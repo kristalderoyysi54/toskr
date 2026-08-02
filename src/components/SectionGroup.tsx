@@ -1,0 +1,264 @@
+import { useState } from "react";
+import { useDroppable } from "@dnd-kit/core";
+import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import {
+  ArrowDown,
+  ArrowUp,
+  CheckSquare,
+  ChevronDown,
+  ChevronRight,
+  MoreHorizontal,
+  Pencil,
+  Trash2,
+} from "lucide-react";
+
+import { NoteCard } from "@/components/NoteCard";
+import {
+  SimpleMenu,
+  SimpleMenuItem,
+  SimpleMenuSeparator,
+} from "@/components/SimpleMenu";
+import { cn } from "@/lib/utils";
+import {
+  INBOX_ID,
+  SECTION_COLORS,
+  useNotesStore,
+  type Note,
+  type Section,
+} from "@/store/notesStore";
+import { useUIStore } from "@/store/uiStore";
+
+export function SectionGroup({
+  section,
+  activeNotes,
+  doneNotes,
+  query,
+}: {
+  section: Section;
+  activeNotes: Note[];
+  doneNotes: Note[];
+  query: string;
+}) {
+  const {
+    setChecked,
+    renameSection,
+    deleteSection,
+    moveSection,
+    toggleSectionCollapsed,
+    setSectionColor,
+  } = useNotesStore.getState();
+  const checkedIds = useNotesStore((s) => s.checkedIds);
+  const doneOpen = useUIStore((s) => s.doneOpen[section.id] ?? false);
+
+  const [renaming, setRenaming] = useState(false);
+  const [name, setName] = useState(section.name);
+
+  // 空组/折叠组也可作为跨组拖拽的投放目标
+  const { setNodeRef, isOver } = useDroppable({ id: `sec:${section.id}` });
+
+  const total = activeNotes.length + doneNotes.length;
+  const collapsed = !!section.collapsed;
+
+  const checkAll = () => {
+    const ids = [...activeNotes, ...doneNotes].map((n) => n.id);
+    const merged = new Set([...checkedIds, ...ids]);
+    setChecked([...merged]);
+  };
+
+  const commitRename = () => {
+    setRenaming(false);
+    renameSection(section.id, name);
+  };
+
+  return (
+    <section
+      ref={setNodeRef}
+      className={cn(
+        "mb-3 rounded-lg transition-colors",
+        isOver && "bg-primary/[0.06] ring-1 ring-primary/30"
+      )}
+    >
+      <div className="group/section mb-1.5 flex h-5 items-center gap-1 pl-0.5 pr-1">
+        <button
+          aria-label={collapsed ? "展开分组" : "折叠分组"}
+          onClick={() => toggleSectionCollapsed(section.id)}
+          className="rounded p-0.5 text-muted-foreground/60 hover:text-foreground"
+        >
+          {collapsed ? (
+            <ChevronRight className="size-3" />
+          ) : (
+            <ChevronDown className="size-3" />
+          )}
+        </button>
+
+        {section.color && (
+          <span
+            className="size-2 shrink-0 rounded-full"
+            style={{ backgroundColor: section.color }}
+          />
+        )}
+        {renaming ? (
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter" && !e.nativeEvent.isComposing) commitRename();
+              if (e.key === "Escape") {
+                setName(section.name);
+                setRenaming(false);
+              }
+            }}
+            className="h-5 w-32 bg-transparent text-[11px] font-semibold uppercase tracking-[0.08em] outline-none"
+          />
+        ) : (
+          <h3
+            className="select-none text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground"
+            onDoubleClick={() => {
+              setName(section.name);
+              setRenaming(true);
+            }}
+          >
+            {section.name}
+          </h3>
+        )}
+        <span className="text-[10px] tabular-nums text-muted-foreground/60">{total}</span>
+
+        <div className="ml-auto">
+          <SimpleMenu
+            align="end"
+            trigger={({ open, toggle }) => (
+              <button
+                aria-label="分组操作"
+                onClick={toggle}
+                className={cn(
+                  "rounded p-0.5 text-muted-foreground/60 transition-opacity hover:text-foreground",
+                  open
+                    ? "opacity-100"
+                    : "opacity-0 group-hover/section:opacity-100"
+                )}
+              >
+                <MoreHorizontal className="size-3.5" />
+              </button>
+            )}
+          >
+            {(close) => (
+              <>
+                <SimpleMenuItem
+                  disabled={!total}
+                  onClick={() => {
+                    close();
+                    checkAll();
+                  }}
+                >
+                  <CheckSquare className="size-3.5" /> 全选此组
+                </SimpleMenuItem>
+                <SimpleMenuItem
+                  onClick={() => {
+                    close();
+                    setName(section.name);
+                    setRenaming(true);
+                  }}
+                >
+                  <Pencil className="size-3.5" /> 重命名
+                </SimpleMenuItem>
+                <div className="flex items-center gap-1 px-2 py-1.5">
+                  {SECTION_COLORS.map((c) => (
+                    <button
+                      key={c}
+                      aria-label="设置分组色"
+                      onClick={() => {
+                        setSectionColor(section.id, c);
+                        close();
+                      }}
+                      className="size-3.5 rounded-full ring-offset-1 transition-transform hover:scale-125"
+                      style={{ backgroundColor: c }}
+                    />
+                  ))}
+                  <button
+                    aria-label="清除颜色"
+                    onClick={() => {
+                      setSectionColor(section.id, undefined);
+                      close();
+                    }}
+                    className="size-3.5 rounded-full border border-dashed border-muted-foreground/50 transition-transform hover:scale-125"
+                  />
+                </div>
+                <SimpleMenuSeparator />
+                <SimpleMenuItem
+                  onClick={() => {
+                    close();
+                    moveSection(section.id, -1);
+                  }}
+                >
+                  <ArrowUp className="size-3.5" /> 上移
+                </SimpleMenuItem>
+                <SimpleMenuItem
+                  onClick={() => {
+                    close();
+                    moveSection(section.id, 1);
+                  }}
+                >
+                  <ArrowDown className="size-3.5" /> 下移
+                </SimpleMenuItem>
+                {section.id !== INBOX_ID && (
+                  <>
+                    <SimpleMenuSeparator />
+                    <SimpleMenuItem
+                      destructive
+                      onClick={() => {
+                        close();
+                        deleteSection(section.id);
+                      }}
+                    >
+                      <Trash2 className="size-3.5" /> 删除分组
+                    </SimpleMenuItem>
+                  </>
+                )}
+              </>
+            )}
+          </SimpleMenu>
+        </div>
+      </div>
+
+      {!collapsed && (
+        <SortableContext
+          items={[...activeNotes, ...doneNotes].map((n) => n.id)}
+          strategy={verticalListSortingStrategy}
+        >
+          {activeNotes.length === 0 && doneNotes.length === 0 ? (
+            <p className="px-2 py-1 text-[11px] text-muted-foreground/50">空</p>
+          ) : (
+            <div className="flex flex-col gap-1 pl-2">
+              {activeNotes.map((note) => (
+                <NoteCard key={note.id} note={note} query={query} />
+              ))}
+
+              {doneNotes.length > 0 && (
+                <>
+                  <button
+                    onClick={() => useUIStore.getState().toggleDoneOpen(section.id)}
+                    className="flex items-center gap-1 px-1 py-0.5 text-[10px] text-muted-foreground/60 hover:text-foreground"
+                  >
+                    {doneOpen ? (
+                      <ChevronDown className="size-2.5" />
+                    ) : (
+                      <ChevronRight className="size-2.5" />
+                    )}
+                    已完成 {doneNotes.length}
+                  </button>
+                  {doneOpen &&
+                    doneNotes.map((note) => (
+                      <NoteCard key={note.id} note={note} query={query} />
+                    ))}
+                </>
+              )}
+            </div>
+          )}
+        </SortableContext>
+      )}
+    </section>
+  );
+}

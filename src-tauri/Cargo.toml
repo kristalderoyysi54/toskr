@@ -1,0 +1,56 @@
+[package]
+name = "toskr"
+version = "0.2.2"
+description = "Toskr — AI 工作流的划词摘录与 Prompt 暂存工具"
+authors = ["kai"]
+edition = "2021"
+
+[lib]
+name = "toskr_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"] }
+tauri-plugin-store = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+enigo = "0.6"
+arboard = "3"
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+window-vibrancy = "0.6"
+core-foundation = "0.10"
+core-graphics = "0.24"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = [
+  "NSString",
+  "NSData",
+  "NSDictionary",
+  "NSEnumerator",
+  "NSArray",
+] }
+objc2-app-kit = { version = "0.3", features = [
+  "NSWorkspace",
+  "NSRunningApplication",
+  "NSWindow",
+  "NSResponder",
+  "NSGraphics",
+  "NSImage",
+  "NSImageRep",
+  "NSBitmapImageRep",
+  "NSPasteboard",
+] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

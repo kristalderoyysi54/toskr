@@ -1,0 +1,235 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+    --font-heading: var(--font-sans);
+    --font-sans: 'Geist Variable', sans-serif;
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.145 0 0);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.145 0 0);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.145 0 0);
+    --primary: oklch(0.205 0 0);
+    --primary-foreground: oklch(0.985 0 0);
+    --secondary: oklch(0.97 0 0);
+    --secondary-foreground: oklch(0.205 0 0);
+    --muted: oklch(0.97 0 0);
+    --muted-foreground: oklch(0.556 0 0);
+    --accent: oklch(0.97 0 0);
+    --accent-foreground: oklch(0.205 0 0);
+    --destructive: oklch(0.577 0.245 27.325);
+    --border: oklch(0.922 0 0);
+    --input: oklch(0.922 0 0);
+    --ring: oklch(0.708 0 0);
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --radius: 0.625rem;
+    --sidebar: oklch(0.985 0 0);
+    --sidebar-foreground: oklch(0.145 0 0);
+    --sidebar-primary: oklch(0.205 0 0);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.97 0 0);
+    --sidebar-accent-foreground: oklch(0.205 0 0);
+    --sidebar-border: oklch(0.922 0 0);
+    --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.922 0 0);
+    --primary-foreground: oklch(0.205 0 0);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.556 0 0);
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --sidebar: oklch(0.205 0 0);
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-primary: oklch(0.488 0.243 264.376);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.269 0 0);
+    --sidebar-accent-foreground: oklch(0.985 0 0);
+    --sidebar-border: oklch(1 0 0 / 10%);
+    --sidebar-ring: oklch(0.556 0 0);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    }
+  body {
+    @apply bg-background text-foreground;
+    }
+  html {
+    @apply font-sans;
+    }
+}
+
+/* ===== Toskr 定制 ===== */
+
+/* 中英混排字体栈：Geist 负责西文，PingFang 负责中文 */
+@theme inline {
+  --font-sans: "Geist Variable", -apple-system, "PingFang SC",
+    "Hiragino Sans GB", "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+}
+
+/* 窗口毛玻璃：webview 全链路透明，膜层颜色由内容自绘 */
+html,
+body,
+#root {
+  height: 100%;
+  background: transparent !important;
+}
+
+body {
+  overflow: hidden;
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+textarea,
+input {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* 面板内容膜层：半透明底色叠在系统 vibrancy 上；不透明度可在设置里调 */
+.panel-surface {
+  background: oklch(0.99 0 0 / calc(var(--panel-alpha, 0.62) * 100%));
+}
+.dark .panel-surface {
+  background: oklch(0.17 0 0 / calc(var(--panel-alpha, 0.62) * 0.9 * 100%));
+}
+
+/* 代码语法高亮配色（浅/深色各一套，跟随主题） */
+.hljs-comment,
+.hljs-quote { color: #8a8f98; font-style: italic; }
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal { color: #a626a4; }
+.hljs-string,
+.hljs-regexp,
+.hljs-addition { color: #14856a; }
+.hljs-number,
+.hljs-built_in,
+.hljs-type { color: #b76b01; }
+.hljs-title,
+.hljs-section,
+.hljs-attr,
+.hljs-attribute { color: #2f6fd0; }
+.hljs-variable,
+.hljs-template-variable,
+.hljs-name { color: #c2410c; }
+.dark .hljs-comment,
+.dark .hljs-quote { color: #7d8590; }
+.dark .hljs-keyword,
+.dark .hljs-selector-tag,
+.dark .hljs-literal { color: #d2a8ff; }
+.dark .hljs-string,
+.dark .hljs-regexp,
+.dark .hljs-addition { color: #7ee787; }
+.dark .hljs-number,
+.dark .hljs-built_in,
+.dark .hljs-type { color: #ffa657; }
+.dark .hljs-title,
+.dark .hljs-section,
+.dark .hljs-attr,
+.dark .hljs-attribute { color: #79c0ff; }
+.dark .hljs-variable,
+.dark .hljs-template-variable,
+.dark .hljs-name { color: #ffa198; }
+
+/* 新捕获卡片入场高亮 */
+.flash-highlight {
+  animation: flash-highlight 1.8s ease-out;
+}
+@keyframes flash-highlight {
+  0% {
+    background-color: oklch(0.72 0.15 60 / 30%);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+/* HUD 气泡入场 */
+.hud-pop {
+  animation: hud-pop 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+@keyframes hud-pop {
+  from {
+    transform: translateY(-4px) scale(0.94);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}

@@ -1,0 +1,513 @@
+//! 前端可调用的 Tauri 命令。
+//!
+//! 约定：非 async 命令在 Tauri v2 中于主线程执行（可安全做窗口/AppKit 操作）；
+//! 含 sleep 的流程一律 async + spawn_blocking。
+
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+
+use tauri::{AppHandle, Manager, State};
+
+use crate::input::synth;
+use crate::state::{AppState, MOD_CONTROL, MOD_OPTION, MOD_SHIFT};
+
+/// 定位到目标位置并显示面板（伴随/经典模式由 Rust 侧裁决）。
+#[tauri::command]
+pub fn show_panel(app: AppHandle) {
+    crate::window::request_show_panel(&app);
+}
+
+/// 隐藏面板；`restore_focus` 时归还焦点给此前的前台应用。
+#[tauri::command]
+pub fn hide_panel(app: AppHandle, restore_focus: bool) {
+    crate::window::hide_panel(&app, restore_focus);
+}
+
+/// 写系统剪贴板（「复制为列表」等）。
+#[tauri::command]
+pub fn copy_text(text: String) -> Result<(), String> {
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    clipboard.set_text(text).map_err(|e| e.to_string())
+}
+
+/// 一键发送：备份剪贴板 → 收面板 → 激活目标并确认到达 →
+/// 先粘贴文本，再逐张粘贴图片附件（图片必须以图片形式写入剪贴板，
+/// 否则只会粘出占位文字）→ 可选回车 → 延迟还原剪贴板。
+/// 目标未到达则**中止**并返回 false（不粘贴、不标完成）。
+#[tauri::command]
+pub async fn send_to_chat(
+    app: AppHandle,
+    text: String,
+    image_files: Vec<String>,
+    press_enter: bool,
+    keep_panel: bool,
+) -> Result<bool, String> {
+    // 备份用户原剪贴板（文本），发送完成后还原，避免静默吞掉用户内容
+    let saved = arboard::Clipboard::new()
+        .ok()
+        .and_then(|mut c| c.get_text().ok());
+
+    // 图片先在主线程外读成像素，避免粘贴过程中再读盘拖慢节奏
+    let images: Vec<(usize, usize, Vec<u8>)> = image_files
+        .iter()
+        .filter_map(|f| crate::storage::read_image_rgba(&app, f))
+        .collect();
+
+    let target_pid = *app.state::<AppState>().prev_app_pid.lock().unwrap();
+    let target_name = target_pid
+        .and_then(crate::focus::app_name_of)
+        .unwrap_or_else(|| "目标应用".to_string());
+    crate::diag::push(
+        &app,
+        format!(
+            "发送 → {target_name}({}) 文本{}字 图{}张",
+            target_pid.map_or("?".into(), |p| p.to_string()),
+            text.chars().count(),
+            images.len()
+        ),
+    );
+    // 钉住时保留面板（仅把焦点交回目标应用），否则收起面板
+    if keep_panel {
+        if let Some(pid) = target_pid {
+            crate::focus::activate_pid(pid);
+        }
+    } else {
+        crate::window::hide_panel(&app, false);
+    }
+
+    let has_text = !text.trim().is_empty();
+    let sent = tauri::async_runtime::spawn_blocking(move || -> Result<bool, String> {
+        if let Some(pid) = target_pid {
+            crate::focus::activate_pid(pid);
+            // 激活是异步的：确认目标真正到达前台，未到达即中止（防误粘贴）
+            if !crate::focus::wait_frontmost(pid, 10, 40) {
+                return Ok(false);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(180));
+
+        if has_text {
+            {
+                let mut c = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+                c.set_text(text).map_err(|e| e.to_string())?;
+            }
+            synth::press_paste()?;
+        }
+
+        for (w, h, rgba) in images {
+            // 每张图单独写入剪贴板再粘贴；目标应用需要时间读取粘贴板
+            std::thread::sleep(Duration::from_millis(320));
+            {
+                let mut c = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+                c.set_image(arboard::ImageData {
+                    width: w,
+                    height: h,
+                    bytes: rgba.into(),
+                })
+                .map_err(|e| e.to_string())?;
+            }
+            synth::press_paste()?;
+        }
+
+        if press_enter {
+            std::thread::sleep(Duration::from_millis(200));
+            synth::press_return()?;
+        }
+        Ok(true)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    crate::diag::push(
+        &app,
+        if sent { "发送: 粘贴完成" } else { "发送: 目标未就绪，已中止" },
+    );
+    // 发送回执 HUD：成功报告去向（发错目标一眼可见），失败明确警示
+    if sent {
+        crate::window::show_hud(&app, "sent", format!("已发送到 {target_name}"), false);
+    } else {
+        crate::window::show_hud(
+            &app,
+            "warn",
+            format!("发送中止：{target_name} 未到达前台"),
+            false,
+        );
+    }
+    if sent {
+        // 目标应用已在按键事件处理中读取粘贴板；延迟还原用户原剪贴板
+        tauri::async_runtime::spawn_blocking(move || {
+            std::thread::sleep(Duration::from_millis(1500));
+            if let Some(text) = saved {
+                if let Ok(mut c) = arboard::Clipboard::new() {
+                    let _ = c.set_text(text);
+                }
+            }
+        });
+    } else {
+        crate::window::show_hud(
+            &app,
+            "warn",
+            "目标未就绪 · 内容已在剪贴板".into(),
+            false,
+        );
+    }
+    Ok(sent)
+}
+
+/// 辅助功能授权状态；`prompt` 为 true 时未授权会弹系统提示。
+#[tauri::command]
+pub fn ax_trusted(prompt: bool) -> bool {
+    if prompt {
+        crate::ax::request_trust_with_prompt()
+    } else {
+        crate::ax::is_trusted()
+    }
+}
+
+/// 全局键盘监听健康状态：installed=tap 已创建；receiving=真正收到过键盘事件
+/// （Sequoia 上二者可分离：缺输入监控权限时创建成功但事件被静默扣留）。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TapHealth {
+    pub installed: bool,
+    pub receiving: bool,
+    pub listening: bool,
+}
+
+#[tauri::command]
+pub fn tap_status(state: State<'_, AppState>) -> TapHealth {
+    TapHealth {
+        installed: state.tap_installed.load(Ordering::SeqCst),
+        receiving: state.key_events_seen.load(Ordering::Relaxed),
+        listening: crate::input::tap::listen_authorized(),
+    }
+}
+
+/// 用户授权后重试安装监听（免重启）。
+#[tauri::command]
+pub fn retry_tap(app: AppHandle) {
+    crate::input::tap::retry_install(&app);
+}
+
+/// 用默认浏览器打开链接（仅放行 http/https）。
+#[tauri::command]
+pub fn open_url(url: String) {
+    if url.starts_with("http://") || url.starts_with("https://") {
+        let _ = std::process::Command::new("open").arg(url).spawn();
+    }
+}
+
+/// 打开系统设置对应隐私面板："accessibility" | "input-monitoring"。
+#[tauri::command]
+pub fn open_privacy_settings(pane: String) {
+    let url = match pane.as_str() {
+        "input-monitoring" => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
+        }
+        _ => "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+    };
+    let _ = std::process::Command::new("open").arg(url).spawn();
+}
+
+// ===== v2 命令 =====
+
+/// 下发触发键配置（设置项）。
+#[tauri::command]
+pub fn set_hotkey_config(state: State<'_, AppState>, modifier: String, gap_ms: u16) {
+    let m = match modifier.as_str() {
+        "control" => MOD_CONTROL,
+        "option" => MOD_OPTION,
+        _ => MOD_SHIFT,
+    };
+    state.hotkey_modifier.store(m, Ordering::Relaxed);
+    state
+        .hotkey_gap_ms
+        .store(gap_ms.clamp(200, 800), Ordering::Relaxed);
+}
+
+/// 下发伴随停靠配置。
+#[tauri::command]
+pub fn set_companion_config(app: AppHandle, enabled: bool, apps: Vec<String>) {
+    let state = app.state::<AppState>();
+    *state.companion.lock().unwrap() = crate::state::CompanionConfig { enabled, apps };
+}
+
+/// 伴随停靠间隙（pt，0=紧贴目标窗口）。
+#[tauri::command]
+pub fn set_companion_gap(app: AppHandle, gap: f64) {
+    *app.state::<AppState>().companion_gap.lock().unwrap() = gap.clamp(0.0, 40.0);
+}
+
+/// 下发捕获排除列表。
+#[tauri::command]
+pub fn set_excluded_apps(app: AppHandle, apps: Vec<String>) {
+    *app.state::<AppState>().excluded_apps.lock().unwrap() = apps;
+}
+
+/// 面板宽度（pt），可见时实时右吸附生效。
+#[tauri::command]
+pub fn set_panel_width(app: AppHandle, width: f64) {
+    crate::window::set_panel_width(&app, width);
+}
+
+/// 隐身模式（前端设置持久化，Rust 运行态即时生效）。
+#[tauri::command]
+pub fn set_stealth(app: AppHandle, on: bool) {
+    app.state::<AppState>().stealth.store(on, Ordering::SeqCst);
+    crate::tray::refresh(&app);
+}
+
+/// 「上一个前台应用」的信息（设置里「把当前应用加入伴随列表」用——
+/// 点击设置时前台是 Toskr 自己，真正想加的是打开面板前所在的应用）。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrevAppInfo {
+    pub bundle_id: String,
+    pub name: Option<String>,
+}
+
+#[tauri::command]
+pub fn prev_app_info(app: AppHandle) -> Option<PrevAppInfo> {
+    let pid = (*app.state::<AppState>().prev_app_pid.lock().unwrap())?;
+    let running =
+        objc2_app_kit::NSRunningApplication::runningApplicationWithProcessIdentifier(pid)?;
+    Some(PrevAppInfo {
+        bundle_id: running.bundleIdentifier().map(|b| b.to_string())?,
+        name: running.localizedName().map(|n| n.to_string()),
+    })
+}
+
+/// 面板失焦后由前端调用：刷新「发送目标」为用户切去的应用（防 Pin 场景目标漂移），
+/// 并在切到伴随应用时动态重吸附。
+#[tauri::command]
+pub fn refresh_prev_app(app: AppHandle) {
+    let me = std::process::id() as i32;
+    if let Some(front) = crate::focus::frontmost_info() {
+        if front.pid != me {
+            *app.state::<AppState>().prev_app_pid.lock().unwrap() = Some(front.pid);
+        }
+    }
+    crate::window::maybe_redock(&app);
+}
+
+/// 上/下缘拖拽调节（增量）。返回当前偏移与高度供前端持久化。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PanelVertical {
+    pub top_offset: f64,
+    pub height: Option<f64>,
+}
+
+#[tauri::command]
+pub fn adjust_panel_edge(app: AppHandle, edge: String, delta: f64) -> PanelVertical {
+    let (top_offset, height) = crate::window::adjust_panel_edge(&app, &edge, delta);
+    PanelVertical { top_offset, height }
+}
+
+/// 设置/重置上下调节（启动同步、双击复位）。
+#[tauri::command]
+pub fn set_panel_vertical(app: AppHandle, top_offset: f64, height: Option<f64>) {
+    crate::window::set_panel_vertical(&app, top_offset, height);
+}
+
+/// 前端入库裁决后回调展示捕获 HUD（kind: "added" | "duplicate"）。
+#[tauri::command]
+pub fn show_capture_hud(app: AppHandle, kind: String, preview: String) {
+    let kind = if kind == "duplicate" { "duplicate" } else { "added" };
+    // 前端去重裁决的回执也进诊断：与「捕获:」行拼起来即是完整链路
+    crate::diag::push(&app, format!("入库回执: {kind}「{preview}」"));
+    crate::window::show_hud(&app, kind, preview, kind == "added");
+}
+
+/// 立即隐藏 HUD（点击气泡打开面板时调用）。
+#[tauri::command]
+pub fn hide_hud(app: AppHandle) {
+    crate::window::hide_hud_now(&app);
+}
+
+/// 通用 HUD 反馈（操作确认、错误提示等；`undoable` 时悬停可撤销）。
+#[tauri::command]
+pub fn hud_feedback(app: AppHandle, kind: String, text: String, undoable: Option<bool>) {
+    crate::window::show_hud(&app, &kind, text, undoable.unwrap_or(false));
+}
+
+/// 前端链路诊断回执（Toggle 处理结果等落盘，报障时诊断页可见）。
+#[tauri::command]
+pub fn diag_note(app: AppHandle, msg: String) {
+    crate::diag::push(&app, msg);
+}
+
+/// 应用图标 data URL + 主色（卡片顶部通栏底色用；带缓存，主线程命令）。
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AppIconInfo {
+    pub url: String,
+    pub color: String,
+}
+
+#[tauri::command]
+pub fn app_icon(app: AppHandle, bundle_id: String) -> Option<AppIconInfo> {
+    let state = app.state::<AppState>();
+    let cached = state.icon_cache.lock().unwrap().get(&bundle_id).cloned();
+    let pair = match cached {
+        Some(hit) => hit,
+        None => {
+            let fetched = crate::focus::app_icon_png_base64(&bundle_id)
+                .map(|i| (i.data_url, i.color));
+            state
+                .icon_cache
+                .lock()
+                .unwrap()
+                .insert(bundle_id, fetched.clone());
+            fetched
+        }
+    };
+    pair.map(|(url, color)| AppIconInfo { url, color })
+}
+
+/// 设置窗口主题（system/light/dark）：同时切换原生外观与
+/// webview 的 prefers-color-scheme，前端 CSS 深浅色自动跟随。
+#[tauri::command]
+pub fn set_window_theme(app: AppHandle, theme: String) {
+    let theme = match theme.as_str() {
+        "light" => Some(tauri::Theme::Light),
+        "dark" => Some(tauri::Theme::Dark),
+        _ => None, // 跟随系统
+    };
+    for label in ["main", "settings"] {
+        if let Some(window) = app.get_webview_window(label) {
+            let _ = window.set_theme(theme);
+        }
+    }
+}
+
+/// 外观：动态开关毛玻璃并切换材质（无需重启）。
+/// material: "hud" | "popover" | "sidebar" | "under-window" | "fullscreen"
+#[tauri::command]
+pub fn set_vibrancy(app: AppHandle, enabled: bool, material: String) {
+    #[cfg(target_os = "macos")]
+    {
+        use window_vibrancy::{
+            apply_vibrancy, clear_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
+        };
+        let Some(window) = app.get_webview_window("main") else {
+            return;
+        };
+        if !enabled {
+            let _ = clear_vibrancy(&window);
+            return;
+        }
+        let mat = match material.as_str() {
+            "popover" => NSVisualEffectMaterial::Popover,
+            "sidebar" => NSVisualEffectMaterial::Sidebar,
+            "under-window" => NSVisualEffectMaterial::UnderWindowBackground,
+            "fullscreen" => NSVisualEffectMaterial::FullScreenUI,
+            _ => NSVisualEffectMaterial::HudWindow,
+        };
+        // 切材质需先清除旧的效果视图，否则会叠加。
+        // state=Active：强制常亮材质，否则窗口失焦时系统会切到 inactive 外观，
+        // 变成更实的灰底，通透感消失。
+        let _ = clear_vibrancy(&window);
+        let _ = apply_vibrancy(
+            &window,
+            mat,
+            Some(NSVisualEffectState::Active),
+            Some(14.0),
+        );
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, enabled, material);
+    }
+}
+
+/// 窗口整体不透明度（毛玻璃层一并变透，实现真正的穿透查看）。
+#[tauri::command]
+pub fn set_window_alpha(app: AppHandle, alpha: f64) {
+    crate::window::set_window_alpha(&app, alpha);
+}
+
+/// 独立模式手动位置：传 null 清除（下次回到屏幕右缘默认位）。
+#[tauri::command]
+pub fn set_panel_free_pos(app: AppHandle, x: Option<f64>, y: Option<f64>) {
+    crate::window::set_free_pos(&app, x.zip(y));
+}
+
+/// 打开独立设置窗口。
+#[tauri::command]
+pub fn open_settings_window(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("settings") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+/// 重启应用（输入监控授权变更后需要重启进程才能生效）。
+#[tauri::command]
+pub fn restart_app(app: AppHandle) {
+    app.restart();
+}
+
+/// 诊断日志（新→旧，最多 50 条）：触发/拒绝原因、捕获分支、发送结果。
+#[tauri::command]
+pub fn get_diagnostics(app: AppHandle) -> Vec<crate::diag::DiagEntry> {
+    crate::diag::entries(&app)
+}
+
+// ===== 存储（可自定义数据文件夹 + 图片附件） =====
+
+/// 当前数据文件夹路径。
+#[tauri::command]
+pub fn get_data_dir(app: AppHandle) -> String {
+    crate::storage::data_dir(&app).to_string_lossy().to_string()
+}
+
+/// 切换数据文件夹（搬运已有数据与图片）。
+#[tauri::command]
+pub fn set_data_dir(app: AppHandle, path: String) -> Result<String, String> {
+    crate::storage::set_data_dir(&app, std::path::Path::new(&path))?;
+    Ok(crate::storage::data_dir(&app).to_string_lossy().to_string())
+}
+
+/// 恢复默认数据文件夹。
+#[tauri::command]
+pub fn reset_data_dir(app: AppHandle) -> Result<String, String> {
+    crate::storage::reset_data_dir(&app)?;
+    Ok(crate::storage::data_dir(&app).to_string_lossy().to_string())
+}
+
+/// 读取笔记数据文件（不存在返回 None，前端回落旧存储做一次性迁移）。
+#[tauri::command]
+pub fn read_data_file(app: AppHandle) -> Option<String> {
+    crate::storage::read_data(&app)
+}
+
+/// 写入笔记数据文件（原子替换）。
+#[tauri::command]
+pub fn write_data_file(app: AppHandle, content: String) -> Result<(), String> {
+    crate::storage::write_data(&app, &content)
+}
+
+/// 图片附件的 data URL（前端 <img> 直接渲染）。
+#[tauri::command]
+pub fn image_data_url(app: AppHandle, name: String) -> Option<String> {
+    crate::storage::image_data_url(&app, &name)
+}
+
+/// 删除图片附件（卡片删除时清理）。
+#[tauri::command]
+pub fn remove_image(app: AppHandle, name: String) {
+    crate::storage::remove_image(&app, &name);
+}
+
+/// 导出备份到用户选定路径。
+#[tauri::command]
+pub fn export_file(path: String, content: String) -> Result<(), String> {
+    std::fs::write(&path, content).map_err(|e| format!("写入失败: {e}"))
+}
+
+/// 从用户选定路径读入备份。
+#[tauri::command]
+pub fn import_file(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| format!("读取失败: {e}"))
+}

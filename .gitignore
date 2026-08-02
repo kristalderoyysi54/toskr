@@ -1,0 +1,37 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Tauri / Rust
+src-tauri/target
+src-tauri/gen/schemas
+
+# 本地 AI 工具目录（个人工作笔记与环境配置）
+.claude/
+.codex/
+tasks/
+
+# 设计探索稿（大文件，不入库）
+/toskr-*.png
+assets/icon-concepts/

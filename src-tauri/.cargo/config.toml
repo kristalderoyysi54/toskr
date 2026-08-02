@@ -1,0 +1,10 @@
+# 用户批准（2026-07-31）：crates.io 直连被限速，本项目走 rsproxy.cn（字节跳动）镜像
+# 仅影响本项目；如需全局生效可将本文件内容复制到 ~/.cargo/config.toml
+[source.crates-io]
+replace-with = "rsproxy-sparse"
+
+[source.rsproxy-sparse]
+registry = "sparse+https://rsproxy.cn/index/"
+
+[net]
+git-fetch-with-cli = true
