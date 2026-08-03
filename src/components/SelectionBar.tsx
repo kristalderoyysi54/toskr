@@ -19,11 +19,13 @@ import {
 } from "@/lib/actions";
 import { buildSendText, sendPreview } from "@/lib/format";
 import { orderedCheckedNotes, useNotesStore } from "@/store/notesStore";
+import { useUIStore } from "@/store/uiStore";
 
 /** 勾选 ≥1 条时出现的批量操作条。 */
 export function SelectionBar() {
   const checkedIds = useNotesStore((s) => s.checkedIds);
   const snippets = useNotesStore((s) => s.settings.promptSnippets);
+  const page = useUIStore((s) => s.page);
   const count = checkedIds.length;
   if (count === 0) return null;
 
@@ -42,9 +44,12 @@ export function SelectionBar() {
         <IconAction label="合并笔记" disabled={count < 2} onClick={mergeCheckedWithUndo}>
           <Merge className="size-3.5" />
         </IconAction>
-        <IconAction label="标记完成" onClick={() => state.setDone(orderedIds(), true)}>
-          <CheckCheck className="size-3.5" />
-        </IconAction>
+        {/* 剪贴板历史无「完成」语义（发送也不标完成），该页隐藏 */}
+        {page !== "clipboard" && (
+          <IconAction label="标记完成" onClick={() => state.setDone(orderedIds(), true)}>
+            <CheckCheck className="size-3.5" />
+          </IconAction>
+        )}
         <IconAction
           label="删除"
           onClick={() => deleteNotesWithUndo(orderedIds())}

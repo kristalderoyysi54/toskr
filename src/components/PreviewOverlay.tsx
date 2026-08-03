@@ -147,7 +147,13 @@ export function PreviewOverlay() {
               {isImage ? (
                 <div className="flex h-full items-center justify-center">
                   {imageUrl ? (
-                    <img src={imageUrl} alt="捕获的图片" className="max-h-full max-w-full object-contain" />
+                    <img
+                      src={imageUrl}
+                      alt="捕获的图片"
+                      title="点击原尺寸预览"
+                      onClick={() => note.imageFile && void api.quickLook(note.imageFile)}
+                      className="max-h-full max-w-full cursor-zoom-in object-contain"
+                    />
                   ) : (
                     <span className="text-[12px] text-muted-foreground">加载中…</span>
                   )}
@@ -260,11 +266,15 @@ export function PreviewOverlay() {
   );
 }
 
-/** 预览层里的附件图片。 */
+/** 预览层里的附件图片（点击 Quick Look 原尺寸）。 */
 function PreviewThumb({ file }: { file: string }) {
   const url = useNoteImage(file);
   return (
-    <div className="flex items-center justify-center overflow-hidden rounded-lg bg-black/[0.05] p-1 dark:bg-white/[0.08]">
+    <div
+      title="点击原尺寸预览"
+      onClick={() => void api.quickLook(file)}
+      className="flex cursor-zoom-in items-center justify-center overflow-hidden rounded-lg bg-black/[0.05] p-1 dark:bg-white/[0.08]"
+    >
       {url ? (
         <img src={url} alt="" className="max-h-40 max-w-full object-contain" />
       ) : (

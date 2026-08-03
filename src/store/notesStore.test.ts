@@ -22,6 +22,7 @@ import {
   doneIdsAfterSend,
   INBOX_ID,
   orderedCheckedNotes,
+  TASK_INBOX_ID,
   useNotesStore,
 } from "./notesStore";
 
@@ -29,6 +30,8 @@ function reset() {
   useNotesStore.setState({
     sections: [{ id: INBOX_ID, name: "收件箱" }],
     notes: [],
+    tasks: [],
+    taskSections: [{ id: TASK_INBOX_ID, name: "收集箱" }],
     checkedIds: [],
     settings: defaultSettings(),
     undoStack: [],
@@ -217,7 +220,7 @@ describe("导入合并", () => {
         { id: "new-2", text: "孤儿", sectionId: "ghost", done: false, createdAt: 3 },
       ],
     });
-    expect(added).toBe(2);
+    expect(added.notes).toBe(2);
     const state = useNotesStore.getState();
     expect(state.notes).toHaveLength(3);
     expect(state.sections.map((x) => x.name)).toEqual(["收件箱", "外部组"]);
@@ -316,35 +319,330 @@ describe("剪贴板历史 addClipNote", () => {
     useNotesStore.getState().addClipNote("same");
     expect(useNotesStore.getState().notes).toHaveLength(1);
   });
+});
 
-  it("超限从最旧裁剪，常用 ★ 卡不清理", () => {
-    useNotesStore.setState({
-      settings: { ...defaultSettings(), clipHistoryLimit: 2 },
-    });
-    useNotesStore.getState().addClipNote("a");
-    const keepId = useNotesStore.getState().notes[0].id;
-    useNotesStore.getState().toggleNoteKeep(keepId);
-    useNotesStore.getState().addClipNote("b");
-    useNotesStore.getState().addClipNote("c");
-    useNotesStore.getState().addClipNote("d");
-    const texts = useNotesStore
-      .getState()
-      .notes.filter((n) => n.sectionId === CLIPBOARD_ID)
-      .map((n) => n.text);
-    // 非 keep 只留最新 2 条（d/c），keep 的 a 幸存
-    expect(texts.sort()).toEqual(["a", "c", "d"]);
+describe("任务：CRUD / 撤销 / 转换原子性 / 导入", () => {
+  beforeEach(reset);
+
+  it("addTask 去空白、空串 empty、默认 todo/none/无到期", () => {
+    expect(useNotesStore.getState().addTask("   ").result).toBe("empty");
+    const { result, id } = useNotesStore.getState().addTask("  写周报  ");
+    expect(result).toBe("added");
+    const t = useNotesStore.getState().tasks.find((x) => x.id === id)!;
+    expect(t.text).toBe("写周报");
+    expect(t.status).toBe("todo");
+    expect(t.priority).toBe("none");
+    expect(t.dueAt).toBeNull();
+    expect(t.remindedAt).toBeNull();
   });
 
-  it("裁剪返回不再被引用的图片文件名", () => {
-    useNotesStore.setState({
-      settings: { ...defaultSettings(), clipHistoryLimit: 1 },
+  it("addTask 不去重（与 addNote 的刻意差异）", () => {
+    useNotesStore.getState().addTask("回复邮件");
+    useNotesStore.getState().addTask("回复邮件");
+    expect(useNotesStore.getState().tasks).toHaveLength(2);
+  });
+
+  it("cycleTaskStatus 三态循环；toggleTaskDone 二态直切", () => {
+    const id = useNotesStore.getState().addTask("任务").id!;
+    const st = () => useNotesStore.getState().tasks[0].status;
+    useNotesStore.getState().cycleTaskStatus(id);
+    expect(st()).toBe("doing");
+    useNotesStore.getState().cycleTaskStatus(id);
+    expect(st()).toBe("done");
+    useNotesStore.getState().cycleTaskStatus(id);
+    expect(st()).toBe("todo");
+    // doing 状态下 toggle 直达 done（跳过中间态），再 toggle 回 todo
+    useNotesStore.getState().cycleTaskStatus(id);
+    expect(st()).toBe("doing");
+    useNotesStore.getState().toggleTaskDone(id);
+    expect(st()).toBe("done");
+    useNotesStore.getState().toggleTaskDone(id);
+    expect(st()).toBe("todo");
+  });
+
+  it("setTaskDue 变更会清空 remindedAt", () => {
+    const id = useNotesStore.getState().addTask("任务").id!;
+    useNotesStore.getState().setTaskDue(id, 1000);
+    useNotesStore.getState().markTasksReminded([id]);
+    expect(useNotesStore.getState().tasks[0].remindedAt).not.toBeNull();
+    useNotesStore.getState().setTaskDue(id, 2000);
+    expect(useNotesStore.getState().tasks[0].remindedAt).toBeNull();
+  });
+
+  it("deleteTasks / clearDoneTasks 可撤销", () => {
+    const a = useNotesStore.getState().addTask("A").id!;
+    useNotesStore.getState().addTask("B");
+    useNotesStore.getState().deleteTasks([a]);
+    expect(useNotesStore.getState().tasks).toHaveLength(1);
+    useNotesStore.getState().undo();
+    expect(useNotesStore.getState().tasks).toHaveLength(2);
+    useNotesStore.getState().toggleTaskDone(a);
+    expect(useNotesStore.getState().clearDoneTasks()).toBe(1);
+    expect(useNotesStore.getState().tasks).toHaveLength(1);
+    useNotesStore.getState().undo();
+    expect(useNotesStore.getState().tasks).toHaveLength(2);
+  });
+
+  it("convertNoteToTask：原子转换，一次 undo 同时恢复笔记并移除任务", () => {
+    const noteId = useNotesStore.getState().addNote("变成待办的笔记").id!;
+    expect(useNotesStore.getState().convertNoteToTask(noteId)).toBe(true);
+    expect(useNotesStore.getState().notes).toHaveLength(0);
+    expect(useNotesStore.getState().tasks).toHaveLength(1);
+    expect(useNotesStore.getState().tasks[0].text).toBe("变成待办的笔记");
+    useNotesStore.getState().undo();
+    expect(useNotesStore.getState().notes).toHaveLength(1);
+    expect(useNotesStore.getState().tasks).toHaveLength(0);
+  });
+
+  it("convertNoteToTask：图片卡拒绝且无副作用", () => {
+    const imgId = useNotesStore
+      .getState()
+      .addNote("图片 100×100", { kind: "image", imageFile: "a.png" }).id!;
+    expect(useNotesStore.getState().convertNoteToTask(imgId)).toBe(false);
+    expect(useNotesStore.getState().notes).toHaveLength(1);
+    expect(useNotesStore.getState().tasks).toHaveLength(0);
+  });
+
+  it("importMerge 合并 tasks：按 id 去重并计数", () => {
+    const kept = useNotesStore.getState().addTask("本地任务").id!;
+    const r = useNotesStore.getState().importMerge({
+      tasks: [
+        {
+          id: kept,
+          text: "重复导入应跳过",
+          status: "todo",
+          priority: "none",
+          dueAt: null,
+          createdAt: 1,
+          remindedAt: null,
+        },
+        {
+          id: "t-new",
+          text: "外部任务",
+          status: "doing",
+          priority: "high",
+          dueAt: null,
+          createdAt: 2,
+          remindedAt: null,
+        },
+      ],
     });
-    useNotesStore
+    expect(r).toEqual({ notes: 0, tasks: 1 });
+    expect(useNotesStore.getState().tasks).toHaveLength(2);
+    expect(useNotesStore.getState().tasks.find((t) => t.id === kept)?.text).toBe(
+      "本地任务"
+    );
+  });
+});
+
+describe("任务：备注与检查列表", () => {
+  beforeEach(reset);
+
+  it("updateTaskNote 设置与清除（空串 = 清除）", () => {
+    const id = useNotesStore.getState().addTask("任务").id!;
+    useNotesStore.getState().updateTaskNote(id, "  一些备注  ");
+    expect(useNotesStore.getState().tasks[0].note).toBe("一些备注");
+    useNotesStore.getState().updateTaskNote(id, "   ");
+    expect(useNotesStore.getState().tasks[0].note).toBeUndefined();
+  });
+
+  it("addChecklistItem 追加、忽略空白", () => {
+    const id = useNotesStore.getState().addTask("任务").id!;
+    useNotesStore.getState().addChecklistItem(id, "  子项A ");
+    useNotesStore.getState().addChecklistItem(id, "   ");
+    useNotesStore.getState().addChecklistItem(id, "子项B");
+    const list = useNotesStore.getState().tasks[0].checklist!;
+    expect(list.map((c) => c.text)).toEqual(["子项A", "子项B"]);
+    expect(list.every((c) => !c.done)).toBe(true);
+  });
+
+  it("toggleChecklistItem 勾选/取消", () => {
+    const id = useNotesStore.getState().addTask("任务").id!;
+    useNotesStore.getState().addChecklistItem(id, "子项");
+    const itemId = useNotesStore.getState().tasks[0].checklist![0].id;
+    useNotesStore.getState().toggleChecklistItem(id, itemId);
+    expect(useNotesStore.getState().tasks[0].checklist![0].done).toBe(true);
+    useNotesStore.getState().toggleChecklistItem(id, itemId);
+    expect(useNotesStore.getState().tasks[0].checklist![0].done).toBe(false);
+  });
+
+  it("updateChecklistItem 改文本；清空文本即删除该项", () => {
+    const id = useNotesStore.getState().addTask("任务").id!;
+    useNotesStore.getState().addChecklistItem(id, "旧文本");
+    const itemId = useNotesStore.getState().tasks[0].checklist![0].id;
+    useNotesStore.getState().updateChecklistItem(id, itemId, "新文本");
+    expect(useNotesStore.getState().tasks[0].checklist![0].text).toBe("新文本");
+    useNotesStore.getState().updateChecklistItem(id, itemId, "   ");
+    expect(useNotesStore.getState().tasks[0].checklist).toHaveLength(0);
+  });
+
+  it("deleteChecklistItem 删除指定项", () => {
+    const id = useNotesStore.getState().addTask("任务").id!;
+    useNotesStore.getState().addChecklistItem(id, "A");
+    useNotesStore.getState().addChecklistItem(id, "B");
+    const first = useNotesStore.getState().tasks[0].checklist![0].id;
+    useNotesStore.getState().deleteChecklistItem(id, first);
+    expect(useNotesStore.getState().tasks[0].checklist!.map((c) => c.text)).toEqual([
+      "B",
+    ]);
+  });
+
+  it("删除任务后撤销可恢复备注与检查列表", () => {
+    const id = useNotesStore.getState().addTask("任务").id!;
+    useNotesStore.getState().updateTaskNote(id, "备注");
+    useNotesStore.getState().addChecklistItem(id, "子项");
+    useNotesStore.getState().deleteTasks([id]);
+    expect(useNotesStore.getState().tasks).toHaveLength(0);
+    useNotesStore.getState().undo();
+    const t = useNotesStore.getState().tasks[0];
+    expect(t.note).toBe("备注");
+    expect(t.checklist!.map((c) => c.text)).toEqual(["子项"]);
+  });
+});
+
+describe("任务：闪念与分组", () => {
+  beforeEach(reset);
+
+  it("addTask 支持 spark 类型；sparkToTask 转正式待办", () => {
+    const id = useNotesStore.getState().addTask("一个灵感", { kind: "spark" }).id!;
+    expect(useNotesStore.getState().tasks[0].kind).toBe("spark");
+    useNotesStore.getState().sparkToTask(id);
+    const t = useNotesStore.getState().tasks[0];
+    expect(t.kind).toBeUndefined();
+    expect(t.status).toBe("todo");
+  });
+
+  it("addTask 指定分组；未知分组回落收集箱", () => {
+    useNotesStore.getState().addTaskSection("工作");
+    const g = useNotesStore.getState().taskSections[1];
+    const a = useNotesStore.getState().addTask("入组", { sectionId: g.id }).id!;
+    const b = useNotesStore.getState().addTask("孤儿", { sectionId: "ghost" }).id!;
+    expect(useNotesStore.getState().tasks.find((t) => t.id === a)?.sectionId).toBe(g.id);
+    expect(
+      useNotesStore.getState().tasks.find((t) => t.id === b)?.sectionId
+    ).toBeUndefined();
+  });
+
+  it("moveTasksToSection 移动；移回收集箱归一为 undefined", () => {
+    useNotesStore.getState().addTaskSection("工作");
+    const g = useNotesStore.getState().taskSections[1];
+    const id = useNotesStore.getState().addTask("任务").id!;
+    useNotesStore.getState().moveTasksToSection([id], g.id);
+    expect(useNotesStore.getState().tasks[0].sectionId).toBe(g.id);
+    useNotesStore.getState().moveTasksToSection([id], TASK_INBOX_ID);
+    expect(useNotesStore.getState().tasks[0].sectionId).toBeUndefined();
+  });
+
+  it("deleteTaskSection：组内任务归收集箱、收集箱不可删、可撤销", () => {
+    useNotesStore.getState().addTaskSection("临时");
+    const g = useNotesStore.getState().taskSections[1];
+    const id = useNotesStore.getState().addTask("组内", { sectionId: g.id }).id!;
+    useNotesStore.getState().deleteTaskSection(g.id);
+    expect(useNotesStore.getState().taskSections).toHaveLength(1);
+    expect(useNotesStore.getState().tasks[0].sectionId).toBeUndefined();
+    useNotesStore.getState().undo();
+    expect(useNotesStore.getState().taskSections).toHaveLength(2);
+    expect(useNotesStore.getState().tasks.find((t) => t.id === id)?.sectionId).toBe(
+      g.id
+    );
+    useNotesStore.getState().deleteTaskSection(TASK_INBOX_ID);
+    expect(
+      useNotesStore.getState().taskSections.some((s) => s.id === TASK_INBOX_ID)
+    ).toBe(true);
+  });
+
+  it("importMerge：taskSections 合并、任务孤儿分组兜底收集箱", () => {
+    const r = useNotesStore.getState().importMerge({
+      taskSections: [{ id: "ext-g", name: "外部组" }],
+      tasks: [
+        {
+          id: "t1",
+          text: "带组",
+          status: "todo",
+          priority: "none",
+          dueAt: null,
+          createdAt: 1,
+          remindedAt: null,
+          sectionId: "ext-g",
+        },
+        {
+          id: "t2",
+          text: "孤儿组",
+          status: "todo",
+          priority: "none",
+          dueAt: null,
+          createdAt: 2,
+          remindedAt: null,
+          sectionId: "nowhere",
+        },
+      ],
+    });
+    expect(r.tasks).toBe(2);
+    const st = useNotesStore.getState();
+    expect(st.taskSections.map((s) => s.id)).toEqual([TASK_INBOX_ID, "ext-g"]);
+    expect(st.tasks.find((t) => t.id === "t1")?.sectionId).toBe("ext-g");
+    expect(st.tasks.find((t) => t.id === "t2")?.sectionId).toBeUndefined();
+  });
+});
+
+describe("剪贴板 tab：发送不标完成 / 清空 / 超龄清理", () => {
+  beforeEach(reset);
+
+  function addClip(text: string, createdAt?: number) {
+    const id = useNotesStore.getState().addNote(text).id!;
+    useNotesStore.setState({
+      notes: useNotesStore.getState().notes.map((n) =>
+        n.id === id
+          ? { ...n, sectionId: CLIPBOARD_ID, ...(createdAt ? { createdAt } : {}) }
+          : n
+      ),
+    });
+    return id;
+  }
+
+  it("doneIdsAfterSend 排除剪贴板卡（历史流水无完成语义）", () => {
+    const clip = addClip("剪贴板内容");
+    const normal = useNotesStore.getState().addNote("普通笔记").id!;
+    expect(doneIdsAfterSend(useNotesStore.getState(), [clip, normal])).toEqual([
+      normal,
+    ]);
+  });
+
+  it("clearClipHistory 清空非固定卡且可撤销", () => {
+    const a = addClip("A");
+    addClip("B");
+    useNotesStore.getState().toggleNoteKeep(a); // 固定 A
+    const r = useNotesStore.getState().clearClipHistory();
+    expect(r.removed).toBe(1);
+    expect(
+      useNotesStore.getState().notes.filter((n) => n.sectionId === CLIPBOARD_ID)
+    ).toHaveLength(1);
+    useNotesStore.getState().undo();
+    expect(
+      useNotesStore.getState().notes.filter((n) => n.sectionId === CLIPBOARD_ID)
+    ).toHaveLength(2);
+  });
+
+  it("pruneClipHistory 按保留时长清理超龄非固定卡；永久不清", () => {
+    const old = addClip("过期", Date.now() - 10 * 86_400_000);
+    const fresh = addClip("新鲜");
+    const pinnedOld = addClip("固定过期", Date.now() - 10 * 86_400_000);
+    useNotesStore.getState().toggleNoteKeep(pinnedOld);
+    // 永久：不清
+    useNotesStore.getState().setSettings({ clipRetentionDays: null });
+    useNotesStore.getState().pruneClipHistory();
+    expect(
+      useNotesStore.getState().notes.filter((n) => n.sectionId === CLIPBOARD_ID)
+    ).toHaveLength(3);
+    // 7 天：只清超龄且未固定的
+    useNotesStore.getState().setSettings({ clipRetentionDays: 7 });
+    useNotesStore.getState().pruneClipHistory();
+    const rest = useNotesStore
       .getState()
-      .addClipNote("图片 1×1", { kind: "image", imageFile: "clip-a.png" });
-    const removed = useNotesStore
-      .getState()
-      .addClipNote("图片 2×2", { kind: "image", imageFile: "clip-b.png" });
-    expect(removed).toEqual(["clip-a.png"]);
+      .notes.filter((n) => n.sectionId === CLIPBOARD_ID)
+      .map((n) => n.id)
+      .sort();
+    expect(rest).toEqual([fresh, pinnedOld].sort());
+    expect(rest).not.toContain(old);
   });
 });

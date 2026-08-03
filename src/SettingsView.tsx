@@ -2,12 +2,14 @@ import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
+import { ask } from "@tauri-apps/plugin-dialog";
 import type { Update } from "@tauri-apps/plugin-updater";
 import {
   Activity,
   ArrowDown,
   ArrowUp,
   Check,
+  ClipboardList,
   Database,
   Info,
   Keyboard,
@@ -22,6 +24,7 @@ import {
 
 import { Switch } from "@/components/ui/switch";
 import {
+  SETTINGS_CLEAR_CLIP,
   SETTINGS_EXPORT,
   SETTINGS_IMPORT,
   SETTINGS_PATCH,
@@ -44,6 +47,7 @@ import {
 type SectionId =
   | "general"
   | "hotkey"
+  | "clip"
   | "companion"
   | "exclude"
   | "snippets"
@@ -54,6 +58,7 @@ type SectionId =
 const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode }[] = [
   { id: "general", label: "通用", icon: <Settings2 className="size-4" /> },
   { id: "hotkey", label: "快捷键", icon: <Keyboard className="size-4" /> },
+  { id: "clip", label: "剪贴板", icon: <ClipboardList className="size-4" /> },
   { id: "companion", label: "伴随停靠", icon: <Magnet className="size-4" /> },
   { id: "exclude", label: "捕获排除", icon: <Shield className="size-4" /> },
   { id: "snippets", label: "Prompt 模板", icon: <Sparkles className="size-4" /> },
@@ -103,6 +108,7 @@ export default function SettingsView() {
       <main className="min-w-0 flex-1 overflow-y-auto p-5">
         {section === "general" && <GeneralSection settings={settings} patch={patch} />}
         {section === "hotkey" && <HotkeySection settings={settings} patch={patch} />}
+        {section === "clip" && <ClipboardSection settings={settings} patch={patch} />}
         {section === "companion" && <CompanionSection settings={settings} patch={patch} />}
         {section === "exclude" && <ExcludeSection settings={settings} patch={patch} />}
         {section === "snippets" && <SnippetsSection settings={settings} patch={patch} />}
@@ -432,9 +438,114 @@ function GeneralSection({ settings, patch }: SP) {
             />
           }
         />
+      </Group>
+      <ContextMenuGroup settings={settings} patch={patch} />
+    </div>
+  );
+}
+
+
+
+/** 保留时长滑杆（Paste 风格连续细分：1 天 ~ 2 年 ~ 无限，共 23 档）。 */
+const RETENTION_STEPS: { days: number | null; label: string }[] = [
+  ...[1, 2, 3, 4, 5, 6].map((d) => ({ days: d, label: `${d} 天` })),
+  ...[1, 2, 3].map((w) => ({ days: w * 7, label: `${w} 周` })),
+  ...Array.from({ length: 11 }, (_, i) => ({
+    days: (i + 1) * 30,
+    label: `${i + 1} 个月`,
+  })),
+  { days: 365, label: "1 年" },
+  { days: 730, label: "2 年" },
+  { days: null, label: "无限" },
+];
+
+function RetentionSlider({ settings, patch }: SP) {
+  // 拖动中只更新本地视觉，松手才提交（缩短需确认，拖动途中不能连环弹窗）
+  const [drag, setDrag] = useState<number | null>(null);
+  const committed = RETENTION_STEPS.findIndex(
+    (st) => st.days === settings.clipRetentionDays
+  );
+  const committedIdx = committed >= 0 ? committed : RETENTION_STEPS.length - 1;
+  const shownIdx = drag ?? committedIdx;
+  const shown = RETENTION_STEPS[shownIdx];
+
+  const commit = () => {
+    if (drag === null || drag === committedIdx) {
+      setDrag(null);
+      return;
+    }
+    const next = RETENTION_STEPS[drag];
+    const cur = settings.clipRetentionDays;
+    const shrinking = next.days !== null && (cur === null || next.days < cur);
+    if (!shrinking) {
+      patch({ clipRetentionDays: next.days });
+      setDrag(null);
+      return;
+    }
+    // 缩短会清理更旧记录：原生确认框（取消则滑块弹回原值）
+    void ask(
+      "比新的时长限制更旧的记录将被立即清理。\n已固定（★）的记录不会被删除。",
+      {
+        title: `确定把保留时长调整为「${next.label}」吗？`,
+        kind: "warning",
+        okLabel: "调整并清理",
+        cancelLabel: "取消",
+      }
+    ).then((yes) => {
+      if (yes) patch({ clipRetentionDays: next.days });
+      setDrag(null);
+    });
+  };
+
+  return (
+    <div className="w-60">
+      <input
+        type="range"
+        min={0}
+        max={RETENTION_STEPS.length - 1}
+        step={1}
+        value={shownIdx}
+        onChange={(e) => setDrag(Number(e.target.value))}
+        onPointerUp={commit}
+        onKeyUp={commit}
+        onBlur={commit}
+        className="w-full accent-primary"
+      />
+      <p className="mt-0.5 text-center text-[12px] font-medium">{shown.label}</p>
+      <div className="flex justify-between text-[10px] text-muted-foreground/70">
+        <span>天</span>
+        <span>周</span>
+        <span>个月</span>
+        <span>年</span>
+        <span>无限</span>
+      </div>
+      {shown.days === null && (
+        <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-500">
+          ⚠️ 无限历史可能会增加您的磁盘空间使用量
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** 剪贴板独立配置：收集/暂停/保留/删除历史/规则（参照 Paste）。 */
+function ClipboardSection({ settings, patch }: SP) {
+  const paused =
+    settings.clipPauseUntil !== null && settings.clipPauseUntil > Date.now();
+  const resumeAt = (ms: number) => {
+    const d = new Date(ms);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+  const pauseBtn =
+    "rounded-md border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground hover:text-foreground";
+  return (
+    <div>
+      <SectionTitle>剪贴板</SectionTitle>
+      <Group title="收集">
         <Row
           label="剪贴板历史"
-          hint="自动收集所有复制内容到「剪贴板」分组；密码管理器与标记为机密的内容不收集"
+          hint="自动收集复制的内容到「剪贴板」页"
           right={
             <Switch
               checked={settings.clipHistory}
@@ -444,23 +555,102 @@ function GeneralSection({ settings, patch }: SP) {
         />
         {settings.clipHistory && (
           <Row
-            label="历史保留条数"
-            hint="超出后自动清理最旧的（常用 ★ 卡片不清理）"
+            label="暂停收集"
+            hint={
+              paused
+                ? `已暂停 · ${resumeAt(settings.clipPauseUntil!)} 自动恢复`
+                : "临时停止收集，到点自动恢复"
+            }
             right={
-              <Segmented
-                value={String(settings.clipHistoryLimit)}
-                options={[
-                  { value: "30", label: "30" },
-                  { value: "50", label: "50" },
-                  { value: "100", label: "100" },
-                ]}
-                onChange={(v) => patch({ clipHistoryLimit: Number(v) })}
-              />
+              paused ? (
+                <button
+                  onClick={() => patch({ clipPauseUntil: null })}
+                  className="rounded-md border border-primary/50 bg-primary/10 px-2 py-0.5 text-[11px] font-medium"
+                >
+                  立即恢复
+                </button>
+              ) : (
+                <div className="flex gap-1">
+                  {[15, 30, 60, 480].map((m) => (
+                    <button
+                      key={m}
+                      onClick={() =>
+                        patch({ clipPauseUntil: Date.now() + m * 60_000 })
+                      }
+                      className={pauseBtn}
+                    >
+                      {m < 60 ? `${m}分` : `${m / 60}时`}
+                    </button>
+                  ))}
+                </div>
+              )
             }
           />
         )}
       </Group>
-      <ContextMenuGroup settings={settings} patch={patch} />
+      <Group title="保留历史">
+        <Row
+          label="保留时长"
+          hint="超龄记录自动清理（固定 ★ 不清理）"
+          right={<RetentionSlider settings={settings} patch={patch} />}
+        />
+        <Row
+          label="删除历史"
+          hint="清空全部非固定的剪贴板记录（可在主面板撤销）"
+          right={
+            <button
+              onClick={() => {
+                // 破坏性操作先原生确认框（Paste 同款 NSAlert）
+                void ask(
+                  "已固定（★）的记录不会被删除。\n删除后可在主面板的提示气泡中撤销一次。",
+                  {
+                    title: "您确定要删除剪贴板历史记录吗？",
+                    kind: "warning",
+                    okLabel: "清除",
+                    cancelLabel: "取消",
+                  }
+                ).then((yes) => {
+                  if (yes) void emitTo("main", SETTINGS_CLEAR_CLIP, {});
+                });
+              }}
+              className="rounded-md border border-red-500/40 px-2 py-0.5 text-[11px] text-red-500 hover:bg-red-500/10"
+            >
+              删除历史…
+            </button>
+          }
+        />
+      </Group>
+      <Group title="规则">
+        <Row
+          label="忽略机密内容"
+          hint="检测到密码管理器的机密标记时不保存"
+          right={
+            <Switch
+              checked={settings.clipIgnoreConcealed}
+              onCheckedChange={(v) => patch({ clipIgnoreConcealed: v })}
+            />
+          }
+        />
+        <Row
+          label="忽略瞬时内容"
+          hint="不保存其他程序生成的临时数据"
+          right={
+            <Switch
+              checked={settings.clipIgnoreTransient}
+              onCheckedChange={(v) => patch({ clipIgnoreTransient: v })}
+            />
+          }
+        />
+      </Group>
+      <p className="mb-2 text-[12px] font-medium text-muted-foreground">忽略应用程序</p>
+      <p className="mb-3 text-[12px] text-muted-foreground">
+        不保存从以下应用复制的内容（独立于「捕获排除」列表）。
+      </p>
+      <AppListEditor
+        apps={settings.clipExcludedApps}
+        onChange={(apps) => patch({ clipExcludedApps: apps })}
+        addLabel="把当前应用加入忽略列表"
+      />
     </div>
   );
 }
@@ -510,7 +700,7 @@ function HotkeySection({ settings, patch }: SP) {
           }
         />
       </Group>
-      <Group title="面板内快捷键（长按 ⌘ 可随时速查）">
+      <Group title="面板内快捷键（长按 ⌥ 可随时速查）">
         {[
           ["⇧⇧", "捕获选中文本 / 呼出面板"],
           ["↑ ↓", "移动焦点卡片"],
@@ -952,7 +1142,7 @@ function SnippetsSection({ settings, patch }: SP) {
           value={text}
           rows={2}
           onChange={(e) => setText(e.target.value)}
-          placeholder={"模板内容，支持多行（如：请把下面的文案润色：\n{内容}\n保持原有格式）"}
+          placeholder="模板内容，写 {内容} 指定插入位置，支持多行"
           className="min-h-8 flex-1 resize-y rounded-lg border border-border bg-transparent px-2 py-1.5 text-[12px] leading-relaxed outline-none focus:border-primary/50"
         />
         <button

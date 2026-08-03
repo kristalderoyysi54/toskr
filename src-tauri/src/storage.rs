@@ -178,6 +178,15 @@ pub fn read_image_rgba(app: &AppHandle, name: &str) -> Option<(usize, usize, Vec
     Some((w, h, img.into_raw()))
 }
 
+/// 图片附件绝对路径（Quick Look 预览用；含文件名安全检查，不存在返回 None）。
+pub fn image_path(app: &AppHandle, name: &str) -> Option<std::path::PathBuf> {
+    if name.contains('/') || name.contains("..") {
+        return None;
+    }
+    let p = data_dir(app).join(MEDIA_DIR).join(name);
+    p.exists().then_some(p)
+}
+
 /// 删除图片附件（卡片删除时清理）。
 pub fn remove_image(app: &AppHandle, name: &str) {
     if name.contains('/') || name.contains("..") {

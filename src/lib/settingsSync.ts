@@ -14,6 +14,7 @@ export const SETTINGS_STATE = "toskr://settings-state";
 export const SETTINGS_PATCH = "toskr://settings-patch";
 export const SETTINGS_EXPORT = "toskr://do-export";
 export const SETTINGS_IMPORT = "toskr://do-import";
+export const SETTINGS_CLEAR_CLIP = "toskr://do-clear-clip";
 
 /** 应用设置补丁并执行对应的 Rust 侧副作用（主面板调用）。 */
 export function applySettingsPatch(patch: Partial<Settings>) {
@@ -41,6 +42,27 @@ export function applySettingsPatch(patch: Partial<Settings>) {
   if ("clipHistory" in patch) {
     void api.setClipWatch(s.clipHistory);
   }
+  if ("clipPauseUntil" in patch) {
+    void api.setClipPause(s.clipPauseUntil ?? 0);
+  }
+  if ("clipRetentionDays" in patch) {
+    // 缩短时长即刻生效（不等 30 分钟周期），清掉孤儿图片
+    useNotesStore
+      .getState()
+      .pruneClipHistory()
+      .forEach((f) => void api.removeImage(f).catch(() => {}));
+  }
+  if (
+    "clipIgnoreConcealed" in patch ||
+    "clipIgnoreTransient" in patch ||
+    "clipExcludedApps" in patch
+  ) {
+    void api.setClipRules(
+      s.clipIgnoreConcealed,
+      s.clipIgnoreTransient,
+      s.clipExcludedApps
+    );
+  }
   if ("stealth" in patch) {
     void api.setStealth(s.stealth);
   }
@@ -67,12 +89,14 @@ export function broadcastSettings() {
 export function installSettingsSyncHost(handlers: {
   onExport: () => void;
   onImport: () => void;
+  onClearClip: () => void;
 }) {
   const subs = [
     listen(SETTINGS_REQUEST, () => broadcastSettings()),
     listen<Partial<Settings>>(SETTINGS_PATCH, (e) => applySettingsPatch(e.payload)),
     listen(SETTINGS_EXPORT, () => handlers.onExport()),
     listen(SETTINGS_IMPORT, () => handlers.onImport()),
+    listen(SETTINGS_CLEAR_CLIP, () => handlers.onClearClip()),
   ];
   return () => {
     subs.forEach((p) => p.then((fn) => fn()));

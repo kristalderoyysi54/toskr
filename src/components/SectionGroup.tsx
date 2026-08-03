@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import {
@@ -54,6 +54,8 @@ export function SectionGroup({
 
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(section.name);
+  // 单击组名折叠 / 双击改名：延迟消歧，双击时取消未执行的折叠
+  const clickTimer = useRef(0);
 
   // 空组/折叠组也可作为跨组拖拽的投放目标
   const { setNodeRef, isOver } = useDroppable({ id: `sec:${section.id}` });
@@ -117,8 +119,17 @@ export function SectionGroup({
           />
         ) : (
           <h3
-            className="select-none text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground"
+            title="点击折叠/展开 · 双击重命名"
+            className="cursor-pointer select-none text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground hover:text-foreground"
+            onClick={() => {
+              window.clearTimeout(clickTimer.current);
+              clickTimer.current = window.setTimeout(
+                () => toggleSectionCollapsed(section.id),
+                220
+              );
+            }}
             onDoubleClick={() => {
+              window.clearTimeout(clickTimer.current);
               setName(section.name);
               setRenaming(true);
             }}

@@ -1,11 +1,12 @@
 import type { Note } from "@/store/notesStore";
 
-/** 笔记是否命中搜索词（大小写不敏感，匹配文本与来源应用名）。 */
+/** 笔记是否命中搜索词（大小写不敏感，匹配文本、自定义标题与来源应用名）。 */
 export function matchNote(note: Note, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
   return (
     note.text.toLowerCase().includes(q) ||
+    (note.title?.toLowerCase().includes(q) ?? false) ||
     (note.sourceApp?.toLowerCase().includes(q) ?? false)
   );
 }

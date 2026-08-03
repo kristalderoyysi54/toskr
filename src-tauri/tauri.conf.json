@@ -53,6 +53,23 @@
         "focus": false,
         "acceptFirstMouse": false,
         "visibleOnAllWorkspaces": true
+      },
+      {
+        "label": "imgpreview",
+        "title": "图片预览",
+        "width": 600,
+        "height": 400,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": true,
+        "shadow": true,
+        "acceptFirstMouse": true,
+        "visibleOnAllWorkspaces": true,
+        "minWidth": 240,
+        "minHeight": 180
       }
     ],
     "security": {

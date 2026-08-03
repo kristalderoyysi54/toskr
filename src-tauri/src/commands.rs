@@ -48,6 +48,39 @@ pub fn set_clip_watch(app: AppHandle, enabled: bool) {
         .store(enabled, Ordering::SeqCst);
 }
 
+/// 图片原尺寸预览（自建预览窗；面板 320-520pt 放不下大图）。
+#[tauri::command]
+pub fn quick_look(app: AppHandle, file: String) {
+    crate::window::preview_image(&app, file);
+}
+
+/// 暂停剪贴板收集下发（设置页改动 → 同步 Rust 与托盘菜单；0 = 恢复）。
+#[tauri::command]
+pub fn set_clip_pause(app: AppHandle, until_ms: i64) {
+    app.state::<AppState>()
+        .clip_pause_until
+        .store(until_ms.max(0), Ordering::Relaxed);
+    crate::tray::refresh(&app);
+}
+
+/// 剪贴板规则下发：忽略机密/瞬时内容与独立忽略应用列表。
+#[tauri::command]
+pub fn set_clip_rules(
+    app: AppHandle,
+    ignore_concealed: bool,
+    ignore_transient: bool,
+    apps: Vec<String>,
+) {
+    let state = app.state::<AppState>();
+    state
+        .clip_ignore_concealed
+        .store(ignore_concealed, Ordering::Relaxed);
+    state
+        .clip_ignore_transient
+        .store(ignore_transient, Ordering::Relaxed);
+    *state.clip_excluded_apps.lock().unwrap() = apps;
+}
+
 /// 一键发送：备份剪贴板 → 收面板 → 激活目标并确认到达 →
 /// 先粘贴文本，再逐张粘贴图片附件（图片必须以图片形式写入剪贴板，
 /// 否则只会粘出占位文字）→ 可选回车 → 延迟还原剪贴板。
@@ -115,8 +148,16 @@ pub async fn send_to_chat(
         }
 
         for (w, h, rgba) in images {
-            // 每张图单独写入剪贴板再粘贴；目标应用需要时间读取粘贴板
-            std::thread::sleep(Duration::from_millis(320));
+            // 每张图单独写入剪贴板再粘贴。间隔必须足够长：慢应用（聊天类）
+            // 异步消化上一张图期间就覆盖剪贴板会导致后续粘贴被吞（只发出一张）
+            std::thread::sleep(Duration::from_millis(700));
+            if let Some(pid) = target_pid {
+                // 目标中途失焦（图片预览弹层抢焦等）时重新激活，防粘错地方/丢图
+                if !crate::focus::wait_frontmost(pid, 5, 40) {
+                    crate::focus::activate_pid(pid);
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+            }
             {
                 let mut c = arboard::Clipboard::new().map_err(|e| e.to_string())?;
                 c.set_image(arboard::ImageData {
@@ -145,13 +186,13 @@ pub async fn send_to_chat(
     );
     // 发送回执 HUD：成功报告去向（发错目标一眼可见），失败明确警示
     if sent {
-        crate::window::show_hud(&app, "sent", format!("已发送到 {target_name}"), false);
+        crate::window::show_hud(&app, "sent", format!("已发送到 {target_name}"), false, false, None);
     } else {
         crate::window::show_hud(
             &app,
             "warn",
             format!("发送中止：{target_name} 未到达前台"),
-            false,
+            false, false, None,
         );
     }
     if sent {
@@ -171,7 +212,7 @@ pub async fn send_to_chat(
             &app,
             "warn",
             "目标未就绪 · 内容已在剪贴板".into(),
-            false,
+            false, false, None,
         );
     }
     Ok(sent)
@@ -382,7 +423,7 @@ pub fn show_capture_hud(app: AppHandle, kind: String, preview: String) {
     let kind = if kind == "duplicate" { "duplicate" } else { "added" };
     // 前端去重裁决的回执也进诊断：与「捕获:」行拼起来即是完整链路
     crate::diag::push(&app, format!("入库回执: {kind}「{preview}」"));
-    crate::window::show_hud(&app, kind, preview, kind == "added");
+    crate::window::show_hud(&app, kind, preview, kind == "added", false, None);
 }
 
 /// 立即隐藏 HUD（点击气泡打开面板时调用）。
@@ -391,10 +432,25 @@ pub fn hide_hud(app: AppHandle) {
     crate::window::hide_hud_now(&app);
 }
 
-/// 通用 HUD 反馈（操作确认、错误提示等；`undoable` 时悬停可撤销）。
+/// 通用 HUD 反馈（操作确认、错误提示等；`undoable` 时悬停可撤销；
+/// `sticky` 为粘性气泡（任务到期提醒），仅点击可关闭，`target_id` 为点击跳转目标）。
 #[tauri::command]
-pub fn hud_feedback(app: AppHandle, kind: String, text: String, undoable: Option<bool>) {
-    crate::window::show_hud(&app, &kind, text, undoable.unwrap_or(false));
+pub fn hud_feedback(
+    app: AppHandle,
+    kind: String,
+    text: String,
+    undoable: Option<bool>,
+    sticky: Option<bool>,
+    target_id: Option<String>,
+) {
+    crate::window::show_hud(
+        &app,
+        &kind,
+        text,
+        undoable.unwrap_or(false),
+        sticky.unwrap_or(false),
+        target_id,
+    );
 }
 
 /// 前端链路诊断回执（Toggle 处理结果等落盘，报障时诊断页可见）。

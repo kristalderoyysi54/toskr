@@ -27,6 +27,7 @@ function reset() {
   useNotesStore.setState({
     sections: [{ id: INBOX_ID, name: "收件箱" }],
     notes: [],
+    tasks: [],
     checkedIds: [],
     settings: defaultSettings(),
     undoStack: [],

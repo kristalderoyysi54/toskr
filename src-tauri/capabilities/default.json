@@ -2,7 +2,12 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Toskr 主面板与 HUD 窗口的默认能力",
-  "windows": ["main", "hud", "settings"],
+  "windows": [
+    "main",
+    "hud",
+    "settings",
+    "imgpreview"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-show",

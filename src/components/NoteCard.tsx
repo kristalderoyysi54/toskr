@@ -7,9 +7,12 @@ import {
   Expand,
   FolderInput,
   GripVertical,
+  Inbox,
   ListOrdered,
+  ListTodo,
   Merge,
   Pencil,
+  PenLine,
   ExternalLink,
   Send,
   ScanText,
@@ -30,6 +33,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
+  convertNoteToTaskWithUndo,
   copyNotesAsList,
   deleteNotesWithUndo,
   mergeNoteWithChecked,
@@ -45,6 +49,8 @@ import { splitHighlight } from "@/lib/search";
 import { api } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import {
+  CLIPBOARD_ID,
+  INBOX_ID,
   noteImages,
   normalizeContextMenu,
   useNotesStore,
@@ -55,7 +61,7 @@ import { useUIStore } from "@/store/uiStore";
 
 /**
  * 固定尺寸卡片瓷砖（Paste 风格）：统一高度、3 行截断展示；
- * 完整内容与编辑通过预览层（Space / 双击 / 放大按钮）。
+ * 双击 = 直接发送到对话；完整内容与编辑通过预览层（Space / 放大按钮）。
  */
 export function NoteCard({ note, query = "" }: { note: Note; query?: string }) {
   const checked = useNotesStore((s) => s.checkedIds.includes(note.id));
@@ -98,9 +104,14 @@ export function NoteCard({ note, query = "" }: { note: Note; query?: string }) {
   }, [focused]);
 
   const openPreview = (editing = false) => {
-    // 链接卡片「查看明细」= 直接打开网页；编辑仍走预览层编辑链接文本
+    // 链接卡「查看明细」= 直接打开网页；编辑仍走预览层编辑链接文本
     if (isLink && !editing) {
       void api.openUrl(note.url!);
+      return;
+    }
+    // 图片卡「查看明细」= 系统 Quick Look 原尺寸预览（窄面板放不下大图）
+    if (isImage && !editing && note.imageFile) {
+      void api.quickLook(note.imageFile);
       return;
     }
     useUIStore.getState().openPreview(note.id, editing);
@@ -132,11 +143,21 @@ export function NoteCard({ note, query = "" }: { note: Note; query?: string }) {
   const renderMenuItem = (id: ContextMenuItemId): React.ReactNode => {
     switch (id) {
       case "preview":
-        return isLink ? (
-          <ContextMenuItem key={id} onClick={() => void api.openUrl(note.url!)}>
-            <ExternalLink className="size-3.5" /> 打开链接
-          </ContextMenuItem>
-        ) : (
+        if (isLink) {
+          return (
+            <ContextMenuItem key={id} onClick={() => void api.openUrl(note.url!)}>
+              <ExternalLink className="size-3.5" /> 打开链接
+            </ContextMenuItem>
+          );
+        }
+        if (isImage && note.imageFile) {
+          return (
+            <ContextMenuItem key={id} onClick={() => openPreview()}>
+              <Expand className="size-3.5" /> 原尺寸预览
+            </ContextMenuItem>
+          );
+        }
+        return (
           <ContextMenuItem key={id} onClick={() => openPreview()}>
             <Expand className="size-3.5" /> 预览
           </ContextMenuItem>
@@ -199,7 +220,27 @@ export function NoteCard({ note, query = "" }: { note: Note; query?: string }) {
         return (
           <ContextMenuItem key={id} onClick={() => toggleNoteKeep(note.id)}>
             <Star className={cn("size-3.5", note.keep && "fill-current")} />{" "}
-            {note.keep ? "取消常用" : "设为常用 · 发送后保留"}
+            {isClip
+              ? note.keep
+                ? "取消固定"
+                : "固定 · 不被清理"
+              : note.keep
+                ? "取消常用"
+                : "设为常用 · 发送后保留"}
+          </ContextMenuItem>
+        );
+      case "rename":
+        return (
+          <ContextMenuItem key={id} onClick={startRename}>
+            <PenLine className="size-3.5" /> 重命名
+          </ContextMenuItem>
+        );
+      case "to-task":
+        // 任务没有图片语义：图片卡/图文组合卡不提供转换
+        if (isImage || isComposite) return null;
+        return (
+          <ContextMenuItem key={id} onClick={() => convertNoteToTaskWithUndo(note.id)}>
+            <ListTodo className="size-3.5" /> 转为任务
           </ContextMenuItem>
         );
       case "move":
@@ -211,7 +252,8 @@ export function NoteCard({ note, query = "" }: { note: Note; query?: string }) {
             </ContextMenuSubTrigger>
             <ContextMenuSubContent className="w-36">
               {sections
-                .filter((s) => s.id !== note.sectionId)
+                // 剪贴板是自动流水分组，不作为移动目标
+                .filter((s) => s.id !== note.sectionId && s.id !== CLIPBOARD_ID)
                 .map((s) => (
                   <ContextMenuItem key={s.id} onClick={() => moveNotes([note.id], s.id)}>
                     {s.name}
@@ -283,6 +325,34 @@ export function NoteCard({ note, query = "" }: { note: Note; query?: string }) {
 
   const segments = splitHighlight(note.text, query);
 
+  /** 通栏类型标签（无自定义标题时显示）。 */
+  const typeLabel = isImage
+    ? images.length > 1
+      ? `图片 ×${images.length}`
+      : "图片"
+    : isComposite
+      ? `图文 ×${images.length + 1}`
+      : isLink
+        ? "链接"
+        : note.codeLang
+          ? langLabel(note.codeLang)
+          : "文本";
+
+  // 重命名（点击通栏类型区 / 右键「重命名」）：行内编辑自定义标题
+  const [renaming, setRenaming] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const startRename = () => {
+    setTitleDraft(note.title ?? "");
+    setRenaming(true);
+  };
+  const commitRename = () => {
+    useNotesStore.getState().updateNoteTitle(note.id, titleDraft);
+    setRenaming(false);
+  };
+
+  /** 剪贴板历史卡：右键语义变化（固定/保存为笔记）。 */
+  const isClip = note.sectionId === CLIPBOARD_ID;
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -318,14 +388,18 @@ export function NoteCard({ note, query = "" }: { note: Note; query?: string }) {
             ui.setFocusedId(note.id);
             ui.setAnchorId(note.id);
             const checkedNow = useNotesStore.getState().checkedIds;
-            if (checkedNow.includes(note.id) && checkedNow.length > 1) {
-              // 多选中点击已选卡片：收拢为仅选中这张（Finder 式）
-              useNotesStore.getState().setChecked([note.id]);
-            } else {
+            if (e.metaKey) {
+              // ⌘+点击：累加/移出多选（Finder 式）
               toggleChecked(note.id);
+            } else if (checkedNow.length === 1 && checkedNow[0] === note.id) {
+              // 单击唯一已选的这张：取消选择
+              useNotesStore.getState().clearChecked();
+            } else {
+              // 单击：单选（替换现有选择）
+              useNotesStore.getState().setChecked([note.id]);
             }
           }}
-          onDoubleClick={() => openPreview()}
+          onDoubleClick={() => void sendNotesToChat([note.id])}
           className={cn(
             "group relative flex cursor-default select-none overflow-hidden rounded-lg border border-transparent",
             compact ? "h-9 items-center" : "h-[136px] flex-col px-2 pb-1.5 pt-1.5",
@@ -379,19 +453,33 @@ export function NoteCard({ note, query = "" }: { note: Note; query?: string }) {
             style={{ backgroundColor: (cardTint && icon?.color) || "#5b5b60" }}
           >
             <div className="min-w-0 flex-1 leading-tight">
-              <p className="truncate text-[11px] font-semibold text-white">
-                {isImage
-                  ? images.length > 1
-                    ? `图片 ×${images.length}`
-                    : "图片"
-                  : isComposite
-                    ? `图文 ×${images.length + 1}`
-                    : isLink
-                      ? "链接"
-                    : note.codeLang
-                      ? langLabel(note.codeLang)
-                      : "文本"}
-              </p>
+              {renaming ? (
+                <input
+                  autoFocus
+                  value={titleDraft}
+                  placeholder={typeLabel}
+                  onChange={(e) => setTitleDraft(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  onBlur={commitRename}
+                  onKeyDown={(e) => {
+                    e.stopPropagation();
+                    if (e.key === "Enter" && !e.nativeEvent.isComposing) commitRename();
+                    if (e.key === "Escape") setRenaming(false);
+                  }}
+                  className="w-full bg-transparent text-[11px] font-semibold text-white outline-none placeholder:text-white/50"
+                />
+              ) : (
+                <p
+                  title="点击重命名"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    startRename();
+                  }}
+                  className="cursor-text truncate text-[11px] font-semibold text-white"
+                >
+                  {note.title ?? typeLabel}
+                </p>
+              )}
               <p className="truncate text-[10px] text-white/70">
                 {timeAgo(note.createdAt)}
               </p>
@@ -533,6 +621,17 @@ export function NoteCard({ note, query = "" }: { note: Note; query?: string }) {
         {mergeCount >= 2 && (
           <ContextMenuItem onClick={() => mergeNoteWithChecked(note.id)}>
             <Merge className="size-3.5" /> 合并笔记 ×{mergeCount}
+          </ContextMenuItem>
+        )}
+        {/* 剪贴板历史卡的转正主路径：搬去收件箱成为正式笔记 */}
+        {isClip && (
+          <ContextMenuItem
+            onClick={() => {
+              moveNotes([note.id], INBOX_ID);
+              tip("ok", "已保存为笔记");
+            }}
+          >
+            <Inbox className="size-3.5" /> 保存为笔记
           </ContextMenuItem>
         )}
         {/* 中段按设置项的显隐与顺序渲染；卡片类型不适用的项自动跳过 */}
