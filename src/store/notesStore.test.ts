@@ -17,7 +17,9 @@ vi.mock("./persistStorage", () => {
 });
 
 import {
+  CLIPBOARD_ID,
   defaultSettings,
+  doneIdsAfterSend,
   INBOX_ID,
   orderedCheckedNotes,
   useNotesStore,
@@ -221,5 +223,128 @@ describe("导入合并", () => {
     expect(state.sections.map((x) => x.name)).toEqual(["收件箱", "外部组"]);
     expect(state.notes.find((n) => n.id === "new-2")?.sectionId).toBe(INBOX_ID);
     expect(state.notes.find((n) => n.id === localId)?.text).toBe("本地已有");
+  });
+});
+
+describe("链接卡片：updateNoteText 升降级与 setLinkMeta", () => {
+  beforeEach(reset);
+
+  it("捕获/输入纯 URL 自动成为链接卡", () => {
+    const { id } = useNotesStore.getState().addNote("https://a.com/docs");
+    const n = useNotesStore.getState().notes.find((x) => x.id === id)!;
+    expect(n.kind).toBe("link");
+    expect(n.url).toBe("https://a.com/docs");
+  });
+
+  it("编辑成另一个 URL：保持链接卡并清掉旧简介待重抓", () => {
+    const { id } = useNotesStore.getState().addNote("https://a.com/1");
+    useNotesStore.getState().setLinkMeta(id!, { title: "旧标题", icon: "https://a.com/f.ico" });
+    useNotesStore.getState().updateNoteText(id!, "https://b.com/2");
+    const n = useNotesStore.getState().notes.find((x) => x.id === id)!;
+    expect(n.kind).toBe("link");
+    expect(n.url).toBe("https://b.com/2");
+    expect(n.linkTitle).toBeUndefined();
+    expect(n.linkIcon).toBeUndefined();
+  });
+
+  it("链接卡编辑成普通文本：降级为文本卡", () => {
+    const { id } = useNotesStore.getState().addNote("https://a.com/1");
+    useNotesStore.getState().setLinkMeta(id!, { title: "标题" });
+    useNotesStore.getState().updateNoteText(id!, "只是普通笔记");
+    const n = useNotesStore.getState().notes.find((x) => x.id === id)!;
+    expect(n.kind).toBe("text");
+    expect(n.url).toBeUndefined();
+    expect(n.linkTitle).toBeUndefined();
+  });
+
+  it("文本卡编辑成 URL：升级为链接卡", () => {
+    const { id } = useNotesStore.getState().addNote("普通文本");
+    useNotesStore.getState().updateNoteText(id!, "https://c.com/x");
+    const n = useNotesStore.getState().notes.find((x) => x.id === id)!;
+    expect(n.kind).toBe("link");
+    expect(n.url).toBe("https://c.com/x");
+  });
+
+  it("setLinkMeta 只作用于链接卡且 URL 未变时生效", () => {
+    const { id } = useNotesStore.getState().addNote("普通文本");
+    useNotesStore.getState().setLinkMeta(id!, { title: "不应写入" });
+    expect(
+      useNotesStore.getState().notes.find((x) => x.id === id)!.linkTitle
+    ).toBeUndefined();
+  });
+});
+
+describe("发送后保留：doneIdsAfterSend", () => {
+  beforeEach(reset);
+
+  it("普通卡发送后进入完成列表", () => {
+    const { id } = useNotesStore.getState().addNote("普通内容");
+    expect(doneIdsAfterSend(useNotesStore.getState(), [id!])).toEqual([id]);
+  });
+
+  it("「常用」卡发送后不标完成", () => {
+    const a = useNotesStore.getState().addNote("常用 Prompt").id!;
+    const b = useNotesStore.getState().addNote("一次性内容").id!;
+    useNotesStore.getState().toggleNoteKeep(a);
+    expect(doneIdsAfterSend(useNotesStore.getState(), [a, b])).toEqual([b]);
+    // 再次切换恢复常规行为
+    useNotesStore.getState().toggleNoteKeep(a);
+    expect(doneIdsAfterSend(useNotesStore.getState(), [a, b]).sort()).toEqual(
+      [a, b].sort()
+    );
+  });
+
+  it("「发送后保留」分组内的卡不标完成", () => {
+    useNotesStore.getState().toggleSectionKeep(INBOX_ID);
+    const a = useNotesStore.getState().addNote("Prompt 库内容").id!;
+    expect(doneIdsAfterSend(useNotesStore.getState(), [a])).toEqual([]);
+  });
+});
+
+describe("剪贴板历史 addClipNote", () => {
+  beforeEach(reset);
+
+  it("首次收集自动建「剪贴板」组并插在收件箱之后", () => {
+    useNotesStore.getState().addClipNote("copied");
+    const sections = useNotesStore.getState().sections;
+    expect(sections.map((s) => s.id)).toEqual([INBOX_ID, CLIPBOARD_ID]);
+    expect(useNotesStore.getState().notes[0].sectionId).toBe(CLIPBOARD_ID);
+  });
+
+  it("重复文本静默跳过不新建", () => {
+    useNotesStore.getState().addClipNote("same");
+    useNotesStore.getState().addClipNote("same");
+    expect(useNotesStore.getState().notes).toHaveLength(1);
+  });
+
+  it("超限从最旧裁剪，常用 ★ 卡不清理", () => {
+    useNotesStore.setState({
+      settings: { ...defaultSettings(), clipHistoryLimit: 2 },
+    });
+    useNotesStore.getState().addClipNote("a");
+    const keepId = useNotesStore.getState().notes[0].id;
+    useNotesStore.getState().toggleNoteKeep(keepId);
+    useNotesStore.getState().addClipNote("b");
+    useNotesStore.getState().addClipNote("c");
+    useNotesStore.getState().addClipNote("d");
+    const texts = useNotesStore
+      .getState()
+      .notes.filter((n) => n.sectionId === CLIPBOARD_ID)
+      .map((n) => n.text);
+    // 非 keep 只留最新 2 条（d/c），keep 的 a 幸存
+    expect(texts.sort()).toEqual(["a", "c", "d"]);
+  });
+
+  it("裁剪返回不再被引用的图片文件名", () => {
+    useNotesStore.setState({
+      settings: { ...defaultSettings(), clipHistoryLimit: 1 },
+    });
+    useNotesStore
+      .getState()
+      .addClipNote("图片 1×1", { kind: "image", imageFile: "clip-a.png" });
+    const removed = useNotesStore
+      .getState()
+      .addClipNote("图片 2×2", { kind: "image", imageFile: "clip-b.png" });
+    expect(removed).toEqual(["clip-a.png"]);
   });
 });

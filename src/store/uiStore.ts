@@ -25,6 +25,8 @@ interface UIState {
   flashId: string | null;
   /** 各分组「已完成」折叠区展开态（临时）。 */
   doneOpen: Record<string, boolean>;
+  /** ⌘ 按住中（前 9 张卡显示 ⌘1-9 快发角标）。 */
+  cmdHeld: boolean;
   /** 辅助功能授权状态（应用级常驻轮询写入）。 */
   permissionAx: boolean;
   /** 键盘监听 tap 是否已创建。 */
@@ -46,6 +48,7 @@ interface UIState {
   closePreview: () => void;
   setPreviewEditing: (editing: boolean) => void;
   setFlashId: (id: string | null) => void;
+  setCmdHeld: (held: boolean) => void;
   toggleDoneOpen: (sectionId: string) => void;
   setPermission: (
     ax: boolean,
@@ -68,6 +71,7 @@ export const useUIStore = create<UIState>()((set, get) => ({
   previewEditing: false,
   flashId: null,
   doneOpen: {},
+  cmdHeld: false,
   permissionAx: true,
   permissionInstalled: true,
   permissionReceiving: true,
@@ -87,6 +91,7 @@ export const useUIStore = create<UIState>()((set, get) => ({
   closePreview: () => set({ previewId: null, previewEditing: false }),
   setPreviewEditing: (previewEditing) => set({ previewEditing }),
   setFlashId: (flashId) => set({ flashId }),
+  setCmdHeld: (cmdHeld) => set({ cmdHeld }),
   toggleDoneOpen: (sectionId) =>
     set({ doneOpen: { ...get().doneOpen, [sectionId]: !get().doneOpen[sectionId] } }),
   setPermission: (permissionAx, permissionInstalled, permissionReceiving, eventsStuck) =>

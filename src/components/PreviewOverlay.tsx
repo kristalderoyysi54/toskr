@@ -4,8 +4,9 @@ import { Check, Copy, ExternalLink, Pencil, Send, Trash2, X } from "lucide-react
 
 import { tip } from "@/lib/tip";
 import { Button } from "@/components/ui/button";
-import { deleteNotesWithUndo, sendNotesToChat } from "@/lib/actions";
+import { deleteNotesWithUndo, enrichLinkMeta, sendNotesToChat } from "@/lib/actions";
 import { highlightCode, langLabel } from "@/lib/code";
+import { looksLikeMarkdown, renderMarkdown } from "@/lib/markdown";
 import { useAppIcon } from "@/lib/icons";
 import { useNoteImage } from "@/lib/media";
 import { api } from "@/lib/tauri";
@@ -37,6 +38,14 @@ export function PreviewOverlay() {
   const imageUrl = useNoteImage(isImage ? note?.imageFile : undefined);
   const [draft, setDraft] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Markdown 渲染视图：像 Markdown 的文本卡默认渲染，可切回原文（代码卡不参与）
+  const [mdView, setMdView] = useState(false);
+  const isMd = !!note && !isImage && !isLink && !note.codeLang && looksLikeMarkdown(note.text);
+
+  useEffect(() => {
+    setMdView(isMd);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [note?.id]);
 
   useEffect(() => {
     if (editing && note) {
@@ -48,6 +57,8 @@ export function PreviewOverlay() {
   const save = () => {
     if (note && draft.trim() && draft !== note.text) {
       useNotesStore.getState().updateNoteText(note.id, draft);
+      // 编辑成链接（或改了 URL）时补抓网页标题/图标（幂等）
+      void enrichLinkMeta(note.id);
       tip("ok", "已保存");
     }
     useUIStore.getState().setPreviewEditing(false);
@@ -124,7 +135,15 @@ export function PreviewOverlay() {
               </button>
             </header>
 
-            <div className="min-h-0 flex-1 overflow-y-auto p-3">
+            <div
+              className="min-h-0 flex-1 overflow-y-auto p-3"
+              onDoubleClick={() => {
+                // 双击正文直接进入编辑（图片卡无文本编辑）
+                if (!isImage && !editing) {
+                  useUIStore.getState().setPreviewEditing(true);
+                }
+              }}
+            >
               {isImage ? (
                 <div className="flex h-full items-center justify-center">
                   {imageUrl ? (
@@ -157,6 +176,11 @@ export function PreviewOverlay() {
                     }}
                   />
                 </pre>
+              ) : mdView ? (
+                <div
+                  className="md-preview text-[13px] leading-relaxed"
+                  dangerouslySetInnerHTML={{ __html: renderMarkdown(note.text) }}
+                />
               ) : (
                 <pre className="whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-[12.5px] leading-relaxed">
                   {note.text}
@@ -188,6 +212,14 @@ export function PreviewOverlay() {
                   </Button>
                 ) : (
                   <>
+                    {isMd && (
+                      <button
+                        onClick={() => setMdView(!mdView)}
+                        className="rounded-md px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
+                      >
+                        {mdView ? "原文" : "渲染"}
+                      </button>
+                    )}
                     {isLink && (
                       <IconBtn label="打开链接" onClick={() => void api.openUrl(note.url!)}>
                         <ExternalLink className="size-3.5" />

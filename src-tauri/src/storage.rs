@@ -159,6 +159,14 @@ pub fn image_data_url(app: &AppHandle, name: &str) -> Option<String> {
     Some(format!("data:image/png;base64,{b64}"))
 }
 
+/// 读取图片附件原始字节（OCR 用；不存在返回 None）。
+pub fn read_image_bytes(app: &AppHandle, name: &str) -> Option<Vec<u8>> {
+    if name.contains('/') || name.contains("..") {
+        return None;
+    }
+    fs::read(data_dir(app).join(MEDIA_DIR).join(name)).ok()
+}
+
 /// 读取图片附件为 RGBA 像素（写入剪贴板用）。
 pub fn read_image_rgba(app: &AppHandle, name: &str) -> Option<(usize, usize, Vec<u8>)> {
     if name.contains('/') || name.contains("..") {

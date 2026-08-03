@@ -54,6 +54,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         CheckMenuItem::with_id(app, "stealth", "隐身模式（不弹捕获提示）", true, stealth, None::<&str>)?;
     let autostart_item =
         CheckMenuItem::with_id(app, "autostart", "开机启动", true, autostart_enabled, None::<&str>)?;
+    let settings_item = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 Toskr", true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
@@ -61,7 +62,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     if tap_ok {
         Menu::with_items(
             app,
-            &[&toggle, &sep1, &stealth_item, &autostart_item, &sep2, &quit],
+            &[&toggle, &sep1, &stealth_item, &autostart_item, &settings_item, &sep2, &quit],
         )
     } else {
         let label = if tap_installed {
@@ -79,7 +80,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         let sep0 = PredefinedMenuItem::separator(app)?;
         Menu::with_items(
             app,
-            &[&warn, &sep0, &toggle, &sep1, &stealth_item, &autostart_item, &sep2, &quit],
+            &[&warn, &sep0, &toggle, &sep1, &stealth_item, &autostart_item, &settings_item, &sep2, &quit],
         )
     }
 }
@@ -92,10 +93,10 @@ fn handle_menu(app: &AppHandle, id: &str) {
                 .and_then(|w| w.is_visible().ok())
                 .unwrap_or(false);
             if visible {
-                let _ = app.emit_to("main", TRIGGER_EVENT, TriggerPayload::Toggle);
+                let _ = app.emit_to("main", TRIGGER_EVENT, TriggerPayload::Toggle { force: false });
             } else {
                 crate::window::request_show_panel(app);
-                let _ = app.emit_to("main", TRIGGER_EVENT, TriggerPayload::Toggle);
+                let _ = app.emit_to("main", TRIGGER_EVENT, TriggerPayload::Toggle { force: false });
             }
         }
         "fix-permission" => {
@@ -133,6 +134,7 @@ fn handle_menu(app: &AppHandle, id: &str) {
             };
             refresh(app);
         }
+        "settings" => crate::commands::open_settings_window(app.clone()),
         "quit" => app.exit(0),
         _ => {}
     }

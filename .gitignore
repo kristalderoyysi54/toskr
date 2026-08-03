@@ -31,6 +31,7 @@ src-tauri/gen/schemas
 .claude/
 .codex/
 tasks/
+/CLAUDE.md
 
 # 设计探索稿（大文件，不入库）
 /toskr-*.png

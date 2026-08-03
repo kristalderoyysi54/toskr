@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { CornerDownLeft } from "lucide-react";
 
+import { enrichLinkMeta } from "@/lib/actions";
 import { tip } from "@/lib/tip";
 import { cn } from "@/lib/utils";
 import { useNotesStore } from "@/store/notesStore";
@@ -18,10 +19,11 @@ export function DraftInput() {
   const submit = () => {
     const text = value.trim();
     if (!text) return;
-    const { result } = useNotesStore.getState().addNote(text);
+    const { result, id } = useNotesStore.getState().addNote(text);
     if (result === "duplicate") {
       tip("duplicate", "");
     }
+    if (result === "added" && id) void enrichLinkMeta(id);
     setValue("");
     const el = textareaRef.current;
     if (el) {

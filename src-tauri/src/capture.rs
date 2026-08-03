@@ -24,7 +24,7 @@ const POLL_ATTEMPTS: u32 = 25;
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// NSPasteboard 通用剪贴板的 changeCount（任意线程可读）。
-fn pasteboard_change_count() -> isize {
+pub(crate) fn pasteboard_change_count() -> isize {
     let pb = objc2_app_kit::NSPasteboard::generalPasteboard();
     pb.changeCount()
 }
@@ -101,6 +101,9 @@ fn capture_via_clipboard(app: &AppHandle) -> Option<Captured> {
     // 更新基线：本次尝试结束时的剪贴板文本
     let final_text = clipboard.get_text().ok().filter(|t| !t.is_empty());
     *state.last_clipboard_text.lock().unwrap() = final_text;
+    // 合成 ⌘C 造成的变更视为应用自身写入：捕获结果已走入库链路，
+    // 剪贴板历史 watcher 不应重复收集
+    crate::clipwatch::mark_self_write(app);
 
     if let Some(text) = captured.and_then(normalize) {
         return Some(Captured::Text(text));

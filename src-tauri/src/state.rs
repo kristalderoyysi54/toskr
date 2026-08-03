@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU16, AtomicU64, AtomicU8};
 use std::sync::Mutex;
 
 /// 触发修饰键编码（AtomicU8）。
@@ -100,6 +100,10 @@ pub struct AppState {
     /// 上次捕获尝试结束时的剪贴板文本快照（「新鲜度兜底」判定用：
     /// 流式终端选区被新输出冲掉时，copy-on-select 已入剪贴板的内容仍可捕获）。
     pub last_clipboard_text: Mutex<Option<String>>,
+    /// 剪贴板历史收集开关（设置项下发；watcher 线程常驻按此门控）。
+    pub clip_watch: AtomicBool,
+    /// 应用自身最近一次写剪贴板后的 changeCount（watcher 忽略该次变更）。
+    pub pasteboard_self_count: AtomicI64,
 }
 
 impl Default for AppState {
@@ -136,6 +140,8 @@ impl Default for AppState {
             hud: Mutex::new(HudRuntime::default()),
             icon_cache: Mutex::new(HashMap::new()),
             last_clipboard_text: Mutex::new(None),
+            clip_watch: AtomicBool::new(false),
+            pasteboard_self_count: AtomicI64::new(0),
         }
     }
 }

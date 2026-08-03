@@ -20,6 +20,7 @@ import {
   Eraser,
   Pin,
   Plus,
+  Rows3,
   Search,
   Settings2,
   X,
@@ -35,20 +36,24 @@ import {
   clearDoneWithUndo,
   copyCheckedAsList,
   deleteNotesWithUndo,
+  enrichLinkMeta,
   sendCheckedToChat,
+  sendNotesToChat,
 } from "@/lib/actions";
 import { previewOf } from "@/lib/format";
 import { runPendingUndo, setPendingUndo, tip } from "@/lib/tip";
-import { silentUpdateNotify } from "@/lib/updater";
+import { silentUpdateFlow } from "@/lib/updater";
 import { matchNote } from "@/lib/search";
 import { broadcastSettings, installSettingsSyncHost } from "@/lib/settingsSync";
 import {
   api,
   HUD_OPEN_PANEL_EVENT,
   PANEL_MOVED_EVENT,
+  CLIP_EVENT,
   STEALTH_EVENT,
   TRIGGER_EVENT,
   UNDO_CAPTURE_EVENT,
+  type ClipPayload,
   type TriggerPayload,
 } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
@@ -155,8 +160,9 @@ export default function App() {
         const { open: isOpen, pinned: isPinned } = useUIStore.getState();
         // 前端链路回执：报障时与 Rust 侧「双击触发」拼成完整链路
         void api.diagNote(`前端收到 Toggle: open=${isOpen} pinned=${isPinned}`);
-        // 钉住 = 常驻：双击快捷键不收起面板（Esc / 取消图钉可收）
-        if (isOpen && isPinned) {
+        // 钉住 = 常驻：双击快捷键不收起面板（Esc / 取消图钉可收）；
+        // 专用面板快捷键（force）意图明确，钉住时也执行收起
+        if (isOpen && isPinned && !payload.force) {
           tip("info", "面板已固定 · 按 Esc 或取消图钉可收起");
           return;
         }
@@ -167,7 +173,8 @@ export default function App() {
       const { result, id } = useNotesStore.getState().addNote(payload.text, {
         sourceApp: payload.appName ?? undefined,
         sourceBundle: payload.bundleId ?? undefined,
-        kind: payload.contentKind === "image" ? "image" : "text",
+        // 文本不写死 kind，交给 addNote 检测（URL → 链接卡）
+        kind: payload.contentKind === "image" ? "image" : undefined,
         imageFile: payload.imageFile ?? undefined,
         imageW: payload.imageW ?? undefined,
         imageH: payload.imageH ?? undefined,
@@ -178,6 +185,7 @@ export default function App() {
         previewOf(payload.text)
       );
       if (result === "added" && id) {
+        void enrichLinkMeta(id);
         captureHistory.push(id);
         setPendingUndo(() => {
           const undoId = captureHistory.pop();
@@ -263,6 +271,26 @@ export default function App() {
     };
   }, []);
 
+  // 剪贴板历史：watcher 推送 → 静默入库（重复内容由 addNote 去重吞掉）
+  useEffect(() => {
+    const unlisten = listen<ClipPayload>(CLIP_EVENT, (event) => {
+      const p = event.payload;
+      const removed = useNotesStore.getState().addClipNote(p.text, {
+        sourceApp: p.appName ?? undefined,
+        sourceBundle: p.bundleId ?? undefined,
+        kind: p.contentKind === "image" ? "image" : "text",
+        imageFile: p.imageFile ?? undefined,
+        imageW: p.imageW ?? undefined,
+        imageH: p.imageH ?? undefined,
+      });
+      // 被裁剪卡片的图片附件落盘清理（尽力而为）
+      removed.forEach((f) => void api.removeImage(f).catch(() => {}));
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
   // 失焦：自动隐藏（Pin 豁免）+ 刷新发送目标（防 Pin 场景目标漂移）
   useEffect(() => {
     const win = getCurrentWebviewWindow();
@@ -302,12 +330,14 @@ export default function App() {
   useEffect(() => {
     const push = (settings: Settings) => {
       void api.setHotkeyConfig(settings.hotkeyModifier, settings.hotkeyGapMs);
+      void api.setPanelHotkey(settings.panelToggleHotkey).catch(() => {});
       void api.setCompanionConfig(settings.companionEnabled, settings.companionApps);
       void api.setCompanionGap(settings.companionGap);
       void api.setPanelFreePos(settings.panelFreeX, settings.panelFreeY);
       void api.setPanelWidth(settings.panelWidth);
       // 垂直覆盖为会话内临时值（切换吸附目标即重置），不做启动恢复
       void api.setStealth(settings.stealth);
+      void api.setClipWatch(settings.clipHistory);
       void api.setWindowTheme(settings.theme);
       void api.setExcludedApps(settings.excludedApps);
       void api.setVibrancy(settings.vibrancy, settings.vibrancyMaterial);
@@ -331,7 +361,7 @@ export default function App() {
 
   // 启动静默检查更新：发现新版右上角气泡提醒（不自动下载，不打扰）
   useEffect(() => {
-    const timer = window.setTimeout(() => void silentUpdateNotify(), 8000);
+    const timer = window.setTimeout(() => void silentUpdateFlow(), 8000);
     return () => window.clearTimeout(timer);
   }, []);
 
@@ -481,6 +511,16 @@ export default function App() {
         void sendCheckedToChat();
         return;
       }
+      // ⌘1-9：按可见顺序直接发送第 N 张卡（Paste 式快发）
+      if (e.metaKey && !e.shiftKey && !e.altKey && !e.ctrlKey && /^[1-9]$/.test(e.key)) {
+        if (editable) return;
+        const id = navIds[Number(e.key) - 1];
+        if (id) {
+          e.preventDefault();
+          void sendNotesToChat([id]);
+        }
+        return;
+      }
       if (e.key === "c" && e.metaKey && !e.shiftKey && !e.altKey) {
         const hasSelection = !!window.getSelection()?.toString();
         if (!editable && !hasSelection) {
@@ -508,10 +548,17 @@ export default function App() {
         ui.setFocusedId(next);
         return;
       }
-      // Space = 全文预览（Paste 风格）；x = 勾选切换
+      // Space = 全文预览（Paste 风格）；链接卡片「明细」= 直接打开网页
       if (e.key === " " && ui.focusedId) {
         e.preventDefault();
-        ui.openPreview(ui.focusedId);
+        const focusedNote = useNotesStore
+          .getState()
+          .notes.find((n) => n.id === ui.focusedId);
+        if (focusedNote?.kind === "link" && focusedNote.url) {
+          void api.openUrl(focusedNote.url);
+        } else {
+          ui.openPreview(ui.focusedId);
+        }
         return;
       }
       if (e.key === "x" && !e.metaKey && ui.focusedId) {
@@ -601,6 +648,7 @@ export default function App() {
     let timer = 0;
     const down = (e: KeyboardEvent) => {
       if (e.key === "Meta" && !timer) {
+        useUIStore.getState().setCmdHeld(true);
         timer = window.setTimeout(() => setShowShortcuts(true), 650);
       }
     };
@@ -609,6 +657,7 @@ export default function App() {
         window.clearTimeout(timer);
         timer = 0;
       }
+      useUIStore.getState().setCmdHeld(false);
       setShowShortcuts(false);
     };
     const up = (e: KeyboardEvent) => {
@@ -814,6 +863,19 @@ export default function App() {
                     <Search className="size-3.5" />
                   </button>
                   <button
+                    aria-label="切换卡片密度"
+                    title="卡片密度：舒适 / 紧凑"
+                    onClick={() => {
+                      const cur = useNotesStore.getState().settings.cardDensity;
+                      useNotesStore.getState().setSettings({
+                        cardDensity: cur === "compact" ? "comfortable" : "compact",
+                      });
+                    }}
+                    className="rounded-md p-1 text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
+                  >
+                    <Rows3 className="size-3.5" />
+                  </button>
+                  <button
                     aria-label={pinned ? "取消固定" : "固定面板"}
                     title={pinned ? "取消固定" : "固定（失焦不隐藏）"}
                     onClick={() => useUIStore.getState().setPinned(!pinned)}
@@ -964,6 +1026,7 @@ const SHORTCUTS: [string, string][] = [
   ["x", "勾选 / 取消勾选"],
   ["⌘A", "全选可见卡片"],
   ["⌘⏎", "发送勾选到对话"],
+  ["⌘1-9", "快发第 N 张卡（按住 ⌘ 看角标）"],
   ["⌘C", "复制勾选为列表"],
   ["⌘⌫", "删除焦点卡片"],
   ["⌘F", "搜索"],

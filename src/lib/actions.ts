@@ -1,7 +1,17 @@
-import { buildSendText, formatAsNumberedList, wrapAsCodeBlock } from "@/lib/format";
+import {
+  applyPromptTemplate,
+  buildSendText,
+  formatAsNumberedList,
+  wrapAsCodeBlock,
+} from "@/lib/format";
 import { api } from "@/lib/tauri";
 import { setPendingUndo, tip } from "@/lib/tip";
-import { noteImages, orderedCheckedNotes, useNotesStore } from "@/store/notesStore";
+import {
+  doneIdsAfterSend,
+  noteImages,
+  orderedCheckedNotes,
+  useNotesStore,
+} from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
 
 /** 可撤销的操作确认（HUD 气泡悬停出「撤销」；撤销 = 弹出栈顶快照恢复）。 */
@@ -11,6 +21,24 @@ export function undoableTip(message: string) {
     tip("undone", label ? "已撤销" : "没有可撤销的操作");
   });
   tip("ok", message, true);
+}
+
+/** 链接卡片补抓网页标题/图标（幂等：已有标题跳过；离线/超时静默保持 URL 展示）。 */
+export async function enrichLinkMeta(id: string) {
+  const note = useNotesStore.getState().notes.find((n) => n.id === id);
+  if (!note || note.kind !== "link" || !note.url || note.linkTitle) return;
+  try {
+    const meta = await api.fetchLinkMeta(note.url);
+    const cur = useNotesStore.getState().notes.find((n) => n.id === id);
+    // 抓取期间卡片被删除或 URL 被改：丢弃过期结果
+    if (!cur || cur.url !== note.url) return;
+    useNotesStore.getState().setLinkMeta(id, {
+      title: meta.title ?? undefined,
+      icon: meta.icon ?? undefined,
+    });
+  } catch {
+    /* 静默：卡片保持 URL 展示 */
+  }
 }
 
 /** 删除并给撤销机会。 */
@@ -68,7 +96,8 @@ export function copyCheckedAsList() {
 /**
  * 一键发送到当前对话。目标应用未到达前台时 Rust 会中止（返回 false），
  * 此时不标完成、保留勾选，由 HUD 提示用户。
- * `prefix`：Prompt 前缀模板（拼在内容前，Prompt 组装台）。
+ * `prefix`：Prompt 模板（含 {内容}/{content} 占位符时内容注入占位处，
+ * 否则拼在内容前，Prompt 组装台）。
  */
 export async function sendNotesToChat(
   ids: string[],
@@ -93,7 +122,7 @@ export async function sendNotesToChat(
       textNotes.length === 1 ? textNotes[0].codeLang : undefined
     );
   }
-  const text = prefix ? (body ? `${prefix}\n\n${body}` : prefix) : body;
+  const text = prefix ? applyPromptTemplate(prefix, body) : body;
   // 钉住 = 常驻：发送后保留面板，只把焦点交回目标应用
   const keepPanel = useUIStore.getState().pinned;
   if (!keepPanel) {
@@ -108,8 +137,12 @@ export async function sendNotesToChat(
       keepPanel
     );
     if (sent) {
-      const sentIds = targets.map((n) => n.id);
-      useNotesStore.getState().setDone(sentIds, true);
+      // 「常用」卡与「发送后保留」分组内的卡不标完成（长期复用内容）
+      const doneIds = doneIdsAfterSend(
+        useNotesStore.getState(),
+        targets.map((n) => n.id)
+      );
+      if (doneIds.length) useNotesStore.getState().setDone(doneIds, true);
       useNotesStore.getState().clearChecked();
       useNotesStore.getState().markOnboarding({ sent: true });
     }

@@ -6,7 +6,7 @@
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::input::synth;
 use crate::state::{AppState, MOD_CONTROL, MOD_OPTION, MOD_SHIFT};
@@ -25,9 +25,27 @@ pub fn hide_panel(app: AppHandle, restore_focus: bool) {
 
 /// 写系统剪贴板（「复制为列表」等）。
 #[tauri::command]
-pub fn copy_text(text: String) -> Result<(), String> {
+pub fn copy_text(app: AppHandle, text: String) -> Result<(), String> {
     let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-    clipboard.set_text(text).map_err(|e| e.to_string())
+    clipboard.set_text(text).map_err(|e| e.to_string())?;
+    crate::clipwatch::mark_self_write(&app);
+    Ok(())
+}
+
+/// 图片附件 OCR（Vision 离线识别，中英）。空结果返回 Err。
+#[tauri::command]
+pub async fn ocr_image(app: AppHandle, file: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::ocr::recognize(&app, &file))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// 剪贴板历史收集开关（设置项下发）。
+#[tauri::command]
+pub fn set_clip_watch(app: AppHandle, enabled: bool) {
+    app.state::<AppState>()
+        .clip_watch
+        .store(enabled, Ordering::SeqCst);
 }
 
 /// 一键发送：备份剪贴板 → 收面板 → 激活目标并确认到达 →
@@ -76,6 +94,7 @@ pub async fn send_to_chat(
     }
 
     let has_text = !text.trim().is_empty();
+    let mark_handle = app.clone();
     let sent = tauri::async_runtime::spawn_blocking(move || -> Result<bool, String> {
         if let Some(pid) = target_pid {
             crate::focus::activate_pid(pid);
@@ -91,6 +110,7 @@ pub async fn send_to_chat(
                 let mut c = arboard::Clipboard::new().map_err(|e| e.to_string())?;
                 c.set_text(text).map_err(|e| e.to_string())?;
             }
+            crate::clipwatch::mark_self_write(&mark_handle);
             synth::press_paste()?;
         }
 
@@ -106,6 +126,7 @@ pub async fn send_to_chat(
                 })
                 .map_err(|e| e.to_string())?;
             }
+            crate::clipwatch::mark_self_write(&mark_handle);
             synth::press_paste()?;
         }
 
@@ -135,11 +156,13 @@ pub async fn send_to_chat(
     }
     if sent {
         // 目标应用已在按键事件处理中读取粘贴板；延迟还原用户原剪贴板
+        let restore_handle = app.clone();
         tauri::async_runtime::spawn_blocking(move || {
             std::thread::sleep(Duration::from_millis(1500));
             if let Some(text) = saved {
                 if let Ok(mut c) = arboard::Clipboard::new() {
                     let _ = c.set_text(text);
+                    crate::clipwatch::mark_self_write(&restore_handle);
                 }
             }
         });
@@ -223,6 +246,49 @@ pub fn set_hotkey_config(state: State<'_, AppState>, modifier: String, gap_ms: u
     state
         .hotkey_gap_ms
         .store(gap_ms.clamp(200, 800), Ordering::Relaxed);
+}
+
+/// 注册/清除「面板显示/隐藏」全局快捷键（RegisterEventHotKey，独占按键）。
+/// 与双击触发键完全独立：只开关面板，绝不捕获内容。
+/// `shortcut` 为 global-shortcut 格式（如 "Cmd+Shift+KeyV"），None/空串 = 清除。
+#[tauri::command]
+pub fn set_panel_hotkey(app: AppHandle, shortcut: Option<String>) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+
+    let gs = app.global_shortcut();
+    // 该插件只承载这一个快捷键，整体清空即完成换绑/清除
+    gs.unregister_all().map_err(|e| e.to_string())?;
+    let Some(s) = shortcut.filter(|s| !s.trim().is_empty()) else {
+        return Ok(());
+    };
+    gs.on_shortcut(s.as_str(), move |app, _sc, event| {
+        if event.state() == ShortcutState::Pressed {
+            on_panel_hotkey(app);
+        }
+    })
+    .map_err(|e| {
+        let msg = format!("快捷键注册失败：{e}");
+        crate::diag::push(&app, format!("{msg} ({s})"));
+        msg
+    })?;
+    crate::diag::push(&app, format!("面板快捷键已绑定: {s}"));
+    Ok(())
+}
+
+/// 面板快捷键触发：快照前台应用（供「发送到对话」归还焦点）后开关面板。
+fn on_panel_hotkey(app: &AppHandle) {
+    crate::diag::push(app, "面板快捷键触发");
+    let me = std::process::id() as i32;
+    if let Some(front) = crate::focus::frontmost_info() {
+        if front.pid != me {
+            *app.state::<AppState>().prev_app_pid.lock().unwrap() = Some(front.pid);
+        }
+    }
+    let _ = app.emit_to(
+        "main",
+        crate::events::TRIGGER_EVENT,
+        crate::events::TriggerPayload::Toggle { force: true },
+    );
 }
 
 /// 下发伴随停靠配置。

@@ -9,6 +9,7 @@ import {
   ChevronRight,
   MoreHorizontal,
   Pencil,
+  Star,
   Trash2,
 } from "lucide-react";
 
@@ -45,6 +46,7 @@ export function SectionGroup({
     deleteSection,
     moveSection,
     toggleSectionCollapsed,
+    toggleSectionKeep,
     setSectionColor,
   } = useNotesStore.getState();
   const checkedIds = useNotesStore((s) => s.checkedIds);
@@ -124,6 +126,12 @@ export function SectionGroup({
             {section.name}
           </h3>
         )}
+        {section.keepAfterSend && (
+          <Star
+            className="size-2.5 shrink-0 fill-current text-muted-foreground/70"
+            aria-label="发送后保留"
+          />
+        )}
         <span className="text-[10px] tabular-nums text-muted-foreground/60">{total}</span>
 
         <div className="ml-auto">
@@ -186,6 +194,22 @@ export function SectionGroup({
                     className="size-3.5 rounded-full border border-dashed border-muted-foreground/50 transition-transform hover:scale-125"
                   />
                 </div>
+                <SimpleMenuSeparator />
+                <SimpleMenuItem
+                  title="组内卡片发送后不标记完成，适合 Prompt 库等长期复用内容"
+                  onClick={() => {
+                    close();
+                    toggleSectionKeep(section.id);
+                  }}
+                >
+                  <Star
+                    className={cn(
+                      "size-3.5",
+                      section.keepAfterSend && "fill-current"
+                    )}
+                  />{" "}
+                  {section.keepAfterSend ? "取消发送后保留" : "发送后保留"}
+                </SimpleMenuItem>
                 <SimpleMenuSeparator />
                 <SimpleMenuItem
                   onClick={() => {

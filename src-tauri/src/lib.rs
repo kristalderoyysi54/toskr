@@ -1,10 +1,13 @@
 mod ax;
 mod capture;
+mod clipwatch;
 mod commands;
 mod diag;
 mod events;
 mod focus;
 mod input;
+mod ocr;
+mod linkmeta;
 mod state;
 mod storage;
 mod tray;
@@ -21,6 +24,7 @@ pub fn run() {
             window::request_show_panel(app);
         }))
         .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -103,6 +107,9 @@ pub fn run() {
                 }
             }
 
+            // 剪贴板历史 watcher 常驻线程（开关由设置项经 set_clip_watch 门控）
+            clipwatch::spawn(app.handle().clone());
+
             // 托盘在 tap 安装之后创建，初始菜单即可反映权限状态。
             tray::create(app.handle())?;
             Ok(())
@@ -152,6 +159,7 @@ pub fn run() {
             commands::open_privacy_settings,
             commands::open_url,
             commands::set_hotkey_config,
+            commands::set_panel_hotkey,
             commands::set_companion_config,
             commands::set_excluded_apps,
             commands::set_companion_gap,
@@ -159,6 +167,8 @@ pub fn run() {
             commands::adjust_panel_edge,
             commands::set_panel_vertical,
             commands::set_stealth,
+            commands::set_clip_watch,
+            commands::ocr_image,
             commands::prev_app_info,
             commands::refresh_prev_app,
             commands::show_capture_hud,
@@ -176,6 +186,7 @@ pub fn run() {
             commands::remove_image,
             commands::export_file,
             commands::import_file,
+            linkmeta::fetch_link_meta,
         ])
         .run(tauri::generate_context!())
         .expect("Toskr 启动失败");

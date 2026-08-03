@@ -5,10 +5,14 @@ import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import type { Update } from "@tauri-apps/plugin-updater";
 import {
   Activity,
+  ArrowDown,
+  ArrowUp,
+  Check,
   Database,
   Info,
   Keyboard,
   Magnet,
+  Pencil,
   Plus,
   Settings2,
   Shield,
@@ -28,7 +32,9 @@ import { api } from "@/lib/tauri";
 import { checkForUpdate, downloadAndInstall } from "@/lib/updater";
 import { cn } from "@/lib/utils";
 import {
+  CONTEXT_MENU_REGISTRY,
   defaultSettings,
+  normalizeContextMenu,
   type PromptSnippet,
   type Settings,
   type ThemePref,
@@ -102,7 +108,7 @@ export default function SettingsView() {
         {section === "snippets" && <SnippetsSection settings={settings} patch={patch} />}
         {section === "data" && <DataSection />}
         {section === "diagnostics" && <DiagnosticsSection />}
-        {section === "about" && <AboutSection />}
+        {section === "about" && <AboutSection settings={settings} patch={patch} />}
       </main>
     </div>
   );
@@ -177,6 +183,67 @@ function Segmented<T extends string>({
 }
 
 type SP = { settings: Settings; patch: (p: Partial<Settings>) => void };
+
+/** 卡片右键菜单自定义：显隐开关 + 顺序调整（合并/删除固定，不参与）。 */
+function ContextMenuGroup({ settings, patch }: SP) {
+  const cfg = normalizeContextMenu(settings.contextMenu);
+  const labelOf = (id: string) =>
+    CONTEXT_MENU_REGISTRY.find((i) => i.id === id)?.label ?? id;
+  const move = (idx: number, dir: -1 | 1) => {
+    const j = idx + dir;
+    if (j < 0 || j >= cfg.length) return;
+    const next = [...cfg];
+    [next[idx], next[j]] = [next[j], next[idx]];
+    patch({ contextMenu: next });
+  };
+  return (
+    <Group title="卡片右键菜单（勾选显示 · 箭头调序；合并与删除固定不动）">
+      {cfg.map((item, idx) => (
+        <div
+          key={item.id}
+          className="group/menurow flex items-center gap-3 px-3.5 py-2"
+        >
+          <Switch
+            checked={item.on}
+            onCheckedChange={(v) =>
+              patch({
+                contextMenu: cfg.map((i) =>
+                  i.id === item.id ? { ...i, on: v } : i
+                ),
+              })
+            }
+          />
+          <span
+            className={cn(
+              "flex-1 text-[13px]",
+              !item.on && "text-muted-foreground/50"
+            )}
+          >
+            {labelOf(item.id)}
+          </span>
+          <div className="flex gap-0.5 opacity-0 transition-opacity group-hover/menurow:opacity-100">
+            <button
+              onClick={() => move(idx, -1)}
+              disabled={idx === 0}
+              aria-label="上移"
+              className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
+            >
+              <ArrowUp className="size-3.5" />
+            </button>
+            <button
+              onClick={() => move(idx, 1)}
+              disabled={idx === cfg.length - 1}
+              aria-label="下移"
+              className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
+            >
+              <ArrowDown className="size-3.5" />
+            </button>
+          </div>
+        </div>
+      ))}
+    </Group>
+  );
+}
 
 /* ============ 各分区 ============ */
 
@@ -292,6 +359,40 @@ function GeneralSection({ settings, patch }: SP) {
             />
           }
         />
+        <Row
+          label="卡片密度"
+          hint="紧凑模式单行展示，一屏可见更多卡片"
+          right={
+            <Segmented<Settings["cardDensity"]>
+              value={settings.cardDensity}
+              options={[
+                { value: "comfortable", label: "舒适" },
+                { value: "compact", label: "紧凑" },
+              ]}
+              onChange={(v) => patch({ cardDensity: v })}
+            />
+          }
+        />
+        <Row
+          label="卡片底色不透明度"
+          hint="调低可透出毛玻璃背景；100% 为实色卡片"
+          right={
+            <div className="flex items-center gap-2">
+              <input
+                type="range"
+                min={30}
+                max={100}
+                step={5}
+                value={Math.round(settings.cardOpacity * 100)}
+                onChange={(e) => patch({ cardOpacity: Number(e.target.value) / 100 })}
+                className="h-1 w-32 cursor-pointer accent-primary"
+              />
+              <span className="w-9 text-right text-[11px] tabular-nums text-muted-foreground">
+                {Math.round(settings.cardOpacity * 100)}%
+              </span>
+            </div>
+          }
+        />
       </Group>
       <Group title="系统">
         <Row
@@ -331,7 +432,35 @@ function GeneralSection({ settings, patch }: SP) {
             />
           }
         />
+        <Row
+          label="剪贴板历史"
+          hint="自动收集所有复制内容到「剪贴板」分组；密码管理器与标记为机密的内容不收集"
+          right={
+            <Switch
+              checked={settings.clipHistory}
+              onCheckedChange={(v) => patch({ clipHistory: v })}
+            />
+          }
+        />
+        {settings.clipHistory && (
+          <Row
+            label="历史保留条数"
+            hint="超出后自动清理最旧的（常用 ★ 卡片不清理）"
+            right={
+              <Segmented
+                value={String(settings.clipHistoryLimit)}
+                options={[
+                  { value: "30", label: "30" },
+                  { value: "50", label: "50" },
+                  { value: "100", label: "100" },
+                ]}
+                onChange={(v) => patch({ clipHistoryLimit: Number(v) })}
+              />
+            }
+          />
+        )}
       </Group>
+      <ContextMenuGroup settings={settings} patch={patch} />
     </div>
   );
 }
@@ -370,6 +499,16 @@ function HotkeySection({ settings, patch }: SP) {
             />
           }
         />
+        <Row
+          label="面板显示 / 隐藏"
+          hint="独立快捷键，只开关面板不捕获内容；钉住时也可收起"
+          right={
+            <HotkeyRecorder
+              value={settings.panelToggleHotkey}
+              onChange={(v) => patch({ panelToggleHotkey: v })}
+            />
+          }
+        />
       </Group>
       <Group title="面板内快捷键（长按 ⌘ 可随时速查）">
         {[
@@ -396,6 +535,153 @@ function HotkeySection({ settings, patch }: SP) {
           />
         ))}
       </Group>
+    </div>
+  );
+}
+
+/** 面板快捷键的 mac 符号展示（存储用 global-shortcut 格式如 "Cmd+Shift+KeyV"）。 */
+const HOTKEY_MOD_LABELS: Record<string, string> = {
+  Cmd: "⌘",
+  Ctrl: "⌃",
+  Alt: "⌥",
+  Shift: "⇧",
+};
+const HOTKEY_CODE_LABELS: Record<string, string> = {
+  Space: "Space",
+  Enter: "⏎",
+  Tab: "⇥",
+  ArrowUp: "↑",
+  ArrowDown: "↓",
+  ArrowLeft: "←",
+  ArrowRight: "→",
+  Home: "↖",
+  End: "↘",
+  PageUp: "⇞",
+  PageDown: "⇟",
+  Minus: "-",
+  Equal: "=",
+  BracketLeft: "[",
+  BracketRight: "]",
+  Backslash: "\\",
+  Semicolon: ";",
+  Quote: "'",
+  Comma: ",",
+  Period: ".",
+  Slash: "/",
+  Backquote: "`",
+};
+
+function hotkeyLabel(shortcut: string): string {
+  return shortcut
+    .split("+")
+    .map(
+      (part) =>
+        HOTKEY_MOD_LABELS[part] ??
+        HOTKEY_CODE_LABELS[part] ??
+        (part.startsWith("Key")
+          ? part.slice(3)
+          : part.startsWith("Digit")
+            ? part.slice(5)
+            : part)
+    )
+    .join(" ");
+}
+
+/** 可注册为主键的 W3C code（keyboard_types::Code 可解析的子集）。 */
+const HOTKEY_CODE_RE =
+  /^(Key[A-Z]|Digit[0-9]|F([1-9]|1[0-9])|Space|Minus|Equal|BracketLeft|BracketRight|Backslash|Semicolon|Quote|Comma|Period|Slash|Backquote|Arrow(Up|Down|Left|Right)|Home|End|PageUp|PageDown|Enter|Tab)$/;
+
+/** 快捷键录制器：点击进入录制，按组合键先试注册（可发现占用），成功才落设置。 */
+function HotkeyRecorder({
+  value,
+  onChange,
+}: {
+  value: string | null;
+  onChange: (v: string | null) => void;
+}) {
+  const [recording, setRecording] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // 录制用 window 级捕获监听，不依赖 DOM 焦点：WKWebView 与 Safari 一样
+  // 点击按钮不给焦点，且 React 复用按钮节点导致 autoFocus 不触发，
+  // 挂在按钮上的 onKeyDown 一个键也收不到。
+  useEffect(() => {
+    if (!recording) return;
+    const handler = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        setRecording(false);
+        setError(null);
+        return;
+      }
+      // 纯修饰键按下：继续等主键
+      if (["Meta", "Control", "Alt", "Shift"].includes(e.key)) return;
+      const code = e.code;
+      if (!HOTKEY_CODE_RE.test(code)) return;
+      // 纯 Shift/无修饰会拦截正常输入，仅 F 键豁免
+      const isFnKey = /^F([1-9]|1[0-9])$/.test(code);
+      if (!isFnKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        setError("需包含 ⌘ / ⌃ / ⌥");
+        return;
+      }
+      const mods = [
+        e.metaKey && "Cmd",
+        e.ctrlKey && "Ctrl",
+        e.altKey && "Alt",
+        e.shiftKey && "Shift",
+      ].filter(Boolean) as string[];
+      const shortcut = [...mods, code].join("+");
+      void api
+        .setPanelHotkey(shortcut)
+        .then(() => {
+          onChange(shortcut);
+          setRecording(false);
+          setError(null);
+        })
+        .catch(() => setError("注册失败，可能已被其他应用占用"));
+    };
+    window.addEventListener("keydown", handler, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", handler, { capture: true });
+  }, [recording, onChange]);
+
+  return (
+    <div className="flex items-center gap-1.5">
+      {error && <span className="text-[11px] text-destructive">{error}</span>}
+      {recording ? (
+        <button
+          onClick={() => {
+            setRecording(false);
+            setError(null);
+          }}
+          className="rounded-md border border-primary/60 bg-primary/10 px-2 py-1 text-[12px] text-muted-foreground"
+        >
+          按下组合键，Esc 取消
+        </button>
+      ) : (
+        <button
+          onClick={() => {
+            setRecording(true);
+            setError(null);
+          }}
+          className="rounded-md border border-border bg-muted px-2 py-1 text-[12px] tabular-nums hover:bg-black/5 dark:hover:bg-white/10"
+        >
+          {value ? hotkeyLabel(value) : "点击录制"}
+        </button>
+      )}
+      {value && !recording && (
+        <button
+          onClick={() => {
+            onChange(null);
+            setError(null);
+          }}
+          className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+          title="清除快捷键"
+        >
+          <X className="size-3.5" />
+        </button>
+      )}
     </div>
   );
 }
@@ -517,6 +803,9 @@ function ExcludeSection({ settings, patch }: SP) {
 function SnippetsSection({ settings, patch }: SP) {
   const [label, setLabel] = useState("");
   const [text, setText] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editLabel, setEditLabel] = useState("");
+  const [editText, setEditText] = useState("");
   const add = () => {
     if (!label.trim() || !text.trim()) return;
     const snippet: PromptSnippet = {
@@ -528,46 +817,143 @@ function SnippetsSection({ settings, patch }: SP) {
     setLabel("");
     setText("");
   };
+  const startEdit = (sn: PromptSnippet) => {
+    setEditingId(sn.id);
+    setEditLabel(sn.label);
+    setEditText(sn.text);
+  };
+  const saveEdit = () => {
+    if (!editingId || !editLabel.trim() || !editText.trim()) return;
+    patch({
+      promptSnippets: settings.promptSnippets.map((s) =>
+        s.id === editingId
+          ? { ...s, label: editLabel.trim(), text: editText.trim() }
+          : s
+      ),
+    });
+    setEditingId(null);
+  };
+  const move = (id: string, dir: -1 | 1) => {
+    const list = [...settings.promptSnippets];
+    const i = list.findIndex((s) => s.id === id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= list.length) return;
+    [list[i], list[j]] = [list[j], list[i]];
+    patch({ promptSnippets: list });
+  };
   return (
     <div>
-      <SectionTitle>Prompt 前缀模板</SectionTitle>
+      <SectionTitle>Prompt 模板</SectionTitle>
       <p className="mb-3 text-[12px] text-muted-foreground">
-        发送时可在「发送到对话 ▾」下拉里选择一个前缀，与勾选内容组装后发出。
+        发送时可在「发送到对话 ▾」下拉里选择模板（按此处顺序排列），与勾选内容组装后发出。
+        模板中写 <code className="rounded bg-muted px-1">{"{内容}"}</code>{" "}
+        指定内容插入位置（可多处）；不写则内容拼在模板之后。
       </p>
       <div className="mb-3 divide-y divide-border/50 rounded-xl border border-border/60 bg-card">
-        {settings.promptSnippets.map((sn) => (
-          <div key={sn.id} className="group flex items-center gap-2 px-3.5 py-2">
-            <span className="shrink-0 text-[13px] font-medium">{sn.label}</span>
-            <span className="truncate text-[12px] text-muted-foreground">{sn.text}</span>
-            <button
-              aria-label="删除模板"
-              onClick={() =>
-                patch({
-                  promptSnippets: settings.promptSnippets.filter((s) => s.id !== sn.id),
-                })
-              }
-              className="ml-auto hidden rounded p-0.5 text-muted-foreground hover:text-foreground group-hover:block"
-            >
-              <X className="size-3.5" />
-            </button>
-          </div>
-        ))}
+        {settings.promptSnippets.map((sn, i) =>
+          editingId === sn.id ? (
+            <div key={sn.id} className="flex items-start gap-2 px-3.5 py-2">
+              <input
+                value={editLabel}
+                onChange={(e) => setEditLabel(e.target.value)}
+                placeholder="模板名"
+                className="h-8 w-32 rounded-lg border border-border bg-transparent px-2 text-[12px] outline-none focus:border-primary/50"
+              />
+              <textarea
+                value={editText}
+                rows={3}
+                autoFocus
+                onChange={(e) => setEditText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && e.metaKey) {
+                    e.preventDefault();
+                    saveEdit();
+                  } else if (e.key === "Escape") {
+                    setEditingId(null);
+                  }
+                }}
+                className="min-h-8 flex-1 resize-y rounded-lg border border-border bg-transparent px-2 py-1.5 text-[12px] leading-relaxed outline-none focus:border-primary/50"
+              />
+              <button
+                onClick={saveEdit}
+                title="保存（⌘⏎）"
+                className="flex h-8 items-center gap-1 rounded-lg bg-primary px-2.5 text-[12px] text-primary-foreground hover:opacity-90"
+              >
+                <Check className="size-3.5" /> 保存
+              </button>
+              <button
+                onClick={() => setEditingId(null)}
+                title="取消（Esc）"
+                aria-label="取消编辑"
+                className="flex h-8 items-center rounded-lg border border-border px-2 text-[12px] text-muted-foreground hover:text-foreground"
+              >
+                <X className="size-3.5" />
+              </button>
+            </div>
+          ) : (
+            <div key={sn.id} className="group flex items-center gap-2 px-3.5 py-2">
+              <span className="shrink-0 text-[13px] font-medium">{sn.label}</span>
+              <span className="truncate text-[12px] text-muted-foreground">
+                {sn.text.replace(/\n+/g, " ⏎ ")}
+              </span>
+              <div className="ml-auto hidden shrink-0 items-center gap-0.5 group-hover:flex">
+                <button
+                  aria-label="上移"
+                  disabled={i === 0}
+                  onClick={() => move(sn.id, -1)}
+                  className="rounded p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-30"
+                >
+                  <ArrowUp className="size-3.5" />
+                </button>
+                <button
+                  aria-label="下移"
+                  disabled={i === settings.promptSnippets.length - 1}
+                  onClick={() => move(sn.id, 1)}
+                  className="rounded p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-30"
+                >
+                  <ArrowDown className="size-3.5" />
+                </button>
+                <button
+                  aria-label="编辑模板"
+                  onClick={() => startEdit(sn)}
+                  className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+                >
+                  <Pencil className="size-3.5" />
+                </button>
+                <button
+                  aria-label="删除模板"
+                  onClick={() =>
+                    patch({
+                      promptSnippets: settings.promptSnippets.filter(
+                        (s) => s.id !== sn.id
+                      ),
+                    })
+                  }
+                  className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="size-3.5" />
+                </button>
+              </div>
+            </div>
+          )
+        )}
         {settings.promptSnippets.length === 0 && (
           <p className="px-3.5 py-2 text-[12px] text-muted-foreground/60">暂无模板</p>
         )}
       </div>
-      <div className="flex gap-2">
+      <div className="flex items-start gap-2">
         <input
           value={label}
           onChange={(e) => setLabel(e.target.value)}
           placeholder="模板名"
           className="h-8 w-32 rounded-lg border border-border bg-transparent px-2 text-[12px] outline-none focus:border-primary/50"
         />
-        <input
+        <textarea
           value={text}
+          rows={2}
           onChange={(e) => setText(e.target.value)}
-          placeholder="前缀内容（如：请帮我 review 以下代码：）"
-          className="h-8 flex-1 rounded-lg border border-border bg-transparent px-2 text-[12px] outline-none focus:border-primary/50"
+          placeholder={"模板内容，支持多行（如：请把下面的文案润色：\n{内容}\n保持原有格式）"}
+          className="min-h-8 flex-1 resize-y rounded-lg border border-border bg-transparent px-2 py-1.5 text-[12px] leading-relaxed outline-none focus:border-primary/50"
         />
         <button
           onClick={add}
@@ -620,6 +1006,7 @@ function DataSection() {
           <p className="mt-1 text-[11px] text-muted-foreground">
             卡片数据（toskr-data.json）与图片附件（media/）都存放于此；
             切换文件夹会把已有内容一并搬过去。
+            选择 iCloud Drive 内的文件夹即可多机同步（避免多台 Mac 同时运行）。
           </p>
           <div className="mt-2 flex gap-2">
             <button
@@ -703,7 +1090,13 @@ function DiagnosticsSection() {
   );
 }
 
-function AboutSection() {
+function AboutSection({
+  settings,
+  patch,
+}: {
+  settings: Settings;
+  patch: (p: Partial<Settings>) => void;
+}) {
   const [version, setVersion] = useState("");
   const [update, setUpdate] = useState<Update | null>(null);
   const [phase, setPhase] = useState<"idle" | "checking" | "latest" | "downloading">(
@@ -738,42 +1131,45 @@ function AboutSection() {
   return (
     <div>
       <SectionTitle>关于</SectionTitle>
-      <div className="rounded-xl border border-border/60 bg-card p-4">
+
+      <div className="mb-4 rounded-xl border border-border/60 bg-card p-4 text-center">
         <p className="text-[15px] font-semibold">Toskr</p>
-        <p className="mt-1 text-[12px] text-muted-foreground">
-          面向 AI 工作流的全局划词摘录、Prompt 暂存与一键流转工具。
+        <p className="mt-0.5 text-[12px] tabular-nums text-muted-foreground">
+          v{version || "…"}
         </p>
-        <p className="mt-3 text-[12px] text-muted-foreground">
-          版本 {version || "…"} · 本地优先 · 无账号 · 无遥测
+        <p className="mt-2 text-[12px] text-muted-foreground">
+          面向 AI 工作流的全局划词摘录、Prompt 暂存与一键流转工具
         </p>
         <p className="mt-1 text-[11px] text-muted-foreground/70">
-          双击 ⇧ 捕获选中文本；在终端/编辑器旁磁吸伴随；⌘⏎ 一键发回对话。
+          本地优先 · 无账号 · 无遥测
         </p>
+      </div>
 
-        <div className="mt-4 flex items-center gap-2 border-t border-border/60 pt-3">
-          {update ? (
-            phase === "downloading" ? (
-              <p className="text-[12px] text-muted-foreground">
-                正在下载 v{update.version}… {progress}%（完成后自动重启）
-              </p>
-            ) : (
-              <>
-                <p className="flex-1 text-[12px]">
-                  发现新版本 <span className="font-semibold">v{update.version}</span>
-                </p>
+      <Group title="更新">
+        <Row
+          label={
+            update
+              ? `发现新版本 v${update.version}`
+              : phase === "latest"
+                ? "已是最新版本 ✓"
+                : "检查更新"
+          }
+          hint={update ? undefined : "从 GitHub Releases 获取"}
+          right={
+            update ? (
+              phase === "downloading" ? (
+                <span className="text-[12px] tabular-nums text-muted-foreground">
+                  {progress}% · 完成后自动重启
+                </span>
+              ) : (
                 <button
                   onClick={() => void onInstall()}
                   className="rounded-md bg-primary px-2.5 py-1 text-[12px] font-medium text-primary-foreground hover:opacity-90"
                 >
                   下载并安装
                 </button>
-              </>
-            )
-          ) : (
-            <>
-              <p className="flex-1 text-[12px] text-muted-foreground">
-                {phase === "latest" ? "已是最新版本 ✓" : "从 GitHub Releases 获取更新"}
-              </p>
+              )
+            ) : (
               <button
                 onClick={() => void onCheck()}
                 disabled={phase === "checking"}
@@ -781,10 +1177,61 @@ function AboutSection() {
               >
                 {phase === "checking" ? "检查中…" : "检查更新"}
               </button>
-            </>
-          )}
-        </div>
-      </div>
+            )
+          }
+        />
+        {update?.body && (
+          <div className="px-3 py-2.5">
+            <p className="mb-1 text-[11px] font-medium text-muted-foreground">
+              本次更新内容
+            </p>
+            <p className="max-h-28 overflow-y-auto whitespace-pre-wrap text-[12px] leading-relaxed">
+              {update.body}
+            </p>
+          </div>
+        )}
+        <Row
+          label="自动检查更新"
+          hint="启动后静默检查；关闭后仅手动点击「检查更新」时查找"
+          right={
+            <Switch
+              checked={settings.autoCheckUpdate}
+              onCheckedChange={(v) => patch({ autoCheckUpdate: v })}
+            />
+          }
+        />
+        <Row
+          label="自动安装更新"
+          hint="发现新版后台静默下载替换，重启应用后生效（不打断使用）"
+          right={
+            <Switch
+              checked={settings.autoInstallUpdate}
+              onCheckedChange={(v) => patch({ autoInstallUpdate: v })}
+            />
+          }
+        />
+        <LinkRow label="更新日志" value="所有版本" url={`${REPO_URL}/releases`} />
+      </Group>
+
+      <Group title="链接">
+        <LinkRow label="项目主页" value="GitHub" url={REPO_URL} />
+        <LinkRow label="报告 Bug" value="提 Issue" url={`${REPO_URL}/issues/new`} />
+      </Group>
     </div>
+  );
+}
+
+const REPO_URL = "https://github.com/kristalderoyysi54/toskr";
+
+/** 关于页链接行：整行可点，外链图标示意跳浏览器。 */
+function LinkRow({ label, value, url }: { label: string; value: string; url: string }) {
+  return (
+    <button
+      onClick={() => void api.openUrl(url)}
+      className="flex w-full items-center px-3 py-2.5 text-left hover:bg-muted/50"
+    >
+      <span className="flex-1 text-[13px]">{label}</span>
+      <span className="text-[12px] text-muted-foreground">{value} ↗</span>
+    </button>
   );
 }
