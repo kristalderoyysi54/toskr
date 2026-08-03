@@ -26,6 +26,9 @@ EOF
 echo "→ 版本号已写入 $VERSION"
 
 # 2. 签名打包（updater 签名走环境变量；app 签名走 conf 里的证书）
+# touch 强制重编译：generate_context! 在编译期读 tauri.conf.json 嵌入版本号，
+# 但 cargo 不追踪该依赖——不 touch 会打出「自报旧版本」的包，更新循环提示
+touch src-tauri/src/lib.rs
 export TAURI_SIGNING_PRIVATE_KEY="$KEY"
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
 PATH=/usr/bin:$PATH pnpm tauri build
