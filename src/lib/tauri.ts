@@ -169,6 +169,14 @@ export const api = {
   diagNote: (msg: string) => invoke("diag_note", { msg }),
   appIcon: (bundleId: string) =>
     invoke<{ url: string; color: string } | null>("app_icon", { bundleId }),
+  /** 设置里应用列表展示信息（不要求应用在运行）。 */
+  appListInfo: (bundleId: string) =>
+    invoke<{ name: string; iconUrl: string | null } | null>("app_list_info", {
+      bundleId,
+    }),
+  /** 从 .app 路径读 bundle id。 */
+  bundleIdOfApp: (path: string) =>
+    invoke<string | null>("bundle_id_of_app", { path }),
   exportFile: (path: string, content: string) =>
     invoke("export_file", { path, content }),
   importFile: (path: string) => invoke<string>("import_file", { path }),
