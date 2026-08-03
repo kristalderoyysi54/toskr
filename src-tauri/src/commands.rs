@@ -487,6 +487,32 @@ pub fn app_icon(app: AppHandle, bundle_id: String) -> Option<AppIconInfo> {
     pair.map(|(url, color)| AppIconInfo { url, color })
 }
 
+/// 设置里应用列表的展示信息（不要求应用在运行；未安装返回 None）。
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AppListInfo {
+    pub name: String,
+    pub icon_url: Option<String>,
+}
+
+#[tauri::command]
+pub fn app_list_info(bundle_id: String) -> Option<AppListInfo> {
+    crate::focus::app_list_info(&bundle_id)
+        .map(|(name, icon_url)| AppListInfo { name, icon_url })
+}
+
+/// 从 .app 路径读 bundle id（设置里「选择应用」添加用）。
+#[tauri::command]
+pub fn bundle_id_of_app(path: String) -> Option<String> {
+    let info = format!("{}/Contents/Info", path.trim_end_matches('/'));
+    let out = std::process::Command::new("defaults")
+        .args(["read", &info, "CFBundleIdentifier"])
+        .output()
+        .ok()?;
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!s.is_empty()).then_some(s)
+}
+
 /// 设置窗口主题（system/light/dark）：同时切换原生外观与
 /// webview 的 prefers-color-scheme，前端 CSS 深浅色自动跟随。
 #[tauri::command]

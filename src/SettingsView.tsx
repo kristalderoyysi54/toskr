@@ -876,6 +876,63 @@ function HotkeyRecorder({
   );
 }
 
+/** 应用列表展示信息缓存（bundle id → 名称/图标；设置窗口会话内有效）。 */
+const appInfoCache = new Map<
+  string,
+  Promise<{ name: string; iconUrl: string | null } | null>
+>();
+
+function useAppListInfo(bundleId: string) {
+  const [info, setInfo] = useState<{ name: string; iconUrl: string | null } | null>(
+    null
+  );
+  useEffect(() => {
+    let hit = appInfoCache.get(bundleId);
+    if (!hit) {
+      hit = api.appListInfo(bundleId).catch(() => null);
+      appInfoCache.set(bundleId, hit);
+    }
+    let alive = true;
+    void hit.then((i) => {
+      if (alive) setInfo(i);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [bundleId]);
+  return info;
+}
+
+/** 列表行：应用图标 + 显示名（未安装/解析失败回退 bundle id）。 */
+function AppListRow({
+  bundle,
+  onRemove,
+}: {
+  bundle: string;
+  onRemove: () => void;
+}) {
+  const info = useAppListInfo(bundle);
+  return (
+    <div className="group flex items-center gap-2 rounded px-1.5 py-1 hover:bg-black/[0.03] dark:hover:bg-white/[0.04]">
+      {info?.iconUrl ? (
+        <img src={info.iconUrl} alt="" className="size-5 shrink-0" />
+      ) : (
+        <span className="size-5 shrink-0 rounded bg-black/10 dark:bg-white/10" />
+      )}
+      <span className="truncate text-[13px]" title={bundle}>
+        {info?.name ?? bundle}
+      </span>
+      <button
+        aria-label="移除"
+        onClick={onRemove}
+        className="ml-auto hidden rounded p-0.5 text-muted-foreground hover:text-foreground group-hover:block"
+      >
+        <X className="size-3" />
+      </button>
+    </div>
+  );
+}
+
 function AppListEditor({
   apps,
   onChange,
@@ -894,29 +951,44 @@ function AppListEditor({
       /* ignore */
     }
   };
+  const pickApp = async () => {
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const picked = await open({
+        multiple: false,
+        defaultPath: "/Applications",
+        filters: [{ name: "应用程序", extensions: ["app"] }],
+      });
+      if (typeof picked !== "string") return;
+      const bundle = await api.bundleIdOfApp(picked);
+      if (bundle && !apps.includes(bundle)) onChange([...apps, bundle]);
+    } catch {
+      /* ignore */
+    }
+  };
   return (
     <div className="rounded-xl border border-border/60 bg-card p-2">
-      <button
-        onClick={addCurrent}
-        className="mb-1 flex items-center gap-1 rounded-md px-1.5 py-1 text-[12px] text-primary hover:bg-primary/10"
-      >
-        <Plus className="size-3.5" /> {addLabel}
-      </button>
+      <div className="mb-1 flex items-center gap-1">
+        <button
+          onClick={pickApp}
+          className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[12px] text-primary hover:bg-primary/10"
+        >
+          <Plus className="size-3.5" /> 选择应用…
+        </button>
+        <button
+          onClick={addCurrent}
+          className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[12px] text-primary hover:bg-primary/10"
+        >
+          <Plus className="size-3.5" /> {addLabel}
+        </button>
+      </div>
       <div className="max-h-56 overflow-y-auto">
         {apps.map((bundle) => (
-          <div
+          <AppListRow
             key={bundle}
-            className="group flex items-center gap-1 rounded px-1.5 py-1 text-[12px] text-muted-foreground hover:bg-black/[0.03] dark:hover:bg-white/[0.04]"
-          >
-            <span className="truncate">{bundle}</span>
-            <button
-              aria-label="移除"
-              onClick={() => onChange(apps.filter((b) => b !== bundle))}
-              className="ml-auto hidden rounded p-0.5 hover:text-foreground group-hover:block"
-            >
-              <X className="size-3" />
-            </button>
-          </div>
+            bundle={bundle}
+            onRemove={() => onChange(apps.filter((b) => b !== bundle))}
+          />
         ))}
         {apps.length === 0 && (
           <p className="px-1.5 py-1 text-[12px] text-muted-foreground/60">空</p>

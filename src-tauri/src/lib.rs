@@ -178,6 +178,8 @@ pub fn run() {
             commands::hud_feedback,
             commands::hide_hud,
             commands::app_icon,
+            commands::app_list_info,
+            commands::bundle_id_of_app,
             commands::diag_note,
             commands::get_diagnostics,
             commands::get_data_dir,

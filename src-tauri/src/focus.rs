@@ -157,3 +157,35 @@ pub fn app_icon_png_base64(bundle_id: &str) -> Option<AppIcon> {
         color,
     })
 }
+
+/// 已安装应用的列表展示信息（名称 + 图标 data URL）。与 `app_icon_png_base64`
+/// 不同：走 NSWorkspace 查询，**不要求应用正在运行**（设置里的排除/忽略列表用）。
+/// 仅限主线程调用（NSImage 非线程安全）。
+pub fn app_list_info(bundle_id: &str) -> Option<(String, Option<String>)> {
+    use base64::Engine;
+    use objc2_foundation::NSString;
+
+    let ws = unsafe { NSWorkspace::sharedWorkspace() };
+    let url = unsafe {
+        ws.URLForApplicationWithBundleIdentifier(&NSString::from_str(bundle_id))
+    }?;
+    let name = unsafe { url.lastPathComponent() }?.to_string();
+    let icon_url = (|| {
+        let path = url.path()?;
+        let img = unsafe { ws.iconForFile(&path) };
+        let tiff = unsafe { img.TIFFRepresentation() }?;
+        let rep = NSBitmapImageRep::initWithData(NSBitmapImageRep::alloc(), &tiff)?;
+        let props = objc2_foundation::NSDictionary::new();
+        let png =
+            unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &props) }?;
+        let bytes = png.to_vec();
+        if bytes.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        ))
+    })();
+    Some((name, icon_url))
+}
