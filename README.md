@@ -70,7 +70,11 @@
 
 ## 📦 安装
 
-暂未提供预编译安装包，请从源码构建。
+从 [Releases](https://github.com/kristalderoyysi54/toskr/releases) 下载 `Toskr.app.tar.gz`，解压后把 `Toskr.app` 拖入「应用程序」。首次打开需**右键 →「打开」**绕过 Gatekeeper（自签名应用）。
+
+**自动更新**：应用启动后会静默检查 GitHub Releases，发现新版在右上角气泡提醒；也可在 设置 → 关于 中手动「检查更新」，一键下载安装并自动重启（更新包经 minisign 签名校验）。
+
+### 从源码构建
 
 **环境要求**：macOS 13+ · Node.js 20+ 与 pnpm · Rust 稳定版工具链 · Xcode Command Line Tools
 
@@ -121,8 +125,14 @@ pnpm build:app     # 产出 .app
 
 手动验收清单见 [docs/manual-qa.md](docs/manual-qa.md)。
 
+**发版**：`./script/release.sh 0.3.0 "更新说明"` —— 自动完成版本号写入、签名打包、生成 `latest.json`、创建 GitHub Release 并上传更新包（需 `gh` CLI 登录与 `~/.tauri/toskr-updater.key` updater 私钥）。
+
 > 中国大陆网络：`src-tauri/.cargo/config.toml` 已配置 rsproxy.cn crates 镜像，如需全局生效可复制到 `~/.cargo/config.toml`。
 
 ## 🙏 致谢
 
 灵感与原型来自 [shadcn](https://github.com/shadcn) 的 Copper，在其基础上重写并大幅增强。
+
+## 📄 许可证
+
+[MIT](LICENSE)

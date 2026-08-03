@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
+import type { Update } from "@tauri-apps/plugin-updater";
 import {
   Activity,
   Database,
@@ -23,6 +25,7 @@ import {
   SETTINGS_STATE,
 } from "@/lib/settingsSync";
 import { api } from "@/lib/tauri";
+import { checkForUpdate, downloadAndInstall } from "@/lib/updater";
 import { cn } from "@/lib/utils";
 import {
   defaultSettings,
@@ -701,6 +704,37 @@ function DiagnosticsSection() {
 }
 
 function AboutSection() {
+  const [version, setVersion] = useState("");
+  const [update, setUpdate] = useState<Update | null>(null);
+  const [phase, setPhase] = useState<"idle" | "checking" | "latest" | "downloading">(
+    "idle"
+  );
+  const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    void getVersion().then(setVersion).catch(() => {});
+  }, []);
+
+  const onCheck = async () => {
+    setPhase("checking");
+    const u = await checkForUpdate();
+    if (u) {
+      setUpdate(u);
+      setPhase("idle");
+    } else {
+      setUpdate(null);
+      setPhase("latest");
+    }
+  };
+
+  const onInstall = async () => {
+    if (!update) return;
+    setPhase("downloading");
+    setProgress(0);
+    const ok = await downloadAndInstall(update, setProgress);
+    if (!ok) setPhase("idle");
+  };
+
   return (
     <div>
       <SectionTitle>关于</SectionTitle>
@@ -710,11 +744,46 @@ function AboutSection() {
           面向 AI 工作流的全局划词摘录、Prompt 暂存与一键流转工具。
         </p>
         <p className="mt-3 text-[12px] text-muted-foreground">
-          版本 0.3.0 · 本地优先 · 无账号 · 无遥测
+          版本 {version || "…"} · 本地优先 · 无账号 · 无遥测
         </p>
         <p className="mt-1 text-[11px] text-muted-foreground/70">
           双击 ⇧ 捕获选中文本；在终端/编辑器旁磁吸伴随；⌘⏎ 一键发回对话。
         </p>
+
+        <div className="mt-4 flex items-center gap-2 border-t border-border/60 pt-3">
+          {update ? (
+            phase === "downloading" ? (
+              <p className="text-[12px] text-muted-foreground">
+                正在下载 v{update.version}… {progress}%（完成后自动重启）
+              </p>
+            ) : (
+              <>
+                <p className="flex-1 text-[12px]">
+                  发现新版本 <span className="font-semibold">v{update.version}</span>
+                </p>
+                <button
+                  onClick={() => void onInstall()}
+                  className="rounded-md bg-primary px-2.5 py-1 text-[12px] font-medium text-primary-foreground hover:opacity-90"
+                >
+                  下载并安装
+                </button>
+              </>
+            )
+          ) : (
+            <>
+              <p className="flex-1 text-[12px] text-muted-foreground">
+                {phase === "latest" ? "已是最新版本 ✓" : "从 GitHub Releases 获取更新"}
+              </p>
+              <button
+                onClick={() => void onCheck()}
+                disabled={phase === "checking"}
+                className="rounded-md border border-border px-2.5 py-1 text-[12px] hover:bg-muted disabled:opacity-50"
+              >
+                {phase === "checking" ? "检查中…" : "检查更新"}
+              </button>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
