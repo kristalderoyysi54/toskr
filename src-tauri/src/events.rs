@@ -4,8 +4,9 @@ use serde::Serialize;
 #[derive(Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum TriggerPayload {
-    /// 无选中文本：开关面板。
-    Toggle,
+    /// 无选中文本：开关面板。`force` 表示来自专用面板快捷键：
+    /// 用户意图明确是开关，钉住状态下也执行收起（双击触发则保持防误触）。
+    Toggle { force: bool },
     /// 捕获到选中文本：交给前端入库（去重后由前端回调 HUD）。
     #[serde(rename_all = "camelCase")]
     Captured {

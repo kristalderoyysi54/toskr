@@ -26,6 +26,8 @@ base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png"] }
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
+tauri-plugin-global-shortcut = "2"
+objc2-vision = { version = "0.3.2", features = ["VNRecognizeTextRequest", "VNRequest", "VNObservation", "VNRequestHandler", "VNTypes"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 window-vibrancy = "0.6"
@@ -38,6 +40,7 @@ objc2-foundation = { version = "0.3", features = [
   "NSDictionary",
   "NSEnumerator",
   "NSArray",
+  "NSError",
 ] }
 objc2-app-kit = { version = "0.3", features = [
   "NSWorkspace",

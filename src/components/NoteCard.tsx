@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
@@ -7,11 +7,15 @@ import {
   Expand,
   FolderInput,
   GripVertical,
+  ListOrdered,
   Merge,
   Pencil,
   ExternalLink,
   Send,
+  ScanText,
+  Star,
   Trash2,
+  Wand2,
 } from "lucide-react";
 
 import { tip } from "@/lib/tip";
@@ -25,7 +29,14 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { deleteNotesWithUndo, mergeNoteWithChecked, sendNotesToChat } from "@/lib/actions";
+import {
+  copyNotesAsList,
+  deleteNotesWithUndo,
+  mergeNoteWithChecked,
+  sendNotesToChat,
+  undoableTip,
+} from "@/lib/actions";
+import { TEXT_OPS, type TextOp } from "@/lib/textops";
 import { langLabel } from "@/lib/code";
 import { linkParts } from "@/lib/link";
 import { useAppIcon } from "@/lib/icons";
@@ -33,7 +44,13 @@ import { timeAgo, useNoteImage } from "@/lib/media";
 import { splitHighlight } from "@/lib/search";
 import { api } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
-import { noteImages, useNotesStore, type Note } from "@/store/notesStore";
+import {
+  noteImages,
+  normalizeContextMenu,
+  useNotesStore,
+  type ContextMenuItemId,
+  type Note,
+} from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
 
 /**
@@ -48,11 +65,20 @@ export function NoteCard({ note, query = "" }: { note: Note; query?: string }) {
   const sections = useNotesStore((s) => s.sections);
   const focused = useUIStore((s) => s.focusedId === note.id);
   const flashing = useUIStore((s) => s.flashId === note.id);
-  const { toggleChecked, toggleDone, moveNotes } = useNotesStore.getState();
+  // ⌘ 按住时前 9 张卡显示 ⌘N 快发角标
+  const quickSlot = useUIStore((s) => {
+    if (!s.cmdHeld) return 0;
+    const i = s.navIds.indexOf(note.id);
+    return i >= 0 && i < 9 ? i + 1 : 0;
+  });
+  const { toggleChecked, toggleDone, toggleNoteKeep, moveNotes } =
+    useNotesStore.getState();
 
   const cardRef = useRef<HTMLDivElement | null>(null);
   const icon = useAppIcon(note.sourceBundle);
   const cardTint = useNotesStore((s) => s.settings.cardTint);
+  const cardOpacity = useNotesStore((s) => s.settings.cardOpacity);
+  const compact = useNotesStore((s) => s.settings.cardDensity === "compact");
   const isImage = note.kind === "image";
   const isLink = note.kind === "link" && !!note.url;
   const images = noteImages(note);
@@ -71,8 +97,180 @@ export function NoteCard({ note, query = "" }: { note: Note; query?: string }) {
     }
   }, [focused]);
 
-  const openPreview = (editing = false) =>
+  const openPreview = (editing = false) => {
+    // 链接卡片「查看明细」= 直接打开网页；编辑仍走预览层编辑链接文本
+    if (isLink && !editing) {
+      void api.openUrl(note.url!);
+      return;
+    }
     useUIStore.getState().openPreview(note.id, editing);
+  };
+
+  // 文本卡正文可直接拖出到外部应用输入框（WKWebView 原生桥接系统拖拽）
+  const dragOutProps = !isImage
+    ? {
+        draggable: true,
+        onDragStart: (e: React.DragEvent) => {
+          e.dataTransfer.setData("text/plain", note.text);
+          e.dataTransfer.effectAllowed = "copy" as const;
+        },
+      }
+    : {};
+
+  // 只订阅稳定引用，派生数组用 useMemo——选择器里 new 数组会造成
+  // getSnapshot 永不相等 → React 无限重渲染崩溃（主窗口白屏、面板无法唤起）
+  const menuCfgRaw = useNotesStore((s) => s.settings.contextMenu);
+  const menuIds = useMemo(
+    () =>
+      normalizeContextMenu(menuCfgRaw)
+        .filter((i) => i.on)
+        .map((i) => i.id),
+    [menuCfgRaw]
+  );
+
+  /** 右键菜单中段：按配置顺序渲染，卡片类型不适用返回 null。 */
+  const renderMenuItem = (id: ContextMenuItemId): React.ReactNode => {
+    switch (id) {
+      case "preview":
+        return isLink ? (
+          <ContextMenuItem key={id} onClick={() => void api.openUrl(note.url!)}>
+            <ExternalLink className="size-3.5" /> 打开链接
+          </ContextMenuItem>
+        ) : (
+          <ContextMenuItem key={id} onClick={() => openPreview()}>
+            <Expand className="size-3.5" /> 预览
+          </ContextMenuItem>
+        );
+      case "textops":
+        if (isImage || isLink) return null;
+        return (
+          <ContextMenuSub key={id}>
+            <ContextMenuSubTrigger>
+              <Wand2 className="mr-2 size-3.5" /> 文本处理
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent className="w-36">
+              {TEXT_OPS.map((tOp) => (
+                <ContextMenuItem key={tOp.id} onClick={() => applyTextOp(tOp)}>
+                  {tOp.label}
+                </ContextMenuItem>
+              ))}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+        );
+      case "send":
+        return (
+          <ContextMenuItem key={id} onClick={() => sendNotesToChat([note.id])}>
+            <Send className="size-3.5" /> 发送到对话
+          </ContextMenuItem>
+        );
+      case "copy":
+        return (
+          <ContextMenuItem key={id} onClick={copyOne}>
+            <Copy className="size-3.5" /> 复制内容
+          </ContextMenuItem>
+        );
+      case "copy-list":
+        return (
+          <ContextMenuItem key={id} onClick={() => void copyWithChecked()}>
+            <ListOrdered className="size-3.5" /> 复制为列表
+          </ContextMenuItem>
+        );
+      case "edit":
+        if (isImage) return null;
+        return (
+          <ContextMenuItem key={id} onClick={() => openPreview(true)}>
+            <Pencil className="size-3.5" /> 编辑
+          </ContextMenuItem>
+        );
+      case "ocr":
+        if (!isImage || !note.imageFile) return null;
+        return (
+          <ContextMenuItem key={id} onClick={() => void runOcr()}>
+            <ScanText className="size-3.5" /> 识别文字 (OCR)
+          </ContextMenuItem>
+        );
+      case "done":
+        return (
+          <ContextMenuItem key={id} onClick={() => toggleDone(note.id)}>
+            <Check className="size-3.5" /> {note.done ? "取消完成" : "标记完成"}
+          </ContextMenuItem>
+        );
+      case "keep":
+        return (
+          <ContextMenuItem key={id} onClick={() => toggleNoteKeep(note.id)}>
+            <Star className={cn("size-3.5", note.keep && "fill-current")} />{" "}
+            {note.keep ? "取消常用" : "设为常用 · 发送后保留"}
+          </ContextMenuItem>
+        );
+      case "move":
+        if (sections.length <= 1) return null;
+        return (
+          <ContextMenuSub key={id}>
+            <ContextMenuSubTrigger>
+              <FolderInput className="mr-2 size-3.5" /> 移动到
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent className="w-36">
+              {sections
+                .filter((s) => s.id !== note.sectionId)
+                .map((s) => (
+                  <ContextMenuItem key={s.id} onClick={() => moveNotes([note.id], s.id)}>
+                    {s.name}
+                  </ContextMenuItem>
+                ))}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+        );
+    }
+  };
+
+  /** 复制为列表：勾选项 ∪ 当前卡（与右键合并同一语义）。 */
+  const copyWithChecked = () => {
+    const checkedNow = useNotesStore.getState().checkedIds;
+    const pick = new Set([...checkedNow, note.id]);
+    const ids = useNotesStore
+      .getState()
+      .notes.filter((n) => pick.has(n.id))
+      .map((n) => n.id);
+    return copyNotesAsList(ids);
+  };
+
+  const runOcr = async () => {
+    if (!note.imageFile) return;
+    tip("info", "正在识别文字…");
+    try {
+      const text = await api.ocrImage(note.imageFile);
+      const { result, id } = useNotesStore.getState().addNote(text, {
+        sectionId: note.sectionId,
+        sourceApp: note.sourceApp,
+        sourceBundle: note.sourceBundle,
+      });
+      if (result === "added" && id) {
+        useUIStore.getState().setFlashId(id);
+        tip("ok", "已识别为新卡片");
+      } else if (result === "duplicate") {
+        tip("duplicate", "");
+      }
+    } catch (e) {
+      const msg = String(e);
+      if (msg.includes("未识别到文字")) tip("info", "未识别到文字");
+      else tip("warn", `识别失败：${msg}`);
+    }
+  };
+
+  const applyTextOp = (textOp: TextOp) => {
+    try {
+      const next = textOp.apply(note.text);
+      if (next === note.text) {
+        tip("info", "内容无变化");
+        return;
+      }
+      useNotesStore.getState().snapshot(`文本处理：${textOp.label}`);
+      useNotesStore.getState().updateNoteText(note.id, next);
+      undoableTip(`已处理 · ${textOp.label}`);
+    } catch {
+      tip("warn", `${textOp.label}失败：内容不符合格式`);
+    }
+  };
 
   const copyOne = async () => {
     try {
@@ -93,7 +291,11 @@ export function NoteCard({ note, query = "" }: { note: Note; query?: string }) {
             setNodeRef(el);
             cardRef.current = el;
           }}
-          style={{ transform: CSS.Transform.toString(transform), transition }}
+          style={{
+            transform: CSS.Transform.toString(transform),
+            transition,
+            "--card-alpha": `${Math.round(cardOpacity * 100)}%`,
+          } as React.CSSProperties}
           onClick={(e) => {
             const ui = useUIStore.getState();
             if (e.shiftKey && ui.anchorId && ui.anchorId !== note.id) {
@@ -125,13 +327,16 @@ export function NoteCard({ note, query = "" }: { note: Note; query?: string }) {
           }}
           onDoubleClick={() => openPreview()}
           className={cn(
-            "group relative flex h-[136px] cursor-default select-none flex-col overflow-hidden rounded-lg border border-transparent px-2 pb-1.5 pt-1.5",
-            "bg-black/[0.03] dark:bg-white/[0.05]",
+            "group relative flex cursor-default select-none overflow-hidden rounded-lg border border-transparent",
+            compact ? "h-9 items-center" : "h-[136px] flex-col px-2 pb-1.5 pt-1.5",
+            // 实色卡片（Paste 风格）：与毛玻璃面板分层；透明度由设置项调节
+            "bg-[rgb(255_255_255/var(--card-alpha,100%))] shadow-sm dark:bg-[rgb(39_39_42/var(--card-alpha,100%))]",
             "hover:border-black/10 dark:hover:border-white/10",
-            // 无勾选框设计：选中态用蓝色边框 + 淡蓝底标识（primary 深色下近白，不用）
-            checked && "border-blue-500 ring-2 ring-blue-500 bg-blue-500/[0.08] dark:bg-blue-500/[0.14]",
-            // 键盘焦点：中性淡描边，与蓝色选中态区分
-            focused && "ring-1 ring-black/20 dark:ring-white/25",
+            // 无勾选框设计：选中态用蓝色边框标识（primary 深色下近白，不用）
+            checked && "border-blue-500 ring-2 ring-blue-500",
+            // 键盘焦点：中性淡描边，仅未选中卡展示（选中卡只有粗蓝框一种形态，
+            // 避免 ring-1/ring-2 类冲突混出细蓝框）
+            focused && !checked && "ring-1 ring-black/20 dark:ring-white/25",
             flashing && "flash-highlight",
             isDragging && "z-10 opacity-70 shadow-lg"
           )}
@@ -152,6 +357,22 @@ export function NoteCard({ note, query = "" }: { note: Note; query?: string }) {
             <GripVertical className="size-3.5" />
           </button>
 
+          {quickSlot > 0 && (
+            <span
+              className={cn(
+                "absolute left-1 z-10 flex h-4 min-w-4 items-center justify-center rounded bg-black/70 px-1 text-[10px] font-semibold tabular-nums text-white dark:bg-white/80 dark:text-black",
+                compact ? "top-1/2 -translate-y-1/2" : "top-1"
+              )}
+            >
+              ⌘{quickSlot}
+            </span>
+          )}
+          {compact ? (
+            <div className="flex h-full w-full min-w-0" {...dragOutProps}>
+              <CompactRow note={note} icon={icon} query={query} imageUrl={imageUrl} />
+            </div>
+          ) : (
+            <>
           {/* 顶部通栏：应用主色底 + 类型/时间（白字）+ 右端完整应用图标 */}
           <div
             className="-mx-2 -mt-1.5 mb-1.5 flex h-9 shrink-0 items-center gap-1.5 rounded-t-lg px-2"
@@ -175,6 +396,9 @@ export function NoteCard({ note, query = "" }: { note: Note; query?: string }) {
                 {timeAgo(note.createdAt)}
               </p>
             </div>
+            {note.keep && (
+              <Star className="size-3 shrink-0 fill-white/90 text-white/90" />
+            )}
             {icon && (
               // 应用图标嵌入通栏右端（Paste 风格）：左缘完整可见，
               // 上/右/下被通栏边缘裁去少许——左对齐 + 垂直居中的大图标
@@ -184,14 +408,19 @@ export function NoteCard({ note, query = "" }: { note: Note; query?: string }) {
             )}
           </div>
 
-          <div className="flex min-h-0 flex-1 items-start overflow-hidden">
+          <div className="flex min-h-0 flex-1 items-start overflow-hidden" {...dragOutProps}>
             {isLink ? (
               <div className="flex w-full flex-col justify-center gap-0.5">
-                <p className="line-clamp-2 text-[13px] font-semibold leading-tight [overflow-wrap:anywhere]">
-                  {link!.host}
-                </p>
+                <div className="flex items-start gap-1.5">
+                  {note.linkIcon && <LinkFavicon src={note.linkIcon} />}
+                  <p className="line-clamp-2 text-[13px] font-semibold leading-tight [overflow-wrap:anywhere]">
+                    {note.linkTitle ?? link!.host}
+                  </p>
+                </div>
                 <p className="line-clamp-2 text-[11px] leading-tight text-muted-foreground [overflow-wrap:anywhere]">
-                  {link!.path}
+                  {note.linkTitle
+                    ? link!.host + (link!.path === "/" ? "" : link!.path)
+                    : link!.path}
                 </p>
                 <button
                   onClick={(e) => {
@@ -264,11 +493,25 @@ export function NoteCard({ note, query = "" }: { note: Note; query?: string }) {
                     : `${[...note.text].length} 字符`}
             </span>
           </div>
+            </>
+          )}
 
-          {/* 悬停操作钮：右下角盖在字符数元信息上，避开正文内容 */}
-          <div className="absolute bottom-1 right-1.5 hidden gap-0.5 group-hover:flex">
-            <IconButton label="预览（Space）" onClick={() => openPreview()}>
-              <Expand className="size-3" />
+          {/* 悬停操作钮：盖在元信息/时间上，避开正文内容 */}
+          <div
+            className={cn(
+              "absolute hidden gap-0.5 group-hover:flex",
+              compact ? "right-1 top-1/2 -translate-y-1/2" : "bottom-1 right-1.5"
+            )}
+          >
+            <IconButton
+              label={isLink ? "打开页面（Space）" : "预览（Space）"}
+              onClick={() => openPreview()}
+            >
+              {isLink ? (
+                <ExternalLink className="size-3" />
+              ) : (
+                <Expand className="size-3" />
+              )}
             </IconButton>
             {!isImage && (
               <IconButton label="编辑" onClick={() => openPreview(true)}>
@@ -286,49 +529,14 @@ export function NoteCard({ note, query = "" }: { note: Note; query?: string }) {
       </ContextMenuTrigger>
 
       <ContextMenuContent className="w-44">
-        {isLink && (
-          <ContextMenuItem onClick={() => void api.openUrl(note.url!)}>
-            <ExternalLink className="size-3.5" /> 打开链接
-          </ContextMenuItem>
-        )}
-        <ContextMenuItem onClick={() => openPreview()}>
-          <Expand className="size-3.5" /> 预览
-        </ContextMenuItem>
-        <ContextMenuItem onClick={() => sendNotesToChat([note.id])}>
-          <Send className="size-3.5" /> 发送到对话
-        </ContextMenuItem>
-        <ContextMenuItem onClick={copyOne}>
-          <Copy className="size-3.5" /> 复制内容
-        </ContextMenuItem>
-        {!isImage && (
-          <ContextMenuItem onClick={() => openPreview(true)}>
-            <Pencil className="size-3.5" /> 编辑
-          </ContextMenuItem>
-        )}
-        <ContextMenuItem onClick={() => toggleDone(note.id)}>
-          <Check className="size-3.5" /> {note.done ? "取消完成" : "标记完成"}
-        </ContextMenuItem>
+        {/* 多选场景的核心意图是合并，固定置顶（不参与自定义） */}
         {mergeCount >= 2 && (
           <ContextMenuItem onClick={() => mergeNoteWithChecked(note.id)}>
             <Merge className="size-3.5" /> 合并笔记 ×{mergeCount}
           </ContextMenuItem>
         )}
-        {sections.length > 1 && (
-          <ContextMenuSub>
-            <ContextMenuSubTrigger>
-              <FolderInput className="mr-2 size-3.5" /> 移动到
-            </ContextMenuSubTrigger>
-            <ContextMenuSubContent className="w-36">
-              {sections
-                .filter((s) => s.id !== note.sectionId)
-                .map((s) => (
-                  <ContextMenuItem key={s.id} onClick={() => moveNotes([note.id], s.id)}>
-                    {s.name}
-                  </ContextMenuItem>
-                ))}
-            </ContextMenuSubContent>
-          </ContextMenuSub>
-        )}
+        {/* 中段按设置项的显隐与顺序渲染；卡片类型不适用的项自动跳过 */}
+        {menuIds.map((id) => renderMenuItem(id))}
         <ContextMenuSeparator />
         <ContextMenuItem
           variant="destructive"
@@ -338,6 +546,99 @@ export function NoteCard({ note, query = "" }: { note: Note; query?: string }) {
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
+  );
+}
+
+/** 站点图标：加载失败自动隐藏（favicon 缺失/防盗链很常见）。 */
+/** 紧凑单行布局：主色左条 + 图标 + 首行内容 + 时间（交互全部由外层卡片承担）。 */
+function CompactRow({
+  note,
+  icon,
+  query,
+  imageUrl,
+}: {
+  note: Note;
+  icon: ReturnType<typeof useAppIcon>;
+  query: string;
+  imageUrl?: string | null;
+}) {
+  const cardTint = useNotesStore((s) => s.settings.cardTint);
+  const isImage = note.kind === "image";
+  const isLink = note.kind === "link" && !!note.url;
+  const images = noteImages(note);
+  const link = isLink ? linkParts(note.url!) : null;
+  const firstLine = isImage
+    ? images.length > 1
+      ? `图片 ×${images.length}`
+      : `图片${note.imageW ? ` ${note.imageW}×${note.imageH}` : ""}`
+    : isLink
+      ? (note.linkTitle ?? link!.host + (link!.path === "/" ? "" : link!.path))
+      : note.text.split("\n")[0] || "（空）";
+  const segments = splitHighlight(firstLine, query);
+  return (
+    <div className="relative flex h-full w-full min-w-0 items-center gap-2 pl-2.5 pr-2">
+      {/* 左缘应用主色条（替代舒适模式的彩色通栏） */}
+      <span
+        className="absolute inset-y-0 left-0 w-[3px]"
+        style={{ backgroundColor: (cardTint && icon?.color) || "#5b5b60" }}
+      />
+      {isLink && note.linkIcon ? (
+        <LinkFavicon src={note.linkIcon} />
+      ) : icon ? (
+        <img src={icon.url} alt="" className="size-5 shrink-0" />
+      ) : null}
+      {isImage && imageUrl && (
+        <img
+          src={imageUrl}
+          alt=""
+          className="size-6 shrink-0 rounded object-cover"
+        />
+      )}
+      <p
+        className={cn(
+          "min-w-0 flex-1 truncate text-[12px]",
+          note.codeLang && "font-mono text-[11px]",
+          note.done && "text-muted-foreground line-through opacity-60"
+        )}
+      >
+        {segments.map((seg, i) =>
+          seg.hit ? (
+            <mark
+              key={i}
+              className="rounded-[2px] bg-amber-300/60 text-inherit dark:bg-amber-500/40"
+            >
+              {seg.text}
+            </mark>
+          ) : (
+            <span key={i}>{seg.text}</span>
+          )
+        )}
+      </p>
+      {note.keep && (
+        <Star className="size-3 shrink-0 fill-amber-400 text-amber-400" />
+      )}
+      {!isImage && images.length > 0 && (
+        <span className="shrink-0 text-[10px] text-muted-foreground/60">
+          {images.length}图
+        </span>
+      )}
+      <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/50">
+        {timeAgo(note.createdAt)}
+      </span>
+    </div>
+  );
+}
+
+function LinkFavicon({ src }: { src: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return null;
+  return (
+    <img
+      src={src}
+      alt=""
+      onError={() => setFailed(true)}
+      className="mt-px size-4 shrink-0 rounded"
+    />
   );
 }
 

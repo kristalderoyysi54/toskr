@@ -1,4 +1,4 @@
-import { CheckCheck, ChevronDown, ListOrdered, Merge, Send, Trash2, X } from "lucide-react";
+import { CheckCheck, ChevronDown, Merge, Send, Trash2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -13,7 +13,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
-  copyCheckedAsList,
   deleteNotesWithUndo,
   mergeCheckedWithUndo,
   sendCheckedToChat,
@@ -40,9 +39,6 @@ export function SelectionBar() {
       </span>
 
       <div className="ml-auto flex items-center gap-0.5">
-        <IconAction label="复制为列表" onClick={() => copyCheckedAsList()}>
-          <ListOrdered className="size-3.5" />
-        </IconAction>
         <IconAction label="合并笔记" disabled={count < 2} onClick={mergeCheckedWithUndo}>
           <Merge className="size-3.5" />
         </IconAction>
@@ -113,7 +109,7 @@ export function SelectionBar() {
                   代码块 ```
                 </SimpleMenuItem>
                 <SimpleMenuSeparator />
-                <SimpleMenuLabel>带 Prompt 前缀发送</SimpleMenuLabel>
+                <SimpleMenuLabel>带 Prompt 模板发送</SimpleMenuLabel>
                 {snippets.map((sn) => (
                   <SimpleMenuItem
                     key={sn.id}

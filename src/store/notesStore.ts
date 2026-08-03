@@ -16,6 +16,10 @@ export interface Note {
   codeLang?: string;
   /** 链接卡片的 URL（kind=link）。 */
   url?: string;
+  /** 链接卡片抓取的网页标题（未抓到/未完成时缺省，展示回退 URL）。 */
+  linkTitle?: string;
+  /** 链接卡片的站点图标 URL。 */
+  linkIcon?: string;
   /** 图片附件文件名（kind=image 的主图）。 */
   imageFile?: string;
   /** 附加图片（合并后的组合卡片可同时带多张图）。 */
@@ -25,6 +29,8 @@ export interface Note {
   text: string;
   sectionId: string;
   done: boolean;
+  /** 常用内容：发送后不标记完成，长期复用（右键「设为常用」）。 */
+  keep?: boolean;
   createdAt: number;
   /** 捕获来源应用名（如 "Safari"）。 */
   sourceApp?: string;
@@ -38,6 +44,8 @@ export interface Section {
   collapsed?: boolean;
   /** 分组色标（"#rrggbb"；未设为无色）。 */
   color?: string;
+  /** 组内卡片发送后不标记完成（Prompt 库等长期复用分组）。 */
+  keepAfterSend?: boolean;
 }
 
 /** 分组可选色板（对齐 Paste 的色点风格）。 */
@@ -68,10 +76,19 @@ export interface PromptSnippet {
 }
 
 export const DEFAULT_PROMPT_SNIPPETS: PromptSnippet[] = [
-  { id: "review", label: "代码审查", text: "请帮我 review 以下代码，指出问题与改进建议：" },
-  { id: "translate", label: "翻译成中文", text: "请把以下内容翻译成中文：" },
-  { id: "summarize", label: "总结要点", text: "请总结以下内容的要点：" },
-  { id: "explain", label: "解释内容", text: "请解释以下内容：" },
+  {
+    id: "review",
+    label: "代码审查",
+    text: "请帮我 review 以下代码，指出问题与改进建议：\n\n{内容}",
+  },
+  { id: "translate", label: "翻译成中文", text: "请把以下内容翻译成中文：\n\n{内容}" },
+  { id: "summarize", label: "总结要点", text: "请总结以下内容的要点：\n\n{内容}" },
+  { id: "explain", label: "解释内容", text: "请解释以下内容：\n\n{内容}" },
+  {
+    id: "optimize-prompt",
+    label: "优化提示词",
+    text: "请你不要执行接下来的任务。你现在的身份是世界顶级的提示工程专家，请仔细阅读我提供的提示词：\n\n{内容}\n\n并从清晰度、专业度、结构化、模型适应性四个维度进行批判性优化。请仅输出优化后的提示词内容，并用 ``` 包裹起来。",
+  },
 ];
 
 export type VibrancyMaterial =
@@ -94,6 +111,20 @@ export interface Settings {
   vibrancyMaterial: VibrancyMaterial;
   /** 卡片顶部彩色通栏（关闭则用中性灰）。 */
   cardTint: boolean;
+  /** 卡片底色不透明度（0.3–1）：调低可透出毛玻璃背景。 */
+  cardOpacity: number;
+  /** 卡片密度：舒适（瓷砖）/ 紧凑（单行列表）。 */
+  cardDensity: "comfortable" | "compact";
+  /** 卡片右键菜单项显隐与顺序（合并置顶、删除垫底不参与自定义）。 */
+  contextMenu: { id: ContextMenuItemId; on: boolean }[];
+  /** 启动时自动检查更新。 */
+  autoCheckUpdate: boolean;
+  /** 发现新版本自动下载安装（重启后生效，不打断当前使用）。 */
+  autoInstallUpdate: boolean;
+  /** 剪贴板历史自动收集（默认关闭）。 */
+  clipHistory: boolean;
+  /** 剪贴板历史保留条数上限（常用卡不计入裁剪）。 */
+  clipHistoryLimit: number;
   /** 发送到对话后自动按回车（默认关闭，防误发）。 */
   autoEnter: boolean;
   /** 面板失焦自动隐藏。 */
@@ -102,6 +133,9 @@ export interface Settings {
   hotkeyModifier: "shift" | "control" | "option";
   /** 两次轻击「抬起→抬起」最大间隔（ms）。 */
   hotkeyGapMs: number;
+  /** 面板显示/隐藏专用快捷键（global-shortcut 格式如 "Cmd+Shift+KeyV"，null=未设置）。
+   *  与双击触发独立：只开关面板不捕获，钉住时也可收起。 */
+  panelToggleHotkey: string | null;
   /** 隐身模式：捕获照常入库但不弹 HUD（会议投屏用）。 */
   stealth: boolean;
   /** 伴随停靠：面板磁吸到目标应用窗口右缘并跟随。 */
@@ -129,6 +163,53 @@ export interface Settings {
 }
 
 export const INBOX_ID = "inbox";
+/** 剪贴板历史专用分组（自动创建，插在收件箱之后）。 */
+export const CLIPBOARD_ID = "clipboard";
+
+/** 卡片右键菜单可自定义项（顺序即默认顺序；具体卡片类型不适用的项自动隐藏）。 */
+export type ContextMenuItemId =
+  | "preview"
+  | "textops"
+  | "send"
+  | "copy"
+  | "copy-list"
+  | "edit"
+  | "ocr"
+  | "done"
+  | "keep"
+  | "move";
+
+export const CONTEXT_MENU_REGISTRY: { id: ContextMenuItemId; label: string }[] = [
+  { id: "preview", label: "预览 / 打开链接" },
+  { id: "textops", label: "文本处理" },
+  { id: "send", label: "发送到对话" },
+  { id: "copy", label: "复制内容" },
+  { id: "copy-list", label: "复制为列表" },
+  { id: "edit", label: "编辑" },
+  { id: "ocr", label: "识别文字 (OCR)" },
+  { id: "done", label: "标记完成" },
+  { id: "keep", label: "设为常用" },
+  { id: "move", label: "移动到分组" },
+];
+
+/** 归一化菜单配置：补齐新版本新增项（老配置向前兼容）、剔除未知项。 */
+export function normalizeContextMenu(
+  cfg: { id: ContextMenuItemId; on: boolean }[] | undefined
+): { id: ContextMenuItemId; on: boolean }[] {
+  const known = new Set(CONTEXT_MENU_REGISTRY.map((i) => i.id));
+  const seen = new Set<string>();
+  const out: { id: ContextMenuItemId; on: boolean }[] = [];
+  for (const item of cfg ?? []) {
+    if (known.has(item.id) && !seen.has(item.id)) {
+      out.push({ id: item.id, on: item.on });
+      seen.add(item.id);
+    }
+  }
+  for (const { id } of CONTEXT_MENU_REGISTRY) {
+    if (!seen.has(id)) out.push({ id, on: true });
+  }
+  return out;
+}
 export const PANEL_WIDTH_MIN = 320;
 export const PANEL_WIDTH_MAX = 520;
 
@@ -166,10 +247,18 @@ export const defaultSettings = (): Settings => ({
   vibrancy: true,
   vibrancyMaterial: "hud",
   cardTint: true,
+  cardOpacity: 1,
+  cardDensity: "comfortable",
+  contextMenu: CONTEXT_MENU_REGISTRY.map((i) => ({ id: i.id, on: true })),
+  autoCheckUpdate: true,
+  autoInstallUpdate: false,
+  clipHistory: false,
+  clipHistoryLimit: 50,
   autoEnter: false,
   hideOnBlur: true,
   hotkeyModifier: "shift",
   hotkeyGapMs: 400,
+  panelToggleHotkey: null,
   stealth: false,
   companionEnabled: true,
   companionApps: [...DEFAULT_COMPANION_APPS],
@@ -214,11 +303,29 @@ interface NotesState {
       imageH?: number;
     }
   ) => { result: AddNoteResult; id?: string };
+  /** 剪贴板历史入库：自动建「剪贴板」分组、超限裁剪；返回待清理的图片文件。 */
+  addClipNote: (
+    text: string,
+    opts?: {
+      sourceApp?: string;
+      sourceBundle?: string;
+      kind?: NoteKind;
+      imageFile?: string;
+      imageW?: number;
+      imageH?: number;
+    }
+  ) => string[];
   updateNoteText: (id: string, text: string) => void;
+  /** 回填链接卡片抓取到的网页标题/图标。 */
+  setLinkMeta: (id: string, meta: { title?: string; icon?: string }) => void;
   deleteNotes: (ids: string[], undoLabel?: string) => void;
   setDone: (ids: string[], done: boolean) => void;
   toggleDone: (id: string) => void;
   clearDone: () => number;
+  /** 切换卡片「常用」（发送后不标完成）。 */
+  toggleNoteKeep: (id: string) => void;
+  /** 切换分组「发送后保留」。 */
+  toggleSectionKeep: (id: string) => void;
 
   toggleChecked: (id: string) => void;
   setChecked: (ids: string[]) => void;
@@ -297,15 +404,78 @@ export const useNotesStore = create<NotesState>()(
         return { result: "added", id: note.id };
       },
 
+      addClipNote: (text, opts) => {
+        // 首次收集自动建组，插在收件箱之后（首位是 addNote 的默认落点，不占用）
+        if (!get().sections.some((s) => s.id === CLIPBOARD_ID)) {
+          const [first, ...rest] = get().sections;
+          const clip: Section = { id: CLIPBOARD_ID, name: "剪贴板" };
+          set({ sections: first ? [first, clip, ...rest] : [clip] });
+        }
+        const { result } = get().addNote(text, { ...opts, sectionId: CLIPBOARD_ID });
+        if (result !== "added") return [];
+        // 超限裁剪：非常用卡按新→旧保留 limit 条（notes 数组新卡在前）
+        const limit = Math.max(1, get().settings.clipHistoryLimit);
+        const clipNotes = get().notes.filter(
+          (n) => n.sectionId === CLIPBOARD_ID && !n.keep
+        );
+        const evicted = clipNotes.slice(limit);
+        if (!evicted.length) return [];
+        const evictedIds = new Set(evicted.map((n) => n.id));
+        const survivors = get().notes.filter((n) => !evictedIds.has(n.id));
+        // 仅清理不再被任何卡片引用的图片文件
+        const stillUsed = new Set(survivors.flatMap(noteImages));
+        set({
+          notes: survivors,
+          checkedIds: get().checkedIds.filter((id) => !evictedIds.has(id)),
+        });
+        return [...new Set(evicted.flatMap(noteImages))].filter(
+          (f) => !stillUsed.has(f)
+        );
+      },
+
       updateNoteText: (id, text) => {
         const trimmed = text.trim();
         set({
+          notes: get().notes.map((n) => {
+            if (n.id !== id) return n;
+            const t = trimmed || n.text;
+            // 带图卡片不做链接升级（组合卡渲染优先级会把附件藏掉）
+            const hasImages = !!n.imageFile || !!n.attachments?.length;
+            const url = hasImages ? undefined : detectLink(t);
+            if (url) {
+              // 编辑为/仍为纯链接：URL 变化时清掉旧简介，等待重抓
+              const same = url === n.url;
+              return {
+                ...n,
+                text: t,
+                kind: "link" as const,
+                url,
+                codeLang: undefined,
+                linkTitle: same ? n.linkTitle : undefined,
+                linkIcon: same ? n.linkIcon : undefined,
+              };
+            }
+            return {
+              ...n,
+              text: t,
+              kind: n.kind === "link" ? ("text" as const) : n.kind,
+              url: undefined,
+              linkTitle: undefined,
+              linkIcon: undefined,
+              codeLang: detectCode(t),
+            };
+          }),
+        });
+      },
+
+      setLinkMeta: (id, meta) => {
+        set({
           notes: get().notes.map((n) =>
-            n.id === id
+            n.id === id && n.kind === "link"
               ? {
                   ...n,
-                  text: trimmed || n.text,
-                  codeLang: detectCode(trimmed || n.text),
+                  linkTitle: meta.title ?? n.linkTitle,
+                  linkIcon: meta.icon ?? n.linkIcon,
                 }
               : n
           ),
@@ -332,6 +502,22 @@ export const useNotesStore = create<NotesState>()(
       toggleDone: (id) => {
         set({
           notes: get().notes.map((n) => (n.id === id ? { ...n, done: !n.done } : n)),
+        });
+      },
+
+      toggleNoteKeep: (id) => {
+        set({
+          notes: get().notes.map((n) =>
+            n.id === id ? { ...n, keep: !n.keep } : n
+          ),
+        });
+      },
+
+      toggleSectionKeep: (id) => {
+        set({
+          sections: get().sections.map((s) =>
+            s.id === id ? { ...s, keepAfterSend: !s.keepAfterSend } : s
+          ),
         });
       },
 
@@ -527,7 +713,7 @@ export const useNotesStore = create<NotesState>()(
     }),
     {
       name: "toskr",
-      version: 6,
+      version: 7,
       storage: createJSONStorage(() => tauriStateStorage),
       migrate: (persisted, version) => {
         // 版本升级时把新增的预置应用并入用户已持久化的列表
@@ -545,6 +731,18 @@ export const useNotesStore = create<NotesState>()(
               ...(p.settings.excludedApps ?? []),
             ]),
           ];
+        }
+        if (version < 7 && p?.settings?.promptSnippets) {
+          // 追加新预置的「优化提示词」母模板（用户已有/已删的其余模板不动）
+          const fresh = DEFAULT_PROMPT_SNIPPETS.find(
+            (d) => d.id === "optimize-prompt"
+          );
+          if (
+            fresh &&
+            !p.settings.promptSnippets.some((sn) => sn.id === fresh.id)
+          ) {
+            p.settings.promptSnippets = [...p.settings.promptSnippets, fresh];
+          }
         }
         return persisted;
       },
@@ -575,6 +773,23 @@ export const useNotesStore = create<NotesState>()(
     }
   )
 );
+
+/**
+ * 发送成功后应标记完成的卡片：排除「常用」卡与「发送后保留」分组内的卡
+ * （这些是长期复用内容，发送后留在原位）。
+ */
+export function doneIdsAfterSend(
+  state: Pick<NotesState, "notes" | "sections">,
+  sentIds: string[]
+): string[] {
+  const keepSecs = new Set(
+    state.sections.filter((s) => s.keepAfterSend).map((s) => s.id)
+  );
+  const picked = new Set(sentIds);
+  return state.notes
+    .filter((n) => picked.has(n.id) && !n.keep && !keepSecs.has(n.sectionId))
+    .map((n) => n.id);
+}
 
 /** 卡片携带的全部图片（主图 + 附件，已去重）。 */
 export function noteImages(note: Note): string[] {

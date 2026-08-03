@@ -22,6 +22,10 @@ export function applySettingsPatch(patch: Partial<Settings>) {
   if ("hotkeyModifier" in patch || "hotkeyGapMs" in patch) {
     void api.setHotkeyConfig(s.hotkeyModifier, s.hotkeyGapMs);
   }
+  if ("panelToggleHotkey" in patch) {
+    // 录制器已先试注册成功才发 patch；这里重复注册幂等，失败静默
+    void api.setPanelHotkey(s.panelToggleHotkey).catch(() => {});
+  }
   if ("companionEnabled" in patch || "companionApps" in patch) {
     void api.setCompanionConfig(s.companionEnabled, s.companionApps);
   }
@@ -33,6 +37,9 @@ export function applySettingsPatch(patch: Partial<Settings>) {
   }
   if ("excludedApps" in patch) {
     void api.setExcludedApps(s.excludedApps);
+  }
+  if ("clipHistory" in patch) {
+    void api.setClipWatch(s.clipHistory);
   }
   if ("stealth" in patch) {
     void api.setStealth(s.stealth);

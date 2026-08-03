@@ -14,9 +14,22 @@ export const HUD_OPEN_PANEL_EVENT = "toskr://hud-open-panel";
 export const PANEL_MOVED_EVENT = "toskr://panel-moved";
 /** 托盘隐身模式切换 → 主窗口同步持久化。 */
 export const STEALTH_EVENT = "toskr://stealth-changed";
+/** 剪贴板历史 watcher → 主窗口入库。 */
+export const CLIP_EVENT = "toskr://clip";
+
+/** 剪贴板历史收集载荷。 */
+export interface ClipPayload {
+  contentKind: string;
+  text: string;
+  imageFile: string | null;
+  imageW: number | null;
+  imageH: number | null;
+  appName: string | null;
+  bundleId: string | null;
+}
 
 export type TriggerPayload =
-  | { kind: "toggle" }
+  | { kind: "toggle"; force: boolean }
   | {
       kind: "captured";
       /** 内容类型："text" | "image" */
@@ -55,6 +68,12 @@ export interface PrevAppInfo {
   name: string | null;
 }
 
+/** 链接卡片抓取的网页元数据。 */
+export interface LinkMeta {
+  title: string | null;
+  icon: string | null;
+}
+
 export const api = {
   showPanel: () => invoke("show_panel"),
   hidePanel: (restoreFocus: boolean) => invoke("hide_panel", { restoreFocus }),
@@ -85,6 +104,11 @@ export const api = {
 
   setHotkeyConfig: (modifier: string, gapMs: number) =>
     invoke("set_hotkey_config", { modifier, gapMs }),
+  /** 注册/清除面板显示隐藏快捷键；被占用等注册失败时 reject。 */
+  setPanelHotkey: (shortcut: string | null) =>
+    invoke("set_panel_hotkey", { shortcut }),
+  /** 抓取链接的网页标题/图标（curl，6s 超时）。 */
+  fetchLinkMeta: (url: string) => invoke<LinkMeta>("fetch_link_meta", { url }),
   setCompanionConfig: (enabled: boolean, apps: string[]) =>
     invoke("set_companion_config", { enabled, apps }),
   setExcludedApps: (apps: string[]) => invoke("set_excluded_apps", { apps }),
@@ -107,6 +131,8 @@ export const api = {
   setPanelVertical: (topOffset: number, height: number | null) =>
     invoke("set_panel_vertical", { topOffset, height }),
   setStealth: (on: boolean) => invoke("set_stealth", { on }),
+  setClipWatch: (enabled: boolean) => invoke("set_clip_watch", { enabled }),
+  ocrImage: (file: string) => invoke<string>("ocr_image", { file }),
   prevAppInfo: () => invoke<PrevAppInfo | null>("prev_app_info"),
   refreshPrevApp: () => invoke("refresh_prev_app"),
   showCaptureHud: (kind: "added" | "duplicate", preview: string) =>

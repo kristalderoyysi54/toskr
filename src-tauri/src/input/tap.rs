@@ -214,7 +214,7 @@ fn on_trigger(app: &AppHandle) {
                         front.name.as_deref().unwrap_or("?")
                     ),
                 );
-                let _ = app.emit_to("main", TRIGGER_EVENT, TriggerPayload::Toggle);
+                let _ = app.emit_to("main", TRIGGER_EVENT, TriggerPayload::Toggle { force: false });
                 return;
             }
             let handle = app.clone();
@@ -268,14 +268,14 @@ fn on_trigger(app: &AppHandle) {
                             );
                         } else {
                             let _ =
-                                handle.emit_to("main", TRIGGER_EVENT, TriggerPayload::Toggle);
+                                handle.emit_to("main", TRIGGER_EVENT, TriggerPayload::Toggle { force: false });
                         }
                     }
                 }
             });
         }
         _ => {
-            let _ = app.emit_to("main", TRIGGER_EVENT, TriggerPayload::Toggle);
+            let _ = app.emit_to("main", TRIGGER_EVENT, TriggerPayload::Toggle { force: false });
         }
     }
 }
