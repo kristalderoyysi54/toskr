@@ -144,6 +144,7 @@ export const api = {
   setPanelVertical: (topOffset: number, height: number | null) =>
     invoke("set_panel_vertical", { topOffset, height }),
   setStealth: (on: boolean) => invoke("set_stealth", { on }),
+  setSound: (enabled: boolean) => invoke("set_sound", { enabled }),
   setClipWatch: (enabled: boolean) => invoke("set_clip_watch", { enabled }),
   setClipRules: (
     ignoreConcealed: boolean,

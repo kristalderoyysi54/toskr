@@ -194,6 +194,8 @@ export interface Settings {
   panelToggleHotkey: string | null;
   /** 隐身模式：捕获照常入库但不弹 HUD（会议投屏用）。 */
   stealth: boolean;
+  /** 捕获成功音效（隐身模式下强制静音）。 */
+  soundEnabled: boolean;
   /** 伴随停靠：面板磁吸到目标应用窗口右缘并跟随。 */
   companionEnabled: boolean;
   /** 伴随应用 bundle id 列表。 */
@@ -324,6 +326,7 @@ export const defaultSettings = (): Settings => ({
   hotkeyGapMs: 400,
   panelToggleHotkey: null,
   stealth: false,
+  soundEnabled: true,
   companionEnabled: true,
   companionApps: [...DEFAULT_COMPANION_APPS],
   companionGap: 8,

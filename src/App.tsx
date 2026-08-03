@@ -434,6 +434,7 @@ export default function App() {
       void api.setPanelWidth(settings.panelWidth);
       // 垂直覆盖为会话内临时值（切换吸附目标即重置），不做启动恢复
       void api.setStealth(settings.stealth);
+      void api.setSound(settings.soundEnabled);
       void api.setClipWatch(settings.clipHistory);
       void api.setClipPause(settings.clipPauseUntil ?? 0);
       void api.setClipRules(

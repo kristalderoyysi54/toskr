@@ -438,6 +438,16 @@ function GeneralSection({ settings, patch }: SP) {
             />
           }
         />
+        <Row
+          label="音效"
+          hint="捕获成功时轻响一声（隐身模式下自动静音）"
+          right={
+            <Switch
+              checked={settings.soundEnabled}
+              onCheckedChange={(v) => patch({ soundEnabled: v })}
+            />
+          }
+        />
       </Group>
       <ContextMenuGroup settings={settings} patch={patch} />
     </div>
