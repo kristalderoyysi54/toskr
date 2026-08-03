@@ -39,6 +39,7 @@ import {
 } from "@/lib/actions";
 import { previewOf } from "@/lib/format";
 import { runPendingUndo, setPendingUndo, tip } from "@/lib/tip";
+import { silentUpdateNotify } from "@/lib/updater";
 import { matchNote } from "@/lib/search";
 import { broadcastSettings, installSettingsSyncHost } from "@/lib/settingsSync";
 import {
@@ -326,6 +327,12 @@ export default function App() {
         .catch(() => {});
     });
     return unsub;
+  }, []);
+
+  // 启动静默检查更新：发现新版右上角气泡提醒（不自动下载，不打扰）
+  useEffect(() => {
+    const timer = window.setTimeout(() => void silentUpdateNotify(), 8000);
+    return () => window.clearTimeout(timer);
   }, []);
 
   // 上手引导完成庆祝
