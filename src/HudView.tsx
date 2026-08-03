@@ -1,6 +1,14 @@
 import { useEffect, useState } from "react";
 import { emitTo, listen } from "@tauri-apps/api/event";
-import { AlertTriangle, Check, CopyCheck, Info, Send, Undo2 } from "lucide-react";
+import {
+  AlarmClock,
+  AlertTriangle,
+  Check,
+  CopyCheck,
+  Info,
+  Send,
+  Undo2,
+} from "lucide-react";
 
 import {
   api,
@@ -48,8 +56,15 @@ export default function HudView() {
         <HudIcon kind={item.kind} />
         <div
           onClick={() => {
-            // 点击气泡本体：打开面板并定位到刚捕获的卡片
-            void emitTo("main", HUD_OPEN_PANEL_EVENT, {});
+            // 点击气泡本体：打开面板。到期提醒跳任务页并定位该任务，
+            // 其余定位到刚捕获的卡片
+            void emitTo(
+              "main",
+              HUD_OPEN_PANEL_EVENT,
+              item.kind === "due"
+                ? { page: "tasks", taskId: item.targetId ?? null }
+                : {}
+            );
             void api.hideHud();
           }}
           title="点击查看"
@@ -99,6 +114,8 @@ function titleOf(item: HudPayload): string {
       return item.text || "完成";
     case "info":
       return item.text || "提示";
+    case "due":
+      return item.text || "任务到期";
   }
 }
 
@@ -144,6 +161,12 @@ function HudIcon({ kind }: { kind: HudPayload["kind"] }) {
       return (
         <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-zinc-500/90">
           <Info className="size-3 text-white" strokeWidth={2.5} />
+        </span>
+      );
+    case "due":
+      return (
+        <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-red-500/90">
+          <AlarmClock className="size-3 text-white" strokeWidth={2.5} />
         </span>
       );
   }

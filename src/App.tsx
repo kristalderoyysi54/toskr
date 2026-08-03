@@ -9,13 +9,18 @@ import {
   type DragEndEvent,
   type DragOverEvent,
 } from "@dnd-kit/core";
-import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { AnimatePresence, motion } from "motion/react";
 import {
   CheckCircle2,
   Circle,
+  ClipboardList,
   CornerUpRight,
   Eraser,
   Pin,
@@ -26,20 +31,26 @@ import {
   X,
 } from "lucide-react";
 import { DraftInput } from "@/components/DraftInput";
+import { NoteCard } from "@/components/NoteCard";
 import { PermissionBanner } from "@/components/PermissionBanner";
 import { PreviewOverlay } from "@/components/PreviewOverlay";
 import { SectionGroup } from "@/components/SectionGroup";
 import { SelectionBar } from "@/components/SelectionBar";
+import { TaskPage, TASK_DONE_KEY } from "@/components/TaskPage";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
+  clearDoneTasksWithUndo,
   clearDoneWithUndo,
   copyCheckedAsList,
   deleteNotesWithUndo,
+  deleteTasksWithUndo,
   enrichLinkMeta,
   sendCheckedToChat,
   sendNotesToChat,
+  undoableTip,
 } from "@/lib/actions";
+import { bucketTasksForDisplay, dueTasksToRemind } from "@/lib/tasks";
 import { previewOf } from "@/lib/format";
 import { runPendingUndo, setPendingUndo, tip } from "@/lib/tip";
 import { silentUpdateFlow } from "@/lib/updater";
@@ -50,14 +61,17 @@ import {
   HUD_OPEN_PANEL_EVENT,
   PANEL_MOVED_EVENT,
   CLIP_EVENT,
+  CLIP_PAUSE_EVENT,
   STEALTH_EVENT,
   TRIGGER_EVENT,
   UNDO_CAPTURE_EVENT,
   type ClipPayload,
+  type HudOpenPanelPayload,
   type TriggerPayload,
 } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import {
+  CLIPBOARD_ID,
   PANEL_WIDTH_MAX,
   PANEL_WIDTH_MIN,
   useNotesStore,
@@ -68,14 +82,24 @@ import { useUIStore } from "@/store/uiStore";
 /** 本会话捕获的卡片 id 栈（HUD 撤销用，无需持久化）。 */
 const captureHistory: string[] = [];
 
+/** 页面切换滑动（方向感知：正向左滑进、反向右滑进；spring 与整板一致）。 */
+const PAGE_SLIDE = {
+  enter: (dir: number) => ({ x: dir >= 0 ? 24 : -24, opacity: 0 }),
+  center: { x: 0, opacity: 1 },
+  exit: (dir: number) => ({ x: dir >= 0 ? -24 : 24, opacity: 0 }),
+};
+
 export default function App() {
   const open = useUIStore((s) => s.open);
+  const page = useUIStore((s) => s.page);
   const pinned = useUIStore((s) => s.pinned);
   const searchOpen = useUIStore((s) => s.searchOpen);
   const query = useUIStore((s) => s.query);
   const doneOpen = useUIStore((s) => s.doneOpen);
   const sections = useNotesStore((s) => s.sections);
   const notes = useNotesStore((s) => s.notes);
+  const tasks = useNotesStore((s) => s.tasks);
+  const taskSections = useNotesStore((s) => s.taskSections);
   const settings = useNotesStore((s) => s.settings);
   const onboarding = settings.onboarding;
   /** 收起动画结束隐藏窗口时，是否归还焦点给原前台应用。 */
@@ -241,20 +265,84 @@ export default function App() {
     };
   }, []);
 
-  // 点击 HUD 气泡：展开面板并高亮刚捕获的卡片
+  // 点击 HUD 气泡：展开面板。到期提醒切任务页定位任务，其余高亮刚捕获的卡片
   useEffect(() => {
-    const unlisten = listen(HUD_OPEN_PANEL_EVENT, () => {
-      const lastId = captureHistory[captureHistory.length - 1];
-      if (lastId) {
-        useUIStore.getState().setFocusedId(lastId);
-        useUIStore.getState().setFlashId(lastId);
+    const unlisten = listen<HudOpenPanelPayload>(HUD_OPEN_PANEL_EVENT, (event) => {
+      const p = event.payload ?? {};
+      const flash = (id: string) => {
+        useUIStore.getState().setFocusedId(id);
+        useUIStore.getState().setFlashId(id);
         window.setTimeout(() => {
-          if (useUIStore.getState().flashId === lastId) {
+          if (useUIStore.getState().flashId === id) {
             useUIStore.getState().setFlashId(null);
           }
         }, 1800);
+      };
+      if (p.page === "tasks") {
+        // 先切页（setPage 会清 focusedId），再定位目标任务
+        useUIStore.getState().setPage("tasks");
+        if (p.taskId) flash(p.taskId);
+      } else {
+        const lastId = captureHistory[captureHistory.length - 1];
+        if (lastId) flash(lastId);
       }
       if (!useUIStore.getState().open) void openPanel();
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  // 任务到期提醒：水合后即扫一次（补发休眠/重启期间错过的），此后每 30s。
+  // 粘性 HUD 可能被后续捕获气泡顶掉，任务页「已到期」红区是兜底真相来源。
+  useEffect(() => {
+    const check = () => {
+      const { tasks: all, markTasksReminded } = useNotesStore.getState();
+      const due = dueTasksToRemind(all, Date.now());
+      if (!due.length) return;
+      const text =
+        due.length === 1 ? previewOf(due[0].text) : `${due.length} 个任务已到期`;
+      void api.hudFeedback(
+        "due",
+        text,
+        false,
+        true,
+        due.length === 1 ? due[0].id : undefined
+      );
+      markTasksReminded(due.map((t) => t.id));
+    };
+    if (useNotesStore.persist.hasHydrated()) check();
+    const unsub = useNotesStore.persist.onFinishHydration(() => check());
+    const timer = window.setInterval(check, 30_000);
+    return () => {
+      unsub();
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  // 剪贴板保留时长清理：水合后一次 + 每 30 分钟（固定卡豁免）
+  useEffect(() => {
+    const prune = () => {
+      useNotesStore
+        .getState()
+        .pruneClipHistory()
+        .forEach((f) => void api.removeImage(f).catch(() => {}));
+    };
+    if (useNotesStore.persist.hasHydrated()) prune();
+    const unsub = useNotesStore.persist.onFinishHydration(() => prune());
+    const timer = window.setInterval(prune, 1_800_000);
+    return () => {
+      unsub();
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  // 托盘暂停剪贴板收集 → 同步持久化（0 = 恢复）
+  useEffect(() => {
+    const unlisten = listen<number>(CLIP_PAUSE_EVENT, (event) => {
+      useNotesStore.getState().setSettings({
+        clipPauseUntil: event.payload > 0 ? event.payload : null,
+      });
     });
     return () => {
       unlisten.then((fn) => fn());
@@ -275,6 +363,9 @@ export default function App() {
   useEffect(() => {
     const unlisten = listen<ClipPayload>(CLIP_EVENT, (event) => {
       const p = event.payload;
+      // 暂停收集期间丢弃（到期自动恢复，无需额外定时器）
+      const pauseUntil = useNotesStore.getState().settings.clipPauseUntil;
+      if (pauseUntil && Date.now() < pauseUntil) return;
       const removed = useNotesStore.getState().addClipNote(p.text, {
         sourceApp: p.appName ?? undefined,
         sourceBundle: p.bundleId ?? undefined,
@@ -319,6 +410,12 @@ export default function App() {
     const cleanup = installSettingsSyncHost({
       onExport: () => void exportBackup(),
       onImport: () => void importBackup(),
+      onClearClip: () => {
+        const { removed, orphanImages } = useNotesStore.getState().clearClipHistory();
+        orphanImages.forEach((f) => void api.removeImage(f).catch(() => {}));
+        if (removed > 0) undoableTip(`已清空剪贴板历史 ${removed} 条`);
+        else tip("info", "剪贴板历史已是空的");
+      },
     });
     return cleanup;
   }, []);
@@ -338,6 +435,12 @@ export default function App() {
       // 垂直覆盖为会话内临时值（切换吸附目标即重置），不做启动恢复
       void api.setStealth(settings.stealth);
       void api.setClipWatch(settings.clipHistory);
+      void api.setClipPause(settings.clipPauseUntil ?? 0);
+      void api.setClipRules(
+        settings.clipIgnoreConcealed,
+        settings.clipIgnoreTransient,
+        settings.clipExcludedApps
+      );
       void api.setWindowTheme(settings.theme);
       void api.setExcludedApps(settings.excludedApps);
       void api.setVibrancy(settings.vibrancy, settings.vibrancyMaterial);
@@ -382,8 +485,11 @@ export default function App() {
         filters: [{ name: "JSON", extensions: ["json"] }],
       });
       if (!path) return;
-      const { sections: secs, notes: ns } = useNotesStore.getState();
-      await api.exportFile(path, JSON.stringify({ sections: secs, notes: ns }, null, 2));
+      const { sections: secs, notes: ns, tasks: ts } = useNotesStore.getState();
+      await api.exportFile(
+        path,
+        JSON.stringify({ sections: secs, notes: ns, tasks: ts }, null, 2)
+      );
       tip("ok", "已导出备份");
     } catch (e) {
       tip("warn", `导出失败：${e}`);
@@ -400,7 +506,7 @@ export default function App() {
       if (typeof path !== "string") return;
       const raw = await api.importFile(path);
       const added = useNotesStore.getState().importMerge(JSON.parse(raw));
-      tip("ok", `导入完成（合并）：新增 ${added} 条`);
+      tip("ok", `导入完成（合并）：笔记 ${added.notes} 条，任务 ${added.tasks} 个`);
     } catch (e) {
       tip("warn", `导入失败：${e}`);
     }
@@ -409,9 +515,11 @@ export default function App() {
   // ===== 列表派生 =====
 
   const q = query.trim();
+  // 笔记页不再显示「剪贴板」分组——剪贴板历史提升为平级 tab
   const grouped = useMemo(
     () =>
       sections
+        .filter((section) => section.id !== CLIPBOARD_ID)
         .map((section) => {
           const inSection = notes.filter(
             (n) => n.sectionId === section.id && matchNote(n, q)
@@ -426,10 +534,22 @@ export default function App() {
     [sections, notes, q]
   );
 
-  const matchCount = grouped.reduce((a, g) => a + g.active.length + g.done.length, 0);
+  /** 剪贴板 tab：固定（keep）置顶，其余按时间流水（notes 数组新在前）。 */
+  const clipNotes = useMemo(() => {
+    const list = notes.filter(
+      (n) => n.sectionId === CLIPBOARD_ID && matchNote(n, q)
+    );
+    return [...list.filter((n) => n.keep), ...list.filter((n) => !n.keep)];
+  }, [notes, q]);
 
-  /** 键盘导航覆盖的可见卡片序列。 */
-  const navIds = useMemo(
+  const noteMatchCount = grouped.reduce(
+    (a, g) => a + g.active.length + g.done.length,
+    0
+  );
+  const matchCount = page === "clipboard" ? clipNotes.length : noteMatchCount;
+
+  /** 键盘导航覆盖的可见卡片序列（笔记页）。 */
+  const noteNavIds = useMemo(
     () =>
       grouped.flatMap((g) =>
         g.section.collapsed
@@ -442,6 +562,45 @@ export default function App() {
     [grouped, doneOpen]
   );
 
+  // ===== 任务页派生 =====
+
+  // 到期分区需要随时间推移刷新（任务不变但"是否逾期"在变），30s 一跳
+  const [taskNow, setTaskNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setTaskNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const taskBuckets = useMemo(
+    () => bucketTasksForDisplay(tasks, taskSections, taskNow),
+    [tasks, taskSections, taskNow]
+  );
+  const taskNavIds = useMemo(
+    () => [
+      ...taskBuckets.overdue.map((t) => t.id),
+      ...taskBuckets.sparks.map((t) => t.id),
+      ...taskBuckets.groups.flatMap((g) =>
+        g.section.collapsed ? [] : g.tasks.map((t) => t.id)
+      ),
+      ...(doneOpen[TASK_DONE_KEY] ? taskBuckets.done.map((t) => t.id) : []),
+    ],
+    [taskBuckets, doneOpen]
+  );
+
+  // 剪贴板分页渲染：保留时长开到年/永久后可能上万条，一次性渲染会卡
+  const [clipShown, setClipShown] = useState(200);
+  const visibleClipNotes = useMemo(
+    () => clipNotes.slice(0, clipShown),
+    [clipNotes, clipShown]
+  );
+  const clipNavIds = useMemo(
+    () => visibleClipNotes.map((n) => n.id),
+    [visibleClipNotes]
+  );
+
+  /** 当前页的键盘导航序列。 */
+  const navIds =
+    page === "tasks" ? taskNavIds : page === "clipboard" ? clipNavIds : noteNavIds;
+
   // 可见顺序同步到 uiStore，供 Shift 范围选中使用
   useEffect(() => {
     useUIStore.getState().setNavIds(navIds);
@@ -449,6 +608,16 @@ export default function App() {
 
   const activeCount = notes.filter((n) => !n.done).length;
   const doneCount = notes.length - activeCount;
+  const activeTaskCount = tasks.filter((t) => t.status !== "done").length;
+  const doneTaskCount = tasks.length - activeTaskCount;
+
+  // 页面切换方向（按 tab 顺序 笔记/任务/剪贴板：目标在右则向左滑入）
+  const pageIndex = page === "notes" ? 0 : page === "tasks" ? 1 : 2;
+  const prevPageIndexRef = useRef(pageIndex);
+  const pageDirection = pageIndex - prevPageIndexRef.current;
+  useEffect(() => {
+    prevPageIndexRef.current = pageIndex;
+  }, [pageIndex]);
 
   // ===== 面板内快捷键（Esc 分层 + 全键盘导航） =====
   useEffect(() => {
@@ -488,10 +657,36 @@ export default function App() {
         }
       }
 
+      // ⌃Tab：笔记 → 任务 → 剪贴板 循环（⌘1-9 已被快发占用，取浏览器切标签页惯例）
+      if (e.key === "Tab" && e.ctrlKey) {
+        e.preventDefault();
+        const ui = useUIStore.getState();
+        const order = ["notes", "tasks", "clipboard"] as const;
+        const next = order[(order.indexOf(ui.page) + 1) % order.length];
+        ui.setPage(next);
+        return;
+      }
+      // ⌘← / ⌘→：按 tab 顺序左右切换（输入框内保留系统的行首/行尾跳转）
+      if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && e.metaKey) {
+        if (editable) return;
+        e.preventDefault();
+        const ui = useUIStore.getState();
+        const order = ["notes", "tasks", "clipboard"] as const;
+        const idx = order.indexOf(ui.page);
+        const next =
+          e.key === "ArrowRight"
+            ? Math.min(idx + 1, order.length - 1)
+            : Math.max(idx - 1, 0);
+        ui.setPage(order[next]);
+        return;
+      }
       if (e.key === "Escape") {
         e.preventDefault();
         const ui = useUIStore.getState();
-        if (ui.searchOpen) {
+        if (ui.editingId) {
+          // 任务详情展开中：先收起（编辑控件的失焦保存已各自处理）
+          ui.setEditingId(null);
+        } else if (ui.searchOpen) {
           ui.setSearchOpen(false);
         } else if (useNotesStore.getState().checkedIds.length) {
           useNotesStore.getState().clearChecked();
@@ -506,14 +701,18 @@ export default function App() {
         window.setTimeout(() => searchInputRef.current?.focus(), 30);
         return;
       }
+      // 以下发送/勾选类快捷键操作的是笔记 checkedIds——剪贴板卡也是笔记，
+      // 两页均可用；仅任务页禁用（任务 id 会污染勾选态，切回后「已选 N」错乱）
+      const onNotesPage = useUIStore.getState().page !== "tasks";
       if (e.key === "Enter" && e.metaKey) {
+        if (!onNotesPage) return;
         e.preventDefault();
         void sendCheckedToChat();
         return;
       }
       // ⌘1-9：按可见顺序直接发送第 N 张卡（Paste 式快发）
       if (e.metaKey && !e.shiftKey && !e.altKey && !e.ctrlKey && /^[1-9]$/.test(e.key)) {
-        if (editable) return;
+        if (editable || !onNotesPage) return;
         const id = navIds[Number(e.key) - 1];
         if (id) {
           e.preventDefault();
@@ -523,13 +722,14 @@ export default function App() {
       }
       if (e.key === "c" && e.metaKey && !e.shiftKey && !e.altKey) {
         const hasSelection = !!window.getSelection()?.toString();
-        if (!editable && !hasSelection) {
+        if (!editable && !hasSelection && onNotesPage) {
           e.preventDefault();
           void copyCheckedAsList();
         }
         return;
       }
       if (e.key === "a" && e.metaKey && !editable) {
+        if (!onNotesPage) return;
         e.preventDefault();
         useNotesStore.getState().setChecked(navIds);
         return;
@@ -548,14 +748,22 @@ export default function App() {
         ui.setFocusedId(next);
         return;
       }
-      // Space = 全文预览（Paste 风格）；链接卡片「明细」= 直接打开网页
+      // Space = 全文预览（Paste 风格）；链接卡「明细」= 开网页；
+      // 任务页 = 完成态二态直切（与鼠标点状态点的三态循环是刻意差异）
       if (e.key === " " && ui.focusedId) {
         e.preventDefault();
+        if (ui.page === "tasks") {
+          useNotesStore.getState().toggleTaskDone(ui.focusedId);
+          return;
+        }
         const focusedNote = useNotesStore
           .getState()
           .notes.find((n) => n.id === ui.focusedId);
         if (focusedNote?.kind === "link" && focusedNote.url) {
           void api.openUrl(focusedNote.url);
+        } else if (focusedNote?.kind === "image" && focusedNote.imageFile) {
+          // 图片卡 Space = 系统 Quick Look 原尺寸（与 macOS 空格预览心智一致）
+          void api.quickLook(focusedNote.imageFile);
         } else {
           ui.openPreview(ui.focusedId);
         }
@@ -563,19 +771,31 @@ export default function App() {
       }
       if (e.key === "x" && !e.metaKey && ui.focusedId) {
         e.preventDefault();
-        useNotesStore.getState().toggleChecked(ui.focusedId);
+        if (ui.page === "tasks") {
+          useNotesStore.getState().toggleTaskDone(ui.focusedId);
+        } else {
+          useNotesStore.getState().toggleChecked(ui.focusedId);
+        }
         return;
       }
       if (e.key === "Enter" && !e.metaKey && ui.focusedId) {
         e.preventDefault();
-        ui.openPreview(ui.focusedId, true);
+        if (ui.page === "tasks") {
+          ui.setEditingId(ui.focusedId);
+        } else {
+          ui.openPreview(ui.focusedId, true);
+        }
         return;
       }
       if (e.key === "Backspace" && e.metaKey && ui.focusedId) {
         e.preventDefault();
         const idx = navIds.indexOf(ui.focusedId);
         const nextFocus = navIds[idx + 1] ?? navIds[idx - 1] ?? null;
-        deleteNotesWithUndo([ui.focusedId], "已删除 1 条");
+        if (ui.page === "tasks") {
+          deleteTasksWithUndo([ui.focusedId], "已删除 1 个任务");
+        } else {
+          deleteNotesWithUndo([ui.focusedId], "已删除 1 条");
+        }
         ui.setFocusedId(nextFocus);
       }
     };
@@ -642,34 +862,38 @@ export default function App() {
     }
   };
 
-  // ===== 长按 ⌘ 显示快捷键提示层 =====
+  // ===== 长按 ⌥ 显示快捷键提示层；⌘ 按住显示 ⌘1-9 快发角标 =====
   const [showShortcuts, setShowShortcuts] = useState(false);
   useEffect(() => {
     let timer = 0;
-    const down = (e: KeyboardEvent) => {
-      if (e.key === "Meta" && !timer) {
-        useUIStore.getState().setCmdHeld(true);
-        timer = window.setTimeout(() => setShowShortcuts(true), 650);
-      }
-    };
-    const clear = () => {
+    const clearAlt = () => {
       if (timer) {
         window.clearTimeout(timer);
         timer = 0;
       }
-      useUIStore.getState().setCmdHeld(false);
       setShowShortcuts(false);
     };
+    const down = (e: KeyboardEvent) => {
+      if (e.key === "Meta") useUIStore.getState().setCmdHeld(true);
+      if (e.key === "Alt" && !timer) {
+        timer = window.setTimeout(() => setShowShortcuts(true), 650);
+      }
+    };
     const up = (e: KeyboardEvent) => {
-      if (e.key === "Meta") clear();
+      if (e.key === "Meta") useUIStore.getState().setCmdHeld(false);
+      if (e.key === "Alt") clearAlt();
+    };
+    const blur = () => {
+      clearAlt();
+      useUIStore.getState().setCmdHeld(false);
     };
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
-    window.addEventListener("blur", clear);
+    window.addEventListener("blur", blur);
     return () => {
       window.removeEventListener("keydown", down);
       window.removeEventListener("keyup", up);
-      window.removeEventListener("blur", clear);
+      window.removeEventListener("blur", blur);
       if (timer) window.clearTimeout(timer);
     };
   }, []);
@@ -819,14 +1043,24 @@ export default function App() {
                   Toskr
                 </h1>
                 <span className="text-[11px] tabular-nums text-muted-foreground">
-                  {activeCount}
+                  {page === "notes"
+                    ? activeCount
+                    : page === "tasks"
+                      ? activeTaskCount
+                      : clipNotes.length}
                 </span>
                 <div className="ml-auto flex items-center gap-0.5">
-                  {doneCount > 0 && (
+                  {page !== "clipboard" && (page === "notes" ? doneCount : doneTaskCount) > 0 && (
                     <button
                       aria-label="清理已完成"
-                      title={`清理 ${doneCount} 条已完成`}
-                      onClick={clearDoneWithUndo}
+                      title={
+                        page === "notes"
+                          ? `清理 ${doneCount} 条已完成`
+                          : `清理 ${doneTaskCount} 个已完成任务`
+                      }
+                      onClick={
+                        page === "notes" ? clearDoneWithUndo : clearDoneTasksWithUndo
+                      }
                       className="rounded-md p-1 text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
                     >
                       <Eraser className="size-3.5" />
@@ -834,8 +1068,8 @@ export default function App() {
                   )}
                   {(settings.panelFreeX !== null || settings.panelFreeY !== null) && (
                     <button
-                      aria-label="回到屏幕右缘"
-                      title="回到屏幕右缘（清除手动位置）"
+                      aria-label="重置面板位置"
+                      title="重置面板位置：清除手动拖动，恢复自动停靠（伴随目标 / 屏幕右缘）"
                       onClick={() => {
                         useNotesStore
                           .getState()
@@ -848,33 +1082,37 @@ export default function App() {
                       <CornerUpRight className="size-3.5" />
                     </button>
                   )}
-                  <button
-                    aria-label="搜索（⌘F）"
-                    title="搜索（⌘F）"
-                    onClick={() => {
-                      useUIStore.getState().setSearchOpen(!searchOpen);
-                      window.setTimeout(() => searchInputRef.current?.focus(), 30);
-                    }}
-                    className={cn(
-                      "rounded-md p-1 text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10",
-                      searchOpen && "bg-black/5 text-foreground dark:bg-white/10"
-                    )}
-                  >
-                    <Search className="size-3.5" />
-                  </button>
-                  <button
-                    aria-label="切换卡片密度"
-                    title="卡片密度：舒适 / 紧凑"
-                    onClick={() => {
-                      const cur = useNotesStore.getState().settings.cardDensity;
-                      useNotesStore.getState().setSettings({
-                        cardDensity: cur === "compact" ? "comfortable" : "compact",
-                      });
-                    }}
-                    className="rounded-md p-1 text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
-                  >
-                    <Rows3 className="size-3.5" />
-                  </button>
+                  {page !== "tasks" && (
+                    <>
+                      <button
+                        aria-label="搜索（⌘F）"
+                        title="搜索（⌘F）"
+                        onClick={() => {
+                          useUIStore.getState().setSearchOpen(!searchOpen);
+                          window.setTimeout(() => searchInputRef.current?.focus(), 30);
+                        }}
+                        className={cn(
+                          "rounded-md p-1 text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10",
+                          searchOpen && "bg-black/5 text-foreground dark:bg-white/10"
+                        )}
+                      >
+                        <Search className="size-3.5" />
+                      </button>
+                      <button
+                        aria-label="切换卡片密度"
+                        title="卡片密度：舒适 / 紧凑"
+                        onClick={() => {
+                          const cur = useNotesStore.getState().settings.cardDensity;
+                          useNotesStore.getState().setSettings({
+                            cardDensity: cur === "compact" ? "comfortable" : "compact",
+                          });
+                        }}
+                        className="rounded-md p-1 text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
+                      >
+                        <Rows3 className="size-3.5" />
+                      </button>
+                    </>
+                  )}
                   <button
                     aria-label={pinned ? "取消固定" : "固定面板"}
                     title={pinned ? "取消固定" : "固定（失焦不隐藏）"}
@@ -897,6 +1135,47 @@ export default function App() {
                 </div>
               </header>
 
+              {/* 页面切换：笔记 / 任务 / 剪贴板（⌃Tab 循环），任务 tab 带已到期红色计数 */}
+              <div className="mx-3 mb-1.5 flex items-center gap-1">
+                <PageTab
+                  active={page === "notes"}
+                  onClick={() => useUIStore.getState().setPage("notes")}
+                >
+                  笔记
+                </PageTab>
+                <PageTab
+                  active={page === "tasks"}
+                  badge={taskBuckets.overdue.length}
+                  onClick={() => useUIStore.getState().setPage("tasks")}
+                >
+                  任务
+                </PageTab>
+                <PageTab
+                  active={page === "clipboard"}
+                  onClick={() => useUIStore.getState().setPage("clipboard")}
+                >
+                  剪贴板
+                </PageTab>
+              </div>
+
+              <PermissionBanner />
+
+              <div className="relative min-h-0 flex-1 overflow-hidden">
+                <AnimatePresence initial={false} custom={pageDirection}>
+                  <motion.div
+                    key={page}
+                    custom={pageDirection}
+                    variants={PAGE_SLIDE}
+                    initial="enter"
+                    animate="center"
+                    exit="exit"
+                    transition={{ type: "spring", stiffness: 480, damping: 40 }}
+                    className="absolute inset-0 flex min-h-0 flex-col"
+                  >
+                    {page === "tasks" ? (
+                      <TaskPage buckets={taskBuckets} now={taskNow} />
+                    ) : (
+                      <>
               {searchOpen && (
                 <div className="mx-3 mb-1.5 flex items-center gap-1.5 rounded-lg border border-black/10 bg-white/60 px-2 py-1 dark:border-white/10 dark:bg-white/[0.06]">
                   <Search className="size-3 shrink-0 text-muted-foreground/70" />
@@ -928,8 +1207,56 @@ export default function App() {
                 </div>
               )}
 
-              <PermissionBanner />
-
+              {page === "clipboard" ? (
+                <ScrollArea className="min-h-0 flex-1 px-2">
+                  {clipNotes.length === 0 ? (
+                    <div className="flex flex-col items-center gap-2 px-6 pb-10 pt-16 text-center">
+                      <ClipboardList className="size-6 text-muted-foreground/40" />
+                      <p className="text-[13px] font-medium text-muted-foreground">
+                        {!settings.clipHistory
+                          ? "剪贴板历史未开启"
+                          : q
+                            ? `没有匹配「${q}」的记录`
+                            : "还没有剪贴板记录"}
+                      </p>
+                      {!settings.clipHistory && (
+                        <p className="text-[11px] leading-relaxed text-muted-foreground/70">
+                          在 设置 → 通用 开启「剪贴板历史」后，
+                          <br />
+                          复制过的内容会自动收集到这里。
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <DndContext
+                      sensors={sensors}
+                      collisionDetection={closestCenter}
+                      onDragOver={onDragOver}
+                      onDragEnd={onDragEnd}
+                      onDragCancel={clearDragExpand}
+                    >
+                      <SortableContext
+                        items={clipNavIds}
+                        strategy={verticalListSortingStrategy}
+                      >
+                        <div className="flex flex-col gap-1 pb-2 pl-2 pt-1">
+                          {visibleClipNotes.map((n) => (
+                            <NoteCard key={n.id} note={n} query={q} />
+                          ))}
+                          {clipNotes.length > clipShown && (
+                            <button
+                              onClick={() => setClipShown((v) => v + 200)}
+                              className="mx-auto mb-1 rounded-md px-3 py-1 text-[11px] text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
+                            >
+                              加载更多（还有 {clipNotes.length - clipShown} 条）
+                            </button>
+                          )}
+                        </div>
+                      </SortableContext>
+                    </DndContext>
+                  )}
+                </ScrollArea>
+              ) : (
               <ScrollArea className="min-h-0 flex-1 px-2">
                 {!onboarding.done && <OnboardingCard />}
                 {notes.length === 0 ? (
@@ -970,9 +1297,16 @@ export default function App() {
                   </DndContext>
                 )}
               </ScrollArea>
+              )}
 
               <SelectionBar />
-              <DraftInput />
+              {page === "notes" && <DraftInput />}
+                      </>
+                    )}
+                  </motion.div>
+                </AnimatePresence>
+              </div>
+
               <PreviewOverlay />
               {showShortcuts && <ShortcutHelp />}
             </motion.div>
@@ -1020,6 +1354,7 @@ function OnboardingCard() {
 
 const SHORTCUTS: [string, string][] = [
   ["⇧⇧", "捕获选中文本 / 呼出面板"],
+  ["⌘← →", "切换顶部页签（⌃Tab 循环）"],
   ["↑ ↓", "移动焦点卡片"],
   ["Space", "全文预览（预览中 ↑↓ 切换）"],
   ["Enter", "编辑（预览内 ⌘⏎ 保存）"],
@@ -1033,7 +1368,7 @@ const SHORTCUTS: [string, string][] = [
   ["Esc", "逐层退出（预览→搜索→选择→面板）"],
 ];
 
-/** 长按 ⌘ 弹出的快捷键速查层。 */
+/** 长按 ⌥ 弹出的快捷键速查层。 */
 function ShortcutHelp() {
   return (
     <div className="absolute inset-x-3 bottom-3 z-50 rounded-xl border border-black/10 bg-white/95 p-3 shadow-2xl dark:border-white/10 dark:bg-zinc-900/95">
@@ -1049,6 +1384,38 @@ function ShortcutHelp() {
         ))}
       </div>
     </div>
+  );
+}
+
+/** 顶部页面切换标签（样式对齐设置窗口 Segmented 手感）。 */
+function PageTab({
+  active,
+  badge,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  badge?: number;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[12px]",
+        active
+          ? "border-primary/50 bg-primary/10 font-medium text-foreground"
+          : "border-transparent text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
+      )}
+    >
+      {children}
+      {!!badge && (
+        <span className="rounded-full bg-red-500/90 px-1.5 text-[9px] font-semibold leading-4 tabular-nums text-white">
+          {badge}
+        </span>
+      )}
+    </button>
   );
 }
 

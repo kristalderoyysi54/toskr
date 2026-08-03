@@ -1,8 +1,12 @@
 import { create } from "zustand";
 
+export type PanelPage = "notes" | "clipboard" | "tasks";
+
 interface UIState {
   /** 面板内容是否展开（驱动滑入滑出动画；窗口显隐由 Rust 管）。 */
   open: boolean;
+  /** 当前页面：笔记 / 任务（会话态，每次呼出从笔记页开始）。 */
+  page: PanelPage;
   /** 图钉：钉住后失焦不自动隐藏。 */
   pinned: boolean;
   /** 搜索框是否展开。 */
@@ -37,6 +41,7 @@ interface UIState {
   eventsStuck: boolean;
 
   setOpen: (open: boolean) => void;
+  setPage: (page: PanelPage) => void;
   setPinned: (pinned: boolean) => void;
   setSearchOpen: (open: boolean) => void;
   setQuery: (query: string) => void;
@@ -60,6 +65,7 @@ interface UIState {
 
 export const useUIStore = create<UIState>()((set, get) => ({
   open: false,
+  page: "notes",
   pinned: false,
   searchOpen: false,
   query: "",
@@ -78,6 +84,8 @@ export const useUIStore = create<UIState>()((set, get) => ({
   eventsStuck: false,
 
   setOpen: (open) => set({ open }),
+  // 切页清焦点：避免另一页残留的 focusedId 干扰键盘导航语义
+  setPage: (page) => set({ page, focusedId: null }),
   setPinned: (pinned) => set({ pinned }),
   setSearchOpen: (searchOpen) =>
     set(searchOpen ? { searchOpen } : { searchOpen, query: "" }),

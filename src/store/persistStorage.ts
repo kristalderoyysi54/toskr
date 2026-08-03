@@ -14,8 +14,31 @@ function getLegacyStore(): Promise<Store> {
   return legacyStore;
 }
 
+// 防抖合并写：zustand persist 在每次 state 变更后 setItem，剪贴板高频入库时
+// 若每次都全量读写文件会成为卡顿源。合并 400ms 窗口内的写为一次落盘。
+// 权衡：进程被杀的极端情况最多丢最后 400ms 的变更（个人工具可接受）。
+let pendingValues: Record<string, string> = {};
+let writeTimer = 0;
+
+async function flushPending() {
+  const values = pendingValues;
+  pendingValues = {};
+  if (!Object.keys(values).length) return;
+  let bag: Record<string, string> = {};
+  try {
+    const raw = await api.readDataFile();
+    if (raw) bag = JSON.parse(raw) as Record<string, string>;
+  } catch {
+    /* 首次写入 */
+  }
+  Object.assign(bag, values);
+  await api.writeDataFile(JSON.stringify(bag));
+}
+
 export const tauriStateStorage: StateStorage = {
   getItem: async (name) => {
+    // 防抖窗口内的最新值优先（避免读到落盘前的旧快照）
+    if (name in pendingValues) return pendingValues[name];
     try {
       const raw = await api.readDataFile();
       if (raw) {
@@ -33,15 +56,9 @@ export const tauriStateStorage: StateStorage = {
     }
   },
   setItem: async (name, value) => {
-    let bag: Record<string, string> = {};
-    try {
-      const raw = await api.readDataFile();
-      if (raw) bag = JSON.parse(raw) as Record<string, string>;
-    } catch {
-      /* 首次写入 */
-    }
-    bag[name] = value;
-    await api.writeDataFile(JSON.stringify(bag));
+    pendingValues[name] = value;
+    window.clearTimeout(writeTimer);
+    writeTimer = window.setTimeout(() => void flushPending(), 400);
   },
   removeItem: async (name) => {
     try {

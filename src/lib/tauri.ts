@@ -14,6 +14,8 @@ export const HUD_OPEN_PANEL_EVENT = "toskr://hud-open-panel";
 export const PANEL_MOVED_EVENT = "toskr://panel-moved";
 /** 托盘隐身模式切换 → 主窗口同步持久化。 */
 export const STEALTH_EVENT = "toskr://stealth-changed";
+/** 暂停剪贴板收集变化（托盘/设置 → 主窗口持久化；payload = until ms，0=恢复）。 */
+export const CLIP_PAUSE_EVENT = "toskr://clip-pause-changed";
 /** 剪贴板历史 watcher → 主窗口入库。 */
 export const CLIP_EVENT = "toskr://clip";
 
@@ -49,7 +51,8 @@ export type HudKind =
   | "undone"
   | "sent"
   | "ok"
-  | "info";
+  | "info"
+  | "due";
 
 export interface HudPayload {
   kind: HudKind;
@@ -57,6 +60,16 @@ export interface HudPayload {
   count: number;
   /** 悬停时展示「撤销」按钮。 */
   undoable?: boolean;
+  /** 粘性气泡（任务到期提醒）：不自动隐藏，仅点击可关闭。 */
+  sticky?: boolean;
+  /** 点击气泡的跳转目标（任务 id）。 */
+  targetId?: string | null;
+}
+
+/** 点击 HUD 气泡打开面板的载荷（空对象 = 定位最近捕获的笔记）。 */
+export interface HudOpenPanelPayload {
+  page?: "tasks";
+  taskId?: string | null;
 }
 
 export interface HudHoverPayload {
@@ -132,13 +145,26 @@ export const api = {
     invoke("set_panel_vertical", { topOffset, height }),
   setStealth: (on: boolean) => invoke("set_stealth", { on }),
   setClipWatch: (enabled: boolean) => invoke("set_clip_watch", { enabled }),
+  setClipRules: (
+    ignoreConcealed: boolean,
+    ignoreTransient: boolean,
+    apps: string[]
+  ) => invoke("set_clip_rules", { ignoreConcealed, ignoreTransient, apps }),
+  setClipPause: (untilMs: number) => invoke("set_clip_pause", { untilMs }),
+  /** 系统 Quick Look 原尺寸预览图片附件。 */
+  quickLook: (file: string) => invoke("quick_look", { file }),
   ocrImage: (file: string) => invoke<string>("ocr_image", { file }),
   prevAppInfo: () => invoke<PrevAppInfo | null>("prev_app_info"),
   refreshPrevApp: () => invoke("refresh_prev_app"),
   showCaptureHud: (kind: "added" | "duplicate", preview: string) =>
     invoke("show_capture_hud", { kind, preview }),
-  hudFeedback: (kind: HudKind, text: string, undoable?: boolean) =>
-    invoke("hud_feedback", { kind, text, undoable }),
+  hudFeedback: (
+    kind: HudKind,
+    text: string,
+    undoable?: boolean,
+    sticky?: boolean,
+    targetId?: string
+  ) => invoke("hud_feedback", { kind, text, undoable, sticky, targetId }),
   hideHud: () => invoke("hide_hud"),
   diagNote: (msg: string) => invoke("diag_note", { msg }),
   appIcon: (bundleId: string) =>

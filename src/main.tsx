@@ -4,6 +4,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 import App from "./App";
 import HudView from "./HudView";
+import ImagePreviewView from "./ImagePreviewView";
 import SettingsView from "./SettingsView";
 import "./index.css";
 
@@ -18,7 +19,15 @@ media.addEventListener("change", applyTheme);
 // 同一前端按窗口 label 分流：main → 面板；hud → 提示气泡；settings → 设置窗口
 const label = getCurrentWebviewWindow().label;
 const view =
-  label === "hud" ? <HudView /> : label === "settings" ? <SettingsView /> : <App />;
+  label === "hud" ? (
+    <HudView />
+  ) : label === "settings" ? (
+    <SettingsView />
+  ) : label === "imgpreview" ? (
+    <ImagePreviewView />
+  ) : (
+    <App />
+  );
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>{view}</React.StrictMode>

@@ -488,11 +488,85 @@ pub fn set_panel_vertical(app: &AppHandle, top_offset: f64, height: Option<f64>)
     }
 }
 
+// ============ 图片预览窗 ============
+
+/// 自建图片原尺寸预览窗（qlmanage 的 [DEBUG] 窗口带无用调试按钮，观感差）：
+/// 按图片尺寸适配光标屏工作区 90% 居中；前端 Esc/点击/失焦即隐藏。任意线程可调。
+pub fn preview_image(app: &AppHandle, file: String) {
+    let Some(path) = crate::storage::image_path(app, &file) else {
+        return;
+    };
+    let dims = image::image_dimensions(&path).ok();
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Err(e) = preview_image_on_main(&handle, &file, dims) {
+            eprintln!("[toskr] 图片预览失败: {e}");
+        }
+    });
+}
+
+fn preview_image_on_main(
+    app: &AppHandle,
+    file: &str,
+    dims: Option<(u32, u32)>,
+) -> tauri::Result<()> {
+    let window = app
+        .get_webview_window("imgpreview")
+        .ok_or(tauri::Error::WindowNotFound)?;
+    // 在「面板所在屏幕」弹出（预览由面板上的点击触发，注意力在该屏）；
+    // 拿不到面板位置时回退光标所在屏
+    let monitors = snapshot_monitors_pt(app);
+    let panel_anchor = app.get_webview_window("main").and_then(|w| {
+        let pos = w.outer_position().ok()?;
+        let scale = w.scale_factor().ok()?.max(0.5);
+        Some((pos.x as f64 / scale + 20.0, pos.y as f64 / scale + 20.0))
+    });
+    let m = panel_anchor.and_then(|(x, y)| monitor_containing_pt(&monitors, x, y));
+    let (wa_x, wa_y, wa_w, wa_h) = match m {
+        Some(m) => (m.wa_x, m.wa_y, m.wa_w, m.wa_h),
+        None => {
+            let (origin, area, scale) = cursor_work_area(app)?;
+            (
+                origin.x as f64 / scale,
+                origin.y as f64 / scale,
+                area.width as f64 / scale,
+                area.height as f64 / scale,
+            )
+        }
+    };
+    let (img_w, img_h) = dims
+        .map(|(w, h)| (w as f64, h as f64))
+        .unwrap_or((800.0, 600.0));
+    // 顶部 32pt 标题栏 + 底部 24pt 尺寸标注条；不放大小图（ratio ≤ 1）
+    let max_w = (wa_w * 0.9).max(240.0);
+    let max_h = (wa_h * 0.9 - 56.0).max(180.0);
+    let ratio = (max_w / img_w).min(max_h / img_h).min(1.0);
+    let w = (img_w * ratio).max(280.0);
+    let h = img_h * ratio + 56.0;
+    let x = wa_x + (wa_w - w) / 2.0;
+    let y = wa_y + (wa_h - h) / 2.0;
+    let _ = app.emit_to("imgpreview", "toskr://preview-image", file);
+    window.set_size(LogicalSize::new(w, h))?;
+    window.set_position(LogicalPosition::new(x, y))?;
+    ensure_fullscreen_auxiliary(&window);
+    window.show()?;
+    window.set_focus()?;
+    Ok(())
+}
+
 // ============ HUD ============
 
-/// 展示 HUD（kind: added/duplicate/warn/undone/sent/ok/info）。隐身模式下静默。
+/// 展示 HUD（kind: added/duplicate/warn/undone/sent/ok/info/due）。隐身模式下静默。
+/// `sticky` 为粘性气泡（任务到期提醒）：不自动隐藏，仅点击可关闭。
 /// 可从任意线程调用。
-pub fn show_hud(app: &AppHandle, kind: &str, text: String, undoable: bool) {
+pub fn show_hud(
+    app: &AppHandle,
+    kind: &str,
+    text: String,
+    undoable: bool,
+    sticky: bool,
+    target_id: Option<String>,
+) {
     let state = app.state::<AppState>();
     // 隐身模式吞掉常规气泡，但 warn（发送失败等）必须让用户看见
     if state.stealth.load(Ordering::SeqCst) && kind != "warn" {
@@ -512,6 +586,8 @@ pub fn show_hud(app: &AppHandle, kind: &str, text: String, undoable: bool) {
         text,
         count,
         undoable,
+        sticky,
+        target_id,
     };
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
@@ -522,6 +598,8 @@ pub fn show_hud(app: &AppHandle, kind: &str, text: String, undoable: bool) {
 }
 
 fn show_hud_on_main(app: &AppHandle, payload: HudPayload) -> tauri::Result<()> {
+    // bool 是 Copy：先取出，随后 emit_to 整体 move payload 不受影响
+    let sticky = payload.sticky;
     let window = app
         .get_webview_window("hud")
         .ok_or(tauri::Error::WindowNotFound)?;
@@ -548,13 +626,14 @@ fn show_hud_on_main(app: &AppHandle, payload: HudPayload) -> tauri::Result<()> {
     }
     let generation = state.hud_generation.fetch_add(1, Ordering::SeqCst) + 1;
     let handle = app.clone();
-    tauri::async_runtime::spawn_blocking(move || hud_lifecycle(handle, generation));
+    tauri::async_runtime::spawn_blocking(move || hud_lifecycle(handle, generation, sticky));
     Ok(())
 }
 
 /// HUD 生命周期：光标 hover 检测（穿透窗口收不到鼠标事件，只能全局轮询）
 /// + 无悬停超时隐藏。悬停时暂停倒计时并关闭点击穿透以启用「撤销」按钮。
-fn hud_lifecycle(app: AppHandle, generation: u64) {
+/// `sticky` 时跳过超时隐藏——到期提醒必须由用户点击关闭。
+fn hud_lifecycle(app: AppHandle, generation: u64, sticky: bool) {
     let mut elapsed: u64 = 0;
     const TICK: u64 = 100;
     loop {
@@ -588,7 +667,7 @@ fn hud_lifecycle(app: AppHandle, generation: u64) {
 
         if inside {
             elapsed = 0;
-        } else {
+        } else if !sticky {
             elapsed += TICK;
             if elapsed >= HUD_DURATION_MS {
                 {

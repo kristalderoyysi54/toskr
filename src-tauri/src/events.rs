@@ -26,13 +26,17 @@ pub enum TriggerPayload {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HudPayload {
-    /// "added" | "duplicate" | "warn" | "undone" | "sent" | "ok" | "info"
+    /// "added" | "duplicate" | "warn" | "undone" | "sent" | "ok" | "info" | "due"
     pub kind: String,
     pub text: String,
     /// 连拍计数（仅 added 有意义，≥2 时展示 ×N）。
     pub count: u32,
     /// 悬停时展示「撤销」按钮（捕获入库、可撤销的批量操作）。
     pub undoable: bool,
+    /// 粘性气泡：不自动隐藏，仅用户点击可关闭（任务到期提醒）。
+    pub sticky: bool,
+    /// 点击气泡的跳转目标（任务 id；无则走默认「定位最近捕获」）。
+    pub target_id: Option<String>,
 }
 
 /// HUD hover 状态变化（Rust → hud 窗口）。

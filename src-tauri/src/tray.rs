@@ -4,7 +4,7 @@
 use std::sync::atomic::Ordering;
 
 use tauri::image::Image;
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, Wry};
 use tauri_plugin_autostart::ManagerExt;
@@ -16,6 +16,8 @@ const TRAY_ID: &str = "toskr-tray";
 const TRAY_ICON: &[u8] = include_bytes!("../icons/trayTemplate.png");
 /// 隐身模式变化（tray → 主窗口，用于设置持久化同步）。
 pub const STEALTH_EVENT: &str = "toskr://stealth-changed";
+/// 暂停剪贴板收集变化（tray/设置 → 主窗口持久化；payload = until epoch ms，0=恢复）。
+pub const CLIP_PAUSE_EVENT: &str = "toskr://clip-pause-changed";
 
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let menu = build_menu(app)?;
@@ -50,6 +52,43 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let autostart_enabled = app.autolaunch().is_enabled().unwrap_or(false);
 
     let toggle = MenuItem::with_id(app, "toggle", "显示 / 隐藏面板", true, None::<&str>)?;
+    // 剪贴板暂停：开启收集时展示（Paste 同款子菜单；暂停中变为恢复项）
+    let clip_on = state.clip_watch.load(Ordering::SeqCst);
+    let pause_until = state.clip_pause_until.load(Ordering::Relaxed);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let paused = pause_until > now;
+    let clip_pause_menu: Option<Submenu<Wry>> = if clip_on && !paused {
+        Some(Submenu::with_id_and_items(
+            app,
+            "clip-pause",
+            "暂停剪贴板收集",
+            true,
+            &[
+                &MenuItem::with_id(app, "clip-pause-15", "暂停 15 分钟", true, None::<&str>)?,
+                &MenuItem::with_id(app, "clip-pause-30", "暂停 30 分钟", true, None::<&str>)?,
+                &MenuItem::with_id(app, "clip-pause-60", "暂停 1 小时", true, None::<&str>)?,
+                &MenuItem::with_id(app, "clip-pause-180", "暂停 3 小时", true, None::<&str>)?,
+                &MenuItem::with_id(app, "clip-pause-480", "暂停 8 小时", true, None::<&str>)?,
+            ],
+        )?)
+    } else {
+        None
+    };
+    let clip_resume_item: Option<MenuItem<Wry>> = if clip_on && paused {
+        let mins = ((pause_until - now) + 59_999) / 60_000;
+        Some(MenuItem::with_id(
+            app,
+            "clip-resume",
+            format!("恢复剪贴板收集（约 {mins} 分钟后自动恢复）"),
+            true,
+            None::<&str>,
+        )?)
+    } else {
+        None
+    };
     let stealth_item =
         CheckMenuItem::with_id(app, "stealth", "隐身模式（不弹捕获提示）", true, stealth, None::<&str>)?;
     let autostart_item =
@@ -60,10 +99,21 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let sep2 = PredefinedMenuItem::separator(app)?;
 
     if tap_ok {
-        Menu::with_items(
-            app,
-            &[&toggle, &sep1, &stealth_item, &autostart_item, &settings_item, &sep2, &quit],
-        )
+        let mut items: Vec<&dyn tauri::menu::IsMenuItem<Wry>> = vec![&toggle, &sep1];
+        if let Some(m) = &clip_pause_menu {
+            items.push(m);
+        }
+        if let Some(m) = &clip_resume_item {
+            items.push(m);
+        }
+        items.extend([
+            &stealth_item as &dyn tauri::menu::IsMenuItem<Wry>,
+            &autostart_item,
+            &settings_item,
+            &sep2,
+            &quit,
+        ]);
+        Menu::with_items(app, &items)
     } else {
         let label = if tap_installed {
             "⚠️ 需要输入监控权限（点击设置）"
@@ -78,10 +128,21 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             None::<&str>,
         )?;
         let sep0 = PredefinedMenuItem::separator(app)?;
-        Menu::with_items(
-            app,
-            &[&warn, &sep0, &toggle, &sep1, &stealth_item, &autostart_item, &settings_item, &sep2, &quit],
-        )
+        let mut items: Vec<&dyn tauri::menu::IsMenuItem<Wry>> = vec![&warn, &sep0, &toggle, &sep1];
+        if let Some(m) = &clip_pause_menu {
+            items.push(m);
+        }
+        if let Some(m) = &clip_resume_item {
+            items.push(m);
+        }
+        items.extend([
+            &stealth_item as &dyn tauri::menu::IsMenuItem<Wry>,
+            &autostart_item,
+            &settings_item,
+            &sep2,
+            &quit,
+        ]);
+        Menu::with_items(app, &items)
     }
 }
 
@@ -115,6 +176,27 @@ fn handle_menu(app: &AppHandle, id: &str) {
                 ))
                 .spawn();
             crate::input::tap::retry_install(app);
+        }
+        id if id.starts_with("clip-pause-") => {
+            let mins: i64 = id.trim_start_matches("clip-pause-").parse().unwrap_or(15);
+            let until = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0)
+                + mins * 60_000;
+            app.state::<AppState>()
+                .clip_pause_until
+                .store(until, Ordering::Relaxed);
+            // 同步给前端持久化到 settings
+            let _ = app.emit_to("main", CLIP_PAUSE_EVENT, until);
+            refresh(app);
+        }
+        "clip-resume" => {
+            app.state::<AppState>()
+                .clip_pause_until
+                .store(0, Ordering::Relaxed);
+            let _ = app.emit_to("main", CLIP_PAUSE_EVENT, 0i64);
+            refresh(app);
         }
         "stealth" => {
             let state = app.state::<AppState>();

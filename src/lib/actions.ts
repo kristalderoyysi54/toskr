@@ -55,6 +55,59 @@ export function clearDoneWithUndo() {
   if (n > 0) undoableTip(`已清理 ${n} 条已完成`);
 }
 
+/** 删除任务并给撤销机会。 */
+export function deleteTasksWithUndo(ids: string[], label?: string) {
+  if (!ids.length) return;
+  const text = label ?? `已删除 ${ids.length} 个任务`;
+  useNotesStore.getState().deleteTasks(ids, text);
+  undoableTip(text);
+}
+
+/** 清理全部已完成任务（带撤销）。 */
+export function clearDoneTasksWithUndo() {
+  const n = useNotesStore.getState().clearDoneTasks();
+  if (n > 0) undoableTip(`已清理 ${n} 个已完成任务`);
+}
+
+/** 笔记转任务（带撤销；图片/组合卡不可转）。 */
+export function convertNoteToTaskWithUndo(noteId: string) {
+  if (useNotesStore.getState().convertNoteToTask(noteId)) {
+    undoableTip("已转为任务");
+  } else {
+    tip("warn", "图片卡片暂不支持转为任务");
+  }
+}
+
+/**
+ * 任务发送到对话：标题 + 备注 + 检查列表拼装成 Markdown 后粘贴给 AI。
+ * 任务不因发送标完成（完成与否由用户在任务页管理）。
+ */
+export async function sendTaskToChat(taskId: string) {
+  const task = useNotesStore.getState().tasks.find((t) => t.id === taskId);
+  if (!task) return;
+  const parts = [task.text];
+  if (task.note) parts.push(`\n备注：${task.note}`);
+  const list = task.checklist ?? [];
+  if (list.length) {
+    parts.push(
+      "\n" + list.map((c) => `- [${c.done ? "x" : " "}] ${c.text}`).join("\n")
+    );
+  }
+  const keepPanel = useUIStore.getState().pinned;
+  if (!keepPanel) useUIStore.getState().setOpen(false);
+  try {
+    const sent = await api.sendToChat(
+      parts.join("\n"),
+      [],
+      useNotesStore.getState().settings.autoEnter,
+      keepPanel
+    );
+    if (!sent) tip("warn", "目标应用未就绪，发送已中止");
+  } catch (e) {
+    tip("warn", `发送失败：${e}`);
+  }
+}
+
 /** 合并勾选（带撤销）。 */
 export function mergeCheckedWithUndo() {
   const ids = orderedCheckedNotes(useNotesStore.getState()).map((n) => n.id);

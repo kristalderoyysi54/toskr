@@ -264,7 +264,7 @@ fn on_trigger(app: &AppHandle) {
                                 &handle,
                                 "warn",
                                 "未检测到选中内容".into(),
-                                false,
+                                false, false, None,
                             );
                         } else {
                             let _ =
