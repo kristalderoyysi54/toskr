@@ -423,7 +423,25 @@ pub fn show_capture_hud(app: AppHandle, kind: String, preview: String) {
     let kind = if kind == "duplicate" { "duplicate" } else { "added" };
     // 前端去重裁决的回执也进诊断：与「捕获:」行拼起来即是完整链路
     crate::diag::push(&app, format!("入库回执: {kind}「{preview}」"));
+    // 捕获成功轻响一声（系统音 Pop；隐身模式/开关关闭时静音）
+    let state = app.state::<AppState>();
+    if kind == "added"
+        && state.sound_enabled.load(Ordering::Relaxed)
+        && !state.stealth.load(Ordering::SeqCst)
+    {
+        let _ = std::process::Command::new("afplay")
+            .arg("/System/Library/Sounds/Pop.aiff")
+            .spawn();
+    }
     crate::window::show_hud(&app, kind, preview, kind == "added", false, None);
+}
+
+/// 捕获音效开关（设置项下发）。
+#[tauri::command]
+pub fn set_sound(app: AppHandle, enabled: bool) {
+    app.state::<AppState>()
+        .sound_enabled
+        .store(enabled, Ordering::Relaxed);
 }
 
 /// 立即隐藏 HUD（点击气泡打开面板时调用）。

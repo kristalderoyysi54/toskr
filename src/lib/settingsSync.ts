@@ -66,6 +66,9 @@ export function applySettingsPatch(patch: Partial<Settings>) {
   if ("stealth" in patch) {
     void api.setStealth(s.stealth);
   }
+  if ("soundEnabled" in patch) {
+    void api.setSound(s.soundEnabled);
+  }
   if ("theme" in patch) {
     void api.setWindowTheme(s.theme);
   }

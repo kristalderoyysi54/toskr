@@ -112,6 +112,8 @@ pub struct AppState {
     pub clip_excluded_apps: Mutex<Vec<String>>,
     /// 暂停剪贴板收集到该时刻（epoch ms；0 = 未暂停）。
     pub clip_pause_until: AtomicI64,
+    /// 捕获音效开关（隐身模式下强制静音）。
+    pub sound_enabled: AtomicBool,
 }
 
 impl Default for AppState {
@@ -166,6 +168,7 @@ impl Default for AppState {
                 .collect(),
             ),
             clip_pause_until: AtomicI64::new(0),
+            sound_enabled: AtomicBool::new(true),
         }
     }
 }
