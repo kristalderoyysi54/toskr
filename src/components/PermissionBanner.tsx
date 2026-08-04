@@ -33,18 +33,13 @@ export function PermissionBanner() {
         </p>
         <div className="mt-2 flex gap-1.5">
           <Button
-            size="sm"
+            size="xs"
             variant="outline"
-            className="h-6 rounded-lg px-2 text-[11px]"
             onClick={() => api.openPrivacySettings("input-monitoring")}
           >
             打开输入监控设置
           </Button>
-          <Button
-            size="sm"
-            className="h-6 rounded-lg px-2 text-[11px]"
-            onClick={() => api.restartApp()}
-          >
+          <Button size="xs" onClick={() => api.restartApp()}>
             重启 Toskr
           </Button>
         </div>
@@ -68,9 +63,8 @@ export function PermissionBanner() {
       </p>
       <div className="mt-2 flex gap-1.5">
         <Button
-          size="sm"
+          size="xs"
           variant="outline"
-          className="h-6 rounded-lg px-2 text-[11px]"
           onClick={() => api.openPrivacySettings("accessibility")}
         >
           打开辅助功能设置

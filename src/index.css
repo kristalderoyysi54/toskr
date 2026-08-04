@@ -1,26 +1,56 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
+
+/* —— 原 @import "shadcn/tailwind.css" 的在用部分内联（shadcn 包只是 CLI 工具，已移出运行时依赖）。
+      这些 data-* variant 把 Radix 的 [data-state=…] 属性映射成 Tailwind 类；
+      菜单/popover/tooltip 的开合动画与滚动条方向样式依赖它们，删掉会静默失效（无报错）。 —— */
+@custom-variant data-open {
+  &:where([data-state="open"]),
+  &:where([data-open]:not([data-open="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-closed {
+  &:where([data-state="closed"]),
+  &:where([data-closed]:not([data-closed="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-checked {
+  &:where([data-state="checked"]),
+  &:where([data-checked]:not([data-checked="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-unchecked {
+  &:where([data-state="unchecked"]),
+  &:where([data-unchecked]:not([data-unchecked="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-disabled {
+  &:where([data-disabled="true"]),
+  &:where([data-disabled]:not([data-disabled="false"])) {
+    @slot;
+  }
+}
+@custom-variant data-horizontal {
+  &:where([data-orientation="horizontal"]) {
+    @slot;
+  }
+}
+@custom-variant data-vertical {
+  &:where([data-orientation="vertical"]) {
+    @slot;
+  }
+}
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
     --font-heading: var(--font-sans);
     --font-sans: 'Geist Variable', sans-serif;
-    --color-sidebar-ring: var(--sidebar-ring);
-    --color-sidebar-border: var(--sidebar-border);
-    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-    --color-sidebar-accent: var(--sidebar-accent);
-    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-    --color-sidebar-primary: var(--sidebar-primary);
-    --color-sidebar-foreground: var(--sidebar-foreground);
-    --color-sidebar: var(--sidebar);
-    --color-chart-5: var(--chart-5);
-    --color-chart-4: var(--chart-4);
-    --color-chart-3: var(--chart-3);
-    --color-chart-2: var(--chart-2);
-    --color-chart-1: var(--chart-1);
     --color-ring: var(--ring);
     --color-input: var(--input);
     --color-border: var(--border);
@@ -49,13 +79,17 @@
 }
 
 :root {
+    /* Toskr accent（系统蓝）——全应用换主色只改这两行；
+       h≈292（violet）预留给「灵感 spark」功能色，勿用作 accent */
+    --accent-hue: 259.8;
+    --accent-chroma: 0.19;
     --background: oklch(1 0 0);
     --foreground: oklch(0.145 0 0);
     --card: oklch(1 0 0);
     --card-foreground: oklch(0.145 0 0);
     --popover: oklch(1 0 0);
     --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
+    --primary: oklch(0.56 var(--accent-chroma) var(--accent-hue));
     --primary-foreground: oklch(0.985 0 0);
     --secondary: oklch(0.97 0 0);
     --secondary-foreground: oklch(0.205 0 0);
@@ -66,21 +100,8 @@
     --destructive: oklch(0.577 0.245 27.325);
     --border: oklch(0.922 0 0);
     --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
+    --ring: oklch(0.56 var(--accent-chroma) var(--accent-hue));
     --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
 }
 
 .dark {
@@ -90,8 +111,8 @@
     --card-foreground: oklch(0.985 0 0);
     --popover: oklch(0.205 0 0);
     --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
+    --primary: oklch(0.685 var(--accent-chroma) var(--accent-hue));
+    --primary-foreground: oklch(0.985 0 0);
     --secondary: oklch(0.269 0 0);
     --secondary-foreground: oklch(0.985 0 0);
     --muted: oklch(0.269 0 0);
@@ -101,20 +122,7 @@
     --destructive: oklch(0.704 0.191 22.216);
     --border: oklch(1 0 0 / 10%);
     --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.556 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --sidebar: oklch(0.205 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.556 0 0);
+    --ring: oklch(0.685 var(--accent-chroma) var(--accent-hue));
 }
 
 @layer base {
@@ -168,7 +176,8 @@ input {
   background: oklch(0.17 0 0 / calc(var(--panel-alpha, 0.62) * 0.9 * 100%));
 }
 
-/* 代码语法高亮配色（浅/深色各一套，跟随主题） */
+/* === 代码语法高亮配色（浅/深各一套，跟随主题）===
+   手调 hex，刻意独立于 design-token 体系（色准承重，勿换算成语义 token） */
 .hljs-comment,
 .hljs-quote { color: #8a8f98; font-style: italic; }
 .hljs-keyword,
@@ -291,7 +300,7 @@ input {
 .dark .md-preview :is(th, td) { border-color: rgb(255 255 255 / 0.15); }
 .md-preview th { background: rgb(0 0 0 / 0.04); font-weight: 600; }
 .dark .md-preview th { background: rgb(255 255 255 / 0.06); }
-.md-preview a { color: rgb(59 130 246); text-decoration: underline; }
+.md-preview a { color: var(--primary); text-decoration: underline; }
 .md-preview hr {
   margin: 0.8em 0;
   border: 0;
@@ -299,3 +308,167 @@ input {
 }
 .dark .md-preview hr { border-top-color: rgb(255 255 255 / 0.12); }
 .md-preview img { max-width: 100%; border-radius: 6px; }
+
+/* ═══════════════════════════════════════════════════════════════
+   设计系统 v2 tokens（重塑阶段二新增，纯增量：真实组件尚未消费）
+   样张验收入口：pnpm dev → http://localhost:1420/?styletile=1
+   ═══════════════════════════════════════════════════════════════ */
+
+/* —— 语义色补全：success/warning 沿用全应用「软染色」惯例（bg-x/10 text-x），
+      不配 foreground 对；danger 复用 --destructive —— */
+:root {
+  --success: oklch(0.696 0.17 162.48); /* = emerald-500，与现状勾选同色 */
+  --warning: oklch(0.666 0.179 58.318); /* = amber-600（浅色文字用值） */
+  --surface-lightbox: oklch(0.205 0 0 / 95%); /* 图片预览永暗窗，不随主题 */
+}
+.dark {
+  --success: oklch(0.696 0.17 162.48);
+  --warning: oklch(0.828 0.189 84.429); /* = amber-400 */
+}
+
+@theme inline {
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-surface-raised: var(--popover); /* 浮层统一底：popover 与 card 本就同值 */
+  --color-surface-lightbox: var(--surface-lightbox);
+}
+
+/* —— 字阶：5 档命名刻度（自动生成 text-* utility 与配对行高） —— */
+@theme {
+  --text-micro: 10px;
+  --text-micro--line-height: 14px;
+  --text-label: 11px;
+  --text-label--line-height: 16px;
+  --text-body: 12px;
+  --text-body--line-height: 17px;
+  --text-title: 13px;
+  --text-title--line-height: 18px;
+  --text-heading: 15px;
+  --text-heading--line-height: 20px;
+}
+
+/* —— 动效 token（全部来自现存值命名，非新发明） —— */
+:root {
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 280ms;
+  --duration-exit: 140ms;
+  --duration-emphasis: 1800ms; /* flash-highlight 专用 */
+  --ease-standard: cubic-bezier(0.2, 0.9, 0.3, 1);
+  --ease-pop: cubic-bezier(0.2, 0.9, 0.3, 1.2); /* hud-pop 过冲曲线 */
+}
+
+/* —— 软玻璃 elevation 三档：贴身影 + 环境影 + 顶缘 rim-light —— */
+:root {
+  --elevation-1: inset 0 1px 2px oklch(0 0 0 / 0.05);
+  --elevation-2:
+    0 1px 2px oklch(0 0 0 / 0.08),
+    0 6px 16px -4px oklch(0 0 0 / 0.12),
+    inset 0 1px 0 0 oklch(1 0 0 / 0.4);
+  --elevation-3:
+    0 2px 4px oklch(0 0 0 / 0.1),
+    0 16px 40px -8px oklch(0 0 0 / 0.2),
+    inset 0 1px 0 0 oklch(1 0 0 / 0.6);
+  --surface-inset-bg: oklch(0 0 0 / 4%);
+}
+.dark {
+  --elevation-1: inset 0 1px 2px oklch(0 0 0 / 0.35);
+  --elevation-2:
+    0 1px 2px oklch(0 0 0 / 0.35),
+    0 6px 16px -4px oklch(0 0 0 / 0.45),
+    inset 0 1px 0 0 oklch(1 0 0 / 0.08);
+  --elevation-3:
+    0 2px 4px oklch(0 0 0 / 0.45),
+    0 16px 40px -8px oklch(0 0 0 / 0.55),
+    inset 0 1px 0 0 oklch(1 0 0 / 0.1);
+  --surface-inset-bg: oklch(1 0 0 / 6%);
+}
+@utility elevation-1 {
+  box-shadow: var(--elevation-1);
+}
+@utility elevation-2 {
+  box-shadow: var(--elevation-2);
+}
+@utility elevation-3 {
+  box-shadow: var(--elevation-3);
+}
+/* 凹陷底（输入条/搜索/进度轨）：前景色低 alpha，双主题对称 */
+@utility surface-inset {
+  background-color: var(--surface-inset-bg);
+}
+/* （CTA gloss 与 accent 晕影方案已被用户否决——主按钮保持平面，此处不再提供对应 utility） */
+
+/* —— gloss 光泽：伪元素叠加，零 DOM 改动可加装到任意实色元素；
+      不替换底色、不依赖 WebKit 相对色语法 —— */
+:root {
+  --glass-sheen-top: oklch(1 0 0 / 0.6);
+  --glass-sheen-mid: oklch(1 0 0 / 0.14);
+  --glass-rim-light: oklch(1 0 0 / 0.7);
+  --glass-rim-shade: oklch(0 0 0 / 0.05);
+}
+.dark {
+  --glass-sheen-top: oklch(1 0 0 / 0.28);
+  --glass-sheen-mid: oklch(1 0 0 / 0.06);
+  --glass-rim-light: oklch(1 0 0 / 0.16);
+  --glass-rim-shade: oklch(0 0 0 / 0.35);
+}
+.glass-sheen {
+  position: relative;
+  isolation: isolate;
+}
+.glass-sheen::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1; /* 垫在文字/图标之下：isolation 栈内负 z 仍在自身背景之上 */
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    radial-gradient(140% 120% at 50% 0%, var(--glass-sheen-top), transparent 55%),
+    linear-gradient(to bottom, var(--glass-sheen-mid), transparent 45%);
+}
+.glass-sheen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow:
+    inset 0 1px 0 var(--glass-rim-light),
+    inset 0 -1px 0 var(--glass-rim-shade);
+}
+/* 薄变体：细长元素（进度条 fill）没有径向高光的空间 */
+.glass-sheen-flat {
+  background-image: linear-gradient(to bottom, var(--glass-sheen-top), transparent 60%);
+}
+
+/* —— letterpress 微压印：仅限 wordmark 级大标题 —— */
+:root {
+  --text-shadow-letterpress: 0 1px 0 oklch(1 0 0 / 0.5);
+}
+.dark {
+  --text-shadow-letterpress:
+    0 1px 0 oklch(0 0 0 / 0.4),
+    0 -1px 0 oklch(1 0 0 / 0.04);
+}
+@utility text-letterpress {
+  text-shadow: var(--text-shadow-letterpress);
+}
+
+/* —— 减弱动态效果：一处通杀（覆盖 tw-animate-css、hud-pop、flash 等全部 CSS 动画/过渡）。
+      motion(JS) 库由 App 根部 <MotionConfig reducedMotion="user"> 另行覆盖。 —— */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  /* 去动效不去信息：新捕获卡改为静态染色，仍由 JS 的 1.8s 计时器负责消隐 */
+  .flash-highlight {
+    animation: none !important;
+    background-color: oklch(0.72 0.15 60 / 22%);
+  }
+}
