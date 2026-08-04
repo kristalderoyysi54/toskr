@@ -145,6 +145,8 @@ export const api = {
     invoke("set_panel_vertical", { topOffset, height }),
   setStealth: (on: boolean) => invoke("set_stealth", { on }),
   setSound: (enabled: boolean) => invoke("set_sound", { enabled }),
+  setDoubleTapMode: (captureOnly: boolean) =>
+    invoke("set_double_tap_mode", { captureOnly }),
   setClipWatch: (enabled: boolean) => invoke("set_clip_watch", { enabled }),
   setClipRules: (
     ignoreConcealed: boolean,

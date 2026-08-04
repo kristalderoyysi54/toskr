@@ -319,6 +319,21 @@ describe("剪贴板历史 addClipNote", () => {
     useNotesStore.getState().addClipNote("same");
     expect(useNotesStore.getState().notes).toHaveLength(1);
   });
+
+  it("去重只在域内：剪贴板有同文本仍可捕获为笔记，反之亦然", () => {
+    // 剪贴板先收集了某段文字 → 用户双击捕获同文本，应入库为笔记而非误报重复
+    useNotesStore.getState().addClipNote("跨域文本");
+    const captured = useNotesStore.getState().addNote("跨域文本");
+    expect(captured.result).toBe("added");
+    // 反向：笔记里已有的内容复制时，剪贴板历史照常记录
+    useNotesStore.getState().addNote("先是笔记");
+    useNotesStore.getState().addClipNote("先是笔记");
+    const clips = useNotesStore
+      .getState()
+      .notes.filter((n) => n.sectionId === CLIPBOARD_ID)
+      .map((n) => n.text);
+    expect(clips.sort()).toEqual(["先是笔记", "跨域文本"]);
+  });
 });
 
 describe("任务：CRUD / 撤销 / 转换原子性 / 导入", () => {

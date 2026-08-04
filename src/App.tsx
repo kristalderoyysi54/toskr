@@ -435,6 +435,7 @@ export default function App() {
       // 垂直覆盖为会话内临时值（切换吸附目标即重置），不做启动恢复
       void api.setStealth(settings.stealth);
       void api.setSound(settings.soundEnabled);
+      void api.setDoubleTapMode(settings.doubleTapCaptureOnly);
       void api.setClipWatch(settings.clipHistory);
       void api.setClipPause(settings.clipPauseUntil ?? 0);
       void api.setClipRules(
@@ -587,8 +588,9 @@ export default function App() {
     [taskBuckets, doneOpen]
   );
 
-  // 剪贴板分页渲染：保留时长开到年/永久后可能上万条，一次性渲染会卡
-  const [clipShown, setClipShown] = useState(200);
+  // 剪贴板分页渲染：保留时长开到年/永久后可能上万条，一次性渲染会卡；
+  // 首屏 60 张（约两屏）让切页挂载不掉帧，「加载更多」按 200 递增
+  const [clipShown, setClipShown] = useState(60);
   const visibleClipNotes = useMemo(
     () => clipNotes.slice(0, clipShown),
     [clipNotes, clipShown]
@@ -982,21 +984,28 @@ export default function App() {
         className="h-screen w-screen overflow-hidden text-foreground"
         onContextMenu={(e) => e.preventDefault()}
       >
-        <AnimatePresence
-          onExitComplete={() => {
-            void api.hidePanel(restoreFocusRef.current);
-          }}
-        >
-          {open && (
+        {/* 面板内容树常驻：呼出只播 transform/opacity（GPU 合成层），
+            避免每次打开重新挂载整棵卡片树造成的掉帧；收起动画完成后再隐藏窗口 */}
             <motion.div
               key="panel"
-              initial={{ x: 28, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              exit={{ x: 20, opacity: 0 }}
-              transition={{ type: "spring", stiffness: 480, damping: 40 }}
+              initial={false}
+              animate={open ? { x: 0, opacity: 1 } : { x: 16, opacity: 0 }}
+              // 进场 spring 保手感；退场用短 tween 果断结束——spring 的静止判定
+              // 有长尾，会拖住窗口隐藏时机，露出毛玻璃空板（内容先没、面板后没）
+              transition={
+                open
+                  ? { type: "spring", stiffness: 480, damping: 40 }
+                  : { duration: 0.14, ease: "easeIn" }
+              }
+              onAnimationComplete={() => {
+                if (!useUIStore.getState().open) {
+                  void api.hidePanel(restoreFocusRef.current);
+                }
+              }}
               className={cn(
                 "panel-surface relative flex h-full w-full flex-col overflow-hidden rounded-[14px]",
-                "border border-black/10 dark:border-white/10"
+                "border border-black/10 dark:border-white/10",
+                !open && "pointer-events-none"
               )}
             >
               {/* 左缘宽度拖拽把手 */}
@@ -1311,8 +1320,6 @@ export default function App() {
               <PreviewOverlay />
               {showShortcuts && <ShortcutHelp />}
             </motion.div>
-          )}
-        </AnimatePresence>
       </div>
     </TooltipProvider>
   );

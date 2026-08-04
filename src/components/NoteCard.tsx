@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
@@ -62,8 +62,15 @@ import { useUIStore } from "@/store/uiStore";
 /**
  * 固定尺寸卡片瓷砖（Paste 风格）：统一高度、3 行截断展示；
  * 双击 = 直接发送到对话；完整内容与编辑通过预览层（Space / 放大按钮）。
+ * memo：切页/勾选引发的父级重渲染不再波及未变化的卡片（大列表关键）。
  */
-export function NoteCard({ note, query = "" }: { note: Note; query?: string }) {
+export const NoteCard = memo(function NoteCard({
+  note,
+  query = "",
+}: {
+  note: Note;
+  query?: string;
+}) {
   const checked = useNotesStore((s) => s.checkedIds.includes(note.id));
   const checkedCount = useNotesStore((s) => s.checkedIds.length);
   // 右键合并的目标集合 = 勾选项 ∪ 当前卡片
@@ -646,7 +653,7 @@ export function NoteCard({ note, query = "" }: { note: Note; query?: string }) {
       </ContextMenuContent>
     </ContextMenu>
   );
-}
+});
 
 /** 站点图标：加载失败自动隐藏（favicon 缺失/防盗链很常见）。 */
 /** 紧凑单行布局：主色左条 + 图标 + 首行内容 + 时间（交互全部由外层卡片承担）。 */

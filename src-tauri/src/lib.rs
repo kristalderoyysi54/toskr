@@ -168,6 +168,7 @@ pub fn run() {
             commands::set_panel_vertical,
             commands::set_stealth,
             commands::set_sound,
+            commands::set_double_tap_mode,
             commands::set_clip_watch,
             commands::set_clip_rules,
             commands::set_clip_pause,

@@ -69,6 +69,9 @@ export function applySettingsPatch(patch: Partial<Settings>) {
   if ("soundEnabled" in patch) {
     void api.setSound(s.soundEnabled);
   }
+  if ("doubleTapCaptureOnly" in patch) {
+    void api.setDoubleTapMode(s.doubleTapCaptureOnly);
+  }
   if ("theme" in patch) {
     void api.setWindowTheme(s.theme);
   }

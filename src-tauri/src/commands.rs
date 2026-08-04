@@ -423,10 +423,10 @@ pub fn show_capture_hud(app: AppHandle, kind: String, preview: String) {
     let kind = if kind == "duplicate" { "duplicate" } else { "added" };
     // 前端去重裁决的回执也进诊断：与「捕获:」行拼起来即是完整链路
     crate::diag::push(&app, format!("入库回执: {kind}「{preview}」"));
-    // 捕获成功轻响一声（系统音 Pop；隐身模式/开关关闭时静音）
+    // 捕获动作轻响一声（系统音 Pop；重复内容同样响——动作要有听觉回执；
+    // 隐身模式/开关关闭时静音）
     let state = app.state::<AppState>();
-    if kind == "added"
-        && state.sound_enabled.load(Ordering::Relaxed)
+    if state.sound_enabled.load(Ordering::Relaxed)
         && !state.stealth.load(Ordering::SeqCst)
     {
         let _ = std::process::Command::new("afplay")
@@ -434,6 +434,14 @@ pub fn show_capture_hud(app: AppHandle, kind: String, preview: String) {
             .spawn();
     }
     crate::window::show_hud(&app, kind, preview, kind == "added", false, None);
+}
+
+/// 双击触发行为下发：仅捕获 / 智能（无选中时开关面板）。
+#[tauri::command]
+pub fn set_double_tap_mode(app: AppHandle, capture_only: bool) {
+    app.state::<AppState>()
+        .double_tap_capture_only
+        .store(capture_only, Ordering::Relaxed);
 }
 
 /// 捕获音效开关（设置项下发）。
