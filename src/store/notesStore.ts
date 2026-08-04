@@ -189,6 +189,8 @@ export interface Settings {
   hotkeyModifier: "shift" | "control" | "option";
   /** 两次轻击「抬起→抬起」最大间隔（ms）。 */
   hotkeyGapMs: number;
+  /** 双击触发仅捕获（面板开关交给专用快捷键；默认智能：无选中时开关面板）。 */
+  doubleTapCaptureOnly: boolean;
   /** 面板显示/隐藏专用快捷键（global-shortcut 格式如 "Cmd+Shift+KeyV"，null=未设置）。
    *  与双击触发独立：只开关面板不捕获，钉住时也可收起。 */
   panelToggleHotkey: string | null;
@@ -324,6 +326,7 @@ export const defaultSettings = (): Settings => ({
   hideOnBlur: true,
   hotkeyModifier: "shift",
   hotkeyGapMs: 400,
+  doubleTapCaptureOnly: false,
   panelToggleHotkey: null,
   stealth: false,
   soundEnabled: true,
@@ -490,14 +493,22 @@ export const useNotesStore = create<NotesState>()(
         const trimmed = text.trim();
         if (!trimmed) return { result: "empty" };
         // 去重（覆盖已完成卡片，避免发送后再捕获同一内容又新建）：
-        // - 文本：内容完全相同
-        // - 图片：附件哈希文件名相同（Rust 侧按像素内容哈希命名）
+        // - 文本：内容完全相同；图片：附件哈希文件名相同（像素内容哈希命名）
+        // - 只在目标域内查重：剪贴板历史与笔记互不冲突——复制过的内容
+        //   仍可捕获为笔记（转正意图），捕获过的内容复制时也照常记录历史
+        const targetClip = opts?.sectionId === CLIPBOARD_ID;
+        const inScope = (n: Note) =>
+          (n.sectionId === CLIPBOARD_ID) === targetClip;
         const dup =
           opts?.kind === "image"
             ? opts.imageFile
-              ? get().notes.find((n) => n.imageFile === opts.imageFile)
+              ? get().notes.find(
+                  (n) => inScope(n) && n.imageFile === opts.imageFile
+                )
               : undefined
-            : get().notes.find((n) => n.kind !== "image" && n.text === trimmed);
+            : get().notes.find(
+                (n) => inScope(n) && n.kind !== "image" && n.text === trimmed
+              );
         if (dup) return { result: "duplicate", id: dup.id };
 
         const sections = get().sections;

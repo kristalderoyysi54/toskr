@@ -206,6 +206,10 @@ fn on_trigger(app: &AppHandle) {
                         .any(|a| a == b)
                 })
                 .unwrap_or(false);
+            let capture_only = app
+                .state::<AppState>()
+                .double_tap_capture_only
+                .load(Ordering::Relaxed);
             if excluded {
                 crate::diag::push(
                     app,
@@ -214,7 +218,10 @@ fn on_trigger(app: &AppHandle) {
                         front.name.as_deref().unwrap_or("?")
                     ),
                 );
-                let _ = app.emit_to("main", TRIGGER_EVENT, TriggerPayload::Toggle { force: false });
+                // 仅捕获模式下不兼职开关面板
+                if !capture_only {
+                    let _ = app.emit_to("main", TRIGGER_EVENT, TriggerPayload::Toggle { force: false });
+                }
                 return;
             }
             let handle = app.clone();
@@ -252,14 +259,13 @@ fn on_trigger(app: &AppHandle) {
                         );
                     }
                     None => {
-                        // 捕获失败的兜底：面板已可见（尤其钉住场景）时，用户意图
-                        // 几乎必是捕获——绝不能把面板藏了，只给轻提示；
-                        // 面板隐藏时才视为「开关面板」。
+                        // 捕获失败的兜底：仅捕获模式一律轻提示（面板交给专用快捷键）；
+                        // 智能模式沿用旧语义——面板可见（尤其钉住）时提示，隐藏时开关面板
                         let visible = handle
                             .get_webview_window("main")
                             .and_then(|w| w.is_visible().ok())
                             .unwrap_or(false);
-                        if visible {
+                        if capture_only || visible {
                             crate::window::show_hud(
                                 &handle,
                                 "warn",
@@ -275,7 +281,16 @@ fn on_trigger(app: &AppHandle) {
             });
         }
         _ => {
-            let _ = app.emit_to("main", TRIGGER_EVENT, TriggerPayload::Toggle { force: false });
+            // 面板自身前台：仅捕获模式下双击不再兼职收起（用专用快捷键/Esc）
+            let capture_only = app
+                .state::<AppState>()
+                .double_tap_capture_only
+                .load(Ordering::Relaxed);
+            if capture_only {
+                crate::diag::push(app, "双击触发: 仅捕获模式，忽略面板开关");
+            } else {
+                let _ = app.emit_to("main", TRIGGER_EVENT, TriggerPayload::Toggle { force: false });
+            }
         }
     }
 }

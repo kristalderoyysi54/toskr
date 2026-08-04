@@ -700,6 +700,20 @@ function HotkeySection({ settings, patch }: SP) {
           }
         />
         <Row
+          label="双击行为"
+          hint="仅捕获：无选中只轻提示、不开关面板（配合下方专用面板快捷键）"
+          right={
+            <Segmented
+              value={settings.doubleTapCaptureOnly ? "capture" : "smart"}
+              options={[
+                { value: "smart", label: "智能" },
+                { value: "capture", label: "仅捕获" },
+              ]}
+              onChange={(v) => patch({ doubleTapCaptureOnly: v === "capture" })}
+            />
+          }
+        />
+        <Row
           label="面板显示 / 隐藏"
           hint="独立快捷键，只开关面板不捕获内容；钉住时也可收起"
           right={
