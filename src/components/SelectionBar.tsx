@@ -82,6 +82,7 @@ export function SelectionBar() {
           <SimpleMenu
             side="top"
             align="end"
+            className="flex"
             trigger={({ toggle }) => (
               <Button
                 size="sm"
