@@ -92,6 +92,62 @@ describe("notesStore 基础", () => {
     expect(notes[1].text).toBe("二");
   });
 
+  it("addClipNote 重复内容：已有卡提升到最新并刷新时间来源", () => {
+    const s = useNotesStore.getState();
+    s.addClipNote("重复的", { sourceApp: "A" });
+    s.addClipNote("另一条", {});
+    const before = useNotesStore.getState().notes; // [另一条, 重复的]
+    const dupId = before[1].id;
+    const oldAt = before[1].createdAt;
+    s.addClipNote("重复的", { sourceApp: "B" });
+    const after = useNotesStore.getState().notes;
+    expect(after).toHaveLength(2);
+    expect(after[0].id).toBe(dupId);
+    expect(after[0].sourceApp).toBe("B");
+    expect(after[0].createdAt).toBeGreaterThanOrEqual(oldAt);
+  });
+
+  it("addClipNote 重复图片（同像素哈希文件）：同样提升置顶", () => {
+    const s = useNotesStore.getState();
+    s.addClipNote("图片 1×1", { kind: "image", imageFile: "img-x.png" });
+    s.addClipNote("挡在前面", {});
+    s.addClipNote("图片 1×1", { kind: "image", imageFile: "img-x.png" });
+    const after = useNotesStore.getState().notes;
+    expect(after).toHaveLength(2);
+    expect(after[0].imageFile).toBe("img-x.png");
+  });
+
+  it("mergeNotes 剪贴板域：产出新组合卡置顶，原卡保持原样", () => {
+    const s = useNotesStore.getState();
+    s.addClipNote("甲", {});
+    s.addClipNote("乙", {});
+    const before = useNotesStore.getState().notes;
+    expect(before).toHaveLength(2);
+    useNotesStore.getState().mergeNotes([before[1].id, before[0].id]);
+    const after = useNotesStore.getState().notes;
+    expect(after).toHaveLength(3);
+    // 新组合卡置顶且在剪贴板域，按列表展示顺序拼接（乙后入置顶）
+    expect(after[0].text).toBe("乙\n\n甲");
+    expect(after[0].sectionId).toBe(CLIPBOARD_ID);
+    // 原卡原样保留
+    expect(after.slice(1).map((n) => n.id)).toEqual(before.map((n) => n.id));
+    // 选中态落在新卡上
+    expect(useNotesStore.getState().checkedIds).toEqual([after[0].id]);
+  });
+
+  it("mergeNotes 剪贴板域图片卡：图片全部并入新卡附件", () => {
+    const s = useNotesStore.getState();
+    s.addClipNote("图片 1×1", { kind: "image", imageFile: "img-a.png", imageW: 1, imageH: 1 });
+    s.addClipNote("图片 2×2", { kind: "image", imageFile: "img-b.png", imageW: 2, imageH: 2 });
+    const before = useNotesStore.getState().notes; // [b, a]
+    useNotesStore.getState().mergeNotes([before[0].id, before[1].id]);
+    const combo = useNotesStore.getState().notes[0];
+    expect(combo.kind).toBe("image");
+    expect(combo.imageFile).toBe("img-b.png");
+    expect(combo.attachments).toEqual(["img-a.png"]);
+    expect(useNotesStore.getState().notes).toHaveLength(3);
+  });
+
   it("reorderNotes 在数组内移动", () => {
     const s = useNotesStore.getState();
     s.addNote("一");

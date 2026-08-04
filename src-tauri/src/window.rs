@@ -492,22 +492,33 @@ pub fn set_panel_vertical(app: &AppHandle, top_offset: f64, height: Option<f64>)
 
 /// 自建图片原尺寸预览窗（qlmanage 的 [DEBUG] 窗口带无用调试按钮，观感差）：
 /// 按图片尺寸适配光标屏工作区 90% 居中；前端 Esc/点击/失焦即隐藏。任意线程可调。
-pub fn preview_image(app: &AppHandle, file: String) {
-    let Some(path) = crate::storage::image_path(app, &file) else {
+/// 多图时窗口按起始张定尺寸，其余图在窗内等比适配。
+pub fn preview_image(app: &AppHandle, files: Vec<String>, index: usize) {
+    let index = if files.get(index).is_some() { index } else { 0 };
+    let Some(anchor) = files.get(index) else {
         return;
     };
-    let dims = image::image_dimensions(&path).ok();
+    let dims = crate::storage::image_path(app, anchor)
+        .and_then(|p| image::image_dimensions(&p).ok());
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
-        if let Err(e) = preview_image_on_main(&handle, &file, dims) {
+        if let Err(e) = preview_image_on_main(&handle, files, index, dims) {
             eprintln!("[toskr] 图片预览失败: {e}");
         }
     });
 }
 
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewPayload {
+    files: Vec<String>,
+    index: usize,
+}
+
 fn preview_image_on_main(
     app: &AppHandle,
-    file: &str,
+    files: Vec<String>,
+    index: usize,
     dims: Option<(u32, u32)>,
 ) -> tauri::Result<()> {
     let window = app
@@ -545,7 +556,11 @@ fn preview_image_on_main(
     let h = img_h * ratio + 56.0;
     let x = wa_x + (wa_w - w) / 2.0;
     let y = wa_y + (wa_h - h) / 2.0;
-    let _ = app.emit_to("imgpreview", "toskr://preview-image", file);
+    let _ = app.emit_to(
+        "imgpreview",
+        "toskr://preview-image",
+        PreviewPayload { files, index },
+    );
     window.set_size(LogicalSize::new(w, h))?;
     window.set_position(LogicalPosition::new(x, y))?;
     ensure_fullscreen_auxiliary(&window);

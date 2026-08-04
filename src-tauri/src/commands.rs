@@ -49,9 +49,10 @@ pub fn set_clip_watch(app: AppHandle, enabled: bool) {
 }
 
 /// 图片原尺寸预览（自建预览窗；面板 320-520pt 放不下大图）。
+/// 组合卡传全部图片，`index` 为起始张（预览窗内 ←/→ 翻看）。
 #[tauri::command]
-pub fn quick_look(app: AppHandle, file: String) {
-    crate::window::preview_image(&app, file);
+pub fn quick_look(app: AppHandle, files: Vec<String>, index: Option<usize>) {
+    crate::window::preview_image(&app, files, index.unwrap_or(0));
 }
 
 /// 暂停剪贴板收集下发（设置页改动 → 同步 Rust 与托盘菜单；0 = 恢复）。

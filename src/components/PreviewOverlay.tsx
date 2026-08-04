@@ -151,7 +151,7 @@ export function PreviewOverlay() {
                       src={imageUrl}
                       alt="捕获的图片"
                       title="点击原尺寸预览"
-                      onClick={() => note.imageFile && void api.quickLook(note.imageFile)}
+                      onClick={() => note.imageFile && void api.quickLook(images)}
                       className="max-h-full max-w-full cursor-zoom-in object-contain"
                     />
                   ) : (
@@ -196,7 +196,7 @@ export function PreviewOverlay() {
               {extraImages.length > 0 && (
                 <div className="mt-3 grid grid-cols-2 gap-2">
                   {extraImages.map((f) => (
-                    <PreviewThumb key={f} file={f} />
+                    <PreviewThumb key={f} files={images} index={images.indexOf(f)} />
                   ))}
                 </div>
               )}
@@ -212,7 +212,7 @@ export function PreviewOverlay() {
               </span>
               <div className="ml-auto flex items-center gap-1">
                 {editing ? (
-                  <Button size="sm" className="h-6 gap-1 rounded-lg px-2 text-[11px]" onClick={save}>
+                  <Button size="xs" onClick={save}>
                     <Check className="size-3" /> 保存
                     <kbd className="text-[9px] opacity-70">⌘⏎</kbd>
                   </Button>
@@ -246,8 +246,7 @@ export function PreviewOverlay() {
                       <Trash2 className="size-3.5" />
                     </IconBtn>
                     <Button
-                      size="sm"
-                      className="h-6 gap-1 rounded-lg px-2 text-[11px]"
+                      size="xs"
                       onClick={() => {
                         useUIStore.getState().closePreview();
                         void sendNotesToChat([note.id]);
@@ -266,13 +265,13 @@ export function PreviewOverlay() {
   );
 }
 
-/** 预览层里的附件图片（点击 Quick Look 原尺寸）。 */
-function PreviewThumb({ file }: { file: string }) {
-  const url = useNoteImage(file);
+/** 预览层里的附件图片（点击从该张起原尺寸预览，可 ←/→ 翻看全组）。 */
+function PreviewThumb({ files, index }: { files: string[]; index: number }) {
+  const url = useNoteImage(files[index]);
   return (
     <div
       title="点击原尺寸预览"
-      onClick={() => void api.quickLook(file)}
+      onClick={() => void api.quickLook(files, Math.max(0, index))}
       className="flex cursor-zoom-in items-center justify-center overflow-hidden rounded-lg bg-black/[0.05] p-1 dark:bg-white/[0.08]"
     >
       {url ? (

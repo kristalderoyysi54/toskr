@@ -96,17 +96,20 @@ export function dueTasksToRemind(tasks: Task[], now: number): Task[] {
 }
 
 export type DuePreset =
+  | "in30m"
+  | "in1h"
+  | "in3h"
   | "tonight"
   | "tomorrowMorning"
-  | "tomorrowEvening"
-  | "weekend"
   | "nextMonday";
 
+/** 「提醒我」式快捷档：相对时间在前（稍后提醒），绝对锚点在后。 */
 export const DUE_PRESETS: { key: DuePreset; label: string }[] = [
+  { key: "in30m", label: "30 分钟后" },
+  { key: "in1h", label: "1 小时后" },
+  { key: "in3h", label: "3 小时后" },
   { key: "tonight", label: "今晚 20:00" },
   { key: "tomorrowMorning", label: "明早 9:00" },
-  { key: "tomorrowEvening", label: "明晚 20:00" },
-  { key: "weekend", label: "周六 9:00" },
   { key: "nextMonday", label: "下周一 9:00" },
 ];
 
@@ -124,17 +127,16 @@ export function presetDue(preset: DuePreset, now: number): number {
       0
     ).getTime();
   switch (preset) {
+    case "in30m":
+      return now + 30 * 60_000;
+    case "in1h":
+      return now + 60 * 60_000;
+    case "in3h":
+      return now + 3 * 60 * 60_000;
     case "tonight":
       return at(0, 20);
     case "tomorrowMorning":
       return at(1, 9);
-    case "tomorrowEvening":
-      return at(1, 20);
-    case "weekend": {
-      // 最近的周六（今天是周六 → 今天；周日 → 下周六）
-      const dow = d.getDay();
-      return at(dow === 6 ? 0 : (6 - dow + 7) % 7, 9);
-    }
     case "nextMonday": {
       // 「下」字明确排除当天：周一时跳到 7 天后
       const dow = d.getDay();
