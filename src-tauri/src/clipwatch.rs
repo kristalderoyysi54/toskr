@@ -98,14 +98,15 @@ pub fn spawn(app: AppHandle) {
                 state.clip_ignore_concealed.load(Ordering::Relaxed),
                 state.clip_ignore_transient.load(Ordering::Relaxed),
             ) {
+                crate::diag::push(&app, "剪贴板: 隐私标记内容，跳过");
                 continue;
             }
-            // 复制动作发生时的前台应用即内容来源；忽略名单独立于捕获排除
+            // 复制动作发生时的前台应用即内容来源；忽略名单独立于捕获排除。
+            // 刻意不按「前台是自己」跳过：自身写入已由 mark_self_write 的
+            // changeCount 标记兜底，按 pid 拦会误杀面板前台期间落进来的外部
+            // 写入——截图缩略图延迟数秒才写剪贴板，正是典型受害者。
             let front = crate::focus::frontmost_info();
             if let Some(f) = &front {
-                if f.pid == std::process::id() as i32 {
-                    continue;
-                }
                 let excluded = f
                     .bundle_id
                     .as_deref()
@@ -119,6 +120,10 @@ pub fn spawn(app: AppHandle) {
                     })
                     .unwrap_or(false);
                 if excluded {
+                    crate::diag::push(
+                        &app,
+                        format!("剪贴板: {} 在忽略名单，跳过", f.name.as_deref().unwrap_or("?")),
+                    );
                     continue;
                 }
             }
@@ -126,15 +131,27 @@ pub fn spawn(app: AppHandle) {
                 .map(|f| (f.name, f.bundle_id))
                 .unwrap_or((None, None));
 
+            let src = app_name.clone().unwrap_or_else(|| "?".into());
             let mut clipboard = match arboard::Clipboard::new() {
                 Ok(c) => c,
                 Err(_) => continue,
             };
             if let Ok(text) = clipboard.get_text() {
                 let trimmed = text.trim();
-                if trimmed.is_empty() || text.len() > MAX_TEXT_BYTES {
+                if trimmed.is_empty() {
                     continue;
                 }
+                if text.len() > MAX_TEXT_BYTES {
+                    crate::diag::push(
+                        &app,
+                        format!("剪贴板: 文本超限 {}KB，跳过", text.len() / 1024),
+                    );
+                    continue;
+                }
+                crate::diag::push(
+                    &app,
+                    format!("剪贴板: 收文本 {} 字符 来自 {src}", text.chars().count()),
+                );
                 let _ = app.emit_to(
                     "main",
                     CLIP_EVENT,
@@ -150,25 +167,34 @@ pub fn spawn(app: AppHandle) {
                 );
                 continue;
             }
-            if let Ok(img) = clipboard.get_image() {
-                let (w, h) = (img.width as u32, img.height as u32);
-                if let Ok(file) =
-                    crate::storage::save_image_rgba(&app, img.width, img.height, &img.bytes)
-                {
-                    let _ = app.emit_to(
-                        "main",
-                        CLIP_EVENT,
-                        ClipPayload {
-                            content_kind: "image".into(),
-                            text: format!("图片 {w}×{h}"),
-                            image_file: Some(file),
-                            image_w: Some(w),
-                            image_h: Some(h),
-                            app_name,
-                            bundle_id,
-                        },
-                    );
+            match clipboard.get_image() {
+                Ok(img) => {
+                    let (w, h) = (img.width as u32, img.height as u32);
+                    match crate::storage::save_image_rgba(&app, img.width, img.height, &img.bytes)
+                    {
+                        Ok(file) => {
+                            crate::diag::push(&app, format!("剪贴板: 收图片 {w}×{h} 来自 {src}"));
+                            let _ = app.emit_to(
+                                "main",
+                                CLIP_EVENT,
+                                ClipPayload {
+                                    content_kind: "image".into(),
+                                    text: format!("图片 {w}×{h}"),
+                                    image_file: Some(file),
+                                    image_w: Some(w),
+                                    image_h: Some(h),
+                                    app_name,
+                                    bundle_id,
+                                },
+                            );
+                        }
+                        Err(e) => {
+                            crate::diag::push(&app, format!("剪贴板: 图片保存失败 {e}"));
+                        }
+                    }
                 }
+                // 既无文本也无图片（文件拷贝等特殊类型）——留痕，别当黑箱
+                Err(_) => crate::diag::push(&app, "剪贴板: 变更无可读文本/图片，跳过"),
             }
         }
     });

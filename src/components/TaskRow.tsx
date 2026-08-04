@@ -541,7 +541,17 @@ function DuePopover({
   /** 详情展开态常显（收起态无到期时仅悬停出现）。 */
   alwaysVisible?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpenRaw] = useState(false);
+  // 关闭后按钮多驻留一拍：Radix 退出动画（100ms）期间锚点若被 hidden
+  // 收走，弹层会失锚闪到屏幕角落
+  const [lingering, setLingering] = useState(false);
+  const setOpen = (v: boolean) => {
+    setOpenRaw(v);
+    if (!v) {
+      setLingering(true);
+      window.setTimeout(() => setLingering(false), 180);
+    }
+  };
   const [dateDraft, setDateDraft] = useState("");
   const [timeDraft, setTimeDraft] = useState("20:00");
 
@@ -588,7 +598,9 @@ function DuePopover({
             title="设置到期提醒"
             className={cn(
               "shrink-0 items-center gap-0.5 rounded-md px-1 py-0.5 text-[10px] text-muted-foreground/70 hover:text-foreground",
-              alwaysVisible ? "flex" : "hidden group-hover:flex"
+              // 弹层开着（含退出动画驻留期）必须留在布局里：hidden 会让
+              // Radix 锚点塌掉、弹层跳位
+              alwaysVisible || open || lingering ? "flex" : "hidden group-hover:flex"
             )}
           >
             <AlarmClock className="size-3" /> 到期

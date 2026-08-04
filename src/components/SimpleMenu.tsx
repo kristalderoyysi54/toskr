@@ -13,12 +13,16 @@ export function SimpleMenu({
   align = "end",
   side = "bottom",
   menuClassName,
+  className,
 }: {
   trigger: (props: { open: boolean; toggle: () => void }) => React.ReactNode;
   children: (close: () => void) => React.ReactNode;
   align?: "start" | "end";
   side?: "bottom" | "top";
   menuClassName?: string;
+  /** 根容器附加类。默认 block 会让触发按钮参与基线对齐产生亚像素错位，
+   *  与相邻按钮拼「分裂按钮」时传 "flex" 消除。 */
+  className?: string;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -43,7 +47,7 @@ export function SimpleMenu({
   }, [open]);
 
   return (
-    <div ref={rootRef} className="relative">
+    <div ref={rootRef} className={cn("relative", className)}>
       {trigger({ open, toggle: () => setOpen((v) => !v) })}
       {open && (
         <div
