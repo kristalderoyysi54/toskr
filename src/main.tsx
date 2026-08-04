@@ -57,6 +57,17 @@ const view =
     <App />
   );
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>{view}</React.StrictMode>
-);
+// 设计样张（dev-only，编译期死代码消除）：浏览器开 /?styletile=1 查看
+if (import.meta.env.DEV && new URLSearchParams(location.search).has("styletile")) {
+  void import("./dev/StyleTile").then(({ default: StyleTile }) => {
+    ReactDOM.createRoot(document.getElementById("root")!).render(
+      <React.StrictMode>
+        <StyleTile />
+      </React.StrictMode>
+    );
+  });
+} else {
+  ReactDOM.createRoot(document.getElementById("root")!).render(
+    <React.StrictMode>{view}</React.StrictMode>
+  );
+}
