@@ -33,6 +33,9 @@ export function applySettingsPatch(patch: Partial<Settings>) {
   if ("companionGap" in patch) {
     void api.setCompanionGap(s.companionGap);
   }
+  if ("rightSidebar" in patch) {
+    void api.setRightSidebar(s.rightSidebar);
+  }
   if ("panelFreeX" in patch || "panelFreeY" in patch) {
     void api.setPanelFreePos(s.panelFreeX, s.panelFreeY);
   }

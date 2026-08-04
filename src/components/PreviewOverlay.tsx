@@ -8,7 +8,7 @@ import { deleteNotesWithUndo, enrichLinkMeta, sendNotesToChat } from "@/lib/acti
 import { highlightCode, langLabel } from "@/lib/code";
 import { looksLikeMarkdown, renderMarkdown } from "@/lib/markdown";
 import { useAppIcon } from "@/lib/icons";
-import { useNoteImage } from "@/lib/media";
+import { useNoteImage, useNoteThumb } from "@/lib/media";
 import { api } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { noteImages, useNotesStore } from "@/store/notesStore";
@@ -267,7 +267,7 @@ export function PreviewOverlay() {
 
 /** 预览层里的附件图片（点击从该张起原尺寸预览，可 ←/→ 翻看全组）。 */
 function PreviewThumb({ files, index }: { files: string[]; index: number }) {
-  const url = useNoteImage(files[index]);
+  const url = useNoteThumb(files[index]);
   return (
     <div
       title="点击原尺寸预览"

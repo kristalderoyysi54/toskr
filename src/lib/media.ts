@@ -14,6 +14,34 @@ function fetchImage(name: string): Promise<string | null> {
   return hit;
 }
 
+/** 缩略图 data URL 内存缓存（卡面用小图，与全尺寸分开存）。 */
+const thumbCache = new Map<string, Promise<string | null>>();
+
+function fetchThumb(name: string): Promise<string | null> {
+  let hit = thumbCache.get(name);
+  if (!hit) {
+    hit = api.imageThumbUrl(name).catch(() => null);
+    thumbCache.set(name, hit);
+  }
+  return hit;
+}
+
+/** 卡面缩略图（≤320px，KB 级）：列表滚动/切页不再解码全尺寸大位图。 */
+export function useNoteThumb(name: string | undefined): string | null {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!name) return;
+    let alive = true;
+    fetchThumb(name).then((u) => {
+      if (alive) setUrl(u);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [name]);
+  return name ? url : null;
+}
+
 /** 按附件名取图片 data URL（加载中/失败为 null）。 */
 export function useNoteImage(name: string | undefined): string | null {
   const [url, setUrl] = useState<string | null>(null);

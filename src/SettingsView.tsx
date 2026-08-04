@@ -6,6 +6,7 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import type { Update } from "@tauri-apps/plugin-updater";
 import {
   Activity,
+  AlarmClock,
   ArrowDown,
   ArrowUp,
   Check,
@@ -38,11 +39,13 @@ import {
   CONTEXT_MENU_REGISTRY,
   defaultSettings,
   normalizeContextMenu,
+  type DuePresetCfg,
   type PromptSnippet,
   type Settings,
   type ThemePref,
   type VibrancyMaterial,
 } from "@/store/notesStore";
+import { presetCfgLabel } from "@/lib/tasks";
 
 type SectionId =
   | "general"
@@ -51,6 +54,7 @@ type SectionId =
   | "companion"
   | "exclude"
   | "snippets"
+  | "due"
   | "data"
   | "diagnostics"
   | "about";
@@ -62,6 +66,7 @@ const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode }[] = [
   { id: "companion", label: "伴随停靠", icon: <Magnet className="size-4" /> },
   { id: "exclude", label: "捕获排除", icon: <Shield className="size-4" /> },
   { id: "snippets", label: "Prompt 模板", icon: <Sparkles className="size-4" /> },
+  { id: "due", label: "到期提醒", icon: <AlarmClock className="size-4" /> },
   { id: "data", label: "数据", icon: <Database className="size-4" /> },
   { id: "diagnostics", label: "诊断", icon: <Activity className="size-4" /> },
   { id: "about", label: "关于", icon: <Info className="size-4" /> },
@@ -112,6 +117,7 @@ export default function SettingsView() {
         {section === "companion" && <CompanionSection settings={settings} patch={patch} />}
         {section === "exclude" && <ExcludeSection settings={settings} patch={patch} />}
         {section === "snippets" && <SnippetsSection settings={settings} patch={patch} />}
+        {section === "due" && <DuePresetsSection settings={settings} patch={patch} />}
         {section === "data" && <DataSection />}
         {section === "diagnostics" && <DiagnosticsSection />}
         {section === "about" && <AboutSection settings={settings} patch={patch} />}
@@ -1082,6 +1088,201 @@ function ExcludeSection({ settings, patch }: SP) {
         onChange={(apps) => patch({ excludedApps: apps })}
         addLabel="把当前应用加入排除列表"
       />
+    </div>
+  );
+}
+
+const WEEKDAY_OPTIONS = [
+  { value: "1", label: "周一" },
+  { value: "2", label: "周二" },
+  { value: "3", label: "周三" },
+  { value: "4", label: "周四" },
+  { value: "5", label: "周五" },
+  { value: "6", label: "周六" },
+  { value: "0", label: "周日" },
+];
+
+/** 到期快捷档编辑：任务「到期」弹层里的快捷选项，可增删改。 */
+function DuePresetsSection({ settings, patch }: SP) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<DuePresetCfg | null>(null);
+  const [unit, setUnit] = useState<"m" | "h">("m");
+
+  const startEdit = (p: DuePresetCfg) => {
+    setEditingId(p.id);
+    setDraft({ ...p });
+    setUnit(p.kind === "relative" && p.minutes % 60 === 0 && p.minutes >= 60 ? "h" : "m");
+  };
+  const save = () => {
+    if (!editingId || !draft) return;
+    patch({
+      duePresets: settings.duePresets.map((p) => (p.id === editingId ? draft : p)),
+    });
+    setEditingId(null);
+    setDraft(null);
+  };
+  const remove = (id: string) => {
+    if (editingId === id) {
+      setEditingId(null);
+      setDraft(null);
+    }
+    patch({ duePresets: settings.duePresets.filter((p) => p.id !== id) });
+  };
+  const add = () => {
+    const p: DuePresetCfg = { id: crypto.randomUUID(), kind: "relative", minutes: 60 };
+    patch({ duePresets: [...settings.duePresets, p] });
+    startEdit(p);
+  };
+  const switchKind = (kind: "relative" | "today" | "tomorrow" | "weekday") => {
+    if (!draft) return;
+    if (kind === "relative") {
+      setDraft({ id: draft.id, kind, minutes: 60 });
+      setUnit("h");
+    } else if (kind === "weekday") {
+      setDraft({ id: draft.id, kind, weekday: 1, hour: 9, minute: 0 });
+    } else {
+      setDraft({ id: draft.id, kind, hour: kind === "today" ? 20 : 9, minute: 0 });
+    }
+  };
+  const hmStr = (h: number, m: number) =>
+    `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  const patchTime = (v: string) => {
+    if (!draft || draft.kind === "relative") return;
+    const [h, m] = v.split(":").map((n) => Number(n));
+    if (Number.isFinite(h) && Number.isFinite(m)) {
+      setDraft({ ...draft, hour: h, minute: m });
+    }
+  };
+
+  return (
+    <div>
+      <SectionTitle>到期提醒快捷档</SectionTitle>
+      <p className="mb-3 text-[12px] text-muted-foreground">
+        任务「到期」弹层里的快捷选项（按此处顺序排列）。相对档从点选时刻起算；
+        「今天」定点即使已过也不隐式跳到明天；周几档为「下一个」该周几（不含当天）。
+      </p>
+      <div className="mb-3 divide-y divide-border/50 rounded-xl border border-border/60 bg-card">
+        {settings.duePresets.map((p) =>
+          editingId === p.id && draft ? (
+            <div key={p.id} className="flex flex-col gap-2 px-3.5 py-2.5">
+              <Segmented<"relative" | "today" | "tomorrow" | "weekday">
+                value={draft.kind}
+                onChange={switchKind}
+                options={[
+                  { value: "relative", label: "多久后" },
+                  { value: "today", label: "今天" },
+                  { value: "tomorrow", label: "明天" },
+                  { value: "weekday", label: "下个周几" },
+                ]}
+              />
+              <div className="flex items-center gap-2">
+                {draft.kind === "relative" ? (
+                  <>
+                    <input
+                      type="number"
+                      min={1}
+                      step={unit === "h" ? 0.5 : 1}
+                      value={unit === "h" ? draft.minutes / 60 : draft.minutes}
+                      onChange={(e) => {
+                        const n = Number(e.target.value);
+                        if (!Number.isFinite(n) || n <= 0) return;
+                        setDraft({
+                          ...draft,
+                          minutes: Math.max(1, Math.round(unit === "h" ? n * 60 : n)),
+                        });
+                      }}
+                      className="h-8 w-20 rounded-lg border border-border bg-transparent px-2 text-[12px] tabular-nums outline-none focus:border-primary/50"
+                    />
+                    <Segmented<"m" | "h">
+                      value={unit}
+                      onChange={setUnit}
+                      options={[
+                        { value: "m", label: "分钟" },
+                        { value: "h", label: "小时" },
+                      ]}
+                    />
+                  </>
+                ) : (
+                  <>
+                    {draft.kind === "weekday" && (
+                      <select
+                        value={String(draft.weekday)}
+                        onChange={(e) =>
+                          setDraft({ ...draft, weekday: Number(e.target.value) })
+                        }
+                        className="h-8 rounded-lg border border-border bg-transparent px-2 text-[12px] outline-none focus:border-primary/50"
+                      >
+                        {WEEKDAY_OPTIONS.map((w) => (
+                          <option key={w.value} value={w.value}>
+                            {w.label}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    <input
+                      type="time"
+                      value={hmStr(draft.hour, draft.minute)}
+                      onChange={(e) => patchTime(e.target.value)}
+                      className="h-8 rounded-lg border border-border bg-transparent px-2 text-[12px] tabular-nums outline-none focus:border-primary/50"
+                    />
+                  </>
+                )}
+                <span className="text-[12px] text-muted-foreground">
+                  → {presetCfgLabel(draft)}
+                </span>
+                <div className="ml-auto flex items-center gap-1">
+                  <button
+                    onClick={save}
+                    className="rounded-lg bg-primary px-2.5 py-1 text-[12px] text-primary-foreground hover:opacity-90"
+                  >
+                    保存
+                  </button>
+                  <button
+                    onClick={() => {
+                      setEditingId(null);
+                      setDraft(null);
+                    }}
+                    className="rounded-lg px-2 py-1 text-[12px] text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div key={p.id} className="flex items-center gap-2 px-3.5 py-2">
+              <span className="text-[13px]">{presetCfgLabel(p)}</span>
+              <div className="ml-auto flex items-center gap-0.5">
+                <button
+                  aria-label="编辑"
+                  onClick={() => startEdit(p)}
+                  className="rounded-md p-1 text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
+                >
+                  <Pencil className="size-3.5" />
+                </button>
+                <button
+                  aria-label="删除"
+                  onClick={() => remove(p.id)}
+                  className="rounded-md p-1 text-muted-foreground hover:bg-black/5 hover:text-red-500 dark:hover:bg-white/10"
+                >
+                  <X className="size-3.5" />
+                </button>
+              </div>
+            </div>
+          )
+        )}
+        {settings.duePresets.length === 0 && (
+          <p className="px-3.5 py-3 text-[12px] text-muted-foreground">
+            没有快捷档，弹层里只剩自定义日期时间。
+          </p>
+        )}
+      </div>
+      <button
+        onClick={add}
+        className="flex items-center gap-1 rounded-lg border border-border/60 px-2.5 py-1.5 text-[12px] text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
+      >
+        <Plus className="size-3.5" /> 添加档位
+      </button>
     </div>
   );
 }

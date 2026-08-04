@@ -6,7 +6,8 @@ import {
   compareTasks,
   dueBadgeLabel,
   dueTasksToRemind,
-  presetDue,
+  presetCfgDue,
+  presetCfgLabel,
   sortTasks,
 } from "./tasks";
 
@@ -135,30 +136,54 @@ describe("dueTasksToRemind", () => {
   });
 });
 
-describe("presetDue（NOW = 2026-08-05 周三 12:00）", () => {
-  const local = (y: number, mo: number, day: number, h: number) =>
-    new Date(y, mo, day, h, 0, 0, 0).getTime();
+describe("presetCfgDue（NOW = 2026-08-05 周三 12:00）", () => {
+  const local = (y: number, mo: number, day: number, h: number, min = 0) =>
+    new Date(y, mo, day, h, min, 0, 0).getTime();
 
-  it("今晚 20:00；过了 20 点仍是今天（不隐式跳明天）", () => {
-    expect(presetDue("tonight", NOW)).toBe(local(2026, 7, 5, 20));
+  it("相对档：30 分钟 / 1 / 3 / 6 小时后", () => {
+    expect(presetCfgDue({ id: "a", kind: "relative", minutes: 30 }, NOW)).toBe(
+      NOW + 30 * 60_000
+    );
+    expect(presetCfgDue({ id: "b", kind: "relative", minutes: 60 }, NOW)).toBe(
+      NOW + 3_600_000
+    );
+    expect(presetCfgDue({ id: "c", kind: "relative", minutes: 180 }, NOW)).toBe(
+      NOW + 3 * 3_600_000
+    );
+    expect(presetCfgDue({ id: "d", kind: "relative", minutes: 360 }, NOW)).toBe(
+      NOW + 6 * 3_600_000
+    );
+  });
+
+  it("今天定点：已过也不隐式跳明天", () => {
+    const cfg = { id: "t", kind: "today", hour: 20, minute: 0 } as const;
+    expect(presetCfgDue(cfg, NOW)).toBe(local(2026, 7, 5, 20));
     const lateNow = new Date(2026, 7, 5, 22, 0).getTime();
-    expect(presetDue("tonight", lateNow)).toBe(local(2026, 7, 5, 20));
+    expect(presetCfgDue(cfg, lateNow)).toBe(local(2026, 7, 5, 20));
   });
 
-  it("明早 9:00", () => {
-    expect(presetDue("tomorrowMorning", NOW)).toBe(local(2026, 7, 6, 9));
+  it("明天定点带分钟", () => {
+    expect(
+      presetCfgDue({ id: "m", kind: "tomorrow", hour: 9, minute: 30 }, NOW)
+    ).toBe(local(2026, 7, 6, 9, 30));
   });
 
-  it("相对档位：30 分钟 / 1 小时 / 3 小时后", () => {
-    expect(presetDue("in30m", NOW)).toBe(NOW + 30 * 60_000);
-    expect(presetDue("in1h", NOW)).toBe(NOW + 3_600_000);
-    expect(presetDue("in3h", NOW)).toBe(NOW + 3 * 3_600_000);
-  });
-
-  it("下周一严格排除当天：周一时是 7 天后", () => {
-    expect(presetDue("nextMonday", NOW)).toBe(local(2026, 7, 10, 9)); // 周三→下周一
+  it("周几档「下个」语义排除当天：周一时是 7 天后", () => {
+    const cfg = { id: "w", kind: "weekday", weekday: 1, hour: 9, minute: 0 } as const;
+    expect(presetCfgDue(cfg, NOW)).toBe(local(2026, 7, 10, 9)); // 周三→下周一
     const mon = new Date(2026, 7, 10, 8, 0).getTime();
-    expect(presetDue("nextMonday", mon)).toBe(local(2026, 7, 17, 9));
+    expect(presetCfgDue(cfg, mon)).toBe(local(2026, 7, 17, 9));
+  });
+
+  it("presetCfgLabel：分钟/整小时/定点/周几", () => {
+    expect(presetCfgLabel({ id: "a", kind: "relative", minutes: 45 })).toBe("45 分钟后");
+    expect(presetCfgLabel({ id: "b", kind: "relative", minutes: 360 })).toBe("6 小时后");
+    expect(presetCfgLabel({ id: "c", kind: "today", hour: 20, minute: 0 })).toBe(
+      "今天 20:00"
+    );
+    expect(
+      presetCfgLabel({ id: "d", kind: "weekday", weekday: 6, hour: 9, minute: 30 })
+    ).toBe("下个周六 9:30");
   });
 });
 

@@ -453,6 +453,20 @@ pub fn set_sound(app: AppHandle, enabled: bool) {
         .store(enabled, Ordering::Relaxed);
 }
 
+/// 靠右边栏模式开关（与伴随磁吸互斥）；面板可见时立即应用新布局。
+#[tauri::command]
+pub fn set_right_sidebar(app: AppHandle, enabled: bool) {
+    app.state::<AppState>()
+        .right_sidebar
+        .store(enabled, Ordering::SeqCst);
+    crate::diag::push(&app, format!("靠右边栏: {}", if enabled { "开" } else { "关" }));
+    if let Some(w) = app.get_webview_window("main") {
+        if w.is_visible().unwrap_or(false) {
+            crate::window::request_show_panel(&app);
+        }
+    }
+}
+
 /// 立即隐藏 HUD（点击气泡打开面板时调用）。
 #[tauri::command]
 pub fn hide_hud(app: AppHandle) {
@@ -611,10 +625,17 @@ pub fn set_panel_free_pos(app: AppHandle, x: Option<f64>, y: Option<f64>) {
 /// 打开独立设置窗口。
 #[tauri::command]
 pub fn open_settings_window(app: AppHandle) {
-    if let Some(window) = app.get_webview_window("settings") {
-        let _ = window.show();
-        let _ = window.set_focus();
-    }
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(window) = handle.get_webview_window("settings") {
+            // 从隐藏态打开时定位到「当前使用屏幕」居中；已可见则不动（尊重手动摆放）
+            if !window.is_visible().unwrap_or(false) {
+                crate::window::center_on_cursor_screen(&handle, &window);
+            }
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    });
 }
 
 /// 重启应用（输入监控授权变更后需要重启进程才能生效）。
@@ -667,6 +688,17 @@ pub fn write_data_file(app: AppHandle, content: String) -> Result<(), String> {
 #[tauri::command]
 pub fn image_data_url(app: AppHandle, name: String) -> Option<String> {
     crate::storage::image_data_url(&app, &name)
+}
+
+/// 卡片缩略图 data URL（首次生成落盘缓存；解码走阻塞线程池不占 UI）。
+#[tauri::command]
+pub async fn image_thumb_url(app: AppHandle, name: String) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::storage::image_thumb_data_url(&app, &name)
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// 删除图片附件（卡片删除时清理）。

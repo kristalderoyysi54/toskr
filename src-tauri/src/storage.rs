@@ -159,6 +159,35 @@ pub fn image_data_url(app: &AppHandle, name: &str) -> Option<String> {
     Some(format!("data:image/png;base64,{b64}"))
 }
 
+/// 卡片缩略图 data URL：按需生成并落盘缓存（media/thumbs/<name>，最长边 320px）。
+/// 原图按像素哈希命名不可变 → 缩略图永不失效。全尺寸解码只发生一次；
+/// 之后前端拿到的是 KB 级小图，卡片列表滚动/切页不再反复解码大位图。
+pub fn image_thumb_data_url(app: &AppHandle, name: &str) -> Option<String> {
+    use base64::Engine;
+    if name.contains('/') || name.contains("..") {
+        return None;
+    }
+    let media = data_dir(app).join(MEDIA_DIR);
+    let tdir = media.join("thumbs");
+    let tpath = tdir.join(name);
+    if !tpath.exists() {
+        let src = media.join(name);
+        let img = image::open(&src).ok()?;
+        if img.width() <= 320 && img.height() <= 320 {
+            // 小图直接用原图，不再多存一份
+            let bytes = fs::read(&src).ok()?;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+            return Some(format!("data:image/png;base64,{b64}"));
+        }
+        fs::create_dir_all(&tdir).ok()?;
+        let thumb = img.thumbnail(320, 320);
+        thumb.save_with_format(&tpath, image::ImageFormat::Png).ok()?;
+    }
+    let bytes = fs::read(&tpath).ok()?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Some(format!("data:image/png;base64,{b64}"))
+}
+
 /// 读取图片附件原始字节（OCR 用；不存在返回 None）。
 pub fn read_image_bytes(app: &AppHandle, name: &str) -> Option<Vec<u8>> {
     if name.contains('/') || name.contains("..") {
@@ -187,10 +216,12 @@ pub fn image_path(app: &AppHandle, name: &str) -> Option<std::path::PathBuf> {
     p.exists().then_some(p)
 }
 
-/// 删除图片附件（卡片删除时清理）。
+/// 删除图片附件（卡片删除时清理；缩略图缓存一并清）。
 pub fn remove_image(app: &AppHandle, name: &str) {
     if name.contains('/') || name.contains("..") {
         return;
     }
-    let _ = fs::remove_file(data_dir(app).join(MEDIA_DIR).join(name));
+    let media = data_dir(app).join(MEDIA_DIR);
+    let _ = fs::remove_file(media.join(name));
+    let _ = fs::remove_file(media.join("thumbs").join(name));
 }

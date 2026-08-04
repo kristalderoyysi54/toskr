@@ -123,6 +123,22 @@ export interface PromptSnippet {
   text: string;
 }
 
+/** 到期快捷档配置：相对分钟 / 今天定点 / 明天定点 / 下个周几定点。 */
+export type DuePresetCfg =
+  | { id: string; kind: "relative"; minutes: number }
+  | { id: string; kind: "today" | "tomorrow"; hour: number; minute: number }
+  | { id: string; kind: "weekday"; weekday: number; hour: number; minute: number };
+
+export const DEFAULT_DUE_PRESETS: DuePresetCfg[] = [
+  { id: "rel-30m", kind: "relative", minutes: 30 },
+  { id: "rel-1h", kind: "relative", minutes: 60 },
+  { id: "rel-3h", kind: "relative", minutes: 180 },
+  { id: "rel-6h", kind: "relative", minutes: 360 },
+  { id: "today-20", kind: "today", hour: 20, minute: 0 },
+  { id: "tomorrow-9", kind: "tomorrow", hour: 9, minute: 0 },
+  { id: "next-mon-9", kind: "weekday", weekday: 1, hour: 9, minute: 0 },
+];
+
 export const DEFAULT_PROMPT_SNIPPETS: PromptSnippet[] = [
   {
     id: "review",
@@ -207,6 +223,10 @@ export interface Settings {
   /** 独立模式下手动拖动后的位置（null=默认屏幕右缘）。 */
   panelFreeX: number | null;
   panelFreeY: number | null;
+  /** 靠右边栏模式：贴屏幕右缘全高（保留停靠间距），与伴随磁吸互斥。 */
+  rightSidebar: boolean;
+  /** 到期快捷档（可增删改）：相对分钟 / 今天 / 明天 / 下个周几。 */
+  duePresets: DuePresetCfg[];
   /** 捕获排除列表：这些应用内双击只开关面板、绝不捕获（密码管理器等）。 */
   excludedApps: string[];
   /** Prompt 前缀模板：发送时可选拼在内容前（Prompt 组装台）。 */
@@ -335,6 +355,8 @@ export const defaultSettings = (): Settings => ({
   companionGap: 8,
   panelFreeX: null,
   panelFreeY: null,
+  rightSidebar: false,
+  duePresets: DEFAULT_DUE_PRESETS.map((p) => ({ ...p })),
   excludedApps: [...DEFAULT_EXCLUDED_APPS],
   promptSnippets: [...DEFAULT_PROMPT_SNIPPETS],
   dataDir: "",
