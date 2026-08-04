@@ -604,6 +604,20 @@ describe("任务：闪念与分组", () => {
     expect(useNotesStore.getState().tasks[0].sectionId).toBeUndefined();
   });
 
+  it("reorderTasks 在数组内移动（分组内拖拽排序，同 reorderNotes 心智）", () => {
+    const s = useNotesStore.getState();
+    s.addTask("一");
+    s.addTask("二");
+    s.addTask("三");
+    const [a, , c] = useNotesStore.getState().tasks; // 置顶插入：[三, 二, 一]
+    useNotesStore.getState().reorderTasks(a.id, c.id);
+    expect(useNotesStore.getState().tasks.map((t) => t.text)).toEqual([
+      "二",
+      "一",
+      "三",
+    ]);
+  });
+
   it("deleteTaskSection：组内任务归收集箱、收集箱不可删、可撤销", () => {
     useNotesStore.getState().addTaskSection("临时");
     const g = useNotesStore.getState().taskSections[1];

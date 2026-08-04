@@ -41,7 +41,17 @@ export async function downloadAndInstall(
     if (restart) await relaunch();
     return true;
   } catch (e) {
-    tip("warn", `更新失败：${e}`);
+    const msg = String(e);
+    // App Translocation：浏览器下载的包未经 Finder 移动就运行时，系统把它
+    // 挂到只读路径，更新器无法替换自身 bundle（os error 30）。给可行动的指引。
+    if (msg.includes("Read-only file system") || msg.includes("os error 30")) {
+      tip(
+        "warn",
+        "更新失败：应用被系统隔离为只读——请退出后把 Toskr 拖入「应用程序」文件夹再重新打开，即可正常更新"
+      );
+    } else {
+      tip("warn", `更新失败：${msg}`);
+    }
     return false;
   }
 }

@@ -6,6 +6,7 @@ import {
   compareTasks,
   dueBadgeLabel,
   dueTasksToRemind,
+  isSmartBandTask,
   presetCfgDue,
   presetCfgLabel,
   sortTasks,
@@ -91,15 +92,25 @@ describe("bucketTasksForDisplay", () => {
     expect(b.groups[0].tasks.map((t) => t.id)).toEqual([t1.id]);
   });
 
-  it("按分组归位；孤儿分组兜底收集箱；组内按状态优先排序", () => {
+  it("按分组归位；孤儿分组兜底收集箱；组内保持数组顺序（手动排序，不再按状态/优先级自动排）", () => {
     const secs = [...SECTIONS, { id: "g1", name: "工作" }];
     const inG1 = task({ sectionId: "g1" });
     const orphan = task({ sectionId: "ghost" });
+    // doingG1 状态优先级更高，但手动排序下顺位仍由数组位置决定（排在 inG1 之后）
     const doingG1 = task({ sectionId: "g1", status: "doing" });
     const b = bucketTasksForDisplay([inG1, orphan, doingG1], secs, NOW);
     expect(b.groups.map((g) => g.section.id)).toEqual([TASK_INBOX_ID, "g1"]);
     expect(b.groups[0].tasks.map((t) => t.id)).toEqual([orphan.id]);
-    expect(b.groups[1].tasks.map((t) => t.id)).toEqual([doingG1.id, inG1.id]);
+    expect(b.groups[1].tasks.map((t) => t.id)).toEqual([inG1.id, doingG1.id]);
+  });
+
+  it("已到期按到期时间升序排列（不再走状态/优先级复合排序）", () => {
+    const soon = task({ dueAt: NOW - 1000, priority: "low" });
+    // later 优先级更高但更晚到期：手动/优先级排序均不再影响已到期区顺序
+    const later = task({ dueAt: NOW - 500, priority: "high" });
+    const earliest = task({ dueAt: NOW - 5000, priority: "none" });
+    const b = bucketTasksForDisplay([soon, later, earliest], SECTIONS, NOW);
+    expect(b.overdue.map((t) => t.id)).toEqual([earliest.id, soon.id, later.id]);
   });
 
   it("done 即便逾期/闪念也只进 done 桶，按创建时间倒序", () => {
@@ -118,6 +129,16 @@ describe("bucketTasksForDisplay", () => {
     expect(b.done).toEqual([]);
     expect(b.groups).toHaveLength(1);
     expect(b.groups[0].tasks).toEqual([]);
+  });
+});
+
+describe("isSmartBandTask", () => {
+  it("已完成 / 已到期 / 闪念 → true；普通未到期任务 → false", () => {
+    expect(isSmartBandTask(task({ status: "done" }), NOW)).toBe(true);
+    expect(isSmartBandTask(task({ dueAt: NOW - 1 }), NOW)).toBe(true);
+    expect(isSmartBandTask(task({ kind: "spark" }), NOW)).toBe(true);
+    expect(isSmartBandTask(task({}), NOW)).toBe(false);
+    expect(isSmartBandTask(task({ dueAt: NOW + 60_000 }), NOW)).toBe(false);
   });
 });
 
