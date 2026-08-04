@@ -121,8 +121,7 @@ function HudMock({
   const dot =
     kind === "added" ? "bg-emerald-500/90" : kind === "sent" ? "bg-sky-500/90" : "bg-amber-500/90";
   return (
-    {/* token-exception: rounded-[14px] 模拟 HUD 窗口的 Rust 原生 vibrancy 圆角（apply_vibrancy radius=14），非样式体系值 */}
-    <div className="relative flex h-14 w-60 items-center gap-2.5 rounded-[14px] bg-zinc-800/85 px-3 backdrop-blur-xl">
+    <div className="relative flex h-14 w-60 items-center gap-2.5 rounded-[14px] bg-zinc-800/85 px-3 backdrop-blur-xl">{/* token-exception: rounded-[14px] 模拟 HUD 窗口的 Rust 原生 vibrancy 圆角（apply_vibrancy radius=14），非样式体系值 */}
       {/* rim-light 装饰层：对齐原生 vibrancy 圆角，仅内描边（外影会被窗口裁剪，省略） */}
       <span className="pointer-events-none absolute inset-0 rounded-[14px] shadow-[inset_0_1px_0_oklch(1_0_0/0.16)]" />
       <span className={`flex size-5 shrink-0 items-center justify-center rounded-full ${dot}`}>
