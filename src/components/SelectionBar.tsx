@@ -64,8 +64,8 @@ export function SelectionBar() {
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
-                size="sm"
-                className="h-6 gap-1 rounded-l-lg rounded-r-none px-2 text-[11px]"
+                size="xs"
+                className="rounded-l-lg rounded-r-none"
                 onClick={() => sendCheckedToChat()}
               >
                 <Send className="size-3" /> 发送到对话
@@ -85,10 +85,10 @@ export function SelectionBar() {
             className="flex"
             trigger={({ toggle }) => (
               <Button
-                size="sm"
+                size="xs"
                 aria-label="带 Prompt 模板发送"
                 onClick={toggle}
-                className="h-6 rounded-l-none rounded-r-lg border-l border-primary-foreground/20 px-1"
+                className="rounded-l-none rounded-r-lg border-l border-primary-foreground/20 px-1"
               >
                 <ChevronDown className="size-3" />
               </Button>

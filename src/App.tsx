@@ -52,6 +52,7 @@ import {
 } from "@/lib/actions";
 import { bucketTasksForDisplay, dueTasksToRemind } from "@/lib/tasks";
 import { previewOf } from "@/lib/format";
+import { SHORTCUTS } from "@/lib/shortcuts";
 import { runPendingUndo, setPendingUndo, tip } from "@/lib/tip";
 import { silentUpdateFlow } from "@/lib/updater";
 import { matchNote } from "@/lib/search";
@@ -72,6 +73,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   CLIPBOARD_ID,
+  noteImages,
   PANEL_WIDTH_MAX,
   PANEL_WIDTH_MIN,
   useNotesStore,
@@ -766,7 +768,7 @@ export default function App() {
           void api.openUrl(focusedNote.url);
         } else if (focusedNote?.kind === "image" && focusedNote.imageFile) {
           // 图片卡 Space = 系统 Quick Look 原尺寸（与 macOS 空格预览心智一致）
-          void api.quickLook(focusedNote.imageFile);
+          void api.quickLook(noteImages(focusedNote));
         } else {
           ui.openPreview(ui.focusedId);
         }
@@ -1254,12 +1256,10 @@ export default function App() {
                             <NoteCard key={n.id} note={n} query={q} />
                           ))}
                           {clipNotes.length > clipShown && (
-                            <button
-                              onClick={() => setClipShown((v) => v + 200)}
-                              className="mx-auto mb-1 rounded-md px-3 py-1 text-[11px] text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
-                            >
-                              加载更多（还有 {clipNotes.length - clipShown} 条）
-                            </button>
+                            <ClipLoadMore
+                              remaining={clipNotes.length - clipShown}
+                              onLoad={() => setClipShown((v) => v + 200)}
+                            />
                           )}
                         </div>
                       </SortableContext>
@@ -1325,6 +1325,41 @@ export default function App() {
   );
 }
 
+/** 剪贴板分页哨兵：滚到底附近自动加载下一页（本地数据即时，无 loading 态）。 */
+function ClipLoadMore({
+  remaining,
+  onLoad,
+}: {
+  remaining: number;
+  onLoad: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const onLoadRef = useRef(onLoad);
+  onLoadRef.current = onLoad;
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // 提前 120px 预载，滚动无停顿；IntersectionObserver 的可见性计算
+    // 已含祖先 overflow 裁剪，root 用默认视口即可
+    const ob = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) onLoadRef.current();
+      },
+      { rootMargin: "120px" }
+    );
+    ob.observe(el);
+    return () => ob.disconnect();
+  }, []);
+  return (
+    <div
+      ref={ref}
+      className="py-1 text-center text-[11px] text-muted-foreground/50"
+    >
+      还有 {remaining} 条…
+    </div>
+  );
+}
+
 function OnboardingCard() {
   const onboarding = useNotesStore((s) => s.settings.onboarding);
   const axOk = useUIStore((s) => s.permissionAx);
@@ -1359,22 +1394,6 @@ function OnboardingCard() {
     </div>
   );
 }
-
-const SHORTCUTS: [string, string][] = [
-  ["⇧⇧", "捕获选中文本 / 呼出面板"],
-  ["⌘← →", "切换顶部页签（⌃Tab 循环）"],
-  ["↑ ↓", "移动焦点卡片"],
-  ["Space", "全文预览（预览中 ↑↓ 切换）"],
-  ["Enter", "编辑（预览内 ⌘⏎ 保存）"],
-  ["x", "勾选 / 取消勾选"],
-  ["⌘A", "全选可见卡片"],
-  ["⌘⏎", "发送勾选到对话"],
-  ["⌘1-9", "快发第 N 张卡（按住 ⌘ 看角标）"],
-  ["⌘C", "复制勾选为列表"],
-  ["⌘⌫", "删除焦点卡片"],
-  ["⌘F", "搜索"],
-  ["Esc", "逐层退出（预览→搜索→选择→面板）"],
-];
 
 /** 长按 ⌥ 弹出的快捷键速查层。 */
 function ShortcutHelp() {

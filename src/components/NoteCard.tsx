@@ -59,6 +59,28 @@ import {
 } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
 
+/** 双击发送的第一击会塌掉多选：留档点击前的集合供 onDoubleClick 找回。 */
+let lastMultiSelection: { ids: string[]; at: number } | null = null;
+
+/** 组合卡并排缩略图（独立组件实例规避可变数量 hook；overlay 显示「+N」）。 */
+function CardThumb({ file, overlay }: { file: string; overlay?: string }) {
+  const url = useNoteImage(file);
+  return (
+    <div className="relative flex h-full min-w-0 flex-1 items-center justify-center overflow-hidden rounded bg-black/[0.04] dark:bg-white/[0.06]">
+      {url ? (
+        <img src={url} alt="" className="h-full w-full object-cover" />
+      ) : (
+        <span className="text-[10px] text-muted-foreground/60">…</span>
+      )}
+      {overlay && (
+        <span className="absolute inset-0 flex items-center justify-center bg-black/45 text-[13px] font-medium text-white">
+          {overlay}
+        </span>
+      )}
+    </div>
+  );
+}
+
 /**
  * 固定尺寸卡片瓷砖（Paste 风格）：统一高度、3 行截断展示；
  * 双击 = 直接发送到对话；完整内容与编辑通过预览层（Space / 放大按钮）。
@@ -99,6 +121,7 @@ export const NoteCard = memo(function NoteCard({
   const isComposite = !isImage && images.length > 0;
   const link = isLink ? linkParts(note.url!) : null;
   const imageUrl = useNoteImage(isImage ? note.imageFile : undefined);
+  const cardImages = isImage ? noteImages(note) : [];
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: note.id, disabled: note.done });
@@ -118,7 +141,7 @@ export const NoteCard = memo(function NoteCard({
     }
     // 图片卡「查看明细」= 系统 Quick Look 原尺寸预览（窄面板放不下大图）
     if (isImage && !editing && note.imageFile) {
-      void api.quickLook(note.imageFile);
+      void api.quickLook(noteImages(note));
       return;
     }
     useUIStore.getState().openPreview(note.id, editing);
@@ -395,6 +418,11 @@ export const NoteCard = memo(function NoteCard({
             ui.setFocusedId(note.id);
             ui.setAnchorId(note.id);
             const checkedNow = useNotesStore.getState().checkedIds;
+            // 双击发送前的第一击会把多选塌成单选：先留档，供 onDoubleClick
+            // 找回「点击前的多选集合」整组发送
+            if (checkedNow.length >= 2 && checkedNow.includes(note.id)) {
+              lastMultiSelection = { ids: checkedNow, at: Date.now() };
+            }
             if (e.metaKey) {
               // ⌘+点击：累加/移出多选（Finder 式）
               toggleChecked(note.id);
@@ -406,7 +434,16 @@ export const NoteCard = memo(function NoteCard({
               useNotesStore.getState().setChecked([note.id]);
             }
           }}
-          onDoubleClick={() => void sendNotesToChat([note.id])}
+          onDoubleClick={() => {
+            // 双击在多选集合内的卡：发送整个集合（第一击已塌选，从留档找回）
+            const stash = lastMultiSelection;
+            lastMultiSelection = null;
+            if (stash && Date.now() - stash.at < 600 && stash.ids.includes(note.id)) {
+              void sendNotesToChat(stash.ids);
+            } else {
+              void sendNotesToChat([note.id]);
+            }
+          }}
           className={cn(
             "group relative flex cursor-default select-none overflow-hidden rounded-lg border border-transparent",
             compact ? "h-9 items-center" : "h-[136px] flex-col px-2 pb-1.5 pt-1.5",
@@ -528,17 +565,34 @@ export const NoteCard = memo(function NoteCard({
                 </button>
               </div>
             ) : isImage ? (
-              <div className="flex h-full w-full items-center justify-center overflow-hidden rounded bg-black/[0.04] dark:bg-white/[0.06]">
-                {imageUrl ? (
-                  <img
-                    src={imageUrl}
-                    alt="捕获的图片"
-                    className="max-h-full max-w-full object-contain"
-                  />
-                ) : (
-                  <span className="text-[10px] text-muted-foreground/60">加载中…</span>
-                )}
-              </div>
+              cardImages.length > 1 ? (
+                // 组合卡：并排缩略最多 3 张，更多以「+N」标示
+                <div className="flex h-full w-full gap-1">
+                  {cardImages.slice(0, 3).map((f, i) => (
+                    <CardThumb
+                      key={f}
+                      file={f}
+                      overlay={
+                        i === 2 && cardImages.length > 3
+                          ? `+${cardImages.length - 3}`
+                          : undefined
+                      }
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="flex h-full w-full items-center justify-center overflow-hidden rounded bg-black/[0.04] dark:bg-white/[0.06]">
+                  {imageUrl ? (
+                    <img
+                      src={imageUrl}
+                      alt="捕获的图片"
+                      className="max-h-full max-w-full object-contain"
+                    />
+                  ) : (
+                    <span className="text-[10px] text-muted-foreground/60">加载中…</span>
+                  )}
+                </div>
+              )
             ) : (
               <p
                 className={cn(

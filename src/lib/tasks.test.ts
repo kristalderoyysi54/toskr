@@ -145,17 +145,14 @@ describe("presetDue（NOW = 2026-08-05 周三 12:00）", () => {
     expect(presetDue("tonight", lateNow)).toBe(local(2026, 7, 5, 20));
   });
 
-  it("明早 9:00 / 明晚 20:00", () => {
+  it("明早 9:00", () => {
     expect(presetDue("tomorrowMorning", NOW)).toBe(local(2026, 7, 6, 9));
-    expect(presetDue("tomorrowEvening", NOW)).toBe(local(2026, 7, 6, 20));
   });
 
-  it("周末=最近的周六 9:00；当天是周六即今天；周日跳下周六", () => {
-    expect(presetDue("weekend", NOW)).toBe(local(2026, 7, 8, 9)); // 周三→本周六
-    const sat = new Date(2026, 7, 8, 10, 0).getTime();
-    expect(presetDue("weekend", sat)).toBe(local(2026, 7, 8, 9));
-    const sun = new Date(2026, 7, 9, 10, 0).getTime();
-    expect(presetDue("weekend", sun)).toBe(local(2026, 7, 15, 9));
+  it("相对档位：30 分钟 / 1 小时 / 3 小时后", () => {
+    expect(presetDue("in30m", NOW)).toBe(NOW + 30 * 60_000);
+    expect(presetDue("in1h", NOW)).toBe(NOW + 3_600_000);
+    expect(presetDue("in3h", NOW)).toBe(NOW + 3 * 3_600_000);
   });
 
   it("下周一严格排除当天：周一时是 7 天后", () => {

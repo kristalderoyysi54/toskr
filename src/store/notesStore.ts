@@ -547,7 +547,24 @@ export const useNotesStore = create<NotesState>()(
           set({ sections: first ? [first, clip, ...rest] : [clip] });
         }
         // 数量不设上限：历史规模由「保留时长」滑杆与手动删除历史控制
-        get().addNote(text, { ...opts, sectionId: CLIPBOARD_ID });
+        const res = get().addNote(text, { ...opts, sectionId: CLIPBOARD_ID });
+        // 重复复制＝再次使用：把已有卡提升到历史最新（Paste 行为），
+        // 刷新时间与来源。否则重复内容毫无可见反馈，像「没收集到」
+        if (res.result === "duplicate" && res.id) {
+          const notes = get().notes;
+          const idx = notes.findIndex((n) => n.id === res.id);
+          if (idx >= 0) {
+            const bumped: Note = {
+              ...notes[idx],
+              createdAt: Date.now(),
+              sourceApp: opts?.sourceApp ?? notes[idx].sourceApp,
+              sourceBundle: opts?.sourceBundle ?? notes[idx].sourceBundle,
+            };
+            set({
+              notes: [bumped, ...notes.filter((n) => n.id !== res.id)],
+            });
+          }
+        }
         return [];
       },
 
@@ -730,6 +747,24 @@ export const useNotesStore = create<NotesState>()(
         const mergedText = textParts.length
           ? mergeTexts(textParts)
           : `图片 ${images.length} 张`;
+        // 剪贴板域=历史记录，合并不消费原卡：产出一张新组合卡置顶
+        if (ordered.every((n) => n.sectionId === CLIPBOARD_ID)) {
+          const combo: Note = {
+            id: crypto.randomUUID(),
+            text: mergedText,
+            sectionId: CLIPBOARD_ID,
+            done: false,
+            createdAt: Date.now(),
+            kind: textParts.length ? "text" : "image",
+            codeLang: textParts.length ? detectCode(mergedText) : undefined,
+            imageFile: images[0],
+            imageW: images[0] === first.imageFile ? first.imageW : undefined,
+            imageH: images[0] === first.imageFile ? first.imageH : undefined,
+            attachments: images.slice(1),
+          };
+          set({ notes: [combo, ...notes], checkedIds: [combo.id] });
+          return;
+        }
         const merged: Note = {
           ...first,
           text: mergedText,

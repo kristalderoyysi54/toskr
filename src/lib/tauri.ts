@@ -155,7 +155,8 @@ export const api = {
   ) => invoke("set_clip_rules", { ignoreConcealed, ignoreTransient, apps }),
   setClipPause: (untilMs: number) => invoke("set_clip_pause", { untilMs }),
   /** 系统 Quick Look 原尺寸预览图片附件。 */
-  quickLook: (file: string) => invoke("quick_look", { file }),
+  quickLook: (files: string[], index = 0) =>
+    invoke("quick_look", { files, index }),
   ocrImage: (file: string) => invoke<string>("ocr_image", { file }),
   prevAppInfo: () => invoke<PrevAppInfo | null>("prev_app_info"),
   refreshPrevApp: () => invoke("refresh_prev_app"),
