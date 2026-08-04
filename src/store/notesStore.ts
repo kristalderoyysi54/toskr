@@ -455,6 +455,8 @@ interface NotesState {
   /** 闪念 ⚡ 转正式待办。 */
   sparkToTask: (id: string) => void;
   moveTasksToSection: (ids: string[], sectionId: string) => void;
+  /** 分组内拖拽排序（同 reorderNotes 心智）：把 activeId 移到 overId 所在位置。 */
+  reorderTasks: (activeId: string, overId: string) => void;
   addTaskSection: (name?: string) => void;
   renameTaskSection: (id: string, name: string) => void;
   /** 删除分组：组内任务归收集箱（收集箱不可删）。 */
@@ -922,6 +924,16 @@ export const useNotesStore = create<NotesState>()(
               : t
           ),
         });
+      },
+
+      reorderTasks: (activeId, overId) => {
+        const tasks = [...get().tasks];
+        const from = tasks.findIndex((t) => t.id === activeId);
+        const to = tasks.findIndex((t) => t.id === overId);
+        if (from < 0 || to < 0 || from === to) return;
+        const [moved] = tasks.splice(from, 1);
+        tasks.splice(to, 0, moved);
+        set({ tasks });
       },
 
       addTaskSection: (name) => {

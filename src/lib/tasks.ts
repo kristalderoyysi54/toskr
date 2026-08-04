@@ -44,8 +44,22 @@ export function sortTasks(tasks: Task[]): Task[] {
 }
 
 /**
+ * 任务是否落在智能区（已到期 / 灵感 / 已完成）——这些是横切计算出的视图，
+ * 不是可投放的分组容器；拖拽跨分组时用它判断"当前悬停目标是否代表一个真实分组"。
+ */
+export function isSmartBandTask(t: Task, now: number): boolean {
+  if (t.status === "done") return true;
+  if (t.dueAt !== null && t.dueAt <= now) return true;
+  if (t.kind === "spark") return true;
+  return false;
+}
+
+/**
  * 分桶：逾期未完成的任务无论原状态/类型一律进 overdue（不重复出现在其他区）；
  * 闪念（spark）进灵感区；其余按所属分组归位（孤儿分组兜底收集箱）。
+ *
+ * 分组内展示顺序 = tasks 数组顺序（拖拽排序即数组顺序，手动排序优先于
+ * 优先级/到期的自动排序——与笔记分组的 reorderNotes 同一套心智）。
  */
 export function bucketTasksForDisplay(
   tasks: Task[],
@@ -73,14 +87,15 @@ export function bucketTasksForDisplay(
     if (!byGroup.has(key)) byGroup.set(key, []);
     byGroup.get(key)!.push(t);
   }
-  overdue.sort(compareTasks);
+  // 已到期：按到期时间升序（最紧迫的排最前）
+  overdue.sort((a, b) => (a.dueAt ?? 0) - (b.dueAt ?? 0));
   // 灵感是流水：新想法在最上面
   sparks.sort((a, b) => b.createdAt - a.createdAt);
   // 已完成不再关心优先级/到期，按完成先后的近似（创建时间）倒序
   done.sort((a, b) => b.createdAt - a.createdAt);
   const groups = sections.map((section) => ({
     section,
-    tasks: (byGroup.get(section.id) ?? []).sort(compareTasks),
+    tasks: byGroup.get(section.id) ?? [],
   }));
   return { overdue, sparks, groups, done };
 }

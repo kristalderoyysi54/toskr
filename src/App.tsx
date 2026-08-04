@@ -523,6 +523,25 @@ export default function App() {
     };
   }, []);
 
+  // 首次使用（引导未完成）：自动弹出面板并钉住——新用户不知道双击 ⇧，
+  // 面板必须自己出现且不因失焦消失，三步上手引导才有机会被看到。
+  // 必须等水合完成再判断，否则老用户会被默认值误弹（onboarding 默认 done=false）
+  useEffect(() => {
+    const showForFirstRun = () => {
+      if (useNotesStore.getState().settings.onboarding.done) return;
+      useUIStore.getState().setPinned(true);
+      useUIStore.getState().setOpen(true);
+      void api.showPanel();
+    };
+    if (useNotesStore.persist.hasHydrated()) {
+      showForFirstRun();
+      return;
+    }
+    const unsub = useNotesStore.persist.onFinishHydration(() => showForFirstRun());
+    return unsub;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // 上手引导完成庆祝
   const prevOnboardingDone = useRef(onboarding.done);
   useEffect(() => {

@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { AnimatePresence, motion } from "motion/react";
 import {
   AlarmClock,
@@ -84,13 +86,22 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
   const focused = useUIStore((s) => s.focusedId === task.id);
   const flashing = useUIStore((s) => s.flashId === task.id);
   const expanded = useUIStore((s) => s.editingId === task.id);
-  const rowRef = useRef<HTMLDivElement>(null);
+  const rowRef = useRef<HTMLDivElement | null>(null);
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const [draft, setDraft] = useState(task.text);
   const [noteDraft, setNoteDraft] = useState(task.note ?? "");
 
   const { cycleTaskStatus, cycleTaskPriority, setTaskStatus, setTaskPriority } =
     useNotesStore.getState();
+
+  // 拖拽排序：完成态 / 展开编辑态禁用（编辑器整段拖走没有意义，disabled 时
+  // listeners 由 dnd-kit 置为 undefined）。任务行没有独立把手（不同于 NoteCard），
+  // 刻意不接 attributes/onKeyDown：root 一旦拿 tabIndex，会与全局 Space
+  // 快捷键（任务页 Space=切完成，见 App.tsx）抢键，只保留指针整行可拖。
+  const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: task.id,
+    disabled: task.status === "done" || expanded,
+  });
 
   // 键盘导航焦点滚动可见（与 NoteCard 同款）
   useEffect(() => {
@@ -121,6 +132,10 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
   useEffect(() => {
     if (!expanded) return;
     const onDown = (e: MouseEvent) => {
+      const t = e.target as Element | null;
+      // Radix 弹层（到期选择器等）portal 在 body 上，DOM 不在 rowRef 内——
+      // 不豁免的话，点弹层里的日期/时间输入会被误判「行外」，行收起连带弹层关闭
+      if (t?.closest?.("[data-radix-popper-content-wrapper]")) return;
       if (rowRef.current && !rowRef.current.contains(e.target as Node)) {
         useUIStore.getState().setEditingId(null);
       }
@@ -156,7 +171,17 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
-          ref={rowRef}
+          ref={(el) => {
+            setNodeRef(el);
+            rowRef.current = el;
+          }}
+          style={{
+            transform: CSS.Transform.toString(transform),
+            transition,
+          }}
+          // 抓行内任意处拖拽排序（4px 激活阈值不影响点击展开）；按钮/输入框
+          // 已各自 stopPropagation 或靠距离阈值天然免疫（见文件顶部注释）
+          onPointerDown={(e) => listeners?.onPointerDown?.(e)}
           onClick={() => {
             useUIStore.getState().setFocusedId(task.id);
             useUIStore.getState().setEditingId(task.id);
@@ -170,7 +195,8 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
             "hover:border-black/10 dark:hover:border-white/10",
             focused && "ring-1 ring-black/20 dark:ring-white/25",
             expanded && "ring-1 ring-primary/40",
-            flashing && "flash-highlight"
+            flashing && "flash-highlight",
+            isDragging && "z-10 opacity-70 elevation-3"
           )}
         >
           {/* ===== 行头（收起/展开共用）===== */}

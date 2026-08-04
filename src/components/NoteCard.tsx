@@ -148,16 +148,19 @@ export const NoteCard = memo(function NoteCard({
     useUIStore.getState().openPreview(note.id, editing);
   };
 
-  // 文本卡正文可直接拖出到外部应用输入框（WKWebView 原生桥接系统拖拽）
-  const dragOutProps = !isImage
-    ? {
-        draggable: true,
-        onDragStart: (e: React.DragEvent) => {
-          e.dataTransfer.setData("text/plain", note.text);
-          e.dataTransfer.effectAllowed = "copy" as const;
-        },
-      }
-    : {};
+  // 文本卡正文可直接拖出到外部应用输入框（WKWebView 原生桥接系统拖拽）；
+  // onPointerDown 阻断冒泡：抓文字=拖出文本，抓卡片其余部分（含图片/链接区）=拖拽排序
+  const dragOutProps =
+    !isImage && !isLink
+      ? {
+          draggable: true,
+          onDragStart: (e: React.DragEvent) => {
+            e.dataTransfer.setData("text/plain", note.text);
+            e.dataTransfer.effectAllowed = "copy" as const;
+          },
+          onPointerDown: (e: React.PointerEvent) => e.stopPropagation(),
+        }
+      : {};
 
   // 只订阅稳定引用，派生数组用 useMemo——选择器里 new 数组会造成
   // getSnapshot 永不相等 → React 无限重渲染崩溃（主窗口白屏、面板无法唤起）
@@ -397,6 +400,9 @@ export const NoteCard = memo(function NoteCard({
             transition,
             "--card-alpha": `${Math.round(cardOpacity * 100)}%`,
           } as React.CSSProperties}
+          // 整卡可抓拖拽排序（4px 激活阈值不影响点击/双击）；键盘拾取仍走下方把手，
+          // 避免 Tab 到悬浮操作按钮时 Space/Enter 被 dnd-kit 抢走
+          onPointerDown={(e) => listeners?.onPointerDown?.(e)}
           onClick={(e) => {
             const ui = useUIStore.getState();
             if (e.shiftKey && ui.anchorId && ui.anchorId !== note.id) {
@@ -476,7 +482,7 @@ export const NoteCard = memo(function NoteCard({
           )}
           <button
             {...attributes}
-            {...listeners}
+            onKeyDown={(e) => listeners?.onKeyDown?.(e)}
             onClick={(e) => e.stopPropagation()}
             aria-label="拖拽排序（Space 拾起，方向键移动）"
             className={cn(
@@ -501,8 +507,14 @@ export const NoteCard = memo(function NoteCard({
             </span>
           )}
           {compact ? (
-            <div className="flex h-full w-full min-w-0" {...dragOutProps}>
-              <CompactRow note={note} icon={icon} query={query} imageUrl={imageUrl} />
+            <div className="flex h-full w-full min-w-0">
+              <CompactRow
+                note={note}
+                icon={icon}
+                query={query}
+                imageUrl={imageUrl}
+                dragOutProps={dragOutProps}
+              />
             </div>
           ) : (
             <>
@@ -555,7 +567,7 @@ export const NoteCard = memo(function NoteCard({
             )}
           </div>
 
-          <div className="flex min-h-0 flex-1 items-start overflow-hidden" {...dragOutProps}>
+          <div className="flex min-h-0 flex-1 items-start overflow-hidden">
             {isLink ? (
               <div className="flex w-full flex-col justify-center gap-0.5">
                 <div className="flex items-start gap-1.5">
@@ -610,6 +622,7 @@ export const NoteCard = memo(function NoteCard({
               )
             ) : (
               <p
+                {...dragOutProps}
                 className={cn(
                   // hover:cursor-grab：正文可拖出到外部应用的唯一可见暗示
                   "line-clamp-3 whitespace-pre-wrap text-body leading-normal [overflow-wrap:anywhere] hover:cursor-grab",
@@ -737,11 +750,14 @@ function CompactRow({
   icon,
   query,
   imageUrl,
+  dragOutProps,
 }: {
   note: Note;
   icon: ReturnType<typeof useAppIcon>;
   query: string;
   imageUrl?: string | null;
+  /** 仅文本卡非空：拖出文本到外部应用 + 阻断冒泡（见 NoteCard 同名变量注释）。 */
+  dragOutProps: React.HTMLAttributes<HTMLParagraphElement>;
 }) {
   const cardTint = useNotesStore((s) => s.settings.cardTint);
   const isImage = note.kind === "image";
@@ -780,6 +796,7 @@ function CompactRow({
           <span className="size-6 shrink-0 animate-pulse rounded-sm bg-black/[0.06] dark:bg-white/[0.08]" />
         ))}
       <p
+        {...dragOutProps}
         className={cn(
           "min-w-0 flex-1 truncate text-body hover:cursor-grab",
           note.codeLang && "font-mono text-label",
