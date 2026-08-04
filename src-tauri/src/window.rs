@@ -12,7 +12,7 @@ use tauri::{
 };
 
 use crate::ax::{self, AxWindowFrame};
-use crate::events::{HudHoverPayload, HudPayload, HUD_EVENT, HUD_HOVER_EVENT};
+use crate::events::{HudHoverPayload, HudPayload, HUD_EVENT, HUD_EXIT_EVENT, HUD_HOVER_EVENT};
 use crate::focus;
 use crate::state::AppState;
 
@@ -739,6 +739,14 @@ fn hud_lifecycle(app: AppHandle, generation: u64, sticky: bool) {
         } else if !sticky {
             elapsed += TICK;
             if elapsed >= HUD_DURATION_MS {
+                // 进出场对称：先通知前端播退场动画，稍候再真正隐藏窗口
+                //（本函数运行在 spawn_blocking 专属线程，sleep 不阻塞 UI）
+                let _ = app.emit_to("hud", HUD_EXIT_EVENT, ());
+                std::thread::sleep(Duration::from_millis(160));
+                // 退场期间可能有新气泡顶入（代数已变）：放弃隐藏，交给新一轮
+                if state.hud_generation.load(Ordering::SeqCst) != generation {
+                    return;
+                }
                 {
                     let mut hud = state.hud.lock().unwrap();
                     hud.visible = false;

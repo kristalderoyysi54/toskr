@@ -39,6 +39,9 @@ interface UIState {
   permissionReceiving: boolean;
   /** 已创建却持续收不到事件（输入监控权限被扣的特征）。 */
   eventsStuck: boolean;
+  /** 屏幕阅读器播报镜像：HUD 是独立无焦点窗口，AT 听不到；
+   *  tip() 同步把文案写进面板内的 sr-only live region。 */
+  announce: string;
 
   setOpen: (open: boolean) => void;
   setPage: (page: PanelPage) => void;
@@ -61,6 +64,7 @@ interface UIState {
     receiving: boolean,
     stuck: boolean
   ) => void;
+  setAnnounce: (announce: string) => void;
 }
 
 export const useUIStore = create<UIState>()((set, get) => ({
@@ -82,6 +86,7 @@ export const useUIStore = create<UIState>()((set, get) => ({
   permissionInstalled: true,
   permissionReceiving: true,
   eventsStuck: false,
+  announce: "",
 
   setOpen: (open) => set({ open }),
   // 切页清焦点：避免另一页残留的 focusedId 干扰键盘导航语义
@@ -104,4 +109,5 @@ export const useUIStore = create<UIState>()((set, get) => ({
     set({ doneOpen: { ...get().doneOpen, [sectionId]: !get().doneOpen[sectionId] } }),
   setPermission: (permissionAx, permissionInstalled, permissionReceiving, eventsStuck) =>
     set({ permissionAx, permissionInstalled, permissionReceiving, eventsStuck }),
+  setAnnounce: (announce) => set({ announce }),
 }));

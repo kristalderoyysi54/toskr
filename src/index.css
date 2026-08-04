@@ -228,20 +228,7 @@ input {
   }
 }
 
-/* HUD 气泡入场 */
-.hud-pop {
-  animation: hud-pop 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.2);
-}
-@keyframes hud-pop {
-  from {
-    transform: translateY(-4px) scale(0.94);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0) scale(1);
-    opacity: 1;
-  }
-}
+/* （HUD 入场动画已迁 motion/AnimatePresence，见 HudView.tsx——曲线参数原样保留在 JS 侧） */
 /* Markdown 渲染视图（预览层）：深浅色自适应的最小排版组 */
 .md-preview :is(h1, h2, h3, h4) {
   margin: 0.9em 0 0.4em;
@@ -320,10 +307,16 @@ input {
   --success: oklch(0.696 0.17 162.48); /* = emerald-500，与现状勾选同色 */
   --warning: oklch(0.666 0.179 58.318); /* = amber-600（浅色文字用值） */
   --surface-lightbox: oklch(0.205 0 0 / 95%); /* 图片预览永暗窗，不随主题 */
+  /* 纸白：取自应用图标的奶白（气泡/纸片色）。实心主控件（主按钮、选中分段 chip）
+     统一用它；蓝（--primary/--ring）只做焦点/选中/开关等状态色 */
+  --paper: oklch(0.965 0.012 90);
+  --paper-foreground: oklch(0.24 0.01 90);
 }
 .dark {
   --success: oklch(0.696 0.17 162.48);
   --warning: oklch(0.828 0.189 84.429); /* = amber-400 */
+  --paper: oklch(0.9 0.014 90);
+  --paper-foreground: oklch(0.205 0 0);
 }
 
 @theme inline {
@@ -331,6 +324,8 @@ input {
   --color-warning: var(--warning);
   --color-surface-raised: var(--popover); /* 浮层统一底：popover 与 card 本就同值 */
   --color-surface-lightbox: var(--surface-lightbox);
+  --color-paper: var(--paper);
+  --color-paper-foreground: var(--paper-foreground);
 }
 
 /* —— 字阶：5 档命名刻度（自动生成 text-* utility 与配对行高） —— */
@@ -470,5 +465,9 @@ input {
   .flash-highlight {
     animation: none !important;
     background-color: oklch(0.72 0.15 60 / 22%);
+  }
+  /* 骨架脉冲同理：静态占位仍在，仅去闪烁 */
+  .animate-pulse {
+    animation: none !important;
   }
 }

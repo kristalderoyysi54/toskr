@@ -4,11 +4,15 @@ import { Check, Copy, ExternalLink, Pencil, Send, Trash2, X } from "lucide-react
 
 import { tip } from "@/lib/tip";
 import { Button } from "@/components/ui/button";
+import { floatingSurface } from "@/components/ui/floating-surface";
+import { IconButton } from "@/components/ui/icon-button";
+import { Kbd } from "@/components/ui/kbd";
 import { deleteNotesWithUndo, enrichLinkMeta, sendNotesToChat } from "@/lib/actions";
 import { highlightCode, langLabel } from "@/lib/code";
 import { looksLikeMarkdown, renderMarkdown } from "@/lib/markdown";
 import { useAppIcon } from "@/lib/icons";
 import { useNoteImage, useNoteThumb } from "@/lib/media";
+import { springModal, tweenFade } from "@/lib/motion";
 import { api } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { noteImages, useNotesStore } from "@/store/notesStore";
@@ -38,6 +42,21 @@ export function PreviewOverlay() {
   const imageUrl = useNoteImage(isImage ? note?.imageFile : undefined);
   const [draft, setDraft] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // 手写模态语义：Radix Dialog 的 portal/焦点锁在此窗口类会吞点击（同 SimpleMenu 成因），
+  // 自管 Tab 循环 + 开合时的焦点交还；Esc/Space/↑↓ 仍由 App 级捕获处理，互不重叠
+  const cardModalRef = useRef<HTMLDivElement>(null);
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+  const hasNote = !!note;
+  useEffect(() => {
+    if (hasNote) {
+      restoreFocusRef.current = document.activeElement as HTMLElement | null;
+      window.setTimeout(() => cardModalRef.current?.focus(), 30);
+    } else if (restoreFocusRef.current) {
+      // 尽力交还（WKWebView 点击常不给焦点，还不回去就静默作罢）
+      restoreFocusRef.current.focus?.();
+      restoreFocusRef.current = null;
+    }
+  }, [hasNote]);
   // Markdown 渲染视图：像 Markdown 的文本卡默认渲染，可切回原文（代码卡不参与）
   const [mdView, setMdView] = useState(false);
   const isMd = !!note && !isImage && !isLink && !note.codeLang && looksLikeMarkdown(note.text);
@@ -90,27 +109,49 @@ export function PreviewOverlay() {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.12 }}
+          transition={tweenFade}
           className="absolute inset-0 z-40 flex flex-col bg-black/40 p-3 backdrop-blur-[2px]"
           onClick={() => useUIStore.getState().closePreview()}
         >
           <motion.div
             key={note.id}
+            ref={cardModalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="preview-title"
+            tabIndex={-1}
             initial={{ scale: 0.96, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            transition={{ type: "spring", stiffness: 500, damping: 38 }}
+            transition={springModal}
             className={cn(
-              "flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border",
-              "border-black/10 bg-white/95 shadow-2xl dark:border-white/10 dark:bg-zinc-900/95"
+              "flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl outline-none",
+              floatingSurface(3)
             )}
             onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              // 只管 Tab 循环；其余键位归 App 级预览层捕获处理
+              if (e.key !== "Tab") return;
+              const focusables = cardModalRef.current?.querySelectorAll<HTMLElement>(
+                'button:not([disabled]), textarea, [tabindex]:not([tabindex="-1"])'
+              );
+              if (!focusables?.length) return;
+              const first = focusables[0];
+              const last = focusables[focusables.length - 1];
+              if (e.shiftKey && document.activeElement === first) {
+                e.preventDefault();
+                last.focus();
+              } else if (!e.shiftKey && document.activeElement === last) {
+                e.preventDefault();
+                first.focus();
+              }
+            }}
           >
             <header
               className="flex items-center gap-2 px-3 py-2"
               style={{ backgroundColor: icon?.color ?? "#5b5b60" }}
             >
               <div className="min-w-0 flex-1 leading-tight">
-                <p className="truncate text-[12px] font-semibold text-white">
+                <p id="preview-title" className="truncate text-body font-semibold text-white">
                   {isImage
                     ? images.length > 1
                       ? `图片 ×${images.length}`
@@ -121,7 +162,7 @@ export function PreviewOverlay() {
                         ? langLabel(note.codeLang)
                         : "文本"}
                 </p>
-                <p className="truncate text-[10px] text-white/70">
+                <p className="truncate text-micro text-white/70">
                   {note.sourceApp ? `来自 ${note.sourceApp}` : "笔记"}
                 </p>
               </div>
@@ -129,7 +170,7 @@ export function PreviewOverlay() {
               <button
                 aria-label="关闭"
                 onClick={() => useUIStore.getState().closePreview()}
-                className="rounded p-1 text-white/70 hover:text-white"
+                className="rounded-sm p-1 text-white/70 hover:text-white"
               >
                 <X className="size-3.5" />
               </button>
@@ -155,7 +196,7 @@ export function PreviewOverlay() {
                       className="max-h-full max-w-full cursor-zoom-in object-contain"
                     />
                   ) : (
-                    <span className="text-[12px] text-muted-foreground">加载中…</span>
+                    <span className="text-body text-muted-foreground">加载中…</span>
                   )}
                 </div>
               ) : editing ? (
@@ -172,10 +213,10 @@ export function PreviewOverlay() {
                       useUIStore.getState().setPreviewEditing(false);
                     }
                   }}
-                  className="h-full min-h-40 w-full resize-none bg-transparent font-mono text-[12.5px] leading-relaxed outline-none"
+                  className="h-full min-h-40 w-full resize-none bg-transparent font-mono text-body leading-relaxed outline-none"
                 />
               ) : note.codeLang ? (
-                <pre className="hljs whitespace-pre-wrap [overflow-wrap:anywhere] !bg-transparent font-mono text-[12.5px] leading-relaxed">
+                <pre className="hljs whitespace-pre-wrap [overflow-wrap:anywhere] !bg-transparent font-mono text-body leading-relaxed">
                   <code
                     dangerouslySetInnerHTML={{
                       __html: highlightCode(note.text, note.codeLang),
@@ -184,11 +225,11 @@ export function PreviewOverlay() {
                 </pre>
               ) : mdView ? (
                 <div
-                  className="md-preview text-[13px] leading-relaxed"
+                  className="md-preview text-title leading-relaxed"
                   dangerouslySetInnerHTML={{ __html: renderMarkdown(note.text) }}
                 />
               ) : (
-                <pre className="whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-[12.5px] leading-relaxed">
+                <pre className="whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-body leading-relaxed">
                   {note.text}
                 </pre>
               )}
@@ -203,7 +244,7 @@ export function PreviewOverlay() {
             </div>
 
             <footer className="flex items-center gap-1 border-t border-black/5 px-3 py-2 dark:border-white/5">
-              <span className="text-[10px] tabular-nums text-muted-foreground">
+              <span className="text-micro tabular-nums text-muted-foreground">
                 {isImage
                   ? `图片 ${note.imageW ?? "?"} × ${note.imageH ?? "?"}`
                   : s
@@ -214,37 +255,38 @@ export function PreviewOverlay() {
                 {editing ? (
                   <Button size="xs" onClick={save}>
                     <Check className="size-3" /> 保存
-                    <kbd className="text-[9px] opacity-70">⌘⏎</kbd>
+                    {/* token-exception: 9px 为重塑前原始尺寸，用户指定还原 */}
+                    <Kbd inline className="text-[9px]">⌘⏎</Kbd>
                   </Button>
                 ) : (
                   <>
                     {isMd && (
                       <button
                         onClick={() => setMdView(!mdView)}
-                        className="rounded-md px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
+                        className="rounded-md px-1.5 py-0.5 text-micro text-muted-foreground outline-none hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50 dark:hover:bg-white/10"
                       >
                         {mdView ? "原文" : "渲染"}
                       </button>
                     )}
                     {isLink && (
-                      <IconBtn label="打开链接" onClick={() => void api.openUrl(note.url!)}>
+                      <IconButton label="打开链接" onClick={() => void api.openUrl(note.url!)}>
                         <ExternalLink className="size-3.5" />
-                      </IconBtn>
+                      </IconButton>
                     )}
                     {!isImage && (
-                      <IconBtn
+                      <IconButton
                         label="编辑"
                         onClick={() => useUIStore.getState().setPreviewEditing(true)}
                       >
                         <Pencil className="size-3.5" />
-                      </IconBtn>
+                      </IconButton>
                     )}
-                    <IconBtn label="复制" onClick={copy}>
+                    <IconButton label="复制" onClick={copy}>
                       <Copy className="size-3.5" />
-                    </IconBtn>
-                    <IconBtn label="删除" onClick={remove}>
+                    </IconButton>
+                    <IconButton label="删除" onClick={remove}>
                       <Trash2 className="size-3.5" />
-                    </IconBtn>
+                    </IconButton>
                     <Button
                       size="xs"
                       onClick={() => {
@@ -277,29 +319,8 @@ function PreviewThumb({ files, index }: { files: string[]; index: number }) {
       {url ? (
         <img src={url} alt="" className="max-h-40 max-w-full object-contain" />
       ) : (
-        <span className="p-4 text-[11px] text-muted-foreground">加载中…</span>
+        <span className="p-4 text-label text-muted-foreground">加载中…</span>
       )}
     </div>
-  );
-}
-
-function IconBtn({
-  label,
-  onClick,
-  children,
-}: {
-  label: string;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      aria-label={label}
-      title={label}
-      onClick={onClick}
-      className="rounded-md p-1 text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
-    >
-      {children}
-    </button>
   );
 }

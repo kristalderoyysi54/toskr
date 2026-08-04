@@ -184,7 +184,7 @@ export const PRIORITY_LABEL: Record<TaskPriority, string> = {
 /** 优先级色条（2px 竖条）。 */
 export const PRIORITY_BAR: Record<TaskPriority, string> = {
   none: "bg-black/10 dark:bg-white/10",
-  low: "bg-sky-500",
+  low: "bg-teal-500",
   mid: "bg-amber-500",
-  high: "bg-red-500",
+  high: "bg-destructive",
 };

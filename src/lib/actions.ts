@@ -96,13 +96,13 @@ export async function sendTaskToChat(taskId: string) {
   const keepPanel = useUIStore.getState().pinned;
   if (!keepPanel) useUIStore.getState().setOpen(false);
   try {
-    const sent = await api.sendToChat(
+    await api.sendToChat(
       parts.join("\n"),
       [],
       useNotesStore.getState().settings.autoEnter,
       keepPanel
     );
-    if (!sent) tip("warn", "目标应用未就绪，发送已中止");
+    // 失败警示由 Rust 统一发出（单条合并文案），此处不再补发避免单槽互相覆盖
   } catch (e) {
     tip("warn", `发送失败：${e}`);
   }

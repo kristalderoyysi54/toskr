@@ -62,7 +62,7 @@ export default function ImagePreviewView() {
   }, [files.length]);
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden rounded-xl border border-white/10 bg-zinc-900/95">
+    <div className="flex h-screen w-screen flex-col overflow-hidden rounded-xl border border-white/10 bg-surface-lightbox">
       {/* 标题栏：可拖动窗口 */}
       <div
         data-tauri-drag-region
@@ -71,11 +71,11 @@ export default function ImagePreviewView() {
         <button
           aria-label="关闭预览"
           onClick={close}
-          className="rounded-full p-0.5 text-white/60 hover:bg-white/10 hover:text-white"
+          className="rounded-full p-0.5 text-white/60 outline-none hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-white/60"
         >
           <X className="size-3.5" />
         </button>
-        <span data-tauri-drag-region className="select-none text-[12px] font-medium text-white/80">
+        <span data-tauri-drag-region className="select-none text-body font-medium text-white/80">
           {many ? `图片 ${idx + 1}/${files.length}` : "图片"}
         </span>
       </div>
@@ -96,7 +96,9 @@ export default function ImagePreviewView() {
             className="pointer-events-none max-h-full max-w-full object-contain"
           />
         ) : (
-          <span className="text-[12px] text-white/50">加载中…</span>
+          <div className="flex h-24 w-32 animate-pulse items-center justify-center rounded-lg bg-white/10">
+            <span className="sr-only">加载中…</span>
+          </div>
         )}
         {many && (
           <>
@@ -104,7 +106,7 @@ export default function ImagePreviewView() {
               aria-label="上一张"
               disabled={idx === 0}
               onClick={() => setIdx((i) => Math.max(0, i - 1))}
-              className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-black/40 p-1.5 text-white/80 hover:bg-black/60 hover:text-white disabled:opacity-30"
+              className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-black/40 p-1.5 text-white/80 outline-none hover:bg-black/60 hover:text-white focus-visible:ring-2 focus-visible:ring-white/60 disabled:opacity-30"
             >
               <ChevronLeft className="size-4" />
             </button>
@@ -112,14 +114,14 @@ export default function ImagePreviewView() {
               aria-label="下一张"
               disabled={idx === files.length - 1}
               onClick={() => setIdx((i) => Math.min(files.length - 1, i + 1))}
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-black/40 p-1.5 text-white/80 hover:bg-black/60 hover:text-white disabled:opacity-30"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-black/40 p-1.5 text-white/80 outline-none hover:bg-black/60 hover:text-white focus-visible:ring-2 focus-visible:ring-white/60 disabled:opacity-30"
             >
               <ChevronRight className="size-4" />
             </button>
           </>
         )}
       </div>
-      <div className="flex h-6 shrink-0 items-center justify-center text-[11px] tabular-nums text-white/60">
+      <div className="flex h-6 shrink-0 items-center justify-center text-label tabular-nums text-white/60">
         {many ? `${idx + 1} / ${files.length}${dims ? ` · ${dims}` : ""}` : dims}
       </div>
     </div>

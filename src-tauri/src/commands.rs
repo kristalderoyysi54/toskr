@@ -189,10 +189,11 @@ pub async fn send_to_chat(
     if sent {
         crate::window::show_hud(&app, "sent", format!("已发送到 {target_name}"), false, false, None);
     } else {
+        // 单条合并文案：原先这里与下方 else 连发两条 warn，HUD 单槽互相覆盖
         crate::window::show_hud(
             &app,
             "warn",
-            format!("发送中止：{target_name} 未到达前台"),
+            format!("发送中止：{target_name} 未到达前台 · 内容已在剪贴板"),
             false, false, None,
         );
     }
@@ -208,13 +209,6 @@ pub async fn send_to_chat(
                 }
             }
         });
-    } else {
-        crate::window::show_hud(
-            &app,
-            "warn",
-            "目标未就绪 · 内容已在剪贴板".into(),
-            false, false, None,
-        );
     }
     Ok(sent)
 }

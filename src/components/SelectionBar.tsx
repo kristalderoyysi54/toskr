@@ -7,6 +7,8 @@ import {
   SimpleMenuLabel,
   SimpleMenuSeparator,
 } from "@/components/SimpleMenu";
+import { IconButton } from "@/components/ui/icon-button";
+import { Kbd } from "@/components/ui/kbd";
 import {
   Tooltip,
   TooltipContent,
@@ -35,8 +37,12 @@ export function SelectionBar() {
     sendPreview(buildSendText(orderedCheckedNotes(useNotesStore.getState()).map((n) => n.text)));
 
   return (
-    <div className="mx-3 mb-1 flex items-center gap-0.5 rounded-xl border border-black/10 bg-white/70 px-2 py-1.5 shadow-sm dark:border-white/10 dark:bg-black/40">
-      <span className="px-1 text-[11px] tabular-nums text-muted-foreground">
+    <div
+      role="toolbar"
+      aria-label="批量操作"
+      className="mx-3 mb-1 flex items-center gap-0.5 rounded-xl border border-black/10 bg-white/70 px-2 py-1.5 elevation-3 dark:border-white/10 dark:bg-black/40"
+    >
+      <span className="px-1 text-label tabular-nums text-muted-foreground">
         已选 {count}
       </span>
 
@@ -69,12 +75,13 @@ export function SelectionBar() {
                 onClick={() => sendCheckedToChat()}
               >
                 <Send className="size-3" /> 发送到对话
-                <kbd className="ml-0.5 text-[9px] opacity-70">⌘⏎</kbd>
+                {/* token-exception: 9px 为重塑前原始尺寸，用户指定还原 */}
+                <Kbd inline className="ml-0.5 text-[9px]">⌘⏎</Kbd>
               </Button>
             </TooltipTrigger>
             <TooltipContent side="top" className="max-w-72">
-              <p className="mb-1 text-[10px] font-medium opacity-70">将粘贴以下内容：</p>
-              <pre className="max-h-48 overflow-hidden whitespace-pre-wrap break-words font-mono text-[10px] leading-relaxed">
+              <p className="mb-1 text-micro font-medium opacity-70">将粘贴以下内容：</p>
+              <pre className="max-h-48 overflow-hidden whitespace-pre-wrap break-words font-mono text-micro leading-relaxed">
                 {previewText()}
               </pre>
             </TooltipContent>
@@ -88,7 +95,7 @@ export function SelectionBar() {
                 size="xs"
                 aria-label="带 Prompt 模板发送"
                 onClick={toggle}
-                className="rounded-l-none rounded-r-lg border-l border-primary-foreground/20 px-1"
+                className="rounded-l-none rounded-r-lg border-l border-border px-1"
               >
                 <ChevronDown className="size-3" />
               </Button>
@@ -156,16 +163,11 @@ function IconAction({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button
-          aria-label={label}
-          disabled={disabled}
-          onClick={onClick}
-          className="rounded-md p-1 text-muted-foreground hover:bg-black/5 hover:text-foreground disabled:opacity-40 dark:hover:bg-white/10"
-        >
+        <IconButton label={label} withTitle={false} disabled={disabled} onClick={onClick}>
           {children}
-        </button>
+        </IconButton>
       </TooltipTrigger>
-      <TooltipContent side="top" className="text-[11px]">
+      <TooltipContent side="top" className="text-label">
         {label}
       </TooltipContent>
     </Tooltip>
