@@ -140,6 +140,36 @@ fn show_panel_on_main(app: &AppHandle) -> tauri::Result<()> {
         .ok_or(tauri::Error::WindowNotFound)?;
     let panel_w = *state.panel_width_pt.lock().unwrap();
 
+    // 靠右边栏模式：贴「当前使用屏幕」（光标所在屏）右缘、全高（保留停靠间距），
+    // 与伴随磁吸互斥——不做目标吸附、忽略手动拖动位置。
+    // 屏幕匹配必须走逻辑 pt 空间：物理坐标在不同缩放的多屏下包含测试会失败、
+    // 静默回退主屏（cursor_work_area 的坑）
+    if state.right_sidebar.load(Ordering::SeqCst) {
+        stop_companion_tracker(app);
+        let monitors = snapshot_monitors_pt(app);
+        // 光标屏优先；取不到光标时退面板当前所在屏（monitor_containing_pt 自带首屏兜底）
+        let anchor = cursor_point_pt().or_else(|| {
+            let pos = window.outer_position().ok()?;
+            let scale = window.scale_factor().ok()?.max(0.5);
+            Some((pos.x as f64 / scale + 20.0, pos.y as f64 / scale + 20.0))
+        });
+        let Some(m) = anchor.and_then(|(cx, cy)| monitor_containing_pt(&monitors, cx, cy))
+        else {
+            return Ok(());
+        };
+        let gap = *state.companion_gap.lock().unwrap();
+        let height = (m.wa_h - 2.0 * gap).max(200.0);
+        let x = m.wa_x + m.wa_w - panel_w - gap;
+        let y = m.wa_y + gap;
+        state.docked.store(false, Ordering::SeqCst);
+        window.set_size(LogicalSize::new(panel_w, height))?;
+        window.set_position(LogicalPosition::new(x, y))?;
+        ensure_fullscreen_auxiliary(&window);
+        window.show()?;
+        window.set_focus()?;
+        return Ok(());
+    }
+
     // 伴随候选：前台应用；前台是自己（托盘等路径）时回退到上一个应用
     let candidate: Option<(i32, Option<String>)> = match &front {
         Some(f) => Some((f.pid, f.bundle_id.clone())),
@@ -395,6 +425,30 @@ pub fn maybe_redock(app: &AppHandle) {
     let Some(front) = focus::frontmost_info().filter(|f| f.pid != me) else {
         return;
     };
+    // 靠右边栏模式：不吸附目标，但跟随「当前使用的屏幕」——
+    // 前台窗口换屏时把边栏挪到新屏右缘（多屏工作流）
+    if state.right_sidebar.load(Ordering::SeqCst) {
+        let Some(frame) = ax::focused_window_frame(front.pid) else {
+            return;
+        };
+        let monitors = snapshot_monitors_pt(app);
+        let Some(m) = monitor_containing_pt(
+            &monitors,
+            frame.x + frame.w / 2.0,
+            frame.y + frame.h / 2.0,
+        ) else {
+            return;
+        };
+        let panel_w = *state.panel_width_pt.lock().unwrap();
+        let gap = *state.companion_gap.lock().unwrap();
+        let height = (m.wa_h - 2.0 * gap).max(200.0);
+        let _ = window.set_size(LogicalSize::new(panel_w, height));
+        let _ = window.set_position(LogicalPosition::new(
+            m.wa_x + m.wa_w - panel_w - gap,
+            m.wa_y + gap,
+        ));
+        return;
+    }
     let hit = {
         let cfg = state.companion.lock().unwrap();
         cfg.enabled
@@ -792,21 +846,46 @@ pub fn ensure_fullscreen_auxiliary(window: &tauri::WebviewWindow) {
     }
 }
 
+/// 把窗口居中到光标所在屏（逻辑 pt）。仅限主线程调用。
+pub fn center_on_cursor_screen(app: &AppHandle, window: &tauri::WebviewWindow) {
+    let monitors = snapshot_monitors_pt(app);
+    let Some(m) = cursor_point_pt().and_then(|(cx, cy)| monitor_containing_pt(&monitors, cx, cy))
+    else {
+        return;
+    };
+    let (w, h) = window
+        .outer_size()
+        .ok()
+        .zip(window.scale_factor().ok())
+        .map(|(s, sc)| (s.width as f64 / sc.max(0.5), s.height as f64 / sc.max(0.5)))
+        .unwrap_or((680.0, 560.0));
+    let x = m.wa_x + (m.wa_w - w) / 2.0;
+    let y = m.wa_y + (m.wa_h - h) / 2.0;
+    let _ = window.set_position(LogicalPosition::new(x, y));
+}
+
 /// 光标所在显示器的工作区（物理原点、物理尺寸、缩放）。仅限主线程调用。
+/// 屏幕匹配走逻辑 pt：tao 物理坐标在不同缩放的多屏下包含测试会失败，
+/// 曾导致副屏操作静默回退主屏（靠右边栏/设置窗弹错屏的根因）。
 fn cursor_work_area(
     app: &AppHandle,
 ) -> tauri::Result<(PhysicalPosition<i32>, PhysicalSize<u32>, f64)> {
-    let cursor = app.cursor_position()?;
+    let cursor_pt = cursor_point_pt();
     let monitors = app.available_monitors()?;
-    let monitor = monitors
-        .into_iter()
-        .find(|m| {
-            let p = m.position();
-            let s = m.size();
-            cursor.x >= p.x as f64
-                && cursor.x < (p.x + s.width as i32) as f64
-                && cursor.y >= p.y as f64
-                && cursor.y < (p.y + s.height as i32) as f64
+    let monitor = cursor_pt
+        .and_then(|(cx, cy)| {
+            monitors.into_iter().find(|m| {
+                let scale = m.scale_factor().max(0.5);
+                let wa = m.work_area();
+                let x = wa.position.x as f64 / scale;
+                let y = wa.position.y as f64 / scale;
+                let w = wa.size.width as f64 / scale;
+                let h = wa.size.height as f64 / scale;
+                cx >= x - MARGIN
+                    && cx < x + w + MARGIN
+                    && cy >= y - MARGIN * 4.0
+                    && cy < y + h + MARGIN
+            })
         })
         .or(app.primary_monitor()?)
         .ok_or(tauri::Error::WindowNotFound)?;

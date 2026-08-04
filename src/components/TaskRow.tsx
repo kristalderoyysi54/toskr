@@ -31,10 +31,10 @@ import {
 } from "@/components/ui/popover";
 import { deleteTasksWithUndo, sendTaskToChat } from "@/lib/actions";
 import {
-  DUE_PRESETS,
   dueBadgeLabel,
   dueTone,
-  presetDue,
+  presetCfgDue,
+  presetCfgLabel,
   PRIORITY_BAR,
   PRIORITY_LABEL,
 } from "@/lib/tasks";
@@ -541,6 +541,7 @@ function DuePopover({
   /** 详情展开态常显（收起态无到期时仅悬停出现）。 */
   alwaysVisible?: boolean;
 }) {
+  const duePresets = useNotesStore((s) => s.settings.duePresets);
   const [open, setOpenRaw] = useState(false);
   // 关闭后按钮多驻留一拍：Radix 退出动画（100ms）期间锚点若被 hidden
   // 收走，弹层会失锚闪到屏幕角落
@@ -621,13 +622,13 @@ function DuePopover({
         }}
       >
         <div className="flex flex-col gap-1">
-          {DUE_PRESETS.map((p) => (
+          {duePresets.map((p) => (
             <button
-              key={p.key}
-              onClick={() => setDue(presetDue(p.key, Date.now()))}
+              key={p.id}
+              onClick={() => setDue(presetCfgDue(p, Date.now()))}
               className="rounded-md px-2 py-1 text-left text-[12px] hover:bg-black/5 dark:hover:bg-white/10"
             >
-              {p.label}
+              {presetCfgLabel(p)}
             </button>
           ))}
           <div className="my-1 h-px bg-border/60" />

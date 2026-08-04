@@ -1,5 +1,6 @@
 import {
   TASK_INBOX_ID,
+  type DuePresetCfg,
   type Task,
   type TaskPriority,
   type TaskSection,
@@ -95,53 +96,50 @@ export function dueTasksToRemind(tasks: Task[], now: number): Task[] {
   );
 }
 
-export type DuePreset =
-  | "in30m"
-  | "in1h"
-  | "in3h"
-  | "tonight"
-  | "tomorrowMorning"
-  | "nextMonday";
+const WEEKDAY_NAMES = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 
-/** 「提醒我」式快捷档：相对时间在前（稍后提醒），绝对锚点在后。 */
-export const DUE_PRESETS: { key: DuePreset; label: string }[] = [
-  { key: "in30m", label: "30 分钟后" },
-  { key: "in1h", label: "1 小时后" },
-  { key: "in3h", label: "3 小时后" },
-  { key: "tonight", label: "今晚 20:00" },
-  { key: "tomorrowMorning", label: "明早 9:00" },
-  { key: "nextMonday", label: "下周一 9:00" },
-];
-
-/** 预设 → 具体时间。语义固定（"今晚"即使已过 20:00 也不隐式跳到明天）。 */
-export function presetDue(preset: DuePreset, now: number): number {
+/** 档位 → 具体时间。语义固定（"今天 20:00"即使已过也不隐式跳明天；
+ *  周几档「下个」语义排除当天）。 */
+export function presetCfgDue(cfg: DuePresetCfg, now: number): number {
   const d = new Date(now);
-  const at = (addDays: number, hour: number) =>
+  const at = (addDays: number, hour: number, minute: number) =>
     new Date(
       d.getFullYear(),
       d.getMonth(),
       d.getDate() + addDays,
       hour,
-      0,
+      minute,
       0,
       0
     ).getTime();
-  switch (preset) {
-    case "in30m":
-      return now + 30 * 60_000;
-    case "in1h":
-      return now + 60 * 60_000;
-    case "in3h":
-      return now + 3 * 60 * 60_000;
-    case "tonight":
-      return at(0, 20);
-    case "tomorrowMorning":
-      return at(1, 9);
-    case "nextMonday": {
-      // 「下」字明确排除当天：周一时跳到 7 天后
-      const dow = d.getDay();
-      return at(dow === 1 ? 7 : (1 - dow + 7) % 7 || 7, 9);
+  switch (cfg.kind) {
+    case "relative":
+      return now + cfg.minutes * 60_000;
+    case "today":
+      return at(0, cfg.hour, cfg.minute);
+    case "tomorrow":
+      return at(1, cfg.hour, cfg.minute);
+    case "weekday": {
+      const add = (cfg.weekday - d.getDay() + 7) % 7 || 7;
+      return at(add, cfg.hour, cfg.minute);
     }
+  }
+}
+
+/** 档位展示名（弹层与设置页共用）。 */
+export function presetCfgLabel(cfg: DuePresetCfg): string {
+  const hm = (h: number, m: number) => `${h}:${String(m).padStart(2, "0")}`;
+  switch (cfg.kind) {
+    case "relative":
+      return cfg.minutes % 60 === 0 && cfg.minutes >= 60
+        ? `${cfg.minutes / 60} 小时后`
+        : `${cfg.minutes} 分钟后`;
+    case "today":
+      return `今天 ${hm(cfg.hour, cfg.minute)}`;
+    case "tomorrow":
+      return `明天 ${hm(cfg.hour, cfg.minute)}`;
+    case "weekday":
+      return `下个${WEEKDAY_NAMES[cfg.weekday] ?? "周一"} ${hm(cfg.hour, cfg.minute)}`;
   }
 }
 

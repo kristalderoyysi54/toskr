@@ -16,13 +16,13 @@ import {
 } from "@dnd-kit/sortable";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { AnimatePresence, motion } from "motion/react";
+import { motion } from "motion/react";
 import {
   CheckCircle2,
   Circle,
   ClipboardList,
-  CornerUpRight,
   Eraser,
+  PanelRight,
   Pin,
   Plus,
   Rows3,
@@ -84,12 +84,42 @@ import { useUIStore } from "@/store/uiStore";
 /** 本会话捕获的卡片 id 栈（HUD 撤销用，无需持久化）。 */
 const captureHistory: string[] = [];
 
-/** 页面切换滑动（方向感知：正向左滑进、反向右滑进；spring 与整板一致）。 */
-const PAGE_SLIDE = {
-  enter: (dir: number) => ({ x: dir >= 0 ? 24 : -24, opacity: 0 }),
-  center: { x: 0, opacity: 1 },
-  exit: (dir: number) => ({ x: dir >= 0 ? -24 : 24, opacity: 0 }),
-};
+/**
+ * 常驻页面滑层：三页始终挂载，切页只动 transform/opacity（GPU 合成），
+ * 零挂载成本——重列表页（剪贴板缩略图墙）切入不再掉帧。offset 为
+ * 该页与当前页的序差：0=激活；负=藏左侧；正=藏右侧。动画结束后
+ * visibility:hidden 停掉不活动页的绘制。
+ */
+function PageSlide({
+  offset,
+  children,
+}: {
+  offset: number;
+  children: React.ReactNode;
+}) {
+  const active = offset === 0;
+  return (
+    <motion.div
+      initial={false}
+      animate={
+        active
+          ? { x: 0, opacity: 1, visibility: "visible" as const }
+          : {
+              x: offset < 0 ? -24 : 24,
+              opacity: 0,
+              transitionEnd: { visibility: "hidden" as const },
+            }
+      }
+      transition={{ type: "spring", stiffness: 480, damping: 40 }}
+      className={cn(
+        "absolute inset-0 flex min-h-0 flex-col",
+        !active && "pointer-events-none"
+      )}
+    >
+      {children}
+    </motion.div>
+  );
+}
 
 export default function App() {
   const open = useUIStore((s) => s.open);
@@ -432,6 +462,7 @@ export default function App() {
       void api.setPanelHotkey(settings.panelToggleHotkey).catch(() => {});
       void api.setCompanionConfig(settings.companionEnabled, settings.companionApps);
       void api.setCompanionGap(settings.companionGap);
+      void api.setRightSidebar(settings.rightSidebar).catch(() => {});
       void api.setPanelFreePos(settings.panelFreeX, settings.panelFreeY);
       void api.setPanelWidth(settings.panelWidth);
       // 垂直覆盖为会话内临时值（切换吸附目标即重置），不做启动恢复
@@ -466,10 +497,18 @@ export default function App() {
     return unsub;
   }, []);
 
-  // 启动静默检查更新：发现新版右上角气泡提醒（不自动下载，不打扰）
+  // 静默检查更新：启动 8 秒后一次 + 之后每日一次（常驻后台、重启频率低，
+  // 只查启动那一次会长期错过新版）。发现新版右上角气泡提醒。
   useEffect(() => {
     const timer = window.setTimeout(() => void silentUpdateFlow(), 8000);
-    return () => window.clearTimeout(timer);
+    const daily = window.setInterval(
+      () => void silentUpdateFlow(),
+      24 * 60 * 60 * 1000
+    );
+    return () => {
+      window.clearTimeout(timer);
+      window.clearInterval(daily);
+    };
   }, []);
 
   // 上手引导完成庆祝
@@ -591,7 +630,7 @@ export default function App() {
   );
 
   // 剪贴板分页渲染：保留时长开到年/永久后可能上万条，一次性渲染会卡；
-  // 首屏 60 张（约两屏）让切页挂载不掉帧，「加载更多」按 200 递增
+  // 首屏 60 张在启动时随常驻页挂载（切页零成本），滚动哨兵按 200 递增
   const [clipShown, setClipShown] = useState(60);
   const visibleClipNotes = useMemo(
     () => clipNotes.slice(0, clipShown),
@@ -616,13 +655,8 @@ export default function App() {
   const activeTaskCount = tasks.filter((t) => t.status !== "done").length;
   const doneTaskCount = tasks.length - activeTaskCount;
 
-  // 页面切换方向（按 tab 顺序 笔记/任务/剪贴板：目标在右则向左滑入）
+  // 页面序（笔记/任务/剪贴板）：常驻页按序差决定滑向（左侧页藏左、右侧页藏右）
   const pageIndex = page === "notes" ? 0 : page === "tasks" ? 1 : 2;
-  const prevPageIndexRef = useRef(pageIndex);
-  const pageDirection = pageIndex - prevPageIndexRef.current;
-  useEffect(() => {
-    prevPageIndexRef.current = pageIndex;
-  }, [pageIndex]);
 
   // ===== 面板内快捷键（Esc 分层 + 全键盘导航） =====
   useEffect(() => {
@@ -1062,6 +1096,22 @@ export default function App() {
                       : clipNotes.length}
                 </span>
                 <div className="ml-auto flex items-center gap-0.5">
+                  {page !== "tasks" && (
+                    <button
+                      aria-label="搜索（⌘F）"
+                      title="搜索（⌘F）"
+                      onClick={() => {
+                        useUIStore.getState().setSearchOpen(!searchOpen);
+                        window.setTimeout(() => searchInputRef.current?.focus(), 30);
+                      }}
+                      className={cn(
+                        "rounded-md p-1 text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10",
+                        searchOpen && "bg-black/5 text-foreground dark:bg-white/10"
+                      )}
+                    >
+                      <Search className="size-3.5" />
+                    </button>
+                  )}
                   {page !== "clipboard" && (page === "notes" ? doneCount : doneTaskCount) > 0 && (
                     <button
                       aria-label="清理已完成"
@@ -1078,52 +1128,46 @@ export default function App() {
                       <Eraser className="size-3.5" />
                     </button>
                   )}
-                  {(settings.panelFreeX !== null || settings.panelFreeY !== null) && (
+                  <button
+                    aria-label="靠右边栏"
+                    title={
+                      settings.rightSidebar
+                        ? "退出靠右边栏，恢复自动停靠（伴随磁吸 / 屏幕右缘）"
+                        : "靠右边栏：贴屏幕右缘全高（保留间距），开启后不再伴随磁吸"
+                    }
+                    onClick={async () => {
+                      const on = !useNotesStore.getState().settings.rightSidebar;
+                      useNotesStore.getState().setSettings({
+                        rightSidebar: on,
+                        // 两个方向都清掉手动拖动：开=模式接管位置；关=恢复自动停靠
+                        panelFreeX: null,
+                        panelFreeY: null,
+                      });
+                      await api.setPanelFreePos(null, null).catch(() => {});
+                      await api.setRightSidebar(on).catch(() => {});
+                      if (!on) void api.showPanel();
+                    }}
+                    className={cn(
+                      "rounded-md p-1 text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10",
+                      settings.rightSidebar && "bg-black/5 text-foreground dark:bg-white/10"
+                    )}
+                  >
+                    <PanelRight className="size-3.5" />
+                  </button>
+                  {page !== "tasks" && (
                     <button
-                      aria-label="重置面板位置"
-                      title="重置面板位置：清除手动拖动，恢复自动停靠（伴随目标 / 屏幕右缘）"
+                      aria-label="切换卡片密度"
+                      title="卡片密度：舒适 / 紧凑"
                       onClick={() => {
-                        useNotesStore
-                          .getState()
-                          .setSettings({ panelFreeX: null, panelFreeY: null });
-                        void api.setPanelFreePos(null, null);
-                        void api.showPanel();
+                        const cur = useNotesStore.getState().settings.cardDensity;
+                        useNotesStore.getState().setSettings({
+                          cardDensity: cur === "compact" ? "comfortable" : "compact",
+                        });
                       }}
                       className="rounded-md p-1 text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
                     >
-                      <CornerUpRight className="size-3.5" />
+                      <Rows3 className="size-3.5" />
                     </button>
-                  )}
-                  {page !== "tasks" && (
-                    <>
-                      <button
-                        aria-label="搜索（⌘F）"
-                        title="搜索（⌘F）"
-                        onClick={() => {
-                          useUIStore.getState().setSearchOpen(!searchOpen);
-                          window.setTimeout(() => searchInputRef.current?.focus(), 30);
-                        }}
-                        className={cn(
-                          "rounded-md p-1 text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10",
-                          searchOpen && "bg-black/5 text-foreground dark:bg-white/10"
-                        )}
-                      >
-                        <Search className="size-3.5" />
-                      </button>
-                      <button
-                        aria-label="切换卡片密度"
-                        title="卡片密度：舒适 / 紧凑"
-                        onClick={() => {
-                          const cur = useNotesStore.getState().settings.cardDensity;
-                          useNotesStore.getState().setSettings({
-                            cardDensity: cur === "compact" ? "comfortable" : "compact",
-                          });
-                        }}
-                        className="rounded-md p-1 text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
-                      >
-                        <Rows3 className="size-3.5" />
-                      </button>
-                    </>
                   )}
                   <button
                     aria-label={pinned ? "取消固定" : "固定面板"}
@@ -1172,23 +1216,7 @@ export default function App() {
 
               <PermissionBanner />
 
-              <div className="relative min-h-0 flex-1 overflow-hidden">
-                <AnimatePresence initial={false} custom={pageDirection}>
-                  <motion.div
-                    key={page}
-                    custom={pageDirection}
-                    variants={PAGE_SLIDE}
-                    initial="enter"
-                    animate="center"
-                    exit="exit"
-                    transition={{ type: "spring", stiffness: 480, damping: 40 }}
-                    className="absolute inset-0 flex min-h-0 flex-col"
-                  >
-                    {page === "tasks" ? (
-                      <TaskPage buckets={taskBuckets} now={taskNow} />
-                    ) : (
-                      <>
-              {searchOpen && (
+              {searchOpen && page !== "tasks" && (
                 <div className="mx-3 mb-1.5 flex items-center gap-1.5 rounded-lg border border-black/10 bg-white/60 px-2 py-1 dark:border-white/10 dark:bg-white/[0.06]">
                   <Search className="size-3 shrink-0 text-muted-foreground/70" />
                   <input
@@ -1219,7 +1247,9 @@ export default function App() {
                 </div>
               )}
 
-              {page === "clipboard" ? (
+              {/* 三页常驻堆叠：切页只动 transform/opacity，零挂载成本（同面板开合方案） */}
+              <div className="relative min-h-0 flex-1 overflow-hidden">
+                <PageSlide offset={2 - pageIndex}>
                 <ScrollArea className="min-h-0 flex-1 px-2">
                   {clipNotes.length === 0 ? (
                     <div className="flex flex-col items-center gap-2 px-6 pb-10 pt-16 text-center">
@@ -1266,7 +1296,8 @@ export default function App() {
                     </DndContext>
                   )}
                 </ScrollArea>
-              ) : (
+                </PageSlide>
+                <PageSlide offset={0 - pageIndex}>
               <ScrollArea className="min-h-0 flex-1 px-2">
                 {!onboarding.done && <OnboardingCard />}
                 {notes.length === 0 ? (
@@ -1307,15 +1338,14 @@ export default function App() {
                   </DndContext>
                 )}
               </ScrollArea>
-              )}
+                </PageSlide>
+                <PageSlide offset={1 - pageIndex}>
+                  <TaskPage buckets={taskBuckets} now={taskNow} />
+                </PageSlide>
+              </div>
 
               <SelectionBar />
               {page === "notes" && <DraftInput />}
-                      </>
-                    )}
-                  </motion.div>
-                </AnimatePresence>
-              </div>
 
               <PreviewOverlay />
               {showShortcuts && <ShortcutHelp />}

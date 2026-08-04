@@ -44,7 +44,7 @@ import { TEXT_OPS, type TextOp } from "@/lib/textops";
 import { langLabel } from "@/lib/code";
 import { linkParts } from "@/lib/link";
 import { useAppIcon } from "@/lib/icons";
-import { timeAgo, useNoteImage } from "@/lib/media";
+import { timeAgo, useNoteThumb } from "@/lib/media";
 import { splitHighlight } from "@/lib/search";
 import { api } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
@@ -64,7 +64,7 @@ let lastMultiSelection: { ids: string[]; at: number } | null = null;
 
 /** 组合卡并排缩略图（独立组件实例规避可变数量 hook；overlay 显示「+N」）。 */
 function CardThumb({ file, overlay }: { file: string; overlay?: string }) {
-  const url = useNoteImage(file);
+  const url = useNoteThumb(file);
   return (
     <div className="relative flex h-full min-w-0 flex-1 items-center justify-center overflow-hidden rounded bg-black/[0.04] dark:bg-white/[0.06]">
       {url ? (
@@ -120,7 +120,7 @@ export const NoteCard = memo(function NoteCard({
   /** 组合卡片：既有正文又带图片附件 */
   const isComposite = !isImage && images.length > 0;
   const link = isLink ? linkParts(note.url!) : null;
-  const imageUrl = useNoteImage(isImage ? note.imageFile : undefined);
+  const imageUrl = useNoteThumb(isImage ? note.imageFile : undefined);
   const cardImages = isImage ? noteImages(note) : [];
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
@@ -804,7 +804,7 @@ function LinkFavicon({ src }: { src: string }) {
 
 /** 组合卡片里的小缩略图。 */
 function Thumb({ file }: { file: string }) {
-  const url = useNoteImage(file);
+  const url = useNoteThumb(file);
   return (
     <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded bg-black/[0.05] dark:bg-white/[0.08]">
       {url && <img src={url} alt="" className="max-h-full max-w-full object-contain" />}

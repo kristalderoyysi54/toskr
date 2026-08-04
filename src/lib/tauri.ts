@@ -134,6 +134,7 @@ export const api = {
   readDataFile: () => invoke<string | null>("read_data_file"),
   writeDataFile: (content: string) => invoke("write_data_file", { content }),
   imageDataUrl: (name: string) => invoke<string | null>("image_data_url", { name }),
+  imageThumbUrl: (name: string) => invoke<string | null>("image_thumb_url", { name }),
   removeImage: (name: string) => invoke("remove_image", { name }),
   setPanelWidth: (width: number) => invoke("set_panel_width", { width }),
   adjustPanelEdge: (edge: "top" | "bottom", delta: number) =>
@@ -154,6 +155,8 @@ export const api = {
     apps: string[]
   ) => invoke("set_clip_rules", { ignoreConcealed, ignoreTransient, apps }),
   setClipPause: (untilMs: number) => invoke("set_clip_pause", { untilMs }),
+  setRightSidebar: (enabled: boolean) =>
+    invoke("set_right_sidebar", { enabled }),
   /** 系统 Quick Look 原尺寸预览图片附件。 */
   quickLook: (files: string[], index = 0) =>
     invoke("quick_look", { files, index }),
