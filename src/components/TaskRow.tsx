@@ -24,12 +24,14 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { IconButton } from "@/components/ui/icon-button";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { deleteTasksWithUndo, sendTaskToChat } from "@/lib/actions";
+import { springDetail } from "@/lib/motion";
 import {
   dueBadgeLabel,
   dueTone,
@@ -38,6 +40,7 @@ import {
   PRIORITY_BAR,
   PRIORITY_LABEL,
 } from "@/lib/tasks";
+import { TEXTAREA_MAX_H } from "@/lib/textarea";
 import { cn } from "@/lib/utils";
 import {
   TASK_INBOX_ID,
@@ -98,7 +101,7 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
   const autoResize = (el: HTMLTextAreaElement | null) => {
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, TEXTAREA_MAX_H)}px`;
   };
 
   // 展开：装载草稿并聚焦标题（新挂载元素 + 延时 focus，绕开 WKWebView 焦点惰性）
@@ -163,7 +166,7 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
             // 闪念灵感：紫色底与普通待办区分
             task.kind === "spark"
               ? "bg-violet-50 dark:bg-violet-400/10"
-              : "bg-white dark:bg-zinc-800",
+              : "bg-card",
             "hover:border-black/10 dark:hover:border-white/10",
             focused && "ring-1 ring-black/20 dark:ring-white/25",
             expanded && "ring-1 ring-primary/40",
@@ -186,6 +189,11 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
                 className={cn("h-5 w-[3px] rounded-full", PRIORITY_BAR[task.priority])}
               />
             </button>
+            {task.priority !== "none" && (
+              <span className="shrink-0 text-micro font-semibold leading-none text-muted-foreground">
+                {PRIORITY_LABEL[task.priority]}
+              </span>
+            )}
 
             {/* 闪念：💡（点击转正式待办）；普通任务：状态点三态循环 */}
             {task.kind === "spark" && !done ? (
@@ -241,13 +249,13 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
                     collapse();
                   }
                 }}
-                className="min-w-0 flex-1 resize-none bg-transparent text-[13px] font-medium leading-snug outline-none"
+                className="min-w-0 flex-1 resize-none bg-transparent text-title font-medium leading-snug outline-none"
               />
             ) : (
               <p
                 title={task.text}
                 className={cn(
-                  "min-w-0 flex-1 truncate text-[13px]",
+                  "min-w-0 flex-1 truncate text-title",
                   done && "text-muted-foreground line-through opacity-60"
                 )}
               >
@@ -259,7 +267,7 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
             {!expanded && checklist.length > 0 && (
               <span
                 title={`检查列表 ${checklistDone}/${checklist.length}`}
-                className="flex shrink-0 items-center gap-0.5 text-[10px] tabular-nums text-muted-foreground/70"
+                className="flex shrink-0 items-center gap-0.5 text-micro tabular-nums text-muted-foreground/70"
               >
                 <ListChecks className="size-3" />
                 {checklistDone}/{checklist.length}
@@ -269,16 +277,15 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
             {/* 收起态才在行头放到期/删除；展开态移到详情底部操作行，把宽度留给标题 */}
             {!expanded && <DuePopover task={task} now={now} />}
             {!expanded && (
-              <button
-                aria-label="删除任务"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  deleteTasksWithUndo([task.id], "已删除 1 个任务");
-                }}
-                className="hidden shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground group-hover:block"
+              <IconButton
+                label="删除任务"
+                size="2xs"
+                reveal="hover-focus"
+                tone="danger"
+                onClick={() => deleteTasksWithUndo([task.id], "已删除 1 个任务")}
               >
-                <Trash2 className="size-3.5" />
-              </button>
+                <Trash2 />
+              </IconButton>
             )}
           </div>
 
@@ -290,7 +297,7 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: "auto", opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
-              transition={{ type: "spring", stiffness: 480, damping: 42 }}
+              transition={springDetail}
               className="overflow-hidden"
             >
             <div className="ml-8 mt-1 flex flex-col gap-1.5 pb-1">
@@ -308,7 +315,7 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
                   e.stopPropagation();
                   if (e.key === "Escape") collapse();
                 }}
-                className="resize-none bg-transparent text-[12px] leading-relaxed text-muted-foreground outline-none placeholder:text-muted-foreground/50"
+                className="resize-none bg-transparent text-body leading-relaxed text-muted-foreground outline-none placeholder:text-muted-foreground/50"
               />
               {checklist.length > 0 && (
                 <div className="flex flex-col">
@@ -328,7 +335,7 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
                     e.stopPropagation();
                     deleteTasksWithUndo([task.id], "已删除 1 个任务");
                   }}
-                  className="rounded p-0.5 text-muted-foreground/70 hover:text-red-500"
+                  className="rounded-sm p-0.5 text-muted-foreground/70 outline-none hover:text-destructive focus-visible:ring-2 focus-visible:ring-primary/50"
                 >
                   <Trash2 className="size-3.5" />
                 </button>
@@ -352,7 +359,7 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
         <ContextMenuSeparator />
         {/* 状态/优先级平铺行内选择：窄面板下二级子菜单会翻转遮挡主菜单 */}
         <div className="px-2 py-1">
-          <p className="mb-1 text-[10px] text-muted-foreground">状态</p>
+          <p className="mb-1 text-micro text-muted-foreground">状态</p>
           <div className="flex gap-1">
             {(Object.keys(STATUS_LABEL) as TaskStatus[]).map((s) => (
               <button
@@ -362,7 +369,7 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
                   closeContextMenu();
                 }}
                 className={cn(
-                  "flex-1 rounded-md border px-1 py-0.5 text-[11px]",
+                  "flex-1 rounded-md border px-1 py-0.5 text-label",
                   task.status === s
                     ? "border-primary/50 bg-primary/10 font-medium"
                     : "border-border text-muted-foreground hover:text-foreground"
@@ -374,7 +381,7 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
           </div>
         </div>
         <div className="px-2 py-1">
-          <p className="mb-1 text-[10px] text-muted-foreground">优先级</p>
+          <p className="mb-1 text-micro text-muted-foreground">优先级</p>
           <div className="flex gap-1">
             {PRIORITY_CYCLE.map((p) => (
               <button
@@ -450,7 +457,7 @@ function ChecklistRow({ taskId, item }: { taskId: string; item: ChecklistItem })
   };
 
   return (
-    <div className="group/check flex items-center gap-1.5 rounded px-0.5 py-0.5 hover:bg-black/[0.03] dark:hover:bg-white/[0.05]">
+    <div className="group flex items-center gap-1.5 rounded-sm px-0.5 py-0.5 hover:bg-black/[0.03] dark:hover:bg-white/[0.05]">
       <button
         aria-label={item.done ? "取消勾选" : "勾选"}
         onClick={(e) => {
@@ -479,20 +486,19 @@ function ChecklistRow({ taskId, item }: { taskId: string; item: ChecklistItem })
           }
         }}
         className={cn(
-          "min-w-0 flex-1 bg-transparent text-[12px] outline-none",
+          "min-w-0 flex-1 bg-transparent text-body outline-none",
           item.done && "text-muted-foreground line-through opacity-60"
         )}
       />
-      <button
-        aria-label="删除检查项"
-        onClick={(e) => {
-          e.stopPropagation();
-          useNotesStore.getState().deleteChecklistItem(taskId, item.id);
-        }}
-        className="hidden shrink-0 rounded p-0.5 text-muted-foreground/60 hover:text-foreground group-hover/check:block"
+      <IconButton
+        label="删除检查项"
+        size="2xs"
+        reveal="hover-focus"
+        tone="danger"
+        onClick={() => useNotesStore.getState().deleteChecklistItem(taskId, item.id)}
       >
-        <X className="size-3" />
-      </button>
+        <X />
+      </IconButton>
     </div>
   );
 }
@@ -521,7 +527,7 @@ function ChecklistAdder({ taskId }: { taskId: string }) {
             submit();
           }
         }}
-        className="min-w-0 flex-1 bg-transparent text-[12px] outline-none placeholder:text-muted-foreground/50"
+        className="min-w-0 flex-1 bg-transparent text-body outline-none placeholder:text-muted-foreground/50"
       />
     </div>
   );
@@ -585,8 +591,9 @@ function DuePopover({
             onClick={(e) => e.stopPropagation()}
             title="修改到期时间"
             className={cn(
-              "shrink-0 rounded-md px-1.5 py-0.5 text-[10px] tabular-nums",
-              tone === "overdue" && "bg-red-500/15 text-red-600 dark:text-red-400",
+              // 还原重塑前形态（用户定稿）：纯文字 tone chip，不带图标
+              "shrink-0 rounded-md px-1.5 py-0.5 text-micro tabular-nums",
+              tone === "overdue" && "bg-destructive/15 text-destructive",
               tone === "today" && "bg-amber-500/15 text-amber-600 dark:text-amber-400",
               tone === "later" && "bg-black/[0.06] text-muted-foreground dark:bg-white/10"
             )}
@@ -598,13 +605,13 @@ function DuePopover({
             onClick={(e) => e.stopPropagation()}
             title="设置到期提醒"
             className={cn(
-              "shrink-0 items-center gap-0.5 rounded-md px-1 py-0.5 text-[10px] text-muted-foreground/70 hover:text-foreground",
+              "shrink-0 items-center gap-0.5 rounded-md px-1 py-0.5 text-micro text-muted-foreground/70 hover:text-foreground",
               // 弹层开着（含退出动画驻留期）必须留在布局里：hidden 会让
               // Radix 锚点塌掉、弹层跳位
               alwaysVisible || open || lingering ? "flex" : "hidden group-hover:flex"
             )}
           >
-            <AlarmClock className="size-3" /> 到期
+            <AlarmClock className="size-2.5" /> 到期
           </button>
         )}
       </PopoverTrigger>
@@ -626,7 +633,7 @@ function DuePopover({
             <button
               key={p.id}
               onClick={() => setDue(presetCfgDue(p, Date.now()))}
-              className="rounded-md px-2 py-1 text-left text-[12px] hover:bg-black/5 dark:hover:bg-white/10"
+              className="rounded-md px-2 py-1 text-left text-body hover:bg-black/5 dark:hover:bg-white/10"
             >
               {presetCfgLabel(p)}
             </button>
@@ -637,25 +644,25 @@ function DuePopover({
               type="date"
               value={dateDraft}
               onChange={(e) => setDateDraft(e.target.value)}
-              className="min-w-0 flex-1 rounded-md border border-border bg-transparent px-1.5 py-1 text-[12px] outline-none focus:border-primary/50"
+              className="min-w-0 flex-1 rounded-md border border-border bg-transparent px-1.5 py-1 text-body outline-none focus:border-primary/50"
             />
             <input
               type="time"
               value={timeDraft}
               onChange={(e) => setTimeDraft(e.target.value)}
-              className="w-[74px] shrink-0 rounded-md border border-border bg-transparent px-1.5 py-1 text-[12px] tabular-nums outline-none focus:border-primary/50"
+              className="w-20 shrink-0 rounded-md border border-border bg-transparent px-1.5 py-1 text-body tabular-nums outline-none focus:border-primary/50"
             />
           </div>
           <button
             onClick={commitCustom}
-            className="rounded-md bg-primary px-2 py-1 text-[12px] text-primary-foreground hover:opacity-90"
+            className="rounded-md bg-primary px-2 py-1 text-body text-primary-foreground hover:opacity-90"
           >
             设定该时间
           </button>
           {task.dueAt !== null && (
             <button
               onClick={() => setDue(null)}
-              className="rounded-md px-2 py-1 text-left text-[12px] text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
+              className="rounded-md px-2 py-1 text-left text-body text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
             >
               清除到期
             </button>

@@ -97,6 +97,7 @@ const defaultTaskSections = (): TaskSection[] => [
 ];
 
 /** 分组可选色板（对齐 Paste 的色点风格）。 */
+// 用户可选的分组调色板（数据，非样式 token）：用户直接挑选的颜色值，刻意独立于 design-token 体系
 export const SECTION_COLORS = [
   "#ef4444",
   "#f97316",

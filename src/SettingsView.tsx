@@ -7,6 +7,7 @@ import type { Update } from "@tauri-apps/plugin-updater";
 import {
   Activity,
   AlarmClock,
+  AlertCircle,
   ArrowDown,
   ArrowUp,
   Check,
@@ -23,6 +24,9 @@ import {
   X,
 } from "lucide-react";
 
+import { IconButton } from "@/components/ui/icon-button";
+import { ProgressBar } from "@/components/ui/progress-bar";
+import { Segmented } from "@/components/ui/segmented";
 import { Switch } from "@/components/ui/switch";
 import {
   SETTINGS_CLEAR_CLIP,
@@ -32,7 +36,9 @@ import {
   SETTINGS_REQUEST,
   SETTINGS_STATE,
 } from "@/lib/settingsSync";
+import { SHORTCUTS } from "@/lib/shortcuts";
 import { api } from "@/lib/tauri";
+import { tip } from "@/lib/tip";
 import { checkForUpdate, downloadAndInstall } from "@/lib/updater";
 import { cn } from "@/lib/utils";
 import {
@@ -98,7 +104,7 @@ export default function SettingsView() {
             key={s.id}
             onClick={() => setSection(s.id)}
             className={cn(
-              "flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px]",
+              "flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-body",
               section === s.id
                 ? "bg-primary/10 font-medium text-foreground"
                 : "text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
@@ -129,14 +135,14 @@ export default function SettingsView() {
 /* ============ 通用控件 ============ */
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
-  return <h2 className="mb-3 text-[15px] font-semibold">{children}</h2>;
+  return <h2 className="mb-3 text-heading font-semibold">{children}</h2>;
 }
 
 function Group({ title, children }: { title?: string; children: React.ReactNode }) {
   return (
     <div className="mb-4">
       {title && (
-        <p className="mb-1.5 text-[12px] font-medium text-muted-foreground">{title}</p>
+        <p className="mb-1.5 text-body font-medium text-muted-foreground">{title}</p>
       )}
       <div className="divide-y divide-border/50 rounded-xl border border-border/60 bg-card">
         {children}
@@ -157,44 +163,49 @@ function Row({
   return (
     <div className="flex items-center justify-between gap-4 px-3.5 py-2.5">
       <div className="min-w-0">
-        <p className="text-[13px]">{label}</p>
-        {hint && <p className="mt-0.5 text-[11px] text-muted-foreground">{hint}</p>}
+        <p className="text-title">{label}</p>
+        {hint && <p className="mt-0.5 text-label text-muted-foreground">{hint}</p>}
       </div>
       <div className="shrink-0">{right}</div>
     </div>
   );
 }
 
-function Segmented<T extends string>({
+type SP = { settings: Settings; patch: (p: Partial<Settings>) => void };
+
+/** 滑杆 + 数值 label（windowOpacity/panelOpacity/cardOpacity/companionGap 四处复用）。 */
+function PercentSlider({
   value,
-  options,
+  min,
+  max,
+  step,
   onChange,
+  format = (v) => `${v}%`,
 }: {
-  value: T;
-  options: { value: T; label: string }[];
-  onChange: (v: T) => void;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (v: number) => void;
+  format?: (v: number) => string;
 }) {
   return (
-    <div className="flex gap-1">
-      {options.map((o) => (
-        <button
-          key={o.value}
-          onClick={() => onChange(o.value)}
-          className={cn(
-            "rounded-md border px-2 py-1 text-[12px]",
-            value === o.value
-              ? "border-primary/50 bg-primary/10 font-medium"
-              : "border-border text-muted-foreground hover:text-foreground"
-          )}
-        >
-          {o.label}
-        </button>
-      ))}
+    <div className="flex items-center gap-2">
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="h-1 w-32 cursor-pointer accent-primary"
+      />
+      <span className="w-9 text-right text-label tabular-nums text-muted-foreground">
+        {format(value)}
+      </span>
     </div>
   );
 }
-
-type SP = { settings: Settings; patch: (p: Partial<Settings>) => void };
 
 /** 卡片右键菜单自定义：显隐开关 + 顺序调整（合并/删除固定，不参与）。 */
 function ContextMenuGroup({ settings, patch }: SP) {
@@ -211,10 +222,7 @@ function ContextMenuGroup({ settings, patch }: SP) {
   return (
     <Group title="卡片右键菜单（勾选显示 · 箭头调序；合并与删除固定不动）">
       {cfg.map((item, idx) => (
-        <div
-          key={item.id}
-          className="group/menurow flex items-center gap-3 px-3.5 py-2"
-        >
+        <div key={item.id} className="group flex items-center gap-3 px-3.5 py-2">
           <Switch
             checked={item.on}
             onCheckedChange={(v) =>
@@ -227,29 +235,31 @@ function ContextMenuGroup({ settings, patch }: SP) {
           />
           <span
             className={cn(
-              "flex-1 text-[13px]",
+              "flex-1 text-title",
               !item.on && "text-muted-foreground/50"
             )}
           >
             {labelOf(item.id)}
           </span>
-          <div className="flex gap-0.5 opacity-0 transition-opacity group-hover/menurow:opacity-100">
-            <button
-              onClick={() => move(idx, -1)}
+          <div className="flex gap-0.5">
+            <IconButton
+              label="上移"
+              size="2xs"
+              reveal="hover-focus"
               disabled={idx === 0}
-              aria-label="上移"
-              className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
+              onClick={() => move(idx, -1)}
             >
-              <ArrowUp className="size-3.5" />
-            </button>
-            <button
-              onClick={() => move(idx, 1)}
+              <ArrowUp />
+            </IconButton>
+            <IconButton
+              label="下移"
+              size="2xs"
+              reveal="hover-focus"
               disabled={idx === cfg.length - 1}
-              aria-label="下移"
-              className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
+              onClick={() => move(idx, 1)}
             >
-              <ArrowDown className="size-3.5" />
-            </button>
+              <ArrowDown />
+            </IconButton>
           </div>
         </div>
       ))}
@@ -289,6 +299,7 @@ function GeneralSection({ settings, patch }: SP) {
                 { value: "dark", label: "深色" },
               ]}
               onChange={(v) => patch({ theme: v })}
+              ariaLabel="主题"
             />
           }
         />
@@ -296,40 +307,26 @@ function GeneralSection({ settings, patch }: SP) {
           label="窗口整体不透明度"
           hint="连毛玻璃一起变透，可真正看穿下层窗口内容"
           right={
-            <div className="flex items-center gap-2">
-              <input
-                type="range"
-                min={30}
-                max={100}
-                step={5}
-                value={Math.round(settings.windowOpacity * 100)}
-                onChange={(e) => patch({ windowOpacity: Number(e.target.value) / 100 })}
-                className="h-1 w-32 cursor-pointer accent-primary"
-              />
-              <span className="w-9 text-right text-[11px] tabular-nums text-muted-foreground">
-                {Math.round(settings.windowOpacity * 100)}%
-              </span>
-            </div>
+            <PercentSlider
+              value={Math.round(settings.windowOpacity * 100)}
+              min={30}
+              max={100}
+              step={5}
+              onChange={(v) => patch({ windowOpacity: v / 100 })}
+            />
           }
         />
         <Row
           label="内容底色浓度"
           hint="面板自绘膜层的浓淡（毛玻璃关闭时效果最直观）"
           right={
-            <div className="flex items-center gap-2">
-              <input
-                type="range"
-                min={25}
-                max={100}
-                step={5}
-                value={Math.round(settings.panelOpacity * 100)}
-                onChange={(e) => patch({ panelOpacity: Number(e.target.value) / 100 })}
-                className="h-1 w-32 cursor-pointer accent-primary"
-              />
-              <span className="w-9 text-right text-[11px] tabular-nums text-muted-foreground">
-                {Math.round(settings.panelOpacity * 100)}%
-              </span>
-            </div>
+            <PercentSlider
+              value={Math.round(settings.panelOpacity * 100)}
+              min={25}
+              max={100}
+              step={5}
+              onChange={(v) => patch({ panelOpacity: v / 100 })}
+            />
           }
         />
         <Row
@@ -357,6 +354,7 @@ function GeneralSection({ settings, patch }: SP) {
                   { value: "fullscreen", label: "全屏" },
                 ]}
                 onChange={(v) => patch({ vibrancyMaterial: v })}
+                ariaLabel="毛玻璃材质"
               />
             }
           />
@@ -382,6 +380,7 @@ function GeneralSection({ settings, patch }: SP) {
                 { value: "compact", label: "紧凑" },
               ]}
               onChange={(v) => patch({ cardDensity: v })}
+              ariaLabel="卡片密度"
             />
           }
         />
@@ -389,20 +388,13 @@ function GeneralSection({ settings, patch }: SP) {
           label="卡片底色不透明度"
           hint="调低可透出毛玻璃背景；100% 为实色卡片"
           right={
-            <div className="flex items-center gap-2">
-              <input
-                type="range"
-                min={30}
-                max={100}
-                step={5}
-                value={Math.round(settings.cardOpacity * 100)}
-                onChange={(e) => patch({ cardOpacity: Number(e.target.value) / 100 })}
-                className="h-1 w-32 cursor-pointer accent-primary"
-              />
-              <span className="w-9 text-right text-[11px] tabular-nums text-muted-foreground">
-                {Math.round(settings.cardOpacity * 100)}%
-              </span>
-            </div>
+            <PercentSlider
+              value={Math.round(settings.cardOpacity * 100)}
+              min={30}
+              max={100}
+              step={5}
+              onChange={(v) => patch({ cardOpacity: v / 100 })}
+            />
           }
         />
       </Group>
@@ -527,8 +519,8 @@ function RetentionSlider({ settings, patch }: SP) {
         onBlur={commit}
         className="w-full accent-primary"
       />
-      <p className="mt-0.5 text-center text-[12px] font-medium">{shown.label}</p>
-      <div className="flex justify-between text-[10px] text-muted-foreground/70">
+      <p className="mt-0.5 text-center text-body font-medium">{shown.label}</p>
+      <div className="flex justify-between text-micro text-muted-foreground/70">
         <span>天</span>
         <span>周</span>
         <span>个月</span>
@@ -536,7 +528,7 @@ function RetentionSlider({ settings, patch }: SP) {
         <span>无限</span>
       </div>
       {shown.days === null && (
-        <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-500">
+        <p className="mt-1 text-label text-amber-600 dark:text-amber-500">
           ⚠️ 无限历史可能会增加您的磁盘空间使用量
         </p>
       )}
@@ -554,7 +546,7 @@ function ClipboardSection({ settings, patch }: SP) {
     return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
   };
   const pauseBtn =
-    "rounded-md border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground hover:text-foreground";
+    "rounded-md border border-border px-1.5 py-0.5 text-label text-muted-foreground hover:text-foreground";
   return (
     <div>
       <SectionTitle>剪贴板</SectionTitle>
@@ -581,7 +573,7 @@ function ClipboardSection({ settings, patch }: SP) {
               paused ? (
                 <button
                   onClick={() => patch({ clipPauseUntil: null })}
-                  className="rounded-md border border-primary/50 bg-primary/10 px-2 py-0.5 text-[11px] font-medium"
+                  className="rounded-md border border-primary/50 bg-primary/10 px-2 py-0.5 text-label font-medium"
                 >
                   立即恢复
                 </button>
@@ -629,7 +621,7 @@ function ClipboardSection({ settings, patch }: SP) {
                   if (yes) void emitTo("main", SETTINGS_CLEAR_CLIP, {});
                 });
               }}
-              className="rounded-md border border-red-500/40 px-2 py-0.5 text-[11px] text-red-500 hover:bg-red-500/10"
+              className="rounded-md border border-destructive/40 px-2 py-0.5 text-label text-destructive hover:bg-destructive/10"
             >
               删除历史…
             </button>
@@ -658,8 +650,8 @@ function ClipboardSection({ settings, patch }: SP) {
           }
         />
       </Group>
-      <p className="mb-2 text-[12px] font-medium text-muted-foreground">忽略应用程序</p>
-      <p className="mb-3 text-[12px] text-muted-foreground">
+      <p className="mb-2 text-body font-medium text-muted-foreground">忽略应用程序</p>
+      <p className="mb-3 text-body text-muted-foreground">
         不保存从以下应用复制的内容（独立于「捕获排除」列表）。
       </p>
       <AppListEditor
@@ -687,6 +679,7 @@ function HotkeySection({ settings, patch }: SP) {
                 { value: "option", label: "⌥ Opt" },
               ]}
               onChange={(v) => patch({ hotkeyModifier: v })}
+              ariaLabel="触发键（双击）"
             />
           }
         />
@@ -702,6 +695,7 @@ function HotkeySection({ settings, patch }: SP) {
                 { value: "500", label: "从容 500ms" },
               ]}
               onChange={(v) => patch({ hotkeyGapMs: Number(v) })}
+              ariaLabel="双击间隔"
             />
           }
         />
@@ -716,6 +710,7 @@ function HotkeySection({ settings, patch }: SP) {
                 { value: "capture", label: "仅捕获" },
               ]}
               onChange={(v) => patch({ doubleTapCaptureOnly: v === "capture" })}
+              ariaLabel="双击行为"
             />
           }
         />
@@ -731,28 +726,17 @@ function HotkeySection({ settings, patch }: SP) {
         />
       </Group>
       <Group title="面板内快捷键（长按 ⌥ 可随时速查）">
-        {[
-          ["⇧⇧", "捕获选中文本 / 呼出面板"],
-          ["↑ ↓", "移动焦点卡片"],
-          ["Space", "全文预览（预览中 ↑↓ 切换）"],
-          ["Enter", "编辑（预览内 ⌘⏎ 保存）"],
-          ["x", "勾选 / 取消勾选"],
-          ["⌘A", "全选可见卡片"],
-          ["⌘⏎", "发送勾选到对话"],
-          ["⌘C", "复制勾选为列表"],
-          ["⌘⌫", "删除焦点卡片"],
-          ["⌘F", "搜索"],
-          ["Esc", "逐层退出"],
-        ].map(([k, d]) => (
+        {SHORTCUTS.map(([k, d]) => (
           <Row
-            key={k}
-            label={d}
-            right={
-              <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 text-[11px] tabular-nums">
-                {k}
-              </kbd>
-            }
-          />
+              key={k}
+              label={d}
+              right={
+                // 还原重塑前键帽形态（用户定稿）：11px / bg-muted / 不撑最小宽
+                <kbd className="rounded-sm border border-border bg-muted px-1.5 py-0.5 text-label tabular-nums">
+                  {k}
+                </kbd>
+              }
+            />
         ))}
       </Group>
     </div>
@@ -868,14 +852,24 @@ function HotkeyRecorder({
 
   return (
     <div className="flex items-center gap-1.5">
-      {error && <span className="text-[11px] text-destructive">{error}</span>}
+      {/* 两种提示惯例：HUD tip() 是离散完成动作的默认通道；
+          这里的就地 role=alert chip 仅用于「正在操作的控件」内的即时错误。 */}
+      {error && (
+        <span
+          role="alert"
+          className="inline-flex items-center gap-1 rounded-md bg-destructive/10 px-1.5 py-0.5 text-label text-destructive"
+        >
+          <AlertCircle className="size-3" />
+          {error}
+        </span>
+      )}
       {recording ? (
         <button
           onClick={() => {
             setRecording(false);
             setError(null);
           }}
-          className="rounded-md border border-primary/60 bg-primary/10 px-2 py-1 text-[12px] text-muted-foreground"
+          className="rounded-md border border-primary/60 bg-primary/10 px-2 py-1 text-body text-muted-foreground"
         >
           按下组合键，Esc 取消
         </button>
@@ -885,7 +879,7 @@ function HotkeyRecorder({
             setRecording(true);
             setError(null);
           }}
-          className="rounded-md border border-border bg-muted px-2 py-1 text-[12px] tabular-nums hover:bg-black/5 dark:hover:bg-white/10"
+          className="rounded-md border border-border bg-muted px-2 py-1 text-body tabular-nums hover:bg-black/5 dark:hover:bg-white/10"
         >
           {value ? hotkeyLabel(value) : "点击录制"}
         </button>
@@ -896,7 +890,7 @@ function HotkeyRecorder({
             onChange(null);
             setError(null);
           }}
-          className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+          className="rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
           title="清除快捷键"
         >
           <X className="size-3.5" />
@@ -943,22 +937,25 @@ function AppListRow({
 }) {
   const info = useAppListInfo(bundle);
   return (
-    <div className="group flex items-center gap-2 rounded px-1.5 py-1 hover:bg-black/[0.03] dark:hover:bg-white/[0.04]">
+    <div className="group flex items-center gap-2 rounded-sm px-1.5 py-1 hover:bg-black/[0.03] dark:hover:bg-white/[0.04]">
       {info?.iconUrl ? (
         <img src={info.iconUrl} alt="" className="size-5 shrink-0" />
       ) : (
-        <span className="size-5 shrink-0 rounded bg-black/10 dark:bg-white/10" />
+        <span className="size-5 shrink-0 rounded-sm bg-black/10 dark:bg-white/10" />
       )}
-      <span className="truncate text-[13px]" title={bundle}>
+      <span className="truncate text-title" title={bundle}>
         {info?.name ?? bundle}
       </span>
-      <button
-        aria-label="移除"
+      <IconButton
+        label="移除"
+        tone="danger"
+        size="2xs"
+        reveal="hover-focus"
+        className="ml-auto"
         onClick={onRemove}
-        className="ml-auto hidden rounded p-0.5 text-muted-foreground hover:text-foreground group-hover:block"
       >
-        <X className="size-3" />
-      </button>
+        <X />
+      </IconButton>
     </div>
   );
 }
@@ -1001,13 +998,13 @@ function AppListEditor({
       <div className="mb-1 flex items-center gap-1">
         <button
           onClick={pickApp}
-          className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[12px] text-primary hover:bg-primary/10"
+          className="flex items-center gap-1 rounded-md px-1.5 py-1 text-body text-primary hover:bg-primary/10"
         >
           <Plus className="size-3.5" /> 选择应用…
         </button>
         <button
           onClick={addCurrent}
-          className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[12px] text-primary hover:bg-primary/10"
+          className="flex items-center gap-1 rounded-md px-1.5 py-1 text-body text-primary hover:bg-primary/10"
         >
           <Plus className="size-3.5" /> {addLabel}
         </button>
@@ -1021,7 +1018,7 @@ function AppListEditor({
           />
         ))}
         {apps.length === 0 && (
-          <p className="px-1.5 py-1 text-[12px] text-muted-foreground/60">空</p>
+          <p className="px-1.5 py-1 text-body text-muted-foreground/60">空</p>
         )}
       </div>
     </div>
@@ -1047,24 +1044,18 @@ function CompanionSection({ settings, patch }: SP) {
           label="与窗口的间隙"
           hint="面板贴靠目标窗口时留出的空隙（0 为紧贴）"
           right={
-            <div className="flex items-center gap-2">
-              <input
-                type="range"
-                min={0}
-                max={40}
-                step={2}
-                value={settings.companionGap}
-                onChange={(e) => patch({ companionGap: Number(e.target.value) })}
-                className="h-1 w-32 cursor-pointer accent-primary"
-              />
-              <span className="w-9 text-right text-[11px] tabular-nums text-muted-foreground">
-                {settings.companionGap}pt
-              </span>
-            </div>
+            <PercentSlider
+              value={settings.companionGap}
+              min={0}
+              max={40}
+              step={2}
+              onChange={(v) => patch({ companionGap: v })}
+              format={(v) => `${v}pt`}
+            />
           }
         />
       </Group>
-      <p className="mb-1.5 text-[12px] font-medium text-muted-foreground">
+      <p className="mb-1.5 text-body font-medium text-muted-foreground">
         伴随应用列表（bundle id）
       </p>
       <AppListEditor
@@ -1080,7 +1071,7 @@ function ExcludeSection({ settings, patch }: SP) {
   return (
     <div>
       <SectionTitle>捕获排除</SectionTitle>
-      <p className="mb-3 text-[12px] text-muted-foreground">
+      <p className="mb-3 text-body text-muted-foreground">
         列表内的应用中双击只开关面板、绝不读取任何内容（密码管理器等敏感应用）。
       </p>
       <AppListEditor
@@ -1157,7 +1148,7 @@ function DuePresetsSection({ settings, patch }: SP) {
   return (
     <div>
       <SectionTitle>到期提醒快捷档</SectionTitle>
-      <p className="mb-3 text-[12px] text-muted-foreground">
+      <p className="mb-3 text-body text-muted-foreground">
         任务「到期」弹层里的快捷选项（按此处顺序排列）。相对档从点选时刻起算；
         「今天」定点即使已过也不隐式跳到明天；周几档为「下一个」该周几（不含当天）。
       </p>
@@ -1191,7 +1182,7 @@ function DuePresetsSection({ settings, patch }: SP) {
                           minutes: Math.max(1, Math.round(unit === "h" ? n * 60 : n)),
                         });
                       }}
-                      className="h-8 w-20 rounded-lg border border-border bg-transparent px-2 text-[12px] tabular-nums outline-none focus:border-primary/50"
+                      className="h-8 w-20 rounded-lg border border-border bg-transparent px-2 text-body tabular-nums outline-none focus:border-primary/50"
                     />
                     <Segmented<"m" | "h">
                       value={unit}
@@ -1210,7 +1201,7 @@ function DuePresetsSection({ settings, patch }: SP) {
                         onChange={(e) =>
                           setDraft({ ...draft, weekday: Number(e.target.value) })
                         }
-                        className="h-8 rounded-lg border border-border bg-transparent px-2 text-[12px] outline-none focus:border-primary/50"
+                        className="h-8 rounded-lg border border-border bg-transparent px-2 text-body outline-none focus:border-primary/50"
                       >
                         {WEEKDAY_OPTIONS.map((w) => (
                           <option key={w.value} value={w.value}>
@@ -1223,17 +1214,17 @@ function DuePresetsSection({ settings, patch }: SP) {
                       type="time"
                       value={hmStr(draft.hour, draft.minute)}
                       onChange={(e) => patchTime(e.target.value)}
-                      className="h-8 rounded-lg border border-border bg-transparent px-2 text-[12px] tabular-nums outline-none focus:border-primary/50"
+                      className="h-8 rounded-lg border border-border bg-transparent px-2 text-body tabular-nums outline-none focus:border-primary/50"
                     />
                   </>
                 )}
-                <span className="text-[12px] text-muted-foreground">
+                <span className="text-body text-muted-foreground">
                   → {presetCfgLabel(draft)}
                 </span>
                 <div className="ml-auto flex items-center gap-1">
                   <button
                     onClick={save}
-                    className="rounded-lg bg-primary px-2.5 py-1 text-[12px] text-primary-foreground hover:opacity-90"
+                    className="rounded-lg bg-primary px-2.5 py-1 text-body text-primary-foreground hover:opacity-90"
                   >
                     保存
                   </button>
@@ -1242,7 +1233,7 @@ function DuePresetsSection({ settings, patch }: SP) {
                       setEditingId(null);
                       setDraft(null);
                     }}
-                    className="rounded-lg px-2 py-1 text-[12px] text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
+                    className="rounded-lg px-2 py-1 text-body text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
                   >
                     取消
                   </button>
@@ -1251,7 +1242,7 @@ function DuePresetsSection({ settings, patch }: SP) {
             </div>
           ) : (
             <div key={p.id} className="flex items-center gap-2 px-3.5 py-2">
-              <span className="text-[13px]">{presetCfgLabel(p)}</span>
+              <span className="text-title">{presetCfgLabel(p)}</span>
               <div className="ml-auto flex items-center gap-0.5">
                 <button
                   aria-label="编辑"
@@ -1263,7 +1254,7 @@ function DuePresetsSection({ settings, patch }: SP) {
                 <button
                   aria-label="删除"
                   onClick={() => remove(p.id)}
-                  className="rounded-md p-1 text-muted-foreground hover:bg-black/5 hover:text-red-500 dark:hover:bg-white/10"
+                  className="rounded-md p-1 text-muted-foreground hover:bg-black/5 hover:text-destructive dark:hover:bg-white/10"
                 >
                   <X className="size-3.5" />
                 </button>
@@ -1272,14 +1263,14 @@ function DuePresetsSection({ settings, patch }: SP) {
           )
         )}
         {settings.duePresets.length === 0 && (
-          <p className="px-3.5 py-3 text-[12px] text-muted-foreground">
+          <p className="px-3.5 py-3 text-body text-muted-foreground">
             没有快捷档，弹层里只剩自定义日期时间。
           </p>
         )}
       </div>
       <button
         onClick={add}
-        className="flex items-center gap-1 rounded-lg border border-border/60 px-2.5 py-1.5 text-[12px] text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
+        className="flex items-center gap-1 rounded-lg border border-border/60 px-2.5 py-1.5 text-body text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
       >
         <Plus className="size-3.5" /> 添加档位
       </button>
@@ -1331,9 +1322,9 @@ function SnippetsSection({ settings, patch }: SP) {
   return (
     <div>
       <SectionTitle>Prompt 模板</SectionTitle>
-      <p className="mb-3 text-[12px] text-muted-foreground">
+      <p className="mb-3 text-body text-muted-foreground">
         发送时可在「发送到对话 ▾」下拉里选择模板（按此处顺序排列），与勾选内容组装后发出。
-        模板中写 <code className="rounded bg-muted px-1">{"{内容}"}</code>{" "}
+        模板中写 <code className="rounded-sm bg-muted px-1">{"{内容}"}</code>{" "}
         指定内容插入位置（可多处）；不写则内容拼在模板之后。
       </p>
       <div className="mb-3 divide-y divide-border/50 rounded-xl border border-border/60 bg-card">
@@ -1344,7 +1335,7 @@ function SnippetsSection({ settings, patch }: SP) {
                 value={editLabel}
                 onChange={(e) => setEditLabel(e.target.value)}
                 placeholder="模板名"
-                className="h-8 w-32 rounded-lg border border-border bg-transparent px-2 text-[12px] outline-none focus:border-primary/50"
+                className="h-8 w-32 rounded-lg border border-border bg-transparent px-2 text-body outline-none focus:border-primary/50"
               />
               <textarea
                 value={editText}
@@ -1359,12 +1350,12 @@ function SnippetsSection({ settings, patch }: SP) {
                     setEditingId(null);
                   }
                 }}
-                className="min-h-8 flex-1 resize-y rounded-lg border border-border bg-transparent px-2 py-1.5 text-[12px] leading-relaxed outline-none focus:border-primary/50"
+                className="min-h-8 flex-1 resize-y rounded-lg border border-border bg-transparent px-2 py-1.5 text-body leading-relaxed outline-none focus:border-primary/50"
               />
               <button
                 onClick={saveEdit}
                 title="保存（⌘⏎）"
-                className="flex h-8 items-center gap-1 rounded-lg bg-primary px-2.5 text-[12px] text-primary-foreground hover:opacity-90"
+                className="flex h-8 items-center gap-1 rounded-lg bg-primary px-2.5 text-body text-primary-foreground hover:opacity-90"
               >
                 <Check className="size-3.5" /> 保存
               </button>
@@ -1372,43 +1363,49 @@ function SnippetsSection({ settings, patch }: SP) {
                 onClick={() => setEditingId(null)}
                 title="取消（Esc）"
                 aria-label="取消编辑"
-                className="flex h-8 items-center rounded-lg border border-border px-2 text-[12px] text-muted-foreground hover:text-foreground"
+                className="flex h-8 items-center rounded-lg border border-border px-2 text-body text-muted-foreground hover:text-foreground"
               >
                 <X className="size-3.5" />
               </button>
             </div>
           ) : (
             <div key={sn.id} className="group flex items-center gap-2 px-3.5 py-2">
-              <span className="shrink-0 text-[13px] font-medium">{sn.label}</span>
-              <span className="truncate text-[12px] text-muted-foreground">
+              <span className="shrink-0 text-title font-medium">{sn.label}</span>
+              <span className="truncate text-body text-muted-foreground">
                 {sn.text.replace(/\n+/g, " ⏎ ")}
               </span>
-              <div className="ml-auto hidden shrink-0 items-center gap-0.5 group-hover:flex">
-                <button
-                  aria-label="上移"
+              <div className="ml-auto flex shrink-0 items-center gap-0.5">
+                <IconButton
+                  label="上移"
+                  size="2xs"
+                  reveal="hover-focus"
                   disabled={i === 0}
                   onClick={() => move(sn.id, -1)}
-                  className="rounded p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-30"
                 >
-                  <ArrowUp className="size-3.5" />
-                </button>
-                <button
-                  aria-label="下移"
+                  <ArrowUp />
+                </IconButton>
+                <IconButton
+                  label="下移"
+                  size="2xs"
+                  reveal="hover-focus"
                   disabled={i === settings.promptSnippets.length - 1}
                   onClick={() => move(sn.id, 1)}
-                  className="rounded p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-30"
                 >
-                  <ArrowDown className="size-3.5" />
-                </button>
-                <button
-                  aria-label="编辑模板"
+                  <ArrowDown />
+                </IconButton>
+                <IconButton
+                  label="编辑模板"
+                  size="2xs"
+                  reveal="hover-focus"
                   onClick={() => startEdit(sn)}
-                  className="rounded p-0.5 text-muted-foreground hover:text-foreground"
                 >
-                  <Pencil className="size-3.5" />
-                </button>
-                <button
-                  aria-label="删除模板"
+                  <Pencil />
+                </IconButton>
+                <IconButton
+                  label="删除模板"
+                  tone="danger"
+                  size="2xs"
+                  reveal="hover-focus"
                   onClick={() =>
                     patch({
                       promptSnippets: settings.promptSnippets.filter(
@@ -1416,16 +1413,15 @@ function SnippetsSection({ settings, patch }: SP) {
                       ),
                     })
                   }
-                  className="rounded p-0.5 text-muted-foreground hover:text-foreground"
                 >
-                  <X className="size-3.5" />
-                </button>
+                  <X />
+                </IconButton>
               </div>
             </div>
           )
         )}
         {settings.promptSnippets.length === 0 && (
-          <p className="px-3.5 py-2 text-[12px] text-muted-foreground/60">暂无模板</p>
+          <p className="px-3.5 py-2 text-body text-muted-foreground/60">暂无模板</p>
         )}
       </div>
       <div className="flex items-start gap-2">
@@ -1433,18 +1429,18 @@ function SnippetsSection({ settings, patch }: SP) {
           value={label}
           onChange={(e) => setLabel(e.target.value)}
           placeholder="模板名"
-          className="h-8 w-32 rounded-lg border border-border bg-transparent px-2 text-[12px] outline-none focus:border-primary/50"
+          className="h-8 w-32 rounded-lg border border-border bg-transparent px-2 text-body outline-none focus:border-primary/50"
         />
         <textarea
           value={text}
           rows={2}
           onChange={(e) => setText(e.target.value)}
           placeholder="模板内容，写 {内容} 指定插入位置，支持多行"
-          className="min-h-8 flex-1 resize-y rounded-lg border border-border bg-transparent px-2 py-1.5 text-[12px] leading-relaxed outline-none focus:border-primary/50"
+          className="min-h-8 flex-1 resize-y rounded-lg border border-border bg-transparent px-2 py-1.5 text-body leading-relaxed outline-none focus:border-primary/50"
         />
         <button
           onClick={add}
-          className="flex h-8 items-center gap-1 rounded-lg bg-primary px-3 text-[12px] text-primary-foreground hover:opacity-90"
+          className="flex h-8 items-center gap-1 rounded-lg bg-primary px-3 text-body text-primary-foreground hover:opacity-90"
         >
           <Plus className="size-3.5" /> 添加
         </button>
@@ -1466,7 +1462,7 @@ function DataSection() {
     try {
       setDir(await api.setDataDir(picked));
     } catch (e) {
-      alert(`切换失败：${e}`);
+      tip("warn", `切换失败：${e}`);
     }
   };
 
@@ -1481,16 +1477,16 @@ function DataSection() {
   return (
     <div>
       <SectionTitle>数据</SectionTitle>
-      <p className="mb-3 text-[12px] text-muted-foreground">
+      <p className="mb-3 text-body text-muted-foreground">
         所有数据仅保存在本机，无账号、无同步、无遥测。
       </p>
       <Group title="存储位置">
         <div className="px-3.5 py-2.5">
-          <p className="text-[13px]">数据文件夹</p>
-          <p className="mt-1 break-all rounded-lg bg-muted/60 px-2 py-1 font-mono text-[11px] text-muted-foreground">
+          <p className="text-title">数据文件夹</p>
+          <p className="mt-1 break-all rounded-lg bg-muted/60 px-2 py-1 font-mono text-label text-muted-foreground">
             {dir || "读取中…"}
           </p>
-          <p className="mt-1 text-[11px] text-muted-foreground">
+          <p className="mt-1 text-label text-muted-foreground">
             卡片数据（toskr-data.json）与图片附件（media/）都存放于此；
             切换文件夹会把已有内容一并搬过去。
             选择 iCloud Drive 内的文件夹即可多机同步（避免多台 Mac 同时运行）。
@@ -1498,13 +1494,13 @@ function DataSection() {
           <div className="mt-2 flex gap-2">
             <button
               onClick={pick}
-              className="rounded-lg border border-border px-3 py-1 text-[12px] hover:bg-black/5 dark:hover:bg-white/5"
+              className="rounded-lg border border-border px-3 py-1 text-body hover:bg-black/5 dark:hover:bg-white/5"
             >
               选择文件夹…
             </button>
             <button
               onClick={reset}
-              className="rounded-lg border border-border px-3 py-1 text-[12px] text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5"
+              className="rounded-lg border border-border px-3 py-1 text-body text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5"
             >
               恢复默认
             </button>
@@ -1518,7 +1514,7 @@ function DataSection() {
           right={
             <button
               onClick={() => void emitTo("main", SETTINGS_EXPORT, {})}
-              className="rounded-lg border border-border px-3 py-1 text-[12px] hover:bg-black/5 dark:hover:bg-white/5"
+              className="rounded-lg border border-border px-3 py-1 text-body hover:bg-black/5 dark:hover:bg-white/5"
             >
               导出…
             </button>
@@ -1530,7 +1526,7 @@ function DataSection() {
           right={
             <button
               onClick={() => void emitTo("main", SETTINGS_IMPORT, {})}
-              className="rounded-lg border border-border px-3 py-1 text-[12px] hover:bg-black/5 dark:hover:bg-white/5"
+              className="rounded-lg border border-border px-3 py-1 text-body hover:bg-black/5 dark:hover:bg-white/5"
             >
               导入…
             </button>
@@ -1554,17 +1550,17 @@ function DiagnosticsSection() {
   return (
     <div>
       <SectionTitle>诊断</SectionTitle>
-      <p className="mb-3 text-[12px] text-muted-foreground">
+      <p className="mb-3 text-body text-muted-foreground">
         最近 50 条链路事件（自动刷新）：双击触发/拒绝原因、捕获分支、发送结果。
       </p>
       <div className="rounded-xl border border-border/60 bg-card p-2 font-mono">
         {entries.length === 0 ? (
-          <p className="px-1.5 py-1 text-[12px] text-muted-foreground/60">
+          <p className="px-1.5 py-1 text-body text-muted-foreground/60">
             暂无记录 —— 双击一次触发键就有了
           </p>
         ) : (
           entries.map((d, i) => (
-            <p key={i} className="px-1.5 py-0.5 text-[11px] leading-snug text-muted-foreground">
+            <p key={i} className="px-1.5 py-0.5 text-label leading-snug text-muted-foreground">
               <span className="tabular-nums text-muted-foreground/50">
                 {new Date(d.atMs).toLocaleTimeString("zh-CN", { hour12: false })}
               </span>{" "}
@@ -1620,14 +1616,14 @@ function AboutSection({
       <SectionTitle>关于</SectionTitle>
 
       <div className="mb-4 rounded-xl border border-border/60 bg-card p-4 text-center">
-        <p className="text-[15px] font-semibold">Toskr</p>
-        <p className="mt-0.5 text-[12px] tabular-nums text-muted-foreground">
+        <p className="text-heading font-semibold">Toskr</p>
+        <p className="mt-0.5 text-body tabular-nums text-muted-foreground">
           v{version || "…"}
         </p>
-        <p className="mt-2 text-[12px] text-muted-foreground">
+        <p className="mt-2 text-body text-muted-foreground">
           面向 AI 工作流的全局划词摘录、Prompt 暂存与一键流转工具
         </p>
-        <p className="mt-1 text-[11px] text-muted-foreground/70">
+        <p className="mt-1 text-label text-muted-foreground/70">
           本地优先 · 无账号 · 无遥测
         </p>
       </div>
@@ -1645,13 +1641,16 @@ function AboutSection({
           right={
             update ? (
               phase === "downloading" ? (
-                <span className="text-[12px] tabular-nums text-muted-foreground">
-                  {progress}% · 完成后自动重启
-                </span>
+                <div className="flex items-center gap-2">
+                  <ProgressBar value={progress} tactile className="w-24" />
+                  <span className="text-label tabular-nums text-muted-foreground">
+                    {progress}% · 完成后自动重启
+                  </span>
+                </div>
               ) : (
                 <button
                   onClick={() => void onInstall()}
-                  className="rounded-md bg-primary px-2.5 py-1 text-[12px] font-medium text-primary-foreground hover:opacity-90"
+                  className="rounded-md bg-primary px-2.5 py-1 text-body font-medium text-primary-foreground hover:opacity-90"
                 >
                   下载并安装
                 </button>
@@ -1660,7 +1659,7 @@ function AboutSection({
               <button
                 onClick={() => void onCheck()}
                 disabled={phase === "checking"}
-                className="rounded-md border border-border px-2.5 py-1 text-[12px] hover:bg-muted disabled:opacity-50"
+                className="rounded-md border border-border px-2.5 py-1 text-body hover:bg-muted disabled:opacity-50"
               >
                 {phase === "checking" ? "检查中…" : "检查更新"}
               </button>
@@ -1669,10 +1668,10 @@ function AboutSection({
         />
         {update?.body && (
           <div className="px-3 py-2.5">
-            <p className="mb-1 text-[11px] font-medium text-muted-foreground">
+            <p className="mb-1 text-label font-medium text-muted-foreground">
               本次更新内容
             </p>
-            <p className="max-h-28 overflow-y-auto whitespace-pre-wrap text-[12px] leading-relaxed">
+            <p className="max-h-28 overflow-y-auto whitespace-pre-wrap text-body leading-relaxed">
               {update.body}
             </p>
           </div>
@@ -1717,8 +1716,8 @@ function LinkRow({ label, value, url }: { label: string; value: string; url: str
       onClick={() => void api.openUrl(url)}
       className="flex w-full items-center px-3 py-2.5 text-left hover:bg-muted/50"
     >
-      <span className="flex-1 text-[13px]">{label}</span>
-      <span className="text-[12px] text-muted-foreground">{value} ↗</span>
+      <span className="flex-1 text-title">{label}</span>
+      <span className="text-body text-muted-foreground">{value} ↗</span>
     </button>
   );
 }

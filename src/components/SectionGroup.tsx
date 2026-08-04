@@ -19,6 +19,8 @@ import {
   SimpleMenuItem,
   SimpleMenuSeparator,
 } from "@/components/SimpleMenu";
+import { EmptyState } from "@/components/ui/empty-state";
+import { IconButton } from "@/components/ui/icon-button";
 import { cn } from "@/lib/utils";
 import {
   INBOX_ID,
@@ -82,18 +84,15 @@ export function SectionGroup({
         isOver && "bg-primary/[0.06] ring-1 ring-primary/30"
       )}
     >
-      <div className="group/section mb-1.5 flex h-5 items-center gap-1 pl-0.5 pr-1">
-        <button
-          aria-label={collapsed ? "展开分组" : "折叠分组"}
+      <div className="group mb-1.5 flex h-5 items-center gap-1 pl-0.5 pr-1">
+        <IconButton
+          label={collapsed ? "展开分组" : "折叠分组"}
+          aria-expanded={!collapsed}
+          size="2xs"
           onClick={() => toggleSectionCollapsed(section.id)}
-          className="rounded p-0.5 text-muted-foreground/60 hover:text-foreground"
         >
-          {collapsed ? (
-            <ChevronRight className="size-3" />
-          ) : (
-            <ChevronDown className="size-3" />
-          )}
-        </button>
+          {collapsed ? <ChevronRight /> : <ChevronDown />}
+        </IconButton>
 
         {section.color && (
           <span
@@ -115,12 +114,12 @@ export function SectionGroup({
                 setRenaming(false);
               }
             }}
-            className="h-5 w-32 bg-transparent text-[11px] font-semibold uppercase tracking-[0.08em] outline-none"
+            className="h-5 w-32 bg-transparent text-label font-semibold uppercase tracking-[0.08em] outline-none"
           />
         ) : (
           <h3
             title="点击折叠/展开 · 双击重命名"
-            className="cursor-pointer select-none text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground hover:text-foreground"
+            className="cursor-pointer select-none text-label font-semibold uppercase tracking-[0.08em] text-muted-foreground hover:text-foreground"
             onClick={() => {
               window.clearTimeout(clickTimer.current);
               clickTimer.current = window.setTimeout(
@@ -143,24 +142,21 @@ export function SectionGroup({
             aria-label="发送后保留"
           />
         )}
-        <span className="text-[10px] tabular-nums text-muted-foreground/60">{total}</span>
+        <span className="text-micro tabular-nums text-muted-foreground/60">{total}</span>
 
         <div className="ml-auto">
           <SimpleMenu
             align="end"
             trigger={({ open, toggle }) => (
-              <button
-                aria-label="分组操作"
+              <IconButton
+                label="分组操作"
+                size="2xs"
+                reveal="hover-focus"
                 onClick={toggle}
-                className={cn(
-                  "rounded p-0.5 text-muted-foreground/60 transition-opacity hover:text-foreground",
-                  open
-                    ? "opacity-100"
-                    : "opacity-0 group-hover/section:opacity-100"
-                )}
+                className={open ? "opacity-100 pointer-events-auto" : undefined}
               >
-                <MoreHorizontal className="size-3.5" />
-              </button>
+                <MoreHorizontal />
+              </IconButton>
             )}
           >
             {(close) => (
@@ -264,7 +260,7 @@ export function SectionGroup({
           strategy={verticalListSortingStrategy}
         >
           {activeNotes.length === 0 && doneNotes.length === 0 ? (
-            <p className="px-2 py-1 text-[11px] text-muted-foreground/50">空</p>
+            <EmptyState variant="inline" title="此分组为空" />
           ) : (
             <div className="flex flex-col gap-1 pl-2">
               {activeNotes.map((note) => (
@@ -275,7 +271,7 @@ export function SectionGroup({
                 <>
                   <button
                     onClick={() => useUIStore.getState().toggleDoneOpen(section.id)}
-                    className="flex items-center gap-1 px-1 py-0.5 text-[10px] text-muted-foreground/60 hover:text-foreground"
+                    className="flex items-center gap-1 px-1 py-0.5 text-micro text-muted-foreground/60 hover:text-foreground"
                   >
                     {doneOpen ? (
                       <ChevronDown className="size-2.5" />

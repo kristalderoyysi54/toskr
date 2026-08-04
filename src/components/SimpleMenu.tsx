@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import { floatingSurface } from "@/components/ui/floating-surface";
 import { cn } from "@/lib/utils";
 
 /**
@@ -24,7 +25,15 @@ export function SimpleMenu({
    *  与相邻按钮拼「分裂按钮」时传 "flex" 消除。 */
   className?: string;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpenRaw] = useState(false);
+  // 出场动画期间保持挂载（同 DuePopover 的 lingering 先例）：
+  // data-state 翻 closed → tw-animate 播出场 → 120ms 后真正卸载
+  const [rendered, setRendered] = useState(false);
+  const setOpen = (v: boolean) => {
+    setOpenRaw(v);
+    if (v) setRendered(true);
+    else window.setTimeout(() => setRendered(false), 120);
+  };
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -48,13 +57,18 @@ export function SimpleMenu({
 
   return (
     <div ref={rootRef} className={cn("relative", className)}>
-      {trigger({ open, toggle: () => setOpen((v) => !v) })}
-      {open && (
+      {trigger({ open, toggle: () => setOpen(!open) })}
+      {rendered && (
         <div
+          data-state={open ? "open" : "closed"}
           className={cn(
-            "absolute z-50 min-w-40 rounded-lg border border-black/10 bg-white/95 p-1 shadow-xl",
-            "dark:border-white/10 dark:bg-zinc-900/95",
-            side === "bottom" ? "top-full mt-1" : "bottom-full mb-1",
+            "absolute z-50 min-w-40 rounded-lg p-1",
+            floatingSurface(2),
+            // 与 Radix 菜单同一套 tw-animate 进出场（duration-100 对齐）
+            "data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95",
+            "data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+            "duration-100",
+            side === "bottom" ? "top-full mt-1 origin-top" : "bottom-full mb-1 origin-bottom",
             align === "end" ? "right-0" : "left-0",
             menuClassName
           )}
@@ -87,8 +101,8 @@ export function SimpleMenuItem({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px]",
-        "hover:bg-black/5 disabled:opacity-40 dark:hover:bg-white/10",
+        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-body outline-none",
+        "hover:bg-black/5 focus-visible:bg-black/5 disabled:opacity-40 dark:hover:bg-white/10 dark:focus-visible:bg-white/10",
         destructive && "text-destructive"
       )}
     >
@@ -100,11 +114,11 @@ export function SimpleMenuItem({
 /** 菜单分组标题。 */
 export function SimpleMenuLabel({ children }: { children: React.ReactNode }) {
   return (
-    <p className="px-2 py-1 text-[10px] font-medium text-muted-foreground">{children}</p>
+    <p className="px-2 py-1 text-micro font-medium text-muted-foreground">{children}</p>
   );
 }
 
 /** 分隔线。 */
 export function SimpleMenuSeparator() {
-  return <div className="my-1 h-px bg-black/10 dark:bg-white/10" />;
+  return <div className="my-1 h-px bg-border" />;
 }

@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 
 import { tip } from "@/lib/tip";
+import { IconButton } from "@/components/ui/icon-button";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -66,14 +67,14 @@ let lastMultiSelection: { ids: string[]; at: number } | null = null;
 function CardThumb({ file, overlay }: { file: string; overlay?: string }) {
   const url = useNoteThumb(file);
   return (
-    <div className="relative flex h-full min-w-0 flex-1 items-center justify-center overflow-hidden rounded bg-black/[0.04] dark:bg-white/[0.06]">
+    <div className="relative flex h-full min-w-0 flex-1 items-center justify-center overflow-hidden rounded-sm bg-black/[0.04] dark:bg-white/[0.06]">
       {url ? (
         <img src={url} alt="" className="h-full w-full object-cover" />
       ) : (
-        <span className="text-[10px] text-muted-foreground/60">…</span>
+        <span className="text-micro text-muted-foreground/60">…</span>
       )}
       {overlay && (
-        <span className="absolute inset-0 flex items-center justify-center bg-black/45 text-[13px] font-medium text-white">
+        <span className="absolute inset-0 flex items-center justify-center bg-black/45 text-title font-medium text-white">
           {overlay}
         </span>
       )}
@@ -450,15 +451,29 @@ export const NoteCard = memo(function NoteCard({
             // 实色卡片（Paste 风格）：与毛玻璃面板分层；透明度由设置项调节
             "bg-[rgb(255_255_255/var(--card-alpha,100%))] shadow-sm dark:bg-[rgb(39_39_42/var(--card-alpha,100%))]",
             "hover:border-black/10 dark:hover:border-white/10",
-            // 无勾选框设计：选中态用蓝色边框标识（primary 深色下近白，不用）
-            checked && "border-blue-500 ring-2 ring-blue-500",
-            // 键盘焦点：中性淡描边，仅未选中卡展示（选中卡只有粗蓝框一种形态，
-            // 避免 ring-1/ring-2 类冲突混出细蓝框）
-            focused && !checked && "ring-1 ring-black/20 dark:ring-white/25",
+            // 舒适密度的悬浮微升：位移只作用于卡片刚体（内部图标区相对位置不变）；
+            // reduced-motion 下 transition 被全局压到 0.01ms，等效"去位移保影子"
+            !compact &&
+              "transition-[transform,box-shadow] duration-150 hover:-translate-y-px hover:elevation-2",
+            // 无勾选框设计：选中态 = 淡填色 + primary 边框（+ 舒适密度抬升）——
+            // 与键盘焦点的中性细环用"形状"区分，不只靠色（左缘条方案已被用户否决）
+            checked && (compact ? "ring-1 ring-primary/30" : "border-primary/40 elevation-2"),
+            focused && !checked && "ring-1 ring-foreground/20",
             flashing && "flash-highlight",
-            isDragging && "z-10 opacity-70 shadow-lg"
+            isDragging && "z-10 opacity-70 elevation-3"
           )}
         >
+          {checked && (
+            <span
+              aria-hidden
+              className={cn(
+                "pointer-events-none absolute inset-0",
+                compact
+                  ? "bg-primary/[0.08] dark:bg-primary/[0.14]"
+                  : "bg-primary/[0.06] dark:bg-primary/[0.1]"
+              )}
+            />
+          )}
           <button
             {...attributes}
             {...listeners}
@@ -478,7 +493,7 @@ export const NoteCard = memo(function NoteCard({
           {quickSlot > 0 && (
             <span
               className={cn(
-                "absolute left-1 z-10 flex h-4 min-w-4 items-center justify-center rounded bg-black/70 px-1 text-[10px] font-semibold tabular-nums text-white dark:bg-white/80 dark:text-black",
+                "absolute left-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-sm bg-black/70 px-1 text-micro font-semibold tabular-nums text-white dark:bg-white/80 dark:text-black",
                 compact ? "top-1/2 -translate-y-1/2" : "top-1"
               )}
             >
@@ -510,7 +525,7 @@ export const NoteCard = memo(function NoteCard({
                     if (e.key === "Enter" && !e.nativeEvent.isComposing) commitRename();
                     if (e.key === "Escape") setRenaming(false);
                   }}
-                  className="w-full bg-transparent text-[11px] font-semibold text-white outline-none placeholder:text-white/50"
+                  className="w-full bg-transparent text-label font-semibold text-white outline-none placeholder:text-white/50"
                 />
               ) : (
                 <p
@@ -519,12 +534,12 @@ export const NoteCard = memo(function NoteCard({
                     e.stopPropagation();
                     startRename();
                   }}
-                  className="cursor-text truncate text-[11px] font-semibold text-white"
+                  className="cursor-text truncate text-label font-semibold text-white"
                 >
                   {note.title ?? typeLabel}
                 </p>
               )}
-              <p className="truncate text-[10px] text-white/70">
+              <p className="truncate text-micro text-white/70">
                 {timeAgo(note.createdAt)}
               </p>
             </div>
@@ -545,11 +560,11 @@ export const NoteCard = memo(function NoteCard({
               <div className="flex w-full flex-col justify-center gap-0.5">
                 <div className="flex items-start gap-1.5">
                   {note.linkIcon && <LinkFavicon src={note.linkIcon} />}
-                  <p className="line-clamp-2 text-[13px] font-semibold leading-tight [overflow-wrap:anywhere]">
+                  <p className="line-clamp-2 text-title font-semibold leading-tight [overflow-wrap:anywhere]">
                     {note.linkTitle ?? link!.host}
                   </p>
                 </div>
-                <p className="line-clamp-2 text-[11px] leading-tight text-muted-foreground [overflow-wrap:anywhere]">
+                <p className="line-clamp-2 text-label leading-tight text-muted-foreground [overflow-wrap:anywhere]">
                   {note.linkTitle
                     ? link!.host + (link!.path === "/" ? "" : link!.path)
                     : link!.path}
@@ -559,7 +574,7 @@ export const NoteCard = memo(function NoteCard({
                     e.stopPropagation();
                     void api.openUrl(note.url!);
                   }}
-                  className="mt-1 flex w-fit items-center gap-1 rounded-md bg-black/[0.06] px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground dark:bg-white/10"
+                  className="mt-1 flex w-fit items-center gap-1 rounded-md bg-black/[0.06] px-1.5 py-0.5 text-micro text-muted-foreground hover:text-foreground dark:bg-white/10"
                 >
                   <ExternalLink className="size-2.5" /> 打开链接
                 </button>
@@ -581,7 +596,7 @@ export const NoteCard = memo(function NoteCard({
                   ))}
                 </div>
               ) : (
-                <div className="flex h-full w-full items-center justify-center overflow-hidden rounded bg-black/[0.04] dark:bg-white/[0.06]">
+                <div className="flex h-full w-full items-center justify-center overflow-hidden rounded-sm bg-black/[0.04] dark:bg-white/[0.06]">
                   {imageUrl ? (
                     <img
                       src={imageUrl}
@@ -589,15 +604,16 @@ export const NoteCard = memo(function NoteCard({
                       className="max-h-full max-w-full object-contain"
                     />
                   ) : (
-                    <span className="text-[10px] text-muted-foreground/60">加载中…</span>
+                    <span className="text-micro text-muted-foreground/60">加载中…</span>
                   )}
                 </div>
               )
             ) : (
               <p
                 className={cn(
-                  "line-clamp-3 whitespace-pre-wrap [overflow-wrap:anywhere] text-[12.5px] leading-[1.5]",
-                  note.codeLang && "font-mono text-[11.5px]",
+                  // hover:cursor-grab：正文可拖出到外部应用的唯一可见暗示
+                  "line-clamp-3 whitespace-pre-wrap text-body leading-normal [overflow-wrap:anywhere] hover:cursor-grab",
+                  note.codeLang && "font-mono text-label",
                   note.done && "text-muted-foreground line-through opacity-60"
                 )}
               >
@@ -623,14 +639,14 @@ export const NoteCard = memo(function NoteCard({
                 <Thumb key={f} file={f} />
               ))}
               {images.length > 4 && (
-                <span className="self-center text-[10px] text-muted-foreground/60">
+                <span className="self-center text-micro text-muted-foreground/60">
                   +{images.length - 4}
                 </span>
               )}
             </div>
           )}
 
-          <div className="flex h-4 shrink-0 items-center gap-1 text-[10px] text-muted-foreground/70">
+          <div className="flex h-4 shrink-0 items-center gap-1 text-micro text-muted-foreground/70">
             {note.sourceApp ? <span className="truncate">来自 {note.sourceApp}</span> : <span />}
             <span className="ml-auto shrink-0 tabular-nums text-muted-foreground/50">
               {isImage && note.imageW
@@ -645,15 +661,17 @@ export const NoteCard = memo(function NoteCard({
             </>
           )}
 
-          {/* 悬停操作钮：盖在元信息/时间上，避开正文内容 */}
+          {/* 悬停操作钮：hover/键盘焦点显现（opacity 方案，Tab 可达） */}
           <div
             className={cn(
-              "absolute hidden gap-0.5 group-hover:flex",
+              "absolute flex gap-0.5",
               compact ? "right-1 top-1/2 -translate-y-1/2" : "bottom-1 right-1.5"
             )}
           >
             <IconButton
               label={isLink ? "打开页面（Space）" : "预览（Space）"}
+              surface
+              reveal="hover-focus"
               onClick={() => openPreview()}
             >
               {isLink ? (
@@ -663,12 +681,15 @@ export const NoteCard = memo(function NoteCard({
               )}
             </IconButton>
             {!isImage && (
-              <IconButton label="编辑" onClick={() => openPreview(true)}>
+              <IconButton label="编辑" surface reveal="hover-focus" onClick={() => openPreview(true)}>
                 <Pencil className="size-3" />
               </IconButton>
             )}
             <IconButton
               label="删除"
+              surface
+              reveal="hover-focus"
+              tone="danger"
               onClick={() => deleteNotesWithUndo([note.id], "已删除 1 条")}
             >
               <Trash2 className="size-3" />
@@ -747,17 +768,21 @@ function CompactRow({
       ) : icon ? (
         <img src={icon.url} alt="" className="size-5 shrink-0" />
       ) : null}
-      {isImage && imageUrl && (
-        <img
-          src={imageUrl}
-          alt=""
-          className="size-6 shrink-0 rounded object-cover"
-        />
-      )}
+      {isImage &&
+        (imageUrl ? (
+          <img
+            src={imageUrl}
+            alt=""
+            className="size-6 shrink-0 rounded-sm object-cover"
+          />
+        ) : (
+          // 缩略图解码中的骨架占位：同尺寸脉冲块，杜绝"空洞"
+          <span className="size-6 shrink-0 animate-pulse rounded-sm bg-black/[0.06] dark:bg-white/[0.08]" />
+        ))}
       <p
         className={cn(
-          "min-w-0 flex-1 truncate text-[12px]",
-          note.codeLang && "font-mono text-[11px]",
+          "min-w-0 flex-1 truncate text-body hover:cursor-grab",
+          note.codeLang && "font-mono text-label",
           note.done && "text-muted-foreground line-through opacity-60"
         )}
       >
@@ -774,15 +799,16 @@ function CompactRow({
           )
         )}
       </p>
+      {/* 尾部元数据在 hover 时淡出，给悬浮操作钮让位（原先是图标直接压在时间上打架） */}
       {note.keep && (
-        <Star className="size-3 shrink-0 fill-amber-400 text-amber-400" />
+        <Star className="size-3 shrink-0 fill-amber-400 text-amber-400 transition-opacity group-hover:opacity-0" />
       )}
       {!isImage && images.length > 0 && (
-        <span className="shrink-0 text-[10px] text-muted-foreground/60">
+        <span className="shrink-0 text-micro text-muted-foreground/60 transition-opacity group-hover:opacity-0">
           {images.length}图
         </span>
       )}
-      <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/50">
+      <span className="shrink-0 text-micro tabular-nums text-muted-foreground/50 transition-opacity group-hover:opacity-0">
         {timeAgo(note.createdAt)}
       </span>
     </div>
@@ -797,7 +823,7 @@ function LinkFavicon({ src }: { src: string }) {
       src={src}
       alt=""
       onError={() => setFailed(true)}
-      className="mt-px size-4 shrink-0 rounded"
+      className="mt-px size-4 shrink-0 rounded-sm"
     />
   );
 }
@@ -806,35 +832,9 @@ function LinkFavicon({ src }: { src: string }) {
 function Thumb({ file }: { file: string }) {
   const url = useNoteThumb(file);
   return (
-    <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded bg-black/[0.05] dark:bg-white/[0.08]">
+    <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-sm bg-black/[0.05] dark:bg-white/[0.08]">
       {url && <img src={url} alt="" className="max-h-full max-w-full object-contain" />}
     </span>
   );
 }
 
-function IconButton({
-  label,
-  onClick,
-  children,
-}: {
-  label: string;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      aria-label={label}
-      title={label}
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick();
-      }}
-      className={cn(
-        "rounded-md border border-black/5 bg-white/95 p-1 text-muted-foreground shadow-sm",
-        "hover:text-foreground dark:border-white/10 dark:bg-zinc-800/95"
-      )}
-    >
-      {children}
-    </button>
-  );
-}

@@ -16,7 +16,7 @@ import {
 } from "@dnd-kit/sortable";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { motion } from "motion/react";
+import { motion, MotionConfig } from "motion/react";
 import {
   CheckCircle2,
   Circle,
@@ -27,6 +27,7 @@ import {
   Plus,
   Rows3,
   Search,
+  SearchX,
   Settings2,
   X,
 } from "lucide-react";
@@ -37,8 +38,17 @@ import { PreviewOverlay } from "@/components/PreviewOverlay";
 import { SectionGroup } from "@/components/SectionGroup";
 import { SelectionBar } from "@/components/SelectionBar";
 import { TaskPage, TASK_DONE_KEY } from "@/components/TaskPage";
+import { EmptyState } from "@/components/ui/empty-state";
+import { floatingSurface } from "@/components/ui/floating-surface";
+import { IconButton } from "@/components/ui/icon-button";
+import { Kbd } from "@/components/ui/kbd";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   clearDoneTasksWithUndo,
   clearDoneWithUndo,
@@ -51,6 +61,7 @@ import {
   undoableTip,
 } from "@/lib/actions";
 import { bucketTasksForDisplay, dueTasksToRemind } from "@/lib/tasks";
+import { springSnappy, tweenExit } from "@/lib/motion";
 import { previewOf } from "@/lib/format";
 import { SHORTCUTS } from "@/lib/shortcuts";
 import { runPendingUndo, setPendingUndo, tip } from "@/lib/tip";
@@ -110,7 +121,7 @@ function PageSlide({
               transitionEnd: { visibility: "hidden" as const },
             }
       }
-      transition={{ type: "spring", stiffness: 480, damping: 40 }}
+      transition={springSnappy}
       className={cn(
         "absolute inset-0 flex min-h-0 flex-col",
         !active && "pointer-events-none"
@@ -125,6 +136,7 @@ export default function App() {
   const open = useUIStore((s) => s.open);
   const page = useUIStore((s) => s.page);
   const pinned = useUIStore((s) => s.pinned);
+  const announce = useUIStore((s) => s.announce);
   const searchOpen = useUIStore((s) => s.searchOpen);
   const query = useUIStore((s) => s.query);
   const doneOpen = useUIStore((s) => s.doneOpen);
@@ -773,6 +785,13 @@ export default function App() {
         useNotesStore.getState().setChecked(navIds);
         return;
       }
+      // ⌘Z：撤销上一步（HUD 悬停撤销的键盘等价入口，复用同一 pendingUndo 槽）
+      if (e.key === "z" && e.metaKey && !e.shiftKey) {
+        if (editable) return; // 输入框/文本区让位原生撤销
+        e.preventDefault();
+        runPendingUndo();
+        return;
+      }
       if (editable) return;
 
       const ui = useUIStore.getState();
@@ -1015,6 +1034,7 @@ export default function App() {
   };
 
   return (
+    <MotionConfig reducedMotion="user">
     <TooltipProvider delayDuration={400}>
       <div
         className="h-screen w-screen overflow-hidden text-foreground"
@@ -1028,19 +1048,15 @@ export default function App() {
               animate={open ? { x: 0, opacity: 1 } : { x: 16, opacity: 0 }}
               // 进场 spring 保手感；退场用短 tween 果断结束——spring 的静止判定
               // 有长尾，会拖住窗口隐藏时机，露出毛玻璃空板（内容先没、面板后没）
-              transition={
-                open
-                  ? { type: "spring", stiffness: 480, damping: 40 }
-                  : { duration: 0.14, ease: "easeIn" }
-              }
+              transition={open ? springSnappy : tweenExit}
               onAnimationComplete={() => {
                 if (!useUIStore.getState().open) {
                   void api.hidePanel(restoreFocusRef.current);
                 }
               }}
               className={cn(
-                "panel-surface relative flex h-full w-full flex-col overflow-hidden rounded-[14px]",
-                "border border-black/10 dark:border-white/10",
+                "panel-surface relative flex h-full w-full flex-col overflow-hidden rounded-xl",
+                "border border-foreground/10",
                 !open && "pointer-events-none"
               )}
             >
@@ -1084,11 +1100,11 @@ export default function App() {
                 <h1
                   data-tauri-drag-region
                   title="拖动此处可移动面板（未吸附时）"
-                  className="cursor-grab select-none text-[13px] font-semibold tracking-tight active:cursor-grabbing"
+                  className="cursor-grab select-none text-title font-semibold tracking-tight active:cursor-grabbing"
                 >
                   Toskr
                 </h1>
-                <span className="text-[11px] tabular-nums text-muted-foreground">
+                <span className="text-label tabular-nums text-muted-foreground">
                   {page === "notes"
                     ? activeCount
                     : page === "tasks"
@@ -1096,45 +1112,81 @@ export default function App() {
                       : clipNotes.length}
                 </span>
                 <div className="ml-auto flex items-center gap-0.5">
+                  {/* 页面级工具：搜索 / 清理 / 密度 —— 与右侧全局工具用分隔线区分 */}
                   {page !== "tasks" && (
-                    <button
-                      aria-label="搜索（⌘F）"
-                      title="搜索（⌘F）"
-                      onClick={() => {
-                        useUIStore.getState().setSearchOpen(!searchOpen);
-                        window.setTimeout(() => searchInputRef.current?.focus(), 30);
-                      }}
-                      className={cn(
-                        "rounded-md p-1 text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10",
-                        searchOpen && "bg-black/5 text-foreground dark:bg-white/10"
-                      )}
-                    >
-                      <Search className="size-3.5" />
-                    </button>
+                    <Tipped label="搜索（⌘F）">
+                      <IconButton
+                        label="搜索（⌘F）"
+                        withTitle={false}
+                        pressed={searchOpen}
+                        onClick={() => {
+                          useUIStore.getState().setSearchOpen(!searchOpen);
+                          window.setTimeout(() => searchInputRef.current?.focus(), 30);
+                        }}
+                      >
+                        <Search />
+                      </IconButton>
+                    </Tipped>
                   )}
                   {page !== "clipboard" && (page === "notes" ? doneCount : doneTaskCount) > 0 && (
-                    <button
-                      aria-label="清理已完成"
-                      title={
+                    <Tipped
+                      label={
                         page === "notes"
                           ? `清理 ${doneCount} 条已完成`
                           : `清理 ${doneTaskCount} 个已完成任务`
                       }
-                      onClick={
-                        page === "notes" ? clearDoneWithUndo : clearDoneTasksWithUndo
-                      }
-                      className="rounded-md p-1 text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
                     >
-                      <Eraser className="size-3.5" />
-                    </button>
+                      <IconButton
+                        label={
+                          page === "notes"
+                            ? `清理 ${doneCount} 条已完成`
+                            : `清理 ${doneTaskCount} 个已完成任务`
+                        }
+                        withTitle={false}
+                        onClick={
+                          page === "notes" ? clearDoneWithUndo : clearDoneTasksWithUndo
+                        }
+                      >
+                        <Eraser />
+                      </IconButton>
+                    </Tipped>
                   )}
-                  <button
-                    aria-label="靠右边栏"
-                    title={
+                  {page !== "tasks" && (
+                    <Tipped label="卡片密度：舒适 / 紧凑">
+                      <IconButton
+                        label="卡片密度：舒适 / 紧凑"
+                        withTitle={false}
+                        pressed={settings.cardDensity === "compact"}
+                        onClick={() => {
+                          const cur = useNotesStore.getState().settings.cardDensity;
+                          useNotesStore.getState().setSettings({
+                            cardDensity: cur === "compact" ? "comfortable" : "compact",
+                          });
+                        }}
+                      >
+                        <Rows3 />
+                      </IconButton>
+                    </Tipped>
+                  )}
+                  {(page !== "tasks" || doneTaskCount > 0) && (
+                    <span aria-hidden className="mx-0.5 h-3.5 w-px bg-border" />
+                  )}
+                  {/* 全局工具：停靠模式 / 固定 / 设置 */}
+                  <Tipped
+                    label={
                       settings.rightSidebar
                         ? "退出靠右边栏，恢复自动停靠（伴随磁吸 / 屏幕右缘）"
                         : "靠右边栏：贴屏幕右缘全高（保留间距），开启后不再伴随磁吸"
                     }
+                  >
+                  <IconButton
+                    label={
+                      settings.rightSidebar
+                        ? "退出靠右边栏，恢复自动停靠（伴随磁吸 / 屏幕右缘）"
+                        : "靠右边栏：贴屏幕右缘全高（保留间距），开启后不再伴随磁吸"
+                    }
+                    withTitle={false}
+                    pressed={settings.rightSidebar}
                     onClick={async () => {
                       const on = !useNotesStore.getState().settings.rightSidebar;
                       useNotesStore.getState().setSettings({
@@ -1147,52 +1199,34 @@ export default function App() {
                       await api.setRightSidebar(on).catch(() => {});
                       if (!on) void api.showPanel();
                     }}
-                    className={cn(
-                      "rounded-md p-1 text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10",
-                      settings.rightSidebar && "bg-black/5 text-foreground dark:bg-white/10"
-                    )}
                   >
-                    <PanelRight className="size-3.5" />
-                  </button>
-                  {page !== "tasks" && (
-                    <button
-                      aria-label="切换卡片密度"
-                      title="卡片密度：舒适 / 紧凑"
-                      onClick={() => {
-                        const cur = useNotesStore.getState().settings.cardDensity;
-                        useNotesStore.getState().setSettings({
-                          cardDensity: cur === "compact" ? "comfortable" : "compact",
-                        });
-                      }}
-                      className="rounded-md p-1 text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
+                    <PanelRight />
+                  </IconButton>
+                  </Tipped>
+                  <Tipped label={pinned ? "取消固定" : "固定（失焦不隐藏）"}>
+                    <IconButton
+                      label={pinned ? "取消固定" : "固定（失焦不隐藏）"}
+                      withTitle={false}
+                      pressed={pinned}
+                      onClick={() => useUIStore.getState().setPinned(!pinned)}
                     >
-                      <Rows3 className="size-3.5" />
-                    </button>
-                  )}
-                  <button
-                    aria-label={pinned ? "取消固定" : "固定面板"}
-                    title={pinned ? "取消固定" : "固定（失焦不隐藏）"}
-                    onClick={() => useUIStore.getState().setPinned(!pinned)}
-                    className={cn(
-                      "rounded-md p-1 text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10",
-                      pinned && "bg-black/5 text-foreground dark:bg-white/10"
-                    )}
-                  >
-                    <Pin className={cn("size-3.5", pinned && "fill-current")} />
-                  </button>
-                  <button
-                    aria-label="设置"
-                    title="设置"
-                    onClick={() => api.openSettingsWindow()}
-                    className="rounded-md p-1 text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
-                  >
-                    <Settings2 className="size-3.5" />
-                  </button>
+                      <Pin className={cn("size-3.5", pinned && "fill-current")} />
+                    </IconButton>
+                  </Tipped>
+                  <Tipped label="设置">
+                    <IconButton
+                      label="设置"
+                      withTitle={false}
+                      onClick={() => api.openSettingsWindow()}
+                    >
+                      <Settings2 />
+                    </IconButton>
+                  </Tipped>
                 </div>
               </header>
 
               {/* 页面切换：笔记 / 任务 / 剪贴板（⌃Tab 循环），任务 tab 带已到期红色计数 */}
-              <div className="mx-3 mb-1.5 flex items-center gap-1">
+              <div role="tablist" aria-label="页面" className="mx-3 mb-1.5 flex items-center gap-1">
                 <PageTab
                   active={page === "notes"}
                   onClick={() => useUIStore.getState().setPage("notes")}
@@ -1217,7 +1251,7 @@ export default function App() {
               <PermissionBanner />
 
               {searchOpen && page !== "tasks" && (
-                <div className="mx-3 mb-1.5 flex items-center gap-1.5 rounded-lg border border-black/10 bg-white/60 px-2 py-1 dark:border-white/10 dark:bg-white/[0.06]">
+                <div className="surface-inset mx-3 mb-1.5 flex items-center gap-1.5 rounded-lg border border-foreground/10 px-2 py-1 focus-within:border-primary/50">
                   <Search className="size-3 shrink-0 text-muted-foreground/70" />
                   <input
                     ref={searchInputRef}
@@ -1230,20 +1264,20 @@ export default function App() {
                         useUIStore.getState().setSearchOpen(false);
                       }
                     }}
-                    className="h-5 w-full bg-transparent text-[12px] outline-none placeholder:text-muted-foreground/60"
+                    className="h-5 w-full bg-transparent text-body outline-none placeholder:text-muted-foreground/60"
                   />
                   {q && (
-                    <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                    <span className="shrink-0 text-micro tabular-nums text-muted-foreground">
                       {matchCount}
                     </span>
                   )}
-                  <button
-                    aria-label="关闭搜索"
+                  <IconButton
+                    label="关闭搜索"
+                    size="2xs"
                     onClick={() => useUIStore.getState().setSearchOpen(false)}
-                    className="shrink-0 rounded p-0.5 text-muted-foreground/70 hover:text-foreground"
                   >
-                    <X className="size-3" />
-                  </button>
+                    <X />
+                  </IconButton>
                 </div>
               )}
 
@@ -1252,23 +1286,25 @@ export default function App() {
                 <PageSlide offset={2 - pageIndex}>
                 <ScrollArea className="min-h-0 flex-1 px-2">
                   {clipNotes.length === 0 ? (
-                    <div className="flex flex-col items-center gap-2 px-6 pb-10 pt-16 text-center">
-                      <ClipboardList className="size-6 text-muted-foreground/40" />
-                      <p className="text-[13px] font-medium text-muted-foreground">
-                        {!settings.clipHistory
+                    <EmptyState
+                      icon={<ClipboardList />}
+                      title={
+                        !settings.clipHistory
                           ? "剪贴板历史未开启"
                           : q
                             ? `没有匹配「${q}」的记录`
-                            : "还没有剪贴板记录"}
-                      </p>
-                      {!settings.clipHistory && (
-                        <p className="text-[11px] leading-relaxed text-muted-foreground/70">
-                          在 设置 → 通用 开启「剪贴板历史」后，
-                          <br />
-                          复制过的内容会自动收集到这里。
-                        </p>
-                      )}
-                    </div>
+                            : "还没有剪贴板记录"
+                      }
+                      hint={
+                        !settings.clipHistory ? (
+                          <>
+                            在 设置 → 通用 开启「剪贴板历史」后，
+                            <br />
+                            复制过的内容会自动收集到这里。
+                          </>
+                        ) : undefined
+                      }
+                    />
                   ) : (
                     <DndContext
                       sensors={sensors}
@@ -1302,12 +1338,20 @@ export default function App() {
                 {!onboarding.done && <OnboardingCard />}
                 {notes.length === 0 ? (
                   onboarding.done ? (
-                    <EmptyState />
+                    <EmptyState
+                      title="还没有内容"
+                      hint={
+                        <>
+                          在任意应用中选中文字后连按两次 <Kbd>⇧ Shift</Kbd>{" "}
+                          即可捕获到这里；
+                          <br />
+                          也可以在下方直接记下想法或提示词。
+                        </>
+                      }
+                    />
                   ) : null
                 ) : matchCount === 0 && q ? (
-                  <p className="px-4 py-10 text-center text-[12px] text-muted-foreground/60">
-                    没有匹配「{q}」的卡片
-                  </p>
+                  <EmptyState icon={<SearchX />} title={`没有匹配「${q}」的卡片`} />
                 ) : (
                   <DndContext
                     sensors={sensors}
@@ -1329,7 +1373,7 @@ export default function App() {
                       {!q && (
                         <button
                           onClick={() => useNotesStore.getState().addSection()}
-                          className="mb-2 ml-2 flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-muted-foreground/60 hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
+                          className="mb-2 ml-2 flex items-center gap-1 rounded-md px-1.5 py-1 text-label text-muted-foreground/60 outline-none hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50 dark:hover:bg-white/10"
                         >
                           <Plus className="size-3" /> 新建分组
                         </button>
@@ -1349,9 +1393,14 @@ export default function App() {
 
               <PreviewOverlay />
               {showShortcuts && <ShortcutHelp />}
+              {/* HUD 是独立无焦点窗口，屏幕阅读器听不到——tip() 文案镜像到此播报 */}
+              <div aria-live="polite" role="status" className="sr-only">
+                {announce}
+              </div>
             </motion.div>
       </div>
     </TooltipProvider>
+    </MotionConfig>
   );
 }
 
@@ -1383,7 +1432,7 @@ function ClipLoadMore({
   return (
     <div
       ref={ref}
-      className="py-1 text-center text-[11px] text-muted-foreground/50"
+      className="py-1 text-center text-label text-muted-foreground/50"
     >
       还有 {remaining} 条…
     </div>
@@ -1397,45 +1446,54 @@ function OnboardingCard() {
   const Step = ({ done, children }: { done: boolean; children: React.ReactNode }) => (
     <li className="flex items-start gap-1.5">
       {done ? (
-        <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-emerald-500" />
+        <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" />
       ) : (
         <Circle className="mt-0.5 size-3.5 shrink-0 text-muted-foreground/40" />
       )}
-      <span className={cn("text-[11.5px] leading-relaxed", done && "text-muted-foreground line-through")}>
+      <span className={cn("text-label leading-normal", done && "text-muted-foreground line-through")}>
         {children}
+        {done && <span className="sr-only">，已完成</span>}
       </span>
     </li>
   );
 
   return (
-    <div className="mx-1 mb-2 mt-1 rounded-xl border border-black/10 bg-white/50 p-3 dark:border-white/10 dark:bg-white/[0.05]">
-      <p className="mb-1.5 text-[12px] font-semibold">三步上手</p>
-      <ul className="flex flex-col gap-1">
+    <div className="mx-1 mb-2 mt-1 rounded-xl border border-foreground/10 bg-surface-raised/90 p-3 elevation-3">
+      <p className="mb-1.5 text-body font-semibold">三步上手</p>
+      <ul aria-live="polite" className="flex flex-col gap-1">
         <Step done={axOk}>在系统设置授权「辅助功能」</Step>
         <Step done={onboarding.captured}>
-          去任意应用选中一段文字，连按两次{" "}
-          <kbd className="rounded border border-black/10 bg-black/5 px-1 text-[10px] dark:border-white/15 dark:bg-white/10">
-            ⇧
-          </kbd>{" "}
-          捕获
+          去任意应用选中一段文字，连按两次 <Kbd>⇧</Kbd> 捕获
         </Step>
-        <Step done={onboarding.sent}>勾选卡片，按 ⌘⏎ 发送回你的 AI 对话</Step>
+        <Step done={onboarding.sent}>
+          勾选卡片，按 <Kbd>⌘⏎</Kbd> 发送回你的 AI 对话
+        </Step>
       </ul>
     </div>
+  );
+}
+
+/** chrome 级图标钮的 Radix 提示（行级高重复件按政策保留原生 title）。 */
+function Tipped({ label, children }: { label: string; children: React.ReactElement }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side="bottom" className="max-w-64 text-label">
+        {label}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
 /** 长按 ⌥ 弹出的快捷键速查层。 */
 function ShortcutHelp() {
   return (
-    <div className="absolute inset-x-3 bottom-3 z-50 rounded-xl border border-black/10 bg-white/95 p-3 shadow-2xl dark:border-white/10 dark:bg-zinc-900/95">
-      <p className="mb-1.5 text-[11px] font-semibold text-muted-foreground">快捷键</p>
+    <div className={cn("absolute inset-x-3 bottom-3 z-50 rounded-xl p-3", floatingSurface(3))}>
+      <p className="mb-1.5 text-label font-semibold text-muted-foreground">快捷键</p>
       <div className="grid grid-cols-1 gap-y-0.5">
         {SHORTCUTS.map(([key, desc]) => (
-          <div key={key} className="flex items-center gap-2 text-[11px]">
-            <kbd className="min-w-10 rounded border border-black/10 bg-black/5 px-1 py-0.5 text-center text-[10px] tabular-nums dark:border-white/15 dark:bg-white/10">
-              {key}
-            </kbd>
+          <div key={key} className="flex items-center gap-2 text-label">
+            <Kbd className="min-w-10 py-0.5">{key}</Kbd>
             <span className="text-muted-foreground">{desc}</span>
           </div>
         ))}
@@ -1458,17 +1516,22 @@ function PageTab({
 }) {
   return (
     <button
+      role="tab"
+      aria-selected={active}
       onClick={onClick}
       className={cn(
-        "flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[12px]",
+        "flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-label outline-none",
+        "transition-[color,background-color,transform] duration-100",
+        "focus-visible:ring-2 focus-visible:ring-primary/50 active:scale-[0.97]",
         active
           ? "border-primary/50 bg-primary/10 font-medium text-foreground"
           : "border-transparent text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
       )}
     >
       {children}
+      {/* token-exception: 徽标 9px 为重塑前原始尺寸，用户指定还原 */}
       {!!badge && (
-        <span className="rounded-full bg-red-500/90 px-1.5 text-[9px] font-semibold leading-4 tabular-nums text-white">
+        <span className="rounded-full bg-destructive/90 px-1.5 text-[9px] font-semibold leading-4 tabular-nums text-white">
           {badge}
         </span>
       )}
@@ -1476,19 +1539,3 @@ function PageTab({
   );
 }
 
-function EmptyState() {
-  return (
-    <div className="flex flex-col items-center gap-2 px-6 pb-10 pt-16 text-center">
-      <p className="text-[13px] font-medium text-muted-foreground">还没有内容</p>
-      <p className="text-[11px] leading-relaxed text-muted-foreground/70">
-        在任意应用中选中文字后连按两次{" "}
-        <kbd className="rounded border border-black/10 bg-black/5 px-1 py-0.5 text-[10px] dark:border-white/15 dark:bg-white/10">
-          ⇧ Shift
-        </kbd>{" "}
-        即可捕获到这里；
-        <br />
-        也可以在下方直接记下想法或提示词。
-      </p>
-    </div>
-  );
-}

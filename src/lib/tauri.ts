@@ -6,6 +6,8 @@ export const TRIGGER_EVENT = "toskr://trigger";
 export const HUD_EVENT = "toskr://hud";
 /** Rust → HUD 窗口 hover 状态事件。 */
 export const HUD_HOVER_EVENT = "toskr://hud-hover";
+/** Rust → HUD 窗口：即将隐藏，先播退场动画（Rust 侧延迟 160ms 再真正 hide）。 */
+export const HUD_EXIT_EVENT = "toskr://hud-exit";
 /** HUD → 主窗口撤销捕获请求。 */
 export const UNDO_CAPTURE_EVENT = "toskr://undo-capture";
 /** HUD → 主窗口：点击气泡打开面板并定位到刚捕获的卡片。 */

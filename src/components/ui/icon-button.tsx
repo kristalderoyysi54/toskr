@@ -36,9 +36,10 @@ const iconButtonVariants = cva(
       },
       reveal: {
         always: "",
-        hover: "opacity-0 group-hover:opacity-100",
+        hover:
+          "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100",
         "hover-focus":
-          "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+          "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
       },
       surface: {
         true: "border border-foreground/10 bg-surface-raised/95 elevation-2",

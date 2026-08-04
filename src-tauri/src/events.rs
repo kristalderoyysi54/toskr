@@ -49,3 +49,5 @@ pub struct HudHoverPayload {
 pub const TRIGGER_EVENT: &str = "toskr://trigger";
 pub const HUD_EVENT: &str = "toskr://hud";
 pub const HUD_HOVER_EVENT: &str = "toskr://hud-hover";
+/// 即将隐藏 HUD：先通知前端播退场动画，延迟少许再真正 hide（进出场对称）。
+pub const HUD_EXIT_EVENT: &str = "toskr://hud-exit";

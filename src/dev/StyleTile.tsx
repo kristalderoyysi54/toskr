@@ -45,7 +45,7 @@ function PrimaryButton({ children }: { children: React.ReactNode }) {
   return (
     <button
       type="button"
-      className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-4 text-title font-medium text-primary-foreground shadow-sm transition-transform hover:bg-primary/85 active:translate-y-px"
+      className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border bg-background px-4 text-title font-medium text-foreground transition-transform hover:bg-muted active:translate-y-px dark:border-input dark:bg-input/30 dark:hover:bg-input/50"
     >
       {children}
     </button>
@@ -166,13 +166,14 @@ function OnboardingMock() {
 function TilePanel() {
   return (
     <div className="flex min-h-full flex-col gap-7 bg-background p-6 text-foreground">
-      <Spec title="色板 · 系统蓝 accent（一行可换色）">
+      <Spec title="色板 · 纸白主控件 + 蓝状态色">
         <div className="flex flex-wrap gap-3">
-          <Swatch name="primary" className="bg-primary" note="系统蓝" />
+          <Swatch name="paper" className="bg-paper" note="纸白·备用（主控件已改描边款）" />
+          <Swatch name="primary" className="bg-primary" note="蓝·焦点/选中/开关" />
           <Swatch name="success" className="bg-success" note="=现状勾选绿" />
           <Swatch name="warning" className="bg-warning" note="=现状琥珀" />
           <Swatch name="destructive" className="bg-destructive" />
-          <Swatch name="spark 紫" className="bg-violet-500" note="灵感专属，非 accent" />
+          <Swatch name="spark 紫" className="bg-violet-500" note="灵感专属" />
         </div>
       </Spec>
 
@@ -226,7 +227,7 @@ function TilePanel() {
         </div>
       </Spec>
 
-      <Spec title="按钮 · 平面系统蓝（gloss 方案已否决）">
+      <Spec title="按钮 · 描边款主键（用户定稿；gloss 与纸白填充均已否决）">
         <div className="flex flex-wrap items-center gap-3">
           <PrimaryButton>
             <Send className="size-3.5" />
