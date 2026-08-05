@@ -43,7 +43,7 @@ import {
   undoableTip,
 } from "@/lib/actions";
 import { TEXT_OPS, type TextOp } from "@/lib/textops";
-import { langLabel } from "@/lib/code";
+import { highlightCode, langLabel } from "@/lib/code";
 import { linkParts } from "@/lib/link";
 import { useAppIcon } from "@/lib/icons";
 import { timeAgo, useNoteThumb } from "@/lib/media";
@@ -56,6 +56,7 @@ import {
   INBOX_ID,
   noteImages,
   normalizeContextMenu,
+  orderedCheckedNotes,
   useNotesStore,
   type ContextMenuItemId,
   type Note,
@@ -140,6 +141,17 @@ export const NoteCard = memo(function NoteCard({
       cardRef.current?.scrollIntoView({ block: "nearest" });
     }
   }, [focused]);
+
+  /** 删除：当前卡属于多选集合 → 删整组；否则只删这一张。 */
+  const deleteSelfOrChecked = () => {
+    const st = useNotesStore.getState();
+    if (checked && st.checkedIds.length > 1) {
+      const ids = orderedCheckedNotes(st).map((n) => n.id);
+      deleteNotesWithUndo(ids, `已删除 ${ids.length} 条`);
+    } else {
+      deleteNotesWithUndo([note.id], "已删除 1 条");
+    }
+  };
 
   const openPreview = (editing = false) => {
     // 链接卡「查看明细」= 直接打开网页；编辑仍走预览层编辑链接文本
@@ -379,6 +391,14 @@ export const NoteCard = memo(function NoteCard({
   };
 
   const segments = splitHighlight(note.text, query);
+  // 卡面代码高亮：只算可见头部（600 字符足够 3-6 行），memo 防重复计算
+  const cardCodeHtml = useMemo(
+    () =>
+      note.codeLang && !query
+        ? highlightCode(note.text.slice(0, 600), note.codeLang)
+        : "",
+    [note.text, note.codeLang, query]
+  );
 
   /** 通栏类型标签（无自定义标题时显示）。 */
   const typeLabel = isImage
@@ -649,6 +669,21 @@ export const NoteCard = memo(function NoteCard({
                   )}
                 </div>
               )
+            ) : note.codeLang && !query ? (
+              // 代码卡卡面直接语法高亮（与预览层同源）；搜索时让位给命中高亮
+              <pre
+                {...dragOutProps}
+                className={cn(
+                  "hljs !bg-transparent",
+                  strip ? "line-clamp-[6]" : "line-clamp-3",
+                  "whitespace-pre-wrap font-mono text-label leading-normal [overflow-wrap:anywhere] hover:cursor-grab",
+                  note.done && "text-muted-foreground line-through opacity-60"
+                )}
+              >
+                <code
+                  dangerouslySetInnerHTML={{ __html: cardCodeHtml }}
+                />
+              </pre>
             ) : (
               <p
                 {...dragOutProps}
@@ -733,7 +768,7 @@ export const NoteCard = memo(function NoteCard({
               surface
               reveal="hover-focus"
               tone="danger"
-              onClick={() => deleteNotesWithUndo([note.id], "已删除 1 条")}
+              onClick={deleteSelfOrChecked}
             >
               <Trash2 className="size-3" />
             </IconButton>
@@ -764,9 +799,10 @@ export const NoteCard = memo(function NoteCard({
         <ContextMenuSeparator />
         <ContextMenuItem
           variant="destructive"
-          onClick={() => deleteNotesWithUndo([note.id], "已删除 1 条")}
+          onClick={deleteSelfOrChecked}
         >
           <Trash2 className="size-3.5" /> 删除
+          {checked && checkedCount > 1 ? ` ${checkedCount} 项` : ""}
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>

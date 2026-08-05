@@ -229,20 +229,20 @@ function GroupPill({
           <Pencil className="size-3.5" /> 重命名
         </ContextMenuItem>
         {manage.setColor && (
-          <div className="flex items-center gap-1 px-2 py-1.5">
+          <div className="flex flex-wrap items-center gap-1.5 px-2 py-1.5">
             {SECTION_COLORS.map((c) => (
               <button
                 key={c}
                 aria-label="设置分组色"
                 onClick={() => manage.setColor?.(item.id, c)}
-                className="size-3.5 rounded-full ring-offset-1 transition-transform hover:scale-125"
+                className="size-3.5 shrink-0 rounded-full ring-offset-1 transition-transform hover:scale-125"
                 style={{ backgroundColor: c }}
               />
             ))}
             <button
               aria-label="清除颜色"
               onClick={() => manage.setColor?.(item.id, undefined)}
-              className="size-3.5 rounded-full border border-dashed border-muted-foreground/50 transition-transform hover:scale-125"
+              className="size-3.5 shrink-0 rounded-full border border-dashed border-muted-foreground/50 transition-transform hover:scale-125"
             />
           </div>
         )}
@@ -998,9 +998,23 @@ export default function App() {
     [visibleClipNotes]
   );
 
-  /** 当前页的键盘导航序列。 */
+  /** 上/下横栏形态：三页走方形卡片串（导航序也切到串序）。 */
+  const horizontalBar =
+    settings.rightSidebar &&
+    (settings.sidebarEdge === "top" || settings.sidebarEdge === "bottom");
+  const stripTaskIds = useMemo(() => stripTasks.map((t) => t.id), [stripTasks]);
+
+  /** 当前页的键盘导航序列（横栏 = 胶囊过滤后的卡片串序）。 */
   const navIds =
-    page === "tasks" ? taskNavIds : page === "clipboard" ? clipNavIds : noteNavIds;
+    page === "tasks"
+      ? horizontalBar
+        ? stripTaskIds
+        : taskNavIds
+      : page === "clipboard"
+        ? clipNavIds
+        : horizontalBar
+          ? stripNoteIds
+          : noteNavIds;
 
   // 可见顺序同步到 uiStore，供 Shift 范围选中使用
   useEffect(() => {
@@ -1014,10 +1028,6 @@ export default function App() {
 
   // 页面序（笔记/任务/剪贴板）：常驻页按序差决定滑向（左侧页藏左、右侧页藏右）
   const pageIndex = page === "notes" ? 0 : page === "tasks" ? 1 : 2;
-  /** 上/下横栏形态：剪贴板页走 Paste 式方形卡横向串。 */
-  const horizontalBar =
-    settings.rightSidebar &&
-    (settings.sidebarEdge === "top" || settings.sidebarEdge === "bottom");
   /** 横栏下笔记输入通栏默认收起，由工具栏「添加笔记」按钮唤出。 */
   const [barDraftOpen, setBarDraftOpen] = useState(false);
 
@@ -1157,6 +1167,26 @@ export default function App() {
         ui.setFocusedId(next);
         return;
       }
+      // ←/→ 在卡片序列中前后移动并选中（横栏=左右相邻，竖栏=上/下一张；
+      // ⌘←→ 仍是切页，输入框内不拦）
+      if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !e.metaKey) {
+        if (editable) return;
+        if (!navIds.length) return;
+        e.preventDefault();
+        const idx = ui.focusedId ? navIds.indexOf(ui.focusedId) : -1;
+        const next =
+          e.key === "ArrowRight"
+            ? navIds[Math.min(idx + 1, navIds.length - 1)]
+            : navIds[Math.max(idx - 1, 0)];
+        ui.setFocusedId(next);
+        // 笔记/剪贴板：左右导航即单选（蓝色选中态，回车可直发）；
+        // 任务页无勾选语义，保持焦点环
+        if (ui.page !== "tasks" && next) {
+          useNotesStore.getState().setChecked([next]);
+          ui.setAnchorId(next);
+        }
+        return;
+      }
       // Space = 全文预览（Paste 风格）；链接卡「明细」= 开网页；
       // 任务页 = 完成态二态直切（与鼠标点状态点的三态循环是刻意差异）
       if (e.key === " " && ui.focusedId) {
@@ -1186,6 +1216,18 @@ export default function App() {
           useNotesStore.getState().toggleChecked(ui.focusedId);
         }
         return;
+      }
+      // 剪贴板页：已有选中卡时回车直接发送（无选中仍走预览编辑）
+      if (e.key === "Enter" && !e.metaKey && !editable && ui.page === "clipboard") {
+        const st = useNotesStore.getState();
+        const hasClipChecked = st.notes.some(
+          (n) => st.checkedIds.includes(n.id) && n.sectionId === CLIPBOARD_ID
+        );
+        if (hasClipChecked) {
+          e.preventDefault();
+          void sendCheckedToChat();
+          return;
+        }
       }
       if (e.key === "Enter" && !e.metaKey && ui.focusedId) {
         e.preventDefault();
