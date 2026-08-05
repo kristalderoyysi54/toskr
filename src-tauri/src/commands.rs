@@ -447,6 +447,20 @@ pub fn set_sound(app: AppHandle, enabled: bool) {
         .store(enabled, Ordering::Relaxed);
 }
 
+/// 面板是否置顶（屏幕最上层）。关闭后面板可被其他窗口盖住。
+/// 伴随磁吸期间面板与目标应用同层级（强制非置顶），此处只记偏好；
+/// 脱离磁吸（独立/边栏）时按偏好恢复。
+#[tauri::command]
+pub fn set_panel_topmost(app: AppHandle, enabled: bool) {
+    let state = app.state::<AppState>();
+    state.panel_topmost.store(enabled, Ordering::SeqCst);
+    if !state.docked.load(Ordering::SeqCst) {
+        if let Some(w) = app.get_webview_window("main") {
+            let _ = w.set_always_on_top(enabled);
+        }
+    }
+}
+
 /// 前台应用是否是本应用（面板失焦判定：焦点移到自家预览/设置窗不算离开）。
 #[tauri::command]
 pub fn is_self_frontmost() -> bool {

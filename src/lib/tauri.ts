@@ -160,6 +160,21 @@ export const api = {
   setSidebarMode: (enabled: boolean, edge: string) =>
     invoke("set_sidebar_mode", { enabled, edge }),
   isSelfFrontmost: () => invoke<boolean>("is_self_frontmost"),
+  setPanelTopmost: (enabled: boolean) =>
+    invoke("set_panel_topmost", { enabled }),
+  /** OpenAI 兼容对话补全（配置由调用方传入；返回 content 文本）。 */
+  aiChat: (
+    baseUrl: string,
+    apiKey: string,
+    model: string,
+    system: string,
+    user: string,
+    maxTokens: number
+  ) =>
+    invoke<string>("ai_chat", { baseUrl, apiKey, model, system, user, maxTokens }),
+  /** 拉取提供商可用模型列表（GET /v1/models）。 */
+  aiListModels: (baseUrl: string, apiKey: string) =>
+    invoke<string[]>("ai_list_models", { baseUrl, apiKey }),
   /** 系统 Quick Look 原尺寸预览图片附件。 */
   quickLook: (files: string[], index = 0) =>
     invoke("quick_look", { files, index }),

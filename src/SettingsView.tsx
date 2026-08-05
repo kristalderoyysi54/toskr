@@ -7,6 +7,9 @@ import type { Update } from "@tauri-apps/plugin-updater";
 import {
   Activity,
   AlarmClock,
+  Bot,
+  Eye,
+  EyeOff,
   AlertCircle,
   ArrowDown,
   ArrowUp,
@@ -52,6 +55,7 @@ import {
   type VibrancyMaterial,
 } from "@/store/notesStore";
 import { presetCfgLabel } from "@/lib/tasks";
+import { AI_PRESETS, matchPreset, testAiConnection } from "@/lib/ai";
 
 type SectionId =
   | "general"
@@ -61,6 +65,7 @@ type SectionId =
   | "exclude"
   | "snippets"
   | "due"
+  | "ai"
   | "data"
   | "diagnostics"
   | "about";
@@ -73,6 +78,7 @@ const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode }[] = [
   { id: "exclude", label: "捕获排除", icon: <Shield className="size-4" /> },
   { id: "snippets", label: "Prompt 模板", icon: <Sparkles className="size-4" /> },
   { id: "due", label: "到期提醒", icon: <AlarmClock className="size-4" /> },
+  { id: "ai", label: "AI 智能", icon: <Bot className="size-4" /> },
   { id: "data", label: "数据", icon: <Database className="size-4" /> },
   { id: "diagnostics", label: "诊断", icon: <Activity className="size-4" /> },
   { id: "about", label: "关于", icon: <Info className="size-4" /> },
@@ -124,6 +130,7 @@ export default function SettingsView() {
         {section === "exclude" && <ExcludeSection settings={settings} patch={patch} />}
         {section === "snippets" && <SnippetsSection settings={settings} patch={patch} />}
         {section === "due" && <DuePresetsSection settings={settings} patch={patch} />}
+        {section === "ai" && <AiSection settings={settings} patch={patch} />}
         {section === "data" && <DataSection />}
         {section === "diagnostics" && <DiagnosticsSection />}
         {section === "about" && <AboutSection settings={settings} patch={patch} />}
@@ -417,8 +424,18 @@ function GeneralSection({ settings, patch }: SP) {
           }
         />
         <Row
+          label="面板置顶"
+          hint="显示在屏幕最上层；关闭后可被其他窗口盖住"
+          right={
+            <Switch
+              checked={settings.panelTopmost}
+              onCheckedChange={(v) => patch({ panelTopmost: v })}
+            />
+          }
+        />
+        <Row
           label="失焦自动隐藏"
-          hint="点击其他应用时收起面板（钉住豁免）"
+          hint="点击其他应用时收起面板（钉住豁免）；关闭则面板保持显示"
           right={
             <Switch
               checked={settings.hideOnBlur}
@@ -1092,6 +1109,194 @@ const WEEKDAY_OPTIONS = [
   { value: "6", label: "周六" },
   { value: "0", label: "周日" },
 ];
+
+
+/** AI 智能：OpenAI 兼容提供商单配置 + 功能开关 + 连接测试。 */
+function AiSection({ settings, patch }: SP) {
+  const [showKey, setShowKey] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [models, setModels] = useState<string[]>([]);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const preset = matchPreset(settings.aiBaseUrl);
+  const fetchModels = async () => {
+    if (fetchingModels) return;
+    setFetchingModels(true);
+    try {
+      const ids = await api.aiListModels(
+        settings.aiBaseUrl.trim(),
+        settings.aiApiKey.trim()
+      );
+      setModels(ids);
+      // 当前值不在列表时不强改，让用户自行选择
+      tip("ok", `获取到 ${ids.length} 个模型`);
+    } catch (e) {
+      tip("warn", `获取失败：${String(e).slice(0, 80)}`);
+    } finally {
+      setFetchingModels(false);
+    }
+  };
+  const runTest = async () => {
+    if (testing) return;
+    setTesting(true);
+    try {
+      await testAiConnection(settings.aiBaseUrl, settings.aiApiKey, settings.aiModel);
+      tip("ok", "AI 连接成功");
+    } catch (e) {
+      tip("warn", `连接失败：${String(e).slice(0, 80)}`);
+    } finally {
+      setTesting(false);
+    }
+  };
+  return (
+    <div>
+      <SectionTitle>AI 智能</SectionTitle>
+      <p className="mb-3 text-body text-muted-foreground">
+        配置 OpenAI 兼容的 AI 提供商后：任务输入框 ✨ 模式支持「下午3点提醒我开会」
+        「20分钟后提醒我关火」等自然语言建任务；任务右键可 AI 拆解子任务；
+        笔记右键可 AI 转任务、AI 起标题。
+      </p>
+      <Group>
+        <Row
+          label="启用 AI 智能"
+          hint="关闭后各 AI 入口点击提示去配置，不发起请求"
+          right={
+            <Switch
+              checked={settings.aiEnabled}
+              onCheckedChange={(v) => patch({ aiEnabled: v })}
+            />
+          }
+        />
+      </Group>
+      <Group title="提供商（OpenAI 兼容）">
+        <div className="flex flex-wrap items-center gap-1 px-3.5 py-2.5">
+          {AI_PRESETS.map((pz) => (
+            <button
+              key={pz.id}
+              onClick={() => {
+                if (pz.id === "custom") return;
+                patch({
+                  aiBaseUrl: pz.baseUrl,
+                  // 仅模型名为空时才填充推荐值，避免覆盖用户已填内容
+                  ...(settings.aiModel.trim() ? {} : { aiModel: pz.modelHint }),
+                });
+              }}
+              className={cn(
+                "rounded-full border px-2.5 py-0.5 text-label",
+                preset === pz.id
+                  ? "border-border bg-primary/10 font-medium text-foreground dark:border-input"
+                  : "border-border text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {pz.label}
+            </button>
+          ))}
+        </div>
+        <Row
+          label="Base URL"
+          hint="如 https://api.deepseek.com（自动拼接 /v1/chat/completions）"
+          right={
+            <input
+              value={settings.aiBaseUrl}
+              onChange={(e) => patch({ aiBaseUrl: e.target.value })}
+              placeholder="https://…"
+              autoComplete="off"
+              className="h-8 w-64 rounded-lg border border-border bg-transparent px-2 text-body outline-none focus:border-primary/50"
+            />
+          }
+        />
+        <Row
+          label="API Key"
+          hint="明文保存在本地数据文件，仅发往上方 Base URL"
+          right={
+            <div className="flex items-center gap-1">
+              <input
+                type={showKey ? "text" : "password"}
+                value={settings.aiApiKey}
+                onChange={(e) => patch({ aiApiKey: e.target.value })}
+                placeholder="sk-…"
+                autoComplete="off"
+                className="h-8 w-56 rounded-lg border border-border bg-transparent px-2 text-body outline-none focus:border-primary/50"
+              />
+              <IconButton
+                label={showKey ? "隐藏密钥" : "显示密钥"}
+                onClick={() => setShowKey((v) => !v)}
+              >
+                {showKey ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+              </IconButton>
+            </div>
+          }
+        />
+        <Row
+          label="模型名"
+          hint={
+            models.length
+              ? `已获取 ${models.length} 个模型，下拉选择`
+              : "如 deepseek-chat / gpt-4o-mini，或点「获取列表」拉取"
+          }
+          right={
+            <div className="flex items-center gap-1">
+              {models.length ? (
+                <select
+                  value={models.includes(settings.aiModel) ? settings.aiModel : ""}
+                  onChange={(e) => {
+                    if (e.target.value === "__manual__") {
+                      setModels([]);
+                      return;
+                    }
+                    if (e.target.value) patch({ aiModel: e.target.value });
+                  }}
+                  className="h-8 w-56 rounded-lg border border-border bg-transparent px-2 text-body outline-none focus:border-primary/50"
+                >
+                  <option value="" disabled>
+                    选择模型…
+                  </option>
+                  {models.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                  <option value="__manual__">手动输入…</option>
+                </select>
+              ) : (
+                <input
+                  value={settings.aiModel}
+                  onChange={(e) => patch({ aiModel: e.target.value })}
+                  placeholder="模型 ID"
+                  autoComplete="off"
+                  className="h-8 w-44 rounded-lg border border-border bg-transparent px-2 text-body outline-none focus:border-primary/50"
+                />
+              )}
+              <button
+                onClick={() => void fetchModels()}
+                disabled={fetchingModels}
+                className="shrink-0 rounded-lg border border-border px-2 py-1 text-label text-muted-foreground hover:text-foreground disabled:opacity-50"
+              >
+                {fetchingModels ? "获取中…" : models.length ? "刷新" : "获取列表"}
+              </button>
+            </div>
+          }
+        />
+        <Row
+          label="连接测试"
+          hint="用当前填写的配置发一次最小请求（无需先启用）"
+          right={
+            <button
+              onClick={() => void runTest()}
+              disabled={testing}
+              className="rounded-lg border border-border px-2.5 py-1 text-label text-muted-foreground hover:text-foreground disabled:opacity-50"
+            >
+              {testing ? "测试中…" : "测试连接"}
+            </button>
+          }
+        />
+      </Group>
+      <p className="text-label text-muted-foreground/70">
+        隐私说明：仅在你主动触发 AI 功能时，把相关文本发送到上方配置的服务；
+        无中转代理，密钥与内容不写入诊断日志。
+      </p>
+    </div>
+  );
+}
 
 /** 到期快捷档编辑：任务「到期」弹层里的快捷选项，可增删改。 */
 function DuePresetsSection({ settings, patch }: SP) {

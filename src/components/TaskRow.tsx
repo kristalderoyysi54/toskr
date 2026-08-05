@@ -11,6 +11,7 @@ import {
   ListChecks,
   Plus,
   Send,
+  Sparkles,
   Trash2,
   X,
   Lightbulb,
@@ -33,6 +34,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { deleteTasksWithUndo, sendTaskToChat } from "@/lib/actions";
+import { splitSubtasks } from "@/lib/ai";
 import { springDetail } from "@/lib/motion";
 import {
   dueBadgeLabel,
@@ -384,6 +386,9 @@ function TaskMenu({ task }: { task: Task }) {
           <ContextMenuItem onClick={() => void sendTaskToChat(task.id)}>
             <Send className="size-3.5" /> 发送到对话
           </ContextMenuItem>
+          <ContextMenuItem onClick={() => void splitSubtasks(task.id)}>
+            <Sparkles className="size-3.5" /> AI 拆解子任务
+          </ContextMenuItem>
           {task.kind === "spark" && (
             <ContextMenuItem onClick={() => useNotesStore.getState().sparkToTask(task.id)}>
               <Lightbulb className="size-3.5" /> 转为待办
@@ -714,34 +719,121 @@ function DuePopover({
   );
 }
 
+/** 瓷砖详情弹层（横栏版展开卡）：标题 / 备注 / 检查列表 / 到期 / 删除。 */
+function TileDetail({
+  task,
+  now,
+  onClose,
+}: {
+  task: Task;
+  now: number;
+  onClose: () => void;
+}) {
+  const [draft, setDraft] = useState(task.text);
+  const [noteDraft, setNoteDraft] = useState(task.note ?? "");
+  const checklist = task.checklist ?? [];
+  const saveTitle = () => {
+    if (draft.trim() && draft !== task.text) {
+      useNotesStore.getState().updateTaskText(task.id, draft);
+    }
+  };
+  const saveNote = () => {
+    if (noteDraft !== (task.note ?? "")) {
+      useNotesStore.getState().updateTaskNote(task.id, noteDraft);
+    }
+  };
+  const titleRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    window.setTimeout(() => titleRef.current?.focus(), 30);
+  }, []);
+  return (
+    <div
+      className="slim-scroll flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto"
+      onClick={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        // 阻断到全局快捷键；Esc 保存并关闭
+        e.stopPropagation();
+        if (e.key === "Escape") {
+          saveTitle();
+          saveNote();
+          onClose();
+        }
+      }}
+    >
+      <textarea
+        ref={titleRef}
+        value={draft}
+        rows={2}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={saveTitle}
+        className="shrink-0 resize-none bg-transparent text-body font-medium leading-snug outline-none"
+      />
+      <textarea
+        value={noteDraft}
+        rows={2}
+        placeholder="备注…"
+        onChange={(e) => setNoteDraft(e.target.value)}
+        onBlur={saveNote}
+        className="resize-none bg-transparent text-body leading-relaxed text-muted-foreground outline-none placeholder:text-muted-foreground/50"
+      />
+      {checklist.length > 0 && (
+        <div className="flex flex-col">
+          {checklist.map((c) => (
+            <ChecklistRow key={c.id} taskId={task.id} item={c} />
+          ))}
+        </div>
+      )}
+      <ChecklistAdder taskId={task.id} />
+      <div className="flex items-center gap-1.5 pt-0.5">
+        <DuePopover task={task} now={now} alwaysVisible dense />
+        <span className="flex-1" />
+        <button
+          aria-label="删除任务"
+          onClick={() => {
+            onClose();
+            deleteTasksWithUndo([task.id], "已删除 1 个任务");
+          }}
+          className="rounded-sm p-0.5 text-muted-foreground/70 hover:text-destructive"
+        >
+          <Trash2 className="size-3.5" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** 横栏方块瓷砖（上/下边栏）：与任务行同一套操作——状态点循环、
- *  💡转待办、优先级循环、到期弹层、右键完整菜单；双击就地编辑标题
- *  （发送走右键菜单）、键盘焦点环。 */
+ *  💡转待办、优先级循环、到期弹层、右键完整菜单、检查进度徽标；
+ *  双击原位展开为详情编辑卡（标题/备注/子任务，卡内滚动），
+ *  点卡外/Esc 收起，键盘焦点环。 */
 export function TaskTile({ task, now }: { task: Task; now: number }) {
   const focused = useUIStore((s) => s.focusedId === task.id);
   const tileRef = useRef<HTMLDivElement>(null);
-  const editRef = useRef<HTMLTextAreaElement>(null);
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(task.text);
+  const [detailOpen, setDetailOpen] = useState(false);
   useEffect(() => {
     if (focused) {
       tileRef.current?.scrollIntoView({ inline: "nearest", block: "nearest" });
     }
   }, [focused]);
-  // WKWebView 焦点惰性：延时聚焦新挂载的编辑框（同 TaskRow 展开逻辑）
+  // 点卡外收起（到期弹层 portal 在 body，需豁免，同 TaskRow 展开逻辑）
   useEffect(() => {
-    if (editing) {
-      window.setTimeout(() => editRef.current?.focus(), 30);
-    }
-  }, [editing]);
-  const saveEdit = () => {
-    if (draft.trim() && draft !== task.text) {
-      useNotesStore.getState().updateTaskText(task.id, draft);
-    }
-    setEditing(false);
-  };
+    if (!detailOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Element | null;
+      if (t?.closest?.("[data-radix-popper-content-wrapper]")) return;
+      if (tileRef.current && !tileRef.current.contains(e.target as Node)) {
+        setDetailOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDown, { capture: true });
+    return () =>
+      document.removeEventListener("mousedown", onDown, { capture: true });
+  }, [detailOpen]);
   const spark = task.kind === "spark";
   const done = task.status === "done";
+  const checklist = task.checklist ?? [];
+  const checklistDone = checklist.filter((c) => c.done).length;
   const StatusIcon =
     task.status === "done"
       ? CheckCircle2
@@ -755,94 +847,96 @@ export function TaskTile({ task, now }: { task: Task; now: number }) {
           ref={tileRef}
           onClick={() => useUIStore.getState().setFocusedId(task.id)}
           onDoubleClick={() => {
-            if (!editing) {
-              setDraft(task.text);
-              setEditing(true);
-            }
+            if (!detailOpen) setDetailOpen(true);
           }}
           className={cn(
-            "group relative flex h-auto aspect-[16/17] shrink-0 cursor-default select-none flex-col overflow-hidden rounded-lg border border-transparent px-2 pb-1.5 pt-1.5",
+            "group relative flex h-auto shrink-0 cursor-default select-none flex-col overflow-hidden rounded-lg border border-transparent px-2 pb-1.5 pt-1.5 transition-[width] duration-150",
+            detailOpen ? "w-96" : "aspect-[16/17]",
             "bg-[rgb(255_255_255/var(--card-alpha,100%))] shadow-sm dark:bg-[rgb(39_39_42/var(--card-alpha,100%))]",
             "hover:border-black/10 dark:hover:border-white/10",
             spark && "bg-violet-50/90 dark:bg-violet-950/40",
-            focused && "ring-1 ring-black/20 dark:ring-white/25"
+            focused && !detailOpen && "ring-1 ring-black/20 dark:ring-white/25",
+            detailOpen && "ring-1 ring-primary/40"
           )}
         >
-          <div className="mb-1 flex items-center gap-1">
-            {spark && !done ? (
-              <button
-                aria-label="灵感转为待办"
-                title="💡 灵感 · 点击转为待办"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  useNotesStore.getState().sparkToTask(task.id);
-                }}
-                className="shrink-0 rounded-full text-violet-500 hover:text-violet-600"
-              >
-                <Lightbulb className="size-4" />
-              </button>
-            ) : (
-              <button
-                aria-label={`状态：${STATUS_LABEL[task.status]}（点击切换）`}
-                title={`状态：${STATUS_LABEL[task.status]}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  useNotesStore.getState().cycleTaskStatus(task.id);
-                }}
+          {detailOpen ? (
+            <TileDetail task={task} now={now} onClose={() => setDetailOpen(false)} />
+          ) : (
+            <>
+              <div className="mb-1 flex items-center gap-1">
+                {spark && !done ? (
+                  <button
+                    aria-label="灵感转为待办"
+                    title="💡 灵感 · 点击转为待办"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      useNotesStore.getState().sparkToTask(task.id);
+                    }}
+                    className="shrink-0 rounded-full text-violet-500 hover:text-violet-600"
+                  >
+                    <Lightbulb className="size-4" />
+                  </button>
+                ) : (
+                  <button
+                    aria-label={`状态：${STATUS_LABEL[task.status]}（点击切换）`}
+                    title={`状态：${STATUS_LABEL[task.status]}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      useNotesStore.getState().cycleTaskStatus(task.id);
+                    }}
+                    className={cn(
+                      "shrink-0 rounded-full text-muted-foreground hover:text-foreground",
+                      task.status === "doing" && "text-primary",
+                      done && "text-emerald-600 dark:text-emerald-400"
+                    )}
+                  >
+                    <StatusIcon className="size-4" />
+                  </button>
+                )}
+                {/* 优先级色条：点击循环 无→低→中→高（与任务行一致） */}
+                <button
+                  aria-label={`优先级：${PRIORITY_LABEL[task.priority]}（点击切换）`}
+                  title={`优先级：${PRIORITY_LABEL[task.priority]}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    useNotesStore.getState().cycleTaskPriority(task.id);
+                  }}
+                  className="flex h-5 w-2 shrink-0 items-center justify-center"
+                >
+                  <span
+                    className={cn(
+                      "h-4 w-[3px] rounded-full",
+                      PRIORITY_BAR[task.priority]
+                    )}
+                  />
+                </button>
+                {checklist.length > 0 && (
+                  <span
+                    title={`检查列表 ${checklistDone}/${checklist.length}`}
+                    className="flex shrink-0 items-center gap-0.5 text-micro tabular-nums text-muted-foreground"
+                  >
+                    <ListChecks className="size-3" />
+                    {checklistDone}/{checklist.length}
+                  </span>
+                )}
+                <span className="ml-auto" onClick={(e) => e.stopPropagation()}>
+                  <DuePopover task={task} now={now} alwaysVisible dense />
+                </span>
+              </div>
+              <p
                 className={cn(
-                  "shrink-0 rounded-full text-muted-foreground hover:text-foreground",
-                  task.status === "doing" && "text-primary",
-                  done && "text-emerald-600 dark:text-emerald-400"
+                  "line-clamp-[6] whitespace-pre-wrap text-body leading-normal [overflow-wrap:anywhere]",
+                  done && "text-muted-foreground line-through opacity-60"
                 )}
               >
-                <StatusIcon className="size-4" />
-              </button>
-            )}
-            {/* 优先级色条：点击循环 无→低→中→高（与任务行一致） */}
-            <button
-              aria-label={`优先级：${PRIORITY_LABEL[task.priority]}（点击切换）`}
-              title={`优先级：${PRIORITY_LABEL[task.priority]}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                useNotesStore.getState().cycleTaskPriority(task.id);
-              }}
-              className="flex h-5 w-2 shrink-0 items-center justify-center"
-            >
-              <span
-                className={cn("h-4 w-[3px] rounded-full", PRIORITY_BAR[task.priority])}
-              />
-            </button>
-            <span className="ml-auto" onClick={(e) => e.stopPropagation()}>
-              <DuePopover task={task} now={now} alwaysVisible dense />
-            </span>
-          </div>
-          {editing ? (
-            <textarea
-              ref={editRef}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onClick={(e) => e.stopPropagation()}
-              onKeyDown={(e) => {
-                e.stopPropagation();
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  saveEdit();
-                } else if (e.key === "Escape") {
-                  setEditing(false);
-                }
-              }}
-              onBlur={saveEdit}
-              className="min-h-0 flex-1 resize-none bg-transparent text-body leading-normal outline-none"
-            />
-          ) : (
-            <p
-              className={cn(
-                "line-clamp-[6] whitespace-pre-wrap text-body leading-normal [overflow-wrap:anywhere]",
-                done && "text-muted-foreground line-through opacity-60"
+                {task.text}
+              </p>
+              {task.note && (
+                <p className="mt-0.5 line-clamp-1 text-micro text-muted-foreground/70">
+                  {task.note}
+                </p>
               )}
-            >
-              {task.text}
-            </p>
+            </>
           )}
         </div>
       </ContextMenuTrigger>

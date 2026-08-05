@@ -228,8 +228,18 @@ export interface Settings {
   rightSidebar: boolean;
   /** 边栏停靠缘（左右=全高竖栏，上下=全宽横栏）。 */
   sidebarEdge: "right" | "left" | "top" | "bottom";
+  /** 面板置顶（屏幕最上层）；关闭后可被其他窗口盖住。 */
+  panelTopmost: boolean;
   /** 到期快捷档（可增删改）：相对分钟 / 今天 / 明天 / 下个周几。 */
   duePresets: DuePresetCfg[];
+  /** AI 提供商（OpenAI 兼容）：Base URL（如 https://api.deepseek.com）。 */
+  aiBaseUrl: string;
+  /** AI API Key（明文随本地设置落盘；界面遮罩显示）。 */
+  aiApiKey: string;
+  /** AI 模型名（如 deepseek-chat）。 */
+  aiModel: string;
+  /** AI 智能功能总开关（独立于配置是否填写）。 */
+  aiEnabled: boolean;
   /** 捕获排除列表：这些应用内双击只开关面板、绝不捕获（密码管理器等）。 */
   excludedApps: string[];
   /** Prompt 前缀模板：发送时可选拼在内容前（Prompt 组装台）。 */
@@ -262,6 +272,8 @@ export type ContextMenuItemId =
   | "keep"
   | "rename"
   | "to-task"
+  | "ai-to-task"
+  | "ai-title"
   | "move";
 
 export const CONTEXT_MENU_REGISTRY: { id: ContextMenuItemId; label: string }[] = [
@@ -276,6 +288,8 @@ export const CONTEXT_MENU_REGISTRY: { id: ContextMenuItemId; label: string }[] =
   { id: "keep", label: "设为常用 / 固定" },
   { id: "rename", label: "重命名" },
   { id: "to-task", label: "转为任务" },
+  { id: "ai-to-task", label: "AI 转任务" },
+  { id: "ai-title", label: "AI 起标题" },
   { id: "move", label: "移动到分组" },
 ];
 
@@ -360,7 +374,12 @@ export const defaultSettings = (): Settings => ({
   panelFreeY: null,
   rightSidebar: false,
   sidebarEdge: "right",
+  panelTopmost: true,
   duePresets: DEFAULT_DUE_PRESETS.map((p) => ({ ...p })),
+  aiBaseUrl: "",
+  aiApiKey: "",
+  aiModel: "",
+  aiEnabled: false,
   excludedApps: [...DEFAULT_EXCLUDED_APPS],
   promptSnippets: [...DEFAULT_PROMPT_SNIPPETS],
   dataDir: "",
@@ -489,6 +508,12 @@ interface NotesState {
   clearDoneTasks: () => number;
   /** 笔记转任务：一次快照原子完成「建任务 + 删笔记」；图片/组合卡返回 false。 */
   convertNoteToTask: (noteId: string) => boolean;
+  /** AI 版笔记转任务：标题/检查项由调用方（AI 解析后）传入，同款原子语义。 */
+  convertNoteToTaskSmart: (
+    noteId: string,
+    title: string,
+    checklist: string[]
+  ) => boolean;
 
   setSettings: (patch: Partial<Settings>) => void;
   markOnboarding: (patch: Partial<OnboardingState>) => void;
@@ -1166,6 +1191,36 @@ export const useNotesStore = create<NotesState>()(
           dueAt: null,
           createdAt: Date.now(),
           remindedAt: null,
+        };
+        set({
+          tasks: [task, ...get().tasks],
+          notes: get().notes.filter((n) => n.id !== noteId),
+          checkedIds: get().checkedIds.filter((id) => id !== noteId),
+        });
+        return true;
+      },
+
+      convertNoteToTaskSmart: (noteId, title, checklist) => {
+        const note = get().notes.find((n) => n.id === noteId);
+        if (!note) return false;
+        if (note.kind === "image" || noteImages(note).length > 0) return false;
+        get().snapshot("AI 转为任务");
+        const items = checklist.map((t) => t.trim()).filter(Boolean);
+        const task: Task = {
+          id: crypto.randomUUID(),
+          text: title.trim() || note.text,
+          status: "todo",
+          priority: "none",
+          dueAt: null,
+          createdAt: Date.now(),
+          remindedAt: null,
+          checklist: items.length
+            ? items.map((text) => ({
+                id: crypto.randomUUID(),
+                text,
+                done: false,
+              }))
+            : undefined,
         };
         set({
           tasks: [task, ...get().tasks],

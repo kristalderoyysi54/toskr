@@ -773,6 +773,7 @@ export default function App() {
       void api
         .setSidebarMode(settings.rightSidebar, settings.sidebarEdge)
         .catch(() => {});
+      void api.setPanelTopmost(settings.panelTopmost).catch(() => {});
       void api.setPanelFreePos(settings.panelFreeX, settings.panelFreeY);
       void api.setPanelWidth(settings.panelWidth);
       // 垂直覆盖为会话内临时值（切换吸附目标即重置），不做启动恢复
@@ -1499,25 +1500,17 @@ export default function App() {
                 >
                   Toskr
                 </h1>
-                <span className="text-label tabular-nums text-muted-foreground">
-                  {page === "notes"
-                    ? activeCount
-                    : page === "tasks"
-                      ? activeTaskCount
-                      : clipNotes.length}
-                </span>
-                {/* 横栏：页签 + 分组胶囊并入标题行居中（Paste 式），少占一到两行高度 */}
+                {/* 横栏：页签固定在标题旁（左），分组胶囊独立居中——
+                    切页时页签位置不动，胶囊各自居中，互不牵连 */}
                 {horizontalBar && (
-                  <div
-                    role="tablist"
-                    aria-label="页面"
-                    className="absolute left-1/2 top-1/2 flex max-w-[60%] -translate-x-1/2 -translate-y-1/2 items-center gap-1 overflow-x-auto [&::-webkit-scrollbar]:hidden"
-                  >
+                  <div role="tablist" aria-label="页面" className="flex shrink-0 items-center gap-1">
                     {pageTabs}
+                  </div>
+                )}
+                {horizontalBar && (page === "notes" || page === "tasks") && (
+                  <div className="absolute left-1/2 top-1/2 flex max-w-[46%] -translate-x-1/2 -translate-y-1/2 items-center gap-1 overflow-x-auto [&::-webkit-scrollbar]:hidden">
                     {page === "notes" && (
-                      <>
-                        <span aria-hidden className="mx-1 h-3.5 w-px shrink-0 bg-border" />
-                        <GroupPills
+                      <GroupPills
                           bare
                           items={grouped.map((g) => g.section)}
                           active={noteGroupFilter}
@@ -1552,12 +1545,9 @@ export default function App() {
                             add: () => useNotesStore.getState().addSection(),
                           }}
                         />
-                      </>
                     )}
                     {page === "tasks" && (
-                      <>
-                        <span aria-hidden className="mx-1 h-3.5 w-px shrink-0 bg-border" />
-                        <GroupPills
+                      <GroupPills
                           bare
                           items={taskSections}
                           active={taskGroupFilter}
@@ -1577,7 +1567,6 @@ export default function App() {
                               useNotesStore.getState().addTaskSection(),
                           }}
                         />
-                      </>
                     )}
                   </div>
                 )}
@@ -1649,7 +1638,7 @@ export default function App() {
                       </IconButton>
                     </Tipped>
                   )}
-                  {page !== "tasks" && (
+                  {page !== "tasks" && !horizontalBar && (
                     <Tipped label="卡片密度：舒适 / 紧凑">
                       <IconButton
                         label="卡片密度：舒适 / 紧凑"

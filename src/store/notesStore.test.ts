@@ -474,6 +474,42 @@ describe("任务：CRUD / 撤销 / 转换原子性 / 导入", () => {
     expect(useNotesStore.getState().tasks).toHaveLength(0);
   });
 
+  it("convertNoteToTaskSmart：AI 标题+检查项原子转换，一次 undo 全恢复", () => {
+    const noteId = useNotesStore.getState().addNote("整理季度汇报材料的一大段笔记").id!;
+    expect(
+      useNotesStore
+        .getState()
+        .convertNoteToTaskSmart(noteId, "整理季度汇报", ["收集数据", " 排版 ", ""])
+    ).toBe(true);
+    const task = useNotesStore.getState().tasks[0];
+    expect(task.text).toBe("整理季度汇报");
+    expect(task.checklist?.map((c) => c.text)).toEqual(["收集数据", "排版"]);
+    expect(useNotesStore.getState().notes).toHaveLength(0);
+    useNotesStore.getState().undo();
+    expect(useNotesStore.getState().notes).toHaveLength(1);
+    expect(useNotesStore.getState().tasks).toHaveLength(0);
+  });
+
+  it("convertNoteToTaskSmart：空检查项 → checklist 为 undefined；空标题回退原文", () => {
+    const noteId = useNotesStore.getState().addNote("原文标题").id!;
+    expect(
+      useNotesStore.getState().convertNoteToTaskSmart(noteId, "  ", [])
+    ).toBe(true);
+    const task = useNotesStore.getState().tasks[0];
+    expect(task.text).toBe("原文标题");
+    expect(task.checklist).toBeUndefined();
+  });
+
+  it("convertNoteToTaskSmart：图片卡拒绝", () => {
+    const imgId = useNotesStore
+      .getState()
+      .addNote("图片 1×1", { kind: "image", imageFile: "b.png" }).id!;
+    expect(
+      useNotesStore.getState().convertNoteToTaskSmart(imgId, "标题", ["x"])
+    ).toBe(false);
+    expect(useNotesStore.getState().tasks).toHaveLength(0);
+  });
+
   it("importMerge 合并 tasks：按 id 去重并计数", () => {
     const kept = useNotesStore.getState().addTask("本地任务").id!;
     const r = useNotesStore.getState().importMerge({

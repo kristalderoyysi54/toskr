@@ -118,6 +118,8 @@ pub struct AppState {
     pub right_sidebar: AtomicBool,
     /// 边栏停靠缘：0=右 1=左 2=上 3=下（左右全高竖栏，上下全宽横栏）。
     pub sidebar_edge: AtomicU8,
+    /// 面板置顶偏好（用户设置）；伴随磁吸期间强制同层级，脱离后按此恢复。
+    pub panel_topmost: AtomicBool,
     /// 双击触发仅捕获（面板开关完全交给专用快捷键）。
     pub double_tap_capture_only: AtomicBool,
 }
@@ -177,6 +179,7 @@ impl Default for AppState {
             sound_enabled: AtomicBool::new(true),
             right_sidebar: AtomicBool::new(false),
             sidebar_edge: AtomicU8::new(0),
+            panel_topmost: AtomicBool::new(true),
             double_tap_capture_only: AtomicBool::new(false),
         }
     }
