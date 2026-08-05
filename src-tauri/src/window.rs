@@ -364,6 +364,10 @@ fn start_companion_tracker(app: &AppHandle, target_pid: i32, monitors: Vec<Monit
     tauri::async_runtime::spawn_blocking(move || {
         let mut target = target_pid;
         let mut last: Option<(AxWindowFrame, u32, i32, i32, i32)> = None;
+        // 同层级契约的无焦点路径：失焦回调（maybe_redock）只覆盖「面板曾获焦再切走」，
+        // 用户不碰面板直接在应用间切换时，压层级/随目标浮现只能靠这里
+        let mut last_front: i32 = -1;
+        let mut was_docked = false;
         loop {
             std::thread::sleep(Duration::from_millis(60));
             let state = handle.state::<AppState>();
@@ -383,25 +387,29 @@ fn start_companion_tracker(app: &AppHandle, target_pid: i32, monitors: Vec<Monit
             }
             // 切到「伴随列表内」的另一应用 → 换吸附目标；
             // 切到列表外应用/桌面 → 不追（面板原地保持独立/上次吸附位置）
-            if let Some(front) = focus::frontmost_info() {
-                if front.pid != me && front.pid != target {
-                    let in_list = {
-                        let cfg = state.companion.lock().unwrap();
-                        front
-                            .bundle_id
-                            .as_deref()
-                            .map(|b| cfg.apps.iter().any(|a| a == b))
-                            .unwrap_or(false)
-                    };
-                    if in_list {
-                        target = front.pid;
-                        *state.prev_app_pid.lock().unwrap() = Some(target);
-                        // 高度覆盖随目标切换重置：与新应用窗口同高
-                        reset_overrides_if_target_changed(&state, target);
-                        last = None;
+            let front_pid = match focus::frontmost_info() {
+                Some(front) => {
+                    if front.pid != me && front.pid != target {
+                        let in_list = {
+                            let cfg = state.companion.lock().unwrap();
+                            front
+                                .bundle_id
+                                .as_deref()
+                                .map(|b| cfg.apps.iter().any(|a| a == b))
+                                .unwrap_or(false)
+                        };
+                        if in_list {
+                            target = front.pid;
+                            *state.prev_app_pid.lock().unwrap() = Some(target);
+                            // 高度覆盖随目标切换重置：与新应用窗口同高
+                            reset_overrides_if_target_changed(&state, target);
+                            last = None;
+                        }
                     }
+                    front.pid
                 }
-            }
+                None => -1,
+            };
             let width_pt = *state.panel_width_pt.lock().unwrap();
             let top_offset = *state.panel_top_offset.lock().unwrap();
             let height_override = *state.panel_height_pt.lock().unwrap();
@@ -409,8 +417,32 @@ fn start_companion_tracker(app: &AppHandle, target_pid: i32, monitors: Vec<Monit
             // 目标无有效窗口（桌面/小对话框/已退出）→ 面板原地不动，继续观望
             let Some(frame) = dockable_frame(target) else {
                 state.docked.store(false, Ordering::SeqCst);
+                was_docked = false;
+                last_front = front_pid;
                 continue;
             };
+            // 新建立吸附 → 强制与目标同层级（独立模式唤出时可能带着置顶）；
+            // 目标应用刚激活 → 面板一起浮现（不抢焦点）
+            let newly_docked = !was_docked;
+            was_docked = true;
+            let rise = front_pid == target && last_front != target;
+            last_front = front_pid;
+            if newly_docked || rise {
+                let h2 = handle.clone();
+                let _ = handle.run_on_main_thread(move || {
+                    if let Some(win) = h2.get_webview_window("main") {
+                        if !win.is_visible().unwrap_or(false) {
+                            return;
+                        }
+                        if newly_docked {
+                            let _ = win.set_always_on_top(false);
+                        }
+                        if rise {
+                            order_front_without_focus(&win);
+                        }
+                    }
+                });
+            }
             let key = (
                 frame,
                 width_pt as u32,
@@ -518,6 +550,7 @@ pub fn maybe_redock(app: &AppHandle) {
     let (x, y, w, h) =
         compute_companion_rect(frame, panel_w, top_offset, height_override, gap, &monitor);
     // 目标激活重吸附：保持同层级并随目标一起浮到前面（不抢焦点）
+    state.docked.store(true, Ordering::SeqCst);
     let _ = window.set_always_on_top(false);
     let _ = window.set_size(LogicalSize::new(w, h));
     let _ = window.set_position(LogicalPosition::new(x, y));

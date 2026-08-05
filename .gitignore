@@ -36,3 +36,4 @@ tasks/
 # 设计探索稿（大文件，不入库）
 /toskr-*.png
 assets/icon-concepts/
+.gstack/
