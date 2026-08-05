@@ -224,8 +224,10 @@ export interface Settings {
   /** 独立模式下手动拖动后的位置（null=默认屏幕右缘）。 */
   panelFreeX: number | null;
   panelFreeY: number | null;
-  /** 靠右边栏模式：贴屏幕右缘全高（保留停靠间距），与伴随磁吸互斥。 */
+  /** 边栏模式：贴屏幕某缘（保留停靠间距），与伴随磁吸互斥。 */
   rightSidebar: boolean;
+  /** 边栏停靠缘（左右=全高竖栏，上下=全宽横栏）。 */
+  sidebarEdge: "right" | "left" | "top" | "bottom";
   /** 到期快捷档（可增删改）：相对分钟 / 今天 / 明天 / 下个周几。 */
   duePresets: DuePresetCfg[];
   /** 捕获排除列表：这些应用内双击只开关面板、绝不捕获（密码管理器等）。 */
@@ -357,6 +359,7 @@ export const defaultSettings = (): Settings => ({
   panelFreeX: null,
   panelFreeY: null,
   rightSidebar: false,
+  sidebarEdge: "right",
   duePresets: DEFAULT_DUE_PRESETS.map((p) => ({ ...p })),
   excludedApps: [...DEFAULT_EXCLUDED_APPS],
   promptSnippets: [...DEFAULT_PROMPT_SNIPPETS],

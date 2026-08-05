@@ -447,13 +447,31 @@ pub fn set_sound(app: AppHandle, enabled: bool) {
         .store(enabled, Ordering::Relaxed);
 }
 
-/// 靠右边栏模式开关（与伴随磁吸互斥）；面板可见时立即应用新布局。
+/// 前台应用是否是本应用（面板失焦判定：焦点移到自家预览/设置窗不算离开）。
 #[tauri::command]
-pub fn set_right_sidebar(app: AppHandle, enabled: bool) {
-    app.state::<AppState>()
-        .right_sidebar
-        .store(enabled, Ordering::SeqCst);
-    crate::diag::push(&app, format!("靠右边栏: {}", if enabled { "开" } else { "关" }));
+pub fn is_self_frontmost() -> bool {
+    crate::focus::frontmost_info()
+        .map(|f| f.pid == std::process::id() as i32)
+        .unwrap_or(false)
+}
+
+/// 边栏模式开关与停靠缘（right/left/top/bottom；与伴随磁吸互斥）；
+/// 面板可见时立即应用新布局。
+#[tauri::command]
+pub fn set_sidebar_mode(app: AppHandle, enabled: bool, edge: String) {
+    let state = app.state::<AppState>();
+    state.right_sidebar.store(enabled, Ordering::SeqCst);
+    let code = match edge.as_str() {
+        "left" => 1u8,
+        "top" => 2,
+        "bottom" => 3,
+        _ => 0,
+    };
+    state.sidebar_edge.store(code, Ordering::SeqCst);
+    crate::diag::push(
+        &app,
+        format!("边栏: {} {edge}", if enabled { "开" } else { "关" }),
+    );
     if let Some(w) = app.get_webview_window("main") {
         if w.is_visible().unwrap_or(false) {
             crate::window::request_show_panel(&app);

@@ -10,6 +10,7 @@ import {
   type DragOverEvent,
 } from "@dnd-kit/core";
 import {
+  horizontalListSortingStrategy,
   SortableContext,
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
@@ -21,10 +22,19 @@ import {
   CheckCircle2,
   Circle,
   ClipboardList,
+  ArrowLeft,
+  ArrowRight,
+  CheckCheck,
   Eraser,
+  PanelBottom,
+  PanelLeft,
   PanelRight,
+  PanelTop,
+  Pencil,
   Pin,
   Plus,
+  Star,
+  Trash2,
   Rows3,
   Search,
   SearchX,
@@ -36,8 +46,23 @@ import { NoteCard } from "@/components/NoteCard";
 import { PermissionBanner } from "@/components/PermissionBanner";
 import { PreviewOverlay } from "@/components/PreviewOverlay";
 import { SectionGroup } from "@/components/SectionGroup";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { SelectionBar } from "@/components/SelectionBar";
+import {
+  SimpleMenu,
+  SimpleMenuItem,
+  SimpleMenuLabel,
+  SimpleMenuSeparator,
+} from "@/components/SimpleMenu";
 import { TaskPage, TASK_DONE_KEY } from "@/components/TaskPage";
+import { TaskTile } from "@/components/TaskRow";
+import { TaskQuickAdd } from "@/components/TaskQuickAdd";
 import { EmptyState } from "@/components/ui/empty-state";
 import { floatingSurface } from "@/components/ui/floating-surface";
 import { IconButton } from "@/components/ui/icon-button";
@@ -84,9 +109,12 @@ import {
 import { cn } from "@/lib/utils";
 import {
   CLIPBOARD_ID,
+  INBOX_ID,
   noteImages,
   PANEL_WIDTH_MAX,
   PANEL_WIDTH_MIN,
+  SECTION_COLORS,
+  TASK_INBOX_ID,
   useNotesStore,
   type Settings,
 } from "@/store/notesStore";
@@ -94,6 +122,268 @@ import { useUIStore } from "@/store/uiStore";
 
 /** 本会话捕获的卡片 id 栈（HUD 撤销用，无需持久化）。 */
 const captureHistory: string[] = [];
+
+/** 横栏「已完成」过滤哨兵值（与真实分组 id 隔离）。 */
+const DONE_FILTER = "__done__";
+
+/** 横栏分组胶囊管理能力（与竖栏分组头对齐）。 */
+interface PillManage {
+  rename: (id: string, name: string) => void;
+  move: (id: string, dir: -1 | 1) => void;
+  remove: (id: string) => void;
+  /** 不可删除的固定分组（收件箱/收集箱）。 */
+  lockedId: string;
+  setColor?: (id: string, c?: string) => void;
+  toggleKeep?: (id: string) => void;
+  keepOn?: (id: string) => boolean;
+  /** 全选该组卡片（笔记）。 */
+  checkAll?: (id: string) => void;
+  /** 行尾「+」新建分组。 */
+  add?: () => void;
+}
+
+const pillCls = (on: boolean) =>
+  cn(
+    "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-label",
+    on
+      ? "border-border bg-primary/10 font-medium text-foreground dark:border-input"
+      : "border-transparent text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
+  );
+
+/** 单个分组胶囊：点选过滤；双击改名；右键管理菜单（改名/色板/保留/移动/删除）。 */
+function GroupPill({
+  item,
+  on,
+  onPick,
+  manage,
+}: {
+  item: { id: string; name: string; color?: string };
+  on: boolean;
+  onPick: () => void;
+  manage?: PillManage;
+}) {
+  const [renaming, setRenaming] = useState(false);
+  const [name, setName] = useState(item.name);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (renaming) window.setTimeout(() => inputRef.current?.focus(), 30);
+  }, [renaming]);
+  const commit = () => {
+    if (manage && name.trim() && name.trim() !== item.name) {
+      manage.rename(item.id, name.trim());
+    }
+    setRenaming(false);
+  };
+  if (renaming) {
+    return (
+      <input
+        ref={inputRef}
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Enter") commit();
+          else if (e.key === "Escape") setRenaming(false);
+        }}
+        onBlur={commit}
+        className="h-6 w-24 shrink-0 rounded-full border border-border bg-transparent px-2.5 text-label outline-none"
+      />
+    );
+  }
+  const trigger = () => (
+    <button
+      onClick={onPick}
+      onDoubleClick={() => {
+        if (manage) {
+          setName(item.name);
+          setRenaming(true);
+        }
+      }}
+      className={pillCls(on)}
+    >
+      <span
+        className="size-2 shrink-0 rounded-full"
+        style={{ backgroundColor: item.color ?? "#98989d" }}
+      />
+      {item.name}
+    </button>
+  );
+  if (!manage) return trigger();
+  // 胶囊行在 overflow-x-auto 容器内，SimpleMenu 的绝对定位下拉会被裁剪；
+  // 改用 Radix ContextMenu（portal 逃逸裁剪，与卡片右键同栈、本窗口已验证可用）
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{trigger()}</ContextMenuTrigger>
+      <ContextMenuContent className="w-44">
+        {manage.checkAll && (
+          <ContextMenuItem onClick={() => manage.checkAll?.(item.id)}>
+            <CheckCheck className="size-3.5" /> 全选此组
+          </ContextMenuItem>
+        )}
+        <ContextMenuItem
+          onClick={() => {
+            setName(item.name);
+            setRenaming(true);
+          }}
+        >
+          <Pencil className="size-3.5" /> 重命名
+        </ContextMenuItem>
+        {manage.setColor && (
+          <div className="flex items-center gap-1 px-2 py-1.5">
+            {SECTION_COLORS.map((c) => (
+              <button
+                key={c}
+                aria-label="设置分组色"
+                onClick={() => manage.setColor?.(item.id, c)}
+                className="size-3.5 rounded-full ring-offset-1 transition-transform hover:scale-125"
+                style={{ backgroundColor: c }}
+              />
+            ))}
+            <button
+              aria-label="清除颜色"
+              onClick={() => manage.setColor?.(item.id, undefined)}
+              className="size-3.5 rounded-full border border-dashed border-muted-foreground/50 transition-transform hover:scale-125"
+            />
+          </div>
+        )}
+        {manage.toggleKeep && (
+          <ContextMenuItem
+            title="组内卡片发送后不标记完成，适合 Prompt 库等长期复用内容"
+            onClick={() => manage.toggleKeep?.(item.id)}
+          >
+            <Star
+              className={cn("size-3.5", manage.keepOn?.(item.id) && "fill-current")}
+            />{" "}
+            {manage.keepOn?.(item.id) ? "取消发送后保留" : "发送后保留"}
+          </ContextMenuItem>
+        )}
+        <ContextMenuSeparator />
+        <ContextMenuItem onClick={() => manage.move(item.id, -1)}>
+          <ArrowLeft className="size-3.5" /> 左移
+        </ContextMenuItem>
+        <ContextMenuItem onClick={() => manage.move(item.id, 1)}>
+          <ArrowRight className="size-3.5" /> 右移
+        </ContextMenuItem>
+        {item.id !== manage.lockedId && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem
+              variant="destructive"
+              onClick={() => manage.remove(item.id)}
+            >
+              <Trash2 className="size-3.5" /> 删除分组
+            </ContextMenuItem>
+          </>
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+/** 横栏分组胶囊行（Paste 顶栏样式）：全部 + 各分组（带色点），点选过滤。 */
+function GroupPills({
+  items,
+  active,
+  onPick,
+  bare,
+  manage,
+  doneCount,
+}: {
+  items: { id: string; name: string; color?: string }[];
+  active: string | null;
+  onPick: (id: string | null) => void;
+  /** 并入标题行时去掉外层留白与滚动（由父容器统一处理）。 */
+  bare?: boolean;
+  manage?: PillManage;
+  /** 已完成数量（>0 时显示「已完成」胶囊，选中值为 DONE_FILTER）。 */
+  doneCount?: number;
+}) {
+  return (
+    <div
+      className={
+        bare
+          ? "flex shrink-0 items-center gap-1"
+          : "slim-scroll flex shrink-0 items-center gap-1 overflow-x-auto px-3 pb-1 pt-0.5"
+      }
+    >
+      <button onClick={() => onPick(null)} className={pillCls(active === null)}>
+        全部
+      </button>
+      {items.map((s) => (
+        <GroupPill
+          key={s.id}
+          item={s}
+          on={active === s.id}
+          onPick={() => onPick(active === s.id ? null : s.id)}
+          manage={manage}
+        />
+      ))}
+      {doneCount !== undefined && doneCount > 0 && (
+        <button
+          onClick={() => onPick(active === DONE_FILTER ? null : DONE_FILTER)}
+          className={cn(pillCls(active === DONE_FILTER), "text-muted-foreground")}
+        >
+          ✓ 已完成 {doneCount}
+        </button>
+      )}
+      {manage?.add && (
+        <button
+          aria-label="新建分组"
+          title="新建分组（双击胶囊可改名）"
+          onClick={manage.add}
+          className="flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
+        >
+          <Plus className="size-3.5" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** 横栏滚动容器：细滚动条 + 纵向滚轮转横向滑动（Paste 手感）。 */
+function StripScroller({ children }: { children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+        el.scrollLeft += e.deltaY;
+        e.preventDefault();
+      }
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+  return (
+    <div
+      ref={ref}
+      className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden [&::-webkit-scrollbar]:hidden"
+    >
+      {children}
+    </div>
+  );
+}
+
+const SIDEBAR_EDGE_LABEL = {
+  right: "靠右显示",
+  left: "靠左显示",
+  top: "靠上显示",
+  bottom: "靠下显示",
+} as const;
+
+/** 应用边栏停靠：开=接管位置（清手动拖动）；关=恢复自动停靠。 */
+async function applySidebar(on: boolean, edge: Settings["sidebarEdge"]) {
+  useNotesStore.getState().setSettings({
+    rightSidebar: on,
+    sidebarEdge: edge,
+    panelFreeX: null,
+    panelFreeY: null,
+  });
+  await api.setPanelFreePos(null, null).catch(() => {});
+  await api.setSidebarMode(on, edge).catch(() => {});
+  if (!on) void api.showPanel();
+}
 
 /**
  * 常驻页面滑层：三页始终挂载，切页只动 transform/opacity（GPU 合成），
@@ -434,9 +724,15 @@ export default function App() {
       window.setTimeout(() => {
         void api.refreshPrevApp();
       }, 300);
-      const { open: isOpen, pinned: isPinned } = useUIStore.getState();
-      const { hideOnBlur } = useNotesStore.getState().settings;
-      if (isOpen && !isPinned && hideOnBlur) closePanel(false);
+      // 稍等前台归属稳定再判定：焦点若只是移到自家窗口（空格图片预览、
+      // 设置窗），应用仍在前台 → 不算离开，面板不收（未钉住场景）
+      window.setTimeout(async () => {
+        const { open: isOpen, pinned: isPinned } = useUIStore.getState();
+        const { hideOnBlur } = useNotesStore.getState().settings;
+        if (!(isOpen && !isPinned && hideOnBlur)) return;
+        const stillOurs = await api.isSelfFrontmost().catch(() => false);
+        if (!stillOurs) closePanel(false);
+      }, 120);
     });
     return () => {
       unlisten.then((fn) => fn());
@@ -474,7 +770,9 @@ export default function App() {
       void api.setPanelHotkey(settings.panelToggleHotkey).catch(() => {});
       void api.setCompanionConfig(settings.companionEnabled, settings.companionApps);
       void api.setCompanionGap(settings.companionGap);
-      void api.setRightSidebar(settings.rightSidebar).catch(() => {});
+      void api
+        .setSidebarMode(settings.rightSidebar, settings.sidebarEdge)
+        .catch(() => {});
       void api.setPanelFreePos(settings.panelFreeX, settings.panelFreeY);
       void api.setPanelWidth(settings.panelWidth);
       // 垂直覆盖为会话内临时值（切换吸附目标即重置），不做启动恢复
@@ -590,6 +888,10 @@ export default function App() {
 
   const q = query.trim();
   // 笔记页不再显示「剪贴板」分组——剪贴板历史提升为平级 tab
+  /** 横栏分组过滤（null=全部；笔记/任务各自独立）。 */
+  const [noteGroupFilter, setNoteGroupFilter] = useState<string | null>(null);
+  const [taskGroupFilter, setTaskGroupFilter] = useState<string | null>(null);
+
   const grouped = useMemo(
     () =>
       sections
@@ -607,6 +909,15 @@ export default function App() {
         .filter((g) => !q || g.active.length + g.done.length > 0),
     [sections, notes, q]
   );
+  /** 横栏形态：各分组未完成卡拍平成一条串（分组顺序 → 组内顺序），
+   *  可按分组胶囊过滤。 */
+  const stripNotes = useMemo(() => {
+    if (noteGroupFilter === DONE_FILTER) return grouped.flatMap((g) => g.done);
+    return grouped
+      .filter((g) => !noteGroupFilter || g.section.id === noteGroupFilter)
+      .flatMap((g) => g.active);
+  }, [grouped, noteGroupFilter]);
+  const stripNoteIds = useMemo(() => stripNotes.map((n) => n.id), [stripNotes]);
 
   /** 剪贴板 tab：固定（keep）置顶，其余按时间流水（notes 数组新在前）。 */
   const clipNotes = useMemo(() => {
@@ -648,6 +959,20 @@ export default function App() {
     () => bucketTasksForDisplay(tasks, taskSections, taskNow),
     [tasks, taskSections, taskNow]
   );
+  /** 横栏形态：到期 → 灵感 → 各组进行中/待办拍平（不含已完成），
+   *  可按分组胶囊过滤。 */
+  const stripTasks = useMemo(() => {
+    const flat = [
+      ...taskBuckets.overdue,
+      ...taskBuckets.sparks,
+      ...taskBuckets.groups.flatMap((g) => g.tasks),
+    ];
+    if (taskGroupFilter === DONE_FILTER) return taskBuckets.done;
+    if (!taskGroupFilter) return flat;
+    return flat.filter(
+      (t) => (t.sectionId ?? TASK_INBOX_ID) === taskGroupFilter
+    );
+  }, [taskBuckets, taskGroupFilter]);
   const taskNavIds = useMemo(
     () => [
       ...taskBuckets.overdue.map((t) => t.id),
@@ -688,6 +1013,12 @@ export default function App() {
 
   // 页面序（笔记/任务/剪贴板）：常驻页按序差决定滑向（左侧页藏左、右侧页藏右）
   const pageIndex = page === "notes" ? 0 : page === "tasks" ? 1 : 2;
+  /** 上/下横栏形态：剪贴板页走 Paste 式方形卡横向串。 */
+  const horizontalBar =
+    settings.rightSidebar &&
+    (settings.sidebarEdge === "top" || settings.sidebarEdge === "bottom");
+  /** 横栏下笔记输入通栏默认收起，由工具栏「添加笔记」按钮唤出。 */
+  const [barDraftOpen, setBarDraftOpen] = useState(false);
 
   // ===== 面板内快捷键（Esc 分层 + 全键盘导航） =====
   useEffect(() => {
@@ -1052,6 +1383,31 @@ export default function App() {
     useNotesStore.getState().setSettings({ panelTopOffset: 0, panelHeight: null });
   };
 
+  /** 页签三连（普通模式独占一行；横栏并入标题行居中）。 */
+  const pageTabs = (
+    <>
+      <PageTab
+        active={page === "notes"}
+        onClick={() => useUIStore.getState().setPage("notes")}
+      >
+        笔记
+      </PageTab>
+      <PageTab
+        active={page === "tasks"}
+        badge={taskBuckets.overdue.length}
+        onClick={() => useUIStore.getState().setPage("tasks")}
+      >
+        任务
+      </PageTab>
+      <PageTab
+        active={page === "clipboard"}
+        onClick={() => useUIStore.getState().setPage("clipboard")}
+      >
+        剪贴板
+      </PageTab>
+    </>
+  );
+
   return (
     <MotionConfig reducedMotion="user">
     <TooltipProvider delayDuration={400}>
@@ -1064,7 +1420,27 @@ export default function App() {
             <motion.div
               key="panel"
               initial={false}
-              animate={open ? { x: 0, opacity: 1 } : { x: 16, opacity: 0 }}
+              // 隐藏位姿沿停靠缘方向：右/默认→右侧、左→左侧、上→上方、下→下方，
+              // 出入动画即「从所在缘划出/划入」
+              animate={
+                open
+                  ? { x: 0, y: 0, opacity: 1 }
+                  : {
+                      x:
+                        !settings.rightSidebar || settings.sidebarEdge === "right"
+                          ? 16
+                          : settings.sidebarEdge === "left"
+                            ? -16
+                            : 0,
+                      y:
+                        settings.rightSidebar && settings.sidebarEdge === "top"
+                          ? -16
+                          : settings.rightSidebar && settings.sidebarEdge === "bottom"
+                            ? 16
+                            : 0,
+                      opacity: 0,
+                    }
+              }
               // 进场 spring 保手感；退场用短 tween 果断结束——spring 的静止判定
               // 有长尾，会拖住窗口隐藏时机，露出毛玻璃空板（内容先没、面板后没）
               transition={open ? springSnappy : tweenExit}
@@ -1114,7 +1490,7 @@ export default function App() {
 
               <header
                 data-tauri-drag-region
-                className="flex items-center gap-2 px-4 pb-2 pt-3.5"
+                className="relative flex items-center gap-2 px-4 pb-2 pt-3.5"
               >
                 <h1
                   data-tauri-drag-region
@@ -1130,7 +1506,110 @@ export default function App() {
                       ? activeTaskCount
                       : clipNotes.length}
                 </span>
+                {/* 横栏：页签 + 分组胶囊并入标题行居中（Paste 式），少占一到两行高度 */}
+                {horizontalBar && (
+                  <div
+                    role="tablist"
+                    aria-label="页面"
+                    className="absolute left-1/2 top-1/2 flex max-w-[60%] -translate-x-1/2 -translate-y-1/2 items-center gap-1 overflow-x-auto [&::-webkit-scrollbar]:hidden"
+                  >
+                    {pageTabs}
+                    {page === "notes" && (
+                      <>
+                        <span aria-hidden className="mx-1 h-3.5 w-px shrink-0 bg-border" />
+                        <GroupPills
+                          bare
+                          items={grouped.map((g) => g.section)}
+                          active={noteGroupFilter}
+                          onPick={setNoteGroupFilter}
+                          doneCount={grouped.reduce((n, g) => n + g.done.length, 0)}
+                          manage={{
+                            rename: (id, n) =>
+                              useNotesStore.getState().renameSection(id, n),
+                            move: (id, d) =>
+                              useNotesStore.getState().moveSection(id, d),
+                            remove: (id) => {
+                              if (noteGroupFilter === id) setNoteGroupFilter(null);
+                              useNotesStore.getState().deleteSection(id);
+                            },
+                            lockedId: INBOX_ID,
+                            setColor: (id, c) =>
+                              useNotesStore.getState().setSectionColor(id, c),
+                            toggleKeep: (id) =>
+                              useNotesStore.getState().toggleSectionKeep(id),
+                            keepOn: (id) =>
+                              !!useNotesStore
+                                .getState()
+                                .sections.find((s) => s.id === id)?.keepAfterSend,
+                            checkAll: (id) => {
+                              const g = grouped.find((x) => x.section.id === id);
+                              if (g?.active.length) {
+                                useNotesStore
+                                  .getState()
+                                  .setChecked(g.active.map((n) => n.id));
+                              }
+                            },
+                            add: () => useNotesStore.getState().addSection(),
+                          }}
+                        />
+                      </>
+                    )}
+                    {page === "tasks" && (
+                      <>
+                        <span aria-hidden className="mx-1 h-3.5 w-px shrink-0 bg-border" />
+                        <GroupPills
+                          bare
+                          items={taskSections}
+                          active={taskGroupFilter}
+                          onPick={setTaskGroupFilter}
+                          doneCount={taskBuckets.done.length}
+                          manage={{
+                            rename: (id, n) =>
+                              useNotesStore.getState().renameTaskSection(id, n),
+                            move: (id, d) =>
+                              useNotesStore.getState().moveTaskSection(id, d),
+                            remove: (id) => {
+                              if (taskGroupFilter === id) setTaskGroupFilter(null);
+                              useNotesStore.getState().deleteTaskSection(id);
+                            },
+                            lockedId: TASK_INBOX_ID,
+                            add: () =>
+                              useNotesStore.getState().addTaskSection(),
+                          }}
+                        />
+                      </>
+                    )}
+                  </div>
+                )}
                 <div className="ml-auto flex items-center gap-0.5">
+                  {/* 横栏：输入通栏收起，这里按需唤出（仅上下布局出现） */}
+                  {horizontalBar && page === "notes" && (
+                    <Tipped label={barDraftOpen ? "收起输入" : "添加笔记"}>
+                      <IconButton
+                        label={barDraftOpen ? "收起输入" : "添加笔记"}
+                        withTitle={false}
+                        pressed={barDraftOpen}
+                        onClick={() =>
+                          setBarDraftOpen((v) => {
+                            const next = !v;
+                            if (next) {
+                              // WKWebView 点击不给焦点：唤出后主动聚焦输入框
+                              window.setTimeout(() => {
+                                document
+                                  .querySelector<HTMLTextAreaElement>(
+                                    'textarea[placeholder*="添加笔记"]'
+                                  )
+                                  ?.focus();
+                              }, 60);
+                            }
+                            return next;
+                          })
+                        }
+                      >
+                        <Plus />
+                      </IconButton>
+                    </Tipped>
+                  )}
                   {/* 页面级工具：搜索 / 清理 / 密度 —— 与右侧全局工具用分隔线区分 */}
                   {page !== "tasks" && (
                     <Tipped label="搜索（⌘F）">
@@ -1191,37 +1670,66 @@ export default function App() {
                     <span aria-hidden className="mx-0.5 h-3.5 w-px bg-border" />
                   )}
                   {/* 全局工具：停靠模式 / 固定 / 设置 */}
-                  <Tipped
-                    label={
-                      settings.rightSidebar
-                        ? "退出靠右边栏，恢复自动停靠（伴随磁吸 / 屏幕右缘）"
-                        : "靠右边栏：贴屏幕右缘全高（保留间距），开启后不再伴随磁吸"
-                    }
-                  >
-                  <IconButton
-                    label={
-                      settings.rightSidebar
-                        ? "退出靠右边栏，恢复自动停靠（伴随磁吸 / 屏幕右缘）"
-                        : "靠右边栏：贴屏幕右缘全高（保留间距），开启后不再伴随磁吸"
-                    }
-                    withTitle={false}
-                    pressed={settings.rightSidebar}
-                    onClick={async () => {
-                      const on = !useNotesStore.getState().settings.rightSidebar;
-                      useNotesStore.getState().setSettings({
-                        rightSidebar: on,
-                        // 两个方向都清掉手动拖动：开=模式接管位置；关=恢复自动停靠
-                        panelFreeX: null,
-                        panelFreeY: null,
-                      });
-                      await api.setPanelFreePos(null, null).catch(() => {});
-                      await api.setRightSidebar(on).catch(() => {});
-                      if (!on) void api.showPanel();
+                  <SimpleMenu
+                    side="bottom"
+                    align="end"
+                    className="flex"
+                    trigger={({ toggle }) => {
+                      const EdgeIcon =
+                        settings.sidebarEdge === "left"
+                          ? PanelLeft
+                          : settings.sidebarEdge === "top"
+                            ? PanelTop
+                            : settings.sidebarEdge === "bottom"
+                              ? PanelBottom
+                              : PanelRight;
+                      const label = settings.rightSidebar
+                        ? `边栏已开启（${SIDEBAR_EDGE_LABEL[settings.sidebarEdge]}）· 点击换停靠缘或关闭`
+                        : "边栏停靠：贴屏幕某缘显示（与伴随磁吸互斥）";
+                      return (
+                        <Tipped label={label}>
+                          <IconButton
+                            label={label}
+                            withTitle={false}
+                            pressed={settings.rightSidebar}
+                            onClick={toggle}
+                          >
+                            <EdgeIcon />
+                          </IconButton>
+                        </Tipped>
+                      );
                     }}
                   >
-                    <PanelRight />
-                  </IconButton>
-                  </Tipped>
+                    {(close) => (
+                      <>
+                        <SimpleMenuLabel>边栏停靠（与伴随磁吸互斥）</SimpleMenuLabel>
+                        {(["right", "left", "top", "bottom"] as const).map((edge) => (
+                          <SimpleMenuItem
+                            key={edge}
+                            onClick={() => {
+                              close();
+                              void applySidebar(true, edge);
+                            }}
+                          >
+                            {settings.rightSidebar && settings.sidebarEdge === edge
+                              ? "✓ "
+                              : ""}
+                            {SIDEBAR_EDGE_LABEL[edge]}
+                          </SimpleMenuItem>
+                        ))}
+                        <SimpleMenuSeparator />
+                        <SimpleMenuItem
+                          disabled={!settings.rightSidebar}
+                          onClick={() => {
+                            close();
+                            void applySidebar(false, settings.sidebarEdge);
+                          }}
+                        >
+                          关闭边栏（恢复自动停靠）
+                        </SimpleMenuItem>
+                      </>
+                    )}
+                  </SimpleMenu>
                   <Tipped label={pinned ? "取消固定" : "固定（失焦不隐藏）"}>
                     <IconButton
                       label={pinned ? "取消固定" : "固定（失焦不隐藏）"}
@@ -1244,28 +1752,17 @@ export default function App() {
                 </div>
               </header>
 
-              {/* 页面切换：笔记 / 任务 / 剪贴板（⌃Tab 循环），任务 tab 带已到期红色计数 */}
-              <div role="tablist" aria-label="页面" className="mx-3 mb-1.5 flex items-center gap-1">
-                <PageTab
-                  active={page === "notes"}
-                  onClick={() => useUIStore.getState().setPage("notes")}
+              {/* 页面切换：笔记 / 任务 / 剪贴板（⌃Tab 循环）。
+                  横栏形态并入标题行居中（Paste 式单行头部），不再单占一行 */}
+              {!horizontalBar && (
+                <div
+                  role="tablist"
+                  aria-label="页面"
+                  className="mx-3 mb-1.5 flex items-center gap-1"
                 >
-                  笔记
-                </PageTab>
-                <PageTab
-                  active={page === "tasks"}
-                  badge={taskBuckets.overdue.length}
-                  onClick={() => useUIStore.getState().setPage("tasks")}
-                >
-                  任务
-                </PageTab>
-                <PageTab
-                  active={page === "clipboard"}
-                  onClick={() => useUIStore.getState().setPage("clipboard")}
-                >
-                  剪贴板
-                </PageTab>
-              </div>
+                  {pageTabs}
+                </div>
+              )}
 
               <PermissionBanner />
 
@@ -1303,6 +1800,40 @@ export default function App() {
               {/* 三页常驻堆叠：切页只动 transform/opacity，零挂载成本（同面板开合方案） */}
               <div className="relative min-h-0 flex-1 overflow-hidden">
                 <PageSlide offset={2 - pageIndex}>
+                {horizontalBar ? (
+                  <StripScroller>
+                    {clipNotes.length === 0 ? (
+                      <p className="px-4 py-6 text-body text-muted-foreground/60">
+                        {settings.clipHistory ? "还没有剪贴板记录" : "剪贴板历史未开启"}
+                      </p>
+                    ) : (
+                      <DndContext
+                        sensors={sensors}
+                        collisionDetection={closestCenter}
+                        onDragOver={onDragOver}
+                        onDragEnd={onDragEnd}
+                        onDragCancel={clearDragExpand}
+                      >
+                        <SortableContext
+                          items={clipNavIds}
+                          strategy={horizontalListSortingStrategy}
+                        >
+                          <div className="flex h-full items-stretch gap-2.5 px-3 pb-2 pt-1">
+                            {visibleClipNotes.map((n) => (
+                              <NoteCard key={n.id} note={n} query={q} strip />
+                            ))}
+                            {clipNotes.length > clipShown && (
+                              <ClipLoadMore
+                                remaining={clipNotes.length - clipShown}
+                                onLoad={() => setClipShown((v) => v + 200)}
+                              />
+                            )}
+                          </div>
+                        </SortableContext>
+                      </DndContext>
+                    )}
+                  </StripScroller>
+                ) : (
                 <ScrollArea className="min-h-0 flex-1 px-2">
                   {clipNotes.length === 0 ? (
                     <EmptyState
@@ -1351,8 +1882,39 @@ export default function App() {
                     </DndContext>
                   )}
                 </ScrollArea>
+                )}
                 </PageSlide>
                 <PageSlide offset={0 - pageIndex}>
+                {horizontalBar ? (
+                  <>
+                  <StripScroller>
+                    {stripNotes.length === 0 ? (
+                      <p className="px-4 py-6 text-body text-muted-foreground/60">
+                        没有未完成的笔记卡片
+                      </p>
+                    ) : (
+                      <DndContext
+                        sensors={sensors}
+                        collisionDetection={closestCenter}
+                        onDragOver={onDragOver}
+                        onDragEnd={onDragEnd}
+                        onDragCancel={clearDragExpand}
+                      >
+                        <SortableContext
+                          items={stripNoteIds}
+                          strategy={horizontalListSortingStrategy}
+                        >
+                          <div className="flex h-full items-stretch gap-2.5 px-3 pb-2 pt-1">
+                            {stripNotes.map((n) => (
+                              <NoteCard key={n.id} note={n} query={q} strip />
+                            ))}
+                          </div>
+                        </SortableContext>
+                      </DndContext>
+                    )}
+                  </StripScroller>
+                  </>
+                ) : (
               <ScrollArea className="min-h-0 flex-1 px-2">
                 {!onboarding.done && <OnboardingCard />}
                 {notes.length === 0 ? (
@@ -1401,14 +1963,37 @@ export default function App() {
                   </DndContext>
                 )}
               </ScrollArea>
+                )}
                 </PageSlide>
                 <PageSlide offset={1 - pageIndex}>
-                  <TaskPage buckets={taskBuckets} now={taskNow} />
+                  {horizontalBar ? (
+                    <>
+                      <StripScroller>
+                        {stripTasks.length === 0 ? (
+                          <p className="px-4 py-6 text-body text-muted-foreground/60">
+                            没有进行中的任务
+                          </p>
+                        ) : (
+                          <div className="flex h-full items-stretch gap-2.5 px-3 pb-2 pt-1">
+                            {stripTasks.map((t) => (
+                              <TaskTile key={t.id} task={t} now={taskNow} />
+                            ))}
+                          </div>
+                        )}
+                      </StripScroller>
+                      {/* 横栏也保留快速添加（含 💡 灵感切换） */}
+                      <TaskQuickAdd />
+                    </>
+                  ) : (
+                    <TaskPage buckets={taskBuckets} now={taskNow} />
+                  )}
                 </PageSlide>
               </div>
 
-              <SelectionBar />
-              {page === "notes" && <DraftInput />}
+              {/* 横栏形态寸土寸金：批量操作条不占通栏（双击/⌘⏎/右键仍可发送） */}
+              {!horizontalBar && <SelectionBar />}
+              {/* 横栏形态：输入通栏默认不占空间，工具栏 + 按钮唤出 */}
+              {page === "notes" && (!horizontalBar || barDraftOpen) && <DraftInput />}
 
               <PreviewOverlay />
               {showShortcuts && <ShortcutHelp />}
@@ -1543,7 +2128,7 @@ function PageTab({
         "transition-[color,background-color,transform] duration-100",
         "focus-visible:ring-2 focus-visible:ring-primary/50 active:scale-[0.97]",
         active
-          ? "border-primary/50 bg-primary/10 font-medium text-foreground"
+          ? "border-border bg-primary/10 font-medium text-foreground dark:border-input"
           : "border-transparent text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
       )}
     >

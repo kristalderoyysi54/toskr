@@ -37,7 +37,7 @@ export function Segmented<T extends string>({
               "focus-visible:ring-2 focus-visible:ring-primary/50 active:scale-[0.97]",
               size === "sm" ? "px-2 py-1 text-label" : "px-1.5 py-0.5 text-micro",
               active
-                ? "border-primary/50 bg-primary/10 font-medium"
+                ? "border-border bg-primary/10 font-medium dark:border-input"
                 : "border-border text-muted-foreground hover:text-foreground"
             )}
           >

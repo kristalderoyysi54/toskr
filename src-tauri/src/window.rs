@@ -76,6 +76,36 @@ fn snapshot_monitors_pt(app: &AppHandle) -> Vec<MonitorPt> {
         .collect()
 }
 
+/// 边栏停靠矩形（逻辑 pt）：左右=全高竖栏（宽=面板宽），
+/// 上下=全宽横栏（Paste 式卡片串，高≈工作区 32%，钳制在 260-420pt）。四周保留 gap。
+fn sidebar_rect(edge: u8, m: &MonitorPt, panel_w: f64, gap: f64) -> (f64, f64, f64, f64) {
+    match edge {
+        1 => (
+            m.wa_x + gap,
+            m.wa_y + gap,
+            panel_w,
+            (m.wa_h - 2.0 * gap).max(200.0),
+        ),
+        2 | 3 => {
+            let max_h = (m.wa_h - 2.0 * gap).max(200.0);
+            let h = (m.wa_h * 0.32).clamp(260.0_f64.min(max_h), 420.0).min(max_h);
+            let w = (m.wa_w - 2.0 * gap).max(320.0);
+            let y = if edge == 2 {
+                m.wa_y + gap
+            } else {
+                m.wa_y + m.wa_h - h - gap
+            };
+            (m.wa_x + gap, y, w, h)
+        }
+        _ => (
+            m.wa_x + m.wa_w - panel_w - gap,
+            m.wa_y + gap,
+            panel_w,
+            (m.wa_h - 2.0 * gap).max(200.0),
+        ),
+    }
+}
+
 fn monitor_containing_pt(monitors: &[MonitorPt], x: f64, y: f64) -> Option<MonitorPt> {
     monitors
         .iter()
@@ -158,11 +188,10 @@ fn show_panel_on_main(app: &AppHandle) -> tauri::Result<()> {
             return Ok(());
         };
         let gap = *state.companion_gap.lock().unwrap();
-        let height = (m.wa_h - 2.0 * gap).max(200.0);
-        let x = m.wa_x + m.wa_w - panel_w - gap;
-        let y = m.wa_y + gap;
+        let edge = state.sidebar_edge.load(Ordering::SeqCst);
+        let (x, y, w, h) = sidebar_rect(edge, &m, panel_w, gap);
         state.docked.store(false, Ordering::SeqCst);
-        window.set_size(LogicalSize::new(panel_w, height))?;
+        window.set_size(LogicalSize::new(w, h))?;
         window.set_position(LogicalPosition::new(x, y))?;
         ensure_fullscreen_auxiliary(&window);
         window.show()?;
@@ -303,12 +332,20 @@ pub fn set_panel_width(app: &AppHandle, width_pt: f64) {
         let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) else {
             return;
         };
-        // 同屏操作：物理 → 逻辑后按逻辑坐标写回，保持右缘不动
-        let right_pt = (pos.x as f64 + size.width as f64) / scale;
+        // 同屏操作：物理 → 逻辑后按逻辑坐标写回。默认保持右缘不动；
+        // 边栏靠左时锚定左缘（向右生长）
+        let state = handle.state::<AppState>();
+        let anchor_left = state.right_sidebar.load(Ordering::SeqCst)
+            && state.sidebar_edge.load(Ordering::SeqCst) == 1;
         let y_pt = pos.y as f64 / scale;
         let h_pt = size.height as f64 / scale;
+        let x_pt = if anchor_left {
+            pos.x as f64 / scale
+        } else {
+            (pos.x as f64 + size.width as f64) / scale - width_pt
+        };
         let _ = window.set_size(LogicalSize::new(width_pt, h_pt));
-        let _ = window.set_position(LogicalPosition::new(right_pt - width_pt, y_pt));
+        let _ = window.set_position(LogicalPosition::new(x_pt, y_pt));
     });
 }
 
@@ -441,12 +478,10 @@ pub fn maybe_redock(app: &AppHandle) {
         };
         let panel_w = *state.panel_width_pt.lock().unwrap();
         let gap = *state.companion_gap.lock().unwrap();
-        let height = (m.wa_h - 2.0 * gap).max(200.0);
-        let _ = window.set_size(LogicalSize::new(panel_w, height));
-        let _ = window.set_position(LogicalPosition::new(
-            m.wa_x + m.wa_w - panel_w - gap,
-            m.wa_y + gap,
-        ));
+        let edge = state.sidebar_edge.load(Ordering::SeqCst);
+        let (x, y, w, h) = sidebar_rect(edge, &m, panel_w, gap);
+        let _ = window.set_size(LogicalSize::new(w, h));
+        let _ = window.set_position(LogicalPosition::new(x, y));
         return;
     }
     let hit = {

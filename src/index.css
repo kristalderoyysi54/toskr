@@ -471,3 +471,19 @@ input {
     animation: none !important;
   }
 }
+
+/* 细滚动条（横栏卡片串 / 矮窗口弹层通用，替代系统粗轨道） */
+.slim-scroll::-webkit-scrollbar {
+  height: 5px;
+  width: 5px;
+}
+.slim-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.slim-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: oklch(0 0 0 / 18%);
+}
+.dark .slim-scroll::-webkit-scrollbar-thumb {
+  background: oklch(1 0 0 / 22%);
+}
