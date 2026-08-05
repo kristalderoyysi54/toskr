@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion } from "motion/react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion, type Variants } from "motion/react";
 import { Check, Copy, ExternalLink, Pencil, Send, Trash2, X } from "lucide-react";
 
 import { tip } from "@/lib/tip";
@@ -15,6 +15,7 @@ import { useNoteImage, useNoteThumb } from "@/lib/media";
 import { springModal, tweenFade } from "@/lib/motion";
 import { api } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
+import { headerGradient } from "@/components/NoteCard";
 import { noteImages, useNotesStore } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
 
@@ -25,6 +26,21 @@ function stats(text: string) {
   const lines = text.split("\n").length;
   return { chars, words, lines };
 }
+
+type Rect = { top: number; left: number; width: number; height: number };
+
+/** 按 id 反查卡片当前视口矩形（开合形变的锚点；找不到/太小则退回淡入淡出）。 */
+function cardRect(id: string | null): Rect | null {
+  if (!id) return null;
+  const el = document.querySelector(`[data-note-id="${CSS.escape(id)}"]`);
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  if (r.width < 8 || r.height < 8) return null;
+  return { top: r.top, left: r.left, width: r.width, height: r.height };
+}
+
+/** 预览层四周留白（原 p-3 的 12px）。 */
+const MODAL_MARGIN = 12;
 
 /**
  * 全文预览层（Space 弹出，Paste App 风格）：
@@ -45,7 +61,12 @@ export function PreviewOverlay() {
   // 手写模态语义：Radix Dialog 的 portal/焦点锁在此窗口类会吞点击（同 SimpleMenu 成因），
   // 自管 Tab 循环 + 开合时的焦点交还；Esc/Space/↑↓ 仍由 App 级捕获处理，互不重叠
   const cardModalRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
+  // ↑↓ 导航原地换内容（形变层不重挂载），滚动位置手动归零
+  useEffect(() => {
+    bodyRef.current?.scrollTo({ top: 0 });
+  }, [previewId]);
   const hasNote = !!note;
   useEffect(() => {
     if (hasNote) {
@@ -101,8 +122,37 @@ export function PreviewOverlay() {
 
   const s = note ? stats(note.text) : null;
 
+  // ===== 开合形变（Aceternity expandable-card 的手感，手动 FLIP 实现）=====
+  // 打开：从被点卡片的实测矩形弹性生长为整层；关闭：收缩回卡片当前位置。
+  // 不用 layoutId 共享布局：卡片根节点已被 dnd-kit 接管 transform，双方会打架。
+  const openRect = useMemo(() => cardRect(previewId), [previewId]);
+  const lastIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (previewId) lastIdRef.current = previewId;
+  }, [previewId]);
+  // 退场矩形在「previewId 刚清空」的那次渲染实测（↑↓ 导航后收回到最后所在卡）
+  const exitRect = previewId ? openRect : cardRect(lastIdRef.current);
+  const openTarget = {
+    top: MODAL_MARGIN,
+    left: MODAL_MARGIN,
+    width: window.innerWidth - MODAL_MARGIN * 2,
+    height: window.innerHeight - MODAL_MARGIN * 2,
+    opacity: 1,
+    scale: 1,
+  };
+  const modalVariants: Variants = {
+    from: (r: Rect | null) =>
+      r ? { ...r, opacity: 1, scale: 1 } : { ...openTarget, opacity: 0, scale: 0.96 },
+    open: { ...openTarget, transition: springModal },
+    exit: (r: Rect | null) =>
+      r
+        ? { ...r, opacity: 1, scale: 1, transition: springModal }
+        : { ...openTarget, opacity: 0, scale: 0.96, transition: tweenFade },
+  };
+
   return (
-    <AnimatePresence>
+    <AnimatePresence custom={exitRect}>
+      {/* 遮罩与详情层是同级兄弟：嵌套的话遮罩先淡完会把还在收缩的详情层一起藏掉 */}
       {note && (
         <motion.div
           key="preview-backdrop"
@@ -110,21 +160,25 @@ export function PreviewOverlay() {
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={tweenFade}
-          className="absolute inset-0 z-40 flex flex-col bg-black/40 p-3 backdrop-blur-[2px]"
+          className="absolute inset-0 z-40 bg-black/40 backdrop-blur-[2px]"
           onClick={() => useUIStore.getState().closePreview()}
-        >
+        />
+      )}
+      {note && (
           <motion.div
-            key={note.id}
+            key="preview-modal"
             ref={cardModalRef}
             role="dialog"
             aria-modal="true"
             aria-labelledby="preview-title"
             tabIndex={-1}
-            initial={{ scale: 0.96, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            transition={springModal}
+            custom={openRect}
+            variants={modalVariants}
+            initial="from"
+            animate="open"
+            exit="exit"
             className={cn(
-              "flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl outline-none",
+              "absolute z-40 flex flex-col overflow-hidden rounded-xl outline-none",
               floatingSurface(3)
             )}
             onClick={(e) => e.stopPropagation()}
@@ -146,9 +200,16 @@ export function PreviewOverlay() {
               }
             }}
           >
+            {/* 内容随形变淡入（略延迟让矩形先立起来）；关闭时先速隐再收缩 */}
+            <motion.div
+              className="flex min-h-0 flex-1 flex-col"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1, transition: { delay: 0.06, duration: 0.18 } }}
+              exit={{ opacity: 0, transition: { duration: 0.08 } }}
+            >
             <header
               className="flex items-center gap-2 px-3 py-2"
-              style={{ backgroundColor: icon?.color ?? "#5b5b60" }}
+              style={{ backgroundImage: headerGradient(icon?.color ?? "#5b5b60") }}
             >
               <div className="min-w-0 flex-1 leading-tight">
                 <p id="preview-title" className="truncate text-body font-semibold text-white">
@@ -177,6 +238,7 @@ export function PreviewOverlay() {
             </header>
 
             <div
+              ref={bodyRef}
               className="min-h-0 flex-1 overflow-y-auto p-3"
               onDoubleClick={() => {
                 // 双击正文直接进入编辑（图片卡无文本编辑）
@@ -300,8 +362,8 @@ export function PreviewOverlay() {
                 )}
               </div>
             </footer>
+            </motion.div>
           </motion.div>
-        </motion.div>
       )}
     </AnimatePresence>
   );

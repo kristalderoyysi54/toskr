@@ -46,6 +46,7 @@ import { TEXT_OPS, type TextOp } from "@/lib/textops";
 import { highlightCode, langLabel } from "@/lib/code";
 import { linkParts } from "@/lib/link";
 import { useAppIcon } from "@/lib/icons";
+import { isMonoLike, splitMiddle } from "@/lib/cliprow";
 import { timeAgo, useNoteThumb } from "@/lib/media";
 import { noteToTaskSmart, suggestTitle } from "@/lib/ai";
 import { splitHighlight } from "@/lib/search";
@@ -65,6 +66,18 @@ import { useUIStore } from "@/store/uiStore";
 
 /** 双击发送的第一击会塌掉多选：留档点击前的集合供 onDoubleClick 找回。 */
 let lastMultiSelection: { ids: string[]; at: number } | null = null;
+
+/**
+ * 卡顶通栏底色：应用主色的轻微对角渐变（左上亮 → 右下暗各偏 ~8%），
+ * 两端都吃 --card-alpha（设置 → 卡片透明度；无该变量的环境退回不透明）。
+ */
+export function headerGradient(color: string): string {
+  const withAlpha = (c: string) =>
+    `color-mix(in srgb, ${c} var(--card-alpha, 100%), transparent)`;
+  return `linear-gradient(135deg, ${withAlpha(
+    `color-mix(in srgb, ${color} 86%, white)`
+  )}, ${withAlpha(`color-mix(in srgb, ${color} 92%, black)`)})`;
+}
 
 /** 组合卡并排缩略图（独立组件实例规避可变数量 hook；overlay 显示「+N」）。 */
 function CardThumb({ file, overlay }: { file: string; overlay?: string }) {
@@ -436,6 +449,8 @@ export const NoteCard = memo(function NoteCard({
             setNodeRef(el);
             cardRef.current = el;
           }}
+          // 预览层开合动画的矩形锚点（按 id 反查卡片当前位置）
+          data-note-id={note.id}
           style={{
             transform: CSS.Transform.toString(transform),
             transition,
@@ -531,6 +546,7 @@ export const NoteCard = memo(function NoteCard({
           )}
           <button
             {...attributes}
+            data-drag-handle
             onKeyDown={(e) => listeners?.onKeyDown?.(e)}
             onClick={(e) => e.stopPropagation()}
             aria-label="拖拽排序（Space 拾起，方向键移动）"
@@ -567,10 +583,15 @@ export const NoteCard = memo(function NoteCard({
             </div>
           ) : (
             <>
-          {/* 顶部通栏：应用主色底 + 类型/时间（白字）+ 右端完整应用图标 */}
+          {/* 顶部通栏：应用主色轻微渐变底 + 类型/时间（白字）+ 右端完整应用
+              图标；渐变两端与卡底同吃 --card-alpha（设置 → 卡片透明度） */}
           <div
             className="-mx-2 -mt-1.5 mb-1.5 flex h-9 shrink-0 items-center gap-1.5 rounded-t-lg px-2"
-            style={{ backgroundColor: (cardTint && icon?.color) || "#5b5b60" }}
+            style={{
+              backgroundImage: headerGradient(
+                (cardTint && icon?.color) || "#5b5b60"
+              ),
+            }}
           >
             <div className="min-w-0 flex-1 leading-tight">
               {renaming ? (
@@ -825,7 +846,6 @@ function CompactRow({
   /** 仅文本卡非空：拖出文本到外部应用 + 阻断冒泡（见 NoteCard 同名变量注释）。 */
   dragOutProps: React.HTMLAttributes<HTMLParagraphElement>;
 }) {
-  const cardTint = useNotesStore((s) => s.settings.cardTint);
   const isImage = note.kind === "image";
   const isLink = note.kind === "link" && !!note.url;
   const images = noteImages(note);
@@ -837,14 +857,12 @@ function CompactRow({
     : isLink
       ? (note.linkTitle ?? link!.host + (link!.path === "/" ? "" : link!.path))
       : note.text.split("\n")[0] || "（空）";
+  const mono = !isImage && !isLink && isMonoLike(firstLine);
   const segments = splitHighlight(firstLine, query);
+  // 统一紧凑行样式（2026-08-05 用户定稿，笔记/剪贴板同款）：
+  // 无左缘色条（来源由图标表达）、路径/命令等宽 + 中段省略、无逐行时间戳
   return (
-    <div className="relative flex h-full w-full min-w-0 items-center gap-2 pl-2.5 pr-2">
-      {/* 左缘应用主色条（替代舒适模式的彩色通栏） */}
-      <span
-        className="absolute inset-y-0 left-0 w-[3px]"
-        style={{ backgroundColor: (cardTint && icon?.color) || "#5b5b60" }}
-      />
+    <div className="relative flex h-full w-full min-w-0 items-center gap-2 pl-2 pr-2">
       {isLink && note.linkIcon ? (
         <LinkFavicon src={note.linkIcon} />
       ) : icon ? (
@@ -865,20 +883,34 @@ function CompactRow({
         {...dragOutProps}
         className={cn(
           "min-w-0 flex-1 truncate text-body hover:cursor-grab",
-          note.codeLang && "font-mono text-label",
+          (note.codeLang || mono) && "font-mono text-label",
           note.done && "text-muted-foreground line-through opacity-60"
         )}
       >
-        {segments.map((seg, i) =>
-          seg.hit ? (
-            <mark
-              key={i}
-              className="rounded-[2px] bg-amber-300/60 text-inherit dark:bg-amber-500/40"
-            >
-              {seg.text}
-            </mark>
-          ) : (
-            <span key={i}>{seg.text}</span>
+        {mono && !query ? (
+          // 中段省略：head 弹性截断 + tail 定长保留（路径尾段才是身份）。
+          // 搜索态回退到常规截断，保证高亮片段可见
+          (() => {
+            const { head, tail } = splitMiddle(firstLine);
+            return (
+              <span className="flex min-w-0">
+                <span className="truncate">{head}</span>
+                {tail && <span className="shrink-0">{tail}</span>}
+              </span>
+            );
+          })()
+        ) : (
+          segments.map((seg, i) =>
+            seg.hit ? (
+              <mark
+                key={i}
+                className="rounded-[2px] bg-amber-300/60 text-inherit dark:bg-amber-500/40"
+              >
+                {seg.text}
+              </mark>
+            ) : (
+              <span key={i}>{seg.text}</span>
+            )
           )
         )}
       </p>
@@ -891,9 +923,6 @@ function CompactRow({
           {images.length}图
         </span>
       )}
-      <span className="shrink-0 text-micro tabular-nums text-muted-foreground/50 transition-opacity group-hover:opacity-0">
-        {timeAgo(note.createdAt)}
-      </span>
     </div>
   );
 }

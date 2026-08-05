@@ -65,6 +65,7 @@ import { TaskTile } from "@/components/TaskRow";
 import { TaskQuickAdd } from "@/components/TaskQuickAdd";
 import { EmptyState } from "@/components/ui/empty-state";
 import { floatingSurface } from "@/components/ui/floating-surface";
+import { GlowingEffect } from "@/components/ui/glowing-effect";
 import { IconButton } from "@/components/ui/icon-button";
 import { Kbd } from "@/components/ui/kbd";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -85,6 +86,7 @@ import {
   sendNotesToChat,
   undoableTip,
 } from "@/lib/actions";
+import { clipTimeBand } from "@/lib/cliprow";
 import { bucketTasksForDisplay, dueTasksToRemind } from "@/lib/tasks";
 import { springSnappy, tweenExit } from "@/lib/motion";
 import { previewOf } from "@/lib/format";
@@ -997,6 +999,19 @@ export default function App() {
     () => visibleClipNotes.map((n) => n.id),
     [visibleClipNotes]
   );
+  /** 纵向列表的时间分组（Raycast 剪贴板风格）：置顶独立一组，其余按时间段
+   *  连续合并；手动拖动重排后同段名可能再现，key 取组首元素 id 保证稳定。
+   *  taskNow 30s 心跳顺带驱动段边界随时间推移（刚刚 → 1 小时内）。 */
+  const clipBands = useMemo(() => {
+    const bands: { band: string; notes: typeof visibleClipNotes }[] = [];
+    for (const n of visibleClipNotes) {
+      const band = n.keep ? "置顶" : clipTimeBand(n.createdAt, taskNow);
+      const last = bands[bands.length - 1];
+      if (last && last.band === band) last.notes.push(n);
+      else bands.push({ band, notes: [n] });
+    }
+    return bands;
+  }, [visibleClipNotes, taskNow]);
 
   /** 上/下横栏形态：三页走方形卡片串（导航序也切到串序）。 */
   const horizontalBar =
@@ -1068,6 +1083,10 @@ export default function App() {
           return;
         }
       }
+
+      // 拖拽把手聚焦中 = 键盘拖拽模式：Space/方向键让给 dnd-kit
+      // （否则任务页 Space 会同时拾起排序 + 切完成，双动作打架）
+      if (target?.closest?.("[data-drag-handle]")) return;
 
       // ⌃Tab：笔记 → 任务 → 剪贴板 循环（⌘1-9 已被快发占用，取浏览器切标签页惯例）
       if (e.key === "Tab" && e.ctrlKey) {
@@ -1498,6 +1517,15 @@ export default function App() {
                 !open && "pointer-events-none"
               )}
             >
+              {/* 整体外边框光晕：锥形弧沿边框追随指针（z-30 盖过内容边缘，
+                  pointer-events-none 不挡任何交互；浮层 z-50 仍在其上） */}
+              <GlowingEffect
+                className="z-30"
+                borderWidth={1}
+                spread={40}
+                proximity={64}
+                inactiveZone={0.55}
+              />
               {/* 左缘宽度拖拽把手 */}
               <div
                 onPointerDown={startResize}
@@ -1898,9 +1926,26 @@ export default function App() {
                         items={clipNavIds}
                         strategy={verticalListSortingStrategy}
                       >
-                        <div className="flex flex-col gap-1 pb-2 pl-2 pt-1">
-                          {visibleClipNotes.map((n) => (
-                            <NoteCard key={n.id} note={n} query={q} />
+                        <div className="flex flex-col pb-2 pl-2 pt-1">
+                          {clipBands.map(({ band, notes: bandNotes }, bi) => (
+                            <div key={`${band}-${bandNotes[0]!.id}`}>
+                              <div
+                                className={cn(
+                                  "flex items-center gap-2 px-1 pb-1",
+                                  bi === 0 ? "pt-0.5" : "pt-2.5"
+                                )}
+                              >
+                                <span className="text-micro font-medium text-muted-foreground/50">
+                                  {band}
+                                </span>
+                                <span className="h-px flex-1 bg-border/60" />
+                              </div>
+                              <div className="flex flex-col gap-1">
+                                {bandNotes.map((n) => (
+                                  <NoteCard key={n.id} note={n} query={q} />
+                                ))}
+                              </div>
+                            </div>
                           ))}
                           {clipNotes.length > clipShown && (
                             <ClipLoadMore

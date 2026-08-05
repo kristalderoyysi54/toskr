@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { AnimatePresence, motion } from "motion/react";
@@ -8,6 +8,7 @@ import {
   Circle,
   CircleDot,
   FolderInput,
+  GripVertical,
   ListChecks,
   Plus,
   Send,
@@ -88,6 +89,7 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
   const focused = useUIStore((s) => s.focusedId === task.id);
   const flashing = useUIStore((s) => s.flashId === task.id);
   const expanded = useUIStore((s) => s.editingId === task.id);
+  const cardOpacity = useNotesStore((s) => s.settings.cardOpacity);
   const rowRef = useRef<HTMLDivElement | null>(null);
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const [draft, setDraft] = useState(task.text);
@@ -95,14 +97,16 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
 
   const { cycleTaskStatus, cycleTaskPriority } = useNotesStore.getState();
 
-  // 拖拽排序：完成态 / 展开编辑态禁用（编辑器整段拖走没有意义，disabled 时
-  // listeners 由 dnd-kit 置为 undefined）。任务行没有独立把手（不同于 NoteCard），
-  // 刻意不接 attributes/onKeyDown：root 一旦拿 tabIndex，会与全局 Space
-  // 快捷键（任务页 Space=切完成，见 App.tsx）抢键，只保留指针整行可拖。
-  const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: task.id,
-    disabled: task.status === "done" || expanded,
-  });
+  // 拖拽排序：完成态禁用（disabled 时 listeners 由 dnd-kit 置为 undefined）。
+  // 收起行整行可拖 + 左缘把手；展开编辑态只留把手可拖（root 若继续转发
+  // pointerdown，编辑器里划选文字会误触发排序）。attributes/onKeyDown 只放
+  // 把手：root 一旦拿 tabIndex，会与全局 Space 快捷键（任务页 Space=切完成，
+  // 见 App.tsx）抢键；把手自身的键盘冲突由 data-drag-handle 让路规则解决。
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({
+      id: task.id,
+      disabled: task.status === "done",
+    });
 
   // 键盘导航焦点滚动可见（与 NoteCard 同款）
   useEffect(() => {
@@ -176,23 +180,30 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
             setNodeRef(el);
             rowRef.current = el;
           }}
-          style={{
-            transform: CSS.Transform.toString(transform),
-            transition,
+          style={
+            {
+              transform: CSS.Transform.toString(transform),
+              transition,
+              "--card-alpha": `${Math.round(cardOpacity * 100)}%`,
+            } as CSSProperties
+          }
+          // 收起态抓行内任意处拖拽排序（4px 激活阈值不影响点击展开）；按钮/
+          // 输入框已各自 stopPropagation 或靠距离阈值天然免疫（见文件顶部注释）。
+          // 展开态只走左缘把手，避免编辑器内划选文字触发拖动
+          onPointerDown={(e) => {
+            if (!expanded) listeners?.onPointerDown?.(e);
           }}
-          // 抓行内任意处拖拽排序（4px 激活阈值不影响点击展开）；按钮/输入框
-          // 已各自 stopPropagation 或靠距离阈值天然免疫（见文件顶部注释）
-          onPointerDown={(e) => listeners?.onPointerDown?.(e)}
           onClick={() => {
             useUIStore.getState().setFocusedId(task.id);
             useUIStore.getState().setEditingId(task.id);
           }}
           className={cn(
-            "group rounded-lg border border-transparent px-2 py-1.5 shadow-sm",
-            // 闪念灵感：紫色底与普通待办区分
+            "group relative rounded-lg border border-transparent px-2 py-1.5 shadow-sm",
+            // 闪念灵感：紫色底与普通待办区分。两种底色都吃 --card-alpha
+            // （设置 → 卡片透明度），与笔记/剪贴板卡同一套配方
             task.kind === "spark"
-              ? "bg-violet-50 dark:bg-violet-400/10"
-              : "bg-card",
+              ? "bg-[rgb(245_243_255/var(--card-alpha,100%))] dark:bg-[rgb(167_139_250/calc(var(--card-alpha,100%)*0.1))]"
+              : "bg-[rgb(255_255_255/var(--card-alpha,100%))] dark:bg-[rgb(39_39_42/var(--card-alpha,100%))]",
             "hover:border-black/10 dark:hover:border-white/10",
             focused && "ring-1 ring-black/20 dark:ring-white/25",
             expanded && "ring-1 ring-primary/40",
@@ -200,6 +211,28 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
             isDragging && "z-10 opacity-70 elevation-3"
           )}
         >
+          {/* 左缘拖拽把手（悬停显现，与 NoteCard 同款）：展开态的唯一拖拽入口 */}
+          <button
+            {...attributes}
+            data-drag-handle
+            onKeyDown={(e) => listeners?.onKeyDown?.(e)}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              listeners?.onPointerDown?.(e);
+            }}
+            onClick={(e) => e.stopPropagation()}
+            aria-label="拖拽排序（Space 拾起，方向键移动）"
+            className={cn(
+              "absolute -left-4 top-2 cursor-grab touch-none p-0.5",
+              "text-muted-foreground/50 opacity-0 transition-opacity group-hover:opacity-100",
+              "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/60",
+              "active:cursor-grabbing",
+              done && "hidden"
+            )}
+          >
+            <GripVertical className="size-3.5" />
+          </button>
+
           {/* ===== 行头（收起/展开共用）===== */}
           <div className="flex items-center gap-2">
             {/* 优先级色条：点击循环 无→低→中→高 */}
@@ -809,6 +842,7 @@ function TileDetail({
  *  点卡外/Esc 收起，键盘焦点环。 */
 export function TaskTile({ task, now }: { task: Task; now: number }) {
   const focused = useUIStore((s) => s.focusedId === task.id);
+  const cardOpacity = useNotesStore((s) => s.settings.cardOpacity);
   const tileRef = useRef<HTMLDivElement>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   useEffect(() => {
@@ -845,6 +879,7 @@ export function TaskTile({ task, now }: { task: Task; now: number }) {
       <ContextMenuTrigger asChild>
         <div
           ref={tileRef}
+          style={{ "--card-alpha": `${Math.round(cardOpacity * 100)}%` } as CSSProperties}
           onClick={() => useUIStore.getState().setFocusedId(task.id)}
           onDoubleClick={() => {
             if (!detailOpen) setDetailOpen(true);
@@ -854,7 +889,9 @@ export function TaskTile({ task, now }: { task: Task; now: number }) {
             detailOpen ? "w-96" : "aspect-[16/17]",
             "bg-[rgb(255_255_255/var(--card-alpha,100%))] shadow-sm dark:bg-[rgb(39_39_42/var(--card-alpha,100%))]",
             "hover:border-black/10 dark:hover:border-white/10",
-            spark && "bg-violet-50/90 dark:bg-violet-950/40",
+            // 闪念紫底同样乘上 --card-alpha（基础配方在上一行，spark 覆盖之）
+            spark &&
+              "bg-[rgb(245_243_255/calc(var(--card-alpha,100%)*0.9))] dark:bg-[rgb(46_16_101/calc(var(--card-alpha,100%)*0.4))]",
             // 横栏 ←/→ 导航的「选中」视觉：与笔记卡选中同款蓝框（任务无勾选
             // 语义，焦点即选中）
             focused && !detailOpen && "border-primary ring-2 ring-primary/40",
