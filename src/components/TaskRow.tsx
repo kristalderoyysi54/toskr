@@ -855,7 +855,9 @@ export function TaskTile({ task, now }: { task: Task; now: number }) {
             "bg-[rgb(255_255_255/var(--card-alpha,100%))] shadow-sm dark:bg-[rgb(39_39_42/var(--card-alpha,100%))]",
             "hover:border-black/10 dark:hover:border-white/10",
             spark && "bg-violet-50/90 dark:bg-violet-950/40",
-            focused && !detailOpen && "ring-1 ring-black/20 dark:ring-white/25",
+            // 横栏 ←/→ 导航的「选中」视觉：与笔记卡选中同款蓝框（任务无勾选
+            // 语义，焦点即选中）
+            focused && !detailOpen && "border-primary ring-2 ring-primary/40",
             detailOpen && "ring-1 ring-primary/40"
           )}
         >
@@ -925,12 +927,59 @@ export function TaskTile({ task, now }: { task: Task; now: number }) {
               </div>
               <p
                 className={cn(
-                  "line-clamp-[6] whitespace-pre-wrap text-body leading-normal [overflow-wrap:anywhere]",
+                  checklist.length ? "line-clamp-2" : "line-clamp-[6]",
+                  "whitespace-pre-wrap text-body leading-normal [overflow-wrap:anywhere]",
                   done && "text-muted-foreground line-through opacity-60"
                 )}
               >
                 {task.text}
               </p>
+              {/* 子待办预览：默认展示可容纳的前几条（圆点可点选切换完成） */}
+              {checklist.length > 0 && (
+                <div className="mt-1 flex min-h-0 flex-col gap-0.5 overflow-hidden">
+                  {checklist.slice(0, 4).map((c) => (
+                    <div
+                      key={c.id}
+                      className="flex min-w-0 items-center gap-1.5 text-label"
+                    >
+                      <button
+                        aria-label={c.done ? "标记未完成" : "标记完成"}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          useNotesStore
+                            .getState()
+                            .toggleChecklistItem(task.id, c.id);
+                        }}
+                        className={cn(
+                          "shrink-0 rounded-full",
+                          c.done
+                            ? "text-emerald-600 dark:text-emerald-400"
+                            : "text-muted-foreground/60 hover:text-foreground"
+                        )}
+                      >
+                        {c.done ? (
+                          <CheckCircle2 className="size-3" />
+                        ) : (
+                          <Circle className="size-3" />
+                        )}
+                      </button>
+                      <span
+                        className={cn(
+                          "truncate text-muted-foreground",
+                          c.done && "line-through opacity-60"
+                        )}
+                      >
+                        {c.text}
+                      </span>
+                    </div>
+                  ))}
+                  {checklist.length > 4 && (
+                    <span className="text-micro text-muted-foreground/60">
+                      还有 {checklist.length - 4} 条…
+                    </span>
+                  )}
+                </div>
+              )}
               {task.note && (
                 <p className="mt-0.5 line-clamp-1 text-micro text-muted-foreground/70">
                   {task.note}

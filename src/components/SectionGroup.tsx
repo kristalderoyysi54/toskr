@@ -179,7 +179,7 @@ export function SectionGroup({
                 >
                   <Pencil className="size-3.5" /> 重命名
                 </SimpleMenuItem>
-                <div className="flex items-center gap-1 px-2 py-1.5">
+                <div className="flex flex-wrap items-center gap-1.5 px-2 py-1.5">
                   {SECTION_COLORS.map((c) => (
                     <button
                       key={c}
@@ -188,7 +188,7 @@ export function SectionGroup({
                         setSectionColor(section.id, c);
                         close();
                       }}
-                      className="size-3.5 rounded-full ring-offset-1 transition-transform hover:scale-125"
+                      className="size-3.5 shrink-0 rounded-full ring-offset-1 transition-transform hover:scale-125"
                       style={{ backgroundColor: c }}
                     />
                   ))}
@@ -198,7 +198,7 @@ export function SectionGroup({
                       setSectionColor(section.id, undefined);
                       close();
                     }}
-                    className="size-3.5 rounded-full border border-dashed border-muted-foreground/50 transition-transform hover:scale-125"
+                    className="size-3.5 shrink-0 rounded-full border border-dashed border-muted-foreground/50 transition-transform hover:scale-125"
                   />
                 </div>
                 <SimpleMenuSeparator />

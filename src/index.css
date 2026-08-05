@@ -472,18 +472,22 @@ input {
   }
 }
 
-/* 细滚动条（横栏卡片串 / 矮窗口弹层通用，替代系统粗轨道） */
-.slim-scroll::-webkit-scrollbar {
-  height: 5px;
+/* 全局细滚动条（右键菜单/弹层/设置页等一切可滚动区域统一，替代系统粗轨道）；
+   需要完全隐藏滚动条的容器用 [&::-webkit-scrollbar]:hidden（更高特异性覆盖此处） */
+*::-webkit-scrollbar {
   width: 5px;
+  height: 5px;
 }
-.slim-scroll::-webkit-scrollbar-track {
+*::-webkit-scrollbar-track {
   background: transparent;
 }
-.slim-scroll::-webkit-scrollbar-thumb {
+*::-webkit-scrollbar-thumb {
   border-radius: 999px;
   background: oklch(0 0 0 / 18%);
 }
-.dark .slim-scroll::-webkit-scrollbar-thumb {
+.dark *::-webkit-scrollbar-thumb {
   background: oklch(1 0 0 / 22%);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }

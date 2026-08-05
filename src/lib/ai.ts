@@ -326,8 +326,12 @@ ${nowContext()}
    - 没提到时间 → null
 3. priority：只能是 "none"|"low"|"mid"|"high"。出现"重要""紧急""务必""deadline"→ high；
    "有空""顺手""不急"→ low；无法判断 → none。
-4. checklist：仅当用户明确要求拆步骤/清单（"拆一下""分几步""列个清单"）时才给出，
-   3-8 条，每条动词开头不超过20字；否则给空数组 []。
+4. checklist：以下两种情况给出，其余给空数组 []：
+   a. 用户要求拆步骤/清单（"拆一下""分几步""列个清单"）→ 你来拆解 3-8 条，动词开头不超过20字；
+   b. 用户列举了多件并列事项并示意归并（"这两个/这几件 做成待办/子任务/子项/检查项"，
+      或一句话里明显包含多个并列任务）→ 把每件事各作一条 checklist，保留用户原表述（可轻度精简）。
+5. 当 checklist 非空时，title 必须是对整组事项的概括性短标题（不超过30字），
+   绝不要把整段原文塞进 title。
 
 输出结构（所有键都必须出现）：
 {"title": string, "due": {"minutesFromNow": number} | {"date": string, "time": string} | null, "priority": string, "checklist": string[]}
@@ -337,6 +341,7 @@ ${nowContext()}
 输入"20分钟后提醒我关火" → {"title":"关火","due":{"minutesFromNow":20},"priority":"high","checklist":[]}
 输入"晚上8点提醒我复盘"（当前已 21:00）→ {"title":"复盘","due":{"date":"2026-08-06","time":"20:00"},"priority":"none","checklist":[]}
 输入"明早9点前交周报，拆一下步骤" → {"title":"交周报","due":{"date":"2026-08-06","time":"09:00"},"priority":"mid","checklist":["整理本周完成事项","汇总下周计划","检查数据与附件","发送周报"]}
+输入"增加补单适配JSAPI方式 结算表增加jsAPI类型，这两个做成待办事项" → {"title":"JSAPI 适配改造","due":null,"priority":"none","checklist":["增加补单适配JSAPI方式","结算表增加jsAPI类型"]}
 
 ${ONLY_JSON}`;
 }
