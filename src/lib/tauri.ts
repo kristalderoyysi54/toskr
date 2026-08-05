@@ -157,8 +157,9 @@ export const api = {
     apps: string[]
   ) => invoke("set_clip_rules", { ignoreConcealed, ignoreTransient, apps }),
   setClipPause: (untilMs: number) => invoke("set_clip_pause", { untilMs }),
-  setRightSidebar: (enabled: boolean) =>
-    invoke("set_right_sidebar", { enabled }),
+  setSidebarMode: (enabled: boolean, edge: string) =>
+    invoke("set_sidebar_mode", { enabled, edge }),
+  isSelfFrontmost: () => invoke<boolean>("is_self_frontmost"),
   /** 系统 Quick Look 原尺寸预览图片附件。 */
   quickLook: (files: string[], index = 0) =>
     invoke("quick_look", { files, index }),

@@ -114,8 +114,10 @@ pub struct AppState {
     pub clip_pause_until: AtomicI64,
     /// 捕获音效开关（隐身模式下强制静音）。
     pub sound_enabled: AtomicBool,
-    /// 靠右边栏模式：面板贴屏幕右缘全高（保留停靠间距），与伴随磁吸互斥。
+    /// 边栏模式：面板贴屏幕某缘（保留停靠间距），与伴随磁吸互斥。
     pub right_sidebar: AtomicBool,
+    /// 边栏停靠缘：0=右 1=左 2=上 3=下（左右全高竖栏，上下全宽横栏）。
+    pub sidebar_edge: AtomicU8,
     /// 双击触发仅捕获（面板开关完全交给专用快捷键）。
     pub double_tap_capture_only: AtomicBool,
 }
@@ -174,6 +176,7 @@ impl Default for AppState {
             clip_pause_until: AtomicI64::new(0),
             sound_enabled: AtomicBool::new(true),
             right_sidebar: AtomicBool::new(false),
+            sidebar_edge: AtomicU8::new(0),
             double_tap_capture_only: AtomicBool::new(false),
         }
     }

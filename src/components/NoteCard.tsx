@@ -90,9 +90,12 @@ function CardThumb({ file, overlay }: { file: string; overlay?: string }) {
 export const NoteCard = memo(function NoteCard({
   note,
   query = "",
+  strip = false,
 }: {
   note: Note;
   query?: string;
+  /** 横栏卡片串形态（上/下边栏）：固定宽方形卡、随栏高伸展。 */
+  strip?: boolean;
 }) {
   const checked = useNotesStore((s) => s.checkedIds.includes(note.id));
   const checkedCount = useNotesStore((s) => s.checkedIds.length);
@@ -114,7 +117,9 @@ export const NoteCard = memo(function NoteCard({
   const icon = useAppIcon(note.sourceBundle);
   const cardTint = useNotesStore((s) => s.settings.cardTint);
   const cardOpacity = useNotesStore((s) => s.settings.cardOpacity);
-  const compact = useNotesStore((s) => s.settings.cardDensity === "compact");
+  const compactPref = useNotesStore((s) => s.settings.cardDensity === "compact");
+  // 横栏串固定瓷砖形态，不受密度设置影响
+  const compact = compactPref && !strip;
   const isImage = note.kind === "image";
   const isLink = note.kind === "link" && !!note.url;
   const images = noteImages(note);
@@ -453,7 +458,12 @@ export const NoteCard = memo(function NoteCard({
           }}
           className={cn(
             "group relative flex cursor-default select-none overflow-hidden rounded-lg border border-transparent",
-            compact ? "h-9 items-center" : "h-[136px] flex-col px-2 pb-1.5 pt-1.5",
+            strip
+              ? // Paste 1:1：近方形卡（实测 496×526 → 16/17），宽随栏高推导
+                "h-auto aspect-[16/17] shrink-0 flex-col px-2 pb-1.5 pt-1.5"
+              : compact
+                ? "h-9 items-center"
+                : "h-[136px] flex-col px-2 pb-1.5 pt-1.5",
             // 实色卡片（Paste 风格）：与毛玻璃面板分层；透明度由设置项调节
             "bg-[rgb(255_255_255/var(--card-alpha,100%))] shadow-sm dark:bg-[rgb(39_39_42/var(--card-alpha,100%))]",
             "hover:border-black/10 dark:hover:border-white/10",
@@ -463,7 +473,10 @@ export const NoteCard = memo(function NoteCard({
               "transition-[transform,box-shadow] duration-150 hover:-translate-y-px hover:elevation-2",
             // 无勾选框设计：选中态 = 淡填色 + primary 边框（+ 舒适密度抬升）——
             // 与键盘焦点的中性细环用"形状"区分，不只靠色（左缘条方案已被用户否决）
-            checked && (compact ? "ring-1 ring-primary/30" : "border-primary/40 elevation-2"),
+            checked &&
+              (compact
+                ? "ring-2 ring-primary/70"
+                : "border-primary ring-2 ring-primary/40 elevation-2"),
             focused && !checked && "ring-1 ring-foreground/20",
             flashing && "flash-highlight",
             isDragging && "z-10 opacity-70 elevation-3"
@@ -475,8 +488,8 @@ export const NoteCard = memo(function NoteCard({
               className={cn(
                 "pointer-events-none absolute inset-0",
                 compact
-                  ? "bg-primary/[0.08] dark:bg-primary/[0.14]"
-                  : "bg-primary/[0.06] dark:bg-primary/[0.1]"
+                  ? "bg-primary/[0.12] dark:bg-primary/[0.2]"
+                  : "bg-primary/[0.1] dark:bg-primary/[0.16]"
               )}
             />
           )}
@@ -625,7 +638,8 @@ export const NoteCard = memo(function NoteCard({
                 {...dragOutProps}
                 className={cn(
                   // hover:cursor-grab：正文可拖出到外部应用的唯一可见暗示
-                  "line-clamp-3 whitespace-pre-wrap text-body leading-normal [overflow-wrap:anywhere] hover:cursor-grab",
+                  strip ? "line-clamp-[6]" : "line-clamp-3",
+                  "whitespace-pre-wrap text-body leading-normal [overflow-wrap:anywhere] hover:cursor-grab",
                   note.codeLang && "font-mono text-label",
                   note.done && "text-muted-foreground line-through opacity-60"
                 )}

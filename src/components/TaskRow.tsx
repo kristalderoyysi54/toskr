@@ -91,8 +91,7 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
   const [draft, setDraft] = useState(task.text);
   const [noteDraft, setNoteDraft] = useState(task.note ?? "");
 
-  const { cycleTaskStatus, cycleTaskPriority, setTaskStatus, setTaskPriority } =
-    useNotesStore.getState();
+  const { cycleTaskStatus, cycleTaskPriority } = useNotesStore.getState();
 
   // 拖拽排序：完成态 / 展开编辑态禁用（编辑器整段拖走没有意义，disabled 时
   // listeners 由 dnd-kit 置为 undefined）。任务行没有独立把手（不同于 NoteCard），
@@ -373,72 +372,79 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
         </div>
       </ContextMenuTrigger>
 
-      <ContextMenuContent className="w-40">
-        <ContextMenuItem onClick={() => void sendTaskToChat(task.id)}>
-          <Send className="size-3.5" /> 发送到对话
-        </ContextMenuItem>
-        {task.kind === "spark" && (
-          <ContextMenuItem onClick={() => useNotesStore.getState().sparkToTask(task.id)}>
-            <Lightbulb className="size-3.5" /> 转为待办
-          </ContextMenuItem>
-        )}
-        <ContextMenuSeparator />
-        {/* 状态/优先级平铺行内选择：窄面板下二级子菜单会翻转遮挡主菜单 */}
-        <div className="px-2 py-1">
-          <p className="mb-1 text-micro text-muted-foreground">状态</p>
-          <div className="flex gap-1">
-            {(Object.keys(STATUS_LABEL) as TaskStatus[]).map((s) => (
-              <button
-                key={s}
-                onClick={() => {
-                  setTaskStatus(task.id, s);
-                  closeContextMenu();
-                }}
-                className={cn(
-                  "flex-1 rounded-md border px-1 py-0.5 text-label",
-                  task.status === s
-                    ? "border-primary/50 bg-primary/10 font-medium"
-                    : "border-border text-muted-foreground hover:text-foreground"
-                )}
-              >
-                {STATUS_LABEL[s]}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="px-2 py-1">
-          <p className="mb-1 text-micro text-muted-foreground">优先级</p>
-          <div className="flex gap-1">
-            {PRIORITY_CYCLE.map((p) => (
-              <button
-                key={p}
-                title={PRIORITY_LABEL[p]}
-                onClick={() => {
-                  setTaskPriority(task.id, p);
-                  closeContextMenu();
-                }}
-                className={cn(
-                  "flex h-6 flex-1 items-center justify-center rounded-md border",
-                  task.priority === p
-                    ? "border-primary/50 bg-primary/10"
-                    : "border-border hover:bg-black/5 dark:hover:bg-white/10"
-                )}
-              >
-                <span className={cn("h-3.5 w-[3px] rounded-full", PRIORITY_BAR[p])} />
-              </button>
-            ))}
-          </div>
-        </div>
-        <MoveToSectionSub task={task} />
-        <ContextMenuSeparator />
-        <ContextMenuItem
-          variant="destructive"
-          onClick={() => deleteTasksWithUndo([task.id], "已删除 1 个任务")}
-        >
-          <Trash2 className="size-3.5" /> 删除
-        </ContextMenuItem>
-      </ContextMenuContent>
+      <TaskMenu task={task} />
     </ContextMenu>
+  );
+}
+
+/** 任务右键菜单（行与横栏瓷砖共用）。 */
+function TaskMenu({ task }: { task: Task }) {
+  return (
+        <ContextMenuContent className="w-40">
+          <ContextMenuItem onClick={() => void sendTaskToChat(task.id)}>
+            <Send className="size-3.5" /> 发送到对话
+          </ContextMenuItem>
+          {task.kind === "spark" && (
+            <ContextMenuItem onClick={() => useNotesStore.getState().sparkToTask(task.id)}>
+              <Lightbulb className="size-3.5" /> 转为待办
+            </ContextMenuItem>
+          )}
+          <ContextMenuSeparator />
+          {/* 状态/优先级平铺行内选择：窄面板下二级子菜单会翻转遮挡主菜单 */}
+          <div className="px-2 py-1">
+            <p className="mb-1 text-micro text-muted-foreground">状态</p>
+            <div className="flex gap-1">
+              {(Object.keys(STATUS_LABEL) as TaskStatus[]).map((s) => (
+                <button
+                  key={s}
+                  onClick={() => {
+                    useNotesStore.getState().setTaskStatus(task.id, s);
+                    closeContextMenu();
+                  }}
+                  className={cn(
+                    "flex-1 rounded-md border px-1 py-0.5 text-label",
+                    task.status === s
+                      ? "border-border bg-primary/10 font-medium dark:border-input"
+                      : "border-border text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  {STATUS_LABEL[s]}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="px-2 py-1">
+            <p className="mb-1 text-micro text-muted-foreground">优先级</p>
+            <div className="flex gap-1">
+              {PRIORITY_CYCLE.map((p) => (
+                <button
+                  key={p}
+                  title={PRIORITY_LABEL[p]}
+                  onClick={() => {
+                    useNotesStore.getState().setTaskPriority(task.id, p);
+                    closeContextMenu();
+                  }}
+                  className={cn(
+                    "flex h-6 flex-1 items-center justify-center rounded-md border",
+                    task.priority === p
+                      ? "border-border bg-primary/10 dark:border-input"
+                      : "border-border hover:bg-black/5 dark:hover:bg-white/10"
+                  )}
+                >
+                  <span className={cn("h-3.5 w-[3px] rounded-full", PRIORITY_BAR[p])} />
+                </button>
+              ))}
+            </div>
+          </div>
+          <MoveToSectionSub task={task} />
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            variant="destructive"
+            onClick={() => deleteTasksWithUndo([task.id], "已删除 1 个任务")}
+          >
+            <Trash2 className="size-3.5" /> 删除
+          </ContextMenuItem>
+        </ContextMenuContent>
   );
 }
 
@@ -567,11 +573,14 @@ function DuePopover({
   task,
   now,
   alwaysVisible,
+  dense,
 }: {
   task: Task;
   now: number;
   /** 详情展开态常显（收起态无到期时仅悬停出现）。 */
   alwaysVisible?: boolean;
+  /** 紧凑形态（横栏瓷砖）：快捷档双列网格，整体压进矮窗口。 */
+  dense?: boolean;
 }) {
   const duePresets = useNotesStore((s) => s.settings.duePresets);
   const [open, setOpenRaw] = useState(false);
@@ -643,7 +652,11 @@ function DuePopover({
       </PopoverTrigger>
       <PopoverContent
         align="end"
-        className="w-56 p-2"
+        // 高度钳到 Radix 可用空间（横栏窗口矮，超出即内滚，防被窗口截断）
+        className={cn(
+          "slim-scroll max-h-[var(--radix-popover-content-available-height)] overflow-y-auto p-2",
+          dense ? "w-64" : "w-56"
+        )}
         onClick={(e) => e.stopPropagation()}
         // 阻断到全局快捷键（Esc 关面板等）；Radix 自身的 Esc 关闭走 capture 不受影响
         onKeyDown={(e) => {
@@ -655,15 +668,17 @@ function DuePopover({
         }}
       >
         <div className="flex flex-col gap-1">
-          {duePresets.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => setDue(presetCfgDue(p, Date.now()))}
-              className="rounded-md px-2 py-1 text-left text-body hover:bg-black/5 dark:hover:bg-white/10"
-            >
-              {presetCfgLabel(p)}
-            </button>
-          ))}
+          <div className={dense ? "grid grid-cols-2 gap-1" : "flex flex-col gap-1"}>
+            {duePresets.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => setDue(presetCfgDue(p, Date.now()))}
+                className="rounded-md px-2 py-1 text-left text-body hover:bg-black/5 dark:hover:bg-white/10"
+              >
+                {presetCfgLabel(p)}
+              </button>
+            ))}
+          </div>
           <div className="my-1 h-px bg-border/60" />
           <div className="flex items-center gap-1">
             <input
@@ -696,5 +711,142 @@ function DuePopover({
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/** 横栏方块瓷砖（上/下边栏）：与任务行同一套操作——状态点循环、
+ *  💡转待办、优先级循环、到期弹层、右键完整菜单；双击就地编辑标题
+ *  （发送走右键菜单）、键盘焦点环。 */
+export function TaskTile({ task, now }: { task: Task; now: number }) {
+  const focused = useUIStore((s) => s.focusedId === task.id);
+  const tileRef = useRef<HTMLDivElement>(null);
+  const editRef = useRef<HTMLTextAreaElement>(null);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(task.text);
+  useEffect(() => {
+    if (focused) {
+      tileRef.current?.scrollIntoView({ inline: "nearest", block: "nearest" });
+    }
+  }, [focused]);
+  // WKWebView 焦点惰性：延时聚焦新挂载的编辑框（同 TaskRow 展开逻辑）
+  useEffect(() => {
+    if (editing) {
+      window.setTimeout(() => editRef.current?.focus(), 30);
+    }
+  }, [editing]);
+  const saveEdit = () => {
+    if (draft.trim() && draft !== task.text) {
+      useNotesStore.getState().updateTaskText(task.id, draft);
+    }
+    setEditing(false);
+  };
+  const spark = task.kind === "spark";
+  const done = task.status === "done";
+  const StatusIcon =
+    task.status === "done"
+      ? CheckCircle2
+      : task.status === "doing"
+        ? CircleDot
+        : Circle;
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          ref={tileRef}
+          onClick={() => useUIStore.getState().setFocusedId(task.id)}
+          onDoubleClick={() => {
+            if (!editing) {
+              setDraft(task.text);
+              setEditing(true);
+            }
+          }}
+          className={cn(
+            "group relative flex h-auto aspect-[16/17] shrink-0 cursor-default select-none flex-col overflow-hidden rounded-lg border border-transparent px-2 pb-1.5 pt-1.5",
+            "bg-[rgb(255_255_255/var(--card-alpha,100%))] shadow-sm dark:bg-[rgb(39_39_42/var(--card-alpha,100%))]",
+            "hover:border-black/10 dark:hover:border-white/10",
+            spark && "bg-violet-50/90 dark:bg-violet-950/40",
+            focused && "ring-1 ring-black/20 dark:ring-white/25"
+          )}
+        >
+          <div className="mb-1 flex items-center gap-1">
+            {spark && !done ? (
+              <button
+                aria-label="灵感转为待办"
+                title="💡 灵感 · 点击转为待办"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  useNotesStore.getState().sparkToTask(task.id);
+                }}
+                className="shrink-0 rounded-full text-violet-500 hover:text-violet-600"
+              >
+                <Lightbulb className="size-4" />
+              </button>
+            ) : (
+              <button
+                aria-label={`状态：${STATUS_LABEL[task.status]}（点击切换）`}
+                title={`状态：${STATUS_LABEL[task.status]}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  useNotesStore.getState().cycleTaskStatus(task.id);
+                }}
+                className={cn(
+                  "shrink-0 rounded-full text-muted-foreground hover:text-foreground",
+                  task.status === "doing" && "text-primary",
+                  done && "text-emerald-600 dark:text-emerald-400"
+                )}
+              >
+                <StatusIcon className="size-4" />
+              </button>
+            )}
+            {/* 优先级色条：点击循环 无→低→中→高（与任务行一致） */}
+            <button
+              aria-label={`优先级：${PRIORITY_LABEL[task.priority]}（点击切换）`}
+              title={`优先级：${PRIORITY_LABEL[task.priority]}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                useNotesStore.getState().cycleTaskPriority(task.id);
+              }}
+              className="flex h-5 w-2 shrink-0 items-center justify-center"
+            >
+              <span
+                className={cn("h-4 w-[3px] rounded-full", PRIORITY_BAR[task.priority])}
+              />
+            </button>
+            <span className="ml-auto" onClick={(e) => e.stopPropagation()}>
+              <DuePopover task={task} now={now} alwaysVisible dense />
+            </span>
+          </div>
+          {editing ? (
+            <textarea
+              ref={editRef}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  saveEdit();
+                } else if (e.key === "Escape") {
+                  setEditing(false);
+                }
+              }}
+              onBlur={saveEdit}
+              className="min-h-0 flex-1 resize-none bg-transparent text-body leading-normal outline-none"
+            />
+          ) : (
+            <p
+              className={cn(
+                "line-clamp-[6] whitespace-pre-wrap text-body leading-normal [overflow-wrap:anywhere]",
+                done && "text-muted-foreground line-through opacity-60"
+              )}
+            >
+              {task.text}
+            </p>
+          )}
+        </div>
+      </ContextMenuTrigger>
+      <TaskMenu task={task} />
+    </ContextMenu>
   );
 }
