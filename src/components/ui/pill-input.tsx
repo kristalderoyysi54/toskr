@@ -18,6 +18,8 @@ type PillInputProps = {
   leftSlot?: React.ReactNode;
   submitLabel?: string;
   className?: string;
+  /** 禁用（AI 请求在途等）：输入锁定、提交短路、壳降不透明度。 */
+  disabled?: boolean;
 };
 
 /**
@@ -34,12 +36,13 @@ export function PillInput({
   leftSlot,
   submitLabel = "添加",
   className,
+  disabled = false,
 }: PillInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const submit = () => {
-    if (!value.trim()) return;
+    if (disabled || !value.trim()) return;
     onSubmit();
     const ta = textareaRef.current;
     if (ta) ta.style.height = "auto";
@@ -58,6 +61,7 @@ export function PillInput({
         tone === "spark"
           ? "border-violet-400/60 bg-violet-500/[0.08] focus-within:border-violet-500/70"
           : "border-black/10 focus-within:border-primary/50 dark:border-white/10",
+        disabled && "opacity-60",
         className
       )}
     >
@@ -66,6 +70,7 @@ export function PillInput({
         <textarea
           ref={textareaRef}
           value={value}
+          disabled={disabled}
           rows={1}
           placeholder={placeholder}
           onChange={(e) => {
@@ -85,6 +90,7 @@ export function PillInput({
         <input
           ref={inputRef}
           value={value}
+          disabled={disabled}
           placeholder={placeholder}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => {
@@ -101,6 +107,8 @@ export function PillInput({
         <IconButton
           label={submitLabel}
           stopPropagation={false}
+          disabled={disabled}
+          onClick={submit}
           className={multiline ? "mb-0.5" : undefined}
         >
           <CornerDownLeft className="size-3.5" />

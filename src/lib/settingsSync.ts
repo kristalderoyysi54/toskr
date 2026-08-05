@@ -36,6 +36,9 @@ export function applySettingsPatch(patch: Partial<Settings>) {
   if ("rightSidebar" in patch || "sidebarEdge" in patch) {
     void api.setSidebarMode(s.rightSidebar, s.sidebarEdge);
   }
+  if ("panelTopmost" in patch) {
+    void api.setPanelTopmost(s.panelTopmost);
+  }
   if ("panelFreeX" in patch || "panelFreeY" in patch) {
     void api.setPanelFreePos(s.panelFreeX, s.panelFreeY);
   }

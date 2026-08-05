@@ -191,6 +191,7 @@ fn show_panel_on_main(app: &AppHandle) -> tauri::Result<()> {
         let edge = state.sidebar_edge.load(Ordering::SeqCst);
         let (x, y, w, h) = sidebar_rect(edge, &m, panel_w, gap);
         state.docked.store(false, Ordering::SeqCst);
+        let _ = window.set_always_on_top(state.panel_topmost.load(Ordering::SeqCst));
         window.set_size(LogicalSize::new(w, h))?;
         window.set_position(LogicalPosition::new(x, y))?;
         ensure_fullscreen_auxiliary(&window);
@@ -246,6 +247,8 @@ fn show_panel_on_main(app: &AppHandle) -> tauri::Result<()> {
             let (x, y, w, h) =
                 compute_companion_rect(frame, panel_w, top_offset, height_override, gap, &monitor);
             state.docked.store(true, Ordering::SeqCst);
+            // 伴随磁吸：与目标应用同层级（一起被盖/一起浮现），不悬浮全局
+            let _ = window.set_always_on_top(false);
             window.set_size(LogicalSize::new(w, h))?;
             window.set_position(LogicalPosition::new(x, y))?;
             ensure_fullscreen_auxiliary(&window);
@@ -275,6 +278,7 @@ fn show_panel_on_main(app: &AppHandle) -> tauri::Result<()> {
                 .unwrap_or(auto_h)
                 .clamp(PANEL_MIN_HEIGHT.min(auto_h), wa_h);
             state.docked.store(false, Ordering::SeqCst);
+            let _ = window.set_always_on_top(state.panel_topmost.load(Ordering::SeqCst));
             // 独立模式：优先用用户手动拖到的位置（钳制在工作区内）
             let free = *state.panel_free_pos.lock().unwrap();
             let (x, y) = match free {
@@ -513,8 +517,11 @@ pub fn maybe_redock(app: &AppHandle) {
     let gap = *state.companion_gap.lock().unwrap();
     let (x, y, w, h) =
         compute_companion_rect(frame, panel_w, top_offset, height_override, gap, &monitor);
+    // 目标激活重吸附：保持同层级并随目标一起浮到前面（不抢焦点）
+    let _ = window.set_always_on_top(false);
     let _ = window.set_size(LogicalSize::new(w, h));
     let _ = window.set_position(LogicalPosition::new(x, y));
+    order_front_without_focus(&window);
     start_companion_tracker(app, front.pid, monitors);
 }
 

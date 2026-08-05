@@ -16,6 +16,7 @@ import {
   ExternalLink,
   Send,
   ScanText,
+  Sparkles,
   Star,
   Trash2,
   Wand2,
@@ -46,6 +47,7 @@ import { langLabel } from "@/lib/code";
 import { linkParts } from "@/lib/link";
 import { useAppIcon } from "@/lib/icons";
 import { timeAgo, useNoteThumb } from "@/lib/media";
+import { noteToTaskSmart, suggestTitle } from "@/lib/ai";
 import { splitHighlight } from "@/lib/search";
 import { api } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
@@ -272,6 +274,20 @@ export const NoteCard = memo(function NoteCard({
         return (
           <ContextMenuItem key={id} onClick={startRename}>
             <PenLine className="size-3.5" /> 重命名
+          </ContextMenuItem>
+        );
+            case "ai-to-task":
+        if (isImage || isComposite) return null;
+        return (
+          <ContextMenuItem key={id} onClick={() => void noteToTaskSmart(note.id)}>
+            <Sparkles className="size-3.5" /> AI 转任务
+          </ContextMenuItem>
+        );
+      case "ai-title":
+        if (isImage) return null;
+        return (
+          <ContextMenuItem key={id} onClick={() => void suggestTitle(note.id)}>
+            <Sparkles className="size-3.5" /> AI 起标题
           </ContextMenuItem>
         );
       case "to-task":

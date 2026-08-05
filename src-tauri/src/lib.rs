@@ -7,6 +7,7 @@ mod events;
 mod focus;
 mod input;
 mod ocr;
+mod ai;
 mod linkmeta;
 mod state;
 mod storage;
@@ -170,6 +171,7 @@ pub fn run() {
             commands::set_sound,
             commands::set_sidebar_mode,
             commands::is_self_frontmost,
+            commands::set_panel_topmost,
             commands::set_double_tap_mode,
             commands::set_clip_watch,
             commands::set_clip_rules,
@@ -197,6 +199,8 @@ pub fn run() {
             commands::export_file,
             commands::import_file,
             linkmeta::fetch_link_meta,
+            ai::ai_chat,
+            ai::ai_list_models,
         ])
         .run(tauri::generate_context!())
         .expect("Toskr 启动失败");
