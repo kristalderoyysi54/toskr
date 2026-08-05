@@ -1,6 +1,7 @@
 import { emitTo, listen } from "@tauri-apps/api/event";
 
 import { api } from "@/lib/tauri";
+import { tip } from "@/lib/tip";
 import { useNotesStore, type Settings } from "@/store/notesStore";
 
 /**
@@ -18,6 +19,15 @@ export const SETTINGS_CLEAR_CLIP = "toskr://do-clear-clip";
 
 /** 应用设置补丁并执行对应的 Rust 侧副作用（主面板调用）。 */
 export function applySettingsPatch(patch: Partial<Settings>) {
+  // 互斥收敛：开启伴随停靠时自动退出边栏模式并恢复自动停靠——
+  // 边栏在 Rust 侧一票否决磁吸，不清掉会让这个开关看似失效
+  if (
+    patch.companionEnabled === true &&
+    useNotesStore.getState().settings.rightSidebar
+  ) {
+    patch = { ...patch, rightSidebar: false, panelFreeX: null, panelFreeY: null };
+    tip("info", "边栏已关闭，恢复伴随磁吸");
+  }
   useNotesStore.getState().setSettings(patch);
   const s = useNotesStore.getState().settings;
   if ("hotkeyModifier" in patch || "hotkeyGapMs" in patch) {
@@ -33,14 +43,16 @@ export function applySettingsPatch(patch: Partial<Settings>) {
   if ("companionGap" in patch) {
     void api.setCompanionGap(s.companionGap);
   }
+  if ("panelFreeX" in patch || "panelFreeY" in patch) {
+    // 先清拖动位再动边栏：set_sidebar_mode 关闭时会立即重排，
+    // 顺序反了会按旧的手动位置摆放一帧
+    void api.setPanelFreePos(s.panelFreeX, s.panelFreeY);
+  }
   if ("rightSidebar" in patch || "sidebarEdge" in patch) {
     void api.setSidebarMode(s.rightSidebar, s.sidebarEdge);
   }
   if ("panelTopmost" in patch) {
     void api.setPanelTopmost(s.panelTopmost);
-  }
-  if ("panelFreeX" in patch || "panelFreeY" in patch) {
-    void api.setPanelFreePos(s.panelFreeX, s.panelFreeY);
   }
   if ("excludedApps" in patch) {
     void api.setExcludedApps(s.excludedApps);
