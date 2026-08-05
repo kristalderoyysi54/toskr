@@ -1173,7 +1173,11 @@ function AiSection({ settings, patch }: SP) {
             <button
               key={pz.id}
               onClick={() => {
-                if (pz.id === "custom") return;
+                if (pz.id === "custom") {
+                  // 进入自定义：清空 Base URL 待手动输入（模型与 Key 保留）
+                  patch({ aiBaseUrl: "" });
+                  return;
+                }
                 patch({
                   aiBaseUrl: pz.baseUrl,
                   // 仅模型名为空时才填充推荐值，避免覆盖用户已填内容

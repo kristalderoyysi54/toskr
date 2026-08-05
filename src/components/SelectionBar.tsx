@@ -20,16 +20,25 @@ import {
   sendCheckedToChat,
 } from "@/lib/actions";
 import { buildSendText, sendPreview } from "@/lib/format";
-import { orderedCheckedNotes, useNotesStore } from "@/store/notesStore";
+import { CLIPBOARD_ID, orderedCheckedNotes, useNotesStore } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
 
 /** 勾选 ≥1 条时出现的批量操作条。 */
 export function SelectionBar() {
   const checkedIds = useNotesStore((s) => s.checkedIds);
+  const notes = useNotesStore((s) => s.notes);
   const snippets = useNotesStore((s) => s.settings.promptSnippets);
   const page = useUIStore((s) => s.page);
   const count = checkedIds.length;
-  if (count === 0) return null;
+  // 只在「当前页存在选中项」时显示：笔记页的选中切到剪贴板页不显示，
+  // 切回笔记页恢复（反之亦然；跨域混选则两页都显示）
+  const checkedSet = new Set(checkedIds);
+  const relevantHere = notes.some(
+    (n) =>
+      checkedSet.has(n.id) &&
+      (n.sectionId === CLIPBOARD_ID) === (page === "clipboard")
+  );
+  if (count === 0 || !relevantHere) return null;
 
   const state = useNotesStore.getState();
   const orderedIds = () => orderedCheckedNotes(useNotesStore.getState()).map((n) => n.id);
