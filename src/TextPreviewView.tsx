@@ -25,25 +25,48 @@ import { cn } from "@/lib/utils";
  * ⌘⏎ 保存。窗口隐藏复用，内容经 toskr://note-preview 事件下发；
  * 编辑保存 / 发送经事件回传主面板执行（主面板是唯一持久化写入方）。
  */
-/** 附件缩略块：懒取缩略图，点击 Quick Look。 */
-function AttachThumb({ file, onClick }: { file: string; onClick: () => void }) {
+/** 附件缩略块：懒取缩略图，点击 Quick Look；悬停右上角 ⊗ 从卡片移除该图。 */
+function AttachThumb({
+  file,
+  onClick,
+  onRemove,
+}: {
+  file: string;
+  onClick: () => void;
+  onRemove: () => void;
+}) {
   const url = useNoteThumb(file);
   return (
-    <button
-      aria-label="查看图片"
-      onClick={onClick}
-      className={cn(
-        "flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-md",
-        "border border-foreground/10 bg-black/[0.04] outline-none dark:bg-white/[0.06]",
-        "focus-visible:ring-2 focus-visible:ring-primary/50"
-      )}
-    >
-      {url ? (
-        <img src={url} alt="" className="h-full w-full object-cover" />
-      ) : (
-        <span className="size-4 animate-pulse rounded-sm bg-black/10 dark:bg-white/10" />
-      )}
-    </button>
+    <div className="group relative shrink-0">
+      <button
+        aria-label="查看图片"
+        onClick={onClick}
+        className={cn(
+          "flex size-12 items-center justify-center overflow-hidden rounded-md",
+          "border border-foreground/10 bg-black/[0.04] outline-none dark:bg-white/[0.06]",
+          "focus-visible:ring-2 focus-visible:ring-primary/50"
+        )}
+      >
+        {url ? (
+          <img src={url} alt="" className="h-full w-full object-cover" />
+        ) : (
+          <span className="size-4 animate-pulse rounded-sm bg-black/10 dark:bg-white/10" />
+        )}
+      </button>
+      {/* 常显于键盘焦点，悬停才淡入——缩略图只有 48px，常驻 ⊗ 会盖住画面 */}
+      <button
+        aria-label="从卡片移除这张图片"
+        title="从卡片移除这张图片"
+        onClick={onRemove}
+        className={cn(
+          "absolute -right-1 -top-1 rounded-full bg-foreground/80 p-0.5 text-background",
+          "opacity-0 outline-none transition-opacity group-hover:opacity-100",
+          "focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary/50"
+        )}
+      >
+        <X className="size-2.5" />
+      </button>
+    </div>
   );
 }
 
@@ -228,7 +251,9 @@ export default function TextPreviewView() {
         )}
       </motion.div>
 
-      {/* 图片附件缩略条（组合卡）：常显在正文与页脚之间，点击 Quick Look 原图 */}
+      {/* 图片附件缩略条（组合卡）：常显在正文与页脚之间，点击 Quick Look 原图，
+          悬停 ⊗ 从卡片移除。移除本身回主面板执行（唯一持久化写入方），这里
+          先本地摘掉该图，界面不等回程 */}
       {!editing && note.images.length > 0 && (
         <div className="flex shrink-0 gap-1.5 overflow-x-auto border-t border-black/5 px-3 py-2 dark:border-white/5">
           {note.images.map((f, i) => (
@@ -236,6 +261,19 @@ export default function TextPreviewView() {
               key={f}
               file={f}
               onClick={() => void api.quickLook(note.images, i)}
+              onRemove={() => {
+                void emitTo("main", "toskr://note-image-remove", {
+                  id: note.id,
+                  file: f,
+                });
+                const rest = note.images.filter((x) => x !== f);
+                // 图没了、文字也没了 → 主面板会把整张卡删掉，详情窗跟着关
+                if (!rest.length && !note.text.trim()) {
+                  close();
+                  return;
+                }
+                setNote({ ...note, images: rest });
+              }}
             />
           ))}
         </div>

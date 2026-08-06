@@ -8,6 +8,32 @@ import { tauriStateStorage } from "./persistStorage";
 
 export type NoteKind = "text" | "image" | "link";
 
+/** 面板页签（与 uiStore.PanelPage 同集合；此处独立声明避免 store 互相依赖）。 */
+export type PageId = "notes" | "clipboard" | "tasks";
+
+/** 页签默认顺序（剪贴最高频，居首）。 */
+export const DEFAULT_PAGE_ORDER: PageId[] = ["clipboard", "notes", "tasks"];
+
+/**
+ * 归一化页签顺序：去重、剔除未知项、补齐缺失页（按默认序追加）。
+ * 持久化数据可能来自旧版本（无此字段）或将来新增页的版本，
+ * 少一页就会整页无法访问，必须兜底。
+ */
+export function normalizePageOrder(order: unknown): PageId[] {
+  const seen = new Set<PageId>();
+  const out: PageId[] = [];
+  if (Array.isArray(order)) {
+    for (const p of order) {
+      if (DEFAULT_PAGE_ORDER.includes(p as PageId) && !seen.has(p as PageId)) {
+        seen.add(p as PageId);
+        out.push(p as PageId);
+      }
+    }
+  }
+  for (const p of DEFAULT_PAGE_ORDER) if (!seen.has(p)) out.push(p);
+  return out;
+}
+
 export interface Note {
   id: string;
   /** 内容类型（缺省视为 text，兼容旧数据）。 */
@@ -186,9 +212,9 @@ export interface Settings {
   autoCheckUpdate: boolean;
   /** 发现新版本自动下载安装（重启后生效，不打断当前使用）。 */
   autoInstallUpdate: boolean;
-  /** 剪贴板历史自动收集（默认关闭）。 */
+  /** 剪贴板历史自动收集（首装默认开启）。 */
   clipHistory: boolean;
-  /** 剪贴板历史保留时长（天；null = 永久）。超龄的非固定卡自动清理。 */
+  /** 剪贴板历史保留时长（天；null = 永久，首装默认 30 天）。超龄的非固定卡自动清理。 */
   clipRetentionDays: number | null;
   /** 暂停剪贴板收集到该时刻（epoch ms；null = 未暂停）。 */
   clipPauseUntil: number | null;
@@ -231,6 +257,8 @@ export interface Settings {
   rightSidebar: boolean;
   /** 边栏停靠缘（左右=全高竖栏，上下=全宽横栏）。 */
   sidebarEdge: "right" | "left" | "top" | "bottom";
+  /** 页签顺序（可拖动重排；同时决定切页滑动方向）。 */
+  pageOrder: PageId[];
   /** 面板置顶（屏幕最上层）；关闭后可被其他窗口盖住。 */
   panelTopmost: boolean;
   /** 到期快捷档（可增删改）：相对分钟 / 今天 / 明天 / 下个周几。 */
@@ -356,8 +384,9 @@ export const defaultSettings = (): Settings => ({
   contextMenu: CONTEXT_MENU_REGISTRY.map((i) => ({ id: i.id, on: true })),
   autoCheckUpdate: true,
   autoInstallUpdate: false,
-  clipHistory: false,
-  clipRetentionDays: null,
+  // 首装默认（2026-08 用户指定）：剪贴板历史开，保留 1 个月
+  clipHistory: true,
+  clipRetentionDays: 30,
   clipPauseUntil: null,
   clipIgnoreConcealed: true,
   clipIgnoreTransient: true,
@@ -378,6 +407,7 @@ export const defaultSettings = (): Settings => ({
   panelFreeX: null,
   panelFreeY: null,
   rightSidebar: false,
+  pageOrder: [...DEFAULT_PAGE_ORDER],
   sidebarEdge: "right",
   panelTopmost: true,
   duePresets: DEFAULT_DUE_PRESETS.map((p) => ({ ...p })),
@@ -448,6 +478,13 @@ interface NotesState {
   /** 按保留时长清理超龄剪贴板卡（固定卡豁免；静默，不占撤销栈）。返回待清理图片。 */
   pruneClipHistory: () => string[];
   updateNoteText: (id: string, text: string) => void;
+  /**
+   * 从卡片移除一张图片（组合卡详情页的 ⊗）。剩余图片顺次补位；一张不剩时：
+   * 有文字 → 退化为纯文本卡，无文字 → 整张卡删除。可撤销，故刻意不删磁盘
+   * 文件（与 deleteNotes 同约定：撤销要还原得回来）。
+   * 返回：卡片是否已被整张删除（调用方据此决定是否关闭详情窗）。
+   */
+  removeNoteImage: (id: string, file: string) => { noteDeleted: boolean };
   /** 回填链接卡片抓取到的网页标题/图标。 */
   setLinkMeta: (id: string, meta: { title?: string; icon?: string }) => void;
   /** 重命名卡片（空串 = 清除标题）。 */
@@ -709,6 +746,56 @@ export const useNotesStore = create<NotesState>()(
             };
           }),
         });
+      },
+
+      removeNoteImage: (id, file) => {
+        const note = get().notes.find((n) => n.id === id);
+        if (!note || !noteImages(note).includes(file)) {
+          return { noteDeleted: false };
+        }
+        const rest = noteImages(note).filter((f) => f !== file);
+        get().snapshot("移除图片");
+        if (!rest.length) {
+          // 一张不剩：还有真实文字就退化为纯文本卡，否则整张卡没内容了 → 删除
+          if (imageCaption(note)) {
+            set({
+              notes: get().notes.map((n) =>
+                n.id === id
+                  ? {
+                      ...n,
+                      kind: "text" as const,
+                      imageFile: undefined,
+                      attachments: undefined,
+                      imageW: undefined,
+                      imageH: undefined,
+                    }
+                  : n
+              ),
+            });
+            return { noteDeleted: false };
+          }
+          set({
+            notes: get().notes.filter((n) => n.id !== id),
+            checkedIds: get().checkedIds.filter((c) => c !== id),
+          });
+          return { noteDeleted: true };
+        }
+        // 主图被移除时由 rest[0] 顶上；宽高只对原主图有效，换图即失效
+        const mainKept = rest[0] === note.imageFile;
+        set({
+          notes: get().notes.map((n) =>
+            n.id === id
+              ? {
+                  ...n,
+                  imageFile: rest[0],
+                  attachments: rest.length > 1 ? rest.slice(1) : undefined,
+                  imageW: mainKept ? n.imageW : undefined,
+                  imageH: mainKept ? n.imageH : undefined,
+                }
+              : n
+          ),
+        });
+        return { noteDeleted: false };
       },
 
       updateNoteTitle: (id, title) => {
@@ -1393,6 +1480,8 @@ export const useNotesStore = create<NotesState>()(
             ...defaultSettings().onboarding,
             ...(p.settings?.onboarding ?? {}),
           },
+          // 页签顺序单独归一化：缺项/重复/未知值都会让整页无法访问
+          pageOrder: normalizePageOrder(p.settings?.pageOrder),
         };
         // 启动后水合完成前若已捕获新卡片，保留它们（避免被持久层覆盖丢失）
         const persistedIds = new Set(merged.notes.map((n) => n.id));

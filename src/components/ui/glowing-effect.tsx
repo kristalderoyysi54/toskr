@@ -56,6 +56,7 @@ export const GlowingEffect = memo(function GlowingEffect({
   const modeRef = useRef<"idle" | "follow">("idle");
   const startAnim = useRef<AnimControls | null>(null);
   const twinAnim = useRef<AnimControls | null>(null);
+  const opacityAnim = useRef<AnimControls | null>(null);
 
   /** 归位常态：--start 转到右上角方位（转角短侧），--twin 淡入到 1。 */
   const toIdle = useCallback((immediate = false) => {
@@ -73,8 +74,18 @@ export const GlowingEffect = memo(function GlowingEffect({
     if (immediate) {
       el.style.setProperty("--start", String(corner));
       el.style.setProperty("--twin", "1");
+      el.style.setProperty("--glow-opacity", "0");
       return;
     }
+    // 静息态整体淡出：常驻的双弧在窄面板上会沿边缘连成一条线，被用户读成
+    // 「外框描边」（像素实测面板右缘 1pt 彩色渐变带）。光晕只在指针靠近时出现
+    opacityAnim.current?.stop();
+    const opCur = parseFloat(el.style.getPropertyValue("--glow-opacity")) || 0;
+    opacityAnim.current = animate(opCur, 0, {
+      duration: IDLE_RETURN_S,
+      ease: "linear",
+      onUpdate: (v) => el.style.setProperty("--glow-opacity", String(v)),
+    });
     const twinCur = parseFloat(el.style.getPropertyValue("--twin")) || 0;
     startAnim.current = animate(cur, cur + diff, {
       duration: IDLE_RETURN_S,
@@ -91,6 +102,13 @@ export const GlowingEffect = memo(function GlowingEffect({
   /** 进入追随态：对称弧淡出，只留追随弧。 */
   const toFollow = useCallback((el: HTMLElement) => {
     modeRef.current = "follow";
+    opacityAnim.current?.stop();
+    const opCur = parseFloat(el.style.getPropertyValue("--glow-opacity")) || 0;
+    opacityAnim.current = animate(opCur, 1, {
+      duration: 0.2,
+      ease: "linear",
+      onUpdate: (v) => el.style.setProperty("--glow-opacity", String(v)),
+    });
     twinAnim.current?.stop();
     const twinCur = parseFloat(el.style.getPropertyValue("--twin")) || 0;
     twinAnim.current = animate(twinCur, 0, {
@@ -177,6 +195,7 @@ export const GlowingEffect = memo(function GlowingEffect({
       }
       startAnim.current?.stop();
       twinAnim.current?.stop();
+      opacityAnim.current?.stop();
       window.removeEventListener("scroll", handleScroll);
       document.body.removeEventListener("pointermove", handlePointerMove);
       document.documentElement.removeEventListener("pointerleave", handleAway);
@@ -195,6 +214,7 @@ export const GlowingEffect = memo(function GlowingEffect({
           "--spread": spread,
           "--start": "0",
           "--twin": "1",
+          "--glow-opacity": "0",
           "--glowingeffect-border-width": `${borderWidth}px`,
           "--repeating-conic-gradient-times": "5",
           // token-exception: Aceternity 原版四色光晕渐变（装饰层，非语义色）
@@ -231,7 +251,7 @@ export const GlowingEffect = memo(function GlowingEffect({
     >
       <div
         className={cn(
-          "glow rounded-[inherit]",
+          "glow rounded-[inherit] [opacity:var(--glow-opacity)]",
           'after:content-[""] after:absolute after:inset-0 after:rounded-[inherit]',
           "after:[border:var(--glowingeffect-border-width)_solid_transparent]",
           "after:[background:var(--gradient)] after:[background-attachment:fixed]",

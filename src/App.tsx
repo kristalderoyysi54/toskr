@@ -8,13 +8,17 @@ import {
   useSensors,
   type DragEndEvent,
   type DragOverEvent,
+  type Modifier,
 } from "@dnd-kit/core";
 import {
+  arrayMove,
   horizontalListSortingStrategy,
   SortableContext,
   sortableKeyboardCoordinates,
+  useSortable,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { motion, MotionConfig } from "motion/react";
@@ -129,6 +133,7 @@ import {
   SECTION_COLORS,
   TASK_INBOX_ID,
   useNotesStore,
+  type PageId,
   type Settings,
 } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
@@ -400,6 +405,16 @@ async function applySidebar(on: boolean, edge: Settings["sidebarEdge"]) {
   await api.setPanelFreePos(null, null).catch(() => {});
   await api.setSidebarMode(on, edge).catch(() => {});
 }
+
+/** 页签拖拽只允许横向位移（@dnd-kit/modifiers 不在依赖里，就地实现）。 */
+const lockYAxis: Modifier = ({ transform }) => ({ ...transform, y: 0 });
+
+/** 页签中文名（顺序由 settings.pageOrder 决定）。 */
+const PAGE_LABEL: Record<PageId, string> = {
+  clipboard: "剪贴",
+  notes: "笔记",
+  tasks: "任务",
+};
 
 /**
  * 常驻页面滑层：三页始终挂载，切页只动 transform/opacity（GPU 合成），
@@ -844,6 +859,13 @@ export default function App() {
       listen<{ id: string }>("toskr://note-send", (e) => {
         void sendNotesToChat([e.payload.id]);
       }),
+      // 详情窗移除组合卡里的某张图（可撤销；磁盘文件保留，撤销要还原得回来）
+      listen<{ id: string; file: string }>("toskr://note-image-remove", (e) => {
+        const { noteDeleted } = useNotesStore
+          .getState()
+          .removeNoteImage(e.payload.id, e.payload.file);
+        undoableTip(noteDeleted ? "已删除 1 条" : "已移除图片");
+      }),
     ];
     return () => {
       subs.forEach((p) => p.then((fn) => fn()));
@@ -852,16 +874,27 @@ export default function App() {
 
   // 持久化水合后把运行时配置下发给 Rust
   useEffect(() => {
-    // 历史矛盾状态自愈：旧版停靠菜单绕过互斥收敛，可能把「磁吸开启 +
-    // 边栏开启」一起持久化——Rust 侧边栏一票否决磁吸，表现为磁吸打勾
-    // 但完全不生效。按用户最后一次明确动作（开磁吸）收敛：退出边栏。
+    // 历史矛盾状态自愈（互斥关系曾在多个版本间反复，持久化里可能留下
+    // 任意组合）。收敛顺序固定，结果与「贴边行为二选一」的现行语义一致：
+    //  1. 贴边隐藏 + 磁吸同时为真 → 保贴边隐藏（首装默认档，也是菜单里
+    //     「二选一」的第一项），关磁吸；否则菜单会出现两项都打勾的假象
+    //  2. 磁吸 + 边栏同时为真 → 退出边栏（边栏在 Rust 侧一票否决磁吸，
+    //     不清掉会让磁吸打勾却完全不生效）
     const heal = (settings: Settings): Settings => {
-      if (!(settings.companionEnabled && settings.rightSidebar)) return settings;
-      useNotesStore.getState().setSettings({
-        rightSidebar: false,
-        panelFreeX: null,
-        panelFreeY: null,
-      });
+      const patch: Partial<Settings> = {};
+      if (settings.autoEdgeHide && settings.companionEnabled) {
+        patch.companionEnabled = false;
+      }
+      if (
+        (patch.companionEnabled ?? settings.companionEnabled) &&
+        settings.rightSidebar
+      ) {
+        patch.rightSidebar = false;
+        patch.panelFreeX = null;
+        patch.panelFreeY = null;
+      }
+      if (!Object.keys(patch).length) return settings;
+      useNotesStore.getState().setSettings(patch);
       return useNotesStore.getState().settings;
     };
     // 模式在身 → 面板默认常显示（图钉不持久化，每次启动按模式重新给默认；
@@ -1151,8 +1184,24 @@ export default function App() {
   const activeTaskCount = tasks.filter((t) => t.status !== "done").length;
   const doneTaskCount = tasks.length - activeTaskCount;
 
-  // 页面序（笔记/任务/剪贴板）：常驻页按序差决定滑向（左侧页藏左、右侧页藏右）
-  const pageIndex = page === "clipboard" ? 0 : page === "notes" ? 1 : 2;
+  // 页面序：用户可拖动页签重排（持久化）。常驻页按序差决定滑向
+  // （左侧页藏左、右侧页藏右），所以顺序一变滑动方向立刻跟着变
+  const pageOrder = useNotesStore((s) => s.settings.pageOrder);
+  const clipHistory = useNotesStore((s) => s.settings.clipHistory);
+  // 关掉剪贴板历史 = 该功能整体隐退：页签也不再出现（页序本身保持不变，
+  // 重新打开即回到原位置）。零依赖派生，useMemo 保持引用稳定
+  const visiblePages = useMemo(
+    () => pageOrder.filter((p) => p !== "clipboard" || clipHistory),
+    [pageOrder, clipHistory]
+  );
+  const pageIndex = Math.max(0, pageOrder.indexOf(page));
+  const orderOf = (p: PageId) => Math.max(0, pageOrder.indexOf(p));
+  // 停在剪贴页时把功能关掉 → 该页已不可达，切到页序上的第一个可见页
+  useEffect(() => {
+    if (!visiblePages.includes(page)) {
+      useUIStore.getState().setPage(visiblePages[0] ?? "notes");
+    }
+  }, [visiblePages, page]);
   /** 横栏下笔记输入通栏默认收起，由工具栏「添加笔记」按钮唤出。 */
   const [barDraftOpen, setBarDraftOpen] = useState(false);
 
@@ -1198,27 +1247,26 @@ export default function App() {
       // （否则任务页 Space 会同时拾起排序 + 切完成，双动作打架）
       if (target?.closest?.("[data-drag-handle]")) return;
 
-      // ⌃Tab：剪贴 → 笔记 → 任务 循环（⌘1-9 已被快发占用，取浏览器切标签页惯例）
+      // ⌃Tab：按页签顺序循环（⌘1-9 已被快发占用，取浏览器切标签页惯例）。
+      // 用可见页序而非硬编码：页签可拖动重排，剪贴板关闭时该页也不该被切到
       if (e.key === "Tab" && e.ctrlKey) {
         e.preventDefault();
         const ui = useUIStore.getState();
-        const order = ["clipboard", "notes", "tasks"] as const;
-        const next = order[(order.indexOf(ui.page) + 1) % order.length];
-        ui.setPage(next);
+        const cur = Math.max(0, visiblePages.indexOf(ui.page));
+        ui.setPage(visiblePages[(cur + 1) % visiblePages.length]);
         return;
       }
-      // ⌘← / ⌘→：按 tab 顺序左右切换（输入框内保留系统的行首/行尾跳转）
+      // ⌘← / ⌘→：按页签顺序左右切换（输入框内保留系统的行首/行尾跳转）
       if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && e.metaKey) {
         if (editable) return;
         e.preventDefault();
         const ui = useUIStore.getState();
-        const order = ["clipboard", "notes", "tasks"] as const;
-        const idx = order.indexOf(ui.page);
+        const idx = Math.max(0, visiblePages.indexOf(ui.page));
         const next =
           e.key === "ArrowRight"
-            ? Math.min(idx + 1, order.length - 1)
+            ? Math.min(idx + 1, visiblePages.length - 1)
             : Math.max(idx - 1, 0);
-        ui.setPage(order[next]);
+        ui.setPage(visiblePages[next]);
         return;
       }
       if (e.key === "Escape") {
@@ -1387,11 +1435,18 @@ export default function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [navIds]);
+    // visiblePages：⌃Tab / ⌘←→ 的切页序随页签顺序与剪贴板开关变化
+  }, [navIds, visiblePages]);
 
   // ===== 跨分组拖拽 =====
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+  // 页签重排用更大的启动阈值：页签首要动作是切页，4px 容易把「手抖的点击」
+  // 吃成拖拽（点了没反应）；6px 拖起来仍然跟手
+  const tabSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
@@ -1566,29 +1621,37 @@ export default function App() {
     useNotesStore.getState().setSettings({ panelTopOffset: 0, panelHeight: null });
   };
 
-  /** 页签三连（普通模式独占一行；横栏并入标题行居中）。剪贴最高频，居首。 */
+  /** 页签三连（普通模式独占一行；横栏并入标题行居中）：按用户页序渲染，
+   *  可按住横向拖动重排（拖拽阈值 6px，短按仍是切页）。 */
   const pageTabs = (
-    <>
-      <PageTab
-        active={page === "clipboard"}
-        onClick={() => useUIStore.getState().setPage("clipboard")}
-      >
-        剪贴
-      </PageTab>
-      <PageTab
-        active={page === "notes"}
-        onClick={() => useUIStore.getState().setPage("notes")}
-      >
-        笔记
-      </PageTab>
-      <PageTab
-        active={page === "tasks"}
-        badge={taskBuckets.overdue.length}
-        onClick={() => useUIStore.getState().setPage("tasks")}
-      >
-        任务
-      </PageTab>
-    </>
+    <DndContext
+      sensors={tabSensors}
+      collisionDetection={closestCenter}
+      modifiers={[lockYAxis]}
+      onDragEnd={({ active, over }) => {
+        if (!over || active.id === over.id) return;
+        const from = pageOrder.indexOf(active.id as PageId);
+        const to = pageOrder.indexOf(over.id as PageId);
+        if (from < 0 || to < 0) return;
+        useNotesStore
+          .getState()
+          .setSettings({ pageOrder: arrayMove(pageOrder, from, to) });
+      }}
+    >
+      <SortableContext items={visiblePages} strategy={horizontalListSortingStrategy}>
+        {visiblePages.map((id) => (
+          <PageTab
+            key={id}
+            id={id}
+            active={page === id}
+            badge={id === "tasks" ? taskBuckets.overdue.length : undefined}
+            onClick={() => useUIStore.getState().setPage(id)}
+          >
+            {PAGE_LABEL[id]}
+          </PageTab>
+        ))}
+      </SortableContext>
+    </DndContext>
   );
 
   return (
@@ -1633,8 +1696,11 @@ export default function App() {
                 }
               }}
               className={cn(
+                // 不加静态外边框：`border-foreground/10` 在浅色是黑 10%、深色是
+                // 白 10%，正是用户否决的「随系统颜色的那圈描边」（像素实测面板
+                // 左缘 1pt 亮带 #35475b vs 面板底 #22354b）。轮廓交给 rounded-xl
+                // + 窗口投影 + 指针追随的 GlowingEffect，不靠常驻线
                 "panel-surface relative flex h-full w-full flex-col overflow-hidden rounded-xl",
-                "border border-foreground/10",
                 !open && "pointer-events-none"
               )}
             >
@@ -2001,7 +2067,6 @@ export default function App() {
                           }}
                         >
                           {settings.autoEdgeHide ? "✓ " : ""}自动贴边隐藏
-                          {settings.companionEnabled ? "（磁吸开启中）" : ""}
                         </SimpleMenuItem>
                         <SimpleMenuItem
                           title="终端/编辑器在前台时面板吸附其侧缘并跟随；其余应用下面板可任意放置（应用清单在 设置 → 伴随停靠）；开启默认常显示，且关闭贴边隐藏并退出边栏"
@@ -2013,7 +2078,6 @@ export default function App() {
                           }}
                         >
                           {settings.companionEnabled ? "✓ " : ""}伴随磁吸
-                          {settings.autoEdgeHide ? "（贴边隐藏开启中）" : ""}
                         </SimpleMenuItem>
                       </>
                     )}
@@ -2087,7 +2151,7 @@ export default function App() {
 
               {/* 三页常驻堆叠：切页只动 transform/opacity，零挂载成本（同面板开合方案） */}
               <div className="relative min-h-0 flex-1 overflow-hidden">
-                <PageSlide offset={0 - pageIndex}>
+                <PageSlide offset={orderOf("clipboard") - pageIndex}>
                 {horizontalBar ? (
                   <StripScroller>
                     {clipNotes.length === 0 ? (
@@ -2189,7 +2253,7 @@ export default function App() {
                 </ScrollArea>
                 )}
                 </PageSlide>
-                <PageSlide offset={1 - pageIndex}>
+                <PageSlide offset={orderOf("notes") - pageIndex}>
                 {horizontalBar ? (
                   <>
                   <StripScroller>
@@ -2270,7 +2334,7 @@ export default function App() {
               </ScrollArea>
                 )}
                 </PageSlide>
-                <PageSlide offset={2 - pageIndex}>
+                <PageSlide offset={orderOf("tasks") - pageIndex}>
                   {horizontalBar ? (
                     <>
                       <StripScroller>
@@ -2414,25 +2478,41 @@ function ShortcutHelp() {
 
 /** 顶部页面切换标签（样式对齐设置窗口 Segmented 手感）。 */
 function PageTab({
+  id,
   active,
   badge,
   onClick,
   children,
 }: {
+  id: PageId;
   active: boolean;
   badge?: number;
   onClick: () => void;
   children: React.ReactNode;
 }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id });
   return (
     <button
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        // 拖拽中压过相邻页签，避免被后一个盖住半截
+        zIndex: isDragging ? 1 : undefined,
+      }}
+      {...attributes}
+      {...listeners}
+      // 必须在 attributes 之后：dnd-kit 会带上 role="button"，
+      // 覆盖掉页签的 tab 语义（无障碍读屏会把它念成普通按钮）
       role="tab"
       aria-selected={active}
       onClick={onClick}
       className={cn(
-        "flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-label outline-none",
+        "relative flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-label outline-none",
         "transition-[color,background-color,transform] duration-100",
         "focus-visible:ring-2 focus-visible:ring-primary/50 active:scale-[0.97]",
+        isDragging && "cursor-grabbing opacity-80",
         active
           ? // 中性灰胶囊（Raycast 式，2026-08 用户选定）：无描边无蓝色，纯灰阶承托
             "border-transparent bg-black/[0.07] font-medium text-foreground dark:bg-white/[0.1]"
