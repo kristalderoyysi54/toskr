@@ -10,8 +10,13 @@ let announceGen = 0;
  * 同时把文案镜像进面板内的 sr-only live region——HUD 是独立无焦点窗口，
  * 屏幕阅读器听不到；此镜像只覆盖主面板自身触发的动作（架构局限，见计划文档）。
  */
-export function tip(kind: HudKind, text: string, undoable = false) {
-  void api.hudFeedback(kind, text, undoable).catch(() => {
+export function tip(
+  kind: HudKind,
+  text: string,
+  undoable = false,
+  targetId?: string
+) {
+  void api.hudFeedback(kind, text, undoable, false, targetId).catch(() => {
     /* Tauri 环境外忽略 */
   });
   if (text) {

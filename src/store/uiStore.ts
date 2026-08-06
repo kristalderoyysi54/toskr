@@ -42,6 +42,16 @@ interface UIState {
   /** 屏幕阅读器播报镜像：HUD 是独立无焦点窗口，AT 听不到；
    *  tip() 同步把文案写进面板内的 sr-only live region。 */
   announce: string;
+  /** 可用更新元数据（silentUpdateFlow 发现新版时写入；null=无更新）。 */
+  updateAvail: UpdateMeta | null;
+  /** 更新对话框显隐（头部「更新」按钮 / 更新气泡点击唤起）。 */
+  updateDialogOpen: boolean;
+  /** 贴边隐藏当前是否可介入（设置开启 + 右缘停靠/边栏布局 + 非钉住 +
+   *  非伴随磁吸）；为 true 时失焦自动隐藏让位给贴边滑出（Dock 式收纳）。 */
+  edgeHideActive: boolean;
+  /** 面板当前是否已贴边滑出（仅露出细条）；为 true 时快捷键/双击唤出应
+   *  识别为「贴边唤回」而非「开关切换到关闭」。 */
+  edgeHidden: boolean;
 
   setOpen: (open: boolean) => void;
   setPage: (page: PanelPage) => void;
@@ -65,7 +75,17 @@ interface UIState {
     stuck: boolean
   ) => void;
   setAnnounce: (announce: string) => void;
+  setUpdateAvail: (updateAvail: UpdateMeta | null) => void;
+  setUpdateDialogOpen: (updateDialogOpen: boolean) => void;
+  setEdgeHideState: (active: boolean, hidden: boolean) => void;
 }
+
+/** 可用更新的展示元数据（对话框：版本对比 + 更新内容）。 */
+export type UpdateMeta = {
+  version: string;
+  current: string;
+  notes: string;
+};
 
 export const useUIStore = create<UIState>()((set, get) => ({
   open: false,
@@ -87,6 +107,10 @@ export const useUIStore = create<UIState>()((set, get) => ({
   permissionReceiving: true,
   eventsStuck: false,
   announce: "",
+  updateAvail: null,
+  updateDialogOpen: false,
+  edgeHideActive: false,
+  edgeHidden: false,
 
   setOpen: (open) => set({ open }),
   // 切页清焦点：避免另一页残留的 focusedId 干扰键盘导航语义
@@ -110,4 +134,8 @@ export const useUIStore = create<UIState>()((set, get) => ({
   setPermission: (permissionAx, permissionInstalled, permissionReceiving, eventsStuck) =>
     set({ permissionAx, permissionInstalled, permissionReceiving, eventsStuck }),
   setAnnounce: (announce) => set({ announce }),
+  setUpdateAvail: (updateAvail) => set({ updateAvail }),
+  setUpdateDialogOpen: (updateDialogOpen) => set({ updateDialogOpen }),
+  setEdgeHideState: (edgeHideActive, edgeHidden) =>
+    set({ edgeHideActive, edgeHidden }),
 }));

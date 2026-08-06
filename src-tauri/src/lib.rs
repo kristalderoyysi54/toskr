@@ -111,6 +111,9 @@ pub fn run() {
             // 剪贴板历史 watcher 常驻线程（开关由设置项经 set_clip_watch 门控）
             clipwatch::spawn(app.handle().clone());
 
+            // 贴边隐藏光标轮询 + 滑出/滑回动画常驻线程（开关由 auto_edge_hide 门控）
+            window::spawn_edge_hide_supervisor(app.handle());
+
             // 托盘在 tap 安装之后创建，初始菜单即可反映权限状态。
             tray::create(app.handle())?;
             Ok(())
@@ -131,9 +134,17 @@ pub fn run() {
                     if window::is_docked(app) {
                         return;
                     }
+                    // 机器驱动的移动一律不当成「用户手动拖拽」记录：贴边滑出/
+                    // 滑回动画（原生 NSAnimationContext 每帧都触发 Moved）、以及
+                    // 程序自己摆放面板（停靠/边栏/伴随重定位/改宽度）。否则会把
+                    // 面板自己算出的停靠位污染进 panel_free_pos，下次显示即误判成
+                    // 手动拖离右缘，连锁清空贴边隐藏锚点——贴边隐藏整体失效。
+                    if window::is_machine_move(app) {
+                        return;
+                    }
                     let scale = window.scale_factor().unwrap_or(1.0).max(0.1);
                     let (x, y) = (pos.x as f64 / scale, pos.y as f64 / scale);
-                    window::remember_free_pos(app, x, y);
+                    window::on_user_panel_move(app, x, y);
                     let _ = app.emit_to(
                         "main",
                         "toskr://panel-moved",
@@ -158,6 +169,9 @@ pub fn run() {
             commands::set_window_alpha,
             commands::set_panel_free_pos,
             commands::open_privacy_settings,
+            commands::reset_input_monitoring,
+            commands::copy_image_to_clipboard,
+            commands::paste_image_from_clipboard,
             commands::open_url,
             commands::set_hotkey_config,
             commands::set_panel_hotkey,
@@ -172,11 +186,17 @@ pub fn run() {
             commands::set_sidebar_mode,
             commands::is_self_frontmost,
             commands::set_panel_topmost,
+            commands::set_auto_edge_hide,
+            commands::edge_hide_now,
+            commands::set_panel_pinned,
+            commands::set_panel_drag_active,
+            commands::evaluate_drag_dock,
             commands::set_double_tap_mode,
             commands::set_clip_watch,
             commands::set_clip_rules,
             commands::set_clip_pause,
             commands::quick_look,
+            commands::show_text_preview,
             commands::ocr_image,
             commands::prev_app_info,
             commands::refresh_prev_app,

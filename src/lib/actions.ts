@@ -1,7 +1,11 @@
+import { emitTo } from "@tauri-apps/api/event";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+
 import {
   applyPromptTemplate,
   buildSendText,
   formatAsNumberedList,
+  imageCaption,
   wrapAsCodeBlock,
 } from "@/lib/format";
 import { api } from "@/lib/tauri";
@@ -11,6 +15,7 @@ import {
   noteImages,
   orderedCheckedNotes,
   useNotesStore,
+  type Note,
 } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
 
@@ -21,6 +26,71 @@ export function undoableTip(message: string) {
     tip("undone", label ? "已撤销" : "没有可撤销的操作");
   });
   tip("ok", message, true);
+}
+
+/** 文本详情窗的内容载荷（主面板 → textpreview 窗口）。 */
+export type NotePreviewPayload = {
+  id: string;
+  text: string;
+  kind: string;
+  codeLang: string | null;
+  url: string | null;
+  title: string | null;
+  sourceApp: string | null;
+  sourceBundle: string | null;
+  /** 图片附件（组合卡在详情窗展示缩略条；点击 Quick Look）。 */
+  images: string[];
+  /** true = 打开即进入编辑态。 */
+  edit: boolean;
+};
+
+/** 详情窗最近展示的卡 id（Space 开合判定用；窗口被 Esc/点 X 关掉也无碍——
+ *  toggle 前会实测窗口可见性）。 */
+let lastDetailId: string | null = null;
+
+/**
+ * Space 快速查看语义（Quick Look 心智）：同一张卡已在详情窗展示中 →
+ * 再按空格关闭；否则打开。仅 Space 入口用，Enter/明细按钮永远是打开。
+ */
+export async function toggleNoteDetail(id: string) {
+  try {
+    const win = await WebviewWindow.getByLabel("textpreview");
+    if (win && lastDetailId === id && (await win.isVisible())) {
+      void win.hide();
+      return;
+    }
+  } catch {
+    /* Tauri 环境外 */
+  }
+  openNoteDetail(id);
+}
+
+/**
+ * 打开卡片明细：文字类（文本/代码/链接编辑）→ 桌面居中的文本详情窗
+ * （窄面板放不下长文）；图片卡仍走面板内预览层（形变开合 + Quick Look）。
+ */
+export function openNoteDetail(id: string, edit = false) {
+  const note = useNotesStore.getState().notes.find((n) => n.id === id);
+  if (!note) return;
+  if (note.kind === "image") {
+    useUIStore.getState().openPreview(id, edit);
+    return;
+  }
+  lastDetailId = note.id;
+  void api.showTextPreview();
+  const payload: NotePreviewPayload = {
+    id: note.id,
+    text: note.text,
+    kind: note.kind ?? "text",
+    codeLang: note.codeLang ?? null,
+    url: note.url ?? null,
+    title: note.title ?? null,
+    sourceApp: note.sourceApp ?? null,
+    sourceBundle: note.sourceBundle ?? null,
+    images: noteImages(note),
+    edit,
+  };
+  void emitTo("textpreview", "toskr://note-preview", payload);
 }
 
 /** 链接卡片补抓网页标题/图标（幂等：已有标题跳过；离线/超时静默保持 URL 展示）。 */
@@ -127,6 +197,25 @@ export function mergeNoteWithChecked(noteId: string) {
 }
 
 /** 把指定笔记复制为编号列表到系统剪贴板。 */
+/** 复制单条笔记内容：图片卡复制图片本体（多图取第一张），其余复制文本。 */
+export async function copyNoteContent(note: Note) {
+  const images = noteImages(note);
+  try {
+    if (note.kind === "image" && images.length > 0) {
+      await api.copyImage(images[0]);
+      tip(
+        "ok",
+        images.length > 1 ? `已复制第 1 张图（共 ${images.length} 张）` : "已复制图片"
+      );
+    } else {
+      await api.copyText(note.text);
+      tip("ok", "已复制");
+    }
+  } catch (e) {
+    tip("warn", `复制失败：${e}`);
+  }
+}
+
 export async function copyNotesAsList(ids: string[]) {
   const { notes } = useNotesStore.getState();
   const picked = new Set(ids);
@@ -163,8 +252,11 @@ export async function sendNotesToChat(
   if (!targets.length) return;
 
   // 图片卡片以真正的图片粘贴（写入剪贴板再 ⌘V），文本部分单独拼装，
-  // 否则图片会退化成「图片 1867×391」这样的占位文字
-  const textNotes = targets.filter((n) => n.kind !== "image");
+  // 否则图片会退化成「图片 1867×391」这样的占位文字。图片卡的真实文字
+  // 备注（详情窗里写的说明，占位符不算）也参与拼装——发送时文字跟着图走
+  const textNotes = targets.filter(
+    (n) => n.kind !== "image" || imageCaption(n).length > 0
+  );
   const imageFiles = [...new Set(targets.flatMap(noteImages))];
 
   let body = textNotes.length ? buildSendText(textNotes.map((n) => n.text)) : "";

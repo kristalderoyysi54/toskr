@@ -55,6 +55,23 @@
         "visibleOnAllWorkspaces": true
       },
       {
+        "label": "textpreview",
+        "title": "内容详情",
+        "width": 560,
+        "height": 540,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": true,
+        "shadow": true,
+        "acceptFirstMouse": true,
+        "visibleOnAllWorkspaces": true,
+        "minWidth": 380,
+        "minHeight": 300
+      },
+      {
         "label": "imgpreview",
         "title": "图片预览",
         "width": 600,

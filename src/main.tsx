@@ -6,6 +6,7 @@ import App from "./App";
 import HudView from "./HudView";
 import ImagePreviewView from "./ImagePreviewView";
 import SettingsView from "./SettingsView";
+import TextPreviewView from "./TextPreviewView";
 import "./index.css";
 
 // 跟随系统深浅色（shadcn 的 .dark class 策略；set_theme 后 webview 的
@@ -53,6 +54,8 @@ const view =
     <SettingsView />
   ) : label === "imgpreview" ? (
     <ImagePreviewView />
+  ) : label === "textpreview" ? (
+    <TextPreviewView />
   ) : (
     <App />
   );

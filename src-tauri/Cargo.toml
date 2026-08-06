@@ -52,6 +52,9 @@ objc2-app-kit = { version = "0.3", features = [
   "NSImageRep",
   "NSBitmapImageRep",
   "NSPasteboard",
+  "NSAnimation",
+  "NSAnimationContext",
+  "NSScreen",
 ] }
 
 [profile.release]

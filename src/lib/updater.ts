@@ -3,6 +3,18 @@ import { relaunch } from "@tauri-apps/plugin-process";
 
 import { tip } from "@/lib/tip";
 import { useNotesStore } from "@/store/notesStore";
+import { useUIStore } from "@/store/uiStore";
+
+/** 最近一次发现的更新对象（Update 实例不可入 store，模块级缓存）。 */
+let pendingUpdate: Update | null = null;
+
+/** 面板更新对话框「立即下载」：安装最近发现的更新，完成后自动重启。 */
+export async function installPendingUpdate(
+  onProgress?: (pct: number) => void
+): Promise<boolean> {
+  if (!pendingUpdate) return false;
+  return downloadAndInstall(pendingUpdate, onProgress, true);
+}
 
 /**
  * 应用更新：GitHub Releases 的 latest.json 为源，minisign 签名校验。
@@ -72,6 +84,13 @@ export async function silentUpdateFlow() {
     const ok = await downloadAndInstall(update, undefined, false);
     if (ok) tip("ok", `已更新到 v${update.version} · 重启应用后生效`);
   } else {
-    tip("info", `发现新版本 v${update.version} · 可在设置中更新`);
+    // 头部「更新」按钮亮起 + 气泡点击唤起面板内更新对话框
+    pendingUpdate = update;
+    useUIStore.getState().setUpdateAvail({
+      version: update.version,
+      current: update.currentVersion,
+      notes: update.body ?? "",
+    });
+    tip("info", `发现新版本 v${update.version} · 点击查看`, false, "update");
   }
 }

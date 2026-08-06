@@ -4,6 +4,7 @@ import {
   applyPromptTemplate,
   buildSendText,
   formatAsNumberedList,
+  imageCaption,
   mergeTexts,
 } from "./format";
 
@@ -62,5 +63,25 @@ describe("applyPromptTemplate", () => {
 
   it("空内容时占位符替换为空", () => {
     expect(applyPromptTemplate("A{内容}B", "")).toBe("AB");
+  });
+});
+
+describe("imageCaption", () => {
+  it("捕获占位「图片 W×H」与合并占位「图片 N 张」不算备注", () => {
+    expect(imageCaption({ kind: "image", text: "图片 1867×391" })).toBe("");
+    expect(imageCaption({ kind: "image", text: "图片 3 张" })).toBe("");
+    expect(imageCaption({ kind: "image", text: "  " })).toBe("");
+  });
+
+  it("用户写的说明是真实备注", () => {
+    expect(imageCaption({ kind: "image", text: "登录页报错截图" })).toBe(
+      "登录页报错截图"
+    );
+    expect(imageCaption({ kind: "image", text: " 带空白 " })).toBe("带空白");
+  });
+
+  it("非图片卡原样返回文本", () => {
+    expect(imageCaption({ kind: "text", text: "图片 1×1" })).toBe("图片 1×1");
+    expect(imageCaption({ text: "无 kind 视为文本" })).toBe("无 kind 视为文本");
   });
 });

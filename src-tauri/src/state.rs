@@ -13,6 +13,9 @@ pub const MOD_OPTION: u8 = 2;
 pub struct CompanionConfig {
     pub enabled: bool,
     pub apps: Vec<String>,
+    /// 磁吸方向：0=右（默认，贴目标窗口右缘）1=左（贴左缘），与
+    /// `sidebar_edge` 同一套编码，对应用户在停靠菜单选择的 靠左/靠右。
+    pub side: u8,
 }
 
 /// 与前端 DEFAULT_COMPANION_APPS 保持一致的预置伴随应用。
@@ -38,8 +41,34 @@ impl Default for CompanionConfig {
         Self {
             enabled: true,
             apps: DEFAULT_COMPANION_APPS.iter().map(|s| s.to_string()).collect(),
+            side: 0,
         }
     }
+}
+
+/// 贴边隐藏锚点：面板处于「右缘独立停靠 / 四缘边栏」等可自动隐藏布局时的
+/// 展开态矩形 + 所在屏幕物理完整边界（逻辑 pt）+ 贴靠缘。伴随磁吸 / 独立
+/// 模式手动拖离右缘时清空（None），贴边隐藏轮询据此判断是否可介入。
+/// 具体的滑出目标位/触边判定/展开态容差几何都是 `edge` 相关的，实现见
+/// window.rs 的 `impl EdgeHideAnchor`（geometry 与状态分层：这里只存数据）。
+#[derive(Clone, Copy, Debug)]
+pub struct EdgeHideAnchor {
+    /// 贴靠缘：0=右 1=左 2=上 3=下，与 `sidebar_edge` 同一套编码。
+    /// 独立模式（非边栏）恒为 0（右）。
+    pub edge: u8,
+    /// 展开态矩形（逻辑 pt，左上角原点）。
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    /// 所在屏幕「物理完整边界」（`Monitor::position()+size()`，非
+    /// work_area）：滑出目标位与触边判定都以此为准——work_area 在有菜单栏
+    /// /靠边 Dock 等布局下会比物理屏幕窄，用它做判定线光标可能永远够不到
+    /// （round 4 复现的「光标停在屏幕边缘也永远唤不回」）。
+    pub screen_full_x: f64,
+    pub screen_full_y: f64,
+    pub screen_full_w: f64,
+    pub screen_full_h: f64,
 }
 
 /// HUD 运行态（hover 轮询与连拍计数共享）。
@@ -122,6 +151,36 @@ pub struct AppState {
     pub panel_topmost: AtomicBool,
     /// 双击触发仅捕获（面板开关完全交给专用快捷键）。
     pub double_tap_capture_only: AtomicBool,
+    /// 自动贴边隐藏开关（设置项，默认关闭）：面板贴右缘时鼠标离开自动滑出，
+    /// 移到屏幕右缘唤回（类似 Dock）。
+    pub auto_edge_hide: AtomicBool,
+    /// 面板固定（图钉）：前端 uiStore.pinned 同步。语义严格是「失焦不隐藏」，
+    /// 只豁免焦点驱动的收起，不影响光标驱动的贴边隐藏。
+    pub panel_pinned: AtomicBool,
+    /// 用户正在拖拽面板宽度/上下缘：拖拽期间暂停贴边滑出计时。
+    pub panel_dragging: AtomicBool,
+    /// 面板当前是否处于贴边隐藏（滑出仅露出边缘细条）态。
+    pub edge_hidden: AtomicBool,
+    /// 贴边隐藏动画代数：bump 即抢占/取消正在进行的滑出滑回动画
+    /// （面板重新定位、显式隐藏、设置关闭等都会抢占）。
+    pub edge_hide_gen: AtomicU64,
+    /// 贴边隐藏锚点（见 [`EdgeHideAnchor`]）。
+    pub edge_hide_anchor: Mutex<Option<EdgeHideAnchor>>,
+    /// 「机器驱动移动」截止时间戳（epoch ms，0 = 当前无机器移动）。
+    /// 程序自己摆放面板（停靠/边栏/伴随重定位/改宽度/贴边滑出滑回动画）
+    /// 同样会触发 `WindowEvent::Moved`，必须在此窗口期内让 lib.rs 的 Moved
+    /// 处理器忽略「记为用户手动拖拽位置」的副作用。
+    ///
+    /// 只盖动画曾是个大坑：经典右缘自动停靠每次显示都 `set_position` 到
+    /// 自己算出的位置，那一帧 Moved 把该位置写进 `panel_free_pos`，下次显示
+    /// 就被判成「用户手动拖离右缘」→ 清空贴边隐藏锚点 → 贴边隐藏整体失效
+    /// （用户实测：反复开关面板，日志里一条「锚点建立」都没有）。
+    pub machine_move_until_ms: AtomicI64,
+    /// 唤回重臂锁：滑出瞬间光标已经停在触边判定区（如失焦触发滑出时，
+    /// 光标本来就停在屏幕边缘）会置位；置位期间触边判定不放行，必须等
+    /// 光标先离开判定区一次才解除，避免「隐藏了又立刻被自己的光标唤回」
+    /// 的抖动（round 6）。
+    pub edge_hide_wake_rearm: AtomicBool,
 }
 
 impl Default for AppState {
@@ -181,6 +240,14 @@ impl Default for AppState {
             sidebar_edge: AtomicU8::new(0),
             panel_topmost: AtomicBool::new(true),
             double_tap_capture_only: AtomicBool::new(false),
+            auto_edge_hide: AtomicBool::new(false),
+            panel_pinned: AtomicBool::new(false),
+            panel_dragging: AtomicBool::new(false),
+            edge_hidden: AtomicBool::new(false),
+            edge_hide_gen: AtomicU64::new(0),
+            edge_hide_anchor: Mutex::new(None),
+            machine_move_until_ms: AtomicI64::new(0),
+            edge_hide_wake_rearm: AtomicBool::new(false),
         }
     }
 }

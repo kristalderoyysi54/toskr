@@ -50,9 +50,24 @@ pub fn set_clip_watch(app: AppHandle, enabled: bool) {
 
 /// 图片原尺寸预览（自建预览窗；面板 320-520pt 放不下大图）。
 /// 组合卡传全部图片，`index` 为起始张（预览窗内 ←/→ 翻看）。
+/// `note_id`/`note_text`：所属笔记的 id 与当前文字（图片卡详情内联编辑
+/// 备注用；不传则预览窗不显示编辑条）。
 #[tauri::command]
-pub fn quick_look(app: AppHandle, files: Vec<String>, index: Option<usize>) {
-    crate::window::preview_image(&app, files, index.unwrap_or(0));
+pub fn quick_look(
+    app: AppHandle,
+    files: Vec<String>,
+    index: Option<usize>,
+    note_id: Option<String>,
+    note_text: Option<String>,
+) {
+    crate::window::preview_image(&app, files, index.unwrap_or(0), note_id, note_text);
+}
+
+/// 文本详情窗（桌面居中弹出；窄面板放不下长文，预览/编辑都在这个窗口）。
+/// 内容由前端 emit 到 textpreview 窗口。
+#[tauri::command]
+pub fn show_text_preview(app: AppHandle) {
+    crate::window::show_text_preview(&app);
 }
 
 /// 暂停剪贴板收集下发（设置页改动 → 同步 Rust 与托盘菜单；0 = 恢复）。
@@ -256,6 +271,77 @@ pub fn open_url(url: String) {
     }
 }
 
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PastedImage {
+    file: String,
+    width: u32,
+    height: u32,
+}
+
+/// 从系统剪贴板读图并入库（输入框 ⌘V 粘贴图片）。剪贴板无图返回 None。
+/// 走 Rust 直读（与剪贴板历史同款 arboard 路径），避免图片字节过 IPC。
+#[tauri::command]
+pub async fn paste_image_from_clipboard(app: AppHandle) -> Result<Option<PastedImage>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut c = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+        let Ok(img) = c.get_image() else {
+            return Ok(None);
+        };
+        let (w, h) = (img.width as u32, img.height as u32);
+        let file = crate::storage::save_image_rgba(&app, img.width, img.height, &img.bytes)?;
+        crate::diag::push(&app, format!("粘贴入库: 图片 {w}×{h}"));
+        Ok(Some(PastedImage {
+            file,
+            width: w,
+            height: h,
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 把图片附件写入系统剪贴板（图片卡「复制内容」）。
+/// 复用发送链路同款 arboard 写入 + mark_self_write（防剪贴板历史收录自家写入）。
+#[tauri::command]
+pub async fn copy_image_to_clipboard(app: AppHandle, file: String) -> Result<(), String> {
+    let (w, h, rgba) =
+        crate::storage::read_image_rgba(&app, &file).ok_or_else(|| "图片读取失败".to_string())?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        let mut c = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+        c.set_image(arboard::ImageData {
+            width: w,
+            height: h,
+            bytes: rgba.into(),
+        })
+        .map_err(|e| e.to_string())?;
+        crate::clipwatch::mark_self_write(&app);
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 一键重置「输入监控」授权：等价于系统设置里删除 Toskr 条目（tccutil reset）。
+/// 场景：TCC 条目的签名指纹与当前二进制不符时（首装预注册/换签名的经典顽疾），
+/// 开关打开也收不到事件，只有删除条目让系统重新登记才能恢复。
+#[tauri::command]
+pub fn reset_input_monitoring(app: AppHandle) -> Result<(), String> {
+    let bundle_id = app.config().identifier.clone();
+    let out = std::process::Command::new("tccutil")
+        .args(["reset", "ListenEvent", &bundle_id])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        crate::diag::push(&app, "权限: tccutil 已重置输入监控条目");
+        Ok(())
+    } else {
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        crate::diag::push(&app, format!("权限: tccutil 重置失败 {err}"));
+        Err(err)
+    }
+}
+
 /// 打开系统设置对应隐私面板："accessibility" | "input-monitoring"。
 #[tauri::command]
 pub fn open_privacy_settings(pane: String) {
@@ -327,11 +413,17 @@ fn on_panel_hotkey(app: &AppHandle) {
     );
 }
 
-/// 下发伴随停靠配置。
+/// 下发伴随停靠配置。`side`："right"（默认，贴目标窗口右缘）| "left"（贴左缘）。
+/// 关闭时必须解除接管（停跟踪器 + 复位 docked）——docked 残留会把贴边隐藏
+/// 与拖拽入坞一起静默卡死。
 #[tauri::command]
-pub fn set_companion_config(app: AppHandle, enabled: bool, apps: Vec<String>) {
+pub fn set_companion_config(app: AppHandle, enabled: bool, apps: Vec<String>, side: String) {
     let state = app.state::<AppState>();
-    *state.companion.lock().unwrap() = crate::state::CompanionConfig { enabled, apps };
+    let side = if side == "left" { 1u8 } else { 0 };
+    *state.companion.lock().unwrap() = crate::state::CompanionConfig { enabled, apps, side };
+    if !enabled {
+        crate::window::release_companion_takeover(&app);
+    }
 }
 
 /// 伴随停靠间隙（pt，0=紧贴目标窗口）。
@@ -459,6 +551,46 @@ pub fn set_panel_topmost(app: AppHandle, enabled: bool) {
             let _ = w.set_always_on_top(enabled);
         }
     }
+}
+
+/// 自动贴边隐藏开关（设置项下发）：面板贴屏幕右缘时鼠标离开自动滑出，
+/// 移到屏幕右缘唤回（类似 Dock）。关闭时若正处于隐藏态立即滑回。
+#[tauri::command]
+pub fn set_auto_edge_hide(app: AppHandle, enabled: bool) {
+    crate::window::set_auto_edge_hide(&app, enabled);
+}
+
+/// 立即贴边滑出（前端失焦分支调用，贴边隐藏模式下代替真实 hide）；
+/// 前置条件不满足时是安全的空操作。
+#[tauri::command]
+pub fn edge_hide_now(app: AppHandle) {
+    crate::window::edge_hide_now(&app);
+}
+
+/// 面板固定（图钉）状态同步（前端 uiStore.pinned）。语义严格限定为
+/// 「失焦不隐藏」：只豁免焦点驱动的收起（前端 blur 分支 / `edge_hide_now`），
+/// 不影响光标驱动的贴边隐藏——钉住 + 自动贴边隐藏 = Dock 行为。
+#[tauri::command]
+pub fn set_panel_pinned(app: AppHandle, pinned: bool) {
+    app.state::<AppState>()
+        .panel_pinned
+        .store(pinned, Ordering::SeqCst);
+}
+
+/// 手动拖拽落定（前端拖拽去抖后调用）：拖到屏幕左右真实边界 → 吸平入坞
+/// 贴边隐藏；拖到别处 → 保持自由摆放。
+#[tauri::command]
+pub fn evaluate_drag_dock(app: AppHandle) {
+    crate::window::evaluate_drag_dock(&app);
+}
+
+/// 用户正在拖拽面板宽度/上下缘（前端 pointerdown~pointerup 期间下发）；
+/// 拖拽期间贴边隐藏暂停计时，避免光标途经边界时误触发滑出。
+#[tauri::command]
+pub fn set_panel_drag_active(app: AppHandle, active: bool) {
+    app.state::<AppState>()
+        .panel_dragging
+        .store(active, Ordering::Relaxed);
 }
 
 /// 前台应用是否是本应用（面板失焦判定：焦点移到自家预览/设置窗不算离开）。

@@ -107,3 +107,37 @@ describe("图文组合卡片", () => {
     expect(final[0].text).toBe("说明文字");
   });
 });
+
+describe("图片卡文字备注参与合并", () => {
+  beforeEach(reset);
+
+  it("真实备注并入正文，占位符不参与；图片全部聚齐", () => {
+    const s = useNotesStore.getState();
+    const img1 = s.addNote("现场截图说明", { kind: "image", imageFile: "a.png" });
+    const img2 = useNotesStore
+      .getState()
+      .addNote("图片 2×2", { kind: "image", imageFile: "b.png" });
+    const t1 = useNotesStore.getState().addNote("背景与目标");
+    useNotesStore.getState().mergeNotes([t1.id!, img1.id!, img2.id!]);
+    const notes = useNotesStore.getState().notes;
+    expect(notes).toHaveLength(1);
+    const m = notes[0];
+    // notes 序新在前：文字卡正文在前，图片备注跟随；占位符「图片 2×2」被剔除
+    expect(m.text).toBe("背景与目标\n\n现场截图说明");
+    expect(m.kind).toBe("text");
+    expect(noteImages(m).sort()).toEqual(["a.png", "b.png"]);
+  });
+
+  it("两张带备注的图合并：备注拼接、卡为组合文字卡", () => {
+    const s = useNotesStore.getState();
+    const a = s.addNote("第一张说明", { kind: "image", imageFile: "a.png" });
+    const b = useNotesStore
+      .getState()
+      .addNote("第二张说明", { kind: "image", imageFile: "b.png" });
+    useNotesStore.getState().mergeNotes([a.id!, b.id!]);
+    const m = useNotesStore.getState().notes[0];
+    expect(m.text).toBe("第二张说明\n\n第一张说明");
+    expect(m.kind).toBe("text");
+    expect(noteImages(m).sort()).toEqual(["a.png", "b.png"]);
+  });
+});
