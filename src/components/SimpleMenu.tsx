@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 import { floatingSurface } from "@/components/ui/floating-surface";
 import { cn } from "@/lib/utils";
@@ -54,9 +55,19 @@ export function SimpleMenu({
     };
     window.addEventListener("pointerdown", onDown, true);
     window.addEventListener("keydown", onKey, true);
+    // 窗口失焦即关：切到别的应用时本窗口收不到 pointerdown，菜单会一直
+    // 挂着（面板默认常显示后尤其明显——回来还停在旧菜单上）。用 Tauri 的
+    // 窗口焦点事件而非 DOM blur：WKWebView 里 document 常常压根没拿到过
+    // 焦点（点 button 不给焦点是本项目既有的坑），DOM blur 不可靠。
+    const unlistenFocus = getCurrentWebviewWindow().onFocusChanged(
+      ({ payload: focused }) => {
+        if (!focused) setOpen(false);
+      }
+    );
     return () => {
       window.removeEventListener("pointerdown", onDown, true);
       window.removeEventListener("keydown", onKey, true);
+      void unlistenFocus.then((fn) => fn()).catch(() => {});
     };
   }, [open]);
 

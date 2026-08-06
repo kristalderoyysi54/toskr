@@ -141,3 +141,96 @@ describe("图片卡文字备注参与合并", () => {
     expect(noteImages(m).sort()).toEqual(["a.png", "b.png"]);
   });
 });
+
+describe("组合卡移除单张图片", () => {
+  beforeEach(reset);
+
+  it("移除附件：剩余图顺次补位，主图不变", () => {
+    const s = useNotesStore.getState();
+    const a = s.addNote("第一张", { kind: "image", imageFile: "a.png" });
+    const b = useNotesStore
+      .getState()
+      .addNote("第二张", { kind: "image", imageFile: "b.png" });
+    const c = useNotesStore
+      .getState()
+      .addNote("第三张", { kind: "image", imageFile: "c.png" });
+    useNotesStore.getState().mergeNotes([a.id!, b.id!, c.id!]);
+    const merged = useNotesStore.getState().notes[0];
+    const main = merged.imageFile!;
+    const victim = noteImages(merged).find((f) => f !== main)!;
+
+    const r = useNotesStore.getState().removeNoteImage(merged.id, victim);
+    expect(r.noteDeleted).toBe(false);
+    const after = useNotesStore.getState().notes[0];
+    expect(noteImages(after)).toHaveLength(2);
+    expect(noteImages(after)).not.toContain(victim);
+    expect(after.imageFile).toBe(main);
+  });
+
+  it("移除主图：附件顶上成为新主图，旧宽高失效", () => {
+    const s = useNotesStore.getState();
+    const a = s.addNote("图片 10×10", {
+      kind: "image",
+      imageFile: "a.png",
+      imageW: 10,
+      imageH: 10,
+    });
+    const b = useNotesStore
+      .getState()
+      .addNote("图片 20×20", { kind: "image", imageFile: "b.png" });
+    useNotesStore.getState().mergeNotes([a.id!, b.id!]);
+    const merged = useNotesStore.getState().notes[0];
+    useNotesStore.getState().removeNoteImage(merged.id, merged.imageFile!);
+    const after = useNotesStore.getState().notes[0];
+    expect(noteImages(after)).toHaveLength(1);
+    expect(after.imageW).toBeUndefined();
+    expect(after.imageH).toBeUndefined();
+  });
+
+  it("移除最后一张：有文字 → 退化为纯文本卡", () => {
+    const s = useNotesStore.getState();
+    const img = s.addNote("图片 1×1", { kind: "image", imageFile: "a.png" });
+    const t = useNotesStore.getState().addNote("说明文字");
+    useNotesStore.getState().mergeNotes([t.id!, img.id!]);
+    const merged = useNotesStore.getState().notes[0];
+    const r = useNotesStore.getState().removeNoteImage(merged.id, "a.png");
+    expect(r.noteDeleted).toBe(false);
+    const after = useNotesStore.getState().notes[0];
+    expect(after.kind).toBe("text");
+    expect(noteImages(after)).toEqual([]);
+    expect(after.text).toBe("说明文字");
+  });
+
+  it("移除最后一张：只有占位文字 → 整张卡删除", () => {
+    const s = useNotesStore.getState();
+    const img = s.addNote("图片 1×1", { kind: "image", imageFile: "a.png" });
+    const r = useNotesStore.getState().removeNoteImage(img.id!, "a.png");
+    expect(r.noteDeleted).toBe(true);
+    expect(useNotesStore.getState().notes).toHaveLength(0);
+  });
+
+  it("撤销可还原被移除的图片", () => {
+    const s = useNotesStore.getState();
+    const a = s.addNote("第一张", { kind: "image", imageFile: "a.png" });
+    const b = useNotesStore
+      .getState()
+      .addNote("第二张", { kind: "image", imageFile: "b.png" });
+    useNotesStore.getState().mergeNotes([a.id!, b.id!]);
+    const merged = useNotesStore.getState().notes[0];
+    useNotesStore.getState().removeNoteImage(merged.id, "a.png");
+    expect(noteImages(useNotesStore.getState().notes[0])).toHaveLength(1);
+    useNotesStore.getState().undo();
+    expect(noteImages(useNotesStore.getState().notes[0]).sort()).toEqual([
+      "a.png",
+      "b.png",
+    ]);
+  });
+
+  it("不属于该卡的文件名是安全空操作", () => {
+    const s = useNotesStore.getState();
+    const img = s.addNote("图片 1×1", { kind: "image", imageFile: "a.png" });
+    const r = useNotesStore.getState().removeNoteImage(img.id!, "zzz.png");
+    expect(r.noteDeleted).toBe(false);
+    expect(useNotesStore.getState().notes).toHaveLength(1);
+  });
+});

@@ -13,6 +13,7 @@ import {
   deleteNotesWithUndo,
   enrichLinkMeta,
   sendNotesToChat,
+  undoableTip,
 } from "@/lib/actions";
 import { highlightCode, langLabel } from "@/lib/code";
 import { looksLikeMarkdown, renderMarkdown } from "@/lib/markdown";
@@ -119,6 +120,14 @@ export function PreviewOverlay() {
     if (!note) return;
     useUIStore.getState().closePreview();
     deleteNotesWithUndo([note.id], "已删除 1 条");
+  };
+
+  /** 从组合卡里移除一张图（可撤销）；移到最后一张连卡片一起没了就关预览层。 */
+  const removeImage = (file: string) => {
+    if (!note) return;
+    const { noteDeleted } = useNotesStore.getState().removeNoteImage(note.id, file);
+    if (noteDeleted) useUIStore.getState().closePreview();
+    undoableTip(noteDeleted ? "已删除 1 条" : "已移除图片");
   };
 
   const s = note ? stats(note.text) : null;
@@ -311,7 +320,12 @@ export function PreviewOverlay() {
               {extraImages.length > 0 && (
                 <div className="mt-3 grid grid-cols-2 gap-2">
                   {extraImages.map((f) => (
-                    <PreviewThumb key={f} files={images} index={images.indexOf(f)} />
+                    <PreviewThumb
+                      key={f}
+                      files={images}
+                      index={images.indexOf(f)}
+                      onRemove={() => removeImage(f)}
+                    />
                   ))}
                 </div>
               )}
@@ -381,20 +395,45 @@ export function PreviewOverlay() {
   );
 }
 
-/** 预览层里的附件图片（点击从该张起原尺寸预览，可 ←/→ 翻看全组）。 */
-function PreviewThumb({ files, index }: { files: string[]; index: number }) {
+/** 预览层里的附件图片（点击从该张起原尺寸预览，可 ←/→ 翻看全组；
+ *  悬停右上角 ⊗ 从卡片移除该图）。 */
+function PreviewThumb({
+  files,
+  index,
+  onRemove,
+}: {
+  files: string[];
+  index: number;
+  onRemove: () => void;
+}) {
   const url = useNoteThumb(files[index]);
   return (
-    <div
-      title="点击原尺寸预览"
-      onClick={() => void api.quickLook(files, Math.max(0, index))}
-      className="flex cursor-zoom-in items-center justify-center overflow-hidden rounded-lg bg-black/[0.05] p-1 dark:bg-white/[0.08]"
-    >
-      {url ? (
-        <img src={url} alt="" className="max-h-40 max-w-full object-contain" />
-      ) : (
-        <span className="p-4 text-label text-muted-foreground">加载中…</span>
-      )}
+    <div className="group relative">
+      <div
+        title="点击原尺寸预览"
+        onClick={() => void api.quickLook(files, Math.max(0, index))}
+        className="flex cursor-zoom-in items-center justify-center overflow-hidden rounded-lg bg-black/[0.05] p-1 dark:bg-white/[0.08]"
+      >
+        {url ? (
+          <img src={url} alt="" className="max-h-40 max-w-full object-contain" />
+        ) : (
+          <span className="p-4 text-label text-muted-foreground">加载中…</span>
+        )}
+      </div>
+      <IconButton
+        label="从卡片移除这张图片"
+        withTitle
+        onClick={(e) => {
+          e.stopPropagation();
+          onRemove();
+        }}
+        className={cn(
+          "absolute right-1 top-1 bg-background/85 opacity-0 transition-opacity",
+          "group-hover:opacity-100 focus-visible:opacity-100"
+        )}
+      >
+        <X className="size-3" />
+      </IconButton>
     </div>
   );
 }

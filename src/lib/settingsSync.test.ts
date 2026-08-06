@@ -120,6 +120,18 @@ describe("applySettingsPatch 伴随停靠 ⇄ 边栏互斥", () => {
     expect(mocks.fns.get("setCompanionConfig")).toHaveBeenCalled();
   });
 
+  it("默认设置即满足二选一：贴边隐藏开、磁吸关", () => {
+    const d = defaultSettings();
+    expect(d.autoEdgeHide).toBe(true);
+    expect(d.companionEnabled).toBe(false);
+  });
+
+  it("首装默认：剪贴板历史开、保留 1 个月（30 天）", () => {
+    const d = defaultSettings();
+    expect(d.clipHistory).toBe(true);
+    expect(d.clipRetentionDays).toBe(30);
+  });
+
   it("模式开启默认联动：贴边隐藏 → 常显示图钉 + 置顶；磁吸 → 仅常显示图钉", () => {
     useUIStore.getState().setPinned(false);
     seed({

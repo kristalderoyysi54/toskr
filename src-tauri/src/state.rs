@@ -39,7 +39,11 @@ pub const DEFAULT_COMPANION_APPS: &[&str] = &[
 impl Default for CompanionConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            // 必须与前端 defaultSettings.companionEnabled 保持一致（当前为
+            // false：首装默认走自动贴边隐藏）。两边不一致会在「启动 → 前端
+            // 水合下发」之间开一个窗口期，期间磁吸按错误的默认值接管，
+            // 把 docked 置位、贴边隐藏被静默否决。
+            enabled: false,
             apps: DEFAULT_COMPANION_APPS.iter().map(|s| s.to_string()).collect(),
             side: 0,
         }
@@ -217,7 +221,9 @@ impl Default for AppState {
             hud: Mutex::new(HudRuntime::default()),
             icon_cache: Mutex::new(HashMap::new()),
             last_clipboard_text: Mutex::new(None),
-            clip_watch: AtomicBool::new(false),
+            // 与前端 defaultSettings.clipHistory 一致（首装默认开）：两边不一致
+            // 会在「启动 → 前端水合下发」之间漏收/多收一段剪贴板内容
+            clip_watch: AtomicBool::new(true),
             pasteboard_self_count: AtomicI64::new(0),
             clip_ignore_concealed: AtomicBool::new(true),
             clip_ignore_transient: AtomicBool::new(true),
@@ -240,7 +246,8 @@ impl Default for AppState {
             sidebar_edge: AtomicU8::new(0),
             panel_topmost: AtomicBool::new(true),
             double_tap_capture_only: AtomicBool::new(false),
-            auto_edge_hide: AtomicBool::new(false),
+            // 与前端 defaultSettings.autoEdgeHide 一致（首装默认开）
+            auto_edge_hide: AtomicBool::new(true),
             panel_pinned: AtomicBool::new(false),
             panel_dragging: AtomicBool::new(false),
             edge_hidden: AtomicBool::new(false),

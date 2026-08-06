@@ -198,13 +198,12 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
             useUIStore.getState().setEditingId(task.id);
           }}
           className={cn(
-            "group relative rounded-lg border border-transparent px-2 py-1.5 shadow-sm",
+            "group relative rounded-lg border border-transparent px-2 py-1.5",
             // 闪念灵感：紫色底与普通待办区分。两种底色都吃 --card-alpha
             // （设置 → 卡片透明度），与笔记/剪贴板卡同一套配方
             task.kind === "spark"
               ? "bg-[rgb(245_243_255/var(--card-alpha,100%))] dark:bg-[rgb(167_139_250/calc(var(--card-alpha,100%)*0.1))]"
               : "bg-[rgb(255_255_255/var(--card-alpha,100%))] dark:bg-[rgb(39_39_42/var(--card-alpha,100%))]",
-            "hover:border-black/10 dark:hover:border-white/10",
             focused && "ring-1 ring-black/20 dark:ring-white/25",
             expanded && "ring-1 ring-primary/40",
             flashing && "flash-highlight",
@@ -885,16 +884,16 @@ export function TaskTile({ task, now }: { task: Task; now: number }) {
             if (!detailOpen) setDetailOpen(true);
           }}
           className={cn(
-            "group relative flex h-auto shrink-0 cursor-default select-none flex-col overflow-hidden rounded-lg border border-transparent px-2 pb-1.5 pt-1.5 transition-[width] duration-150",
+            "group relative flex h-auto shrink-0 cursor-default select-none flex-col overflow-hidden rounded-lg px-2 pb-1.5 pt-1.5 transition-[width] duration-150",
             detailOpen ? "w-96" : "aspect-[16/17]",
-            "bg-[rgb(255_255_255/var(--card-alpha,100%))] shadow-sm dark:bg-[rgb(39_39_42/var(--card-alpha,100%))]",
-            "hover:border-black/10 dark:hover:border-white/10",
+            "bg-[rgb(255_255_255/var(--card-alpha,100%))] dark:bg-[rgb(39_39_42/var(--card-alpha,100%))]",
             // 闪念紫底同样乘上 --card-alpha（基础配方在上一行，spark 覆盖之）
             spark &&
               "bg-[rgb(245_243_255/calc(var(--card-alpha,100%)*0.9))] dark:bg-[rgb(46_16_101/calc(var(--card-alpha,100%)*0.4))]",
             // 横栏 ←/→ 导航的「选中」视觉：与笔记卡选中同款蓝框（任务无勾选
             // 语义，焦点即选中）
-            focused && !detailOpen && "border-primary ring-2 ring-primary/40",
+            // 只用 ring 不用 border：边框会把彩色通栏往内挤出一圈卡片底色
+            focused && !detailOpen && "ring-2 ring-primary/70",
             detailOpen && "ring-1 ring-primary/40"
           )}
         >

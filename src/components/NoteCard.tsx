@@ -509,27 +509,38 @@ export const NoteCard = memo(function NoteCard({
             }
           }}
           className={cn(
-            "group relative flex cursor-default select-none overflow-hidden rounded-lg border border-transparent",
+            // 不留 border：卡片曾有 1px `border-transparent`（只为给选中态
+            // border-primary 占位）。box-sizing:border-box 下，顶部通栏的
+            // `-mx-2` 只抵消 padding、抵消不掉这 1px，卡片底色就从边框里透出来，
+            // 在彩色通栏两侧形成一圈「深色主题黑、浅色主题白」的细边——
+            // 正是用户反复指出的那层描边（放大截图实测：面板 #2f3a4a →
+            // 暗带 #1f2226 → 通栏 #cd7538）。选中态改用不占布局的 ring
+            "group relative flex cursor-default select-none overflow-hidden rounded-lg",
             strip
               ? // Paste 1:1：近方形卡（实测 496×526 → 16/17），宽随栏高推导
                 "h-auto aspect-[16/17] shrink-0 flex-col px-2 pb-1.5 pt-1.5"
               : compact
                 ? "h-9 items-center"
                 : "h-[136px] flex-col px-2 pb-1.5 pt-1.5",
-            // 实色卡片（Paste 风格）：与毛玻璃面板分层；透明度由设置项调节
-            "bg-[rgb(255_255_255/var(--card-alpha,100%))] shadow-sm dark:bg-[rgb(39_39_42/var(--card-alpha,100%))]",
-            "hover:border-black/10 dark:hover:border-white/10",
+            // 实色卡片（Paste 风格）：与毛玻璃面板分层；透明度由设置项调节。
+            // 静息态不给阴影——shadow-sm 是紧贴边缘的 1px 硬阴影，在深色面板上
+            // 会读成一条描边（用户实测否决；详情层同理只用大而柔的 elevation）。
+            // 卡底与面板底本身对比足够，不靠边线也分得开
+            "bg-[rgb(255_255_255/var(--card-alpha,100%))] dark:bg-[rgb(39_39_42/var(--card-alpha,100%))]",
             // 舒适密度的悬浮微升：位移只作用于卡片刚体（内部图标区相对位置不变）；
             // reduced-motion 下 transition 被全局压到 0.01ms，等效"去位移保影子"
             !compact &&
               "transition-[transform,box-shadow] duration-150 hover:-translate-y-px hover:elevation-2",
-            // 无勾选框设计：选中态 = 淡填色 + primary 边框（+ 舒适密度抬升）——
-            // 与键盘焦点的中性细环用"形状"区分，不只靠色（左缘条方案已被用户否决）
+            // 无勾选框设计：选中态 = primary 光环（+ 舒适密度抬升）。
+            // 只用 ring 不用 border：ring 画在布局盒之外，不会像边框那样把
+            // 通栏往内挤出一圈底色
             checked &&
               (compact
                 ? "ring-2 ring-primary/70"
-                : "border-primary ring-2 ring-primary/40 elevation-2"),
-            focused && !checked && "ring-1 ring-foreground/20",
+                : "ring-2 ring-primary/70 elevation-2"),
+            // 键盘焦点：只抬升不描边（用户否决"随主题黑白的中性细环"——
+            // 点击卡片也会置 focusedId，那圈线几乎常驻，观感像多了一层边框）
+            focused && !checked && "elevation-2",
             flashing && "flash-highlight",
             isDragging && "z-10 opacity-70 elevation-3"
           )}
