@@ -20,6 +20,12 @@ type PillInputProps = {
   className?: string;
   /** 禁用（AI 请求在途等）：输入锁定、提交短路、壳降不透明度。 */
   disabled?: boolean;
+  /** 粘贴内容含图片时回调（并阻断默认文本粘贴）；未传则粘贴行为保持原生。 */
+  onPasteImage?: () => void;
+  /** 输入行上方的附件区（如暂存图片缩略 chips）。 */
+  attachmentsSlot?: React.ReactNode;
+  /** 文本为空时也允许提交（有暂存附件的场景）。 */
+  canSubmitEmpty?: boolean;
 };
 
 /**
@@ -37,12 +43,33 @@ export function PillInput({
   submitLabel = "添加",
   className,
   disabled = false,
+  onPasteImage,
+  attachmentsSlot,
+  canSubmitEmpty = false,
 }: PillInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const submittable = !!value.trim() || canSubmitEmpty;
+
+  /** ⌘V 含图片 → 拦截默认粘贴交给回调（纯文本粘贴不受影响）。
+   *  探测放宽：WKWebView 对「新鲜截图」（TIFF 形态）常不暴露 image/* 项，
+   *  故追加「纯文本为空」兜底——截图剪贴板必然无文本，交给 Rust 直读判定；
+   *  真没图时回调侧仅提示一次，等价无害的空粘贴。 */
+  const handlePaste = (e: React.ClipboardEvent) => {
+    if (!onPasteImage || disabled) return;
+    const items = [...e.clipboardData.items];
+    const hasImage = items.some(
+      (i) => i.type.startsWith("image/") || i.kind === "file"
+    );
+    const textEmpty = !e.clipboardData.getData("text/plain").trim();
+    if (hasImage || textEmpty) {
+      e.preventDefault();
+      onPasteImage();
+    }
+  };
 
   const submit = () => {
-    if (disabled || !value.trim()) return;
+    if (disabled || !submittable) return;
     onSubmit();
     const ta = textareaRef.current;
     if (ta) ta.style.height = "auto";
@@ -55,8 +82,7 @@ export function PillInput({
   return (
     <div
       className={cn(
-        "flex gap-1.5 rounded-xl border px-2.5 py-2 backdrop-blur-sm",
-        multiline ? "items-end" : "items-center",
+        "rounded-xl border px-2.5 py-2 backdrop-blur-sm",
         "surface-inset elevation-1",
         tone === "spark"
           ? "border-violet-400/60 bg-violet-500/[0.08] focus-within:border-violet-500/70"
@@ -65,6 +91,8 @@ export function PillInput({
         className
       )}
     >
+      {attachmentsSlot && <div className="mb-1.5">{attachmentsSlot}</div>}
+      <div className={cn("flex gap-1.5", multiline ? "items-end" : "items-center")}>
       {leftSlot}
       {multiline ? (
         <textarea
@@ -84,6 +112,7 @@ export function PillInput({
               submit();
             }
           }}
+          onPaste={handlePaste}
           className={cn(fieldCls, "max-h-[132px] min-h-5 resize-none leading-normal")}
         />
       ) : (
@@ -103,7 +132,7 @@ export function PillInput({
           className={fieldCls}
         />
       )}
-      {value.trim() && (
+      {submittable && (
         <IconButton
           label={submitLabel}
           stopPropagation={false}
@@ -114,6 +143,7 @@ export function PillInput({
           <CornerDownLeft className="size-3.5" />
         </IconButton>
       )}
+      </div>
     </div>
   );
 }

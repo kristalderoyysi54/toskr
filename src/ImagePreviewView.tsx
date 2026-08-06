@@ -1,30 +1,50 @@
-import { useEffect, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { useEffect, useRef, useState } from "react";
+import { emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import { motion } from "motion/react";
+import { Check, ChevronLeft, ChevronRight, Pencil, X } from "lucide-react";
 
+import { springSnappy } from "@/lib/motion";
 import { api } from "@/lib/tauri";
+import { cn } from "@/lib/utils";
 
 /**
  * 图片原尺寸预览窗（独立 webview，Paste 风格）：
  * 标题栏与图片区均可拖动窗口、可缩放；⊗ / Esc / Space 关闭（隐藏复用）。
  * 组合卡多图：←/→ 或两侧按钮翻看，标题与底栏显示第几张。
  * 刻意不做失焦关闭——可拖动窗口的语义是「摆在一边对照看」。
+ * 带笔记上下文（noteId）时底部显示文字备注条：查看 / 内联编辑，
+ * ⌘⏎ 保存经 toskr://note-edit 回传主面板（主面板是唯一持久化写入方）。
  */
 export default function ImagePreviewView() {
   const [files, setFiles] = useState<string[]>([]);
   const [idx, setIdx] = useState(0);
   const [url, setUrl] = useState<string | null>(null);
   const [dims, setDims] = useState("");
+  // 每次唤起自增：窗口隐藏复用，重开同一张图也要重播入场动效
+  const [gen, setGen] = useState(0);
+  // 笔记上下文（备注编辑；null = 无编辑条，纯看图）
+  const [noteId, setNoteId] = useState<string | null>(null);
+  const [noteText, setNoteText] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    const un = listen<{ files: string[]; index: number }>(
-      "toskr://preview-image",
-      (e) => {
-        setFiles(e.payload.files);
-        setIdx(Math.min(e.payload.index, Math.max(0, e.payload.files.length - 1)));
-      }
-    );
+    const un = listen<{
+      files: string[];
+      index: number;
+      noteId: string | null;
+      noteText: string | null;
+    }>("toskr://preview-image", (e) => {
+      setFiles(e.payload.files);
+      setIdx(Math.min(e.payload.index, Math.max(0, e.payload.files.length - 1)));
+      setNoteId(e.payload.noteId ?? null);
+      setNoteText(e.payload.noteText ?? "");
+      setDraft(e.payload.noteText ?? "");
+      setEditing(false);
+      setGen((g) => g + 1);
+    });
     return () => {
       un.then((fn) => fn());
     };
@@ -41,11 +61,41 @@ export default function ImagePreviewView() {
       .catch(() => setUrl(null));
   }, [file]);
 
+  // 编辑态聚焦（WKWebView 焦点惰性 → 延时）
+  useEffect(() => {
+    if (editing) {
+      window.setTimeout(() => textareaRef.current?.focus(), 30);
+    }
+  }, [editing]);
+
   const close = () => void getCurrentWebviewWindow().hide();
   const many = files.length > 1;
 
+  const save = () => {
+    if (!noteId) return;
+    if (draft !== noteText) {
+      // 主面板 updateNoteText 持久化 + HUD「已保存」；空文本 = 清除备注
+      void emitTo("main", "toskr://note-edit", { id: noteId, text: draft });
+      setNoteText(draft);
+    }
+    setEditing(false);
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // 编辑态接管：Esc 退出编辑（不关窗）、⌘⏎ 保存；翻页/空格关窗全部让位
+      if (editing) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          setDraft(noteText);
+          setEditing(false);
+        } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+          e.preventDefault();
+          save();
+        }
+        return;
+      }
       if (e.key === "Escape" || e.key === " ") {
         e.preventDefault();
         close();
@@ -57,9 +107,11 @@ export default function ImagePreviewView() {
         setIdx((i) => Math.min(files.length - 1, i + 1));
       }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [files.length]);
+    // 捕获阶段：不赌焦点（WKWebView 点击 button 不给焦点的既有约定）
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => window.removeEventListener("keydown", onKey, { capture: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [files.length, editing, noteText, noteId, draft]);
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden rounded-xl border border-white/10 bg-surface-lightbox">
@@ -85,7 +137,12 @@ export default function ImagePreviewView() {
         className="relative flex min-h-0 flex-1 cursor-grab items-center justify-center p-2 active:cursor-grabbing"
       >
         {url ? (
-          <img
+          <motion.img
+            // 按「唤起代数 + 张序」重挂载：打开、翻页、重开同图都有浮现过渡
+            key={`${gen}-${idx}`}
+            initial={{ opacity: 0, scale: 0.96 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={springSnappy}
             src={url}
             alt=""
             onLoad={(e) =>
@@ -121,6 +178,57 @@ export default function ImagePreviewView() {
           </>
         )}
       </div>
+      {/* 备注条（有笔记上下文才显示）：查看态一行截断 + 铅笔；编辑态 textarea */}
+      {noteId && (
+        <div className="shrink-0 border-t border-white/10 px-3 py-1.5">
+          {editing ? (
+            <div className="flex items-end gap-1.5">
+              <textarea
+                ref={textareaRef}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                rows={2}
+                placeholder="给这张图片写点文字…"
+                className={cn(
+                  "min-h-0 flex-1 resize-none rounded-md bg-white/10 px-2 py-1 text-body text-white/90",
+                  "placeholder:text-white/35 outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+                )}
+              />
+              <button
+                aria-label="保存备注（⌘⏎）"
+                title="保存（⌘⏎）；Esc 取消"
+                onClick={save}
+                className="rounded-md bg-white/15 p-1.5 text-white/85 outline-none hover:bg-white/25 hover:text-white focus-visible:ring-2 focus-visible:ring-white/60"
+              >
+                <Check className="size-3.5" />
+              </button>
+            </div>
+          ) : (
+            <button
+              aria-label={noteText ? "编辑文字备注" : "添加文字备注"}
+              title={noteText ? "编辑文字备注" : "添加文字备注"}
+              onClick={() => {
+                setDraft(noteText);
+                setEditing(true);
+              }}
+              className={cn(
+                "group flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left outline-none",
+                "hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-white/40"
+              )}
+            >
+              <Pencil className="size-3 shrink-0 text-white/40 group-hover:text-white/80" />
+              <span
+                className={cn(
+                  "min-w-0 flex-1 truncate text-body",
+                  noteText ? "text-white/85" : "text-white/35"
+                )}
+              >
+                {noteText || "添加文字备注…"}
+              </span>
+            </button>
+          )}
+        </div>
+      )}
       <div className="flex h-6 shrink-0 items-center justify-center text-label tabular-nums text-white/60">
         {many ? `${idx + 1} / ${files.length}${dims ? ` · ${dims}` : ""}` : dims}
       </div>

@@ -22,6 +22,7 @@ import {
   Wand2,
 } from "lucide-react";
 
+import { imageCaption } from "@/lib/format";
 import { tip } from "@/lib/tip";
 import { IconButton } from "@/components/ui/icon-button";
 import {
@@ -36,9 +37,11 @@ import {
 } from "@/components/ui/context-menu";
 import {
   convertNoteToTaskWithUndo,
+  copyNoteContent,
   copyNotesAsList,
   deleteNotesWithUndo,
   mergeNoteWithChecked,
+  openNoteDetail,
   sendNotesToChat,
   undoableTip,
 } from "@/lib/actions";
@@ -172,12 +175,17 @@ export const NoteCard = memo(function NoteCard({
       void api.openUrl(note.url!);
       return;
     }
-    // 图片卡「查看明细」= 系统 Quick Look 原尺寸预览（窄面板放不下大图）
+    // 图片卡「查看明细」= 原尺寸预览窗（窄面板放不下大图），带笔记上下文
+    // 以便在预览窗内联编辑文字备注（占位符「图片 W×H」不当作备注下发）
     if (isImage && !editing && note.imageFile) {
-      void api.quickLook(noteImages(note));
+      void api.quickLook(noteImages(note), 0, {
+        id: note.id,
+        text: imageCaption(note),
+      });
       return;
     }
-    useUIStore.getState().openPreview(note.id, editing);
+    // 文字类 → 桌面居中的文本详情窗；图片编辑等仍走面板内预览层
+    openNoteDetail(note.id, editing);
   };
 
   // 文本卡正文可直接拖出到外部应用输入框（WKWebView 原生桥接系统拖拽）；
@@ -394,14 +402,7 @@ export const NoteCard = memo(function NoteCard({
     }
   };
 
-  const copyOne = async () => {
-    try {
-      await api.copyText(note.text);
-      tip("ok", "已复制");
-    } catch (e) {
-      tip("warn", `复制失败：${e}`);
-    }
-  };
+  const copyOne = () => void copyNoteContent(note);
 
   const segments = splitHighlight(note.text, query);
   // 卡面代码高亮：只算可见头部（600 字符足够 3-6 行），memo 防重复计算
@@ -662,34 +663,48 @@ export const NoteCard = memo(function NoteCard({
                 </button>
               </div>
             ) : isImage ? (
-              cardImages.length > 1 ? (
-                // 组合卡：并排缩略最多 3 张，更多以「+N」标示
-                <div className="flex h-full w-full gap-1">
-                  {cardImages.slice(0, 3).map((f, i) => (
-                    <CardThumb
-                      key={f}
-                      file={f}
-                      overlay={
-                        i === 2 && cardImages.length > 3
-                          ? `+${cardImages.length - 3}`
-                          : undefined
-                      }
-                    />
-                  ))}
-                </div>
-              ) : (
-                <div className="flex h-full w-full items-center justify-center overflow-hidden rounded-sm bg-black/[0.04] dark:bg-white/[0.06]">
-                  {imageUrl ? (
-                    <img
-                      src={imageUrl}
-                      alt="捕获的图片"
-                      className="max-h-full max-w-full object-contain"
-                    />
-                  ) : (
-                    <span className="text-micro text-muted-foreground/60">加载中…</span>
-                  )}
-                </div>
-              )
+              <div className="flex h-full w-full flex-col gap-1">
+                {cardImages.length > 1 ? (
+                  // 组合卡：并排缩略最多 3 张，更多以「+N」标示
+                  <div className="flex min-h-0 flex-1 gap-1">
+                    {cardImages.slice(0, 3).map((f, i) => (
+                      <CardThumb
+                        key={f}
+                        file={f}
+                        overlay={
+                          i === 2 && cardImages.length > 3
+                            ? `+${cardImages.length - 3}`
+                            : undefined
+                        }
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-sm bg-black/[0.04] dark:bg-white/[0.06]">
+                    {imageUrl ? (
+                      <img
+                        src={imageUrl}
+                        alt="捕获的图片"
+                        className="max-h-full max-w-full object-contain"
+                      />
+                    ) : (
+                      <span className="text-micro text-muted-foreground/60">加载中…</span>
+                    )}
+                  </div>
+                )}
+                {/* 真实文字备注（详情窗编辑；占位符不回显）：卡面一行截断，
+                    保存立即可见 */}
+                {imageCaption(note) && (
+                  <p
+                    className={cn(
+                      "shrink-0 truncate text-label text-muted-foreground",
+                      note.done && "line-through opacity-60"
+                    )}
+                  >
+                    {imageCaption(note)}
+                  </p>
+                )}
+              </div>
             ) : note.codeLang && !query ? (
               // 代码卡卡面直接语法高亮（与预览层同源）；搜索时让位给命中高亮
               <pre

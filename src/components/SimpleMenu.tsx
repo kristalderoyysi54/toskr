@@ -29,10 +29,15 @@ export function SimpleMenu({
   // 出场动画期间保持挂载（同 DuePopover 的 lingering 先例）：
   // data-state 翻 closed → tw-animate 播出场 → 120ms 后真正卸载
   const [rendered, setRendered] = useState(false);
+  // 出场卸载计时器必须可取消：关→120ms 内再开时，若旧计时器仍在飞行，
+  // 会把「已经重新打开」的菜单直接卸载——open=true 却无渲染，状态与画面
+  // 脱节（外点监听还挂着），表现为「点图标闪一下菜单就没了」。
+  const lingerTimer = useRef(0);
   const setOpen = (v: boolean) => {
     setOpenRaw(v);
+    window.clearTimeout(lingerTimer.current);
     if (v) setRendered(true);
-    else window.setTimeout(() => setRendered(false), 120);
+    else lingerTimer.current = window.setTimeout(() => setRendered(false), 120);
   };
   const rootRef = useRef<HTMLDivElement>(null);
 

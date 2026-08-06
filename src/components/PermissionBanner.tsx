@@ -2,7 +2,19 @@ import { KeyboardOff, ShieldAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/tauri";
+import { tip } from "@/lib/tip";
 import { useUIStore } from "@/store/uiStore";
+
+/** 一键重置输入监控条目（等价系统设置里的 −），成功后带用户去重新勾选。 */
+async function resetAndReopen() {
+  try {
+    await api.resetInputMonitoring();
+    tip("ok", "已重置授权条目 · 请重新勾选 Toskr 后点「重启」");
+  } catch (e) {
+    tip("warn", `自动重置失败（${String(e)}）· 请手动删除条目后重加`);
+  }
+  void api.openPrivacySettings("input-monitoring");
+}
 
 /**
  * 权限引导横幅（纯展示）：状态由 App 级常驻守护写入 uiStore。
@@ -27,11 +39,14 @@ export function PermissionBanner() {
           键盘事件被系统拦截
         </div>
         <p className="mt-1 text-label leading-relaxed text-muted-foreground">
-          监听已创建但收不到按键——通常是「输入监控」权限未对当前签名生效。请在系统设置
-          → 隐私与安全性 → <b>输入监控</b> 中删除旧的 Toskr 条目并重新添加/勾选，
-          然后点击下方重启。
+          监听已创建但收不到按键——通常是「输入监控」授权条目未对当前签名生效
+          （<b>即使开关已打开</b>也会如此）。点「一键重置授权」自动删除旧条目，
+          在打开的设置里重新勾选/添加 Toskr，再点「重启」即可恢复。
         </p>
         <div className="mt-2 flex gap-1.5">
+          <Button size="xs" onClick={() => void resetAndReopen()}>
+            一键重置授权
+          </Button>
           <Button
             size="xs"
             variant="outline"
@@ -39,7 +54,7 @@ export function PermissionBanner() {
           >
             打开输入监控设置
           </Button>
-          <Button size="xs" onClick={() => api.restartApp()}>
+          <Button size="xs" variant="outline" onClick={() => api.restartApp()}>
             重启 Toskr
           </Button>
         </div>

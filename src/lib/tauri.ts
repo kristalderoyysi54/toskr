@@ -20,6 +20,15 @@ export const STEALTH_EVENT = "toskr://stealth-changed";
 export const CLIP_PAUSE_EVENT = "toskr://clip-pause-changed";
 /** 剪贴板历史 watcher → 主窗口入库。 */
 export const CLIP_EVENT = "toskr://clip";
+/** Rust → 主窗口：贴边隐藏运行态变化（进入/退出可介入布局、滑出/滑回）。 */
+export const EDGE_HIDE_STATE_EVENT = "toskr://edge-hide-state";
+
+/** 贴边隐藏运行态载荷：active=当前是否处于可自动隐藏的布局（非钉住、
+ *  非伴随磁吸的右缘停靠/右侧边栏）；hidden=面板当前是否已滑出仅露出细条。 */
+export interface EdgeHideStatePayload {
+  active: boolean;
+  hidden: boolean;
+}
 
 /** 剪贴板历史收集载荷。 */
 export interface ClipPayload {
@@ -72,6 +81,10 @@ export interface HudPayload {
 export interface HudOpenPanelPayload {
   page?: "tasks";
   taskId?: string | null;
+  /** 改开设置窗并切到指定分区，不开面板。 */
+  settings?: string;
+  /** 打开面板并唤起更新对话框（更新提醒气泡）。 */
+  update?: boolean;
 }
 
 export interface HudHoverPayload {
@@ -116,6 +129,15 @@ export const api = {
   retryTap: () => invoke("retry_tap"),
   openPrivacySettings: (pane: "accessibility" | "input-monitoring") =>
     invoke("open_privacy_settings", { pane }),
+  /** 一键重置输入监控授权（tccutil 删除条目，等价系统设置里的 −）；失败 reject。 */
+  resetInputMonitoring: () => invoke("reset_input_monitoring"),
+  /** 把图片附件写入系统剪贴板（图片卡复制）。 */
+  copyImage: (file: string) => invoke("copy_image_to_clipboard", { file }),
+  /** 从系统剪贴板读图并入库（输入框粘贴图片）；无图返回 null。 */
+  pasteImageFromClipboard: () =>
+    invoke<{ file: string; width: number; height: number } | null>(
+      "paste_image_from_clipboard"
+    ),
 
   setHotkeyConfig: (modifier: string, gapMs: number) =>
     invoke("set_hotkey_config", { modifier, gapMs }),
@@ -124,8 +146,9 @@ export const api = {
     invoke("set_panel_hotkey", { shortcut }),
   /** 抓取链接的网页标题/图标（curl，6s 超时）。 */
   fetchLinkMeta: (url: string) => invoke<LinkMeta>("fetch_link_meta", { url }),
-  setCompanionConfig: (enabled: boolean, apps: string[]) =>
-    invoke("set_companion_config", { enabled, apps }),
+  /** `side`："right"（默认，贴目标窗口右缘）| "left"（贴左缘）。 */
+  setCompanionConfig: (enabled: boolean, apps: string[], side: "left" | "right" = "right") =>
+    invoke("set_companion_config", { enabled, apps, side }),
   setExcludedApps: (apps: string[]) => invoke("set_excluded_apps", { apps }),
   setCompanionGap: (gap: number) => invoke("set_companion_gap", { gap }),
   getDiagnostics: () =>
@@ -162,6 +185,19 @@ export const api = {
   isSelfFrontmost: () => invoke<boolean>("is_self_frontmost"),
   setPanelTopmost: (enabled: boolean) =>
     invoke("set_panel_topmost", { enabled }),
+  /** 自动贴边隐藏开关（类似 Dock；关闭时若正隐藏会自动滑回）。 */
+  setAutoEdgeHide: (enabled: boolean) =>
+    invoke("set_auto_edge_hide", { enabled }),
+  /** 面板固定（图钉）状态同步：只豁免失焦收起，不影响光标驱动的贴边隐藏。 */
+  setPanelPinned: (pinned: boolean) => invoke("set_panel_pinned", { pinned }),
+  /** 手动拖拽落定评估：拖到屏幕左右缘 → 吸平入坞贴边隐藏。 */
+  evaluateDragDock: () => invoke("evaluate_drag_dock"),
+  /** 面板宽度/上下缘拖拽期间下发，贴边隐藏暂停计时。 */
+  setPanelDragActive: (active: boolean) =>
+    invoke("set_panel_drag_active", { active }),
+  /** 立即贴边滑出（失焦时贴边隐藏模式下的「收起」，不是真实 hide；
+   *  前置条件不满足时是安全的空操作）。 */
+  edgeHideNow: () => invoke("edge_hide_now"),
   /** OpenAI 兼容对话补全（配置由调用方传入；返回 content 文本）。 */
   aiChat: (
     baseUrl: string,
@@ -176,8 +212,16 @@ export const api = {
   aiListModels: (baseUrl: string, apiKey: string) =>
     invoke<string[]>("ai_list_models", { baseUrl, apiKey }),
   /** 系统 Quick Look 原尺寸预览图片附件。 */
-  quickLook: (files: string[], index = 0) =>
-    invoke("quick_look", { files, index }),
+  /** 图片原尺寸预览；`note` 传所属笔记时预览窗显示文字备注编辑条。 */
+  quickLook: (files: string[], index = 0, note?: { id: string; text: string }) =>
+    invoke("quick_look", {
+      files,
+      index,
+      noteId: note?.id ?? null,
+      noteText: note?.text ?? null,
+    }),
+  /** 文本详情窗（桌面居中；内容另行 emit 到 textpreview 窗口）。 */
+  showTextPreview: () => invoke("show_text_preview"),
   ocrImage: (file: string) => invoke<string>("ocr_image", { file }),
   prevAppInfo: () => invoke<PrevAppInfo | null>("prev_app_info"),
   refreshPrevApp: () => invoke("refresh_prev_app"),

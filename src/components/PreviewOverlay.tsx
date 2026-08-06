@@ -2,12 +2,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, type Variants } from "motion/react";
 import { Check, Copy, ExternalLink, Pencil, Send, Trash2, X } from "lucide-react";
 
+import { imageCaption } from "@/lib/format";
 import { tip } from "@/lib/tip";
 import { Button } from "@/components/ui/button";
 import { floatingSurface } from "@/components/ui/floating-surface";
 import { IconButton } from "@/components/ui/icon-button";
 import { Kbd } from "@/components/ui/kbd";
-import { deleteNotesWithUndo, enrichLinkMeta, sendNotesToChat } from "@/lib/actions";
+import {
+  copyNoteContent,
+  deleteNotesWithUndo,
+  enrichLinkMeta,
+  sendNotesToChat,
+} from "@/lib/actions";
 import { highlightCode, langLabel } from "@/lib/code";
 import { looksLikeMarkdown, renderMarkdown } from "@/lib/markdown";
 import { useAppIcon } from "@/lib/icons";
@@ -20,7 +26,7 @@ import { noteImages, useNotesStore } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
 
 /** 文本统计（Paste 风格）：字符 / 单词（CJK 按字计）/ 行。 */
-function stats(text: string) {
+export function stats(text: string) {
   const chars = [...text].length;
   const words = (text.match(/[一-鿿぀-ヿ]|[a-zA-Z0-9_'-]+/g) ?? []).length;
   const lines = text.split("\n").length;
@@ -104,14 +110,9 @@ export function PreviewOverlay() {
     useUIStore.getState().setPreviewEditing(false);
   };
 
-  const copy = async () => {
+  const copy = () => {
     if (!note) return;
-    try {
-      await api.copyText(note.text);
-      tip("ok", "已复制");
-    } catch (e) {
-      tip("warn", `复制失败：${e}`);
-    }
+    void copyNoteContent(note);
   };
 
   const remove = () => {
@@ -250,11 +251,22 @@ export function PreviewOverlay() {
               {isImage ? (
                 <div className="flex h-full items-center justify-center">
                   {imageUrl ? (
-                    <img
+                    <motion.img
+                      // 按 url 重挂载：↑↓ 切到别的图片卡时同样重播浮现
+                      key={imageUrl}
+                      initial={{ opacity: 0, scale: 0.97 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={springModal}
                       src={imageUrl}
                       alt="捕获的图片"
                       title="点击原尺寸预览"
-                      onClick={() => note.imageFile && void api.quickLook(images)}
+                      onClick={() =>
+                        note.imageFile &&
+                        void api.quickLook(images, 0, {
+                          id: note.id,
+                          text: imageCaption(note),
+                        })
+                      }
                       className="max-h-full max-w-full cursor-zoom-in object-contain"
                     />
                   ) : (

@@ -3,7 +3,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 import { detectCode } from "@/lib/code";
 import { detectLink } from "@/lib/link";
-import { mergeTexts } from "@/lib/format";
+import { imageCaption, mergeTexts } from "@/lib/format";
 import { tauriStateStorage } from "./persistStorage";
 
 export type NoteKind = "text" | "image" | "link";
@@ -202,6 +202,9 @@ export interface Settings {
   autoEnter: boolean;
   /** 面板失焦自动隐藏。 */
   hideOnBlur: boolean;
+  /** 自动贴边隐藏：面板贴屏幕右缘时鼠标离开自动滑出隐藏，
+   *  移到屏幕右缘唤出（类似 Dock）；钉住时不生效。 */
+  autoEdgeHide: boolean;
   /** 全局触发键：双击哪个修饰键。 */
   hotkeyModifier: "shift" | "control" | "option";
   /** 两次轻击「抬起→抬起」最大间隔（ms）。 */
@@ -361,13 +364,15 @@ export const defaultSettings = (): Settings => ({
   clipExcludedApps: [...DEFAULT_EXCLUDED_APPS],
   autoEnter: false,
   hideOnBlur: true,
+  // 首装默认体验（2026-08 用户指定）：贴边隐藏开、伴随磁吸关
+  autoEdgeHide: true,
   hotkeyModifier: "shift",
   hotkeyGapMs: 400,
   doubleTapCaptureOnly: false,
   panelToggleHotkey: null,
   stealth: false,
   soundEnabled: true,
-  companionEnabled: true,
+  companionEnabled: false,
   companionApps: [...DEFAULT_COMPANION_APPS],
   companionGap: 8,
   panelFreeX: null,
@@ -422,6 +427,8 @@ interface NotesState {
       imageFile?: string;
       imageW?: number;
       imageH?: number;
+      /** 除 imageFile 外的其余图片附件（输入框暂存多图成组合卡）。 */
+      attachments?: string[];
     }
   ) => { result: AddNoteResult; id?: string };
   /** 剪贴板历史入库：自动建「剪贴板」分组、超限裁剪；返回待清理的图片文件。 */
@@ -559,9 +566,12 @@ export const useNotesStore = create<NotesState>()(
                   (n) => inScope(n) && n.imageFile === opts.imageFile
                 )
               : undefined
-            : get().notes.find(
-                (n) => inScope(n) && n.kind !== "image" && n.text === trimmed
-              );
+            : opts?.attachments?.length || opts?.imageFile
+              ? // 图文组合卡：同文不同图是合法新卡，不按文本查重
+                undefined
+              : get().notes.find(
+                  (n) => inScope(n) && n.kind !== "image" && n.text === trimmed
+                );
         if (dup) return { result: "duplicate", id: dup.id };
 
         const sections = get().sections;
@@ -586,6 +596,7 @@ export const useNotesStore = create<NotesState>()(
           imageFile: opts?.imageFile,
           imageW: opts?.imageW,
           imageH: opts?.imageH,
+          attachments: opts?.attachments?.length ? opts.attachments : undefined,
         };
         // 最新的卡片置顶（收件箱语义：新内容在最上面）
         set({ notes: [note, ...get().notes] });
@@ -668,9 +679,11 @@ export const useNotesStore = create<NotesState>()(
         set({
           notes: get().notes.map((n) => {
             if (n.id !== id) return n;
-            const t = trimmed || n.text;
             // 带图卡片不做链接升级（组合卡渲染优先级会把附件藏掉）
             const hasImages = !!n.imageFile || !!n.attachments?.length;
+            // 空文本：纯文本卡回退旧值（防误清空成无内容卡）；带图卡的文字
+            // 只是备注，允许清空（图片本身就是内容）
+            const t = trimmed || (hasImages ? "" : n.text);
             const url = hasImages ? undefined : detectLink(t);
             if (url) {
               // 编辑为/仍为纯链接：URL 变化时清掉旧简介，等待重抓
@@ -793,8 +806,12 @@ export const useNotesStore = create<NotesState>()(
         if (ordered.length < 2) return;
         get().snapshot(`合并 ${ordered.length} 条`);
 
-        // 组合卡片：文字合并成正文，图片全部作为附件挂在同一张卡上
-        const textParts = ordered.filter((n) => n.kind !== "image").map((n) => n.text);
+        // 组合卡片：文字合并成正文，图片全部作为附件挂在同一张卡上。
+        // 图片卡的真实文字备注（占位符「图片 W×H」不算）同样参与合并
+        // ——文字跟着图走，任何图+文/图+图组合都不丢字
+        const textParts = ordered
+          .filter((n) => n.kind !== "image" || imageCaption(n).length > 0)
+          .map((n) => n.text);
         const images = [...new Set(ordered.flatMap(noteImages))];
         const first = ordered[0];
         const mergedText = textParts.length

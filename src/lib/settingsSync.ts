@@ -3,6 +3,7 @@ import { emitTo, listen } from "@tauri-apps/api/event";
 import { api } from "@/lib/tauri";
 import { tip } from "@/lib/tip";
 import { useNotesStore, type Settings } from "@/store/notesStore";
+import { useUIStore } from "@/store/uiStore";
 
 /**
  * 主面板 ↔ 设置窗口的设置同步。
@@ -11,6 +12,8 @@ import { useNotesStore, type Settings } from "@/store/notesStore";
  * - settings 窗口的每次修改发 patch，主面板应用 + 持久化 + 下发 Rust 副作用 + 回播 state
  */
 export const SETTINGS_REQUEST = "toskr://settings-request";
+/** 让设置窗切到指定分区（载荷为 SectionId 字符串，如 "about"）。 */
+export const SETTINGS_SECTION = "toskr://settings-section";
 export const SETTINGS_STATE = "toskr://settings-state";
 export const SETTINGS_PATCH = "toskr://settings-patch";
 export const SETTINGS_EXPORT = "toskr://do-export";
@@ -19,7 +22,24 @@ export const SETTINGS_CLEAR_CLIP = "toskr://do-clear-clip";
 
 /** 应用设置补丁并执行对应的 Rust 侧副作用（主面板调用）。 */
 export function applySettingsPatch(patch: Partial<Settings>) {
-  // 互斥收敛：开启伴随停靠时自动退出边栏模式并恢复自动停靠——
+  // 互斥收敛（用户指定 2026-08：贴边隐藏与伴随磁吸是二选一的两种贴边行为）。
+  // 所有互斥都必须收敛在这里——任何入口（停靠菜单/设置窗）绕过本函数直连
+  // setSettings 都会复现「开关打勾但被另一模式否决」的静默失效
+  if (
+    patch.autoEdgeHide === true &&
+    useNotesStore.getState().settings.companionEnabled
+  ) {
+    patch = { ...patch, companionEnabled: false };
+    tip("info", "已关闭伴随磁吸");
+  }
+  if (
+    patch.companionEnabled === true &&
+    useNotesStore.getState().settings.autoEdgeHide
+  ) {
+    patch = { ...patch, autoEdgeHide: false };
+    tip("info", "已关闭贴边隐藏");
+  }
+  // 开启伴随停靠时自动退出边栏模式并恢复自动停靠——
   // 边栏在 Rust 侧一票否决磁吸，不清掉会让这个开关看似失效
   if (
     patch.companionEnabled === true &&
@@ -27,6 +47,16 @@ export function applySettingsPatch(patch: Partial<Settings>) {
   ) {
     patch = { ...patch, rightSidebar: false, panelFreeX: null, panelFreeY: null };
     tip("info", "边栏已关闭，恢复伴随磁吸");
+  }
+  // 模式开启的默认联动（用户指定 2026-08）：两种贴边行为都以「面板长期在屏」
+  // 为前提——磁吸要跟着终端走、贴边隐藏要留缝待唤，失焦整面板关掉与模式相悖。
+  // 开启即默认常显示（图钉=失焦不隐藏，会话内可手动取消）；贴边隐藏另默认
+  // 置顶层级，滑出的细缝与触边唤回不被其他窗口盖住。
+  if (patch.autoEdgeHide === true || patch.companionEnabled === true) {
+    useUIStore.getState().setPinned(true);
+  }
+  if (patch.autoEdgeHide === true && !useNotesStore.getState().settings.panelTopmost) {
+    patch = { ...patch, panelTopmost: true };
   }
   useNotesStore.getState().setSettings(patch);
   const s = useNotesStore.getState().settings;
@@ -37,8 +67,15 @@ export function applySettingsPatch(patch: Partial<Settings>) {
     // 录制器已先试注册成功才发 patch；这里重复注册幂等，失败静默
     void api.setPanelHotkey(s.panelToggleHotkey).catch(() => {});
   }
-  if ("companionEnabled" in patch || "companionApps" in patch) {
-    void api.setCompanionConfig(s.companionEnabled, s.companionApps);
+  if (
+    "companionEnabled" in patch ||
+    "companionApps" in patch ||
+    ("sidebarEdge" in patch && s.companionEnabled)
+  ) {
+    // 磁吸方向复用 sidebarEdge 这个共享的左右偏好；边栏没有的 top/bottom
+    // 对伴随磁吸无意义，退化为右
+    const side = s.sidebarEdge === "left" ? "left" : "right";
+    void api.setCompanionConfig(s.companionEnabled, s.companionApps, side);
   }
   if ("companionGap" in patch) {
     void api.setCompanionGap(s.companionGap);
@@ -53,6 +90,9 @@ export function applySettingsPatch(patch: Partial<Settings>) {
   }
   if ("panelTopmost" in patch) {
     void api.setPanelTopmost(s.panelTopmost);
+  }
+  if ("autoEdgeHide" in patch) {
+    void api.setAutoEdgeHide(s.autoEdgeHide);
   }
   if ("excludedApps" in patch) {
     void api.setExcludedApps(s.excludedApps);

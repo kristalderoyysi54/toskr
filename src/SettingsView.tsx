@@ -37,6 +37,7 @@ import {
   SETTINGS_IMPORT,
   SETTINGS_PATCH,
   SETTINGS_REQUEST,
+  SETTINGS_SECTION,
   SETTINGS_STATE,
 } from "@/lib/settingsSync";
 import { SHORTCUTS } from "@/lib/shortcuts";
@@ -91,9 +92,14 @@ export default function SettingsView() {
 
   useEffect(() => {
     const un = listen<Settings>(SETTINGS_STATE, (e) => setSettings(e.payload));
+    // 外部指路（更新提醒气泡点击等）→ 切到指定分区
+    const unSection = listen<string>(SETTINGS_SECTION, (e) =>
+      setSection(e.payload as SectionId)
+    );
     void emitTo("main", SETTINGS_REQUEST, {});
     return () => {
       un.then((fn) => fn());
+      unSection.then((fn) => fn());
     };
   }, []);
 
@@ -440,6 +446,16 @@ function GeneralSection({ settings, patch }: SP) {
             <Switch
               checked={settings.hideOnBlur}
               onCheckedChange={(v) => patch({ hideOnBlur: v })}
+            />
+          }
+        />
+        <Row
+          label="自动贴边隐藏"
+          hint="面板停在屏幕右缘（自动停靠或手动拖到屏缘）时自动滑出隐藏，鼠标移到屏缘唤出（类似 Dock）；与伴随磁吸二选一"
+          right={
+            <Switch
+              checked={settings.autoEdgeHide}
+              onCheckedChange={(v) => patch({ autoEdgeHide: v })}
             />
           }
         />

@@ -52,3 +52,17 @@ export function sendPreview(text: string, maxLines = 10): string {
   const suffix = lines.length > maxLines ? `\n…（共 ${lines.length} 行）` : "";
   return `${shown}${suffix}`;
 }
+
+/** 捕获/合并自动写入的图片占位文字（「图片 100×50」「图片 3 张」）。 */
+const IMAGE_PLACEHOLDER = /^图片 (\d+×\d+|\d+ 张)$/;
+
+/**
+ * 图片卡的「真实文字备注」：用户在详情窗写的说明才算，捕获时自动写入的
+ * 占位文字（图片 W×H / 图片 N 张）不算。发送/合并/卡面回显统一用这个
+ * 判定收集文字——占位符混进正文正是原先「图片退化成占位文字」的坑。
+ */
+export function imageCaption(note: { kind?: string; text: string }): string {
+  const t = note.text.trim();
+  if (note.kind !== "image") return t;
+  return IMAGE_PLACEHOLDER.test(t) ? "" : t;
+}

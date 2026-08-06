@@ -79,14 +79,19 @@ export default function HudView() {
               <HudIcon kind={item.kind} />
               <div
                 onClick={() => {
-                  // 点击气泡本体：打开面板。到期提醒跳任务页并定位该任务，
+                  // 点击气泡本体：打开面板。到期提醒跳任务页并定位该任务；
+                  // settings: 目标（更新提醒）改开设置窗对应分区；
                   // 其余定位到刚捕获的卡片。先本地播退场，再让窗口隐藏
                   void emitTo(
                     "main",
                     HUD_OPEN_PANEL_EVENT,
                     item.kind === "due"
                       ? { page: "tasks", taskId: item.targetId ?? null }
-                      : {}
+                      : item.targetId === "update"
+                        ? { update: true }
+                        : item.targetId?.startsWith("settings:")
+                          ? { settings: item.targetId.slice("settings:".length) }
+                          : {}
                   );
                   setItem(null);
                   window.setTimeout(() => void api.hideHud(), 150);

@@ -46,8 +46,22 @@ pub struct HudHoverPayload {
     pub hovered: bool,
 }
 
+/// 贴边隐藏运行态变化（Rust → 主窗口）：`active` = 当前是否处于可自动
+/// 隐藏的布局（设置开启 + 面板可见 + 右缘独立停靠/右侧边栏 + 非钉住 +
+/// 非伴随磁吸）；`hidden` = 面板当前是否已滑出仅露出细条。
+/// 前端据此在 active 时豁免失焦自动隐藏（滑出取代真实 hide），
+/// 在 hidden 时把快捷键/双击唤出识别为「贴边唤回」而非「开关切换」。
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EdgeHideStatePayload {
+    pub active: bool,
+    pub hidden: bool,
+}
+
 pub const TRIGGER_EVENT: &str = "toskr://trigger";
 pub const HUD_EVENT: &str = "toskr://hud";
 pub const HUD_HOVER_EVENT: &str = "toskr://hud-hover";
 /// 即将隐藏 HUD：先通知前端播退场动画，延迟少许再真正 hide（进出场对称）。
 pub const HUD_EXIT_EVENT: &str = "toskr://hud-exit";
+/// 贴边隐藏运行态变化，载荷见 [`EdgeHideStatePayload`]。
+pub const EDGE_HIDE_STATE_EVENT: &str = "toskr://edge-hide-state";

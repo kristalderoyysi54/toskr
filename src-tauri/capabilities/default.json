@@ -6,7 +6,8 @@
     "main",
     "hud",
     "settings",
-    "imgpreview"
+    "imgpreview",
+    "textpreview"
   ],
   "permissions": [
     "core:default",
