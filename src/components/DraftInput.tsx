@@ -1,12 +1,13 @@
-import { useState } from "react";
-import { X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Check, ChevronUp, FolderInput, X } from "lucide-react";
 
+import { SimpleMenu, SimpleMenuItem } from "@/components/SimpleMenu";
 import { PillInput } from "@/components/ui/pill-input";
 import { enrichLinkMeta } from "@/lib/actions";
 import { useNoteThumb } from "@/lib/media";
 import { api } from "@/lib/tauri";
 import { tip } from "@/lib/tip";
-import { useNotesStore } from "@/store/notesStore";
+import { CLIPBOARD_ID, INBOX_ID, useNotesStore } from "@/store/notesStore";
 
 type PendingImage = { file: string; width: number; height: number };
 
@@ -53,6 +54,24 @@ function PendingThumb({
 export function DraftInput() {
   const [value, setValue] = useState("");
   const [pending, setPending] = useState<PendingImage[]>([]);
+  const sections = useNotesStore((s) => s.sections);
+  const targetSections = useMemo(
+    () => sections.filter((section) => section.id !== CLIPBOARD_ID),
+    [sections]
+  );
+  const [sectionId, setSectionId] = useState(() =>
+    sections.some((section) => section.id === INBOX_ID)
+      ? INBOX_ID
+      : (targetSections[0]?.id ?? INBOX_ID)
+  );
+  const selectedSection =
+    targetSections.find((section) => section.id === sectionId) ?? targetSections[0];
+
+  useEffect(() => {
+    if (!targetSections.some((section) => section.id === sectionId)) {
+      setSectionId(targetSections[0]?.id ?? INBOX_ID);
+    }
+  }, [sectionId, targetSections]);
 
   const submit = () => {
     const text = value.trim();
@@ -65,6 +84,7 @@ export function DraftInput() {
           : `图片 ${first!.width}×${first!.height}`),
       first
         ? {
+            sectionId,
             // 有文字 = 组合卡（kind 固定 text，绕过链接检测保住图文混排展示）
             kind: text ? "text" : "image",
             imageFile: first.file,
@@ -72,7 +92,7 @@ export function DraftInput() {
             imageH: first.height,
             attachments: pending.slice(1).map((p) => p.file),
           }
-        : undefined
+        : { sectionId }
     );
     if (result === "duplicate") tip("duplicate", "");
     if (result === "added") {
@@ -106,6 +126,54 @@ export function DraftInput() {
         onSubmit={submit}
         onPasteImage={() => void pasteImage()}
         canSubmitEmpty={pending.length > 0}
+        leftSlot={
+          <SimpleMenu
+            align="start"
+            side="top"
+            className="flex shrink-0"
+            menuClassName="w-44"
+            trigger={({ open, toggle }) => (
+              <button
+                type="button"
+                aria-label={`添加到分组：${selectedSection?.name ?? "收件箱"}`}
+                aria-expanded={open}
+                onClick={toggle}
+                className={
+                  "flex h-6 max-w-24 shrink-0 items-center gap-1 rounded-md px-1.5 " +
+                  "text-label text-muted-foreground outline-none hover:bg-black/5 hover:text-foreground " +
+                  "focus-visible:ring-2 focus-visible:ring-primary/50 dark:hover:bg-white/10"
+                }
+              >
+                <FolderInput className="size-3 shrink-0" />
+                <span className="truncate">{selectedSection?.name ?? "收件箱"}</span>
+                <ChevronUp
+                  className={`size-2.5 shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
+                />
+              </button>
+            )}
+          >
+            {(close) => (
+              <>
+                {targetSections.map((section) => (
+                  <SimpleMenuItem
+                    key={section.id}
+                    onClick={() => {
+                      setSectionId(section.id);
+                      close();
+                    }}
+                  >
+                    <Check
+                      className={
+                        section.id === sectionId ? "size-3.5" : "size-3.5 opacity-0"
+                      }
+                    />
+                    <span className="truncate">{section.name}</span>
+                  </SimpleMenuItem>
+                ))}
+              </>
+            )}
+          </SimpleMenu>
+        }
         attachmentsSlot={
           pending.length > 0 ? (
             <div className="flex flex-wrap gap-1.5">

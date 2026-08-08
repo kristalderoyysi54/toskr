@@ -4,7 +4,7 @@ import { marked } from "marked";
 
 /** 粗看是否像 Markdown（决定预览层默认进渲染视图还是原文视图）。 */
 export function looksLikeMarkdown(text: string): boolean {
-  return /(^|\n)\s{0,3}(#{1,6}\s|[-*+]\s|\d+\.\s|>\s|```)|\*\*[^*\n]+\*\*|\[[^\]\n]+\]\([^)\n]+\)|`[^`\n]+`/.test(
+  return /(^|\n)\s{0,3}(#{1,6}\s|[-*+]\s|\d+\.\s|>\s|```)|\*\*[^*\n]+\*\*|(?:^|[^*])\*(?![*\s])(?:[^*\n]*\S)?\*(?!\*)|\[[^\]\n]+\]\([^)\n]+\)|`[^`\n]+`/.test(
     text
   );
 }

@@ -91,15 +91,14 @@ export function PreviewOverlay() {
 
   useEffect(() => {
     setMdView(isMd);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [note?.id]);
+  }, [note, isMd]);
 
   useEffect(() => {
     if (editing && note) {
       setDraft(note.text);
       window.setTimeout(() => textareaRef.current?.focus(), 30);
     }
-  }, [editing, note?.id]);
+  }, [editing, note]);
 
   const save = () => {
     if (note && draft.trim() && draft !== note.text) {

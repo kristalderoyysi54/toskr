@@ -1,6 +1,10 @@
 import { useRef, useState } from "react";
-import { useDroppable } from "@dnd-kit/core";
-import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import {
   ArrowDown,
   ArrowUp,
@@ -59,8 +63,19 @@ export function SectionGroup({
   // 单击组名折叠 / 双击改名：延迟消歧，双击时取消未执行的折叠
   const clickTimer = useRef(0);
 
-  // 空组/折叠组也可作为跨组拖拽的投放目标
-  const { setNodeRef, isOver } = useDroppable({ id: `sec:${section.id}` });
+  // 分组本身可排序；同一 sec:* 投放区也继续承接卡片跨组拖拽。
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+    isOver,
+  } = useSortable({
+    id: `sec:${section.id}`,
+    data: { type: "section", sectionId: section.id },
+  });
 
   const total = activeNotes.length + doneNotes.length;
   const collapsed = !!section.collapsed;
@@ -79,9 +94,14 @@ export function SectionGroup({
   return (
     <section
       ref={setNodeRef}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+      }}
       className={cn(
-        "mb-3 rounded-lg transition-colors",
-        isOver && "bg-primary/[0.06] ring-1 ring-primary/30"
+        "relative mb-3 rounded-lg transition-colors",
+        isOver && !isDragging && "bg-primary/[0.06] ring-1 ring-primary/30",
+        isDragging && "z-10 opacity-70 elevation-2"
       )}
     >
       <div className="group mb-1.5 flex h-5 items-center gap-1 pl-0.5 pr-1">
@@ -118,8 +138,10 @@ export function SectionGroup({
           />
         ) : (
           <h3
-            title="点击折叠/展开 · 双击重命名"
-            className="cursor-pointer select-none text-label font-semibold uppercase tracking-[0.08em] text-muted-foreground hover:text-foreground"
+            {...attributes}
+            {...listeners}
+            title="拖动调整分组顺序 · 点击折叠/展开 · 双击重命名"
+            className="cursor-grab select-none touch-none text-label font-semibold uppercase tracking-[0.08em] text-muted-foreground hover:text-foreground active:cursor-grabbing"
             onClick={() => {
               window.clearTimeout(clickTimer.current);
               clickTimer.current = window.setTimeout(
