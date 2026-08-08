@@ -50,6 +50,7 @@ import { highlightCode, langLabel } from "@/lib/code";
 import { linkParts } from "@/lib/link";
 import { useAppIcon } from "@/lib/icons";
 import { isMonoLike, splitMiddle } from "@/lib/cliprow";
+import { shouldScrollFocusedCard } from "@/lib/cardFocus";
 import { timeAgo, useNoteThumb } from "@/lib/media";
 import { noteToTaskSmart, suggestTitle } from "@/lib/ai";
 import { splitHighlight } from "@/lib/search";
@@ -153,8 +154,11 @@ export const NoteCard = memo(function NoteCard({
 
   // 键盘导航焦点滚动可见
   useEffect(() => {
-    if (focused) {
-      cardRef.current?.scrollIntoView({ block: "nearest" });
+    const card = cardRef.current;
+    if (!card) return;
+    const insideHiddenPage = !!card.closest('[aria-hidden="true"]');
+    if (shouldScrollFocusedCard(focused, insideHiddenPage)) {
+      card.scrollIntoView({ block: "nearest" });
     }
   }, [focused]);
 
@@ -561,10 +565,12 @@ export const NoteCard = memo(function NoteCard({
             data-drag-handle
             onKeyDown={(e) => listeners?.onKeyDown?.(e)}
             onClick={(e) => e.stopPropagation()}
-            aria-label="拖拽排序（Space 拾起，方向键移动）"
+            aria-label="拖拽调整位置和分组（Space 拾起，方向键移动）"
             className={cn(
-              "absolute -left-4 top-1/2 -translate-y-1/2 cursor-grab touch-none p-0.5",
-              "text-muted-foreground/50 opacity-0 transition-opacity group-hover:opacity-100",
+              "cursor-grab touch-none p-0.5 text-muted-foreground/50 transition-opacity",
+              compact
+                ? "relative ml-1 shrink-0 opacity-60 hover:opacity-100"
+                : "absolute -left-4 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100",
               "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/60",
               "active:cursor-grabbing",
               note.done && "hidden"
@@ -584,7 +590,7 @@ export const NoteCard = memo(function NoteCard({
             </span>
           )}
           {compact ? (
-            <div className="flex h-full w-full min-w-0">
+            <div className="flex h-full min-w-0 flex-1">
               <CompactRow
                 note={note}
                 icon={icon}
@@ -975,4 +981,3 @@ function Thumb({ file }: { file: string }) {
     </span>
   );
 }
-

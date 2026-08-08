@@ -50,6 +50,24 @@ describe("notesStore 基础", () => {
     expect(notes[0].sectionId).toBe(INBOX_ID);
   });
 
+  it("addNote 可指定目标分组，无效分组回退收件箱", () => {
+    useNotesStore.getState().addSection("研究");
+    const section = useNotesStore.getState().sections[1];
+    const grouped = useNotesStore
+      .getState()
+      .addNote("分组笔记", { sectionId: section.id });
+    const fallback = useNotesStore
+      .getState()
+      .addNote("回退笔记", { sectionId: "missing" });
+
+    expect(
+      useNotesStore.getState().notes.find((n) => n.id === grouped.id)?.sectionId
+    ).toBe(section.id);
+    expect(
+      useNotesStore.getState().notes.find((n) => n.id === fallback.id)?.sectionId
+    ).toBe(INBOX_ID);
+  });
+
   it("addNote 忽略纯空白", () => {
     expect(useNotesStore.getState().addNote("   \n  ").result).toBe("empty");
     expect(useNotesStore.getState().notes).toHaveLength(0);
@@ -188,6 +206,23 @@ describe("notesStore 基础", () => {
     void a;
   });
 
+  it("reorderSections 支持拖拽跨多项调整顺序", () => {
+    const s = useNotesStore.getState();
+    s.addSection("A");
+    s.addSection("B");
+    s.addSection("C");
+    const [, a, , c] = useNotesStore.getState().sections;
+
+    useNotesStore.getState().reorderSections(c.id, a.id);
+
+    expect(useNotesStore.getState().sections.map((section) => section.name)).toEqual([
+      "收件箱",
+      "C",
+      "A",
+      "B",
+    ]);
+  });
+
   it("orderedCheckedNotes 按展示顺序返回", () => {
     const s = useNotesStore.getState();
     s.addNote("一");
@@ -322,6 +357,28 @@ describe("链接卡片：updateNoteText 升降级与 setLinkMeta", () => {
     const n = useNotesStore.getState().notes.find((x) => x.id === id)!;
     expect(n.kind).toBe("link");
     expect(n.url).toBe("https://c.com/x");
+  });
+
+  it("详情编辑可附加并去重粘贴的图片", () => {
+    const { id } = useNotesStore.getState().addNote("正文");
+    useNotesStore
+      .getState()
+      .updateNoteText(id!, "正文", ["a.png", "a.png", "b.png"]);
+    const n = useNotesStore.getState().notes.find((x) => x.id === id)!;
+
+    expect(n.kind).toBe("text");
+    expect(n.imageFile).toBe("a.png");
+    expect(n.attachments).toEqual(["b.png"]);
+  });
+
+  it("详情编辑清空文字但保留图片时转为图片卡", () => {
+    const { id } = useNotesStore.getState().addNote("稍后删掉");
+    useNotesStore.getState().updateNoteText(id!, "", ["a.png"]);
+    const n = useNotesStore.getState().notes.find((x) => x.id === id)!;
+
+    expect(n.kind).toBe("image");
+    expect(n.text).toBe("");
+    expect(n.imageFile).toBe("a.png");
   });
 
   it("setLinkMeta 只作用于链接卡且 URL 未变时生效", () => {

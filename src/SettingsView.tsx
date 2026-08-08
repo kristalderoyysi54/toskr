@@ -193,6 +193,7 @@ function PercentSlider({
   max,
   step,
   onChange,
+  ariaLabel,
   format = (v) => `${v}%`,
 }: {
   value: number;
@@ -200,11 +201,13 @@ function PercentSlider({
   max: number;
   step: number;
   onChange: (v: number) => void;
+  ariaLabel: string;
   format?: (v: number) => string;
 }) {
   return (
     <div className="flex items-center gap-2">
       <input
+        aria-label={ariaLabel}
         type="range"
         min={min}
         max={max}
@@ -237,6 +240,7 @@ function ContextMenuGroup({ settings, patch }: SP) {
       {cfg.map((item, idx) => (
         <div key={item.id} className="group flex items-center gap-3 px-3.5 py-2">
           <Switch
+            aria-label={`${labelOf(item.id)}：显示`}
             checked={item.on}
             onCheckedChange={(v) =>
               patch({
@@ -321,6 +325,7 @@ function GeneralSection({ settings, patch }: SP) {
           hint="连毛玻璃一起变透，可真正看穿下层窗口内容"
           right={
             <PercentSlider
+              ariaLabel="窗口整体不透明度"
               value={Math.round(settings.windowOpacity * 100)}
               min={30}
               max={100}
@@ -334,10 +339,11 @@ function GeneralSection({ settings, patch }: SP) {
           hint="面板自绘膜层的浓淡（毛玻璃关闭时效果最直观）"
           right={
             <PercentSlider
+              ariaLabel="内容底色浓度"
               value={Math.round(settings.panelOpacity * 100)}
               min={25}
               max={100}
-              step={5}
+              step={1}
               onChange={(v) => patch({ panelOpacity: v / 100 })}
             />
           }
@@ -347,6 +353,7 @@ function GeneralSection({ settings, patch }: SP) {
           hint="macOS 原生 vibrancy 模糊效果"
           right={
             <Switch
+              aria-label="毛玻璃背景"
               checked={settings.vibrancy}
               onCheckedChange={(v) => patch({ vibrancy: v })}
             />
@@ -377,6 +384,7 @@ function GeneralSection({ settings, patch }: SP) {
           hint="用来源应用图标主色作卡片顶栏底色；关闭则统一中性灰"
           right={
             <Switch
+              aria-label="卡片彩色通栏"
               checked={settings.cardTint}
               onCheckedChange={(v) => patch({ cardTint: v })}
             />
@@ -402,6 +410,7 @@ function GeneralSection({ settings, patch }: SP) {
           hint="调低可透出毛玻璃背景；100% 为实色卡片"
           right={
             <PercentSlider
+              ariaLabel="卡片底色不透明度"
               value={Math.round(settings.cardOpacity * 100)}
               min={30}
               max={100}
@@ -415,7 +424,13 @@ function GeneralSection({ settings, patch }: SP) {
         <Row
           label="开机启动"
           hint="登录后自动在后台待命"
-          right={<Switch checked={autostart} onCheckedChange={toggleAutostart} />}
+          right={
+            <Switch
+              aria-label="开机启动"
+              checked={autostart}
+              onCheckedChange={toggleAutostart}
+            />
+          }
         />
       </Group>
       <Group title="行为">
@@ -424,6 +439,7 @@ function GeneralSection({ settings, patch }: SP) {
           hint="直接把内容发给 AI，谨慎开启"
           right={
             <Switch
+              aria-label="发送后自动按回车"
               checked={settings.autoEnter}
               onCheckedChange={(v) => patch({ autoEnter: v })}
             />
@@ -434,6 +450,7 @@ function GeneralSection({ settings, patch }: SP) {
           hint="显示在屏幕最上层；关闭后可被其他窗口盖住"
           right={
             <Switch
+              aria-label="面板置顶"
               checked={settings.panelTopmost}
               onCheckedChange={(v) => patch({ panelTopmost: v })}
             />
@@ -444,6 +461,7 @@ function GeneralSection({ settings, patch }: SP) {
           hint="点击其他应用时收起面板（钉住豁免）；关闭则面板保持显示"
           right={
             <Switch
+              aria-label="失焦自动隐藏"
               checked={settings.hideOnBlur}
               onCheckedChange={(v) => patch({ hideOnBlur: v })}
             />
@@ -454,6 +472,7 @@ function GeneralSection({ settings, patch }: SP) {
           hint="面板停在屏幕右缘（自动停靠或手动拖到屏缘）时自动滑出隐藏，鼠标移到屏缘唤出（类似 Dock）；与伴随磁吸二选一"
           right={
             <Switch
+              aria-label="自动贴边隐藏"
               checked={settings.autoEdgeHide}
               onCheckedChange={(v) => patch({ autoEdgeHide: v })}
             />
@@ -464,6 +483,7 @@ function GeneralSection({ settings, patch }: SP) {
           hint="不弹「已捕获」气泡（投屏/会议用，失败警示仍显示）"
           right={
             <Switch
+              aria-label="隐身模式"
               checked={settings.stealth}
               onCheckedChange={(v) => patch({ stealth: v })}
             />
@@ -474,6 +494,7 @@ function GeneralSection({ settings, patch }: SP) {
           hint="捕获成功时轻响一声（隐身模式下自动静音）"
           right={
             <Switch
+              aria-label="音效"
               checked={settings.soundEnabled}
               onCheckedChange={(v) => patch({ soundEnabled: v })}
             />
@@ -541,6 +562,7 @@ function RetentionSlider({ settings, patch }: SP) {
   return (
     <div className="w-60">
       <input
+        aria-label="剪贴板历史保留时长"
         type="range"
         min={0}
         max={RETENTION_STEPS.length - 1}
@@ -589,6 +611,7 @@ function ClipboardSection({ settings, patch }: SP) {
           hint="自动收集复制的内容到「剪贴板」页"
           right={
             <Switch
+              aria-label="剪贴板历史"
               checked={settings.clipHistory}
               onCheckedChange={(v) => patch({ clipHistory: v })}
             />
@@ -667,6 +690,7 @@ function ClipboardSection({ settings, patch }: SP) {
           hint="检测到密码管理器的机密标记时不保存"
           right={
             <Switch
+              aria-label="忽略机密内容"
               checked={settings.clipIgnoreConcealed}
               onCheckedChange={(v) => patch({ clipIgnoreConcealed: v })}
             />
@@ -677,6 +701,7 @@ function ClipboardSection({ settings, patch }: SP) {
           hint="不保存其他程序生成的临时数据"
           right={
             <Switch
+              aria-label="忽略瞬时内容"
               checked={settings.clipIgnoreTransient}
               onCheckedChange={(v) => patch({ clipIgnoreTransient: v })}
             />
@@ -1068,6 +1093,7 @@ function CompanionSection({ settings, patch }: SP) {
           hint="面板磁吸到列表内应用的窗口右缘、同高并实时跟随"
           right={
             <Switch
+              aria-label="启用伴随停靠"
               checked={settings.companionEnabled}
               onCheckedChange={(v) => patch({ companionEnabled: v })}
             />
@@ -1078,6 +1104,7 @@ function CompanionSection({ settings, patch }: SP) {
           hint="面板贴靠目标窗口时留出的空隙（0 为紧贴）"
           right={
             <PercentSlider
+              ariaLabel="与窗口的间隙"
               value={settings.companionGap}
               min={0}
               max={40}
@@ -1177,6 +1204,7 @@ function AiSection({ settings, patch }: SP) {
           hint="关闭后各 AI 入口点击提示去配置，不发起请求"
           right={
             <Switch
+              aria-label="启用 AI 智能"
               checked={settings.aiEnabled}
               onCheckedChange={(v) => patch({ aiEnabled: v })}
             />
@@ -1906,6 +1934,7 @@ function AboutSection({
           hint="启动后静默检查；关闭后仅手动点击「检查更新」时查找"
           right={
             <Switch
+              aria-label="自动检查更新"
               checked={settings.autoCheckUpdate}
               onCheckedChange={(v) => patch({ autoCheckUpdate: v })}
             />
@@ -1916,6 +1945,7 @@ function AboutSection({
           hint="发现新版后台静默下载替换，重启应用后生效（不打断使用）"
           right={
             <Switch
+              aria-label="自动安装更新"
               checked={settings.autoInstallUpdate}
               onCheckedChange={(v) => patch({ autoInstallUpdate: v })}
             />

@@ -72,38 +72,46 @@ type IconButtonProps = Omit<React.ComponentProps<"button">, "children"> &
     children: React.ReactNode;
   };
 
-export function IconButton({
-  label,
-  withTitle = true,
-  pressed,
-  stopPropagation = true,
-  size,
-  tone,
-  reveal,
-  surface,
-  className,
-  onClick,
-  children,
-  ...props
-}: IconButtonProps) {
-  return (
-    <button
-      type="button"
-      tabIndex={0}
-      aria-label={label}
-      title={withTitle ? label : undefined}
-      aria-pressed={pressed}
-      onClick={(e) => {
-        if (stopPropagation) e.stopPropagation();
-        onClick?.(e);
-      }}
-      className={cn(
-        iconButtonVariants({ size, tone, reveal, surface, pressedLook: pressed === true }),
-        className
-      )}
-      {...props}
-    >
-      {children}
-    </button>
-  );
-}
+export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
+  function IconButton(
+    {
+      label,
+      withTitle = true,
+      pressed,
+      stopPropagation = true,
+      size,
+      tone,
+      reveal,
+      surface,
+      className,
+      onClick,
+      children,
+      ...props
+    },
+    ref
+  ) {
+    return (
+      <button
+        ref={ref}
+        type="button"
+        tabIndex={0}
+        aria-label={label}
+        title={withTitle ? label : undefined}
+        aria-pressed={pressed}
+        onClick={(e) => {
+          if (stopPropagation) e.stopPropagation();
+          onClick?.(e);
+        }}
+        className={cn(
+          iconButtonVariants({ size, tone, reveal, surface, pressedLook: pressed === true }),
+          className
+        )}
+        {...props}
+      >
+        {children}
+      </button>
+    );
+  }
+);
+
+IconButton.displayName = "IconButton";

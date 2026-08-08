@@ -4,6 +4,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { detectCode } from "@/lib/code";
 import { detectLink } from "@/lib/link";
 import { imageCaption, mergeTexts } from "@/lib/format";
+import { normalizeNoteContent } from "@/lib/noteContent";
 import { tauriStateStorage } from "./persistStorage";
 
 export type NoteKind = "text" | "image" | "link";
@@ -477,7 +478,8 @@ interface NotesState {
   clearClipHistory: () => { removed: number; orphanImages: string[] };
   /** 按保留时长清理超龄剪贴板卡（固定卡豁免；静默，不占撤销栈）。返回待清理图片。 */
   pruneClipHistory: () => string[];
-  updateNoteText: (id: string, text: string) => void;
+  /** 更新正文；详情编辑器传 imageFiles 时同步替换附件。 */
+  updateNoteText: (id: string, text: string, imageFiles?: string[]) => void;
   /**
    * 从卡片移除一张图片（组合卡详情页的 ⊗）。剩余图片顺次补位；一张不剩时：
    * 有文字 → 退化为纯文本卡，无文字 → 整张卡删除。可撤销，故刻意不删磁盘
@@ -511,6 +513,7 @@ interface NotesState {
   setSectionColor: (id: string, color?: string) => void;
   deleteSection: (id: string) => void;
   moveSection: (id: string, dir: -1 | 1) => void;
+  reorderSections: (activeId: string, overId: string) => void;
   toggleSectionCollapsed: (id: string) => void;
 
   // ===== 任务 =====
@@ -711,25 +714,38 @@ export const useNotesStore = create<NotesState>()(
         );
       },
 
-      updateNoteText: (id, text) => {
+      updateNoteText: (id, text, imageFiles) => {
         const trimmed = text.trim();
         set({
           notes: get().notes.map((n) => {
             if (n.id !== id) return n;
-            // 带图卡片不做链接升级（组合卡渲染优先级会把附件藏掉）
-            const hasImages = !!n.imageFile || !!n.attachments?.length;
+            const replacesImages = imageFiles !== undefined;
+            const files = replacesImages
+              ? [...new Set(imageFiles.filter(Boolean))]
+              : noteImages(n);
+            const hasImages = files.length > 0;
             // 空文本：纯文本卡回退旧值（防误清空成无内容卡）；带图卡的文字
             // 只是备注，允许清空（图片本身就是内容）
             const t = trimmed || (hasImages ? "" : n.text);
-            const url = hasImages ? undefined : detectLink(t);
-            if (url) {
+            const normalized = normalizeNoteContent(t, hasImages);
+            const firstImage = files[0];
+            const imagePatch = replacesImages
+              ? {
+                  imageFile: firstImage,
+                  attachments: files.length > 1 ? files.slice(1) : undefined,
+                  imageW: firstImage === n.imageFile ? n.imageW : undefined,
+                  imageH: firstImage === n.imageFile ? n.imageH : undefined,
+                }
+              : {};
+            if (normalized.url) {
               // 编辑为/仍为纯链接：URL 变化时清掉旧简介，等待重抓
-              const same = url === n.url;
+              const same = normalized.url === n.url;
               return {
                 ...n,
-                text: t,
+                ...imagePatch,
+                text: normalized.text,
                 kind: "link" as const,
-                url,
+                url: normalized.url,
                 codeLang: undefined,
                 linkTitle: same ? n.linkTitle : undefined,
                 linkIcon: same ? n.linkIcon : undefined,
@@ -737,12 +753,17 @@ export const useNotesStore = create<NotesState>()(
             }
             return {
               ...n,
-              text: t,
-              kind: n.kind === "link" ? ("text" as const) : n.kind,
+              ...imagePatch,
+              text: normalized.text,
+              kind: replacesImages
+                ? normalized.kind
+                : n.kind === "link"
+                  ? ("text" as const)
+                  : n.kind,
               url: undefined,
               linkTitle: undefined,
               linkIcon: undefined,
-              codeLang: detectCode(t),
+              codeLang: normalized.codeLang ?? undefined,
             };
           }),
         });
@@ -998,6 +1019,16 @@ export const useNotesStore = create<NotesState>()(
         const from = sections.findIndex((s) => s.id === id);
         const to = from + dir;
         if (from < 0 || to < 0 || to >= sections.length) return;
+        const [moved] = sections.splice(from, 1);
+        sections.splice(to, 0, moved);
+        set({ sections });
+      },
+
+      reorderSections: (activeId, overId) => {
+        const sections = [...get().sections];
+        const from = sections.findIndex((s) => s.id === activeId);
+        const to = sections.findIndex((s) => s.id === overId);
+        if (from < 0 || to < 0 || from === to) return;
         const [moved] = sections.splice(from, 1);
         sections.splice(to, 0, moved);
         set({ sections });

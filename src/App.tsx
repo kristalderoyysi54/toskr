@@ -50,6 +50,7 @@ import { DraftInput } from "@/components/DraftInput";
 import { NoteCard } from "@/components/NoteCard";
 import { PermissionBanner } from "@/components/PermissionBanner";
 import { PreviewOverlay } from "@/components/PreviewOverlay";
+import { buildBackupPayload } from "@/lib/backup";
 import { UpdateDialog } from "@/components/UpdateDialog";
 import { SectionGroup } from "@/components/SectionGroup";
 import {
@@ -148,6 +149,8 @@ const DONE_FILTER = "__done__";
 interface PillManage {
   rename: (id: string, name: string) => void;
   move: (id: string, dir: -1 | 1) => void;
+  /** 横栏分组胶囊拖拽排序（笔记分组）。 */
+  reorder?: (activeId: string, overId: string) => void;
   remove: (id: string) => void;
   /** 不可删除的固定分组（收件箱/收集箱）。 */
   lockedId: string;
@@ -180,6 +183,11 @@ function GroupPill({
   onPick: () => void;
   manage?: PillManage;
 }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({
+      id: `pill:${item.id}`,
+      disabled: !manage?.reorder,
+    });
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(item.name);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -210,6 +218,17 @@ function GroupPill({
   }
   const trigger = () => (
     <button
+      ref={manage?.reorder ? setNodeRef : undefined}
+      {...(manage?.reorder ? attributes : {})}
+      {...(manage?.reorder ? listeners : {})}
+      style={
+        manage?.reorder
+          ? {
+              transform: CSS.Transform.toString(transform),
+              transition,
+            }
+          : undefined
+      }
       onClick={onPick}
       onDoubleClick={() => {
         if (manage) {
@@ -217,7 +236,11 @@ function GroupPill({
           setRenaming(true);
         }
       }}
-      className={pillCls(on)}
+      className={cn(
+        pillCls(on),
+        manage?.reorder && "cursor-grab touch-none active:cursor-grabbing",
+        isDragging && "z-10 opacity-70 elevation-2"
+      )}
     >
       <span
         className="size-2 shrink-0 rounded-full"
@@ -316,7 +339,11 @@ function GroupPills({
   /** 已完成数量（>0 时显示「已完成」胶囊，选中值为 DONE_FILTER）。 */
   doneCount?: number;
 }) {
-  return (
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+  const row = (
     <div
       className={
         bare
@@ -355,6 +382,28 @@ function GroupPills({
         </button>
       )}
     </div>
+  );
+
+  if (!manage?.reorder) return row;
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragEnd={({ active: dragged, over }) => {
+        if (!over || dragged.id === over.id) return;
+        manage.reorder?.(
+          String(dragged.id).replace(/^pill:/, ""),
+          String(over.id).replace(/^pill:/, "")
+        );
+      }}
+    >
+      <SortableContext
+        items={items.map((item) => `pill:${item.id}`)}
+        strategy={horizontalListSortingStrategy}
+      >
+        {row}
+      </SortableContext>
+    </DndContext>
   );
 }
 
@@ -432,6 +481,7 @@ function PageSlide({
   const active = offset === 0;
   return (
     <motion.div
+      aria-hidden={!active}
       initial={false}
       animate={
         active
@@ -850,9 +900,76 @@ export default function App() {
   // 文本详情窗的写回通道：编辑保存 / 发送都回到主面板执行
   // （主面板是唯一持久化写入方，详情窗只读展示 + 发事件）
   useEffect(() => {
+    const gcKey = "toskr:pending-image-gc:v1";
+    const pendingImageGc = new Set<string>();
+    const deletingImages = new Set<string>();
+    try {
+      const saved = JSON.parse(localStorage.getItem(gcKey) ?? "[]");
+      if (Array.isArray(saved)) {
+        saved.filter((file): file is string => typeof file === "string").forEach(
+          (file) => pendingImageGc.add(file)
+        );
+      }
+    } catch {
+      /* 损坏的临时清理队列忽略，不影响业务数据 */
+    }
+    const persistGc = () => {
+      try {
+        if (pendingImageGc.size) {
+          localStorage.setItem(gcKey, JSON.stringify([...pendingImageGc]));
+        } else {
+          localStorage.removeItem(gcKey);
+        }
+      } catch {
+        /* WebView 存储不可用时退化为本次运行内清理 */
+      }
+    };
+    let hydrated = useNotesStore.persist.hasHydrated();
+    const removeUnreferencedImages = (files: string[]) => {
+      files.forEach((file) => pendingImageGc.add(file));
+      persistGc();
+      if (!hydrated || !pendingImageGc.size) return;
+      const state = useNotesStore.getState();
+      const used = new Set(
+        [...state.notes, ...state.undoStack.flatMap((entry) => entry.notes)].flatMap(
+          noteImages
+        )
+      );
+      [...pendingImageGc]
+        .filter((file) => !used.has(file) && !deletingImages.has(file))
+        .forEach((file) => {
+          deletingImages.add(file);
+          void api
+            .removeImage(file)
+            .then(() => pendingImageGc.delete(file))
+            .catch(() => {})
+            .finally(() => {
+              deletingImages.delete(file);
+              persistGc();
+            });
+        });
+    };
+    if (hydrated) removeUnreferencedImages([]);
+    const stopHydrationSweep = useNotesStore.persist.onFinishHydration(() => {
+      hydrated = true;
+      removeUnreferencedImages([]);
+    });
+    const stopGcWatch = useNotesStore.subscribe((state, previous) => {
+      if (state.notes !== previous.notes || state.undoStack !== previous.undoStack) {
+        removeUnreferencedImages([]);
+      }
+    });
     const subs = [
-      listen<{ id: string; text: string }>("toskr://note-edit", (e) => {
-        useNotesStore.getState().updateNoteText(e.payload.id, e.payload.text);
+      listen<{
+        id: string;
+        text: string;
+        images?: string[];
+        discardedImages?: string[];
+      }>("toskr://note-edit", (e) => {
+        useNotesStore
+          .getState()
+          .updateNoteText(e.payload.id, e.payload.text, e.payload.images);
+        removeUnreferencedImages(e.payload.discardedImages ?? []);
         void enrichLinkMeta(e.payload.id);
         tip("ok", "已保存");
       }),
@@ -866,8 +983,15 @@ export default function App() {
           .removeNoteImage(e.payload.id, e.payload.file);
         undoableTip(noteDeleted ? "已删除 1 条" : "已移除图片");
       }),
+      // 详情编辑取消时仅删本次新增、且没有被任意卡片引用的图片；剪贴板
+      // 内容哈希可能命中已有文件，不能由详情窗直接删盘。
+      listen<{ files: string[] }>("toskr://note-image-discard", (e) => {
+        removeUnreferencedImages(e.payload.files);
+      }),
     ];
     return () => {
+      stopHydrationSweep();
+      stopGcWatch();
       subs.forEach((p) => p.then((fn) => fn()));
     };
   }, []);
@@ -1003,10 +1127,9 @@ export default function App() {
         filters: [{ name: "JSON", extensions: ["json"] }],
       });
       if (!path) return;
-      const { sections: secs, notes: ns, tasks: ts } = useNotesStore.getState();
       await api.exportFile(
         path,
-        JSON.stringify({ sections: secs, notes: ns, tasks: ts }, null, 2)
+        JSON.stringify(buildBackupPayload(useNotesStore.getState()), null, 2)
       );
       tip("ok", "已导出备份");
     } catch (e) {
@@ -1462,6 +1585,7 @@ export default function App() {
     if (!over) return;
     const overId = String(over.id);
     const activeId = String(active.id);
+    if (activeId.startsWith("sec:")) return;
     const state = useNotesStore.getState();
     const activeNote = state.notes.find((n) => n.id === activeId);
     if (!activeNote) return;
@@ -1496,7 +1620,18 @@ export default function App() {
     clearDragExpand();
     const { active, over } = event;
     if (!over) return;
+    const activeId = String(active.id);
     const overId = String(over.id);
+    if (activeId.startsWith("sec:")) {
+      const state = useNotesStore.getState();
+      const targetSectionId = overId.startsWith("sec:")
+        ? overId.slice(4)
+        : (state.notes.find((note) => note.id === overId)?.sectionId ?? null);
+      if (targetSectionId) {
+        state.reorderSections(activeId.slice(4), targetSectionId);
+      }
+      return;
+    }
     if (overId.startsWith("sec:")) return;
     if (active.id !== over.id) {
       useNotesStore.getState().reorderNotes(String(active.id), overId);
@@ -1791,6 +1926,10 @@ export default function App() {
                               useNotesStore.getState().renameSection(id, n),
                             move: (id, d) =>
                               useNotesStore.getState().moveSection(id, d),
+                            reorder: (activeId, overId) =>
+                              useNotesStore
+                                .getState()
+                                .reorderSections(activeId, overId),
                             remove: (id) => {
                               if (noteGroupFilter === id) setNoteGroupFilter(null);
                               useNotesStore.getState().deleteSection(id);
@@ -1944,7 +2083,7 @@ export default function App() {
                               : PanelRight;
                       const label = settings.rightSidebar
                         ? `停靠：${SIDEBAR_EDGE_LABEL[settings.sidebarEdge]} · 点击调整边栏与贴边行为`
-                        : "边栏与贴边行为（四缘边栏 / 贴边隐藏 / 伴随磁吸）";
+                        : "边栏与贴边行为（靠右 / 靠下 / 贴边隐藏 / 伴随磁吸）";
                       return (
                         <Tipped label={label}>
                           <IconButton
@@ -2311,15 +2450,20 @@ export default function App() {
                     onDragCancel={clearDragExpand}
                   >
                     <div className="pb-2 pt-1">
-                      {grouped.map(({ section, active, done }) => (
-                        <SectionGroup
-                          key={section.id}
-                          section={section}
-                          activeNotes={active}
-                          doneNotes={done}
-                          query={q}
-                        />
-                      ))}
+                      <SortableContext
+                        items={grouped.map(({ section }) => `sec:${section.id}`)}
+                        strategy={verticalListSortingStrategy}
+                      >
+                        {grouped.map(({ section, active, done }) => (
+                          <SectionGroup
+                            key={section.id}
+                            section={section}
+                            activeNotes={active}
+                            doneNotes={done}
+                            query={q}
+                          />
+                        ))}
+                      </SortableContext>
                       {!q && (
                         <button
                           onClick={() => useNotesStore.getState().addSection()}
@@ -2529,4 +2673,3 @@ function PageTab({
     </button>
   );
 }
-

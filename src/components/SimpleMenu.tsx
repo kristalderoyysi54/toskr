@@ -27,10 +27,10 @@ export function SimpleMenu({
   className?: string;
 }) {
   const [open, setOpenRaw] = useState(false);
-  // 出场动画期间保持挂载（同 DuePopover 的 lingering 先例）：
-  // data-state 翻 closed → tw-animate 播出场 → 120ms 后真正卸载
+  // 出场动画期间保持挂载：data-state 翻 closed → tw-animate 播出场，
+  // animationend 当帧卸载；计时器只兜底系统禁动画等极端环境。
   const [rendered, setRendered] = useState(false);
-  // 出场卸载计时器必须可取消：关→120ms 内再开时，若旧计时器仍在飞行，
+  // 出场卸载计时器必须可取消：关闭后短时间内再开时，若旧计时器仍在飞行，
   // 会把「已经重新打开」的菜单直接卸载——open=true 却无渲染，状态与画面
   // 脱节（外点监听还挂着），表现为「点图标闪一下菜单就没了」。
   const lingerTimer = useRef(0);
@@ -38,9 +38,16 @@ export function SimpleMenu({
     setOpenRaw(v);
     window.clearTimeout(lingerTimer.current);
     if (v) setRendered(true);
-    else lingerTimer.current = window.setTimeout(() => setRendered(false), 120);
+    else lingerTimer.current = window.setTimeout(() => setRendered(false), 160);
   };
   const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(
+    () => () => {
+      window.clearTimeout(lingerTimer.current);
+    },
+    []
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -77,6 +84,13 @@ export function SimpleMenu({
       {rendered && (
         <div
           data-state={open ? "open" : "closed"}
+          // 兜底计时器触发前也停在透明末帧，杜绝动画结束后闪回 opacity:1。
+          style={!open ? { animationFillMode: "forwards" } : undefined}
+          onAnimationEnd={(event) => {
+            if (event.target !== event.currentTarget || open) return;
+            window.clearTimeout(lingerTimer.current);
+            setRendered(false);
+          }}
           className={cn(
             "absolute z-50 min-w-40 rounded-lg p-1",
             floatingSurface(2),
