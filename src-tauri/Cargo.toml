@@ -20,6 +20,9 @@ tauri-plugin-autostart = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
+libc = "0.2"
+zip = { version = "4.6.1", default-features = false }
 enigo = "0.6"
 arboard = "3"
 base64 = "0.22"
@@ -34,13 +37,18 @@ window-vibrancy = "0.6"
 core-foundation = "0.10"
 core-graphics = "0.24"
 objc2 = "0.6"
+block2 = "0.6"
 objc2-foundation = { version = "0.3", features = [
   "NSString",
   "NSData",
   "NSDictionary",
+  "NSNotification",
+  "NSOperation",
   "NSEnumerator",
   "NSArray",
   "NSError",
+  "NSDate",
+  "block2",
 ] }
 objc2-app-kit = { version = "0.3", features = [
   "NSWorkspace",
@@ -52,10 +60,14 @@ objc2-app-kit = { version = "0.3", features = [
   "NSImageRep",
   "NSBitmapImageRep",
   "NSPasteboard",
+  "NSPasteboardItem",
   "NSAnimation",
   "NSAnimationContext",
   "NSScreen",
 ] }
+
+[dev-dependencies]
+tempfile = "3"
 
 [profile.release]
 codegen-units = 1

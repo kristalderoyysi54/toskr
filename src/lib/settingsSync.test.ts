@@ -39,7 +39,15 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 import { applySettingsPatch } from "./settingsSync";
 import { defaultSettings, useNotesStore } from "../store/notesStore";
+import { useDataOperationStore } from "../store/dataOperationStore";
 import { useUIStore } from "../store/uiStore";
+import {
+  applyTargetEvent,
+  resetTargetState,
+  setTargetProfileOverride,
+  useTargetStore,
+} from "../store/targetStore";
+import type { TargetSnapshot } from "./tauri";
 
 function seed(overrides: Partial<ReturnType<typeof defaultSettings>>) {
   useNotesStore.setState({ settings: { ...defaultSettings(), ...overrides } });
@@ -49,6 +57,26 @@ describe("applySettingsPatch 伴随停靠 ⇄ 边栏互斥", () => {
   beforeEach(() => {
     mocks.fns.clear();
     mocks.tip.mockClear();
+    useDataOperationStore.setState({ locked: false, phase: "idle", message: "" });
+    resetTargetState();
+  });
+
+  it("数据事务锁定期间拒绝设置写入和 Rust 副作用", () => {
+    seed({ panelTopmost: false });
+    useDataOperationStore.setState({
+      locked: true,
+      phase: "rehydrate",
+      message: "正在重新水合",
+    });
+
+    applySettingsPatch({ panelTopmost: true });
+
+    expect(useNotesStore.getState().settings.panelTopmost).toBe(false);
+    expect(mocks.fns.get("setPanelTopmost")).toBeUndefined();
+    expect(mocks.tip).toHaveBeenCalledWith(
+      "warn",
+      "数据操作进行中，设置暂时只读"
+    );
   });
 
   it("边栏开着时开启伴随停靠 → 自动退出边栏并清手动拖动位", () => {
@@ -130,6 +158,52 @@ describe("applySettingsPatch 伴随停靠 ⇄ 边栏互斥", () => {
     const d = defaultSettings();
     expect(d.clipHistory).toBe(true);
     expect(d.clipRetentionDays).toBe(30);
+  });
+
+  it("Profile/Prompt 分组 patch 走主窗口持久化，并修复已删除的临时 Profile", () => {
+    const settings = defaultSettings();
+    seed({
+      targetProfiles: [
+        ...settings.targetProfiles,
+        {
+          id: "temporary",
+          name: "临时",
+          bundleIds: ["com.openai.codex"],
+          promptGroupId: settings.promptGroups[0].id,
+          defaultFormat: "plain",
+          enterPolicy: "never",
+          privacyPolicy: "requireRedaction",
+          keepPanel: false,
+        },
+      ],
+    });
+    applyTargetEvent({
+      token: "target",
+      pid: 42,
+      bundleId: "com.openai.codex",
+      appName: "Codex",
+      launchedAtMs: 1,
+      capturedAtMs: 2,
+      revision: 1,
+      ready: true,
+      reason: null,
+      windowId: null,
+    } satisfies TargetSnapshot);
+    setTargetProfileOverride("temporary");
+
+    applySettingsPatch({
+      targetProfiles: settings.targetProfiles,
+      promptGroups: settings.promptGroups,
+    });
+
+    expect(useNotesStore.getState().settings.targetProfiles).toEqual(
+      settings.targetProfiles
+    );
+    expect(useTargetStore.getState().profileOverrideId).toBeNull();
+    expect(mocks.tip).toHaveBeenCalledWith(
+      "info",
+      "本次 Profile 已被删除，已恢复自动匹配"
+    );
   });
 
   it("模式开启默认联动：贴边隐藏 → 常显示图钉 + 置顶；磁吸 → 仅常显示图钉", () => {

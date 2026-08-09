@@ -1,15 +1,30 @@
 import { useEffect, useMemo, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { Check, ChevronUp, FolderInput, X } from "lucide-react";
 
 import { SimpleMenu, SimpleMenuItem } from "@/components/SimpleMenu";
 import { PillInput } from "@/components/ui/pill-input";
 import { enrichLinkMeta } from "@/lib/actions";
+import {
+  beginDataGenerationLease,
+  DATA_CONTEXT_INVALIDATED_EVENT,
+  matchesDataGeneration,
+} from "@/lib/dataGeneration";
 import { useNoteThumb } from "@/lib/media";
 import { api } from "@/lib/tauri";
 import { tip } from "@/lib/tip";
 import { CLIPBOARD_ID, INBOX_ID, useNotesStore } from "@/store/notesStore";
+import {
+  isDataOperationLocked,
+  useDataOperationStore,
+} from "@/store/dataOperationStore";
 
-type PendingImage = { file: string; width: number; height: number };
+type PendingImage = {
+  file: string;
+  width: number;
+  height: number;
+  dataGeneration: number;
+};
 
 /** 暂存图片缩略 chip：悬停/聚焦出移除钮。 */
 function PendingThumb({
@@ -54,6 +69,7 @@ function PendingThumb({
 export function DraftInput() {
   const [value, setValue] = useState("");
   const [pending, setPending] = useState<PendingImage[]>([]);
+  const dataLocked = useDataOperationStore((state) => state.locked);
   const sections = useNotesStore((s) => s.sections);
   const targetSections = useMemo(
     () => sections.filter((section) => section.id !== CLIPBOARD_ID),
@@ -73,14 +89,28 @@ export function DraftInput() {
     }
   }, [sectionId, targetSections]);
 
+  useEffect(() => {
+    if (dataLocked) setPending([]);
+  }, [dataLocked]);
+
+  useEffect(() => {
+    const invalidated = listen(DATA_CONTEXT_INVALIDATED_EVENT, () => setPending([]));
+    return () => {
+      invalidated.then((stop) => stop());
+    };
+  }, []);
+
   const submit = () => {
     const text = value.trim();
-    if (!text && pending.length === 0) return;
-    const first = pending[0];
+    const validPending = pending.filter((image) =>
+      matchesDataGeneration(image.dataGeneration)
+    );
+    if (!text && validPending.length === 0) return;
+    const first = validPending[0];
     const { result, id } = useNotesStore.getState().addNote(
       text ||
-        (pending.length > 1
-          ? `图片 ${pending.length} 张`
+        (validPending.length > 1
+          ? `图片 ${validPending.length} 张`
           : `图片 ${first!.width}×${first!.height}`),
       first
         ? {
@@ -90,7 +120,7 @@ export function DraftInput() {
             imageFile: first.file,
             imageW: first.width,
             imageH: first.height,
-            attachments: pending.slice(1).map((p) => p.file),
+            attachments: validPending.slice(1).map((p) => p.file),
           }
         : { sectionId }
     );
@@ -105,15 +135,23 @@ export function DraftInput() {
 
   /** 粘贴图片：Rust 直读剪贴板入库（哈希去重），暂存为 chip 不立即成卡。 */
   const pasteImage = async () => {
+    if (isDataOperationLocked()) return;
+    const lease = beginDataGenerationLease();
     try {
       const img = await api.pasteImageFromClipboard();
+      if (!matchesDataGeneration(lease.generation)) return;
       if (!img) {
         tip("info", "剪贴板里没有可用图片");
         return;
       }
-      setPending((p) => (p.some((x) => x.file === img.file) ? p : [...p, img]));
+      const pendingImage = { ...img, dataGeneration: lease.generation };
+      setPending((p) =>
+        p.some((x) => x.file === img.file) ? p : [...p, pendingImage]
+      );
     } catch (e) {
       tip("warn", `粘贴图片失败：${e}`);
+    } finally {
+      lease.release();
     }
   };
 

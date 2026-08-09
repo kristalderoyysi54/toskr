@@ -16,6 +16,13 @@ function fetchIcon(bundleId: string): Promise<AppIconInfo | null> {
   if (!hit) {
     hit = api.appIcon(bundleId).catch(() => null);
     cache.set(bundleId, hit);
+    // 只长期缓存成功结果：null 缓存住会让该应用的图标整个会话都停在
+    // 兜底态；下次挂载/渲染重试即可自愈
+    void hit.then((loaded) => {
+      if (loaded === null && cache.get(bundleId) === hit) {
+        cache.delete(bundleId);
+      }
+    });
   }
   return hit;
 }

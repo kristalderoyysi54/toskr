@@ -44,7 +44,10 @@ impl Default for CompanionConfig {
             // 水合下发」之间开一个窗口期，期间磁吸按错误的默认值接管，
             // 把 docked 置位、贴边隐藏被静默否决。
             enabled: false,
-            apps: DEFAULT_COMPANION_APPS.iter().map(|s| s.to_string()).collect(),
+            apps: DEFAULT_COMPANION_APPS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             side: 0,
         }
     }
@@ -88,8 +91,12 @@ pub struct HudRuntime {
 
 /// 全局共享状态。
 pub struct AppState {
-    /// 面板弹出/触发前记录的前台应用 PID，用于「发送到对话」时归还焦点。
+    /// 面板弹出/触发前记录的前台应用 PID，仅供窗口布局、伴随与焦点归还。
     pub prev_app_pid: Mutex<Option<i32>>,
+    /// 发送专用的不可变目标快照；窗口布局仍使用 `prev_app_pid`，投递不再直接读取它。
+    pub delivery_target: Mutex<crate::target::TargetState>,
+    /// 原生 pasteboard 事务互斥：发送与捕获回退的快照/写入/恢复不可并发交错。
+    pub pasteboard_transaction_in_flight: AtomicBool,
     /// HUD 显示代数计数：防止早到的隐藏/轮询任务干扰新 HUD。
     pub hud_generation: AtomicU64,
     /// CGEventTap 是否安装成功（未授权辅助功能时会失败）。
@@ -97,6 +104,8 @@ pub struct AppState {
     /// tap 是否真正收到过键盘事件（Sequoia：创建成功≠事件投递，
     /// 输入监控权限缺失时事件被系统静默扣留）。
     pub key_events_seen: AtomicBool,
+    /// 非 Toskr 合成的键盘/鼠标按下事件代数；捕获回退据此拒绝用户输入漂移。
+    pub physical_input_generation: AtomicU64,
 
     // ===== v2 =====
     /// 触发修饰键（MOD_*）。
@@ -130,9 +139,6 @@ pub struct AppState {
     pub hud: Mutex<HudRuntime>,
     /// 应用图标缓存：bundle id → (data URL, 主色)。
     pub icon_cache: Mutex<HashMap<String, Option<(String, String)>>>,
-    /// 上次捕获尝试结束时的剪贴板文本快照（「新鲜度兜底」判定用：
-    /// 流式终端选区被新输出冲掉时，copy-on-select 已入剪贴板的内容仍可捕获）。
-    pub last_clipboard_text: Mutex<Option<String>>,
     /// 剪贴板历史收集开关（设置项下发；watcher 线程常驻按此门控）。
     pub clip_watch: AtomicBool,
     /// 应用自身最近一次写剪贴板后的 changeCount（watcher 忽略该次变更）。
@@ -191,9 +197,12 @@ impl Default for AppState {
     fn default() -> Self {
         Self {
             prev_app_pid: Mutex::new(None),
+            delivery_target: Mutex::new(crate::target::TargetState::default()),
+            pasteboard_transaction_in_flight: AtomicBool::new(false),
             hud_generation: AtomicU64::new(0),
             tap_installed: AtomicBool::new(false),
             key_events_seen: AtomicBool::new(false),
+            physical_input_generation: AtomicU64::new(0),
             hotkey_modifier: AtomicU8::new(MOD_SHIFT),
             hotkey_gap_ms: AtomicU16::new(400),
             stealth: AtomicBool::new(false),
@@ -220,7 +229,6 @@ impl Default for AppState {
             companion_gen: AtomicU64::new(0),
             hud: Mutex::new(HudRuntime::default()),
             icon_cache: Mutex::new(HashMap::new()),
-            last_clipboard_text: Mutex::new(None),
             // 与前端 defaultSettings.clipHistory 一致（首装默认开）：两边不一致
             // 会在「启动 → 前端水合下发」之间漏收/多收一段剪贴板内容
             clip_watch: AtomicBool::new(true),

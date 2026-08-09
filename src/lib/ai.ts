@@ -1,4 +1,9 @@
 import { undoableTip } from "@/lib/actions";
+import {
+  beginDataGenerationLease,
+  matchesDataGeneration,
+  type DataGenerationLease,
+} from "@/lib/dataGeneration";
 import { tip } from "@/lib/tip";
 import { api } from "@/lib/tauri";
 import {
@@ -6,6 +11,7 @@ import {
   type Settings,
   type TaskPriority,
 } from "@/store/notesStore";
+import { isDataOperationLocked } from "@/store/dataOperationStore";
 
 /**
  * AI 智能能力（OpenAI 兼容单配置）：
@@ -365,6 +371,14 @@ ${ONLY_JSON}`;
 
 // ===== 业务功能 =====
 
+function beginAiLease(): DataGenerationLease | null {
+  if (isDataOperationLocked()) {
+    tip("warn", "数据只读期间不能启动 AI 操作");
+    return null;
+  }
+  return beginDataGenerationLease();
+}
+
 /**
  * ✨ 自然语言建任务。任何失败（未配置/网络/解析）都回退为普通文本任务入库
  * ——回车的语义是「存下这句话」，AI 只是增强，用户输入绝不能凭空消失。
@@ -372,10 +386,13 @@ ${ONLY_JSON}`;
 export async function parseTaskInput(rawText: string): Promise<void> {
   const text = rawText.trim();
   if (!text) return;
+  const lease = beginAiLease();
+  if (!lease) return;
   try {
     const raw = await callAi(parseTaskSystem(), text, 600);
     const r = normalizeParsedTask(parseAiRaw(raw), text, Date.now());
     if (!r) throw new AiError("parse", "AI 返回内容缺少必要字段");
+    if (!matchesDataGeneration(lease.generation)) return;
     const store = useNotesStore.getState();
     const { result, id } = store.addTask(truncateChars(r.title, 30) || text);
     if (result !== "added" || !id) return;
@@ -386,8 +403,11 @@ export async function parseTaskInput(rawText: string): Promise<void> {
     }
     tip("ok", `已创建任务「${truncateChars(r.title, 12)}」`);
   } catch (e) {
+    if (!matchesDataGeneration(lease.generation)) return;
     useNotesStore.getState().addTask(text);
     tip("warn", `${aiErrorTip(e)} · 已按原文创建任务`);
+  } finally {
+    lease.release();
   }
 }
 
@@ -395,6 +415,11 @@ export async function parseTaskInput(rawText: string): Promise<void> {
 export async function splitSubtasks(taskId: string): Promise<void> {
   const key = `split:${taskId}`;
   if (!withLock(key)) return;
+  const lease = beginAiLease();
+  if (!lease) {
+    busyKeys.delete(key);
+    return;
+  }
   try {
     const task = useNotesStore.getState().tasks.find((t) => t.id === taskId);
     if (!task) return;
@@ -410,7 +435,12 @@ export async function splitSubtasks(taskId: string): Promise<void> {
     const r = await callAiJson(SPLIT_SYSTEM, user, isSplitResult, 600);
     const items = r.items.map((t) => t.trim()).filter(Boolean).slice(0, 8);
     const store = useNotesStore.getState();
-    if (!items.length || !store.tasks.some((t) => t.id === taskId)) {
+    const current = store.tasks.find((candidate) => candidate.id === taskId);
+    if (
+      !matchesDataGeneration(lease.generation) ||
+      !items.length ||
+      current !== task
+    ) {
       tip("warn", "AI 未返回可用的检查项");
       return;
     }
@@ -420,6 +450,7 @@ export async function splitSubtasks(taskId: string): Promise<void> {
   } catch (e) {
     tip("warn", aiErrorTip(e));
   } finally {
+    lease.release();
     busyKeys.delete(key);
   }
 }
@@ -428,6 +459,11 @@ export async function splitSubtasks(taskId: string): Promise<void> {
 export async function noteToTaskSmart(noteId: string): Promise<void> {
   const key = `to-task:${noteId}`;
   if (!withLock(key)) return;
+  const lease = beginAiLease();
+  if (!lease) {
+    busyKeys.delete(key);
+    return;
+  }
   try {
     const note = useNotesStore.getState().notes.find((n) => n.id === noteId);
     if (!note || note.kind === "image") return;
@@ -443,7 +479,10 @@ export async function noteToTaskSmart(noteId: string): Promise<void> {
       600
     );
     // AI 思考期间笔记可能已被删除/变更：以当下状态为准
-    if (!useNotesStore.getState().notes.some((n) => n.id === noteId)) {
+    if (
+      !matchesDataGeneration(lease.generation) ||
+      useNotesStore.getState().notes.find((candidate) => candidate.id === noteId) !== note
+    ) {
       tip("warn", "笔记已不存在，转换取消");
       return;
     }
@@ -455,6 +494,7 @@ export async function noteToTaskSmart(noteId: string): Promise<void> {
   } catch (e) {
     tip("warn", aiErrorTip(e));
   } finally {
+    lease.release();
     busyKeys.delete(key);
   }
 }
@@ -463,6 +503,11 @@ export async function noteToTaskSmart(noteId: string): Promise<void> {
 export async function suggestTitle(noteId: string): Promise<void> {
   const key = `title:${noteId}`;
   if (!withLock(key)) return;
+  const lease = beginAiLease();
+  if (!lease) {
+    busyKeys.delete(key);
+    return;
+  }
   try {
     const note = useNotesStore.getState().notes.find((n) => n.id === noteId);
     if (!note || note.kind === "image") return;
@@ -472,13 +517,18 @@ export async function suggestTitle(noteId: string): Promise<void> {
     }
     tip("info", "AI 正在起标题…");
     const r = await callAiJson(TITLE_SYSTEM, note.text, isTitleResult, 100);
-    if (!useNotesStore.getState().notes.some((n) => n.id === noteId)) return;
+    if (
+      !matchesDataGeneration(lease.generation) ||
+      useNotesStore.getState().notes.find((candidate) => candidate.id === noteId) !== note
+    )
+      return;
     const title = truncateChars(r.title, 12);
     useNotesStore.getState().updateNoteTitle(noteId, title);
     tip("ok", `已命名：${title}`);
   } catch (e) {
     tip("warn", aiErrorTip(e));
   } finally {
+    lease.release();
     busyKeys.delete(key);
   }
 }

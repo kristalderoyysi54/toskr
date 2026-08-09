@@ -1,5 +1,6 @@
 import { emitTo } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { ask } from "@tauri-apps/plugin-dialog";
 
 import {
   applyPromptTemplate,
@@ -8,8 +9,19 @@ import {
   imageCaption,
   wrapAsCodeBlock,
 } from "@/lib/format";
-import { api } from "@/lib/tauri";
+import {
+  beginDataGenerationLease,
+  currentDataGeneration,
+  matchesDataGeneration,
+} from "@/lib/dataGeneration";
+import {
+  api,
+  isSendDeliveryResult,
+  type SendDeliveryResult,
+} from "@/lib/tauri";
 import { setPendingUndo, tip } from "@/lib/tip";
+import { currentTargetProfileResolution } from "@/lib/currentTargetProfile";
+import type { TargetProfileResolution } from "@/lib/targetProfiles";
 import {
   doneIdsAfterSend,
   noteImages,
@@ -18,6 +30,15 @@ import {
   type Note,
 } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
+import { isDataOperationLocked } from "@/store/dataOperationStore";
+import {
+  clearTargetProfileOverride,
+  currentTargetBlockMessage,
+  refreshTarget,
+  sameTargetIdentity,
+  targetSendDisabled,
+  useTargetStore,
+} from "@/store/targetStore";
 
 /** 可撤销的操作确认（HUD 气泡悬停出「撤销」；撤销 = 弹出栈顶快照恢复）。 */
 export function undoableTip(message: string) {
@@ -28,8 +49,27 @@ export function undoableTip(message: string) {
   tip("ok", message, true);
 }
 
+/**
+ * 发送/保存被前置闸门拦截时的可见反馈：请求可能来自详情窗，而主面板正处于
+ * 贴边隐藏或关闭状态——HUD 落在不可见窗口上等于毫无反馈。先把面板带回可见
+ * 再警告，并落一条无正文的诊断脚注供事后排查。
+ */
+export function warnWithPanel(message: string, diagCode?: string) {
+  useUIStore.getState().setOpen(true);
+  try {
+    void Promise.resolve(api.showPanel()).catch(() => {});
+    void Promise.resolve(
+      api.diagNote(`前端阻断: ${diagCode ?? message}`)
+    ).catch(() => {});
+  } catch {
+    /* Tauri 环境外 */
+  }
+  tip("warn", message);
+}
+
 /** 文本详情窗的内容载荷（主面板 → textpreview 窗口）。 */
 export type NotePreviewPayload = {
+  dataGeneration: number;
   id: string;
   text: string;
   kind: string;
@@ -47,6 +87,137 @@ export type NotePreviewPayload = {
 /** 详情窗最近展示的卡 id（Space 开合判定用；窗口被 Esc/点 X 关掉也无碍——
  *  toggle 前会实测窗口可见性）。 */
 let lastDetailId: string | null = null;
+let deliverySequence = 0;
+let deliveryPending = false;
+
+function sameProfilePolicy(
+  left: TargetProfileResolution,
+  right: TargetProfileResolution
+): boolean {
+  return left.source === right.source &&
+    left.promptGroup.id === right.promptGroup.id &&
+    left.profile.id === right.profile.id &&
+    left.profile.defaultFormat === right.profile.defaultFormat &&
+    left.profile.enterPolicy === right.profile.enterPolicy &&
+    left.profile.privacyPolicy === right.profile.privacyPolicy &&
+    left.profile.keepPanel === right.profile.keepPanel;
+}
+
+function nextDeliveryId() {
+  deliverySequence = (deliverySequence + 1) % Number.MAX_SAFE_INTEGER;
+  return `delivery-${Date.now().toString(36)}-${deliverySequence.toString(36)}`;
+}
+
+async function restorePanelAfterDelivery(keepPanel: boolean) {
+  useUIStore.getState().setOpen(true);
+  if (!keepPanel) {
+    try {
+      await api.showPanel();
+    } catch (error) {
+      tip("warn", `发送已中止，但面板恢复失败：${error}`);
+    }
+  }
+}
+
+/** 所有笔记/任务/单条/批量/快捷发送共用的唯一前端投递入口。 */
+async function deliver(
+  text: string,
+  imageFiles: string[],
+  profileResolution: TargetProfileResolution
+): Promise<SendDeliveryResult | null> {
+  if (deliveryPending) {
+    warnWithPanel("已有发送正在进行，请稍候", "delivery-pending");
+    return null;
+  }
+  if (isDataOperationLocked()) {
+    warnWithPanel("数据只读期间不能发送", "data-locked");
+    return null;
+  }
+  if (useTargetStore.getState().profileOverrideNeedsConfirmation) {
+    warnWithPanel("目标已变化，请在面板确认 Profile 后重试", "override-needs-confirmation");
+    return null;
+  }
+  if (targetSendDisabled()) {
+    warnWithPanel(currentTargetBlockMessage(), "target-not-ready");
+    return null;
+  }
+  const visibleTarget = useTargetStore.getState().snapshot;
+  const lease = beginDataGenerationLease();
+  deliveryPending = true;
+  const keepPanel =
+    useUIStore.getState().pinned || profileResolution.profile.keepPanel;
+  try {
+    let pressEnter = false;
+    if (profileResolution.profile.enterPolicy === "confirm") {
+      const confirmed = await ask(
+        "当前 Profile 要求发送前确认：粘贴后立即按回车吗？",
+        { title: "确认自动回车", kind: "warning" }
+      );
+      if (!confirmed) {
+        tip("info", "已取消发送，内容和选择保持不变");
+        return null;
+      }
+      pressEnter = true;
+    } else {
+      pressEnter = profileResolution.profile.enterPolicy === "allow";
+    }
+    // UI ready 只允许进入准备阶段；发送紧前仍刷新 token，随后由 Native 在每个
+    // paste/Enter gate 再验证。事件抢占本次刷新时 fail-closed，不借用新目标续发。
+    const target = await refreshTarget();
+    if (!target?.ready || targetSendDisabled()) {
+      const message = target
+        ? currentTargetBlockMessage()
+        : useTargetStore.getState().status === "ready"
+          ? "投递目标刚刚发生变化，请重试发送"
+          : currentTargetBlockMessage();
+      warnWithPanel(message, "target-refresh-blocked");
+      return null;
+    }
+    if (!sameTargetIdentity(visibleTarget, target)) {
+      warnWithPanel("投递目标已变化，请确认后重试发送", "target-identity-changed");
+      return null;
+    }
+    // 确认框/刷新均会让出事件循环。期间即使 A→B→A 回到同一进程，临时
+    // Profile 的确认闸仍必须保持；Settings 改过策略也不能沿用点击时的旧 Enter。
+    if (useTargetStore.getState().profileOverrideNeedsConfirmation) {
+      warnWithPanel("目标已变化，请在面板确认 Profile 后重试", "override-needs-confirmation");
+      return null;
+    }
+    if (!sameProfilePolicy(profileResolution, currentTargetProfileResolution())) {
+      warnWithPanel("Profile 设置已变化，请确认后重试发送", "profile-policy-changed");
+      return null;
+    }
+    const deliveryId = nextDeliveryId();
+    if (!keepPanel) useUIStore.getState().setOpen(false);
+    const result = await api.sendDelivery({
+      targetToken: target.token,
+      text,
+      imageFiles,
+      pressEnter,
+      keepPanel,
+      deliveryId,
+    });
+    if (!isSendDeliveryResult(result) || result.deliveryId !== deliveryId) {
+      throw new Error("原生发送回执无效");
+    }
+    if (
+      result.status === "sent" &&
+      profileResolution.source === "temporary" &&
+      useTargetStore.getState().profileOverrideId === profileResolution.profile.id
+    ) {
+      clearTargetProfileOverride();
+    }
+    if (result.status !== "sent") await restorePanelAfterDelivery(keepPanel);
+    return result;
+  } catch (error) {
+    await restorePanelAfterDelivery(keepPanel);
+    tip("warn", `发送失败：${error}`);
+    return null;
+  } finally {
+    deliveryPending = false;
+    lease.release();
+  }
+}
 
 /**
  * Space 快速查看语义（Quick Look 心智）：同一张卡已在详情窗展示中 →
@@ -79,6 +250,7 @@ export function openNoteDetail(id: string, edit = false) {
   lastDetailId = note.id;
   void api.showTextPreview();
   const payload: NotePreviewPayload = {
+    dataGeneration: currentDataGeneration(),
     id: note.id,
     text: note.text,
     kind: note.kind ?? "text",
@@ -95,13 +267,14 @@ export function openNoteDetail(id: string, edit = false) {
 
 /** 链接卡片补抓网页标题/图标（幂等：已有标题跳过；离线/超时静默保持 URL 展示）。 */
 export async function enrichLinkMeta(id: string) {
+  const dataGeneration = currentDataGeneration();
   const note = useNotesStore.getState().notes.find((n) => n.id === id);
   if (!note || note.kind !== "link" || !note.url || note.linkTitle) return;
   try {
     const meta = await api.fetchLinkMeta(note.url);
     const cur = useNotesStore.getState().notes.find((n) => n.id === id);
     // 抓取期间卡片被删除或 URL 被改：丢弃过期结果
-    if (!cur || cur.url !== note.url) return;
+    if (!matchesDataGeneration(dataGeneration) || !cur || cur.url !== note.url) return;
     useNotesStore.getState().setLinkMeta(id, {
       title: meta.title ?? undefined,
       icon: meta.icon ?? undefined,
@@ -163,19 +336,13 @@ export async function sendTaskToChat(taskId: string) {
       "\n" + list.map((c) => `- [${c.done ? "x" : " "}] ${c.text}`).join("\n")
     );
   }
-  const keepPanel = useUIStore.getState().pinned;
-  if (!keepPanel) useUIStore.getState().setOpen(false);
-  try {
-    await api.sendToChat(
-      parts.join("\n"),
-      [],
-      useNotesStore.getState().settings.autoEnter,
-      keepPanel
-    );
-    // 失败警示由 Rust 统一发出（单条合并文案），此处不再补发避免单槽互相覆盖
-  } catch (e) {
-    tip("warn", `发送失败：${e}`);
-  }
+  const profile = currentTargetProfileResolution();
+  const text = parts.join("\n");
+  return deliver(
+    profile.profile.defaultFormat === "code" ? wrapAsCodeBlock(text) : text,
+    [],
+    profile
+  );
 }
 
 /** 合并勾选（带撤销）。 */
@@ -244,9 +411,10 @@ export function copyCheckedAsList() {
 export async function sendNotesToChat(
   ids: string[],
   prefix?: string,
-  opts?: { asCode?: boolean }
+  opts?: { asCode?: boolean; format?: "plain" | "code" }
 ) {
   const notesState = useNotesStore.getState();
+  const dataGeneration = currentDataGeneration();
   const picked = new Set(ids);
   const targets = notesState.notes.filter((n) => picked.has(n.id));
   if (!targets.length) return;
@@ -258,9 +426,11 @@ export async function sendNotesToChat(
     (n) => n.kind !== "image" || imageCaption(n).length > 0
   );
   const imageFiles = [...new Set(targets.flatMap(noteImages))];
+  const profile = currentTargetProfileResolution();
+  const format = opts?.format ?? (opts?.asCode ? "code" : profile.profile.defaultFormat);
 
   let body = textNotes.length ? buildSendText(textNotes.map((n) => n.text)) : "";
-  if (body && opts?.asCode) {
+  if (body && format === "code") {
     // 代码块发送：单条用其检测到的语言，多条统一无语言标记
     body = wrapAsCodeBlock(
       body,
@@ -268,36 +438,26 @@ export async function sendNotesToChat(
     );
   }
   const text = prefix ? applyPromptTemplate(prefix, body) : body;
-  // 钉住 = 常驻：发送后保留面板，只把焦点交回目标应用
-  const keepPanel = useUIStore.getState().pinned;
-  if (!keepPanel) {
-    // Rust 侧会直接 hide 窗口，这里同步收起状态、跳过退场动画与二次 hide。
-    useUIStore.getState().setOpen(false);
-  }
-  try {
-    const sent = await api.sendToChat(
-      text,
-      imageFiles,
-      notesState.settings.autoEnter,
-      keepPanel
-    );
-    if (sent) {
-      // 「常用」卡与「发送后保留」分组内的卡不标完成（长期复用内容）
-      const doneIds = doneIdsAfterSend(
-        useNotesStore.getState(),
-        targets.map((n) => n.id)
-      );
-      if (doneIds.length) useNotesStore.getState().setDone(doneIds, true);
-      useNotesStore.getState().clearChecked();
-      useNotesStore.getState().markOnboarding({ sent: true });
-    }
-  } catch (e) {
-    tip("warn", `发送失败：${e}`);
-  }
+  const result = await deliver(text, imageFiles, profile);
+  if (result?.status !== "sent") return result;
+  if (!matchesDataGeneration(dataGeneration)) return result;
+
+  // 「常用」卡与「发送后保留」分组内的卡不标完成（长期复用内容）
+  const doneIds = doneIdsAfterSend(
+    useNotesStore.getState(),
+    targets.map((n) => n.id)
+  );
+  if (doneIds.length) useNotesStore.getState().setDone(doneIds, true);
+  useNotesStore.getState().clearChecked();
+  useNotesStore.getState().markOnboarding({ sent: true });
+  return result;
 }
 
 /** 发送全部勾选项（可带 Prompt 前缀模板）。 */
-export function sendCheckedToChat(prefix?: string, opts?: { asCode?: boolean }) {
+export function sendCheckedToChat(
+  prefix?: string,
+  opts?: { asCode?: boolean; format?: "plain" | "code" }
+) {
   const state = useNotesStore.getState();
   return sendNotesToChat(
     orderedCheckedNotes(state).map((n) => n.id),

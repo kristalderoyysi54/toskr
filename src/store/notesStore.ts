@@ -5,7 +5,20 @@ import { detectCode } from "@/lib/code";
 import { detectLink } from "@/lib/link";
 import { imageCaption, mergeTexts } from "@/lib/format";
 import { normalizeNoteContent } from "@/lib/noteContent";
+import {
+  GENERAL_PROMPT_GROUP_ID,
+  SAFETY_PROFILE_ID,
+  TERMINAL_BUNDLE_IDS,
+  createDefaultPromptGroups,
+  createDefaultTargetProfiles,
+  repairTargetProfileConfiguration,
+  type PromptGroup,
+  type PromptSnippet,
+  type TargetProfile,
+} from "@/lib/targetProfiles";
 import { tauriStateStorage } from "./persistStorage";
+
+export type { PromptGroup, PromptSnippet, TargetProfile } from "@/lib/targetProfiles";
 
 export type NoteKind = "text" | "image" | "link";
 
@@ -14,6 +27,7 @@ export type PageId = "notes" | "clipboard" | "tasks";
 
 /** 页签默认顺序（剪贴最高频，居首）。 */
 export const DEFAULT_PAGE_ORDER: PageId[] = ["clipboard", "notes", "tasks"];
+export const STORE_VERSION = 9;
 
 /**
  * 归一化页签顺序：去重、剔除未知项、补齐缺失页（按默认序追加）。
@@ -145,12 +159,6 @@ export interface OnboardingState {
 
 export type ThemePref = "system" | "light" | "dark";
 
-export interface PromptSnippet {
-  id: string;
-  label: string;
-  text: string;
-}
-
 /** 到期快捷档配置：相对分钟 / 今天定点 / 明天定点 / 下个周几定点。 */
 export type DuePresetCfg =
   | { id: string; kind: "relative"; minutes: number }
@@ -172,14 +180,31 @@ export const DEFAULT_PROMPT_SNIPPETS: PromptSnippet[] = [
     id: "review",
     label: "代码审查",
     text: "请帮我 review 以下代码，指出问题与改进建议：\n\n{内容}",
+    groupId: GENERAL_PROMPT_GROUP_ID,
   },
-  { id: "translate", label: "翻译成中文", text: "请把以下内容翻译成中文：\n\n{内容}" },
-  { id: "summarize", label: "总结要点", text: "请总结以下内容的要点：\n\n{内容}" },
-  { id: "explain", label: "解释内容", text: "请解释以下内容：\n\n{内容}" },
+  {
+    id: "translate",
+    label: "翻译成中文",
+    text: "请把以下内容翻译成中文：\n\n{内容}",
+    groupId: GENERAL_PROMPT_GROUP_ID,
+  },
+  {
+    id: "summarize",
+    label: "总结要点",
+    text: "请总结以下内容的要点：\n\n{内容}",
+    groupId: GENERAL_PROMPT_GROUP_ID,
+  },
+  {
+    id: "explain",
+    label: "解释内容",
+    text: "请解释以下内容：\n\n{内容}",
+    groupId: GENERAL_PROMPT_GROUP_ID,
+  },
   {
     id: "optimize-prompt",
     label: "优化提示词",
     text: "请你不要执行接下来的任务。你现在的身份是世界顶级的提示工程专家，请仔细阅读我提供的提示词：\n\n{内容}\n\n并从清晰度、专业度、结构化、模型适应性四个维度进行批判性优化。请仅输出优化后的提示词内容，并用 ``` 包裹起来。",
+    groupId: GENERAL_PROMPT_GROUP_ID,
   },
 ];
 
@@ -225,7 +250,7 @@ export interface Settings {
   clipIgnoreTransient: boolean;
   /** 剪贴板规则：忽略应用列表（独立于捕获排除）。 */
   clipExcludedApps: string[];
-  /** 发送到对话后自动按回车（默认关闭，防误发）。 */
+  /** v8 兼容字段；v9 起仅迁移读取，投递统一由 TargetProfile.enterPolicy 决定。 */
   autoEnter: boolean;
   /** 面板失焦自动隐藏。 */
   hideOnBlur: boolean;
@@ -276,6 +301,12 @@ export interface Settings {
   excludedApps: string[];
   /** Prompt 前缀模板：发送时可选拼在内容前（Prompt 组装台）。 */
   promptSnippets: PromptSnippet[];
+  /** Prompt 分组；通用分组始终存在。 */
+  promptGroups: PromptGroup[];
+  /** 目标应用投递偏好，按数组顺序决定重复 bundle 的稳定 winner。 */
+  targetProfiles: TargetProfile[];
+  /** 未精确命中 bundle 时使用的用户默认 Profile。 */
+  defaultTargetProfileId: string;
   /** 数据文件夹展示值（真实来源在 Rust，这里仅用于设置界面回显）。 */
   dataDir: string;
   /** 面板逻辑宽度（pt）。 */
@@ -349,13 +380,7 @@ export const PANEL_WIDTH_MAX = 520;
 const defaultSections = (): Section[] => [{ id: INBOX_ID, name: "收件箱" }];
 
 export const DEFAULT_COMPANION_APPS = [
-  "com.apple.Terminal",
-  "com.googlecode.iterm2",
-  "dev.warp.Warp-Stable",
-  "com.github.wez.wezterm",
-  "net.kovidgoyal.kitty",
-  "io.alacritty",
-  "com.mitchellh.ghostty",
+  ...TERMINAL_BUNDLE_IDS,
   "com.todesktop.230313mzl4w4u92",
   "com.microsoft.VSCode",
   "com.microsoft.VSCodeInsiders",
@@ -417,7 +442,10 @@ export const defaultSettings = (): Settings => ({
   aiModel: "",
   aiEnabled: false,
   excludedApps: [...DEFAULT_EXCLUDED_APPS],
-  promptSnippets: [...DEFAULT_PROMPT_SNIPPETS],
+  promptGroups: createDefaultPromptGroups(),
+  promptSnippets: DEFAULT_PROMPT_SNIPPETS.map((item) => ({ ...item })),
+  targetProfiles: createDefaultTargetProfiles(false),
+  defaultTargetProfileId: SAFETY_PROFILE_ID,
   dataDir: "",
   panelWidth: 380,
   panelTopOffset: 0,
@@ -425,7 +453,23 @@ export const defaultSettings = (): Settings => ({
   onboarding: { captured: false, sent: false, done: false },
 });
 
-interface UndoEntry {
+function repairSettingsTargetProfiles(settings: Settings): Settings {
+  const repaired = repairTargetProfileConfiguration({
+    groups: settings.promptGroups,
+    snippets: settings.promptSnippets,
+    profiles: settings.targetProfiles,
+    defaultProfileId: settings.defaultTargetProfileId,
+  });
+  return {
+    ...settings,
+    promptGroups: repaired.groups,
+    promptSnippets: repaired.snippets,
+    targetProfiles: repaired.profiles,
+    defaultTargetProfileId: repaired.defaultProfileId,
+  };
+}
+
+export interface UndoEntry {
   label: string;
   sections: Section[];
   notes: Note[];
@@ -435,7 +479,7 @@ interface UndoEntry {
 
 export type AddNoteResult = "added" | "duplicate" | "empty";
 
-interface NotesState {
+export interface NotesState {
   sections: Section[];
   notes: Note[];
   /** 任务（任务页；与笔记同一持久化 bag、同一条撤销栈）。 */
@@ -573,10 +617,466 @@ interface NotesState {
     notes?: Note[];
     tasks?: Task[];
     taskSections?: TaskSection[];
-  }) => { notes: number; tasks: number };
+  }) => { notes: number; tasks: number; skippedDuplicates: number };
 }
 
 const UNDO_DEPTH = 5;
+
+type PersistentNotesState = Pick<
+  NotesState,
+  "sections" | "notes" | "tasks" | "taskSections" | "settings"
+>;
+
+export type NotesStoreSnapshot = PersistentNotesState &
+  Pick<NotesState, "checkedIds" | "undoStack">;
+
+function dedupeById<T extends { id: string }>(values: unknown): T[] {
+  if (!Array.isArray(values)) return [];
+  const seen = new Set<string>();
+  return values.filter((value): value is T => {
+    if (!value || typeof value !== "object") return false;
+    const id = (value as { id?: unknown }).id;
+    if (typeof id !== "string" || !id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+function assertCurrentSchemaHasUniqueIds(
+  persisted: Partial<NotesState>
+): void {
+  const assertUnique = (values: unknown, field: string) => {
+    if (!Array.isArray(values)) return;
+    const seen = new Set<string>();
+    for (const value of values) {
+      if (!value || typeof value !== "object") continue;
+      const id = (value as { id?: unknown }).id;
+      if (typeof id === "string" && id && seen.has(id)) {
+        throw new Error(`${field} 含重复 id：${id}`);
+      }
+      if (typeof id === "string" && id) seen.add(id);
+    }
+  };
+  assertUnique(persisted.sections, "sections");
+  assertUnique(persisted.notes, "notes");
+  assertUnique(persisted.taskSections, "taskSections");
+  assertUnique(persisted.tasks, "tasks");
+  for (const task of Array.isArray(persisted.tasks) ? persisted.tasks : []) {
+    if (task && typeof task === "object") {
+      assertUnique((task as Task).checklist, "task.checklist");
+    }
+  }
+  assertUnique(persisted.settings?.promptGroups, "settings.promptGroups");
+  assertUnique(persisted.settings?.promptSnippets, "settings.promptSnippets");
+  assertUnique(persisted.settings?.targetProfiles, "settings.targetProfiles");
+}
+
+function validateSettingsShape(value: unknown, version: number): void {
+  if (value === undefined) return;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("settings 必须是对象");
+  }
+  const settings = value as Record<string, unknown>;
+  const defaults = defaultSettings() as unknown as Record<string, unknown>;
+  const nullableTypes: Record<string, "number" | "string"> = {
+    clipPauseUntil: "number",
+    panelToggleHotkey: "string",
+    panelFreeX: "number",
+    panelFreeY: "number",
+    panelHeight: "number",
+  };
+  for (const [key, fallback] of Object.entries(defaults)) {
+    const current = settings[key];
+    if (current === undefined) continue;
+    if (key === "clipRetentionDays") {
+      if (current !== null && (typeof current !== "number" || !Number.isFinite(current))) {
+        throw new Error("settings.clipRetentionDays 类型无效");
+      }
+      continue;
+    }
+    if (key in nullableTypes) {
+      if (current !== null && typeof current !== nullableTypes[key]) {
+        throw new Error(`settings.${key} 类型无效`);
+      }
+      continue;
+    }
+    if (Array.isArray(fallback) || (fallback && typeof fallback === "object")) continue;
+    if (typeof current !== typeof fallback) {
+      throw new Error(`settings.${key} 类型无效`);
+    }
+    if (typeof current === "number" && !Number.isFinite(current)) {
+      throw new Error(`settings.${key} 必须是有限数字`);
+    }
+  }
+  const enumField = (key: string, allowed: readonly string[]) => {
+    const current = settings[key];
+    if (current !== undefined && (typeof current !== "string" || !allowed.includes(current))) {
+      throw new Error(`settings.${key} 枚举无效`);
+    }
+  };
+  enumField("theme", ["system", "light", "dark"]);
+  enumField("vibrancyMaterial", ["hud", "popover", "sidebar", "under-window", "fullscreen"]);
+  enumField("cardDensity", ["comfortable", "compact"]);
+  enumField("hotkeyModifier", ["shift", "control", "option"]);
+  enumField("sidebarEdge", ["right", "left", "top", "bottom"]);
+
+  const stringArrays = ["clipExcludedApps", "companionApps", "excludedApps"];
+  for (const key of stringArrays) {
+    const current = settings[key];
+    if (current !== undefined && (!Array.isArray(current) || !current.every((item) => typeof item === "string"))) {
+      throw new Error(`settings.${key} 必须是字符串数组`);
+    }
+  }
+  const pageOrder = settings.pageOrder;
+  if (pageOrder !== undefined && (!Array.isArray(pageOrder) || !pageOrder.every((item) => DEFAULT_PAGE_ORDER.includes(item as PageId)))) {
+    throw new Error("settings.pageOrder 含无效页签");
+  }
+  const snippets = settings.promptSnippets;
+  if (snippets !== undefined && (!Array.isArray(snippets) || !snippets.every((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+    const snippet = item as Record<string, unknown>;
+    return typeof snippet.id === "string"
+      && (version < STORE_VERSION || snippet.id.length > 0)
+      && ["label", "text"].every((key) => typeof snippet[key] === "string")
+      && (version < 9 || typeof snippet.groupId === "string");
+  }))) {
+    throw new Error("settings.promptSnippets 字段无效");
+  }
+  const promptGroups = settings.promptGroups;
+  if (promptGroups !== undefined && (!Array.isArray(promptGroups) || !promptGroups.every((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+    const group = item as Record<string, unknown>;
+    return typeof group.id === "string"
+      && group.id.length > 0
+      && typeof group.name === "string"
+      && typeof group.order === "number"
+      && Number.isFinite(group.order);
+  }))) {
+    throw new Error("settings.promptGroups 字段无效");
+  }
+  const profiles = settings.targetProfiles;
+  if (profiles !== undefined && (!Array.isArray(profiles) || !profiles.every((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+    const profile = item as Record<string, unknown>;
+    return typeof profile.id === "string"
+      && profile.id.length > 0
+      && typeof profile.name === "string"
+      && Array.isArray(profile.bundleIds)
+      && profile.bundleIds.every((bundleId) => typeof bundleId === "string")
+      && typeof profile.promptGroupId === "string"
+      && ["plain", "code"].includes(String(profile.defaultFormat))
+      && ["never", "confirm", "allow"].includes(String(profile.enterPolicy))
+      && ["requireRedaction", "confirmRaw", "allowRaw"].includes(String(profile.privacyPolicy))
+      && typeof profile.keepPanel === "boolean";
+  }))) {
+    throw new Error("settings.targetProfiles 字段无效");
+  }
+  if (settings.defaultTargetProfileId !== undefined
+    && typeof settings.defaultTargetProfileId !== "string") {
+    throw new Error("settings.defaultTargetProfileId 字段无效");
+  }
+  const menu = settings.contextMenu;
+  const menuIds = new Set(CONTEXT_MENU_REGISTRY.map((item) => item.id));
+  if (menu !== undefined && (!Array.isArray(menu) || !menu.every((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+    const entry = item as Record<string, unknown>;
+    return typeof entry.id === "string" && menuIds.has(entry.id as ContextMenuItemId) && typeof entry.on === "boolean";
+  }))) {
+    throw new Error("settings.contextMenu 字段无效");
+  }
+  const onboarding = settings.onboarding;
+  if (onboarding !== undefined && (!onboarding || typeof onboarding !== "object" || Array.isArray(onboarding)
+    || !["captured", "sent", "done"].every((key) => {
+      const field = (onboarding as Record<string, unknown>)[key];
+      return field === undefined || typeof field === "boolean";
+    }))) {
+    throw new Error("settings.onboarding 字段无效");
+  }
+  const duePresets = settings.duePresets;
+  if (duePresets !== undefined && (!Array.isArray(duePresets) || !duePresets.every((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+    const preset = item as Record<string, unknown>;
+    if (typeof preset.id !== "string" || !["relative", "today", "tomorrow", "weekday"].includes(String(preset.kind))) return false;
+    const numeric = (key: string) => typeof preset[key] === "number" && Number.isFinite(preset[key]);
+    return preset.kind === "relative" ? numeric("minutes") : numeric("hour") && numeric("minute") && (preset.kind !== "weekday" || numeric("weekday"));
+  }))) {
+    throw new Error("settings.duePresets 字段无效");
+  }
+}
+
+function finiteNumberOrDefault(value: unknown, fallback: number, field: string): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new Error(`${field} 必须是非负有限数字`);
+  }
+  return value;
+}
+
+function nullableTimeOrDefault(value: unknown, field: string): number | null {
+  if (value === undefined || value === null) return null;
+  return finiteNumberOrDefault(value, 0, field);
+}
+
+/**
+ * v8 允许重复或空 snippet id；v9 必须唯一。迁移只重编号冲突项，绝不丢模板，
+ * 因而数量、正文与数组顺序保持不变，且重复执行会得到同一结果。
+ */
+function migrateLegacyPromptSnippets(
+  snippets: PromptSnippet[]
+): PromptSnippet[] {
+  const used = new Set<string>();
+  return snippets.map((snippet, index) => {
+    let id = snippet.id;
+    if (!id || used.has(id)) {
+      const base = id || "legacy-snippet";
+      let suffix = index + 1;
+      do {
+        id = `${base}-migrated-${suffix}`;
+        suffix += 1;
+      } while (used.has(id));
+    }
+    used.add(id);
+    return { ...snippet, id, groupId: GENERAL_PROMPT_GROUP_ID };
+  });
+}
+
+function normalizeNoteRecord(note: Note, sectionIds: Set<string>): Note {
+  const kind = note.kind ?? "text";
+  if (!(["text", "image", "link"] as const).includes(kind)) {
+    throw new Error(`note.kind 无效：${String(note.kind)}`);
+  }
+  if (note.done !== undefined && typeof note.done !== "boolean") {
+    throw new Error("note.done 必须是 boolean");
+  }
+  return {
+    ...note,
+    kind,
+    text: typeof note.text === "string" ? note.text : "",
+    sectionId:
+      typeof note.sectionId === "string" && sectionIds.has(note.sectionId)
+        ? note.sectionId
+        : INBOX_ID,
+    done: note.done ?? false,
+    createdAt: finiteNumberOrDefault(note.createdAt, 0, "note.createdAt"),
+    attachments: Array.isArray(note.attachments)
+      ? [...new Set(note.attachments.filter((file): file is string => typeof file === "string" && !!file))].filter(
+          (file) => file !== note.imageFile
+        )
+      : undefined,
+  };
+}
+
+function normalizeTaskRecord(task: Task, sectionIds: Set<string>): Task {
+  const status = task.status ?? "todo";
+  const priority = task.priority ?? "none";
+  if (!(["todo", "doing", "done"] as const).includes(status)) {
+    throw new Error(`task.status 无效：${String(task.status)}`);
+  }
+  if (!(["none", "low", "mid", "high"] as const).includes(priority)) {
+    throw new Error(`task.priority 无效：${String(task.priority)}`);
+  }
+  if (task.kind !== undefined && task.kind !== "spark") {
+    throw new Error(`task.kind 无效：${String(task.kind)}`);
+  }
+  const checklist = dedupeById<ChecklistItem>(task.checklist).map((item) => {
+    if (item.done !== undefined && typeof item.done !== "boolean") {
+      throw new Error("checklist.done 必须是 boolean");
+    }
+    return {
+      ...item,
+      text: typeof item.text === "string" ? item.text : "",
+      done: item.done ?? false,
+    };
+  });
+  return {
+    ...task,
+    text: typeof task.text === "string" ? task.text : "",
+    status,
+    priority,
+    dueAt: nullableTimeOrDefault(task.dueAt, "task.dueAt"),
+    remindedAt: nullableTimeOrDefault(task.remindedAt, "task.remindedAt"),
+    createdAt: finiteNumberOrDefault(task.createdAt, 0, "task.createdAt"),
+    checklist: checklist.length ? checklist : undefined,
+    sectionId:
+      task.sectionId && sectionIds.has(task.sectionId) ? task.sectionId : undefined,
+  };
+}
+
+/** Zustand persist v1-v9 向前迁移；未知字段保留，旧版本重复记录按首项去重。 */
+export function migratePersistedState(
+  persisted: unknown,
+  version: number
+): Partial<NotesState> {
+  if (version > STORE_VERSION) {
+    throw new Error(`store schema ${version} 高于当前支持的 ${STORE_VERSION}`);
+  }
+  if (persisted !== undefined && persisted !== null && (typeof persisted !== "object" || Array.isArray(persisted))) {
+    throw new Error("持久化 state 必须是对象");
+  }
+  const p = (persisted && typeof persisted === "object"
+    ? { ...(persisted as Partial<NotesState>) }
+    : {}) as Partial<NotesState>;
+  for (const key of ["sections", "notes", "taskSections", "tasks"] as const) {
+    if (p[key] !== undefined && !Array.isArray(p[key])) {
+      throw new Error(`${key} 必须是数组`);
+    }
+  }
+  if (version === STORE_VERSION) assertCurrentSchemaHasUniqueIds(p);
+  validateSettingsShape(p.settings, version);
+  if (version < 5 && p.settings?.companionApps) {
+    p.settings = {
+      ...p.settings,
+      companionApps: [
+        ...new Set([...DEFAULT_COMPANION_APPS, ...p.settings.companionApps]),
+      ],
+    };
+  }
+  if (version < 6 && p.settings) {
+    p.settings = {
+      ...p.settings,
+      excludedApps: [
+        ...new Set([
+          ...DEFAULT_EXCLUDED_APPS,
+          ...(p.settings.excludedApps ?? []),
+        ]),
+      ],
+    };
+  }
+  if (version < 7 && p.settings?.promptSnippets) {
+    const fresh = DEFAULT_PROMPT_SNIPPETS.find((item) => item.id === "optimize-prompt");
+    if (fresh && !p.settings.promptSnippets.some((snippet) => snippet.id === fresh.id)) {
+      p.settings = {
+        ...p.settings,
+        promptSnippets: [...p.settings.promptSnippets, fresh],
+      };
+    }
+  }
+  if (version < 9 && p.settings) {
+    const legacyAutoEnter = p.settings.autoEnter === true;
+    p.settings = {
+      ...p.settings,
+      // 保留字段仅为旧备份兼容；实际投递从 v9 起只读取 Profile。
+      autoEnter: false,
+      promptGroups: createDefaultPromptGroups(),
+      promptSnippets: migrateLegacyPromptSnippets(
+        p.settings.promptSnippets ?? DEFAULT_PROMPT_SNIPPETS
+      ),
+      targetProfiles: createDefaultTargetProfiles(legacyAutoEnter),
+      defaultTargetProfileId: SAFETY_PROFILE_ID,
+    };
+  }
+
+  const sections = dedupeById<Section>(p.sections).map((section) => ({
+    ...section,
+    name: typeof section.name === "string" ? section.name : "未命名分组",
+  }));
+  if (!sections.some((section) => section.id === INBOX_ID)) {
+    sections.unshift({ id: INBOX_ID, name: "收件箱" });
+  }
+  const sectionIds = new Set(sections.map((section) => section.id));
+  const notes = dedupeById<Note>(p.notes).map((note) =>
+    normalizeNoteRecord(note, sectionIds)
+  );
+  const taskSections = dedupeById<TaskSection>(p.taskSections).map((section) => ({
+    ...section,
+    name: typeof section.name === "string" ? section.name : "未命名分组",
+  }));
+  if (!taskSections.some((section) => section.id === TASK_INBOX_ID)) {
+    taskSections.unshift({ id: TASK_INBOX_ID, name: "收集箱" });
+  }
+  const taskSectionIds = new Set(taskSections.map((section) => section.id));
+  const tasks = dedupeById<Task>(p.tasks).map((task) =>
+    normalizeTaskRecord(task, taskSectionIds)
+  );
+  return { ...p, sections, notes, taskSections, tasks };
+}
+
+function normalizedPersistentState(
+  persisted: Partial<NotesState>
+): PersistentNotesState {
+  const mergedSettings = {
+    ...defaultSettings(),
+    ...(persisted.settings ?? {}),
+    onboarding: {
+      ...defaultSettings().onboarding,
+      ...(persisted.settings?.onboarding ?? {}),
+    },
+    pageOrder: normalizePageOrder(persisted.settings?.pageOrder),
+    contextMenu: normalizeContextMenu(persisted.settings?.contextMenu),
+  };
+  const settings = repairSettingsTargetProfiles(mergedSettings);
+  return {
+    sections: persisted.sections?.length ? persisted.sections : defaultSections(),
+    notes: persisted.notes ?? [],
+    tasks: persisted.tasks ?? [],
+    taskSections: persisted.taskSections?.length
+      ? persisted.taskSections
+      : defaultTaskSections(),
+    settings,
+  };
+}
+
+export function decodePersistedState(raw: string): PersistentNotesState {
+  const envelope: unknown = JSON.parse(raw);
+  if (!envelope || typeof envelope !== "object") {
+    throw new Error("持久化 envelope 无效");
+  }
+  const version = (envelope as { version?: unknown }).version;
+  if (typeof version !== "number" || !Number.isInteger(version)) {
+    throw new Error("持久化 envelope 缺少整数 version");
+  }
+  const migrated = migratePersistedState(
+    (envelope as { state?: unknown }).state,
+    version
+  );
+  return normalizedPersistentState(migrated);
+}
+
+/**
+ * persist merge：Zustand 只在 version 变化时调用 migrate；同版本备份也可能
+ * 缺字段，merge 每次都走同一 decoder，保证重启后仍得到稳定默认值并拒绝坏
+ * 类型。水合完成前已捕获的新卡片保留在列表顶部——收件箱最新在上，且这些
+ * 卡片必然比磁盘上的所有记录都新。
+ */
+export function mergePersistedNotesState(
+  persisted: unknown,
+  current: NotesState
+): NotesState {
+  const migrated = migratePersistedState(persisted, STORE_VERSION);
+  const p = normalizedPersistentState(migrated);
+  const merged = { ...current, ...p };
+  if (!merged.sections?.length) merged.sections = defaultSections();
+  if (!merged.taskSections?.length) merged.taskSections = defaultTaskSections();
+  // settings 深合并：老版本数据缺新字段时回填默认值
+  merged.settings = repairSettingsTargetProfiles({
+    ...defaultSettings(),
+    ...(p.settings ?? {}),
+    onboarding: {
+      ...defaultSettings().onboarding,
+      ...(p.settings?.onboarding ?? {}),
+    },
+    // 页签顺序单独归一化：缺项/重复/未知值都会让整页无法访问
+    pageOrder: normalizePageOrder(p.settings?.pageOrder),
+  });
+  const persistedIds = new Set(merged.notes.map((n) => n.id));
+  const early = current.notes.filter((n) => !persistedIds.has(n.id));
+  if (early.length) merged.notes = [...early, ...merged.notes];
+  return merged;
+}
+
+export function persistentStateOf(state: NotesState): PersistentNotesState {
+  return {
+    sections: state.sections,
+    notes: state.notes,
+    tasks: state.tasks,
+    taskSections: state.taskSections,
+    settings: state.settings,
+  };
+}
+
+export function serializePersistentState(state: NotesState): string {
+  return JSON.stringify({ state: persistentStateOf(state), version: STORE_VERSION });
+}
 
 export const useNotesStore = create<NotesState>()(
   persist(
@@ -1365,7 +1865,13 @@ export const useNotesStore = create<NotesState>()(
         return true;
       },
 
-      setSettings: (patch) => set({ settings: { ...get().settings, ...patch } }),
+      setSettings: (patch) =>
+        set({
+          settings: repairSettingsTargetProfiles({
+            ...get().settings,
+            ...patch,
+          }),
+        }),
 
       markOnboarding: (patch) => {
         const current = get().settings.onboarding;
@@ -1408,121 +1914,151 @@ export const useNotesStore = create<NotesState>()(
         get().snapshot("导入合并");
         const state = get();
         const sectionIds = new Set(state.sections.map((s) => s.id));
-        const newSections = (data.sections ?? []).filter(
-          (s) => s && typeof s.id === "string" && !sectionIds.has(s.id)
-        );
+        let skippedDuplicates = 0;
+        const newSections: Section[] = [];
+        for (const section of data.sections ?? []) {
+          if (
+            !section ||
+            typeof section.id !== "string" ||
+            !section.id ||
+            typeof section.name !== "string"
+          )
+            continue;
+          if (sectionIds.has(section.id)) {
+            skippedDuplicates += 1;
+            continue;
+          }
+          sectionIds.add(section.id);
+          newSections.push(section);
+        }
         const allSections = [...state.sections, ...newSections];
         const allSectionIds = new Set(allSections.map((s) => s.id));
         const noteIds = new Set(state.notes.map((n) => n.id));
-        const newNotes = (data.notes ?? [])
-          .filter(
-            (n) =>
-              n &&
-              typeof n.id === "string" &&
-              typeof n.text === "string" &&
-              !noteIds.has(n.id)
+        const newNotes: Note[] = [];
+        for (const note of data.notes ?? []) {
+          if (
+            !note ||
+            typeof note.id !== "string" ||
+            !note.id ||
+            typeof note.text !== "string"
           )
-          .map((n) => ({
-            ...n,
-            sectionId: allSectionIds.has(n.sectionId) ? n.sectionId : INBOX_ID,
-          }));
+            continue;
+          if (noteIds.has(note.id)) {
+            skippedDuplicates += 1;
+            continue;
+          }
+          noteIds.add(note.id);
+          newNotes.push(normalizeNoteRecord(note, allSectionIds));
+        }
         const taskSecIds = new Set(state.taskSections.map((s) => s.id));
-        const newTaskSections = (data.taskSections ?? []).filter(
-          (s) => s && typeof s.id === "string" && !taskSecIds.has(s.id)
-        );
+        const newTaskSections: TaskSection[] = [];
+        for (const section of data.taskSections ?? []) {
+          if (
+            !section ||
+            typeof section.id !== "string" ||
+            !section.id ||
+            typeof section.name !== "string"
+          )
+            continue;
+          if (taskSecIds.has(section.id)) {
+            skippedDuplicates += 1;
+            continue;
+          }
+          taskSecIds.add(section.id);
+          newTaskSections.push(section);
+        }
         const allTaskSections = [...state.taskSections, ...newTaskSections];
         const allTaskSecIds = new Set(allTaskSections.map((s) => s.id));
         const taskIds = new Set(state.tasks.map((t) => t.id));
-        const newTasks = (data.tasks ?? [])
-          .filter(
-            (t) =>
-              t &&
-              typeof t.id === "string" &&
-              typeof t.text === "string" &&
-              !taskIds.has(t.id)
+        const newTasks: Task[] = [];
+        for (const task of data.tasks ?? []) {
+          if (
+            !task ||
+            typeof task.id !== "string" ||
+            !task.id ||
+            typeof task.text !== "string"
           )
-          .map((t) => ({
-            ...t,
-            // 孤儿分组兜底回收集箱（undefined 即收集箱）
-            sectionId:
-              t.sectionId && allTaskSecIds.has(t.sectionId) ? t.sectionId : undefined,
-          }));
+            continue;
+          if (taskIds.has(task.id)) {
+            skippedDuplicates += 1;
+            continue;
+          }
+          taskIds.add(task.id);
+          newTasks.push(normalizeTaskRecord(task, allTaskSecIds));
+        }
         set({
           sections: allSections,
           notes: [...state.notes, ...newNotes],
           tasks: [...state.tasks, ...newTasks],
           taskSections: allTaskSections,
         });
-        return { notes: newNotes.length, tasks: newTasks.length };
+        return {
+          notes: newNotes.length,
+          tasks: newTasks.length,
+          skippedDuplicates,
+        };
       },
     }),
     {
       name: "toskr",
-      version: 7,
+      version: STORE_VERSION,
       storage: createJSONStorage(() => tauriStateStorage),
-      migrate: (persisted, version) => {
-        // 版本升级时把新增的预置应用并入用户已持久化的列表
-        // （仅升级这一次，之后用户的增删照常生效）
-        const p = persisted as Partial<NotesState> | undefined;
-        if (version < 5 && p?.settings?.companionApps) {
-          p.settings.companionApps = [
-            ...new Set([...DEFAULT_COMPANION_APPS, ...p.settings.companionApps]),
-          ];
-        }
-        if (version < 6 && p?.settings) {
-          p.settings.excludedApps = [
-            ...new Set([
-              ...DEFAULT_EXCLUDED_APPS,
-              ...(p.settings.excludedApps ?? []),
-            ]),
-          ];
-        }
-        if (version < 7 && p?.settings?.promptSnippets) {
-          // 追加新预置的「优化提示词」母模板（用户已有/已删的其余模板不动）
-          const fresh = DEFAULT_PROMPT_SNIPPETS.find(
-            (d) => d.id === "optimize-prompt"
-          );
-          if (
-            fresh &&
-            !p.settings.promptSnippets.some((sn) => sn.id === fresh.id)
-          ) {
-            p.settings.promptSnippets = [...p.settings.promptSnippets, fresh];
-          }
-        }
-        return persisted;
-      },
-      partialize: (state) => ({
-        sections: state.sections,
-        notes: state.notes,
-        tasks: state.tasks,
-        taskSections: state.taskSections,
-        settings: state.settings,
-      }),
-      merge: (persisted, current) => {
-        const p = (persisted ?? {}) as Partial<NotesState>;
-        const merged = { ...current, ...p };
-        if (!merged.sections?.length) merged.sections = defaultSections();
-        if (!merged.taskSections?.length) merged.taskSections = defaultTaskSections();
-        // settings 深合并：老版本数据缺新字段时回填默认值
-        merged.settings = {
-          ...defaultSettings(),
-          ...(p.settings ?? {}),
-          onboarding: {
-            ...defaultSettings().onboarding,
-            ...(p.settings?.onboarding ?? {}),
-          },
-          // 页签顺序单独归一化：缺项/重复/未知值都会让整页无法访问
-          pageOrder: normalizePageOrder(p.settings?.pageOrder),
-        };
-        // 启动后水合完成前若已捕获新卡片，保留它们（避免被持久层覆盖丢失）
-        const persistedIds = new Set(merged.notes.map((n) => n.id));
-        const early = current.notes.filter((n) => !persistedIds.has(n.id));
-        if (early.length) merged.notes = [...merged.notes, ...early];
-        return merged;
-      },
+      // main WebView 先查询 Native journal/status，再决定续接事务或水合。
+      // 禁止模块加载时的自动水合与 pending rollback 交错。
+      skipHydration: true,
+      migrate: migratePersistedState,
+      partialize: persistentStateOf,
+      merge: mergePersistedNotesState,
     }
   )
 );
+
+/** 目录切换/完整恢复专用：替换持久域，绝不与旧目录内存记录合并。 */
+export function replaceNotesStoreFromPersisted(raw: string): void {
+  const next = decodePersistedState(raw);
+  useNotesStore.setState({
+    ...next,
+    checkedIds: [],
+    undoStack: [],
+  });
+}
+
+/** 回滚专用：磁盘仍是事务前 A 时恢复 selection/undo；外部已变 B 时清空旧上下文。 */
+export function restoreNotesStoreAfterRollback(
+  snapshot: NotesStoreSnapshot,
+  raw: string
+): void {
+  const restored = decodePersistedState(raw);
+  const snapshotPersistent: PersistentNotesState = {
+    sections: snapshot.sections,
+    notes: snapshot.notes,
+    tasks: snapshot.tasks,
+    taskSections: snapshot.taskSections,
+    settings: snapshot.settings,
+  };
+  if (JSON.stringify(restored) === JSON.stringify(snapshotPersistent)) {
+    restoreNotesStoreSnapshot(snapshot);
+    return;
+  }
+  useNotesStore.setState({
+    ...restored,
+    checkedIds: [],
+    undoStack: [],
+  });
+}
+
+export function captureNotesStoreSnapshot(): NotesStoreSnapshot {
+  const state = useNotesStore.getState();
+  return structuredClone({
+    ...persistentStateOf(state),
+    checkedIds: state.checkedIds,
+    undoStack: state.undoStack,
+  });
+}
+
+export function restoreNotesStoreSnapshot(snapshot: NotesStoreSnapshot): void {
+  useNotesStore.setState(structuredClone(snapshot));
+}
 
 /**
  * 发送成功后应标记完成的卡片：排除「常用」卡、「发送后保留」分组内的卡，

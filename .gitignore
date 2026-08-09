@@ -30,10 +30,21 @@ src-tauri/gen/schemas
 # 本地 AI 工具目录（个人工作笔记与环境配置）
 .claude/
 .codex/
+.codex-work/
+/output/
+/outputs/
 tasks/
 /CLAUDE.md
+/AGENTS.md
 
 # 设计探索稿（大文件，不入库）
 /toskr-*.png
 assets/icon-concepts/
 .gstack/
+
+# design-sync（claude.ai/design 同步的机器状态，配置/预览等持久文件仍入库）
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules

@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 
 import { headerGradient } from "@/components/NoteCard";
+import { DataReadOnlyGuard } from "@/components/DataReadOnlyGuard";
 import { stats } from "@/components/PreviewOverlay";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
@@ -26,13 +27,28 @@ import { looksLikeMarkdown, renderMarkdown } from "@/lib/markdown";
 import { springSnappy } from "@/lib/motion";
 import { refreshPreviewPayload } from "@/lib/previewPayload";
 import {
+  DATA_ACTIVITY_EVENT,
+  DATA_LOCATION_CHANGED_EVENT,
+} from "@/lib/dataOperations";
+import { DATA_CONTEXT_INVALIDATED_EVENT } from "@/lib/dataGeneration";
+import {
   resolveSourceSelection,
   type SelectionEdit,
   type TextSelection,
 } from "@/lib/selectionFormat";
-import { api } from "@/lib/tauri";
+import {
+  api,
+  TARGET_CHANGED_EVENT,
+  type TargetSnapshot,
+} from "@/lib/tauri";
 import { tip } from "@/lib/tip";
 import { cn } from "@/lib/utils";
+import {
+  applyTargetEvent,
+  readTarget,
+  targetBlockMessage,
+  useTargetStore,
+} from "@/store/targetStore";
 
 /**
  * 文本详情窗（独立 webview，桌面居中）：窄面板放不下长文，文字类卡片的
@@ -86,10 +102,16 @@ function AttachThumb({
 }
 
 /** 详情窗只上报本次编辑新增且放弃的文件；主窗口会再按全库引用过滤后删盘。 */
-function discardDraftImages(original: string[], draft: string[]) {
+function discardDraftImages(
+  original: string[],
+  draft: string[],
+  dataGeneration?: number
+) {
   const originalSet = new Set(original);
   const files = [...new Set(draft.filter((file) => !originalSet.has(file)))];
-  if (files.length) void emitTo("main", "toskr://note-image-discard", { files });
+  if (files.length && dataGeneration !== undefined) {
+    void emitTo("main", "toskr://note-image-discard", { files, dataGeneration });
+  }
 }
 
 type TextEditSnapshot = SelectionEdit & { images: string[] };
@@ -207,24 +229,50 @@ export default function TextPreviewView() {
   const pendingSelectionRef = useRef<TextSelection | null>(null);
   const pendingTextEditRef = useRef<SelectionEdit | null>(null);
   const textEditHistoryRef = useRef<TextEditHistory>(freshTextEditHistory());
-  const editSessionRef = useRef({ original: [] as string[], editing: false });
+  const editSessionRef = useRef({
+    original: [] as string[],
+    editing: false,
+    dataGeneration: undefined as number | undefined,
+  });
   const icon = useAppIcon(note?.sourceBundle ?? undefined);
+  const targetReady = useTargetStore(
+    (state) => state.status === "ready" && !state.profileOverrideNeedsConfirmation
+  );
+  const targetBlockedMessage = useTargetStore((state) =>
+    state.profileOverrideNeedsConfirmation
+      ? "目标已变化，请确认 Profile"
+      : state.status === "ready"
+        ? null
+        : targetBlockMessage(state.status, state.reason)
+  );
 
   useEffect(() => {
     editSessionRef.current = {
       original: note?.images ?? [],
       editing,
+      dataGeneration: note?.dataGeneration,
     };
-  }, [editing, note?.images]);
+  }, [editing, note?.dataGeneration, note?.images]);
+
+  useEffect(() => {
+    const changed = listen<TargetSnapshot>(TARGET_CHANGED_EVENT, (event) => {
+      applyTargetEvent(event.payload);
+    });
+    return () => {
+      changed.then((stop) => stop());
+    };
+  }, []);
 
   useEffect(() => {
     const un = listen<NotePreviewPayload>("toskr://note-preview", (e) => {
       editSessionTokenRef.current += 1;
       const previous = editSessionRef.current;
       if (previous.editing) {
-        discardDraftImages(previous.original, [
-          ...sessionPastedImagesRef.current,
-        ]);
+        discardDraftImages(
+          previous.original,
+          [...sessionPastedImagesRef.current],
+          previous.dataGeneration
+        );
       }
       sessionPastedImagesRef.current.clear();
       const p = e.payload;
@@ -241,9 +289,32 @@ export default function TextPreviewView() {
       textEditHistoryRef.current = freshTextEditHistory();
       setGen((g) => g + 1);
       bodyRef.current?.scrollTo({ top: 0 });
+      // 独立 WebView 只读同步当前 token；先注册 target event，让在途旧响应
+      // 服从更新事件，但不能因打开详情窗轮换 Native token。
+      void readTarget();
     });
     return () => {
       un.then((fn) => fn());
+    };
+  }, []);
+
+  useEffect(() => {
+    const invalidate = () => {
+      editSessionTokenRef.current += 1;
+      sessionPastedImagesRef.current.clear();
+      setNote(null);
+      setEditing(false);
+      void getCurrentWebviewWindow().hide();
+    };
+    const activity = listen<{ locked: boolean }>(DATA_ACTIVITY_EVENT, (event) => {
+      if (event.payload.locked) invalidate();
+    });
+    const changed = listen(DATA_LOCATION_CHANGED_EVENT, invalidate);
+    const invalidated = listen(DATA_CONTEXT_INVALIDATED_EVENT, invalidate);
+    return () => {
+      activity.then((stop) => stop());
+      changed.then((stop) => stop());
+      invalidated.then((stop) => stop());
     };
   }, []);
 
@@ -278,7 +349,11 @@ export default function TextPreviewView() {
   const close = () => {
     if (editing && note) {
       editSessionTokenRef.current += 1;
-      discardDraftImages(note.images, [...sessionPastedImagesRef.current]);
+      discardDraftImages(
+        note.images,
+        [...sessionPastedImagesRef.current],
+        note.dataGeneration
+      );
       sessionPastedImagesRef.current.clear();
     }
     void getCurrentWebviewWindow().hide();
@@ -306,13 +381,14 @@ export default function TextPreviewView() {
         text: next.payload.text,
         images,
         discardedImages,
+        dataGeneration: note.dataGeneration,
       });
       setNote(next.payload);
       draftRef.current = next.payload.text;
       setDraftEmpty(!next.payload.text.trim());
       setMdView(next.markdownView);
     } else {
-      discardDraftImages(images, discardedImages);
+      discardDraftImages(images, discardedImages, note.dataGeneration);
     }
     sessionPastedImagesRef.current.clear();
     setTextSelection(null);
@@ -330,7 +406,7 @@ export default function TextPreviewView() {
         return;
       }
       if (sessionToken !== editSessionTokenRef.current) {
-        discardDraftImages([], [image.file]);
+        discardDraftImages([], [image.file], note?.dataGeneration);
         return;
       }
       const current = draftImagesRef.current;
@@ -434,7 +510,10 @@ export default function TextPreviewView() {
   const send = () => {
     if (!note) return;
     close();
-    void emitTo("main", "toskr://note-send", { id: note.id });
+    void emitTo("main", "toskr://note-send", {
+      id: note.id,
+      dataGeneration: note.dataGeneration,
+    });
   };
 
   // 文本编辑态由本窗口接管撤销/重做：连续输入按 1 秒内同类输入合并，
@@ -516,6 +595,7 @@ export default function TextPreviewView() {
         data-tauri-drag-region
         className="flex h-screen w-screen items-center justify-center rounded-xl bg-background"
       >
+        <DataReadOnlyGuard />
         <button
           aria-label="关闭"
           onClick={close}
@@ -543,6 +623,7 @@ export default function TextPreviewView() {
   return (
     // 无描边：窗体轮廓交给 macOS 原生投影（conf shadow: true），内部只做质感层
     <div className="flex h-screen w-screen select-none flex-col overflow-hidden rounded-xl bg-background text-foreground">
+      <DataReadOnlyGuard />
       {/* 标题栏：应用主色渐变（与卡顶同款）+ 顶缘内嵌高光（HUD 气泡同款
           玻璃质感）+ 与正文交界的一丝落影；可拖动窗口 */}
       <header
@@ -749,6 +830,7 @@ export default function TextPreviewView() {
                 void emitTo("main", "toskr://note-image-remove", {
                   id: note.id,
                   file: f,
+                  dataGeneration: note.dataGeneration,
                 });
                 const rest = note.images.filter((x) => x !== f);
                 // 图没了、文字也没了 → 主面板会把整张卡删掉，详情窗跟着关
@@ -809,7 +891,27 @@ export default function TextPreviewView() {
               <IconButton label="复制" onClick={() => void copy()}>
                 <Copy className="size-3.5" />
               </IconButton>
-              <Button size="xs" onClick={send}>
+              <p
+                id="text-preview-target-status"
+                role="status"
+                aria-live="polite"
+                className="sr-only"
+              >
+                {targetBlockedMessage ?? ""}
+              </p>
+              <Button
+                size="xs"
+                disabled={!targetReady}
+                aria-label={
+                  targetReady
+                    ? "发送到当前目标"
+                    : `发送不可用：${targetBlockedMessage}`
+                }
+                aria-describedby={
+                  targetReady ? undefined : "text-preview-target-status"
+                }
+                onClick={send}
+              >
                 <Send className="size-3" /> 发送
               </Button>
             </>
