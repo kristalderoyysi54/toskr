@@ -14,25 +14,31 @@ import {
   ArrowDown,
   ArrowUp,
   Check,
+  ChevronRight,
   ClipboardList,
   Database,
   Info,
   Keyboard,
+  Crosshair,
   Magnet,
   Pencil,
   Plus,
   Settings2,
-  Shield,
-  Sparkles,
   X,
 } from "lucide-react";
 
+import { SimpleSelect } from "@/components/SimpleSelect";
 import { IconButton } from "@/components/ui/icon-button";
 import { ProgressBar } from "@/components/ui/progress-bar";
 import { Segmented } from "@/components/ui/segmented";
 import { Switch } from "@/components/ui/switch";
 import {
   SETTINGS_CLEAR_CLIP,
+  SETTINGS_DATA_HEALTH,
+  SETTINGS_DATA_HEALTH_RESULT,
+  SETTINGS_DATA_CONFLICT_ACTION,
+  SETTINGS_DATA_OPERATION,
+  SETTINGS_DATA_RECOVERY_OPERATION,
   SETTINGS_EXPORT,
   SETTINGS_IMPORT,
   SETTINGS_PATCH,
@@ -40,8 +46,35 @@ import {
   SETTINGS_SECTION,
   SETTINGS_STATE,
 } from "@/lib/settingsSync";
+import {
+  DATA_ACTIVITY_EVENT,
+  DATA_LOCATION_CHANGED_EVENT,
+} from "@/lib/dataOperations";
+import {
+  availableDataActions,
+  needsBlockingDataOverlay,
+} from "@/lib/dataLocation";
 import { SHORTCUTS } from "@/lib/shortcuts";
-import { api } from "@/lib/tauri";
+import {
+  api,
+  type DataLocationInspection,
+  type DataLocationStatus,
+  type DataOperationPlan,
+  type MediaIntegrityReport,
+} from "@/lib/tauri";
+
+async function requestStorageRecoveryAction(
+  action: "retryStorage" | "loadDefault"
+): Promise<void> {
+  if (action === "loadDefault") {
+    const confirmed = await ask(
+      "这会明确停用当前自定义目录并加载默认数据目录。原目录指针会保留为恢复副本，不会删除原数据。确认继续吗？",
+      { title: "加载默认数据目录", kind: "warning" }
+    );
+    if (!confirmed) return;
+  }
+  await emitTo("main", SETTINGS_DATA_CONFLICT_ACTION, action);
+}
 import { tip } from "@/lib/tip";
 import { checkForUpdate, downloadAndInstall } from "@/lib/updater";
 import { cn } from "@/lib/utils";
@@ -51,10 +84,18 @@ import {
   normalizeContextMenu,
   type DuePresetCfg,
   type PromptSnippet,
+  type TargetProfile,
   type Settings,
   type ThemePref,
   type VibrancyMaterial,
 } from "@/store/notesStore";
+import {
+  GENERAL_PROMPT_GROUP_ID,
+  SAFETY_PROFILE_ID,
+  deletePromptGroup,
+  deleteTargetProfile,
+  findDuplicateBundleAssignments,
+} from "@/lib/targetProfiles";
 import { presetCfgLabel } from "@/lib/tasks";
 import { AI_PRESETS, matchPreset, testAiConnection } from "@/lib/ai";
 
@@ -62,79 +103,220 @@ type SectionId =
   | "general"
   | "hotkey"
   | "clip"
-  | "companion"
-  | "exclude"
-  | "snippets"
+  | "target"
   | "due"
   | "ai"
+  | "companion"
   | "data"
   | "diagnostics"
   | "about";
 
-const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode }[] = [
-  { id: "general", label: "通用", icon: <Settings2 className="size-4" /> },
-  { id: "hotkey", label: "快捷键", icon: <Keyboard className="size-4" /> },
-  { id: "clip", label: "剪贴板", icon: <ClipboardList className="size-4" /> },
-  { id: "companion", label: "伴随停靠", icon: <Magnet className="size-4" /> },
-  { id: "exclude", label: "捕获排除", icon: <Shield className="size-4" /> },
-  { id: "snippets", label: "Prompt 模板", icon: <Sparkles className="size-4" /> },
-  { id: "due", label: "到期提醒", icon: <AlarmClock className="size-4" /> },
-  { id: "ai", label: "AI 智能", icon: <Bot className="size-4" /> },
-  { id: "data", label: "数据", icon: <Database className="size-4" /> },
-  { id: "diagnostics", label: "诊断", icon: <Activity className="size-4" /> },
-  { id: "about", label: "关于", icon: <Info className="size-4" /> },
+/** 侧栏分章（用户指定 2026-08：菜单要有章法——按 面板/捕获/发送/助手/系统
+ *  五章组织，小项合并进相邻章节，次要细节在分区内做渐进式披露）。 */
+const SECTION_GROUPS: {
+  title: string;
+  items: { id: SectionId; label: string; icon: React.ReactNode }[];
+}[] = [
+  {
+    title: "面板",
+    items: [
+      { id: "general", label: "通用", icon: <Settings2 className="size-4" /> },
+      { id: "companion", label: "伴随停靠", icon: <Magnet className="size-4" /> },
+    ],
+  },
+  {
+    title: "捕获",
+    items: [
+      { id: "hotkey", label: "捕获与快捷键", icon: <Keyboard className="size-4" /> },
+      { id: "clip", label: "剪贴板", icon: <ClipboardList className="size-4" /> },
+    ],
+  },
+  {
+    title: "发送",
+    items: [
+      { id: "target", label: "目标与模板", icon: <Crosshair className="size-4" /> },
+    ],
+  },
+  {
+    title: "助手",
+    items: [
+      { id: "due", label: "到期提醒", icon: <AlarmClock className="size-4" /> },
+      { id: "ai", label: "AI 智能", icon: <Bot className="size-4" /> },
+    ],
+  },
+  {
+    title: "系统",
+    items: [
+      { id: "data", label: "数据", icon: <Database className="size-4" /> },
+      { id: "diagnostics", label: "诊断", icon: <Activity className="size-4" /> },
+      { id: "about", label: "关于", icon: <Info className="size-4" /> },
+    ],
+  },
 ];
 
 /** 独立设置窗口：主面板是唯一持久化写入方，这里只收 state / 发 patch。 */
 export default function SettingsView() {
   const [settings, setSettings] = useState<Settings>(defaultSettings());
   const [section, setSection] = useState<SectionId>("general");
+  const [dataActivity, setDataActivity] = useState({
+    locked: false,
+    phase: "idle",
+    message: "",
+  });
 
   useEffect(() => {
     const un = listen<Settings>(SETTINGS_STATE, (e) => setSettings(e.payload));
     // 外部指路（更新提醒气泡点击等）→ 切到指定分区
-    const unSection = listen<string>(SETTINGS_SECTION, (e) =>
-      setSection(e.payload as SectionId)
+    const unSection = listen<string>(SETTINGS_SECTION, (e) => {
+      const requested = ["snippets", "prompts"].includes(e.payload)
+        ? "target"
+        : e.payload === "exclude"
+          ? "hotkey"
+          : e.payload;
+      setSection(requested as SectionId);
+    });
+    const unDataActivity = listen<{ locked: boolean; phase: string; message: string }>(
+      DATA_ACTIVITY_EVENT,
+      (event) => setDataActivity(event.payload)
     );
     void emitTo("main", SETTINGS_REQUEST, {});
     return () => {
       un.then((fn) => fn());
       unSection.then((fn) => fn());
+      unDataActivity.then((fn) => fn());
     };
   }, []);
 
   const patch = (p: Partial<Settings>) => {
+    if (dataActivity.locked) {
+      tip("warn", "数据操作进行中，设置暂时只读");
+      return;
+    }
     setSettings((s) => ({ ...s, ...p }));
     void emitTo("main", SETTINGS_PATCH, p);
   };
 
   return (
     <div className="flex h-screen w-screen select-none bg-background text-foreground">
-      <aside className="flex w-44 shrink-0 flex-col gap-0.5 border-r border-border/60 bg-muted/40 p-2">
-        {SECTIONS.map((s) => (
-          <button
-            key={s.id}
-            onClick={() => setSection(s.id)}
-            className={cn(
-              "flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-body",
-              section === s.id
-                ? "bg-primary/10 font-medium text-foreground"
-                : "text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
+      {needsBlockingDataOverlay(dataActivity) && (
+        <div
+          role="status"
+          aria-live="assertive"
+          aria-busy="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/90 px-6 backdrop-blur-sm"
+        >
+          <div className="rounded-xl border border-border bg-popover px-4 py-3 text-center shadow-lg">
+            <p className="text-title font-medium">数据暂时只读</p>
+            <p className="mt-1 text-body text-muted-foreground">
+              {dataActivity.message || "正在验证并切换数据目录…"}
+            </p>
+          </div>
+        </div>
+      )}
+      {dataActivity.locked &&
+        (dataActivity.phase === "conflict" ||
+          dataActivity.phase === "storageRecovery") && (
+        <div
+          role="alert"
+          className="fixed inset-x-4 top-4 z-50 rounded-xl border border-destructive/40 bg-popover p-3 shadow-lg"
+        >
+          <p className="text-title font-medium">
+            {dataActivity.phase === "storageRecovery"
+              ? "数据目录需要恢复"
+              : "检测到外部数据版本"}
+          </p>
+          <p className="mt-1 text-body text-muted-foreground">
+            {dataActivity.message || "自动写入已停止；请选择如何处理磁盘新版本。"}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {dataActivity.phase === "storageRecovery" ? (
+              <>
+                <button
+                  onClick={() =>
+                    void requestStorageRecoveryAction("retryStorage")
+                  }
+                  className="rounded-lg bg-primary px-3 py-1 text-body text-primary-foreground"
+                >
+                  重试挂载
+                </button>
+                <button
+                  onClick={() =>
+                    void requestStorageRecoveryAction("loadDefault")
+                  }
+                  className="rounded-lg border border-border px-3 py-1 text-body"
+                >
+                  明确加载默认目录
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={() =>
+                    void emitTo("main", SETTINGS_DATA_CONFLICT_ACTION, "reload")
+                  }
+                  className="rounded-lg bg-primary px-3 py-1 text-body text-primary-foreground"
+                >
+                  重新加载磁盘
+                </button>
+                <button
+                  onClick={() =>
+                    void emitTo(
+                      "main",
+                      SETTINGS_DATA_CONFLICT_ACTION,
+                      "saveRecovery"
+                    )
+                  }
+                  className="rounded-lg border border-border px-3 py-1 text-body"
+                >
+                  另存恢复副本后加载
+                </button>
+              </>
             )}
-          >
-            {s.icon}
-            {s.label}
-          </button>
+            <button
+              onClick={() => tip("info", "已保持只读；冲突仍待处理")}
+              className="rounded-lg border border-border px-3 py-1 text-body text-muted-foreground"
+            >
+              暂不处理
+            </button>
+          </div>
+        </div>
+      )}
+      <aside className="flex w-44 shrink-0 flex-col gap-0.5 border-r border-border/60 bg-muted/40 p-2">
+        {SECTION_GROUPS.map((group) => (
+          <div key={group.title} className="mb-1 flex flex-col gap-0.5">
+            <p className="px-2.5 pb-0.5 pt-1.5 text-micro font-medium tracking-wide text-muted-foreground/60">
+              {group.title}
+            </p>
+            {group.items.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => setSection(s.id)}
+                className={cn(
+                  "flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-body",
+                  section === s.id
+                    ? "bg-primary/10 font-medium text-foreground"
+                    : "text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
+                )}
+              >
+                {s.icon}
+                {s.label}
+              </button>
+            ))}
+          </div>
         ))}
       </aside>
 
       <main className="min-w-0 flex-1 overflow-y-auto p-5">
         {section === "general" && <GeneralSection settings={settings} patch={patch} />}
-        {section === "hotkey" && <HotkeySection settings={settings} patch={patch} />}
+        {section === "hotkey" && (
+          <>
+            <HotkeySection settings={settings} patch={patch} />
+            <ExcludeSection settings={settings} patch={patch} />
+          </>
+        )}
         {section === "clip" && <ClipboardSection settings={settings} patch={patch} />}
+        {section === "target" && <TargetSection settings={settings} patch={patch} />}
         {section === "companion" && <CompanionSection settings={settings} patch={patch} />}
-        {section === "exclude" && <ExcludeSection settings={settings} patch={patch} />}
-        {section === "snippets" && <SnippetsSection settings={settings} patch={patch} />}
         {section === "due" && <DuePresetsSection settings={settings} patch={patch} />}
         {section === "ai" && <AiSection settings={settings} patch={patch} />}
         {section === "data" && <DataSection />}
@@ -149,6 +331,27 @@ export default function SettingsView() {
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return <h2 className="mb-3 text-heading font-semibold">{children}</h2>;
+}
+
+/** 渐进式披露：次要设置默认收起，点标题展开（重要项默认可见，细节按需）。 */
+function Disclosure({ title, children }: { title: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mb-5">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1 rounded-md py-0.5 text-body font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50"
+      >
+        <ChevronRight
+          className={cn("size-3.5 transition-transform", open && "rotate-90")}
+        />
+        {title}
+      </button>
+      {open && <div className="mt-1.5">{children}</div>}
+    </div>
+  );
 }
 
 function Group({ title, children }: { title?: string; children: React.ReactNode }) {
@@ -361,20 +564,28 @@ function GeneralSection({ settings, patch }: SP) {
         />
         {settings.vibrancy && (
           <Row
-            label="毛玻璃材质"
-            hint="不同材质的模糊强度与色调不同"
+            label="毛玻璃风格"
+            hint="从最通透到最厚重；配合下方不透明度调整感受最直观"
             right={
               <Segmented<VibrancyMaterial>
-                value={settings.vibrancyMaterial}
+                // 原生材质有 5 种枚举，但叠上面板内容膜层后视觉差异极小，
+                // 五选一等于盲选（用户实测否决）。压缩为 3 档可感知风格：
+                // 通透=hud（最亮最透）、柔和=sidebar（居中）、厚重=
+                // under-window（最实）。旧持久化值就近映射高亮，选择即写规范值
+                value={
+                  settings.vibrancyMaterial === "popover"
+                    ? "sidebar"
+                    : settings.vibrancyMaterial === "fullscreen"
+                      ? "hud"
+                      : settings.vibrancyMaterial
+                }
                 options={[
-                  { value: "hud", label: "HUD" },
-                  { value: "popover", label: "浮层" },
-                  { value: "sidebar", label: "边栏" },
-                  { value: "under-window", label: "窗底" },
-                  { value: "fullscreen", label: "全屏" },
+                  { value: "hud", label: "通透" },
+                  { value: "sidebar", label: "柔和" },
+                  { value: "under-window", label: "厚重" },
                 ]}
                 onChange={(v) => patch({ vibrancyMaterial: v })}
-                ariaLabel="毛玻璃材质"
+                ariaLabel="毛玻璃风格"
               />
             }
           />
@@ -434,17 +645,6 @@ function GeneralSection({ settings, patch }: SP) {
         />
       </Group>
       <Group title="行为">
-        <Row
-          label="发送后自动按回车"
-          hint="直接把内容发给 AI，谨慎开启"
-          right={
-            <Switch
-              aria-label="发送后自动按回车"
-              checked={settings.autoEnter}
-              onCheckedChange={(v) => patch({ autoEnter: v })}
-            />
-          }
-        />
         <Row
           label="面板置顶"
           hint="显示在屏幕最上层；关闭后可被其他窗口盖住"
@@ -684,6 +884,7 @@ function ClipboardSection({ settings, patch }: SP) {
           }
         />
       </Group>
+      <Disclosure title="收集规则与忽略应用">
       <Group title="规则">
         <Row
           label="忽略机密内容"
@@ -717,6 +918,7 @@ function ClipboardSection({ settings, patch }: SP) {
         onChange={(apps) => patch({ clipExcludedApps: apps })}
         addLabel="把当前应用加入忽略列表"
       />
+      </Disclosure>
     </div>
   );
 }
@@ -724,7 +926,7 @@ function ClipboardSection({ settings, patch }: SP) {
 function HotkeySection({ settings, patch }: SP) {
   return (
     <div>
-      <SectionTitle>快捷键</SectionTitle>
+      <SectionTitle>捕获与快捷键</SectionTitle>
       <Group title="全局触发">
         <Row
           label="触发键（双击）"
@@ -1022,16 +1224,20 @@ function AppListEditor({
   apps,
   onChange,
   addLabel,
+  getCurrentBundle,
 }: {
   apps: string[];
   onChange: (apps: string[]) => void;
   addLabel: string;
+  getCurrentBundle?: () => Promise<string | null>;
 }) {
   const addCurrent = async () => {
     try {
-      const info = await api.prevAppInfo();
-      if (!info || apps.includes(info.bundleId)) return;
-      onChange([...apps, info.bundleId]);
+      const bundleId = getCurrentBundle
+        ? await getCurrentBundle()
+        : (await api.prevAppInfo())?.bundleId;
+      if (!bundleId || apps.includes(bundleId)) return;
+      onChange([...apps, bundleId]);
     } catch {
       /* ignore */
     }
@@ -1083,10 +1289,298 @@ function AppListEditor({
   );
 }
 
+function TargetSection({ settings, patch }: SP) {
+  return (
+    <div>
+      <SectionTitle>目标与模板</SectionTitle>
+      <p className="mb-3 text-body text-muted-foreground">
+        Profile 按目标应用决定模板分组、格式、回车与隐私策略；重复 bundle 按列表首项稳定命中。
+      </p>
+      <TargetProfilesEditor settings={settings} patch={patch} />
+      <SnippetsSection settings={settings} patch={patch} />
+    </div>
+  );
+}
+
 function CompanionSection({ settings, patch }: SP) {
   return (
     <div>
       <SectionTitle>伴随停靠</SectionTitle>
+      <CompanionSettings settings={settings} patch={patch} />
+    </div>
+  );
+}
+
+function TargetProfilesEditor({ settings, patch }: SP) {
+  // 折叠态只显示名称与策略摘要；同一时刻只展开一张，降低设置页密度
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const duplicates = findDuplicateBundleAssignments(settings.targetProfiles);
+  const updateProfile = (id: string, profilePatch: Partial<TargetProfile>) =>
+    patch({
+      targetProfiles: settings.targetProfiles.map((profile) =>
+        profile.id === id ? { ...profile, ...profilePatch } : profile
+      ),
+    });
+  const addProfile = () => {
+    const id = crypto.randomUUID();
+    patch({
+      targetProfiles: [
+        ...settings.targetProfiles,
+        {
+          id,
+          name: "新 Profile",
+          bundleIds: [],
+          promptGroupId: GENERAL_PROMPT_GROUP_ID,
+          defaultFormat: "plain",
+          enterPolicy: "never",
+          privacyPolicy: "requireRedaction",
+          keepPanel: false,
+        },
+      ],
+      ...(settings.targetProfiles.length === 0
+        ? { defaultTargetProfileId: id }
+        : {}),
+    });
+    setExpandedId(id);
+  };
+  const removeProfile = (id: string) => {
+    const next = deleteTargetProfile(
+      {
+        groups: settings.promptGroups,
+        snippets: settings.promptSnippets,
+        profiles: settings.targetProfiles,
+        defaultProfileId: settings.defaultTargetProfileId,
+      },
+      id
+    );
+    patch({
+      targetProfiles: next.profiles,
+      defaultTargetProfileId: next.defaultProfileId,
+    });
+  };
+  const moveProfile = (id: string, direction: -1 | 1) => {
+    const next = [...settings.targetProfiles];
+    const index = next.findIndex((item) => item.id === id);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= next.length) return;
+    [next[index], next[target]] = [next[target], next[index]];
+    patch({ targetProfiles: next });
+  };
+  const currentTargetBundle = async () => {
+    const target = await api.getTargetSnapshot();
+    if (!target.ready || !target.bundleId) {
+      tip("warn", "当前投递目标未就绪，请先在目标应用中呼出 Toskr");
+      return null;
+    }
+    return target.bundleId;
+  };
+
+  return (
+    <div className="mb-5">
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <p className="text-body font-medium text-muted-foreground">Target Profiles</p>
+        <button
+          type="button"
+          onClick={addProfile}
+          className="flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-body text-primary"
+        >
+          <Plus className="size-3.5" /> 新建 Profile
+        </button>
+      </div>
+      <Group>
+        <Row
+          label="默认 Profile"
+          hint="未知应用会继承其分组/格式，但 Enter 与隐私仍强制使用安全默认"
+          right={
+            <SimpleSelect
+              ariaLabel="默认 Target Profile"
+              className="w-48"
+              align="end"
+              value={settings.defaultTargetProfileId}
+              options={
+                settings.targetProfiles.length === 0
+                  ? [{ value: SAFETY_PROFILE_ID, label: "安全默认" }]
+                  : settings.targetProfiles.map((profile) => ({
+                      value: profile.id,
+                      label: profile.name,
+                    }))
+              }
+              onChange={(defaultTargetProfileId) => patch({ defaultTargetProfileId })}
+            />
+          }
+        />
+      </Group>
+      {duplicates.length > 0 && (
+        <div role="alert" className="mb-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-label">
+          {duplicates.map((duplicate) => (
+            <p key={duplicate.bundleId}>
+              {duplicate.bundleId} 同时属于 {duplicate.profileNames.join("、")}；当前使用列表首项。
+            </p>
+          ))}
+        </div>
+      )}
+      <div className="space-y-2">
+        {settings.targetProfiles.map((profile, index) => {
+          const expanded = expandedId === profile.id;
+          const summary = [
+            settings.promptGroups.find(
+              (group) => group.id === profile.promptGroupId
+            )?.name ?? "通用",
+            profile.defaultFormat === "code" ? "代码块" : "纯文本",
+            profile.enterPolicy === "never"
+              ? "不回车"
+              : profile.enterPolicy === "confirm"
+                ? "回车需确认"
+                : "自动回车",
+            profile.bundleIds.length ? `${profile.bundleIds.length} 应用` : null,
+          ]
+            .filter(Boolean)
+            .join(" · ");
+          return (
+          <div key={profile.id} className="rounded-xl border border-border/60 bg-card">
+            <button
+              type="button"
+              aria-expanded={expanded}
+              aria-label={`${expanded ? "收起" : "展开"} Profile ${profile.name}`}
+              onClick={() => setExpandedId(expanded ? null : profile.id)}
+              className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+            >
+              <ChevronRight
+                className={cn(
+                  "size-3.5 shrink-0 text-muted-foreground transition-transform",
+                  expanded && "rotate-90"
+                )}
+              />
+              <span className="min-w-0 flex-1 truncate text-body font-medium">
+                {profile.name}
+              </span>
+              <span
+                className={cn(
+                  "shrink-0 text-label",
+                  profile.enterPolicy === "allow"
+                    ? "text-warning"
+                    : "text-muted-foreground"
+                )}
+              >
+                {summary}
+              </span>
+            </button>
+            {expanded && (
+            <div className="border-t border-border/40 p-3">
+            <div className="mb-2 flex items-center gap-2">
+              <input
+                aria-label={`${profile.name} Profile 名称`}
+                value={profile.name}
+                onChange={(event) => updateProfile(profile.id, { name: event.target.value })}
+                className="h-8 min-w-0 flex-1 rounded-lg border border-border bg-transparent px-2 text-title font-medium"
+              />
+              <IconButton
+                label="上移 Profile"
+                size="2xs"
+                disabled={index === 0}
+                onClick={() => moveProfile(profile.id, -1)}
+              ><ArrowUp /></IconButton>
+              <IconButton
+                label="下移 Profile"
+                size="2xs"
+                disabled={index === settings.targetProfiles.length - 1}
+                onClick={() => moveProfile(profile.id, 1)}
+              ><ArrowDown /></IconButton>
+              <IconButton
+                label={`删除 Profile ${profile.name}`}
+                tone="danger"
+                size="2xs"
+                onClick={() => removeProfile(profile.id)}
+              ><X /></IconButton>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="text-label text-muted-foreground">
+                Prompt 分组
+                <SimpleSelect
+                  ariaLabel={`${profile.name} Prompt 分组`}
+                  className="mt-0.5"
+                  value={profile.promptGroupId}
+                  options={[...settings.promptGroups]
+                    .sort((a, b) => a.order - b.order)
+                    .map((group) => ({ value: group.id, label: group.name }))}
+                  onChange={(promptGroupId) => updateProfile(profile.id, { promptGroupId })}
+                />
+              </div>
+              <div className="text-label text-muted-foreground">
+                默认格式
+                <SimpleSelect<TargetProfile["defaultFormat"]>
+                  ariaLabel={`${profile.name} 默认格式`}
+                  className="mt-0.5"
+                  value={profile.defaultFormat}
+                  options={[
+                    { value: "plain", label: "纯文本" },
+                    { value: "code", label: "代码块" },
+                  ]}
+                  onChange={(defaultFormat) => updateProfile(profile.id, { defaultFormat })}
+                />
+              </div>
+              <div className="text-label text-muted-foreground">
+                回车策略
+                <SimpleSelect<TargetProfile["enterPolicy"]>
+                  ariaLabel={`${profile.name} 回车策略`}
+                  className="mt-0.5"
+                  value={profile.enterPolicy}
+                  options={[
+                    { value: "never", label: "不按回车" },
+                    { value: "confirm", label: "发送前确认" },
+                    { value: "allow", label: "允许自动回车" },
+                  ]}
+                  onChange={(enterPolicy) => updateProfile(profile.id, { enterPolicy })}
+                />
+              </div>
+              <div className="text-label text-muted-foreground">
+                隐私策略
+                <SimpleSelect<TargetProfile["privacyPolicy"]>
+                  ariaLabel={`${profile.name} 隐私策略`}
+                  className="mt-0.5"
+                  value={profile.privacyPolicy}
+                  options={[
+                    { value: "requireRedaction", label: "要求脱敏（未生效）" },
+                    { value: "confirmRaw", label: "原文需确认（未生效）" },
+                    { value: "allowRaw", label: "允许原文" },
+                  ]}
+                  onChange={(privacyPolicy) => updateProfile(profile.id, { privacyPolicy })}
+                />
+              </div>
+            </div>
+            <div className="mt-2 flex items-center justify-between rounded-lg bg-muted/40 px-2 py-1.5">
+              <span className="text-body">发送后保留面板</span>
+              <Switch
+                aria-label={`${profile.name} 发送后保留面板`}
+                checked={profile.keepPanel}
+                onCheckedChange={(keepPanel) => updateProfile(profile.id, { keepPanel })}
+              />
+            </div>
+            <p className="mb-1 mt-2 text-label font-medium text-muted-foreground">精确匹配应用</p>
+            <AppListEditor
+              apps={profile.bundleIds}
+              onChange={(bundleIds) => updateProfile(profile.id, { bundleIds })}
+              addLabel="把当前投递目标加入 Profile"
+              getCurrentBundle={currentTargetBundle}
+            />
+            </div>
+            )}
+          </div>
+          );
+        })}
+        {settings.targetProfiles.length === 0 && (
+          <p className="rounded-xl border border-border/60 px-3 py-2 text-body text-muted-foreground">
+            暂无持久化 Profile；当前使用不可放宽的安全默认。
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CompanionSettings({ settings, patch }: SP) {
+  return (
+    <div className="mb-5">
       <Group>
         <Row
           label="启用伴随停靠"
@@ -1130,7 +1624,7 @@ function CompanionSection({ settings, patch }: SP) {
 function ExcludeSection({ settings, patch }: SP) {
   return (
     <div>
-      <SectionTitle>捕获排除</SectionTitle>
+      <p className="mb-2 text-body font-medium text-muted-foreground">捕获排除</p>
       <p className="mb-3 text-body text-muted-foreground">
         列表内的应用中双击只开关面板、绝不读取任何内容（密码管理器等敏感应用）。
       </p>
@@ -1532,17 +2026,69 @@ function DuePresetsSection({ settings, patch }: SP) {
 }
 
 function SnippetsSection({ settings, patch }: SP) {
+  const sortedGroups = [...settings.promptGroups].sort((a, b) => a.order - b.order);
+  const [groupName, setGroupName] = useState("");
   const [label, setLabel] = useState("");
   const [text, setText] = useState("");
+  const [groupId, setGroupId] = useState(GENERAL_PROMPT_GROUP_ID);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editLabel, setEditLabel] = useState("");
   const [editText, setEditText] = useState("");
+  const [editGroupId, setEditGroupId] = useState(GENERAL_PROMPT_GROUP_ID);
+  const addGroup = () => {
+    const name = groupName.trim();
+    if (!name) return;
+    patch({
+      promptGroups: [
+        ...settings.promptGroups,
+        {
+          id: crypto.randomUUID(),
+          name,
+          order: Math.max(-1, ...settings.promptGroups.map((item) => item.order)) + 1,
+        },
+      ],
+    });
+    setGroupName("");
+  };
+  const removeGroup = (id: string) => {
+    const next = deletePromptGroup(
+      {
+        groups: settings.promptGroups,
+        snippets: settings.promptSnippets,
+        profiles: settings.targetProfiles,
+        defaultProfileId: settings.defaultTargetProfileId,
+      },
+      id
+    );
+    patch({
+      promptGroups: next.groups,
+      promptSnippets: next.snippets,
+      targetProfiles: next.profiles,
+      defaultTargetProfileId: next.defaultProfileId,
+    });
+    if (groupId === id) setGroupId(GENERAL_PROMPT_GROUP_ID);
+    if (editGroupId === id) setEditGroupId(GENERAL_PROMPT_GROUP_ID);
+    if (next.affectedReferences > 0) {
+      tip("info", `已将 ${next.affectedReferences} 个引用回落到“通用”分组`);
+    }
+  };
+  const moveGroup = (id: string, direction: -1 | 1) => {
+    const ordered = [...sortedGroups];
+    const index = ordered.findIndex((item) => item.id === id);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= ordered.length) return;
+    [ordered[index], ordered[target]] = [ordered[target], ordered[index]];
+    patch({
+      promptGroups: ordered.map((item, order) => ({ ...item, order })),
+    });
+  };
   const add = () => {
     if (!label.trim() || !text.trim()) return;
     const snippet: PromptSnippet = {
       id: crypto.randomUUID(),
       label: label.trim(),
       text: text.trim(),
+      groupId,
     };
     patch({ promptSnippets: [...settings.promptSnippets, snippet] });
     setLabel("");
@@ -1552,13 +2098,19 @@ function SnippetsSection({ settings, patch }: SP) {
     setEditingId(sn.id);
     setEditLabel(sn.label);
     setEditText(sn.text);
+    setEditGroupId(sn.groupId);
   };
   const saveEdit = () => {
     if (!editingId || !editLabel.trim() || !editText.trim()) return;
     patch({
       promptSnippets: settings.promptSnippets.map((s) =>
         s.id === editingId
-          ? { ...s, label: editLabel.trim(), text: editText.trim() }
+          ? {
+              ...s,
+              label: editLabel.trim(),
+              text: editText.trim(),
+              groupId: editGroupId,
+            }
           : s
       ),
     });
@@ -1574,7 +2126,65 @@ function SnippetsSection({ settings, patch }: SP) {
   };
   return (
     <div>
-      <SectionTitle>Prompt 模板</SectionTitle>
+      <p className="mb-1.5 text-body font-medium text-muted-foreground">Prompt 分组</p>
+      <div className="mb-2 divide-y divide-border/50 rounded-xl border border-border/60 bg-card">
+        {sortedGroups.map((group, index) => (
+          <div key={group.id} className="flex items-center gap-2 px-3.5 py-2">
+            <input
+              aria-label={`${group.name} 分组名称`}
+              value={group.name}
+              disabled={group.id === GENERAL_PROMPT_GROUP_ID}
+              onChange={(event) =>
+                patch({
+                  promptGroups: settings.promptGroups.map((item) =>
+                    item.id === group.id ? { ...item, name: event.target.value } : item
+                  ),
+                })
+              }
+              className="h-8 min-w-0 flex-1 rounded-lg border border-border bg-transparent px-2 text-title disabled:border-transparent disabled:opacity-100"
+            />
+            <IconButton
+              label="上移 Prompt 分组"
+              size="2xs"
+              disabled={index === 0}
+              onClick={() => moveGroup(group.id, -1)}
+            ><ArrowUp /></IconButton>
+            <IconButton
+              label="下移 Prompt 分组"
+              size="2xs"
+              disabled={index === sortedGroups.length - 1}
+              onClick={() => moveGroup(group.id, 1)}
+            ><ArrowDown /></IconButton>
+            <IconButton
+              label={`删除 Prompt 分组 ${group.name}`}
+              tone="danger"
+              size="2xs"
+              disabled={group.id === GENERAL_PROMPT_GROUP_ID}
+              onClick={() => removeGroup(group.id)}
+            ><X /></IconButton>
+          </div>
+        ))}
+      </div>
+      <div className="mb-5 flex items-center gap-2">
+        <input
+          aria-label="新 Prompt 分组名称"
+          value={groupName}
+          onChange={(event) => setGroupName(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") addGroup();
+          }}
+          placeholder="新分组名称"
+          className="h-8 min-w-0 flex-1 rounded-lg border border-border bg-transparent px-2 text-body"
+        />
+        <button
+          type="button"
+          onClick={addGroup}
+          className="flex h-8 items-center gap-1 rounded-lg border border-border px-3 text-body text-primary"
+        >
+          <Plus className="size-3.5" /> 新建分组
+        </button>
+      </div>
+      <p className="mb-1.5 text-body font-medium text-muted-foreground">Prompt 模板</p>
       <p className="mb-3 text-body text-muted-foreground">
         发送时可在「发送到对话 ▾」下拉里选择模板（按此处顺序排列），与勾选内容组装后发出。
         模板中写 <code className="rounded-sm bg-muted px-1">{"{内容}"}</code>{" "}
@@ -1605,6 +2215,17 @@ function SnippetsSection({ settings, patch }: SP) {
                 }}
                 className="min-h-8 flex-1 resize-y rounded-lg border border-border bg-transparent px-2 py-1.5 text-body leading-relaxed outline-none focus:border-primary/50"
               />
+              <SimpleSelect
+                ariaLabel="模板所属分组"
+                className="w-28 shrink-0"
+                align="end"
+                value={editGroupId}
+                options={sortedGroups.map((group) => ({
+                  value: group.id,
+                  label: group.name,
+                }))}
+                onChange={setEditGroupId}
+              />
               <button
                 onClick={saveEdit}
                 title="保存（⌘⏎）"
@@ -1627,6 +2248,23 @@ function SnippetsSection({ settings, patch }: SP) {
               <span className="truncate text-body text-muted-foreground">
                 {sn.text.replace(/\n+/g, " ⏎ ")}
               </span>
+              <SimpleSelect
+                ariaLabel={`${sn.label} 所属 Prompt 分组`}
+                className="w-28 shrink-0"
+                align="end"
+                value={sn.groupId}
+                options={sortedGroups.map((group) => ({
+                  value: group.id,
+                  label: group.name,
+                }))}
+                onChange={(groupId) =>
+                  patch({
+                    promptSnippets: settings.promptSnippets.map((item) =>
+                      item.id === sn.id ? { ...item, groupId } : item
+                    ),
+                  })
+                }
+              />
               <div className="ml-auto flex shrink-0 items-center gap-0.5">
                 <IconButton
                   label="上移"
@@ -1691,6 +2329,17 @@ function SnippetsSection({ settings, patch }: SP) {
           placeholder="模板内容，写 {内容} 指定插入位置，支持多行"
           className="min-h-8 flex-1 resize-y rounded-lg border border-border bg-transparent px-2 py-1.5 text-body leading-relaxed outline-none focus:border-primary/50"
         />
+        <SimpleSelect
+          ariaLabel="新模板所属分组"
+          className="w-28 shrink-0"
+          align="end"
+          value={groupId}
+          options={sortedGroups.map((group) => ({
+            value: group.id,
+            label: group.name,
+          }))}
+          onChange={setGroupId}
+        />
         <button
           onClick={add}
           className="flex h-8 items-center gap-1 rounded-lg bg-primary px-3 text-body text-primary-foreground hover:opacity-90"
@@ -1703,29 +2352,107 @@ function SnippetsSection({ settings, patch }: SP) {
 }
 
 function DataSection() {
-  const [dir, setDir] = useState("");
+  const [status, setStatus] = useState<DataLocationStatus | null>(null);
+  const [inspection, setInspection] = useState<DataLocationInspection | null>(null);
+  const [activity, setActivity] = useState({
+    locked: false,
+    phase: "idle",
+    message: "",
+  });
+  const [health, setHealth] = useState<MediaIntegrityReport | null>(null);
+
+  const reloadStatus = () => {
+    void api.getDataLocationStatus().then(setStatus).catch(() => {});
+  };
+
   useEffect(() => {
-    api.getDataDir().then(setDir).catch(() => {});
+    reloadStatus();
+    const subscriptions = [
+      listen<{ locked: boolean; phase: string; message: string }>(
+        DATA_ACTIVITY_EVENT,
+        (event) => {
+          setActivity(event.payload);
+          if (
+            !event.payload.locked ||
+            event.payload.phase === "conflict" ||
+            event.payload.phase === "storageRecovery"
+          )
+            reloadStatus();
+        }
+      ),
+      listen(DATA_LOCATION_CHANGED_EVENT, () => reloadStatus()),
+      listen<MediaIntegrityReport>(SETTINGS_DATA_HEALTH_RESULT, (event) =>
+        setHealth(event.payload)
+      ),
+    ];
+    return () => subscriptions.forEach((subscription) => subscription.then((stop) => stop()));
   }, []);
+
+  const inspectPath = async (path: string) => {
+    try {
+      setInspection(await api.inspectDataLocation(path));
+    } catch (error) {
+      tip("warn", `预检失败：${String(error)}`);
+    }
+  };
 
   const pick = async () => {
     const { open } = await import("@tauri-apps/plugin-dialog");
     const picked = await open({ directory: true, multiple: false });
     if (typeof picked !== "string") return;
-    try {
-      setDir(await api.setDataDir(picked));
-    } catch (e) {
-      tip("warn", `切换失败：${e}`);
-    }
+    await inspectPath(picked);
   };
 
-  const reset = async () => {
-    try {
-      setDir(await api.resetDataDir());
-    } catch {
-      /* ignore */
-    }
+  const inspectDefault = async () => {
+    if (status) await inspectPath(status.defaultDir);
   };
+
+  const execute = async (
+    action: DataOperationPlan["action"],
+    replaceConfirmed = false
+  ) => {
+    if (!status || !inspection) return;
+    if (action === "replaceTargetWithCurrent") {
+      const confirmed = await ask(
+        "目标已有有效 Toskr 数据。应用会先创建目标恢复快照，再以当前数据替换目标；不提供自动合并。确认继续吗？",
+        { title: "二次确认替换目标", kind: "warning" }
+      );
+      if (!confirmed) return;
+      replaceConfirmed = true;
+    }
+    const plan: DataOperationPlan = {
+      operationId: crypto.randomUUID(),
+      sourcePath: status.activeDir,
+      targetPath: inspection.path,
+      action,
+      replaceConfirmed,
+      expectedTargetRevision: inspection.revision ?? "",
+    };
+    setActivity({ locked: true, phase: "prepare", message: "正在刷新并冻结写入…" });
+    await emitTo(
+      "main",
+      status.initializationFailure
+        ? SETTINGS_DATA_RECOVERY_OPERATION
+        : SETTINGS_DATA_OPERATION,
+      plan
+    );
+  };
+
+  const targetLabel: Record<DataLocationInspection["kind"], string> = {
+    missing: "目录不存在（可创建后迁移）",
+    empty: "空目录",
+    nonToskr: "含普通文件但没有 Toskr 数据",
+    valid: "有效 Toskr 数据",
+    corrupt: "Toskr JSON 损坏",
+    unsupported: "schema 高于当前版本",
+  };
+  const availableActions: DataOperationPlan["action"][] = inspection
+    ? status?.initializationFailure
+      ? inspection.kind === "valid" && !inspection.sameAsActive
+        ? ["loadExistingTarget", "cancel"]
+        : ["cancel"]
+      : availableDataActions(inspection)
+    : [];
 
   return (
     <div>
@@ -1737,36 +2464,185 @@ function DataSection() {
         <div className="px-3.5 py-2.5">
           <p className="text-title">数据文件夹</p>
           <p className="mt-1 break-all rounded-lg bg-muted/60 px-2 py-1 font-mono text-label text-muted-foreground">
-            {dir || "读取中…"}
+            {status?.activeDir || "读取中…"}
           </p>
           <p className="mt-1 text-label text-muted-foreground">
-            卡片数据（toskr-data.json）与图片附件（media/）都存放于此；
-            切换文件夹会把已有内容一并搬过去。
-            选择 iCloud Drive 内的文件夹即可多机同步（避免多台 Mac 同时运行）。
+            切换前会刷新待写数据、预检目标、创建恢复点并重新水合。
+            iCloud、Dropbox 等目录只作为外部同步位置，不承诺无冲突多设备同步。
           </p>
+          {status?.lastSuccessfulSwitchAtMs && (
+            <p className="mt-1 text-label text-muted-foreground">
+              最近成功切换：{new Date(status.lastSuccessfulSwitchAtMs).toLocaleString()}
+            </p>
+          )}
+          {status?.lastConflictAtMs && (
+            <p className="mt-1 text-label text-destructive">
+              最近磁盘冲突：{new Date(status.lastConflictAtMs).toLocaleString()}
+            </p>
+          )}
+          {status?.initializationFailure && (
+            <div className="mt-2 rounded-lg border border-destructive/40 p-2" role="alert">
+              <p className="text-body font-medium">数据目录初始化失败，当前保持只读。</p>
+              <p className="mt-1 text-label text-muted-foreground">
+                错误代码：{status.initializationFailure.code}
+              </p>
+              <p className="mt-1 text-label text-muted-foreground">
+                {status.initializationFailure.message}
+              </p>
+              <p className="mt-1 break-all font-mono text-label text-muted-foreground">
+                已配置目录：{status.activeDir}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  onClick={() =>
+                    void requestStorageRecoveryAction("retryStorage")
+                  }
+                  className="rounded-lg bg-primary px-3 py-1 text-body text-primary-foreground"
+                >
+                  重试挂载
+                </button>
+                <button
+                  onClick={() =>
+                    void requestStorageRecoveryAction("loadDefault")
+                  }
+                  className="rounded-lg border border-border px-3 py-1 text-body"
+                >
+                  明确加载默认目录
+                </button>
+              </div>
+            </div>
+          )}
+          {status?.conflictPending && !status.initializationFailure && (
+            <div className="mt-2 rounded-lg border border-destructive/40 p-2" role="alert">
+              <p className="text-body">外部版本尚未处理，自动写入已停止。</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  onClick={() =>
+                    void emitTo("main", SETTINGS_DATA_CONFLICT_ACTION, "reload")
+                  }
+                  className="rounded-lg bg-primary px-3 py-1 text-body text-primary-foreground"
+                >
+                  重新加载磁盘
+                </button>
+                <button
+                  onClick={() =>
+                    void emitTo("main", SETTINGS_DATA_CONFLICT_ACTION, "saveRecovery")
+                  }
+                  className="rounded-lg border border-border px-3 py-1 text-body"
+                >
+                  另存恢复副本后加载
+                </button>
+                <button
+                  onClick={() =>
+                    tip("info", "已保持只读；冲突仍待处理，不会覆盖磁盘新版本")
+                  }
+                  className="rounded-lg border border-border px-3 py-1 text-body text-muted-foreground"
+                >
+                  暂不处理
+                </button>
+              </div>
+            </div>
+          )}
           <div className="mt-2 flex gap-2">
             <button
               onClick={pick}
+              disabled={activity.locked && !status?.initializationFailure}
               className="rounded-lg border border-border px-3 py-1 text-body hover:bg-black/5 dark:hover:bg-white/5"
             >
-              选择文件夹…
+              预检新目录…
             </button>
             <button
-              onClick={reset}
+              onClick={() => void inspectDefault()}
+              disabled={activity.locked || !status}
               className="rounded-lg border border-border px-3 py-1 text-body text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5"
             >
-              恢复默认
+              预检默认目录
             </button>
           </div>
+          {activity.message && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="mt-2 rounded-lg border border-border bg-muted/40 px-2 py-1.5 text-body"
+            >
+              {activity.message}
+            </div>
+          )}
+          {inspection && (
+            <div className="mt-3 rounded-xl border border-border bg-muted/30 p-2.5">
+              <p className="text-title font-medium">目标预检：{targetLabel[inspection.kind]}</p>
+              <p className="mt-1 break-all font-mono text-label text-muted-foreground">
+                {inspection.path}
+              </p>
+              <p className="mt-1 text-label text-muted-foreground">
+                笔记 {inspection.noteCount} · 任务 {inspection.taskCount} · 媒体 {inspection.mediaCount}
+              </p>
+              {inspection.externalSyncLikely && (
+                <p className="mt-1 text-label text-muted-foreground">
+                  检测到外部同步目录：并发修改会被阻止，但本阶段不自动合并。
+                </p>
+              )}
+              {!inspection.writable && (
+                <p className="mt-1 text-label text-destructive">目标不可写，已阻止执行。</p>
+              )}
+              <div className="mt-2 flex flex-wrap gap-2">
+                {inspection.sameAsActive ? (
+                  <span className="text-label text-muted-foreground">这就是当前活动目录，无需切换。</span>
+                ) : availableActions.includes("migrateCurrentToTarget") ? (
+                  <button
+                    onClick={() => void execute("migrateCurrentToTarget")}
+                    disabled={activity.locked}
+                    className="rounded-lg bg-primary px-3 py-1 text-body text-primary-foreground"
+                  >
+                    迁移当前数据
+                  </button>
+                ) : availableActions.includes("loadExistingTarget") ? (
+                  <>
+                    <button
+                      onClick={() => void execute("loadExistingTarget")}
+                      disabled={activity.locked && !status?.initializationFailure}
+                      className="rounded-lg bg-primary px-3 py-1 text-body text-primary-foreground"
+                    >
+                      加载目标数据
+                    </button>
+                    <button
+                      onClick={() => void execute("replaceTargetWithCurrent")}
+                      disabled={activity.locked}
+                      className="rounded-lg border border-destructive/40 px-3 py-1 text-body text-destructive"
+                    >
+                      创建恢复点后替换目标
+                    </button>
+                  </>
+                ) : (
+                  <span className="text-label text-muted-foreground">
+                    当前目标不可安全加载或覆盖，请修复后重新预检。
+                  </span>
+                )}
+                <button
+                  onClick={() => setInspection(null)}
+                  disabled={activity.locked && !status?.initializationFailure}
+                  className="rounded-lg border border-border px-3 py-1 text-body text-muted-foreground"
+                >
+                  取消
+                </button>
+              </div>
+              {inspection.kind === "valid" && (
+                <p className="mt-2 text-label text-muted-foreground">
+                  两个有效数据集不会自动 record-level merge。
+                </p>
+              )}
+            </div>
+          )}
         </div>
       </Group>
       <Group title="备份">
         <Row
-          label="导出备份"
-          hint="把全部分组与卡片导出为 JSON 文件"
+          label="导出完整备份"
+          hint="版本化 manifest + 状态 + taskSections + 被引用媒体；缺媒体会失败"
           right={
             <button
               onClick={() => void emitTo("main", SETTINGS_EXPORT, {})}
+              disabled={activity.locked}
               className="rounded-lg border border-border px-3 py-1 text-body hover:bg-black/5 dark:hover:bg-white/5"
             >
               导出…
@@ -1774,17 +2650,42 @@ function DataSection() {
           }
         />
         <Row
-          label="导入合并"
-          hint="按 id 去重合并，不覆盖现有数据"
+          label="导入并预检"
+          hint="完整备份原子恢复（不含 API Key）；旧 JSON 仅兼容合并并显示缺失能力"
           right={
             <button
               onClick={() => void emitTo("main", SETTINGS_IMPORT, {})}
+              disabled={activity.locked}
               className="rounded-lg border border-border px-3 py-1 text-body hover:bg-black/5 dark:hover:bg-white/5"
             >
               导入…
             </button>
           }
         />
+      </Group>
+      <Group title="数据健康">
+        <div className="px-3.5 py-2.5">
+          <button
+            onClick={() => void emitTo("main", SETTINGS_DATA_HEALTH, {})}
+            disabled={activity.locked}
+            className="rounded-lg border border-border px-3 py-1 text-body hover:bg-black/5 dark:hover:bg-white/5"
+          >
+            运行健康检查
+          </button>
+          {health && (
+            <div className="mt-2 text-label text-muted-foreground" role="status" aria-live="polite">
+              <p>
+                引用 {health.referencedCount} · 文件 {health.actualCount} · 缺失 {health.missing.length} · 孤立 {health.orphaned.length} · 待 GC {health.tombstoned.length}
+              </p>
+              {health.suggestions.map((suggestion) => (
+                <p key={suggestion} className="mt-1">• {suggestion}</p>
+              ))}
+              {!health.missing.length && !health.orphaned.length && !health.unsafeEntries.length && (
+                <p className="mt-1 text-primary">媒体引用完整，未自动删除任何可疑文件。</p>
+              )}
+            </div>
+          )}
+        </div>
       </Group>
     </div>
   );

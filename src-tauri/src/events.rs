@@ -59,6 +59,8 @@ pub struct EdgeHideStatePayload {
 }
 
 pub const TRIGGER_EVENT: &str = "toskr://trigger";
+/// 前台观察器确认“下一次投递目标”语义变化；载荷为最新 TargetSnapshot。
+pub const TARGET_CHANGED_EVENT: &str = "toskr://target-changed";
 pub const HUD_EVENT: &str = "toskr://hud";
 pub const HUD_HOVER_EVENT: &str = "toskr://hud-hover";
 /// 即将隐藏 HUD：先通知前端播退场动画，延迟少许再真正 hide（进出场对称）。

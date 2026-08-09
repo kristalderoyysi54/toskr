@@ -5,13 +5,18 @@
 
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 
+/// 供 CGEventTap 区分 Toskr 合成事件与用户真实输入。
+pub(crate) const EVENT_SOURCE_MARKER: i64 = 0x544f_534b_52;
+
 /// kVK_ANSI_C
 const VK_C: u32 = 0x08;
 /// kVK_ANSI_V
 const VK_V: u32 = 0x09;
 
 fn with_enigo(f: impl FnOnce(&mut Enigo) -> enigo::InputResult<()>) -> Result<(), String> {
-    let mut enigo = Enigo::new(&Settings::default())
+    let mut settings = Settings::default();
+    settings.event_source_user_data = Some(EVENT_SOURCE_MARKER);
+    let mut enigo = Enigo::new(&settings)
         .map_err(|e| format!("初始化按键合成失败（缺少辅助功能权限？）: {e}"))?;
     f(&mut enigo).map_err(|e| format!("合成按键失败: {e}"))
 }

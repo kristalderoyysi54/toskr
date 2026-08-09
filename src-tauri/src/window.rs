@@ -252,10 +252,10 @@ fn show_panel_on_main(app: &AppHandle) -> tauri::Result<()> {
     // 抢占正在进行的滑出/滑回动画，确保面板立刻完整可见（键盘唤出优先级最高）。
     cancel_edge_hide(app, &state, "唤出面板");
 
-    // 面板即将抢占焦点，先记录前台应用（发送归还 + 伴随目标）
+    // 面板即将抢占焦点，先记录前台应用（下一次投递快照 + 伴随/焦点目标）
     let front = focus::frontmost_info().filter(|f| f.pid != me);
     if let Some(f) = &front {
-        *state.prev_app_pid.lock().unwrap() = Some(f.pid);
+        crate::target::observe_front(app, f);
     }
 
     let window = app
@@ -1202,6 +1202,9 @@ fn start_companion_tracker(app: &AppHandle, target_pid: i32, monitors: Vec<Monit
             // 切到列表外应用/桌面 → 不追（面板原地保持独立/上次吸附位置）
             let front_pid = match focus::frontmost_info() {
                 Some(front) => {
+                    if front.pid != me {
+                        crate::target::observe_front(&handle, &front);
+                    }
                     if front.pid != me && front.pid != target {
                         let in_list = {
                             let cfg = state.companion.lock().unwrap();
@@ -1213,7 +1216,6 @@ fn start_companion_tracker(app: &AppHandle, target_pid: i32, monitors: Vec<Monit
                         };
                         if in_list {
                             target = front.pid;
-                            *state.prev_app_pid.lock().unwrap() = Some(target);
                             // 高度覆盖随目标切换重置：与新应用窗口同高
                             reset_overrides_if_target_changed(&state, target);
                             last = None;
@@ -1547,6 +1549,7 @@ pub fn preview_image(
     index: usize,
     note_id: Option<String>,
     note_text: Option<String>,
+    data_generation: Option<u64>,
 ) {
     let index = if files.get(index).is_some() { index } else { 0 };
     let Some(anchor) = files.get(index) else {
@@ -1556,7 +1559,15 @@ pub fn preview_image(
         .and_then(|p| image::image_dimensions(&p).ok());
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
-        if let Err(e) = preview_image_on_main(&handle, files, index, dims, note_id, note_text) {
+        if let Err(e) = preview_image_on_main(
+            &handle,
+            files,
+            index,
+            dims,
+            note_id,
+            note_text,
+            data_generation,
+        ) {
             eprintln!("[toskr] 图片预览失败: {e}");
         }
     });
@@ -1570,6 +1581,7 @@ struct PreviewPayload {
     /// 所属笔记 id/当前文字（图片卡详情内联编辑备注；None = 无编辑条）。
     note_id: Option<String>,
     note_text: Option<String>,
+    data_generation: Option<u64>,
 }
 
 fn preview_image_on_main(
@@ -1579,6 +1591,7 @@ fn preview_image_on_main(
     dims: Option<(u32, u32)>,
     note_id: Option<String>,
     note_text: Option<String>,
+    data_generation: Option<u64>,
 ) -> tauri::Result<()> {
     let window = app
         .get_webview_window("imgpreview")
@@ -1625,6 +1638,7 @@ fn preview_image_on_main(
             index,
             note_id,
             note_text,
+            data_generation,
         },
     );
     window.set_size(LogicalSize::new(w, h))?;

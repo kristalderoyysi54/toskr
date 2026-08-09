@@ -29,6 +29,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { IconButton } from "@/components/ui/icon-button";
+import { TargetSendMenuItem } from "@/components/TargetSendMenuItem";
 import {
   Popover,
   PopoverContent,
@@ -415,9 +416,9 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
 function TaskMenu({ task }: { task: Task }) {
   return (
         <ContextMenuContent className="w-40">
-          <ContextMenuItem onClick={() => void sendTaskToChat(task.id)}>
+          <TargetSendMenuItem onClick={() => void sendTaskToChat(task.id)}>
             <Send className="size-3.5" /> 发送到对话
-          </ContextMenuItem>
+          </TargetSendMenuItem>
           <ContextMenuItem onClick={() => void splitSubtasks(task.id)}>
             <Sparkles className="size-3.5" /> AI 拆解子任务
           </ContextMenuItem>

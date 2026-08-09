@@ -1,9 +1,16 @@
 import { emitTo, listen } from "@tauri-apps/api/event";
 
 import { api } from "@/lib/tauri";
+import { isDataOperationLocked } from "@/store/dataOperationStore";
+import { useDataOperationStore } from "@/store/dataOperationStore";
+import { DATA_ACTIVITY_EVENT } from "@/lib/dataOperations";
 import { tip } from "@/lib/tip";
 import { useNotesStore, type Settings } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
+import {
+  clearTargetProfileOverride,
+  useTargetStore,
+} from "@/store/targetStore";
 
 /**
  * 主面板 ↔ 设置窗口的设置同步。
@@ -19,9 +26,24 @@ export const SETTINGS_PATCH = "toskr://settings-patch";
 export const SETTINGS_EXPORT = "toskr://do-export";
 export const SETTINGS_IMPORT = "toskr://do-import";
 export const SETTINGS_CLEAR_CLIP = "toskr://do-clear-clip";
+export const SETTINGS_DATA_OPERATION = "toskr://do-data-operation";
+export const SETTINGS_DATA_RECOVERY_OPERATION = "toskr://do-data-recovery-operation";
+export const SETTINGS_DATA_HEALTH = "toskr://do-data-health";
+export const SETTINGS_DATA_HEALTH_RESULT = "toskr://data-health-result";
+export const SETTINGS_DATA_CONFLICT_ACTION = "toskr://data-conflict-action";
+export type DataConflictAction =
+  | "reload"
+  | "saveRecovery"
+  | "retryStorage"
+  | "loadDefault";
 
 /** 应用设置补丁并执行对应的 Rust 侧副作用（主面板调用）。 */
 export function applySettingsPatch(patch: Partial<Settings>) {
+  if (isDataOperationLocked()) {
+    tip("warn", "数据操作进行中，设置暂时只读");
+    broadcastSettings();
+    return;
+  }
   // 互斥收敛（用户指定 2026-08：贴边隐藏与伴随磁吸是二选一的两种贴边行为）。
   // 所有互斥都必须收敛在这里——任何入口（停靠菜单/设置窗）绕过本函数直连
   // setSettings 都会复现「开关打勾但被另一模式否决」的静默失效
@@ -60,6 +82,14 @@ export function applySettingsPatch(patch: Partial<Settings>) {
   }
   useNotesStore.getState().setSettings(patch);
   const s = useNotesStore.getState().settings;
+  const profileOverrideId = useTargetStore.getState().profileOverrideId;
+  if (
+    profileOverrideId &&
+    !s.targetProfiles.some((profile) => profile.id === profileOverrideId)
+  ) {
+    clearTargetProfileOverride();
+    tip("info", "本次 Profile 已被删除，已恢复自动匹配");
+  }
   if ("hotkeyModifier" in patch || "hotkeyGapMs" in patch) {
     void api.setHotkeyConfig(s.hotkeyModifier, s.hotkeyGapMs);
   }
@@ -104,11 +134,8 @@ export function applySettingsPatch(patch: Partial<Settings>) {
     void api.setClipPause(s.clipPauseUntil ?? 0);
   }
   if ("clipRetentionDays" in patch) {
-    // 缩短时长即刻生效（不等 30 分钟周期），清掉孤儿图片
-    useNotesStore
-      .getState()
-      .pruneClipHistory()
-      .forEach((f) => void api.removeImage(f).catch(() => {}));
+    // 缩短时长即刻更新记录；媒体实体由主窗口的引用差分统一进入延迟 GC。
+    useNotesStore.getState().pruneClipHistory();
   }
   if (
     "clipIgnoreConcealed" in patch ||
@@ -154,13 +181,44 @@ export function installSettingsSyncHost(handlers: {
   onExport: () => void;
   onImport: () => void;
   onClearClip: () => void;
+  onDataOperation: (plan: import("@/lib/tauri").DataOperationPlan) => void;
+  onDataRecoveryOperation: (plan: import("@/lib/tauri").DataOperationPlan) => void;
+  onDataHealth: () => void;
+  onDataConflictAction: (action: DataConflictAction) => void;
 }) {
+  const whileWritable = (action: () => void) => {
+    if (isDataOperationLocked()) {
+      tip("warn", "数据操作进行中，当前操作已阻止");
+      return;
+    }
+    action();
+  };
   const subs = [
-    listen(SETTINGS_REQUEST, () => broadcastSettings()),
+    listen(SETTINGS_REQUEST, () => {
+      broadcastSettings();
+      const activity = useDataOperationStore.getState();
+      void emitTo("settings", DATA_ACTIVITY_EVENT, {
+        locked: activity.locked,
+        phase: activity.phase,
+        message: activity.message,
+      }).catch(() => {});
+    }),
     listen<Partial<Settings>>(SETTINGS_PATCH, (e) => applySettingsPatch(e.payload)),
-    listen(SETTINGS_EXPORT, () => handlers.onExport()),
-    listen(SETTINGS_IMPORT, () => handlers.onImport()),
-    listen(SETTINGS_CLEAR_CLIP, () => handlers.onClearClip()),
+    listen(SETTINGS_EXPORT, () => whileWritable(handlers.onExport)),
+    listen(SETTINGS_IMPORT, () => whileWritable(handlers.onImport)),
+    listen(SETTINGS_CLEAR_CLIP, () => whileWritable(handlers.onClearClip)),
+    listen<import("@/lib/tauri").DataOperationPlan>(SETTINGS_DATA_OPERATION, (event) =>
+      whileWritable(() => handlers.onDataOperation(event.payload))
+    ),
+    listen<import("@/lib/tauri").DataOperationPlan>(
+      SETTINGS_DATA_RECOVERY_OPERATION,
+      (event) => handlers.onDataRecoveryOperation(event.payload)
+    ),
+    listen(SETTINGS_DATA_HEALTH, () => whileWritable(handlers.onDataHealth)),
+    // 冲突会把主界面锁成只读；处理冲突/启动恢复的出口必须仍可调用。
+    listen<DataConflictAction>(SETTINGS_DATA_CONFLICT_ACTION, (event) =>
+      handlers.onDataConflictAction(event.payload)
+    ),
   ];
   return () => {
     subs.forEach((p) => p.then((fn) => fn()));

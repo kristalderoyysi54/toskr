@@ -3,12 +3,10 @@
 //! 约定：非 async 命令在 Tauri v2 中于主线程执行（可安全做窗口/AppKit 操作）；
 //! 含 sleep 的流程一律 async + spawn_blocking。
 
-use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::input::synth;
 use crate::state::{AppState, MOD_CONTROL, MOD_OPTION, MOD_SHIFT};
 
 /// 定位到目标位置并显示面板（伴随/经典模式由 Rust 侧裁决）。
@@ -26,9 +24,10 @@ pub fn hide_panel(app: AppHandle, restore_focus: bool) {
 /// 写系统剪贴板（「复制为列表」等）。
 #[tauri::command]
 pub fn copy_text(app: AppHandle, text: String) -> Result<(), String> {
-    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-    clipboard.set_text(text).map_err(|e| e.to_string())?;
-    crate::clipwatch::mark_self_write(&app);
+    let _permit = crate::pasteboard::try_claim(&app)
+        .ok_or_else(|| "剪贴板事务进行中，请稍后重试".to_string())?;
+    let exact_count = crate::pasteboard::write_general_text(&text).map_err(|e| e.to_string())?;
+    crate::clipwatch::mark_self_write_count(&app, exact_count);
     Ok(())
 }
 
@@ -59,8 +58,16 @@ pub fn quick_look(
     index: Option<usize>,
     note_id: Option<String>,
     note_text: Option<String>,
+    data_generation: Option<u64>,
 ) {
-    crate::window::preview_image(&app, files, index.unwrap_or(0), note_id, note_text);
+    crate::window::preview_image(
+        &app,
+        files,
+        index.unwrap_or(0),
+        note_id,
+        note_text,
+        data_generation,
+    );
 }
 
 /// 文本详情窗（桌面居中弹出；窄面板放不下长文，预览/编辑都在这个窗口）。
@@ -97,10 +104,60 @@ pub fn set_clip_rules(
     *state.clip_excluded_apps.lock().unwrap() = apps;
 }
 
-/// 一键发送：备份剪贴板 → 收面板 → 激活目标并确认到达 →
-/// 先粘贴文本，再逐张粘贴图片附件（图片必须以图片形式写入剪贴板，
-/// 否则只会粘出占位文字）→ 可选回车 → 延迟还原剪贴板。
-/// 目标未到达则**中止**并返回 false（不粘贴、不标完成）。
+#[tauri::command]
+pub fn get_target_snapshot(app: AppHandle) -> crate::target::TargetSnapshot {
+    crate::target::revalidate_observed_target(&app)
+}
+
+#[tauri::command]
+pub fn refresh_target_snapshot(app: AppHandle) -> crate::target::TargetSnapshot {
+    crate::target::refresh_current(&app.state::<AppState>())
+}
+
+#[tauri::command]
+pub fn validate_target_snapshot(
+    app: AppHandle,
+    target_token: Option<String>,
+) -> crate::target::TargetSnapshot {
+    crate::target::validate_current(&app.state::<AppState>(), target_token.as_deref())
+}
+
+async fn run_delivery(
+    app: AppHandle,
+    request: crate::delivery::SendDeliveryRequest,
+) -> Result<crate::delivery::SendDeliveryResult, String> {
+    let result = crate::delivery::execute_native(app.clone(), request).await?;
+    let target = result.target.as_ref();
+    crate::diag::push(
+        &app,
+        format!(
+            "delivery={} target={}({}) status={} reason={}",
+            result.delivery_id,
+            target
+                .and_then(|snapshot| snapshot.bundle_id.as_deref())
+                .unwrap_or("?"),
+            target
+                .and_then(|snapshot| snapshot.pid)
+                .map_or_else(|| "?".into(), |pid| pid.to_string()),
+            result.status.as_str(),
+            result.reason_code.as_str(),
+        ),
+    );
+    let (hud_kind, hud_message) = crate::delivery::hud_feedback(&result);
+    crate::window::show_hud(&app, hud_kind, hud_message.to_string(), false, false, None);
+    Ok(result)
+}
+
+/// 唯一原生发送契约。所有失败均通过结构化结果返回；只有运行时 join 失败才 reject。
+#[tauri::command]
+pub async fn send_delivery(
+    app: AppHandle,
+    request: crate::delivery::SendDeliveryRequest,
+) -> Result<crate::delivery::SendDeliveryResult, String> {
+    run_delivery(app, request).await
+}
+
+/// 旧调用兼容层：只组装新请求并委托 `send_delivery`，不保留第二套发送逻辑。
 #[tauri::command]
 pub async fn send_to_chat(
     app: AppHandle,
@@ -109,123 +166,21 @@ pub async fn send_to_chat(
     press_enter: bool,
     keep_panel: bool,
 ) -> Result<bool, String> {
-    // 备份用户原剪贴板（文本），发送完成后还原，避免静默吞掉用户内容
-    let saved = arboard::Clipboard::new()
-        .ok()
-        .and_then(|mut c| c.get_text().ok());
-
-    // 图片先在主线程外读成像素，避免粘贴过程中再读盘拖慢节奏
-    let images: Vec<(usize, usize, Vec<u8>)> = image_files
-        .iter()
-        .filter_map(|f| crate::storage::read_image_rgba(&app, f))
-        .collect();
-
-    let target_pid = *app.state::<AppState>().prev_app_pid.lock().unwrap();
-    let target_name = target_pid
-        .and_then(crate::focus::app_name_of)
-        .unwrap_or_else(|| "目标应用".to_string());
-    crate::diag::push(
-        &app,
-        format!(
-            "发送 → {target_name}({}) 文本{}字 图{}张",
-            target_pid.map_or("?".into(), |p| p.to_string()),
-            text.chars().count(),
-            images.len()
+    static LEGACY_DELIVERY_SEQ: AtomicU64 = AtomicU64::new(0);
+    let snapshot = crate::target::current_snapshot(&app.state::<AppState>());
+    let request = crate::delivery::SendDeliveryRequest {
+        target_token: snapshot.token,
+        text,
+        image_files,
+        press_enter,
+        keep_panel,
+        delivery_id: format!(
+            "legacy-{}-{}",
+            crate::target::now_ms(),
+            LEGACY_DELIVERY_SEQ.fetch_add(1, Ordering::Relaxed)
         ),
-    );
-    // 钉住时保留面板（仅把焦点交回目标应用），否则收起面板
-    if keep_panel {
-        if let Some(pid) = target_pid {
-            crate::focus::activate_pid(pid);
-        }
-    } else {
-        crate::window::hide_panel(&app, false);
-    }
-
-    let has_text = !text.trim().is_empty();
-    let mark_handle = app.clone();
-    let sent = tauri::async_runtime::spawn_blocking(move || -> Result<bool, String> {
-        if let Some(pid) = target_pid {
-            crate::focus::activate_pid(pid);
-            // 激活是异步的：确认目标真正到达前台，未到达即中止（防误粘贴）
-            if !crate::focus::wait_frontmost(pid, 10, 40) {
-                return Ok(false);
-            }
-        }
-        std::thread::sleep(Duration::from_millis(180));
-
-        if has_text {
-            {
-                let mut c = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-                c.set_text(text).map_err(|e| e.to_string())?;
-            }
-            crate::clipwatch::mark_self_write(&mark_handle);
-            synth::press_paste()?;
-        }
-
-        for (w, h, rgba) in images {
-            // 每张图单独写入剪贴板再粘贴。间隔必须足够长：慢应用（聊天类）
-            // 异步消化上一张图期间就覆盖剪贴板会导致后续粘贴被吞（只发出一张）
-            std::thread::sleep(Duration::from_millis(700));
-            if let Some(pid) = target_pid {
-                // 目标中途失焦（图片预览弹层抢焦等）时重新激活，防粘错地方/丢图
-                if !crate::focus::wait_frontmost(pid, 5, 40) {
-                    crate::focus::activate_pid(pid);
-                    std::thread::sleep(Duration::from_millis(200));
-                }
-            }
-            {
-                let mut c = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-                c.set_image(arboard::ImageData {
-                    width: w,
-                    height: h,
-                    bytes: rgba.into(),
-                })
-                .map_err(|e| e.to_string())?;
-            }
-            crate::clipwatch::mark_self_write(&mark_handle);
-            synth::press_paste()?;
-        }
-
-        if press_enter {
-            std::thread::sleep(Duration::from_millis(200));
-            synth::press_return()?;
-        }
-        Ok(true)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
-    crate::diag::push(
-        &app,
-        if sent { "发送: 粘贴完成" } else { "发送: 目标未就绪，已中止" },
-    );
-    // 发送回执 HUD：成功报告去向（发错目标一眼可见），失败明确警示
-    if sent {
-        crate::window::show_hud(&app, "sent", format!("已发送到 {target_name}"), false, false, None);
-    } else {
-        // 单条合并文案：原先这里与下方 else 连发两条 warn，HUD 单槽互相覆盖
-        crate::window::show_hud(
-            &app,
-            "warn",
-            format!("发送中止：{target_name} 未到达前台 · 内容已在剪贴板"),
-            false, false, None,
-        );
-    }
-    if sent {
-        // 目标应用已在按键事件处理中读取粘贴板；延迟还原用户原剪贴板
-        let restore_handle = app.clone();
-        tauri::async_runtime::spawn_blocking(move || {
-            std::thread::sleep(Duration::from_millis(1500));
-            if let Some(text) = saved {
-                if let Ok(mut c) = arboard::Clipboard::new() {
-                    let _ = c.set_text(text);
-                    crate::clipwatch::mark_self_write(&restore_handle);
-                }
-            }
-        });
-    }
-    Ok(sent)
+    };
+    Ok(run_delivery(app, request).await?.status == crate::delivery::DeliveryStatus::Sent)
 }
 
 /// 辅助功能授权状态；`prompt` 为 true 时未授权会弹系统提示。
@@ -302,20 +257,17 @@ pub async fn paste_image_from_clipboard(app: AppHandle) -> Result<Option<PastedI
 }
 
 /// 把图片附件写入系统剪贴板（图片卡「复制内容」）。
-/// 复用发送链路同款 arboard 写入 + mark_self_write（防剪贴板历史收录自家写入）。
+/// 复用全局 pasteboard 写入许可与精确 generation 标记，防止历史收录自家写入。
 #[tauri::command]
 pub async fn copy_image_to_clipboard(app: AppHandle, file: String) -> Result<(), String> {
-    let (w, h, rgba) =
-        crate::storage::read_image_rgba(&app, &file).ok_or_else(|| "图片读取失败".to_string())?;
     tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
-        let mut c = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-        c.set_image(arboard::ImageData {
-            width: w,
-            height: h,
-            bytes: rgba.into(),
-        })
-        .map_err(|e| e.to_string())?;
-        crate::clipwatch::mark_self_write(&app);
+        let (w, h, rgba) = crate::storage::read_image_rgba(&app, &file)
+            .ok_or_else(|| "图片读取失败".to_string())?;
+        let _permit = crate::pasteboard::try_claim(&app)
+            .ok_or_else(|| "剪贴板事务进行中，请稍后重试".to_string())?;
+        let exact_count =
+            crate::pasteboard::write_general_image(w, h, &rgba).map_err(|e| e.to_string())?;
+        crate::clipwatch::mark_self_write_count(&app, exact_count);
         Ok(())
     })
     .await
@@ -397,13 +349,13 @@ pub fn set_panel_hotkey(app: AppHandle, shortcut: Option<String>) -> Result<(), 
     Ok(())
 }
 
-/// 面板快捷键触发：快照前台应用（供「发送到对话」归还焦点）后开关面板。
+/// 面板快捷键触发：先建立前台目标快照，再开关面板。
 fn on_panel_hotkey(app: &AppHandle) {
     crate::diag::push(app, "面板快捷键触发");
     let me = std::process::id() as i32;
     if let Some(front) = crate::focus::frontmost_info() {
         if front.pid != me {
-            *app.state::<AppState>().prev_app_pid.lock().unwrap() = Some(front.pid);
+            crate::target::observe_front(app, &front);
         }
     }
     let _ = app.emit_to(
@@ -473,15 +425,27 @@ pub fn prev_app_info(app: AppHandle) -> Option<PrevAppInfo> {
 
 /// 面板失焦后由前端调用：刷新「发送目标」为用户切去的应用（防 Pin 场景目标漂移），
 /// 并在切到伴随应用时动态重吸附。
+fn internal_aux_window_focused(app: &AppHandle) -> bool {
+    ["settings", "textpreview", "imgpreview"]
+        .into_iter()
+        .any(|label| {
+            app.get_webview_window(label)
+                .and_then(|window| window.is_focused().ok())
+                .unwrap_or(false)
+        })
+}
+
 #[tauri::command]
-pub fn refresh_prev_app(app: AppHandle) {
+pub fn refresh_prev_app(app: AppHandle) -> crate::target::TargetSnapshot {
     let me = std::process::id() as i32;
-    if let Some(front) = crate::focus::frontmost_info() {
-        if front.pid != me {
-            *app.state::<AppState>().prev_app_pid.lock().unwrap() = Some(front.pid);
-        }
-    }
+    let (observation_revision, front) = crate::focus::frontmost_info_with_revision();
+    let snapshot = match front {
+        Some(front) if front.pid != me => crate::target::observe_front(&app, &front),
+        _ if internal_aux_window_focused(&app) => crate::target::revalidate_observed_target(&app),
+        _ => crate::target::require_observation_after(&app, observation_revision),
+    };
     crate::window::maybe_redock(&app);
+    snapshot
 }
 
 /// 上/下缘拖拽调节（增量）。返回当前偏移与高度供前端持久化。
@@ -509,7 +473,7 @@ pub fn set_panel_vertical(app: AppHandle, top_offset: f64, height: Option<f64>) 
 pub fn show_capture_hud(app: AppHandle, kind: String, preview: String) {
     let kind = if kind == "duplicate" { "duplicate" } else { "added" };
     // 前端去重裁决的回执也进诊断：与「捕获:」行拼起来即是完整链路
-    crate::diag::push(&app, format!("入库回执: {kind}「{preview}」"));
+    crate::diag::push(&app, format!("入库回执: {kind}"));
     // 捕获动作轻响一声（系统音 Pop；重复内容同样响——动作要有听觉回执；
     // 隐身模式/开关关闭时静音）
     let state = app.state::<AppState>();
@@ -675,11 +639,15 @@ pub fn app_icon(app: AppHandle, bundle_id: String) -> Option<AppIconInfo> {
         None => {
             let fetched = crate::focus::app_icon_png_base64(&bundle_id)
                 .map(|i| (i.data_url, i.color));
-            state
-                .icon_cache
-                .lock()
-                .unwrap()
-                .insert(bundle_id, fetched.clone());
+            // 只缓存成功结果：瞬时失败（应用恰好不在运行等）负缓存进 Map
+            // 会让该 bundle 整个会话再也取不到图标——目标栏/卡片 logo 一起消失
+            if fetched.is_some() {
+                state
+                    .icon_cache
+                    .lock()
+                    .unwrap()
+                    .insert(bundle_id, fetched.clone());
+            }
             fetched
         }
     };
@@ -810,42 +778,172 @@ pub fn get_diagnostics(app: AppHandle) -> Vec<crate::diag::DiagEntry> {
 
 // ===== 存储（可自定义数据文件夹 + 图片附件） =====
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupImportPrepared {
+    pub inspection: crate::backup::BackupInspection,
+    pub operation: crate::data_integrity::DataOperationResult,
+}
+
+fn blocking_data_failure(error: impl std::fmt::Display) -> crate::data_integrity::DataOperationFailure {
+    crate::data_integrity::DataOperationFailure {
+        code: crate::data_integrity::DataOperationFailureCode::ReadFailed,
+        message: format!("后台文件任务失败：{error}"),
+    }
+}
+
+fn blocking_backup_failure(error: impl std::fmt::Display) -> crate::backup::BackupFailure {
+    crate::backup::BackupFailure {
+        code: crate::backup::BackupFailureCode::IoFailed,
+        message: format!("后台备份任务失败：{error}"),
+    }
+}
+
 /// 当前数据文件夹路径。
 #[tauri::command]
 pub fn get_data_dir(app: AppHandle) -> String {
     crate::storage::data_dir(&app).to_string_lossy().to_string()
 }
 
-/// 切换数据文件夹（搬运已有数据与图片）。
 #[tauri::command]
-pub fn set_data_dir(app: AppHandle, path: String) -> Result<String, String> {
-    crate::storage::set_data_dir(&app, std::path::Path::new(&path))?;
-    Ok(crate::storage::data_dir(&app).to_string_lossy().to_string())
+pub fn get_data_location_status(app: AppHandle) -> crate::storage::DataLocationStatus {
+    crate::storage::data_location_status(&app)
 }
 
-/// 恢复默认数据文件夹。
 #[tauri::command]
-pub fn reset_data_dir(app: AppHandle) -> Result<String, String> {
-    crate::storage::reset_data_dir(&app)?;
-    Ok(crate::storage::data_dir(&app).to_string_lossy().to_string())
+pub async fn retry_storage_initialization(
+    app: AppHandle,
+) -> Result<crate::storage::DataLocationStatus, crate::data_integrity::DataOperationFailure> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::storage::retry_storage_initialization(&app)
+    })
+    .await
+    .map_err(blocking_data_failure)?
 }
 
-/// 读取笔记数据文件（不存在返回 None，前端回落旧存储做一次性迁移）。
 #[tauri::command]
-pub fn read_data_file(app: AppHandle) -> Option<String> {
-    crate::storage::read_data(&app)
+pub async fn load_default_from_recovery(
+    app: AppHandle,
+) -> Result<crate::storage::DataLocationStatus, crate::data_integrity::DataOperationFailure> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::storage::load_default_from_recovery(&app)
+    })
+    .await
+    .map_err(blocking_data_failure)?
 }
 
-/// 写入笔记数据文件（原子替换）。
 #[tauri::command]
-pub fn write_data_file(app: AppHandle, content: String) -> Result<(), String> {
-    crate::storage::write_data(&app, &content)
+pub fn clear_data_conflict(app: AppHandle) {
+    crate::storage::clear_data_conflict(&app);
+}
+
+#[tauri::command]
+pub fn mark_data_conflict(
+    app: AppHandle,
+) -> Result<(), crate::data_integrity::DataOperationFailure> {
+    crate::storage::mark_data_conflict(&app)
+}
+
+#[tauri::command]
+pub async fn inspect_data_location(
+    app: AppHandle,
+    path: String,
+) -> Result<crate::data_integrity::DataLocationInspection, crate::data_integrity::DataOperationFailure>
+{
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::storage::inspect_data_location(&app, std::path::Path::new(&path))
+    })
+    .await
+    .map_err(blocking_data_failure)
+}
+
+#[tauri::command]
+pub async fn begin_recovery_data_operation(
+    app: AppHandle,
+    plan: crate::data_integrity::DataOperationPlan,
+) -> Result<crate::data_integrity::DataOperationResult, crate::data_integrity::DataOperationFailure>
+{
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::storage::begin_recovery_data_operation(&app, &plan)
+    })
+    .await
+    .map_err(blocking_data_failure)?
+}
+
+#[tauri::command]
+pub async fn begin_data_operation(
+    app: AppHandle,
+    plan: crate::data_integrity::DataOperationPlan,
+) -> Result<crate::data_integrity::DataOperationResult, crate::data_integrity::DataOperationFailure>
+{
+    tauri::async_runtime::spawn_blocking(move || crate::storage::begin_data_operation(&app, &plan))
+        .await
+        .map_err(blocking_data_failure)?
+}
+
+#[tauri::command]
+pub async fn finalize_data_operation(
+    app: AppHandle,
+    operation_id: String,
+) -> Result<crate::data_integrity::DataOperationResult, crate::data_integrity::DataOperationFailure>
+{
+    let worker_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        crate::storage::finalize_data_operation(&worker_app, &operation_id)
+    })
+    .await
+    .map_err(blocking_data_failure)??;
+    let _ = app.emit("toskr://data-location-changed", &result);
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn rollback_data_operation(
+    app: AppHandle,
+    operation_id: String,
+) -> Result<crate::data_integrity::DataOperationResult, crate::data_integrity::DataOperationFailure>
+{
+    let worker_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        crate::storage::rollback_data_operation(&worker_app, &operation_id)
+    })
+    .await
+    .map_err(blocking_data_failure)??;
+    let _ = app.emit("toskr://data-location-changed", &result);
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn read_data_snapshot(
+    app: AppHandle,
+) -> Result<crate::data_integrity::DataFileSnapshot, crate::data_integrity::DataOperationFailure>
+{
+    tauri::async_runtime::spawn_blocking(move || crate::storage::read_data_snapshot(&app))
+        .await
+        .map_err(blocking_data_failure)?
+}
+
+#[tauri::command]
+pub async fn write_data_if_current(
+    app: AppHandle,
+    content: String,
+    expected_revision: String,
+) -> Result<crate::data_integrity::DataFileSnapshot, crate::data_integrity::DataOperationFailure>
+{
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::storage::write_data_if_current(&app, &content, &expected_revision)
+    })
+    .await
+    .map_err(blocking_data_failure)?
 }
 
 /// 图片附件的 data URL（前端 <img> 直接渲染）。
 #[tauri::command]
-pub fn image_data_url(app: AppHandle, name: String) -> Option<String> {
-    crate::storage::image_data_url(&app, &name)
+pub async fn image_data_url(app: AppHandle, name: String) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || crate::storage::image_data_url(&app, &name))
+        .await
+        .ok()
+        .flatten()
 }
 
 /// 卡片缩略图 data URL（首次生成落盘缓存；解码走阻塞线程池不占 UI）。
@@ -859,20 +957,177 @@ pub async fn image_thumb_url(app: AppHandle, name: String) -> Option<String> {
     .flatten()
 }
 
-/// 删除图片附件（卡片删除时清理）。
 #[tauri::command]
-pub fn remove_image(app: AppHandle, name: String) {
-    crate::storage::remove_image(&app, &name);
+pub async fn export_complete_backup(
+    app: AppHandle,
+    path: String,
+    state_json: String,
+    expected_revision: String,
+) -> Result<crate::backup::BackupInspection, crate::backup::BackupFailure> {
+    let created_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis() as u64);
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::storage::export_complete_backup(
+            &app,
+            std::path::Path::new(&path),
+            &state_json,
+            created_at_ms,
+            Some(&expected_revision),
+        )
+    })
+    .await
+    .map_err(blocking_backup_failure)?
 }
 
-/// 导出备份到用户选定路径。
 #[tauri::command]
-pub fn export_file(path: String, content: String) -> Result<(), String> {
-    std::fs::write(&path, content).map_err(|e| format!("写入失败: {e}"))
+pub async fn export_conflict_recovery_backup(
+    app: AppHandle,
+    path: String,
+    state_json: String,
+) -> Result<crate::backup::BackupInspection, crate::backup::BackupFailure> {
+    let created_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis() as u64);
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::storage::export_conflict_recovery_backup(
+            &app,
+            std::path::Path::new(&path),
+            &state_json,
+            created_at_ms,
+        )
+    })
+    .await
+    .map_err(blocking_backup_failure)?
 }
 
-/// 从用户选定路径读入备份。
 #[tauri::command]
-pub fn import_file(path: String) -> Result<String, String> {
-    std::fs::read_to_string(&path).map_err(|e| format!("读取失败: {e}"))
+pub async fn inspect_backup(
+    path: String,
+) -> Result<crate::backup::BackupInspection, crate::backup::BackupFailure> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::backup::inspect_backup(std::path::Path::new(&path))
+    })
+    .await
+    .map_err(blocking_backup_failure)?
+}
+
+#[tauri::command]
+pub async fn create_data_recovery_backup(
+    app: AppHandle,
+    state_json: String,
+    operation_id: String,
+    expected_revision: String,
+) -> Result<String, crate::backup::BackupFailure> {
+    if operation_id.is_empty()
+        || operation_id.len() > 80
+        || !operation_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err(crate::backup::BackupFailure {
+            code: crate::backup::BackupFailureCode::InvalidState,
+            message: "operation ID 格式无效".into(),
+        });
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let recovery_dir = crate::storage::default_data_dir(&app).join("recovery");
+        std::fs::create_dir_all(&recovery_dir).map_err(blocking_backup_failure)?;
+        let path = recovery_dir.join(format!("recovery-{operation_id}.toskr-backup"));
+        let created_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_millis() as u64);
+        crate::storage::export_complete_backup(
+            &app,
+            &path,
+            &state_json,
+            created_at_ms,
+            Some(&expected_revision),
+        )?;
+        Ok(path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(blocking_backup_failure)?
+}
+
+#[tauri::command]
+pub async fn begin_complete_backup_import(
+    app: AppHandle,
+    path: String,
+    operation_id: String,
+    expected_revision: String,
+    expected_active_revision: String,
+) -> Result<BackupImportPrepared, crate::storage::BackupImportFailure> {
+    let prepared = tauri::async_runtime::spawn_blocking(move || {
+        crate::storage::begin_complete_backup_import(
+            &app,
+            std::path::Path::new(&path),
+            &operation_id,
+            &expected_revision,
+            &expected_active_revision,
+        )
+    })
+    .await
+    .map_err(|error| crate::storage::BackupImportFailure {
+        code: "ioFailed".into(),
+        message: format!("后台导入任务失败：{error}"),
+    })?;
+    let (inspection, operation) = prepared?;
+    Ok(BackupImportPrepared {
+        inspection,
+        operation,
+    })
+}
+
+#[tauri::command]
+pub async fn read_legacy_backup(
+    path: String,
+    expected_revision: String,
+) -> Result<String, crate::backup::BackupFailure> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::backup::read_legacy_backup(std::path::Path::new(&path), &expected_revision)
+    })
+    .await
+    .map_err(blocking_backup_failure)?
+}
+
+#[tauri::command]
+pub async fn inspect_media_integrity(
+    app: AppHandle,
+    state_json: String,
+) -> Result<crate::data_integrity::MediaIntegrityReport, crate::data_integrity::DataOperationFailure>
+{
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::storage::inspect_media_integrity(&app, &state_json)
+    })
+    .await
+    .map_err(blocking_data_failure)?
+}
+
+#[tauri::command]
+pub async fn schedule_media_gc(
+    app: AppHandle,
+    files: Vec<String>,
+    not_before_ms: u64,
+) -> Result<(), crate::data_integrity::DataOperationFailure> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::storage::schedule_media_gc(&app, &files, not_before_ms)
+    })
+    .await
+    .map_err(blocking_data_failure)?
+}
+
+#[tauri::command]
+pub async fn run_media_gc(
+    app: AppHandle,
+    state_json: String,
+    now_ms: u64,
+    expected_revision: String,
+) -> Result<crate::data_integrity::MediaGcResult, crate::data_integrity::DataOperationFailure>
+{
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::storage::run_media_gc(&app, &state_json, now_ms, &expected_revision)
+    })
+    .await
+    .map_err(blocking_data_failure)?
 }

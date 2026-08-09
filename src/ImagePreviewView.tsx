@@ -5,6 +5,12 @@ import { motion } from "motion/react";
 import { Check, ChevronLeft, ChevronRight, Pencil, X } from "lucide-react";
 
 import { springSnappy } from "@/lib/motion";
+import { DataReadOnlyGuard } from "@/components/DataReadOnlyGuard";
+import {
+  DATA_ACTIVITY_EVENT,
+  DATA_LOCATION_CHANGED_EVENT,
+} from "@/lib/dataOperations";
+import { DATA_CONTEXT_INVALIDATED_EVENT } from "@/lib/dataGeneration";
 import { api } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 
@@ -28,6 +34,7 @@ export default function ImagePreviewView() {
   const [noteText, setNoteText] = useState("");
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  const [dataGeneration, setDataGeneration] = useState<number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -36,17 +43,39 @@ export default function ImagePreviewView() {
       index: number;
       noteId: string | null;
       noteText: string | null;
+      dataGeneration: number | null;
     }>("toskr://preview-image", (e) => {
       setFiles(e.payload.files);
       setIdx(Math.min(e.payload.index, Math.max(0, e.payload.files.length - 1)));
       setNoteId(e.payload.noteId ?? null);
       setNoteText(e.payload.noteText ?? "");
       setDraft(e.payload.noteText ?? "");
+      setDataGeneration(e.payload.dataGeneration ?? null);
       setEditing(false);
       setGen((g) => g + 1);
     });
     return () => {
       un.then((fn) => fn());
+    };
+  }, []);
+
+  useEffect(() => {
+    const invalidate = () => {
+      setFiles([]);
+      setNoteId(null);
+      setDataGeneration(null);
+      setEditing(false);
+      void getCurrentWebviewWindow().hide();
+    };
+    const activity = listen<{ locked: boolean }>(DATA_ACTIVITY_EVENT, (event) => {
+      if (event.payload.locked) invalidate();
+    });
+    const changed = listen(DATA_LOCATION_CHANGED_EVENT, invalidate);
+    const invalidated = listen(DATA_CONTEXT_INVALIDATED_EVENT, invalidate);
+    return () => {
+      activity.then((stop) => stop());
+      changed.then((stop) => stop());
+      invalidated.then((stop) => stop());
     };
   }, []);
 
@@ -72,10 +101,14 @@ export default function ImagePreviewView() {
   const many = files.length > 1;
 
   const save = () => {
-    if (!noteId) return;
+    if (!noteId || dataGeneration === null) return;
     if (draft !== noteText) {
       // 主面板 updateNoteText 持久化 + HUD「已保存」；空文本 = 清除备注
-      void emitTo("main", "toskr://note-edit", { id: noteId, text: draft });
+      void emitTo("main", "toskr://note-edit", {
+        id: noteId,
+        text: draft,
+        dataGeneration,
+      });
       setNoteText(draft);
     }
     setEditing(false);
@@ -111,10 +144,11 @@ export default function ImagePreviewView() {
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files.length, editing, noteText, noteId, draft]);
+  }, [files.length, editing, noteText, noteId, draft, dataGeneration]);
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden rounded-xl border border-white/10 bg-surface-lightbox">
+      <DataReadOnlyGuard />
       {/* 标题栏：可拖动窗口 */}
       <div
         data-tauri-drag-region

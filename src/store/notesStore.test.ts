@@ -18,13 +18,21 @@ vi.mock("./persistStorage", () => {
 
 import {
   CLIPBOARD_ID,
+  decodePersistedState,
   defaultSettings,
   doneIdsAfterSend,
   INBOX_ID,
+  mergePersistedNotesState,
   orderedCheckedNotes,
+  replaceNotesStoreFromPersisted,
+  STORE_VERSION,
   TASK_INBOX_ID,
   useNotesStore,
 } from "./notesStore";
+import {
+  GENERAL_PROMPT_GROUP_ID,
+  SAFETY_PROFILE_ID,
+} from "@/lib/targetProfiles";
 
 function reset() {
   useNotesStore.setState({
@@ -40,6 +48,29 @@ function reset() {
 
 describe("notesStore 基础", () => {
   beforeEach(reset);
+
+  it("由 Native status bootstrap 显式水合，模块加载不自动读取待续目标", () => {
+    expect(useNotesStore.persist.getOptions().skipHydration).toBe(true);
+  });
+
+  it("水合前捕获的新卡片 merge 后保持在列表顶部而不是沉底", () => {
+    useNotesStore.getState().addNote("早期捕获");
+    const current = useNotesStore.getState();
+    const merged = mergePersistedNotesState(
+      {
+        notes: [
+          { id: "disk-new", text: "磁盘较新", createdAt: 2 },
+          { id: "disk-old", text: "磁盘较旧", createdAt: 1 },
+        ],
+      },
+      current
+    );
+    expect(merged.notes.map((n) => n.text)).toEqual([
+      "早期捕获",
+      "磁盘较新",
+      "磁盘较旧",
+    ]);
+  });
 
   it("addNote 去除首尾空白并落入收件箱", () => {
     const { result } = useNotesStore.getState().addNote("  hello  ");
@@ -233,6 +264,225 @@ describe("notesStore 基础", () => {
       "二",
       "一",
     ]);
+  });
+});
+
+describe("store v9 migration and directory rehydrate", () => {
+  it("v8 模板迁入通用分组且 autoEnter=true 只迁为 confirm", () => {
+    const legacySnippets = [
+      { id: "one", label: "一", text: "first" },
+      { id: "two", label: "二", text: "second" },
+    ];
+    const decoded = decodePersistedState(
+      JSON.stringify({
+        version: 8,
+        state: {
+          sections: [],
+          notes: [],
+          tasks: [],
+          taskSections: [],
+          settings: {
+            ...defaultSettings(),
+            autoEnter: true,
+            promptGroups: undefined,
+            targetProfiles: undefined,
+            defaultTargetProfileId: undefined,
+            promptSnippets: legacySnippets,
+          },
+        },
+      })
+    );
+
+    expect(decoded.settings.promptGroups).toEqual([
+      { id: GENERAL_PROMPT_GROUP_ID, name: "通用", order: 0 },
+    ]);
+    expect(decoded.settings.promptSnippets).toEqual(
+      legacySnippets.map((snippet) => ({
+        ...snippet,
+        groupId: GENERAL_PROMPT_GROUP_ID,
+      }))
+    );
+    expect(decoded.settings.targetProfiles.find((item) => item.id === SAFETY_PROFILE_ID))
+      .toMatchObject({ enterPolicy: "confirm" });
+    expect(decoded.settings.targetProfiles.every((item) => item.enterPolicy !== "allow"))
+      .toBe(true);
+    expect(decoded.settings.autoEnter).toBe(false);
+  });
+
+  it("v8 重复或空 snippet id 稳定重编号，v9 round-trip 不丢模板", () => {
+    const legacySnippets = [
+      { id: "same", label: "一", text: "first" },
+      { id: "same", label: "二", text: "second" },
+      { id: "", label: "三", text: "third" },
+    ];
+    const decoded = decodePersistedState(JSON.stringify({
+      version: 8,
+      state: {
+        sections: [],
+        notes: [],
+        tasks: [],
+        taskSections: [],
+        settings: { ...defaultSettings(), promptSnippets: legacySnippets },
+      },
+    }));
+    const migrated = decoded.settings.promptSnippets;
+
+    expect(migrated.map((item) => item.text)).toEqual(["first", "second", "third"]);
+    expect(new Set(migrated.map((item) => item.id)).size).toBe(3);
+    expect(migrated.every((item) => item.groupId === GENERAL_PROMPT_GROUP_ID)).toBe(true);
+
+    const roundTrip = decodePersistedState(JSON.stringify({
+      version: STORE_VERSION,
+      state: decoded,
+    }));
+    expect(roundTrip.settings.promptSnippets).toEqual(migrated);
+  });
+
+  it("deduplicates old records, restores required groups, and tolerates unknown fields", () => {
+    const decoded = decodePersistedState(
+      JSON.stringify({
+        version: 7,
+        state: {
+          sections: [
+            { id: "x", name: "X", future: true },
+            { id: "x", name: "duplicate" },
+          ],
+          notes: [
+            { id: "n", text: "first", sectionId: "missing", done: false, createdAt: 1 },
+            { id: "n", text: "duplicate", sectionId: "x", done: false, createdAt: 2 },
+          ],
+          tasks: [],
+          taskSections: [],
+          settings: { ...defaultSettings(), futureSetting: "kept" },
+          futureTopLevel: true,
+        },
+      })
+    );
+
+    expect(decoded.sections.map((section) => section.id)).toEqual([INBOX_ID, "x"]);
+    expect(decoded.notes).toHaveLength(1);
+    expect(decoded.notes[0].sectionId).toBe(INBOX_ID);
+    expect(decoded.taskSections[0].id).toBe(TASK_INBOX_ID);
+    expect((decoded.settings as unknown as { futureSetting: string }).futureSetting).toBe(
+      "kept"
+    );
+  });
+
+  it("rejects duplicate ids in the current schema instead of silently dropping records", () => {
+    expect(() =>
+      decodePersistedState(
+        JSON.stringify({
+          version: STORE_VERSION,
+          state: {
+            sections: [],
+            notes: [
+              { id: "same", text: "first" },
+              { id: "same", text: "second" },
+            ],
+            tasks: [],
+            taskSections: [],
+          },
+        })
+      )
+    ).toThrow("notes 含重复 id");
+  });
+
+  it("rejects empty Phase04 ids in the current schema", () => {
+    const settings = defaultSettings();
+    expect(() => decodePersistedState(JSON.stringify({
+      version: STORE_VERSION,
+      state: {
+        sections: [],
+        notes: [],
+        tasks: [],
+        taskSections: [],
+        settings: {
+          ...settings,
+          promptGroups: [{ id: "", name: "坏分组", order: 0 }],
+        },
+      },
+    }))).toThrow("settings.promptGroups 字段无效");
+    expect(() => decodePersistedState(JSON.stringify({
+      version: STORE_VERSION,
+      state: {
+        sections: [],
+        notes: [],
+        tasks: [],
+        taskSections: [],
+        settings: {
+          ...settings,
+          targetProfiles: [{
+            id: "",
+            name: "坏 Profile",
+            bundleIds: [],
+            promptGroupId: GENERAL_PROMPT_GROUP_ID,
+            defaultFormat: "plain",
+            enterPolicy: "never",
+            privacyPolicy: "requireRedaction",
+            keepPanel: false,
+          }],
+        },
+      },
+    }))).toThrow("settings.targetProfiles 字段无效");
+  });
+
+  it.each([
+    ["present non-array records", { notes: "corrupt" }],
+    ["wrong settings array type", { settings: { promptSnippets: "corrupt" } }],
+    ["invalid settings enum", { settings: { theme: "neon" } }],
+  ])("rejects %s instead of silently normalizing it", (_label, patch) => {
+    expect(() =>
+      decodePersistedState(
+        JSON.stringify({
+          version: STORE_VERSION,
+          state: {
+            sections: [],
+            notes: [],
+            tasks: [],
+            taskSections: [],
+            settings: defaultSettings(),
+            ...patch,
+          },
+        })
+      )
+    ).toThrow();
+  });
+
+  it("directory rehydrate replaces old memory instead of merging it", () => {
+    useNotesStore.getState().addNote("old-directory");
+    const raw = JSON.stringify({
+      version: STORE_VERSION,
+      state: {
+        sections: [{ id: INBOX_ID, name: "收件箱" }],
+        notes: [
+          {
+            id: "new",
+            text: "new-directory",
+            sectionId: INBOX_ID,
+            done: false,
+            createdAt: 1,
+          },
+        ],
+        tasks: [],
+        taskSections: [{ id: TASK_INBOX_ID, name: "收集箱" }],
+        settings: defaultSettings(),
+      },
+    });
+
+    replaceNotesStoreFromPersisted(raw);
+
+    expect(useNotesStore.getState().notes.map((note) => note.text)).toEqual([
+      "new-directory",
+    ]);
+    expect(useNotesStore.getState().undoStack).toEqual([]);
+  });
+
+  it("rejects a future store schema before replacing memory", () => {
+    expect(() =>
+      decodePersistedState(
+        JSON.stringify({ version: STORE_VERSION + 1, state: {} })
+      )
+    ).toThrow(/高于当前支持/);
   });
 });
 
@@ -591,7 +841,7 @@ describe("任务：CRUD / 撤销 / 转换原子性 / 导入", () => {
         },
       ],
     });
-    expect(r).toEqual({ notes: 0, tasks: 1 });
+    expect(r).toEqual({ notes: 0, tasks: 1, skippedDuplicates: 1 });
     expect(useNotesStore.getState().tasks).toHaveLength(2);
     expect(useNotesStore.getState().tasks.find((t) => t.id === kept)?.text).toBe(
       "本地任务"

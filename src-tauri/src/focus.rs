@@ -2,11 +2,24 @@
 
 #![cfg(target_os = "macos")]
 
-use objc2::AnyThread;
+use block2::RcBlock;
+use objc2::{runtime::AnyObject, AnyThread};
 use objc2_app_kit::{
-    NSApplicationActivationOptions, NSBitmapImageFileType, NSBitmapImageRep,
-    NSRunningApplication, NSWorkspace,
+    NSApplicationActivationOptions, NSBitmapImageFileType, NSBitmapImageRep, NSRunningApplication,
+    NSWorkspace, NSWorkspaceApplicationKey, NSWorkspaceDidActivateApplicationNotification,
 };
+use objc2_foundation::{NSDictionary, NSNotification, NSString};
+use std::{
+    ptr::NonNull,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
+};
+use tauri::AppHandle;
+
+static FRONT_OBSERVATION_REVISION: Mutex<u64> = Mutex::new(0);
+static WORKSPACE_ACTIVATION_OBSERVER_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 /// 前台应用信息。
 #[derive(Clone, Debug, Default)]
@@ -14,17 +27,108 @@ pub struct FrontApp {
     pub pid: i32,
     pub name: Option<String>,
     pub bundle_id: Option<String>,
+    /// LaunchServices 记录的进程启动时刻；用于识别 PID 被同 bundle 新进程复用。
+    pub launched_at_ms: Option<i64>,
+    /// 与实际查询同序分配的进程内单调序号；并发调用据此丢弃迟到旧采样。
+    pub observation_revision: u64,
+}
+
+fn launch_time_ms(app: &NSRunningApplication) -> Option<i64> {
+    app.launchDate()
+        .map(|date| (date.timeIntervalSince1970() * 1_000.0).round() as i64)
+}
+
+fn running_app_info(app: &NSRunningApplication) -> FrontApp {
+    FrontApp {
+        pid: app.processIdentifier(),
+        name: app.localizedName().map(|n| n.to_string()),
+        bundle_id: app.bundleIdentifier().map(|b| b.to_string()),
+        launched_at_ms: launch_time_ms(app),
+        observation_revision: 0,
+    }
+}
+
+fn observed_running_app_info(app: &NSRunningApplication) -> FrontApp {
+    let mut revision = FRONT_OBSERVATION_REVISION
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *revision = revision.wrapping_add(1).max(1);
+    let mut front = running_app_info(app);
+    front.observation_revision = *revision;
+    front
+}
+
+fn activated_app(notification: &NSNotification) -> Option<FrontApp> {
+    let user_info = notification.userInfo()?;
+    // NSWorkspace guarantees this notification carries NSRunningApplication under this key.
+    let typed: &NSDictionary<NSString, AnyObject> = unsafe { user_info.cast_unchecked() };
+    let application_key = unsafe { NSWorkspaceApplicationKey };
+    let app = typed
+        .objectForKey(application_key)?
+        .downcast::<NSRunningApplication>()
+        .ok()?;
+    Some(observed_running_app_info(&app))
+}
+
+/// 进程级应用激活事件源。它覆盖 main/settings/textpreview/imgpreview 全部窗口，
+/// 并直接读取通知中的 NSRunningApplication，因此不会漏掉短于 250ms 的 B。
+pub fn install_workspace_activation_observer(app: AppHandle) {
+    if WORKSPACE_ACTIVATION_OBSERVER_INSTALLED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let me = std::process::id() as i32;
+    let center = NSWorkspace::sharedWorkspace().notificationCenter();
+    let block = RcBlock::new(move |notification: NonNull<NSNotification>| {
+        let notification = unsafe { notification.as_ref() };
+        let Some(front) = activated_app(notification) else {
+            return;
+        };
+        if front.pid == me {
+            crate::target::revalidate_observed_target(&app);
+        } else {
+            crate::target::observe_front(&app, &front);
+        }
+    });
+    let observer = unsafe {
+        center.addObserverForName_object_queue_usingBlock(
+            Some(NSWorkspaceDidActivateApplicationNotification),
+            None,
+            None,
+            &block,
+        )
+    };
+    // 应用进程只安装一次，生命周期与 NSWorkspace notification center 一致。
+    std::mem::forget(observer);
+}
+
+/// 当前前台应用与同一次查询的单调序号。即使系统暂时没有 frontmost app，
+/// 也推进序号，使调用方能建立“此前采样均不得解除 pending”的明确屏障。
+pub fn frontmost_info_with_revision() -> (u64, Option<FrontApp>) {
+    // 查询与编号必须同序：若先编号再被抢占，晚读到的 C 可能带旧 revision 被误丢。
+    let mut revision = FRONT_OBSERVATION_REVISION
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let workspace = NSWorkspace::sharedWorkspace();
+    let app = workspace.frontmostApplication();
+    *revision = revision.wrapping_add(1).max(1);
+    let observation_revision = *revision;
+    let front = app.map(|app| {
+        let mut front = running_app_info(&app);
+        front.observation_revision = observation_revision;
+        front
+    });
+    (observation_revision, front)
 }
 
 /// 当前前台应用信息。只读操作，任意线程可调。
 pub fn frontmost_info() -> Option<FrontApp> {
-    let workspace = NSWorkspace::sharedWorkspace();
-    let app = workspace.frontmostApplication()?;
-    Some(FrontApp {
-        pid: app.processIdentifier(),
-        name: app.localizedName().map(|n| n.to_string()),
-        bundle_id: app.bundleIdentifier().map(|b| b.to_string()),
-    })
+    frontmost_info_with_revision().1
+}
+
+/// 指定 PID 对应的完整进程身份。PID 不存在时返回 None。
+pub fn app_info_of(pid: i32) -> Option<FrontApp> {
+    NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+        .map(|app| running_app_info(&app))
 }
 
 /// 当前前台应用的 (pid, 名称)。
@@ -36,12 +140,6 @@ pub fn frontmost() -> Option<(i32, Option<String>)> {
 pub fn bundle_of(pid: i32) -> Option<String> {
     NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
         .and_then(|a| a.bundleIdentifier().map(|b| b.to_string()))
-}
-
-/// 指定 PID 应用的显示名（诊断/发送回执用）。
-pub fn app_name_of(pid: i32) -> Option<String> {
-    NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
-        .and_then(|a| a.localizedName().map(|n| n.to_string()))
 }
 
 /// 激活指定 PID 的应用。空 options：Sonoma+ 的协作式激活默认即把窗口带前
@@ -133,17 +231,28 @@ fn dominant_color(png: &[u8]) -> Option<String> {
 /// 找不到应用/无图标返回 None。
 pub fn app_icon_png_base64(bundle_id: &str) -> Option<AppIcon> {
     use base64::Engine;
-    use objc2_foundation::NSString;
 
     let ns_bundle = NSString::from_str(bundle_id);
-    let apps =
-        NSRunningApplication::runningApplicationsWithBundleIdentifier(&ns_bundle);
-    let app = apps.iter().next()?;
-    let icon = app.icon()?;
+    let apps = NSRunningApplication::runningApplicationsWithBundleIdentifier(&ns_bundle);
+    // 优先运行中的进程图标；查不到（应用刚退出/启动恢复的目标尚未运行/
+    // 枚举瞬时失败）回退 NSWorkspace 按安装路径取——目标栏的 logo 不该
+    // 因为一次运行态枚举落空就消失
+    let icon = match apps.iter().next().and_then(|app| app.icon()) {
+        Some(icon) => icon,
+        None => {
+            let ws = unsafe { NSWorkspace::sharedWorkspace() };
+            let url = unsafe {
+                ws.URLForApplicationWithBundleIdentifier(&NSString::from_str(bundle_id))
+            }?;
+            let path = url.path()?;
+            unsafe { ws.iconForFile(&path) }
+        }
+    };
     let tiff = icon.TIFFRepresentation()?;
     let rep = NSBitmapImageRep::initWithData(NSBitmapImageRep::alloc(), &tiff)?;
     let props = objc2_foundation::NSDictionary::new();
-    let png = unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &props) }?;
+    let png =
+        unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &props) }?;
     let bytes = png.to_vec();
     if bytes.is_empty() {
         return None;
@@ -163,12 +272,9 @@ pub fn app_icon_png_base64(bundle_id: &str) -> Option<AppIcon> {
 /// 仅限主线程调用（NSImage 非线程安全）。
 pub fn app_list_info(bundle_id: &str) -> Option<(String, Option<String>)> {
     use base64::Engine;
-    use objc2_foundation::NSString;
 
     let ws = unsafe { NSWorkspace::sharedWorkspace() };
-    let url = unsafe {
-        ws.URLForApplicationWithBundleIdentifier(&NSString::from_str(bundle_id))
-    }?;
+    let url = unsafe { ws.URLForApplicationWithBundleIdentifier(&NSString::from_str(bundle_id)) }?;
     let name = unsafe { url.lastPathComponent() }?.to_string();
     let icon_url = (|| {
         let path = url.path()?;

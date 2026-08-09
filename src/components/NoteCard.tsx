@@ -25,6 +25,7 @@ import {
 import { imageCaption } from "@/lib/format";
 import { tip } from "@/lib/tip";
 import { IconButton } from "@/components/ui/icon-button";
+import { TargetSendMenuItem } from "@/components/TargetSendMenuItem";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -54,6 +55,11 @@ import { shouldScrollFocusedCard } from "@/lib/cardFocus";
 import { timeAgo, useNoteThumb } from "@/lib/media";
 import { noteToTaskSmart, suggestTitle } from "@/lib/ai";
 import { splitHighlight } from "@/lib/search";
+import {
+  beginDataGenerationLease,
+  currentDataGeneration,
+  matchesDataGeneration,
+} from "@/lib/dataGeneration";
 import { api } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import {
@@ -67,6 +73,7 @@ import {
   type Note,
 } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
+import { isDataOperationLocked } from "@/store/dataOperationStore";
 
 /** 双击发送的第一击会塌掉多选：留档点击前的集合供 onDoubleClick 找回。 */
 let lastMultiSelection: { ids: string[]; at: number } | null = null;
@@ -185,6 +192,7 @@ export const NoteCard = memo(function NoteCard({
       void api.quickLook(noteImages(note), 0, {
         id: note.id,
         text: imageCaption(note),
+        dataGeneration: currentDataGeneration(),
       });
       return;
     }
@@ -258,9 +266,9 @@ export const NoteCard = memo(function NoteCard({
         );
       case "send":
         return (
-          <ContextMenuItem key={id} onClick={() => sendNotesToChat([note.id])}>
+          <TargetSendMenuItem key={id} onClick={() => void sendNotesToChat([note.id])}>
             <Send className="size-3.5" /> 发送到对话
-          </ContextMenuItem>
+          </TargetSendMenuItem>
         );
       case "copy":
         return (
@@ -369,10 +377,18 @@ export const NoteCard = memo(function NoteCard({
   };
 
   const runOcr = async () => {
-    if (!note.imageFile) return;
+    if (!note.imageFile || isDataOperationLocked()) return;
+    const lease = beginDataGenerationLease();
     tip("info", "正在识别文字…");
     try {
       const text = await api.ocrImage(note.imageFile);
+      const current = useNotesStore.getState().notes.find((item) => item.id === note.id);
+      if (
+        !matchesDataGeneration(lease.generation) ||
+        current?.imageFile !== note.imageFile
+      ) {
+        return;
+      }
       const { result, id } = useNotesStore.getState().addNote(text, {
         sectionId: note.sectionId,
         sourceApp: note.sourceApp,
@@ -388,6 +404,8 @@ export const NoteCard = memo(function NoteCard({
       const msg = String(e);
       if (msg.includes("未识别到文字")) tip("info", "未识别到文字");
       else tip("warn", `识别失败：${msg}`);
+    } finally {
+      lease.release();
     }
   };
 

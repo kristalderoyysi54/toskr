@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 
 /** Rust 侧双击触发键事件。 */
 export const TRIGGER_EVENT = "toskr://trigger";
+/** Rust 前台观察器确认下一次投递目标发生语义变化。 */
+export const TARGET_CHANGED_EVENT = "toskr://target-changed";
 /** Rust → HUD 窗口展示事件。 */
 export const HUD_EVENT = "toskr://hud";
 /** Rust → HUD 窗口 hover 状态事件。 */
@@ -102,17 +104,290 @@ export interface LinkMeta {
   icon: string | null;
 }
 
+export type DataLocationKind =
+  | "missing"
+  | "empty"
+  | "nonToskr"
+  | "valid"
+  | "corrupt"
+  | "unsupported";
+
+export interface DataLocationInspection {
+  path: string;
+  kind: DataLocationKind;
+  revision: string | null;
+  readable: boolean;
+  writable: boolean;
+  sameAsActive: boolean;
+  externalSyncLikely: boolean;
+  storeVersion: number | null;
+  noteCount: number;
+  taskCount: number;
+  mediaCount: number;
+  ordinaryFileCount: number;
+}
+
+export interface DataOperationFailure {
+  code: string;
+  message: string;
+}
+
+export interface DataLocationStatus {
+  activeDir: string;
+  defaultDir: string;
+  lastSuccessfulSwitchAtMs: number | null;
+  lastConflictAtMs: number | null;
+  conflictPending: boolean;
+  pendingOperationId: string | null;
+  initializationFailure: DataOperationFailure | null;
+}
+
+export type DataOperationAction =
+  | "migrateCurrentToTarget"
+  | "loadExistingTarget"
+  | "replaceTargetWithCurrent"
+  | "cancel";
+
+export type DataOperationPhase =
+  | "prepare"
+  | "recoveryPoint"
+  | "copy"
+  | "verify"
+  | "commitPointer"
+  | "rehydrate"
+  | "complete"
+  | "rollback";
+
+export interface DataOperationPlan {
+  operationId: string;
+  sourcePath: string;
+  targetPath: string;
+  action: DataOperationAction;
+  replaceConfirmed: boolean;
+  expectedTargetRevision: string;
+}
+
+export interface DataOperationResult {
+  operationId: string;
+  status: "awaitingRehydrate" | "completed" | "rolledBack" | "cancelled";
+  phase: DataOperationPhase;
+  activeDir: string;
+  rolledBack: boolean;
+  message: string;
+}
+
+export interface DataFileSnapshot {
+  content: string | null;
+  revision: string;
+  size: number;
+  modifiedAtMs: number | null;
+}
+
+export interface BackupCounts {
+  sections: number;
+  notes: number;
+  taskSections: number;
+  tasks: number;
+  media: number;
+}
+
+export interface BackupInspection {
+  format: "complete" | "legacyJson";
+  archiveRevision: string;
+  backupSchemaVersion: number | null;
+  storeSchemaVersion: number | null;
+  appVersion: string | null;
+  createdAtMs: number | null;
+  counts: BackupCounts;
+  missingMedia: string[];
+  warnings: string[];
+}
+
+export interface BackupImportPrepared {
+  inspection: BackupInspection;
+  operation: DataOperationResult;
+}
+
+export interface MediaIntegrityReport {
+  referencedCount: number;
+  actualCount: number;
+  missing: string[];
+  orphaned: string[];
+  shared: { file: string; references: number }[];
+  pendingUndoReferences: string[];
+  tombstoned: string[];
+  unsafeEntries: string[];
+  suggestions: string[];
+}
+
+export interface MediaGcResult {
+  deleted: string[];
+  retained: string[];
+}
+
+export type TargetReason =
+  | "target_missing"
+  | "target_token_missing"
+  | "target_token_stale"
+  | "target_exited"
+  | "target_bundle_mismatch"
+  | "target_process_mismatch"
+  | "target_identity_unavailable"
+  | "target_not_frontmost";
+
+export interface TargetSnapshot {
+  token: string | null;
+  pid: number | null;
+  bundleId: string | null;
+  appName: string | null;
+  launchedAtMs: number | null;
+  capturedAtMs: number;
+  /** 原生目标状态的进程内单调版本；用于拒绝并发倒序事件。 */
+  revision: number;
+  ready: boolean;
+  reason: TargetReason | null;
+  /** 当前无法可靠取得编辑窗口身份，原生侧固定返回 null。 */
+  windowId: number | null;
+}
+
+export type DeliveryStatus = "sent" | "blocked" | "failed";
+
+export type DeliveryReasonCode =
+  | "ok"
+  | TargetReason
+  | "target_focus_drift"
+  | "delivery_in_progress"
+  | "payload_empty"
+  | "image_unreadable"
+  | "paste_failed"
+  | "enter_failed"
+  | "internal_error";
+
+export type ClipboardOutcome =
+  | "restored"
+  | "skippedUserChanged"
+  | "nothingToRestore"
+  | "restoreFailed"
+  | "notOwned";
+
+export interface SendDeliveryRequest {
+  targetToken: string | null;
+  text: string;
+  imageFiles: string[];
+  pressEnter: boolean;
+  keepPanel: boolean;
+  deliveryId: string;
+}
+
+export interface SendDeliveryResult {
+  deliveryId: string;
+  status: DeliveryStatus;
+  reasonCode: DeliveryReasonCode;
+  message: string;
+  target: TargetSnapshot | null;
+  pasteCompleted: boolean;
+  enterPressed: boolean;
+  clipboardOutcome: ClipboardOutcome;
+  startedAtMs: number;
+  finishedAtMs: number;
+}
+
+const DELIVERY_STATUSES = new Set<DeliveryStatus>(["sent", "blocked", "failed"]);
+const TARGET_REASONS = new Set<TargetReason>([
+  "target_missing",
+  "target_token_missing",
+  "target_token_stale",
+  "target_exited",
+  "target_bundle_mismatch",
+  "target_process_mismatch",
+  "target_identity_unavailable",
+  "target_not_frontmost",
+]);
+const DELIVERY_REASONS = new Set<DeliveryReasonCode>([
+  "ok",
+  ...TARGET_REASONS,
+  "target_focus_drift",
+  "delivery_in_progress",
+  "payload_empty",
+  "image_unreadable",
+  "paste_failed",
+  "enter_failed",
+  "internal_error",
+]);
+const CLIPBOARD_OUTCOMES = new Set<ClipboardOutcome>([
+  "restored",
+  "skippedUserChanged",
+  "nothingToRestore",
+  "restoreFailed",
+  "notOwned",
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isNullableFiniteNumber(value: unknown): value is number | null {
+  return value === null || (typeof value === "number" && Number.isFinite(value));
+}
+
+function isTargetSnapshot(value: unknown): value is TargetSnapshot {
+  if (!isRecord(value)) return false;
+  return (
+    (typeof value.token === "string" || value.token === null) &&
+    isNullableFiniteNumber(value.pid) &&
+    (typeof value.bundleId === "string" || value.bundleId === null) &&
+    (typeof value.appName === "string" || value.appName === null) &&
+    isNullableFiniteNumber(value.launchedAtMs) &&
+    typeof value.capturedAtMs === "number" &&
+    Number.isFinite(value.capturedAtMs) &&
+    typeof value.revision === "number" &&
+    Number.isSafeInteger(value.revision) &&
+    value.revision >= 0 &&
+    typeof value.ready === "boolean" &&
+    (value.reason === null || TARGET_REASONS.has(value.reason as TargetReason)) &&
+    isNullableFiniteNumber(value.windowId)
+  );
+}
+
+/** IPC 边界守卫，防止旧二进制或异常 payload 被误判为成功。 */
+export function isSendDeliveryResult(value: unknown): value is SendDeliveryResult {
+  if (!isRecord(value)) return false;
+  const structurallyValid =
+    typeof value.deliveryId === "string" &&
+    DELIVERY_STATUSES.has(value.status as DeliveryStatus) &&
+    DELIVERY_REASONS.has(value.reasonCode as DeliveryReasonCode) &&
+    typeof value.message === "string" &&
+    (value.target === null || isTargetSnapshot(value.target)) &&
+    typeof value.pasteCompleted === "boolean" &&
+    typeof value.enterPressed === "boolean" &&
+    CLIPBOARD_OUTCOMES.has(value.clipboardOutcome as ClipboardOutcome) &&
+    typeof value.startedAtMs === "number" &&
+    Number.isFinite(value.startedAtMs) &&
+    typeof value.finishedAtMs === "number" &&
+    Number.isFinite(value.finishedAtMs) &&
+    value.finishedAtMs >= value.startedAtMs;
+  if (!structurallyValid) return false;
+  if (value.status === "sent") {
+    return (
+      value.reasonCode === "ok" &&
+      value.pasteCompleted === true &&
+      isTargetSnapshot(value.target) &&
+      value.target.ready
+    );
+  }
+  return value.reasonCode !== "ok" && value.enterPressed === false;
+}
+
 export const api = {
   showPanel: () => invoke("show_panel"),
   hidePanel: (restoreFocus: boolean) => invoke("hide_panel", { restoreFocus }),
   copyText: (text: string) => invoke("copy_text", { text }),
-  /** 返回是否真正完成粘贴（false=目标未到达，已中止）。 */
-  sendToChat: (
-    text: string,
-    imageFiles: string[],
-    pressEnter: boolean,
-    keepPanel: boolean
-  ) => invoke<boolean>("send_to_chat", { text, imageFiles, pressEnter, keepPanel }),
+  getTargetSnapshot: () => invoke<TargetSnapshot>("get_target_snapshot"),
+  refreshTargetSnapshot: () => invoke<TargetSnapshot>("refresh_target_snapshot"),
+  validateTargetSnapshot: (targetToken: string | null) =>
+    invoke<TargetSnapshot>("validate_target_snapshot", { targetToken }),
+  sendDelivery: (request: SendDeliveryRequest) =>
+    invoke<SendDeliveryResult>("send_delivery", { request }),
   axTrusted: (prompt: boolean) => invoke<boolean>("ax_trusted", { prompt }),
   tapStatus: () =>
     invoke<{ installed: boolean; receiving: boolean; listening: boolean }>("tap_status"),
@@ -154,13 +429,32 @@ export const api = {
   getDiagnostics: () =>
     invoke<{ atMs: number; msg: string }[]>("get_diagnostics"),
   getDataDir: () => invoke<string>("get_data_dir"),
-  setDataDir: (path: string) => invoke<string>("set_data_dir", { path }),
-  resetDataDir: () => invoke<string>("reset_data_dir"),
-  readDataFile: () => invoke<string | null>("read_data_file"),
-  writeDataFile: (content: string) => invoke("write_data_file", { content }),
+  getDataLocationStatus: () =>
+    invoke<DataLocationStatus>("get_data_location_status"),
+  retryStorageInitialization: () =>
+    invoke<DataLocationStatus>("retry_storage_initialization"),
+  loadDefaultFromRecovery: () =>
+    invoke<DataLocationStatus>("load_default_from_recovery"),
+  clearDataConflict: () => invoke<void>("clear_data_conflict"),
+  markDataConflict: () => invoke<void>("mark_data_conflict"),
+  inspectDataLocation: (path: string) =>
+    invoke<DataLocationInspection>("inspect_data_location", { path }),
+  beginDataOperation: (plan: DataOperationPlan) =>
+    invoke<DataOperationResult>("begin_data_operation", { plan }),
+  beginRecoveryDataOperation: (plan: DataOperationPlan) =>
+    invoke<DataOperationResult>("begin_recovery_data_operation", { plan }),
+  finalizeDataOperation: (operationId: string) =>
+    invoke<DataOperationResult>("finalize_data_operation", { operationId }),
+  rollbackDataOperation: (operationId: string) =>
+    invoke<DataOperationResult>("rollback_data_operation", { operationId }),
+  readDataSnapshot: () => invoke<DataFileSnapshot>("read_data_snapshot"),
+  writeDataIfCurrent: (content: string, expectedRevision: string) =>
+    invoke<DataFileSnapshot>("write_data_if_current", {
+      content,
+      expectedRevision,
+    }),
   imageDataUrl: (name: string) => invoke<string | null>("image_data_url", { name }),
   imageThumbUrl: (name: string) => invoke<string | null>("image_thumb_url", { name }),
-  removeImage: (name: string) => invoke("remove_image", { name }),
   setPanelWidth: (width: number) => invoke("set_panel_width", { width }),
   adjustPanelEdge: (edge: "top" | "bottom", delta: number) =>
     invoke<{ topOffset: number; height: number | null }>("adjust_panel_edge", {
@@ -213,18 +507,23 @@ export const api = {
     invoke<string[]>("ai_list_models", { baseUrl, apiKey }),
   /** 系统 Quick Look 原尺寸预览图片附件。 */
   /** 图片原尺寸预览；`note` 传所属笔记时预览窗显示文字备注编辑条。 */
-  quickLook: (files: string[], index = 0, note?: { id: string; text: string }) =>
+  quickLook: (
+    files: string[],
+    index = 0,
+    note?: { id: string; text: string; dataGeneration: number }
+  ) =>
     invoke("quick_look", {
       files,
       index,
       noteId: note?.id ?? null,
       noteText: note?.text ?? null,
+      dataGeneration: note?.dataGeneration ?? null,
     }),
   /** 文本详情窗（桌面居中；内容另行 emit 到 textpreview 窗口）。 */
   showTextPreview: () => invoke("show_text_preview"),
   ocrImage: (file: string) => invoke<string>("ocr_image", { file }),
   prevAppInfo: () => invoke<PrevAppInfo | null>("prev_app_info"),
-  refreshPrevApp: () => invoke("refresh_prev_app"),
+  refreshPrevApp: () => invoke<TargetSnapshot>("refresh_prev_app"),
   showCaptureHud: (kind: "added" | "duplicate", preview: string) =>
     invoke("show_capture_hud", { kind, preview }),
   hudFeedback: (
@@ -246,7 +545,55 @@ export const api = {
   /** 从 .app 路径读 bundle id。 */
   bundleIdOfApp: (path: string) =>
     invoke<string | null>("bundle_id_of_app", { path }),
-  exportFile: (path: string, content: string) =>
-    invoke("export_file", { path, content }),
-  importFile: (path: string) => invoke<string>("import_file", { path }),
+  exportCompleteBackup: (
+    path: string,
+    stateJson: string,
+    expectedRevision: string
+  ) =>
+    invoke<BackupInspection>("export_complete_backup", {
+      path,
+      stateJson,
+      expectedRevision,
+    }),
+  exportConflictRecoveryBackup: (path: string, stateJson: string) =>
+    invoke<BackupInspection>("export_conflict_recovery_backup", {
+      path,
+      stateJson,
+    }),
+  inspectBackup: (path: string) =>
+    invoke<BackupInspection>("inspect_backup", { path }),
+  createDataRecoveryBackup: (
+    stateJson: string,
+    operationId: string,
+    expectedRevision: string
+  ) =>
+    invoke<string>("create_data_recovery_backup", {
+      stateJson,
+      operationId,
+      expectedRevision,
+    }),
+  beginCompleteBackupImport: (
+    path: string,
+    operationId: string,
+    expectedRevision: string,
+    expectedActiveRevision: string
+  ) =>
+    invoke<BackupImportPrepared>("begin_complete_backup_import", {
+      path,
+      operationId,
+      expectedRevision,
+      expectedActiveRevision,
+    }),
+  readLegacyBackup: (path: string, expectedRevision: string) =>
+    invoke<string>("read_legacy_backup", { path, expectedRevision }),
+  inspectMediaIntegrity: (stateJson: string) =>
+    invoke<MediaIntegrityReport>("inspect_media_integrity", { stateJson }),
+  scheduleMediaGc: (files: string[], notBeforeMs: number) =>
+    invoke<void>("schedule_media_gc", { files, notBeforeMs }),
+  runMediaGc: (stateJson: string, nowMs: number, expectedRevision: string) =>
+    invoke<MediaGcResult>("run_media_gc", {
+      stateJson,
+      nowMs,
+      expectedRevision,
+    }),
 };

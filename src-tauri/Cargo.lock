@@ -4478,16 +4478,19 @@ version = "0.2.2"
 dependencies = [
  "arboard",
  "base64 0.22.1",
+ "block2",
  "core-foundation",
  "core-graphics 0.24.0",
  "enigo",
  "image",
+ "libc",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
  "objc2-vision",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",
@@ -4497,7 +4500,9 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-store",
  "tauri-plugin-updater",
+ "tempfile",
  "window-vibrancy",
+ "zip",
 ]
 
 [[package]]

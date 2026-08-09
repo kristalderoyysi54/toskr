@@ -4,6 +4,7 @@ import type { NotePreviewPayload } from "./actions";
 import { refreshPreviewPayload } from "./previewPayload";
 
 const note = (overrides: Partial<NotePreviewPayload> = {}): NotePreviewPayload => ({
+  dataGeneration: 0,
   id: "note-1",
   text: "plain text",
   kind: "text",

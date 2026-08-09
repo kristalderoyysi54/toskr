@@ -35,6 +35,10 @@ export function setPendingUndo(fn: () => void) {
   pendingUndo = fn;
 }
 
+export function clearPendingUndo() {
+  pendingUndo = null;
+}
+
 /** HUD 撤销点击回执：执行并清空当前待撤销动作。 */
 export function runPendingUndo() {
   const fn = pendingUndo;

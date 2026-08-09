@@ -50,7 +50,24 @@ import { DraftInput } from "@/components/DraftInput";
 import { NoteCard } from "@/components/NoteCard";
 import { PermissionBanner } from "@/components/PermissionBanner";
 import { PreviewOverlay } from "@/components/PreviewOverlay";
-import { buildBackupPayload } from "@/lib/backup";
+import { buildBackupPayload, buildMediaIntegrityPayload } from "@/lib/backup";
+import {
+  DATA_RUNTIME_READY_EVENT,
+  reloadAfterPersistenceConflict,
+  reportDataActivity,
+  resumePendingDataOperation,
+  runCompleteBackupImport,
+  runCompleteBackupExport,
+  runDataLocationOperation,
+  runRecoveryDataLocationOperation,
+  runLegacyJsonImport,
+} from "@/lib/dataOperations";
+import {
+  beginDataGenerationLease,
+  DATA_CONTEXT_INVALIDATED_EVENT,
+  currentDataGeneration,
+  matchesDataGeneration,
+} from "@/lib/dataGeneration";
 import { UpdateDialog } from "@/components/UpdateDialog";
 import { SectionGroup } from "@/components/SectionGroup";
 import {
@@ -61,6 +78,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { SelectionBar } from "@/components/SelectionBar";
+import { TargetLensBar } from "@/components/TargetLensBar";
 import {
   SimpleMenu,
   SimpleMenuItem,
@@ -94,19 +112,22 @@ import {
   sendCheckedToChat,
   sendNotesToChat,
   undoableTip,
+  warnWithPanel,
 } from "@/lib/actions";
 import { clipTimeBand } from "@/lib/cliprow";
 import { bucketTasksForDisplay, dueTasksToRemind } from "@/lib/tasks";
 import { springSnappy, tweenExit } from "@/lib/motion";
 import { imageCaption, previewOf } from "@/lib/format";
 import { SHORTCUTS } from "@/lib/shortcuts";
-import { runPendingUndo, setPendingUndo, tip } from "@/lib/tip";
+import { clearPendingUndo, runPendingUndo, setPendingUndo, tip } from "@/lib/tip";
 import { silentUpdateFlow } from "@/lib/updater";
 import { matchNote } from "@/lib/search";
+import { applyRuntimeSettings } from "@/lib/runtimeSettings";
 import {
   applySettingsPatch,
   broadcastSettings,
   installSettingsSyncHost,
+  SETTINGS_DATA_HEALTH_RESULT,
   SETTINGS_SECTION,
 } from "@/lib/settingsSync";
 import {
@@ -117,11 +138,13 @@ import {
   CLIP_EVENT,
   CLIP_PAUSE_EVENT,
   STEALTH_EVENT,
+  TARGET_CHANGED_EVENT,
   TRIGGER_EVENT,
   UNDO_CAPTURE_EVENT,
   type ClipPayload,
   type EdgeHideStatePayload,
   type HudOpenPanelPayload,
+  type TargetSnapshot,
   type TriggerPayload,
 } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
@@ -138,12 +161,84 @@ import {
   type Settings,
 } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
+import {
+  isDataOperationLocked,
+  useDataOperationStore,
+} from "@/store/dataOperationStore";
+import {
+  currentPersistenceRevision,
+  enterPersistenceConflict,
+  flushPendingWrites,
+  PERSISTENCE_CONFLICT_EVENT,
+} from "@/store/persistStorage";
+import {
+  applyTargetEvent,
+  beginTargetBlurObservation,
+  observeTargetAfterBlur,
+  refreshTarget,
+  targetObservationPending,
+  useTargetStore,
+} from "@/store/targetStore";
 
 /** 本会话捕获的卡片 id 栈（HUD 撤销用，无需持久化）。 */
-const captureHistory: string[] = [];
+const captureHistory: { id: string; dataGeneration: number }[] = [];
 
 /** 横栏「已完成」过滤哨兵值（与真实分组 id 隔离）。 */
 const DONE_FILTER = "__done__";
+const MEDIA_GC_GRACE_MS = 30_000;
+
+function mediaIntegrityStateJson(): string {
+  return JSON.stringify(buildMediaIntegrityPayload(useNotesStore.getState()));
+}
+
+function handleMediaGcFailure(error: unknown): void {
+  if (
+    error &&
+    typeof error === "object" &&
+    "code" in error &&
+    String((error as { code: unknown }).code) === "externalConflict"
+  ) {
+    enterPersistenceConflict(error);
+  }
+}
+
+function runScheduledMediaGc() {
+  if (isDataOperationLocked()) return;
+  const lease = beginDataGenerationLease();
+  void flushPendingWrites()
+    .then(() => {
+      const revision = currentPersistenceRevision();
+      if (!revision) throw new Error("媒体 GC 缺少持久化基线");
+      return api.runMediaGc(mediaIntegrityStateJson(), Date.now(), revision);
+    })
+    .catch((error) => {
+      handleMediaGcFailure(error);
+      /* 健康检查会报告未完成项；后台 GC 不用正文日志轰炸用户。 */
+    })
+    .finally(lease.release);
+}
+
+function scheduleMediaGc(files: string[], graceMs = MEDIA_GC_GRACE_MS) {
+  const unique = [...new Set(files.filter(Boolean))];
+  if (!unique.length || isDataOperationLocked()) return;
+  const lease = beginDataGenerationLease();
+  void flushPendingWrites()
+    .then(() => api.scheduleMediaGc(unique, Date.now() + graceMs))
+    .then(() => {
+      const revision = currentPersistenceRevision();
+      if (!revision) throw new Error("媒体 GC 缺少持久化基线");
+      return api.runMediaGc(mediaIntegrityStateJson(), Date.now(), revision);
+    })
+    .catch(handleMediaGcFailure)
+    .finally(lease.release);
+}
+
+function userError(error: unknown): string {
+  if (error && typeof error === "object" && "message" in error) {
+    return String((error as { message: unknown }).message);
+  }
+  return String(error);
+}
 
 /** 横栏分组胶囊管理能力（与竖栏分组头对齐）。 */
 interface PillManage {
@@ -504,6 +599,8 @@ function PageSlide({
 }
 
 export default function App() {
+  const dataOperationLocked = useDataOperationStore((state) => state.locked);
+  const dataOperationMessage = useDataOperationStore((state) => state.message);
   const open = useUIStore((s) => s.open);
   const page = useUIStore((s) => s.page);
   const pinned = useUIStore((s) => s.pinned);
@@ -523,6 +620,60 @@ export default function App() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const dragExpandRef = useRef<{ sec: string; timer: number } | null>(null);
 
+  // Native 两阶段事务可跨 WebView reload 存活。默认保持只读，查询 status 后
+  // 要么续接 rehydrate/finalize，要么安全 rollback；绝不让旧 JS 状态穿透。
+  useEffect(() => {
+    let alive = true;
+    void api
+      .getDataLocationStatus()
+      .then(async (status) => {
+        if (!alive) return;
+        if (status.pendingOperationId) {
+          await resumePendingDataOperation(status.pendingOperationId);
+          return;
+        }
+        if (status.initializationFailure) {
+          enterPersistenceConflict(status.initializationFailure);
+          reportDataActivity({
+            locked: true,
+            phase: "storageRecovery",
+            message: `存储初始化失败：${status.initializationFailure.message}`,
+          });
+          return;
+        }
+        if (status.conflictPending) {
+          const conflict = {
+            code: "externalConflict",
+            message: "检测到尚未处理的数据冲突",
+          };
+          enterPersistenceConflict(conflict);
+          reportDataActivity({
+            locked: true,
+            phase: "conflict",
+            message: conflict.message,
+          });
+          return;
+        }
+        await useNotesStore.persist.rehydrate();
+        if (!alive) return;
+        reportDataActivity({ locked: false, phase: "idle", message: "" });
+      })
+      .catch((error) => {
+        if (!alive) return;
+        const locked = isDataOperationLocked();
+        reportDataActivity({
+          locked,
+          phase: locked ? "rollback" : "idle",
+          message: locked
+            ? `待完成数据事务恢复失败：${userError(error)}`
+            : `待完成数据事务已回滚：${userError(error)}`,
+        });
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const openPanel = async () => {
     try {
       await api.showPanel();
@@ -530,6 +681,7 @@ export default function App() {
       /* Tauri 环境外忽略 */
     }
     useUIStore.getState().setOpen(true);
+    void refreshTarget();
   };
 
   const closePanel = (restoreFocus: boolean) => {
@@ -592,9 +744,34 @@ export default function App() {
 
   // ===== Rust 事件闭环 =====
 
+  // 前台观察器只在目标语义变化时推送快照；事件本身即新基线，不做前端轮询。
+  useEffect(() => {
+    const unlisten = listen<TargetSnapshot>(TARGET_CHANGED_EVENT, (event) => {
+      applyTargetEvent(event.payload);
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  // 独立详情窗也有发送按钮；只同步最新快照，不让它建立第二套目标推断。
+  useEffect(
+    () =>
+      useTargetStore.subscribe((state, previous) => {
+        if (state.snapshot && state.snapshot !== previous.snapshot) {
+          void emitTo("textpreview", TARGET_CHANGED_EVENT, state.snapshot).catch(() => {});
+        }
+      }),
+    []
+  );
+
   // 触发事件：开关面板 / 捕获入库（去重裁决后回调 HUD）
   useEffect(() => {
     const unlisten = listen<TriggerPayload>(TRIGGER_EVENT, (event) => {
+      if (isDataOperationLocked()) {
+        tip("warn", "数据操作进行中，捕获暂时停用");
+        return;
+      }
       const payload = event.payload;
       if (payload.kind === "toggle") {
         const { open: isOpen, pinned: isPinned, edgeHidden } = useUIStore.getState();
@@ -638,11 +815,15 @@ export default function App() {
       );
       if (result === "added" && id) {
         void enrichLinkMeta(id);
-        captureHistory.push(id);
+        captureHistory.push({ id, dataGeneration: currentDataGeneration() });
         setPendingUndo(() => {
-          const undoId = captureHistory.pop();
+          const entry = captureHistory.pop();
+          const undoId = entry?.id;
           const exists =
-            undoId && useNotesStore.getState().notes.some((n) => n.id === undoId);
+            entry &&
+            matchesDataGeneration(entry.dataGeneration) &&
+            undoId &&
+            useNotesStore.getState().notes.some((n) => n.id === undoId);
           if (exists && undoId) {
             useNotesStore.getState().deleteNotes([undoId], "撤销捕获");
             void api.hudFeedback("undone", "已撤销");
@@ -667,6 +848,7 @@ export default function App() {
   // HUD 悬停撤销请求
   useEffect(() => {
     const unlisten = listen(UNDO_CAPTURE_EVENT, () => {
+      if (isDataOperationLocked()) return;
       runPendingUndo();
     });
     return () => {
@@ -681,6 +863,7 @@ export default function App() {
       const { x, y } = event.payload;
       window.clearTimeout(timer);
       timer = window.setTimeout(() => {
+        if (isDataOperationLocked()) return;
         useNotesStore.getState().setSettings({
           panelFreeX: Math.round(x),
           panelFreeY: Math.round(y),
@@ -743,7 +926,11 @@ export default function App() {
         useUIStore.getState().setPage("tasks");
         if (p.taskId) flash(p.taskId);
       } else {
-        const lastId = captureHistory[captureHistory.length - 1];
+        const lastEntry = captureHistory[captureHistory.length - 1];
+        const lastId =
+          lastEntry && matchesDataGeneration(lastEntry.dataGeneration)
+            ? lastEntry.id
+            : undefined;
         if (lastId) flash(lastId);
       }
       if (!useUIStore.getState().open) void openPanel();
@@ -757,6 +944,7 @@ export default function App() {
   // 粘性 HUD 可能被后续捕获气泡顶掉，任务页「已到期」红区是兜底真相来源。
   useEffect(() => {
     const check = () => {
+      if (isDataOperationLocked()) return;
       const { tasks: all, markTasksReminded } = useNotesStore.getState();
       const due = dueTasksToRemind(all, Date.now());
       if (!due.length) return;
@@ -773,9 +961,11 @@ export default function App() {
     };
     if (useNotesStore.persist.hasHydrated()) check();
     const unsub = useNotesStore.persist.onFinishHydration(() => check());
+    window.addEventListener(DATA_RUNTIME_READY_EVENT, check);
     const timer = window.setInterval(check, 30_000);
     return () => {
       unsub();
+      window.removeEventListener(DATA_RUNTIME_READY_EVENT, check);
       window.clearInterval(timer);
     };
   }, []);
@@ -783,16 +973,19 @@ export default function App() {
   // 剪贴板保留时长清理：水合后一次 + 每 30 分钟（固定卡豁免）
   useEffect(() => {
     const prune = () => {
+      if (isDataOperationLocked()) return;
       useNotesStore
         .getState()
         .pruneClipHistory()
-        .forEach((f) => void api.removeImage(f).catch(() => {}));
+        .forEach((file) => scheduleMediaGc([file]));
     };
     if (useNotesStore.persist.hasHydrated()) prune();
     const unsub = useNotesStore.persist.onFinishHydration(() => prune());
+    window.addEventListener(DATA_RUNTIME_READY_EVENT, prune);
     const timer = window.setInterval(prune, 1_800_000);
     return () => {
       unsub();
+      window.removeEventListener(DATA_RUNTIME_READY_EVENT, prune);
       window.clearInterval(timer);
     };
   }, []);
@@ -800,6 +993,7 @@ export default function App() {
   // 托盘暂停剪贴板收集 → 同步持久化（0 = 恢复）
   useEffect(() => {
     const unlisten = listen<number>(CLIP_PAUSE_EVENT, (event) => {
+      if (isDataOperationLocked()) return;
       useNotesStore.getState().setSettings({
         clipPauseUntil: event.payload > 0 ? event.payload : null,
       });
@@ -812,6 +1006,7 @@ export default function App() {
   // 托盘隐身开关 → 同步持久化
   useEffect(() => {
     const unlisten = listen<boolean>(STEALTH_EVENT, (event) => {
+      if (isDataOperationLocked()) return;
       useNotesStore.getState().setSettings({ stealth: event.payload });
     });
     return () => {
@@ -822,6 +1017,7 @@ export default function App() {
   // 剪贴板历史：watcher 推送 → 静默入库（重复内容由 addNote 去重吞掉）
   useEffect(() => {
     const unlisten = listen<ClipPayload>(CLIP_EVENT, (event) => {
+      if (isDataOperationLocked()) return;
       const p = event.payload;
       // 暂停收集期间丢弃（到期自动恢复，无需额外定时器）
       const pauseUntil = useNotesStore.getState().settings.clipPauseUntil;
@@ -835,7 +1031,7 @@ export default function App() {
         imageH: p.imageH ?? undefined,
       });
       // 被裁剪卡片的图片附件落盘清理（尽力而为）
-      removed.forEach((f) => void api.removeImage(f).catch(() => {}));
+      scheduleMediaGc(removed);
     });
     return () => {
       unlisten.then((fn) => fn());
@@ -845,10 +1041,25 @@ export default function App() {
   // 失焦：自动隐藏（Pin 豁免）+ 刷新发送目标（防 Pin 场景目标漂移）
   useEffect(() => {
     const win = getCurrentWebviewWindow();
+    let focusEpoch = 0;
     const unlisten = win.onFocusChanged(({ payload: focused }) => {
-      if (focused) return;
+      const epoch = ++focusEpoch;
+      if (focused) {
+        if (useUIStore.getState().open && !targetObservationPending()) {
+          void refreshTarget();
+        }
+        return;
+      }
+      // 同步先关发送闸门，再让 Native 采样；即使 A→B→Toskr 全程短于轮询周期，
+      // 未真正接受到 B observation 前也不能用旧 A 的存活校验恢复 ready。
+      beginTargetBlurObservation();
+      // 等焦点归属完成一个事件循环：Native 只在确证 settings/textpreview/imgpreview
+      // 已聚焦时把它视为 Toskr 内部切窗；否则仍建立外部 observation 屏障。
       window.setTimeout(() => {
-        void api.refreshPrevApp();
+        void observeTargetAfterBlur();
+      }, 0);
+      window.setTimeout(() => {
+        if (epoch === focusEpoch) void observeTargetAfterBlur();
       }, 300);
       // 稍等前台归属稳定再判定：焦点若只是移到自家窗口（空格图片预览、
       // 设置窗），应用仍在前台 → 不算离开，面板不收（未钉住场景）
@@ -873,6 +1084,17 @@ export default function App() {
     };
   }, []);
 
+  // WebView 从后台/睡眠可见态恢复时复核一次；不设 interval。
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && useUIStore.getState().open) {
+        void refreshTarget();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, []);
+
   // 外观：面板不透明度写入 CSS 变量（实时生效）
   const panelOpacity = useNotesStore((s) => s.settings.panelOpacity);
   useEffect(() => {
@@ -886,9 +1108,106 @@ export default function App() {
       onImport: () => void importBackup(),
       onClearClip: () => {
         const { removed, orphanImages } = useNotesStore.getState().clearClipHistory();
-        orphanImages.forEach((f) => void api.removeImage(f).catch(() => {}));
+        scheduleMediaGc(orphanImages);
         if (removed > 0) undoableTip(`已清空剪贴板历史 ${removed} 条`);
         else tip("info", "剪贴板历史已是空的");
+      },
+      onDataOperation: (plan) => {
+        void runDataLocationOperation(plan)
+          .then((result) => {
+            reportDataActivity({
+              locked: false,
+              phase: "complete",
+              message: result.message,
+            });
+            tip("ok", result.message);
+          })
+          .catch((error) => {
+            const message = `数据操作失败：${userError(error)}`;
+            reportDataActivity({
+              locked: isDataOperationLocked(),
+              phase: "rollback",
+              message,
+            });
+            tip("warn", message);
+          });
+      },
+      onDataRecoveryOperation: (plan) => {
+        void runRecoveryDataLocationOperation(plan)
+          .then((result) => {
+            reportDataActivity({
+              locked: false,
+              phase: "complete",
+              message: result.message,
+            });
+            tip("ok", result.message);
+          })
+          .catch((error) => {
+            const message = `数据恢复失败：${userError(error)}`;
+            reportDataActivity({
+              locked: isDataOperationLocked(),
+              phase: isDataOperationLocked() ? "storageRecovery" : "rollback",
+              message,
+            });
+            tip("warn", message);
+          });
+      },
+      onDataHealth: () => {
+        void api
+          .inspectMediaIntegrity(mediaIntegrityStateJson())
+          .then((report) => emitTo("settings", SETTINGS_DATA_HEALTH_RESULT, report))
+          .catch((error) => {
+            tip("warn", `健康检查失败：${userError(error)}`);
+          });
+      },
+      onDataConflictAction: (action) => {
+        const reload = () =>
+          reloadAfterPersistenceConflict()
+            .then(() => tip("ok", "已重新加载磁盘新版本"))
+            .catch((error) => tip("warn", `重新加载失败：${userError(error)}`));
+        if (action === "reload") {
+          void reload();
+          return;
+        }
+        if (action === "retryStorage" || action === "loadDefault") {
+          const recover =
+            action === "retryStorage"
+              ? api.retryStorageInitialization
+              : api.loadDefaultFromRecovery;
+          void recover()
+            .then(async () => {
+              await reload();
+              tip(
+                "ok",
+                action === "retryStorage"
+                  ? "存储挂载已恢复"
+                  : "已明确加载默认数据目录"
+              );
+            })
+            .catch((error) =>
+              tip("warn", `存储恢复失败：${userError(error)}`)
+            );
+          return;
+        }
+        void import("@tauri-apps/plugin-dialog")
+          .then(({ save }) =>
+            save({
+              defaultPath: "toskr-conflict-recovery.toskr-backup",
+              filters: [
+                { name: "Toskr 恢复副本", extensions: ["toskr-backup"] },
+              ],
+            })
+          )
+          .then(async (path) => {
+            if (!path) return;
+            await api.exportConflictRecoveryBackup(
+              path,
+              JSON.stringify(buildBackupPayload(useNotesStore.getState()))
+            );
+            tip("ok", "当前内存已另存为恢复副本");
+            await reload();
+          })
+          .catch((error) => tip("warn", `另存恢复副本失败：${userError(error)}`));
       },
     });
     return cleanup;
@@ -897,66 +1216,64 @@ export default function App() {
   // 设置变化后广播给设置窗口（托盘隐身切换等外部改动也能同步）
   useEffect(() => useNotesStore.subscribe(() => broadcastSettings()), []);
 
+  useEffect(() => {
+    const onConflict = () => {
+      const message = "检测到数据文件被外部修改，已停止自动覆盖";
+      void api
+        .markDataConflict()
+        .then(() => {
+          if (useDataOperationStore.getState().phase === "storageRecovery") {
+            return;
+          }
+          reportDataActivity({
+            locked: true,
+            phase: "conflict",
+            message,
+          });
+          tip("warn", `${message}；请在设置 → 数据中选择处理方式`);
+        })
+        .catch((error) => {
+          reportDataActivity({
+            locked: true,
+            phase: "rollback",
+            message: `冲突状态持久化失败：${userError(error)}`,
+          });
+        });
+    };
+    window.addEventListener(PERSISTENCE_CONFLICT_EVENT, onConflict);
+    return () => window.removeEventListener(PERSISTENCE_CONFLICT_EVENT, onConflict);
+  }, []);
+
+  useEffect(() => {
+    const invalidated = listen(DATA_CONTEXT_INVALIDATED_EVENT, () => {
+      captureHistory.length = 0;
+      clearPendingUndo();
+    });
+    return () => {
+      invalidated.then((stop) => stop());
+    };
+  }, []);
+
   // 文本详情窗的写回通道：编辑保存 / 发送都回到主面板执行
   // （主面板是唯一持久化写入方，详情窗只读展示 + 发事件）
   useEffect(() => {
-    const gcKey = "toskr:pending-image-gc:v1";
-    const pendingImageGc = new Set<string>();
-    const deletingImages = new Set<string>();
-    try {
-      const saved = JSON.parse(localStorage.getItem(gcKey) ?? "[]");
-      if (Array.isArray(saved)) {
-        saved.filter((file): file is string => typeof file === "string").forEach(
-          (file) => pendingImageGc.add(file)
-        );
-      }
-    } catch {
-      /* 损坏的临时清理队列忽略，不影响业务数据 */
-    }
-    const persistGc = () => {
-      try {
-        if (pendingImageGc.size) {
-          localStorage.setItem(gcKey, JSON.stringify([...pendingImageGc]));
-        } else {
-          localStorage.removeItem(gcKey);
-        }
-      } catch {
-        /* WebView 存储不可用时退化为本次运行内清理 */
-      }
-    };
     let hydrated = useNotesStore.persist.hasHydrated();
-    const removeUnreferencedImages = (files: string[]) => {
-      files.forEach((file) => pendingImageGc.add(file));
-      persistGc();
-      if (!hydrated || !pendingImageGc.size) return;
-      const state = useNotesStore.getState();
-      const used = new Set(
-        [...state.notes, ...state.undoStack.flatMap((entry) => entry.notes)].flatMap(
-          noteImages
-        )
-      );
-      [...pendingImageGc]
-        .filter((file) => !used.has(file) && !deletingImages.has(file))
-        .forEach((file) => {
-          deletingImages.add(file);
-          void api
-            .removeImage(file)
-            .then(() => pendingImageGc.delete(file))
-            .catch(() => {})
-            .finally(() => {
-              deletingImages.delete(file);
-              persistGc();
-            });
-        });
-    };
-    if (hydrated) removeUnreferencedImages([]);
+    if (hydrated) runScheduledMediaGc();
     const stopHydrationSweep = useNotesStore.persist.onFinishHydration(() => {
       hydrated = true;
-      removeUnreferencedImages([]);
+      runScheduledMediaGc();
     });
+    const onRuntimeReady = () => {
+      hydrated = true;
+      runScheduledMediaGc();
+    };
+    window.addEventListener(DATA_RUNTIME_READY_EVENT, onRuntimeReady);
     const stopGcWatch = useNotesStore.subscribe((state, previous) => {
       if (state.notes !== previous.notes || state.undoStack !== previous.undoStack) {
-        removeUnreferencedImages([]);
+        const before = new Set(previous.notes.flatMap(noteImages));
+        const after = new Set(state.notes.flatMap(noteImages));
+        scheduleMediaGc([...before].filter((file) => !after.has(file)));
+        if (hydrated) runScheduledMediaGc();
       }
     });
     const subs = [
@@ -965,32 +1282,77 @@ export default function App() {
         text: string;
         images?: string[];
         discardedImages?: string[];
+        dataGeneration: number;
       }>("toskr://note-edit", (e) => {
+        if (
+          isDataOperationLocked() ||
+          !matchesDataGeneration(e.payload.dataGeneration)
+        ) {
+          // 静默丢弃会让用户误信已保存；面板可能贴边隐藏，必须带回可见告知
+          warnWithPanel(
+            "编辑未保存：数据上下文已变化，请复制内容后重新打开卡片",
+            "note-edit rejected"
+          );
+          return;
+        }
         useNotesStore
           .getState()
           .updateNoteText(e.payload.id, e.payload.text, e.payload.images);
-        removeUnreferencedImages(e.payload.discardedImages ?? []);
+        scheduleMediaGc(e.payload.discardedImages ?? [], 0);
         void enrichLinkMeta(e.payload.id);
         tip("ok", "已保存");
       }),
-      listen<{ id: string }>("toskr://note-send", (e) => {
+      listen<{ id: string; dataGeneration: number }>("toskr://note-send", (e) => {
+        if (
+          isDataOperationLocked() ||
+          !matchesDataGeneration(e.payload.dataGeneration)
+        ) {
+          warnWithPanel(
+            "发送已取消：数据上下文已变化，请重新打开卡片后再发送",
+            "note-send rejected"
+          );
+          return;
+        }
         void sendNotesToChat([e.payload.id]);
       }),
       // 详情窗移除组合卡里的某张图（可撤销；磁盘文件保留，撤销要还原得回来）
-      listen<{ id: string; file: string }>("toskr://note-image-remove", (e) => {
+      listen<{ id: string; file: string; dataGeneration: number }>(
+        "toskr://note-image-remove",
+        (e) => {
+        if (
+          isDataOperationLocked() ||
+          !matchesDataGeneration(e.payload.dataGeneration)
+        ) {
+          warnWithPanel(
+            "移除图片未生效：数据上下文已变化，请重新打开卡片",
+            "note-image-remove rejected"
+          );
+          return;
+        }
         const { noteDeleted } = useNotesStore
           .getState()
           .removeNoteImage(e.payload.id, e.payload.file);
+        scheduleMediaGc([e.payload.file]);
         undoableTip(noteDeleted ? "已删除 1 条" : "已移除图片");
-      }),
+        }
+      ),
       // 详情编辑取消时仅删本次新增、且没有被任意卡片引用的图片；剪贴板
       // 内容哈希可能命中已有文件，不能由详情窗直接删盘。
-      listen<{ files: string[] }>("toskr://note-image-discard", (e) => {
-        removeUnreferencedImages(e.payload.files);
-      }),
+      listen<{ files: string[]; dataGeneration: number }>(
+        "toskr://note-image-discard",
+        (e) => {
+        if (
+          isDataOperationLocked() ||
+          !matchesDataGeneration(e.payload.dataGeneration)
+        )
+          return;
+        scheduleMediaGc(e.payload.files, 0);
+        }
+      ),
     ];
     return () => {
       stopHydrationSweep();
+      window.removeEventListener(DATA_RUNTIME_READY_EVENT, onRuntimeReady);
       stopGcWatch();
       subs.forEach((p) => p.then((fn) => fn()));
     };
@@ -1029,48 +1391,16 @@ export default function App() {
       }
       return settings;
     };
-    const push = (settings: Settings) => {
-      void api.setHotkeyConfig(settings.hotkeyModifier, settings.hotkeyGapMs);
-      void api.setPanelHotkey(settings.panelToggleHotkey).catch(() => {});
-      void api.setCompanionConfig(
-        settings.companionEnabled,
-        settings.companionApps,
-        settings.sidebarEdge === "left" ? "left" : "right"
-      );
-      void api.setCompanionGap(settings.companionGap);
-      void api
-        .setSidebarMode(settings.rightSidebar, settings.sidebarEdge)
-        .catch(() => {});
-      void api.setPanelTopmost(settings.panelTopmost).catch(() => {});
-      void api.setAutoEdgeHide(settings.autoEdgeHide).catch(() => {});
-      void api.setPanelFreePos(settings.panelFreeX, settings.panelFreeY);
-      void api.setPanelWidth(settings.panelWidth);
-      // 垂直覆盖为会话内临时值（切换吸附目标即重置），不做启动恢复
-      void api.setStealth(settings.stealth);
-      void api.setSound(settings.soundEnabled);
-      void api.setDoubleTapMode(settings.doubleTapCaptureOnly);
-      void api.setClipWatch(settings.clipHistory);
-      void api.setClipPause(settings.clipPauseUntil ?? 0);
-      void api.setClipRules(
-        settings.clipIgnoreConcealed,
-        settings.clipIgnoreTransient,
-        settings.clipExcludedApps
-      );
-      void api.setWindowTheme(settings.theme);
-      void api.setExcludedApps(settings.excludedApps);
-      void api.setVibrancy(settings.vibrancy, settings.vibrancyMaterial);
-      void api.setWindowAlpha(settings.windowOpacity);
-    };
     if (useNotesStore.persist.hasHydrated()) {
-      push(applyModeDefaults(heal(useNotesStore.getState().settings)));
+      applyRuntimeSettings(applyModeDefaults(heal(useNotesStore.getState().settings)));
     }
     const unsub = useNotesStore.persist.onFinishHydration((state) => {
-      push(applyModeDefaults(heal(state.settings)));
+      applyRuntimeSettings(applyModeDefaults(heal(state.settings)));
       // 迁移提交：新数据文件尚不存在（数据还在旧存储）时立即落盘一次
       void api
-        .readDataFile()
-        .then((raw) => {
-          if (!raw) useNotesStore.setState({});
+        .readDataSnapshot()
+        .then((snapshot) => {
+          if (!snapshot.content) useNotesStore.setState({});
         })
         .catch(() => {});
     });
@@ -1123,33 +1453,105 @@ export default function App() {
     try {
       const { save } = await import("@tauri-apps/plugin-dialog");
       const path = await save({
-        defaultPath: "toskr-backup.json",
-        filters: [{ name: "JSON", extensions: ["json"] }],
+        defaultPath: "toskr-complete-backup.toskr-backup",
+        filters: [{ name: "Toskr 完整备份", extensions: ["toskr-backup"] }],
       });
       if (!path) return;
-      await api.exportFile(
-        path,
-        JSON.stringify(buildBackupPayload(useNotesStore.getState()), null, 2)
+      const inspection = await runCompleteBackupExport(path);
+      tip(
+        "ok",
+        `完整备份已验证：${inspection.counts.notes} 条笔记、${inspection.counts.tasks} 个任务、${inspection.counts.media} 个媒体`
       );
-      tip("ok", "已导出备份");
     } catch (e) {
-      tip("warn", `导出失败：${e}`);
+      tip("warn", `导出失败：${userError(e)}`);
     }
   };
 
   const importBackup = async () => {
+    let importCommitted = false;
     try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
+      const { ask, open } = await import("@tauri-apps/plugin-dialog");
       const path = await open({
         multiple: false,
-        filters: [{ name: "JSON", extensions: ["json"] }],
+        filters: [
+          { name: "Toskr 备份", extensions: ["toskr-backup", "json"] },
+        ],
       });
       if (typeof path !== "string") return;
-      const raw = await api.importFile(path);
-      const added = useNotesStore.getState().importMerge(JSON.parse(raw));
-      tip("ok", `导入完成（合并）：笔记 ${added.notes} 条，任务 ${added.tasks} 个`);
+      const inspection = await api.inspectBackup(path);
+      const counts = inspection.counts;
+      const legacyLimitations = [
+        ...inspection.warnings,
+        ...(inspection.missingMedia.length
+          ? [`引用了 ${inspection.missingMedia.length} 个未随旧 JSON 提供的媒体文件`]
+          : []),
+      ];
+      const confirmed = await ask(
+        inspection.format === "complete"
+          ? `完整备份已通过 manifest/hash 预检。将恢复 ${counts.notes} 条笔记、${counts.tasks} 个任务、${counts.media} 个媒体，并先创建当前数据恢复点。API Key 不在备份中，恢复后需重新配置。继续吗？`
+          : `这是旧 JSON，将先创建当前数据恢复点，再按 ID 合并 ${counts.notes} 条笔记、${counts.tasks} 个任务。\n\n完整性限制：\n- ${legacyLimitations.join("\n- ")}\n\n继续吗？`,
+        { title: "导入预检", kind: "warning" }
+      );
+      if (!confirmed) return;
+      const operationId = crypto.randomUUID();
+      if (inspection.format === "complete") {
+        const { result } = await runCompleteBackupImport(
+          path,
+          operationId,
+          inspection.archiveRevision
+        );
+        importCommitted = true;
+        reportDataActivity({
+          locked: false,
+          phase: "complete",
+          message: result.message,
+        });
+        tip("ok", `完整备份恢复完成：笔记 ${counts.notes} 条，媒体 ${counts.media} 个`);
+      } else {
+        const { added } = await runLegacyJsonImport(
+          path,
+          operationId,
+          inspection.archiveRevision
+        );
+        importCommitted = true;
+        const duplicateSuffix = added.skippedDuplicates
+          ? `，跳过重复 ID ${added.skippedDuplicates} 项`
+          : "";
+        try {
+          const health = await api.inspectMediaIntegrity(mediaIntegrityStateJson());
+          await emitTo("settings", SETTINGS_DATA_HEALTH_RESULT, health);
+          const partial =
+            health.missing.length > 0 || inspection.missingMedia.length > 0;
+          reportDataActivity({
+            locked: false,
+            phase: "complete",
+            message: partial
+              ? `旧 JSON 已部分导入；健康检查仍有 ${health.missing.length} 个缺失媒体`
+              : "旧 JSON 已兼容导入并完成数据健康检查",
+          });
+          tip(
+            partial ? "warn" : "ok",
+            `${partial ? "旧 JSON 部分合并" : "旧 JSON 合并完成"}：笔记 ${added.notes} 条，任务 ${added.tasks} 个${duplicateSuffix}${partial ? `；缺失媒体 ${health.missing.length} 个` : ""}`
+          );
+        } catch (postflightError) {
+          const message = `旧 JSON 已导入，但完整性报告生成失败：${userError(postflightError)}`;
+          reportDataActivity({ locked: false, phase: "complete", message });
+          tip("warn", message);
+        }
+      }
+      broadcastSettings();
+      runScheduledMediaGc();
     } catch (e) {
-      tip("warn", `导入失败：${e}`);
+      const locked = isDataOperationLocked();
+      const message = importCommitted
+        ? `导入已完成，但后续刷新失败：${userError(e)}`
+        : `导入失败：${userError(e)}`;
+      reportDataActivity({
+        locked,
+        phase: importCommitted ? "complete" : locked ? "rollback" : "idle",
+        message,
+      });
+      tip("warn", message);
     }
   };
 
@@ -1331,6 +1733,11 @@ export default function App() {
   // ===== 面板内快捷键（Esc 分层 + 全键盘导航） =====
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (isDataOperationLocked()) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       const target = e.target as HTMLElement | null;
       const editable =
         !!target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT");
@@ -1506,6 +1913,7 @@ export default function App() {
           void api.quickLook(noteImages(focusedNote), 0, {
             id: focusedNote.id,
             text: imageCaption(focusedNote),
+            dataGeneration: currentDataGeneration(),
           });
         } else {
           // 文字类 → 桌面居中的文本详情窗；同卡再按空格收起（Quick Look 心智）
@@ -1796,6 +2204,21 @@ export default function App() {
         className="h-screen w-screen overflow-hidden text-foreground"
         onContextMenu={(e) => e.preventDefault()}
       >
+        {dataOperationLocked && (
+          <div
+            role="status"
+            aria-live="assertive"
+            aria-busy="true"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-background/90 px-6 backdrop-blur-sm"
+          >
+            <div className="rounded-xl border border-border bg-popover px-4 py-3 text-center shadow-lg">
+              <p className="text-title font-medium">数据暂时只读</p>
+              <p className="mt-1 text-body text-muted-foreground">
+                {dataOperationMessage || "正在验证并切换数据目录…"}
+              </p>
+            </div>
+          </div>
+        )}
         {/* 面板内容树常驻：呼出只播 transform/opacity（GPU 合成层），
             避免每次打开重新挂载整棵卡片树造成的掉帧；收起动画完成后再隐藏窗口 */}
             <motion.div
@@ -2242,6 +2665,8 @@ export default function App() {
                   </Tipped>
                 </div>
               </header>
+
+              <TargetLensBar />
 
               {/* 页面切换：笔记 / 任务 / 剪贴板（⌃Tab 循环）。
                   横栏形态并入标题行居中（Paste 式单行头部），不再单占一行 */}

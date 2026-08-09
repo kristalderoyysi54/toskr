@@ -21,10 +21,12 @@ import { useAppIcon } from "@/lib/icons";
 import { useNoteImage, useNoteThumb } from "@/lib/media";
 import { springModal, tweenFade } from "@/lib/motion";
 import { api } from "@/lib/tauri";
+import { currentDataGeneration } from "@/lib/dataGeneration";
 import { cn } from "@/lib/utils";
 import { headerGradient } from "@/components/NoteCard";
 import { noteImages, useNotesStore } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
+import { useTargetStore } from "@/store/targetStore";
 
 /** 文本统计（Paste 风格）：字符 / 单词（CJK 按字计）/ 行。 */
 export function stats(text: string) {
@@ -56,6 +58,10 @@ const MODAL_MARGIN = 12;
 export function PreviewOverlay() {
   const previewId = useUIStore((s) => s.previewId);
   const editing = useUIStore((s) => s.previewEditing);
+  const profileChanged = useTargetStore((s) => s.profileOverrideNeedsConfirmation);
+  const targetReady = useTargetStore(
+    (s) => s.status === "ready" && !s.profileOverrideNeedsConfirmation
+  );
   const note = useNotesStore((s) => s.notes.find((n) => n.id === previewId));
   const icon = useAppIcon(note?.sourceBundle);
   const isImage = note?.kind === "image";
@@ -273,6 +279,7 @@ export function PreviewOverlay() {
                         void api.quickLook(images, 0, {
                           id: note.id,
                           text: imageCaption(note),
+                          dataGeneration: currentDataGeneration(),
                         })
                       }
                       className="max-h-full max-w-full cursor-zoom-in object-contain"
@@ -376,6 +383,14 @@ export function PreviewOverlay() {
                     </IconButton>
                     <Button
                       size="xs"
+                      disabled={!targetReady}
+                      aria-label={
+                        targetReady
+                          ? "发送到当前目标"
+                          : profileChanged
+                            ? "发送不可用：目标已变化，请确认 Profile"
+                            : "发送不可用：投递目标未就绪"
+                      }
                       onClick={() => {
                         useUIStore.getState().closePreview();
                         void sendNotesToChat([note.id]);

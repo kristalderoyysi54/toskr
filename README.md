@@ -30,8 +30,8 @@
 - **剪贴板**：自动收集历史流水；固定 ★ 置顶不清理、托盘一键暂停、保留时长滑杆、机密 / 瞬时 / 应用忽略规则
 - **AI 智能**（可选）：配置 OpenAI 兼容提供商（DeepSeek / OpenAI / Kimi / 通义 / 自定义）后——✨ 自然语言建任务（「下午3点提醒我开会」自动解析到期与优先级）、AI 拆解子任务、笔记 AI 转任务、AI 起标题
 - **边栏四缘**：面板可停靠屏幕右 / 左 / 上 / 下缘；上下缘为 Paste 式方形卡片横栏（分组胶囊过滤、滚轮横滑）
-- **发回对话**：⌘⏎ 焦点精确归还后自动粘贴（未就绪即中止）；⌘1-9 快发、双击直发、Prompt 模板 `{内容}` 占位、剪贴板无损还原
-- **数据**：完全本地 JSON、无网络无遥测；导出 / 导入合并，数据目录可放 iCloud 多机同步
+- **发回对话**：⌘⏎ 焦点精确归还后自动粘贴（未就绪即中止）；Target Profile 按 bundle 精确选择模板分组、格式、回车、隐私策略与面板保留行为，支持本次临时覆盖；完整 pasteboard 快照按 changeCount 所有权安全恢复
+- **数据**：完全本地、无遥测；目录切换先预检并可回滚，完整备份包含任务分组与被引用媒体（不含 API Key）；iCloud / Dropbox 仅作为外部存储位置，检测冲突但不承诺自动合并或无冲突多机同步
 
 ## ⌨️ 快捷键
 
@@ -47,7 +47,7 @@
 
 ## 📦 安装
 
-从 [Releases](https://github.com/kristalderoyysi54/toskr/releases) 下载 `Toskr.app.tar.gz`，解压后把 `Toskr.app` 拖入「应用程序」。首次打开需**右键 →「打开」**绕过 Gatekeeper（自签名应用）。
+从 [Releases](https://github.com/kristalderoyysi54/toskr/releases) 下载 `Toskr_<版本>_aarch64.dmg`，打开安装盘，按界面提示把 `Toskr.app` 拖入 `Applications`。首次打开需**右键 →「打开」**绕过 Gatekeeper（自签名应用）。
 
 **自动更新**：应用启动后会静默检查 GitHub Releases，发现新版在右上角气泡提醒；也可在 设置 → 关于 中手动「检查更新」，一键下载安装并自动重启（更新包经 minisign 签名校验）。
 
@@ -60,7 +60,7 @@ git clone https://github.com/kristalderoyysi54/toskr.git
 cd toskr
 pnpm install
 pnpm tauri dev    # 开发运行
-pnpm build:app    # 打包 → src-tauri/target/release/bundle/macos/Toskr.app
+pnpm build:app    # 打包 → .app + 可拖拽安装的 .dmg
 ```
 
 **关于签名**：`tauri.conf.json` 默认指定自签名证书 `Toskr Dev Signing`，好处是签名跨编译稳定，重新构建后无需重新授予辅助功能权限。首次构建前二选一：
@@ -85,7 +85,7 @@ Tauri v2（Rust）· React 18 · TypeScript · Tailwind CSS v4 · shadcn/ui · Z
 几个有意思的实现点：
 
 - **双击检测**：CGEventTap 挂主线程 CFRunLoop + 参数化纯状态机（单测覆盖），规避 rdev 多年未修复的段错误
-- **划词读取**：AX API 直读优先（零副作用），剪贴板技法兜底（备份 → ⌘C → 轮询 → 还原）
+- **划词读取**：AX API 直读优先（零副作用）；复制回退使用完整快照，仅接受固定采纳窗内唯一稳定、且前台身份与真实输入未漂移的 changeCount revision，并在迟到恢复宽限窗后按所有权安全恢复
 - **伴随停靠**：AX 读取目标窗口 frame + 60ms 跟随循环 + 纯函数矩形计算（多屏 / 缩放均有单测）
 - **悬停撤销**：点击穿透的窗口收不到鼠标事件，改用 CGEvent 全局光标轮询命中检测，动态切换穿透状态
 - **全屏可见**：NSWindow `collectionBehavior += FullScreenAuxiliary`
@@ -102,7 +102,7 @@ pnpm build:app     # 产出 .app
 
 手动验收清单见 [docs/manual-qa.md](docs/manual-qa.md)。
 
-**发版**：`./script/release.sh 0.11.0 "更新说明"` —— 自动完成版本号写入、签名打包、生成 `latest.json`、创建 GitHub Release 并上传更新包（需 `gh` CLI 登录与 `~/.tauri/toskr-updater.key` updater 私钥）。
+**发版**：`./script/release.sh 0.11.0 "更新说明"` —— 自动完成版本号写入、签名打包、校验 DMG、生成 `latest.json`、创建 GitHub Release，并上传 DMG 与自动更新包（需 `gh` CLI 登录与 `~/.tauri/toskr-updater.key` updater 私钥）。
 
 > 中国大陆网络：`src-tauri/.cargo/config.toml` 已配置 rsproxy.cn crates 镜像，如需全局生效可复制到 `~/.cargo/config.toml`。
 

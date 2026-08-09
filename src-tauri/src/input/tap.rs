@@ -16,7 +16,7 @@ use core_foundation::mach_port::CFMachPortRef;
 use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
 use core_graphics::event::{
     CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
-    CGEventType,
+    CGEventType, EventField,
 };
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -49,7 +49,13 @@ pub fn install(app: AppHandle) -> Result<(), String> {
         CGEventTapLocation::Session,
         CGEventTapPlacement::HeadInsertEventTap,
         CGEventTapOptions::ListenOnly,
-        vec![CGEventType::FlagsChanged, CGEventType::KeyDown],
+        vec![
+            CGEventType::FlagsChanged,
+            CGEventType::KeyDown,
+            CGEventType::LeftMouseDown,
+            CGEventType::RightMouseDown,
+            CGEventType::OtherMouseDown,
+        ],
         move |_proxy, event_type, event| {
             handle_event(&app, &shared, event_type, event);
             None
@@ -96,12 +102,23 @@ fn handle_event(
     event_type: CGEventType,
     event: &core_graphics::event::CGEvent,
 ) {
-    // 事件心跳：首个键盘事件到达即标记（诊断输入监控权限是否放行投递）
-    {
+    let is_keyboard = matches!(event_type, CGEventType::FlagsChanged | CGEventType::KeyDown);
+    if is_keyboard {
+        // 事件心跳：首个键盘事件到达即标记（诊断输入监控权限是否放行投递）
         let state = app.state::<AppState>();
         if !state.key_events_seen.swap(true, Ordering::Relaxed) {
             crate::diag::push(app, "键盘事件流已到达（输入监控正常）");
         }
+    }
+    if !matches!(
+        event_type,
+        CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput
+    ) && event.get_integer_value_field(EventField::EVENT_SOURCE_USER_DATA)
+        != super::synth::EVENT_SOURCE_MARKER
+    {
+        app.state::<AppState>()
+            .physical_input_generation
+            .fetch_add(1, Ordering::Relaxed);
     }
     match event_type {
         // 回调超时/用户输入导致 tap 被系统禁用时自动恢复（经典陷阱）。
@@ -144,8 +161,10 @@ fn handle_event(
                             | CGEventFlags::CGEventFlagCommand,
                     ),
                 };
-                let gap_ms =
-                    app.state::<AppState>().hotkey_gap_ms.load(Ordering::Relaxed) as u64;
+                let gap_ms = app
+                    .state::<AppState>()
+                    .hotkey_gap_ms
+                    .load(Ordering::Relaxed) as u64;
                 guard
                     .0
                     .set_release_gap(std::time::Duration::from_millis(gap_ms));
@@ -155,7 +174,10 @@ fn handle_event(
                 let other_mods = flags.intersects(other_flags);
 
                 let input = if target_now && !target_prev {
-                    InputEvent::ShiftDown { at: now, other_mods }
+                    InputEvent::ShiftDown {
+                        at: now,
+                        other_mods,
+                    }
                 } else if !target_now && target_prev {
                     InputEvent::ShiftUp { at: now }
                 } else {
@@ -167,7 +189,11 @@ fn handle_event(
             match triggered {
                 FeedOutcome::Triggered => {
                     crate::diag::push(app, "双击触发");
-                    on_trigger(app);
+                    let input_generation = app
+                        .state::<AppState>()
+                        .physical_input_generation
+                        .load(Ordering::Acquire);
+                    on_trigger(app, input_generation);
                 }
                 FeedOutcome::Rejected { reason, ms } => {
                     // 近失诊断：帮用户/开发定位「为什么这次没触发」
@@ -186,13 +212,11 @@ fn handle_event(
 /// 双击 Shift 触发裁决：
 /// - 前台是本应用 → 开关面板；
 /// - 前台是其他应用 → 尝试捕获选中文本；有 → 静默入库 + HUD；无 → 开关面板。
-fn on_trigger(app: &AppHandle) {
+fn on_trigger(app: &AppHandle, input_generation: u64) {
     let me = std::process::id() as i32;
     match crate::focus::frontmost_info() {
         Some(front) if front.pid != me => {
-            if let Some(state) = app.try_state::<AppState>() {
-                *state.prev_app_pid.lock().unwrap() = Some(front.pid);
-            }
+            crate::target::observe_front(app, &front);
             // 捕获排除名单（密码管理器等）：只做面板开关，绝不读取内容
             let excluded = front
                 .bundle_id
@@ -220,13 +244,17 @@ fn on_trigger(app: &AppHandle) {
                 );
                 // 仅捕获模式下不兼职开关面板
                 if !capture_only {
-                    let _ = app.emit_to("main", TRIGGER_EVENT, TriggerPayload::Toggle { force: false });
+                    let _ = app.emit_to(
+                        "main",
+                        TRIGGER_EVENT,
+                        TriggerPayload::Toggle { force: false },
+                    );
                 }
                 return;
             }
             let handle = app.clone();
             tauri::async_runtime::spawn_blocking(move || {
-                match crate::capture::capture_selection(&handle) {
+                match crate::capture::capture_selection(&handle, &front, input_generation) {
                     // 只发事件：入库与去重由前端裁决后回调 show_capture_hud
                     Some(crate::capture::Captured::Text(text)) => {
                         let _ = handle.emit_to(
@@ -270,11 +298,16 @@ fn on_trigger(app: &AppHandle) {
                                 &handle,
                                 "warn",
                                 "未检测到选中内容".into(),
-                                false, false, None,
+                                false,
+                                false,
+                                None,
                             );
                         } else {
-                            let _ =
-                                handle.emit_to("main", TRIGGER_EVENT, TriggerPayload::Toggle { force: false });
+                            let _ = handle.emit_to(
+                                "main",
+                                TRIGGER_EVENT,
+                                TriggerPayload::Toggle { force: false },
+                            );
                         }
                     }
                 }
@@ -289,7 +322,11 @@ fn on_trigger(app: &AppHandle) {
             if capture_only {
                 crate::diag::push(app, "双击触发: 仅捕获模式，忽略面板开关");
             } else {
-                let _ = app.emit_to("main", TRIGGER_EVENT, TriggerPayload::Toggle { force: false });
+                let _ = app.emit_to(
+                    "main",
+                    TRIGGER_EVENT,
+                    TriggerPayload::Toggle { force: false },
+                );
             }
         }
     }

@@ -1,7 +1,10 @@
 mod ax;
+mod backup;
 mod capture;
 mod clipwatch;
 mod commands;
+mod data_integrity;
+mod delivery;
 mod diag;
 mod events;
 mod focus;
@@ -9,8 +12,10 @@ mod input;
 mod ocr;
 mod ai;
 mod linkmeta;
+mod pasteboard;
 mod state;
 mod storage;
+mod target;
 mod tray;
 mod window;
 
@@ -37,6 +42,13 @@ pub fn run() {
         .manage(diag::DiagLog::default())
         .manage(storage::Storage::default())
         .setup(|app| {
+            if let Err(error) = storage::initialize_storage(app.handle()) {
+                diag::push(
+                    app.handle(),
+                    format!("数据存储进入只读恢复模式: {:?}", error.code),
+                );
+                storage::enter_storage_recovery_mode(app.handle(), error);
+            }
             // 启动指纹：证明当前运行的是哪个构建的哪个进程（排查部署未生效）
             diag::push(
                 app.handle(),
@@ -47,10 +59,9 @@ pub fn run() {
                 ),
             );
 
-            // 前台应用观察者：持续把「最后一个非本应用的前台 pid」写入
-            // prev_app_pid。发送/归还焦点永远回到用户刚刚所在的应用——
-            // 只在呼出/捕获/停靠时拍快照会过期（例：在 A 捕获后切到 B
-            // 点发送，内容被粘回 A，用户在 B 里看不到任何东西）。
+            // 前台应用观察者：持续更新窗口布局用的 prev_app_pid，以及“下一次投递”
+            // 的目标快照。相同进程身份保持 token；一次投递开始后持有自己的不可变
+            // snapshot，不会被观察器后续切到 B 的更新改写。
             {
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {
@@ -59,14 +70,18 @@ pub fn run() {
                         std::thread::sleep(std::time::Duration::from_millis(250));
                         if let Some(f) = focus::frontmost_info() {
                             if f.pid != me {
-                                if let Some(state) = handle.try_state::<state::AppState>() {
-                                    *state.prev_app_pid.lock().unwrap() = Some(f.pid);
-                                }
+                                target::observe_front(&handle, &f);
+                            } else {
+                                target::revalidate_observed_target(&handle);
                             }
                         }
                     }
                 });
             }
+
+            // 轮询只作低频身份复核；所有 Toskr 窗口共享的应用激活事件才是
+            // 短暂 A→B→self 切换的安全关键目标来源。
+            focus::install_workspace_activation_observer(app.handle().clone());
 
             // Sequoia 上 Accessory 策略是 CGEventTap 能创建成功的前提，
             // 必须先于 tap 安装（Prohibited 策略即使已授权也会静默失败）。
@@ -158,6 +173,10 @@ pub fn run() {
             commands::show_panel,
             commands::hide_panel,
             commands::copy_text,
+            commands::get_target_snapshot,
+            commands::refresh_target_snapshot,
+            commands::validate_target_snapshot,
+            commands::send_delivery,
             commands::send_to_chat,
             commands::ax_trusted,
             commands::tap_status,
@@ -209,15 +228,29 @@ pub fn run() {
             commands::diag_note,
             commands::get_diagnostics,
             commands::get_data_dir,
-            commands::set_data_dir,
-            commands::reset_data_dir,
-            commands::read_data_file,
-            commands::write_data_file,
+            commands::get_data_location_status,
+            commands::retry_storage_initialization,
+            commands::load_default_from_recovery,
+            commands::clear_data_conflict,
+            commands::mark_data_conflict,
+            commands::inspect_data_location,
+            commands::begin_data_operation,
+            commands::begin_recovery_data_operation,
+            commands::finalize_data_operation,
+            commands::rollback_data_operation,
+            commands::read_data_snapshot,
+            commands::write_data_if_current,
             commands::image_data_url,
             commands::image_thumb_url,
-            commands::remove_image,
-            commands::export_file,
-            commands::import_file,
+            commands::export_complete_backup,
+            commands::export_conflict_recovery_backup,
+            commands::inspect_backup,
+            commands::create_data_recovery_backup,
+            commands::begin_complete_backup_import,
+            commands::read_legacy_backup,
+            commands::inspect_media_integrity,
+            commands::schedule_media_gc,
+            commands::run_media_gc,
             linkmeta::fetch_link_meta,
             ai::ai_chat,
             ai::ai_list_models,

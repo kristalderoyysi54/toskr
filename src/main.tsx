@@ -31,6 +31,13 @@ if (import.meta.env.DEV) {
   void import("./store/uiStore").then((m) => {
     (window as unknown as Record<string, unknown>).uiStore = m.useUIStore;
   });
+  void import("./store/targetStore").then((m) => {
+    (window as unknown as Record<string, unknown>).targetStore = m.useTargetStore;
+  });
+  void import("./store/dataOperationStore").then((m) => {
+    (window as unknown as Record<string, unknown>).dataOperationStore =
+      m.useDataOperationStore;
+  });
 }
 
 const media = window.matchMedia("(prefers-color-scheme: dark)");

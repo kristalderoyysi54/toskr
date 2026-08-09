@@ -1,0 +1,258 @@
+export type DeliveryFormat = "plain" | "code";
+export type EnterPolicy = "never" | "confirm" | "allow";
+export type PrivacyPolicy = "requireRedaction" | "confirmRaw" | "allowRaw";
+
+export interface PromptGroup {
+  id: string;
+  name: string;
+  order: number;
+}
+
+export interface PromptSnippet {
+  id: string;
+  label: string;
+  text: string;
+  groupId: string;
+}
+
+export interface TargetProfile {
+  id: string;
+  name: string;
+  bundleIds: string[];
+  promptGroupId: string;
+  defaultFormat: DeliveryFormat;
+  enterPolicy: EnterPolicy;
+  privacyPolicy: PrivacyPolicy;
+  keepPanel: boolean;
+}
+
+export const GENERAL_PROMPT_GROUP_ID = "general";
+export const SAFETY_PROFILE_ID = "default-safe";
+export const TERMINAL_PROFILE_ID = "terminal-safe";
+
+/** 只复用仓库原有伴随列表中的明确终端 bundle，不推测第三方标识。 */
+export const TERMINAL_BUNDLE_IDS = [
+  "com.apple.Terminal",
+  "com.googlecode.iterm2",
+  "dev.warp.Warp-Stable",
+  "com.github.wez.wezterm",
+  "net.kovidgoyal.kitty",
+  "io.alacritty",
+  "com.mitchellh.ghostty",
+] as const;
+
+const SAFETY_PROFILE: TargetProfile = {
+  id: SAFETY_PROFILE_ID,
+  name: "安全默认",
+  bundleIds: [],
+  promptGroupId: GENERAL_PROMPT_GROUP_ID,
+  defaultFormat: "plain",
+  enterPolicy: "never",
+  privacyPolicy: "requireRedaction",
+  keepPanel: false,
+};
+
+export function createDefaultPromptGroups(): PromptGroup[] {
+  return [{ id: GENERAL_PROMPT_GROUP_ID, name: "通用", order: 0 }];
+}
+
+export function createDefaultTargetProfiles(
+  legacyAutoEnter = false
+): TargetProfile[] {
+  return [
+    {
+      ...SAFETY_PROFILE,
+      enterPolicy: legacyAutoEnter ? "confirm" : "never",
+    },
+    {
+      id: TERMINAL_PROFILE_ID,
+      name: "终端（安全）",
+      bundleIds: [...TERMINAL_BUNDLE_IDS],
+      promptGroupId: GENERAL_PROMPT_GROUP_ID,
+      defaultFormat: "code",
+      enterPolicy: "never",
+      privacyPolicy: "requireRedaction",
+      keepPanel: false,
+    },
+  ];
+}
+
+export type TargetProfileResolutionSource =
+  | "temporary"
+  | "bundle"
+  | "default"
+  | "safe";
+
+export interface TargetProfileResolution {
+  profile: TargetProfile;
+  promptGroup: PromptGroup;
+  source: TargetProfileResolutionSource;
+  safetyClamped: boolean;
+  duplicateBundleProfileIds: string[];
+}
+
+export function resolveTargetProfile(input: {
+  bundleId: string | null | undefined;
+  groups: PromptGroup[];
+  profiles: TargetProfile[];
+  defaultProfileId: string;
+  temporaryProfileId?: string | null;
+}): TargetProfileResolution {
+  const temporary = input.temporaryProfileId
+    ? input.profiles.find((item) => item.id === input.temporaryProfileId)
+    : undefined;
+  const bundleMatches = input.bundleId
+    ? input.profiles.filter((item) => item.bundleIds.includes(input.bundleId!))
+    : [];
+  const configuredDefault = input.profiles.find(
+    (item) => item.id === input.defaultProfileId
+  );
+
+  let source: TargetProfileResolutionSource = "safe";
+  let profile = SAFETY_PROFILE;
+  if (temporary) {
+    source = "temporary";
+    profile = temporary;
+  } else if (bundleMatches[0]) {
+    source = "bundle";
+    profile = bundleMatches[0];
+  } else if (configuredDefault) {
+    source = "default";
+    profile = configuredDefault;
+  }
+
+  // 未命中明确 bundle 时，默认 Profile 仍可提供分组/格式，但不得自动放宽
+  // Enter 或隐私策略。只有用户本次显式覆盖才允许高风险值生效。
+  const safetyClamped =
+    source === "default" &&
+    (profile.enterPolicy !== "never" ||
+      profile.privacyPolicy !== "requireRedaction");
+  if (source === "default") {
+    profile = {
+      ...profile,
+      enterPolicy: "never",
+      privacyPolicy: "requireRedaction",
+    };
+  }
+
+  const promptGroup =
+    input.groups.find((item) => item.id === profile.promptGroupId) ??
+    input.groups.find((item) => item.id === GENERAL_PROMPT_GROUP_ID) ??
+    createDefaultPromptGroups()[0];
+
+  return {
+    profile: { ...profile, bundleIds: [...profile.bundleIds] },
+    promptGroup,
+    source,
+    safetyClamped,
+    duplicateBundleProfileIds: bundleMatches.map((item) => item.id),
+  };
+}
+
+export interface TargetProfileConfiguration {
+  groups: PromptGroup[];
+  snippets: PromptSnippet[];
+  profiles: TargetProfile[];
+  defaultProfileId: string;
+}
+
+export interface DuplicateBundleAssignment {
+  bundleId: string;
+  profileIds: string[];
+  profileNames: string[];
+}
+
+export function findDuplicateBundleAssignments(
+  profiles: TargetProfile[]
+): DuplicateBundleAssignment[] {
+  const owners = new Map<string, TargetProfile[]>();
+  for (const profile of profiles) {
+    for (const bundleId of new Set(profile.bundleIds)) {
+      const list = owners.get(bundleId) ?? [];
+      list.push(profile);
+      owners.set(bundleId, list);
+    }
+  }
+  return [...owners.entries()]
+    .filter(([, list]) => list.length > 1)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([bundleId, list]) => ({
+      bundleId,
+      profileIds: list.map((item) => item.id),
+      profileNames: list.map((item) => item.name),
+    }));
+}
+
+export function promptSnippetsForGroup(
+  snippets: PromptSnippet[],
+  groupId: string
+): { prioritized: PromptSnippet[]; all: PromptSnippet[] } {
+  return {
+    prioritized: snippets.filter((item) => item.groupId === groupId),
+    all: [...snippets],
+  };
+}
+
+export function repairTargetProfileConfiguration(
+  input: TargetProfileConfiguration
+): TargetProfileConfiguration {
+  const groups = input.groups.some(
+    (item) => item.id === GENERAL_PROMPT_GROUP_ID
+  )
+    ? input.groups
+    : [createDefaultPromptGroups()[0], ...input.groups];
+  const groupIds = new Set(groups.map((item) => item.id));
+  const snippets = input.snippets.map((item) =>
+    groupIds.has(item.groupId)
+      ? item
+      : { ...item, groupId: GENERAL_PROMPT_GROUP_ID }
+  );
+  const profiles = input.profiles.map((item) => ({
+    ...item,
+    bundleIds: [...new Set(item.bundleIds.filter(Boolean))],
+    promptGroupId: groupIds.has(item.promptGroupId)
+      ? item.promptGroupId
+      : GENERAL_PROMPT_GROUP_ID,
+  }));
+  const defaultProfileId = profiles.some(
+    (item) => item.id === input.defaultProfileId
+  )
+    ? input.defaultProfileId
+    : (profiles[0]?.id ?? SAFETY_PROFILE_ID);
+  return { groups, snippets, profiles, defaultProfileId };
+}
+
+export function deletePromptGroup(
+  input: TargetProfileConfiguration,
+  groupId: string
+): TargetProfileConfiguration & { affectedReferences: number } {
+  if (groupId === GENERAL_PROMPT_GROUP_ID) {
+    return { ...repairTargetProfileConfiguration(input), affectedReferences: 0 };
+  }
+  let affectedReferences = 0;
+  const result = repairTargetProfileConfiguration({
+    ...input,
+    groups: input.groups.filter((item) => item.id !== groupId),
+    snippets: input.snippets.map((item) => {
+      if (item.groupId !== groupId) return item;
+      affectedReferences += 1;
+      return { ...item, groupId: GENERAL_PROMPT_GROUP_ID };
+    }),
+    profiles: input.profiles.map((item) => {
+      if (item.promptGroupId !== groupId) return item;
+      affectedReferences += 1;
+      return { ...item, promptGroupId: GENERAL_PROMPT_GROUP_ID };
+    }),
+  });
+  return { ...result, affectedReferences };
+}
+
+export function deleteTargetProfile(
+  input: TargetProfileConfiguration,
+  profileId: string
+): TargetProfileConfiguration {
+  return repairTargetProfileConfiguration({
+    ...input,
+    profiles: input.profiles.filter((item) => item.id !== profileId),
+  });
+}
