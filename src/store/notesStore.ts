@@ -5,6 +5,17 @@ import { detectCode } from "@/lib/code";
 import { detectLink } from "@/lib/link";
 import { imageCaption, mergeTexts } from "@/lib/format";
 import { normalizeNoteContent } from "@/lib/noteContent";
+import { FIREWALL_WARN_CATEGORIES } from "@/lib/delivery/firewall";
+import type { FindingCategory } from "@/lib/tauri";
+import {
+  normalizeOutcomeBaselines,
+  normalizeProblemSessions,
+  normalizeQualityFeedback,
+  type OutcomeBaseline,
+  type OutcomeProblemSession,
+  type OutcomeQualityFeedback,
+  type OutcomeRetentionDays,
+} from "@/lib/outcomeIntelligence";
 import {
   GENERAL_PROMPT_GROUP_ID,
   SAFETY_PROFILE_ID,
@@ -16,9 +27,18 @@ import {
   type PromptSnippet,
   type TargetProfile,
 } from "@/lib/targetProfiles";
+import {
+  ONBOARDING_VERSION,
+  defaultOnboardingState,
+  onboardingAfter,
+  onboardingStateFromPersisted,
+  type OnboardingEvent,
+  type OnboardingState,
+} from "@/lib/onboarding";
 import { tauriStateStorage } from "./persistStorage";
 
 export type { PromptGroup, PromptSnippet, TargetProfile } from "@/lib/targetProfiles";
+export type { OnboardingEvent, OnboardingState } from "@/lib/onboarding";
 
 export type NoteKind = "text" | "image" | "link";
 
@@ -27,7 +47,7 @@ export type PageId = "notes" | "clipboard" | "tasks";
 
 /** 页签默认顺序（剪贴最高频，居首）。 */
 export const DEFAULT_PAGE_ORDER: PageId[] = ["clipboard", "notes", "tasks"];
-export const STORE_VERSION = 9;
+export const STORE_VERSION = 14;
 
 /**
  * 归一化页签顺序：去重、剔除未知项、补齐缺失页（按默认序追加）。
@@ -79,6 +99,16 @@ export interface Note {
   sourceApp?: string;
   /** 来源应用 bundle id（图标经内存缓存按需获取，不落盘）。 */
   sourceBundle?: string;
+  /** 手动确认的投递结果来源；结果正文仍只存在本 Note。 */
+  provenance?: NoteProvenance;
+}
+
+export interface NoteProvenance {
+  kind: "deliveryResult";
+  deliveryId: string;
+  capturedAtMs: number;
+  sourceBundle: string;
+  sourceItemIds: string[];
 }
 
 export interface Section {
@@ -150,12 +180,6 @@ export const SECTION_COLORS = [
   "#ec4899",
   "#94a3b8",
 ];
-
-export interface OnboardingState {
-  captured: boolean;
-  sent: boolean;
-  done: boolean;
-}
 
 export type ThemePref = "system" | "light" | "dark";
 
@@ -285,14 +309,14 @@ export interface Settings {
   sidebarEdge: "right" | "left" | "top" | "bottom";
   /** 页签顺序（可拖动重排；同时决定切页滑动方向）。 */
   pageOrder: PageId[];
+  /** 底部新增框上次选择的笔记分组；null = 按当前排序取第一组。 */
+  lastDraftSectionId: string | null;
   /** 面板置顶（屏幕最上层）；关闭后可被其他窗口盖住。 */
   panelTopmost: boolean;
   /** 到期快捷档（可增删改）：相对分钟 / 今天 / 明天 / 下个周几。 */
   duePresets: DuePresetCfg[];
   /** AI 提供商（OpenAI 兼容）：Base URL（如 https://api.deepseek.com）。 */
   aiBaseUrl: string;
-  /** AI API Key（明文随本地设置落盘；界面遮罩显示）。 */
-  aiApiKey: string;
   /** AI 模型名（如 deepseek-chat）。 */
   aiModel: string;
   /** AI 智能功能总开关（独立于配置是否填写）。 */
@@ -307,6 +331,22 @@ export interface Settings {
   targetProfiles: TargetProfile[];
   /** 未精确命中 bundle 时使用的用户默认 Profile。 */
   defaultTargetProfileId: string;
+  /** 本地出站隐私检查总开关；首装默认开启。 */
+  firewallEnabled: boolean;
+  /** 用户本次关闭的提示级类别；block 规则不允许进入此列表。 */
+  firewallDisabledWarnCategories: FindingCategory[];
+  /** 本机成效聚合开关；关闭后新投递仍可恢复，但不进入指标。 */
+  outcomeMetricsEnabled: boolean;
+  /** 投递元数据账本保留期；按当前数据目录压实。 */
+  outcomeRetentionDays: OutcomeRetentionDays;
+  /** “清除成效历史”推进的本机代次；不删除最近投递恢复账本。 */
+  outcomeMetricsEpoch: number;
+  /** 用户明确填写的传统流程基线；没有基线绝不估算节省时间。 */
+  outcomeBaselines: OutcomeBaseline[];
+  /** 用户对已关联结果的可选质量反馈，不包含结果正文。 */
+  outcomeQualityFeedback: OutcomeQualityFeedback[];
+  /** 用户主动开始的问题处理计时，只保存时间与关联投递 ID。 */
+  outcomeProblemSessions: OutcomeProblemSession[];
   /** 数据文件夹展示值（真实来源在 Rust，这里仅用于设置界面回显）。 */
   dataDir: string;
   /** 面板逻辑宽度（pt）。 */
@@ -434,11 +474,11 @@ export const defaultSettings = (): Settings => ({
   panelFreeY: null,
   rightSidebar: false,
   pageOrder: [...DEFAULT_PAGE_ORDER],
+  lastDraftSectionId: null,
   sidebarEdge: "right",
   panelTopmost: true,
   duePresets: DEFAULT_DUE_PRESETS.map((p) => ({ ...p })),
   aiBaseUrl: "",
-  aiApiKey: "",
   aiModel: "",
   aiEnabled: false,
   excludedApps: [...DEFAULT_EXCLUDED_APPS],
@@ -446,11 +486,19 @@ export const defaultSettings = (): Settings => ({
   promptSnippets: DEFAULT_PROMPT_SNIPPETS.map((item) => ({ ...item })),
   targetProfiles: createDefaultTargetProfiles(false),
   defaultTargetProfileId: SAFETY_PROFILE_ID,
+  firewallEnabled: true,
+  firewallDisabledWarnCategories: [],
+  outcomeMetricsEnabled: true,
+  outcomeRetentionDays: 30,
+  outcomeMetricsEpoch: 0,
+  outcomeBaselines: [],
+  outcomeQualityFeedback: [],
+  outcomeProblemSessions: [],
   dataDir: "",
   panelWidth: 380,
   panelTopOffset: 0,
   panelHeight: null,
-  onboarding: { captured: false, sent: false, done: false },
+  onboarding: defaultOnboardingState(),
 });
 
 function repairSettingsTargetProfiles(settings: Settings): Settings {
@@ -462,6 +510,20 @@ function repairSettingsTargetProfiles(settings: Settings): Settings {
   });
   return {
     ...settings,
+    firewallDisabledWarnCategories: [
+      ...new Set(settings.firewallDisabledWarnCategories),
+    ].filter((category) =>
+      FIREWALL_WARN_CATEGORIES.includes(
+        category as (typeof FIREWALL_WARN_CATEGORIES)[number]
+      )
+    ),
+    outcomeRetentionDays: ([7, 30, 90] as const).includes(settings.outcomeRetentionDays)
+      ? settings.outcomeRetentionDays
+      : 30,
+    outcomeBaselines: normalizeOutcomeBaselines(settings.outcomeBaselines),
+    outcomeQualityFeedback: normalizeQualityFeedback(settings.outcomeQualityFeedback),
+    outcomeProblemSessions: normalizeProblemSessions(settings.outcomeProblemSessions),
+    onboarding: onboardingStateFromPersisted(settings.onboarding),
     promptGroups: repaired.groups,
     promptSnippets: repaired.snippets,
     targetProfiles: repaired.profiles,
@@ -535,6 +597,8 @@ export interface NotesState {
   setLinkMeta: (id: string, meta: { title?: string; icon?: string }) => void;
   /** 重命名卡片（空串 = 清除标题）。 */
   updateNoteTitle: (id: string, title: string) => void;
+  /** 关联/改绑/解除投递结果；不删除或改写 Note 正文。 */
+  setNoteProvenance: (id: string, provenance?: NoteProvenance) => boolean;
   deleteNotes: (ids: string[], undoLabel?: string) => void;
   setDone: (ids: string[], done: boolean) => void;
   toggleDone: (id: string) => void;
@@ -608,6 +672,7 @@ export interface NotesState {
 
   setSettings: (patch: Partial<Settings>) => void;
   markOnboarding: (patch: Partial<OnboardingState>) => void;
+  transitionOnboarding: (event: OnboardingEvent) => void;
 
   snapshot: (label: string) => void;
   undo: () => string | null;
@@ -677,6 +742,11 @@ function validateSettingsShape(value: unknown, version: number): void {
     throw new Error("settings 必须是对象");
   }
   const settings = value as Record<string, unknown>;
+  // v10 及更早的 aiApiKey 只为异步 Keychain 迁移保留。迁移失败时它必须
+  // 继续作为唯一可恢复副本存在，因此 v11 也只校验类型，不在 decoder 中删除。
+  if (settings.aiApiKey !== undefined && typeof settings.aiApiKey !== "string") {
+    throw new Error("settings.aiApiKey 类型无效");
+  }
   const defaults = defaultSettings() as unknown as Record<string, unknown>;
   const nullableTypes: Record<string, "number" | "string"> = {
     clipPauseUntil: "number",
@@ -684,6 +754,7 @@ function validateSettingsShape(value: unknown, version: number): void {
     panelFreeX: "number",
     panelFreeY: "number",
     panelHeight: "number",
+    lastDraftSectionId: "string",
   };
   for (const [key, fallback] of Object.entries(defaults)) {
     const current = settings[key];
@@ -719,6 +790,17 @@ function validateSettingsShape(value: unknown, version: number): void {
   enumField("cardDensity", ["comfortable", "compact"]);
   enumField("hotkeyModifier", ["shift", "control", "option"]);
   enumField("sidebarEdge", ["right", "left", "top", "bottom"]);
+  if (settings.outcomeRetentionDays !== undefined &&
+    ![7, 30, 90].includes(settings.outcomeRetentionDays as number)) {
+    throw new Error("settings.outcomeRetentionDays 枚举无效");
+  }
+  if (settings.outcomeMetricsEpoch !== undefined && (
+    typeof settings.outcomeMetricsEpoch !== "number" ||
+    !Number.isSafeInteger(settings.outcomeMetricsEpoch) ||
+    settings.outcomeMetricsEpoch < 0
+  )) {
+    throw new Error("settings.outcomeMetricsEpoch 字段无效");
+  }
 
   const stringArrays = ["clipExcludedApps", "companionApps", "excludedApps"];
   for (const key of stringArrays) {
@@ -727,6 +809,30 @@ function validateSettingsShape(value: unknown, version: number): void {
       throw new Error(`settings.${key} 必须是字符串数组`);
     }
   }
+  const disabledWarnCategories = settings.firewallDisabledWarnCategories;
+  if (disabledWarnCategories !== undefined && (
+    !Array.isArray(disabledWarnCategories) ||
+    !disabledWarnCategories.every((item) =>
+      FIREWALL_WARN_CATEGORIES.includes(item as (typeof FIREWALL_WARN_CATEGORIES)[number])
+    )
+  )) {
+    throw new Error("settings.firewallDisabledWarnCategories 含不可关闭类别");
+  }
+  const validateNormalizedArray = (
+    key: string,
+    max: number,
+    normalize: (items: never[]) => unknown[]
+  ) => {
+    const current = settings[key];
+    if (current === undefined) return;
+    if (!Array.isArray(current) || current.length > max ||
+      current.some((item) => normalize([item] as never[]).length !== 1)) {
+      throw new Error(`settings.${key} 字段无效`);
+    }
+  };
+  validateNormalizedArray("outcomeBaselines", 64, normalizeOutcomeBaselines);
+  validateNormalizedArray("outcomeQualityFeedback", 500, normalizeQualityFeedback);
+  validateNormalizedArray("outcomeProblemSessions", 100, normalizeProblemSessions);
   const pageOrder = settings.pageOrder;
   if (pageOrder !== undefined && (!Array.isArray(pageOrder) || !pageOrder.every((item) => DEFAULT_PAGE_ORDER.includes(item as PageId)))) {
     throw new Error("settings.pageOrder 含无效页签");
@@ -736,7 +842,7 @@ function validateSettingsShape(value: unknown, version: number): void {
     if (!item || typeof item !== "object" || Array.isArray(item)) return false;
     const snippet = item as Record<string, unknown>;
     return typeof snippet.id === "string"
-      && (version < STORE_VERSION || snippet.id.length > 0)
+      && (version < 9 || snippet.id.length > 0)
       && ["label", "text"].every((key) => typeof snippet[key] === "string")
       && (version < 9 || typeof snippet.groupId === "string");
   }))) {
@@ -785,11 +891,48 @@ function validateSettingsShape(value: unknown, version: number): void {
     throw new Error("settings.contextMenu 字段无效");
   }
   const onboarding = settings.onboarding;
-  if (onboarding !== undefined && (!onboarding || typeof onboarding !== "object" || Array.isArray(onboarding)
-    || !["captured", "sent", "done"].every((key) => {
-      const field = (onboarding as Record<string, unknown>)[key];
-      return field === undefined || typeof field === "boolean";
-    }))) {
+  const onboardingValid = (() => {
+    if (onboarding === undefined) return true;
+    if (!onboarding || typeof onboarding !== "object" || Array.isArray(onboarding)) {
+      return false;
+    }
+    const value = onboarding as unknown as Record<string, unknown>;
+    if (!["captured", "sent", "done", "rehearsalActive"].every((key) =>
+      value[key] === undefined || typeof value[key] === "boolean"
+    )) return false;
+    if (
+      value.onboardingVersion !== undefined &&
+      value.onboardingVersion !== ONBOARDING_VERSION
+    ) return false;
+    if (
+      value.rehearsalStep !== undefined &&
+      !["permissions", "capture", "target", "firewall", "delivery", "complete"]
+        .includes(String(value.rehearsalStep))
+    ) return false;
+    if (
+      value.rehearsalNoteId !== undefined &&
+      value.rehearsalNoteId !== null &&
+      typeof value.rehearsalNoteId !== "string"
+    ) return false;
+    const optionalTimes = [
+      "rehearsalStartedAtMs",
+      "rehearsalPausedAtMs",
+      "rehearsalCompletedAtMs",
+      "rehearsalDeferredAtMs",
+      "activationStartedAtMs",
+    ];
+    if (!optionalTimes.every((key) =>
+      value[key] === undefined ||
+      value[key] === null ||
+      (typeof value[key] === "number" &&
+        Number.isFinite(value[key]) &&
+        (value[key] as number) >= 0)
+    )) return false;
+    return value.activationWithin60s === undefined ||
+      value.activationWithin60s === null ||
+      typeof value.activationWithin60s === "boolean";
+  })();
+  if (!onboardingValid) {
     throw new Error("settings.onboarding 字段无效");
   }
   const duePresets = settings.duePresets;
@@ -840,6 +983,37 @@ function migrateLegacyPromptSnippets(
   });
 }
 
+function normalizeNoteProvenance(value: unknown): NoteProvenance | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("note.provenance 必须是对象");
+  }
+  const provenance = value as Record<string, unknown>;
+  if (
+    provenance.kind !== "deliveryResult" ||
+    typeof provenance.deliveryId !== "string" ||
+    !provenance.deliveryId ||
+    typeof provenance.sourceBundle !== "string" ||
+    !provenance.sourceBundle ||
+    typeof provenance.capturedAtMs !== "number" ||
+    !Number.isFinite(provenance.capturedAtMs) ||
+    provenance.capturedAtMs < 0 ||
+    !Array.isArray(provenance.sourceItemIds) ||
+    !provenance.sourceItemIds.length ||
+    !provenance.sourceItemIds.every((id) => typeof id === "string" && !!id)
+  ) {
+    throw new Error("note.provenance 字段无效");
+  }
+  return {
+    ...(provenance as unknown as NoteProvenance),
+    kind: "deliveryResult",
+    deliveryId: provenance.deliveryId,
+    capturedAtMs: provenance.capturedAtMs,
+    sourceBundle: provenance.sourceBundle,
+    sourceItemIds: [...new Set(provenance.sourceItemIds)],
+  };
+}
+
 function normalizeNoteRecord(note: Note, sectionIds: Set<string>): Note {
   const kind = note.kind ?? "text";
   if (!(["text", "image", "link"] as const).includes(kind)) {
@@ -858,6 +1032,7 @@ function normalizeNoteRecord(note: Note, sectionIds: Set<string>): Note {
         : INBOX_ID,
     done: note.done ?? false,
     createdAt: finiteNumberOrDefault(note.createdAt, 0, "note.createdAt"),
+    provenance: normalizeNoteProvenance(note.provenance),
     attachments: Array.isArray(note.attachments)
       ? [...new Set(note.attachments.filter((file): file is string => typeof file === "string" && !!file))].filter(
           (file) => file !== note.imageFile
@@ -902,7 +1077,7 @@ function normalizeTaskRecord(task: Task, sectionIds: Set<string>): Task {
   };
 }
 
-/** Zustand persist v1-v9 向前迁移；未知字段保留，旧版本重复记录按首项去重。 */
+/** Zustand persist v1-v14 向前迁移；未知字段保留，旧版本重复记录按首项去重。 */
 export function migratePersistedState(
   persisted: unknown,
   version: number
@@ -921,7 +1096,7 @@ export function migratePersistedState(
       throw new Error(`${key} 必须是数组`);
     }
   }
-  if (version === STORE_VERSION) assertCurrentSchemaHasUniqueIds(p);
+  if (version >= 9) assertCurrentSchemaHasUniqueIds(p);
   validateSettingsShape(p.settings, version);
   if (version < 5 && p.settings?.companionApps) {
     p.settings = {
@@ -965,6 +1140,30 @@ export function migratePersistedState(
       defaultTargetProfileId: SAFETY_PROFILE_ID,
     };
   }
+  if (version < 10 && p.settings) {
+    p.settings = {
+      ...p.settings,
+      firewallEnabled: true,
+      firewallDisabledWarnCategories: [],
+    };
+  }
+  if (version < 13 && p.settings) {
+    p.settings = {
+      ...p.settings,
+      outcomeMetricsEnabled: true,
+      outcomeRetentionDays: 30,
+      outcomeMetricsEpoch: 0,
+      outcomeBaselines: [],
+      outcomeQualityFeedback: [],
+      outcomeProblemSessions: [],
+    };
+  }
+  if (version < 14 && p.settings) {
+    p.settings = {
+      ...p.settings,
+      onboarding: onboardingStateFromPersisted(p.settings.onboarding),
+    };
+  }
 
   const sections = dedupeById<Section>(p.sections).map((section) => ({
     ...section,
@@ -997,10 +1196,7 @@ function normalizedPersistentState(
   const mergedSettings = {
     ...defaultSettings(),
     ...(persisted.settings ?? {}),
-    onboarding: {
-      ...defaultSettings().onboarding,
-      ...(persisted.settings?.onboarding ?? {}),
-    },
+    onboarding: onboardingStateFromPersisted(persisted.settings?.onboarding),
     pageOrder: normalizePageOrder(persisted.settings?.pageOrder),
     contextMenu: normalizeContextMenu(persisted.settings?.contextMenu),
   };
@@ -1051,10 +1247,7 @@ export function mergePersistedNotesState(
   merged.settings = repairSettingsTargetProfiles({
     ...defaultSettings(),
     ...(p.settings ?? {}),
-    onboarding: {
-      ...defaultSettings().onboarding,
-      ...(p.settings?.onboarding ?? {}),
-    },
+    onboarding: onboardingStateFromPersisted(p.settings?.onboarding),
     // 页签顺序单独归一化：缺项/重复/未知值都会让整页无法访问
     pageOrder: normalizePageOrder(p.settings?.pageOrder),
   });
@@ -1326,6 +1519,20 @@ export const useNotesStore = create<NotesState>()(
             n.id === id ? { ...n, title: trimmed || undefined } : n
           ),
         });
+      },
+
+      setNoteProvenance: (id, provenance) => {
+        const notes = get().notes;
+        const index = notes.findIndex((note) => note.id === id);
+        if (index < 0) return false;
+        const normalized = normalizeNoteProvenance(provenance);
+        if (
+          JSON.stringify(notes[index].provenance) === JSON.stringify(normalized)
+        ) return true;
+        const next = [...notes];
+        next[index] = { ...notes[index], provenance: normalized };
+        set({ notes: next });
+        return true;
       },
 
       setLinkMeta: (id, meta) => {
@@ -1874,10 +2081,19 @@ export const useNotesStore = create<NotesState>()(
         }),
 
       markOnboarding: (patch) => {
-        const current = get().settings.onboarding;
-        const next = { ...current, ...patch };
-        if (next.captured && next.sent) next.done = true;
+        const current = onboardingStateFromPersisted(get().settings.onboarding);
+        const next = onboardingStateFromPersisted({ ...current, ...patch });
         set({ settings: { ...get().settings, onboarding: next } });
+      },
+
+      transitionOnboarding: (event) => {
+        const current = onboardingStateFromPersisted(get().settings.onboarding);
+        set({
+          settings: {
+            ...get().settings,
+            onboarding: onboardingAfter(current, event),
+          },
+        });
       },
 
       snapshot: (label) => {

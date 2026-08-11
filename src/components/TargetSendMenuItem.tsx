@@ -5,9 +5,11 @@ import { useTargetStore } from "@/store/targetStore";
 export function TargetSendMenuItem({
   onClick,
   children,
+  allowInternal = false,
 }: {
   onClick: () => void;
   children: React.ReactNode;
+  allowInternal?: boolean;
 }) {
   const ready = useTargetStore(
     (state) => state.status === "ready" && !state.profileOverrideNeedsConfirmation
@@ -15,14 +17,17 @@ export function TargetSendMenuItem({
   const profileChanged = useTargetStore(
     (state) => state.profileOverrideNeedsConfirmation
   );
+  const enabled = ready || allowInternal;
   return (
     <ContextMenuItem
-      disabled={!ready}
+      disabled={!enabled}
       aria-label={
         ready
           ? "发送到当前目标"
+          : allowInternal
+            ? "优先添加到当前卡片编辑器"
           : profileChanged
-            ? "发送不可用：目标已变化，请确认 Profile"
+            ? "发送不可用：原临时投递方案已暂停"
             : "发送不可用：投递目标未就绪"
       }
       onClick={onClick}

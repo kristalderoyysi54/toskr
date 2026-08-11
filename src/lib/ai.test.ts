@@ -100,14 +100,12 @@ describe("aiReady / matchPreset / truncateChars", () => {
   const full = {
     aiEnabled: true,
     aiBaseUrl: "https://api.deepseek.com",
-    aiApiKey: "sk-x",
     aiModel: "deepseek-chat",
   };
-  it("四条件缺一不可", () => {
+  it("启用、地址和模型缺一不可；key 状态由 Rust Keychain 负责", () => {
     expect(aiReady(full)).toBe(true);
     expect(aiReady({ ...full, aiEnabled: false })).toBe(false);
     expect(aiReady({ ...full, aiBaseUrl: " " })).toBe(false);
-    expect(aiReady({ ...full, aiApiKey: "" })).toBe(false);
     expect(aiReady({ ...full, aiModel: "" })).toBe(false);
   });
   it("matchPreset 命中与回退", () => {

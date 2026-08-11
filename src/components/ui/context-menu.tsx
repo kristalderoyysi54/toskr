@@ -130,15 +130,14 @@ function ContextMenuSubContent({
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.SubContent>) {
   return (
-    // 子菜单必须与父菜单同样走 Portal：父级 Content 有 overflow-x-hidden，
-    // 且开合动画期间带 transform 形成包含块——不入 Portal 的子菜单会被父盒裁剪
-    // （窄面板上向左弹出时"显示不全"的根因）。ContextMenu 的 Portal 在本窗口类
-    // 已被父级 Content 生产验证，与 SimpleMenu 规避的 Dropdown/Popover 焦点锁问题无关。
+    // Portal 只能逃逸 DOM overflow，不能越过 Tauri WebView 的原生窗口边界。
+    // 固定 w-32/w-36 可能大于 Popper 算出的剩余空间，因此宽高必须再受 available
+    // variables 约束；窄面板时内容在框内换行/滚动，而不是被窗口边缘裁掉。
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.SubContent
         data-slot="context-menu-sub-content"
         collisionPadding={collisionPadding}
-        className={cn("z-50 min-w-32 origin-(--radix-context-menu-content-transform-origin) overflow-hidden rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95", className )}
+        className={cn("z-50 min-w-0 max-h-(--radix-context-menu-content-available-height) max-w-(--radix-context-menu-content-available-width) origin-(--radix-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95", className )}
         {...props}
       />
     </ContextMenuPrimitive.Portal>

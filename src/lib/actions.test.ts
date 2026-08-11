@@ -5,10 +5,20 @@ const apiMocks = vi.hoisted(() => ({
   refreshPrevApp: vi.fn(),
   sendDelivery: vi.fn(),
   showPanel: vi.fn(),
+  showTextPreview: vi.fn(),
+  quickLook: vi.fn(),
   appIcon: vi.fn(),
   diagNote: vi.fn(),
+  scanSensitiveText: vi.fn(),
 }));
 const dialogMocks = vi.hoisted(() => ({ ask: vi.fn() }));
+const eventMocks = vi.hoisted(() => ({
+  emit: vi.fn(),
+  emitTo: vi.fn(),
+  listen: vi.fn(),
+  listeners: new Map<string, (event: { payload: Record<string, unknown> }) => void>(),
+}));
+const webviewMocks = vi.hoisted(() => ({ getByLabel: vi.fn() }));
 
 vi.mock("@/store/persistStorage", () => ({
   tauriStateStorage: {
@@ -17,9 +27,9 @@ vi.mock("@/store/persistStorage", () => ({
     removeItem: vi.fn(async () => undefined),
   },
 }));
-vi.mock("@tauri-apps/api/event", () => ({ emitTo: vi.fn() }));
+vi.mock("@tauri-apps/api/event", () => eventMocks);
 vi.mock("@tauri-apps/api/webviewWindow", () => ({
-  WebviewWindow: { getByLabel: vi.fn() },
+  WebviewWindow: { getByLabel: webviewMocks.getByLabel },
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => dialogMocks);
 vi.mock("@/lib/tip", () => ({
@@ -38,12 +48,20 @@ vi.mock("@/lib/tauri", async (importOriginal) => {
 });
 
 import {
+  openSafeRehearsalPreflight,
+  openNoteDetail,
   sendCheckedToChat,
   sendNotesToChat,
   sendTaskToChat,
   warnWithPanel,
 } from "./actions";
+import { SAFE_REHEARSAL_TEXT } from "./onboarding";
+import { submitPreflightDraft } from "./delivery/preflight";
 import { tip } from "./tip";
+import {
+  advanceDataGeneration,
+  hasDataGenerationLeases,
+} from "./dataGeneration";
 import type {
   DeliveryStatus,
   SendDeliveryRequest,
@@ -51,6 +69,7 @@ import type {
   TargetSnapshot,
 } from "./tauri";
 import {
+  CLIPBOARD_ID,
   defaultSettings,
   INBOX_ID,
   TASK_INBOX_ID,
@@ -59,12 +78,20 @@ import {
 import { useUIStore } from "../store/uiStore";
 import { useDataOperationStore } from "../store/dataOperationStore";
 import {
+  resetDeliveryStore,
+  useDeliveryStore,
+} from "../store/deliveryStore";
+import {
   applyTargetEvent,
   setTargetProfileOverride,
   observeTargetAfterBlur,
   resetTargetState,
   useTargetStore,
 } from "../store/targetStore";
+import {
+  clearEditorSessionMedia,
+  editorSessionMediaFiles,
+} from "./editorSessionMedia";
 
 const target: TargetSnapshot = {
   token: "token-1",
@@ -104,6 +131,10 @@ function result(
 }
 
 function reset(status: DeliveryStatus) {
+  clearEditorSessionMedia();
+  resetDeliveryStore();
+  // 既有执行器回归保持直发；Preflight 行为由本阶段专用用例覆盖。
+  useDeliveryStore.getState().setPreflightMode("off");
   useDataOperationStore.setState({ locked: false, phase: "idle", message: "" });
   useNotesStore.setState({
     sections: [{ id: INBOX_ID, name: "收件箱" }],
@@ -121,6 +152,36 @@ function reset(status: DeliveryStatus) {
   apiMocks.refreshTargetSnapshot.mockReset().mockResolvedValue(target);
   apiMocks.refreshPrevApp.mockReset();
   apiMocks.showPanel.mockReset().mockResolvedValue(undefined);
+  apiMocks.showTextPreview.mockReset().mockResolvedValue(undefined);
+  apiMocks.quickLook.mockReset().mockResolvedValue(undefined);
+  apiMocks.scanSensitiveText.mockReset().mockImplementation(async (text: string) => ({
+    findings: [],
+    warnings: [],
+    inputUtf16: text.length,
+    scannedUtf16: text.length,
+    complete: true,
+  }));
+  eventMocks.listeners.clear();
+  eventMocks.emit.mockReset().mockResolvedValue(undefined);
+  eventMocks.listen.mockReset().mockImplementation(async (event, handler) => {
+    eventMocks.listeners.set(event, handler);
+    return () => eventMocks.listeners.delete(event);
+  });
+  eventMocks.emitTo.mockReset().mockImplementation(
+    async (_target: string, event: string, payload: Record<string, unknown>) => {
+      if (event !== "toskr://note-editor-insert") return;
+      eventMocks.listeners.get("toskr://note-editor-insert-result")?.({
+        payload: {
+          requestId: payload.requestId,
+          targetId: payload.targetId,
+          targetSessionId: payload.targetSessionId,
+          dataGeneration: payload.dataGeneration,
+          status: "applied",
+        },
+      });
+    }
+  );
+  webviewMocks.getByLabel.mockReset().mockResolvedValue(null);
   apiMocks.sendDelivery
     .mockReset()
     .mockImplementation(async (request: SendDeliveryRequest) => result(request, status));
@@ -130,6 +191,573 @@ function reset(status: DeliveryStatus) {
 
 describe("结构化发送结果的 store 副作用", () => {
   beforeEach(() => reset("sent"));
+
+  it("图片卡编辑直接打开带编辑标记的原尺寸预览", () => {
+    const { id } = useNotesStore.getState().addNote("图片 231×242", {
+      kind: "image",
+      imageFile: "shot.png",
+      imageW: 231,
+      imageH: 242,
+    });
+
+    openNoteDetail(id!, true);
+
+    expect(apiMocks.quickLook).toHaveBeenCalledWith(
+      ["shot.png"],
+      0,
+      expect.objectContaining({
+        id,
+        text: "",
+        edit: true,
+        dataGeneration: expect.any(Number),
+      })
+    );
+  });
+
+  it("文字详情载荷不再携带主面板方向", () => {
+    const { id } = useNotesStore.getState().addNote("正文");
+
+    openNoteDetail(id!);
+
+    const payload = eventMocks.emitTo.mock.calls.find(
+      ([label, event]) =>
+        label === "textpreview" && event === "toskr://note-preview"
+    )?.[2];
+    expect(payload).toBeDefined();
+    expect(payload).not.toHaveProperty("detailFrameNotchSide");
+  });
+
+  it("剪贴板卡优先追加到当前可见卡片编辑器，不误投递到外部目标", async () => {
+    const destination = useNotesStore.getState().addNote("原卡内容").id!;
+    openNoteDetail(destination, true);
+    eventMocks.emitTo.mockClear();
+    apiMocks.showTextPreview.mockClear();
+
+    useNotesStore.getState().addClipNote("剪贴板正文", {});
+    useNotesStore.getState().addClipNote("图片 20×10", {
+      kind: "image",
+      imageFile: "clip.png",
+      imageW: 20,
+      imageH: 10,
+    });
+    const sourceIds = useNotesStore
+      .getState()
+      .notes.filter((note) => note.sectionId === CLIPBOARD_ID)
+      .map((note) => note.id);
+    useNotesStore.getState().setChecked(sourceIds);
+    webviewMocks.getByLabel.mockResolvedValue({
+      isVisible: vi.fn().mockResolvedValue(true),
+    });
+
+    await sendNotesToChat(sourceIds);
+
+    expect(eventMocks.emitTo).toHaveBeenCalledWith(
+      "textpreview",
+      "toskr://note-editor-insert",
+      {
+        requestId: expect.any(String),
+        operationKey: expect.stringMatching(/^editor-insert-/),
+        expiresAt: expect.any(Number),
+        targetId: destination,
+        targetSessionId: expect.any(String),
+        text: "剪贴板正文",
+        images: ["clip.png"],
+        dataGeneration: expect.any(Number),
+      }
+    );
+    expect(apiMocks.showTextPreview).toHaveBeenCalledOnce();
+    expect(apiMocks.sendDelivery).not.toHaveBeenCalled();
+    expect(useNotesStore.getState().checkedIds).toEqual([]);
+  });
+
+  it.each([
+    ["显式预检", "off", { forcePreflight: true }],
+    ["always 模式", "always", undefined],
+  ] as const)("%s 不被剪贴板编辑器内部追加旁路", async (_label, mode, options) => {
+    const destination = useNotesStore.getState().addNote("目标卡片").id!;
+    openNoteDetail(destination, true);
+    eventMocks.emitTo.mockClear();
+    useNotesStore.getState().addClipNote("需要外部预检", {});
+    const sourceId = useNotesStore.getState().notes[0].id;
+    useDeliveryStore.getState().setPreflightMode(mode);
+    webviewMocks.getByLabel.mockResolvedValue({
+      isVisible: vi.fn().mockResolvedValue(true),
+    });
+
+    await sendNotesToChat([sourceId], undefined, options);
+
+    expect(useDeliveryStore.getState()).toMatchObject({ open: true, busy: false });
+    expect(useDeliveryStore.getState().draft?.sourceItemIds).toEqual([sourceId]);
+    expect(eventMocks.emitTo).not.toHaveBeenCalledWith(
+      "textpreview",
+      "toskr://note-editor-insert",
+      expect.anything()
+    );
+  });
+
+  it("图片追加后即使来源卡删除，未保存编辑会话仍持有媒体引用", async () => {
+    const destination = useNotesStore.getState().addNote("目标卡片").id!;
+    openNoteDetail(destination, true);
+    eventMocks.emitTo.mockClear();
+    useNotesStore.getState().addClipNote("图片 20×10", {
+      kind: "image",
+      imageFile: "clip.png",
+      imageW: 20,
+      imageH: 10,
+    });
+    const sourceId = useNotesStore.getState().notes[0].id;
+    webviewMocks.getByLabel.mockResolvedValue({
+      isVisible: vi.fn().mockResolvedValue(true),
+    });
+
+    await sendNotesToChat([sourceId]);
+    useNotesStore.getState().deleteNotes([sourceId]);
+
+    expect(editorSessionMediaFiles()).toEqual(["clip.png"]);
+  });
+
+  it("用户两次明确添加同一内容时创建两个操作，不把第二次误判为重试", async () => {
+    const destination = useNotesStore.getState().addNote("目标卡片").id!;
+    openNoteDetail(destination, true);
+    eventMocks.emitTo.mockClear();
+    useNotesStore.getState().addClipNote("可重复添加", {});
+    const sourceId = useNotesStore.getState().notes[0].id;
+    webviewMocks.getByLabel.mockResolvedValue({
+      isVisible: vi.fn().mockResolvedValue(true),
+    });
+
+    await sendNotesToChat([sourceId]);
+    await sendNotesToChat([sourceId]);
+
+    const payloads = eventMocks.emitTo.mock.calls
+      .filter(([, event]) => event === "toskr://note-editor-insert")
+      .map(([, , payload]) => payload as Record<string, unknown>);
+    expect(payloads).toHaveLength(2);
+    expect(payloads[1].operationKey).not.toBe(payloads[0].operationKey);
+    expect(payloads[1].targetSessionId).toBe(payloads[0].targetSessionId);
+  });
+
+  it("同一卡片关闭重开会轮换编辑会话，旧操作不能命中新草稿", async () => {
+    const destination = useNotesStore.getState().addNote("目标卡片").id!;
+    openNoteDetail(destination, true);
+    const firstPreview = eventMocks.emitTo.mock.calls.find(
+      ([, event]) => event === "toskr://note-preview"
+    )?.[2] as Record<string, unknown>;
+    eventMocks.emitTo.mockClear();
+    useNotesStore.getState().addClipNote("相同来源", {});
+    const sourceId = useNotesStore.getState().notes[0].id;
+    webviewMocks.getByLabel.mockResolvedValue({
+      isVisible: vi.fn().mockResolvedValue(true),
+    });
+    await sendNotesToChat([sourceId]);
+
+    openNoteDetail(destination, true);
+    const secondPreview = eventMocks.emitTo.mock.calls.find(
+      ([, event]) => event === "toskr://note-preview"
+    )?.[2] as Record<string, unknown>;
+    expect(secondPreview.sessionId).not.toBe(firstPreview.sessionId);
+
+    eventMocks.emitTo.mockClear();
+    await sendNotesToChat([sourceId]);
+    expect(eventMocks.emitTo).toHaveBeenCalledWith(
+      "textpreview",
+      "toskr://note-editor-insert",
+      expect.objectContaining({ targetSessionId: secondPreview.sessionId })
+    );
+  });
+
+  it("卡片编辑器不可见时，剪贴板卡仍按原链路投递外部目标", async () => {
+    useNotesStore.getState().addClipNote("发给外部目标", {});
+    const sourceId = useNotesStore.getState().notes[0].id;
+
+    await sendNotesToChat([sourceId]);
+
+    expect(eventMocks.emitTo).not.toHaveBeenCalledWith(
+      "textpreview",
+      "toskr://note-editor-insert",
+      expect.anything()
+    );
+    expect(apiMocks.sendDelivery).toHaveBeenCalledOnce();
+  });
+
+  it("已确认存在卡片编辑器但内部事件失败时保持 fail-closed", async () => {
+    const destination = useNotesStore.getState().addNote("目标卡片").id!;
+    openNoteDetail(destination, true);
+    eventMocks.emitTo.mockClear();
+    useNotesStore.getState().addClipNote("敏感剪贴板内容", {});
+    const sourceId = useNotesStore.getState().notes[0].id;
+    useNotesStore.getState().setChecked([sourceId]);
+    webviewMocks.getByLabel.mockResolvedValue({
+      isVisible: vi.fn().mockResolvedValue(true),
+    });
+    eventMocks.emitTo.mockRejectedValueOnce(new Error("event unavailable"));
+
+    await sendNotesToChat([sourceId]);
+
+    expect(apiMocks.sendDelivery).not.toHaveBeenCalled();
+    expect(useNotesStore.getState().checkedIds).toEqual([sourceId]);
+    expect(tip).toHaveBeenCalledWith(
+      "warn",
+      "添加到卡片编辑器失败：Error: event unavailable"
+    );
+  });
+
+  it("编辑器可见性查询失败时不回退外投", async () => {
+    const destination = useNotesStore.getState().addNote("目标卡片").id!;
+    openNoteDetail(destination, true);
+    eventMocks.emitTo.mockClear();
+    useNotesStore.getState().addClipNote("仅供内部编辑", {});
+    const sourceId = useNotesStore.getState().notes[0].id;
+    useNotesStore.getState().setChecked([sourceId]);
+    webviewMocks.getByLabel.mockRejectedValue(new Error("visibility unavailable"));
+
+    await sendNotesToChat([sourceId]);
+
+    expect(apiMocks.sendDelivery).not.toHaveBeenCalled();
+    expect(useNotesStore.getState().checkedIds).toEqual([sourceId]);
+    expect(tip).toHaveBeenCalledWith(
+      "warn",
+      "无法确认卡片编辑器状态：Error: visibility unavailable"
+    );
+  });
+
+  it("编辑器拒绝 ACK 时不清选择、不假报成功也不回退外投", async () => {
+    const destination = useNotesStore.getState().addNote("目标卡片").id!;
+    openNoteDetail(destination, true);
+    eventMocks.emitTo.mockClear();
+    useNotesStore.getState().addClipNote("等待确认", {});
+    const sourceId = useNotesStore.getState().notes[0].id;
+    useNotesStore.getState().setChecked([sourceId]);
+    webviewMocks.getByLabel.mockResolvedValue({
+      isVisible: vi.fn().mockResolvedValue(true),
+    });
+    eventMocks.emitTo.mockImplementationOnce(
+      async (_target: string, event: string, payload: Record<string, unknown>) => {
+        if (event !== "toskr://note-editor-insert") return;
+        eventMocks.listeners.get("toskr://note-editor-insert-result")?.({
+          payload: {
+            requestId: payload.requestId,
+            targetId: payload.targetId,
+            targetSessionId: payload.targetSessionId,
+            dataGeneration: payload.dataGeneration,
+            status: "rejected",
+            reason: "目标已变化",
+          },
+        });
+      }
+    );
+
+    await sendNotesToChat([sourceId]);
+
+    expect(apiMocks.sendDelivery).not.toHaveBeenCalled();
+    expect(useNotesStore.getState().checkedIds).toEqual([sourceId]);
+    expect(tip).toHaveBeenCalledWith(
+      "warn",
+      "添加到卡片编辑器失败：Error: 目标已变化"
+    );
+  });
+
+  it("卡片编辑器追加在途时拒绝重复操作", async () => {
+    const destination = useNotesStore.getState().addNote("目标卡片").id!;
+    openNoteDetail(destination, true);
+    eventMocks.emitTo.mockClear();
+    useNotesStore.getState().addClipNote("只追加一次", {});
+    const sourceId = useNotesStore.getState().notes[0].id;
+    webviewMocks.getByLabel.mockResolvedValue({
+      isVisible: vi.fn().mockResolvedValue(true),
+    });
+    let pendingPayload: Record<string, unknown> | undefined;
+    eventMocks.emitTo.mockImplementation(
+      async (_target: string, event: string, payload: Record<string, unknown>) => {
+        if (event === "toskr://note-editor-insert") pendingPayload = payload;
+      }
+    );
+
+    const first = sendNotesToChat([sourceId]);
+    await vi.waitFor(() => expect(pendingPayload).toBeDefined());
+    await sendNotesToChat([sourceId]);
+    eventMocks.listeners.get("toskr://note-editor-insert-result")?.({
+      payload: {
+        requestId: pendingPayload!.requestId,
+        targetId: pendingPayload!.targetId,
+        targetSessionId: pendingPayload!.targetSessionId,
+        dataGeneration: pendingPayload!.dataGeneration,
+        status: "applied",
+      },
+    });
+    await first;
+
+    expect(
+      eventMocks.emitTo.mock.calls.filter(
+        ([, event]) => event === "toskr://note-editor-insert"
+      )
+    ).toHaveLength(1);
+    expect(tip).toHaveBeenCalledWith("warn", "已有发送正在进行，请稍候");
+  });
+
+  it("编辑器可见性探测期间打开预检后，不再把旧意图追加到编辑器", async () => {
+    const destination = useNotesStore.getState().addNote("目标卡片").id!;
+    openNoteDetail(destination, true);
+    eventMocks.emitTo.mockClear();
+    useNotesStore.getState().addClipNote("等待可见性", {});
+    const sourceId = useNotesStore.getState().notes[0].id;
+    let resolveVisible!: (visible: boolean) => void;
+    const isVisible = vi.fn(
+      () => new Promise<boolean>((resolve) => { resolveVisible = resolve; })
+    );
+    webviewMocks.getByLabel.mockResolvedValue({ isVisible });
+
+    const pendingInsert = sendNotesToChat([sourceId]);
+    await vi.waitFor(() => expect(isVisible).toHaveBeenCalledOnce());
+    const taskId = useNotesStore.getState().addTask("另一个明确意图").id!;
+    await sendTaskToChat(taskId, { forcePreflight: true });
+    resolveVisible(true);
+    await pendingInsert;
+
+    expect(useDeliveryStore.getState().draft?.sourceKind).toBe("task");
+    expect(eventMocks.emitTo).not.toHaveBeenCalledWith(
+      "textpreview",
+      "toskr://note-editor-insert",
+      expect.anything()
+    );
+    expect(tip).toHaveBeenCalledWith("warn", "请先完成或关闭当前投递预检");
+  });
+
+  it("编辑器探测期间数据代际变化时禁止旧剪贴板内容外投", async () => {
+    const destination = useNotesStore.getState().addNote("目标卡片").id!;
+    openNoteDetail(destination, true);
+    useNotesStore.getState().addClipNote("旧数据内容", {});
+    const sourceId = useNotesStore.getState().notes[0].id;
+    let resolveVisible!: (visible: boolean) => void;
+    const isVisible = vi.fn(
+      () => new Promise<boolean>((resolve) => (resolveVisible = resolve))
+    );
+    webviewMocks.getByLabel.mockResolvedValue({ isVisible });
+
+    const pending = sendNotesToChat([sourceId]);
+    await vi.waitFor(() => expect(isVisible).toHaveBeenCalledOnce());
+    advanceDataGeneration();
+    resolveVisible(false);
+    await pending;
+
+    expect(apiMocks.sendDelivery).not.toHaveBeenCalled();
+    expect(tip).toHaveBeenCalledWith(
+      "warn",
+      "发送已取消：数据上下文已变化，请重新选择内容"
+    );
+  });
+
+  it("内部 IPC 挂起会超时释放 ACK 监听、发送锁与数据租约", async () => {
+    vi.useFakeTimers();
+    try {
+      const destination = useNotesStore.getState().addNote("目标卡片").id!;
+      openNoteDetail(destination, true);
+      eventMocks.emitTo.mockClear();
+      useNotesStore.getState().addClipNote("超时后可安全重试", {});
+      const sourceId = useNotesStore.getState().notes[0].id;
+      useNotesStore.getState().setChecked([sourceId]);
+      webviewMocks.getByLabel.mockResolvedValue({
+        isVisible: vi.fn().mockResolvedValue(true),
+      });
+      const payloads: Record<string, unknown>[] = [];
+      eventMocks.emitTo.mockImplementation(
+        (_target: string, event: string, payload: Record<string, unknown>) => {
+          if (event === "toskr://note-editor-insert") payloads.push(payload);
+          return new Promise<never>(() => {});
+        }
+      );
+
+      const first = sendNotesToChat([sourceId]);
+      await vi.advanceTimersByTimeAsync(1600);
+      await first;
+
+      expect(hasDataGenerationLeases()).toBe(false);
+      expect(useNotesStore.getState().checkedIds).toEqual([sourceId]);
+      expect(tip).toHaveBeenCalledWith(
+        "warn",
+        "添加到卡片编辑器失败：Error: 卡片编辑器未确认接收"
+      );
+
+      eventMocks.emitTo.mockImplementation(
+        async (_target: string, event: string, payload: Record<string, unknown>) => {
+          if (event !== "toskr://note-editor-insert") return;
+          payloads.push(payload);
+          eventMocks.listeners.get("toskr://note-editor-insert-result")?.({
+            payload: {
+              requestId: payload.requestId,
+              targetId: payload.targetId,
+              targetSessionId: payload.targetSessionId,
+              dataGeneration: payload.dataGeneration,
+              status: "applied",
+            },
+          });
+        }
+      );
+      await sendNotesToChat([sourceId]);
+
+      expect(payloads).toHaveLength(2);
+      expect(payloads[1].requestId).not.toBe(payloads[0].requestId);
+      expect(payloads[1].operationKey).toBe(payloads[0].operationKey);
+      expect(payloads[1].expiresAt).toBeGreaterThan(
+        payloads[0].expiresAt as number
+      );
+      expect(useNotesStore.getState().checkedIds).toEqual([]);
+      expect(hasDataGenerationLeases()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("编辑器已 ACK 时不被仍悬挂的派发 Promise 拖成失败", async () => {
+    const destination = useNotesStore.getState().addNote("目标卡片").id!;
+    openNoteDetail(destination, true);
+    eventMocks.emitTo.mockClear();
+    useNotesStore.getState().addClipNote("ACK 已到", {});
+    const sourceId = useNotesStore.getState().notes[0].id;
+    useNotesStore.getState().setChecked([sourceId]);
+    webviewMocks.getByLabel.mockResolvedValue({
+      isVisible: vi.fn().mockResolvedValue(true),
+    });
+    eventMocks.emitTo.mockImplementation(
+      (_target: string, event: string, payload: Record<string, unknown>) => {
+        if (event !== "toskr://note-editor-insert") return Promise.resolve();
+        eventMocks.listeners.get("toskr://note-editor-insert-result")?.({
+          payload: {
+            requestId: payload.requestId,
+            targetId: payload.targetId,
+            targetSessionId: payload.targetSessionId,
+            dataGeneration: payload.dataGeneration,
+            status: "applied",
+          },
+        });
+        return new Promise<never>(() => {});
+      }
+    );
+
+    await sendNotesToChat([sourceId]);
+
+    expect(useNotesStore.getState().checkedIds).toEqual([]);
+    expect(tip).toHaveBeenCalledWith("ok", "已添加到卡片编辑器");
+    expect(hasDataGenerationLeases()).toBe(false);
+  });
+
+  it("窗口探测挂起同样有界退出，不泄漏数据租约", async () => {
+    vi.useFakeTimers();
+    try {
+      const destination = useNotesStore.getState().addNote("目标卡片").id!;
+      openNoteDetail(destination, true);
+      useNotesStore.getState().addClipNote("窗口探测超时", {});
+      const sourceId = useNotesStore.getState().notes[0].id;
+      webviewMocks.getByLabel.mockReturnValue(new Promise<never>(() => {}));
+
+      const pending = sendNotesToChat([sourceId]);
+      await vi.advanceTimersByTimeAsync(1600);
+      await pending;
+
+      expect(apiMocks.sendDelivery).not.toHaveBeenCalled();
+      expect(hasDataGenerationLeases()).toBe(false);
+      expect(tip).toHaveBeenCalledWith(
+        "warn",
+        "无法确认卡片编辑器状态：Error: 卡片编辑器窗口探测超时"
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("窗口探测期间来源卡被编辑时使用最新内容，不追加旧快照", async () => {
+    const destination = useNotesStore.getState().addNote("目标卡片").id!;
+    openNoteDetail(destination, true);
+    eventMocks.emitTo.mockClear();
+    useNotesStore.getState().addClipNote("旧内容", {});
+    const sourceId = useNotesStore.getState().notes[0].id;
+    let resolveVisible!: (visible: boolean) => void;
+    const visible = new Promise<boolean>((resolve) => (resolveVisible = resolve));
+    webviewMocks.getByLabel.mockResolvedValue({
+      isVisible: vi.fn().mockReturnValue(visible),
+    });
+
+    const pending = sendNotesToChat([sourceId]);
+    await vi.waitFor(() => expect(webviewMocks.getByLabel).toHaveBeenCalled());
+    useNotesStore.getState().updateNoteText(sourceId, "最新内容");
+    resolveVisible(true);
+    await pending;
+
+    expect(eventMocks.emitTo).toHaveBeenCalledWith(
+      "textpreview",
+      "toskr://note-editor-insert",
+      expect.objectContaining({ text: "最新内容" })
+    );
+  });
+
+  it("ACK 监听注册期间来源卡被编辑时仍在派发前重读最新内容", async () => {
+    const destination = useNotesStore.getState().addNote("目标卡片").id!;
+    openNoteDetail(destination, true);
+    eventMocks.emitTo.mockClear();
+    useNotesStore.getState().addClipNote("监听前旧内容", {});
+    const sourceId = useNotesStore.getState().notes[0].id;
+    webviewMocks.getByLabel.mockResolvedValue({
+      isVisible: vi.fn().mockResolvedValue(true),
+    });
+    let resolveRegistration!: () => void;
+    eventMocks.listen.mockImplementation((event, handler) => {
+      eventMocks.listeners.set(event, handler);
+      return new Promise<() => void>((resolve) => {
+        resolveRegistration = () =>
+          resolve(() => eventMocks.listeners.delete(event));
+      });
+    });
+
+    const pending = sendNotesToChat([sourceId]);
+    await vi.waitFor(() => expect(eventMocks.listen).toHaveBeenCalledOnce());
+    useNotesStore.getState().updateNoteText(sourceId, "监听后最新内容");
+    resolveRegistration();
+    await pending;
+
+    expect(eventMocks.emitTo).toHaveBeenCalledWith(
+      "textpreview",
+      "toskr://note-editor-insert",
+      expect.objectContaining({ text: "监听后最新内容" })
+    );
+  });
+
+  it("ACK 返回前目标卡被删除时不清选择、不假报成功", async () => {
+    const destination = useNotesStore.getState().addNote("目标卡片").id!;
+    openNoteDetail(destination, true);
+    eventMocks.emitTo.mockClear();
+    useNotesStore.getState().addClipNote("等待目标复核", {});
+    const sourceId = useNotesStore.getState().notes[0].id;
+    useNotesStore.getState().setChecked([sourceId]);
+    webviewMocks.getByLabel.mockResolvedValue({
+      isVisible: vi.fn().mockResolvedValue(true),
+    });
+    let payload: Record<string, unknown> | undefined;
+    eventMocks.emitTo.mockImplementation(
+      async (_target: string, event: string, next: Record<string, unknown>) => {
+        if (event === "toskr://note-editor-insert") payload = next;
+      }
+    );
+
+    const pending = sendNotesToChat([sourceId]);
+    await vi.waitFor(() => expect(payload).toBeDefined());
+    useNotesStore.getState().deleteNotes([destination]);
+    eventMocks.listeners.get("toskr://note-editor-insert-result")?.({
+      payload: {
+        requestId: payload!.requestId,
+        targetId: payload!.targetId,
+        targetSessionId: payload!.targetSessionId,
+        dataGeneration: payload!.dataGeneration,
+        status: "applied",
+      },
+    });
+    await pending;
+
+    expect(useNotesStore.getState().checkedIds).toEqual([sourceId]);
+    expect(tip).toHaveBeenCalledWith(
+      "warn",
+      "卡片编辑目标已变化，内容未确认添加"
+    );
+  });
 
   it("Native 数据事务状态尚未核验时阻止发送", async () => {
     const added = useNotesStore.getState().addNote("bootstrap pending");
@@ -155,6 +783,89 @@ describe("结构化发送结果的 store 副作用", () => {
     expect(useNotesStore.getState().settings.onboarding.sent).toBe(true);
     expect(useUIStore.getState().open).toBe(false);
     expect(apiMocks.showPanel).not.toHaveBeenCalled();
+  });
+
+  it("smart 模式的图片 Draft 打开预检且不提前调用 Native", async () => {
+    useDeliveryStore.getState().setPreflightMode("smart");
+    const added = useNotesStore.getState().addNote("图片 20×10", {
+      kind: "image",
+      imageFile: "fixture.png",
+    });
+    useNotesStore.getState().setChecked([added.id!]);
+
+    await sendNotesToChat([added.id!]);
+
+    expect(apiMocks.sendDelivery).not.toHaveBeenCalled();
+    expect(useDeliveryStore.getState()).toMatchObject({ open: true, busy: false });
+    expect(useDeliveryStore.getState().draft?.imageFiles).toEqual(["fixture.png"]);
+    expect(useNotesStore.getState().checkedIds).toEqual([added.id]);
+  });
+
+  it("异步编辑器探测后的并发意图不能覆盖已打开的预检 Draft", async () => {
+    useDeliveryStore.getState().setPreflightMode("smart");
+    const firstId = useNotesStore.getState().addNote("第一张图", {
+      kind: "image",
+      imageFile: "first.png",
+    }).id!;
+    const secondId = useNotesStore.getState().addNote("第二张图", {
+      kind: "image",
+      imageFile: "second.png",
+    }).id!;
+
+    await Promise.all([
+      sendNotesToChat([firstId]),
+      sendNotesToChat([secondId]),
+    ]);
+
+    expect(apiMocks.sendDelivery).not.toHaveBeenCalled();
+    expect(useDeliveryStore.getState().draft?.sourceItemIds).toEqual([firstId]);
+    expect(tip).toHaveBeenCalledWith("warn", "已有发送正在进行，请稍候");
+  });
+
+  it("发送菜单可对简单文本显式强制预检", async () => {
+    useDeliveryStore.getState().setPreflightMode("off");
+    const id = useNotesStore.getState().addNote("需要确认").id!;
+
+    await sendNotesToChat([id], undefined, { forcePreflight: true });
+
+    expect(apiMocks.sendDelivery).not.toHaveBeenCalled();
+    expect(useDeliveryStore.getState().draft?.finalText).toBe("需要确认");
+  });
+
+  it("安全演练只为受控示例打开带 no-enter 锁的真实预检", async () => {
+    const id = useNotesStore.getState().addNote(SAFE_REHEARSAL_TEXT).id!;
+    const store = useNotesStore.getState();
+    store.transitionOnboarding({ type: "start" });
+    store.transitionOnboarding({ type: "permissionsReady" });
+    store.transitionOnboarding({ type: "samplePrepared" });
+    store.transitionOnboarding({ type: "sampleCaptured", noteId: id });
+    store.transitionOnboarding({ type: "targetConfirmed" });
+
+    await openSafeRehearsalPreflight(id);
+
+    expect(apiMocks.sendDelivery).not.toHaveBeenCalled();
+    expect(useDeliveryStore.getState()).toMatchObject({ open: true });
+    expect(useDeliveryStore.getState().draft).toMatchObject({
+      safeRehearsal: true,
+      sourceItemIds: [id],
+      enterDecisionConfirmed: true,
+      pressEnter: false,
+      keepPanel: true,
+    });
+    expect(useNotesStore.getState().settings.onboarding.rehearsalStep)
+      .toBe("delivery");
+
+    await submitPreflightDraft();
+
+    expect(apiMocks.sendDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ pressEnter: false, keepPanel: true })
+    );
+    expect(useNotesStore.getState().settings.onboarding).toMatchObject({
+      done: true,
+      sent: true,
+      rehearsalStep: "complete",
+      rehearsalActive: false,
+    });
   });
 
   it.each(["blocked", "failed"] as const)(
@@ -339,7 +1050,10 @@ describe("结构化发送结果的 store 副作用", () => {
     await expect(sendNotesToChat([noteId])).resolves.toBeNull();
     expect(apiMocks.sendDelivery).not.toHaveBeenCalled();
     expect(useNotesStore.getState().checkedIds).toEqual([noteId]);
-    expect(tip).toHaveBeenCalledWith("warn", "目标已变化，请在面板确认 Profile 后重试");
+    expect(tip).toHaveBeenCalledWith(
+      "warn",
+      "原临时投递方案已暂停，请确认或恢复自动匹配"
+    );
   });
 
   it("A→B→A 发生在 Enter 确认期间仍阻止旧临时 Profile", async () => {
@@ -382,7 +1096,10 @@ describe("结构化发送结果的 store 副作用", () => {
     await expect(pending).resolves.toBeNull();
     expect(apiMocks.sendDelivery).not.toHaveBeenCalled();
     expect(useTargetStore.getState().profileOverrideNeedsConfirmation).toBe(true);
-    expect(tip).toHaveBeenCalledWith("warn", "目标已变化，请在面板确认 Profile 后重试");
+    expect(tip).toHaveBeenCalledWith(
+      "warn",
+      "原临时投递方案已暂停，请确认或恢复自动匹配"
+    );
   });
 
   it("确认框期间 Profile 策略改变时不沿用旧 Enter 决策", async () => {
@@ -418,7 +1135,7 @@ describe("结构化发送结果的 store 副作用", () => {
     expect(apiMocks.sendDelivery).not.toHaveBeenCalled();
     expect(tip).toHaveBeenCalledWith(
       "warn",
-      "Profile 设置已变化，请确认后重试发送"
+      "投递方案设置已变化，请确认后重试发送"
     );
   });
 
@@ -490,8 +1207,9 @@ describe("结构化发送结果的 store 副作用", () => {
   });
 
   it("快速重复发送只允许一个原生投递在途", async () => {
-    reset("blocked");
+    reset("sent");
     const noteId = useNotesStore.getState().addNote("once").id!;
+    useNotesStore.getState().setChecked([noteId]);
     let resolveDelivery!: (value: SendDeliveryResult) => void;
     apiMocks.sendDelivery.mockImplementation(
       () =>
@@ -506,9 +1224,11 @@ describe("结构化发送结果的 store 副作用", () => {
     expect(duplicate).toBeNull();
     await vi.waitFor(() => expect(apiMocks.sendDelivery).toHaveBeenCalledOnce());
     const request = apiMocks.sendDelivery.mock.calls[0][0] as SendDeliveryRequest;
-    resolveDelivery(result(request, "blocked"));
-    await first;
+    resolveDelivery(result(request, "sent"));
+    await expect(first).resolves.toMatchObject({ status: "sent" });
     expect(apiMocks.sendDelivery).toHaveBeenCalledOnce();
+    expect(useNotesStore.getState().notes[0].done).toBe(true);
+    expect(useNotesStore.getState().checkedIds).toEqual([]);
   });
 
   it("warnWithPanel 恢复面板可见、警告并落无正文诊断脚注", () => {

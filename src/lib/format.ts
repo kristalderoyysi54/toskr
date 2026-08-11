@@ -66,3 +66,16 @@ export function imageCaption(note: { kind?: string; text: string }): string {
   if (note.kind !== "image") return t;
   return IMAGE_PLACEHOLDER.test(t) ? "" : t;
 }
+
+/** 紧凑列表里的图片卡主文案：真实备注优先，无备注才回退图片元数据。 */
+export function imageListLabel(
+  note: { kind?: string; text: string; imageW?: number; imageH?: number },
+  imageCount: number
+): string {
+  const caption = imageCaption(note).split("\n")[0];
+  if (caption) return caption;
+  if (imageCount > 1) return `图片 ×${imageCount}`;
+  return note.imageW && note.imageH
+    ? `图片 ${note.imageW}×${note.imageH}`
+    : "图片";
+}

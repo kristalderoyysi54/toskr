@@ -2,19 +2,8 @@ import { KeyboardOff, ShieldAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/tauri";
-import { tip } from "@/lib/tip";
+import { resetInputMonitoringAndReopen } from "@/lib/permissionRecovery";
 import { useUIStore } from "@/store/uiStore";
-
-/** 一键重置输入监控条目（等价系统设置里的 −），成功后带用户去重新勾选。 */
-async function resetAndReopen() {
-  try {
-    await api.resetInputMonitoring();
-    tip("ok", "已重置授权条目 · 请重新勾选 Toskr 后点「重启」");
-  } catch (e) {
-    tip("warn", `自动重置失败（${String(e)}）· 请手动删除条目后重加`);
-  }
-  void api.openPrivacySettings("input-monitoring");
-}
 
 /**
  * 权限引导横幅（纯展示）：状态由 App 级常驻守护写入 uiStore。
@@ -44,7 +33,7 @@ export function PermissionBanner() {
           在打开的设置里重新勾选/添加 Toskr，再点「重启」即可恢复。
         </p>
         <div className="mt-2 flex gap-1.5">
-          <Button size="xs" onClick={() => void resetAndReopen()}>
+          <Button size="xs" onClick={() => void resetInputMonitoringAndReopen()}>
             一键重置授权
           </Button>
           <Button

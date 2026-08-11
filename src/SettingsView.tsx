@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
@@ -8,8 +8,6 @@ import {
   Activity,
   AlarmClock,
   Bot,
-  Eye,
-  EyeOff,
   AlertCircle,
   ArrowDown,
   ArrowUp,
@@ -24,10 +22,14 @@ import {
   Pencil,
   Plus,
   Settings2,
+  TrendingUp,
   X,
 } from "lucide-react";
 
 import { SimpleSelect } from "@/components/SimpleSelect";
+import { TargetProfileManager } from "@/components/settings/TargetProfileManager";
+import { OutcomeInsightsSection } from "@/components/settings/OutcomeInsightsSection";
+import { useAppIdentity } from "@/components/settings/useAppIdentity";
 import { IconButton } from "@/components/ui/icon-button";
 import { ProgressBar } from "@/components/ui/progress-bar";
 import { Segmented } from "@/components/ui/segmented";
@@ -41,10 +43,13 @@ import {
   SETTINGS_DATA_RECOVERY_OPERATION,
   SETTINGS_EXPORT,
   SETTINGS_IMPORT,
+  SETTINGS_AI_KEY_CHANGED,
   SETTINGS_PATCH,
   SETTINGS_REQUEST,
   SETTINGS_SECTION,
+  SETTINGS_START_SAFE_REHEARSAL,
   SETTINGS_STATE,
+  type SettingsSectionPayload,
 } from "@/lib/settingsSync";
 import {
   DATA_ACTIVITY_EVENT,
@@ -56,7 +61,12 @@ import {
 } from "@/lib/dataLocation";
 import { SHORTCUTS } from "@/lib/shortcuts";
 import {
+  FIREWALL_CATEGORY_LABEL,
+  FIREWALL_WARN_CATEGORIES,
+} from "@/lib/delivery/firewall";
+import {
   api,
+  type AiKeyStatus,
   type DataLocationInspection,
   type DataLocationStatus,
   type DataOperationPlan,
@@ -84,26 +94,24 @@ import {
   normalizeContextMenu,
   type DuePresetCfg,
   type PromptSnippet,
-  type TargetProfile,
   type Settings,
   type ThemePref,
   type VibrancyMaterial,
 } from "@/store/notesStore";
 import {
   GENERAL_PROMPT_GROUP_ID,
-  SAFETY_PROFILE_ID,
   deletePromptGroup,
-  deleteTargetProfile,
-  findDuplicateBundleAssignments,
 } from "@/lib/targetProfiles";
 import { presetCfgLabel } from "@/lib/tasks";
 import { AI_PRESETS, matchPreset, testAiConnection } from "@/lib/ai";
+import { subscribeAiKeyStatus } from "@/lib/aiKeyStatus";
 
 type SectionId =
   | "general"
   | "hotkey"
   | "clip"
   | "target"
+  | "outcome"
   | "due"
   | "ai"
   | "companion"
@@ -134,7 +142,8 @@ const SECTION_GROUPS: {
   {
     title: "发送",
     items: [
-      { id: "target", label: "目标与模板", icon: <Crosshair className="size-4" /> },
+      { id: "target", label: "目标与投递方案", icon: <Crosshair className="size-4" /> },
+      { id: "outcome", label: "成效与隐私", icon: <TrendingUp className="size-4" /> },
     ],
   },
   {
@@ -158,6 +167,10 @@ const SECTION_GROUPS: {
 export default function SettingsView() {
   const [settings, setSettings] = useState<Settings>(defaultSettings());
   const [section, setSection] = useState<SectionId>("general");
+  const [targetProfileRequest, setTargetProfileRequest] = useState<{
+    profileId: string;
+    sequence: number;
+  } | null>(null);
   const [dataActivity, setDataActivity] = useState({
     locked: false,
     phase: "idle",
@@ -167,12 +180,24 @@ export default function SettingsView() {
   useEffect(() => {
     const un = listen<Settings>(SETTINGS_STATE, (e) => setSettings(e.payload));
     // 外部指路（更新提醒气泡点击等）→ 切到指定分区
-    const unSection = listen<string>(SETTINGS_SECTION, (e) => {
-      const requested = ["snippets", "prompts"].includes(e.payload)
+    const unSection = listen<SettingsSectionPayload>(SETTINGS_SECTION, (e) => {
+      const rawSection = typeof e.payload === "string"
+        ? e.payload
+        : e.payload.section;
+      const requested = ["snippets", "prompts"].includes(rawSection)
         ? "target"
-        : e.payload === "exclude"
+        : rawSection === "exclude"
           ? "hotkey"
-          : e.payload;
+          : rawSection;
+      const targetProfileId = typeof e.payload === "string"
+        ? null
+        : e.payload.targetProfileId ?? null;
+      if (targetProfileId) {
+        setTargetProfileRequest((previous) => ({
+          profileId: targetProfileId,
+          sequence: (previous?.sequence ?? 0) + 1,
+        }));
+      }
       setSection(requested as SectionId);
     });
     const unDataActivity = listen<{ locked: boolean; phase: string; message: string }>(
@@ -315,7 +340,14 @@ export default function SettingsView() {
           </>
         )}
         {section === "clip" && <ClipboardSection settings={settings} patch={patch} />}
-        {section === "target" && <TargetSection settings={settings} patch={patch} />}
+        {section === "target" && (
+          <TargetSection
+            settings={settings}
+            patch={patch}
+            targetProfileRequest={targetProfileRequest}
+          />
+        )}
+        {section === "outcome" && <OutcomeInsightsSection settings={settings} patch={patch} />}
         {section === "companion" && <CompanionSection settings={settings} patch={patch} />}
         {section === "due" && <DuePresetsSection settings={settings} patch={patch} />}
         {section === "ai" && <AiSection settings={settings} patch={patch} />}
@@ -1160,33 +1192,6 @@ function HotkeyRecorder({
   );
 }
 
-/** 应用列表展示信息缓存（bundle id → 名称/图标；设置窗口会话内有效）。 */
-const appInfoCache = new Map<
-  string,
-  Promise<{ name: string; iconUrl: string | null } | null>
->();
-
-function useAppListInfo(bundleId: string) {
-  const [info, setInfo] = useState<{ name: string; iconUrl: string | null } | null>(
-    null
-  );
-  useEffect(() => {
-    let hit = appInfoCache.get(bundleId);
-    if (!hit) {
-      hit = api.appListInfo(bundleId).catch(() => null);
-      appInfoCache.set(bundleId, hit);
-    }
-    let alive = true;
-    void hit.then((i) => {
-      if (alive) setInfo(i);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [bundleId]);
-  return info;
-}
-
 /** 列表行：应用图标 + 显示名（未安装/解析失败回退 bundle id）。 */
 function AppListRow({
   bundle,
@@ -1195,7 +1200,7 @@ function AppListRow({
   bundle: string;
   onRemove: () => void;
 }) {
-  const info = useAppListInfo(bundle);
+  const info = useAppIdentity(bundle);
   return (
     <div className="group flex items-center gap-2 rounded-sm px-1.5 py-1 hover:bg-black/[0.03] dark:hover:bg-white/[0.04]">
       {info?.iconUrl ? (
@@ -1289,16 +1294,76 @@ function AppListEditor({
   );
 }
 
-function TargetSection({ settings, patch }: SP) {
+function TargetSection({
+  settings,
+  patch,
+  targetProfileRequest,
+}: SP & {
+  targetProfileRequest: { profileId: string; sequence: number } | null;
+}) {
   return (
     <div>
-      <SectionTitle>目标与模板</SectionTitle>
+      <SectionTitle>目标与投递方案</SectionTitle>
       <p className="mb-3 text-body text-muted-foreground">
-        Profile 按目标应用决定模板分组、格式、回车与隐私策略；重复 bundle 按列表首项稳定命中。
+        Toskr 会根据当前目标应用自动选择投递方案。方案决定提示词组、输出格式、粘贴后动作和出站隐私策略。
       </p>
-      <TargetProfilesEditor settings={settings} patch={patch} />
+      <FirewallSettings settings={settings} patch={patch} />
+      <TargetProfileManager
+        settings={settings}
+        patch={patch}
+        requestedProfileId={targetProfileRequest?.profileId ?? null}
+        requestSequence={targetProfileRequest?.sequence ?? 0}
+      />
       <SnippetsSection settings={settings} patch={patch} />
     </div>
+  );
+}
+
+function FirewallSettings({ settings, patch }: SP) {
+  const disabled = new Set(settings.firewallDisabledWarnCategories);
+  return (
+    <Group title="Context Firewall（仅本机文本检查）">
+      <Row
+        label="发送前隐私检查"
+        hint="默认开启；快速发送也会先检查，有风险时自动进入预检"
+        right={
+          <Switch
+            aria-label="发送前隐私检查"
+            checked={settings.firewallEnabled}
+            onCheckedChange={(firewallEnabled) => patch({ firewallEnabled })}
+          />
+        }
+      />
+      <div className="px-3.5 py-2.5">
+        <p className="text-title">提示级类别</p>
+        <p className="mt-0.5 text-label text-muted-foreground">
+          可按类别关闭提示；私钥、授权、API 密钥、数据库连接、Cookie 与会话等高风险规则不能单独关闭。
+        </p>
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          {FIREWALL_WARN_CATEGORIES.map((category) => (
+            <label key={category} className="flex items-center justify-between gap-2 rounded-lg bg-muted/40 px-2 py-1.5 text-body">
+              {FIREWALL_CATEGORY_LABEL[category]}
+              <Switch
+                size="sm"
+                disabled={!settings.firewallEnabled}
+                aria-label={`${FIREWALL_CATEGORY_LABEL[category]}提示`}
+                checked={!disabled.has(category)}
+                onCheckedChange={(enabled) => patch({
+                  firewallDisabledWarnCategories: enabled
+                    ? settings.firewallDisabledWarnCategories.filter(
+                        (item) => item !== category
+                      )
+                    : [...settings.firewallDisabledWarnCategories, category],
+                })}
+              />
+            </label>
+          ))}
+        </div>
+        <p className="mt-2 text-label text-warning">
+          检测基于本地规则，可能存在误报或漏报；“未发现”不代表绝对安全。
+        </p>
+      </div>
+    </Group>
   );
 }
 
@@ -1307,273 +1372,6 @@ function CompanionSection({ settings, patch }: SP) {
     <div>
       <SectionTitle>伴随停靠</SectionTitle>
       <CompanionSettings settings={settings} patch={patch} />
-    </div>
-  );
-}
-
-function TargetProfilesEditor({ settings, patch }: SP) {
-  // 折叠态只显示名称与策略摘要；同一时刻只展开一张，降低设置页密度
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const duplicates = findDuplicateBundleAssignments(settings.targetProfiles);
-  const updateProfile = (id: string, profilePatch: Partial<TargetProfile>) =>
-    patch({
-      targetProfiles: settings.targetProfiles.map((profile) =>
-        profile.id === id ? { ...profile, ...profilePatch } : profile
-      ),
-    });
-  const addProfile = () => {
-    const id = crypto.randomUUID();
-    patch({
-      targetProfiles: [
-        ...settings.targetProfiles,
-        {
-          id,
-          name: "新 Profile",
-          bundleIds: [],
-          promptGroupId: GENERAL_PROMPT_GROUP_ID,
-          defaultFormat: "plain",
-          enterPolicy: "never",
-          privacyPolicy: "requireRedaction",
-          keepPanel: false,
-        },
-      ],
-      ...(settings.targetProfiles.length === 0
-        ? { defaultTargetProfileId: id }
-        : {}),
-    });
-    setExpandedId(id);
-  };
-  const removeProfile = (id: string) => {
-    const next = deleteTargetProfile(
-      {
-        groups: settings.promptGroups,
-        snippets: settings.promptSnippets,
-        profiles: settings.targetProfiles,
-        defaultProfileId: settings.defaultTargetProfileId,
-      },
-      id
-    );
-    patch({
-      targetProfiles: next.profiles,
-      defaultTargetProfileId: next.defaultProfileId,
-    });
-  };
-  const moveProfile = (id: string, direction: -1 | 1) => {
-    const next = [...settings.targetProfiles];
-    const index = next.findIndex((item) => item.id === id);
-    const target = index + direction;
-    if (index < 0 || target < 0 || target >= next.length) return;
-    [next[index], next[target]] = [next[target], next[index]];
-    patch({ targetProfiles: next });
-  };
-  const currentTargetBundle = async () => {
-    const target = await api.getTargetSnapshot();
-    if (!target.ready || !target.bundleId) {
-      tip("warn", "当前投递目标未就绪，请先在目标应用中呼出 Toskr");
-      return null;
-    }
-    return target.bundleId;
-  };
-
-  return (
-    <div className="mb-5">
-      <div className="mb-1.5 flex items-center justify-between gap-2">
-        <p className="text-body font-medium text-muted-foreground">Target Profiles</p>
-        <button
-          type="button"
-          onClick={addProfile}
-          className="flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-body text-primary"
-        >
-          <Plus className="size-3.5" /> 新建 Profile
-        </button>
-      </div>
-      <Group>
-        <Row
-          label="默认 Profile"
-          hint="未知应用会继承其分组/格式，但 Enter 与隐私仍强制使用安全默认"
-          right={
-            <SimpleSelect
-              ariaLabel="默认 Target Profile"
-              className="w-48"
-              align="end"
-              value={settings.defaultTargetProfileId}
-              options={
-                settings.targetProfiles.length === 0
-                  ? [{ value: SAFETY_PROFILE_ID, label: "安全默认" }]
-                  : settings.targetProfiles.map((profile) => ({
-                      value: profile.id,
-                      label: profile.name,
-                    }))
-              }
-              onChange={(defaultTargetProfileId) => patch({ defaultTargetProfileId })}
-            />
-          }
-        />
-      </Group>
-      {duplicates.length > 0 && (
-        <div role="alert" className="mb-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-label">
-          {duplicates.map((duplicate) => (
-            <p key={duplicate.bundleId}>
-              {duplicate.bundleId} 同时属于 {duplicate.profileNames.join("、")}；当前使用列表首项。
-            </p>
-          ))}
-        </div>
-      )}
-      <div className="space-y-2">
-        {settings.targetProfiles.map((profile, index) => {
-          const expanded = expandedId === profile.id;
-          const summary = [
-            settings.promptGroups.find(
-              (group) => group.id === profile.promptGroupId
-            )?.name ?? "通用",
-            profile.defaultFormat === "code" ? "代码块" : "纯文本",
-            profile.enterPolicy === "never"
-              ? "不回车"
-              : profile.enterPolicy === "confirm"
-                ? "回车需确认"
-                : "自动回车",
-            profile.bundleIds.length ? `${profile.bundleIds.length} 应用` : null,
-          ]
-            .filter(Boolean)
-            .join(" · ");
-          return (
-          <div key={profile.id} className="rounded-xl border border-border/60 bg-card">
-            <button
-              type="button"
-              aria-expanded={expanded}
-              aria-label={`${expanded ? "收起" : "展开"} Profile ${profile.name}`}
-              onClick={() => setExpandedId(expanded ? null : profile.id)}
-              className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
-            >
-              <ChevronRight
-                className={cn(
-                  "size-3.5 shrink-0 text-muted-foreground transition-transform",
-                  expanded && "rotate-90"
-                )}
-              />
-              <span className="min-w-0 flex-1 truncate text-body font-medium">
-                {profile.name}
-              </span>
-              <span
-                className={cn(
-                  "shrink-0 text-label",
-                  profile.enterPolicy === "allow"
-                    ? "text-warning"
-                    : "text-muted-foreground"
-                )}
-              >
-                {summary}
-              </span>
-            </button>
-            {expanded && (
-            <div className="border-t border-border/40 p-3">
-            <div className="mb-2 flex items-center gap-2">
-              <input
-                aria-label={`${profile.name} Profile 名称`}
-                value={profile.name}
-                onChange={(event) => updateProfile(profile.id, { name: event.target.value })}
-                className="h-8 min-w-0 flex-1 rounded-lg border border-border bg-transparent px-2 text-title font-medium"
-              />
-              <IconButton
-                label="上移 Profile"
-                size="2xs"
-                disabled={index === 0}
-                onClick={() => moveProfile(profile.id, -1)}
-              ><ArrowUp /></IconButton>
-              <IconButton
-                label="下移 Profile"
-                size="2xs"
-                disabled={index === settings.targetProfiles.length - 1}
-                onClick={() => moveProfile(profile.id, 1)}
-              ><ArrowDown /></IconButton>
-              <IconButton
-                label={`删除 Profile ${profile.name}`}
-                tone="danger"
-                size="2xs"
-                onClick={() => removeProfile(profile.id)}
-              ><X /></IconButton>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="text-label text-muted-foreground">
-                Prompt 分组
-                <SimpleSelect
-                  ariaLabel={`${profile.name} Prompt 分组`}
-                  className="mt-0.5"
-                  value={profile.promptGroupId}
-                  options={[...settings.promptGroups]
-                    .sort((a, b) => a.order - b.order)
-                    .map((group) => ({ value: group.id, label: group.name }))}
-                  onChange={(promptGroupId) => updateProfile(profile.id, { promptGroupId })}
-                />
-              </div>
-              <div className="text-label text-muted-foreground">
-                默认格式
-                <SimpleSelect<TargetProfile["defaultFormat"]>
-                  ariaLabel={`${profile.name} 默认格式`}
-                  className="mt-0.5"
-                  value={profile.defaultFormat}
-                  options={[
-                    { value: "plain", label: "纯文本" },
-                    { value: "code", label: "代码块" },
-                  ]}
-                  onChange={(defaultFormat) => updateProfile(profile.id, { defaultFormat })}
-                />
-              </div>
-              <div className="text-label text-muted-foreground">
-                回车策略
-                <SimpleSelect<TargetProfile["enterPolicy"]>
-                  ariaLabel={`${profile.name} 回车策略`}
-                  className="mt-0.5"
-                  value={profile.enterPolicy}
-                  options={[
-                    { value: "never", label: "不按回车" },
-                    { value: "confirm", label: "发送前确认" },
-                    { value: "allow", label: "允许自动回车" },
-                  ]}
-                  onChange={(enterPolicy) => updateProfile(profile.id, { enterPolicy })}
-                />
-              </div>
-              <div className="text-label text-muted-foreground">
-                隐私策略
-                <SimpleSelect<TargetProfile["privacyPolicy"]>
-                  ariaLabel={`${profile.name} 隐私策略`}
-                  className="mt-0.5"
-                  value={profile.privacyPolicy}
-                  options={[
-                    { value: "requireRedaction", label: "要求脱敏（未生效）" },
-                    { value: "confirmRaw", label: "原文需确认（未生效）" },
-                    { value: "allowRaw", label: "允许原文" },
-                  ]}
-                  onChange={(privacyPolicy) => updateProfile(profile.id, { privacyPolicy })}
-                />
-              </div>
-            </div>
-            <div className="mt-2 flex items-center justify-between rounded-lg bg-muted/40 px-2 py-1.5">
-              <span className="text-body">发送后保留面板</span>
-              <Switch
-                aria-label={`${profile.name} 发送后保留面板`}
-                checked={profile.keepPanel}
-                onCheckedChange={(keepPanel) => updateProfile(profile.id, { keepPanel })}
-              />
-            </div>
-            <p className="mb-1 mt-2 text-label font-medium text-muted-foreground">精确匹配应用</p>
-            <AppListEditor
-              apps={profile.bundleIds}
-              onChange={(bundleIds) => updateProfile(profile.id, { bundleIds })}
-              addLabel="把当前投递目标加入 Profile"
-              getCurrentBundle={currentTargetBundle}
-            />
-            </div>
-            )}
-          </div>
-          );
-        })}
-        {settings.targetProfiles.length === 0 && (
-          <p className="rounded-xl border border-border/60 px-3 py-2 text-body text-muted-foreground">
-            暂无持久化 Profile；当前使用不可放宽的安全默认。
-          </p>
-        )}
-      </div>
     </div>
   );
 }
@@ -1648,98 +1446,190 @@ const WEEKDAY_OPTIONS = [
 ];
 
 
-/** AI 智能：OpenAI 兼容提供商单配置 + 功能开关 + 连接测试。 */
+/** AI 智能：配置留在普通设置，secret 只经 Rust 进入 macOS Keychain。 */
 function AiSection({ settings, patch }: SP) {
-  const [showKey, setShowKey] = useState(false);
+  const [keyStatus, setKeyStatus] = useState<AiKeyStatus>({
+    configured: false,
+    updatedAtMs: null,
+  });
+  const [keyStatusKnown, setKeyStatusKnown] = useState(false);
+  const [keyStatusError, setKeyStatusError] = useState(false);
+  const [newKey, setNewKey] = useState("");
+  const [savingKey, setSavingKey] = useState(false);
+  const [deletingKey, setDeletingKey] = useState(false);
   const [testing, setTesting] = useState(false);
   const [models, setModels] = useState<string[]>([]);
   const [fetchingModels, setFetchingModels] = useState(false);
   const preset = matchPreset(settings.aiBaseUrl);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void subscribeAiKeyStatus(
+      (status) => {
+        if (disposed) return;
+        setKeyStatus(status);
+        setKeyStatusKnown(true);
+        setKeyStatusError(false);
+      },
+      api.getAiKeyStatus,
+      () => {
+        if (disposed) return;
+        setKeyStatusKnown(true);
+        setKeyStatusError(true);
+      }
+    ).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  const saveKey = async () => {
+    const key = newKey.trim();
+    if (!key || savingKey) return;
+    setSavingKey(true);
+    try {
+      const status = await api.setAiApiKey(key, true);
+      setKeyStatus(status);
+      setKeyStatusKnown(true);
+      setKeyStatusError(false);
+      setNewKey("");
+      await emitTo("main", SETTINGS_AI_KEY_CHANGED, status).catch(() => {});
+      tip("ok", keyStatus.configured ? "AI 密钥已覆盖" : "AI 密钥已存入钥匙串");
+    } catch {
+      tip("warn", "AI 密钥保存失败；原密钥未被删除");
+    } finally {
+      setSavingKey(false);
+    }
+  };
+
+  const removeKey = async () => {
+    if (deletingKey) return;
+    const confirmed = await ask(
+      "删除后 AI 功能会停止，且 Toskr 无法恢复原密钥。确认从 macOS 钥匙串删除吗？",
+      { title: "删除 AI 密钥", kind: "warning" }
+    );
+    if (!confirmed) return;
+    setDeletingKey(true);
+    try {
+      const status = await api.deleteAiApiKey();
+      setKeyStatus(status);
+      setNewKey("");
+      await emitTo("main", SETTINGS_AI_KEY_CHANGED, status).catch(() => {});
+      tip("ok", "AI 密钥已删除");
+    } catch {
+      tip("warn", "AI 密钥删除失败；原密钥仍保留");
+    } finally {
+      setDeletingKey(false);
+    }
+  };
+
+  const requireKey = () => {
+    if (!keyStatusKnown) {
+      tip("info", "正在读取 macOS 钥匙串状态，请稍候");
+      return false;
+    }
+    if (keyStatusError) {
+      tip("warn", "无法读取 macOS 钥匙串状态，请稍后重试");
+      return false;
+    }
+    if (keyStatus.configured) return true;
+    tip("info", "请先把 AI API Key 存入 macOS 钥匙串");
+    return false;
+  };
+
   const fetchModels = async () => {
-    if (fetchingModels) return;
+    if (fetchingModels || !requireKey()) return;
     setFetchingModels(true);
     try {
-      const ids = await api.aiListModels(
-        settings.aiBaseUrl.trim(),
-        settings.aiApiKey.trim()
-      );
+      const ids = await api.aiListModels(settings.aiBaseUrl.trim());
       setModels(ids);
-      // 当前值不在列表时不强改，让用户自行选择
       tip("ok", `获取到 ${ids.length} 个模型`);
-    } catch (e) {
-      tip("warn", `获取失败：${String(e).slice(0, 80)}`);
+    } catch (error) {
+      tip("warn", `获取失败：${String(error).slice(0, 80)}`);
     } finally {
       setFetchingModels(false);
     }
   };
+
   const runTest = async () => {
-    if (testing) return;
+    if (testing || !requireKey()) return;
     setTesting(true);
     try {
-      await testAiConnection(settings.aiBaseUrl, settings.aiApiKey, settings.aiModel);
+      await testAiConnection(settings.aiBaseUrl, settings.aiModel);
       tip("ok", "AI 连接成功");
-    } catch (e) {
-      tip("warn", `连接失败：${String(e).slice(0, 80)}`);
+    } catch (error) {
+      tip("warn", `连接失败：${String(error).slice(0, 80)}`);
     } finally {
       setTesting(false);
     }
   };
+
+  const keyHint = keyStatusError
+    ? "无法读取钥匙串状态，请稍后重试"
+    : !keyStatusKnown
+      ? "正在读取 macOS 钥匙串…"
+      : keyStatus.configured
+        ? `已配置${keyStatus.updatedAtMs ? ` · ${new Date(keyStatus.updatedAtMs).toLocaleString()}` : ""}`
+        : "未配置；输入新密钥后只可覆盖或删除，不会回显";
+
   return (
     <div>
       <SectionTitle>AI 智能</SectionTitle>
       <p className="mb-3 text-body text-muted-foreground">
-        配置 OpenAI 兼容的 AI 提供商后：任务输入框 ✨ 模式支持「下午3点提醒我开会」
-        「20分钟后提醒我关火」等自然语言建任务；任务右键可 AI 拆解子任务；
-        笔记右键可 AI 转任务、AI 起标题。
+        配置 OpenAI 兼容的 AI 提供商后：任务输入框 ✨ 模式支持自然语言建任务；
+        任务可 AI 拆解，笔记可 AI 转任务或起标题。
       </p>
       <Group>
         <Row
           label="启用 AI 智能"
-          hint="关闭后各 AI 入口点击提示去配置，不发起请求"
+          hint="关闭后各 AI 入口不发起请求"
           right={
             <Switch
               aria-label="启用 AI 智能"
               checked={settings.aiEnabled}
-              onCheckedChange={(v) => patch({ aiEnabled: v })}
+              onCheckedChange={(value) => patch({ aiEnabled: value })}
             />
           }
         />
       </Group>
       <Group title="提供商（OpenAI 兼容）">
         <div className="flex flex-wrap items-center gap-1 px-3.5 py-2.5">
-          {AI_PRESETS.map((pz) => (
+          {AI_PRESETS.map((item) => (
             <button
-              key={pz.id}
+              key={item.id}
               onClick={() => {
-                if (pz.id === "custom") {
-                  // 进入自定义：清空 Base URL 待手动输入（模型与 Key 保留）
+                if (item.id === "custom") {
                   patch({ aiBaseUrl: "" });
                   return;
                 }
                 patch({
-                  aiBaseUrl: pz.baseUrl,
-                  // 仅模型名为空时才填充推荐值，避免覆盖用户已填内容
-                  ...(settings.aiModel.trim() ? {} : { aiModel: pz.modelHint }),
+                  aiBaseUrl: item.baseUrl,
+                  ...(settings.aiModel.trim() ? {} : { aiModel: item.modelHint }),
                 });
               }}
               className={cn(
                 "rounded-full border px-2.5 py-0.5 text-label",
-                preset === pz.id
+                preset === item.id
                   ? "border-border bg-primary/10 font-medium text-foreground dark:border-input"
                   : "border-border text-muted-foreground hover:text-foreground"
               )}
             >
-              {pz.label}
+              {item.label}
             </button>
           ))}
         </div>
         <Row
           label="Base URL"
-          hint="如 https://api.deepseek.com（自动拼接 /v1/chat/completions）"
+          hint="远端仅允许 HTTPS；HTTP 只允许 localhost、127.0.0.1 或 ::1"
           right={
             <input
               value={settings.aiBaseUrl}
-              onChange={(e) => patch({ aiBaseUrl: e.target.value })}
+              onChange={(event) => patch({ aiBaseUrl: event.target.value })}
               placeholder="https://…"
               autoComplete="off"
               className="h-8 w-64 rounded-lg border border-border bg-transparent px-2 text-body outline-none focus:border-primary/50"
@@ -1748,61 +1638,61 @@ function AiSection({ settings, patch }: SP) {
         />
         <Row
           label="API Key"
-          hint="明文保存在本地数据文件，仅发往上方 Base URL"
+          hint={keyHint}
           right={
-            <div className="flex items-center gap-1">
+            <div className="flex max-w-80 flex-wrap items-center justify-end gap-1" aria-live="polite">
               <input
-                type={showKey ? "text" : "password"}
-                value={settings.aiApiKey}
-                onChange={(e) => patch({ aiApiKey: e.target.value })}
-                placeholder="sk-…"
-                autoComplete="off"
-                className="h-8 w-56 rounded-lg border border-border bg-transparent px-2 text-body outline-none focus:border-primary/50"
+                type="password"
+                value={newKey}
+                onChange={(event) => setNewKey(event.target.value)}
+                placeholder={keyStatus.configured ? "输入新密钥以覆盖" : "输入新密钥"}
+                autoComplete="new-password"
+                className="h-8 w-48 rounded-lg border border-border bg-transparent px-2 text-body outline-none focus:border-primary/50"
               />
-              <IconButton
-                label={showKey ? "隐藏密钥" : "显示密钥"}
-                onClick={() => setShowKey((v) => !v)}
+              <button
+                onClick={() => void saveKey()}
+                disabled={!newKey.trim() || savingKey}
+                className="rounded-lg border border-border px-2 py-1 text-label text-muted-foreground hover:text-foreground disabled:opacity-50"
               >
-                {showKey ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
-              </IconButton>
+                {savingKey ? "保存中…" : keyStatus.configured ? "覆盖" : "保存"}
+              </button>
+              {keyStatus.configured && (
+                <button
+                  onClick={() => void removeKey()}
+                  disabled={deletingKey}
+                  className="rounded-lg border border-destructive/30 px-2 py-1 text-label text-destructive disabled:opacity-50"
+                >
+                  {deletingKey ? "删除中…" : "删除"}
+                </button>
+              )}
             </div>
           }
         />
         <Row
           label="模型名"
-          hint={
-            models.length
-              ? `已获取 ${models.length} 个模型，下拉选择`
-              : "如 deepseek-chat / gpt-4o-mini，或点「获取列表」拉取"
-          }
+          hint={models.length ? `已获取 ${models.length} 个模型` : "手动填写，或从已配置服务获取列表"}
           right={
             <div className="flex items-center gap-1">
               {models.length ? (
                 <select
                   value={models.includes(settings.aiModel) ? settings.aiModel : ""}
-                  onChange={(e) => {
-                    if (e.target.value === "__manual__") {
+                  onChange={(event) => {
+                    if (event.target.value === "__manual__") {
                       setModels([]);
                       return;
                     }
-                    if (e.target.value) patch({ aiModel: e.target.value });
+                    if (event.target.value) patch({ aiModel: event.target.value });
                   }}
                   className="h-8 w-56 rounded-lg border border-border bg-transparent px-2 text-body outline-none focus:border-primary/50"
                 >
-                  <option value="" disabled>
-                    选择模型…
-                  </option>
-                  {models.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
+                  <option value="" disabled>选择模型…</option>
+                  {models.map((model) => <option key={model} value={model}>{model}</option>)}
                   <option value="__manual__">手动输入…</option>
                 </select>
               ) : (
                 <input
                   value={settings.aiModel}
-                  onChange={(e) => patch({ aiModel: e.target.value })}
+                  onChange={(event) => patch({ aiModel: event.target.value })}
                   placeholder="模型 ID"
                   autoComplete="off"
                   className="h-8 w-44 rounded-lg border border-border bg-transparent px-2 text-body outline-none focus:border-primary/50"
@@ -1820,7 +1710,7 @@ function AiSection({ settings, patch }: SP) {
         />
         <Row
           label="连接测试"
-          hint="用当前填写的配置发一次最小请求（无需先启用）"
+          hint="从 macOS 钥匙串读取密钥并发送一次最小请求（无需先启用）"
           right={
             <button
               onClick={() => void runTest()}
@@ -1833,8 +1723,8 @@ function AiSection({ settings, patch }: SP) {
         />
       </Group>
       <p className="text-label text-muted-foreground/70">
-        隐私说明：仅在你主动触发 AI 功能时，把相关文本发送到上方配置的服务；
-        无中转代理，密钥与内容不写入诊断日志。
+        隐私说明：API Key 只保存在 macOS 钥匙串，不进入数据文件、完整备份、
+        诊断或进程参数；只有你主动触发 AI 功能时，相关文本才会直达所选服务。
       </p>
     </div>
   );
@@ -2026,7 +1916,14 @@ function DuePresetsSection({ settings, patch }: SP) {
 }
 
 function SnippetsSection({ settings, patch }: SP) {
-  const sortedGroups = [...settings.promptGroups].sort((a, b) => a.order - b.order);
+  const sortedGroups = useMemo(
+    () => [...settings.promptGroups].sort((a, b) => a.order - b.order),
+    [settings.promptGroups]
+  );
+  const groupOptions = useMemo(
+    () => sortedGroups.map((group) => ({ value: group.id, label: group.name })),
+    [sortedGroups]
+  );
   const [groupName, setGroupName] = useState("");
   const [label, setLabel] = useState("");
   const [text, setText] = useState("");
@@ -2069,7 +1966,7 @@ function SnippetsSection({ settings, patch }: SP) {
     if (groupId === id) setGroupId(GENERAL_PROMPT_GROUP_ID);
     if (editGroupId === id) setEditGroupId(GENERAL_PROMPT_GROUP_ID);
     if (next.affectedReferences > 0) {
-      tip("info", `已将 ${next.affectedReferences} 个引用回落到“通用”分组`);
+      tip("info", `已将 ${next.affectedReferences} 个引用回落到“通用”提示词组`);
     }
   };
   const moveGroup = (id: string, direction: -1 | 1) => {
@@ -2126,12 +2023,12 @@ function SnippetsSection({ settings, patch }: SP) {
   };
   return (
     <div>
-      <p className="mb-1.5 text-body font-medium text-muted-foreground">Prompt 分组</p>
+      <p className="mb-1.5 text-body font-medium text-muted-foreground">提示词组</p>
       <div className="mb-2 divide-y divide-border/50 rounded-xl border border-border/60 bg-card">
         {sortedGroups.map((group, index) => (
           <div key={group.id} className="flex items-center gap-2 px-3.5 py-2">
             <input
-              aria-label={`${group.name} 分组名称`}
+              aria-label={`${group.name} 提示词组名称`}
               value={group.name}
               disabled={group.id === GENERAL_PROMPT_GROUP_ID}
               onChange={(event) =>
@@ -2144,19 +2041,19 @@ function SnippetsSection({ settings, patch }: SP) {
               className="h-8 min-w-0 flex-1 rounded-lg border border-border bg-transparent px-2 text-title disabled:border-transparent disabled:opacity-100"
             />
             <IconButton
-              label="上移 Prompt 分组"
+              label="上移提示词组"
               size="2xs"
               disabled={index === 0}
               onClick={() => moveGroup(group.id, -1)}
             ><ArrowUp /></IconButton>
             <IconButton
-              label="下移 Prompt 分组"
+              label="下移提示词组"
               size="2xs"
               disabled={index === sortedGroups.length - 1}
               onClick={() => moveGroup(group.id, 1)}
             ><ArrowDown /></IconButton>
             <IconButton
-              label={`删除 Prompt 分组 ${group.name}`}
+              label={`删除提示词组 ${group.name}`}
               tone="danger"
               size="2xs"
               disabled={group.id === GENERAL_PROMPT_GROUP_ID}
@@ -2167,13 +2064,13 @@ function SnippetsSection({ settings, patch }: SP) {
       </div>
       <div className="mb-5 flex items-center gap-2">
         <input
-          aria-label="新 Prompt 分组名称"
+          aria-label="新提示词组名称"
           value={groupName}
           onChange={(event) => setGroupName(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter") addGroup();
           }}
-          placeholder="新分组名称"
+          placeholder="新提示词组名称"
           className="h-8 min-w-0 flex-1 rounded-lg border border-border bg-transparent px-2 text-body"
         />
         <button
@@ -2181,10 +2078,10 @@ function SnippetsSection({ settings, patch }: SP) {
           onClick={addGroup}
           className="flex h-8 items-center gap-1 rounded-lg border border-border px-3 text-body text-primary"
         >
-          <Plus className="size-3.5" /> 新建分组
+          <Plus className="size-3.5" /> 新建提示词组
         </button>
       </div>
-      <p className="mb-1.5 text-body font-medium text-muted-foreground">Prompt 模板</p>
+      <p className="mb-1.5 text-body font-medium text-muted-foreground">提示词模板</p>
       <p className="mb-3 text-body text-muted-foreground">
         发送时可在「发送到对话 ▾」下拉里选择模板（按此处顺序排列），与勾选内容组装后发出。
         模板中写 <code className="rounded-sm bg-muted px-1">{"{内容}"}</code>{" "}
@@ -2216,14 +2113,11 @@ function SnippetsSection({ settings, patch }: SP) {
                 className="min-h-8 flex-1 resize-y rounded-lg border border-border bg-transparent px-2 py-1.5 text-body leading-relaxed outline-none focus:border-primary/50"
               />
               <SimpleSelect
-                ariaLabel="模板所属分组"
+                ariaLabel="模板所属提示词组"
                 className="w-28 shrink-0"
                 align="end"
                 value={editGroupId}
-                options={sortedGroups.map((group) => ({
-                  value: group.id,
-                  label: group.name,
-                }))}
+                options={groupOptions}
                 onChange={setEditGroupId}
               />
               <button
@@ -2249,14 +2143,11 @@ function SnippetsSection({ settings, patch }: SP) {
                 {sn.text.replace(/\n+/g, " ⏎ ")}
               </span>
               <SimpleSelect
-                ariaLabel={`${sn.label} 所属 Prompt 分组`}
+                ariaLabel={`${sn.label} 所属提示词组`}
                 className="w-28 shrink-0"
                 align="end"
                 value={sn.groupId}
-                options={sortedGroups.map((group) => ({
-                  value: group.id,
-                  label: group.name,
-                }))}
+                options={groupOptions}
                 onChange={(groupId) =>
                   patch({
                     promptSnippets: settings.promptSnippets.map((item) =>
@@ -2330,14 +2221,11 @@ function SnippetsSection({ settings, patch }: SP) {
           className="min-h-8 flex-1 resize-y rounded-lg border border-border bg-transparent px-2 py-1.5 text-body leading-relaxed outline-none focus:border-primary/50"
         />
         <SimpleSelect
-          ariaLabel="新模板所属分组"
+          ariaLabel="新模板所属提示词组"
           className="w-28 shrink-0"
           align="end"
           value={groupId}
-          options={sortedGroups.map((group) => ({
-            value: group.id,
-            label: group.name,
-          }))}
+          options={groupOptions}
           onChange={setGroupId}
         />
         <button
@@ -2856,6 +2744,20 @@ function AboutSection({
       </Group>
 
       <Group title="链接">
+        <Row
+          label="安全投递演练"
+          hint="重跑权限、捕获、目标确认、脱敏预检与只粘贴投递"
+          right={
+            <button
+              type="button"
+              onClick={() =>
+                void emitTo("main", SETTINGS_START_SAFE_REHEARSAL, {})}
+              className="rounded-md border border-border px-2.5 py-1 text-body hover:bg-muted"
+            >
+              开始演练
+            </button>
+          }
+        />
         <LinkRow label="项目主页" value="GitHub" url={REPO_URL} />
         <LinkRow label="报告 Bug" value="提 Issue" url={`${REPO_URL}/issues/new`} />
       </Group>

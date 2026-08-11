@@ -23,8 +23,6 @@ import { emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { motion, MotionConfig } from "motion/react";
 import {
-  CheckCircle2,
-  Circle,
   ClipboardList,
   ArrowLeft,
   ArrowRight,
@@ -49,8 +47,17 @@ import {
 import { DraftInput } from "@/components/DraftInput";
 import { NoteCard } from "@/components/NoteCard";
 import { PermissionBanner } from "@/components/PermissionBanner";
+import { SafeDeliveryRehearsal } from "@/components/SafeDeliveryRehearsal";
 import { PreviewOverlay } from "@/components/PreviewOverlay";
 import { buildBackupPayload, buildMediaIntegrityPayload } from "@/lib/backup";
+import {
+  clearEditorSessionMedia,
+  editorSessionMediaFiles,
+  NOTE_EDITOR_SESSION_RELEASE_EVENT,
+  releaseEditorSessionMedia,
+  subscribeEditorMediaReleases,
+  type NoteEditorSessionReleasePayload,
+} from "@/lib/editorSessionMedia";
 import {
   DATA_RUNTIME_READY_EVENT,
   reloadAfterPersistenceConflict,
@@ -78,7 +85,22 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { SelectionBar } from "@/components/SelectionBar";
+import { PreflightComposer } from "@/components/PreflightComposer";
+import { ResultLinkDialog } from "@/components/ResultLinkDialog";
+import { ResultVerificationDialog } from "@/components/ResultVerificationDialog";
 import { TargetLensBar } from "@/components/TargetLensBar";
+import {
+  clearDeliveryRedactionSessions,
+  closeResultReturnDialog,
+  deliveryCandidatesForCapturedNote,
+  RESULT_LINK_CHANGED_EVENT,
+} from "@/lib/resultReturn";
+import { closeResultVerificationDialog } from "@/lib/resultVerification";
+import {
+  DELIVERY_ACTIVITY_CLEARED_EVENT,
+  getRecentDeliveryEventsCached,
+  invalidateDeliveryActivityCache,
+} from "@/lib/deliveryActivity";
 import {
   SimpleMenu,
   SimpleMenuItem,
@@ -121,15 +143,23 @@ import { imageCaption, previewOf } from "@/lib/format";
 import { SHORTCUTS } from "@/lib/shortcuts";
 import { clearPendingUndo, runPendingUndo, setPendingUndo, tip } from "@/lib/tip";
 import { silentUpdateFlow } from "@/lib/updater";
+import {
+  legacyAiApiKey,
+  migrateLegacyAiApiKey,
+  withoutLegacyAiApiKey,
+} from "@/lib/aiKeyMigration";
 import { matchNote } from "@/lib/search";
 import { applyRuntimeSettings } from "@/lib/runtimeSettings";
 import {
   applySettingsPatch,
   broadcastSettings,
   installSettingsSyncHost,
+  SETTINGS_AI_KEY_CHANGED,
   SETTINGS_DATA_HEALTH_RESULT,
   SETTINGS_SECTION,
+  SETTINGS_START_SAFE_REHEARSAL,
 } from "@/lib/settingsSync";
+import { isSafeRehearsalText } from "@/lib/onboarding";
 import {
   api,
   EDGE_HIDE_STATE_EVENT,
@@ -161,6 +191,7 @@ import {
   type Settings,
 } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
+import { useDeliveryStore } from "@/store/deliveryStore";
 import {
   isDataOperationLocked,
   useDataOperationStore,
@@ -188,7 +219,12 @@ const DONE_FILTER = "__done__";
 const MEDIA_GC_GRACE_MS = 30_000;
 
 function mediaIntegrityStateJson(): string {
-  return JSON.stringify(buildMediaIntegrityPayload(useNotesStore.getState()));
+  return JSON.stringify(
+    buildMediaIntegrityPayload(
+      useNotesStore.getState(),
+      editorSessionMediaFiles()
+    )
+  );
 }
 
 function handleMediaGcFailure(error: unknown): void {
@@ -768,11 +804,18 @@ export default function App() {
   // 触发事件：开关面板 / 捕获入库（去重裁决后回调 HUD）
   useEffect(() => {
     const unlisten = listen<TriggerPayload>(TRIGGER_EVENT, (event) => {
+      const payload = event.payload;
       if (isDataOperationLocked()) {
-        tip("warn", "数据操作进行中，捕获暂时停用");
+        const clipboardWarning =
+          payload.kind === "captured" ? payload.clipboardWarning : null;
+        tip(
+          "warn",
+          clipboardWarning
+            ? `数据操作进行中，捕获暂时停用 · ${clipboardWarning}`
+            : "数据操作进行中，捕获暂时停用"
+        );
         return;
       }
-      const payload = event.payload;
       if (payload.kind === "toggle") {
         const { open: isOpen, pinned: isPinned, edgeHidden } = useUIStore.getState();
         // 前端链路回执：报障时与 Rust 侧「双击触发」拼成完整链路
@@ -809,10 +852,38 @@ export default function App() {
         imageH: payload.imageH ?? undefined,
       });
       if (result === "empty") return;
-      void api.showCaptureHud(
-        result === "duplicate" ? "duplicate" : "added",
-        previewOf(payload.text)
-      );
+      const showCaptureResult = async () => {
+        let associationSuggested = false;
+        if (result === "added" && id && payload.bundleId) {
+          try {
+            const events = await getRecentDeliveryEventsCached(100);
+            const current = useNotesStore.getState().notes.find((note) => note.id === id);
+            associationSuggested = !!current &&
+              deliveryCandidatesForCapturedNote(current, events).length === 1;
+          } catch {
+            // 建议是增强能力；活动记录不可用不能吞掉捕获 HUD。
+          }
+        }
+        void api.showCaptureHud(
+          result === "duplicate" ? "duplicate" : "added",
+          previewOf(payload.text),
+          payload.clipboardWarning,
+          associationSuggested
+        );
+      };
+      void showCaptureResult();
+      if (id && isSafeRehearsalText(payload.text)) {
+        const rehearsal = useNotesStore.getState().settings.onboarding;
+        if (
+          rehearsal.rehearsalActive &&
+          rehearsal.rehearsalStep === "capture"
+        ) {
+          useNotesStore.getState().transitionOnboarding({
+            type: "sampleCaptured",
+            noteId: id,
+          });
+        }
+      }
       if (result === "added" && id) {
         void enrichLinkMeta(id);
         captureHistory.push({ id, dataGeneration: currentDataGeneration() });
@@ -853,6 +924,24 @@ export default function App() {
     });
     return () => {
       unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  // 设置 → 关于可随时重跑；只重置演练会话，不清理用户卡片或已完成标记。
+  useEffect(() => {
+    const subscription = listen(SETTINGS_START_SAFE_REHEARSAL, () => {
+      if (isDataOperationLocked()) {
+        tip("warn", "数据操作进行中，暂不能开始演练");
+        return;
+      }
+      useNotesStore.getState().transitionOnboarding({ type: "start" });
+      useUIStore.getState().setPage("notes");
+      useUIStore.getState().setPinned(true);
+      useUIStore.getState().setOpen(true);
+      void api.showPanel();
+    });
+    return () => {
+      void subscription.then((unlisten) => unlisten());
     };
   }, []);
 
@@ -1248,15 +1337,32 @@ export default function App() {
     const invalidated = listen(DATA_CONTEXT_INVALIDATED_EVENT, () => {
       captureHistory.length = 0;
       clearPendingUndo();
+      clearEditorSessionMedia();
+      clearDeliveryRedactionSessions();
+      closeResultReturnDialog();
+      closeResultVerificationDialog();
+      useDeliveryStore.getState().closeDraft();
+    });
+    const activityCleared = listen(DELIVERY_ACTIVITY_CLEARED_EVENT, () => {
+      invalidateDeliveryActivityCache();
+      closeResultReturnDialog();
+      closeResultVerificationDialog();
+      window.dispatchEvent(new Event(RESULT_LINK_CHANGED_EVENT));
     });
     return () => {
       invalidated.then((stop) => stop());
+      activityCleared.then((stop) => stop());
     };
   }, []);
 
   // 文本详情窗的写回通道：编辑保存 / 发送都回到主面板执行
   // （主面板是唯一持久化写入方，详情窗只读展示 + 发事件）
   useEffect(() => {
+    const stopEditorMediaReleases = subscribeEditorMediaReleases((release) => {
+      if (matchesDataGeneration(release.dataGeneration)) {
+        scheduleMediaGc(release.files);
+      }
+    });
     let hydrated = useNotesStore.persist.hasHydrated();
     if (hydrated) runScheduledMediaGc();
     const stopHydrationSweep = useNotesStore.persist.onFinishHydration(() => {
@@ -1282,6 +1388,7 @@ export default function App() {
         text: string;
         images?: string[];
         discardedImages?: string[];
+        sessionId?: string;
         dataGeneration: number;
       }>("toskr://note-edit", (e) => {
         if (
@@ -1298,6 +1405,9 @@ export default function App() {
         useNotesStore
           .getState()
           .updateNoteText(e.payload.id, e.payload.text, e.payload.images);
+        if (e.payload.sessionId) {
+          releaseEditorSessionMedia(e.payload.sessionId);
+        }
         scheduleMediaGc(e.payload.discardedImages ?? [], 0);
         void enrichLinkMeta(e.payload.id);
         tip("ok", "已保存");
@@ -1349,8 +1459,15 @@ export default function App() {
         scheduleMediaGc(e.payload.files, 0);
         }
       ),
+      listen<NoteEditorSessionReleasePayload>(
+        NOTE_EDITOR_SESSION_RELEASE_EVENT,
+        (e) => {
+          releaseEditorSessionMedia(e.payload.targetSessionId);
+        }
+      ),
     ];
     return () => {
+      stopEditorMediaReleases();
       stopHydrationSweep();
       window.removeEventListener(DATA_RUNTIME_READY_EVENT, onRuntimeReady);
       stopGcWatch();
@@ -1360,6 +1477,44 @@ export default function App() {
 
   // 持久化水合后把运行时配置下发给 Rust
   useEffect(() => {
+    const pendingMigrations = new Set<number>();
+    const migrateAiKey = (source: Settings) => {
+      const legacyKey = legacyAiApiKey(source);
+      const generation = currentDataGeneration();
+      if (
+        !legacyKey ||
+        isDataOperationLocked() ||
+        pendingMigrations.has(generation)
+      ) return;
+      pendingMigrations.add(generation);
+      void migrateLegacyAiApiKey(source, {
+        setAiApiKey: api.setAiApiKey,
+        commit: () => {
+          // Keychain IPC 在途时可能切换数据目录或修改其他设置：只移除当前
+          // 仍匹配的旧 secret，绝不把 source 快照覆盖回新 settings。
+          const current = useNotesStore.getState().settings;
+          if (
+            !matchesDataGeneration(generation) ||
+            isDataOperationLocked() ||
+            legacyAiApiKey(current) !== legacyKey
+          ) return;
+          useNotesStore.setState({
+            settings: withoutLegacyAiApiKey(current),
+          });
+        },
+      }).then((result) => {
+        if (
+          result === "failed" &&
+          matchesDataGeneration(generation) &&
+          legacyAiApiKey(useNotesStore.getState().settings) === legacyKey
+        ) {
+          tip(
+            "warn",
+            "AI 密钥迁移到 macOS 钥匙串失败；旧副本仍保留，请到设置中重试"
+          );
+        }
+      }).finally(() => pendingMigrations.delete(generation));
+    };
     // 历史矛盾状态自愈（互斥关系曾在多个版本间反复，持久化里可能留下
     // 任意组合）。收敛顺序固定，结果与「贴边行为二选一」的现行语义一致：
     //  1. 贴边隐藏 + 磁吸同时为真 → 保贴边隐藏（首装默认档，也是菜单里
@@ -1392,10 +1547,14 @@ export default function App() {
       return settings;
     };
     if (useNotesStore.persist.hasHydrated()) {
-      applyRuntimeSettings(applyModeDefaults(heal(useNotesStore.getState().settings)));
+      const settings = applyModeDefaults(heal(useNotesStore.getState().settings));
+      applyRuntimeSettings(settings);
+      migrateAiKey(settings);
     }
     const unsub = useNotesStore.persist.onFinishHydration((state) => {
-      applyRuntimeSettings(applyModeDefaults(heal(state.settings)));
+      const settings = applyModeDefaults(heal(state.settings));
+      applyRuntimeSettings(settings);
+      migrateAiKey(settings);
       // 迁移提交：新数据文件尚不存在（数据还在旧存储）时立即落盘一次
       void api
         .readDataSnapshot()
@@ -1404,7 +1563,43 @@ export default function App() {
         })
         .catch(() => {});
     });
-    return unsub;
+    const stopDataActivity = useDataOperationStore.subscribe((state, previous) => {
+      if (
+        previous.locked &&
+        !state.locked &&
+        useNotesStore.persist.hasHydrated()
+      ) {
+        migrateAiKey(useNotesStore.getState().settings);
+      }
+    });
+    return () => {
+      unsub();
+      stopDataActivity();
+    };
+  }, []);
+
+  // 设置窗显式 set/delete 后清除当前数据目录可能残留的旧 JSON key；数据事务
+  // 期间只记意图，解锁后再写，避免 Keychain 事件穿透目录切换的写闸。
+  useEffect(() => {
+    let clearPending = false;
+    const clearLegacyKey = () => {
+      if (isDataOperationLocked()) {
+        clearPending = true;
+        return;
+      }
+      const current = useNotesStore.getState().settings;
+      clearPending = false;
+      if (!legacyAiApiKey(current)) return;
+      useNotesStore.setState({ settings: withoutLegacyAiApiKey(current) });
+    };
+    const subscription = listen(SETTINGS_AI_KEY_CHANGED, clearLegacyKey);
+    const stopDataActivity = useDataOperationStore.subscribe((state) => {
+      if (clearPending && !state.locked) clearLegacyKey();
+    });
+    return () => {
+      void subscription.then((unlisten) => unlisten());
+      stopDataActivity();
+    };
   }, []);
 
   // 静默检查更新：启动 8 秒后一次 + 之后每日一次（常驻后台、重启频率低，
@@ -1426,7 +1621,8 @@ export default function App() {
   // 必须等水合完成再判断，否则老用户会被默认值误弹（onboarding 默认 done=false）
   useEffect(() => {
     const showForFirstRun = () => {
-      if (useNotesStore.getState().settings.onboarding.done) return;
+      const current = useNotesStore.getState().settings.onboarding;
+      if (current.done || !current.rehearsalActive) return;
       useUIStore.getState().setPinned(true);
       useUIStore.getState().setOpen(true);
       void api.showPanel();
@@ -1733,6 +1929,7 @@ export default function App() {
   // ===== 面板内快捷键（Esc 分层 + 全键盘导航） =====
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (useDeliveryStore.getState().open) return;
       if (isDataOperationLocked()) {
         e.preventDefault();
         e.stopPropagation();
@@ -2849,7 +3046,9 @@ export default function App() {
                   </>
                 ) : (
               <ScrollArea className="min-h-0 flex-1 px-2">
-                {!onboarding.done && <OnboardingCard />}
+                {(!onboarding.done || onboarding.rehearsalActive) && (
+                  <SafeDeliveryRehearsal />
+                )}
                 {notes.length === 0 ? (
                   onboarding.done ? (
                     <EmptyState
@@ -2928,12 +3127,15 @@ export default function App() {
                 </PageSlide>
               </div>
 
-              {/* 横栏形态寸土寸金：批量操作条不占通栏（双击/⌘⏎/右键仍可发送） */}
-              {!horizontalBar && <SelectionBar />}
+              {/* 横栏以右下紧凑浮条保留显式预检与模式选择，不占内容通栏。 */}
+              <SelectionBar compact={horizontalBar} />
               {/* 横栏形态：输入通栏默认不占空间，工具栏 + 按钮唤出 */}
               {page === "notes" && (!horizontalBar || barDraftOpen) && <DraftInput />}
 
               <PreviewOverlay />
+              <PreflightComposer horizontal={horizontalBar} />
+              <ResultLinkDialog />
+              <ResultVerificationDialog />
               <UpdateDialog />
               {showShortcuts && <ShortcutHelp />}
               {/* HUD 是独立无焦点窗口，屏幕阅读器听不到——tip() 文案镜像到此播报 */}
@@ -2978,40 +3180,6 @@ function ClipLoadMore({
       className="py-1 text-center text-label text-muted-foreground/50"
     >
       还有 {remaining} 条…
-    </div>
-  );
-}
-
-function OnboardingCard() {
-  const onboarding = useNotesStore((s) => s.settings.onboarding);
-  const axOk = useUIStore((s) => s.permissionAx);
-
-  const Step = ({ done, children }: { done: boolean; children: React.ReactNode }) => (
-    <li className="flex items-start gap-1.5">
-      {done ? (
-        <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" />
-      ) : (
-        <Circle className="mt-0.5 size-3.5 shrink-0 text-muted-foreground/40" />
-      )}
-      <span className={cn("text-label leading-normal", done && "text-muted-foreground line-through")}>
-        {children}
-        {done && <span className="sr-only">，已完成</span>}
-      </span>
-    </li>
-  );
-
-  return (
-    <div className="mx-1 mb-2 mt-1 rounded-xl border border-foreground/10 bg-surface-raised/90 p-3 elevation-3">
-      <p className="mb-1.5 text-body font-semibold">三步上手</p>
-      <ul aria-live="polite" className="flex flex-col gap-1">
-        <Step done={axOk}>在系统设置授权「辅助功能」</Step>
-        <Step done={onboarding.captured}>
-          去任意应用选中一段文字，连按两次 <Kbd>⇧</Kbd> 捕获
-        </Step>
-        <Step done={onboarding.sent}>
-          勾选卡片，按 <Kbd>⌘⏎</Kbd> 发送回你的 AI 对话
-        </Step>
-      </ul>
     </div>
   );
 }

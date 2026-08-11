@@ -40,14 +40,17 @@ export function SimpleSelect<T extends string>({
   return (
     <SimpleMenu
       align={align}
+      menuRole="listbox"
+      menuAriaLabel={ariaLabel}
       className={cn("block", className)}
       menuClassName="max-h-64 w-full min-w-full overflow-y-auto"
-      trigger={({ open, toggle }) => (
+      trigger={({ open, toggle, controls }) => (
         <button
           type="button"
           aria-label={ariaLabel}
           aria-haspopup="listbox"
           aria-expanded={open}
+          aria-controls={controls}
           disabled={disabled}
           onClick={toggle}
           className={cn(
@@ -75,6 +78,7 @@ export function SimpleSelect<T extends string>({
           {options.map((option) => (
             <SimpleMenuItem
               key={option.value}
+              selected={option.value === value}
               onClick={() => {
                 close();
                 if (option.value !== value) onChange(option.value);

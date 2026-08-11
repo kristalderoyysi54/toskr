@@ -50,7 +50,7 @@ pub fn set_clip_watch(app: AppHandle, enabled: bool) {
 /// 图片原尺寸预览（自建预览窗；面板 320-520pt 放不下大图）。
 /// 组合卡传全部图片，`index` 为起始张（预览窗内 ←/→ 翻看）。
 /// `note_id`/`note_text`：所属笔记的 id 与当前文字（图片卡详情内联编辑
-/// 备注用；不传则预览窗不显示编辑条）。
+/// 备注用；不传则预览窗不显示编辑条）；`edit` 为 true 时直接进入编辑态。
 #[tauri::command]
 pub fn quick_look(
     app: AppHandle,
@@ -59,6 +59,7 @@ pub fn quick_look(
     note_id: Option<String>,
     note_text: Option<String>,
     data_generation: Option<u64>,
+    edit: bool,
 ) {
     crate::window::preview_image(
         &app,
@@ -67,6 +68,7 @@ pub fn quick_look(
         note_id,
         note_text,
         data_generation,
+        edit,
     );
 }
 
@@ -155,6 +157,25 @@ pub async fn send_delivery(
     request: crate::delivery::SendDeliveryRequest,
 ) -> Result<crate::delivery::SendDeliveryResult, String> {
     run_delivery(app, request).await
+}
+
+/// 完全本地的确定性文本扫描。大文本放入 blocking pool，避免占用 WebView/UI 线程；
+/// 诊断摘要由 privacy 模块生成，永不包含正文或命中原值。
+#[tauri::command]
+pub async fn scan_sensitive_text(
+    app: AppHandle,
+    request: crate::privacy::ScanSensitiveRequest,
+) -> Result<crate::privacy::ScanSensitiveResult, String> {
+    let started = std::time::Instant::now();
+    let result =
+        tauri::async_runtime::spawn_blocking(move || crate::privacy::scan_sensitive_text(request))
+            .await
+            .map_err(|error| format!("本地隐私扫描任务失败：{error}"))?;
+    crate::diag::push(
+        &app,
+        crate::privacy::diagnostic_summary(&result, started.elapsed()),
+    );
+    Ok(result)
 }
 
 /// 旧调用兼容层：只组装新请求并委托 `send_delivery`，不保留第二套发送逻辑。
@@ -367,13 +388,21 @@ fn on_panel_hotkey(app: &AppHandle) {
 
 /// 下发伴随停靠配置。`side`："right"（默认，贴目标窗口右缘）| "left"（贴左缘）。
 /// 关闭时必须解除接管（停跟踪器 + 复位 docked）——docked 残留会把贴边隐藏
-/// 与拖拽入坞一起静默卡死。
+/// 与拖拽入坞一起静默卡死；开启时立即刷新已显示面板，不能等下一次焦点事件。
+/// 启动水合期间各项设置并发下发，若这里只换状态，面板可能已经按独立模式落在
+/// 另一块屏幕，之后一直沿用旧位置。
 #[tauri::command]
 pub fn set_companion_config(app: AppHandle, enabled: bool, apps: Vec<String>, side: String) {
     let state = app.state::<AppState>();
     let side = if side == "left" { 1u8 } else { 0 };
-    *state.companion.lock().unwrap() = crate::state::CompanionConfig { enabled, apps, side };
-    if !enabled {
+    *state.companion.lock().unwrap() = crate::state::CompanionConfig {
+        enabled,
+        apps,
+        side,
+    };
+    if enabled {
+        crate::window::refresh_companion_takeover(&app);
+    } else {
         crate::window::release_companion_takeover(&app);
     }
 }
@@ -469,22 +498,69 @@ pub fn set_panel_vertical(app: AppHandle, top_offset: f64, height: Option<f64>) 
 }
 
 /// 前端入库裁决后回调展示捕获 HUD（kind: "added" | "duplicate"）。
+fn capture_hud_feedback(
+    kind: &str,
+    preview: String,
+    warning: Option<String>,
+    association_suggested: bool,
+) -> (&'static str, String, bool) {
+    let (capture_kind, undoable) = if kind == "duplicate" {
+        ("duplicate", false)
+    } else {
+        ("added", true)
+    };
+    match warning {
+        // warn 在隐身模式也必须可见，因此绝不能携带用户捕获正文。
+        Some(warning) => (
+            "warn",
+            format!(
+                "{} · {warning}",
+                if capture_kind == "duplicate" {
+                    "内容已存在"
+                } else {
+                    "已捕获"
+                }
+            ),
+            undoable,
+        ),
+        None => (
+            capture_kind,
+            if association_suggested && capture_kind == "added" {
+                format!("{preview}\n可关联到最近一次投递，请在卡片右键确认")
+            } else {
+                preview
+            },
+            undoable,
+        ),
+    }
+}
+
 #[tauri::command]
-pub fn show_capture_hud(app: AppHandle, kind: String, preview: String) {
-    let kind = if kind == "duplicate" { "duplicate" } else { "added" };
+pub fn show_capture_hud(
+    app: AppHandle,
+    kind: String,
+    preview: String,
+    warning: Option<String>,
+    association_suggested: bool,
+) {
+    let (hud_kind, text, undoable) =
+        capture_hud_feedback(&kind, preview, warning, association_suggested);
+    let capture_kind = if kind == "duplicate" {
+        "duplicate"
+    } else {
+        "added"
+    };
     // 前端去重裁决的回执也进诊断：与「捕获:」行拼起来即是完整链路
-    crate::diag::push(&app, format!("入库回执: {kind}"));
+    crate::diag::push(&app, format!("入库回执: {capture_kind}"));
     // 捕获动作轻响一声（系统音 Pop；重复内容同样响——动作要有听觉回执；
     // 隐身模式/开关关闭时静音）
     let state = app.state::<AppState>();
-    if state.sound_enabled.load(Ordering::Relaxed)
-        && !state.stealth.load(Ordering::SeqCst)
-    {
+    if state.sound_enabled.load(Ordering::Relaxed) && !state.stealth.load(Ordering::SeqCst) {
         let _ = std::process::Command::new("afplay")
             .arg("/System/Library/Sounds/Pop.aiff")
             .spawn();
     }
-    crate::window::show_hud(&app, kind, preview, kind == "added", false, None);
+    crate::window::show_hud(&app, hud_kind, text, undoable, false, None);
 }
 
 /// 双击触发行为下发：仅捕获 / 智能（无选中时开关面板）。
@@ -637,8 +713,8 @@ pub fn app_icon(app: AppHandle, bundle_id: String) -> Option<AppIconInfo> {
     let pair = match cached {
         Some(hit) => hit,
         None => {
-            let fetched = crate::focus::app_icon_png_base64(&bundle_id)
-                .map(|i| (i.data_url, i.color));
+            let fetched =
+                crate::focus::app_icon_png_base64(&bundle_id).map(|i| (i.data_url, i.color));
             // 只缓存成功结果：瞬时失败（应用恰好不在运行等）负缓存进 Map
             // 会让该 bundle 整个会话再也取不到图标——目标栏/卡片 logo 一起消失
             if fetched.is_some() {
@@ -664,8 +740,7 @@ pub struct AppListInfo {
 
 #[tauri::command]
 pub fn app_list_info(bundle_id: String) -> Option<AppListInfo> {
-    crate::focus::app_list_info(&bundle_id)
-        .map(|(name, icon_url)| AppListInfo { name, icon_url })
+    crate::focus::app_list_info(&bundle_id).map(|(name, icon_url)| AppListInfo { name, icon_url })
 }
 
 /// 从 .app 路径读 bundle id（设置里「选择应用」添加用）。
@@ -723,12 +798,7 @@ pub fn set_vibrancy(app: AppHandle, enabled: bool, material: String) {
         // state=Active：强制常亮材质，否则窗口失焦时系统会切到 inactive 外观，
         // 变成更实的灰底，通透感消失。
         let _ = clear_vibrancy(&window);
-        let _ = apply_vibrancy(
-            &window,
-            mat,
-            Some(NSVisualEffectState::Active),
-            Some(14.0),
-        );
+        let _ = apply_vibrancy(&window, mat, Some(NSVisualEffectState::Active), Some(14.0));
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -776,6 +846,42 @@ pub fn get_diagnostics(app: AppHandle) -> Vec<crate::diag::DiagEntry> {
     crate::diag::entries(&app)
 }
 
+#[tauri::command]
+pub async fn append_delivery_event(
+    app: AppHandle,
+    event: crate::activity::DeliveryEvent,
+    retention_days: u16,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::activity::append(&app, event, retention_days)
+    })
+        .await
+        .map_err(|error| format!("后台投递活动写入失败：{error}"))?
+}
+
+#[tauri::command]
+pub async fn get_recent_delivery_events(
+    app: AppHandle,
+    limit: usize,
+    retention_days: u16,
+) -> Result<Vec<crate::activity::DeliveryEvent>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::activity::recent(&app, limit, retention_days)
+    })
+        .await
+        .map_err(|error| format!("后台投递活动读取失败：{error}"))?
+}
+
+#[tauri::command]
+pub async fn clear_delivery_events(app: AppHandle) -> Result<(), String> {
+    let worker_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::activity::clear(&worker_app))
+        .await
+        .map_err(|error| format!("后台投递活动清除失败：{error}"))??;
+    let _ = app.emit(crate::events::DELIVERY_ACTIVITY_CLEARED_EVENT, ());
+    Ok(())
+}
+
 // ===== 存储（可自定义数据文件夹 + 图片附件） =====
 
 #[derive(serde::Serialize)]
@@ -785,7 +891,9 @@ pub struct BackupImportPrepared {
     pub operation: crate::data_integrity::DataOperationResult,
 }
 
-fn blocking_data_failure(error: impl std::fmt::Display) -> crate::data_integrity::DataOperationFailure {
+fn blocking_data_failure(
+    error: impl std::fmt::Display,
+) -> crate::data_integrity::DataOperationFailure {
     crate::data_integrity::DataOperationFailure {
         code: crate::data_integrity::DataOperationFailureCode::ReadFailed,
         message: format!("后台文件任务失败：{error}"),
@@ -814,22 +922,18 @@ pub fn get_data_location_status(app: AppHandle) -> crate::storage::DataLocationS
 pub async fn retry_storage_initialization(
     app: AppHandle,
 ) -> Result<crate::storage::DataLocationStatus, crate::data_integrity::DataOperationFailure> {
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::storage::retry_storage_initialization(&app)
-    })
-    .await
-    .map_err(blocking_data_failure)?
+    tauri::async_runtime::spawn_blocking(move || crate::storage::retry_storage_initialization(&app))
+        .await
+        .map_err(blocking_data_failure)?
 }
 
 #[tauri::command]
 pub async fn load_default_from_recovery(
     app: AppHandle,
 ) -> Result<crate::storage::DataLocationStatus, crate::data_integrity::DataOperationFailure> {
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::storage::load_default_from_recovery(&app)
-    })
-    .await
-    .map_err(blocking_data_failure)?
+    tauri::async_runtime::spawn_blocking(move || crate::storage::load_default_from_recovery(&app))
+        .await
+        .map_err(blocking_data_failure)?
 }
 
 #[tauri::command]
@@ -848,8 +952,10 @@ pub fn mark_data_conflict(
 pub async fn inspect_data_location(
     app: AppHandle,
     path: String,
-) -> Result<crate::data_integrity::DataLocationInspection, crate::data_integrity::DataOperationFailure>
-{
+) -> Result<
+    crate::data_integrity::DataLocationInspection,
+    crate::data_integrity::DataOperationFailure,
+> {
     tauri::async_runtime::spawn_blocking(move || {
         crate::storage::inspect_data_location(&app, std::path::Path::new(&path))
     })
@@ -916,8 +1022,7 @@ pub async fn rollback_data_operation(
 #[tauri::command]
 pub async fn read_data_snapshot(
     app: AppHandle,
-) -> Result<crate::data_integrity::DataFileSnapshot, crate::data_integrity::DataOperationFailure>
-{
+) -> Result<crate::data_integrity::DataFileSnapshot, crate::data_integrity::DataOperationFailure> {
     tauri::async_runtime::spawn_blocking(move || crate::storage::read_data_snapshot(&app))
         .await
         .map_err(blocking_data_failure)?
@@ -928,8 +1033,7 @@ pub async fn write_data_if_current(
     app: AppHandle,
     content: String,
     expected_revision: String,
-) -> Result<crate::data_integrity::DataFileSnapshot, crate::data_integrity::DataOperationFailure>
-{
+) -> Result<crate::data_integrity::DataFileSnapshot, crate::data_integrity::DataOperationFailure> {
     tauri::async_runtime::spawn_blocking(move || {
         crate::storage::write_data_if_current(&app, &content, &expected_revision)
     })
@@ -949,12 +1053,10 @@ pub async fn image_data_url(app: AppHandle, name: String) -> Option<String> {
 /// 卡片缩略图 data URL（首次生成落盘缓存；解码走阻塞线程池不占 UI）。
 #[tauri::command]
 pub async fn image_thumb_url(app: AppHandle, name: String) -> Option<String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::storage::image_thumb_data_url(&app, &name)
-    })
-    .await
-    .ok()
-    .flatten()
+    tauri::async_runtime::spawn_blocking(move || crate::storage::image_thumb_data_url(&app, &name))
+        .await
+        .ok()
+        .flatten()
 }
 
 #[tauri::command]
@@ -1123,11 +1225,46 @@ pub async fn run_media_gc(
     state_json: String,
     now_ms: u64,
     expected_revision: String,
-) -> Result<crate::data_integrity::MediaGcResult, crate::data_integrity::DataOperationFailure>
-{
+) -> Result<crate::data_integrity::MediaGcResult, crate::data_integrity::DataOperationFailure> {
     tauri::async_runtime::spawn_blocking(move || {
         crate::storage::run_media_gc(&app, &state_json, now_ms, &expected_revision)
     })
     .await
     .map_err(blocking_data_failure)?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::capture_hud_feedback;
+
+    #[test]
+    fn clipboard_restore_warning_stays_visible_without_losing_capture_undo() {
+        let (kind, text, undoable) = capture_hud_feedback(
+            "added",
+            "捕获内容".into(),
+            Some("原剪贴板仅恢复了可读内容".into()),
+            true,
+        );
+        assert_eq!(kind, "warn");
+        assert_eq!(text, "已捕获 · 原剪贴板仅恢复了可读内容");
+        assert!(!text.contains("捕获内容"));
+        assert!(undoable);
+
+        let (kind, text, undoable) = capture_hud_feedback(
+            "duplicate",
+            "捕获内容".into(),
+            Some("原剪贴板恢复失败".into()),
+            true,
+        );
+        assert_eq!(kind, "warn");
+        assert_eq!(text, "内容已存在 · 原剪贴板恢复失败");
+        assert!(!text.contains("捕获内容"));
+        assert!(!undoable);
+
+        let (kind, text, undoable) =
+            capture_hud_feedback("added", "捕获内容".into(), None, true);
+        assert_eq!(kind, "added");
+        assert_eq!(text, "捕获内容\n可关联到最近一次投递，请在卡片右键确认");
+        assert!(undoable);
+    }
 }

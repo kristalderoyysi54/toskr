@@ -54,7 +54,7 @@ export default function HudView() {
 
   return (
     <MotionConfig reducedMotion="user">
-      <div className="relative flex h-screen w-screen items-center overflow-hidden bg-transparent px-3">
+      <div className="relative flex h-screen w-screen items-center overflow-hidden rounded-xl bg-foreground/75 px-3 dark:bg-transparent">
         {/* token-exception: rounded-[14px] 对齐 Rust 原生 vibrancy 圆角（apply_vibrancy radius=14） */}
         <span
           aria-hidden

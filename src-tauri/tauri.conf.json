@@ -30,8 +30,8 @@
       {
         "label": "settings",
         "title": "Toskr 设置",
-        "width": 680,
-        "height": 540,
+        "width": 1040,
+        "height": 720,
         "minWidth": 560,
         "minHeight": 420,
         "visible": false,

@@ -1,0 +1,411 @@
+import { renderToStaticMarkup } from "react-dom/server";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/store/persistStorage", () => ({
+  tauriStateStorage: {
+    getItem: vi.fn(async () => null),
+    setItem: vi.fn(async () => undefined),
+    removeItem: vi.fn(async () => undefined),
+  },
+}));
+vi.mock("@/lib/tauri", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/tauri")>();
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      appIcon: vi.fn(async () => null),
+      imageThumbUrl: vi.fn(async () => null),
+    },
+  };
+});
+
+import { PreflightComposer } from "./PreflightComposer";
+import { TargetLensBar } from "./TargetLensBar";
+import { buildDeliveryDraft } from "@/lib/delivery/buildDraft";
+import {
+  nextDeliveryDraftRevision,
+  resetDeliveryDraftSession,
+} from "@/lib/delivery/executeDraft";
+import { currentTargetProfileResolution } from "@/lib/currentTargetProfile";
+import { currentDataGeneration } from "@/lib/dataGeneration";
+import {
+  resetDeliveryStore,
+  useDeliveryStore,
+} from "@/store/deliveryStore";
+import {
+  defaultSettings,
+  INBOX_ID,
+  TASK_INBOX_ID,
+  useNotesStore,
+} from "@/store/notesStore";
+import {
+  applyTargetEvent,
+  resetTargetState,
+  useTargetStore,
+} from "@/store/targetStore";
+import { useUIStore } from "@/store/uiStore";
+import type { TargetSnapshot } from "@/lib/tauri";
+
+const target: TargetSnapshot = {
+  token: "target-token",
+  pid: 42,
+  bundleId: "com.openai.codex",
+  appName: "Codex",
+  launchedAtMs: 100,
+  capturedAtMs: 200,
+  revision: 3,
+  ready: true,
+  reason: null,
+  windowId: null,
+};
+
+function syncServerSnapshots() {
+  Object.assign(useDeliveryStore.getInitialState(), useDeliveryStore.getState());
+  Object.assign(useNotesStore.getInitialState(), useNotesStore.getState());
+  Object.assign(useTargetStore.getInitialState(), useTargetStore.getState());
+  Object.assign(useUIStore.getInitialState(), useUIStore.getState());
+}
+
+describe("PreflightComposer", () => {
+  beforeEach(() => {
+    resetDeliveryDraftSession();
+    resetDeliveryStore();
+    resetTargetState();
+    useNotesStore.setState({
+      sections: [{ id: INBOX_ID, name: "收件箱" }],
+      notes: [],
+      tasks: [],
+      taskSections: [{ id: TASK_INBOX_ID, name: "收集箱" }],
+      checkedIds: [],
+      settings: defaultSettings(),
+      undoStack: [],
+    });
+    useUIStore.setState({ open: true, pinned: false });
+    applyTargetEvent(target);
+  });
+
+  it("VoiceOver 可读目标、回车、warning、正文与按钮状态", () => {
+    const id = useNotesStore.getState().addNote("需要发送的正文").id!;
+    useNotesStore.getState().setChecked([id]);
+    const revision = nextDeliveryDraftRevision();
+    const draft = buildDeliveryDraft(
+      {
+        id: "preflight-a11y",
+        revision,
+        createdAtMs: 1,
+        sourceKind: "note",
+        sourceItemIds: [id],
+      },
+      {
+        notes: useNotesStore.getState().notes,
+        tasks: [],
+        promptSnippets: useNotesStore.getState().settings.promptSnippets,
+        checkedItemIds: [id],
+        targetSnapshot: useTargetStore.getState().snapshot,
+        profileResolution: currentTargetProfileResolution(),
+        panelPinned: false,
+        dataGeneration: currentDataGeneration(),
+        firewallEnabled: true,
+        firewallDisabledWarnCategories:
+          useNotesStore.getState().settings.firewallDisabledWarnCategories,
+      }
+    );
+    useDeliveryStore.getState().openDraft({
+      ...draft,
+      firewallStatus: "ready",
+      enterPolicy: "confirm",
+      enterDecisionConfirmed: false,
+      pressEnter: false,
+      warnings: ["source-missing"],
+    });
+    useTargetStore.setState({ status: "blocked", reason: "target_exited" });
+    syncServerSnapshots();
+
+    const html = renderToStaticMarkup(<PreflightComposer />);
+
+    expect(html).toContain('role="dialog"');
+    expect(html).toContain('aria-modal="true"');
+    expect(html).toContain("Codex");
+    expect(html).toContain("粘贴后动作");
+    expect(html).toContain("本次尚未确认");
+    expect(html).toContain("本次不按回车");
+    expect(html).toContain("本次粘贴后按回车");
+    expect(html).toContain('type="radio"');
+    expect(html).toContain('aria-label="投递警告"');
+    expect(html).toContain("部分来源已不存在");
+    expect(html).toContain('aria-label="最终投递内容"');
+    expect(html).toContain("需要发送的正文");
+    expect(html).toContain('aria-describedby="preflight-status"');
+    expect(html).toContain("确认发送");
+    expect(html).toContain("disabled");
+  });
+
+  it("横栏在同一浮层并排呈现概览与最终内容", () => {
+    const id = useNotesStore.getState().addNote("横栏正文").id!;
+    useNotesStore.getState().setChecked([id]);
+    const revision = nextDeliveryDraftRevision();
+    useDeliveryStore.getState().openDraft({
+      ...buildDeliveryDraft(
+        {
+          id: "horizontal",
+          revision,
+          createdAtMs: 1,
+          sourceKind: "note",
+          sourceItemIds: [id],
+        },
+        {
+          notes: useNotesStore.getState().notes,
+          tasks: [],
+          promptSnippets: useNotesStore.getState().settings.promptSnippets,
+          checkedItemIds: [id],
+          targetSnapshot: useTargetStore.getState().snapshot,
+          profileResolution: currentTargetProfileResolution(),
+          panelPinned: false,
+          dataGeneration: currentDataGeneration(),
+          firewallEnabled: true,
+          firewallDisabledWarnCategories:
+            useNotesStore.getState().settings.firewallDisabledWarnCategories,
+        }
+      ),
+      firewallStatus: "ready",
+    });
+    syncServerSnapshots();
+
+    const html = renderToStaticMarkup(<PreflightComposer horizontal />);
+    expect(html).toContain("grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]");
+    expect(html).toContain('aria-label="投递概览"');
+    expect(html).toContain('aria-label="最终投递内容"');
+    expect(html).not.toContain('role="tablist"');
+  });
+
+  it("安全演练预检明确展示 no-enter 锁且不提供回车单选项", () => {
+    const id = useNotesStore.getState().addNote("安全演练正文").id!;
+    useNotesStore.getState().setChecked([id]);
+    const built = buildDeliveryDraft(
+      {
+        id: "safe-rehearsal-ui",
+        revision: nextDeliveryDraftRevision(),
+        createdAtMs: 1,
+        sourceKind: "note",
+        sourceItemIds: [id],
+      },
+      {
+        notes: useNotesStore.getState().notes,
+        tasks: [],
+        promptSnippets: useNotesStore.getState().settings.promptSnippets,
+        checkedItemIds: [id],
+        targetSnapshot: useTargetStore.getState().snapshot,
+        profileResolution: currentTargetProfileResolution(),
+        panelPinned: false,
+        dataGeneration: currentDataGeneration(),
+        firewallEnabled: true,
+        firewallDisabledWarnCategories: [],
+      }
+    );
+    useDeliveryStore.getState().openDraft({
+      ...built,
+      safeRehearsal: true,
+      firewallStatus: "ready",
+      enterPolicy: "confirm",
+      enterDecisionConfirmed: true,
+      pressEnter: false,
+      keepPanel: true,
+    });
+    syncServerSnapshots();
+
+    const html = renderToStaticMarkup(<PreflightComposer />);
+
+    expect(html).toContain("安全投递演练预检");
+    expect(html).toContain("演练安全锁：只粘贴，不按回车");
+    expect(html).toContain("安全粘贴");
+    expect(html).not.toContain('name="preflight-enter-decision"');
+  });
+
+  it("已证明零粘贴的目标失效允许从同一 Draft 重新识别并重试", () => {
+    const id = useNotesStore.getState().addNote("保留的本次修改").id!;
+    useNotesStore.getState().setChecked([id]);
+    useDeliveryStore.getState().openDraft({
+      ...buildDeliveryDraft(
+        {
+          id: "safe-retry",
+          revision: nextDeliveryDraftRevision(),
+          createdAtMs: 1,
+          sourceKind: "note",
+          sourceItemIds: [id],
+        },
+        {
+          notes: useNotesStore.getState().notes,
+          tasks: [],
+          promptSnippets: useNotesStore.getState().settings.promptSnippets,
+          checkedItemIds: [id],
+          targetSnapshot: useTargetStore.getState().snapshot,
+          profileResolution: currentTargetProfileResolution(),
+          panelPinned: false,
+          dataGeneration: currentDataGeneration(),
+          firewallEnabled: true,
+          firewallDisabledWarnCategories:
+            useNotesStore.getState().settings.firewallDisabledWarnCategories,
+        }
+      ),
+      firewallStatus: "ready",
+    });
+    useDeliveryStore.getState().setSafeRetryPending(true);
+    useTargetStore.setState({ status: "blocked", reason: "refresh_failed" });
+    syncServerSnapshots();
+
+    const html = renderToStaticMarkup(<PreflightComposer />);
+    const recoveryButton = html.match(
+      /<button[^>]*aria-describedby="preflight-status"[^>]*>[\s\S]*?<\/button>/
+    )?.[0];
+
+    expect(recoveryButton).toContain("重新识别并重试");
+    expect(recoveryButton).not.toMatch(/\sdisabled(?:=|\s|>)/);
+  });
+
+  it("展示 Firewall 分类、遮罩、处理动作与高风险二次确认", () => {
+    const id = useNotesStore.getState().addNote("fake_phase08_token").id!;
+    useNotesStore.getState().setChecked([id]);
+    const built = buildDeliveryDraft(
+      {
+        id: "privacy-ui",
+        revision: nextDeliveryDraftRevision(),
+        createdAtMs: 1,
+        sourceKind: "note",
+        sourceItemIds: [id],
+      },
+      {
+        notes: useNotesStore.getState().notes,
+        tasks: [],
+        promptSnippets: useNotesStore.getState().settings.promptSnippets,
+        checkedItemIds: [id],
+        targetSnapshot: useTargetStore.getState().snapshot,
+        profileResolution: currentTargetProfileResolution(),
+        panelPinned: false,
+        dataGeneration: currentDataGeneration(),
+        firewallEnabled: true,
+        firewallDisabledWarnCategories: [],
+      }
+    );
+    useDeliveryStore.getState().openDraft({
+      ...built,
+      privacyPolicy: "allowRaw",
+      firewallStatus: "ready",
+      findings: [{
+        id: "api-key-ui",
+        category: "apiKey",
+        severity: "block",
+        startUtf16: 0,
+        endUtf16: built.finalText.length,
+        maskedPreview: "fa•••en",
+        suggestedPlaceholder: "[API_KEY]",
+        ruleId: "test.api-key",
+      }],
+      pressEnter: false,
+    });
+    syncServerSnapshots();
+
+    const html = renderToStaticMarkup(<PreflightComposer />);
+    expect(html).toContain('aria-label="本地隐私检查"');
+    expect(html).toContain("API 密钥 · 高风险 ×1");
+    expect(html).toContain("fa•••en");
+    expect(html).toContain("替换此项");
+    expect(html).toContain("替换同类");
+    expect(html).toContain("替换所有建议项");
+    expect(html).toContain("本次保留原文");
+    expect(html).toContain("再次确认保留高风险原文");
+  });
+
+  it("调用前可见 provider、模型、数据范围与显式转换入口", () => {
+    useNotesStore.setState((state) => ({
+      settings: {
+        ...state.settings,
+        aiEnabled: true,
+        aiBaseUrl: "https://api.deepseek.com",
+        aiModel: "deepseek-chat",
+      },
+    }));
+    const id = useNotesStore.getState().addNote("四字正文").id!;
+    useNotesStore.getState().setChecked([id]);
+    const built = buildDeliveryDraft(
+      {
+        id: "ai-transform-ui",
+        revision: nextDeliveryDraftRevision(),
+        createdAtMs: 1,
+        sourceKind: "note",
+        sourceItemIds: [id],
+      },
+      {
+        notes: useNotesStore.getState().notes,
+        tasks: [],
+        promptSnippets: useNotesStore.getState().settings.promptSnippets,
+        checkedItemIds: [id],
+        targetSnapshot: useTargetStore.getState().snapshot,
+        profileResolution: currentTargetProfileResolution(),
+        panelPinned: false,
+        dataGeneration: currentDataGeneration(),
+        firewallEnabled: true,
+        firewallDisabledWarnCategories: [],
+      }
+    );
+    useDeliveryStore.getState().openDraft({ ...built, firewallStatus: "ready" });
+    syncServerSnapshots();
+
+    const html = renderToStaticMarkup(<PreflightComposer />);
+    expect(html).toContain('aria-label="AI 显式转换"');
+    expect(html).toContain("DeepSeek");
+    expect(html).toContain("deepseek-chat");
+    expect(html).toContain(`${built.finalText.length} 字符`);
+    expect(html).toContain("图片附件不会发送");
+    expect(html).toContain("生成预览");
+  });
+
+  it("50,000 条历史下 Target Lens 与 Preflight 不渲染整份历史", () => {
+    const notes = Array.from({ length: 50_000 }, (_, index) => ({
+      id: `history-${index}`,
+      text: `历史正文 ${index}`,
+      sectionId: INBOX_ID,
+      done: false,
+      createdAt: index,
+    }));
+    const source = notes.at(-1)!;
+    useNotesStore.setState({ notes, checkedIds: [source.id] });
+    const built = buildDeliveryDraft(
+      {
+        id: "history-scale",
+        revision: nextDeliveryDraftRevision(),
+        createdAtMs: 1,
+        sourceKind: "note",
+        sourceItemIds: [source.id],
+      },
+      {
+        notes,
+        tasks: [],
+        promptSnippets: useNotesStore.getState().settings.promptSnippets,
+        checkedItemIds: [source.id],
+        targetSnapshot: useTargetStore.getState().snapshot,
+        profileResolution: currentTargetProfileResolution(),
+        panelPinned: false,
+        dataGeneration: currentDataGeneration(),
+        firewallEnabled: true,
+        firewallDisabledWarnCategories: [],
+      }
+    );
+    useDeliveryStore.getState().openDraft({ ...built, firewallStatus: "ready" });
+    syncServerSnapshots();
+    const startedAt = performance.now();
+
+    const html = renderToStaticMarkup(
+      <>
+        <TargetLensBar />
+        <PreflightComposer />
+      </>
+    );
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(html).toContain(source.text);
+    expect(html).toContain("投递预检");
+    expect(html.length).toBeLessThan(150_000);
+    expect(elapsedMs).toBeLessThan(2_500);
+  });
+});

@@ -1,26 +1,57 @@
-import { AppWindow, ChevronDown, RefreshCw } from "lucide-react";
+import { emitTo } from "@tauri-apps/api/event";
+import { ChevronDown, History, RefreshCw } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 
+import { ApplicationIcon } from "@/components/ApplicationIcon";
+import { TargetProfileQuickSwitch } from "@/components/TargetProfileQuickSwitch";
+import { RecentDeliveryDrawer } from "@/components/RecentDeliveryDrawer";
 import { IconButton } from "@/components/ui/icon-button";
-import { SimpleSelect } from "@/components/SimpleSelect";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { api, type TargetSnapshot } from "@/lib/tauri";
+import {
+  applySettingsPatch,
+  SETTINGS_SECTION,
+} from "@/lib/settingsSync";
+import { tip } from "@/lib/tip";
+import {
+  canPermanentlyAssignTargetProfileOverride,
+  DELIVERY_FORMAT_LABEL,
+  ENTER_POLICY_STATUS_LABEL,
+  INITIAL_TARGET_LENS_DISCLOSURE_STATE,
+  shouldClearOpenQuickSwitchOverride,
+  targetLensDetailsExpanded,
+  targetLensDisclosureStateAfter,
+  type QuickProfileOption,
+} from "@/lib/targetLens";
 import { cn } from "@/lib/utils";
 import {
+  assignTargetProfileBundle,
   resolveTargetProfile,
   type DeliveryFormat,
   type EnterPolicy,
-  type PrivacyPolicy,
+  type PromptGroup,
+  type TargetProfile,
   type TargetProfileResolutionSource,
 } from "@/lib/targetProfiles";
 import { useNotesStore } from "@/store/notesStore";
 import {
+  clearTargetProfileOverride,
   confirmTargetProfileOverride,
   setTargetProfileOverride,
   refreshTarget,
+  targetProfileIdentity,
   targetReasonLabel,
   targetStatusLabel,
   useTargetStore,
@@ -39,29 +70,89 @@ export interface TargetLensViewProps {
   profileSource: TargetProfileResolutionSource;
   defaultFormat: DeliveryFormat;
   enterPolicy: EnterPolicy;
-  privacyPolicy: PrivacyPolicy;
-  duplicateBundleProfileIds: string[];
+  keepPanel: boolean;
+  privacyCapabilityActive: boolean;
+  profileId: string;
   profileOverrideNeedsConfirmation: boolean;
   profileOverrideId: string | null;
-  profileOptions: { id: string; name: string }[];
+  profileOverrideName: string | null;
+  automaticProfileName: string;
+  quickProfiles: QuickProfileOption[];
+  quickSwitchOpen: boolean;
+  canMakePermanent: boolean;
   onRefresh: () => void;
   onConfirmProfile: () => void;
   onSelectProfile: (profileId: string | null) => void;
-  onManageProfiles: () => void;
+  onQuickSwitchOpenChange: (open: boolean) => void;
+  onMakePermanent: () => void;
+  onEditCurrentProfile: () => void;
+  onOpenActivity: () => void;
+  activityButtonRef?: React.RefObject<HTMLButtonElement>;
 }
 
-const ENTER_LABEL: Record<EnterPolicy, string> = {
-  never: "关闭",
-  confirm: "发送前确认",
-  allow: "允许",
-};
-// 脱敏/原文确认的执行链由后续隐私阶段接入；接入前必须标注「未生效」，
-// 禁止让用户误信当前发送已有脱敏或确认防护。
-const PRIVACY_LABEL: Record<PrivacyPolicy, string> = {
-  requireRedaction: "要求脱敏（未生效）",
-  confirmRaw: "原文需确认（未生效）",
-  allowRaw: "允许原文",
-};
+function toQuickProfile(
+  profile: TargetProfile,
+  groups: PromptGroup[]
+): QuickProfileOption {
+  return {
+    id: profile.id,
+    name: profile.name,
+    promptGroupName:
+      groups.find((group) => group.id === profile.promptGroupId)?.name ?? "通用",
+    defaultFormat: profile.defaultFormat,
+    enterPolicy: profile.enterPolicy,
+    keepPanel: profile.keepPanel,
+  };
+}
+
+function targetMatchReason(input: {
+  status: TargetStatus;
+  reason: TargetStateReason;
+  source: TargetProfileResolutionSource;
+  appName: string;
+  profileName: string;
+  overrideNeedsConfirmation: boolean;
+}): string {
+  if (input.status === "unknown") return "尚未识别投递目标，发送已锁定";
+  if (input.status === "refreshing") return "正在重新确认目标与投递方案";
+  if (input.status === "blocked") {
+    return `目标应用已失效：${targetReasonLabel(input.reason)}`;
+  }
+  if (input.overrideNeedsConfirmation) {
+    return "原临时投递方案已暂停，当前已按目标重新选择";
+  }
+  switch (input.source) {
+    case "temporary":
+      return "仅本次手动选择";
+    case "conflict":
+      return `存在重复应用绑定，当前稳定使用 ${input.profileName}`;
+    case "exact":
+      return `已为 ${input.appName} 指定`;
+    default:
+      return "未匹配具体应用，使用默认方案";
+  }
+}
+
+function TargetRuleTag({
+  children,
+  warning = false,
+}: {
+  children: React.ReactNode;
+  warning?: boolean;
+}) {
+  return (
+    <span
+      className={cn(
+        "min-w-0 max-w-full rounded-sm px-1.5 py-0.5 text-micro leading-tight",
+        warning
+          ? "bg-warning/10 text-warning"
+          : "bg-muted/60 text-muted-foreground"
+      )}
+    >
+      <span className="line-clamp-2 break-words">{children}</span>
+    </span>
+  );
+}
 
 export function TargetLensView({
   snapshot,
@@ -73,233 +164,290 @@ export function TargetLensView({
   profileSource,
   defaultFormat,
   enterPolicy,
-  privacyPolicy,
-  duplicateBundleProfileIds,
+  keepPanel,
+  privacyCapabilityActive,
+  profileId,
   profileOverrideNeedsConfirmation,
   profileOverrideId,
-  profileOptions,
+  profileOverrideName,
+  automaticProfileName,
+  quickProfiles,
+  quickSwitchOpen,
+  canMakePermanent,
   onRefresh,
   onConfirmProfile,
   onSelectProfile,
-  onManageProfiles,
+  onQuickSwitchOpenChange,
+  onMakePermanent,
+  onEditCurrentProfile,
+  onOpenActivity,
+  activityButtonRef,
 }: TargetLensViewProps) {
+  const detailsId = useId();
+  const [disclosureState, dispatchDisclosure] = useReducer(
+    targetLensDisclosureStateAfter,
+    INITIAL_TARGET_LENS_DISCLOSURE_STATE
+  );
+  const detailsExpanded = targetLensDetailsExpanded(disclosureState);
   const appName = snapshot?.appName ?? "未识别目标";
   const statusLabel = targetStatusLabel(status);
-  const enterLabel = ENTER_LABEL[enterPolicy];
-  const privacyLabel = PRIVACY_LABEL[privacyPolicy];
-  const blockedReason = status === "blocked" || status === "unknown"
-    ? targetReasonLabel(reason)
-    : null;
+  const enterLabel = ENTER_POLICY_STATUS_LABEL[enterPolicy];
+  const privacyLabel = privacyCapabilityActive
+    ? "隐私检查：已启用"
+    : "隐私检查：尚未启用";
+  const matchReason = targetMatchReason({
+    status,
+    reason,
+    source: profileSource,
+    appName,
+    profileName,
+    overrideNeedsConfirmation: profileOverrideNeedsConfirmation,
+  });
   const accessibleLabel = [
-    `目标 ${appName}，状态 ${statusLabel}，Profile ${profileName}，Prompt 分组 ${promptGroupName}，格式${defaultFormat === "code" ? "代码" : "纯文本"}，自动回车${enterLabel}，隐私${privacyLabel}`,
-    profileSource === "temporary" ? "本次使用临时 Profile" : null,
-    profileOverrideNeedsConfirmation ? "目标已变化，请确认 Profile" : null,
-    duplicateBundleProfileIds.length > 1
-      ? `多个 Profile 命中，按列表顺序使用 ${profileName}`
-      : null,
-    blockedReason ? `原因 ${blockedReason}` : null,
-  ]
-    .filter(Boolean)
-    .join("，");
+    `目标 ${appName}，状态 ${statusLabel}，投递方案 ${profileName}`,
+    `匹配来源 ${matchReason}`,
+    `提示词组 ${promptGroupName}，输出格式 ${DELIVERY_FORMAT_LABEL[defaultFormat]}`,
+    `粘贴后动作 ${enterLabel}，发送完成后 ${keepPanel ? "保持打开" : "关闭面板"}，${privacyLabel}`,
+  ].join("，");
+  const statusTone = status === "ready"
+    ? "bg-success/10 text-success"
+    : status === "blocked" || status === "unknown"
+      ? "bg-destructive/10 text-destructive"
+      : "bg-muted text-muted-foreground";
+  const reasonTone = status === "blocked" || status === "unknown"
+    ? "text-destructive"
+    : profileSource === "conflict" || profileOverrideNeedsConfirmation
+      ? "text-warning"
+      : "text-muted-foreground";
+  const showRecoveryAction =
+    status === "blocked" || status === "unknown" || status === "refreshing";
+  const hasHiddenWarning =
+    status === "ready" &&
+    (!privacyCapabilityActive ||
+      enterPolicy === "allow" ||
+      profileSource === "conflict");
+  const disclosureLabel = detailsExpanded
+    ? "收起投递详情"
+    : hasHiddenWarning
+      ? "展开投递详情，包含风险项"
+      : "展开投递详情";
+  const currentQuickProfile = useMemo<QuickProfileOption>(
+    () => ({
+      id: profileId,
+      name: profileName,
+      promptGroupName,
+      defaultFormat,
+      enterPolicy,
+      keepPanel,
+    }),
+    [defaultFormat, enterPolicy, keepPanel, profileId, profileName, promptGroupName]
+  );
+  const refreshControl = (
+    <IconButton
+      label="重新识别投递目标"
+      withTitle={false}
+      size="2xs"
+      disabled={status === "refreshing"}
+      onClick={onRefresh}
+    >
+      <RefreshCw
+        className={cn(
+          "transition-opacity duration-100 motion-reduce:transition-none",
+          status === "refreshing" && "opacity-50"
+        )}
+      />
+    </IconButton>
+  );
 
   return (
     <section
-      role="status"
-      aria-live="polite"
+      role="region"
       aria-busy={status === "refreshing"}
       aria-label={accessibleLabel}
-      className="mx-3 mb-1.5 border-y border-border/70 px-1 py-0.5"
+      className="mx-3 mb-1.5 min-w-0 overflow-hidden px-1 py-1"
     >
-      <div className="flex min-h-6 items-center gap-1.5">
-        {icon ? (
-          <img src={icon.url} alt="" className="size-4 shrink-0 rounded-sm" />
-        ) : (
-          <span
-            data-target-icon="fallback"
-            aria-hidden="true"
-            className="flex size-4 shrink-0 items-center justify-center rounded-sm bg-muted text-muted-foreground"
-          >
-            <AppWindow className="size-3" />
-          </span>
-        )}
-
-        <span className="min-w-0 truncate text-label font-medium" title={appName}>
+      <span className="sr-only" aria-live="polite" aria-atomic="true">
+        投递目标 {appName}，{statusLabel}，当前投递方案 {profileName}
+      </span>
+      <div className="flex min-h-8 min-w-0 items-center gap-2">
+        <ApplicationIcon
+          src={icon?.url}
+          name={appName}
+          className="size-5 rounded-sm"
+        />
+        <span className="min-w-0 flex-1 truncate text-body font-semibold" title={appName}>
           {appName}
         </span>
-        <span aria-hidden className="text-muted-foreground/50">·</span>
         <span
+          role="status"
+          aria-live="off"
+          aria-label={`目标状态：${statusLabel}`}
           className={cn(
-            "size-1.5 shrink-0 rounded-full",
-            status === "ready" && "bg-success",
-            status === "refreshing" && "motion-safe:animate-pulse bg-warning",
-            status === "blocked" && "bg-destructive",
-            status === "unknown" && "bg-muted-foreground/50"
+            "inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-label font-medium",
+            statusTone
           )}
-        />
-        <span className="shrink-0 text-micro text-muted-foreground">{statusLabel}</span>
-        <span className="flex-1" />
-        {enterPolicy !== "never" && (
-          <span className="shrink-0 rounded-sm bg-warning/15 px-1 text-micro font-medium text-warning">
-            回车：{enterPolicy === "confirm" ? "需确认" : "自动"}
-          </span>
-        )}
-        <Popover>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              title={profileName}
-              aria-label={`本次投递 Profile：${profileName}，点击查看与切换`}
-              className={cn(
-                "flex max-w-32 shrink-0 items-center gap-0.5 rounded-sm border px-1 py-0.5 text-micro outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-primary/50",
-                profileOverrideId
-                  ? "border-primary/50 text-primary"
-                  : "border-border text-muted-foreground"
-              )}
-            >
-              <span className="truncate">{profileName}</span>
-              <ChevronDown aria-hidden className="size-2.5 shrink-0" />
-            </button>
-          </PopoverTrigger>
-          <PopoverContent align="end" sideOffset={4} className="w-60 gap-1.5 p-2">
-            <TargetLensProfileDetails
-              profileName={profileName}
-              promptGroupName={promptGroupName}
-              defaultFormat={defaultFormat}
-              enterPolicy={enterPolicy}
-              privacyPolicy={privacyPolicy}
-              selectDisabled={status !== "ready"}
-              profileOverrideId={profileOverrideId}
-              profileOptions={profileOptions}
-              onSelectProfile={onSelectProfile}
-              onManageProfiles={onManageProfiles}
+        >
+          <span aria-hidden className="size-1.5 rounded-full bg-current" />
+          {statusLabel}
+        </span>
+        {showRecoveryAction && refreshControl}
+        <IconButton
+          ref={activityButtonRef}
+          label="打开最近投递"
+          withTitle={false}
+          size="xs"
+          onClick={onOpenActivity}
+        >
+          <History aria-hidden className="size-3" />
+        </IconButton>
+        <IconButton
+          label={disclosureLabel}
+          size="xs"
+          aria-expanded={detailsExpanded}
+          aria-controls={detailsId}
+          onClick={() => dispatchDisclosure({ type: "toggle" })}
+          onKeyDown={(event) => {
+            if (event.key !== "Escape" || !detailsExpanded) return;
+            event.preventDefault();
+            event.stopPropagation();
+            dispatchDisclosure({ type: "dismiss" });
+          }}
+          className={cn(detailsExpanded && "bg-muted/50 text-foreground")}
+        >
+          <ChevronDown
+            aria-hidden
+            className={cn(
+              "size-3 transition-transform duration-100 motion-reduce:transition-none",
+              detailsExpanded && "rotate-180"
+            )}
+          />
+          {hasHiddenWarning && !detailsExpanded && (
+            <span
+              aria-hidden
+              data-target-lens-warning-indicator
+              className="absolute right-0.5 top-0.5 size-1 rounded-full bg-warning ring-1 ring-background"
             />
-          </PopoverContent>
-        </Popover>
-        {status === "blocked" || status === "unknown" ? (
-          <button
-            type="button"
-            tabIndex={0}
-            aria-label="重新识别投递目标"
-            onClick={onRefresh}
-            className="flex shrink-0 items-center gap-0.5 rounded-sm px-0.5 text-micro font-medium text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-primary/50"
-          >
-            <RefreshCw className="size-3" />
-            重新识别
-          </button>
-        ) : (
-          <IconButton
-            label="重新识别投递目标"
-            withTitle={false}
-            size="2xs"
-            disabled={status === "refreshing"}
-            onClick={onRefresh}
-          >
-            <RefreshCw className={cn(status === "refreshing" && "motion-safe:animate-spin")} />
-          </IconButton>
-        )}
+          )}
+        </IconButton>
       </div>
+      {!detailsExpanded && (status === "blocked" || status === "unknown") && (
+        <p
+          role="alert"
+          className="mt-0.5 line-clamp-2 break-words pl-7 text-micro leading-tight text-destructive"
+        >
+          {matchReason}
+        </p>
+      )}
       {profileOverrideNeedsConfirmation && (
-        <div className="flex items-center justify-between gap-2 pb-0.5 pl-5 text-micro text-warning" role="alert">
-          <span>目标已变化，请确认 Profile</span>
+        <div
+          role="alert"
+          className="mt-1 flex min-w-0 items-start gap-1 rounded-sm bg-warning/10 px-1.5 py-1"
+        >
+          <p className="min-w-0 flex-1 line-clamp-2 break-words text-micro leading-tight text-warning">
+            {matchReason}
+          </p>
           <button
             type="button"
             onClick={onConfirmProfile}
-            className="shrink-0 rounded-sm px-1 font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-primary/50"
+            className="shrink-0 rounded-sm px-1 text-micro font-medium text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-primary/50"
           >
-            确认本次 Profile
+            将 {profileOverrideName ?? "原方案"} 用于当前目标
           </button>
         </div>
       )}
-      {duplicateBundleProfileIds.length > 1 && (
-        <p className="truncate pb-0.5 pl-5 text-micro text-warning" role="alert">
-          多个 Profile 命中；按列表顺序使用 {profileName}
-        </p>
-      )}
-      {blockedReason && (
-        <p
-          className={cn(
-            "truncate pb-0.5 pl-5 text-micro",
-            status === "blocked" ? "text-destructive" : "text-muted-foreground"
-          )}
-          title={blockedReason}
+      {detailsExpanded && (
+        <div
+          id={detailsId}
+          role="group"
+          aria-label="完整投递详情"
+          className="mt-1 origin-top rounded-lg bg-muted/30 px-2 py-1.5 animate-in fade-in zoom-in-95 duration-100 motion-reduce:animate-none"
         >
-          {blockedReason}
-        </p>
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="shrink-0 text-micro text-muted-foreground">
+              当前方案
+            </span>
+            <Popover open={quickSwitchOpen} onOpenChange={onQuickSwitchOpenChange}>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  tabIndex={0}
+                  title={profileName}
+                  aria-label={`本次投递方案：${profileName}，点击查看与切换`}
+                  className={cn(
+                    "flex min-w-0 max-w-40 items-center gap-0.5 rounded-sm border px-1.5 py-0.5 text-micro outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-primary/50",
+                    profileOverrideId
+                      ? "border-primary/50 text-primary"
+                      : "border-border text-muted-foreground"
+                  )}
+                >
+                  <span className="truncate">{profileName}</span>
+                  <ChevronDown aria-hidden className="size-2.5 shrink-0" />
+                </button>
+              </PopoverTrigger>
+              {/* token-exception: viewport clamp prevents overflow in Toskr's 320–380px native panel. */}
+              <PopoverContent
+                align="end"
+                sideOffset={4}
+                aria-label={`投递到 ${appName}，快速切换投递方案`}
+                className="w-80 max-w-[calc(100vw-1rem)] gap-0 p-2"
+              >
+                <TargetProfileQuickSwitch
+                  appName={appName}
+                  icon={icon}
+                  status={status}
+                  matchReason={matchReason}
+                  currentProfile={currentQuickProfile}
+                  candidates={quickProfiles}
+                  privacyCapabilityActive={privacyCapabilityActive}
+                  temporaryProfileId={profileOverrideId}
+                  automaticProfileName={automaticProfileName}
+                  canMakePermanent={canMakePermanent}
+                  onSelectTemporary={onSelectProfile}
+                  onRestoreAutomatic={() => onSelectProfile(null)}
+                  onMakePermanent={onMakePermanent}
+                  onEdit={onEditCurrentProfile}
+                  onClose={() => onQuickSwitchOpenChange(false)}
+                />
+              </PopoverContent>
+            </Popover>
+            {!showRecoveryAction && <span className="ml-auto">{refreshControl}</span>}
+          </div>
+          <p
+            className={cn(
+              "mt-1 min-w-0 line-clamp-2 break-words text-micro leading-tight",
+              reasonTone
+            )}
+          >
+            匹配来源：{matchReason}
+          </p>
+          <div
+            className="mt-1 flex min-w-0 flex-wrap gap-1"
+            aria-label="本次真实生效规则"
+          >
+            <TargetRuleTag>提示词组：{promptGroupName}</TargetRuleTag>
+            <TargetRuleTag>
+              输出格式：{DELIVERY_FORMAT_LABEL[defaultFormat]}
+            </TargetRuleTag>
+            <TargetRuleTag warning={enterPolicy === "allow"}>
+              粘贴后动作：{ENTER_POLICY_STATUS_LABEL[enterPolicy]}
+            </TargetRuleTag>
+            <TargetRuleTag>
+              发送完成后：{keepPanel ? "保持打开" : "关闭面板"}
+            </TargetRuleTag>
+            <TargetRuleTag warning={!privacyCapabilityActive}>
+              {privacyLabel}
+            </TargetRuleTag>
+          </div>
+        </div>
       )}
     </section>
   );
 }
 
-export interface TargetLensProfileDetailsProps {
-  profileName: string;
-  promptGroupName: string;
-  defaultFormat: DeliveryFormat;
-  enterPolicy: EnterPolicy;
-  privacyPolicy: PrivacyPolicy;
-  selectDisabled: boolean;
-  profileOverrideId: string | null;
-  profileOptions: { id: string; name: string }[];
-  onSelectProfile: (profileId: string | null) => void;
-  onManageProfiles: () => void;
-}
-
-/** Profile 徽章弹层：本次临时覆盖选择 + 当前生效策略明细（只读）。 */
-export function TargetLensProfileDetails({
-  profileName,
-  promptGroupName,
-  defaultFormat,
-  enterPolicy,
-  privacyPolicy,
-  selectDisabled,
-  profileOverrideId,
-  profileOptions,
-  onSelectProfile,
-  onManageProfiles,
-}: TargetLensProfileDetailsProps) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      {/* 不用 <label> 包裹：label 会把点击转发给触发钮，而转发前的 pointerdown
-          落在菜单根节点外，先触发外点关闭再被转发点击重开——闪烁竞态（SimpleMenu
-          的既有坑）。文案独立成行，a11y 走触发钮的 aria-label */}
-      <div className="flex flex-col gap-0.5 text-micro text-muted-foreground">
-        本次投递 Profile
-        <SimpleSelect
-          ariaLabel="本次投递 Profile"
-          size="micro"
-          disabled={selectDisabled}
-          value={profileOverrideId ?? "__auto__"}
-          options={[
-            { value: "__auto__", label: `自动：${profileName}` },
-            ...profileOptions.map((profile) => ({
-              value: profile.id,
-              label: profile.name,
-            })),
-          ]}
-          onChange={(next) => onSelectProfile(next === "__auto__" ? null : next)}
-        />
-      </div>
-      <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-micro">
-        <dt className="text-muted-foreground">模板分组</dt>
-        <dd className="truncate">{promptGroupName}</dd>
-        <dt className="text-muted-foreground">默认格式</dt>
-        <dd>{defaultFormat === "code" ? "代码块" : "纯文本"}</dd>
-        <dt className="text-muted-foreground">自动回车</dt>
-        <dd>{ENTER_LABEL[enterPolicy]}</dd>
-        <dt className="text-muted-foreground">隐私策略</dt>
-        <dd>{PRIVACY_LABEL[privacyPolicy]}</dd>
-      </dl>
-      <button
-        type="button"
-        onClick={onManageProfiles}
-        className="self-start rounded-sm text-micro text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-primary/50"
-      >
-        管理 Profile 与模板…
-      </button>
-    </div>
-  );
-}
-
 export function TargetLensBar() {
+  const [quickSwitchOpen, setQuickSwitchOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
+  const activityButtonRef = useRef<HTMLButtonElement>(null);
   const snapshot = useTargetStore((state) => state.snapshot);
   const status = useTargetStore((state) => state.status);
   const reason = useTargetStore((state) => state.reason);
@@ -309,38 +457,233 @@ export function TargetLensBar() {
   const defaultTargetProfileId = useNotesStore(
     (state) => state.settings.defaultTargetProfileId
   );
+  const firewallEnabled = useNotesStore(
+    (state) => state.settings.firewallEnabled
+  );
   const profileOverrideId = useTargetStore((state) => state.profileOverrideId);
+  const profileOverrideTargetIdentity = useTargetStore(
+    (state) => state.profileOverrideTargetIdentity
+  );
   const profileOverrideNeedsConfirmation = useTargetStore(
     (state) => state.profileOverrideNeedsConfirmation
   );
-  const resolution = resolveTargetProfile({
-    bundleId: snapshot?.bundleId,
-    groups: promptGroups,
-    profiles: targetProfiles,
-    defaultProfileId: defaultTargetProfileId,
-    temporaryProfileId: profileOverrideId,
-  });
+  const targetIdentity = useMemo(() => targetProfileIdentity(snapshot), [snapshot]);
+
+  useEffect(() => {
+    if (
+      shouldClearOpenQuickSwitchOverride({
+        open: quickSwitchOpen,
+        profileOverrideId,
+        profileOverrideTargetIdentity,
+        targetIdentity,
+        profileOverrideNeedsConfirmation,
+      })
+    ) {
+      clearTargetProfileOverride();
+    }
+  }, [
+    profileOverrideId,
+    profileOverrideNeedsConfirmation,
+    profileOverrideTargetIdentity,
+    quickSwitchOpen,
+    targetIdentity,
+  ]);
+
+  const resolution = useMemo(
+    () =>
+      resolveTargetProfile({
+        bundleId: snapshot?.bundleId,
+        isTargetReady: status === "ready",
+        targetIdentity,
+        groups: promptGroups,
+        profiles: targetProfiles,
+        defaultProfileId: defaultTargetProfileId,
+        temporaryProfileId: profileOverrideId,
+        temporaryTargetIdentity: profileOverrideTargetIdentity,
+        temporaryNeedsConfirmation: profileOverrideNeedsConfirmation,
+        privacyCapabilityActive: firewallEnabled,
+      }),
+    [
+      defaultTargetProfileId,
+      firewallEnabled,
+      profileOverrideId,
+      profileOverrideTargetIdentity,
+      profileOverrideNeedsConfirmation,
+      promptGroups,
+      snapshot?.bundleId,
+      status,
+      targetIdentity,
+      targetProfiles,
+    ]
+  );
+  const automaticResolution = useMemo(
+    () =>
+      resolveTargetProfile({
+        bundleId: snapshot?.bundleId,
+        isTargetReady: status === "ready",
+        targetIdentity,
+        groups: promptGroups,
+        profiles: targetProfiles,
+        defaultProfileId: defaultTargetProfileId,
+        privacyCapabilityActive: firewallEnabled,
+      }),
+    [
+      defaultTargetProfileId,
+      firewallEnabled,
+      promptGroups,
+      snapshot?.bundleId,
+      status,
+      targetIdentity,
+      targetProfiles,
+    ]
+  );
+  const profileOverrideName = useMemo(
+    () =>
+      targetProfiles.find((profile) => profile.id === profileOverrideId)?.name ?? null,
+    [profileOverrideId, targetProfiles]
+  );
+  const quickProfiles = useMemo(() => {
+    const seen = new Set<string>();
+    return [
+      resolution.profile,
+      automaticResolution.profile,
+      ...targetProfiles,
+    ]
+      .filter((profile) => {
+        if (seen.has(profile.id)) return false;
+        seen.add(profile.id);
+        return true;
+      })
+      .slice(0, 3)
+      .map((profile) => toQuickProfile(profile, promptGroups));
+  }, [
+    automaticResolution.profile,
+    promptGroups,
+    resolution.profile,
+    targetProfiles,
+  ]);
+  const makePermanent = useCallback(() => {
+    const targetState = useTargetStore.getState();
+    const settings = useNotesStore.getState().settings;
+    const liveTargetIdentity = targetProfileIdentity(targetState.snapshot);
+    const liveResolution = resolveTargetProfile({
+      bundleId: targetState.snapshot?.bundleId,
+      isTargetReady: targetState.status === "ready",
+      targetIdentity: liveTargetIdentity,
+      groups: settings.promptGroups,
+      profiles: settings.targetProfiles,
+      defaultProfileId: settings.defaultTargetProfileId,
+      temporaryProfileId: targetState.profileOverrideId,
+      temporaryTargetIdentity: targetState.profileOverrideTargetIdentity,
+      temporaryNeedsConfirmation:
+        targetState.profileOverrideNeedsConfirmation,
+      privacyCapabilityActive: settings.firewallEnabled,
+    });
+    if (
+      !canPermanentlyAssignTargetProfileOverride({
+        targetBundleId: liveResolution.targetBundleId,
+        targetIdentity: liveTargetIdentity,
+        profileOverrideId: targetState.profileOverrideId,
+        profileOverrideTargetIdentity:
+          targetState.profileOverrideTargetIdentity,
+        profileOverrideNeedsConfirmation:
+          targetState.profileOverrideNeedsConfirmation,
+        resolvedProfileId: liveResolution.profileId,
+        resolvedSource: liveResolution.source,
+        isTargetReady: liveResolution.isTargetReady,
+      })
+    ) {
+      return;
+    }
+
+    const bundleId = liveResolution.targetBundleId;
+    const overrideId = targetState.profileOverrideId;
+    if (!bundleId || !overrideId) return;
+    const selectedProfile = settings.targetProfiles.find(
+      (profile) => profile.id === overrideId
+    );
+    if (!selectedProfile) return;
+
+    applySettingsPatch({
+      targetProfiles: assignTargetProfileBundle(
+        settings.targetProfiles,
+        bundleId,
+        overrideId
+      ),
+    });
+    const appliedProfiles = useNotesStore.getState().settings.targetProfiles;
+    const appliedOwner = appliedProfiles.find(
+      (profile) => profile.id === overrideId
+    );
+    const assignmentApplied = Boolean(
+      appliedOwner?.bundleIds.includes(bundleId) &&
+        appliedProfiles.every(
+          (profile) =>
+            profile.id === overrideId ||
+            !profile.bundleIds.includes(bundleId)
+        )
+    );
+    if (!assignmentApplied) return;
+
+    clearTargetProfileOverride();
+    tip(
+      "ok",
+      `以后发给 ${targetState.snapshot?.appName ?? "当前应用"} 将使用 ${selectedProfile.name}`
+    );
+  }, []);
+  const editCurrentProfile = useCallback(() => {
+    void api.openSettingsWindow();
+    void emitTo("settings", SETTINGS_SECTION, {
+      section: "target",
+      targetProfileId: resolution.profileId,
+    });
+  }, [resolution.profileId]);
 
   return (
-    <TargetLensView
-      snapshot={snapshot}
-      status={status}
-      reason={reason}
-      icon={icon}
-      profileName={resolution.profile.name}
-      promptGroupName={resolution.promptGroup.name}
-      profileSource={resolution.source}
-      defaultFormat={resolution.profile.defaultFormat}
-      enterPolicy={resolution.profile.enterPolicy}
-      privacyPolicy={resolution.profile.privacyPolicy}
-      duplicateBundleProfileIds={resolution.duplicateBundleProfileIds}
-      profileOverrideNeedsConfirmation={profileOverrideNeedsConfirmation}
-      profileOverrideId={profileOverrideId}
-      profileOptions={targetProfiles.map(({ id, name }) => ({ id, name }))}
-      onRefresh={() => void refreshTarget()}
-      onConfirmProfile={confirmTargetProfileOverride}
-      onSelectProfile={setTargetProfileOverride}
-      onManageProfiles={() => void api.openSettingsWindow()}
-    />
+    <>
+      <TargetLensView
+        snapshot={snapshot}
+        status={status}
+        reason={reason}
+        icon={icon}
+        profileName={resolution.profile.name}
+        promptGroupName={resolution.promptGroup.name}
+        profileSource={resolution.source}
+        profileId={resolution.profileId}
+        defaultFormat={resolution.profile.defaultFormat}
+        enterPolicy={resolution.profile.enterPolicy}
+        keepPanel={resolution.profile.keepPanel}
+        privacyCapabilityActive={resolution.privacyCapabilityActive}
+        profileOverrideNeedsConfirmation={profileOverrideNeedsConfirmation}
+        profileOverrideId={profileOverrideId}
+        profileOverrideName={profileOverrideName}
+        automaticProfileName={automaticResolution.profile.name}
+        quickProfiles={quickProfiles}
+        quickSwitchOpen={quickSwitchOpen}
+        canMakePermanent={canPermanentlyAssignTargetProfileOverride({
+          targetBundleId: resolution.targetBundleId,
+          targetIdentity,
+          profileOverrideId,
+          profileOverrideTargetIdentity,
+          profileOverrideNeedsConfirmation,
+          resolvedProfileId: resolution.profileId,
+          resolvedSource: resolution.source,
+          isTargetReady: resolution.isTargetReady,
+        })}
+        onRefresh={() => void refreshTarget()}
+        onConfirmProfile={confirmTargetProfileOverride}
+        onSelectProfile={setTargetProfileOverride}
+        onQuickSwitchOpenChange={setQuickSwitchOpen}
+        onMakePermanent={makePermanent}
+        onEditCurrentProfile={editCurrentProfile}
+        onOpenActivity={() => setActivityOpen(true)}
+        activityButtonRef={activityButtonRef}
+      />
+      <RecentDeliveryDrawer
+        open={activityOpen}
+        onOpenChange={setActivityOpen}
+        returnFocusRef={activityButtonRef}
+      />
+    </>
   );
 }

@@ -1,4 +1,5 @@
 mod ax;
+mod activity;
 mod backup;
 mod capture;
 mod clipwatch;
@@ -13,6 +14,7 @@ mod ocr;
 mod ai;
 mod linkmeta;
 mod pasteboard;
+mod privacy;
 mod state;
 mod storage;
 mod target;
@@ -177,6 +179,7 @@ pub fn run() {
             commands::refresh_target_snapshot,
             commands::validate_target_snapshot,
             commands::send_delivery,
+            commands::scan_sensitive_text,
             commands::send_to_chat,
             commands::ax_trusted,
             commands::tap_status,
@@ -227,6 +230,9 @@ pub fn run() {
             commands::bundle_id_of_app,
             commands::diag_note,
             commands::get_diagnostics,
+            commands::append_delivery_event,
+            commands::get_recent_delivery_events,
+            commands::clear_delivery_events,
             commands::get_data_dir,
             commands::get_data_location_status,
             commands::retry_storage_initialization,
@@ -252,6 +258,9 @@ pub fn run() {
             commands::schedule_media_gc,
             commands::run_media_gc,
             linkmeta::fetch_link_meta,
+            ai::set_ai_api_key,
+            ai::get_ai_key_status,
+            ai::delete_ai_api_key,
             ai::ai_chat,
             ai::ai_list_models,
         ])

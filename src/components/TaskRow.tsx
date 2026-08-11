@@ -419,6 +419,11 @@ function TaskMenu({ task }: { task: Task }) {
           <TargetSendMenuItem onClick={() => void sendTaskToChat(task.id)}>
             <Send className="size-3.5" /> 发送到对话
           </TargetSendMenuItem>
+          <TargetSendMenuItem
+            onClick={() => void sendTaskToChat(task.id, { forcePreflight: true })}
+          >
+            <ListChecks className="size-3.5" /> 预检并发送
+          </TargetSendMenuItem>
           <ContextMenuItem onClick={() => void splitSubtasks(task.id)}>
             <Sparkles className="size-3.5" /> AI 拆解子任务
           </ContextMenuItem>

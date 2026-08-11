@@ -143,6 +143,7 @@ pub enum PayloadKind {
 fn message_with_clipboard(message: impl Into<String>, outcome: ClipboardOutcome) -> String {
     let suffix = match outcome {
         ClipboardOutcome::Restored => " · 原剪贴板已恢复",
+        ClipboardOutcome::RestoredPartial => " · 原剪贴板可读内容已恢复（不可读取格式未恢复）",
         ClipboardOutcome::SkippedUserChanged => " · 已保留你刚复制的内容",
         ClipboardOutcome::RestoreFailed => " · 原剪贴板恢复失败",
         ClipboardOutcome::NotOwned => " · 剪贴板所有权已变化",
@@ -721,10 +722,7 @@ impl DeliveryRuntime for NativeDeliveryRuntime {
             .transaction
             .as_ref()
             .and_then(PasteboardTransaction::last_toskr_write_count);
-        if matches!(
-            outcome,
-            ClipboardOutcome::Restored | ClipboardOutcome::RestoreFailed
-        ) {
+        if outcome.should_mark_self_write() {
             if let Some(exact_count) = last_toskr_write_count {
                 crate::clipwatch::mark_self_write_count(&self.app, exact_count);
             }
@@ -737,10 +735,12 @@ impl DeliveryRuntime for NativeDeliveryRuntime {
 /// HUD 只消费结构化结果，command 层不重新猜测成功或失败原因。
 pub fn hud_feedback(result: &SendDeliveryResult) -> (&'static str, &str) {
     (
-        if result.status == DeliveryStatus::Sent {
-            "sent"
-        } else {
+        if result.status != DeliveryStatus::Sent
+            || result.clipboard_outcome.warning_message().is_some()
+        {
             "warn"
+        } else {
+            "sent"
         },
         result.message.as_str(),
     )
@@ -1327,6 +1327,10 @@ mod tests {
         let cases = [
             (ClipboardOutcome::Restored, " · 原剪贴板已恢复"),
             (
+                ClipboardOutcome::RestoredPartial,
+                " · 原剪贴板可读内容已恢复（不可读取格式未恢复）",
+            ),
+            (
                 ClipboardOutcome::SkippedUserChanged,
                 " · 已保留你刚复制的内容",
             ),
@@ -1344,7 +1348,15 @@ mod tests {
 
             assert_eq!(result.clipboard_outcome, clipboard_outcome);
             assert_eq!(result.message, format!("已发送到 Codex{suffix}"));
-            assert_eq!(hud_feedback(&result), ("sent", result.message.as_str()));
+            let expected_kind = if clipboard_outcome.warning_message().is_some() {
+                "warn"
+            } else {
+                "sent"
+            };
+            assert_eq!(
+                hud_feedback(&result),
+                (expected_kind, result.message.as_str())
+            );
         }
     }
 }

@@ -37,7 +37,8 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
-import { applySettingsPatch } from "./settingsSync";
+import { emitTo } from "@tauri-apps/api/event";
+import { applySettingsPatch, broadcastSettings, SETTINGS_STATE } from "./settingsSync";
 import { defaultSettings, useNotesStore } from "../store/notesStore";
 import { useDataOperationStore } from "../store/dataOperationStore";
 import { useUIStore } from "../store/uiStore";
@@ -57,8 +58,27 @@ describe("applySettingsPatch 伴随停靠 ⇄ 边栏互斥", () => {
   beforeEach(() => {
     mocks.fns.clear();
     mocks.tip.mockClear();
+    vi.mocked(emitTo).mockClear();
     useDataOperationStore.setState({ locked: false, phase: "idle", message: "" });
     resetTargetState();
+  });
+
+  it("广播到设置 WebView 前剥离旧 JSON 密钥恢复副本", () => {
+    seed({});
+    useNotesStore.setState({
+      settings: {
+        ...useNotesStore.getState().settings,
+        aiApiKey: "sk-never-broadcast",
+      } as ReturnType<typeof defaultSettings>,
+    });
+
+    broadcastSettings();
+
+    expect(vi.mocked(emitTo)).toHaveBeenCalledWith(
+      "settings",
+      SETTINGS_STATE,
+      expect.not.objectContaining({ aiApiKey: expect.anything() })
+    );
   });
 
   it("数据事务锁定期间拒绝设置写入和 Rust 副作用", () => {
@@ -160,7 +180,7 @@ describe("applySettingsPatch 伴随停靠 ⇄ 边栏互斥", () => {
     expect(d.clipRetentionDays).toBe(30);
   });
 
-  it("Profile/Prompt 分组 patch 走主窗口持久化，并修复已删除的临时 Profile", () => {
+  it("投递方案/提示词组 patch 走主窗口持久化，并修复已删除的临时方案", () => {
     const settings = defaultSettings();
     seed({
       targetProfiles: [
@@ -202,7 +222,7 @@ describe("applySettingsPatch 伴随停靠 ⇄ 边栏互斥", () => {
     expect(useTargetStore.getState().profileOverrideId).toBeNull();
     expect(mocks.tip).toHaveBeenCalledWith(
       "info",
-      "本次 Profile 已被删除，已恢复自动匹配"
+      "本次投递方案已被删除，已恢复自动匹配"
     );
   });
 

@@ -5,6 +5,7 @@ import { isDataOperationLocked } from "@/store/dataOperationStore";
 import { useDataOperationStore } from "@/store/dataOperationStore";
 import { DATA_ACTIVITY_EVENT } from "@/lib/dataOperations";
 import { tip } from "@/lib/tip";
+import { withoutLegacyAiApiKey } from "@/lib/aiKeyMigration";
 import { useNotesStore, type Settings } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
 import {
@@ -19,10 +20,17 @@ import {
  * - settings 窗口的每次修改发 patch，主面板应用 + 持久化 + 下发 Rust 副作用 + 回播 state
  */
 export const SETTINGS_REQUEST = "toskr://settings-request";
-/** 让设置窗切到指定分区（载荷为 SectionId 字符串，如 "about"）。 */
+/** 让设置窗切到指定分区；target 可附带需要编辑的投递方案。 */
 export const SETTINGS_SECTION = "toskr://settings-section";
+export type SettingsSectionPayload =
+  | string
+  | { section: string; targetProfileId?: string };
 export const SETTINGS_STATE = "toskr://settings-state";
 export const SETTINGS_PATCH = "toskr://settings-patch";
+/** 设置窗显式保存/删除 Keychain key 后通知 main 清理当前目录的旧迁移副本。 */
+export const SETTINGS_AI_KEY_CHANGED = "toskr://settings-ai-key-changed";
+/** 关于页手动重跑受控安全投递演练。 */
+export const SETTINGS_START_SAFE_REHEARSAL = "toskr://start-safe-rehearsal";
 export const SETTINGS_EXPORT = "toskr://do-export";
 export const SETTINGS_IMPORT = "toskr://do-import";
 export const SETTINGS_CLEAR_CLIP = "toskr://do-clear-clip";
@@ -88,7 +96,7 @@ export function applySettingsPatch(patch: Partial<Settings>) {
     !s.targetProfiles.some((profile) => profile.id === profileOverrideId)
   ) {
     clearTargetProfileOverride();
-    tip("info", "本次 Profile 已被删除，已恢复自动匹配");
+    tip("info", "本次投递方案已被删除，已恢复自动匹配");
   }
   if ("hotkeyModifier" in patch || "hotkeyGapMs" in patch) {
     void api.setHotkeyConfig(s.hotkeyModifier, s.hotkeyGapMs);
@@ -171,9 +179,11 @@ export function applySettingsPatch(patch: Partial<Settings>) {
 
 /** 把当前设置广播给设置窗口。 */
 export function broadcastSettings() {
-  void emitTo("settings", SETTINGS_STATE, useNotesStore.getState().settings).catch(
-    () => {}
-  );
+  void emitTo(
+    "settings",
+    SETTINGS_STATE,
+    withoutLegacyAiApiKey(useNotesStore.getState().settings)
+  ).catch(() => {});
 }
 
 /** 主面板安装同步监听（request/patch/export/import）。返回清理函数。 */

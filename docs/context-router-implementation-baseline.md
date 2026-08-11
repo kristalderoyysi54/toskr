@@ -361,16 +361,18 @@ type ResultLink = {
 
 ## 7. Store 与数据迁移顺序
 
-当前真实 store version 是 7。后续按阶段串行推进，禁止多个阶段抢用同一 version：
+本文启动时的 store version 是 7；截至 Phase 14 已按阶段串行推进到 v13，禁止预留或抢用未来 version：
 
 | 顺序 | 阶段 | 建议 schema 动作 | 兼容/回滚门禁 |
 |---|---|---|---|
 | 1 | 02A | 先建立完整目录/媒体备份 manifest，不急于增加业务字段 | 完整备份、hash、revision、故障注入和 rehydrate 通过前停止后续持久化 |
-| 2 | 04 | v9：增加 `targetProfiles`、`promptGroups`，保留原 `promptSnippets` | 缺失字段给安全默认；重复 bundle 确定性处理；旧 snippet 文本/顺序不丢 |
-| 3 | 09 | v9：把 legacy `aiApiKey` 事务性迁入 Keychain | Keychain 写入并回读成功后才删 JSON；失败时保留唯一副本并阻止覆盖；备份始终排除 key |
-| 4 | 11 | activity 使用独立、带 schema 的 append/轮转文件；settings 如新增留存策略则升 v10 | 单行损坏可跳过；正文/secret 禁止进入；清活动不触碰业务数据 |
-| 5 | 12 | v11：只增加 `resultLinks` 元数据 | Note 本体不搬迁；重复 link ID 确定性去重；来源/结果缺失可表达 |
-| 6 | 14 | v12：增加指标开关、留存和用户基线 | 默认关闭虚假 ROI；缺少用户基线时不产生“节省时间” |
+| 2 | 04 | v9：增加 `targetProfiles`、`promptGroups`，保留原 `promptSnippets` | 缺失字段补内建默认方案；历史重复 bundle 保持首项命中并标记 conflict，新编辑阻止重复；旧 snippet 文本/顺序不丢 |
+| 3 | 08 | v10：增加 Firewall 设置 | 默认启用；未知字段和既有 Note/Task/Profile 保持，redaction map 不持久化 |
+| 4 | 09 | v11：把 legacy `aiApiKey` 事务性迁入 Keychain | Keychain 接受同值后才删 JSON；失败或冲突时保留唯一恢复副本；备份始终排除 key |
+| 5 | 11 | activity 使用独立、严格白名单的 append/轮转文件，不占 store version | 单行损坏可跳过；正文/secret 禁止进入；清活动不触碰业务数据 |
+| 6 | 12 | v12：为 Note 增加可选 `deliveryResult` provenance | 旧 Note 不搬迁；无关联时字段缺失；正文、媒体与顺序不变，未知 Note 字段可读取 |
+| 7 | 13 | 核验报告默认只存在当前会话；显式保存时复用普通 Note | 不增加 store 字段；活动只追加状态/计数，AI 输入与 report 对象不持久化 |
+| 8 | 14 | v13：增加本机 metrics 开关/代次、保留期、人工基线、结果质量与问题会话 | v12 默认启用但不上传；旧活动视为 epoch 0；清指标推进 epoch 且不删恢复账本；缺少用户基线时不产生“节省时间” |
 
 每次迁移必须幂等，接受字段缺失和未知字段，并在 merge 时深合并默认 settings。数组按稳定
 ID 去重，冲突规则写入测试；不认识的未来字段读取时容忍、当前版本写回时只序列化已知白名单。
@@ -708,3 +710,517 @@ TextEdit/Finder/Preview provider 行为仍需原生手测。
 - 构建仍有 bundle identifier `.app`、dialog 静态/动态 import、1.82MB 主 chunk 与未 notarize 警告；
   本轮只证明本地构建、签名、DMG 完整性和启动，不声明可发布。
 - 本阶段未执行 git add/commit/push、分支切换、stash/reset/rebase、release、版本修改或外部发布。
+
+## 15. Phase 05 实现增量（2026-08-11）
+
+> 本节是 Phase 05 后的投递事实；第 2、3、8、9 节保留 Phase 00 的历史快照，涉及最终正文拼装、发送入口与结构化回执时以本节为准。
+
+### 15.1 CODE-CONFIRMED
+
+- `src/lib/delivery/buildDraft.ts` 是唯一最终正文构建器。笔记、任务、单条、批量、快捷键、格式与提示词模板共享不可变 `DeliveryDraft`；纯函数按 store 顺序取卡、去重图片、区分真实图片说明和尺寸占位，并保留单条/多条代码块规则。
+- `src/lib/delivery/executeDraft.ts` 是唯一 `api.sendDelivery` 调用者。它统一复核数据代际、来源、勾选快照、目标身份、投递方案和 Enter 决策，并只在结构化 `sent` 回执仍新鲜时更新 done、checked、onboarding 与临时方案生命周期。
+- 可执行 Draft 使用会话内单调 revision；allocated revision 与 active execution revision 分离。显式 invalidation 会作废在途回执，发送中创建但未执行的 Draft 不会污染当前回执。
+- SelectionBar Tooltip 通过非执行 preview Draft 直接渲染完整 `finalText`，不再截断、二次拼装或在 React render 中推进全局 revision；长正文使用既有细滚动区域。
+- Draft 保存构建时的全局勾选副本。Native 等待期间新增选择时，旧回执不清勾选、不标卡片完成，并给出“选择已变化”的明确反馈。
+- `src/lib/delivery-routing.test.js` 锁定所有入口仍委托 actions、只有执行器能调用 Native、生产代码不存在第二套最终正文拼装；两轮独立规格/工程只读复核最终均为 PASS。
+
+### 15.2 Data Migration 与兼容边界
+
+- Draft 正文、Prompt、target token 与 revision 只存在于当前 WebView 会话，不写 Zustand、业务 JSON、备份或诊断日志；本阶段没有 schema/version 变化，也不需要数据迁移。
+- 现有 Note、Task、Target Profile、剪贴板编辑器追加、Pin、失败恢复和临时方案语义保留；没有新增 Preflight、Firewall、AI 转换或自动重试。
+
+### 15.3 自动证据与运行指纹
+
+| 命令 | 结果 | 证据摘要 |
+|---|---|---|
+| `pnpm typecheck` | PASS（exit 0） | `tsc -b` 无错误 |
+| `pnpm test` | PASS（exit 0） | 37 files、431 tests 全通过 |
+| `pnpm lint` | PASS WITH WARNINGS（exit 0） | 仅 3 条既有 Fast Refresh warning |
+| `STRICT=1 pnpm check:tokens` | PASS（exit 0） | 6 项硬护栏均为 0 |
+| `(cd src-tauri && cargo test)` | PASS WITH WARNINGS（exit 0） | 163 tests 全通过；13 条既有 `unnecessary unsafe` 与 NSPasteboard 测试线程提示 |
+| `pnpm build:app` | PASS（exit 0，138.6s） | Vite 2614 modules；App、DMG、updater archive/signature 均生成 |
+| `codesign --verify --deep --strict` | PASS（exit 0） | 本地 `Toskr Dev Signing` 签名有效 |
+| `git diff --check` | PASS（exit 0） | tracked diff 无 whitespace error |
+
+- 构建后终止旧 PID 78532；首次 `open` 遇到瞬时 LaunchServices `-600`，使用同一 bundle 重试后于 2026-08-11 01:08 +08:00 启动 PID 85206。诊断记录 `启动 v0.14.0 pid=85206`，随后完成快捷键与边栏运行设置初始化。
+- App 二进制 SHA-256：`03f44cbcee3a0793daeb6af230149cb6dfa765ab17c37c0a0764c4aa51d51acc`；前端资源键为 `index-DvlDeQw7.js` / `index-DGMQHPBR.css`。
+
+### 15.4 RUNTIME-REQUIRED 与已知边界
+
+- 本轮只启动并验证了新 release bundle、签名、PID 与初始化日志；没有向真实第三方应用发送 fixture，也没有改动用户卡片来伪造运行证据。第 66–72 项跨应用逐字节粘贴、焦点漂移、Enter 与 VoiceOver 行为仍需原生复验。
+- 自动测试证明 builder 输出与 Native request 字节相同、stale 回执不产生本地状态副作用；它不能证明目标应用最终如何解释粘贴内容，也不能替代真实多图 pasteboard 时序。
+- 本阶段未执行 git add/commit/push、分支切换、stash/reset/rebase、release、版本修改或外部发布。
+
+## 16. Phase 06 实现增量（2026-08-11）
+
+> 本节是 Phase 06 后的预检事实；Phase 05 的单一 Draft/执行器继续是权威投递管线，预检只编辑会话内 Draft，不创建第二套正文或 Native 发送路径。
+
+### 16.1 CODE-CONFIRMED
+
+- `src/components/PreflightComposer.tsx` 提供统一投递预检：显示目标、Profile、来源项、图片、Prompt、格式、Enter 决策和真实 `finalText`。横向面板使用双栏，竖向/窄面板使用分区布局；取消、关闭或失败不会写回原卡片。
+- 会话模式支持 smart / always / off；复杂或高风险 Draft 自动进入预检，稳定单条纯文本保留快速发送。SelectionBar 与卡片任务菜单均可显式强制预检，显式入口不会被可见剪贴板编辑器的内部追加路径截获。
+- `src/store/deliveryStore.ts` 只保存当前会话 Draft、活动分区、busy、错误和副作用确定性；关闭与数据代际失效会清除正文及临时编辑。全局设置、业务 JSON、备份和诊断日志不保存预检正文。
+- 确认前独立复核 target、Profile、数据代际、Note/Task 正文和图片、Prompt 文本及分组、全局选择与 revision。target 先失效时仍检查被遮住的非目标 stale，切换 Prompt/格式不能用 live 数据偷偷替换旧来源基线。
+- 失败重试分成两类：Native 调用前且可证明零外部副作用时，允许在同一 target identity 下刷新 token，再经完整 freshness 门禁 rebase；IPC 回执丢失、粘贴后漂移或部分完成属于结果不确定，锁定原 Draft 重投以避免重复粘贴。
+- 临时 Profile 成功清理同时绑定 profile id 与 target identity；旧目标 A 的迟到回执不会清掉新目标 B 的同名覆盖。迟到 target refresh 也不会修改新开的 Draft 或 busy 状态。
+- 模态输入由 App 级总闸隔离；焦点循环包含 `summary`，Esc 关闭并保留选择，Cmd+Enter 只触发一次确认。公共 `SimpleMenu` 按 viewport 限高滚动并消费方向键，横栏中完整菜单不再被原生 WebView 裁掉。
+- 两名独立规格/工程审查最终 PASS；结构、竞态、组合 stale、零副作用重试、A→B 迟到回执及真实 DOM 键盘路径均有回归测试。
+
+### 16.2 Data Migration 与兼容边界
+
+- 本阶段没有 schema/version 变化，无需数据迁移。`DeliveryDraft`、本次 Prompt/格式/Enter/正文编辑、safe-retry 与错误状态只存在当前 WebView 会话。
+- 预检模式当前按会话默认 smart，不写入既有持久设置；重启后恢复 smart 是刻意的最小驻留策略，不是水合缺失。
+- 现有 Note、Task、Target Profile、图片附件、Pin、伴随磁吸和 Native `send_delivery` 协议保持兼容；Phase 07 Firewall、AI 转换、活动历史、结果回收尚未接入。
+
+### 16.3 自动证据与运行指纹
+
+| 命令 | 结果 | 证据摘要 |
+|---|---|---|
+| `pnpm typecheck` | PASS（exit 0） | `tsc -b` 无错误 |
+| `pnpm test` | PASS（exit 0） | 40 files、470 tests 全通过 |
+| `pnpm lint` | PASS WITH WARNINGS（exit 0） | 仅 3 条既有 Fast Refresh warning |
+| `STRICT=1 pnpm check:tokens` | PASS（exit 0） | 6 项硬护栏均为 0 |
+| `(cd src-tauri && cargo test)` | PASS WITH WARNINGS（exit 0） | 163 tests 全通过；13 条既有 `unnecessary unsafe` 与 NSPasteboard 测试线程提示 |
+| `pnpm build:app` | PASS（exit 0，141.6s） | Vite 2617 modules；App、DMG、updater archive/signature 均生成 |
+| `codesign --verify --deep --strict` | PASS（exit 0） | 本地开发签名有效 |
+| `hdiutil verify` | PASS（exit 0） | DMG CRC 校验有效 |
+| `git diff --check` | PASS（exit 0） | tracked diff 无 whitespace error |
+
+- 最终 release bundle 于 2026-08-11 02:36:54 +08:00 启动 PID 99727；`toskr-diag.log` 第 10595 行记录 `启动 v0.14.0 pid=99727`。
+- App 二进制 SHA-256：`d894b1c32f8fd1ec8b0bd9c7185f5ebcc24c1b24f965259d99cd0a0869e4f560`；前端资源键为 `index-D0xrGasr.js` / `index-D7e_XtH8.css`。
+- DMG SHA-256：`9635205c1e02198ad1e36ef2426d2bcc5790c2285b0bb9fe4671eae57c6cfef9`；updater archive SHA-256：`de46a272ad5570e9f73346021f44ff8a7ac582cecdfd4f4976cfd557e2ebc332`。
+- DEV Playwright 在 420×260 视口验证完整发送菜单位于 `x=239..399 / y=21..217`，可视高 194、内容高 744、最大滚动 550；底部最后操作仍完全可见。预检位于 12px 安全边距内，连续 24 次 Tab 均留在 dialog，Esc 后 `checkedIds` 两项完整保留。
+- 暗色 + Reduce Motion 仿真下，预检背景为深色语义表面、正文为浅色语义前景；media query 生效后可见 transition/animation 均被压至 `0.00001s`。截图保存于忽略目录 `output/playwright/phase06-*.png`。
+
+### 16.4 RUNTIME-REQUIRED 与已知边界
+
+- Computer Use 以最终 App 完整路径、显示名和 SystemUIServer 尝试连接均超时；本机多个 Toskr 副本又共享 bundle id，无法建立可信 AX 会话。本轮没有把 DEV 浏览器布局冒充真实 WKWebView、TCC 或 VoiceOver 证据。
+- `docs/manual-qa.md` 73–80 的普通窗口、Pin、伴随、横栏/窄面板、浅深色、Reduce Motion、完整键盘/VoiceOver、真实第三方目标发送仍标记 `RUNTIME-REQUIRED`。
+- 自动测试能证明 Draft、freshness、焦点路由和本地副作用边界，不能证明第三方目标如何消费粘贴、Enter 或多附件，也不能排除真实窗口层级/多屏几何差异。
+- 预检模式是会话偏好；若未来产品要求跨重启记忆，必须另做设置 schema 与迁移，不应让当前 Draft 持久化顺带承担该职责。
+- 本阶段未执行 git add/commit/push、分支切换、stash/reset/rebase、release、版本修改或外部发布。
+
+## 17. Phase 07 实现增量（2026-08-11）
+
+> 本节是 Phase 07 后的本地文本扫描事实；扫描器只产生瞬态结构化 finding，不修改 Phase 05/06 Draft、不执行脱敏或策略裁决，UI 与发送行为仍保持不变。
+
+### 17.1 CODE-CONFIRMED
+
+- `src-tauri/src/privacy.rs` 是唯一敏感文本规则引擎。所有正则由 `OnceLock` 单次编译，输入在 Rust blocking pool 扫描；模块没有网络、进程、AI 或模型调用。
+- 首批类别覆盖 privateKey、authorization、apiKey、databaseUrl、email、phone、nationalId、bankCard、ipAddress、cookie、session。高误报长串规则被刻意排除：Token/Secret/电话/银行卡需要明确上下文，身份证、卡号和 IPv4还需格式或校验算法通过。
+- Finding 契约包含稳定 `id/ruleId`、category、severity、`startUtf16/endUtf16`、只暴露首尾极少字符的 `maskedPreview` 与类别占位建议；不返回原值、完整 Prompt、可逆 hash 或 redaction map。
+- Rust 内部以 byte range 零拷贝匹配，完成重叠裁决后一次映射到 UTF-16。前端 `findingUtf16RangeIsValid` 进一步拒绝负值、倒序、越界与拆开 surrogate pair 的范围，`findingSourceText` 才允许 JavaScript slice。
+- 重叠优先级固定为 severity 高者、UTF-16 范围更长者、ruleId 字典序；选择后按文本位置稳定输出。数据库 URL 内邮箱、Cookie 内 Session 与 Authorization/Bearer 的重叠不会产生随机结果。
+- 扫描上限为 2 MiB。超限不扫描前缀，也不返回伪“安全”空结果，而是 `complete=false`、`scannedUtf16=0` 和结构化 `inputTooLong` warning。
+- `commands::scan_sensitive_text` 是唯一 Tauri 入口，`api.scanSensitiveText` 是唯一前端封装。诊断摘要只接收结构化结果与耗时，只写 UTF-16 长度、finding 数、类别计数和 elapsed ms。
+
+### 17.2 Data Migration 与兼容边界
+
+- 本阶段没有业务 store、设置或备份 schema 变化，无需迁移。Finding、输入正文和扫描 warning 只存在单次 IPC 生命周期，不写 Zustand、业务 JSON 或备份。
+- `regex` 作为直接 Rust 依赖加入；版本已存在于原锁文件的传递依赖中，本轮锁文件只把它加入 Toskr 的直接依赖表。
+- 当前没有 UI、自动脱敏、隐私策略门禁、自定义正则、图片扫描或 AI 调用；这些能力分别留给 Phase 08、09/10 与可选 Phase 16，Phase 07 不能被描述为已阻止敏感发送。
+
+### 17.3 自动证据与运行指纹
+
+| 命令 | 结果 | 证据摘要 |
+|---|---|---|
+| `pnpm typecheck` | PASS（exit 0） | `tsc -b` 无错误 |
+| `pnpm test` | PASS（exit 0） | 42 files、474 tests 全通过 |
+| `pnpm lint` | PASS WITH WARNINGS（exit 0） | 仅 3 条既有 Fast Refresh warning |
+| `STRICT=1 pnpm check:tokens` | PASS（exit 0） | 6 项硬护栏均为 0 |
+| `(cd src-tauri && cargo test)` | PASS WITH WARNINGS（exit 0） | 181 tests 全通过；13 条既有 `unnecessary unsafe` 与 NSPasteboard 测试线程提示 |
+| `(cd src-tauri && cargo clippy --lib --tests)` | PASS WITH WARNINGS（exit 0） | 新 privacy 模块零 clippy warning；其余为 23/24 条既有 warning |
+| `pnpm build:app` | PASS（exit 0，139.3s） | Vite 2617 modules；App、DMG、updater archive/signature 均生成 |
+| `codesign --verify --deep --strict` | PASS（exit 0） | 本地开发签名有效 |
+| `hdiutil verify` | PASS（exit 0） | DMG CRC 校验有效 |
+| `git diff --check` | PASS（exit 0） | tracked diff 无 whitespace error |
+
+- 每个 finding 类别至少 5 个正例与 5 个反例；额外覆盖 PEM、多行 Authorization、无 padding Basic、JSON/YAML 字段、URL encoding、中文上下文、emoji/组合字符、身份证 checksum、Luhn、U+FFFD、空文本、超限、重叠和 serde camelCase。
+- 1 MiB 混合文本性能门槛为 750ms；本机 debug 单测首轮实测 346.33ms。command 另由 blocking pool 隔离，因此该 CPU 时间不占 WebView/UI 线程；这不是对所有机器的硬件性能承诺。
+- 最终 release bundle 于 2026-08-11 03:14:08 +08:00 启动 PID 6455；`toskr-diag.log` 第 10599 行记录 `启动 v0.14.0 pid=6455`。
+- App 二进制 SHA-256：`f72efa36258b8bed9d82df2053f587fa76bc375870972f67253296a7f78b1996`；前端资源键为 `index-sr6Zi5LX.js` / `index-D7e_XtH8.css`。
+- DMG SHA-256：`0f21b236da3fec64858daf59c838e00f39fd87319a934d1f5dbee94448fa4215`；updater archive SHA-256：`9f9fb8586f149b4d99d58620f02f131942412b0498f9572ef849200e6ed0f6c2`。
+- 最终二进制 strings 可见 `scan_sensitive_text`、`credential.pem_private_key` 与 `network.ipv4_private`，证明 command/规则进入本轮 bundle；未用该静态指纹冒充真实 IPC 调用。
+
+### 17.4 RUNTIME-REQUIRED 与已知边界
+
+- Phase 07 没有主界面入口，当前运行态只完成最终 bundle 启动、PID/诊断和二进制注册指纹。`docs/manual-qa.md` 81–83 的真实签名 WebView DevTools invoke、JavaScript UTF-16 slice、磁盘日志原值搜索与 UI 响应仍标记 `RUNTIME-REQUIRED`。
+- 规则引擎是确定性高置信基线，不承诺识别所有供应商 Token、国际身份证、所有电话号码或语义秘密；为追求召回率加入“任意长字符串”会违反本阶段低误报边界。
+- `maskedPreview` 刻意只保留首尾极少字符；同值稳定编号和实际替换由后续 Draft 会话层完成，Phase 07 不保存命中值或映射。
+- 本阶段未执行 git add/commit/push、分支切换、stash/reset/rebase、release、版本修改或外部发布。
+
+## 18. Phase 08 实现增量（2026-08-11）
+
+> 本节记录 Phase 08 的本地脱敏预览与发送门禁事实。扫描、替换、确认和策略裁决都发生在单次 `DeliveryDraft` 会话；只有经门禁批准的 `finalText` 可以进入 Native 投递。
+
+### 18.1 CODE-CONFIRMED
+
+- `DeliveryDraft` 新增 Firewall 开关、关闭的 warn 类别、扫描状态、findings、redaction map、scan revision 与隐私决定。正文、Prompt、格式、目标 token 或 profile 变化会使旧结果失效，`keepPanel` 等不改变出站内容的 UI 决定不会触发无意义重扫。
+- `firewall.ts` 是纯策略/替换层：它先验证 UTF-16 范围，再按 severity、范围长度、位置和稳定 ID 裁决交叠；替换从后向前执行，不拆 emoji 或组合字符。同原值复用同一占位符，并跳过正文已占用的编号。
+- `requireRedaction` 要求所有 warn/block finding 被替换或明确排除；`confirmRaw` 要求剩余 warn 原文做一次当前扫描确认；`allowRaw` 对任意剩余 block 原文仍要求二次确认。任何保留 block 原文的可发送状态都强制 `pressEnter=false`。
+- quick/smart/off 与显式预检共用同一扫描和策略门禁。无 finding 才允许保留快速路径；有 finding、扫描异常、非法范围或 `complete=false` 都 fail-closed 打开预检，不会提前调用 Native。
+- 扫描准备与执行共用 `draftPreparationPending`。闸门建立在 delivery revision 分配前，因此快速双击、扫描迟到或第二次被拒意图都不能污染首个在途回执。
+- 预检台展示扫描状态、profile 策略、类别/严重级别/数量和不可逆遮罩预览，支持定位、逐项/同类/全部替换、明确保留、原文确认和失败重试；正文编辑使用 160ms 防抖，提交前仍执行同步门禁。
+- 设置页默认开启 Firewall，只允许用户关闭 email、phone、nationalId、bankCard、ipAddress 五类 warn 提示；privateKey、authorization、apiKey、databaseUrl、cookie、session 等 block 规则始终生效。界面明确说明确定性规则仍可能误报或漏报。
+- 执行器在 Native IPC 前最后一次复核扫描状态、隐私策略、来源/选择/目标/profile freshness，并只消费 `draft.finalText`；失败分支沿用 Phase 06 的零副作用/结果不确定重试边界。
+
+### 18.2 Data Migration 与敏感数据生命周期
+
+- Zustand 业务 schema 从 v9 升至 v10；v9 迁移默认 `firewallEnabled=true`、`firewallDisabledWarnCategories=[]`。禁用列表只接受五类 warn，重复值会规范化，非法 block 类别 fail-closed。
+- Rust `MAX_STORE_VERSION` 同步升至 10，并验证 Firewall 字段；v9 起的 snippet/profile 唯一性阈值仍固定为 v9，没有错误绑定到当前最大版本。
+- redaction map、finding 原文与原文确认只存在于当前 delivery store 内存。发送、取消、数据代际失效或重启都会清空；它们不写业务 JSON、完整备份、活动目录或诊断日志。
+- 诊断只使用结构化类别、数量、长度、状态与耗时；预检遮罩预览来自 Rust 的不可逆最小预览，不把原值复制到 HUD 或错误消息。
+
+### 18.3 自动证据与运行指纹
+
+| 命令 | 结果 | 证据摘要 |
+|---|---|---|
+| `pnpm typecheck` | PASS（exit 0） | `tsc -b` 无错误 |
+| `pnpm test` | PASS（exit 0） | 43 files、489 tests 全通过 |
+| `pnpm lint` | PASS WITH WARNINGS（exit 0） | 仅 3 条既有 Fast Refresh warning |
+| `STRICT=1 pnpm check:tokens` | PASS（exit 0） | 6 项硬护栏均为 0 |
+| `(cd src-tauri && cargo test)` | PASS WITH WARNINGS（exit 0） | 182 tests 全通过；13 条既有 `unnecessary unsafe` 与 NSPasteboard 测试线程提示 |
+| `pnpm build:app` | PASS（exit 0，136.9s） | Vite 2620 modules；App、DMG、updater archive/signature 均生成 |
+| `codesign --verify --deep --strict` | PASS（exit 0） | 本地开发签名有效 |
+| `hdiutil verify` | PASS（exit 0） | DMG CRC 校验有效 |
+| `git diff --check` | PASS（exit 0） | tracked diff 无 whitespace error |
+
+- 最终 release bundle 于 2026-08-11 03:51:20 +08:00 启动 PID 12357；`toskr-diag.log` 第 10602 行记录 `启动 v0.14.0 pid=12357`。
+- App 二进制 SHA-256：`e84d193503fcd1077798e69a8a096e5fabdcbb9071db35023da8e1c31e877fbe`；前端资源键为 `index-wzzKOlKf.js` / `index-B4rPv-7F.css`。
+- DMG SHA-256：`dfd4a3bfa4462dcc22ce52be7f49d483b1b69d146dda2023b2f5322f33c5e68a`；updater archive SHA-256：`b7890b21d3245b91ca4a2c8e0c12939879d1176dac526eddbdb5569b2ef6c03e`。
+- 最终二进制 strings 可见 `firewallEnabled`、`firewallDisabledWarnCategories`、`requireRedaction` 与 `scan_sensitive_text`，证明设置、策略和本地 command 进入本轮 bundle；该静态指纹不等同于真实第三方发送验证。
+
+### 18.4 RUNTIME-REQUIRED 与已知边界
+
+- `docs/manual-qa.md` 84–91 的真实签名 WKWebView findings 交互、三种策略矩阵、扫描失败/超限、自动 Enter 关闭、VoiceOver、第三方目标粘贴、数据目录切换和磁盘原值搜索仍标记 `RUNTIME-REQUIRED`。
+- 当前扫描只覆盖文本；图片 OCR、附件内容扫描、自定义正则和语义秘密不在 Phase 08 范围。界面必须持续提示可能误报/漏报，不能把“未发现”描述为绝对安全。
+- 内部编辑器追加仍属于应用内草稿操作，不是外部 egress；真正向第三方应用发送时仍会经过统一 Draft 扫描。若未来把内部草稿自动同步到网络端，该边界必须重新建模。
+- 构建仍有既有 bundle identifier 后缀、单前端 chunk 体积与 13 条 `unnecessary unsafe` warning；本阶段未扩大这些问题，也没有用顺手重构增加风险面。
+- 本阶段未执行 git add/commit/push、分支切换、stash/reset/rebase、release、版本修改或外部发布。
+
+## 19. Phase 09 实现增量（2026-08-11）
+
+> 本节记录 AI 密钥迁出业务 JSON 与进程内 HTTPS 请求边界。Phase 09 不改变 Phase 05–08 的 Draft、Firewall 或 Native 投递语义。
+
+### 19.1 CODE-CONFIRMED
+
+- AI 密钥只由 Rust Keychain adapter 读写；前端 IPC、Zustand 类型、设置广播、AI 请求参数与诊断均不再携带密钥。设置页只显示“已配置/未配置”和可选更新时间，输入值保存后清空。
+- `ai.rs` 使用进程内 `reqwest` client，不启动 `curl` 或其他子进程；连接、状态码、响应格式等错误统一返回不含 provider body 的通用消息，响应流上限 2 MiB，超时 30 秒且禁止重定向。
+- 地址策略只允许远端 HTTPS 与精确的 `localhost`、`127.0.0.1`、`::1` HTTP loopback；userinfo、query、fragment、非 HTTP(S)、无 host 与其他明文 HTTP 在请求前拒绝。URL path prefix 会保留。
+- Keychain service/account 固定为 `com.toskr.app.ai` / `openai-compatible`。显式保存允许覆盖；迁移采用 set-if-absent：已有相同值视为成功，不同值 fail-closed 并保留 JSON 恢复副本。
+- 删除以不含密钥的 Keychain tombstone 原子覆盖旧记录；即使进程在 JSON 清理前退出，旧 v10 字段也不会自动复活。后续显式保存可以替换 tombstone。
+- AI 自然语言任务、拆解、笔记转任务、标题、模型列表与连接测试统一查询 Keychain；未配置、网络或解析失败均保留用户原输入/原卡片。
+
+### 19.2 Data Migration 与敏感数据生命周期
+
+- Zustand schema 从 v10 升至 v11，Rust `MAX_STORE_VERSION` 同步为 11。解码 v10 时仅验证旧 `aiApiKey` 为字符串，在 Keychain 接受前刻意保留该唯一恢复副本；成功后才以同数据代际、同来源值和写锁门禁删除字段。
+- 迁移失败、Keychain 冲突、目录切换或锁定均不会静默清除旧值；完整备份继续拒绝含旧密钥的状态，跨窗口设置广播也会先移除该字段。
+- 真实 v10 数据在本轮 release 启动后升至 v11，`aiApiKey` 字段由存在变为不存在，Keychain 条目存在；校验脚本只读取 schema 版本和字段存在性，从未读取、打印或比较密钥正文。
+- Keychain 是应用级存储而数据目录可切换，因此迁移用“同值接受、异值保留”的冲突语义，而不是让后到目录覆盖先到密钥。
+
+### 19.3 依赖与许可证
+
+- 直接依赖新增 `reqwest 0.13`（`json,rustls-no-provider`）、`rustls 0.23`（ring provider）、`url 2.5`、`security-framework 3.7` 与 `security-framework-sys 2.17`；它们此前已作为 updater/platform verifier 的传递包存在于锁文件，本轮没有新增 package block。
+- `reqwest`、`security-framework`、`url` 为 MIT OR Apache-2.0；`rustls` 为 Apache-2.0 OR ISC OR MIT。直连依赖主要用于固定 feature/API 边界，未观察到额外独立网络栈进入最终 bundle。
+- TLS ring provider 在首个 AI client 前显式安装，避免依赖 updater 的偶然初始化顺序。
+
+### 19.4 自动证据、产物与运行指纹
+
+| 命令 | 结果 | 证据摘要 |
+|---|---|---|
+| `pnpm typecheck` | PASS（exit 0） | `tsc -b` 无错误 |
+| `pnpm test` | PASS（exit 0） | 47 files、503 tests 全通过 |
+| `pnpm lint` | PASS WITH WARNINGS（exit 0） | 仅 3 条既有 Fast Refresh warning |
+| `STRICT=1 pnpm check:tokens` | PASS（exit 0） | 6 项硬护栏均为 0 |
+| `(cd src-tauri && cargo test)` | PASS WITH WARNINGS（exit 0） | 182 tests 全通过；仅既有 warning/NSPasteboard 测试提示 |
+| `(cd src-tauri && cargo clippy --lib --tests)` | PASS WITH WARNINGS（exit 0） | 新 AI 模块零 clippy warning；其余为既有 warning |
+| `pnpm build:app` | PASS（exit 0，137.5s） | Vite 2622 modules；App、DMG、updater archive/signature 均生成 |
+| `codesign --verify --deep --strict` | PASS（exit 0） | bundle 有效并满足 designated requirement |
+| `hdiutil verify` | PASS（exit 0） | DMG CRC 校验有效 |
+| `git diff --check` | PASS（exit 0） | tracked diff 无 whitespace error |
+
+- 最终 release bundle 于 2026-08-11 04:31:53 +08:00 启动 PID 17375；`toskr-diag.log` 第 10605 行记录 `启动 v0.14.0 pid=17375`。首次 `open` 遇到 LaunchServices `-600`，确认旧进程停止后以同一 bundle 新实例启动成功。
+- App 二进制 SHA-256：`296e88de2a7a1917fe30408219a79f4518935a9f24c8f47896db1bd0931f8f2a`；前端资源键为 `index-OqJ1Whfb.js` / `index-BA6bFExM.css`。
+- DMG SHA-256：`0ddf007de4b36e45ca55ad127350da15ced4ac1d6594bedf1ddd5e95adfe1636`；updater archive SHA-256：`499d4363e66deaf0acdc92c150384c3dba8a33a8ae90698fba8761412b1cd86a`。
+- 运行进程只有 bundle 内 `toskr` 主程序，未发现子进程；这证明启动路径不依赖外部 `curl`，不等同于已触发全部 AI provider 请求。
+
+### 19.5 RUNTIME-REQUIRED 与已知边界
+
+- `docs/manual-qa.md` 92–98 的真实设置交互、覆盖/删除、故障注入、local stub、全部 AI 入口、浅深色、窄窗、Tab 与 VoiceOver 仍需原生复验。本轮未删除或覆盖用户真实 Keychain 密钥来制造测试证据。
+- 自动测试覆盖地址策略、2 MiB 上限、provider 错误清洗、迁移冲突、tombstone、跨窗状态竞态、fallback 与请求结构；它不能证明真实供应商可用性、系统 Keychain 授权弹窗或 TCC/辅助功能体验。
+- 进程内 HTTP 消除了命令行参数与子进程泄露面，但 TLS 信任、代理、供应商服务端留存与用户主动发送的正文仍属于外部边界；UI 不应把它描述为端到端机密。
+- 本阶段未执行 git add/commit/push、分支切换、stash/reset/rebase、release、版本修改或外部发布。
+
+## 20. Phase 10 实现增量（2026-08-11）
+
+> 本节记录 Preflight 内的显式 AI 转换。AI 只生成会话内候选；用户应用前不改 finalText，应用后仍必须重新经过 Phase 08 Firewall 与既有投递门禁。
+
+### 20.1 CODE-CONFIRMED
+
+- `aiClient.ts` 成为唯一前端 AI transport：旧自然语言任务、拆解、笔记转任务、起标题、设置连接测试与新转换共享 Keychain 状态、进程内 `ai_chat`、错误分类、32 秒前端兜底和本地取消机制；生产代码其他位置不再调用 `api.aiChat`。
+- `aiTransform.ts` 定义四个固定 `TransformRecipe`：总结要点、提取行动项、优化 Prompt、结构化需求；每项固定 label/description/systemPrompt/outputMode/maxTokens，不支持用户注入任意系统指令或自动模型选择。
+- 调用只由 Preflight 中“生成预览”按钮触发。按钮前展示 provider、model、输入字符数，并说明只发送 Firewall 处理后的当前 `finalText`、不发送图片附件。
+- Firewall 未启用、未完成、失败/超限或当前策略仍不可发送时，转换在调用 transport 前 fail-closed；未解决 block 的回归测试锁定请求次数为 0。
+- `TransformResult` 绑定 requestId、draftId、draftRevision、recipeId、provider、model、text 与 createdAtMs。正文、Prompt/格式、revision 变化后的迟到结果保留为“已过期”只读候选，应用操作不存在。
+- AI 在途时同一 Preflight 只允许一个逻辑转换；重复点击不创建第二个请求，Cmd+Enter 也不能提前发送旧 finalText。取消立即释放 UI busy 并丢弃结果，底层不可中断 invoke 结束前仍阻止同配方并发。
+- 应用候选会递增 DeliveryDraft revision、清除本次回车决定与 raw-send 确认、使旧 findings 失效，并立即重新运行 Context Firewall；丢弃不改 Draft，一层恢复点可把 finalText 还原后再次扫描。
+- AI 请求、响应、diff 与恢复点只存在 delivery store 会话；关闭、Escape、背景关闭、数据上下文失效或重启都会清除，Note/Task 和持久设置不被覆盖。
+
+### 20.2 UI 与可访问性
+
+- `AiTransformPanel` 复用现有 Button、SimpleSelect、语义色与细滚动条。窄竖窗按上下顺序显示，横栏把转换前/候选并排并压缩说明密度；候选、过期、错误、取消、应用和恢复均有可读状态。
+- 380×720 浅色诊断态中 dialog 位于 12px 安全边距内，body scrollWidth/clientWidth 为 380/380；AI 面板完整位于 x=29..351，无横向溢出。
+- 900×360 横栏暗色 + Reduce Motion 诊断态中内容区可视高 224px，AI 面板为 218px 并完整可见；转换前文本、候选、丢弃和应用按钮同时呈现，无 body 横向溢出。
+- 浏览器截图保存于忽略目录 `output/playwright/phase10-transform-vertical-before.png`、`phase10-transform-vertical-result.png`、`phase10-transform-horizontal-dark-result.png`；它们只证明 DOM/CSS，不替代签名 WKWebView、VoiceOver 或真实 provider。
+
+### 20.3 Data Migration 与敏感数据生命周期
+
+- 本阶段没有持久 schema 变化，store version 仍为 v11，无迁移。TransformRecipe 是代码常量，TransformRequest/Result、候选正文、恢复文本与 transport 状态不进入 Zustand persist、业务 JSON或完整备份。
+- provider/model/字符数可进入可见会话元数据，但实现没有新增诊断写入；原始请求、响应、完整 Prompt、API key 与 Firewall redaction map 均不写日志。
+- 用户应用 AI 文本只修改本次 DeliveryDraft；原 Note/Task 继续作为 freshness 基线。若来源、选择、目标、Profile 或数据代际失效，既有 Preflight/执行器门禁仍阻止发送。
+
+### 20.4 自动证据、产物与运行指纹
+
+| 命令 | 结果 | 证据摘要 |
+|---|---|---|
+| `pnpm typecheck` | PASS（exit 0） | `tsc -b` 无错误 |
+| `pnpm test` | PASS（exit 0） | 49 files、518 tests 全通过 |
+| `pnpm lint` | PASS WITH WARNINGS（exit 0） | 仅 3 条既有 Fast Refresh warning；新文件零 warning |
+| `STRICT=1 pnpm check:tokens` | PASS（exit 0） | 6 项硬护栏均为 0 |
+| `(cd src-tauri && cargo test)` | PASS WITH WARNINGS（exit 0） | 182 tests 全通过；13 条既有 `unnecessary unsafe` 与 NSPasteboard 测试提示 |
+| `pnpm build:app` | PASS（exit 0，约 141.9s） | Vite 2625 modules；App、DMG、updater archive/signature 均生成 |
+| `codesign --verify --deep --strict` | PASS（exit 0） | bundle 有效并满足 designated requirement |
+| `hdiutil verify` | PASS（exit 0） | DMG CRC 校验有效 |
+| `git diff --check` | PASS（exit 0） | tracked diff 无 whitespace error |
+
+- 最终 release bundle 于 2026-08-11 05:01:15 +08:00 启动 PID 21702；`toskr-diag.log` 第 10608 行记录 `启动 v0.14.0 pid=21702`，主进程没有子进程。
+- App 二进制 SHA-256：`f24e61892ce842aae68f8dfbb4971baf913bb28733c2eba9dc655a1632ad3c07`；前端资源键为 `index-Bc25lXvu.js` / `index-CEXppqEa.css`。
+- DMG SHA-256：`54b630bc8aaf377e167b673f176a12724a6c17073d584e863890f90f80da4104`；updater archive SHA-256：`ab932dc78bcd5b1cceed5329b4e9442abeb869fb7c3df0588c115ded1e130ad0`。
+
+### 20.5 RUNTIME-REQUIRED 与已知边界
+
+- `docs/manual-qa.md` 99–106 的真实 Keychain/provider/local stub、签名 WKWebView 取消/超时/迟到、完整键盘、VoiceOver 与真实目标投递仍需原生复验；本轮未向任何真实 AI 提供商发送 fixture。
+- 浏览器状态注入证明布局、滚动与会话 UI，但不能证明 Tauri IPC 取消时序、系统网络/TLS、provider 兼容性或原生窗口在 260pt 极限高度下的全部辅助功能行为。
+- 本地取消不能中断已进入 Rust/网络栈的请求；它保证结果不回写并释放 UI busy，底层仍由 30 秒 Native 超时与 32 秒前端兜底收口。若未来需要真正节省流量，应新增可取消的 Native operation，而不是把“丢弃结果”描述为网络已取消。
+- 简单 diff 是字符替换/新增与行数摘要，不是语义 diff；它足以支持本阶段审阅，但不能当作 AI 修改正确性的证明。
+- 本阶段未执行 git add/commit/push、分支切换、stash/reset/rebase、release、版本修改或外部发布。
+
+## 21. Phase 11 实现增量（2026-08-11）
+
+> 本节记录本地投递活动元数据与安全恢复入口。Phase 11 不保存历史正文，也不提供一键重放。
+
+### 21.1 CODE-CONFIRMED
+
+- 新增有界 `DeliveryEvent` JSONL：只允许事件/投递 ID、时间、来源 ID、目标应用/bundle、方案、状态/稳定 reason、时长、字符/图片、Firewall 类别计数、脱敏数与剪贴板结果；Rust `deny_unknown_fields`、长度/数量/尺寸门禁拒绝正文旁路。
+- `draftCreated → preflightOpened/firewallBlocked → sendStarted → sendSent/sendBlocked/sendFailed → clipboardRestored/clipboardSkipped` 生命周期统一从 Draft/Native 结构化结果生成。记录失败不会改写真实发送结果。
+- 主文件 `toskr-delivery-activity.jsonl` 与单一归档 `.1.jsonl` 最多保留最新 500 条/30 天，单文件有界；坏行、未知字段、重复事件与异常时间跳过，清理仅删除这两个文件。
+- 活动写入与数据目录事务共用 Native 写闸，前端排队即持有数据代际租约；目录切换、迁移、回滚不会把旧事件写入新数据集。活动文件跟随迁移/回滚，但不参与业务 revision 或完整备份。
+- Target Lens 增加常驻历史按钮，右侧 Portal 抽屉按 deliveryId 折叠事件，只展示元数据、当前来源可用性和剪贴板结果；设置页同步提供数据范围说明与清除入口。
+- blocked/failed 只提供“重新准备”：要求全部历史来源 ID 当前仍存在，重读最新 Note/Task、刷新当前目标和方案、重新跑 Firewall并强制打开新预检；历史正文、旧 target token、旧确认与自动发送均无复用路径。
+
+### 21.2 自动证据、产物与运行指纹
+
+| 命令 | 结果 | 证据摘要 |
+|---|---|---|
+| `pnpm typecheck` | PASS（exit 0） | `tsc -b` 无错误 |
+| `pnpm test` | PASS（exit 0） | 51 files、525 tests 全通过 |
+| `pnpm lint` | PASS WITH WARNINGS（exit 0） | 仅 3 条既有 Fast Refresh warning；新文件零 warning |
+| `STRICT=1 pnpm check:tokens` | PASS（exit 0） | 6 项硬护栏均为 0 |
+| `(cd src-tauri && cargo test)` | PASS WITH WARNINGS（exit 0） | 186 tests 全通过；13 条既有 `unnecessary unsafe` 与 NSPasteboard 测试提示 |
+| `(cd src-tauri && cargo clippy --lib --tests)` | PASS WITH WARNINGS（exit 0） | 新 activity 模块零 warning；其余为既有 warning |
+| `pnpm build:app` | PASS（exit 0，140.2s） | Vite 2629 modules；App、DMG、updater archive/signature 均生成 |
+| `codesign --verify --deep --strict` | PASS（exit 0） | bundle 有效并满足 designated requirement |
+| `hdiutil verify` | PASS（exit 0） | DMG CRC 校验有效 |
+| `git diff --check` | PASS（exit 0） | tracked diff 无 whitespace error |
+
+- 最终 release bundle 于 2026-08-11 启动 PID 31031；`toskr-diag.log` 第 10611 行记录 `启动 v0.14.0 pid=31031`，主进程没有子进程。
+- App 二进制 SHA-256：`5bc25d84782d2b4fa9ef36848cbb9c9129c07cb2431734976e31e9643894e6af`；前端资源键为 `index-CjTHm0UL.js` / `index-CCvzM0kA.css`。
+- DMG SHA-256：`974a10e28535c6071afc8b05504cefc42aa9c1a8b8a8209a2262878807d09110`；updater archive SHA-256：`10787436bc5f0495905ce907f16090511ca1792b2846483d118cefbefd84b451`。
+
+### 21.3 RUNTIME-REQUIRED 与已知边界
+
+- `docs/manual-qa.md` 107–114 的真实第三方目标 sent/blocked/failed、synthetic 磁盘扫描、轮转/损坏注入、数据目录迁移、恢复预检、窄横栏、VoiceOver 与 Reduce Motion 仍需原生复验。
+- 本轮 release 启动与静态/自动测试不能证明辅助功能权限、真实 pasteboard、目标 App 生命周期和屏幕几何组合；未制造真实失败记录，也未清理用户现有活动/业务数据。
+- 记录是本地元数据审计线索，不是可靠送达证明；Native 回执未知时仍按失败/不确定处理，产品不应把“有记录”等同于第三方已接收。
+- 本阶段未执行 git add/commit/push、分支切换、stash/reset/rebase、release、版本修改或外部发布。
+
+## 22. Phase 12 实现增量（2026-08-11）
+
+> 本节记录结果回收与来源关联。候选匹配只产生建议；没有任何路径会自动把捕获卡片判定为某次投递结果。
+
+### 22.1 CODE-CONFIRMED
+
+- Note 新增可选 `deliveryResult` provenance，只持久化 delivery ID、捕获时间、来源 bundle 与来源卡 ID；关联、改绑和解除均不搬运或修改 Note 正文、图片、分组、完成状态。
+- 候选只接受 30 分钟内、精确同 bundle、已成功的 `sendSent`：唯一候选只改变捕获 HUD 提示，多候选进入显式选择器，空候选显示原因；确认前 Note 与活动文件都不产生关联。
+- Note 右键菜单和最近投递抽屉共用一个模态关联协议。选择器只显示目标、时间、来源数量、字符数与图片数；改绑二次确认，解除只删 provenance，删除源/结果时明确显示 missing/partial，不从活动记录重建正文。
+- 成功关联追加 `resultCaptured` 元数据事件，其中只增加 `resultNoteId`；前端逐字段正向构造，Rust `deny_unknown_fields`、类型/状态配对和尺寸门禁继续拒绝正文旁路。
+- 结果仍是普通 Note，可编辑、移动、勾选、删除并重新进入既有 DeliveryDraft；没有新增 Result tab、特殊发送器或历史正文重放路径。
+- redaction map 最多保留 32 个当前会话条目，只在明确敏感提示确认后生成临时恢复预览；关闭、数据上下文失效或重启即消失，不写回 Note、活动、备份或设置。
+- 任一窗口清空投递台账后会广播到主窗口，立即失效候选缓存并关闭旧关联会话；Native 确认迟到以 request/data generation 门禁丢弃，不能把已清记录重新关联。
+
+### 22.2 UI、键盘与布局证据
+
+- 380×720 浅色空态 Dialog 位于 8px 安全边距内；24 个候选时弹窗为 `8,88–372,632`，候选区可视 384px / 内容 1266px，页面无横向溢出。
+- 900×360 横向窗口中同一 24 项弹窗为 `250,8–650,352`，候选区可视 184px / 内容 1266px，页面无横向或纵向溢出。
+- Shift+Tab 保持在模态内；Escape 关闭后焦点回到稳定的“打开最近投递”触发器。暗色 + Reduce Motion 命中后弹窗动画为 `none`。
+- 上述 Playwright 只验证浏览器 DOM/CSS 和焦点协议；测试期间注入的临时卡片未进入真实用户数据，浏览器会话、Vite server 与 `.playwright-cli` 临时目录均已清理。
+
+### 22.3 Data Migration 与敏感数据生命周期
+
+- Zustand schema 从 v11 升至 v12，Rust `MAX_STORE_VERSION` 同步为 12。v11 Note 原样迁移且 provenance 缺失；v12 对合法 provenance 做字段白名单、字符串/时间/数组校验和来源 ID 去重，同时容忍未来未知 Note 字段。
+- 完整备份接受合法 provenance、拒绝无效形状；redaction map 只存在模块内存，类型与备份结构均没有持久字段。关联活动文件仍不参与业务 revision 或完整备份。
+- provenance 是当前关系真相，append-only 活动是历史线索：改绑/解除后旧事件按当前 Note 关系解释，删除 Note 不会触发历史正文恢复。
+
+### 22.4 自动证据、产物与运行指纹
+
+| 命令 | 结果 | 证据摘要 |
+|---|---|---|
+| `pnpm typecheck` | PASS（exit 0） | `tsc -b` 无错误 |
+| `pnpm test` | PASS（exit 0） | 54 files、542 tests 全通过 |
+| `pnpm lint` | PASS WITH WARNINGS（exit 0） | 仅 3 条既有 Fast Refresh warning |
+| `STRICT=1 pnpm check:tokens` | PASS（exit 0） | 6 项硬护栏均为 0 |
+| `(cd src-tauri && cargo test)` | PASS WITH WARNINGS（exit 0） | 187 tests 全通过；仅既有 warning/NSPasteboard 测试提示 |
+| `(cd src-tauri && cargo clippy --lib --tests)` | PASS WITH WARNINGS（exit 0） | 新结果回收链路零新增 warning；其余为既有 warning |
+| `pnpm build:app` | PASS（exit 0，142.8s） | Vite 2631 modules；App、DMG、updater archive/signature 均生成 |
+| `codesign --verify --deep --strict` | PASS（exit 0） | bundle 有效并满足 designated requirement |
+| `hdiutil verify` | PASS（exit 0） | DMG CRC 校验有效 |
+| `git diff --check` | PASS（exit 0） | tracked diff 无 whitespace error |
+
+- 最终 release bundle 于 2026-08-11 启动 PID 38302；`toskr-diag.log` 第 10614 行记录 `启动 v0.14.0 pid=38302`。同路径只有一个实例，主进程没有子进程。
+- App 二进制 SHA-256：`b4b198db359d9df89f37824163ffbd72d4dfbbb5a7541c7fa8be451ba575bf54`；前端资源键为 `index-_14hUU82.js` / `index-BVbvCDYl.css`。
+- DMG SHA-256：`445bb2153becaacdc55b4a06827addb0c96349bdc8fe0479091a2008061f2b7f`；updater archive SHA-256：`d142b7872c8833277538dcfbfb1954e6757efaf57f9bed09b11db2c6a1bf402e`。
+
+### 22.5 RUNTIME-REQUIRED 与已知边界
+
+- `docs/manual-qa.md` 115–122 的真实 ChatGPT/Claude 投递与捕获、HUD 唯一建议、多候选/超时/bundle 排除、改绑/解除、源/结果删除、占位恢复、真实 v11 数据升级、签名 WKWebView 与 VoiceOver 仍需原生复验。
+- bundle 启动、自动测试和浏览器注入不能证明第三方回答确属某次发送；bundle + 时间窗口只是候选缩小器，产品必须继续把最终关联责任留给用户确认。
+- 本轮没有捕获、改绑、删除或清理用户真实卡片/活动，也没有把 synthetic 敏感正文写入真实数据目录。
+- 本阶段未执行 git add/commit/push、分支切换、stash/reset/rebase、release、版本修改或外部发布。
+
+## 23. Phase 13 实现增量（2026-08-11）
+
+> 本节记录结果核验。核验只比较当前关联来源与当前结果，提供证据、缺失、风险和问题；不自动修改结果，也不声称发现全部错误。
+
+### 23.1 CODE-CONFIRMED
+
+- `verifyResultDeterministically` 本地检查空/短/疑似截断结果、JSON 与 dot-path 必填字段、必要标题/段落、占位符丢失/重复/未知及来源引用缺失；自动路径不触碰网络。发送会话计数失效时即使当前结果没有可见占位符也降级为人工复核，图片附件明确列为本阶段未核验范围。
+- `VerificationReport` 固定为 status、checks、missing、newAssumptions、risks、questions、生成时间与 source/result 会话 revision。Note/Task 对象被替换、来源删除或结果编辑后，旧报告立即 stale，保存、AI 与继续投递均 fail-closed。
+- AI 核验只有显式按钮可触发。来源和结果分别完整经过 Context Firewall，所有 finding 在本地替换后才进入唯一 `aiClient`；调用前显示 provider、model、字符范围与替换计数，严格 exact-key JSON guard 拒绝空响应、未知字段和错误结构。
+- 同一结果只允许一个 AI transport 在途；取消立即拒绝迟到结果，相同结果要等底层 transport 收口后才可再发。请求绑定数据代际与当前 source/result revision，目录切换会关闭会话。
+- 报告默认只存在 React 会话；“保存为笔记”与“问题进入预检”都先复核 live revision，再创建带同一 delivery provenance 的普通 Note。问题路径复用既有 DeliveryDraft/Firewall/Preflight，不存在自动发送旁路。
+- `resultVerified` 逐字段正向构造，只保存 result Note ID、核验状态、检查数与问题数。Rust 继续 `deny_unknown_fields`、类型/状态配对与有界计数；活动聚合按时间选择最新核验，不受 JSONL 读取顺序影响。清空活动后，迟到的结果关联/核验事件必须先找到同一 delivery 的现存成功发送事件，否则拒绝写入，不能复活已清记录。
+- Note 右键“投递结果”与最近投递抽屉提供核验入口，没有新增主 tab；清活动与数据上下文失效都会关闭旧核验弹窗，不能借旧 send event 重建历史。
+
+### 23.2 UI、键盘与布局证据
+
+- Playwright 注入 synthetic 关联卡验证 JSON 结构项通过；由于 DEV 桩没有真实活动账本/发送会话 placeholder 计数，整体保持“需要人工复核”。加入缺失 `missing.path` 与“验收标准”后变为 blocked，并启用问题入口。随后替换来源对象，旧报告显示“报告已过期”，保存与问题入口同步禁用。
+- 380×720 浅色：Dialog 为 `8,8–372,712`，内部可视 564px / 内容 943px；document 与内部横向溢出均为 0。900×360 横向：Dialog 为 `82,8–818,352`，内部可视 220px / 内容 548px，横向溢出为 0。
+- 暗色 + Reduce Motion 命中，Dialog 动画时长为 `0s`；Escape 关闭后焦点精确返回注入的稳定触发器 `qa-return-focus`。
+- 浏览器诊断使用拒绝全部 Tauri invoke 的既有 DEV 桩，因此“本地隐私检查失败/活动记录不可用”是预期错误路径证据，不代表 Native Firewall、Keychain 或真实 AI 已完成运行验证。
+
+### 23.3 Data Migration 与敏感数据生命周期
+
+- Phase 13 不改变 Zustand store version，当前仍为 v12；报告、AI 请求/响应、脱敏后输入和对象 revision 都只存在当前 WebView 会话。
+- 只有用户显式“保存为笔记”才持久化格式化报告正文；它是普通 Note，不复制来源/结果正文。活动文件只持久化状态与计数，完整备份没有新 schema。
+- 发送时 placeholder 次数只以不可逆 placeholder→count 形式从当前内存会话读取；raw→placeholder 映射不进入核验 UI、AI、活动、设置或备份。映射失效时检查降级为明确人工复核，不猜测合法性。
+- 当前架构故意不保存发送时正文，因此只能核验“当前关联来源 vs 当前结果”，不能反证关联前或发送后的历史编辑；UI 常驻披露该边界。
+
+### 23.4 自动证据、产物与运行指纹
+
+| 命令 | 结果 | 证据摘要 |
+|---|---|---|
+| `pnpm typecheck` | PASS（exit 0） | `tsc -b` 无错误 |
+| `pnpm test` | PASS（exit 0） | 57 files、561 tests 全通过 |
+| `pnpm lint` | PASS WITH WARNINGS（exit 0） | 仅 3 条既有 Fast Refresh warning |
+| `STRICT=1 pnpm check:tokens` | PASS（exit 0） | 6 项硬护栏均为 0 |
+| `(cd src-tauri && cargo test)` | PASS WITH WARNINGS（exit 0） | 189 tests 全通过；仅既有 warning/NSPasteboard 测试提示 |
+| `(cd src-tauri && cargo clippy --all-targets --all-features)` | PASS WITH WARNINGS（exit 0） | 结果核验链路零新增 warning；其余为既有 warning |
+| `pnpm build:app` | PASS（exit 0，141.8s） | Vite 2633 modules；App、DMG、updater archive/signature 均生成 |
+| `codesign --verify --deep --strict` | PASS（exit 0） | bundle 有效并满足 designated requirement |
+| `hdiutil verify` | PASS（exit 0） | DMG CRC 校验有效 |
+| `git diff --check` | PASS（exit 0） | tracked diff 无 whitespace error |
+
+- 最终 release bundle 于 2026-08-11 启动 PID 49347；`toskr-diag.log` 第 10620 行记录 `启动 v0.14.0 pid=49347`。同路径只有一个实例，主进程没有子进程。
+- App 二进制 SHA-256：`601abca1c15ff90a10a86217afb1c17d53b8f7f9d92402005b889d33c41de1be`；前端资源键为 `index-bmjvQ3M3.js` / `index-c2vGlXh9.css`。
+- DMG SHA-256：`3b2a6993b30f61224c92cfed3688517c1a9831f0acde59389896f1885b54c5b3`；updater archive SHA-256：`f3da50c1281f06547cdff1c9fe8894906fb5a29bdd496473e848a97a1a1563b5`。
+- 旧 PID 46672 精确退出后，以 `open -n` 成功启动同一最终 bundle。
+
+### 23.5 RUNTIME-REQUIRED 与已知边界
+
+- `docs/manual-qa.md` 123–130 的真实签名 WKWebView、本机 Firewall IPC、Keychain/local AI stub、第三方来源/结果、活动磁盘扫描、VoiceOver、Tab/Shift+Tab 与 260–420pt 原生横栏仍需复验。
+- 自动检查可证明约定结构、占位符与当前对象版本，不可证明语义事实完整，也不可发现全部幻觉；pass 文案限定为“规则内未发现问题”。
+- 本轮没有调用真实 AI、没有捕获或修改用户真实结果卡，没有把 synthetic 测试正文写入真实数据目录或活动文件。
+- 本阶段未执行 git add/commit/push、分支切换、stash/reset/rebase、release、版本修改或外部发布。
+
+## 24. Phase 14 实现增量（2026-08-11）
+
+> 本节记录只基于本地活动元数据的成效度量。实测流程时长与用户人工基线估算始终分开；没有基线时不显示节省时间。
+
+### 24.1 CODE-CONFIRMED
+
+- 新增纯函数聚合器，按本地日历日支持近 7 天、近 30 天与全部保留期，并可按最终成功事件的 Target Profile / TransformRecipe 过滤；输出尝试数、成功率、blocked/failed 原因、目标拦截、Firewall/脱敏、剪贴板、重试、核验、质量反馈及各阶段中位耗时。
+- 小于 5 个样本不输出趋势结论；只有一个有投递日期时明确提示至少需要两个日期，不把单日样本误报为持平。损坏、未知或含正文旁路的活动记录由既有 Native 白名单跳过，聚合器只接收已批准元数据字段。
+- 结果质量反馈为 `directUse / minorEdit / majorEdit / discarded` 四态，绑定 delivery + 当前 result Note；改绑、旧 metrics epoch、关闭度量或清除后不再展示旧反馈入口。
+- Settings 的“成效与隐私”位于既有“发送”分区，不新增主 tab。界面使用轻量数值、分布和 CSS 柱条，支持范围/Profile/recipe 过滤、度量开关、7/30/90 天留存、人工基线、问题计时与二次确认清除。
+- 只有合法的 Profile/recipe 人工分钟基线才计算“估算累计节省”，recipe 基线优先；`Draft→resultCaptured` 与问题 start→solved 作为实测时长单独展示，不推断金额、人工成本或绩效。
+- 度量关闭不阻断投递：恢复账本仍写入 `metricsEligible=false` 的最小事件，dashboard 不消费。清除成效历史通过推进 `metricsEpoch` 隔离旧事件与排队迟到写，同时只清质量反馈/问题会话，不删除承担恢复职责的活动 JSONL。
+- 问题会话只保存 session、delivery、result Note ID 和时间；delivery 与结果关系、顺序、重复解决/取消及跨 epoch 状态均有严格门禁。
+
+### 24.2 UI、键盘与布局证据
+
+- Playwright 隔离页在 560×560 浅色窄窗验证 document/root/main 横向溢出均为 0；暗色 + Reduce Motion 下可见动画数为 0。Tab 顺序覆盖导航、刷新、度量开关、留存、摘要、范围、过滤、基线、问题计时和清除。
+- 空数据且无人工基线时显示“人工基线 未设置”，不生成节省数值。注入仅含元数据的 6 次 synthetic 生命周期后，界面显示 67% 成功率、目标拦截、Firewall/脱敏、剪贴板、核验、2 分钟 Draft→send、30 秒 send→result 和 2.5 分钟实测流程时长。
+- 浏览器内临时设置 20 分钟人工基线后，界面把“估算累计节省 18 分钟 / 1 个有人工基线样本”与实测 2.5 分钟分栏展示。截图位于忽略目录 `output/playwright/phase14-outcome-narrow-light.png`、`phase14-outcome-narrow-dark-reduced.png`、`phase14-outcome-synthetic-baseline.png`。
+- 上述证据只证明 DOM/CSS、键盘序列和纯前端聚合；注入数据没有进入用户 store 或活动文件，浏览器会话与 Vite server 已关闭。
+
+### 24.3 Data Migration 与敏感数据生命周期
+
+- Zustand schema 从 v12 升至 v13，Rust `MAX_STORE_VERSION` 同步为 13。迁移默认开启度量、保留 30 天、epoch=0，并兼容字段缺失、未知字段、重复/超限基线、反馈和会话；持久集合均有界且先校验再截断。
+- `DeliveryEvent` 新增可选 `metricsEligible`、`metricsEpoch`、`transformRecipeId`，Rust 对旧 JSONL 缺字段保持兼容并继续 `deny_unknown_fields`。活动读取/追加按 7/30/90 天设置压实，业务正文、Prompt、结果正文、API key、token 与 redaction map 均不进入事件或 dashboard。
+- 清除成效历史不删除 `toskr-delivery-activity.jsonl` / `.1.jsonl`，因此不会破坏最近投递恢复、结果关联或核验证据；旧 epoch 只对指标不可见。人工基线作为用户设置保留，质量反馈和问题会话归零。
+
+### 24.4 自动证据、产物与运行指纹
+
+| 命令 | 结果 | 证据摘要 |
+|---|---|---|
+| `pnpm typecheck` | PASS（exit 0） | `tsc -b` 无错误 |
+| `pnpm test` | PASS（exit 0） | 59 files、579 tests 全通过 |
+| `pnpm lint` | PASS WITH WARNINGS（exit 0） | 仅 3 条既有 Fast Refresh warning |
+| `STRICT=1 pnpm check:tokens` | PASS（exit 0） | 6 项硬护栏均为 0 |
+| `(cd src-tauri && cargo test)` | PASS WITH WARNINGS（exit 0） | 192 tests 全通过；仅既有 warning/NSPasteboard 测试提示 |
+| `(cd src-tauri && cargo clippy --all-targets --all-features)` | PASS WITH WARNINGS（exit 0） | 成效度量链路零新增 warning；其余为既有 warning |
+| `pnpm build:app` | PASS（exit 0，约 153s） | Vite 2635 modules；App、DMG、updater archive/signature 均生成 |
+| `codesign --verify --deep --strict` | PASS（exit 0） | bundle 有效并满足 designated requirement |
+| `hdiutil verify` | PASS（exit 0） | DMG CRC 校验有效 |
+| `git diff --check` | PASS（exit 0） | tracked diff 无 whitespace error |
+
+- 最终 release bundle 于 2026-08-11 启动 PID 56914；`toskr-diag.log` 第 10623 行记录 `启动 v0.14.0 pid=56914`。同路径只有一个实例，主进程没有子进程。
+- App 二进制 SHA-256：`ded55496988978e9b7dc16319ec2fc057971ee59482c29dd6c80743a72df2eca`；前端资源键为 `index-CcaUKpKE.js` / `index-zGUhwu99.css`。
+- DMG SHA-256：`d47f6f8e0472750edb6d6b29355c7f6efe6667874098b55df853fcdbc0d6bd32`；updater archive SHA-256：`f92e635d9c98f7d1b343ac6b5475ead44a108e983d8d7849be8da7fba1006c38`。
+
+### 24.5 RUNTIME-REQUIRED 与已知边界
+
+- `docs/manual-qa.md` 131–138 的真实投递/结果/核验事件、跨午夜时区、质量更新、签名设置窗、真实活动压实、清除前后磁盘 hash、VoiceOver 与 260–420pt 原生横栏仍需复验。
+- 本轮 Computer Use 无法枚举签名 App 窗口，系统辅助功能桥接也超时；因此没有把 Playwright 页面当作真实 WKWebView/Tauri IPC、系统主题、原生活动文件或辅助功能证明。
+- 成效统计是本地流程线索，不是第三方送达、内容质量或生产力的自动裁决；用户基线是人工估算，样本少时不输出趋势，任何实际节省都不换算金额。
+- 本阶段未执行 git add/commit/push、分支切换、stash/reset/rebase、release、版本修改或外部发布。
+
+## 25. Phase 15｜首次真实演练、无障碍与发布硬化（2026-08-11）
+
+### 25.1 实现边界
+
+- Zustand schema 从 v13 升至 v14，Rust `MAX_STORE_VERSION` 同步为 14。`onboardingVersion=2` 保存步骤、暂停/完成/稍后时间、受控示例 Note ID 与权限就绪后的内部激活时间；旧 `done=true` 用户迁为 `complete + inactive`，不会强制重做，未知字段继续保留。
+- 演练不建模拟发送器：示例必须经全局双击捕获成为普通 Note，再复用 Target Lens、唯一 `DeliveryDraft`、Context Firewall、Preflight 与 Native `send_delivery`。设置 → 关于仅重置演练会话，不删除用户卡片。
+- `safeRehearsal` 只活在非持久化 Draft。构建时强制 `requireRedaction`、开启 Firewall、恢复全部 warn 类别、`pressEnter=false` 与 `keepPanel=true`；DeliveryStore、Preflight 重建及唯一执行器重复收紧，UI 无法重新开启回车。
+- 60 秒只从复制受控示例后计算本机布尔激活信号，不展示倒计时；系统权限页停留、暂停或选择稍后不会被记录为失败。
+
+### 25.2 发布证据边界
+
+- 自动语义覆盖 Target Lens、Preflight/Firewall、最近投递、Result Return、结果核验、成效设置和演练控件；根 `MotionConfig reducedMotion="user"` 与各浮层 `motion-reduce` 保持减弱动效下的静态状态。
+- 参考环境 macOS 15.6.1 arm64、Node 22.18.0、pnpm 10.12.1、rustc 1.87.0：1 MiB Firewall 364.26ms、500 条活动聚合 3ms、50,000 条历史下 Lens+Preflight SSR 36ms。数值是本机回归样本，不是跨硬件承诺。
+- 真正 TCC、VoiceOver、第三方 App、原生四缘/多屏、全屏 Space 与 wakeups 不能由 Vitest/SSR 证明，统一保留 `RUNTIME-REQUIRED`；详见 `docs/context-router-release-readiness.md` 与 QA 139–146。
+
+### 25.3 可复用结论
+
+- 上手流程若复制业务 UI 却绕开真实入口，只能证明演示组件；受控数据、显式目标确认与不可变安全锁应嵌入现有权威管线。
+- 上手完成状态与“可再次演练”是两个维度：旧用户可以保持 `done=true`，同时用会话级 `rehearsalActive` 重跑，避免帮助入口反向破坏首次体验兼容性。

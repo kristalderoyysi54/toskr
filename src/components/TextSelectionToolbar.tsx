@@ -31,6 +31,7 @@ const BLOCK_FORMATS: ReadonlyArray<{
   { id: "heading3", label: "标题 3", shortcut: "⌥⌘3" },
   { id: "numbered-list", label: "编号列表", shortcut: "⌥⌘4" },
   { id: "bullet-list", label: "项目符号列表", shortcut: "⌥⌘5" },
+  { id: "code-block", label: "代码块", shortcut: "⌥⌘6" },
 ];
 
 const formatLabel = (id: BlockSelectionFormat) =>
@@ -111,7 +112,7 @@ export function TextSelectionToolbar({
       } else if (!event.altKey && key === "k") {
         event.preventDefault();
         openLink();
-      } else if (event.altKey && /^Digit[0-5]$/.test(event.code)) {
+      } else if (event.altKey && /^Digit[0-6]$/.test(event.code)) {
         event.preventDefault();
         const format = BLOCK_FORMATS[Number(event.code.slice(-1))]?.id;
         if (format) onApply(applyBlockFormat(text, selection, format));

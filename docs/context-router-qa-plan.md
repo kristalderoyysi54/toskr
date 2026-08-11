@@ -178,13 +178,13 @@ notes: string
 | CTX-03-008 | P1 / Native | 磁吸 App A、实际发送目标 B 时显示 B 而不是 A |
 | CTX-03-R01 | P1 / Accessibility | VoiceOver 读出目标、应用名、状态、Enter 策略；窄面板不溢出 |
 
-### 阶段 04｜Target Profile 与 Prompt 分组
+### 阶段 04｜投递方案与提示词组
 
 | 场景 ID | 优先级/层 | 场景与关键预期 |
 |---|---|---|
 | CTX-04-001 | P0 / Migration | v7→新版本后 snippet 数量、文本、ID 和顺序不丢失 |
 | CTX-04-002 | P0 / Migration | 旧 autoEnter=true 不迁移为无提示自动 Enter |
-| CTX-04-003 | P1 / TS | 临时覆盖 > bundle 精确匹配 > 用户默认 > 安全默认的优先级确定 |
+| CTX-04-003 | P1 / TS | 临时覆盖 > bundle exact/conflict > 未识别应用 fallback 的优先级确定；A→B→A 不复活旧覆盖 |
 | CTX-04-004 | P1 / TS | 删除 Profile/group/snippet 后引用修复且无孤儿 |
 | CTX-04-005 | P1 / TS | 重复 bundle 有确定性 winner 与 UI 警告 |
 | CTX-04-006 | P1 / TS | 目标变化不静默覆盖本次用户选择 |
@@ -310,6 +310,7 @@ notes: string
 | CTX-13-004 | P1 / TS | 错误 JSON、超时、取消、空响应不改 result Note |
 | CTX-13-005 | P0 / Privacy | verification activity 不含来源或结果正文 |
 | CTX-13-006 | P1 / Data | 保存报告生成普通 Note 并保留 ResultLink |
+| CTX-13-007 | P1 / Accessibility | 窄竖屏/横栏、主题、减弱动效、焦点闭环和 stale 禁用状态可读 |
 | CTX-13-R01 | P1 / Native | 本地检查→显式 AI 核验→来源变化→stale→保存问题 Note |
 
 ### 阶段 14｜Outcome Intelligence
@@ -324,20 +325,23 @@ notes: string
 | CTX-14-006 | P0 / Data | 清指标不删除业务数据或活动原始事件 |
 | CTX-14-007 | P0 / Privacy | 聚合器从不读取正文，只读已批准元数据 |
 | CTX-14-008 | P1 / Robustness | 损坏活动记录不使 dashboard 崩溃 |
+| CTX-14-009 | P1 / TS | 质量反馈同 delivery 更新且四态分布准确 |
+| CTX-14-010 | P1 / TS | 问题会话开始、关联投递/结果、解决与取消状态确定 |
+| CTX-14-011 | P0 / Migration | v12→v13 默认值、缺字段/未知字段/重复项与 Native 备份校验兼容 |
 | CTX-14-R01 | P1 / Native | 配基线前后对比；关闭/清除/缩短留存逐项验证 |
 
 ### 阶段 15｜Onboarding、无障碍与发布硬化
 
 | 场景 ID | 优先级/层 | 场景与关键预期 |
 |---|---|---|
-| CTX-15-001 | P1 / TS | onboarding 可暂停、退出、重启后恢复 |
-| CTX-15-002 | P0 / Native | 权限拒绝、稍后授权、系统事件流拦截为不同状态和行动 |
-| CTX-15-003 | P0 / Policy | 演练中的自动 Enter 始终关闭 |
-| CTX-15-004 | P1 / Migration | 已完成 onboarding 的旧用户不被强制重做 |
-| CTX-15-005 | P1 / Accessibility | 所有新增控件有 accessible name/state/description |
-| CTX-15-006 | P1 / Visual | 最窄支持窗口无横向溢出、系统粗滚动条或遮挡 |
-| CTX-15-007 | P1 / Performance | 目标事件、扫描、预检、活动列表的样本环境和耗时可复核 |
-| CTX-15-008 | P0 / Release | 所有阶段测试/build/启动指纹通过；未跑项明确 RUNTIME-REQUIRED |
+| CTX-15-001 | P1 / TS | `onboarding.test.ts`：暂停、恢复、示例 Note 与内部 60 秒指标 PASS；真实重启按 QA 142 复核 |
+| CTX-15-002 | P0 / Native | 五态权限矩阵与可行动文案自动 PASS；真实 TCC 拒绝/重授/输入监控仍为 `RUNTIME-REQUIRED` |
+| CTX-15-003 | P0 / Policy | Draft helper、DeliveryStore、Preflight 与唯一 Native 执行器四层锁定 `pressEnter=false`；集成测试 PASS |
+| CTX-15-004 | P1 / Migration | Zustand v13→v14 与 Rust validator PASS；旧 `done=true` 迁入 complete/inactive，不强制重做 |
+| CTX-15-005 | P1 / Accessibility | Lens、Preflight/Firewall、最近投递、Result Return、核验、成效与演练 37 个语义测试 PASS；真实 VoiceOver 为 `RUNTIME-REQUIRED` |
+| CTX-15-006 | P1 / Visual | 组件使用 viewport 限制、内部滚动与截断；浏览器/签名窄窗、横栏仍按 QA 144 留运行证据 |
+| CTX-15-007 | P1 / Performance | macOS 15.6.1 arm64：1 MiB Firewall 364.26ms；500 活动 3ms；50k Lens+Preflight 36ms；空闲 wakeups 待 Native |
+| CTX-15-008 | P0 / Release | 全门禁、构建、启动 PID/指纹写入 release readiness；未跑原生矩阵不得升级为 PASS |
 | CTX-15-R01 | P0 / Native | 全新临时数据完成权限→捕获→Lens→Firewall→Preflight→投递演练 |
 | CTX-15-R02 | P1 / Accessibility | 全键盘访问、VoiceOver、减弱动效、浅/深色、标准/紧缩密度回归 |
 

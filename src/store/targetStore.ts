@@ -42,7 +42,7 @@ function statusOf(snapshot: TargetSnapshot): TargetStatus {
   return snapshot.ready ? "ready" : "blocked";
 }
 
-function profileTargetIdentity(snapshot: TargetSnapshot | null): string | null {
+export function targetProfileIdentity(snapshot: TargetSnapshot | null): string | null {
   if (!snapshot?.bundleId || snapshot.pid === null || snapshot.launchedAtMs === null) {
     return null;
   }
@@ -94,7 +94,7 @@ function commitSnapshot(snapshot: TargetSnapshot): boolean {
 
   const sameBundle = current.snapshot?.bundleId === snapshot.bundleId;
   const icon = sameBundle ? current.icon : null;
-  const nextProfileTargetIdentity = profileTargetIdentity(snapshot);
+  const nextProfileTargetIdentity = targetProfileIdentity(snapshot);
   const profileTargetChanged =
     !!current.profileOverrideId &&
     current.profileOverrideTargetIdentity !== null &&
@@ -232,7 +232,7 @@ export function setTargetProfileOverride(profileId: string | null): void {
   useTargetStore.setState({
     profileOverrideId: profileId,
     profileOverrideTargetIdentity: profileId
-      ? profileTargetIdentity(snapshot)
+      ? targetProfileIdentity(snapshot)
       : null,
     profileOverrideNeedsConfirmation: false,
   });
@@ -246,7 +246,7 @@ export function confirmTargetProfileOverride(): void {
   const current = useTargetStore.getState();
   if (!current.profileOverrideId) return;
   useTargetStore.setState({
-    profileOverrideTargetIdentity: profileTargetIdentity(current.snapshot),
+    profileOverrideTargetIdentity: targetProfileIdentity(current.snapshot),
     profileOverrideNeedsConfirmation: false,
   });
 }
@@ -268,7 +268,7 @@ export function targetStatusLabel(status: TargetStatus): string {
     case "refreshing":
       return "正在确认";
     case "ready":
-      return "可发送";
+      return "目标可用";
     case "blocked":
       return "目标已失效";
     default:

@@ -10,19 +10,22 @@ import {
   Inbox,
   ListOrdered,
   ListTodo,
+  Link2,
   Merge,
   Pencil,
   PenLine,
   ExternalLink,
   Send,
   ScanText,
+  ShieldCheck,
   Sparkles,
   Star,
   Trash2,
+  Unlink,
   Wand2,
 } from "lucide-react";
 
-import { imageCaption } from "@/lib/format";
+import { imageCaption, imageListLabel } from "@/lib/format";
 import { tip } from "@/lib/tip";
 import { IconButton } from "@/components/ui/icon-button";
 import { TargetSendMenuItem } from "@/components/TargetSendMenuItem";
@@ -74,6 +77,13 @@ import {
 } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
 import { isDataOperationLocked } from "@/store/dataOperationStore";
+import {
+  deliveryRedactionMapAvailable,
+  requestPlaceholderPreview,
+  requestResultLinkForNote,
+  requestResultUnlink,
+} from "@/lib/resultReturn";
+import { requestResultVerification } from "@/lib/resultVerification";
 
 /** 双击发送的第一击会塌掉多选：留档点击前的集合供 onDoubleClick 找回。 */
 let lastMultiSelection: { ids: string[]; at: number } | null = null;
@@ -130,6 +140,15 @@ export const NoteCard = memo(function NoteCard({
   const mergeCount = checked ? checkedCount : checkedCount + 1;
   const sections = useNotesStore((s) => s.sections);
   const focused = useUIStore((s) => s.focusedId === note.id);
+  const provenanceSourceState = useNotesStore((state) => {
+    if (!note.provenance) return "available" as const;
+    const ids = note.provenance.sourceItemIds;
+    const count = ids.filter((id) =>
+      state.notes.some((item) => item.id === id) ||
+      state.tasks.some((item) => item.id === id)
+    ).length;
+    return count === ids.length ? "available" as const : count ? "partial" as const : "missing" as const;
+  });
   const flashing = useUIStore((s) => s.flashId === note.id);
   // ⌘ 按住时前 9 张卡显示 ⌘N 快发角标
   const quickSlot = useUIStore((s) => {
@@ -200,6 +219,25 @@ export const NoteCard = memo(function NoteCard({
     openNoteDetail(note.id, editing);
   };
 
+  const openProvenanceSource = () => {
+    const sourceIds = note.provenance?.sourceItemIds ?? [];
+    const state = useNotesStore.getState();
+    const sourceNote = state.notes.find((item) => sourceIds.includes(item.id));
+    if (sourceNote) {
+      openNoteDetail(sourceNote.id);
+      return;
+    }
+    const sourceTask = state.tasks.find((item) => sourceIds.includes(item.id));
+    if (sourceTask) {
+      const ui = useUIStore.getState();
+      ui.setPage("tasks");
+      ui.setFocusedId(sourceTask.id);
+      tip("info", "已定位原始任务");
+      return;
+    }
+    tip("warn", "原始来源已不存在，结果卡仍可正常使用");
+  };
+
   // 文本卡正文可直接拖出到外部应用输入框（WKWebView 原生桥接系统拖拽）；
   // onPointerDown 阻断冒泡：抓文字=拖出文本，抓卡片其余部分（含图片/链接区）=拖拽排序
   const dragOutProps =
@@ -266,8 +304,13 @@ export const NoteCard = memo(function NoteCard({
         );
       case "send":
         return (
-          <TargetSendMenuItem key={id} onClick={() => void sendNotesToChat([note.id])}>
-            <Send className="size-3.5" /> 发送到对话
+          <TargetSendMenuItem
+            key={id}
+            allowInternal={note.sectionId === CLIPBOARD_ID}
+            onClick={() => void sendNotesToChat([note.id])}
+          >
+            <Send className="size-3.5" />
+            {note.sectionId === CLIPBOARD_ID ? "发送 / 添加" : "发送到对话"}
           </TargetSendMenuItem>
         );
       case "copy":
@@ -283,7 +326,6 @@ export const NoteCard = memo(function NoteCard({
           </ContextMenuItem>
         );
       case "edit":
-        if (isImage) return null;
         return (
           <ContextMenuItem key={id} onClick={() => openPreview(true)}>
             <Pencil className="size-3.5" /> 编辑
@@ -796,7 +838,27 @@ export const NoteCard = memo(function NoteCard({
           )}
 
           <div className="flex h-4 shrink-0 items-center gap-1 text-micro text-muted-foreground/70">
-            {note.sourceApp ? <span className="truncate">来自 {note.sourceApp}</span> : <span />}
+            {note.provenance ? (
+              <button
+                type="button"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openProvenanceSource();
+                }}
+                className={cn(
+                  "inline-flex min-w-0 items-center gap-1 truncate rounded-sm outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50",
+                  provenanceSourceState !== "available" && "text-warning"
+                )}
+              >
+                <Link2 className="size-3 shrink-0" aria-hidden />
+                {provenanceSourceState === "available"
+                  ? "来自投递结果"
+                  : provenanceSourceState === "partial"
+                    ? "投递结果 · 部分来源缺失"
+                    : "投递结果 · 来源缺失"}
+              </button>
+            ) : note.sourceApp ? <span className="truncate">来自 {note.sourceApp}</span> : <span />}
             <span className="ml-auto shrink-0 tabular-nums text-muted-foreground/50">
               {isImage && note.imageW
                 ? `${note.imageW} × ${note.imageH}`
@@ -829,11 +891,14 @@ export const NoteCard = memo(function NoteCard({
                 <Expand className="size-3" />
               )}
             </IconButton>
-            {!isImage && (
-              <IconButton label="编辑" surface reveal="hover-focus" onClick={() => openPreview(true)}>
-                <Pencil className="size-3" />
-              </IconButton>
-            )}
+            <IconButton
+              label="编辑"
+              surface
+              reveal="hover-focus"
+              onClick={() => openPreview(true)}
+            >
+              <Pencil className="size-3" />
+            </IconButton>
             <IconButton
               label="删除"
               surface
@@ -863,6 +928,40 @@ export const NoteCard = memo(function NoteCard({
             }}
           >
             <Inbox className="size-3.5" /> 保存为笔记
+          </ContextMenuItem>
+        )}
+        {note.provenance ? (
+          <ContextMenuSub>
+            <ContextMenuSubTrigger>
+              <Link2 className="mr-2 size-3.5" /> 投递结果
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent className="w-44">
+              <ContextMenuItem onClick={openProvenanceSource}>
+                <Expand className="size-3.5" /> 打开原始上下文
+              </ContextMenuItem>
+              <ContextMenuItem onClick={() => requestResultVerification(
+                note.id,
+                cardRef.current?.querySelector<HTMLElement>("[data-drag-handle]") ?? cardRef.current
+              )}>
+                <ShieldCheck className="size-3.5" /> 核验结果
+              </ContextMenuItem>
+              <ContextMenuItem onClick={() => requestResultLinkForNote(note.id, cardRef.current)}>
+                <Link2 className="size-3.5" /> 更改投递关联
+              </ContextMenuItem>
+              <ContextMenuItem onClick={() => requestPlaceholderPreview(note.id, cardRef.current)}>
+                <ScanText className="size-3.5" />
+                {deliveryRedactionMapAvailable(note.provenance.deliveryId)
+                  ? "恢复占位符预览"
+                  : "占位符映射已失效"}
+              </ContextMenuItem>
+              <ContextMenuItem onClick={() => requestResultUnlink(note.id, cardRef.current)}>
+                <Unlink className="size-3.5" /> 解除投递关联
+              </ContextMenuItem>
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+        ) : (
+          <ContextMenuItem onClick={() => requestResultLinkForNote(note.id, cardRef.current)}>
+            <Link2 className="size-3.5" /> 关联到最近投递
           </ContextMenuItem>
         )}
         {/* 中段按设置项的显隐与顺序渲染；卡片类型不适用的项自动跳过 */}
@@ -901,9 +1000,7 @@ function CompactRow({
   const images = noteImages(note);
   const link = isLink ? linkParts(note.url!) : null;
   const firstLine = isImage
-    ? images.length > 1
-      ? `图片 ×${images.length}`
-      : `图片${note.imageW ? ` ${note.imageW}×${note.imageH}` : ""}`
+    ? imageListLabel(note, images.length)
     : isLink
       ? (note.linkTitle ?? link!.host + (link!.path === "/" ? "" : link!.path))
       : note.text.split("\n")[0] || "（空）";
@@ -967,6 +1064,12 @@ function CompactRow({
       {/* 尾部元数据在 hover 时淡出，给悬浮操作钮让位（原先是图标直接压在时间上打架） */}
       {note.keep && (
         <Star className="size-3 shrink-0 fill-amber-400 text-amber-400 transition-opacity group-hover:opacity-0" />
+      )}
+      {note.provenance && (
+        <Link2
+          className="size-3 shrink-0 text-primary transition-opacity group-hover:opacity-0"
+          aria-label="来自投递结果"
+        />
       )}
       {!isImage && images.length > 0 && (
         <span className="shrink-0 text-micro text-muted-foreground/60 transition-opacity group-hover:opacity-0">

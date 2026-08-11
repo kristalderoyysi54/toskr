@@ -19,6 +19,8 @@ pub enum TriggerPayload {
         image_h: Option<u32>,
         app_name: Option<String>,
         bundle_id: Option<String>,
+        /// 原剪贴板恢复不完整时的可见告警；正常恢复为 null。
+        clipboard_warning: Option<String>,
     },
 }
 
@@ -61,6 +63,8 @@ pub struct EdgeHideStatePayload {
 pub const TRIGGER_EVENT: &str = "toskr://trigger";
 /// 前台观察器确认“下一次投递目标”语义变化；载荷为最新 TargetSnapshot。
 pub const TARGET_CHANGED_EVENT: &str = "toskr://target-changed";
+/// 任一窗口清空投递活动后广播；其他窗口必须丢弃候选缓存和旧关联会话。
+pub const DELIVERY_ACTIVITY_CLEARED_EVENT: &str = "toskr://delivery-activity-cleared";
 pub const HUD_EVENT: &str = "toskr://hud";
 pub const HUD_HOVER_EVENT: &str = "toskr://hud-hover";
 /// 即将隐藏 HUD：先通知前端播退场动画，延迟少许再真正 hide（进出场对称）。

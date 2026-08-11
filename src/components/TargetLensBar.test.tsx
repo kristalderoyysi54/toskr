@@ -3,10 +3,16 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { TargetSnapshot } from "@/lib/tauri";
 import {
-  TargetLensProfileDetails,
   TargetLensView,
   type TargetLensViewProps,
 } from "@/components/TargetLensBar";
+import {
+  canPermanentlyAssignTargetProfileOverride,
+  INITIAL_TARGET_LENS_DISCLOSURE_STATE,
+  shouldClearOpenQuickSwitchOverride,
+  targetLensDetailsExpanded,
+  targetLensDisclosureStateAfter,
+} from "@/lib/targetLens";
 
 const readySnapshot: TargetSnapshot = {
   token: "token",
@@ -29,29 +35,157 @@ function render(props: Partial<TargetLensViewProps>) {
       reason={null}
       icon={null}
       profileName="安全默认"
+      profileId="default-safe"
       promptGroupName="通用"
-      profileSource="safe"
+      profileSource="fallback"
       defaultFormat="plain"
       enterPolicy="never"
-      privacyPolicy="requireRedaction"
-      duplicateBundleProfileIds={[]}
+      keepPanel={false}
+      privacyCapabilityActive={false}
       profileOverrideNeedsConfirmation={false}
       profileOverrideId={null}
-      profileOptions={[{ id: "codex", name: "Codex" }]}
+      profileOverrideName={null}
+      automaticProfileName="安全默认"
+      quickProfiles={[
+        {
+          id: "default-safe",
+          name: "安全默认",
+          promptGroupName: "通用",
+          defaultFormat: "plain",
+          enterPolicy: "never",
+          keepPanel: false,
+        },
+      ]}
+      quickSwitchOpen={false}
+      canMakePermanent={false}
       onRefresh={vi.fn()}
       onConfirmProfile={vi.fn()}
       onSelectProfile={vi.fn()}
-      onManageProfiles={vi.fn()}
+      onQuickSwitchOpenChange={vi.fn()}
+      onMakePermanent={vi.fn()}
+      onEditCurrentProfile={vi.fn()}
+      onOpenActivity={vi.fn()}
       {...props}
     />
   );
 }
 
 describe("TargetLensView", () => {
+  it("浮层打开期间目标变化会清除不适用的临时覆盖", () => {
+    expect(
+      shouldClearOpenQuickSwitchOverride({
+        open: true,
+        profileOverrideId: "temporary",
+        profileOverrideTargetIdentity: "otty:42:500",
+        targetIdentity: "codex:99:700",
+        profileOverrideNeedsConfirmation: true,
+      })
+    ).toBe(true);
+    expect(
+      shouldClearOpenQuickSwitchOverride({
+        open: false,
+        profileOverrideId: "temporary",
+        profileOverrideTargetIdentity: "otty:42:500",
+        targetIdentity: "codex:99:700",
+        profileOverrideNeedsConfirmation: true,
+      })
+    ).toBe(false);
+  });
+
+  it("只有仍绑定当前目标且被统一解析为 temporary 的覆盖才能永久绑定", () => {
+    const valid = {
+      targetBundleId: "com.example.otty",
+      targetIdentity: "otty:42:500",
+      profileOverrideId: "writing",
+      profileOverrideTargetIdentity: "otty:42:500",
+      profileOverrideNeedsConfirmation: false,
+      resolvedProfileId: "writing",
+      resolvedSource: "temporary" as const,
+      isTargetReady: true,
+    };
+
+    expect(canPermanentlyAssignTargetProfileOverride(valid)).toBe(true);
+    expect(
+      canPermanentlyAssignTargetProfileOverride({
+        ...valid,
+        targetIdentity: "codex:99:700",
+      })
+    ).toBe(false);
+    expect(
+      canPermanentlyAssignTargetProfileOverride({
+        ...valid,
+        profileOverrideNeedsConfirmation: true,
+      })
+    ).toBe(false);
+    expect(
+      canPermanentlyAssignTargetProfileOverride({
+        ...valid,
+        resolvedSource: "fallback",
+      })
+    ).toBe(false);
+  });
+
+  it("默认收起只保留目标与状态，隐藏规则用风险点提示", () => {
+    const html = render({
+      status: "ready",
+      snapshot: { ...readySnapshot, appName: "Otty" },
+      profileName: "终端投递",
+      profileSource: "exact",
+      promptGroupName: "终端问答",
+      defaultFormat: "code",
+      enterPolicy: "allow",
+    });
+
+    expect(html).toContain("Otty");
+    expect(html).toContain("目标可用");
+    expect(html).toContain('aria-label="打开最近投递"');
+    expect(html).not.toContain("应用指定 · 终端问答 · 代码块");
+    expect(html).not.toContain('aria-label="本次投递方案');
+    expect(html).not.toContain('aria-label="重新识别投递目标"');
+    expect(html).not.toContain("提示词组：终端问答");
+    expect(html).not.toContain("输出格式：代码块");
+    expect(html).not.toContain("发送完成后：关闭面板");
+    expect(html).not.toContain(">自动按回车 · 高风险</span>");
+    expect(html).not.toContain(">隐私未启用</span>");
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain('aria-controls="');
+    expect(html).toContain('aria-label="展开投递详情，包含风险项"');
+    expect(html).toContain("data-target-lens-warning-indicator");
+  });
+
+  it("详情状态只响应箭头切换，Escape 收起", () => {
+    let state = INITIAL_TARGET_LENS_DISCLOSURE_STATE;
+    expect(targetLensDetailsExpanded(state)).toBe(false);
+
+    state = targetLensDisclosureStateAfter(state, { type: "toggle" });
+    expect(targetLensDetailsExpanded(state)).toBe(true);
+
+    state = targetLensDisclosureStateAfter(state, { type: "dismiss" });
+    expect(targetLensDetailsExpanded(state)).toBe(false);
+
+    state = targetLensDisclosureStateAfter(state, { type: "toggle" });
+    state = targetLensDisclosureStateAfter(state, { type: "toggle" });
+    expect(targetLensDetailsExpanded(state)).toBe(false);
+  });
+
+  it.each([
+    ["fallback", "未匹配具体应用，使用默认方案"],
+    ["temporary", "仅本次手动选择"],
+    ["conflict", "存在重复应用绑定"],
+  ] as const)("%s 匹配展示真实选择原因", (profileSource, expected) => {
+    const html = render({
+      status: "ready",
+      snapshot: readySnapshot,
+      profileSource,
+      profileName: "当前方案",
+    });
+    expect(html).toContain(expected);
+  });
+
   it.each([
     ["unknown", "尚未识别"],
     ["refreshing", "正在确认"],
-    ["ready", "可发送"],
+    ["ready", "目标可用"],
     ["blocked", "目标已失效"],
   ] as const)("稳定渲染 %s 状态", (status, label) => {
     const html = render({
@@ -62,75 +196,65 @@ describe("TargetLensView", () => {
     expect(html).toContain(label);
   });
 
-  it("VoiceOver 名称包含目标、Profile、分组、格式、回车与隐私策略", () => {
+  it("VoiceOver 名称使用投递方案术语并如实说明隐私能力", () => {
     const html = render({
       status: "ready",
       snapshot: readySnapshot,
       profileName: "Codex",
+      profileSource: "exact",
       promptGroupName: "编程",
       defaultFormat: "code",
       enterPolicy: "allow",
-      privacyPolicy: "confirmRaw",
     });
 
     expect(html).toContain("Codex");
-    // 行内只保留非默认回车的警示徽章；完整策略经 aria 与弹层继续可达
-    expect(html).toContain("回车：自动");
-    expect(html).toContain("自动回车允许");
-    expect(html).toContain("Profile Codex");
-    expect(html).toContain("Prompt 分组 编程");
-    expect(html).toContain("格式代码");
-    expect(html).toContain("隐私原文需确认");
-    expect(html).toContain("本次投递 Profile：Codex");
-    expect(html).toContain('aria-label="重新识别投递目标"');
+    // 收起态只呈现目标与状态；完整规则仍进入 region 的可访问名称。
+    expect(html).toContain("粘贴后动作 自动按回车 · 高风险");
+    expect(html).toContain("投递方案 Codex");
+    expect(html).toContain("提示词组 编程");
+    expect(html).toContain("输出格式 代码块");
+    expect(html).toContain("隐私检查：尚未启用");
+    expect(html).not.toContain('aria-label="本次投递方案：Codex');
+    expect(html).not.toContain('aria-label="重新识别投递目标"');
+    expect(html).not.toContain('aria-haspopup="dialog"');
+    expect(html).toContain('aria-live="off"');
     expect(html).toContain('tabindex="0"');
   });
 
-  it("回车为关闭时不渲染行内回车徽章", () => {
+  it("无目标明确锁定发送，长应用与长方案保持窄宽截断和两行规则", () => {
+    const longName = "这是一个非常非常长的目标应用名称用于验证窄面板布局";
+    const html = render({
+      status: "unknown",
+      snapshot: null,
+      profileName: `${longName}投递方案`,
+      promptGroupName: `${longName}提示词组`,
+    });
+
+    expect(html).toContain("尚未识别投递目标，发送已锁定");
+    expect(html).toContain("overflow-hidden");
+    expect(html).toContain("truncate");
+    expect(html).toContain("line-clamp-2");
+    expect(html).toContain('aria-label="重新识别投递目标"');
+    expect(html).not.toContain("overflow-x-auto");
+  });
+
+  it("仅粘贴明确展示不自动回车", () => {
     const html = render({ status: "ready", snapshot: readySnapshot });
-    expect(html).not.toContain("回车：");
+    expect(html).toContain("从不按回车");
   });
 
-  it("Profile 弹层明细包含覆盖选择、分组、格式、回车与隐私（未生效）", () => {
-    const html = renderToStaticMarkup(
-      <TargetLensProfileDetails
-        profileName="Codex"
-        promptGroupName="编程"
-        defaultFormat="code"
-        enterPolicy="allow"
-        privacyPolicy="confirmRaw"
-        selectDisabled={false}
-        profileOverrideId={null}
-        profileOptions={[{ id: "codex", name: "Codex" }]}
-        onSelectProfile={vi.fn()}
-        onManageProfiles={vi.fn()}
-      />
-    );
-
-    expect(html).toContain('aria-label="本次投递 Profile"');
-    expect(html).toContain("自动：Codex");
-    expect(html).toContain("模板分组");
-    expect(html).toContain("编程");
-    expect(html).toContain("代码块");
-    expect(html).toContain("自动回车");
-    expect(html).toContain("原文需确认（未生效）");
-    expect(html).toContain("管理 Profile 与模板…");
-  });
-
-  it("目标变化与重复 bundle 都提供同窗可访问警告", () => {
+  it("目标变化后暂停旧临时方案并提供显式应用入口", () => {
     const html = render({
       status: "ready",
       snapshot: readySnapshot,
       profileName: "临时",
       profileSource: "temporary",
       profileOverrideNeedsConfirmation: true,
-      duplicateBundleProfileIds: ["one", "two"],
+      profileOverrideName: "临时",
     });
 
-    expect(html).toContain("目标已变化，请确认 Profile");
-    expect(html).toContain("确认本次 Profile");
-    expect(html).toContain("多个 Profile 命中");
-    expect(html).toContain('role="alert"');
+    expect(html).toContain("原临时投递方案已暂停");
+    expect(html).toContain("将 临时 用于当前目标");
   });
 
   it("图标缺失时提供稳定 fallback，blocked 展示可行动原因", () => {
@@ -140,11 +264,10 @@ describe("TargetLensView", () => {
       reason: "target_exited",
     });
 
-    expect(html).toContain('data-target-icon="fallback"');
+    expect(html).toContain('role="img"');
+    expect(html).toContain('aria-label="Codex 应用图标"');
     expect(html).toContain("目标应用已退出，请重新识别");
-    expect(html).toContain(
-      "隐私要求脱敏"
-    );
+    expect(html).toContain("隐私检查：尚未启用");
     expect(html).toContain("重新识别");
   });
 });

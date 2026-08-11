@@ -1,4 +1,5 @@
 import { CheckCheck, ChevronDown, Merge, Send, Trash2, X } from "lucide-react";
+import { useMemo } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -19,87 +20,211 @@ import {
   mergeCheckedWithUndo,
   sendCheckedToChat,
 } from "@/lib/actions";
-import { buildSendText, sendPreview } from "@/lib/format";
+import { currentDataGeneration } from "@/lib/dataGeneration";
+import { buildDeliveryDraft } from "@/lib/delivery/buildDraft";
+import { ENTER_POLICY_STATUS_LABEL } from "@/lib/targetLens";
+import { cn } from "@/lib/utils";
 import {
   promptSnippetsForGroup,
   resolveTargetProfile,
 } from "@/lib/targetProfiles";
 import { CLIPBOARD_ID, orderedCheckedNotes, useNotesStore } from "@/store/notesStore";
+import { useDeliveryStore, type PreflightMode } from "@/store/deliveryStore";
 import { useUIStore } from "@/store/uiStore";
 import {
   clearTargetProfileOverride,
   confirmTargetProfileOverride,
   setTargetProfileOverride,
+  targetProfileIdentity,
   useTargetStore,
 } from "@/store/targetStore";
 
 /** 勾选 ≥1 条时出现的批量操作条。 */
-export function SelectionBar() {
+export function SelectionBar({ compact = false }: { compact?: boolean }) {
   const checkedIds = useNotesStore((s) => s.checkedIds);
   const notes = useNotesStore((s) => s.notes);
   const settings = useNotesStore((s) => s.settings);
   const page = useUIStore((s) => s.page);
+  const pinned = useUIStore((s) => s.pinned);
+  const preflightMode = useDeliveryStore((s) => s.preflightMode);
   const targetStatus = useTargetStore((s) => s.status);
-  const targetBundleId = useTargetStore((s) => s.snapshot?.bundleId);
+  const targetSnapshot = useTargetStore((s) => s.snapshot);
   const profileOverrideId = useTargetStore((s) => s.profileOverrideId);
+  const profileOverrideTargetIdentity = useTargetStore(
+    (s) => s.profileOverrideTargetIdentity
+  );
   const profileOverrideNeedsConfirmation = useTargetStore(
     (s) => s.profileOverrideNeedsConfirmation
   );
-  const nativeTargetReady = targetStatus === "ready";
-  const targetReady = nativeTargetReady && !profileOverrideNeedsConfirmation;
-  const resolution = resolveTargetProfile({
-    bundleId: targetBundleId,
-    groups: settings.promptGroups,
-    profiles: settings.targetProfiles,
-    defaultProfileId: settings.defaultTargetProfileId,
-    temporaryProfileId: profileOverrideId,
-  });
-  const snippetMenu = promptSnippetsForGroup(
-    settings.promptSnippets,
-    resolution.promptGroup.id
+  const targetIdentity = useMemo(
+    () => targetProfileIdentity(targetSnapshot),
+    [targetSnapshot]
+  );
+  const resolution = useMemo(
+    () =>
+      resolveTargetProfile({
+        bundleId: targetSnapshot?.bundleId,
+        isTargetReady: targetStatus === "ready",
+        targetIdentity,
+        groups: settings.promptGroups,
+        profiles: settings.targetProfiles,
+        defaultProfileId: settings.defaultTargetProfileId,
+        temporaryProfileId: profileOverrideId,
+        temporaryTargetIdentity: profileOverrideTargetIdentity,
+        temporaryNeedsConfirmation: profileOverrideNeedsConfirmation,
+        privacyCapabilityActive: settings.firewallEnabled,
+      }),
+    [
+      profileOverrideId,
+      profileOverrideTargetIdentity,
+      profileOverrideNeedsConfirmation,
+      settings.defaultTargetProfileId,
+      settings.firewallEnabled,
+      settings.promptGroups,
+      settings.targetProfiles,
+      targetIdentity,
+      targetSnapshot?.bundleId,
+      targetStatus,
+    ]
+  );
+  const automaticResolution = useMemo(
+    () =>
+      resolveTargetProfile({
+        bundleId: targetSnapshot?.bundleId,
+        isTargetReady: targetStatus === "ready",
+        targetIdentity,
+        groups: settings.promptGroups,
+        profiles: settings.targetProfiles,
+        defaultProfileId: settings.defaultTargetProfileId,
+        privacyCapabilityActive: settings.firewallEnabled,
+      }),
+    [
+      settings.defaultTargetProfileId,
+      settings.firewallEnabled,
+      settings.promptGroups,
+      settings.targetProfiles,
+      targetIdentity,
+      targetSnapshot?.bundleId,
+      targetStatus,
+    ]
+  );
+  const profileOverrideName = useMemo(
+    () =>
+      settings.targetProfiles.find((profile) => profile.id === profileOverrideId)
+        ?.name ?? null,
+    [profileOverrideId, settings.targetProfiles]
+  );
+  const nativeTargetReady = resolution.isTargetReady;
+  const internalSendAvailable = page === "clipboard";
+  const targetReady =
+    internalSendAvailable ||
+    (nativeTargetReady && !profileOverrideNeedsConfirmation);
+  const snippetMenu = useMemo(
+    () =>
+      promptSnippetsForGroup(
+        settings.promptSnippets,
+        resolution.promptGroup.id
+      ),
+    [resolution.promptGroup.id, settings.promptSnippets]
   );
   const count = checkedIds.length;
   // 只在「当前页存在选中项」时显示：笔记页的选中切到剪贴板页不显示，
   // 切回笔记页恢复（反之亦然；跨域混选则两页都显示）
-  const checkedSet = new Set(checkedIds);
-  const relevantHere = notes.some(
-    (n) =>
-      checkedSet.has(n.id) &&
-      (n.sectionId === CLIPBOARD_ID) === (page === "clipboard")
+  const relevantHere = useMemo(
+    () => {
+      if (page === "tasks") return false;
+      const checkedSet = new Set(checkedIds);
+      return notes.some(
+        (n) =>
+          checkedSet.has(n.id) &&
+          (n.sectionId === CLIPBOARD_ID) === (page === "clipboard")
+      );
+    },
+    [checkedIds, notes, page]
   );
-  if (count === 0 || !relevantHere) return null;
+  const orderedSelection = useMemo(
+    () => orderedCheckedNotes({ notes, checkedIds }),
+    [checkedIds, notes]
+  );
+  const previewDraft = useMemo(
+    () => {
+      if (count === 0 || !relevantHere) return null;
+      return buildDeliveryDraft(
+        {
+          id: "selection-preview",
+          // UI 预览不可执行，不占用投递会话的全局 revision。
+          revision: 0,
+          createdAtMs: Date.now(),
+          sourceKind: orderedSelection.length === 1 ? "note" : "note-batch",
+          sourceItemIds: orderedSelection.map((note) => note.id),
+        },
+        {
+          notes,
+          tasks: [],
+          promptSnippets: settings.promptSnippets,
+          checkedItemIds: checkedIds,
+          // Tooltip 只消费 finalText；不让原生刷新时间戳制造虚假的内容版本。
+          targetSnapshot: null,
+          profileResolution: resolution,
+          panelPinned: pinned,
+          dataGeneration: currentDataGeneration(),
+          firewallEnabled: settings.firewallEnabled,
+          firewallDisabledWarnCategories:
+            settings.firewallDisabledWarnCategories,
+        }
+      );
+    },
+    [
+      checkedIds,
+      count,
+      notes,
+      orderedSelection,
+      pinned,
+      relevantHere,
+      resolution,
+      settings.firewallDisabledWarnCategories,
+      settings.firewallEnabled,
+      settings.promptSnippets,
+    ]
+  );
+  if (!previewDraft) return null;
 
   const state = useNotesStore.getState();
   const orderedIds = () => orderedCheckedNotes(useNotesStore.getState()).map((n) => n.id);
-  const previewText = () =>
-    sendPreview(buildSendText(orderedCheckedNotes(useNotesStore.getState()).map((n) => n.text)));
 
   return (
     <div
       role="toolbar"
       aria-label="批量操作"
-      className="mx-3 mb-1 flex items-center gap-0.5 rounded-xl border border-black/10 bg-white/70 px-2 py-1.5 elevation-3 dark:border-white/10 dark:bg-black/40"
+      className={cn(
+        "flex items-center gap-0.5 rounded-xl border border-black/10 bg-white/70 px-2 py-1.5 elevation-3 dark:border-white/10 dark:bg-black/40",
+        compact ? "absolute bottom-2 right-3 z-30" : "mx-3 mb-1"
+      )}
     >
       <span className="px-1 text-label tabular-nums text-muted-foreground">
         已选 {count}
       </span>
 
       <div className="ml-auto flex items-center gap-0.5">
-        <IconAction label="合并笔记" disabled={count < 2} onClick={mergeCheckedWithUndo}>
-          <Merge className="size-3.5" />
-        </IconAction>
-        {/* 剪贴板历史无「完成」语义（发送也不标完成），该页隐藏 */}
-        {page !== "clipboard" && (
-          <IconAction label="标记完成" onClick={() => state.setDone(orderedIds(), true)}>
-            <CheckCheck className="size-3.5" />
-          </IconAction>
+        {!compact && (
+          <>
+            <IconAction label="合并笔记" disabled={count < 2} onClick={mergeCheckedWithUndo}>
+              <Merge className="size-3.5" />
+            </IconAction>
+            {/* 剪贴板历史无「完成」语义（发送也不标完成），该页隐藏 */}
+            {page !== "clipboard" && (
+              <IconAction label="标记完成" onClick={() => state.setDone(orderedIds(), true)}>
+                <CheckCheck className="size-3.5" />
+              </IconAction>
+            )}
+            <IconAction
+              label="删除"
+              onClick={() => deleteNotesWithUndo(orderedIds())}
+            >
+              <Trash2 className="size-3.5" />
+            </IconAction>
+          </>
         )}
-        <IconAction
-          label="删除"
-          onClick={() => deleteNotesWithUndo(orderedIds())}
-        >
-          <Trash2 className="size-3.5" />
-        </IconAction>
         <IconAction label="清除选择" onClick={() => state.clearChecked()}>
           <X className="size-3.5" />
         </IconAction>
@@ -111,24 +236,27 @@ export function SelectionBar() {
                 size="xs"
                 disabled={!targetReady}
                 aria-label={
-                  targetReady
-                    ? `发送到当前目标，Profile ${resolution.profile.name}，回车策略 ${resolution.profile.enterPolicy}`
+                  internalSendAvailable
+                    ? "优先添加到当前卡片编辑器，否则发送到当前目标"
+                    : targetReady
+                    ? `发送到当前目标，投递方案 ${resolution.profile.name}，粘贴后动作 ${ENTER_POLICY_STATUS_LABEL[resolution.profile.enterPolicy]}`
                     : profileOverrideNeedsConfirmation
-                      ? "发送不可用：目标已变化，请确认 Profile"
+                      ? "发送不可用：原临时投递方案已暂停"
                       : "发送不可用：投递目标未就绪"
                 }
                 className="rounded-l-lg rounded-r-none"
                 onClick={() => sendCheckedToChat()}
               >
-                <Send className="size-3" /> 发送到对话
+                <Send className="size-3" />
+                {internalSendAvailable ? "发送 / 添加" : "发送到对话"}
                 {/* token-exception: 9px 为重塑前原始尺寸，用户指定还原 */}
                 <Kbd inline className="ml-0.5 text-[9px]">⌘⏎</Kbd>
               </Button>
             </TooltipTrigger>
             <TooltipContent side="top" className="max-w-72">
               <p className="mb-1 text-micro font-medium opacity-70">将粘贴以下内容：</p>
-              <pre className="max-h-48 overflow-hidden whitespace-pre-wrap break-words font-mono text-micro leading-relaxed">
-                {previewText()}
+              <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words font-mono text-micro leading-relaxed">
+                {previewDraft.finalText}
               </pre>
             </TooltipContent>
           </Tooltip>
@@ -139,8 +267,8 @@ export function SelectionBar() {
             trigger={({ toggle }) => (
               <Button
                 size="xs"
-                aria-label="选择本次 Profile、格式或 Prompt 模板"
-                disabled={!nativeTargetReady}
+                aria-label="选择本次投递方案、输出格式或提示词模板"
+                disabled={!nativeTargetReady && !internalSendAvailable}
                 onClick={toggle}
                 className="rounded-l-none rounded-r-lg border-l border-border px-1"
               >
@@ -150,7 +278,37 @@ export function SelectionBar() {
           >
             {(close) => (
               <>
-                <SimpleMenuLabel>发送格式</SimpleMenuLabel>
+                <SimpleMenuLabel>发送前</SimpleMenuLabel>
+                <SimpleMenuItem
+                  disabled={!nativeTargetReady || profileOverrideNeedsConfirmation}
+                  onClick={() => {
+                    close();
+                    void sendCheckedToChat(undefined, { forcePreflight: true });
+                  }}
+                >
+                  预检并发送
+                </SimpleMenuItem>
+                <SimpleMenuLabel>预检方式</SimpleMenuLabel>
+                {(
+                  [
+                    ["smart", "智能（复杂内容时打开）"],
+                    ["always", "每次发送前打开"],
+                    ["off", "关闭自动预检"],
+                  ] as const satisfies readonly (readonly [PreflightMode, string])[]
+                ).map(([mode, label]) => (
+                  <SimpleMenuItem
+                    key={mode}
+                    selected={preflightMode === mode}
+                    onClick={() => {
+                      useDeliveryStore.getState().setPreflightMode(mode);
+                      close();
+                    }}
+                  >
+                    {preflightMode === mode ? "✓ " : ""}{label}
+                  </SimpleMenuItem>
+                ))}
+                <SimpleMenuSeparator />
+                <SimpleMenuLabel>输出格式</SimpleMenuLabel>
                 <SimpleMenuItem
                   disabled={!targetReady}
                   onClick={() => {
@@ -158,7 +316,7 @@ export function SelectionBar() {
                     void sendCheckedToChat(undefined, { format: "plain" });
                   }}
                 >
-                  纯文本{resolution.profile.defaultFormat === "plain" ? "（Profile 默认）" : ""}
+                  纯文本{resolution.profile.defaultFormat === "plain" ? "（方案默认）" : ""}
                 </SimpleMenuItem>
                 <SimpleMenuItem
                   disabled={!targetReady}
@@ -168,10 +326,10 @@ export function SelectionBar() {
                     void sendCheckedToChat(undefined, { format: "code" });
                   }}
                 >
-                  代码块 ```{resolution.profile.defaultFormat === "code" ? "（Profile 默认）" : ""}
+                  代码块 ```{resolution.profile.defaultFormat === "code" ? "（方案默认）" : ""}
                 </SimpleMenuItem>
                 <SimpleMenuSeparator />
-                <SimpleMenuLabel>本次 Profile</SimpleMenuLabel>
+                <SimpleMenuLabel>本次投递方案</SimpleMenuLabel>
                 {profileOverrideNeedsConfirmation && (
                   <SimpleMenuItem
                     onClick={() => {
@@ -179,7 +337,7 @@ export function SelectionBar() {
                       close();
                     }}
                   >
-                    确认当前选择：{resolution.profile.name}
+                    将 {profileOverrideName ?? "原方案"} 用于当前目标
                   </SimpleMenuItem>
                 )}
                 <SimpleMenuItem
@@ -188,7 +346,7 @@ export function SelectionBar() {
                     close();
                   }}
                 >
-                  {profileOverrideId ? "跟随目标自动匹配" : "✓ 跟随目标自动匹配"}
+                  {profileOverrideId ? "" : "✓ "}自动匹配：{automaticResolution.profile.name}
                 </SimpleMenuItem>
                 {settings.targetProfiles.map((profile) => (
                   <SimpleMenuItem
@@ -203,7 +361,7 @@ export function SelectionBar() {
                 ))}
                 <SimpleMenuSeparator />
                 <SimpleMenuLabel>
-                  当前分组 · {resolution.promptGroup.name}
+                  当前提示词组 · {resolution.promptGroup.name}
                 </SimpleMenuLabel>
                 {snippetMenu.prioritized.map((sn) => (
                   <SimpleMenuItem
@@ -212,7 +370,7 @@ export function SelectionBar() {
                     title={sn.text}
                     onClick={() => {
                       close();
-                      void sendCheckedToChat(sn.text);
+                      void sendCheckedToChat(sn.text, { promptSnippetId: sn.id });
                     }}
                   >
                     {sn.label}
@@ -232,7 +390,7 @@ export function SelectionBar() {
                     title={sn.text}
                     onClick={() => {
                       close();
-                      void sendCheckedToChat(sn.text);
+                      void sendCheckedToChat(sn.text, { promptSnippetId: sn.id });
                     }}
                   >
                     {sn.label}

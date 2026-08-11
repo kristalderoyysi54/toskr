@@ -99,8 +99,19 @@ pub(crate) fn pasteboard_change_count() -> isize {
 
 /// 捕获结果：文本或图片附件。
 pub enum Captured {
-    Text(String),
-    Image { file: String, w: u32, h: u32 },
+    Text {
+        text: String,
+        clipboard_warning: Option<&'static str>,
+    },
+    Image {
+        file: String,
+        w: u32,
+        h: u32,
+        clipboard_warning: Option<&'static str>,
+    },
+    Warning {
+        message: &'static str,
+    },
 }
 
 /// 捕获当前前台应用的选中内容（文本优先，其次剪贴板图片）。
@@ -121,7 +132,10 @@ pub fn capture_selection(
                 return None;
             }
             crate::diag::push(app, "捕获: AX 直读成功");
-            normalize(t).map(Captured::Text)
+            normalize(t).map(|text| Captured::Text {
+                text,
+                clipboard_warning: None,
+            })
         }
         // 「空」不可信：Otty 等终端的 AX 声明支持 AXSelectedText 但从不填充
         // （连 range 都谎报 0，实测实锤）。空时仍走剪贴板路径。
@@ -164,9 +178,16 @@ fn capture_via_clipboard(
         app,
         format!("捕获: 剪贴板事务 {}", attempt.clipboard_outcome.as_str()),
     );
+    let clipboard_warning = attempt.clipboard_outcome.warning_message();
+    let warning_only = || clipboard_warning.map(|message| Captured::Warning { message });
 
     match attempt.payload {
-        Some(CopyPayload::Text(text)) => normalize(text).map(Captured::Text),
+        Some(CopyPayload::Text(text)) => normalize(text)
+            .map(|text| Captured::Text {
+                text,
+                clipboard_warning,
+            })
+            .or_else(warning_only),
         Some(CopyPayload::Image {
             width,
             height,
@@ -174,20 +195,25 @@ fn capture_via_clipboard(
         }) => {
             let (Ok(w), Ok(h)) = (u32::try_from(width), u32::try_from(height)) else {
                 crate::diag::push(app, "捕获: 图片尺寸超出支持范围");
-                return None;
+                return warning_only();
             };
             match crate::storage::save_image_rgba(app, width, height, &rgba) {
                 Ok(file) => {
                     crate::diag::push(app, format!("捕获: 图片 {}×{}", width, height));
-                    Some(Captured::Image { file, w, h })
+                    Some(Captured::Image {
+                        file,
+                        w,
+                        h,
+                        clipboard_warning,
+                    })
                 }
                 Err(error) => {
                     crate::diag::push(app, format!("捕获: 图片保存失败 {error}"));
-                    None
+                    warning_only()
                 }
             }
         }
-        None => None,
+        None => warning_only(),
     }
 }
 
@@ -336,10 +362,7 @@ impl ClipboardCaptureRuntime for NativeClipboardCapture<'_> {
     fn restore(&mut self) -> ClipboardOutcome {
         let outcome = self.transaction.restore_if_owned();
         let last_toskr_write_count = self.transaction.last_toskr_write_count();
-        if matches!(
-            outcome,
-            ClipboardOutcome::Restored | ClipboardOutcome::RestoreFailed
-        ) {
+        if outcome.should_mark_self_write() {
             if let Some(exact_count) = last_toskr_write_count {
                 crate::clipwatch::mark_self_write_count(self.app, exact_count);
             }

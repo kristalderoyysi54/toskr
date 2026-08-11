@@ -7,7 +7,8 @@ export type BlockSelectionFormat =
   | "heading2"
   | "heading3"
   | "numbered-list"
-  | "bullet-list";
+  | "bullet-list"
+  | "code-block";
 
 export type SelectionEdit = Readonly<{
   text: string;
@@ -186,6 +187,72 @@ function selectedLineRange(text: string, selection: TextSelection): TextSelectio
   return { start: lineStart, end: nextBreak < 0 ? text.length : nextBreak };
 }
 
+type FencedCodeBlock = Readonly<{
+  start: number;
+  end: number;
+  contentStart: number;
+  contentEnd: number;
+}>;
+
+/** 找出包围当前整行选区的 Markdown 围栏；关闭围栏必须与打开字符一致且等长或更长。 */
+function fencedCodeBlockAt(
+  text: string,
+  selection: TextSelection
+): FencedCodeBlock | null {
+  const range = selectedLineRange(text, selection);
+  let open:
+    | { start: number; lineEnd: number; marker: "`" | "~"; length: number }
+    | null = null;
+
+  for (let lineStart = 0; lineStart <= text.length; ) {
+    const nextBreak = text.indexOf("\n", lineStart);
+    const lineEnd = nextBreak < 0 ? text.length : nextBreak;
+    const line = text.slice(lineStart, lineEnd);
+    const match = /^[\t ]{0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+
+    if (!open && match) {
+      open = {
+        start: lineStart,
+        lineEnd,
+        marker: match[1][0] as "`" | "~",
+        length: match[1].length,
+      };
+    } else if (open && match) {
+      const marker = match[1][0] as "`" | "~";
+      const closes =
+        marker === open.marker &&
+        match[1].length >= open.length &&
+        !match[2].trim();
+      if (closes) {
+        const contentStart = Math.min(text.length, open.lineEnd + 1);
+        const contentEnd = Math.max(contentStart, lineStart - 1);
+        const block = {
+          start: open.start,
+          end: lineEnd,
+          contentStart,
+          contentEnd,
+        };
+        const insideContent =
+          range.start >= block.contentStart && range.end <= block.contentEnd;
+        const coversBlock =
+          range.start <= block.start && range.end >= block.end;
+        if (insideContent || coversBlock) return block;
+        open = null;
+      }
+    }
+
+    if (nextBreak < 0) break;
+    lineStart = nextBreak + 1;
+  }
+  return null;
+}
+
+function codeFenceFor(text: string): string {
+  let longest = 0;
+  for (const run of text.matchAll(/`+/g)) longest = Math.max(longest, run[0].length);
+  return "`".repeat(Math.max(3, longest + 1));
+}
+
 function stripSupportedBlockPrefix(line: string): { indent: string; body: string } {
   const indent = line.match(/^[\t ]*/)?.[0] ?? "";
   const body = line
@@ -194,14 +261,58 @@ function stripSupportedBlockPrefix(line: string): { indent: string; body: string
   return { indent, body };
 }
 
-/** 选区涉及的整行切换为正文/标题/列表，空行原样保留。 */
+/** 选区涉及的整行切换为正文/标题/列表/代码块，空行原样保留。 */
 export function applyBlockFormat(
   text: string,
   selection: TextSelection,
   format: BlockSelectionFormat
 ): SelectionEdit {
-  const range = selectedLineRange(text, selection);
-  const lines = text.slice(range.start, range.end).split("\n");
+  const existingCodeBlock = fencedCodeBlockAt(text, selection);
+  if (format === "code-block") {
+    if (existingCodeBlock) {
+      return { text, selection: normalizedSelection(text, selection) };
+    }
+    const range = selectedLineRange(text, selection);
+    const content = text.slice(range.start, range.end);
+    const fence = codeFenceFor(content);
+    const replacement = `${fence}\n${content}\n${fence}`;
+    const contentStart = range.start + fence.length + 1;
+    return {
+      text: text.slice(0, range.start) + replacement + text.slice(range.end),
+      selection: { start: contentStart, end: contentStart + content.length },
+    };
+  }
+
+  let source = text;
+  let sourceSelection = selection;
+  if (existingCodeBlock) {
+    const selectedRange = selectedLineRange(text, selection);
+    const selectsContent =
+      selectedRange.start === existingCodeBlock.contentStart &&
+      selectedRange.end === existingCodeBlock.contentEnd;
+    const selectsWholeBlock =
+      selectedRange.start === existingCodeBlock.start &&
+      selectedRange.end === existingCodeBlock.end;
+    // 只在整段代码都被选中时转换，避免改动未选择的代码行。
+    if (!selectsContent && !selectsWholeBlock) {
+      return { text, selection: normalizedSelection(text, selection) };
+    }
+    const content = text.slice(
+      existingCodeBlock.contentStart,
+      existingCodeBlock.contentEnd
+    );
+    source =
+      text.slice(0, existingCodeBlock.start) +
+      content +
+      text.slice(existingCodeBlock.end);
+    sourceSelection = {
+      start: existingCodeBlock.start,
+      end: existingCodeBlock.start + content.length,
+    };
+  }
+
+  const range = selectedLineRange(source, sourceSelection);
+  const lines = source.slice(range.start, range.end).split("\n");
   let number = 0;
   const replacement = lines
     .map((line) => {
@@ -218,7 +329,7 @@ export function applyBlockFormat(
     .join("\n");
 
   return {
-    text: text.slice(0, range.start) + replacement + text.slice(range.end),
+    text: source.slice(0, range.start) + replacement + source.slice(range.end),
     selection: { start: range.start, end: range.start + replacement.length },
   };
 }
@@ -228,6 +339,7 @@ export function blockFormatAt(
   text: string,
   selection: TextSelection
 ): BlockSelectionFormat {
+  if (fencedCodeBlockAt(text, selection)) return "code-block";
   const range = selectedLineRange(text, selection);
   const line = text
     .slice(range.start, range.end)

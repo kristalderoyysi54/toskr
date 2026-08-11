@@ -1,3 +1,5 @@
+import { useId } from "react";
+
 import { cn } from "@/lib/utils";
 
 /**
@@ -20,31 +22,39 @@ export function Segmented<T extends string>({
   ariaLabel?: string;
   className?: string;
 }) {
+  const groupName = useId();
   return (
-    <div role="radiogroup" aria-label={ariaLabel} className={cn("flex gap-1", className)}>
+    <fieldset aria-label={ariaLabel} className={cn("flex gap-1", className)}>
       {options.map((o) => {
         const active = value === o.value;
         return (
-          <button
+          <label
             key={o.value}
-            type="button"
-            role="radio"
-            aria-checked={active}
             title={o.title}
-            onClick={() => onChange(o.value)}
-            className={cn(
-              "rounded-md border outline-none transition-[color,background-color,transform] duration-100",
-              "focus-visible:ring-2 focus-visible:ring-primary/50 active:scale-[0.97]",
-              size === "sm" ? "px-2 py-1 text-label" : "px-1.5 py-0.5 text-micro",
-              active
-                ? "border-border bg-primary/10 font-medium dark:border-input"
-                : "border-border text-muted-foreground hover:text-foreground"
-            )}
+            className="cursor-pointer"
           >
-            {o.label}
-          </button>
+            <input
+              type="radio"
+              name={groupName}
+              checked={active}
+              onChange={() => onChange(o.value)}
+              className="peer sr-only"
+            />
+            <span
+              className={cn(
+                "block rounded-md border outline-none transition-colors duration-100 motion-reduce:transition-none",
+                "peer-focus-visible:ring-2 peer-focus-visible:ring-primary/50",
+                size === "sm" ? "px-2 py-1 text-label" : "px-1.5 py-0.5 text-micro",
+                active
+                  ? "border-border bg-primary/10 font-medium dark:border-input"
+                  : "border-border text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {o.label}
+            </span>
+          </label>
         );
       })}
-    </div>
+    </fieldset>
   );
 }
