@@ -8,13 +8,14 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardWriting};
 use objc2_foundation::{NSArray, NSData, NSString};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ClipboardOutcome {
     Restored,
+    RestoredPartial,
     SkippedUserChanged,
     NothingToRestore,
     RestoreFailed,
@@ -51,10 +52,28 @@ impl ClipboardOutcome {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Restored => "restored",
+            Self::RestoredPartial => "restoredPartial",
             Self::SkippedUserChanged => "skippedUserChanged",
             Self::NothingToRestore => "nothingToRestore",
             Self::RestoreFailed => "restoreFailed",
             Self::NotOwned => "notOwned",
+        }
+    }
+
+    /// 恢复尝试可能写出一个 Toskr generation，watcher 需据此避免自吞。
+    pub fn should_mark_self_write(self) -> bool {
+        matches!(
+            self,
+            Self::Restored | Self::RestoredPartial | Self::RestoreFailed
+        )
+    }
+
+    /// 部分恢复或恢复失败都可能造成用户剪贴板信息损失，不能被隐身模式吞掉。
+    pub fn warning_message(self) -> Option<&'static str> {
+        match self {
+            Self::RestoredPartial => Some("原剪贴板仅恢复了可读内容（不可读取格式未恢复）"),
+            Self::RestoreFailed => Some("原剪贴板恢复失败"),
+            _ => None,
         }
     }
 }
@@ -74,6 +93,7 @@ struct PasteboardItemSnapshot {
 struct PasteboardSnapshot {
     change_count: isize,
     items: Vec<PasteboardItemSnapshot>,
+    unavailable_representations: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -120,18 +140,25 @@ fn capture_snapshot(target: &PasteboardTarget) -> Result<PasteboardSnapshot, Pas
         let pasteboard = target.resolve();
         let change_count = pasteboard.changeCount();
         let mut items = Vec::new();
+        let mut unavailable_representations = 0;
         if let Some(source_items) = pasteboard.pasteboardItems() {
             for source_item in source_items.iter() {
                 let mut representations = Vec::new();
-                for type_id in source_item.types().iter() {
-                    let bytes = source_item
-                        .dataForType(&type_id)
-                        .ok_or(PasteboardError::RepresentationUnavailable)?
-                        .to_vec();
-                    representations.push(PasteboardRepresentation {
-                        type_id: type_id.to_string(),
-                        bytes,
-                    });
+                let source_types = source_item.types();
+                for type_id in source_types.iter() {
+                    if let Some(data) = source_item.dataForType(&type_id) {
+                        representations.push(PasteboardRepresentation {
+                            type_id: type_id.to_string(),
+                            bytes: data.to_vec(),
+                        });
+                    } else {
+                        unavailable_representations += 1;
+                    }
+                }
+                // 辅助/惰性表示失效时仍可备份该条目的可读内容；但整条都不可读
+                // 就不能安全替换 general pasteboard，继续 fail-closed。
+                if !source_types.is_empty() && representations.is_empty() {
+                    return Err(PasteboardError::RepresentationUnavailable);
                 }
                 items.push(PasteboardItemSnapshot { representations });
             }
@@ -140,6 +167,7 @@ fn capture_snapshot(target: &PasteboardTarget) -> Result<PasteboardSnapshot, Pas
             return Ok(PasteboardSnapshot {
                 change_count,
                 items,
+                unavailable_representations,
             });
         }
     }
@@ -176,6 +204,7 @@ fn text_snapshot(change_count: isize, text: &str) -> PasteboardSnapshot {
                 bytes: text.as_bytes().to_vec(),
             }],
         }],
+        unavailable_representations: 0,
     }
 }
 
@@ -206,6 +235,7 @@ fn image_snapshot(
                 bytes: png,
             }],
         }],
+        unavailable_representations: 0,
     })
 }
 
@@ -467,6 +497,9 @@ impl PasteboardTransaction {
         let attempt = restore(&self.target, &self.original, owned);
         self.restore_write_count = attempt.owned_change_count;
         match attempt.result {
+            Ok(()) if self.original.unavailable_representations > 0 => {
+                ClipboardOutcome::RestoredPartial
+            }
             Ok(()) => ClipboardOutcome::Restored,
             Err(PasteboardError::OwnershipLost) => ClipboardOutcome::SkippedUserChanged,
             Err(_) => ClipboardOutcome::RestoreFailed,
@@ -478,8 +511,39 @@ impl PasteboardTransaction {
 mod tests {
     use super::*;
     use objc2::runtime::ProtocolObject;
-    use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardWriting};
-    use objc2_foundation::{NSArray, NSData, NSString};
+    use objc2::{define_class, msg_send, AnyThread};
+    use objc2_app_kit::{
+        NSPasteboard, NSPasteboardItem, NSPasteboardItemDataProvider, NSPasteboardType,
+        NSPasteboardWriting,
+    };
+    use objc2_foundation::{NSArray, NSData, NSObject, NSObjectProtocol, NSString};
+
+    define_class!(
+        #[unsafe(super(NSObject))]
+        #[ivars = ()]
+        struct UnavailableRepresentationProvider;
+
+        unsafe impl NSObjectProtocol for UnavailableRepresentationProvider {}
+
+        unsafe impl NSPasteboardItemDataProvider for UnavailableRepresentationProvider {
+            #[unsafe(method(pasteboard:item:provideDataForType:))]
+            fn provide_data(
+                &self,
+                _pasteboard: Option<&NSPasteboard>,
+                _item: &NSPasteboardItem,
+                _type_id: &NSPasteboardType,
+            ) {
+                // 模拟来源应用声明了惰性表示，却无法兑现该表示。
+            }
+        }
+    );
+
+    impl UnavailableRepresentationProvider {
+        fn new() -> Retained<Self> {
+            let provider = Self::alloc().set_ivars(());
+            unsafe { msg_send![super(provider), init] }
+        }
+    }
 
     #[test]
     fn shared_transaction_gate_allows_only_one_owner() {
@@ -557,6 +621,7 @@ mod tests {
     fn clipboard_outcomes_serialize_to_the_frontend_contract() {
         let cases = [
             (ClipboardOutcome::Restored, "restored"),
+            (ClipboardOutcome::RestoredPartial, "restoredPartial"),
             (ClipboardOutcome::SkippedUserChanged, "skippedUserChanged"),
             (ClipboardOutcome::NothingToRestore, "nothingToRestore"),
             (ClipboardOutcome::RestoreFailed, "restoreFailed"),
@@ -567,6 +632,32 @@ mod tests {
             assert_eq!(outcome.as_str(), expected);
             assert_eq!(serde_json::to_value(outcome).unwrap(), expected);
         }
+    }
+
+    #[test]
+    fn only_restore_writes_are_hidden_from_clipboard_history() {
+        assert!(ClipboardOutcome::Restored.should_mark_self_write());
+        assert!(ClipboardOutcome::RestoredPartial.should_mark_self_write());
+        assert!(ClipboardOutcome::RestoreFailed.should_mark_self_write());
+        assert!(!ClipboardOutcome::SkippedUserChanged.should_mark_self_write());
+        assert!(!ClipboardOutcome::NothingToRestore.should_mark_self_write());
+        assert!(!ClipboardOutcome::NotOwned.should_mark_self_write());
+    }
+
+    #[test]
+    fn only_lossy_restore_outcomes_require_visible_warning() {
+        assert!(ClipboardOutcome::RestoredPartial
+            .warning_message()
+            .is_some());
+        assert!(ClipboardOutcome::RestoreFailed.warning_message().is_some());
+        assert!(ClipboardOutcome::Restored.warning_message().is_none());
+        assert!(ClipboardOutcome::SkippedUserChanged
+            .warning_message()
+            .is_none());
+        assert!(ClipboardOutcome::NothingToRestore
+            .warning_message()
+            .is_none());
+        assert!(ClipboardOutcome::NotOwned.warning_message().is_none());
     }
 
     fn pasteboard(name: &str) -> objc2::rc::Retained<NSPasteboard> {
@@ -633,6 +724,74 @@ mod tests {
 
         assert_eq!(read_fixture(&name), expected);
         pasteboard(&name).clearContents();
+    }
+
+    #[test]
+    fn unavailable_auxiliary_representation_does_not_block_snapshot() {
+        let name = format!("com.toskr.tests.unavailable.{}", std::process::id());
+        let pb = pasteboard(&name);
+        let item = NSPasteboardItem::new();
+        assert!(item.setData_forType(
+            &NSData::with_bytes(b"original"),
+            &NSString::from_str("public.utf8-plain-text"),
+        ));
+        let provider = UnavailableRepresentationProvider::new();
+        let unavailable_types =
+            NSArray::from_retained_slice(&[NSString::from_str("com.example.unavailable")]);
+        assert!(item
+            .setDataProvider_forTypes(ProtocolObject::from_ref(&*provider), &unavailable_types,));
+        let objects = [ProtocolObject::<dyn NSPasteboardWriting>::from_retained(
+            item,
+        )];
+        pb.clearContents();
+        assert!(pb.writeObjects(&NSArray::from_retained_slice(&objects)));
+
+        let mut transaction = PasteboardTransaction::capture_named(&name).unwrap();
+        transaction.write_text("temporary payload").unwrap();
+
+        assert_eq!(
+            transaction.restore_if_owned(),
+            ClipboardOutcome::RestoredPartial
+        );
+        let restored = pb.pasteboardItems().expect("restored item");
+        let restored_item = restored.iter().next().expect("first restored item");
+        assert_eq!(
+            restored_item
+                .dataForType(&NSString::from_str("public.utf8-plain-text"))
+                .expect("readable representation")
+                .to_vec(),
+            b"original"
+        );
+        assert!(!restored_item
+            .types()
+            .iter()
+            .any(|type_id| type_id.to_string() == "com.example.unavailable"));
+        pb.clearContents();
+    }
+
+    #[test]
+    fn entirely_unavailable_item_still_blocks_before_overwrite() {
+        let name = format!("com.toskr.tests.unreadable.{}", std::process::id());
+        let pb = pasteboard(&name);
+        let item = NSPasteboardItem::new();
+        let provider = UnavailableRepresentationProvider::new();
+        let unavailable_types =
+            NSArray::from_retained_slice(&[NSString::from_str("com.example.unavailable")]);
+        assert!(item
+            .setDataProvider_forTypes(ProtocolObject::from_ref(&*provider), &unavailable_types,));
+        let objects = [ProtocolObject::<dyn NSPasteboardWriting>::from_retained(
+            item,
+        )];
+        pb.clearContents();
+        assert!(pb.writeObjects(&NSArray::from_retained_slice(&objects)));
+        let before = pb.changeCount();
+
+        assert!(matches!(
+            PasteboardTransaction::capture_named(&name),
+            Err(PasteboardError::RepresentationUnavailable)
+        ));
+        assert_eq!(pb.changeCount(), before);
+        pb.clearContents();
     }
 
     #[test]

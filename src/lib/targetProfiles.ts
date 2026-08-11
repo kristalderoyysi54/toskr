@@ -43,7 +43,7 @@ export const TERMINAL_BUNDLE_IDS = [
 
 const SAFETY_PROFILE: TargetProfile = {
   id: SAFETY_PROFILE_ID,
-  name: "安全默认",
+  name: "稳妥投递",
   bundleIds: [],
   promptGroupId: GENERAL_PROMPT_GROUP_ID,
   defaultFormat: "plain",
@@ -79,55 +79,95 @@ export function createDefaultTargetProfiles(
 
 export type TargetProfileResolutionSource =
   | "temporary"
-  | "bundle"
-  | "default"
-  | "safe";
+  | "exact"
+  | "fallback"
+  | "conflict";
+
+export type TargetProfileResolutionReason =
+  | "temporary_override"
+  | "temporary_target_changed"
+  | "exact_bundle_match"
+  | "duplicate_bundle_conflict"
+  | "fallback_default"
+  | "target_missing"
+  | "target_unavailable";
 
 export interface TargetProfileResolution {
+  profileId: string;
   profile: TargetProfile;
   promptGroup: PromptGroup;
   source: TargetProfileResolutionSource;
+  targetBundleId: string | null;
+  reason: TargetProfileResolutionReason;
+  isTargetReady: boolean;
+  privacyCapabilityActive: boolean;
   safetyClamped: boolean;
   duplicateBundleProfileIds: string[];
 }
 
 export function resolveTargetProfile(input: {
   bundleId: string | null | undefined;
+  isTargetReady: boolean;
+  targetIdentity?: string | null;
   groups: PromptGroup[];
   profiles: TargetProfile[];
   defaultProfileId: string;
   temporaryProfileId?: string | null;
+  temporaryTargetIdentity?: string | null;
+  temporaryNeedsConfirmation?: boolean;
+  privacyCapabilityActive?: boolean;
 }): TargetProfileResolution {
-  const temporary = input.temporaryProfileId
+  const targetBundleId = input.bundleId ?? null;
+  const isTargetReady = Boolean(
+    input.isTargetReady && targetBundleId
+  );
+  const requestedTemporary = input.temporaryProfileId
     ? input.profiles.find((item) => item.id === input.temporaryProfileId)
     : undefined;
-  const bundleMatches = input.bundleId
-    ? input.profiles.filter((item) => item.bundleIds.includes(input.bundleId!))
+  const temporaryTargetMatches = Boolean(
+    requestedTemporary &&
+      !input.temporaryNeedsConfirmation &&
+      input.targetIdentity &&
+      input.temporaryTargetIdentity &&
+      input.targetIdentity === input.temporaryTargetIdentity
+  );
+  const temporary = temporaryTargetMatches ? requestedTemporary : undefined;
+  const bundleMatches = targetBundleId
+    ? input.profiles.filter((item) => item.bundleIds.includes(targetBundleId))
     : [];
   const configuredDefault = input.profiles.find(
     (item) => item.id === input.defaultProfileId
   );
 
-  let source: TargetProfileResolutionSource = "safe";
+  let source: TargetProfileResolutionSource = "fallback";
+  let reason: TargetProfileResolutionReason = targetBundleId
+    ? "fallback_default"
+    : "target_missing";
   let profile = SAFETY_PROFILE;
   if (temporary) {
     source = "temporary";
+    reason = "temporary_override";
     profile = temporary;
   } else if (bundleMatches[0]) {
-    source = "bundle";
+    source = bundleMatches.length > 1 ? "conflict" : "exact";
+    reason = bundleMatches.length > 1
+      ? "duplicate_bundle_conflict"
+      : "exact_bundle_match";
     profile = bundleMatches[0];
   } else if (configuredDefault) {
-    source = "default";
     profile = configuredDefault;
+  }
+  if (requestedTemporary && !temporaryTargetMatches) {
+    reason = "temporary_target_changed";
   }
 
   // 未命中明确 bundle 时，默认 Profile 仍可提供分组/格式，但不得自动放宽
-  // Enter 或隐私策略。只有用户本次显式覆盖才允许高风险值生效。
+  // 粘贴后动作或隐私预设。只有用户本次显式覆盖才允许高风险值生效。
   const safetyClamped =
-    source === "default" &&
+    source === "fallback" &&
     (profile.enterPolicy !== "never" ||
       profile.privacyPolicy !== "requireRedaction");
-  if (source === "default") {
+  if (source === "fallback") {
     profile = {
       ...profile,
       enterPolicy: "never",
@@ -140,10 +180,19 @@ export function resolveTargetProfile(input: {
     input.groups.find((item) => item.id === GENERAL_PROMPT_GROUP_ID) ??
     createDefaultPromptGroups()[0];
 
+  if (!isTargetReady) {
+    reason = targetBundleId ? "target_unavailable" : "target_missing";
+  }
+
   return {
+    profileId: profile.id,
     profile: { ...profile, bundleIds: [...profile.bundleIds] },
     promptGroup,
     source,
+    targetBundleId,
+    reason,
+    isTargetReady,
+    privacyCapabilityActive: input.privacyCapabilityActive ?? false,
     safetyClamped,
     duplicateBundleProfileIds: bundleMatches.map((item) => item.id),
   };
@@ -160,6 +209,100 @@ export interface DuplicateBundleAssignment {
   bundleId: string;
   profileIds: string[];
   profileNames: string[];
+}
+
+export interface TargetProfileBundleUpdate {
+  profiles: TargetProfile[];
+  blockedBundleIds: string[];
+}
+
+/**
+ * 设置页唯一的应用绑定编辑入口：历史重复项原样保留，只有本次新增且已被
+ * 其他方案占用的 bundle 会被拒绝。这样不会静默改写旧数据，也不会继续制造冲突。
+ */
+export function updateTargetProfileBundleIds(
+  profiles: TargetProfile[],
+  profileId: string,
+  requestedBundleIds: string[]
+): TargetProfileBundleUpdate {
+  const current = profiles.find((profile) => profile.id === profileId);
+  if (!current) return { profiles, blockedBundleIds: [] };
+
+  const currentBundleIds = new Set(current.bundleIds);
+  const ownedByOtherProfiles = new Set(
+    profiles
+      .filter((profile) => profile.id !== profileId)
+      .flatMap((profile) => profile.bundleIds)
+  );
+  const requested = [...new Set(requestedBundleIds.map((item) => item.trim()).filter(Boolean))];
+  const blockedBundleIds = requested.filter(
+    (bundleId) =>
+      !currentBundleIds.has(bundleId) && ownedByOtherProfiles.has(bundleId)
+  );
+  const blocked = new Set(blockedBundleIds);
+  const bundleIds = requested.filter((bundleId) => !blocked.has(bundleId));
+
+  return {
+    profiles: profiles.map((profile) =>
+      profile.id === profileId ? { ...profile, bundleIds } : profile
+    ),
+    blockedBundleIds,
+  };
+}
+
+/**
+ * 主面板“以后使用”的显式永久重绑入口。用户已经确认改变行为，因此把目标
+ * bundle 从其他方案移除，再加入所选方案；不触碰任何无关绑定或方案顺序。
+ */
+export function assignTargetProfileBundle(
+  profiles: TargetProfile[],
+  bundleId: string,
+  profileId: string
+): TargetProfile[] {
+  const normalizedBundleId = bundleId.trim();
+  if (
+    !normalizedBundleId ||
+    !profiles.some((profile) => profile.id === profileId)
+  ) {
+    return profiles;
+  }
+
+  let changed = false;
+  const next = profiles.map((profile) => {
+    if (profile.id === profileId) {
+      if (profile.bundleIds.includes(normalizedBundleId)) return profile;
+      changed = true;
+      return {
+        ...profile,
+        bundleIds: [...profile.bundleIds, normalizedBundleId],
+      };
+    }
+    if (!profile.bundleIds.includes(normalizedBundleId)) return profile;
+    changed = true;
+    return {
+      ...profile,
+      bundleIds: profile.bundleIds.filter((item) => item !== normalizedBundleId),
+    };
+  });
+  return changed ? next : profiles;
+}
+
+/** 用户显式裁决历史冲突：保留所选方案的绑定，其他方案只移除该 bundle。 */
+export function keepTargetProfileBundleAssignment(
+  profiles: TargetProfile[],
+  bundleId: string,
+  profileId: string
+): TargetProfile[] {
+  const selected = profiles.find((profile) => profile.id === profileId);
+  if (!selected?.bundleIds.includes(bundleId)) return profiles;
+  return profiles.map((profile) =>
+    profile.id === profileId || !profile.bundleIds.includes(bundleId)
+      ? profile
+      : {
+          ...profile,
+          bundleIds: profile.bundleIds.filter((item) => item !== bundleId),
+        }
+  );
 }
 
 export function findDuplicateBundleAssignments(
@@ -207,7 +350,10 @@ export function repairTargetProfileConfiguration(
       ? item
       : { ...item, groupId: GENERAL_PROMPT_GROUP_ID }
   );
-  const profiles = input.profiles.map((item) => ({
+  const sourceProfiles = input.profiles.length
+    ? input.profiles
+    : [{ ...SAFETY_PROFILE, bundleIds: [] }];
+  const profiles = sourceProfiles.map((item) => ({
     ...item,
     bundleIds: [...new Set(item.bundleIds.filter(Boolean))],
     promptGroupId: groupIds.has(item.promptGroupId)
@@ -251,6 +397,9 @@ export function deleteTargetProfile(
   input: TargetProfileConfiguration,
   profileId: string
 ): TargetProfileConfiguration {
+  if (profileId === input.defaultProfileId) {
+    return repairTargetProfileConfiguration(input);
+  }
   return repairTargetProfileConfiguration({
     ...input,
     profiles: input.profiles.filter((item) => item.id !== profileId),

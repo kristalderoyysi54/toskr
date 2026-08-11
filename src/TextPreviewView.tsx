@@ -14,6 +14,7 @@ import {
 
 import { headerGradient } from "@/components/NoteCard";
 import { DataReadOnlyGuard } from "@/components/DataReadOnlyGuard";
+import { DetailWindowFrame } from "@/components/DetailWindowFrame";
 import { stats } from "@/components/PreviewOverlay";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
@@ -21,11 +22,22 @@ import { Kbd } from "@/components/ui/kbd";
 import { TextSelectionToolbar } from "@/components/TextSelectionToolbar";
 import type { NotePreviewPayload } from "@/lib/actions";
 import { highlightCode, langLabel } from "@/lib/code";
+import { NOTE_EDITOR_SESSION_RELEASE_EVENT } from "@/lib/editorSessionMedia";
 import { useAppIcon } from "@/lib/icons";
 import { useNoteThumb } from "@/lib/media";
 import { looksLikeMarkdown, renderMarkdown } from "@/lib/markdown";
 import { springSnappy } from "@/lib/motion";
-import { refreshPreviewPayload } from "@/lib/previewPayload";
+import {
+  appendPreviewContent,
+  editorInsertRejectionReason,
+  hasRecentEditorInsertOperation,
+  NOTE_EDITOR_INSERT_EVENT,
+  NOTE_EDITOR_INSERT_RESULT_EVENT,
+  rememberEditorInsertOperation,
+  refreshPreviewPayload,
+  type NoteEditorInsertPayload,
+  type NoteEditorInsertResultPayload,
+} from "@/lib/previewPayload";
 import {
   DATA_ACTIVITY_EVENT,
   DATA_LOCATION_CHANGED_EVENT,
@@ -112,6 +124,14 @@ function discardDraftImages(
   if (files.length && dataGeneration !== undefined) {
     void emitTo("main", "toskr://note-image-discard", { files, dataGeneration });
   }
+}
+
+function releaseEditorSession(note: NotePreviewPayload | null) {
+  if (!note) return;
+  void emitTo("main", NOTE_EDITOR_SESSION_RELEASE_EVENT, {
+    targetSessionId: note.sessionId,
+    dataGeneration: note.dataGeneration,
+  }).catch(() => {});
 }
 
 type TextEditSnapshot = SelectionEdit & { images: string[] };
@@ -228,6 +248,10 @@ export default function TextPreviewView() {
   const previewContentRef = useRef<HTMLElement>(null);
   const pendingSelectionRef = useRef<TextSelection | null>(null);
   const pendingTextEditRef = useRef<SelectionEdit | null>(null);
+  const pendingTextEditImagesRef = useRef<string[] | null>(null);
+  const pendingTextEditBeforeRef = useRef<TextEditSnapshot | null>(null);
+  const appliedInsertOperationsRef = useRef(new Map<string, number>());
+  const noteRef = useRef<NotePreviewPayload | null>(null);
   const textEditHistoryRef = useRef<TextEditHistory>(freshTextEditHistory());
   const editSessionRef = useRef({
     original: [] as string[],
@@ -240,7 +264,7 @@ export default function TextPreviewView() {
   );
   const targetBlockedMessage = useTargetStore((state) =>
     state.profileOverrideNeedsConfirmation
-      ? "目标已变化，请确认 Profile"
+      ? "原临时投递方案已暂停"
       : state.status === "ready"
         ? null
         : targetBlockMessage(state.status, state.reason)
@@ -265,6 +289,11 @@ export default function TextPreviewView() {
 
   useEffect(() => {
     const un = listen<NotePreviewPayload>("toskr://note-preview", (e) => {
+      const p = e.payload;
+      const previousNote = noteRef.current;
+      if (previousNote?.sessionId !== p.sessionId) {
+        releaseEditorSession(previousNote);
+      }
       editSessionTokenRef.current += 1;
       const previous = editSessionRef.current;
       if (previous.editing) {
@@ -275,7 +304,8 @@ export default function TextPreviewView() {
         );
       }
       sessionPastedImagesRef.current.clear();
-      const p = e.payload;
+      appliedInsertOperationsRef.current.clear();
+      noteRef.current = p;
       setNote(p);
       draftRef.current = p.text;
       setDraftEmpty(!p.text.trim());
@@ -286,6 +316,8 @@ export default function TextPreviewView() {
       setTextSelection(null);
       pendingSelectionRef.current = null;
       pendingTextEditRef.current = null;
+      pendingTextEditImagesRef.current = null;
+      pendingTextEditBeforeRef.current = null;
       textEditHistoryRef.current = freshTextEditHistory();
       setGen((g) => g + 1);
       bodyRef.current?.scrollTo({ top: 0 });
@@ -299,9 +331,105 @@ export default function TextPreviewView() {
   }, []);
 
   useEffect(() => {
+    const un = listen<NoteEditorInsertPayload>(
+      NOTE_EDITOR_INSERT_EVENT,
+      (event) => {
+        const currentNote = noteRef.current;
+        const payload = event.payload;
+        const respond = (
+          status: NoteEditorInsertResultPayload["status"],
+          reason?: string
+        ) => {
+          void emitTo(
+            "main",
+            NOTE_EDITOR_INSERT_RESULT_EVENT,
+            {
+              requestId: payload.requestId,
+              targetId: payload.targetId,
+              targetSessionId: payload.targetSessionId,
+              dataGeneration: payload.dataGeneration,
+              status,
+              ...(reason ? { reason } : {}),
+            } satisfies NoteEditorInsertResultPayload
+          ).catch(() => {});
+        };
+        const rejection = editorInsertRejectionReason(currentNote, payload);
+        if (rejection) {
+          respond("rejected", rejection);
+          return;
+        }
+        const applied = appliedInsertOperationsRef.current;
+        if (hasRecentEditorInsertOperation(applied, payload.operationKey)) {
+          respond("applied");
+          return;
+        }
+        const acknowledgeApplied = () => {
+          rememberEditorInsertOperation(applied, payload.operationKey);
+          respond("applied");
+        };
+        try {
+          const appended = appendPreviewContent(
+            draftRef.current,
+            draftImagesRef.current,
+            payload.text,
+            payload.images
+          );
+          const edit: SelectionEdit = {
+            text: appended.text,
+            selection: appended.selection,
+          };
+          const textarea = textareaRef.current;
+          if (textarea) {
+            checkpointTextEdit(
+              textEditHistoryRef.current,
+              snapshotTextarea(textarea, draftImagesRef.current)
+            );
+            applyTextareaEdit(textarea, edit);
+            draftRef.current = appended.text;
+            draftImagesRef.current = appended.images;
+            setDraftImages(appended.images);
+            setDraftEmpty(!appended.text.trim());
+            setTextSelection(null);
+            pendingSelectionRef.current = null;
+            acknowledgeApplied();
+            return;
+          }
+          if (!pendingTextEditBeforeRef.current) {
+            pendingTextEditBeforeRef.current = {
+              text: draftRef.current,
+              images: [...draftImagesRef.current],
+              selection: {
+                start: draftRef.current.length,
+                end: draftRef.current.length,
+              },
+            };
+          }
+          pendingTextEditRef.current = edit;
+          pendingTextEditImagesRef.current = appended.images;
+          draftRef.current = appended.text;
+          draftImagesRef.current = appended.images;
+          setDraftImages(appended.images);
+          setDraftEmpty(!appended.text.trim());
+          setTextSelection(null);
+          pendingSelectionRef.current = null;
+          setEditing(true);
+          acknowledgeApplied();
+        } catch (error) {
+          respond("rejected", String(error));
+        }
+      }
+    );
+    return () => {
+      un.then((stop) => stop());
+    };
+  }, []);
+
+  useEffect(() => {
     const invalidate = () => {
+      releaseEditorSession(noteRef.current);
       editSessionTokenRef.current += 1;
       sessionPastedImagesRef.current.clear();
+      noteRef.current = null;
       setNote(null);
       setEditing(false);
       void getCurrentWebviewWindow().hide();
@@ -328,13 +456,21 @@ export default function TextPreviewView() {
         if (pendingEdit) {
           checkpointTextEdit(
             textEditHistoryRef.current,
-            snapshotTextarea(textarea, draftImagesRef.current)
+            pendingTextEditBeforeRef.current ??
+              snapshotTextarea(textarea, draftImagesRef.current)
           );
           applyTextareaEdit(textarea, pendingEdit);
           draftRef.current = pendingEdit.text;
+          const pendingImages = pendingTextEditImagesRef.current;
+          if (pendingImages) {
+            draftImagesRef.current = pendingImages;
+            setDraftImages(pendingImages);
+          }
           setDraftEmpty(!pendingEdit.text.trim());
           setTextSelection(pendingEdit.selection);
           pendingTextEditRef.current = null;
+          pendingTextEditImagesRef.current = null;
+          pendingTextEditBeforeRef.current = null;
           pendingSelectionRef.current = null;
           return;
         }
@@ -356,6 +492,7 @@ export default function TextPreviewView() {
       );
       sessionPastedImagesRef.current.clear();
     }
+    releaseEditorSession(note);
     void getCurrentWebviewWindow().hide();
   };
 
@@ -378,17 +515,20 @@ export default function TextPreviewView() {
       const next = refreshPreviewPayload({ ...note, images }, text);
       void emitTo("main", "toskr://note-edit", {
         id: note.id,
+        sessionId: note.sessionId,
         text: next.payload.text,
         images,
         discardedImages,
         dataGeneration: note.dataGeneration,
       });
       setNote(next.payload);
+      noteRef.current = next.payload;
       draftRef.current = next.payload.text;
       setDraftEmpty(!next.payload.text.trim());
       setMdView(next.markdownView);
     } else {
       discardDraftImages(images, discardedImages, note.dataGeneration);
+      releaseEditorSession(note);
     }
     sessionPastedImagesRef.current.clear();
     setTextSelection(null);
@@ -581,6 +721,7 @@ export default function TextPreviewView() {
           ]);
           sessionPastedImagesRef.current.clear();
         }
+        releaseEditorSession(noteRef.current);
         void getCurrentWebviewWindow().hide();
       }
     };
@@ -591,10 +732,7 @@ export default function TextPreviewView() {
   if (!note) {
     // 内容未达的兜底空态：仍给关闭按钮 + 可拖动，不至于出现关不掉的白框
     return (
-      <div
-        data-tauri-drag-region
-        className="flex h-screen w-screen items-center justify-center rounded-xl bg-background"
-      >
+      <DetailWindowFrame surfaceClassName="items-center justify-center bg-background">
         <DataReadOnlyGuard />
         <button
           aria-label="关闭"
@@ -604,7 +742,7 @@ export default function TextPreviewView() {
           <X className="size-3.5" />
         </button>
         <span className="text-body text-muted-foreground">加载中…</span>
-      </div>
+      </DetailWindowFrame>
     );
   }
 
@@ -619,17 +757,19 @@ export default function TextPreviewView() {
       : "文本";
   const s = stats(note.text);
   const shownImages = editing ? draftImages : note.images;
+  const detailHeaderBackground = headerGradient(icon?.color ?? "#5b5b60");
 
   return (
-    // 无描边：窗体轮廓交给 macOS 原生投影（conf shadow: true），内部只做质感层
-    <div className="flex h-screen w-screen select-none flex-col overflow-hidden rounded-xl bg-background text-foreground">
+    <DetailWindowFrame
+      surfaceClassName="select-none bg-background text-foreground"
+    >
       <DataReadOnlyGuard />
       {/* 标题栏：应用主色渐变（与卡顶同款）+ 顶缘内嵌高光（HUD 气泡同款
           玻璃质感）+ 与正文交界的一丝落影；可拖动窗口 */}
       <header
         data-tauri-drag-region
         className="relative z-10 flex h-11 shrink-0 cursor-grab items-center gap-2 px-3 shadow-[inset_0_1px_0_oklch(1_0_0/0.2),0_1px_3px_oklch(0_0_0/0.12)] active:cursor-grabbing"
-        style={{ backgroundImage: headerGradient(icon?.color ?? "#5b5b60") }}
+        style={{ backgroundImage: detailHeaderBackground }}
       >
         <div data-tauri-drag-region className="min-w-0 flex-1 leading-tight">
           <p
@@ -758,6 +898,7 @@ export default function TextPreviewView() {
                     ...sessionPastedImagesRef.current,
                   ]);
                   sessionPastedImagesRef.current.clear();
+                  releaseEditorSession(note);
                   draftRef.current = note.text;
                   setDraftEmpty(!note.text.trim());
                   textEditHistoryRef.current = freshTextEditHistory();
@@ -918,6 +1059,6 @@ export default function TextPreviewView() {
           )}
         </div>
       </footer>
-    </div>
+    </DetailWindowFrame>
   );
 }

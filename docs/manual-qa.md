@@ -14,10 +14,10 @@
 10. 删除/合并/清理已完成 → toast 撤销恢复原位
 11. 已完成沉底折叠展开；顶栏清理按钮
 12. 跨组拖拽；拖到折叠组悬停自动展开
-13. 当前 Target Profile 的回车策略为“关闭”：从 TextEdit/Codex 打开 Toskr，勾选 synthetic 文本发送 → 只粘贴、不回车；成功 HUD 的应用名与实际目标一致，卡片才标完成
+13. 当前投递方案的“粘贴后动作”为“仅粘贴”：从 TextEdit/Codex 打开 Toskr，勾选 synthetic 文本发送 → 只粘贴、不回车；成功 HUD 的应用名与实际目标一致，卡片才标完成
 14. 发送前退出目标 App → `blocked/target_exited` 气泡；无粘贴、无回车，卡片未完成、选择与面板恢复
 15. Pin 面板 → 切 App B → 回面板发送 → 落点只允许为 B；切换后旧 token 不得继续投递到 A
-16. 仅在一次性 TextEdit 文档中把精确 Profile 设为“允许自动回车”：文本粘贴后、200ms 回车窗口内抢焦点到 App B → B 无粘贴且两边都无回车；结果为 focus drift，卡片与选择保留
+16. 仅在一次性 TextEdit 文档中把精确投递方案的“粘贴后动作”设为“粘贴并回车”：文本粘贴后、200ms 回车窗口内抢焦点到 App B → B 无粘贴且两边都无回车；结果为 focus drift，卡片与选择保留
 17. iTerm/终端作为目标且保持默认设置 → 只粘贴、不自动回车；确认设置默认值仍为关闭
 18. 全屏 Safari/终端上双击 ⇧ 面板与气泡均可见
 19. 隐身模式开启：捕获入库但无气泡
@@ -57,31 +57,145 @@
 
 ## Target Lens 投递目标可视化（Phase 03，RUNTIME-REQUIRED）
 
-47. 分别从 TextEdit 与 Codex 打开 Toskr：Target Lens 的图标、应用名、“可发送”状态与 Profile 回车策略准确；发送落点、成功 HUD 应用名与 Lens 一致
+47. 分别从 TextEdit 与 Codex 打开 Toskr：Target Lens 第一层显示图标、应用名、仅代表目标可用的绿色状态与当前投递方案；第二层解释 exact/fallback/temporary/conflict 来源；第三层显示提示词组、输出格式、粘贴后动作和“隐私检查尚未启用”；发送落点、成功 HUD 应用名与 Lens 一致
 48. Pin 面板后从 App A 切到 App B：Lens 只更新为 B，不清空当前选择、草稿或预览；发送只能落到 B，不能回投 A
 49. 伴随/磁吸仍指向 App A 时切到 App B：Lens 反映 B 而不是停靠对象；开关伴随和停靠方向不改变投递目标语义
 50. 在独立窄面板、右/左侧边栏、上/下横向条分别检查 ready / refreshing / blocked：目标条不横向滚动、不变成厚重工具栏，长应用名可截断，阻断原因仍可见
 51. 目标 App 退出或 PID/launch identity 变化且 Toskr 仍在前台：Lens 自动转为阻断；笔记、任务、批量、预览和快捷键入口均不粘贴、不回车，HUD 与 VoiceOver 给出同一原因
 52. 快速 A→B→A 切换并连续点“重新识别”：旧异步响应不得回滚新目标，图标不闪回、相同快照不重复请求图标或制造事件风暴
-53. 使用缺少图标的测试 App：显示稳定 fallback；键盘可聚焦并触发“重新识别”；VoiceOver 精确读出目标名、状态与 Profile 的格式/回车/隐私策略
-54. 在一次性 TextEdit 文档分别配置 Profile 的“关闭 / 确认 / 允许”回车策略：Lens 即时更新，实际发送分别只粘贴 / 确认后回车 / 直接回车；焦点漂移时仍由 Native gate 阻断
+53. 使用缺少图标的测试 App：显示稳定 fallback；键盘可聚焦并触发“重新识别”；VoiceOver 精确读出目标名、状态、投递方案、提示词组、输出格式、粘贴后动作，并明确播报“隐私检查尚未启用”；目标变化只由克制的 aria-live 播报一次，不重复整块内容
+54. 在一次性 TextEdit 文档分别配置投递方案的“仅粘贴 / 粘贴后询问是否回车 / 粘贴并回车”：Lens 即时更新，实际发送分别只粘贴 / 确认后回车 / 直接回车；焦点漂移时仍由 Native gate 阻断
 
-## Target Profile 与 Prompt 分组（Phase 04，RUNTIME-REQUIRED）
+## 投递方案与提示词组（Phase 04，RUNTIME-REQUIRED）
 
-55. 设置分为“目标与模板”（Profile 管理 + Prompt 分组/模板）与独立的“伴随停靠”分区；两区均键盘可达，深链 snippets → 目标与模板、companion → 伴随停靠
-56. 用 v8 临时数据启动新包：旧 Prompt 的非冲突 ID、名称、正文和顺序全部保留并归入“通用”；重复/空 ID 稳定重编号但不丢模板；旧 autoEnter=true 只迁为默认 Profile 的“发送前确认”
-57. 分别为 Codex、Claude、浏览器配置精确 Profile，再逐个切换：Lens 的 Profile、Prompt 分组、格式、回车和隐私策略随真实 bundle 命中；未配置应用显示安全默认
-58. 逐个切换仓库既有终端 bundle：默认“终端（安全）”Profile 命中，回车始终关闭；应用未安装的 bundle 留在配置中也不导致设置页崩溃
-59. 把同一 synthetic bundle 加入两个 Profile：设置页与 Lens 同时警告，按列表首项稳定命中；上下移动后 winner 可预测变化
-60. 在 App A 手动选择“本次 Profile”，快速切到 App B 再回 Toskr：临时选择不被覆盖，但所有发送入口先阻止并显示“目标已变化，请确认 Profile”；确认后才可发送
-61. 删除正被 snippet 和多个 Profile 引用的分组：全部引用回落“通用”，HUD 报告修复数量，重启后无孤儿引用
-62. 在 380pt 竖面板与横向条用 VoiceOver/Tab 检查 Lens Profile 下拉、确认按钮、重复命中警告和 SelectionBar“当前分组 / 全部模板”，不得横向溢出或隐藏回车状态
+55. 设置分为“目标与模板”（投递方案 + 提示词组/模板）与独立的“伴随停靠”分区；匹配预演输入 bundle identifier 后显示“自动匹配：<方案名称>”或冲突；两区均键盘可达，深链 snippets → 目标与模板、companion → 伴随停靠
+56. 用 v8 临时数据启动新包：旧提示词的非冲突 ID、名称、正文和顺序全部保留并归入“通用”；重复/空 ID 稳定重编号但不丢模板；旧 autoEnter=true 只迁为默认投递方案的“粘贴后询问是否回车”
+57. 分别为 Codex、Claude、浏览器配置适用应用，再逐个切换：Lens 的投递方案、提示词组、输出格式和粘贴后动作随真实 bundle 命中，并解释“已为 <应用> 指定”；未配置应用解释“未匹配具体应用，使用默认方案”；无论隐私预设为何，主面板与快速切换浮层都显示“隐私检查尚未启用”
+58. 逐个切换仓库既有终端 bundle：默认“终端（安全）”投递方案命中，粘贴后动作始终为“仅粘贴”；应用未安装的 bundle 留在配置中也不导致设置页崩溃
+59. 尝试把已绑定的 synthetic bundle 新增到另一投递方案：设置页阻止新增且保留其他合法编辑；再用历史重复数据启动，设置页与 Lens 以黄色标记 conflict、按列表首项稳定命中，点击“保留在 <方案>”后只移除其他方案的该绑定
+60. 在 App A 打开快速切换浮层，选择另一方案后只产生绑定 A 快照的临时覆盖，永久适用应用保持不变；只有再点“以后发给 A 都使用此方案”才迁移永久绑定。浮层保持打开时切到 App B：标题、图标、原因与规则立即更新，旧覆盖清除，B 使用自己的 exact/fallback；B 失效时全部方案选择与发送入口锁定
+61. 删除正被 snippet 和多个投递方案引用的提示词组：全部引用回落“通用”，HUD 报告修复数量，重启后无孤儿引用
+62. 在 380pt 竖面板与横向条用长应用名、长方案名、VoiceOver/Tab 检查 Lens 与快速切换浮层：Enter/Space 打开，↑↓ 循环移动，Enter 临时选择，Escape 关闭；当前摘要、最多三项方案、恢复自动、编辑入口均可达；不得横向溢出，状态标签自然换行且最多两行
 
 ## 签名与 TCC 备注
 
 构建使用本机自签名证书 **"Toskr Dev Signing"**（`bundle.macOS.signingIdentity`），签名跨编译稳定，重新编译后无需重新授权辅助功能。换机器时：先在钥匙串创建同名代码签名证书并信任，或移除该配置退回 ad-hoc（每次重编译需在系统设置里删掉 Toskr 条目重新添加）。`pnpm tauri dev` 的调试进程权限附着于启动它的终端。
 
 ## AI 智能（v0.9.x 新增）
-63. 设置 → AI 智能：预设点选填 Base URL（模型名为空才带入推荐值）；API Key 默认遮罩、眼睛可切换；「测试连接」未启用也能跑，成功/失败各有气泡
+63. 设置 → AI 智能：预设点选填 Base URL（模型名为空才带入推荐值）；API Key 只显示“已配置/未配置”，新值只可保存或覆盖且不能回显；「测试连接」从 macOS 钥匙串读取 key，未启用 AI 总开关也能执行
 64. 任务输入框 ✨ 模式：「下午3点提醒我开会」回车 → 生成带到期时间的任务；AI 未配置/断网时按原文创建普通任务（输入不丢失）+ warn 气泡；💡 与 ✨ 互斥
 65. 任务右键「AI 拆解子任务」→ 写入 3-8 条检查项，HUD 可撤销；笔记右键「AI 转任务」→ 建任务删笔记一次撤销恢复；「AI 起标题」→ 卡片通栏出现短标题
+
+## DeliveryDraft 单一投递管线（Phase 05，RUNTIME-REQUIRED）
+
+66. 在一次性 TextEdit 文档中，用单卡、批量、`⌘1…9`、`⌘Enter` 与提示词模板发送同一 synthetic fixture；逐字节比较 Tooltip 预览与实际粘贴，换行、编号、Prompt 占位符和特殊字符均一致
+67. 分别发送链接、单条带语言代码、多条混合代码、带真实说明的图片和多图组合：单条代码保留语言，多条代码块不带语言；图片说明进入正文，尺寸占位不进入正文，附件按卡片列表首次出现顺序且不重复
+68. 发送包含标题、备注与 checklist 的 synthetic 任务：目标收到稳定 Markdown，任务状态不因发送改变；blocked/failed 时面板恢复且原选择不丢失
+69. 分别使用“仅粘贴 / 询问后回车 / 粘贴并回车”的投递方案：取消确认时无粘贴，确认后 Native 收到的回车决策与 Draft 一致，Pin 只改变发送后面板是否保留
+70. 发送确认、目标刷新或 Native 回执在途时，依次修改来源正文、新增勾选、切换目标与更改投递方案：旧 Draft 不得修改 done、checked 或 onboarding，新勾选必须保留并显示明确警告
+71. 快速双击同一发送入口：只允许一个 Native 投递在途；第二次显示“已有发送正在进行”，首个成功回执仍正常标完成并清除其原始选择
+72. 发送前退出目标、发送中切走焦点及模拟不可读图片：Native 必须在任何粘贴/回车副作用前阻断；所有入口统一恢复面板、保留卡片与选择
+
+## 投递预检台（Phase 06，RUNTIME-REQUIRED）
+
+73. 普通竖向面板分别发送单条稳定纯文本、多条、图片、Prompt、代码块及 allow/confirm 回车方案：smart 只让首项快速发送，其余进入同一预检；always 全部进入，off 保持快速发送；菜单“预检并发送”始终显式打开
+74. 在预检中逐项核对目标图标/名称、投递方案、来源展开列表、图片缩略图、Prompt、输出格式、真实最终正文、回车决定、保留面板和 warning；修改最终正文后原 Note/Task 不变，“恢复自动组装内容”还原本次 Draft
+75. 打开预检后分别编辑/删除/移组来源，新增勾选，切换目标、临时方案或数据目录：确认按钮立即禁用并播报对应 stale 原因；切换 Prompt/格式不得偷换来源基线
+76. Pin 与非 Pin 各发送一次；再在伴随模式下从 App A 切 App B 后打开预检：目标只显示 B，keepPanel 只反映本次决定；A 的迟到回执不得清除 B 新选的临时方案
+77. 分别制造目标刷新失败、Native 首次 paste 前 blocked、paste 后焦点漂移、Enter 失败和 IPC 回执丢失：零粘贴失败保留可编辑重试；同目标安全回执只更新 token；可能已粘贴的结果锁定原 Draft 并要求先核对，不能重复外发
+78. 在 380pt 竖面板以及 260–420pt 上/下横栏打开完整发送菜单和预检：菜单顶部“预检并发送/预检方式”可见且可滚动，预检竖向分区或横向双栏均无横向溢出，长正文、长来源和多图区域可独立滚动
+79. 用完整键盘复测：发送菜单 Enter/Space 打开、↑↓/Home/End 移动、Escape 返回触发器；预检初始 Tab/Shift+Tab 不逃到背后面板，Escape 保留选择，Cmd+Enter 只发一次，busy 与全部禁用态仍有焦点留在 modal 内
+80. 浅色、暗色和系统 Reduce Motion 各检查一次浮层层级、文字/警告对比度、滚动条和开关状态；VoiceOver 依次读出 dialog 标题、目标、回车实际决定、warning/stale、最终正文、取消与确认按钮的可用状态
+
+## Context Firewall 本地文本引擎（Phase 07，RUNTIME-REQUIRED）
+
+81. 在签名 release 包的 WebView DevTools 中调用 `scan_sensitive_text`，输入只含 synthetic 的 PEM、Authorization、JSON API key、数据库 URL、邮箱、电话、身份证、Luhn 卡号、IPv4、Cookie/Session；逐项用 JavaScript `slice(startUtf16, endUtf16)` 验证范围，主界面不得发生变化
+82. 调用后检查诊断页与 `toskr-diag.log`：只允许出现 UTF-16 长度、finding 数、类别计数和耗时；搜索 synthetic 原值、完整 Prompt、Token 与可逆 hash 均不得命中
+83. 分别提交空文本、含 emoji/组合字符/U+FFFD 的文本、1 MiB 混合文本与超过 2 MiB 的文本：前三者完整返回且界面不阻塞，超限结果必须为 `complete=false + inputTooLong`，不得把未扫描内容视为安全
+
+## Context Firewall 脱敏预览与出站门禁（Phase 08，RUNTIME-REQUIRED）
+
+84. 在真实签名包中发送只含 synthetic 的邮箱、手机号与 fake API key 文本：快速发送必须先本地扫描并自动打开预检；Firewall 区域显示类别、严重级别、数量与遮罩预览，正文原值不得出现在 HUD 或诊断
+85. 在同一 Draft 放入两处相同邮箱、emoji/组合字符和交叠 synthetic fixture：逐项、同类、全部替换均保持 Unicode 完整；同值稳定复用 `[EMAIL_01]`，正文已有该编号时从下一号开始
+86. 分别用 `requireRedaction / confirmRaw / allowRaw` 方案发送 warn 与 block：逐项替换或明确保留前按钮状态符合策略；confirmRaw 的提示项需一次确认，allowRaw 的 block 必须二次确认，普通点击不能绕过
+87. 用单条无 finding 文本和带 finding 文本各走 smart/off/显式预检：无 finding 保持原快速发送；任何 finding、扫描失败或超限都进入预检且不提前调用 Native；快速双击仍只有一个在途意图
+88. 确认保留原文后依次修改正文、Prompt、格式、目标 token 与投递方案：旧确认立即失效并重新扫描或要求重开预检；迟到扫描结果不得覆盖新正文
+89. 设置 → 目标与投递方案检查 Firewall 默认开启；逐个关闭/恢复邮箱、电话、身份证、银行卡、IP 提示，block 类别没有单独关闭入口；界面明确说明可能误报和漏报
+90. 对仍保留 block 原文的三种策略复测“自动按回车”方案：允许发送的明确保留/二次确认路径也必须只粘贴、不按回车；目标漂移与 Native gate 继续优先阻断
+91. 完成发送、取消预检、切换数据目录并重启后，业务 JSON、完整备份、活动目录和诊断日志均不含 redaction map 或 synthetic 原值；v9 数据自动迁到 v10 且原 Note/Task/Profile 不丢失
+
+## AI 密钥与传输安全（Phase 09，RUNTIME-REQUIRED）
+
+92. 在设置窗保存 synthetic API key：输入框保存后立即清空，只显示“已配置”和可选更新时间；关闭/重开设置与重启 App 状态仍一致，主窗口和设置窗口的状态变化不闪回
+93. 先保存 A，再输入 B 覆盖，使用本地 stub 验证请求只接受 B；点击删除并确认后状态变“未配置”，获取模型、测试连接和现有任务 AI 均给准确提示，不能读取或恢复 A/B 明文
+94. 用 v10 临时数据副本放入 synthetic `aiApiKey` 后启动：Keychain 写入成功才从 JSON 清除；故障注入让写入失败时 HUD 明确警告，JSON 中唯一恢复副本仍在且完整备份继续拒绝包含它
+95. 分别填写 HTTPS、`http://localhost`、`http://127.0.0.1`、`http://[::1]`、远端 HTTP、userinfo、FTP 和无 host 地址：HTTPS 与三种 loopback 通过策略，其他在发请求前阻断；redirect 不得把 Bearer header 带到第二跳
+96. 让本地 stub 延迟响应，期间用 `ps` 检查 Toskr 及子进程：不得出现 curl 子进程、Authorization header、API key、正文或完整 Prompt；诊断、错误 HUD、业务 JSON和完整备份同样搜索不到 synthetic key
+97. 用本地 stub 依次走自然语言建任务、拆解子任务、笔记转任务、AI 起标题、获取模型和测试连接；成功行为保持兼容，未配置、删除 key、网络失败和解析失败时原输入/原卡片不得丢失
+98. 在浅色/暗色与 380pt 窄设置窗检查 Keychain 状态、覆盖、删除确认、HTTPS 提示和错误文案；Tab/VoiceOver 顺序可达，密钥正文任何时候都不被朗读或显示
+
+## AI 显式转换预览（Phase 10，RUNTIME-REQUIRED）
+
+99. 打开投递预检的“内容”分区：未点击前不得发起 AI 请求；四个固定转换可选，provider、model、将发送的字符数及“只发 Firewall 后文本、不发图片”在按钮前可见
+100. 使用 local stub 计数，在未完成扫描、扫描失败/超限和未解决 block finding 时分别点击“生成预览”：请求数始终为 0；处理并确认当前隐私结果后才允许显式调用
+101. 让 stub 返回 synthetic 文本：原始 finalText 与 AI 候选同时可见，变更摘要合理；未点“应用”时 Note、Task 与 finalText 均不变，点“应用”后 revision 增加、回车/原文确认失效并重新扫描
+102. AI 在途时继续编辑正文、切 Prompt/格式、切目标并快速重复点击：同一 Draft 同一 recipe 只有一个请求；迟到结果显示“已过期”且没有应用按钮，⌘Enter 不会提前发送旧正文
+103. 分别在请求中点击取消、按 Escape、点背景和关闭预检，再让 stub 迟到返回：busy 立即释放、预检结果清空、迟到内容不回写；重新打开同一卡不会继承旧候选
+104. 依次制造未配置 Keychain、断网、超时、非法 JSON 和空响应：错误只显示通用状态，原 finalText 与来源卡完整保留；恢复后可重新显式触发
+105. 应用候选后点击“恢复转换前版本”，再分别验证丢弃候选和关闭预检：恢复同样重新扫描，任何完整请求/响应、diff 或恢复点都不进入业务 JSON、完整备份或诊断
+106. 在 380pt 竖面板与 260–420pt 上/下横栏复测浅色、暗色、Reduce Motion、长原文/长候选、Tab/Shift+Tab 与 VoiceOver：原文、候选、过期/错误状态、取消/应用/恢复均可达，无横向溢出或系统粗滚动条
+
+## 最近投递与安全恢复（Phase 11，RUNTIME-REQUIRED）
+
+107. 在一次性 TextEdit 文档依次完成 sent、发送前 blocked、Native failed：Target Lens 的历史入口出现对应记录，抽屉只显示时间、目标、方案、状态、原因、来源 ID 可用性、字符/图片/Firewall/脱敏计数和剪贴板结果，不显示正文或 Prompt
+108. 用只含 synthetic secret 的来源完成预检与发送，再检查当前数据目录的 `toskr-delivery-activity.jsonl` / `.1.jsonl`：字段严格白名单，搜索正文、Prompt、API key、target token、redaction map 与 finding preview 均不命中；向副本插入坏 JSON/未知字段后仍可读取其余合法行
+109. 用临时数据目录生成超过 500 条、超过 30 天及超过单文件预算的事件：读取结果保持最新 500 条且过期记录消失，主文件与单一归档均有界；切换/迁移/回滚数据目录时历史跟随当前数据集且不串目录
+110. 对失败记录先修改原 Note/Task，再点“重新准备”：必须读取当前来源、刷新当前目标、重新跑 Firewall 并打开新预检；历史正文、旧 target token 和旧确认不得复用，确认前 Native 调用数为 0
+111. 删除全部来源、只删除部分来源各复测一次：记录显示“来源已不存在/部分来源已不存在”，“重新准备”禁用并给可操作说明；不得猜测正文或只发送残余子集
+112. 让原目标 App A 退出、切到 App B 后从 A 的失败记录重新准备：Draft 绑定 B 的新 identity/token 和当前方案，先展示预检且不自动粘贴；只有本次明确确认才允许发送
+113. 分别从历史抽屉与设置清除活动记录：二次确认明确“不影响卡片”；清理前后对业务 JSON、任务/分组与媒体做 hash/数量比较，必须完全一致，两个活动文件消失且重开为空
+114. 在 380pt 竖面板、260–420pt 上/下横栏、浅色/暗色/Reduce Motion 中打开长历史：抽屉不横向溢出、列表内部可滚动；Tab/Shift+Tab 不逃逸，Escape 关闭并返回历史按钮，VoiceOver 读出状态、来源可用性、剪贴板结果和禁用原因
+
+## 结果回收与来源关联（Phase 12，RUNTIME-REQUIRED）
+
+115. 向 ChatGPT/Claude 各成功投递一次，再于 30 分钟内从对应应用捕获 synthetic 回答：只有 bundle 精确一致且仅一条成功候选时，捕获 HUD 提示“可关联”；卡片与活动记录在用户确认前均不得自动出现关联
+116. 构造同 bundle 的两条成功投递、无成功投递、超出 30 分钟和 bundle 不同四种情况：右键“关联到最近投递”分别显示按时间倒序的多候选、明确空态或排除项；选择器只显示时间、目标、来源/字符/图片计数，不显示发送或结果正文
+117. 关联后结果 Note 显示“来自投递结果”标记；点击可打开仍存在的首个原始 Note/Task，结果卡本身仍可编辑、勾选并再次进入普通 DeliveryDraft；不得出现 Result 主 tab 或特殊发送旁路
+118. 从最近投递抽屉点“关联现有卡片”，候选只含投递之后 30 分钟内同 bundle 的 Note；确认后抽屉显示“打开结果”，可分别打开来源与结果，活动 JSONL 的 `resultCaptured` 只新增 result Note ID
+119. 将同一结果卡改绑到另一条投递：必须二次确认，旧投递显示关联已解除/改绑；再解除关联，结果正文、图片、分组和完成状态保持不变，重新打开/重启后 provenance 确实移除
+120. 关联后分别删除全部/部分源卡和结果卡：结果卡继续可打开并显示来源缺失/部分缺失；结果卡删除后活动抽屉显示“结果卡已不存在”，不得用历史数据重建任何正文
+121. 用含 `[EMAIL_01]` 的 synthetic 回答复测：同一应用会话且映射仍在时，只有确认敏感内容警告后才显示临时恢复预览；关闭即清除且不写回 Note/活动/备份，换数据目录或重启后明确显示映射已失效
+122. 用 v11 临时数据升级 v12，比较旧 Note ID/正文/顺序/媒体 hash 不变；再复测目录切换、完整备份、380pt 竖面板、260–420pt 横栏、浅/暗色、Reduce Motion、Tab/Shift+Tab/Escape/焦点归还与 VoiceOver
+
+## 结果核验（Phase 13，RUNTIME-REQUIRED）
+
+123. 对一张已关联结果卡分别准备完整 JSON、非法 JSON、空结果、短结果、奇数代码围栏和省略号结尾：本地检查自动运行且不联网；格式、必填字段、截断与长度状态准确，只表述规则证据，不宣称结果正确
+124. 在结果里分别删除、重复并新增 synthetic `[EMAIL_01]` / `[PHONE_01]`：当前发送会话仍有计数时准确区分丢失/重复/未知；清会话或重启后明确“映射已失效”，不能把陌生占位符判定为安全
+125. 输入 JSON dot-path 与必要标题/段落后复测完整和故意遗漏结果：缺失项进入 `blocked`，问题入口可用；来源 Note/Task 被编辑、删除或结果正文变化后，旧报告立即显示过期且保存、AI 与继续投递全部禁用
+126. AI 配置 local stub，点击前确认请求数为 0，界面先显示 provider、model、来源/结果字符范围和本地 finding 替换计数；点击后请求只含已脱敏当前来源、已脱敏结果与固定 schema，不含图片、raw finding 或 redaction map
+127. 让 stub 返回合法报告、未知字段、非法 JSON、空响应、超时，并在途重复点击/取消/关闭/切数据目录：严格 guard 只接受白名单 JSON；错误与取消不改 result Note，迟到回执不回写，新请求须等旧 transport 收口
+128. 分别点击“保存为笔记”和“问题进入预检”：前者生成普通 Note 并保留同一 delivery provenance，正文不复制来源/结果；后者生成问题 Note 后进入既有 Preflight，仍需重新扫描、确认目标且不会自动发送
+129. 检查当前数据目录活动 JSONL：`resultVerified` 只含 result Note ID、核验状态与检查/问题计数，不含报告、来源、结果或 AI Prompt；同一投递多次核验时最近投递只展示时间最新的一次计数，清活动立即关闭旧核验会话
+130. 在 380pt 竖面板和 260–420pt 上/下横栏复测浅色、暗色、Reduce Motion、长检查列表、Tab/Shift+Tab/Escape/回焦与 VoiceOver：弹窗无横向溢出，正文只在内部滚动，状态、失效原因、AI 数据范围和禁用动作均可读
+
+## 本地成效度量（Phase 14，RUNTIME-REQUIRED）
+
+131. 设置 → 成效与隐私：用 synthetic 的 sent/blocked/failed、Firewall、脱敏、剪贴板、结果回收与核验事件核对投递次数、成功率、原因/状态分布、重试、`Draft→sendSent` 与 `sendSent→resultCaptured` 中位耗时；0/1/小于 5 个样本时不得给趋势结论
+132. 在系统时区跨 0 点生成边界事件，切换近 7 天、近 30 天、全部保留期及 Target Profile/TransformRecipe：本地日历范围和组合过滤准确，图表无正文、Prompt 或结果文本
+133. 对已关联结果在最近投递中依次选择“直接使用/小改/大改/未采用”，重复修改只保留最新反馈；关闭成效度量后入口消失，新发送仍成功且恢复账本事件标记为不参与指标
+134. 未配置人工基线时界面不显示节省时间值；分别给 Profile 与 recipe 填传统流程分钟数后，recipe 基线优先，实测流程耗时与“估算累计节省”分开显示，零值/负值/异常大值被拒绝
+135. 开始问题计时 → 关联一条成功投递 → 回收并关联结果 → 同步结果关联 → 手动标记解决：只保存 session/delivery/result ID 与时间，start→solved 实测中位数准确；取消路径不进入解决耗时
+136. 点击“清除成效历史”后统计归零、质量/计时清空，但人工基线和最近投递恢复记录仍在；卡片、任务、分组与附件内容/数量不变，活动 JSONL before/after hash 不变，业务 JSON 只允许成效代次、质量反馈和问题会话变化；新投递只进入新的 metrics epoch
+137. 将保留期从 90 缩到 30、7 天：下次读取压实两个活动文件，过期事件消失且最近投递仍可恢复；再从最近投递抽屉显式清活动，只有活动文件消失，业务数据不变
+138. 在最窄设置窗口、浅色/暗色、Reduce Motion、200+ 日样本和长方案名下检查：筛选/卡片/轻量柱图无横向溢出或粗滚动条；Tab/Shift+Tab、VoiceOver 可读开关、范围、样本量、估算标签、基线、问题会话和清除确认
+
+## 首次真实演练与发布硬化（Phase 15，RUNTIME-REQUIRED）
+
+139. 用全新临时数据目录启动签名包：辅助功能拒绝、已授权但 tap 未建立、等待首个事件、输入监控拦截和完全就绪分别显示不同状态与行动；停留系统设置多久都不显示倒计时或失败结论
+140. 复制演练示例到 TextEdit 临时文档，选中全文并双击 ⇧：必须由真实捕获生成包含 `demo.user@example.com` 的普通 Note，再主动切到安全目标、重新识别并在 Target Lens 确认；未就绪目标没有确认入口
+141. 打开演练预检：假邮箱必须由真实 Context Firewall 检出，应用替换后 finalText 可核对；无论目标 Profile、AI 改写或预检交互如何变化，界面与 Native 实际请求都保持“只粘贴、不按回车、保留面板”；完成真实安全投递或点“稍后在真实应用演练”均能结束
+142. 分别在捕获、目标和预检步骤暂停/退出/重启：重新打开后从原步骤和原示例 Note 继续；用 v13 已完成数据升级后不得自动弹引导，设置 → 关于 → 安全投递演练可主动重跑且不清旧卡片
+143. 只用键盘依次完成：展开 Target Lens、打开 Preflight、定位/替换 finding、取消或安全粘贴、打开最近投递、关联结果、打开成效设置；Tab/Shift+Tab/Escape/⌘Enter 不得穿透模态或触发两次发送，关闭后焦点回到稳定触发器
+144. 在 380pt 竖面板、260–420pt 上/下横栏、最窄设置窗、浅色/暗色和 Reduce Motion 下复测演练、Lens、Preflight/Firewall、最近投递、Result Return 与成效设置；无横向溢出或粗滚动条，状态不依赖颜色/动画，VoiceOver 读出名称、状态、禁用原因与结果
+145. 在同一发布候选环境记录 1 MiB Firewall、500 条活动记录及 50,000 条历史下 Lens+Preflight 的耗时与硬件/OS/Node/Rust 版本；超限扫描继续 fail-closed，活动仍最多 500 条，界面不得渲染整份历史
+146. 发布构建重启后静置面板，记录 Toskr 空闲 CPU 与 wakeups；再按 TextEdit、Safari/Chrome、Claude/ChatGPT、Codex/Cursor、Terminal、Pin、伴随、四缘边栏、全屏 Space 和可用多屏逐项回归。无法取得 TCC、VoiceOver、多屏或 wakeups 证据时必须保留 `RUNTIME-REQUIRED`

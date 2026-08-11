@@ -27,6 +27,10 @@ enigo = "0.6"
 arboard = "3"
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png"] }
+regex = "1"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+url = "2.5"
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
 tauri-plugin-global-shortcut = "2"
@@ -34,6 +38,8 @@ objc2-vision = { version = "0.3.2", features = ["VNRecognizeTextRequest", "VNReq
 
 [target.'cfg(target_os = "macos")'.dependencies]
 window-vibrancy = "0.6"
+security-framework = "3.7"
+security-framework-sys = "2.17"
 core-foundation = "0.10"
 core-graphics = "0.24"
 objc2 = "0.6"

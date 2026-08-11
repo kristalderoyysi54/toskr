@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildBackupPayload } from "./backup";
+import { buildBackupPayload, buildMediaIntegrityPayload } from "./backup";
 import { defaultSettings, STORE_VERSION } from "@/store/notesStore";
 
 describe("buildBackupPayload", () => {
@@ -10,7 +10,11 @@ describe("buildBackupPayload", () => {
       notes: [],
       taskSections: [{ id: "task-inbox", name: "收集箱" }],
       tasks: [],
-      settings: { ...defaultSettings(), aiApiKey: "must-not-leak", dataDir: "/private" },
+      settings: {
+        ...defaultSettings(),
+        aiApiKey: "must-not-leak",
+        dataDir: "/private",
+      } as ReturnType<typeof defaultSettings>,
     });
 
     expect(payload.storeVersion).toBe(STORE_VERSION);
@@ -26,5 +30,54 @@ describe("buildBackupPayload", () => {
     ]);
     expect(payload.state.settings).not.toHaveProperty("aiApiKey");
     expect(payload.state.settings).not.toHaveProperty("dataDir");
+  });
+
+  it("完整备份只携带结果来源元数据，不携带会话 redactionMap", () => {
+    const payload = buildBackupPayload({
+      sections: [{ id: "inbox", name: "收件箱" }],
+      notes: [{
+        id: "result-1",
+        text: "结果正文",
+        sectionId: "inbox",
+        done: false,
+        createdAt: 2,
+        provenance: {
+          kind: "deliveryResult",
+          deliveryId: "delivery-1",
+          capturedAtMs: 2,
+          sourceBundle: "com.openai.chat",
+          sourceItemIds: ["source-1"],
+        },
+      }],
+      taskSections: [{ id: "task-inbox", name: "收集箱" }],
+      tasks: [],
+      settings: defaultSettings(),
+    });
+
+    expect(payload.state.notes[0].provenance).toMatchObject({
+      deliveryId: "delivery-1",
+      sourceItemIds: ["source-1"],
+    });
+    expect(JSON.stringify(payload)).not.toContain("redactionMap");
+  });
+});
+
+describe("buildMediaIntegrityPayload", () => {
+  it("把未保存编辑草稿图片作为运行态活动引用交给媒体 GC", () => {
+    const payload = buildMediaIntegrityPayload(
+      {
+        sections: [],
+        notes: [],
+        taskSections: [],
+        tasks: [],
+        settings: defaultSettings(),
+        undoStack: [],
+      },
+      ["clip.png", "clip.png"]
+    );
+
+    expect(payload.state.editorDrafts).toEqual([
+      { attachments: ["clip.png"] },
+    ]);
   });
 });

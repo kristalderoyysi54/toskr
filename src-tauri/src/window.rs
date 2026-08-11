@@ -135,7 +135,9 @@ fn sidebar_rect(edge: u8, m: &MonitorPt, panel_w: f64, gap: f64) -> (f64, f64, f
         ),
         2 | 3 => {
             let max_h = (m.wa_h - 2.0 * gap).max(200.0);
-            let h = (m.wa_h * 0.32).clamp(260.0_f64.min(max_h), 420.0).min(max_h);
+            let h = (m.wa_h * 0.32)
+                .clamp(260.0_f64.min(max_h), 420.0)
+                .min(max_h);
             let w = (m.wa_w - 2.0 * gap).max(320.0);
             let y = if edge == 2 {
                 m.wa_y + gap
@@ -166,14 +168,27 @@ fn monitor_containing_pt(monitors: &[MonitorPt], x: f64, y: f64) -> Option<Monit
         .copied()
 }
 
+/// 窗口布局目标：前台是外部应用时用前台；Toskr 因面板/设置水合占据前台时，
+/// 回退到唤出面板前记录的应用。保持为纯函数，避免配置恢复与显示入口各写一套裁决。
+fn select_layout_candidate(
+    current: Option<(i32, Option<String>)>,
+    own_pid: i32,
+    previous: Option<(i32, Option<String>)>,
+) -> Option<(i32, Option<String>)> {
+    match current {
+        Some(candidate) if candidate.0 != own_pid => Some(candidate),
+        _ => previous.filter(|candidate| candidate.0 != own_pid),
+    }
+}
+
 /// 严格按物理完整边界判定坐标点所在屏（无兜底——查不到就是 None）。
 /// 与 `monitor_containing_pt` 的区别：后者带首屏兜底 + work_area 容差，
 /// 适合「总得选一块屏」的定位场景；这里用于「越过这条线还有没有屏」的
 /// 桌面边界判定，兜底会让判定恒真，必须严格。
 fn monitor_at_strict(monitors: &[MonitorPt], x: f64, y: f64) -> Option<&MonitorPt> {
-    monitors.iter().find(|m| {
-        x >= m.mon_x && x < m.mon_x + m.mon_w && y >= m.mon_y && y < m.mon_y + m.mon_h
-    })
+    monitors
+        .iter()
+        .find(|m| x >= m.mon_x && x < m.mon_x + m.mon_w && y >= m.mon_y && y < m.mon_y + m.mon_h)
 }
 
 /// 手动拖拽入坞判定（纯函数）：面板右缘落在所在屏物理右边界
@@ -218,8 +233,10 @@ pub fn compute_companion_rect(
     let h = height_override
         .unwrap_or(auto_h)
         .clamp(PANEL_MIN_HEIGHT, monitor.wa_h);
-    let y = (frame.y + top_offset)
-        .clamp(monitor.wa_y, (monitor.wa_y + monitor.wa_h - h).max(monitor.wa_y));
+    let y = (frame.y + top_offset).clamp(
+        monitor.wa_y,
+        (monitor.wa_y + monitor.wa_h - h).max(monitor.wa_y),
+    );
     let x = if side == 1 {
         // 贴左缘：目标窗口左缘 - 间隙 - 面板宽；屏幕左侧放不下时向右收
         let min_x = monitor.wa_x + MARGIN;
@@ -314,13 +331,12 @@ fn show_panel_on_main(app: &AppHandle) -> tauri::Result<()> {
     }
 
     // 伴随候选：前台应用；前台是自己（托盘等路径）时回退到上一个应用
-    let candidate: Option<(i32, Option<String>)> = match &front {
-        Some(f) => Some((f.pid, f.bundle_id.clone())),
-        None => {
-            let pid = *state.prev_app_pid.lock().unwrap();
-            pid.map(|p| (p, focus::bundle_of(p)))
-        }
-    };
+    let previous = (*state.prev_app_pid.lock().unwrap()).map(|pid| (pid, focus::bundle_of(pid)));
+    let candidate = select_layout_candidate(
+        front.as_ref().map(|f| (f.pid, f.bundle_id.clone())),
+        me,
+        previous,
+    );
 
     // 伴随停靠：候选应用需在预设伴随列表内且有有效窗口 frame
     let (companion_enabled, companion_apps, companion_side) = {
@@ -335,9 +351,7 @@ fn show_panel_on_main(app: &AppHandle) -> tauri::Result<()> {
                 .unwrap_or(false);
         let frame = if hit { dockable_frame(*pid) } else { None };
         // 伴随诊断（stderr，仅命令行启动可见）
-        eprintln!(
-            "[toskr] companion: candidate={pid}({bundle:?}) in_list={hit} frame={frame:?}"
-        );
+        eprintln!("[toskr] companion: candidate={pid}({bundle:?}) in_list={hit} frame={frame:?}");
         frame.map(|frame| (*pid, frame))
     });
 
@@ -348,12 +362,9 @@ fn show_panel_on_main(app: &AppHandle) -> tauri::Result<()> {
             // 吸附目标变化 → 高度/偏移覆盖重置为自动（与新应用窗口同高）
             reset_overrides_if_target_changed(&state, pid);
             let monitors = snapshot_monitors_pt(app);
-            let monitor = monitor_containing_pt(
-                &monitors,
-                frame.x + frame.w / 2.0,
-                frame.y + frame.h / 2.0,
-            )
-            .ok_or(tauri::Error::WindowNotFound)?;
+            let monitor =
+                monitor_containing_pt(&monitors, frame.x + frame.w / 2.0, frame.y + frame.h / 2.0)
+                    .ok_or(tauri::Error::WindowNotFound)?;
             let top_offset = *state.panel_top_offset.lock().unwrap();
             let height_override = *state.panel_height_pt.lock().unwrap();
             let gap = *state.companion_gap.lock().unwrap();
@@ -381,11 +392,12 @@ fn show_panel_on_main(app: &AppHandle) -> tauri::Result<()> {
         }
         None => {
             // 独立模式：屏幕右缘停靠（桌面/无有效窗口的应用）。
-            // 伴随开启时 tracker 仍常驻：之后切到任何有窗口的应用会自动吸附过去。
+            // 伴随开启时 tracker 仍常驻，但用 -1 作为未绑定种子；只有之后切到
+            // 伴随列表内应用才会接管。不能把当前的非白名单应用 PID 当初始目标，
+            // 否则 tracker 下一 tick 会绕过列表检查，跨屏吸到不该跟随的窗口。
             if companion_enabled {
                 let monitors = snapshot_monitors_pt(app);
-                let pid = candidate.as_ref().map(|(p, _)| *p).unwrap_or(-1);
-                start_companion_tracker(app, pid, monitors);
+                start_companion_tracker(app, -1, monitors);
             } else {
                 stop_companion_tracker(app);
             }
@@ -456,8 +468,7 @@ fn show_panel_on_main(app: &AppHandle) -> tauri::Result<()> {
                 // 该缘并保持贴边隐藏候选身份，跨开关面板存活——否则「拖走再
                 // 拖回屏缘」后自动隐藏永远不再启动（用户实测的缺口）。
                 let monitors = snapshot_monitors_pt(app);
-                let m = monitor_at_strict(&monitors, x + panel_w / 2.0, y + height / 2.0)
-                    .copied();
+                let m = monitor_at_strict(&monitors, x + panel_w / 2.0, y + height / 2.0).copied();
                 match m.and_then(|m| {
                     manual_dock_edge(&monitors, &m, x, y, panel_w, height).map(|e| (e, m))
                 }) {
@@ -529,7 +540,9 @@ pub fn set_panel_width(app: &AppHandle, width_pt: f64) {
             return;
         }
         // 伴随跟随线程会在下个 tick 应用新宽度；经典模式此处立即右吸附重排
-        let Ok(scale) = window.scale_factor() else { return };
+        let Ok(scale) = window.scale_factor() else {
+            return;
+        };
         let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) else {
             return;
         };
@@ -835,8 +848,7 @@ fn animate_edge_slide(app: &AppHandle, anchor: EdgeHideAnchor, to_hidden: bool) 
     // 内（判定区是触边线附近的窄带，落在“仍算 inside”的范围内）。
     if to_hidden {
         if let Some((cx, cy)) = cursor_point_pt() {
-            if anchor.touching(cx, cy) && !state.edge_hide_wake_rearm.swap(true, Ordering::SeqCst)
-            {
+            if anchor.touching(cx, cy) && !state.edge_hide_wake_rearm.swap(true, Ordering::SeqCst) {
                 crate::diag::push(app, "贴边隐藏: 滑出时光标仍在触边区，唤回需先离开判定区");
             }
         }
@@ -850,7 +862,11 @@ fn animate_edge_slide(app: &AppHandle, anchor: EdgeHideAnchor, to_hidden: bool) 
     );
     crate::diag::push(
         app,
-        if to_hidden { "贴边隐藏: 滑出" } else { "贴边隐藏: 滑回" },
+        if to_hidden {
+            "贴边隐藏: 滑出"
+        } else {
+            "贴边隐藏: 滑回"
+        },
     );
     let my_gen = state.edge_hide_gen.fetch_add(1, Ordering::SeqCst) + 1;
     let handle = app.clone();
@@ -1019,15 +1035,15 @@ pub fn spawn_edge_hide_supervisor(app: &AppHandle) {
                 // 落在光标物理上永远够不到的地方——round 4 复现的「光标停在
                 // 屏幕边缘也永远唤不回」正对应这个可能成因。
                 let cursor = cursor_point_pt();
-                let touching_zone =
-                    cursor.map(|(cx, cy)| anchor.touching(cx, cy)).unwrap_or(false);
+                let touching_zone = cursor
+                    .map(|(cx, cy)| anchor.touching(cx, cy))
+                    .unwrap_or(false);
                 // 唤回重臂锁（round 6）：光标一旦离开触边判定区就解除锁——
                 // 只在这里清，锁只能靠「先离开一次」解除，不会自己超时失效
                 if !touching_zone && state.edge_hide_wake_rearm.swap(false, Ordering::SeqCst) {
                     crate::diag::push(&handle, "贴边隐藏: 已离开触边判定区，重新允许唤回");
                 }
-                let touching =
-                    touching_zone && !state.edge_hide_wake_rearm.load(Ordering::SeqCst);
+                let touching = touching_zone && !state.edge_hide_wake_rearm.load(Ordering::SeqCst);
                 // round 4 探针（限频 1/s，永久保留但安静）：光标进入判定线附近
                 // 60pt 却仍未命中时把原始数值记下来——代码走查无法 100% 证伪
                 // 坐标/单位假设，下次设备复现直接从日志读出 cx/cy 与判定线的
@@ -1154,8 +1170,7 @@ pub fn edge_hide_now(app: &AppHandle) {
     let Some(anchor) = *state.edge_hide_anchor.lock().unwrap() else {
         return;
     };
-    let active =
-        !state.panel_pinned.load(Ordering::SeqCst) && !state.docked.load(Ordering::SeqCst);
+    let active = !state.panel_pinned.load(Ordering::SeqCst) && !state.docked.load(Ordering::SeqCst);
     if !active || state.edge_hidden.load(Ordering::SeqCst) {
         return;
     }
@@ -1277,11 +1292,9 @@ fn start_companion_tracker(app: &AppHandle, target_pid: i32, monitors: Vec<Monit
                 continue;
             }
             last = Some(key);
-            let Some(monitor) = monitor_containing_pt(
-                &monitors,
-                frame.x + frame.w / 2.0,
-                frame.y + frame.h / 2.0,
-            ) else {
+            let Some(monitor) =
+                monitor_containing_pt(&monitors, frame.x + frame.w / 2.0, frame.y + frame.h / 2.0)
+            else {
                 continue;
             };
             let (x, y, w, h) = compute_companion_rect(
@@ -1328,9 +1341,19 @@ pub fn release_companion_takeover(app: &AppHandle) {
     }
 }
 
+/// 配置恢复/变更为开启时重新接管已显示面板。不会显示隐藏窗口；`force_tracker`
+/// 确保即使矩形恰好没变，也会清理独立模式状态并启动跟踪器。
+pub fn refresh_companion_takeover(app: &AppHandle) {
+    maybe_redock_inner(app, true);
+}
+
 /// 面板可见时用户切换到伴随应用 → 动态重吸附（面板失焦回调触发；主线程）。
 /// 解决「先在别处呼出、再切到终端却不跟随」的问题（Pin 场景尤其明显）。
 pub fn maybe_redock(app: &AppHandle) {
+    maybe_redock_inner(app, false);
+}
+
+fn maybe_redock_inner(app: &AppHandle, force_tracker: bool) {
     let state = app.state::<AppState>();
     let Some(window) = app.get_webview_window("main") else {
         return;
@@ -1339,13 +1362,22 @@ pub fn maybe_redock(app: &AppHandle) {
         return;
     }
     let me = std::process::id() as i32;
-    let Some(front) = focus::frontmost_info().filter(|f| f.pid != me) else {
+    let companion_enabled = state.companion.lock().unwrap().enabled;
+    let current = focus::frontmost_info().map(|front| (front.pid, front.bundle_id));
+    let previous = (*state.prev_app_pid.lock().unwrap()).map(|pid| (pid, focus::bundle_of(pid)));
+    let Some((target_pid, target_bundle_id)) = select_layout_candidate(current, me, previous)
+    else {
+        // 配置水合时可能还没有外部目标。仍启动观察器，之后目标切到列表内应用
+        // 就能首次吸附；否则还得依赖一次偶然的面板 blur 才会开始跟随。
+        if force_tracker && companion_enabled && !state.right_sidebar.load(Ordering::SeqCst) {
+            start_companion_tracker(app, -1, snapshot_monitors_pt(app));
+        }
         return;
     };
     // 靠右边栏模式：不吸附目标，但跟随「当前使用的屏幕」——
     // 前台窗口换屏时把边栏挪到新屏右缘（多屏工作流）
     if state.right_sidebar.load(Ordering::SeqCst) {
-        let Some(frame) = ax::focused_window_frame(front.pid) else {
+        let Some(frame) = ax::focused_window_frame(target_pid) else {
             return;
         };
         let monitors = snapshot_monitors_pt(app);
@@ -1353,11 +1385,9 @@ pub fn maybe_redock(app: &AppHandle) {
             crate::diag::push(app, "贴边: 显示器解析失败");
             return;
         }
-        let Some(m) = monitor_containing_pt(
-            &monitors,
-            frame.x + frame.w / 2.0,
-            frame.y + frame.h / 2.0,
-        ) else {
+        let Some(m) =
+            monitor_containing_pt(&monitors, frame.x + frame.w / 2.0, frame.y + frame.h / 2.0)
+        else {
             return;
         };
         let panel_w = *state.panel_width_pt.lock().unwrap();
@@ -1410,24 +1440,24 @@ pub fn maybe_redock(app: &AppHandle) {
     let hit = {
         let cfg = state.companion.lock().unwrap();
         cfg.enabled
-            && front
-                .bundle_id
+            && target_bundle_id
                 .as_deref()
                 .map(|b| cfg.apps.iter().any(|a| a == b))
                 .unwrap_or(false)
     };
     if !hit {
+        if force_tracker {
+            start_companion_tracker(app, -1, snapshot_monitors_pt(app));
+        }
         return;
     }
-    let Some(frame) = ax::focused_window_frame(front.pid) else {
+    let Some(frame) = ax::focused_window_frame(target_pid) else {
         return;
     };
     let monitors = snapshot_monitors_pt(app);
-    let Some(monitor) = monitor_containing_pt(
-        &monitors,
-        frame.x + frame.w / 2.0,
-        frame.y + frame.h / 2.0,
-    ) else {
+    let Some(monitor) =
+        monitor_containing_pt(&monitors, frame.x + frame.w / 2.0, frame.y + frame.h / 2.0)
+    else {
         return;
     };
     let panel_w = *state.panel_width_pt.lock().unwrap();
@@ -1460,7 +1490,7 @@ pub fn maybe_redock(app: &AppHandle) {
                 && (size.width as f64 / scale - w).abs() < 0.5
                 && (size.height as f64 / scale - h).abs() < 0.5
         });
-    if unchanged {
+    if unchanged && !force_tracker {
         return;
     }
     // 目标激活重吸附：保持同层级并随目标一起浮到前面（不抢焦点）
@@ -1469,11 +1499,13 @@ pub fn maybe_redock(app: &AppHandle) {
     clear_edge_hide_anchor(app, &state, "跟随重定位(伴随)");
     cancel_edge_hide(app, &state, "跟随重定位(伴随)");
     let _ = window.set_always_on_top(false);
-    mark_machine_move(app);
-    let _ = window.set_size(LogicalSize::new(w, h));
-    let _ = window.set_position(LogicalPosition::new(x, y));
+    if !unchanged {
+        mark_machine_move(app);
+        let _ = window.set_size(LogicalSize::new(w, h));
+        let _ = window.set_position(LogicalPosition::new(x, y));
+    }
     order_front_without_focus(&window);
-    start_companion_tracker(app, front.pid, monitors);
+    start_companion_tracker(app, target_pid, monitors);
 }
 
 /// 上/下缘拖拽调节（增量 delta，逻辑 pt；主线程）。
@@ -1526,8 +1558,7 @@ pub fn adjust_panel_edge(app: &AppHandle, edge: &str, delta: f64) -> (f64, Optio
 pub fn set_panel_vertical(app: &AppHandle, top_offset: f64, height: Option<f64>) {
     let state = app.state::<AppState>();
     *state.panel_top_offset.lock().unwrap() = top_offset;
-    *state.panel_height_pt.lock().unwrap() =
-        height.map(|h| h.max(PANEL_MIN_HEIGHT));
+    *state.panel_height_pt.lock().unwrap() = height.map(|h| h.max(PANEL_MIN_HEIGHT));
     let visible = app
         .get_webview_window("main")
         .and_then(|w| w.is_visible().ok())
@@ -1550,13 +1581,14 @@ pub fn preview_image(
     note_id: Option<String>,
     note_text: Option<String>,
     data_generation: Option<u64>,
+    edit: bool,
 ) {
     let index = if files.get(index).is_some() { index } else { 0 };
     let Some(anchor) = files.get(index) else {
         return;
     };
-    let dims = crate::storage::image_path(app, anchor)
-        .and_then(|p| image::image_dimensions(&p).ok());
+    let dims =
+        crate::storage::image_path(app, anchor).and_then(|p| image::image_dimensions(&p).ok());
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
         if let Err(e) = preview_image_on_main(
@@ -1567,6 +1599,7 @@ pub fn preview_image(
             note_id,
             note_text,
             data_generation,
+            edit,
         ) {
             eprintln!("[toskr] 图片预览失败: {e}");
         }
@@ -1582,6 +1615,7 @@ struct PreviewPayload {
     note_id: Option<String>,
     note_text: Option<String>,
     data_generation: Option<u64>,
+    edit: bool,
 }
 
 fn preview_image_on_main(
@@ -1592,6 +1626,7 @@ fn preview_image_on_main(
     note_id: Option<String>,
     note_text: Option<String>,
     data_generation: Option<u64>,
+    edit: bool,
 ) -> tauri::Result<()> {
     let window = app
         .get_webview_window("imgpreview")
@@ -1621,7 +1656,7 @@ fn preview_image_on_main(
         .map(|(w, h)| (w as f64, h as f64))
         .unwrap_or((800.0, 600.0));
     // 顶部 32pt 标题栏 + 底部 24pt 尺寸标注条；带笔记上下文时再留 44pt
-    // 备注编辑条；不放大小图（ratio ≤ 1）
+    // 备注编辑条；不放大小图（ratio ≤ 1）。
     let chrome = if note_id.is_some() { 100.0 } else { 56.0 };
     let max_w = (wa_w * 0.9).max(240.0);
     let max_h = (wa_h * 0.9 - chrome).max(180.0);
@@ -1639,6 +1674,7 @@ fn preview_image_on_main(
             note_id,
             note_text,
             data_generation,
+            edit,
         },
     );
     window.set_size(LogicalSize::new(w, h))?;
@@ -1714,6 +1750,10 @@ fn text_preview_on_main(app: &AppHandle) -> tauri::Result<()> {
 /// 展示 HUD（kind: added/duplicate/warn/undone/sent/ok/info/due）。隐身模式下静默。
 /// `sticky` 为粘性气泡（任务到期提醒）：不自动隐藏，仅点击可关闭。
 /// 可从任意线程调用。
+fn suppress_hud_in_stealth(stealth: bool, kind: &str) -> bool {
+    stealth && kind != "warn"
+}
+
 pub fn show_hud(
     app: &AppHandle,
     kind: &str,
@@ -1724,7 +1764,7 @@ pub fn show_hud(
 ) {
     let state = app.state::<AppState>();
     // 隐身模式吞掉常规气泡，但 warn（发送失败等）必须让用户看见
-    if state.stealth.load(Ordering::SeqCst) && kind != "warn" {
+    if suppress_hud_in_stealth(state.stealth.load(Ordering::SeqCst), kind) {
         return;
     }
     let count = {
@@ -2124,6 +2164,13 @@ fn cursor_work_area(
 mod tests {
     use super::*;
 
+    #[test]
+    fn stealth_never_suppresses_clipboard_warnings() {
+        assert!(!suppress_hud_in_stealth(true, "warn"));
+        assert!(suppress_hud_in_stealth(true, "sent"));
+        assert!(!suppress_hud_in_stealth(false, "sent"));
+    }
+
     const MON: MonitorPt = MonitorPt {
         wa_x: 0.0,
         wa_y: 25.0,
@@ -2257,6 +2304,52 @@ mod tests {
         assert_eq!(x, MARGIN);
     }
 
+    #[test]
+    fn companion_refresh_uses_previous_target_while_toskr_is_frontmost() {
+        let previous = (42, Some("io.appmakes.otty".to_string()));
+        let selected = select_layout_candidate(
+            Some((99, Some("cc.ffitch.toskr".to_string()))),
+            99,
+            Some(previous.clone()),
+        );
+
+        assert_eq!(selected, Some(previous));
+    }
+
+    #[test]
+    fn companion_selects_external_monitor_in_mixed_scale_desktop() {
+        let built_in = MonitorPt {
+            wa_x: 0.0,
+            wa_y: 38.0,
+            wa_w: 1728.0,
+            wa_h: 1079.0,
+            mon_x: 0.0,
+            mon_y: 0.0,
+            mon_w: 1728.0,
+            mon_h: 1117.0,
+        };
+        let external = MonitorPt {
+            wa_x: 1728.0,
+            wa_y: 62.0,
+            wa_w: 1920.0,
+            wa_h: 1055.0,
+            mon_x: 1728.0,
+            mon_y: 37.0,
+            mon_w: 1920.0,
+            mon_h: 1080.0,
+        };
+        let target = frame(1750.0, 81.0, 1450.0, 929.0);
+        let monitor = monitor_containing_pt(
+            &[built_in, external],
+            target.x + target.w / 2.0,
+            target.y + target.h / 2.0,
+        )
+        .expect("副屏目标必须命中副屏");
+
+        let rect = compute_companion_rect(target, 380.0, 0.0, None, 8.0, &monitor, 0);
+        assert_eq!(rect, (3208.0, 81.0, 380.0, 929.0));
+    }
+
     // ===== P1：四缘贴边隐藏几何 =====
 
     fn anchor(edge: u8) -> EdgeHideAnchor {
@@ -2388,8 +2481,14 @@ mod tests {
         let (w, h) = (320.0, 900.0);
         // 副屏右缘：真实桌面边界 → 入坞右（贴近 / 拖出屏外都算）
         let right = MON_R.mon_x + MON_R.mon_w;
-        assert_eq!(manual_dock_edge(&ms, &MON_R, right - w - 10.0, 100.0, w, h), Some(0));
-        assert_eq!(manual_dock_edge(&ms, &MON_R, right - 200.0, 100.0, w, h), Some(0));
+        assert_eq!(
+            manual_dock_edge(&ms, &MON_R, right - w - 10.0, 100.0, w, h),
+            Some(0)
+        );
+        assert_eq!(
+            manual_dock_edge(&ms, &MON_R, right - 200.0, 100.0, w, h),
+            Some(0)
+        );
         // 内建屏右缘 = 两屏接缝 → 不入坞（滑出去等于滑到副屏中央）
         assert_eq!(
             manual_dock_edge(&ms, &MON, MON.mon_w - w + 5.0, 100.0, w, h),
@@ -2422,12 +2521,18 @@ mod tests {
             // 面板跨轴范围之外、仍在屏缘上 → 唤回
             for cross in [wake_a + 1.0, wake_b - 1.0] {
                 let (cx, cy) = from_axis_coords(edge, line, cross);
-                assert!(a.touching(cx, cy), "edge={edge} 屏缘上 cross={cross} 应唤回");
+                assert!(
+                    a.touching(cx, cy),
+                    "edge={edge} 屏缘上 cross={cross} 应唤回"
+                );
             }
             // 越出该屏物理边界（屏外/邻屏）→ 不唤回
             for cross in [wake_a - 1.0, wake_b + 1.0] {
                 let (cx, cy) = from_axis_coords(edge, line, cross);
-                assert!(!a.touching(cx, cy), "edge={edge} 屏外 cross={cross} 不应唤回");
+                assert!(
+                    !a.touching(cx, cy),
+                    "edge={edge} 屏外 cross={cross} 不应唤回"
+                );
             }
         }
     }
@@ -2445,7 +2550,10 @@ mod tests {
                 _ => line + EDGE_HIDE_TOUCH_SLOP + 1.0,
             };
             let (cx, cy) = from_axis_coords(edge, beyond, mid);
-            assert!(!a.touching(cx, cy), "edge={edge} 越线超容差（邻屏深处）不应算触边");
+            assert!(
+                !a.touching(cx, cy),
+                "edge={edge} 越线超容差（邻屏深处）不应算触边"
+            );
         }
     }
 

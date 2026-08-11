@@ -6,6 +6,7 @@ import { Check, ChevronLeft, ChevronRight, Pencil, X } from "lucide-react";
 
 import { springSnappy } from "@/lib/motion";
 import { DataReadOnlyGuard } from "@/components/DataReadOnlyGuard";
+import { DetailWindowFrame } from "@/components/DetailWindowFrame";
 import {
   DATA_ACTIVITY_EVENT,
   DATA_LOCATION_CHANGED_EVENT,
@@ -44,6 +45,7 @@ export default function ImagePreviewView() {
       noteId: string | null;
       noteText: string | null;
       dataGeneration: number | null;
+      edit?: boolean;
     }>("toskr://preview-image", (e) => {
       setFiles(e.payload.files);
       setIdx(Math.min(e.payload.index, Math.max(0, e.payload.files.length - 1)));
@@ -51,7 +53,7 @@ export default function ImagePreviewView() {
       setNoteText(e.payload.noteText ?? "");
       setDraft(e.payload.noteText ?? "");
       setDataGeneration(e.payload.dataGeneration ?? null);
-      setEditing(false);
+      setEditing(e.payload.edit ?? false);
       setGen((g) => g + 1);
     });
     return () => {
@@ -147,7 +149,10 @@ export default function ImagePreviewView() {
   }, [files.length, editing, noteText, noteId, draft, dataGeneration]);
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden rounded-xl border border-white/10 bg-surface-lightbox">
+    <DetailWindowFrame
+      tone="lightbox"
+      surfaceClassName="bg-surface-lightbox"
+    >
       <DataReadOnlyGuard />
       {/* 标题栏：可拖动窗口 */}
       <div
@@ -266,6 +271,6 @@ export default function ImagePreviewView() {
       <div className="flex h-6 shrink-0 items-center justify-center text-label tabular-nums text-white/60">
         {many ? `${idx + 1} / ${files.length}${dims ? ` · ${dims}` : ""}` : dims}
       </div>
-    </div>
+    </DetailWindowFrame>
   );
 }

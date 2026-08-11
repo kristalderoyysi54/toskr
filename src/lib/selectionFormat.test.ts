@@ -96,6 +96,37 @@ describe("selectionFormat：块格式", () => {
       "\n# 正文"
     );
   });
+
+  it("代码块包裹完整行，选区保留在代码正文并可恢复为文本", () => {
+    const source = "前\nconst x = 1;\nreturn x;\n后";
+    const code = applyBlockFormat(source, { start: 4, end: 20 }, "code-block");
+
+    expect(code).toEqual({
+      text: "前\n```\nconst x = 1;\nreturn x;\n```\n后",
+      selection: { start: 6, end: 28 },
+    });
+    expect(blockFormatAt(code.text, code.selection)).toBe("code-block");
+    expect(applyBlockFormat(code.text, code.selection, "code-block")).toEqual(code);
+    expect(applyBlockFormat(code.text, code.selection, "paragraph")).toEqual({
+      text: source,
+      selection: { start: 2, end: 24 },
+    });
+    expect(
+      applyBlockFormat(code.text, { start: 2, end: 32 }, "paragraph")
+    ).toEqual({
+      text: source,
+      selection: { start: 2, end: 24 },
+    });
+  });
+
+  it("代码正文内部选区识别为代码块，内容含三反引号时自动加长围栏", () => {
+    const fenced = "```\nalpha\nbeta\n```";
+    expect(blockFormatAt(fenced, { start: 7, end: 9 })).toBe("code-block");
+
+    const code = applyBlockFormat("alpha\n```\nbeta", { start: 0, end: 14 }, "code-block");
+    expect(code.text).toBe("````\nalpha\n```\nbeta\n````");
+    expect(blockFormatAt(code.text, code.selection)).toBe("code-block");
+  });
 });
 
 describe("selectionFormat：渲染态选区映射", () => {

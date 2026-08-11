@@ -6,6 +6,10 @@ import { SimpleMenu, SimpleMenuItem } from "@/components/SimpleMenu";
 import { PillInput } from "@/components/ui/pill-input";
 import { enrichLinkMeta } from "@/lib/actions";
 import {
+  draftTargetSections,
+  resolveDraftSectionId,
+} from "@/lib/draftSection";
+import {
   beginDataGenerationLease,
   DATA_CONTEXT_INVALIDATED_EVENT,
   matchesDataGeneration,
@@ -13,7 +17,7 @@ import {
 import { useNoteThumb } from "@/lib/media";
 import { api } from "@/lib/tauri";
 import { tip } from "@/lib/tip";
-import { CLIPBOARD_ID, INBOX_ID, useNotesStore } from "@/store/notesStore";
+import { useNotesStore } from "@/store/notesStore";
 import {
   isDataOperationLocked,
   useDataOperationStore,
@@ -71,23 +75,16 @@ export function DraftInput() {
   const [pending, setPending] = useState<PendingImage[]>([]);
   const dataLocked = useDataOperationStore((state) => state.locked);
   const sections = useNotesStore((s) => s.sections);
+  const lastDraftSectionId = useNotesStore(
+    (s) => s.settings.lastDraftSectionId
+  );
   const targetSections = useMemo(
-    () => sections.filter((section) => section.id !== CLIPBOARD_ID),
+    () => draftTargetSections(sections),
     [sections]
   );
-  const [sectionId, setSectionId] = useState(() =>
-    sections.some((section) => section.id === INBOX_ID)
-      ? INBOX_ID
-      : (targetSections[0]?.id ?? INBOX_ID)
-  );
+  const sectionId = resolveDraftSectionId(sections, lastDraftSectionId);
   const selectedSection =
     targetSections.find((section) => section.id === sectionId) ?? targetSections[0];
-
-  useEffect(() => {
-    if (!targetSections.some((section) => section.id === sectionId)) {
-      setSectionId(targetSections[0]?.id ?? INBOX_ID);
-    }
-  }, [sectionId, targetSections]);
 
   useEffect(() => {
     if (dataLocked) setPending([]);
@@ -106,6 +103,9 @@ export function DraftInput() {
       matchesDataGeneration(image.dataGeneration)
     );
     if (!text && validPending.length === 0) return;
+    if (lastDraftSectionId !== sectionId) {
+      useNotesStore.getState().setSettings({ lastDraftSectionId: sectionId });
+    }
     const first = validPending[0];
     const { result, id } = useNotesStore.getState().addNote(
       text ||
@@ -196,7 +196,9 @@ export function DraftInput() {
                   <SimpleMenuItem
                     key={section.id}
                     onClick={() => {
-                      setSectionId(section.id);
+                      useNotesStore
+                        .getState()
+                        .setSettings({ lastDraftSectionId: section.id });
                       close();
                     }}
                   >

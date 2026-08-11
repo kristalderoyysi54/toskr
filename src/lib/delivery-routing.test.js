@@ -19,12 +19,46 @@ function productionSources(dir) {
 }
 
 describe("发送入口路由", () => {
-  it("只有 actions 能调用原生 sendDelivery", () => {
+  it("只有 DeliveryDraft 执行器能调用原生 sendDelivery", () => {
     const callers = productionSources(srcRoot)
       .filter((file) => readFileSync(file, "utf8").includes("api.sendDelivery("))
       .map((file) => path.relative(srcRoot, file));
 
-    expect(callers).toEqual([path.join("lib", "actions.ts")]);
+    expect(callers).toEqual([
+      path.join("lib", "delivery", "executeDraft.ts"),
+    ]);
+  });
+
+  it("最终正文只在 buildDeliveryDraft 组装，Tooltip 直接消费 finalText", () => {
+    const actions = readFileSync(path.join(srcRoot, "lib", "actions.ts"), "utf8");
+    const selection = readFileSync(
+      path.join(srcRoot, "components", "SelectionBar.tsx"),
+      "utf8"
+    );
+    const builder = readFileSync(
+      path.join(srcRoot, "lib", "delivery", "buildDraft.ts"),
+      "utf8"
+    );
+    const preflight = readFileSync(
+      path.join(srcRoot, "lib", "delivery", "preflight.ts"),
+      "utf8"
+    );
+
+    expect(actions).toContain("buildDeliveryDraft(");
+    expect(actions).toContain("dispatchDeliveryDraft(");
+    expect(preflight).toContain("executeDeliveryDraft");
+    expect(actions).not.toMatch(/buildSendText\(|applyPromptTemplate\(|wrapAsCodeBlock\(/);
+    expect(builder).toContain("buildSendText(");
+    expect(builder).toContain("applyPromptTemplate(");
+    expect(builder).toContain("wrapAsCodeBlock(");
+    expect(selection).toContain("buildDeliveryDraft(");
+    expect(selection).toContain("{previewDraft.finalText}");
+    expect(selection).not.toContain("sendPreview(");
+    expect(selection).toContain("revision: 0");
+    expect(selection).not.toContain("nextDeliveryDraftRevision");
+    expect(selection).toContain("promptSnippetId: sn.id");
+    expect(selection).not.toContain("buildSendText(");
+    expect(builder).not.toMatch(/Date\.now|crypto\.|useNotesStore|getState\(|localStorage|createJSONStorage/);
   });
 
   it.each([
@@ -40,6 +74,14 @@ describe("发送入口路由", () => {
 
   it("快捷键与可见按钮共享 target store 门禁，发送前仍刷新并交给 Native", () => {
     const actions = readFileSync(path.join(srcRoot, "lib", "actions.ts"), "utf8");
+    const executor = readFileSync(
+      path.join(srcRoot, "lib", "delivery", "executeDraft.ts"),
+      "utf8"
+    );
+    const preflight = readFileSync(
+      path.join(srcRoot, "lib", "delivery", "preflight.ts"),
+      "utf8"
+    );
     const app = readFileSync(path.join(srcRoot, "App.tsx"), "utf8");
     const selection = readFileSync(
       path.join(srcRoot, "components", "SelectionBar.tsx"),
@@ -52,15 +94,47 @@ describe("发送入口路由", () => {
     const note = readFileSync(path.join(srcRoot, "components", "NoteCard.tsx"), "utf8");
     const task = readFileSync(path.join(srcRoot, "components", "TaskRow.tsx"), "utf8");
 
-    expect(actions).toContain("targetSendDisabled()");
-    expect(actions).toContain("await refreshTarget()");
-    expect(actions).toContain("api.sendDelivery(");
+    expect(actions).toContain("dispatchDeliveryDraft(");
+    expect(preflight).toContain("executeDeliveryDraft");
+    expect(executor).toContain("targetSendDisabled()");
+    expect(executor).toContain("await refreshTarget()");
+    expect(executor).toContain("api.sendDelivery(");
     expect(app).toContain("void sendCheckedToChat()");
     expect(app).toContain("void sendNotesToChat([id])");
     expect(selection).toContain("useTargetStore");
     expect(preview).toContain("useTargetStore");
     expect(note).toContain("TargetSendMenuItem");
     expect(task).toContain("TargetSendMenuItem");
+  });
+
+  it("预检模态阻断主面板快捷键，数据上下文失效时同步清理正文会话", () => {
+    const app = readFileSync(path.join(srcRoot, "App.tsx"), "utf8");
+    const actions = readFileSync(path.join(srcRoot, "lib", "actions.ts"), "utf8");
+    const composer = readFileSync(
+      path.join(srcRoot, "components", "PreflightComposer.tsx"),
+      "utf8"
+    );
+
+    expect(app).toContain("if (useDeliveryStore.getState().open) return;");
+    expect(composer).toContain("event.stopImmediatePropagation()");
+    expect(app).toContain("useDeliveryStore.getState().closeDraft()");
+    expect(app).toContain("<SelectionBar compact={horizontalBar} />");
+    expect(app).toContain("<PreflightComposer horizontal={horizontalBar} />");
+    expect(readFileSync(path.join(srcRoot, "components", "TaskRow.tsx"), "utf8"))
+      .toContain("sendTaskToChat(task.id, { forcePreflight: true })");
+    expect(actions).toContain('preflightMode === "always"');
+    expect(actions).toContain("!requiresPreflight &&");
+  });
+
+  it("SimpleMenu 方向键打开时消费事件，不穿透主面板焦点导航", () => {
+    const menu = readFileSync(
+      path.join(srcRoot, "components", "SimpleMenu.tsx"),
+      "utf8"
+    );
+
+    expect(menu).toMatch(
+      /event\.preventDefault\(\);\s*event\.stopPropagation\(\);\s*initialFocusEdge/
+    );
   });
 
   it("目标变化由 Rust 事件驱动，前端 target store 不增加轮询", () => {
@@ -141,8 +215,62 @@ describe("发送入口路由", () => {
     expect(preview).toContain('"text-preview-target-status"');
   });
 
+  it("剪贴板卡内部追加由共享事件契约连接 actions 与文本编辑器", () => {
+    const actions = readFileSync(path.join(srcRoot, "lib", "actions.ts"), "utf8");
+    const preview = readFileSync(path.join(srcRoot, "TextPreviewView.tsx"), "utf8");
+
+    expect(actions).toContain("NOTE_EDITOR_INSERT_EVENT");
+    expect(actions).toContain('"textpreview",\n      NOTE_EDITOR_INSERT_EVENT');
+    expect(preview).toContain("listen<NoteEditorInsertPayload>");
+    expect(preview).toContain("NOTE_EDITOR_INSERT_EVENT");
+    expect(preview).toContain("appendPreviewContent(");
+    expect(actions).toContain("NOTE_EDITOR_INSERT_RESULT_EVENT");
+    expect(actions).toContain("emitEditorInsert(() =>");
+    expect(actions).toContain("lastDetailSessionId");
+    expect(preview).toContain("editorInsertRejectionReason(currentNote, payload)");
+    expect(preview).toContain("NOTE_EDITOR_INSERT_RESULT_EVENT,");
+    expect(preview).toContain(").catch(() => {});");
+  });
+
+  it("未保存编辑草稿的图片进入媒体 GC 活动引用，保存或关闭后释放", () => {
+    const actions = readFileSync(path.join(srcRoot, "lib", "actions.ts"), "utf8");
+    const preview = readFileSync(path.join(srcRoot, "TextPreviewView.tsx"), "utf8");
+    const app = readFileSync(path.join(srcRoot, "App.tsx"), "utf8");
+
+    expect(actions).toContain("retainEditorOperationMedia(");
+    expect(app).toContain("editorSessionMediaFiles()");
+    expect(app).toContain("releaseEditorSessionMedia(e.payload.sessionId)");
+    expect(preview).toContain("NOTE_EDITOR_SESSION_RELEASE_EVENT");
+    expect(preview).toContain("sessionId: note.sessionId");
+  });
+
+  it("剪贴板页可在外部目标未就绪时进入内部编辑器路由", () => {
+    const menu = readFileSync(
+      path.join(srcRoot, "components", "TargetSendMenuItem.tsx"),
+      "utf8"
+    );
+    const note = readFileSync(path.join(srcRoot, "components", "NoteCard.tsx"), "utf8");
+    const selection = readFileSync(
+      path.join(srcRoot, "components", "SelectionBar.tsx"),
+      "utf8"
+    );
+    const overlay = readFileSync(
+      path.join(srcRoot, "components", "PreviewOverlay.tsx"),
+      "utf8"
+    );
+
+    expect(menu).toContain("ready || allowInternal");
+    expect(note).toContain("allowInternal={note.sectionId === CLIPBOARD_ID}");
+    expect(selection).toContain('page === "clipboard"');
+    expect(overlay).toContain("targetReady || internalSendAvailable");
+  });
+
   it("Profile 策略只有一个解析入口，旧 autoEnter 不再参与投递", () => {
     const actions = readFileSync(path.join(srcRoot, "lib", "actions.ts"), "utf8");
+    const executor = readFileSync(
+      path.join(srcRoot, "lib", "delivery", "executeDraft.ts"),
+      "utf8"
+    );
     const lens = readFileSync(
       path.join(srcRoot, "components", "TargetLensBar.tsx"),
       "utf8"
@@ -154,28 +282,203 @@ describe("发送入口路由", () => {
 
     expect(actions).toContain("currentTargetProfileResolution()");
     expect(actions).not.toContain("settings.autoEnter");
-    expect(actions).toContain('enterPolicy === "confirm"');
-    // SimpleSelect 组件经 ariaLabel prop 落到触发钮的 aria-label（渲染级断言在 TargetLensBar.test.tsx）
-  expect(lens).toContain('ariaLabel="本次投递 Profile"');
-    expect(lens).toContain("目标已变化，请确认 Profile");
-    expect(selection).toContain("当前分组 ·");
+    expect(executor).toContain('draft.enterPolicy === "confirm"');
+    // Lens 只消费统一 resolver，快速切换是独立决策浮层而非第二套匹配器
+    expect(lens).toContain("TargetProfileQuickSwitch");
+    expect(lens).toContain("shouldClearOpenQuickSwitchOverride");
+    expect(lens).toContain("onSelectTemporary={onSelectProfile}");
+    expect(lens).toContain("assignTargetProfileBundle");
+    expect(lens).toContain("canPermanentlyAssignTargetProfileOverride");
+    expect(lens).toContain("快速切换投递方案");
+    expect(lens).toContain("原临时投递方案已暂停");
+    expect(selection).toContain("当前提示词组 ·");
     expect(selection).toContain("全部模板");
     expect(selection).toContain("setTargetProfileOverride");
   });
 
-  it("Settings 分区：目标与模板合并（Profile+Prompt），伴随停靠独立（用户指定）", () => {
+  it("Settings 分区：目标与投递方案主从管理，提示词仍在同区，伴随停靠独立", () => {
     const settings = readFileSync(path.join(srcRoot, "SettingsView.tsx"), "utf8");
+    const manager = readFileSync(
+      path.join(srcRoot, "components", "settings", "TargetProfileManager.tsx"),
+      "utf8"
+    );
+    const editor = readFileSync(
+      path.join(srcRoot, "components", "settings", "ProfileEditor.tsx"),
+      "utf8"
+    );
+    const assignments = readFileSync(
+      path.join(srcRoot, "components", "settings", "AppAssignmentPicker.tsx"),
+      "utf8"
+    );
 
-    expect(settings).toContain('{ id: "target", label: "目标与模板"');
+    expect(settings).toContain('{ id: "target", label: "目标与投递方案"');
     expect(settings).toContain('{ id: "companion", label: "伴随停靠"');
-    // 模板不独立成区：snippets/prompts 深链都落到目标与模板
+    // 提示词不独立成区：snippets/prompts 深链仍落到目标与投递方案
     expect(settings).not.toContain('{ id: "snippets", label:');
     expect(settings).not.toContain('{ id: "prompts", label:');
-    expect(settings).toContain('["snippets", "prompts"].includes(e.payload)');
-    expect(settings).toContain("TargetProfilesEditor");
-    expect(settings).toContain("findDuplicateBundleAssignments");
+    expect(settings).toContain('["snippets", "prompts"].includes(rawSection)');
+    expect(settings).toContain("TargetProfileManager");
+    expect(settings).not.toContain("TargetProfilesEditor");
     expect(settings).toContain("deletePromptGroup");
-    expect(settings).toContain("把当前投递目标加入 Profile");
+    expect(manager).toContain("CurrentTargetPreview");
+    expect(manager).toContain("ProfileList");
+    expect(manager).toContain("ProfileEditor");
+    expect(manager).toContain("ProfileCreateSheet");
+    expect(manager).toContain("ProfileConflictResolver");
+    expect(manager).toContain("resolveTargetProfile({");
+    expect(manager).toContain("settingsTargetAfterObservation");
+    expect(manager).toContain("handledRequestSequence");
+    expect(manager).toContain("requestSequence <= handledRequestSequence.current");
+    expect(editor).toContain("previewSelectedProfile({");
+    expect(editor).toContain("currentResolution");
+    expect(settings).toContain("targetProfileId");
+    expect(assignments).toContain("updateTargetProfileBundleIds(");
+    expect(assignments).toContain("assignTargetProfileBundle(");
+    expect(assignments.indexOf("const requestId = ++requestSequence.current")).toBeLessThan(
+      assignments.indexOf("let liveProfiles = latestProfiles.current")
+    );
+    expect(manager).not.toMatch(/clipboard|paste|pressEnter/i);
+  });
+
+  it("投递方案 UI 共享单一事件监听，图标缓存且 50 项派生状态按输入引用复用", () => {
+    const manager = readFileSync(
+      path.join(srcRoot, "components", "settings", "TargetProfileManager.tsx"),
+      "utf8"
+    );
+    const identity = readFileSync(
+      path.join(srcRoot, "components", "settings", "useAppIdentity.ts"),
+      "utf8"
+    );
+    const profileList = readFileSync(
+      path.join(srcRoot, "components", "settings", "ProfileList.tsx"),
+      "utf8"
+    );
+    const applicationIcon = readFileSync(
+      path.join(srcRoot, "components", "ApplicationIcon.tsx"),
+      "utf8"
+    );
+
+    expect(manager.match(/listen<TargetSnapshot>/g)).toHaveLength(1);
+    expect(manager).not.toContain("setInterval");
+    expect(manager).toContain("latestTargetRevision");
+    expect(manager).toContain("snapshot.revision < latestTargetRevision.current");
+    expect(identity).toContain("const appInfoCache = new Map");
+    expect(identity).toContain("appInfoCache.get(bundleId)");
+    expect(identity).toContain("appInfoCache.set(bundleId, request)");
+    expect(identity).toContain("resolved?.bundleId === bundleId");
+    expect(applicationIcon).toContain("onError");
+    expect(profileList).toContain("profileReorderAvailability(profiles, defaultProfileId)");
+    expect(profileList).toContain("useMemo(");
+  });
+
+  it("用户界面不再暴露旧投递术语或缩写标签", () => {
+    const relatedSources = [
+      "components/TargetLensBar.tsx",
+      "components/TargetProfileQuickSwitch.tsx",
+      "components/SelectionBar.tsx",
+      "components/settings/AppAssignmentPicker.tsx",
+      "components/settings/CurrentTargetPreview.tsx",
+      "components/settings/DeliveryPolicySummary.tsx",
+      "components/settings/DeliveryTrack.tsx",
+      "components/settings/ProfileCreateSheet.tsx",
+      "components/settings/ProfileEditor.tsx",
+      "components/settings/ProfileList.tsx",
+    ].map((file) => readFileSync(path.join(srcRoot, file), "utf8"));
+
+    for (const source of relatedSources) {
+      expect(source).not.toMatch(/["'`]Profile["'`]/);
+      expect(source).not.toMatch(/Target Profiles|Prompt Group|Enter Policy|Privacy Policy/);
+      expect(source).not.toMatch(/回车：|粘贴后：|发送后：|发送后面板|目标不可用|隐私未检查/);
+      expect(source).not.toMatch(/["'`]未识别应用默认["'`]|默认项固定/);
+    }
+  });
+
+  it("受控新建 Sheet 关闭后把焦点交还原触发按钮", () => {
+    const manager = readFileSync(
+      path.join(srcRoot, "components", "settings", "TargetProfileManager.tsx"),
+      "utf8"
+    );
+    const list = readFileSync(
+      path.join(srcRoot, "components", "settings", "ProfileList.tsx"),
+      "utf8"
+    );
+    const sheet = readFileSync(
+      path.join(srcRoot, "components", "settings", "ProfileCreateSheet.tsx"),
+      "utf8"
+    );
+
+    expect(manager).toContain("createReturnFocusRef");
+    expect(list).toContain("onCreate(event.currentTarget)");
+    expect(sheet).toContain("onCloseAutoFocus");
+    expect(sheet).toContain("returnFocusRef.current?.focus()");
+  });
+
+  it("冲突修复按钮消失后把焦点移到下一修复动作或保留方案", () => {
+    const resolver = readFileSync(
+      path.join(srcRoot, "components", "settings", "ProfileConflictResolver.tsx"),
+      "utf8"
+    );
+
+    expect(resolver).toContain("focusAfterConflictResolution");
+    expect(resolver).toContain("data-profile-conflict-action");
+    expect(resolver).toContain("data-profile-select");
+    expect(resolver).toContain("data-profile-list-focus-fallback");
+  });
+
+  it("设置页下拉菜单使用真实语义、方向键并在关闭后恢复触发焦点", () => {
+    const menu = readFileSync(
+      path.join(srcRoot, "components", "SimpleMenu.tsx"),
+      "utf8"
+    );
+    const select = readFileSync(
+      path.join(srcRoot, "components", "SimpleSelect.tsx"),
+      "utf8"
+    );
+
+    expect(menu).toContain('role={menuRole === "listbox" ? "option" : "menuitem"}');
+    expect(menu).toContain('["ArrowDown", "ArrowUp", "Home", "End"]');
+    expect(menu).toContain("restoreTriggerFocus");
+    expect(select).toContain('menuRole="listbox"');
+    expect(select).toContain("aria-controls={controls}");
+  });
+
+  it("Popover 与 Sheet 的 Reduce Motion 覆盖状态选择器动效", () => {
+    const popover = readFileSync(
+      path.join(srcRoot, "components", "ui", "popover.tsx"),
+      "utf8"
+    );
+    const sheet = readFileSync(
+      path.join(srcRoot, "components", "settings", "ProfileCreateSheet.tsx"),
+      "utf8"
+    );
+    const lens = readFileSync(
+      path.join(srcRoot, "components", "TargetLensBar.tsx"),
+      "utf8"
+    );
+    const targetPreview = readFileSync(
+      path.join(srcRoot, "components", "settings", "CurrentTargetPreview.tsx"),
+      "utf8"
+    );
+    const menu = readFileSync(
+      path.join(srcRoot, "components", "SimpleMenu.tsx"),
+      "utf8"
+    );
+    const segmented = readFileSync(
+      path.join(srcRoot, "components", "ui", "segmented.tsx"),
+      "utf8"
+    );
+    const iconButton = readFileSync(
+      path.join(srcRoot, "components", "ui", "icon-button.tsx"),
+      "utf8"
+    );
+
+    expect(popover).toContain("motion-reduce:!animate-none");
+    expect(sheet.match(/motion-reduce:!animate-none/g)).toHaveLength(2);
+    expect(menu).toContain("motion-reduce:!animate-none");
+    expect(segmented).toContain("motion-reduce:transition-none");
+    expect(iconButton).toContain("motion-reduce:active:scale-100");
+    expect(lens).not.toContain("animate-spin");
+    expect(targetPreview).not.toContain("animate-spin");
   });
 });
 

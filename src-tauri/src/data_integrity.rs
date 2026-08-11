@@ -17,9 +17,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::activity::{
+    ACTIVITY_ARCHIVE_FILE, ACTIVITY_FILE, ARCHIVE_FILE_BYTES, MAIN_FILE_BYTES,
+};
 use crate::storage::{DATA_FILE, MEDIA_DIR};
 
-pub const MAX_STORE_VERSION: u64 = 9;
+pub const MAX_STORE_VERSION: u64 = 14;
 const MISSING_REVISION: &str = "missing";
 const MEDIA_GC_FILE: &str = "toskr-media-gc.json";
 const DATA_JOURNAL_FILE: &str = "toskr-data-transaction.json";
@@ -218,12 +221,15 @@ pub fn schedule_media_gc(
             }
             entry.not_before_ms = entry.not_before_ms.max(not_before_ms);
         } else {
-            scheduled.insert(file.clone(), MediaGcEntry {
-                file: file.clone(),
-                not_before_ms,
-                file_revision,
-                quarantine: None,
-            });
+            scheduled.insert(
+                file.clone(),
+                MediaGcEntry {
+                    file: file.clone(),
+                    not_before_ms,
+                    file_revision,
+                    quarantine: None,
+                },
+            );
         }
     }
     write_gc_entries(data_dir, scheduled.into_values().collect())
@@ -304,9 +310,7 @@ fn recover_staged_media_gc(
         let quarantine_exists = quarantine.exists();
         match (original_exists, quarantine_exists) {
             (false, true) => {
-                if media_file_revision(&quarantine)?.as_deref()
-                    != entry.file_revision.as_deref()
-                {
+                if media_file_revision(&quarantine)?.as_deref() != entry.file_revision.as_deref() {
                     return Err(failure(
                         DataOperationFailureCode::ExternalConflict,
                         format!("媒体 {} 的崩溃隔离版本 generation 不匹配", entry.file),
@@ -322,9 +326,7 @@ fn recover_staged_media_gc(
                 changed = true;
             }
             (true, false) => {
-                if media_file_revision(&original)?.as_deref()
-                    != entry.file_revision.as_deref()
-                {
+                if media_file_revision(&original)?.as_deref() != entry.file_revision.as_deref() {
                     return Err(failure(
                         DataOperationFailureCode::ExternalConflict,
                         format!("媒体 {} 在 GC journal 后被外部替换", entry.file),
@@ -339,9 +341,7 @@ fn recover_staged_media_gc(
                 changed = true;
             }
             (true, true) => {
-                if media_file_revision(&quarantine)?.as_deref()
-                    != entry.file_revision.as_deref()
-                {
+                if media_file_revision(&quarantine)?.as_deref() != entry.file_revision.as_deref() {
                     return Err(failure(
                         DataOperationFailureCode::ExternalConflict,
                         format!("媒体 {} 的隔离版本无法证明所有权", entry.file),
@@ -378,23 +378,21 @@ pub fn run_media_gc(
     now_ms: u64,
     mut verify_revision: impl FnMut() -> Result<(), DataOperationFailure>,
 ) -> Result<MediaGcResult, DataOperationFailure> {
-    let authoritative: serde_json::Value = serde_json::from_str(authoritative_state_json).map_err(|error| {
-        failure(
-            DataOperationFailureCode::CorruptData,
-            format!("媒体 GC 状态 JSON 无效：{error}"),
-        )
-    })?;
+    let authoritative: serde_json::Value =
+        serde_json::from_str(authoritative_state_json).map_err(|error| {
+            failure(
+                DataOperationFailureCode::CorruptData,
+                format!("媒体 GC 状态 JSON 无效：{error}"),
+            )
+        })?;
     let runtime: serde_json::Value = serde_json::from_str(runtime_state_json).map_err(|error| {
         failure(
             DataOperationFailureCode::CorruptData,
             format!("媒体 GC 运行态 JSON 无效：{error}"),
         )
     })?;
-    let (mut active, _) = media_reference_counts(&authoritative)?;
+    let (authoritative_active, _) = media_reference_counts(&authoritative)?;
     let (runtime_active, undo) = media_reference_counts(&runtime)?;
-    for (file, count) in runtime_active {
-        *active.entry(file).or_default() += count;
-    }
     let media_root = data_dir.join(MEDIA_DIR);
     require_plain_directory(&media_root)?;
     let thumbs_root = media_root.join("thumbs");
@@ -412,14 +410,17 @@ pub fn run_media_gc(
     let stage_result = (|| -> Result<(), DataOperationFailure> {
         for index in 0..entries.len() {
             let entry = entries[index].clone();
-            // 活动记录重新引用表示删除已撤销，可取消墓碑；仅 undo 仍引用时必须
-            // 保留墓碑，待 undo 过期/重启后再按原 deadline 清理。
-            if active.contains_key(&entry.file) {
+            // 只有已持久化的活动记录能证明删除已撤销并取消墓碑。运行态草稿与
+            // undo 只延后本轮删除；进程退出后墓碑仍在，下一次 sweep 可清理孤儿。
+            if authoritative_active.contains_key(&entry.file) {
                 retained.push(entry.file.clone());
                 remove_indices.insert(index);
                 continue;
             }
-            if undo.contains_key(&entry.file) || entry.not_before_ms > now_ms {
+            if runtime_active.contains_key(&entry.file)
+                || undo.contains_key(&entry.file)
+                || entry.not_before_ms > now_ms
+            {
                 retained.push(entry.file.clone());
                 continue;
             }
@@ -1427,9 +1428,7 @@ fn managed_revision(root: &Path) -> Result<String, DataOperationFailure> {
     manifest_revision(&manifest)
 }
 
-fn manifest_revision(
-    manifest: &BTreeMap<String, String>,
-) -> Result<String, DataOperationFailure> {
+fn manifest_revision(manifest: &BTreeMap<String, String>) -> Result<String, DataOperationFailure> {
     let bytes = serde_json::to_vec(&manifest).map_err(|error| {
         failure(
             DataOperationFailureCode::VerificationFailed,
@@ -1711,7 +1710,21 @@ fn copy_managed(source: &Path, destination: &Path) -> Result<(), DataOperationFa
     if source_media.exists() {
         copy_directory(&source_media, &destination_media)?;
     }
-    copy_optional_managed_file(source, destination, MEDIA_GC_FILE)?;
+    copy_optional_managed_file(source, destination, MEDIA_GC_FILE, MAX_DATA_FILE_BYTES)?;
+    // 活动账本随数据集迁移/回滚，但刻意不进入 managed revision：
+    // 元数据追加不能让笔记持久化误判成外部业务冲突。
+    copy_optional_managed_file(
+        source,
+        destination,
+        ACTIVITY_FILE,
+        MAIN_FILE_BYTES + 64 * 1024,
+    )?;
+    copy_optional_managed_file(
+        source,
+        destination,
+        ACTIVITY_ARCHIVE_FILE,
+        ARCHIVE_FILE_BYTES + 64 * 1024,
+    )?;
     File::open(destination)
         .and_then(|directory| directory.sync_all())
         .map_err(copy_error)
@@ -1721,6 +1734,7 @@ fn copy_optional_managed_file(
     source: &Path,
     destination: &Path,
     name: &str,
+    max_bytes: u64,
 ) -> Result<(), DataOperationFailure> {
     let path = source.join(name);
     if !path.exists() {
@@ -1733,7 +1747,7 @@ fn copy_optional_managed_file(
             format!("受管数据不是普通文件：{name}"),
         ));
     }
-    copy_regular_file(&path, &destination.join(name), MAX_DATA_FILE_BYTES)
+    copy_regular_file(&path, &destination.join(name), max_bytes)
 }
 
 fn copy_directory(source: &Path, destination: &Path) -> Result<(), DataOperationFailure> {
@@ -1967,7 +1981,13 @@ fn commit_staging(
 }
 
 fn move_managed_no_replace(source: &Path, destination: &Path) -> Result<(), DataOperationFailure> {
-    for name in [DATA_FILE, MEDIA_DIR, MEDIA_GC_FILE] {
+    for name in [
+        DATA_FILE,
+        MEDIA_DIR,
+        MEDIA_GC_FILE,
+        ACTIVITY_FILE,
+        ACTIVITY_ARCHIVE_FILE,
+    ] {
         let from = source.join(name);
         if !from.exists() {
             continue;
@@ -2015,6 +2035,12 @@ fn remove_managed(root: &Path) -> Result<(), DataOperationFailure> {
     let gc = root.join(MEDIA_GC_FILE);
     if gc.exists() {
         fs::remove_file(gc).map_err(copy_error)?;
+    }
+    for name in [ACTIVITY_FILE, ACTIVITY_ARCHIVE_FILE] {
+        let path = root.join(name);
+        if path.exists() {
+            fs::remove_file(path).map_err(copy_error)?;
+        }
     }
     Ok(())
 }
@@ -2071,11 +2097,7 @@ fn rollback_target(pending: &PendingDataOperation) -> Result<(), DataOperationFa
             let rollback_staging = pending
                 .target
                 .join(format!(".toskr-rollback-{}", pending.operation_id));
-            let preserved_partial = prepare_rollback_staging(
-                pending,
-                recovery,
-                &rollback_staging,
-            )?;
+            let preserved_partial = prepare_rollback_staging(pending, recovery, &rollback_staging)?;
             move_managed_no_replace(&rollback_staging, &pending.target).map_err(rollback_error)?;
             let _ = fs::remove_dir(&rollback_staging);
             if managed_revision(&pending.target).map_err(rollback_error)? != pending.target_revision
@@ -2128,9 +2150,7 @@ fn prepare_rollback_staging(
     rollback_staging: &Path,
 ) -> Result<Option<PathBuf>, DataOperationFailure> {
     let recovery_manifest = managed_manifest_partial(recovery).map_err(rollback_error)?;
-    if manifest_revision(&recovery_manifest).map_err(rollback_error)?
-        != pending.target_revision
-    {
+    if manifest_revision(&recovery_manifest).map_err(rollback_error)? != pending.target_revision {
         return Err(failure(
             DataOperationFailureCode::RollbackFailed,
             "目标恢复点 hash 不匹配",
@@ -2188,9 +2208,7 @@ enum OwnedPartialKind {
     RollbackRestore,
 }
 
-fn rejoin_forward_displaced(
-    pending: &PendingDataOperation,
-) -> Result<(), DataOperationFailure> {
+fn rejoin_forward_displaced(pending: &PendingDataOperation) -> Result<(), DataOperationFailure> {
     let displaced = pending.displaced_dir.as_ref().ok_or_else(|| {
         failure(
             DataOperationFailureCode::RollbackFailed,
@@ -2207,9 +2225,7 @@ fn rejoin_forward_displaced(
     Ok(())
 }
 
-fn rejoin_rollback_staging(
-    pending: &PendingDataOperation,
-) -> Result<(), DataOperationFailure> {
+fn rejoin_rollback_staging(pending: &PendingDataOperation) -> Result<(), DataOperationFailure> {
     let rollback_staging = pending
         .target
         .join(format!(".toskr-rollback-{}", pending.operation_id));
@@ -2329,10 +2345,7 @@ fn capture_current_for_rollback(
     let captured = managed_partial_revision(&capture).map_err(rollback_error)?;
     if captured != expected_revision {
         let restored = move_managed_no_replace(&capture, &pending.target).is_ok()
-            && managed_partial_revision(&pending.target)
-                .ok()
-                .as_deref()
-                == Some(captured.as_str());
+            && managed_partial_revision(&pending.target).ok().as_deref() == Some(captured.as_str());
         if restored {
             let _ = fs::remove_dir_all(&capture);
         }
@@ -2379,10 +2392,7 @@ fn current_target_owned_partial(
             .unwrap_or_default();
         if !displaced.is_empty()
             && manifest_revision(&staging).map_err(rollback_error)? == *expected_committed
-            && combined_manifest_matches(
-                [current.clone(), displaced],
-                &pending.target_revision,
-            )?
+            && combined_manifest_matches([current.clone(), displaced], &pending.target_revision)?
         {
             return Ok(Some(OwnedPartialKind::ForwardDisplace));
         }
@@ -2407,10 +2417,7 @@ fn current_target_owned_partial(
     // 子目录的并集必须精确等于 committed revision。
     let capture = rollback_capture_manifest(pending)?;
     if !capture.is_empty()
-        && combined_manifest_matches(
-            [current.clone(), capture.clone()],
-            expected_committed,
-        )?
+        && combined_manifest_matches([current.clone(), capture.clone()], expected_committed)?
     {
         return Ok(Some(OwnedPartialKind::ForwardOrCapture));
     }
@@ -2444,8 +2451,7 @@ fn current_target_owned_partial(
             .transpose()?
             .unwrap_or_default();
         if !remaining.is_empty()
-            && manifest_revision(&recovery).map_err(rollback_error)?
-                == pending.target_revision
+            && manifest_revision(&recovery).map_err(rollback_error)? == pending.target_revision
             && manifest_is_subset(&remaining, &recovery)
         {
             return Ok(Some(OwnedPartialKind::RollbackCopyPartial));
@@ -2903,17 +2909,13 @@ fn parse_store_document(raw: &str) -> Option<StoreSummary> {
     let root: serde_json::Value = serde_json::from_str(persisted).ok()?;
     let version = root.get("version").and_then(serde_json::Value::as_u64)?;
     let state = root.get("state")?.as_object()?;
-    let allow_legacy_duplicates = version < MAX_STORE_VERSION;
+    let allow_legacy_duplicates = version < 9;
     let sections = validate_record_array(
         state.get("sections"),
         validate_section,
         allow_legacy_duplicates,
     )?;
-    let notes = validate_record_array(
-        state.get("notes"),
-        validate_note,
-        allow_legacy_duplicates,
-    )?;
+    let notes = validate_record_array(state.get("notes"), validate_note, allow_legacy_duplicates)?;
     let task_sections = validate_record_array(
         state.get("taskSections"),
         validate_section,
@@ -2981,22 +2983,40 @@ pub(crate) fn validate_settings_value_for_version(
     let Some(settings) = value.as_object() else {
         return false;
     };
-    let finite = |value: &serde_json::Value| {
-        value.as_f64().is_some_and(f64::is_finite)
-    };
+    let finite = |value: &serde_json::Value| value.as_f64().is_some_and(f64::is_finite);
     for key in [
-        "vibrancy", "cardTint", "autoCheckUpdate", "autoInstallUpdate", "clipHistory",
-        "clipIgnoreConcealed", "clipIgnoreTransient", "autoEnter", "hideOnBlur",
-        "autoEdgeHide", "doubleTapCaptureOnly", "stealth", "soundEnabled",
-        "companionEnabled", "rightSidebar", "panelTopmost", "aiEnabled",
+        "vibrancy",
+        "cardTint",
+        "autoCheckUpdate",
+        "autoInstallUpdate",
+        "clipHistory",
+        "clipIgnoreConcealed",
+        "clipIgnoreTransient",
+        "autoEnter",
+        "hideOnBlur",
+        "autoEdgeHide",
+        "doubleTapCaptureOnly",
+        "stealth",
+        "soundEnabled",
+        "companionEnabled",
+        "rightSidebar",
+        "panelTopmost",
+        "aiEnabled",
+        "firewallEnabled",
+        "outcomeMetricsEnabled",
     ] {
         if !optional_type(settings, key, serde_json::Value::is_boolean) {
             return false;
         }
     }
     for key in [
-        "panelOpacity", "windowOpacity", "cardOpacity", "hotkeyGapMs", "companionGap",
-        "panelWidth", "panelTopOffset",
+        "panelOpacity",
+        "windowOpacity",
+        "cardOpacity",
+        "hotkeyGapMs",
+        "companionGap",
+        "panelWidth",
+        "panelTopOffset",
     ] {
         if !optional_type(settings, key, finite) {
             return false;
@@ -3007,7 +3027,12 @@ pub(crate) fn validate_settings_value_for_version(
             return false;
         }
     }
-    for key in ["clipPauseUntil", "panelFreeX", "panelFreeY", "panelHeight"] {
+    for key in [
+        "clipPauseUntil",
+        "panelFreeX",
+        "panelFreeY",
+        "panelHeight",
+    ] {
         if !optional_type(settings, key, |value| value.is_null() || finite(value)) {
             return false;
         }
@@ -3016,12 +3041,22 @@ pub(crate) fn validate_settings_value_for_version(
         value.is_null() || valid_nonnegative_number(value)
     }) || !optional_type(settings, "panelToggleHotkey", |value| {
         value.is_null() || value.is_string()
+    }) || !optional_type(settings, "outcomeRetentionDays", |value| {
+        matches!(value.as_u64(), Some(7 | 30 | 90))
+    }) {
+        return false;
+    }
+    if !optional_type(settings, "outcomeMetricsEpoch", |value| {
+        value.as_u64().is_some_and(|epoch| epoch <= 9_007_199_254_740_991)
     }) {
         return false;
     }
     for (key, allowed) in [
         ("theme", &["system", "light", "dark"][..]),
-        ("vibrancyMaterial", &["hud", "popover", "sidebar", "under-window", "fullscreen"][..]),
+        (
+            "vibrancyMaterial",
+            &["hud", "popover", "sidebar", "under-window", "fullscreen"][..],
+        ),
         ("cardDensity", &["comfortable", "compact"][..]),
         ("hotkeyModifier", &["shift", "control", "option"][..]),
         ("sidebarEdge", &["right", "left", "top", "bottom"][..]),
@@ -3041,11 +3076,113 @@ pub(crate) fn validate_settings_value_for_version(
             return false;
         }
     }
-    if !optional_type(settings, "pageOrder", |value| {
+    if !optional_type(settings, "firewallDisabledWarnCategories", |value| {
         value.as_array().is_some_and(|items| {
             items.iter().all(|item| {
-                matches!(item.as_str(), Some("clipboard" | "notes" | "tasks"))
+                matches!(
+                    item.as_str(),
+                    Some("email" | "phone" | "nationalId" | "bankCard" | "ipAddress")
+                )
             })
+        })
+    }) {
+        return false;
+    }
+    if !optional_type(settings, "outcomeBaselines", |value| {
+        value.as_array().is_some_and(|items| {
+            items.len() <= 64 && items.iter().all(|item| {
+                item.as_object().is_some_and(|item| {
+                    let scope = item.get("scope").and_then(serde_json::Value::as_str);
+                    let scope_id = item.get("scopeId").and_then(serde_json::Value::as_str);
+                    let minutes = item.get("minutes").and_then(serde_json::Value::as_f64);
+                    let scope_valid = match scope {
+                        Some("profile") => true,
+                        Some("recipe") => matches!(
+                            scope_id,
+                            Some(
+                                "summarize"
+                                    | "extract-actions"
+                                    | "improve-prompt"
+                                    | "structure-requirements"
+                            )
+                        ),
+                        _ => false,
+                    };
+                    scope_valid
+                        && scope_id.is_some_and(|id| !id.is_empty() && id.len() <= 160)
+                        && minutes.is_some_and(|number| {
+                            number.is_finite() && number > 0.0 && number <= 10_080.0
+                        })
+                })
+            })
+        })
+    }) || !optional_type(settings, "outcomeQualityFeedback", |value| {
+        value.as_array().is_some_and(|items| {
+            items.len() <= 500 && items.iter().all(|item| {
+                item.as_object().is_some_and(|item| {
+                    let delivery_id = item.get("deliveryId").and_then(serde_json::Value::as_str);
+                    delivery_id.is_some_and(|id| !id.is_empty() && id.len() <= 160) && item
+                        .get("resultNoteId")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|id| !id.is_empty() && id.len() <= 160)
+                        && matches!(
+                            item.get("quality").and_then(serde_json::Value::as_str),
+                            Some("directUse" | "minorEdit" | "majorEdit" | "discarded")
+                        )
+                        && item.get("updatedAtMs").is_some_and(valid_nonnegative_number)
+                })
+            })
+        })
+    }) || !optional_type(settings, "outcomeProblemSessions", |value| {
+        value.as_array().is_some_and(|items| {
+            items.len() <= 100 && items.iter().all(|item| {
+                item.as_object().is_some_and(|item| {
+                    let id = item.get("id").and_then(serde_json::Value::as_str);
+                    let started = item.get("startedAtMs").and_then(serde_json::Value::as_f64);
+                    let delivery = item.get("deliveryId");
+                    let result_note = item.get("resultNoteId");
+                    let linked = item.get("linkedAtMs");
+                    let solved = item.get("solvedAtMs");
+                    let cancelled = item.get("cancelledAtMs");
+                    let nullable_after_start = |candidate: Option<&serde_json::Value>| {
+                        candidate.is_some_and(|candidate| {
+                            candidate.is_null()
+                                || candidate.as_f64().is_some_and(|time| {
+                                    time.is_finite()
+                                        && started.is_some_and(|start| time >= start)
+                                })
+                        })
+                    };
+                    id.is_some_and(|id| !id.is_empty() && id.len() <= 160)
+                        && started.is_some_and(|time| time.is_finite() && time >= 0.0)
+                        && delivery.is_some_and(|value| {
+                            value.is_null()
+                                || value.as_str().is_some_and(|id| !id.is_empty() && id.len() <= 160)
+                        })
+                        && result_note.is_none_or(|value| {
+                            value.is_null()
+                                || value.as_str().is_some_and(|id| !id.is_empty() && id.len() <= 160)
+                        })
+                        && nullable_after_start(linked)
+                        && nullable_after_start(solved)
+                        && nullable_after_start(cancelled)
+                        && !(solved.is_some_and(|value| !value.is_null())
+                            && cancelled.is_some_and(|value| !value.is_null()))
+                        && (delivery.is_some_and(serde_json::Value::is_null)
+                            == linked.is_some_and(serde_json::Value::is_null))
+                        && !(delivery.is_some_and(serde_json::Value::is_null)
+                            && result_note.is_some_and(|value| !value.is_null()))
+                })
+            })
+        })
+    }) {
+        return false;
+    }
+    if !optional_type(settings, "pageOrder", |value| {
+        value.as_array().is_some_and(|items| {
+            items
+                .iter()
+                .all(|item| matches!(item.as_str(), Some("clipboard" | "notes" | "tasks")))
         })
     }) || !optional_type(settings, "promptSnippets", |value| {
         let mut ids = BTreeSet::new();
@@ -3058,8 +3195,10 @@ pub(crate) fn validate_settings_value_for_version(
                     let id = item.get("id").and_then(serde_json::Value::as_str);
                     fields_valid
                         && (store_version < 9
-                            || item.get("groupId").is_some_and(serde_json::Value::is_string))
-                        && (store_version < MAX_STORE_VERSION
+                            || item
+                                .get("groupId")
+                                .is_some_and(serde_json::Value::is_string))
+                        && (store_version < 9
                             || id.is_some_and(|id| !id.is_empty() && ids.insert(id)))
                 })
             })
@@ -3073,7 +3212,7 @@ pub(crate) fn validate_settings_value_for_version(
                     id.is_some_and(|id| !id.is_empty())
                         && item.get("name").is_some_and(serde_json::Value::is_string)
                         && item.get("order").is_some_and(finite)
-                        && (store_version < MAX_STORE_VERSION
+                        && (store_version < 9
                             || id.is_some_and(|id| ids.insert(id)))
                 })
             })
@@ -3086,20 +3225,40 @@ pub(crate) fn validate_settings_value_for_version(
                     let id = item.get("id").and_then(serde_json::Value::as_str);
                     id.is_some_and(|id| !id.is_empty())
                         && item.get("name").is_some_and(serde_json::Value::is_string)
-                        && item.get("bundleIds").and_then(serde_json::Value::as_array)
+                        && item
+                            .get("bundleIds")
+                            .and_then(serde_json::Value::as_array)
                             .is_some_and(|bundles| bundles.iter().all(serde_json::Value::is_string))
-                        && item.get("promptGroupId").is_some_and(serde_json::Value::is_string)
-                        && matches!(item.get("defaultFormat").and_then(serde_json::Value::as_str), Some("plain" | "code"))
-                        && matches!(item.get("enterPolicy").and_then(serde_json::Value::as_str), Some("never" | "confirm" | "allow"))
-                        && matches!(item.get("privacyPolicy").and_then(serde_json::Value::as_str), Some("requireRedaction" | "confirmRaw" | "allowRaw"))
-                        && item.get("keepPanel").is_some_and(serde_json::Value::is_boolean)
-                        && (store_version < MAX_STORE_VERSION
+                        && item
+                            .get("promptGroupId")
+                            .is_some_and(serde_json::Value::is_string)
+                        && matches!(
+                            item.get("defaultFormat")
+                                .and_then(serde_json::Value::as_str),
+                            Some("plain" | "code")
+                        )
+                        && matches!(
+                            item.get("enterPolicy").and_then(serde_json::Value::as_str),
+                            Some("never" | "confirm" | "allow")
+                        )
+                        && matches!(
+                            item.get("privacyPolicy")
+                                .and_then(serde_json::Value::as_str),
+                            Some("requireRedaction" | "confirmRaw" | "allowRaw")
+                        )
+                        && item
+                            .get("keepPanel")
+                            .is_some_and(serde_json::Value::is_boolean)
+                        && (store_version < 9
                             || id.is_some_and(|id| ids.insert(id)))
                 })
             })
         })
-    }) || !optional_type(settings, "defaultTargetProfileId", serde_json::Value::is_string)
-    || !optional_type(settings, "contextMenu", |value| {
+    }) || !optional_type(
+        settings,
+        "defaultTargetProfileId",
+        serde_json::Value::is_string,
+    ) || !optional_type(settings, "contextMenu", |value| {
         value.as_array().is_some_and(|items| {
             items.iter().all(|item| {
                 item.as_object().is_some_and(|item| {
@@ -3113,9 +3272,40 @@ pub(crate) fn validate_settings_value_for_version(
     }
     if !optional_type(settings, "onboarding", |value| {
         value.as_object().is_some_and(|onboarding| {
-            ["captured", "sent", "done"]
+            ["captured", "sent", "done", "rehearsalActive"]
                 .iter()
                 .all(|key| optional_type(onboarding, key, serde_json::Value::is_boolean))
+                && optional_type(onboarding, "onboardingVersion", |value| {
+                    value.as_u64() == Some(2)
+                })
+                && optional_type(onboarding, "rehearsalStep", |value| {
+                    matches!(
+                        value.as_str(),
+                        Some(
+                            "permissions"
+                                | "capture"
+                                | "target"
+                                | "firewall"
+                                | "delivery"
+                                | "complete"
+                        )
+                    )
+                })
+                && optional_type(onboarding, "rehearsalNoteId", |value| {
+                    value.is_null() || value.is_string()
+                })
+                && [
+                    "rehearsalStartedAtMs",
+                    "rehearsalPausedAtMs",
+                    "rehearsalCompletedAtMs",
+                    "rehearsalDeferredAtMs",
+                    "activationStartedAtMs",
+                ]
+                .iter()
+                .all(|key| optional_type(onboarding, key, valid_nullable_time))
+                && optional_type(onboarding, "activationWithin60s", |value| {
+                    value.is_null() || value.is_boolean()
+                })
         })
     }) || !optional_type(settings, "duePresets", |value| {
         value.as_array().is_some_and(|items| {
@@ -3162,6 +3352,33 @@ fn valid_nullable_time(value: &serde_json::Value) -> bool {
     value.is_null() || valid_nonnegative_number(value)
 }
 
+pub(crate) fn validate_note_provenance(value: &serde_json::Value) -> bool {
+    value.as_object().is_some_and(|provenance| {
+        provenance.get("kind").and_then(serde_json::Value::as_str)
+            == Some("deliveryResult")
+            && provenance
+                .get("deliveryId")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|value| !value.is_empty())
+            && provenance
+                .get("capturedAtMs")
+                .is_some_and(valid_nonnegative_number)
+            && provenance
+                .get("sourceBundle")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|value| !value.is_empty())
+            && provenance
+                .get("sourceItemIds")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|ids| {
+                    !ids.is_empty()
+                        && ids.iter().all(|id| {
+                            id.as_str().is_some_and(|value| !value.is_empty())
+                        })
+                })
+    })
+}
+
 fn validate_note(object: &serde_json::Map<String, serde_json::Value>) -> bool {
     optional_type(object, "text", serde_json::Value::is_string)
         && optional_type(object, "sectionId", serde_json::Value::is_string)
@@ -3175,6 +3392,7 @@ fn validate_note(object: &serde_json::Map<String, serde_json::Value>) -> bool {
                 .as_array()
                 .is_some_and(|items| items.iter().all(serde_json::Value::is_string))
         })
+        && optional_type(object, "provenance", validate_note_provenance)
 }
 
 fn validate_task(
@@ -3197,7 +3415,8 @@ fn validate_task(
                 let mut ids = BTreeSet::new();
                 items.iter().all(|item| {
                     item.as_object().is_some_and(|item| {
-                        let Some(id) = item.get("id")
+                        let Some(id) = item
+                            .get("id")
                             .and_then(serde_json::Value::as_str)
                             .filter(|id| !id.is_empty())
                         else {
@@ -3325,6 +3544,13 @@ mod tests {
                 serde_json::json!({"settings": {"promptSnippets": "corrupt"}}),
             ),
             (
+                "invalid-firewall-category",
+                serde_json::json!({"settings": {
+                    "firewallEnabled": true,
+                    "firewallDisabledWarnCategories": ["apiKey"]
+                }}),
+            ),
+            (
                 "v9-snippet-without-group",
                 serde_json::json!({"settings": {"promptSnippets": [
                     {"id": "snippet", "label": "Snippet", "text": "text"}
@@ -3391,11 +3617,151 @@ mod tests {
             )
             .unwrap();
 
-            assert_eq!(
-                inspect_location(&dir, None).kind,
-                DataLocationKind::Corrupt
-            );
+            assert_eq!(inspect_location(&dir, None).kind, DataLocationKind::Corrupt);
         }
+    }
+
+    #[test]
+    fn current_store_accepts_only_disableable_firewall_warn_categories() {
+        let settings = serde_json::json!({
+            "firewallEnabled": true,
+            "firewallDisabledWarnCategories": [
+                "email", "phone", "nationalId", "bankCard", "ipAddress"
+            ]
+        });
+        assert!(validate_settings_value_for_version(
+            Some(&settings),
+            MAX_STORE_VERSION
+        ));
+    }
+
+    #[test]
+    fn current_store_validates_resumable_onboarding_state() {
+        let valid = serde_json::json!({
+            "onboarding": {
+                "captured": true,
+                "sent": false,
+                "done": false,
+                "onboardingVersion": 2,
+                "rehearsalStep": "firewall",
+                "rehearsalActive": true,
+                "rehearsalNoteId": "note-1",
+                "rehearsalStartedAtMs": 10,
+                "rehearsalPausedAtMs": null,
+                "rehearsalCompletedAtMs": null,
+                "rehearsalDeferredAtMs": null,
+                "activationStartedAtMs": 20,
+                "activationWithin60s": null
+            }
+        });
+        assert_eq!(MAX_STORE_VERSION, 14);
+        assert!(validate_settings_value_for_version(
+            Some(&valid),
+            MAX_STORE_VERSION
+        ));
+
+        for invalid in [
+            serde_json::json!({"onboarding": {
+                "onboardingVersion": 3, "rehearsalStep": "capture"
+            }}),
+            serde_json::json!({"onboarding": {
+                "onboardingVersion": 2, "rehearsalStep": "unknown"
+            }}),
+            serde_json::json!({"onboarding": {
+                "onboardingVersion": 2, "rehearsalStartedAtMs": -1
+            }}),
+        ] {
+            assert!(!validate_settings_value_for_version(
+                Some(&invalid),
+                MAX_STORE_VERSION
+            ));
+        }
+    }
+
+    #[test]
+    fn current_store_validates_bounded_outcome_settings() {
+        let valid = serde_json::json!({
+            "outcomeMetricsEnabled": false,
+            "outcomeRetentionDays": 90,
+            "outcomeMetricsEpoch": 1,
+            "outcomeBaselines": [
+                {"scope": "profile", "scopeId": "safe", "minutes": 20},
+                {"scope": "recipe", "scopeId": "summarize", "minutes": 8}
+            ],
+            "outcomeQualityFeedback": [{
+                "deliveryId": "delivery-1", "resultNoteId": "result-1",
+                "quality": "minorEdit", "updatedAtMs": 100
+            }],
+            "outcomeProblemSessions": [{
+                "id": "session-1", "startedAtMs": 10,
+                "deliveryId": "delivery-1", "linkedAtMs": 20,
+                "resultNoteId": "result-1",
+                "solvedAtMs": 30, "cancelledAtMs": null
+            }]
+        });
+        assert!(validate_settings_value_for_version(
+            Some(&valid),
+            MAX_STORE_VERSION
+        ));
+        let compatible_duplicates = serde_json::json!({
+            "outcomeBaselines": [
+                {"scope": "profile", "scopeId": "safe", "minutes": 10},
+                {"scope": "profile", "scopeId": "safe", "minutes": 15, "futureField": true}
+            ],
+            "outcomeProblemSessions": [{
+                "id": "legacy-session", "startedAtMs": 10,
+                "deliveryId": "delivery-1", "linkedAtMs": 20,
+                "solvedAtMs": null, "cancelledAtMs": null
+            }]
+        });
+        assert!(validate_settings_value_for_version(
+            Some(&compatible_duplicates),
+            MAX_STORE_VERSION
+        ));
+
+        for invalid in [
+            serde_json::json!({"outcomeRetentionDays": 8}),
+            serde_json::json!({"outcomeMetricsEpoch": -1}),
+            serde_json::json!({"outcomeBaselines": [
+                {"scope": "profile", "scopeId": "safe", "minutes": 0}
+            ]}),
+            serde_json::json!({"outcomeQualityFeedback": [{
+                "deliveryId": "delivery-1", "resultNoteId": "result-1",
+                "quality": "unknown", "updatedAtMs": 100
+            }]}),
+            serde_json::json!({"outcomeProblemSessions": [{
+                "id": "session-1", "startedAtMs": 10,
+                "deliveryId": null, "linkedAtMs": 20,
+                "resultNoteId": null,
+                "solvedAtMs": null, "cancelledAtMs": null
+            }]}),
+            serde_json::json!({"outcomeProblemSessions": [{
+                "id": "session-2", "startedAtMs": 10,
+                "deliveryId": "delivery-1", "linkedAtMs": null,
+                "resultNoteId": null,
+                "solvedAtMs": null, "cancelledAtMs": null
+            }]})
+        ] {
+            assert!(!validate_settings_value_for_version(
+                Some(&invalid),
+                MAX_STORE_VERSION
+            ));
+        }
+    }
+
+    #[test]
+    fn current_store_accepts_delivery_result_provenance_and_rejects_invalid_shape() {
+        let valid = serde_json::json!({
+            "kind": "deliveryResult",
+            "deliveryId": "delivery-1",
+            "capturedAtMs": 100,
+            "sourceBundle": "com.openai.chat",
+            "sourceItemIds": ["note-1"]
+        });
+        assert!(validate_note_provenance(&valid));
+        let mut invalid = valid;
+        invalid["sourceItemIds"] = serde_json::json!([]);
+        assert!(!validate_note_provenance(&invalid));
     }
 
     #[test]
@@ -3478,6 +3844,12 @@ mod tests {
         write_valid_store(&source, "source-note");
         fs::write(source.join(MEDIA_DIR).join("image.png"), b"png").unwrap();
         schedule_media_gc(&source, &["image.png".into()], 500).unwrap();
+        fs::write(source.join(ACTIVITY_FILE), b"activity-main\n").unwrap();
+        fs::write(
+            source.join(ACTIVITY_ARCHIVE_FILE),
+            b"activity-archive\n",
+        )
+        .unwrap();
         fs::write(&pointer, source.to_string_lossy().as_bytes()).unwrap();
         let plan = DataOperationPlan {
             operation_id: "op-migrate".into(),
@@ -3492,6 +3864,14 @@ mod tests {
         assert!(target.join(DATA_FILE).is_file());
         assert!(target.join(MEDIA_DIR).join("image.png").is_file());
         assert!(target.join(MEDIA_GC_FILE).is_file());
+        assert_eq!(
+            fs::read(target.join(ACTIVITY_FILE)).unwrap(),
+            b"activity-main\n"
+        );
+        assert_eq!(
+            fs::read(target.join(ACTIVITY_ARCHIVE_FILE)).unwrap(),
+            b"activity-archive\n"
+        );
         let restored = pending.rollback(&pointer, &default_dir).unwrap();
 
         assert_eq!(restored, source);
@@ -3500,6 +3880,11 @@ mod tests {
             source.to_string_lossy()
         );
         assert!(source.join(DATA_FILE).is_file());
+        assert_eq!(
+            fs::read(source.join(ACTIVITY_FILE)).unwrap(),
+            b"activity-main\n"
+        );
+        assert!(!target.join(ACTIVITY_FILE).exists());
         assert!(source.join(MEDIA_DIR).join("image.png").is_file());
         assert!(source.join(MEDIA_GC_FILE).is_file());
         assert!(!target.join(DATA_FILE).exists());
@@ -3531,7 +3916,10 @@ mod tests {
         let pending = begin_data_operation(&plan, &pointer, &default_dir).unwrap();
         assert_eq!(pending.active_dir, target);
         pending.finalize().unwrap();
-        assert_eq!(fs::read_to_string(&pointer).unwrap(), target.to_string_lossy());
+        assert_eq!(
+            fs::read_to_string(&pointer).unwrap(),
+            target.to_string_lossy()
+        );
         assert_eq!(fs::read(source.join(DATA_FILE)).unwrap(), b"not-json");
     }
 
@@ -3854,16 +4242,15 @@ mod tests {
         write_valid_store(&imported, "from-backup");
         fs::write(&pointer, active.to_string_lossy().as_bytes()).unwrap();
 
-        let pending =
-            begin_import_operation(
-                &imported,
-                &active,
-                "op-import",
-                &expected_revision(&active).unwrap(),
-                &pointer,
-                &default_dir,
-            )
-                .unwrap();
+        let pending = begin_import_operation(
+            &imported,
+            &active,
+            "op-import",
+            &expected_revision(&active).unwrap(),
+            &pointer,
+            &default_dir,
+        )
+        .unwrap();
         assert!(fs::read_to_string(active.join(DATA_FILE))
             .unwrap()
             .contains("from-backup"));
@@ -3994,6 +4381,40 @@ mod tests {
         let expired = run_media_gc(root.path(), empty, empty, 3, || Ok(())).unwrap();
         assert_eq!(expired.deleted, vec!["kept.png"]);
         assert!(!root.path().join(MEDIA_GC_FILE).exists());
+    }
+
+    #[test]
+    fn media_gc_keeps_an_editor_draft_image_after_its_source_note_is_deleted() {
+        let root = tempdir().unwrap();
+        fs::create_dir_all(root.path().join(MEDIA_DIR)).unwrap();
+        fs::write(root.path().join(MEDIA_DIR).join("clip.png"), b"clip").unwrap();
+        schedule_media_gc(root.path(), &["clip.png".into()], 1).unwrap();
+        let disk = serde_json::json!({"state": {"notes": []}});
+        let draft = serde_json::json!({
+            "state": {
+                "notes": [],
+                "editorDrafts": [{"attachments": ["clip.png"]}]
+            }
+        });
+
+        let retained = run_media_gc(
+            root.path(),
+            &disk.to_string(),
+            &draft.to_string(),
+            2,
+            || Ok(()),
+        )
+        .unwrap();
+        assert_eq!(retained.retained, vec!["clip.png"]);
+        assert!(root.path().join(MEDIA_DIR).join("clip.png").exists());
+        assert!(root.path().join(MEDIA_GC_FILE).exists());
+
+        // 模拟强退/重启：内存草稿消失且没有显式 release，原墓碑仍可完成清理。
+        let released = run_media_gc(root.path(), &disk.to_string(), &disk.to_string(), 3, || {
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(released.deleted, vec!["clip.png"]);
     }
 
     #[test]
@@ -4210,11 +4631,7 @@ mod tests {
         // 还原到 forward commit 的中间态：A 仍完整位于 staging；旧 B 的 data
         // 已进入 displaced，而 media 尚留 target，随后进程退出。
         move_managed_no_replace(&target, staging).unwrap();
-        rename_no_replace(
-            &displaced.join(MEDIA_DIR),
-            &target.join(MEDIA_DIR),
-        )
-        .unwrap();
+        rename_no_replace(&displaced.join(MEDIA_DIR), &target.join(MEDIA_DIR)).unwrap();
         pending.commit_completed = false;
         pending.persist_journal().unwrap();
         drop(pending);
@@ -4425,7 +4842,7 @@ mod tests {
                 &pointer,
                 &default_dir,
             )
-                .unwrap(),
+            .unwrap(),
         );
         recover_pending_data_operation(&pointer, &default_dir).unwrap();
 
@@ -4456,7 +4873,7 @@ mod tests {
                 &pointer,
                 &default_dir,
             )
-                .unwrap(),
+            .unwrap(),
         );
         fs::remove_dir_all(&import).unwrap();
         write_valid_store(&active, "external-after-import");
@@ -4617,11 +5034,7 @@ mod tests {
         move_managed_no_replace(&target, &committed_capture).unwrap();
         let rollback_staging = target.join(".toskr-rollback-rollback-rejoin-crash");
         copy_managed(pending.recovery_dir.as_ref().unwrap(), &rollback_staging).unwrap();
-        rename_no_replace(
-            &rollback_staging.join(DATA_FILE),
-            &target.join(DATA_FILE),
-        )
-        .unwrap();
+        rename_no_replace(&rollback_staging.join(DATA_FILE), &target.join(DATA_FILE)).unwrap();
         rejoin_rollback_staging(&pending).unwrap();
         drop(pending); // B partial 已合回完整 staging、目标为空时进程退出。
 
@@ -4744,7 +5157,10 @@ mod tests {
         write_valid_store(&target, "last-moment-external");
         let error = commit_staging(&staging, &target, &displaced, &expected_target).unwrap_err();
 
-        assert_eq!(error.failure.code, DataOperationFailureCode::ExternalConflict);
+        assert_eq!(
+            error.failure.code,
+            DataOperationFailureCode::ExternalConflict
+        );
         assert!(error.external_restored);
         assert!(fs::read_to_string(target.join(DATA_FILE))
             .unwrap()

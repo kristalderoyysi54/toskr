@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { DeliveryEvent } from "@/lib/deliveryActivityCore";
 
 /** Rust 侧双击触发键事件。 */
 export const TRIGGER_EVENT = "toskr://trigger";
@@ -24,6 +25,25 @@ export const CLIP_PAUSE_EVENT = "toskr://clip-pause-changed";
 export const CLIP_EVENT = "toskr://clip";
 /** Rust → 主窗口：贴边隐藏运行态变化（进入/退出可介入布局、滑出/滑回）。 */
 export const EDGE_HIDE_STATE_EVENT = "toskr://edge-hide-state";
+/** Rust Keychain 状态变化；payload 永远不含 key。 */
+export const AI_KEY_STATUS_EVENT = "toskr://ai-key-status";
+
+export interface AiKeyStatus {
+  configured: boolean;
+  updatedAtMs: number | null;
+}
+
+export function isAiKeyStatus(value: unknown): value is AiKeyStatus {
+  if (!value || typeof value !== "object") return false;
+  const status = value as Partial<AiKeyStatus>;
+  return (
+    typeof status.configured === "boolean" &&
+    (status.updatedAtMs === null ||
+      (typeof status.updatedAtMs === "number" &&
+        Number.isFinite(status.updatedAtMs) &&
+        status.updatedAtMs >= 0))
+  );
+}
 
 /** 贴边隐藏运行态载荷：active=当前是否处于可自动隐藏的布局（非钉住、
  *  非伴随磁吸的右缘停靠/右侧边栏）；hidden=面板当前是否已滑出仅露出细条。 */
@@ -55,6 +75,7 @@ export type TriggerPayload =
       imageH: number | null;
       appName: string | null;
       bundleId: string | null;
+      clipboardWarning: string | null;
     };
 
 export type HudKind =
@@ -265,6 +286,7 @@ export type DeliveryReasonCode =
 
 export type ClipboardOutcome =
   | "restored"
+  | "restoredPartial"
   | "skippedUserChanged"
   | "nothingToRestore"
   | "restoreFailed"
@@ -292,6 +314,51 @@ export interface SendDeliveryResult {
   finishedAtMs: number;
 }
 
+export type FindingCategory =
+  | "privateKey"
+  | "authorization"
+  | "apiKey"
+  | "databaseUrl"
+  | "email"
+  | "phone"
+  | "nationalId"
+  | "bankCard"
+  | "ipAddress"
+  | "cookie"
+  | "session";
+
+export type FindingSeverity = "info" | "warn" | "block";
+
+export interface FirewallFinding {
+  id: string;
+  category: FindingCategory;
+  severity: FindingSeverity;
+  startUtf16: number;
+  endUtf16: number;
+  maskedPreview: string;
+  suggestedPlaceholder: string;
+  ruleId: string;
+}
+
+export interface ScanSensitiveRequest {
+  text: string;
+}
+
+export interface ScanWarning {
+  code: "inputTooLong";
+  message: string;
+  maxBytes: number;
+  actualBytes: number;
+}
+
+export interface ScanSensitiveResult {
+  findings: FirewallFinding[];
+  warnings: ScanWarning[];
+  inputUtf16: number;
+  scannedUtf16: number;
+  complete: boolean;
+}
+
 const DELIVERY_STATUSES = new Set<DeliveryStatus>(["sent", "blocked", "failed"]);
 const TARGET_REASONS = new Set<TargetReason>([
   "target_missing",
@@ -316,6 +383,7 @@ const DELIVERY_REASONS = new Set<DeliveryReasonCode>([
 ]);
 const CLIPBOARD_OUTCOMES = new Set<ClipboardOutcome>([
   "restored",
+  "restoredPartial",
   "skippedUserChanged",
   "nothingToRestore",
   "restoreFailed",
@@ -388,6 +456,10 @@ export const api = {
     invoke<TargetSnapshot>("validate_target_snapshot", { targetToken }),
   sendDelivery: (request: SendDeliveryRequest) =>
     invoke<SendDeliveryResult>("send_delivery", { request }),
+  scanSensitiveText: (text: string) =>
+    invoke<ScanSensitiveResult>("scan_sensitive_text", {
+      request: { text } satisfies ScanSensitiveRequest,
+    }),
   axTrusted: (prompt: boolean) => invoke<boolean>("ax_trusted", { prompt }),
   tapStatus: () =>
     invoke<{ installed: boolean; receiving: boolean; listening: boolean }>("tap_status"),
@@ -428,6 +500,11 @@ export const api = {
   setCompanionGap: (gap: number) => invoke("set_companion_gap", { gap }),
   getDiagnostics: () =>
     invoke<{ atMs: number; msg: string }[]>("get_diagnostics"),
+  appendDeliveryEvent: (event: DeliveryEvent, retentionDays = 30) =>
+    invoke<void>("append_delivery_event", { event, retentionDays }),
+  getRecentDeliveryEvents: (limit = 100, retentionDays = 30) =>
+    invoke<DeliveryEvent[]>("get_recent_delivery_events", { limit, retentionDays }),
+  clearDeliveryEvents: () => invoke<void>("clear_delivery_events"),
   getDataDir: () => invoke<string>("get_data_dir"),
   getDataLocationStatus: () =>
     invoke<DataLocationStatus>("get_data_location_status"),
@@ -492,25 +569,29 @@ export const api = {
   /** 立即贴边滑出（失焦时贴边隐藏模式下的「收起」，不是真实 hide；
    *  前置条件不满足时是安全的空操作）。 */
   edgeHideNow: () => invoke("edge_hide_now"),
-  /** OpenAI 兼容对话补全（配置由调用方传入；返回 content 文本）。 */
+  /** Keychain 仅回传配置状态；密钥正文永不返回 WebView。 */
+  setAiApiKey: (apiKey: string, overwriteExisting: boolean) =>
+    invoke<AiKeyStatus>("set_ai_api_key", { apiKey, overwriteExisting }),
+  getAiKeyStatus: () => invoke<AiKeyStatus>("get_ai_key_status"),
+  deleteAiApiKey: () => invoke<AiKeyStatus>("delete_ai_api_key"),
+  /** OpenAI 兼容对话补全；Rust 从 Keychain 读取 key。 */
   aiChat: (
     baseUrl: string,
-    apiKey: string,
     model: string,
     system: string,
     user: string,
     maxTokens: number
   ) =>
-    invoke<string>("ai_chat", { baseUrl, apiKey, model, system, user, maxTokens }),
+    invoke<string>("ai_chat", { baseUrl, model, system, user, maxTokens }),
   /** 拉取提供商可用模型列表（GET /v1/models）。 */
-  aiListModels: (baseUrl: string, apiKey: string) =>
-    invoke<string[]>("ai_list_models", { baseUrl, apiKey }),
+  aiListModels: (baseUrl: string) =>
+    invoke<string[]>("ai_list_models", { baseUrl }),
   /** 系统 Quick Look 原尺寸预览图片附件。 */
   /** 图片原尺寸预览；`note` 传所属笔记时预览窗显示文字备注编辑条。 */
   quickLook: (
     files: string[],
     index = 0,
-    note?: { id: string; text: string; dataGeneration: number }
+    note?: { id: string; text: string; dataGeneration: number; edit?: boolean }
   ) =>
     invoke("quick_look", {
       files,
@@ -518,14 +599,24 @@ export const api = {
       noteId: note?.id ?? null,
       noteText: note?.text ?? null,
       dataGeneration: note?.dataGeneration ?? null,
+      edit: note?.edit ?? false,
     }),
   /** 文本详情窗（桌面居中；内容另行 emit 到 textpreview 窗口）。 */
   showTextPreview: () => invoke("show_text_preview"),
   ocrImage: (file: string) => invoke<string>("ocr_image", { file }),
   prevAppInfo: () => invoke<PrevAppInfo | null>("prev_app_info"),
   refreshPrevApp: () => invoke<TargetSnapshot>("refresh_prev_app"),
-  showCaptureHud: (kind: "added" | "duplicate", preview: string) =>
-    invoke("show_capture_hud", { kind, preview }),
+  showCaptureHud: (
+    kind: "added" | "duplicate",
+    preview: string,
+    warning?: string | null,
+    associationSuggested = false
+  ) => invoke("show_capture_hud", {
+    kind,
+    preview,
+    warning: warning ?? null,
+    associationSuggested,
+  }),
   hudFeedback: (
     kind: HudKind,
     text: string,

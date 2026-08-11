@@ -5,6 +5,7 @@ import {
   buildSendText,
   formatAsNumberedList,
   imageCaption,
+  imageListLabel,
   mergeTexts,
 } from "./format";
 
@@ -83,5 +84,33 @@ describe("imageCaption", () => {
   it("非图片卡原样返回文本", () => {
     expect(imageCaption({ kind: "text", text: "图片 1×1" })).toBe("图片 1×1");
     expect(imageCaption({ text: "无 kind 视为文本" })).toBe("无 kind 视为文本");
+  });
+});
+
+describe("imageListLabel", () => {
+  it("有文字备注时显示编辑后的首行", () => {
+    expect(
+      imageListLabel(
+        {
+          kind: "image",
+          text: "编辑后的图片说明\n第二行",
+          imageW: 231,
+          imageH: 242,
+        },
+        1
+      )
+    ).toBe("编辑后的图片说明");
+  });
+
+  it("无真实备注时回退尺寸或图片数量", () => {
+    expect(
+      imageListLabel(
+        { kind: "image", text: "图片 231×242", imageW: 231, imageH: 242 },
+        1
+      )
+    ).toBe("图片 231×242");
+    expect(imageListLabel({ kind: "image", text: "图片 3 张" }, 3)).toBe(
+      "图片 ×3"
+    );
   });
 });

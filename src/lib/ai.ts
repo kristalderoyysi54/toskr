@@ -5,64 +5,31 @@ import {
   type DataGenerationLease,
 } from "@/lib/dataGeneration";
 import { tip } from "@/lib/tip";
-import { api } from "@/lib/tauri";
 import {
   useNotesStore,
-  type Settings,
   type TaskPriority,
 } from "@/store/notesStore";
 import { isDataOperationLocked } from "@/store/dataOperationStore";
+import {
+  AiError,
+  aiErrorTip,
+  aiReady,
+  requestAi,
+} from "@/lib/aiClient";
+
+export {
+  AI_PRESETS,
+  AiError,
+  aiErrorTip,
+  aiReady,
+  matchPreset,
+} from "@/lib/aiClient";
 
 /**
  * AI 智能能力（OpenAI 兼容单配置）：
  * 自然语言建任务 / 拆解子任务 / 笔记智能转任务 / AI 起标题。
- * 提示词与解析都在本文件；HTTP 由 Rust ai_chat（curl）承担。
+ * 提示词与解析都在本文件；HTTP 与 Keychain 读取由 Rust ai_chat 承担。
  */
-
-// ===== 提供商预设 =====
-
-export interface AiPreset {
-  id: "deepseek" | "openai" | "kimi" | "qwen" | "custom";
-  label: string;
-  baseUrl: string;
-  modelHint: string;
-}
-
-export const AI_PRESETS: AiPreset[] = [
-  {
-    id: "deepseek",
-    label: "DeepSeek",
-    baseUrl: "https://api.deepseek.com",
-    modelHint: "deepseek-chat",
-  },
-  {
-    id: "openai",
-    label: "OpenAI",
-    baseUrl: "https://api.openai.com",
-    modelHint: "gpt-4o-mini",
-  },
-  {
-    id: "kimi",
-    label: "Kimi",
-    baseUrl: "https://api.moonshot.cn",
-    modelHint: "moonshot-v1-8k",
-  },
-  {
-    id: "qwen",
-    label: "通义",
-    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode",
-    modelHint: "qwen-plus",
-  },
-  { id: "custom", label: "自定义", baseUrl: "", modelHint: "" },
-];
-
-/** 由 baseUrl 反查当前命中的预设（不单独持久化选中项，避免双字段打架）。 */
-export function matchPreset(baseUrl: string): AiPreset["id"] {
-  return (
-    AI_PRESETS.find((p) => p.id !== "custom" && p.baseUrl === baseUrl.trim())
-      ?.id ?? "custom"
-  );
-}
 
 // ===== 基础设施（纯函数，vitest 覆盖） =====
 
@@ -81,32 +48,6 @@ export function stripJsonFence(raw: string): string {
 export function truncateChars(s: string, n: number): string {
   const chars = [...s.trim()];
   return chars.length > n ? chars.slice(0, n).join("") : chars.join("");
-}
-
-export function aiReady(
-  s: Pick<Settings, "aiEnabled" | "aiBaseUrl" | "aiApiKey" | "aiModel">
-): boolean {
-  return (
-    s.aiEnabled && !!s.aiBaseUrl.trim() && !!s.aiApiKey.trim() && !!s.aiModel.trim()
-  );
-}
-
-export type AiErrorKind = "not-configured" | "network" | "parse";
-
-export class AiError extends Error {
-  kind: AiErrorKind;
-  constructor(kind: AiErrorKind, msg: string) {
-    super(msg);
-    this.kind = kind;
-  }
-}
-
-export function aiErrorTip(e: unknown): string {
-  if (e instanceof AiError) {
-    if (e.kind === "not-configured") return "请先在 设置 → AI 智能 中配置并启用";
-    if (e.kind === "parse") return "AI 返回内容无法解析";
-  }
-  return `AI 请求失败：${String(e).slice(0, 60)}`;
 }
 
 // ===== 结果类型与守卫 =====
@@ -245,23 +186,6 @@ export function isTitleResult(v: unknown): v is TitleResult {
 
 // ===== 调用管线 =====
 
-async function callAi(system: string, user: string, maxTokens: number): Promise<string> {
-  const { settings } = useNotesStore.getState();
-  if (!aiReady(settings)) throw new AiError("not-configured", "AI 未配置或未启用");
-  try {
-    return await api.aiChat(
-      settings.aiBaseUrl.trim(),
-      settings.aiApiKey.trim(),
-      settings.aiModel.trim(),
-      system,
-      user,
-      maxTokens
-    );
-  } catch (e) {
-    throw new AiError("network", String(e));
-  }
-}
-
 /** 常见模型 JSON 瑕疵修复：尾逗号、中文引号/弯引号。 */
 export function repairJson(s: string): string {
   return s
@@ -295,7 +219,10 @@ async function callAiJson<T>(
   guard: (v: unknown) => v is T,
   maxTokens: number
 ): Promise<T> {
-  return parseAiJson(await callAi(system, user, maxTokens), guard);
+  return parseAiJson(
+    await requestAi({ system, user, maxTokens }),
+    guard
+  );
 }
 
 /** 按「功能:目标id」加锁；同一对象在途时重复触发静默忽略。 */
@@ -389,7 +316,11 @@ export async function parseTaskInput(rawText: string): Promise<void> {
   const lease = beginAiLease();
   if (!lease) return;
   try {
-    const raw = await callAi(parseTaskSystem(), text, 600);
+    const raw = await requestAi({
+      system: parseTaskSystem(),
+      user: text,
+      maxTokens: 600,
+    });
     const r = normalizeParsedTask(parseAiRaw(raw), text, Date.now());
     if (!r) throw new AiError("parse", "AI 返回内容缺少必要字段");
     if (!matchesDataGeneration(lease.generation)) return;
@@ -539,16 +470,13 @@ export async function suggestTitle(noteId: string): Promise<void> {
  */
 export async function testAiConnection(
   baseUrl: string,
-  apiKey: string,
   model: string
 ): Promise<void> {
-  const reply = await api.aiChat(
-    baseUrl.trim(),
-    apiKey.trim(),
-    model.trim(),
-    "你是连通性测试助手。",
-    "收到请只回复：OK",
-    50
-  );
+  const reply = await requestAi({
+    system: "你是连通性测试助手。",
+    user: "收到请只回复：OK",
+    maxTokens: 50,
+    connection: { baseUrl, model },
+  });
   if (!reply.trim()) throw new Error("响应为空");
 }

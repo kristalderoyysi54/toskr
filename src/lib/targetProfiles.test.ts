@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  assignTargetProfileBundle,
   GENERAL_PROMPT_GROUP_ID,
   SAFETY_PROFILE_ID,
   TERMINAL_BUNDLE_IDS,
@@ -9,8 +10,11 @@ import {
   deletePromptGroup,
   deleteTargetProfile,
   findDuplicateBundleAssignments,
+  keepTargetProfileBundleAssignment,
   promptSnippetsForGroup,
+  repairTargetProfileConfiguration,
   resolveTargetProfile,
+  updateTargetProfileBundleIds,
   type PromptGroup,
   type PromptSnippet,
   type TargetProfile,
@@ -60,37 +64,163 @@ describe("Target Profile resolver", () => {
     }),
   ];
 
-  it("临时覆盖 > bundle 精确匹配 > 用户默认 > 安全默认", () => {
+  it("精确匹配返回唯一投递方案契约且不虚构隐私能力", () => {
     expect(
       resolveTargetProfile({
         bundleId: "com.openai.codex",
+        isTargetReady: true,
+        targetIdentity: "codex:42:500",
+        groups,
+        profiles,
+        defaultProfileId: "default",
+      })
+    ).toMatchObject({
+      profileId: "codex",
+      profile: { id: "codex" },
+      source: "exact",
+      targetBundleId: "com.openai.codex",
+      reason: "exact_bundle_match",
+      isTargetReady: true,
+      privacyCapabilityActive: false,
+    });
+  });
+
+  it("绑定旧目标的临时覆盖不会应用到新目标", () => {
+    expect(
+      resolveTargetProfile({
+        bundleId: "com.openai.codex",
+        isTargetReady: true,
+        targetIdentity: "codex:42:500",
         groups,
         profiles,
         defaultProfileId: "default",
         temporaryProfileId: "temporary",
+        temporaryTargetIdentity: "terminal:99:700",
+      })
+    ).toMatchObject({
+      profileId: "codex",
+      source: "exact",
+      reason: "temporary_target_changed",
+    });
+  });
+
+  it("A→B→A 后待确认的临时覆盖不会自行复活", () => {
+    expect(
+      resolveTargetProfile({
+        bundleId: "com.openai.codex",
+        isTargetReady: true,
+        targetIdentity: "codex:42:500",
+        groups,
+        profiles,
+        defaultProfileId: "default",
+        temporaryProfileId: "temporary",
+        temporaryTargetIdentity: "codex:42:500",
+        temporaryNeedsConfirmation: true,
+      })
+    ).toMatchObject({
+      profileId: "codex",
+      source: "exact",
+      reason: "temporary_target_changed",
+    });
+  });
+
+  it("临时覆盖在同一目标上优先于精确匹配", () => {
+    expect(
+      resolveTargetProfile({
+        bundleId: "com.openai.codex",
+        isTargetReady: true,
+        targetIdentity: "codex:42:500",
+        groups,
+        profiles,
+        defaultProfileId: "default",
+        temporaryProfileId: "temporary",
+        temporaryTargetIdentity: "codex:42:500",
+      })
+    ).toMatchObject({ profileId: "temporary", source: "temporary" });
+  });
+
+  it("未识别应用使用 fallback，且无目标与失效目标保持不可用", () => {
+    expect(
+      resolveTargetProfile({
+        bundleId: "com.example.unknown",
+        isTargetReady: true,
+        groups,
+        profiles,
+        defaultProfileId: "default",
+      })
+    ).toMatchObject({
+      profileId: "default",
+      source: "fallback",
+      reason: "fallback_default",
+      isTargetReady: true,
+    });
+
+    expect(
+      resolveTargetProfile({
+        bundleId: null,
+        isTargetReady: false,
+        groups,
+        profiles,
+        defaultProfileId: "default",
+      })
+    ).toMatchObject({
+      source: "fallback",
+      reason: "target_missing",
+      isTargetReady: false,
+    });
+
+    expect(
+      resolveTargetProfile({
+        bundleId: "com.openai.codex",
+        isTargetReady: false,
+        groups,
+        profiles,
+        defaultProfileId: "default",
+      })
+    ).toMatchObject({
+      profileId: "codex",
+      source: "exact",
+      reason: "target_unavailable",
+      isTargetReady: false,
+    });
+  });
+
+  it("临时覆盖 > bundle 精确匹配 > 未识别应用默认方案 > 内建方案", () => {
+    expect(
+      resolveTargetProfile({
+        bundleId: "com.openai.codex",
+        isTargetReady: true,
+        groups,
+        profiles,
+        defaultProfileId: "default",
+        temporaryProfileId: "temporary",
+        targetIdentity: "codex:42:500",
+        temporaryTargetIdentity: "codex:42:500",
       }).profile.id
     ).toBe("temporary");
 
     expect(
       resolveTargetProfile({
         bundleId: "com.openai.codex",
+        isTargetReady: true,
         groups,
         profiles,
         defaultProfileId: "default",
       })
     ).toMatchObject({
-      source: "bundle",
+      source: "exact",
       profile: { id: "codex" },
       promptGroup: { id: "coding" },
     });
 
     const unknown = resolveTargetProfile({
       bundleId: "com.example.unknown",
+      isTargetReady: true,
       groups,
       profiles,
       defaultProfileId: "default",
     });
-    expect(unknown.source).toBe("default");
+    expect(unknown.source).toBe("fallback");
     expect(unknown.profile.id).toBe("default");
     expect(unknown.profile.enterPolicy).toBe("never");
     expect(unknown.profile.privacyPolicy).toBe("requireRedaction");
@@ -99,6 +229,7 @@ describe("Target Profile resolver", () => {
     expect(
       resolveTargetProfile({
         bundleId: null,
+        isTargetReady: false,
         groups: [],
         profiles: [],
         defaultProfileId: "missing",
@@ -115,11 +246,12 @@ describe("Target Profile resolver", () => {
     for (const bundleId of TERMINAL_BUNDLE_IDS) {
       const resolved = resolveTargetProfile({
         bundleId,
+        isTargetReady: true,
         groups: createDefaultPromptGroups(),
         profiles: defaults,
         defaultProfileId: SAFETY_PROFILE_ID,
       });
-      expect(resolved.source).toBe("bundle");
+      expect(resolved.source).toBe("exact");
       expect(resolved.profile.enterPolicy).toBe("never");
     }
   });
@@ -131,12 +263,14 @@ describe("Target Profile resolver", () => {
     ];
     const resolved = resolveTargetProfile({
       bundleId: "com.example.same",
+      isTargetReady: true,
       groups,
       profiles: duplicate,
       defaultProfileId: "first",
     });
 
     expect(resolved.profile.id).toBe("first");
+    expect(resolved.source).toBe("conflict");
     expect(resolved.duplicateBundleProfileIds).toEqual(["first", "second"]);
     expect(findDuplicateBundleAssignments(duplicate)).toEqual([
       {
@@ -144,6 +278,84 @@ describe("Target Profile resolver", () => {
         profileIds: ["first", "second"],
         profileNames: ["first", "second"],
       },
+    ]);
+  });
+
+  it("新增重复 bundle 被阻止，其他合法绑定仍可保存", () => {
+    const current = [
+      profile("first", ["com.example.owned"]),
+      profile("second", []),
+    ];
+
+    const result = updateTargetProfileBundleIds(
+      current,
+      "second",
+      ["com.example.owned", "com.example.fresh"]
+    );
+
+    expect(result.blockedBundleIds).toEqual(["com.example.owned"]);
+    expect(result.profiles).toEqual([
+      current[0],
+      profile("second", ["com.example.fresh"]),
+    ]);
+  });
+
+  it("移除当前方案已有应用不会触碰其他方案", () => {
+    const current = [
+      profile("first", ["com.example.keep"]),
+      profile("second", ["com.example.remove", "com.example.stay"]),
+    ];
+
+    const result = updateTargetProfileBundleIds(
+      current,
+      "second",
+      ["com.example.stay"]
+    );
+
+    expect(result.blockedBundleIds).toEqual([]);
+    expect(result.profiles).toEqual([
+      current[0],
+      profile("second", ["com.example.stay"]),
+    ]);
+  });
+
+  it("只有显式以后使用才把应用唯一重绑到所选方案", () => {
+    const current = [
+      profile("terminal", ["com.ghostty.Ghostty", "com.apple.Terminal"]),
+      profile("writing", ["com.apple.TextEdit"]),
+    ];
+
+    const assigned = assignTargetProfileBundle(
+      current,
+      "com.ghostty.Ghostty",
+      "writing"
+    );
+
+    expect(assigned).toEqual([
+      profile("terminal", ["com.apple.Terminal"]),
+      profile("writing", ["com.apple.TextEdit", "com.ghostty.Ghostty"]),
+    ]);
+    expect(current[0].bundleIds).toEqual([
+      "com.ghostty.Ghostty",
+      "com.apple.Terminal",
+    ]);
+  });
+
+  it("历史重复 bundle 只在用户选择保留方案后解除冲突", () => {
+    const duplicate = [
+      profile("first", ["com.example.same", "com.example.first"]),
+      profile("second", ["com.example.same", "com.example.second"]),
+    ];
+
+    expect(
+      keepTargetProfileBundleAssignment(
+        duplicate,
+        "com.example.same",
+        "second"
+      )
+    ).toEqual([
+      profile("first", ["com.example.first"]),
+      duplicate[1],
     ]);
   });
 
@@ -174,6 +386,35 @@ describe("Prompt/Profile reference repair", () => {
     profile("other", ["com.example.other"], { promptGroupId: "team" }),
   ];
 
+  it("新安装使用稳妥投递，旧安全默认名称不会被静默改写", () => {
+    expect(createDefaultTargetProfiles(false)[0]).toMatchObject({
+      id: SAFETY_PROFILE_ID,
+      name: "稳妥投递",
+    });
+
+    const legacy = profile(SAFETY_PROFILE_ID, [], { name: "安全默认" });
+    const repaired = repairTargetProfileConfiguration({
+      groups,
+      snippets,
+      profiles: [legacy],
+      defaultProfileId: SAFETY_PROFILE_ID,
+    });
+    expect(repaired.profiles[0].name).toBe("安全默认");
+  });
+
+  it("空配置始终补回未识别应用的默认方案", () => {
+    const repaired = repairTargetProfileConfiguration({
+      groups,
+      snippets,
+      profiles: [],
+      defaultProfileId: "",
+    });
+
+    expect(repaired.profiles).toHaveLength(1);
+    expect(repaired.profiles[0].id).toBe(SAFETY_PROFILE_ID);
+    expect(repaired.defaultProfileId).toBe(SAFETY_PROFILE_ID);
+  });
+
   it("删除被引用分组后 snippet/Profile 全部回落通用分组", () => {
     const result = deletePromptGroup(
       { groups, snippets, profiles, defaultProfileId: "default" },
@@ -189,15 +430,16 @@ describe("Prompt/Profile reference repair", () => {
     expect(result.profiles.every((item) => item.promptGroupId === GENERAL_PROMPT_GROUP_ID)).toBe(true);
   });
 
-  it("删除默认 Profile 后 defaultProfileId 指向剩余项；删空则回到安全虚拟 Profile", () => {
-    const first = deleteTargetProfile(
+  it("未识别应用的默认方案不能删除，删除其他方案不会影响默认项", () => {
+    const protectedResult = deleteTargetProfile(
       { groups, snippets, profiles, defaultProfileId: "default" },
       "default"
     );
-    expect(first.defaultProfileId).toBe("other");
+    expect(protectedResult.profiles).toEqual(profiles);
+    expect(protectedResult.defaultProfileId).toBe("default");
 
-    const empty = deleteTargetProfile(first, "other");
-    expect(empty.profiles).toEqual([]);
-    expect(empty.defaultProfileId).toBe(SAFETY_PROFILE_ID);
+    const withoutOther = deleteTargetProfile(protectedResult, "other");
+    expect(withoutOther.profiles).toEqual([profiles[0]]);
+    expect(withoutOther.defaultProfileId).toBe("default");
   });
 });

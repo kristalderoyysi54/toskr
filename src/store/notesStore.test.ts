@@ -49,6 +49,236 @@ function reset() {
 describe("notesStore 基础", () => {
   beforeEach(reset);
 
+  it("v12 迁移到 v14 时正文不变，并补齐本地成效设置", () => {
+    expect(STORE_VERSION).toBe(14);
+    const decoded = decodePersistedState(JSON.stringify({
+      version: 12,
+      state: {
+        sections: [{ id: INBOX_ID, name: "收件箱" }],
+        notes: [{ id: "legacy", text: "旧结果", sectionId: INBOX_ID, done: false, createdAt: 1 }],
+      },
+    }));
+    expect(decoded.notes[0]).toMatchObject({ id: "legacy", text: "旧结果" });
+    expect(decoded.notes[0].provenance).toBeUndefined();
+    expect(decoded.settings).toMatchObject({
+      outcomeMetricsEnabled: true,
+      outcomeRetentionDays: 30,
+      outcomeMetricsEpoch: 0,
+      outcomeBaselines: [],
+      outcomeQualityFeedback: [],
+      outcomeProblemSessions: [],
+    });
+  });
+
+  it("v13 上手状态迁入可恢复演练，已完成旧用户不会被强制重做", () => {
+    const decodeOnboarding = (onboarding: object) =>
+      decodePersistedState(JSON.stringify({
+        version: 13,
+        state: {
+          sections: [{ id: INBOX_ID, name: "收件箱" }],
+          notes: [],
+          tasks: [],
+          taskSections: [],
+          settings: { ...defaultSettings(), onboarding },
+        },
+      })).settings.onboarding;
+
+    expect(decodeOnboarding({ captured: true, sent: true, done: true }))
+      .toMatchObject({
+        onboardingVersion: 2,
+        rehearsalStep: "complete",
+        rehearsalActive: false,
+        done: true,
+      });
+    expect(decodeOnboarding({ captured: true, sent: false, done: false }))
+      .toMatchObject({
+        onboardingVersion: 2,
+        rehearsalStep: "permissions",
+        rehearsalActive: true,
+        done: false,
+      });
+  });
+
+  it("v14 拒绝未来演练版本与损坏步骤", () => {
+    const decodeOnboarding = (onboarding: object) => () =>
+      decodePersistedState(JSON.stringify({
+        version: 14,
+        state: {
+          settings: { ...defaultSettings(), onboarding },
+        },
+      }));
+
+    expect(decodeOnboarding({
+      ...defaultSettings().onboarding,
+      onboardingVersion: 3,
+    })).toThrow("settings.onboarding 字段无效");
+    expect(decodeOnboarding({
+      ...defaultSettings().onboarding,
+      rehearsalStep: "unknown",
+    })).toThrow("settings.onboarding 字段无效");
+  });
+
+  it("v13 拒绝损坏的成效设置，并保留合法本机元数据", () => {
+    const state = {
+      settings: {
+        ...defaultSettings(),
+        outcomeRetentionDays: 90,
+        outcomeBaselines: [{ scope: "profile", scopeId: "safe", minutes: 20 }],
+        outcomeQualityFeedback: [{
+          deliveryId: "delivery-1",
+          resultNoteId: "result-1",
+          quality: "directUse",
+          updatedAtMs: 10,
+        }],
+        outcomeProblemSessions: [{
+          id: "session-1",
+          startedAtMs: 1,
+          deliveryId: "delivery-1",
+          resultNoteId: "result-1",
+          linkedAtMs: 2,
+          solvedAtMs: 3,
+          cancelledAtMs: null,
+        }],
+      },
+    };
+    const decoded = decodePersistedState(JSON.stringify({ version: 13, state }));
+    expect(decoded.settings.outcomeRetentionDays).toBe(90);
+    expect(decoded.settings.outcomeBaselines).toHaveLength(1);
+    expect(decoded.settings.outcomeQualityFeedback).toHaveLength(1);
+    expect(decoded.settings.outcomeProblemSessions).toHaveLength(1);
+
+    const invalid = structuredClone(state);
+    invalid.settings.outcomeProblemSessions[0].solvedAtMs = 0;
+    expect(() => decodePersistedState(JSON.stringify({ version: 13, state: invalid })))
+      .toThrow("settings.outcomeProblemSessions 字段无效");
+  });
+
+  it("v13 成效数组兼容缺失新字段、未知字段与重复项，并稳定保留最后值", () => {
+    const decoded = decodePersistedState(JSON.stringify({
+      version: 13,
+      state: {
+        settings: {
+          ...defaultSettings(),
+          outcomeBaselines: [
+            { scope: "profile", scopeId: "safe", minutes: 10 },
+            { scope: "profile", scopeId: "safe", minutes: 15, futureField: "kept" },
+          ],
+          outcomeQualityFeedback: [
+            { deliveryId: "d", resultNoteId: "r", quality: "directUse", updatedAtMs: 1 },
+            { deliveryId: "d", resultNoteId: "r", quality: "minorEdit", updatedAtMs: 2 },
+          ],
+          outcomeProblemSessions: [
+            {
+              id: "s", startedAtMs: 1, deliveryId: "d", linkedAtMs: 2,
+              solvedAtMs: null, cancelledAtMs: null,
+            },
+            {
+              id: "s", startedAtMs: 1, deliveryId: "d", resultNoteId: "r",
+              linkedAtMs: 2, solvedAtMs: 3, cancelledAtMs: null,
+            },
+          ],
+        },
+      },
+    }));
+
+    expect(decoded.settings.outcomeBaselines).toEqual([expect.objectContaining({
+      scopeId: "safe",
+      minutes: 15,
+      futureField: "kept",
+    })]);
+    expect(decoded.settings.outcomeQualityFeedback).toMatchObject([{ quality: "minorEdit" }]);
+    expect(decoded.settings.outcomeProblemSessions).toMatchObject([{
+      id: "s",
+      resultNoteId: "r",
+      solvedAtMs: 3,
+    }]);
+  });
+
+  it("清除成效用户数据只清质量与计时，不改卡片、任务或人工基线", () => {
+    const noteId = useNotesStore.getState().addNote("业务卡片").id!;
+    const taskId = useNotesStore.getState().addTask("业务任务").id!;
+    useNotesStore.getState().setSettings({
+      outcomeBaselines: [{ scope: "profile", scopeId: "safe", minutes: 20 }],
+      outcomeQualityFeedback: [{
+        deliveryId: "d",
+        resultNoteId: "r",
+        quality: "directUse",
+        updatedAtMs: 1,
+      }],
+      outcomeProblemSessions: [{
+        id: "s",
+        startedAtMs: 1,
+        deliveryId: null,
+        resultNoteId: null,
+        linkedAtMs: null,
+        solvedAtMs: null,
+        cancelledAtMs: null,
+      }],
+    });
+
+    useNotesStore.getState().setSettings({
+      outcomeMetricsEpoch: 1,
+      outcomeQualityFeedback: [],
+      outcomeProblemSessions: [],
+    });
+
+    const state = useNotesStore.getState();
+    expect(state.notes.find((note) => note.id === noteId)?.text).toBe("业务卡片");
+    expect(state.tasks.find((task) => task.id === taskId)?.text).toBe("业务任务");
+    expect(state.settings.outcomeBaselines).toHaveLength(1);
+    expect(state.settings.outcomeMetricsEpoch).toBe(1);
+    expect(state.settings.outcomeQualityFeedback).toEqual([]);
+    expect(state.settings.outcomeProblemSessions).toEqual([]);
+  });
+
+  it("link、relink、unlink 只更新单一 provenance，不删除 Note", () => {
+    const added = useNotesStore.getState().addNote("结果");
+    const first = {
+      kind: "deliveryResult" as const,
+      deliveryId: "delivery-a",
+      capturedAtMs: 10,
+      sourceBundle: "com.a",
+      sourceItemIds: ["source-a"],
+    };
+    const second = { ...first, deliveryId: "delivery-b" };
+    expect(useNotesStore.getState().setNoteProvenance(added.id!, first)).toBe(true);
+    expect(useNotesStore.getState().notes[0].provenance?.deliveryId).toBe("delivery-a");
+    expect(useNotesStore.getState().setNoteProvenance(added.id!, second)).toBe(true);
+    expect(useNotesStore.getState().notes[0].provenance?.deliveryId).toBe("delivery-b");
+    expect(useNotesStore.getState().setNoteProvenance(added.id!, undefined)).toBe(true);
+    expect(useNotesStore.getState().notes[0]).toMatchObject({ id: added.id, text: "结果" });
+    expect(useNotesStore.getState().notes[0].provenance).toBeUndefined();
+  });
+
+  it("v12 provenance 去重来源 ID、容忍 Note 未知字段并拒绝缺失必填项", () => {
+    const base = {
+      sections: [{ id: INBOX_ID, name: "收件箱" }],
+      notes: [{
+        id: "result",
+        text: "结果",
+        sectionId: INBOX_ID,
+        done: false,
+        createdAt: 1,
+        futureField: "kept",
+        provenance: {
+          kind: "deliveryResult",
+          deliveryId: "delivery-1",
+          capturedAtMs: 1,
+          sourceBundle: "com.openai.chat",
+          sourceItemIds: ["source-1", "source-1"],
+        },
+      }],
+    };
+    const decoded = decodePersistedState(JSON.stringify({ version: 12, state: base }));
+    expect(decoded.notes[0].provenance?.sourceItemIds).toEqual(["source-1"]);
+    expect(decoded.notes[0]).toHaveProperty("futureField", "kept");
+
+    const invalid = structuredClone(base);
+    delete (invalid.notes[0].provenance as Partial<typeof base.notes[0]["provenance"]>).sourceBundle;
+    expect(() => decodePersistedState(JSON.stringify({ version: 12, state: invalid })))
+      .toThrow("note.provenance 字段无效");
+  });
+
   it("由 Native status bootstrap 显式水合，模块加载不自动读取待续目标", () => {
     expect(useNotesStore.persist.getOptions().skipHydration).toBe(true);
   });
@@ -267,7 +497,84 @@ describe("notesStore 基础", () => {
   });
 });
 
-describe("store v9 migration and directory rehydrate", () => {
+describe("store v13 migration and directory rehydrate", () => {
+  it("v10 旧 key 只保留为 Keychain 迁移恢复副本，默认 v11 不再创建该字段", () => {
+    const decoded = decodePersistedState(JSON.stringify({
+      version: 10,
+      state: {
+        sections: [],
+        notes: [],
+        tasks: [],
+        taskSections: [],
+        settings: { ...defaultSettings(), aiApiKey: "sk-legacy-recovery" },
+      },
+    }));
+
+    expect(defaultSettings()).not.toHaveProperty("aiApiKey");
+    expect(decoded.settings).toHaveProperty("aiApiKey", "sk-legacy-recovery");
+    expect(() => decodePersistedState(JSON.stringify({
+      version: STORE_VERSION,
+      state: {
+        sections: [], notes: [], tasks: [], taskSections: [],
+        settings: { ...defaultSettings(), aiApiKey: 42 },
+      },
+    }))).toThrow("settings.aiApiKey 类型无效");
+  });
+
+  it("v9 向前迁移默认开启 Firewall，且只允许关闭提示级类别", () => {
+    const legacy = { ...defaultSettings() } as Partial<ReturnType<typeof defaultSettings>>;
+    delete legacy.firewallEnabled;
+    delete legacy.firewallDisabledWarnCategories;
+    const decoded = decodePersistedState(JSON.stringify({
+      version: 9,
+      state: {
+        sections: [],
+        notes: [],
+        tasks: [],
+        taskSections: [],
+        settings: legacy,
+      },
+    }));
+
+    expect(decoded.settings).toMatchObject({
+      firewallEnabled: true,
+      firewallDisabledWarnCategories: [],
+    });
+    expect(() => decodePersistedState(JSON.stringify({
+      version: STORE_VERSION,
+      state: {
+        sections: [], notes: [], tasks: [], taskSections: [],
+        settings: {
+          ...defaultSettings(),
+          firewallDisabledWarnCategories: ["apiKey"],
+        },
+      },
+    }))).toThrow("settings.firewallDisabledWarnCategories 含不可关闭类别");
+  });
+  it("同版本旧数据缺少新增框目标时回填默认值，并保留已记录分组", () => {
+    const withoutField = defaultSettings() as Partial<ReturnType<typeof defaultSettings>>;
+    delete withoutField.lastDraftSectionId;
+    const decode = (settings: object) =>
+      decodePersistedState(
+        JSON.stringify({
+          version: STORE_VERSION,
+          state: {
+            sections: [{ id: INBOX_ID, name: "收件箱" }],
+            notes: [],
+            tasks: [],
+            taskSections: [],
+            settings,
+          },
+        })
+      );
+
+    expect(decode(withoutField).settings.lastDraftSectionId).toBeNull();
+    expect(
+      decode({ ...defaultSettings(), lastDraftSectionId: "project" }).settings
+        .lastDraftSectionId
+    ).toBe("project");
+  });
+
   it("v8 模板迁入通用分组且 autoEnter=true 只迁为 confirm", () => {
     const legacySnippets = [
       { id: "one", label: "一", text: "first" },
@@ -567,6 +874,26 @@ describe("导入合并", () => {
     expect(state.sections.map((x) => x.name)).toEqual(["收件箱", "外部组"]);
     expect(state.notes.find((n) => n.id === "new-2")?.sectionId).toBe(INBOX_ID);
     expect(state.notes.find((n) => n.id === localId)?.text).toBe("本地已有");
+  });
+});
+
+describe("图片卡片：文字备注编辑", () => {
+  beforeEach(reset);
+
+  it("保存文字后保持图片类型，并把编辑内容写回列表数据源", () => {
+    const { id } = useNotesStore.getState().addNote("图片 231×242", {
+      kind: "image",
+      imageFile: "shot.png",
+      imageW: 231,
+      imageH: 242,
+    });
+
+    useNotesStore.getState().updateNoteText(id!, "编辑后的图片说明");
+    const note = useNotesStore.getState().notes.find((item) => item.id === id)!;
+
+    expect(note.kind).toBe("image");
+    expect(note.text).toBe("编辑后的图片说明");
+    expect(note.imageFile).toBe("shot.png");
   });
 });
 

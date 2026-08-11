@@ -256,8 +256,11 @@ fn on_trigger(app: &AppHandle, input_generation: u64) {
             tauri::async_runtime::spawn_blocking(move || {
                 match crate::capture::capture_selection(&handle, &front, input_generation) {
                     // 只发事件：入库与去重由前端裁决后回调 show_capture_hud
-                    Some(crate::capture::Captured::Text(text)) => {
-                        let _ = handle.emit_to(
+                    Some(crate::capture::Captured::Text {
+                        text,
+                        clipboard_warning,
+                    }) => {
+                        let emitted = handle.emit_to(
                             "main",
                             TRIGGER_EVENT,
                             TriggerPayload::Captured {
@@ -268,11 +271,29 @@ fn on_trigger(app: &AppHandle, input_generation: u64) {
                                 image_h: None,
                                 app_name: front.name,
                                 bundle_id: front.bundle_id,
+                                clipboard_warning: clipboard_warning.map(str::to_owned),
                             },
                         );
+                        if emitted.is_err() {
+                            if let Some(message) = clipboard_warning {
+                                crate::window::show_hud(
+                                    &handle,
+                                    "warn",
+                                    message.into(),
+                                    false,
+                                    false,
+                                    None,
+                                );
+                            }
+                        }
                     }
-                    Some(crate::capture::Captured::Image { file, w, h }) => {
-                        let _ = handle.emit_to(
+                    Some(crate::capture::Captured::Image {
+                        file,
+                        w,
+                        h,
+                        clipboard_warning,
+                    }) => {
+                        let emitted = handle.emit_to(
                             "main",
                             TRIGGER_EVENT,
                             TriggerPayload::Captured {
@@ -283,7 +304,30 @@ fn on_trigger(app: &AppHandle, input_generation: u64) {
                                 image_h: Some(h),
                                 app_name: front.name,
                                 bundle_id: front.bundle_id,
+                                clipboard_warning: clipboard_warning.map(str::to_owned),
                             },
+                        );
+                        if emitted.is_err() {
+                            if let Some(message) = clipboard_warning {
+                                crate::window::show_hud(
+                                    &handle,
+                                    "warn",
+                                    message.into(),
+                                    false,
+                                    false,
+                                    None,
+                                );
+                            }
+                        }
+                    }
+                    Some(crate::capture::Captured::Warning { message }) => {
+                        crate::window::show_hud(
+                            &handle,
+                            "warn",
+                            message.into(),
+                            false,
+                            false,
+                            None,
                         );
                     }
                     None => {

@@ -50,6 +50,7 @@ describe("SendDeliveryResult guard", () => {
 
   it.each([
     "restored",
+    "restoredPartial",
     "skippedUserChanged",
     "nothingToRestore",
     "restoreFailed",

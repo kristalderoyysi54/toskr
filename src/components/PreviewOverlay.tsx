@@ -24,7 +24,11 @@ import { api } from "@/lib/tauri";
 import { currentDataGeneration } from "@/lib/dataGeneration";
 import { cn } from "@/lib/utils";
 import { headerGradient } from "@/components/NoteCard";
-import { noteImages, useNotesStore } from "@/store/notesStore";
+import {
+  CLIPBOARD_ID,
+  noteImages,
+  useNotesStore,
+} from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
 import { useTargetStore } from "@/store/targetStore";
 
@@ -63,6 +67,8 @@ export function PreviewOverlay() {
     (s) => s.status === "ready" && !s.profileOverrideNeedsConfirmation
   );
   const note = useNotesStore((s) => s.notes.find((n) => n.id === previewId));
+  const internalSendAvailable = note?.sectionId === CLIPBOARD_ID;
+  const canSend = targetReady || internalSendAvailable;
   const icon = useAppIcon(note?.sourceBundle);
   const isImage = note?.kind === "image";
   const isLink = note?.kind === "link" && !!note?.url;
@@ -383,12 +389,14 @@ export function PreviewOverlay() {
                     </IconButton>
                     <Button
                       size="xs"
-                      disabled={!targetReady}
+                      disabled={!canSend}
                       aria-label={
                         targetReady
                           ? "发送到当前目标"
+                          : internalSendAvailable
+                            ? "优先添加到当前卡片编辑器"
                           : profileChanged
-                            ? "发送不可用：目标已变化，请确认 Profile"
+                            ? "发送不可用：原临时投递方案已暂停"
                             : "发送不可用：投递目标未就绪"
                       }
                       onClick={() => {
@@ -396,7 +404,8 @@ export function PreviewOverlay() {
                         void sendNotesToChat([note.id]);
                       }}
                     >
-                      <Send className="size-3" /> 发送
+                      <Send className="size-3" />
+                      {internalSendAvailable ? "发送 / 添加" : "发送"}
                     </Button>
                   </>
                 )}

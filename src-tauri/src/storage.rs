@@ -337,6 +337,21 @@ pub fn data_dir(app: &AppHandle) -> PathBuf {
     dir
 }
 
+/** 与数据目录事务共用写闸；活动账本读写期间目录不能被切换。 */
+pub(crate) fn with_active_data_dir<T>(
+    app: &AppHandle,
+    action: impl FnOnce(&Path) -> Result<T, String>,
+) -> Result<T, String> {
+    let storage = app.state::<Storage>();
+    let _write = storage.write_gate.lock().unwrap();
+    let transaction_pending = { storage.runtime.lock().unwrap().pending.is_some() };
+    if transaction_pending || recovery_required(app) {
+        return Err("数据目录事务进行中".into());
+    }
+    let root = data_dir(app);
+    action(&root)
+}
+
 fn recovery_required(app: &AppHandle) -> bool {
     if app
         .state::<Storage>()

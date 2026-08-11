@@ -18,7 +18,8 @@ use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 use crate::data_integrity::{
-    validate_settings_value, validate_settings_value_for_version, MAX_STORE_VERSION,
+    validate_note_provenance, validate_settings_value, validate_settings_value_for_version,
+    MAX_STORE_VERSION,
 };
 use crate::storage::{DATA_FILE, MEDIA_DIR};
 
@@ -1041,6 +1042,12 @@ fn validate_domain_fields(state: &serde_json::Map<String, Value>) -> Result<(), 
             return Err(invalid("note.done 必须是 boolean".into()));
         }
         validate_optional_nonnegative_number(object.get("createdAt"), "note.createdAt")?;
+        if object
+            .get("provenance")
+            .is_some_and(|value| !validate_note_provenance(value))
+        {
+            return Err(invalid("note.provenance 字段无效".into()));
+        }
     }
     for task in state
         .get("tasks")

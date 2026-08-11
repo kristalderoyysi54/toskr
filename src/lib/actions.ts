@@ -1,29 +1,44 @@
-import { emitTo } from "@tauri-apps/api/event";
+import { emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { ask } from "@tauri-apps/plugin-dialog";
 
 import {
-  applyPromptTemplate,
-  buildSendText,
   formatAsNumberedList,
   imageCaption,
-  wrapAsCodeBlock,
 } from "@/lib/format";
 import {
   beginDataGenerationLease,
   currentDataGeneration,
   matchesDataGeneration,
 } from "@/lib/dataGeneration";
-import {
-  api,
-  isSendDeliveryResult,
-  type SendDeliveryResult,
-} from "@/lib/tauri";
+import { api } from "@/lib/tauri";
 import { setPendingUndo, tip } from "@/lib/tip";
 import { currentTargetProfileResolution } from "@/lib/currentTargetProfile";
-import type { TargetProfileResolution } from "@/lib/targetProfiles";
+import { buildDeliveryDraft } from "@/lib/delivery/buildDraft";
 import {
-  doneIdsAfterSend,
+  deliveryDraftPreparationPending,
+  dispatchDeliveryDraft,
+} from "@/lib/delivery/preflight";
+import {
+  deliveryDraftPending,
+  nextDeliveryDraftRevision,
+  warnWithPanel,
+} from "@/lib/delivery/executeDraft";
+import type { DeliveryDraftInput } from "@/lib/delivery/types";
+import {
+  EDITOR_INSERT_OPERATION_TTL_MS,
+  EDITOR_INSERT_REQUEST_TTL_MS,
+  NOTE_EDITOR_INSERT_EVENT,
+  NOTE_EDITOR_INSERT_RESULT_EVENT,
+  type NoteEditorInsertPayload,
+  type NoteEditorInsertResultPayload,
+} from "@/lib/previewPayload";
+import {
+  releaseEditorOperationMedia,
+  releaseEditorSessionMedia,
+  retainEditorOperationMedia,
+} from "@/lib/editorSessionMedia";
+import {
+  CLIPBOARD_ID,
   noteImages,
   orderedCheckedNotes,
   useNotesStore,
@@ -31,14 +46,14 @@ import {
 } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
 import { isDataOperationLocked } from "@/store/dataOperationStore";
+import { useDeliveryStore } from "@/store/deliveryStore";
+import { useTargetStore } from "@/store/targetStore";
 import {
-  clearTargetProfileOverride,
-  currentTargetBlockMessage,
-  refreshTarget,
-  sameTargetIdentity,
-  targetSendDisabled,
-  useTargetStore,
-} from "@/store/targetStore";
+  isSafeRehearsalText,
+  secureRehearsalDraft,
+} from "@/lib/onboarding";
+
+export { warnWithPanel } from "@/lib/delivery/executeDraft";
 
 /** 可撤销的操作确认（HUD 气泡悬停出「撤销」；撤销 = 弹出栈顶快照恢复）。 */
 export function undoableTip(message: string) {
@@ -49,27 +64,10 @@ export function undoableTip(message: string) {
   tip("ok", message, true);
 }
 
-/**
- * 发送/保存被前置闸门拦截时的可见反馈：请求可能来自详情窗，而主面板正处于
- * 贴边隐藏或关闭状态——HUD 落在不可见窗口上等于毫无反馈。先把面板带回可见
- * 再警告，并落一条无正文的诊断脚注供事后排查。
- */
-export function warnWithPanel(message: string, diagCode?: string) {
-  useUIStore.getState().setOpen(true);
-  try {
-    void Promise.resolve(api.showPanel()).catch(() => {});
-    void Promise.resolve(
-      api.diagNote(`前端阻断: ${diagCode ?? message}`)
-    ).catch(() => {});
-  } catch {
-    /* Tauri 环境外 */
-  }
-  tip("warn", message);
-}
-
 /** 文本详情窗的内容载荷（主面板 → textpreview 窗口）。 */
 export type NotePreviewPayload = {
   dataGeneration: number;
+  sessionId: string;
   id: string;
   text: string;
   kind: string;
@@ -87,20 +85,83 @@ export type NotePreviewPayload = {
 /** 详情窗最近展示的卡 id（Space 开合判定用；窗口被 Esc/点 X 关掉也无碍——
  *  toggle 前会实测窗口可见性）。 */
 let lastDetailId: string | null = null;
+let lastDetailSessionId: string | null = null;
 let deliverySequence = 0;
-let deliveryPending = false;
+let editorInsertPending = false;
+let editorInsertRetry:
+  | {
+      fingerprint: string;
+      operationKey: string;
+      retryExpiresAt: number;
+    }
+  | null = null;
 
-function sameProfilePolicy(
-  left: TargetProfileResolution,
-  right: TargetProfileResolution
-): boolean {
-  return left.source === right.source &&
-    left.promptGroup.id === right.promptGroup.id &&
-    left.profile.id === right.profile.id &&
-    left.profile.defaultFormat === right.profile.defaultFormat &&
-    left.profile.enterPolicy === right.profile.enterPolicy &&
-    left.profile.privacyPolicy === right.profile.privacyPolicy &&
-    left.profile.keepPanel === right.profile.keepPanel;
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
+async function emitEditorInsert(
+  createPayload: () => NoteEditorInsertPayload
+): Promise<{
+  payload: NoteEditorInsertPayload;
+  result: NoteEditorInsertResultPayload;
+}> {
+  let stop: (() => void) | undefined;
+  let payload: NoteEditorInsertPayload | null = null;
+  let resolveAck!: (result: NoteEditorInsertResultPayload) => void;
+  const ack = new Promise<NoteEditorInsertResultPayload>((resolve) => {
+    resolveAck = resolve;
+  });
+  const registration = listen<NoteEditorInsertResultPayload>(
+    NOTE_EDITOR_INSERT_RESULT_EVENT,
+    (event) => {
+      if (payload && event.payload.requestId === payload.requestId) {
+        resolveAck(event.payload);
+      }
+    }
+  );
+  try {
+    stop = await withTimeout(
+      registration,
+      1500,
+      "卡片编辑器回执监听未就绪"
+    );
+    // listener 就绪后无 await：重读来源、组装 payload、dispatch 连成同一同步段。
+    payload = createPayload();
+    const dispatchFailure = emitTo(
+      "textpreview",
+      NOTE_EDITOR_INSERT_EVENT,
+      payload
+    ).then(
+      () => new Promise<never>(() => {}),
+      (error) => Promise.reject(error)
+    );
+    const result = await withTimeout(
+      Promise.race([ack, dispatchFailure]),
+      1500,
+      "卡片编辑器未确认接收"
+    );
+    return { payload, result };
+  } finally {
+    if (stop) stop();
+    else void registration.then((lateStop) => lateStop()).catch(() => {});
+  }
 }
 
 function nextDeliveryId() {
@@ -108,115 +169,110 @@ function nextDeliveryId() {
   return `delivery-${Date.now().toString(36)}-${deliverySequence.toString(36)}`;
 }
 
-async function restorePanelAfterDelivery(keepPanel: boolean) {
-  useUIStore.getState().setOpen(true);
-  if (!keepPanel) {
-    try {
-      await api.showPanel();
-    } catch (error) {
-      tip("warn", `发送已中止，但面板恢复失败：${error}`);
-    }
-  }
+type NoteDeliveryOptions = {
+  asCode?: boolean;
+  format?: "plain" | "code";
+  promptSnippetId?: string;
+  forcePreflight?: boolean;
+  /** 仅内部上手演练使用；不能由普通发送菜单构造。 */
+  safeRehearsal?: boolean;
+};
+
+function preflightBlocksNewIntent(): boolean {
+  const preflight = useDeliveryStore.getState();
+  if (!preflight.open) return false;
+  warnWithPanel(
+    preflight.busy ? "已有发送正在进行，请稍候" : "请先完成或关闭当前投递预检",
+    preflight.busy ? "delivery-pending" : "preflight-open"
+  );
+  return true;
 }
 
-/** 所有笔记/任务/单条/批量/快捷发送共用的唯一前端投递入口。 */
-async function deliver(
+function draftInput(
+  sourceItemIds: string[],
+  sourceKind: DeliveryDraftInput["sourceKind"],
+  prefix?: string,
+  opts?: NoteDeliveryOptions
+): DeliveryDraftInput {
+  return {
+    id: nextDeliveryId(),
+    revision: nextDeliveryDraftRevision(),
+    createdAtMs: Date.now(),
+    sourceKind,
+    sourceItemIds,
+    format: opts?.format ?? (opts?.asCode ? "code" : undefined),
+    promptSnippetId: opts?.promptSnippetId ?? null,
+    promptTemplate: prefix,
+  };
+}
+
+function currentDraftState(dataGeneration: number) {
+  const state = useNotesStore.getState();
+  return {
+    notes: state.notes,
+    tasks: state.tasks,
+    promptSnippets: state.settings.promptSnippets,
+    checkedItemIds: state.checkedIds,
+    targetSnapshot: useTargetStore.getState().snapshot,
+    profileResolution: currentTargetProfileResolution(),
+    panelPinned: useUIStore.getState().pinned,
+    dataGeneration,
+    firewallEnabled: state.settings.firewallEnabled,
+    firewallDisabledWarnCategories:
+      state.settings.firewallDisabledWarnCategories,
+  };
+}
+
+function buildNoteDraft(
+  ids: string[],
+  dataGeneration: number,
+  prefix?: string,
+  opts?: NoteDeliveryOptions
+) {
+  const draft = buildDeliveryDraft(
+    draftInput(ids, ids.length === 1 ? "note" : "note-batch", prefix, opts),
+    currentDraftState(dataGeneration)
+  );
+  return opts?.safeRehearsal ? secureRehearsalDraft(draft) : draft;
+}
+
+function editorInsertFingerprint(
+  targetId: string,
+  targetSessionId: string,
+  dataGeneration: number,
+  sourceIds: string[],
   text: string,
-  imageFiles: string[],
-  profileResolution: TargetProfileResolution
-): Promise<SendDeliveryResult | null> {
-  if (deliveryPending) {
-    warnWithPanel("已有发送正在进行，请稍候", "delivery-pending");
-    return null;
+  images: string[]
+) {
+  const input = JSON.stringify({
+    targetId,
+    targetSessionId,
+    dataGeneration,
+    sourceIds,
+    text,
+    images,
+  });
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < input.length; index += 1) {
+    hash = Math.imul(hash ^ input.charCodeAt(index), 0x01000193);
   }
-  if (isDataOperationLocked()) {
-    warnWithPanel("数据只读期间不能发送", "data-locked");
-    return null;
+  return (hash >>> 0).toString(36);
+}
+
+function editorInsertOperation(fingerprint: string) {
+  const now = Date.now();
+  if (
+    editorInsertRetry?.fingerprint === fingerprint &&
+    editorInsertRetry.retryExpiresAt > now
+  ) {
+    return editorInsertRetry;
   }
-  if (useTargetStore.getState().profileOverrideNeedsConfirmation) {
-    warnWithPanel("目标已变化，请在面板确认 Profile 后重试", "override-needs-confirmation");
-    return null;
-  }
-  if (targetSendDisabled()) {
-    warnWithPanel(currentTargetBlockMessage(), "target-not-ready");
-    return null;
-  }
-  const visibleTarget = useTargetStore.getState().snapshot;
-  const lease = beginDataGenerationLease();
-  deliveryPending = true;
-  const keepPanel =
-    useUIStore.getState().pinned || profileResolution.profile.keepPanel;
-  try {
-    let pressEnter = false;
-    if (profileResolution.profile.enterPolicy === "confirm") {
-      const confirmed = await ask(
-        "当前 Profile 要求发送前确认：粘贴后立即按回车吗？",
-        { title: "确认自动回车", kind: "warning" }
-      );
-      if (!confirmed) {
-        tip("info", "已取消发送，内容和选择保持不变");
-        return null;
-      }
-      pressEnter = true;
-    } else {
-      pressEnter = profileResolution.profile.enterPolicy === "allow";
-    }
-    // UI ready 只允许进入准备阶段；发送紧前仍刷新 token，随后由 Native 在每个
-    // paste/Enter gate 再验证。事件抢占本次刷新时 fail-closed，不借用新目标续发。
-    const target = await refreshTarget();
-    if (!target?.ready || targetSendDisabled()) {
-      const message = target
-        ? currentTargetBlockMessage()
-        : useTargetStore.getState().status === "ready"
-          ? "投递目标刚刚发生变化，请重试发送"
-          : currentTargetBlockMessage();
-      warnWithPanel(message, "target-refresh-blocked");
-      return null;
-    }
-    if (!sameTargetIdentity(visibleTarget, target)) {
-      warnWithPanel("投递目标已变化，请确认后重试发送", "target-identity-changed");
-      return null;
-    }
-    // 确认框/刷新均会让出事件循环。期间即使 A→B→A 回到同一进程，临时
-    // Profile 的确认闸仍必须保持；Settings 改过策略也不能沿用点击时的旧 Enter。
-    if (useTargetStore.getState().profileOverrideNeedsConfirmation) {
-      warnWithPanel("目标已变化，请在面板确认 Profile 后重试", "override-needs-confirmation");
-      return null;
-    }
-    if (!sameProfilePolicy(profileResolution, currentTargetProfileResolution())) {
-      warnWithPanel("Profile 设置已变化，请确认后重试发送", "profile-policy-changed");
-      return null;
-    }
-    const deliveryId = nextDeliveryId();
-    if (!keepPanel) useUIStore.getState().setOpen(false);
-    const result = await api.sendDelivery({
-      targetToken: target.token,
-      text,
-      imageFiles,
-      pressEnter,
-      keepPanel,
-      deliveryId,
-    });
-    if (!isSendDeliveryResult(result) || result.deliveryId !== deliveryId) {
-      throw new Error("原生发送回执无效");
-    }
-    if (
-      result.status === "sent" &&
-      profileResolution.source === "temporary" &&
-      useTargetStore.getState().profileOverrideId === profileResolution.profile.id
-    ) {
-      clearTargetProfileOverride();
-    }
-    if (result.status !== "sent") await restorePanelAfterDelivery(keepPanel);
-    return result;
-  } catch (error) {
-    await restorePanelAfterDelivery(keepPanel);
-    tip("warn", `发送失败：${error}`);
-    return null;
-  } finally {
-    deliveryPending = false;
-    lease.release();
-  }
+  editorInsertRetry = {
+    fingerprint,
+    operationKey: `editor-insert-${crypto.randomUUID()}`,
+    retryExpiresAt: now + EDITOR_INSERT_OPERATION_TTL_MS,
+  };
+  return editorInsertRetry;
 }
 
 /**
@@ -227,6 +283,9 @@ export async function toggleNoteDetail(id: string) {
   try {
     const win = await WebviewWindow.getByLabel("textpreview");
     if (win && lastDetailId === id && (await win.isVisible())) {
+      if (lastDetailSessionId) {
+        releaseEditorSessionMedia(lastDetailSessionId);
+      }
       void win.hide();
       return;
     }
@@ -237,20 +296,34 @@ export async function toggleNoteDetail(id: string) {
 }
 
 /**
- * 打开卡片明细：文字类（文本/代码/链接编辑）→ 桌面居中的文本详情窗
- * （窄面板放不下长文）；图片卡仍走面板内预览层（形变开合 + Quick Look）。
+ * 打开卡片明细：文字类（文本/代码/链接编辑）→ 桌面居中的文本详情窗；
+ * 图片编辑直接进入原尺寸预览窗的备注编辑态。
  */
 export function openNoteDetail(id: string, edit = false) {
   const note = useNotesStore.getState().notes.find((n) => n.id === id);
   if (!note) return;
   if (note.kind === "image") {
+    if (edit && note.imageFile) {
+      void api.quickLook(noteImages(note), 0, {
+        id: note.id,
+        text: imageCaption(note),
+        dataGeneration: currentDataGeneration(),
+        edit: true,
+      });
+      return;
+    }
     useUIStore.getState().openPreview(id, edit);
     return;
   }
+  if (lastDetailSessionId) {
+    releaseEditorSessionMedia(lastDetailSessionId);
+  }
   lastDetailId = note.id;
+  lastDetailSessionId = crypto.randomUUID();
   void api.showTextPreview();
   const payload: NotePreviewPayload = {
     dataGeneration: currentDataGeneration(),
+    sessionId: lastDetailSessionId,
     id: note.id,
     text: note.text,
     kind: note.kind ?? "text",
@@ -325,24 +398,27 @@ export function convertNoteToTaskWithUndo(noteId: string) {
  * 任务发送到对话：标题 + 备注 + 检查列表拼装成 Markdown 后粘贴给 AI。
  * 任务不因发送标完成（完成与否由用户在任务页管理）。
  */
-export async function sendTaskToChat(taskId: string) {
+export async function sendTaskToChat(
+  taskId: string,
+  opts?: { forcePreflight?: boolean }
+) {
   const task = useNotesStore.getState().tasks.find((t) => t.id === taskId);
   if (!task) return;
-  const parts = [task.text];
-  if (task.note) parts.push(`\n备注：${task.note}`);
-  const list = task.checklist ?? [];
-  if (list.length) {
-    parts.push(
-      "\n" + list.map((c) => `- [${c.done ? "x" : " "}] ${c.text}`).join("\n")
-    );
+  if (
+    preflightBlocksNewIntent() ||
+    deliveryDraftPending() ||
+    deliveryDraftPreparationPending() ||
+    editorInsertPending
+  ) {
+    if (useDeliveryStore.getState().open) return null;
+    warnWithPanel("已有发送正在进行，请稍候", "delivery-pending");
+    return null;
   }
-  const profile = currentTargetProfileResolution();
-  const text = parts.join("\n");
-  return deliver(
-    profile.profile.defaultFormat === "code" ? wrapAsCodeBlock(text) : text,
-    [],
-    profile
+  const draft = buildDeliveryDraft(
+    draftInput([taskId], "task"),
+    currentDraftState(currentDataGeneration())
   );
+  return dispatchDeliveryDraft(draft, { force: opts?.forcePreflight });
 }
 
 /** 合并勾选（带撤销）。 */
@@ -396,6 +472,188 @@ export async function copyNotesAsList(ids: string[]) {
   }
 }
 
+/**
+ * 剪贴板卡发送时，若 Toskr 自己的文本详情窗正可见，则把内容追加到该编辑器。
+ * 一旦确认存在内部目标，失败也不回退到外部投递，避免内容误发。
+ */
+async function insertClipboardNotesIntoOpenEditor(
+  targets: Note[],
+  dataGeneration: number,
+  prefix?: string,
+  opts?: { asCode?: boolean; format?: "plain" | "code" }
+): Promise<"not-target" | "handled"> {
+  if (
+    !lastDetailId ||
+    !lastDetailSessionId ||
+    targets.some((note) => note.sectionId !== CLIPBOARD_ID)
+  ) {
+    return "not-target";
+  }
+
+  let win: Awaited<ReturnType<typeof WebviewWindow.getByLabel>>;
+  try {
+    win = await withTimeout(
+      WebviewWindow.getByLabel("textpreview"),
+      1500,
+      "卡片编辑器窗口探测超时"
+    );
+  } catch (error) {
+    warnWithPanel(
+      `无法确认卡片编辑器状态：${error}`,
+      "note-editor-visibility-unknown"
+    );
+    return "handled";
+  }
+  if (!win) return "not-target";
+  try {
+    if (
+      !(await withTimeout(
+        win.isVisible(),
+        1500,
+        "卡片编辑器可见性探测超时"
+      ))
+    ) {
+      return "not-target";
+    }
+  } catch (error) {
+    warnWithPanel(
+      `无法确认卡片编辑器状态：${error}`,
+      "note-editor-visibility-unknown"
+    );
+    return "handled";
+  }
+
+  const targetId = lastDetailId;
+  const targetSessionId = lastDetailSessionId;
+  const destinationExists = useNotesStore
+    .getState()
+    .notes.some((note) => note.id === targetId);
+  if (!destinationExists) {
+    tip("warn", "卡片编辑器内容已失效，请重新打开目标卡片");
+    return "handled";
+  }
+  if (isDataOperationLocked()) {
+    warnWithPanel("数据只读期间不能修改卡片", "note-editor-insert-locked");
+    return "handled";
+  }
+
+  if (preflightBlocksNewIntent()) return "handled";
+  if (
+    deliveryDraftPending() ||
+    deliveryDraftPreparationPending() ||
+    editorInsertPending
+  ) {
+    warnWithPanel("已有发送正在进行，请稍候", "delivery-pending");
+    return "handled";
+  }
+  editorInsertPending = true;
+
+  try {
+    const sourceIds = new Set(
+      targets.filter((note) => note.id !== targetId).map((note) => note.id)
+    );
+    if (!sourceIds.size) {
+      tip("warn", "不能把卡片内容添加到自身");
+      return "handled";
+    }
+    const format = opts?.format ?? (opts?.asCode ? "code" : "plain");
+    const { payload, result } = await emitEditorInsert(() => {
+      if (
+        lastDetailId !== targetId ||
+        lastDetailSessionId !== targetSessionId ||
+        !matchesDataGeneration(dataGeneration)
+      ) {
+        throw new Error("卡片编辑目标或数据上下文已变化");
+      }
+      const currentNotes = useNotesStore.getState().notes;
+      const sources = currentNotes.filter((note) => sourceIds.has(note.id));
+      if (
+        sources.length !== sourceIds.size ||
+        sources.some((note) => note.sectionId !== CLIPBOARD_ID) ||
+        !currentNotes.some((note) => note.id === targetId)
+      ) {
+        throw new Error("卡片内容已变化，请重新选择后再添加");
+      }
+      const draft = buildNoteDraft(
+        sources.map((note) => note.id),
+        dataGeneration,
+        prefix,
+        { ...opts, format }
+      );
+      const fingerprint = editorInsertFingerprint(
+        targetId,
+        targetSessionId,
+        dataGeneration,
+        sources.map((note) => note.id),
+        draft.finalText,
+        draft.imageFiles
+      );
+      const operation = editorInsertOperation(fingerprint);
+      retainEditorOperationMedia(
+        targetSessionId,
+        operation.operationKey,
+        dataGeneration,
+        draft.imageFiles
+      );
+      return {
+        requestId: crypto.randomUUID(),
+        operationKey: operation.operationKey,
+        expiresAt: Date.now() + EDITOR_INSERT_REQUEST_TTL_MS,
+        targetId,
+        targetSessionId,
+        text: draft.finalText,
+        images: draft.imageFiles,
+        dataGeneration,
+      };
+    });
+    if (
+      result.status !== "applied" ||
+      result.targetId !== targetId ||
+      result.targetSessionId !== targetSessionId ||
+      result.dataGeneration !== dataGeneration
+    ) {
+      if (result.status === "rejected") {
+        releaseEditorOperationMedia(targetSessionId, payload.operationKey);
+      }
+      throw new Error(result.reason ?? "卡片编辑器拒绝了内容");
+    }
+    if (
+      lastDetailId !== targetId ||
+      lastDetailSessionId !== targetSessionId ||
+      !matchesDataGeneration(dataGeneration) ||
+      !useNotesStore.getState().notes.some((note) => note.id === targetId) ||
+      !(await withTimeout(
+        win.isVisible(),
+        1500,
+        "卡片编辑器可见性复核超时"
+      ))
+    ) {
+      tip("warn", "卡片编辑目标已变化，内容未确认添加");
+      return "handled";
+    }
+    if (editorInsertRetry?.operationKey === payload.operationKey) {
+      editorInsertRetry = null;
+    }
+    useNotesStore.getState().clearChecked();
+    try {
+      await withTimeout(
+        api.showTextPreview(),
+        1500,
+        "卡片编辑窗口唤起超时"
+      );
+    } catch {
+      tip("warn", "内容已添加，但卡片编辑窗口唤起失败");
+      return "handled";
+    }
+    tip("ok", "已添加到卡片编辑器");
+  } catch (error) {
+    warnWithPanel(`添加到卡片编辑器失败：${error}`, "note-editor-insert-failed");
+  } finally {
+    editorInsertPending = false;
+  }
+  return "handled";
+}
+
 /** 复制勾选项为编号列表。 */
 export function copyCheckedAsList() {
   const state = useNotesStore.getState();
@@ -411,52 +669,127 @@ export function copyCheckedAsList() {
 export async function sendNotesToChat(
   ids: string[],
   prefix?: string,
-  opts?: { asCode?: boolean; format?: "plain" | "code" }
+  opts?: NoteDeliveryOptions
 ) {
-  const notesState = useNotesStore.getState();
-  const dataGeneration = currentDataGeneration();
   const picked = new Set(ids);
-  const targets = notesState.notes.filter((n) => picked.has(n.id));
+  let targets = useNotesStore
+    .getState()
+    .notes.filter((note) => picked.has(note.id));
   if (!targets.length) return;
-
-  // 图片卡片以真正的图片粘贴（写入剪贴板再 ⌘V），文本部分单独拼装，
-  // 否则图片会退化成「图片 1867×391」这样的占位文字。图片卡的真实文字
-  // 备注（详情窗里写的说明，占位符不算）也参与拼装——发送时文字跟着图走
-  const textNotes = targets.filter(
-    (n) => n.kind !== "image" || imageCaption(n).length > 0
-  );
-  const imageFiles = [...new Set(targets.flatMap(noteImages))];
-  const profile = currentTargetProfileResolution();
-  const format = opts?.format ?? (opts?.asCode ? "code" : profile.profile.defaultFormat);
-
-  let body = textNotes.length ? buildSendText(textNotes.map((n) => n.text)) : "";
-  if (body && format === "code") {
-    // 代码块发送：单条用其检测到的语言，多条统一无语言标记
-    body = wrapAsCodeBlock(
-      body,
-      textNotes.length === 1 ? textNotes[0].codeLang : undefined
-    );
+  if (
+    preflightBlocksNewIntent() ||
+    deliveryDraftPending() ||
+    deliveryDraftPreparationPending() ||
+    editorInsertPending
+  ) {
+    if (useDeliveryStore.getState().open) return null;
+    warnWithPanel("已有发送正在进行，请稍候", "delivery-pending");
+    return null;
   }
-  const text = prefix ? applyPromptTemplate(prefix, body) : body;
-  const result = await deliver(text, imageFiles, profile);
-  if (result?.status !== "sent") return result;
-  if (!matchesDataGeneration(dataGeneration)) return result;
+  if (isDataOperationLocked()) {
+    warnWithPanel("数据只读期间不能发送", "data-locked");
+    return null;
+  }
+  const lease = beginDataGenerationLease();
+  const dataGeneration = lease.generation;
+  try {
+    const requiresPreflight =
+      opts?.forcePreflight ||
+      opts?.safeRehearsal ||
+      useDeliveryStore.getState().preflightMode === "always";
+    if (
+      !requiresPreflight &&
+      (await insertClipboardNotesIntoOpenEditor(
+        targets,
+        dataGeneration,
+        prefix,
+        opts
+      )) === "handled"
+    ) {
+      return null;
+    }
+    if (
+      preflightBlocksNewIntent() ||
+      deliveryDraftPending() ||
+      deliveryDraftPreparationPending() ||
+      editorInsertPending
+    ) {
+      if (useDeliveryStore.getState().open) return null;
+      warnWithPanel("已有发送正在进行，请稍候", "delivery-pending");
+      return null;
+    }
+    if (
+      !matchesDataGeneration(dataGeneration) ||
+      isDataOperationLocked()
+    ) {
+      warnWithPanel(
+        "发送已取消：数据上下文已变化，请重新选择内容",
+        "send-generation-changed"
+      );
+      return null;
+    }
+    const latestTargets = useNotesStore
+      .getState()
+      .notes.filter((note) => picked.has(note.id));
+    if (latestTargets.length !== targets.length) {
+      warnWithPanel("发送已取消：所选卡片已变化", "send-notes-changed");
+      return null;
+    }
+    targets = latestTargets;
 
-  // 「常用」卡与「发送后保留」分组内的卡不标完成（长期复用内容）
-  const doneIds = doneIdsAfterSend(
-    useNotesStore.getState(),
-    targets.map((n) => n.id)
-  );
-  if (doneIds.length) useNotesStore.getState().setDone(doneIds, true);
-  useNotesStore.getState().clearChecked();
-  useNotesStore.getState().markOnboarding({ sent: true });
+    const draft = buildNoteDraft(
+      targets.map((note) => note.id),
+      dataGeneration,
+      prefix,
+      opts
+    );
+    return dispatchDeliveryDraft(draft, {
+      force: opts?.forcePreflight || opts?.safeRehearsal,
+    });
+  } finally {
+    lease.release();
+  }
+}
+
+/** 受控上手演练唯一入口：真实 Firewall/Preflight/Native 链路，强制不回车。 */
+export async function openSafeRehearsalPreflight(noteId: string) {
+  const state = useNotesStore.getState();
+  const onboarding = state.settings.onboarding;
+  const note = state.notes.find((item) => item.id === noteId);
+  if (
+    !onboarding.rehearsalActive ||
+    onboarding.rehearsalNoteId !== noteId ||
+    !["firewall", "delivery"].includes(onboarding.rehearsalStep) ||
+    !note ||
+    !isSafeRehearsalText(note.text)
+  ) {
+    warnWithPanel("演练示例已变化，请从捕获步骤重新开始", "rehearsal-source-stale");
+    return null;
+  }
+  if (useTargetStore.getState().status !== "ready") {
+    warnWithPanel("请先重新识别并确认安全目标", "rehearsal-target-not-ready");
+    return null;
+  }
+  const result = await sendNotesToChat([noteId], undefined, {
+    forcePreflight: true,
+    safeRehearsal: true,
+  });
+  const delivery = useDeliveryStore.getState();
+  if (
+    delivery.open &&
+    delivery.draft?.safeRehearsal &&
+    delivery.draft.sourceItemIds.length === 1 &&
+    delivery.draft.sourceItemIds[0] === noteId
+  ) {
+    useNotesStore.getState().transitionOnboarding({ type: "preflightOpened" });
+  }
   return result;
 }
 
 /** 发送全部勾选项（可带 Prompt 前缀模板）。 */
 export function sendCheckedToChat(
   prefix?: string,
-  opts?: { asCode?: boolean; format?: "plain" | "code" }
+  opts?: NoteDeliveryOptions
 ) {
   const state = useNotesStore.getState();
   return sendNotesToChat(
