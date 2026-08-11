@@ -3,7 +3,7 @@ import type { DeliveryEvent } from "@/lib/deliveryActivityCore";
 
 /** Rust 侧双击触发键事件。 */
 export const TRIGGER_EVENT = "toskr://trigger";
-/** Rust 前台观察器确认下一次投递目标发生语义变化。 */
+/** Rust 前台观察器确认下一次发送目标发生语义变化。 */
 export const TARGET_CHANGED_EVENT = "toskr://target-changed";
 /** Rust → HUD 窗口展示事件。 */
 export const HUD_EVENT = "toskr://hud";
@@ -64,7 +64,11 @@ export interface ClipPayload {
 }
 
 export type TriggerPayload =
-  | { kind: "toggle"; force: boolean }
+  | {
+      kind: "toggle";
+      force: boolean;
+      source: "hotkey" | "doubleTap" | "tray";
+    }
   | {
       kind: "captured";
       /** 内容类型："text" | "image" */
@@ -280,6 +284,7 @@ export type DeliveryReasonCode =
   | "delivery_in_progress"
   | "payload_empty"
   | "image_unreadable"
+  | "image_changed"
   | "paste_failed"
   | "enter_failed"
   | "internal_error";
@@ -296,6 +301,8 @@ export interface SendDeliveryRequest {
   targetToken: string | null;
   text: string;
   imageFiles: string[];
+  /** 与 imageFiles 同序；已扫描/遮挡图片在 Native 副作用前复核像素 hash。 */
+  expectedImagePixelHashes: Array<string | null>;
   pressEnter: boolean;
   keepPanel: boolean;
   deliveryId: string;
@@ -359,6 +366,61 @@ export interface ScanSensitiveResult {
   complete: boolean;
 }
 
+/** Vision 框已统一转换为左上原点、0..1 归一化坐标。 */
+export interface ImageNormalizedBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface ImagePixelBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface ImageOcrObservation {
+  text: string;
+  confidence: number;
+  boundingBox: ImageNormalizedBox;
+  imageWidth: number;
+  imageHeight: number;
+}
+
+export interface ImageFirewallFinding {
+  id: string;
+  observationIndex: number;
+  category: FindingCategory;
+  severity: FindingSeverity;
+  boundingBox: ImageNormalizedBox;
+  pixelBox: ImagePixelBox;
+  maskedPreview: string;
+  ruleId: string;
+}
+
+export interface ScanImageFirewallResult {
+  file: string;
+  pixelHash: string;
+  ruleVersion: number;
+  imageWidth: number;
+  imageHeight: number;
+  cacheHit: boolean;
+  /** 只存在于 IPC 扫描回执；控制器不得写入 DeliveryDraft 或日志。 */
+  observations: ImageOcrObservation[];
+  findings: ImageFirewallFinding[];
+}
+
+export interface RedactDeliveryImageResult {
+  originalFile: string;
+  redactedFile: string;
+  originalPixelHash: string;
+  redactedPixelHash: string;
+  imageWidth: number;
+  imageHeight: number;
+}
+
 const DELIVERY_STATUSES = new Set<DeliveryStatus>(["sent", "blocked", "failed"]);
 const TARGET_REASONS = new Set<TargetReason>([
   "target_missing",
@@ -377,6 +439,7 @@ const DELIVERY_REASONS = new Set<DeliveryReasonCode>([
   "delivery_in_progress",
   "payload_empty",
   "image_unreadable",
+  "image_changed",
   "paste_failed",
   "enter_failed",
   "internal_error",
@@ -447,7 +510,7 @@ export function isSendDeliveryResult(value: unknown): value is SendDeliveryResul
 }
 
 export const api = {
-  showPanel: () => invoke("show_panel"),
+  showPanel: (shortcutHold = false) => invoke("show_panel", { shortcutHold }),
   hidePanel: (restoreFocus: boolean) => invoke("hide_panel", { restoreFocus }),
   copyText: (text: string) => invoke("copy_text", { text }),
   getTargetSnapshot: () => invoke<TargetSnapshot>("get_target_snapshot"),
@@ -460,6 +523,17 @@ export const api = {
     invoke<ScanSensitiveResult>("scan_sensitive_text", {
       request: { text } satisfies ScanSensitiveRequest,
     }),
+  scanImageFirewall: (file: string, force = false) =>
+    invoke<ScanImageFirewallResult>("scan_image_firewall", { file, force }),
+  redactDeliveryImage: (originalFile: string, regions: ImagePixelBox[]) =>
+    invoke<RedactDeliveryImageResult>("redact_delivery_image", {
+      request: { originalFile, regions },
+    }),
+  cleanupRedactedImages: (files: string[]) =>
+    invoke<void>("cleanup_redacted_images", { files }),
+  clearRedactedImages: () => invoke<void>("clear_redacted_images"),
+  deliveryImageDataUrl: (file: string) =>
+    invoke<string | null>("delivery_image_data_url", { file }),
   axTrusted: (prompt: boolean) => invoke<boolean>("ax_trusted", { prompt }),
   tapStatus: () =>
     invoke<{ installed: boolean; receiving: boolean; listening: boolean }>("tap_status"),
@@ -556,7 +630,7 @@ export const api = {
   isSelfFrontmost: () => invoke<boolean>("is_self_frontmost"),
   setPanelTopmost: (enabled: boolean) =>
     invoke("set_panel_topmost", { enabled }),
-  /** 自动贴边隐藏开关（类似 Dock；关闭时若正隐藏会自动滑回）。 */
+  /** 兼容旧设置字段；当前产品始终下发 true，贴边隐藏是默认能力。 */
   setAutoEdgeHide: (enabled: boolean) =>
     invoke("set_auto_edge_hide", { enabled }),
   /** 面板固定（图钉）状态同步：只豁免失焦收起，不影响光标驱动的贴边隐藏。 */
@@ -566,9 +640,9 @@ export const api = {
   /** 面板宽度/上下缘拖拽期间下发，贴边隐藏暂停计时。 */
   setPanelDragActive: (active: boolean) =>
     invoke("set_panel_drag_active", { active }),
-  /** 立即贴边滑出（失焦时贴边隐藏模式下的「收起」，不是真实 hide；
-   *  前置条件不满足时是安全的空操作）。 */
-  edgeHideNow: () => invoke("edge_hide_now"),
+  /** 立即贴边滑出；explicit=true 用于 Esc，可越过快捷键保护与图钉。 */
+  edgeHideNow: (explicit = false) =>
+    invoke<boolean>("edge_hide_now", { explicit }),
   /** Keychain 仅回传配置状态；密钥正文永不返回 WebView。 */
   setAiApiKey: (apiKey: string, overwriteExisting: boolean) =>
     invoke<AiKeyStatus>("set_ai_api_key", { apiKey, overwriteExisting }),

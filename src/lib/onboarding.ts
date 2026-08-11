@@ -26,6 +26,10 @@ export interface OnboardingState {
   rehearsalPausedAtMs: number | null;
   rehearsalCompletedAtMs: number | null;
   rehearsalDeferredAtMs: number | null;
+  /** Raycast 式入门任务：权限检查作为独立成就保留，重跑演练不清空。 */
+  permissionsCompletedAtMs: number | null;
+  /** 可逆占位符本地恢复教学已完成；不保存任何真实映射或正文。 */
+  recoveryTutorialCompletedAtMs: number | null;
   /** 从权限就绪后的首个示例动作起算；不包含系统设置停留时间。 */
   activationStartedAtMs: number | null;
   /** 仅作本机内部激活信号；UI 不展示倒计时或失败结论。 */
@@ -42,6 +46,7 @@ export type OnboardingEvent =
   | { type: "targetConfirmed" }
   | { type: "preflightOpened" }
   | { type: "deliverySent" }
+  | { type: "recoveryTutorialCompleted" }
   | { type: "defer" };
 
 export type PermissionRehearsalStatus =
@@ -50,6 +55,8 @@ export type PermissionRehearsalStatus =
   | "waitingForEvents"
   | "inputMonitoringBlocked"
   | "ready";
+
+export type SafeRehearsalLaunchMode = "start" | "resume";
 
 const STEPS = new Set<OnboardingStep>([
   "permissions",
@@ -79,6 +86,8 @@ export function defaultOnboardingState(): OnboardingState {
     rehearsalPausedAtMs: null,
     rehearsalCompletedAtMs: null,
     rehearsalDeferredAtMs: null,
+    permissionsCompletedAtMs: null,
+    recoveryTutorialCompletedAtMs: null,
     activationStartedAtMs: null,
     activationWithin60s: null,
   };
@@ -131,6 +140,10 @@ export function onboardingStateFromPersisted(value: unknown): OnboardingState {
     rehearsalPausedAtMs: finiteTime(raw.rehearsalPausedAtMs),
     rehearsalCompletedAtMs: finiteTime(raw.rehearsalCompletedAtMs),
     rehearsalDeferredAtMs: finiteTime(raw.rehearsalDeferredAtMs),
+    permissionsCompletedAtMs: finiteTime(raw.permissionsCompletedAtMs),
+    recoveryTutorialCompletedAtMs: finiteTime(
+      raw.recoveryTutorialCompletedAtMs
+    ),
     activationStartedAtMs: finiteTime(raw.activationStartedAtMs),
     activationWithin60s:
       typeof raw.activationWithin60s === "boolean"
@@ -174,7 +187,11 @@ export function onboardingAfter(
       };
     case "permissionsReady":
       return state.rehearsalStep === "permissions"
-        ? { ...state, rehearsalStep: "capture" }
+        ? {
+            ...state,
+            rehearsalStep: "capture",
+            permissionsCompletedAtMs: state.permissionsCompletedAtMs ?? now,
+          }
         : state;
     case "samplePrepared":
       return {
@@ -213,6 +230,12 @@ export function onboardingAfter(
             : now - startedAt <= SAFE_REHEARSAL_ACTIVATION_MS,
       };
     }
+    case "recoveryTutorialCompleted":
+      return {
+        ...state,
+        recoveryTutorialCompletedAtMs:
+          state.recoveryTutorialCompletedAtMs ?? now,
+      };
     case "defer":
       return {
         ...state,
@@ -224,6 +247,17 @@ export function onboardingAfter(
         activationWithin60s: null,
       };
   }
+}
+
+/** “继续”只恢复未完成步骤；已完成或显式重跑都从权限检查重新开始。 */
+export function safeRehearsalLaunchEvent(
+  current: OnboardingState,
+  mode: SafeRehearsalLaunchMode
+): OnboardingEvent {
+  const state = onboardingStateFromPersisted(current);
+  return mode === "resume" && state.rehearsalStep !== "complete"
+    ? { type: "resume" }
+    : { type: "start" };
 }
 
 export function permissionRehearsalStatus(

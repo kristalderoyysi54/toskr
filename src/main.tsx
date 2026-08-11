@@ -13,10 +13,23 @@ import "./index.css";
 // prefers-color-scheme 也会变，故同一监听可覆盖手动主题）
 // 临时诊断：纯浏览器打开时垫一个最小 Tauri 桩，让 UI 可渲染（invoke 全部拒绝）
 if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
+  const requestedLabel = new URLSearchParams(location.search).get("view");
+  const diagnosticLabel = [
+    "main",
+    "hud",
+    "settings",
+    "imgpreview",
+    "textpreview",
+  ].includes(requestedLabel ?? "")
+    ? requestedLabel!
+    : "main";
   (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {
     metadata: {
-      currentWindow: { label: "main" },
-      currentWebview: { label: "main", windowLabel: "main" },
+      currentWindow: { label: diagnosticLabel },
+      currentWebview: {
+        label: diagnosticLabel,
+        windowLabel: diagnosticLabel,
+      },
     },
     transformCallback: () => 0,
     invoke: () => Promise.reject(new Error("browser-diagnose")),

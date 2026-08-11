@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useMemo, useRef, useState } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
@@ -67,6 +67,7 @@ import { api } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import {
   CLIPBOARD_ID,
+  groupContextMenuIds,
   INBOX_ID,
   noteImages,
   normalizeContextMenu,
@@ -503,8 +504,61 @@ export const NoteCard = memo(function NoteCard({
     setRenaming(false);
   };
 
-  /** 剪贴板历史卡：右键语义变化（固定/保存为笔记）。 */
+  /** 剪贴板历史卡：固定语义不同，并可从卡面直接保存为正式笔记。 */
   const isClip = note.sectionId === CLIPBOARD_ID;
+  const saveClipAsNote = () => {
+    if (!isClip) return;
+    moveNotes([note.id], INBOX_ID);
+    tip("ok", "已保存为笔记");
+  };
+
+  const relationMenuItem = note.provenance ? (
+    <ContextMenuSub key="relation">
+      <ContextMenuSubTrigger>
+        <Link2 className="mr-2 size-3.5" /> 对应回复
+      </ContextMenuSubTrigger>
+      <ContextMenuSubContent className="w-44">
+        <ContextMenuItem onClick={openProvenanceSource}>
+          <Expand className="size-3.5" /> 查看发送内容
+        </ContextMenuItem>
+        <ContextMenuItem onClick={() => requestResultVerification(
+          note.id,
+          cardRef.current?.querySelector<HTMLElement>("[data-drag-handle]") ?? cardRef.current
+        )}>
+          <ShieldCheck className="size-3.5" /> 检查这条回复
+        </ContextMenuItem>
+        <ContextMenuItem onClick={() => requestResultLinkForNote(note.id, cardRef.current)}>
+          <Link2 className="size-3.5" /> 更换对应发送
+        </ContextMenuItem>
+        <ContextMenuItem onClick={() => requestPlaceholderPreview(note.id, cardRef.current)}>
+          <ScanText className="size-3.5" />
+          {deliveryRedactionMapAvailable(note.provenance.deliveryId)
+            ? "恢复占位符预览"
+            : "占位符映射已失效"}
+        </ContextMenuItem>
+        <ContextMenuItem onClick={() => requestResultUnlink(note.id, cardRef.current)}>
+          <Unlink className="size-3.5" /> 这不是对应回复
+        </ContextMenuItem>
+      </ContextMenuSubContent>
+    </ContextMenuSub>
+  ) : (
+    <ContextMenuItem
+      key="relation"
+      onClick={() => requestResultLinkForNote(note.id, cardRef.current)}
+    >
+      <Link2 className="size-3.5" /> 保存为某次回复
+    </ContextMenuItem>
+  );
+
+  const menuSections = groupContextMenuIds(menuIds)
+    .map((group) => ({
+      ...group,
+      items: [
+        ...group.ids.map((id) => renderMenuItem(id)).filter(Boolean),
+        ...(group.id === "send" ? [relationMenuItem] : []),
+      ],
+    }))
+    .filter((group) => group.items.length > 0);
 
   return (
     <ContextMenu>
@@ -853,10 +907,10 @@ export const NoteCard = memo(function NoteCard({
               >
                 <Link2 className="size-3 shrink-0" aria-hidden />
                 {provenanceSourceState === "available"
-                  ? "来自投递结果"
+                  ? "来自发送结果"
                   : provenanceSourceState === "partial"
-                    ? "投递结果 · 部分来源缺失"
-                    : "投递结果 · 来源缺失"}
+                    ? "发送结果 · 部分来源缺失"
+                    : "发送结果 · 来源缺失"}
               </button>
             ) : note.sourceApp ? <span className="truncate">来自 {note.sourceApp}</span> : <span />}
             <span className="ml-auto shrink-0 tabular-nums text-muted-foreground/50">
@@ -879,6 +933,16 @@ export const NoteCard = memo(function NoteCard({
               compact ? "right-1 top-1/2 -translate-y-1/2" : "bottom-1 right-1.5"
             )}
           >
+            {isClip && (
+              <IconButton
+                label="保存为笔记"
+                surface
+                reveal="hover-focus"
+                onClick={saveClipAsNote}
+              >
+                <Inbox className="size-3" />
+              </IconButton>
+            )}
             <IconButton
               label={isLink ? "打开页面（Space）" : "预览（Space）"}
               surface
@@ -919,53 +983,14 @@ export const NoteCard = memo(function NoteCard({
             <Merge className="size-3.5" /> 合并笔记 ×{mergeCount}
           </ContextMenuItem>
         )}
-        {/* 剪贴板历史卡的转正主路径：搬去收件箱成为正式笔记 */}
-        {isClip && (
-          <ContextMenuItem
-            onClick={() => {
-              moveNotes([note.id], INBOX_ID);
-              tip("ok", "已保存为笔记");
-            }}
-          >
-            <Inbox className="size-3.5" /> 保存为笔记
-          </ContextMenuItem>
-        )}
-        {note.provenance ? (
-          <ContextMenuSub>
-            <ContextMenuSubTrigger>
-              <Link2 className="mr-2 size-3.5" /> 投递结果
-            </ContextMenuSubTrigger>
-            <ContextMenuSubContent className="w-44">
-              <ContextMenuItem onClick={openProvenanceSource}>
-                <Expand className="size-3.5" /> 打开原始上下文
-              </ContextMenuItem>
-              <ContextMenuItem onClick={() => requestResultVerification(
-                note.id,
-                cardRef.current?.querySelector<HTMLElement>("[data-drag-handle]") ?? cardRef.current
-              )}>
-                <ShieldCheck className="size-3.5" /> 核验结果
-              </ContextMenuItem>
-              <ContextMenuItem onClick={() => requestResultLinkForNote(note.id, cardRef.current)}>
-                <Link2 className="size-3.5" /> 更改投递关联
-              </ContextMenuItem>
-              <ContextMenuItem onClick={() => requestPlaceholderPreview(note.id, cardRef.current)}>
-                <ScanText className="size-3.5" />
-                {deliveryRedactionMapAvailable(note.provenance.deliveryId)
-                  ? "恢复占位符预览"
-                  : "占位符映射已失效"}
-              </ContextMenuItem>
-              <ContextMenuItem onClick={() => requestResultUnlink(note.id, cardRef.current)}>
-                <Unlink className="size-3.5" /> 解除投递关联
-              </ContextMenuItem>
-            </ContextMenuSubContent>
-          </ContextMenuSub>
-        ) : (
-          <ContextMenuItem onClick={() => requestResultLinkForNote(note.id, cardRef.current)}>
-            <Link2 className="size-3.5" /> 关联到最近投递
-          </ContextMenuItem>
-        )}
-        {/* 中段按设置项的显隐与顺序渲染；卡片类型不适用的项自动跳过 */}
-        {menuIds.map((id) => renderMenuItem(id))}
+        {mergeCount >= 2 && <ContextMenuSeparator />}
+        {/* 一级菜单按用途分组；保留设置中的组内顺序与显隐。 */}
+        {menuSections.map((group, index) => (
+          <Fragment key={group.id}>
+            {index > 0 && <ContextMenuSeparator />}
+            {group.items}
+          </Fragment>
+        ))}
         <ContextMenuSeparator />
         <ContextMenuItem
           variant="destructive"
@@ -1068,7 +1093,7 @@ function CompactRow({
       {note.provenance && (
         <Link2
           className="size-3 shrink-0 text-primary transition-opacity group-hover:opacity-0"
-          aria-label="来自投递结果"
+          aria-label="来自发送结果"
         />
       )}
       {!isImage && images.length > 0 && (

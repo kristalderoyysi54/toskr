@@ -12,7 +12,7 @@ function targetPreviewReason(
   snapshot: TargetSnapshot | null,
   resolution: TargetProfileResolution
 ): string {
-  if (!snapshot?.bundleId) return "尚未识别投递目标";
+  if (!snapshot?.bundleId) return "尚未识别发送目标";
   if (!snapshot.ready) return "目标应用已失效";
   switch (resolution.source) {
     case "temporary":
@@ -46,7 +46,7 @@ export function CurrentTargetPreview({
   const targetStatus = !snapshot?.bundleId
     ? "尚未识别"
     : snapshot.ready
-      ? "目标可用"
+      ? "可发送"
       : "目标已失效";
   const reason = targetPreviewReason(snapshot, resolution);
   const statusTone = snapshot?.ready
@@ -113,7 +113,7 @@ export function CurrentTargetPreview({
       </div>
 
       <div className="mt-2 rounded-lg bg-muted/35 px-2.5 py-2">
-        <p className="text-micro text-muted-foreground">解析到的投递方案</p>
+        <p className="text-micro text-muted-foreground">解析到的发送方案</p>
         <p className="line-clamp-2 break-words text-body font-semibold" title={resolution.profile.name}>
           {resolution.profile.name}
         </p>
@@ -146,7 +146,7 @@ export function CurrentTargetPreview({
       )}
 
       <p className="sr-only" aria-live="polite" aria-atomic="true">
-        当前目标 {appName}，{targetStatus}，投递方案 {resolution.profile.name}
+        当前目标 {appName}，{targetStatus}，发送方案 {resolution.profile.name}
       </p>
       {testMessage && (
         <p role="status" aria-live="polite" className="mt-2 text-label text-muted-foreground">

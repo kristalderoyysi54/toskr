@@ -64,7 +64,7 @@ describe("Target Profile resolver", () => {
     }),
   ];
 
-  it("精确匹配返回唯一投递方案契约且不虚构隐私能力", () => {
+  it("精确匹配返回唯一发送方案契约且不虚构隐私能力", () => {
     expect(
       resolveTargetProfile({
         bundleId: "com.openai.codex",
@@ -386,10 +386,10 @@ describe("Prompt/Profile reference repair", () => {
     profile("other", ["com.example.other"], { promptGroupId: "team" }),
   ];
 
-  it("新安装使用稳妥投递，旧安全默认名称不会被静默改写", () => {
+  it("新安装使用稳妥发送，旧安全默认名称不会被静默改写", () => {
     expect(createDefaultTargetProfiles(false)[0]).toMatchObject({
       id: SAFETY_PROFILE_ID,
-      name: "稳妥投递",
+      name: "稳妥发送",
     });
 
     const legacy = profile(SAFETY_PROFILE_ID, [], { name: "安全默认" });

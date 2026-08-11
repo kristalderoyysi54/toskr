@@ -43,7 +43,7 @@ export const TERMINAL_BUNDLE_IDS = [
 
 const SAFETY_PROFILE: TargetProfile = {
   id: SAFETY_PROFILE_ID,
-  name: "稳妥投递",
+  name: "稳妥发送",
   bundleIds: [],
   promptGroupId: GENERAL_PROMPT_GROUP_ID,
   defaultFormat: "plain",

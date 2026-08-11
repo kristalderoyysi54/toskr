@@ -10,6 +10,7 @@ import {
   type ScanSensitiveText,
 } from "@/lib/delivery/firewallController";
 import { useDeliveryStore } from "@/store/deliveryStore";
+import { cleanupDeliveryDraftImages } from "@/lib/delivery/imageFirewall";
 
 export type TransformRecipeId =
   | "summarize"
@@ -289,5 +290,7 @@ export async function restoreOpenDraftTransform(
 
 export function closeOpenDraftWithTransforms(): void {
   cancelOpenDraftTransform();
+  const draft = useDeliveryStore.getState().draft;
   useDeliveryStore.getState().closeDraft();
+  cleanupDeliveryDraftImages(draft);
 }

@@ -1,6 +1,10 @@
 import type { TargetSnapshot } from "@/lib/tauri";
 import type { TransformRecipeId } from "@/lib/aiTransform";
-import type { FirewallFinding, FindingCategory } from "@/lib/tauri";
+import type {
+  FirewallFinding,
+  FindingCategory,
+  ImageFirewallFinding,
+} from "@/lib/tauri";
 import type {
   DeliveryFormat,
   EnterPolicy,
@@ -13,7 +17,32 @@ import type { Note, Task } from "@/store/notesStore";
 import type {
   FirewallStatus,
   PrivacyDecision,
+  RawPrivacyConfirmation,
 } from "./firewall";
+
+export type ImageFirewallStatus =
+  | "idle"
+  | "scanning"
+  | "ready"
+  | "redacting"
+  | "failed"
+  | "disabled";
+
+/** OCR 原文永不进入此结构；Draft 只保留遮罩决策所需元数据。 */
+export interface ImageFirewallItem {
+  originalFile: string;
+  sendFile: string;
+  status: ImageFirewallStatus;
+  pixelHash: string | null;
+  redactedPixelHash: string | null;
+  width: number | null;
+  height: number | null;
+  scanRevision: number;
+  findings: ImageFirewallFinding[];
+  redactedFindingIds: string[];
+  rawConfirmation: RawPrivacyConfirmation | null;
+  failureMessage: string | null;
+}
 
 export type DeliverySourceKind = "note" | "note-batch" | "task";
 
@@ -21,7 +50,7 @@ export type DeliveryDraftWarning =
   | "source-missing"
   | "empty-payload";
 
-/** 会话内投递快照；原始正文不会进入持久化 store。 */
+/** 会话内发送快照；原始正文不会进入持久化 store。 */
 export interface DeliveryDraft {
   id: string;
   revision: number;
@@ -34,7 +63,11 @@ export interface DeliveryDraft {
   /** 纯构建器生成的正文基线；本次手工编辑可恢复到这里。 */
   assembledText: string;
   finalText: string;
+  /** 构建时的权威来源；图片遮挡后新鲜度仍只与原图比较。 */
+  originalImageFiles: string[];
+  /** Native 实际读取的附件；只允许原图名或当前 Draft 的遮挡副本 token。 */
   imageFiles: string[];
+  imageFirewall: ImageFirewallItem[];
   format: DeliveryFormat;
   promptSnippetId: string | null;
   /** 最后一次实际应用到正文的 AI 配方；手工修改/恢复后清空。 */

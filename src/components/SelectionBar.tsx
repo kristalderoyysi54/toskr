@@ -152,7 +152,7 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
       return buildDeliveryDraft(
         {
           id: "selection-preview",
-          // UI 预览不可执行，不占用投递会话的全局 revision。
+          // UI 预览不可执行，不占用发送会话的全局 revision。
           revision: 0,
           createdAtMs: Date.now(),
           sourceKind: orderedSelection.length === 1 ? "note" : "note-batch",
@@ -239,10 +239,10 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
                   internalSendAvailable
                     ? "优先添加到当前卡片编辑器，否则发送到当前目标"
                     : targetReady
-                    ? `发送到当前目标，投递方案 ${resolution.profile.name}，粘贴后动作 ${ENTER_POLICY_STATUS_LABEL[resolution.profile.enterPolicy]}`
+                    ? `发送到当前目标，发送方案 ${resolution.profile.name}，粘贴后动作 ${ENTER_POLICY_STATUS_LABEL[resolution.profile.enterPolicy]}`
                     : profileOverrideNeedsConfirmation
-                      ? "发送不可用：原临时投递方案已暂停"
-                      : "发送不可用：投递目标未就绪"
+                      ? "发送不可用：原临时发送方案已暂停"
+                      : "发送不可用：发送目标未就绪"
                 }
                 className="rounded-l-lg rounded-r-none"
                 onClick={() => sendCheckedToChat()}
@@ -267,7 +267,7 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
             trigger={({ toggle }) => (
               <Button
                 size="xs"
-                aria-label="选择本次投递方案、输出格式或提示词模板"
+                aria-label="选择本次发送方案、输出格式或提示词模板"
                 disabled={!nativeTargetReady && !internalSendAvailable}
                 onClick={toggle}
                 className="rounded-l-none rounded-r-lg border-l border-border px-1"
@@ -329,7 +329,7 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
                   代码块 ```{resolution.profile.defaultFormat === "code" ? "（方案默认）" : ""}
                 </SimpleMenuItem>
                 <SimpleMenuSeparator />
-                <SimpleMenuLabel>本次投递方案</SimpleMenuLabel>
+                <SimpleMenuLabel>本次发送方案</SimpleMenuLabel>
                 {profileOverrideNeedsConfirmation && (
                   <SimpleMenuItem
                     onClick={() => {

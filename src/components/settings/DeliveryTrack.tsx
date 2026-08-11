@@ -84,14 +84,14 @@ export function DeliveryTrack({
   const targetStatus = !targetBundleId
     ? "尚未识别，发送已锁定"
     : currentResolution.isTargetReady
-      ? "目标可用"
+      ? "可发送"
       : "目标已失效，发送已锁定";
   const configuredGroup = configuredPromptGroupName ?? "已删除的提示词组";
 
   return (
     <div
       className="rounded-xl bg-muted/30 p-2.5"
-      aria-label={`${configuredProfile.name} 应用到当前测试目标的投递轨道`}
+      aria-label={`${configuredProfile.name} 应用到当前测试目标的发送轨道`}
     >
       <div className="mb-2 flex min-w-0 items-center gap-2">
         <AppIcon bundleId={targetBundleId} appName={targetName} size="sm" />
@@ -110,9 +110,9 @@ export function DeliveryTrack({
         </div>
       </div>
 
-      <ol aria-label="配置到生效的投递轨道">
+      <ol aria-label="配置到生效的发送轨道">
         <TrackCard title="配置值" warning={!configuredPromptGroupName}>
-          <p>投递方案：{configuredProfile.name}</p>
+          <p>发送方案：{configuredProfile.name}</p>
           <p className={cn(!configuredPromptGroupName && "text-warning")}>提示词组：{configuredGroup}</p>
           <p>输出格式：{configuredFormat.label}</p>
           <p className={cn(configuredProfile.enterPolicy === "allow" && "text-warning")}>
@@ -122,12 +122,12 @@ export function DeliveryTrack({
         </TrackCard>
         <Connector />
         <TrackCard
-          title="测试预演值（不影响当前投递）"
+          title="测试预演值（不影响当前发送）"
           warning={!previewResolution.isTargetReady || !configuredPromptGroupName}
         >
           <p>目标应用：{targetName}</p>
           <p>匹配来源：{SOURCE_LABEL[previewResolution.source]}</p>
-          <p>投递方案：{previewResolution.profile.name}</p>
+          <p>发送方案：{previewResolution.profile.name}</p>
           <p>提示词组：{previewResolution.promptGroup.name}</p>
           <p>输出格式：{previewFormat.label}</p>
           <p className={cn(previewResolution.profile.enterPolicy === "allow" && "text-warning")}>
@@ -142,7 +142,7 @@ export function DeliveryTrack({
         >
           <p>目标应用：{targetName}</p>
           <p>匹配来源：{SOURCE_LABEL[currentResolution.source]}</p>
-          <p>投递方案：{currentResolution.profile.name}</p>
+          <p>发送方案：{currentResolution.profile.name}</p>
           <p>提示词组：{currentResolution.promptGroup.name}</p>
           <p>输出格式：{currentFormat.label}</p>
           <p className={cn(currentResolution.profile.enterPolicy === "allow" && "text-warning")}>
@@ -172,7 +172,7 @@ export function DeliveryTrack({
       </ol>
 
       <div className="mt-2 rounded-lg border border-border/60 bg-card px-2 py-1.5">
-        <p className="text-micro font-medium text-muted-foreground">本地预演输出示例（不会投递）</p>
+        <p className="text-micro font-medium text-muted-foreground">本地预演输出示例（不会发送）</p>
         <pre className="mt-0.5 max-w-full whitespace-pre-wrap break-words font-mono text-micro leading-relaxed text-foreground">
           {previewFormat.example}
         </pre>

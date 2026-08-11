@@ -137,6 +137,45 @@ describe("Outcome Intelligence 聚合器", () => {
     expect(metrics.insufficientSample).toBe(true);
   });
 
+  it("把图片 Firewall 阻止计入终态，并识别跨 deliveryId 的重新准备", () => {
+    const events: DeliveryEvent[] = [
+      event("draftCreated", NOW - 5_000, { deliveryId: "blocked-image" }),
+      event("firewallBlocked", NOW - 4_000, {
+        deliveryId: "blocked-image",
+        reasonCode: "privacy_gate_blocked",
+        firewallCounts: {
+          ...event("firewallBlocked", NOW).firewallCounts,
+          nationalId: 2,
+        },
+        redactionCount: 1,
+      }),
+      event("draftCreated", NOW - 3_000, {
+        deliveryId: "retry-image",
+        reasonCode: "retry-prepared",
+      }),
+      event("sendStarted", NOW - 2_000, { deliveryId: "retry-image" }),
+      event("sendFailed", NOW - 1_000, {
+        deliveryId: "retry-image",
+        reasonCode: "paste_failed",
+      }),
+    ];
+
+    const metrics = aggregateOutcomeMetrics(events, [], [], [], {
+      range: "7d",
+      nowMs: NOW,
+      timeZone: "Asia/Shanghai",
+      profileId: null,
+      recipeId: null,
+    });
+
+    expect(metrics.deliveryAttempts).toBe(2);
+    expect(metrics.blockedReasons).toEqual({ privacy_gate_blocked: 1 });
+    expect(metrics.failedReasons).toEqual({ paste_failed: 1 });
+    expect(metrics.firewallFindingCount).toBe(2);
+    expect(metrics.redactionCount).toBe(1);
+    expect(metrics.retryCount).toBe(1);
+  });
+
   it("按本地日历范围、Profile 与已应用 recipe 过滤，关闭时事件不进入指标", () => {
     const insideShanghaiDay = Date.UTC(2026, 7, 4, 16, 30);
     const beforeShanghaiDay = Date.UTC(2026, 7, 4, 15, 59);

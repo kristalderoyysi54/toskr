@@ -132,12 +132,14 @@ describe("PreflightComposer", () => {
     expect(html).toContain("本次不按回车");
     expect(html).toContain("本次粘贴后按回车");
     expect(html).toContain('type="radio"');
-    expect(html).toContain('aria-label="投递警告"');
+    expect(html).toContain('aria-label="发送警告"');
     expect(html).toContain("部分来源已不存在");
-    expect(html).toContain('aria-label="最终投递内容"');
+    expect(html).toContain('aria-label="最终发送内容"');
     expect(html).toContain("需要发送的正文");
     expect(html).toContain('aria-describedby="preflight-status"');
     expect(html).toContain("确认发送");
+    expect(html).toContain('aria-label="重新检测当前文本"');
+    expect(html).toContain("重新检测");
     expect(html).toContain("disabled");
   });
 
@@ -174,8 +176,8 @@ describe("PreflightComposer", () => {
 
     const html = renderToStaticMarkup(<PreflightComposer horizontal />);
     expect(html).toContain("grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]");
-    expect(html).toContain('aria-label="投递概览"');
-    expect(html).toContain('aria-label="最终投递内容"');
+    expect(html).toContain('aria-label="发送概览"');
+    expect(html).toContain('aria-label="最终发送内容"');
     expect(html).not.toContain('role="tablist"');
   });
 
@@ -216,7 +218,7 @@ describe("PreflightComposer", () => {
 
     const html = renderToStaticMarkup(<PreflightComposer />);
 
-    expect(html).toContain("安全投递演练预检");
+    expect(html).toContain("安全发送演练预检");
     expect(html).toContain("演练安全锁：只粘贴，不按回车");
     expect(html).toContain("安全粘贴");
     expect(html).not.toContain('name="preflight-enter-decision"');
@@ -316,6 +318,76 @@ describe("PreflightComposer", () => {
     expect(html).toContain("再次确认保留高风险原文");
   });
 
+  it("图片预检展示区域框、原图与发送状态，未遮挡 block 时禁用发送", () => {
+    const id = useNotesStore.getState().addNote("假敏感截图", {
+      kind: "image",
+      imageFile: "img-synthetic.png",
+      imageW: 400,
+      imageH: 200,
+    }).id!;
+    useNotesStore.getState().setChecked([id]);
+    const built = buildDeliveryDraft(
+      {
+        id: "image-firewall-ui",
+        revision: nextDeliveryDraftRevision(),
+        createdAtMs: 1,
+        sourceKind: "note",
+        sourceItemIds: [id],
+      },
+      {
+        notes: useNotesStore.getState().notes,
+        tasks: [],
+        promptSnippets: useNotesStore.getState().settings.promptSnippets,
+        checkedItemIds: [id],
+        targetSnapshot: useTargetStore.getState().snapshot,
+        profileResolution: currentTargetProfileResolution(),
+        panelPinned: false,
+        dataGeneration: currentDataGeneration(),
+        firewallEnabled: true,
+        firewallDisabledWarnCategories: [],
+      }
+    );
+    useDeliveryStore.getState().openDraft({
+      ...built,
+      firewallStatus: "ready",
+      imageFirewall: [{
+        ...built.imageFirewall[0],
+        status: "ready",
+        pixelHash: "a".repeat(64),
+        width: 400,
+        height: 200,
+        scanRevision: 1,
+        findings: [{
+          id: "image-api-key",
+          observationIndex: 0,
+          category: "apiKey",
+          severity: "block",
+          boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.15 },
+          pixelBox: { x: 38, y: 38, width: 204, height: 34 },
+          maskedPreview: "sk••••89",
+          ruleId: "test.image-api-key",
+        }],
+      }],
+    });
+    syncServerSnapshots();
+
+    const html = renderToStaticMarkup(<PreflightComposer />);
+
+    expect(html).toContain('aria-label="图片隐私检查"');
+    expect(html).toContain("请遮挡全部图片敏感区域");
+    expect(html).toContain("原图");
+    expect(html).toContain("遮挡此文字区域");
+    expect(html).toContain("遮挡全部图片敏感区域");
+    expect(html).toContain('aria-label="重新检测当前文本和原始图片"');
+    expect(html).toContain("left:10%");
+    // 2:1 原图在 4:3 contain 预览中上下留白，区域框必须随真实画面偏移。
+    expect(html).toContain("top:30%");
+    const submit = html.match(
+      /<button[^>]*aria-describedby="preflight-status"[^>]*>[\s\S]*?<\/button>/
+    )?.[0];
+    expect(submit).toContain("disabled");
+  });
+
   it("调用前可见 provider、模型、数据范围与显式转换入口", () => {
     useNotesStore.setState((state) => ({
       settings: {
@@ -404,7 +476,7 @@ describe("PreflightComposer", () => {
     const elapsedMs = performance.now() - startedAt;
 
     expect(html).toContain(source.text);
-    expect(html).toContain("投递预检");
+    expect(html).toContain("发送预检");
     expect(html.length).toBeLessThan(150_000);
     expect(elapsedMs).toBeLessThan(2_500);
   });

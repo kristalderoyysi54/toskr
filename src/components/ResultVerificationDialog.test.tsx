@@ -40,7 +40,7 @@ describe("ResultVerificationDialog", () => {
       <VerificationReportView report={report} stale />
     );
     expect(html).toContain("报告已过期");
-    expect(html).toContain("不能保存或继续投递");
+    expect(html).toContain("不能保存或继续发送");
   });
 
   it("AI 按钮前只显示 provider、模型、字符范围和 finding 状态", () => {
@@ -67,5 +67,31 @@ describe("ResultVerificationDialog", () => {
     expect(html).toContain("3 项 finding 已本地替换");
     expect(html).not.toContain("safe source");
     expect(html).not.toContain("safe result");
+  });
+
+  it("报告与 AI 摘要不使用最小字阶承载需要逐字判断的信息", () => {
+    const reportHtml = renderToStaticMarkup(
+      <VerificationReportView report={report} stale={false} />
+    );
+    const summaryHtml = renderToStaticMarkup(
+      <VerificationPrivacySummary
+        provider="DeepSeek"
+        model="deepseek-v4-flash"
+        prepared={{
+          status: "ready",
+          sourceText: "safe source",
+          resultText: "safe result",
+          sourceChars: 26,
+          resultChars: 648,
+          findingCount: 0,
+          replacedCount: 0,
+          sourceRevision: "source:1",
+          resultRevision: "result:2",
+        }}
+      />
+    );
+
+    expect(reportHtml).not.toContain("text-micro");
+    expect(summaryHtml).not.toContain("text-micro");
   });
 });

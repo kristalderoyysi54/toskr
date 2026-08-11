@@ -35,7 +35,7 @@ function BoundAppRow({
       <span className="min-w-0 flex-1 truncate text-body" title={`${name} · ${bundleId}`}>
         {name}
       </span>
-      <IconButton label={`从当前投递方案移除 ${name}`} tone="danger" size="xs" onClick={onRemove}>
+      <IconButton label={`从当前发送方案移除 ${name}`} tone="danger" size="xs" onClick={onRemove}>
         <X />
       </IconButton>
     </div>

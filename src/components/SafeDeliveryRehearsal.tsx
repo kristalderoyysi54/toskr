@@ -34,7 +34,7 @@ const STEP_ORDER = [
   "firewall",
   "delivery",
 ] as const;
-const STEP_LABEL = ["权限", "捕获", "目标", "脱敏预检", "安全投递"];
+const STEP_LABEL = ["权限", "捕获", "目标", "脱敏预检", "安全发送"];
 
 export interface SafeDeliveryRehearsalViewProps {
   onboarding: OnboardingState;
@@ -179,7 +179,7 @@ function StepContent(props: SafeDeliveryRehearsalViewProps) {
     case "delivery":
       return (
         <>
-          <p className="text-body font-medium">脱敏、核对 finalText，再安全投递</p>
+          <p className="text-body font-medium">脱敏、核对 finalText，再安全发送</p>
           <p className="mt-1 text-label text-muted-foreground">
             Context Firewall 会识别假邮箱；请应用替换并检查最终正文。演练安全锁下自动回车始终关闭。
           </p>
@@ -203,10 +203,10 @@ export function SafeDeliveryRehearsalView(
   if (!onboarding.rehearsalActive) {
     return (
       <section
-        aria-label="安全投递演练"
+        aria-label="安全发送演练"
         className="mx-1 mb-2 mt-1 rounded-xl border border-foreground/10 bg-surface-raised/90 p-3 elevation-3"
       >
-        <p className="text-body font-semibold">安全投递演练已暂停</p>
+        <p className="text-body font-semibold">安全发送演练已暂停</p>
         <p className="mt-1 text-label text-muted-foreground">
           进度已保存在本机，继续时会从上一步恢复。
         </p>
@@ -223,12 +223,12 @@ export function SafeDeliveryRehearsalView(
   );
   return (
     <section
-      aria-label="安全投递演练"
+      aria-label="安全发送演练"
       className="mx-1 mb-2 mt-1 rounded-xl border border-foreground/10 bg-surface-raised/90 p-3 elevation-3"
     >
       <div className="flex items-center gap-2">
         <div className="min-w-0 flex-1">
-          <p className="text-body font-semibold">安全投递演练</p>
+          <p className="text-body font-semibold">安全发送演练</p>
           <p className="text-micro text-muted-foreground">真实链路 · 假数据 · 不自动回车</p>
         </div>
         <Button size="xs" variant="ghost" onClick={props.onPause}>

@@ -1224,3 +1224,101 @@ TextEdit/Finder/Preview provider 行为仍需原生手测。
 
 - 上手流程若复制业务 UI 却绕开真实入口，只能证明演示组件；受控数据、显式目标确认与不可变安全锁应嵌入现有权威管线。
 - 上手完成状态与“可再次演练”是两个维度：旧用户可以保持 `done=true`，同时用会话级 `rehearsalActive` 重跑，避免帮助入口反向破坏首次体验兼容性。
+
+### 25.4 自动证据、产物与运行指纹
+
+| 命令 | 结果 | 证据摘要 |
+|---|---|---|
+| `pnpm typecheck` | PASS（exit 0） | `tsc -b` 无错误 |
+| `pnpm test` | PASS（exit 0） | 61 files、596 tests 全通过 |
+| `pnpm lint` | PASS WITH WARNINGS（exit 0） | 仅 3 条既有 Fast Refresh warning |
+| `STRICT=1 pnpm check:tokens` | PASS（exit 0） | 6 项硬护栏均为 0 |
+| `(cd src-tauri && cargo test)` | PASS WITH WARNINGS（exit 0） | 193 tests 全通过；仅 warning/NSPasteboard 测试提示 |
+| `(cd src-tauri && cargo clippy --all-targets --all-features)` | PASS WITH WARNINGS（exit 0） | 无 error，保留既有 lint 债务 |
+| `pnpm build:app` | PASS（exit 0，151.2s） | Vite 2638 modules；App、DMG、updater archive/signature 均生成 |
+| `codesign --verify --deep --strict` | PASS（exit 0） | bundle 有效并满足 designated requirement |
+| `hdiutil verify` / 只读挂载 | PASS（exit 0） | DMG CRC 有效，包含 `Toskr.app` 与 `/Applications` 符号链接 |
+| `git diff --check` | PASS（exit 0） | tracked diff 无 whitespace error |
+
+- 380×720 浏览器诊断在浅色、暗色与 Reduce Motion 下均无水平溢出；演练区域位于 x=12..368，内部 scrollWidth/clientWidth 为 354/354，减弱动效后的 animation/transition duration 为 0.01ms。
+- 最终 release bundle 于 2026-08-11 09:20 +08:00 启动 PID 75103；`toskr-diag.log` 第 10639 行记录 `启动 v0.14.0 pid=75103`。同路径只有一个实例，主进程没有直接子进程。
+- App 二进制 SHA-256：`bc64853c05adf45734bae548f99d2b62d29aedec56ad1cdea7438ca403ed6156`；前端资源键为 `index-D4jvXf3C.js` / `index-BWoRdQBH.css`。
+- DMG SHA-256：`a201a2d9832b7dffea811b29cd7f5c142cde991662d75d9adb19cd539ca5e37f`；updater archive SHA-256：`aa934e008d82f2c34065c2371058e42772eb78f2b8739c992d6d3c92eeea98d0`；签名文件为 404 bytes。
+- 新实例静置三次 `top` 采样为 0.0% / 0.3% / 0.4% CPU、power 0.0 / 0.3 / 0.4；`powermetrics` 要求 superuser，未绕过权限获取 wakeups。
+
+### 25.5 RUNTIME-REQUIRED 与已知边界
+
+- `docs/manual-qa.md` 139–146 的全新数据目录、真实 TCC、第三方 App 捕获/投递/no-enter、VoiceOver、签名原生窗口主题/横栏/Pin/伴随/四缘/全屏/多屏与 wakeups 仍需人工复验。
+- Playwright 只证明浏览器 DOM/CSS、媒体查询与状态机；真实 `uiStore.open` 必须打开后再取布局证据，DEV 隐藏态的空白截图不能当作原生窗口结果。
+- 本阶段没有向第三方 App 投递受控示例，也没有读取敏感正文、申请 root、发布、改版本或 push。已按用户要求创建本地检查点 commit `b37a7ea`。
+
+## 26. Phase 16｜可选图片 Context Firewall（2026-08-11）
+
+### 26.1 实现边界
+
+- `src-tauri/src/ocr.rs` 在保留旧字符串 OCR 契约的同时返回逐 observation 的 text、confidence 与 Vision 左下原点归一化框；`image_firewall.rs` 统一转为前端左上原点和带 2px padding 的像素框，再让每条 observation 复用 Phase 07 文字规则。
+- 扫描缓存是进程内 32 项、10 分钟有界 LRU，key 为图片像素 hash + `FIREWALL_RULE_VERSION`；缓存只保留区域几何、置信度和脱敏 finding，首次 IPC 结算后不驻留 OCR 原文。多张大图串行解码、逐张独立结算，尺寸、observation、finding 和遮挡区域均有上限。Vision 偶发插入的标点空格只在规则输入归一化，首次扫描回执的原始 observation 不被改写。
+- Preflight 在原图 `object-contain` 画面上按真实留白映射区域框，显示类别、严重级别、原图/实际发送状态，并支持逐项、单图全部、全部图片遮挡和恢复原图。首版使用纯色实心覆盖，不实现可逆模糊、人脸识别、外部图片 AI 或通用编辑器。
+- `DeliveryDraft.originalImageFiles` 固定来源新鲜度，`imageFiles` 才是 Native 实际附件；遮挡生成独立 `toskr-redacted:` token，Native 只从专用临时目录读取。已知 block 在全部 Profile 下必须遮挡，OCR 失败由 Profile 决定硬阻断或绑定当前扫描/目标的显式人工确认，任何图片风险都会关闭自动回车。
+- 扫描、遮挡和发送仍复用唯一 DeliveryDraft/Preflight/Native 执行器。旧扫描、关闭重开 ABA、数据代际切换和迟到遮挡回执均按 Draft ID、revision、原图像素 hash、尺寸与目标 token fail-closed；Native 在剪贴板备份和窗口切换前重新解码并核对实际发送像素 hash，同名文件被替换会返回 `image_changed`。
+
+### 26.2 数据、生命周期与隐私
+
+- 本阶段没有持久化 schema 变化，Zustand 仍为 v14、Rust validator 最大版本仍为 14；OCR observation、区域、像素 hash、遮挡 token 与人工确认都只存在当前投递会话，不进入业务 JSON 或备份。
+- 遮挡副本位于默认应用数据目录的专用 `delivery-redactions` 临时根，名称含脱敏像素 hash 与单调序号，写入使用 `create_new + O_NOFOLLOW + fsync`。取消、恢复原图、发送成功与数据上下文失效会清理；应用启动先清崩溃遗留，普通媒体文件名不会被清理接口接受。
+- 前端在 IPC 边界校验图片 hash、rule version、尺寸、confidence、归一化框、像素框、finding 数量与枚举，并在写入 Draft 前丢弃含 OCR 原文的 observations；Rust 缓存入队时再次清空 observation text。活动只聚合类别/遮挡计数，Rust 诊断只写 observation/finding/block/warn/cache/耗时计数。
+
+### 26.3 自动与本机合成证据
+
+- Rust 纯函数覆盖 Vision 坐标、1x/2x/边缘裁剪、纯色副本与原图 hash、临时 token/启动清理、缓存版本、序列化、多行独立 finding、OCR 标点噪声和无正文诊断；前端覆盖策略矩阵、多图失败隔离、原文丢弃、临时副本、取消/重开/迟到回执、来源新鲜度、Native 附件与无正文活动。
+- 本机以 3000×1200 Retina synthetic PNG 运行真实 Vision，仅含假邮箱和假 API key；OCR observation 的 confidence/坐标/图片尺寸合法，两个类别均被本地规则识别。测试输出不打印 OCR 原文，也不读取通用剪贴板。
+- `ImageFirewallPanel` 的 SSR 语义测试锁定图片区域、原图/发送状态、处理动作和未遮挡 block 的禁用发送；2:1 图片在 4:3 contain 预览中的框会计入上下留白，不再按裁剪缩略图错位。
+
+| 命令 | 结果 | 证据摘要 |
+|---|---|---|
+| `pnpm typecheck` | PASS（exit 0） | `tsc -b` 无错误 |
+| `pnpm test` | PASS（exit 0） | 62 files、611 tests 全通过 |
+| `pnpm lint` | PASS WITH WARNINGS（exit 0） | 仅 3 条既有 Fast Refresh warning |
+| `STRICT=1 pnpm check:tokens` | PASS（exit 0） | 6 项硬护栏均为 0 |
+| `(cd src-tauri && cargo test)` | PASS WITH WARNINGS（exit 0） | 204 passed、1 ignored；仅既有 warning/NSPasteboard 测试提示 |
+| synthetic Vision ignored test | PASS（exit 0） | 3000×1200 Retina 假邮箱/API key，两类均命中且无正文输出 |
+| `(cd src-tauri && cargo clippy --all-targets --all-features)` | PASS WITH WARNINGS（exit 0） | 无 error；保留既有 18/19 条 lint 债务 |
+| `rustfmt --check src/image_firewall.rs` / `git diff --check` | PASS（exit 0） | 新 Rust 模块和 tracked diff 无格式/空白错误 |
+| `pnpm build:app` | PASS（exit 0，157.4s） | Vite 2640 modules；App、DMG、updater archive/signature 均生成 |
+| `codesign --verify --deep --strict` / `hdiutil verify` | PASS（exit 0） | bundle designated requirement 与 DMG CRC 有效 |
+
+- binary SHA-256 为 `d7b8fab9da3b52484865306995977499b6a05ec75378ead3538b652b67b44f97`；DMG 为 `1916b2cb313f34845a3d981a2a91fd70e575c7d277f7a795d04ac2621f0eac35`；updater archive 为 `8bce164f3579189181189bf9847d0d1e319c49b77ecf3cc267e9ceefdce8b300`；资源键为 `index-ipgi6ASM.js` / `index-DVPbN2oM.css`。
+- 最终 release bundle 以 PID 5300 启动，`toskr-diag.log` 第 10815 行记录同一 v0.14.0 PID；只有一个 `toskr` 实例，启动清理后专用临时目录为空。
+- 额外的仓库级 `cargo fmt --check` 因 HEAD 中多份既有 Rust 格式差异失败；未机械重写无关文件。新模块单文件 rustfmt、阶段硬门禁、Clippy 与 diff-check 均独立通过。
+
+### 26.4 可复用结论
+
+- 图片“来源文件”与“本次发送文件”必须是两条显式数据线：新鲜度与 GC 绑定原图，Native 只消费 Draft 当前副本；若只覆写一个 `imageFiles`，来源检查会把合法脱敏误判 stale，清理也容易误伤原媒体。
+- Vision OCR 会为邮箱或赋值符两侧插入空格。应只规范化隐私规则输入并保留原 observation 与整框；修改 OCR 文本或按 finding 子串猜像素位置，会让审计证据与遮挡范围分叉。
+- `object-cover` 缩略图不能直接叠归一化区域框。预览应使用 `object-contain` 并把 letterbox 偏移纳入映射，否则横图/竖图的框即使像素计算正确，用户看到的位置仍是错的。
+- Draft 临时媒体是有外部副作用的异步资源；仅用文件名/scan revision 防迟到不足以区分关闭重开的同图 ABA，回执还必须绑定唯一 Draft ID，失效结果只允许回收副本。
+- 图片扫描结论必须绑定像素而不是文件名；前端携带扫描/遮挡像素 hash，Native 在任何剪贴板或窗口副作用前重新解码核对，才能关闭“同名换图”的 TOCTOU 窗口。
+- 原文确认绑定的是 target capability token。发送前普通路径可轮换 token，但存在明确保留/原文确认时只能复核当前 token；先轮换再沿用旧确认等价于把授权转移到新能力。
+
+### 26.5 RUNTIME-REQUIRED 与已知边界
+
+- `docs/manual-qa.md` 147–154 的手机号/账号、旋转图、签名 WKWebView 区域视觉、真实文件 SHA、强退清理、第三方目标只收到副本、VoiceOver 与 260–420pt 原生横栏仍需人工复验。
+- 真实 Vision synthetic 门禁证明本机 OCR 与规则相接，不证明所有字体、方向、语言或视觉秘密都能检出；空结果、失败、超限和未知回执继续 fail-closed，UI 必须保留误报/漏报说明。
+- 浏览器可连接本地 DEV 页面，但没有通过只读浏览器控制去伪造 DeliveryStore；因此本轮不把主界面 DOM 当作图片预检视觉证据。自动 SSR/CSS 和纯函数证据不能替代签名原生窗口或真实第三方投递。
+- 用户已授权的本地检查点 commit `b37a7ea` 发生在 Phase 16 修改前；本阶段未执行后续 git add/commit/push、分支切换、stash/reset/rebase、release 或版本修改。
+
+## 27. Target Lens 紧凑状态与“发送”产品措辞（2026-08-11）
+
+### 27.1 当前实现
+
+- Target Lens 收起态统一为 16px 应用图标、应用名、中点分隔符、状态点与状态文字；历史和展开操作保持右对齐。ready 显示“可发送”，不再使用有底色的状态胶囊。
+- 临时方案暂停仍是独立安全门禁：目标进程 ready 但方案待确认时显示黄色“需确认”，不能用绿色“可发送”掩盖阻断事实。
+- 产品界面、无障碍名称、提示/错误、设置、预检、最近记录及 Native 用户可见错误统一使用“发送”；内部 `Delivery*` 类型、reason code 与持久化协议名不重命名。
+- 默认安全方案与新建方案默认名同步为“稳妥发送”；用户自定义的既有方案名称视为业务数据，不因措辞调整被静默改写。无 schema 变化。
+
+### 27.2 验证证据
+
+- `pnpm typecheck`、62 files / 611 Vitest、严格 token、204 Rust tests（1 ignored）全部通过；lint 仅 3 条既有 Fast Refresh warning，`git diff --check` 通过。
+- 浏览器诊断在 320px 浅色与 260px 暗色下均无横向溢出；图标边界为 16×16，状态 accessible name 为“目标状态：可发送”。真实临时方案暂停语义由组件测试锁定为“需确认”。
+- `pnpm build:app` 157.5s 通过；App/DMG 签名与 DMG CRC 有效。运行 PID 11824，binary SHA-256 `bb80eba8…7659`，资源键 `index-B1kg-mHZ.js` / `index-BtKdDtx6.css`。
+- 签名原生窗口中的真实应用图标、VoiceOver 朗读顺序和各停靠形态仍按 `docs/manual-qa.md` 47–62 标记 `RUNTIME-REQUIRED`；浏览器截图不替代这些事实。

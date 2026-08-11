@@ -19,6 +19,12 @@ import {
   type ScanSensitiveText,
 } from "./firewallController";
 import { EMPTY_PRIVACY_DECISION } from "./firewall";
+import {
+  cleanupDeliveryDraftImages,
+  evaluateDeliveryDraftImages,
+  scanDeliveryDraftImages,
+  type ScanImageFirewall,
+} from "./imageFirewall";
 import { currentTargetProfileResolution } from "@/lib/currentTargetProfile";
 import {
   useDeliveryStore,
@@ -40,7 +46,11 @@ export function shouldOpenPreflight(
   if (force) return true;
   if (
     draft.firewallEnabled &&
-    (draft.firewallStatus !== "ready" || draft.findings.length > 0)
+    (draft.firewallStatus !== "ready" ||
+      draft.findings.length > 0 ||
+      draft.imageFirewall.some(
+        (item) => item.status !== "ready" || item.findings.length > 0
+      ))
   ) return true;
   if (mode === "always") return true;
   if (mode === "off") return false;
@@ -66,9 +76,9 @@ const staleMessages: Record<
   generation: "数据上下文已变化，请重新选择内容",
   source: "来源内容已变化，请重新打开预检",
   selection: "选择已变化，请重新打开预检",
-  revision: "投递草稿已被更新，请使用最新预检",
-  target: "投递目标已变化，请重新确认目标",
-  profile: "投递方案已变化，请重新打开预检",
+  revision: "发送草稿已被更新，请使用最新预检",
+  target: "发送目标已变化，请重新确认目标",
+  profile: "发送方案已变化，请重新打开预检",
 };
 
 /** 纯重组：只更新本次正文选择，目标、选择和策略仍绑定打开预检时的快照。 */
@@ -116,6 +126,16 @@ export function rebuildPreflightDraft(
     redactionMap: { ...draft.redactionMap },
     scanRevision: draft.scanRevision + 1,
     privacyDecision: { ...EMPTY_PRIVACY_DECISION },
+    originalImageFiles: [...draft.originalImageFiles],
+    imageFiles: [...draft.imageFiles],
+    imageFirewall: draft.imageFirewall.map((item) => ({
+      ...item,
+      findings: [...item.findings],
+      redactedFindingIds: [...item.redactedFindingIds],
+      rawConfirmation: item.rawConfirmation
+        ? { ...item.rawConfirmation }
+        : null,
+    })),
     enterPolicy: draft.enterPolicy,
     enterDecisionConfirmed: draft.enterDecisionConfirmed,
     pressEnter: draft.pressEnter,
@@ -204,6 +224,8 @@ export async function dispatchDeliveryDraft(
     force?: boolean;
     execute?: ExecuteDraft;
     scan?: ScanSensitiveText;
+    scanImage?: ScanImageFirewall;
+    activityReasonCode?: "retry-prepared";
   } = {}
 ): Promise<SendDeliveryResult | null> {
   if (draftPreparationPending) {
@@ -213,12 +235,16 @@ export async function dispatchDeliveryDraft(
   draftPreparationPending = true;
   try {
     void recordDeliveryEvent(
-      deliveryEventFromDraft(draft, "draftCreated", { status: "prepared" })
+      deliveryEventFromDraft(draft, "draftCreated", {
+        status: "prepared",
+        reasonCode: options.activityReasonCode ?? null,
+      })
     );
-    const scannedDraft = await scanDeliveryDraftFirewall(draft, options.scan);
+    const textScanned = await scanDeliveryDraftFirewall(draft, options.scan);
+    const scannedDraft = await scanDeliveryDraftImages(textScanned, options.scanImage);
     const state = useDeliveryStore.getState();
     if (state.open) {
-      warnWithPanel("请先完成或关闭当前投递预检", "preflight-open");
+      warnWithPanel("请先完成或关闭当前发送预检", "preflight-open");
       return null;
     }
     if (shouldOpenPreflight(scannedDraft, state.preflightMode, options.force)) {
@@ -250,6 +276,7 @@ export async function submitPreflightDraft(options: {
   retrySafe?: typeof deliveryRetryIsSafe;
   refresh?: typeof refreshTarget;
   scan?: ScanSensitiveText;
+  scanImage?: ScanImageFirewall;
 } = {}): Promise<SendDeliveryResult | null> {
   const state = useDeliveryStore.getState();
   if (!state.open || !state.draft || state.busy) return null;
@@ -270,6 +297,14 @@ export async function submitPreflightDraft(options: {
     useDeliveryStore.setState({ draft: scanned, busy: false });
     draft = scanned;
   }
+  if (draft.imageFirewall.some((item) => item.status === "idle")) {
+    if (!useDeliveryStore.getState().busy) state.setBusy(true);
+    const scanned = await scanDeliveryDraftImages(draft, options.scanImage);
+    const current = useDeliveryStore.getState();
+    if (!current.open || current.draft !== draft) return null;
+    useDeliveryStore.setState({ draft: scanned, busy: false });
+    draft = scanned;
+  }
   const inspect = options.inspect ?? inspectDeliveryDraft;
   const rebase = options.rebase ?? rebaseDeliveryDraftForRetry;
   let reason = inspect(draft);
@@ -282,14 +317,14 @@ export async function submitPreflightDraft(options: {
     try {
       refreshedTarget = await (options.refresh ?? refreshTarget)();
     } catch {
-      // 重新识别发生在 Native 投递前，失败仍然可以再次尝试。
+      // 重新识别发生在 Native 发送前，失败仍然可以再次尝试。
     }
     const current = useDeliveryStore.getState();
     if (!current.open || current.draft !== draft) return null;
     const recovered = rebase(draft, refreshedTarget);
     if (!recovered) {
       current.setBusy(false);
-      current.setLastError("原目标、来源或投递方案已变化，请重新打开预检");
+      current.setLastError("原目标、来源或发送方案已变化，请重新打开预检");
       return null;
     }
     current.replaceDraft(recovered);
@@ -307,14 +342,17 @@ export async function submitPreflightDraft(options: {
     return null;
   }
   const firewall = evaluateDeliveryDraftFirewall(draft);
-  if (!firewall.canSend) {
+  const imageFirewall = evaluateDeliveryDraftImages(draft);
+  if (!firewall.canSend || !imageFirewall.canSend) {
     void recordDeliveryEvent(
       deliveryEventFromDraft(draft, "firewallBlocked", {
         status: "blocked",
         reasonCode: "privacy_gate_blocked",
       })
     );
-    state.setLastError(firewall.reason ?? "请先完成隐私检查");
+    state.setLastError(
+      firewall.reason ?? imageFirewall.reason ?? "请先完成隐私检查"
+    );
     return null;
   }
 
@@ -324,6 +362,7 @@ export async function submitPreflightDraft(options: {
     const result = await (options.execute ?? executeDeliveryDraft)(draft);
     if (result?.status === "sent") {
       useDeliveryStore.getState().closeDraft();
+      cleanupDeliveryDraftImages(draft);
       return result;
     }
     const delivery = useDeliveryStore.getState();
@@ -332,6 +371,13 @@ export async function submitPreflightDraft(options: {
       delivery.setBusy(false);
       delivery.setLastError("发送尚未开始，可以修改后重试");
       return null;
+    }
+    if (result.reasonCode === "image_changed" && !result.pasteCompleted) {
+      delivery.setSafeRetryPending(false);
+      delivery.setRetryBlocked(true);
+      delivery.setBusy(false);
+      delivery.setLastError("图片内容已变化，请关闭后重新预检并重新扫描");
+      return result;
     }
     const retrySafe = (options.retrySafe ?? deliveryRetryIsSafe)(result);
     const retryDraft = retrySafe

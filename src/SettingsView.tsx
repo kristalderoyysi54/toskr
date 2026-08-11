@@ -47,7 +47,6 @@ import {
   SETTINGS_PATCH,
   SETTINGS_REQUEST,
   SETTINGS_SECTION,
-  SETTINGS_START_SAFE_REHEARSAL,
   SETTINGS_STATE,
   type SettingsSectionPayload,
 } from "@/lib/settingsSync";
@@ -90,8 +89,10 @@ import { checkForUpdate, downloadAndInstall } from "@/lib/updater";
 import { cn } from "@/lib/utils";
 import {
   CONTEXT_MENU_REGISTRY,
+  groupContextMenuIds,
   defaultSettings,
   normalizeContextMenu,
+  type ContextMenuItemId,
   type DuePresetCfg,
   type PromptSnippet,
   type Settings,
@@ -102,9 +103,14 @@ import {
   GENERAL_PROMPT_GROUP_ID,
   deletePromptGroup,
 } from "@/lib/targetProfiles";
+import { onboardingStateFromPersisted } from "@/lib/onboarding";
 import { presetCfgLabel } from "@/lib/tasks";
 import { AI_PRESETS, matchPreset, testAiConnection } from "@/lib/ai";
 import { subscribeAiKeyStatus } from "@/lib/aiKeyStatus";
+import {
+  useDataOperationStore,
+  type DataActivity,
+} from "@/store/dataOperationStore";
 
 type SectionId =
   | "general"
@@ -142,8 +148,8 @@ const SECTION_GROUPS: {
   {
     title: "发送",
     items: [
-      { id: "target", label: "目标与投递方案", icon: <Crosshair className="size-4" /> },
-      { id: "outcome", label: "成效与隐私", icon: <TrendingUp className="size-4" /> },
+      { id: "target", label: "目标与发送方案", icon: <Crosshair className="size-4" /> },
+      { id: "outcome", label: "使用概览", icon: <TrendingUp className="size-4" /> },
     ],
   },
   {
@@ -164,18 +170,40 @@ const SECTION_GROUPS: {
 ];
 
 /** 独立设置窗口：主面板是唯一持久化写入方，这里只收 state / 发 patch。 */
+function initialSettingsForView(): Settings {
+  const settings = defaultSettings();
+  if (!import.meta.env.DEV || typeof location === "undefined") {
+    return settings;
+  }
+  const tutorial = new URLSearchParams(location.search).get("tutorial");
+  if (!tutorial || !["2", "3", "4"].includes(tutorial)) return settings;
+  // 浏览器静态验收没有 main WebView 回播状态；仅显式教程预览解除诊断桩的初始锁。
+  useDataOperationStore.setState({ locked: false, phase: "idle", message: "" });
+  const sent = tutorial === "3" || tutorial === "4";
+  return {
+    ...settings,
+    onboarding: onboardingStateFromPersisted({
+      ...settings.onboarding,
+      permissionsCompletedAtMs: 1,
+      captured: true,
+      sent,
+      done: sent,
+      rehearsalStep: sent ? "complete" : "target",
+      rehearsalActive: !sent,
+      rehearsalNoteId: "browser-tutorial-preview",
+      recoveryTutorialCompletedAtMs: tutorial === "4" ? 2 : null,
+    }),
+  };
+}
+
 export default function SettingsView() {
-  const [settings, setSettings] = useState<Settings>(defaultSettings());
+  const [settings, setSettings] = useState<Settings>(initialSettingsForView);
   const [section, setSection] = useState<SectionId>("general");
   const [targetProfileRequest, setTargetProfileRequest] = useState<{
     profileId: string;
     sequence: number;
   } | null>(null);
-  const [dataActivity, setDataActivity] = useState({
-    locked: false,
-    phase: "idle",
-    message: "",
-  });
+  const dataActivity = useDataOperationStore();
 
   useEffect(() => {
     const un = listen<Settings>(SETTINGS_STATE, (e) => setSettings(e.payload));
@@ -200,11 +228,14 @@ export default function SettingsView() {
       }
       setSection(requested as SectionId);
     });
-    const unDataActivity = listen<{ locked: boolean; phase: string; message: string }>(
+    const unDataActivity = listen<DataActivity>(
       DATA_ACTIVITY_EVENT,
-      (event) => setDataActivity(event.payload)
+      (event) => useDataOperationStore.getState().update(event.payload)
     );
-    void emitTo("main", SETTINGS_REQUEST, {});
+    // 先完成三个监听器注册再请求快照，避免冷启动时错过唯一一次解锁回执。
+    void Promise.all([un, unSection, unDataActivity])
+      .then(() => emitTo("main", SETTINGS_REQUEST, {}))
+      .catch(() => {});
     return () => {
       un.then((fn) => fn());
       unSection.then((fn) => fn());
@@ -317,7 +348,7 @@ export default function SettingsView() {
                 key={s.id}
                 onClick={() => setSection(s.id)}
                 className={cn(
-                  "flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-body",
+                  "flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-body outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
                   section === s.id
                     ? "bg-primary/10 font-medium text-foreground"
                     : "text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
@@ -458,61 +489,80 @@ function PercentSlider({
   );
 }
 
-/** 卡片右键菜单自定义：显隐开关 + 顺序调整（合并/删除固定，不参与）。 */
+/** 卡片右键菜单自定义：按用途分组，显隐与组内顺序可调。 */
 function ContextMenuGroup({ settings, patch }: SP) {
   const cfg = normalizeContextMenu(settings.contextMenu);
+  const cfgById = new Map(cfg.map((item) => [item.id, item]));
+  const groups = groupContextMenuIds(cfg.map((item) => item.id));
   const labelOf = (id: string) =>
     CONTEXT_MENU_REGISTRY.find((i) => i.id === id)?.label ?? id;
-  const move = (idx: number, dir: -1 | 1) => {
-    const j = idx + dir;
-    if (j < 0 || j >= cfg.length) return;
+  const move = (ids: readonly ContextMenuItemId[], idx: number, dir: -1 | 1) => {
+    const swapId = ids[idx + dir];
+    if (!swapId) return;
+    const current = cfg.findIndex((item) => item.id === ids[idx]);
+    const target = cfg.findIndex((item) => item.id === swapId);
     const next = [...cfg];
-    [next[idx], next[j]] = [next[j], next[idx]];
+    [next[current], next[target]] = [next[target], next[current]];
     patch({ contextMenu: next });
   };
   return (
-    <Group title="卡片右键菜单（勾选显示 · 箭头调序；合并与删除固定不动）">
-      {cfg.map((item, idx) => (
-        <div key={item.id} className="group flex items-center gap-3 px-3.5 py-2">
-          <Switch
-            aria-label={`${labelOf(item.id)}：显示`}
-            checked={item.on}
-            onCheckedChange={(v) =>
-              patch({
-                contextMenu: cfg.map((i) =>
-                  i.id === item.id ? { ...i, on: v } : i
-                ),
-              })
-            }
-          />
-          <span
+    <Group title="卡片右键菜单（勾选显示 · 组内调序；合并、回复关系与删除固定）">
+      {groups.map((group, groupIndex) => (
+        <div key={group.id}>
+          <div
             className={cn(
-              "flex-1 text-title",
-              !item.on && "text-muted-foreground/50"
+              "border-t border-border/60 bg-muted/25 px-3.5 py-1 text-micro font-medium text-muted-foreground",
+              groupIndex === 0 && "border-t-0"
             )}
           >
-            {labelOf(item.id)}
-          </span>
-          <div className="flex gap-0.5">
-            <IconButton
-              label="上移"
-              size="2xs"
-              reveal="hover-focus"
-              disabled={idx === 0}
-              onClick={() => move(idx, -1)}
-            >
-              <ArrowUp />
-            </IconButton>
-            <IconButton
-              label="下移"
-              size="2xs"
-              reveal="hover-focus"
-              disabled={idx === cfg.length - 1}
-              onClick={() => move(idx, 1)}
-            >
-              <ArrowDown />
-            </IconButton>
+            {group.label}
           </div>
+          {group.ids.map((id, idx) => {
+            const item = cfgById.get(id)!;
+            return (
+              <div key={item.id} className="group flex items-center gap-3 px-3.5 py-2">
+                <Switch
+                  aria-label={`${labelOf(item.id)}：显示`}
+                  checked={item.on}
+                  onCheckedChange={(v) =>
+                    patch({
+                      contextMenu: cfg.map((i) =>
+                        i.id === item.id ? { ...i, on: v } : i
+                      ),
+                    })
+                  }
+                />
+                <span
+                  className={cn(
+                    "flex-1 text-title",
+                    !item.on && "text-muted-foreground/50"
+                  )}
+                >
+                  {labelOf(item.id)}
+                </span>
+                <div className="flex gap-0.5">
+                  <IconButton
+                    label="组内上移"
+                    size="2xs"
+                    reveal="hover-focus"
+                    disabled={idx === 0}
+                    onClick={() => move(group.ids, idx, -1)}
+                  >
+                    <ArrowUp />
+                  </IconButton>
+                  <IconButton
+                    label="组内下移"
+                    size="2xs"
+                    reveal="hover-focus"
+                    disabled={idx === group.ids.length - 1}
+                    onClick={() => move(group.ids, idx, 1)}
+                  >
+                    <ArrowDown />
+                  </IconButton>
+                </div>
+              </div>
+            );
+          })}
         </div>
       ))}
     </Group>
@@ -696,17 +746,6 @@ function GeneralSection({ settings, patch }: SP) {
               aria-label="失焦自动隐藏"
               checked={settings.hideOnBlur}
               onCheckedChange={(v) => patch({ hideOnBlur: v })}
-            />
-          }
-        />
-        <Row
-          label="自动贴边隐藏"
-          hint="面板停在屏幕右缘（自动停靠或手动拖到屏缘）时自动滑出隐藏，鼠标移到屏缘唤出（类似 Dock）；与伴随磁吸二选一"
-          right={
-            <Switch
-              aria-label="自动贴边隐藏"
-              checked={settings.autoEdgeHide}
-              onCheckedChange={(v) => patch({ autoEdgeHide: v })}
             />
           }
         />
@@ -1303,9 +1342,9 @@ function TargetSection({
 }) {
   return (
     <div>
-      <SectionTitle>目标与投递方案</SectionTitle>
+      <SectionTitle>目标与发送方案</SectionTitle>
       <p className="mb-3 text-body text-muted-foreground">
-        Toskr 会根据当前目标应用自动选择投递方案。方案决定提示词组、输出格式、粘贴后动作和出站隐私策略。
+        Toskr 会根据当前目标应用自动选择发送方案。方案决定提示词组、输出格式、粘贴后动作和出站隐私策略。
       </p>
       <FirewallSettings settings={settings} patch={patch} />
       <TargetProfileManager
@@ -1382,7 +1421,7 @@ function CompanionSettings({ settings, patch }: SP) {
       <Group>
         <Row
           label="启用伴随停靠"
-          hint="面板磁吸到列表内应用的窗口右缘、同高并实时跟随"
+          hint="有目标时磁吸并跟随；无可用目标时自由拖动，拖到屏幕外缘会自动收起"
           right={
             <Switch
               aria-label="启用伴随停靠"
@@ -2744,20 +2783,6 @@ function AboutSection({
       </Group>
 
       <Group title="链接">
-        <Row
-          label="安全投递演练"
-          hint="重跑权限、捕获、目标确认、脱敏预检与只粘贴投递"
-          right={
-            <button
-              type="button"
-              onClick={() =>
-                void emitTo("main", SETTINGS_START_SAFE_REHEARSAL, {})}
-              className="rounded-md border border-border px-2.5 py-1 text-body hover:bg-muted"
-            >
-              开始演练
-            </button>
-          }
-        />
         <LinkRow label="项目主页" value="GitHub" url={REPO_URL} />
         <LinkRow label="报告 Bug" value="提 Issue" url={`${REPO_URL}/issues/new`} />
       </Group>

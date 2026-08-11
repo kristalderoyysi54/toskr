@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const apiMocks = vi.hoisted(() => ({
   appIcon: vi.fn(),
   diagNote: vi.fn(),
+  getTargetSnapshot: vi.fn(),
   refreshTargetSnapshot: vi.fn(),
   refreshPrevApp: vi.fn(),
   sendDelivery: vi.fn(),
@@ -183,7 +184,20 @@ describe("buildDeliveryDraft", () => {
     expect(draft.sourceItemIds).toEqual(["second", "image", "first"]);
     expect(draft.rawText).toBe("1. 第二条\n2. 架构图\n3. 第一条");
     expect(draft.finalText).toBe("审查：\n1. 第二条\n2. 架构图\n3. 第一条");
+    expect(draft.originalImageFiles).toEqual(["diagram.png", "detail.png"]);
     expect(draft.imageFiles).toEqual(["diagram.png", "detail.png"]);
+    expect(draft.imageFirewall).toEqual([
+      expect.objectContaining({
+        originalFile: "diagram.png",
+        sendFile: "diagram.png",
+        status: "idle",
+      }),
+      expect.objectContaining({
+        originalFile: "detail.png",
+        sendFile: "detail.png",
+        status: "idle",
+      }),
+    ]);
     expect(draft).toMatchObject({
       id: "draft-1",
       revision: 1,
@@ -368,6 +382,7 @@ function resetExecution(status: DeliveryStatus = "sent") {
   applyTargetEvent(target);
   apiMocks.diagNote.mockReset().mockResolvedValue(undefined);
   apiMocks.refreshTargetSnapshot.mockReset().mockResolvedValue(target);
+  apiMocks.getTargetSnapshot.mockReset().mockResolvedValue(target);
   apiMocks.refreshPrevApp.mockReset();
   apiMocks.showPanel.mockReset().mockResolvedValue(undefined);
   apiMocks.scanSensitiveText.mockReset().mockImplementation(async (text: string) => ({
@@ -516,6 +531,7 @@ describe("executeDeliveryDraft", () => {
       targetToken: target.token,
       text: draft.finalText,
       imageFiles: draft.imageFiles,
+      expectedImagePixelHashes: [],
       pressEnter: draft.pressEnter,
       keepPanel: draft.keepPanel,
       deliveryId: draft.id,
@@ -571,6 +587,93 @@ describe("executeDeliveryDraft", () => {
     );
   });
 
+  it("未遮挡的图片 block 在执行器最后门禁阻断，不触发 Native", async () => {
+    const id = useNotesStore.getState().addNote("假敏感截图", {
+      kind: "image",
+      imageFile: "img-synthetic.png",
+      imageW: 400,
+      imageH: 200,
+    }).id!;
+    useNotesStore.getState().setChecked([id]);
+    const built = executableNoteDraft([id]);
+    const finding = {
+      id: "image-block",
+      observationIndex: 0,
+      category: "apiKey" as const,
+      severity: "block" as const,
+      boundingBox: { x: 0.1, y: 0.2, width: 0.4, height: 0.1 },
+      pixelBox: { x: 38, y: 38, width: 164, height: 24 },
+      maskedPreview: "sk••••89",
+      ruleId: "test.image-api-key",
+    };
+    const draft = {
+      ...built,
+      imageFirewall: [{
+        ...built.imageFirewall[0],
+        status: "ready" as const,
+        pixelHash: "a".repeat(64),
+        width: 400,
+        height: 200,
+        scanRevision: 1,
+        findings: [finding],
+      }],
+    };
+
+    expect(await executeDeliveryDraft(draft)).toBeNull();
+    expect(apiMocks.sendDelivery).not.toHaveBeenCalled();
+    expect(tip).toHaveBeenCalledWith(
+      "warn",
+      expect.stringContaining("遮挡")
+    );
+  });
+
+  it("图片遮挡后只把临时副本 token 交给 Native，来源校验仍绑定原图", async () => {
+    const id = useNotesStore.getState().addNote("假敏感截图", {
+      kind: "image",
+      imageFile: "img-synthetic.png",
+      imageW: 400,
+      imageH: 200,
+    }).id!;
+    useNotesStore.getState().setChecked([id]);
+    const built = executableNoteDraft([id]);
+    const finding = {
+      id: "image-block",
+      observationIndex: 0,
+      category: "apiKey" as const,
+      severity: "block" as const,
+      boundingBox: { x: 0.1, y: 0.2, width: 0.4, height: 0.1 },
+      pixelBox: { x: 38, y: 38, width: 164, height: 24 },
+      maskedPreview: "sk••••89",
+      ruleId: "test.image-api-key",
+    };
+    const sendFile = "toskr-redacted:redacted-content-hash.png";
+    const draft = {
+      ...built,
+      imageFiles: [sendFile],
+      imageFirewall: [{
+        ...built.imageFirewall[0],
+        sendFile,
+        status: "ready" as const,
+        pixelHash: "a".repeat(64),
+        redactedPixelHash: "b".repeat(64),
+        width: 400,
+        height: 200,
+        scanRevision: 1,
+        findings: [finding],
+        redactedFindingIds: [finding.id],
+      }],
+    };
+
+    expect(inspectDeliveryDraft(draft)).toBeNull();
+    expect((await executeDeliveryDraft(draft))?.status).toBe("sent");
+    expect(apiMocks.sendDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        imageFiles: [sendFile],
+        expectedImagePixelHashes: ["b".repeat(64)],
+      })
+    );
+  });
+
   it("allowRaw 的 block 二次确认后仍强制关闭自动回车", async () => {
     const current = useNotesStore.getState();
     current.setSettings({
@@ -615,6 +718,61 @@ describe("executeDeliveryDraft", () => {
 
     expect(apiMocks.sendDelivery).toHaveBeenCalledWith(
       expect.objectContaining({ pressEnter: false })
+    );
+    expect(apiMocks.getTargetSnapshot).toHaveBeenCalledOnce();
+    expect(apiMocks.refreshTargetSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("原文确认后的目标 token 若已轮换，执行器不会把旧确认搬到新能力", async () => {
+    const current = useNotesStore.getState();
+    current.setSettings({
+      targetProfiles: [{
+        id: "raw-profile",
+        name: "原文测试",
+        bundleIds: [target.bundleId!],
+        promptGroupId: "general",
+        defaultFormat: "plain",
+        enterPolicy: "never",
+        privacyPolicy: "allowRaw",
+        keepPanel: false,
+      }],
+      defaultTargetProfileId: "raw-profile",
+    });
+    const id = current.addNote("fake-block-value").id!;
+    current.setChecked([id]);
+    const built = executableNoteDraft([id]);
+    const draft = {
+      ...built,
+      findings: [{
+        id: "block-1",
+        category: "apiKey" as const,
+        severity: "block" as const,
+        startUtf16: 0,
+        endUtf16: 5,
+        maskedPreview: "fa•••ue",
+        suggestedPlaceholder: "[API_KEY]",
+        ruleId: "test.api-key",
+      }],
+      privacyDecision: {
+        ...built.privacyDecision,
+        rawConfirmation: {
+          revision: built.scanRevision,
+          targetToken: built.targetSnapshot?.token ?? null,
+          level: "block" as const,
+        },
+      },
+    };
+    apiMocks.getTargetSnapshot.mockResolvedValueOnce({
+      ...target,
+      token: "rotated-target-token",
+      revision: target.revision + 1,
+    });
+
+    expect(await executeDeliveryDraft(draft)).toBeNull();
+    expect(apiMocks.sendDelivery).not.toHaveBeenCalled();
+    expect(tip).toHaveBeenCalledWith(
+      "warn",
+      expect.stringContaining("重新确认原文发送")
     );
   });
 
@@ -721,7 +879,7 @@ describe("executeDeliveryDraft", () => {
     await expect(executeDeliveryDraft(draft)).resolves.toBeNull();
 
     expect(apiMocks.sendDelivery).not.toHaveBeenCalled();
-    expect(tip).toHaveBeenCalledWith("warn", "发送已取消：投递内容已更新，请重试");
+    expect(tip).toHaveBeenCalledWith("warn", "发送已取消：发送内容已更新，请重试");
   });
 
   it("Native 回执晚于 revision 更新时丢弃状态副作用", async () => {

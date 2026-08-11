@@ -18,6 +18,7 @@ import { doneIdsAfterSend, useNotesStore } from "@/store/notesStore";
 import {
   clearTargetProfileOverride,
   currentTargetBlockMessage,
+  readTarget,
   refreshTarget,
   sameTargetIdentity,
   targetProfileIdentity,
@@ -35,6 +36,7 @@ import { isSafeRehearsalText } from "@/lib/onboarding";
 
 import type { DeliveryDraft } from "./types";
 import { evaluateDeliveryDraftFirewall } from "./firewallController";
+import { evaluateDeliveryDraftImages } from "./imageFirewall";
 
 let latestAllocatedRevision = 0;
 let activeExecutionRevision: number | null = null;
@@ -127,6 +129,13 @@ function sameStrings(left: readonly string[], right: readonly string[]): boolean
     left.every((value, index) => value === right[index]);
 }
 
+/** 原文保留决定绑定当前 target token；发送前复核不能再轮换这枚 token。 */
+function draftHasTargetBoundPrivacyDecision(draft: DeliveryDraft): boolean {
+  return draft.privacyDecision.excludedFindingIds.length > 0 ||
+    draft.privacyDecision.rawConfirmation !== null ||
+    draft.imageFirewall.some((item) => item.rawConfirmation !== null);
+}
+
 function draftSourceIsCurrent(draft: DeliveryDraft): boolean {
   const state = useNotesStore.getState();
   if (draft.promptSnippetId) {
@@ -169,7 +178,7 @@ function draftSourceIsCurrent(draft: DeliveryDraft): boolean {
   return rebuilt.rawText === draft.rawText &&
     rebuilt.finalText === draft.assembledText &&
     sameStrings(rebuilt.sourceItemIds, draft.sourceItemIds) &&
-    sameStrings(rebuilt.imageFiles, draft.imageFiles);
+    sameStrings(rebuilt.imageFiles, draft.originalImageFiles);
 }
 
 type DraftFreshnessIssue =
@@ -265,7 +274,7 @@ function rejectStaleDraft(draft: DeliveryDraft): boolean {
     ],
     source: ["发送已取消：来源内容已变化，请重试", "draft-source-changed"],
     selection: ["发送已取消：选择已变化，请重试", "draft-selection-changed"],
-    revision: ["发送已取消：投递内容已更新，请重试", "draft-stale"],
+    revision: ["发送已取消：发送内容已更新，请重试", "draft-stale"],
   };
   void recordDeliveryEvent(
     deliveryEventFromDraft(draft, "sendBlocked", {
@@ -307,7 +316,7 @@ async function discardStaleResult(
     generation: "发送已完成，但数据上下文已变化，未修改卡片状态",
     source: "发送已完成，但来源内容已变化，未修改卡片状态",
     selection: "发送已完成，但选择已变化，未修改卡片状态",
-    revision: "发送已完成，但投递内容版本已变化，未修改卡片状态",
+    revision: "发送已完成，但发送内容版本已变化，未修改卡片状态",
   };
   tip("warn", messages[issue]);
   return true;
@@ -338,14 +347,14 @@ function applySuccessfulDelivery(draft: DeliveryDraft) {
     ) {
       state.transitionOnboarding({ type: "deliverySent" });
     } else {
-      tip("warn", "演练投递已完成，但演练会话已变化，未改写上手进度");
+      tip("warn", "演练发送已完成，但演练会话已变化，未改写上手进度");
     }
     return;
   }
   state.markOnboarding({ sent: true });
 }
 
-/** 所有外部投递唯一执行器；只消费不可变 Draft，不再自行拼装正文。 */
+/** 所有外部发送唯一执行器；只消费不可变 Draft，不再自行拼装正文。 */
 export async function executeDeliveryDraft(
   draft: DeliveryDraft
 ): Promise<SendDeliveryResult | null> {
@@ -353,7 +362,7 @@ export async function executeDeliveryDraft(
     return blockDelivery(draft, "已有发送正在进行，请稍候", "delivery-pending");
   }
   if (draft.revision !== latestAllocatedRevision) {
-    return blockDelivery(draft, "发送已取消：投递内容已更新，请重试", "draft-stale");
+    return blockDelivery(draft, "发送已取消：发送内容已更新，请重试", "draft-stale");
   }
   if (isDataOperationLocked()) {
     return blockDelivery(draft, "数据只读期间不能发送", "data-locked");
@@ -362,12 +371,12 @@ export async function executeDeliveryDraft(
     return blockDelivery(draft, "发送已取消：所选内容已变化", "draft-source-missing");
   }
   if (draft.warnings.includes("empty-payload")) {
-    return blockDelivery(draft, "发送已取消：没有可投递的内容", "draft-empty");
+    return blockDelivery(draft, "发送已取消：没有可发送的内容", "draft-empty");
   }
   if (useTargetStore.getState().profileOverrideNeedsConfirmation) {
     return blockDelivery(
       draft,
-      "原临时投递方案已暂停，请确认或恢复自动匹配",
+      "原临时发送方案已暂停，请确认或恢复自动匹配",
       "override-needs-confirmation"
     );
   }
@@ -375,22 +384,23 @@ export async function executeDeliveryDraft(
     return blockDelivery(draft, currentTargetBlockMessage(), "target-not-ready");
   }
   if (!sameDraftTarget(draft.targetSnapshot, useTargetStore.getState().snapshot)) {
-    return blockDelivery(draft, "投递目标已变化，请确认后重试发送", "draft-target-changed");
+    return blockDelivery(draft, "发送目标已变化，请确认后重试发送", "draft-target-changed");
   }
   if (!sameDraftProfile(draft)) {
-    return blockDelivery(draft, "投递方案设置已变化，请确认后重试发送", "profile-policy-changed");
+    return blockDelivery(draft, "发送方案设置已变化，请确认后重试发送", "profile-policy-changed");
   }
   if (rejectStaleDraft(draft)) return null;
   const firewall = evaluateDeliveryDraftFirewall(draft);
-  if (!firewall.canSend) {
+  const imageFirewall = evaluateDeliveryDraftImages(draft);
+  if (!firewall.canSend || !imageFirewall.canSend) {
     warnWithPanel(
-      `发送已取消：${firewall.reason ?? "隐私检查未完成"}`,
-      "privacy-gate-blocked"
+      `发送已取消：${firewall.reason ?? imageFirewall.reason ?? "隐私检查未完成"}`,
+      "privacy_gate_blocked"
     );
     void recordDeliveryEvent(
       deliveryEventFromDraft(draft, "firewallBlocked", {
         status: "blocked",
-        reasonCode: "privacy-gate-blocked",
+        reasonCode: "privacy_gate_blocked",
       })
     );
     return null;
@@ -401,7 +411,8 @@ export async function executeDeliveryDraft(
   deliveryPending = true;
   let nativeDispatchTarget: TargetSnapshot | null = null;
   try {
-    let pressEnter = draft.safeRehearsal || firewall.forcePressEnterOff
+    let pressEnter = draft.safeRehearsal ||
+      firewall.forcePressEnterOff || imageFirewall.forcePressEnterOff
       ? false
       : draft.pressEnter;
     if (
@@ -410,7 +421,7 @@ export async function executeDeliveryDraft(
       !draft.enterDecisionConfirmed
     ) {
       const confirmed = await ask(
-        "当前投递方案的“粘贴后动作”需要确认：粘贴后立即按回车吗？",
+        "当前发送方案的“粘贴后动作”需要确认：粘贴后立即按回车吗？",
         { title: "确认粘贴后动作", kind: "warning" }
       );
       if (rejectStaleDraft(draft)) return null;
@@ -421,27 +432,40 @@ export async function executeDeliveryDraft(
       pressEnter = true;
     }
 
-    const refreshedTarget = await refreshTarget();
+    const preserveConfirmedToken = draftHasTargetBoundPrivacyDecision(draft);
+    const refreshedTarget = await (
+      preserveConfirmedToken ? readTarget() : refreshTarget()
+    );
     if (!refreshedTarget?.ready || targetSendDisabled()) {
       const message = refreshedTarget
         ? currentTargetBlockMessage()
         : useTargetStore.getState().status === "ready"
-          ? "投递目标刚刚发生变化，请重试发送"
+          ? "发送目标刚刚发生变化，请重试发送"
           : currentTargetBlockMessage();
       return blockDelivery(draft, message, "target-refresh-blocked");
     }
     if (!sameTargetIdentity(draft.targetSnapshot, refreshedTarget)) {
-      return blockDelivery(draft, "投递目标已变化，请确认后重试发送", "target-identity-changed");
+      return blockDelivery(draft, "发送目标已变化，请确认后重试发送", "target-identity-changed");
+    }
+    if (
+      preserveConfirmedToken &&
+      refreshedTarget.token !== draft.targetSnapshot?.token
+    ) {
+      return blockDelivery(
+        draft,
+        "发送目标凭据已变化，请重新确认原文发送",
+        "privacy-confirmation-stale"
+      );
     }
     if (useTargetStore.getState().profileOverrideNeedsConfirmation) {
       return blockDelivery(
         draft,
-        "原临时投递方案已暂停，请确认或恢复自动匹配",
+        "原临时发送方案已暂停，请确认或恢复自动匹配",
         "override-needs-confirmation"
       );
     }
     if (!sameDraftProfile(draft)) {
-      return blockDelivery(draft, "投递方案设置已变化，请确认后重试发送", "profile-policy-changed");
+      return blockDelivery(draft, "发送方案设置已变化，请确认后重试发送", "profile-policy-changed");
     }
     if (rejectStaleDraft(draft)) return null;
 
@@ -454,6 +478,11 @@ export async function executeDeliveryDraft(
       targetToken: refreshedTarget.token,
       text: draft.finalText,
       imageFiles: draft.imageFiles,
+      expectedImagePixelHashes: draft.imageFirewall.map((item) =>
+        item.sendFile === item.originalFile
+          ? item.pixelHash
+          : item.redactedPixelHash
+      ),
       pressEnter,
       keepPanel: draft.keepPanel,
       deliveryId: draft.id,

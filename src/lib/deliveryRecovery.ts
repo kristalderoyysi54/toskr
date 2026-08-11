@@ -65,7 +65,7 @@ export async function reprepareDeliveryEvent(
   options: RecoveryOptions = {}
 ): Promise<DeliveryRecoveryResult> {
   if (
-    !["sendBlocked", "sendFailed"].includes(event.eventType) ||
+    !["firewallBlocked", "sendBlocked", "sendFailed"].includes(event.eventType) ||
     !["blocked", "failed"].includes(event.status)
   ) {
     return { ok: false, reason: "unsupported" };
@@ -118,7 +118,11 @@ export async function reprepareDeliveryEvent(
           notes.settings.firewallDisabledWarnCategories,
       }
     );
-    await dispatchDeliveryDraft(draft, { force: true, scan: options.scan });
+    await dispatchDeliveryDraft(draft, {
+      force: true,
+      scan: options.scan,
+      activityReasonCode: "retry-prepared",
+    });
     return useDeliveryStore.getState().open
       ? { ok: true }
       : { ok: false, reason: "busy" };

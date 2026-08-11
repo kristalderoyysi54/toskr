@@ -197,7 +197,7 @@ export function TargetProfileManager({
     const availability = !currentTarget?.bundleId
       ? "尚未识别，发送已锁定"
       : currentResolution.isTargetReady
-        ? "目标可用"
+        ? "可发送"
         : "目标已失效，发送已锁定";
     setTestMessage(
       `解析完成：${currentResolution.profile.name} · ${availability}。未访问剪贴板，未模拟粘贴或回车。`

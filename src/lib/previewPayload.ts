@@ -30,6 +30,12 @@ export const EDITOR_INSERT_REQUEST_TTL_MS = 1500;
 export const EDITOR_INSERT_OPERATION_TTL_MS = 5000;
 const EDITOR_INSERT_CACHE_MAX = 32;
 
+export function previewIsEditable(
+  note: NotePreviewPayload | null
+): note is NotePreviewPayload {
+  return !!note && note.readOnly !== true;
+}
+
 export function editorInsertRejectionReason(
   currentNote: NotePreviewPayload | null,
   payload: NoteEditorInsertPayload,
@@ -42,6 +48,9 @@ export function editorInsertRejectionReason(
     currentNote.dataGeneration !== payload.dataGeneration
   ) {
     return "卡片编辑目标或数据上下文已变化";
+  }
+  if (!previewIsEditable(currentNote)) {
+    return "当前内容为只读预览";
   }
   if (!Number.isFinite(payload.expiresAt) || payload.expiresAt <= now) {
     return "卡片编辑请求已过期";

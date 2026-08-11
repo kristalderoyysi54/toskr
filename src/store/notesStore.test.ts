@@ -18,9 +18,11 @@ vi.mock("./persistStorage", () => {
 
 import {
   CLIPBOARD_ID,
+  CONTEXT_MENU_REGISTRY,
   decodePersistedState,
   defaultSettings,
   doneIdsAfterSend,
+  groupContextMenuIds,
   INBOX_ID,
   mergePersistedNotesState,
   orderedCheckedNotes,
@@ -48,6 +50,36 @@ function reset() {
 
 describe("notesStore 基础", () => {
   beforeEach(reset);
+
+  it("右键菜单按语义完整分组，并保留每组内的用户顺序", () => {
+    const allIds = CONTEXT_MENU_REGISTRY.map((item) => item.id);
+    const groupedIds = groupContextMenuIds(allIds).flatMap((group) => group.ids);
+
+    expect(new Set(groupedIds)).toEqual(new Set(allIds));
+    expect(groupedIds).toHaveLength(allIds.length);
+
+    const custom = groupContextMenuIds([
+      "move",
+      "preview",
+      "copy",
+      "edit",
+      "keep",
+      "send",
+      "textops",
+    ]);
+    expect(custom.map((group) => [group.id, group.ids])).toEqual([
+      ["view", ["preview", "edit"]],
+      ["content", ["copy", "textops"]],
+      ["send", ["send"]],
+      ["organize", ["move", "keep"]],
+    ]);
+    expect(groupContextMenuIds(["move"]).map((group) => group.id)).toEqual([
+      "view",
+      "content",
+      "send",
+      "organize",
+    ]);
+  });
 
   it("v12 迁移到 v14 时正文不变，并补齐本地成效设置", () => {
     expect(STORE_VERSION).toBe(14);

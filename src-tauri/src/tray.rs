@@ -9,7 +9,7 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, Wry};
 use tauri_plugin_autostart::ManagerExt;
 
-use crate::events::{TriggerPayload, TRIGGER_EVENT};
+use crate::events::{TriggerPayload, TriggerSource, TRIGGER_EVENT};
 use crate::state::AppState;
 
 const TRAY_ID: &str = "toskr-tray";
@@ -154,10 +154,25 @@ fn handle_menu(app: &AppHandle, id: &str) {
                 .and_then(|w| w.is_visible().ok())
                 .unwrap_or(false);
             if visible {
-                let _ = app.emit_to("main", TRIGGER_EVENT, TriggerPayload::Toggle { force: false });
+                let _ = app.emit_to(
+                    "main",
+                    TRIGGER_EVENT,
+                    TriggerPayload::Toggle {
+                        force: false,
+                        source: TriggerSource::Tray,
+                    },
+                );
             } else {
+                crate::window::set_panel_auto_hide_armed(app, true, "托盘打开");
                 crate::window::request_show_panel(app);
-                let _ = app.emit_to("main", TRIGGER_EVENT, TriggerPayload::Toggle { force: false });
+                let _ = app.emit_to(
+                    "main",
+                    TRIGGER_EVENT,
+                    TriggerPayload::Toggle {
+                        force: false,
+                        source: TriggerSource::Tray,
+                    },
+                );
             }
         }
         "fix-permission" => {

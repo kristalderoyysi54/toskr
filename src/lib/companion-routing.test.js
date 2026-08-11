@@ -25,4 +25,15 @@ describe("伴随磁吸运行态门禁", () => {
     expect(rust).not.toContain("DEBUG-ms-companion");
     expect(rust).not.toContain("debug-ms-companion");
   });
+
+  it("贴边隐藏作为默认能力，不再暴露菜单或设置开关", () => {
+    const app = source("src/App.tsx");
+    const settings = source("src/SettingsView.tsx");
+    const runtime = source("src/lib/runtimeSettings.ts");
+
+    expect(app).not.toContain(">自动贴边隐藏<");
+    expect(settings).not.toContain('label="自动贴边隐藏"');
+    expect(settings).not.toContain('aria-label="自动贴边隐藏"');
+    expect(runtime).toContain("api.setAutoEdgeHide(true)");
+  });
 });

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ResultLinkChoices } from "./ResultLinkDialog";
 import type { DeliveryEvent } from "@/lib/deliveryActivityCore";
+import { retainExplicitResultSelection } from "@/lib/resultReturn";
 import type { Note } from "@/store/notesStore";
 
 const event = {
@@ -31,7 +32,7 @@ const event = {
 
 const note = {
   id: "result-1",
-  text: "answer secret body",
+  text: "这是接口排查回复",
   sectionId: "inbox",
   done: false,
   createdAt: 2_000,
@@ -39,24 +40,48 @@ const note = {
   sourceBundle: "com.openai.chat",
 } satisfies Note;
 
+const sourceNotes: Note[] = [
+  {
+    id: "source-1",
+    text: "请帮我分析登录接口失败原因",
+    sectionId: "inbox",
+    done: false,
+    createdAt: 500,
+  },
+  {
+    id: "source-2",
+    kind: "image",
+    text: "图片 320×180",
+    imageFile: "debug.png",
+    imageW: 320,
+    imageH: 180,
+    sectionId: "inbox",
+    done: false,
+    createdAt: 600,
+  },
+];
+
 describe("ResultLinkDialog", () => {
-  it("投递候选只显示时间、目标和来源计数，不显示正文", () => {
+  it("发送候选显示当前本地来源摘要，帮助区分短时间内的多次发送", () => {
     const html = renderToStaticMarkup(
       <ResultLinkChoices
         mode="delivery"
         deliveries={[event, { ...event, eventId: "event-2", deliveryId: "delivery-2", timestampMs: 900 }]}
         notes={[]}
-        selectedId="delivery-1"
+        sourceNotes={sourceNotes}
+        selectedId={null}
         onSelect={vi.fn()}
       />
     );
     expect(html).toContain("Chat");
-    expect(html).toContain("来源 2 项");
-    expect(html).toContain("42 字符 · 1 图");
-    expect(html).not.toContain("secret");
+    expect(html).toContain("发送内容：请帮我分析登录接口失败原因，另有 1 项");
+    expect(html).toContain("42 字文字 · 1 张图片");
+    expect(html).toContain('aria-checked="false"');
+    expect(html).toContain("text-title");
+    expect(html).not.toContain("text-micro");
   });
 
-  it("现有卡片候选不展示结果正文，无候选有明确状态", () => {
+  it("回复候选展示本地摘要且无候选时直接说明下一步", () => {
     const list = renderToStaticMarkup(
       <ResultLinkChoices
         mode="note"
@@ -67,12 +92,20 @@ describe("ResultLinkDialog", () => {
       />
     );
     expect(list).toContain("Chat");
-    expect(list).toContain("18 字符");
-    expect(list).not.toContain("answer secret body");
+    expect(list).toContain("这是接口排查回复");
+    expect(list).toContain("回复候选 · 8 字");
+    expect(list).toContain("text-title");
+    expect(list).not.toContain("text-micro");
 
     const empty = renderToStaticMarkup(
       <ResultLinkChoices mode="delivery" deliveries={[]} notes={[]} selectedId={null} onSelect={vi.fn()} />
     );
-    expect(empty).toContain("没有符合条件的最近投递");
+    expect(empty).toContain("找不到可对应的发送记录");
+  });
+
+  it("候选变化只保留用户明确点选，不自动选择第一项", () => {
+    expect(retainExplicitResultSelection(null, ["first"])).toBeNull();
+    expect(retainExplicitResultSelection("missing", ["first"])).toBeNull();
+    expect(retainExplicitResultSelection("first", ["first", "second"])).toBe("first");
   });
 });

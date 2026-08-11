@@ -33,6 +33,7 @@ import {
   hasRecentEditorInsertOperation,
   NOTE_EDITOR_INSERT_EVENT,
   NOTE_EDITOR_INSERT_RESULT_EVENT,
+  previewIsEditable,
   rememberEditorInsertOperation,
   refreshPreviewPayload,
   type NoteEditorInsertPayload,
@@ -76,7 +77,7 @@ function AttachThumb({
 }: {
   file: string;
   onClick: () => void;
-  onRemove: () => void;
+  onRemove?: () => void;
 }) {
   const url = useNoteThumb(file);
   return (
@@ -96,19 +97,21 @@ function AttachThumb({
           <span className="size-4 animate-pulse rounded-sm bg-black/10 dark:bg-white/10" />
         )}
       </button>
-      {/* 常显于键盘焦点，悬停才淡入——缩略图只有 48px，常驻 ⊗ 会盖住画面 */}
-      <button
-        aria-label="从卡片移除这张图片"
-        title="从卡片移除这张图片"
-        onClick={onRemove}
-        className={cn(
-          "absolute -right-1 -top-1 rounded-full bg-foreground/80 p-0.5 text-background",
-          "opacity-0 outline-none transition-opacity group-hover:opacity-100",
-          "focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary/50"
-        )}
-      >
-        <X className="size-2.5" />
-      </button>
+      {onRemove && (
+        /* 常显于键盘焦点，悬停才淡入——缩略图只有 48px，常驻 ⊗ 会盖住画面 */
+        <button
+          aria-label="从卡片移除这张图片"
+          title="从卡片移除这张图片"
+          onClick={onRemove}
+          className={cn(
+            "absolute -right-1 -top-1 rounded-full bg-foreground/80 p-0.5 text-background",
+            "opacity-0 outline-none transition-opacity group-hover:opacity-100",
+            "focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary/50"
+          )}
+        >
+          <X className="size-2.5" />
+        </button>
+      )}
     </div>
   );
 }
@@ -264,7 +267,7 @@ export default function TextPreviewView() {
   );
   const targetBlockedMessage = useTargetStore((state) =>
     state.profileOverrideNeedsConfirmation
-      ? "原临时投递方案已暂停"
+      ? "原临时发送方案已暂停"
       : state.status === "ready"
         ? null
         : targetBlockMessage(state.status, state.reason)
@@ -311,7 +314,7 @@ export default function TextPreviewView() {
       setDraftEmpty(!p.text.trim());
       draftImagesRef.current = p.images;
       setDraftImages(p.images);
-      setEditing(p.edit);
+      setEditing(previewIsEditable(p) && p.edit);
       setMdView(!p.codeLang && p.kind !== "link" && looksLikeMarkdown(p.text));
       setTextSelection(null);
       pendingSelectionRef.current = null;
@@ -497,7 +500,7 @@ export default function TextPreviewView() {
   };
 
   const save = () => {
-    if (!note) return;
+    if (!previewIsEditable(note)) return;
     const text = draftRef.current.trim();
     const images = draftImagesRef.current;
     if (!text && images.length === 0) {
@@ -538,6 +541,7 @@ export default function TextPreviewView() {
 
   /** 从系统剪贴板粘贴图片，先作为编辑草稿附件，保存时再写回主 store。 */
   const pasteImage = async () => {
+    if (!previewIsEditable(note)) return;
     const sessionToken = editSessionTokenRef.current;
     try {
       const image = await api.pasteImageFromClipboard();
@@ -617,6 +621,7 @@ export default function TextPreviewView() {
   };
 
   const applySelectionEdit = (edit: SelectionEdit) => {
+    if (!previewIsEditable(note)) return;
     setTextSelection(edit.selection);
     pendingSelectionRef.current = edit.selection;
     if (!editing) {
@@ -648,7 +653,7 @@ export default function TextPreviewView() {
   };
 
   const send = () => {
-    if (!note) return;
+    if (!previewIsEditable(note)) return;
     close();
     void emitTo("main", "toskr://note-send", {
       id: note.id,
@@ -747,6 +752,7 @@ export default function TextPreviewView() {
   }
 
   const isLink = note.kind === "link" && !!note.url;
+  const editable = previewIsEditable(note);
   const isMd = !note.codeLang && !isLink && looksLikeMarkdown(note.text);
   const typeLabel = isLink
     ? "链接"
@@ -779,7 +785,7 @@ export default function TextPreviewView() {
             {note.title || typeLabel}
           </p>
           <p data-tauri-drag-region className="truncate text-micro text-white/70">
-            {note.sourceApp ? `来自 ${note.sourceApp}` : "笔记"}
+            {note.subtitle ?? (note.sourceApp ? `来自 ${note.sourceApp}` : "笔记")}
           </p>
         </div>
         {icon && <img src={icon.url} alt="" className="size-6 rounded-[5px]" />}
@@ -803,7 +809,7 @@ export default function TextPreviewView() {
           className="h-full select-text overflow-y-auto p-4"
           onPointerUp={syncPreviewSelection}
           onDoubleClick={() => {
-            if (!editing) setEditing(true);
+            if (editable && !editing) setEditing(true);
           }}
         >
           {editing ? (
@@ -934,7 +940,7 @@ export default function TextPreviewView() {
           )}
         </motion.div>
 
-        {textSelection && !note.codeLang && !isLink && (
+        {editable && textSelection && !note.codeLang && !isLink && (
           <TextSelectionToolbar
             text={editing ? draftRef.current : note.text}
             selection={textSelection}
@@ -953,7 +959,7 @@ export default function TextPreviewView() {
               key={f}
               file={f}
               onClick={() => void api.quickLook(shownImages, i)}
-              onRemove={() => {
+              onRemove={editable ? () => {
                 if (editing) {
                   const current = draftImagesRef.current;
                   const textarea = textareaRef.current;
@@ -982,7 +988,7 @@ export default function TextPreviewView() {
                 setNote({ ...note, images: rest });
                 draftImagesRef.current = rest;
                 setDraftImages(rest);
-              }}
+              } : undefined}
             />
           ))}
         </div>
@@ -1026,35 +1032,41 @@ export default function TextPreviewView() {
                   <ExternalLink className="size-3.5" />
                 </IconButton>
               )}
-              <IconButton label="编辑" onClick={() => setEditing(true)}>
-                <Pencil className="size-3.5" />
-              </IconButton>
+              {editable && (
+                <IconButton label="编辑" onClick={() => setEditing(true)}>
+                  <Pencil className="size-3.5" />
+                </IconButton>
+              )}
               <IconButton label="复制" onClick={() => void copy()}>
                 <Copy className="size-3.5" />
               </IconButton>
-              <p
-                id="text-preview-target-status"
-                role="status"
-                aria-live="polite"
-                className="sr-only"
-              >
-                {targetBlockedMessage ?? ""}
-              </p>
-              <Button
-                size="xs"
-                disabled={!targetReady}
-                aria-label={
-                  targetReady
-                    ? "发送到当前目标"
-                    : `发送不可用：${targetBlockedMessage}`
-                }
-                aria-describedby={
-                  targetReady ? undefined : "text-preview-target-status"
-                }
-                onClick={send}
-              >
-                <Send className="size-3" /> 发送
-              </Button>
+              {editable && (
+                <>
+                  <p
+                    id="text-preview-target-status"
+                    role="status"
+                    aria-live="polite"
+                    className="sr-only"
+                  >
+                    {targetBlockedMessage ?? ""}
+                  </p>
+                  <Button
+                    size="xs"
+                    disabled={!targetReady}
+                    aria-label={
+                      targetReady
+                        ? "发送到当前目标"
+                        : `发送不可用：${targetBlockedMessage}`
+                    }
+                    aria-describedby={
+                      targetReady ? undefined : "text-preview-target-status"
+                    }
+                    onClick={send}
+                  >
+                    <Send className="size-3" /> 发送
+                  </Button>
+                </>
+              )}
             </>
           )}
         </div>

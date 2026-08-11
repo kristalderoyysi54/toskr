@@ -21,7 +21,7 @@ use core_graphics::event::{
 use tauri::{AppHandle, Emitter, Manager};
 
 use super::detector::{DoubleShiftDetector, FeedOutcome, InputEvent};
-use crate::events::{TriggerPayload, TRIGGER_EVENT};
+use crate::events::{TriggerPayload, TriggerSource, TRIGGER_EVENT};
 use crate::state::AppState;
 
 use std::sync::atomic::AtomicPtr;
@@ -104,7 +104,7 @@ fn handle_event(
 ) {
     let is_keyboard = matches!(event_type, CGEventType::FlagsChanged | CGEventType::KeyDown);
     if is_keyboard {
-        // 事件心跳：首个键盘事件到达即标记（诊断输入监控权限是否放行投递）
+        // 事件心跳：首个键盘事件到达即标记（诊断输入监控权限是否放行发送）
         let state = app.state::<AppState>();
         if !state.key_events_seen.swap(true, Ordering::Relaxed) {
             crate::diag::push(app, "键盘事件流已到达（输入监控正常）");
@@ -247,7 +247,10 @@ fn on_trigger(app: &AppHandle, input_generation: u64) {
                     let _ = app.emit_to(
                         "main",
                         TRIGGER_EVENT,
-                        TriggerPayload::Toggle { force: false },
+                        TriggerPayload::Toggle {
+                            force: false,
+                            source: TriggerSource::DoubleTap,
+                        },
                     );
                 }
                 return;
@@ -350,7 +353,10 @@ fn on_trigger(app: &AppHandle, input_generation: u64) {
                             let _ = handle.emit_to(
                                 "main",
                                 TRIGGER_EVENT,
-                                TriggerPayload::Toggle { force: false },
+                                TriggerPayload::Toggle {
+                                    force: false,
+                                    source: TriggerSource::DoubleTap,
+                                },
                             );
                         }
                     }
@@ -369,7 +375,10 @@ fn on_trigger(app: &AppHandle, input_generation: u64) {
                 let _ = app.emit_to(
                     "main",
                     TRIGGER_EVENT,
-                    TriggerPayload::Toggle { force: false },
+                    TriggerPayload::Toggle {
+                        force: false,
+                        source: TriggerSource::DoubleTap,
+                    },
                 );
             }
         }

@@ -328,6 +328,7 @@ notes: string
 | CTX-14-009 | P1 / TS | 质量反馈同 delivery 更新且四态分布准确 |
 | CTX-14-010 | P1 / TS | 问题会话开始、关联投递/结果、解决与取消状态确定 |
 | CTX-14-011 | P0 / Migration | v12→v13 默认值、缺字段/未知字段/重复项与 Native 备份校验兼容 |
+| CTX-14-012 | P1 / TS | `firewallBlocked` 作为 blocked 终态进入尝试/原因/脱敏计数；历史“重新准备”跨新 deliveryId 仍计为一次重试 |
 | CTX-14-R01 | P1 / Native | 配基线前后对比；关闭/清除/缩短留存逐项验证 |
 
 ### 阶段 15｜Onboarding、无障碍与发布硬化
@@ -339,9 +340,9 @@ notes: string
 | CTX-15-003 | P0 / Policy | Draft helper、DeliveryStore、Preflight 与唯一 Native 执行器四层锁定 `pressEnter=false`；集成测试 PASS |
 | CTX-15-004 | P1 / Migration | Zustand v13→v14 与 Rust validator PASS；旧 `done=true` 迁入 complete/inactive，不强制重做 |
 | CTX-15-005 | P1 / Accessibility | Lens、Preflight/Firewall、最近投递、Result Return、核验、成效与演练 37 个语义测试 PASS；真实 VoiceOver 为 `RUNTIME-REQUIRED` |
-| CTX-15-006 | P1 / Visual | 组件使用 viewport 限制、内部滚动与截断；浏览器/签名窄窗、横栏仍按 QA 144 留运行证据 |
-| CTX-15-007 | P1 / Performance | macOS 15.6.1 arm64：1 MiB Firewall 364.26ms；500 活动 3ms；50k Lens+Preflight 36ms；空闲 wakeups 待 Native |
-| CTX-15-008 | P0 / Release | 全门禁、构建、启动 PID/指纹写入 release readiness；未跑原生矩阵不得升级为 PASS |
+| CTX-15-006 | P1 / Visual | 380×720 浏览器浅/深色、Reduce Motion、12px 安全边距与零横溢出 PASS；签名原生横栏仍按 QA 144 复核 |
+| CTX-15-007 | P1 / Performance | macOS 15.6.1 arm64：1 MiB Firewall 364.26ms；500 活动 3ms；50k Lens+Preflight 36ms；空闲 CPU 0.0/0.3/0.4%，wakeups 因 powermetrics 需 root 保留 Native |
+| CTX-15-008 | P0 / Release | 全门禁、151.2s 构建、签名/DMG/updater、PID 75103、诊断 10639 与 SHA 已写入 release readiness；原生矩阵仍未升级为 PASS |
 | CTX-15-R01 | P0 / Native | 全新临时数据完成权限→捕获→Lens→Firewall→Preflight→投递演练 |
 | CTX-15-R02 | P1 / Accessibility | 全键盘访问、VoiceOver、减弱动效、浅/深色、标准/紧缩密度回归 |
 
@@ -349,14 +350,14 @@ notes: string
 
 | 场景 ID | 优先级/层 | 场景与关键预期 |
 |---|---|---|
-| CTX-16-001 | P1 / Geometry | bounding box 在 1x/2x、缩放视图和 Retina 图片映射准确 |
-| CTX-16-002 | P1 / OCR | 多行与旋转图片的支持/不支持边界明确 |
-| CTX-16-003 | P0 / Media | 脱敏前后原图文件 hash 不变 |
-| CTX-16-004 | P0 / Media | 临时副本只在所需生命周期存在，崩溃恢复可清理 |
-| CTX-16-005 | P1 / TS | 多图 finding、遮盖和 revision 互不污染 |
-| CTX-16-006 | P0 / Policy | OCR 失败为明确 risk/block，不当作通过 |
-| CTX-16-007 | P0 / Privacy | activity/diag 不含 OCR 正文或原图副本 |
-| CTX-16-R01 | P1 / Native | 邮箱/手机号/token/账号截图：本地识别→预览遮盖→只发送副本 |
+| CTX-16-001 | P1 / Geometry | `AUTO-PASS`：Vision 左下→前端左上、1x/2x、边缘裁剪、像素 padding 与 4:3 `object-contain` 留白映射均有测试；真实旋转预览保留 Native |
+| CTX-16-002 | P1 / OCR | `PARTIAL`：多 observation、序列化与 synthetic 邮箱/API key 的真实 Vision OCR PASS；旋转图片识别边界仍为 `RUNTIME-REQUIRED` |
+| CTX-16-003 | P0 / Media | `AUTO-PASS`：纯色遮挡复制前后原图像素 hash 不变，发送副本 hash 独立；Native 副作用前重算 hash 并拒绝同名换图；真实磁盘 SHA 见 QA 150 |
+| CTX-16-004 | P0 / Media | `AUTO-PASS`：token 白名单、取消/迟到/重开/启动清理均 PASS，清理测试证明不触碰原媒体；真实强退见 QA 152 |
+| CTX-16-005 | P1 / TS | `AUTO-PASS`：多图串行扫描但独立结算，finding、顺序、revision 与 reopened Draft ID 不串写 |
+| CTX-16-006 | P0 / Policy | `AUTO-PASS`：OCR 失败 fail-closed；非严格方案也要绑定 scan revision + target token 的逐图人工确认；已知 block 无 raw bypass |
+| CTX-16-007 | P0 / Privacy | `AUTO-PASS`：Draft 与进程缓存均不保留 OCR observation 原文，activity/diag 只保留类别计数、遮挡数与耗时，不含正文、路径或区域 |
+| CTX-16-R01 | P1 / Native | `RUNTIME-REQUIRED`：邮箱/手机号/token/账号截图本地识别→可视遮挡→第三方目标只收到副本 |
 
 ## 5. 每阶段完成报告最小内容
 

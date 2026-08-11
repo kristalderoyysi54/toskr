@@ -54,7 +54,7 @@ function seed(overrides: Partial<ReturnType<typeof defaultSettings>>) {
   useNotesStore.setState({ settings: { ...defaultSettings(), ...overrides } });
 }
 
-describe("applySettingsPatch 伴随停靠 ⇄ 边栏互斥", () => {
+describe("applySettingsPatch 面板布局策略", () => {
   beforeEach(() => {
     mocks.fns.clear();
     mocks.tip.mockClear();
@@ -147,28 +147,28 @@ describe("applySettingsPatch 伴随停靠 ⇄ 边栏互斥", () => {
     expect(mocks.tip).not.toHaveBeenCalled();
   });
 
-  it("互斥二选一：开贴边隐藏自动关磁吸（含 Rust 同步）", () => {
-    seed({ companionEnabled: true, autoEdgeHide: false, rightSidebar: false });
-    applySettingsPatch({ autoEdgeHide: true });
-    const s = useNotesStore.getState().settings;
-    expect(s.autoEdgeHide).toBe(true);
-    expect(s.companionEnabled).toBe(false);
-    expect(mocks.fns.get("setAutoEdgeHide")).toHaveBeenCalledWith(true);
-    // companionEnabled 进了 patch → setCompanionConfig 以 false 下发
-    expect(mocks.fns.get("setCompanionConfig")).toHaveBeenCalled();
-  });
-
-  it("互斥二选一：开磁吸自动关贴边隐藏（含 Rust 同步）", () => {
+  it("伴随磁吸与默认贴边能力可同时开启", () => {
     seed({ companionEnabled: false, autoEdgeHide: true, rightSidebar: false });
     applySettingsPatch({ companionEnabled: true });
     const s = useNotesStore.getState().settings;
+    expect(s.autoEdgeHide).toBe(true);
     expect(s.companionEnabled).toBe(true);
-    expect(s.autoEdgeHide).toBe(false);
-    expect(mocks.fns.get("setAutoEdgeHide")).toHaveBeenCalledWith(false);
     expect(mocks.fns.get("setCompanionConfig")).toHaveBeenCalled();
+    expect(mocks.tip).not.toHaveBeenCalledWith("info", "已关闭贴边隐藏");
   });
 
-  it("默认设置即满足二选一：贴边隐藏开、磁吸关", () => {
+  it("旧设置尝试关闭贴边能力时静默归一为开启且不强制图钉/置顶", () => {
+    useUIStore.getState().setPinned(false);
+    seed({ autoEdgeHide: true, companionEnabled: false, panelTopmost: false });
+    applySettingsPatch({ autoEdgeHide: false });
+    const s = useNotesStore.getState().settings;
+    expect(s.autoEdgeHide).toBe(true);
+    expect(s.panelTopmost).toBe(false);
+    expect(useUIStore.getState().pinned).toBe(false);
+    expect(mocks.fns.get("setAutoEdgeHide")).toHaveBeenCalledWith(true);
+  });
+
+  it("默认设置开启贴边能力、磁吸按需关闭", () => {
     const d = defaultSettings();
     expect(d.autoEdgeHide).toBe(true);
     expect(d.companionEnabled).toBe(false);
@@ -180,7 +180,7 @@ describe("applySettingsPatch 伴随停靠 ⇄ 边栏互斥", () => {
     expect(d.clipRetentionDays).toBe(30);
   });
 
-  it("投递方案/提示词组 patch 走主窗口持久化，并修复已删除的临时方案", () => {
+  it("发送方案/提示词组 patch 走主窗口持久化，并修复已删除的临时方案", () => {
     const settings = defaultSettings();
     seed({
       targetProfiles: [
@@ -222,11 +222,11 @@ describe("applySettingsPatch 伴随停靠 ⇄ 边栏互斥", () => {
     expect(useTargetStore.getState().profileOverrideId).toBeNull();
     expect(mocks.tip).toHaveBeenCalledWith(
       "info",
-      "本次投递方案已被删除，已恢复自动匹配"
+      "本次发送方案已被删除，已恢复自动匹配"
     );
   });
 
-  it("模式开启默认联动：贴边隐藏 → 常显示图钉 + 置顶；磁吸 → 仅常显示图钉", () => {
+  it("只有伴随模式默认联动常显示；默认贴边能力不改图钉或置顶", () => {
     useUIStore.getState().setPinned(false);
     seed({
       autoEdgeHide: false,
@@ -235,9 +235,9 @@ describe("applySettingsPatch 伴随停靠 ⇄ 边栏互斥", () => {
       rightSidebar: false,
     });
     applySettingsPatch({ autoEdgeHide: true });
-    expect(useUIStore.getState().pinned).toBe(true);
-    expect(useNotesStore.getState().settings.panelTopmost).toBe(true);
-    expect(mocks.fns.get("setPanelTopmost")).toHaveBeenCalledWith(true);
+    expect(useUIStore.getState().pinned).toBe(false);
+    expect(useNotesStore.getState().settings.panelTopmost).toBe(false);
+    expect(mocks.fns.get("setPanelTopmost")).toBeUndefined();
 
     useUIStore.getState().setPinned(false);
     seed({

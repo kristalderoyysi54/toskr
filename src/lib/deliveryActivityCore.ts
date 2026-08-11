@@ -70,7 +70,7 @@ export interface DeliveryEvent {
   redactionCount: number;
   clipboardOutcome: ClipboardOutcome | null;
   resultNoteId: string | null;
-  /** false 时仅供最近投递恢复，不进入成效聚合；旧行缺省视为 true。 */
+  /** false 时仅供最近发送恢复，不进入成效聚合；旧行缺省视为 true。 */
   metricsEligible?: boolean;
   /** 成效清除代次；旧行缺省为 0，清除不删除恢复账本。 */
   metricsEpoch?: number;
@@ -80,6 +80,16 @@ export interface DeliveryEvent {
   verificationStatus?: VerificationActivityStatus | null;
   verificationCheckCount?: number | null;
   verificationIssueCount?: number | null;
+}
+
+/**
+ * 最近发送的只读聚合视图。`timestampMs` 始终表示发送生命周期的最终时间；
+ * 关联和检查时间单列，避免后续动作把旧发送伪装成刚刚发生。
+ */
+export interface DeliveryActivityRecord extends DeliveryEvent {
+  lastActivityAtMs: number;
+  resultLinkedAtMs: number | null;
+  verificationAtMs: number | null;
 }
 
 export type DeliveryEventOverrides = {
@@ -128,6 +138,11 @@ export function deliveryEventFromDraft(
   for (const finding of draft.findings) {
     firewallCounts[finding.category] += 1;
   }
+  for (const image of draft.imageFirewall) {
+    for (const finding of image.findings) {
+      firewallCounts[finding.category] += 1;
+    }
+  }
   return {
     eventId: overrides.eventId ?? nextEventId(),
     deliveryId: draft.id,
@@ -146,7 +161,12 @@ export function deliveryEventFromDraft(
     textCharCount: draft.finalText.length,
     imageCount: draft.imageFiles.length,
     firewallCounts,
-    redactionCount: draft.privacyDecision.replacedCount,
+    redactionCount:
+      draft.privacyDecision.replacedCount +
+      draft.imageFirewall.reduce(
+        (count, image) => count + image.redactedFindingIds.length,
+        0
+      ),
     clipboardOutcome: overrides.clipboardOutcome ?? null,
     resultNoteId: null,
     metricsEligible: true,
@@ -195,7 +215,7 @@ export function deliveryEventsFromResult(
 
 export function deliveryActivityRecords(
   events: readonly DeliveryEvent[]
-): DeliveryEvent[] {
+): DeliveryActivityRecord[] {
   const grouped = new Map<
     string,
     {
@@ -205,6 +225,7 @@ export function deliveryActivityRecords(
       clipboardOutcome: ClipboardOutcome | null;
       resultNoteId: string | null;
       resultAt: number;
+      resultLinkedAt: number;
       verificationStatus: VerificationActivityStatus | null;
       verificationCheckCount: number | null;
       verificationIssueCount: number | null;
@@ -215,11 +236,13 @@ export function deliveryActivityRecords(
     const current = grouped.get(event.deliveryId);
     const isClipboard = event.eventType === "clipboardRestored" ||
       event.eventType === "clipboardSkipped";
-    const isFinal = event.eventType === "sendSent" ||
+    const isFinal = event.eventType === "firewallBlocked" ||
+      event.eventType === "sendSent" ||
       event.eventType === "sendBlocked" ||
       event.eventType === "sendFailed";
     const isResult = event.eventType === "resultCaptured" ||
       event.eventType === "resultVerified";
+    const isResultLink = event.eventType === "resultCaptured";
     const isVerification = event.eventType === "resultVerified";
     if (!current) {
       grouped.set(event.deliveryId, {
@@ -229,6 +252,7 @@ export function deliveryActivityRecords(
         clipboardOutcome: isClipboard ? event.clipboardOutcome : null,
         resultNoteId: isResult ? event.resultNoteId : null,
         resultAt: isResult ? event.timestampMs : -1,
+        resultLinkedAt: isResultLink ? event.timestampMs : -1,
         verificationStatus: isVerification ? event.verificationStatus ?? null : null,
         verificationCheckCount:
           isVerification ? event.verificationCheckCount ?? null : null,
@@ -252,6 +276,9 @@ export function deliveryActivityRecords(
       current.resultAt = event.timestampMs;
       current.resultNoteId = event.resultNoteId;
     }
+    if (isResultLink && event.timestampMs >= current.resultLinkedAt) {
+      current.resultLinkedAt = event.timestampMs;
+    }
     if (isVerification && event.timestampMs >= current.verificationAt) {
       current.verificationAt = event.timestampMs;
       current.verificationStatus = event.verificationStatus ?? null;
@@ -260,20 +287,52 @@ export function deliveryActivityRecords(
     }
   }
   return [...grouped.values()]
-    .sort((left, right) => right.latestAt - left.latestAt)
     .map((group) => ({
       ...(group.final ?? group.latest),
-      timestampMs: group.latestAt,
+      timestampMs: (group.final ?? group.latest).timestampMs,
+      lastActivityAtMs: group.latestAt,
+      resultLinkedAtMs: group.resultLinkedAt >= 0 ? group.resultLinkedAt : null,
+      verificationAtMs: group.verificationAt >= 0 ? group.verificationAt : null,
       clipboardOutcome:
         group.clipboardOutcome ?? (group.final ?? group.latest).clipboardOutcome,
       resultNoteId: group.resultNoteId,
       verificationStatus: group.verificationStatus,
       verificationCheckCount: group.verificationCheckCount,
       verificationIssueCount: group.verificationIssueCount,
-    }));
+    }))
+    .sort((left, right) => right.timestampMs - left.timestampMs);
 }
 
 export type DeliverySourceAvailability = "available" | "partial" | "missing";
+
+/** 按发送记录中的顺序解析当前仍存在的来源。 */
+export function deliverySourceItems(
+  event: DeliveryEvent,
+  notes: readonly Note[],
+  tasks: readonly Task[]
+): { notes: Note[]; tasks: Task[] } {
+  const sourceIds = new Set(event.sourceItemIds);
+  const notesById = new Map(
+    notes.filter((item) => sourceIds.has(item.id)).map((item) => [item.id, item])
+  );
+  const tasksById = new Map(
+    tasks.filter((item) => sourceIds.has(item.id)).map((item) => [item.id, item])
+  );
+  return {
+    notes: event.sourceKind === "task"
+      ? []
+      : event.sourceItemIds.flatMap((id) => {
+          const note = notesById.get(id);
+          return note ? [note] : [];
+        }),
+    tasks: event.sourceKind === "task"
+      ? event.sourceItemIds.flatMap((id) => {
+          const task = tasksById.get(id);
+          return task ? [task] : [];
+        })
+      : [],
+  };
+}
 
 export function deliveryEventSourceAvailability(
   event: DeliveryEvent,

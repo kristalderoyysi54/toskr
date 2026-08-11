@@ -10,7 +10,7 @@ import {
 const profiles: QuickProfileOption[] = [
   {
     id: "terminal",
-    name: "终端投递",
+    name: "终端发送",
     promptGroupName: "终端问答",
     defaultFormat: "code",
     enterPolicy: "allow",
@@ -43,7 +43,7 @@ const profiles: QuickProfileOption[] = [
 ];
 
 describe("TargetProfileQuickSwitch", () => {
-  it("展示投递决策上下文、最多三个方案和真实隐私状态", () => {
+  it("展示发送决策上下文、最多三个方案和真实隐私状态", () => {
     const html = renderToStaticMarkup(
       <TargetProfileQuickSwitch
         appName="Otty"
@@ -54,7 +54,7 @@ describe("TargetProfileQuickSwitch", () => {
         candidates={profiles}
         privacyCapabilityActive={false}
         temporaryProfileId="terminal"
-        automaticProfileName="终端投递"
+        automaticProfileName="终端发送"
         canMakePermanent
         onSelectTemporary={vi.fn()}
         onRestoreAutomatic={vi.fn()}
@@ -64,19 +64,19 @@ describe("TargetProfileQuickSwitch", () => {
       />
     );
 
-    expect(html).toContain("投递到 Otty");
-    expect(html).toContain("目标可用");
+    expect(html).toContain("发送到 Otty");
+    expect(html).toContain("可发送");
     expect(html).toContain("已为 Otty 指定");
-    expect(html).toContain("当前投递方案");
-    expect(html).toContain("终端投递");
+    expect(html).toContain("当前发送方案");
+    expect(html).toContain("终端发送");
     expect(html).toContain("本次真实生效规则");
     expect(html).toContain("粘贴后动作：自动按回车 · 高风险");
     expect(html).toContain("发送完成后：关闭面板");
     expect(html).toContain("匹配来源：已为 Otty 指定");
     expect(html).toContain("隐私检查：尚未启用");
     expect(html).toContain("以后发给 Otty 都使用此方案");
-    expect(html).toContain("编辑 Otty 的投递方案");
-    expect(html).toContain("恢复自动匹配：终端投递");
+    expect(html).toContain("编辑 Otty 的发送方案");
+    expect(html).toContain("恢复自动匹配：终端发送");
     expect(html).not.toContain("第四项不应出现");
     expect(html).not.toMatch(/要求脱敏|已脱敏|已保护/);
     expect(html).not.toContain("回车：自动回车");
@@ -113,13 +113,13 @@ describe("TargetProfileQuickSwitch", () => {
         matchReason="目标应用已失效"
         currentProfile={{
           ...profiles[0],
-          name: "一个非常长的投递方案名称用于验证窄窗口",
+          name: "一个非常长的发送方案名称用于验证窄窗口",
           promptGroupName: "一个非常长的提示词组名称用于验证最多两行",
         }}
         candidates={profiles.slice(0, 3)}
         privacyCapabilityActive={false}
         temporaryProfileId="terminal"
-        automaticProfileName="终端投递"
+        automaticProfileName="终端发送"
         canMakePermanent={false}
         onSelectTemporary={vi.fn()}
         onRestoreAutomatic={vi.fn()}

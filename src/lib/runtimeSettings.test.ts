@@ -32,7 +32,7 @@ describe("rehydrated runtime settings", () => {
   it("reapplies hotkey, watcher, theme and panel behavior from the new dataset", async () => {
     const settings = {
       ...defaultSettings(),
-      autoEdgeHide: true,
+      autoEdgeHide: false,
       clipHistory: false,
       theme: "dark" as const,
     };
@@ -42,7 +42,7 @@ describe("rehydrated runtime settings", () => {
       expect(mocks.fns.get("setWindowTheme")).toHaveBeenCalledWith("dark")
     );
 
-    expect(useUIStore.getState().pinned).toBe(true);
+    expect(useUIStore.getState().pinned).toBe(false);
     expect(mocks.fns.get("setHotkeyConfig")).toHaveBeenCalledWith(
       settings.hotkeyModifier,
       settings.hotkeyGapMs
@@ -50,6 +50,14 @@ describe("rehydrated runtime settings", () => {
     expect(mocks.fns.get("setClipWatch")).toHaveBeenCalledWith(false);
     expect(mocks.fns.get("setWindowTheme")).toHaveBeenCalledWith("dark");
     expect(mocks.fns.get("setAutoEdgeHide")).toHaveBeenCalledWith(true);
+  });
+
+  it("伴随模式仍默认常显示", async () => {
+    applyRuntimeSettings({ ...defaultSettings(), companionEnabled: true });
+    await vi.waitFor(() =>
+      expect(mocks.fns.get("setCompanionConfig")).toHaveBeenCalled()
+    );
+    expect(useUIStore.getState().pinned).toBe(true);
   });
 
   it("waits for every old batch effect before surfacing one rejection", async () => {

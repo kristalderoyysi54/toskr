@@ -1,7 +1,8 @@
+import { ask } from "@tauri-apps/plugin-dialog";
 import {
   AlertTriangle,
-  Image as ImageIcon,
   LocateFixed,
+  RefreshCw,
   RotateCcw,
   Send,
   ShieldAlert,
@@ -11,6 +12,7 @@ import { useEffect, useMemo, useRef } from "react";
 
 import { ApplicationIcon } from "@/components/ApplicationIcon";
 import { AiTransformPanel } from "@/components/AiTransformPanel";
+import { ImageFirewallPanel } from "@/components/ImageFirewallPanel";
 import { SimpleSelect, type SimpleSelectOption } from "@/components/SimpleSelect";
 import { Button } from "@/components/ui/button";
 import { floatingSurface } from "@/components/ui/floating-surface";
@@ -21,11 +23,12 @@ import {
   inspectDeliveryDraftNonTarget,
   type DeliveryDraftStaleReason,
 } from "@/lib/delivery/executeDraft";
+import { evaluateDeliveryDraftFirewall } from "@/lib/delivery/firewallController";
 import {
-  evaluateDeliveryDraftFirewall,
-  retryOpenDeliveryDraftScan,
-  scanOpenDeliveryDraft,
-} from "@/lib/delivery/firewallController";
+  evaluateDeliveryDraftImages,
+  rescanOpenDeliveryDraftPrivacy,
+  scanOpenDeliveryDraftPrivacy,
+} from "@/lib/delivery/imageFirewall";
 import {
   FIREWALL_CATEGORY_LABEL,
   FIREWALL_SEVERITY_LABEL,
@@ -36,7 +39,7 @@ import {
   updateOpenPreflightDraft,
 } from "@/lib/delivery/preflight";
 import { imageListLabel } from "@/lib/format";
-import { useNoteThumb } from "@/lib/media";
+import { tip } from "@/lib/tip";
 import { ENTER_POLICY_STATUS_LABEL } from "@/lib/targetLens";
 import type { FirewallFinding } from "@/lib/tauri";
 import { promptSnippetsForGroup } from "@/lib/targetProfiles";
@@ -62,25 +65,6 @@ function dialogFocusables(dialog: HTMLElement | null): HTMLElement[] {
       'summary, button:not([disabled]), textarea:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'
     ) ?? []
   ).filter((element) => element.offsetParent !== null);
-}
-
-function AttachmentThumb({ file, index }: { file: string; index: number }) {
-  const url = useNoteThumb(file);
-  return url ? (
-    <img
-      src={url}
-      alt={`附件图片 ${index + 1}`}
-      className="size-12 shrink-0 rounded-md object-cover ring-1 ring-foreground/10"
-    />
-  ) : (
-    <span
-      role="img"
-      aria-label={`附件图片 ${index + 1} 正在载入`}
-      className="flex size-12 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
-    >
-      <ImageIcon className="size-4" aria-hidden />
-    </span>
-  );
 }
 
 export function PreflightComposer({ horizontal = false }: { horizontal?: boolean }) {
@@ -124,7 +108,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
     draft?.enterPolicy,
     draft?.format,
     draft?.id,
-    draft?.imageFiles,
+    draft?.originalImageFiles,
     draft?.privacyPolicy,
     draft?.profileDefaultFormat,
     draft?.profileKeepPanel,
@@ -237,6 +221,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
     staleReason === "target" &&
     !hiddenStaleReason;
   const firewall = draft ? evaluateDeliveryDraftFirewall(draft) : null;
+  const imageFirewall = draft ? evaluateDeliveryDraftImages(draft) : null;
   const firewallSummary = useMemo(() => {
     const summary = new Map<
       string,
@@ -266,18 +251,23 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
     (!staleMessage || canRecoverTarget) &&
     hasPayload &&
     enterReady &&
-    firewall?.canSend
+    firewall?.canSend &&
+    imageFirewall?.canSend
     && transformStatus !== "running"
   );
 
   useEffect(() => {
-    if (open && draft?.firewallStatus === "idle") {
+    if (
+      open &&
+      (draft?.firewallStatus === "idle" ||
+        draft?.imageFirewall.some((item) => item.status === "idle"))
+    ) {
       const timer = window.setTimeout(() => {
-        void scanOpenDeliveryDraft();
+        void scanOpenDeliveryDraftPrivacy();
       }, 160);
       return () => window.clearTimeout(timer);
     }
-  }, [draft?.firewallStatus, draft?.id, draft?.revision, open]);
+  }, [draft?.firewallStatus, draft?.id, draft?.imageFirewall, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -349,6 +339,59 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
     confirmRaw: "高风险必处理，提示项可确认保留",
     allowRaw: "允许原文，高风险需二次确认",
   }[draft.privacyPolicy];
+  const privacyScanPending =
+    draft.firewallStatus === "idle" || draft.firewallStatus === "scanning" ||
+    draft.imageFirewall.some((item) =>
+      item.status === "idle" || item.status === "scanning" || item.status === "redacting"
+    );
+  const hasImageRedactions = draft.imageFirewall.some(
+    (item) => item.sendFile !== item.originalFile
+  );
+  const privacyRescanLabel = draft.imageFirewall.length
+    ? "重新检测当前文本和原始图片"
+    : "重新检测当前文本";
+  const rerunPrivacyScan = async () => {
+    const expectedDraftId = draft.id;
+    if (hasImageRedactions) {
+      let confirmed = false;
+      try {
+        confirmed = await ask(
+          "重新检测会恢复图片为原图，并清除已完成的遮挡；检测后需要重新处理。是否继续？",
+          { title: "重新检测隐私内容", kind: "warning" }
+        );
+      } catch {
+        tip("warn", "无法确认重新检测，请稍后重试");
+        return;
+      }
+      if (!confirmed) return;
+    }
+    if (useDeliveryStore.getState().draft?.id !== expectedDraftId) return;
+    const completed = await rescanOpenDeliveryDraftPrivacy();
+    const current = useDeliveryStore.getState();
+    const live = current.draft;
+    if (!current.open || live?.id !== expectedDraftId) return;
+    if (!completed) {
+      tip("warn", "本次重新检测已失效，请在内容稳定后重试");
+      return;
+    }
+    const incomplete = live.firewallStatus === "failed" ||
+      live.firewallStatus === "incomplete" ||
+      live.imageFirewall.some((item) => item.status === "failed");
+    if (incomplete) {
+      tip("warn", "重新检测完成，但有内容未能完整检查");
+      return;
+    }
+    const findingCount = live.findings.length + live.imageFirewall.reduce(
+      (total, item) => total + item.findings.length,
+      0
+    );
+    tip(
+      "ok",
+      findingCount
+        ? `重新检测完成，发现 ${findingCount} 项可能的敏感内容`
+        : "重新检测完成，未发现敏感内容"
+    );
+  };
 
   return (
     <>
@@ -391,7 +434,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
         <header className="flex items-center gap-2 border-b border-border px-3 py-2">
           <div className="min-w-0 flex-1">
             <h2 id="preflight-title" className="text-title font-semibold">
-              {draft.safeRehearsal ? "安全投递演练预检" : "投递预检"}
+              {draft.safeRehearsal ? "安全发送演练预检" : "发送预检"}
             </h2>
             <p className="truncate text-micro text-muted-foreground">
               {draft.safeRehearsal
@@ -416,7 +459,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
               ))}
             </div>
           )}
-          <IconButton label="关闭投递预检" size="xs" disabled={busy} onClick={close}>
+          <IconButton label="关闭发送预检" size="xs" disabled={busy} onClick={close}>
             <X />
           </IconButton>
         </header>
@@ -430,7 +473,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
           )}
         >
           <section
-            aria-label="投递概览"
+            aria-label="发送概览"
             className={cn(
               "min-h-0 space-y-2 overflow-y-auto rounded-lg bg-muted/30 p-2",
               !showSummary && "hidden"
@@ -441,7 +484,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
               <div className="min-w-0 flex-1">
                 <p className="truncate text-body font-medium">{targetName}</p>
                 <p className="text-micro text-muted-foreground">
-                  {staleReason === "target" ? "目标已变化" : "目标可用"}
+                  {staleReason === "target" ? "目标已变化" : "可发送"}
                 </p>
               </div>
               <span className="rounded-md bg-secondary px-1.5 py-0.5 text-micro">
@@ -462,15 +505,12 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
               </ol>
             </details>
 
-            {draft.imageFiles.length > 0 && (
-              <div>
-                <p className="mb-1 text-label font-medium">图片 {draft.imageFiles.length} 张</p>
-                <div className="flex gap-1.5 overflow-x-auto pb-1">
-                  {draft.imageFiles.map((file, index) => (
-                    <AttachmentThumb key={`${file}-${index}`} file={file} index={index} />
-                  ))}
-                </div>
-              </div>
+            {draft.imageFirewall.length > 0 && (
+              <ImageFirewallPanel
+                draft={draft}
+                busy={busy}
+                evaluation={imageFirewall!}
+              />
             )}
 
             <div className="grid grid-cols-2 gap-2">
@@ -561,7 +601,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
             </div>
 
             {draft.warnings.length > 0 && (
-              <div role="status" aria-label="投递警告" className="rounded-lg bg-warning/10 p-2 text-label text-warning">
+              <div role="status" aria-label="发送警告" className="rounded-lg bg-warning/10 p-2 text-label text-warning">
                 <p className="mb-1 flex items-center gap-1 font-medium">
                   <AlertTriangle className="size-3" /> 当前警告
                 </p>
@@ -580,22 +620,44 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
               <div className="flex items-center gap-1.5">
                 <ShieldAlert className="size-3.5 text-warning" aria-hidden />
                 <p className="text-label font-medium">Context Firewall</p>
-                <span className="ml-auto text-micro text-muted-foreground">
-                  {draft.firewallStatus === "disabled"
-                    ? "已关闭"
-                    : draft.firewallStatus === "scanning"
-                      ? "扫描中…"
-                      : draft.firewallStatus === "ready"
-                        ? `${draft.findings.length} 项`
-                        : draft.firewallStatus === "incomplete"
-                          ? "检查不完整"
-                          : draft.firewallStatus === "failed"
-                            ? "检查失败"
-                            : "等待检查"}
-                </span>
+                <div className="ml-auto flex shrink-0 items-center gap-1">
+                  <span aria-live="polite" className="text-micro text-muted-foreground">
+                    {draft.firewallStatus === "disabled"
+                      ? "已关闭"
+                      : draft.firewallStatus === "scanning"
+                        ? "扫描中…"
+                        : draft.firewallStatus === "ready"
+                          ? `${draft.findings.length} 项`
+                          : draft.firewallStatus === "incomplete"
+                            ? "检查不完整"
+                            : draft.firewallStatus === "failed"
+                              ? "检查失败"
+                              : "等待检查"}
+                  </span>
+                  {draft.firewallEnabled && (
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="ghost"
+                      aria-label={privacyRescanLabel}
+                      title={privacyRescanLabel}
+                      disabled={busy || privacyScanPending}
+                      onClick={() => void rerunPrivacyScan()}
+                    >
+                      <RefreshCw
+                        aria-hidden
+                        className={cn(
+                          "size-3",
+                          privacyScanPending && "animate-spin motion-reduce:animate-none"
+                        )}
+                      />
+                      {privacyScanPending ? "检测中" : "重新检测"}
+                    </Button>
+                  )}
+                </div>
               </div>
               <p className="text-micro text-muted-foreground">
-                {privacyPolicyLabel} · 仅检查文本，检测可能存在误报或漏报
+                {privacyPolicyLabel} · 检测可能存在误报或漏报
               </p>
               {firewallSummary.length > 0 && (
                 <div className="flex flex-wrap gap-1" aria-label="敏感项分类汇总">
@@ -719,27 +781,16 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                     : "确认本次保留提示级原文"}
                 </Button>
               )}
-              {draft.firewallStatus === "failed" && (
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="secondary"
-                  disabled={busy}
-                  onClick={retryOpenDeliveryDraftScan}
-                >
-                  重新执行本地检查
-                </Button>
-              )}
-              {firewall?.reason && (
+              {(firewall?.reason || imageFirewall?.reason) && (
                 <p role="status" className="text-micro text-warning">
-                  {firewall.reason}
+                  {firewall?.reason ?? imageFirewall?.reason}
                 </p>
               )}
             </section>
           </section>
 
           <section
-            aria-label="最终投递内容"
+            aria-label="最终发送内容"
             className={cn(
               "min-h-0 flex-1 flex-col gap-2 overflow-y-auto rounded-lg bg-muted/30 p-2",
               showContent ? "flex" : "hidden"
@@ -786,12 +837,12 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
             aria-live="polite"
             className={cn(
               "min-w-0 flex-1 truncate text-label",
-              staleMessage || lastError || firewall?.reason
+              staleMessage || lastError || firewall?.reason || imageFirewall?.reason
                 ? "text-warning"
                 : "text-muted-foreground"
             )}
           >
-            {staleMessage ?? lastError ?? firewall?.reason ??
+            {staleMessage ?? lastError ?? firewall?.reason ?? imageFirewall?.reason ??
               (draft.safeRehearsal
                 ? "演练只会把最终文本粘贴到已确认目标，不会自动回车"
                 : "本次修改不会改动原始卡片")}

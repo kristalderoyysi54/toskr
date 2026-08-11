@@ -30,14 +30,14 @@ function props(
   };
 }
 
-describe("安全投递演练 UI", () => {
+describe("安全发送演练 UI", () => {
   it("权限状态提供不同、可访问且可行动的反馈", () => {
     const denied = renderToStaticMarkup(
       <SafeDeliveryRehearsalView
         {...props({ permissionStatus: "accessibilityDenied" })}
       />
     );
-    expect(denied).toContain('aria-label="安全投递演练"');
+    expect(denied).toContain('aria-label="安全发送演练"');
     expect(denied).toContain("辅助功能尚未授权");
     expect(denied).toContain("打开辅助功能设置");
 
