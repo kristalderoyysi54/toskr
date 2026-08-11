@@ -99,7 +99,7 @@ export interface Note {
   sourceApp?: string;
   /** 来源应用 bundle id（图标经内存缓存按需获取，不落盘）。 */
   sourceBundle?: string;
-  /** 手动确认的投递结果来源；结果正文仍只存在本 Note。 */
+  /** 手动确认的发送结果来源；结果正文仍只存在本 Note。 */
   provenance?: NoteProvenance;
 }
 
@@ -274,12 +274,11 @@ export interface Settings {
   clipIgnoreTransient: boolean;
   /** 剪贴板规则：忽略应用列表（独立于捕获排除）。 */
   clipExcludedApps: string[];
-  /** v8 兼容字段；v9 起仅迁移读取，投递统一由 TargetProfile.enterPolicy 决定。 */
+  /** v8 兼容字段；v9 起仅迁移读取，发送统一由 TargetProfile.enterPolicy 决定。 */
   autoEnter: boolean;
   /** 面板失焦自动隐藏。 */
   hideOnBlur: boolean;
-  /** 自动贴边隐藏：面板贴屏幕右缘时鼠标离开自动滑出隐藏，
-   *  移到屏幕右缘唤出（类似 Dock）；钉住时不生效。 */
+  /** v16 兼容字段；当前固定为 true，贴边隐藏已是无需配置的默认能力。 */
   autoEdgeHide: boolean;
   /** 全局触发键：双击哪个修饰键。 */
   hotkeyModifier: "shift" | "control" | "option";
@@ -327,7 +326,7 @@ export interface Settings {
   promptSnippets: PromptSnippet[];
   /** Prompt 分组；通用分组始终存在。 */
   promptGroups: PromptGroup[];
-  /** 目标应用投递偏好，按数组顺序决定重复 bundle 的稳定 winner。 */
+  /** 目标应用发送偏好，按数组顺序决定重复 bundle 的稳定 winner。 */
   targetProfiles: TargetProfile[];
   /** 未精确命中 bundle 时使用的用户默认 Profile。 */
   defaultTargetProfileId: string;
@@ -335,17 +334,17 @@ export interface Settings {
   firewallEnabled: boolean;
   /** 用户本次关闭的提示级类别；block 规则不允许进入此列表。 */
   firewallDisabledWarnCategories: FindingCategory[];
-  /** 本机成效聚合开关；关闭后新投递仍可恢复，但不进入指标。 */
+  /** 本机成效聚合开关；关闭后新发送仍可恢复，但不进入指标。 */
   outcomeMetricsEnabled: boolean;
-  /** 投递元数据账本保留期；按当前数据目录压实。 */
+  /** 发送元数据账本保留期；按当前数据目录压实。 */
   outcomeRetentionDays: OutcomeRetentionDays;
-  /** “清除成效历史”推进的本机代次；不删除最近投递恢复账本。 */
+  /** “清除成效历史”推进的本机代次；不删除最近发送恢复账本。 */
   outcomeMetricsEpoch: number;
   /** 用户明确填写的传统流程基线；没有基线绝不估算节省时间。 */
   outcomeBaselines: OutcomeBaseline[];
   /** 用户对已关联结果的可选质量反馈，不包含结果正文。 */
   outcomeQualityFeedback: OutcomeQualityFeedback[];
-  /** 用户主动开始的问题处理计时，只保存时间与关联投递 ID。 */
+  /** 用户主动开始的问题处理计时，只保存时间与关联发送 ID。 */
   outcomeProblemSessions: OutcomeProblemSession[];
   /** 数据文件夹展示值（真实来源在 Rust，这里仅用于设置界面回显）。 */
   dataDir: string;
@@ -395,6 +394,43 @@ export const CONTEXT_MENU_REGISTRY: { id: ContextMenuItemId; label: string }[] =
   { id: "ai-title", label: "AI 起标题" },
   { id: "move", label: "移动到分组" },
 ];
+
+/**
+ * 右键菜单固定按用途分区，用户自定义顺序只在同一分区内生效。
+ * 保持一级菜单，避免窄面板里多层子菜单越过 WebView 边界。
+ */
+export const CONTEXT_MENU_GROUPS = [
+  { id: "view", label: "查看与编辑" },
+  { id: "content", label: "复制与处理" },
+  { id: "send", label: "发送与转换" },
+  { id: "organize", label: "整理" },
+] as const;
+
+export type ContextMenuGroupId = (typeof CONTEXT_MENU_GROUPS)[number]["id"];
+
+const CONTEXT_MENU_GROUP_BY_ITEM: Record<ContextMenuItemId, ContextMenuGroupId> = {
+  preview: "view",
+  edit: "view",
+  rename: "view",
+  copy: "content",
+  "copy-list": "content",
+  textops: "content",
+  ocr: "content",
+  "ai-title": "content",
+  send: "send",
+  "to-task": "send",
+  "ai-to-task": "send",
+  done: "organize",
+  keep: "organize",
+  move: "organize",
+};
+
+export function groupContextMenuIds(ids: readonly ContextMenuItemId[]) {
+  return CONTEXT_MENU_GROUPS.map((group) => ({
+    ...group,
+    ids: ids.filter((id) => CONTEXT_MENU_GROUP_BY_ITEM[id] === group.id),
+  }));
+}
 
 /** 归一化菜单配置：补齐新版本新增项（老配置向前兼容）、剔除未知项。 */
 export function normalizeContextMenu(
@@ -459,7 +495,7 @@ export const defaultSettings = (): Settings => ({
   clipExcludedApps: [...DEFAULT_EXCLUDED_APPS],
   autoEnter: false,
   hideOnBlur: true,
-  // 首装默认体验（2026-08 用户指定）：贴边隐藏开、伴随磁吸关
+  // 贴边隐藏是默认能力（字段保留用于兼容旧备份），伴随磁吸按需开启
   autoEdgeHide: true,
   hotkeyModifier: "shift",
   hotkeyGapMs: 400,
@@ -597,7 +633,7 @@ export interface NotesState {
   setLinkMeta: (id: string, meta: { title?: string; icon?: string }) => void;
   /** 重命名卡片（空串 = 清除标题）。 */
   updateNoteTitle: (id: string, title: string) => void;
-  /** 关联/改绑/解除投递结果；不删除或改写 Note 正文。 */
+  /** 关联/改绑/解除发送结果；不删除或改写 Note 正文。 */
   setNoteProvenance: (id: string, provenance?: NoteProvenance) => boolean;
   deleteNotes: (ids: string[], undoLabel?: string) => void;
   setDone: (ids: string[], done: boolean) => void;
@@ -919,6 +955,8 @@ function validateSettingsShape(value: unknown, version: number): void {
       "rehearsalPausedAtMs",
       "rehearsalCompletedAtMs",
       "rehearsalDeferredAtMs",
+      "permissionsCompletedAtMs",
+      "recoveryTutorialCompletedAtMs",
       "activationStartedAtMs",
     ];
     if (!optionalTimes.every((key) =>
@@ -1130,7 +1168,7 @@ export function migratePersistedState(
     const legacyAutoEnter = p.settings.autoEnter === true;
     p.settings = {
       ...p.settings,
-      // 保留字段仅为旧备份兼容；实际投递从 v9 起只读取 Profile。
+      // 保留字段仅为旧备份兼容；实际发送从 v9 起只读取 Profile。
       autoEnter: false,
       promptGroups: createDefaultPromptGroups(),
       promptSnippets: migrateLegacyPromptSnippets(

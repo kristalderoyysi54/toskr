@@ -1,17 +1,21 @@
-import { listen } from "@tauri-apps/api/event";
+import { emitTo, listen } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
   CheckCircle2,
+  ChevronDown,
+  CircleAlert,
   Clock3,
   Play,
   RefreshCw,
+  Send,
   ShieldCheck,
   Trash2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 
 import { SimpleSelect } from "@/components/SimpleSelect";
+import { SafeDeliveryLearningPath } from "@/components/settings/SafeDeliveryLearningPath";
 import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
 import { Switch } from "@/components/ui/switch";
@@ -33,8 +37,11 @@ import {
   type OutcomeMetrics,
   type OutcomeRange,
 } from "@/lib/outcomeIntelligence";
+import { onboardingAfter } from "@/lib/onboarding";
+import { SETTINGS_START_SAFE_REHEARSAL } from "@/lib/settingsSync";
 import { tip } from "@/lib/tip";
 import { cn } from "@/lib/utils";
+import { useDataOperationStore } from "@/store/dataOperationStore";
 import type { Settings } from "@/store/notesStore";
 
 type Props = {
@@ -96,80 +103,190 @@ function Distribution({ title, values }: {
   values: Record<string, number>;
 }) {
   const entries = Object.entries(values).filter(([, count]) => count > 0);
+  if (!entries.length) return null;
   return (
     <div className="rounded-xl border border-border/60 bg-card px-3 py-2.5">
       <p className="text-body font-medium">{title}</p>
-      {entries.length ? (
-        <ul className="mt-1.5 space-y-1 text-label text-muted-foreground">
-          {entries.map(([key, count]) => (
-            <li key={key} className="flex items-center justify-between gap-2">
-              <span className="min-w-0 truncate" title={key}>{REASON_LABEL[key] ?? key}</span>
-              <span className="tabular-nums text-foreground">{count}</span>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="mt-1.5 text-label text-muted-foreground">暂无</p>
-      )}
+      <ul className="mt-1.5 space-y-1 text-label text-muted-foreground">
+        {entries.map(([key, count]) => (
+          <li key={key} className="flex items-center justify-between gap-2">
+            <span className="min-w-0 truncate" title={key}>{REASON_LABEL[key] ?? key}</span>
+            <span className="tabular-nums text-foreground">{count}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
 
-export function OutcomeMetricsSummary({ metrics }: { metrics: OutcomeMetrics }) {
-  const maxAttempts = Math.max(1, ...metrics.dailyTrend.map((item) => item.attempts));
-  const estimate = metrics.estimatedTimeSavedMs === null
-    ? "—"
-    : formatDuration(metrics.estimatedTimeSavedMs);
+function PrimaryMetric({ label, value, hint }: {
+  label: string;
+  value: string | number;
+  hint: string;
+}) {
   return (
-    <div aria-label="本机成效摘要">
-      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-        <MetricCard label="投递尝试" value={metrics.deliveryAttempts} />
-        <MetricCard label="成功率" value={formatPercent(metrics.successRate)} />
-        <MetricCard label="重试次数" value={metrics.retryCount} />
-        <MetricCard label="目标失效阻止" value={metrics.targetInvalidationBlocks} />
-      </div>
-      <div className="mt-2 grid grid-cols-2 gap-2 lg:grid-cols-4">
-        <MetricCard label="草稿 → 发送（中位）" value={formatDuration(metrics.draftToSendMedianMs)} />
-        <MetricCard label="发送 → 回收（中位）" value={formatDuration(metrics.sendToResultMedianMs)} />
-        <MetricCard label="实测流程耗时（中位）" value={formatDuration(metrics.actualWorkflowMedianMs)} />
-        {metrics.estimatedTimeSavedMs === null ? (
-          <MetricCard label="人工基线" value="未设置" hint="设置后才显示节省时间估算" />
-        ) : (
-          <MetricCard
-            label="估算累计节省"
-            value={estimate}
-            hint={`估算 · ${metrics.estimatedSampleSize} 个有人工基线样本`}
-          />
-        )}
-      </div>
-      <div className="mt-2 grid gap-2 md:grid-cols-2 lg:grid-cols-4">
-        <Distribution title="阻止原因" values={metrics.blockedReasons} />
-        <Distribution title="失败原因" values={metrics.failedReasons} />
-        <Distribution title="剪贴板结果" values={metrics.clipboardOutcomes} />
-        <Distribution title="结果质量" values={metrics.qualityFeedback} />
-      </div>
-      <div className="mt-2 grid grid-cols-2 gap-2 lg:grid-cols-4">
-        <MetricCard label="Firewall 命中" value={metrics.firewallFindingCount} />
-        <MetricCard label="已替换敏感项" value={metrics.redactionCount} />
-        <MetricCard
-          label="结果核验"
-          value={metrics.verificationStatuses.pass + metrics.verificationStatuses.needsReview + metrics.verificationStatuses.blocked}
-          hint={`通过 ${metrics.verificationStatuses.pass} · 复核 ${metrics.verificationStatuses.needsReview} · 阻止 ${metrics.verificationStatuses.blocked}`}
-        />
-        <MetricCard label="问题解决耗时（中位）" value={formatDuration(metrics.problemResolutionMedianMs)} hint="仅主动计时会话" />
-      </div>
-      <div className="mt-2 rounded-xl border border-border/60 bg-card px-3 py-2.5">
-        <div className="flex items-center justify-between gap-2">
-          <p className="text-body font-medium">每日投递</p>
-          <span className="text-micro text-muted-foreground">
-            样本 {metrics.sampleSize}
+    <div className="min-w-0 px-3 py-3">
+      <p className="text-label text-muted-foreground">{label}</p>
+      <p className="mt-0.5 truncate text-heading font-semibold tabular-nums">{value}</p>
+      <p className="mt-0.5 truncate text-micro text-muted-foreground" title={hint}>{hint}</p>
+    </div>
+  );
+}
+
+export function OutcomeMetricsSummary({
+  metrics,
+  hasActivity = true,
+  rangeLabel = "所选时间",
+}: {
+  metrics: OutcomeMetrics;
+  hasActivity?: boolean;
+  rangeLabel?: string;
+}) {
+  if (!metrics.deliveryAttempts) {
+    return (
+      <section
+        aria-label="使用摘要"
+        className="rounded-xl border border-border/60 bg-card px-4 py-5"
+      >
+        <div className="flex items-start gap-3">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+            <Send aria-hidden className="size-4" />
           </span>
+          <div>
+            <h3 className="text-title font-medium">
+              {hasActivity ? "当前筛选没有数据" : "还没有可统计的发送"}
+            </h3>
+            <p className="mt-1 max-w-xl text-body leading-relaxed text-muted-foreground">
+              {hasActivity
+                ? "换一个时间范围或清除详细筛选后再看。"
+                : "完成一次发送后，这里会显示成功率、用时和敏感内容保护情况。"}
+            </p>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  const unresolved = Math.max(0, metrics.deliveryAttempts - metrics.sentCount);
+  const estimate = metrics.estimatedTimeSavedMs === null
+    ? null
+    : formatDuration(metrics.estimatedTimeSavedMs);
+  const summaryNote = estimate
+    ? `按你设置的传统用时，累计约节省 ${estimate}。`
+    : metrics.actualWorkflowMedianMs !== null
+      ? `一次完整流程通常用时 ${formatDuration(metrics.actualWorkflowMedianMs)}。在高级工具中填写传统用时后，可查看节省时间估算。`
+      : metrics.insufficientSample
+        ? "继续完成几次发送，累计 5 次后会开始显示趋势。"
+        : "在高级工具中填写传统用时后，可查看节省时间估算。";
+
+  return (
+    <section aria-label="使用摘要" className="overflow-hidden rounded-xl border border-border/60 bg-card">
+      <div className="flex items-center justify-between gap-2 border-b border-border/50 px-3 py-2.5">
+        <div>
+          <h3 className="text-title font-medium">这段时间</h3>
+          <p className="mt-0.5 text-micro text-muted-foreground">{rangeLabel}</p>
+        </div>
+        <span className="text-label text-muted-foreground">共 {metrics.deliveryAttempts} 次尝试</span>
+      </div>
+      <div className="grid grid-cols-3 divide-x divide-border/50">
+        <PrimaryMetric
+          label="发送完成"
+          value={metrics.sentCount}
+          hint={unresolved ? `受阻或失败 ${unresolved} 次` : "全部完成"}
+        />
+        <PrimaryMetric
+          label="成功率"
+          value={formatPercent(metrics.successRate)}
+          hint={metrics.insufficientSample ? "样本仍较少" : "按当前筛选计算"}
+        />
+        <PrimaryMetric
+          label="已保护敏感内容"
+          value={metrics.redactionCount}
+          hint={metrics.firewallFindingCount
+            ? `共发现 ${metrics.firewallFindingCount} 项`
+            : "未发现需替换内容"}
+        />
+      </div>
+      <p className="border-t border-border/50 bg-muted/30 px-3 py-2 text-label text-muted-foreground" role="status">
+        {summaryNote}
+      </p>
+    </section>
+  );
+}
+
+export function OutcomeMetricsDetails({ metrics }: { metrics: OutcomeMetrics }) {
+  const maxAttempts = Math.max(1, ...metrics.dailyTrend.map((item) => item.attempts));
+  const distributions = [
+    { title: "阻止原因", values: metrics.blockedReasons },
+    { title: "失败原因", values: metrics.failedReasons },
+    { title: "剪贴板结果", values: metrics.clipboardOutcomes },
+    { title: "结果质量", values: metrics.qualityFeedback },
+  ].filter((item) => Object.values(item.values).some((count) => count > 0));
+
+  return (
+    <div aria-label="详细使用数据" className="space-y-3">
+      <section aria-labelledby="outcome-process-title">
+        <h4 id="outcome-process-title" className="mb-1.5 text-label font-medium text-muted-foreground">发送过程</h4>
+        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+          <MetricCard label="发送尝试" value={metrics.deliveryAttempts} />
+          <MetricCard label="重试次数" value={metrics.retryCount} />
+          <MetricCard label="目标变化阻止" value={metrics.targetInvalidationBlocks} />
+          <MetricCard
+            label="结果核验"
+            value={metrics.verificationStatuses.pass + metrics.verificationStatuses.needsReview + metrics.verificationStatuses.blocked}
+            hint={`通过 ${metrics.verificationStatuses.pass} · 复核 ${metrics.verificationStatuses.needsReview} · 阻止 ${metrics.verificationStatuses.blocked}`}
+          />
+        </div>
+      </section>
+
+      <section aria-labelledby="outcome-time-title">
+        <h4 id="outcome-time-title" className="mb-1.5 text-label font-medium text-muted-foreground">用时</h4>
+        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+          <MetricCard label="准备到发送（中位）" value={formatDuration(metrics.draftToSendMedianMs)} />
+          <MetricCard label="发送到回收（中位）" value={formatDuration(metrics.sendToResultMedianMs)} />
+          <MetricCard label="完整流程（中位）" value={formatDuration(metrics.actualWorkflowMedianMs)} />
+          {metrics.estimatedTimeSavedMs === null ? (
+            <MetricCard label="节省时间估算" value="未设置" hint="可在高级工具中填写传统用时" />
+          ) : (
+            <MetricCard
+              label="估算累计节省"
+              value={formatDuration(metrics.estimatedTimeSavedMs)}
+              hint={`估算 · ${metrics.estimatedSampleSize} 个传统用时样本`}
+            />
+          )}
+        </div>
+      </section>
+
+      <section aria-labelledby="outcome-safety-title">
+        <h4 id="outcome-safety-title" className="mb-1.5 text-label font-medium text-muted-foreground">隐私与结果</h4>
+        <div className="grid grid-cols-2 gap-2 lg:grid-cols-3">
+          <MetricCard label="发现敏感内容" value={metrics.firewallFindingCount} />
+          <MetricCard label="已保护敏感内容" value={metrics.redactionCount} />
+          <MetricCard label="问题解决用时（中位）" value={formatDuration(metrics.problemResolutionMedianMs)} hint="仅包含主动计时" />
+        </div>
+      </section>
+
+      {!!distributions.length && (
+        <section aria-labelledby="outcome-reasons-title">
+          <h4 id="outcome-reasons-title" className="mb-1.5 text-label font-medium text-muted-foreground">原因与结果</h4>
+          <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-4">
+            {distributions.map((item) => (
+              <Distribution key={item.title} title={item.title} values={item.values} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section className="rounded-xl border border-border/60 bg-card px-3 py-2.5" aria-labelledby="outcome-daily-title">
+        <div className="flex items-center justify-between gap-2">
+          <h4 id="outcome-daily-title" className="text-body font-medium">每日发送</h4>
+          <span className="text-micro text-muted-foreground">样本 {metrics.sampleSize}</span>
         </div>
         {metrics.dailyTrend.length ? (
           <div
             className="mt-2 flex h-20 items-end gap-1"
             role="img"
-            aria-label={`每日投递柱状图，共 ${metrics.dailyTrend.length} 天`}
+            aria-label={`每日发送柱状图，共 ${metrics.dailyTrend.length} 天`}
           >
             {metrics.dailyTrend.map((item) => (
               <div
@@ -196,15 +313,37 @@ export function OutcomeMetricsSummary({ metrics }: { metrics: OutcomeMetrics }) 
           {metrics.insufficientSample
             ? "样本少于 5 次，不给出趋势结论。"
             : metrics.trendConclusion === null
-              ? "至少需要 2 个有投递的日期才给出趋势结论。"
-            : metrics.trendConclusion === "up"
-              ? "后半段成功投递数量上升。"
-              : metrics.trendConclusion === "down"
-                ? "后半段成功投递数量下降。"
-                : "前后两段成功投递数量持平。"}
+              ? "至少需要 2 个有发送的日期才给出趋势结论。"
+              : metrics.trendConclusion === "up"
+                ? "后半段成功发送数量上升。"
+                : metrics.trendConclusion === "down"
+                  ? "后半段成功发送数量下降。"
+                  : "前后两段成功发送数量持平。"}
         </p>
-      </div>
+      </section>
     </div>
+  );
+}
+
+function ProgressiveSection({ title, description, children }: {
+  title: string;
+  description: string;
+  children: ReactNode;
+}) {
+  return (
+    <details className="group mt-3 overflow-hidden rounded-xl border border-border/60 bg-card">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3.5 py-3 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/50 [&::-webkit-details-marker]:hidden">
+        <span className="min-w-0">
+          <span className="block text-title font-medium">{title}</span>
+          <span className="mt-0.5 block text-label text-muted-foreground">{description}</span>
+        </span>
+        <ChevronDown
+          aria-hidden
+          className="size-4 shrink-0 text-muted-foreground transition-transform duration-100 group-open:rotate-180 motion-reduce:transition-none"
+        />
+      </summary>
+      <div className="border-t border-border/50 p-3">{children}</div>
+    </details>
   );
 }
 
@@ -215,8 +354,9 @@ function nextSessionId(): string {
 }
 
 export function OutcomeInsightsSection({ settings, patch }: Props) {
+  const dataLocked = useDataOperationStore((state) => state.locked);
   const [events, setEvents] = useState<DeliveryEvent[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [range, setRange] = useState<OutcomeRange>("30d");
   const [profileId, setProfileId] = useState("all");
@@ -235,17 +375,18 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
         settings.outcomeRetentionDays
       ));
     } catch {
-      setError("本地投递元数据读取失败，请稍后重试");
+      setError("使用记录读取失败，请稍后重试");
     } finally {
       setLoading(false);
     }
   }, [settings.outcomeRetentionDays]);
 
   useEffect(() => {
+    if (dataLocked) return;
     void load();
     const clearListener = listen(DELIVERY_ACTIVITY_CLEARED_EVENT, () => setEvents([]));
     return () => { void clearListener.then((stop) => stop()); };
-  }, [load]);
+  }, [dataLocked, load]);
 
   const metrics = useMemo(() => aggregateOutcomeMetrics(
     events,
@@ -307,12 +448,12 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
 
   const clearMetrics = async () => {
     const confirmed = await ask(
-      "清除成效统计、结果质量反馈和问题计时？最近投递恢复记录、卡片、任务、附件及人工基线不会改变。",
-      { title: "清除成效历史", kind: "warning" }
+      "清除使用统计、结果评价和问题计时？最近发送记录、卡片、任务、附件及传统用时设置不会改变。",
+      { title: "清除使用统计", kind: "warning" }
     );
     if (!confirmed) return;
     if (settings.outcomeMetricsEpoch >= Number.MAX_SAFE_INTEGER) {
-      tip("warn", "成效历史代次已达安全上限，请先导出诊断后联系支持");
+      tip("warn", "使用统计已达到安全上限，请先导出诊断后联系支持");
       return;
     }
     patch({
@@ -320,129 +461,168 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
       outcomeQualityFeedback: [],
       outcomeProblemSessions: [],
     });
-    tip("ok", "成效历史已清除；最近投递记录仍保留");
+    tip("ok", "使用统计已清除；最近发送记录仍保留");
   };
 
   const baselineOptions = [
     ...settings.targetProfiles.map((profile) => ({
       value: `profile:${profile.id}`,
-      label: `方案 · ${profile.name}`,
+      label: `发送方案 · ${profile.name}`,
     })),
     ...TRANSFORM_RECIPES.map((recipe) => ({
       value: `recipe:${recipe.id}`,
-      label: `配方 · ${recipe.label}`,
+      label: `AI 处理 · ${recipe.label}`,
     })),
   ];
 
   return (
     <div>
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-heading font-semibold">成效与隐私</h2>
-          <p className="mt-1 text-body text-muted-foreground">
-            只在本机按元数据聚合，不上传、不读取卡片正文，也不计算金额或自动 ROI。
-          </p>
-        </div>
+      <div className="mb-1 flex items-start justify-between gap-3">
+        <h2 className="text-heading font-semibold">使用概览</h2>
         <Button type="button" size="sm" variant="secondary" onClick={() => void load()} disabled={loading}>
           <RefreshCw className={cn("size-3.5", loading && "animate-spin motion-reduce:animate-none")} />
           刷新
         </Button>
       </div>
 
-      <div className="mb-4 divide-y divide-border/50 rounded-xl border border-border/60 bg-card">
-        <div className="flex items-center justify-between gap-4 px-3.5 py-2.5">
+      <div className="mb-3 flex items-center justify-between gap-4 rounded-xl border border-border/60 bg-card px-3.5 py-2.5">
+        <div className="flex min-w-0 items-start gap-2.5">
+          <ShieldCheck
+            aria-hidden
+            className={cn(
+              "mt-0.5 size-4 shrink-0",
+              settings.outcomeMetricsEnabled ? "text-success" : "text-muted-foreground"
+            )}
+          />
           <div className="min-w-0">
-            <p className="text-title">本机成效度量</p>
+            <p className="text-title font-medium">
+              {settings.outcomeMetricsEnabled ? "本机使用统计已开启" : "本机使用统计已暂停"}
+            </p>
             <p className="mt-0.5 text-label text-muted-foreground">
-              关闭后新投递仍写入最近投递恢复账本，但明确排除在成效聚合之外。
+              只记录次数、时间和状态，不保存卡片正文、Prompt 或密钥。
             </p>
           </div>
-          <Switch
-            aria-label="本机成效度量"
-            checked={settings.outcomeMetricsEnabled}
-            onCheckedChange={(checked) => patch({
-              outcomeMetricsEnabled: checked,
-              ...(!checked && activeSession ? {
-                outcomeProblemSessions: cancelProblemSession(
-                  settings.outcomeProblemSessions,
-                  activeSession.id,
-                  Date.now()
-                ),
-              } : {}),
-            })}
-          />
         </div>
-        <div className="flex items-center justify-between gap-4 px-3.5 py-2.5">
-          <div>
-            <p className="text-title">元数据保留期</p>
-            <p className="mt-0.5 text-label text-muted-foreground">最多仍为 500 条；缩短后下次读取即压实。</p>
+        <Switch
+          aria-label="本机使用统计"
+          checked={settings.outcomeMetricsEnabled}
+          onCheckedChange={(checked) => patch({
+            outcomeMetricsEnabled: checked,
+            ...(!checked && activeSession ? {
+              outcomeProblemSessions: cancelProblemSession(
+                settings.outcomeProblemSessions,
+                activeSession.id,
+                Date.now()
+              ),
+            } : {}),
+          })}
+        />
+      </div>
+
+      <SafeDeliveryLearningPath
+        onboarding={settings.onboarding}
+        onRunRehearsal={(mode) => {
+          void emitTo("main", SETTINGS_START_SAFE_REHEARSAL, { mode });
+        }}
+        onCompleteRecoveryTutorial={() => patch({
+          onboarding: onboardingAfter(
+            settings.onboarding,
+            { type: "recoveryTutorialCompleted" }
+          ),
+        })}
+      />
+
+      {error && !events.length ? (
+        <div role="alert" className="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-4">
+          <div className="flex items-start gap-3">
+            <CircleAlert aria-hidden className="mt-0.5 size-4 shrink-0 text-destructive" />
+            <div className="min-w-0 flex-1">
+              <h3 className="text-title font-medium">暂时读不到使用记录</h3>
+              <p className="mt-1 text-body text-muted-foreground">
+                这不会影响发送和最近发送记录。可以稍后再试，或现在重新读取。
+              </p>
+            </div>
+            <Button type="button" size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
+              再试一次
+            </Button>
           </div>
-          <SimpleSelect
-            ariaLabel="元数据保留期"
-            className="w-28"
-            value={String(settings.outcomeRetentionDays)}
-            options={[
-              { value: "7", label: "7 天" },
-              { value: "30", label: "30 天" },
-              { value: "90", label: "90 天" },
-            ]}
-            onChange={(value) => patch({ outcomeRetentionDays: Number(value) as 7 | 30 | 90 })}
-          />
+          <span className="sr-only">{error}</span>
         </div>
-        <details className="px-3.5 py-2.5 text-label text-muted-foreground">
-          <summary className="cursor-pointer rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-primary/50">具体记录什么</summary>
-          <p className="mt-1.5 leading-relaxed">
-            时间、目标应用、投递方案、已应用配方、状态/原因、字符与图片数量、Firewall/脱敏计数、剪贴板结果、结果卡 ID 与核验计数。绝不保存正文、Prompt、API Key、目标 token 或脱敏映射。
-          </p>
-        </details>
-      </div>
-
-      {!settings.outcomeMetricsEnabled && (
-        <p role="status" className="mb-3 rounded-xl bg-warning/10 px-3 py-2 text-body text-warning">
-          成效度量已暂停；既有本机历史仍保留，可单独清除。
-        </p>
+      ) : (
+        <>
+          {error && (
+            <div role="status" className="mb-3 flex items-center justify-between gap-3 rounded-xl bg-warning/10 px-3 py-2 text-body text-warning">
+              <span>本次刷新失败，下面仍显示上次读取的结果。</span>
+              <Button type="button" size="xs" variant="ghost" onClick={() => void load()} disabled={loading}>再试一次</Button>
+            </div>
+          )}
+          {loading && !events.length ? (
+            <p role="status" className="rounded-xl border border-border/60 bg-card py-10 text-center text-body text-muted-foreground">
+              正在读取使用记录…
+            </p>
+          ) : (
+            <>
+              {!!events.length && (
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <p className="text-label text-muted-foreground">查看范围</p>
+                  <Segmented ariaLabel="使用概览范围" value={range} options={RANGE_OPTIONS} onChange={setRange} />
+                </div>
+              )}
+              <OutcomeMetricsSummary
+                metrics={metrics}
+                hasActivity={!!events.length}
+                rangeLabel={RANGE_OPTIONS.find((option) => option.value === range)?.label}
+              />
+              {!!events.length && (
+                <ProgressiveSection
+                  title="趋势和详细数据"
+                  description="查看发送原因、用时、结果和每日变化"
+                >
+                  <div className="mb-3 flex flex-wrap items-center gap-2">
+                    <SimpleSelect
+                      ariaLabel="按发送方案筛选"
+                      className="w-40"
+                      value={profileId}
+                      options={[
+                        { value: "all", label: "全部发送方案" },
+                        ...settings.targetProfiles.map((profile) => ({ value: profile.id, label: profile.name })),
+                      ]}
+                      onChange={setProfileId}
+                    />
+                    <SimpleSelect
+                      ariaLabel="按 AI 处理筛选"
+                      className="w-36"
+                      value={recipeId}
+                      options={[
+                        { value: "all", label: "全部 AI 处理" },
+                        ...TRANSFORM_RECIPES.map((recipe) => ({ value: recipe.id, label: recipe.label })),
+                      ]}
+                      onChange={setRecipeId}
+                    />
+                  </div>
+                  <OutcomeMetricsDetails metrics={metrics} />
+                </ProgressiveSection>
+              )}
+            </>
+          )}
+        </>
       )}
-      {error && <p role="alert" className="mb-3 rounded-xl bg-destructive/10 px-3 py-2 text-body text-destructive">{error}</p>}
 
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <Segmented ariaLabel="成效统计范围" value={range} options={RANGE_OPTIONS} onChange={setRange} />
-        <SimpleSelect
-          ariaLabel="按投递方案筛选"
-          className="w-40"
-          value={profileId}
-          options={[
-            { value: "all", label: "全部投递方案" },
-            ...settings.targetProfiles.map((profile) => ({ value: profile.id, label: profile.name })),
-          ]}
-          onChange={setProfileId}
-        />
-        <SimpleSelect
-          ariaLabel="按 AI 配方筛选"
-          className="w-36"
-          value={recipeId}
-          options={[
-            { value: "all", label: "全部配方" },
-            ...TRANSFORM_RECIPES.map((recipe) => ({ value: recipe.id, label: recipe.label })),
-          ]}
-          onChange={setRecipeId}
-        />
-      </div>
-
-      {loading && !events.length
-        ? <p role="status" className="py-12 text-center text-body text-muted-foreground">正在读取本机元数据…</p>
-        : <OutcomeMetricsSummary metrics={metrics} />}
-
-      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+      <ProgressiveSection
+        title="高级工具"
+        description="估算节省时间，或记录一次完整的问题处理用时"
+      >
+      <div className="grid gap-3 lg:grid-cols-2">
         <section className="rounded-xl border border-border/60 bg-card p-3" aria-labelledby="outcome-baseline-title">
           <div className="flex items-start gap-2">
             <Clock3 className="mt-0.5 size-4 text-muted-foreground" aria-hidden />
             <div>
-              <h3 id="outcome-baseline-title" className="text-title font-medium">人工基线</h3>
-              <p className="mt-0.5 text-label text-muted-foreground">填写不用 Toskr 时完成同类流程的分钟数；只用于标注为“估算”的时间差。</p>
+              <h3 id="outcome-baseline-title" className="text-title font-medium">传统用时（可选）</h3>
+              <p className="mt-0.5 text-label text-muted-foreground">填写不用 Toskr 时完成同类工作的分钟数，用来估算节省时间。</p>
             </div>
           </div>
           <div className="mt-2 flex gap-2">
-            <SimpleSelect ariaLabel="基线适用范围" className="min-w-0 flex-1" value={baselineScope} options={baselineOptions} onChange={setBaselineScope} />
+            <SimpleSelect ariaLabel="传统用时适用范围" className="min-w-0 flex-1" value={baselineScope} options={baselineOptions} onChange={setBaselineScope} />
             <input
               type="number"
               min={0.1}
@@ -466,7 +646,7 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
                   <span className="tabular-nums">{baseline.minutes} 分钟</span>
                   <button
                     type="button"
-                    aria-label={`删除基线 ${label}`}
+                    aria-label={`删除传统用时 ${label}`}
                     onClick={() => patch({ outcomeBaselines: settings.outcomeBaselines.filter((item) => `${item.scope}:${item.scopeId}` !== key) })}
                     className="rounded-sm p-0.5 text-muted-foreground hover:text-destructive focus-visible:ring-2 focus-visible:ring-primary/50"
                   ><X className="size-3.5" /></button>
@@ -480,8 +660,8 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
           <div className="flex items-start gap-2">
             <Play className="mt-0.5 size-4 text-muted-foreground" aria-hidden />
             <div className="min-w-0 flex-1">
-              <h3 id="problem-session-title" className="text-title font-medium">问题处理计时（可选）</h3>
-              <p className="mt-0.5 text-label text-muted-foreground">只记录开始、关联投递、解决/取消时间，不记录问题内容。</p>
+              <h3 id="problem-session-title" className="text-title font-medium">完整问题用时（可选）</h3>
+              <p className="mt-0.5 text-label text-muted-foreground">从开始处理到解决，只记录时间和关联发送，不记录问题内容。</p>
             </div>
           </div>
           {!activeSession ? (
@@ -506,10 +686,10 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
                 开始于 {new Date(activeSession.startedAtMs).toLocaleString("zh-CN", { hour12: false })}
               </p>
               <SimpleSelect
-                ariaLabel="关联问题会话到最近投递"
+                ariaLabel="关联问题会话到最近发送"
                 value={activeSession.deliveryId ?? "none"}
                 options={[
-                  { value: "none", label: "尚未关联投递" },
+                  { value: "none", label: "尚未关联发送" },
                   ...records.map((record) => ({
                     value: record.deliveryId,
                     label: `${record.targetAppName || record.targetBundleId || "未识别目标"} · ${new Date(record.timestampMs).toLocaleString("zh-CN", { hour12: false })}`,
@@ -530,8 +710,8 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
                 <div className="flex items-center justify-between gap-2 text-label text-muted-foreground">
                   <span>
                     {activeSession.resultNoteId
-                      ? "已关联投递与结果"
-                      : "已关联投递，结果尚未回收"}
+                      ? "已关联发送与结果"
+                      : "已关联发送，结果尚未回收"}
                   </span>
                   {activeRecord?.resultNoteId && activeRecord.resultNoteId !== activeSession.resultNoteId && (
                     <Button
@@ -574,19 +754,47 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
           )}
         </section>
       </div>
+      </ProgressiveSection>
 
-      <div className="mt-4 rounded-xl border border-border/60 bg-card p-3">
-        <div className="flex items-start gap-2">
-          <ShieldCheck className="mt-0.5 size-4 text-success" aria-hidden />
-          <div className="min-w-0 flex-1">
-            <p className="text-title font-medium">数据控制</p>
-            <p className="mt-0.5 text-label text-muted-foreground">结果质量可在“最近投递”中选填。清除只推进统计时间边界，不删除恢复记录或业务内容。</p>
+      <ProgressiveSection
+        title="数据与隐私"
+        description="设置保留时间，查看记录范围或清除统计"
+      >
+        <div className="divide-y divide-border/50 rounded-xl border border-border/60">
+          <div className="flex items-center justify-between gap-4 px-3.5 py-2.5">
+            <div>
+              <p className="text-title">统计保留时间</p>
+              <p className="mt-0.5 text-label text-muted-foreground">最多保留 500 条，到期后自动清理。</p>
+            </div>
+            <SimpleSelect
+              ariaLabel="统计保留时间"
+              className="w-28"
+              value={String(settings.outcomeRetentionDays)}
+              options={[
+                { value: "7", label: "7 天" },
+                { value: "30", label: "30 天" },
+                { value: "90", label: "90 天" },
+              ]}
+              onChange={(value) => patch({ outcomeRetentionDays: Number(value) as 7 | 30 | 90 })}
+            />
           </div>
-          <Button type="button" size="sm" variant="outline" onClick={() => void clearMetrics()}>
-            <Trash2 className="size-3.5" /> 清除成效历史
-          </Button>
+          <div className="px-3.5 py-2.5">
+            <p className="text-title">会记录什么</p>
+            <p className="mt-1 text-label leading-relaxed text-muted-foreground">
+              只记录时间、目标应用、发送方案、状态、数量和处理结果。不会保存正文、Prompt、API Key、目标 token 或脱敏对应关系。
+            </p>
+          </div>
+          <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
+            <div className="min-w-0">
+              <p className="text-title">清除使用统计</p>
+              <p className="mt-0.5 text-label text-muted-foreground">不会删除卡片、任务、附件或最近发送记录。</p>
+            </div>
+            <Button type="button" size="sm" variant="outline" onClick={() => void clearMetrics()}>
+              <Trash2 className="size-3.5" /> 清除统计
+            </Button>
+          </div>
         </div>
-      </div>
+      </ProgressiveSection>
     </div>
   );
 }

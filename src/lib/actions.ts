@@ -13,7 +13,10 @@ import {
 import { api } from "@/lib/tauri";
 import { setPendingUndo, tip } from "@/lib/tip";
 import { currentTargetProfileResolution } from "@/lib/currentTargetProfile";
-import { buildDeliveryDraft } from "@/lib/delivery/buildDraft";
+import {
+  buildDeliveryDraft,
+  buildNoteSourceContent,
+} from "@/lib/delivery/buildDraft";
 import {
   deliveryDraftPreparationPending,
   dispatchDeliveryDraft,
@@ -76,10 +79,14 @@ export type NotePreviewPayload = {
   title: string | null;
   sourceApp: string | null;
   sourceBundle: string | null;
+  /** 非卡片预览可覆盖标题下的来源说明。 */
+  subtitle?: string | null;
   /** 图片附件（组合卡在详情窗展示缩略条；点击 Quick Look）。 */
   images: string[];
   /** true = 打开即进入编辑态。 */
   edit: boolean;
+  /** 合并发送来源等临时视图不可编辑、移除附件或再次发送。 */
+  readOnly?: boolean;
 };
 
 /** 详情窗最近展示的卡 id（Space 开合判定用；窗口被 Esc/点 X 关掉也无碍——
@@ -182,7 +189,7 @@ function preflightBlocksNewIntent(): boolean {
   const preflight = useDeliveryStore.getState();
   if (!preflight.open) return false;
   warnWithPanel(
-    preflight.busy ? "已有发送正在进行，请稍候" : "请先完成或关闭当前投递预检",
+    preflight.busy ? "已有发送正在进行，请稍候" : "请先完成或关闭当前发送预检",
     preflight.busy ? "delivery-pending" : "preflight-open"
   );
   return true;
@@ -315,15 +322,8 @@ export function openNoteDetail(id: string, edit = false) {
     useUIStore.getState().openPreview(id, edit);
     return;
   }
-  if (lastDetailSessionId) {
-    releaseEditorSessionMedia(lastDetailSessionId);
-  }
-  lastDetailId = note.id;
-  lastDetailSessionId = crypto.randomUUID();
-  void api.showTextPreview();
-  const payload: NotePreviewPayload = {
+  openTextPreview({
     dataGeneration: currentDataGeneration(),
-    sessionId: lastDetailSessionId,
     id: note.id,
     text: note.text,
     kind: note.kind ?? "text",
@@ -334,8 +334,63 @@ export function openNoteDetail(id: string, edit = false) {
     sourceBundle: note.sourceBundle ?? null,
     images: noteImages(note),
     edit,
-  };
-  void emitTo("textpreview", "toskr://note-preview", payload);
+  });
+}
+
+function openTextPreview(payload: Omit<NotePreviewPayload, "sessionId">) {
+  if (lastDetailSessionId) releaseEditorSessionMedia(lastDetailSessionId);
+  lastDetailId = payload.id;
+  const sessionId = crypto.randomUUID();
+  lastDetailSessionId = sessionId;
+  void api.showTextPreview();
+  void emitTo("textpreview", "toskr://note-preview", {
+    ...payload,
+    sessionId,
+  } satisfies NotePreviewPayload);
+}
+
+/**
+ * 最近发送不持久化正文；合并记录按当前仍存在的来源卡片重建只读预览。
+ * 单卡继续走原详情逻辑，避免改变既有查看/编辑习惯。
+ */
+export function openNoteBatchDetail(
+  ids: readonly string[],
+  expectedSourceCount = ids.length
+): boolean {
+  const notesById = new Map(
+    useNotesStore.getState().notes.map((note) => [note.id, note])
+  );
+  const notes = ids.flatMap((id) => {
+    const note = notesById.get(id);
+    return note ? [note] : [];
+  });
+  if (!notes.length) return false;
+  if (notes.length === 1 && expectedSourceCount <= 1) {
+    openNoteDetail(notes[0].id);
+    return true;
+  }
+
+  const content = buildNoteSourceContent(notes);
+  const expected = Math.max(notes.length, expectedSourceCount);
+  const sourceCount = notes.length === expected
+    ? `${notes.length} 张当前来源卡片`
+    : `${notes.length}/${expected} 张当前可用来源卡片`;
+  openTextPreview({
+    dataGeneration: currentDataGeneration(),
+    id: `delivery-source-${crypto.randomUUID()}`,
+    text: content.rawText,
+    kind: content.rawText ? "text" : "image",
+    codeLang: content.singleCodeLanguage ?? null,
+    url: null,
+    title: "合并发送内容",
+    subtitle: `${sourceCount} · 发送记录不保存正文`,
+    sourceApp: null,
+    sourceBundle: null,
+    images: content.imageFiles,
+    edit: false,
+    readOnly: true,
+  });
+  return true;
 }
 
 /** 链接卡片补抓网页标题/图标（幂等：已有标题跳过；离线/超时静默保持 URL 展示）。 */
@@ -474,7 +529,7 @@ export async function copyNotesAsList(ids: string[]) {
 
 /**
  * 剪贴板卡发送时，若 Toskr 自己的文本详情窗正可见，则把内容追加到该编辑器。
- * 一旦确认存在内部目标，失败也不回退到外部投递，避免内容误发。
+ * 一旦确认存在内部目标，失败也不回退到外部发送，避免内容误发。
  */
 async function insertClipboardNotesIntoOpenEditor(
   targets: Note[],

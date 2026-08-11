@@ -104,7 +104,31 @@ function draft(overrides: Partial<DeliveryDraft> = {}): DeliveryDraft {
     rawText: "secret raw body",
     assembledText: "prompt secret raw body",
     finalText: "redacted body",
+    originalImageFiles: ["/secret/image.png"],
     imageFiles: ["/secret/image.png"],
+    imageFirewall: [{
+      originalFile: "/secret/image.png",
+      sendFile: "/secret/image.png",
+      status: "ready",
+      pixelHash: null,
+      redactedPixelHash: null,
+      width: null,
+      height: null,
+      scanRevision: 1,
+      findings: [{
+        id: "image-region-secret",
+        observationIndex: 0,
+        category: "email",
+        severity: "warn",
+        boundingBox: { x: 0.123, y: 0.456, width: 0.2, height: 0.1 },
+        pixelBox: { x: 12, y: 45, width: 20, height: 10 },
+        maskedPreview: "ocr-secret-preview",
+        ruleId: "ocr-rule-secret",
+      }],
+      redactedFindingIds: ["image-region-secret"],
+      rawConfirmation: null,
+      failureMessage: null,
+    }],
     format: "plain",
     promptSnippetId: "snippet-secret",
     transformRecipeId: null,
@@ -265,6 +289,8 @@ describe("delivery activity", () => {
       "verificationStatus",
     ].sort());
     expect(event.firewallCounts.apiKey).toBe(1);
+    expect(event.firewallCounts.email).toBe(1);
+    expect(event.redactionCount).toBe(2);
     expect(event.textCharCount).toBe("redacted body".length);
     expect(event.transformRecipeId).toBe("summarize");
     for (const forbidden of [
@@ -275,6 +301,9 @@ describe("delivery activity", () => {
       "old-secret-token",
       "snippet-secret",
       "rule-secret",
+      "ocr-secret-preview",
+      "ocr-rule-secret",
+      "0.123",
     ]) {
       expect(serialized).not.toContain(forbidden);
     }
@@ -371,6 +400,35 @@ describe("delivery activity", () => {
     expect(useDeliveryStore.getState().draft?.targetSnapshot?.token).not.toBe(
       "old-secret-token"
     );
+  });
+
+  it("图片 Firewall 阻止记录可重新准备，并以无正文元数据标记重试", async () => {
+    const noteId = useNotesStore.getState().addNote("重新检查图片").id!;
+    const refresh = vi.fn(async () => {
+      useTargetStore.setState({ snapshot: refreshedTarget, status: "ready", reason: null });
+      return refreshedTarget;
+    });
+
+    const result = await reprepareDeliveryEvent(
+      failedEvent({
+        eventType: "firewallBlocked",
+        status: "blocked",
+        reasonCode: "privacy_gate_blocked",
+        sourceItemIds: [noteId],
+      }),
+      { refresh }
+    );
+    await flushDeliveryActivityWrites();
+
+    expect(result).toEqual({ ok: true });
+    expect(appendDeliveryEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: "draftCreated",
+        reasonCode: "retry-prepared",
+      }),
+      expect.any(Number)
+    );
+    expect(sendDelivery).not.toHaveBeenCalled();
   });
 
   it("来源已删除时明确失败，不刷新目标、不打开预检也不发送", async () => {

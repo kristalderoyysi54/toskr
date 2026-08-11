@@ -48,6 +48,7 @@ vi.mock("@/lib/tauri", async (importOriginal) => {
 });
 
 import {
+  openNoteBatchDetail,
   openSafeRehearsalPreflight,
   openNoteDetail,
   sendCheckedToChat,
@@ -227,7 +228,41 @@ describe("结构化发送结果的 store 副作用", () => {
     expect(payload).not.toHaveProperty("detailFrameNotchSide");
   });
 
-  it("剪贴板卡优先追加到当前可见卡片编辑器，不误投递到外部目标", async () => {
+  it("合并发送来源按发送规则重建图文只读预览", () => {
+    const textId = useNotesStore.getState().addNote("问题背景").id!;
+    const firstImageId = useNotesStore.getState().addNote("图片 1200×800", {
+      kind: "image",
+      imageFile: "first.png",
+    }).id!;
+    const secondImageId = useNotesStore.getState().addNote("图片 900×600", {
+      kind: "image",
+      imageFile: "second.png",
+    }).id!;
+
+    expect(
+      openNoteBatchDetail([textId, firstImageId, secondImageId], 3)
+    ).toBe(true);
+
+    const payload = eventMocks.emitTo.mock.calls.find(
+      ([label, event]) =>
+        label === "textpreview" && event === "toskr://note-preview"
+    )?.[2];
+    expect(apiMocks.showTextPreview).toHaveBeenCalledOnce();
+    expect(payload).toMatchObject({
+      text: "问题背景",
+      images: ["first.png", "second.png"],
+      kind: "text",
+      title: "合并发送内容",
+      subtitle: "3 张当前来源卡片 · 发送记录不保存正文",
+      edit: false,
+      readOnly: true,
+    });
+    expect(payload?.id).not.toBe(textId);
+    expect(payload?.id).not.toBe(firstImageId);
+    expect(payload?.id).not.toBe(secondImageId);
+  });
+
+  it("剪贴板卡优先追加到当前可见卡片编辑器，不误发送到外部目标", async () => {
     const destination = useNotesStore.getState().addNote("原卡内容").id!;
     openNoteDetail(destination, true);
     eventMocks.emitTo.mockClear();
@@ -366,7 +401,7 @@ describe("结构化发送结果的 store 副作用", () => {
     );
   });
 
-  it("卡片编辑器不可见时，剪贴板卡仍按原链路投递外部目标", async () => {
+  it("卡片编辑器不可见时，剪贴板卡仍按原链路发送外部目标", async () => {
     useNotesStore.getState().addClipNote("发给外部目标", {});
     const sourceId = useNotesStore.getState().notes[0].id;
 
@@ -520,7 +555,7 @@ describe("结构化发送结果的 store 副作用", () => {
       "toskr://note-editor-insert",
       expect.anything()
     );
-    expect(tip).toHaveBeenCalledWith("warn", "请先完成或关闭当前投递预检");
+    expect(tip).toHaveBeenCalledWith("warn", "请先完成或关闭当前发送预检");
   });
 
   it("编辑器探测期间数据代际变化时禁止旧剪贴板内容外投", async () => {
@@ -975,7 +1010,7 @@ describe("结构化发送结果的 store 副作用", () => {
     expect(useUIStore.getState().open).toBe(true);
   });
 
-  it("enterPolicy=confirm 拒绝时不投递，确认后才允许 Enter", async () => {
+  it("enterPolicy=confirm 拒绝时不发送，确认后才允许 Enter", async () => {
     const noteId = useNotesStore.getState().addNote("confirm enter").id!;
     const settings = useNotesStore.getState().settings;
     useNotesStore.getState().setSettings({
@@ -1052,7 +1087,7 @@ describe("结构化发送结果的 store 副作用", () => {
     expect(useNotesStore.getState().checkedIds).toEqual([noteId]);
     expect(tip).toHaveBeenCalledWith(
       "warn",
-      "原临时投递方案已暂停，请确认或恢复自动匹配"
+      "原临时发送方案已暂停，请确认或恢复自动匹配"
     );
   });
 
@@ -1098,7 +1133,7 @@ describe("结构化发送结果的 store 副作用", () => {
     expect(useTargetStore.getState().profileOverrideNeedsConfirmation).toBe(true);
     expect(tip).toHaveBeenCalledWith(
       "warn",
-      "原临时投递方案已暂停，请确认或恢复自动匹配"
+      "原临时发送方案已暂停，请确认或恢复自动匹配"
     );
   });
 
@@ -1135,7 +1170,7 @@ describe("结构化发送结果的 store 副作用", () => {
     expect(apiMocks.sendDelivery).not.toHaveBeenCalled();
     expect(tip).toHaveBeenCalledWith(
       "warn",
-      "投递方案设置已变化，请确认后重试发送"
+      "发送方案设置已变化，请确认后重试发送"
     );
   });
 
@@ -1174,7 +1209,7 @@ describe("结构化发送结果的 store 副作用", () => {
     expect(apiMocks.sendDelivery).not.toHaveBeenCalled();
     expect(useTargetStore.getState().snapshot).toEqual(targetB);
     expect(useNotesStore.getState().checkedIds).toEqual([noteId]);
-    expect(tip).toHaveBeenCalledWith("warn", "投递目标已变化，请确认后重试发送");
+    expect(tip).toHaveBeenCalledWith("warn", "发送目标已变化，请确认后重试发送");
   });
 
   it("A→B→Toskr 小于观察周期且 B 漏采时发送保持 fail-closed", async () => {
@@ -1206,7 +1241,7 @@ describe("结构化发送结果的 store 副作用", () => {
     }
   });
 
-  it("快速重复发送只允许一个原生投递在途", async () => {
+  it("快速重复发送只允许一个原生发送在途", async () => {
     reset("sent");
     const noteId = useNotesStore.getState().addNote("once").id!;
     useNotesStore.getState().setChecked([noteId]);

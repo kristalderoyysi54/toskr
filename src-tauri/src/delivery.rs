@@ -1,4 +1,4 @@
-//! 单一投递状态机与跨前后端结构化契约。
+//! 单一发送状态机与跨前后端结构化契约。
 
 use std::time::Duration;
 
@@ -15,6 +15,8 @@ pub struct SendDeliveryRequest {
     pub target_token: Option<String>,
     pub text: String,
     pub image_files: Vec<String>,
+    #[serde(default)]
+    pub expected_image_pixel_hashes: Vec<Option<String>>,
     pub press_enter: bool,
     pub keep_panel: bool,
     pub delivery_id: String,
@@ -54,6 +56,7 @@ pub enum DeliveryReasonCode {
     DeliveryInProgress,
     PayloadEmpty,
     ImageUnreadable,
+    ImageChanged,
     PasteFailed,
     EnterFailed,
     InternalError,
@@ -75,6 +78,7 @@ impl DeliveryReasonCode {
             Self::DeliveryInProgress => "delivery_in_progress",
             Self::PayloadEmpty => "payload_empty",
             Self::ImageUnreadable => "image_unreadable",
+            Self::ImageChanged => "image_changed",
             Self::PasteFailed => "paste_failed",
             Self::EnterFailed => "enter_failed",
             Self::InternalError => "internal_error",
@@ -178,7 +182,7 @@ fn blocked_message(reason: DeliveryReasonCode) -> &'static str {
         DeliveryReasonCode::TargetNotFrontmost | DeliveryReasonCode::TargetFocusDrift => {
             "发送中止：目标应用未处于前台"
         }
-        DeliveryReasonCode::DeliveryInProgress => "发送中止：已有投递正在进行",
+        DeliveryReasonCode::DeliveryInProgress => "发送中止：已有发送正在进行",
         _ => "发送中止",
     }
 }
@@ -547,6 +551,38 @@ struct NativeDeliveryRuntime {
     clipboard_outcome: Option<ClipboardOutcome>,
 }
 
+fn verify_image_integrity(
+    file: &str,
+    expected: Option<&str>,
+    width: usize,
+    height: usize,
+    rgba: &[u8],
+) -> Result<(), DeliveryFailure> {
+    let Some(expected) = expected else {
+        if file.starts_with("toskr-redacted:") {
+            return Err(DeliveryFailure::new(
+                DeliveryReasonCode::ImageChanged,
+                "发送失败：遮挡图片缺少完整性证明，请重新预检",
+            ));
+        }
+        return Ok(());
+    };
+    if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(DeliveryFailure::new(
+            DeliveryReasonCode::ImageChanged,
+            "发送失败：图片完整性证明无效，请重新预检",
+        ));
+    }
+    let actual = crate::storage::content_hash(width, height, rgba);
+    if actual != expected {
+        return Err(DeliveryFailure::new(
+            DeliveryReasonCode::ImageChanged,
+            "发送失败：图片内容已变化，请重新扫描",
+        ));
+    }
+    Ok(())
+}
+
 impl NativeDeliveryRuntime {
     fn new(app: AppHandle) -> Self {
         Self {
@@ -578,14 +614,26 @@ impl DeliveryRuntime for NativeDeliveryRuntime {
     }
 
     fn prepare_payload(&mut self, request: &SendDeliveryRequest) -> Result<(), DeliveryFailure> {
+        if request.image_files.len() != request.expected_image_pixel_hashes.len() {
+            return Err(DeliveryFailure::new(
+                DeliveryReasonCode::ImageChanged,
+                "发送失败：图片完整性信息不完整，请重新预检",
+            ));
+        }
         let mut images = Vec::with_capacity(request.image_files.len());
-        for file in &request.image_files {
-            let Some(image) = crate::storage::read_image_rgba(&self.app, file) else {
+        for (file, expected_hash) in request
+            .image_files
+            .iter()
+            .zip(&request.expected_image_pixel_hashes)
+        {
+            let Some(image) = crate::image_firewall::read_delivery_image_rgba(&self.app, file)
+            else {
                 return Err(DeliveryFailure::new(
                     DeliveryReasonCode::ImageUnreadable,
                     "发送失败：图片附件不可读取",
                 ));
             };
+            verify_image_integrity(file, expected_hash.as_deref(), image.0, image.1, &image.2)?;
             images.push(image);
         }
         self.transaction = Some(PasteboardTransaction::capture_original().map_err(|error| {
@@ -644,7 +692,7 @@ impl DeliveryRuntime for NativeDeliveryRuntime {
         let Some((width, height, rgba)) = self.images.get(index) else {
             return Err(DeliveryFailure::new(
                 DeliveryReasonCode::InternalError,
-                "发送失败：图片投递状态异常",
+                "发送失败：图片发送状态异常",
             ));
         };
         let transaction = self.transaction.as_mut().ok_or_else(|| {
@@ -945,10 +993,35 @@ mod tests {
             target_token: token.map(str::to_string),
             text: "hello".into(),
             image_files: vec![],
+            expected_image_pixel_hashes: vec![],
             press_enter: true,
             keep_panel: false,
             delivery_id: "delivery-1".into(),
         }
+    }
+
+    #[test]
+    fn image_integrity_rejects_same_name_pixel_drift_before_delivery() {
+        let original = vec![10, 20, 30, 255];
+        let expected = crate::storage::content_hash(1, 1, &original);
+        assert!(
+            verify_image_integrity("img-synthetic.png", Some(&expected), 1, 1, &original,).is_ok()
+        );
+
+        let changed = vec![200, 20, 30, 255];
+        let failure = verify_image_integrity("img-synthetic.png", Some(&expected), 1, 1, &changed)
+            .expect_err("same name with changed pixels must fail closed");
+        assert_eq!(failure.reason_code, DeliveryReasonCode::ImageChanged);
+
+        let missing = verify_image_integrity(
+            "toskr-redacted:redacted-synthetic.png",
+            None,
+            1,
+            1,
+            &original,
+        )
+        .expect_err("redacted tokens always require an expected hash");
+        assert_eq!(missing.reason_code, DeliveryReasonCode::ImageChanged);
     }
 
     #[test]

@@ -72,7 +72,7 @@ describe("发送入口路由", () => {
     expect(readFileSync(path.join(srcRoot, relativeFile), "utf8")).toContain(action);
   });
 
-  it("快捷键与可见按钮共享 target store 门禁，发送前仍刷新并交给 Native", () => {
+  it("快捷键与可见按钮共享 target store 门禁，发送前复核目标并交给 Native", () => {
     const actions = readFileSync(path.join(srcRoot, "lib", "actions.ts"), "utf8");
     const executor = readFileSync(
       path.join(srcRoot, "lib", "delivery", "executeDraft.ts"),
@@ -97,7 +97,7 @@ describe("发送入口路由", () => {
     expect(actions).toContain("dispatchDeliveryDraft(");
     expect(preflight).toContain("executeDeliveryDraft");
     expect(executor).toContain("targetSendDisabled()");
-    expect(executor).toContain("await refreshTarget()");
+    expect(executor).toContain("readTarget() : refreshTarget()");
     expect(executor).toContain("api.sendDelivery(");
     expect(app).toContain("void sendCheckedToChat()");
     expect(app).toContain("void sendNotesToChat([id])");
@@ -265,7 +265,7 @@ describe("发送入口路由", () => {
     expect(overlay).toContain("targetReady || internalSendAvailable");
   });
 
-  it("Profile 策略只有一个解析入口，旧 autoEnter 不再参与投递", () => {
+  it("Profile 策略只有一个解析入口，旧 autoEnter 不再参与发送", () => {
     const actions = readFileSync(path.join(srcRoot, "lib", "actions.ts"), "utf8");
     const executor = readFileSync(
       path.join(srcRoot, "lib", "delivery", "executeDraft.ts"),
@@ -289,14 +289,14 @@ describe("发送入口路由", () => {
     expect(lens).toContain("onSelectTemporary={onSelectProfile}");
     expect(lens).toContain("assignTargetProfileBundle");
     expect(lens).toContain("canPermanentlyAssignTargetProfileOverride");
-    expect(lens).toContain("快速切换投递方案");
-    expect(lens).toContain("原临时投递方案已暂停");
+    expect(lens).toContain("快速切换发送方案");
+    expect(lens).toContain("原临时发送方案已暂停");
     expect(selection).toContain("当前提示词组 ·");
     expect(selection).toContain("全部模板");
     expect(selection).toContain("setTargetProfileOverride");
   });
 
-  it("Settings 分区：目标与投递方案主从管理，提示词仍在同区，伴随停靠独立", () => {
+  it("Settings 分区：目标与发送方案主从管理，提示词仍在同区，伴随停靠独立", () => {
     const settings = readFileSync(path.join(srcRoot, "SettingsView.tsx"), "utf8");
     const manager = readFileSync(
       path.join(srcRoot, "components", "settings", "TargetProfileManager.tsx"),
@@ -311,9 +311,9 @@ describe("发送入口路由", () => {
       "utf8"
     );
 
-    expect(settings).toContain('{ id: "target", label: "目标与投递方案"');
+    expect(settings).toContain('{ id: "target", label: "目标与发送方案"');
     expect(settings).toContain('{ id: "companion", label: "伴随停靠"');
-    // 提示词不独立成区：snippets/prompts 深链仍落到目标与投递方案
+    // 提示词不独立成区：snippets/prompts 深链仍落到目标与发送方案
     expect(settings).not.toContain('{ id: "snippets", label:');
     expect(settings).not.toContain('{ id: "prompts", label:');
     expect(settings).toContain('["snippets", "prompts"].includes(rawSection)');
@@ -340,7 +340,7 @@ describe("发送入口路由", () => {
     expect(manager).not.toMatch(/clipboard|paste|pressEnter/i);
   });
 
-  it("投递方案 UI 共享单一事件监听，图标缓存且 50 项派生状态按输入引用复用", () => {
+  it("发送方案 UI 共享单一事件监听，图标缓存且 50 项派生状态按输入引用复用", () => {
     const manager = readFileSync(
       path.join(srcRoot, "components", "settings", "TargetProfileManager.tsx"),
       "utf8"
@@ -371,7 +371,7 @@ describe("发送入口路由", () => {
     expect(profileList).toContain("useMemo(");
   });
 
-  it("用户界面不再暴露旧投递术语或缩写标签", () => {
+  it("用户界面不再暴露旧发送术语或缩写标签", () => {
     const relatedSources = [
       "components/TargetLensBar.tsx",
       "components/TargetProfileQuickSwitch.tsx",

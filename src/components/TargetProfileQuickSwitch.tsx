@@ -126,7 +126,7 @@ export function TargetProfileQuickSwitch({
   }, [activeIndex, currentProfile.id, onClose, onSelectTemporary, targetReady, visibleCandidates]);
 
   return (
-    <div className="flex min-w-0 flex-col gap-2" aria-label={`投递到 ${appName}`}>
+    <div className="flex min-w-0 flex-col gap-2" aria-label={`发送到 ${appName}`}>
       <header className="flex min-w-0 items-center gap-2">
         <ApplicationIcon
           src={icon?.url}
@@ -135,7 +135,7 @@ export function TargetProfileQuickSwitch({
         />
         <div className="min-w-0 flex-1">
           <p className="truncate text-title font-medium" title={appName}>
-            投递到 {appName}
+            发送到 {appName}
           </p>
           <p className="line-clamp-2 break-words text-micro leading-tight text-muted-foreground">
             匹配来源：{matchReason}
@@ -155,8 +155,8 @@ export function TargetProfileQuickSwitch({
         </span>
       </header>
 
-      <section className="rounded-lg bg-muted/45 px-2 py-1.5" aria-label="当前投递方案">
-        <p className="text-micro text-muted-foreground">当前投递方案</p>
+      <section className="rounded-lg bg-muted/45 px-2 py-1.5" aria-label="当前发送方案">
+        <p className="text-micro text-muted-foreground">当前发送方案</p>
         <p className="line-clamp-2 break-words text-body font-medium" title={currentProfile.name}>
           {currentProfile.name}
         </p>
@@ -167,7 +167,7 @@ export function TargetProfileQuickSwitch({
         <p id="quick-profile-options-label" className="mb-1 text-micro font-medium text-muted-foreground">
           快速选择 · ↑↓ 移动 · Enter 使用
         </p>
-        <div role="listbox" aria-label="选择本次临时投递方案" className="space-y-0.5">
+        <div role="listbox" aria-label="选择本次临时发送方案" className="space-y-0.5">
           {visibleCandidates.map((profile, index) => {
             const selected = profile.id === currentProfile.id;
             return (
@@ -285,7 +285,7 @@ export function TargetProfileQuickSwitch({
           className="ml-auto flex items-center gap-1 rounded-sm text-micro text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50"
         >
           <Settings2 aria-hidden className="size-3" />
-          编辑 {appName} 的投递方案
+          编辑 {appName} 的发送方案
         </button>
       </div>
     </div>

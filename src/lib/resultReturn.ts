@@ -101,6 +101,14 @@ export function resultNoteCandidatesForDelivery(
 
 export type ResultAssociationState = "none" | "linked" | "unlinked" | "missing";
 
+/** 候选变化时只保留用户亲自点选且仍然有效的项，绝不猜第一项。 */
+export function retainExplicitResultSelection(
+  selectedId: string | null,
+  candidateIds: readonly string[]
+): string | null {
+  return selectedId && candidateIds.includes(selectedId) ? selectedId : null;
+}
+
 export function resultAssociationState(
   event: DeliveryEvent,
   notes: readonly Note[]

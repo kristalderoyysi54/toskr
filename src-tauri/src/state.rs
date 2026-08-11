@@ -40,7 +40,7 @@ impl Default for CompanionConfig {
     fn default() -> Self {
         Self {
             // 必须与前端 defaultSettings.companionEnabled 保持一致（当前为
-            // false：首装默认走自动贴边隐藏）。两边不一致会在「启动 → 前端
+            // false：首装默认自由摆放，拖到屏缘后自动收起）。两边不一致会在「启动 → 前端
             // 水合下发」之间开一个窗口期，期间磁吸按错误的默认值接管，
             // 把 docked 置位、贴边隐藏被静默否决。
             enabled: false,
@@ -93,7 +93,7 @@ pub struct HudRuntime {
 pub struct AppState {
     /// 面板弹出/触发前记录的前台应用 PID，仅供窗口布局、伴随与焦点归还。
     pub prev_app_pid: Mutex<Option<i32>>,
-    /// 发送专用的不可变目标快照；窗口布局仍使用 `prev_app_pid`，投递不再直接读取它。
+    /// 发送专用的不可变目标快照；窗口布局仍使用 `prev_app_pid`，发送不再直接读取它。
     pub delivery_target: Mutex<crate::target::TargetState>,
     /// 原生 pasteboard 事务互斥：发送与捕获回退的快照/写入/恢复不可并发交错。
     pub pasteboard_transaction_in_flight: AtomicBool,
@@ -101,7 +101,7 @@ pub struct AppState {
     pub hud_generation: AtomicU64,
     /// CGEventTap 是否安装成功（未授权辅助功能时会失败）。
     pub tap_installed: AtomicBool,
-    /// tap 是否真正收到过键盘事件（Sequoia：创建成功≠事件投递，
+    /// tap 是否真正收到过键盘事件（Sequoia：创建成功≠事件发送，
     /// 输入监控权限缺失时事件被系统静默扣留）。
     pub key_events_seen: AtomicBool,
     /// 非 Toskr 合成的键盘/鼠标按下事件代数；捕获回退据此拒绝用户输入漂移。
@@ -161,9 +161,11 @@ pub struct AppState {
     pub panel_topmost: AtomicBool,
     /// 双击触发仅捕获（面板开关完全交给专用快捷键）。
     pub double_tap_capture_only: AtomicBool,
-    /// 自动贴边隐藏开关（设置项，默认关闭）：面板贴右缘时鼠标离开自动滑出，
-    /// 移到屏幕右缘唤回（类似 Dock）。
+    /// 贴边隐藏兼容开关；当前运行态固定开启，是否介入由用户拖动建立的锚点决定。
     pub auto_edge_hide: AtomicBool,
+    /// 快捷键呼出保护：false 时即使已有屏缘锚点，失焦/光标离开也不自动收起；
+    /// 真实拖动或 Esc 会重新置为 true。
+    pub panel_auto_hide_armed: AtomicBool,
     /// 面板固定（图钉）：前端 uiStore.pinned 同步。语义严格是「失焦不隐藏」，
     /// 只豁免焦点驱动的收起，不影响光标驱动的贴边隐藏。
     pub panel_pinned: AtomicBool,
@@ -256,6 +258,7 @@ impl Default for AppState {
             double_tap_capture_only: AtomicBool::new(false),
             // 与前端 defaultSettings.autoEdgeHide 一致（首装默认开）
             auto_edge_hide: AtomicBool::new(true),
+            panel_auto_hide_armed: AtomicBool::new(true),
             panel_pinned: AtomicBool::new(false),
             panel_dragging: AtomicBool::new(false),
             edge_hidden: AtomicBool::new(false),

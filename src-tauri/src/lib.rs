@@ -10,6 +10,7 @@ mod diag;
 mod events;
 mod focus;
 mod input;
+mod image_firewall;
 mod ocr;
 mod ai;
 mod linkmeta;
@@ -29,6 +30,7 @@ pub fn run() {
     tauri::Builder::default()
         // 单实例必须最先注册：二次启动时聚焦已有面板。
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            window::set_panel_auto_hide_armed(app, true, "二次启动");
             window::request_show_panel(app);
         }))
         .plugin(tauri_plugin_store::Builder::default().build())
@@ -51,6 +53,10 @@ pub fn run() {
                 );
                 storage::enter_storage_recovery_mode(app.handle(), error);
             }
+            // Draft 遮挡副本只活在当前进程会话；启动即清理崩溃遗留。
+            if let Err(error) = image_firewall::initialize_transient_store(app.handle()) {
+                diag::push(app.handle(), format!("图片隐私临时区初始化失败: {error}"));
+            }
             // 启动指纹：证明当前运行的是哪个构建的哪个进程（排查部署未生效）
             diag::push(
                 app.handle(),
@@ -61,8 +67,8 @@ pub fn run() {
                 ),
             );
 
-            // 前台应用观察者：持续更新窗口布局用的 prev_app_pid，以及“下一次投递”
-            // 的目标快照。相同进程身份保持 token；一次投递开始后持有自己的不可变
+            // 前台应用观察者：持续更新窗口布局用的 prev_app_pid，以及“下一次发送”
+            // 的目标快照。相同进程身份保持 token；一次发送开始后持有自己的不可变
             // snapshot，不会被观察器后续切到 B 的更新改写。
             {
                 let handle = app.handle().clone();
@@ -180,6 +186,11 @@ pub fn run() {
             commands::validate_target_snapshot,
             commands::send_delivery,
             commands::scan_sensitive_text,
+            commands::scan_image_firewall,
+            commands::redact_delivery_image,
+            commands::cleanup_redacted_images,
+            commands::clear_redacted_images,
+            commands::delivery_image_data_url,
             commands::send_to_chat,
             commands::ax_trusted,
             commands::tap_status,

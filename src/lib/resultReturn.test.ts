@@ -69,7 +69,7 @@ function note(overrides: Partial<Note> = {}): Note {
 describe("result return", () => {
   beforeEach(clearDeliveryRedactionSessions);
 
-  it("只解析 30 分钟内、bundle 精确一致的成功投递，且纯解析不会自动关联", () => {
+  it("只解析 30 分钟内、bundle 精确一致的成功发送，且纯解析不会自动关联", () => {
     const captured = note({ createdAt: 1_000 + RESULT_ASSOCIATION_WINDOW_MS });
     const candidates = deliveryCandidatesForCapturedNote(captured, [
       sent(),
@@ -94,7 +94,7 @@ describe("result return", () => {
     expect(deliveryCandidatesForCapturedNote(note({ sourceBundle: undefined }), [sent()])).toEqual([]);
   });
 
-  it("从投递侧只列出其后 30 分钟内同 bundle 的现有 Note", () => {
+  it("从发送侧只列出其后 30 分钟内同 bundle 的现有 Note", () => {
     const event = sent();
     expect(
       resultNoteCandidatesForDelivery(event, [

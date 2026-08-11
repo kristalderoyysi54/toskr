@@ -133,16 +133,30 @@ export async function scanOpenDeliveryDraft(
   useDeliveryStore.setState({ draft: completed, lastError: null });
 }
 
-export function retryOpenDeliveryDraftScan(): void {
+/**
+ * 用户主动重检当前正文。先同步清空旧 finding/确认，再进入现有扫描协调器；
+ * 因此按钮连点、正文变化或 Draft 关闭都只能让同一 revision 的回执落地。
+ */
+export async function rescanOpenDeliveryDraft(
+  scan: ScanSensitiveText = api.scanSensitiveText
+): Promise<boolean> {
   const current = useDeliveryStore.getState();
   const draft = current.draft;
-  if (!current.open || !draft || draft.firewallStatus !== "failed") return;
+  if (
+    !current.open || current.busy || !draft || !draft.firewallEnabled ||
+    draft.firewallStatus === "scanning"
+  ) return false;
+  const expected = {
+    id: draft.id,
+    revision: draft.revision,
+    finalText: draft.finalText,
+    targetToken: draft.targetSnapshot?.token ?? null,
+  };
   useDeliveryStore.setState({
     draft: {
       ...draft,
       firewallStatus: "idle",
       findings: [],
-      scanRevision: draft.scanRevision + 1,
       privacyDecision: {
         ...draft.privacyDecision,
         excludedFindingIds: [],
@@ -151,4 +165,16 @@ export function retryOpenDeliveryDraftScan(): void {
     },
     lastError: null,
   });
+  await scanOpenDeliveryDraft(scan);
+  const settled = useDeliveryStore.getState();
+  const live = settled.draft;
+  return Boolean(
+    settled.open && live &&
+    live.id === expected.id &&
+    live.revision === expected.revision &&
+    live.finalText === expected.finalText &&
+    (live.targetSnapshot?.token ?? null) === expected.targetToken &&
+    live.firewallStatus !== "idle" &&
+    live.firewallStatus !== "scanning"
+  );
 }

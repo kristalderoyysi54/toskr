@@ -82,7 +82,7 @@ export function ProfileList({
     >
       <div className="mb-2 flex items-center justify-between gap-2">
         <div>
-          <h3 id="profile-list-title" className="text-title font-semibold">投递方案</h3>
+          <h3 id="profile-list-title" className="text-title font-semibold">发送方案</h3>
           <p className="text-micro text-muted-foreground">未识别应用的默认方案固定在顶部</p>
         </div>
         <Button
@@ -97,11 +97,11 @@ export function ProfileList({
 
       {searchVisible && (
         <label className="relative mb-2 block">
-          <span className="sr-only">搜索投递方案</span>
+          <span className="sr-only">搜索发送方案</span>
           <Search aria-hidden className="pointer-events-none absolute left-2 top-2 size-3.5 text-muted-foreground" />
           <input
             type="search"
-            aria-label="搜索投递方案"
+            aria-label="搜索发送方案"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="搜索方案或应用"
@@ -110,7 +110,7 @@ export function ProfileList({
         </label>
       )}
 
-      <ul aria-label="投递方案列表" className="space-y-1">
+      <ul aria-label="发送方案列表" className="space-y-1">
         {visibleProfiles.map((profile) => {
           const selected = profile.id === selectedProfileId;
           const isDefault = profile.id === defaultProfileId;
@@ -249,7 +249,7 @@ export function ProfileList({
         })}
         {visibleProfiles.length === 0 && (
           <li className="rounded-xl border border-border/60 px-3 py-4 text-center text-body text-muted-foreground">
-            没有匹配的投递方案
+            没有匹配的发送方案
           </li>
         )}
       </ul>

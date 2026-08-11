@@ -216,6 +216,23 @@ fn manual_dock_edge(
     None
 }
 
+/// 只有“用户曾明确放置”的自由位置才允许恢复为贴边锚点；默认出现位置即使
+/// 靠近屏缘，也不能冒充一次拖动并自动收起。
+fn manual_dock_target(
+    monitors: &[MonitorPt],
+    user_positioned: bool,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+) -> Option<(u8, MonitorPt)> {
+    if !user_positioned {
+        return None;
+    }
+    let m = monitor_at_strict(monitors, x + w / 2.0, y + h / 2.0).copied()?;
+    manual_dock_edge(monitors, &m, x, y, w, h).map(|edge| (edge, m))
+}
+
 /// 伴随停靠矩形（纯函数，逻辑 pt）：贴目标窗口右缘或左缘（`side`：0=右
 /// 1=左，与 `sidebar_edge` 同一套编码，用户在停靠菜单里选的 靠左/靠右
 /// 方向），默认同高；支持用户上下调节：`top_offset` 相对目标窗口顶的
@@ -269,7 +286,7 @@ fn show_panel_on_main(app: &AppHandle) -> tauri::Result<()> {
     // 抢占正在进行的滑出/滑回动画，确保面板立刻完整可见（键盘唤出优先级最高）。
     cancel_edge_hide(app, &state, "唤出面板");
 
-    // 面板即将抢占焦点，先记录前台应用（下一次投递快照 + 伴随/焦点目标）
+    // 面板即将抢占焦点，先记录前台应用（下一次发送快照 + 伴随/焦点目标）
     let front = focus::frontmost_info().filter(|f| f.pid != me);
     if let Some(f) = &front {
         crate::target::observe_front(app, f);
@@ -391,7 +408,7 @@ fn show_panel_on_main(app: &AppHandle) -> tauri::Result<()> {
             start_companion_tracker(app, pid, monitors);
         }
         None => {
-            // 独立模式：屏幕右缘停靠（桌面/无有效窗口的应用）。
+            // 独立模式：自由摆放（桌面/无有效伴随窗口的应用）。
             // 伴随开启时 tracker 仍常驻，但用 -1 作为未绑定种子；只有之后切到
             // 伴随列表内应用才会接管。不能把当前的非白名单应用 PID 当初始目标，
             // 否则 tracker 下一 tick 会绕过列表检查，跨屏吸到不该跟随的窗口。
@@ -438,40 +455,12 @@ fn show_panel_on_main(app: &AppHandle) -> tauri::Result<()> {
                     (wa_y + MARGIN + top_offset).clamp(wa_y, (wa_y + wa_h - height).max(wa_y)),
                 ),
             };
-            // 经典右缘自动停靠是贴边隐藏候选布局。按包含关系（而非 work_area
-            // 原点相等）解析同一块屏的物理完整边界（round 4 修复：origin 相等
-            // 在有菜单栏的屏幕上几乎必然落空）。
-            if free.is_none() {
-                if let Some((fx, fy, fw, fh)) =
-                    monitor_full_bounds_at(app, wa_x + wa_w / 2.0, wa_y + wa_h / 2.0)
-                {
-                    set_edge_hide_anchor(
-                        app,
-                        &state,
-                        EdgeHideAnchor {
-                            edge: 0,
-                            x,
-                            y,
-                            w: panel_w,
-                            h: height,
-                            screen_full_x: fx,
-                            screen_full_y: fy,
-                            screen_full_w: fw,
-                            screen_full_h: fh,
-                        },
-                    );
-                } else {
-                    clear_edge_hide_anchor(app, &state, "显示器解析失败");
-                }
-            } else {
+            if free.is_some() {
                 // 手动位置停在屏幕左右真实边界上 = 拖拽入坞（Dock 式）：吸平
                 // 该缘并保持贴边隐藏候选身份，跨开关面板存活——否则「拖走再
                 // 拖回屏缘」后自动隐藏永远不再启动（用户实测的缺口）。
                 let monitors = snapshot_monitors_pt(app);
-                let m = monitor_at_strict(&monitors, x + panel_w / 2.0, y + height / 2.0).copied();
-                match m.and_then(|m| {
-                    manual_dock_edge(&monitors, &m, x, y, panel_w, height).map(|e| (e, m))
-                }) {
+                match manual_dock_target(&monitors, true, x, y, panel_w, height) {
                     Some((edge, m)) => {
                         x = m.mon_x + m.mon_w - panel_w;
                         *state.panel_free_pos.lock().unwrap() = Some((x, y));
@@ -493,6 +482,10 @@ fn show_panel_on_main(app: &AppHandle) -> tauri::Result<()> {
                     }
                     None => clear_edge_hide_anchor(app, &state, "手动拖离屏缘"),
                 }
+            } else {
+                // 首次/未手动放置时仍可默认出现在右侧，但不建立锚点；只有真实
+                // 拖动落边后才进入自动收起，避免“刚呼出就自己消失”。
+                clear_edge_hide_anchor(app, &state, "默认自由位置");
             }
             mark_machine_move(app);
             window.set_size(LogicalSize::new(panel_w, height))?;
@@ -508,6 +501,7 @@ fn show_panel_on_main(app: &AppHandle) -> tauri::Result<()> {
 /// 隐藏面板；`restore_focus` 时把焦点还给此前记录的前台应用。
 pub fn hide_panel(app: &AppHandle, restore_focus: bool) {
     stop_companion_tracker(app);
+    set_panel_auto_hide_armed(app, true, "面板关闭");
     if let Some(state) = app.try_state::<AppState>() {
         // 显式隐藏（Esc/失焦/开关切换）独立于贴边隐藏态，抢占掉可能正在进行的滑出/滑回动画
         cancel_edge_hide(app, &state, "显式隐藏");
@@ -714,41 +708,6 @@ fn clear_edge_hide_anchor(app: &AppHandle, state: &AppState, reason: &str) {
     *slot = None;
 }
 
-/// 按「包含关系」解析给定逻辑 pt 坐标点所在屏幕的物理完整边界（非
-/// work_area）。round 4 的回归：原先按「work_area 原点相等」反查，
-/// 在有菜单栏/靠边 Dock 等布局下极易因 x/y 偏移永不命中，静默返回
-/// None，贴边隐藏锚点创建随之失败、功能整体失效——包含判定不依赖
-/// 两次调用算出同一数值，天然不受这类偏移影响。仅限主线程调用
-/// （`available_monitors` 的线程安全坑）。失败（含「无显示器」）时
-/// 记一条诊断日志，避免又一次静默失败。
-fn monitor_full_bounds_at(app: &AppHandle, x: f64, y: f64) -> Option<(f64, f64, f64, f64)> {
-    let monitors = match app.available_monitors() {
-        Ok(m) if !m.is_empty() => m,
-        _ => {
-            crate::diag::push(app, "贴边: 显示器解析失败");
-            return None;
-        }
-    };
-    let hit = monitors
-        .iter()
-        .find(|m| {
-            let scale = m.scale_factor().max(0.5);
-            let mx = m.position().x as f64 / scale;
-            let my = m.position().y as f64 / scale;
-            let mw = m.size().width as f64 / scale;
-            let mh = m.size().height as f64 / scale;
-            x >= mx && x < mx + mw && y >= my && y < my + mh
-        })
-        .or_else(|| monitors.first())?;
-    let scale = hit.scale_factor().max(0.5);
-    Some((
-        hit.position().x as f64 / scale,
-        hit.position().y as f64 / scale,
-        hit.size().width as f64 / scale,
-        hit.size().height as f64 / scale,
-    ))
-}
-
 /// 当前 epoch ms（用于「机器驱动移动」时间窗判定，非计时精度敏感场景）。
 fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -756,6 +715,22 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// 切换默认贴边收起的单次会话门禁。仅状态变化记日志，避免拖动事件刷屏。
+pub fn set_panel_auto_hide_armed(app: &AppHandle, armed: bool, reason: &str) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    if state.panel_auto_hide_armed.swap(armed, Ordering::SeqCst) != armed {
+        crate::diag::push(
+            app,
+            format!(
+                "贴边: 自动收起{}（{reason}）",
+                if armed { "已启用" } else { "已暂停" }
+            ),
+        );
+    }
 }
 
 /// 取消贴边隐藏态并抢占飞行中的动画：重新定位面板的入口（唤出面板、
@@ -1014,7 +989,7 @@ pub fn spawn_edge_hide_supervisor(app: &AppHandle) {
                 continue;
             };
             // 伴随磁吸接管：目标应用接管定位，前置条件不再满足，若正贴边隐藏立即滑回。
-            // 钉住不在此列（用户明确要求「钉住 + 自动贴边隐藏 = Dock 行为」）：
+            // 钉住不在此列（图钉 + 已入坞 = Dock 行为）：
             // 钉住的语义是「失焦不隐藏」，管的是焦点驱动的收起（前端 blur 分支与
             // edge_hide_now 各自为它豁免）；而这里是光标驱动的 Dock 式滑出——
             // 两者正交，钉住只保证「不会因为切走焦点而消失」，不该连鼠标离开
@@ -1026,6 +1001,18 @@ pub fn spawn_edge_hide_supervisor(app: &AppHandle) {
                 }
                 away_ms = 0;
                 report_edge_hide_state(&handle, &mut last_reported, false, false);
+                continue;
+            }
+            // 快捷键/双击呼出保护：锚点仍保留（Esc 可立即沿该缘收起），但
+            // 光标离开不计时，失焦入口也会被 edge_hide_now 的同一门禁拦住。
+            if !state.panel_auto_hide_armed.load(Ordering::SeqCst) {
+                away_ms = 0;
+                report_edge_hide_state(
+                    &handle,
+                    &mut last_reported,
+                    true,
+                    state.edge_hidden.load(Ordering::SeqCst),
+                );
                 continue;
             }
             if state.edge_hidden.load(Ordering::SeqCst) {
@@ -1109,8 +1096,8 @@ pub fn spawn_edge_hide_supervisor(app: &AppHandle) {
 }
 
 /// 增量上报「贴边隐藏」运行态给前端（仅状态变化才发，避免每 60ms 一条事件）。
-/// `active`：设置开启 + 面板可见 + 处于贴边隐藏候选布局（右缘独立停靠/右侧
-/// 边栏）+ 非钉住 + 非伴随磁吸；`hidden`：面板当前是否已滑出仅露出细条。
+/// `active`：面板可见 + 已有屏缘锚点 + 非伴随接管；快捷键保护只暂停动作，
+/// 不清除锚点。`hidden`：面板当前是否已滑出仅露出细条。
 /// 前端据此在 active 时豁免失焦自动隐藏（滑出取代真实 hide），在 hidden
 /// 时把快捷键/双击唤出识别为「贴边唤回」而非「开关切换到关闭」。
 fn report_edge_hide_state(
@@ -1130,7 +1117,7 @@ fn report_edge_hide_state(
     );
 }
 
-/// 自动贴边隐藏开关（设置项下发）；关闭时若正处于隐藏态立即滑回。
+/// 旧设置兼容入口；当前前端固定开启。关闭时若正处于隐藏态立即滑回。
 pub fn set_auto_edge_hide(app: &AppHandle, enabled: bool) {
     let state = app.state::<AppState>();
     state.auto_edge_hide.store(enabled, Ordering::SeqCst);
@@ -1148,33 +1135,42 @@ pub fn set_auto_edge_hide(app: &AppHandle, enabled: bool) {
     }
 }
 
-/// 立即贴边滑出：失焦时贴边隐藏模式下的「收起」入口（前端 blur 分支调用），
-/// 不是真实 window.hide()——细条仍露出，触边/快捷键唤回照常生效。
-/// 前置条件（开启 + 面板可见 + 有锚点 + 未钉住 + 非磁吸接管 + 当前未隐藏），
-/// 任一条件不满足都是安全的空操作。
+/// 立即贴边滑出。普通调用来自失焦，服从快捷键保护与图钉；`explicit=true`
+/// 来自 Esc，解除保护并越过图钉。成功返回 true，前端据此避免再真实 hide。
 ///
 /// 这里比监督线程的宽限期滑出多一条「未钉住」：本入口是**焦点**驱动的，
 /// 正对着钉住要豁免的那件事（失焦不隐藏）；监督线程那条是**光标**驱动的
 /// Dock 式收起，钉住不该拦。两条路径的门控故意不同，别再合并。
-pub fn edge_hide_now(app: &AppHandle) {
+pub fn edge_hide_now(app: &AppHandle, explicit: bool) -> bool {
     let state = app.state::<AppState>();
+    if explicit {
+        set_panel_auto_hide_armed(app, true, "Esc");
+    }
     if !state.auto_edge_hide.load(Ordering::Relaxed) {
-        return;
+        return false;
     }
     let Some(window) = app.get_webview_window("main") else {
-        return;
+        return false;
     };
     if !window.is_visible().unwrap_or(false) {
-        return;
+        return false;
     }
     let Some(anchor) = *state.edge_hide_anchor.lock().unwrap() else {
-        return;
+        return false;
     };
-    let active = !state.panel_pinned.load(Ordering::SeqCst) && !state.docked.load(Ordering::SeqCst);
+    let active = (explicit || !state.panel_pinned.load(Ordering::SeqCst))
+        && state.panel_auto_hide_armed.load(Ordering::SeqCst)
+        && !state.docked.load(Ordering::SeqCst);
     if !active || state.edge_hidden.load(Ordering::SeqCst) {
-        return;
+        return false;
     }
     animate_edge_slide(app, anchor, true);
+    if explicit {
+        if let Some(pid) = *state.prev_app_pid.lock().unwrap() {
+            focus::activate_pid(pid);
+        }
+    }
+    true
 }
 
 // ============ 伴随跟随 ============
@@ -1247,8 +1243,19 @@ fn start_companion_tracker(app: &AppHandle, target_pid: i32, monitors: Vec<Monit
             let side = state.companion.lock().unwrap().side;
             // 目标无有效窗口（桌面/小对话框/已退出）→ 面板原地不动，继续观望
             let Some(frame) = dockable_frame(target) else {
-                state.docked.store(false, Ordering::SeqCst);
+                let released = state.docked.swap(false, Ordering::SeqCst);
+                if released {
+                    let topmost = state.panel_topmost.load(Ordering::SeqCst);
+                    let h2 = handle.clone();
+                    let _ = handle.run_on_main_thread(move || {
+                        if let Some(win) = h2.get_webview_window("main") {
+                            let _ = win.set_always_on_top(topmost);
+                        }
+                    });
+                    crate::diag::push(&handle, "伴随: 目标不可用，恢复自由拖动");
+                }
                 was_docked = false;
+                last = None;
                 last_front = front_pid;
                 continue;
             };
@@ -1982,6 +1989,7 @@ pub fn remember_free_pos(app: &AppHandle, x: f64, y: f64) {
 /// 光标一离开旧矩形 600ms 就把面板从用户手里滑走。拖拽落定后由
 /// `evaluate_drag_dock`（前端去抖回调）决定是否重新入坞。
 pub fn on_user_panel_move(app: &AppHandle, x: f64, y: f64) {
+    set_panel_auto_hide_armed(app, true, "用户拖动");
     remember_free_pos(app, x, y);
     if let Some(state) = app.try_state::<AppState>() {
         clear_edge_hide_anchor(app, &state, "拖拽移动");
@@ -2030,14 +2038,14 @@ pub fn evaluate_drag_dock(app: &AppHandle) {
         let monitors = snapshot_monitors_pt(&handle);
         let cy = py + ph / 2.0;
         // 面板中心可能已被拖出屏外：中心失配时退回左/右缘内侧点解析所在屏
-        let Some(m) = monitor_at_strict(&monitors, px + pw / 2.0, cy)
-            .or_else(|| monitor_at_strict(&monitors, px + 2.0, cy))
-            .or_else(|| monitor_at_strict(&monitors, px + pw - 2.0, cy))
-            .copied()
-        else {
-            return;
-        };
-        let Some(edge) = manual_dock_edge(&monitors, &m, px, py, pw, ph) else {
+        let target = manual_dock_target(&monitors, true, px, py, pw, ph).or_else(|| {
+            // 面板中心可能已被拖出屏外：退回左右内侧点解析所在屏。
+            let m = monitor_at_strict(&monitors, px + 2.0, cy)
+                .or_else(|| monitor_at_strict(&monitors, px + pw - 2.0, cy))
+                .copied()?;
+            manual_dock_edge(&monitors, &m, px, py, pw, ph).map(|edge| (edge, m))
+        });
+        let Some((edge, m)) = target else {
             return;
         };
         let x = m.mon_x + m.mon_w - pw;
@@ -2502,6 +2510,20 @@ mod tests {
         assert_eq!(
             manual_dock_edge(&[MON], &MON, MON.mon_w - w - 8.0, 100.0, w, h),
             Some(0)
+        );
+    }
+
+    #[test]
+    fn default_right_side_position_does_not_count_as_user_docking() {
+        let x = MON.mon_x + MON.mon_w - 320.0 - MARGIN;
+        assert!(
+            manual_dock_target(&[MON], false, x, 100.0, 320.0, 700.0).is_none(),
+            "默认出现位置不能自动建立贴边锚点"
+        );
+        assert_eq!(
+            manual_dock_target(&[MON], true, x, 100.0, 320.0, 700.0).map(|(edge, _)| edge),
+            Some(0),
+            "同一位置由用户真实拖到时应入坞"
         );
     }
 

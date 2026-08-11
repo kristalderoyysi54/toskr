@@ -5,6 +5,7 @@ import {
   appendPreviewContent,
   editorInsertRejectionReason,
   hasRecentEditorInsertOperation,
+  previewIsEditable,
   refreshPreviewPayload,
   rememberEditorInsertOperation,
 } from "./previewPayload";
@@ -162,5 +163,15 @@ describe("编辑器追加请求边界", () => {
     expect(
       editorInsertRejectionReason(note({ sessionId: "session-2" }), payload, 2000)
     ).toBe("卡片编辑目标或数据上下文已变化");
+  });
+
+  it("合并发送来源预览保持只读并拒绝外部追加", () => {
+    const readOnly = note({ readOnly: true, edit: false });
+
+    expect(previewIsEditable(readOnly)).toBe(false);
+    expect(editorInsertRejectionReason(readOnly, payload, 2000)).toBe(
+      "当前内容为只读预览"
+    );
+    expect(previewIsEditable(note())).toBe(true);
   });
 });

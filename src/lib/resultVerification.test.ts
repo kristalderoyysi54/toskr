@@ -437,7 +437,7 @@ describe("result verification", () => {
     settle();
   });
 
-  it("保存报告生成普通 Note 并保留 delivery provenance；问题 Note 可继续投递", () => {
+  it("保存报告生成普通 Note 并保留 delivery provenance；问题 Note 可继续发送", () => {
     const source = sourceNote();
     const result = resultNote("足够长的结果正文，包含 [EMAIL_01]。");
     useNotesStore.setState({ notes: [result, source] });

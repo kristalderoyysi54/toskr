@@ -13,6 +13,7 @@ import {
   ChevronRight,
   MoreHorizontal,
   Pencil,
+  Plus,
   Star,
   Trash2,
 } from "lucide-react";
@@ -25,6 +26,7 @@ import {
 } from "@/components/SimpleMenu";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IconButton } from "@/components/ui/icon-button";
+import { focusNoteDraftInput } from "@/lib/noteDraftFocus";
 import { cn } from "@/lib/utils";
 import {
   INBOX_ID,
@@ -54,6 +56,7 @@ export function SectionGroup({
     toggleSectionCollapsed,
     toggleSectionKeep,
     setSectionColor,
+    setSettings,
   } = useNotesStore.getState();
   const checkedIds = useNotesStore((s) => s.checkedIds);
   const doneOpen = useUIStore((s) => s.doneOpen[section.id] ?? false);
@@ -84,6 +87,12 @@ export function SectionGroup({
     const ids = [...activeNotes, ...doneNotes].map((n) => n.id);
     const merged = new Set([...checkedIds, ...ids]);
     setChecked([...merged]);
+  };
+
+  const addContent = () => {
+    setSettings({ lastDraftSectionId: section.id });
+    if (collapsed) toggleSectionCollapsed(section.id);
+    focusNoteDraftInput();
   };
 
   const commitRename = () => {
@@ -166,7 +175,15 @@ export function SectionGroup({
         )}
         <span className="text-micro tabular-nums text-muted-foreground/60">{total}</span>
 
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-0.5">
+          <IconButton
+            label={`在「${section.name}」中添加内容`}
+            size="2xs"
+            reveal="hover-focus"
+            onClick={addContent}
+          >
+            <Plus />
+          </IconButton>
           <SimpleMenu
             align="end"
             trigger={({ open, toggle }) => (

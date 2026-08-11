@@ -156,7 +156,7 @@ export function DraftInput() {
   };
 
   return (
-    <div className="px-3 pb-3 pt-1.5">
+    <div data-note-draft-input className="px-3 pb-3 pt-1.5">
       <PillInput
         multiline
         value={value}

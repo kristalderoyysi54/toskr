@@ -41,6 +41,22 @@ describe("数据事务架构门禁", () => {
     expect(source("src/ImagePreviewView.tsx")).toContain("DataReadOnlyGuard");
   });
 
+  it("Settings 解锁快照与使用记录读取共享同一数据操作状态", () => {
+    const settings = source("src/SettingsView.tsx");
+    const outcome = source("src/components/settings/OutcomeInsightsSection.tsx");
+
+    expect(settings).toContain("const dataActivity = useDataOperationStore()");
+    expect(settings).toContain(
+      "useDataOperationStore.getState().update(event.payload)"
+    );
+    expect(settings).not.toContain("const [dataActivity, setDataActivity]");
+    expect(settings).toContain("Promise.all([un, unSection, unDataActivity])");
+    expect(outcome).toContain(
+      "const dataLocked = useDataOperationStore((state) => state.locked)"
+    );
+    expect(outcome).toContain("if (dataLocked) return");
+  });
+
   it("存储初始化失败仍保留专用的有效目录恢复入口", () => {
     const operations = source("src/lib/dataOperations.ts");
     const settings = source("src/SettingsView.tsx");

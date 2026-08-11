@@ -1,4 +1,4 @@
-//! 当前数据目录内的投递活动账本。
+//! 当前数据目录内的发送活动账本。
 //! 只接受固定元数据结构；正文、Prompt、目标 token 和脱敏映射没有字段可写。
 
 use std::collections::BTreeMap;
@@ -137,7 +137,7 @@ fn default_true() -> bool {
 
 fn retention_ms(retention_days: u16) -> Result<u64, String> {
     if !matches!(retention_days, 7 | 30 | 90) {
-        return Err("投递活动保留期无效".into());
+        return Err("发送活动保留期无效".into());
     }
     Ok(u64::from(retention_days) * 24 * 60 * 60 * 1_000)
 }
@@ -154,7 +154,7 @@ fn validate_text(value: &str, label: &str, max: usize, allow_empty: bool) -> Res
         || value.len() > max
         || value.chars().any(char::is_control)
     {
-        return Err(format!("{label} 不符合投递活动元数据约束"));
+        return Err(format!("{label} 不符合发送活动元数据约束"));
     }
     Ok(())
 }
@@ -164,10 +164,10 @@ fn validate_event(event: &DeliveryEvent) -> Result<(), String> {
     validate_text(&event.delivery_id, "deliveryId", 160, false)?;
     validate_text(&event.profile_id, "profileId", 160, false)?;
     if event.timestamp_ms == 0 || event.source_item_ids.is_empty() {
-        return Err("投递活动缺少时间或来源".into());
+        return Err("发送活动缺少时间或来源".into());
     }
     if event.source_item_ids.len() > MAX_SOURCE_IDS {
-        return Err("投递活动来源数量超限".into());
+        return Err("发送活动来源数量超限".into());
     }
     for id in &event.source_item_ids {
         validate_text(id, "sourceItemId", 160, false)?;
@@ -227,7 +227,7 @@ fn validate_event(event: &DeliveryEvent) -> Result<(), String> {
         DeliveryEventType::ResultVerified => DeliveryActivityStatus::Verified,
     };
     if event.status != expected_status {
-        return Err("投递活动类型与状态不匹配".into());
+        return Err("发送活动类型与状态不匹配".into());
     }
     if event.duration_ms.unwrap_or(0) > 7 * 24 * 60 * 60 * 1_000
         || event.text_char_count > 100_000_000
@@ -237,7 +237,7 @@ fn validate_event(event: &DeliveryEvent) -> Result<(), String> {
         || event.verification_issue_count.unwrap_or(0) > 100_000
         || event.metrics_epoch > 9_007_199_254_740_991
     {
-        return Err("投递活动计数超限".into());
+        return Err("发送活动计数超限".into());
     }
     let counts = &event.firewall_counts;
     if [
@@ -263,7 +263,7 @@ fn validate_event(event: &DeliveryEvent) -> Result<(), String> {
         .len()
         > MAX_EVENT_BYTES
     {
-        return Err("单条投递活动过大".into());
+        return Err("单条发送活动过大".into());
     }
     Ok(())
 }
@@ -272,13 +272,13 @@ fn read_events_file(path: &Path) -> Result<Vec<DeliveryEvent>, String> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(format!("读取投递活动文件失败：{error}")),
+        Err(error) => return Err(format!("读取发送活动文件失败：{error}")),
     };
     if metadata.file_type().is_symlink()
         || !metadata.is_file()
         || metadata.len() > MAX_READ_FILE_BYTES
     {
-        return Err("投递活动文件不是大小合规的普通文件".into());
+        return Err("发送活动文件不是大小合规的普通文件".into());
     }
     let bytes = data_integrity::read_regular_file(path, MAX_READ_FILE_BYTES)
         .map_err(|error| error.message)?;
@@ -322,14 +322,14 @@ fn remove_file_if_present(path: &Path) -> Result<(), String> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!("清除投递活动文件失败：{error}")),
+        Err(error) => Err(format!("清除发送活动文件失败：{error}")),
     }
 }
 
 fn sync_root(root: &Path) -> Result<(), String> {
     fs::File::open(root)
         .and_then(|directory| directory.sync_all())
-        .map_err(|error| format!("同步投递活动目录失败：{error}"))
+        .map_err(|error| format!("同步发送活动目录失败：{error}"))
 }
 
 fn write_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -353,7 +353,7 @@ fn persist_events(
     now: u64,
     retention_days: u16,
 ) -> Result<(), String> {
-    fs::create_dir_all(root).map_err(|error| format!("创建投递活动目录失败：{error}"))?;
+    fs::create_dir_all(root).map_err(|error| format!("创建发送活动目录失败：{error}"))?;
     let cutoff = now.saturating_sub(retention_ms(retention_days)?);
     let future = now.saturating_add(FUTURE_TOLERANCE_MS);
     let mut by_id = BTreeMap::new();
@@ -428,7 +428,7 @@ fn append_to_dir(
             && stored.event_type == DeliveryEventType::SendSent
             && stored.status == DeliveryActivityStatus::Sent
     }) {
-        return Err("结果活动缺少当前账本中的成功投递".into());
+        return Err("结果活动缺少当前账本中的成功发送".into());
     }
     if events
         .iter()

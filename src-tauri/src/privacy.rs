@@ -7,6 +7,8 @@ use regex::{Captures, Regex};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_SCAN_INPUT_BYTES: usize = 2 * 1024 * 1024;
+/// OCR 缓存与规则结果的显式失效版本。任何检测规则语义变化都必须递增。
+pub const FIREWALL_RULE_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

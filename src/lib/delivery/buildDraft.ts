@@ -41,6 +41,21 @@ function uniqueImages(notes: readonly Note[]): string[] {
   return [...new Set(notes.flatMap((note) => noteImages(note)))];
 }
 
+/** 多卡发送与只读来源预览共享同一正文、附件组装规则。 */
+export function buildNoteSourceContent(notes: readonly Note[]) {
+  const textNotes = notes
+    .map((note) => ({ note, text: noteText(note) }))
+    .filter((entry): entry is { note: Note; text: string } => entry.text !== null);
+  return {
+    rawText: textNotes.length
+      ? buildSendText(textNotes.map((entry) => entry.text))
+      : "",
+    imageFiles: uniqueImages(notes),
+    singleCodeLanguage:
+      textNotes.length === 1 ? textNotes[0].note.codeLang : undefined,
+  };
+}
+
 function addWarning(
   warnings: DeliveryDraftWarning[],
   warning: DeliveryDraftWarning
@@ -72,14 +87,10 @@ export function buildDeliveryDraft(
   } else {
     const selected = orderedNotes(input.sourceItemIds, state.notes);
     sourceItemIds = selected.map((note) => note.id);
-    const textNotes = selected
-      .map((note) => ({ note, text: noteText(note) }))
-      .filter((entry): entry is { note: Note; text: string } => entry.text !== null);
-    rawText = textNotes.length
-      ? buildSendText(textNotes.map((entry) => entry.text))
-      : "";
-    imageFiles = uniqueImages(selected);
-    if (textNotes.length === 1) singleCodeLanguage = textNotes[0].note.codeLang;
+    const content = buildNoteSourceContent(selected);
+    rawText = content.rawText;
+    imageFiles = content.imageFiles;
+    singleCodeLanguage = content.singleCodeLanguage;
   }
 
   if (sourceItemIds.length !== requestedIds.size) {
@@ -113,7 +124,22 @@ export function buildDeliveryDraft(
     rawText,
     assembledText: finalText,
     finalText,
+    originalImageFiles: [...imageFiles],
     imageFiles,
+    imageFirewall: imageFiles.map((file) => ({
+      originalFile: file,
+      sendFile: file,
+      status: state.firewallEnabled ? "idle" : "disabled",
+      pixelHash: null,
+      redactedPixelHash: null,
+      width: null,
+      height: null,
+      scanRevision: 0,
+      findings: [],
+      redactedFindingIds: [],
+      rawConfirmation: null,
+      failureMessage: null,
+    })),
     format,
     promptSnippetId: input.promptSnippetId ?? null,
     transformRecipeId: null,

@@ -13,7 +13,7 @@ interface TargetState {
   lastUpdatedAt: number | null;
   icon: AppIconInfo | null;
   observationPending: boolean;
-  /** 下一次成功投递前的临时 Profile 覆盖；永不持久化。 */
+  /** 下一次成功发送前的临时 Profile 覆盖；永不持久化。 */
   profileOverrideId: string | null;
   profileOverrideTargetIdentity: string | null;
   profileOverrideNeedsConfirmation: boolean;
@@ -268,7 +268,7 @@ export function targetStatusLabel(status: TargetStatus): string {
     case "refreshing":
       return "正在确认";
     case "ready":
-      return "目标可用";
+      return "可发送";
     case "blocked":
       return "目标已失效";
     default:
@@ -294,7 +294,7 @@ export function targetReasonLabel(reason: TargetStateReason): string {
       return "目标确认失败，请重新识别";
     case "target_missing":
     default:
-      return "尚未识别投递目标，请先重新识别";
+      return "尚未识别发送目标，请先重新识别";
   }
 }
 
@@ -302,7 +302,7 @@ export function targetBlockMessage(
   status: TargetStatus,
   reason: TargetStateReason
 ): string {
-  if (status === "refreshing") return "正在确认投递目标，请稍候";
+  if (status === "refreshing") return "正在确认发送目标，请稍候";
   return targetReasonLabel(reason);
 }
 

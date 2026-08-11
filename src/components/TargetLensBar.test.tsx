@@ -129,7 +129,7 @@ describe("TargetLensView", () => {
     const html = render({
       status: "ready",
       snapshot: { ...readySnapshot, appName: "Otty" },
-      profileName: "终端投递",
+      profileName: "终端发送",
       profileSource: "exact",
       promptGroupName: "终端问答",
       defaultFormat: "code",
@@ -137,11 +137,19 @@ describe("TargetLensView", () => {
     });
 
     expect(html).toContain("Otty");
-    expect(html).toContain("目标可用");
-    expect(html).toContain('aria-label="打开最近投递"');
+    expect(html).toContain("可发送");
+    expect(html).toContain("data-target-lens-identity");
+    expect(html).toContain("size-4 shrink-0 rounded-sm");
+    expect(html).toContain("truncate text-label font-semibold");
+    expect(html).not.toContain("truncate text-body font-semibold");
+    expect(html).toContain("items-center gap-1 text-micro font-medium");
+    expect(html).not.toContain("items-center gap-1 text-label font-medium");
+    expect(html).toContain(">·</span>");
+    expect(html).not.toContain("bg-success/10");
+    expect(html).toContain('aria-label="打开最近发送"');
     expect(html).not.toContain("应用指定 · 终端问答 · 代码块");
-    expect(html).not.toContain('aria-label="本次投递方案');
-    expect(html).not.toContain('aria-label="重新识别投递目标"');
+    expect(html).not.toContain('aria-label="本次发送方案');
+    expect(html).not.toContain('aria-label="重新识别发送目标"');
     expect(html).not.toContain("提示词组：终端问答");
     expect(html).not.toContain("输出格式：代码块");
     expect(html).not.toContain("发送完成后：关闭面板");
@@ -149,7 +157,7 @@ describe("TargetLensView", () => {
     expect(html).not.toContain(">隐私未启用</span>");
     expect(html).toContain('aria-expanded="false"');
     expect(html).toContain('aria-controls="');
-    expect(html).toContain('aria-label="展开投递详情，包含风险项"');
+    expect(html).toContain('aria-label="展开发送详情，包含风险项"');
     expect(html).toContain("data-target-lens-warning-indicator");
   });
 
@@ -185,7 +193,7 @@ describe("TargetLensView", () => {
   it.each([
     ["unknown", "尚未识别"],
     ["refreshing", "正在确认"],
-    ["ready", "目标可用"],
+    ["ready", "可发送"],
     ["blocked", "目标已失效"],
   ] as const)("稳定渲染 %s 状态", (status, label) => {
     const html = render({
@@ -196,7 +204,7 @@ describe("TargetLensView", () => {
     expect(html).toContain(label);
   });
 
-  it("VoiceOver 名称使用投递方案术语并如实说明隐私能力", () => {
+  it("VoiceOver 名称使用发送方案术语并如实说明隐私能力", () => {
     const html = render({
       status: "ready",
       snapshot: readySnapshot,
@@ -210,12 +218,12 @@ describe("TargetLensView", () => {
     expect(html).toContain("Codex");
     // 收起态只呈现目标与状态；完整规则仍进入 region 的可访问名称。
     expect(html).toContain("粘贴后动作 自动按回车 · 高风险");
-    expect(html).toContain("投递方案 Codex");
+    expect(html).toContain("发送方案 Codex");
     expect(html).toContain("提示词组 编程");
     expect(html).toContain("输出格式 代码块");
     expect(html).toContain("隐私检查：尚未启用");
-    expect(html).not.toContain('aria-label="本次投递方案：Codex');
-    expect(html).not.toContain('aria-label="重新识别投递目标"');
+    expect(html).not.toContain('aria-label="本次发送方案：Codex');
+    expect(html).not.toContain('aria-label="重新识别发送目标"');
     expect(html).not.toContain('aria-haspopup="dialog"');
     expect(html).toContain('aria-live="off"');
     expect(html).toContain('tabindex="0"');
@@ -226,15 +234,15 @@ describe("TargetLensView", () => {
     const html = render({
       status: "unknown",
       snapshot: null,
-      profileName: `${longName}投递方案`,
+      profileName: `${longName}发送方案`,
       promptGroupName: `${longName}提示词组`,
     });
 
-    expect(html).toContain("尚未识别投递目标，发送已锁定");
+    expect(html).toContain("尚未识别发送目标，发送已锁定");
     expect(html).toContain("overflow-hidden");
     expect(html).toContain("truncate");
     expect(html).toContain("line-clamp-2");
-    expect(html).toContain('aria-label="重新识别投递目标"');
+    expect(html).toContain('aria-label="重新识别发送目标"');
     expect(html).not.toContain("overflow-x-auto");
   });
 
@@ -253,7 +261,9 @@ describe("TargetLensView", () => {
       profileOverrideName: "临时",
     });
 
-    expect(html).toContain("原临时投递方案已暂停");
+    expect(html).toContain("原临时发送方案已暂停");
+    expect(html).toContain("需确认");
+    expect(html).not.toContain("目标状态：可发送");
     expect(html).toContain("将 临时 用于当前目标");
   });
 

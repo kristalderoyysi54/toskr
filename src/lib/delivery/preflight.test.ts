@@ -90,7 +90,9 @@ function draft(overrides: Partial<DeliveryDraft> = {}): DeliveryDraft {
     rawText: "正文",
     assembledText: "正文",
     finalText: "正文",
+    originalImageFiles: [],
     imageFiles: [],
+    imageFirewall: [],
     format: "plain",
     promptSnippetId: null,
     promptSnippetGroupId: null,
@@ -516,7 +518,7 @@ describe("preflight controller", () => {
 
     expect(execute).not.toHaveBeenCalled();
     expect(useDeliveryStore.getState().draft).toBe(value);
-    expect(useDeliveryStore.getState().lastError).toContain("投递目标已变化");
+    expect(useDeliveryStore.getState().lastError).toContain("发送目标已变化");
   });
 
   it("真实目标 token 变化会把旧 Draft 标记为 stale", () => {

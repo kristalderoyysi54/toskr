@@ -3,7 +3,7 @@ import type { Settings } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
 
 function runtimeEffects(settings: Settings): Promise<unknown>[] {
-  if (settings.autoEdgeHide || settings.companionEnabled) {
+  if (settings.companionEnabled) {
     useUIStore.getState().setPinned(true);
   }
   return [
@@ -17,7 +17,8 @@ function runtimeEffects(settings: Settings): Promise<unknown>[] {
     api.setCompanionGap(settings.companionGap),
     api.setSidebarMode(settings.rightSidebar, settings.sidebarEdge),
     api.setPanelTopmost(settings.panelTopmost),
-    api.setAutoEdgeHide(settings.autoEdgeHide),
+    // `autoEdgeHide` 仅保留旧数据兼容；运行态始终开启，是否收起由入坞锚点裁决。
+    api.setAutoEdgeHide(true),
     api.setPanelFreePos(settings.panelFreeX, settings.panelFreeY),
     api.setPanelWidth(settings.panelWidth),
     api.setStealth(settings.stealth),

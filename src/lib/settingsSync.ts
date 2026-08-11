@@ -20,7 +20,7 @@ import {
  * - settings 窗口的每次修改发 patch，主面板应用 + 持久化 + 下发 Rust 副作用 + 回播 state
  */
 export const SETTINGS_REQUEST = "toskr://settings-request";
-/** 让设置窗切到指定分区；target 可附带需要编辑的投递方案。 */
+/** 让设置窗切到指定分区；target 可附带需要编辑的发送方案。 */
 export const SETTINGS_SECTION = "toskr://settings-section";
 export type SettingsSectionPayload =
   | string
@@ -29,8 +29,11 @@ export const SETTINGS_STATE = "toskr://settings-state";
 export const SETTINGS_PATCH = "toskr://settings-patch";
 /** 设置窗显式保存/删除 Keychain key 后通知 main 清理当前目录的旧迁移副本。 */
 export const SETTINGS_AI_KEY_CHANGED = "toskr://settings-ai-key-changed";
-/** 关于页手动重跑受控安全投递演练。 */
+/** 使用概览启动或继续受控安全发送演练。 */
 export const SETTINGS_START_SAFE_REHEARSAL = "toskr://start-safe-rehearsal";
+export interface SafeRehearsalLaunchRequest {
+  mode?: "start" | "resume";
+}
 export const SETTINGS_EXPORT = "toskr://do-export";
 export const SETTINGS_IMPORT = "toskr://do-import";
 export const SETTINGS_CLEAR_CLIP = "toskr://do-clear-clip";
@@ -52,22 +55,9 @@ export function applySettingsPatch(patch: Partial<Settings>) {
     broadcastSettings();
     return;
   }
-  // 互斥收敛（用户指定 2026-08：贴边隐藏与伴随磁吸是二选一的两种贴边行为）。
-  // 所有互斥都必须收敛在这里——任何入口（停靠菜单/设置窗）绕过本函数直连
-  // setSettings 都会复现「开关打勾但被另一模式否决」的静默失效
-  if (
-    patch.autoEdgeHide === true &&
-    useNotesStore.getState().settings.companionEnabled
-  ) {
-    patch = { ...patch, companionEnabled: false };
-    tip("info", "已关闭伴随磁吸");
-  }
-  if (
-    patch.companionEnabled === true &&
-    useNotesStore.getState().settings.autoEdgeHide
-  ) {
-    patch = { ...patch, autoEdgeHide: false };
-    tip("info", "已关闭贴边隐藏");
+  // 贴边隐藏已是默认能力且不再与伴随互斥；旧设置/备份中的 false 静默归一。
+  if (!useNotesStore.getState().settings.autoEdgeHide || patch.autoEdgeHide === false) {
+    patch = { ...patch, autoEdgeHide: true };
   }
   // 开启伴随停靠时自动退出边栏模式并恢复自动停靠——
   // 边栏在 Rust 侧一票否决磁吸，不清掉会让这个开关看似失效
@@ -78,15 +68,10 @@ export function applySettingsPatch(patch: Partial<Settings>) {
     patch = { ...patch, rightSidebar: false, panelFreeX: null, panelFreeY: null };
     tip("info", "边栏已关闭，恢复伴随磁吸");
   }
-  // 模式开启的默认联动（用户指定 2026-08）：两种贴边行为都以「面板长期在屏」
-  // 为前提——磁吸要跟着终端走、贴边隐藏要留缝待唤，失焦整面板关掉与模式相悖。
-  // 开启即默认常显示（图钉=失焦不隐藏，会话内可手动取消）；贴边隐藏另默认
-  // 置顶层级，滑出的细缝与触边唤回不被其他窗口盖住。
-  if (patch.autoEdgeHide === true || patch.companionEnabled === true) {
+  // 伴随接管沿用“常显示”默认；默认贴边能力不强制图钉，快捷键呼出由单次
+  // 会话保护控制，普通打开仍服从用户的失焦设置。
+  if (patch.companionEnabled === true) {
     useUIStore.getState().setPinned(true);
-  }
-  if (patch.autoEdgeHide === true && !useNotesStore.getState().settings.panelTopmost) {
-    patch = { ...patch, panelTopmost: true };
   }
   useNotesStore.getState().setSettings(patch);
   const s = useNotesStore.getState().settings;
@@ -96,7 +81,7 @@ export function applySettingsPatch(patch: Partial<Settings>) {
     !s.targetProfiles.some((profile) => profile.id === profileOverrideId)
   ) {
     clearTargetProfileOverride();
-    tip("info", "本次投递方案已被删除，已恢复自动匹配");
+    tip("info", "本次发送方案已被删除，已恢复自动匹配");
   }
   if ("hotkeyModifier" in patch || "hotkeyGapMs" in patch) {
     void api.setHotkeyConfig(s.hotkeyModifier, s.hotkeyGapMs);
@@ -130,7 +115,7 @@ export function applySettingsPatch(patch: Partial<Settings>) {
     void api.setPanelTopmost(s.panelTopmost);
   }
   if ("autoEdgeHide" in patch) {
-    void api.setAutoEdgeHide(s.autoEdgeHide);
+    void api.setAutoEdgeHide(true);
   }
   if ("excludedApps" in patch) {
     void api.setExcludedApps(s.excludedApps);

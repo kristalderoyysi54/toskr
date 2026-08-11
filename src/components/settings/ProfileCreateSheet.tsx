@@ -34,7 +34,7 @@ export function ProfileCreateSheet({
   onCreate: (profile: TargetProfile, moveCurrentBundle: boolean) => void;
 }) {
   const [presetId, setPresetId] = useState<ProfilePresetId>("safe");
-  const [name, setName] = useState("稳妥投递");
+  const [name, setName] = useState("稳妥发送");
   const [includeCurrent, setIncludeCurrent] = useState(false);
   const [confirmedMoveBundleId, setConfirmedMoveBundleId] = useState<string | null>(null);
   const currentBundleId = currentTarget?.ready ? currentTarget.bundleId : null;
@@ -55,7 +55,7 @@ export function ProfileCreateSheet({
   useEffect(() => {
     if (!open) return;
     setPresetId("safe");
-    setName("稳妥投递");
+    setName("稳妥发送");
     setIncludeCurrent(false);
     setConfirmedMoveBundleId(null);
   }, [open]);
@@ -107,14 +107,14 @@ export function ProfileCreateSheet({
           <div className="flex items-start gap-2">
             <div className="min-w-0 flex-1">
               <DialogPrimitive.Title className="text-heading font-semibold">
-                新建投递方案
+                新建发送方案
               </DialogPrimitive.Title>
               <DialogPrimitive.Description className="mt-1 text-body text-muted-foreground">
                 推荐方案只填入初始值，创建后可在完整编辑器中继续调整。
               </DialogPrimitive.Description>
             </div>
             <DialogPrimitive.Close asChild>
-              <IconButton label="关闭新建投递方案" size="sm"><X /></IconButton>
+              <IconButton label="关闭新建发送方案" size="sm"><X /></IconButton>
             </DialogPrimitive.Close>
           </div>
 

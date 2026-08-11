@@ -51,10 +51,10 @@ const target: TargetSnapshot = {
   windowId: null,
 };
 
-describe("投递方案设置组件", () => {
+describe("发送方案设置组件", () => {
   it.each([
     ["exact", [profile("default"), profile("otty", { name: "AI 对话", bundleIds: [target.bundleId as string] })], "已为 Otty 指定"],
-    ["fallback", [profile("default", { name: "稳妥投递" })], "未匹配具体应用，使用默认方案"],
+    ["fallback", [profile("default", { name: "稳妥发送" })], "未匹配具体应用，使用默认方案"],
     ["conflict", [profile("first", { bundleIds: [target.bundleId as string] }), profile("second", { bundleIds: [target.bundleId as string] })], "存在重复应用绑定"],
   ] as const)("当前匹配卡准确展示 %s", (_source, profiles, expectedReason) => {
     const resolution = resolveTargetProfile({
@@ -76,7 +76,7 @@ describe("投递方案设置组件", () => {
     );
 
     expect(html).toContain("当前匹配");
-    expect(html).toContain("目标可用");
+    expect(html).toContain("可发送");
     expect(html).toContain(expectedReason);
     expect(html).toContain("隐私检查：尚未启用");
     expect(html).toContain("隐私检查尚未启用 · 本次未检查");
@@ -222,13 +222,13 @@ describe("投递方案设置组件", () => {
     expect(html).toContain("已启用");
     expect(html).toContain("发送前在本机检查最终文本");
     expect(html).toContain("配置值");
-    expect(html).toContain("测试预演值（不影响当前投递）");
+    expect(html).toContain("测试预演值（不影响当前发送）");
     expect(html).toContain("匹配来源：仅本次预演");
     expect(html).toContain("当前真实生效值");
     expect(html).toContain("匹配来源：未识别应用的默认方案");
     expect(html).toContain("发送前隐私门禁");
     expect(html).toContain("当前生效策略：要求逐项处理");
-    expect(html).toContain("本地预演输出示例（不会投递）");
+    expect(html).toContain("本地预演输出示例（不会发送）");
     expect(html).toContain("示例：```");
     expect(html).toContain("预览只解析规则，不会访问剪贴板，也不会模拟粘贴或回车");
     expect(html).toContain('type="radio"');
@@ -280,7 +280,7 @@ describe("投递方案设置组件", () => {
     );
 
     expect(html).toMatch(
-      /测试预演值（不影响当前投递）[\s\S]*粘贴后动作：自动按回车 · 高风险[\s\S]*当前真实生效值[\s\S]*粘贴后动作：从不按回车/
+      /测试预演值（不影响当前发送）[\s\S]*粘贴后动作：自动按回车 · 高风险[\s\S]*当前真实生效值[\s\S]*粘贴后动作：从不按回车/
     );
     expect(html).toContain("默认回退已收紧为从不按回车");
   });

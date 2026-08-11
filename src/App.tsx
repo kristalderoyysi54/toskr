@@ -29,6 +29,7 @@ import {
   ArrowUpCircle,
   CheckCheck,
   Eraser,
+  Menu,
   PanelBottom,
   PanelLeft,
   PanelRight,
@@ -149,6 +150,11 @@ import {
   withoutLegacyAiApiKey,
 } from "@/lib/aiKeyMigration";
 import { matchNote } from "@/lib/search";
+import { scrollPageToStart } from "@/lib/pageScroll";
+import {
+  shouldHidePanelOnBlur,
+  triggerKeepsPanelOpen,
+} from "@/lib/panelBehavior";
 import { applyRuntimeSettings } from "@/lib/runtimeSettings";
 import {
   applySettingsPatch,
@@ -158,8 +164,12 @@ import {
   SETTINGS_DATA_HEALTH_RESULT,
   SETTINGS_SECTION,
   SETTINGS_START_SAFE_REHEARSAL,
+  type SafeRehearsalLaunchRequest,
 } from "@/lib/settingsSync";
-import { isSafeRehearsalText } from "@/lib/onboarding";
+import {
+  isSafeRehearsalText,
+  safeRehearsalLaunchEvent,
+} from "@/lib/onboarding";
 import {
   api,
   EDGE_HIDE_STATE_EVENT,
@@ -178,6 +188,7 @@ import {
   type TriggerPayload,
 } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
+import { clearDeliveryDraftImages } from "@/lib/delivery/imageFirewall";
 import {
   CLIPBOARD_ID,
   INBOX_ID,
@@ -556,6 +567,7 @@ function StripScroller({ children }: { children: React.ReactNode }) {
   return (
     <div
       ref={ref}
+      data-strip-scroller
       className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden [&::-webkit-scrollbar]:hidden"
     >
       {children}
@@ -604,14 +616,17 @@ const PAGE_LABEL: Record<PageId, string> = {
  */
 function PageSlide({
   offset,
+  contentRef,
   children,
 }: {
   offset: number;
+  contentRef: React.Ref<HTMLDivElement>;
   children: React.ReactNode;
 }) {
   const active = offset === 0;
   return (
     <motion.div
+      ref={contentRef}
       aria-hidden={!active}
       initial={false}
       animate={
@@ -710,9 +725,10 @@ export default function App() {
     };
   }, []);
 
-  const openPanel = async () => {
+  const openPanel = async (shortcutHoldOpen = false) => {
+    useUIStore.getState().setShortcutHoldOpen(shortcutHoldOpen);
     try {
-      await api.showPanel();
+      await api.showPanel(shortcutHoldOpen);
     } catch {
       /* Tauri 环境外忽略 */
     }
@@ -722,7 +738,19 @@ export default function App() {
 
   const closePanel = (restoreFocus: boolean) => {
     restoreFocusRef.current = restoreFocus;
-    useUIStore.getState().setOpen(false);
+    const ui = useUIStore.getState();
+    ui.setShortcutHoldOpen(false);
+    ui.setOpen(false);
+  };
+
+  const dismissPanel = () => {
+    useUIStore.getState().setShortcutHoldOpen(false);
+    void api
+      .edgeHideNow(true)
+      .then((handled) => {
+        if (!handled && useUIStore.getState().open) closePanel(true);
+      })
+      .catch(() => closePanel(true));
   };
 
   // 正常启动保持隐藏，让第一次双击快捷键执行“显示”而不是误判为“关闭”。
@@ -817,10 +845,11 @@ export default function App() {
         return;
       }
       if (payload.kind === "toggle") {
+        const shortcutHoldOpen = triggerKeepsPanelOpen(payload);
         const { open: isOpen, pinned: isPinned, edgeHidden } = useUIStore.getState();
         // 前端链路回执：报障时与 Rust 侧「双击触发」拼成完整链路
         void api.diagNote(
-          `前端收到 Toggle: open=${isOpen} pinned=${isPinned} edgeHidden=${edgeHidden}`
+          `前端收到 Toggle: source=${payload.source} open=${isOpen} pinned=${isPinned} edgeHidden=${edgeHidden}`
         );
         // 面板正贴边隐藏（仅露出细条）时，内容层从未收起过，前端 open 仍是
         // true——这时快捷键的意图必然是「唤出」，不能按老逻辑当成「已经开着
@@ -829,7 +858,7 @@ export default function App() {
         // （唤出面板）」），这里只需确保 open 不被误切成 false。
         if (edgeHidden) {
           void api.diagNote("贴边: 快捷键唤出");
-          void openPanel();
+          void openPanel(shortcutHoldOpen);
           return;
         }
         // 钉住 = 常驻：双击快捷键不收起面板（Esc / 取消图钉可收）；
@@ -839,7 +868,7 @@ export default function App() {
           return;
         }
         if (isOpen) closePanel(true);
-        else void openPanel();
+        else void openPanel(shortcutHoldOpen);
         return;
       }
       const { result, id } = useNotesStore.getState().addNote(payload.text, {
@@ -927,19 +956,28 @@ export default function App() {
     };
   }, []);
 
-  // 设置 → 关于可随时重跑；只重置演练会话，不清理用户卡片或已完成标记。
+  // 使用概览可开始/继续演练；继续保留当前步骤，重跑也不清理用户卡片或任务成就。
   useEffect(() => {
-    const subscription = listen(SETTINGS_START_SAFE_REHEARSAL, () => {
-      if (isDataOperationLocked()) {
-        tip("warn", "数据操作进行中，暂不能开始演练");
-        return;
+    const subscription = listen<SafeRehearsalLaunchRequest>(
+      SETTINGS_START_SAFE_REHEARSAL,
+      (event) => {
+        if (isDataOperationLocked()) {
+          tip("warn", "数据操作进行中，暂不能开始演练");
+          return;
+        }
+        const notes = useNotesStore.getState();
+        notes.transitionOnboarding(
+          safeRehearsalLaunchEvent(
+            notes.settings.onboarding,
+            event.payload?.mode ?? "start"
+          )
+        );
+        useUIStore.getState().setPage("notes");
+        useUIStore.getState().setPinned(true);
+        useUIStore.getState().setOpen(true);
+        void api.showPanel();
       }
-      useNotesStore.getState().transitionOnboarding({ type: "start" });
-      useUIStore.getState().setPage("notes");
-      useUIStore.getState().setPinned(true);
-      useUIStore.getState().setOpen(true);
-      void api.showPanel();
-    });
+    );
     return () => {
       void subscription.then((unlisten) => unlisten());
     };
@@ -950,6 +988,8 @@ export default function App() {
     let timer = 0;
     const unlisten = listen<{ x: number; y: number }>(PANEL_MOVED_EVENT, (event) => {
       const { x, y } = event.payload;
+      // 只有真实用户移动会从 Native 进入这里；一旦移动，快捷键保护即解除。
+      useUIStore.getState().setShortcutHoldOpen(false);
       window.clearTimeout(timer);
       timer = window.setTimeout(() => {
         if (isDataOperationLocked()) return;
@@ -968,8 +1008,7 @@ export default function App() {
     };
   }, []);
 
-  // 图钉状态同步给 Rust：钉住只豁免「失焦收起」，光标驱动的贴边隐藏照常
-  // （钉住 + 自动贴边隐藏 = Dock 行为）
+  // 图钉状态同步给 Rust：钉住只豁免失焦，已入坞后的光标收起照常工作。
   useEffect(() => {
     void api.setPanelPinned(pinned).catch(() => {});
   }, [pinned]);
@@ -1153,9 +1192,23 @@ export default function App() {
       // 稍等前台归属稳定再判定：焦点若只是移到自家窗口（空格图片预览、
       // 设置窗），应用仍在前台 → 不算离开，面板不收（未钉住场景）
       window.setTimeout(async () => {
-        const { open: isOpen, pinned: isPinned, edgeHideActive } = useUIStore.getState();
+        const {
+          open: isOpen,
+          pinned: isPinned,
+          edgeHideActive,
+          shortcutHoldOpen,
+        } = useUIStore.getState();
         const { hideOnBlur } = useNotesStore.getState().settings;
-        if (!(isOpen && !isPinned && hideOnBlur)) return;
+        if (
+          !shouldHidePanelOnBlur({
+            open: isOpen,
+            pinned: isPinned,
+            hideOnBlur,
+            shortcutHoldOpen,
+          })
+        ) {
+          return;
+        }
         const stillOurs = await api.isSelfFrontmost().catch(() => false);
         if (stillOurs) return;
         // 未钉住时任何停靠形态失焦都要收起：贴边隐藏接管期间「收起」的
@@ -1342,6 +1395,7 @@ export default function App() {
       closeResultReturnDialog();
       closeResultVerificationDialog();
       useDeliveryStore.getState().closeDraft();
+      clearDeliveryDraftImages();
     });
     const activityCleared = listen(DELIVERY_ACTIVITY_CLEARED_EVENT, () => {
       invalidateDeliveryActivityCache();
@@ -1515,17 +1569,11 @@ export default function App() {
         }
       }).finally(() => pendingMigrations.delete(generation));
     };
-    // 历史矛盾状态自愈（互斥关系曾在多个版本间反复，持久化里可能留下
-    // 任意组合）。收敛顺序固定，结果与「贴边行为二选一」的现行语义一致：
-    //  1. 贴边隐藏 + 磁吸同时为真 → 保贴边隐藏（首装默认档，也是菜单里
-    //     「二选一」的第一项），关磁吸；否则菜单会出现两项都打勾的假象
-    //  2. 磁吸 + 边栏同时为真 → 退出边栏（边栏在 Rust 侧一票否决磁吸，
-    //     不清掉会让磁吸打勾却完全不生效）
+    // 历史状态自愈：贴边隐藏已是无开关的默认能力；伴随只在命中目标时接管，
+    // 因此两者不再互斥。固定边栏仍与伴随接管互斥。
     const heal = (settings: Settings): Settings => {
       const patch: Partial<Settings> = {};
-      if (settings.autoEdgeHide && settings.companionEnabled) {
-        patch.companionEnabled = false;
-      }
+      if (!settings.autoEdgeHide) patch.autoEdgeHide = true;
       if (
         (patch.companionEnabled ?? settings.companionEnabled) &&
         settings.rightSidebar
@@ -1538,10 +1586,10 @@ export default function App() {
       useNotesStore.getState().setSettings(patch);
       return useNotesStore.getState().settings;
     };
-    // 模式在身 → 面板默认常显示（图钉不持久化，每次启动按模式重新给默认；
-    // 会话内可手动取消）。与 applySettingsPatch 的开启联动同一语义
+    // 伴随模式沿用既有“常显示”默认；默认贴边能力本身不再强制图钉，
+    // 快捷键呼出由单次会话保护精确控制。
     const applyModeDefaults = (settings: Settings): Settings => {
-      if (settings.autoEdgeHide || settings.companionEnabled) {
+      if (settings.companionEnabled) {
         useUIStore.getState().setPinned(true);
       }
       return settings;
@@ -1917,6 +1965,20 @@ export default function App() {
   );
   const pageIndex = Math.max(0, pageOrder.indexOf(page));
   const orderOf = (p: PageId) => Math.max(0, pageOrder.indexOf(p));
+  const clipboardPageRef = useRef<HTMLDivElement>(null);
+  const notesPageRef = useRef<HTMLDivElement>(null);
+  const tasksPageRef = useRef<HTMLDivElement>(null);
+  const pageRootRef: Record<PageId, React.RefObject<HTMLDivElement | null>> = {
+    clipboard: clipboardPageRef,
+    notes: notesPageRef,
+    tasks: tasksPageRef,
+  };
+  const scrollTabPageToStart = (id: PageId) => {
+    scrollPageToStart(
+      pageRootRef[id].current,
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    );
+  };
   // 停在剪贴页时把功能关掉 → 该页已不可达，切到页序上的第一个可见页
   useEffect(() => {
     if (!visiblePages.includes(page)) {
@@ -2007,7 +2069,7 @@ export default function App() {
         } else if (useNotesStore.getState().checkedIds.length) {
           useNotesStore.getState().clearChecked();
         } else {
-          closePanel(true);
+          dismissPanel();
         }
         return;
       }
@@ -2386,6 +2448,7 @@ export default function App() {
             active={page === id}
             badge={id === "tasks" ? taskBuckets.overdue.length : undefined}
             onClick={() => useUIStore.getState().setPage(id)}
+            onDoubleClick={() => scrollTabPageToStart(id)}
           >
             {PAGE_LABEL[id]}
           </PageTab>
@@ -2644,7 +2707,9 @@ export default function App() {
                       </IconButton>
                     </Tipped>
                   )}
-                  {page !== "clipboard" && (page === "notes" ? doneCount : doneTaskCount) > 0 && (
+                  {horizontalBar &&
+                    page !== "clipboard" &&
+                    (page === "notes" ? doneCount : doneTaskCount) > 0 && (
                     <Tipped
                       label={
                         page === "notes"
@@ -2667,27 +2732,10 @@ export default function App() {
                       </IconButton>
                     </Tipped>
                   )}
-                  {page !== "tasks" && !horizontalBar && (
-                    <Tipped label="卡片密度：舒适 / 紧凑">
-                      <IconButton
-                        label="卡片密度：舒适 / 紧凑"
-                        withTitle={false}
-                        pressed={settings.cardDensity === "compact"}
-                        onClick={() => {
-                          const cur = useNotesStore.getState().settings.cardDensity;
-                          useNotesStore.getState().setSettings({
-                            cardDensity: cur === "compact" ? "comfortable" : "compact",
-                          });
-                        }}
-                      >
-                        <Rows3 />
-                      </IconButton>
-                    </Tipped>
-                  )}
-                  {(page !== "tasks" || doneTaskCount > 0) && (
+                  {horizontalBar && (page !== "tasks" || doneTaskCount > 0) && (
                     <span aria-hidden className="mx-0.5 h-3.5 w-px bg-border" />
                   )}
-                  {/* 全局工具：停靠模式 / 固定 / 设置 */}
+                  {/* 横栏保留现有停靠工具；竖向把密度、停靠和固定收进单一菜单。 */}
                   <SimpleMenu
                     side="bottom"
                     align="end"
@@ -2701,18 +2749,22 @@ export default function App() {
                             : settings.sidebarEdge === "bottom"
                               ? PanelBottom
                               : PanelRight;
-                      const label = settings.rightSidebar
-                        ? `停靠：${SIDEBAR_EDGE_LABEL[settings.sidebarEdge]} · 点击调整边栏与贴边行为`
-                        : "边栏与贴边行为（靠右 / 靠下 / 贴边隐藏 / 伴随磁吸）";
+                      const label = horizontalBar
+                        ? settings.rightSidebar
+                          ? `停靠：${SIDEBAR_EDGE_LABEL[settings.sidebarEdge]} · 点击调整位置`
+                          : settings.companionEnabled
+                            ? "伴随磁吸与方向"
+                            : "面板位置与伴随磁吸"
+                        : "竖向面板选项";
                       return (
                         <Tipped label={label}>
                           <IconButton
                             label={label}
                             withTitle={false}
-                            pressed={settings.rightSidebar}
+                            pressed={horizontalBar ? settings.rightSidebar : undefined}
                             onClick={toggle}
                           >
-                            <EdgeIcon />
+                            {horizontalBar ? <EdgeIcon /> : <Menu />}
                           </IconButton>
                         </Tipped>
                       );
@@ -2720,17 +2772,49 @@ export default function App() {
                   >
                     {(close) => (
                       <>
-                        {/* 三模式显示矩阵（每组至多一个 ✓；位置只开放 右/下 两档，
-                            用户指定 2026-08）：
-                            磁吸模式 → 左右=磁吸方向；
-                            贴边隐藏模式 → 右/下=隐藏所在缘（边栏关闭时默认右缘）；
-                            无行为模式 → 右/下=固定边栏开关（再点取消恢复自由摆放） */}
+                        {!horizontalBar && (
+                          <>
+                            <SimpleMenuLabel>显示</SimpleMenuLabel>
+                            {page !== "tasks" && (
+                              <SimpleMenuItem
+                                onClick={() => {
+                                  close();
+                                  const current =
+                                    useNotesStore.getState().settings.cardDensity;
+                                  useNotesStore.getState().setSettings({
+                                    cardDensity:
+                                      current === "compact" ? "comfortable" : "compact",
+                                  });
+                                }}
+                              >
+                                <Rows3 className="size-3.5" />
+                                {settings.cardDensity === "compact"
+                                  ? "使用舒适卡片"
+                                  : "使用紧缩列表"}
+                              </SimpleMenuItem>
+                            )}
+                            {page !== "clipboard" &&
+                              (page === "notes" ? doneCount : doneTaskCount) > 0 && (
+                                <SimpleMenuItem
+                                  onClick={() => {
+                                    close();
+                                    if (page === "notes") clearDoneWithUndo();
+                                    else clearDoneTasksWithUndo();
+                                  }}
+                                >
+                                  <Eraser className="size-3.5" />
+                                  {page === "notes"
+                                    ? `清理 ${doneCount} 条已完成`
+                                    : `清理 ${doneTaskCount} 个已完成任务`}
+                                </SimpleMenuItem>
+                              )}
+                            <SimpleMenuSeparator />
+                          </>
+                        )}
+                        {/* 伴随开启时选择目标窗口左右侧；未开启时边栏为可选项，
+                            不选择即自由摆放，真实拖到外侧屏缘后自动收起。 */}
                         <SimpleMenuLabel>
-                          {settings.companionEnabled
-                            ? "磁吸方向"
-                            : settings.autoEdgeHide
-                              ? "贴边隐藏所在缘"
-                              : "边栏停靠"}
+                          {settings.companionEnabled ? "磁吸方向" : "固定边栏（可选）"}
                         </SimpleMenuLabel>
                         {(settings.companionEnabled
                           ? (["right", "left"] as const)
@@ -2767,38 +2851,14 @@ export default function App() {
                               </SimpleMenuItem>
                             );
                           }
-                          if (settings.autoEdgeHide) {
-                            // 贴边隐藏模式：选面板贴哪条屏缘（并在该缘滑出/唤回）；
-                            // 未开边栏时实际锚在右缘（经典自动停靠）
-                            const checked = settings.rightSidebar
-                              ? settings.sidebarEdge === edge
-                              : edge === "right";
-                            return (
-                              <SimpleMenuItem
-                                key={edge}
-                                title={
-                                  checked && settings.rightSidebar
-                                    ? "再次点击取消边栏（回到右缘自动停靠并继续贴边隐藏）"
-                                    : "面板贴此屏缘显示，并在该缘滑出隐藏 / 触边唤回"
-                                }
-                                onClick={() => {
-                                  close();
-                                  void applySidebar(!(checked && settings.rightSidebar), edge);
-                                }}
-                              >
-                                {checked ? "✓ " : ""}
-                                {SIDEBAR_EDGE_LABEL[edge]}
-                              </SimpleMenuItem>
-                            );
-                          }
-                          // 无行为模式：四缘 = 固定边栏开关
+                          // 默认自由摆放；固定边栏只是显式可选布局。
                           return (
                             <SimpleMenuItem
                               key={edge}
                               title={
                                 activeEdge
-                                  ? "再次点击取消边栏，恢复自由摆放"
-                                  : "固定为屏幕边栏"
+                                  ? "再次点击取消边栏，恢复自由拖动"
+                                  : "固定为屏幕边栏；自由模式拖到外侧屏缘也会自动收起"
                               }
                               onClick={() => {
                                 close();
@@ -2811,24 +2871,8 @@ export default function App() {
                           );
                         })}
                         <SimpleMenuSeparator />
-                        {/* 互斥二选一（用户指定）：开一个自动关另一个。互斥收敛
-                            统一在 applySettingsPatch 里做，任何入口不得绕过直连
-                            setSettings——曾因绕过漏关边栏，磁吸被静默否决。
-                            点击不关菜单，勾选态即时可见 */}
-                        <SimpleMenuLabel>贴边行为（二选一）</SimpleMenuLabel>
                         <SimpleMenuItem
-                          title="不用时面板滑出屏缘只留一条缝，鼠标碰对应屏缘唤出（类似 Dock）；把面板拖到屏幕右缘也会入坞；开启默认常显示并置顶，且关闭伴随磁吸"
-                          onClick={() => {
-                            applySettingsPatch({
-                              autoEdgeHide:
-                                !useNotesStore.getState().settings.autoEdgeHide,
-                            });
-                          }}
-                        >
-                          {settings.autoEdgeHide ? "✓ " : ""}自动贴边隐藏
-                        </SimpleMenuItem>
-                        <SimpleMenuItem
-                          title="终端/编辑器在前台时面板吸附其侧缘并跟随；其余应用下面板可任意放置（应用清单在 设置 → 伴随停靠）；开启默认常显示，且关闭贴边隐藏并退出边栏"
+                          title="目标应用存在时吸附并跟随；没有可用目标时保持自由拖动，拖到外侧屏缘后自动收起（应用清单在 设置 → 伴随停靠）"
                           onClick={() => {
                             applySettingsPatch({
                               companionEnabled:
@@ -2838,19 +2882,35 @@ export default function App() {
                         >
                           {settings.companionEnabled ? "✓ " : ""}伴随磁吸
                         </SimpleMenuItem>
+                        {!horizontalBar && (
+                          <>
+                            <SimpleMenuSeparator />
+                            <SimpleMenuItem
+                              onClick={() => {
+                                close();
+                                useUIStore.getState().setPinned(!pinned);
+                              }}
+                            >
+                              <Pin className={cn("size-3.5", pinned && "fill-current")} />
+                              {pinned ? "取消固定" : "固定 · 失焦不隐藏"}
+                            </SimpleMenuItem>
+                          </>
+                        )}
                       </>
                     )}
                   </SimpleMenu>
-                  <Tipped label={pinned ? "取消固定" : "固定（失焦不隐藏）"}>
-                    <IconButton
-                      label={pinned ? "取消固定" : "固定（失焦不隐藏）"}
-                      withTitle={false}
-                      pressed={pinned}
-                      onClick={() => useUIStore.getState().setPinned(!pinned)}
-                    >
-                      <Pin className={cn("size-3.5", pinned && "fill-current")} />
-                    </IconButton>
-                  </Tipped>
+                  {horizontalBar && (
+                    <Tipped label={pinned ? "取消固定" : "固定（失焦不隐藏）"}>
+                      <IconButton
+                        label={pinned ? "取消固定" : "固定（失焦不隐藏）"}
+                        withTitle={false}
+                        pressed={pinned}
+                        onClick={() => useUIStore.getState().setPinned(!pinned)}
+                      >
+                        <Pin className={cn("size-3.5", pinned && "fill-current")} />
+                      </IconButton>
+                    </Tipped>
+                  )}
                   <Tipped label="设置">
                     <IconButton
                       label="设置"
@@ -2912,7 +2972,10 @@ export default function App() {
 
               {/* 三页常驻堆叠：切页只动 transform/opacity，零挂载成本（同面板开合方案） */}
               <div className="relative min-h-0 flex-1 overflow-hidden">
-                <PageSlide offset={orderOf("clipboard") - pageIndex}>
+                <PageSlide
+                  offset={orderOf("clipboard") - pageIndex}
+                  contentRef={clipboardPageRef}
+                >
                 {horizontalBar ? (
                   <StripScroller>
                     {clipNotes.length === 0 ? (
@@ -3014,7 +3077,10 @@ export default function App() {
                 </ScrollArea>
                 )}
                 </PageSlide>
-                <PageSlide offset={orderOf("notes") - pageIndex}>
+                <PageSlide
+                  offset={orderOf("notes") - pageIndex}
+                  contentRef={notesPageRef}
+                >
                 {horizontalBar ? (
                   <>
                   <StripScroller>
@@ -3102,7 +3168,10 @@ export default function App() {
               </ScrollArea>
                 )}
                 </PageSlide>
-                <PageSlide offset={orderOf("tasks") - pageIndex}>
+                <PageSlide
+                  offset={orderOf("tasks") - pageIndex}
+                  contentRef={tasksPageRef}
+                >
                   {horizontalBar ? (
                     <>
                       <StripScroller>
@@ -3219,12 +3288,14 @@ function PageTab({
   active,
   badge,
   onClick,
+  onDoubleClick,
   children,
 }: {
   id: PageId;
   active: boolean;
   badge?: number;
   onClick: () => void;
+  onDoubleClick: () => void;
   children: React.ReactNode;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
@@ -3245,6 +3316,8 @@ function PageTab({
       role="tab"
       aria-selected={active}
       onClick={onClick}
+      onDoubleClick={onDoubleClick}
+      title={`切换到${PAGE_LABEL[id]}；双击返回列表起点`}
       className={cn(
         "relative flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-label outline-none",
         "transition-[color,background-color,transform] duration-100",

@@ -113,13 +113,13 @@ function targetMatchReason(input: {
   profileName: string;
   overrideNeedsConfirmation: boolean;
 }): string {
-  if (input.status === "unknown") return "尚未识别投递目标，发送已锁定";
-  if (input.status === "refreshing") return "正在重新确认目标与投递方案";
+  if (input.status === "unknown") return "尚未识别发送目标，发送已锁定";
+  if (input.status === "refreshing") return "正在重新确认目标与发送方案";
   if (input.status === "blocked") {
     return `目标应用已失效：${targetReasonLabel(input.reason)}`;
   }
   if (input.overrideNeedsConfirmation) {
-    return "原临时投递方案已暂停，当前已按目标重新选择";
+    return "原临时发送方案已暂停，当前已按目标重新选择";
   }
   switch (input.source) {
     case "temporary":
@@ -190,7 +190,11 @@ export function TargetLensView({
   );
   const detailsExpanded = targetLensDetailsExpanded(disclosureState);
   const appName = snapshot?.appName ?? "未识别目标";
-  const statusLabel = targetStatusLabel(status);
+  const profileConfirmationRequired =
+    status === "ready" && profileOverrideNeedsConfirmation;
+  const statusLabel = profileConfirmationRequired
+    ? "需确认"
+    : targetStatusLabel(status);
   const enterLabel = ENTER_POLICY_STATUS_LABEL[enterPolicy];
   const privacyLabel = privacyCapabilityActive
     ? "隐私检查：已启用"
@@ -204,16 +208,23 @@ export function TargetLensView({
     overrideNeedsConfirmation: profileOverrideNeedsConfirmation,
   });
   const accessibleLabel = [
-    `目标 ${appName}，状态 ${statusLabel}，投递方案 ${profileName}`,
+    `目标 ${appName}，状态 ${statusLabel}，发送方案 ${profileName}`,
     `匹配来源 ${matchReason}`,
     `提示词组 ${promptGroupName}，输出格式 ${DELIVERY_FORMAT_LABEL[defaultFormat]}`,
     `粘贴后动作 ${enterLabel}，发送完成后 ${keepPanel ? "保持打开" : "关闭面板"}，${privacyLabel}`,
   ].join("，");
-  const statusTone = status === "ready"
-    ? "bg-success/10 text-success"
+  const statusTone = profileConfirmationRequired
+    ? "text-warning"
     : status === "blocked" || status === "unknown"
-      ? "bg-destructive/10 text-destructive"
-      : "bg-muted text-muted-foreground";
+      ? "text-destructive"
+      : "text-muted-foreground";
+  const statusDotTone = profileConfirmationRequired
+    ? "bg-warning"
+    : status === "ready"
+      ? "bg-success"
+      : status === "blocked" || status === "unknown"
+        ? "bg-destructive"
+        : "bg-muted-foreground";
   const reasonTone = status === "blocked" || status === "unknown"
     ? "text-destructive"
     : profileSource === "conflict" || profileOverrideNeedsConfirmation
@@ -227,10 +238,10 @@ export function TargetLensView({
       enterPolicy === "allow" ||
       profileSource === "conflict");
   const disclosureLabel = detailsExpanded
-    ? "收起投递详情"
+    ? "收起发送详情"
     : hasHiddenWarning
-      ? "展开投递详情，包含风险项"
-      : "展开投递详情";
+      ? "展开发送详情，包含风险项"
+      : "展开发送详情";
   const currentQuickProfile = useMemo<QuickProfileOption>(
     () => ({
       id: profileId,
@@ -244,7 +255,7 @@ export function TargetLensView({
   );
   const refreshControl = (
     <IconButton
-      label="重新识别投递目标"
+      label="重新识别发送目标"
       withTitle={false}
       size="2xs"
       disabled={status === "refreshing"}
@@ -267,68 +278,81 @@ export function TargetLensView({
       className="mx-3 mb-1.5 min-w-0 overflow-hidden px-1 py-1"
     >
       <span className="sr-only" aria-live="polite" aria-atomic="true">
-        投递目标 {appName}，{statusLabel}，当前投递方案 {profileName}
+        发送目标 {appName}，{statusLabel}，当前发送方案 {profileName}
       </span>
-      <div className="flex min-h-8 min-w-0 items-center gap-2">
-        <ApplicationIcon
-          src={icon?.url}
-          name={appName}
-          className="size-5 rounded-sm"
-        />
-        <span className="min-w-0 flex-1 truncate text-body font-semibold" title={appName}>
-          {appName}
-        </span>
-        <span
-          role="status"
-          aria-live="off"
-          aria-label={`目标状态：${statusLabel}`}
-          className={cn(
-            "inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-label font-medium",
-            statusTone
-          )}
+      <div className="flex min-h-7 min-w-0 items-center gap-1.5">
+        <div
+          data-target-lens-identity
+          className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden"
         >
-          <span aria-hidden className="size-1.5 rounded-full bg-current" />
-          {statusLabel}
-        </span>
-        {showRecoveryAction && refreshControl}
-        <IconButton
-          ref={activityButtonRef}
-          label="打开最近投递"
-          withTitle={false}
-          size="xs"
-          onClick={onOpenActivity}
-        >
-          <History aria-hidden className="size-3" />
-        </IconButton>
-        <IconButton
-          label={disclosureLabel}
-          size="xs"
-          aria-expanded={detailsExpanded}
-          aria-controls={detailsId}
-          onClick={() => dispatchDisclosure({ type: "toggle" })}
-          onKeyDown={(event) => {
-            if (event.key !== "Escape" || !detailsExpanded) return;
-            event.preventDefault();
-            event.stopPropagation();
-            dispatchDisclosure({ type: "dismiss" });
-          }}
-          className={cn(detailsExpanded && "bg-muted/50 text-foreground")}
-        >
-          <ChevronDown
-            aria-hidden
-            className={cn(
-              "size-3 transition-transform duration-100 motion-reduce:transition-none",
-              detailsExpanded && "rotate-180"
-            )}
+          <ApplicationIcon
+            src={icon?.url}
+            name={appName}
+            className="size-4 shrink-0 rounded-sm"
           />
-          {hasHiddenWarning && !detailsExpanded && (
+          <span className="min-w-0 truncate text-label font-semibold" title={appName}>
+            {appName}
+          </span>
+          <span aria-hidden className="shrink-0 text-micro text-muted-foreground/60">
+            ·
+          </span>
+          <span
+            role="status"
+            aria-live="off"
+            aria-label={`目标状态：${statusLabel}`}
+            className={cn(
+              "inline-flex shrink-0 items-center gap-1 text-micro font-medium",
+              statusTone
+            )}
+          >
             <span
               aria-hidden
-              data-target-lens-warning-indicator
-              className="absolute right-0.5 top-0.5 size-1 rounded-full bg-warning ring-1 ring-background"
+              className={cn("size-1.5 rounded-full", statusDotTone)}
             />
-          )}
-        </IconButton>
+            {statusLabel}
+          </span>
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5">
+          {showRecoveryAction && refreshControl}
+          <IconButton
+            ref={activityButtonRef}
+            label="打开最近发送"
+            withTitle={false}
+            size="xs"
+            onClick={onOpenActivity}
+          >
+            <History aria-hidden className="size-3" />
+          </IconButton>
+          <IconButton
+            label={disclosureLabel}
+            size="xs"
+            aria-expanded={detailsExpanded}
+            aria-controls={detailsId}
+            onClick={() => dispatchDisclosure({ type: "toggle" })}
+            onKeyDown={(event) => {
+              if (event.key !== "Escape" || !detailsExpanded) return;
+              event.preventDefault();
+              event.stopPropagation();
+              dispatchDisclosure({ type: "dismiss" });
+            }}
+            className={cn(detailsExpanded && "bg-muted/50 text-foreground")}
+          >
+            <ChevronDown
+              aria-hidden
+              className={cn(
+                "size-3 transition-transform duration-100 motion-reduce:transition-none",
+                detailsExpanded && "rotate-180"
+              )}
+            />
+            {hasHiddenWarning && !detailsExpanded && (
+              <span
+                aria-hidden
+                data-target-lens-warning-indicator
+                className="absolute right-0.5 top-0.5 size-1 rounded-full bg-warning ring-1 ring-background"
+              />
+            )}
+          </IconButton>
+        </div>
       </div>
       {!detailsExpanded && (status === "blocked" || status === "unknown") && (
         <p
@@ -359,7 +383,7 @@ export function TargetLensView({
         <div
           id={detailsId}
           role="group"
-          aria-label="完整投递详情"
+          aria-label="完整发送详情"
           className="mt-1 origin-top rounded-lg bg-muted/30 px-2 py-1.5 animate-in fade-in zoom-in-95 duration-100 motion-reduce:animate-none"
         >
           <div className="flex min-w-0 items-center gap-1.5">
@@ -372,7 +396,7 @@ export function TargetLensView({
                   type="button"
                   tabIndex={0}
                   title={profileName}
-                  aria-label={`本次投递方案：${profileName}，点击查看与切换`}
+                  aria-label={`本次发送方案：${profileName}，点击查看与切换`}
                   className={cn(
                     "flex min-w-0 max-w-40 items-center gap-0.5 rounded-sm border px-1.5 py-0.5 text-micro outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-primary/50",
                     profileOverrideId
@@ -388,7 +412,7 @@ export function TargetLensView({
               <PopoverContent
                 align="end"
                 sideOffset={4}
-                aria-label={`投递到 ${appName}，快速切换投递方案`}
+                aria-label={`发送到 ${appName}，快速切换发送方案`}
                 className="w-80 max-w-[calc(100vw-1rem)] gap-0 p-2"
               >
                 <TargetProfileQuickSwitch

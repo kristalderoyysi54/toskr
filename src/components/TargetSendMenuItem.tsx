@@ -27,8 +27,8 @@ export function TargetSendMenuItem({
           : allowInternal
             ? "优先添加到当前卡片编辑器"
           : profileChanged
-            ? "发送不可用：原临时投递方案已暂停"
-            : "发送不可用：投递目标未就绪"
+            ? "发送不可用：原临时发送方案已暂停"
+            : "发送不可用：发送目标未就绪"
       }
       onClick={onClick}
     >

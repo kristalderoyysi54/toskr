@@ -122,18 +122,18 @@ export function VerificationReportView({
       {stale && (
         <div role="alert" className="rounded-xl bg-destructive/10 px-2.5 py-2 text-body text-destructive">
           <strong className="block font-semibold">报告已过期</strong>
-          来源、结果或数据上下文已变化，旧报告不能保存或继续投递；请关闭后重新核验。
+          来源、结果或数据上下文已变化，旧报告不能保存或继续发送；请关闭后重新核验。
         </div>
       )}
       <div className="flex flex-wrap items-center gap-2">
         <span className={cn("rounded-lg px-2 py-1 text-label font-semibold", STATUS_STYLE[report.status])}>
           {STATUS_LABEL[report.status]}
         </span>
-        <time className="text-micro tabular-nums text-muted-foreground">
+        <time className="text-label tabular-nums text-muted-foreground">
           {new Date(report.createdAtMs).toLocaleString("zh-CN", { hour12: false })}
         </time>
       </div>
-      <ol className="space-y-1.5" aria-label="核验检查">
+      <ol className="space-y-1.5" aria-label="回复检查项">
         {report.checks.map((check) => (
           <li key={check.id} className="flex items-start gap-1.5 rounded-lg bg-muted/45 px-2 py-1.5 text-body">
             {check.status === "pass" ? (
@@ -154,7 +154,7 @@ export function VerificationReportView({
         <ReportList title="风险" values={report.risks} />
         <ReportList title="待确认问题" values={report.questions} />
       </div>
-      <p className="rounded-lg bg-muted/45 px-2 py-1.5 text-micro leading-relaxed text-muted-foreground">
+      <p className="rounded-lg bg-muted/45 px-2 py-1.5 text-label leading-relaxed text-muted-foreground">
         核验只呈现规则内证据、遗漏和问题，不代表结果完全正确，也不替代人工审批。
       </p>
     </div>
@@ -261,11 +261,11 @@ export function ResultVerificationDialog() {
   const startSession = useCallback((detail: Extract<ResultVerificationRequest, { kind: "open" }>) => {
     const context = liveContext(detail.noteId);
     if (!context?.resultNote.provenance) {
-      tip("warn", "结果关联已变化，无法开始核验");
+      tip("warn", "对应回复已变化，请重新打开检查");
       return;
     }
     if (isDataOperationLocked()) {
-      tip("warn", "数据只读期间不能开始核验");
+      tip("warn", "数据只读期间不能检查回复");
       return;
     }
     if (activeNoteId.current) cancelAiResultVerification(activeNoteId.current);
@@ -406,14 +406,14 @@ export function ResultVerificationDialog() {
       prepared.status !== "ready" || !descriptor.ready || isDataOperationLocked()
     ) return;
     if (!matchesDataGeneration(session.dataGeneration)) {
-      setError("数据上下文已变化，请重新打开核验");
+      setError("数据上下文已变化，请重新打开回复检查");
       return;
     }
     if (
       prepared.sourceRevision !== currentContext.sourceRevision ||
       prepared.resultRevision !== currentContext.resultRevision
     ) {
-      setError("来源或结果已变化，请重新打开核验");
+      setError("发送内容或回复已变化，请重新打开检查");
       return;
     }
     const lease = beginDataGenerationLease();
@@ -442,13 +442,13 @@ export function ResultVerificationDialog() {
         ) {
           const recorded = await recordReport(outcome.report, session);
           if (!recorded && session.deliveryEvent) {
-            tip("warn", "核验已完成，但活动记录写入失败");
+            tip("warn", "回复检查已完成，但发送记录更新失败");
           }
         }
       } else if (outcome.status === "error") {
         setError(outcome.error);
       } else if (outcome.status === "duplicate") {
-        setError("已有 AI 核验正在收口，请稍候");
+        setError("已有 AI 检查正在收尾，请稍候");
       }
     } finally {
       await awaitResultVerificationTransport(session.noteId);
@@ -463,7 +463,7 @@ export function ResultVerificationDialog() {
   const cancelAi = () => {
     if (!session) return;
     cancelAiResultVerification(session.noteId);
-    setError("AI 核验已取消；结果卡没有被修改");
+    setError("AI 检查已取消；回复卡没有被修改");
   };
 
   const saveReport = async () => {
@@ -474,13 +474,13 @@ export function ResultVerificationDialog() {
     }
     const result = saveVerificationReportAsNote(report, currentContext!);
     if (!result.ok) {
-      setError(result.reason === "stale" ? "报告已过期，请重新核验" : "报告保存失败");
+      setError(result.reason === "stale" ? "检查结果已过期，请重新检查" : "报告保存失败");
       return;
     }
     const recorded = await recordReport(report, session);
     tip(
       recorded || !session.deliveryEvent ? "ok" : "warn",
-      result.created ? "核验报告已保存为普通笔记" : "核验报告笔记已存在"
+      result.created ? "回复检查报告已保存为普通笔记" : "回复检查报告笔记已存在"
     );
   };
 
@@ -493,9 +493,9 @@ export function ResultVerificationDialog() {
     const result = createVerificationQuestionsNote(report, currentContext!);
     if (!result.ok) {
       setError(result.reason === "empty"
-        ? "当前报告没有可继续投递的问题"
+        ? "当前报告没有可继续发送的问题"
         : result.reason === "stale"
-          ? "报告已过期，请重新核验"
+          ? "报告已过期，请重新检查"
           : "问题清单创建失败");
       return;
     }
@@ -517,33 +517,35 @@ export function ResultVerificationDialog() {
   return (
     <DialogPrimitive.Root open={!!session} onOpenChange={(open) => !open && reset()}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-[80] bg-background/55 backdrop-blur-sm data-open:animate-in data-open:fade-in-0 duration-100 motion-reduce:!animate-none" />
-        <DialogPrimitive.Content
-          data-toskr-modal="result-verification"
-          onKeyDown={(event) => event.stopPropagation()}
-          onCloseAutoFocus={(event) => {
-            const target = returnFocus.current;
-            returnFocus.current = null;
-            if (!target?.isConnected) return;
-            event.preventDefault();
-            target.focus();
-          }}
-          className={cn(
-            "fixed left-1/2 top-1/2 z-[81] flex max-h-[calc(100vh-1rem)] w-[min(46rem,calc(100vw-1rem))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl p-3 outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 motion-reduce:!animate-none",
-            floatingSurface(3)
-          )}
-        >
+        <DialogPrimitive.Overlay className="fixed inset-0 z-[80] bg-background/70 data-open:animate-in data-open:fade-in-0 duration-100 motion-reduce:!animate-none" />
+        <div className="pointer-events-none fixed inset-0 z-[81] grid place-items-center p-2">
+          <DialogPrimitive.Content
+            data-toskr-modal="result-verification"
+            onKeyDown={(event) => event.stopPropagation()}
+            onCloseAutoFocus={(event) => {
+              const target = returnFocus.current;
+              returnFocus.current = null;
+              if (!target?.isConnected) return;
+              event.preventDefault();
+              target.focus();
+            }}
+            className={cn(
+              "pointer-events-auto flex max-h-[calc(100vh-1rem)] w-full max-w-[46rem] flex-col overflow-hidden rounded-2xl p-3 outline-none duration-100 data-open:animate-in data-open:fade-in-0 motion-reduce:!animate-none",
+              floatingSurface(3),
+              "bg-surface-raised"
+            )}
+          >
           <header className="flex items-start gap-2 border-b border-border/70 pb-2">
             <div className="min-w-0 flex-1">
-              <DialogPrimitive.Title className="flex items-center gap-1.5 text-title font-semibold">
-                <FileCheck2 className="size-4 text-primary" aria-hidden /> 结果核验
+              <DialogPrimitive.Title className="flex items-center gap-1.5 text-heading font-semibold">
+                <FileCheck2 className="size-4 text-primary" aria-hidden /> 检查回复
               </DialogPrimitive.Title>
-              <DialogPrimitive.Description className="mt-0.5 text-micro leading-relaxed text-muted-foreground">
-                本地规则自动运行；AI 只有点击后才会接收已脱敏的当前来源与结果。
+              <DialogPrimitive.Description className="mt-0.5 text-label leading-relaxed text-muted-foreground">
+                先用本地规则查找遗漏和格式问题；需要时再让 AI 对照。
               </DialogPrimitive.Description>
             </div>
             <DialogPrimitive.Close asChild>
-              <IconButton label="关闭结果核验" size="sm"><X /></IconButton>
+              <IconButton label="关闭回复检查" size="sm"><X /></IconButton>
             </DialogPrimitive.Close>
           </header>
 
@@ -551,7 +553,7 @@ export function ResultVerificationDialog() {
             <div className="grid gap-3 md:grid-cols-[minmax(0,15rem)_minmax(0,1fr)]">
               <aside className="space-y-3">
                 <section className="space-y-2 rounded-xl bg-muted/30 p-2.5">
-                  <h3 className="text-label font-semibold">核验约定</h3>
+                  <h3 className="text-title font-semibold">你希望回复满足什么？</h3>
                   <SimpleSelect
                     value={expectation.format}
                     options={FORMAT_OPTIONS}
@@ -563,7 +565,7 @@ export function ResultVerificationDialog() {
                     menuLabel="预期格式"
                     disabled={stale || busy}
                   />
-                  <label className="block text-micro text-muted-foreground">
+                  <label className="block text-label text-foreground/80">
                     JSON 必填字段（每行一个，可用 a.b）
                     <textarea
                       value={jsonFieldsText}
@@ -576,7 +578,7 @@ export function ResultVerificationDialog() {
                       className="mt-1 h-16 w-full resize-y rounded-lg border border-border bg-transparent px-2 py-1.5 text-body text-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary/50 disabled:opacity-50"
                     />
                   </label>
-                  <label className="block text-micro text-muted-foreground">
+                  <label className="block text-label text-foreground/80">
                     必要标题或段落（每行一个）
                     <textarea
                       value={sectionsText}
@@ -589,7 +591,7 @@ export function ResultVerificationDialog() {
                       className="mt-1 h-16 w-full resize-y rounded-lg border border-border bg-transparent px-2 py-1.5 text-body text-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary/50 disabled:opacity-50"
                     />
                   </label>
-                  <p className="text-micro leading-relaxed text-muted-foreground">
+                  <p className="text-label leading-relaxed text-muted-foreground">
                     {expectation.expectedPlaceholderCounts === null
                       ? "发送会话映射已失效：无法完整核对占位符，需人工复核。"
                       : `已知发送占位符 ${Object.keys(expectation.expectedPlaceholderCounts).length} 项。`}
@@ -597,8 +599,8 @@ export function ResultVerificationDialog() {
                 </section>
 
                 <section className="space-y-2">
-                  <h3 className="flex items-center gap-1.5 text-label font-semibold">
-                    <Bot className="size-3.5" aria-hidden /> 可选 AI 对照
+                  <h3 className="flex items-center gap-1.5 text-title font-semibold">
+                    <Bot className="size-3.5" aria-hidden /> 需要时再用 AI 检查
                   </h3>
                   <VerificationPrivacySummary
                     provider={descriptor.provider}
@@ -606,30 +608,30 @@ export function ResultVerificationDialog() {
                     prepared={prepared}
                   />
                   {!descriptor.ready && (
-                    <p className="text-micro text-warning">请先在设置 → AI 智能中配置并启用。</p>
+                    <p className="text-label text-warning">请先在设置 → AI 智能中配置并启用。</p>
                   )}
                   <div className="flex gap-1.5">
                     {busy ? (
                       <Button type="button" size="sm" variant="secondary" onClick={cancelAi}>
-                        <X className="size-3.5" /> 取消核验
+                        <X className="size-3.5" /> 取消检查
                       </Button>
                     ) : (
                       <Button type="button" size="sm" variant="secondary" disabled={!canRunAi} onClick={() => void runAi()}>
-                        <Bot className="size-3.5" /> AI 核验
+                        <Bot className="size-3.5" /> AI 深度检查
                       </Button>
                     )}
                     {busy && <LoaderCircle className="mt-1.5 size-4 animate-spin text-muted-foreground motion-reduce:animate-none" aria-hidden />}
                   </div>
                   {aiAttribution && (
-                    <p className="text-micro text-muted-foreground">AI 报告：{aiAttribution}</p>
+                    <p className="text-label text-muted-foreground">AI 报告：{aiAttribution}</p>
                   )}
                 </section>
 
-                <p className="rounded-lg bg-warning/10 px-2 py-1.5 text-micro leading-relaxed text-warning">
-                  历史投递正文不会写入活动账本。本次只能以当前关联来源为基线，无法反证关联前是否已编辑。
+                <p className="rounded-lg bg-warning/10 px-2 py-1.5 text-label leading-relaxed text-warning">
+                  为保护隐私，发送记录不保存正文。本次比较的是当前发送内容与当前回复；如果原卡后来编辑过，请人工再确认。
                 </p>
                 {activityUnavailable && (
-                  <p className="text-micro text-muted-foreground">活动记录不可用；仍可本地核验，但不会补造历史事件。</p>
+                  <p className="text-label text-muted-foreground">发送记录暂不可用；仍可在本机检查，但不会补写历史。</p>
                 )}
               </aside>
 
@@ -642,7 +644,7 @@ export function ResultVerificationDialog() {
                 {report ? (
                   <VerificationReportView report={report} stale={stale} />
                 ) : (
-                  <p role="status" className="py-8 text-center text-body text-muted-foreground">正在准备本地核验…</p>
+                  <p role="status" className="py-8 text-center text-body text-muted-foreground">正在准备本地检查…</p>
                 )}
               </main>
             </div>
@@ -657,9 +659,10 @@ export function ResultVerificationDialog() {
             </Button>
           </footer>
           <div role="status" aria-live="polite" className="sr-only">
-            {busy ? "AI 核验进行中" : error ?? (stale ? "核验报告已过期" : "")}
+            {busy ? "AI 检查进行中" : error ?? (stale ? "检查报告已过期" : "")}
           </div>
-        </DialogPrimitive.Content>
+          </DialogPrimitive.Content>
+        </div>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
   );

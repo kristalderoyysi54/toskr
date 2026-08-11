@@ -39,7 +39,7 @@ export interface OutcomeFilters {
   timeZone: string;
   profileId: string | null;
   recipeId: TransformRecipeId | null;
-  /** 清除指标只推进本地代次，不删除“最近投递”的恢复事件。 */
+  /** 清除指标只推进本地代次，不删除“最近发送”的恢复事件。 */
   metricsEpoch?: number;
 }
 
@@ -219,8 +219,8 @@ export function aggregateOutcomeMetrics(
     .filter((event) => eventEligible(event, filters))
     .sort((left, right) => left.timestampMs - right.timestampMs);
   const finals = eligibleEvents.filter((event) =>
-    (event.eventType === "sendSent" || event.eventType === "sendBlocked" ||
-      event.eventType === "sendFailed") &&
+    (event.eventType === "firewallBlocked" || event.eventType === "sendSent" ||
+      event.eventType === "sendBlocked" || event.eventType === "sendFailed") &&
     eventInRange(event, filters, dayKeys) &&
     (!filters.profileId || event.profileId === filters.profileId) &&
     (!filters.recipeId ||
@@ -247,7 +247,7 @@ export function aggregateOutcomeMetrics(
   let firewallFindingCount = 0;
   let redactionCount = 0;
   for (const event of finals) {
-    if (event.eventType === "sendBlocked") {
+    if (event.eventType === "firewallBlocked" || event.eventType === "sendBlocked") {
       increment(blockedReasons, event.reasonCode);
       if (isTargetBlock(event.reasonCode)) targetInvalidationBlocks += 1;
     }
@@ -285,6 +285,9 @@ export function aggregateOutcomeMetrics(
       draftToSend.push(sent.timestampMs - draft.timestampMs);
     }
     retryCount += Math.max(0, starts.length - 1);
+    retryCount += group.filter((event) =>
+      event.eventType === "draftCreated" && event.reasonCode === "retry-prepared"
+    ).length;
     if (sent && result && result.timestampMs >= sent.timestampMs) {
       sendToResult.push(result.timestampMs - sent.timestampMs);
     }

@@ -9,9 +9,14 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::state::{AppState, MOD_CONTROL, MOD_OPTION, MOD_SHIFT};
 
-/// 定位到目标位置并显示面板（伴随/经典模式由 Rust 侧裁决）。
+/// 定位到目标位置并显示面板。快捷键呼出可要求在真实拖动/Esc 前保持展开。
 #[tauri::command]
-pub fn show_panel(app: AppHandle) {
+pub fn show_panel(app: AppHandle, shortcut_hold: Option<bool>) {
+    crate::window::set_panel_auto_hide_armed(
+        &app,
+        !shortcut_hold.unwrap_or(false),
+        "显示入口",
+    );
     crate::window::request_show_panel(&app);
 }
 
@@ -37,6 +42,58 @@ pub async fn ocr_image(app: AppHandle, file: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || crate::ocr::recognize(&app, &file))
         .await
         .map_err(|e| e.to_string())?
+}
+
+/// 本地 OCR + 逐观察文本 Firewall；诊断仅记录计数与耗时。
+#[tauri::command]
+pub async fn scan_image_firewall(
+    app: AppHandle,
+    file: String,
+    force: Option<bool>,
+) -> Result<crate::image_firewall::ScanImageFirewallResult, String> {
+    let worker_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::image_firewall::scan(&worker_app, &file, force.unwrap_or(false))
+    })
+    .await
+    .map_err(|_| "本地图片隐私检查任务失败".to_string())?
+}
+
+/// 从原图创建纯色遮挡副本；原图与常规媒体目录均不会写入。
+#[tauri::command]
+pub async fn redact_delivery_image(
+    app: AppHandle,
+    request: crate::image_firewall::RedactImageRequest,
+) -> Result<crate::image_firewall::RedactImageResult, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::image_firewall::redact(&app, request))
+        .await
+        .map_err(|_| "创建遮挡图片任务失败".to_string())?
+}
+
+#[tauri::command]
+pub async fn cleanup_redacted_images(app: AppHandle, files: Vec<String>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::image_firewall::cleanup(&app, &files))
+        .await
+        .map_err(|_| "清理遮挡图片任务失败".to_string())?
+}
+
+#[tauri::command]
+pub async fn clear_redacted_images(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::image_firewall::clear_all(&app))
+        .await
+        .map_err(|_| "清理图片隐私会话任务失败".to_string())?
+}
+
+#[tauri::command]
+pub async fn delivery_image_data_url(
+    app: AppHandle,
+    file: String,
+) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::image_firewall::delivery_image_data_url(&app, &file)
+    })
+    .await
+    .map_err(|_| "读取图片隐私预览任务失败".to_string())
 }
 
 /// 剪贴板历史收集开关（设置项下发）。
@@ -189,10 +246,12 @@ pub async fn send_to_chat(
 ) -> Result<bool, String> {
     static LEGACY_DELIVERY_SEQ: AtomicU64 = AtomicU64::new(0);
     let snapshot = crate::target::current_snapshot(&app.state::<AppState>());
+    let expected_image_pixel_hashes = vec![None; image_files.len()];
     let request = crate::delivery::SendDeliveryRequest {
         target_token: snapshot.token,
         text,
         image_files,
+        expected_image_pixel_hashes,
         press_enter,
         keep_panel,
         delivery_id: format!(
@@ -382,7 +441,10 @@ fn on_panel_hotkey(app: &AppHandle) {
     let _ = app.emit_to(
         "main",
         crate::events::TRIGGER_EVENT,
-        crate::events::TriggerPayload::Toggle { force: true },
+        crate::events::TriggerPayload::Toggle {
+            force: true,
+            source: crate::events::TriggerSource::Hotkey,
+        },
     );
 }
 
@@ -526,7 +588,7 @@ fn capture_hud_feedback(
         None => (
             capture_kind,
             if association_suggested && capture_kind == "added" {
-                format!("{preview}\n可关联到最近一次投递，请在卡片右键确认")
+                format!("{preview}\n可关联到最近一次发送，请在卡片右键确认")
             } else {
                 preview
             },
@@ -593,23 +655,21 @@ pub fn set_panel_topmost(app: AppHandle, enabled: bool) {
     }
 }
 
-/// 自动贴边隐藏开关（设置项下发）：面板贴屏幕右缘时鼠标离开自动滑出，
-/// 移到屏幕右缘唤回（类似 Dock）。关闭时若正处于隐藏态立即滑回。
+/// 旧设置兼容命令；当前前端固定下发 true。
 #[tauri::command]
 pub fn set_auto_edge_hide(app: AppHandle, enabled: bool) {
     crate::window::set_auto_edge_hide(&app, enabled);
 }
 
-/// 立即贴边滑出（前端失焦分支调用，贴边隐藏模式下代替真实 hide）；
-/// 前置条件不满足时是安全的空操作。
+/// 立即贴边滑出；`explicit` 用于 Esc，可解除快捷键保护并越过图钉。
 #[tauri::command]
-pub fn edge_hide_now(app: AppHandle) {
-    crate::window::edge_hide_now(&app);
+pub fn edge_hide_now(app: AppHandle, explicit: Option<bool>) -> bool {
+    crate::window::edge_hide_now(&app, explicit.unwrap_or(false))
 }
 
 /// 面板固定（图钉）状态同步（前端 uiStore.pinned）。语义严格限定为
 /// 「失焦不隐藏」：只豁免焦点驱动的收起（前端 blur 分支 / `edge_hide_now`），
-/// 不影响光标驱动的贴边隐藏——钉住 + 自动贴边隐藏 = Dock 行为。
+/// 不影响光标驱动的贴边隐藏——钉住 + 已入坞 = Dock 行为。
 #[tauri::command]
 pub fn set_panel_pinned(app: AppHandle, pinned: bool) {
     app.state::<AppState>()
@@ -855,8 +915,8 @@ pub async fn append_delivery_event(
     tauri::async_runtime::spawn_blocking(move || {
         crate::activity::append(&app, event, retention_days)
     })
-        .await
-        .map_err(|error| format!("后台投递活动写入失败：{error}"))?
+    .await
+    .map_err(|error| format!("后台发送活动写入失败：{error}"))?
 }
 
 #[tauri::command]
@@ -868,8 +928,8 @@ pub async fn get_recent_delivery_events(
     tauri::async_runtime::spawn_blocking(move || {
         crate::activity::recent(&app, limit, retention_days)
     })
-        .await
-        .map_err(|error| format!("后台投递活动读取失败：{error}"))?
+    .await
+    .map_err(|error| format!("后台发送活动读取失败：{error}"))?
 }
 
 #[tauri::command]
@@ -877,7 +937,7 @@ pub async fn clear_delivery_events(app: AppHandle) -> Result<(), String> {
     let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || crate::activity::clear(&worker_app))
         .await
-        .map_err(|error| format!("后台投递活动清除失败：{error}"))??;
+        .map_err(|error| format!("后台发送活动清除失败：{error}"))??;
     let _ = app.emit(crate::events::DELIVERY_ACTIVITY_CLEARED_EVENT, ());
     Ok(())
 }
@@ -1261,10 +1321,9 @@ mod tests {
         assert!(!text.contains("捕获内容"));
         assert!(!undoable);
 
-        let (kind, text, undoable) =
-            capture_hud_feedback("added", "捕获内容".into(), None, true);
+        let (kind, text, undoable) = capture_hud_feedback("added", "捕获内容".into(), None, true);
         assert_eq!(kind, "added");
-        assert_eq!(text, "捕获内容\n可关联到最近一次投递，请在卡片右键确认");
+        assert_eq!(text, "捕获内容\n可关联到最近一次发送，请在卡片右键确认");
         assert!(undoable);
     }
 }

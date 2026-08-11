@@ -34,7 +34,7 @@ function profile(id: string, name = id): TargetProfile {
   };
 }
 
-describe("投递方案管理器纯数据契约", () => {
+describe("发送方案管理器纯数据契约", () => {
   it("默认方案只在视图中置顶，不改变存储顺序", () => {
     const stored = [profile("first"), profile("default"), profile("last")];
     const visible = filterAndPinProfiles(stored, "default", "");
@@ -146,8 +146,8 @@ describe("投递方案管理器纯数据契约", () => {
   });
 
   it("应用移动确认明确写出来源与目标方案", () => {
-    expect(buildAppMoveQuestion("Otty", "AI 对话", "稳妥投递")).toBe(
-      "Otty 当前属于“AI 对话”，是否移动到“稳妥投递”？"
+    expect(buildAppMoveQuestion("Otty", "AI 对话", "稳妥发送")).toBe(
+      "Otty 当前属于“AI 对话”，是否移动到“稳妥发送”？"
     );
   });
 

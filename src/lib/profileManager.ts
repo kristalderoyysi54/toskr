@@ -48,7 +48,7 @@ export interface ProfilePreset {
 export const PROFILE_PRESETS: readonly ProfilePreset[] = [
   {
     id: "safe",
-    name: "稳妥投递",
+    name: "稳妥发送",
     description: "纯文本粘贴，不自动按回车",
     defaultFormat: "plain",
     enterPolicy: "never",
@@ -94,7 +94,7 @@ export const DELIVERY_FORMAT_OPTIONS: readonly {
     value: "plain",
     label: "纯文本",
     description: "保持内容自然排版，适合聊天与文档应用。",
-    example: "示例：这是准备投递的内容。",
+    example: "示例：这是准备发送的内容。",
   },
   {
     value: "code",

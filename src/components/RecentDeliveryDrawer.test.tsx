@@ -5,6 +5,7 @@ import { RecentDeliveryList } from "./RecentDeliveryDrawer";
 import {
   deliveryActivityRecords,
   deliveryEventSourceAvailability,
+  deliverySourceItems,
   type DeliveryEvent,
 } from "@/lib/deliveryActivity";
 import type { Note } from "@/store/notesStore";
@@ -48,6 +49,47 @@ function event(overrides: Partial<DeliveryEvent> = {}): DeliveryEvent {
 }
 
 describe("RecentDeliveryDrawer", () => {
+  it("合并发送的查看入口保留全部来源及图片附件", () => {
+    const notes: Note[] = [
+      {
+        id: "text-1",
+        text: "问题背景",
+        sectionId: "inbox",
+        done: false,
+        createdAt: 1,
+      },
+      {
+        id: "image-1",
+        text: "图片 1200×800",
+        sectionId: "inbox",
+        done: false,
+        createdAt: 2,
+        kind: "image",
+        imageFile: "first.png",
+      },
+      {
+        id: "image-2",
+        text: "图片 900×600",
+        sectionId: "inbox",
+        done: false,
+        createdAt: 3,
+        kind: "image",
+        imageFile: "second.png",
+      },
+    ];
+
+    const sources = deliverySourceItems(event({
+      sourceItemIds: notes.map((note) => note.id),
+      imageCount: 2,
+    }), notes, []);
+
+    expect(sources.notes.map((note) => note.id)).toEqual([
+      "text-1",
+      "image-1",
+      "image-2",
+    ]);
+  });
+
   it("把同一 delivery 的生命周期折叠为一条，并保留剪贴板结果", () => {
     const records = deliveryActivityRecords([
       event({
@@ -71,6 +113,45 @@ describe("RecentDeliveryDrawer", () => {
       eventType: "sendFailed",
       status: "failed",
       clipboardOutcome: "restoreFailed",
+      timestampMs: 100,
+      lastActivityAtMs: 110,
+      resultLinkedAtMs: null,
+      verificationAtMs: null,
+    });
+  });
+
+  it("后续保存或检查回复不覆盖真实发送时间，也不会把旧发送顶到最前", () => {
+    const records = deliveryActivityRecords([
+      event({
+        eventId: "old-sent",
+        deliveryId: "old",
+        eventType: "sendSent",
+        status: "sent",
+        timestampMs: 100,
+      }),
+      event({
+        eventId: "old-verified",
+        deliveryId: "old",
+        eventType: "resultVerified",
+        status: "verified",
+        timestampMs: 300,
+        resultNoteId: "result-old",
+        verificationStatus: "needsReview",
+      }),
+      event({
+        eventId: "new-sent",
+        deliveryId: "new",
+        eventType: "sendSent",
+        status: "sent",
+        timestampMs: 200,
+      }),
+    ]);
+
+    expect(records.map((record) => record.deliveryId)).toEqual(["new", "old"]);
+    expect(records[1]).toMatchObject({
+      timestampMs: 100,
+      lastActivityAtMs: 300,
+      verificationAtMs: 300,
     });
   });
 
@@ -87,7 +168,7 @@ describe("RecentDeliveryDrawer", () => {
 
     const html = renderToStaticMarkup(
       <RecentDeliveryList
-        records={[event()]}
+        records={deliveryActivityRecords([event()])}
         notes={[]}
         tasks={[]}
         busyEventId={null}
@@ -96,15 +177,17 @@ describe("RecentDeliveryDrawer", () => {
     );
     expect(html).toContain("Codex");
     expect(html).toContain("发送失败");
-    expect(html).toContain("已脱敏 2 项");
-    expect(html).toContain("来源已不存在");
+    expect(html).toContain("发送内容");
+    expect(html).toContain("原内容已删除");
+    expect(html).toContain("发送前隐藏了 2 项敏感内容");
+    expect(html).toContain("更多信息");
     expect(html).toContain("重新准备");
     expect(html).toContain("disabled");
     expect(html).not.toContain("重试发送");
     expect(html).not.toContain("当前正文不会进入活动组件");
   });
 
-  it("结果事件折叠到原投递，结果存在时提供来源与结果入口", () => {
+  it("结果事件折叠到原发送，结果存在时提供来源与结果入口", () => {
     const records = deliveryActivityRecords([
       event({
         eventId: "verified",
@@ -171,6 +254,10 @@ describe("RecentDeliveryDrawer", () => {
     };
     expect(records[0]).toMatchObject({
       status: "sent",
+      timestampMs: 100,
+      lastActivityAtMs: 130,
+      resultLinkedAtMs: 120,
+      verificationAtMs: 130,
       resultNoteId: "result-1",
       verificationStatus: "needsReview",
       verificationCheckCount: 7,
@@ -187,6 +274,7 @@ describe("RecentDeliveryDrawer", () => {
         onOpenResult={vi.fn()}
         onVerify={vi.fn()}
         onAssociate={vi.fn()}
+        onUnlink={vi.fn()}
         qualityFeedback={[{
           deliveryId: "delivery-1",
           resultNoteId: "result-1",
@@ -197,13 +285,14 @@ describe("RecentDeliveryDrawer", () => {
         onQuality={vi.fn()}
       />
     );
-    expect(html).toContain("打开来源");
-    expect(html).toContain("打开结果");
-    expect(html).not.toContain("打开结果 ×2");
-    expect(html).toContain("核验结果");
-    expect(html).toContain("核验 7 项 · 问题 2");
-    expect(html).toContain("关联现有卡片");
-    expect(html).toContain("结果质量（可选）");
+    expect(html).toContain("发送于");
+    expect(html).toContain("发送内容");
+    expect(html).toContain("回复已保存");
+    expect(html).toContain("检查发现 2 个问题");
+    expect(html).toContain("检查回复");
+    expect(html).toContain("更换回复");
+    expect(html).toContain("这不是对应回复");
+    expect(html).toContain("这条回复后来怎么用？（可选）");
     expect(html).toContain("直接使用");
     expect(html).toContain("aria-pressed=\"true\"");
     expect(html).not.toContain("结果正文不进入活动行");
@@ -221,6 +310,61 @@ describe("RecentDeliveryDrawer", () => {
         onQuality={vi.fn()}
       />
     );
-    expect(afterMetricsClear).not.toContain("结果质量（可选）");
+    expect(afterMetricsClear).not.toContain("这条回复后来怎么用？（可选）");
+  });
+
+  it("回复改绑后只展示当前关系，旧时间明确标为曾保存", () => {
+    const records = deliveryActivityRecords([
+      event({
+        eventId: "captured",
+        eventType: "resultCaptured",
+        status: "captured",
+        timestampMs: 120,
+        resultNoteId: "result-1",
+      }),
+      event({
+        eventId: "sent",
+        eventType: "sendSent",
+        status: "sent",
+        timestampMs: 100,
+      }),
+    ]);
+    const source: Note = {
+      id: "note-1",
+      text: "来源",
+      sectionId: "inbox",
+      done: false,
+      createdAt: 80,
+    };
+    const reboundResult: Note = {
+      id: "result-1",
+      text: "已经改绑到另一条发送",
+      sectionId: "inbox",
+      done: false,
+      createdAt: 120,
+      provenance: {
+        kind: "deliveryResult",
+        deliveryId: "delivery-2",
+        capturedAtMs: 120,
+        sourceBundle: "com.openai.codex",
+        sourceItemIds: ["note-2"],
+      },
+    };
+
+    const html = renderToStaticMarkup(
+      <RecentDeliveryList
+        records={records}
+        notes={[source, reboundResult]}
+        tasks={[]}
+        busyEventId={null}
+        onReprepare={vi.fn()}
+        onAssociate={vi.fn()}
+      />
+    );
+
+    expect(html).toContain("尚未保存回复");
+    expect(html).toContain("曾保存，现已更换");
+    expect(html).toContain("曾保存回复");
+    expect(html).not.toContain("回复已保存");
   });
 });

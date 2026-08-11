@@ -46,12 +46,14 @@ interface UIState {
   updateAvail: UpdateMeta | null;
   /** 更新对话框显隐（头部「更新」按钮 / 更新气泡点击唤起）。 */
   updateDialogOpen: boolean;
-  /** 贴边隐藏当前是否可介入（设置开启 + 右缘停靠/边栏布局 + 非钉住 +
-   *  非伴随磁吸）；为 true 时失焦自动隐藏让位给贴边滑出（Dock 式收纳）。 */
+  /** 当前是否已有屏缘锚点且未被伴随目标接管；为 true 时失焦用贴边滑出
+   *  代替真实隐藏。快捷键保护只暂停动作，不清除该锚点。 */
   edgeHideActive: boolean;
   /** 面板当前是否已贴边滑出（仅露出细条）；为 true 时快捷键/双击唤出应
    *  识别为「贴边唤回」而非「开关切换到关闭」。 */
   edgeHidden: boolean;
+  /** 快捷键/双击呼出保护：真实拖动或 Esc 前，失焦与光标离开均不自动收起。 */
+  shortcutHoldOpen: boolean;
 
   setOpen: (open: boolean) => void;
   setPage: (page: PanelPage) => void;
@@ -78,6 +80,7 @@ interface UIState {
   setUpdateAvail: (updateAvail: UpdateMeta | null) => void;
   setUpdateDialogOpen: (updateDialogOpen: boolean) => void;
   setEdgeHideState: (active: boolean, hidden: boolean) => void;
+  setShortcutHoldOpen: (hold: boolean) => void;
 }
 
 /** 可用更新的展示元数据（对话框：版本对比 + 更新内容）。 */
@@ -111,6 +114,7 @@ export const useUIStore = create<UIState>()((set, get) => ({
   updateDialogOpen: false,
   edgeHideActive: false,
   edgeHidden: false,
+  shortcutHoldOpen: false,
 
   setOpen: (open) => set({ open }),
   // 切页清焦点：避免另一页残留的 focusedId 干扰键盘导航语义
@@ -138,4 +142,5 @@ export const useUIStore = create<UIState>()((set, get) => ({
   setUpdateDialogOpen: (updateDialogOpen) => set({ updateDialogOpen }),
   setEdgeHideState: (edgeHideActive, edgeHidden) =>
     set({ edgeHideActive, edgeHidden }),
+  setShortcutHoldOpen: (shortcutHoldOpen) => set({ shortcutHoldOpen }),
 }));

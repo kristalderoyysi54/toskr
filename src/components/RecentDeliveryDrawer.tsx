@@ -1,13 +1,17 @@
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
   AlertTriangle,
+  ArrowRight,
   CheckCircle2,
+  ChevronDown,
   Clock3,
-  ExternalLink,
+  FileText,
   Link2,
+  MessageSquareReply,
   RotateCcw,
   ShieldCheck,
   Trash2,
+  Unlink,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -21,13 +25,16 @@ import {
   DELIVERY_ACTIVITY_MAX_EVENTS,
   deliveryActivityRecords,
   deliveryEventSourceAvailability,
+  deliverySourceItems,
   getRecentDeliveryEvents,
   reprepareDeliveryEvent,
+  type DeliveryActivityRecord,
   type DeliveryEvent,
 } from "@/lib/deliveryActivity";
 import {
   RESULT_LINK_CHANGED_EVENT,
   requestResultLinkForDelivery,
+  requestResultUnlink,
   resultAssociationState,
 } from "@/lib/resultReturn";
 import { requestResultVerification } from "@/lib/resultVerification";
@@ -36,23 +43,23 @@ import {
   type OutcomeQuality,
   type OutcomeQualityFeedback,
 } from "@/lib/outcomeIntelligence";
-import { openNoteDetail } from "@/lib/actions";
+import { openNoteBatchDetail, openNoteDetail } from "@/lib/actions";
 import { tip } from "@/lib/tip";
 import { cn } from "@/lib/utils";
 import { useNotesStore, type Note, type Task } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
 
 const STATUS_LABEL: Record<DeliveryEvent["status"], string> = {
-  prepared: "草稿已准备",
-  opened: "等待预检",
-  started: "正在投递",
-  sent: "发送成功",
-  blocked: "发送已阻止",
+  prepared: "准备中",
+  opened: "等待确认",
+  started: "发送中",
+  sent: "已发送",
+  blocked: "未发送",
   failed: "发送失败",
   restored: "剪贴板已恢复",
   skipped: "剪贴板未覆盖",
-  captured: "已收到结果",
-  verified: "结果已核验",
+  captured: "回复已保存",
+  verified: "回复已检查",
 };
 
 const CLIPBOARD_LABEL: Record<NonNullable<DeliveryEvent["clipboardOutcome"]>, string> = {
@@ -68,8 +75,8 @@ const RECOVERY_ERROR = {
   unsupported: "这条记录不支持重新准备",
   sourceMissing: "来源已不存在，无法重新准备",
   busy: "请先完成当前发送或预检",
-  dataChanged: "数据目录已变化，请重新打开最近投递",
-  targetUnavailable: "当前没有可用投递目标",
+  dataChanged: "数据目录已变化，请重新打开最近发送",
+  targetUnavailable: "当前没有可用发送目标",
 } as const;
 
 const QUALITY_LABEL: Record<OutcomeQuality, string> = {
@@ -78,6 +85,134 @@ const QUALITY_LABEL: Record<OutcomeQuality, string> = {
   majorEdit: "大改",
   discarded: "未采用",
 };
+
+function localTime(timestampMs: number): string {
+  return new Date(timestampMs).toLocaleString("zh-CN", { hour12: false });
+}
+
+function payloadLabel(record: DeliveryEvent): string {
+  const parts: string[] = [];
+  if (record.textCharCount) parts.push(`${record.textCharCount} 字文字`);
+  if (record.imageCount) parts.push(`${record.imageCount} 张图片`);
+  return parts.length ? parts.join(" + ") : "无正文内容";
+}
+
+function sourceLabel(
+  record: DeliveryEvent,
+  availability: ReturnType<typeof deliveryEventSourceAvailability>
+): string {
+  if (availability === "missing") return "原内容已删除";
+  if (availability === "partial") return "部分原内容已删除";
+  const unit = record.sourceKind === "task" ? "个任务" : "张卡片";
+  return `${record.sourceItemIds.length} ${unit}可查看`;
+}
+
+function verificationLabel(record: DeliveryEvent): string {
+  if (record.verificationStatus === "pass") return "检查完成，未发现问题";
+  if (record.verificationStatus === "blocked") return "暂时无法完成检查";
+  if (record.verificationStatus === "needsReview") {
+    return `检查发现 ${record.verificationIssueCount ?? 0} 个问题`;
+  }
+  return "可查看或检查";
+}
+
+type RelationshipProps = {
+  record: DeliveryActivityRecord;
+  availability: ReturnType<typeof deliveryEventSourceAvailability>;
+  association: ReturnType<typeof resultAssociationState>;
+  result: Note | null;
+  onOpenSource?: (event: DeliveryEvent) => void;
+  onOpenResult?: (note: Note) => void;
+  onAssociate?: (event: DeliveryEvent) => void;
+};
+
+function DeliveryRelationship({
+  record,
+  availability,
+  association,
+  result,
+  onOpenSource,
+  onOpenResult,
+  onAssociate,
+}: RelationshipProps) {
+  const sent = record.status === "sent";
+  const sourceAvailable = availability !== "missing" && !!onOpenSource;
+  const replyAvailable = !!result && !!onOpenResult;
+  const canChooseReply = sent && !result && !!onAssociate;
+  const replyTitle = result
+    ? "回复已保存"
+    : association === "missing"
+      ? "回复卡已删除"
+      : sent
+        ? "尚未保存回复"
+        : "发送未完成";
+  const replyDetail = result
+    ? verificationLabel(record)
+    : association === "unlinked"
+      ? "曾保存，现已更换"
+      : association === "missing"
+        ? "点击重新选择回复"
+        : sent
+          ? "点击选择真正的回复"
+          : "发送成功后才能保存";
+
+  return (
+    <div
+      aria-label="发送内容与回复的关系"
+      className="mt-2 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch gap-1 max-[330px]:grid-cols-1"
+    >
+      <button
+        type="button"
+        disabled={!sourceAvailable}
+        onClick={() => onOpenSource?.(record)}
+        className="min-w-0 rounded-lg border border-foreground/10 bg-background/55 p-2 text-left outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-primary/50 disabled:cursor-default disabled:opacity-60"
+      >
+        <span className="mb-1 flex items-center gap-1 text-label font-medium">
+          <span className="flex size-5 items-center justify-center rounded-md bg-muted text-muted-foreground">
+            <FileText className="size-3" aria-hidden />
+          </span>
+          发送内容
+        </span>
+        <span className="block truncate text-micro text-muted-foreground">
+          {sourceLabel(record, availability)}
+        </span>
+      </button>
+
+      <span className="flex w-4 items-center justify-center text-muted-foreground/60 max-[330px]:h-3 max-[330px]:w-full" aria-hidden>
+        <ArrowRight className="size-3.5 max-[330px]:rotate-90" />
+      </span>
+
+      <button
+        type="button"
+        disabled={!replyAvailable && !canChooseReply}
+        onClick={() => {
+          if (result) onOpenResult?.(result);
+          else onAssociate?.(record);
+        }}
+        className={cn(
+          "min-w-0 rounded-lg border p-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/50 disabled:cursor-default",
+          result
+            ? "border-success/25 bg-success/5 hover:bg-success/10"
+            : "border-dashed border-foreground/15 bg-muted/25 hover:bg-muted/55",
+          !replyAvailable && !canChooseReply && "opacity-60"
+        )}
+      >
+        <span className="mb-1 flex items-center gap-1 text-label font-medium">
+          <span className={cn(
+            "flex size-5 items-center justify-center rounded-md",
+            result ? "bg-success/12 text-success" : "bg-muted text-muted-foreground"
+          )}>
+            {result
+              ? <CheckCircle2 className="size-3" aria-hidden />
+              : <MessageSquareReply className="size-3" aria-hidden />}
+          </span>
+          <span className="truncate max-[330px]:overflow-visible max-[330px]:whitespace-normal">{replyTitle}</span>
+        </span>
+        <span className="block truncate text-micro text-muted-foreground">{replyDetail}</span>
+      </button>
+    </div>
+  );
+}
 
 export function RecentDeliveryList({
   records,
@@ -89,11 +224,12 @@ export function RecentDeliveryList({
   onOpenResult,
   onVerify,
   onAssociate,
+  onUnlink,
   qualityFeedback = [],
   qualityMetricsEpoch,
   onQuality,
 }: {
-  records: readonly DeliveryEvent[];
+  records: readonly DeliveryActivityRecord[];
   notes: readonly Note[];
   tasks: readonly Task[];
   busyEventId: string | null;
@@ -102,6 +238,7 @@ export function RecentDeliveryList({
   onOpenResult?: (note: Note) => void;
   onVerify?: (note: Note) => void;
   onAssociate?: (event: DeliveryEvent) => void;
+  onUnlink?: (note: Note) => void;
   qualityFeedback?: readonly OutcomeQualityFeedback[];
   qualityMetricsEpoch?: number;
   onQuality?: (
@@ -110,22 +247,25 @@ export function RecentDeliveryList({
     quality: OutcomeQuality
   ) => void;
 }) {
-  const qualityByResult = new Map(
-    qualityFeedback.map((item) => [
-      `${item.deliveryId}:${item.resultNoteId}`,
-      item.quality,
-    ] as const)
+  const qualityByResult = useMemo(
+    () => new Map(
+      qualityFeedback.map((item) => [
+        `${item.deliveryId}:${item.resultNoteId}`,
+        item.quality,
+      ] as const)
+    ),
+    [qualityFeedback]
   );
   if (!records.length) {
     return (
       <div className="flex min-h-36 flex-col items-center justify-center text-center text-body text-muted-foreground">
         <Clock3 className="mb-2 size-5 opacity-50" aria-hidden />
-        暂无投递记录
+        暂无发送记录
       </div>
     );
   }
   return (
-    <ol className="space-y-2" aria-label="最近投递记录">
+    <ol className="space-y-2" aria-label="最近发送记录">
       {records.map((record) => {
         const availability = deliveryEventSourceAvailability(record, notes, tasks);
         const recoverable = record.status === "failed" || record.status === "blocked";
@@ -139,8 +279,9 @@ export function RecentDeliveryList({
             )
           : [];
         const association = resultAssociationState(record, notes);
-        const selectedQuality = linkedResults[0]
-          ? qualityByResult.get(`${record.deliveryId}:${linkedResults[0].id}`) ?? null
+        const linkedResult = linkedResults[0] ?? null;
+        const selectedQuality = linkedResult
+          ? qualityByResult.get(`${record.deliveryId}:${linkedResult.id}`) ?? null
           : null;
         const qualityEligible = qualityMetricsEpoch !== undefined &&
           record.metricsEligible !== false &&
@@ -148,7 +289,7 @@ export function RecentDeliveryList({
         return (
           <li
             key={record.deliveryId}
-            className="rounded-xl border border-foreground/10 bg-muted/35 p-2.5"
+            className="rounded-xl border border-foreground/10 bg-muted/30 p-2.5"
           >
             <div className="flex min-w-0 items-start gap-2">
               {statusProblem ? (
@@ -163,108 +304,129 @@ export function RecentDeliveryList({
                   </span>
                   <span
                     className={cn(
-                      "ml-auto shrink-0 rounded-md px-1.5 py-0.5 text-micro font-medium",
+                      "ml-auto shrink-0 text-micro font-medium",
                       statusProblem
-                        ? "bg-warning/10 text-warning"
-                        : "bg-success/10 text-success"
+                        ? "text-warning"
+                        : "text-success"
                     )}
                   >
                     {STATUS_LABEL[record.status]}
                   </span>
                 </div>
-                <time
-                  dateTime={new Date(record.timestampMs).toISOString()}
-                  className="mt-0.5 block text-micro tabular-nums text-muted-foreground"
-                >
-                  {new Date(record.timestampMs).toLocaleString("zh-CN", { hour12: false })}
-                </time>
+                <p className="mt-0.5 truncate text-micro text-muted-foreground">
+                  <time dateTime={new Date(record.timestampMs).toISOString()} className="tabular-nums">
+                    {record.status === "sent" ? "发送于 " : "记录于 "}{localTime(record.timestampMs)}
+                  </time>
+                  <span aria-hidden> · </span>{payloadLabel(record)}
+                </p>
               </div>
             </div>
-            <div className="mt-2 flex flex-wrap gap-1 text-micro text-muted-foreground">
-              <span className="rounded-sm bg-muted px-1.5 py-0.5">
-                {availability === "available"
-                  ? `来源存在 · ${record.sourceItemIds.length} 项`
-                  : availability === "partial"
-                    ? "部分来源已不存在"
-                    : "来源已不存在"}
-              </span>
-              <span className="rounded-sm bg-muted px-1.5 py-0.5">
-                已脱敏 {record.redactionCount} 项
-              </span>
-              {record.clipboardOutcome && (
-                <span className="rounded-sm bg-muted px-1.5 py-0.5">
-                  剪贴板：{CLIPBOARD_LABEL[record.clipboardOutcome]}
-                </span>
-              )}
-              <span className="rounded-sm bg-muted px-1.5 py-0.5">
-                {record.textCharCount} 字符{record.imageCount ? ` · ${record.imageCount} 图` : ""}
-              </span>
-              {record.verificationStatus && (
-                <span className={cn(
-                  "rounded-sm px-1.5 py-0.5",
-                  record.verificationStatus === "pass"
-                    ? "bg-success/10 text-success"
-                    : record.verificationStatus === "blocked"
-                      ? "bg-destructive/10 text-destructive"
-                      : "bg-warning/10 text-warning"
-                )}>
-                  核验 {record.verificationCheckCount ?? 0} 项 · 问题 {record.verificationIssueCount ?? 0}
-                </span>
-              )}
-            </div>
-            {!linkedResults.length && association === "missing" && (
-              <p className="mt-1.5 text-micro text-warning">已关联的结果卡已不存在</p>
-            )}
-            {!linkedResults.length && association === "unlinked" && (
-              <p className="mt-1.5 text-micro text-muted-foreground">原结果关联已解除或改绑</p>
-            )}
-            <div className="mt-2 flex flex-wrap items-center justify-end gap-1">
-              {availability !== "missing" && onOpenSource && (
-                <Button type="button" size="xs" variant="ghost" onClick={() => onOpenSource(record)}>
-                  <ExternalLink className="size-3" /> 打开来源
-                </Button>
-              )}
-              {!!linkedResults.length && onOpenResult && (
-                <Button type="button" size="xs" variant="ghost" onClick={() => onOpenResult(linkedResults[0])}>
-                  <ExternalLink className="size-3" />
-                  打开结果{linkedResults.length > 1 ? ` ×${linkedResults.length}` : ""}
-                </Button>
-              )}
-              {!!linkedResults.length && onVerify && (
-                <Button type="button" size="xs" variant="secondary" onClick={() => onVerify(linkedResults[0])}>
-                  <ShieldCheck className="size-3" /> 核验结果
-                </Button>
-              )}
-              {record.status === "sent" && onAssociate && (
-                <Button type="button" size="xs" variant="secondary" onClick={() => onAssociate(record)}>
-                  <Link2 className="size-3" /> 关联现有卡片
-                </Button>
-              )}
-            </div>
-            {!!linkedResults.length && onQuality && qualityEligible && (
-              <fieldset className="mt-2 border-t border-border/50 pt-2">
-                <legend className="sr-only">结果使用质量</legend>
-                <div className="flex flex-wrap items-center gap-1" aria-label="结果使用质量">
-                  <span className="mr-auto text-micro text-muted-foreground">结果质量（可选）</span>
-                  {(Object.keys(QUALITY_LABEL) as OutcomeQuality[]).map((quality) => (
-                    <button
-                      key={quality}
-                      type="button"
-                      aria-pressed={selectedQuality === quality}
-                      onClick={() => onQuality(record, linkedResults[0].id, quality)}
-                      className={cn(
-                        "rounded-md px-1.5 py-1 text-micro outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
-                        selectedQuality === quality
-                          ? "bg-primary/15 font-medium text-primary"
-                          : "bg-muted text-muted-foreground hover:text-foreground"
-                      )}
-                    >
-                      {QUALITY_LABEL[quality]}
-                    </button>
-                  ))}
-                </div>
-              </fieldset>
-            )}
+
+            <DeliveryRelationship
+              record={record}
+              availability={availability}
+              association={association}
+              result={linkedResult}
+              onOpenSource={onOpenSource}
+              onOpenResult={onOpenResult}
+              onAssociate={onAssociate}
+            />
+
+            <details className="group mt-2 border-t border-border/50 pt-1.5">
+              <summary className="flex cursor-pointer list-none items-center gap-1 rounded-md px-1 py-1 text-micro text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50 [&::-webkit-details-marker]:hidden">
+                更多信息
+                <ChevronDown className="ml-auto size-3 transition-transform group-open:rotate-180 motion-reduce:transition-none" aria-hidden />
+              </summary>
+              <div className="px-1 pb-1 pt-1.5">
+                <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-micro">
+                  <dt className="text-muted-foreground">原内容</dt>
+                  <dd className="truncate text-right">{sourceLabel(record, availability)}</dd>
+                  <dt className="text-muted-foreground">隐私保护</dt>
+                  <dd className="text-right">
+                    {record.redactionCount
+                      ? `发送前隐藏了 ${record.redactionCount} 项敏感内容`
+                      : "发送前未替换敏感内容"}
+                  </dd>
+                  {record.clipboardOutcome && (
+                    <>
+                      <dt className="text-muted-foreground">剪贴板</dt>
+                      <dd className="text-right">{CLIPBOARD_LABEL[record.clipboardOutcome]}</dd>
+                    </>
+                  )}
+                  {record.resultLinkedAtMs && (
+                    <>
+                      <dt className="text-muted-foreground">
+                        {association === "linked" ? "保存回复" : "曾保存回复"}
+                      </dt>
+                      <dd className="text-right tabular-nums">{localTime(record.resultLinkedAtMs)}</dd>
+                    </>
+                  )}
+                  {record.verificationAtMs && (
+                    <>
+                      <dt className="text-muted-foreground">检查回复</dt>
+                      <dd className="text-right tabular-nums">{localTime(record.verificationAtMs)}</dd>
+                    </>
+                  )}
+                  {!linkedResult && association === "unlinked" && (
+                    <>
+                      <dt className="text-muted-foreground">历史回复</dt>
+                      <dd className="text-right">曾保存，现已取消或更换</dd>
+                    </>
+                  )}
+                  {!linkedResult && association === "missing" && (
+                    <>
+                      <dt className="text-muted-foreground">历史回复</dt>
+                      <dd className="text-right text-warning">回复卡已删除</dd>
+                    </>
+                  )}
+                </dl>
+
+                {linkedResult && (
+                  <div className="mt-2 flex flex-wrap items-center gap-1">
+                    {onVerify && (
+                      <Button type="button" size="xs" variant="secondary" onClick={() => onVerify(linkedResult)}>
+                        <ShieldCheck className="size-3" /> 检查回复
+                      </Button>
+                    )}
+                    {onAssociate && (
+                      <Button type="button" size="xs" variant="ghost" onClick={() => onAssociate(record)}>
+                        <Link2 className="size-3" /> 更换回复
+                      </Button>
+                    )}
+                    {onUnlink && (
+                      <Button type="button" size="xs" variant="ghost" onClick={() => onUnlink(linkedResult)}>
+                        <Unlink className="size-3" /> 这不是对应回复
+                      </Button>
+                    )}
+                  </div>
+                )}
+
+                {linkedResult && onQuality && qualityEligible && (
+                  <fieldset className="mt-2 border-t border-border/50 pt-2">
+                    <legend className="text-micro text-muted-foreground">这条回复后来怎么用？（可选）</legend>
+                    <div className="mt-1 flex flex-wrap gap-1" aria-label="回复使用情况">
+                      {(Object.keys(QUALITY_LABEL) as OutcomeQuality[]).map((quality) => (
+                        <button
+                          key={quality}
+                          type="button"
+                          aria-pressed={selectedQuality === quality}
+                          onClick={() => onQuality(record, linkedResult.id, quality)}
+                          className={cn(
+                            "rounded-md px-1.5 py-1 text-micro outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
+                            selectedQuality === quality
+                              ? "bg-primary/15 font-medium text-primary"
+                              : "bg-muted text-muted-foreground hover:text-foreground"
+                          )}
+                        >
+                          {QUALITY_LABEL[quality]}
+                        </button>
+                      ))}
+                    </div>
+                  </fieldset>
+                )}
+              </div>
+            </details>
+
             {recoverable && (
               <div className="mt-2 flex items-center justify-end">
                 <Button
@@ -321,7 +483,7 @@ export function RecentDeliveryDrawer({
     try {
       setEvents(await getRecentDeliveryEvents(DELIVERY_ACTIVITY_MAX_EVENTS));
     } catch {
-      setError("最近投递读取失败，请稍后重试");
+      setError("最近发送读取失败，请稍后重试");
     } finally {
       setLoading(false);
     }
@@ -338,15 +500,15 @@ export function RecentDeliveryDrawer({
   }, [load, open]);
 
   const clear = async () => {
-    const confirmed = await ask("仅清除本数据目录中的投递元数据记录，不影响卡片、任务和附件。确认继续吗？", {
-      title: "清除最近投递",
+    const confirmed = await ask("仅清除本数据目录中的发送元数据记录，不影响卡片、任务和附件。确认继续吗？", {
+      title: "清除最近发送",
       kind: "warning",
     });
     if (!confirmed) return;
     try {
       await clearDeliveryEvents();
       setEvents([]);
-      tip("ok", "最近投递已清除");
+      tip("ok", "最近发送已清除");
     } catch {
       setError("清除失败，数据目录可能正在切换");
     }
@@ -367,17 +529,16 @@ export function RecentDeliveryDrawer({
 
   const openSource = (event: DeliveryEvent) => {
     const state = useNotesStore.getState();
-    const sourceNote = event.sourceKind === "task"
-      ? undefined
-      : state.notes.find((item) => event.sourceItemIds.includes(item.id));
-    if (sourceNote) {
+    const sources = deliverySourceItems(event, state.notes, state.tasks);
+    if (sources.notes.length) {
       onOpenChange(false);
-      openNoteDetail(sourceNote.id);
+      openNoteBatchDetail(
+        sources.notes.map((note) => note.id),
+        event.sourceItemIds.length
+      );
       return;
     }
-    const sourceTask = event.sourceKind === "task"
-      ? state.tasks.find((item) => event.sourceItemIds.includes(item.id))
-      : undefined;
+    const sourceTask = sources.tasks[0];
     if (sourceTask) {
       onOpenChange(false);
       const ui = useUIStore.getState();
@@ -404,19 +565,22 @@ export function RecentDeliveryDrawer({
           <header className="flex items-start gap-2 border-b border-border/70 pb-2">
             <div className="min-w-0 flex-1">
               <DialogPrimitive.Title className="text-title font-semibold">
-                最近投递
+                最近发送
               </DialogPrimitive.Title>
               <DialogPrimitive.Description className="mt-0.5 text-micro leading-relaxed text-muted-foreground">
-                仅保存目标、状态与计数等元数据；不保存正文或 Prompt。保留最近 {DELIVERY_ACTIVITY_MAX_EVENTS} 条或 {retentionDays} 天。
+                查看发送是否成功，并把收到的回复放回对应记录。
               </DialogPrimitive.Description>
             </div>
             <DialogPrimitive.Close asChild>
-              <IconButton label="关闭最近投递" size="sm"><X /></IconButton>
+              <IconButton label="关闭最近发送" size="sm"><X /></IconButton>
             </DialogPrimitive.Close>
           </header>
           <div className="mt-2 flex items-center justify-between gap-2">
-            <span className="inline-flex items-center gap-1 text-micro text-muted-foreground">
-              <ShieldCheck className="size-3 text-success" aria-hidden /> 本机当前数据目录
+            <span
+              className="inline-flex items-center gap-1 text-micro text-muted-foreground"
+              title={`仅保存时间、状态与数量，不保存正文；最多 ${DELIVERY_ACTIVITY_MAX_EVENTS} 条或 ${retentionDays} 天`}
+            >
+              <ShieldCheck className="size-3 text-success" aria-hidden /> 本机保存 · 不含正文
             </span>
             <button
               type="button"
@@ -460,6 +624,14 @@ export function RecentDeliveryDrawer({
                   );
                   requestResultLinkForDelivery(
                     sent ?? record,
+                    document.activeElement instanceof HTMLElement
+                      ? document.activeElement
+                      : null
+                  );
+                }}
+                onUnlink={(note) => {
+                  requestResultUnlink(
+                    note.id,
                     document.activeElement instanceof HTMLElement
                       ? document.activeElement
                       : null
