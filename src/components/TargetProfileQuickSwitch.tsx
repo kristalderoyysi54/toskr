@@ -1,4 +1,11 @@
-import { Check, Link2, RotateCcw, Settings2 } from "lucide-react";
+import {
+  Check,
+  Link2,
+  RotateCcw,
+  Settings2,
+  ShieldAlert,
+  ShieldCheck,
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ApplicationIcon } from "@/components/ApplicationIcon";
@@ -6,22 +13,80 @@ import type { AppIconInfo } from "@/lib/icons";
 import {
   DELIVERY_FORMAT_LABEL,
   ENTER_POLICY_STATUS_LABEL,
+  profileDiffSummary,
   quickSwitchKeyboardCommand,
   type QuickProfileOption,
 } from "@/lib/targetLens";
 import { cn } from "@/lib/utils";
 import { targetStatusLabel, type TargetStatus } from "@/store/targetStore";
 
-function ProfileSummary({ profile }: { profile: QuickProfileOption }) {
+/** 台账键/值样式（A 版定稿）：键 micro 灰右对齐，值 label 亮字左对齐，行高统一对基线。 */
+const LEDGER_KEY_CLS = "text-right text-micro leading-4 text-muted-foreground/70";
+const LEDGER_VALUE_CLS = "min-w-0 break-words text-label font-medium leading-4";
+
+/**
+ * 生效规则台账（快速切换浮层与透镜条展开区共用）：
+ * 五行两列取代「键：值」胶囊——键弱值强、逐行对齐；
+ * 警示值（自动回车 / 隐私未启用）染 warning，其余保持前景色。
+ */
+export function ProfileRuleLedger({
+  profile,
+  privacyCapabilityActive,
+  className,
+}: {
+  profile: QuickProfileOption;
+  privacyCapabilityActive: boolean;
+  className?: string;
+}) {
   return (
-    <span
-      className={cn(
-        "line-clamp-2 min-w-0 break-words text-micro leading-tight",
-        profile.enterPolicy === "allow" ? "text-warning" : "text-muted-foreground"
-      )}
+    <dl
+      aria-label="本次生效规则"
+      className={cn("grid grid-cols-[52px_1fr] gap-x-3 gap-y-1", className)}
     >
-      {profile.promptGroupName} · {DELIVERY_FORMAT_LABEL[profile.defaultFormat]} · {ENTER_POLICY_STATUS_LABEL[profile.enterPolicy]} · {profile.keepPanel ? "发送后保持打开" : "发送后关闭面板"}
-    </span>
+      <dt className={LEDGER_KEY_CLS}>提示词组</dt>
+      <dd className={LEDGER_VALUE_CLS}>{profile.promptGroupName}</dd>
+      <dt className={LEDGER_KEY_CLS}>输出格式</dt>
+      <dd className={LEDGER_VALUE_CLS}>
+        {DELIVERY_FORMAT_LABEL[profile.defaultFormat]}
+      </dd>
+      <dt className={LEDGER_KEY_CLS}>粘贴后</dt>
+      <dd
+        className={cn(
+          LEDGER_VALUE_CLS,
+          profile.enterPolicy === "allow" && "text-warning"
+        )}
+      >
+        {ENTER_POLICY_STATUS_LABEL[profile.enterPolicy]}
+      </dd>
+      <dt className={LEDGER_KEY_CLS}>完成后</dt>
+      <dd className={LEDGER_VALUE_CLS}>
+        {profile.keepPanel ? "保持打开" : "关闭面板"}
+      </dd>
+      <dt className={LEDGER_KEY_CLS}>隐私检查</dt>
+      <dd
+        className={cn(
+          LEDGER_VALUE_CLS,
+          "flex items-center gap-1",
+          !privacyCapabilityActive && "text-warning"
+        )}
+      >
+        {privacyCapabilityActive ? (
+          <ShieldCheck aria-hidden className="size-3 shrink-0 text-success" />
+        ) : (
+          <ShieldAlert aria-hidden className="size-3 shrink-0" />
+        )}
+        {privacyCapabilityActive ? "发送时执行" : "尚未启用"}
+      </dd>
+    </dl>
+  );
+}
+
+/** 区块标题（cap 样式）：中文吃字距不吃大小写，与分组头 tracking 同款。 */
+function SectionCap({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="mb-1.5 text-micro font-semibold tracking-[0.08em] text-muted-foreground/70">
+      {children}
+    </p>
   );
 }
 
@@ -68,13 +133,10 @@ export function TargetProfileQuickSwitch({
   const statusLabel = targetStatusLabel(status);
   const targetReady = status === "ready";
   const statusTone = targetReady
-    ? "bg-success/10 text-success"
+    ? "bg-success/10 text-success ring-success/30"
     : status === "blocked" || status === "unknown"
-      ? "bg-destructive/10 text-destructive"
-      : "bg-muted text-muted-foreground";
-  const privacyLabel = privacyCapabilityActive
-    ? "隐私检查：发送时执行"
-    : "隐私检查：尚未启用";
+      ? "bg-destructive/10 text-destructive ring-destructive/30"
+      : "bg-muted text-muted-foreground ring-border";
 
   useEffect(() => {
     if (activeIndex >= 0) return;
@@ -126,7 +188,7 @@ export function TargetProfileQuickSwitch({
   }, [activeIndex, currentProfile.id, onClose, onSelectTemporary, targetReady, visibleCandidates]);
 
   return (
-    <div className="flex min-w-0 flex-col gap-2" aria-label={`发送到 ${appName}`}>
+    <div className="flex min-w-0 flex-col" aria-label={`发送到 ${appName}`}>
       <header className="flex min-w-0 items-center gap-2">
         <ApplicationIcon
           src={icon?.url}
@@ -134,11 +196,12 @@ export function TargetProfileQuickSwitch({
           className="size-6 rounded-md"
         />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-title font-medium" title={appName}>
+          <p className="truncate text-title font-semibold" title={appName}>
             发送到 {appName}
           </p>
-          <p className="line-clamp-2 break-words text-micro leading-tight text-muted-foreground">
-            匹配来源：{matchReason}
+          {/* 匹配来源直接给结论（前缀「匹配来源：」是系统视角术语，去掉） */}
+          <p className="line-clamp-2 break-words text-micro leading-tight text-muted-foreground/75">
+            {matchReason}
           </p>
         </div>
         <span
@@ -146,7 +209,7 @@ export function TargetProfileQuickSwitch({
           aria-live="off"
           aria-label={`目标状态：${statusLabel}`}
           className={cn(
-            "inline-flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-0.5 text-micro font-medium",
+            "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-micro font-medium ring-1 ring-inset",
             statusTone
           )}
         >
@@ -155,21 +218,27 @@ export function TargetProfileQuickSwitch({
         </span>
       </header>
 
-      <section className="rounded-lg bg-muted/45 px-2 py-1.5" aria-label="当前发送方案">
-        <p className="text-micro text-muted-foreground">当前发送方案</p>
-        <p className="line-clamp-2 break-words text-body font-medium" title={currentProfile.name}>
-          {currentProfile.name}
-        </p>
-        <ProfileSummary profile={currentProfile} />
-      </section>
+      <div aria-hidden className="-mx-2 my-2.5 h-px bg-border/60" />
 
       <section aria-labelledby="quick-profile-options-label">
-        <p id="quick-profile-options-label" className="mb-1 text-micro font-medium text-muted-foreground">
-          快速选择 · ↑↓ 移动 · Enter 使用
+        <p
+          id="quick-profile-options-label"
+          className="mb-1.5 text-micro font-semibold tracking-[0.08em] text-muted-foreground/70"
+        >
+          发送方案
+          <span className="ml-1.5 font-normal tracking-normal text-muted-foreground/50">
+            ↑↓ 移动 · Enter 使用
+          </span>
         </p>
         <div role="listbox" aria-label="选择本次临时发送方案" className="space-y-0.5">
           {visibleCandidates.map((profile, index) => {
             const selected = profile.id === currentProfile.id;
+            const diffs = selected ? [] : profileDiffSummary(profile, currentProfile);
+            const diffText = diffs.length ? diffs.join(" · ") : "与当前参数相同";
+            // 差异里引入自动回车属于新增风险，副行整体染警示色
+            const diffWarning =
+              profile.enterPolicy === "allow" &&
+              profile.enterPolicy !== currentProfile.enterPolicy;
             return (
               <button
                 key={profile.id}
@@ -190,7 +259,7 @@ export function TargetProfileQuickSwitch({
                   "flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none transition-colors duration-100 motion-reduce:transition-none",
                   "focus-visible:ring-2 focus-visible:ring-primary/50 disabled:opacity-40",
                   selected
-                    ? "bg-primary/10 text-foreground"
+                    ? "bg-primary/10 ring-1 ring-inset ring-primary/25"
                     : "hover:bg-black/5 dark:hover:bg-white/10"
                 )}
               >
@@ -198,12 +267,27 @@ export function TargetProfileQuickSwitch({
                   aria-hidden
                   className={cn("size-3 shrink-0 text-primary", !selected && "invisible")}
                 />
-                <span className="min-w-0 flex-1">
-                  <span className="line-clamp-2 block break-words text-body font-medium">
-                    {profile.name}
-                  </span>
-                  <ProfileSummary profile={profile} />
+                <span
+                  className="min-w-0 shrink-0 truncate text-label font-semibold"
+                  title={profile.name}
+                >
+                  {profile.name}
                 </span>
+                {selected ? (
+                  <span className="ml-auto shrink-0 rounded-full bg-primary/15 px-1.5 py-px text-micro font-semibold text-primary">
+                    当前
+                  </span>
+                ) : (
+                  <span
+                    className={cn(
+                      "ml-auto min-w-0 truncate text-micro",
+                      diffWarning ? "text-warning" : "text-muted-foreground/80"
+                    )}
+                    title={diffText}
+                  >
+                    {diffText}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -215,36 +299,14 @@ export function TargetProfileQuickSwitch({
         </div>
       </section>
 
-      <section aria-label="本次真实生效规则" className="flex flex-wrap gap-1">
-        <span className="line-clamp-2 max-w-full break-words rounded-sm bg-muted/60 px-1.5 py-0.5 text-micro text-muted-foreground">
-          提示词组：{currentProfile.promptGroupName}
-        </span>
-        <span className="line-clamp-2 max-w-full break-words rounded-sm bg-muted/60 px-1.5 py-0.5 text-micro text-muted-foreground">
-          输出格式：{DELIVERY_FORMAT_LABEL[currentProfile.defaultFormat]}
-        </span>
-        <span
-          className={cn(
-            "line-clamp-2 max-w-full break-words rounded-sm px-1.5 py-0.5 text-micro",
-            currentProfile.enterPolicy === "allow"
-              ? "bg-warning/10 text-warning"
-              : "bg-muted/60 text-muted-foreground"
-          )}
-        >
-          粘贴后动作：{ENTER_POLICY_STATUS_LABEL[currentProfile.enterPolicy]}
-        </span>
-        <span className="line-clamp-2 max-w-full break-words rounded-sm bg-muted/60 px-1.5 py-0.5 text-micro text-muted-foreground">
-          发送完成后：{currentProfile.keepPanel ? "保持打开" : "关闭面板"}
-        </span>
-        <span
-          className={cn(
-            "line-clamp-2 max-w-full break-words rounded-sm px-1.5 py-0.5 text-micro",
-            privacyCapabilityActive
-              ? "bg-muted/60 text-muted-foreground"
-              : "bg-warning/10 text-warning"
-          )}
-        >
-          {privacyLabel}
-        </span>
+      <div aria-hidden className="-mx-2 my-2.5 h-px bg-border/60" />
+
+      <section aria-label="本次生效规则">
+        <SectionCap>本次生效规则</SectionCap>
+        <ProfileRuleLedger
+          profile={currentProfile}
+          privacyCapabilityActive={privacyCapabilityActive}
+        />
       </section>
 
       {temporaryProfileId && canMakePermanent && (
@@ -254,7 +316,7 @@ export function TargetProfileQuickSwitch({
             onMakePermanent();
             onClose();
           }}
-          className="flex min-w-0 items-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-left text-body outline-none hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-primary/50 dark:hover:bg-white/10"
+          className="mt-2.5 flex min-w-0 items-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-left text-body outline-none hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-primary/50 dark:hover:bg-white/10"
         >
           <Link2 aria-hidden className="size-3.5 shrink-0" />
           <span className="line-clamp-2 break-words">
@@ -263,10 +325,11 @@ export function TargetProfileQuickSwitch({
         </button>
       )}
 
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/60 pt-1.5">
+      <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/60 pt-2">
         <button
           type="button"
           disabled={!temporaryProfileId}
+          title={`恢复自动匹配：${automaticProfileName}`}
           onClick={() => {
             onRestoreAutomatic();
             onClose();
@@ -274,10 +337,11 @@ export function TargetProfileQuickSwitch({
           className="flex items-center gap-1 rounded-sm text-micro text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50 disabled:opacity-40"
         >
           <RotateCcw aria-hidden className="size-3" />
-          恢复自动匹配：{automaticProfileName}
+          恢复自动匹配
         </button>
         <button
           type="button"
+          title={`编辑 ${appName} 的发送方案`}
           onClick={() => {
             onClose();
             onEdit();
@@ -285,7 +349,7 @@ export function TargetProfileQuickSwitch({
           className="ml-auto flex items-center gap-1 rounded-sm text-micro text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50"
         >
           <Settings2 aria-hidden className="size-3" />
-          编辑 {appName} 的发送方案
+          编辑方案
         </button>
       </div>
     </div>

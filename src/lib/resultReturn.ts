@@ -1,5 +1,8 @@
-import type { DeliveryEvent } from "@/lib/deliveryActivityCore";
-import type { Note } from "@/store/notesStore";
+import {
+  recordDeliveryEvent,
+  type DeliveryEvent,
+} from "@/lib/deliveryActivityCore";
+import { useNotesStore, type Note, type NoteProvenance } from "@/store/notesStore";
 
 export const RESULT_ASSOCIATION_WINDOW_MS = 30 * 60 * 1_000;
 const MAX_REDACTION_SESSIONS = 32;
@@ -201,6 +204,45 @@ export function deliveryPlaceholderCounts(
 
 export function clearDeliveryRedactionSessions(): void {
   redactionSessions.clear();
+}
+
+/** 捕获原文是否含有该次投递发出的占位符——自动归位的指纹证据（仅会话内存可查）。 */
+export function deliveryPlaceholderEvidence(
+  deliveryId: string,
+  text: string
+): boolean {
+  const counts = redactionSessions.get(deliveryId)?.placeholderCounts;
+  if (!counts || !text) return false;
+  return Object.keys(counts).some((placeholder) => text.includes(placeholder));
+}
+
+/**
+ * 免确认自动归位：把捕获的回复卡写为某次投递的结果（provenance + resultCaptured 事件）。
+ * 只对没有既有归属的卡片生效；调用方需自行保证证据充分（唯一候选 + 占位符指纹）。
+ */
+export async function linkCapturedNoteToDelivery(
+  noteId: string,
+  delivery: DeliveryEvent
+): Promise<boolean> {
+  const note = useNotesStore.getState().notes.find((item) => item.id === noteId);
+  if (!note || note.provenance || !delivery.targetBundleId) return false;
+  const provenance: NoteProvenance = {
+    kind: "deliveryResult",
+    deliveryId: delivery.deliveryId,
+    capturedAtMs: note.createdAt,
+    sourceBundle: delivery.targetBundleId,
+    sourceItemIds: [...delivery.sourceItemIds],
+  };
+  if (!useNotesStore.getState().setNoteProvenance(noteId, provenance)) {
+    return false;
+  }
+  const recorded = await recordDeliveryEvent(
+    resultCapturedEvent(delivery, noteId)
+  );
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(RESULT_LINK_CHANGED_EVENT));
+  }
+  return recorded;
 }
 
 export function previewRestoredPlaceholders(

@@ -171,6 +171,8 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
           firewallEnabled: settings.firewallEnabled,
           firewallDisabledWarnCategories:
             settings.firewallDisabledWarnCategories,
+          aliasEntitiesEnabled: settings.aliasEntitiesEnabled,
+          aliasEntities: settings.aliasEntities,
         }
       );
     },
@@ -182,6 +184,8 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
       pinned,
       relevantHere,
       resolution,
+      settings.aliasEntities,
+      settings.aliasEntitiesEnabled,
       settings.firewallDisabledWarnCategories,
       settings.firewallEnabled,
       settings.promptSnippets,
@@ -198,7 +202,8 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
       aria-label="批量操作"
       className={cn(
         "flex items-center gap-0.5 rounded-xl border border-black/10 bg-white/70 px-2 py-1.5 elevation-3 dark:border-white/10 dark:bg-black/40",
-        compact ? "absolute bottom-2 right-3 z-30" : "mx-3 mb-1"
+        // 竖栏形态四周等距：左右/底部均 8px，与列表卡片同一对齐系
+        compact ? "absolute bottom-2 right-3 z-30" : "mx-2 mb-2"
       )}
     >
       <span className="px-1 text-label tabular-nums text-muted-foreground">

@@ -14,6 +14,7 @@ import type {
   TargetProfileResolutionSource,
 } from "@/lib/targetProfiles";
 import type { Note, Task } from "@/store/notesStore";
+import type { AliasEntity } from "./aliasEntities";
 import type {
   FirewallStatus,
   PrivacyDecision,
@@ -91,6 +92,8 @@ export interface DeliveryDraft {
   findings: FirewallFinding[];
   /** 原值 → 稳定占位符，仅存在于非持久化 DeliveryStore 会话。 */
   redactionMap: Record<string, string>;
+  /** 构建时按词典自动化名的命中数；预检逐项还原会递减。 */
+  aliasReplacedCount: number;
   scanRevision: number;
   privacyDecision: PrivacyDecision;
   enterPolicy: EnterPolicy;
@@ -128,4 +131,6 @@ export interface DeliveryDraftBuildState {
   dataGeneration: number;
   firewallEnabled: boolean;
   firewallDisabledWarnCategories: readonly FindingCategory[];
+  aliasEntitiesEnabled: boolean;
+  aliasEntities: readonly AliasEntity[];
 }

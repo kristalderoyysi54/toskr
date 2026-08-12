@@ -12,7 +12,6 @@ import {
   ArrowDown,
   ArrowUp,
   Check,
-  ChevronRight,
   ClipboardList,
   Database,
   Info,
@@ -27,9 +26,11 @@ import {
 } from "lucide-react";
 
 import { SimpleSelect } from "@/components/SimpleSelect";
+import { AliasEntitySettings } from "@/components/settings/AliasEntitySettings";
 import { TargetProfileManager } from "@/components/settings/TargetProfileManager";
 import { OutcomeInsightsSection } from "@/components/settings/OutcomeInsightsSection";
 import { useAppIdentity } from "@/components/settings/useAppIdentity";
+import { Disclosure } from "@/components/ui/disclosure";
 import { IconButton } from "@/components/ui/icon-button";
 import { ProgressBar } from "@/components/ui/progress-bar";
 import { Segmented } from "@/components/ui/segmented";
@@ -396,26 +397,6 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   return <h2 className="mb-3 text-heading font-semibold">{children}</h2>;
 }
 
-/** 渐进式披露：次要设置默认收起，点标题展开（重要项默认可见，细节按需）。 */
-function Disclosure({ title, children }: { title: string; children: React.ReactNode }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="mb-5">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1 rounded-md py-0.5 text-body font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50"
-      >
-        <ChevronRight
-          className={cn("size-3.5 transition-transform", open && "rotate-90")}
-        />
-        {title}
-      </button>
-      {open && <div className="mt-1.5">{children}</div>}
-    </div>
-  );
-}
 
 function Group({ title, children }: { title?: string; children: React.ReactNode }) {
   return (
@@ -674,7 +655,7 @@ function GeneralSection({ settings, patch }: SP) {
         )}
         <Row
           label="卡片彩色通栏"
-          hint="用来源应用图标主色作卡片顶栏底色；关闭则统一中性灰"
+          hint="笔记卡顶栏底色：分组色优先、无分组色用来源应用主色；关闭统一中性灰"
           right={
             <Switch
               aria-label="卡片彩色通栏"
@@ -698,6 +679,24 @@ function GeneralSection({ settings, patch }: SP) {
             />
           }
         />
+        {settings.cardDensity === "comfortable" && (
+          <Row
+            label="剪贴卡模板"
+            hint="只影响剪贴页：浓缩＝票据头＋单行摘要；单行＝只留票据头行，内容看预览"
+            right={
+              <Segmented<Settings["clipCardTemplate"]>
+                value={settings.clipCardTemplate}
+                options={[
+                  { value: "standard", label: "标准" },
+                  { value: "condensed", label: "浓缩" },
+                  { value: "banner", label: "单行" },
+                ]}
+                onChange={(v) => patch({ clipCardTemplate: v })}
+                ariaLabel="剪贴卡模板"
+              />
+            }
+          />
+        )}
         <Row
           label="卡片底色不透明度"
           hint="调低可透出毛玻璃背景；100% 为实色卡片"
@@ -1346,14 +1345,19 @@ function TargetSection({
       <p className="mb-3 text-body text-muted-foreground">
         Toskr 会根据当前目标应用自动选择发送方案。方案决定提示词组、输出格式、粘贴后动作和出站隐私策略。
       </p>
-      <FirewallSettings settings={settings} patch={patch} />
       <TargetProfileManager
         settings={settings}
         patch={patch}
         requestedProfileId={targetProfileRequest?.profileId ?? null}
         requestSequence={targetProfileRequest?.sequence ?? 0}
       />
-      <SnippetsSection settings={settings} patch={patch} />
+      <Disclosure title="隐私与化名">
+        <FirewallSettings settings={settings} patch={patch} />
+        <AliasEntitySettings settings={settings} patch={patch} />
+      </Disclosure>
+      <Disclosure title="提示词组">
+        <SnippetsSection settings={settings} patch={patch} />
+      </Disclosure>
     </div>
   );
 }
@@ -1361,9 +1365,9 @@ function TargetSection({
 function FirewallSettings({ settings, patch }: SP) {
   const disabled = new Set(settings.firewallDisabledWarnCategories);
   return (
-    <Group title="Context Firewall（仅本机文本检查）">
+    <Group title="发送前隐私检查（仅本机文本检查）">
       <Row
-        label="发送前隐私检查"
+        label="启用隐私检查"
         hint="默认开启；快速发送也会先检查，有风险时自动进入预检"
         right={
           <Switch
@@ -1602,7 +1606,10 @@ function AiSection({ settings, patch }: SP) {
       await testAiConnection(settings.aiBaseUrl, settings.aiModel);
       tip("ok", "AI 连接成功");
     } catch (error) {
-      tip("warn", `连接失败：${String(error).slice(0, 80)}`);
+      tip(
+        "warn",
+        `连接失败：${(error instanceof Error ? error.message : String(error)).slice(0, 120)}`
+      );
     } finally {
       setTesting(false);
     }

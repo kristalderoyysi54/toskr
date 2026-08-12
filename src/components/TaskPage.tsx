@@ -137,7 +137,7 @@ export function TaskPage({ buckets, now }: { buckets: TaskBuckets; now: number }
   return (
     <>
       <TaskQuickAdd />
-      <ScrollArea className="min-h-0 flex-1 px-2">
+      <ScrollArea className="min-h-0 flex-1 px-3.5">
         {empty ? (
           <EmptyState
             icon={<ListTodo />}
@@ -195,7 +195,7 @@ export function TaskPage({ buckets, now }: { buckets: TaskBuckets; now: number }
                     已完成 {buckets.done.length}
                   </button>
                   {doneOpen && (
-                    <div className="mt-1 flex flex-col gap-1 pl-2">
+                    <div className="mt-1 flex flex-col gap-1">
                       {buckets.done.map((t) => (
                         <TaskRow key={t.id} task={t} now={now} />
                       ))}
@@ -262,7 +262,7 @@ function SmartSection({
         <h3 className={headingCls}>{heading}</h3>
       )}
       {!collapsed && (
-        <div className="flex flex-col gap-1 pl-2">
+        <div className="flex flex-col gap-1">
           {tasks.map((t) => (
             <TaskRow key={t.id} task={t} now={now} />
           ))}
@@ -429,7 +429,7 @@ function TaskGroupBlock({
           strategy={verticalListSortingStrategy}
         >
           {tasks.length ? (
-            <div className="flex flex-col gap-1 pl-2">
+            <div className="flex flex-col gap-1">
               {tasks.map((t) => (
                 <TaskRow key={t.id} task={t} now={now} />
               ))}

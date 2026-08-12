@@ -18,8 +18,9 @@ use crate::state::{AppState, EdgeHideAnchor};
 
 /// 面板与 HUD 距工作区边缘的逻辑边距（pt）。
 const MARGIN: f64 = 12.0;
-const HUD_WIDTH: f64 = 240.0;
-const HUD_HEIGHT: f64 = 56.0;
+const HUD_WIDTH: f64 = 264.0;
+// 气泡（两行 ≈48 含顶部投影余量）+ 尾巴/间距 6 + logo 36 + 底部投影余量 ≈ 100
+const HUD_HEIGHT: f64 = 100.0;
 /// HUD 无悬停时的展示时长（ms）。
 const HUD_DURATION_MS: u64 = 1600;
 /// 伴随模式自动高度的下限（pt）。

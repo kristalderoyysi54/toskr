@@ -167,7 +167,9 @@ describe("result verification", () => {
       expectation({ expectedPlaceholderCounts: null })
     );
     expect(expired.status).toBe("needsReview");
-    expect(expired.risks.join(" ")).toContain("映射已失效");
+    // 人话降级：说清原因（重启/久远）+ 影响范围（临时占位符无法核对）
+    expect(expired.risks.join(" ")).toContain("应用重启过或该次发送较久");
+    expect(expired.risks.join(" ")).toContain("[EMAIL_01] 无法判断是否来自本次发送");
 
     const expiredWithoutVisiblePlaceholder = verifyResultDeterministically(
       buildVerificationContext(resultNote("结果正文足够长，但当前没有可见占位符。"), [sourceNote("普通来源正文")], []),
@@ -176,7 +178,43 @@ describe("result verification", () => {
     expect(expiredWithoutVisiblePlaceholder.status).toBe("needsReview");
     expect(expiredWithoutVisiblePlaceholder.checks.find(
       (check) => check.id === "privacy.placeholders"
-    )?.message).toContain("无法完整核对");
+    )?.message).toContain("无法确认是否有占位符丢失");
+  });
+
+  it("会话清单失效后仍用持久词典识别化名，只对临时占位符降级", () => {
+    const dictionary = [{ placeholder: "[USER_01]" }];
+    const mixed = verifyResultDeterministically(
+      buildVerificationContext(
+        resultNote("请转告 [USER_01]，抄送 [EMAIL_01]，其余照旧执行。"),
+        [sourceNote("普通来源正文")],
+        [],
+        dictionary
+      ),
+      expectation({ expectedPlaceholderCounts: null })
+    );
+    expect(mixed.status).toBe("needsReview");
+    const mixedCheck = mixed.checks.find(
+      (check) => check.id === "privacy.placeholders"
+    );
+    expect(mixedCheck?.message).toContain("词典化名 1 处可识别");
+    expect(mixedCheck?.message).toContain("1 处临时占位符无法核对");
+    expect(mixed.risks.join(" ")).toContain("[EMAIL_01]");
+    expect(mixed.risks.join(" ")).not.toContain("[USER_01] 无法判断");
+
+    const dictionaryOnly = verifyResultDeterministically(
+      buildVerificationContext(
+        resultNote("请转告 [USER_01]，其余按原计划执行即可。"),
+        [sourceNote("普通来源正文")],
+        [],
+        dictionary
+      ),
+      expectation({ expectedPlaceholderCounts: null })
+    );
+    const dictionaryCheck = dictionaryOnly.checks.find(
+      (check) => check.id === "privacy.placeholders"
+    );
+    expect(dictionaryCheck?.message).toContain("词典化名 1 处均可识别、可恢复");
+    expect(dictionaryOnly.risks.join(" ")).not.toContain("无法判断是否来自本次发送");
   });
 
   it("JSON 必填路径只接受对象自身字段，不把原型属性误判为结果字段", () => {

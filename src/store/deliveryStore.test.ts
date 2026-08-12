@@ -51,6 +51,7 @@ function draft(): DeliveryDraft {
     firewallStatus: "ready",
     findings: [],
     redactionMap: {},
+    aliasReplacedCount: 0,
     scanRevision: 1,
     privacyDecision: {
       excludedFindingIds: [],
@@ -306,5 +307,48 @@ describe("deliveryStore", () => {
     expect(serializePersistentState(useNotesStore.getState())).not.toContain(raw);
     useDeliveryStore.getState().closeDraft();
     expect(useDeliveryStore.getState().draft).toBeNull();
+  });
+});
+
+describe("revertAliasFinding", () => {
+  beforeEach(() => resetDeliveryStore());
+
+  function aliasedDraft(): DeliveryDraft {
+    return {
+      ...draft(),
+      assembledText: "通知 [USER_01] 到场",
+      finalText: "通知 [USER_01] 到场",
+      redactionMap: { 张三: "[USER_01]" },
+      aliasReplacedCount: 1,
+    };
+  }
+
+  it("按鲜活偏移量还原原文，递减计数并触发隐私重扫描", () => {
+    useDeliveryStore.getState().openDraft(aliasedDraft());
+    useDeliveryStore.getState().revertAliasFinding({
+      startUtf16: 3,
+      endUtf16: 12,
+      placeholder: "[USER_01]",
+      originalText: "张三",
+    });
+    const next = useDeliveryStore.getState().draft!;
+    expect(next.finalText).toBe("通知 张三 到场");
+    expect(next.aliasReplacedCount).toBe(0);
+    // invalidatePrivacy：扫描状态复位并推进 scanRevision
+    expect(next.firewallStatus).toBe("idle");
+    expect(next.scanRevision).toBe(2);
+  });
+
+  it("偏移量已失效（文本被编辑）时静默忽略", () => {
+    useDeliveryStore.getState().openDraft(aliasedDraft());
+    useDeliveryStore.getState().setFinalText("完全不同的正文");
+    const before = useDeliveryStore.getState().draft!;
+    useDeliveryStore.getState().revertAliasFinding({
+      startUtf16: 3,
+      endUtf16: 12,
+      placeholder: "[USER_01]",
+      originalText: "张三",
+    });
+    expect(useDeliveryStore.getState().draft).toBe(before);
   });
 });

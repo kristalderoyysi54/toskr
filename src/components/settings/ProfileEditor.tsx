@@ -257,11 +257,12 @@ export function ProfileEditor({
         </div>
       </EditorSection>
 
-      <EditorSection number={5} title="发送前隐私检查">
+      {/* 与全局「发送前隐私检查」总开关区分：此处只决定命中敏感项后的处置粒度 */}
+      <EditorSection number={5} title="隐私命中后处理策略">
         <div className="rounded-xl border border-warning/40 bg-warning/10 p-2.5">
           <div className="flex flex-wrap items-center gap-1.5">
             <ShieldAlert aria-hidden className="size-4 text-warning" />
-            <p className="text-body font-semibold">发送前隐私检查</p>
+            <p className="text-body font-semibold">隐私命中后处理策略</p>
             <span className={cn(
               "rounded-sm px-1.5 py-0.5 text-micro font-medium",
               firewallEnabled

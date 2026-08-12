@@ -2,6 +2,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CurrentTargetPreview } from "@/components/settings/CurrentTargetPreview";
+import { Disclosure } from "@/components/ui/disclosure";
 import { ProfileConflictResolver } from "@/components/settings/ProfileConflictResolver";
 import { ProfileCreateSheet } from "@/components/settings/ProfileCreateSheet";
 import { ProfileEditor } from "@/components/settings/ProfileEditor";
@@ -111,6 +112,21 @@ export function TargetProfileManager({
     }
   }, [currentResolution.profileId, selectedProfileId, settings.targetProfiles]);
 
+  // 方案管理默认折叠（回答「现在会发生什么」的当前目标卡常驻即可）；
+  // 深链首帧直接展开，避免先收起再展开的闪动
+  const [managementOpen, setManagementOpen] = useState(
+    () => Boolean(requestedProfileId) && requestSequence > 0
+  );
+  const [scrollRequestId, setScrollRequestId] = useState(0);
+  const openManagementAndScroll = () => {
+    setManagementOpen(true);
+    setScrollRequestId((n) => n + 1);
+  };
+  useEffect(() => {
+    if (scrollRequestId === 0) return;
+    scrollSettingsElementIntoView("target-profile-management");
+  }, [scrollRequestId]);
+
   useEffect(() => {
     if (
       requestSequence <= handledRequestSequence.current ||
@@ -122,6 +138,7 @@ export function TargetProfileManager({
     handledRequestSequence.current = requestSequence;
     selectionTouched.current = true;
     setSelectedProfileId(requestedProfileId);
+    openManagementAndScroll();
   }, [requestSequence, requestedProfileId, settings.targetProfiles]);
 
   const selectedProfile =
@@ -204,6 +221,12 @@ export function TargetProfileManager({
     );
   };
 
+  const editCurrentlyResolvedProfile = () => {
+    selectionTouched.current = true;
+    setSelectedProfileId(currentResolution.profileId);
+    openManagementAndScroll();
+  };
+
   return (
     <div className="mb-5 min-w-0">
       <CurrentTargetPreview
@@ -213,13 +236,25 @@ export function TargetProfileManager({
         testMessage={testMessage}
         onRefresh={() => void refreshCurrentTarget()}
         onTest={testCurrentTarget}
+        onEditProfile={editCurrentlyResolvedProfile}
       />
 
       <ProfileConflictResolver
         profiles={settings.targetProfiles}
-        onResolve={(targetProfiles) => patch({ targetProfiles })}
+        onResolve={(targetProfiles) => {
+          patch({ targetProfiles });
+          // 修复后的焦点兜底目标在管理区里，须同步展开（不能异步，
+          // 保证 requestAnimationFrame 前 ProfileList 已在 DOM）
+          openManagementAndScroll();
+        }}
       />
 
+      <Disclosure
+        title="发送方案管理"
+        id="target-profile-management"
+        open={managementOpen}
+        onOpenChange={setManagementOpen}
+      >
       <div className="grid min-w-0 gap-3 lg:grid-cols-3">
         <ProfileList
           profiles={settings.targetProfiles}
@@ -278,6 +313,21 @@ export function TargetProfileManager({
           setSelectedProfileId(profile.id);
         }}
       />
+      </Disclosure>
     </div>
   );
+}
+
+/** 只滚动设置页 main 容器（scrollTo 自带钳制）；不能用 scrollIntoView：
+ *  它会连带程序化滚动 overflow:hidden 的 body，把整页顶出可视区露出窗口底色。 */
+function scrollSettingsElementIntoView(elementId: string) {
+  const target = document.getElementById(elementId);
+  const container = target?.closest("main");
+  if (!target || !container) return;
+  const top =
+    container.scrollTop +
+    target.getBoundingClientRect().top -
+    container.getBoundingClientRect().top -
+    12;
+  container.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
 }

@@ -1,4 +1,8 @@
-import type { DeliveryFormat, EnterPolicy } from "@/lib/targetProfiles";
+import type {
+  DeliveryFormat,
+  EnterPolicy,
+  TargetProfileResolutionSource,
+} from "@/lib/targetProfiles";
 
 export interface TargetLensDisclosureState {
   expanded: boolean;
@@ -55,6 +59,30 @@ export const ENTER_POLICY_STATUS_LABEL: Record<EnterPolicy, string> = {
   allow: "自动按回车 · 高风险",
 };
 
+/** 折叠态隐藏风险的具体原因；供 chevron 的 title/aria 拼接，解释警示圆点。 */
+export function hiddenWarningReasons(input: {
+  privacyCapabilityActive: boolean;
+  enterPolicy: EnterPolicy;
+  profileSource: TargetProfileResolutionSource;
+}): string[] {
+  const reasons: string[] = [];
+  if (!input.privacyCapabilityActive) reasons.push("隐私检查已关闭");
+  if (input.enterPolicy === "allow") reasons.push("自动回车已开启");
+  if (input.profileSource === "conflict") reasons.push("方案存在重复绑定冲突");
+  return reasons;
+}
+
+/** 匹配来源的唯一中文措辞（DeliveryTrack 与当前匹配卡共用，消费方可拼接上下文）。 */
+export const TARGET_PROFILE_SOURCE_LABEL: Record<
+  TargetProfileResolutionSource,
+  string
+> = {
+  temporary: "仅本次手动选择",
+  exact: "应用指定",
+  fallback: "未识别应用的默认方案",
+  conflict: "重复绑定冲突",
+};
+
 export interface QuickProfileOption {
   id: string;
   name: string;
@@ -62,6 +90,31 @@ export interface QuickProfileOption {
   defaultFormat: DeliveryFormat;
   enterPolicy: EnterPolicy;
   keepPanel: boolean;
+}
+
+/**
+ * 候选方案相对当前方案的差异摘要（快速切换列表副行）：只报不同的维度，
+ * 避免整串参数复读；参数完全一致时返回空数组（渲染层显示「与当前参数相同」）。
+ * 自动回车是高风险差异，措辞必须完整携带风险标注。
+ */
+export function profileDiffSummary(
+  profile: QuickProfileOption,
+  current: QuickProfileOption
+): string[] {
+  const diffs: string[] = [];
+  if (profile.promptGroupName !== current.promptGroupName) {
+    diffs.push(`提示词组改为${profile.promptGroupName}`);
+  }
+  if (profile.defaultFormat !== current.defaultFormat) {
+    diffs.push(`输出改为${DELIVERY_FORMAT_LABEL[profile.defaultFormat]}`);
+  }
+  if (profile.enterPolicy !== current.enterPolicy) {
+    diffs.push(`粘贴后改为${ENTER_POLICY_STATUS_LABEL[profile.enterPolicy]}`);
+  }
+  if (profile.keepPanel !== current.keepPanel) {
+    diffs.push(profile.keepPanel ? "完成后保持打开" : "完成后关闭面板");
+  }
+  return diffs;
 }
 
 export type QuickSwitchKeyboardCommand =

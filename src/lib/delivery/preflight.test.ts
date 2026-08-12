@@ -28,6 +28,7 @@ import {
   deliveryRetryIsSafe,
   dispatchDeliveryDraft,
   rebuildPreflightDraft,
+  recoverOpenPreflightTarget,
   shouldOpenPreflight,
   submitPreflightDraft,
   updateOpenPreflightDraft,
@@ -41,7 +42,11 @@ import {
 import type { SendDeliveryResult, TargetSnapshot } from "@/lib/tauri";
 import type { TargetProfileResolution } from "@/lib/targetProfiles";
 import type { DeliveryDraftBuildState } from "./types";
-import { resetTargetState, useTargetStore } from "@/store/targetStore";
+import {
+  applyTargetEvent,
+  resetTargetState,
+  useTargetStore,
+} from "@/store/targetStore";
 import { useNotesStore } from "@/store/notesStore";
 
 const target: TargetSnapshot = {
@@ -107,6 +112,7 @@ function draft(overrides: Partial<DeliveryDraft> = {}): DeliveryDraft {
     firewallEnabled: true,
     firewallDisabledWarnCategories: [],
     firewallStatus: "ready",
+    aliasReplacedCount: 0,
     findings: [],
     redactionMap: {},
     scanRevision: 1,
@@ -217,6 +223,8 @@ describe("rebuildPreflightDraft", () => {
       dataGeneration: 999,
       firewallEnabled: true,
       firewallDisabledWarnCategories: [],
+      aliasEntitiesEnabled: true,
+      aliasEntities: [],
     };
 
     const rebuilt = rebuildPreflightDraft(
@@ -561,5 +569,50 @@ describe("preflight controller", () => {
       pressEnter: true,
       firewallStatus: "ready",
     }));
+  });
+});
+
+describe("recoverOpenPreflightTarget", () => {
+  beforeEach(() => {
+    resetDeliveryStore();
+    resetTargetState();
+  });
+
+  it("同一目标身份仅 token 轮换时自动重基线，预检内容与隐私状态保留", () => {
+    applyTargetEvent({ ...target, token: "token-next", revision: 2, capturedAtMs: 30 });
+    const value = draft({ redactionMap: { 张三: "[USER_01]" }, aliasReplacedCount: 1 });
+    useDeliveryStore.getState().openDraft(value);
+
+    expect(recoverOpenPreflightTarget(() => null)).toBe(true);
+    const next = useDeliveryStore.getState().draft!;
+    expect(next.targetSnapshot?.token).toBe("token-next");
+    expect(next.revision).toBeGreaterThan(value.revision);
+    expect(next.finalText).toBe(value.finalText);
+    expect(next.redactionMap).toEqual({ 张三: "[USER_01]" });
+    expect(useDeliveryStore.getState().open).toBe(true);
+  });
+
+  it("目标身份变化（重启/换窗口）时拒绝自动重绑", () => {
+    applyTargetEvent({
+      ...target,
+      token: "token-next",
+      launchedAtMs: 99,
+      revision: 2,
+    });
+    const value = draft();
+    useDeliveryStore.getState().openDraft(value);
+
+    expect(recoverOpenPreflightTarget(() => null)).toBe(false);
+    expect(useDeliveryStore.getState().draft?.targetSnapshot?.token).toBe(target.token);
+  });
+
+  it("token 未变化时幂等 no-op；来源/方案漂移时拒绝恢复", () => {
+    applyTargetEvent({ ...target });
+    useDeliveryStore.getState().openDraft(draft());
+    expect(recoverOpenPreflightTarget(() => null)).toBe(false);
+
+    applyTargetEvent({ ...target, token: "token-next", revision: 2 });
+    expect(recoverOpenPreflightTarget(() => "source")).toBe(false);
+    expect(useDeliveryStore.getState().draft?.targetSnapshot?.token).toBe(target.token);
   });
 });

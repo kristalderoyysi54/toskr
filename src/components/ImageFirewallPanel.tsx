@@ -130,7 +130,7 @@ export function ImageFirewallPanel({
       <div className="flex items-center gap-1.5">
         <ImageIcon className="size-3.5 text-warning" aria-hidden />
         <p className="text-label font-medium">
-          图片 Firewall · {draft.imageFirewall.length} 张
+          图片隐私检查 · {draft.imageFirewall.length} 张
         </p>
         <span className="ml-auto text-micro text-muted-foreground">
           {evaluation.canSend ? "可发送" : evaluation.reason ?? "等待检查"}

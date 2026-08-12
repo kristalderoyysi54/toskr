@@ -157,6 +157,7 @@ function draft(overrides: Partial<DeliveryDraft> = {}): DeliveryDraft {
       },
     ],
     redactionMap: { "sk-secret": "[API_KEY_01]" },
+    aliasReplacedCount: 0,
     scanRevision: 1,
     privacyDecision: {
       excludedFindingIds: [],

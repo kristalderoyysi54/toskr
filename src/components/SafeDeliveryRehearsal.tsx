@@ -179,9 +179,9 @@ function StepContent(props: SafeDeliveryRehearsalViewProps) {
     case "delivery":
       return (
         <>
-          <p className="text-body font-medium">脱敏、核对 finalText，再安全发送</p>
+          <p className="text-body font-medium">脱敏、核对最终正文，再安全发送</p>
           <p className="mt-1 text-label text-muted-foreground">
-            Context Firewall 会识别假邮箱；请应用替换并检查最终正文。演练安全锁下自动回车始终关闭。
+            本地隐私检查会识别假邮箱；请应用替换并检查最终正文。演练安全锁下自动回车始终关闭。
           </p>
           <Button size="xs" className="mt-2" onClick={props.onOpenPreflight}>
             {onboarding.rehearsalStep === "delivery" ? "重新打开演练预检" : "打开演练预检"}

@@ -11,7 +11,10 @@ import {
 } from "react";
 
 import { ApplicationIcon } from "@/components/ApplicationIcon";
-import { TargetProfileQuickSwitch } from "@/components/TargetProfileQuickSwitch";
+import {
+  ProfileRuleLedger,
+  TargetProfileQuickSwitch,
+} from "@/components/TargetProfileQuickSwitch";
 import { RecentDeliveryDrawer } from "@/components/RecentDeliveryDrawer";
 import { IconButton } from "@/components/ui/icon-button";
 import {
@@ -29,6 +32,7 @@ import {
   canPermanentlyAssignTargetProfileOverride,
   DELIVERY_FORMAT_LABEL,
   ENTER_POLICY_STATUS_LABEL,
+  hiddenWarningReasons,
   INITIAL_TARGET_LENS_DISCLOSURE_STATE,
   shouldClearOpenQuickSwitchOverride,
   targetLensDetailsExpanded,
@@ -133,27 +137,6 @@ function targetMatchReason(input: {
   }
 }
 
-function TargetRuleTag({
-  children,
-  warning = false,
-}: {
-  children: React.ReactNode;
-  warning?: boolean;
-}) {
-  return (
-    <span
-      className={cn(
-        "min-w-0 max-w-full rounded-sm px-1.5 py-0.5 text-micro leading-tight",
-        warning
-          ? "bg-warning/10 text-warning"
-          : "bg-muted/60 text-muted-foreground"
-      )}
-    >
-      <span className="line-clamp-2 break-words">{children}</span>
-    </span>
-  );
-}
-
 export function TargetLensView({
   snapshot,
   status,
@@ -237,10 +220,18 @@ export function TargetLensView({
     (!privacyCapabilityActive ||
       enterPolicy === "allow" ||
       profileSource === "conflict");
+  // hover chevron 即见具体风险原因（同时解释右上角警示圆点），不必先展开
+  const hiddenWarningDetail = hasHiddenWarning
+    ? hiddenWarningReasons({
+        privacyCapabilityActive,
+        enterPolicy,
+        profileSource,
+      }).join("、")
+    : "";
   const disclosureLabel = detailsExpanded
     ? "收起发送详情"
-    : hasHiddenWarning
-      ? "展开发送详情，包含风险项"
+    : hiddenWarningDetail
+      ? `展开发送详情 · ${hiddenWarningDetail}`
       : "展开发送详情";
   const currentQuickProfile = useMemo<QuickProfileOption>(
     () => ({
@@ -317,7 +308,6 @@ export function TargetLensView({
           <IconButton
             ref={activityButtonRef}
             label="打开最近发送"
-            withTitle={false}
             size="xs"
             onClick={onOpenActivity}
           >
@@ -388,7 +378,7 @@ export function TargetLensView({
         >
           <div className="flex min-w-0 items-center gap-1.5">
             <span className="shrink-0 text-micro text-muted-foreground">
-              当前方案
+              方案
             </span>
             <Popover open={quickSwitchOpen} onOpenChange={onQuickSwitchOpenChange}>
               <PopoverTrigger asChild>
@@ -398,14 +388,17 @@ export function TargetLensView({
                   title={profileName}
                   aria-label={`本次发送方案：${profileName}，点击查看与切换`}
                   className={cn(
-                    "flex min-w-0 max-w-40 items-center gap-0.5 rounded-sm border px-1.5 py-0.5 text-micro outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-primary/50",
+                    "flex min-w-0 max-w-40 items-center gap-1 rounded-md border px-1.5 py-0.5 text-label outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-primary/50",
                     profileOverrideId
                       ? "border-primary/50 text-primary"
-                      : "border-border text-muted-foreground"
+                      : "border-border text-foreground"
                   )}
                 >
-                  <span className="truncate">{profileName}</span>
-                  <ChevronDown aria-hidden className="size-2.5 shrink-0" />
+                  <span className="truncate font-medium">{profileName}</span>
+                  <ChevronDown
+                    aria-hidden
+                    className="size-2.5 shrink-0 text-muted-foreground"
+                  />
                 </button>
               </PopoverTrigger>
               {/* token-exception: viewport clamp prevents overflow in Toskr's 320–380px native panel. */}
@@ -434,34 +427,29 @@ export function TargetLensView({
                 />
               </PopoverContent>
             </Popover>
+            {/* 来源缩注取代整句「匹配来源」：临时指定/自动匹配一词即达 */}
+            <span className="shrink-0 text-micro text-muted-foreground/60">
+              {profileOverrideId ? "临时指定" : "自动匹配"}
+            </span>
             {!showRecoveryAction && <span className="ml-auto">{refreshControl}</span>}
           </div>
-          <p
-            className={cn(
-              "mt-1 min-w-0 line-clamp-2 break-words text-micro leading-tight",
-              reasonTone
-            )}
-          >
-            匹配来源：{matchReason}
-          </p>
-          <div
-            className="mt-1 flex min-w-0 flex-wrap gap-1"
-            aria-label="本次真实生效规则"
-          >
-            <TargetRuleTag>提示词组：{promptGroupName}</TargetRuleTag>
-            <TargetRuleTag>
-              输出格式：{DELIVERY_FORMAT_LABEL[defaultFormat]}
-            </TargetRuleTag>
-            <TargetRuleTag warning={enterPolicy === "allow"}>
-              粘贴后动作：{ENTER_POLICY_STATUS_LABEL[enterPolicy]}
-            </TargetRuleTag>
-            <TargetRuleTag>
-              发送完成后：{keepPanel ? "保持打开" : "关闭面板"}
-            </TargetRuleTag>
-            <TargetRuleTag warning={!privacyCapabilityActive}>
-              {privacyLabel}
-            </TargetRuleTag>
-          </div>
+          {/* 匹配来源正常态省略（头部状态徽章已表达；「自动匹配/临时指定」缩注在方案行）；
+              警示/失效原因仍需完整呈现 */}
+          {reasonTone !== "text-muted-foreground" && (
+            <p
+              className={cn(
+                "mt-1 min-w-0 line-clamp-2 break-words text-micro leading-tight",
+                reasonTone
+              )}
+            >
+              {matchReason}
+            </p>
+          )}
+          <ProfileRuleLedger
+            className="mt-2"
+            profile={currentQuickProfile}
+            privacyCapabilityActive={privacyCapabilityActive}
+          />
         </div>
       )}
     </section>

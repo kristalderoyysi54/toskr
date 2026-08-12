@@ -301,7 +301,7 @@ export function SectionGroup({
           {activeNotes.length === 0 && doneNotes.length === 0 ? (
             <EmptyState variant="inline" title="此分组为空" />
           ) : (
-            <div className="flex flex-col gap-1 pl-2">
+            <div className="flex flex-col gap-1">
               {activeNotes.map((note) => (
                 <NoteCard key={note.id} note={note} query={query} />
               ))}

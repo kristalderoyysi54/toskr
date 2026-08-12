@@ -32,7 +32,11 @@ import {
 } from "@/store/deliveryStore";
 import { useUIStore } from "@/store/uiStore";
 import { useNotesStore } from "@/store/notesStore";
-import { refreshTarget, useTargetStore } from "@/store/targetStore";
+import {
+  refreshTarget,
+  sameTargetIdentity,
+  useTargetStore,
+} from "@/store/targetStore";
 import {
   deliveryEventFromDraft,
   recordDeliveryEvent,
@@ -185,10 +189,45 @@ export function updateOpenPreflightDraft(
       firewallEnabled: notes.settings.firewallEnabled,
       firewallDisabledWarnCategories:
         notes.settings.firewallDisabledWarnCategories,
+      aliasEntitiesEnabled: notes.settings.aliasEntitiesEnabled,
+      aliasEntities: notes.settings.aliasEntities,
     },
     nextDeliveryDraftRevision(draft.revision)
   );
   delivery.replaceDraft(rebuilt, recoverableTarget);
+}
+
+/**
+ * 目标失效的自动恢复：用户切回同一目标（同进程/窗口身份，token 允许轮换）时，
+ * 把 Draft 的目标快照重基线为最新令牌，预检无需取消重来。
+ * 换成其他应用、目标重启（身份变化）或来源/方案漂移时不自动重绑，维持显式阻断；
+ * 发送前 Native gate 仍会再校验一次目标。
+ */
+export function recoverOpenPreflightTarget(
+  inspectNonTarget: typeof inspectDeliveryDraftNonTarget = inspectDeliveryDraftNonTarget
+): boolean {
+  const delivery = useDeliveryStore.getState();
+  const draft = delivery.draft;
+  if (!delivery.open || !draft || delivery.busy || delivery.retryBlocked) {
+    return false;
+  }
+  const target = useTargetStore.getState();
+  if (
+    target.status !== "ready" ||
+    target.profileOverrideNeedsConfirmation ||
+    !target.snapshot ||
+    draft.targetSnapshot?.token === target.snapshot.token ||
+    !sameTargetIdentity(draft.targetSnapshot, target.snapshot) ||
+    inspectNonTarget(draft)
+  ) {
+    return false;
+  }
+  delivery.replaceDraft({
+    ...draft,
+    revision: nextDeliveryDraftRevision(draft.revision),
+    targetSnapshot: { ...target.snapshot },
+  });
+  return true;
 }
 
 type ExecuteDraft = (

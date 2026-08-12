@@ -1,4 +1,17 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/store/persistStorage", () => ({
+  tauriStateStorage: {
+    getItem: vi.fn(async () => null),
+    setItem: vi.fn(async () => undefined),
+    removeItem: vi.fn(async () => undefined),
+  },
+}));
+const recordDeliveryEventMock = vi.hoisted(() => vi.fn(async () => true));
+vi.mock("@/lib/deliveryActivityCore", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/deliveryActivityCore")>();
+  return { ...actual, recordDeliveryEvent: recordDeliveryEventMock };
+});
 
 import type { DeliveryEvent } from "./deliveryActivityCore";
 import {
@@ -6,14 +19,16 @@ import {
   clearDeliveryRedactionSessions,
   deliveryCandidatesForCapturedNote,
   deliveryPlaceholderCounts,
+  deliveryPlaceholderEvidence,
   deliveryRedactionMapAvailable,
+  linkCapturedNoteToDelivery,
   previewRestoredPlaceholders,
   rememberDeliveryRedactionMap,
   resultAssociationState,
   resultCapturedEvent,
   resultNoteCandidatesForDelivery,
 } from "./resultReturn";
-import type { Note } from "@/store/notesStore";
+import { INBOX_ID, useNotesStore, type Note } from "@/store/notesStore";
 
 const counts: DeliveryEvent["firewallCounts"] = {
   privateKey: 0,
@@ -168,5 +183,62 @@ describe("result return", () => {
     expect(deliveryRedactionMapAvailable("delivery-0")).toBe(false);
     expect(deliveryRedactionMapAvailable("delivery-1")).toBe(true);
     expect(deliveryRedactionMapAvailable("delivery-32")).toBe(true);
+  });
+});
+
+describe("占位符指纹自动归位", () => {
+  beforeEach(() => {
+    clearDeliveryRedactionSessions();
+    recordDeliveryEventMock.mockClear();
+    useNotesStore.setState({
+      sections: [{ id: INBOX_ID, name: "收件箱" }],
+      notes: [note()],
+      undoStack: [],
+    });
+  });
+
+  it("deliveryPlaceholderEvidence 仅在会话映射存在且原文含占位符时为真", () => {
+    expect(deliveryPlaceholderEvidence("delivery-1", "回复 [EMAIL_01]")).toBe(false);
+    rememberDeliveryRedactionMap("delivery-1", {
+      "alice@example.com": "[EMAIL_01]",
+    });
+    expect(deliveryPlaceholderEvidence("delivery-1", "回复 [EMAIL_01] 收到")).toBe(true);
+    expect(deliveryPlaceholderEvidence("delivery-1", "没有占位符的回复")).toBe(false);
+    expect(deliveryPlaceholderEvidence("delivery-1", "")).toBe(false);
+  });
+
+  it("linkCapturedNoteToDelivery 写入 provenance 并记录 resultCaptured 事件", async () => {
+    expect(await linkCapturedNoteToDelivery("result-1", sent())).toBe(true);
+    const linked = useNotesStore.getState().notes.find((item) => item.id === "result-1");
+    expect(linked?.provenance).toMatchObject({
+      kind: "deliveryResult",
+      deliveryId: "delivery-1",
+      sourceBundle: "com.openai.chat",
+      sourceItemIds: ["source-1"],
+    });
+    expect(recordDeliveryEventMock).toHaveBeenCalledTimes(1);
+    expect(recordDeliveryEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: "resultCaptured",
+        resultNoteId: "result-1",
+      })
+    );
+  });
+
+  it("已有归属的卡片与不存在的卡片都拒绝归位", async () => {
+    useNotesStore.setState({
+      notes: [note({
+        provenance: {
+          kind: "deliveryResult",
+          deliveryId: "other",
+          capturedAtMs: 2_000,
+          sourceBundle: "com.openai.chat",
+          sourceItemIds: ["source-1"],
+        },
+      })],
+    });
+    expect(await linkCapturedNoteToDelivery("result-1", sent())).toBe(false);
+    expect(await linkCapturedNoteToDelivery("ghost", sent())).toBe(false);
+    expect(recordDeliveryEventMock).not.toHaveBeenCalled();
   });
 });

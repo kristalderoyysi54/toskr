@@ -51,6 +51,7 @@ function draft(patch: Partial<DeliveryDraft> = {}): DeliveryDraft {
     firewallEnabled: true,
     firewallDisabledWarnCategories: [],
     firewallStatus: "ready",
+    aliasReplacedCount: 0,
     findings: [],
     redactionMap: {},
     scanRevision: 2,

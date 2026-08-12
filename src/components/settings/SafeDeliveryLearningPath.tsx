@@ -182,36 +182,44 @@ export function SafeDeliveryLearningPath({
               </div>
 
               {current && isRecovery && recoveryOpen && (
-                <div
-                  role="group"
-                  aria-label="本地恢复演示"
-                  className="ml-7 mt-2 flex items-center gap-2 rounded-lg bg-muted/50 px-2.5 py-2"
-                >
-                  <code
-                    aria-live="polite"
-                    className="min-w-0 flex-1 truncate text-body text-foreground"
+                <div className="ml-7 mt-2 space-y-1.5">
+                  <div
+                    role="group"
+                    aria-label="本地恢复演示"
+                    className="flex items-center gap-2 rounded-lg bg-muted/50 px-2.5 py-2"
                   >
-                    {restored
-                      ? "demo.user@example.com 已收到"
-                      : "[EMAIL_01] 已收到"}
-                  </code>
-                  <p className="hidden text-micro text-muted-foreground lg:block">
-                    演练假数据 · 不读取真实内容
-                  </p>
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant={restored ? "secondary" : "outline"}
-                    onClick={() => {
-                      if (!restored) {
-                        setRestored(true);
-                        return;
-                      }
-                      onCompleteRecoveryTutorial();
-                    }}
-                  >
-                    {restored ? "完成教学" : "本地恢复"}
-                  </Button>
+                    <code
+                      aria-live="polite"
+                      className="min-w-0 flex-1 truncate text-body text-foreground"
+                    >
+                      {restored
+                        ? "demo.user@example.com 已收到"
+                        : "[EMAIL_01] 已收到"}
+                    </code>
+                    <p className="hidden text-micro text-muted-foreground lg:block">
+                      演练假数据 · 不读取真实内容
+                    </p>
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant={restored ? "secondary" : "outline"}
+                      onClick={() => {
+                        if (!restored) {
+                          setRestored(true);
+                          return;
+                        }
+                        onCompleteRecoveryTutorial();
+                      }}
+                    >
+                      {restored ? "完成教学" : "本地恢复"}
+                    </Button>
+                  </div>
+                  {restored && (
+                    <p className="text-micro text-muted-foreground">
+                      真实实体同理：在「设置 → 目标与发送方案 → 可逆化名」录入词典后，发送时自动替换为占位符，捕获
+                      AI 回复时自动恢复为原文
+                    </p>
+                  )}
                 </div>
               )}
             </li>

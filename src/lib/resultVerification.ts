@@ -6,7 +6,11 @@ import {
   type AiRequestHandle,
 } from "@/lib/aiClient";
 import type { DeliveryEvent } from "@/lib/deliveryActivityCore";
-import { replaceFirewallFindings } from "@/lib/delivery/firewall";
+import {
+  PLACEHOLDER_NAME_PATTERN,
+  PLACEHOLDER_PATTERN,
+  replaceFirewallFindings,
+} from "@/lib/delivery/firewall";
 import { buildTaskMarkdown } from "@/lib/delivery/buildDraft";
 import type { ScanSensitiveText } from "@/lib/delivery/firewallController";
 import { imageCaption, buildSendText } from "@/lib/format";
@@ -89,6 +93,8 @@ export interface ResultVerificationContext {
   resultText: string;
   sourceRevision: string;
   resultRevision: string;
+  /** 持久词典的占位符集合：会话映射失效后仍可识别词典化名，只对临时占位符降级。 */
+  dictionaryPlaceholders?: ReadonlySet<string>;
 }
 
 const entityRevisions = new WeakMap<object, number>();
@@ -125,7 +131,8 @@ function noteSourceText(note: Note): string {
 export function buildVerificationContext(
   resultNote: Note,
   notes: readonly Note[],
-  tasks: readonly Task[]
+  tasks: readonly Task[],
+  aliasEntities: readonly { placeholder: string }[] = []
 ): ResultVerificationContext {
   const sourceIds = resultNote.provenance?.sourceItemIds ?? [];
   const sources: VerificationSource[] = [];
@@ -156,6 +163,9 @@ export function buildVerificationContext(
     resultText: resultNote.text,
     sourceRevision: "",
     resultRevision: "",
+    dictionaryPlaceholders: new Set(
+      aliasEntities.map((entity) => entity.placeholder).filter(Boolean)
+    ),
   };
   context.sourceRevision = sourceRevisionOf(context);
   context.resultRevision = resultRevisionOf(context);
@@ -189,9 +199,6 @@ function addCheck(
 ): void {
   checks.push({ id, status, message });
 }
-
-const PLACEHOLDER_PATTERN = /\[[A-Z][A-Z0-9_]*_[0-9]{2,}\]/g;
-const PLACEHOLDER_NAME_PATTERN = /^\[[A-Z][A-Z0-9_]*_[0-9]{2,}\]$/;
 
 function placeholderCounts(text: string): Map<string, number> {
   const counts = new Map<string, number>();
@@ -337,6 +344,19 @@ export function verifyResultDeterministically(
     (placeholder) => !expected.has(placeholder)
   );
   const mappingExpired = expectation.expectedPlaceholderCounts === null;
+  // 会话清单失效后仍可用持久词典识别化名占位符，只对临时占位符降级
+  const dictionary = context.dictionaryPlaceholders ?? new Set<string>();
+  const dictionaryKnown = mappingExpired
+    ? [...resultPlaceholders.keys()].filter((item) => dictionary.has(item))
+    : [];
+  const temporaryUnknown = mappingExpired
+    ? [...resultPlaceholders.keys()].filter((item) => !dictionary.has(item))
+    : [];
+  const expiredMessage = resultPlaceholders.size === 0
+    ? "应用重启过或该次发送较久，临时占位符清单已清理；无法确认是否有占位符丢失"
+    : temporaryUnknown.length
+      ? `词典化名 ${dictionaryKnown.length} 处可识别；${temporaryUnknown.length} 处临时占位符无法核对（应用重启过或该次发送较久）`
+      : `词典化名 ${dictionaryKnown.length} 处均可识别、可恢复；数量核对不可用（应用重启过或该次发送较久）`;
   const placeholderProblem = mappingExpired || missingPlaceholders.length ||
     duplicatePlaceholders.length || unknownPlaceholders.length;
   addCheck(
@@ -344,7 +364,7 @@ export function verifyResultDeterministically(
     "privacy.placeholders",
     placeholderProblem ? "needsReview" : "pass",
     mappingExpired
-      ? "发送会话占位符映射已失效，无法完整核对占位符"
+      ? expiredMessage
       : placeholderProblem
         ? "占位符存在丢失、重复或未知项"
         : "占位符数量与已知发送会话一致"
@@ -354,7 +374,12 @@ export function verifyResultDeterministically(
     risks.push(`占位符重复：${duplicatePlaceholders.join("、")}`);
   }
   if (mappingExpired) {
-    risks.push("发送会话的占位符映射已失效，无法判断陌生占位符");
+    risks.push(
+      "应用重启过或该次发送较久，临时占位符清单已清理，数量核对不可用；如需严格核对请人工比对"
+    );
+    if (temporaryUnknown.length) {
+      risks.push(`临时占位符 ${temporaryUnknown.join("、")} 无法判断是否来自本次发送`);
+    }
   } else {
     newAssumptions.push(
       ...unknownPlaceholders.map((placeholder) => `未知占位符 ${placeholder}`)
@@ -745,7 +770,12 @@ function liveVerificationContext(context: ResultVerificationContext): ResultVeri
   const state = useNotesStore.getState();
   const result = state.notes.find((note) => note.id === context.resultNote.id);
   return result?.provenance
-    ? buildVerificationContext(result, state.notes, state.tasks)
+    ? buildVerificationContext(
+        result,
+        state.notes,
+        state.tasks,
+        state.settings.aliasEntities
+      )
     : null;
 }
 

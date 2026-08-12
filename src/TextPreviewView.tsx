@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { motion } from "motion/react";
@@ -9,6 +9,7 @@ import {
   ImagePlus,
   Pencil,
   Send,
+  TextSelect,
   X,
 } from "lucide-react";
 
@@ -21,6 +22,7 @@ import { IconButton } from "@/components/ui/icon-button";
 import { Kbd } from "@/components/ui/kbd";
 import { TextSelectionToolbar } from "@/components/TextSelectionToolbar";
 import type { NotePreviewPayload } from "@/lib/actions";
+import { requestAliasQuickAdd } from "@/lib/aliasQuickAdd";
 import { highlightCode, langLabel } from "@/lib/code";
 import { NOTE_EDITOR_SESSION_RELEASE_EVENT } from "@/lib/editorSessionMedia";
 import { useAppIcon } from "@/lib/icons";
@@ -237,6 +239,9 @@ export default function TextPreviewView() {
   const [draftImages, setDraftImages] = useState<string[]>([]);
   const [mdView, setMdView] = useState(false);
   const [textSelection, setTextSelection] = useState<TextSelection | null>(null);
+  // 选词模式：正文按分词渲染为可点选区块，点选驱动 textSelection（复用选中工具条）
+  const [pickMode, setPickMode] = useState(false);
+  const [pick, setPick] = useState<{ anchor: number; focus: number } | null>(null);
   // 每次唤起自增：窗口隐藏复用，重开也要重播内容浮现
   const [gen, setGen] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -591,7 +596,78 @@ export default function TextPreviewView() {
     setTextSelection(selection.start === selection.end ? null : selection);
   };
 
+  // —— 选词模式：Intl.Segmenter 分词（旧 WebKit 退回空白/标点粗分） ——
+  const noteText = note?.text ?? "";
+  const pickSegments = useMemo(() => {
+    if (!pickMode || !noteText) return [];
+    type Segment = { text: string; start: number; end: number; wordLike: boolean };
+    const out: Segment[] = [];
+    if (typeof Intl !== "undefined" && "Segmenter" in Intl) {
+      const segmenter = new Intl.Segmenter("zh-Hans", { granularity: "word" });
+      for (const item of segmenter.segment(noteText)) {
+        out.push({
+          text: item.segment,
+          start: item.index,
+          end: item.index + item.segment.length,
+          wordLike: !!item.isWordLike,
+        });
+      }
+      return out;
+    }
+    let cursor = 0;
+    for (const part of noteText.split(/([\s，。、；;,.!？?：:（）()[\]{}"'「」]+)/)) {
+      if (!part) continue;
+      out.push({
+        text: part,
+        start: cursor,
+        end: cursor + part.length,
+        wordLike: !/^[\s，。、；;,.!？?：:（）()[\]{}"'「」]+$/.test(part),
+      });
+      cursor += part.length;
+    }
+    return out;
+  }, [pickMode, noteText]);
+
+  const onPickToken = (index: number) => {
+    setPick((previous) => {
+      if (!previous) return { anchor: index, focus: index };
+      if (previous.anchor === index && previous.focus === index) return null;
+      return { anchor: previous.anchor, focus: index };
+    });
+  };
+
+  useEffect(() => {
+    if (!pickMode) return;
+    if (!pick || !pickSegments.length) {
+      setTextSelection(null);
+      return;
+    }
+    const low = Math.min(pick.anchor, pick.focus);
+    const high = Math.max(pick.anchor, pick.focus);
+    const start = pickSegments[low]?.start;
+    const end = pickSegments[high]?.end;
+    if (start === undefined || end === undefined) {
+      setPick(null);
+      return;
+    }
+    setTextSelection({ start, end });
+  }, [pick, pickMode, pickSegments]);
+
+  const exitPickMode = () => {
+    setPickMode(false);
+    setPick(null);
+    setTextSelection(null);
+  };
+
+  const addSelectionToAliasDictionary = (originalText: string, category: string) => {
+    // 词典写入必须在主面板原子取号，这里只发语义事件；HUD 回执全局可见
+    requestAliasQuickAdd({ originalText, category });
+    setPick(null);
+    setTextSelection(null);
+  };
+
   const syncPreviewSelection = () => {
+    if (pickMode) return;
     if (editing || !note || note.codeLang || note.kind === "link") return;
     const root = previewContentRef.current;
     const domSelection = window.getSelection();
@@ -924,6 +1000,49 @@ export default function TextPreviewView() {
                 }}
               />
             </pre>
+          ) : pickMode ? (
+            <div
+              ref={previewContentRef as React.RefObject<HTMLDivElement>}
+              aria-label="选词模式：点选词语，可再点另一词扩展范围"
+              className="whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-body leading-[2.2]"
+            >
+              {pickSegments.map((segment, index) => {
+                const inRange =
+                  !!pick &&
+                  index >= Math.min(pick.anchor, pick.focus) &&
+                  index <= Math.max(pick.anchor, pick.focus);
+                return segment.wordLike ? (
+                  <button
+                    key={`${segment.start}-${index}`}
+                    type="button"
+                    onClick={() => onPickToken(index)}
+                    className={cn(
+                      // token-exception: 键帽方块（用户选定模板 B）——底边厚度/按压位移/
+                      // 内高光为立体质感所需的一次性物理值，主题色仍走 token
+                      "mx-[3px] my-[2px] inline rounded-[7px] border border-border/50 bg-muted px-[7px] py-px font-[inherit] text-inherit outline-none",
+                      "shadow-[0_2.5px_0_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.08)]",
+                      "transition-[transform,box-shadow,background-color] duration-75",
+                      "hover:brightness-110 focus-visible:ring-2 focus-visible:ring-primary/50",
+                      "active:translate-y-[1.5px] active:shadow-[0_1px_0_rgba(0,0,0,0.35)]",
+                      inRange &&
+                        "translate-y-[1.5px] border-primary/60 bg-primary text-primary-foreground shadow-[0_1px_0_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.3)] hover:brightness-105"
+                    )}
+                  >
+                    {segment.text}
+                  </button>
+                ) : (
+                  <span
+                    key={`${segment.start}-${index}`}
+                    className={cn(
+                      "text-muted-foreground/70",
+                      inRange && "text-primary"
+                    )}
+                  >
+                    {segment.text}
+                  </span>
+                );
+              })}
+            </div>
           ) : mdView ? (
             <div
               ref={previewContentRef as React.RefObject<HTMLDivElement>}
@@ -940,11 +1059,13 @@ export default function TextPreviewView() {
           )}
         </motion.div>
 
-        {editable && textSelection && !note.codeLang && !isLink && (
+        {(editable || pickMode) && textSelection && !note.codeLang && !isLink && (
           <TextSelectionToolbar
             text={editing ? draftRef.current : note.text}
             selection={textSelection}
             onApply={applySelectionEdit}
+            onAddAlias={editing ? undefined : addSelectionToAliasDictionary}
+            readOnly={!editable}
           />
         )}
       </div>
@@ -1016,7 +1137,27 @@ export default function TextPreviewView() {
             </>
           ) : (
             <>
-              {isMd && (
+              {!isLink && !note.codeLang && (
+                <IconButton
+                  label={
+                    pickMode
+                      ? "退出选词模式"
+                      : "选词模式：点选词语快速加入化名词典"
+                  }
+                  pressed={pickMode}
+                  onClick={() => {
+                    if (pickMode) exitPickMode();
+                    else {
+                      setPickMode(true);
+                      setPick(null);
+                      setTextSelection(null);
+                    }
+                  }}
+                >
+                  <TextSelect className="size-3.5" />
+                </IconButton>
+              )}
+              {isMd && !pickMode && (
                 <button
                   onClick={() => setMdView(!mdView)}
                   className={cn(

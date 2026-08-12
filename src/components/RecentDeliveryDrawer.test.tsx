@@ -177,13 +177,14 @@ describe("RecentDeliveryDrawer", () => {
     );
     expect(html).toContain("Codex");
     expect(html).toContain("发送失败");
-    expect(html).toContain("发送内容");
+    expect(html).toContain("查看发送内容");
     expect(html).toContain("原内容已删除");
     expect(html).toContain("发送前隐藏了 2 项敏感内容");
     expect(html).toContain("更多信息");
     expect(html).toContain("重新准备");
     expect(html).toContain("disabled");
     expect(html).not.toContain("重试发送");
+    // 摘要只来自传入的存活卡片；未传入的正文绝不出现
     expect(html).not.toContain("当前正文不会进入活动组件");
   });
 
@@ -275,42 +276,20 @@ describe("RecentDeliveryDrawer", () => {
         onVerify={vi.fn()}
         onAssociate={vi.fn()}
         onUnlink={vi.fn()}
-        qualityFeedback={[{
-          deliveryId: "delivery-1",
-          resultNoteId: "result-1",
-          quality: "minorEdit",
-          updatedAtMs: 140,
-        }]}
-        qualityMetricsEpoch={0}
-        onQuality={vi.fn()}
       />
     );
     expect(html).toContain("发送于");
-    expect(html).toContain("发送内容");
-    expect(html).toContain("回复已保存");
+    expect(html).toContain("已收到回复");
+    expect(html).toContain("打开回复");
     expect(html).toContain("检查发现 2 个问题");
     expect(html).toContain("检查回复");
     expect(html).toContain("更换回复");
     expect(html).toContain("这不是对应回复");
-    expect(html).toContain("这条回复后来怎么用？（可选）");
-    expect(html).toContain("直接使用");
-    expect(html).toContain("aria-pressed=\"true\"");
+    // 出站摘要来自存活来源卡（显示级重建，账本事件仍不存正文——见 resultReturn 白名单测试）
+    expect(html).toContain("原始正文不进入活动行");
+    // 回复与派生报告的正文不在抽屉渲染，只提供「打开回复」入口
     expect(html).not.toContain("结果正文不进入活动行");
-    expect(html).not.toContain("原始正文不进入活动行");
     expect(html).not.toContain("派生报告正文也不进入活动行");
-
-    const afterMetricsClear = renderToStaticMarkup(
-      <RecentDeliveryList
-        records={records}
-        notes={[source, result]}
-        tasks={[]}
-        busyEventId={null}
-        onReprepare={vi.fn()}
-        qualityMetricsEpoch={1}
-        onQuality={vi.fn()}
-      />
-    );
-    expect(afterMetricsClear).not.toContain("这条回复后来怎么用？（可选）");
   });
 
   it("回复改绑后只展示当前关系，旧时间明确标为曾保存", () => {
@@ -362,9 +341,46 @@ describe("RecentDeliveryDrawer", () => {
       />
     );
 
-    expect(html).toContain("尚未保存回复");
-    expect(html).toContain("曾保存，现已更换");
+    // 改绑后回到等待态：等待区组头给划词引导 + 卡脚手动选择兜底；历史痕迹只在更多明细里
+    expect(html).toContain("等待回复");
+    expect(html).toContain("自动带回");
+    expect(html).toContain("手动选择");
+    expect(html).toContain("曾保存，现已取消或更换");
     expect(html).toContain("曾保存回复");
-    expect(html).not.toContain("回复已保存");
+    expect(html).not.toContain("已收到回复");
+    expect(html).not.toContain("打开回复");
+  });
+
+  it("进行中的半次发送不进主列表，折叠为未发出的记录", () => {
+    const html = renderToStaticMarkup(
+      <RecentDeliveryList
+        records={deliveryActivityRecords([
+          event({
+            eventId: "opened",
+            deliveryId: "half",
+            eventType: "preflightOpened",
+            status: "opened",
+            timestampMs: 200,
+            clipboardOutcome: null,
+          }),
+          event({
+            eventId: "sent-ok",
+            deliveryId: "done",
+            eventType: "sendSent",
+            status: "sent",
+            timestampMs: 100,
+          }),
+        ])}
+        notes={[]}
+        tasks={[]}
+        busyEventId={null}
+        onReprepare={vi.fn()}
+      />
+    );
+    expect(html).toContain("未发出的记录 1 条");
+    expect(html).toContain("预检未完成");
+    expect(html).toContain("等待回复");
+    // 主列表行不出现「下一步」以外的占位噪音；未发出行只有一行式条目
+    expect(html).not.toContain("发送成功后才能保存");
   });
 });

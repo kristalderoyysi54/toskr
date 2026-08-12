@@ -227,6 +227,8 @@ function currentDraftState(dataGeneration: number) {
     firewallEnabled: state.settings.firewallEnabled,
     firewallDisabledWarnCategories:
       state.settings.firewallDisabledWarnCategories,
+    aliasEntitiesEnabled: state.settings.aliasEntitiesEnabled,
+    aliasEntities: state.settings.aliasEntities,
   };
 }
 

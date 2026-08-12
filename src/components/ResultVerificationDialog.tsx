@@ -94,7 +94,12 @@ function liveContext(noteId: string): ResultVerificationContext | null {
   const state = useNotesStore.getState();
   const note = state.notes.find((item) => item.id === noteId);
   return note?.provenance
-    ? buildVerificationContext(note, state.notes, state.tasks)
+    ? buildVerificationContext(
+        note,
+        state.notes,
+        state.tasks,
+        state.settings.aliasEntities
+      )
     : null;
 }
 
@@ -228,13 +233,14 @@ export function ResultVerificationDialog() {
     [aiBaseUrl, aiEnabled, aiModel]
   );
 
+  const aliasEntities = useNotesStore((state) => state.settings.aliasEntities);
   const currentContext = useMemo(() => {
     if (!session) return null;
     const note = notes.find((item) => item.id === session.noteId);
     return note?.provenance
-      ? buildVerificationContext(note, notes, tasks)
+      ? buildVerificationContext(note, notes, tasks, aliasEntities)
       : null;
-  }, [notes, session, tasks]);
+  }, [aliasEntities, notes, session, tasks]);
 
   const stale = Boolean(
     session && report && (

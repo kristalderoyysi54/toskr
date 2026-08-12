@@ -75,6 +75,10 @@ export function aiErrorTip(error: unknown): string {
     }
     if (error.kind === "parse") return "AI 返回内容无法解析";
     if (error.kind === "cancelled") return "AI 转换已取消";
+    // network 携带的具体原因（HTTP 状态/超时等）直接给用户，可定位
+    if (error.kind === "network" && error.message && error.message !== "AI 请求失败") {
+      return error.message;
+    }
   }
   return "AI 请求失败，请检查网络与服务配置";
 }
@@ -172,7 +176,15 @@ export function startAiRequest(input: AiRequestInput): AiRequestHandle {
       return result;
     } catch (error) {
       if (error instanceof AiError) throw error;
-      throw new AiError("network", "AI 请求失败");
+      // Rust 侧错误串已是脱敏后的人话（HTTP 状态、URL 校验、密钥未配置等），
+      // 必须透传——吞成固定文案会让「换了密钥连不上」这类问题无从定位
+      const detail =
+        typeof error === "string"
+          ? error
+          : error instanceof Error
+            ? error.message
+            : "";
+      throw new AiError("network", detail || "AI 请求失败");
     }
   });
 

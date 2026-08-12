@@ -9,6 +9,7 @@ import {
   EMPTY_PRIVACY_DECISION,
   replaceFirewallFindings,
 } from "@/lib/delivery/firewall";
+import { findingUtf16RangeIsValid } from "@/lib/privacy";
 import type { FindingCategory } from "@/lib/tauri";
 import type {
   TransformRequest,
@@ -46,6 +47,13 @@ interface DeliveryState {
   replaceFirewallCategory: (category: FindingCategory) => void;
   replaceAllFirewallFindings: () => void;
   excludeFirewallFinding: (findingId: string) => void;
+  /** 词典化名单次豁免：把 finalText 中一处占位符还原为原文并触发隐私重扫描。 */
+  revertAliasFinding: (occurrence: {
+    startUtf16: number;
+    endUtf16: number;
+    placeholder: string;
+    originalText: string;
+  }) => void;
   confirmRawPrivacy: (level: "warn" | "block") => void;
   beginTransform: (request: TransformRequest) => boolean;
   finishTransform: (result: TransformResult) => void;
@@ -313,6 +321,33 @@ export const useDeliveryStore = create<DeliveryState>()((set, get) => ({
       new Set(draft.findings.map((finding) => finding.id))
     );
     if (next) set({
+      draft: next,
+      lastError: null,
+      transform: staleTransform(get().transform, next),
+    });
+  },
+  revertAliasFinding: (occurrence) => {
+    const draft = get().draft;
+    if (!draft) return;
+    // 偏移量必须对当前 finalText 仍然鲜活；文本已被编辑则静默忽略（UI 会随重算刷新）
+    if (
+      !findingUtf16RangeIsValid(draft.finalText, occurrence) ||
+      draft.finalText.slice(occurrence.startUtf16, occurrence.endUtf16) !==
+        occurrence.placeholder
+    ) return;
+    const finalText =
+      draft.finalText.slice(0, occurrence.startUtf16) +
+      occurrence.originalText +
+      draft.finalText.slice(occurrence.endUtf16);
+    const next = revise(
+      draft,
+      {
+        finalText,
+        aliasReplacedCount: Math.max(0, draft.aliasReplacedCount - 1),
+      },
+      true
+    );
+    set({
       draft: next,
       lastError: null,
       transform: staleTransform(get().transform, next),

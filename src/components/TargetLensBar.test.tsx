@@ -157,7 +157,9 @@ describe("TargetLensView", () => {
     expect(html).not.toContain(">隐私未启用</span>");
     expect(html).toContain('aria-expanded="false"');
     expect(html).toContain('aria-controls="');
-    expect(html).toContain('aria-label="展开发送详情，包含风险项"');
+    expect(html).toContain(
+      'aria-label="展开发送详情 · 隐私检查已关闭、自动回车已开启"'
+    );
     expect(html).toContain("data-target-lens-warning-indicator");
   });
 

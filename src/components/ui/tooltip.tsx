@@ -18,16 +18,62 @@ function TooltipProvider({
   )
 }
 
+const TooltipPointerContext = React.createContext<
+  React.MutableRefObject<boolean> | null
+>(null)
+
+/**
+ * 提示只允许指针悬停打开：菜单/浮层关闭后焦点程序化回流到触发按钮时，
+ * Radix 会以焦点态弹出提示且没有失焦事件让它关闭（现网复现：菜单选完
+ * tips 钉死不消失）。键盘与读屏语义由按钮 aria-label 承担，与本策略无关。
+ */
 function Tooltip({
+  open: openProp,
+  defaultOpen = false,
+  onOpenChange,
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Root>) {
-  return <TooltipPrimitive.Root data-slot="tooltip" {...props} />
+  const pointerInside = React.useRef(false)
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen)
+  const isControlled = openProp !== undefined
+  const open = isControlled ? openProp : uncontrolledOpen
+  const handleOpenChange = (next: boolean) => {
+    if (next && !pointerInside.current) return
+    if (!isControlled) setUncontrolledOpen(next)
+    onOpenChange?.(next)
+  }
+  return (
+    <TooltipPointerContext.Provider value={pointerInside}>
+      <TooltipPrimitive.Root
+        data-slot="tooltip"
+        open={open}
+        onOpenChange={handleOpenChange}
+        {...props}
+      />
+    </TooltipPointerContext.Provider>
+  )
 }
 
 function TooltipTrigger({
+  onPointerEnter,
+  onPointerLeave,
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Trigger>) {
-  return <TooltipPrimitive.Trigger data-slot="tooltip-trigger" {...props} />
+  const pointerInside = React.useContext(TooltipPointerContext)
+  return (
+    <TooltipPrimitive.Trigger
+      data-slot="tooltip-trigger"
+      onPointerEnter={(event) => {
+        if (pointerInside) pointerInside.current = true
+        onPointerEnter?.(event)
+      }}
+      onPointerLeave={(event) => {
+        if (pointerInside) pointerInside.current = false
+        onPointerLeave?.(event)
+      }}
+      {...props}
+    />
+  )
 }
 
 function TooltipContent({

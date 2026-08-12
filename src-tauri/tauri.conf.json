@@ -41,8 +41,8 @@
       {
         "label": "hud",
         "title": "Toskr HUD",
-        "width": 240,
-        "height": 56,
+        "width": 264,
+        "height": 100,
         "visible": false,
         "decorations": false,
         "transparent": true,
