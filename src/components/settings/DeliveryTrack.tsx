@@ -5,19 +5,15 @@ import {
   DELIVERY_FORMAT_OPTIONS,
   PRIVACY_POLICY_OPTIONS,
 } from "@/lib/profileManager";
-import { ENTER_POLICY_STATUS_LABEL } from "@/lib/targetLens";
+import {
+  ENTER_POLICY_STATUS_LABEL,
+  TARGET_PROFILE_SOURCE_LABEL,
+} from "@/lib/targetLens";
 import type {
   TargetProfile,
   TargetProfileResolution,
 } from "@/lib/targetProfiles";
 import { cn } from "@/lib/utils";
-
-const SOURCE_LABEL: Record<TargetProfileResolution["source"], string> = {
-  temporary: "仅本次预演",
-  exact: "适用应用匹配",
-  fallback: "未识别应用的默认方案",
-  conflict: "历史绑定冲突",
-};
 
 function TrackCard({
   title,
@@ -126,7 +122,7 @@ export function DeliveryTrack({
           warning={!previewResolution.isTargetReady || !configuredPromptGroupName}
         >
           <p>目标应用：{targetName}</p>
-          <p>匹配来源：{SOURCE_LABEL[previewResolution.source]}</p>
+          <p>匹配来源：{TARGET_PROFILE_SOURCE_LABEL[previewResolution.source]}</p>
           <p>发送方案：{previewResolution.profile.name}</p>
           <p>提示词组：{previewResolution.promptGroup.name}</p>
           <p>输出格式：{previewFormat.label}</p>
@@ -141,7 +137,7 @@ export function DeliveryTrack({
           warning={currentResolution.source === "conflict" || !currentResolution.isTargetReady || currentResolution.safetyClamped}
         >
           <p>目标应用：{targetName}</p>
-          <p>匹配来源：{SOURCE_LABEL[currentResolution.source]}</p>
+          <p>匹配来源：{TARGET_PROFILE_SOURCE_LABEL[currentResolution.source]}</p>
           <p>发送方案：{currentResolution.profile.name}</p>
           <p>提示词组：{currentResolution.promptGroup.name}</p>
           <p>输出格式：{currentFormat.label}</p>

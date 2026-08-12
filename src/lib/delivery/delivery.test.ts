@@ -145,6 +145,8 @@ function state(overrides: Partial<DeliveryDraftBuildState> = {}): DeliveryDraftB
     dataGeneration: 7,
     firewallEnabled: true,
     firewallDisabledWarnCategories: [],
+    aliasEntitiesEnabled: true,
+    aliasEntities: [],
     ...overrides,
   };
 }
@@ -423,6 +425,9 @@ function executableNoteDraft(ids: string[]) {
       firewallEnabled: useNotesStore.getState().settings.firewallEnabled,
       firewallDisabledWarnCategories:
         useNotesStore.getState().settings.firewallDisabledWarnCategories,
+      aliasEntitiesEnabled:
+        useNotesStore.getState().settings.aliasEntitiesEnabled,
+      aliasEntities: useNotesStore.getState().settings.aliasEntities,
     }
   );
   return { ...draft, firewallStatus: "ready" as const };
@@ -487,6 +492,8 @@ describe("executeDeliveryDraft", () => {
         firewallEnabled: current.settings.firewallEnabled,
         firewallDisabledWarnCategories:
           current.settings.firewallDisabledWarnCategories,
+        aliasEntitiesEnabled: current.settings.aliasEntitiesEnabled,
+        aliasEntities: current.settings.aliasEntities,
       }
     );
     useNotesStore.setState({
@@ -1004,5 +1011,58 @@ describe("executeDeliveryDraft", () => {
     expect(useTargetStore.getState().profileOverrideTargetIdentity).toBe(
       targetProfileIdentity(targetB)
     );
+  });
+});
+
+describe("buildDeliveryDraft 词典化名", () => {
+  const dictionary = [
+    {
+      id: "alias-user",
+      category: "USER",
+      originalText: "张三",
+      placeholder: "[USER_01]",
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    },
+  ];
+
+  it("开启时在构建阶段替换并记录映射与命中数", () => {
+    const draft = buildDeliveryDraft(
+      input({ sourceItemIds: ["n1"] }),
+      state({
+        notes: [note("n1", "请通知张三，让张三确认")],
+        aliasEntities: dictionary,
+      })
+    );
+    expect(draft.finalText).toBe("请通知[USER_01]，让[USER_01]确认");
+    expect(draft.assembledText).toBe(draft.finalText);
+    expect(draft.aliasReplacedCount).toBe(2);
+    expect(draft.redactionMap).toEqual({ 张三: "[USER_01]" });
+  });
+
+  it("模板文字与正文一样参与化名（与隐私扫描待遇一致）", () => {
+    const draft = buildDeliveryDraft(
+      input({ sourceItemIds: ["n1"], promptTemplate: "转告张三：\n{内容}" }),
+      state({
+        notes: [note("n1", "会议改期")],
+        aliasEntities: dictionary,
+      })
+    );
+    expect(draft.finalText).toBe("转告[USER_01]：\n会议改期");
+    expect(draft.aliasReplacedCount).toBe(1);
+  });
+
+  it("总开关关闭时保留原文且不产生映射", () => {
+    const draft = buildDeliveryDraft(
+      input({ sourceItemIds: ["n1"] }),
+      state({
+        notes: [note("n1", "请通知张三")],
+        aliasEntitiesEnabled: false,
+        aliasEntities: dictionary,
+      })
+    );
+    expect(draft.finalText).toBe("请通知张三");
+    expect(draft.aliasReplacedCount).toBe(0);
+    expect(draft.redactionMap).toEqual({});
   });
 });

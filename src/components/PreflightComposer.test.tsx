@@ -109,6 +109,8 @@ describe("PreflightComposer", () => {
         firewallEnabled: true,
         firewallDisabledWarnCategories:
           useNotesStore.getState().settings.firewallDisabledWarnCategories,
+        aliasEntitiesEnabled: true,
+        aliasEntities: [],
       }
     );
     useDeliveryStore.getState().openDraft({
@@ -168,6 +170,8 @@ describe("PreflightComposer", () => {
           firewallEnabled: true,
           firewallDisabledWarnCategories:
             useNotesStore.getState().settings.firewallDisabledWarnCategories,
+          aliasEntitiesEnabled: true,
+          aliasEntities: [],
         }
       ),
       firewallStatus: "ready",
@@ -203,6 +207,8 @@ describe("PreflightComposer", () => {
         dataGeneration: currentDataGeneration(),
         firewallEnabled: true,
         firewallDisabledWarnCategories: [],
+        aliasEntitiesEnabled: true,
+        aliasEntities: [],
       }
     );
     useDeliveryStore.getState().openDraft({
@@ -248,6 +254,8 @@ describe("PreflightComposer", () => {
           firewallEnabled: true,
           firewallDisabledWarnCategories:
             useNotesStore.getState().settings.firewallDisabledWarnCategories,
+          aliasEntitiesEnabled: true,
+          aliasEntities: [],
         }
       ),
       firewallStatus: "ready",
@@ -287,6 +295,8 @@ describe("PreflightComposer", () => {
         dataGeneration: currentDataGeneration(),
         firewallEnabled: true,
         firewallDisabledWarnCategories: [],
+        aliasEntitiesEnabled: true,
+        aliasEntities: [],
       }
     );
     useDeliveryStore.getState().openDraft({
@@ -311,10 +321,12 @@ describe("PreflightComposer", () => {
     expect(html).toContain('aria-label="本地隐私检查"');
     expect(html).toContain("API 密钥 · 高风险 ×1");
     expect(html).toContain("fa•••en");
-    expect(html).toContain("替换此项");
-    expect(html).toContain("替换同类");
-    expect(html).toContain("替换所有建议项");
-    expect(html).toContain("本次保留原文");
+    expect(html).toContain("替换为占位符");
+    expect(html).toContain("同类全部替换");
+    expect(html).toContain("保留原文发送");
+    expect(html).toContain('aria-label="在正文中定位这一项"');
+    // 单条命中时不出现批量按钮，降低误当选项卡的噪音
+    expect(html).not.toContain("一键全部替换");
     expect(html).toContain("再次确认保留高风险原文");
   });
 
@@ -345,6 +357,8 @@ describe("PreflightComposer", () => {
         dataGeneration: currentDataGeneration(),
         firewallEnabled: true,
         firewallDisabledWarnCategories: [],
+        aliasEntitiesEnabled: true,
+        aliasEntities: [],
       }
     );
     useDeliveryStore.getState().openDraft({
@@ -388,7 +402,7 @@ describe("PreflightComposer", () => {
     expect(submit).toContain("disabled");
   });
 
-  it("调用前可见 provider、模型、数据范围与显式转换入口", () => {
+  it("AI 转换预览已按用户反馈移除：即使 AI 已配置也不出现入口", () => {
     useNotesStore.setState((state) => ({
       settings: {
         ...state.settings,
@@ -418,18 +432,21 @@ describe("PreflightComposer", () => {
         dataGeneration: currentDataGeneration(),
         firewallEnabled: true,
         firewallDisabledWarnCategories: [],
+        aliasEntitiesEnabled: true,
+        aliasEntities: [],
       }
     );
     useDeliveryStore.getState().openDraft({ ...built, firewallStatus: "ready" });
     syncServerSnapshots();
 
     const html = renderToStaticMarkup(<PreflightComposer />);
-    expect(html).toContain('aria-label="AI 显式转换"');
-    expect(html).toContain("DeepSeek");
-    expect(html).toContain("deepseek-chat");
-    expect(html).toContain(`${built.finalText.length} 字符`);
-    expect(html).toContain("图片附件不会发送");
-    expect(html).toContain("生成预览");
+    expect(html).not.toContain("AI 显式转换");
+    expect(html).not.toContain("AI 转换预览");
+    expect(html).not.toContain("生成预览");
+    expect(html).not.toContain("deepseek-chat");
+    // 预检主体仍完整
+    expect(html).toContain("本地隐私检查");
+    expect(html).toContain('id="preflight-final-text"');
   });
 
   it("50,000 条历史下 Target Lens 与 Preflight 不渲染整份历史", () => {
@@ -461,6 +478,8 @@ describe("PreflightComposer", () => {
         dataGeneration: currentDataGeneration(),
         firewallEnabled: true,
         firewallDisabledWarnCategories: [],
+        aliasEntitiesEnabled: true,
+        aliasEntities: [],
       }
     );
     useDeliveryStore.getState().openDraft({ ...built, firewallStatus: "ready" });
@@ -479,5 +498,105 @@ describe("PreflightComposer", () => {
     expect(html).toContain("发送预检");
     expect(html.length).toBeLessThan(150_000);
     expect(elapsedMs).toBeLessThan(2_500);
+  });
+});
+
+describe("PreflightComposer 可逆化名分区", () => {
+  beforeEach(() => {
+    resetDeliveryDraftSession();
+    resetDeliveryStore();
+    resetTargetState();
+    useNotesStore.setState({
+      sections: [{ id: INBOX_ID, name: "收件箱" }],
+      notes: [],
+      tasks: [],
+      taskSections: [{ id: TASK_INBOX_ID, name: "收集箱" }],
+      checkedIds: [],
+      settings: {
+        ...defaultSettings(),
+        aliasEntities: [
+          {
+            id: "alias-user",
+            category: "USER",
+            originalText: "张三",
+            placeholder: "[USER_01]",
+            createdAtMs: 1,
+            updatedAtMs: 1,
+          },
+        ],
+      },
+      undoStack: [],
+    });
+    useUIStore.setState({ open: true, pinned: false });
+    applyTargetEvent(target);
+  });
+
+  function openAliasedDraft() {
+    const id = useNotesStore.getState().addNote("请通知张三到场").id!;
+    useNotesStore.getState().setChecked([id]);
+    const settings = useNotesStore.getState().settings;
+    const draft = buildDeliveryDraft(
+      {
+        id: "preflight-alias",
+        revision: nextDeliveryDraftRevision(),
+        createdAtMs: 1,
+        sourceKind: "note",
+        sourceItemIds: [id],
+      },
+      {
+        notes: useNotesStore.getState().notes,
+        tasks: [],
+        promptSnippets: settings.promptSnippets,
+        checkedItemIds: [id],
+        targetSnapshot: useTargetStore.getState().snapshot,
+        profileResolution: currentTargetProfileResolution(),
+        panelPinned: false,
+        dataGeneration: currentDataGeneration(),
+        firewallEnabled: true,
+        firewallDisabledWarnCategories: settings.firewallDisabledWarnCategories,
+        aliasEntitiesEnabled: settings.aliasEntitiesEnabled,
+        aliasEntities: settings.aliasEntities,
+      }
+    );
+    useDeliveryStore.getState().openDraft({ ...draft, firewallStatus: "ready" });
+    return draft;
+  }
+
+  it("展示已自动替换的词典命中与还原按钮", () => {
+    const draft = openAliasedDraft();
+    expect(draft.finalText).toBe("请通知[USER_01]到场");
+    syncServerSnapshots();
+    const html = renderToStaticMarkup(<PreflightComposer />);
+    expect(html).toContain("可逆化名");
+    expect(html).toContain("已自动替换 1 处");
+    expect(html).toContain("张三 → [USER_01]");
+    expect(html).toContain("还原为原文");
+  });
+
+  it("还原一处后分区收缩且正文恢复原文", () => {
+    openAliasedDraft();
+    const current = useDeliveryStore.getState().draft!;
+    const start = current.finalText.indexOf("[USER_01]");
+    useDeliveryStore.getState().revertAliasFinding({
+      startUtf16: start,
+      endUtf16: start + "[USER_01]".length,
+      placeholder: "[USER_01]",
+      originalText: "张三",
+    });
+    expect(useDeliveryStore.getState().draft!.finalText).toBe("请通知张三到场");
+    syncServerSnapshots();
+    const html = renderToStaticMarkup(<PreflightComposer />);
+    expect(html).not.toContain("可逆化名");
+  });
+
+  it("总开关关闭时不渲染分区", () => {
+    useNotesStore.setState((state) => ({
+      settings: { ...state.settings, aliasEntitiesEnabled: false },
+    }));
+    const draft = openAliasedDraft();
+    expect(draft.finalText).toBe("请通知张三到场");
+    syncServerSnapshots();
+    const html = renderToStaticMarkup(<PreflightComposer />);
+    expect(html).not.toContain("可逆化名");
   });
 });

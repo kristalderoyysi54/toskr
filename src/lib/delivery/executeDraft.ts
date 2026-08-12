@@ -173,6 +173,8 @@ function draftSourceIsCurrent(draft: DeliveryDraft): boolean {
       firewallEnabled: state.settings.firewallEnabled,
       firewallDisabledWarnCategories:
         state.settings.firewallDisabledWarnCategories,
+      aliasEntitiesEnabled: state.settings.aliasEntitiesEnabled,
+      aliasEntities: state.settings.aliasEntities,
     }
   );
   return rebuilt.rawText === draft.rawText &&

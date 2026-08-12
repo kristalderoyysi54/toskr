@@ -94,6 +94,8 @@ import {
   clearDeliveryRedactionSessions,
   closeResultReturnDialog,
   deliveryCandidatesForCapturedNote,
+  deliveryPlaceholderEvidence,
+  linkCapturedNoteToDelivery,
   RESULT_LINK_CHANGED_EVENT,
 } from "@/lib/resultReturn";
 import { closeResultVerificationDialog } from "@/lib/resultVerification";
@@ -188,6 +190,8 @@ import {
   type TriggerPayload,
 } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
+import { registerAliasQuickAddListener } from "@/lib/aliasQuickAdd";
+import { restoreAliases } from "@/lib/delivery/aliasEntities";
 import { clearDeliveryDraftImages } from "@/lib/delivery/imageFirewall";
 import {
   CLIPBOARD_ID,
@@ -871,7 +875,16 @@ export default function App() {
         else void openPanel(shortcutHoldOpen);
         return;
       }
-      const { result, id } = useNotesStore.getState().addNote(payload.text, {
+      // 可逆化名：仅文本捕获在入库前把词典占位符还原为原文（本机词典反查，无需发送会话）
+      const captureSettings = useNotesStore.getState().settings;
+      const aliasRestore =
+        payload.contentKind !== "image" &&
+        captureSettings.aliasEntitiesEnabled &&
+        captureSettings.aliasAutoRestoreOnCapture
+          ? restoreAliases(payload.text, captureSettings.aliasEntities)
+          : null;
+      const captureText = aliasRestore?.text ?? payload.text;
+      const { result, id } = useNotesStore.getState().addNote(captureText, {
         sourceApp: payload.appName ?? undefined,
         sourceBundle: payload.bundleId ?? undefined,
         // 文本不写死 kind，交给 addNote 检测（URL → 链接卡）
@@ -883,21 +896,34 @@ export default function App() {
       if (result === "empty") return;
       const showCaptureResult = async () => {
         let associationSuggested = false;
+        let autoLinked = false;
         if (result === "added" && id && payload.bundleId) {
           try {
             const events = await getRecentDeliveryEventsCached(100);
             const current = useNotesStore.getState().notes.find((note) => note.id === id);
-            associationSuggested = !!current &&
-              deliveryCandidatesForCapturedNote(current, events).length === 1;
+            const candidates = current
+              ? deliveryCandidatesForCapturedNote(current, events)
+              : [];
+            // 占位符指纹（对恢复前原文判定）+ 唯一候选 = 双重证据，免确认自动归位；
+            // 只有时间窗证据时维持「右键确认」建议，多候选不动
+            if (
+              candidates.length === 1 &&
+              deliveryPlaceholderEvidence(candidates[0].deliveryId, payload.text)
+            ) {
+              autoLinked = await linkCapturedNoteToDelivery(id, candidates[0]);
+            }
+            associationSuggested = !autoLinked && candidates.length === 1;
           } catch {
             // 建议是增强能力；活动记录不可用不能吞掉捕获 HUD。
           }
         }
         void api.showCaptureHud(
           result === "duplicate" ? "duplicate" : "added",
-          previewOf(payload.text),
+          previewOf(captureText),
           payload.clipboardWarning,
-          associationSuggested
+          associationSuggested,
+          aliasRestore?.restoredCount ?? null,
+          autoLinked
         );
       };
       void showCaptureResult();
@@ -942,6 +968,14 @@ export default function App() {
     });
     return () => {
       unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  // 详情窗等非主窗口的「加入化名词典」请求：主面板统一取号写入
+  useEffect(() => {
+    const unlisten = registerAliasQuickAddListener();
+    return () => {
+      void unlisten.then((fn) => fn());
     };
   }, []);
 
@@ -3010,7 +3044,7 @@ export default function App() {
                     )}
                   </StripScroller>
                 ) : (
-                <ScrollArea className="min-h-0 flex-1 px-2">
+                <ScrollArea className="min-h-0 flex-1 px-3.5">
                   {clipNotes.length === 0 ? (
                     <EmptyState
                       icon={<ClipboardList />}
@@ -3043,12 +3077,12 @@ export default function App() {
                         items={clipNavIds}
                         strategy={verticalListSortingStrategy}
                       >
-                        <div className="flex flex-col pb-2 pl-2 pt-1">
+                        <div className="flex flex-col pb-2 pt-1">
                           {clipBands.map(({ band, notes: bandNotes }, bi) => (
                             <div key={`${band}-${bandNotes[0]!.id}`}>
                               <div
                                 className={cn(
-                                  "flex items-center gap-2 px-1 pb-1",
+                                  "flex items-center gap-2 pb-1",
                                   bi === 0 ? "pt-0.5" : "pt-2.5"
                                 )}
                               >
@@ -3057,7 +3091,13 @@ export default function App() {
                                 </span>
                                 <span className="h-px flex-1 bg-border/60" />
                               </div>
-                              <div className="flex flex-col gap-1">
+                              {/* 紧缩=零间距流水（行底 hover 才浮现，靠行高节奏分行）；舒适=卡片间距 */}
+                              <div
+                                className={cn(
+                                  "flex flex-col",
+                                  settings.cardDensity !== "compact" && "gap-1"
+                                )}
+                              >
                                 {bandNotes.map((n) => (
                                   <NoteCard key={n.id} note={n} query={q} />
                                 ))}
@@ -3111,7 +3151,7 @@ export default function App() {
                   </StripScroller>
                   </>
                 ) : (
-              <ScrollArea className="min-h-0 flex-1 px-2">
+              <ScrollArea className="min-h-0 flex-1 px-3.5">
                 {(!onboarding.done || onboarding.rehearsalActive) && (
                   <SafeDeliveryRehearsal />
                 )}
@@ -3253,7 +3293,8 @@ function ClipLoadMore({
   );
 }
 
-/** chrome 级图标钮的 Radix 提示（行级高重复件按政策保留原生 title）。 */
+/** chrome 级图标钮的 Radix 提示（行级高重复件按政策保留原生 title）；
+ *  「仅指针可打开」策略统一在 ui/tooltip.tsx 实现。 */
 function Tipped({ label, children }: { label: string; children: React.ReactElement }) {
   return (
     <Tooltip>
@@ -3330,9 +3371,10 @@ function PageTab({
       )}
     >
       {children}
-      {/* token-exception: 徽标 9px 为重塑前原始尺寸，用户指定还原 */}
+      {/* 16px 正圆：min-w=h 锁死单数字为圆，两位数由 min-width 让位撑成胶囊。
+          字号走 text-micro（10px）——9px 在 16px 圆里笔画糊、占比过小，视觉上「不正」 */}
       {!!badge && (
-        <span className="rounded-full bg-destructive/90 px-1.5 text-[9px] font-semibold leading-4 tabular-nums text-white">
+        <span className="inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-destructive/90 px-1 text-micro font-semibold tabular-nums text-white">
           {badge}
         </span>
       )}

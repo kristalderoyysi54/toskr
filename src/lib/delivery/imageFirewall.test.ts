@@ -88,6 +88,7 @@ function draft(items: ImageFirewallItem[]): DeliveryDraft {
     firewallEnabled: true,
     firewallDisabledWarnCategories: [],
     firewallStatus: "ready",
+    aliasReplacedCount: 0,
     findings: [],
     redactionMap: {},
     scanRevision: 1,

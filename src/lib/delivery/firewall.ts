@@ -62,7 +62,21 @@ export const FIREWALL_SEVERITY_LABEL: Record<FindingSeverity, string> = {
   block: "高风险",
 };
 
-function placeholderBase(finding: FirewallFinding): string {
+/** 全局占位符形态（[CODE_NN]）；resultVerification 与化名词典共用同一定义。 */
+export const PLACEHOLDER_PATTERN = /\[[A-Z][A-Z0-9_]*_[0-9]{2,}\]/g;
+export const PLACEHOLDER_NAME_PATTERN = /^\[[A-Z][A-Z0-9_]*_[0-9]{2,}\]$/;
+
+/** 替换/裁决算法需要的最小结构；FirewallFinding 天然满足，词典命中也可复用。 */
+export interface PlaceholderMatch {
+  id: string;
+  category: string;
+  severity: FindingSeverity;
+  startUtf16: number;
+  endUtf16: number;
+  suggestedPlaceholder: string;
+}
+
+function placeholderBase(finding: PlaceholderMatch): string {
   const suggested = finding.suggestedPlaceholder.trim();
   const bracketed = /^\[([A-Z0-9_]+)\]$/.exec(suggested);
   if (bracketed) return bracketed[1];
@@ -88,9 +102,9 @@ function nextPlaceholderNumber(
 }
 
 /** 为同一 Draft 的原值分配稳定占位符；旧映射永不重编号。 */
-export function assignStablePlaceholders(
+export function assignStablePlaceholders<T extends PlaceholderMatch>(
   text: string,
-  findings: readonly FirewallFinding[],
+  findings: readonly T[],
   existing: Readonly<Record<string, string>>
 ): Record<string, string> {
   const redactionMap = Object.assign(
@@ -120,10 +134,10 @@ const SEVERITY_RANK: Record<FindingSeverity, number> = {
 };
 
 /** 异常/重叠 finding 也 fail-closed：高严重级、长区间优先，禁止交叉 slice。 */
-function nonOverlappingFindings(
+export function nonOverlappingFindings<T extends PlaceholderMatch>(
   text: string,
-  findings: readonly FirewallFinding[]
-): FirewallFinding[] {
+  findings: readonly T[]
+): T[] {
   const candidates = findings
     .filter((finding) => findingUtf16RangeIsValid(text, finding))
     .sort((left, right) =>
@@ -132,7 +146,7 @@ function nonOverlappingFindings(
       left.startUtf16 - right.startUtf16 ||
       left.id.localeCompare(right.id)
     );
-  const selected: FirewallFinding[] = [];
+  const selected: T[] = [];
   for (const candidate of candidates) {
     if (selected.some((item) =>
       candidate.startUtf16 < item.endUtf16 && candidate.endUtf16 > item.startUtf16
@@ -142,9 +156,9 @@ function nonOverlappingFindings(
   return selected.sort((left, right) => left.startUtf16 - right.startUtf16);
 }
 
-export function replaceFirewallFindings(
+export function replaceFirewallFindings<T extends PlaceholderMatch>(
   text: string,
-  findings: readonly FirewallFinding[],
+  findings: readonly T[],
   existingMap: Readonly<Record<string, string>>
 ): {
   text: string;

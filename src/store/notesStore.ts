@@ -6,14 +6,19 @@ import { detectLink } from "@/lib/link";
 import { imageCaption, mergeTexts } from "@/lib/format";
 import { normalizeNoteContent } from "@/lib/noteContent";
 import { FIREWALL_WARN_CATEGORIES } from "@/lib/delivery/firewall";
+import {
+  isAliasCategoryRecordValid,
+  isAliasCounterRecordValid,
+  isAliasEntityRecordValid,
+  type AliasCategoryDefinition,
+  type AliasEntity,
+} from "@/lib/delivery/aliasEntities";
 import type { FindingCategory } from "@/lib/tauri";
 import {
   normalizeOutcomeBaselines,
   normalizeProblemSessions,
-  normalizeQualityFeedback,
   type OutcomeBaseline,
   type OutcomeProblemSession,
-  type OutcomeQualityFeedback,
   type OutcomeRetentionDays,
 } from "@/lib/outcomeIntelligence";
 import {
@@ -38,6 +43,7 @@ import {
 import { tauriStateStorage } from "./persistStorage";
 
 export type { PromptGroup, PromptSnippet, TargetProfile } from "@/lib/targetProfiles";
+export type { AliasCategoryDefinition, AliasEntity } from "@/lib/delivery/aliasEntities";
 export type { OnboardingEvent, OnboardingState } from "@/lib/onboarding";
 
 export type NoteKind = "text" | "image" | "link";
@@ -47,7 +53,7 @@ export type PageId = "notes" | "clipboard" | "tasks";
 
 /** 页签默认顺序（剪贴最高频，居首）。 */
 export const DEFAULT_PAGE_ORDER: PageId[] = ["clipboard", "notes", "tasks"];
-export const STORE_VERSION = 14;
+export const STORE_VERSION = 15;
 
 /**
  * 归一化页签顺序：去重、剔除未知项、补齐缺失页（按默认序追加）。
@@ -256,6 +262,8 @@ export interface Settings {
   cardOpacity: number;
   /** 卡片密度：舒适（瓷砖）/ 紧凑（单行列表）。 */
   cardDensity: "comfortable" | "compact";
+  /** 剪贴卡模板（仅舒适密度竖栏生效）：标准瓷砖 / 浓缩（通栏+单行摘要）/ 只留通栏。 */
+  clipCardTemplate: "standard" | "condensed" | "banner";
   /** 卡片右键菜单项显隐与顺序（合并置顶、删除垫底不参与自定义）。 */
   contextMenu: { id: ContextMenuItemId; on: boolean }[];
   /** 启动时自动检查更新。 */
@@ -334,6 +342,16 @@ export interface Settings {
   firewallEnabled: boolean;
   /** 用户本次关闭的提示级类别；block 规则不允许进入此列表。 */
   firewallDisabledWarnCategories: FindingCategory[];
+  /** 可逆化名总开关（词典为空时天然惰性）。 */
+  aliasEntitiesEnabled: boolean;
+  /** 化名词典：用户主动录入的原文 → 稳定占位符（明文随本地数据与完整备份保存）。 */
+  aliasEntities: AliasEntity[];
+  /** 用户自定义化名类别（预置类别硬编码，不落此处）。 */
+  aliasCustomCategories: AliasCategoryDefinition[];
+  /** 类别码 → 下一个可用编号；只增不减，删除条目不回收编号。 */
+  aliasNextNumberByCategory: Record<string, number>;
+  /** 划词捕获入库时自动把词典占位符恢复为原文。 */
+  aliasAutoRestoreOnCapture: boolean;
   /** 本机成效聚合开关；关闭后新发送仍可恢复，但不进入指标。 */
   outcomeMetricsEnabled: boolean;
   /** 发送元数据账本保留期；按当前数据目录压实。 */
@@ -342,8 +360,6 @@ export interface Settings {
   outcomeMetricsEpoch: number;
   /** 用户明确填写的传统流程基线；没有基线绝不估算节省时间。 */
   outcomeBaselines: OutcomeBaseline[];
-  /** 用户对已关联结果的可选质量反馈，不包含结果正文。 */
-  outcomeQualityFeedback: OutcomeQualityFeedback[];
   /** 用户主动开始的问题处理计时，只保存时间与关联发送 ID。 */
   outcomeProblemSessions: OutcomeProblemSession[];
   /** 数据文件夹展示值（真实来源在 Rust，这里仅用于设置界面回显）。 */
@@ -483,6 +499,7 @@ export const defaultSettings = (): Settings => ({
   cardTint: true,
   cardOpacity: 1,
   cardDensity: "comfortable",
+  clipCardTemplate: "standard",
   contextMenu: CONTEXT_MENU_REGISTRY.map((i) => ({ id: i.id, on: true })),
   autoCheckUpdate: true,
   autoInstallUpdate: false,
@@ -524,11 +541,15 @@ export const defaultSettings = (): Settings => ({
   defaultTargetProfileId: SAFETY_PROFILE_ID,
   firewallEnabled: true,
   firewallDisabledWarnCategories: [],
+  aliasEntitiesEnabled: true,
+  aliasEntities: [],
+  aliasCustomCategories: [],
+  aliasNextNumberByCategory: {},
+  aliasAutoRestoreOnCapture: true,
   outcomeMetricsEnabled: true,
   outcomeRetentionDays: 30,
   outcomeMetricsEpoch: 0,
   outcomeBaselines: [],
-  outcomeQualityFeedback: [],
   outcomeProblemSessions: [],
   dataDir: "",
   panelWidth: 380,
@@ -557,7 +578,6 @@ function repairSettingsTargetProfiles(settings: Settings): Settings {
       ? settings.outcomeRetentionDays
       : 30,
     outcomeBaselines: normalizeOutcomeBaselines(settings.outcomeBaselines),
-    outcomeQualityFeedback: normalizeQualityFeedback(settings.outcomeQualityFeedback),
     outcomeProblemSessions: normalizeProblemSessions(settings.outcomeProblemSessions),
     onboarding: onboardingStateFromPersisted(settings.onboarding),
     promptGroups: repaired.groups,
@@ -770,6 +790,7 @@ function assertCurrentSchemaHasUniqueIds(
   assertUnique(persisted.settings?.promptGroups, "settings.promptGroups");
   assertUnique(persisted.settings?.promptSnippets, "settings.promptSnippets");
   assertUnique(persisted.settings?.targetProfiles, "settings.targetProfiles");
+  assertUnique(persisted.settings?.aliasEntities, "settings.aliasEntities");
 }
 
 function validateSettingsShape(value: unknown, version: number): void {
@@ -824,6 +845,7 @@ function validateSettingsShape(value: unknown, version: number): void {
   enumField("theme", ["system", "light", "dark"]);
   enumField("vibrancyMaterial", ["hud", "popover", "sidebar", "under-window", "fullscreen"]);
   enumField("cardDensity", ["comfortable", "compact"]);
+  enumField("clipCardTemplate", ["standard", "condensed", "banner"]);
   enumField("hotkeyModifier", ["shift", "control", "option"]);
   enumField("sidebarEdge", ["right", "left", "top", "bottom"]);
   if (settings.outcomeRetentionDays !== undefined &&
@@ -867,7 +889,6 @@ function validateSettingsShape(value: unknown, version: number): void {
     }
   };
   validateNormalizedArray("outcomeBaselines", 64, normalizeOutcomeBaselines);
-  validateNormalizedArray("outcomeQualityFeedback", 500, normalizeQualityFeedback);
   validateNormalizedArray("outcomeProblemSessions", 100, normalizeProblemSessions);
   const pageOrder = settings.pageOrder;
   if (pageOrder !== undefined && (!Array.isArray(pageOrder) || !pageOrder.every((item) => DEFAULT_PAGE_ORDER.includes(item as PageId)))) {
@@ -916,6 +937,38 @@ function validateSettingsShape(value: unknown, version: number): void {
   if (settings.defaultTargetProfileId !== undefined
     && typeof settings.defaultTargetProfileId !== "string") {
     throw new Error("settings.defaultTargetProfileId 字段无效");
+  }
+  const aliasEntities = settings.aliasEntities;
+  if (aliasEntities !== undefined) {
+    if (!Array.isArray(aliasEntities) || !aliasEntities.every(isAliasEntityRecordValid)) {
+      throw new Error("settings.aliasEntities 字段无效");
+    }
+    const originals = new Set<string>();
+    const placeholders = new Set<string>();
+    for (const item of aliasEntities as AliasEntity[]) {
+      if (originals.has(item.originalText) || placeholders.has(item.placeholder)) {
+        throw new Error("settings.aliasEntities 含重复原文或占位符");
+      }
+      originals.add(item.originalText);
+      placeholders.add(item.placeholder);
+    }
+  }
+  const aliasCustomCategories = settings.aliasCustomCategories;
+  if (aliasCustomCategories !== undefined) {
+    if (!Array.isArray(aliasCustomCategories) ||
+      !aliasCustomCategories.every(isAliasCategoryRecordValid)) {
+      throw new Error("settings.aliasCustomCategories 字段无效");
+    }
+    const codes = new Set(
+      (aliasCustomCategories as AliasCategoryDefinition[]).map((item) => item.code)
+    );
+    if (codes.size !== aliasCustomCategories.length) {
+      throw new Error("settings.aliasCustomCategories 含重复类别码");
+    }
+  }
+  if (settings.aliasNextNumberByCategory !== undefined &&
+    !isAliasCounterRecordValid(settings.aliasNextNumberByCategory)) {
+    throw new Error("settings.aliasNextNumberByCategory 字段无效");
   }
   const menu = settings.contextMenu;
   const menuIds = new Set(CONTEXT_MENU_REGISTRY.map((item) => item.id));
@@ -1192,7 +1245,6 @@ export function migratePersistedState(
       outcomeRetentionDays: 30,
       outcomeMetricsEpoch: 0,
       outcomeBaselines: [],
-      outcomeQualityFeedback: [],
       outcomeProblemSessions: [],
     };
   }
@@ -1200,6 +1252,17 @@ export function migratePersistedState(
     p.settings = {
       ...p.settings,
       onboarding: onboardingStateFromPersisted(p.settings.onboarding),
+    };
+  }
+  if (version < 15 && p.settings) {
+    p.settings = {
+      ...p.settings,
+      // 词典为空时功能天然惰性，开关默认开启不改变旧用户任何可见行为
+      aliasEntitiesEnabled: true,
+      aliasEntities: [],
+      aliasCustomCategories: [],
+      aliasNextNumberByCategory: {},
+      aliasAutoRestoreOnCapture: true,
     };
   }
 
@@ -1346,10 +1409,12 @@ export const useNotesStore = create<NotesState>()(
         if (dup) return { result: "duplicate", id: dup.id };
 
         const sections = get().sections;
+        // 默认落点绝不能是剪贴板历史组：分组排序可能把隐藏的剪贴板组顶到
+        // 首位，导致双击捕获「消失」进剪贴页（现网踩坑 2026-08）
         const sectionId =
           opts?.sectionId && sections.some((s) => s.id === opts.sectionId)
             ? opts.sectionId
-            : (sections[0]?.id ?? INBOX_ID);
+            : (sections.find((s) => s.id !== CLIPBOARD_ID)?.id ?? INBOX_ID);
         const note: Note = {
           id: crypto.randomUUID(),
           text: trimmed,
@@ -1762,8 +1827,12 @@ export const useNotesStore = create<NotesState>()(
       moveSection: (id, dir) => {
         const sections = [...get().sections];
         const from = sections.findIndex((s) => s.id === id);
-        const to = from + dir;
-        if (from < 0 || to < 0 || to >= sections.length) return;
+        if (from < 0) return;
+        // 剪贴板历史组在笔记页不可见：相邻交换必须跳过它，
+        // 否则出现「按了上/下移但看不见变化」的隐形换位
+        let to = from + dir;
+        while (sections[to]?.id === CLIPBOARD_ID) to += dir;
+        if (to < 0 || to >= sections.length) return;
         const [moved] = sections.splice(from, 1);
         sections.splice(to, 0, moved);
         set({ sections });

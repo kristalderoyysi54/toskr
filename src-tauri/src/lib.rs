@@ -109,8 +109,7 @@ pub fn run() {
                     window::ensure_fullscreen_auxiliary(&win);
                 }
                 if let Some(win) = app.get_webview_window("hud") {
-                    let _ =
-                        apply_vibrancy(&win, NSVisualEffectMaterial::HudWindow, active, Some(14.0));
+                    // HUD 自绘纸白气泡 + 尾巴 + logo（异形剪影），不再贴整窗 vibrancy 圆角膜
                     let _ = win.set_ignore_cursor_events(true);
                     window::ensure_fullscreen_auxiliary(&win);
                 }

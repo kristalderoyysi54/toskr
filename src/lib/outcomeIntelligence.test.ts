@@ -9,7 +9,6 @@ import {
   normalizeProblemSessions,
   solveProblemSession,
   startProblemSession,
-  upsertQualityFeedback,
   type OutcomeBaseline,
   type OutcomeProblemSession,
 } from "./outcomeIntelligence";
@@ -109,7 +108,7 @@ describe("Outcome Intelligence 聚合器", () => {
       }),
     ];
 
-    const metrics = aggregateOutcomeMetrics(events, [], [], [], {
+    const metrics = aggregateOutcomeMetrics(events, [], [], {
       range: "7d",
       nowMs: NOW,
       timeZone: "Asia/Shanghai",
@@ -160,7 +159,7 @@ describe("Outcome Intelligence 聚合器", () => {
       }),
     ];
 
-    const metrics = aggregateOutcomeMetrics(events, [], [], [], {
+    const metrics = aggregateOutcomeMetrics(events, [], [], {
       range: "7d",
       nowMs: NOW,
       timeZone: "Asia/Shanghai",
@@ -208,7 +207,7 @@ describe("Outcome Intelligence 聚合器", () => {
       }),
     ];
 
-    const metrics = aggregateOutcomeMetrics(events, [], [], [], {
+    const metrics = aggregateOutcomeMetrics(events, [], [], {
       range: "7d",
       nowMs: NOW,
       timeZone: "Asia/Shanghai",
@@ -225,7 +224,7 @@ describe("Outcome Intelligence 聚合器", () => {
       event("sendSent", NOW - 500, { deliveryId: "after-clear", metricsEpoch: 1 }),
     ];
 
-    const metrics = aggregateOutcomeMetrics(events, [], [], [], {
+    const metrics = aggregateOutcomeMetrics(events, [], [], {
       range: "all",
       nowMs: NOW,
       timeZone: "UTC",
@@ -250,13 +249,12 @@ describe("Outcome Intelligence 聚合器", () => {
       [null, { eventType: "unknown" }, safe] as unknown as DeliveryEvent[],
       [],
       [],
-      [],
       { range: "30d", nowMs: NOW, timeZone: "UTC", profileId: null, recipeId: null }
     );
     expect(metrics.deliveryAttempts).toBe(1);
     expect(metrics.successRate).toBe(1);
 
-    const empty = aggregateOutcomeMetrics([], [], [], [], {
+    const empty = aggregateOutcomeMetrics([], [], [], {
       range: "all",
       nowMs: NOW,
       timeZone: "UTC",
@@ -281,7 +279,7 @@ describe("Outcome Intelligence 聚合器", () => {
       event("sendSent", NOW - 5_000, { deliveryId: "d2", transformRecipeId: "summarize" }),
     ];
 
-    const metrics = aggregateOutcomeMetrics(events, [], [], [], {
+    const metrics = aggregateOutcomeMetrics(events, [], [], {
       range: "all",
       nowMs: NOW,
       timeZone: "UTC",
@@ -309,46 +307,16 @@ describe("Outcome Intelligence 聚合器", () => {
       profileId: null,
       recipeId: null,
     };
-    expect(aggregateOutcomeMetrics(events, [], [], [], options).estimatedTimeSavedMs).toBeNull();
+    expect(aggregateOutcomeMetrics(events, [], [], options).estimatedTimeSavedMs).toBeNull();
 
     const baselines: OutcomeBaseline[] = [
       { scope: "profile", scopeId: "profile-a", minutes: 20 },
       { scope: "recipe", scopeId: "summarize", minutes: 8 },
     ];
-    const metrics = aggregateOutcomeMetrics(events, [], [], baselines, options);
+    const metrics = aggregateOutcomeMetrics(events, [], baselines, options);
     expect(metrics.actualWorkflowMedianMs).toBe(5 * 60_000);
     expect(metrics.estimatedTimeSavedMs).toBe(3 * 60_000);
     expect(metrics.estimatedSampleSize).toBe(1);
-  });
-
-  it("结果改绑后不把旧结果的质量反馈归到新结果", () => {
-    const events = [
-      event("sendSent", NOW - 3_000),
-      event("resultCaptured", NOW - 2_000, { resultNoteId: "result-old" }),
-      event("resultCaptured", NOW - 1_000, { resultNoteId: "result-current" }),
-    ];
-    const options = {
-      range: "all" as const,
-      nowMs: NOW,
-      timeZone: "UTC",
-      profileId: null,
-      recipeId: null,
-    };
-    const oldFeedback = aggregateOutcomeMetrics(events, [{
-      deliveryId: "d1",
-      resultNoteId: "result-old",
-      quality: "directUse",
-      updatedAtMs: NOW - 500,
-    }], [], [], options);
-    expect(oldFeedback.qualityFeedback.directUse).toBe(0);
-
-    const currentFeedback = aggregateOutcomeMetrics(events, [{
-      deliveryId: "d1",
-      resultNoteId: "result-current",
-      quality: "minorEdit",
-      updatedAtMs: NOW - 500,
-    }], [], [], options);
-    expect(currentFeedback.qualityFeedback.minorEdit).toBe(1);
   });
 });
 
@@ -365,27 +333,6 @@ describe("Outcome Intelligence 用户输入状态", () => {
       { scope: "profile", scopeId: "p", minutes: 15 },
       { scope: "recipe", scopeId: "summarize", minutes: 8 },
     ]);
-  });
-
-  it("质量反馈按 delivery 更新且有界", () => {
-    const first = upsertQualityFeedback([], {
-      deliveryId: "d1",
-      resultNoteId: "r1",
-      quality: "directUse",
-      updatedAtMs: 1,
-    });
-    const updated = upsertQualityFeedback(first, {
-      deliveryId: "d1",
-      resultNoteId: "r1",
-      quality: "minorEdit",
-      updatedAtMs: 2,
-    });
-    expect(updated).toEqual([{
-      deliveryId: "d1",
-      resultNoteId: "r1",
-      quality: "minorEdit",
-      updatedAtMs: 2,
-    }]);
   });
 
   it("问题会话只允许开始→关联→解决或取消，并计算真实耗时", () => {

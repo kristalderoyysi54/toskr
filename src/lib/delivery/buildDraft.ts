@@ -12,6 +12,7 @@ import type {
   DeliveryDraftInput,
   DeliveryDraftWarning,
 } from "./types";
+import { applyAliasEntities } from "./aliasEntities";
 import { EMPTY_PRIVACY_DECISION } from "./firewall";
 
 export function buildTaskMarkdown(task: Task): string {
@@ -101,9 +102,14 @@ export function buildDeliveryDraft(
   const formattedText = rawText && format === "code"
     ? wrapAsCodeBlock(rawText, singleCodeLanguage)
     : rawText;
-  const finalText = input.promptTemplate
+  const assembledBase = input.promptTemplate
     ? applyPromptTemplate(input.promptTemplate, formattedText)
     : formattedText;
+  // 词典化名先于隐私正则扫描（扫描发生在 dispatch 阶段），被化名的实体不会再触发正则命中
+  const aliasResult = state.aliasEntitiesEnabled && assembledBase
+    ? applyAliasEntities(assembledBase, state.aliasEntities)
+    : { text: assembledBase, redactionMap: {}, replacedCount: 0 };
+  const finalText = aliasResult.text;
 
   if (!finalText && imageFiles.length === 0) {
     addWarning(warnings, "empty-payload");
@@ -156,7 +162,8 @@ export function buildDeliveryDraft(
     firewallDisabledWarnCategories: [...state.firewallDisabledWarnCategories],
     firewallStatus: state.firewallEnabled ? "idle" : "disabled",
     findings: [],
-    redactionMap: {},
+    redactionMap: aliasResult.redactionMap,
+    aliasReplacedCount: aliasResult.replacedCount,
     scanRevision: 0,
     privacyDecision: { ...EMPTY_PRIVACY_DECISION },
     enterPolicy: profile.enterPolicy,

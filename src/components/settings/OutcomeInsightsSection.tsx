@@ -8,7 +8,6 @@ import {
   Play,
   RefreshCw,
   Send,
-  ShieldCheck,
   Trash2,
   X,
 } from "lucide-react";
@@ -67,10 +66,6 @@ const REASON_LABEL: Record<string, string> = {
   nothingToRestore: "无需恢复",
   restoreFailed: "恢复失败",
   notOwned: "剪贴板所有权已变化",
-  directUse: "直接使用",
-  minorEdit: "小改后使用",
-  majorEdit: "大改后使用",
-  discarded: "未采用",
 };
 
 function formatPercent(value: number | null): string {
@@ -137,10 +132,13 @@ export function OutcomeMetricsSummary({
   metrics,
   hasActivity = true,
   rangeLabel = "所选时间",
+  onClearFilters,
 }: {
   metrics: OutcomeMetrics;
   hasActivity?: boolean;
   rangeLabel?: string;
+  /** 有记录但当前筛选为空时的一键复位（筛选器藏在折叠区里，空态必须给出口）。 */
+  onClearFilters?: () => void;
 }) {
   if (!metrics.deliveryAttempts) {
     return (
@@ -161,6 +159,22 @@ export function OutcomeMetricsSummary({
                 ? "换一个时间范围或清除详细筛选后再看。"
                 : "完成一次发送后，这里会显示成功率、用时和敏感内容保护情况。"}
             </p>
+            {!hasActivity && (
+              <p className="mt-2 text-label text-muted-foreground">
+                发送第一条内容试试：双击 ⇧ 捕获选中文本，勾选后 ⌘⏎ 发送。
+              </p>
+            )}
+            {hasActivity && onClearFilters && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="mt-2"
+                onClick={onClearFilters}
+              >
+                清除筛选
+              </Button>
+            )}
           </div>
         </div>
       </section>
@@ -220,7 +234,6 @@ export function OutcomeMetricsDetails({ metrics }: { metrics: OutcomeMetrics }) 
     { title: "阻止原因", values: metrics.blockedReasons },
     { title: "失败原因", values: metrics.failedReasons },
     { title: "剪贴板结果", values: metrics.clipboardOutcomes },
-    { title: "结果质量", values: metrics.qualityFeedback },
   ].filter((item) => Object.values(item.values).some((count) => count > 0));
 
   return (
@@ -390,7 +403,6 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
 
   const metrics = useMemo(() => aggregateOutcomeMetrics(
     events,
-    settings.outcomeQualityFeedback,
     settings.outcomeProblemSessions,
     settings.outcomeBaselines,
     {
@@ -409,7 +421,6 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
     settings.outcomeBaselines,
     settings.outcomeMetricsEpoch,
     settings.outcomeProblemSessions,
-    settings.outcomeQualityFeedback,
   ]);
 
   const records = useMemo(
@@ -448,7 +459,7 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
 
   const clearMetrics = async () => {
     const confirmed = await ask(
-      "清除使用统计、结果评价和问题计时？最近发送记录、卡片、任务、附件及传统用时设置不会改变。",
+      "清除使用统计和问题计时？最近发送记录、卡片、任务、附件及传统用时设置不会改变。",
       { title: "清除使用统计", kind: "warning" }
     );
     if (!confirmed) return;
@@ -458,7 +469,6 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
     }
     patch({
       outcomeMetricsEpoch: settings.outcomeMetricsEpoch + 1,
-      outcomeQualityFeedback: [],
       outcomeProblemSessions: [],
     });
     tip("ok", "使用统计已清除；最近发送记录仍保留");
@@ -483,40 +493,6 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
           <RefreshCw className={cn("size-3.5", loading && "animate-spin motion-reduce:animate-none")} />
           刷新
         </Button>
-      </div>
-
-      <div className="mb-3 flex items-center justify-between gap-4 rounded-xl border border-border/60 bg-card px-3.5 py-2.5">
-        <div className="flex min-w-0 items-start gap-2.5">
-          <ShieldCheck
-            aria-hidden
-            className={cn(
-              "mt-0.5 size-4 shrink-0",
-              settings.outcomeMetricsEnabled ? "text-success" : "text-muted-foreground"
-            )}
-          />
-          <div className="min-w-0">
-            <p className="text-title font-medium">
-              {settings.outcomeMetricsEnabled ? "本机使用统计已开启" : "本机使用统计已暂停"}
-            </p>
-            <p className="mt-0.5 text-label text-muted-foreground">
-              只记录次数、时间和状态，不保存卡片正文、Prompt 或密钥。
-            </p>
-          </div>
-        </div>
-        <Switch
-          aria-label="本机使用统计"
-          checked={settings.outcomeMetricsEnabled}
-          onCheckedChange={(checked) => patch({
-            outcomeMetricsEnabled: checked,
-            ...(!checked && activeSession ? {
-              outcomeProblemSessions: cancelProblemSession(
-                settings.outcomeProblemSessions,
-                activeSession.id,
-                Date.now()
-              ),
-            } : {}),
-          })}
-        />
       </div>
 
       <SafeDeliveryLearningPath
@@ -572,6 +548,12 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
                 metrics={metrics}
                 hasActivity={!!events.length}
                 rangeLabel={RANGE_OPTIONS.find((option) => option.value === range)?.label}
+                onClearFilters={() => {
+                  setProfileId("all");
+                  setRecipeId("all");
+                  // 「清除」要真的放宽到最大范围；回默认 30 天可能仍然为空
+                  setRange("all");
+                }}
               />
               {!!events.length && (
                 <ProgressiveSection
@@ -761,6 +743,29 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
         description="设置保留时间，查看记录范围或清除统计"
       >
         <div className="divide-y divide-border/50 rounded-xl border border-border/60">
+          <div className="flex items-center justify-between gap-4 px-3.5 py-2.5">
+            <div className="min-w-0">
+              <p className="text-title">本机使用统计</p>
+              <p className="mt-0.5 text-label text-muted-foreground">
+                {settings.outcomeMetricsEnabled ? "已开启" : "已暂停"} ·
+                只记录次数、时间和状态，不保存卡片正文、Prompt 或密钥
+              </p>
+            </div>
+            <Switch
+              aria-label="本机使用统计"
+              checked={settings.outcomeMetricsEnabled}
+              onCheckedChange={(checked) => patch({
+                outcomeMetricsEnabled: checked,
+                ...(!checked && activeSession ? {
+                  outcomeProblemSessions: cancelProblemSession(
+                    settings.outcomeProblemSessions,
+                    activeSession.id,
+                    Date.now()
+                  ),
+                } : {}),
+              })}
+            />
+          </div>
           <div className="flex items-center justify-between gap-4 px-3.5 py-2.5">
             <div>
               <p className="text-title">统计保留时间</p>

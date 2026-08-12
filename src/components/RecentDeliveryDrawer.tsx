@@ -1,25 +1,23 @@
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
   AlertTriangle,
-  ArrowRight,
   CheckCircle2,
   ChevronDown,
   Clock3,
-  FileText,
-  Link2,
   MessageSquareReply,
   RotateCcw,
   ShieldCheck,
   Trash2,
   Unlink,
+  VenetianMask,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 
-import { Button } from "@/components/ui/button";
 import { floatingSurface } from "@/components/ui/floating-surface";
 import { IconButton } from "@/components/ui/icon-button";
+import { Kbd } from "@/components/ui/kbd";
 import {
   clearDeliveryEvents,
   DELIVERY_ACTIVITY_MAX_EVENTS,
@@ -39,11 +37,11 @@ import {
 } from "@/lib/resultReturn";
 import { requestResultVerification } from "@/lib/resultVerification";
 import {
-  upsertQualityFeedback,
-  type OutcomeQuality,
-  type OutcomeQualityFeedback,
-} from "@/lib/outcomeIntelligence";
-import { openNoteBatchDetail, openNoteDetail } from "@/lib/actions";
+  activeAliasOccurrences,
+  restoreAliases,
+} from "@/lib/delivery/aliasEntities";
+import { openNoteBatchDetail, openNoteDetail, undoableTip } from "@/lib/actions";
+import { timeAgo } from "@/lib/media";
 import { tip } from "@/lib/tip";
 import { cn } from "@/lib/utils";
 import { useNotesStore, type Note, type Task } from "@/store/notesStore";
@@ -51,10 +49,10 @@ import { useUIStore } from "@/store/uiStore";
 
 const STATUS_LABEL: Record<DeliveryEvent["status"], string> = {
   prepared: "准备中",
-  opened: "等待确认",
+  opened: "预检未完成",
   started: "发送中",
   sent: "已发送",
-  blocked: "未发送",
+  blocked: "已拦截",
   failed: "发送失败",
   restored: "剪贴板已恢复",
   skipped: "剪贴板未覆盖",
@@ -78,13 +76,6 @@ const RECOVERY_ERROR = {
   dataChanged: "数据目录已变化，请重新打开最近发送",
   targetUnavailable: "当前没有可用发送目标",
 } as const;
-
-const QUALITY_LABEL: Record<OutcomeQuality, string> = {
-  directUse: "直接使用",
-  minorEdit: "小改",
-  majorEdit: "大改",
-  discarded: "未采用",
-};
 
 function localTime(timestampMs: number): string {
   return new Date(timestampMs).toLocaleString("zh-CN", { hour12: false });
@@ -116,102 +107,107 @@ function verificationLabel(record: DeliveryEvent): string {
   return "可查看或检查";
 }
 
-type RelationshipProps = {
-  record: DeliveryActivityRecord;
-  availability: ReturnType<typeof deliveryEventSourceAvailability>;
-  association: ReturnType<typeof resultAssociationState>;
-  result: Note | null;
-  onOpenSource?: (event: DeliveryEvent) => void;
-  onOpenResult?: (note: Note) => void;
-  onAssociate?: (event: DeliveryEvent) => void;
-};
+/** 回合视角的行徽章：等待回复 / 已收到回复 / 问题态沿用状态词。 */
+function roundtripBadge(
+  record: DeliveryActivityRecord,
+  hasReply: boolean
+): { label: string; tone: "success" | "warning" | "muted" } {
+  if (record.status === "failed" || record.status === "blocked") {
+    return { label: STATUS_LABEL[record.status], tone: "warning" };
+  }
+  if (record.status !== "sent") {
+    return { label: STATUS_LABEL[record.status], tone: "muted" };
+  }
+  return hasReply
+    ? { label: "已收到回复", tone: "success" }
+    : { label: "等待回复", tone: "muted" };
+}
 
-function DeliveryRelationship({
+/** 卡脚/明细里的文字链操作（低视觉重量，替代原 Button 组）。 */
+const FOOT_LINK =
+  "rounded-sm text-micro text-muted-foreground underline decoration-dotted underline-offset-2 outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50 disabled:opacity-40";
+
+/** 状态药丸：软染色底 + 图标；等待态用琥珀呼吸点替代静态时钟。 */
+function StatusPill({
   record,
-  availability,
-  association,
-  result,
-  onOpenSource,
-  onOpenResult,
-  onAssociate,
-}: RelationshipProps) {
-  const sent = record.status === "sent";
-  const sourceAvailable = availability !== "missing" && !!onOpenSource;
-  const replyAvailable = !!result && !!onOpenResult;
-  const canChooseReply = sent && !result && !!onAssociate;
-  const replyTitle = result
-    ? "回复已保存"
-    : association === "missing"
-      ? "回复卡已删除"
-      : sent
-        ? "尚未保存回复"
-        : "发送未完成";
-  const replyDetail = result
-    ? verificationLabel(record)
-    : association === "unlinked"
-      ? "曾保存，现已更换"
-      : association === "missing"
-        ? "点击重新选择回复"
-        : sent
-          ? "点击选择真正的回复"
-          : "发送成功后才能保存";
-
+  hasReply,
+}: {
+  record: DeliveryActivityRecord;
+  hasReply: boolean;
+}) {
+  const badge = roundtripBadge(record, hasReply);
+  const waiting = record.status === "sent" && !hasReply;
   return (
-    <div
-      aria-label="发送内容与回复的关系"
-      className="mt-2 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch gap-1 max-[330px]:grid-cols-1"
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-px text-micro font-medium",
+        badge.tone === "warning"
+          ? "bg-destructive/10 text-destructive"
+          : badge.tone === "success"
+            ? "bg-success/10 text-success"
+            : waiting
+              ? "bg-warning/10 text-warning"
+              : "bg-muted text-muted-foreground"
+      )}
     >
-      <button
-        type="button"
-        disabled={!sourceAvailable}
-        onClick={() => onOpenSource?.(record)}
-        className="min-w-0 rounded-lg border border-foreground/10 bg-background/55 p-2 text-left outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-primary/50 disabled:cursor-default disabled:opacity-60"
-      >
-        <span className="mb-1 flex items-center gap-1 text-label font-medium">
-          <span className="flex size-5 items-center justify-center rounded-md bg-muted text-muted-foreground">
-            <FileText className="size-3" aria-hidden />
-          </span>
-          发送内容
+      {badge.tone === "warning" ? (
+        <AlertTriangle className="size-2.5" aria-hidden />
+      ) : badge.tone === "success" ? (
+        <CheckCircle2 className="size-2.5" aria-hidden />
+      ) : waiting ? (
+        <span className="relative flex size-1.5" aria-hidden>
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-warning opacity-60 motion-reduce:animate-none" />
+          <span className="relative inline-flex size-1.5 rounded-full bg-warning" />
         </span>
-        <span className="block truncate text-micro text-muted-foreground">
-          {sourceLabel(record, availability)}
-        </span>
-      </button>
+      ) : (
+        <Clock3 className="size-2.5" aria-hidden />
+      )}
+      {badge.label}
+    </span>
+  );
+}
 
-      <span className="flex w-4 items-center justify-center text-muted-foreground/60 max-[330px]:h-3 max-[330px]:w-full" aria-hidden>
-        <ArrowRight className="size-3.5 max-[330px]:rotate-90" />
+/** 分区组头：状态标签 + 计数 + 发丝线；等待区右端挂一条全局划词引导。 */
+function SectionHead({
+  label,
+  count,
+  hint,
+}: {
+  label: string;
+  count: number;
+  hint?: boolean;
+}) {
+  return (
+    <div className="mb-1.5 flex items-center gap-2 px-0.5 pt-3 first:pt-0.5">
+      <span className="shrink-0 text-micro font-medium text-muted-foreground/70">
+        {label} · {count}
       </span>
-
-      <button
-        type="button"
-        disabled={!replyAvailable && !canChooseReply}
-        onClick={() => {
-          if (result) onOpenResult?.(result);
-          else onAssociate?.(record);
-        }}
-        className={cn(
-          "min-w-0 rounded-lg border p-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/50 disabled:cursor-default",
-          result
-            ? "border-success/25 bg-success/5 hover:bg-success/10"
-            : "border-dashed border-foreground/15 bg-muted/25 hover:bg-muted/55",
-          !replyAvailable && !canChooseReply && "opacity-60"
-        )}
-      >
-        <span className="mb-1 flex items-center gap-1 text-label font-medium">
-          <span className={cn(
-            "flex size-5 items-center justify-center rounded-md",
-            result ? "bg-success/12 text-success" : "bg-muted text-muted-foreground"
-          )}>
-            {result
-              ? <CheckCircle2 className="size-3" aria-hidden />
-              : <MessageSquareReply className="size-3" aria-hidden />}
-          </span>
-          <span className="truncate max-[330px]:overflow-visible max-[330px]:whitespace-normal">{replyTitle}</span>
+      <span className="h-px min-w-4 flex-1 bg-border/60" aria-hidden />
+      {hint && (
+        <span
+          className="flex shrink-0 items-center gap-1 text-micro text-muted-foreground/70"
+          title="在 AI 应用双击 ⇧ 划选回复内容，会自动带回并对应到该次发送"
+        >
+          划词 <Kbd>⇧⇧</Kbd> 自动带回
         </span>
-        <span className="block truncate text-micro text-muted-foreground">{replyDetail}</span>
-      </button>
+      )}
     </div>
   );
+}
+
+/** 出站摘要：从当前仍存活的来源卡实时重建首行（账本不存正文）；来源删除时返回 null。 */
+function outboundSummary(
+  record: DeliveryEvent,
+  notes: readonly Note[],
+  tasks: readonly Task[]
+): string | null {
+  const sources = deliverySourceItems(record, notes, tasks);
+  const text =
+    sources.notes
+      .map((note) => (note.kind === "image" ? "" : note.text))
+      .find(Boolean) ?? sources.tasks[0]?.text;
+  const firstLine = text?.split("\n", 1)[0]?.trim();
+  return firstLine || null;
 }
 
 export function RecentDeliveryList({
@@ -225,9 +221,6 @@ export function RecentDeliveryList({
   onVerify,
   onAssociate,
   onUnlink,
-  qualityFeedback = [],
-  qualityMetricsEpoch,
-  onQuality,
 }: {
   records: readonly DeliveryActivityRecord[];
   notes: readonly Note[];
@@ -239,37 +232,65 @@ export function RecentDeliveryList({
   onVerify?: (note: Note) => void;
   onAssociate?: (event: DeliveryEvent) => void;
   onUnlink?: (note: Note) => void;
-  qualityFeedback?: readonly OutcomeQualityFeedback[];
-  qualityMetricsEpoch?: number;
-  onQuality?: (
-    event: DeliveryEvent,
-    resultNoteId: string,
-    quality: OutcomeQuality
-  ) => void;
 }) {
-  const qualityByResult = useMemo(
-    () => new Map(
-      qualityFeedback.map((item) => [
-        `${item.deliveryId}:${item.resultNoteId}`,
-        item.quality,
-      ] as const)
-    ),
-    [qualityFeedback]
+  const aliasEntitiesEnabled = useNotesStore(
+    (state) => state.settings.aliasEntitiesEnabled
+  );
+  const aliasEntities = useNotesStore((state) => state.settings.aliasEntities);
+  const restoreReplyAliases = (note: Note) => {
+    const { text, restoredCount } = restoreAliases(note.text, aliasEntities);
+    if (text === note.text) return;
+    useNotesStore.getState().snapshot("恢复化名");
+    useNotesStore.getState().updateNoteText(note.id, text);
+    undoableTip(`已恢复 ${restoredCount} 处化名`);
+  };
+  // 回合视角：进行中的半次发送（准备中/预检未完成/发送中）不进主列表，收进底部折叠组
+  const mainRecords = records.filter(
+    (record) =>
+      record.status !== "prepared" &&
+      record.status !== "opened" &&
+      record.status !== "started"
+  );
+  const unfinishedRecords = records.filter(
+    (record) => !mainRecords.includes(record)
   );
   if (!records.length) {
     return (
       <div className="flex min-h-36 flex-col items-center justify-center text-center text-body text-muted-foreground">
         <Clock3 className="mb-2 size-5 opacity-50" aria-hidden />
         暂无发送记录
+        <p className="mt-1 text-label text-muted-foreground">
+          勾选卡片后 ⌘⏎ 发送，这里会出现你和 AI 的一问一答
+        </p>
       </div>
     );
   }
-  return (
-    <ol className="space-y-2" aria-label="最近发送记录">
-      {records.map((record) => {
+  // 状态分区（方案 B，2026-08-12 用户定稿）：需处理 → 等待回复 → 已完成，组内保持原时间序。
+  // 分区自带答案，行内不再重复「下一步」教学（引导收进等待区组头）
+  const recordHasReply = (record: DeliveryActivityRecord) =>
+    !!record.resultNoteId &&
+    notes.some(
+      (note) =>
+        note.id === record.resultNoteId &&
+        note.provenance?.deliveryId === record.deliveryId
+    );
+  const attention = mainRecords.filter(
+    (record) => record.status === "failed" || record.status === "blocked"
+  );
+  const waiting = mainRecords.filter(
+    (record) => record.status === "sent" && !recordHasReply(record)
+  );
+  const settled = mainRecords.filter(
+    (record) => !attention.includes(record) && !waiting.includes(record)
+  );
+  const sections = [
+    { key: "attention", label: "需处理", records: attention, hint: false },
+    { key: "waiting", label: "等待回复", records: waiting, hint: true },
+    { key: "settled", label: "已完成", records: settled, hint: false },
+  ].filter((section) => section.records.length > 0);
+  const renderRound = (record: DeliveryActivityRecord) => {
         const availability = deliveryEventSourceAvailability(record, notes, tasks);
         const recoverable = record.status === "failed" || record.status === "blocked";
-        const statusProblem = recoverable;
         // 报告/问题 Note 也保留 delivery provenance；抽屉的“结果”必须只认
         // 活动事件明确记录的 resultNoteId，不能把派生笔记误当成原结果。
         const linkedResults = record.resultNoteId
@@ -280,67 +301,153 @@ export function RecentDeliveryList({
           : [];
         const association = resultAssociationState(record, notes);
         const linkedResult = linkedResults[0] ?? null;
-        const selectedQuality = linkedResult
-          ? qualityByResult.get(`${record.deliveryId}:${linkedResult.id}`) ?? null
-          : null;
-        const qualityEligible = qualityMetricsEpoch !== undefined &&
-          record.metricsEligible !== false &&
-          (record.metricsEpoch ?? 0) === qualityMetricsEpoch;
+        const aliasRestorable =
+          linkedResult && aliasEntitiesEnabled
+            ? activeAliasOccurrences(linkedResult.text, aliasEntities)
+            : [];
+        const summary = outboundSummary(record, notes, tasks);
+        const waitingReply = record.status === "sent" && !linkedResult;
         return (
           <li
             key={record.deliveryId}
             className="rounded-xl border border-foreground/10 bg-muted/30 p-2.5"
           >
-            <div className="flex min-w-0 items-start gap-2">
-              {statusProblem ? (
-                <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" aria-hidden />
-              ) : (
-                <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" aria-hidden />
-              )}
-              <div className="min-w-0 flex-1">
-                <div className="flex min-w-0 items-center gap-1.5">
-                  <span className="truncate text-body font-medium" title={record.targetAppName ?? undefined}>
-                    {record.targetAppName || record.targetBundleId || "未识别目标"}
-                  </span>
-                  <span
-                    className={cn(
-                      "ml-auto shrink-0 text-micro font-medium",
-                      statusProblem
-                        ? "text-warning"
-                        : "text-success"
-                    )}
-                  >
-                    {STATUS_LABEL[record.status]}
-                  </span>
-                </div>
-                <p className="mt-0.5 truncate text-micro text-muted-foreground">
-                  <time dateTime={new Date(record.timestampMs).toISOString()} className="tabular-nums">
-                    {record.status === "sent" ? "发送于 " : "记录于 "}{localTime(record.timestampMs)}
-                  </time>
-                  <span aria-hidden> · </span>{payloadLabel(record)}
-                </p>
-              </div>
+            {/* 行头：应用名（署名位）＋ 时间紧贴状态药丸（不悬在行中间） */}
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="min-w-0 flex-1 truncate text-body font-medium" title={record.targetAppName ?? undefined}>
+                {record.targetAppName || record.targetBundleId || "未识别目标"}
+              </span>
+              <time
+                className="shrink-0 text-micro tabular-nums text-muted-foreground/60"
+                dateTime={new Date(record.timestampMs).toISOString()}
+                title={localTime(record.timestampMs)}
+              >
+                {timeAgo(record.timestampMs)}
+              </time>
+              <StatusPill record={record} hasReply={!!linkedResult} />
             </div>
 
-            <DeliveryRelationship
-              record={record}
-              availability={availability}
-              association={association}
-              result={linkedResult}
-              onOpenSource={onOpenSource}
-              onOpenResult={onOpenResult}
-              onAssociate={onAssociate}
-            />
+            {/* 出站摘要（来源卡实时重建）——点击查看完整发送内容 */}
+            <button
+              type="button"
+              disabled={availability === "missing" || !onOpenSource}
+              onClick={() => onOpenSource?.(record)}
+              title="查看发送内容"
+              className="mt-1 block w-full min-w-0 truncate rounded-md px-1 py-0.5 text-left text-body text-foreground/90 outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50 disabled:cursor-default disabled:opacity-60"
+            >
+              {summary ? `“${summary}”` : sourceLabel(record, availability)}
+            </button>
 
+            {/* 回复引用条（问答感的「答」）：按隐私契约不渲染回复正文，只给入库标记与入口 */}
+            {linkedResult && (
+              <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 border-l-2 border-success/40 py-0.5 pl-2">
+                <span className="flex items-center gap-1 text-micro text-muted-foreground">
+                  <MessageSquareReply className="size-3 shrink-0 text-success" aria-hidden />
+                  回复已入库
+                </span>
+                {onOpenResult && (
+                  <button
+                    type="button"
+                    title="打开回复"
+                    onClick={() => onOpenResult(linkedResult)}
+                    className="rounded-md border border-border/60 px-1.5 py-px text-micro text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50"
+                  >
+                    打开
+                  </button>
+                )}
+                {aliasRestorable.length > 0 && (
+                  <button
+                    type="button"
+                    title="把词典占位符还原为原文（本机操作，可撤销）"
+                    onClick={() => restoreReplyAliases(linkedResult)}
+                    className="flex items-center gap-1 rounded-md border border-border/60 px-1.5 py-px text-micro text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50"
+                  >
+                    <VenetianMask className="size-3" aria-hidden /> 恢复化名（{aliasRestorable.length} 处）
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* 卡脚：高频操作走左侧文字链，右端「更多」展开完整明细；
+                操作钮在 summary 内需 preventDefault 阻断 details 切换 */}
             <details className="group mt-2 border-t border-border/50 pt-1.5">
-              <summary className="flex cursor-pointer list-none items-center gap-1 rounded-md px-1 py-1 text-micro text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50 [&::-webkit-details-marker]:hidden">
-                更多信息
-                <ChevronDown className="ml-auto size-3 transition-transform group-open:rotate-180 motion-reduce:transition-none" aria-hidden />
+              <summary className="flex cursor-pointer list-none items-center gap-3 rounded-md px-1 py-0.5 outline-none focus-visible:ring-2 focus-visible:ring-primary/50 [&::-webkit-details-marker]:hidden">
+                {waitingReply && onAssociate && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onAssociate(record);
+                    }}
+                    className={FOOT_LINK}
+                  >
+                    手动选择回复
+                  </button>
+                )}
+                {recoverable && (
+                  <button
+                    type="button"
+                    disabled={availability !== "available" || busyEventId !== null}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onReprepare(record);
+                    }}
+                    className={cn("flex items-center gap-1", FOOT_LINK)}
+                  >
+                    <RotateCcw className={cn("size-3", busyEventId === record.eventId && "animate-spin motion-reduce:animate-none")} aria-hidden />
+                    重新准备
+                  </button>
+                )}
+                {linkedResult && onVerify && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onVerify(linkedResult);
+                    }}
+                    className={FOOT_LINK}
+                  >
+                    检查回复
+                  </button>
+                )}
+                {linkedResult && onAssociate && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onAssociate(record);
+                    }}
+                    className={FOOT_LINK}
+                  >
+                    更换回复
+                  </button>
+                )}
+                <span
+                  className="ml-auto flex items-center gap-1 text-micro text-muted-foreground transition-colors hover:text-foreground"
+                  title="更多信息"
+                >
+                  更多
+                  <ChevronDown className="size-3 transition-transform group-open:rotate-180 motion-reduce:transition-none" aria-hidden />
+                </span>
               </summary>
               <div className="px-1 pb-1 pt-1.5">
                 <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-micro">
+                  <dt className="text-muted-foreground">
+                    {record.status === "sent" ? "发送于" : "记录于"}
+                  </dt>
+                  <dd className="text-right tabular-nums">
+                    <time dateTime={new Date(record.timestampMs).toISOString()}>
+                      {localTime(record.timestampMs)}
+                    </time>
+                  </dd>
                   <dt className="text-muted-foreground">原内容</dt>
-                  <dd className="truncate text-right">{sourceLabel(record, availability)}</dd>
+                  <dd className="truncate text-right">
+                    {sourceLabel(record, availability)} · {payloadLabel(record)}
+                  </dd>
                   <dt className="text-muted-foreground">隐私保护</dt>
                   <dd className="text-right">
                     {record.redactionCount
@@ -367,6 +474,12 @@ export function RecentDeliveryList({
                       <dd className="text-right tabular-nums">{localTime(record.verificationAtMs)}</dd>
                     </>
                   )}
+                  {linkedResult && (
+                    <>
+                      <dt className="text-muted-foreground">核验</dt>
+                      <dd className="text-right">{verificationLabel(record)}</dd>
+                    </>
+                  )}
                   {!linkedResult && association === "unlinked" && (
                     <>
                       <dt className="text-muted-foreground">历史回复</dt>
@@ -381,70 +494,73 @@ export function RecentDeliveryList({
                   )}
                 </dl>
 
-                {linkedResult && (
-                  <div className="mt-2 flex flex-wrap items-center gap-1">
-                    {onVerify && (
-                      <Button type="button" size="xs" variant="secondary" onClick={() => onVerify(linkedResult)}>
-                        <ShieldCheck className="size-3" /> 检查回复
-                      </Button>
-                    )}
-                    {onAssociate && (
-                      <Button type="button" size="xs" variant="ghost" onClick={() => onAssociate(record)}>
-                        <Link2 className="size-3" /> 更换回复
-                      </Button>
-                    )}
-                    {onUnlink && (
-                      <Button type="button" size="xs" variant="ghost" onClick={() => onUnlink(linkedResult)}>
-                        <Unlink className="size-3" /> 这不是对应回复
-                      </Button>
-                    )}
+                {/* 高频操作已上卡脚（检查/更换）；解绑是低频危险项，留在明细里 */}
+                {linkedResult && onUnlink && (
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      onClick={() => onUnlink(linkedResult)}
+                      className={cn("flex items-center gap-1", FOOT_LINK)}
+                    >
+                      <Unlink className="size-3" aria-hidden /> 这不是对应回复
+                    </button>
                   </div>
-                )}
-
-                {linkedResult && onQuality && qualityEligible && (
-                  <fieldset className="mt-2 border-t border-border/50 pt-2">
-                    <legend className="text-micro text-muted-foreground">这条回复后来怎么用？（可选）</legend>
-                    <div className="mt-1 flex flex-wrap gap-1" aria-label="回复使用情况">
-                      {(Object.keys(QUALITY_LABEL) as OutcomeQuality[]).map((quality) => (
-                        <button
-                          key={quality}
-                          type="button"
-                          aria-pressed={selectedQuality === quality}
-                          onClick={() => onQuality(record, linkedResult.id, quality)}
-                          className={cn(
-                            "rounded-md px-1.5 py-1 text-micro outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
-                            selectedQuality === quality
-                              ? "bg-primary/15 font-medium text-primary"
-                              : "bg-muted text-muted-foreground hover:text-foreground"
-                          )}
-                        >
-                          {QUALITY_LABEL[quality]}
-                        </button>
-                      ))}
-                    </div>
-                  </fieldset>
                 )}
               </div>
             </details>
-
-            {recoverable && (
-              <div className="mt-2 flex items-center justify-end">
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="secondary"
-                  disabled={availability !== "available" || busyEventId !== null}
-                  onClick={() => onReprepare(record)}
-                >
-                  <RotateCcw className={cn("size-3", busyEventId === record.eventId && "animate-spin motion-reduce:animate-none")} />
-                  重新准备
-                </Button>
-              </div>
-            )}
           </li>
         );
-      })}
-    </ol>
+  };
+  return (
+    <div>
+    {sections.map((section) => (
+      <Fragment key={section.key}>
+        <SectionHead
+          label={section.label}
+          count={section.records.length}
+          hint={section.hint}
+        />
+        <ol className="space-y-1.5" aria-label={`${section.label}记录`}>
+          {section.records.map(renderRound)}
+        </ol>
+      </Fragment>
+    ))}
+
+    {unfinishedRecords.length > 0 && (
+      <details className="group mt-3">
+        <summary className="flex cursor-pointer list-none items-center gap-1 rounded-md px-1 py-1 text-micro text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50 [&::-webkit-details-marker]:hidden">
+          未发出的记录 {unfinishedRecords.length} 条
+          <ChevronDown className="ml-auto size-3 transition-transform group-open:rotate-180 motion-reduce:transition-none" aria-hidden />
+        </summary>
+        <ol className="mt-1.5 space-y-1.5" aria-label="未发出的记录">
+          {unfinishedRecords.map((record) => {
+            const availability = deliveryEventSourceAvailability(record, notes, tasks);
+            const summary = outboundSummary(record, notes, tasks);
+            return (
+              <li key={record.deliveryId}>
+                <button
+                  type="button"
+                  disabled={availability === "missing" || !onOpenSource}
+                  onClick={() => onOpenSource?.(record)}
+                  title="查看内容"
+                  className="flex w-full min-w-0 items-center gap-1.5 rounded-lg border border-border/50 px-2 py-1.5 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-primary/50 disabled:cursor-default disabled:opacity-60"
+                >
+                  <Clock3 className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+                  <span className="min-w-0 truncate text-label">
+                    {record.targetAppName || record.targetBundleId || "未识别目标"}
+                    {summary ? ` · ${summary}` : ""}
+                  </span>
+                  <span className="ml-auto shrink-0 text-micro text-muted-foreground">
+                    {STATUS_LABEL[record.status]}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+      </details>
+    )}
+    </div>
   );
 }
 
@@ -459,17 +575,8 @@ export function RecentDeliveryDrawer({
 }) {
   const notes = useNotesStore((state) => state.notes);
   const tasks = useNotesStore((state) => state.tasks);
-  const qualityFeedback = useNotesStore(
-    (state) => state.settings.outcomeQualityFeedback
-  );
-  const metricsEnabled = useNotesStore(
-    (state) => state.settings.outcomeMetricsEnabled
-  );
   const retentionDays = useNotesStore(
     (state) => state.settings.outcomeRetentionDays
-  );
-  const metricsEpoch = useNotesStore(
-    (state) => state.settings.outcomeMetricsEpoch
   );
   const [events, setEvents] = useState<DeliveryEvent[]>([]);
   const [loading, setLoading] = useState(false);
@@ -531,7 +638,13 @@ export function RecentDeliveryDrawer({
     const state = useNotesStore.getState();
     const sources = deliverySourceItems(event, state.notes, state.tasks);
     if (sources.notes.length) {
-      onOpenChange(false);
+      // 文本/代码/链接与合并预览都在独立窗口打开，抽屉保持打开；
+      // 仅单张图片卡走面板内预览层（会被抽屉盖住），才需要先收起抽屉
+      const single =
+        sources.notes.length === 1 && event.sourceItemIds.length <= 1
+          ? sources.notes[0]
+          : null;
+      if (single?.kind === "image") onOpenChange(false);
       openNoteBatchDetail(
         sources.notes.map((note) => note.id),
         event.sourceItemIds.length
@@ -562,35 +675,28 @@ export function RecentDeliveryDrawer({
             floatingSurface(3)
           )}
         >
-          <header className="flex items-start gap-2 border-b border-border/70 pb-2">
-            <div className="min-w-0 flex-1">
-              <DialogPrimitive.Title className="text-title font-semibold">
-                最近发送
-              </DialogPrimitive.Title>
-              <DialogPrimitive.Description className="mt-0.5 text-micro leading-relaxed text-muted-foreground">
-                查看发送是否成功，并把收到的回复放回对应记录。
-              </DialogPrimitive.Description>
-            </div>
+          {/* 头部瘦身：教学副标题只留给读屏（视觉引导由等待区组头承担），
+              清除记录收进头部图标位 */}
+          <header className="flex items-center gap-1 border-b border-border/70 pb-2">
+            <DialogPrimitive.Title className="min-w-0 flex-1 truncate text-title font-semibold">
+              最近发送
+            </DialogPrimitive.Title>
+            <DialogPrimitive.Description className="sr-only">
+              发出的内容和收到的回复，一问一答都在这里；划词捕获的回复会自动对应。
+            </DialogPrimitive.Description>
+            <IconButton
+              label="清除记录"
+              size="sm"
+              tone="danger"
+              onClick={() => void clear()}
+              disabled={loading || busyEventId !== null || !events.length}
+            >
+              <Trash2 />
+            </IconButton>
             <DialogPrimitive.Close asChild>
               <IconButton label="关闭最近发送" size="sm"><X /></IconButton>
             </DialogPrimitive.Close>
           </header>
-          <div className="mt-2 flex items-center justify-between gap-2">
-            <span
-              className="inline-flex items-center gap-1 text-micro text-muted-foreground"
-              title={`仅保存时间、状态与数量，不保存正文；最多 ${DELIVERY_ACTIVITY_MAX_EVENTS} 条或 ${retentionDays} 天`}
-            >
-              <ShieldCheck className="size-3 text-success" aria-hidden /> 本机保存 · 不含正文
-            </span>
-            <button
-              type="button"
-              onClick={() => void clear()}
-              disabled={loading || busyEventId !== null || !events.length}
-              className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-micro text-muted-foreground outline-none hover:bg-destructive/10 hover:text-destructive focus-visible:ring-2 focus-visible:ring-primary/50 disabled:opacity-40"
-            >
-              <Trash2 className="size-3" aria-hidden /> 清除记录
-            </button>
-          </div>
           {error && (
             <p role="alert" className="mt-2 rounded-lg bg-destructive/10 px-2 py-1.5 text-body text-destructive">
               {error}
@@ -608,14 +714,18 @@ export function RecentDeliveryDrawer({
                 onReprepare={(event) => void reprepare(event)}
                 onOpenSource={openSource}
                 onOpenResult={(note) => {
-                  onOpenChange(false);
+                  // 文本回复在独立窗口打开，抽屉保持；图片回复走面板内预览层需先收起
+                  if (note.kind === "image") onOpenChange(false);
                   openNoteDetail(note.id);
                 }}
                 onVerify={(note) => {
-                  onOpenChange(false);
-                  window.setTimeout(() => {
-                    requestResultVerification(note.id, returnFocusRef.current);
-                  }, 0);
+                  // 检查对话框是更高层的独立 Dialog（与「更换回复」同法），抽屉无需关闭
+                  requestResultVerification(
+                    note.id,
+                    document.activeElement instanceof HTMLElement
+                      ? document.activeElement
+                      : returnFocusRef.current
+                  );
                 }}
                 onAssociate={(record) => {
                   const sent = events.find(
@@ -637,26 +747,17 @@ export function RecentDeliveryDrawer({
                       : null
                   );
                 }}
-                qualityFeedback={qualityFeedback}
-                qualityMetricsEpoch={metricsEnabled ? metricsEpoch : undefined}
-                onQuality={metricsEnabled ? ((record, resultNoteId, quality) => {
-                  const state = useNotesStore.getState();
-                  state.setSettings({
-                    outcomeQualityFeedback: upsertQualityFeedback(
-                      state.settings.outcomeQualityFeedback,
-                      {
-                        deliveryId: record.deliveryId,
-                        resultNoteId,
-                        quality,
-                        updatedAtMs: Date.now(),
-                      }
-                    ),
-                  });
-                  tip("ok", "结果质量已记录（仅保存在本机）");
-                }) : undefined}
               />
             )}
           </div>
+          {/* 隐私说明沉底为尾注（常显、不与列表争视线） */}
+          <p
+            className="mt-2 flex items-center gap-1.5 border-t border-border/50 pt-2 text-micro text-muted-foreground/70"
+            title={`仅保存时间、状态与数量，不保存正文；最多 ${DELIVERY_ACTIVITY_MAX_EVENTS} 条或 ${retentionDays} 天`}
+          >
+            <ShieldCheck className="size-3 shrink-0 text-success" aria-hidden />
+            记录仅存状态与计数 · 摘要来自当前卡片
+          </p>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>

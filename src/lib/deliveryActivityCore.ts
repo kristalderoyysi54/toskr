@@ -163,6 +163,7 @@ export function deliveryEventFromDraft(
     firewallCounts,
     redactionCount:
       draft.privacyDecision.replacedCount +
+      draft.aliasReplacedCount +
       draft.imageFirewall.reduce(
         (count, image) => count + image.redactedFindingIds.length,
         0

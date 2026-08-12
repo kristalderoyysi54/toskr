@@ -116,6 +116,8 @@ export async function reprepareDeliveryEvent(
         firewallEnabled: notes.settings.firewallEnabled,
         firewallDisabledWarnCategories:
           notes.settings.firewallDisabledWarnCategories,
+        aliasEntitiesEnabled: notes.settings.aliasEntitiesEnabled,
+        aliasEntities: notes.settings.aliasEntities,
       }
     );
     await dispatchDeliveryDraft(draft, {

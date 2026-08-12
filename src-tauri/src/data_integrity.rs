@@ -22,7 +22,7 @@ use crate::activity::{
 };
 use crate::storage::{DATA_FILE, MEDIA_DIR};
 
-pub const MAX_STORE_VERSION: u64 = 14;
+pub const MAX_STORE_VERSION: u64 = 15;
 const MISSING_REVISION: &str = "missing";
 const MEDIA_GC_FILE: &str = "toskr-media-gc.json";
 const DATA_JOURNAL_FILE: &str = "toskr-data-transaction.json";
@@ -2973,6 +2973,52 @@ pub(crate) fn validate_settings_value(value: Option<&serde_json::Value>) -> bool
     validate_settings_value_for_version(value, 0)
 }
 
+/// 与前端 aliasEntities.ts 的保留字/预置类别保持一致（防化名占位符与隐私正则撞号）。
+const RESERVED_ALIAS_CATEGORY_CODES: [&str; 11] = [
+    "PRIVATE_KEY",
+    "AUTHORIZATION",
+    "API_KEY",
+    "DATABASE_URL",
+    "EMAIL",
+    "PHONE",
+    "NATIONAL_ID",
+    "BANK_CARD",
+    "IP_ADDRESS",
+    "COOKIE",
+    "SESSION",
+];
+const ALIAS_PRESET_CATEGORY_CODES: [&str; 5] =
+    ["USER", "MERCHANT", "ORDER", "PROJECT", "CONTACT"];
+
+/// 等价前端 ^[A-Z][A-Z0-9_]{0,15}$。
+fn valid_alias_category_code(code: &str) -> bool {
+    let bytes = code.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 16
+        && bytes[0].is_ascii_uppercase()
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || *byte == b'_')
+}
+
+/// 等价前端 ^\[[A-Z][A-Z0-9_]*_[0-9]{2,}\]$。
+fn valid_alias_placeholder(value: &str) -> bool {
+    let Some(inner) = value.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')) else {
+        return false;
+    };
+    let Some((base, digits)) = inner.rsplit_once('_') else {
+        return false;
+    };
+    let base_bytes = base.as_bytes();
+    !base_bytes.is_empty()
+        && base_bytes[0].is_ascii_uppercase()
+        && base_bytes
+            .iter()
+            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || *byte == b'_')
+        && digits.len() >= 2
+        && digits.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 pub(crate) fn validate_settings_value_for_version(
     value: Option<&serde_json::Value>,
     store_version: u64,
@@ -3003,6 +3049,8 @@ pub(crate) fn validate_settings_value_for_version(
         "panelTopmost",
         "aiEnabled",
         "firewallEnabled",
+        "aliasEntitiesEnabled",
+        "aliasAutoRestoreOnCapture",
         "outcomeMetricsEnabled",
     ] {
         if !optional_type(settings, key, serde_json::Value::is_boolean) {
@@ -3265,6 +3313,67 @@ pub(crate) fn validate_settings_value_for_version(
                     item.get("id").is_some_and(serde_json::Value::is_string)
                         && item.get("on").is_some_and(serde_json::Value::is_boolean)
                 })
+            })
+        })
+    }) {
+        return false;
+    }
+    if !optional_type(settings, "aliasEntities", |value| {
+        let mut ids = BTreeSet::new();
+        let mut originals = BTreeSet::new();
+        let mut placeholders = BTreeSet::new();
+        value.as_array().is_some_and(|items| {
+            items.iter().all(|item| {
+                item.as_object().is_some_and(|item| {
+                    item.get("id")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|id| !id.is_empty() && ids.insert(id))
+                        && item
+                            .get("category")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(valid_alias_category_code)
+                        && item
+                            .get("originalText")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|text| !text.is_empty() && originals.insert(text))
+                        && item
+                            .get("placeholder")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|text| {
+                                valid_alias_placeholder(text) && placeholders.insert(text)
+                            })
+                        && item.get("createdAtMs").is_some_and(finite)
+                        && item.get("updatedAtMs").is_some_and(finite)
+                })
+            })
+        })
+    }) || !optional_type(settings, "aliasCustomCategories", |value| {
+        let mut codes = BTreeSet::new();
+        value.as_array().is_some_and(|items| {
+            items.iter().all(|item| {
+                item.as_object().is_some_and(|item| {
+                    item.get("code")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|code| {
+                            valid_alias_category_code(code)
+                                && !RESERVED_ALIAS_CATEGORY_CODES.contains(&code)
+                                && !ALIAS_PRESET_CATEGORY_CODES.contains(&code)
+                                && codes.insert(code)
+                        })
+                        && item
+                            .get("label")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|label| !label.is_empty())
+                })
+            })
+        })
+    }) || !optional_type(settings, "aliasNextNumberByCategory", |value| {
+        value.as_object().is_some_and(|counters| {
+            counters.iter().all(|(code, count)| {
+                valid_alias_category_code(code)
+                    && count
+                        .as_u64()
+                        .is_some_and(|count| (1..=9_007_199_254_740_991).contains(&count))
             })
         })
     }) {
@@ -3654,7 +3763,7 @@ mod tests {
                 "activationWithin60s": null
             }
         });
-        assert_eq!(MAX_STORE_VERSION, 14);
+        assert_eq!(MAX_STORE_VERSION, 15);
         assert!(validate_settings_value_for_version(
             Some(&valid),
             MAX_STORE_VERSION

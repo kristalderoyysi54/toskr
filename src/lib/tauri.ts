@@ -684,12 +684,16 @@ export const api = {
     kind: "added" | "duplicate",
     preview: string,
     warning?: string | null,
-    associationSuggested = false
+    associationSuggested = false,
+    aliasRestoredCount: number | null = null,
+    autoLinked = false
   ) => invoke("show_capture_hud", {
     kind,
     preview,
     warning: warning ?? null,
     associationSuggested,
+    aliasRestoredCount,
+    autoLinked,
   }),
   hudFeedback: (
     kind: HudKind,

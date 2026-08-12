@@ -54,8 +54,8 @@ const target: TargetSnapshot = {
 describe("发送方案设置组件", () => {
   it.each([
     ["exact", [profile("default"), profile("otty", { name: "AI 对话", bundleIds: [target.bundleId as string] })], "已为 Otty 指定"],
-    ["fallback", [profile("default", { name: "稳妥发送" })], "未匹配具体应用，使用默认方案"],
-    ["conflict", [profile("first", { bundleIds: [target.bundleId as string] }), profile("second", { bundleIds: [target.bundleId as string] })], "存在重复应用绑定"],
+    ["fallback", [profile("default", { name: "稳妥发送" })], "未识别应用的默认方案"],
+    ["conflict", [profile("first", { bundleIds: [target.bundleId as string] }), profile("second", { bundleIds: [target.bundleId as string] })], "重复绑定冲突"],
   ] as const)("当前匹配卡准确展示 %s", (_source, profiles, expectedReason) => {
     const resolution = resolveTargetProfile({
       bundleId: target.bundleId,
@@ -72,6 +72,7 @@ describe("发送方案设置组件", () => {
         testMessage={null}
         onRefresh={vi.fn()}
         onTest={vi.fn()}
+        onEditProfile={vi.fn()}
       />
     );
 
@@ -81,7 +82,7 @@ describe("发送方案设置组件", () => {
     expect(html).toContain("隐私检查：尚未启用");
     expect(html).toContain("隐私检查尚未启用 · 本次未检查");
     expect(html).toContain('aria-label="Otty 应用图标"');
-    expect(html).toContain('aria-label="刷新当前目标"');
+    expect(html).toContain('aria-label="刷新（重新识别系统前台应用）"');
     expect(html).toContain("测试当前目标");
     expect(html).not.toMatch(/已脱敏|已保护|隐私检查：安全/);
   });
@@ -103,6 +104,7 @@ describe("发送方案设置组件", () => {
         testMessage={null}
         onRefresh={vi.fn()}
         onTest={vi.fn()}
+        onEditProfile={vi.fn()}
       />
     );
     expect(missing).toContain("尚未识别");
@@ -122,6 +124,7 @@ describe("发送方案设置组件", () => {
         testMessage={null}
         onRefresh={vi.fn()}
         onTest={vi.fn()}
+        onEditProfile={vi.fn()}
       />
     );
     expect(unavailable).toContain("目标已失效");
@@ -205,7 +208,7 @@ describe("发送方案设置组件", () => {
       "适用应用",
       "内容与格式",
       "发送行为",
-      "发送前隐私检查",
+      "隐私命中后处理策略",
       "实时效果预览",
     ];
     for (let index = 1; index < headings.length; index += 1) {
@@ -223,7 +226,7 @@ describe("发送方案设置组件", () => {
     expect(html).toContain("发送前在本机检查最终文本");
     expect(html).toContain("配置值");
     expect(html).toContain("测试预演值（不影响当前发送）");
-    expect(html).toContain("匹配来源：仅本次预演");
+    expect(html).toContain("匹配来源：仅本次手动选择");
     expect(html).toContain("当前真实生效值");
     expect(html).toContain("匹配来源：未识别应用的默认方案");
     expect(html).toContain("发送前隐私门禁");
@@ -304,7 +307,7 @@ describe("发送方案设置组件", () => {
     );
 
     expect(html).toMatch(
-      /当前真实生效值[\s\S]*匹配来源：历史绑定冲突/
+      /当前真实生效值[\s\S]*匹配来源：重复绑定冲突/
     );
   });
 

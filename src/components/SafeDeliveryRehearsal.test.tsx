@@ -78,7 +78,7 @@ describe("安全发送演练 UI", () => {
     expect(html).not.toContain("确认这个目标");
   });
 
-  it("预检步骤明确显示 Firewall、finalText 与回车安全锁", () => {
+  it("预检步骤明确显示隐私检查、最终正文与回车安全锁，无英文术语泄漏", () => {
     const state = {
       ...onboardingStateFromPersisted(undefined),
       rehearsalStep: "firewall" as const,
@@ -87,8 +87,10 @@ describe("安全发送演练 UI", () => {
     const html = renderToStaticMarkup(
       <SafeDeliveryRehearsalView {...props({ onboarding: state })} />
     );
-    expect(html).toContain("Context Firewall");
-    expect(html).toContain("finalText");
+    expect(html).toContain("本地隐私检查");
+    expect(html).toContain("最终正文");
+    expect(html).not.toContain("finalText");
+    expect(html).not.toContain("Firewall");
     expect(html).toContain("自动回车始终关闭");
     expect(html).toContain("打开演练预检");
   });

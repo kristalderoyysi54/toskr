@@ -9,8 +9,10 @@ import {
   Info,
   Send,
   Undo2,
+  X,
 } from "lucide-react";
 
+import { IconButton } from "@/components/ui/icon-button";
 import { tweenMenu } from "@/lib/motion";
 import {
   api,
@@ -24,10 +26,13 @@ import {
 } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 
+import logoUrl from "../src-tauri/icons/128x128.png";
+
 /**
  * 迷你 HUD 窗口（独立 webview）：全应用统一的提示气泡（捕获/操作确认/警示）。
+ * 形态：纸白说话气泡 + 尾巴指向右下角 logo（「logo 在说话」），右侧常显关闭钮。
  * 默认点击穿透；Rust 侧检测到光标悬停会关闭穿透并推送 hover 态，
- * 此时对 undoable 的提示展示「撤销」按钮。
+ * 此时关闭钮可点、对 undoable 的提示展示「撤销」按钮。
  */
 export default function HudView() {
   const [item, setItem] = useState<(HudPayload & { key: number }) | null>(null);
@@ -52,14 +57,15 @@ export default function HudView() {
 
   const undoable = !!item?.undoable;
 
+  const dismiss = () => {
+    // 与点击气泡同一退场节奏：先本地播退场，再让窗口隐藏
+    setItem(null);
+    window.setTimeout(() => void api.hideHud(), 150);
+  };
+
   return (
     <MotionConfig reducedMotion="user">
-      <div className="relative flex h-screen w-screen items-center overflow-hidden rounded-xl bg-foreground/75 px-3 dark:bg-transparent">
-        {/* token-exception: rounded-[14px] 对齐 Rust 原生 vibrancy 圆角（apply_vibrancy radius=14） */}
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-0 rounded-[14px] shadow-[inset_0_1px_0_oklch(1_0_0/0.16)]"
-        />
+      <div className="flex h-screen w-screen flex-col items-end overflow-hidden px-3 pt-2">
         {/* 进出场对称：入场沿用原 hud-pop 参数；退场淡出微缩。
             连发覆盖时 popLayout 让新旧内容交叉淡切，单槽替换不再是硬切 */}
         <AnimatePresence mode="popLayout">
@@ -74,56 +80,89 @@ export default function HudView() {
                 transition: { duration: 0.18, ease: [0.2, 0.9, 0.3, 1.2] },
               }}
               exit={{ opacity: 0, scale: 0.96, transition: tweenMenu }}
-              className="flex w-full items-center gap-2"
+              className="flex w-full flex-col items-end"
             >
-              <HudIcon kind={item.kind} />
-              <div
-                onClick={() => {
-                  // 点击气泡本体：打开面板。到期提醒跳任务页并定位该任务；
-                  // settings: 目标（更新提醒）改开设置窗对应分区；
-                  // 其余定位到刚捕获的卡片。先本地播退场，再让窗口隐藏
-                  void emitTo(
-                    "main",
-                    HUD_OPEN_PANEL_EVENT,
-                    item.kind === "due"
-                      ? { page: "tasks", taskId: item.targetId ?? null }
-                      : item.targetId === "update"
-                        ? { update: true }
-                        : item.targetId?.startsWith("settings:")
-                          ? { settings: item.targetId.slice("settings:".length) }
-                          : {}
-                  );
-                  setItem(null);
-                  window.setTimeout(() => void api.hideHud(), 150);
-                }}
-                title="点击查看"
-                className="min-w-0 flex-1 cursor-pointer"
-              >
-                <p className="text-body font-medium leading-tight text-white">
-                  {titleOf(item)}
-                </p>
-                {/* warn/undone/sent 的 text 已是标题本身，副行只给捕获类展示预览 */}
-                {(item.kind === "added" || item.kind === "duplicate") && item.text && (
-                  <p className="truncate text-micro leading-tight text-white/60">
-                    {item.text}
-                  </p>
-                )}
-              </div>
-              {undoable && (
-                <button
-                  onClick={() => {
-                    void emitTo("main", UNDO_CAPTURE_EVENT, {});
-                  }}
-                  className={cn(
-                    "flex shrink-0 items-center gap-1 rounded-sm border border-white/20 px-1.5 py-0.5 outline-none",
-                    "text-micro text-white/90 transition-opacity hover:bg-white/15",
-                    "focus-visible:ring-2 focus-visible:ring-white/60",
-                    hovered ? "opacity-100" : "pointer-events-none opacity-0"
+              {/* token-exception: 气泡与尾巴合成一个异形剪影，须用多层 drop-shadow
+                  统一投影 + 0.5px 描边（elevation 系列是 box-shadow，罩不住尾巴） */}
+              <div className="relative w-full [filter:drop-shadow(0_1px_1px_rgb(20_20_24/0.10))_drop-shadow(0_4px_10px_rgb(20_20_24/0.16))_drop-shadow(0_0_0.5px_rgb(20_20_24/0.30))] dark:[filter:drop-shadow(0_1px_1px_rgb(0_0_0/0.35))_drop-shadow(0_5px_14px_rgb(0_0_0/0.45))_drop-shadow(0_0_0.5px_rgb(0_0_0/0.60))]">
+                <div className="flex w-full items-center gap-2 rounded-2xl bg-paper py-1.5 pl-2.5 pr-1.5 text-paper-foreground">
+                  <HudIcon kind={item.kind} />
+                  <div
+                    onClick={() => {
+                      // 点击气泡本体：打开面板。到期提醒跳任务页并定位该任务；
+                      // settings: 目标（更新提醒）改开设置窗对应分区；
+                      // 其余定位到刚捕获的卡片。先本地播退场，再让窗口隐藏
+                      void emitTo(
+                        "main",
+                        HUD_OPEN_PANEL_EVENT,
+                        item.kind === "due"
+                          ? { page: "tasks", taskId: item.targetId ?? null }
+                          : item.targetId === "update"
+                            ? { update: true }
+                            : item.targetId?.startsWith("settings:")
+                              ? { settings: item.targetId.slice("settings:".length) }
+                              : {}
+                      );
+                      dismiss();
+                    }}
+                    title="点击查看"
+                    className="min-w-0 flex-1 cursor-pointer"
+                  >
+                    <p className="text-body font-medium leading-tight">
+                      {titleOf(item)}
+                    </p>
+                    {/* warn/undone/sent 的 text 已是标题本身，副行只给捕获类展示预览 */}
+                    {(item.kind === "added" || item.kind === "duplicate") &&
+                      item.text && (
+                        <p className="truncate text-micro leading-tight text-paper-foreground/55">
+                          {item.text}
+                        </p>
+                      )}
+                  </div>
+                  {undoable && (
+                    <button
+                      onClick={() => {
+                        void emitTo("main", UNDO_CAPTURE_EVENT, {});
+                      }}
+                      className={cn(
+                        "flex shrink-0 items-center gap-1 rounded-sm border border-paper-foreground/25 px-1.5 py-0.5 outline-none",
+                        "text-micro text-paper-foreground/75 transition-opacity hover:bg-paper-foreground/10",
+                        "focus-visible:ring-2 focus-visible:ring-primary/50",
+                        hovered ? "opacity-100" : "pointer-events-none opacity-0"
+                      )}
+                    >
+                      <Undo2 className="size-2.5" /> 撤销
+                    </button>
                   )}
+                  <IconButton
+                    label="关闭"
+                    onClick={dismiss}
+                    className="rounded-full bg-paper-foreground/10 text-paper-foreground/60 hover:bg-paper-foreground/15 hover:text-paper-foreground/85 dark:hover:bg-paper-foreground/15 dark:hover:text-paper-foreground/85"
+                  >
+                    <X strokeWidth={2.5} />
+                  </IconButton>
+                </div>
+                {/* token-exception: 尾巴为固定几何 SVG（22×13），从气泡右下弯向 logo */}
+                <svg
+                  className="absolute right-3.5 top-full -mt-px"
+                  width="22"
+                  height="13"
+                  viewBox="0 0 22 13"
+                  aria-hidden="true"
                 >
-                  <Undo2 className="size-2.5" /> 撤销
-                </button>
-              )}
+                  <path
+                    className="fill-paper"
+                    d="M2 0 H20 C19.6 3.8 20.2 7.6 21.6 10.8 Q22.4 12.6 20.6 12.3 C13.8 11.2 6 7.4 2 0 Z"
+                  />
+                </svg>
+              </div>
+              {/* token-exception: 头像投影须跟随图标透明轮廓，box-shadow 做不到 */}
+              <img
+                src={logoUrl}
+                alt=""
+                draggable={false}
+                className="mr-0.5 mt-1.5 size-9 select-none [filter:drop-shadow(0_2px_5px_rgb(20_20_24/0.28))] dark:[filter:drop-shadow(0_3px_7px_rgb(0_0_0/0.55))]"
+              />
             </motion.div>
           )}
         </AnimatePresence>

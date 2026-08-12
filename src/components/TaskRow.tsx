@@ -211,7 +211,10 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
             isDragging && "z-10 opacity-70 elevation-3"
           )}
         >
-          {/* 左缘拖拽把手（悬停显现，与 NoteCard 同款）：展开态的唯一拖拽入口 */}
+          {/* 拖拽把手（与 NoteCard 同款卡内浮钮）：键盘 Tab 聚焦时显现；
+              展开态整行拖拽被禁（防编辑器划选误触），故展开态 hover 也显现
+              作为唯一鼠标拖拽入口。旧版 -left-4 挂卡外会被 ScrollArea
+              Viewport 的 overflow-x:hidden 裁掉，列表还得为它垫 pl-2 */}
           <button
             {...attributes}
             data-drag-handle
@@ -223,8 +226,9 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
             onClick={(e) => e.stopPropagation()}
             aria-label="拖拽排序（Space 拾起，方向键移动）"
             className={cn(
-              "absolute -left-4 top-2 cursor-grab touch-none p-0.5",
-              "text-muted-foreground/50 opacity-0 transition-opacity group-hover:opacity-100",
+              "absolute left-1 top-1.5 cursor-grab touch-none rounded-md border border-foreground/10 bg-surface-raised/95 p-0.5 elevation-2",
+              "text-muted-foreground/50 opacity-0 transition-opacity",
+              expanded && "group-hover:opacity-100",
               "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/60",
               "active:cursor-grabbing",
               done && "hidden"

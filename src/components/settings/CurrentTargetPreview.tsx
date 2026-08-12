@@ -1,28 +1,29 @@
-import { FlaskConical, RefreshCw } from "lucide-react";
+import { FlaskConical, Pencil, RefreshCw } from "lucide-react";
 
 import { AppIcon } from "@/components/settings/AppIdentity";
 import { DeliveryPolicySummary } from "@/components/settings/DeliveryPolicySummary";
 import { useAppIdentity } from "@/components/settings/useAppIdentity";
 import { IconButton } from "@/components/ui/icon-button";
+import { TARGET_PROFILE_SOURCE_LABEL } from "@/lib/targetLens";
 import type { TargetSnapshot } from "@/lib/tauri";
 import type { TargetProfileResolution } from "@/lib/targetProfiles";
 import { cn } from "@/lib/utils";
 
+/** 措辞根词统一走 TARGET_PROFILE_SOURCE_LABEL，这里只拼接目标上下文。 */
 function targetPreviewReason(
   snapshot: TargetSnapshot | null,
   resolution: TargetProfileResolution
 ): string {
   if (!snapshot?.bundleId) return "尚未识别发送目标";
   if (!snapshot.ready) return "目标应用已失效";
+  const base = TARGET_PROFILE_SOURCE_LABEL[resolution.source];
   switch (resolution.source) {
-    case "temporary":
-      return "仅本次手动选择";
     case "conflict":
-      return `存在重复应用绑定，当前稳定使用 ${resolution.profile.name}`;
+      return `${base}，当前稳定使用 ${resolution.profile.name}`;
     case "exact":
-      return `已为 ${snapshot.appName || snapshot.bundleId} 指定`;
+      return `${base}：已为 ${snapshot.appName || snapshot.bundleId} 指定`;
     default:
-      return "未匹配具体应用，使用默认方案";
+      return base;
   }
 }
 
@@ -33,6 +34,7 @@ export function CurrentTargetPreview({
   testMessage,
   onRefresh,
   onTest,
+  onEditProfile,
 }: {
   snapshot: TargetSnapshot | null;
   resolution: TargetProfileResolution;
@@ -40,6 +42,8 @@ export function CurrentTargetPreview({
   testMessage: string | null;
   onRefresh: () => void;
   onTest: () => void;
+  /** 「编辑此方案」直达：选中当前解析到的方案并展开方案管理区。 */
+  onEditProfile: () => void;
 }) {
   const identity = useAppIdentity(snapshot?.bundleId, snapshot?.appName);
   const appName = identity?.name || snapshot?.appName || snapshot?.bundleId || "未识别目标";
@@ -88,7 +92,7 @@ export function CurrentTargetPreview({
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1">
           <IconButton
-            label="刷新当前目标"
+            label="刷新（重新识别系统前台应用）"
             size="sm"
             disabled={refreshing}
             onClick={onRefresh}
@@ -102,8 +106,18 @@ export function CurrentTargetPreview({
           </IconButton>
           <button
             type="button"
+            onClick={onEditProfile}
+            title="编辑当前解析到的发送方案"
+            className="inline-flex h-8 items-center gap-1 rounded-lg border border-border px-2 text-body outline-none hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-primary/50 dark:hover:bg-white/10"
+          >
+            <Pencil aria-hidden className="size-3.5" />
+            编辑此方案
+          </button>
+          <button
+            type="button"
             disabled={!snapshot?.bundleId || refreshing}
             onClick={onTest}
+            title="仅本地重新计算发送方案，不重新识别前台应用、不访问剪贴板"
             className="inline-flex h-8 items-center gap-1 rounded-lg border border-border px-2 text-body outline-none hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-primary/50 disabled:opacity-40 dark:hover:bg-white/10"
           >
             <FlaskConical aria-hidden className="size-3.5" />

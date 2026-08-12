@@ -14,6 +14,7 @@ import {
   Merge,
   Pencil,
   PenLine,
+  Pin,
   ExternalLink,
   Send,
   ScanText,
@@ -22,9 +23,14 @@ import {
   Star,
   Trash2,
   Unlink,
+  VenetianMask,
   Wand2,
 } from "lucide-react";
 
+import {
+  activeAliasOccurrences,
+  restoreAliases,
+} from "@/lib/delivery/aliasEntities";
 import { imageCaption, imageListLabel } from "@/lib/format";
 import { tip } from "@/lib/tip";
 import { IconButton } from "@/components/ui/icon-button";
@@ -120,6 +126,16 @@ function CardThumb({ file, overlay }: { file: string; overlay?: string }) {
   );
 }
 
+/** 卡片单行摘要：图片=「图片 ×N」标签，链接=标题或 host+路径，文本=首行。 */
+function noteFirstLine(note: Note): string {
+  if (note.kind === "image") return imageListLabel(note, noteImages(note).length);
+  if (note.kind === "link" && note.url) {
+    const link = linkParts(note.url);
+    return note.linkTitle ?? link.host + (link.path === "/" ? "" : link.path);
+  }
+  return note.text.split("\n")[0] || "（空）";
+}
+
 /**
  * 固定尺寸卡片瓷砖（Paste 风格）：统一高度、3 行截断展示；
  * 双击 = 直接发送到对话；完整内容与编辑通过预览层（Space / 放大按钮）。
@@ -163,10 +179,26 @@ export const NoteCard = memo(function NoteCard({
   const cardRef = useRef<HTMLDivElement | null>(null);
   const icon = useAppIcon(note.sourceBundle);
   const cardTint = useNotesStore((s) => s.settings.cardTint);
+  // 笔记域头部渐变的分组色兜底（返回原始字符串，满足选择器稳定引用约束）；
+  // 剪贴卡恒不取分组色，保持"来源应用主色，否则中性灰"的现状
+  const sectionColor = useNotesStore((s) =>
+    note.sectionId === CLIPBOARD_ID
+      ? undefined
+      : s.sections.find((sec) => sec.id === note.sectionId)?.color
+  );
   const cardOpacity = useNotesStore((s) => s.settings.cardOpacity);
   const compactPref = useNotesStore((s) => s.settings.cardDensity === "compact");
+  const aliasEntitiesEnabled = useNotesStore((s) => s.settings.aliasEntitiesEnabled);
+  const aliasEntities = useNotesStore((s) => s.settings.aliasEntities);
   // 横栏串固定瓷砖形态，不受密度设置影响
   const compact = compactPref && !strip;
+  /** 剪贴板历史卡：固定语义不同，并可从卡面直接保存为正式笔记。 */
+  const isClip = note.sectionId === CLIPBOARD_ID;
+  const clipTemplatePref = useNotesStore((s) => s.settings.clipCardTemplate);
+  /** 票据形态（B 案定稿）：仅剪贴 × 舒适密度 × 竖栏；紧凑、横栏串、笔记不受影响。 */
+  const ticket = isClip && !compact && !strip;
+  /** 剪贴卡模板只作用于票据形态（舒适密度竖栏）；其余恒为标准形态。 */
+  const clipTemplate = ticket ? clipTemplatePref : "standard";
   const isImage = note.kind === "image";
   const isLink = note.kind === "link" && !!note.url;
   const images = noteImages(note);
@@ -348,7 +380,7 @@ export const NoteCard = memo(function NoteCard({
       case "keep":
         return (
           <ContextMenuItem key={id} onClick={() => toggleNoteKeep(note.id)}>
-            <Star className={cn("size-3.5", note.keep && "fill-current")} />{" "}
+            <KeepGlyph className={cn("size-3.5", note.keep && "fill-current")} />{" "}
             {isClip
               ? note.keep
                 ? "取消固定"
@@ -467,6 +499,24 @@ export const NoteCard = memo(function NoteCard({
     }
   };
 
+  // 铁律：占位符出现列表在 useMemo 派生，绝不放进 zustand 选择器
+  const aliasRestorable = useMemo(
+    () =>
+      aliasEntitiesEnabled && !isImage
+        ? activeAliasOccurrences(note.text, aliasEntities)
+        : [],
+    [aliasEntities, aliasEntitiesEnabled, isImage, note.text]
+  );
+
+  const restoreCardAliases = () => {
+    if (aliasRestorable.length === 0) return;
+    const { text } = restoreAliases(note.text, aliasEntities);
+    if (text === note.text) return;
+    useNotesStore.getState().snapshot("恢复化名");
+    useNotesStore.getState().updateNoteText(note.id, text);
+    undoableTip(`已恢复 ${aliasRestorable.length} 处化名`);
+  };
+
   const copyOne = () => void copyNoteContent(note);
 
   const segments = splitHighlight(note.text, query);
@@ -504,8 +554,18 @@ export const NoteCard = memo(function NoteCard({
     setRenaming(false);
   };
 
-  /** 剪贴板历史卡：固定语义不同，并可从卡面直接保存为正式笔记。 */
-  const isClip = note.sectionId === CLIPBOARD_ID;
+  /** keep 图标分域：剪贴=图钉（固定置顶·不被清理），笔记=星标（常用·发送后保留） */
+  const KeepGlyph = isClip ? Pin : Star;
+  // 通栏底色：竖栏笔记=资产牌（A 案），分组色优先（归属即身份）> 应用主色 > 中性灰；
+  // 横栏串维持现状——应用主色优先，图标色未就绪时不闪分组色
+  const headerTint = strip
+    ? icon?.color ?? (note.sourceBundle ? undefined : sectionColor)
+    : sectionColor ?? icon?.color;
+  /** 竖栏笔记通栏副行展示的分组名（组织轴）；其余形态不消费。 */
+  const sectionName =
+    !isClip && !strip
+      ? sections.find((sec) => sec.id === note.sectionId)?.name
+      : undefined;
   const saveClipAsNote = () => {
     if (!isClip) return;
     moveNotes([note.id], INBOX_ID);
@@ -575,8 +635,8 @@ export const NoteCard = memo(function NoteCard({
             transition,
             "--card-alpha": `${Math.round(cardOpacity * 100)}%`,
           } as React.CSSProperties}
-          // 整卡可抓拖拽排序（4px 激活阈值不影响点击/双击）；键盘拾取仍走下方把手，
-          // 避免 Tab 到悬浮操作按钮时 Space/Enter 被 dnd-kit 抢走
+          // 整卡可抓拖拽排序（4px 激活阈值不影响点击/双击）；键盘拾取走专用把手
+          // （Tab 聚焦时浮现），避免 Tab 到悬浮操作按钮时 Space/Enter 被 dnd-kit 抢走
           onPointerDown={(e) => listeners?.onPointerDown?.(e)}
           onClick={(e) => {
             const ui = useUIStore.getState();
@@ -633,22 +693,40 @@ export const NoteCard = memo(function NoteCard({
             // 在彩色通栏两侧形成一圈「深色主题黑、浅色主题白」的细边——
             // 正是用户反复指出的那层描边（放大截图实测：面板 #2f3a4a →
             // 暗带 #1f2226 → 通栏 #cd7538）。选中态改用不占布局的 ring
-            "group relative flex cursor-default select-none overflow-hidden rounded-lg",
+            "group relative flex cursor-default select-none overflow-hidden",
+            compact && isClip ? "rounded-md" : "rounded-lg",
             strip
               ? // Paste 1:1：近方形卡（实测 496×526 → 16/17），宽随栏高推导
                 "h-auto aspect-[16/17] shrink-0 flex-col px-2 pb-1.5 pt-1.5"
               : compact
-                ? "h-9 items-center"
-                : "h-[136px] flex-col px-2 pb-1.5 pt-1.5",
+                ? // 紧缩双调性（2026-08-12 用户定稿）：剪贴=流水行更密，笔记=资产卡呼吸
+                  isClip
+                  ? "h-8 items-center"
+                  : "h-10 items-center"
+                : ticket
+                  ? // 舒适竖栏剪贴=时间票据（B 案定稿）：标准=票据全卡；
+                    // 浓缩=票据头+单行摘要；单行=只留票据头行
+                    clipTemplate === "banner"
+                    ? "h-8 flex-col justify-center px-2"
+                    : clipTemplate === "condensed"
+                      ? "h-[52px] flex-col px-2 pb-1 pt-1.5"
+                      : "h-[116px] flex-col px-2 pb-1 pt-1.5"
+                  : // 舒适竖栏笔记=资产牌（A 案）/ 横栏串：维持通栏瓷砖
+                    "h-[136px] flex-col px-2 pb-1.5 pt-1.5",
             // 实色卡片（Paste 风格）：与毛玻璃面板分层；透明度由设置项调节。
             // 静息态不给阴影——shadow-sm 是紧贴边缘的 1px 硬阴影，在深色面板上
             // 会读成一条描边（用户实测否决；详情层同理只用大而柔的 elevation）。
-            // 卡底与面板底本身对比足够，不靠边线也分得开
-            "bg-[rgb(255_255_255/var(--card-alpha,100%))] dark:bg-[rgb(39_39_42/var(--card-alpha,100%))]",
+            // 卡底与面板底本身对比足够，不靠边线也分得开。
+            // 剪贴板紧缩行例外：去卡片化（hover 才浮现行底）——临时流水的调性
+            compact && isClip
+              ? "transition-colors hover:bg-black/[0.05] dark:hover:bg-white/[0.06]"
+              : "bg-[rgb(255_255_255/var(--card-alpha,100%))] dark:bg-[rgb(39_39_42/var(--card-alpha,100%))]",
             // 舒适密度的悬浮微升：位移只作用于卡片刚体（内部图标区相对位置不变）；
             // reduced-motion 下 transition 被全局压到 0.01ms，等效"去位移保影子"
             !compact &&
               "transition-[transform,box-shadow] duration-150 hover:-translate-y-px hover:elevation-2",
+            // 紧缩笔记卡 hover 只给影子不位移（资产感；流水行只亮底不抬）
+            compact && !isClip && "transition-shadow duration-150 hover:elevation-2",
             // 无勾选框设计：选中态 = primary 光环（+ 舒适密度抬升）。
             // 只用 ring 不用 border：ring 画在布局盒之外，不会像边框那样把
             // 通栏往内挤出一圈底色
@@ -682,9 +760,12 @@ export const NoteCard = memo(function NoteCard({
             aria-label="拖拽调整位置和分组（Space 拾起，方向键移动）"
             className={cn(
               "cursor-grab touch-none p-0.5 text-muted-foreground/50 transition-opacity",
+              // 舒适卡把手＝键盘专用（鼠标拖拽走整卡）：Tab 聚焦时以卡内浮钮显现。
+              // 旧版 -left-4 挂卡外，被 ScrollArea Viewport 的 overflow-x:hidden
+              // 裁得只剩几像素（hover 显现名存实亡），列表左侧还得为它垫 pl-2
               compact
                 ? "relative ml-1 shrink-0 opacity-60 hover:opacity-100"
-                : "absolute -left-4 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100",
+                : "absolute left-1 top-1/2 -translate-y-1/2 rounded-md border border-foreground/10 bg-surface-raised/95 elevation-2 opacity-0",
               "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/60",
               "active:cursor-grabbing",
               note.done && "hidden"
@@ -715,13 +796,94 @@ export const NoteCard = memo(function NoteCard({
             </div>
           ) : (
             <>
-          {/* 顶部通栏：应用主色轻微渐变底 + 类型/时间（白字）+ 右端完整应用
-              图标；渐变两端与卡底同吃 --card-alpha（设置 → 卡片透明度） */}
+          {/* 票据头行（剪贴 × 舒适竖栏，B 案定稿）：相对时间为主键 + 标题/类型徽标
+              + 图钉 + 右端完整应用图标（不裁切）；浓缩/单行模板下操作钮悬浮
+              头行右端，元数据 hover 淡出让位（沿用原通栏模板技法） */}
+          {ticket && (
+            <div
+              className={cn(
+                "flex h-5 shrink-0 items-center gap-1.5",
+                clipTemplate === "standard" && "mb-1"
+              )}
+            >
+              {/* 时间主键：强调靠字重，颜色退到与底行「来自 …」同族灰（略深） */}
+              <span className="shrink-0 text-label font-semibold tabular-nums text-muted-foreground">
+                {timeAgo(note.createdAt)}
+              </span>
+              <div className="flex min-w-0 flex-1 items-center">
+                {renaming ? (
+                  <input
+                    autoFocus
+                    value={titleDraft}
+                    placeholder={typeLabel}
+                    onChange={(e) => setTitleDraft(e.target.value)}
+                    onClick={(e) => e.stopPropagation()}
+                    onBlur={commitRename}
+                    onKeyDown={(e) => {
+                      e.stopPropagation();
+                      if (e.key === "Enter" && !e.nativeEvent.isComposing) commitRename();
+                      if (e.key === "Escape") setRenaming(false);
+                    }}
+                    className="w-full bg-transparent text-label font-medium outline-none placeholder:text-muted-foreground/50"
+                  />
+                ) : note.title ? (
+                  <p
+                    title="点击重命名"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      startRename();
+                    }}
+                    className="min-w-0 cursor-text truncate text-label font-medium"
+                  >
+                    {note.title}
+                  </p>
+                ) : typeLabel !== "文本" ? (
+                  // 纯文本剪贴不设类型徽标（时间即身份，重命名走右键菜单）；
+                  // 徽标 flex 化定高居中——inline-block 会骑基线在头行里下坠
+                  <button
+                    type="button"
+                    title="点击重命名"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      startRename();
+                    }}
+                    className="inline-flex h-3.5 max-w-full cursor-text items-center rounded-sm surface-inset px-1.5 text-micro font-medium leading-none text-muted-foreground"
+                  >
+                    <span className="truncate">{typeLabel}</span>
+                  </button>
+                ) : null}
+              </div>
+              {note.keep && (
+                <KeepGlyph
+                  className={cn(
+                    "size-3 shrink-0 fill-amber-400 text-amber-400",
+                    clipTemplate !== "standard" &&
+                      "transition-opacity group-focus-within:opacity-0 group-hover:opacity-0"
+                  )}
+                />
+              )}
+              {icon && (
+                <img
+                  src={icon.url}
+                  alt=""
+                  className={cn(
+                    "size-4 shrink-0",
+                    clipTemplate !== "standard" &&
+                      "transition-opacity group-focus-within:opacity-0 group-hover:opacity-0"
+                  )}
+                />
+              )}
+            </div>
+          )}
+
+          {/* 顶部通栏（竖栏笔记=资产牌 / 横栏串维持现状）：渐变底 + 标题与副行
+              （白字）+ 右端应用图标；渐变两端与卡底同吃 --card-alpha */}
+          {!ticket && (
           <div
             className="-mx-2 -mt-1.5 mb-1.5 flex h-9 shrink-0 items-center gap-1.5 rounded-t-lg px-2"
             style={{
               backgroundImage: headerGradient(
-                (cardTint && icon?.color) || "#5b5b60"
+                (cardTint && headerTint) || "#5b5b60"
               ),
             }}
           >
@@ -739,7 +901,11 @@ export const NoteCard = memo(function NoteCard({
                     if (e.key === "Enter" && !e.nativeEvent.isComposing) commitRename();
                     if (e.key === "Escape") setRenaming(false);
                   }}
-                  className="w-full bg-transparent text-label font-semibold text-white outline-none placeholder:text-white/50"
+                  className={cn(
+                    "w-full bg-transparent font-semibold text-white outline-none placeholder:text-white/50",
+                    // 竖栏笔记标题升一档（资产感）；横栏串维持现状字阶
+                    strip ? "text-label" : "text-title"
+                  )}
                 />
               ) : (
                 <p
@@ -748,17 +914,21 @@ export const NoteCard = memo(function NoteCard({
                     e.stopPropagation();
                     startRename();
                   }}
-                  className="cursor-text truncate text-label font-semibold text-white"
+                  className={cn(
+                    "cursor-text truncate font-semibold text-white",
+                    strip ? "text-label" : "text-title"
+                  )}
                 >
                   {note.title ?? typeLabel}
                 </p>
               )}
               <p className="truncate text-micro text-white/70">
-                {timeAgo(note.createdAt)}
+                {/* 竖栏笔记副行=分组名（组织轴，时间移至右下角）；横栏串维持相对时间 */}
+                {!strip && sectionName ? sectionName : timeAgo(note.createdAt)}
               </p>
             </div>
             {note.keep && (
-              <Star className="size-3 shrink-0 fill-white/90 text-white/90" />
+              <KeepGlyph className="size-3 shrink-0 fill-white/90 text-white/90" />
             )}
             {icon && (
               // 应用图标嵌入通栏右端（Paste 风格）：左缘完整可见，
@@ -768,7 +938,46 @@ export const NoteCard = memo(function NoteCard({
               </span>
             )}
           </div>
+          )}
 
+          {/* 浓缩模板：通栏下只保留一行摘要（图片=缩略图+张数标签，链接=favicon+标题） */}
+          {clipTemplate === "condensed" && (
+            <div className="flex min-h-0 flex-1 items-center gap-1.5 overflow-hidden">
+              {isImage &&
+                (imageUrl ? (
+                  <img
+                    src={imageUrl}
+                    alt=""
+                    className="size-6 shrink-0 rounded-sm object-cover"
+                  />
+                ) : (
+                  <span className="size-6 shrink-0 animate-pulse rounded-sm bg-black/[0.06] dark:bg-white/[0.08]" />
+                ))}
+              {isLink && note.linkIcon && <LinkFavicon src={note.linkIcon} />}
+              <p
+                {...dragOutProps}
+                className={cn(
+                  "min-w-0 flex-1 truncate hover:cursor-grab",
+                  note.codeLang ? "font-mono text-label" : "text-body",
+                  note.done && "text-muted-foreground line-through opacity-60"
+                )}
+              >
+                {splitHighlight(noteFirstLine(note), query).map((seg, i) =>
+                  seg.hit ? (
+                    <mark
+                      key={i}
+                      className="rounded-[2px] bg-amber-300/60 text-inherit dark:bg-amber-500/40"
+                    >
+                      {seg.text}
+                    </mark>
+                  ) : (
+                    <span key={i}>{seg.text}</span>
+                  )
+                )}
+              </p>
+            </div>
+          )}
+          {clipTemplate === "standard" && (
           <div className="flex min-h-0 flex-1 items-start overflow-hidden">
             {isLink ? (
               <div className="flex w-full flex-col justify-center gap-0.5">
@@ -783,15 +992,18 @@ export const NoteCard = memo(function NoteCard({
                     ? link!.host + (link!.path === "/" ? "" : link!.path)
                     : link!.path}
                 </p>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void api.openUrl(note.url!);
-                  }}
-                  className="mt-1 flex w-fit items-center gap-1 rounded-md bg-black/[0.06] px-1.5 py-0.5 text-micro text-muted-foreground hover:text-foreground dark:bg-white/10"
-                >
-                  <ExternalLink className="size-2.5" /> 打开链接
-                </button>
+                {/* 票据高度装不下常驻按钮：打开链接走悬浮「打开页面」钮 / Space / 右键 */}
+                {!ticket && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void api.openUrl(note.url!);
+                    }}
+                    className="mt-1 flex w-fit items-center gap-1 rounded-md bg-black/[0.06] px-1.5 py-0.5 text-micro text-muted-foreground hover:text-foreground dark:bg-white/10"
+                  >
+                    <ExternalLink className="size-2.5" /> 打开链接
+                  </button>
+                )}
               </div>
             ) : isImage ? (
               <div className="flex h-full w-full flex-col gap-1">
@@ -877,8 +1089,9 @@ export const NoteCard = memo(function NoteCard({
               </p>
             )}
           </div>
+          )}
 
-          {isComposite && (
+          {clipTemplate === "standard" && isComposite && (
             <div className="mb-1 flex shrink-0 gap-1 overflow-hidden">
               {images.slice(0, 4).map((f) => (
                 <Thumb key={f} file={f} />
@@ -891,7 +1104,14 @@ export const NoteCard = memo(function NoteCard({
             </div>
           )}
 
-          <div className="flex h-4 shrink-0 items-center gap-1 text-micro text-muted-foreground/70">
+          {clipTemplate === "standard" && (
+          <div
+            className={cn(
+              "flex shrink-0 items-center gap-1 text-micro text-muted-foreground/70",
+              // 票据底行带打孔虚线裁切线（B 案）；笔记/横栏维持现状高度
+              ticket ? "h-5 border-t border-dashed border-foreground/10 pt-1" : "h-4"
+            )}
+          >
             {note.provenance ? (
               <button
                 type="button"
@@ -912,27 +1132,70 @@ export const NoteCard = memo(function NoteCard({
                     ? "发送结果 · 部分来源缺失"
                     : "发送结果 · 来源缺失"}
               </button>
+            ) : aliasRestorable.length > 0 ? (
+              <button
+                type="button"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  restoreCardAliases();
+                }}
+                className="inline-flex min-w-0 items-center gap-1 truncate rounded-sm outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50"
+                title="把词典占位符还原为原文（本机操作，可撤销）"
+              >
+                <VenetianMask className="size-3 shrink-0" aria-hidden />
+                含 {aliasRestorable.length} 处化名 · 点击恢复
+              </button>
             ) : note.sourceApp ? <span className="truncate">来自 {note.sourceApp}</span> : <span />}
             <span className="ml-auto shrink-0 tabular-nums text-muted-foreground/50">
-              {isImage && note.imageW
-                ? `${note.imageW} × ${note.imageH}`
-                : isLink
-                  ? "链接"
-                  : isComposite
-                    ? `${[...note.text].length} 字符 · ${images.length} 图`
-                    : `${[...note.text].length} 字符`}
+              {!isClip && !strip
+                ? // 竖栏笔记（A 案）：通栏副行让位给分组名，时间移到右下角
+                  timeAgo(note.createdAt)
+                : isImage && note.imageW
+                  ? `${note.imageW} × ${note.imageH}`
+                  : isLink
+                    ? "链接"
+                    : isComposite
+                      ? `${[...note.text].length} 字符 · ${images.length} 图`
+                      : `${[...note.text].length} 字符`}
             </span>
           </div>
+          )}
             </>
           )}
 
+          {/* 紧缩笔记卡：操作钮显现时右端先铺同卡底色渐变垫底，钮不再悬空压字；
+              剪贴流水行无实底可渐变（毛玻璃面板），维持右端元数据淡出的现状 */}
+          {compact && !isClip && (
+            // token-exception: 渐变终点必须精确等于卡底色（含 --card-alpha 用户透明度），无对应 token
+            <span
+              aria-hidden
+              className="pointer-events-none absolute inset-y-0 right-0 w-2/5 rounded-[inherit] bg-gradient-to-l from-[rgb(255_255_255/var(--card-alpha,100%))] from-55% to-transparent opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 dark:from-[rgb(39_39_42/var(--card-alpha,100%))]"
+            />
+          )}
           {/* 悬停操作钮：hover/键盘焦点显现（opacity 方案，Tab 可达） */}
           <div
             className={cn(
               "absolute flex gap-0.5",
-              compact ? "right-1 top-1/2 -translate-y-1/2" : "bottom-1 right-1.5"
+              compact || clipTemplate === "banner"
+                ? // 紧凑行 / 单行票据：钮垂直居中（行内元数据 hover 让位）
+                  "right-1 top-1/2 -translate-y-1/2"
+                : clipTemplate === "condensed"
+                  ? // 浓缩票据：钮挂票据头行右端（头行元数据 hover 让位）
+                    "right-1 top-1"
+                  : "bottom-1 right-1.5"
             )}
           >
+            {isClip && (
+              <IconButton
+                label="复制内容"
+                surface
+                reveal="hover-focus"
+                onClick={copyOne}
+              >
+                <Copy className="size-3" />
+              </IconButton>
+            )}
             {isClip && (
               <IconButton
                 label="保存为笔记"
@@ -941,6 +1204,16 @@ export const NoteCard = memo(function NoteCard({
                 onClick={saveClipAsNote}
               >
                 <Inbox className="size-3" />
+              </IconButton>
+            )}
+            {aliasRestorable.length > 0 && (
+              <IconButton
+                label="恢复化名"
+                surface
+                reveal="hover-focus"
+                onClick={restoreCardAliases}
+              >
+                <VenetianMask className="size-3" />
               </IconButton>
             )}
             <IconButton
@@ -1023,16 +1296,30 @@ function CompactRow({
   const isImage = note.kind === "image";
   const isLink = note.kind === "link" && !!note.url;
   const images = noteImages(note);
-  const link = isLink ? linkParts(note.url!) : null;
-  const firstLine = isImage
-    ? imageListLabel(note, images.length)
-    : isLink
-      ? (note.linkTitle ?? link!.host + (link!.path === "/" ? "" : link!.path))
-      : note.text.split("\n")[0] || "（空）";
+  const firstLine = noteFirstLine(note);
   const mono = !isImage && !isLink && isMonoLike(firstLine);
-  const segments = splitHighlight(firstLine, query);
-  // 统一紧凑行样式（2026-08-05 用户定稿，笔记/剪贴板同款）：
-  // 无左缘色条（来源由图标表达）、路径/命令等宽 + 中段省略、无逐行时间戳
+  /** 自定义标题（命名过的资产）：标题优先展示，内容首行降级为淡色摘要 */
+  const title = note.title?.trim() || null;
+  const preview = firstLine === "（空）" ? null : firstLine;
+  const isClip = note.sectionId === CLIPBOARD_ID;
+  const highlightSegs = (text: string) =>
+    splitHighlight(text, query).map((seg, i) =>
+      seg.hit ? (
+        <mark
+          key={i}
+          className="rounded-[2px] bg-amber-300/60 text-inherit dark:bg-amber-500/40"
+        >
+          {seg.text}
+        </mark>
+      ) : (
+        <span key={i}>{seg.text}</span>
+      )
+    );
+  /** keep 图标分域（与完整卡同规则）：剪贴=图钉，笔记=星标；只换图标不动布局 */
+  const KeepGlyph = isClip ? Pin : Star;
+  // 紧凑行双调性（2026-08-12 用户定稿，替代 08-05「两域同款」）：骨架共用
+  // （无左缘色条、来源由图标表达、等宽中段省略），差异由外层行高/底色
+  // + 本行的「标题优先」与「剪贴相对时间戳」表达
   return (
     <div className="relative flex h-full w-full min-w-0 items-center gap-2 pl-2 pr-2">
       {isLink && note.linkIcon ? (
@@ -1055,11 +1342,19 @@ function CompactRow({
         {...dragOutProps}
         className={cn(
           "min-w-0 flex-1 truncate text-body hover:cursor-grab",
-          (note.codeLang || mono) && "font-mono text-label",
+          !title && (note.codeLang || mono) && "font-mono text-label",
           note.done && "text-muted-foreground line-through opacity-60"
         )}
       >
-        {mono && !query ? (
+        {title ? (
+          // 标题优先：加重标题 + 淡色摘要同行跟随（长标题吃掉摘要，整行尾部省略）
+          <>
+            <span className="font-medium">{highlightSegs(title)}</span>
+            {preview && (
+              <span className="text-muted-foreground"> — {highlightSegs(preview)}</span>
+            )}
+          </>
+        ) : mono && !query ? (
           // 中段省略：head 弹性截断 + tail 定长保留（路径尾段才是身份）。
           // 搜索态回退到常规截断，保证高亮片段可见
           (() => {
@@ -1072,23 +1367,12 @@ function CompactRow({
             );
           })()
         ) : (
-          segments.map((seg, i) =>
-            seg.hit ? (
-              <mark
-                key={i}
-                className="rounded-[2px] bg-amber-300/60 text-inherit dark:bg-amber-500/40"
-              >
-                {seg.text}
-              </mark>
-            ) : (
-              <span key={i}>{seg.text}</span>
-            )
-          )
+          highlightSegs(firstLine)
         )}
       </p>
       {/* 尾部元数据在 hover 时淡出，给悬浮操作钮让位（原先是图标直接压在时间上打架） */}
       {note.keep && (
-        <Star className="size-3 shrink-0 fill-amber-400 text-amber-400 transition-opacity group-hover:opacity-0" />
+        <KeepGlyph className="size-3 shrink-0 fill-amber-400 text-amber-400 transition-opacity group-hover:opacity-0" />
       )}
       {note.provenance && (
         <Link2
@@ -1099,6 +1383,12 @@ function CompactRow({
       {!isImage && images.length > 0 && (
         <span className="shrink-0 text-micro text-muted-foreground/60 transition-opacity group-hover:opacity-0">
           {images.length}图
+        </span>
+      )}
+      {/* 剪贴流水行常显相对时间（新鲜度=核心元数据）；置顶行免时间只留图钉 */}
+      {isClip && !note.keep && (
+        <span className="shrink-0 text-micro tabular-nums text-muted-foreground/50 transition-opacity group-hover:opacity-0">
+          {timeAgo(note.createdAt)}
         </span>
       )}
     </div>

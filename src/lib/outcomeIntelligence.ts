@@ -3,24 +3,12 @@ import type { DeliveryEvent } from "@/lib/deliveryActivityCore";
 
 export type OutcomeRange = "7d" | "30d" | "all";
 export type OutcomeRetentionDays = 7 | 30 | 90;
-export type OutcomeQuality =
-  | "directUse"
-  | "minorEdit"
-  | "majorEdit"
-  | "discarded";
 export type OutcomeBaselineScope = "profile" | "recipe";
 
 export interface OutcomeBaseline {
   scope: OutcomeBaselineScope;
   scopeId: string;
   minutes: number;
-}
-
-export interface OutcomeQualityFeedback {
-  deliveryId: string;
-  resultNoteId: string;
-  quality: OutcomeQuality;
-  updatedAtMs: number;
 }
 
 export interface OutcomeProblemSession {
@@ -64,7 +52,6 @@ export interface OutcomeMetrics {
   actualWorkflowMedianMs: number | null;
   retryCount: number;
   verificationStatuses: Record<"pass" | "needsReview" | "blocked", number>;
-  qualityFeedback: Record<OutcomeQuality, number>;
   problemResolutionMedianMs: number | null;
   estimatedTimeSavedMs: number | null;
   estimatedSampleSize: number;
@@ -80,12 +67,6 @@ type MetricEvent = DeliveryEvent & {
   transformRecipeId?: TransformRecipeId | null;
 };
 
-const QUALITY_VALUES = new Set<OutcomeQuality>([
-  "directUse",
-  "minorEdit",
-  "majorEdit",
-  "discarded",
-]);
 const RECIPE_VALUES = new Set<TransformRecipeId>([
   "summarize",
   "extract-actions",
@@ -208,7 +189,6 @@ function baselineFor(
 
 export function aggregateOutcomeMetrics(
   inputEvents: readonly DeliveryEvent[],
-  qualityInput: readonly OutcomeQualityFeedback[],
   sessionsInput: readonly OutcomeProblemSession[],
   baselineInput: readonly OutcomeBaseline[],
   filters: OutcomeFilters
@@ -311,30 +291,6 @@ export function aggregateOutcomeMetrics(
     if (latest?.verificationStatus) verificationStatuses[latest.verificationStatus] += 1;
   }
 
-  const qualityFeedback = {
-    directUse: 0,
-    minorEdit: 0,
-    majorEdit: 0,
-    discarded: 0,
-  };
-  const resultNoteByDelivery = new Map<string, string>();
-  for (const event of events) {
-    if ((event.eventType === "resultCaptured" || event.eventType === "resultVerified") &&
-      event.resultNoteId) {
-      resultNoteByDelivery.set(event.deliveryId, event.resultNoteId);
-    }
-  }
-  const latestQuality = new Map<string, OutcomeQualityFeedback>();
-  for (const item of qualityInput) {
-    if (!validQualityFeedback(item) || !includedDeliveries.has(item.deliveryId) ||
-      resultNoteByDelivery.get(item.deliveryId) !== item.resultNoteId) continue;
-    const current = latestQuality.get(item.deliveryId);
-    if (!current || item.updatedAtMs >= current.updatedAtMs) {
-      latestQuality.set(item.deliveryId, item);
-    }
-  }
-  for (const item of latestQuality.values()) qualityFeedback[item.quality] += 1;
-
   const problemDurations = normalizeProblemSessions(sessionsInput)
     .filter((session) => session.startedAtMs <= filters.nowMs)
     .filter(validProblemSession)
@@ -382,7 +338,6 @@ export function aggregateOutcomeMetrics(
     actualWorkflowMedianMs: median(actualWorkflows),
     retryCount,
     verificationStatuses,
-    qualityFeedback,
     problemResolutionMedianMs: median(problemDurations),
     estimatedTimeSavedMs: estimatedSavings.length
       ? estimatedSavings.reduce((sum, value) => sum + value, 0)
@@ -415,36 +370,6 @@ export function normalizeOutcomeBaselines(
     });
   }
   return [...byScope.values()].slice(-64);
-}
-
-function validQualityFeedback(value: unknown): value is OutcomeQualityFeedback {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const item = value as Partial<OutcomeQualityFeedback>;
-  return typeof item.deliveryId === "string" && !!item.deliveryId &&
-    item.deliveryId.length <= 160 && typeof item.resultNoteId === "string" &&
-    !!item.resultNoteId && item.resultNoteId.length <= 160 &&
-    QUALITY_VALUES.has(item.quality as OutcomeQuality) && validTime(item.updatedAtMs);
-}
-
-export function normalizeQualityFeedback(
-  input: readonly OutcomeQualityFeedback[] | undefined
-): OutcomeQualityFeedback[] {
-  const byDelivery = new Map<string, OutcomeQualityFeedback>();
-  for (const item of input ?? []) {
-    if (!validQualityFeedback(item)) continue;
-    const current = byDelivery.get(item.deliveryId);
-    if (!current || item.updatedAtMs >= current.updatedAtMs) byDelivery.set(item.deliveryId, { ...item });
-  }
-  return [...byDelivery.values()]
-    .sort((left, right) => left.updatedAtMs - right.updatedAtMs)
-    .slice(-500);
-}
-
-export function upsertQualityFeedback(
-  input: readonly OutcomeQualityFeedback[],
-  feedback: OutcomeQualityFeedback
-): OutcomeQualityFeedback[] {
-  return normalizeQualityFeedback([...input, feedback]);
 }
 
 function validProblemSession(value: unknown): boolean {

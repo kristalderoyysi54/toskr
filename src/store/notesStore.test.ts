@@ -81,8 +81,8 @@ describe("notesStore 基础", () => {
     ]);
   });
 
-  it("v12 迁移到 v14 时正文不变，并补齐本地成效设置", () => {
-    expect(STORE_VERSION).toBe(14);
+  it("v12 迁移到 v15 时正文不变，并补齐本地成效设置", () => {
+    expect(STORE_VERSION).toBe(15);
     const decoded = decodePersistedState(JSON.stringify({
       version: 12,
       state: {
@@ -97,9 +97,102 @@ describe("notesStore 基础", () => {
       outcomeRetentionDays: 30,
       outcomeMetricsEpoch: 0,
       outcomeBaselines: [],
-      outcomeQualityFeedback: [],
       outcomeProblemSessions: [],
     });
+  });
+
+  it("v14 迁移到 v15 补齐可逆化名默认值，不改动既有设置", () => {
+    const {
+      aliasEntitiesEnabled: _enabled,
+      aliasEntities: _entities,
+      aliasCustomCategories: _categories,
+      aliasNextNumberByCategory: _counters,
+      aliasAutoRestoreOnCapture: _autoRestore,
+      ...legacySettings
+    } = defaultSettings();
+    const decoded = decodePersistedState(JSON.stringify({
+      version: 14,
+      state: {
+        sections: [{ id: INBOX_ID, name: "收件箱" }],
+        notes: [],
+        tasks: [],
+        taskSections: [],
+        settings: { ...legacySettings, stealth: true },
+      },
+    }));
+    expect(decoded.settings).toMatchObject({
+      stealth: true,
+      aliasEntitiesEnabled: true,
+      aliasEntities: [],
+      aliasCustomCategories: [],
+      aliasNextNumberByCategory: {},
+      aliasAutoRestoreOnCapture: true,
+    });
+  });
+
+  it("v15 拒绝损坏的化名词典与计数器", () => {
+    const decodeAlias = (patch: object) => () =>
+      decodePersistedState(JSON.stringify({
+        version: 15,
+        state: {
+          sections: [{ id: INBOX_ID, name: "收件箱" }],
+          notes: [],
+          tasks: [],
+          taskSections: [],
+          settings: { ...defaultSettings(), ...patch },
+        },
+      }));
+    const entity = {
+      id: "alias-1",
+      category: "USER",
+      originalText: "张三",
+      placeholder: "[USER_01]",
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    };
+
+    expect(decodeAlias({ aliasEntities: [entity] })).not.toThrow();
+    // 占位符编号不足两位
+    expect(
+      decodeAlias({ aliasEntities: [{ ...entity, placeholder: "[USER_1]" }] })
+    ).toThrow();
+    // 不同 id 但原文重复
+    expect(
+      decodeAlias({
+        aliasEntities: [entity, { ...entity, id: "alias-2", placeholder: "[USER_02]" }],
+      })
+    ).toThrow();
+    // 自定义类别命中保留字
+    expect(
+      decodeAlias({ aliasCustomCategories: [{ code: "EMAIL", label: "邮箱" }] })
+    ).toThrow();
+    // 计数器出现零值
+    expect(decodeAlias({ aliasNextNumberByCategory: { USER: 0 } })).toThrow();
+  });
+
+  it("剪贴卡模板：合法枚举通过，缺省回退标准，非法值拒绝", () => {
+    const decodeTemplate = (settings: object) =>
+      decodePersistedState(JSON.stringify({
+        version: 15,
+        state: {
+          sections: [{ id: INBOX_ID, name: "收件箱" }],
+          notes: [],
+          tasks: [],
+          taskSections: [],
+          settings,
+        },
+      }));
+
+    expect(
+      decodeTemplate({ ...defaultSettings(), clipCardTemplate: "banner" }).settings
+        .clipCardTemplate
+    ).toBe("banner");
+    // 旧备份没有该字段：合并默认值
+    const { clipCardTemplate: _tpl, ...legacy } = defaultSettings();
+    expect(decodeTemplate(legacy).settings.clipCardTemplate).toBe("standard");
+    expect(() =>
+      decodeTemplate({ ...defaultSettings(), clipCardTemplate: "huge" })
+    ).toThrow(/枚举无效/);
   });
 
   it("v13 上手状态迁入可恢复演练，已完成旧用户不会被强制重做", () => {
@@ -156,12 +249,6 @@ describe("notesStore 基础", () => {
         ...defaultSettings(),
         outcomeRetentionDays: 90,
         outcomeBaselines: [{ scope: "profile", scopeId: "safe", minutes: 20 }],
-        outcomeQualityFeedback: [{
-          deliveryId: "delivery-1",
-          resultNoteId: "result-1",
-          quality: "directUse",
-          updatedAtMs: 10,
-        }],
         outcomeProblemSessions: [{
           id: "session-1",
           startedAtMs: 1,
@@ -176,7 +263,6 @@ describe("notesStore 基础", () => {
     const decoded = decodePersistedState(JSON.stringify({ version: 13, state }));
     expect(decoded.settings.outcomeRetentionDays).toBe(90);
     expect(decoded.settings.outcomeBaselines).toHaveLength(1);
-    expect(decoded.settings.outcomeQualityFeedback).toHaveLength(1);
     expect(decoded.settings.outcomeProblemSessions).toHaveLength(1);
 
     const invalid = structuredClone(state);
@@ -194,10 +280,6 @@ describe("notesStore 基础", () => {
           outcomeBaselines: [
             { scope: "profile", scopeId: "safe", minutes: 10 },
             { scope: "profile", scopeId: "safe", minutes: 15, futureField: "kept" },
-          ],
-          outcomeQualityFeedback: [
-            { deliveryId: "d", resultNoteId: "r", quality: "directUse", updatedAtMs: 1 },
-            { deliveryId: "d", resultNoteId: "r", quality: "minorEdit", updatedAtMs: 2 },
           ],
           outcomeProblemSessions: [
             {
@@ -218,7 +300,6 @@ describe("notesStore 基础", () => {
       minutes: 15,
       futureField: "kept",
     })]);
-    expect(decoded.settings.outcomeQualityFeedback).toMatchObject([{ quality: "minorEdit" }]);
     expect(decoded.settings.outcomeProblemSessions).toMatchObject([{
       id: "s",
       resultNoteId: "r",
@@ -226,17 +307,11 @@ describe("notesStore 基础", () => {
     }]);
   });
 
-  it("清除成效用户数据只清质量与计时，不改卡片、任务或人工基线", () => {
+  it("清除成效用户数据只清计时，不改卡片、任务或人工基线", () => {
     const noteId = useNotesStore.getState().addNote("业务卡片").id!;
     const taskId = useNotesStore.getState().addTask("业务任务").id!;
     useNotesStore.getState().setSettings({
       outcomeBaselines: [{ scope: "profile", scopeId: "safe", minutes: 20 }],
-      outcomeQualityFeedback: [{
-        deliveryId: "d",
-        resultNoteId: "r",
-        quality: "directUse",
-        updatedAtMs: 1,
-      }],
       outcomeProblemSessions: [{
         id: "s",
         startedAtMs: 1,
@@ -250,7 +325,6 @@ describe("notesStore 基础", () => {
 
     useNotesStore.getState().setSettings({
       outcomeMetricsEpoch: 1,
-      outcomeQualityFeedback: [],
       outcomeProblemSessions: [],
     });
 
@@ -259,7 +333,6 @@ describe("notesStore 基础", () => {
     expect(state.tasks.find((task) => task.id === taskId)?.text).toBe("业务任务");
     expect(state.settings.outcomeBaselines).toHaveLength(1);
     expect(state.settings.outcomeMetricsEpoch).toBe(1);
-    expect(state.settings.outcomeQualityFeedback).toEqual([]);
     expect(state.settings.outcomeProblemSessions).toEqual([]);
   });
 
@@ -1431,5 +1504,47 @@ describe("剪贴板 tab：发送不标完成 / 清空 / 超龄清理", () => {
       .sort();
     expect(rest).toEqual([fresh, pinnedOld].sort());
     expect(rest).not.toContain(old);
+  });
+});
+
+describe("剪贴板分组不干扰默认落点与分组排序", () => {
+  it("剪贴板组被顶到首位时，捕获默认仍落入首个非剪贴板分组", () => {
+    useNotesStore.setState({
+      sections: [
+        { id: CLIPBOARD_ID, name: "剪贴板" },
+        { id: INBOX_ID, name: "收件箱" },
+      ],
+      notes: [],
+    });
+    const { result, id } = useNotesStore.getState().addNote("捕获正文", {});
+    expect(result).toBe("added");
+    expect(
+      useNotesStore.getState().notes.find((note) => note.id === id)?.sectionId
+    ).toBe(INBOX_ID);
+  });
+
+  it("上下移分组跳过隐藏的剪贴板组，顶部分组上移为无操作", () => {
+    useNotesStore.setState({
+      sections: [
+        { id: INBOX_ID, name: "收件箱" },
+        { id: CLIPBOARD_ID, name: "剪贴板" },
+        { id: "group-a", name: "A" },
+      ],
+      notes: [],
+    });
+    // 收件箱下移：应越过隐藏的剪贴板组，与可见的 A 组换位
+    useNotesStore.getState().moveSection(INBOX_ID, 1);
+    expect(useNotesStore.getState().sections.map((section) => section.id)).toEqual([
+      CLIPBOARD_ID,
+      "group-a",
+      INBOX_ID,
+    ]);
+    // A 组现在是可见首位：继续上移不得与剪贴板组发生隐形换位
+    useNotesStore.getState().moveSection("group-a", -1);
+    expect(useNotesStore.getState().sections.map((section) => section.id)).toEqual([
+      CLIPBOARD_ID,
+      "group-a",
+      INBOX_ID,
+    ]);
   });
 });

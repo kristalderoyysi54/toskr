@@ -25,7 +25,6 @@ function metrics(overrides: Partial<OutcomeMetrics> = {}): OutcomeMetrics {
     actualWorkflowMedianMs: 120_000,
     retryCount: 1,
     verificationStatuses: { pass: 1, needsReview: 1, blocked: 0 },
-    qualityFeedback: { directUse: 1, minorEdit: 1, majorEdit: 0, discarded: 0 },
     problemResolutionMedianMs: 180_000,
     estimatedTimeSavedMs: 240_000,
     estimatedSampleSize: 2,
@@ -98,6 +97,7 @@ describe("OutcomeInsightsSection", () => {
     );
     expect(firstUse).toContain("还没有可统计的发送");
     expect(firstUse).toContain("完成一次发送后");
+    expect(firstUse).toContain("发送第一条内容试试");
     expect(firstUse).not.toContain("发送完成");
 
     const filtered = renderToStaticMarkup(
@@ -105,6 +105,19 @@ describe("OutcomeInsightsSection", () => {
     );
     expect(filtered).toContain("当前筛选没有数据");
     expect(filtered).toContain("换一个时间范围");
+    // 没传 onClearFilters 时不渲染按钮
+    expect(filtered).not.toContain("清除筛选");
+
+    const filteredWithClear = renderToStaticMarkup(
+      <OutcomeMetricsSummary metrics={empty} hasActivity onClearFilters={vi.fn()} />
+    );
+    expect(filteredWithClear).toContain("清除筛选");
+
+    // 零记录场景「清除筛选」没有意义，防止条件写反
+    const neverUsed = renderToStaticMarkup(
+      <OutcomeMetricsSummary metrics={empty} hasActivity={false} onClearFilters={vi.fn()} />
+    );
+    expect(neverUsed).not.toContain("清除筛选");
   });
 
   it("设置页优先展示使用概览，高级工具和隐私控制默认折叠", () => {
@@ -128,5 +141,9 @@ describe("OutcomeInsightsSection", () => {
     expect(html).not.toContain("<details open");
     expect(html).toContain("开始计时");
     expect(html).toContain("disabled");
+    // 统计开关已下沉进「数据与隐私」折叠区（details 收起时内容仍在 DOM）
+    expect(html.indexOf("数据与隐私")).toBeLessThan(
+      html.indexOf('aria-label="本机使用统计"')
+    );
   });
 });

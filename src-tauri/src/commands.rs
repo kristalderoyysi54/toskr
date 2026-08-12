@@ -565,6 +565,8 @@ fn capture_hud_feedback(
     preview: String,
     warning: Option<String>,
     association_suggested: bool,
+    alias_restored_count: Option<u64>,
+    auto_linked: bool,
 ) -> (&'static str, String, bool) {
     let (capture_kind, undoable) = if kind == "duplicate" {
         ("duplicate", false)
@@ -587,10 +589,20 @@ fn capture_hud_feedback(
         ),
         None => (
             capture_kind,
-            if association_suggested && capture_kind == "added" {
-                format!("{preview}\n可关联到最近一次发送，请在卡片右键确认")
-            } else {
-                preview
+            {
+                // 化名恢复/自动归位回执都以追加行呈现；只报事实，不报映射
+                let mut text = preview;
+                if capture_kind == "added" {
+                    if let Some(count) = alias_restored_count.filter(|count| *count > 0) {
+                        text = format!("{text}\n已恢复 {count} 处化名");
+                    }
+                    if auto_linked {
+                        text = format!("{text}\n已自动保存为最近发送的回复");
+                    } else if association_suggested {
+                        text = format!("{text}\n可关联到最近一次发送，请在卡片右键确认");
+                    }
+                }
+                text
             },
             undoable,
         ),
@@ -604,9 +616,17 @@ pub fn show_capture_hud(
     preview: String,
     warning: Option<String>,
     association_suggested: bool,
+    alias_restored_count: Option<u64>,
+    auto_linked: bool,
 ) {
-    let (hud_kind, text, undoable) =
-        capture_hud_feedback(&kind, preview, warning, association_suggested);
+    let (hud_kind, text, undoable) = capture_hud_feedback(
+        &kind,
+        preview,
+        warning,
+        association_suggested,
+        alias_restored_count,
+        auto_linked,
+    );
     let capture_kind = if kind == "duplicate" {
         "duplicate"
     } else {
@@ -1304,6 +1324,8 @@ mod tests {
             "捕获内容".into(),
             Some("原剪贴板仅恢复了可读内容".into()),
             true,
+            None,
+            false,
         );
         assert_eq!(kind, "warn");
         assert_eq!(text, "已捕获 · 原剪贴板仅恢复了可读内容");
@@ -1315,15 +1337,50 @@ mod tests {
             "捕获内容".into(),
             Some("原剪贴板恢复失败".into()),
             true,
+            None,
+            false,
         );
         assert_eq!(kind, "warn");
         assert_eq!(text, "内容已存在 · 原剪贴板恢复失败");
         assert!(!text.contains("捕获内容"));
         assert!(!undoable);
 
-        let (kind, text, undoable) = capture_hud_feedback("added", "捕获内容".into(), None, true);
+        let (kind, text, undoable) =
+            capture_hud_feedback("added", "捕获内容".into(), None, true, None, false);
         assert_eq!(kind, "added");
         assert_eq!(text, "捕获内容\n可关联到最近一次发送，请在卡片右键确认");
         assert!(undoable);
+    }
+
+    #[test]
+    fn alias_restore_count_appends_line_only_for_added_capture() {
+        let (kind, text, undoable) =
+            capture_hud_feedback("added", "张三的回复".into(), None, false, Some(2), false);
+        assert_eq!(kind, "added");
+        assert_eq!(text, "张三的回复\n已恢复 2 处化名");
+        assert!(undoable);
+
+        // 数量为 0 不加行；重复捕获不加行
+        let (_, text, _) =
+            capture_hud_feedback("added", "预览".into(), None, false, Some(0), false);
+        assert_eq!(text, "预览");
+        let (_, text, _) =
+            capture_hud_feedback("duplicate", "预览".into(), None, false, Some(3), false);
+        assert_eq!(text, "预览");
+    }
+
+    #[test]
+    fn auto_linked_line_replaces_association_suggestion() {
+        // 自动归位行优先，且不再显示「请右键确认」建议行
+        let (kind, text, _) =
+            capture_hud_feedback("added", "回复内容".into(), None, true, Some(1), true);
+        assert_eq!(kind, "added");
+        assert_eq!(text, "回复内容\n已恢复 1 处化名\n已自动保存为最近发送的回复");
+        assert!(!text.contains("右键确认"));
+
+        // 重复捕获不追加自动归位行
+        let (_, text, _) =
+            capture_hud_feedback("duplicate", "预览".into(), None, false, None, true);
+        assert_eq!(text, "预览");
     }
 }
