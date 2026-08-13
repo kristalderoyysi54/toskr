@@ -1,6 +1,7 @@
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 
+import { focusRing } from "@/components/ui/focus-ring";
 import { cn } from "@/lib/utils";
 
 /**
@@ -15,10 +16,10 @@ import { cn } from "@/lib/utils";
 const iconButtonVariants = cva(
   cn(
     "relative inline-flex shrink-0 items-center justify-center outline-none select-none",
-    "transition-[color,background-color,transform,opacity] duration-100 motion-reduce:transition-none",
+    "transition-[color,background-color,transform,opacity] duration-(--duration-control) motion-reduce:transition-none",
     "after:absolute after:-inset-x-1.5 after:-inset-y-1",
-    "focus-visible:ring-2 focus-visible:ring-primary/50",
-    "active:scale-[0.94] motion-reduce:active:scale-100 disabled:pointer-events-none disabled:opacity-40",
+    focusRing,
+    "active:scale-[0.94] motion-reduce:active:scale-100 disabled:pointer-events-none disabled:opacity-45",
     "[&_svg]:pointer-events-none [&_svg]:shrink-0"
   ),
   {

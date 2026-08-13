@@ -261,6 +261,8 @@ fn on_trigger(app: &AppHandle, input_generation: u64) {
                     // 只发事件：入库与去重由前端裁决后回调 show_capture_hud
                     Some(crate::capture::Captured::Text {
                         text,
+                        html,
+                        source_url,
                         clipboard_warning,
                     }) => {
                         let emitted = handle.emit_to(
@@ -269,6 +271,9 @@ fn on_trigger(app: &AppHandle, input_generation: u64) {
                             TriggerPayload::Captured {
                                 content_kind: "text".into(),
                                 text,
+                                html,
+                                source_url,
+                                captured_at_ms: crate::target::now_ms(),
                                 image_file: None,
                                 image_w: None,
                                 image_h: None,
@@ -302,6 +307,9 @@ fn on_trigger(app: &AppHandle, input_generation: u64) {
                             TriggerPayload::Captured {
                                 content_kind: "image".into(),
                                 text: format!("图片 {w}×{h}"),
+                                html: None,
+                                source_url: None,
+                                captured_at_ms: crate::target::now_ms(),
                                 image_file: Some(file),
                                 image_w: Some(w),
                                 image_h: Some(h),

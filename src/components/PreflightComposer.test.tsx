@@ -273,6 +273,61 @@ describe("PreflightComposer", () => {
     expect(recoveryButton).not.toMatch(/\sdisabled(?:=|\s|>)/);
   });
 
+  it("切到另一个已就绪目标时提供原地确认，不要求取消后重走发送", () => {
+    const id = useNotesStore.getState().addNote("继续保留的预检正文").id!;
+    useNotesStore.getState().setChecked([id]);
+    useDeliveryStore.getState().openDraft({
+      ...buildDeliveryDraft(
+        {
+          id: "confirm-target-change",
+          revision: nextDeliveryDraftRevision(),
+          createdAtMs: 1,
+          sourceKind: "note",
+          sourceItemIds: [id],
+        },
+        {
+          notes: useNotesStore.getState().notes,
+          tasks: [],
+          promptSnippets: useNotesStore.getState().settings.promptSnippets,
+          checkedItemIds: [id],
+          targetSnapshot: useTargetStore.getState().snapshot,
+          profileResolution: currentTargetProfileResolution(),
+          panelPinned: false,
+          dataGeneration: currentDataGeneration(),
+          firewallEnabled: true,
+          firewallDisabledWarnCategories: [],
+          aliasEntitiesEnabled: true,
+          aliasEntities: [],
+        }
+      ),
+      firewallStatus: "ready",
+    });
+    applyTargetEvent({
+      ...target,
+      token: "ishot-target-token",
+      pid: 84,
+      bundleId: "cc.ffitch.shot",
+      appName: "iShot Pro",
+      launchedAtMs: 300,
+      capturedAtMs: 400,
+      revision: 4,
+    });
+    syncServerSnapshots();
+
+    const html = renderToStaticMarkup(<PreflightComposer />);
+    const targetButton = html.match(
+      /<button[^>]*aria-label="确认将发送目标改为 iShot Pro"[^>]*>[\s\S]*?<\/button>/
+    )?.[0];
+
+    expect(html).toContain("Codex → iShot Pro");
+    expect(html).toContain("待确认新目标");
+    expect(html).toContain("待重算方案");
+    expect(html).toContain("当前为 iShot Pro，确认后将重算发送方案");
+    expect(targetButton).toContain("确认新目标");
+    expect(targetButton).not.toMatch(/\sdisabled(?:=|\s|>)/);
+    expect(html).not.toContain("取消后重新发起发送");
+  });
+
   it("展示 Firewall 分类、遮罩、处理动作与高风险二次确认", () => {
     const id = useNotesStore.getState().addNote("fake_phase08_token").id!;
     useNotesStore.getState().setChecked([id]);
@@ -390,6 +445,8 @@ describe("PreflightComposer", () => {
     expect(html).toContain('aria-label="图片隐私检查"');
     expect(html).toContain("请遮挡全部图片敏感区域");
     expect(html).toContain("原图");
+    expect(html).toContain('aria-label="查看图片 1 原图"');
+    expect(html).toContain('title="点击查看原图"');
     expect(html).toContain("遮挡此文字区域");
     expect(html).toContain("遮挡全部图片敏感区域");
     expect(html).toContain('aria-label="重新检测当前文本和原始图片"');
@@ -400,6 +457,72 @@ describe("PreflightComposer", () => {
       /<button[^>]*aria-describedby="preflight-status"[^>]*>[\s\S]*?<\/button>/
     )?.[0];
     expect(submit).toContain("disabled");
+
+    useDeliveryStore.setState((state) => ({
+      draft: state.draft
+        ? {
+            ...state.draft,
+            imageFiles: ["toskr-redacted:preview.png"],
+            imageFirewall: state.draft.imageFirewall.map((item) => ({
+              ...item,
+              sendFile: "toskr-redacted:preview.png",
+              redactedPixelHash: "b".repeat(64),
+              redactedFindingIds: ["image-api-key"],
+            })),
+          }
+        : null,
+    }));
+    syncServerSnapshots();
+    const redactedHtml = renderToStaticMarkup(<PreflightComposer />);
+    expect(redactedHtml).toContain('aria-label="查看图片 1 实际发送图"');
+    expect(redactedHtml).toContain('title="点击查看实际发送图"');
+  });
+
+  it("内容页展示富内容图片附件，并提供逐张查看入口", () => {
+    const id = useNotesStore.getState().addNote("调用方旧文本会被忽略", {
+      contentBlocks: [
+        { type: "text", text: "第一段" },
+        { type: "image", file: "screen-a.png" },
+        { type: "text", text: "第二段" },
+        { type: "image", file: "screen-b.png" },
+      ],
+    }).id!;
+    useNotesStore.getState().setChecked([id]);
+    const built = buildDeliveryDraft(
+      {
+        id: "rich-attachments-ui",
+        revision: nextDeliveryDraftRevision(),
+        createdAtMs: 1,
+        sourceKind: "note",
+        sourceItemIds: [id],
+      },
+      {
+        notes: useNotesStore.getState().notes,
+        tasks: [],
+        promptSnippets: useNotesStore.getState().settings.promptSnippets,
+        checkedItemIds: [id],
+        targetSnapshot: useTargetStore.getState().snapshot,
+        profileResolution: currentTargetProfileResolution(),
+        panelPinned: false,
+        dataGeneration: currentDataGeneration(),
+        firewallEnabled: true,
+        firewallDisabledWarnCategories: [],
+        aliasEntitiesEnabled: true,
+        aliasEntities: [],
+      }
+    );
+    useDeliveryStore.getState().openDraft({ ...built, firewallStatus: "ready" });
+    useDeliveryStore.getState().setActiveSection("content");
+    syncServerSnapshots();
+
+    const html = renderToStaticMarkup(<PreflightComposer />);
+
+    expect(built.originalImageFiles).toEqual(["screen-a.png", "screen-b.png"]);
+    expect(html).toContain('aria-label="图片附件原图，共 2 张"');
+    expect(html).toContain("2 张 · 点击查看原图");
+    expect(html).toContain('aria-label="查看附件原图 1，共 2 张"');
+    expect(html).toContain('aria-label="查看附件原图 2，共 2 张"');
+    expect(html.match(/aria-label="查看附件原图/g)).toHaveLength(2);
   });
 
   it("AI 转换预览已按用户反馈移除：即使 AI 已配置也不出现入口", () => {

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const apiMocks = vi.hoisted(() => ({
   appIcon: vi.fn(),
   diagNote: vi.fn(),
+  edgeHideNow: vi.fn(),
   getTargetSnapshot: vi.fn(),
   refreshTargetSnapshot: vi.fn(),
   refreshPrevApp: vi.fn(),
@@ -378,11 +379,18 @@ function resetExecution(status: DeliveryStatus = "sent") {
     settings: defaultSettings(),
     undoStack: [],
   });
-  useUIStore.setState({ open: true, pinned: false });
+  useUIStore.setState({
+    open: true,
+    pinned: false,
+    edgeHideActive: false,
+    edgeHidden: false,
+    shortcutHoldOpen: false,
+  });
   apiMocks.appIcon.mockReset().mockResolvedValue(null);
   resetTargetState();
   applyTargetEvent(target);
   apiMocks.diagNote.mockReset().mockResolvedValue(undefined);
+  apiMocks.edgeHideNow.mockReset().mockResolvedValue(false);
   apiMocks.refreshTargetSnapshot.mockReset().mockResolvedValue(target);
   apiMocks.getTargetSnapshot.mockReset().mockResolvedValue(target);
   apiMocks.refreshPrevApp.mockReset();
@@ -546,6 +554,47 @@ describe("executeDeliveryDraft", () => {
     expect(useNotesStore.getState().notes.every((item) => item.done)).toBe(true);
     expect(useNotesStore.getState().checkedIds).toEqual([]);
     expect(useNotesStore.getState().settings.onboarding.sent).toBe(true);
+  });
+
+  it("贴边模式发送后只滑出收起，不把面板真隐藏", async () => {
+    const id = useNotesStore.getState().addNote("贴边发送").id!;
+    useNotesStore.getState().setChecked([id]);
+    useUIStore.setState({
+      edgeHideActive: true,
+      edgeHidden: false,
+      shortcutHoldOpen: true,
+    });
+    const draft = executableNoteDraft([id]);
+
+    expect(draft.keepPanel).toBe(false);
+    await executeDeliveryDraft(draft);
+
+    expect(apiMocks.sendDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ keepPanel: true })
+    );
+    expect(apiMocks.edgeHideNow).toHaveBeenCalledWith(true);
+    expect(useUIStore.getState()).toMatchObject({
+      open: true,
+      shortcutHoldOpen: false,
+    });
+  });
+
+  it("从已滑出的贴边细条发送时保留唤回入口", async () => {
+    const id = useNotesStore.getState().addNote("已贴边发送").id!;
+    useNotesStore.getState().setChecked([id]);
+    useUIStore.setState({
+      edgeHideActive: true,
+      edgeHidden: true,
+      shortcutHoldOpen: false,
+    });
+
+    await executeDeliveryDraft(executableNoteDraft([id]));
+
+    expect(apiMocks.sendDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ keepPanel: true })
+    );
+    expect(apiMocks.edgeHideNow).not.toHaveBeenCalled();
+    expect(useUIStore.getState().open).toBe(true);
   });
 
   it("安全演练即使命中 allow 方案也只粘贴、不按回车", async () => {

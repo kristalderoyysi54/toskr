@@ -22,7 +22,7 @@ use crate::activity::{
 };
 use crate::storage::{DATA_FILE, MEDIA_DIR};
 
-pub const MAX_STORE_VERSION: u64 = 15;
+pub const MAX_STORE_VERSION: u64 = 17;
 const MISSING_REVISION: &str = "missing";
 const MEDIA_GC_FILE: &str = "toskr-media-gc.json";
 const DATA_JOURNAL_FILE: &str = "toskr-data-transaction.json";
@@ -3044,6 +3044,7 @@ pub(crate) fn validate_settings_value_for_version(
         "doubleTapCaptureOnly",
         "stealth",
         "soundEnabled",
+        "initialPanelSetupDone",
         "companionEnabled",
         "rightSidebar",
         "panelTopmost",
@@ -3062,6 +3063,7 @@ pub(crate) fn validate_settings_value_for_version(
         "windowOpacity",
         "cardOpacity",
         "hotkeyGapMs",
+        "hudDurationMs",
         "companionGap",
         "panelWidth",
         "panelTopOffset",
@@ -3096,6 +3098,13 @@ pub(crate) fn validate_settings_value_for_version(
     }
     if !optional_type(settings, "outcomeMetricsEpoch", |value| {
         value.as_u64().is_some_and(|epoch| epoch <= 9_007_199_254_740_991)
+    }) {
+        return false;
+    }
+    if !optional_type(settings, "hudDurationMs", |value| {
+        value
+            .as_u64()
+            .is_some_and(|duration| (2_000..=10_000).contains(&duration))
     }) {
         return false;
     }
@@ -3501,7 +3510,39 @@ fn validate_note(object: &serde_json::Map<String, serde_json::Value>) -> bool {
                 .as_array()
                 .is_some_and(|items| items.iter().all(serde_json::Value::is_string))
         })
+        && optional_type(object, "contentBlocks", validate_note_content_blocks)
         && optional_type(object, "provenance", validate_note_provenance)
+}
+
+fn validate_note_content_blocks(value: &serde_json::Value) -> bool {
+    value.as_array().is_some_and(|blocks| {
+        blocks.iter().all(|block| {
+            let Some(block) = block.as_object() else {
+                return false;
+            };
+            match block.get("type").and_then(serde_json::Value::as_str) {
+                Some("text") => block.get("text").is_some_and(serde_json::Value::is_string),
+                Some("image") => {
+                    block
+                        .get("file")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|file| validate_media_file_name(file).is_ok())
+                        && optional_type(block, "alt", serde_json::Value::is_string)
+                        && optional_type(block, "width", |value| {
+                            value
+                                .as_f64()
+                                .is_some_and(|number| number.is_finite() && number > 0.0)
+                        })
+                        && optional_type(block, "height", |value| {
+                            value
+                                .as_f64()
+                                .is_some_and(|number| number.is_finite() && number > 0.0)
+                        })
+                }
+                _ => false,
+            }
+        })
+    })
 }
 
 fn validate_task(
@@ -3745,6 +3786,36 @@ mod tests {
     }
 
     #[test]
+    fn current_store_validates_hud_duration_range() {
+        assert!(validate_settings_value_for_version(
+            Some(&serde_json::json!({"hudDurationMs": 3_000})),
+            MAX_STORE_VERSION
+        ));
+        for invalid in [
+            serde_json::json!({"hudDurationMs": 1_999}),
+            serde_json::json!({"hudDurationMs": 10_001}),
+            serde_json::json!({"hudDurationMs": 2_500.5}),
+        ] {
+            assert!(!validate_settings_value_for_version(
+                Some(&invalid),
+                MAX_STORE_VERSION
+            ));
+        }
+    }
+
+    #[test]
+    fn current_store_validates_initial_panel_setup_marker() {
+        assert!(validate_settings_value_for_version(
+            Some(&serde_json::json!({"initialPanelSetupDone": false})),
+            MAX_STORE_VERSION
+        ));
+        assert!(!validate_settings_value_for_version(
+            Some(&serde_json::json!({"initialPanelSetupDone": "yes"})),
+            MAX_STORE_VERSION
+        ));
+    }
+
+    #[test]
     fn current_store_validates_resumable_onboarding_state() {
         let valid = serde_json::json!({
             "onboarding": {
@@ -3763,7 +3834,7 @@ mod tests {
                 "activationWithin60s": null
             }
         });
-        assert_eq!(MAX_STORE_VERSION, 15);
+        assert_eq!(MAX_STORE_VERSION, 17);
         assert!(validate_settings_value_for_version(
             Some(&valid),
             MAX_STORE_VERSION
@@ -3871,6 +3942,31 @@ mod tests {
         let mut invalid = valid;
         invalid["sourceItemIds"] = serde_json::json!([]);
         assert!(!validate_note_provenance(&invalid));
+    }
+
+    #[test]
+    fn current_store_validates_ordered_note_content_blocks() {
+        let valid = serde_json::json!([
+            {"type": "text", "text": "路径：审批管理"},
+            {
+                "type": "image",
+                "file": "img-deadbeef.png",
+                "alt": "商户注册",
+                "width": 1684,
+                "height": 612
+            },
+            {"type": "text", "text": "一、商户类型"}
+        ]);
+        assert!(validate_note_content_blocks(&valid));
+
+        for invalid in [
+            serde_json::json!([{"type": "image", "file": "../secret.png"}]),
+            serde_json::json!([{"type": "image", "file": "x.png", "width": 0}]),
+            serde_json::json!([{"type": "text", "text": 1}]),
+            serde_json::json!([{"type": "future", "text": "x"}]),
+        ] {
+            assert!(!validate_note_content_blocks(&invalid));
+        }
     }
 
     #[test]

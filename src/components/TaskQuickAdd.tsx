@@ -72,7 +72,7 @@ export function TaskQuickAdd() {
               <Lightbulb
                 className={cn(
                   "size-3.5",
-                  spark ? "fill-violet-400 text-violet-500" : "text-muted-foreground/60"
+                  spark ? "fill-violet-400 text-violet-500" : "text-muted-foreground"
                 )}
               />
             </IconButton>
@@ -99,7 +99,7 @@ export function TaskQuickAdd() {
                     "size-3.5",
                     aiMode
                       ? "fill-amber-400 text-amber-500"
-                      : "text-muted-foreground/60"
+                      : "text-muted-foreground"
                   )}
                 />
               )}

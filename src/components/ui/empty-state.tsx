@@ -19,7 +19,7 @@ export function EmptyState({
 }) {
   if (variant === "inline") {
     return (
-      <p className={cn("py-2 text-center text-label text-muted-foreground/60", className)}>
+      <p className={cn("py-2 text-center text-label text-muted-foreground", className)}>
         {title}
       </p>
     );
@@ -31,12 +31,13 @@ export function EmptyState({
         className
       )}
     >
+      {/* 图标属纯装饰，保留 alpha 弱化；文字一律实色（13px 以下禁 alpha 灰，对比度批次） */}
       {icon && (
-        <span className="text-muted-foreground/40 [&_svg]:size-6">{icon}</span>
+        <span className="text-muted-foreground/50 [&_svg]:size-6">{icon}</span>
       )}
       <p className="text-title font-medium text-muted-foreground">{title}</p>
       {hint && (
-        <p className="text-label leading-normal text-muted-foreground/70">{hint}</p>
+        <p className="text-label leading-normal text-muted-foreground">{hint}</p>
       )}
     </div>
   );

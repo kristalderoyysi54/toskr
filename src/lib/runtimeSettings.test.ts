@@ -34,6 +34,7 @@ describe("rehydrated runtime settings", () => {
       ...defaultSettings(),
       autoEdgeHide: false,
       clipHistory: false,
+      hudDurationMs: 5_000,
       theme: "dark" as const,
     };
 
@@ -50,6 +51,7 @@ describe("rehydrated runtime settings", () => {
     expect(mocks.fns.get("setClipWatch")).toHaveBeenCalledWith(false);
     expect(mocks.fns.get("setWindowTheme")).toHaveBeenCalledWith("dark");
     expect(mocks.fns.get("setAutoEdgeHide")).toHaveBeenCalledWith(true);
+    expect(mocks.fns.get("setHudDuration")).toHaveBeenCalledWith(5_000);
   });
 
   it("伴随模式仍默认常显示", async () => {

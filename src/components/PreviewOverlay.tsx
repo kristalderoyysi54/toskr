@@ -9,6 +9,10 @@ import { floatingSurface } from "@/components/ui/floating-surface";
 import { IconButton } from "@/components/ui/icon-button";
 import { Kbd } from "@/components/ui/kbd";
 import {
+  RichNoteContent,
+  RichNoteTextEditor,
+} from "@/components/RichNoteContent";
+import {
   copyNoteContent,
   deleteNotesWithUndo,
   enrichLinkMeta,
@@ -20,8 +24,13 @@ import { looksLikeMarkdown, renderMarkdown } from "@/lib/markdown";
 import { useAppIcon } from "@/lib/icons";
 import { useNoteImage, useNoteThumb } from "@/lib/media";
 import { springModal, tweenFade } from "@/lib/motion";
-import { api } from "@/lib/tauri";
+import { api, type ImagePreviewSource } from "@/lib/tauri";
 import { currentDataGeneration } from "@/lib/dataGeneration";
+import {
+  hasOrderedRichLayout,
+  normalizeNoteContentBlocks,
+  type NoteContentBlock,
+} from "@/lib/noteContentBlocks";
 import { cn } from "@/lib/utils";
 import { headerGradient } from "@/components/NoteCard";
 import {
@@ -72,10 +81,23 @@ export function PreviewOverlay() {
   const icon = useAppIcon(note?.sourceBundle);
   const isImage = note?.kind === "image";
   const isLink = note?.kind === "link" && !!note?.url;
+  const orderedRich = hasOrderedRichLayout(note?.contentBlocks);
+  const activeEditing = editing && !isImage;
+  const imagePreviewSource: ImagePreviewSource | undefined =
+    note && !activeEditing
+      ? {
+          id: note.id,
+          text: note.text,
+          dataGeneration: currentDataGeneration(),
+        }
+      : undefined;
   const images = note ? noteImages(note) : [];
   const extraImages = isImage ? images.slice(1) : images;
   const imageUrl = useNoteImage(isImage ? note?.imageFile : undefined);
   const [draft, setDraft] = useState("");
+  const [draftBlocks, setDraftBlocks] = useState<NoteContentBlock[]>(
+    () => note?.contentBlocks ?? []
+  );
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // 手写模态语义：Radix Dialog 的 portal/焦点锁在此窗口类会吞点击（同 SimpleMenu 成因），
   // 自管 Tab 循环 + 开合时的焦点交还；Esc/Space/↑↓ 仍由 App 级捕获处理，互不重叠
@@ -106,14 +128,32 @@ export function PreviewOverlay() {
   }, [note, isMd]);
 
   useEffect(() => {
-    if (editing && note) {
+    if (activeEditing && note) {
+      if (orderedRich && note.contentBlocks) {
+        setDraftBlocks(note.contentBlocks);
+        return;
+      }
       setDraft(note.text);
       window.setTimeout(() => textareaRef.current?.focus(), 30);
     }
-  }, [editing, note]);
+  }, [activeEditing, note, orderedRich]);
 
   const save = () => {
-    if (note && draft.trim() && draft !== note.text) {
+    if (!note) {
+      useUIStore.getState().setPreviewEditing(false);
+      return;
+    }
+    if (orderedRich && note.contentBlocks) {
+      const nextBlocks = normalizeNoteContentBlocks(draftBlocks);
+      if (JSON.stringify(nextBlocks) !== JSON.stringify(note.contentBlocks)) {
+        useNotesStore.getState().updateNoteContent(note.id, nextBlocks);
+        void enrichLinkMeta(note.id);
+        tip("ok", "已保存");
+      }
+      useUIStore.getState().setPreviewEditing(false);
+      return;
+    }
+    if (draft.trim() && draft !== note.text) {
       useNotesStore.getState().updateNoteText(note.id, draft);
       // 编辑成链接（或改了 URL）时补抓网页标题/图标（幂等）
       void enrichLinkMeta(note.id);
@@ -263,7 +303,7 @@ export function PreviewOverlay() {
               className="min-h-0 flex-1 overflow-y-auto p-3"
               onDoubleClick={() => {
                 // 双击正文直接进入编辑（图片卡无文本编辑）
-                if (!isImage && !editing) {
+                if (!isImage && !activeEditing) {
                   useUIStore.getState().setPreviewEditing(true);
                 }
               }}
@@ -294,7 +334,18 @@ export function PreviewOverlay() {
                     <span className="text-body text-muted-foreground">加载中…</span>
                   )}
                 </div>
-              ) : editing ? (
+              ) : activeEditing && orderedRich && note.contentBlocks ? (
+                <RichNoteTextEditor
+                  key={note.id}
+                  blocks={draftBlocks}
+                  onChange={setDraftBlocks}
+                  onSave={save}
+                  onCancel={() => {
+                    setDraftBlocks(note.contentBlocks ?? []);
+                    useUIStore.getState().setPreviewEditing(false);
+                  }}
+                />
+              ) : activeEditing ? (
                 <textarea
                   ref={textareaRef}
                   value={draft}
@@ -309,6 +360,11 @@ export function PreviewOverlay() {
                     }
                   }}
                   className="h-full min-h-40 w-full resize-none bg-transparent font-mono text-body leading-relaxed outline-none"
+                />
+              ) : orderedRich && note.contentBlocks ? (
+                <RichNoteContent
+                  blocks={note.contentBlocks}
+                  previewSource={imagePreviewSource}
                 />
               ) : note.codeLang ? (
                 <pre className="hljs whitespace-pre-wrap [overflow-wrap:anywhere] !bg-transparent font-mono text-body leading-relaxed">
@@ -329,13 +385,14 @@ export function PreviewOverlay() {
                 </pre>
               )}
 
-              {extraImages.length > 0 && (
+              {!orderedRich && extraImages.length > 0 && (
                 <div className="mt-3 grid grid-cols-2 gap-2">
                   {extraImages.map((f) => (
                     <PreviewThumb
                       key={f}
                       files={images}
                       index={images.indexOf(f)}
+                      previewSource={imagePreviewSource}
                       onRemove={() => removeImage(f)}
                     />
                   ))}
@@ -352,7 +409,7 @@ export function PreviewOverlay() {
                     : ""}
               </span>
               <div className="ml-auto flex items-center gap-1">
-                {editing ? (
+                {activeEditing ? (
                   <Button size="xs" onClick={save}>
                     <Check className="size-3" /> 保存
                     {/* token-exception: 9px 为重塑前原始尺寸，用户指定还原 */}
@@ -360,10 +417,10 @@ export function PreviewOverlay() {
                   </Button>
                 ) : (
                   <>
-                    {isMd && (
+                    {!orderedRich && isMd && (
                       <button
                         onClick={() => setMdView(!mdView)}
-                        className="rounded-md px-1.5 py-0.5 text-micro text-muted-foreground outline-none hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50 dark:hover:bg-white/10"
+                        className="rounded-md px-1.5 py-0.5 text-micro text-muted-foreground outline-none hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:hover:bg-white/10"
                       >
                         {mdView ? "原文" : "渲染"}
                       </button>
@@ -375,7 +432,7 @@ export function PreviewOverlay() {
                     )}
                     {!isImage && (
                       <IconButton
-                        label="编辑"
+                        label={orderedRich ? "编辑文字（图片位置固定）" : "编辑"}
                         onClick={() => useUIStore.getState().setPreviewEditing(true)}
                       >
                         <Pencil className="size-3.5" />
@@ -423,10 +480,12 @@ export function PreviewOverlay() {
 function PreviewThumb({
   files,
   index,
+  previewSource,
   onRemove,
 }: {
   files: string[];
   index: number;
+  previewSource?: ImagePreviewSource;
   onRemove: () => void;
 }) {
   const url = useNoteThumb(files[index]);
@@ -434,7 +493,9 @@ function PreviewThumb({
     <div className="group relative">
       <div
         title="点击原尺寸预览"
-        onClick={() => void api.quickLook(files, Math.max(0, index))}
+        onClick={() =>
+          void api.quickLook(files, Math.max(0, index), previewSource)
+        }
         className="flex cursor-zoom-in items-center justify-center overflow-hidden rounded-lg bg-black/[0.05] p-1 dark:bg-white/[0.08]"
       >
         {url ? (

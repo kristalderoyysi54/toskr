@@ -1,6 +1,8 @@
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
   AlertTriangle,
+  Check,
+  Image as ImageIcon,
   LocateFixed,
   RefreshCw,
   RotateCcw,
@@ -21,6 +23,7 @@ import { IconButton } from "@/components/ui/icon-button";
 import { Kbd } from "@/components/ui/kbd";
 import {
   inspectDeliveryDraft,
+  inspectDeliveryDraftFreshness,
   inspectDeliveryDraftNonTarget,
   type DeliveryDraftStaleReason,
 } from "@/lib/delivery/executeDraft";
@@ -41,15 +44,17 @@ import {
   FIREWALL_SEVERITY_LABEL,
 } from "@/lib/delivery/firewall";
 import {
+  confirmOpenPreflightTargetChange,
   preflightStaleMessage,
   recoverOpenPreflightTarget,
   submitPreflightDraft,
   updateOpenPreflightDraft,
 } from "@/lib/delivery/preflight";
 import { imageListLabel } from "@/lib/format";
+import { useNoteThumb } from "@/lib/media";
 import { tip } from "@/lib/tip";
 import { ENTER_POLICY_STATUS_LABEL } from "@/lib/targetLens";
-import type { FirewallFinding } from "@/lib/tauri";
+import { api, type FirewallFinding } from "@/lib/tauri";
 import { promptSnippetsForGroup } from "@/lib/targetProfiles";
 import { cn } from "@/lib/utils";
 import { useDeliveryStore } from "@/store/deliveryStore";
@@ -73,6 +78,43 @@ function dialogFocusables(dialog: HTMLElement | null): HTMLElement[] {
       'summary, button:not([disabled]), textarea:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'
     ) ?? []
   ).filter((element) => element.offsetParent !== null);
+}
+
+function PreflightAttachment({
+  files,
+  index,
+}: {
+  files: string[];
+  index: number;
+}) {
+  const url = useNoteThumb(files[index]);
+  return (
+    <li className="shrink-0">
+      <button
+        type="button"
+        aria-label={`查看附件原图 ${index + 1}，共 ${files.length} 张`}
+        title="点击查看原图"
+        onClick={() => void api.quickLook(files, index)}
+        className={cn(
+          "relative flex size-14 cursor-zoom-in items-center justify-center overflow-hidden rounded-md",
+          "border border-foreground/10 bg-background/70 outline-none hover:border-primary/40",
+          "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+        )}
+      >
+        {url ? (
+          <img src={url} alt="" className="size-full object-contain" />
+        ) : (
+          <ImageIcon className="size-4 text-muted-foreground" aria-hidden />
+        )}
+        <span
+          aria-hidden
+          className="absolute bottom-0.5 right-0.5 rounded-sm bg-black/60 px-1 text-micro tabular-nums text-white"
+        >
+          {index + 1}
+        </span>
+      </button>
+    </li>
+  );
 }
 
 export function PreflightComposer({ horizontal = false }: { horizontal?: boolean }) {
@@ -105,6 +147,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
     inputs: readonly unknown[];
     reason: DeliveryDraftStaleReason | null;
     hiddenReason: DeliveryDraftStaleReason | null;
+    freshnessReason: DeliveryDraftStaleReason | null;
   } | null>(null);
 
   // 手工正文和回车/保留开关不会改变来源新鲜度；排除这些高频字段，
@@ -158,11 +201,38 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
         draft && safeRetryPending && reason === "target"
           ? inspectDeliveryDraftNonTarget(draft)
           : null,
+      freshnessReason:
+        draft && reason === "target"
+          ? inspectDeliveryDraftFreshness(draft)
+          : null,
     };
   }
   const staleReason = staleCacheRef.current?.reason ?? null;
   const hiddenStaleReason = staleCacheRef.current?.hiddenReason ?? null;
-  const staleMessage = preflightStaleMessage(hiddenStaleReason ?? staleReason);
+  const targetFreshnessReason = staleCacheRef.current?.freshnessReason ?? null;
+  const readyDifferentTarget = Boolean(
+    staleReason === "target" &&
+    targetStatus === "ready" &&
+    targetSnapshot?.ready &&
+    !sameTargetIdentity(draft?.targetSnapshot ?? null, targetSnapshot)
+  );
+  const showTargetChangeAction = Boolean(
+    readyDifferentTarget &&
+    !profileOverrideNeedsConfirmation &&
+    !targetFreshnessReason &&
+    !retryBlocked
+  );
+  const canConfirmTargetChange = Boolean(
+    showTargetChangeAction && !busy && transformStatus !== "running"
+  );
+  const visibleStaleReason = readyDifferentTarget && targetFreshnessReason
+    ? targetFreshnessReason
+    : showTargetChangeAction
+      ? staleReason
+      : hiddenStaleReason ?? staleReason;
+  const staleMessage = preflightStaleMessage(visibleStaleReason);
+  const currentTargetName =
+    targetSnapshot?.appName || targetSnapshot?.bundleId || "新目标";
   const sourceItemIds = draft?.sourceItemIds;
   const sourceKind = draft?.sourceKind;
   const sourceLabels = useMemo(() => {
@@ -187,7 +257,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
     () =>
       promptGroupId
         ? promptSnippetsForGroup(settings.promptSnippets, promptGroupId)
-        : { prioritized: [], all: [] },
+        : { prioritized: [], remaining: [] },
     [promptGroupId, settings.promptSnippets]
   );
   const draftPromptSnippetId = draft?.promptSnippetId;
@@ -195,7 +265,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
   const promptOptions = useMemo(() => {
     const seen = new Set<string>();
     const options: SimpleSelectOption[] = [{ value: "none", label: "无模板" }];
-    for (const snippet of [...promptMenu.prioritized, ...promptMenu.all]) {
+    for (const snippet of [...promptMenu.prioritized, ...promptMenu.remaining]) {
       if (seen.has(snippet.id)) continue;
       seen.add(snippet.id);
       options.push({ value: snippet.id, label: snippet.label });
@@ -282,21 +352,17 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
     && transformStatus !== "running"
   );
   // 目标失效时按场景给出恢复路径，而不是只报状态：
-  // ① 方案待确认 → 指去目标条；② 同应用但身份已换（重启/换窗口）→ 无法续用，请重新发起；
+  // ① 已识别到另一个 ready 目标 → 显式确认并重算方案；② 方案待确认 → 指去目标条；
   // ③ 人在别的应用 → 切回即自动恢复（由下方 effect 调 recoverOpenPreflightTarget 兑现）
   const draftTargetName =
     draft?.targetSnapshot?.appName || draft?.targetSnapshot?.bundleId || "目标应用";
   const staleTargetGuidance =
-    (hiddenStaleReason ?? staleReason) === "target" && !canRecoverTarget
-      ? profileOverrideNeedsConfirmation
+    visibleStaleReason === "target" && !canRecoverTarget
+      ? showTargetChangeAction
+        ? `当前为 ${currentTargetName}，确认后将重算发送方案`
+        : profileOverrideNeedsConfirmation
         ? "在面板目标条确认本次发送方案后可继续"
-        : targetStatus === "ready" &&
-            targetSnapshot &&
-            draft?.targetSnapshot &&
-            draft.targetSnapshot.bundleId === targetSnapshot.bundleId &&
-            !sameTargetIdentity(draft.targetSnapshot, targetSnapshot)
-          ? "目标应用已重启或窗口已变化，请取消后重新发起发送"
-          : `切回 ${draftTargetName} 后这里会自动恢复`
+        : `切回 ${draftTargetName} 后这里会自动恢复`
       : null;
   const staleDisplay = staleMessage
     ? staleTargetGuidance
@@ -393,7 +459,11 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
   const showSummary = horizontal || activeSection === "summary";
   const showContent = horizontal || activeSection === "content";
   const targetName = draft.targetSnapshot?.appName ?? "未识别目标";
-  const icon = targetSnapshot?.bundleId === draft.targetSnapshot?.bundleId
+  const targetDisplayName = readyDifferentTarget
+    ? `${targetName} → ${currentTargetName}`
+    : targetName;
+  const icon = readyDifferentTarget ||
+      targetSnapshot?.bundleId === draft.targetSnapshot?.bundleId
     ? targetIcon?.url
     : null;
   const excludedFindingIds = new Set(
@@ -572,15 +642,19 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
             )}
           >
             <div className="flex items-center gap-2">
-              <ApplicationIcon src={icon} name={targetName} className="size-8 rounded-lg" />
+              <ApplicationIcon src={icon} name={targetDisplayName} className="size-8 rounded-lg" />
               <div className="min-w-0 flex-1">
-                <p className="truncate text-body font-medium">{targetName}</p>
+                <p className="truncate text-body font-medium">{targetDisplayName}</p>
                 <p className="text-micro text-muted-foreground">
-                  {staleReason === "target" ? "目标已变化" : "可发送"}
+                  {readyDifferentTarget
+                    ? "待确认新目标"
+                    : staleReason === "target"
+                      ? "目标已变化"
+                      : "可发送"}
                 </p>
               </div>
               <span className="rounded-md bg-secondary px-1.5 py-0.5 text-micro">
-                {profileName}
+                {readyDifferentTarget ? "待重算方案" : profileName}
               </span>
             </div>
 
@@ -1023,6 +1097,28 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
               onChange={(event) => useDeliveryStore.getState().setFinalText(event.target.value)}
               className="min-h-24 flex-1 resize-none rounded-lg border border-border bg-background/70 p-2 font-mono text-body leading-relaxed outline-none focus:border-primary/60 focus:ring-2 focus:ring-primary/20"
             />
+            {draft.originalImageFiles.length > 0 && (
+              <div className="shrink-0 space-y-1">
+                <div className="flex items-center gap-2">
+                  <p className="text-label font-medium">附件</p>
+                  <span className="ml-auto text-micro text-muted-foreground">
+                    {draft.originalImageFiles.length} 张 · 点击查看原图
+                  </span>
+                </div>
+                <ul
+                  aria-label={`图片附件原图，共 ${draft.originalImageFiles.length} 张`}
+                  className="flex gap-1.5 overflow-x-auto pb-0.5"
+                >
+                  {draft.originalImageFiles.map((file, index) => (
+                    <PreflightAttachment
+                      key={file}
+                      files={draft.originalImageFiles}
+                      index={index}
+                    />
+                  ))}
+                </ul>
+              </div>
+            )}
           </section>
         </div>
 
@@ -1048,23 +1144,51 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
             取消
           </Button>
           {/* disabled 按钮 pointer-events 为 none，tooltip 挂到外层 span 才能悬停可见 */}
-          <span title={submitBlockedReason ?? undefined} className="shrink-0">
+          <span
+            title={
+              showTargetChangeAction
+                ? `确认将发送目标改为 ${currentTargetName}`
+                : submitBlockedReason ?? undefined
+            }
+            className="shrink-0"
+          >
             <Button
               type="button"
               size="sm"
-              disabled={!canSubmit}
+              disabled={showTargetChangeAction ? !canConfirmTargetChange : !canSubmit}
               aria-describedby="preflight-status"
-              onClick={() => void submitPreflightDraft()}
+              aria-label={
+                showTargetChangeAction
+                  ? `确认将发送目标改为 ${currentTargetName}`
+                  : undefined
+              }
+              onClick={() => {
+                if (showTargetChangeAction) {
+                  confirmOpenPreflightTargetChange({
+                    expectedTarget: targetSnapshot,
+                  });
+                  return;
+                }
+                void submitPreflightDraft();
+              }}
             >
-              <Send className="size-3.5" />
-              {busy
+              {showTargetChangeAction ? (
+                <Check className="size-3.5" />
+              ) : (
+                <Send className="size-3.5" />
+              )}
+              {showTargetChangeAction
+                ? canConfirmTargetChange
+                  ? "确认新目标"
+                  : "暂不可确认"
+                : busy
                 ? "发送中…"
                 : canRecoverTarget
                   ? "重新识别并重试"
                   : draft.safeRehearsal
                     ? "安全粘贴"
                     : "确认发送"}
-              <Kbd inline>⌘⏎</Kbd>
+              {!showTargetChangeAction && <Kbd inline>⌘⏎</Kbd>}
             </Button>
           </span>
         </footer>

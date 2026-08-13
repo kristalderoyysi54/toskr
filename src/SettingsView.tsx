@@ -90,6 +90,8 @@ import { checkForUpdate, downloadAndInstall } from "@/lib/updater";
 import { cn } from "@/lib/utils";
 import {
   CONTEXT_MENU_REGISTRY,
+  HUD_DURATION_MAX_MS,
+  HUD_DURATION_MIN_MS,
   groupContextMenuIds,
   defaultSettings,
   normalizeContextMenu,
@@ -341,7 +343,7 @@ export default function SettingsView() {
       <aside className="flex w-44 shrink-0 flex-col gap-0.5 border-r border-border/60 bg-muted/40 p-2">
         {SECTION_GROUPS.map((group) => (
           <div key={group.title} className="mb-1 flex flex-col gap-0.5">
-            <p className="px-2.5 pb-0.5 pt-1.5 text-micro font-medium tracking-wide text-muted-foreground/60">
+            <p className="px-2.5 pb-0.5 pt-1.5 text-micro font-medium tracking-wide text-muted-foreground">
               {group.title}
             </p>
             {group.items.map((s) => (
@@ -349,7 +351,7 @@ export default function SettingsView() {
                 key={s.id}
                 onClick={() => setSection(s.id)}
                 className={cn(
-                  "flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-body outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
+                  "flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-body outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
                   section === s.id
                     ? "bg-primary/10 font-medium text-foreground"
                     : "text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
@@ -433,7 +435,7 @@ function Row({
 
 type SP = { settings: Settings; patch: (p: Partial<Settings>) => void };
 
-/** 滑杆 + 数值 label（windowOpacity/panelOpacity/cardOpacity/companionGap 四处复用）。 */
+/** 滑杆 + 数值 label；onCommit 仅在松手/键盘调整落定后触发。 */
 function PercentSlider({
   value,
   min,
@@ -442,6 +444,7 @@ function PercentSlider({
   onChange,
   ariaLabel,
   format = (v) => `${v}%`,
+  onCommit,
 }: {
   value: number;
   min: number;
@@ -450,6 +453,7 @@ function PercentSlider({
   onChange: (v: number) => void;
   ariaLabel: string;
   format?: (v: number) => string;
+  onCommit?: (v: number) => void;
 }) {
   return (
     <div className="flex items-center gap-2">
@@ -461,6 +465,12 @@ function PercentSlider({
         step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
+        onPointerUp={(e) => onCommit?.(Number(e.currentTarget.value))}
+        onKeyUp={(e) => {
+          if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) {
+            onCommit?.(Number(e.currentTarget.value));
+          }
+        }}
         className="h-1 w-32 cursor-pointer accent-primary"
       />
       <span className="w-9 text-right text-label tabular-nums text-muted-foreground">
@@ -516,7 +526,7 @@ function ContextMenuGroup({ settings, patch }: SP) {
                 <span
                   className={cn(
                     "flex-1 text-title",
-                    !item.on && "text-muted-foreground/50"
+                    !item.on && "text-muted-foreground"
                   )}
                 >
                   {labelOf(item.id)}
@@ -682,14 +692,13 @@ function GeneralSection({ settings, patch }: SP) {
         {settings.cardDensity === "comfortable" && (
           <Row
             label="剪贴卡模板"
-            hint="只影响剪贴页：浓缩＝票据头＋单行摘要；单行＝只留票据头行，内容看预览"
+            hint="只影响剪贴页：标准显示完整票据；浓缩保留票据头＋单行摘要"
             right={
               <Segmented<Settings["clipCardTemplate"]>
                 value={settings.clipCardTemplate}
                 options={[
                   { value: "standard", label: "标准" },
                   { value: "condensed", label: "浓缩" },
-                  { value: "banner", label: "单行" },
                 ]}
                 onChange={(v) => patch({ clipCardTemplate: v })}
                 ariaLabel="剪贴卡模板"
@@ -770,6 +779,27 @@ function GeneralSection({ settings, patch }: SP) {
             />
           }
         />
+        <Row
+          label="提示显示时长"
+          hint="适用于所有自动关闭的提示气泡；悬停时暂停倒计时"
+          right={
+            <PercentSlider
+              ariaLabel="提示显示时长"
+              value={settings.hudDurationMs / 1_000}
+              min={HUD_DURATION_MIN_MS / 1_000}
+              max={HUD_DURATION_MAX_MS / 1_000}
+              step={1}
+              onChange={(seconds) => patch({ hudDurationMs: seconds * 1_000 })}
+              onCommit={(seconds) => {
+                void api
+                  .setHudDuration(seconds * 1_000)
+                  .then(() => tip("info", `提示会显示 ${seconds} 秒`))
+                  .catch(() => {});
+              }}
+              format={(seconds) => `${seconds} 秒`}
+            />
+          }
+        />
       </Group>
       <ContextMenuGroup settings={settings} patch={patch} />
     </div>
@@ -845,7 +875,7 @@ function RetentionSlider({ settings, patch }: SP) {
         className="w-full accent-primary"
       />
       <p className="mt-0.5 text-center text-body font-medium">{shown.label}</p>
-      <div className="flex justify-between text-micro text-muted-foreground/70">
+      <div className="flex justify-between text-micro text-muted-foreground">
         <span>天</span>
         <span>周</span>
         <span>个月</span>
@@ -1325,7 +1355,7 @@ function AppListEditor({
           />
         ))}
         {apps.length === 0 && (
-          <p className="px-1.5 py-1 text-body text-muted-foreground/60">空</p>
+          <p className="px-1.5 py-1 text-body text-muted-foreground">空</p>
         )}
       </div>
     </div>
@@ -1768,7 +1798,7 @@ function AiSection({ settings, patch }: SP) {
           }
         />
       </Group>
-      <p className="text-label text-muted-foreground/70">
+      <p className="text-label text-muted-foreground">
         隐私说明：API Key 只保存在 macOS 钥匙串，不进入数据文件、完整备份、
         诊断或进程参数；只有你主动触发 AI 功能时，相关文本才会直达所选服务。
       </p>
@@ -2249,7 +2279,7 @@ function SnippetsSection({ settings, patch }: SP) {
           )
         )}
         {settings.promptSnippets.length === 0 && (
-          <p className="px-3.5 py-2 text-body text-muted-foreground/60">暂无模板</p>
+          <p className="px-3.5 py-2 text-body text-muted-foreground">暂无模板</p>
         )}
       </div>
       <div className="flex items-start gap-2">
@@ -2643,13 +2673,13 @@ function DiagnosticsSection() {
       </p>
       <div className="rounded-xl border border-border/60 bg-card p-2 font-mono">
         {entries.length === 0 ? (
-          <p className="px-1.5 py-1 text-body text-muted-foreground/60">
+          <p className="px-1.5 py-1 text-body text-muted-foreground">
             暂无记录 —— 双击一次触发键就有了
           </p>
         ) : (
           entries.map((d, i) => (
             <p key={i} className="px-1.5 py-0.5 text-label leading-snug text-muted-foreground">
-              <span className="tabular-nums text-muted-foreground/50">
+              <span className="tabular-nums text-muted-foreground">
                 {new Date(d.atMs).toLocaleTimeString("zh-CN", { hour12: false })}
               </span>{" "}
               {d.msg}
@@ -2711,7 +2741,7 @@ function AboutSection({
         <p className="mt-2 text-body text-muted-foreground">
           面向 AI 工作流的全局划词摘录、Prompt 暂存与一键流转工具
         </p>
-        <p className="mt-1 text-label text-muted-foreground/70">
+        <p className="mt-1 text-label text-muted-foreground">
           本地优先 · 无账号 · 无遥测
         </p>
       </div>

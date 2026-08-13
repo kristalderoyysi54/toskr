@@ -115,7 +115,7 @@ function CardThumb({ file, overlay }: { file: string; overlay?: string }) {
       {url ? (
         <img src={url} alt="" className="h-full w-full object-cover" />
       ) : (
-        <span className="text-micro text-muted-foreground/60">…</span>
+        <span className="text-micro text-muted-foreground">…</span>
       )}
       {overlay && (
         <span className="absolute inset-0 flex items-center justify-center bg-black/45 text-title font-medium text-white">
@@ -610,7 +610,12 @@ export const NoteCard = memo(function NoteCard({
     </ContextMenuItem>
   );
 
-  const menuSections = groupContextMenuIds(menuIds)
+  // 多选时将「移动到」提升到合并之后；单选仍保留用户配置的组内顺序。
+  const promotedMoveItem =
+    mergeCount >= 2 && menuIds.includes("move") ? renderMenuItem("move") : null;
+  const menuSections = groupContextMenuIds(
+    promotedMoveItem ? menuIds.filter((id) => id !== "move") : menuIds
+  )
     .map((group) => ({
       ...group,
       items: [
@@ -705,10 +710,8 @@ export const NoteCard = memo(function NoteCard({
                   : "h-10 items-center"
                 : ticket
                   ? // 舒适竖栏剪贴=时间票据（B 案定稿）：标准=票据全卡；
-                    // 浓缩=票据头+单行摘要；单行=只留票据头行
-                    clipTemplate === "banner"
-                    ? "h-8 flex-col justify-center px-2"
-                    : clipTemplate === "condensed"
+                    // 浓缩=票据头+单行摘要
+                    clipTemplate === "condensed"
                       ? "h-[52px] flex-col px-2 pb-1 pt-1.5"
                       : "h-[116px] flex-col px-2 pb-1 pt-1.5"
                   : // 舒适竖栏笔记=资产牌（A 案）/ 横栏串：维持通栏瓷砖
@@ -766,7 +769,7 @@ export const NoteCard = memo(function NoteCard({
               compact
                 ? "relative ml-1 shrink-0 opacity-60 hover:opacity-100"
                 : "absolute left-1 top-1/2 -translate-y-1/2 rounded-md border border-foreground/10 bg-surface-raised/95 elevation-2 opacity-0",
-              "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/60",
+              "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
               "active:cursor-grabbing",
               note.done && "hidden"
             )}
@@ -797,7 +800,7 @@ export const NoteCard = memo(function NoteCard({
           ) : (
             <>
           {/* 票据头行（剪贴 × 舒适竖栏，B 案定稿）：相对时间为主键 + 标题/类型徽标
-              + 图钉 + 右端完整应用图标（不裁切）；浓缩/单行模板下操作钮悬浮
+              + 图钉 + 右端完整应用图标（不裁切）；浓缩模板下操作钮悬浮
               头行右端，元数据 hover 淡出让位（沿用原通栏模板技法） */}
           {ticket && (
             <div
@@ -824,7 +827,7 @@ export const NoteCard = memo(function NoteCard({
                       if (e.key === "Enter" && !e.nativeEvent.isComposing) commitRename();
                       if (e.key === "Escape") setRenaming(false);
                     }}
-                    className="w-full bg-transparent text-label font-medium outline-none placeholder:text-muted-foreground/50"
+                    className="w-full bg-transparent text-label font-medium outline-none placeholder:text-muted-foreground"
                   />
                 ) : note.title ? (
                   <p
@@ -1031,7 +1034,7 @@ export const NoteCard = memo(function NoteCard({
                         className="max-h-full max-w-full object-contain"
                       />
                     ) : (
-                      <span className="text-micro text-muted-foreground/60">加载中…</span>
+                      <span className="text-micro text-muted-foreground">加载中…</span>
                     )}
                   </div>
                 )}
@@ -1097,7 +1100,7 @@ export const NoteCard = memo(function NoteCard({
                 <Thumb key={f} file={f} />
               ))}
               {images.length > 4 && (
-                <span className="self-center text-micro text-muted-foreground/60">
+                <span className="self-center text-micro text-muted-foreground">
                   +{images.length - 4}
                 </span>
               )}
@@ -1107,7 +1110,7 @@ export const NoteCard = memo(function NoteCard({
           {clipTemplate === "standard" && (
           <div
             className={cn(
-              "flex shrink-0 items-center gap-1 text-micro text-muted-foreground/70",
+              "flex shrink-0 items-center gap-1 text-micro text-muted-foreground",
               // 票据底行带打孔虚线裁切线（B 案）；笔记/横栏维持现状高度
               ticket ? "h-5 border-t border-dashed border-foreground/10 pt-1" : "h-4"
             )}
@@ -1121,7 +1124,7 @@ export const NoteCard = memo(function NoteCard({
                   openProvenanceSource();
                 }}
                 className={cn(
-                  "inline-flex min-w-0 items-center gap-1 truncate rounded-sm outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50",
+                  "inline-flex min-w-0 items-center gap-1 truncate rounded-sm outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
                   provenanceSourceState !== "available" && "text-warning"
                 )}
               >
@@ -1140,14 +1143,14 @@ export const NoteCard = memo(function NoteCard({
                   event.stopPropagation();
                   restoreCardAliases();
                 }}
-                className="inline-flex min-w-0 items-center gap-1 truncate rounded-sm outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50"
+                className="inline-flex min-w-0 items-center gap-1 truncate rounded-sm outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
                 title="把词典占位符还原为原文（本机操作，可撤销）"
               >
                 <VenetianMask className="size-3 shrink-0" aria-hidden />
                 含 {aliasRestorable.length} 处化名 · 点击恢复
               </button>
             ) : note.sourceApp ? <span className="truncate">来自 {note.sourceApp}</span> : <span />}
-            <span className="ml-auto shrink-0 tabular-nums text-muted-foreground/50">
+            <span className="ml-auto shrink-0 tabular-nums text-muted-foreground">
               {!isClip && !strip
                 ? // 竖栏笔记（A 案）：通栏副行让位给分组名，时间移到右下角
                   timeAgo(note.createdAt)
@@ -1177,8 +1180,8 @@ export const NoteCard = memo(function NoteCard({
           <div
             className={cn(
               "absolute flex gap-0.5",
-              compact || clipTemplate === "banner"
-                ? // 紧凑行 / 单行票据：钮垂直居中（行内元数据 hover 让位）
+              compact
+                ? // 紧凑列表行：钮垂直居中（行内元数据 hover 让位）
                   "right-1 top-1/2 -translate-y-1/2"
                 : clipTemplate === "condensed"
                   ? // 浓缩票据：钮挂票据头行右端（头行元数据 hover 让位）
@@ -1250,12 +1253,13 @@ export const NoteCard = memo(function NoteCard({
       </ContextMenuTrigger>
 
       <ContextMenuContent className="w-44">
-        {/* 多选场景的核心意图是合并，固定置顶（不参与自定义） */}
+        {/* 多选场景优先展示合并与移动；移动仍遵循用户显隐配置。 */}
         {mergeCount >= 2 && (
           <ContextMenuItem onClick={() => mergeNoteWithChecked(note.id)}>
             <Merge className="size-3.5" /> 合并笔记 ×{mergeCount}
           </ContextMenuItem>
         )}
+        {promotedMoveItem}
         {mergeCount >= 2 && <ContextMenuSeparator />}
         {/* 一级菜单按用途分组；保留设置中的组内顺序与显隐。 */}
         {menuSections.map((group, index) => (
@@ -1381,13 +1385,13 @@ function CompactRow({
         />
       )}
       {!isImage && images.length > 0 && (
-        <span className="shrink-0 text-micro text-muted-foreground/60 transition-opacity group-hover:opacity-0">
+        <span className="shrink-0 text-micro text-muted-foreground transition-opacity group-hover:opacity-0">
           {images.length}图
         </span>
       )}
       {/* 剪贴流水行常显相对时间（新鲜度=核心元数据）；置顶行免时间只留图钉 */}
       {isClip && !note.keep && (
-        <span className="shrink-0 text-micro tabular-nums text-muted-foreground/50 transition-opacity group-hover:opacity-0">
+        <span className="shrink-0 text-micro tabular-nums text-muted-foreground transition-opacity group-hover:opacity-0">
           {timeAgo(note.createdAt)}
         </span>
       )}

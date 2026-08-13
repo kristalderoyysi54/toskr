@@ -65,7 +65,7 @@ export function UpdateDialog() {
 
             <div className="mt-3 flex items-center gap-2 font-mono text-body tabular-nums">
               <span className="text-muted-foreground">v{meta.current}</span>
-              <ArrowRight className="size-3.5 text-muted-foreground/60" />
+              <ArrowRight className="size-3.5 text-muted-foreground" />
               <span className="font-semibold text-primary">v{meta.version}</span>
             </div>
 

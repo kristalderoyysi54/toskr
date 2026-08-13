@@ -92,6 +92,37 @@ async function restorePanelAfterDelivery(keepPanel: boolean) {
   }
 }
 
+type DeliveryPanelPlan = {
+  keepNativeWindow: boolean;
+  edgeHideAfterSuccess: boolean;
+};
+
+/** 贴边模式的“收起”是沿屏缘滑出，不能退化成真实 hide。 */
+function planDeliveryPanel(draftKeepPanel: boolean): DeliveryPanelPlan {
+  const { pinned, edgeHideActive } = useUIStore.getState();
+  const keepByPolicy = draftKeepPanel || pinned;
+  const edgeHideAfterSuccess = edgeHideActive && !keepByPolicy;
+  return {
+    keepNativeWindow: keepByPolicy || edgeHideAfterSuccess,
+    edgeHideAfterSuccess,
+  };
+}
+
+function settlePanelAfterSuccessfulDelivery(plan: DeliveryPanelPlan) {
+  if (!plan.edgeHideAfterSuccess) return;
+  const ui = useUIStore.getState();
+  // 发送期间若用户改为固定，实时图钉比 Draft 快照优先。
+  if (ui.pinned) return;
+  ui.setShortcutHoldOpen(false);
+  if (!ui.edgeHideActive) {
+    ui.setOpen(false);
+    return;
+  }
+  // 这里是发送方案的显式“成功后收起”：解除快捷键保护，
+  // 但保留窗口和屏缘锚点，以便触边立即唤回。
+  if (!ui.edgeHidden) void api.edgeHideNow(true).catch(() => {});
+}
+
 function sameDraftTarget(
   draftTarget: TargetSnapshot | null,
   currentTarget: TargetSnapshot | null
@@ -183,14 +214,14 @@ function draftSourceIsCurrent(draft: DeliveryDraft): boolean {
     sameStrings(rebuilt.imageFiles, draft.originalImageFiles);
 }
 
-type DraftFreshnessIssue =
+export type DeliveryDraftFreshnessIssue =
   | "generation"
   | "source"
   | "selection"
   | "revision";
 
 export type DeliveryDraftStaleReason =
-  | DraftFreshnessIssue
+  | DeliveryDraftFreshnessIssue
   | "target"
   | "profile";
 
@@ -199,7 +230,9 @@ export type DeliveryDraftNonTargetStaleReason = Exclude<
   "target"
 >;
 
-function draftFreshnessIssue(draft: DeliveryDraft): DraftFreshnessIssue | null {
+export function inspectDeliveryDraftFreshness(
+  draft: DeliveryDraft
+): DeliveryDraftFreshnessIssue | null {
   if (!matchesDataGeneration(draft.dataGeneration)) return "generation";
   if (!draftSourceIsCurrent(draft)) return "source";
   if (
@@ -234,7 +267,7 @@ export function inspectDeliveryDraftNonTarget(
   draft: DeliveryDraft
 ): DeliveryDraftNonTargetStaleReason | null {
   if (!sameDraftProfile(draft)) return "profile";
-  return draftFreshnessIssue(draft);
+  return inspectDeliveryDraftFreshness(draft);
 }
 
 /**
@@ -254,7 +287,7 @@ export function rebaseDeliveryDraftForRetry(
     !sameDraftTarget(verifiedTarget, target.snapshot) ||
     !sameTargetIdentity(draft.targetSnapshot, target.snapshot) ||
     !sameDraftProfile(draft) ||
-    draftFreshnessIssue(draft)
+    inspectDeliveryDraftFreshness(draft)
   ) {
     return null;
   }
@@ -266,10 +299,10 @@ export function rebaseDeliveryDraftForRetry(
 }
 
 function rejectStaleDraft(draft: DeliveryDraft): boolean {
-  const issue = draftFreshnessIssue(draft);
+  const issue = inspectDeliveryDraftFreshness(draft);
   if (!issue) return false;
   if (issue === "source" || issue === "selection") invalidateDeliveryDrafts();
-  const messages: Record<DraftFreshnessIssue, [string, string]> = {
+  const messages: Record<DeliveryDraftFreshnessIssue, [string, string]> = {
     generation: [
       "发送已取消：数据上下文已变化，请重新选择内容",
       "send-generation-changed",
@@ -307,14 +340,14 @@ async function discardStaleResult(
   draft: DeliveryDraft,
   result: SendDeliveryResult
 ): Promise<boolean> {
-  const issue = draftFreshnessIssue(draft);
+  const issue = inspectDeliveryDraftFreshness(draft);
   if (!issue) return false;
   if (issue === "source" || issue === "selection") invalidateDeliveryDrafts();
   if (result.status !== "sent") {
     await restorePanelAfterDelivery(draft.keepPanel);
     return true;
   }
-  const messages: Record<DraftFreshnessIssue, string> = {
+  const messages: Record<DeliveryDraftFreshnessIssue, string> = {
     generation: "发送已完成，但数据上下文已变化，未修改卡片状态",
     source: "发送已完成，但来源内容已变化，未修改卡片状态",
     selection: "发送已完成，但选择已变化，未修改卡片状态",
@@ -471,7 +504,8 @@ export async function executeDeliveryDraft(
     }
     if (rejectStaleDraft(draft)) return null;
 
-    if (!draft.keepPanel) useUIStore.getState().setOpen(false);
+    const panelPlan = planDeliveryPanel(draft.keepPanel);
+    if (!panelPlan.keepNativeWindow) useUIStore.getState().setOpen(false);
     nativeDispatchTarget = refreshedTarget;
     void recordDeliveryEvent(
       deliveryEventFromDraft(draft, "sendStarted", { status: "started" })
@@ -486,7 +520,7 @@ export async function executeDeliveryDraft(
           : item.redactedPixelHash
       ),
       pressEnter,
-      keepPanel: draft.keepPanel,
+      keepPanel: panelPlan.keepNativeWindow,
       deliveryId: draft.id,
     });
     if (!isSendDeliveryResult(result) || result.deliveryId !== draft.id) {
@@ -495,6 +529,7 @@ export async function executeDeliveryDraft(
     recordDeliveryResult(draft, result);
     if (result.status === "sent") {
       rememberDeliveryRedactionMap(draft.id, draft.redactionMap, draft.finalText);
+      settlePanelAfterSuccessfulDelivery(panelPlan);
     }
     if (await discardStaleResult(draft, result)) return result;
     const targetState = useTargetStore.getState();

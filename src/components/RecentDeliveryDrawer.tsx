@@ -125,7 +125,7 @@ function roundtripBadge(
 
 /** 卡脚/明细里的文字链操作（低视觉重量，替代原 Button 组）。 */
 const FOOT_LINK =
-  "rounded-sm text-micro text-muted-foreground underline decoration-dotted underline-offset-2 outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50 disabled:opacity-40";
+  "rounded-sm text-micro text-muted-foreground underline decoration-dotted underline-offset-2 outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:opacity-40";
 
 /** 状态药丸：软染色底 + 图标；等待态用琥珀呼吸点替代静态时钟。 */
 function StatusPill({
@@ -179,13 +179,13 @@ function SectionHead({
 }) {
   return (
     <div className="mb-1.5 flex items-center gap-2 px-0.5 pt-3 first:pt-0.5">
-      <span className="shrink-0 text-micro font-medium text-muted-foreground/70">
+      <span className="shrink-0 text-micro font-medium text-muted-foreground">
         {label} · {count}
       </span>
       <span className="h-px min-w-4 flex-1 bg-border/60" aria-hidden />
       {hint && (
         <span
-          className="flex shrink-0 items-center gap-1 text-micro text-muted-foreground/70"
+          className="flex shrink-0 items-center gap-1 text-micro text-muted-foreground"
           title="在 AI 应用双击 ⇧ 划选回复内容，会自动带回并对应到该次发送"
         >
           划词 <Kbd>⇧⇧</Kbd> 自动带回
@@ -318,7 +318,7 @@ export function RecentDeliveryList({
                 {record.targetAppName || record.targetBundleId || "未识别目标"}
               </span>
               <time
-                className="shrink-0 text-micro tabular-nums text-muted-foreground/60"
+                className="shrink-0 text-micro tabular-nums text-muted-foreground"
                 dateTime={new Date(record.timestampMs).toISOString()}
                 title={localTime(record.timestampMs)}
               >
@@ -333,7 +333,7 @@ export function RecentDeliveryList({
               disabled={availability === "missing" || !onOpenSource}
               onClick={() => onOpenSource?.(record)}
               title="查看发送内容"
-              className="mt-1 block w-full min-w-0 truncate rounded-md px-1 py-0.5 text-left text-body text-foreground/90 outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50 disabled:cursor-default disabled:opacity-60"
+              className="mt-1 block w-full min-w-0 truncate rounded-md px-1 py-0.5 text-left text-body text-foreground/90 outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:cursor-default disabled:opacity-60"
             >
               {summary ? `“${summary}”` : sourceLabel(record, availability)}
             </button>
@@ -350,7 +350,7 @@ export function RecentDeliveryList({
                     type="button"
                     title="打开回复"
                     onClick={() => onOpenResult(linkedResult)}
-                    className="rounded-md border border-border/60 px-1.5 py-px text-micro text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50"
+                    className="rounded-md border border-border/60 px-1.5 py-px text-micro text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
                   >
                     打开
                   </button>
@@ -360,7 +360,7 @@ export function RecentDeliveryList({
                     type="button"
                     title="把词典占位符还原为原文（本机操作，可撤销）"
                     onClick={() => restoreReplyAliases(linkedResult)}
-                    className="flex items-center gap-1 rounded-md border border-border/60 px-1.5 py-px text-micro text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50"
+                    className="flex items-center gap-1 rounded-md border border-border/60 px-1.5 py-px text-micro text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
                   >
                     <VenetianMask className="size-3" aria-hidden /> 恢复化名（{aliasRestorable.length} 处）
                   </button>
@@ -371,7 +371,7 @@ export function RecentDeliveryList({
             {/* 卡脚：高频操作走左侧文字链，右端「更多」展开完整明细；
                 操作钮在 summary 内需 preventDefault 阻断 details 切换 */}
             <details className="group mt-2 border-t border-border/50 pt-1.5">
-              <summary className="flex cursor-pointer list-none items-center gap-3 rounded-md px-1 py-0.5 outline-none focus-visible:ring-2 focus-visible:ring-primary/50 [&::-webkit-details-marker]:hidden">
+              <summary className="flex cursor-pointer list-none items-center gap-3 rounded-md px-1 py-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background [&::-webkit-details-marker]:hidden">
                 {waitingReply && onAssociate && (
                   <button
                     type="button"
@@ -528,7 +528,7 @@ export function RecentDeliveryList({
 
     {unfinishedRecords.length > 0 && (
       <details className="group mt-3">
-        <summary className="flex cursor-pointer list-none items-center gap-1 rounded-md px-1 py-1 text-micro text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50 [&::-webkit-details-marker]:hidden">
+        <summary className="flex cursor-pointer list-none items-center gap-1 rounded-md px-1 py-1 text-micro text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background [&::-webkit-details-marker]:hidden">
           未发出的记录 {unfinishedRecords.length} 条
           <ChevronDown className="ml-auto size-3 transition-transform group-open:rotate-180 motion-reduce:transition-none" aria-hidden />
         </summary>
@@ -543,7 +543,7 @@ export function RecentDeliveryList({
                   disabled={availability === "missing" || !onOpenSource}
                   onClick={() => onOpenSource?.(record)}
                   title="查看内容"
-                  className="flex w-full min-w-0 items-center gap-1.5 rounded-lg border border-border/50 px-2 py-1.5 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-primary/50 disabled:cursor-default disabled:opacity-60"
+                  className="flex w-full min-w-0 items-center gap-1.5 rounded-lg border border-border/50 px-2 py-1.5 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:cursor-default disabled:opacity-60"
                 >
                   <Clock3 className="size-3 shrink-0 text-muted-foreground" aria-hidden />
                   <span className="min-w-0 truncate text-label">
@@ -752,7 +752,7 @@ export function RecentDeliveryDrawer({
           </div>
           {/* 隐私说明沉底为尾注（常显、不与列表争视线） */}
           <p
-            className="mt-2 flex items-center gap-1.5 border-t border-border/50 pt-2 text-micro text-muted-foreground/70"
+            className="mt-2 flex items-center gap-1.5 border-t border-border/50 pt-2 text-micro text-muted-foreground"
             title={`仅保存时间、状态与数量，不保存正文；最多 ${DELIVERY_ACTIVITY_MAX_EVENTS} 条或 ${retentionDays} 天`}
           >
             <ShieldCheck className="size-3 shrink-0 text-success" aria-hidden />

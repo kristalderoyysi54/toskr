@@ -180,6 +180,15 @@ describe("applySettingsPatch 面板布局策略", () => {
     expect(d.clipRetentionDays).toBe(30);
   });
 
+  it("提示时长修改后立即持久化并下发 Native", () => {
+    seed({ hudDurationMs: 3_000 });
+
+    applySettingsPatch({ hudDurationMs: 5_000 });
+
+    expect(useNotesStore.getState().settings.hudDurationMs).toBe(5_000);
+    expect(mocks.fns.get("setHudDuration")).toHaveBeenCalledWith(5_000);
+  });
+
   it("发送方案/提示词组 patch 走主窗口持久化，并修复已删除的临时方案", () => {
     const settings = defaultSettings();
     seed({

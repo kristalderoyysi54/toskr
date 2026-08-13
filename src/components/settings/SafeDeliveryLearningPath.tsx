@@ -110,7 +110,7 @@ export function SafeDeliveryLearningPath({
             if (complete) setShowCompletedTasks(false);
             else setDeferred(true);
           }}
-          className="ml-auto whitespace-nowrap rounded-sm text-label text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50 sm:ml-0"
+          className="ml-auto whitespace-nowrap rounded-sm text-label text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background sm:ml-0"
         >
           {complete ? "收起" : "稍后继续"}
         </button>
@@ -134,7 +134,7 @@ export function SafeDeliveryLearningPath({
                     {index + 1}
                   </span>
                 ) : (
-                  <LockKeyhole aria-hidden className="size-4 shrink-0 text-muted-foreground/60" />
+                  <LockKeyhole aria-hidden className="size-4 shrink-0 text-muted-foreground" />
                 )}
 
                 <div className="min-w-0 flex-1">
@@ -157,7 +157,6 @@ export function SafeDeliveryLearningPath({
                   <Button
                     type="button"
                     size="sm"
-                    className="border-paper bg-paper text-paper-foreground hover:bg-paper/90 dark:border-paper dark:bg-paper dark:text-paper-foreground dark:hover:bg-paper/90"
                     onClick={() => {
                       if (isRecovery) {
                         setRecoveryOpen(true);

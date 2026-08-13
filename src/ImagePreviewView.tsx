@@ -2,18 +2,29 @@ import { useEffect, useRef, useState } from "react";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { motion } from "motion/react";
-import { Check, ChevronLeft, ChevronRight, Pencil, X } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Pencil, Send, X } from "lucide-react";
 
 import { springSnappy } from "@/lib/motion";
 import { DataReadOnlyGuard } from "@/components/DataReadOnlyGuard";
 import { DetailWindowFrame } from "@/components/DetailWindowFrame";
+import { IconButton } from "@/components/ui/icon-button";
 import {
   DATA_ACTIVITY_EVENT,
   DATA_LOCATION_CHANGED_EVENT,
 } from "@/lib/dataOperations";
 import { DATA_CONTEXT_INVALIDATED_EVENT } from "@/lib/dataGeneration";
-import { api } from "@/lib/tauri";
+import {
+  api,
+  TARGET_CHANGED_EVENT,
+  type TargetSnapshot,
+} from "@/lib/tauri";
 import { cn } from "@/lib/utils";
+import {
+  applyTargetEvent,
+  readTarget,
+  targetBlockMessage,
+  useTargetStore,
+} from "@/store/targetStore";
 
 /**
  * 图片原尺寸预览窗（独立 webview，Paste 风格）：
@@ -37,6 +48,25 @@ export default function ImagePreviewView() {
   const [draft, setDraft] = useState("");
   const [dataGeneration, setDataGeneration] = useState<number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const targetReady = useTargetStore(
+    (state) => state.status === "ready" && !state.profileOverrideNeedsConfirmation
+  );
+  const targetBlockedMessage = useTargetStore((state) =>
+    state.profileOverrideNeedsConfirmation
+      ? "原临时发送方案已暂停"
+      : state.status === "ready"
+        ? null
+        : targetBlockMessage(state.status, state.reason)
+  );
+
+  useEffect(() => {
+    const changed = listen<TargetSnapshot>(TARGET_CHANGED_EVENT, (event) => {
+      applyTargetEvent(event.payload);
+    });
+    return () => {
+      changed.then((stop) => stop());
+    };
+  }, []);
 
   useEffect(() => {
     const un = listen<{
@@ -55,6 +85,8 @@ export default function ImagePreviewView() {
       setDataGeneration(e.payload.dataGeneration ?? null);
       setEditing(e.payload.edit ?? false);
       setGen((g) => g + 1);
+      // 独立 WebView 只读同步当前目标；发送仍由主面板统一执行。
+      void readTarget();
     });
     return () => {
       un.then((fn) => fn());
@@ -87,7 +119,7 @@ export default function ImagePreviewView() {
     setUrl(null);
     setDims("");
     void api
-      .imageDataUrl(file)
+      .deliveryImageDataUrl(file, true)
       .then((u) => setUrl(u))
       .catch(() => setUrl(null));
   }, [file]);
@@ -101,6 +133,18 @@ export default function ImagePreviewView() {
 
   const close = () => void getCurrentWebviewWindow().hide();
   const many = files.length > 1;
+  const sendLabel = many
+    ? `发送整张卡片（含 ${files.length} 张图片）`
+    : "发送当前图片卡片";
+
+  const send = () => {
+    if (!noteId || dataGeneration === null) return;
+    close();
+    void emitTo("main", "toskr://note-send", {
+      id: noteId,
+      dataGeneration,
+    });
+  };
 
   const save = () => {
     if (!noteId || dataGeneration === null) return;
@@ -162,13 +206,41 @@ export default function ImagePreviewView() {
         <button
           aria-label="关闭预览"
           onClick={close}
-          className="rounded-full p-0.5 text-white/60 outline-none hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-white/60"
+          className="rounded-full p-0.5 text-foreground/60 outline-none hover:bg-foreground/10 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
         >
           <X className="size-3.5" />
         </button>
-        <span data-tauri-drag-region className="select-none text-body font-medium text-white/80">
+        <span data-tauri-drag-region className="select-none text-body font-medium text-foreground/80">
           {many ? `图片 ${idx + 1}/${files.length}` : "图片"}
         </span>
+        {!editing && noteId && dataGeneration !== null && (
+          <>
+            <p
+              id="image-preview-target-status"
+              role="status"
+              aria-live="polite"
+              className="sr-only"
+            >
+              {targetBlockedMessage ?? ""}
+            </p>
+            <IconButton
+              label={
+                targetReady
+                  ? sendLabel
+                  : `发送不可用：${targetBlockedMessage}`
+              }
+              size="xs"
+              disabled={!targetReady}
+              aria-describedby={
+                targetReady ? undefined : "image-preview-target-status"
+              }
+              onClick={send}
+              className="ml-auto text-foreground/60 hover:bg-foreground/10 hover:text-foreground focus-visible:ring-ring focus-visible:ring-offset-0"
+            >
+              <Send className="size-3.5" />
+            </IconButton>
+          </>
+        )}
       </div>
       {/* 图片区：同样可拖动窗口（img 关闭指针事件，拖拽落在容器上） */}
       <div
@@ -192,7 +264,7 @@ export default function ImagePreviewView() {
             className="pointer-events-none max-h-full max-w-full object-contain"
           />
         ) : (
-          <div className="flex h-24 w-32 animate-pulse items-center justify-center rounded-lg bg-white/10">
+          <div className="flex h-24 w-32 animate-pulse items-center justify-center rounded-lg bg-foreground/10">
             <span className="sr-only">加载中…</span>
           </div>
         )}
@@ -219,7 +291,7 @@ export default function ImagePreviewView() {
       </div>
       {/* 备注条（有笔记上下文才显示）：查看态一行截断 + 铅笔；编辑态 textarea */}
       {noteId && (
-        <div className="shrink-0 border-t border-white/10 px-3 py-1.5">
+        <div className="shrink-0 border-t border-border px-3 py-1.5">
           {editing ? (
             <div className="flex items-end gap-1.5">
               <textarea
@@ -229,15 +301,15 @@ export default function ImagePreviewView() {
                 rows={2}
                 placeholder="给这张图片写点文字…"
                 className={cn(
-                  "min-h-0 flex-1 resize-none rounded-md bg-white/10 px-2 py-1 text-body text-white/90",
-                  "placeholder:text-white/35 outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+                  "min-h-0 flex-1 resize-none rounded-md bg-foreground/5 px-2 py-1 text-body text-foreground/90",
+                  "placeholder:text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
                 )}
               />
               <button
                 aria-label="保存备注（⌘⏎）"
                 title="保存（⌘⏎）；Esc 取消"
                 onClick={save}
-                className="rounded-md bg-white/15 p-1.5 text-white/85 outline-none hover:bg-white/25 hover:text-white focus-visible:ring-2 focus-visible:ring-white/60"
+                className="rounded-md bg-foreground/10 p-1.5 text-foreground/85 outline-none hover:bg-foreground/15 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <Check className="size-3.5" />
               </button>
@@ -252,14 +324,14 @@ export default function ImagePreviewView() {
               }}
               className={cn(
                 "group flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left outline-none",
-                "hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-white/40"
+                "hover:bg-foreground/10 focus-visible:ring-2 focus-visible:ring-ring/60"
               )}
             >
-              <Pencil className="size-3 shrink-0 text-white/40 group-hover:text-white/80" />
+              <Pencil className="size-3 shrink-0 text-foreground/40 group-hover:text-foreground/80" />
               <span
                 className={cn(
                   "min-w-0 flex-1 truncate text-body",
-                  noteText ? "text-white/85" : "text-white/35"
+                  noteText ? "text-foreground/85" : "text-muted-foreground"
                 )}
               >
                 {noteText || "添加文字备注…"}
@@ -268,7 +340,7 @@ export default function ImagePreviewView() {
           )}
         </div>
       )}
-      <div className="flex h-6 shrink-0 items-center justify-center text-label tabular-nums text-white/60">
+      <div className="flex h-6 shrink-0 items-center justify-center text-label tabular-nums text-muted-foreground">
         {many ? `${idx + 1} / ${files.length}${dims ? ` · ${dims}` : ""}` : dims}
       </div>
     </DetailWindowFrame>

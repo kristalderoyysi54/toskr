@@ -581,7 +581,7 @@ export function ResultVerificationDialog() {
                         setJsonFieldsText(event.target.value);
                       }}
                       onBlur={commitTextExpectations}
-                      className="mt-1 h-16 w-full resize-y rounded-lg border border-border bg-transparent px-2 py-1.5 text-body text-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary/50 disabled:opacity-50"
+                      className="mt-1 h-16 w-full resize-y rounded-lg border border-border bg-transparent px-2 py-1.5 text-body text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:opacity-50"
                     />
                   </label>
                   <label className="block text-label text-foreground/80">
@@ -594,7 +594,7 @@ export function ResultVerificationDialog() {
                         setSectionsText(event.target.value);
                       }}
                       onBlur={commitTextExpectations}
-                      className="mt-1 h-16 w-full resize-y rounded-lg border border-border bg-transparent px-2 py-1.5 text-body text-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary/50 disabled:opacity-50"
+                      className="mt-1 h-16 w-full resize-y rounded-lg border border-border bg-transparent px-2 py-1.5 text-body text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:opacity-50"
                     />
                   </label>
                   <p className="text-label leading-relaxed text-muted-foreground">

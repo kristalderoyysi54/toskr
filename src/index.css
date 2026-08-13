@@ -94,7 +94,8 @@
     --secondary: oklch(0.97 0 0);
     --secondary-foreground: oklch(0.205 0 0);
     --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
+    /* 0.556→0.51（≈#666）：10–12px 次级文字白底 4.7→5.75:1、灰底 5.27:1（2026-08-13 对比度批次） */
+    --muted-foreground: oklch(0.51 0 0);
     --accent: oklch(0.97 0 0);
     --accent-foreground: oklch(0.205 0 0);
     --destructive: oklch(0.577 0.245 27.325);
@@ -116,7 +117,8 @@
     --secondary: oklch(0.269 0 0);
     --secondary-foreground: oklch(0.985 0 0);
     --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
+    /* 0.708→0.72：与浅色同批次微提（卡片底 6.9→7.2:1）；暗色主要靠取缔 alpha 弱化 */
+    --muted-foreground: oklch(0.72 0 0);
     --accent: oklch(0.269 0 0);
     --accent-foreground: oklch(0.985 0 0);
     --destructive: oklch(0.704 0.191 22.216);
@@ -306,23 +308,56 @@ input {
 :root {
   --success: oklch(0.696 0.17 162.48); /* = emerald-500，与现状勾选同色 */
   --warning: oklch(0.666 0.179 58.318); /* = amber-600（浅色文字用值） */
-  --surface-lightbox: oklch(0.205 0 0 / 95%); /* 图片预览永暗窗，不随主题 */
+  --surface-lightbox: oklch(0.985 0 0 / 96%);
   --detail-frame-rim: oklch(0.145 0 0 / 22%);
   --detail-frame-rim-highlight: oklch(1 0 0 / 62%);
-  --detail-frame-lightbox-rim: oklch(1 0 0 / 20%);
-  --detail-frame-lightbox-highlight: oklch(1 0 0 / 12%);
-  /* 纸白：取自应用图标的奶白（气泡/纸片色）。实心主控件（主按钮、选中分段 chip）
-     统一用它；蓝（--primary/--ring）只做焦点/选中/开关等状态色 */
+  --detail-frame-lightbox-rim: oklch(0.145 0 0 / 22%);
+  --detail-frame-lightbox-highlight: oklch(1 0 0 / 62%);
+  /* 纸白：取自应用图标的奶白（气泡/纸片色）。仅 HUD 气泡等「图标身份色」场景使用；
+     主按钮不再用它（2026-08-13 用户定稿：嫌暖黄，改中性白实体，见下组 token）；
+     蓝（--primary/--ring）只做焦点/选中/开关等状态色 */
   --paper: oklch(0.965 0.012 90);
   --paper-foreground: oklch(0.24 0.01 90);
+  /* —— 主按钮白实体（2026-08-13 定稿）：纯白抬升件=最高视觉重量；
+        描边款退居 secondary/outline，红字 ghost 做 destructive —— */
+  --button-primary: oklch(1 0 0);
+  --button-primary-hover: oklch(0.955 0 0);
+  --button-primary-foreground: oklch(0.145 0 0);
+  --button-primary-border: oklch(0 0 0 / 10%);
+  --button-primary-shadow: 0 1px 2px oklch(0 0 0 / 0.12);
+  /* —— Segmented 凹槽轨道上的浮起 thumb（PageTab 复用同款） —— */
+  --segmented-thumb: oklch(1 0 0);
+  --segmented-thumb-shadow:
+    0 1px 2px oklch(0 0 0 / 0.14),
+    inset 0 1px 0 oklch(1 0 0 / 0.45);
+  /* —— Switch 关闭轨道：0.922 白底轮廓仅 1.26:1 看不清，加深 + 描边（≈2.3:1，
+        与 macOS 原生≈1.3:1 的折中；严格 3:1 需 #8A 级深灰，视觉过重） —— */
+  --switch-track-off: oklch(0.86 0 0);
+  --switch-track-off-border: oklch(0 0 0 / 14%);
 }
 .dark {
   --success: oklch(0.696 0.17 162.48);
   --warning: oklch(0.828 0.189 84.429); /* = amber-400 */
+  --surface-lightbox: oklch(0.205 0 0 / 95%);
   --detail-frame-rim: oklch(1 0 0 / 22%);
   --detail-frame-rim-highlight: oklch(1 0 0 / 14%);
+  --detail-frame-lightbox-rim: oklch(1 0 0 / 20%);
+  --detail-frame-lightbox-highlight: oklch(1 0 0 / 12%);
   --paper: oklch(0.9 0.014 90);
   --paper-foreground: oklch(0.205 0 0);
+  --button-primary: oklch(0.92 0 0);
+  --button-primary-hover: oklch(0.87 0 0);
+  --button-primary-foreground: oklch(0.205 0 0);
+  --button-primary-border: oklch(1 0 0 / 8%);
+  --button-primary-shadow:
+    0 1px 2px oklch(0 0 0 / 0.5),
+    inset 0 1px 0 oklch(1 0 0 / 0.7);
+  --segmented-thumb: oklch(0.33 0 0);
+  --segmented-thumb-shadow:
+    0 1px 2px oklch(0 0 0 / 0.4),
+    inset 0 1px 0 oklch(1 0 0 / 0.14);
+  --switch-track-off: oklch(1 0 0 / 14%);
+  --switch-track-off-border: oklch(1 0 0 / 12%);
 }
 
 @theme inline {
@@ -332,6 +367,10 @@ input {
   --color-surface-lightbox: var(--surface-lightbox);
   --color-paper: var(--paper);
   --color-paper-foreground: var(--paper-foreground);
+  --color-button-primary: var(--button-primary);
+  --color-button-primary-hover: var(--button-primary-hover);
+  --color-button-primary-foreground: var(--button-primary-foreground);
+  --color-segmented-thumb: var(--segmented-thumb);
 }
 
 /* —— 字阶：5 档命名刻度（自动生成 text-* utility 与配对行高） —— */
@@ -348,8 +387,12 @@ input {
   --text-heading--line-height: 20px;
 }
 
-/* —— 动效 token（全部来自现存值命名，非新发明） —— */
+/* —— 动效 token（全部来自现存值命名，非新发明）。
+      2026-08-13 质感批次收敛为双层语义：控件状态走 control(100ms)、
+      浮层进出走 overlay(160ms)；fast/base 保留给既有消费方，slow 留给面板级位移 —— */
 :root {
+  --duration-control: 100ms;
+  --duration-overlay: 160ms;
   --duration-fast: 120ms;
   --duration-base: 180ms;
   --duration-slow: 280ms;

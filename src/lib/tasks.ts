@@ -189,6 +189,11 @@ export function dueBadgeLabel(dueAt: number, now: number): string {
   return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
 }
 
+/** 到期徽标短文案（竖栏行内用）：已到期区头已声明「到期」，去掉行内重复后缀。 */
+export function dueBadgeShortLabel(dueAt: number, now: number): string {
+  return dueBadgeLabel(dueAt, now).replace(/到期$/, "");
+}
+
 /** 优先级展示表。 */
 export const PRIORITY_LABEL: Record<TaskPriority, string> = {
   none: "无优先级",

@@ -208,6 +208,25 @@ fn text_snapshot(change_count: isize, text: &str) -> PasteboardSnapshot {
     }
 }
 
+fn text_and_html_snapshot(change_count: isize, plain: &str, html: &str) -> PasteboardSnapshot {
+    PasteboardSnapshot {
+        change_count,
+        items: vec![PasteboardItemSnapshot {
+            representations: vec![
+                PasteboardRepresentation {
+                    type_id: "public.utf8-plain-text".into(),
+                    bytes: plain.as_bytes().to_vec(),
+                },
+                PasteboardRepresentation {
+                    type_id: "public.html".into(),
+                    bytes: html.as_bytes().to_vec(),
+                },
+            ],
+        }],
+        unavailable_representations: 0,
+    }
+}
+
 fn image_snapshot(
     change_count: isize,
     width: usize,
@@ -313,6 +332,18 @@ fn write_snapshot_to_target(
 /// 显式“复制”入口使用：永久替换 general pasteboard，并返回精确自写 generation。
 pub fn write_general_text(text: &str) -> Result<isize, PasteboardError> {
     write_snapshot_to_target(&PasteboardTarget::General, &text_snapshot(0, text))
+}
+
+/// 富内容复制：plain fallback 与 HTML 放在同一个 pasteboard item，接收方可按
+/// 自身能力选择表示；调用前必须已经完成 HTML/附件构建，避免半截写入。
+pub fn write_general_text_and_html(
+    plain: &str,
+    html: &str,
+) -> Result<isize, PasteboardError> {
+    write_snapshot_to_target(
+        &PasteboardTarget::General,
+        &text_and_html_snapshot(0, plain, html),
+    )
 }
 
 pub fn write_general_image(
@@ -723,6 +754,26 @@ mod tests {
         assert_eq!(transaction.restore_if_owned(), ClipboardOutcome::Restored);
 
         assert_eq!(read_fixture(&name), expected);
+        pasteboard(&name).clearContents();
+    }
+
+    #[test]
+    fn rich_write_keeps_plain_and_html_on_the_same_item() {
+        let name = format!("com.toskr.tests.rich-write.{}", std::process::id());
+        let target = PasteboardTarget::Named(name.clone());
+        let snapshot = text_and_html_snapshot(0, "前图后", "<p>前<img src=\"data:x\">后</p>");
+
+        write_snapshot_to_target(&target, &snapshot).unwrap();
+
+        let items = read_fixture(&name);
+        assert_eq!(items.len(), 1);
+        assert!(items[0].iter().any(|(type_id, bytes)| {
+            type_id == "public.utf8-plain-text" && bytes == "前图后".as_bytes()
+        }));
+        assert!(items[0].iter().any(|(type_id, bytes)| {
+            type_id == "public.html"
+                && bytes == "<p>前<img src=\"data:x\">后</p>".as_bytes()
+        }));
         pasteboard(&name).clearContents();
     }
 

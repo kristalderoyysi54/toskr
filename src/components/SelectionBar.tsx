@@ -383,28 +383,29 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
                 ))}
                 {snippetMenu.prioritized.length === 0 && (
                   <SimpleMenuItem disabled onClick={() => {}}>
-                    当前分组暂无模板
+                    {snippetMenu.remaining.length > 0
+                      ? "当前分组暂无模板"
+                      : "去设置里添加模板"}
                   </SimpleMenuItem>
                 )}
-                <SimpleMenuSeparator />
-                <SimpleMenuLabel>全部模板</SimpleMenuLabel>
-                {snippetMenu.all.map((sn) => (
-                  <SimpleMenuItem
-                    key={`all-${sn.id}`}
-                    disabled={!targetReady}
-                    title={sn.text}
-                    onClick={() => {
-                      close();
-                      void sendCheckedToChat(sn.text, { promptSnippetId: sn.id });
-                    }}
-                  >
-                    {sn.label}
-                  </SimpleMenuItem>
-                ))}
-                {snippetMenu.all.length === 0 && (
-                  <SimpleMenuItem disabled onClick={() => {}}>
-                    去设置里添加模板
-                  </SimpleMenuItem>
+                {snippetMenu.remaining.length > 0 && (
+                  <>
+                    <SimpleMenuSeparator />
+                    <SimpleMenuLabel>其他模板</SimpleMenuLabel>
+                    {snippetMenu.remaining.map((sn) => (
+                      <SimpleMenuItem
+                        key={`remaining-${sn.id}`}
+                        disabled={!targetReady}
+                        title={sn.text}
+                        onClick={() => {
+                          close();
+                          void sendCheckedToChat(sn.text, { promptSnippetId: sn.id });
+                        }}
+                      >
+                        {sn.label}
+                      </SimpleMenuItem>
+                    ))}
+                  </>
                 )}
               </>
             )}

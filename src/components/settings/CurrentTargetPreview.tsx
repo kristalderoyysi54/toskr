@@ -108,7 +108,7 @@ export function CurrentTargetPreview({
             type="button"
             onClick={onEditProfile}
             title="编辑当前解析到的发送方案"
-            className="inline-flex h-8 items-center gap-1 rounded-lg border border-border px-2 text-body outline-none hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-primary/50 dark:hover:bg-white/10"
+            className="inline-flex h-8 items-center gap-1 rounded-lg border border-border px-2 text-body outline-none hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:hover:bg-white/10"
           >
             <Pencil aria-hidden className="size-3.5" />
             编辑此方案
@@ -118,7 +118,7 @@ export function CurrentTargetPreview({
             disabled={!snapshot?.bundleId || refreshing}
             onClick={onTest}
             title="仅本地重新计算发送方案，不重新识别前台应用、不访问剪贴板"
-            className="inline-flex h-8 items-center gap-1 rounded-lg border border-border px-2 text-body outline-none hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-primary/50 disabled:opacity-40 dark:hover:bg-white/10"
+            className="inline-flex h-8 items-center gap-1 rounded-lg border border-border px-2 text-body outline-none hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:opacity-40 dark:hover:bg-white/10"
           >
             <FlaskConical aria-hidden className="size-3.5" />
             测试当前目标

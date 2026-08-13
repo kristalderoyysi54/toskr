@@ -153,14 +153,14 @@ export function AppAssignmentPicker({
               void requestAssignment(currentTarget.bundleId, currentTarget.appName);
             }
           }}
-          className="inline-flex h-8 items-center gap-1 rounded-lg border border-border px-2 text-body outline-none hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-primary/50 disabled:opacity-40 dark:hover:bg-white/10"
+          className="inline-flex h-8 items-center gap-1 rounded-lg border border-border px-2 text-body outline-none hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:opacity-40 dark:hover:bg-white/10"
         >
           <Plus aria-hidden className="size-3.5" /> 添加当前目标应用
         </button>
         <button
           type="button"
           onClick={() => void pickInstalledApp()}
-          className="inline-flex h-8 items-center gap-1 rounded-lg border border-border px-2 text-body outline-none hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-primary/50 dark:hover:bg-white/10"
+          className="inline-flex h-8 items-center gap-1 rounded-lg border border-border px-2 text-body outline-none hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:hover:bg-white/10"
         >
           <FolderOpen aria-hidden className="size-3.5" /> 选择应用…
         </button>
@@ -191,7 +191,7 @@ export function AppAssignmentPicker({
             <button
               type="button"
               onClick={() => setPendingMove(null)}
-              className="h-7 rounded-md border border-border px-2 text-label outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+              className="h-7 rounded-md border border-border px-2 text-label outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
             >
               取消
             </button>
@@ -240,7 +240,7 @@ export function AppAssignmentPicker({
               disabled={profile.bundleIds.includes(app.bundleId)}
               onClick={() => void requestAssignment(app.bundleId, app.appName)}
               aria-label={`将 ${app.appName} 添加到 ${profile.name}`}
-              className="inline-flex max-w-full items-center gap-1 rounded-md border border-border px-1.5 py-1 text-label outline-none hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-primary/50 disabled:opacity-40 dark:hover:bg-white/10"
+              className="inline-flex max-w-full items-center gap-1 rounded-md border border-border px-1.5 py-1 text-label outline-none hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:opacity-40 dark:hover:bg-white/10"
             >
               <AppIcon bundleId={app.bundleId} appName={app.appName} size="xs" />
               <span className="max-w-36 truncate">{app.appName}</span>

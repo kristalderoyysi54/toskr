@@ -21,8 +21,6 @@ const MARGIN: f64 = 12.0;
 const HUD_WIDTH: f64 = 264.0;
 // 气泡（两行 ≈48 含顶部投影余量）+ 尾巴/间距 6 + logo 36 + 底部投影余量 ≈ 100
 const HUD_HEIGHT: f64 = 100.0;
-/// HUD 无悬停时的展示时长（ms）。
-const HUD_DURATION_MS: u64 = 1600;
 /// 伴随模式自动高度的下限（pt）。
 const COMPANION_MIN_HEIGHT: f64 = 400.0;
 /// 用户手动调节的高度下限（pt）。
@@ -1595,8 +1593,7 @@ pub fn preview_image(
     let Some(anchor) = files.get(index) else {
         return;
     };
-    let dims =
-        crate::storage::image_path(app, anchor).and_then(|p| image::image_dimensions(&p).ok());
+    let dims = crate::image_firewall::delivery_image_dimensions(app, anchor);
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
         if let Err(e) = preview_image_on_main(
@@ -1828,8 +1825,11 @@ fn show_hud_on_main(app: &AppHandle, payload: HudPayload) -> tauri::Result<()> {
         hud.rect_pt = (x, y, HUD_WIDTH, HUD_HEIGHT);
     }
     let generation = state.hud_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    let duration_ms = state.hud_duration_ms.load(Ordering::Relaxed);
     let handle = app.clone();
-    tauri::async_runtime::spawn_blocking(move || hud_lifecycle(handle, generation, sticky));
+    tauri::async_runtime::spawn_blocking(move || {
+        hud_lifecycle(handle, generation, sticky, duration_ms)
+    });
     Ok(())
 }
 
@@ -1839,7 +1839,7 @@ fn show_hud_on_main(app: &AppHandle, payload: HudPayload) -> tauri::Result<()> {
 /// 另每秒做一次位置自愈：睡眠唤醒/显示器增减时系统会挪动 HUD 窗口，
 /// 或展示瞬间拿到过渡期屏幕几何——气泡落到屏幕中间，且 hover 判定
 /// 用的 rect 与实际位置脱节后穿透永不解除，粘性提醒点不掉。
-fn hud_lifecycle(app: AppHandle, generation: u64, sticky: bool) {
+fn hud_lifecycle(app: AppHandle, generation: u64, sticky: bool, duration_ms: u64) {
     let mut elapsed: u64 = 0;
     let mut heal_ticks: u64 = 0;
     const TICK: u64 = 100;
@@ -1910,7 +1910,7 @@ fn hud_lifecycle(app: AppHandle, generation: u64, sticky: bool) {
             elapsed = 0;
         } else if !sticky {
             elapsed += TICK;
-            if elapsed >= HUD_DURATION_MS {
+            if elapsed >= duration_ms {
                 // 进出场对称：先通知前端播退场动画，稍候再真正隐藏窗口
                 //（本函数运行在 spawn_blocking 专属线程，sleep 不阻塞 UI）
                 let _ = app.emit_to("hud", HUD_EXIT_EVENT, ());

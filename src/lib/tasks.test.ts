@@ -5,6 +5,7 @@ import {
   bucketTasksForDisplay,
   compareTasks,
   dueBadgeLabel,
+  dueBadgeShortLabel,
   dueTasksToRemind,
   isSmartBandTask,
   presetCfgDue,
@@ -221,5 +222,11 @@ describe("dueBadgeLabel", () => {
     expect(dueBadgeLabel(at(6, 9), NOW)).toBe("明天 09:00");
     expect(dueBadgeLabel(at(8, 9), NOW)).toBe("周六 09:00");
     expect(dueBadgeLabel(at(20, 9), NOW)).toBe("8月20日 09:00");
+  });
+
+  it("短文案：仅剥逾期「到期」后缀，未来文案原样", () => {
+    expect(dueBadgeShortLabel(NOW - 3 * 3_600_000, NOW)).toBe("3 小时前");
+    const at = (d: number, h: number) => new Date(2026, 7, d, h, 0).getTime();
+    expect(dueBadgeShortLabel(at(5, 20), NOW)).toBe("今天 20:00");
   });
 });

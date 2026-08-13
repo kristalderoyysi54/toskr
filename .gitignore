@@ -42,6 +42,12 @@ tasks/
 assets/icon-concepts/
 .gstack/
 
+# 会话走查截图与个人 QA 笔记（同上，不入库）
+/.codex-*.png
+/.codex-*.jpg
+.playwright-cli/
+/design-qa.md
+
 # design-sync（claude.ai/design 同步的机器状态，配置/预览等持久文件仍入库）
 .ds-sync/
 ds-bundle/

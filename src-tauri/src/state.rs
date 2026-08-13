@@ -7,6 +7,14 @@ pub const MOD_SHIFT: u8 = 0;
 pub const MOD_CONTROL: u8 = 1;
 pub const MOD_OPTION: u8 = 2;
 
+pub const HUD_DURATION_MIN_MS: u64 = 2_000;
+pub const HUD_DURATION_MAX_MS: u64 = 10_000;
+pub const HUD_DURATION_DEFAULT_MS: u64 = 3_000;
+
+pub fn clamp_hud_duration_ms(duration_ms: u64) -> u64 {
+    duration_ms.clamp(HUD_DURATION_MIN_MS, HUD_DURATION_MAX_MS)
+}
+
 /// 伴随停靠配置（由前端 settings 下发；下发前用与前端一致的默认值，
 /// 避免启动初期存在「伴随未启用」的窗口期）。
 #[derive(Clone)]
@@ -99,6 +107,8 @@ pub struct AppState {
     pub pasteboard_transaction_in_flight: AtomicBool,
     /// HUD 显示代数计数：防止早到的隐藏/轮询任务干扰新 HUD。
     pub hud_generation: AtomicU64,
+    /// 非粘性 HUD 自动隐藏时长（ms），由持久设置下发。
+    pub hud_duration_ms: AtomicU64,
     /// CGEventTap 是否安装成功（未授权辅助功能时会失败）。
     pub tap_installed: AtomicBool,
     /// tap 是否真正收到过键盘事件（Sequoia：创建成功≠事件发送，
@@ -202,6 +212,7 @@ impl Default for AppState {
             delivery_target: Mutex::new(crate::target::TargetState::default()),
             pasteboard_transaction_in_flight: AtomicBool::new(false),
             hud_generation: AtomicU64::new(0),
+            hud_duration_ms: AtomicU64::new(HUD_DURATION_DEFAULT_MS),
             tap_installed: AtomicBool::new(false),
             key_events_seen: AtomicBool::new(false),
             physical_input_generation: AtomicU64::new(0),
@@ -267,5 +278,17 @@ impl Default for AppState {
             machine_move_until_ms: AtomicI64::new(0),
             edge_hide_wake_rearm: AtomicBool::new(false),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hud_duration_is_bounded() {
+        assert_eq!(clamp_hud_duration_ms(1), HUD_DURATION_MIN_MS);
+        assert_eq!(clamp_hud_duration_ms(3_000), 3_000);
+        assert_eq!(clamp_hud_duration_ms(u64::MAX), HUD_DURATION_MAX_MS);
     }
 }

@@ -329,10 +329,10 @@ export function findDuplicateBundleAssignments(
 export function promptSnippetsForGroup(
   snippets: PromptSnippet[],
   groupId: string
-): { prioritized: PromptSnippet[]; all: PromptSnippet[] } {
+): { prioritized: PromptSnippet[]; remaining: PromptSnippet[] } {
   return {
     prioritized: snippets.filter((item) => item.groupId === groupId),
-    all: [...snippets],
+    remaining: snippets.filter((item) => item.groupId !== groupId),
   };
 }
 

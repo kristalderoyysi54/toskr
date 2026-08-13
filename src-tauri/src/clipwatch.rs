@@ -25,6 +25,9 @@ const POLL: Duration = Duration::from_millis(500);
 pub struct ClipPayload {
     pub content_kind: String,
     pub text: String,
+    pub html: Option<String>,
+    pub source_url: Option<String>,
+    pub captured_at_ms: i64,
     pub image_file: Option<String>,
     pub image_w: Option<u32>,
     pub image_h: Option<u32>,
@@ -98,6 +101,7 @@ pub fn spawn(app: AppHandle) {
                 continue;
             }
             last_seen = count;
+            let captured_at_ms = now_ms();
             if count == state.pasteboard_self_count.load(Ordering::SeqCst) {
                 continue; // 应用自身写入
             }
@@ -141,6 +145,54 @@ pub fn spawn(app: AppHandle) {
                 front.map(|f| (f.name, f.bundle_id)).unwrap_or((None, None));
 
             let src = app_name.clone().unwrap_or_else(|| "?".into());
+            match crate::rich_clipboard::read_expected(count as isize) {
+                Ok(rich) if rich.plain_text.is_some() || rich.html.is_some() => {
+                    let text = rich.plain_text.unwrap_or_default();
+                    if text.len() > MAX_TEXT_BYTES {
+                        crate::diag::push(
+                            &app,
+                            format!("剪贴板: 文本超限 {}KB，跳过", text.len() / 1024),
+                        );
+                        continue;
+                    }
+                    if pasteboard_change_count() as i64 != count {
+                        continue;
+                    }
+                    let has_html = rich.html.is_some();
+                    let text_chars = text.chars().count();
+                    drop(permit);
+                    crate::diag::push(
+                        &app,
+                        format!(
+                            "剪贴板: 收{} {} 字符 来自 {src}",
+                            if has_html { "图文" } else { "文本" },
+                            text_chars
+                        ),
+                    );
+                    let _ = app.emit_to(
+                        "main",
+                        CLIP_EVENT,
+                        ClipPayload {
+                            content_kind: "text".into(),
+                            text,
+                            html: rich.html,
+                            source_url: rich.source_url,
+                            captured_at_ms,
+                            image_file: None,
+                            image_w: None,
+                            image_h: None,
+                            app_name,
+                            bundle_id,
+                        },
+                    );
+                    continue;
+                }
+                Ok(_) => {}
+                Err(error) => crate::diag::push(
+                    &app,
+                    format!("剪贴板: 富内容读取失败 ({error})，尝试兼容格式"),
+                ),
+            }
             let mut clipboard = match arboard::Clipboard::new() {
                 Ok(c) => c,
                 Err(_) => continue,
@@ -172,6 +224,9 @@ pub fn spawn(app: AppHandle) {
                     ClipPayload {
                         content_kind: "text".into(),
                         text,
+                        html: None,
+                        source_url: None,
+                        captured_at_ms,
                         image_file: None,
                         image_w: None,
                         image_h: None,
@@ -200,6 +255,9 @@ pub fn spawn(app: AppHandle) {
                                 ClipPayload {
                                     content_kind: "image".into(),
                                     text: format!("图片 {w}×{h}"),
+                                    html: None,
+                                    source_url: None,
+                                    captured_at_ms,
                                     image_file: Some(file),
                                     image_w: Some(w),
                                     image_h: Some(h),
@@ -234,5 +292,27 @@ mod tests {
 
         assert_eq!(counter.load(Ordering::SeqCst), restored_generation as i64);
         assert_ne!(counter.load(Ordering::SeqCst), later_user_generation as i64);
+    }
+
+    #[test]
+    fn rich_clip_payload_serializes_html_source_and_capture_time() {
+        let value = serde_json::to_value(ClipPayload {
+            content_kind: "text".into(),
+            text: "正文".into(),
+            html: Some("<p>正文<img src=\"x.png\"></p>".into()),
+            source_url: Some("https://example.test/page".into()),
+            captured_at_ms: 123,
+            image_file: None,
+            image_w: None,
+            image_h: None,
+            app_name: Some("Browser".into()),
+            bundle_id: Some("example.browser".into()),
+        })
+        .unwrap();
+
+        assert_eq!(value["contentKind"], "text");
+        assert_eq!(value["sourceUrl"], "https://example.test/page");
+        assert_eq!(value["capturedAtMs"], 123);
+        assert!(value["html"].as_str().unwrap().contains("<img"));
     }
 }

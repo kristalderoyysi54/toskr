@@ -23,6 +23,7 @@ function runtimeEffects(settings: Settings): Promise<unknown>[] {
     api.setPanelWidth(settings.panelWidth),
     api.setStealth(settings.stealth),
     api.setSound(settings.soundEnabled),
+    api.setHudDuration(settings.hudDurationMs),
     api.setDoubleTapMode(settings.doubleTapCaptureOnly),
     api.setClipWatch(settings.clipHistory),
     api.setClipPause(settings.clipPauseUntil ?? 0),

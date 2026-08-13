@@ -40,6 +40,7 @@ import { splitSubtasks } from "@/lib/ai";
 import { springDetail } from "@/lib/motion";
 import {
   dueBadgeLabel,
+  dueBadgeShortLabel,
   dueTone,
   presetCfgDue,
   presetCfgLabel,
@@ -200,6 +201,9 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
           }}
           className={cn(
             "group relative rounded-lg border border-transparent px-2 py-1.5",
+            // 行 hover 轻投影浮起（不位移，任务是动词不是资产；同紧缩笔记卡的
+            // 「只给影子」调性），删除/到期钮随 hover 同步显现
+            "transition-shadow duration-150 hover:elevation-2",
             // 闪念灵感：紫色底与普通待办区分。两种底色都吃 --card-alpha
             // （设置 → 卡片透明度），与笔记/剪贴板卡同一套配方
             task.kind === "spark"
@@ -229,7 +233,7 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
               "absolute left-1 top-1.5 cursor-grab touch-none rounded-md border border-foreground/10 bg-surface-raised/95 p-0.5 elevation-2",
               "text-muted-foreground/50 opacity-0 transition-opacity",
               expanded && "group-hover:opacity-100",
-              "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/60",
+              "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
               "active:cursor-grabbing",
               done && "hidden"
             )}
@@ -250,14 +254,16 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
               className="flex h-6 w-2 shrink-0 items-center justify-center"
             >
               <span
-                className={cn("h-5 w-[3px] rounded-full", PRIORITY_BAR[task.priority])}
+                className={cn(
+                  "h-5 w-[3px] rounded-full transition-colors",
+                  // 无优先级静息隐形、hover 淡现提示可点（灰条常驻读成噪音）；
+                  // 有优先级恒显色条——色即语义，不再配文字标签
+                  task.priority === "none"
+                    ? "bg-transparent group-hover:bg-black/10 dark:group-hover:bg-white/10"
+                    : PRIORITY_BAR[task.priority]
+                )}
               />
             </button>
-            {task.priority !== "none" && (
-              <span className="shrink-0 text-micro font-semibold leading-none text-muted-foreground">
-                {PRIORITY_LABEL[task.priority]}
-              </span>
-            )}
 
             {/* 闪念：💡（点击转正式待办）；普通任务：状态点三态循环 */}
             {task.kind === "spark" && !done ? (
@@ -316,30 +322,45 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
                 className="min-w-0 flex-1 resize-none bg-transparent text-title font-medium leading-snug outline-none"
               />
             ) : (
-              <p
-                title={task.text}
-                className={cn(
-                  "min-w-0 flex-1 truncate text-title",
-                  done && "text-muted-foreground line-through opacity-60"
+              <div className="min-w-0 flex-1">
+                <p
+                  title={task.text}
+                  className={cn(
+                    "truncate text-title",
+                    done && "text-muted-foreground line-through opacity-60"
+                  )}
+                >
+                  {task.text}
+                </p>
+                {/* 备注一行淡色预览（此前收起态完全不可见，只有横栏瓷砖有此待遇） */}
+                {task.note && (
+                  <p className="truncate text-micro text-muted-foreground">
+                    {task.note}
+                  </p>
                 )}
-              >
-                {task.text}
-              </p>
+              </div>
             )}
 
-            {/* 收起态：检查列表进度徽标 */}
+            {/* 收起态：检查列表微型进度条（完成度一眼可读） */}
             {!expanded && checklist.length > 0 && (
               <span
                 title={`检查列表 ${checklistDone}/${checklist.length}`}
-                className="flex shrink-0 items-center gap-0.5 text-micro tabular-nums text-muted-foreground/70"
+                className="flex shrink-0 items-center gap-1 text-micro tabular-nums text-muted-foreground"
               >
-                <ListChecks className="size-3" />
+                <span className="h-[3px] w-5 overflow-hidden rounded-full surface-inset">
+                  <span
+                    className="block h-full rounded-full bg-muted-foreground/60"
+                    style={{
+                      width: `${Math.round((checklistDone / checklist.length) * 100)}%`,
+                    }}
+                  />
+                </span>
                 {checklistDone}/{checklist.length}
               </span>
             )}
 
             {/* 收起态才在行头放到期/删除；展开态移到详情底部操作行，把宽度留给标题 */}
-            {!expanded && <DuePopover task={task} now={now} />}
+            {!expanded && <DuePopover task={task} now={now} shortLabel />}
             {!expanded && (
               <IconButton
                 label="删除任务"
@@ -379,7 +400,7 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
                   e.stopPropagation();
                   if (e.key === "Escape") collapse();
                 }}
-                className="resize-none bg-transparent text-body leading-relaxed text-muted-foreground outline-none placeholder:text-muted-foreground/50"
+                className="resize-none bg-transparent text-body leading-relaxed text-muted-foreground outline-none placeholder:text-muted-foreground"
               />
               {checklist.length > 0 && (
                 <div className="flex flex-col">
@@ -399,7 +420,7 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
                     e.stopPropagation();
                     deleteTasksWithUndo([task.id], "已删除 1 个任务");
                   }}
-                  className="rounded-sm p-0.5 text-muted-foreground/70 outline-none hover:text-destructive focus-visible:ring-2 focus-visible:ring-primary/50"
+                  className="rounded-sm p-0.5 text-muted-foreground outline-none hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
                 >
                   <Trash2 className="size-3.5" />
                 </button>
@@ -606,7 +627,7 @@ function ChecklistAdder({ taskId }: { taskId: string }) {
             submit();
           }
         }}
-        className="min-w-0 flex-1 bg-transparent text-body outline-none placeholder:text-muted-foreground/50"
+        className="min-w-0 flex-1 bg-transparent text-body outline-none placeholder:text-muted-foreground"
       />
     </div>
   );
@@ -621,6 +642,7 @@ function DuePopover({
   now,
   alwaysVisible,
   dense,
+  shortLabel,
 }: {
   task: Task;
   now: number;
@@ -628,6 +650,8 @@ function DuePopover({
   alwaysVisible?: boolean;
   /** 紧凑形态（横栏瓷砖）：快捷档双列网格，整体压进矮窗口。 */
   dense?: boolean;
+  /** 短文案（竖栏收起行）：剥掉逾期「到期」后缀去重——区头已声明；全文进 tooltip。 */
+  shortLabel?: boolean;
 }) {
   const duePresets = useNotesStore((s) => s.settings.duePresets);
   const [open, setOpenRaw] = useState(false);
@@ -671,7 +695,11 @@ function DuePopover({
         {task.dueAt !== null ? (
           <button
             onClick={(e) => e.stopPropagation()}
-            title="修改到期时间"
+            title={
+              shortLabel
+                ? `${dueBadgeLabel(task.dueAt, now)} · 点击修改`
+                : "修改到期时间"
+            }
             className={cn(
               // 还原重塑前形态（用户定稿）：纯文字 tone chip，不带图标
               "shrink-0 rounded-md px-1.5 py-0.5 text-micro tabular-nums",
@@ -680,14 +708,14 @@ function DuePopover({
               tone === "later" && "bg-black/[0.06] text-muted-foreground dark:bg-white/10"
             )}
           >
-            {dueBadgeLabel(task.dueAt, now)}
+            {(shortLabel ? dueBadgeShortLabel : dueBadgeLabel)(task.dueAt, now)}
           </button>
         ) : (
           <button
             onClick={(e) => e.stopPropagation()}
             title="设置到期提醒"
             className={cn(
-              "shrink-0 items-center gap-0.5 rounded-md px-1 py-0.5 text-micro text-muted-foreground/70 hover:text-foreground",
+              "shrink-0 items-center gap-0.5 rounded-md px-1 py-0.5 text-micro text-muted-foreground hover:text-foreground",
               // 弹层开着（含退出动画驻留期）必须留在布局里：hidden 会让
               // Radix 锚点塌掉、弹层跳位
               alwaysVisible || open || lingering ? "flex" : "hidden group-hover:flex"
@@ -817,7 +845,7 @@ function TileDetail({
         placeholder="备注…"
         onChange={(e) => setNoteDraft(e.target.value)}
         onBlur={saveNote}
-        className="resize-none bg-transparent text-body leading-relaxed text-muted-foreground outline-none placeholder:text-muted-foreground/50"
+        className="resize-none bg-transparent text-body leading-relaxed text-muted-foreground outline-none placeholder:text-muted-foreground"
       />
       {checklist.length > 0 && (
         <div className="flex flex-col">
@@ -836,7 +864,7 @@ function TileDetail({
             onClose();
             deleteTasksWithUndo([task.id], "已删除 1 个任务");
           }}
-          className="rounded-sm p-0.5 text-muted-foreground/70 hover:text-destructive"
+          className="rounded-sm p-0.5 text-muted-foreground hover:text-destructive"
         >
           <Trash2 className="size-3.5" />
         </button>
@@ -1000,7 +1028,7 @@ export function TaskTile({ task, now }: { task: Task; now: number }) {
                           "shrink-0 rounded-full",
                           c.done
                             ? "text-emerald-600 dark:text-emerald-400"
-                            : "text-muted-foreground/60 hover:text-foreground"
+                            : "text-muted-foreground hover:text-foreground"
                         )}
                       >
                         {c.done ? (
@@ -1020,14 +1048,14 @@ export function TaskTile({ task, now }: { task: Task; now: number }) {
                     </div>
                   ))}
                   {checklist.length > 4 && (
-                    <span className="text-micro text-muted-foreground/60">
+                    <span className="text-micro text-muted-foreground">
                       还有 {checklist.length - 4} 条…
                     </span>
                   )}
                 </div>
               )}
               {task.note && (
-                <p className="mt-0.5 line-clamp-1 text-micro text-muted-foreground/70">
+                <p className="mt-0.5 line-clamp-1 text-micro text-muted-foreground">
                   {task.note}
                 </p>
               )}

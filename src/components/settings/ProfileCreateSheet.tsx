@@ -137,7 +137,7 @@ export function ProfileCreateSheet({
                         className="peer sr-only"
                       />
                       <span className={cn(
-                        "block min-h-full rounded-xl border p-2 text-left outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-primary/50",
+                        "block min-h-full rounded-xl border p-2 text-left outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-focus-visible:ring-offset-1 peer-focus-visible:ring-offset-background",
                         selected ? "border-primary/50 bg-primary/10" : "border-border bg-card"
                       )}>
                         <span className="flex items-center gap-1 text-body font-semibold">
@@ -160,7 +160,7 @@ export function ProfileCreateSheet({
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 maxLength={80}
-                className="mt-1 h-9 w-full rounded-lg border border-border bg-transparent px-2 text-body text-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                className="mt-1 h-9 w-full rounded-lg border border-border bg-transparent px-2 text-body text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
               />
             </label>
 
@@ -197,7 +197,7 @@ export function ProfileCreateSheet({
                   aria-pressed={moveConfirmed}
                   onClick={() => setConfirmedMoveBundleId(currentBundleId)}
                   className={cn(
-                    "mt-2 rounded-md border px-2 py-1 text-label font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
+                    "mt-2 rounded-md border px-2 py-1 text-label font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
                     moveConfirmed
                       ? "border-primary/40 bg-primary/10 text-primary"
                       : "border-warning/40 text-warning"
@@ -211,7 +211,7 @@ export function ProfileCreateSheet({
 
           <div className="mt-3 flex justify-end gap-2 border-t border-border pt-3">
             <DialogPrimitive.Close asChild>
-              <button type="button" className="h-8 rounded-lg border border-border px-3 text-body outline-none focus-visible:ring-2 focus-visible:ring-primary/50">
+              <button type="button" className="h-8 rounded-lg border border-border px-3 text-body outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background">
                 取消
               </button>
             </DialogPrimitive.Close>
