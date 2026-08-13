@@ -1,9 +1,10 @@
 //! 跨应用划词捕获。
 //!
 //! 策略（按优先级）：
-//! 1. AX API 直读焦点元素选中文本 —— 零副作用，原生应用/Safari 等可用。
-//! 2. AX 不可信/不支持时走完整 pasteboard 事务：快照 → 合成 ⌘C →
-//!    仅接受唯一稳定 revision 且前台身份/真实输入未漂移 → 按所有权安全恢复。
+//! 1. AX API 直读焦点元素选中文本，作为复制事务失败时的纯文本兜底。
+//! 2. 始终尝试完整 pasteboard 事务：快照 → 合成 ⌘C → 读取同一 item 的
+//!    plain + HTML → 仅接受唯一稳定 revision 且前台身份/真实输入未漂移 →
+//!    按所有权安全恢复。这样富选区不会被 AX 的纯文本结果提前截断。
 
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -101,6 +102,8 @@ pub(crate) fn pasteboard_change_count() -> isize {
 pub enum Captured {
     Text {
         text: String,
+        html: Option<String>,
+        source_url: Option<String>,
         clipboard_warning: Option<&'static str>,
     },
     Image {
@@ -114,7 +117,7 @@ pub enum Captured {
     },
 }
 
-/// 捕获当前前台应用的选中内容（文本优先，其次剪贴板图片）。
+/// 捕获当前前台应用的选中内容（有序图文优先，其次纯文本/单图）。
 /// 阻塞调用（含 sleep），须在非主线程执行。
 pub fn capture_selection(
     app: &AppHandle,
@@ -131,21 +134,19 @@ pub fn capture_selection(
                 crate::diag::push(app, "捕获: AX 读取期间前台已变化，已中止");
                 return None;
             }
-            crate::diag::push(app, "捕获: AX 直读成功");
-            normalize(t).map(|text| Captured::Text {
-                text,
-                clipboard_warning: None,
-            })
+            let fallback_text = normalize(t);
+            crate::diag::push(app, "捕获: AX 直读成功，继续读取富选区");
+            capture_via_clipboard(app, source, input_generation, fallback_text)
         }
         // 「空」不可信：Otty 等终端的 AX 声明支持 AXSelectedText 但从不填充
         // （连 range 都谎报 0，实测实锤）。空时仍走剪贴板路径。
         AxSelection::Empty => {
             crate::diag::push(app, "捕获: AX 报空(不可信) → 剪贴板路径");
-            capture_via_clipboard(app, source, input_generation)
+            capture_via_clipboard(app, source, input_generation, None)
         }
         AxSelection::Unsupported => {
             crate::diag::push(app, "捕获: AX 不支持 → 剪贴板路径");
-            capture_via_clipboard(app, source, input_generation)
+            capture_via_clipboard(app, source, input_generation, None)
         }
     }
 }
@@ -154,16 +155,17 @@ fn capture_via_clipboard(
     app: &AppHandle,
     source: &crate::focus::FrontApp,
     input_generation: u64,
+    fallback_text: Option<String>,
 ) -> Option<Captured> {
     let Some(permit) = crate::pasteboard::try_claim(app) else {
-        crate::diag::push(app, "捕获: 剪贴板事务忙，已跳过复制回退");
-        return None;
+        crate::diag::push(app, "捕获: 剪贴板事务忙，使用 AX 纯文本兜底");
+        return fallback_capture(app, source, input_generation, fallback_text, None);
     };
     let transaction = match PasteboardTransaction::capture_original() {
         Ok(transaction) => transaction,
         Err(error) => {
             crate::diag::push(app, format!("捕获: 剪贴板快照失败 ({error})"));
-            return None;
+            return fallback_capture(app, source, input_generation, fallback_text, None);
         }
     };
     let mut runtime = NativeClipboardCapture {
@@ -179,15 +181,33 @@ fn capture_via_clipboard(
         format!("捕获: 剪贴板事务 {}", attempt.clipboard_outcome.as_str()),
     );
     let clipboard_warning = attempt.clipboard_outcome.warning_message();
-    let warning_only = || clipboard_warning.map(|message| Captured::Warning { message });
 
     match attempt.payload {
-        Some(CopyPayload::Text(text)) => normalize(text)
-            .map(|text| Captured::Text {
-                text,
-                clipboard_warning,
-            })
-            .or_else(warning_only),
+        Some(CopyPayload::Text {
+            text,
+            html,
+            source_url,
+        }) => {
+            let text = normalize(text)
+                .or(fallback_text.clone())
+                .unwrap_or_default();
+            if !text.is_empty() || html.is_some() {
+                Some(Captured::Text {
+                    text,
+                    html,
+                    source_url,
+                    clipboard_warning,
+                })
+            } else {
+                fallback_capture(
+                    app,
+                    source,
+                    input_generation,
+                    fallback_text,
+                    clipboard_warning,
+                )
+            }
+        }
         Some(CopyPayload::Image {
             width,
             height,
@@ -195,7 +215,13 @@ fn capture_via_clipboard(
         }) => {
             let (Ok(w), Ok(h)) = (u32::try_from(width), u32::try_from(height)) else {
                 crate::diag::push(app, "捕获: 图片尺寸超出支持范围");
-                return warning_only();
+                return fallback_capture(
+                    app,
+                    source,
+                    input_generation,
+                    fallback_text,
+                    clipboard_warning,
+                );
             };
             match crate::storage::save_image_rgba(app, width, height, &rgba) {
                 Ok(file) => {
@@ -209,17 +235,53 @@ fn capture_via_clipboard(
                 }
                 Err(error) => {
                     crate::diag::push(app, format!("捕获: 图片保存失败 {error}"));
-                    warning_only()
+                    fallback_capture(
+                        app,
+                        source,
+                        input_generation,
+                        fallback_text,
+                        clipboard_warning,
+                    )
                 }
             }
         }
-        None => warning_only(),
+        None => fallback_capture(
+            app,
+            source,
+            input_generation,
+            fallback_text,
+            clipboard_warning,
+        ),
     }
+}
+
+fn fallback_capture(
+    app: &AppHandle,
+    source: &crate::focus::FrontApp,
+    input_generation: u64,
+    fallback_text: Option<String>,
+    clipboard_warning: Option<&'static str>,
+) -> Option<Captured> {
+    if same_capture_context(app, source, input_generation) {
+        if let Some(text) = fallback_text {
+            return Some(Captured::Text {
+                text,
+                html: None,
+                source_url: None,
+                clipboard_warning,
+            });
+        }
+    }
+    clipboard_warning.map(|message| Captured::Warning { message })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum CopyPayload {
-    Text(String),
+    Text {
+        text: String,
+        html: Option<String>,
+        source_url: Option<String>,
+    },
     Image {
         width: usize,
         height: usize,
@@ -346,12 +408,42 @@ impl ClipboardCaptureRuntime for NativeClipboardCapture<'_> {
     }
 
     fn read_payload(&mut self) -> Option<CopyPayload> {
-        let mut clipboard = arboard::Clipboard::new().ok()?;
-        if let Ok(text) = clipboard.get_text() {
-            if !text.is_empty() {
-                return Some(CopyPayload::Text(text));
+        let expected_change_count = self.transaction.current_change_count();
+        // AppKit 会警告惰性 pasteboard provider 在后台线程同步兑现；捕获事务本身
+        // 继续留在阻塞线程，仅把有界的表示读取调度回主线程。回到本线程后仍会
+        // 由 execute_clipboard_capture 二次核对 context + generation + 所有权。
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        if let Err(error) = self.app.run_on_main_thread(move || {
+            let _ = sender.send(crate::rich_clipboard::read_expected(expected_change_count));
+        }) {
+            crate::diag::push(self.app, format!("捕获: 富剪贴板读取调度失败 ({error})"));
+            return None;
+        }
+        let rich = match receiver.recv_timeout(Duration::from_secs(2)) {
+            Ok(result) => result,
+            Err(_) => {
+                crate::diag::push(self.app, "捕获: 富剪贴板读取超时");
+                return None;
+            }
+        };
+        match rich {
+            Ok(rich) if rich.plain_text.is_some() || rich.html.is_some() => {
+                return Some(CopyPayload::Text {
+                    text: rich.plain_text.unwrap_or_default(),
+                    html: rich.html,
+                    source_url: rich.source_url,
+                });
+            }
+            Ok(_) => {}
+            Err(error) => {
+                crate::diag::push(self.app, format!("捕获: 富剪贴板读取失败 ({error})"));
+                return None;
             }
         }
+
+        // 没有文本/HTML 表示时才读取单张位图；不从另一个 pasteboard item
+        // 拼接文本和图片，以免伪造并不存在的顺序关系。
+        let mut clipboard = arboard::Clipboard::new().ok()?;
         clipboard.get_image().ok().map(|image| CopyPayload::Image {
             width: image.width,
             height: image.height,
@@ -386,6 +478,14 @@ mod tests {
     use super::*;
     use std::collections::VecDeque;
 
+    fn text_payload(text: &str) -> CopyPayload {
+        CopyPayload::Text {
+            text: text.into(),
+            html: None,
+            source_url: None,
+        }
+    }
+
     struct FakeCaptureRuntime {
         original: isize,
         context_valid: bool,
@@ -415,7 +515,7 @@ mod tests {
                 claim_succeeds: true,
                 current_counts: vec![11, 11],
                 current_index: 0,
-                payload: Some(CopyPayload::Text("new selection".into())),
+                payload: Some(text_payload("new selection")),
                 restore_outcome: ClipboardOutcome::Restored,
                 read_calls: 0,
                 restore_calls: 0,
@@ -476,7 +576,7 @@ mod tests {
     fn copy_failure_never_reads_historical_clipboard_and_still_finishes_transaction() {
         let mut runtime = FakeCaptureRuntime {
             copy_succeeds: false,
-            payload: Some(CopyPayload::Text("historical".into())),
+            payload: Some(text_payload("historical")),
             restore_outcome: ClipboardOutcome::NothingToRestore,
             ..FakeCaptureRuntime::default()
         };
@@ -508,7 +608,7 @@ mod tests {
     fn timeout_never_reads_historical_clipboard_and_still_finishes_transaction() {
         let mut runtime = FakeCaptureRuntime {
             observed: CopyObservation::None,
-            payload: Some(CopyPayload::Text("historical".into())),
+            payload: Some(text_payload("historical")),
             restore_outcome: ClipboardOutcome::NothingToRestore,
             ..FakeCaptureRuntime::default()
         };
@@ -541,11 +641,27 @@ mod tests {
 
         let result = execute_clipboard_capture(&mut runtime);
 
-        assert_eq!(
-            result.payload,
-            Some(CopyPayload::Text("new selection".into()))
-        );
+        assert_eq!(result.payload, Some(text_payload("new selection")));
         assert_eq!(result.clipboard_outcome, ClipboardOutcome::Restored);
+        assert_eq!(runtime.read_calls, 1);
+        assert_eq!(runtime.restore_calls, 1);
+    }
+
+    #[test]
+    fn accepted_copy_keeps_plain_html_and_source_as_one_payload() {
+        let rich = CopyPayload::Text {
+            text: "前\n后".into(),
+            html: Some("<p>前</p><img src=\"https://img.test/a.png\"><p>后</p>".into()),
+            source_url: Some("https://example.test/page".into()),
+        };
+        let mut runtime = FakeCaptureRuntime {
+            payload: Some(rich.clone()),
+            ..FakeCaptureRuntime::default()
+        };
+
+        let result = execute_clipboard_capture(&mut runtime);
+
+        assert_eq!(result.payload, Some(rich));
         assert_eq!(runtime.read_calls, 1);
         assert_eq!(runtime.restore_calls, 1);
     }
@@ -554,7 +670,7 @@ mod tests {
     fn copy_after_acceptance_window_is_restored_but_never_adopted() {
         let mut runtime = FakeCaptureRuntime {
             observed: CopyObservation::Late(11),
-            payload: Some(CopyPayload::Text("late selection".into())),
+            payload: Some(text_payload("late selection")),
             ..FakeCaptureRuntime::default()
         };
 
@@ -627,7 +743,7 @@ mod tests {
     fn change_during_read_discards_unowned_content() {
         let mut runtime = FakeCaptureRuntime {
             current_counts: vec![11, 12],
-            payload: Some(CopyPayload::Text("unrelated user copy".into())),
+            payload: Some(text_payload("unrelated user copy")),
             restore_outcome: ClipboardOutcome::SkippedUserChanged,
             ..FakeCaptureRuntime::default()
         };

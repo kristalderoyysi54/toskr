@@ -359,7 +359,7 @@ describe("Target Profile resolver", () => {
     ]);
   });
 
-  it("Prompt 菜单优先当前分组，同时保留全部模板原顺序", () => {
+  it("Prompt 菜单优先当前分组，其他模板不重复且保留原顺序", () => {
     const snippets: PromptSnippet[] = [
       { id: "a", label: "A", text: "a", groupId: GENERAL_PROMPT_GROUP_ID },
       { id: "b", label: "B", text: "b", groupId: "coding" },
@@ -368,7 +368,22 @@ describe("Target Profile resolver", () => {
 
     const menu = promptSnippetsForGroup(snippets, "coding");
     expect(menu.prioritized.map((item) => item.id)).toEqual(["b", "c"]);
-    expect(menu.all.map((item) => item.id)).toEqual(["a", "b", "c"]);
+    expect(menu.remaining.map((item) => item.id)).toEqual(["a"]);
+
+    const generalMenu = promptSnippetsForGroup(snippets, GENERAL_PROMPT_GROUP_ID);
+    expect(generalMenu.prioritized.map((item) => item.id)).toEqual(["a"]);
+    expect(generalMenu.remaining.map((item) => item.id)).toEqual(["b", "c"]);
+
+    const singleGroupMenu = promptSnippetsForGroup(
+      snippets.map((item) => ({ ...item, groupId: "coding" })),
+      "coding"
+    );
+    expect(singleGroupMenu.prioritized.map((item) => item.id)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+    expect(singleGroupMenu.remaining).toEqual([]);
   });
 });
 

@@ -179,7 +179,7 @@ export function DraftInput() {
                 className={
                   "flex h-6 max-w-24 shrink-0 items-center gap-1 rounded-md px-1.5 " +
                   "text-label text-muted-foreground outline-none hover:bg-black/5 hover:text-foreground " +
-                  "focus-visible:ring-2 focus-visible:ring-primary/50 dark:hover:bg-white/10"
+                  "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:hover:bg-white/10"
                 }
               >
                 <FolderInput className="size-3 shrink-0" />

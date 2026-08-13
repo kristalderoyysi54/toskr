@@ -265,7 +265,7 @@ export function SafeDeliveryRehearsalView(
       <button
         type="button"
         onClick={props.onDefer}
-        className="mt-2 text-label text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+        className="mt-2 text-label text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
       >
         稍后在真实应用演练
       </button>

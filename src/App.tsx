@@ -110,11 +110,17 @@ import {
   SimpleMenuLabel,
   SimpleMenuSeparator,
 } from "@/components/SimpleMenu";
-import { TaskPage, TASK_DONE_KEY } from "@/components/TaskPage";
+import {
+  TaskPage,
+  TASK_DONE_KEY,
+  TASK_OVERDUE_COLLAPSED_KEY,
+  TASK_SPARKS_COLLAPSED_KEY,
+} from "@/components/TaskPage";
 import { TaskTile } from "@/components/TaskRow";
 import { TaskQuickAdd } from "@/components/TaskQuickAdd";
 import { EmptyState } from "@/components/ui/empty-state";
 import { floatingSurface } from "@/components/ui/floating-surface";
+import { focusRing } from "@/components/ui/focus-ring";
 import { GlowingEffect } from "@/components/ui/glowing-effect";
 import { IconButton } from "@/components/ui/icon-button";
 import { Kbd } from "@/components/ui/kbd";
@@ -138,10 +144,19 @@ import {
   sendNotesToChat,
   undoableTip,
   warnWithPanel,
+  type NoteEditPayload,
 } from "@/lib/actions";
 import { clipTimeBand } from "@/lib/cliprow";
+import {
+  materializeRichCapture,
+  restoreRichCaptureAliases,
+} from "@/lib/richCapture";
 import { bucketTasksForDisplay, dueTasksToRemind } from "@/lib/tasks";
 import { springSnappy, tweenExit } from "@/lib/motion";
+import {
+  advancePermissionGuard,
+  initialPermissionGuardState,
+} from "@/lib/permissionGuard";
 import { imageCaption, previewOf } from "@/lib/format";
 import { SHORTCUTS } from "@/lib/shortcuts";
 import { clearPendingUndo, runPendingUndo, setPendingUndo, tip } from "@/lib/tip";
@@ -202,6 +217,7 @@ import {
   SECTION_COLORS,
   TASK_INBOX_ID,
   useNotesStore,
+  type NoteContentBlock,
   type PageId,
   type Settings,
 } from "@/store/notesStore";
@@ -429,7 +445,7 @@ function GroupPill({
             <button
               aria-label="清除颜色"
               onClick={() => manage.setColor?.(item.id, undefined)}
-              className="size-3.5 shrink-0 rounded-full border border-dashed border-muted-foreground/50 transition-transform hover:scale-125"
+              className="size-3.5 shrink-0 rounded-full border border-dashed border-muted-foreground/75 transition-transform hover:scale-125"
             />
           </div>
         )}
@@ -758,43 +774,73 @@ export default function App() {
   };
 
   // 正常启动保持隐藏，让第一次双击快捷键执行“显示”而不是误判为“关闭”。
-  // 仅在监听不可用时自动打开，继续承载首启授权引导。
+  // 监听不可用仍会自动打开授权引导，但必须等数据闸门解锁：新档案由下面的
+  // initialPanelSetup 先固定/磁吸再显示，避免权限分支抢跑而闪现独立态。
   useEffect(() => {
     let alive = true;
+    let needsPermissionPanel = false;
+    const maybeOpenPermissionPanel = () => {
+      if (
+        !alive ||
+        !needsPermissionPanel ||
+        isDataOperationLocked() ||
+        !useNotesStore.persist.hasHydrated()
+      ) return;
+      if (!useNotesStore.getState().settings.initialPanelSetupDone) return;
+      needsPermissionPanel = false;
+      void openPanel();
+    };
     void api
       .tapStatus()
       .then(({ installed, listening }) => {
-        if (alive && (!installed || !listening)) void openPanel();
+        if (!alive || (installed && listening)) return;
+        needsPermissionPanel = true;
+        maybeOpenPermissionPanel();
       })
       .catch(() => {
         /* Tauri 环境外忽略 */
       });
+    window.addEventListener(DATA_RUNTIME_READY_EVENT, maybeOpenPermissionPanel);
     return () => {
       alive = false;
+      window.removeEventListener(
+        DATA_RUNTIME_READY_EVENT,
+        maybeOpenPermissionPanel
+      );
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 应用级权限守护（常驻，与面板显隐无关）：
   // - 辅助功能授权后 3s 内自动重装监听（无需重启）
-  // - tap 已创建却持续收不到事件 → 判定输入监控权限被扣（Sequoia 特征）
+  // - 判「输入监控被扣」只认铁证，不再把「启动后没人打字」当故障
+  //   （更新重启后必现 12s 误报横幅，诱导用户无谓点「重置授权/重启」）：
+  //   铁证 = 系统授权查询连续为否，或本窗口收到过按键而 tap 始终无事件
   useEffect(() => {
     let alive = true;
-    let prevHealthy: boolean | null = null;
-    let stuckTicks = 0;
+    let wasStuck = false;
+    let guard = initialPermissionGuardState();
+    // 不健康窗口内 webview 自己收到 keydown = 键盘活动确凿存在的反证
+    const onKeyEvidence = () => {
+      guard.webviewKeySeen = true;
+    };
+    window.addEventListener("keydown", onKeyEvidence, { capture: true });
     const check = async () => {
       try {
         const [ax, tap] = await Promise.all([api.axTrusted(false), api.tapStatus()]);
         if (!alive) return;
-        if (tap.listening && tap.installed && !tap.receiving) stuckTicks += 1;
-        else stuckTicks = 0;
-        const stuck = !tap.listening || stuckTicks >= 4;
+        const advanced = advancePermissionGuard(guard, tap);
+        guard = advanced.state;
+        const stuck = advanced.stuck;
         useUIStore.getState().setPermission(ax, tap.installed, tap.receiving, stuck);
         const healthy = tap.installed && tap.receiving;
-        if (prevHealthy === false && healthy) {
+        // 就绪气泡只做「从故障恢复」的确认；普通启动后的首次按键不打扰
+        if (wasStuck && healthy) {
           tip("ok", "键盘监听已就绪，双击 ⇧ 试试 ✓");
+          wasStuck = false;
+        } else if (stuck) {
+          wasStuck = true;
         }
-        prevHealthy = healthy;
         if (ax && !tap.installed) {
           await api.retryTap();
         }
@@ -807,6 +853,7 @@ export default function App() {
     return () => {
       alive = false;
       window.clearInterval(timer);
+      window.removeEventListener("keydown", onKeyEvidence, { capture: true });
     };
   }, []);
 
@@ -875,96 +922,194 @@ export default function App() {
         else void openPanel(shortcutHoldOpen);
         return;
       }
-      // 可逆化名：仅文本捕获在入库前把词典占位符还原为原文（本机词典反查，无需发送会话）
+      const capturedAt = Number.isFinite(payload.capturedAtMs)
+        ? payload.capturedAtMs
+        : Date.now();
+
+      // 所有捕获形态共用一个入库收尾，避免富捕获另造 HUD、撤销与结果关联分支。
+      const commitCapture = (
+        captureText: string,
+        aliasRestoredCount: number | null,
+        contentBlocks?: NoteContentBlock[],
+        captureWarning: string | null = payload.clipboardWarning
+      ) => {
+        const { result, id } = useNotesStore.getState().addNote(captureText, {
+          sourceApp: payload.appName ?? undefined,
+          sourceBundle: payload.bundleId ?? undefined,
+          // contentBlocks 一旦存在就是唯一真源；旧图片字段只服务单图兼容路径。
+          contentBlocks,
+          kind:
+            contentBlocks === undefined && payload.contentKind === "image"
+              ? "image"
+              : undefined,
+          imageFile:
+            contentBlocks === undefined ? payload.imageFile ?? undefined : undefined,
+          imageW:
+            contentBlocks === undefined ? payload.imageW ?? undefined : undefined,
+          imageH:
+            contentBlocks === undefined ? payload.imageH ?? undefined : undefined,
+          createdAt: capturedAt,
+        });
+        if (result === "empty") return result;
+        const imageCount =
+          contentBlocks?.filter((block) => block.type === "image").length ?? 0;
+        const capturePreview =
+          captureText || (imageCount > 1 ? `图片 ×${imageCount}` : "图片");
+        const showCaptureResult = async () => {
+          let associationSuggested = false;
+          let autoLinked = false;
+          if (result === "added" && id && payload.bundleId) {
+            try {
+              const events = await getRecentDeliveryEventsCached(100);
+              const current = useNotesStore
+                .getState()
+                .notes.find((note) => note.id === id);
+              const candidates = current
+                ? deliveryCandidatesForCapturedNote(current, events)
+                : [];
+              // 占位符指纹（对恢复前原文判定）+ 唯一候选 = 双重证据，免确认自动归位；
+              // 只有时间窗证据时维持「右键确认」建议，多候选不动
+              if (
+                candidates.length === 1 &&
+                deliveryPlaceholderEvidence(candidates[0].deliveryId, payload.text)
+              ) {
+                autoLinked = await linkCapturedNoteToDelivery(id, candidates[0]);
+              }
+              associationSuggested = !autoLinked && candidates.length === 1;
+            } catch {
+              // 建议是增强能力；活动记录不可用不能吞掉捕获 HUD。
+            }
+          }
+          void api.showCaptureHud(
+            result === "duplicate" ? "duplicate" : "added",
+            previewOf(capturePreview),
+            captureWarning,
+            associationSuggested,
+            aliasRestoredCount,
+            autoLinked
+          );
+        };
+        void showCaptureResult();
+        if (id && isSafeRehearsalText(payload.text)) {
+          const rehearsal = useNotesStore.getState().settings.onboarding;
+          if (
+            rehearsal.rehearsalActive &&
+            rehearsal.rehearsalStep === "capture"
+          ) {
+            useNotesStore.getState().transitionOnboarding({
+              type: "sampleCaptured",
+              noteId: id,
+            });
+          }
+        }
+        if (result === "added" && id) {
+          void enrichLinkMeta(id);
+          captureHistory.push({ id, dataGeneration: currentDataGeneration() });
+          setPendingUndo(() => {
+            const entry = captureHistory.pop();
+            const undoId = entry?.id;
+            const exists =
+              entry &&
+              matchesDataGeneration(entry.dataGeneration) &&
+              undoId &&
+              useNotesStore.getState().notes.some((n) => n.id === undoId);
+            if (exists && undoId) {
+              useNotesStore.getState().deleteNotes([undoId], "撤销捕获");
+              void api.hudFeedback("undone", "已撤销");
+            } else {
+              void api.hudFeedback("undone", "没有可撤销的捕获");
+            }
+          });
+          useNotesStore.getState().markOnboarding({ captured: true });
+          useUIStore.getState().setFlashId(id);
+          window.setTimeout(() => {
+            if (useUIStore.getState().flashId === id) {
+              useUIStore.getState().setFlashId(null);
+            }
+          }, 1800);
+        }
+        return result;
+      };
+
       const captureSettings = useNotesStore.getState().settings;
-      const aliasRestore =
+      const shouldRestoreAliases =
         payload.contentKind !== "image" &&
         captureSettings.aliasEntitiesEnabled &&
-        captureSettings.aliasAutoRestoreOnCapture
+        captureSettings.aliasAutoRestoreOnCapture;
+
+      if (!payload.html) {
+        const aliasRestore = shouldRestoreAliases
           ? restoreAliases(payload.text, captureSettings.aliasEntities)
           : null;
-      const captureText = aliasRestore?.text ?? payload.text;
-      const { result, id } = useNotesStore.getState().addNote(captureText, {
-        sourceApp: payload.appName ?? undefined,
-        sourceBundle: payload.bundleId ?? undefined,
-        // 文本不写死 kind，交给 addNote 检测（URL → 链接卡）
-        kind: payload.contentKind === "image" ? "image" : undefined,
-        imageFile: payload.imageFile ?? undefined,
-        imageW: payload.imageW ?? undefined,
-        imageH: payload.imageH ?? undefined,
-      });
-      if (result === "empty") return;
-      const showCaptureResult = async () => {
-        let associationSuggested = false;
-        let autoLinked = false;
-        if (result === "added" && id && payload.bundleId) {
-          try {
-            const events = await getRecentDeliveryEventsCached(100);
-            const current = useNotesStore.getState().notes.find((note) => note.id === id);
-            const candidates = current
-              ? deliveryCandidatesForCapturedNote(current, events)
-              : [];
-            // 占位符指纹（对恢复前原文判定）+ 唯一候选 = 双重证据，免确认自动归位；
-            // 只有时间窗证据时维持「右键确认」建议，多候选不动
-            if (
-              candidates.length === 1 &&
-              deliveryPlaceholderEvidence(candidates[0].deliveryId, payload.text)
-            ) {
-              autoLinked = await linkCapturedNoteToDelivery(id, candidates[0]);
-            }
-            associationSuggested = !autoLinked && candidates.length === 1;
-          } catch {
-            // 建议是增强能力；活动记录不可用不能吞掉捕获 HUD。
-          }
-        }
-        void api.showCaptureHud(
-          result === "duplicate" ? "duplicate" : "added",
-          previewOf(captureText),
-          payload.clipboardWarning,
-          associationSuggested,
-          aliasRestore?.restoredCount ?? null,
-          autoLinked
+        commitCapture(
+          aliasRestore?.text ?? payload.text,
+          aliasRestore?.restoredCount ?? null
         );
-      };
-      void showCaptureResult();
-      if (id && isSafeRehearsalText(payload.text)) {
-        const rehearsal = useNotesStore.getState().settings.onboarding;
-        if (
-          rehearsal.rehearsalActive &&
-          rehearsal.rehearsalStep === "capture"
-        ) {
-          useNotesStore.getState().transitionOnboarding({
-            type: "sampleCaptured",
-            noteId: id,
-          });
-        }
+        return;
       }
-      if (result === "added" && id) {
-        void enrichLinkMeta(id);
-        captureHistory.push({ id, dataGeneration: currentDataGeneration() });
-        setPendingUndo(() => {
-          const entry = captureHistory.pop();
-          const undoId = entry?.id;
-          const exists =
-            entry &&
-            matchesDataGeneration(entry.dataGeneration) &&
-            undoId &&
-            useNotesStore.getState().notes.some((n) => n.id === undoId);
-          if (exists && undoId) {
-            useNotesStore.getState().deleteNotes([undoId], "撤销捕获");
-            void api.hudFeedback("undone", "已撤销");
-          } else {
-            void api.hudFeedback("undone", "没有可撤销的捕获");
+
+      // HTML 图片可能异步落盘：持有 generation 租约，若数据位置在此期间变化，
+      // 丢弃结果并立即回收刚生成的媒体，绝不写进新账本。
+      const lease = beginDataGenerationLease();
+      void materializeRichCapture({
+        plainText: payload.text,
+        html: payload.html,
+        sourceUrl: payload.sourceUrl,
+      })
+        .then((rich) => {
+          if (!matchesDataGeneration(lease.generation) || isDataOperationLocked()) {
+            scheduleMediaGc(
+              rich.contentBlocks.flatMap((block) =>
+                block.type === "image" ? [block.file] : []
+              ),
+              0
+            );
+            return;
           }
-        });
-        useNotesStore.getState().markOnboarding({ captured: true });
-        useUIStore.getState().setFlashId(id);
-        window.setTimeout(() => {
-          if (useUIStore.getState().flashId === id) {
-            useUIStore.getState().setFlashId(null);
+          const restored = shouldRestoreAliases
+            ? restoreRichCaptureAliases(rich, captureSettings.aliasEntities)
+            : { ...rich, restoredCount: 0 };
+          const captureWarning = [
+            payload.clipboardWarning,
+            restored.omittedImageCount > 0
+              ? `${restored.omittedImageCount} 张图片未能保存`
+              : null,
+          ]
+            .filter((warning): warning is string => !!warning)
+            .join(" · ") || null;
+          const result = commitCapture(
+            restored.text,
+            shouldRestoreAliases ? restored.restoredCount : null,
+            restored.contentBlocks,
+            captureWarning
+          );
+          if (result === "empty" && restored.omittedImageCount > 0) {
+            tip("warn", `${restored.omittedImageCount} 张图片未能保存`);
           }
-        }, 1800);
-      }
+        })
+        .catch(() => {
+          // 富读取失败时仍保存同一 generation 的 AX/plain fallback，不吞正文。
+          if (!matchesDataGeneration(lease.generation) || isDataOperationLocked()) {
+            return;
+          }
+          const restored = shouldRestoreAliases
+            ? restoreAliases(payload.text, captureSettings.aliasEntities)
+            : null;
+          const fallbackWarning = [
+            payload.clipboardWarning,
+            "图片读取失败，已保存文字",
+          ].filter(Boolean).join(" · ");
+          const result = commitCapture(
+            restored?.text ?? payload.text,
+            restored?.restoredCount ?? null,
+            undefined,
+            fallbackWarning
+          );
+          if (result === "empty") {
+            tip("warn", "图片读取失败，未保存到可读取内容");
+          }
+        })
+        .finally(lease.release);
     });
     return () => {
       unlisten.then((fn) => fn());
@@ -1184,16 +1329,68 @@ export default function App() {
       // 暂停收集期间丢弃（到期自动恢复，无需额外定时器）
       const pauseUntil = useNotesStore.getState().settings.clipPauseUntil;
       if (pauseUntil && Date.now() < pauseUntil) return;
-      const removed = useNotesStore.getState().addClipNote(p.text, {
-        sourceApp: p.appName ?? undefined,
-        sourceBundle: p.bundleId ?? undefined,
-        kind: p.contentKind === "image" ? "image" : "text",
-        imageFile: p.imageFile ?? undefined,
-        imageW: p.imageW ?? undefined,
-        imageH: p.imageH ?? undefined,
-      });
-      // 被裁剪卡片的图片附件落盘清理（尽力而为）
-      scheduleMediaGc(removed);
+      const capturedAt = Number.isFinite(p.capturedAtMs)
+        ? p.capturedAtMs
+        : Date.now();
+      if (!p.html) {
+        const removed = useNotesStore.getState().addClipNote(p.text, {
+          sourceApp: p.appName ?? undefined,
+          sourceBundle: p.bundleId ?? undefined,
+          kind: p.contentKind === "image" ? "image" : "text",
+          imageFile: p.imageFile ?? undefined,
+          imageW: p.imageW ?? undefined,
+          imageH: p.imageH ?? undefined,
+          createdAt: capturedAt,
+        });
+        scheduleMediaGc(removed);
+        return;
+      }
+
+      // HTML 的图片下载可能比下一次复制慢：持有数据 generation 租约，完成后
+      // 仍按复制时刻插入。pasteboard 许可已在 Rust 发事件前释放，不阻塞后续复制。
+      const lease = beginDataGenerationLease();
+      void materializeRichCapture({
+        plainText: p.text,
+        html: p.html,
+        sourceUrl: p.sourceUrl,
+      })
+        .then((rich) => {
+          if (!matchesDataGeneration(lease.generation) || isDataOperationLocked()) {
+            scheduleMediaGc(
+              rich.contentBlocks.flatMap((block) =>
+                block.type === "image" ? [block.file] : []
+              ),
+              0
+            );
+            return;
+          }
+          const removed = useNotesStore.getState().addClipNote(rich.text, {
+            sourceApp: p.appName ?? undefined,
+            sourceBundle: p.bundleId ?? undefined,
+            contentBlocks: rich.contentBlocks,
+            createdAt: capturedAt,
+          });
+          scheduleMediaGc(removed);
+          if (rich.omittedImageCount > 0) {
+            tip(
+              "warn",
+              `已保存可读取内容，${rich.omittedImageCount} 张图片未能保存`
+            );
+          }
+        })
+        .catch(() => {
+          // 富读取失败时仍保存同一 generation 的 plain fallback，不吞正文。
+          if (matchesDataGeneration(lease.generation) && !isDataOperationLocked()) {
+            useNotesStore.getState().addClipNote(p.text, {
+              sourceApp: p.appName ?? undefined,
+              sourceBundle: p.bundleId ?? undefined,
+              kind: "text",
+              createdAt: capturedAt,
+            });
+            tip("warn", "图片读取失败，已保存文字");
+          }
+        })
+        .finally(lease.release);
     });
     return () => {
       unlisten.then((fn) => fn());
@@ -1471,14 +1668,7 @@ export default function App() {
       }
     });
     const subs = [
-      listen<{
-        id: string;
-        text: string;
-        images?: string[];
-        discardedImages?: string[];
-        sessionId?: string;
-        dataGeneration: number;
-      }>("toskr://note-edit", (e) => {
+      listen<NoteEditPayload>("toskr://note-edit", (e) => {
         if (
           isDataOperationLocked() ||
           !matchesDataGeneration(e.payload.dataGeneration)
@@ -1490,13 +1680,19 @@ export default function App() {
           );
           return;
         }
-        useNotesStore
-          .getState()
-          .updateNoteText(e.payload.id, e.payload.text, e.payload.images);
+        if (e.payload.format === "blocks") {
+          useNotesStore
+            .getState()
+            .updateNoteContent(e.payload.id, e.payload.contentBlocks);
+        } else {
+          useNotesStore
+            .getState()
+            .updateNoteText(e.payload.id, e.payload.text, e.payload.images);
+          scheduleMediaGc(e.payload.discardedImages ?? [], 0);
+        }
         if (e.payload.sessionId) {
           releaseEditorSessionMedia(e.payload.sessionId);
         }
-        scheduleMediaGc(e.payload.discardedImages ?? [], 0);
         void enrichLinkMeta(e.payload.id);
         tip("ok", "已保存");
       }),
@@ -1698,23 +1894,79 @@ export default function App() {
     };
   }, []);
 
-  // 首次使用（引导未完成）：自动弹出面板并钉住——新用户不知道双击 ⇧，
-  // 面板必须自己出现且不因失焦消失，三步上手引导才有机会被看到。
-  // 必须等水合完成再判断，否则老用户会被默认值误弹（onboarding 默认 done=false）
+  // 首个数据档案只消费一次默认态：先固定，再启用伴随磁吸，最后显示面板。
+  // 独立标记与 onboarding 解耦，避免升级用户或重跑安全演练时被改写磁吸偏好。
+  // Native 任一步失败都不落“已完成”，下次启动会幂等重试；老档案由 v17 迁移
+  // 直接标记完成。数据运行时解锁前禁止写入，避免初始化穿透目录事务闸门。
   useEffect(() => {
-    const showForFirstRun = () => {
-      const current = useNotesStore.getState().settings.onboarding;
+    let alive = true;
+    let applying = false;
+
+    const showActiveOnboarding = (settings: Settings) => {
+      const current = settings.onboarding;
       if (current.done || !current.rehearsalActive) return;
       useUIStore.getState().setPinned(true);
       useUIStore.getState().setOpen(true);
       void api.showPanel();
     };
+
+    const reconcileInitialPanel = () => {
+      if (
+        !alive ||
+        applying ||
+        isDataOperationLocked() ||
+        !useNotesStore.persist.hasHydrated()
+      ) return;
+
+      const settings = useNotesStore.getState().settings;
+      if (settings.initialPanelSetupDone) {
+        showActiveOnboarding(settings);
+        return;
+      }
+
+      applying = true;
+      const side = settings.sidebarEdge === "left" ? "left" : "right";
+      useNotesStore.getState().setSettings({
+        companionEnabled: true,
+        rightSidebar: false,
+        panelFreeX: null,
+        panelFreeY: null,
+      });
+      useUIStore.getState().setPinned(true);
+      useUIStore.getState().setOpen(true);
+
+      void (async () => {
+        try {
+          // 配置顺序很重要：先解除边栏/自由位置，再让 companion 以最终状态
+          // 计算首次布局；showPanel 最后执行，避免先按独立模式闪现一帧。
+          await api.setPanelPinned(true);
+          await api.setPanelFreePos(null, null);
+          await api.setSidebarMode(false, settings.sidebarEdge);
+          await api.setCompanionGap(settings.companionGap);
+          await api.setCompanionConfig(true, settings.companionApps, side);
+          await api.showPanel();
+          if (!alive || isDataOperationLocked()) return;
+          useNotesStore.getState().setSettings({ initialPanelSetupDone: true });
+          await flushPendingWrites();
+        } catch {
+          // 打开面板优先于增强布局；未持久完成的标记会在下次启动从磁盘重试。
+          if (alive) void api.showPanel().catch(() => {});
+        } finally {
+          applying = false;
+        }
+      })();
+    };
+
     if (useNotesStore.persist.hasHydrated()) {
-      showForFirstRun();
-      return;
+      reconcileInitialPanel();
     }
-    const unsub = useNotesStore.persist.onFinishHydration(() => showForFirstRun());
-    return unsub;
+    const unsub = useNotesStore.persist.onFinishHydration(reconcileInitialPanel);
+    window.addEventListener(DATA_RUNTIME_READY_EVENT, reconcileInitialPanel);
+    return () => {
+      alive = false;
+      unsub();
+      window.removeEventListener(DATA_RUNTIME_READY_EVENT, reconcileInitialPanel);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1924,8 +2176,12 @@ export default function App() {
   }, [taskBuckets, taskGroupFilter]);
   const taskNavIds = useMemo(
     () => [
-      ...taskBuckets.overdue.map((t) => t.id),
-      ...taskBuckets.sparks.map((t) => t.id),
+      ...(doneOpen[TASK_OVERDUE_COLLAPSED_KEY]
+        ? []
+        : taskBuckets.overdue.map((t) => t.id)),
+      ...(doneOpen[TASK_SPARKS_COLLAPSED_KEY]
+        ? []
+        : taskBuckets.sparks.map((t) => t.id)),
       ...taskBuckets.groups.flatMap((g) =>
         g.section.collapsed ? [] : g.tasks.map((t) => t.id)
       ),
@@ -1979,7 +2235,11 @@ export default function App() {
 
   // 可见顺序同步到 uiStore，供 Shift 范围选中使用
   useEffect(() => {
-    useUIStore.getState().setNavIds(navIds);
+    const ui = useUIStore.getState();
+    ui.setNavIds(navIds);
+    if (ui.focusedId && !navIds.includes(ui.focusedId)) {
+      ui.setFocusedId(null);
+    }
   }, [navIds]);
 
   const activeCount = notes.filter((n) => !n.done).length;
@@ -2616,7 +2876,7 @@ export default function App() {
                     className={cn(
                       "flex shrink-0 items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5",
                       "text-micro font-medium text-primary outline-none",
-                      "hover:bg-primary/15 focus-visible:ring-2 focus-visible:ring-primary/50"
+                      "hover:bg-primary/15 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
                     )}
                   >
                     <ArrowUpCircle className="size-3" /> 更新
@@ -2625,7 +2885,7 @@ export default function App() {
                 {/* 横栏：页签固定在标题旁（左），分组胶囊独立居中——
                     切页时页签位置不动，胶囊各自居中，互不牵连 */}
                 {horizontalBar && (
-                  <div role="tablist" aria-label="页面" className="flex shrink-0 items-center gap-1">
+                  <div role="tablist" aria-label="页面" className="surface-inset elevation-1 flex shrink-0 items-center rounded-lg p-0.5">
                     {pageTabs}
                   </div>
                 )}
@@ -2965,7 +3225,7 @@ export default function App() {
                 <div
                   role="tablist"
                   aria-label="页面"
-                  className="mx-3 mb-1.5 flex items-center gap-1"
+                  className="surface-inset elevation-1 mx-3 mb-1.5 inline-flex w-fit items-center self-start rounded-lg p-0.5"
                 >
                   {pageTabs}
                 </div>
@@ -2975,7 +3235,7 @@ export default function App() {
 
               {searchOpen && page !== "tasks" && (
                 <div className="surface-inset mx-3 mb-1.5 flex items-center gap-1.5 rounded-lg border border-foreground/10 px-2 py-1 focus-within:border-primary/50">
-                  <Search className="size-3 shrink-0 text-muted-foreground/70" />
+                  <Search className="size-3 shrink-0 text-muted-foreground" />
                   <input
                     ref={searchInputRef}
                     autoFocus
@@ -2987,7 +3247,7 @@ export default function App() {
                         useUIStore.getState().setSearchOpen(false);
                       }
                     }}
-                    className="h-5 w-full bg-transparent text-body outline-none placeholder:text-muted-foreground/60"
+                    className="h-5 w-full bg-transparent text-body outline-none placeholder:text-muted-foreground"
                   />
                   {q && (
                     <span className="shrink-0 text-micro tabular-nums text-muted-foreground">
@@ -3013,7 +3273,7 @@ export default function App() {
                 {horizontalBar ? (
                   <StripScroller>
                     {clipNotes.length === 0 ? (
-                      <p className="px-4 py-6 text-body text-muted-foreground/60">
+                      <p className="px-4 py-6 text-body text-muted-foreground">
                         {settings.clipHistory ? "还没有剪贴板记录" : "剪贴板历史未开启"}
                       </p>
                     ) : (
@@ -3086,7 +3346,7 @@ export default function App() {
                                   bi === 0 ? "pt-0.5" : "pt-2.5"
                                 )}
                               >
-                                <span className="text-micro font-medium text-muted-foreground/50">
+                                <span className="text-micro font-medium text-muted-foreground">
                                   {band}
                                 </span>
                                 <span className="h-px flex-1 bg-border/60" />
@@ -3125,7 +3385,7 @@ export default function App() {
                   <>
                   <StripScroller>
                     {stripNotes.length === 0 ? (
-                      <p className="px-4 py-6 text-body text-muted-foreground/60">
+                      <p className="px-4 py-6 text-body text-muted-foreground">
                         没有未完成的笔记卡片
                       </p>
                     ) : (
@@ -3197,7 +3457,7 @@ export default function App() {
                       {!q && (
                         <button
                           onClick={() => useNotesStore.getState().addSection()}
-                          className="mb-2 ml-2 flex items-center gap-1 rounded-md px-1.5 py-1 text-label text-muted-foreground/60 outline-none hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50 dark:hover:bg-white/10"
+                          className="mb-2 ml-2 flex items-center gap-1 rounded-md px-1.5 py-1 text-label text-muted-foreground outline-none hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:hover:bg-white/10"
                         >
                           <Plus className="size-3" /> 新建分组
                         </button>
@@ -3216,7 +3476,7 @@ export default function App() {
                     <>
                       <StripScroller>
                         {stripTasks.length === 0 ? (
-                          <p className="px-4 py-6 text-body text-muted-foreground/60">
+                          <p className="px-4 py-6 text-body text-muted-foreground">
                             没有进行中的任务
                           </p>
                         ) : (
@@ -3286,7 +3546,7 @@ function ClipLoadMore({
   return (
     <div
       ref={ref}
-      className="py-1 text-center text-label text-muted-foreground/50"
+      className="py-1 text-center text-label text-muted-foreground"
     >
       还有 {remaining} 条…
     </div>
@@ -3361,12 +3621,14 @@ function PageTab({
       title={`切换到${PAGE_LABEL[id]}；双击返回列表起点`}
       className={cn(
         "relative flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-label outline-none",
-        "transition-[color,background-color,transform] duration-100",
-        "focus-visible:ring-2 focus-visible:ring-primary/50 active:scale-[0.97]",
+        "transition-[color,background-color,transform] duration-(--duration-control)",
+        focusRing,
+        "active:scale-[0.97]",
         isDragging && "cursor-grabbing opacity-80",
         active
-          ? // 中性灰胶囊（Raycast 式，2026-08 用户选定）：无描边无蓝色，纯灰阶承托
-            "border-transparent bg-black/[0.07] font-medium text-foreground dark:bg-white/[0.1]"
+          ? // 浮起 thumb（2026-08-13 随 Segmented 轨道化联动，替代灰胶囊）：
+            // 白片+微投影承托选中，仍无描边无蓝色；轨道见 tablist 容器
+            "border-transparent bg-segmented-thumb font-medium text-foreground shadow-(--segmented-thumb-shadow)"
           : "border-transparent text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
       )}
     >

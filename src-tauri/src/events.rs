@@ -21,6 +21,12 @@ pub enum TriggerPayload {
         /// 内容类型："text" | "image"（外层 kind 已被枚举标签占用）
         content_kind: String,
         text: String,
+        /// 与 text 来自同一 pasteboard item / generation 的富表示。
+        html: Option<String>,
+        /// 浏览器声明的来源 URL，仅供前端解析相对图片地址。
+        source_url: Option<String>,
+        /// 来源侧捕获时间；异步图片本地化不得改变卡片时序。
+        captured_at_ms: i64,
         /// 图片附件文件名（kind=image 时有值）
         image_file: Option<String>,
         image_w: Option<u32>,
@@ -93,5 +99,28 @@ mod tests {
         assert_eq!(payload["kind"], "toggle");
         assert_eq!(payload["source"], "doubleTap");
         assert_eq!(payload["force"], true);
+    }
+
+    #[test]
+    fn rich_capture_serializes_same_snapshot_fields_for_frontend() {
+        let payload = serde_json::to_value(TriggerPayload::Captured {
+            content_kind: "text".into(),
+            text: "前\n后".into(),
+            html: Some("<p>前</p><img src=\"data:image/png;base64,AA==\"><p>后</p>".into()),
+            source_url: Some("https://example.test/page".into()),
+            captured_at_ms: 123,
+            image_file: None,
+            image_w: None,
+            image_h: None,
+            app_name: Some("Browser".into()),
+            bundle_id: Some("test.browser".into()),
+            clipboard_warning: None,
+        })
+        .unwrap();
+
+        assert_eq!(payload["kind"], "captured");
+        assert_eq!(&payload["html"].as_str().unwrap()[..3], "<p>");
+        assert_eq!(payload["sourceUrl"], "https://example.test/page");
+        assert_eq!(payload["capturedAtMs"], 123);
     }
 }

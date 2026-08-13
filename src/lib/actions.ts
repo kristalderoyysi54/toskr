@@ -42,10 +42,12 @@ import {
 } from "@/lib/editorSessionMedia";
 import {
   CLIPBOARD_ID,
+  noteContentBlocks,
   noteImages,
   orderedCheckedNotes,
   useNotesStore,
   type Note,
+  type NoteContentBlock,
 } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
 import { isDataOperationLocked } from "@/store/dataOperationStore";
@@ -81,13 +83,39 @@ export type NotePreviewPayload = {
   sourceBundle: string | null;
   /** 非卡片预览可覆盖标题下的来源说明。 */
   subtitle?: string | null;
+  /** 主面板按卡片通栏同款规则决议的标题栏定色（分组色优先/着色关闭时中性灰）；
+   *  null/缺省 = 详情窗用应用主色兜底（与卡片 sectionColor ?? icon.color 一致）。 */
+  headerColor?: string | null;
   /** 图片附件（组合卡在详情窗展示缩略条；点击 Quick Look）。 */
   images: string[];
+  /** 有序富内容；缺省表示普通/旧式扁平卡。 */
+  contentBlocks?: NoteContentBlock[] | null;
   /** true = 打开即进入编辑态。 */
   edit: boolean;
   /** 合并发送来源等临时视图不可编辑、移除附件或再次发送。 */
   readOnly?: boolean;
 };
+
+/**
+ * 独立详情窗的无歧义写回协议。flat 允许旧编辑器改正文/尾部附件；blocks
+ * 只接受权威有序块，主窗口据此选择对应 Store 原语，禁止富卡被误压平。
+ */
+export type NoteEditPayload = {
+  id: string;
+  sessionId?: string;
+  dataGeneration: number;
+} & (
+  | {
+      format: "flat";
+      text: string;
+      images?: string[];
+      discardedImages?: string[];
+    }
+  | {
+      format: "blocks";
+      contentBlocks: NoteContentBlock[];
+    }
+);
 
 /** 详情窗最近展示的卡 id（Space 开合判定用；窗口被 Esc/点 X 关掉也无碍——
  *  toggle 前会实测窗口可见性）。 */
@@ -309,8 +337,16 @@ export async function toggleNoteDetail(id: string) {
  * 图片编辑直接进入原尺寸预览窗的备注编辑态。
  */
 export function openNoteDetail(id: string, edit = false) {
-  const note = useNotesStore.getState().notes.find((n) => n.id === id);
+  const { notes, sections, settings } = useNotesStore.getState();
+  const note = notes.find((n) => n.id === id);
   if (!note) return;
+  // 与卡片通栏同款取色：分组色优先（剪贴卡恒不取）；着色关闭时定死中性灰，
+  // 避免详情窗再用应用主色兜底出现两边颜色不一致
+  const sectionColor =
+    note.sectionId === CLIPBOARD_ID
+      ? undefined
+      : sections.find((sec) => sec.id === note.sectionId)?.color;
+  const headerColor = settings.cardTint ? sectionColor ?? null : "#5b5b60";
   if (note.kind === "image") {
     if (edit && note.imageFile) {
       void api.quickLook(noteImages(note), 0, {
@@ -334,7 +370,9 @@ export function openNoteDetail(id: string, edit = false) {
     title: note.title ?? null,
     sourceApp: note.sourceApp ?? null,
     sourceBundle: note.sourceBundle ?? null,
+    headerColor,
     images: noteImages(note),
+    contentBlocks: note.contentBlocks ? noteContentBlocks(note) : null,
     edit,
   });
 }
@@ -389,6 +427,7 @@ export function openNoteBatchDetail(
     sourceApp: null,
     sourceBundle: null,
     images: content.imageFiles,
+    contentBlocks: null,
     edit: false,
     readOnly: true,
   });
@@ -497,11 +536,25 @@ export function mergeNoteWithChecked(noteId: string) {
 }
 
 /** 把指定笔记复制为编号列表到系统剪贴板。 */
-/** 复制单条笔记内容：图片卡复制图片本体（多图取第一张），其余复制文本。 */
+/** 复制单条笔记内容：有序图文写 plain+HTML；单图仍写原生 PNG。 */
 export async function copyNoteContent(note: Note) {
   const images = noteImages(note);
+  const blocks = noteContentBlocks(note);
   try {
-    if (note.kind === "image" && images.length > 0) {
+    if (blocks.some((block) => block.type === "image") && blocks.length > 1) {
+      await api.copyRichClipboard(
+        blocks.map((block) =>
+          block.type === "text"
+            ? { kind: "text" as const, text: block.text }
+            : {
+                kind: "image" as const,
+                file: block.file,
+                ...(block.alt ? { alt: block.alt } : {}),
+              }
+        )
+      );
+      tip("ok", `已复制图文（${images.length} 张图）`);
+    } else if (note.kind === "image" && images.length > 0) {
       await api.copyImage(images[0]);
       tip(
         "ok",

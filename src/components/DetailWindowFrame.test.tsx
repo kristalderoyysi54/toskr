@@ -18,7 +18,7 @@ describe("DetailWindowFrame", () => {
     expect(html).toContain("正文");
   });
 
-  it("图片详情窗使用永暗 lightbox 边框语义", () => {
+  it("图片详情窗使用可随主题切换的 lightbox 边框语义", () => {
     const html = renderToStaticMarkup(
       <DetailWindowFrame tone="lightbox">图片</DetailWindowFrame>
     );

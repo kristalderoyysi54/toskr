@@ -127,7 +127,7 @@ export default function HudView() {
                       className={cn(
                         "flex shrink-0 items-center gap-1 rounded-sm border border-paper-foreground/25 px-1.5 py-0.5 outline-none",
                         "text-micro text-paper-foreground/75 transition-opacity hover:bg-paper-foreground/10",
-                        "focus-visible:ring-2 focus-visible:ring-primary/50",
+                        "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
                         hovered ? "opacity-100" : "pointer-events-none opacity-0"
                       )}
                     >

@@ -33,6 +33,14 @@ export interface AiKeyStatus {
   updatedAtMs: number | null;
 }
 
+/** 独立图片预览关联的权威来源卡；缺省表示纯文件/隐私核验预览。 */
+export interface ImagePreviewSource {
+  id: string;
+  text: string;
+  dataGeneration: number;
+  edit?: boolean;
+}
+
 export function isAiKeyStatus(value: unknown): value is AiKeyStatus {
   if (!value || typeof value !== "object") return false;
   const status = value as Partial<AiKeyStatus>;
@@ -56,6 +64,12 @@ export interface EdgeHideStatePayload {
 export interface ClipPayload {
   contentKind: string;
   text: string;
+  /** 同一 generation 的 HTML 表示；只交给无行为解析器，不直接渲染。 */
+  html: string | null;
+  /** 浏览器声明的来源 URL，仅用于解析相对图片地址。 */
+  sourceUrl: string | null;
+  /** watcher 观察到复制的时间，避免异步图片落盘打乱历史顺序。 */
+  capturedAtMs: number;
   imageFile: string | null;
   imageW: number | null;
   imageH: number | null;
@@ -74,6 +88,12 @@ export type TriggerPayload =
       /** 内容类型："text" | "image" */
       contentKind: string;
       text: string;
+      /** 与 text 来自同一 pasteboard item / generation 的富表示。 */
+      html: string | null;
+      /** 浏览器声明的来源 URL，仅用于解析相对图片地址。 */
+      sourceUrl: string | null;
+      /** 来源侧捕获时间，避免异步图片落盘改变卡片时序。 */
+      capturedAtMs: number;
       imageFile: string | null;
       imageW: number | null;
       imageH: number | null;
@@ -127,6 +147,26 @@ export interface PrevAppInfo {
 export interface LinkMeta {
   title: string | null;
   icon: string | null;
+}
+
+export type RichClipboardWriteBlock =
+  | { kind: "text"; text: string }
+  | { kind: "image"; file: string; alt?: string };
+
+export interface LocalizedRichImage {
+  index: number;
+  ok: boolean;
+  file?: string;
+  width?: number;
+  height?: number;
+  reason?: string;
+}
+
+export interface RichClipboardWriteResult {
+  changeCount: number;
+  plainBytes: number;
+  htmlBytes: number;
+  imageCount: number;
 }
 
 export type DataLocationKind =
@@ -513,6 +553,13 @@ export const api = {
   showPanel: (shortcutHold = false) => invoke("show_panel", { shortcutHold }),
   hidePanel: (restoreFocus: boolean) => invoke("hide_panel", { restoreFocus }),
   copyText: (text: string) => invoke("copy_text", { text }),
+  copyRichClipboard: (blocks: RichClipboardWriteBlock[]) =>
+    invoke<RichClipboardWriteResult>("copy_rich_clipboard", { blocks }),
+  localizeRichClipboardImages: (sources: string[], sourceUrl?: string | null) =>
+    invoke<LocalizedRichImage[]>("localize_rich_clipboard_images", {
+      sources,
+      sourceUrl: sourceUrl ?? null,
+    }),
   getTargetSnapshot: () => invoke<TargetSnapshot>("get_target_snapshot"),
   refreshTargetSnapshot: () => invoke<TargetSnapshot>("refresh_target_snapshot"),
   validateTargetSnapshot: (targetToken: string | null) =>
@@ -532,8 +579,8 @@ export const api = {
   cleanupRedactedImages: (files: string[]) =>
     invoke<void>("cleanup_redacted_images", { files }),
   clearRedactedImages: () => invoke<void>("clear_redacted_images"),
-  deliveryImageDataUrl: (file: string) =>
-    invoke<string | null>("delivery_image_data_url", { file }),
+  deliveryImageDataUrl: (file: string, fullSize = false) =>
+    invoke<string | null>("delivery_image_data_url", { file, fullSize }),
   axTrusted: (prompt: boolean) => invoke<boolean>("ax_trusted", { prompt }),
   tapStatus: () =>
     invoke<{ installed: boolean; receiving: boolean; listening: boolean }>("tap_status"),
@@ -616,6 +663,8 @@ export const api = {
     invoke("set_panel_vertical", { topOffset, height }),
   setStealth: (on: boolean) => invoke("set_stealth", { on }),
   setSound: (enabled: boolean) => invoke("set_sound", { enabled }),
+  setHudDuration: (durationMs: number) =>
+    invoke("set_hud_duration", { durationMs }),
   setDoubleTapMode: (captureOnly: boolean) =>
     invoke("set_double_tap_mode", { captureOnly }),
   setClipWatch: (enabled: boolean) => invoke("set_clip_watch", { enabled }),
@@ -665,7 +714,7 @@ export const api = {
   quickLook: (
     files: string[],
     index = 0,
-    note?: { id: string; text: string; dataGeneration: number; edit?: boolean }
+    note?: ImagePreviewSource
   ) =>
     invoke("quick_look", {
       files,

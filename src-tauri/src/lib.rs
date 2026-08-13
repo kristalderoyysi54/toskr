@@ -16,6 +16,7 @@ mod ai;
 mod linkmeta;
 mod pasteboard;
 mod privacy;
+mod rich_clipboard;
 mod state;
 mod storage;
 mod target;
@@ -180,6 +181,8 @@ pub fn run() {
             commands::show_panel,
             commands::hide_panel,
             commands::copy_text,
+            commands::copy_rich_clipboard,
+            commands::localize_rich_clipboard_images,
             commands::get_target_snapshot,
             commands::refresh_target_snapshot,
             commands::validate_target_snapshot,
@@ -215,6 +218,7 @@ pub fn run() {
             commands::set_panel_vertical,
             commands::set_stealth,
             commands::set_sound,
+            commands::set_hud_duration,
             commands::set_sidebar_mode,
             commands::is_self_frontmost,
             commands::set_panel_topmost,

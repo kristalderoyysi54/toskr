@@ -2,6 +2,7 @@ import { buildDeliveryDraft } from "./buildDraft";
 import {
   executeDeliveryDraft,
   inspectDeliveryDraft,
+  inspectDeliveryDraftFreshness,
   inspectDeliveryDraftNonTarget,
   nextDeliveryDraftRevision,
   rebaseDeliveryDraftForRetry,
@@ -11,7 +12,7 @@ import type {
   DeliveryDraft,
   DeliveryDraftBuildState,
 } from "./types";
-import type { SendDeliveryResult } from "@/lib/tauri";
+import type { SendDeliveryResult, TargetSnapshot } from "@/lib/tauri";
 import type { DeliveryFormat } from "@/lib/targetProfiles";
 import {
   evaluateDeliveryDraftFirewall,
@@ -227,6 +228,155 @@ export function recoverOpenPreflightTarget(
     revision: nextDeliveryDraftRevision(draft.revision),
     targetSnapshot: { ...target.snapshot },
   });
+  return true;
+}
+
+type PreflightTargetRebindState = Pick<
+  DeliveryDraftBuildState,
+  | "targetSnapshot"
+  | "profileResolution"
+  | "firewallEnabled"
+  | "firewallDisabledWarnCategories"
+>;
+
+/**
+ * 显式确认新目标后的纯重绑：保留用户本次正文、模板、格式和图片遮挡，
+ * 但重算目标方案与回车策略，并撤销所有绑定旧 target token 的原文放行。
+ */
+export function rebindPreflightDraftTarget(
+  draft: DeliveryDraft,
+  state: PreflightTargetRebindState,
+  revision: number
+): DeliveryDraft {
+  const profile = state.profileResolution.profile;
+  const firewallEnabled = draft.safeRehearsal || state.firewallEnabled;
+  const disabledWarnCategories = draft.safeRehearsal
+    ? []
+    : [...state.firewallDisabledWarnCategories];
+  const firewallConfigChanged =
+    draft.firewallEnabled !== firewallEnabled ||
+    draft.firewallDisabledWarnCategories.length !== disabledWarnCategories.length ||
+    draft.firewallDisabledWarnCategories.some(
+      (value, index) => value !== disabledWarnCategories[index]
+    );
+  // 旧文本扫描回执绑定 target token；正在扫描时回到 idle，让现有协调器重启。
+  const resetTextScan = firewallConfigChanged || draft.firewallStatus === "scanning";
+  const imageFirewall = draft.imageFirewall.map((item) => ({
+    ...item,
+    status: firewallConfigChanged
+      ? (firewallEnabled ? "idle" as const : "disabled" as const)
+      : item.status,
+    findings: firewallConfigChanged ? [] : [...item.findings],
+    rawConfirmation: null,
+    failureMessage: firewallConfigChanged ? null : item.failureMessage,
+  }));
+  const enterPolicy = profile.enterPolicy;
+  return {
+    ...draft,
+    revision,
+    targetSnapshot: state.targetSnapshot ? { ...state.targetSnapshot } : null,
+    targetProfileId: state.profileResolution.profileId,
+    promptGroupId: state.profileResolution.promptGroup.id,
+    profileSource: state.profileResolution.source,
+    profileDefaultFormat: profile.defaultFormat,
+    profileKeepPanel: profile.keepPanel,
+    privacyPolicy: draft.safeRehearsal
+      ? "requireRedaction"
+      : profile.privacyPolicy,
+    firewallEnabled,
+    firewallDisabledWarnCategories: disabledWarnCategories,
+    firewallStatus: resetTextScan
+      ? (firewallEnabled ? "idle" : "disabled")
+      : draft.firewallStatus,
+    findings: resetTextScan ? [] : [...draft.findings],
+    privacyDecision: {
+      excludedFindingIds: [],
+      rawConfirmation: null,
+      replacedCount: draft.privacyDecision.replacedCount,
+    },
+    imageFirewall,
+    imageFiles: imageFirewall.map((item) => item.sendFile),
+    enterPolicy,
+    enterDecisionConfirmed: draft.safeRehearsal || enterPolicy !== "confirm",
+    pressEnter: draft.safeRehearsal ? false : enterPolicy === "allow",
+    keepPanel: draft.safeRehearsal ? true : draft.keepPanel,
+  };
+}
+
+type ConfirmPreflightTargetChangeOptions = {
+  expectedTarget?: TargetSnapshot | null;
+  inspectFreshness?: typeof inspectDeliveryDraftFreshness;
+  resolveProfile?: typeof currentTargetProfileResolution;
+};
+
+/** 用户在预检内明确接受界面所示新目标；全程同步且拒绝展示后再次跳目标。 */
+export function confirmOpenPreflightTargetChange(
+  options: ConfirmPreflightTargetChangeOptions = {}
+): boolean {
+  const delivery = useDeliveryStore.getState();
+  const draft = delivery.draft;
+  if (!delivery.open || !draft || delivery.busy) return false;
+  if (delivery.retryBlocked) {
+    delivery.setLastError("目标可能已收到部分内容，请核对后关闭并重新预检");
+    return false;
+  }
+  if (delivery.transform.status === "running") {
+    delivery.setLastError("AI 转换正在生成，请等待完成后再确认新目标");
+    return false;
+  }
+
+  const target = useTargetStore.getState();
+  if (
+    target.status !== "ready" ||
+    target.profileOverrideNeedsConfirmation ||
+    !target.snapshot?.ready
+  ) {
+    delivery.setLastError(
+      target.profileOverrideNeedsConfirmation
+        ? "请先确认当前目标使用的发送方案"
+        : "当前新目标尚未就绪，请重新识别后再确认"
+    );
+    return false;
+  }
+  if (
+    Object.hasOwn(options, "expectedTarget") &&
+    (!options.expectedTarget ||
+      !sameTargetIdentity(options.expectedTarget, target.snapshot))
+  ) {
+    delivery.setLastError("目标已再次变化，请确认当前新目标");
+    return false;
+  }
+  if (sameTargetIdentity(draft.targetSnapshot, target.snapshot)) {
+    return recoverOpenPreflightTarget();
+  }
+
+  const freshness = (options.inspectFreshness ?? inspectDeliveryDraftFreshness)(draft);
+  if (freshness) {
+    delivery.setLastError(staleMessages[freshness]);
+    return false;
+  }
+  const resolution = (options.resolveProfile ?? currentTargetProfileResolution)();
+  if (
+    !resolution.isTargetReady ||
+    resolution.targetBundleId !== target.snapshot.bundleId
+  ) {
+    delivery.setLastError("新目标的发送方案尚未就绪，请重新识别后再确认");
+    return false;
+  }
+
+  const notes = useNotesStore.getState();
+  const rebound = rebindPreflightDraftTarget(
+    draft,
+    {
+      targetSnapshot: target.snapshot,
+      profileResolution: resolution,
+      firewallEnabled: notes.settings.firewallEnabled,
+      firewallDisabledWarnCategories:
+        notes.settings.firewallDisabledWarnCategories,
+    },
+    nextDeliveryDraftRevision(draft.revision)
+  );
+  delivery.replaceDraft(rebound);
   return true;
 }
 

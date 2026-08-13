@@ -21,7 +21,7 @@ import { cn } from "@/lib/utils";
 import { targetStatusLabel, type TargetStatus } from "@/store/targetStore";
 
 /** 台账键/值样式（A 版定稿）：键 micro 灰右对齐，值 label 亮字左对齐，行高统一对基线。 */
-const LEDGER_KEY_CLS = "text-right text-micro leading-4 text-muted-foreground/70";
+const LEDGER_KEY_CLS = "text-right text-micro leading-4 text-muted-foreground";
 const LEDGER_VALUE_CLS = "min-w-0 break-words text-label font-medium leading-4";
 
 /**
@@ -84,7 +84,7 @@ export function ProfileRuleLedger({
 /** 区块标题（cap 样式）：中文吃字距不吃大小写，与分组头 tracking 同款。 */
 function SectionCap({ children }: { children: React.ReactNode }) {
   return (
-    <p className="mb-1.5 text-micro font-semibold tracking-[0.08em] text-muted-foreground/70">
+    <p className="mb-1.5 text-micro font-semibold tracking-[0.08em] text-muted-foreground">
       {children}
     </p>
   );
@@ -200,7 +200,7 @@ export function TargetProfileQuickSwitch({
             发送到 {appName}
           </p>
           {/* 匹配来源直接给结论（前缀「匹配来源：」是系统视角术语，去掉） */}
-          <p className="line-clamp-2 break-words text-micro leading-tight text-muted-foreground/75">
+          <p className="line-clamp-2 break-words text-micro leading-tight text-muted-foreground">
             {matchReason}
           </p>
         </div>
@@ -223,10 +223,10 @@ export function TargetProfileQuickSwitch({
       <section aria-labelledby="quick-profile-options-label">
         <p
           id="quick-profile-options-label"
-          className="mb-1.5 text-micro font-semibold tracking-[0.08em] text-muted-foreground/70"
+          className="mb-1.5 text-micro font-semibold tracking-[0.08em] text-muted-foreground"
         >
           发送方案
-          <span className="ml-1.5 font-normal tracking-normal text-muted-foreground/50">
+          <span className="ml-1.5 font-normal tracking-normal text-muted-foreground">
             ↑↓ 移动 · Enter 使用
           </span>
         </p>
@@ -257,7 +257,7 @@ export function TargetProfileQuickSwitch({
                 }}
                 className={cn(
                   "flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none transition-colors duration-100 motion-reduce:transition-none",
-                  "focus-visible:ring-2 focus-visible:ring-primary/50 disabled:opacity-40",
+                  "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:opacity-40",
                   selected
                     ? "bg-primary/10 ring-1 ring-inset ring-primary/25"
                     : "hover:bg-black/5 dark:hover:bg-white/10"
@@ -281,7 +281,7 @@ export function TargetProfileQuickSwitch({
                   <span
                     className={cn(
                       "ml-auto min-w-0 truncate text-micro",
-                      diffWarning ? "text-warning" : "text-muted-foreground/80"
+                      diffWarning ? "text-warning" : "text-muted-foreground"
                     )}
                     title={diffText}
                   >
@@ -316,7 +316,7 @@ export function TargetProfileQuickSwitch({
             onMakePermanent();
             onClose();
           }}
-          className="mt-2.5 flex min-w-0 items-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-left text-body outline-none hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-primary/50 dark:hover:bg-white/10"
+          className="mt-2.5 flex min-w-0 items-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-left text-body outline-none hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:hover:bg-white/10"
         >
           <Link2 aria-hidden className="size-3.5 shrink-0" />
           <span className="line-clamp-2 break-words">
@@ -334,7 +334,7 @@ export function TargetProfileQuickSwitch({
             onRestoreAutomatic();
             onClose();
           }}
-          className="flex items-center gap-1 rounded-sm text-micro text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50 disabled:opacity-40"
+          className="flex items-center gap-1 rounded-sm text-micro text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:opacity-40"
         >
           <RotateCcw aria-hidden className="size-3" />
           恢复自动匹配
@@ -346,7 +346,7 @@ export function TargetProfileQuickSwitch({
             onClose();
             onEdit();
           }}
-          className="ml-auto flex items-center gap-1 rounded-sm text-micro text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50"
+          className="ml-auto flex items-center gap-1 rounded-sm text-micro text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
         >
           <Settings2 aria-hidden className="size-3" />
           编辑方案

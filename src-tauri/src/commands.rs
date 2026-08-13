@@ -36,6 +36,29 @@ pub fn copy_text(app: AppHandle, text: String) -> Result<(), String> {
     Ok(())
 }
 
+/// 将 HTML 中解析出的图片源按原顺序本地化；结果只带 index/状态/本地文件，
+/// 不回显或记录可能含鉴权参数的完整 URL。
+#[tauri::command]
+pub async fn localize_rich_clipboard_images(
+    app: AppHandle,
+    sources: Vec<String>,
+    source_url: Option<String>,
+) -> Vec<crate::rich_clipboard::LocalizedRichImage> {
+    crate::rich_clipboard::localize_images(&app, sources, source_url).await
+}
+
+/// 把有序文字/图片块写成同一 pasteboard item 的 plain + HTML 两种表示。
+#[tauri::command]
+pub async fn copy_rich_clipboard(
+    app: AppHandle,
+    blocks: Vec<crate::rich_clipboard::RichClipboardBlock>,
+) -> Result<crate::rich_clipboard::RichClipboardWriteResult, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::rich_clipboard::write_blocks(&app, &blocks))
+        .await
+        .map_err(|_| "创建富剪贴板任务失败".to_string())?
+        .map_err(|error| error.to_string())
+}
+
 /// 图片附件 OCR（Vision 离线识别，中英）。空结果返回 Err。
 #[tauri::command]
 pub async fn ocr_image(app: AppHandle, file: String) -> Result<String, String> {
@@ -88,9 +111,10 @@ pub async fn clear_redacted_images(app: AppHandle) -> Result<(), String> {
 pub async fn delivery_image_data_url(
     app: AppHandle,
     file: String,
+    full_size: Option<bool>,
 ) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        crate::image_firewall::delivery_image_data_url(&app, &file)
+        crate::image_firewall::delivery_image_data_url(&app, &file, full_size.unwrap_or(false))
     })
     .await
     .map_err(|_| "读取图片隐私预览任务失败".to_string())
@@ -661,6 +685,15 @@ pub fn set_sound(app: AppHandle, enabled: bool) {
         .store(enabled, Ordering::Relaxed);
 }
 
+/// 非粘性 HUD 自动隐藏时长（设置持久化，Rust 统一裁决所有提示入口）。
+#[tauri::command]
+pub fn set_hud_duration(app: AppHandle, duration_ms: u64) {
+    app.state::<AppState>().hud_duration_ms.store(
+        crate::state::clamp_hud_duration_ms(duration_ms),
+        Ordering::Relaxed,
+    );
+}
+
 /// 面板是否置顶（屏幕最上层）。关闭后面板可被其他窗口盖住。
 /// 伴随磁吸期间面板与目标应用同层级（强制非置顶），此处只记偏好；
 /// 脱离磁吸（独立/边栏）时按偏好恢复。
@@ -837,6 +870,8 @@ pub fn bundle_id_of_app(path: String) -> Option<String> {
 
 /// 设置窗口主题（system/light/dark）：同时切换原生外观与
 /// webview 的 prefers-color-scheme，前端 CSS 深浅色自动跟随。
+const THEMED_WINDOW_LABELS: [&str; 3] = ["main", "settings", "imgpreview"];
+
 #[tauri::command]
 pub fn set_window_theme(app: AppHandle, theme: String) {
     let theme = match theme.as_str() {
@@ -844,7 +879,7 @@ pub fn set_window_theme(app: AppHandle, theme: String) {
         "dark" => Some(tauri::Theme::Dark),
         _ => None, // 跟随系统
     };
-    for label in ["main", "settings"] {
+    for label in THEMED_WINDOW_LABELS {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.set_theme(theme);
         }
@@ -1315,7 +1350,12 @@ pub async fn run_media_gc(
 
 #[cfg(test)]
 mod tests {
-    use super::capture_hud_feedback;
+    use super::{capture_hud_feedback, THEMED_WINDOW_LABELS};
+
+    #[test]
+    fn manual_theme_reaches_the_image_preview_window() {
+        assert_eq!(THEMED_WINDOW_LABELS, ["main", "settings", "imgpreview"]);
+    }
 
     #[test]
     fn clipboard_restore_warning_stays_visible_without_losing_capture_undo() {

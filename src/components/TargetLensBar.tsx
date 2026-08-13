@@ -284,7 +284,7 @@ export function TargetLensView({
           <span className="min-w-0 truncate text-label font-semibold" title={appName}>
             {appName}
           </span>
-          <span aria-hidden className="shrink-0 text-micro text-muted-foreground/60">
+          <span aria-hidden className="shrink-0 text-micro text-muted-foreground">
             ·
           </span>
           <span
@@ -363,7 +363,7 @@ export function TargetLensView({
           <button
             type="button"
             onClick={onConfirmProfile}
-            className="shrink-0 rounded-sm px-1 text-micro font-medium text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-primary/50"
+            className="shrink-0 rounded-sm px-1 text-micro font-medium text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
           >
             将 {profileOverrideName ?? "原方案"} 用于当前目标
           </button>
@@ -388,7 +388,7 @@ export function TargetLensView({
                   title={profileName}
                   aria-label={`本次发送方案：${profileName}，点击查看与切换`}
                   className={cn(
-                    "flex min-w-0 max-w-40 items-center gap-1 rounded-md border px-1.5 py-0.5 text-label outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-primary/50",
+                    "flex min-w-0 max-w-40 items-center gap-1 rounded-md border px-1.5 py-0.5 text-label outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
                     profileOverrideId
                       ? "border-primary/50 text-primary"
                       : "border-border text-foreground"
@@ -428,7 +428,7 @@ export function TargetLensView({
               </PopoverContent>
             </Popover>
             {/* 来源缩注取代整句「匹配来源」：临时指定/自动匹配一词即达 */}
-            <span className="shrink-0 text-micro text-muted-foreground/60">
+            <span className="shrink-0 text-micro text-muted-foreground">
               {profileOverrideId ? "临时指定" : "自动匹配"}
             </span>
             {!showRecoveryAction && <span className="ml-auto">{refreshControl}</span>}

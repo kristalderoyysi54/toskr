@@ -132,7 +132,7 @@ export function ProfileEditor({
           <button
             type="button"
             onClick={onSetDefault}
-            className="rounded-lg border border-border px-2 py-1 text-label outline-none hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-primary/50 dark:hover:bg-white/10"
+            className="rounded-lg border border-border px-2 py-1 text-label outline-none hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:hover:bg-white/10"
           >
             设为未识别应用的默认方案
           </button>
@@ -147,7 +147,7 @@ export function ProfileEditor({
             value={profile.name}
             maxLength={80}
             onChange={(event) => onUpdate({ name: event.target.value })}
-            className="mt-1 h-9 w-full rounded-lg border border-border bg-transparent px-2 text-body text-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+            className="mt-1 h-9 w-full rounded-lg border border-border bg-transparent px-2 text-body text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
           />
         </label>
       </EditorSection>
@@ -196,7 +196,7 @@ export function ProfileEditor({
                     className="peer sr-only"
                   />
                   <span className={cn(
-                    "block min-h-full rounded-xl border p-2 text-left outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-primary/50",
+                    "block min-h-full rounded-xl border p-2 text-left outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-focus-visible:ring-offset-1 peer-focus-visible:ring-offset-background",
                     selected ? "border-primary/50 bg-primary/10" : "border-border"
                   )}>
                     <span className="block text-body font-semibold">{option.label}</span>
@@ -231,7 +231,7 @@ export function ProfileEditor({
                     className="peer sr-only"
                   />
                   <span className={cn(
-                    "block rounded-lg border px-2 py-1.5 text-left outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-primary/50",
+                    "block rounded-lg border px-2 py-1.5 text-left outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-focus-visible:ring-offset-1 peer-focus-visible:ring-offset-background",
                     selected ? "border-primary/50 bg-primary/10" : "border-border"
                   )}>
                     <span className="block text-body font-medium">{option.label}</span>

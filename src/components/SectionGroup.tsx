@@ -169,11 +169,11 @@ export function SectionGroup({
         )}
         {section.keepAfterSend && (
           <Star
-            className="size-2.5 shrink-0 fill-current text-muted-foreground/70"
+            className="size-2.5 shrink-0 fill-current text-muted-foreground"
             aria-label="发送后保留"
           />
         )}
-        <span className="text-micro tabular-nums text-muted-foreground/60">{total}</span>
+        <span className="text-micro tabular-nums text-muted-foreground">{total}</span>
 
         <div className="ml-auto flex items-center gap-0.5">
           <IconButton
@@ -237,7 +237,7 @@ export function SectionGroup({
                       setSectionColor(section.id, undefined);
                       close();
                     }}
-                    className="size-3.5 shrink-0 rounded-full border border-dashed border-muted-foreground/50 transition-transform hover:scale-125"
+                    className="size-3.5 shrink-0 rounded-full border border-dashed border-muted-foreground/75 transition-transform hover:scale-125"
                   />
                 </div>
                 <SimpleMenuSeparator />
@@ -310,7 +310,7 @@ export function SectionGroup({
                 <>
                   <button
                     onClick={() => useUIStore.getState().toggleDoneOpen(section.id)}
-                    className="flex items-center gap-1 px-1 py-0.5 text-micro text-muted-foreground/60 hover:text-foreground"
+                    className="flex items-center gap-1 px-1 py-0.5 text-micro text-muted-foreground hover:text-foreground"
                   >
                     {doneOpen ? (
                       <ChevronDown className="size-2.5" />

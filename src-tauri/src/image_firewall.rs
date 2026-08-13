@@ -562,11 +562,21 @@ pub fn read_delivery_image_rgba(app: &AppHandle, file: &str) -> Option<(usize, u
     ))
 }
 
-pub fn delivery_image_data_url(app: &AppHandle, file: &str) -> Option<String> {
+pub fn delivery_image_data_url(app: &AppHandle, file: &str, full_size: bool) -> Option<String> {
     if !file.starts_with(TOKEN_PREFIX) {
-        return crate::storage::image_thumb_data_url(app, file);
+        return if full_size {
+            crate::storage::image_data_url(app, file)
+        } else {
+            crate::storage::image_thumb_data_url(app, file)
+        };
     }
     let bytes = fs::read(transient_file(app, file)?).ok()?;
+    if full_size {
+        return Some(format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&bytes)
+        ));
+    }
     let thumbnail = image::load_from_memory(&bytes).ok()?.thumbnail(320, 320);
     let mut png = Cursor::new(Vec::new());
     thumbnail.write_to(&mut png, image::ImageFormat::Png).ok()?;
@@ -574,6 +584,15 @@ pub fn delivery_image_data_url(app: &AppHandle, file: &str) -> Option<String> {
         "data:image/png;base64,{}",
         base64::engine::general_purpose::STANDARD.encode(png.get_ref())
     ))
+}
+
+pub fn delivery_image_dimensions(app: &AppHandle, file: &str) -> Option<(u32, u32)> {
+    let path = if file.starts_with(TOKEN_PREFIX) {
+        transient_file(app, file)?
+    } else {
+        crate::storage::image_path(app, file)?
+    };
+    image::image_dimensions(path).ok()
 }
 
 #[cfg(test)]

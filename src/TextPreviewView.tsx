@@ -16,12 +16,16 @@ import {
 import { headerGradient } from "@/components/NoteCard";
 import { DataReadOnlyGuard } from "@/components/DataReadOnlyGuard";
 import { DetailWindowFrame } from "@/components/DetailWindowFrame";
+import {
+  RichNoteContent,
+  RichNoteTextEditor,
+} from "@/components/RichNoteContent";
 import { stats } from "@/components/PreviewOverlay";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Kbd } from "@/components/ui/kbd";
 import { TextSelectionToolbar } from "@/components/TextSelectionToolbar";
-import type { NotePreviewPayload } from "@/lib/actions";
+import type { NoteEditPayload, NotePreviewPayload } from "@/lib/actions";
 import { requestAliasQuickAdd } from "@/lib/aliasQuickAdd";
 import { highlightCode, langLabel } from "@/lib/code";
 import { NOTE_EDITOR_SESSION_RELEASE_EVENT } from "@/lib/editorSessionMedia";
@@ -29,6 +33,12 @@ import { useAppIcon } from "@/lib/icons";
 import { useNoteThumb } from "@/lib/media";
 import { looksLikeMarkdown, renderMarkdown } from "@/lib/markdown";
 import { springSnappy } from "@/lib/motion";
+import {
+  hasOrderedRichLayout,
+  normalizeNoteContentBlocks,
+  textFromContentBlocks,
+  type NoteContentBlock,
+} from "@/lib/noteContentBlocks";
 import {
   appendPreviewContent,
   editorInsertRejectionReason,
@@ -90,7 +100,7 @@ function AttachThumb({
         className={cn(
           "flex size-12 items-center justify-center overflow-hidden rounded-md",
           "border border-foreground/10 bg-black/[0.04] outline-none dark:bg-white/[0.06]",
-          "focus-visible:ring-2 focus-visible:ring-primary/50"
+          "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
         )}
       >
         {url ? (
@@ -108,7 +118,7 @@ function AttachThumb({
           className={cn(
             "absolute -right-1 -top-1 rounded-full bg-foreground/80 p-0.5 text-background",
             "opacity-0 outline-none transition-opacity group-hover:opacity-100",
-            "focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary/50"
+            "focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
           )}
         >
           <X className="size-2.5" />
@@ -237,6 +247,9 @@ export default function TextPreviewView() {
   const [editing, setEditing] = useState(false);
   const [draftEmpty, setDraftEmpty] = useState(true);
   const [draftImages, setDraftImages] = useState<string[]>([]);
+  const [draftContentBlocks, setDraftContentBlocks] = useState<
+    NoteContentBlock[]
+  >([]);
   const [mdView, setMdView] = useState(false);
   const [textSelection, setTextSelection] = useState<TextSelection | null>(null);
   // 选词模式：正文按分词渲染为可点选区块，点选驱动 textSelection（复用选中工具条）
@@ -248,6 +261,7 @@ export default function TextPreviewView() {
   // 正文由 textarea DOM 持有，避免每次按键的 React 回写切断原生撤销分组。
   const draftRef = useRef("");
   const draftImagesRef = useRef<string[]>([]);
+  const draftContentBlocksRef = useRef<NoteContentBlock[]>([]);
   const sessionPastedImagesRef = useRef<Set<string>>(new Set());
   const editSessionTokenRef = useRef(0);
   const composingRef = useRef(false);
@@ -319,6 +333,8 @@ export default function TextPreviewView() {
       setDraftEmpty(!p.text.trim());
       draftImagesRef.current = p.images;
       setDraftImages(p.images);
+      draftContentBlocksRef.current = p.contentBlocks ?? [];
+      setDraftContentBlocks(p.contentBlocks ?? []);
       setEditing(previewIsEditable(p) && p.edit);
       setMdView(!p.codeLang && p.kind !== "link" && looksLikeMarkdown(p.text));
       setTextSelection(null);
@@ -364,6 +380,10 @@ export default function TextPreviewView() {
         const rejection = editorInsertRejectionReason(currentNote, payload);
         if (rejection) {
           respond("rejected", rejection);
+          return;
+        }
+        if (hasOrderedRichLayout(currentNote?.contentBlocks)) {
+          respond("rejected", "有序图文卡仅支持编辑现有文字段落");
           return;
         }
         const applied = appliedInsertOperationsRef.current;
@@ -504,8 +524,64 @@ export default function TextPreviewView() {
     void getCurrentWebviewWindow().hide();
   };
 
+  const cancelEditing = () => {
+    if (!note) return;
+    editSessionTokenRef.current += 1;
+    discardDraftImages(
+      note.images,
+      [...sessionPastedImagesRef.current],
+      note.dataGeneration
+    );
+    sessionPastedImagesRef.current.clear();
+    releaseEditorSession(note);
+    draftRef.current = note.text;
+    setDraftEmpty(!note.text.trim());
+    textEditHistoryRef.current = freshTextEditHistory();
+    draftImagesRef.current = note.images;
+    setDraftImages(note.images);
+    draftContentBlocksRef.current = note.contentBlocks ?? [];
+    setDraftContentBlocks(note.contentBlocks ?? []);
+    setTextSelection(null);
+    setEditing(false);
+  };
+
   const save = () => {
     if (!previewIsEditable(note)) return;
+    if (hasOrderedRichLayout(note.contentBlocks) && note.contentBlocks) {
+      const contentBlocks = normalizeNoteContentBlocks(
+        draftContentBlocksRef.current
+      );
+      const changed =
+        JSON.stringify(contentBlocks) !== JSON.stringify(note.contentBlocks);
+      editSessionTokenRef.current += 1;
+      if (changed) {
+        const text = textFromContentBlocks(contentBlocks);
+        const next = refreshPreviewPayload({ ...note, contentBlocks }, text);
+        void emitTo(
+          "main",
+          "toskr://note-edit",
+          {
+            format: "blocks",
+            id: note.id,
+            sessionId: note.sessionId,
+            contentBlocks,
+            dataGeneration: note.dataGeneration,
+          } satisfies NoteEditPayload
+        );
+        setNote(next.payload);
+        noteRef.current = next.payload;
+        draftContentBlocksRef.current = contentBlocks;
+        setDraftContentBlocks(contentBlocks);
+        draftRef.current = next.payload.text;
+        setDraftEmpty(!next.payload.text.trim());
+        setMdView(next.markdownView);
+      } else {
+        releaseEditorSession(note);
+      }
+      setTextSelection(null);
+      setEditing(false);
+      return;
+    }
     const text = draftRef.current.trim();
     const images = draftImagesRef.current;
     if (!text && images.length === 0) {
@@ -521,14 +597,19 @@ export default function TextPreviewView() {
     editSessionTokenRef.current += 1;
     if (text !== note.text || imagesChanged) {
       const next = refreshPreviewPayload({ ...note, images }, text);
-      void emitTo("main", "toskr://note-edit", {
-        id: note.id,
-        sessionId: note.sessionId,
-        text: next.payload.text,
-        images,
-        discardedImages,
-        dataGeneration: note.dataGeneration,
-      });
+      void emitTo(
+        "main",
+        "toskr://note-edit",
+        {
+          format: "flat",
+          id: note.id,
+          sessionId: note.sessionId,
+          text: next.payload.text,
+          images,
+          discardedImages,
+          dataGeneration: note.dataGeneration,
+        } satisfies NoteEditPayload
+      );
       setNote(next.payload);
       noteRef.current = next.payload;
       draftRef.current = next.payload.text;
@@ -546,7 +627,9 @@ export default function TextPreviewView() {
 
   /** 从系统剪贴板粘贴图片，先作为编辑草稿附件，保存时再写回主 store。 */
   const pasteImage = async () => {
-    if (!previewIsEditable(note)) return;
+    if (!previewIsEditable(note) || hasOrderedRichLayout(note.contentBlocks)) {
+      return;
+    }
     const sessionToken = editSessionTokenRef.current;
     try {
       const image = await api.pasteImageFromClipboard();
@@ -668,7 +751,13 @@ export default function TextPreviewView() {
 
   const syncPreviewSelection = () => {
     if (pickMode) return;
-    if (editing || !note || note.codeLang || note.kind === "link") return;
+    if (
+      editing ||
+      !note ||
+      note.codeLang ||
+      note.kind === "link" ||
+      hasOrderedRichLayout(note.contentBlocks)
+    ) return;
     const root = previewContentRef.current;
     const domSelection = window.getSelection();
     if (!root || !domSelection || domSelection.isCollapsed || !domSelection.rangeCount) {
@@ -697,7 +786,9 @@ export default function TextPreviewView() {
   };
 
   const applySelectionEdit = (edit: SelectionEdit) => {
-    if (!previewIsEditable(note)) return;
+    if (!previewIsEditable(note) || hasOrderedRichLayout(note.contentBlocks)) {
+      return;
+    }
     setTextSelection(edit.selection);
     pendingSelectionRef.current = edit.selection;
     if (!editing) {
@@ -721,8 +812,26 @@ export default function TextPreviewView() {
   const copy = async () => {
     if (!note) return;
     try {
-      await api.copyText(editing ? draftRef.current : note.text);
-      tip("ok", "已复制");
+      const richBlocks = !editing && hasOrderedRichLayout(note.contentBlocks)
+        ? note.contentBlocks
+        : null;
+      if (richBlocks) {
+        await api.copyRichClipboard(
+          richBlocks.map((block) =>
+            block.type === "text"
+              ? { kind: "text" as const, text: block.text }
+              : {
+                  kind: "image" as const,
+                  file: block.file,
+                  ...(block.alt ? { alt: block.alt } : {}),
+                }
+          )
+        );
+        tip("ok", "已复制图文");
+      } else {
+        await api.copyText(editing ? draftRef.current : note.text);
+        tip("ok", "已复制");
+      }
     } catch (e) {
       tip("warn", `复制失败：${e}`);
     }
@@ -818,7 +927,7 @@ export default function TextPreviewView() {
         <button
           aria-label="关闭"
           onClick={close}
-          className="absolute right-2 top-2 rounded-sm p-1 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50"
+          className="absolute right-2 top-2 rounded-sm p-1 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
         >
           <X className="size-3.5" />
         </button>
@@ -828,18 +937,33 @@ export default function TextPreviewView() {
   }
 
   const isLink = note.kind === "link" && !!note.url;
-  const editable = previewIsEditable(note);
+  const orderedRich = hasOrderedRichLayout(note.contentBlocks);
+  const writable = previewIsEditable(note);
+  const editable = writable;
+  const flatEditable = writable && !orderedRich;
   const isMd = !note.codeLang && !isLink && looksLikeMarkdown(note.text);
   const typeLabel = isLink
     ? "链接"
+    : orderedRich
+      ? "图文快照"
     : note.kind === "image"
       ? "图片"
     : note.codeLang
       ? langLabel(note.codeLang)
       : "文本";
   const s = stats(note.text);
-  const shownImages = editing ? draftImages : note.images;
-  const detailHeaderBackground = headerGradient(icon?.color ?? "#5b5b60");
+  const shownImages = orderedRich ? [] : editing ? draftImages : note.images;
+  const imagePreviewSource = writable && !editing
+    ? {
+        id: note.id,
+        text: note.text,
+        dataGeneration: note.dataGeneration,
+      }
+    : undefined;
+  // 与来源卡片通栏同色：主面板决议的分组色/中性灰优先，应用主色兜底
+  const detailHeaderBackground = headerGradient(
+    note.headerColor ?? icon?.color ?? "#5b5b60"
+  );
 
   return (
     <DetailWindowFrame
@@ -888,7 +1012,18 @@ export default function TextPreviewView() {
             if (editable && !editing) setEditing(true);
           }}
         >
-          {editing ? (
+          {editing && orderedRich && note.contentBlocks ? (
+            <RichNoteTextEditor
+              key={note.id}
+              blocks={draftContentBlocks}
+              onChange={(blocks) => {
+                draftContentBlocksRef.current = blocks;
+                setDraftContentBlocks(blocks);
+              }}
+              onSave={save}
+              onCancel={cancelEditing}
+            />
+          ) : editing ? (
             <textarea
               ref={textareaRef}
               // 保持 DOM 原生编辑历史；受控 value 每次重写会把连续输入拆成逐字撤销。
@@ -975,22 +1110,15 @@ export default function TextPreviewView() {
                   e.preventDefault();
                   save();
                 } else if (e.key === "Escape") {
-                  editSessionTokenRef.current += 1;
-                  discardDraftImages(note.images, [
-                    ...sessionPastedImagesRef.current,
-                  ]);
-                  sessionPastedImagesRef.current.clear();
-                  releaseEditorSession(note);
-                  draftRef.current = note.text;
-                  setDraftEmpty(!note.text.trim());
-                  textEditHistoryRef.current = freshTextEditHistory();
-                  draftImagesRef.current = note.images;
-                  setDraftImages(note.images);
-                  setTextSelection(null);
-                  setEditing(false);
+                  cancelEditing();
                 }
               }}
               className="h-full min-h-40 w-full resize-none bg-transparent font-mono text-body leading-relaxed outline-none"
+            />
+          ) : orderedRich && note.contentBlocks ? (
+            <RichNoteContent
+              blocks={note.contentBlocks}
+              previewSource={imagePreviewSource}
             />
           ) : note.codeLang ? (
             <pre className="hljs whitespace-pre-wrap [overflow-wrap:anywhere] !bg-transparent font-mono text-body leading-relaxed">
@@ -1022,7 +1150,7 @@ export default function TextPreviewView() {
                       "mx-[3px] my-[2px] inline rounded-[7px] border border-border/50 bg-muted px-[7px] py-px font-[inherit] text-inherit outline-none",
                       "shadow-[0_2.5px_0_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.08)]",
                       "transition-[transform,box-shadow,background-color] duration-75",
-                      "hover:brightness-110 focus-visible:ring-2 focus-visible:ring-primary/50",
+                      "hover:brightness-110 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
                       "active:translate-y-[1.5px] active:shadow-[0_1px_0_rgba(0,0,0,0.35)]",
                       inRange &&
                         "translate-y-[1.5px] border-primary/60 bg-primary text-primary-foreground shadow-[0_1px_0_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.3)] hover:brightness-105"
@@ -1034,7 +1162,7 @@ export default function TextPreviewView() {
                   <span
                     key={`${segment.start}-${index}`}
                     className={cn(
-                      "text-muted-foreground/70",
+                      "text-muted-foreground",
                       inRange && "text-primary"
                     )}
                   >
@@ -1059,15 +1187,18 @@ export default function TextPreviewView() {
           )}
         </motion.div>
 
-        {(editable || pickMode) && textSelection && !note.codeLang && !isLink && (
-          <TextSelectionToolbar
-            text={editing ? draftRef.current : note.text}
-            selection={textSelection}
-            onApply={applySelectionEdit}
-            onAddAlias={editing ? undefined : addSelectionToAliasDictionary}
-            readOnly={!editable}
-          />
-        )}
+        {(flatEditable || pickMode) &&
+          textSelection &&
+          !note.codeLang &&
+          !isLink && (
+            <TextSelectionToolbar
+              text={editing ? draftRef.current : note.text}
+              selection={textSelection}
+              onApply={applySelectionEdit}
+              onAddAlias={editing ? undefined : addSelectionToAliasDictionary}
+              readOnly={!flatEditable}
+            />
+          )}
       </div>
 
       {/* 图片附件缩略条（组合卡）：常显在正文与页脚之间，点击 Quick Look 原图，
@@ -1079,7 +1210,7 @@ export default function TextPreviewView() {
             <AttachThumb
               key={f}
               file={f}
-              onClick={() => void api.quickLook(shownImages, i)}
+              onClick={() => void api.quickLook(shownImages, i, imagePreviewSource)}
               onRemove={editable ? () => {
                 if (editing) {
                   const current = draftImagesRef.current;
@@ -1122,12 +1253,14 @@ export default function TextPreviewView() {
         <div className="ml-auto flex items-center gap-1">
           {editing ? (
             <>
-              <IconButton label="粘贴图片（⌘V）" onClick={() => void pasteImage()}>
-                <ImagePlus className="size-3.5" />
-              </IconButton>
+              {!orderedRich && (
+                <IconButton label="粘贴图片（⌘V）" onClick={() => void pasteImage()}>
+                  <ImagePlus className="size-3.5" />
+                </IconButton>
+              )}
               <Button
                 size="xs"
-                disabled={draftEmpty && draftImages.length === 0}
+                disabled={!orderedRich && draftEmpty && draftImages.length === 0}
                 onClick={save}
               >
                 <Check className="size-3" /> 保存
@@ -1137,7 +1270,7 @@ export default function TextPreviewView() {
             </>
           ) : (
             <>
-              {!isLink && !note.codeLang && (
+              {!orderedRich && !isLink && !note.codeLang && (
                 <IconButton
                   label={
                     pickMode
@@ -1157,12 +1290,12 @@ export default function TextPreviewView() {
                   <TextSelect className="size-3.5" />
                 </IconButton>
               )}
-              {isMd && !pickMode && (
+              {!orderedRich && isMd && !pickMode && (
                 <button
                   onClick={() => setMdView(!mdView)}
                   className={cn(
                     "rounded-md px-1.5 py-0.5 text-micro text-muted-foreground outline-none",
-                    "hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/50 dark:hover:bg-white/10"
+                    "hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:hover:bg-white/10"
                   )}
                 >
                   {mdView ? "原文" : "渲染"}
@@ -1174,14 +1307,17 @@ export default function TextPreviewView() {
                 </IconButton>
               )}
               {editable && (
-                <IconButton label="编辑" onClick={() => setEditing(true)}>
+                <IconButton
+                  label={orderedRich ? "编辑文字（图片位置固定）" : "编辑"}
+                  onClick={() => setEditing(true)}
+                >
                   <Pencil className="size-3.5" />
                 </IconButton>
               )}
               <IconButton label="复制" onClick={() => void copy()}>
                 <Copy className="size-3.5" />
               </IconButton>
-              {editable && (
+              {writable && (
                 <>
                   <p
                     id="text-preview-target-status"

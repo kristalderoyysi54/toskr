@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import { CornerDownLeft } from "lucide-react";
 
+import { focusRingWithin } from "@/components/ui/focus-ring";
 import { IconButton } from "@/components/ui/icon-button";
 import { autoResizeTextarea } from "@/lib/textarea";
 import { cn } from "@/lib/utils";
@@ -77,13 +78,14 @@ export function PillInput({
   };
 
   const fieldCls =
-    "w-full bg-transparent text-title outline-none placeholder:text-muted-foreground/70";
+    "w-full bg-transparent text-title outline-none placeholder:text-muted-foreground";
 
   return (
     <div
       className={cn(
         "rounded-xl border px-2.5 py-2 backdrop-blur-sm",
         "surface-inset elevation-1",
+        focusRingWithin,
         tone === "spark"
           ? "border-violet-400/60 bg-violet-500/[0.08] focus-within:border-violet-500/70"
           : "border-black/10 focus-within:border-primary/50 dark:border-white/10",

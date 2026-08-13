@@ -148,7 +148,7 @@ export function ResultLinkChoices({
               aria-checked={selectedId === delivery.deliveryId}
               onClick={() => onSelect(delivery.deliveryId)}
               className={cn(
-                "flex w-full items-start gap-2.5 rounded-xl border px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
+                "flex w-full items-start gap-2.5 rounded-xl border px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
                 selectedId === delivery.deliveryId
                   ? "border-primary/45 bg-primary/8"
                   : "border-foreground/10 bg-muted/30 hover:bg-muted/55"
@@ -182,7 +182,7 @@ export function ResultLinkChoices({
               aria-checked={selectedId === note.id}
               onClick={() => onSelect(note.id)}
               className={cn(
-                "flex w-full items-start gap-2.5 rounded-xl border px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
+                "flex w-full items-start gap-2.5 rounded-xl border px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
                 selectedId === note.id
                   ? "border-primary/45 bg-primary/8"
                   : "border-foreground/10 bg-muted/30 hover:bg-muted/55"

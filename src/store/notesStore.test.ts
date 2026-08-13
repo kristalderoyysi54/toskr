@@ -23,8 +23,10 @@ import {
   defaultSettings,
   doneIdsAfterSend,
   groupContextMenuIds,
+  HUD_DURATION_DEFAULT_MS,
   INBOX_ID,
   mergePersistedNotesState,
+  noteContentBlocks,
   orderedCheckedNotes,
   replaceNotesStoreFromPersisted,
   STORE_VERSION,
@@ -81,8 +83,8 @@ describe("notesStore 基础", () => {
     ]);
   });
 
-  it("v12 迁移到 v15 时正文不变，并补齐本地成效设置", () => {
-    expect(STORE_VERSION).toBe(15);
+  it("v12 迁移到 v17 时正文不变、生成权威块，并补齐本地成效设置", () => {
+    expect(STORE_VERSION).toBe(17);
     const decoded = decodePersistedState(JSON.stringify({
       version: 12,
       state: {
@@ -91,6 +93,9 @@ describe("notesStore 基础", () => {
       },
     }));
     expect(decoded.notes[0]).toMatchObject({ id: "legacy", text: "旧结果" });
+    expect(decoded.notes[0].contentBlocks).toEqual([
+      { type: "text", text: "旧结果" },
+    ]);
     expect(decoded.notes[0].provenance).toBeUndefined();
     expect(decoded.settings).toMatchObject({
       outcomeMetricsEnabled: true,
@@ -101,7 +106,7 @@ describe("notesStore 基础", () => {
     });
   });
 
-  it("v14 迁移到 v15 补齐可逆化名默认值，不改动既有设置", () => {
+  it("v14 迁移到 v17 补齐可逆化名默认值，不改动既有设置", () => {
     const {
       aliasEntitiesEnabled: _enabled,
       aliasEntities: _entities,
@@ -128,6 +133,111 @@ describe("notesStore 基础", () => {
       aliasNextNumberByCategory: {},
       aliasAutoRestoreOnCapture: true,
     });
+  });
+
+  it("首装面板默认态仅留给新档案，v16 旧档案迁移后不触发", () => {
+    expect(defaultSettings()).toMatchObject({
+      initialPanelSetupDone: false,
+      companionEnabled: false,
+    });
+
+    const {
+      initialPanelSetupDone: _initialPanelSetupDone,
+      ...v16Settings
+    } = defaultSettings();
+    const migrated = decodePersistedState(JSON.stringify({
+      version: 16,
+      state: {
+        settings: { ...v16Settings, companionEnabled: false },
+      },
+    }));
+    expect(migrated.settings).toMatchObject({
+      initialPanelSetupDone: true,
+      companionEnabled: false,
+    });
+
+    const legacyWithoutSettings = decodePersistedState(JSON.stringify({
+      version: 16,
+      state: {},
+    }));
+    expect(legacyWithoutSettings.settings.initialPanelSetupDone).toBe(true);
+
+    expect(() => decodePersistedState(JSON.stringify({
+      version: STORE_VERSION,
+      state: { settings: { initialPanelSetupDone: "yes" } },
+    }))).toThrow("settings.initialPanelSetupDone 类型无效");
+  });
+
+  it("v15 只从当时权威旧字段建块，不采信同名未知字段", () => {
+    const decoded = decodePersistedState(JSON.stringify({
+      version: 15,
+      state: {
+        sections: [{ id: INBOX_ID, name: "收件箱" }],
+        notes: [{
+          id: "legacy-rich-name",
+          text: "旧正文",
+          imageFile: "old.png",
+          contentBlocks: [{ type: "text", text: "不应采信" }],
+          sectionId: INBOX_ID,
+          done: false,
+          createdAt: 1,
+        }],
+      },
+    }));
+
+    expect(decoded.notes[0].contentBlocks).toEqual([
+      { type: "text", text: "旧正文" },
+      { type: "image", file: "old.png" },
+    ]);
+  });
+
+  it("v16 只信权威块并覆盖漂移兼容投影，损坏块 fail-closed", () => {
+    const state = {
+      sections: [{ id: INBOX_ID, name: "收件箱" }],
+      notes: [{
+        id: "rich",
+        text: "过期正文",
+        imageFile: "stale.png",
+        contentBlocks: [
+          { type: "text", text: "第一段" },
+          { type: "image", file: "real.png", width: 20, height: 10 },
+          { type: "text", text: "第二段" },
+        ],
+        sectionId: INBOX_ID,
+        done: false,
+        createdAt: 1,
+      }],
+    };
+    const decoded = decodePersistedState(JSON.stringify({ version: 16, state }));
+    expect(decoded.notes[0]).toMatchObject({
+      text: "第一段\n第二段",
+      imageFile: "real.png",
+      imageW: 20,
+      imageH: 10,
+    });
+
+    const invalid = structuredClone(state);
+    invalid.notes[0].contentBlocks[1] = { type: "image", file: "" } as never;
+    expect(() =>
+      decodePersistedState(JSON.stringify({ version: 16, state: invalid }))
+    ).toThrow("contentBlocks.image.file");
+  });
+
+  it("提示显示时长缺省回填 3 秒，并拒绝越界或小数设置", () => {
+    const decodeDuration = (settings: object) =>
+      decodePersistedState(JSON.stringify({
+        version: STORE_VERSION,
+        state: { settings },
+      })).settings;
+
+    expect(defaultSettings().hudDurationMs).toBe(HUD_DURATION_DEFAULT_MS);
+    expect(decodeDuration({}).hudDurationMs).toBe(HUD_DURATION_DEFAULT_MS);
+    expect(decodeDuration({ hudDurationMs: 5_000 }).hudDurationMs).toBe(5_000);
+    for (const hudDurationMs of [1_999, 10_001, 2_500.5]) {
+      expect(() => decodeDuration({ hudDurationMs })).toThrow(
+        "settings.hudDurationMs 超出允许范围"
+      );
+    }
   });
 
   it("v15 拒绝损坏的化名词典与计数器", () => {
@@ -170,10 +280,10 @@ describe("notesStore 基础", () => {
     expect(decodeAlias({ aliasNextNumberByCategory: { USER: 0 } })).toThrow();
   });
 
-  it("剪贴卡模板：合法枚举通过，缺省回退标准，非法值拒绝", () => {
+  it("剪贴卡模板：仅保留标准与浓缩，旧单行迁入浓缩", () => {
     const decodeTemplate = (settings: object) =>
       decodePersistedState(JSON.stringify({
-        version: 15,
+        version: STORE_VERSION,
         state: {
           sections: [{ id: INBOX_ID, name: "收件箱" }],
           notes: [],
@@ -184,9 +294,17 @@ describe("notesStore 基础", () => {
       }));
 
     expect(
+      decodeTemplate({ ...defaultSettings(), clipCardTemplate: "standard" }).settings
+        .clipCardTemplate
+    ).toBe("standard");
+    expect(
+      decodeTemplate({ ...defaultSettings(), clipCardTemplate: "condensed" }).settings
+        .clipCardTemplate
+    ).toBe("condensed");
+    expect(
       decodeTemplate({ ...defaultSettings(), clipCardTemplate: "banner" }).settings
         .clipCardTemplate
-    ).toBe("banner");
+    ).toBe("condensed");
     // 旧备份没有该字段：合并默认值
     const { clipCardTemplate: _tpl, ...legacy } = defaultSettings();
     expect(decodeTemplate(legacy).settings.clipCardTemplate).toBe("standard");
@@ -416,6 +534,54 @@ describe("notesStore 基础", () => {
     expect(notes[0].sectionId).toBe(INBOX_ID);
   });
 
+  it("addNote 以有序富块为权威并确定性同步兼容投影", () => {
+    const blocks = [
+      { type: "text" as const, text: "路径：审批管理" },
+      { type: "image" as const, file: "a.png", alt: "注册页", width: 800, height: 600 },
+      { type: "text" as const, text: "一、商户类型" },
+      { type: "image" as const, file: "b.png" },
+    ];
+    const added = useNotesStore.getState().addNote("调用方旧文本会被忽略", {
+      contentBlocks: blocks,
+    });
+    const note = useNotesStore.getState().notes.find((item) => item.id === added.id)!;
+
+    expect(noteContentBlocks(note)).toEqual(blocks);
+    expect(note).toMatchObject({
+      text: "路径：审批管理\n一、商户类型",
+      imageFile: "a.png",
+      attachments: ["b.png"],
+      imageW: 800,
+      imageH: 600,
+      kind: "text",
+    });
+  });
+
+  it("updateNoteContent 原子同步块与旧投影，updateNoteText 也不产生漂移", () => {
+    const id = useNotesStore.getState().addNote("旧正文").id!;
+    useNotesStore.getState().updateNoteContent(id, [
+      { type: "text", text: "前文" },
+      { type: "image", file: "one.png" },
+      { type: "text", text: "后文" },
+      { type: "image", file: "two.png" },
+    ]);
+    let note = useNotesStore.getState().notes.find((item) => item.id === id)!;
+    expect(note.text).toBe("前文\n后文");
+    expect(note.imageFile).toBe("one.png");
+    expect(note.attachments).toEqual(["two.png"]);
+
+    useNotesStore.getState().updateNoteText(id, "统一编辑后的正文");
+    note = useNotesStore.getState().notes.find((item) => item.id === id)!;
+    expect(noteContentBlocks(note)).toEqual([
+      { type: "text", text: "统一编辑后的正文" },
+      { type: "image", file: "one.png" },
+      { type: "image", file: "two.png" },
+    ]);
+    expect(note.text).toBe("统一编辑后的正文");
+    expect(note.imageFile).toBe("one.png");
+    expect(note.attachments).toEqual(["two.png"]);
+  });
+
   it("addNote 可指定目标分组，无效分组回退收件箱", () => {
     useNotesStore.getState().addSection("研究");
     const section = useNotesStore.getState().sections[1];
@@ -489,6 +655,31 @@ describe("notesStore 基础", () => {
     expect(after[0].id).toBe(dupId);
     expect(after[0].sourceApp).toBe("B");
     expect(after[0].createdAt).toBeGreaterThanOrEqual(oldAt);
+  });
+
+  it("异步富剪贴按来源 createdAt 排序，重复内容用来源时间提升", () => {
+    const s = useNotesStore.getState();
+    const older = [
+      { type: "text" as const, text: "旧来源" },
+      { type: "image" as const, file: "old.png" },
+    ];
+    s.addClipNote("较新文字", { createdAt: 200 });
+    // 旧来源图片稍后完成本地化，但不能因完成较晚而越过较新记录。
+    s.addClipNote("旧来源", { contentBlocks: older, createdAt: 100 });
+    expect(useNotesStore.getState().notes.map((note) => note.createdAt)).toEqual([
+      200,
+      100,
+    ]);
+
+    useNotesStore.getState().addClipNote("旧来源", {
+      contentBlocks: older,
+      createdAt: 300,
+      sourceApp: "Geelib",
+    });
+    const after = useNotesStore.getState().notes;
+    expect(after).toHaveLength(2);
+    expect(after.map((note) => note.createdAt)).toEqual([300, 200]);
+    expect(after[0].sourceApp).toBe("Geelib");
   });
 
   it("addClipNote 重复图片（同像素哈希文件）：同样提升置顶", () => {

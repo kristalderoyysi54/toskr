@@ -105,7 +105,7 @@ export function ProfileList({
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="搜索方案或应用"
-            className="h-8 w-full rounded-lg border border-border bg-transparent pl-7 pr-2 text-body outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+            className="h-8 w-full rounded-lg border border-border bg-transparent pl-7 pr-2 text-body outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
           />
         </label>
       )}
@@ -143,7 +143,7 @@ export function ProfileList({
                   event.preventDefault();
                   moveFocus(profile.id, event.key === "ArrowDown" ? 1 : -1);
                 }}
-                className="min-w-0 flex-1 rounded-lg px-2 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                className="min-w-0 flex-1 rounded-lg px-2 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
               >
                 <span className="flex min-w-0 items-start gap-1.5">
                   <span className="min-w-0 flex-1">

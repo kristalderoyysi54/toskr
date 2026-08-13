@@ -75,7 +75,7 @@ function ConflictRow({
                );
                focusAfterConflictResolution(profileId);
              }}
-            className="rounded-md border border-warning/40 px-2 py-1 text-label font-medium text-warning outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+            className="rounded-md border border-warning/40 px-2 py-1 text-label font-medium text-warning outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
           >
             保留在 {profileNames[index]}
           </button>

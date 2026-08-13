@@ -50,8 +50,9 @@ import { useUIStore } from "@/store/uiStore";
 
 /** 任务页「已完成」折叠区在 uiStore.doneOpen 里的固定 key。 */
 export const TASK_DONE_KEY = "tasks:done";
-/** 灵感区折叠态 key（存"是否折叠"，缺省展开）。 */
-const SPARKS_COLLAPSED_KEY = "tasks:sparks-collapsed";
+/** 智能区折叠态 key（存"是否折叠"，缺省展开）。 */
+export const TASK_OVERDUE_COLLAPSED_KEY = "tasks:overdue-collapsed";
+export const TASK_SPARKS_COLLAPSED_KEY = "tasks:sparks-collapsed";
 
 /**
  * 任务页：闪念速记 + 智能区（已到期红 / 💡灵感紫）+ 可折叠自定义分组 + 已完成。
@@ -160,7 +161,13 @@ export function TaskPage({ buckets, now }: { buckets: TaskBuckets; now: number }
           >
             <div className="flex flex-col gap-3 pb-2 pt-1">
               {buckets.overdue.length > 0 && (
-                <SmartSection title="已到期" tone="red" tasks={buckets.overdue} now={now} />
+                <SmartSection
+                  title="已到期"
+                  tone="red"
+                  tasks={buckets.overdue}
+                  now={now}
+                  collapseKey={TASK_OVERDUE_COLLAPSED_KEY}
+                />
               )}
               {buckets.sparks.length > 0 && (
                 <SmartSection
@@ -169,7 +176,7 @@ export function TaskPage({ buckets, now }: { buckets: TaskBuckets; now: number }
                   icon={<Lightbulb className="size-3 fill-violet-400 text-violet-500" />}
                   tasks={buckets.sparks}
                   now={now}
-                  collapseKey={SPARKS_COLLAPSED_KEY}
+                  collapseKey={TASK_SPARKS_COLLAPSED_KEY}
                 />
               )}
               {buckets.groups.map(({ section, tasks }) => (
@@ -177,7 +184,7 @@ export function TaskPage({ buckets, now }: { buckets: TaskBuckets; now: number }
               ))}
               <button
                 onClick={() => useNotesStore.getState().addTaskSection()}
-                className="mb-1 ml-2 flex w-fit items-center gap-1 rounded-md px-1.5 py-1 text-label text-muted-foreground/60 hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
+                className="mb-1 ml-2 flex w-fit items-center gap-1 rounded-md px-1.5 py-1 text-label text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
               >
                 <Plus className="size-3" /> 新建分组
               </button>
@@ -185,7 +192,7 @@ export function TaskPage({ buckets, now }: { buckets: TaskBuckets; now: number }
                 <div>
                   <button
                     onClick={() => useUIStore.getState().toggleDoneOpen(TASK_DONE_KEY)}
-                    className="flex items-center gap-1 px-1 py-0.5 text-micro text-muted-foreground/60 hover:text-foreground"
+                    className="flex items-center gap-1 px-1 py-0.5 text-micro text-muted-foreground hover:text-foreground"
                   >
                     {doneOpen ? (
                       <ChevronDown className="size-2.5" />
@@ -233,7 +240,13 @@ function SmartSection({
     <>
       {icon}
       {title}
-      <span className="text-micro font-normal tabular-nums opacity-60">
+      {/* 计数微 chip：染智能区色（红/紫软底），与普通分组的中性 chip 同族 */}
+      <span
+        className={cn(
+          "rounded-sm px-1 py-px text-micro font-semibold tabular-nums",
+          tone === "red" ? "bg-destructive/10" : "bg-violet-500/10"
+        )}
+      >
         {tasks.length}
       </span>
     </>
@@ -246,10 +259,15 @@ function SmartSection({
     <section>
       {collapseKey ? (
         <button
+          type="button"
           onClick={() => useUIStore.getState().toggleDoneOpen(collapseKey)}
           title={collapsed ? "展开" : "折叠"}
+          aria-label={`${collapsed ? "展开" : "折叠"}${title}分组`}
           aria-expanded={!collapsed}
-          className={cn(headingCls, "w-full")}
+          className={cn(
+            headingCls,
+            "w-full rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+          )}
         >
           {collapsed ? (
             <ChevronRight className="size-3" />
@@ -315,7 +333,7 @@ function TaskGroupBlock({
           aria-label={collapsed ? "展开分组" : "折叠分组"}
           aria-expanded={!collapsed}
           onClick={() => toggleTaskSectionCollapsed(section.id)}
-          className="rounded-sm p-0.5 text-muted-foreground/60 hover:text-foreground"
+          className="rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
         >
           {collapsed ? (
             <ChevronRight className="size-3" />
@@ -359,7 +377,7 @@ function TaskGroupBlock({
             {section.name}
           </h3>
         )}
-        <span className="text-micro tabular-nums text-muted-foreground/60">
+        <span className="rounded-sm surface-inset px-1 py-px text-micro font-semibold tabular-nums text-muted-foreground">
           {tasks.length}
         </span>
         <div className="ml-auto">

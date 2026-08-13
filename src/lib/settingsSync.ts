@@ -147,6 +147,9 @@ export function applySettingsPatch(patch: Partial<Settings>) {
   if ("soundEnabled" in patch) {
     void api.setSound(s.soundEnabled);
   }
+  if ("hudDurationMs" in patch) {
+    void api.setHudDuration(s.hudDurationMs);
+  }
   if ("doubleTapCaptureOnly" in patch) {
     void api.setDoubleTapMode(s.doubleTapCaptureOnly);
   }

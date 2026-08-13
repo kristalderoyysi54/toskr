@@ -3,8 +3,16 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 import { detectCode } from "@/lib/code";
 import { detectLink } from "@/lib/link";
-import { imageCaption, mergeTexts } from "@/lib/format";
+import { imageCaption } from "@/lib/format";
 import { normalizeNoteContent } from "@/lib/noteContent";
+import {
+  normalizeNoteContentBlocks,
+  noteContentBlocks,
+  projectNoteContent,
+  replaceNoteTextProjection,
+  textFromContentBlocks,
+  type NoteContentBlock,
+} from "@/lib/noteContentBlocks";
 import { FIREWALL_WARN_CATEGORIES } from "@/lib/delivery/firewall";
 import {
   isAliasCategoryRecordValid,
@@ -45,6 +53,8 @@ import { tauriStateStorage } from "./persistStorage";
 export type { PromptGroup, PromptSnippet, TargetProfile } from "@/lib/targetProfiles";
 export type { AliasCategoryDefinition, AliasEntity } from "@/lib/delivery/aliasEntities";
 export type { OnboardingEvent, OnboardingState } from "@/lib/onboarding";
+export type { NoteContentBlock } from "@/lib/noteContentBlocks";
+export { noteContentBlocks, textFromContentBlocks };
 
 export type NoteKind = "text" | "image" | "link";
 
@@ -53,7 +63,7 @@ export type PageId = "notes" | "clipboard" | "tasks";
 
 /** 页签默认顺序（剪贴最高频，居首）。 */
 export const DEFAULT_PAGE_ORDER: PageId[] = ["clipboard", "notes", "tasks"];
-export const STORE_VERSION = 15;
+export const STORE_VERSION = 17;
 
 /**
  * 归一化页签顺序：去重、剔除未知项、补齐缺失页（按默认序追加）。
@@ -91,6 +101,11 @@ export interface Note {
   imageFile?: string;
   /** 附加图片（合并后的组合卡片可同时带多张图）。 */
   attachments?: string[];
+  /**
+   * 富卡权威内容。缺省仅用于兼容旧内存夹具/导入；v16 新建与持久化迁移
+   * 都会写入。text/imageFile/attachments 是由它确定性生成的兼容投影。
+   */
+  contentBlocks?: NoteContentBlock[];
   imageW?: number;
   imageH?: number;
   text: string;
@@ -262,8 +277,8 @@ export interface Settings {
   cardOpacity: number;
   /** 卡片密度：舒适（瓷砖）/ 紧凑（单行列表）。 */
   cardDensity: "comfortable" | "compact";
-  /** 剪贴卡模板（仅舒适密度竖栏生效）：标准瓷砖 / 浓缩（通栏+单行摘要）/ 只留通栏。 */
-  clipCardTemplate: "standard" | "condensed" | "banner";
+  /** 剪贴卡模板（仅舒适密度竖栏生效）：标准瓷砖 / 浓缩（票据头+单行摘要）。 */
+  clipCardTemplate: "standard" | "condensed";
   /** 卡片右键菜单项显隐与顺序（合并置顶、删除垫底不参与自定义）。 */
   contextMenu: { id: ContextMenuItemId; on: boolean }[];
   /** 启动时自动检查更新。 */
@@ -301,6 +316,10 @@ export interface Settings {
   stealth: boolean;
   /** 捕获成功音效（隐身模式下强制静音）。 */
   soundEnabled: boolean;
+  /** 非粘性提示气泡自动隐藏时长（ms）。 */
+  hudDurationMs: number;
+  /** 首个数据档案的面板默认态是否已成功下发（仅首启消费一次）。 */
+  initialPanelSetupDone: boolean;
   /** 伴随停靠：面板磁吸到目标应用窗口右缘并跟随。 */
   companionEnabled: boolean;
   /** 伴随应用 bundle id 列表。 */
@@ -468,6 +487,9 @@ export function normalizeContextMenu(
 }
 export const PANEL_WIDTH_MIN = 320;
 export const PANEL_WIDTH_MAX = 520;
+export const HUD_DURATION_MIN_MS = 2_000;
+export const HUD_DURATION_MAX_MS = 10_000;
+export const HUD_DURATION_DEFAULT_MS = 3_000;
 
 const defaultSections = (): Section[] => [{ id: INBOX_ID, name: "收件箱" }];
 
@@ -520,6 +542,9 @@ export const defaultSettings = (): Settings => ({
   panelToggleHotkey: null,
   stealth: false,
   soundEnabled: true,
+  hudDurationMs: HUD_DURATION_DEFAULT_MS,
+  // Native 启动仍保持隐藏；数据水合确认是新档案后再一次性打开、固定并启用磁吸
+  initialPanelSetupDone: false,
   companionEnabled: false,
   companionApps: [...DEFAULT_COMPANION_APPS],
   companionGap: 8,
@@ -622,6 +647,10 @@ export interface NotesState {
       imageH?: number;
       /** 除 imageFile 外的其余图片附件（输入框暂存多图成组合卡）。 */
       attachments?: string[];
+      /** 有序富内容；传入后为权威，text 与旧图片字段只作调用兼容。 */
+      contentBlocks?: NoteContentBlock[];
+      /** 来源侧捕获时间；异步图片本地化完成顺序不应改写原始时间。 */
+      createdAt?: number;
     }
   ) => { result: AddNoteResult; id?: string };
   /** 剪贴板历史入库：自动建「剪贴板」分组、超限裁剪；返回待清理的图片文件。 */
@@ -634,6 +663,11 @@ export interface NotesState {
       imageFile?: string;
       imageW?: number;
       imageH?: number;
+      attachments?: string[];
+      /** 有序富内容；传入后为权威。 */
+      contentBlocks?: NoteContentBlock[];
+      /** 来源侧捕获时间；重复项提升也使用该时间。 */
+      createdAt?: number;
     }
   ) => string[];
   /** 清空剪贴板历史（固定 ★ 卡保留；可撤销）。返回删除数与待清理图片。 */
@@ -642,6 +676,8 @@ export interface NotesState {
   pruneClipHistory: () => string[];
   /** 更新正文；详情编辑器传 imageFiles 时同步替换附件。 */
   updateNoteText: (id: string, text: string, imageFiles?: string[]) => void;
+  /** 原子替换富卡权威块，并同步所有兼容投影。 */
+  updateNoteContent: (id: string, blocks: NoteContentBlock[]) => void;
   /**
    * 从卡片移除一张图片（组合卡详情页的 ⊗）。剩余图片顺次补位；一张不剩时：
    * 有文字 → 退化为纯文本卡，无文字 → 整张卡删除。可撤销，故刻意不删磁盘
@@ -845,6 +881,7 @@ function validateSettingsShape(value: unknown, version: number): void {
   enumField("theme", ["system", "light", "dark"]);
   enumField("vibrancyMaterial", ["hud", "popover", "sidebar", "under-window", "fullscreen"]);
   enumField("cardDensity", ["comfortable", "compact"]);
+  // banner 是已移除的旧「单行」模板，仅为读取旧数据保留；迁移后统一写成 condensed。
   enumField("clipCardTemplate", ["standard", "condensed", "banner"]);
   enumField("hotkeyModifier", ["shift", "control", "option"]);
   enumField("sidebarEdge", ["right", "left", "top", "bottom"]);
@@ -858,6 +895,14 @@ function validateSettingsShape(value: unknown, version: number): void {
     settings.outcomeMetricsEpoch < 0
   )) {
     throw new Error("settings.outcomeMetricsEpoch 字段无效");
+  }
+  if (settings.hudDurationMs !== undefined && (
+    typeof settings.hudDurationMs !== "number" ||
+    !Number.isInteger(settings.hudDurationMs) ||
+    settings.hudDurationMs < HUD_DURATION_MIN_MS ||
+    settings.hudDurationMs > HUD_DURATION_MAX_MS
+  )) {
+    throw new Error("settings.hudDurationMs 超出允许范围");
   }
 
   const stringArrays = ["clipExcludedApps", "companionApps", "excludedApps"];
@@ -1105,7 +1150,31 @@ function normalizeNoteProvenance(value: unknown): NoteProvenance | undefined {
   };
 }
 
-function normalizeNoteRecord(note: Note, sectionIds: Set<string>): Note {
+function noteContentPatch(blocks: unknown): Pick<
+  Note,
+  | "contentBlocks"
+  | "text"
+  | "imageFile"
+  | "attachments"
+  | "imageW"
+  | "imageH"
+> {
+  const projected = projectNoteContent(blocks);
+  return {
+    contentBlocks: projected.contentBlocks,
+    text: projected.text,
+    imageFile: projected.imageFile,
+    attachments: projected.attachments,
+    imageW: projected.imageW,
+    imageH: projected.imageH,
+  };
+}
+
+function normalizeNoteRecord(
+  note: Note,
+  sectionIds: Set<string>,
+  preferContentBlocks = true
+): Note {
   const kind = note.kind ?? "text";
   if (!(["text", "image", "link"] as const).includes(kind)) {
     throw new Error(`note.kind 无效：${String(note.kind)}`);
@@ -1113,10 +1182,15 @@ function normalizeNoteRecord(note: Note, sectionIds: Set<string>): Note {
   if (note.done !== undefined && typeof note.done !== "boolean") {
     throw new Error("note.done 必须是 boolean");
   }
+  // v15 及更早版本中的同名未知字段没有契约，迁移时只从当时权威的旧字段
+  // 建块；v16/导入的新卡只信 contentBlocks，随后统一反投影旧字段。
+  const blocks = preferContentBlocks
+    ? noteContentBlocks(note)
+    : noteContentBlocks({ ...note, contentBlocks: undefined });
   return {
     ...note,
     kind,
-    text: typeof note.text === "string" ? note.text : "",
+    ...noteContentPatch(blocks),
     sectionId:
       typeof note.sectionId === "string" && sectionIds.has(note.sectionId)
         ? note.sectionId
@@ -1124,11 +1198,6 @@ function normalizeNoteRecord(note: Note, sectionIds: Set<string>): Note {
     done: note.done ?? false,
     createdAt: finiteNumberOrDefault(note.createdAt, 0, "note.createdAt"),
     provenance: normalizeNoteProvenance(note.provenance),
-    attachments: Array.isArray(note.attachments)
-      ? [...new Set(note.attachments.filter((file): file is string => typeof file === "string" && !!file))].filter(
-          (file) => file !== note.imageFile
-        )
-      : undefined,
   };
 }
 
@@ -1168,7 +1237,7 @@ function normalizeTaskRecord(task: Task, sectionIds: Set<string>): Task {
   };
 }
 
-/** Zustand persist v1-v14 向前迁移；未知字段保留，旧版本重复记录按首项去重。 */
+/** Zustand persist v1-v17 向前迁移；未知字段保留，旧版本重复记录按首项去重。 */
 export function migratePersistedState(
   persisted: unknown,
   version: number
@@ -1189,6 +1258,12 @@ export function migratePersistedState(
   }
   if (version >= 9) assertCurrentSchemaHasUniqueIds(p);
   validateSettingsShape(p.settings, version);
+  if (
+    p.settings &&
+    (p.settings as unknown as Record<string, unknown>).clipCardTemplate === "banner"
+  ) {
+    p.settings = { ...p.settings, clipCardTemplate: "condensed" };
+  }
   if (version < 5 && p.settings?.companionApps) {
     p.settings = {
       ...p.settings,
@@ -1265,6 +1340,14 @@ export function migratePersistedState(
       aliasAutoRestoreOnCapture: true,
     };
   }
+  if (version < 17) {
+    // v16 及更早的数据都属于既有用户：迁移时直接标记已处理，绝不能因升级
+    // 强制打开面板或改写其伴随偏好。没有 settings 的旧 envelope 也同样保护。
+    p.settings = {
+      ...(p.settings ?? {}),
+      initialPanelSetupDone: true,
+    } as Settings;
+  }
 
   const sections = dedupeById<Section>(p.sections).map((section) => ({
     ...section,
@@ -1275,7 +1358,7 @@ export function migratePersistedState(
   }
   const sectionIds = new Set(sections.map((section) => section.id));
   const notes = dedupeById<Note>(p.notes).map((note) =>
-    normalizeNoteRecord(note, sectionIds)
+    normalizeNoteRecord(note, sectionIds, version >= 16)
   );
   const taskSections = dedupeById<TaskSection>(p.taskSections).map((section) => ({
     ...section,
@@ -1372,6 +1455,56 @@ export function serializePersistentState(state: NotesState): string {
   return JSON.stringify({ state: persistentStateOf(state), version: STORE_VERSION });
 }
 
+type AddNoteContentOptions = {
+  contentBlocks?: NoteContentBlock[];
+  imageFile?: string;
+  attachments?: string[];
+  imageW?: number;
+  imageH?: number;
+};
+
+function contentBlocksForAdd(
+  text: string,
+  opts: AddNoteContentOptions | undefined
+): NoteContentBlock[] {
+  if (opts?.contentBlocks !== undefined) {
+    return normalizeNoteContentBlocks(opts.contentBlocks);
+  }
+  const blocks: NoteContentBlock[] = [];
+  const trimmed = text.trim();
+  if (trimmed) blocks.push({ type: "text", text: trimmed });
+  const files = [opts?.imageFile, ...(opts?.attachments ?? [])].filter(
+    (file): file is string => typeof file === "string" && !!file
+  );
+  const seen = new Set<string>();
+  for (const file of files) {
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const main = file === opts?.imageFile;
+    blocks.push({
+      type: "image",
+      file,
+      ...(main && opts?.imageW !== undefined ? { width: opts.imageW } : {}),
+      ...(main && opts?.imageH !== undefined ? { height: opts.imageH } : {}),
+    });
+  }
+  return normalizeNoteContentBlocks(blocks);
+}
+
+/** 剪贴记录按来源时间降序插入，异步图片本地化完成顺序不影响原始顺序。 */
+function insertClipboardNoteByTime(notes: Note[], note: Note): Note[] {
+  const before = notes.findIndex(
+    (item) => item.sectionId === CLIPBOARD_ID && item.createdAt <= note.createdAt
+  );
+  if (before >= 0) return [...notes.slice(0, before), note, ...notes.slice(before)];
+  let last = -1;
+  notes.forEach((item, index) => {
+    if (item.sectionId === CLIPBOARD_ID) last = index;
+  });
+  if (last >= 0) return [...notes.slice(0, last + 1), note, ...notes.slice(last + 1)];
+  return [note, ...notes];
+}
+
 export const useNotesStore = create<NotesState>()(
   persist(
     (set, get) => ({
@@ -1384,8 +1517,15 @@ export const useNotesStore = create<NotesState>()(
       undoStack: [],
 
       addNote: (text, opts) => {
-        const trimmed = text.trim();
-        if (!trimmed) return { result: "empty" };
+        const blocks = contentBlocksForAdd(text, opts);
+        const content = projectNoteContent(blocks);
+        const trimmed = content.text.trim();
+        if (!trimmed && content.imageFiles.length === 0) return { result: "empty" };
+        const createdAt = finiteNumberOrDefault(
+          opts?.createdAt,
+          Date.now(),
+          "note.createdAt"
+        );
         // 去重（覆盖已完成卡片，避免发送后再捕获同一内容又新建）：
         // - 文本：内容完全相同；图片：附件哈希文件名相同（像素内容哈希命名）
         // - 只在目标域内查重：剪贴板历史与笔记互不冲突——复制过的内容
@@ -1393,12 +1533,16 @@ export const useNotesStore = create<NotesState>()(
         const targetClip = opts?.sectionId === CLIPBOARD_ID;
         const inScope = (n: Note) =>
           (n.sectionId === CLIPBOARD_ID) === targetClip;
-        const dup =
-          opts?.kind === "image"
-            ? opts.imageFile
-              ? get().notes.find(
-                  (n) => inScope(n) && n.imageFile === opts.imageFile
-                )
+        const primaryImage = content.imageFile;
+        const dup = opts?.contentBlocks !== undefined
+          ? get().notes.find(
+              (n) =>
+                inScope(n) &&
+                JSON.stringify(noteContentBlocks(n)) === JSON.stringify(blocks)
+            )
+          : opts?.kind === "image"
+            ? primaryImage
+              ? get().notes.find((n) => inScope(n) && n.imageFile === primaryImage)
               : undefined
             : opts?.attachments?.length || opts?.imageFile
               ? // 图文组合卡：同文不同图是合法新卡，不按文本查重
@@ -1417,25 +1561,38 @@ export const useNotesStore = create<NotesState>()(
             : (sections.find((s) => s.id !== CLIPBOARD_ID)?.id ?? INBOX_ID);
         const note: Note = {
           id: crypto.randomUUID(),
-          text: trimmed,
+          ...noteContentPatch(blocks),
           sectionId,
           done: false,
-          createdAt: Date.now(),
+          createdAt,
           sourceApp: opts?.sourceApp,
           sourceBundle: opts?.sourceBundle,
-          kind: opts?.kind ?? (detectLink(trimmed) ? "link" : "text"),
-          url: opts?.kind === "image" ? undefined : detectLink(trimmed),
+          kind:
+            opts?.kind ??
+            (content.imageFiles.length > 0
+              ? trimmed
+                ? "text"
+                : "image"
+              : detectLink(trimmed)
+                ? "link"
+                : "text"),
+          url:
+            opts?.kind === "image" || content.imageFiles.length > 0
+              ? undefined
+              : detectLink(trimmed),
           codeLang:
-            opts?.kind === "image" || detectLink(trimmed)
+            opts?.kind === "image" ||
+            content.imageFiles.length > 0 ||
+            detectLink(trimmed)
               ? undefined
               : detectCode(trimmed),
-          imageFile: opts?.imageFile,
-          imageW: opts?.imageW,
-          imageH: opts?.imageH,
-          attachments: opts?.attachments?.length ? opts.attachments : undefined,
         };
         // 最新的卡片置顶（收件箱语义：新内容在最上面）
-        set({ notes: [note, ...get().notes] });
+        set({
+          notes: targetClip
+            ? insertClipboardNoteByTime(get().notes, note)
+            : [note, ...get().notes],
+        });
         return { result: "added", id: note.id };
       },
 
@@ -1456,13 +1613,18 @@ export const useNotesStore = create<NotesState>()(
           if (idx >= 0) {
             const bumped: Note = {
               ...notes[idx],
-              createdAt: Date.now(),
+              createdAt: finiteNumberOrDefault(
+                opts?.createdAt,
+                Date.now(),
+                "note.createdAt"
+              ),
               sourceApp: opts?.sourceApp ?? notes[idx].sourceApp,
               sourceBundle: opts?.sourceBundle ?? notes[idx].sourceBundle,
             };
-            set({
-              notes: [bumped, ...notes.filter((n) => n.id !== res.id)],
-            });
+            set({ notes: insertClipboardNoteByTime(
+              notes.filter((n) => n.id !== res.id),
+              bumped
+            ) });
           }
         }
         return [];
@@ -1516,6 +1678,7 @@ export const useNotesStore = create<NotesState>()(
           notes: get().notes.map((n) => {
             if (n.id !== id) return n;
             const replacesImages = imageFiles !== undefined;
+            const currentBlocks = noteContentBlocks(n);
             const files = replacesImages
               ? [...new Set(imageFiles.filter(Boolean))]
               : noteImages(n);
@@ -1523,23 +1686,15 @@ export const useNotesStore = create<NotesState>()(
             // 空文本：纯文本卡回退旧值（防误清空成无内容卡）；带图卡的文字
             // 只是备注，允许清空（图片本身就是内容）
             const t = trimmed || (hasImages ? "" : n.text);
-            const normalized = normalizeNoteContent(t, hasImages);
-            const firstImage = files[0];
-            const imagePatch = replacesImages
-              ? {
-                  imageFile: firstImage,
-                  attachments: files.length > 1 ? files.slice(1) : undefined,
-                  imageW: firstImage === n.imageFile ? n.imageW : undefined,
-                  imageH: firstImage === n.imageFile ? n.imageH : undefined,
-                }
-              : {};
+            const blocks = replaceNoteTextProjection(currentBlocks, t, imageFiles);
+            const contentPatch = noteContentPatch(blocks);
+            const normalized = normalizeNoteContent(contentPatch.text, hasImages);
             if (normalized.url) {
               // 编辑为/仍为纯链接：URL 变化时清掉旧简介，等待重抓
               const same = normalized.url === n.url;
               return {
                 ...n,
-                ...imagePatch,
-                text: normalized.text,
+                ...contentPatch,
                 kind: "link" as const,
                 url: normalized.url,
                 codeLang: undefined,
@@ -1549,8 +1704,7 @@ export const useNotesStore = create<NotesState>()(
             }
             return {
               ...n,
-              ...imagePatch,
-              text: normalized.text,
+              ...contentPatch,
               kind: replacesImages
                 ? normalized.kind
                 : n.kind === "link"
@@ -1565,12 +1719,40 @@ export const useNotesStore = create<NotesState>()(
         });
       },
 
+      updateNoteContent: (id, blocks) => {
+        const contentPatch = noteContentPatch(blocks);
+        const hasImages = !!contentPatch.imageFile;
+        if (!contentPatch.text.trim() && !hasImages) return;
+        const normalized = normalizeNoteContent(contentPatch.text, hasImages);
+        set({
+          notes: get().notes.map((note) => {
+            if (note.id !== id) return note;
+            const sameUrl = normalized.url === note.url;
+            return {
+              ...note,
+              ...contentPatch,
+              kind: normalized.kind,
+              url: normalized.url ?? undefined,
+              codeLang: normalized.codeLang ?? undefined,
+              linkTitle: sameUrl ? note.linkTitle : undefined,
+              linkIcon: sameUrl ? note.linkIcon : undefined,
+            };
+          }),
+        });
+      },
+
       removeNoteImage: (id, file) => {
         const note = get().notes.find((n) => n.id === id);
         if (!note || !noteImages(note).includes(file)) {
           return { noteDeleted: false };
         }
-        const rest = noteImages(note).filter((f) => f !== file);
+        const nextBlocks = noteContentBlocks(note).filter(
+          (block) => block.type !== "image" || block.file !== file
+        );
+        const nextContent = noteContentPatch(nextBlocks);
+        const rest = nextContent.imageFile
+          ? [nextContent.imageFile, ...(nextContent.attachments ?? [])]
+          : [];
         get().snapshot("移除图片");
         if (!rest.length) {
           // 一张不剩：还有真实文字就退化为纯文本卡，否则整张卡没内容了 → 删除
@@ -1580,11 +1762,8 @@ export const useNotesStore = create<NotesState>()(
                 n.id === id
                   ? {
                       ...n,
+                      ...nextContent,
                       kind: "text" as const,
-                      imageFile: undefined,
-                      attachments: undefined,
-                      imageW: undefined,
-                      imageH: undefined,
                     }
                   : n
               ),
@@ -1597,17 +1776,13 @@ export const useNotesStore = create<NotesState>()(
           });
           return { noteDeleted: true };
         }
-        // 主图被移除时由 rest[0] 顶上；宽高只对原主图有效，换图即失效
-        const mainKept = rest[0] === note.imageFile;
+        // 主图被移除时由后续首个图片块顶上；每个块自己的尺寸元数据跟图走。
         set({
           notes: get().notes.map((n) =>
             n.id === id
               ? {
                   ...n,
-                  imageFile: rest[0],
-                  attachments: rest.length > 1 ? rest.slice(1) : undefined,
-                  imageW: mainKept ? n.imageW : undefined,
-                  imageH: mainKept ? n.imageH : undefined,
+                  ...nextContent,
                 }
               : n
           ),
@@ -1724,45 +1899,90 @@ export const useNotesStore = create<NotesState>()(
         if (ordered.length < 2) return;
         get().snapshot(`合并 ${ordered.length} 条`);
 
-        // 组合卡片：文字合并成正文，图片全部作为附件挂在同一张卡上。
-        // 图片卡的真实文字备注（占位符「图片 W×H」不算）同样参与合并
-        // ——文字跟着图走，任何图+文/图+图组合都不丢字
+        // 各来源卡的块保持原有文档顺序；图片卡自动占位文字不是真实正文，
+        // 合并时仍剔除。不同来源的正文兼容投影维持旧版空行分隔语义。
+        const sourceBlocks = ordered.map((note) => {
+          const keepText = note.kind !== "image" || imageCaption(note).length > 0;
+          return noteContentBlocks(note).filter(
+            (block) => keepText || block.type !== "text"
+          );
+        });
+        const textSourceIndexes = sourceBlocks.flatMap((blocks, index) =>
+          blocks.some((block) => block.type === "text") ? [index] : []
+        );
+        const lastTextSource = textSourceIndexes.at(-1);
+        let mergedBlocks = sourceBlocks.flatMap((blocks, index) =>
+          lastTextSource !== undefined &&
+          index !== lastTextSource &&
+          blocks.some((block) => block.type === "text")
+            ? [...blocks, { type: "text", text: "\n\n" } satisfies NoteContentBlock]
+            : blocks
+        );
+        const hasRichLayout = ordered.some(
+          (note, index) =>
+            JSON.stringify(sourceBlocks[index]) !==
+            JSON.stringify(
+              noteContentBlocks({ ...note, contentBlocks: undefined }).filter(
+                (block) =>
+                  note.kind !== "image" ||
+                  imageCaption(note).length > 0 ||
+                  block.type !== "text"
+              )
+            )
+        );
+        if (!hasRichLayout) {
+          // 旧组合卡只为首个来源卡的主图保留宽高；其余附件从未持久化尺寸。
+          // 保持该兼容行为，富文档布局则保留每个图片块自己的元数据。
+          let firstImage = true;
+          const legacyDimensionFile = ordered[0].imageFile;
+          mergedBlocks = mergedBlocks.map((block) => {
+            if (block.type !== "image") return block;
+            const keepDimensions = firstImage && block.file === legacyDimensionFile;
+            firstImage = false;
+            if (keepDimensions) return block;
+            const { width: _width, height: _height, ...withoutDimensions } = block;
+            return withoutDimensions;
+          });
+        }
+        const mergedContent = noteContentPatch(mergedBlocks);
+        const images = [
+          mergedContent.imageFile,
+          ...(mergedContent.attachments ?? []),
+        ].filter((file): file is string => !!file);
         const textParts = ordered
           .filter((n) => n.kind !== "image" || imageCaption(n).length > 0)
           .map((n) => n.text);
-        const images = [...new Set(ordered.flatMap(noteImages))];
         const first = ordered[0];
         const mergedText = textParts.length
-          ? mergeTexts(textParts)
+          ? mergedContent.text
           : `图片 ${images.length} 张`;
+        // 纯图片卡继续保留旧占位投影；占位也写入块，避免兼容字段成为第二真源。
+        const content = textParts.length
+          ? mergedContent
+          : noteContentPatch([
+              { type: "text", text: mergedText },
+              ...mergedBlocks,
+            ]);
         // 剪贴板域=历史记录，合并不消费原卡：产出一张新组合卡置顶
         if (ordered.every((n) => n.sectionId === CLIPBOARD_ID)) {
           const combo: Note = {
             id: crypto.randomUUID(),
-            text: mergedText,
+            ...content,
             sectionId: CLIPBOARD_ID,
             done: false,
             createdAt: Date.now(),
             kind: textParts.length ? "text" : "image",
             codeLang: textParts.length ? detectCode(mergedText) : undefined,
-            imageFile: images[0],
-            imageW: images[0] === first.imageFile ? first.imageW : undefined,
-            imageH: images[0] === first.imageFile ? first.imageH : undefined,
-            attachments: images.slice(1),
           };
           set({ notes: [combo, ...notes], checkedIds: [combo.id] });
           return;
         }
         const merged: Note = {
           ...first,
-          text: mergedText,
+          ...content,
           kind: textParts.length ? "text" : "image",
           codeLang: textParts.length ? detectCode(mergedText) : undefined,
           url: undefined,
-          imageFile: images[0],
-          imageW: images[0] === first.imageFile ? first.imageW : undefined,
-          imageH: images[0] === first.imageFile ? first.imageH : undefined,
-          attachments: images.slice(1),
         };
         const rest = new Set(ordered.slice(1).map((n) => n.id));
         set({
@@ -2408,10 +2628,13 @@ export function doneIdsAfterSend(
 
 /** 卡片携带的全部图片（主图 + 附件，已去重）。 */
 export function noteImages(note: Note): string[] {
-  const all = [note.imageFile, ...(note.attachments ?? [])].filter(
-    (f): f is string => !!f
-  );
-  return [...new Set(all)];
+  return [
+    ...new Set(
+      noteContentBlocks(note).flatMap((block) =>
+        block.type === "image" ? [block.file] : []
+      )
+    ),
+  ];
 }
 
 /** 按列表展示顺序返回勾选的笔记。 */

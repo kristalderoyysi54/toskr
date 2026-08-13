@@ -215,6 +215,48 @@ describe("发送入口路由", () => {
     expect(preview).toContain('"text-preview-target-status"');
   });
 
+  it("独立图片预览的快捷发送继续走主面板目标与预检链路", () => {
+    const preview = readFileSync(path.join(srcRoot, "ImagePreviewView.tsx"), "utf8");
+    const textPreview = readFileSync(path.join(srcRoot, "TextPreviewView.tsx"), "utf8");
+    const richContent = readFileSync(
+      path.join(srcRoot, "components", "RichNoteContent.tsx"),
+      "utf8"
+    );
+    const overlay = readFileSync(
+      path.join(srcRoot, "components", "PreviewOverlay.tsx"),
+      "utf8"
+    );
+    const app = readFileSync(path.join(srcRoot, "App.tsx"), "utf8");
+    const targetListener = preview.indexOf(
+      "listen<TargetSnapshot>(TARGET_CHANGED_EVENT"
+    );
+    const previewListener = preview.indexOf(
+      'listen<{\n      files: string[];'
+    );
+
+    expect(targetListener).toBeGreaterThanOrEqual(0);
+    expect(previewListener).toBeGreaterThan(targetListener);
+    expect(preview).toContain("void readTarget()");
+    expect(preview).toContain('emitTo("main", "toskr://note-send"');
+    expect(preview).toContain('id="image-preview-target-status"');
+    expect(preview).toContain("disabled={!targetReady}");
+    expect(preview).toContain("!editing && noteId && dataGeneration !== null");
+    expect(preview).toContain("发送整张卡片（含 ${files.length} 张图片）");
+    expect(textPreview).toContain("const imagePreviewSource = writable && !editing");
+    expect(textPreview).toContain(
+      "api.quickLook(shownImages, i, imagePreviewSource)"
+    );
+    expect(textPreview).toContain("previewSource={imagePreviewSource}");
+    expect(richContent).toContain(
+      "api.quickLook(files, index, previewSource)"
+    );
+    expect(overlay).toContain("previewSource={imagePreviewSource}");
+    expect(app).toContain(
+      'listen<{ id: string; dataGeneration: number }>("toskr://note-send"'
+    );
+    expect(app).toContain("void sendNotesToChat([e.payload.id])");
+  });
+
   it("剪贴板卡内部追加由共享事件契约连接 actions 与文本编辑器", () => {
     const actions = readFileSync(path.join(srcRoot, "lib", "actions.ts"), "utf8");
     const preview = readFileSync(path.join(srcRoot, "TextPreviewView.tsx"), "utf8");
@@ -292,7 +334,8 @@ describe("发送入口路由", () => {
     expect(lens).toContain("快速切换发送方案");
     expect(lens).toContain("原临时发送方案已暂停");
     expect(selection).toContain("当前提示词组 ·");
-    expect(selection).toContain("全部模板");
+    expect(selection).toContain("其他模板");
+    expect(selection).toContain("snippetMenu.remaining");
     expect(selection).toContain("setTargetProfileOverride");
   });
 

@@ -200,7 +200,7 @@ export function TextSelectionToolbar({
                 }
               }}
               placeholder="粘贴链接地址"
-              className="h-7 min-w-0 flex-1 rounded-md border border-foreground/10 bg-background px-2 text-body outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-primary/50"
+              className="h-7 min-w-0 flex-1 rounded-md border border-foreground/10 bg-background px-2 text-body outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
             />
             <Button type="submit" size="xs" disabled={!href.trim()}>
               应用
@@ -233,7 +233,7 @@ export function TextSelectionToolbar({
                 }
               }}
               placeholder="要化名的原文（可修改）"
-              className="h-7 min-w-0 rounded-md border border-foreground/10 bg-background px-2 text-body outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-primary/50"
+              className="h-7 min-w-0 rounded-md border border-foreground/10 bg-background px-2 text-body outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
             />
             <div className="flex items-center gap-1">
               <div
@@ -249,7 +249,7 @@ export function TextSelectionToolbar({
                     aria-checked={aliasCategory === category.code}
                     onClick={() => setAliasCategory(category.code)}
                     className={cn(
-                      "rounded-md px-1.5 py-0.5 text-micro outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
+                      "rounded-md px-1.5 py-0.5 text-micro outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
                       aliasCategory === category.code
                         ? "bg-primary/15 font-medium text-foreground"
                         : "bg-black/5 text-muted-foreground hover:text-foreground dark:bg-white/10"
@@ -346,7 +346,7 @@ export function TextSelectionToolbar({
                   }}
                   className={cn(
                     "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-body outline-none",
-                    "hover:bg-black/5 focus-visible:bg-black/5 focus-visible:ring-2 focus-visible:ring-primary/40 dark:hover:bg-white/10 dark:focus-visible:bg-white/10",
+                    "hover:bg-black/5 focus-visible:bg-black/5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:hover:bg-white/10 dark:focus-visible:bg-white/10",
                     active && "bg-black/5 dark:bg-white/10"
                   )}
                 >

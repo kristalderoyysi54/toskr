@@ -26,7 +26,7 @@ zip = { version = "4.6.1", default-features = false }
 enigo = "0.6"
 arboard = "3"
 base64 = "0.22"
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }

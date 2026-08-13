@@ -36,7 +36,7 @@ function TypeRow({ cls, px, use }: { cls: string; px: string; use: string }) {
         {cls} · {px}
       </span>
       <span className={`${cls} font-medium`}>划词捕获，一键发回对话 Aa 123</span>
-      <span className="text-micro text-muted-foreground/70">{use}</span>
+      <span className="text-micro text-muted-foreground">{use}</span>
     </div>
   );
 }
@@ -45,7 +45,7 @@ function PrimaryButton({ children }: { children: React.ReactNode }) {
   return (
     <button
       type="button"
-      className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border bg-background px-4 text-title font-medium text-foreground transition-transform hover:bg-muted active:translate-y-px dark:border-input dark:bg-input/30 dark:hover:bg-input/50"
+      className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-(--button-primary-border) bg-button-primary px-4 text-title font-medium text-button-primary-foreground shadow-(--button-primary-shadow) transition-all duration-(--duration-control) hover:bg-button-primary-hover active:translate-y-[0.5px] active:shadow-none"
     >
       {children}
     </button>
@@ -55,8 +55,10 @@ function PrimaryButton({ children }: { children: React.ReactNode }) {
 function SwitchMock({ on }: { on: boolean }) {
   return (
     <span
-      className={`relative inline-block h-[18px] w-8 rounded-full shadow-[inset_0_1px_2px_oklch(0_0_0/0.18)] transition-colors ${
-        on ? "bg-primary" : "bg-foreground/15"
+      className={`relative inline-block h-[18px] w-8 rounded-full border shadow-[inset_0_1px_2px_oklch(0_0_0/0.18)] transition-colors ${
+        on
+          ? "border-transparent bg-primary"
+          : "border-(--switch-track-off-border) bg-(--switch-track-off)"
       }`}
     >
       <span
@@ -168,7 +170,8 @@ function TilePanel() {
     <div className="flex min-h-full flex-col gap-7 bg-background p-6 text-foreground">
       <Spec title="色板 · 纸白主控件 + 蓝状态色">
         <div className="flex flex-wrap gap-3">
-          <Swatch name="paper" className="bg-paper" note="纸白·备用（主控件已改描边款）" />
+          <Swatch name="paper" className="bg-paper" note="纸白·仅 HUD 气泡身份色（主按钮嫌暖黄已弃用）" />
+          <Swatch name="button-primary" className="bg-button-primary" note="主按钮白实体（2026-08-13 定稿）" />
           <Swatch name="primary" className="bg-primary" note="蓝·焦点/选中/开关" />
           <Swatch name="success" className="bg-success" note="=现状勾选绿" />
           <Swatch name="warning" className="bg-warning" note="=现状琥珀" />
@@ -227,7 +230,7 @@ function TilePanel() {
         </div>
       </Spec>
 
-      <Spec title="按钮 · 描边款主键（用户定稿；gloss 与纸白填充均已否决）">
+      <Spec title="按钮 · 白实体主键（2026-08-13 定稿；gloss/纸白暖调/粉底 destructive 均已否决）">
         <div className="flex flex-wrap items-center gap-3">
           <PrimaryButton>
             <Send className="size-3.5" />
@@ -237,20 +240,20 @@ function TilePanel() {
             type="button"
             className="inline-flex h-8 items-center rounded-lg border border-border bg-background px-3 text-body font-medium text-foreground hover:bg-muted"
           >
-            次要操作
+            次要操作（描边降档）
           </button>
           <button
             type="button"
-            className="inline-flex h-8 items-center rounded-lg bg-destructive/10 px-3 text-body font-medium text-destructive hover:bg-destructive/20"
+            className="inline-flex h-8 items-center rounded-lg px-3 text-body font-medium text-destructive hover:bg-destructive/10"
           >
-            删除
+            删除（红字 ghost）
           </button>
           <button
             type="button"
             disabled
-            className="inline-flex h-8 items-center rounded-lg bg-primary px-3 text-body font-medium text-primary-foreground opacity-50"
+            className="inline-flex h-8 items-center rounded-lg border border-(--button-primary-border) bg-button-primary px-3 text-body font-medium text-button-primary-foreground opacity-45"
           >
-            禁用态
+            禁用态 ·45
           </button>
         </div>
       </Spec>

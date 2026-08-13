@@ -345,7 +345,7 @@ function ProgressiveSection({ title, description, children }: {
 }) {
   return (
     <details className="group mt-3 overflow-hidden rounded-xl border border-border/60 bg-card">
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3.5 py-3 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/50 [&::-webkit-details-marker]:hidden">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3.5 py-3 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
         <span className="min-w-0">
           <span className="block text-title font-medium">{title}</span>
           <span className="mt-0.5 block text-label text-muted-foreground">{description}</span>
@@ -614,7 +614,7 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
               value={baselineMinutes}
               onChange={(event) => setBaselineMinutes(event.target.value)}
               placeholder="分钟"
-              className="h-8 w-24 rounded-lg border border-border bg-transparent px-2 text-body outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+              className="h-8 w-24 rounded-lg border border-border bg-transparent px-2 text-body outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
             />
             <Button type="button" size="sm" onClick={addBaseline}>保存</Button>
           </div>
@@ -630,7 +630,7 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
                     type="button"
                     aria-label={`删除传统用时 ${label}`}
                     onClick={() => patch({ outcomeBaselines: settings.outcomeBaselines.filter((item) => `${item.scope}:${item.scopeId}` !== key) })}
-                    className="rounded-sm p-0.5 text-muted-foreground hover:text-destructive focus-visible:ring-2 focus-visible:ring-primary/50"
+                    className="rounded-sm p-0.5 text-muted-foreground hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
                   ><X className="size-3.5" /></button>
                 </li>
               );

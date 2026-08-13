@@ -1,5 +1,5 @@
 import { Image as ImageIcon, ShieldAlert, ShieldCheck } from "lucide-react";
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -23,21 +23,18 @@ import { cn } from "@/lib/utils";
 
 function AttachmentImage({
   url,
-  label,
 }: {
   url: string | null;
-  label: string;
 }) {
   return url ? (
     <img
       src={url}
-      alt={label}
+      alt=""
       className="size-full object-contain"
     />
   ) : (
     <span
-      role="img"
-      aria-label={`${label}正在载入`}
+      aria-hidden
       className="flex size-full items-center justify-center text-muted-foreground"
     >
       <ImageIcon className="size-4" aria-hidden />
@@ -45,12 +42,46 @@ function AttachmentImage({
   );
 }
 
+function AttachmentPreview({
+  url,
+  label,
+  title,
+  onClick,
+  children,
+}: {
+  url: string | null;
+  label: string;
+  title: string;
+  onClick: () => void;
+  children?: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={title}
+      onClick={onClick}
+      className={cn(
+        "relative aspect-[4/3] w-full cursor-zoom-in overflow-hidden rounded-md bg-muted/60 outline-none ring-1 ring-foreground/10",
+        "hover:ring-primary/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+      )}
+    >
+      <AttachmentImage url={url} />
+      {children}
+    </button>
+  );
+}
+
 function AttachmentComparison({
   item,
   index,
+  originalFiles,
+  sendFiles,
 }: {
   item: ImageFirewallItem;
   index: number;
+  originalFiles: string[];
+  sendFiles: string[];
 }) {
   const originalUrl = useNoteThumb(item.originalFile);
   const redacted = item.sendFile !== item.originalFile;
@@ -72,8 +103,12 @@ function AttachmentComparison({
       redacted ? "w-48 grid-cols-2" : "w-24 grid-cols-1"
     )}>
       <div className="min-w-0 space-y-0.5 text-center">
-        <div className="relative aspect-[4/3] w-full overflow-hidden rounded-md bg-muted/60 ring-1 ring-foreground/10">
-          <AttachmentImage url={originalUrl} label={`图片 ${index + 1} 原图`} />
+        <AttachmentPreview
+          url={originalUrl}
+          label={`查看图片 ${index + 1} 原图`}
+          title="点击查看原图"
+          onClick={() => void api.quickLook(originalFiles, index)}
+        >
           {item.findings.map((finding) => (
             <span
               key={finding.id}
@@ -93,16 +128,19 @@ function AttachmentComparison({
               )}
             />
           ))}
-        </div>
+        </AttachmentPreview>
         <p className="text-micro text-muted-foreground">原图</p>
       </div>
       {redacted && (
-          <div className="min-w-0 space-y-0.5 text-center">
-            <div className="aspect-[4/3] w-full overflow-hidden rounded-md bg-muted/60 ring-1 ring-foreground/10">
-              <AttachmentImage url={sendUrl} label={`图片 ${index + 1} 实际发送副本`} />
-            </div>
-            <p className="text-micro font-medium text-success">实际发送</p>
-          </div>
+        <div className="min-w-0 space-y-0.5 text-center">
+          <AttachmentPreview
+            url={sendUrl}
+            label={`查看图片 ${index + 1} 实际发送图`}
+            title="点击查看实际发送图"
+            onClick={() => void api.quickLook(sendFiles, index)}
+          />
+          <p className="text-micro font-medium text-success">实际发送</p>
+        </div>
       )}
     </div>
   );
@@ -122,6 +160,8 @@ export function ImageFirewallPanel({
       (finding) => !item.redactedFindingIds.includes(finding.id)
     )
   );
+  const originalFiles = draft.imageFirewall.map((item) => item.originalFile);
+  const sendFiles = draft.imageFirewall.map((item) => item.sendFile);
   return (
     <section
       aria-label="图片隐私检查"
@@ -154,7 +194,12 @@ export function ImageFirewallPanel({
               className="space-y-1.5 rounded-md bg-background/60 p-1.5"
             >
               <div className="flex gap-2">
-                <AttachmentComparison item={item} index={index} />
+                <AttachmentComparison
+                  item={item}
+                  index={index}
+                  originalFiles={originalFiles}
+                  sendFiles={sendFiles}
+                />
                 <div className="min-w-0 flex-1 text-micro">
                   <p className="font-medium">图片 {index + 1}</p>
                   <p className={cn(

@@ -25,8 +25,10 @@ vi.mock("@/lib/tauri", async (importOriginal) => {
 });
 
 import {
+  confirmOpenPreflightTargetChange,
   deliveryRetryIsSafe,
   dispatchDeliveryDraft,
+  rebindPreflightDraftTarget,
   rebuildPreflightDraft,
   recoverOpenPreflightTarget,
   shouldOpenPreflight,
@@ -248,6 +250,100 @@ describe("rebuildPreflightDraft", () => {
     expect(rebuilt.dataGeneration).toBe(original.dataGeneration);
     expect(rebuilt.keepPanel).toBe(true);
     expect(original.finalText).toBe("正文");
+  });
+
+  it("确认新目标会保留本次内容与图片遮挡，但撤销旧目标的原文放行", () => {
+    const nextTarget: TargetSnapshot = {
+      ...target,
+      token: "target-b-token",
+      bundleId: "com.example.target-b",
+      appName: "Target B",
+      pid: 84,
+      launchedAtMs: 40,
+      revision: 2,
+    };
+    const nextResolution: TargetProfileResolution = {
+      ...profileResolution,
+      profileId: "target-b",
+      targetBundleId: nextTarget.bundleId,
+      promptGroup: { id: "coding", name: "编码", order: 1 },
+      profile: {
+        ...profileResolution.profile,
+        id: "target-b",
+        bundleIds: [nextTarget.bundleId!],
+        promptGroupId: "coding",
+        defaultFormat: "code",
+        enterPolicy: "confirm",
+        privacyPolicy: "confirmRaw",
+        keepPanel: true,
+      },
+    };
+    const original = draft({
+      finalText: "用户修改后的正文",
+      privacyDecision: {
+        excludedFindingIds: ["text-secret"],
+        rawConfirmation: {
+          revision: 1,
+          targetToken: target.token,
+          level: "warn",
+        },
+        replacedCount: 2,
+      },
+      originalImageFiles: ["screen.png"],
+      imageFiles: ["toskr-redacted:screen.png"],
+      imageFirewall: [{
+        originalFile: "screen.png",
+        sendFile: "toskr-redacted:screen.png",
+        status: "ready",
+        pixelHash: "a".repeat(64),
+        redactedPixelHash: "b".repeat(64),
+        width: 100,
+        height: 80,
+        scanRevision: 1,
+        findings: [],
+        redactedFindingIds: ["image-secret"],
+        rawConfirmation: {
+          revision: 1,
+          targetToken: target.token,
+          level: "warn",
+        },
+        failureMessage: null,
+      }],
+      keepPanel: false,
+    });
+
+    const rebound = rebindPreflightDraftTarget(
+      original,
+      {
+        targetSnapshot: nextTarget,
+        profileResolution: nextResolution,
+        firewallEnabled: true,
+        firewallDisabledWarnCategories: [],
+      },
+      7
+    );
+
+    expect(rebound).toMatchObject({
+      revision: 7,
+      finalText: "用户修改后的正文",
+      format: "plain",
+      targetProfileId: "target-b",
+      promptGroupId: "coding",
+      profileDefaultFormat: "code",
+      privacyPolicy: "confirmRaw",
+      enterPolicy: "confirm",
+      enterDecisionConfirmed: false,
+      pressEnter: false,
+      keepPanel: false,
+    });
+    expect(rebound.targetSnapshot).toEqual(nextTarget);
+    expect(rebound.imageFiles).toEqual(["toskr-redacted:screen.png"]);
+    expect(rebound.imageFirewall[0].rawConfirmation).toBeNull();
+    expect(rebound.privacyDecision).toEqual({
+      excludedFindingIds: [],
+      rawConfirmation: null,
+      replacedCount: 2,
+    });
   });
 });
 
@@ -614,5 +710,107 @@ describe("recoverOpenPreflightTarget", () => {
     applyTargetEvent({ ...target, token: "token-next", revision: 2 });
     expect(recoverOpenPreflightTarget(() => "source")).toBe(false);
     expect(useDeliveryStore.getState().draft?.targetSnapshot?.token).toBe(target.token);
+  });
+});
+
+describe("confirmOpenPreflightTargetChange", () => {
+  beforeEach(() => {
+    resetDeliveryStore();
+    resetTargetState();
+    useNotesStore.setState((state) => ({
+      settings: {
+        ...state.settings,
+        firewallEnabled: true,
+        firewallDisabledWarnCategories: [],
+      },
+    }));
+  });
+
+  it("把已识别的新目标同步绑定到原 Draft，无需关闭预检重来", () => {
+    const nextTarget: TargetSnapshot = {
+      ...target,
+      token: "target-b-token",
+      bundleId: "com.example.target-b",
+      appName: "Target B",
+      pid: 84,
+      launchedAtMs: 40,
+      revision: 2,
+    };
+    const nextResolution: TargetProfileResolution = {
+      ...profileResolution,
+      targetBundleId: nextTarget.bundleId,
+      profile: {
+        ...profileResolution.profile,
+        bundleIds: [nextTarget.bundleId!],
+      },
+    };
+    const original = draft({ finalText: "保留的手工修改" });
+    useDeliveryStore.getState().openDraft(original);
+    applyTargetEvent(nextTarget);
+
+    expect(confirmOpenPreflightTargetChange({
+      inspectFreshness: () => null,
+      resolveProfile: () => nextResolution,
+    })).toBe(true);
+
+    const state = useDeliveryStore.getState();
+    expect(state.open).toBe(true);
+    expect(state.draft?.finalText).toBe("保留的手工修改");
+    expect(state.draft?.targetSnapshot).toEqual(nextTarget);
+    expect(state.draft?.revision).toBeGreaterThan(original.revision);
+    expect(state.lastError).toBeNull();
+  });
+
+  it("来源已变化时不允许借确认新目标偷换草稿基线", () => {
+    const nextTarget: TargetSnapshot = {
+      ...target,
+      token: "target-b-token",
+      bundleId: "com.example.target-b",
+      pid: 84,
+      launchedAtMs: 40,
+      revision: 2,
+    };
+    const original = draft();
+    useDeliveryStore.getState().openDraft(original);
+    applyTargetEvent(nextTarget);
+
+    expect(confirmOpenPreflightTargetChange({
+      inspectFreshness: () => "source",
+      resolveProfile: () => profileResolution,
+    })).toBe(false);
+    expect(useDeliveryStore.getState().draft).toBe(original);
+    expect(useDeliveryStore.getState().lastError).toContain("来源内容已变化");
+  });
+
+  it("用户看到的新目标在点击前再次变化时拒绝静默改绑", () => {
+    const displayedTarget: TargetSnapshot = {
+      ...target,
+      token: "target-b-token",
+      bundleId: "com.example.target-b",
+      appName: "Target B",
+      pid: 84,
+      launchedAtMs: 40,
+      revision: 2,
+    };
+    const currentTarget: TargetSnapshot = {
+      ...displayedTarget,
+      token: "target-c-token",
+      bundleId: "com.example.target-c",
+      appName: "Target C",
+      pid: 126,
+      launchedAtMs: 60,
+      revision: 3,
+    };
+    const original = draft();
+    useDeliveryStore.getState().openDraft(original);
+    applyTargetEvent(currentTarget);
+
+    expect(confirmOpenPreflightTargetChange({
+      expectedTarget: displayedTarget,
+      inspectFreshness: () => null,
+      resolveProfile: () => profileResolution,
+    })).toBe(false);
+    expect(useDeliveryStore.getState().draft).toBe(original);
+    expect(useDeliveryStore.getState().lastError).toContain("目标已再次变化");
   });
 });

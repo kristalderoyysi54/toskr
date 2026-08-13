@@ -10,6 +10,9 @@ const apiMocks = vi.hoisted(() => ({
   appIcon: vi.fn(),
   diagNote: vi.fn(),
   scanSensitiveText: vi.fn(),
+  copyText: vi.fn(),
+  copyImage: vi.fn(),
+  copyRichClipboard: vi.fn(),
 }));
 const dialogMocks = vi.hoisted(() => ({ ask: vi.fn() }));
 const eventMocks = vi.hoisted(() => ({
@@ -48,6 +51,7 @@ vi.mock("@/lib/tauri", async (importOriginal) => {
 });
 
 import {
+  copyNoteContent,
   openNoteBatchDetail,
   openSafeRehearsalPreflight,
   openNoteDetail,
@@ -155,6 +159,9 @@ function reset(status: DeliveryStatus) {
   apiMocks.showPanel.mockReset().mockResolvedValue(undefined);
   apiMocks.showTextPreview.mockReset().mockResolvedValue(undefined);
   apiMocks.quickLook.mockReset().mockResolvedValue(undefined);
+  apiMocks.copyText.mockReset().mockResolvedValue(undefined);
+  apiMocks.copyImage.mockReset().mockResolvedValue(undefined);
+  apiMocks.copyRichClipboard.mockReset().mockResolvedValue(undefined);
   apiMocks.scanSensitiveText.mockReset().mockImplementation(async (text: string) => ({
     findings: [],
     warnings: [],
@@ -226,6 +233,34 @@ describe("结构化发送结果的 store 副作用", () => {
     )?.[2];
     expect(payload).toBeDefined();
     expect(payload).not.toHaveProperty("detailFrameNotchSide");
+  });
+
+  it("交错图文卡把权威块传给详情并按原顺序富复制", async () => {
+    const contentBlocks = [
+      { type: "text" as const, text: "路径：审批管理" },
+      { type: "image" as const, file: "first.png", alt: "第一张" },
+      { type: "text" as const, text: "一、商户类型" },
+      { type: "image" as const, file: "second.png" },
+    ];
+    const { id } = useNotesStore.getState().addNote("", { contentBlocks });
+    const note = useNotesStore.getState().notes.find((item) => item.id === id)!;
+
+    openNoteDetail(id!);
+    await copyNoteContent(note);
+
+    const payload = eventMocks.emitTo.mock.calls.find(
+      ([label, event]) =>
+        label === "textpreview" && event === "toskr://note-preview"
+    )?.[2];
+    expect(payload).toMatchObject({ contentBlocks });
+    expect(apiMocks.copyRichClipboard).toHaveBeenCalledWith([
+      { kind: "text", text: "路径：审批管理" },
+      { kind: "image", file: "first.png", alt: "第一张" },
+      { kind: "text", text: "一、商户类型" },
+      { kind: "image", file: "second.png" },
+    ]);
+    expect(apiMocks.copyText).not.toHaveBeenCalled();
+    expect(apiMocks.copyImage).not.toHaveBeenCalled();
   });
 
   it("合并发送来源按发送规则重建图文只读预览", () => {

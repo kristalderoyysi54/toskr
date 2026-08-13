@@ -55,7 +55,7 @@ export function SimpleSelect<T extends string>({
           onClick={toggle}
           className={cn(
             "flex w-full items-center gap-1 border border-border bg-transparent text-left text-foreground outline-none",
-            "hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-primary/50 disabled:opacity-50 dark:hover:bg-white/10",
+            "hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:opacity-50 dark:hover:bg-white/10",
             size === "body"
               ? "h-8 rounded-lg px-2 text-body"
               : "h-6 rounded-sm px-1 text-micro"

@@ -174,10 +174,10 @@ export function SimpleMenu({
           className={cn(
             "absolute z-50 max-h-[calc(100vh-4rem)] min-w-40 overflow-y-auto overscroll-contain rounded-lg p-1",
             floatingSurface(2),
-            // 与 Radix 菜单同一套 tw-animate 进出场（duration-100 对齐）
+            // 与 Radix 菜单同一套 tw-animate 进出场（duration-overlay 对齐）
             "data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95",
             "data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
-            "duration-100 motion-reduce:!animate-none motion-reduce:!transition-none",
+            "duration-(--duration-overlay) ease-(--ease-standard) motion-reduce:!animate-none motion-reduce:!transition-none",
             side === "bottom" ? "top-full mt-1 origin-top" : "bottom-full mb-1 origin-bottom",
             align === "end" ? "right-0" : "left-0",
             menuClassName
@@ -220,8 +220,8 @@ export function SimpleMenuItem({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-body outline-none",
-        "hover:bg-black/5 focus-visible:bg-black/5 disabled:opacity-40 dark:hover:bg-white/10 dark:focus-visible:bg-white/10",
+        "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-body outline-none",
+        "hover:bg-black/5 focus-visible:bg-black/5 disabled:opacity-45 dark:hover:bg-white/10 dark:focus-visible:bg-white/10",
         destructive && "text-destructive"
       )}
     >
