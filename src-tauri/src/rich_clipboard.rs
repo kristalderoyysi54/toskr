@@ -415,6 +415,31 @@ pub(crate) async fn localize_images(
             )),
         }
     }
+    // 失败只落原因码计数（图片 URL 可能带鉴权参数，绝不回显/落盘）。
+    let failures = results.iter().filter(|image| !image.ok).count();
+    if failures > 0 {
+        let mut reasons: Vec<(RichImageFailureReason, usize)> = Vec::new();
+        for image in results.iter().filter(|image| !image.ok) {
+            let Some(reason) = image.reason else { continue };
+            match reasons.iter_mut().find(|(seen, _)| *seen == reason) {
+                Some((_, count)) => *count += 1,
+                None => reasons.push((reason, 1)),
+            }
+        }
+        let summary = reasons
+            .iter()
+            .map(|(reason, count)| format!("{reason:?}×{count}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        crate::diag::push(
+            app,
+            format!(
+                "富图片: 本地化 {}/{} 失败 ({summary})",
+                failures,
+                results.len()
+            ),
+        );
+    }
     results
 }
 
@@ -432,7 +457,73 @@ async fn load_source_bytes(
             .await
             .map_err(|_| RichImageFailureReason::InternalFailed)?;
     }
+    if source.starts_with("file:") {
+        let from_web_page = source_origin.is_some();
+        return tauri::async_runtime::spawn_blocking(move || {
+            read_local_image_file(&source, limit, from_web_page)
+        })
+        .await
+        .map_err(|_| RichImageFailureReason::InternalFailed)?;
+    }
     fetch_http_image(&source, limit, source_origin, deadline).await
+}
+
+/// 读取 IM 等本地应用复制的 HTML 里引用的 `file://` 图片。
+///
+/// 策略门：复制若来自真实网页（携带有效公网 http(s) sourceUrl），一律拒绝——
+/// 远程页面本身无法渲染 file:// 图片，这类组合只可能是伪造的剪贴板 HTML。
+/// 路径 canonicalize（吃掉符号链接）后必须落在应用缓存类根目录内，
+/// 用户文稿树（~/Documents、~/Desktop、~/Pictures 等）永不可达。
+fn read_local_image_file(
+    source: &str,
+    limit: usize,
+    from_web_page: bool,
+) -> Result<Vec<u8>, RichImageFailureReason> {
+    if from_web_page {
+        return Err(RichImageFailureReason::UnsupportedScheme);
+    }
+    let url = Url::parse(source).map_err(|_| RichImageFailureReason::InvalidSource)?;
+    if url.scheme() != "file" {
+        return Err(RichImageFailureReason::UnsupportedScheme);
+    }
+    let path = url
+        .to_file_path()
+        .map_err(|_| RichImageFailureReason::InvalidSource)?;
+    let path =
+        std::fs::canonicalize(&path).map_err(|_| RichImageFailureReason::InvalidSource)?;
+    if !local_image_path_allowed(&path) {
+        return Err(RichImageFailureReason::UnsupportedScheme);
+    }
+    let metadata =
+        std::fs::symlink_metadata(&path).map_err(|_| RichImageFailureReason::InvalidSource)?;
+    if !metadata.is_file() {
+        return Err(RichImageFailureReason::InvalidSource);
+    }
+    if metadata.len() > limit as u64 {
+        return Err(RichImageFailureReason::TooLarge);
+    }
+    let bytes = std::fs::read(&path).map_err(|_| RichImageFailureReason::InvalidSource)?;
+    if bytes.len() > limit {
+        return Err(RichImageFailureReason::TooLarge);
+    }
+    Ok(bytes)
+}
+
+/// 允许的本地图片根：各应用数据/缓存（~/Library）与系统临时目录。
+fn local_image_path_allowed(path: &std::path::Path) -> bool {
+    let mut roots = vec![
+        std::path::PathBuf::from("/private/var/folders"),
+        std::path::PathBuf::from("/private/tmp"),
+        std::path::PathBuf::from("/var/folders"),
+        std::path::PathBuf::from("/tmp"),
+    ];
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = std::path::PathBuf::from(home);
+        if home.is_absolute() {
+            roots.push(home.join("Library"));
+        }
+    }
+    roots.iter().any(|root| path.starts_with(root))
 }
 
 fn decode_data_url(source: &str, limit: usize) -> Result<Vec<u8>, RichImageFailureReason> {
@@ -444,7 +535,7 @@ fn decode_data_url(source: &str, limit: usize) -> Result<Vec<u8>, RichImageFailu
     let media_type = parts.next().unwrap_or_default().to_ascii_lowercase();
     if !matches!(
         media_type.as_str(),
-        "image/png" | "image/jpeg" | "image/jpg"
+        "image/png" | "image/jpeg" | "image/jpg" | "image/gif" | "image/webp" | "image/bmp"
     ) {
         return Err(RichImageFailureReason::UnsupportedDataType);
     }
@@ -515,14 +606,23 @@ async fn fetch_http_image(
             .ok_or(RichImageFailureReason::BatchTimeout)?
             .min(Duration::from_secs(10));
         validate_http_url(&current)?;
-        let allow_benchmark_dns = source_origin.is_some()
-            && current.scheme() == "https"
-            && matches!(current.host(), Some(Host::Domain(_)));
+        let allow_benchmark_dns = fake_ip_proxy_allowed(&current);
         let (host, addresses) = resolve_public_addresses(&current, allow_benchmark_dns).await?;
-        let client = pinned_http_client(&host, &addresses, request_timeout)?;
+        // Fake-IP（benchmark 段）没有可钉住的真实地址——直连它在「仅系统代理」
+        // 模式下是黑洞。此时按域名把请求交给用户自己的代理（环境变量或 macOS
+        // 系统代理），真实解析与分流本来就由代理决定；公网结果维持钉住+禁代理。
+        let fake_ip_only = addresses.iter().all(|address| benchmark_proxy_ip(address.ip()));
+        let client = if fake_ip_only {
+            proxied_fake_ip_client(request_timeout)?
+        } else {
+            pinned_http_client(&host, &addresses, request_timeout)?
+        };
         let mut request = client
             .get(current.clone())
-            .header("Accept", "image/png,image/jpeg;q=0.9");
+            .header(
+                "Accept",
+                "image/png,image/webp,image/jpeg;q=0.9,image/gif;q=0.8",
+            );
         if let Some(source_origin) = source_origin {
             request = request.header(REFERER, source_origin);
         }
@@ -590,6 +690,23 @@ fn pinned_http_client(
         // 禁用系统代理，避免代理绕过下面已钉住且已校验的公网 DNS 结果。
         .no_proxy()
         .resolve_to_addrs(host, addresses)
+        .user_agent("Toskr/RichClipboard")
+        .build()
+        .map_err(|_| RichImageFailureReason::InternalFailed)
+}
+
+/// Fake-IP 场景专用：不钉地址、不禁代理，让请求按域名走用户的代理链
+/// （reqwest 读环境变量与 macOS 系统代理，见 Cargo `system-proxy` feature）。
+fn proxied_fake_ip_client(
+    request_timeout: Duration,
+) -> Result<reqwest::Client, RichImageFailureReason> {
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+    reqwest::Client::builder()
+        .connect_timeout(request_timeout.min(Duration::from_secs(4)))
+        .timeout(request_timeout)
+        .redirect(reqwest::redirect::Policy::none())
         .user_agent("Toskr/RichClipboard")
         .build()
         .map_err(|_| RichImageFailureReason::InternalFailed)
@@ -685,10 +802,16 @@ fn public_ip(ip: IpAddr) -> bool {
     }
 }
 
-/// Surge 等增强 DNS 会把已复制网页中的公网 HTTPS 资源映射到 RFC 2544
-/// benchmark 段。只有调用方同时提供了 clipboard sourceUrl、目标仍是域名 HTTPS
-/// 时才允许该段；URL 直接写 benchmark IP、HTTP、无来源上下文仍拒绝。TLS SNI 与
-/// 手动逐跳 DNS 钉住继续生效，因此不会放宽 loopback/RFC1918/link-local/metadata。
+/// Surge 等增强 DNS（Fake-IP 模式）会把 HTTPS 域名映射到 RFC 2544 benchmark 段，
+/// 实际去向由代理按 TLS SNI 域名转发；无代理的机器该段不可路由，连接自然失败。
+/// 因此只要目标是域名形态的 HTTPS 就允许该段——本地应用（IM 等）复制的图文没有
+/// 网页 sourceUrl，同样受 Fake-IP 影响（实证：360 推推 im.live.360.cn → 198.18.x）。
+/// URL 直接写 benchmark IP 或走 HTTP 仍拒绝。TLS SNI 与手动逐跳 DNS 钉住继续
+/// 生效，因此不会放宽 loopback/RFC1918/link-local/metadata。
+fn fake_ip_proxy_allowed(url: &Url) -> bool {
+    url.scheme() == "https" && matches!(url.host(), Some(Host::Domain(_)))
+}
+
 fn benchmark_proxy_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
@@ -742,7 +865,14 @@ struct DecodedImage {
 fn decode_supported_image(bytes: &[u8]) -> Result<DecodedImage, RichImageFailureReason> {
     let format =
         image::guess_format(bytes).map_err(|_| RichImageFailureReason::UnsupportedImage)?;
-    if !matches!(format, ImageFormat::Png | ImageFormat::Jpeg) {
+    if !matches!(
+        format,
+        ImageFormat::Png
+            | ImageFormat::Jpeg
+            | ImageFormat::Gif
+            | ImageFormat::WebP
+            | ImageFormat::Bmp
+    ) {
         return Err(RichImageFailureReason::UnsupportedImage);
     }
     let (width, height) = ImageReader::with_format(Cursor::new(bytes), format)
@@ -1094,6 +1224,25 @@ mod tests {
         bytes
     }
 
+    fn gif_fixture() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = image::codecs::gif::GifEncoder::new(&mut bytes);
+            encoder
+                .encode(&[10, 20, 30, 255], 1, 1, ColorType::Rgba8.into())
+                .unwrap();
+        }
+        bytes
+    }
+
+    fn bmp_fixture() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        image::codecs::bmp::BmpEncoder::new(&mut bytes)
+            .encode(&[10, 20, 30], 1, 1, ColorType::Rgb8.into())
+            .unwrap();
+        bytes
+    }
+
     #[test]
     fn expected_generation_reads_plain_html_and_safe_source_url() {
         let name = format!("com.toskr.tests.rich-read.{}", std::process::id());
@@ -1235,17 +1384,94 @@ mod tests {
     }
 
     #[test]
-    fn decoder_accepts_only_bounded_png_and_jpeg() {
+    fn decoder_accepts_bounded_bitmap_formats_only() {
         let png = decode_supported_image(&png_fixture()).unwrap();
         assert_eq!((png.width, png.height, png.rgba.len()), (1, 1, 4));
 
         let jpeg = decode_supported_image(&jpeg_fixture()).unwrap();
         assert_eq!((jpeg.width, jpeg.height, jpeg.rgba.len()), (1, 1, 4));
 
+        let gif = decode_supported_image(&gif_fixture()).unwrap();
+        assert_eq!((gif.width, gif.height, gif.rgba.len()), (1, 1, 4));
+
+        let bmp = decode_supported_image(&bmp_fixture()).unwrap();
+        assert_eq!((bmp.width, bmp.height, bmp.rgba.len()), (1, 1, 4));
+
+        // 未启用的格式（TIFF 魔数）仍拒收；截断 GIF 头过得了嗅探但解码必败。
         assert!(matches!(
-            decode_supported_image(b"GIF89a"),
+            decode_supported_image(b"II*\x00rest"),
             Err(RichImageFailureReason::UnsupportedImage)
         ));
+        assert!(matches!(
+            decode_supported_image(b"GIF89a"),
+            Err(RichImageFailureReason::DecodeFailed)
+        ));
+    }
+
+    #[test]
+    fn data_urls_accept_im_common_bitmap_types_only() {
+        for mime in ["image/gif", "image/webp", "image/bmp"] {
+            let url = format!("data:{mime};base64,{}", STANDARD.encode(b"stub-bytes"));
+            assert_eq!(
+                decode_data_url(&url, MAX_IMAGE_BYTES).unwrap(),
+                b"stub-bytes"
+            );
+        }
+        assert!(matches!(
+            decode_data_url("data:image/svg+xml;base64,PHN2Zz4=", MAX_IMAGE_BYTES),
+            Err(RichImageFailureReason::UnsupportedDataType)
+        ));
+    }
+
+    #[test]
+    fn local_file_images_only_from_cache_roots_and_never_for_web_copies() {
+        let dir = std::env::temp_dir().join(format!("toskr-rich-file-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fixture.png");
+        std::fs::write(&path, png_fixture()).unwrap();
+        let url = Url::from_file_path(&path).unwrap().to_string();
+
+        // 本地应用复制（无网页来源）→ 读取成功（temp 目录 canonicalize 后在缓存根内）
+        assert_eq!(
+            read_local_image_file(&url, MAX_IMAGE_BYTES, false).unwrap(),
+            png_fixture()
+        );
+        // 真实网页复制携带 file:// → 一律拒绝
+        assert!(matches!(
+            read_local_image_file(&url, MAX_IMAGE_BYTES, true),
+            Err(RichImageFailureReason::UnsupportedScheme)
+        ));
+        // 大小上限
+        assert!(matches!(
+            read_local_image_file(&url, 3, false),
+            Err(RichImageFailureReason::TooLarge)
+        ));
+        // 带主机名的 file URL 与不存在的文件 → 拒绝
+        assert!(matches!(
+            read_local_image_file("file://evil-host/x.png", MAX_IMAGE_BYTES, false),
+            Err(RichImageFailureReason::InvalidSource)
+        ));
+        assert!(matches!(
+            read_local_image_file(
+                Url::from_file_path(dir.join("missing.png")).unwrap().as_str(),
+                MAX_IMAGE_BYTES,
+                false
+            ),
+            Err(RichImageFailureReason::InvalidSource)
+        ));
+        std::fs::remove_dir_all(&dir).ok();
+
+        // 缓存根白名单：系统临时/应用数据可达，用户文稿树永不可达
+        assert!(local_image_path_allowed(std::path::Path::new(
+            "/private/var/folders/ab/cd/T/im-cache/img.png"
+        )));
+        assert!(!local_image_path_allowed(std::path::Path::new(
+            "/Users/someone/Documents/secret.png"
+        )));
+        if let Some(home) = std::env::var_os("HOME") {
+            let library = std::path::PathBuf::from(home).join("Library/Caches/im/img.png");
+            assert!(local_image_path_allowed(&library));
+        }
     }
 
     #[test]
@@ -1349,7 +1575,17 @@ mod tests {
         let synthetic = IpAddr::V4(Ipv4Addr::new(198, 18, 4, 50));
         assert!(!public_ip(synthetic));
         assert!(benchmark_proxy_ip(synthetic));
-        let direct_benchmark = Url::parse("https://198.18.4.50/a.png").unwrap();
-        assert!(!matches!(direct_benchmark.host(), Some(Host::Domain(_))));
+
+        // Fake-IP 豁免不要求网页来源（本地 IM 复制同样受 Fake-IP DNS 影响），
+        // 但仅限域名形态的 HTTPS：直接写 benchmark IP 或走 HTTP 仍拒绝。
+        assert!(fake_ip_proxy_allowed(
+            &Url::parse("https://im.example-corp.test:8989/img/a.png").unwrap()
+        ));
+        assert!(!fake_ip_proxy_allowed(
+            &Url::parse("http://im.example-corp.test/img/a.png").unwrap()
+        ));
+        assert!(!fake_ip_proxy_allowed(
+            &Url::parse("https://198.18.4.50/a.png").unwrap()
+        ));
     }
 }

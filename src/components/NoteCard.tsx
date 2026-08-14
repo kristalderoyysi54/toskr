@@ -21,6 +21,7 @@ import {
   ShieldCheck,
   Sparkles,
   Star,
+  Tag,
   Trash2,
   Unlink,
   VenetianMask,
@@ -61,7 +62,7 @@ import { linkParts } from "@/lib/link";
 import { useAppIcon } from "@/lib/icons";
 import { isMonoLike, splitMiddle } from "@/lib/cliprow";
 import { shouldScrollFocusedCard } from "@/lib/cardFocus";
-import { timeAgo, useNoteThumb } from "@/lib/media";
+import { noteTimeLabel, useNoteThumb } from "@/lib/media";
 import { noteToTaskSmart, suggestTitle } from "@/lib/ai";
 import { splitHighlight } from "@/lib/search";
 import {
@@ -75,9 +76,11 @@ import {
   CLIPBOARD_ID,
   groupContextMenuIds,
   INBOX_ID,
+  NOTE_TAG_MAX_COUNT,
   noteImages,
   normalizeContextMenu,
   orderedCheckedNotes,
+  sanitizeNoteTags,
   useNotesStore,
   type ContextMenuItemId,
   type Note,
@@ -396,6 +399,60 @@ export const NoteCard = memo(function NoteCard({
             <PenLine className="size-3.5" /> 重命名
           </ContextMenuItem>
         );
+      case "tags": {
+        // 全库标签目录：菜单打开瞬间快照即可（点击项后菜单即关闭），
+        // 不订阅 notes——遵守选择器稳定引用红线
+        const catalog = sanitizeNoteTags(
+          useNotesStore.getState().notes.flatMap((n) => n.tags ?? [])
+        );
+        const current = new Set(note.tags ?? []);
+        return (
+          <ContextMenuSub key={id}>
+            <ContextMenuSubTrigger>
+              <Tag className="mr-2 size-3.5" /> 标签
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent className="w-40">
+              {(catalog ?? []).map((tag) => (
+                <ContextMenuItem
+                  key={tag}
+                  disabled={
+                    !current.has(tag) && current.size >= NOTE_TAG_MAX_COUNT
+                  }
+                  onClick={() =>
+                    useNotesStore
+                      .getState()
+                      .setNoteTags(
+                        note.id,
+                        current.has(tag)
+                          ? [...current].filter((item) => item !== tag)
+                          : [...current, tag]
+                      )
+                  }
+                >
+                  <Check
+                    className={cn(
+                      "size-3.5",
+                      current.has(tag) ? "opacity-100" : "opacity-0"
+                    )}
+                  />
+                  <span className="truncate">{tag}</span>
+                </ContextMenuItem>
+              ))}
+              {!!catalog?.length && <ContextMenuSeparator />}
+              <ContextMenuItem
+                disabled={current.size >= NOTE_TAG_MAX_COUNT}
+                onClick={() => {
+                  tagInputPendingRef.current = true;
+                  tagInputOpenedAtRef.current = Date.now();
+                  setTagDraft("");
+                }}
+              >
+                <PenLine className="size-3.5" /> 新标签…
+              </ContextMenuItem>
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+        );
+      }
             case "ai-to-task":
         if (isImage || isComposite) return null;
         return (
@@ -545,6 +602,22 @@ export const NoteCard = memo(function NoteCard({
   // 重命名（点击通栏类型区 / 右键「重命名」）：行内编辑自定义标题
   const [renaming, setRenaming] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
+  // 新标签内联输入（右键 标签 → 新标签…）；null = 未在输入
+  const [tagDraft, setTagDraft] = useState<string | null>(null);
+  // 标记「本次菜单关闭是为了打开标签输入」——见 ContextMenuContent 的
+  // onCloseAutoFocus：阻止焦点归还卡片，避免输入框挂载瞬间被 blur 关闭
+  const tagInputPendingRef = useRef(false);
+  // 输入条挂载时刻：挂载初期的 blur 一律视为焦点竞态噪声（WKWebView 焦点
+  // 惰性 + 菜单关闭归还），抢回焦点而不是提交关闭
+  const tagInputOpenedAtRef = useRef(0);
+  const commitTagDraft = () => {
+    if (tagDraft?.trim()) {
+      useNotesStore
+        .getState()
+        .setNoteTags(note.id, [...(note.tags ?? []), tagDraft]);
+    }
+    setTagDraft(null);
+  };
   const startRename = () => {
     setTitleDraft(note.title ?? "");
     setRenaming(true);
@@ -811,7 +884,7 @@ export const NoteCard = memo(function NoteCard({
             >
               {/* 时间主键：强调靠字重，颜色退到与底行「来自 …」同族灰（略深） */}
               <span className="shrink-0 text-label font-semibold tabular-nums text-muted-foreground">
-                {timeAgo(note.createdAt)}
+                {noteTimeLabel(note)}
               </span>
               <div className="flex min-w-0 flex-1 items-center">
                 {renaming ? (
@@ -927,7 +1000,7 @@ export const NoteCard = memo(function NoteCard({
               )}
               <p className="truncate text-micro text-white/70">
                 {/* 竖栏笔记副行=分组名（组织轴，时间移至右下角）；横栏串维持相对时间 */}
-                {!strip && sectionName ? sectionName : timeAgo(note.createdAt)}
+                {!strip && sectionName ? sectionName : noteTimeLabel(note)}
               </p>
             </div>
             {note.keep && (
@@ -1150,10 +1223,27 @@ export const NoteCard = memo(function NoteCard({
                 含 {aliasRestorable.length} 处化名 · 点击恢复
               </button>
             ) : note.sourceApp ? <span className="truncate">来自 {note.sourceApp}</span> : <span />}
+            {!!note.tags?.length && (
+              <span className="flex min-w-0 shrink items-center gap-1 overflow-hidden">
+                {note.tags.slice(0, 3).map((tag) => (
+                  <span
+                    key={tag}
+                    className="max-w-20 shrink-0 truncate rounded-sm surface-inset px-1 text-micro leading-4 text-muted-foreground"
+                  >
+                    #{tag}
+                  </span>
+                ))}
+                {note.tags.length > 3 && (
+                  <span className="shrink-0 text-micro text-muted-foreground">
+                    +{note.tags.length - 3}
+                  </span>
+                )}
+              </span>
+            )}
             <span className="ml-auto shrink-0 tabular-nums text-muted-foreground">
               {!isClip && !strip
                 ? // 竖栏笔记（A 案）：通栏副行让位给分组名，时间移到右下角
-                  timeAgo(note.createdAt)
+                  noteTimeLabel(note)
                 : isImage && note.imageW
                   ? `${note.imageW} × ${note.imageH}`
                   : isLink
@@ -1165,6 +1255,38 @@ export const NoteCard = memo(function NoteCard({
           </div>
           )}
             </>
+          )}
+
+          {/* 新标签内联输入浮条（右键 标签 → 新标签…）：浮在卡底，全模板通用 */}
+          {tagDraft !== null && (
+            <div
+              className="absolute inset-x-1 bottom-1 z-10 flex items-center gap-1.5 rounded-md border border-border bg-popover px-1.5 py-1 shadow-md"
+              onClick={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <Tag className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+              <input
+                autoFocus
+                value={tagDraft}
+                placeholder="新标签，回车添加"
+                onChange={(e) => setTagDraft(e.target.value)}
+                onBlur={(e) => {
+                  // 挂载初期的失焦是菜单关闭/焦点归还的竞态，不是用户意图
+                  if (Date.now() - tagInputOpenedAtRef.current < 400) {
+                    const el = e.currentTarget;
+                    window.setTimeout(() => el.focus(), 0);
+                    return;
+                  }
+                  commitTagDraft();
+                }}
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === "Enter" && !e.nativeEvent.isComposing) commitTagDraft();
+                  if (e.key === "Escape") setTagDraft(null);
+                }}
+                className="w-full bg-transparent text-label outline-none placeholder:text-muted-foreground"
+              />
+            </div>
           )}
 
           {/* 紧缩笔记卡：操作钮显现时右端先铺同卡底色渐变垫底，钮不再悬空压字；
@@ -1252,7 +1374,18 @@ export const NoteCard = memo(function NoteCard({
         </div>
       </ContextMenuTrigger>
 
-      <ContextMenuContent className="w-44">
+      <ContextMenuContent
+        className="w-44"
+        // 「新标签…」点击后菜单关闭会把焦点归还给卡片，正好抢走刚挂载的
+        // 标签输入框焦点 → onBlur 立即提交关闭（表现为浮条闪现即失）。
+        // 仅在该次关闭阻止归还，让 autoFocus 的输入框保住焦点。
+        onCloseAutoFocus={(event) => {
+          if (tagInputPendingRef.current) {
+            tagInputPendingRef.current = false;
+            event.preventDefault();
+          }
+        }}
+      >
         {/* 多选场景优先展示合并与移动；移动仍遵循用户显隐配置。 */}
         {mergeCount >= 2 && (
           <ContextMenuItem onClick={() => mergeNoteWithChecked(note.id)}>
@@ -1392,7 +1525,7 @@ function CompactRow({
       {/* 剪贴流水行常显相对时间（新鲜度=核心元数据）；置顶行免时间只留图钉 */}
       {isClip && !note.keep && (
         <span className="shrink-0 text-micro tabular-nums text-muted-foreground transition-opacity group-hover:opacity-0">
-          {timeAgo(note.createdAt)}
+          {noteTimeLabel(note)}
         </span>
       )}
     </div>

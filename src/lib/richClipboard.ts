@@ -7,6 +7,8 @@ export interface ParsedRichClipboard {
   blocks: RichClipboardBlock[];
   imageSources: string[];
   omittedImageCount: number;
+  /** 解析阶段被丢弃图片源的 scheme 标签（与 omittedImageCount 逐条对应），诊断用。 */
+  omittedSchemes: string[];
 }
 
 export interface RichClipboardInput {
@@ -85,6 +87,7 @@ export function parseRichClipboard(input: RichClipboardInput): ParsedRichClipboa
   const imageIndexes = new Map<string, number>();
   const blocks: RichClipboardBlock[] = [];
   const ignoredStack: string[] = [];
+  const omittedSchemes: string[] = [];
   const baseUrl = validHttpUrl(input.sourceUrl ?? "");
 
   let omittedImageCount = 0;
@@ -203,12 +206,13 @@ export function parseRichClipboard(input: RichClipboardInput): ParsedRichClipboa
 
       if (!tag.closing && tag.name === "img") {
         const source = normalizeImageSource(tag.attributes.get("src") ?? "", baseUrl);
-        if (!source) {
+        if (!source.ok) {
           omittedImageCount += 1;
+          omittedSchemes.push(source.scheme);
           return;
         }
         const alt = normalizeInlineText(tag.attributes.get("alt") ?? "") || undefined;
-        appendImage(source, alt);
+        appendImage(source.source, alt);
         return;
       }
 
@@ -226,6 +230,7 @@ export function parseRichClipboard(input: RichClipboardInput): ParsedRichClipboa
       blocks: fallbackText ? [{ type: "text", text: fallbackText }] : [],
       imageSources,
       omittedImageCount,
+      omittedSchemes,
     };
   }
 
@@ -238,6 +243,7 @@ export function parseRichClipboard(input: RichClipboardInput): ParsedRichClipboa
     blocks,
     imageSources,
     omittedImageCount,
+    omittedSchemes,
   };
 }
 
@@ -363,34 +369,67 @@ function parseAttributes(source: string): Map<string, string> {
   return attributes;
 }
 
-function normalizeImageSource(value: string, baseUrl: URL | null): string | null {
-  const source = value.trim();
-  if (!source) return null;
+type NormalizedImageSource =
+  | { ok: true; source: string }
+  | { ok: false; scheme: string };
 
-  const data = /^data:image\/(png|jpeg);base64,(.*)$/isu.exec(source);
+function normalizeImageSource(
+  value: string,
+  baseUrl: URL | null
+): NormalizedImageSource {
+  const source = value.trim();
+  if (!source) return { ok: false, scheme: "empty" };
+
+  const data = /^data:image\/(png|jpe?g|gif|webp|bmp);base64,(.*)$/isu.exec(source);
   if (data) {
     const payload = data[2].replace(/\s+/gu, "");
-    if (!payload || !/^[A-Za-z0-9+/]*={0,2}$/u.test(payload)) return null;
-    return `data:image/${data[1].toLowerCase()};base64,${payload}`;
+    if (!payload || !/^[A-Za-z0-9+/]*={0,2}$/u.test(payload)) {
+      return { ok: false, scheme: "data" };
+    }
+    return {
+      ok: true,
+      source: `data:image/${data[1].toLowerCase()};base64,${payload}`,
+    };
   }
-  if (/^data:/iu.test(source)) return null;
+  if (/^data:/iu.test(source)) {
+    const mime = /^data:([^;,]*)/iu.exec(source)?.[1].toLowerCase() ?? "";
+    return { ok: false, scheme: mime ? `data:${mime}` : "data" };
+  }
 
   let parsed: URL;
   try {
     parsed = new URL(source);
   } catch {
-    if (!baseUrl) return null;
+    if (!baseUrl) return { ok: false, scheme: "relative" };
     try {
       parsed = new URL(source, baseUrl);
     } catch {
-      return null;
+      return { ok: false, scheme: "relative" };
     }
   }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+
+  // IM/本地应用复制的 HTML 常引用自身缓存文件；解析层放行，
+  // 读取策略（网页来源拒绝、缓存根白名单、解码闸门）由 Native 层把守。
+  if (parsed.protocol === "file:") {
+    if (parsed.hostname && parsed.hostname !== "localhost") {
+      return { ok: false, scheme: "file-host" };
+    }
+    const path = safeDecodeURIComponent(parsed.pathname).toLowerCase();
+    if (path.endsWith(".svg") || path.endsWith(".svgz")) {
+      return { ok: false, scheme: "svg" };
+    }
+    return { ok: true, source: parsed.href };
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return { ok: false, scheme: parsed.protocol.replace(/:$/u, "") };
+  }
 
   const path = safeDecodeURIComponent(parsed.pathname).toLowerCase();
-  if (path.endsWith(".svg") || path.endsWith(".svgz")) return null;
-  return parsed.href;
+  if (path.endsWith(".svg") || path.endsWith(".svgz")) {
+    return { ok: false, scheme: "svg" };
+  }
+  return { ok: true, source: parsed.href };
 }
 
 function validHttpUrl(value: string): URL | null {

@@ -4,6 +4,12 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { motion } from "motion/react";
 import { Check, ChevronLeft, ChevronRight, Pencil, Send, X } from "lucide-react";
 
+import {
+  FIT_VIEW,
+  wheelZoomFactor,
+  zoomViewAround,
+  type ZoomView,
+} from "@/lib/imageZoom";
 import { springSnappy } from "@/lib/motion";
 import { DataReadOnlyGuard } from "@/components/DataReadOnlyGuard";
 import { DetailWindowFrame } from "@/components/DetailWindowFrame";
@@ -30,6 +36,8 @@ import {
  * 图片原尺寸预览窗（独立 webview，Paste 风格）：
  * 标题栏与图片区均可拖动窗口、可缩放；⊗ / Esc / Space 关闭（隐藏复用）。
  * 组合卡多图：←/→ 或两侧按钮翻看，标题与底栏显示第几张。
+ * 滚轮以鼠标为锚缩放（1×–8×）；放大后拖拽平移图片（1× 时拖拽仍是拖窗），
+ * 双击 2× ⇄ 复位，翻页/重开自动回到适配。
  * 刻意不做失焦关闭——可拖动窗口的语义是「摆在一边对照看」。
  * 带笔记上下文（noteId）时底部显示文字备注条：查看 / 内联编辑，
  * ⌘⏎ 保存经 toskr://note-edit 回传主面板（主面板是唯一持久化写入方）。
@@ -41,6 +49,15 @@ export default function ImagePreviewView() {
   const [dims, setDims] = useState("");
   // 每次唤起自增：窗口隐藏复用，重开同一张图也要重播入场动效
   const [gen, setGen] = useState(0);
+  const [view, setView] = useState<ZoomView>(FIT_VIEW);
+  const zoomAreaRef = useRef<HTMLDivElement>(null);
+  const panDragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+  } | null>(null);
   // 笔记上下文（备注编辑；null = 无编辑条，纯看图）
   const [noteId, setNoteId] = useState<string | null>(null);
   const [noteText, setNoteText] = useState("");
@@ -123,6 +140,73 @@ export default function ImagePreviewView() {
       .then((u) => setUrl(u))
       .catch(() => setUrl(null));
   }, [file]);
+
+  // 翻页 / 重新唤起：缩放回适配（缩放是单次查看态，不跨图残留）
+  useEffect(() => {
+    setView(FIT_VIEW);
+    panDragRef.current = null;
+  }, [gen, idx]);
+
+  // 滚轮缩放：原生监听（passive:false 才能 preventDefault），鼠标位置为锚
+  useEffect(() => {
+    const area = zoomAreaRef.current;
+    if (!area) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const rect = area.getBoundingClientRect();
+      const anchor = {
+        x: event.clientX - rect.left - rect.width / 2,
+        y: event.clientY - rect.top - rect.height / 2,
+      };
+      setView((previous) =>
+        zoomViewAround(
+          previous,
+          previous.zoom * wheelZoomFactor(event.deltaY),
+          anchor
+        )
+      );
+    };
+    area.addEventListener("wheel", onWheel, { passive: false });
+    return () => area.removeEventListener("wheel", onWheel);
+  }, []);
+
+  const zoomed = view.zoom > 1;
+
+  // 放大后拖拽 = 平移图片（1× 时该区域仍是 data-tauri-drag-region 拖窗）
+  const onZoomPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!zoomed || event.button !== 0) return;
+    if ((event.target as HTMLElement).closest("button")) return;
+    panDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: view.x,
+      originY: view.y,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const onZoomPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = panDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    setView((previous) => ({
+      zoom: previous.zoom,
+      x: drag.originX + (event.clientX - drag.startX),
+      y: drag.originY + (event.clientY - drag.startY),
+    }));
+  };
+
+  const onZoomPointerEnd = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (panDragRef.current?.pointerId !== event.pointerId) return;
+    panDragRef.current = null;
+  };
+
+  // 双击复位（仅放大态：适配态的双击属于 drag-region 的窗口原生行为，勿抢）
+  const onZoomDoubleClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!zoomed) return;
+    if ((event.target as HTMLElement).closest("button")) return;
+    setView(FIT_VIEW);
+  };
 
   // 编辑态聚焦（WKWebView 焦点惰性 → 延时）
   useEffect(() => {
@@ -242,27 +326,40 @@ export default function ImagePreviewView() {
           </>
         )}
       </div>
-      {/* 图片区：同样可拖动窗口（img 关闭指针事件，拖拽落在容器上） */}
+      {/* 图片区：适配态整体拖窗；放大后拖拽转为平移图片（img 关闭指针事件） */}
       <div
-        data-tauri-drag-region
-        className="relative flex min-h-0 flex-1 cursor-grab items-center justify-center p-2 active:cursor-grabbing"
+        ref={zoomAreaRef}
+        data-tauri-drag-region={zoomed ? undefined : true}
+        onPointerDown={onZoomPointerDown}
+        onPointerMove={onZoomPointerMove}
+        onPointerUp={onZoomPointerEnd}
+        onPointerCancel={onZoomPointerEnd}
+        onDoubleClick={onZoomDoubleClick}
+        className="relative flex min-h-0 flex-1 cursor-grab touch-none items-center justify-center overflow-hidden p-2 active:cursor-grabbing"
       >
         {url ? (
-          <motion.img
-            // 按「唤起代数 + 张序」重挂载：打开、翻页、重开同图都有浮现过渡
-            key={`${gen}-${idx}`}
-            initial={{ opacity: 0, scale: 0.96 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={springSnappy}
-            src={url}
-            alt=""
-            onLoad={(e) =>
-              setDims(
-                `${e.currentTarget.naturalWidth} × ${e.currentTarget.naturalHeight}`
-              )
-            }
-            className="pointer-events-none max-h-full max-w-full object-contain"
-          />
+          <div
+            className="pointer-events-none flex h-full w-full items-center justify-center will-change-transform"
+            style={{
+              transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})`,
+            }}
+          >
+            <motion.img
+              // 按「唤起代数 + 张序」重挂载：打开、翻页、重开同图都有浮现过渡
+              key={`${gen}-${idx}`}
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={springSnappy}
+              src={url}
+              alt=""
+              onLoad={(e) =>
+                setDims(
+                  `${e.currentTarget.naturalWidth} × ${e.currentTarget.naturalHeight}`
+                )
+              }
+              className="max-h-full max-w-full object-contain"
+            />
+          </div>
         ) : (
           <div className="flex h-24 w-32 animate-pulse items-center justify-center rounded-lg bg-foreground/10">
             <span className="sr-only">加载中…</span>
@@ -341,7 +438,13 @@ export default function ImagePreviewView() {
         </div>
       )}
       <div className="flex h-6 shrink-0 items-center justify-center text-label tabular-nums text-muted-foreground">
-        {many ? `${idx + 1} / ${files.length}${dims ? ` · ${dims}` : ""}` : dims}
+        {[
+          many ? `${idx + 1} / ${files.length}` : null,
+          dims || null,
+          zoomed ? `${Math.round(view.zoom * 100)}%` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
       </div>
     </DetailWindowFrame>
   );
