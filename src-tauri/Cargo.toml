@@ -3,6 +3,7 @@ name = "toskr"
 version = "0.2.2"
 description = "Toskr — AI 工作流的划词摘录与 Prompt 暂存工具"
 authors = ["kai"]
+license = "Apache-2.0"
 edition = "2021"
 
 [lib]
