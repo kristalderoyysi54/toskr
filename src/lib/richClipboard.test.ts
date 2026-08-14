@@ -39,6 +39,7 @@ describe("parseRichClipboard", () => {
         "https://geelib.qihoo.net/files/image_tail.jpeg",
       ],
       omittedImageCount: 0,
+      omittedSchemes: [],
     });
   });
 
@@ -46,6 +47,8 @@ describe("parseRichClipboard", () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
 
+    // file:// 在解析层放行（IM 本地缓存场景），读取策略由 Native 层把守：
+    // 网页来源拒绝、缓存根白名单外拒绝——/Users/kai/secret.png 会在那一层挡下。
     const result = parseRichClipboard({
       plainText: "安全正文",
       html: `
@@ -65,12 +68,22 @@ describe("parseRichClipboard", () => {
 
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(result.text).toBe("安全 正文");
-    expect(result.imageSources).toEqual(["https://safe.test/ok.png"]);
+    expect(result.imageSources).toEqual([
+      "file:///Users/kai/secret.png",
+      "https://safe.test/ok.png",
+    ]);
     expect(result.blocks).toEqual([
       { type: "text", text: "安全 正文" },
-      { type: "imageRef", index: 0, alt: "可用 图片" },
+      { type: "imageRef", index: 0 },
+      { type: "imageRef", index: 1, alt: "可用 图片" },
     ]);
-    expect(result.omittedImageCount).toBe(5);
+    expect(result.omittedImageCount).toBe(4);
+    expect(result.omittedSchemes).toEqual([
+      "javascript",
+      "blob",
+      "data:image/svg+xml",
+      "svg",
+    ]);
 
     vi.unstubAllGlobals();
   });
@@ -103,7 +116,38 @@ describe("parseRichClipboard", () => {
       blocks: [{ type: "text", text: "回退文字" }],
       imageSources: [],
       omittedImageCount: 2,
+      omittedSchemes: ["relative", "relative"],
     });
+  });
+
+  it("放行 IM 本地缓存 file:// 与常见位图 data URL，file 主机与 svg 后缀仍拒绝", () => {
+    const result = parseRichClipboard({
+      plainText: "文 字",
+      html: `
+        <p>文</p>
+        <img src="file:///Users/kai/Library/Containers/com.im.app/Data/tmp/%E5%9B%BE 1.png">
+        <p>字</p>
+        <img src="data:image/webp;base64,UklGRg==">
+        <img src="data:image/GIF;base64,R0lGOD==">
+        <img src="file://nas-host/share/x.png">
+        <img src="file:///tmp/vector.svg">
+      `,
+    });
+
+    expect(result.imageSources).toEqual([
+      "file:///Users/kai/Library/Containers/com.im.app/Data/tmp/%E5%9B%BE%201.png",
+      "data:image/webp;base64,UklGRg==",
+      "data:image/gif;base64,R0lGOD==",
+    ]);
+    expect(result.blocks).toEqual([
+      { type: "text", text: "文" },
+      { type: "imageRef", index: 0 },
+      { type: "text", text: "字" },
+      { type: "imageRef", index: 1 },
+      { type: "imageRef", index: 2 },
+    ]);
+    expect(result.omittedImageCount).toBe(2);
+    expect(result.omittedSchemes).toEqual(["file-host", "svg"]);
   });
 
   it("可复用同一图片源，但保留每一次 DOM 位置与各自 alt", () => {
@@ -156,6 +200,7 @@ describe("parseRichClipboard", () => {
       ],
       imageSources: [],
       omittedImageCount: 1,
+      omittedSchemes: ["blob"],
     });
   });
 
@@ -170,6 +215,7 @@ describe("parseRichClipboard", () => {
       blocks: [{ type: "text", text: "第一段 连续\n第二段\n下一行" }],
       imageSources: [],
       omittedImageCount: 0,
+      omittedSchemes: [],
     });
   });
 });

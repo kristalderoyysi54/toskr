@@ -22,6 +22,8 @@ export interface MaterializedRichCapture {
   text: string;
   contentBlocks: NoteContentBlock[];
   omittedImageCount: number;
+  /** 解析阶段丢弃的图片源 scheme 标签（本地化失败不在此列，原因由 Native 诊断记录）。 */
+  omittedSchemes: string[];
 }
 
 export interface RestoredRichCapture extends MaterializedRichCapture {
@@ -73,6 +75,7 @@ export async function materializeRichCapture(
         block.type === "text" ? [{ type: "text", text: block.text }] : []
       ),
       omittedImageCount: parsed.omittedImageCount,
+      omittedSchemes: parsed.omittedSchemes,
     };
   }
 
@@ -83,6 +86,7 @@ export async function materializeRichCapture(
     text: textFromContentBlocks(contentBlocks),
     contentBlocks,
     omittedImageCount: parsed.omittedImageCount + materialized.failed,
+    omittedSchemes: parsed.omittedSchemes,
   };
 }
 

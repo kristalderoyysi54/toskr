@@ -30,7 +30,7 @@ import { requestAliasQuickAdd } from "@/lib/aliasQuickAdd";
 import { highlightCode, langLabel } from "@/lib/code";
 import { NOTE_EDITOR_SESSION_RELEASE_EVENT } from "@/lib/editorSessionMedia";
 import { useAppIcon } from "@/lib/icons";
-import { useNoteThumb } from "@/lib/media";
+import { timeAgo, useNoteThumb } from "@/lib/media";
 import { looksLikeMarkdown, renderMarkdown } from "@/lib/markdown";
 import { springSnappy } from "@/lib/motion";
 import {
@@ -337,6 +337,10 @@ export default function TextPreviewView() {
       setDraftContentBlocks(p.contentBlocks ?? []);
       setEditing(previewIsEditable(p) && p.edit);
       setMdView(!p.codeLang && p.kind !== "link" && looksLikeMarkdown(p.text));
+      // 窗口隐藏复用、组件不卸载：选词模式是单次查看态，换内容必须归位，
+      // 否则一次开启会"传染"给之后打开的所有卡片
+      setPickMode(false);
+      setPick(null);
       setTextSelection(null);
       pendingSelectionRef.current = null;
       pendingTextEditRef.current = null;
@@ -742,6 +746,53 @@ export default function TextPreviewView() {
     setTextSelection(null);
   };
 
+  const enterPickMode = () => {
+    setPickMode(true);
+    setPick(null);
+    setTextSelection(null);
+  };
+
+  // W 键切换选词模式（非编辑态；条件与工具条按钮一致）。
+  // WKWebView 点击按钮不给焦点，快捷键一律窗口级 keydown，不赌焦点。
+  useEffect(() => {
+    if (editing) return;
+    const onPickModeKey = (event: KeyboardEvent) => {
+      if (
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.shiftKey ||
+        event.isComposing ||
+        event.key.toLowerCase() !== "w"
+      ) {
+        return;
+      }
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "TEXTAREA" ||
+          target.tagName === "INPUT" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      const current = noteRef.current;
+      if (
+        !current ||
+        current.codeLang ||
+        (current.kind === "link" && !!current.url) ||
+        hasOrderedRichLayout(current.contentBlocks)
+      ) {
+        return;
+      }
+      event.preventDefault();
+      if (pickMode) exitPickMode();
+      else enterPickMode();
+    };
+    window.addEventListener("keydown", onPickModeKey);
+    return () => window.removeEventListener("keydown", onPickModeKey);
+  }, [editing, pickMode]);
+
   const addSelectionToAliasDictionary = (originalText: string, category: string) => {
     // 词典写入必须在主面板原子取号，这里只发语义事件；HUD 回执全局可见
     requestAliasQuickAdd({ originalText, category });
@@ -985,7 +1036,19 @@ export default function TextPreviewView() {
             {note.title || typeLabel}
           </p>
           <p data-tauri-drag-region className="truncate text-micro text-white/70">
-            {note.subtitle ?? (note.sourceApp ? `来自 ${note.sourceApp}` : "笔记")}
+            {note.subtitle ??
+              [
+                note.sourceApp ? `来自 ${note.sourceApp}` : "笔记",
+                note.createdAt ? `创建 ${timeAgo(note.createdAt)}` : null,
+                note.updatedAt && note.updatedAt > (note.createdAt ?? 0)
+                  ? `改于 ${timeAgo(note.updatedAt)}`
+                  : null,
+                note.tags?.length
+                  ? note.tags.map((tag) => `#${tag}`).join(" ")
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
           </p>
         </div>
         {icon && <img src={icon.url} alt="" className="size-6 rounded-[5px]" />}
@@ -1274,17 +1337,13 @@ export default function TextPreviewView() {
                 <IconButton
                   label={
                     pickMode
-                      ? "退出选词模式"
-                      : "选词模式：点选词语快速加入化名词典"
+                      ? "退出选词模式（W）"
+                      : "选词模式：点选词语快速加入化名词典（W）"
                   }
                   pressed={pickMode}
                   onClick={() => {
                     if (pickMode) exitPickMode();
-                    else {
-                      setPickMode(true);
-                      setPick(null);
-                      setTextSelection(null);
-                    }
+                    else enterPickMode();
                   }}
                 >
                   <TextSelect className="size-3.5" />

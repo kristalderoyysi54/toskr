@@ -58,6 +58,16 @@ export function useNoteImage(name: string | undefined): string | null {
   return name ? url : null;
 }
 
+/** 卡片时间标签：内容改过的卡显示「改于 …」（更新时间），否则显示创建时间。 */
+export function noteTimeLabel(note: {
+  createdAt: number;
+  updatedAt?: number;
+}): string {
+  return note.updatedAt && note.updatedAt > note.createdAt
+    ? `改于 ${timeAgo(note.updatedAt)}`
+    : timeAgo(note.createdAt);
+}
+
 /** 相对时间（Paste 风格：刚刚 / N 分钟前 / N 小时前 / N 天前）。 */
 export function timeAgo(ts: number): string {
   const diff = Date.now() - ts;

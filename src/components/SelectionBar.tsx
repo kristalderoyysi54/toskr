@@ -1,4 +1,4 @@
-import { CheckCheck, ChevronDown, Merge, Send, Trash2, X } from "lucide-react";
+import { CheckCheck, ChevronDown, Merge, Send, Tag, Trash2, X } from "lucide-react";
 import { useMemo } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -28,7 +28,12 @@ import {
   promptSnippetsForGroup,
   resolveTargetProfile,
 } from "@/lib/targetProfiles";
-import { CLIPBOARD_ID, orderedCheckedNotes, useNotesStore } from "@/store/notesStore";
+import {
+  CLIPBOARD_ID,
+  orderedCheckedNotes,
+  sanitizeNoteTags,
+  useNotesStore,
+} from "@/store/notesStore";
 import { useDeliveryStore, type PreflightMode } from "@/store/deliveryStore";
 import { useUIStore } from "@/store/uiStore";
 import {
@@ -191,6 +196,13 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
       settings.promptSnippets,
     ]
   );
+  // 全库标签目录（批量追加候选）；useMemo 派生，遵守选择器稳定引用红线。
+  // 必须先于下面的条件 return——Hook 出现在 early return 之后会让渲染间
+  // Hook 数量不一致，React 整树崩溃（主面板白屏）。
+  const tagCatalog = useMemo(
+    () => sanitizeNoteTags(notes.flatMap((n) => n.tags ?? [])) ?? [],
+    [notes]
+  );
   if (!previewDraft) return null;
 
   const state = useNotesStore.getState();
@@ -222,6 +234,38 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
                 <CheckCheck className="size-3.5" />
               </IconAction>
             )}
+            <SimpleMenu
+              side="top"
+              align="end"
+              trigger={({ toggle }) => (
+                <IconAction label="打标签" onClick={toggle}>
+                  <Tag className="size-3.5" />
+                </IconAction>
+              )}
+            >
+              {(close) => (
+                <>
+                  <SimpleMenuLabel>为已选卡片追加标签</SimpleMenuLabel>
+                  {tagCatalog.length ? (
+                    tagCatalog.map((tag) => (
+                      <SimpleMenuItem
+                        key={tag}
+                        onClick={() => {
+                          state.addNoteTags(orderedIds(), [tag]);
+                          close();
+                        }}
+                      >
+                        <span className="truncate">#{tag}</span>
+                      </SimpleMenuItem>
+                    ))
+                  ) : (
+                    <SimpleMenuItem disabled onClick={() => {}}>
+                      暂无标签 · 先在卡片右键「标签」创建
+                    </SimpleMenuItem>
+                  )}
+                </>
+              )}
+            </SimpleMenu>
             <IconAction
               label="删除"
               onClick={() => deleteNotesWithUndo(orderedIds())}

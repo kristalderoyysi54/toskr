@@ -1042,6 +1042,14 @@ fn validate_domain_fields(state: &serde_json::Map<String, Value>) -> Result<(), 
             return Err(invalid("note.done 必须是 boolean".into()));
         }
         validate_optional_nonnegative_number(object.get("createdAt"), "note.createdAt")?;
+        validate_optional_nonnegative_number(object.get("updatedAt"), "note.updatedAt")?;
+        if object.get("tags").is_some_and(|value| {
+            !value
+                .as_array()
+                .is_some_and(|items| items.iter().all(Value::is_string))
+        }) {
+            return Err(invalid("note.tags 必须是字符串数组".into()));
+        }
         if object
             .get("provenance")
             .is_some_and(|value| !validate_note_provenance(value))
@@ -1830,6 +1838,34 @@ mod tests {
             .code,
             BackupFailureCode::InvalidState
         );
+
+        // 标签必须是字符串数组；updatedAt 必须是非负数字（缺省则放行）
+        let mut invalid_tags: Value = serde_json::from_str(&state_json(None)).unwrap();
+        invalid_tags["state"]["notes"][0]["tags"] = serde_json::json!(["ok", 3]);
+        assert_eq!(
+            export_complete_backup(
+                root.path(),
+                &root.path().join("invalid-tags.toskr-backup"),
+                &invalid_tags.to_string(),
+                "0.14.0",
+                4,
+            )
+            .unwrap_err()
+            .code,
+            BackupFailureCode::InvalidState
+        );
+
+        let mut tagged: Value = serde_json::from_str(&state_json(None)).unwrap();
+        tagged["state"]["notes"][0]["tags"] = serde_json::json!(["工作"]);
+        tagged["state"]["notes"][0]["updatedAt"] = serde_json::json!(1755000000000u64);
+        export_complete_backup(
+            root.path(),
+            &root.path().join("tagged.toskr-backup"),
+            &tagged.to_string(),
+            "0.14.0",
+            5,
+        )
+        .expect("合法 tags/updatedAt 应可导出");
     }
 
     #[test]

@@ -59,8 +59,17 @@ export function shouldOpenPreflight(
   ) return true;
   if (mode === "always") return true;
   if (mode === "off") return false;
+  // 图片隐私扫描已给每一张「ready 且零发现」的回执时，smart 不再因带图
+  // 强制预检——检测无异常直接发送，省一步确认。回执缺失/数量不齐/防火墙
+  // 关闭（没检测过谈不上无异常）仍照旧弹预检。
+  const imagesCleared =
+    draft.firewallEnabled &&
+    draft.imageFirewall.length === draft.imageFiles.length &&
+    draft.imageFirewall.every(
+      (item) => item.status === "ready" && item.findings.length === 0
+    );
   return draft.sourceItemIds.length > 1 ||
-    draft.imageFiles.length > 0 ||
+    (draft.imageFiles.length > 0 && !imagesCleared) ||
     draft.promptTemplate !== null ||
     draft.format === "code" ||
     draft.enterPolicy === "confirm" ||

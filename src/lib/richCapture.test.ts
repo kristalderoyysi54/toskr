@@ -31,6 +31,7 @@ describe("materializeRichCapture", () => {
         { type: "image", file: "a.png", width: 10, height: 20 },
       ],
       omittedImageCount: 0,
+      omittedSchemes: [],
     });
   });
 
@@ -46,6 +47,7 @@ describe("materializeRichCapture", () => {
       text: "正文",
       contentBlocks: [{ type: "text", text: "正文" }],
       omittedImageCount: 1,
+      omittedSchemes: [],
     });
     expect(JSON.stringify(result)).not.toContain("secret");
   });
@@ -60,6 +62,7 @@ describe("materializeRichCapture", () => {
           { type: "text", text: "再见 [USER_01]" },
         ],
         omittedImageCount: 0,
+        omittedSchemes: [],
       },
       [{
         id: "alias-1",

@@ -36,7 +36,7 @@ import {
   updateOpenPreflightDraft,
 } from "./preflight";
 import { inspectDeliveryDraft } from "./executeDraft";
-import type { DeliveryDraft } from "./types";
+import type { DeliveryDraft, ImageFirewallItem } from "./types";
 import {
   resetDeliveryStore,
   useDeliveryStore,
@@ -179,6 +179,7 @@ describe("shouldOpenPreflight", () => {
 
     for (const complex of [
       draft({ sourceKind: "note-batch", sourceItemIds: ["one", "two"] }),
+      // 带图但缺扫描回执（imageFirewall 为空）→ 仍需预检
       draft({ imageFiles: ["one.png"] }),
       draft({ promptSnippetId: "review", promptTemplate: "审查：{内容}" }),
       draft({ format: "code" }),
@@ -188,6 +189,49 @@ describe("shouldOpenPreflight", () => {
     ]) {
       expect(shouldOpenPreflight(complex, "smart")).toBe(true);
     }
+  });
+
+  it("smart 下图片已全部通过隐私扫描（零发现）直发；回执不齐或防火墙关闭仍预检", () => {
+    const readyImage = (file: string): ImageFirewallItem => ({
+      originalFile: file,
+      sendFile: file,
+      status: "ready",
+      pixelHash: `hash-${file}`,
+      redactedPixelHash: null,
+      width: 100,
+      height: 60,
+      scanRevision: 1,
+      findings: [],
+      redactedFindingIds: [],
+      rawConfirmation: null,
+      failureMessage: null,
+    });
+
+    // 每张图都有 ready 且零发现的回执 → 自动直发，省一步确认
+    const cleared = draft({
+      imageFiles: ["one.png", "two.png"],
+      imageFirewall: [readyImage("one.png"), readyImage("two.png")],
+    });
+    expect(shouldOpenPreflight(cleared, "smart")).toBe(false);
+
+    // 回执数量与图片数不齐 → 弹（防御 draft 构造不同步的静默放行）
+    const missingReceipt = draft({
+      imageFiles: ["one.png", "two.png"],
+      imageFirewall: [readyImage("one.png")],
+    });
+    expect(shouldOpenPreflight(missingReceipt, "smart")).toBe(true);
+
+    // 防火墙关闭：没检测过谈不上「无异常」→ 维持预检
+    const firewallOff = draft({
+      firewallEnabled: false,
+      firewallStatus: "disabled",
+      imageFiles: ["one.png"],
+      imageFirewall: [{ ...readyImage("one.png"), status: "disabled" }],
+    });
+    expect(shouldOpenPreflight(firewallOff, "smart")).toBe(true);
+
+    // 扫描有发现走防火墙分支 → 必弹，且 always 档不受直发豁免影响
+    expect(shouldOpenPreflight(cleared, "always")).toBe(true);
   });
 });
 
