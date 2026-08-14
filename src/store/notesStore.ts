@@ -48,22 +48,24 @@ import {
   type OnboardingEvent,
   type OnboardingState,
 } from "@/lib/onboarding";
+import type { SecretKey, SecretMeta } from "@/lib/secret/secret";
 import { tauriStateStorage } from "./persistStorage";
 
 export type { PromptGroup, PromptSnippet, TargetProfile } from "@/lib/targetProfiles";
 export type { AliasCategoryDefinition, AliasEntity } from "@/lib/delivery/aliasEntities";
 export type { OnboardingEvent, OnboardingState } from "@/lib/onboarding";
 export type { NoteContentBlock } from "@/lib/noteContentBlocks";
+export type { SecretKey, SecretMeta, SecretDirection } from "@/lib/secret/secret";
 export { noteContentBlocks, textFromContentBlocks };
 
-export type NoteKind = "text" | "image" | "link";
+export type NoteKind = "text" | "image" | "link" | "secret";
 
 /** 面板页签（与 uiStore.PanelPage 同集合；此处独立声明避免 store 互相依赖）。 */
-export type PageId = "notes" | "clipboard" | "tasks";
+export type PageId = "notes" | "clipboard" | "tasks" | "secret";
 
-/** 页签默认顺序（剪贴最高频，居首）。 */
-export const DEFAULT_PAGE_ORDER: PageId[] = ["clipboard", "notes", "tasks"];
-export const STORE_VERSION = 17;
+/** 页签默认顺序（剪贴最高频，居首；秘文默认关闭故垫底）。 */
+export const DEFAULT_PAGE_ORDER: PageId[] = ["clipboard", "notes", "tasks", "secret"];
+export const STORE_VERSION = 18;
 
 /**
  * 归一化页签顺序：去重、剔除未知项、补齐缺失页（按默认序追加）。
@@ -115,13 +117,26 @@ export interface Note {
   keep?: boolean;
   /** 自定义标题（右键「重命名」；卡片通栏显示，便于识别长内容）。 */
   title?: string;
+  /** 标签（右键「标签」/多选条批量添加；归一去重，最多 8 个）。 */
+  tags?: string[];
   createdAt: number;
+  /**
+   * 内容最后修改时间（编辑正文/富块/增删图片/重命名/合并时打点）。
+   * 组织类操作（完成/常用/移动/打标签）不打点；缺省 = 创建后从未修改。
+   */
+  updatedAt?: number;
   /** 捕获来源应用名（如 "Safari"）。 */
   sourceApp?: string;
   /** 来源应用 bundle id（图标经内存缓存按需获取，不落盘）。 */
   sourceBundle?: string;
   /** 手动确认的发送结果来源；结果正文仍只存在本 Note。 */
   provenance?: NoteProvenance;
+  /**
+   * 秘文卡元数据（kind=secret）：text 存中文密文信封，明文永不落盘、展示按需解密。
+   * keyId=null 表示收到但无匹配密钥（锁定卡）。字段名 secretMeta 而非 secret：
+   * 备份导出黑名单（backup.rs reject_forbidden_fields）会拒绝规范化后恰为 "secret" 的键名。
+   */
+  secretMeta?: SecretMeta;
 }
 
 export interface NoteProvenance {
@@ -389,12 +404,22 @@ export interface Settings {
   panelTopOffset: number;
   /** 面板高度覆盖（pt；null = 自动同目标窗口/近全高）。 */
   panelHeight: number | null;
+  /** 秘文（中文加密通信）总开关；默认关闭，关闭时秘文页与捕获识别都不启用。 */
+  secretEnabled: boolean;
+  /** 共享密钥列表（明文随本地数据保存；威胁模型见设置页说明）。 */
+  secretKeys: SecretKey[];
+  /** 发送时默认使用的密钥 id；null = 用列表首个。 */
+  secretDefaultKeyId: string | null;
+  /** 秘文卡揭示明文后自动重新遮罩的超时（ms）；0 = 常驻不自动遮罩。 */
+  secretRevealTimeoutMs: number;
   onboarding: OnboardingState;
 }
 
 export const INBOX_ID = "inbox";
 /** 剪贴板历史专用分组（自动创建，插在收件箱之后）。 */
 export const CLIPBOARD_ID = "clipboard";
+/** 秘文专用分组（首次收发时自动创建，插在收件箱之后）。 */
+export const SECRET_ID = "secret";
 
 /** 卡片右键菜单可自定义项（顺序即默认顺序；具体卡片类型不适用的项自动隐藏）。 */
 export type ContextMenuItemId =
@@ -408,6 +433,7 @@ export type ContextMenuItemId =
   | "done"
   | "keep"
   | "rename"
+  | "tags"
   | "to-task"
   | "ai-to-task"
   | "ai-title"
@@ -424,6 +450,7 @@ export const CONTEXT_MENU_REGISTRY: { id: ContextMenuItemId; label: string }[] =
   { id: "done", label: "标记完成" },
   { id: "keep", label: "设为常用 / 固定" },
   { id: "rename", label: "重命名" },
+  { id: "tags", label: "标签" },
   { id: "to-task", label: "转为任务" },
   { id: "ai-to-task", label: "AI 转任务" },
   { id: "ai-title", label: "AI 起标题" },
@@ -457,8 +484,34 @@ const CONTEXT_MENU_GROUP_BY_ITEM: Record<ContextMenuItemId, ContextMenuGroupId> 
   "ai-to-task": "send",
   done: "organize",
   keep: "organize",
+  tags: "organize",
   move: "organize",
 };
+
+export const NOTE_TAG_MAX_COUNT = 8;
+export const NOTE_TAG_MAX_LENGTH = 24;
+
+/**
+ * 归一化标签集合：去首尾空白与前导 #、去空、大小写不敏感去重（保序、保首个
+ * 写法）、单条长度按码点封顶、条数封顶；空集合归一为 undefined（不落盘空数组）。
+ */
+export function sanitizeNoteTags(
+  tags: readonly string[]
+): string[] | undefined {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of tags) {
+    const tag = raw.replace(/^[\s#]+/u, "").trim();
+    if (!tag) continue;
+    const clipped = [...tag].slice(0, NOTE_TAG_MAX_LENGTH).join("");
+    const key = clipped.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(clipped);
+    if (out.length >= NOTE_TAG_MAX_COUNT) break;
+  }
+  return out.length ? out : undefined;
+}
 
 export function groupContextMenuIds(ids: readonly ContextMenuItemId[]) {
   return CONTEXT_MENU_GROUPS.map((group) => ({
@@ -580,6 +633,11 @@ export const defaultSettings = (): Settings => ({
   panelWidth: 380,
   panelTopOffset: 0,
   panelHeight: null,
+  // 秘文默认关闭（用户指定）：不显示秘文页、不做捕获识别
+  secretEnabled: false,
+  secretKeys: [],
+  secretDefaultKeyId: null,
+  secretRevealTimeoutMs: 8000,
   onboarding: defaultOnboardingState(),
 });
 
@@ -670,6 +728,20 @@ export interface NotesState {
       createdAt?: number;
     }
   ) => string[];
+  /**
+   * 秘文入库：自动建「秘文」分组；envelope 为中文密文信封（明文永不落盘）。
+   * 同信封重复视为 duplicate。用于捕获自动解密与发送方留存己发卡。
+   */
+  addSecretNote: (
+    envelope: string,
+    meta: SecretMeta,
+    opts?: { sourceApp?: string; sourceBundle?: string; createdAt?: number }
+  ) => { result: AddNoteResult; id?: string };
+  /**
+   * 回写秘文卡元数据（命中密钥变化时用）：卡片改用全部密钥试解成功后，把最新
+   * keyId/keyLabel 写回，让锁定卡补配密钥后模糊态标签也随之更新。纯元数据、不打 updatedAt。
+   */
+  setSecretMeta: (id: string, meta: Partial<SecretMeta>) => void;
   /** 清空剪贴板历史（固定 ★ 卡保留；可撤销）。返回删除数与待清理图片。 */
   clearClipHistory: () => { removed: number; orphanImages: string[] };
   /** 按保留时长清理超龄剪贴板卡（固定卡豁免；静默，不占撤销栈）。返回待清理图片。 */
@@ -689,6 +761,10 @@ export interface NotesState {
   setLinkMeta: (id: string, meta: { title?: string; icon?: string }) => void;
   /** 重命名卡片（空串 = 清除标题）。 */
   updateNoteTitle: (id: string, title: string) => void;
+  /** 覆写卡片标签（经 sanitizeNoteTags 归一；空集清除）。组织操作，不打 updatedAt。 */
+  setNoteTags: (id: string, tags: string[]) => void;
+  /** 批量追加标签（并集，多选条「打标签」）。 */
+  addNoteTags: (ids: string[], tags: string[]) => void;
   /** 关联/改绑/解除发送结果；不删除或改写 Note 正文。 */
   setNoteProvenance: (id: string, provenance?: NoteProvenance) => boolean;
   deleteNotes: (ids: string[], undoLabel?: string) => void;
@@ -827,6 +903,7 @@ function assertCurrentSchemaHasUniqueIds(
   assertUnique(persisted.settings?.promptSnippets, "settings.promptSnippets");
   assertUnique(persisted.settings?.targetProfiles, "settings.targetProfiles");
   assertUnique(persisted.settings?.aliasEntities, "settings.aliasEntities");
+  assertUnique(persisted.settings?.secretKeys, "settings.secretKeys");
 }
 
 function validateSettingsShape(value: unknown, version: number): void {
@@ -848,6 +925,7 @@ function validateSettingsShape(value: unknown, version: number): void {
     panelFreeY: "number",
     panelHeight: "number",
     lastDraftSectionId: "string",
+    secretDefaultKeyId: "string",
   };
   for (const [key, fallback] of Object.entries(defaults)) {
     const current = settings[key];
@@ -982,6 +1060,28 @@ function validateSettingsShape(value: unknown, version: number): void {
   if (settings.defaultTargetProfileId !== undefined
     && typeof settings.defaultTargetProfileId !== "string") {
     throw new Error("settings.defaultTargetProfileId 字段无效");
+  }
+  const secretKeys = settings.secretKeys;
+  if (
+    secretKeys !== undefined &&
+    (!Array.isArray(secretKeys) ||
+      !secretKeys.every((item) => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) {
+          return false;
+        }
+        const key = item as Record<string, unknown>;
+        return (
+          typeof key.id === "string" &&
+          key.id.length > 0 &&
+          typeof key.label === "string" &&
+          typeof key.passphrase === "string" &&
+          (key.note === undefined || typeof key.note === "string") &&
+          typeof key.createdAtMs === "number" &&
+          typeof key.updatedAtMs === "number"
+        );
+      }))
+  ) {
+    throw new Error("settings.secretKeys 字段无效");
   }
   const aliasEntities = settings.aliasEntities;
   if (aliasEntities !== undefined) {
@@ -1119,6 +1219,14 @@ function migrateLegacyPromptSnippets(
   });
 }
 
+function normalizeNoteTags(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || !value.every((tag) => typeof tag === "string")) {
+    throw new Error("note.tags 必须是字符串数组");
+  }
+  return sanitizeNoteTags(value);
+}
+
 function normalizeNoteProvenance(value: unknown): NoteProvenance | undefined {
   if (value === undefined) return undefined;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -1170,13 +1278,29 @@ function noteContentPatch(blocks: unknown): Pick<
   };
 }
 
+/**
+ * 秘文卡元数据归一：kind=secret 恒有合法 meta，非 secret 卡剥除杂散 meta。
+ * 兼容读取历史键名 secret（早期实现曾用该键；正式落盘键为 secretMeta）。
+ */
+function normalizeSecretMeta(kind: NoteKind, meta: unknown): SecretMeta | undefined {
+  if (kind !== "secret") return undefined;
+  const m = (meta && typeof meta === "object" ? meta : {}) as Record<
+    string,
+    unknown
+  >;
+  const direction = m.direction === "out" ? "out" : "in";
+  const keyId = typeof m.keyId === "string" ? m.keyId : null;
+  const keyLabel = typeof m.keyLabel === "string" ? m.keyLabel : undefined;
+  return { keyId, keyLabel, direction };
+}
+
 function normalizeNoteRecord(
   note: Note,
   sectionIds: Set<string>,
   preferContentBlocks = true
 ): Note {
   const kind = note.kind ?? "text";
-  if (!(["text", "image", "link"] as const).includes(kind)) {
+  if (!(["text", "image", "link", "secret"] as const).includes(kind)) {
     throw new Error(`note.kind 无效：${String(note.kind)}`);
   }
   if (note.done !== undefined && typeof note.done !== "boolean") {
@@ -1187,8 +1311,11 @@ function normalizeNoteRecord(
   const blocks = preferContentBlocks
     ? noteContentBlocks(note)
     : noteContentBlocks({ ...note, contentBlocks: undefined });
+  // 剥除早期实现的历史键 secret：其内容已并入下方 secretMeta，且该裸键名会触发
+  // 备份导出黑名单（backup.rs），绝不能随 ...rest 再次落盘。
+  const { secret: _legacySecret, ...rest } = note as Note & { secret?: unknown };
   return {
-    ...note,
+    ...rest,
     kind,
     ...noteContentPatch(blocks),
     sectionId:
@@ -1197,7 +1324,16 @@ function normalizeNoteRecord(
         : INBOX_ID,
     done: note.done ?? false,
     createdAt: finiteNumberOrDefault(note.createdAt, 0, "note.createdAt"),
+    updatedAt:
+      note.updatedAt === undefined
+        ? undefined
+        : finiteNumberOrDefault(note.updatedAt, 0, "note.updatedAt"),
+    tags: normalizeNoteTags(note.tags),
     provenance: normalizeNoteProvenance(note.provenance),
+    secretMeta: normalizeSecretMeta(
+      kind,
+      note.secretMeta ?? (note as { secret?: unknown }).secret
+    ),
   };
 }
 
@@ -1348,7 +1484,16 @@ export function migratePersistedState(
       initialPanelSetupDone: true,
     } as Settings;
   }
-
+  if (version < 18 && p.settings) {
+    p.settings = {
+      ...p.settings,
+      // 秘文默认关闭，不改变旧用户任何可见行为（页签隐藏、捕获不识别）
+      secretEnabled: false,
+      secretKeys: [],
+      secretDefaultKeyId: null,
+      secretRevealTimeoutMs: 8000,
+    };
+  }
   const sections = dedupeById<Section>(p.sections).map((section) => ({
     ...section,
     name: typeof section.name === "string" ? section.name : "未命名分组",
@@ -1630,6 +1775,54 @@ export const useNotesStore = create<NotesState>()(
         return [];
       },
 
+      addSecretNote: (envelope, meta, opts) => {
+        const trimmed = envelope.trim();
+        if (!trimmed) return { result: "empty" };
+        // 首次收发自动建「秘文」分组，插在收件箱之后（与剪贴板同款）
+        if (!get().sections.some((s) => s.id === SECRET_ID)) {
+          const [first, ...rest] = get().sections;
+          const sec: Section = { id: SECRET_ID, name: "秘文" };
+          set({ sections: first ? [first, sec, ...rest] : [sec] });
+        }
+        // 去重：同一中文密文信封重复捕获（域=秘文组）视为重复
+        const dup = get().notes.find(
+          (n) => n.sectionId === SECRET_ID && n.text === trimmed
+        );
+        if (dup) return { result: "duplicate", id: dup.id };
+        const note: Note = {
+          id: crypto.randomUUID(),
+          ...noteContentPatch(contentBlocksForAdd(trimmed, undefined)),
+          kind: "secret",
+          sectionId: SECRET_ID,
+          done: false,
+          createdAt: finiteNumberOrDefault(
+            opts?.createdAt,
+            Date.now(),
+            "note.createdAt"
+          ),
+          sourceApp: opts?.sourceApp,
+          sourceBundle: opts?.sourceBundle,
+          secretMeta: meta,
+        };
+        set({ notes: [note, ...get().notes] });
+        return { result: "added", id: note.id };
+      },
+
+      setSecretMeta: (id, meta) => {
+        set({
+          notes: get().notes.map((n) =>
+            n.id === id && n.kind === "secret"
+              ? {
+                  ...n,
+                  secretMeta: {
+                    ...(n.secretMeta ?? { keyId: null, direction: "in" }),
+                    ...meta,
+                  },
+                }
+              : n
+          ),
+        });
+      },
 
       clearClipHistory: () => {
         const targets = get().notes.filter(
@@ -1674,6 +1867,7 @@ export const useNotesStore = create<NotesState>()(
 
       updateNoteText: (id, text, imageFiles) => {
         const trimmed = text.trim();
+        const editedAt = Date.now();
         set({
           notes: get().notes.map((n) => {
             if (n.id !== id) return n;
@@ -1700,6 +1894,7 @@ export const useNotesStore = create<NotesState>()(
                 codeLang: undefined,
                 linkTitle: same ? n.linkTitle : undefined,
                 linkIcon: same ? n.linkIcon : undefined,
+                updatedAt: editedAt,
               };
             }
             return {
@@ -1714,6 +1909,7 @@ export const useNotesStore = create<NotesState>()(
               linkTitle: undefined,
               linkIcon: undefined,
               codeLang: normalized.codeLang ?? undefined,
+              updatedAt: editedAt,
             };
           }),
         });
@@ -1736,6 +1932,7 @@ export const useNotesStore = create<NotesState>()(
               codeLang: normalized.codeLang ?? undefined,
               linkTitle: sameUrl ? note.linkTitle : undefined,
               linkIcon: sameUrl ? note.linkIcon : undefined,
+              updatedAt: Date.now(),
             };
           }),
         });
@@ -1764,6 +1961,7 @@ export const useNotesStore = create<NotesState>()(
                       ...n,
                       ...nextContent,
                       kind: "text" as const,
+                      updatedAt: Date.now(),
                     }
                   : n
               ),
@@ -1783,6 +1981,7 @@ export const useNotesStore = create<NotesState>()(
               ? {
                   ...n,
                   ...nextContent,
+                  updatedAt: Date.now(),
                 }
               : n
           ),
@@ -1794,7 +1993,29 @@ export const useNotesStore = create<NotesState>()(
         const trimmed = title.trim();
         set({
           notes: get().notes.map((n) =>
-            n.id === id ? { ...n, title: trimmed || undefined } : n
+            n.id === id && n.title !== (trimmed || undefined)
+              ? { ...n, title: trimmed || undefined, updatedAt: Date.now() }
+              : n
+          ),
+        });
+      },
+
+      setNoteTags: (id, tags) => {
+        set({
+          notes: get().notes.map((n) =>
+            n.id === id ? { ...n, tags: sanitizeNoteTags(tags) } : n
+          ),
+        });
+      },
+
+      addNoteTags: (ids, tags) => {
+        if (!ids.length || !tags.length) return;
+        const target = new Set(ids);
+        set({
+          notes: get().notes.map((n) =>
+            target.has(n.id)
+              ? { ...n, tags: sanitizeNoteTags([...(n.tags ?? []), ...tags]) }
+              : n
           ),
         });
       },
@@ -1953,6 +2174,9 @@ export const useNotesStore = create<NotesState>()(
           .filter((n) => n.kind !== "image" || imageCaption(n).length > 0)
           .map((n) => n.text);
         const first = ordered[0];
+        const mergedTags = sanitizeNoteTags(
+          ordered.flatMap((n) => n.tags ?? [])
+        );
         const mergedText = textParts.length
           ? mergedContent.text
           : `图片 ${images.length} 张`;
@@ -1973,6 +2197,7 @@ export const useNotesStore = create<NotesState>()(
             createdAt: Date.now(),
             kind: textParts.length ? "text" : "image",
             codeLang: textParts.length ? detectCode(mergedText) : undefined,
+            tags: mergedTags,
           };
           set({ notes: [combo, ...notes], checkedIds: [combo.id] });
           return;
@@ -1983,6 +2208,8 @@ export const useNotesStore = create<NotesState>()(
           kind: textParts.length ? "text" : "image",
           codeLang: textParts.length ? detectCode(mergedText) : undefined,
           url: undefined,
+          tags: mergedTags,
+          updatedAt: Date.now(),
         };
         const rest = new Set(ordered.slice(1).map((n) => n.id));
         set({

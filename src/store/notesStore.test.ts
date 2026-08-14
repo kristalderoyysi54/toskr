@@ -26,9 +26,11 @@ import {
   HUD_DURATION_DEFAULT_MS,
   INBOX_ID,
   mergePersistedNotesState,
+  NOTE_TAG_MAX_COUNT,
   noteContentBlocks,
   orderedCheckedNotes,
   replaceNotesStoreFromPersisted,
+  sanitizeNoteTags,
   STORE_VERSION,
   TASK_INBOX_ID,
   useNotesStore,
@@ -83,8 +85,8 @@ describe("notesStore 基础", () => {
     ]);
   });
 
-  it("v12 迁移到 v17 时正文不变、生成权威块，并补齐本地成效设置", () => {
-    expect(STORE_VERSION).toBe(17);
+  it("v12 迁移到最新版时正文不变、生成权威块，并补齐本地成效设置", () => {
+    expect(STORE_VERSION).toBe(18);
     const decoded = decodePersistedState(JSON.stringify({
       version: 12,
       state: {
@@ -133,6 +135,82 @@ describe("notesStore 基础", () => {
       aliasNextNumberByCategory: {},
       aliasAutoRestoreOnCapture: true,
     });
+  });
+
+  it("v17 迁移到 v18 补齐秘文默认值（默认关闭）且页序追加秘文页", () => {
+    const {
+      secretEnabled: _secretEnabled,
+      secretKeys: _secretKeys,
+      secretDefaultKeyId: _secretDefaultKeyId,
+      secretRevealTimeoutMs: _secretRevealTimeoutMs,
+      ...legacySettings
+    } = defaultSettings();
+    const decoded = decodePersistedState(JSON.stringify({
+      version: 17,
+      state: {
+        sections: [{ id: INBOX_ID, name: "收件箱" }],
+        notes: [],
+        tasks: [],
+        taskSections: [],
+        settings: {
+          ...legacySettings,
+          stealth: true,
+          pageOrder: ["clipboard", "notes", "tasks"],
+        },
+      },
+    }));
+    expect(decoded.settings).toMatchObject({
+      stealth: true,
+      secretEnabled: false,
+      secretKeys: [],
+      secretDefaultKeyId: null,
+      secretRevealTimeoutMs: 8000,
+    });
+    // 旧页序缺秘文页，normalizePageOrder 应把它补进来
+    expect(decoded.settings.pageOrder).toContain("secret");
+  });
+
+  it("秘文卡：addSecretNote 建组入库；历史键 secret 迁移为 secretMeta 且不再落盘", () => {
+    useNotesStore.setState({
+      sections: [{ id: INBOX_ID, name: "收件箱" }],
+      notes: [],
+      settings: defaultSettings(),
+      undoStack: [],
+    });
+    const { result, id } = useNotesStore
+      .getState()
+      .addSecretNote("「话说密文信封」", { keyId: "k1", keyLabel: "同事", direction: "in" });
+    expect(result).toBe("added");
+    const note = useNotesStore.getState().notes.find((n) => n.id === id)!;
+    expect(note.kind).toBe("secret");
+    expect(note.sectionId).toBe("secret");
+    expect(note.secretMeta).toEqual({ keyId: "k1", keyLabel: "同事", direction: "in" });
+    // 同信封重复 → duplicate
+    expect(
+      useNotesStore.getState().addSecretNote("「话说密文信封」", { keyId: "k1", direction: "in" }).result
+    ).toBe("duplicate");
+
+    // 历史键名 secret 的旧数据经归一后迁到 secretMeta，且裸 secret 键被剥除（不触发备份黑名单）
+    const decoded = decodePersistedState(JSON.stringify({
+      version: STORE_VERSION,
+      state: {
+        sections: [{ id: INBOX_ID, name: "收件箱" }, { id: "secret", name: "秘文" }],
+        notes: [
+          {
+            id: "legacy-secret",
+            text: "「话说旧密文」",
+            kind: "secret",
+            sectionId: "secret",
+            done: false,
+            createdAt: 1,
+            secret: { keyId: "old", keyLabel: "旧钥", direction: "out" },
+          },
+        ],
+      },
+    }));
+    const migrated = decoded.notes.find((n) => n.id === "legacy-secret")!;
+    expect(migrated.secretMeta).toEqual({ keyId: "old", keyLabel: "旧钥", direction: "out" });
+    expect(JSON.stringify(migrated)).not.toContain('"secret":{');
   });
 
   it("首装面板默认态仅留给新档案，v16 旧档案迁移后不触发", () => {
@@ -1737,5 +1815,118 @@ describe("剪贴板分组不干扰默认落点与分组排序", () => {
       "group-a",
       INBOX_ID,
     ]);
+  });
+});
+
+describe("标签与更新时间", () => {
+  beforeEach(() => {
+    useNotesStore.setState({
+      sections: [{ id: INBOX_ID, name: "收件箱" }],
+      notes: [],
+      tasks: [],
+      taskSections: [{ id: TASK_INBOX_ID, name: "收集箱" }],
+      checkedIds: [],
+      settings: defaultSettings(),
+      undoStack: [],
+    });
+  });
+
+  it("sanitizeNoteTags 去空白与前导 #、大小写去重保首个写法、双上限封顶", () => {
+    expect(sanitizeNoteTags([" #工作 ", "工作", "WORK", "work", ""])).toEqual([
+      "工作",
+      "WORK",
+    ]);
+    expect(sanitizeNoteTags([])).toBeUndefined();
+    expect(sanitizeNoteTags(["x".repeat(40)])).toEqual(["x".repeat(24)]);
+    const many = Array.from({ length: 12 }, (_, i) => `t${i}`);
+    expect(sanitizeNoteTags(many)).toHaveLength(NOTE_TAG_MAX_COUNT);
+  });
+
+  it("setNoteTags 归一化覆写且不打 updatedAt；addNoteTags 批量并集", () => {
+    useNotesStore.getState().addNote("甲");
+    useNotesStore.getState().addNote("乙");
+    const [b, a] = useNotesStore.getState().notes;
+    useNotesStore.getState().setNoteTags(a.id, ["#前端", "前端", "架构"]);
+    const tagged = useNotesStore.getState().notes.find((n) => n.id === a.id)!;
+    expect(tagged.tags).toEqual(["前端", "架构"]);
+    expect(tagged.updatedAt).toBeUndefined();
+
+    useNotesStore.getState().addNoteTags([a.id, b.id], ["评审"]);
+    const after = useNotesStore.getState().notes;
+    expect(after.find((n) => n.id === a.id)!.tags).toEqual([
+      "前端",
+      "架构",
+      "评审",
+    ]);
+    expect(after.find((n) => n.id === b.id)!.tags).toEqual(["评审"]);
+
+    useNotesStore.getState().setNoteTags(a.id, []);
+    expect(
+      useNotesStore.getState().notes.find((n) => n.id === a.id)!.tags
+    ).toBeUndefined();
+  });
+
+  it("编辑正文与重命名打 updatedAt；无变化的重命名不打", () => {
+    useNotesStore.getState().addNote("原文");
+    const id = useNotesStore.getState().notes[0].id;
+    expect(useNotesStore.getState().notes[0].updatedAt).toBeUndefined();
+
+    useNotesStore.getState().updateNoteText(id, "改后");
+    const edited = useNotesStore.getState().notes[0];
+    expect(edited.updatedAt).toBeGreaterThan(0);
+
+    useNotesStore.getState().updateNoteTitle(id, "标题");
+    const renamed = useNotesStore.getState().notes[0];
+    expect(renamed.updatedAt).toBeGreaterThanOrEqual(edited.updatedAt!);
+
+    const stamp = renamed.updatedAt;
+    useNotesStore.getState().updateNoteTitle(id, "标题");
+    expect(useNotesStore.getState().notes[0].updatedAt).toBe(stamp);
+  });
+
+  it("合并笔记：标签取并集，合并产物打 updatedAt", () => {
+    useNotesStore.getState().addNote("第二");
+    useNotesStore.getState().addNote("第一");
+    const [first, second] = useNotesStore.getState().notes;
+    useNotesStore.getState().setNoteTags(first.id, ["工作"]);
+    useNotesStore.getState().setNoteTags(second.id, ["工作", "评审"]);
+
+    useNotesStore.getState().mergeNotes([first.id, second.id]);
+    const merged = useNotesStore
+      .getState()
+      .notes.find((n) => n.id === first.id)!;
+    expect(merged.tags).toEqual(["工作", "评审"]);
+    expect(merged.updatedAt).toBeGreaterThan(0);
+  });
+
+  it("持久化归一化：非法 tags 拒绝，合法 tags/updatedAt 原样保留", () => {
+    const base = {
+      version: STORE_VERSION,
+      state: {
+        sections: [{ id: INBOX_ID, name: "收件箱" }],
+        notes: [
+          {
+            id: "n1",
+            text: "正文",
+            sectionId: INBOX_ID,
+            done: false,
+            createdAt: 100,
+            updatedAt: 200,
+            tags: [" #工作 ", "评审"],
+          },
+        ],
+      },
+    };
+    const decoded = decodePersistedState(JSON.stringify(base));
+    expect(decoded.notes[0]).toMatchObject({
+      updatedAt: 200,
+      tags: ["工作", "评审"],
+    });
+
+    const bad = JSON.parse(JSON.stringify(base));
+    bad.state.notes[0].tags = ["ok", 3];
+    expect(() => decodePersistedState(JSON.stringify(bad))).toThrow(
+      "note.tags"
+    );
   });
 });
