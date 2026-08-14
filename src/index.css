@@ -352,10 +352,10 @@ input {
   --button-primary-shadow:
     0 1px 2px oklch(0 0 0 / 0.5),
     inset 0 1px 0 oklch(1 0 0 / 0.7);
-  --segmented-thumb: oklch(0.33 0 0);
-  --segmented-thumb-shadow:
-    0 1px 2px oklch(0 0 0 / 0.4),
-    inset 0 1px 0 oklch(1 0 0 / 0.14);
+  /* 深色 thumb 平面化（2026-08-14 用户定稿）：去顶部 rim 高光（与卡片的
+     无光泽风格统一），0.33 → 0.38 提亮一档（0.33 在毛玻璃暗底上读作纯黑） */
+  --segmented-thumb: oklch(0.38 0 0);
+  --segmented-thumb-shadow: 0 1px 2px oklch(0 0 0 / 0.4);
   --switch-track-off: oklch(1 0 0 / 14%);
   --switch-track-off-border: oklch(1 0 0 / 12%);
 }

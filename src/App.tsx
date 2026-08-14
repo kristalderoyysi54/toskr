@@ -78,6 +78,7 @@ import {
 } from "@/lib/dataGeneration";
 import { UpdateDialog } from "@/components/UpdateDialog";
 import { SectionGroup } from "@/components/SectionGroup";
+import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -672,6 +673,7 @@ function PageSlide({
 export default function App() {
   const dataOperationLocked = useDataOperationStore((state) => state.locked);
   const dataOperationMessage = useDataOperationStore((state) => state.message);
+  const dataOperationPhase = useDataOperationStore((state) => state.phase);
   const open = useUIStore((s) => s.open);
   const page = useUIStore((s) => s.page);
   const pinned = useUIStore((s) => s.pinned);
@@ -2770,6 +2772,20 @@ export default function App() {
               <p className="mt-1 text-body text-muted-foreground">
                 {dataOperationMessage || "正在验证并切换数据目录…"}
               </p>
+              {/* 仅恢复/冲突态给引导：瞬态事务（prepare/rehydrate…）几秒内自行解锁 */}
+              {(dataOperationPhase === "storageRecovery" ||
+                dataOperationPhase === "conflict") && (
+                <Button
+                  size="sm"
+                  className="mt-2.5"
+                  onClick={() => {
+                    void api.openSettingsWindow();
+                    void emitTo("settings", SETTINGS_SECTION, "data");
+                  }}
+                >
+                  前往设置处理
+                </Button>
+              )}
             </div>
           </div>
         )}
@@ -2885,7 +2901,7 @@ export default function App() {
                 {/* 横栏：页签固定在标题旁（左），分组胶囊独立居中——
                     切页时页签位置不动，胶囊各自居中，互不牵连 */}
                 {horizontalBar && (
-                  <div role="tablist" aria-label="页面" className="surface-inset elevation-1 flex shrink-0 items-center rounded-lg p-0.5">
+                  <div role="tablist" aria-label="页面" className="surface-inset flex shrink-0 items-center rounded-lg p-0.5">
                     {pageTabs}
                   </div>
                 )}
@@ -3220,12 +3236,14 @@ export default function App() {
               <TargetLensBar />
 
               {/* 页面切换：笔记 / 任务 / 剪贴板（⌃Tab 循环）。
-                  横栏形态并入标题行居中（Paste 式单行头部），不再单占一行 */}
+                  横栏形态并入标题行居中（Paste 式单行头部），不再单占一行。
+                  两处轨道均不加 elevation-1：深色毛玻璃上 inset 黑影读成
+                  一圈最外层黑框（2026-08-14 用户否决），只留 surface-inset 底 */}
               {!horizontalBar && (
                 <div
                   role="tablist"
                   aria-label="页面"
-                  className="surface-inset elevation-1 mx-3 mb-1.5 inline-flex w-fit items-center self-start rounded-lg p-0.5"
+                  className="surface-inset mx-3 mb-1.5 inline-flex w-fit items-center self-start rounded-lg p-0.5"
                 >
                   {pageTabs}
                 </div>
