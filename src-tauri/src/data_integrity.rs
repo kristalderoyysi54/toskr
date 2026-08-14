@@ -22,7 +22,7 @@ use crate::activity::{
 };
 use crate::storage::{DATA_FILE, MEDIA_DIR};
 
-pub const MAX_STORE_VERSION: u64 = 17;
+pub const MAX_STORE_VERSION: u64 = 18;
 const MISSING_REVISION: &str = "missing";
 const MEDIA_GC_FILE: &str = "toskr-media-gc.json";
 const DATA_JOURNAL_FILE: &str = "toskr-data-transaction.json";
@@ -3053,6 +3053,7 @@ pub(crate) fn validate_settings_value_for_version(
         "aliasEntitiesEnabled",
         "aliasAutoRestoreOnCapture",
         "outcomeMetricsEnabled",
+        "secretEnabled",
     ] {
         if !optional_type(settings, key, serde_json::Value::is_boolean) {
             return false;
@@ -3067,6 +3068,7 @@ pub(crate) fn validate_settings_value_for_version(
         "companionGap",
         "panelWidth",
         "panelTopOffset",
+        "secretRevealTimeoutMs",
     ] {
         if !optional_type(settings, key, finite) {
             return false;
@@ -3237,9 +3239,12 @@ pub(crate) fn validate_settings_value_for_version(
     }
     if !optional_type(settings, "pageOrder", |value| {
         value.as_array().is_some_and(|items| {
-            items
-                .iter()
-                .all(|item| matches!(item.as_str(), Some("clipboard" | "notes" | "tasks")))
+            items.iter().all(|item| {
+                matches!(
+                    item.as_str(),
+                    Some("clipboard" | "notes" | "tasks" | "secret")
+                )
+            })
         })
     }) || !optional_type(settings, "promptSnippets", |value| {
         let mut ids = BTreeSet::new();
@@ -3321,6 +3326,30 @@ pub(crate) fn validate_settings_value_for_version(
                 item.as_object().is_some_and(|item| {
                     item.get("id").is_some_and(serde_json::Value::is_string)
                         && item.get("on").is_some_and(serde_json::Value::is_boolean)
+                })
+            })
+        })
+    }) {
+        return false;
+    }
+    // v18 秘文（镜像前端 validateSettingsShape 的 secretKeys 手写块）
+    if !optional_type(settings, "secretDefaultKeyId", |value| {
+        value.is_null() || value.is_string()
+    }) || !optional_type(settings, "secretKeys", |value| {
+        let mut ids = BTreeSet::new();
+        value.as_array().is_some_and(|items| {
+            items.iter().all(|item| {
+                item.as_object().is_some_and(|item| {
+                    item.get("id")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|id| !id.is_empty() && ids.insert(id))
+                        && item.get("label").is_some_and(serde_json::Value::is_string)
+                        && item
+                            .get("passphrase")
+                            .is_some_and(serde_json::Value::is_string)
+                        && optional_type(item, "note", serde_json::Value::is_string)
+                        && item.get("createdAtMs").is_some_and(finite)
+                        && item.get("updatedAtMs").is_some_and(finite)
                 })
             })
         })
@@ -3502,10 +3531,28 @@ fn validate_note(object: &serde_json::Map<String, serde_json::Value>) -> bool {
         && optional_type(object, "sectionId", serde_json::Value::is_string)
         && optional_type(object, "done", serde_json::Value::is_boolean)
         && optional_type(object, "createdAt", valid_nonnegative_number)
+        && optional_type(object, "updatedAt", valid_nonnegative_number)
         && optional_type(object, "kind", |value| {
-            matches!(value.as_str(), Some("text" | "image" | "link"))
+            matches!(value.as_str(), Some("text" | "image" | "link" | "secret"))
+        })
+        && optional_type(object, "secretMeta", |value| {
+            // v18 秘文卡元数据（镜像前端 normalizeSecretMeta）：keyId 可空、方向二值
+            value.as_object().is_some_and(|meta| {
+                meta.get("keyId")
+                    .is_some_and(|id| id.is_null() || id.is_string())
+                    && optional_type(meta, "keyLabel", serde_json::Value::is_string)
+                    && matches!(
+                        meta.get("direction").and_then(serde_json::Value::as_str),
+                        Some("in" | "out")
+                    )
+            })
         })
         && optional_type(object, "attachments", |value| {
+            value
+                .as_array()
+                .is_some_and(|items| items.iter().all(serde_json::Value::is_string))
+        })
+        && optional_type(object, "tags", |value| {
             value
                 .as_array()
                 .is_some_and(|items| items.iter().all(serde_json::Value::is_string))
@@ -3771,6 +3818,88 @@ mod tests {
         }
     }
 
+    /// v18 秘文数据必须判 Valid（曾因 Rust 镜像缺 kind=secret / pageOrder=secret /
+    /// 版本上限 17 而误判 Corrupt，启动进只读恢复模式）；非法秘文形状仍要拒绝。
+    #[test]
+    fn v18_secret_store_is_valid_and_malformed_secret_shapes_are_rejected() {
+        let write_store = |dir: &std::path::Path, state: serde_json::Value| {
+            fs::create_dir_all(dir.join(MEDIA_DIR)).unwrap();
+            let persisted = serde_json::json!({"version": 18u64, "state": state});
+            fs::write(
+                dir.join(DATA_FILE),
+                serde_json::json!({"toskr": persisted.to_string()}).to_string(),
+            )
+            .unwrap();
+        };
+        let valid_state = serde_json::json!({
+            "sections": [
+                {"id": "inbox", "name": "收件箱"},
+                {"id": "secret", "name": "秘文"}
+            ],
+            "notes": [{
+                "id": "s1", "text": "「话说的一是了」", "kind": "secret",
+                "sectionId": "secret", "done": false, "createdAt": 1,
+                "secretMeta": {"keyId": "k1", "keyLabel": "同事", "direction": "in"}
+            }, {
+                "id": "s2", "text": "「话说我不人在」", "kind": "secret",
+                "sectionId": "secret", "done": false, "createdAt": 2,
+                "secretMeta": {"keyId": null, "direction": "out"}
+            }],
+            "tasks": [], "taskSections": [],
+            "settings": {
+                "secretEnabled": true,
+                "secretDefaultKeyId": null,
+                "secretRevealTimeoutMs": 8000,
+                "pageOrder": ["clipboard", "notes", "tasks", "secret"],
+                "secretKeys": [{
+                    "id": "k1", "label": "同事", "passphrase": "暗号",
+                    "note": "2026-08 约定", "createdAtMs": 1, "updatedAtMs": 1
+                }]
+            }
+        });
+        let root = tempdir().unwrap();
+        let valid_dir = root.path().join("valid-v18-secret");
+        write_store(&valid_dir, valid_state.clone());
+        let inspected = inspect_location(&valid_dir, None);
+        assert_eq!(inspected.kind, DataLocationKind::Valid);
+        assert_eq!(inspected.store_version, Some(18));
+
+        for (name, mutate) in [
+            (
+                "bogus-note-kind",
+                Box::new(|state: &mut serde_json::Value| {
+                    state["notes"][0]["kind"] = "bogus".into();
+                }) as Box<dyn Fn(&mut serde_json::Value)>,
+            ),
+            (
+                "bad-secret-direction",
+                Box::new(|state: &mut serde_json::Value| {
+                    state["notes"][0]["secretMeta"]["direction"] = "sideways".into();
+                }),
+            ),
+            (
+                "duplicate-secret-key-id",
+                Box::new(|state: &mut serde_json::Value| {
+                    let key = state["settings"]["secretKeys"][0].clone();
+                    state["settings"]["secretKeys"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(key);
+                }),
+            ),
+        ] {
+            let mut state = valid_state.clone();
+            mutate(&mut state);
+            let dir = root.path().join(name);
+            write_store(&dir, state);
+            assert_eq!(
+                inspect_location(&dir, None).kind,
+                DataLocationKind::Corrupt,
+                "{name} 应判 Corrupt"
+            );
+        }
+    }
+
     #[test]
     fn current_store_accepts_only_disableable_firewall_warn_categories() {
         let settings = serde_json::json!({
@@ -3834,7 +3963,7 @@ mod tests {
                 "activationWithin60s": null
             }
         });
-        assert_eq!(MAX_STORE_VERSION, 17);
+        assert_eq!(MAX_STORE_VERSION, 18);
         assert!(validate_settings_value_for_version(
             Some(&valid),
             MAX_STORE_VERSION
@@ -3966,6 +4095,30 @@ mod tests {
             serde_json::json!([{"type": "future", "text": "x"}]),
         ] {
             assert!(!validate_note_content_blocks(&invalid));
+        }
+    }
+
+    #[test]
+    fn note_tags_and_updated_at_validate_when_present_only() {
+        let valid = serde_json::json!({
+            "id": "n1",
+            "text": "正文",
+            "tags": ["工作", "评审"],
+            "updatedAt": 1755000000000u64
+        });
+        assert!(validate_note(valid.as_object().unwrap()));
+
+        // 字段缺省照常放行（旧数据无这两个字段）
+        let legacy = serde_json::json!({"id": "n0", "text": "旧卡"});
+        assert!(validate_note(legacy.as_object().unwrap()));
+
+        for invalid in [
+            serde_json::json!({"id": "n2", "tags": "工作"}),
+            serde_json::json!({"id": "n3", "tags": ["ok", 3]}),
+            serde_json::json!({"id": "n4", "updatedAt": -1}),
+            serde_json::json!({"id": "n5", "updatedAt": "yesterday"}),
+        ] {
+            assert!(!validate_note(invalid.as_object().unwrap()));
         }
     }
 

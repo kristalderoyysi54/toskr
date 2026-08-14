@@ -78,6 +78,7 @@ export function buildDeliveryDraft(
   let rawText = "";
   let imageFiles: string[] = [];
   let singleCodeLanguage: string | undefined;
+  let isSecretSource = false;
 
   if (input.sourceKind === "task") {
     const selected = state.tasks.find((task) => requestedIds.has(task.id));
@@ -88,6 +89,7 @@ export function buildDeliveryDraft(
   } else {
     const selected = orderedNotes(input.sourceItemIds, state.notes);
     sourceItemIds = selected.map((note) => note.id);
+    isSecretSource = selected.some((note) => note.kind === "secret");
     const content = buildNoteSourceContent(selected);
     rawText = content.rawText;
     imageFiles = content.imageFiles;
@@ -102,13 +104,17 @@ export function buildDeliveryDraft(
   const formattedText = rawText && format === "code"
     ? wrapAsCodeBlock(rawText, singleCodeLanguage)
     : rawText;
-  const assembledBase = input.promptTemplate
-    ? applyPromptTemplate(input.promptTemplate, formattedText)
-    : formattedText;
+  // 秘文正文是字节精确的密文信封：套 Prompt 模板会破坏语义、别名字面替换可能改掉
+  // 与词典原文同形的码位子串导致永久不可解，故秘文来源一律跳过这两步，原样发送。
+  const assembledBase =
+    input.promptTemplate && !isSecretSource
+      ? applyPromptTemplate(input.promptTemplate, formattedText)
+      : formattedText;
   // 词典化名先于隐私正则扫描（扫描发生在 dispatch 阶段），被化名的实体不会再触发正则命中
-  const aliasResult = state.aliasEntitiesEnabled && assembledBase
-    ? applyAliasEntities(assembledBase, state.aliasEntities)
-    : { text: assembledBase, redactionMap: {}, replacedCount: 0 };
+  const aliasResult =
+    state.aliasEntitiesEnabled && assembledBase && !isSecretSource
+      ? applyAliasEntities(assembledBase, state.aliasEntities)
+      : { text: assembledBase, redactionMap: {}, replacedCount: 0 };
   const finalText = aliasResult.text;
 
   if (!finalText && imageFiles.length === 0) {

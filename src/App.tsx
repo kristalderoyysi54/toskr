@@ -118,6 +118,7 @@ import {
   TASK_SPARKS_COLLAPSED_KEY,
 } from "@/components/TaskPage";
 import { TaskTile } from "@/components/TaskRow";
+import { SecretPage } from "@/components/SecretPage";
 import { TaskQuickAdd } from "@/components/TaskQuickAdd";
 import { EmptyState } from "@/components/ui/empty-state";
 import { floatingSurface } from "@/components/ui/floating-surface";
@@ -167,7 +168,8 @@ import {
   migrateLegacyAiApiKey,
   withoutLegacyAiApiKey,
 } from "@/lib/aiKeyMigration";
-import { matchNote } from "@/lib/search";
+import { matchNote, matchSecretNote } from "@/lib/search";
+import { isSecretEnvelope, openFromChinese } from "@/lib/secret/secret";
 import { scrollPageToStart } from "@/lib/pageScroll";
 import {
   shouldHidePanelOnBlur,
@@ -215,6 +217,7 @@ import {
   noteImages,
   PANEL_WIDTH_MAX,
   PANEL_WIDTH_MIN,
+  SECRET_ID,
   SECTION_COLORS,
   TASK_INBOX_ID,
   useNotesStore,
@@ -627,6 +630,7 @@ const PAGE_LABEL: Record<PageId, string> = {
   clipboard: "剪贴",
   notes: "笔记",
   tasks: "任务",
+  secret: "秘文",
 };
 
 /**
@@ -706,12 +710,14 @@ export default function App() {
           return;
         }
         if (status.initializationFailure) {
-          enterPersistenceConflict(status.initializationFailure);
+          // 相位必须先于 enterPersistenceConflict：其事件是同步派发的，
+          // 冲突处理器按相位判断是否落盘标记（见 PERSISTENCE_CONFLICT_EVENT 监听）
           reportDataActivity({
             locked: true,
             phase: "storageRecovery",
             message: `存储初始化失败：${status.initializationFailure.message}`,
           });
+          enterPersistenceConflict(status.initializationFailure);
           return;
         }
         if (status.conflictPending) {
@@ -1034,6 +1040,51 @@ export default function App() {
       };
 
       const captureSettings = useNotesStore.getState().settings;
+
+      // 秘文识别（双击 ⇧ 解密主路径）：开启秘文且捕获文本是可解析的中文密文信封 →
+      // 逐密钥试解、路由到「秘文」页（明文不落盘），绝不进普通笔记，也绕开别名还原
+      // （别名字面替换会损坏密文）。isSecretEnvelope 结构+魔数校验，误判概率趋近于零。
+      if (captureSettings.secretEnabled && isSecretEnvelope(payload.text)) {
+        const secretOpts = {
+          sourceApp: payload.appName ?? undefined,
+          sourceBundle: payload.bundleId ?? undefined,
+          createdAt: capturedAt,
+        };
+        void (async () => {
+          const res = await openFromChinese(
+            payload.text,
+            useNotesStore.getState().settings.secretKeys
+          );
+          if (res.status === "locked") {
+            const { result } = useNotesStore
+              .getState()
+              .addSecretNote(payload.text, { keyId: null, direction: "in" }, secretOpts);
+            if (result !== "empty") tip("warn", "识别到密文，但没有匹配的密钥");
+            return;
+          }
+          if (res.status === "plaintext") {
+            const { result, id } = useNotesStore
+              .getState()
+              .addSecretNote(
+                payload.text,
+                { keyId: res.keyId, keyLabel: res.keyLabel, direction: "in" },
+                secretOpts
+              );
+            if (result === "duplicate") {
+              tip("duplicate", "这条秘文已在秘文页");
+            } else if (result === "added" && id) {
+              // undoable=true：HUD 悬停出「撤销」，与普通捕获一致
+              setPendingUndo(() => {
+                useNotesStore.getState().deleteNotes([id], "撤销解密");
+                void api.hudFeedback("undone", "已撤销");
+              });
+              tip("added", `已解密 1 条 · 用【${res.keyLabel}】`, true);
+            }
+          }
+        })();
+        return;
+      }
+
       const shouldRestoreAliases =
         payload.contentKind !== "image" &&
         captureSettings.aliasEntitiesEnabled &&
@@ -1079,6 +1130,11 @@ export default function App() {
           ]
             .filter((warning): warning is string => !!warning)
             .join(" · ") || null;
+          if (restored.omittedImageCount > 0 && restored.omittedSchemes.length > 0) {
+            void api.diagNote(
+              `富图片: 解析丢弃 ${restored.omittedSchemes.join(",")}`
+            );
+          }
           const result = commitCapture(
             restored.text,
             shouldRestoreAliases ? restored.restoredCount : null,
@@ -1378,6 +1434,11 @@ export default function App() {
               "warn",
               `已保存可读取内容，${rich.omittedImageCount} 张图片未能保存`
             );
+            if (rich.omittedSchemes.length > 0) {
+              void api.diagNote(
+                `富图片: 解析丢弃 ${rich.omittedSchemes.join(",")}`
+              );
+            }
           }
         })
         .catch(() => {
@@ -1592,14 +1653,20 @@ export default function App() {
   useEffect(() => useNotesStore.subscribe(() => broadcastSettings()), []);
 
   useEffect(() => {
-    const onConflict = () => {
+    const onConflict = (event: Event) => {
+      // 存储恢复模式（初始化失败）自有横幅与出口；必须在落盘任何标记之前判断——
+      // 曾因先 markDataConflict 后判相位，把恢复态误持久化成「外部修改」伪冲突，
+      // 导致之后每次启动都被陈旧标记冻结在只读（2026-08 事故）。
+      if (useDataOperationStore.getState().phase === "storageRecovery") {
+        return;
+      }
+      // 把真实错误进诊断日志：冲突原因不再靠猜（CAS 拒绝 / 读取失败 / 事务门）
+      const detail = (event as CustomEvent).detail;
+      void api.diagNote(`数据冲突事件: ${userError(detail)}`);
       const message = "检测到数据文件被外部修改，已停止自动覆盖";
       void api
         .markDataConflict()
         .then(() => {
-          if (useDataOperationStore.getState().phase === "storageRecovery") {
-            return;
-          }
           reportDataActivity({
             locked: true,
             phase: "conflict",
@@ -2098,10 +2165,16 @@ export default function App() {
   const grouped = useMemo(
     () =>
       sections
-        .filter((section) => section.id !== CLIPBOARD_ID)
+        .filter(
+          (section) => section.id !== CLIPBOARD_ID && section.id !== SECRET_ID
+        )
         .map((section) => {
           const inSection = notes.filter(
-            (n) => n.sectionId === section.id && matchNote(n, q)
+            // kind!==secret 兜底：秘文卡即便分组孤儿也绝不在笔记页用 NoteCard 渲染
+            (n) =>
+              n.sectionId === section.id &&
+              n.kind !== "secret" &&
+              matchNote(n, q)
           );
           return {
             section,
@@ -2130,11 +2203,23 @@ export default function App() {
     return [...list.filter((n) => n.keep), ...list.filter((n) => !n.keep)];
   }, [notes, q]);
 
+  /** 秘文 tab：按 kind 筛（对 section 孤儿健壮），时间流水（新在前）。 */
+  const secretNotes = useMemo(
+    () => notes.filter((n) => n.kind === "secret" && matchSecretNote(n, q)),
+    [notes, q]
+  );
+  const secretNavIds = useMemo(() => secretNotes.map((n) => n.id), [secretNotes]);
+
   const noteMatchCount = grouped.reduce(
     (a, g) => a + g.active.length + g.done.length,
     0
   );
-  const matchCount = page === "clipboard" ? clipNotes.length : noteMatchCount;
+  const matchCount =
+    page === "clipboard"
+      ? clipNotes.length
+      : page === "secret"
+        ? secretNotes.length
+        : noteMatchCount;
 
   /** 键盘导航覆盖的可见卡片序列（笔记页）。 */
   const noteNavIds = useMemo(
@@ -2231,9 +2316,11 @@ export default function App() {
         : taskNavIds
       : page === "clipboard"
         ? clipNavIds
-        : horizontalBar
-          ? stripNoteIds
-          : noteNavIds;
+        : page === "secret"
+          ? secretNavIds
+          : horizontalBar
+            ? stripNoteIds
+            : noteNavIds;
 
   // 可见顺序同步到 uiStore，供 Shift 范围选中使用
   useEffect(() => {
@@ -2253,21 +2340,28 @@ export default function App() {
   // （左侧页藏左、右侧页藏右），所以顺序一变滑动方向立刻跟着变
   const pageOrder = useNotesStore((s) => s.settings.pageOrder);
   const clipHistory = useNotesStore((s) => s.settings.clipHistory);
-  // 关掉剪贴板历史 = 该功能整体隐退：页签也不再出现（页序本身保持不变，
+  const secretEnabled = useNotesStore((s) => s.settings.secretEnabled);
+  // 关掉剪贴板历史 / 秘文 = 该功能整体隐退：页签也不再出现（页序本身保持不变，
   // 重新打开即回到原位置）。零依赖派生，useMemo 保持引用稳定
   const visiblePages = useMemo(
-    () => pageOrder.filter((p) => p !== "clipboard" || clipHistory),
-    [pageOrder, clipHistory]
+    () =>
+      pageOrder.filter(
+        (p) =>
+          (p !== "clipboard" || clipHistory) && (p !== "secret" || secretEnabled)
+      ),
+    [pageOrder, clipHistory, secretEnabled]
   );
   const pageIndex = Math.max(0, pageOrder.indexOf(page));
   const orderOf = (p: PageId) => Math.max(0, pageOrder.indexOf(p));
   const clipboardPageRef = useRef<HTMLDivElement>(null);
   const notesPageRef = useRef<HTMLDivElement>(null);
   const tasksPageRef = useRef<HTMLDivElement>(null);
+  const secretPageRef = useRef<HTMLDivElement>(null);
   const pageRootRef: Record<PageId, React.RefObject<HTMLDivElement | null>> = {
     clipboard: clipboardPageRef,
     notes: notesPageRef,
     tasks: tasksPageRef,
+    secret: secretPageRef,
   };
   const scrollTabPageToStart = (id: PageId) => {
     scrollPageToStart(
@@ -2376,8 +2470,11 @@ export default function App() {
         return;
       }
       // 以下发送/勾选类快捷键操作的是笔记 checkedIds——剪贴板卡也是笔记，
-      // 两页均可用；仅任务页禁用（任务 id 会污染勾选态，切回后「已选 N」错乱）
-      const onNotesPage = useUIStore.getState().page !== "tasks";
+      // 两页均可用；任务页禁用（任务 id 污染勾选态）；秘文页也禁用——密文卡
+      // 只用自身按钮操作，绝不走普通发送/多选/列表复制管线（会暴露/误发密文）。
+      const onNotesPage =
+        useUIStore.getState().page !== "tasks" &&
+        useUIStore.getState().page !== "secret";
       if (e.key === "Enter" && e.metaKey) {
         if (!onNotesPage) return;
         e.preventDefault();
@@ -2442,8 +2539,8 @@ export default function App() {
             : navIds[Math.max(idx - 1, 0)];
         ui.setFocusedId(next);
         // 笔记/剪贴板：左右导航即单选（蓝色选中态，回车可直发）；
-        // 任务页无勾选语义，保持焦点环
-        if (ui.page !== "tasks" && next) {
+        // 任务/秘文页无普通勾选语义，只保持焦点环
+        if (ui.page !== "tasks" && ui.page !== "secret" && next) {
           useNotesStore.getState().setChecked([next]);
           ui.setAnchorId(next);
         }
@@ -2453,6 +2550,8 @@ export default function App() {
       // 任务页 = 完成态二态直切（与鼠标点状态点的三态循环是刻意差异）
       if (e.key === " " && ui.focusedId) {
         e.preventDefault();
+        // 秘文页：Space 不开详情窗（会明文暴露密文正文）；解密走卡片自身点击
+        if (ui.page === "secret") return;
         if (ui.page === "tasks") {
           useNotesStore.getState().toggleTaskDone(ui.focusedId);
           return;
@@ -2478,6 +2577,8 @@ export default function App() {
       }
       if (e.key === "x" && !e.metaKey && ui.focusedId) {
         e.preventDefault();
+        // 秘文页无勾选语义：不可见的勾选态会污染 checkedIds
+        if (ui.page === "secret") return;
         if (ui.page === "tasks") {
           useNotesStore.getState().toggleTaskDone(ui.focusedId);
         } else {
@@ -2499,6 +2600,8 @@ export default function App() {
       }
       if (e.key === "Enter" && !e.metaKey && ui.focusedId) {
         e.preventDefault();
+        // 秘文页：Enter 不开详情窗（同 Space，避免明文暴露/编辑损坏密文）
+        if (ui.page === "secret") return;
         if (ui.page === "tasks") {
           ui.setEditingId(ui.focusedId);
         } else {
@@ -3511,6 +3614,12 @@ export default function App() {
                   ) : (
                     <TaskPage buckets={taskBuckets} now={taskNow} />
                   )}
+                </PageSlide>
+                <PageSlide
+                  offset={orderOf("secret") - pageIndex}
+                  contentRef={secretPageRef}
+                >
+                  <SecretPage notes={secretNotes} query={q} />
                 </PageSlide>
               </div>
 

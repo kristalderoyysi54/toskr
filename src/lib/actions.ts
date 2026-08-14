@@ -90,6 +90,11 @@ export type NotePreviewPayload = {
   images: string[];
   /** 有序富内容；缺省表示普通/旧式扁平卡。 */
   contentBlocks?: NoteContentBlock[] | null;
+  /** 标签（详情窗只读展示；编辑走主窗口卡片右键）。 */
+  tags?: string[];
+  /** 创建/最后修改时间（详情窗头部只读展示；批量聚合视图缺省不带）。 */
+  createdAt?: number;
+  updatedAt?: number;
   /** true = 打开即进入编辑态。 */
   edit: boolean;
   /** 合并发送来源等临时视图不可编辑、移除附件或再次发送。 */
@@ -340,6 +345,12 @@ export function openNoteDetail(id: string, edit = false) {
   const { notes, sections, settings } = useNotesStore.getState();
   const note = notes.find((n) => n.id === id);
   if (!note) return;
+  // 秘文卡绝不进详情窗：通用文本编辑器一旦保存会以明文改写 text，直接损毁密文信封
+  // （GCM 认证从此失败、永久不可解）。解密只走秘文页卡片自身的按需揭示。
+  if (note.kind === "secret") {
+    tip("info", "秘文请在秘文页点击查看，不支持详情窗");
+    return;
+  }
   // 与卡片通栏同款取色：分组色优先（剪贴卡恒不取）；着色关闭时定死中性灰，
   // 避免详情窗再用应用主色兜底出现两边颜色不一致
   const sectionColor =
@@ -373,6 +384,9 @@ export function openNoteDetail(id: string, edit = false) {
     headerColor,
     images: noteImages(note),
     contentBlocks: note.contentBlocks ? noteContentBlocks(note) : null,
+    tags: note.tags,
+    createdAt: note.createdAt,
+    updatedAt: note.updatedAt,
     edit,
   });
 }

@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type PanelPage = "notes" | "clipboard" | "tasks";
+export type PanelPage = "notes" | "clipboard" | "tasks" | "secret";
 
 interface UIState {
   /** 面板内容是否展开（驱动滑入滑出动画；窗口显隐由 Rust 管）。 */

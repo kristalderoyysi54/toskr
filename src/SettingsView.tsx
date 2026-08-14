@@ -16,11 +16,15 @@ import {
   Database,
   Info,
   Keyboard,
+  KeyRound,
   Crosshair,
+  Lock,
   Magnet,
   Pencil,
   Plus,
   Settings2,
+  ShieldCheck,
+  Trash2,
   TrendingUp,
   X,
 } from "lucide-react";
@@ -95,9 +99,11 @@ import {
   groupContextMenuIds,
   defaultSettings,
   normalizeContextMenu,
+  useNotesStore,
   type ContextMenuItemId,
   type DuePresetCfg,
   type PromptSnippet,
+  type SecretKey,
   type Settings,
   type ThemePref,
   type VibrancyMaterial,
@@ -119,6 +125,7 @@ type SectionId =
   | "general"
   | "hotkey"
   | "clip"
+  | "secret"
   | "target"
   | "outcome"
   | "due"
@@ -146,6 +153,7 @@ const SECTION_GROUPS: {
     items: [
       { id: "hotkey", label: "捕获与快捷键", icon: <Keyboard className="size-4" /> },
       { id: "clip", label: "剪贴板", icon: <ClipboardList className="size-4" /> },
+      { id: "secret", label: "秘文", icon: <Lock className="size-4" /> },
     ],
   },
   {
@@ -374,6 +382,7 @@ export default function SettingsView() {
           </>
         )}
         {section === "clip" && <ClipboardSection settings={settings} patch={patch} />}
+        {section === "secret" && <SecretSection settings={settings} patch={patch} />}
         {section === "target" && (
           <TargetSection
             settings={settings}
@@ -1019,6 +1028,180 @@ function ClipboardSection({ settings, patch }: SP) {
         addLabel="把当前应用加入忽略列表"
       />
       </Disclosure>
+    </div>
+  );
+}
+
+const SECRET_FIELD =
+  "h-8 w-full rounded-lg border border-border bg-transparent px-2 text-body text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-primary/50";
+
+const REVEAL_TIMEOUT_OPTIONS = [
+  { value: "5000", label: "5 秒" },
+  { value: "8000", label: "8 秒" },
+  { value: "15000", label: "15 秒" },
+  { value: "0", label: "常驻" },
+];
+
+/**
+ * 共享密钥列表：label（给谁/场景）+ passphrase（共享暗号）+ note（备注何时/与谁约定）。
+ * passphrase 创建后不可再编辑——改暗号等于换锁，会让历史秘文永久不可解；要换请新增一条。
+ */
+function SecretKeysEditor({ settings, patch }: SP) {
+  const keys = settings.secretKeys;
+  const updateMeta = (id: string, p: Partial<SecretKey>) =>
+    patch({
+      secretKeys: keys.map((k) =>
+        k.id === id ? { ...k, ...p, updatedAtMs: Date.now() } : k
+      ),
+    });
+  const addKey = () => {
+    const now = Date.now();
+    const k: SecretKey = {
+      id: crypto.randomUUID(),
+      label: "",
+      passphrase: "",
+      createdAtMs: now,
+      updatedAtMs: now,
+    };
+    patch({
+      secretKeys: [...keys, k],
+      secretDefaultKeyId: settings.secretDefaultKeyId ?? k.id,
+    });
+  };
+  const removeKey = async (key: SecretKey) => {
+    const dependents = useNotesStore
+      .getState()
+      .notes.filter(
+        (n) => n.kind === "secret" && n.secretMeta?.keyId === key.id
+      ).length;
+    const confirmed = await ask(
+      dependents > 0
+        ? `有 ${dependents} 条秘文用「${key.label || "未命名"}」加解密，删除后这些卡片将变为锁定态（用相同密钥文本重新添加可救回）。确定删除？`
+        : `确定删除密钥「${key.label || "未命名"}」？`,
+      { title: "删除秘文密钥", kind: "warning" }
+    );
+    if (!confirmed) return;
+    const next = keys.filter((k) => k.id !== key.id);
+    patch({
+      secretKeys: next,
+      secretDefaultKeyId:
+        settings.secretDefaultKeyId === key.id
+          ? next[0]?.id ?? null
+          : settings.secretDefaultKeyId,
+    });
+  };
+  return (
+    <Group title="共享密钥（与对方约定完全一致；可为不同人各设一组）">
+      {keys.length === 0 ? (
+        <div className="px-3.5 py-3 text-label text-muted-foreground">
+          还没有密钥。添加一组、与对方约定相同的暗号即可开始加解密。
+        </div>
+      ) : (
+        keys.map((k) => (
+          <div key={k.id} className="flex flex-col gap-2 px-3.5 py-3">
+            <div className="flex items-center gap-2">
+              <input
+                aria-label="密钥名称"
+                value={k.label}
+                onChange={(e) => updateMeta(k.id, { label: e.target.value })}
+                placeholder="给谁/场景，如「家人」「测试群」"
+                className={SECRET_FIELD}
+              />
+              <IconButton
+                label="删除密钥"
+                tone="danger"
+                onClick={() => void removeKey(k)}
+              >
+                <Trash2 />
+              </IconButton>
+            </div>
+            <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-2 py-1.5">
+              <KeyRound className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="truncate font-mono text-body text-muted-foreground">
+                {k.passphrase || "（空密钥，请点下方按钮设置）"}
+              </span>
+              <span className="ml-auto shrink-0 text-micro text-muted-foreground">
+                创建后不可改
+              </span>
+            </div>
+            {!k.passphrase && (
+              <input
+                aria-label="设置共享密钥"
+                autoFocus
+                onBlur={(e) => {
+                  const v = e.target.value.trim();
+                  if (v) updateMeta(k.id, { passphrase: v });
+                }}
+                placeholder="输入共享密钥（中文/字符皆可，双方须完全一致），失焦后锁定"
+                autoComplete="off"
+                spellCheck={false}
+                className={SECRET_FIELD}
+              />
+            )}
+            <input
+              aria-label="密钥备注"
+              value={k.note ?? ""}
+              onChange={(e) => updateMeta(k.id, { note: e.target.value })}
+              placeholder="备注：何时/因何/与谁设置（可选）"
+              className={SECRET_FIELD}
+            />
+          </div>
+        ))
+      )}
+      <button
+        onClick={addKey}
+        className="flex items-center gap-1 px-3.5 py-2.5 text-label text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+      >
+        <Plus className="size-3.5" /> 添加密钥
+      </button>
+    </Group>
+  );
+}
+
+/** 秘文（中文加密通信）：总开关 + 共享密钥管理 + 揭示超时。默认关闭。 */
+function SecretSection({ settings, patch }: SP) {
+  return (
+    <div>
+      <SectionTitle>秘文</SectionTitle>
+      <Group>
+        <Row
+          label="启用秘文"
+          hint="本地把文字加密成中文句式发进 IM，对方双击 ⇧ 捕获自动解密。关闭时隐藏秘文页"
+          right={
+            <Switch
+              aria-label="启用秘文"
+              checked={settings.secretEnabled}
+              onCheckedChange={(v) => patch({ secretEnabled: v })}
+            />
+          }
+        />
+        {settings.secretEnabled && (
+          <Row
+            label="揭示后自动遮罩"
+            hint="卡片解密显现后，多久自动回到模糊（切走应用/隐藏面板也会立即遮罩）"
+            right={
+              <Segmented
+                ariaLabel="揭示超时"
+                value={String(settings.secretRevealTimeoutMs)}
+                options={REVEAL_TIMEOUT_OPTIONS}
+                onChange={(v) => patch({ secretRevealTimeoutMs: Number(v) })}
+              />
+            }
+          />
+        )}
+      </Group>
+      {settings.secretEnabled && (
+        <>
+          <SecretKeysEditor settings={settings} patch={patch} />
+          <p className="flex items-start gap-1.5 px-1 text-label text-muted-foreground">
+            <ShieldCheck className="mt-0.5 size-3.5 shrink-0" />
+            <span>
+              密钥以明文保存在本机数据目录并随备份进出——用于防 IM 服务器、旁人与肩窥，
+              不防本机取证。加解密全程在本机完成，不联网。
+            </span>
+          </p>
+        </>
+      )}
     </div>
   );
 }
