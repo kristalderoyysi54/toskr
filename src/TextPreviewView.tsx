@@ -27,7 +27,11 @@ import { IconButton } from "@/components/ui/icon-button";
 import { Kbd } from "@/components/ui/kbd";
 import { Segmented } from "@/components/ui/segmented";
 import { TextSelectionToolbar } from "@/components/TextSelectionToolbar";
-import type { NoteEditPayload, NotePreviewPayload } from "@/lib/actions";
+import {
+  NOTE_EDIT_AUTOSAVE_INTERVAL_MS,
+  type NoteEditPayload,
+  type NotePreviewPayload,
+} from "@/lib/actions";
 import { requestAliasQuickAdd } from "@/lib/aliasQuickAdd";
 import { highlightCode, langLabel } from "@/lib/code";
 import { NOTE_EDITOR_SESSION_RELEASE_EVENT } from "@/lib/editorSessionMedia";
@@ -83,6 +87,8 @@ import {
  * 预览与编辑都在这里。标题栏可拖动窗口；Esc 关闭（编辑态先退编辑）；
  * ⌘⏎ 保存。窗口隐藏复用，内容经 toskr://note-preview 事件下发；
  * 编辑保存 / 发送经事件回传主面板执行（主面板是唯一持久化写入方）。
+ * 编辑态每 2s 静默自动保存；Esc/关窗/切卡都保留内容（清空草稿才还原），
+ * 收尾「已保存」气泡可撤销 = 回到本次编辑前。
  */
 /** 附件缩略块：懒取缩略图，点击 Quick Look；悬停右上角 ⊗ 从卡片移除该图。 */
 function AttachThumb({
@@ -158,6 +164,17 @@ type PickSegment = {
   start: number;
   end: number;
   wordLike: boolean;
+};
+
+const sameFiles = (a: string[], b: string[]) =>
+  a.length === b.length && a.every((file, index) => file === b[index]);
+
+/** 编辑会话账本：origin = 本次编辑前内容；persisted* = 最近一次已写库内容。 */
+type AutosaveSession = {
+  origin: { text: string; images: string[]; blocks: NoteContentBlock[] | null };
+  persistedText: string;
+  persistedImages: string[];
+  persistedBlocksJson: string | null;
 };
 
 type TextEditSnapshot = SelectionEdit & { images: string[] };
@@ -289,6 +306,7 @@ export default function TextPreviewView() {
   const pendingTextEditBeforeRef = useRef<TextEditSnapshot | null>(null);
   const appliedInsertOperationsRef = useRef(new Map<string, number>());
   const noteRef = useRef<NotePreviewPayload | null>(null);
+  const autosaveSessionRef = useRef<AutosaveSession | null>(null);
   const textEditHistoryRef = useRef<TextEditHistory>(freshTextEditHistory());
   const editSessionRef = useRef({
     original: [] as string[],
@@ -315,6 +333,76 @@ export default function TextPreviewView() {
     };
   }, [editing, note?.dataGeneration, note?.images]);
 
+  // 编辑自动保存：进入编辑先快照「本次编辑前内容」，随后按固定间隔把草稿
+  // 静默写回主面板（autosave 事件只持久化，不释放会话/不提示）。崩溃、关窗、
+  // 切卡最多丢一个间隔内的输入；收尾保存与 HUD「撤销」都以 origin 为基准。
+  useEffect(() => {
+    if (!editing) return;
+    const current = noteRef.current;
+    if (!previewIsEditable(current)) return;
+    const blocks =
+      hasOrderedRichLayout(current.contentBlocks) && current.contentBlocks
+        ? current.contentBlocks
+        : null;
+    autosaveSessionRef.current = {
+      origin: { text: current.text, images: [...current.images], blocks },
+      persistedText: current.text,
+      persistedImages: [...current.images],
+      persistedBlocksJson: blocks
+        ? JSON.stringify(normalizeNoteContentBlocks(blocks))
+        : null,
+    };
+    const tick = () => {
+      const session = autosaveSessionRef.current;
+      const target = noteRef.current;
+      if (!session || !previewIsEditable(target)) return;
+      if (session.origin.blocks) {
+        const nextBlocks = normalizeNoteContentBlocks(
+          draftContentBlocksRef.current
+        );
+        const json = JSON.stringify(nextBlocks);
+        if (json === session.persistedBlocksJson) return;
+        void emitTo("main", "toskr://note-edit", {
+          format: "blocks",
+          id: target.id,
+          contentBlocks: nextBlocks,
+          dataGeneration: target.dataGeneration,
+          autosave: true,
+        } satisfies NoteEditPayload);
+        session.persistedBlocksJson = json;
+        return;
+      }
+      const text = draftRef.current;
+      const images = draftImagesRef.current;
+      // 清空态不落库：未写完的空草稿覆盖原文只会造成二次事故
+      if (!text.trim() && images.length === 0) return;
+      if (
+        text === session.persistedText &&
+        sameFiles(images, session.persistedImages)
+      ) {
+        return;
+      }
+      void emitTo("main", "toskr://note-edit", {
+        format: "flat",
+        id: target.id,
+        text,
+        images,
+        dataGeneration: target.dataGeneration,
+        autosave: true,
+      } satisfies NoteEditPayload);
+      session.persistedText = text;
+      session.persistedImages = [...images];
+    };
+    const timer = window.setInterval(tick, NOTE_EDIT_AUTOSAVE_INTERVAL_MS);
+    return () => {
+      window.clearInterval(timer);
+      autosaveSessionRef.current = null;
+    };
+    // 依赖只认「会话身份」（进出编辑、换卡）；note 对象在保存时会换引用，
+    // 不能让它触发重建，否则 origin 会被覆盖成编辑后的内容
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, note?.id]);
+
   useEffect(() => {
     const changed = listen<TargetSnapshot>(TARGET_CHANGED_EVENT, (event) => {
       applyTargetEvent(event.payload);
@@ -327,6 +415,11 @@ export default function TextPreviewView() {
   useEffect(() => {
     const un = listen<NotePreviewPayload>("toskr://note-preview", (e) => {
       const p = e.payload;
+      // 换内容先收尾旧编辑会话：自动保存语义下切卡不丢稿
+      // （保留内容；空草稿还原原文）。save/cancel 只读 ref，不受闭包旧 state 影响
+      if (editSessionRef.current.editing && previewIsEditable(noteRef.current)) {
+        exitEditing();
+      }
       const previousNote = noteRef.current;
       if (previousNote?.sessionId !== p.sessionId) {
         releaseEditorSession(previousNote);
@@ -529,62 +622,104 @@ export default function TextPreviewView() {
     }
   }, [editing, note?.id]);
 
-  const close = () => {
-    if (editing && note) {
-      editSessionTokenRef.current += 1;
-      discardDraftImages(
-        note.images,
-        [...sessionPastedImagesRef.current],
-        note.dataGeneration
+  /** 收尾无改动/取消时，把编辑中已静默写库的内容还原回本次编辑前。 */
+  const revertAutosavedDraft = () => {
+    const session = autosaveSessionRef.current;
+    const current = noteRef.current;
+    if (!session || !previewIsEditable(current)) return;
+    if (session.origin.blocks) {
+      const originJson = JSON.stringify(
+        normalizeNoteContentBlocks(session.origin.blocks)
       );
-      sessionPastedImagesRef.current.clear();
+      if (session.persistedBlocksJson === originJson) return;
+      void emitTo("main", "toskr://note-edit", {
+        format: "blocks",
+        id: current.id,
+        contentBlocks: session.origin.blocks,
+        dataGeneration: current.dataGeneration,
+        autosave: true,
+      } satisfies NoteEditPayload);
+      session.persistedBlocksJson = originJson;
+      return;
     }
-    releaseEditorSession(note);
+    if (
+      session.persistedText === session.origin.text &&
+      sameFiles(session.persistedImages, session.origin.images)
+    ) {
+      return;
+    }
+    void emitTo("main", "toskr://note-edit", {
+      format: "flat",
+      id: current.id,
+      text: session.origin.text,
+      images: session.origin.images,
+      dataGeneration: current.dataGeneration,
+      autosave: true,
+    } satisfies NoteEditPayload);
+    session.persistedText = session.origin.text;
+    session.persistedImages = [...session.origin.images];
+  };
+
+  const close = () => {
+    if (editing && previewIsEditable(noteRef.current)) {
+      // 关窗不再丢草稿：与 Esc 同语义收尾（保留内容；空草稿还原原文）
+      exitEditing();
+    }
+    releaseEditorSession(noteRef.current);
     void getCurrentWebviewWindow().hide();
   };
 
+  /** 放弃修改：还原到本次编辑前内容（清空草稿退出、数据失效等兜底路径）。 */
   const cancelEditing = () => {
-    if (!note) return;
+    const current = noteRef.current;
+    if (!current) return;
+    // 先还原再报废弃图片：主面板按到达顺序处理，GC 复查时引用已回到原状
+    revertAutosavedDraft();
     editSessionTokenRef.current += 1;
     discardDraftImages(
-      note.images,
+      current.images,
       [...sessionPastedImagesRef.current],
-      note.dataGeneration
+      current.dataGeneration
     );
     sessionPastedImagesRef.current.clear();
-    releaseEditorSession(note);
-    draftRef.current = note.text;
-    setDraftEmpty(!note.text.trim());
+    releaseEditorSession(current);
+    draftRef.current = current.text;
+    setDraftEmpty(!current.text.trim());
     textEditHistoryRef.current = freshTextEditHistory();
-    draftImagesRef.current = note.images;
-    setDraftImages(note.images);
-    draftContentBlocksRef.current = note.contentBlocks ?? [];
-    setDraftContentBlocks(note.contentBlocks ?? []);
+    draftImagesRef.current = current.images;
+    setDraftImages(current.images);
+    draftContentBlocksRef.current = current.contentBlocks ?? [];
+    setDraftContentBlocks(current.contentBlocks ?? []);
     setTextSelection(null);
     setEditing(false);
   };
 
   const save = () => {
-    if (!previewIsEditable(note)) return;
-    if (hasOrderedRichLayout(note.contentBlocks) && note.contentBlocks) {
+    const current = noteRef.current;
+    if (!previewIsEditable(current)) return;
+    const session = autosaveSessionRef.current;
+    if (hasOrderedRichLayout(current.contentBlocks) && current.contentBlocks) {
       const contentBlocks = normalizeNoteContentBlocks(
         draftContentBlocksRef.current
       );
       const changed =
-        JSON.stringify(contentBlocks) !== JSON.stringify(note.contentBlocks);
+        JSON.stringify(contentBlocks) !== JSON.stringify(current.contentBlocks);
       editSessionTokenRef.current += 1;
       if (changed) {
         const text = textFromContentBlocks(contentBlocks);
-        const next = refreshPreviewPayload({ ...note, contentBlocks }, text);
+        const next = refreshPreviewPayload({ ...current, contentBlocks }, text);
         void emitTo(
           "main",
           "toskr://note-edit",
           {
             format: "blocks",
-            id: note.id,
-            sessionId: note.sessionId,
+            id: current.id,
+            sessionId: current.sessionId,
             contentBlocks,
-            dataGeneration: note.dataGeneration,
+            dataGeneration: current.dataGeneration,
+            origin: session?.origin.blocks
+              ? { contentBlocks: session.origin.blocks }
+              : undefined,
           } satisfies NoteEditPayload
         );
         setNote(next.payload);
@@ -595,7 +730,8 @@ export default function TextPreviewView() {
         setDraftEmpty(!next.payload.text.trim());
         setMdView(next.markdownView);
       } else {
-        releaseEditorSession(note);
+        revertAutosavedDraft();
+        releaseEditorSession(current);
       }
       setTextSelection(null);
       setEditing(false);
@@ -608,25 +744,28 @@ export default function TextPreviewView() {
       return;
     }
     const imagesChanged =
-      images.length !== note.images.length ||
-      images.some((file, index) => file !== note.images[index]);
+      images.length !== current.images.length ||
+      images.some((file, index) => file !== current.images[index]);
     const discardedImages = [
-      ...new Set([...note.images, ...sessionPastedImagesRef.current]),
+      ...new Set([...current.images, ...sessionPastedImagesRef.current]),
     ].filter((file) => !images.includes(file));
     editSessionTokenRef.current += 1;
-    if (text !== note.text || imagesChanged) {
-      const next = refreshPreviewPayload({ ...note, images }, text);
+    if (text !== current.text || imagesChanged) {
+      const next = refreshPreviewPayload({ ...current, images }, text);
       void emitTo(
         "main",
         "toskr://note-edit",
         {
           format: "flat",
-          id: note.id,
-          sessionId: note.sessionId,
+          id: current.id,
+          sessionId: current.sessionId,
           text: next.payload.text,
           images,
           discardedImages,
-          dataGeneration: note.dataGeneration,
+          dataGeneration: current.dataGeneration,
+          origin: session
+            ? { text: session.origin.text, images: session.origin.images }
+            : undefined,
         } satisfies NoteEditPayload
       );
       setNote(next.payload);
@@ -635,13 +774,26 @@ export default function TextPreviewView() {
       setDraftEmpty(!next.payload.text.trim());
       setMdView(next.markdownView);
     } else {
-      discardDraftImages(images, discardedImages, note.dataGeneration);
-      releaseEditorSession(note);
+      revertAutosavedDraft();
+      discardDraftImages(images, discardedImages, current.dataGeneration);
+      releaseEditorSession(current);
     }
     sessionPastedImagesRef.current.clear();
     setTextSelection(null);
     textEditHistoryRef.current = freshTextEditHistory();
     setEditing(false);
+  };
+
+  /** 退出编辑（Esc/关窗/切卡）：自动保存语义下保留内容；清空草稿视为放弃。 */
+  const exitEditing = () => {
+    const current = noteRef.current;
+    if (!previewIsEditable(current)) return;
+    const flatEmpty =
+      !hasOrderedRichLayout(current.contentBlocks) &&
+      !draftRef.current.trim() &&
+      draftImagesRef.current.length === 0;
+    if (flatEmpty) cancelEditing();
+    else save();
   };
 
   /** 从系统剪贴板粘贴图片，先作为编辑草稿附件，保存时再写回主 store。 */
@@ -1234,7 +1386,7 @@ export default function TextPreviewView() {
                 setDraftContentBlocks(blocks);
               }}
               onSave={save}
-              onCancel={cancelEditing}
+              onCancel={exitEditing}
             />
           ) : editing ? (
             <textarea
@@ -1323,7 +1475,8 @@ export default function TextPreviewView() {
                   e.preventDefault();
                   save();
                 } else if (e.key === "Escape") {
-                  cancelEditing();
+                  // 自动保存语义：Esc 退出编辑保留内容（清空草稿才视为放弃还原）
+                  exitEditing();
                 }
               }}
               className="h-full min-h-40 w-full resize-none bg-transparent font-mono text-body leading-relaxed outline-none"

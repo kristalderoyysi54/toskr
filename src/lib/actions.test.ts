@@ -51,6 +51,7 @@ vi.mock("@/lib/tauri", async (importOriginal) => {
 });
 
 import {
+  armNoteEditUndo,
   copyNoteContent,
   openNoteBatchDetail,
   openSafeRehearsalPreflight,
@@ -62,7 +63,7 @@ import {
 } from "./actions";
 import { SAFE_REHEARSAL_TEXT } from "./onboarding";
 import { submitPreflightDraft } from "./delivery/preflight";
-import { tip } from "./tip";
+import { setPendingUndo, tip } from "./tip";
 import {
   advanceDataGeneration,
   hasDataGenerationLeases,
@@ -1331,5 +1332,84 @@ describe("结构化发送结果的 store 副作用", () => {
     expect(apiMocks.sendDelivery).not.toHaveBeenCalled();
     expect(useUIStore.getState().open).toBe(true);
     expect(apiMocks.showPanel).toHaveBeenCalled();
+  });
+});
+
+describe("armNoteEditUndo 编辑收尾撤销", () => {
+  beforeEach(() => {
+    vi.mocked(tip).mockClear();
+    vi.mocked(setPendingUndo).mockClear();
+    useNotesStore.setState({
+      sections: [{ id: INBOX_ID, name: "收件箱" }],
+      notes: [],
+      tasks: [],
+      taskSections: [{ id: TASK_INBOX_ID, name: "收集箱" }],
+      checkedIds: [],
+      settings: defaultSettings(),
+      undoStack: [],
+    });
+  });
+
+  const findNote = (id: string) =>
+    useNotesStore.getState().notes.find((n) => n.id === id)!;
+
+  it("出可撤销「已保存」；撤销把正文还原到本次编辑前", () => {
+    const id = useNotesStore.getState().addNote("编辑前的原文").id!;
+    useNotesStore.getState().updateNoteText(id, "编辑后的新内容");
+
+    armNoteEditUndo(id, { text: "编辑前的原文" });
+
+    expect(tip).toHaveBeenCalledWith("ok", "已保存", true);
+    expect(setPendingUndo).toHaveBeenCalledTimes(1);
+    const undo = vi.mocked(setPendingUndo).mock.calls[0][0];
+    undo();
+    expect(findNote(id).text).toBe("编辑前的原文");
+    expect(tip).toHaveBeenCalledWith("undone", "已撤销");
+  });
+
+  it("flat origin 携带附件清单：撤销一并还原图片集合", () => {
+    const id = useNotesStore
+      .getState()
+      .addNote("组合卡", { attachments: ["a.png", "b.png"] }).id!;
+    useNotesStore.getState().updateNoteText(id, "改过的文字", ["a.png"]);
+    expect(findNote(id).contentBlocks?.filter((b) => b.type === "image")).toHaveLength(1);
+
+    armNoteEditUndo(id, { text: "组合卡", images: ["a.png", "b.png"] });
+    vi.mocked(setPendingUndo).mock.calls[0][0]();
+
+    const restored = findNote(id);
+    expect(restored.text).toBe("组合卡");
+    expect(
+      restored.contentBlocks?.filter((b) => b.type === "image").map((b) =>
+        b.type === "image" ? b.file : ""
+      )
+    ).toEqual(["a.png", "b.png"]);
+  });
+
+  it("blocks origin：撤销还原有序图文块", () => {
+    const id = useNotesStore.getState().addNote("", {
+      contentBlocks: [
+        { type: "text", text: "图前" },
+        { type: "image", file: "inline.png" },
+        { type: "text", text: "图后" },
+      ],
+    }).id!;
+    useNotesStore.getState().updateNoteContent(id, [
+      { type: "text", text: "改动后的图前" },
+      { type: "image", file: "inline.png" },
+      { type: "text", text: "图后" },
+    ]);
+
+    armNoteEditUndo(id, {
+      contentBlocks: [
+        { type: "text", text: "图前" },
+        { type: "image", file: "inline.png" },
+        { type: "text", text: "图后" },
+      ],
+    });
+    vi.mocked(setPendingUndo).mock.calls[0][0]();
+
+    const blocks = findNote(id).contentBlocks!;
+    expect(blocks[0]).toEqual({ type: "text", text: "图前" });
   });
 });

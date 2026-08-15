@@ -285,7 +285,7 @@ describe("发送入口路由", () => {
     expect(app).toContain("editorSessionMediaFiles()");
     expect(app).toContain("releaseEditorSessionMedia(e.payload.sessionId)");
     expect(preview).toContain("NOTE_EDITOR_SESSION_RELEASE_EVENT");
-    expect(preview).toContain("sessionId: note.sessionId");
+    expect(preview).toContain("sessionId: current.sessionId");
   });
 
   it("剪贴板页可在外部目标未就绪时进入内部编辑器路由", () => {

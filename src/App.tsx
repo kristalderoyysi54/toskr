@@ -134,6 +134,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
+  armNoteEditUndo,
   clearDoneTasksWithUndo,
   clearDoneWithUndo,
   copyCheckedAsList,
@@ -1772,13 +1773,23 @@ export default function App() {
           useNotesStore
             .getState()
             .updateNoteText(e.payload.id, e.payload.text, e.payload.images);
-          scheduleMediaGc(e.payload.discardedImages ?? [], 0);
+          // 收尾保存可撤销：留 30s 宽限，撤销还原引用后 GC 复查会放过这些文件
+          scheduleMediaGc(
+            e.payload.discardedImages ?? [],
+            e.payload.origin ? undefined : 0
+          );
         }
+        // 编辑中的静默自动保存：会话未结束，不释放媒体会话、不提示、不抓链接
+        if (e.payload.autosave) return;
         if (e.payload.sessionId) {
           releaseEditorSessionMedia(e.payload.sessionId);
         }
         void enrichLinkMeta(e.payload.id);
-        tip("ok", "已保存");
+        if (e.payload.origin) {
+          armNoteEditUndo(e.payload.id, e.payload.origin);
+        } else {
+          tip("ok", "已保存");
+        }
       }),
       listen<{ id: string; dataGeneration: number; text?: string }>(
         "toskr://note-send",
