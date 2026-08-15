@@ -92,6 +92,20 @@ export type TargetProfileResolutionReason =
   | "target_missing"
   | "target_unavailable";
 
+/**
+ * 单条规则的本次覆盖（叠加于解析出的方案之上）：透镜条「本次生效规则」行内
+ * 快捷切换写入，换目标即失效，永不持久化。隐私策略不在覆盖范围（高风险项
+ * 不做一键降级，仍走「编辑方案」）。
+ */
+export interface TargetRuleOverrides {
+  promptGroupId?: string;
+  defaultFormat?: DeliveryFormat;
+  enterPolicy?: EnterPolicy;
+  keepPanel?: boolean;
+}
+
+export type TargetRuleOverrideKey = keyof TargetRuleOverrides;
+
 export interface TargetProfileResolution {
   profileId: string;
   profile: TargetProfile;
@@ -103,6 +117,8 @@ export interface TargetProfileResolution {
   privacyCapabilityActive: boolean;
   safetyClamped: boolean;
   duplicateBundleProfileIds: string[];
+  /** 实际生效的规则覆盖键（与基线不同才计入）；空数组 = 无覆盖。 */
+  ruleOverriddenKeys: TargetRuleOverrideKey[];
 }
 
 export function resolveTargetProfile(input: {
@@ -116,6 +132,9 @@ export function resolveTargetProfile(input: {
   temporaryTargetIdentity?: string | null;
   temporaryNeedsConfirmation?: boolean;
   privacyCapabilityActive?: boolean;
+  /** 规则级本次覆盖；身份与 targetIdentity 不一致时整组忽略。 */
+  ruleOverrides?: TargetRuleOverrides | null;
+  ruleOverridesTargetIdentity?: string | null;
 }): TargetProfileResolution {
   const targetBundleId = input.bundleId ?? null;
   const isTargetReady = Boolean(
@@ -175,6 +194,44 @@ export function resolveTargetProfile(input: {
     };
   }
 
+  // 规则级本次覆盖：在安全钳制之后应用——钳制注释言明「只有用户本次显式覆盖
+  // 才允许高风险值生效」，行内快捷切换正是该显式覆盖。身份不符整组失效。
+  const ruleOverriddenKeys: TargetRuleOverrideKey[] = [];
+  const rules =
+    input.ruleOverrides &&
+    input.targetIdentity &&
+    input.ruleOverridesTargetIdentity === input.targetIdentity
+      ? input.ruleOverrides
+      : null;
+  if (rules) {
+    if (
+      rules.promptGroupId !== undefined &&
+      rules.promptGroupId !== profile.promptGroupId &&
+      input.groups.some((item) => item.id === rules.promptGroupId)
+    ) {
+      profile = { ...profile, promptGroupId: rules.promptGroupId };
+      ruleOverriddenKeys.push("promptGroupId");
+    }
+    if (
+      rules.defaultFormat !== undefined &&
+      rules.defaultFormat !== profile.defaultFormat
+    ) {
+      profile = { ...profile, defaultFormat: rules.defaultFormat };
+      ruleOverriddenKeys.push("defaultFormat");
+    }
+    if (
+      rules.enterPolicy !== undefined &&
+      rules.enterPolicy !== profile.enterPolicy
+    ) {
+      profile = { ...profile, enterPolicy: rules.enterPolicy };
+      ruleOverriddenKeys.push("enterPolicy");
+    }
+    if (rules.keepPanel !== undefined && rules.keepPanel !== profile.keepPanel) {
+      profile = { ...profile, keepPanel: rules.keepPanel };
+      ruleOverriddenKeys.push("keepPanel");
+    }
+  }
+
   const promptGroup =
     input.groups.find((item) => item.id === profile.promptGroupId) ??
     input.groups.find((item) => item.id === GENERAL_PROMPT_GROUP_ID) ??
@@ -195,6 +252,7 @@ export function resolveTargetProfile(input: {
     privacyCapabilityActive: input.privacyCapabilityActive ?? false,
     safetyClamped,
     duplicateBundleProfileIds: bundleMatches.map((item) => item.id),
+    ruleOverriddenKeys,
   };
 }
 

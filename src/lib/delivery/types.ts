@@ -61,6 +61,11 @@ export interface DeliveryDraft {
   /** 构建时的全局勾选快照；防止旧回执清掉发送途中新增的选择。 */
   selectionItemIds: string[];
   rawText: string;
+  /**
+   * 片段发送快照（详情窗「发送选中」）；null = 整卡发送。
+   * 新鲜度复核与预检重组的重建入参必须回传它，否则片段会被误判「来源已变化」。
+   */
+  sourceTextOverride: string | null;
   /** 纯构建器生成的正文基线；本次手工编辑可恢复到这里。 */
   assembledText: string;
   finalText: string;
@@ -117,6 +122,11 @@ export interface DeliveryDraftInput {
   format?: DeliveryFormat;
   promptSnippetId?: string | null;
   promptTemplate?: string;
+  /**
+   * 片段发送：以该文本取代来源笔记正文（详情窗选词/选段的「发送选中」）。
+   * 仅单条 note 来源生效；片段是纯文字，图片附件不随行。
+   */
+  sourceTextOverride?: string;
 }
 
 /** 纯构建所需的只读会话状态。 */

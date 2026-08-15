@@ -29,6 +29,7 @@ function draft(): DeliveryDraft {
     sourceItemIds: ["one"],
     selectionItemIds: ["one"],
     rawText: "正文",
+    sourceTextOverride: null,
     assembledText: "自动正文",
     finalText: "自动正文",
     originalImageFiles: [],
@@ -299,6 +300,7 @@ describe("deliveryStore", () => {
     useDeliveryStore.getState().openDraft({
       ...draft(),
       rawText: raw,
+      sourceTextOverride: null,
       assembledText: raw,
       finalText: "[EMAIL_01]",
       redactionMap: { [raw]: "[EMAIL_01]" },

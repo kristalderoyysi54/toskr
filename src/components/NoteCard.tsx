@@ -5,9 +5,11 @@ import {
   Check,
   Copy,
   Expand,
+  FileText,
   FolderInput,
   GripVertical,
   Inbox,
+  ListChecks,
   ListOrdered,
   ListTodo,
   Link2,
@@ -56,6 +58,8 @@ import {
   sendNotesToChat,
   undoableTip,
 } from "@/lib/actions";
+import { currentTargetProfileResolution } from "@/lib/currentTargetProfile";
+import { promptSnippetsForGroup } from "@/lib/targetProfiles";
 import { TEXT_OPS, type TextOp } from "@/lib/textops";
 import { highlightCode, langLabel } from "@/lib/code";
 import { linkParts } from "@/lib/link";
@@ -235,6 +239,22 @@ export const NoteCard = memo(function NoteCard({
     }
   };
 
+  /**
+   * 发送：与删除同款多选感知——当前卡属于多选集合 → 发整组；否则只发这张。
+   * prefix/opts 透传给发送管线（模板发送、预检并发送共用此入口）。
+   */
+  const sendSelfOrChecked = (
+    prefix?: string,
+    opts?: { promptSnippetId?: string; forcePreflight?: boolean }
+  ) => {
+    const st = useNotesStore.getState();
+    const ids =
+      checked && st.checkedIds.length > 1
+        ? orderedCheckedNotes(st).map((n) => n.id)
+        : [note.id];
+    void sendNotesToChat(ids, prefix, opts);
+  };
+
   const openPreview = (editing = false) => {
     // 链接卡「查看明细」= 直接打开网页；编辑仍走预览层编辑链接文本
     if (isLink && !editing) {
@@ -343,11 +363,61 @@ export const NoteCard = memo(function NoteCard({
           <TargetSendMenuItem
             key={id}
             allowInternal={note.sectionId === CLIPBOARD_ID}
-            onClick={() => void sendNotesToChat([note.id])}
+            // 多选感知与删除对齐：卡在多选集合内 → 发整组
+            onClick={() => sendSelfOrChecked()}
           >
             <Send className="size-3.5" />
             {note.sectionId === CLIPBOARD_ID ? "发送 / 添加" : "发送到对话"}
           </TargetSendMenuItem>
+        );
+      case "send-template": {
+        // 单选场景选模板发送的落点（底栏 ⌄ 仅多选可见后，这里是单卡唯一入口）。
+        // 菜单打开时才渲染，getState 一次性取解析结果即可，无需订阅
+        const snippetMenu = promptSnippetsForGroup(
+          useNotesStore.getState().settings.promptSnippets,
+          currentTargetProfileResolution().promptGroup.id
+        );
+        const renderSnippet = (sn: { id: string; label: string; text: string }) => (
+          <ContextMenuItem
+            key={sn.id}
+            title={sn.text}
+            onClick={() => sendSelfOrChecked(sn.text, { promptSnippetId: sn.id })}
+          >
+            {sn.label}
+          </ContextMenuItem>
+        );
+        return (
+          <ContextMenuSub key={id}>
+            <ContextMenuSubTrigger>
+              <FileText className="mr-2 size-3.5" /> 用模板发送
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent className="w-44">
+              {snippetMenu.prioritized.map(renderSnippet)}
+              {snippetMenu.prioritized.length === 0 && (
+                <ContextMenuItem disabled>
+                  {snippetMenu.remaining.length > 0
+                    ? "当前分组暂无模板"
+                    : "去设置里添加模板"}
+                </ContextMenuItem>
+              )}
+              {snippetMenu.remaining.length > 0 && (
+                <>
+                  <ContextMenuSeparator />
+                  {snippetMenu.remaining.map(renderSnippet)}
+                </>
+              )}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+        );
+      }
+      case "send-preflight":
+        return (
+          <ContextMenuItem
+            key={id}
+            onClick={() => sendSelfOrChecked(undefined, { forcePreflight: true })}
+          >
+            <ListChecks className="size-3.5" /> 预检并发送
+          </ContextMenuItem>
         );
       case "copy":
         return (
@@ -1311,6 +1381,29 @@ export const NoteCard = memo(function NoteCard({
                   : "bottom-1 right-1.5"
             )}
           >
+            <IconButton
+              label={
+                isClip
+                  ? "发送 / 添加（双击卡片同效）"
+                  : "发送到对话（双击卡片同效）"
+              }
+              surface
+              reveal="hover-focus"
+              onClick={() => sendSelfOrChecked()}
+            >
+              <Send className="size-3" />
+            </IconButton>
+            {isClip && (
+              <IconButton
+                label={note.keep ? "取消置顶" : "置顶（固定不清理）"}
+                surface
+                reveal="hover-focus"
+                pressed={note.keep}
+                onClick={() => useNotesStore.getState().toggleNoteKeep(note.id)}
+              >
+                <Pin className="size-3" />
+              </IconButton>
+            )}
             {isClip && (
               <IconButton
                 label="复制内容"

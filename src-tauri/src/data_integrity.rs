@@ -3054,6 +3054,7 @@ pub(crate) fn validate_settings_value_for_version(
         "aliasAutoRestoreOnCapture",
         "outcomeMetricsEnabled",
         "secretEnabled",
+        "clipDoubleCopyKeep",
     ] {
         if !optional_type(settings, key, serde_json::Value::is_boolean) {
             return false;

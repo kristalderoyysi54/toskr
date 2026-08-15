@@ -68,6 +68,7 @@ function draft(items: ImageFirewallItem[]): DeliveryDraft {
     sourceItemIds: ["note-1"],
     selectionItemIds: ["note-1"],
     rawText: "",
+    sourceTextOverride: null,
     assembledText: "",
     finalText: "",
     originalImageFiles: items.map((entry) => entry.originalFile),

@@ -82,16 +82,19 @@ README/release/Tauri config 的 tracked diff 是 DMG 构建/发布方向的既�
 
 | 用户入口 | 当前位置 | 前端调用 | 原生终点 |
 |---|---|---|---|
-| SelectionBar 主发送按钮 | `src/components/SelectionBar.tsx:78-92` | `sendCheckedToChat()` | `send_to_chat` |
-| SelectionBar 普通/代码/Prompt 菜单 | `src/components/SelectionBar.tsx:104-145` | `sendCheckedToChat(prefix, opts)` | 同上 |
-| 卡片右键“发送到对话” | `src/components/NoteCard.tsx:259-264` | `sendNotesToChat([id])` | 同上 |
-| 卡片双击直发 | `src/components/NoteCard.tsx:505-513` | 单条或 stashed 多条 `sendNotesToChat` | 同上 |
-| 全局 `⌘Enter` | `src/App.tsx:1416-1423` | `sendCheckedToChat()` | 同上 |
-| 全局 `⌘1…9` | `src/App.tsx:1425-1433` | `sendNotesToChat([id])` | 同上 |
-| 剪贴页 Enter | `src/App.tsx:1525-1535` | `sendCheckedToChat()` | 同上 |
-| PreviewOverlay 发送 | `src/components/PreviewOverlay.tsx:377-385` | `sendNotesToChat([id])` | 同上 |
-| TextPreview 独立窗发送 | `src/TextPreviewView.tsx:434-438` → `src/App.tsx:963-978` | emit 后由 main 调 `sendNotesToChat` | 同上 |
-| TaskRow 右键发送 | `src/components/TaskRow.tsx:414-420` | `sendTaskToChat(id)` | 同上 |
+| SelectionBar 主发送按钮（勾选 ≥1 出现） | `src/components/SelectionBar.tsx:~301` | `sendCheckedToChat()` | `send_to_chat` |
+| SelectionBar ⌄ 下拉（预检/格式/方案/Prompt） | `src/components/SelectionBar.tsx:~314-458` | `sendCheckedToChat(prefix, opts)` | 同上 |
+| 卡面悬浮「发送」钮 | `src/components/NoteCard.tsx:~1333` | `sendSelfOrChecked()`（多选感知） | 同上 |
+| 卡片右键“发送到对话 / 发送·添加” | `src/components/NoteCard.tsx:~357` | `sendSelfOrChecked()`（多选感知） | 同上 |
+| 卡片双击直发 | `src/components/NoteCard.tsx:~98 起（lastMultiSelection 机制）+ onDoubleClick` | 单条或 stashed 多条 `sendNotesToChat` | 同上 |
+| 全局 `⌘Enter` | `src/App.tsx:~2503` | `sendCheckedToChat()` | 同上 |
+| 全局 `⌘1…9` | `src/App.tsx:~2512` | `sendNotesToChat([id])` | 同上 |
+| 剪贴页 Enter | `src/App.tsx:~2636` | `sendCheckedToChat()` | 同上 |
+| PreviewOverlay 发送 | `src/components/PreviewOverlay.tsx:~461` | `sendNotesToChat([id])` | 同上 |
+| TextPreview 独立窗发送（含选词片段） | `src/TextPreviewView.tsx:~914` → `src/App.tsx:~1784` | emit 后由 main 调 `sendNotesToChat`（可带 `overrideText` 片段） | 同上 |
+| TaskRow 右键发送 | `src/components/TaskRow.tsx:~442-451` | `sendTaskToChat(id)` | 同上 |
+
+> 行号带 `~`：随版本漂移，以函数/机制名为准检索。
 
 ### 3.2 当前调用图
 

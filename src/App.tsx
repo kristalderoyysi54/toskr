@@ -1390,8 +1390,20 @@ export default function App() {
       const capturedAt = Number.isFinite(p.capturedAtMs)
         ? p.capturedAtMs
         : Date.now();
+      // 「连续复制两次自动置顶」的可撤销气泡：静默收集的唯一破例，
+      // 因为置顶是手势触发的状态变化，用户需要确认与反悔的机会
+      const announceAutoKept = (
+        autoKept?: { id: string; preview: string }
+      ) => {
+        if (!autoKept) return;
+        setPendingUndo(() => {
+          useNotesStore.getState().toggleNoteKeep(autoKept.id);
+          void api.hudFeedback("undone", "已取消置顶");
+        });
+        tip("ok", `已置顶「${autoKept.preview}」`, true);
+      };
       if (!p.html) {
-        const removed = useNotesStore.getState().addClipNote(p.text, {
+        const clipResult = useNotesStore.getState().addClipNote(p.text, {
           sourceApp: p.appName ?? undefined,
           sourceBundle: p.bundleId ?? undefined,
           kind: p.contentKind === "image" ? "image" : "text",
@@ -1400,7 +1412,8 @@ export default function App() {
           imageH: p.imageH ?? undefined,
           createdAt: capturedAt,
         });
-        scheduleMediaGc(removed);
+        scheduleMediaGc(clipResult.orphanImages);
+        announceAutoKept(clipResult.autoKept);
         return;
       }
 
@@ -1422,13 +1435,14 @@ export default function App() {
             );
             return;
           }
-          const removed = useNotesStore.getState().addClipNote(rich.text, {
+          const clipResult = useNotesStore.getState().addClipNote(rich.text, {
             sourceApp: p.appName ?? undefined,
             sourceBundle: p.bundleId ?? undefined,
             contentBlocks: rich.contentBlocks,
             createdAt: capturedAt,
           });
-          scheduleMediaGc(removed);
+          scheduleMediaGc(clipResult.orphanImages);
+          announceAutoKept(clipResult.autoKept);
           if (rich.omittedImageCount > 0) {
             tip(
               "warn",
@@ -1444,12 +1458,13 @@ export default function App() {
         .catch(() => {
           // 富读取失败时仍保存同一 generation 的 plain fallback，不吞正文。
           if (matchesDataGeneration(lease.generation) && !isDataOperationLocked()) {
-            useNotesStore.getState().addClipNote(p.text, {
+            const clipResult = useNotesStore.getState().addClipNote(p.text, {
               sourceApp: p.appName ?? undefined,
               sourceBundle: p.bundleId ?? undefined,
               kind: "text",
               createdAt: capturedAt,
             });
+            announceAutoKept(clipResult.autoKept);
             tip("warn", "图片读取失败，已保存文字");
           }
         })
@@ -1765,7 +1780,9 @@ export default function App() {
         void enrichLinkMeta(e.payload.id);
         tip("ok", "已保存");
       }),
-      listen<{ id: string; dataGeneration: number }>("toskr://note-send", (e) => {
+      listen<{ id: string; dataGeneration: number; text?: string }>(
+        "toskr://note-send",
+        (e) => {
         if (
           isDataOperationLocked() ||
           !matchesDataGeneration(e.payload.dataGeneration)
@@ -1776,8 +1793,16 @@ export default function App() {
           );
           return;
         }
-        void sendNotesToChat([e.payload.id]);
-      }),
+        // text 存在 = 详情窗「发送选中」：只发选中片段，仍以该卡为来源
+        void sendNotesToChat(
+          [e.payload.id],
+          undefined,
+          e.payload.text !== undefined
+            ? { overrideText: e.payload.text }
+            : undefined
+        );
+        }
+      ),
       // 详情窗移除组合卡里的某张图（可撤销；磁盘文件保留，撤销要还原得回来）
       listen<{ id: string; file: string; dataGeneration: number }>(
         "toskr://note-image-remove",
@@ -1949,17 +1974,18 @@ export default function App() {
     };
   }, []);
 
-  // 静默检查更新：启动 8 秒后一次 + 之后每日一次（常驻后台、重启频率低，
-  // 只查启动那一次会长期错过新版）。发现新版右上角气泡提醒。
+  // 静默检查更新：启动 8 秒后一次 + 之后每 30 分钟一次（常驻后台、重启频率低，
+  // 只查启动那一次会长期错过新版）。发现新版右上角气泡提醒；同版本去重在
+  // silentUpdateFlow 内，不会重复弹泡/重复下载。
   useEffect(() => {
     const timer = window.setTimeout(() => void silentUpdateFlow(), 8000);
-    const daily = window.setInterval(
+    const periodic = window.setInterval(
       () => void silentUpdateFlow(),
-      24 * 60 * 60 * 1000
+      30 * 60 * 1000
     );
     return () => {
       window.clearTimeout(timer);
-      window.clearInterval(daily);
+      window.clearInterval(periodic);
     };
   }, []);
 
@@ -2586,6 +2612,27 @@ export default function App() {
         }
         return;
       }
+      // p = 置顶/常用切换（keep 双域语义：剪贴卡=置顶不清理，笔记卡=常用）
+      if (e.key === "p" && !e.metaKey && !e.ctrlKey && !e.altKey && ui.focusedId) {
+        if (ui.page === "secret" || ui.page === "tasks") return;
+        e.preventDefault();
+        const st = useNotesStore.getState();
+        const focused = st.notes.find((n) => n.id === ui.focusedId);
+        if (!focused) return;
+        st.toggleNoteKeep(focused.id);
+        const isClipCard = focused.sectionId === CLIPBOARD_ID;
+        tip(
+          "ok",
+          focused.keep
+            ? isClipCard
+              ? "已取消置顶"
+              : "已取消常用"
+            : isClipCard
+              ? "已置顶"
+              : "已设为常用"
+        );
+        return;
+      }
       // 剪贴板页：已有选中卡时回车直接发送（无选中仍走预览编辑）
       if (e.key === "Enter" && !e.metaKey && !editable && ui.page === "clipboard") {
         const st = useNotesStore.getState();
@@ -2653,17 +2700,19 @@ export default function App() {
     const activeId = String(active.id);
     if (activeId.startsWith("sec:")) return;
     const state = useNotesStore.getState();
-    const activeNote = state.notes.find((n) => n.id === activeId);
-    if (!activeNote) return;
+    if (!state.notes.some((n) => n.id === activeId)) return;
 
     const targetSection = overId.startsWith("sec:")
       ? overId.slice(4)
       : (state.notes.find((n) => n.id === overId)?.sectionId ?? null);
     if (!targetSection) return;
 
-    if (targetSection !== activeNote.sectionId) {
-      state.moveNotes([activeId], targetSection);
-    }
+    // 跨组换组只在松手时结算（onDragEnd）：分组是纵向堆叠且高度自适应的，
+    // 拖拽途中真把卡搬走会让原组变矮、下方各组整体上移，指针下方又变回原组
+    // → 搬回去 → 布局再变，形成同步自激振荡，撞上 React 嵌套更新上限后
+    // 整棵树被卸载（面板全白且只能重启）。舒展密度卡更高，位移必然跨过组边界，
+    // 所以必现；紧缩密度位移小才表现为偶现。
+
     // 拖到折叠组上悬停 500ms 自动展开
     const section = state.sections.find((s) => s.id === targetSection);
     if (section?.collapsed) {
@@ -2698,9 +2747,20 @@ export default function App() {
       }
       return;
     }
-    if (overId.startsWith("sec:")) return;
-    if (active.id !== over.id) {
-      useNotesStore.getState().reorderNotes(String(active.id), overId);
+    // 卡片落地：先归组再定位。onDragOver 全程不动列表结构，跨组换组在这里结算
+    const state = useNotesStore.getState();
+    const activeNote = state.notes.find((n) => n.id === activeId);
+    if (!activeNote) return;
+    const targetSectionId = overId.startsWith("sec:")
+      ? overId.slice(4)
+      : (state.notes.find((n) => n.id === overId)?.sectionId ?? null);
+    if (!targetSectionId) return;
+    if (targetSectionId !== activeNote.sectionId) {
+      state.moveNotes([activeId], targetSectionId);
+    }
+    // 落在分组容器（含折叠组）上只归组，组内位置保持原样
+    if (!overId.startsWith("sec:") && activeId !== overId) {
+      state.reorderNotes(activeId, overId);
     }
   };
 

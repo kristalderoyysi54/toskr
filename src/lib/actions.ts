@@ -214,6 +214,8 @@ type NoteDeliveryOptions = {
   format?: "plain" | "code";
   promptSnippetId?: string;
   forcePreflight?: boolean;
+  /** 片段发送：以该文本取代来源笔记正文（详情窗「发送选中」）；仅单卡有效。 */
+  overrideText?: string;
   /** 仅内部上手演练使用；不能由普通发送菜单构造。 */
   safeRehearsal?: boolean;
 };
@@ -243,6 +245,8 @@ function draftInput(
     format: opts?.format ?? (opts?.asCode ? "code" : undefined),
     promptSnippetId: opts?.promptSnippetId ?? null,
     promptTemplate: prefix,
+    sourceTextOverride:
+      sourceItemIds.length === 1 ? opts?.overrideText : undefined,
   };
 }
 

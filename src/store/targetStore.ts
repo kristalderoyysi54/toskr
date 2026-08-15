@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 import { api, type TargetReason, type TargetSnapshot } from "@/lib/tauri";
 import type { AppIconInfo } from "@/lib/icons";
+import type { TargetRuleOverrides } from "@/lib/targetProfiles";
 
 export type TargetStatus = "unknown" | "refreshing" | "ready" | "blocked";
 export type TargetStateReason = TargetReason | "refresh_failed" | null;
@@ -17,6 +18,9 @@ interface TargetState {
   profileOverrideId: string | null;
   profileOverrideTargetIdentity: string | null;
   profileOverrideNeedsConfirmation: boolean;
+  /** 单条规则的本次覆盖（透镜条行内快捷切换）；换目标/换方案即失效，永不持久化。 */
+  ruleOverrides: TargetRuleOverrides;
+  ruleOverridesTargetIdentity: string | null;
 }
 
 const INITIAL_TARGET_STATE: TargetState = {
@@ -29,6 +33,8 @@ const INITIAL_TARGET_STATE: TargetState = {
   profileOverrideId: null,
   profileOverrideTargetIdentity: null,
   profileOverrideNeedsConfirmation: false,
+  ruleOverrides: {},
+  ruleOverridesTargetIdentity: null,
 };
 
 export const useTargetStore = create<TargetState>()(() => INITIAL_TARGET_STATE);
@@ -235,7 +241,27 @@ export function setTargetProfileOverride(profileId: string | null): void {
       ? targetProfileIdentity(snapshot)
       : null,
     profileOverrideNeedsConfirmation: false,
+    // 换整套方案 = 从该方案的默认规则重新开始，行内单条覆盖一并清空
+    ruleOverrides: {},
+    ruleOverridesTargetIdentity: null,
   });
+}
+
+/** 行内快捷切换单条规则：与解析基线相同的值由解析层自动视为未覆盖。 */
+export function setTargetRuleOverride(patch: TargetRuleOverrides): void {
+  const current = useTargetStore.getState();
+  const identity = targetProfileIdentity(current.snapshot);
+  if (!identity) return;
+  const base =
+    current.ruleOverridesTargetIdentity === identity ? current.ruleOverrides : {};
+  useTargetStore.setState({
+    ruleOverrides: { ...base, ...patch },
+    ruleOverridesTargetIdentity: identity,
+  });
+}
+
+export function clearTargetRuleOverrides(): void {
+  useTargetStore.setState({ ruleOverrides: {}, ruleOverridesTargetIdentity: null });
 }
 
 export function clearTargetProfileOverride(): void {

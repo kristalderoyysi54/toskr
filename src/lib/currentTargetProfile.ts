@@ -20,5 +20,7 @@ export function currentTargetProfileResolution(): TargetProfileResolution {
     temporaryTargetIdentity: target.profileOverrideTargetIdentity,
     temporaryNeedsConfirmation: target.profileOverrideNeedsConfirmation,
     privacyCapabilityActive: settings.firewallEnabled,
+    ruleOverrides: target.ruleOverrides,
+    ruleOverridesTargetIdentity: target.ruleOverridesTargetIdentity,
   });
 }

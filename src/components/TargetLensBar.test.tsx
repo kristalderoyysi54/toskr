@@ -36,6 +36,7 @@ function render(props: Partial<TargetLensViewProps>) {
       icon={null}
       profileName="安全默认"
       profileId="default-safe"
+      promptGroupId="general"
       promptGroupName="通用"
       profileSource="fallback"
       defaultFormat="plain"
@@ -50,6 +51,7 @@ function render(props: Partial<TargetLensViewProps>) {
         {
           id: "default-safe",
           name: "安全默认",
+          promptGroupId: "general",
           promptGroupName: "通用",
           defaultFormat: "plain",
           enterPolicy: "never",
@@ -131,6 +133,7 @@ describe("TargetLensView", () => {
       snapshot: { ...readySnapshot, appName: "Otty" },
       profileName: "终端发送",
       profileSource: "exact",
+      promptGroupId: "terminal-qa",
       promptGroupName: "终端问答",
       defaultFormat: "code",
       enterPolicy: "allow",
@@ -212,6 +215,7 @@ describe("TargetLensView", () => {
       snapshot: readySnapshot,
       profileName: "Codex",
       profileSource: "exact",
+      promptGroupId: "coding",
       promptGroupName: "编程",
       defaultFormat: "code",
       enterPolicy: "allow",
@@ -237,6 +241,7 @@ describe("TargetLensView", () => {
       status: "unknown",
       snapshot: null,
       profileName: `${longName}发送方案`,
+      promptGroupId: "long-group",
       promptGroupName: `${longName}提示词组`,
     });
 

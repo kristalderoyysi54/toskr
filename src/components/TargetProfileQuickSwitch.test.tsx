@@ -12,6 +12,7 @@ const profiles: QuickProfileOption[] = [
   {
     id: "terminal",
     name: "终端发送",
+    promptGroupId: "terminal-qa",
     promptGroupName: "终端问答",
     defaultFormat: "code",
     enterPolicy: "allow",
@@ -20,6 +21,7 @@ const profiles: QuickProfileOption[] = [
   {
     id: "writing",
     name: "写作",
+    promptGroupId: "writing-polish",
     promptGroupName: "文字润色",
     defaultFormat: "plain",
     enterPolicy: "confirm",
@@ -28,6 +30,7 @@ const profiles: QuickProfileOption[] = [
   {
     id: "research",
     name: "研究",
+    promptGroupId: "deep-research",
     promptGroupName: "深度研究",
     defaultFormat: "plain",
     enterPolicy: "never",
@@ -36,6 +39,7 @@ const profiles: QuickProfileOption[] = [
   {
     id: "fourth",
     name: "第四项不应出现",
+    promptGroupId: "misc",
     promptGroupName: "其他",
     defaultFormat: "plain",
     enterPolicy: "never",

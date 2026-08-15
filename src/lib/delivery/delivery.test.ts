@@ -108,6 +108,7 @@ const profile: TargetProfileResolution = {
   privacyCapabilityActive: false,
   safetyClamped: false,
   duplicateBundleProfileIds: ["codex"],
+  ruleOverriddenKeys: [],
 };
 
 function note(id: string, text: string, overrides: Partial<Note> = {}): Note {
@@ -218,6 +219,39 @@ describe("buildDeliveryDraft", () => {
       dataGeneration: 7,
       warnings: [],
     });
+  });
+
+  it("片段发送：单卡 sourceTextOverride 取代正文且图片不随行；多卡忽略覆盖", () => {
+    const fragment = buildDeliveryDraft(
+      input({
+        sourceKind: "note",
+        sourceItemIds: ["combo"],
+        sourceTextOverride: "只发这一段",
+      }),
+      state({
+        notes: [
+          note("combo", "完整正文很长很长", {
+            imageFile: "diagram.png",
+            attachments: ["diagram.png"],
+          }),
+        ],
+      })
+    );
+    expect(fragment.rawText).toBe("只发这一段");
+    expect(fragment.finalText).toBe("只发这一段");
+    expect(fragment.imageFiles).toEqual([]);
+    expect(fragment.sourceItemIds).toEqual(["combo"]);
+    // 覆盖必须随 Draft 留存：新鲜度复核按同一入参重建，否则片段被误判「来源已变化」
+    expect(fragment.sourceTextOverride).toBe("只发这一段");
+
+    const batch = buildDeliveryDraft(
+      input({
+        sourceItemIds: ["a", "b"],
+        sourceTextOverride: "不该生效",
+      }),
+      state({ notes: [note("a", "甲"), note("b", "乙")] })
+    );
+    expect(batch.rawText).toBe("1. 甲\n2. 乙");
   });
 
   it("代码格式仅为单条保留语言，多条使用无语言代码块", () => {

@@ -7,6 +7,7 @@ import {
   projectNoteContent,
   replaceNoteTextBlockAt,
   replaceNoteTextProjection,
+  textBlockRanges,
   textFromContentBlocks,
   type NoteContentBlock,
 } from "./noteContentBlocks";
@@ -152,5 +153,68 @@ describe("noteContentBlocks", () => {
         { type: "text", text: "后文" },
       ])
     ).toBe(true);
+  });
+
+  it("文字块区间切出的正是投影文本本身（选词模式据此把分词分派回各块）", () => {
+    const cases: NoteContentBlock[][] = [
+      // 块间需要补换行
+      [
+        { type: "text", text: "路径：审批管理" },
+        { type: "image", file: "a.png" },
+        { type: "text", text: "一、商户类型" },
+      ],
+      // 左块自带换行，不再叠加
+      [
+        { type: "text", text: "前文\n" },
+        { type: "image", file: "b.png" },
+        { type: "text", text: "\n\n后文" },
+      ],
+      // 右块自带换行
+      [
+        { type: "text", text: "上" },
+        { type: "text", text: "\n下" },
+      ],
+      // 图片在前，正文在后
+      [
+        { type: "image", file: "c.png" },
+        { type: "text", text: "图注" },
+      ],
+    ];
+
+    for (const blocks of cases) {
+      const text = textFromContentBlocks(blocks);
+      const ranges = textBlockRanges(blocks);
+      // 只覆盖文字块，且按块顺序排列
+      expect(ranges.map((r) => r.blockIndex)).toEqual(
+        blocks.flatMap((block, i) => (block.type === "text" ? [i] : []))
+      );
+      // 每段区间切出的就是该块落到投影里的内容，拼回去等于整篇（含块间补的换行）
+      let rebuilt = "";
+      let cursor = 0;
+      for (const range of ranges) {
+        rebuilt += text.slice(cursor, range.start) + text.slice(range.start, range.end);
+        cursor = range.end;
+      }
+      expect(rebuilt + text.slice(cursor)).toBe(text);
+      expect(ranges.every((r) => r.start <= r.end && r.end <= text.length)).toBe(true);
+    }
+  });
+
+  it("文字块区间跳过块间补出来的换行", () => {
+    const blocks: NoteContentBlock[] = [
+      { type: "text", text: "上" },
+      { type: "image", file: "a.png" },
+      { type: "text", text: "下" },
+    ];
+    const text = textFromContentBlocks(blocks);
+    const ranges = textBlockRanges(blocks);
+
+    expect(text).toBe("上\n下");
+    expect(ranges).toEqual([
+      { blockIndex: 0, start: 0, end: 1 },
+      { blockIndex: 2, start: 2, end: 3 },
+    ]);
+    expect(text.slice(ranges[0].start, ranges[0].end)).toBe("上");
+    expect(text.slice(ranges[1].start, ranges[1].end)).toBe("下");
   });
 });

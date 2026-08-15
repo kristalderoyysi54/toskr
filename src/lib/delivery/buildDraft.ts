@@ -79,6 +79,7 @@ export function buildDeliveryDraft(
   let imageFiles: string[] = [];
   let singleCodeLanguage: string | undefined;
   let isSecretSource = false;
+  let appliedTextOverride: string | null = null;
 
   if (input.sourceKind === "task") {
     const selected = state.tasks.find((task) => requestedIds.has(task.id));
@@ -90,10 +91,16 @@ export function buildDeliveryDraft(
     const selected = orderedNotes(input.sourceItemIds, state.notes);
     sourceItemIds = selected.map((note) => note.id);
     isSecretSource = selected.some((note) => note.kind === "secret");
-    const content = buildNoteSourceContent(selected);
-    rawText = content.rawText;
-    imageFiles = content.imageFiles;
-    singleCodeLanguage = content.singleCodeLanguage;
+    if (input.sourceTextOverride !== undefined && selected.length === 1) {
+      // 片段发送：正文取选中片段，图片不随行；模板/别名等后续环节照常
+      rawText = input.sourceTextOverride;
+      appliedTextOverride = input.sourceTextOverride;
+    } else {
+      const content = buildNoteSourceContent(selected);
+      rawText = content.rawText;
+      imageFiles = content.imageFiles;
+      singleCodeLanguage = content.singleCodeLanguage;
+    }
   }
 
   if (sourceItemIds.length !== requestedIds.size) {
@@ -134,6 +141,7 @@ export function buildDeliveryDraft(
     sourceItemIds,
     selectionItemIds: [...state.checkedItemIds],
     rawText,
+    sourceTextOverride: appliedTextOverride,
     assembledText: finalText,
     finalText,
     originalImageFiles: [...imageFiles],

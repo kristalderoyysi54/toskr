@@ -9,6 +9,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ApplicationIcon } from "@/components/ApplicationIcon";
+import { SimpleSelect } from "@/components/SimpleSelect";
 import type { AppIconInfo } from "@/lib/icons";
 import {
   DELIVERY_FORMAT_LABEL,
@@ -17,6 +18,10 @@ import {
   quickSwitchKeyboardCommand,
   type QuickProfileOption,
 } from "@/lib/targetLens";
+import type {
+  TargetRuleOverrideKey,
+  TargetRuleOverrides,
+} from "@/lib/targetProfiles";
 import { cn } from "@/lib/utils";
 import { targetStatusLabel, type TargetStatus } from "@/store/targetStore";
 
@@ -24,60 +29,175 @@ import { targetStatusLabel, type TargetStatus } from "@/store/targetStore";
 const LEDGER_KEY_CLS = "text-right text-micro leading-4 text-muted-foreground";
 const LEDGER_VALUE_CLS = "min-w-0 break-words text-label font-medium leading-4";
 
+/** 台账行内快捷切换的注入包：缺省时台账保持纯只读展示。 */
+export interface RuleLedgerInteractive {
+  promptGroupOptions: { value: string; label: string }[];
+  overriddenKeys: readonly TargetRuleOverrideKey[];
+  disabled?: boolean;
+  onOverride: (patch: TargetRuleOverrides) => void;
+  onReset: () => void;
+}
+
+/** 覆盖行的「本次」徽标：提示该值只对当前目标临时生效。 */
+function OverriddenBadge() {
+  return (
+    <span className="shrink-0 rounded-full bg-primary/15 px-1.5 py-px text-micro font-semibold text-primary">
+      本次
+    </span>
+  );
+}
+
 /**
  * 生效规则台账（快速切换浮层与透镜条展开区共用）：
  * 五行两列取代「键：值」胶囊——键弱值强、逐行对齐；
  * 警示值（自动回车 / 隐私未启用）染 warning，其余保持前景色。
+ * 注入 interactive 后，前四行变为行内快捷选择（本次生效、换目标即失效）；
+ * 隐私检查恒只读——高风险项不做一键降级，仍走「编辑方案」。
  */
 export function ProfileRuleLedger({
   profile,
   privacyCapabilityActive,
+  interactive,
   className,
 }: {
   profile: QuickProfileOption;
   privacyCapabilityActive: boolean;
+  interactive?: RuleLedgerInteractive;
   className?: string;
 }) {
+  const hasOverrides = (interactive?.overriddenKeys.length ?? 0) > 0;
   return (
-    <dl
-      aria-label="本次生效规则"
-      className={cn("grid grid-cols-[52px_1fr] gap-x-3 gap-y-1", className)}
-    >
-      <dt className={LEDGER_KEY_CLS}>提示词组</dt>
-      <dd className={LEDGER_VALUE_CLS}>{profile.promptGroupName}</dd>
-      <dt className={LEDGER_KEY_CLS}>输出格式</dt>
-      <dd className={LEDGER_VALUE_CLS}>
-        {DELIVERY_FORMAT_LABEL[profile.defaultFormat]}
-      </dd>
-      <dt className={LEDGER_KEY_CLS}>粘贴后</dt>
-      <dd
-        className={cn(
-          LEDGER_VALUE_CLS,
-          profile.enterPolicy === "allow" && "text-warning"
-        )}
+    <div className={className} data-rule-ledger={interactive ? "" : undefined}>
+      <dl
+        aria-label="本次生效规则"
+        className="grid grid-cols-[52px_1fr] items-center gap-x-3 gap-y-1"
       >
-        {ENTER_POLICY_STATUS_LABEL[profile.enterPolicy]}
-      </dd>
-      <dt className={LEDGER_KEY_CLS}>完成后</dt>
-      <dd className={LEDGER_VALUE_CLS}>
-        {profile.keepPanel ? "保持打开" : "关闭面板"}
-      </dd>
-      <dt className={LEDGER_KEY_CLS}>隐私检查</dt>
-      <dd
-        className={cn(
-          LEDGER_VALUE_CLS,
-          "flex items-center gap-1",
-          !privacyCapabilityActive && "text-warning"
-        )}
-      >
-        {privacyCapabilityActive ? (
-          <ShieldCheck aria-hidden className="size-3 shrink-0 text-success" />
-        ) : (
-          <ShieldAlert aria-hidden className="size-3 shrink-0" />
-        )}
-        {privacyCapabilityActive ? "发送时执行" : "尚未启用"}
-      </dd>
-    </dl>
+        <dt className={LEDGER_KEY_CLS}>提示词组</dt>
+        <dd className={cn(LEDGER_VALUE_CLS, "flex items-center gap-1.5")}>
+          {interactive ? (
+            <SimpleSelect
+              ariaLabel="本次提示词组"
+              size="micro"
+              disabled={interactive.disabled}
+              value={profile.promptGroupId}
+              options={interactive.promptGroupOptions}
+              onChange={(promptGroupId) =>
+                interactive.onOverride({ promptGroupId })
+              }
+            />
+          ) : (
+            profile.promptGroupName
+          )}
+          {interactive?.overriddenKeys.includes("promptGroupId") && (
+            <OverriddenBadge />
+          )}
+        </dd>
+        <dt className={LEDGER_KEY_CLS}>输出格式</dt>
+        <dd className={cn(LEDGER_VALUE_CLS, "flex items-center gap-1.5")}>
+          {interactive ? (
+            <SimpleSelect
+              ariaLabel="本次输出格式"
+              size="micro"
+              disabled={interactive.disabled}
+              value={profile.defaultFormat}
+              options={[
+                { value: "plain", label: DELIVERY_FORMAT_LABEL.plain },
+                { value: "code", label: DELIVERY_FORMAT_LABEL.code },
+              ]}
+              onChange={(defaultFormat) =>
+                interactive.onOverride({ defaultFormat })
+              }
+            />
+          ) : (
+            DELIVERY_FORMAT_LABEL[profile.defaultFormat]
+          )}
+          {interactive?.overriddenKeys.includes("defaultFormat") && (
+            <OverriddenBadge />
+          )}
+        </dd>
+        <dt className={LEDGER_KEY_CLS}>粘贴后</dt>
+        <dd
+          className={cn(
+            LEDGER_VALUE_CLS,
+            "flex items-center gap-1.5",
+            !interactive && profile.enterPolicy === "allow" && "text-warning"
+          )}
+        >
+          {interactive ? (
+            <SimpleSelect
+              ariaLabel="本次粘贴后动作"
+              size="micro"
+              disabled={interactive.disabled}
+              value={profile.enterPolicy}
+              options={[
+                { value: "never", label: ENTER_POLICY_STATUS_LABEL.never },
+                { value: "confirm", label: ENTER_POLICY_STATUS_LABEL.confirm },
+                { value: "allow", label: ENTER_POLICY_STATUS_LABEL.allow },
+              ]}
+              onChange={(enterPolicy) => interactive.onOverride({ enterPolicy })}
+            />
+          ) : (
+            ENTER_POLICY_STATUS_LABEL[profile.enterPolicy]
+          )}
+          {interactive && profile.enterPolicy === "allow" && (
+            <ShieldAlert aria-hidden className="size-3 shrink-0 text-warning" />
+          )}
+          {interactive?.overriddenKeys.includes("enterPolicy") && (
+            <OverriddenBadge />
+          )}
+        </dd>
+        <dt className={LEDGER_KEY_CLS}>完成后</dt>
+        <dd className={cn(LEDGER_VALUE_CLS, "flex items-center gap-1.5")}>
+          {interactive ? (
+            <SimpleSelect
+              ariaLabel="本次发送完成后"
+              size="micro"
+              disabled={interactive.disabled}
+              value={profile.keepPanel ? "keep" : "close"}
+              options={[
+                { value: "close", label: "关闭面板" },
+                { value: "keep", label: "保持打开" },
+              ]}
+              onChange={(value) =>
+                interactive.onOverride({ keepPanel: value === "keep" })
+              }
+            />
+          ) : profile.keepPanel ? (
+            "保持打开"
+          ) : (
+            "关闭面板"
+          )}
+          {interactive?.overriddenKeys.includes("keepPanel") && (
+            <OverriddenBadge />
+          )}
+        </dd>
+        <dt className={LEDGER_KEY_CLS}>隐私检查</dt>
+        <dd
+          className={cn(
+            LEDGER_VALUE_CLS,
+            "flex items-center gap-1",
+            !privacyCapabilityActive && "text-warning"
+          )}
+        >
+          {privacyCapabilityActive ? (
+            <ShieldCheck aria-hidden className="size-3 shrink-0 text-success" />
+          ) : (
+            <ShieldAlert aria-hidden className="size-3 shrink-0" />
+          )}
+          {privacyCapabilityActive ? "发送时执行" : "尚未启用"}
+        </dd>
+      </dl>
+      {hasOverrides && interactive && (
+        <button
+          type="button"
+          onClick={interactive.onReset}
+          className="mt-1.5 flex items-center gap-1 rounded-sm text-micro text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+        >
+          <RotateCcw aria-hidden className="size-3" />
+          恢复方案默认规则
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -98,6 +218,7 @@ export function TargetProfileQuickSwitch({
   currentProfile,
   candidates,
   privacyCapabilityActive,
+  ruleInteractive,
   temporaryProfileId,
   automaticProfileName,
   canMakePermanent,
@@ -114,6 +235,7 @@ export function TargetProfileQuickSwitch({
   currentProfile: QuickProfileOption;
   candidates: QuickProfileOption[];
   privacyCapabilityActive: boolean;
+  ruleInteractive?: RuleLedgerInteractive;
   temporaryProfileId: string | null;
   automaticProfileName: string;
   canMakePermanent: boolean;
@@ -153,6 +275,12 @@ export function TargetProfileQuickSwitch({
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      // 台账行内下拉展开时，↑↓/Enter/Esc 属于该菜单；方案列表导航让位
+      if (
+        (event.target as HTMLElement | null)?.closest?.("[data-rule-ledger]")
+      ) {
+        return;
+      }
       const command = quickSwitchKeyboardCommand(
         event.key,
         activeIndex,
@@ -306,6 +434,7 @@ export function TargetProfileQuickSwitch({
         <ProfileRuleLedger
           profile={currentProfile}
           privacyCapabilityActive={privacyCapabilityActive}
+          interactive={ruleInteractive}
         />
       </section>
 

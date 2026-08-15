@@ -8,6 +8,9 @@ import { useUIStore } from "@/store/uiStore";
 /** 最近一次发现的更新对象（Update 实例不可入 store，模块级缓存）。 */
 let pendingUpdate: Update | null = null;
 
+/** 周期静默检查已处理过的版本号：同版本只提醒/安装一次，避免 30 分钟一轮的重复气泡与重复下载。 */
+let lastHandledVersion: string | null = null;
+
 /** 面板更新对话框「立即下载」：安装最近发现的更新，完成后自动重启。 */
 export async function installPendingUpdate(
   onProgress?: (pct: number) => void
@@ -80,6 +83,12 @@ export async function silentUpdateFlow() {
   if (!autoCheckUpdate) return;
   const update = await checkForUpdate();
   if (!update) return;
+  // 同版本只处理一次：30 分钟一轮的周期检查会反复发现同一版本——不去重则
+  // 提醒分支每轮重复弹泡、自动安装分支（装完未重启时二进制仍自报旧版）每轮
+  // 重复下载整包。安装失败也算已处理：warn 已弹过一次，重启后启动检查天然重
+  // 试，设置页手动检查不经此守卫。
+  if (update.version === lastHandledVersion) return;
+  lastHandledVersion = update.version;
   if (autoInstallUpdate) {
     const ok = await downloadAndInstall(update, undefined, false);
     if (ok) tip("ok", `已更新到 v${update.version} · 重启应用后生效`);

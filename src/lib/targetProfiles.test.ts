@@ -85,6 +85,84 @@ describe("Target Profile resolver", () => {
     });
   });
 
+  it("规则级本次覆盖：逐项生效并报告覆盖键，词组随覆盖重解析", () => {
+    const resolved = resolveTargetProfile({
+      bundleId: "com.openai.codex",
+      isTargetReady: true,
+      targetIdentity: "codex:42:500",
+      groups,
+      profiles,
+      defaultProfileId: "default",
+      ruleOverrides: {
+        promptGroupId: GENERAL_PROMPT_GROUP_ID,
+        defaultFormat: "plain",
+        enterPolicy: "allow",
+        keepPanel: false,
+      },
+      ruleOverridesTargetIdentity: "codex:42:500",
+    });
+    expect(resolved.profile).toMatchObject({
+      id: "codex",
+      promptGroupId: GENERAL_PROMPT_GROUP_ID,
+      defaultFormat: "plain",
+      enterPolicy: "allow",
+      keepPanel: false,
+    });
+    expect(resolved.promptGroup.name).toBe("通用");
+    expect(resolved.ruleOverriddenKeys.sort()).toEqual(
+      ["defaultFormat", "enterPolicy", "keepPanel", "promptGroupId"].sort()
+    );
+  });
+
+  it("规则覆盖：与基线相同的值不计入覆盖键；未知词组 id 被忽略", () => {
+    const resolved = resolveTargetProfile({
+      bundleId: "com.openai.codex",
+      isTargetReady: true,
+      targetIdentity: "codex:42:500",
+      groups,
+      profiles,
+      defaultProfileId: "default",
+      ruleOverrides: {
+        defaultFormat: "code", // codex 基线即 code → 不算覆盖
+        promptGroupId: "no-such-group",
+      },
+      ruleOverridesTargetIdentity: "codex:42:500",
+    });
+    expect(resolved.profile.promptGroupId).toBe("coding");
+    expect(resolved.ruleOverriddenKeys).toEqual([]);
+  });
+
+  it("规则覆盖绑定旧目标身份时整组失效", () => {
+    const resolved = resolveTargetProfile({
+      bundleId: "com.openai.codex",
+      isTargetReady: true,
+      targetIdentity: "codex:42:500",
+      groups,
+      profiles,
+      defaultProfileId: "default",
+      ruleOverrides: { enterPolicy: "allow" },
+      ruleOverridesTargetIdentity: "terminal:99:700",
+    });
+    expect(resolved.profile.enterPolicy).toBe("confirm");
+    expect(resolved.ruleOverriddenKeys).toEqual([]);
+  });
+
+  it("规则覆盖在安全钳制之后应用：fallback 也允许用户本次显式放宽", () => {
+    const resolved = resolveTargetProfile({
+      bundleId: "com.unknown.app",
+      isTargetReady: true,
+      targetIdentity: "unknown:1:1",
+      groups,
+      profiles,
+      defaultProfileId: "default", // default 的 allow 会被钳制回 never
+      ruleOverrides: { enterPolicy: "confirm" },
+      ruleOverridesTargetIdentity: "unknown:1:1",
+    });
+    expect(resolved.safetyClamped).toBe(true);
+    expect(resolved.profile.enterPolicy).toBe("confirm");
+    expect(resolved.ruleOverriddenKeys).toEqual(["enterPolicy"]);
+  });
+
   it("绑定旧目标的临时覆盖不会应用到新目标", () => {
     expect(
       resolveTargetProfile({

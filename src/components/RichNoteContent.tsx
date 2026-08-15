@@ -8,7 +8,7 @@ import {
 import { api, type ImagePreviewSource } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 
-function RichImageBlock({
+export function RichImageBlock({
   block,
   files,
   index,

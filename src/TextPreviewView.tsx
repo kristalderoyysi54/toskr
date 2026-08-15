@@ -17,6 +17,7 @@ import { headerGradient } from "@/components/NoteCard";
 import { DataReadOnlyGuard } from "@/components/DataReadOnlyGuard";
 import { DetailWindowFrame } from "@/components/DetailWindowFrame";
 import {
+  RichImageBlock,
   RichNoteContent,
   RichNoteTextEditor,
 } from "@/components/RichNoteContent";
@@ -24,6 +25,7 @@ import { stats } from "@/components/PreviewOverlay";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Kbd } from "@/components/ui/kbd";
+import { Segmented } from "@/components/ui/segmented";
 import { TextSelectionToolbar } from "@/components/TextSelectionToolbar";
 import type { NoteEditPayload, NotePreviewPayload } from "@/lib/actions";
 import { requestAliasQuickAdd } from "@/lib/aliasQuickAdd";
@@ -36,6 +38,7 @@ import { springSnappy } from "@/lib/motion";
 import {
   hasOrderedRichLayout,
   normalizeNoteContentBlocks,
+  textBlockRanges,
   textFromContentBlocks,
   type NoteContentBlock,
 } from "@/lib/noteContentBlocks";
@@ -149,6 +152,14 @@ function releaseEditorSession(note: NotePreviewPayload | null) {
   }).catch(() => {});
 }
 
+/** 选词模式的一个可点选单元；start/end 是相对整卡投影文本的偏移。 */
+type PickSegment = {
+  text: string;
+  start: number;
+  end: number;
+  wordLike: boolean;
+};
+
 type TextEditSnapshot = SelectionEdit & { images: string[] };
 type TextEditHistory = {
   undo: TextEditSnapshot[];
@@ -254,6 +265,10 @@ export default function TextPreviewView() {
   const [textSelection, setTextSelection] = useState<TextSelection | null>(null);
   // 选词模式：正文按分词渲染为可点选区块，点选驱动 textSelection（复用选中工具条）
   const [pickMode, setPickMode] = useState(false);
+  // 粒度：词（Intl.Segmenter 分词）/ 段（按换行分段）；切换即清空已选范围
+  const [pickGranularity, setPickGranularity] = useState<"word" | "paragraph">(
+    "word"
+  );
   const [pick, setPick] = useState<{ anchor: number; focus: number } | null>(null);
   // 每次唤起自增：窗口隐藏复用，重开也要重播内容浮现
   const [gen, setGen] = useState(0);
@@ -687,8 +702,22 @@ export default function TextPreviewView() {
   const noteText = note?.text ?? "";
   const pickSegments = useMemo(() => {
     if (!pickMode || !noteText) return [];
-    type Segment = { text: string; start: number; end: number; wordLike: boolean };
-    const out: Segment[] = [];
+    const out: PickSegment[] = [];
+    if (pickGranularity === "paragraph") {
+      // 段粒度：按换行切分；空行归入分隔符，可选段保留段内换行
+      let cursor = 0;
+      for (const part of noteText.split(/(\n+)/)) {
+        if (!part) continue;
+        out.push({
+          text: part,
+          start: cursor,
+          end: cursor + part.length,
+          wordLike: !/^\n+$/.test(part) && !!part.trim(),
+        });
+        cursor += part.length;
+      }
+      return out;
+    }
     if (typeof Intl !== "undefined" && "Segmenter" in Intl) {
       const segmenter = new Intl.Segmenter("zh-Hans", { granularity: "word" });
       for (const item of segmenter.segment(noteText)) {
@@ -713,7 +742,96 @@ export default function TextPreviewView() {
       cursor += part.length;
     }
     return out;
-  }, [pickMode, noteText]);
+  }, [pickMode, pickGranularity, noteText]);
+
+  /**
+   * 图文卡的选词布局：键帽按文字块回到各自图片之间，图文顺序不被打散；
+   * 非图文卡返回 null，走原来的整段平铺。
+   */
+  const pickBlocks = useMemo(() => {
+    const blocks = note?.contentBlocks;
+    if (!pickMode || !blocks || !hasOrderedRichLayout(blocks)) return null;
+    // 区间是相对块投影算的，正文却来自 payload.text。两者本该同源（Store 一律
+    // 走 projectNoteContent），万一不是就退回平铺——宁可图片不内联，也不能让
+    // 选中的词和实际发出的片段错位
+    if (textFromContentBlocks(blocks) !== noteText) return null;
+    const rangeByBlock = new Map(
+      textBlockRanges(blocks).map((range) => [range.blockIndex, range])
+    );
+    let imageIndex = 0;
+    return blocks.map((block, blockIndex) => {
+      if (block.type === "image") {
+        return {
+          kind: "image" as const,
+          blockIndex,
+          block,
+          imageIndex: imageIndex++,
+        };
+      }
+      const range = rangeByBlock.get(blockIndex);
+      return {
+        kind: "text" as const,
+        blockIndex,
+        // 保留全局下标：点选驱动的 pick.anchor/focus 是 pickSegments 的索引
+        segments: pickSegments.flatMap((segment, index) =>
+          range && segment.start >= range.start && segment.end <= range.end
+            ? [{ segment, index }]
+            : []
+        ),
+      };
+    });
+  }, [note?.contentBlocks, noteText, pickMode, pickSegments]);
+
+  const pickImageFiles = useMemo(
+    () =>
+      (note?.contentBlocks ?? []).flatMap((block) =>
+        block.type === "image" ? [block.file] : []
+      ),
+    [note?.contentBlocks]
+  );
+
+  /** 键帽/分隔符单元；index 必须是 pickSegments 的全局下标。 */
+  const renderPickSegment = (segment: PickSegment, index: number) => {
+    const inRange =
+      !!pick &&
+      index >= Math.min(pick.anchor, pick.focus) &&
+      index <= Math.max(pick.anchor, pick.focus);
+    if (!segment.wordLike) {
+      // 段粒度下换行分隔符不渲染（段块自带间距），词粒度保留原文标点
+      if (pickGranularity === "paragraph") return null;
+      return (
+        <span
+          key={`${segment.start}-${index}`}
+          className={cn("text-muted-foreground", inRange && "text-primary")}
+        >
+          {segment.text}
+        </span>
+      );
+    }
+    return (
+      <button
+        key={`${segment.start}-${index}`}
+        type="button"
+        onClick={() => onPickToken(index)}
+        className={cn(
+          // token-exception: 键帽方块（用户选定模板 B）——底边厚度/按压位移/
+          // 内高光为立体质感所需的一次性物理值，主题色仍走 token
+          "rounded-[7px] border border-border/50 bg-muted font-[inherit] text-inherit outline-none",
+          "shadow-[0_2.5px_0_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.08)]",
+          "transition-[transform,box-shadow,background-color] duration-75",
+          "hover:brightness-110 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+          "active:translate-y-[1.5px] active:shadow-[0_1px_0_rgba(0,0,0,0.35)]",
+          pickGranularity === "paragraph"
+            ? "my-1 block w-full whitespace-pre-wrap px-2.5 py-1.5 text-left"
+            : "mx-[3px] my-[2px] inline px-[7px] py-px",
+          inRange &&
+            "translate-y-[1.5px] border-primary/60 bg-primary text-primary-foreground shadow-[0_1px_0_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.3)] hover:brightness-105"
+        )}
+      >
+        {segment.text}
+      </button>
+    );
+  };
 
   const onPickToken = (index: number) => {
     setPick((previous) => {
@@ -780,8 +898,7 @@ export default function TextPreviewView() {
       if (
         !current ||
         current.codeLang ||
-        (current.kind === "link" && !!current.url) ||
-        hasOrderedRichLayout(current.contentBlocks)
+        (current.kind === "link" && !!current.url)
       ) {
         return;
       }
@@ -897,6 +1014,25 @@ export default function TextPreviewView() {
     });
   };
 
+  // 片段发送：只发选中文字（选词/选段驱动），仍以本卡为来源；发完关窗与整卡发送一致
+  const sendSelection = (fragment: string) => {
+    if (!note || !fragment.trim()) return;
+    close();
+    void emitTo("main", "toskr://note-send", {
+      id: note.id,
+      dataGeneration: note.dataGeneration,
+      text: fragment,
+    });
+  };
+
+  const copySelection = (fragment: string) => {
+    if (!fragment) return;
+    void api
+      .copyText(fragment)
+      .then(() => tip("ok", "已复制选中片段"))
+      .catch((e) => tip("warn", `复制失败：${e}`));
+  };
+
   // 文本编辑态由本窗口接管撤销/重做：连续输入按 1 秒内同类输入合并，
   // 工具栏格式化是独立一步；不再落到主面板的卡片级撤销。
   useEffect(() => {
@@ -952,6 +1088,14 @@ export default function TextPreviewView() {
   // 编辑态：Esc 由 textarea 截获为退出编辑，Space 正常输入不关窗
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Esc 逐层退：选词有选中时先撤选（关联 textSelection 由既有 effect 清），
+      // 再按才关窗——选错一个词不该连详情窗一起丢掉。
+      // 工具条自己的浮层（链接/词典/格式）在 capture 阶段已先吃掉 Esc
+      if (e.key === "Escape" && !editing && pick) {
+        e.preventDefault();
+        setPick(null);
+        return;
+      }
       if (e.key === "Escape" || (e.key === " " && !editing)) {
         e.preventDefault();
         const current = editSessionRef.current;
@@ -968,7 +1112,9 @@ export default function TextPreviewView() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [editing]);
+    // pick 必须在依赖里：漏了会让 handler 闭包读到旧选中状态，撤选后第二次
+    // Esc 又被当成"还有选中"而关不掉窗
+  }, [editing, pick]);
 
   if (!note) {
     // 内容未达的兜底空态：仍给关闭按钮 + 可拖动，不至于出现关不掉的白框
@@ -1003,6 +1149,10 @@ export default function TextPreviewView() {
       ? langLabel(note.codeLang)
       : "文本";
   const s = stats(note.text);
+  // 选区工具条一露面，页脚的「发送」就和它的「发送选中」同屏了，两个发送必须
+  // 一眼分辨发的是什么——此时页脚改口「发送整卡」，与「发送选中」动宾对仗
+  const selectionToolbarOpen =
+    (flatEditable || pickMode) && !!textSelection && !note.codeLang && !isLink;
   const shownImages = orderedRich ? [] : editing ? draftImages : note.images;
   const imagePreviewSource = writable && !editing
     ? {
@@ -1178,11 +1328,6 @@ export default function TextPreviewView() {
               }}
               className="h-full min-h-40 w-full resize-none bg-transparent font-mono text-body leading-relaxed outline-none"
             />
-          ) : orderedRich && note.contentBlocks ? (
-            <RichNoteContent
-              blocks={note.contentBlocks}
-              previewSource={imagePreviewSource}
-            />
           ) : note.codeLang ? (
             <pre className="hljs whitespace-pre-wrap [overflow-wrap:anywhere] !bg-transparent font-mono text-body leading-relaxed">
               <code
@@ -1192,48 +1337,56 @@ export default function TextPreviewView() {
               />
             </pre>
           ) : pickMode ? (
+            // 选词优先于图文渲染：图文卡也要能选词，只是键帽按块回到图片之间
             <div
               ref={previewContentRef as React.RefObject<HTMLDivElement>}
-              aria-label="选词模式：点选词语，可再点另一词扩展范围"
-              className="whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-body leading-[2.2]"
+              aria-label={
+                pickGranularity === "paragraph"
+                  ? "选段模式：点选段落，可再点另一段扩展范围"
+                  : "选词模式：点选词语，可再点另一词扩展范围"
+              }
+              className={cn(
+                "[overflow-wrap:anywhere] font-mono text-body",
+                pickGranularity === "paragraph"
+                  ? "leading-relaxed"
+                  : "whitespace-pre-wrap leading-[2.2]"
+              )}
             >
-              {pickSegments.map((segment, index) => {
-                const inRange =
-                  !!pick &&
-                  index >= Math.min(pick.anchor, pick.focus) &&
-                  index <= Math.max(pick.anchor, pick.focus);
-                return segment.wordLike ? (
-                  <button
-                    key={`${segment.start}-${index}`}
-                    type="button"
-                    onClick={() => onPickToken(index)}
-                    className={cn(
-                      // token-exception: 键帽方块（用户选定模板 B）——底边厚度/按压位移/
-                      // 内高光为立体质感所需的一次性物理值，主题色仍走 token
-                      "mx-[3px] my-[2px] inline rounded-[7px] border border-border/50 bg-muted px-[7px] py-px font-[inherit] text-inherit outline-none",
-                      "shadow-[0_2.5px_0_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.08)]",
-                      "transition-[transform,box-shadow,background-color] duration-75",
-                      "hover:brightness-110 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
-                      "active:translate-y-[1.5px] active:shadow-[0_1px_0_rgba(0,0,0,0.35)]",
-                      inRange &&
-                        "translate-y-[1.5px] border-primary/60 bg-primary text-primary-foreground shadow-[0_1px_0_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.3)] hover:brightness-105"
-                    )}
-                  >
-                    {segment.text}
-                  </button>
-                ) : (
-                  <span
-                    key={`${segment.start}-${index}`}
-                    className={cn(
-                      "text-muted-foreground",
-                      inRange && "text-primary"
-                    )}
-                  >
-                    {segment.text}
-                  </span>
-                );
-              })}
+              {!pick && (
+                // 只在还没选之前出现：选词模式最难懂的是「选完去哪操作」
+                <p className="mb-2 text-micro text-muted-foreground">
+                  {`点${pickGranularity === "paragraph" ? "段落" : "词块"}选中 · 再点另一${
+                    pickGranularity === "paragraph" ? "段" : "块"
+                  }扩展范围 · 选好后底部工具条可发送或复制`}
+                </p>
+              )}
+              {pickBlocks
+                ? pickBlocks.map((entry) =>
+                    entry.kind === "image" ? (
+                      <RichImageBlock
+                        key={`image-${entry.blockIndex}-${entry.block.file}`}
+                        block={entry.block}
+                        files={pickImageFiles}
+                        index={entry.imageIndex}
+                        previewSource={imagePreviewSource}
+                      />
+                    ) : (
+                      <p key={`text-${entry.blockIndex}`}>
+                        {entry.segments.map(({ segment, index }) =>
+                          renderPickSegment(segment, index)
+                        )}
+                      </p>
+                    )
+                  )
+                : pickSegments.map((segment, index) =>
+                    renderPickSegment(segment, index)
+                  )}
             </div>
+          ) : orderedRich && note.contentBlocks ? (
+            <RichNoteContent
+              blocks={note.contentBlocks}
+              previewSource={imagePreviewSource}
+            />
           ) : mdView ? (
             <div
               ref={previewContentRef as React.RefObject<HTMLDivElement>}
@@ -1250,18 +1403,18 @@ export default function TextPreviewView() {
           )}
         </motion.div>
 
-        {(flatEditable || pickMode) &&
-          textSelection &&
-          !note.codeLang &&
-          !isLink && (
-            <TextSelectionToolbar
-              text={editing ? draftRef.current : note.text}
-              selection={textSelection}
-              onApply={applySelectionEdit}
-              onAddAlias={editing ? undefined : addSelectionToAliasDictionary}
-              readOnly={!flatEditable}
-            />
-          )}
+        {selectionToolbarOpen && textSelection && (
+          <TextSelectionToolbar
+            text={editing ? draftRef.current : note.text}
+            selection={textSelection}
+            onApply={applySelectionEdit}
+            onAddAlias={editing ? undefined : addSelectionToAliasDictionary}
+            onSendSelection={writable ? sendSelection : undefined}
+            onCopySelection={copySelection}
+            sendDisabledReason={targetReady ? null : targetBlockedMessage}
+            readOnly={!flatEditable}
+          />
+        )}
       </div>
 
       {/* 图片附件缩略条（组合卡）：常显在正文与页脚之间，点击 Quick Look 原图，
@@ -1333,21 +1486,39 @@ export default function TextPreviewView() {
             </>
           ) : (
             <>
-              {!orderedRich && !isLink && !note.codeLang && (
-                <IconButton
-                  label={
-                    pickMode
-                      ? "退出选词模式（W）"
-                      : "选词模式：点选词语快速加入化名词典（W）"
-                  }
-                  pressed={pickMode}
-                  onClick={() => {
-                    if (pickMode) exitPickMode();
-                    else enterPickMode();
-                  }}
-                >
-                  <TextSelect className="size-3.5" />
-                </IconButton>
+              {!isLink && !note.codeLang && (
+                <>
+                  <IconButton
+                    label={
+                      pickMode
+                        ? "退出选词模式（W）"
+                        : "选词模式：点选词/段，可发送或复制选中片段（W）"
+                    }
+                    pressed={pickMode}
+                    onClick={() => {
+                      if (pickMode) exitPickMode();
+                      else enterPickMode();
+                    }}
+                  >
+                    <TextSelect className="size-3.5" />
+                  </IconButton>
+                  {pickMode && (
+                    <Segmented
+                      ariaLabel="选取粒度"
+                      size="xs"
+                      value={pickGranularity}
+                      options={[
+                        { value: "word", label: "词" },
+                        { value: "paragraph", label: "段" },
+                      ]}
+                      onChange={(value) => {
+                        setPickGranularity(value);
+                        setPick(null);
+                        setTextSelection(null);
+                      }}
+                    />
+                  )}
+                </>
               )}
               {!orderedRich && isMd && !pickMode && (
                 <button
@@ -1391,7 +1562,9 @@ export default function TextPreviewView() {
                     disabled={!targetReady}
                     aria-label={
                       targetReady
-                        ? "发送到当前目标"
+                        ? selectionToolbarOpen
+                          ? "发送整卡到当前目标（不是选中片段）"
+                          : "发送到当前目标"
                         : `发送不可用：${targetBlockedMessage}`
                     }
                     aria-describedby={
@@ -1399,7 +1572,8 @@ export default function TextPreviewView() {
                     }
                     onClick={send}
                   >
-                    <Send className="size-3" /> 发送
+                    <Send className="size-3" />{" "}
+                    {selectionToolbarOpen ? "发送整卡" : "发送"}
                   </Button>
                 </>
               )}

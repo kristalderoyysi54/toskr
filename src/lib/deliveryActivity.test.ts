@@ -102,6 +102,7 @@ function draft(overrides: Partial<DeliveryDraft> = {}): DeliveryDraft {
     sourceItemIds: ["note-1"],
     selectionItemIds: ["note-1"],
     rawText: "secret raw body",
+    sourceTextOverride: null,
     assembledText: "prompt secret raw body",
     finalText: "redacted body",
     originalImageFiles: ["/secret/image.png"],

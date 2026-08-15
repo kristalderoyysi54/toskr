@@ -153,6 +153,9 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
   );
   const previewDraft = useMemo(
     () => {
+      // 单选也出条（2026-08 曾试过「仅 ≥2 出现」，用户否决恢复）：
+      // ⌄ 里的模板/格式/方案选择在单选同样高频，底栏是它们的恒定锚点，
+      // 右键子菜单替代路径被用户评价为不便。勿再改成多选门槛。
       if (count === 0 || !relevantHere) return null;
       return buildDeliveryDraft(
         {
@@ -237,6 +240,8 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
             <SimpleMenu
               side="top"
               align="end"
+              // flex 消除包裹层行盒：block div 内联按钮会吃基线下沉，图标偏上错位
+              className="flex"
               trigger={({ toggle }) => (
                 <IconAction label="打标签" onClick={toggle}>
                   <Tag className="size-3.5" />

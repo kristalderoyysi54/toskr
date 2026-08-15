@@ -191,6 +191,7 @@ function draftSourceIsCurrent(draft: DeliveryDraft): boolean {
       format: draft.format,
       promptSnippetId: draft.promptSnippetId,
       promptTemplate: draft.promptTemplate ?? undefined,
+      sourceTextOverride: draft.sourceTextOverride ?? undefined,
     },
     {
       notes: state.notes,

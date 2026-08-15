@@ -1,6 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
-import { Bold, Check, ChevronDown, Italic, Link2, VenetianMask } from "lucide-react";
+import {
+  Bold,
+  Check,
+  ChevronDown,
+  Copy,
+  Italic,
+  Link2,
+  Send,
+  VenetianMask,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { floatingSurface } from "@/components/ui/floating-surface";
@@ -46,6 +55,9 @@ export function TextSelectionToolbar({
   selection,
   onApply,
   onAddAlias,
+  onSendSelection,
+  onCopySelection,
+  sendDisabledReason,
   readOnly = false,
 }: {
   text: string;
@@ -53,6 +65,12 @@ export function TextSelectionToolbar({
   onApply: (edit: SelectionEdit) => void;
   /** 传入即出现「加入词典」：把选中文字快速录为化名词条（原文可改、类别可换）。 */
   onAddAlias?: (originalText: string, category: string) => void;
+  /** 传入即出现「发送选中」：只把选中片段发到当前目标（选词/选段模式的部分发送）。 */
+  onSendSelection?: (selectedText: string) => void;
+  /** 传入即出现「复制选中」。 */
+  onCopySelection?: (selectedText: string) => void;
+  /** 目标未就绪时的禁用原因；有值则发送按钮禁用并以此作提示。 */
+  sendDisabledReason?: string | null;
   /** 只读来源（如合并预览）：隐藏改写类控件，仅保留词典等非改写操作。 */
   readOnly?: boolean;
 }) {
@@ -266,6 +284,45 @@ export function TextSelectionToolbar({
           </form>
         )}
 
+        {(onSendSelection || onCopySelection) && (
+          <>
+            {/* 工具条作用于「选中的那段」而非整卡——首次使用光看图标看不出来，
+                所以左端常显选区字数，发送按钮也带上文字 */}
+            <span className="px-1 text-micro tabular-nums text-muted-foreground">
+              已选 {[...selectedText].length} 字
+            </span>
+            {onSendSelection && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                title={
+                  sendDisabledReason
+                    ? `发送选中不可用：${sendDisabledReason}`
+                    : "只把选中片段发到当前目标"
+                }
+                disabled={!!sendDisabledReason || !selectedText.trim()}
+                onClick={() => onSendSelection(selectedText)}
+              >
+                <Send />
+                发送选中
+              </Button>
+            )}
+            {onCopySelection && (
+              <IconButton
+                label="复制选中片段"
+                disabled={!selectedText}
+                stopPropagation={false}
+                onClick={() => onCopySelection(selectedText)}
+              >
+                <Copy />
+              </IconButton>
+            )}
+            {(onAddAlias || !readOnly) && (
+              <div className="mx-0.5 h-4 w-px bg-foreground/10" />
+            )}
+          </>
+        )}
         {onAddAlias && (
           <IconButton
             label="加入化名词典：发出自动替换，收回自动恢复"
