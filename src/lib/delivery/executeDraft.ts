@@ -419,7 +419,13 @@ export async function executeDeliveryDraft(
   if (targetSendDisabled()) {
     return blockDelivery(draft, currentTargetBlockMessage(), "target-not-ready");
   }
-  if (!sameDraftTarget(draft.targetSnapshot, useTargetStore.getState().snapshot)) {
+  // 只比目标身份，不比 token：Native 刷新会为同一目标轮换 token（见 targetStore
+  // 的 sameTargetIdentity 注释），详情窗「发送选中」关窗那一下必然触发一次刷新，
+  // 若把轮换当成换了目标，同一个目标也会被误判成「发送目标已变化」。
+  // token 的安全边界在后面：refreshedTarget 与 draft 的身份仍要一致，隐私绑定
+  // 场景另有 token 严格校验，真正下发也用刷新后的 refreshedTarget.token
+  const currentTarget = useTargetStore.getState().snapshot;
+  if (!currentTarget || !sameTargetIdentity(draft.targetSnapshot, currentTarget)) {
     return blockDelivery(draft, "发送目标已变化，请确认后重试发送", "draft-target-changed");
   }
   if (!sameDraftProfile(draft)) {
