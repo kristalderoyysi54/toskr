@@ -54,3 +54,6 @@ ds-bundle/
 .design-sync/.cache/
 .design-sync/learnings/
 .design-sync/node_modules
+
+# 本地临时产物（设计稿/生成图等个人内容不入库）
+/tmp/
