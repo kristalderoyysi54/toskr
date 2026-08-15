@@ -5,6 +5,10 @@ import { motion } from "motion/react";
 import { Check, ChevronLeft, ChevronRight, Pencil, Send, X } from "lucide-react";
 
 import {
+  NOTE_EDIT_AUTOSAVE_INTERVAL_MS,
+  type NoteEditPayload,
+} from "@/lib/actions";
+import {
   FIT_VIEW,
   wheelZoomFactor,
   zoomViewAround,
@@ -41,6 +45,7 @@ import {
  * 刻意不做失焦关闭——可拖动窗口的语义是「摆在一边对照看」。
  * 带笔记上下文（noteId）时底部显示文字备注条：查看 / 内联编辑，
  * ⌘⏎ 保存经 toskr://note-edit 回传主面板（主面板是唯一持久化写入方）。
+ * 编辑态每 2s 静默自动保存；Esc/关窗/切换都保留内容，收尾气泡可撤销。
  */
 export default function ImagePreviewView() {
   const [files, setFiles] = useState<string[]>([]);
@@ -65,6 +70,12 @@ export default function ImagePreviewView() {
   const [draft, setDraft] = useState("");
   const [dataGeneration, setDataGeneration] = useState<number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // 备注编辑镜像 + 会话账本：interval / 事件监听闭包只读 ref，不受旧 state 影响
+  const captionRef = useRef({ editing, noteId, draft, noteText, dataGeneration });
+  captionRef.current = { editing, noteId, draft, noteText, dataGeneration };
+  const captionSessionRef = useRef<{ origin: string; lastSent: string } | null>(
+    null
+  );
   const targetReady = useTargetStore(
     (state) => state.status === "ready" && !state.profileOverrideNeedsConfirmation
   );
@@ -94,6 +105,10 @@ export default function ImagePreviewView() {
       dataGeneration: number | null;
       edit?: boolean;
     }>("toskr://preview-image", (e) => {
+      // 换内容先收尾旧备注编辑会话：自动保存语义下切换不丢稿
+      if (captionRef.current.editing) {
+        emitCaptionFinish(captionRef.current, captionSessionRef.current);
+      }
       setFiles(e.payload.files);
       setIdx(Math.min(e.payload.index, Math.max(0, e.payload.files.length - 1)));
       setNoteId(e.payload.noteId ?? null);
@@ -215,7 +230,65 @@ export default function ImagePreviewView() {
     }
   }, [editing]);
 
-  const close = () => void getCurrentWebviewWindow().hide();
+  /** 备注编辑收尾（emit 部分）：改动过 → 收尾保存（可撤销）；手动改回原文
+   *  而中途已自动保存 → 静默还原。setState 由调用方按场景处理。 */
+  const emitCaptionFinish = (
+    state: typeof captionRef.current,
+    session: { origin: string; lastSent: string } | null
+  ) => {
+    if (!state.noteId || state.dataGeneration === null) return;
+    if (state.draft !== state.noteText) {
+      void emitTo("main", "toskr://note-edit", {
+        format: "flat",
+        id: state.noteId,
+        text: state.draft,
+        dataGeneration: state.dataGeneration,
+        origin: { text: session?.origin ?? state.noteText },
+      } satisfies NoteEditPayload);
+    } else if (session && session.lastSent !== session.origin) {
+      void emitTo("main", "toskr://note-edit", {
+        format: "flat",
+        id: state.noteId,
+        text: session.origin,
+        dataGeneration: state.dataGeneration,
+        autosave: true,
+      } satisfies NoteEditPayload);
+    }
+  };
+
+  // 备注编辑自动保存：进入编辑记住原文，每 2s 把草稿静默写回主面板；
+  // Esc/关窗/切换内容收尾保留内容，防写一半白写。
+  useEffect(() => {
+    if (!editing || !noteId || dataGeneration === null) return;
+    const session = { origin: noteText, lastSent: noteText };
+    captionSessionRef.current = session;
+    const id = noteId;
+    const generation = dataGeneration;
+    const timer = window.setInterval(() => {
+      const current = captionRef.current.draft;
+      if (current === session.lastSent) return;
+      void emitTo("main", "toskr://note-edit", {
+        format: "flat",
+        id,
+        text: current,
+        dataGeneration: generation,
+        autosave: true,
+      } satisfies NoteEditPayload);
+      session.lastSent = current;
+    }, NOTE_EDIT_AUTOSAVE_INTERVAL_MS);
+    return () => {
+      window.clearInterval(timer);
+      captionSessionRef.current = null;
+    };
+    // 只认会话身份（进出编辑、换卡），origin 在会话内必须保持稳定
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, noteId]);
+
+  const close = () => {
+    // 关窗不丢备注草稿：编辑态先按保存收尾（自动保存语义）
+    if (captionRef.current.editing) save();
+    void getCurrentWebviewWindow().hide();
+  };
   const many = files.length > 1;
   const sendLabel = many
     ? `发送整张卡片（含 ${files.length} 张图片）`
@@ -232,15 +305,9 @@ export default function ImagePreviewView() {
 
   const save = () => {
     if (!noteId || dataGeneration === null) return;
-    if (draft !== noteText) {
-      // 主面板 updateNoteText 持久化 + HUD「已保存」；空文本 = 清除备注
-      void emitTo("main", "toskr://note-edit", {
-        id: noteId,
-        text: draft,
-        dataGeneration,
-      });
-      setNoteText(draft);
-    }
+    // 主面板 updateNoteText 持久化 + HUD 可撤销「已保存」；空文本 = 清除备注
+    emitCaptionFinish(captionRef.current, captionSessionRef.current);
+    if (draft !== noteText) setNoteText(draft);
     setEditing(false);
   };
 
@@ -251,8 +318,8 @@ export default function ImagePreviewView() {
         if (e.key === "Escape") {
           e.preventDefault();
           e.stopPropagation();
-          setDraft(noteText);
-          setEditing(false);
+          // 自动保存语义：Esc 退出编辑保留内容，收尾气泡可撤销
+          save();
         } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
           e.preventDefault();
           save();

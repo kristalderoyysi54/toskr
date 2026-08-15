@@ -109,6 +109,10 @@ export type NoteEditPayload = {
   id: string;
   sessionId?: string;
   dataGeneration: number;
+  /** true = 编辑中的静默自动保存：只持久化，不释放会话、不提示、不抓链接。 */
+  autosave?: boolean;
+  /** 会话收尾保存随带：本次编辑开始前的内容，主面板用它装配 HUD「撤销」。 */
+  origin?: NoteEditOrigin;
 } & (
   | {
       format: "flat";
@@ -121,6 +125,30 @@ export type NoteEditPayload = {
       contentBlocks: NoteContentBlock[];
     }
 );
+
+export type NoteEditOrigin =
+  | { text: string; images?: string[] }
+  | { contentBlocks: NoteContentBlock[] };
+
+/** 编辑态每隔这么久把草稿静默写回 store（崩溃/关窗最多丢这窗口内的输入）。 */
+export const NOTE_EDIT_AUTOSAVE_INTERVAL_MS = 2000;
+
+/**
+ * 编辑会话收尾的可撤销「已保存」：撤销 = 把该卡还原到本次编辑开始前的内容。
+ * 不走 undoStack 快照——会话可能跨越数分钟，栈顶早被别的操作压过，
+ * 精确还原单卡字段才不会误伤无关改动。
+ */
+export function armNoteEditUndo(id: string, origin: NoteEditOrigin) {
+  setPendingUndo(() => {
+    if ("contentBlocks" in origin) {
+      useNotesStore.getState().updateNoteContent(id, origin.contentBlocks);
+    } else {
+      useNotesStore.getState().updateNoteText(id, origin.text, origin.images);
+    }
+    tip("undone", "已撤销");
+  });
+  tip("ok", "已保存", true);
+}
 
 /** 详情窗最近展示的卡 id（Space 开合判定用；窗口被 Esc/点 X 关掉也无碍——
  *  toggle 前会实测窗口可见性）。 */

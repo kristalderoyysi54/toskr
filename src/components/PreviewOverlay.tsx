@@ -3,7 +3,6 @@ import { AnimatePresence, motion, type Variants } from "motion/react";
 import { Check, Copy, ExternalLink, Pencil, Send, Trash2, X } from "lucide-react";
 
 import { imageCaption } from "@/lib/format";
-import { tip } from "@/lib/tip";
 import { Button } from "@/components/ui/button";
 import { floatingSurface } from "@/components/ui/floating-surface";
 import { IconButton } from "@/components/ui/icon-button";
@@ -13,9 +12,11 @@ import {
   RichNoteTextEditor,
 } from "@/components/RichNoteContent";
 import {
+  armNoteEditUndo,
   copyNoteContent,
   deleteNotesWithUndo,
   enrichLinkMeta,
+  NOTE_EDIT_AUTOSAVE_INTERVAL_MS,
   sendNotesToChat,
   undoableTip,
 } from "@/lib/actions";
@@ -136,31 +137,90 @@ export function PreviewOverlay() {
       setDraft(note.text);
       window.setTimeout(() => textareaRef.current?.focus(), 30);
     }
-  }, [activeEditing, note, orderedRich]);
+    // 只认「会话身份」：note 是 store 活引用，自动保存每次写库都会换对象，
+    // 让它进依赖会把正在输入的草稿重置回已落库文本
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeEditing, note?.id, orderedRich]);
 
-  const save = () => {
-    if (!note) {
-      useUIStore.getState().setPreviewEditing(false);
-      return;
-    }
-    if (orderedRich && note.contentBlocks) {
-      const nextBlocks = normalizeNoteContentBlocks(draftBlocks);
-      if (JSON.stringify(nextBlocks) !== JSON.stringify(note.contentBlocks)) {
-        useNotesStore.getState().updateNoteContent(note.id, nextBlocks);
-        void enrichLinkMeta(note.id);
-        tip("ok", "已保存");
+  // 草稿镜像：自动保存的 interval 与收尾 cleanup 只读 ref，不受闭包旧 state 影响
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const draftBlocksRef = useRef(draftBlocks);
+  draftBlocksRef.current = draftBlocks;
+
+  // 编辑自动保存（面板内预览层，直接写 store）：进入编辑快照原文，每 2s 把
+  // 草稿静默落库；一切退出路径（⌘⏎/Esc/关层/切卡）都汇到 cleanup 收尾——
+  // 有改动补落库并出可撤销「已保存」（撤销 = 回到本次编辑前），草稿被清空
+  // 则还原原文。防写一半白写：崩溃/误关最多丢一个间隔内的输入。
+  useEffect(() => {
+    if (!activeEditing || !note) return;
+    const id = note.id;
+    const originBlocks =
+      orderedRich && note.contentBlocks ? note.contentBlocks : null;
+    const originBlocksJson = originBlocks
+      ? JSON.stringify(normalizeNoteContentBlocks(originBlocks))
+      : null;
+    const session = {
+      originText: note.text,
+      persistedText: note.text,
+      persistedBlocksJson: originBlocksJson,
+    };
+    const noteExists = () =>
+      useNotesStore.getState().notes.some((n) => n.id === id);
+    const persistDraft = () => {
+      if (!noteExists()) return;
+      if (originBlocks) {
+        const next = normalizeNoteContentBlocks(draftBlocksRef.current);
+        const json = JSON.stringify(next);
+        if (json === session.persistedBlocksJson) return;
+        useNotesStore.getState().updateNoteContent(id, next);
+        session.persistedBlocksJson = json;
+        return;
       }
-      useUIStore.getState().setPreviewEditing(false);
-      return;
-    }
-    if (draft.trim() && draft !== note.text) {
-      useNotesStore.getState().updateNoteText(note.id, draft);
-      // 编辑成链接（或改了 URL）时补抓网页标题/图标（幂等）
-      void enrichLinkMeta(note.id);
-      tip("ok", "已保存");
-    }
-    useUIStore.getState().setPreviewEditing(false);
-  };
+      const text = draftRef.current;
+      // 清空态不落库：未写完的空草稿覆盖原文只会造成二次事故
+      if (!text.trim() || text === session.persistedText) return;
+      useNotesStore.getState().updateNoteText(id, text);
+      session.persistedText = text;
+    };
+    const timer = window.setInterval(
+      persistDraft,
+      NOTE_EDIT_AUTOSAVE_INTERVAL_MS
+    );
+    return () => {
+      window.clearInterval(timer);
+      if (!noteExists()) return;
+      if (originBlocks) {
+        const next = normalizeNoteContentBlocks(draftBlocksRef.current);
+        const json = JSON.stringify(next);
+        if (json !== session.persistedBlocksJson) {
+          useNotesStore.getState().updateNoteContent(id, next);
+        }
+        if (json !== originBlocksJson) {
+          void enrichLinkMeta(id);
+          armNoteEditUndo(id, { contentBlocks: originBlocks });
+        }
+        return;
+      }
+      // 清空草稿 = 放弃：还原原文（不出气泡）
+      const text = draftRef.current.trim()
+        ? draftRef.current
+        : session.originText;
+      if (text !== session.persistedText) {
+        useNotesStore.getState().updateNoteText(id, text);
+      }
+      if (text.trim() !== session.originText) {
+        // 编辑成链接（或改了 URL）时补抓网页标题/图标（幂等）
+        void enrichLinkMeta(id);
+        armNoteEditUndo(id, { text: session.originText });
+      }
+    };
+    // 同上：只认会话身份，origin 在会话内必须保持稳定
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeEditing, note?.id, orderedRich]);
+
+  /** 保存按钮/⌘⏎：真正的落库与「已保存」气泡由编辑会话 cleanup 统一收尾。 */
+  const save = () => useUIStore.getState().setPreviewEditing(false);
 
   const copy = () => {
     if (!note) return;
@@ -340,10 +400,8 @@ export function PreviewOverlay() {
                   blocks={draftBlocks}
                   onChange={setDraftBlocks}
                   onSave={save}
-                  onCancel={() => {
-                    setDraftBlocks(note.contentBlocks ?? []);
-                    useUIStore.getState().setPreviewEditing(false);
-                  }}
+                  // 自动保存语义：Esc 退出编辑保留内容，收尾气泡可撤销
+                  onCancel={save}
                 />
               ) : activeEditing ? (
                 <textarea
