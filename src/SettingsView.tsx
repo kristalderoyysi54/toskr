@@ -14,6 +14,7 @@ import {
   Check,
   ClipboardList,
   Database,
+  Eye,
   Info,
   Keyboard,
   KeyRound,
@@ -24,6 +25,7 @@ import {
   Plus,
   Settings2,
   ShieldCheck,
+  Star,
   Trash2,
   TrendingUp,
   X,
@@ -92,6 +94,7 @@ async function requestStorageRecoveryAction(
 import { tip } from "@/lib/tip";
 import { checkForUpdate, downloadAndInstall } from "@/lib/updater";
 import { cn } from "@/lib/utils";
+import { timeAgo } from "@/lib/media";
 import {
   CONTEXT_MENU_REGISTRY,
   HUD_DURATION_MAX_MS,
@@ -960,6 +963,19 @@ function ClipboardSection({ settings, patch }: SP) {
             }
           />
         )}
+        {settings.clipHistory && (
+          <Row
+            label="连续复制两次自动置顶"
+            hint="10 秒内再次复制同一内容，视为想留住它：自动固定 ★，气泡可撤销"
+            right={
+              <Switch
+                aria-label="连续复制两次自动置顶"
+                checked={settings.clipDoubleCopyKeep}
+                onCheckedChange={(v) => patch({ clipDoubleCopyKeep: v })}
+              />
+            }
+          />
+        )}
       </Group>
       <Group title="保留历史">
         <Row
@@ -1042,24 +1058,51 @@ const REVEAL_TIMEOUT_OPTIONS = [
   { value: "0", label: "常驻" },
 ];
 
+const SECRET_FORM_FIELD = `mt-1 ${SECRET_FIELD}`;
+
 /**
- * 共享密钥列表：label（给谁/场景）+ passphrase（共享暗号）+ note（备注何时/与谁约定）。
- * passphrase 创建后不可再编辑——改暗号等于换锁，会让历史秘文永久不可解；要换请新增一条。
+ * 共享密钥管理：列表态一行一条（名称为主，备注/时间为次，操作悬浮显现），
+ * 新增/编辑走展开式表单（与化名词典同款交互）。passphrase 创建后不可再编辑——
+ * 改暗号等于换锁，历史秘文将永久不可解；要换请新增一把。
  */
 function SecretKeysEditor({ settings, patch }: SP) {
   const keys = settings.secretKeys;
-  const updateMeta = (id: string, p: Partial<SecretKey>) =>
-    patch({
-      secretKeys: keys.map((k) =>
-        k.id === id ? { ...k, ...p, updatedAtMs: Date.now() } : k
-      ),
-    });
-  const addKey = () => {
+  const [formOpen, setFormOpen] = useState(false);
+  const [draftLabel, setDraftLabel] = useState("");
+  const [draftPass, setDraftPass] = useState("");
+  const [draftNote, setDraftNote] = useState("");
+  const [formIssue, setFormIssue] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editLabel, setEditLabel] = useState("");
+  const [editNote, setEditNote] = useState("");
+  const [editPass, setEditPass] = useState("");
+  const [revealedId, setRevealedId] = useState<string | null>(null);
+
+  const closeForm = () => {
+    setFormOpen(false);
+    setDraftLabel("");
+    setDraftPass("");
+    setDraftNote("");
+    setFormIssue(null);
+  };
+
+  const saveNew = () => {
+    const label = draftLabel.trim();
+    const passphrase = draftPass.trim();
+    if (!label) {
+      setFormIssue("先给密钥起个名字（给谁 / 场景）");
+      return;
+    }
+    if (!passphrase) {
+      setFormIssue("共享密钥不能为空");
+      return;
+    }
     const now = Date.now();
     const k: SecretKey = {
       id: crypto.randomUUID(),
-      label: "",
-      passphrase: "",
+      label,
+      passphrase,
+      note: draftNote.trim() || undefined,
       createdAtMs: now,
       updatedAtMs: now,
     };
@@ -1067,7 +1110,31 @@ function SecretKeysEditor({ settings, patch }: SP) {
       secretKeys: [...keys, k],
       secretDefaultKeyId: settings.secretDefaultKeyId ?? k.id,
     });
+    closeForm();
   };
+
+  const startEdit = (k: SecretKey) => {
+    setEditingId(k.id);
+    setEditLabel(k.label);
+    setEditNote(k.note ?? "");
+    setEditPass("");
+    setRevealedId(null);
+  };
+
+  const saveEdit = (k: SecretKey) => {
+    const label = editLabel.trim();
+    if (!label) return;
+    const p: Partial<SecretKey> = { label, note: editNote.trim() || undefined };
+    // 仅历史遗留的空钥允许补设一次；已有 passphrase 恒不可改
+    if (!k.passphrase && editPass.trim()) p.passphrase = editPass.trim();
+    patch({
+      secretKeys: keys.map((item) =>
+        item.id === k.id ? { ...item, ...p, updatedAtMs: Date.now() } : item
+      ),
+    });
+    setEditingId(null);
+  };
+
   const removeKey = async (key: SecretKey) => {
     const dependents = useNotesStore
       .getState()
@@ -1090,70 +1157,246 @@ function SecretKeysEditor({ settings, patch }: SP) {
           : settings.secretDefaultKeyId,
     });
   };
+
   return (
-    <Group title="共享密钥（与对方约定完全一致；可为不同人各设一组）">
-      {keys.length === 0 ? (
-        <div className="px-3.5 py-3 text-label text-muted-foreground">
-          还没有密钥。添加一组、与对方约定相同的暗号即可开始加解密。
-        </div>
-      ) : (
-        keys.map((k) => (
-          <div key={k.id} className="flex flex-col gap-2 px-3.5 py-3">
-            <div className="flex items-center gap-2">
+    <Group title="共享密钥">
+      <div className="px-3.5 py-2.5">
+        <p className="text-label text-muted-foreground">
+          每位聊天对象一把；密钥文本双方须一字不差。加密发送默认用 ★ 密钥，收到密文时自动逐把匹配
+        </p>
+
+        {keys.length === 0 ? (
+          <p className="mt-2 text-body text-muted-foreground">
+            还没有密钥。点「添加密钥」，与对方约定同一句暗号即可开始收发。
+          </p>
+        ) : (
+          <ul className="mt-2 space-y-1" aria-label="共享密钥列表">
+            {keys.map((k) => {
+              const isDefault = settings.secretDefaultKeyId === k.id;
+              const revealed = revealedId === k.id;
+              const editing = editingId === k.id;
+              return (
+                <li key={k.id} className="rounded-lg bg-muted/40 px-2 py-1.5">
+                  {editing ? (
+                    <div className="space-y-2 py-1">
+                      <label className="block text-label text-muted-foreground">
+                        名称（给谁 / 场景）
+                        <input
+                          aria-label="密钥名称"
+                          value={editLabel}
+                          maxLength={24}
+                          autoFocus
+                          onChange={(e) => setEditLabel(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") saveEdit(k);
+                            if (e.key === "Escape") setEditingId(null);
+                          }}
+                          className={SECRET_FORM_FIELD}
+                        />
+                      </label>
+                      <label className="block text-label text-muted-foreground">
+                        备注（可选，何时 / 因何约定）
+                        <input
+                          aria-label="密钥备注"
+                          value={editNote}
+                          maxLength={120}
+                          onChange={(e) => setEditNote(e.target.value)}
+                          className={SECRET_FORM_FIELD}
+                        />
+                      </label>
+                      {!k.passphrase && (
+                        <label className="block text-label text-warning">
+                          补设共享密钥（这把还没设置；保存后不可再改）
+                          <input
+                            aria-label="补设共享密钥"
+                            value={editPass}
+                            maxLength={120}
+                            autoComplete="off"
+                            spellCheck={false}
+                            placeholder="中文 / 字符皆可，双方须完全一致"
+                            onChange={(e) => setEditPass(e.target.value)}
+                            className={SECRET_FORM_FIELD}
+                          />
+                        </label>
+                      )}
+                      <div className="flex justify-end gap-2">
+                        <button
+                          onClick={() => setEditingId(null)}
+                          className="rounded-lg px-2.5 py-1 text-label text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          取消
+                        </button>
+                        <button
+                          onClick={() => saveEdit(k)}
+                          className="rounded-lg bg-paper px-3 py-1 text-label font-medium text-paper-foreground outline-none hover:brightness-105 focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          完成
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="group flex items-center gap-2">
+                      <KeyRound className="size-3.5 shrink-0 text-muted-foreground" />
+                      <span
+                        className="min-w-0 shrink-0 truncate text-body font-medium"
+                        title={k.label}
+                      >
+                        {k.label || "未命名"}
+                      </span>
+                      {isDefault && (
+                        <span className="shrink-0 rounded-sm bg-primary/10 px-1 py-0.5 text-micro text-primary">
+                          默认
+                        </span>
+                      )}
+                      {!k.passphrase && (
+                        <span className="shrink-0 rounded-sm bg-warning/10 px-1 py-0.5 text-micro text-warning">
+                          未设密钥
+                        </span>
+                      )}
+                      <span
+                        className="min-w-0 flex-1 truncate text-label text-muted-foreground"
+                        title={k.note}
+                      >
+                        {k.note ?? ""}
+                      </span>
+                      <span className="shrink-0 text-micro text-muted-foreground">
+                        {timeAgo(k.createdAtMs)}
+                      </span>
+                      <IconButton
+                        label={isDefault ? "默认密钥" : "设为默认（加密发送预选）"}
+                        size="xs"
+                        pressed={isDefault}
+                        reveal={isDefault ? "always" : "hover-focus"}
+                        onClick={() => patch({ secretDefaultKeyId: k.id })}
+                      >
+                        <Star className="size-3" />
+                      </IconButton>
+                      <IconButton
+                        label={revealed ? "隐藏密钥" : "显示密钥（与对方核对）"}
+                        size="xs"
+                        pressed={revealed}
+                        reveal="hover-focus"
+                        onClick={() => setRevealedId(revealed ? null : k.id)}
+                      >
+                        <Eye className="size-3" />
+                      </IconButton>
+                      <IconButton
+                        label="编辑名称与备注"
+                        size="xs"
+                        reveal="hover-focus"
+                        onClick={() => startEdit(k)}
+                      >
+                        <Pencil className="size-3" />
+                      </IconButton>
+                      <IconButton
+                        label="删除密钥"
+                        size="xs"
+                        tone="danger"
+                        reveal="hover-focus"
+                        onClick={() => void removeKey(k)}
+                      >
+                        <Trash2 className="size-3" />
+                      </IconButton>
+                    </div>
+                  )}
+                  {revealed && !editing && (
+                    <p className="mt-1 flex items-center gap-1.5 rounded-md bg-background/70 px-2 py-1">
+                      <span className="shrink-0 text-micro text-muted-foreground">
+                        密钥
+                      </span>
+                      <code className="min-w-0 flex-1 truncate text-body">
+                        {k.passphrase || "（未设置）"}
+                      </code>
+                      <span className="shrink-0 text-micro text-muted-foreground">
+                        创建后不可改
+                      </span>
+                    </p>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
+        {formOpen ? (
+          <div className="mt-2 rounded-lg border border-border/60 p-2.5">
+            <label className="block text-label text-muted-foreground">
+              名称（给谁 / 场景）
               <input
-                aria-label="密钥名称"
-                value={k.label}
-                onChange={(e) => updateMeta(k.id, { label: e.target.value })}
-                placeholder="给谁/场景，如「家人」「测试群」"
-                className={SECRET_FIELD}
-              />
-              <IconButton
-                label="删除密钥"
-                tone="danger"
-                onClick={() => void removeKey(k)}
-              >
-                <Trash2 />
-              </IconButton>
-            </div>
-            <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-2 py-1.5">
-              <KeyRound className="size-3.5 shrink-0 text-muted-foreground" />
-              <span className="truncate font-mono text-body text-muted-foreground">
-                {k.passphrase || "（空密钥，请点下方按钮设置）"}
-              </span>
-              <span className="ml-auto shrink-0 text-micro text-muted-foreground">
-                创建后不可改
-              </span>
-            </div>
-            {!k.passphrase && (
-              <input
-                aria-label="设置共享密钥"
+                aria-label="新密钥名称"
+                value={draftLabel}
+                maxLength={24}
                 autoFocus
-                onBlur={(e) => {
-                  const v = e.target.value.trim();
-                  if (v) updateMeta(k.id, { passphrase: v });
+                placeholder="如「家人」「和小李」「测试群」"
+                onChange={(e) => {
+                  setDraftLabel(e.target.value);
+                  setFormIssue(null);
                 }}
-                placeholder="输入共享密钥（中文/字符皆可，双方须完全一致），失焦后锁定"
+                className={SECRET_FORM_FIELD}
+              />
+            </label>
+            <label className="mt-2 block text-label text-muted-foreground">
+              共享密钥（中文 / 字符皆可）
+              <input
+                aria-label="新共享密钥"
+                value={draftPass}
+                maxLength={120}
                 autoComplete="off"
                 spellCheck={false}
-                className={SECRET_FIELD}
+                placeholder="双方须一字不差；首尾空格自动去除"
+                onChange={(e) => {
+                  setDraftPass(e.target.value);
+                  setFormIssue(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") saveNew();
+                }}
+                className={SECRET_FORM_FIELD}
               />
+            </label>
+            <p className="mt-1 text-micro text-muted-foreground">
+              保存后不可修改（改钥 = 换锁，历史秘文会解不开）；当面或经可信渠道告诉对方同一句话
+            </p>
+            <label className="mt-2 block text-label text-muted-foreground">
+              备注（可选）
+              <input
+                aria-label="新密钥备注"
+                value={draftNote}
+                maxLength={120}
+                placeholder="何时 / 因何约定，帮将来的自己想起来"
+                onChange={(e) => setDraftNote(e.target.value)}
+                className={SECRET_FORM_FIELD}
+              />
+            </label>
+            {formIssue && (
+              <p role="alert" className="mt-1.5 text-label text-warning">
+                {formIssue}
+              </p>
             )}
-            <input
-              aria-label="密钥备注"
-              value={k.note ?? ""}
-              onChange={(e) => updateMeta(k.id, { note: e.target.value })}
-              placeholder="备注：何时/因何/与谁设置（可选）"
-              className={SECRET_FIELD}
-            />
+            <div className="mt-2 flex justify-end gap-2">
+              <button
+                onClick={closeForm}
+                className="rounded-lg px-2.5 py-1 text-label text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                取消
+              </button>
+              <button
+                onClick={saveNew}
+                className="rounded-lg bg-paper px-3 py-1 text-label font-medium text-paper-foreground outline-none hover:brightness-105 focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                保存密钥
+              </button>
+            </div>
           </div>
-        ))
-      )}
-      <button
-        onClick={addKey}
-        className="flex items-center gap-1 px-3.5 py-2.5 text-label text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
-      >
-        <Plus className="size-3.5" /> 添加密钥
-      </button>
+        ) : (
+          <button
+            onClick={() => setFormOpen(true)}
+            className="mt-2 flex items-center gap-1 rounded-md px-1.5 py-1 text-label text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+          >
+            <Plus className="size-3.5" /> 添加密钥
+          </button>
+        )}
+      </div>
     </Group>
   );
 }

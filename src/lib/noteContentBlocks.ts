@@ -157,17 +157,52 @@ export function noteContentBlocks(note: NoteContentSource): NoteContentBlock[] {
 export function textFromContentBlocks(
   blocks: readonly NoteContentBlock[]
 ): string {
-  const parts = blocks
-    .filter((block): block is Extract<NoteContentBlock, { type: "text" }> =>
-      block.type === "text"
-    )
-    .map((block) => block.text);
-  return parts.reduce((text, part, index) => {
-    if (index === 0) return part;
-    if (text.endsWith("\n")) return text + part.replace(/^\n+/, "");
-    if (part.startsWith("\n")) return text + part;
-    return `${text}\n${part}`;
-  }, "");
+  return projectBlockText(blocks).text;
+}
+
+/** 文字块在投影文本里的落点（不含块间补的换行）。 */
+export interface TextBlockRange {
+  /** 在原 blocks 数组中的下标（图片块不出现在结果里）。 */
+  blockIndex: number;
+  start: number;
+  end: number;
+}
+
+/**
+ * 各文字块在 textFromContentBlocks 投影里的区间。选词模式按图文顺序摆放
+ * 键帽时，用它把整卡分词结果分派回各块——与投影同源，改拼接规则也不会漂移。
+ */
+export function textBlockRanges(
+  blocks: readonly NoteContentBlock[]
+): TextBlockRange[] {
+  return projectBlockText(blocks).ranges;
+}
+
+function projectBlockText(blocks: readonly NoteContentBlock[]): {
+  text: string;
+  ranges: TextBlockRange[];
+} {
+  const ranges: TextBlockRange[] = [];
+  let text = "";
+  let seen = 0;
+  blocks.forEach((block, blockIndex) => {
+    if (block.type !== "text") return;
+    // 首块原样落地；其后任一侧已有换行就不再叠加，都没有才补一个分隔换行
+    let lead = "";
+    let body = block.text;
+    if (seen > 0) {
+      if (text.endsWith("\n")) body = block.text.replace(/^\n+/, "");
+      else if (!block.text.startsWith("\n")) lead = "\n";
+    }
+    seen += 1;
+    ranges.push({
+      blockIndex,
+      start: text.length + lead.length,
+      end: text.length + lead.length + body.length,
+    });
+    text += lead + body;
+  });
+  return { text, ranges };
 }
 
 /**

@@ -14,6 +14,7 @@ import { ApplicationIcon } from "@/components/ApplicationIcon";
 import {
   ProfileRuleLedger,
   TargetProfileQuickSwitch,
+  type RuleLedgerInteractive,
 } from "@/components/TargetProfileQuickSwitch";
 import { RecentDeliveryDrawer } from "@/components/RecentDeliveryDrawer";
 import { IconButton } from "@/components/ui/icon-button";
@@ -52,8 +53,10 @@ import {
 import { useNotesStore } from "@/store/notesStore";
 import {
   clearTargetProfileOverride,
+  clearTargetRuleOverrides,
   confirmTargetProfileOverride,
   setTargetProfileOverride,
+  setTargetRuleOverride,
   refreshTarget,
   targetProfileIdentity,
   targetReasonLabel,
@@ -70,12 +73,14 @@ export interface TargetLensViewProps {
   reason: TargetStateReason;
   icon: AppIconInfo | null;
   profileName: string;
+  promptGroupId: string;
   promptGroupName: string;
   profileSource: TargetProfileResolutionSource;
   defaultFormat: DeliveryFormat;
   enterPolicy: EnterPolicy;
   keepPanel: boolean;
   privacyCapabilityActive: boolean;
+  ruleInteractive?: RuleLedgerInteractive;
   profileId: string;
   profileOverrideNeedsConfirmation: boolean;
   profileOverrideId: string | null;
@@ -101,6 +106,7 @@ function toQuickProfile(
   return {
     id: profile.id,
     name: profile.name,
+    promptGroupId: profile.promptGroupId,
     promptGroupName:
       groups.find((group) => group.id === profile.promptGroupId)?.name ?? "通用",
     defaultFormat: profile.defaultFormat,
@@ -143,12 +149,14 @@ export function TargetLensView({
   reason,
   icon,
   profileName,
+  promptGroupId,
   promptGroupName,
   profileSource,
   defaultFormat,
   enterPolicy,
   keepPanel,
   privacyCapabilityActive,
+  ruleInteractive,
   profileId,
   profileOverrideNeedsConfirmation,
   profileOverrideId,
@@ -237,12 +245,21 @@ export function TargetLensView({
     () => ({
       id: profileId,
       name: profileName,
+      promptGroupId,
       promptGroupName,
       defaultFormat,
       enterPolicy,
       keepPanel,
     }),
-    [defaultFormat, enterPolicy, keepPanel, profileId, profileName, promptGroupName]
+    [
+      defaultFormat,
+      enterPolicy,
+      keepPanel,
+      profileId,
+      profileName,
+      promptGroupId,
+      promptGroupName,
+    ]
   );
   const refreshControl = (
     <IconButton
@@ -416,6 +433,7 @@ export function TargetLensView({
                   currentProfile={currentQuickProfile}
                   candidates={quickProfiles}
                   privacyCapabilityActive={privacyCapabilityActive}
+                  ruleInteractive={ruleInteractive}
                   temporaryProfileId={profileOverrideId}
                   automaticProfileName={automaticProfileName}
                   canMakePermanent={canMakePermanent}
@@ -449,6 +467,7 @@ export function TargetLensView({
             className="mt-2"
             profile={currentQuickProfile}
             privacyCapabilityActive={privacyCapabilityActive}
+            interactive={ruleInteractive}
           />
         </div>
       )}
@@ -478,6 +497,10 @@ export function TargetLensBar() {
   );
   const profileOverrideNeedsConfirmation = useTargetStore(
     (state) => state.profileOverrideNeedsConfirmation
+  );
+  const ruleOverrides = useTargetStore((state) => state.ruleOverrides);
+  const ruleOverridesTargetIdentity = useTargetStore(
+    (state) => state.ruleOverridesTargetIdentity
   );
   const targetIdentity = useMemo(() => targetProfileIdentity(snapshot), [snapshot]);
 
@@ -514,6 +537,8 @@ export function TargetLensBar() {
         temporaryTargetIdentity: profileOverrideTargetIdentity,
         temporaryNeedsConfirmation: profileOverrideNeedsConfirmation,
         privacyCapabilityActive: firewallEnabled,
+        ruleOverrides,
+        ruleOverridesTargetIdentity,
       }),
     [
       defaultTargetProfileId,
@@ -522,6 +547,8 @@ export function TargetLensBar() {
       profileOverrideTargetIdentity,
       profileOverrideNeedsConfirmation,
       promptGroups,
+      ruleOverrides,
+      ruleOverridesTargetIdentity,
       snapshot?.bundleId,
       status,
       targetIdentity,
@@ -650,6 +677,20 @@ export function TargetLensBar() {
       targetProfileId: resolution.profileId,
     });
   }, [resolution.profileId]);
+  // 行内快捷切换注入包：目标未就绪时禁用（覆盖按目标身份存放，无身份即无处挂）
+  const ruleInteractive = useMemo<RuleLedgerInteractive>(
+    () => ({
+      promptGroupOptions: promptGroups.map((group) => ({
+        value: group.id,
+        label: group.name,
+      })),
+      overriddenKeys: resolution.ruleOverriddenKeys,
+      disabled: !targetIdentity,
+      onOverride: setTargetRuleOverride,
+      onReset: clearTargetRuleOverrides,
+    }),
+    [promptGroups, resolution.ruleOverriddenKeys, targetIdentity]
+  );
 
   return (
     <>
@@ -659,6 +700,7 @@ export function TargetLensBar() {
         reason={reason}
         icon={icon}
         profileName={resolution.profile.name}
+        promptGroupId={resolution.profile.promptGroupId}
         promptGroupName={resolution.promptGroup.name}
         profileSource={resolution.source}
         profileId={resolution.profileId}
@@ -666,6 +708,7 @@ export function TargetLensBar() {
         enterPolicy={resolution.profile.enterPolicy}
         keepPanel={resolution.profile.keepPanel}
         privacyCapabilityActive={resolution.privacyCapabilityActive}
+        ruleInteractive={ruleInteractive}
         profileOverrideNeedsConfirmation={profileOverrideNeedsConfirmation}
         profileOverrideId={profileOverrideId}
         profileOverrideName={profileOverrideName}

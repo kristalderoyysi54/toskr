@@ -32,6 +32,7 @@ function draft(patch: Partial<DeliveryDraft> = {}): DeliveryDraft {
     sourceItemIds: ["note-1"],
     selectionItemIds: ["note-1"],
     rawText: "原始正文",
+    sourceTextOverride: null,
     assembledText: "原始正文",
     finalText: "原始正文",
     originalImageFiles: [],

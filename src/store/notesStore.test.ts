@@ -770,6 +770,45 @@ describe("notesStore 基础", () => {
     expect(after[0].imageFile).toBe("img-x.png");
   });
 
+  it("连续复制两次手势：10 秒内二次复制自动置顶并回传 autoKept", () => {
+    const s = useNotesStore.getState();
+    s.addClipNote("重要地址内容", { createdAt: 1_000 });
+    const res = s.addClipNote("重要地址内容", { createdAt: 9_000 });
+    const card = useNotesStore.getState().notes[0];
+    expect(card.keep).toBe(true);
+    expect(res.autoKept).toEqual({ id: card.id, preview: "重要地址内容" });
+  });
+
+  it("连续复制两次手势：超出 10 秒窗口只提升不置顶", () => {
+    const s = useNotesStore.getState();
+    s.addClipNote("过会儿再复制", { createdAt: 1_000 });
+    const res = s.addClipNote("过会儿再复制", { createdAt: 12_001 });
+    const card = useNotesStore.getState().notes[0];
+    expect(card.keep).toBeUndefined();
+    expect(res.autoKept).toBeUndefined();
+    expect(card.createdAt).toBe(12_001);
+  });
+
+  it("连续复制两次手势：已置顶卡不重复触发信号", () => {
+    const s = useNotesStore.getState();
+    s.addClipNote("已经钉住", { createdAt: 1_000 });
+    s.addClipNote("已经钉住", { createdAt: 2_000 }); // 首次触发置顶
+    const res = s.addClipNote("已经钉住", { createdAt: 3_000 });
+    expect(useNotesStore.getState().notes[0].keep).toBe(true);
+    expect(res.autoKept).toBeUndefined();
+  });
+
+  it("连续复制两次手势：设置关闭后不触发", () => {
+    useNotesStore.setState({
+      settings: { ...defaultSettings(), clipDoubleCopyKeep: false },
+    });
+    const s = useNotesStore.getState();
+    s.addClipNote("开关已关", { createdAt: 1_000 });
+    const res = s.addClipNote("开关已关", { createdAt: 2_000 });
+    expect(useNotesStore.getState().notes[0].keep).toBeUndefined();
+    expect(res.autoKept).toBeUndefined();
+  });
+
   it("mergeNotes 剪贴板域：产出新组合卡置顶，原卡保持原样", () => {
     const s = useNotesStore.getState();
     s.addClipNote("甲", {});

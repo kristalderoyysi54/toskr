@@ -118,6 +118,7 @@ export function rebuildPreflightDraft(
       format: changes.format ?? draft.format,
       promptSnippetId,
       promptTemplate: promptTemplate ?? undefined,
+      sourceTextOverride: draft.sourceTextOverride ?? undefined,
     },
     state
   );

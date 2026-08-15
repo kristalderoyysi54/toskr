@@ -252,9 +252,11 @@ describe("发送入口路由", () => {
     );
     expect(overlay).toContain("previewSource={imagePreviewSource}");
     expect(app).toContain(
-      'listen<{ id: string; dataGeneration: number }>("toskr://note-send"'
+      'listen<{ id: string; dataGeneration: number; text?: string }>(\n        "toskr://note-send"'
     );
-    expect(app).toContain("void sendNotesToChat([e.payload.id])");
+    // 片段发送：text 存在时以 overrideText 只发选中片段，仍以该卡为来源
+    expect(app).toContain("void sendNotesToChat(\n          [e.payload.id],");
+    expect(app).toContain("{ overrideText: e.payload.text }");
   });
 
   it("剪贴板卡内部追加由共享事件契约连接 actions 与文本编辑器", () => {

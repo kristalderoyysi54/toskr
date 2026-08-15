@@ -84,6 +84,7 @@ const profileResolution: TargetProfileResolution = {
   privacyCapabilityActive: false,
   safetyClamped: false,
   duplicateBundleProfileIds: ["safe"],
+  ruleOverriddenKeys: [],
 };
 
 function draft(overrides: Partial<DeliveryDraft> = {}): DeliveryDraft {
@@ -95,6 +96,7 @@ function draft(overrides: Partial<DeliveryDraft> = {}): DeliveryDraft {
     sourceItemIds: ["one"],
     selectionItemIds: ["one"],
     rawText: "正文",
+    sourceTextOverride: null,
     assembledText: "正文",
     finalText: "正文",
     originalImageFiles: [],

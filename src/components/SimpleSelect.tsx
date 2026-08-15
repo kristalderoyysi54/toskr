@@ -43,7 +43,9 @@ export function SimpleSelect<T extends string>({
       menuRole="listbox"
       menuAriaLabel={ariaLabel}
       className={cn("block", className)}
-      menuClassName="max-h-64 w-full min-w-full overflow-y-auto"
+      // 宽度自适应：内容定宽（w-max，选项不再逐字换行）、下限对齐触发钮
+      // （min-w-full，设置行外观不变）、上限封顶防溢出面板（过长标签才折行）
+      menuClassName="max-h-64 w-max min-w-full max-w-56 overflow-y-auto"
       trigger={({ open, toggle, controls }) => (
         <button
           type="button"

@@ -86,6 +86,7 @@ export const TARGET_PROFILE_SOURCE_LABEL: Record<
 export interface QuickProfileOption {
   id: string;
   name: string;
+  promptGroupId: string;
   promptGroupName: string;
   defaultFormat: DeliveryFormat;
   enterPolicy: EnterPolicy;
