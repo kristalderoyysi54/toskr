@@ -961,6 +961,49 @@ describe("executeDeliveryDraft", () => {
     expect(useDeliveryStore.getState().lastError).toContain("可以修改后重试");
   });
 
+  it("同一目标刷新轮换 token 不算目标变化，Draft 照常发出", async () => {
+    const id = useNotesStore.getState().addNote("选中片段").id!;
+    useNotesStore.getState().setChecked([id]);
+    const draft = executableNoteDraft([id]);
+    // 详情窗「发送选中」关窗那一下必然触发一次刷新：同一进程/同一窗口，
+    // 只有能力令牌与观测时钟在动
+    const rotated: TargetSnapshot = {
+      ...target,
+      token: "rotated-token",
+      revision: target.revision + 1,
+      capturedAtMs: target.capturedAtMs + 1,
+    };
+    applyTargetEvent(rotated);
+    apiMocks.refreshTargetSnapshot.mockResolvedValue(rotated);
+
+    const outcome = await executeDeliveryDraft(draft);
+
+    expect(outcome?.status).toBe("sent");
+    // 下发用的是刷新后的能力令牌，不是 Draft 里那枚旧的
+    expect(apiMocks.sendDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ targetToken: "rotated-token" })
+    );
+  });
+
+  it("目标换成另一个进程时仍然拦下发送", async () => {
+    const id = useNotesStore.getState().addNote("目标真的换了").id!;
+    useNotesStore.getState().setChecked([id]);
+    const draft = executableNoteDraft([id]);
+    applyTargetEvent({
+      ...target,
+      token: "other-token",
+      pid: 84,
+      launchedAtMs: 300,
+      revision: target.revision + 1,
+      capturedAtMs: target.capturedAtMs + 1,
+    });
+
+    await expect(executeDeliveryDraft(draft)).resolves.toBeNull();
+
+    expect(apiMocks.sendDelivery).not.toHaveBeenCalled();
+    expect(tip).toHaveBeenCalledWith("warn", "发送目标已变化，请确认后重试发送");
+  });
+
   it("旧 revision 在执行前 fail-closed，不触发 Native 副作用", async () => {
     const id = useNotesStore.getState().addNote("旧草稿").id!;
     const draft = executableNoteDraft([id]);
