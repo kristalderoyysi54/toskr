@@ -3355,9 +3355,12 @@ export default function App() {
                                   }}
                                 >
                                   <Eraser className="size-3.5" />
-                                  {page === "notes"
-                                    ? `清理 ${doneCount} 条已完成`
-                                    : `清理 ${doneTaskCount} 个已完成任务`}
+                                  {/* nowrap 撑宽菜单：min-w 下长文案+快捷键会折行错位 */}
+                                  <span className="whitespace-nowrap">
+                                    {page === "notes"
+                                      ? `清理 ${doneCount} 条已完成`
+                                      : `清理 ${doneTaskCount} 个已完成任务`}
+                                  </span>
                                   <span className="ml-auto pl-2 text-micro text-muted-foreground">
                                     ⇧⌘⌫
                                   </span>
