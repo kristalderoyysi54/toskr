@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { ChevronLeft, Plus, Search, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, Plus, Search, X } from "lucide-react";
+
+import { SimpleMenu, SimpleMenuItem } from "@/components/SimpleMenu";
 
 import {
   BILL_CATALOG,
@@ -367,21 +369,16 @@ export function AddBillFlow({
                 <Field label={form.kind === "creditCard" ? "金额（可留空，每期可改）" : "每期金额"}>
                   <div className="flex gap-1.5">
                     {/* 货币下拉与金额同排（面板窄，省一行；符号即存储值） */}
-                    <select
+                    <FormSelect
+                      ariaLabel="货币"
+                      className="w-26 shrink-0"
                       value={form.currency}
-                      onChange={(e) => setForm({ ...form, currency: e.target.value })}
-                      aria-label="货币"
-                      className="rounded-md border border-border bg-transparent px-1 py-1 text-body outline-none focus:border-primary/50"
-                    >
-                      {(CURRENCY_OPTIONS.some((o) => o.symbol === form.currency)
+                      options={(CURRENCY_OPTIONS.some((o) => o.symbol === form.currency)
                         ? CURRENCY_OPTIONS
                         : [{ symbol: form.currency, label: form.currency }, ...CURRENCY_OPTIONS]
-                      ).map((o) => (
-                        <option key={o.symbol} value={o.symbol}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
+                      ).map((o) => ({ value: o.symbol, label: o.label }))}
+                      onChange={(currency) => setForm({ ...form, currency })}
+                    />
                     <input
                       type="number"
                       min="0"
@@ -395,17 +392,12 @@ export function AddBillFlow({
                 </Field>
                 {form.kind === "subscription" && (
                   <Field label="类别">
-                    <select
+                    <FormSelect
+                      ariaLabel="类别"
                       value={form.category}
-                      onChange={(e) => setForm({ ...form, category: e.target.value })}
-                      className="w-full rounded-md border border-border bg-transparent px-1 py-1 text-body outline-none focus:border-primary/50"
-                    >
-                      {BILL_CATEGORY_OPTIONS.map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
+                      options={BILL_CATEGORY_OPTIONS}
+                      onChange={(category) => setForm({ ...form, category })}
+                    />
                   </Field>
                 )}
                 {form.kind === "subscription" ? (
@@ -519,5 +511,59 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="text-micro text-muted-foreground">{label}</span>
       {children}
     </label>
+  );
+}
+
+/** 表单下拉：应用内浮层样式（SimpleMenu listbox），替代系统默认 select 外观。 */
+function FormSelect({
+  value,
+  options,
+  onChange,
+  ariaLabel,
+  className,
+}: {
+  value: string;
+  options: { value: string; label: string }[];
+  onChange: (value: string) => void;
+  ariaLabel: string;
+  className?: string;
+}) {
+  const current = options.find((o) => o.value === value);
+  return (
+    <SimpleMenu
+      className={className}
+      menuRole="listbox"
+      menuAriaLabel={ariaLabel}
+      align="start"
+      trigger={({ toggle, controls, open }) => (
+        <button
+          type="button"
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          aria-controls={controls}
+          aria-label={ariaLabel}
+          onClick={toggle}
+          className="flex w-full items-center justify-between gap-1 rounded-md border border-border bg-transparent px-1.5 py-1 text-body outline-none focus-visible:border-primary/50"
+        >
+          <span className="truncate">{current?.label ?? value}</span>
+          <ChevronDown className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+        </button>
+      )}
+    >
+      {(close) =>
+        options.map((o) => (
+          <SimpleMenuItem
+            key={o.value}
+            selected={o.value === value}
+            onClick={() => {
+              onChange(o.value);
+              close();
+            }}
+          >
+            {o.label}
+          </SimpleMenuItem>
+        ))
+      }
+    </SimpleMenu>
   );
 }

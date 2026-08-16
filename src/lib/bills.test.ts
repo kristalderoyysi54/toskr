@@ -5,11 +5,17 @@ import {
   billDueLabel,
   billFallbackColor,
   billsDueWithinDays,
+  categoryBreakdown,
   compareBills,
   dueBillsToRemind,
+  formatCurrencyTotals,
+  monthlyEquivalent,
+  monthlyFixedSpendByCurrency,
   monthlySpendTotal,
+  monthlySpendTotalsByCurrency,
   sixMonthTrend,
   startOfBillDay,
+  yearlySpendTrend,
 } from "@/lib/bills";
 import {
   decodePersistedState,
@@ -158,6 +164,59 @@ describe("消费聚合", () => {
     const trend = sixMonthTrend([b], now);
     expect(trend.map((m) => m.label)).toEqual(["9月", "10月", "11月", "12月", "1月", "2月"]);
     expect(trend.map((m) => m.total)).toEqual([30, 0, 0, 40, 0, 50]);
+  });
+
+  it("monthlyEquivalent 各周期折算到月", () => {
+    expect(monthlyEquivalent(bill({ amount: 12, cycle: "monthly" }))).toBe(12);
+    expect(monthlyEquivalent(bill({ amount: 30, cycle: "quarterly" }))).toBe(10);
+    expect(monthlyEquivalent(bill({ amount: 60, cycle: "semiannual" }))).toBe(10);
+    expect(monthlyEquivalent(bill({ amount: 120, cycle: "yearly" }))).toBe(10);
+    expect(monthlyEquivalent(bill({ amount: 12, cycle: "weekly" }))).toBeCloseTo(52.18, 1);
+    expect(monthlyEquivalent(bill({ amount: null }))).toBe(0);
+  });
+
+  it("categoryBreakdown 只统计活跃订阅、未填类别归 other、按月折算降序", () => {
+    const list = categoryBreakdown([
+      bill({ id: "a", amount: 120, cycle: "yearly", category: "ai" }),
+      bill({ id: "b", amount: 30, cycle: "monthly" }),
+      bill({ id: "c", amount: 99, category: "music", status: "paused" }),
+      bill({ id: "d", kind: "creditCard", amount: 999 }),
+    ]);
+    expect(list).toEqual([
+      { category: "other", total: 30 },
+      { category: "ai", total: 10 },
+    ]);
+  });
+
+  it("多币种：本月/月固定分币种小计，主货币在前；展示串用 + 连接", () => {
+    const now = ts(2026, 8, 16);
+    const bills = [
+      bill({ id: "a", amount: 68, nextDueAt: ts(2026, 8, 20) }),
+      bill({ id: "b", amount: 15.99, currency: "US$", nextDueAt: ts(2026, 8, 22) }),
+    ];
+    const totals = monthlySpendTotalsByCurrency(bills, now, "¥");
+    expect(totals).toEqual([
+      { currency: "¥", total: 68 },
+      { currency: "US$", total: 15.99 },
+    ]);
+    expect(formatCurrencyTotals(totals, "¥")).toBe("¥68 + US$15.99");
+    expect(formatCurrencyTotals([], "¥")).toBe("¥0");
+    expect(monthlyFixedSpendByCurrency(bills, "¥")).toEqual([
+      { currency: "¥", total: 68 },
+      { currency: "US$", total: 15.99 },
+    ]);
+  });
+
+  it("yearlySpendTrend 按年分桶补 0", () => {
+    const b = bill({
+      history: [
+        { id: "e1", periodDueAt: ts(2024, 5, 1), amount: 100, paidAt: ts(2024, 5, 1), method: "auto" },
+        { id: "e2", periodDueAt: ts(2026, 2, 1), amount: 50, paidAt: ts(2026, 2, 1), method: "auto" },
+      ],
+    });
+    expect(yearlySpendTrend([b], ts(2026, 8, 16), 4).map((y) => y.total)).toEqual([
+      0, 100, 0, 50,
+    ]);
   });
 
   it("billsDueWithinDays 只含未来 7 天 active（含今天，逾期与暂停排除）", () => {

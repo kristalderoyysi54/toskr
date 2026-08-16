@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
-import { CreditCard, Plus } from "lucide-react";
+import { ChartColumn, CreditCard, Plus } from "lucide-react";
 
 import { AddBillFlow } from "@/components/subscriptions/AddBillFlow";
+import { BillAnalytics } from "@/components/subscriptions/BillAnalytics";
 import { BillList, BillRow } from "@/components/subscriptions/BillList";
 import { BillMonthGrid } from "@/components/subscriptions/BillMonthGrid";
 import { BillTrendChart } from "@/components/subscriptions/BillTrendChart";
@@ -14,8 +15,8 @@ import { Segmented } from "@/components/ui/segmented";
 import {
   billOccurrencesInRange,
   billsDueWithinDays,
-  formatBillAmount,
-  monthlySpendTotal,
+  formatCurrencyTotals,
+  monthlySpendTotalsByCurrency,
   startOfBillDay,
 } from "@/lib/bills";
 import { useNotesStore, type Bill } from "@/store/notesStore";
@@ -40,9 +41,14 @@ export function SubscriptionsPage({ bills, now }: { bills: Bill[]; now: number }
   const [filter, setFilter] = useState<"upcoming" | "all">("upcoming");
   const [selectedDay, setSelectedDay] = useState(() => startOfBillDay(now));
   const [flow, setFlow] = useState<{ open: boolean; edit?: Bill }>({ open: false });
+  const [analyticsOpen, setAnalyticsOpen] = useState(false);
 
   const upcoming = useMemo(() => billsDueWithinDays(bills, now, 7), [bills, now]);
-  const monthTotal = useMemo(() => monthlySpendTotal(bills, now), [bills, now]);
+  // 多币种时不做汇率直加，按币种分列小计（「¥68 + US$16」）
+  const monthTotalText = useMemo(
+    () => formatCurrencyTotals(monthlySpendTotalsByCurrency(bills, now, currency), currency),
+    [bills, now, currency]
+  );
   const dayBills = useMemo(
     () =>
       bills.filter(
@@ -85,9 +91,8 @@ export function SubscriptionsPage({ bills, now }: { bills: Bill[]; now: number }
       {/* 摘要条：本月消费 + 未来 7 天到期数 + 添加入口 */}
       <div className="flex items-center gap-2 px-3.5 pb-1">
         <div className="min-w-0 flex-1">
-          <p className="text-title font-semibold tabular-nums">
-            本月 {currency}
-            {formatBillAmount(monthTotal)}
+          <p className="truncate text-title font-semibold tabular-nums" title={`本月 ${monthTotalText}`}>
+            本月 {monthTotalText}
           </p>
           <p className="text-micro text-muted-foreground">
             {upcoming.length
@@ -105,6 +110,9 @@ export function SubscriptionsPage({ bills, now }: { bills: Bill[]; now: number }
           ]}
           onChange={setView}
         />
+        <IconButton label="消费分析" size="sm" onClick={() => setAnalyticsOpen(true)}>
+          <ChartColumn />
+        </IconButton>
         <IconButton label="添加订阅" size="sm" onClick={() => setFlow({ open: true })}>
           <Plus />
         </IconButton>
@@ -156,13 +164,26 @@ export function SubscriptionsPage({ bills, now }: { bills: Bill[]; now: number }
             </div>
             <BillList bills={bills} now={now} filter={filter} onEdit={openEdit} />
           </div>
-          <BillTrendChart bills={bills} now={now} currency={currency} />
+          {/* 迷你趋势即分析入口：点击展开完整消费分析 */}
+          <button
+            onClick={() => setAnalyticsOpen(true)}
+            aria-label="打开消费分析"
+            className="rounded-xl text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <BillTrendChart bills={bills} now={now} currency={currency} />
+          </button>
         </div>
       </ScrollArea>
       <AddBillFlow
         open={flow.open}
         edit={flow.edit}
         onOpenChange={(open) => setFlow((f) => ({ open, edit: open ? f.edit : undefined }))}
+      />
+      <BillAnalytics
+        bills={bills}
+        now={now}
+        open={analyticsOpen}
+        onOpenChange={setAnalyticsOpen}
       />
     </>
   );
