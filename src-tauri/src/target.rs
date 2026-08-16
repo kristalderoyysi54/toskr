@@ -78,12 +78,21 @@ impl TargetSnapshot {
     }
 }
 
+/// 前台落在给不出进程身份的界面（系统浮层/权限面板等「非发送类」表面）时，
+/// 健康目标的保留宽限：这类表面本就不可能成为发送目标，立即清场只会制造
+/// 「目标已失效」误报；发送前仍有身份/前台复核兜底，宽限不放松任何校验。
+const UNAVAILABLE_FRONT_GRACE_MS: i64 = 30_000;
+
 #[derive(Default)]
 pub struct TargetState {
     token_generation: u64,
     revision: u64,
     last_observation_revision: u64,
     pending_observation_after: Option<u64>,
+    /// 首次观测到无身份前台的时钟（None = 前台仍在可识别应用上）；
+    /// 宽限从「前台离开目标」那一刻起算，而非上次健康观测——观测只在
+    /// 焦点切换时发生，用户在目标里停留多久都不该吃掉宽限。
+    unavailable_since_ms: Option<i64>,
     current: Option<TargetSnapshot>,
 }
 
@@ -103,9 +112,32 @@ impl TargetState {
                 && snapshot.bundle_id.as_deref() == Some(identity.bundle_id.as_str())
                 && snapshot.launched_at_ms == Some(identity.launched_at_ms)
         }) {
+            self.unavailable_since_ms = None;
             return self.current.clone().expect("checked above");
         }
         self.capture(identity, at_ms)
+    }
+
+    /// 无法识别身份的前台观测：现有 ready 目标在宽限期内保持可用（不清场、
+    /// 不换 token），否则按原样降级为 TargetIdentityUnavailable。
+    /// 返回 (快照, 是否采纳了这个前台作为新目标)。
+    pub fn observe_unavailable(
+        &mut self,
+        front: &FrontApp,
+        at_ms: i64,
+        observation_revision: u64,
+    ) -> (TargetSnapshot, bool) {
+        if !self.accept_observation(observation_revision) {
+            return (self.current(at_ms), false);
+        }
+        if self.current.as_ref().is_some_and(|snapshot| snapshot.ready) {
+            let since = *self.unavailable_since_ms.get_or_insert(at_ms);
+            if at_ms.saturating_sub(since) <= UNAVAILABLE_FRONT_GRACE_MS {
+                return (self.current.clone().expect("checked above"), false);
+            }
+        }
+        self.unavailable_since_ms = None;
+        (self.reject(TargetSnapshot::unavailable(front, at_ms)), true)
     }
 
     pub fn refresh(&mut self, identity: TargetIdentity, at_ms: i64) -> TargetSnapshot {
@@ -123,17 +155,6 @@ impl TargetState {
         snapshot.revision = self.next_revision();
         self.current = Some(snapshot.clone());
         snapshot
-    }
-
-    fn reject_observation(
-        &mut self,
-        snapshot: TargetSnapshot,
-        observation_revision: u64,
-    ) -> TargetSnapshot {
-        if !self.accept_observation(observation_revision) {
-            return self.current(snapshot.captured_at_ms);
-        }
-        self.reject(snapshot)
     }
 
     fn accept_observation(&mut self, observation_revision: u64) -> bool {
@@ -232,6 +253,7 @@ impl TargetState {
     }
 
     fn capture(&mut self, identity: TargetIdentity, at_ms: i64) -> TargetSnapshot {
+        self.unavailable_since_ms = None;
         self.token_generation = self.token_generation.wrapping_add(1).max(1);
         let revision = self.next_revision();
         let bundle_hash = identity
@@ -312,14 +334,16 @@ pub fn observe_front(app: &AppHandle, front: &FrontApp) -> TargetSnapshot {
     let accepted =
         target.current.is_none() || front.observation_revision > target.last_observation_revision;
     let previous = target.current.clone();
-    let snapshot = match target_identity(front) {
-        Some(identity) => target.observe(identity, at_ms, front.observation_revision),
-        None => target.reject_observation(
-            TargetSnapshot::unavailable(front, at_ms),
-            front.observation_revision,
+    let (snapshot, adopted) = match target_identity(front) {
+        Some(identity) => (
+            target.observe(identity, at_ms, front.observation_revision),
+            true,
         ),
+        None => target.observe_unavailable(front, at_ms, front.observation_revision),
     };
-    if accepted {
+    // 宽限保留旧目标时不改 prev_app_pid：焦点归还必须回到真目标，
+    // 不能落在无身份浮层上
+    if accepted && adopted {
         *state.prev_app_pid.lock().unwrap() = Some(front.pid);
     }
     // mutation 与 enqueue 共享同一串行区；前端 revision 继续兜底事件传输倒序。
@@ -550,6 +574,72 @@ mod tests {
             reason: Some(TargetReason::TargetIdentityUnavailable),
             window_id: None,
         }
+    }
+
+    fn identityless_front(observation_revision: u64) -> FrontApp {
+        FrontApp {
+            pid: 9_999,
+            name: Some("SystemOverlay".into()),
+            bundle_id: None,
+            launched_at_ms: None,
+            observation_revision,
+        }
+    }
+
+    #[test]
+    fn identityless_front_keeps_ready_target_within_grace() {
+        let mut state = TargetState::default();
+        let healthy = state.observe(codex(), 1_000, 1);
+
+        // 宽限期内：无身份前台不清场，token 与身份保持不变（不采纳该前台）
+        let (kept, adopted) =
+            state.observe_unavailable(&identityless_front(2), 1_000 + 5_000, 2);
+        assert!(!adopted);
+        assert!(kept.ready);
+        assert_eq!(kept.token, healthy.token);
+
+        // 切回同一目标：立即恢复且 token 不轮换
+        let back = state.observe(codex(), 1_000 + 6_000, 3);
+        assert!(back.ready);
+        assert_eq!(back.token, healthy.token);
+    }
+
+    #[test]
+    fn identityless_front_degrades_after_grace() {
+        let mut state = TargetState::default();
+        let healthy = state.observe(codex(), 1_000, 1);
+
+        // 无论在目标里停留多久，首次无身份观测都从此刻起算宽限
+        let (kept, adopted) =
+            state.observe_unavailable(&identityless_front(2), 600_000, 2);
+        assert!(!adopted);
+        assert_eq!(kept.token, healthy.token);
+
+        // 持续停留在无身份前台超过宽限：按原样降级失效
+        let (degraded, adopted) = state.observe_unavailable(
+            &identityless_front(3),
+            600_000 + UNAVAILABLE_FRONT_GRACE_MS + 1,
+            3,
+        );
+        assert!(adopted);
+        assert!(!degraded.ready);
+        assert_eq!(
+            degraded.reason,
+            Some(TargetReason::TargetIdentityUnavailable)
+        );
+        assert_ne!(degraded.token, healthy.token);
+    }
+
+    #[test]
+    fn identityless_front_without_healthy_target_degrades_immediately() {
+        let mut state = TargetState::default();
+        let (snapshot, adopted) = state.observe_unavailable(&identityless_front(1), 1_000, 1);
+        assert!(adopted);
+        assert!(!snapshot.ready);
+        assert_eq!(
+            snapshot.reason,
+            Some(TargetReason::TargetIdentityUnavailable)
+        );
     }
 
     #[test]
