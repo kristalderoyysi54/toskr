@@ -78,10 +78,12 @@ export function BillMonthGrid({
       };
     });
 
-    // 已续订 = 本月已落账的记账事件数；即将续订 = 本月剩余（今天起）的到期次数
+    // 已续订 = 本月已落账的记账事件数；即将续订 = 本月剩余（今天起）的到期次数。
+    // 只数订阅：信用卡是「还款」不是「续订」，混进来口径失真（用户 2026-08-16 指定）
     let renewed = 0;
     let upcoming = 0;
     for (const bill of bills) {
+      if (bill.kind !== "subscription") continue;
       for (const ev of bill.history) {
         if (ev.periodDueAt >= monthStart && ev.periodDueAt < monthEnd) renewed += 1;
       }
@@ -98,14 +100,15 @@ export function BillMonthGrid({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bills, monthOffset, now]);
 
-  const statusCount = useMemo(
-    () => ({
-      active: bills.filter((b) => b.status === "active").length,
-      paused: bills.filter((b) => b.status === "paused").length,
-      canceled: bills.filter((b) => b.status === "canceled").length,
-    }),
-    [bills]
-  );
+  // 状态统计同样只数订阅（月历格子本身仍显示信用卡到期，不受影响）
+  const statusCount = useMemo(() => {
+    const subs = bills.filter((b) => b.kind === "subscription");
+    return {
+      active: subs.filter((b) => b.status === "active").length,
+      paused: subs.filter((b) => b.status === "paused").length,
+      canceled: subs.filter((b) => b.status === "canceled").length,
+    };
+  }, [bills]);
 
   return (
     <div className="surface-inset rounded-xl p-2">

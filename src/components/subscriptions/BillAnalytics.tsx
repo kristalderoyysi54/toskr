@@ -49,7 +49,8 @@ function categoryLabel(category: string): string {
  * 消费分析全屏覆盖层：指标卡（本月/月固定/年度/活跃）+ 月/年趋势柱状 +
  * 类别环形（conic-gradient，零图表库）。
  * 口径：趋势 = 真实记账（含信用卡已还）；月固定支出与类别构成 = 活跃订阅
- * 的月折算（信用卡还款波动大，刻意排除，见 lib/bills 注释）。
+ * 的月折算（信用卡还款波动大，刻意排除，见 lib/bills 注释）；活跃/总数
+ * 计数 = 仅订阅（信用卡是还款提醒，不算订阅）。
  */
 export function BillAnalytics({
   bills,
@@ -108,7 +109,11 @@ export function BillAnalytics({
         ? `${approx}${currency}${formatBillAmount(Math.round(yearSpendTotal(bills, now, conv) * 100) / 100)}`
         : yearParts,
       yearParts,
-      active: bills.filter((b) => b.status === "active").length,
+      // 活跃/总数只数订阅：信用卡还款是提醒不是订阅（用户 2026-08-16 指定）
+      active: bills.filter(
+        (b) => b.kind === "subscription" && b.status === "active"
+      ).length,
+      subscriptionCount: bills.filter((b) => b.kind === "subscription").length,
       multiCurrency,
       converted: convert !== null,
     };
@@ -209,9 +214,9 @@ export function BillAnalytics({
                   }
                 />
                 <StatCard
-                  label="活跃账单"
+                  label="活跃订阅"
                   value={String(stats.active)}
-                  sub={`共 ${bills.length} 笔`}
+                  sub={`共 ${stats.subscriptionCount} 笔订阅`}
                 />
               </div>
 
