@@ -113,6 +113,8 @@ export function AddBillFlow({
 }) {
   const defaultOffsets = useNotesStore((s) => s.settings.billDefaultReminderOffsets);
   const defaultCurrency = useNotesStore((s) => s.settings.currencySymbol);
+  // 订阅稳定引用，派生放 useMemo（选择器直接返回新数组会触发无限重渲染）
+  const bills = useNotesStore((s) => s.bills);
   const [step, setStep] = useState<"pick" | "confirm">("pick");
   const [category, setCategory] = useState<CatalogCategory | "all">("all");
   const [query, setQuery] = useState("");
@@ -145,6 +147,24 @@ export function AddBillFlow({
     }
   }, [open, edit]);
 
+  /**
+   * 用过的支付方式：直接从既有账单里提取，不新增存储（数据本就在 bills 里，
+   * 无需迁移/备份/校验三件套）。同值取最近一次创建时间，最近用过的排最前，
+   * 封顶 5 个避免撑破表单。
+   */
+  const payMethods = useMemo(() => {
+    const latest = new Map<string, number>();
+    for (const b of bills) {
+      const v = b.payMethod?.trim();
+      if (!v) continue;
+      latest.set(v, Math.max(latest.get(v) ?? 0, b.createdAt));
+    }
+    return [...latest.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([v]) => v);
+  }, [bills]);
+
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
     return BILL_CATALOG.filter(
@@ -167,7 +187,8 @@ export function AddBillFlow({
       currency: defaultCurrency,
       category:
         catalog && catalog.category !== "creditCard" ? catalog.category : "other",
-      payMethod: "",
+      // 新建默认带上最近用过的支付方式（多数人长期只用一两种），要改点药丸即可
+      payMethod: payMethods[0] ?? "",
       cycle: catalog?.defaultCycle ?? "monthly",
       dueDate: toDateInput(startOfBillDay(Date.now())),
       startDate: toDateInput(startOfBillDay(Date.now())),
@@ -321,10 +342,15 @@ export function AddBillFlow({
                           className="flex flex-col items-center gap-1.5 rounded-xl bg-black/5 px-1 py-2.5 outline-none transition-colors hover:bg-black/10 focus-visible:ring-2 focus-visible:ring-ring dark:bg-white/5 dark:hover:bg-white/10"
                         >
                           {icon ? (
-                            <img src={icon} alt="" className="size-8 rounded-lg object-cover" />
+                            // token-exception: 圆角按边长百分比而非固定 px。品牌图是
+                            // App Store artwork（自带 ≈19% 圆角、圆角外填纯黑），固定
+                            // rounded-lg 在 32px 上等于 31%，四角各多削 4px——正好切进
+                            // 内容顶边的图标（Netflix 的 N、Perplexity 符号、Apple TV）
+                            <img src={icon} alt="" className="size-8 rounded-[20%] object-cover" />
                           ) : (
                             <span
-                              className="flex size-8 items-center justify-center rounded-lg text-title font-semibold text-white"
+                              // token-exception: 同上，回退色块跟随品牌图的比例圆角
+                              className="flex size-8 items-center justify-center rounded-[20%] text-title font-semibold text-white"
                               style={{ backgroundColor: billFallbackColor(s.name) }}
                               aria-hidden
                             >
@@ -495,6 +521,32 @@ export function AddBillFlow({
                     placeholder="如 支付宝 / 微信 / 招行卡尾号 1234"
                     className="w-full rounded-md border border-border bg-transparent px-1.5 py-1 text-body outline-none focus:border-primary/50"
                   />
+                  {/* 用过的支付方式快选：点一下即填，再点取消（同款药丸＝同款交互） */}
+                  {payMethods.length > 0 && (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {payMethods.map((m) => {
+                        const on = form.payMethod.trim() === m;
+                        return (
+                          <button
+                            key={m}
+                            role="checkbox"
+                            aria-checked={on}
+                            onClick={() =>
+                              setForm({ ...form, payMethod: on ? "" : m })
+                            }
+                            className={cn(
+                              "max-w-full truncate rounded-full px-2 py-0.5 text-label transition-colors",
+                              on
+                                ? "bg-primary text-primary-foreground"
+                                : "bg-black/5 text-muted-foreground hover:text-foreground dark:bg-white/10"
+                            )}
+                          >
+                            {m}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </Field>
                 <Field label="备注（可选）">
                   <input

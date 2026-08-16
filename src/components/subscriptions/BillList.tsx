@@ -29,7 +29,10 @@ export function BillAvatar({ bill, size = "md" }: { bill: Bill; size?: "md" | "s
   const brand = brandIconUrl(bill.catalogId);
   const favicon = useNoteThumb(brand ? undefined : bill.iconFile);
   const icon = brand ?? favicon;
-  const cls = size === "md" ? "size-6 rounded-md" : "size-3.5 rounded-sm";
+  // token-exception: 圆角按边长百分比而非固定 px。品牌图是 App Store artwork
+  // （自带 ≈19% 圆角），固定 px 圆角在 24/14px 上等于 33%/43%，会二次削掉
+  // 图标边缘内容（黑底图标尤其明显）；百分比一处适配所有尺寸
+  const cls = cn("rounded-[20%]", size === "md" ? "size-6" : "size-3.5");
   if (icon) {
     return <img src={icon} alt="" className={cn(cls, "shrink-0 object-cover")} />;
   }
