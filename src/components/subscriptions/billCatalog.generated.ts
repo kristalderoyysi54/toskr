@@ -996,8 +996,8 @@ export const BILL_CATALOG_GENERATED: CatalogService[] = [
   },
   {
     "id": "manus",
-    "name": "Manus",
-    "nameAlt": "Manus",
+    "name": "Manus AI",
+    "nameAlt": "Manus AI",
     "domain": "manus.im",
     "category": "ai",
     "defaultCycle": "monthly"
