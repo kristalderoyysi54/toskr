@@ -137,24 +137,6 @@ export function BillRow({
             {inactive && ` · ${STATUS_LABEL[bill.status]}`}
           </p>
         </div>
-        {!inactive &&
-          (paidThisCycle ? (
-            <span className="shrink-0 rounded-sm bg-success/10 px-1 py-px text-micro tabular-nums text-success">
-              已还 · 下期 {new Date(bill.nextDueAt).getMonth() + 1}/
-              {new Date(bill.nextDueAt).getDate()}
-            </span>
-          ) : (
-            <span
-              className={cn(
-                "shrink-0 rounded-sm px-1 py-px text-micro tabular-nums",
-                badge.tone === "overdue" && "bg-destructive/10 text-destructive",
-                badge.tone === "today" && "bg-amber-500/15 text-amber-600 dark:text-amber-400",
-                badge.tone === "later" && "text-muted-foreground"
-              )}
-            >
-              {badge.text}
-            </span>
-          ))}
         {bill.kind === "creditCard" && !inactive && !paying && !paidThisCycle && (
           <IconButton
             label="标记已还"
@@ -235,6 +217,26 @@ export function BillRow({
             </>
           )}
         </SimpleMenu>
+        {/* 徽标恒为行尾元素：各行操作按钮数量不同（订阅 1 / 信用卡 2），
+            放按钮之前会导致日期列参差不齐 */}
+        {!inactive &&
+          (paidThisCycle ? (
+            <span className="shrink-0 rounded-sm bg-success/10 px-1 py-px text-right text-micro tabular-nums text-success">
+              已还 · 下期 {new Date(bill.nextDueAt).getMonth() + 1}/
+              {new Date(bill.nextDueAt).getDate()}
+            </span>
+          ) : (
+            <span
+              className={cn(
+                "shrink-0 rounded-sm px-1 py-px text-right text-micro tabular-nums",
+                badge.tone === "overdue" && "bg-destructive/10 text-destructive",
+                badge.tone === "today" && "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+                badge.tone === "later" && "text-muted-foreground"
+              )}
+            >
+              {badge.text}
+            </span>
+          ))}
       </div>
       {paying && (
         <div className="mt-1.5 flex items-center gap-1.5 pl-8">
