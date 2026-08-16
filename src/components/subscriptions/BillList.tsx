@@ -313,7 +313,8 @@ export function BillList({
   return (
     <div className="flex flex-col gap-0.5">
       {group("订阅", subs)}
-      {group("信用卡还款", cards)}
+      {/* 组头去「信用卡」字眼（用户指定 2026-08-16）：还款偏私人，标签低调 */}
+      {group("还款", cards)}
     </div>
   );
 }
