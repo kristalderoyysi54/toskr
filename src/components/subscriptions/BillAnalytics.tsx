@@ -242,16 +242,20 @@ export function BillAnalytics({
                     还没有记账数据；订阅到期滚动或信用卡标记已还后自动积累
                   </p>
                 ) : (
-                  <div className="flex h-24 items-end gap-1 px-1">
+                  <div className="flex items-end gap-1 px-1">
                     {trend.map((t, i) => {
                       const current = i === trend.length - 1;
+                      // 12 根柱标签挤：从当前月往回隔月显示完整标签，不截断
+                      const showLabel =
+                        range === "year" || (trend.length - 1 - i) % 2 === 0;
                       return (
                         <div
                           key={t.key}
                           className="flex min-w-0 flex-1 flex-col items-center gap-0.5"
                           title={`${t.label} ${currency}${formatBillAmount(t.total)}`}
                         >
-                          <div className="flex w-full flex-1 items-end">
+                          {/* 柱容器定高：百分比柱高必须挂在确定高度上 */}
+                          <div className="flex h-20 w-full items-end">
                             <div
                               className={cn(
                                 "w-full rounded-sm",
@@ -266,13 +270,11 @@ export function BillAnalytics({
                           </div>
                           <span
                             className={cn(
-                              "w-full truncate text-center text-micro tabular-nums",
-                              current ? "text-foreground" : "text-muted-foreground",
-                              // 12 根柱标签挤：月度视图隔根显示
-                              range === "month" && i % 2 === 0 && !current && "invisible"
+                              "w-full whitespace-nowrap text-center text-micro tabular-nums",
+                              current ? "text-foreground" : "text-muted-foreground"
                             )}
                           >
-                            {t.label}
+                            {showLabel ? t.label : ""}
                           </span>
                         </div>
                       );

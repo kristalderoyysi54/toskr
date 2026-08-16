@@ -23,7 +23,7 @@ export function BillTrendChart({
   return (
     <div className="surface-inset rounded-xl p-2">
       <p className="pl-1 text-micro text-muted-foreground">近 6 个月消费</p>
-      <div className="mt-1 flex h-14 items-end gap-1.5 px-1">
+      <div className="mt-1 flex items-end gap-1.5 px-1">
         {trend.map((m, i) => {
           const current = i === trend.length - 1;
           return (
@@ -32,7 +32,8 @@ export function BillTrendChart({
               className="flex min-w-0 flex-1 flex-col items-center gap-0.5"
               title={`${m.year} 年 ${m.label} ${currency}${formatBillAmount(m.total)}`}
             >
-              <div className="flex w-full flex-1 items-end">
+              {/* 柱容器定高：百分比柱高必须挂在确定高度上（auto 链解析为 0） */}
+              <div className="flex h-10 w-full items-end">
                 <div
                   className={cn(
                     "w-full rounded-sm",
