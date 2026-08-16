@@ -38,9 +38,6 @@ import { IconButton } from "@/components/ui/icon-button";
 import { StripScroller } from "@/components/ui/strip-scroller";
 import { SimpleSelect } from "@/components/SimpleSelect";
 
-const FIELD =
-  "w-full rounded-lg border border-border bg-transparent px-2.5 py-2 text-body text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-primary/50";
-
 /** 收发条：选密钥 → 输明文 → 加密发送 / 加密复制。
  *  竖栏＝顶部通栏；横栏（上/下停靠）＝左侧定宽列，右边让给横排卡片串。 */
 function SecretComposer({ horizontal = false }: { horizontal?: boolean }) {
@@ -113,50 +110,61 @@ function SecretComposer({ horizontal = false }: { horizontal?: boolean }) {
           : "border-b border-border/60"
       )}
     >
-      <div className="flex items-center gap-2">
-        <KeyRound className="size-3.5 shrink-0 text-muted-foreground" />
-        <SimpleSelect
-          value={keyId}
-          options={keyOptions}
-          onChange={setKeyId}
-          ariaLabel="选择加密密钥"
-          menuLabel="用哪把密钥"
-        />
-      </div>
-      <textarea
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-            e.preventDefault();
-            void seal(true);
-          }
-        }}
-        rows={2}
-        placeholder="写下要加密的话，⌘⏎ 加密并发送"
-        className={cn(FIELD, "resize-none", horizontal && "min-h-0 flex-1")}
+      {/* 密钥胶囊：钥匙收进边框内、宽度贴合密钥名，不再通栏抢走输入卡的视觉重量 */}
+      <SimpleSelect
+        value={keyId}
+        options={keyOptions}
+        onChange={setKeyId}
+        ariaLabel="选择加密密钥"
+        menuLabel="用哪把密钥"
+        icon={<KeyRound />}
+        className="w-fit max-w-full"
       />
-      <div className="flex items-center justify-end gap-2">
-        {draft.trim() && (
-          <span className="mr-auto min-w-0 truncate text-micro text-muted-foreground">
-            密文约 {estimateCipherLength(draft.trim())} 字 · 以「话说」开头
-          </span>
+      {/* 输入卡：明文输入与两个动作同框，读作一件事 */}
+      <div
+        className={cn(
+          "flex flex-col gap-1.5 rounded-lg border border-border px-2.5 py-2 focus-within:border-primary/50",
+          horizontal && "min-h-0 flex-1"
         )}
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => void seal(false)}
-          disabled={busy || !draft.trim()}
-        >
-          <Copy /> 加密复制
-        </Button>
-        <Button
-          size="sm"
-          onClick={() => void seal(true)}
-          disabled={busy || !draft.trim()}
-        >
-          <SendHorizontal /> 加密发送
-        </Button>
+      >
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault();
+              void seal(true);
+            }
+          }}
+          rows={2}
+          placeholder="写下要加密的话，⌘⏎ 加密并发送"
+          className={cn(
+            "w-full resize-none bg-transparent text-body text-foreground outline-none placeholder:text-muted-foreground",
+            horizontal && "min-h-0 flex-1"
+          )}
+        />
+        <div className="flex items-center justify-end gap-2">
+          {draft.trim() && (
+            <span className="mr-auto min-w-0 truncate text-micro text-muted-foreground">
+              密文约 {estimateCipherLength(draft.trim())} 字 · 以「话说」开头
+            </span>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void seal(false)}
+            disabled={busy || !draft.trim()}
+          >
+            <Copy /> 加密复制
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => void seal(true)}
+            disabled={busy || !draft.trim()}
+          >
+            <SendHorizontal /> 加密发送
+          </Button>
+        </div>
       </div>
     </div>
   );
