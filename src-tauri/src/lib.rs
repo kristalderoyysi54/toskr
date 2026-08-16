@@ -8,6 +8,7 @@ mod data_integrity;
 mod delivery;
 mod diag;
 mod events;
+mod exchange;
 mod favicon;
 mod focus;
 mod input;
@@ -275,6 +276,7 @@ pub fn run() {
             commands::run_media_gc,
             linkmeta::fetch_link_meta,
             favicon::fetch_favicon,
+            exchange::fetch_exchange_rates,
             ai::set_ai_api_key,
             ai::get_ai_key_status,
             ai::delete_ai_api_key,

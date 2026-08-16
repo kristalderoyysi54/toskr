@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   advanceCycle,
+  backfillPeriods,
   billDueLabel,
   billFallbackColor,
   billsDueWithinDays,
@@ -279,9 +280,94 @@ describe("文案与排序", () => {
   });
 });
 
+describe("backfillPeriods 开始日期回填", () => {
+  it("月付 8/10 开始、9/10 下期 → 补记 8/10 一期", () => {
+    expect(backfillPeriods(ts(2026, 8, 10), ts(2026, 9, 10), "monthly")).toEqual([
+      ts(2026, 8, 10),
+    ]);
+  });
+
+  it("跨多期与月末钳制；开始日不早于下期时为空", () => {
+    // 钳到月末后不粘滞（advanceCycle 既定语义）：5/31→6/30→7/30→8/30
+    expect(backfillPeriods(ts(2026, 5, 31), ts(2026, 8, 31), "monthly")).toEqual([
+      ts(2026, 5, 31),
+      ts(2026, 6, 30),
+      ts(2026, 7, 30),
+      ts(2026, 8, 30),
+    ]);
+    expect(backfillPeriods(ts(2026, 9, 10), ts(2026, 9, 10), "monthly")).toEqual([]);
+  });
+
+  it("久远周付封顶 60 期，保留最近的", () => {
+    const periods = backfillPeriods(ts(2020, 1, 1), ts(2026, 8, 10), "weekly");
+    expect(periods).toHaveLength(60);
+    expect(periods[59]).toBeLessThan(ts(2026, 8, 10));
+  });
+});
+
 describe("store 账单 actions", () => {
   const reset = () =>
     useNotesStore.setState({ bills: [], undoStack: [], checkedIds: [] });
+
+  it("addBill 带开始日期：回填往期 auto 记账（本月消费/月历立即可见）", () => {
+    reset();
+    const id = useNotesStore.getState().addBill({
+      kind: "subscription",
+      name: "Claude",
+      amount: 200,
+      currency: "US$",
+      cycle: "monthly",
+      startedAt: ts(2026, 8, 10),
+      nextDueAt: ts(2026, 9, 10),
+      fallbackColor: "#ef4444",
+    });
+    const created = useNotesStore.getState().bills.find((b) => b.id === id)!;
+    expect(created.history).toHaveLength(1);
+    expect(created.history[0]).toMatchObject({
+      periodDueAt: ts(2026, 8, 10),
+      paidAt: ts(2026, 8, 10),
+      amount: 200,
+      method: "auto",
+    });
+    expect(monthlySpendTotal([created], ts(2026, 8, 16))).toBe(200);
+  });
+
+  it("updateBill 改开始日期：无手工记账时重建回填；有手工记账保持不动", () => {
+    reset();
+    const id = useNotesStore.getState().addBill({
+      kind: "subscription",
+      name: "Netflix",
+      amount: 68,
+      cycle: "monthly",
+      startedAt: ts(2026, 8, 10),
+      nextDueAt: ts(2026, 9, 10),
+      fallbackColor: "#ef4444",
+    });
+    useNotesStore.getState().updateBill(id, { startedAt: ts(2026, 6, 10) });
+    const rebuilt = useNotesStore.getState().bills.find((b) => b.id === id)!;
+    expect(rebuilt.history.map((e) => e.periodDueAt)).toEqual([
+      ts(2026, 6, 10),
+      ts(2026, 7, 10),
+      ts(2026, 8, 10),
+    ]);
+    // 混入手工记账后不再重建
+    useNotesStore.setState({
+      bills: useNotesStore.getState().bills.map((b) =>
+        b.id === id
+          ? {
+              ...b,
+              history: [
+                ...b.history,
+                { id: "m1", periodDueAt: ts(2026, 9, 10), amount: 70, paidAt: ts(2026, 9, 10), method: "manual" },
+              ],
+            }
+          : b
+      ),
+    });
+    useNotesStore.getState().updateBill(id, { startedAt: ts(2026, 7, 10) });
+    const kept = useNotesStore.getState().bills.find((b) => b.id === id)!;
+    expect(kept.history).toHaveLength(4);
+  });
 
   it("addBill 缺省提醒档取设置默认；updateBill 改到期日重置当期已提醒", () => {
     reset();

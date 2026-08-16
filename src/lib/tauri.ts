@@ -623,6 +623,8 @@ export const api = {
   fetchLinkMeta: (url: string) => invoke<LinkMeta>("fetch_link_meta", { url }),
   /** 按域名抓 favicon 缓存进媒体库，返回文件名；失败 reject（前端回退首字色块）。 */
   fetchFavicon: (domain: string) => invoke<string>("fetch_favicon", { domain }),
+  /** 抓当日汇率（USD 基准 code→rate）；前端按日缓存，失败 reject。 */
+  fetchExchangeRates: () => invoke<Record<string, number>>("fetch_exchange_rates"),
   /** `side`："right"（默认，贴目标窗口右缘）| "left"（贴左缘）。 */
   setCompanionConfig: (enabled: boolean, apps: string[], side: "left" | "right" = "right") =>
     invoke("set_companion_config", { enabled, apps, side }),

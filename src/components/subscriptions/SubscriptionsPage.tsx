@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ChartColumn, CreditCard, Plus } from "lucide-react";
 
 import { AddBillFlow } from "@/components/subscriptions/AddBillFlow";
@@ -15,10 +15,14 @@ import { Segmented } from "@/components/ui/segmented";
 import {
   billOccurrencesInRange,
   billsDueWithinDays,
+  distinctCurrencies,
+  formatBillAmount,
   formatCurrencyTotals,
+  monthlySpendTotal,
   monthlySpendTotalsByCurrency,
   startOfBillDay,
 } from "@/lib/bills";
+import { cachedFx, ensureFx, makeConverter, type FxCache } from "@/lib/currency";
 import { useNotesStore, type Bill } from "@/store/notesStore";
 
 const DAY_MS = 86_400_000;
@@ -44,11 +48,27 @@ export function SubscriptionsPage({ bills, now }: { bills: Bill[]; now: number }
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
 
   const upcoming = useMemo(() => billsDueWithinDays(bills, now, 7), [bills, now]);
-  // 多币种时不做汇率直加，按币种分列小计（「¥68 + US$16」）
-  const monthTotalText = useMemo(
-    () => formatCurrencyTotals(monthlySpendTotalsByCurrency(bills, now, currency), currency),
-    [bills, now, currency]
-  );
+  // 有当日汇率则折算主货币统一显示（多币种加 ≈，tooltip 给分列）；无汇率回退分列
+  const [fx, setFx] = useState<FxCache | null>(() => cachedFx());
+  useEffect(() => {
+    void ensureFx().then((next) => {
+      if (next) setFx(next);
+    });
+  }, []);
+  const monthTotal = useMemo(() => {
+    const parts = formatCurrencyTotals(
+      monthlySpendTotalsByCurrency(bills, now, currency),
+      currency
+    );
+    const convert = makeConverter(currency, fx);
+    const multi = distinctCurrencies(bills, currency).length > 1;
+    if (!convert || !multi) return { text: parts, title: parts };
+    const combined = monthlySpendTotal(bills, now, convert);
+    return {
+      text: `≈ ${currency}${formatBillAmount(Math.round(combined * 100) / 100)}`,
+      title: parts,
+    };
+  }, [bills, now, currency, fx]);
   const dayBills = useMemo(
     () =>
       bills.filter(
@@ -91,8 +111,8 @@ export function SubscriptionsPage({ bills, now }: { bills: Bill[]; now: number }
       {/* 摘要条：本月消费 + 未来 7 天到期数 + 添加入口 */}
       <div className="flex items-center gap-2 px-3.5 pb-1">
         <div className="min-w-0 flex-1">
-          <p className="truncate text-title font-semibold tabular-nums" title={`本月 ${monthTotalText}`}>
-            本月 {monthTotalText}
+          <p className="truncate text-title font-semibold tabular-nums" title={`本月 ${monthTotal.title}`}>
+            本月 {monthTotal.text}
           </p>
           <p className="text-micro text-muted-foreground">
             {upcoming.length
