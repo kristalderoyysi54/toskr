@@ -74,9 +74,15 @@ export function BillAnalytics({
     });
   }, [open]);
   const convert = useMemo(() => makeConverter(currency, fx), [currency, fx]);
+  // 币种规则（与摘要条一致）：单一币种原币原值；多币种才折算主货币（≈）
+  const distinct = useMemo(() => distinctCurrencies(bills, currency), [bills, currency]);
+  const useConversion = distinct.length > 1 && convert !== null;
+  const conv = useConversion ? (convert ?? undefined) : undefined;
+  /** 趋势/环形等聚合图的金额符号：未折算时用唯一原币符号。 */
+  const displaySymbol = useConversion ? currency : (distinct[0] ?? currency);
 
   const stats = useMemo(() => {
-    const multiCurrency = distinctCurrencies(bills, currency).length > 1;
+    const multiCurrency = distinct.length > 1;
     const monthParts = formatCurrencyTotals(
       monthlySpendTotalsByCurrency(bills, now, currency),
       currency
@@ -89,24 +95,22 @@ export function BillAnalytics({
       yearSpendTotalsByCurrency(bills, now, currency),
       currency
     );
-    // 有汇率：统一折算主货币（多币种加 ≈），原币种分列进小字；无汇率：分列为主
-    const approx = multiCurrency && convert ? "≈ " : "";
-    const conv = convert ?? undefined;
     const monthTotal = monthlySpendTotal(bills, now, conv);
     const prev = prevMonthSpendTotal(bills, now, conv);
-    const canCompare = prev > 0 && (convert !== null || !multiCurrency);
+    // 环比：同口径可比（已折算，或本就单一币种）
+    const canCompare = prev > 0 && (useConversion || !multiCurrency);
     return {
-      monthText: convert
-        ? `${approx}${currency}${formatBillAmount(Math.round(monthTotal * 100) / 100)}`
+      monthText: useConversion
+        ? `≈ ${currency}${formatBillAmount(Math.round(monthTotal * 100) / 100)}`
         : monthParts,
       monthParts,
       momPct: canCompare ? ((monthTotal - prev) / prev) * 100 : null,
-      fixedText: convert
-        ? `${approx}${currency}${formatBillAmount(Math.round(monthlyFixedSpend(bills, conv) * 100) / 100)}`
+      fixedText: useConversion
+        ? `≈ ${currency}${formatBillAmount(Math.round(monthlyFixedSpend(bills, conv) * 100) / 100)}`
         : fixedParts,
       fixedParts,
-      yearText: convert
-        ? `${approx}${currency}${formatBillAmount(Math.round(yearSpendTotal(bills, now, conv) * 100) / 100)}`
+      yearText: useConversion
+        ? `≈ ${currency}${formatBillAmount(Math.round(yearSpendTotal(bills, now, conv) * 100) / 100)}`
         : yearParts,
       yearParts,
       // 活跃/总数只数订阅：信用卡还款是提醒不是订阅（用户 2026-08-16 指定）
@@ -115,28 +119,29 @@ export function BillAnalytics({
       ).length,
       subscriptionCount: bills.filter((b) => b.kind === "subscription").length,
       multiCurrency,
-      converted: convert !== null,
+      converted: useConversion,
     };
-  }, [bills, now, currency, convert]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bills, now, currency, conv, useConversion, distinct]);
 
   const trend = useMemo(
     () =>
       range === "month"
-        ? monthlySpendTrend(bills, now, 12, convert ?? undefined).map((m) => ({
+        ? monthlySpendTrend(bills, now, 12, conv).map((m) => ({
             ...m,
             key: `${m.year}-${m.month}`,
           }))
-        : yearlySpendTrend(bills, now, 4, convert ?? undefined).map((y) => ({
+        : yearlySpendTrend(bills, now, 4, conv).map((y) => ({
             ...y,
             key: String(y.year),
           })),
-    [bills, now, range, convert]
+    [bills, now, range, conv]
   );
   const trendMax = Math.max(...trend.map((t) => t.total), 0);
 
   const categories = useMemo(
-    () => categoryBreakdown(bills, convert ?? undefined),
-    [bills, convert]
+    () => categoryBreakdown(bills, conv),
+    [bills, conv]
   );
   const categoryTotal = categories.reduce((sum, c) => sum + c.total, 0);
   const donutGradient = useMemo(() => {
@@ -257,11 +262,11 @@ export function BillAnalytics({
                         <div
                           key={t.key}
                           className="group/bar flex min-w-0 flex-1 flex-col items-center gap-0.5"
-                          title={`${t.label} ${currency}${formatBillAmount(t.total)}`}
+                          title={`${t.label} ${displaySymbol}${formatBillAmount(t.total)}`}
                         >
                           {/* 悬停亮出金额（12 根柱窄，金额允许溢出列宽不截断） */}
                           <span className="h-3 whitespace-nowrap text-micro tabular-nums text-muted-foreground opacity-0 transition-opacity group-hover/bar:opacity-100">
-                            {t.total > 0 ? `${currency}${formatBillAmount(t.total)}` : ""}
+                            {t.total > 0 ? `${displaySymbol}${formatBillAmount(t.total)}` : ""}
                           </span>
                           {/* 柱容器定高：百分比柱高必须挂在确定高度上 */}
                           <div className="flex h-20 w-full items-end">
@@ -317,7 +322,7 @@ export function BillAnalytics({
                       {/* 中孔：挖洞成环 + 中心合计 */}
                       <div className="absolute inset-3 flex flex-col items-center justify-center rounded-full bg-popover">
                         <span className="text-label font-semibold tabular-nums">
-                          {currency}
+                          {displaySymbol}
                           {formatBillAmount(Math.round(categoryTotal))}
                         </span>
                         <span className="text-micro text-muted-foreground">/月</span>
@@ -338,7 +343,7 @@ export function BillAnalytics({
                             {categoryLabel(c.category)}
                           </span>
                           <span className="text-label tabular-nums text-muted-foreground">
-                            {currency}
+                            {displaySymbol}
                             {formatBillAmount(Math.round(c.total))}
                             <span className="ml-1 text-micro">
                               {Math.round((c.total / categoryTotal) * 100)}%
