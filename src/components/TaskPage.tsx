@@ -33,6 +33,7 @@ import {
   SimpleMenuItem,
   SimpleMenuSeparator,
 } from "@/components/SimpleMenu";
+import { TaskCalendar } from "@/components/TaskCalendar";
 import { TaskQuickAdd } from "@/components/TaskQuickAdd";
 import { TaskRow } from "@/components/TaskRow";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -56,8 +57,17 @@ export const TASK_SPARKS_COLLAPSED_KEY = "tasks:sparks-collapsed";
 
 /**
  * 任务页：闪念速记 + 智能区（已到期红 / 💡灵感紫）+ 可折叠自定义分组 + 已完成。
+ * calendar：月历面板（「提醒」页头部日历开关唤出，默认隐藏）。
  */
-export function TaskPage({ buckets, now }: { buckets: TaskBuckets; now: number }) {
+export function TaskPage({
+  buckets,
+  now,
+  calendar = false,
+}: {
+  buckets: TaskBuckets;
+  now: number;
+  calendar?: boolean;
+}) {
   const doneOpen = useUIStore((s) => s.doneOpen[TASK_DONE_KEY] ?? false);
   const empty =
     !buckets.overdue.length &&
@@ -139,6 +149,11 @@ export function TaskPage({ buckets, now }: { buckets: TaskBuckets; now: number }
     <>
       <TaskQuickAdd />
       <ScrollArea className="min-h-0 flex-1 px-3.5">
+        {calendar && (
+          <div className="pb-2 pt-1">
+            <TaskCalendar now={now} />
+          </div>
+        )}
         {empty ? (
           <EmptyState
             icon={<ListTodo />}
