@@ -937,5 +937,85 @@ export const BILL_CATALOG_GENERATED: CatalogService[] = [
     "domain": "duxiaoman.com",
     "category": "creditCard",
     "defaultCycle": "monthly"
+  },
+  {
+    "id": "grok",
+    "name": "Grok",
+    "nameAlt": "Grok",
+    "domain": "grok.com",
+    "category": "ai",
+    "defaultCycle": "monthly"
+  },
+  {
+    "id": "zhipuqingyan",
+    "name": "智谱清言",
+    "nameAlt": "智谱清言",
+    "domain": "chatglm.cn",
+    "category": "ai",
+    "defaultCycle": "monthly"
+  },
+  {
+    "id": "workbuddy",
+    "name": "WorkBuddy",
+    "nameAlt": "WorkBuddy",
+    "domain": "workbuddy.qq.com",
+    "category": "ai",
+    "defaultCycle": "monthly"
+  },
+  {
+    "id": "qwen",
+    "name": "千问",
+    "nameAlt": "千问",
+    "domain": "qwen.ai",
+    "category": "ai",
+    "defaultCycle": "monthly"
+  },
+  {
+    "id": "doubao",
+    "name": "豆包",
+    "nameAlt": "豆包",
+    "domain": "doubao.com",
+    "category": "ai",
+    "defaultCycle": "monthly"
+  },
+  {
+    "id": "yuanbao",
+    "name": "腾讯元宝",
+    "nameAlt": "腾讯元宝",
+    "domain": "yuanbao.tencent.com",
+    "category": "ai",
+    "defaultCycle": "monthly"
+  },
+  {
+    "id": "namiai",
+    "name": "纳米AI",
+    "nameAlt": "纳米AI",
+    "domain": "n.cn",
+    "category": "ai",
+    "defaultCycle": "monthly"
+  },
+  {
+    "id": "manus",
+    "name": "Manus",
+    "nameAlt": "Manus",
+    "domain": "manus.im",
+    "category": "ai",
+    "defaultCycle": "monthly"
+  },
+  {
+    "id": "jimeng",
+    "name": "即梦AI",
+    "nameAlt": "即梦AI",
+    "domain": "jimeng.jianying.com",
+    "category": "ai",
+    "defaultCycle": "monthly"
+  },
+  {
+    "id": "kling",
+    "name": "可灵AI",
+    "nameAlt": "可灵AI",
+    "domain": "klingai.com",
+    "category": "ai",
+    "defaultCycle": "monthly"
   }
 ];

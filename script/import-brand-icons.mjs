@@ -36,6 +36,7 @@ const FINE_CATEGORY = {
   ai: [
     "chatgpt", "claude", "gemini", "perplexity", "copilot", "midjourney", "kimi",
     "cursor", "doubao", "tongyi", "wenxin", "grok", "poe", "deepseek",
+    "zhipuqingyan", "workbuddy", "qwen", "yuanbao", "namiai", "manus", "jimeng", "kling",
   ],
   productivity: [
     "microsoft365", "notion", "figma", "canva", "slack", "zoom", "grammarly",
