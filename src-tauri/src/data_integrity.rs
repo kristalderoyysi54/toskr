@@ -22,7 +22,7 @@ use crate::activity::{
 };
 use crate::storage::{DATA_FILE, MEDIA_DIR};
 
-pub const MAX_STORE_VERSION: u64 = 18;
+pub const MAX_STORE_VERSION: u64 = 19;
 const MISSING_REVISION: &str = "missing";
 const MEDIA_GC_FILE: &str = "toskr-media-gc.json";
 const DATA_JOURNAL_FILE: &str = "toskr-data-transaction.json";
@@ -544,7 +544,8 @@ fn collect_media_counts(
         serde_json::Value::Object(map) => {
             for (key, value) in map {
                 match key.as_str() {
-                    "imageFile" => {
+                    // iconFile = 账单 favicon 缓存；不收集会被 GC 当孤儿误删
+                    "imageFile" | "iconFile" => {
                         if let Some(file) = value.as_str() {
                             validate_media_file_name(file)?;
                             *counts.entry(file.into()).or_default() += 1;
@@ -3964,7 +3965,7 @@ mod tests {
                 "activationWithin60s": null
             }
         });
-        assert_eq!(MAX_STORE_VERSION, 18);
+        assert_eq!(MAX_STORE_VERSION, 19);
         assert!(validate_settings_value_for_version(
             Some(&valid),
             MAX_STORE_VERSION

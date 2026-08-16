@@ -1,5 +1,6 @@
 import {
   STORE_VERSION,
+  type Bill,
   type Note,
   type Section,
   type Settings,
@@ -13,6 +14,7 @@ type BackupSource = {
   notes: Note[];
   taskSections: TaskSection[];
   tasks: Task[];
+  bills: Bill[];
   settings: Settings;
 };
 
@@ -29,6 +31,7 @@ export function buildBackupPayload({
   notes,
   taskSections,
   tasks,
+  bills,
   settings,
 }: BackupSource) {
   return {
@@ -38,6 +41,7 @@ export function buildBackupPayload({
       notes,
       taskSections,
       tasks,
+      bills,
       settings: backupSafeSettings(settings),
     },
   };
@@ -51,6 +55,8 @@ export function buildMediaIntegrityPayload(
     state: {
       notes: source.notes,
       tasks: source.tasks,
+      // 账单 favicon（iconFile）纳入引用声明，否则 GC 会当孤儿文件误删
+      bills: source.bills,
       editorDrafts: editorDraftImages.length
         ? [{ attachments: [...new Set(editorDraftImages)] }]
         : [],

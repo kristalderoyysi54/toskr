@@ -108,6 +108,7 @@ import {
   useNotesStore,
   type ContextMenuItemId,
   type DuePresetCfg,
+  type ReminderOffsetDays,
   type PromptSnippet,
   type SecretKey,
   type Settings,
@@ -398,7 +399,12 @@ export default function SettingsView() {
         )}
         {section === "outcome" && <OutcomeInsightsSection settings={settings} patch={patch} />}
         {section === "companion" && <CompanionSection settings={settings} patch={patch} />}
-        {section === "due" && <DuePresetsSection settings={settings} patch={patch} />}
+        {section === "due" && (
+          <>
+            <DuePresetsSection settings={settings} patch={patch} />
+            <BillReminderDefaultsSection settings={settings} patch={patch} />
+          </>
+        )}
         {section === "ai" && <AiSection settings={settings} patch={patch} />}
         {section === "data" && <DataSection />}
         {section === "diagnostics" && <DiagnosticsSection />}
@@ -2251,6 +2257,63 @@ function AiSection({ settings, patch }: SP) {
 }
 
 /** 到期快捷档编辑：任务「到期」弹层里的快捷选项，可增删改。 */
+/** 账单（订阅/信用卡）提醒偏好：新建账单的默认提前档 + 金额货币符号。 */
+function BillReminderDefaultsSection({ settings, patch }: SP) {
+  const OFFSETS: { value: ReminderOffsetDays; label: string }[] = [
+    { value: 7, label: "提前 7 天" },
+    { value: 3, label: "提前 3 天" },
+    { value: 1, label: "提前 1 天" },
+    { value: 0, label: "当天" },
+  ];
+  const current = settings.billDefaultReminderOffsets;
+  const toggle = (offset: ReminderOffsetDays) => {
+    patch({
+      billDefaultReminderOffsets: current.includes(offset)
+        ? current.filter((o) => o !== offset)
+        : [...current, offset],
+    });
+  };
+  return (
+    <div className="mt-6">
+      <SectionTitle>账单到期提醒</SectionTitle>
+      <p className="mb-3 text-body text-muted-foreground">
+        「提醒 → 订阅」里新建账单默认勾选的提前提醒档；只影响之后新建的账单，
+        已有账单在各自编辑页单独调整。
+      </p>
+      <div className="mb-3 flex flex-wrap gap-1.5">
+        {OFFSETS.map(({ value, label }) => {
+          const on = current.includes(value);
+          return (
+            <button
+              key={value}
+              role="checkbox"
+              aria-checked={on}
+              onClick={() => toggle(value)}
+              className={cn(
+                "rounded-full px-2.5 py-1 text-label transition-colors",
+                on
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-black/5 text-muted-foreground hover:text-foreground dark:bg-white/10"
+              )}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex items-center gap-2">
+        <span className="text-body text-muted-foreground">金额货币符号</span>
+        <input
+          value={settings.currencySymbol}
+          onChange={(e) => patch({ currencySymbol: e.target.value.slice(0, 3) || "¥" })}
+          className="h-8 w-14 rounded-lg border border-border bg-transparent px-2 text-center text-body outline-none focus:border-primary/50"
+          aria-label="金额货币符号"
+        />
+      </div>
+    </div>
+  );
+}
+
 function DuePresetsSection({ settings, patch }: SP) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<DuePresetCfg | null>(null);

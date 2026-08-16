@@ -10,6 +10,7 @@ describe("buildBackupPayload", () => {
       notes: [],
       taskSections: [{ id: "task-inbox", name: "收集箱" }],
       tasks: [],
+      bills: [],
       settings: {
         ...defaultSettings(),
         aiApiKey: "must-not-leak",
@@ -19,6 +20,7 @@ describe("buildBackupPayload", () => {
 
     expect(payload.storeVersion).toBe(STORE_VERSION);
     expect(Object.keys(payload.state).sort()).toEqual([
+      "bills",
       "notes",
       "sections",
       "settings",
@@ -51,6 +53,7 @@ describe("buildBackupPayload", () => {
       }],
       taskSections: [{ id: "task-inbox", name: "收集箱" }],
       tasks: [],
+      bills: [],
       settings: defaultSettings(),
     });
 
@@ -70,6 +73,7 @@ describe("buildMediaIntegrityPayload", () => {
         notes: [],
         taskSections: [],
         tasks: [],
+        bills: [],
         settings: defaultSettings(),
         undoStack: [],
       },

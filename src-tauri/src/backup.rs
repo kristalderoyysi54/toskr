@@ -82,6 +82,9 @@ pub struct BackupCounts {
     pub notes: usize,
     pub task_sections: usize,
     pub tasks: usize,
+    /// v19 起的账单域；旧 manifest 无此键，默认 0 保持可读。
+    #[serde(default)]
+    pub bills: usize,
     pub media: usize,
 }
 
@@ -888,6 +891,7 @@ fn inspect_legacy_json(path: &Path) -> Result<BackupInspection, BackupFailure> {
             notes: array_len(object.get("notes")),
             task_sections: array_len(object.get("taskSections")),
             tasks: array_len(object.get("tasks")),
+            bills: array_len(object.get("bills")),
             media: 0,
         },
         missing_media: media.into_iter().collect(),
@@ -997,6 +1001,13 @@ fn summarize_state(value: &Value) -> Result<StateSummary, BackupFailure> {
             ));
         }
     }
+    // bills 是 v19 新增域：只对 v19+ 备份强制要求，旧备份缺失仍可导入
+    if store_version >= 19 && !state.contains_key("bills") {
+        return Err(failure(
+            BackupFailureCode::InvalidState,
+            "完整备份状态缺少 bills".to_string(),
+        ));
+    }
     if !validate_settings_value_for_version(state.get("settings"), store_version) {
         return Err(failure(
             BackupFailureCode::InvalidState,
@@ -1007,6 +1018,11 @@ fn summarize_state(value: &Value) -> Result<StateSummary, BackupFailure> {
     let notes = validate_record_array(state, "notes", "text")?;
     let task_sections = validate_record_array(state, "taskSections", "name")?;
     let tasks = validate_record_array(state, "tasks", "text")?;
+    let bills = if state.contains_key("bills") {
+        validate_record_array(state, "bills", "name")?
+    } else {
+        0
+    };
     validate_domain_fields(state)?;
     Ok(StateSummary {
         store_version,
@@ -1015,6 +1031,7 @@ fn summarize_state(value: &Value) -> Result<StateSummary, BackupFailure> {
             notes,
             task_sections,
             tasks,
+            bills,
             media: 0,
         },
         media: collect_media_references(root.get("state").unwrap())?,
@@ -1112,6 +1129,89 @@ fn validate_domain_fields(state: &serde_json::Map<String, Value>) -> Result<(), 
             }
         }
     }
+    for bill in state
+        .get("bills")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let object = bill
+            .as_object()
+            .expect("record array was already validated");
+        if !object
+            .get("kind")
+            .is_some_and(|value| matches!(value.as_str(), Some("subscription" | "creditCard")))
+        {
+            return Err(invalid("bill.kind 不是受支持枚举".into()));
+        }
+        if !object.get("cycle").is_some_and(|value| {
+            matches!(
+                value.as_str(),
+                Some("weekly" | "monthly" | "quarterly" | "semiannual" | "yearly")
+            )
+        }) {
+            return Err(invalid("bill.cycle 不是受支持枚举".into()));
+        }
+        if object
+            .get("status")
+            .is_some_and(|value| !matches!(value.as_str(), Some("active" | "paused" | "canceled")))
+        {
+            return Err(invalid("bill.status 不是受支持枚举".into()));
+        }
+        if object
+            .get("amount")
+            .is_some_and(|value| !value.is_null() && value.as_f64().is_none_or(|n| !n.is_finite()))
+        {
+            return Err(invalid("bill.amount 必须是有限数字或 null".into()));
+        }
+        validate_optional_nonnegative_number(object.get("nextDueAt"), "bill.nextDueAt")?;
+        validate_optional_nonnegative_number(object.get("createdAt"), "bill.createdAt")?;
+        if object.get("iconFile").is_some_and(|value| !value.is_string()) {
+            return Err(invalid("bill.iconFile 必须是字符串".into()));
+        }
+        if object.get("reminderOffsets").is_some_and(|value| {
+            !value.as_array().is_some_and(|items| {
+                items
+                    .iter()
+                    .all(|item| matches!(item.as_u64(), Some(0 | 1 | 3 | 7)))
+            })
+        }) {
+            return Err(invalid("bill.reminderOffsets 只允许 0/1/3/7".into()));
+        }
+        if let Some(history) = object.get("history") {
+            let items = history
+                .as_array()
+                .ok_or_else(|| invalid("bill.history 必须是数组".into()))?;
+            let mut ids = BTreeSet::new();
+            for item in items {
+                let item = item
+                    .as_object()
+                    .ok_or_else(|| invalid("bill.history 含非对象".into()))?;
+                let id = item
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| invalid("bill.history 缺少 id".into()))?;
+                if !ids.insert(id) {
+                    return Err(invalid(format!("bill.history 含重复 id：{id}")));
+                }
+                validate_optional_nonnegative_number(item.get("periodDueAt"), "bill.history.periodDueAt")?;
+                validate_optional_nonnegative_number(item.get("paidAt"), "bill.history.paidAt")?;
+                if item
+                    .get("amount")
+                    .is_some_and(|value| value.as_f64().is_none_or(|n| !n.is_finite()))
+                {
+                    return Err(invalid("bill.history.amount 必须是有限数字".into()));
+                }
+                if item
+                    .get("method")
+                    .is_some_and(|value| !matches!(value.as_str(), Some("auto" | "manual")))
+                {
+                    return Err(invalid("bill.history.method 不是受支持枚举".into()));
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1196,7 +1296,8 @@ fn collect_media_references(value: &Value) -> Result<BTreeSet<String>, BackupFai
             Value::Object(map) => {
                 for (key, value) in map {
                     match key.as_str() {
-                        "imageFile" => match value {
+                        // iconFile = 账单 favicon 缓存，与 imageFile 同规则打包
+                        "imageFile" | "iconFile" => match value {
                             Value::String(name) => {
                                 validate_media_name(name)?;
                                 out.insert(name.into());
@@ -1205,7 +1306,7 @@ fn collect_media_references(value: &Value) -> Result<BTreeSet<String>, BackupFai
                             _ => {
                                 return Err(failure(
                                     BackupFailureCode::InvalidState,
-                                    "imageFile 必须是字符串",
+                                    "imageFile/iconFile 必须是字符串",
                                 ));
                             }
                         },
@@ -1561,6 +1662,20 @@ mod tests {
                 "notes": [{"id": "n1", "text": "正文", "imageFile": image}],
                 "taskSections": [{"id": "task-inbox", "name": "收集箱"}],
                 "tasks": [{"id": "t1", "text": "任务"}],
+                "bills": [{
+                    "id": "b1",
+                    "kind": "subscription",
+                    "name": "Netflix",
+                    "fallbackColor": "#ef4444",
+                    "amount": 68,
+                    "cycle": "monthly",
+                    "nextDueAt": 1755619200000u64,
+                    "status": "active",
+                    "reminderOffsets": [3, 1],
+                    "remindedFor": {"dueAt": 1755619200000u64, "offsets": []},
+                    "history": [],
+                    "createdAt": 1
+                }],
                 "settings": {"theme": "system"}
             }
         })
@@ -1597,6 +1712,7 @@ mod tests {
                 notes: 1,
                 task_sections: 1,
                 tasks: 1,
+                bills: 1,
                 media: 1,
             }
         );
@@ -1736,6 +1852,85 @@ mod tests {
     }
 
     #[test]
+    fn v18_backup_without_bills_still_imports() {
+        // 旧版本（<19）完整备份没有 bills 键：required-key 校验必须版本门控放行
+        let root = tempdir().unwrap();
+        let data = root.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        let output = root.path().join("v18.toskr-backup");
+        let legacy_state = serde_json::json!({
+            "storeVersion": 18,
+            "state": {
+                "sections": [{"id": "inbox", "name": "收件箱"}],
+                "notes": [{"id": "n1", "text": "正文"}],
+                "taskSections": [{"id": "task-inbox", "name": "收集箱"}],
+                "tasks": [{"id": "t1", "text": "任务"}],
+                "settings": {"theme": "system"}
+            }
+        })
+        .to_string();
+        let exported = export_complete_backup(&data, &output, &legacy_state, "0.17.3", 42).unwrap();
+        assert_eq!(exported.counts.bills, 0);
+        assert!(inspect_backup(&output).is_ok());
+    }
+
+    #[test]
+    fn v19_backup_missing_bills_or_bad_bill_fields_rejected() {
+        let root = tempdir().unwrap();
+        let data = root.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        let missing = serde_json::json!({
+            "storeVersion": MAX_STORE_VERSION,
+            "state": {
+                "sections": [], "notes": [], "taskSections": [], "tasks": [],
+                "settings": {}
+            }
+        })
+        .to_string();
+        let output = root.path().join("bad.toskr-backup");
+        let error = export_complete_backup(&data, &output, &missing, "0.17.3", 1).unwrap_err();
+        assert!(error.message.contains("bills"), "{}", error.message);
+
+        let bad_kind = serde_json::json!({
+            "storeVersion": MAX_STORE_VERSION,
+            "state": {
+                "sections": [], "notes": [], "taskSections": [], "tasks": [],
+                "bills": [{"id": "b1", "name": "X", "kind": "loan", "cycle": "monthly"}],
+                "settings": {}
+            }
+        })
+        .to_string();
+        let error = export_complete_backup(&data, &output, &bad_kind, "0.17.3", 1).unwrap_err();
+        assert!(error.message.contains("bill.kind"), "{}", error.message);
+    }
+
+    #[test]
+    fn bill_icon_file_counts_as_media_reference() {
+        let root = tempdir().unwrap();
+        let data = root.path().join("data");
+        fs::create_dir_all(data.join(MEDIA_DIR)).unwrap();
+        fs::write(data.join(MEDIA_DIR).join("icon.png"), b"png").unwrap();
+        let output = root.path().join("icon.toskr-backup");
+        let state = serde_json::json!({
+            "storeVersion": MAX_STORE_VERSION,
+            "state": {
+                "sections": [], "notes": [], "taskSections": [], "tasks": [],
+                "bills": [{
+                    "id": "b1", "kind": "subscription", "name": "Netflix",
+                    "cycle": "monthly", "iconFile": "icon.png"
+                }],
+                "settings": {}
+            }
+        })
+        .to_string();
+        let exported = export_complete_backup(&data, &output, &state, "0.17.3", 1).unwrap();
+        assert_eq!(exported.counts.media, 1);
+        let file = File::open(&output).unwrap();
+        let mut archive = ZipArchive::new(file).unwrap();
+        assert!(archive.by_name("media/icon.png").is_ok());
+    }
+
+    #[test]
     fn import_preflight_rejects_manifest_hash_mismatch() {
         let root = tempdir().unwrap();
         let archive = root.path().join("bad-hash.toskr-backup");
@@ -1750,6 +1945,7 @@ mod tests {
                 notes: 1,
                 task_sections: 1,
                 tasks: 1,
+                bills: 1,
                 media: 0,
             },
             files: vec![BackupFileEntry {

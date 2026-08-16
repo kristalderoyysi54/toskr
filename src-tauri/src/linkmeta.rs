@@ -13,8 +13,8 @@ pub struct LinkMeta {
     pub icon: Option<String>,
 }
 
-/// 部分站点对 curl 默认 UA 返回 403/跳登录，伪装成 Safari。
-const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15";
+/// 部分站点对 curl 默认 UA 返回 403/跳登录，伪装成 Safari（favicon 抓取共用）。
+pub(crate) const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15";
 
 #[tauri::command]
 pub async fn fetch_link_meta(url: String) -> Result<LinkMeta, String> {

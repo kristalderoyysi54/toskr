@@ -273,7 +273,7 @@ export async function runLegacyJsonImport(
   operationId: string,
   expectedRevision: string
 ): Promise<{
-  added: { notes: number; tasks: number; skippedDuplicates: number };
+  added: { notes: number; tasks: number; bills: number; skippedDuplicates: number };
   recoveryPath: string;
 }> {
   return withDataOperationMutex("导入旧 JSON", async () => {

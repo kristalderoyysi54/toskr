@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
+import { advanceCycle, billFallbackColor } from "@/lib/bills";
 import { detectCode } from "@/lib/code";
 import { detectLink } from "@/lib/link";
 import { imageCaption } from "@/lib/format";
@@ -65,7 +66,7 @@ export type PageId = "notes" | "clipboard" | "tasks" | "secret";
 
 /** 页签默认顺序（剪贴最高频，居首；秘文默认关闭故垫底）。 */
 export const DEFAULT_PAGE_ORDER: PageId[] = ["clipboard", "notes", "tasks", "secret"];
-export const STORE_VERSION = 18;
+export const STORE_VERSION = 19;
 
 /**
  * 归一化页签顺序：去重、剔除未知项、补齐缺失页（按默认序追加）。
@@ -202,6 +203,64 @@ export interface TaskSection {
 const defaultTaskSections = (): TaskSection[] => [
   { id: TASK_INBOX_ID, name: "收集箱" },
 ];
+
+// ===== 账单（订阅 / 信用卡还款；「提醒」页第二子视图，与任务独立的数据域）=====
+
+export type BillKind = "subscription" | "creditCard";
+
+/** 周期五档（周条/月历色点图例一一对应）；信用卡固定 monthly。 */
+export type BillCycle = "weekly" | "monthly" | "quarterly" | "semiannual" | "yearly";
+
+/** paused/canceled 行为一致（保留记录、不提醒、不计消费），仅语义标签不同。 */
+export type BillStatus = "active" | "paused" | "canceled";
+
+/** 提前提醒档位（天）：0 = 到期当天。 */
+export type ReminderOffsetDays = 0 | 1 | 3 | 7;
+
+export const BILL_REMINDER_OFFSET_OPTIONS: ReminderOffsetDays[] = [7, 3, 1, 0];
+
+/** 单账单记账事件封顶（月付约 5 年），趋势图只看近 6 个月，余量充足。 */
+export const BILL_HISTORY_MAX = 60;
+
+/**
+ * 一次记账事件：订阅到期自动滚动、信用卡「标记已还」各落一条。
+ * 是消费历史/趋势图的唯一数据源（事件流可重算聚合，不维护合计缓存）。
+ */
+export interface BillPaymentEvent {
+  id: string;
+  /** 记的是哪一期（滚动前的 nextDueAt）。 */
+  periodDueAt: number;
+  amount: number;
+  /** auto = periodDueAt 本身（长期未开应用也补记进正确历史月份）；manual = 点击时刻。 */
+  paidAt: number;
+  method: "auto" | "manual";
+}
+
+export interface Bill {
+  id: string;
+  kind: BillKind;
+  name: string;
+  /** 已缓存进本地媒体库的 favicon 文件名（与笔记图片同一套 GC/备份）。 */
+  iconFile?: string;
+  /** 首字色块兜底色（"#rrggbb"，创建时按 name 稳定派生，不随改名重算）。 */
+  fallbackColor: string;
+  /** 每期金额；订阅必填（UI 强制），信用卡可留空（标记已还时再录）。 */
+  amount: number | null;
+  cycle: BillCycle;
+  /** 下次到期/还款日（epoch ms，本地当天 00:00）。 */
+  nextDueAt: number;
+  status: BillStatus;
+  /** 启用的提前提醒档（可多选；空数组 = 不提醒）。 */
+  reminderOffsets: ReminderOffsetDays[];
+  /** 当前账期已提醒过的档位；nextDueAt 滚动后整体重置。 */
+  remindedFor: { dueAt: number; offsets: ReminderOffsetDays[] };
+  /** 记账历史（FIFO 封顶 BILL_HISTORY_MAX）。 */
+  history: BillPaymentEvent[];
+  note?: string;
+  createdAt: number;
+  /** 来自预置服务目录时的条目 id（展示参考，非强约束）。 */
+  catalogId?: string;
+}
 
 /** 分组可选色板（对齐 Paste 的色点风格）。 */
 // 用户可选的分组调色板（数据，非样式 token）：用户直接挑选的颜色值，刻意独立于 design-token 体系
@@ -360,6 +419,10 @@ export interface Settings {
   panelTopmost: boolean;
   /** 到期快捷档（可增删改）：相对分钟 / 今天 / 明天 / 下个周几。 */
   duePresets: DuePresetCfg[];
+  /** 账单金额展示的货币符号（纯前缀，不做汇率/多币种）。 */
+  currencySymbol: string;
+  /** 新建账单默认勾选的提前提醒档；只作用于此后新建，不回写已有账单。 */
+  billDefaultReminderOffsets: ReminderOffsetDays[];
   /** AI 提供商（OpenAI 兼容）：Base URL（如 https://api.deepseek.com）。 */
   aiBaseUrl: string;
   /** AI 模型名（如 deepseek-chat）。 */
@@ -634,6 +697,8 @@ export const defaultSettings = (): Settings => ({
   sidebarEdge: "right",
   panelTopmost: true,
   duePresets: DEFAULT_DUE_PRESETS.map((p) => ({ ...p })),
+  currencySymbol: "¥",
+  billDefaultReminderOffsets: [3, 1],
   aiBaseUrl: "",
   aiModel: "",
   aiEnabled: false,
@@ -701,6 +766,7 @@ export interface UndoEntry {
   notes: Note[];
   tasks: Task[];
   taskSections: TaskSection[];
+  bills: Bill[];
 }
 
 export type AddNoteResult = "added" | "duplicate" | "empty";
@@ -712,6 +778,8 @@ export interface NotesState {
   tasks: Task[];
   /** 任务分组（收集箱恒存）。 */
   taskSections: TaskSection[];
+  /** 账单（「提醒」页订阅子视图；同一持久化 bag、同一条撤销栈）。 */
+  bills: Bill[];
   /** 勾选态（临时，不持久化）。 */
   checkedIds: string[];
   settings: Settings;
@@ -866,6 +934,36 @@ export interface NotesState {
     checklist: string[]
   ) => boolean;
 
+  // ===== 账单 =====
+  /** 新建账单（reminderOffsets 缺省取 settings.billDefaultReminderOffsets）。 */
+  addBill: (input: {
+    kind: BillKind;
+    name: string;
+    amount: number | null;
+    cycle: BillCycle;
+    nextDueAt: number;
+    reminderOffsets?: ReminderOffsetDays[];
+    iconFile?: string;
+    fallbackColor: string;
+    note?: string;
+    catalogId?: string;
+  }) => string;
+  /** 编辑/暂停/恢复/取消统一入口；nextDueAt 变化时重置当期已提醒档。 */
+  updateBill: (
+    id: string,
+    patch: Partial<Omit<Bill, "id" | "createdAt" | "history" | "remindedFor">>
+  ) => void;
+  /** 删除账单（可撤销）；iconFile 的媒体 GC 由调用方 scheduleMediaGc。 */
+  deleteBill: (id: string) => void;
+  /** 信用卡「标记已还」：落 manual 记账、金额回写为本期实付、滚到下期。 */
+  markBillPaid: (id: string, amount: number) => void;
+  /** 滚动所有到期的 active 订阅（可跨多期补记）；信用卡不自动滚。 */
+  rollBillsIfDue: (now: number) => void;
+  /** 提醒去重打点：把命中的档位并入对应账单当期 remindedFor。 */
+  markBillsReminded: (
+    hits: { billId: string; offset: ReminderOffsetDays }[]
+  ) => void;
+
   setSettings: (patch: Partial<Settings>) => void;
   markOnboarding: (patch: Partial<OnboardingState>) => void;
   transitionOnboarding: (event: OnboardingEvent) => void;
@@ -878,14 +976,15 @@ export interface NotesState {
     notes?: Note[];
     tasks?: Task[];
     taskSections?: TaskSection[];
-  }) => { notes: number; tasks: number; skippedDuplicates: number };
+    bills?: Bill[];
+  }) => { notes: number; tasks: number; bills: number; skippedDuplicates: number };
 }
 
 const UNDO_DEPTH = 5;
 
 type PersistentNotesState = Pick<
   NotesState,
-  "sections" | "notes" | "tasks" | "taskSections" | "settings"
+  "sections" | "notes" | "tasks" | "taskSections" | "bills" | "settings"
 >;
 
 export type NotesStoreSnapshot = PersistentNotesState &
@@ -925,6 +1024,12 @@ function assertCurrentSchemaHasUniqueIds(
   for (const task of Array.isArray(persisted.tasks) ? persisted.tasks : []) {
     if (task && typeof task === "object") {
       assertUnique((task as Task).checklist, "task.checklist");
+    }
+  }
+  assertUnique(persisted.bills, "bills");
+  for (const bill of Array.isArray(persisted.bills) ? persisted.bills : []) {
+    if (bill && typeof bill === "object") {
+      assertUnique((bill as Bill).history, "bill.history");
     }
   }
   assertUnique(persisted.settings?.promptGroups, "settings.promptGroups");
@@ -1401,7 +1506,78 @@ function normalizeTaskRecord(task: Task, sectionIds: Set<string>): Task {
   };
 }
 
-/** Zustand persist v1-v17 向前迁移；未知字段保留，旧版本重复记录按首项去重。 */
+const BILL_KINDS = ["subscription", "creditCard"] as const;
+const BILL_CYCLES = ["weekly", "monthly", "quarterly", "semiannual", "yearly"] as const;
+const BILL_STATUSES = ["active", "paused", "canceled"] as const;
+
+function normalizeReminderOffsets(value: unknown): ReminderOffsetDays[] {
+  if (!Array.isArray(value)) return [];
+  const out: ReminderOffsetDays[] = [];
+  for (const item of value) {
+    if (
+      (BILL_REMINDER_OFFSET_OPTIONS as number[]).includes(item as number) &&
+      !out.includes(item as ReminderOffsetDays)
+    ) {
+      out.push(item as ReminderOffsetDays);
+    }
+  }
+  return out;
+}
+
+function normalizeBillRecord(bill: Bill): Bill {
+  if (!(BILL_KINDS as readonly string[]).includes(bill.kind)) {
+    throw new Error(`bill.kind 无效：${String(bill.kind)}`);
+  }
+  if (!(BILL_CYCLES as readonly string[]).includes(bill.cycle)) {
+    throw new Error(`bill.cycle 无效：${String(bill.cycle)}`);
+  }
+  const status = bill.status ?? "active";
+  if (!(BILL_STATUSES as readonly string[]).includes(status)) {
+    throw new Error(`bill.status 无效：${String(bill.status)}`);
+  }
+  if (
+    bill.amount !== null &&
+    bill.amount !== undefined &&
+    (typeof bill.amount !== "number" || !Number.isFinite(bill.amount))
+  ) {
+    throw new Error("bill.amount 必须是有限数字或 null");
+  }
+  const nextDueAt = finiteNumberOrDefault(bill.nextDueAt, 0, "bill.nextDueAt");
+  const remindedRaw = bill.remindedFor;
+  const remindedFor =
+    remindedRaw &&
+    typeof remindedRaw === "object" &&
+    typeof remindedRaw.dueAt === "number" &&
+    remindedRaw.dueAt === nextDueAt
+      ? { dueAt: nextDueAt, offsets: normalizeReminderOffsets(remindedRaw.offsets) }
+      : { dueAt: nextDueAt, offsets: [] as ReminderOffsetDays[] };
+  const history = dedupeById<BillPaymentEvent>(bill.history)
+    .map((ev) => ({
+      id: ev.id,
+      periodDueAt: finiteNumberOrDefault(ev.periodDueAt, 0, "bill.history.periodDueAt"),
+      amount: finiteNumberOrDefault(ev.amount, 0, "bill.history.amount"),
+      paidAt: finiteNumberOrDefault(ev.paidAt, 0, "bill.history.paidAt"),
+      method: ev.method === "manual" ? ("manual" as const) : ("auto" as const),
+    }))
+    .slice(-BILL_HISTORY_MAX);
+  return {
+    ...bill,
+    name: typeof bill.name === "string" ? bill.name : "",
+    fallbackColor:
+      typeof bill.fallbackColor === "string" && bill.fallbackColor
+        ? bill.fallbackColor
+        : billFallbackColor(typeof bill.name === "string" ? bill.name : ""),
+    amount: bill.amount ?? null,
+    nextDueAt,
+    status,
+    reminderOffsets: normalizeReminderOffsets(bill.reminderOffsets),
+    remindedFor,
+    history,
+    createdAt: finiteNumberOrDefault(bill.createdAt, 0, "bill.createdAt"),
+  };
+}
+
+/** Zustand persist v1-v18 向前迁移；未知字段保留，旧版本重复记录按首项去重。 */
 export function migratePersistedState(
   persisted: unknown,
   version: number
@@ -1415,7 +1591,7 @@ export function migratePersistedState(
   const p = (persisted && typeof persisted === "object"
     ? { ...(persisted as Partial<NotesState>) }
     : {}) as Partial<NotesState>;
-  for (const key of ["sections", "notes", "taskSections", "tasks"] as const) {
+  for (const key of ["sections", "notes", "taskSections", "tasks", "bills"] as const) {
     if (p[key] !== undefined && !Array.isArray(p[key])) {
       throw new Error(`${key} 必须是数组`);
     }
@@ -1522,6 +1698,15 @@ export function migratePersistedState(
       secretRevealTimeoutMs: 8000,
     };
   }
+  if (version < 19) {
+    // v19 新增账单域（订阅/信用卡）：旧数据补空数组与账单相关设置默认值
+    p.bills = [];
+    p.settings = {
+      ...(p.settings ?? {}),
+      currencySymbol: "¥",
+      billDefaultReminderOffsets: [3, 1],
+    } as Settings;
+  }
   const sections = dedupeById<Section>(p.sections).map((section) => ({
     ...section,
     name: typeof section.name === "string" ? section.name : "未命名分组",
@@ -1544,7 +1729,8 @@ export function migratePersistedState(
   const tasks = dedupeById<Task>(p.tasks).map((task) =>
     normalizeTaskRecord(task, taskSectionIds)
   );
-  return { ...p, sections, notes, taskSections, tasks };
+  const bills = dedupeById<Bill>(p.bills).map((bill) => normalizeBillRecord(bill));
+  return { ...p, sections, notes, taskSections, tasks, bills };
 }
 
 function normalizedPersistentState(
@@ -1565,6 +1751,7 @@ function normalizedPersistentState(
     taskSections: persisted.taskSections?.length
       ? persisted.taskSections
       : defaultTaskSections(),
+    bills: persisted.bills ?? [],
     settings,
   };
 }
@@ -1620,6 +1807,7 @@ export function persistentStateOf(state: NotesState): PersistentNotesState {
     notes: state.notes,
     tasks: state.tasks,
     taskSections: state.taskSections,
+    bills: state.bills,
     settings: state.settings,
   };
 }
@@ -1685,6 +1873,7 @@ export const useNotesStore = create<NotesState>()(
       notes: [],
       tasks: [],
       taskSections: defaultTaskSections(),
+      bills: [],
       checkedIds: [],
       settings: defaultSettings(),
       undoStack: [],
@@ -2674,6 +2863,128 @@ export const useNotesStore = create<NotesState>()(
         return true;
       },
 
+      addBill: (input) => {
+        const bill: Bill = {
+          id: crypto.randomUUID(),
+          kind: input.kind,
+          name: input.name.trim(),
+          iconFile: input.iconFile,
+          fallbackColor: input.fallbackColor,
+          amount: input.amount,
+          cycle: input.cycle,
+          nextDueAt: input.nextDueAt,
+          status: "active",
+          reminderOffsets:
+            input.reminderOffsets ?? [...get().settings.billDefaultReminderOffsets],
+          remindedFor: { dueAt: input.nextDueAt, offsets: [] },
+          history: [],
+          note: input.note,
+          createdAt: Date.now(),
+          catalogId: input.catalogId,
+        };
+        set({ bills: [bill, ...get().bills] });
+        return bill.id;
+      },
+
+      updateBill: (id, patch) => {
+        set({
+          bills: get().bills.map((b) => {
+            if (b.id !== id) return b;
+            const next = { ...b, ...patch };
+            // 改到期日 = 换账期：当期已提醒档随之作废，对新日期重新提醒
+            if (patch.nextDueAt !== undefined && patch.nextDueAt !== b.nextDueAt) {
+              next.remindedFor = { dueAt: patch.nextDueAt, offsets: [] };
+            }
+            return next;
+          }),
+        });
+      },
+
+      deleteBill: (id) => {
+        const bill = get().bills.find((b) => b.id === id);
+        if (!bill) return;
+        get().snapshot(`删除「${bill.name}」`);
+        set({ bills: get().bills.filter((b) => b.id !== id) });
+      },
+
+      markBillPaid: (id, amount) => {
+        set({
+          bills: get().bills.map((b) => {
+            if (b.id !== id) return b;
+            const nextDueAt = advanceCycle(b.nextDueAt, b.cycle);
+            const event: BillPaymentEvent = {
+              id: crypto.randomUUID(),
+              periodDueAt: b.nextDueAt,
+              amount,
+              paidAt: Date.now(),
+              method: "manual",
+            };
+            return {
+              ...b,
+              // 本期实付回写为下期默认金额（信用卡每期可变的主路径）
+              amount,
+              nextDueAt,
+              remindedFor: { dueAt: nextDueAt, offsets: [] },
+              history: [...b.history, event].slice(-BILL_HISTORY_MAX),
+            };
+          }),
+        });
+      },
+
+      rollBillsIfDue: (now) => {
+        let changed = false;
+        const bills = get().bills.map((b) => {
+          if (b.kind !== "subscription" || b.status !== "active") return b;
+          if (b.nextDueAt > now) return b;
+          changed = true;
+          let due = b.nextDueAt;
+          const events: BillPaymentEvent[] = [];
+          // 应用长期未开可能跨多期；auto 记账 paidAt 用账期本身，入正确历史月份
+          while (due <= now) {
+            events.push({
+              id: crypto.randomUUID(),
+              periodDueAt: due,
+              amount: b.amount ?? 0,
+              paidAt: due,
+              method: "auto",
+            });
+            due = advanceCycle(due, b.cycle);
+          }
+          return {
+            ...b,
+            nextDueAt: due,
+            remindedFor: { dueAt: due, offsets: [] as ReminderOffsetDays[] },
+            history: [...b.history, ...events].slice(-BILL_HISTORY_MAX),
+          };
+        });
+        if (changed) set({ bills });
+      },
+
+      markBillsReminded: (hits) => {
+        if (!hits.length) return;
+        const byBill = new Map<string, ReminderOffsetDays[]>();
+        for (const hit of hits) {
+          const list = byBill.get(hit.billId) ?? [];
+          if (!list.includes(hit.offset)) list.push(hit.offset);
+          byBill.set(hit.billId, list);
+        }
+        set({
+          bills: get().bills.map((b) => {
+            const offsets = byBill.get(b.id);
+            if (!offsets) return b;
+            const base =
+              b.remindedFor.dueAt === b.nextDueAt ? b.remindedFor.offsets : [];
+            return {
+              ...b,
+              remindedFor: {
+                dueAt: b.nextDueAt,
+                offsets: [...new Set([...base, ...offsets])],
+              },
+            };
+          }),
+        });
+      },
+
       setSettings: (patch) =>
         set({
           settings: repairSettingsTargetProfiles({
@@ -2707,6 +3018,7 @@ export const useNotesStore = create<NotesState>()(
             notes: structuredClone(get().notes),
             tasks: structuredClone(get().tasks),
             taskSections: structuredClone(get().taskSections),
+            bills: structuredClone(get().bills),
           },
         ];
         while (stack.length > UNDO_DEPTH) stack.shift();
@@ -2723,6 +3035,8 @@ export const useNotesStore = create<NotesState>()(
           notes: entry.notes,
           tasks: entry.tasks,
           taskSections: entry.taskSections,
+          // 旧撤销条目（无 bills 字段）不回滚账单域，保持当前值
+          ...(entry.bills ? { bills: entry.bills } : {}),
           checkedIds: [],
         });
         return entry.label;
@@ -2804,15 +3118,34 @@ export const useNotesStore = create<NotesState>()(
           taskIds.add(task.id);
           newTasks.push(normalizeTaskRecord(task, allTaskSecIds));
         }
+        const billIds = new Set(state.bills.map((b) => b.id));
+        const newBills: Bill[] = [];
+        for (const bill of data.bills ?? []) {
+          if (
+            !bill ||
+            typeof bill.id !== "string" ||
+            !bill.id ||
+            typeof bill.name !== "string"
+          )
+            continue;
+          if (billIds.has(bill.id)) {
+            skippedDuplicates += 1;
+            continue;
+          }
+          billIds.add(bill.id);
+          newBills.push(normalizeBillRecord(bill));
+        }
         set({
           sections: allSections,
           notes: [...state.notes, ...newNotes],
           tasks: [...state.tasks, ...newTasks],
           taskSections: allTaskSections,
+          bills: [...state.bills, ...newBills],
         });
         return {
           notes: newNotes.length,
           tasks: newTasks.length,
+          bills: newBills.length,
           skippedDuplicates,
         };
       },
@@ -2852,6 +3185,7 @@ export function restoreNotesStoreAfterRollback(
     notes: snapshot.notes,
     tasks: snapshot.tasks,
     taskSections: snapshot.taskSections,
+    bills: snapshot.bills,
     settings: snapshot.settings,
   };
   if (JSON.stringify(restored) === JSON.stringify(snapshotPersistent)) {

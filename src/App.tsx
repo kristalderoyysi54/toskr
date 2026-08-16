@@ -112,11 +112,11 @@ import {
   SimpleMenuSeparator,
 } from "@/components/SimpleMenu";
 import {
-  TaskPage,
   TASK_DONE_KEY,
   TASK_OVERDUE_COLLAPSED_KEY,
   TASK_SPARKS_COLLAPSED_KEY,
 } from "@/components/TaskPage";
+import { RemindersPage } from "@/components/RemindersPage";
 import { TaskTile } from "@/components/TaskRow";
 import { SecretPage } from "@/components/SecretPage";
 import { TaskQuickAdd } from "@/components/TaskQuickAdd";
@@ -158,6 +158,7 @@ import {
   materializeRichCapture,
   restoreRichCaptureAliases,
 } from "@/lib/richCapture";
+import { billDueLabel, dueBillsToRemind } from "@/lib/bills";
 import { bucketTasksForDisplay, dueTasksToRemind } from "@/lib/tasks";
 import { springSnappy, tweenExit } from "@/lib/motion";
 import {
@@ -634,7 +635,7 @@ const lockYAxis: Modifier = ({ transform }) => ({ ...transform, y: 0 });
 const PAGE_LABEL: Record<PageId, string> = {
   clipboard: "剪贴",
   notes: "笔记",
-  tasks: "任务",
+  tasks: "提醒",
   secret: "秘文",
 };
 
@@ -1292,9 +1293,16 @@ export default function App() {
         }, 1800);
       };
       if (p.page === "tasks") {
-        // 先切页（setPage 会清 focusedId），再定位目标任务
+        // 先切页（setPage 会清 focusedId），再定位目标任务/账单
         useUIStore.getState().setPage("tasks");
-        if (p.taskId) flash(p.taskId);
+        if (p.billId) {
+          useUIStore.getState().setRemindersSubview("subscriptions");
+          // bill: 前缀隔离账单/任务的高亮 id 空间（BillRow 按前缀比对）
+          flash(`bill:${p.billId}`);
+        } else if (p.taskId) {
+          useUIStore.getState().setRemindersSubview("tasks");
+          flash(p.taskId);
+        }
       } else {
         const lastEntry = captureHistory[captureHistory.length - 1];
         const lastId =
@@ -1328,6 +1336,42 @@ export default function App() {
         due.length === 1 ? due[0].id : undefined
       );
       markTasksReminded(due.map((t) => t.id));
+    };
+    if (useNotesStore.persist.hasHydrated()) check();
+    const unsub = useNotesStore.persist.onFinishHydration(() => check());
+    window.addEventListener(DATA_RUNTIME_READY_EVENT, check);
+    const timer = window.setInterval(check, 30_000);
+    return () => {
+      unsub();
+      window.removeEventListener(DATA_RUNTIME_READY_EVENT, check);
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  // 账单到期提醒（与任务轮询平行，职责独立）：先滚动到期的 active 订阅
+  // （可跨多期补记消费历史），再按多档提前量判定提醒并打点去重。
+  useEffect(() => {
+    const check = () => {
+      if (isDataOperationLocked()) return;
+      const now = Date.now();
+      useNotesStore.getState().rollBillsIfDue(now);
+      const state = useNotesStore.getState();
+      const due = dueBillsToRemind(state.bills, now);
+      if (!due.length) return;
+      const text =
+        due.length === 1
+          ? billDueLabel(due[0].bill, now, state.settings.currencySymbol)
+          : `${due.length} 笔账单即将到期`;
+      void api.hudFeedback(
+        "due",
+        text,
+        false,
+        true,
+        due.length === 1 ? `bill:${due[0].bill.id}` : undefined
+      );
+      state.markBillsReminded(
+        due.map((h) => ({ billId: h.bill.id, offset: h.offset }))
+      );
     };
     if (useNotesStore.persist.hasHydrated()) check();
     const unsub = useNotesStore.persist.onFinishHydration(() => check());
@@ -3743,7 +3787,7 @@ export default function App() {
                       <TaskQuickAdd />
                     </>
                   ) : (
-                    <TaskPage buckets={taskBuckets} now={taskNow} />
+                    <RemindersPage buckets={taskBuckets} now={taskNow} />
                   )}
                 </PageSlide>
                 <PageSlide

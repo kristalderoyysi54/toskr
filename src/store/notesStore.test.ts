@@ -86,7 +86,7 @@ describe("notesStore 基础", () => {
   });
 
   it("v12 迁移到最新版时正文不变、生成权威块，并补齐本地成效设置", () => {
-    expect(STORE_VERSION).toBe(18);
+    expect(STORE_VERSION).toBe(19);
     const decoded = decodePersistedState(JSON.stringify({
       version: 12,
       state: {
@@ -168,6 +168,30 @@ describe("notesStore 基础", () => {
     });
     // 旧页序缺秘文页，normalizePageOrder 应把它补进来
     expect(decoded.settings.pageOrder).toContain("secret");
+  });
+
+  it("v18 迁移到 v19 补齐账单域：bills 空数组 + 货币符号/默认提醒档", () => {
+    const {
+      currencySymbol: _currency,
+      billDefaultReminderOffsets: _offsets,
+      ...legacySettings
+    } = defaultSettings();
+    const decoded = decodePersistedState(JSON.stringify({
+      version: 18,
+      state: {
+        sections: [{ id: INBOX_ID, name: "收件箱" }],
+        notes: [],
+        tasks: [],
+        taskSections: [],
+        settings: { ...legacySettings, stealth: true },
+      },
+    }));
+    expect(decoded.bills).toEqual([]);
+    expect(decoded.settings).toMatchObject({
+      stealth: true,
+      currencySymbol: "¥",
+      billDefaultReminderOffsets: [3, 1],
+    });
   });
 
   it("秘文卡：addSecretNote 建组入库；历史键 secret 迁移为 secretMeta 且不再落盘", () => {
@@ -1582,7 +1606,7 @@ describe("任务：CRUD / 撤销 / 转换原子性 / 导入", () => {
         },
       ],
     });
-    expect(r).toEqual({ notes: 0, tasks: 1, skippedDuplicates: 1 });
+    expect(r).toEqual({ notes: 0, tasks: 1, bills: 0, skippedDuplicates: 1 });
     expect(useNotesStore.getState().tasks).toHaveLength(2);
     expect(useNotesStore.getState().tasks.find((t) => t.id === kept)?.text).toBe(
       "本地任务"
