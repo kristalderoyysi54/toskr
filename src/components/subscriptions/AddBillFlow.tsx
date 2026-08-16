@@ -3,6 +3,7 @@ import { Dialog as DialogPrimitive } from "radix-ui";
 import { ChevronDown, ChevronLeft, Plus, Search, X } from "lucide-react";
 
 import { SimpleMenu, SimpleMenuItem } from "@/components/SimpleMenu";
+import { brandIconUrl } from "@/components/subscriptions/brandIcons";
 
 import {
   BILL_CATALOG,
@@ -149,7 +150,10 @@ export function AddBillFlow({
     return BILL_CATALOG.filter(
       (s) =>
         (category === "all" || s.category === category) &&
-        (!q || s.name.toLowerCase().includes(q) || s.id.includes(q))
+        (!q ||
+          s.name.toLowerCase().includes(q) ||
+          s.nameAlt?.toLowerCase().includes(q) ||
+          s.id.includes(q))
     );
   }, [category, query]);
 
@@ -234,7 +238,8 @@ export function AddBillFlow({
         catalogId: form.catalog?.id,
       });
       const domain = form.catalog?.domain;
-      if (domain) {
+      // 有内置品牌图（catalogId 直查资源）时无需抓 favicon；仅无图条目兜底
+      if (domain && !brandIconUrl(form.catalog?.id)) {
         // 异步补图标：失败静默回退首字色块，不打扰添加主流程
         void api
           .fetchFavicon(domain)
@@ -307,24 +312,31 @@ export function AddBillFlow({
               <div className="mt-2 min-h-0 flex-1 overflow-y-auto pr-0.5">
                 {matches.length ? (
                   <div className="grid grid-cols-3 gap-1.5 pb-2">
-                    {matches.map((s) => (
-                      <button
-                        key={s.id}
-                        onClick={() => startConfirm(s)}
-                        className="flex flex-col items-center gap-1.5 rounded-xl bg-black/5 px-1 py-2.5 outline-none transition-colors hover:bg-black/10 focus-visible:ring-2 focus-visible:ring-ring dark:bg-white/5 dark:hover:bg-white/10"
-                      >
-                        <span
-                          className="flex size-8 items-center justify-center rounded-lg text-title font-semibold text-white"
-                          style={{ backgroundColor: billFallbackColor(s.name) }}
-                          aria-hidden
+                    {matches.map((s) => {
+                      const icon = brandIconUrl(s.id);
+                      return (
+                        <button
+                          key={s.id}
+                          onClick={() => startConfirm(s)}
+                          className="flex flex-col items-center gap-1.5 rounded-xl bg-black/5 px-1 py-2.5 outline-none transition-colors hover:bg-black/10 focus-visible:ring-2 focus-visible:ring-ring dark:bg-white/5 dark:hover:bg-white/10"
                         >
-                          {billAvatarInitial(s.name)}
-                        </span>
-                        <span className="w-full truncate px-0.5 text-center text-micro">
-                          {s.name}
-                        </span>
-                      </button>
-                    ))}
+                          {icon ? (
+                            <img src={icon} alt="" className="size-8 rounded-lg object-cover" />
+                          ) : (
+                            <span
+                              className="flex size-8 items-center justify-center rounded-lg text-title font-semibold text-white"
+                              style={{ backgroundColor: billFallbackColor(s.name) }}
+                              aria-hidden
+                            >
+                              {billAvatarInitial(s.name)}
+                            </span>
+                          )}
+                          <span className="w-full truncate px-0.5 text-center text-micro">
+                            {s.name}
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
                 ) : (
                   <p className="py-8 text-center text-label text-muted-foreground">

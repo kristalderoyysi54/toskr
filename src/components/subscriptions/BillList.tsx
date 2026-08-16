@@ -6,6 +6,7 @@ import {
   SimpleMenuItem,
   SimpleMenuSeparator,
 } from "@/components/SimpleMenu";
+import { brandIconUrl } from "@/components/subscriptions/brandIcons";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IconButton } from "@/components/ui/icon-button";
 import {
@@ -22,9 +23,11 @@ import { cn } from "@/lib/utils";
 import { useNotesStore, type Bill } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
 
-/** 账单头像：favicon 缓存图优先，缺省首字色块。 */
+/** 账单头像：内置品牌图 → favicon 缓存图 → 首字色块。 */
 export function BillAvatar({ bill, size = "md" }: { bill: Bill; size?: "md" | "sm" }) {
-  const icon = useNoteThumb(bill.iconFile);
+  const brand = brandIconUrl(bill.catalogId);
+  const favicon = useNoteThumb(brand ? undefined : bill.iconFile);
+  const icon = brand ?? favicon;
   const cls = size === "md" ? "size-6 rounded-md" : "size-3.5 rounded-sm";
   if (icon) {
     return <img src={icon} alt="" className={cn(cls, "shrink-0 object-cover")} />;
