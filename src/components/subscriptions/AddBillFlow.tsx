@@ -9,6 +9,7 @@ import {
   type CatalogCategory,
   type CatalogService,
 } from "@/components/subscriptions/billCatalog";
+import { Button } from "@/components/ui/button";
 import { floatingSurface } from "@/components/ui/floating-surface";
 import { IconButton } from "@/components/ui/icon-button";
 import { Segmented } from "@/components/ui/segmented";
@@ -84,6 +85,8 @@ interface FormState {
   cycle: BillCycle;
   /** 订阅：下次续费日（date input）。 */
   dueDate: string;
+  /** 订阅开始日期（纯记录）。 */
+  startDate: string;
   /** 信用卡：每月还款日 1-31。 */
   repayDay: string;
   offsets: ReminderOffsetDays[];
@@ -128,6 +131,7 @@ export function AddBillFlow({
         payMethod: edit.payMethod ?? "",
         cycle: edit.cycle,
         dueDate: toDateInput(edit.nextDueAt),
+        startDate: edit.startedAt != null ? toDateInput(edit.startedAt) : "",
         repayDay: String(new Date(edit.nextDueAt).getDate()),
         offsets: [...edit.reminderOffsets],
         note: edit.note ?? "",
@@ -160,6 +164,7 @@ export function AddBillFlow({
       payMethod: "",
       cycle: catalog?.defaultCycle ?? "monthly",
       dueDate: toDateInput(startOfBillDay(Date.now())),
+      startDate: toDateInput(startOfBillDay(Date.now())),
       repayDay: "10",
       offsets: [...defaultOffsets],
       note: "",
@@ -209,6 +214,10 @@ export function AddBillFlow({
       category: form.kind === "creditCard" ? undefined : form.category || undefined,
       payMethod: form.payMethod.trim() || undefined,
       cycle: form.kind === "creditCard" ? ("monthly" as BillCycle) : form.cycle,
+      startedAt:
+        form.kind === "subscription" && form.startDate
+          ? (fromDateInput(form.startDate) ?? undefined)
+          : undefined,
       nextDueAt,
       reminderOffsets: form.offsets,
       note: form.note.trim() || undefined,
@@ -321,24 +330,19 @@ export function AddBillFlow({
                   </p>
                 )}
               </div>
-              <div className="flex gap-1.5 border-t border-border/50 pt-2">
-                <button
-                  onClick={() => startConfirm(undefined, "subscription")}
-                  className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-paper py-1.5 text-body font-medium text-paper-foreground shadow-sm ring-1 ring-border hover:bg-paper/80"
-                >
-                  <Plus className="size-3.5" /> 自定义订阅
-                </button>
-                <button
-                  onClick={() => startConfirm(undefined, "creditCard")}
-                  className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-paper py-1.5 text-body font-medium text-paper-foreground shadow-sm ring-1 ring-border hover:bg-paper/80"
-                >
-                  <Plus className="size-3.5" /> 自定义信用卡
-                </button>
+              <div className="flex gap-1.5 border-t border-border/50 px-0.5 pb-0.5 pt-2">
+                <Button size="sm" className="flex-1" onClick={() => startConfirm(undefined, "subscription")}>
+                  <Plus /> 自定义订阅
+                </Button>
+                <Button size="sm" className="flex-1" onClick={() => startConfirm(undefined, "creditCard")}>
+                  <Plus /> 自定义信用卡
+                </Button>
               </div>
             </>
           ) : (
             form && (
-              <div className="mt-2 flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto pr-0.5">
+              // px/pb 留 2px 余量：按钮描边与焦点环不被滚动容器裁掉（用户反馈的左/底遮挡）
+              <div className="mt-2 flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-0.5 pb-0.5">
                 {!edit && (
                   <Segmented
                     ariaLabel="账单类型"
@@ -423,6 +427,14 @@ export function AddBillFlow({
                         className="rounded-md border border-border bg-transparent px-1.5 py-1 text-body outline-none focus:border-primary/50"
                       />
                     </Field>
+                    <Field label="开始日期（可选，纯记录）">
+                      <input
+                        type="date"
+                        value={form.startDate}
+                        onChange={(e) => setForm({ ...form, startDate: e.target.value })}
+                        className="rounded-md border border-border bg-transparent px-1.5 py-1 text-body outline-none focus:border-primary/50"
+                      />
+                    </Field>
                   </>
                 ) : (
                   <Field label="每月还款日">
@@ -488,12 +500,9 @@ export function AddBillFlow({
                   />
                 </Field>
                 <div className="mt-auto border-t border-border/50 pt-2">
-                  <button
-                    onClick={submit}
-                    className="w-full rounded-lg bg-paper py-1.5 text-body font-medium text-paper-foreground shadow-sm ring-1 ring-border hover:bg-paper/80"
-                  >
+                  <Button size="sm" className="w-full" onClick={submit}>
                     {edit ? "保存修改" : "添加"}
-                  </button>
+                  </Button>
                 </div>
               </div>
             )

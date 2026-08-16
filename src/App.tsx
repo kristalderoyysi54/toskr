@@ -3922,8 +3922,7 @@ function PageTab({
       onDoubleClick={onDoubleClick}
       title={`切换到${PAGE_LABEL[id]}；双击返回列表起点`}
       className={cn(
-        // 宽松胶囊内距（用户指定 2026-08-16）：页签更接近分段控件的按压面积
-        "relative flex items-center gap-1.5 rounded-md border px-4 py-1.5 text-label outline-none",
+        "relative flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-label outline-none",
         "transition-[color,background-color,transform] duration-(--duration-control)",
         focusRing,
         "active:scale-[0.97]",
