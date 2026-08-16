@@ -143,11 +143,15 @@ import {
   enrichLinkMeta,
   openNoteDetail,
   toggleNoteDetail,
+  NOTE_TAGS_EVENT,
+  refreshOpenNoteDetail,
+  RUN_PENDING_UNDO_EVENT,
   sendCheckedToChat,
   sendNotesToChat,
   undoableTip,
   warnWithPanel,
   type NoteEditPayload,
+  type NoteTagsPayload,
 } from "@/lib/actions";
 import { clipTimeBand } from "@/lib/cliprow";
 import {
@@ -1835,6 +1839,26 @@ export default function App() {
         undoableTip(noteDeleted ? "已删除 1 条" : "已移除图片");
         }
       ),
+      // 详情窗 ⌘Z：执行当前待撤销动作（与点击 HUD「撤销」同路），
+      // 随后重推详情窗内容——撤销后窗内展示不能停留在回退前
+      listen(RUN_PENDING_UNDO_EVENT, () => {
+        runPendingUndo();
+        void refreshOpenNoteDetail();
+      }),
+      // 详情窗标签编辑写回（sanitize 在 store 内统一执行）
+      listen<NoteTagsPayload>(NOTE_TAGS_EVENT, (e) => {
+        if (
+          isDataOperationLocked() ||
+          !matchesDataGeneration(e.payload.dataGeneration)
+        ) {
+          warnWithPanel(
+            "标签未保存：数据上下文已变化，请重新打开卡片",
+            "note-tags rejected"
+          );
+          return;
+        }
+        useNotesStore.getState().setNoteTags(e.payload.id, e.payload.tags);
+      }),
       // 详情编辑取消时仅删本次新增、且没有被任意卡片引用的图片；剪贴板
       // 内容哈希可能命中已有文件，不能由详情窗直接删盘。
       listen<{ files: string[]; dataGeneration: number }>(
@@ -2007,6 +2031,19 @@ export default function App() {
   useEffect(() => {
     let alive = true;
     let applying = false;
+
+    // 应用级首启（webview localStorage，跨数据档案）：安装后第一次启动默认
+    // 亮出主面板——新档案的完整 setup 在下方另有流程；老档案（迁移已标记
+    // initialPanelSetupDone）只做展示，不改伴随/图钉偏好
+    try {
+      if (!window.localStorage.getItem("toskr-first-launch-shown")) {
+        window.localStorage.setItem("toskr-first-launch-shown", "1");
+        useUIStore.getState().setOpen(true);
+        void api.showPanel();
+      }
+    } catch {
+      /* localStorage 不可用则跳过 */
+    }
 
     const showActiveOnboarding = (settings: Settings) => {
       const current = settings.onboarding;

@@ -41,7 +41,9 @@ import {
   retainEditorOperationMedia,
 } from "@/lib/editorSessionMedia";
 import {
+  clampDetailFontSize,
   CLIPBOARD_ID,
+  DETAIL_FONT_SIZE_DEFAULT,
   noteContentBlocks,
   noteImages,
   orderedCheckedNotes,
@@ -95,6 +97,8 @@ export type NotePreviewPayload = {
   /** 创建/最后修改时间（详情窗头部只读展示；批量聚合视图缺省不带）。 */
   createdAt?: number;
   updatedAt?: number;
+  /** 详情窗正文字号（px；缺省用默认字阶）。openTextPreview 统一注入。 */
+  fontSize?: number;
   /** true = 打开即进入编辑态。 */
   edit: boolean;
   /** 合并发送来源等临时视图不可编辑、移除附件或再次发送。 */
@@ -125,6 +129,17 @@ export type NoteEditPayload = {
       contentBlocks: NoteContentBlock[];
     }
 );
+
+/** 详情窗 → 主面板：触发当前待撤销动作（等价点击 HUD 气泡的「撤销」）。 */
+export const RUN_PENDING_UNDO_EVENT = "toskr://run-pending-undo";
+
+/** 详情窗 → 主面板：整卡标签写回（主面板是唯一持久化写入方）。 */
+export const NOTE_TAGS_EVENT = "toskr://note-tags";
+export type NoteTagsPayload = {
+  id: string;
+  tags: string[];
+  dataGeneration: number;
+};
 
 export type NoteEditOrigin =
   | { text: string; images?: string[] }
@@ -370,6 +385,22 @@ export async function toggleNoteDetail(id: string) {
 }
 
 /**
+ * 撤销后详情窗内容可能已回退：窗口仍可见时按最近展示的卡重推 payload。
+ * 不可见/卡已不存在则什么都不做（绝不因撤销把窗口弹出来）。
+ */
+export async function refreshOpenNoteDetail() {
+  if (!lastDetailId) return;
+  try {
+    const win = await WebviewWindow.getByLabel("textpreview");
+    if (!win || !(await win.isVisible())) return;
+  } catch {
+    return; /* Tauri 环境外 */
+  }
+  const note = useNotesStore.getState().notes.find((n) => n.id === lastDetailId);
+  if (note) openNoteDetail(note.id);
+}
+
+/**
  * 打开卡片明细：文字类（文本/代码/链接编辑）→ 桌面居中的文本详情窗；
  * 图片编辑直接进入原尺寸预览窗的备注编辑态。
  */
@@ -430,6 +461,10 @@ function openTextPreview(payload: Omit<NotePreviewPayload, "sessionId">) {
   lastDetailSessionId = sessionId;
   void api.showTextPreview();
   void emitTo("textpreview", "toskr://note-preview", {
+    fontSize: clampDetailFontSize(
+      useNotesStore.getState().settings.detailFontSize ??
+        DETAIL_FONT_SIZE_DEFAULT
+    ),
     ...payload,
     sessionId,
   } satisfies NotePreviewPayload);

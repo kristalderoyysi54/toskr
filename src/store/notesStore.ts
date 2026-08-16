@@ -292,6 +292,8 @@ export interface Settings {
   cardOpacity: number;
   /** 卡片密度：舒适（瓷砖）/ 紧凑（单行列表）。 */
   cardDensity: "comfortable" | "compact";
+  /** 文本详情窗正文字号（px；详情窗 ⌘+/⌘- 同步调整，⌘0 复位）。 */
+  detailFontSize: number;
   /** 剪贴卡模板（仅舒适密度竖栏生效）：标准瓷砖 / 浓缩（票据头+单行摘要）。 */
   clipCardTemplate: "standard" | "condensed";
   /** 卡片右键菜单项显隐与顺序（合并置顶、删除垫底不参与自定义）。 */
@@ -575,6 +577,17 @@ export const DEFAULT_EXCLUDED_APPS = [
   "com.apple.keychainaccess",
 ];
 
+/** 详情窗字号边界与默认（默认对齐 --text-body=12px）。 */
+export const DETAIL_FONT_SIZE_DEFAULT = 12;
+export const DETAIL_FONT_SIZE_MIN = 10;
+export const DETAIL_FONT_SIZE_MAX = 24;
+
+export const clampDetailFontSize = (size: number): number =>
+  Math.min(
+    DETAIL_FONT_SIZE_MAX,
+    Math.max(DETAIL_FONT_SIZE_MIN, Math.round(size))
+  );
+
 export const defaultSettings = (): Settings => ({
   theme: "system",
   panelOpacity: 0.62,
@@ -584,6 +597,7 @@ export const defaultSettings = (): Settings => ({
   cardTint: true,
   cardOpacity: 1,
   cardDensity: "comfortable",
+  detailFontSize: DETAIL_FONT_SIZE_DEFAULT,
   clipCardTemplate: "standard",
   contextMenu: CONTEXT_MENU_REGISTRY.map((i) => ({ id: i.id, on: true })),
   autoCheckUpdate: true,

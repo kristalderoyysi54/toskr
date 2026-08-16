@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   FIT_VIEW,
   MAX_ZOOM,
+  MIN_ZOOM,
   wheelZoomFactor,
   zoomViewAround,
 } from "./imageZoom";
@@ -21,15 +22,28 @@ describe("zoomViewAround", () => {
     expect(after.y + after.zoom * py).toBeCloseTo(anchor.y, 10);
   });
 
-  it("倍率夹在上限，回到 1× 时平移清零", () => {
+  it("倍率夹在上下限，1× 及以下居中且平移清零", () => {
     const capped = zoomViewAround({ zoom: 6, x: 5, y: 5 }, 100, { x: 0, y: 0 });
     expect(capped.zoom).toBe(MAX_ZOOM);
 
-    const reset = zoomViewAround({ zoom: 1.2, x: 80, y: -60 }, 0.5, {
+    // 从放大态缩回 1× 以下：允许缩小到适配以下，但强制居中
+    const shrunk = zoomViewAround({ zoom: 1.2, x: 80, y: -60 }, 0.5, {
       x: 33,
       y: 44,
     });
-    expect(reset).toEqual(FIT_VIEW);
+    expect(shrunk).toEqual({ zoom: 0.5, x: 0, y: 0 });
+
+    const floored = zoomViewAround({ zoom: 0.5, x: 0, y: 0 }, 0.01, {
+      x: 0,
+      y: 0,
+    });
+    expect(floored.zoom).toBe(MIN_ZOOM);
+
+    const backToFit = zoomViewAround({ zoom: 0.5, x: 0, y: 0 }, 1, {
+      x: 12,
+      y: 34,
+    });
+    expect(backToFit).toEqual(FIT_VIEW);
   });
 
   it("滚轮因子平滑可逆：等量正反增量相互抵消", () => {

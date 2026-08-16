@@ -8,6 +8,7 @@ export type BlockSelectionFormat =
   | "heading3"
   | "numbered-list"
   | "bullet-list"
+  | "todo-list"
   | "code-block";
 
 export type SelectionEdit = Readonly<{
@@ -257,7 +258,8 @@ function stripSupportedBlockPrefix(line: string): { indent: string; body: string
   const indent = line.match(/^[\t ]*/)?.[0] ?? "";
   const body = line
     .slice(indent.length)
-    .replace(/^(?:#{1,6}|[-+*]|\d+[.)])[\t ]+/, "");
+    // 核对清单前缀要整体剥（先于裸列表符，否则只剥掉 "-" 留下 "[ ]"）
+    .replace(/^(?:#{1,6}|[-+*][\t ]+\[[ xX]\]|[-+*]|\d+[.)])[\t ]+/, "");
   return { indent, body };
 }
 
@@ -323,6 +325,7 @@ export function applyBlockFormat(
       if (format === "heading2") return `${indent}## ${body}`;
       if (format === "heading3") return `${indent}### ${body}`;
       if (format === "bullet-list") return `${indent}- ${body}`;
+      if (format === "todo-list") return `${indent}- [ ] ${body}`;
       number += 1;
       return `${indent}${number}. ${body}`;
     })
@@ -351,6 +354,7 @@ export function blockFormatAt(
   if (/^##\s/.test(body)) return "heading2";
   if (/^###\s/.test(body)) return "heading3";
   if (/^\d+[.)]\s/.test(body)) return "numbered-list";
+  if (/^[-+*]\s+\[[ xX]\]\s/.test(body)) return "todo-list";
   if (/^[-+*]\s/.test(body)) return "bullet-list";
   return "paragraph";
 }

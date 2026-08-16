@@ -231,9 +231,11 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
             aria-label="拖拽排序（Space 拾起，方向键移动）"
             className={cn(
               "absolute left-1 top-1.5 cursor-grab touch-none rounded-md border border-foreground/10 bg-surface-raised/95 p-0.5 elevation-2",
-              "text-muted-foreground/50 opacity-0 transition-opacity",
-              expanded && "group-hover:opacity-100",
-              "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+              // 隐形态必须连命中也放行：opacity-0 仍参与 hit-testing，会把
+              // 正下方优先级色条的点击整个截走（症状＝优先级点了没反应）
+              "pointer-events-none text-muted-foreground/50 opacity-0 transition-opacity",
+              expanded && "group-hover:pointer-events-auto group-hover:opacity-100",
+              "focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
               "active:cursor-grabbing",
               done && "hidden"
             )}

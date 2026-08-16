@@ -149,3 +149,23 @@ describe("selectionFormat：渲染态选区映射", () => {
     expect(resolveSourceSelection("甲\n\n乙", "甲\n乙", { start: 0, end: 3 })).toBeNull();
   });
 });
+
+import { describe as describe2, expect as expect2, it as it2 } from "vitest";
+import { applyBlockFormat as applyBlock2, blockFormatAt as blockAt2 } from "./selectionFormat";
+
+describe2("核对清单块格式", () => {
+  it2("选区整行转为核对清单，再转回正文剥掉完整前缀", () => {
+    const source = "第一行\n第二行";
+    const todo = applyBlock2(source, { start: 0, end: source.length }, "todo-list");
+    expect2(todo.text).toBe("- [ ] 第一行\n- [ ] 第二行");
+    const back = applyBlock2(todo.text, todo.selection, "paragraph");
+    expect2(back.text).toBe("第一行\n第二行");
+  });
+
+  it2("已勾选清单行被识别为 todo-list，转标题不残留 [x]", () => {
+    const source = "- [x] 已完成项";
+    expect2(blockAt2(source, { start: 0, end: source.length })).toBe("todo-list");
+    const heading = applyBlock2(source, { start: 0, end: source.length }, "heading2");
+    expect2(heading.text).toBe("## 已完成项");
+  });
+});

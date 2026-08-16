@@ -99,6 +99,9 @@ import {
   CONTEXT_MENU_REGISTRY,
   HUD_DURATION_MAX_MS,
   HUD_DURATION_MIN_MS,
+  DETAIL_FONT_SIZE_DEFAULT,
+  DETAIL_FONT_SIZE_MAX,
+  DETAIL_FONT_SIZE_MIN,
   groupContextMenuIds,
   defaultSettings,
   normalizeContextMenu,
@@ -729,6 +732,21 @@ function GeneralSection({ settings, patch }: SP) {
               max={100}
               step={5}
               onChange={(v) => patch({ cardOpacity: v / 100 })}
+            />
+          }
+        />
+        <Row
+          label="详情窗字号"
+          hint="文本详情窗正文字号；窗内 ⌘+ / ⌘− 同步调整，⌘0 复位"
+          right={
+            <PercentSlider
+              ariaLabel="详情窗字号"
+              value={settings.detailFontSize ?? DETAIL_FONT_SIZE_DEFAULT}
+              min={DETAIL_FONT_SIZE_MIN}
+              max={DETAIL_FONT_SIZE_MAX}
+              step={1}
+              format={(v) => `${v}px`}
+              onChange={(v) => patch({ detailFontSize: v })}
             />
           }
         />
