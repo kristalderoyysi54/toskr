@@ -208,14 +208,16 @@ export function formatBillAmount(amount: number): string {
   return String(Math.round(amount * 100) / 100);
 }
 
-/** HUD 提醒文案：「Netflix 3 天后续费 ¥68」「招商银行信用卡 今天还款」。 */
+/** HUD 提醒文案：「Netflix 3 天后续费 ¥68」「招商银行信用卡 今天还款」。
+ *  currency 为全局缺省符号；单笔自带 currency 时优先。 */
 export function billDueLabel(bill: Bill, now: number, currency: string): string {
   const days = Math.round(
     (startOfBillDay(bill.nextDueAt) - startOfBillDay(now)) / DAY_MS
   );
   const verb = bill.kind === "creditCard" ? "还款" : "续费";
+  const symbol = bill.currency ?? currency;
   const amountTxt =
-    bill.amount != null ? ` ${currency}${formatBillAmount(bill.amount)}` : "";
+    bill.amount != null ? ` ${symbol}${formatBillAmount(bill.amount)}` : "";
   if (days < 0) return `${bill.name} ${verb}已逾期 ${-days} 天${amountTxt}`;
   const when = days === 0 ? "今天" : days === 1 ? "明天" : `${days} 天后`;
   return `${bill.name} ${when}${verb}${amountTxt}`;

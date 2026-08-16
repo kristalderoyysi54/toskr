@@ -246,6 +246,13 @@ export interface Bill {
   fallbackColor: string;
   /** 每期金额；订阅必填（UI 强制），信用卡可留空（标记已还时再录）。 */
   amount: number | null;
+  /** 该笔的货币符号（如 "US$"）；缺省用 settings.currencySymbol。
+   *  纯展示前缀：跨币种合计直接加数字、不做汇率（YAGNI）。 */
+  currency?: string;
+  /** 类别（billCatalog 的类别 id 或 "other"；纯展示/筛选参考）。 */
+  category?: string;
+  /** 支付方式（自由文本，如「支付宝」「招行卡尾号 1234」）。 */
+  payMethod?: string;
   cycle: BillCycle;
   /** 下次到期/还款日（epoch ms，本地当天 00:00）。 */
   nextDueAt: number;
@@ -940,6 +947,9 @@ export interface NotesState {
     kind: BillKind;
     name: string;
     amount: number | null;
+    currency?: string;
+    category?: string;
+    payMethod?: string;
     cycle: BillCycle;
     nextDueAt: number;
     reminderOffsets?: ReminderOffsetDays[];
@@ -1563,6 +1573,10 @@ function normalizeBillRecord(bill: Bill): Bill {
   return {
     ...bill,
     name: typeof bill.name === "string" ? bill.name : "",
+    currency: typeof bill.currency === "string" && bill.currency ? bill.currency : undefined,
+    category: typeof bill.category === "string" && bill.category ? bill.category : undefined,
+    payMethod:
+      typeof bill.payMethod === "string" && bill.payMethod ? bill.payMethod : undefined,
     fallbackColor:
       typeof bill.fallbackColor === "string" && bill.fallbackColor
         ? bill.fallbackColor
@@ -2871,6 +2885,9 @@ export const useNotesStore = create<NotesState>()(
           iconFile: input.iconFile,
           fallbackColor: input.fallbackColor,
           amount: input.amount,
+          currency: input.currency,
+          category: input.category,
+          payMethod: input.payMethod,
           cycle: input.cycle,
           nextDueAt: input.nextDueAt,
           status: "active",

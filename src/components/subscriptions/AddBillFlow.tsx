@@ -31,6 +31,25 @@ import {
   type ReminderOffsetDays,
 } from "@/store/notesStore";
 
+/** 货币速选（符号即存储值；不做汇率，仅展示前缀）。 */
+const CURRENCY_OPTIONS = [
+  { symbol: "¥", label: "¥ CNY" },
+  { symbol: "US$", label: "US$ USD" },
+  { symbol: "€", label: "€ EUR" },
+  { symbol: "£", label: "£ GBP" },
+  { symbol: "HK$", label: "HK$ HKD" },
+  { symbol: "JP¥", label: "JP¥ JPY" },
+];
+
+/** 订阅可选类别（信用卡走 kind，不在此列）；catalog 类别之外给「其他」。 */
+const BILL_CATEGORY_OPTIONS: { value: string; label: string }[] = [
+  ...CATALOG_CATEGORIES.filter((c) => c !== "creditCard").map((c) => ({
+    value: c,
+    label: CATALOG_CATEGORY_LABEL[c],
+  })),
+  { value: "other", label: "其他" },
+];
+
 const OFFSET_LABEL: Record<ReminderOffsetDays, string> = {
   7: "提前 7 天",
   3: "提前 3 天",
@@ -59,6 +78,9 @@ interface FormState {
   kind: BillKind;
   name: string;
   amount: string;
+  currency: string;
+  category: string;
+  payMethod: string;
   cycle: BillCycle;
   /** 订阅：下次续费日（date input）。 */
   dueDate: string;
@@ -84,6 +106,7 @@ export function AddBillFlow({
   onOpenChange: (open: boolean) => void;
 }) {
   const defaultOffsets = useNotesStore((s) => s.settings.billDefaultReminderOffsets);
+  const defaultCurrency = useNotesStore((s) => s.settings.currencySymbol);
   const [step, setStep] = useState<"pick" | "confirm">("pick");
   const [category, setCategory] = useState<CatalogCategory | "all">("all");
   const [query, setQuery] = useState("");
@@ -100,6 +123,9 @@ export function AddBillFlow({
         kind: edit.kind,
         name: edit.name,
         amount: edit.amount != null ? String(edit.amount) : "",
+        currency: edit.currency ?? defaultCurrency,
+        category: edit.category ?? "other",
+        payMethod: edit.payMethod ?? "",
         cycle: edit.cycle,
         dueDate: toDateInput(edit.nextDueAt),
         repayDay: String(new Date(edit.nextDueAt).getDate()),
@@ -128,6 +154,10 @@ export function AddBillFlow({
       kind: resolvedKind,
       name: catalog?.name ?? "",
       amount: "",
+      currency: defaultCurrency,
+      category:
+        catalog && catalog.category !== "creditCard" ? catalog.category : "other",
+      payMethod: "",
       cycle: catalog?.defaultCycle ?? "monthly",
       dueDate: toDateInput(startOfBillDay(Date.now())),
       repayDay: "10",
@@ -171,27 +201,25 @@ export function AddBillFlow({
       nextDueAt = parsed;
     }
     const store = useNotesStore.getState();
+    const shared = {
+      kind: form.kind,
+      name,
+      amount,
+      currency: form.currency || undefined,
+      category: form.kind === "creditCard" ? undefined : form.category || undefined,
+      payMethod: form.payMethod.trim() || undefined,
+      cycle: form.kind === "creditCard" ? ("monthly" as BillCycle) : form.cycle,
+      nextDueAt,
+      reminderOffsets: form.offsets,
+      note: form.note.trim() || undefined,
+    };
     if (edit) {
-      store.updateBill(edit.id, {
-        kind: form.kind,
-        name,
-        amount,
-        cycle: form.kind === "creditCard" ? "monthly" : form.cycle,
-        nextDueAt,
-        reminderOffsets: form.offsets,
-        note: form.note.trim() || undefined,
-      });
+      store.updateBill(edit.id, shared);
       tip("ok", `已更新「${name}」`);
     } else {
       const id = store.addBill({
-        kind: form.kind,
-        name,
-        amount,
-        cycle: form.kind === "creditCard" ? "monthly" : form.cycle,
-        nextDueAt,
-        reminderOffsets: form.offsets,
+        ...shared,
         fallbackColor: billFallbackColor(name),
-        note: form.note.trim() || undefined,
         catalogId: form.catalog?.id,
       });
       const domain = form.catalog?.domain;
@@ -333,16 +361,49 @@ export function AddBillFlow({
                   />
                 </Field>
                 <Field label={form.kind === "creditCard" ? "金额（可留空，每期可改）" : "每期金额"}>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={form.amount}
-                    onChange={(e) => setForm({ ...form, amount: e.target.value })}
-                    placeholder={form.kind === "creditCard" ? "留空 = 只提醒还款日" : "68"}
-                    className="w-full rounded-md border border-border bg-transparent px-1.5 py-1 text-body tabular-nums outline-none focus:border-primary/50"
-                  />
+                  <div className="flex gap-1.5">
+                    {/* 货币下拉与金额同排（面板窄，省一行；符号即存储值） */}
+                    <select
+                      value={form.currency}
+                      onChange={(e) => setForm({ ...form, currency: e.target.value })}
+                      aria-label="货币"
+                      className="rounded-md border border-border bg-transparent px-1 py-1 text-body outline-none focus:border-primary/50"
+                    >
+                      {(CURRENCY_OPTIONS.some((o) => o.symbol === form.currency)
+                        ? CURRENCY_OPTIONS
+                        : [{ symbol: form.currency, label: form.currency }, ...CURRENCY_OPTIONS]
+                      ).map((o) => (
+                        <option key={o.symbol} value={o.symbol}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={form.amount}
+                      onChange={(e) => setForm({ ...form, amount: e.target.value })}
+                      placeholder={form.kind === "creditCard" ? "留空 = 只提醒还款日" : "68"}
+                      className="min-w-0 flex-1 rounded-md border border-border bg-transparent px-1.5 py-1 text-body tabular-nums outline-none focus:border-primary/50"
+                    />
+                  </div>
                 </Field>
+                {form.kind === "subscription" && (
+                  <Field label="类别">
+                    <select
+                      value={form.category}
+                      onChange={(e) => setForm({ ...form, category: e.target.value })}
+                      className="w-full rounded-md border border-border bg-transparent px-1 py-1 text-body outline-none focus:border-primary/50"
+                    >
+                      {BILL_CATEGORY_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                )}
                 {form.kind === "subscription" ? (
                   <>
                     <Field label="周期">
@@ -410,6 +471,14 @@ export function AddBillFlow({
                       );
                     })}
                   </div>
+                </Field>
+                <Field label="支付方式（可选）">
+                  <input
+                    value={form.payMethod}
+                    onChange={(e) => setForm({ ...form, payMethod: e.target.value })}
+                    placeholder="如 支付宝 / 微信 / 招行卡尾号 1234"
+                    className="w-full rounded-md border border-border bg-transparent px-1.5 py-1 text-body outline-none focus:border-primary/50"
+                  />
                 </Field>
                 <Field label="备注（可选）">
                   <input

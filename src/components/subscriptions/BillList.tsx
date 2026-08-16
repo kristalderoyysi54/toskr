@@ -74,7 +74,8 @@ export function BillRow({
   now: number;
   onEdit: (bill: Bill) => void;
 }) {
-  const currency = useNotesStore((s) => s.settings.currencySymbol);
+  const globalCurrency = useNotesStore((s) => s.settings.currencySymbol);
+  const currency = bill.currency ?? globalCurrency;
   const flash = useUIStore((s) => s.flashId === `bill:${bill.id}`);
   const [paying, setPaying] = useState(false);
   const [payAmount, setPayAmount] = useState("");
@@ -124,6 +125,7 @@ export function BillRow({
               ? `每月 ${new Date(bill.nextDueAt).getDate()} 日还款`
               : CYCLE_LABEL[bill.cycle]}
             {bill.amount != null && ` · ${currency}${formatBillAmount(bill.amount)}`}
+            {bill.payMethod && ` · ${bill.payMethod}`}
             {inactive && ` · ${STATUS_LABEL[bill.status]}`}
           </p>
         </div>
