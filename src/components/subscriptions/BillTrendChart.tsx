@@ -29,9 +29,13 @@ export function BillTrendChart({
           return (
             <div
               key={`${m.year}-${m.month}`}
-              className="flex min-w-0 flex-1 flex-col items-center gap-0.5"
+              className="group/bar flex min-w-0 flex-1 flex-col items-center gap-0.5"
               title={`${m.year} 年 ${m.label} ${currency}${formatBillAmount(m.total)}`}
             >
+              {/* 悬停亮出金额（title 原生提示慢，柱顶直给） */}
+              <span className="h-3 whitespace-nowrap text-micro tabular-nums text-muted-foreground opacity-0 transition-opacity group-hover/bar:opacity-100">
+                {m.total > 0 ? `${currency}${formatBillAmount(m.total)}` : ""}
+              </span>
               {/* 柱容器定高：百分比柱高必须挂在确定高度上（auto 链解析为 0） */}
               <div className="flex h-10 w-full items-end">
                 <div

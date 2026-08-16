@@ -251,9 +251,13 @@ export function BillAnalytics({
                       return (
                         <div
                           key={t.key}
-                          className="flex min-w-0 flex-1 flex-col items-center gap-0.5"
+                          className="group/bar flex min-w-0 flex-1 flex-col items-center gap-0.5"
                           title={`${t.label} ${currency}${formatBillAmount(t.total)}`}
                         >
+                          {/* 悬停亮出金额（12 根柱窄，金额允许溢出列宽不截断） */}
+                          <span className="h-3 whitespace-nowrap text-micro tabular-nums text-muted-foreground opacity-0 transition-opacity group-hover/bar:opacity-100">
+                            {t.total > 0 ? `${currency}${formatBillAmount(t.total)}` : ""}
+                          </span>
                           {/* 柱容器定高：百分比柱高必须挂在确定高度上 */}
                           <div className="flex h-20 w-full items-end">
                             <div
