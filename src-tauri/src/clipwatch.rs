@@ -145,6 +145,55 @@ pub fn spawn(app: AppHandle) {
                 front.map(|f| (f.name, f.bundle_id)).unwrap_or((None, None));
 
             let src = app_name.clone().unwrap_or_else(|| "?".into());
+            // Finder 等复制的本地图片文件：file-url 表示优先于「文件名文本」，
+            // 收成图片剪贴卡（多选多张 = 多卡；像素哈希去重照常生效）
+            let file_paths = crate::pasteboard::read_file_paths();
+            if file_paths
+                .iter()
+                .any(|p| crate::storage::is_image_file_path(p))
+            {
+                if pasteboard_change_count() as i64 != count {
+                    continue;
+                }
+                drop(permit);
+                let mut imported = 0_u32;
+                for path in &file_paths {
+                    if !crate::storage::is_image_file_path(path) {
+                        continue;
+                    }
+                    match crate::storage::import_image_file(&app, path) {
+                        Ok((file, w, h)) => {
+                            imported += 1;
+                            let _ = app.emit_to(
+                                "main",
+                                CLIP_EVENT,
+                                ClipPayload {
+                                    content_kind: "image".into(),
+                                    text: format!("图片 {w}×{h}"),
+                                    html: None,
+                                    source_url: None,
+                                    captured_at_ms,
+                                    image_file: Some(file),
+                                    image_w: Some(w),
+                                    image_h: Some(h),
+                                    app_name: app_name.clone(),
+                                    bundle_id: bundle_id.clone(),
+                                },
+                            );
+                        }
+                        Err(e) => {
+                            crate::diag::push(&app, format!("剪贴板: 本地图片导入失败 {e}"))
+                        }
+                    }
+                }
+                if imported > 0 {
+                    crate::diag::push(
+                        &app,
+                        format!("剪贴板: 收本地图片文件 ×{imported} 来自 {src}"),
+                    );
+                }
+                continue;
+            }
             match crate::rich_clipboard::read_expected(count as isize) {
                 Ok(rich) if rich.plain_text.is_some() || rich.html.is_some() => {
                     let text = rich.plain_text.unwrap_or_default();

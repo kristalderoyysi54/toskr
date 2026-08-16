@@ -138,16 +138,21 @@ export function DraftInput() {
     if (isDataOperationLocked()) return;
     const lease = beginDataGenerationLease();
     try {
-      const img = await api.pasteImageFromClipboard();
+      const images = await api.pasteImagesFromClipboard();
       if (!matchesDataGeneration(lease.generation)) return;
-      if (!img) {
+      if (!images.length) {
         tip("info", "剪贴板里没有可用图片");
         return;
       }
-      const pendingImage = { ...img, dataGeneration: lease.generation };
-      setPending((p) =>
-        p.some((x) => x.file === img.file) ? p : [...p, pendingImage]
-      );
+      setPending((p) => {
+        const next = [...p];
+        for (const img of images) {
+          if (!next.some((x) => x.file === img.file)) {
+            next.push({ ...img, dataGeneration: lease.generation });
+          }
+        }
+        return next;
+      });
     } catch (e) {
       tip("warn", `粘贴图片失败：${e}`);
     } finally {

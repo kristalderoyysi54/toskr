@@ -7,7 +7,7 @@ use image::{codecs::png::PngEncoder, ColorType, ImageEncoder};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardWriting};
-use objc2_foundation::{NSArray, NSData, NSString};
+use objc2_foundation::{NSArray, NSData, NSString, NSURL};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
@@ -25,6 +25,27 @@ pub enum ClipboardOutcome {
 fn try_claim_flag(flag: &AtomicBool) -> bool {
     flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
+}
+
+/// general pasteboard 里的本地文件路径（public.file-url 表示；Finder 复制文件）。
+/// NSURL 负责 percent 解码，中文/空格文件名不需要手写 decoder。
+pub fn read_file_paths() -> Vec<String> {
+    let file_url_type = NSString::from_str("public.file-url");
+    let pasteboard = NSPasteboard::generalPasteboard();
+    let mut paths = Vec::new();
+    if let Some(items) = pasteboard.pasteboardItems() {
+        for item in items.iter() {
+            let Some(url_string) = item.stringForType(&file_url_type) else {
+                continue;
+            };
+            if let Some(url) = NSURL::URLWithString(&url_string) {
+                if let Some(path) = url.path() {
+                    paths.push(path.to_string());
+                }
+            }
+        }
+    }
+    paths
 }
 
 /// 发送与捕获回退共享的进程内 pasteboard 事务许可。

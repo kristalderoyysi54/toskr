@@ -102,6 +102,9 @@ export type TriggerPayload =
       clipboardWarning: string | null;
     };
 
+/** 粘贴/拖拽导入后已入媒体库的图片（文件名为像素哈希，天然去重）。 */
+export type PastedImage = { file: string; width: number; height: number };
+
 export type HudKind =
   | "added"
   | "duplicate"
@@ -601,11 +604,13 @@ export const api = {
   resetInputMonitoring: () => invoke("reset_input_monitoring"),
   /** 把图片附件写入系统剪贴板（图片卡复制）。 */
   copyImage: (file: string) => invoke("copy_image_to_clipboard", { file }),
-  /** 从系统剪贴板读图并入库（输入框粘贴图片）；无图返回 null。 */
-  pasteImageFromClipboard: () =>
-    invoke<{ file: string; width: number; height: number } | null>(
-      "paste_image_from_clipboard"
-    ),
+  /** 从系统剪贴板读图并入库（粘贴图片）：位图单张；Finder 复制的本地图片
+   *  文件可多张；无图返回空数组。 */
+  pasteImagesFromClipboard: () =>
+    invoke<PastedImage[]>("paste_images_from_clipboard"),
+  /** 拖入的本地图片文件入库（详情窗拖拽添加）；非图片/坏文件被跳过。 */
+  importImageFiles: (paths: string[]) =>
+    invoke<PastedImage[]>("import_image_files", { paths }),
 
   setHotkeyConfig: (modifier: string, gapMs: number) =>
     invoke("set_hotkey_config", { modifier, gapMs }),
