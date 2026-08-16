@@ -2679,6 +2679,19 @@ export default function App() {
         }
         return;
       }
+      // d = 完成态切换（done，与 x 勾选、p 常用同族的单键卡片操作）。
+      // 任务页不接管：那边 Space/x 已是完成切换；秘文页无完成语义
+      if (e.key === "d" && !e.metaKey && !e.ctrlKey && !e.altKey && ui.focusedId) {
+        if (!onNotesPage) return;
+        e.preventDefault();
+        const st = useNotesStore.getState();
+        const focused = st.notes.find((n) => n.id === ui.focusedId);
+        if (!focused) return;
+        st.toggleDone(focused.id);
+        // 标完成后卡片可能因分组「隐藏已完成」当场消失，补一句确认
+        tip("ok", focused.done ? "已取消完成" : "已标记完成");
+        return;
+      }
       // p = 置顶/常用切换（keep 双域语义：剪贴卡=置顶不清理，笔记卡=常用）
       if (e.key === "p" && !e.metaKey && !e.ctrlKey && !e.altKey && ui.focusedId) {
         if (ui.page === "secret" || ui.page === "tasks") return;

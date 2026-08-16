@@ -43,6 +43,7 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuShortcut,
   ContextMenuSub,
   ContextMenuSubContent,
   ContextMenuSubTrigger,
@@ -341,6 +342,7 @@ export const NoteCard = memo(function NoteCard({
           return (
             <ContextMenuItem key={id} onClick={() => void api.openUrl(note.url!)}>
               <ExternalLink className="size-3.5" /> 打开链接
+              <ContextMenuShortcut>Space</ContextMenuShortcut>
             </ContextMenuItem>
           );
         }
@@ -348,12 +350,14 @@ export const NoteCard = memo(function NoteCard({
           return (
             <ContextMenuItem key={id} onClick={() => openPreview()}>
               <Expand className="size-3.5" /> 原尺寸预览
+              <ContextMenuShortcut>Space</ContextMenuShortcut>
             </ContextMenuItem>
           );
         }
         return (
           <ContextMenuItem key={id} onClick={() => openPreview()}>
             <Expand className="size-3.5" /> 预览
+            <ContextMenuShortcut>Space</ContextMenuShortcut>
           </ContextMenuItem>
         );
       case "textops":
@@ -382,6 +386,7 @@ export const NoteCard = memo(function NoteCard({
           >
             <Send className="size-3.5" />
             {note.sectionId === CLIPBOARD_ID ? "发送 / 添加" : "发送到对话"}
+            <ContextMenuShortcut>⌘⏎</ContextMenuShortcut>
           </TargetSendMenuItem>
         );
       case "send-template": {
@@ -443,12 +448,14 @@ export const NoteCard = memo(function NoteCard({
         return (
           <ContextMenuItem key={id} onClick={() => void copyWithChecked()}>
             <ListOrdered className="size-3.5" /> 复制为列表
+            <ContextMenuShortcut>⌘C</ContextMenuShortcut>
           </ContextMenuItem>
         );
       case "edit":
         return (
           <ContextMenuItem key={id} onClick={() => openPreview(true)}>
             <Pencil className="size-3.5" /> 编辑
+            <ContextMenuShortcut>⏎</ContextMenuShortcut>
           </ContextMenuItem>
         );
       case "ocr":
@@ -462,6 +469,7 @@ export const NoteCard = memo(function NoteCard({
         return (
           <ContextMenuItem key={id} onClick={() => toggleDone(note.id)}>
             <Check className="size-3.5" /> {note.done ? "取消完成" : "标记完成"}
+            <ContextMenuShortcut>D</ContextMenuShortcut>
           </ContextMenuItem>
         );
       case "keep":
@@ -475,6 +483,7 @@ export const NoteCard = memo(function NoteCard({
               : note.keep
                 ? "取消常用"
                 : "设为常用 · 发送后保留"}
+            <ContextMenuShortcut>P</ContextMenuShortcut>
           </ContextMenuItem>
         );
       case "rename":
