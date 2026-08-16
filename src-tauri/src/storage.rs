@@ -937,6 +937,43 @@ pub fn save_image_rgba(
     Ok(name)
 }
 
+/// 按扩展名判断本地路径是否为可导入图片（与 image crate 已启用的解码器一致；
+/// HEIC 等无解码器的格式刻意不认，避免读了字节才失败）。
+pub fn is_image_file_path(path: &str) -> bool {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase());
+    matches!(
+        ext.as_deref(),
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp")
+    )
+}
+
+/// 单文件解码上限：防拖入超大文件把解码内存打爆。
+const MAX_IMPORT_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// 本地图片文件导入：解码为 RGBA 后走 save_image_rgba（像素哈希去重，
+/// 同图重复导入复用同一文件名）。返回 (媒体文件名, 宽, 高)。
+pub fn import_image_file(app: &AppHandle, path: &str) -> Result<(String, u32, u32), String> {
+    if !is_image_file_path(path) {
+        return Err("不支持的图片格式".into());
+    }
+    let meta = std::fs::metadata(path).map_err(|error| error.to_string())?;
+    if !meta.is_file() {
+        return Err("不是普通文件".into());
+    }
+    if meta.len() > MAX_IMPORT_IMAGE_BYTES {
+        return Err("图片超过 64MB 上限".into());
+    }
+    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+    let decoded = image::load_from_memory(&bytes).map_err(|error| error.to_string())?;
+    let rgba = decoded.to_rgba8();
+    let (width, height) = (rgba.width(), rgba.height());
+    let file = save_image_rgba(app, width as usize, height as usize, rgba.as_raw())?;
+    Ok((file, width, height))
+}
+
 fn safe_media_name(name: &str) -> bool {
     !name.is_empty()
         && !name.contains('/')
@@ -1168,6 +1205,29 @@ mod tests {
         first[137] = 1;
         assert_ne!(content_hash(64, 64, &first), content_hash(32, 128, &first));
         assert_eq!(content_hash(64, 64, &first).len(), 64);
+    }
+
+    #[test]
+    fn image_file_paths_filter_by_decodable_extension() {
+        for good in [
+            "/Users/kai/图 片/猫 咪.PNG",
+            "/tmp/a.jpeg",
+            "/tmp/b.jpg",
+            "/tmp/c.webp",
+            "/tmp/d.gif",
+            "/tmp/e.bmp",
+        ] {
+            assert!(is_image_file_path(good), "{good}");
+        }
+        for bad in [
+            "/tmp/a.heic",
+            "/tmp/b.pdf",
+            "/tmp/noext",
+            "/tmp/a.png.txt",
+            "/tmp/dir.png/file",
+        ] {
+            assert!(!is_image_file_path(bad), "{bad}");
+        }
     }
 
     #[test]

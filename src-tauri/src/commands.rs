@@ -338,23 +338,74 @@ pub struct PastedImage {
     height: u32,
 }
 
-/// 从系统剪贴板读图并入库（输入框 ⌘V 粘贴图片）。剪贴板无图返回 None。
-/// 走 Rust 直读（与剪贴板历史同款 arboard 路径），避免图片字节过 IPC。
+/// 把一组本地图片路径导入媒体库（哈希去重）；坏文件/不支持格式跳过并留痕。
+fn import_image_paths(app: &AppHandle, paths: &[String]) -> Vec<PastedImage> {
+    let mut imported = Vec::new();
+    for path in paths {
+        if !crate::storage::is_image_file_path(path) {
+            continue;
+        }
+        match crate::storage::import_image_file(app, path) {
+            Ok((file, width, height)) => imported.push(PastedImage {
+                file,
+                width,
+                height,
+            }),
+            Err(e) => crate::diag::push(app, format!("图片导入失败 {path}: {e}")),
+        }
+    }
+    imported
+}
+
+/// 从系统剪贴板读图并入库（⌘V 粘贴图片）。**本地图片文件优先**（与 clipwatch
+/// 同序）：Finder 复制文件时剪贴板同时带 file-url 与文件「图标」位图，位图
+/// 优先会把图标当成图片入库；只有不含图片文件路径时才读位图（截图/应用内复制）。
+/// 无图返回空。走 Rust 直读（与剪贴板历史同款 arboard 路径），避免图片字节过 IPC。
 #[tauri::command]
-pub async fn paste_image_from_clipboard(app: AppHandle) -> Result<Option<PastedImage>, String> {
+pub async fn paste_images_from_clipboard(app: AppHandle) -> Result<Vec<PastedImage>, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let file_paths = crate::pasteboard::read_file_paths();
+        if file_paths
+            .iter()
+            .any(|p| crate::storage::is_image_file_path(p))
+        {
+            let imported = import_image_paths(&app, &file_paths);
+            if !imported.is_empty() {
+                crate::diag::push(&app, format!("粘贴入库: 本地图片文件 ×{}", imported.len()));
+            }
+            // 含图片文件路径就定死走文件分支：坏文件也不回退位图，
+            // 否则又会把 Finder 图标当内容收进来
+            return Ok(imported);
+        }
         let mut c = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-        let Ok(img) = c.get_image() else {
-            return Ok(None);
-        };
-        let (w, h) = (img.width as u32, img.height as u32);
-        let file = crate::storage::save_image_rgba(&app, img.width, img.height, &img.bytes)?;
-        crate::diag::push(&app, format!("粘贴入库: 图片 {w}×{h}"));
-        Ok(Some(PastedImage {
-            file,
-            width: w,
-            height: h,
-        }))
+        if let Ok(img) = c.get_image() {
+            let (w, h) = (img.width as u32, img.height as u32);
+            let file = crate::storage::save_image_rgba(&app, img.width, img.height, &img.bytes)?;
+            crate::diag::push(&app, format!("粘贴入库: 图片 {w}×{h}"));
+            return Ok(vec![PastedImage {
+                file,
+                width: w,
+                height: h,
+            }]);
+        }
+        Ok(Vec::new())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 拖入的本地图片文件入库（详情窗拖拽添加）。非图片/坏文件跳过。
+#[tauri::command]
+pub async fn import_image_files(
+    app: AppHandle,
+    paths: Vec<String>,
+) -> Result<Vec<PastedImage>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let imported = import_image_paths(&app, &paths);
+        if !imported.is_empty() {
+            crate::diag::push(&app, format!("拖拽入库: 本地图片文件 ×{}", imported.len()));
+        }
+        Ok(imported)
     })
     .await
     .map_err(|e| e.to_string())?
