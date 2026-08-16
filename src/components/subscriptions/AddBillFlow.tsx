@@ -431,7 +431,7 @@ export function AddBillFlow({
                         className="rounded-md border border-border bg-transparent px-1.5 py-1 text-body outline-none focus:border-primary/50"
                       />
                     </Field>
-                    <Field label="开始日期（可选，纯记录）">
+                    <Field label="开始日期（可选，自动补记开始以来的往期消费）">
                       <input
                         type="date"
                         value={form.startDate}

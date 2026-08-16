@@ -65,6 +65,28 @@ export function advanceCycle(dueAt: number, cycle: BillCycle): number {
   }
 }
 
+/**
+ * 从开始日期到 nextDueAt（不含）之间的历史账期：开始日即首期付款日，
+ * 按周期步进。用于添加/编辑订阅时回填往期记账（月历点、本月消费、
+ * 趋势与「已续订」统计的数据源）。上限 60 期（BILL_HISTORY_MAX 同值），
+ * 超出取最近的。
+ */
+export function backfillPeriods(
+  startedAt: number,
+  nextDueAt: number,
+  cycle: BillCycle
+): number[] {
+  const periods: number[] = [];
+  let due = startedAt;
+  let guard = 0;
+  while (due < nextDueAt && guard < 400) {
+    periods.push(due);
+    due = advanceCycle(due, cycle);
+    guard += 1;
+  }
+  return periods.slice(-60);
+}
+
 export interface BillReminderHit {
   bill: Bill;
   offset: ReminderOffsetDays;
@@ -108,21 +130,26 @@ export function billsDueWithinDays(bills: Bill[], now: number, days = 7): Bill[]
  * 本月消费合计 = 本月已记账事件（含已暂停账单的历史，付了就是付了）
  * + active 账单本月内剩余的到期投影（周付可能多次；金额留空按 0 计）。
  */
-export function monthlySpendTotal(bills: Bill[], now: number): number {
+export function monthlySpendTotal(
+  bills: Bill[],
+  now: number,
+  convert: (currency: string | undefined) => number = () => 1
+): number {
   const d = new Date(now);
   const monthStart = new Date(d.getFullYear(), d.getMonth(), 1).getTime();
   const nextMonthStart = new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime();
   let total = 0;
   for (const bill of bills) {
+    const rate = convert(bill.currency);
     for (const ev of bill.history) {
-      if (ev.paidAt >= monthStart && ev.paidAt < nextMonthStart) total += ev.amount;
+      if (ev.paidAt >= monthStart && ev.paidAt < nextMonthStart) total += ev.amount * rate;
     }
     if (bill.status !== "active") continue;
     let due = bill.nextDueAt;
     let guard = 0;
     // 周付一个月最多 5 期，8 为带余量的安全上限（防御异常数据死循环）
     while (due < nextMonthStart && guard < 8) {
-      if (due >= monthStart) total += bill.amount ?? 0;
+      if (due >= monthStart) total += (bill.amount ?? 0) * rate;
       due = advanceCycle(due, bill.cycle);
       guard += 1;
     }
@@ -142,7 +169,8 @@ export interface MonthSpend {
 export function monthlySpendTrend(
   bills: Bill[],
   now: number,
-  months: number
+  months: number,
+  convert: (currency: string | undefined) => number = () => 1
 ): MonthSpend[] {
   const d = new Date(now);
   const buckets: MonthSpend[] = [];
@@ -156,12 +184,13 @@ export function monthlySpendTrend(
     });
   }
   for (const bill of bills) {
+    const rate = convert(bill.currency);
     for (const ev of bill.history) {
       const e = new Date(ev.paidAt);
       const hit = buckets.find(
         (b) => b.year === e.getFullYear() && b.month === e.getMonth()
       );
-      if (hit) hit.total += ev.amount;
+      if (hit) hit.total += ev.amount * rate;
     }
   }
   return buckets;
@@ -176,7 +205,8 @@ export function sixMonthTrend(bills: Bill[], now: number): MonthSpend[] {
 export function yearlySpendTrend(
   bills: Bill[],
   now: number,
-  years: number
+  years: number,
+  convert: (currency: string | undefined) => number = () => 1
 ): { year: number; label: string; total: number }[] {
   const current = new Date(now).getFullYear();
   const buckets = Array.from({ length: years }, (_, i) => ({
@@ -185,9 +215,10 @@ export function yearlySpendTrend(
     total: 0,
   }));
   for (const bill of bills) {
+    const rate = convert(bill.currency);
     for (const ev of bill.history) {
       const hit = buckets.find((b) => b.year === new Date(ev.paidAt).getFullYear());
-      if (hit) hit.total += ev.amount;
+      if (hit) hit.total += ev.amount * rate;
     }
   }
   return buckets;
@@ -214,21 +245,25 @@ export function monthlyEquivalent(bill: Bill): number {
  * 月固定支出 = 活跃订阅的月折算合计。刻意不含信用卡：还款额逐期波动，
  * 不是可预期的固定订阅支出。
  */
-export function monthlyFixedSpend(bills: Bill[]): number {
+export function monthlyFixedSpend(
+  bills: Bill[],
+  convert: (currency: string | undefined) => number = () => 1
+): number {
   return bills
     .filter((b) => b.kind === "subscription" && b.status === "active")
-    .reduce((sum, b) => sum + monthlyEquivalent(b), 0);
+    .reduce((sum, b) => sum + monthlyEquivalent(b) * convert(b.currency), 0);
 }
 
 /** 类别构成（活跃订阅按月折算分桶；未填类别归 "other"）。降序。 */
 export function categoryBreakdown(
-  bills: Bill[]
+  bills: Bill[],
+  convert: (currency: string | undefined) => number = () => 1
 ): { category: string; total: number }[] {
   const map = new Map<string, number>();
   for (const bill of bills) {
     if (bill.kind !== "subscription" || bill.status !== "active") continue;
     const key = bill.category || "other";
-    map.set(key, (map.get(key) ?? 0) + monthlyEquivalent(bill));
+    map.set(key, (map.get(key) ?? 0) + monthlyEquivalent(bill) * convert(bill.currency));
   }
   return [...map.entries()]
     .map(([category, total]) => ({ category, total }))
@@ -237,12 +272,17 @@ export function categoryBreakdown(
 }
 
 /** 今年记账累计。 */
-export function yearSpendTotal(bills: Bill[], now: number): number {
+export function yearSpendTotal(
+  bills: Bill[],
+  now: number,
+  convert: (currency: string | undefined) => number = () => 1
+): number {
   const year = new Date(now).getFullYear();
   let total = 0;
   for (const bill of bills) {
+    const rate = convert(bill.currency);
     for (const ev of bill.history) {
-      if (new Date(ev.paidAt).getFullYear() === year) total += ev.amount;
+      if (new Date(ev.paidAt).getFullYear() === year) total += ev.amount * rate;
     }
   }
   return total;
@@ -343,14 +383,19 @@ export function distinctCurrencies(bills: Bill[], primary: string): string[] {
 }
 
 /** 上月记账合计（环比基数；只看已发生的记账，不含投影）。 */
-export function prevMonthSpendTotal(bills: Bill[], now: number): number {
+export function prevMonthSpendTotal(
+  bills: Bill[],
+  now: number,
+  convert: (currency: string | undefined) => number = () => 1
+): number {
   const d = new Date(now);
   const start = new Date(d.getFullYear(), d.getMonth() - 1, 1).getTime();
   const end = new Date(d.getFullYear(), d.getMonth(), 1).getTime();
   let total = 0;
   for (const bill of bills) {
+    const rate = convert(bill.currency);
     for (const ev of bill.history) {
-      if (ev.paidAt >= start && ev.paidAt < end) total += ev.amount;
+      if (ev.paidAt >= start && ev.paidAt < end) total += ev.amount * rate;
     }
   }
   return total;

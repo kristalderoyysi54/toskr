@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { X } from "lucide-react";
 
@@ -14,14 +14,17 @@ import {
   distinctCurrencies,
   formatBillAmount,
   formatCurrencyTotals,
+  monthlyFixedSpend,
   monthlyFixedSpendByCurrency,
   monthlySpendTotal,
   monthlySpendTrend,
   monthlySpendTotalsByCurrency,
   prevMonthSpendTotal,
   yearlySpendTrend,
+  yearSpendTotal,
   yearSpendTotalsByCurrency,
 } from "@/lib/bills";
+import { cachedFx, ensureFx, makeConverter, type FxCache } from "@/lib/currency";
 import { cn } from "@/lib/utils";
 import { useNotesStore, type Bill } from "@/store/notesStore";
 
@@ -61,38 +64,75 @@ export function BillAnalytics({
 }) {
   const currency = useNotesStore((s) => s.settings.currencySymbol);
   const [range, setRange] = useState<"month" | "year">("month");
+  // 打开时确保当日汇率（24h 缓存；失败回退过期缓存 → 再退分列显示）
+  const [fx, setFx] = useState<FxCache | null>(() => cachedFx());
+  useEffect(() => {
+    if (!open) return;
+    void ensureFx().then((next) => {
+      if (next) setFx(next);
+    });
+  }, [open]);
+  const convert = useMemo(() => makeConverter(currency, fx), [currency, fx]);
 
   const stats = useMemo(() => {
     const multiCurrency = distinctCurrencies(bills, currency).length > 1;
-    const monthTotal = monthlySpendTotal(bills, now);
-    const prev = prevMonthSpendTotal(bills, now);
+    const monthParts = formatCurrencyTotals(
+      monthlySpendTotalsByCurrency(bills, now, currency),
+      currency
+    );
+    const fixedParts = formatCurrencyTotals(
+      monthlyFixedSpendByCurrency(bills, currency),
+      currency
+    );
+    const yearParts = formatCurrencyTotals(
+      yearSpendTotalsByCurrency(bills, now, currency),
+      currency
+    );
+    // 有汇率：统一折算主货币（多币种加 ≈），原币种分列进小字；无汇率：分列为主
+    const approx = multiCurrency && convert ? "≈ " : "";
+    const conv = convert ?? undefined;
+    const monthTotal = monthlySpendTotal(bills, now, conv);
+    const prev = prevMonthSpendTotal(bills, now, conv);
+    const canCompare = prev > 0 && (convert !== null || !multiCurrency);
     return {
-      monthText: formatCurrencyTotals(
-        monthlySpendTotalsByCurrency(bills, now, currency),
-        currency
-      ),
-      // 环比：多币种混计或上月无记账时不给百分比（数字不可比）
-      momPct: !multiCurrency && prev > 0 ? ((monthTotal - prev) / prev) * 100 : null,
-      fixedText: formatCurrencyTotals(monthlyFixedSpendByCurrency(bills, currency), currency),
-      yearText: formatCurrencyTotals(
-        yearSpendTotalsByCurrency(bills, now, currency),
-        currency
-      ),
+      monthText: convert
+        ? `${approx}${currency}${formatBillAmount(Math.round(monthTotal * 100) / 100)}`
+        : monthParts,
+      monthParts,
+      momPct: canCompare ? ((monthTotal - prev) / prev) * 100 : null,
+      fixedText: convert
+        ? `${approx}${currency}${formatBillAmount(Math.round(monthlyFixedSpend(bills, conv) * 100) / 100)}`
+        : fixedParts,
+      fixedParts,
+      yearText: convert
+        ? `${approx}${currency}${formatBillAmount(Math.round(yearSpendTotal(bills, now, conv) * 100) / 100)}`
+        : yearParts,
+      yearParts,
       active: bills.filter((b) => b.status === "active").length,
       multiCurrency,
+      converted: convert !== null,
     };
-  }, [bills, now, currency]);
+  }, [bills, now, currency, convert]);
 
   const trend = useMemo(
     () =>
       range === "month"
-        ? monthlySpendTrend(bills, now, 12).map((m) => ({ ...m, key: `${m.year}-${m.month}` }))
-        : yearlySpendTrend(bills, now, 4).map((y) => ({ ...y, key: String(y.year) })),
-    [bills, now, range]
+        ? monthlySpendTrend(bills, now, 12, convert ?? undefined).map((m) => ({
+            ...m,
+            key: `${m.year}-${m.month}`,
+          }))
+        : yearlySpendTrend(bills, now, 4, convert ?? undefined).map((y) => ({
+            ...y,
+            key: String(y.year),
+          })),
+    [bills, now, range, convert]
   );
   const trendMax = Math.max(...trend.map((t) => t.total), 0);
 
-  const categories = useMemo(() => categoryBreakdown(bills), [bills]);
+  const categories = useMemo(
+    () => categoryBreakdown(bills, convert ?? undefined),
+    [bills, convert]
+  );
   const categoryTotal = categories.reduce((sum, c) => sum + c.total, 0);
   const donutGradient = useMemo(() => {
     if (!categoryTotal) return "";
@@ -138,11 +178,13 @@ export function BillAnalytics({
                   label="本月消费"
                   value={stats.monthText}
                   sub={
-                    stats.momPct === null
-                      ? stats.multiCurrency
-                        ? "多币种分列，不做汇率"
-                        : "上月无记账"
-                      : `${stats.momPct >= 0 ? "↑" : "↓"} 较上月 ${Math.abs(stats.momPct).toFixed(0)}%`
+                    stats.momPct !== null
+                      ? `${stats.momPct >= 0 ? "↑" : "↓"} 较上月 ${Math.abs(stats.momPct).toFixed(0)}%`
+                      : stats.multiCurrency && stats.converted
+                        ? stats.monthParts
+                        : stats.multiCurrency
+                          ? "汇率未就绪，按币种分列"
+                          : "上月无记账"
                   }
                   subTone={
                     stats.momPct === null ? "muted" : stats.momPct > 0 ? "up" : "down"
@@ -151,12 +193,20 @@ export function BillAnalytics({
                 <StatCard
                   label="月固定支出"
                   value={stats.fixedText}
-                  sub="活跃订阅按周期折算"
+                  sub={
+                    stats.multiCurrency && stats.converted
+                      ? stats.fixedParts
+                      : "活跃订阅按周期折算"
+                  }
                 />
                 <StatCard
                   label="年度累计"
                   value={stats.yearText}
-                  sub={`${new Date(now).getFullYear()} 年已记账`}
+                  sub={
+                    stats.multiCurrency && stats.converted
+                      ? stats.yearParts
+                      : `${new Date(now).getFullYear()} 年已记账`
+                  }
                 />
                 <StatCard
                   label="活跃账单"
@@ -172,7 +222,7 @@ export function BillAnalytics({
                     消费趋势
                     {stats.multiCurrency && (
                       <span className="ml-1 font-normal text-micro text-muted-foreground">
-                        多币种混计
+                        {stats.converted ? `已折算 ${currency}` : "多币种混计"}
                       </span>
                     )}
                   </p>
@@ -236,7 +286,9 @@ export function BillAnalytics({
                 <p className="mb-1.5 pl-1 text-label font-semibold">
                   按类别{" "}
                   <span className="font-normal text-muted-foreground">
-                    · 月固定支出构成{stats.multiCurrency && "（多币种混计）"}
+                    · 月固定支出构成
+                    {stats.multiCurrency &&
+                      (stats.converted ? `（已折算 ${currency}）` : "（多币种混计）")}
                   </span>
                 </p>
                 {categoryTotal <= 0 ? (
@@ -287,6 +339,18 @@ export function BillAnalytics({
                   </div>
                 )}
               </section>
+              {stats.converted && stats.multiCurrency && fx && (
+                <p className="px-1 text-micro text-muted-foreground">
+                  汇率更新于{" "}
+                  {new Date(fx.fetchedAt).toLocaleString("zh-CN", {
+                    month: "numeric",
+                    day: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}{" "}
+                  · open.er-api.com · 每日缓存，折算仅供参考
+                </p>
+              )}
             </div>
           </div>
         </DialogPrimitive.Content>

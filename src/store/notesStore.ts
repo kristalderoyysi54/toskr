@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
-import { advanceCycle, billFallbackColor } from "@/lib/bills";
+import { advanceCycle, backfillPeriods, billFallbackColor } from "@/lib/bills";
 import { detectCode } from "@/lib/code";
 import { detectLink } from "@/lib/link";
 import { imageCaption } from "@/lib/format";
@@ -2885,6 +2885,20 @@ export const useNotesStore = create<NotesState>()(
       },
 
       addBill: (input) => {
+        // 开始日期 = 首期付款日：回填开始日至下期（不含）的往期记账，
+        // 让月历/本月消费/趋势立即反映既有订阅（仅订阅；信用卡无此语义）
+        const history: BillPaymentEvent[] =
+          input.kind === "subscription" && input.startedAt != null
+            ? backfillPeriods(input.startedAt, input.nextDueAt, input.cycle).map(
+                (periodDueAt) => ({
+                  id: crypto.randomUUID(),
+                  periodDueAt,
+                  amount: input.amount ?? 0,
+                  paidAt: periodDueAt,
+                  method: "auto" as const,
+                })
+              )
+            : [];
         const bill: Bill = {
           id: crypto.randomUUID(),
           kind: input.kind,
@@ -2902,7 +2916,7 @@ export const useNotesStore = create<NotesState>()(
           reminderOffsets:
             input.reminderOffsets ?? [...get().settings.billDefaultReminderOffsets],
           remindedFor: { dueAt: input.nextDueAt, offsets: [] },
-          history: [],
+          history,
           note: input.note,
           createdAt: Date.now(),
           catalogId: input.catalogId,
@@ -2919,6 +2933,30 @@ export const useNotesStore = create<NotesState>()(
             // 改到期日 = 换账期：当期已提醒档随之作废，对新日期重新提醒
             if (patch.nextDueAt !== undefined && patch.nextDueAt !== b.nextDueAt) {
               next.remindedFor = { dueAt: patch.nextDueAt, offsets: [] };
+            }
+            // 编辑动了开始日/到期日/周期且历史全是自动回填（无手工记账）时，
+            // 按新参数重建回填——有手工「已还」记录则绝不覆盖真实账
+            const affectsBackfill =
+              patch.startedAt !== undefined ||
+              patch.nextDueAt !== undefined ||
+              patch.cycle !== undefined;
+            if (
+              affectsBackfill &&
+              next.kind === "subscription" &&
+              b.history.every((ev) => ev.method === "auto")
+            ) {
+              next.history =
+                next.startedAt != null
+                  ? backfillPeriods(next.startedAt, next.nextDueAt, next.cycle).map(
+                      (periodDueAt) => ({
+                        id: crypto.randomUUID(),
+                        periodDueAt,
+                        amount: next.amount ?? 0,
+                        paidAt: periodDueAt,
+                        method: "auto" as const,
+                      })
+                    )
+                  : [];
             }
             return next;
           }),
