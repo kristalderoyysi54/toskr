@@ -116,6 +116,19 @@ export function dueBillsToRemind(bills: Bill[], now: number): BillReminderHit[] 
   return hits;
 }
 
+/**
+ * 信用卡本期是否已还：存在一条手工记账，其账期 + 一个周期恰为当前
+ * nextDueAt（即刚为上一期还过款、还没到下一期）。用于行内「已还」状态。
+ */
+export function cardPaidForCurrentCycle(bill: Bill, now: number): boolean {
+  if (bill.kind !== "creditCard" || bill.nextDueAt <= now) return false;
+  return bill.history.some(
+    (ev) =>
+      ev.method === "manual" &&
+      advanceCycle(ev.periodDueAt, bill.cycle) === bill.nextDueAt
+  );
+}
+
 /** 未来 N 天内到期的 active 账单（含今天，按到期日升序；逾期的不算「即将」）。 */
 export function billsDueWithinDays(bills: Bill[], now: number, days = 7): Bill[] {
   const from = startOfBillDay(now);
@@ -129,6 +142,8 @@ export function billsDueWithinDays(bills: Bill[], now: number, days = 7): Bill[]
 /**
  * 本月消费合计 = 本月已记账事件（含已暂停账单的历史，付了就是付了）
  * + active 账单本月内剩余的到期投影（周付可能多次；金额留空按 0 计）。
+ * 所有金额统计只算订阅：信用卡还款偏私人账务，不进任何消费汇总
+ * （用户指定 2026-08-16），下同。
  */
 export function monthlySpendTotal(
   bills: Bill[],
@@ -140,6 +155,7 @@ export function monthlySpendTotal(
   const nextMonthStart = new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime();
   let total = 0;
   for (const bill of bills) {
+    if (bill.kind !== "subscription") continue;
     const rate = convert(bill.currency);
     for (const ev of bill.history) {
       if (ev.paidAt >= monthStart && ev.paidAt < nextMonthStart) total += ev.amount * rate;
@@ -184,6 +200,7 @@ export function monthlySpendTrend(
     });
   }
   for (const bill of bills) {
+    if (bill.kind !== "subscription") continue;
     const rate = convert(bill.currency);
     for (const ev of bill.history) {
       const e = new Date(ev.paidAt);
@@ -215,6 +232,7 @@ export function yearlySpendTrend(
     total: 0,
   }));
   for (const bill of bills) {
+    if (bill.kind !== "subscription") continue;
     const rate = convert(bill.currency);
     for (const ev of bill.history) {
       const hit = buckets.find((b) => b.year === new Date(ev.paidAt).getFullYear());
@@ -280,6 +298,7 @@ export function yearSpendTotal(
   const year = new Date(now).getFullYear();
   let total = 0;
   for (const bill of bills) {
+    if (bill.kind !== "subscription") continue;
     const rate = convert(bill.currency);
     for (const ev of bill.history) {
       if (new Date(ev.paidAt).getFullYear() === year) total += ev.amount * rate;
@@ -328,6 +347,7 @@ export function monthlySpendTotalsByCurrency(
   const add = (currency: string, amount: number) =>
     map.set(currency, (map.get(currency) ?? 0) + amount);
   for (const bill of bills) {
+    if (bill.kind !== "subscription") continue;
     const currency = bill.currency ?? primary;
     for (const ev of bill.history) {
       if (ev.paidAt >= monthStart && ev.paidAt < nextMonthStart) add(currency, ev.amount);
@@ -367,6 +387,7 @@ export function yearSpendTotalsByCurrency(
   const year = new Date(now).getFullYear();
   const map = new Map<string, number>();
   for (const bill of bills) {
+    if (bill.kind !== "subscription") continue;
     const currency = bill.currency ?? primary;
     for (const ev of bill.history) {
       if (new Date(ev.paidAt).getFullYear() === year) {
@@ -379,7 +400,13 @@ export function yearSpendTotalsByCurrency(
 
 /** 账单集里出现的币种数（缺省币按 primary 计）。 */
 export function distinctCurrencies(bills: Bill[], primary: string): string[] {
-  return [...new Set(bills.map((b) => b.currency ?? primary))];
+  return [
+    ...new Set(
+      bills
+        .filter((b) => b.kind === "subscription")
+        .map((b) => b.currency ?? primary)
+    ),
+  ];
 }
 
 /** 上月记账合计（环比基数；只看已发生的记账，不含投影）。 */
@@ -393,6 +420,7 @@ export function prevMonthSpendTotal(
   const end = new Date(d.getFullYear(), d.getMonth(), 1).getTime();
   let total = 0;
   for (const bill of bills) {
+    if (bill.kind !== "subscription") continue;
     const rate = convert(bill.currency);
     for (const ev of bill.history) {
       if (ev.paidAt >= start && ev.paidAt < end) total += ev.amount * rate;

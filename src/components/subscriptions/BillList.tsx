@@ -12,6 +12,7 @@ import { IconButton } from "@/components/ui/icon-button";
 import {
   billAvatarInitial,
   billsDueWithinDays,
+  cardPaidForCurrentCycle,
   compareBills,
   CYCLE_LABEL,
   formatBillAmount,
@@ -84,6 +85,8 @@ export function BillRow({
   const [payAmount, setPayAmount] = useState("");
   const badge = billDueBadge(bill, now);
   const inactive = bill.status !== "active";
+  // 信用卡本期已还：状态徽标转绿、隐藏「标记已还」按钮直到下期
+  const paidThisCycle = cardPaidForCurrentCycle(bill, now);
 
   const setStatus = (status: Bill["status"], label: string) => {
     useNotesStore.getState().updateBill(bill.id, { status });
@@ -127,24 +130,32 @@ export function BillRow({
             {bill.kind === "creditCard"
               ? `每月 ${new Date(bill.nextDueAt).getDate()} 日还款`
               : CYCLE_LABEL[bill.cycle]}
-            {bill.amount != null && ` · ${currency}${formatBillAmount(bill.amount)}`}
+            {bill.amount != null &&
+              bill.amount !== 0 &&
+              ` · ${currency}${formatBillAmount(bill.amount)}`}
             {bill.payMethod && ` · ${bill.payMethod}`}
             {inactive && ` · ${STATUS_LABEL[bill.status]}`}
           </p>
         </div>
-        {!inactive && (
-          <span
-            className={cn(
-              "shrink-0 rounded-sm px-1 py-px text-micro tabular-nums",
-              badge.tone === "overdue" && "bg-destructive/10 text-destructive",
-              badge.tone === "today" && "bg-amber-500/15 text-amber-600 dark:text-amber-400",
-              badge.tone === "later" && "text-muted-foreground"
-            )}
-          >
-            {badge.text}
-          </span>
-        )}
-        {bill.kind === "creditCard" && !inactive && !paying && (
+        {!inactive &&
+          (paidThisCycle ? (
+            <span className="shrink-0 rounded-sm bg-success/10 px-1 py-px text-micro tabular-nums text-success">
+              已还 · 下期 {new Date(bill.nextDueAt).getMonth() + 1}/
+              {new Date(bill.nextDueAt).getDate()}
+            </span>
+          ) : (
+            <span
+              className={cn(
+                "shrink-0 rounded-sm px-1 py-px text-micro tabular-nums",
+                badge.tone === "overdue" && "bg-destructive/10 text-destructive",
+                badge.tone === "today" && "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+                badge.tone === "later" && "text-muted-foreground"
+              )}
+            >
+              {badge.text}
+            </span>
+          ))}
+        {bill.kind === "creditCard" && !inactive && !paying && !paidThisCycle && (
           <IconButton
             label="标记已还"
             size="xs"
@@ -278,11 +289,29 @@ export function BillList({
       />
     );
   }
+  // 归类区分（用户指定 2026-08-16）：订阅与信用卡还款分组展示，组内保持原序
+  const subs = list.filter((b) => b.kind === "subscription");
+  const cards = list.filter((b) => b.kind === "creditCard");
+  const showHeaders = subs.length > 0 && cards.length > 0;
+  const group = (label: string, items: Bill[]) =>
+    items.length > 0 && (
+      <div>
+        {showHeaders && (
+          <p className="px-1.5 pb-0.5 pt-1 text-micro font-medium text-muted-foreground">
+            {label}
+          </p>
+        )}
+        <div className="flex flex-col gap-0.5">
+          {items.map((bill) => (
+            <BillRow key={bill.id} bill={bill} now={now} onEdit={onEdit} />
+          ))}
+        </div>
+      </div>
+    );
   return (
     <div className="flex flex-col gap-0.5">
-      {list.map((bill) => (
-        <BillRow key={bill.id} bill={bill} now={now} onEdit={onEdit} />
-      ))}
+      {group("订阅", subs)}
+      {group("信用卡还款", cards)}
     </div>
   );
 }

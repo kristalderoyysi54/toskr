@@ -6,6 +6,7 @@ import {
   billDueLabel,
   billFallbackColor,
   billsDueWithinDays,
+  cardPaidForCurrentCycle,
   categoryBreakdown,
   compareBills,
   dueBillsToRemind,
@@ -218,6 +219,47 @@ describe("消费聚合", () => {
     expect(yearlySpendTrend([b], ts(2026, 8, 16), 4).map((y) => y.total)).toEqual([
       0, 100, 0, 50,
     ]);
+  });
+
+  it("金额统计只算订阅：信用卡历史与投影不进本月/趋势/年度", () => {
+    const now = ts(2026, 8, 16);
+    const card = bill({
+      id: "card",
+      kind: "creditCard",
+      amount: 1901.82,
+      nextDueAt: ts(2026, 8, 20),
+      history: [
+        { id: "m1", periodDueAt: ts(2026, 8, 2), amount: 500, paidAt: ts(2026, 8, 2), method: "manual" },
+      ],
+    });
+    const sub = bill({ id: "sub", amount: 68, nextDueAt: ts(2026, 8, 25) });
+    expect(monthlySpendTotal([card, sub], now)).toBe(68);
+    expect(monthlySpendTotalsByCurrency([card, sub], now, "¥")).toEqual([
+      { currency: "¥", total: 68 },
+    ]);
+    expect(sixMonthTrend([card], now).every((m) => m.total === 0)).toBe(true);
+    expect(yearlySpendTrend([card], now, 2).every((y) => y.total === 0)).toBe(true);
+  });
+
+  it("cardPaidForCurrentCycle：标记已还（含提前还）后为真，进入下期到期后为假", () => {
+    const paid = bill({
+      id: "card",
+      kind: "creditCard",
+      nextDueAt: ts(2026, 9, 2),
+      history: [
+        { id: "m1", periodDueAt: ts(2026, 8, 2), amount: 500, paidAt: ts(2026, 7, 30), method: "manual" },
+      ],
+    });
+    expect(cardPaidForCurrentCycle(paid, ts(2026, 8, 16))).toBe(true);
+    // 到了下期还款日（nextDueAt 已过）重新进入待还
+    expect(cardPaidForCurrentCycle(paid, ts(2026, 9, 2, 1))).toBe(false);
+    // auto 事件（订阅滚动）不算已还
+    expect(
+      cardPaidForCurrentCycle(
+        { ...paid, history: [{ ...paid.history[0], method: "auto" }] },
+        ts(2026, 8, 16)
+      )
+    ).toBe(false);
   });
 
   it("billsDueWithinDays 只含未来 7 天 active（含今天，逾期与暂停排除）", () => {
