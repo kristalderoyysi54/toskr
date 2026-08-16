@@ -31,8 +31,9 @@ export function RemindersPage({ buckets, now }: { buckets: TaskBuckets; now: num
   const [taskCalendar, setTaskCalendar] = useState(false);
   return (
     <>
-      {/* min-h 锁行高：订阅子视图无日历钮，避免切换时行高跳 2px */}
-      <div className="flex min-h-6 items-center pb-1 pl-4 pr-3.5">
+      {/* min-h 锁行高：订阅子视图无日历钮，避免切换时行高跳 2px。
+          上下留白（pt-1/pb-2）：上下相邻元素均无自带间距，呼吸全靠本行 */}
+      <div className="flex min-h-6 items-center pb-2 pl-4 pr-3.5 pt-1">
         <div role="tablist" aria-label="提醒子视图" className="flex items-center gap-0.5">
           {SUBVIEWS.map(({ value, label }, i) => {
             const active = subview === value;
