@@ -462,6 +462,37 @@ describe("持久化归一化", () => {
     expect(() => decodePersistedState(envelope({ status: "gone" }))).toThrow(/bill\.status/);
   });
 
+  it("水合归一化：有开始日期但历史为空的订阅自动补记（确定性 id，两次解码一致）", () => {
+    const envelope = JSON.stringify({
+      version: 19,
+      state: {
+        sections: [],
+        notes: [],
+        tasks: [],
+        taskSections: [],
+        bills: [
+          {
+            ...bill({ id: "chatgpt", nextDueAt: ts(2026, 9, 10) }),
+            amount: 100,
+            startedAt: ts(2026, 8, 10),
+            history: [],
+          },
+        ],
+      },
+    });
+    const first = decodePersistedState(envelope);
+    const second = decodePersistedState(envelope);
+    expect(first.bills[0].history).toHaveLength(1);
+    expect(first.bills[0].history[0]).toMatchObject({
+      id: `bf-chatgpt-${ts(2026, 8, 10)}`,
+      periodDueAt: ts(2026, 8, 10),
+      amount: 100,
+      method: "auto",
+    });
+    // 幂等：两次解码字节级一致（rollback 快照比对/写盘去抖依赖这一点）
+    expect(JSON.stringify(first)).toBe(JSON.stringify(second));
+  });
+
   it("currency/category/payMethod 非字符串或空值归一为 undefined", () => {
     const decoded = decodePersistedState(
       JSON.stringify({
