@@ -22,6 +22,7 @@ export function SimpleSelect<T extends string>({
   disabled,
   size = "body",
   align = "start",
+  icon,
   className,
 }: {
   value: T;
@@ -34,6 +35,8 @@ export function SimpleSelect<T extends string>({
   /** body = 设置行（h-8）；micro = 目标栏弹层（h-6）。 */
   size?: "body" | "micro";
   align?: "start" | "end";
+  /** 标签前的装饰图标（收进触发钮边框内，尺寸/配色由本组件统一）。 */
+  icon?: React.ReactNode;
   className?: string;
 }) {
   const current = options.find((option) => option.value === value);
@@ -63,6 +66,19 @@ export function SimpleSelect<T extends string>({
               : "h-6 rounded-sm px-1 text-micro"
           )}
         >
+          {icon && (
+            <span
+              aria-hidden
+              className={cn(
+                "shrink-0 text-muted-foreground",
+                size === "body"
+                  ? "[&_svg]:size-3.5"
+                  : "[&_svg]:size-2.5"
+              )}
+            >
+              {icon}
+            </span>
+          )}
           <span className="min-w-0 flex-1 truncate">{current?.label ?? ""}</span>
           <ChevronDown
             aria-hidden
