@@ -214,8 +214,12 @@ export function monthlySpendTrend(
 }
 
 /** 近 6 个月消费（迷你趋势图用）。 */
-export function sixMonthTrend(bills: Bill[], now: number): MonthSpend[] {
-  return monthlySpendTrend(bills, now, 6);
+export function sixMonthTrend(
+  bills: Bill[],
+  now: number,
+  convert: (currency: string | undefined) => number = () => 1
+): MonthSpend[] {
+  return monthlySpendTrend(bills, now, 6, convert);
 }
 
 /** 近 N 年消费（含今年，按记账事件分年；无数据年补 0）。 */
