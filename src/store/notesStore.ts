@@ -2165,9 +2165,12 @@ export const useNotesStore = create<NotesState>()(
         if (ordered.length < 2) return;
         get().snapshot(`合并 ${ordered.length} 条`);
 
+        // 列表新卡置顶，合并内容按列表底→顶（＝捕获先后）拼接：连续复制的
+        // 有序内容合并后保持原始阅读顺序；合并卡位置与身份仍留在最上面那张。
+        const sources = [...ordered].reverse();
         // 各来源卡的块保持原有文档顺序；图片卡自动占位文字不是真实正文，
         // 合并时仍剔除。不同来源的正文兼容投影维持旧版空行分隔语义。
-        const sourceBlocks = ordered.map((note) => {
+        const sourceBlocks = sources.map((note) => {
           const keepText = note.kind !== "image" || imageCaption(note).length > 0;
           return noteContentBlocks(note).filter(
             (block) => keepText || block.type !== "text"
@@ -2184,7 +2187,7 @@ export const useNotesStore = create<NotesState>()(
             ? [...blocks, { type: "text", text: "\n\n" } satisfies NoteContentBlock]
             : blocks
         );
-        const hasRichLayout = ordered.some(
+        const hasRichLayout = sources.some(
           (note, index) =>
             JSON.stringify(sourceBlocks[index]) !==
             JSON.stringify(
@@ -2197,10 +2200,10 @@ export const useNotesStore = create<NotesState>()(
             )
         );
         if (!hasRichLayout) {
-          // 旧组合卡只为首个来源卡的主图保留宽高；其余附件从未持久化尺寸。
-          // 保持该兼容行为，富文档布局则保留每个图片块自己的元数据。
+          // 旧组合卡只为首个来源卡（按合并内容序）的主图保留宽高；其余附件
+          // 从未持久化尺寸。保持该兼容行为，富文档布局则保留每个图片块自己的元数据。
           let firstImage = true;
-          const legacyDimensionFile = ordered[0].imageFile;
+          const legacyDimensionFile = sources[0].imageFile;
           mergedBlocks = mergedBlocks.map((block) => {
             if (block.type !== "image") return block;
             const keepDimensions = firstImage && block.file === legacyDimensionFile;
@@ -2215,12 +2218,12 @@ export const useNotesStore = create<NotesState>()(
           mergedContent.imageFile,
           ...(mergedContent.attachments ?? []),
         ].filter((file): file is string => !!file);
-        const textParts = ordered
+        const textParts = sources
           .filter((n) => n.kind !== "image" || imageCaption(n).length > 0)
           .map((n) => n.text);
         const first = ordered[0];
         const mergedTags = sanitizeNoteTags(
-          ordered.flatMap((n) => n.tags ?? [])
+          sources.flatMap((n) => n.tags ?? [])
         );
         const mergedText = textParts.length
           ? mergedContent.text

@@ -122,8 +122,9 @@ describe("图片卡文字备注参与合并", () => {
     const notes = useNotesStore.getState().notes;
     expect(notes).toHaveLength(1);
     const m = notes[0];
-    // notes 序新在前：文字卡正文在前，图片备注跟随；占位符「图片 2×2」被剔除
-    expect(m.text).toBe("背景与目标\n\n现场截图说明");
+    // 合并按捕获先后：先捕获的图片备注在前，后写的文字卡跟随；
+    // 占位符「图片 2×2」被剔除
+    expect(m.text).toBe("现场截图说明\n\n背景与目标");
     expect(m.kind).toBe("text");
     expect(noteImages(m).sort()).toEqual(["a.png", "b.png"]);
   });
@@ -136,7 +137,7 @@ describe("图片卡文字备注参与合并", () => {
       .addNote("第二张说明", { kind: "image", imageFile: "b.png" });
     useNotesStore.getState().mergeNotes([a.id!, b.id!]);
     const m = useNotesStore.getState().notes[0];
-    expect(m.text).toBe("第二张说明\n\n第一张说明");
+    expect(m.text).toBe("第一张说明\n\n第二张说明");
     expect(m.kind).toBe("text");
     expect(noteImages(m).sort()).toEqual(["a.png", "b.png"]);
   });

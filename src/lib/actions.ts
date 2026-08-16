@@ -542,10 +542,11 @@ export function deleteNotesWithUndo(ids: string[], label?: string) {
   undoableTip(text);
 }
 
-/** 清理全部已完成卡片（带撤销）。 */
+/** 清理全部已完成卡片（带撤销）；0 条时给反馈（快捷键 ⇧⌘⌫ 无按钮可看）。 */
 export function clearDoneWithUndo() {
   const n = useNotesStore.getState().clearDone();
   if (n > 0) undoableTip(`已清理 ${n} 条已完成`);
+  else tip("info", "没有已完成的卡片");
 }
 
 /** 删除任务并给撤销机会。 */
@@ -556,10 +557,11 @@ export function deleteTasksWithUndo(ids: string[], label?: string) {
   undoableTip(text);
 }
 
-/** 清理全部已完成任务（带撤销）。 */
+/** 清理全部已完成任务（带撤销）；0 个时给反馈（快捷键 ⇧⌘⌫ 无按钮可看）。 */
 export function clearDoneTasksWithUndo() {
   const n = useNotesStore.getState().clearDoneTasks();
   if (n > 0) undoableTip(`已清理 ${n} 个已完成任务`);
+  else tip("info", "没有已完成的任务");
 }
 
 /** 笔记转任务（带撤销；图片/组合卡不可转）。 */

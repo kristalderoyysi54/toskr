@@ -706,17 +706,17 @@ describe("notesStore 基础", () => {
     expect(useNotesStore.getState().notes.map((n) => n.text)).toEqual(["新", "旧"]);
   });
 
-  it("mergeNotes 按列表顺序合并并保留首条位置", () => {
+  it("mergeNotes 按列表底→顶（捕获先后）合并并保留首条位置", () => {
     const s = useNotesStore.getState();
     s.addNote("一");
     s.addNote("二");
     s.addNote("三");
-    // 置顶插入后展示顺序为 [三, 二, 一]
+    // 置顶插入后展示顺序为 [三, 二, 一]；合并内容按捕获先后（一在前）
     const [a, , c] = useNotesStore.getState().notes;
     useNotesStore.getState().mergeNotes([c.id, a.id]);
     const notes = useNotesStore.getState().notes;
     expect(notes).toHaveLength(2);
-    expect(notes[0].text).toBe("三\n\n一");
+    expect(notes[0].text).toBe("一\n\n三");
     expect(notes[1].text).toBe("二");
   });
 
@@ -818,8 +818,8 @@ describe("notesStore 基础", () => {
     useNotesStore.getState().mergeNotes([before[1].id, before[0].id]);
     const after = useNotesStore.getState().notes;
     expect(after).toHaveLength(3);
-    // 新组合卡置顶且在剪贴板域，按列表展示顺序拼接（乙后入置顶）
-    expect(after[0].text).toBe("乙\n\n甲");
+    // 新组合卡置顶且在剪贴板域，按捕获先后拼接（甲先复制在前）
+    expect(after[0].text).toBe("甲\n\n乙");
     expect(after[0].sectionId).toBe(CLIPBOARD_ID);
     // 原卡原样保留
     expect(after.slice(1).map((n) => n.id)).toEqual(before.map((n) => n.id));
@@ -835,8 +835,9 @@ describe("notesStore 基础", () => {
     useNotesStore.getState().mergeNotes([before[0].id, before[1].id]);
     const combo = useNotesStore.getState().notes[0];
     expect(combo.kind).toBe("image");
-    expect(combo.imageFile).toBe("img-b.png");
-    expect(combo.attachments).toEqual(["img-a.png"]);
+    // 按捕获先后拼接：先复制的 a 成为主图
+    expect(combo.imageFile).toBe("img-a.png");
+    expect(combo.attachments).toEqual(["img-b.png"]);
     expect(useNotesStore.getState().notes).toHaveLength(3);
   });
 
