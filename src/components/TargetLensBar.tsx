@@ -283,12 +283,15 @@ export function TargetLensView({
       role="region"
       aria-busy={status === "refreshing"}
       aria-label={accessibleLabel}
-      className="mx-3 mb-1.5 min-w-0 overflow-hidden px-1 py-1"
+      // 根容器不能 overflow-hidden：展开区里各下拉（完成后/粘贴后/输出格式…）
+      // 的菜单是 absolute，会被一并纵向裁掉——实测「完成后」只剩第一项、
+      // 第二项点不到。横向截断下移到身份行（那行不含浮层），语义不变
+      className="mx-3 mb-1.5 min-w-0 px-1 py-1"
     >
       <span className="sr-only" aria-live="polite" aria-atomic="true">
         发送目标 {appName}，{statusLabel}，当前发送方案 {profileName}
       </span>
-      <div className="flex min-h-7 min-w-0 items-center gap-1.5">
+      <div className="flex min-h-7 min-w-0 items-center gap-1.5 overflow-hidden">
         <div
           data-target-lens-identity
           className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden"
