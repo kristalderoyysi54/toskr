@@ -254,6 +254,8 @@ export interface Bill {
   /** 支付方式（自由文本，如「支付宝」「招行卡尾号 1234」）。 */
   payMethod?: string;
   cycle: BillCycle;
+  /** 订阅开始日期（epoch ms 当天 00:00；纯记录，不参与滚动计算）。 */
+  startedAt?: number;
   /** 下次到期/还款日（epoch ms，本地当天 00:00）。 */
   nextDueAt: number;
   status: BillStatus;
@@ -951,6 +953,7 @@ export interface NotesState {
     category?: string;
     payMethod?: string;
     cycle: BillCycle;
+    startedAt?: number;
     nextDueAt: number;
     reminderOffsets?: ReminderOffsetDays[];
     iconFile?: string;
@@ -1577,6 +1580,10 @@ function normalizeBillRecord(bill: Bill): Bill {
     category: typeof bill.category === "string" && bill.category ? bill.category : undefined,
     payMethod:
       typeof bill.payMethod === "string" && bill.payMethod ? bill.payMethod : undefined,
+    startedAt:
+      typeof bill.startedAt === "number" && Number.isFinite(bill.startedAt)
+        ? bill.startedAt
+        : undefined,
     fallbackColor:
       typeof bill.fallbackColor === "string" && bill.fallbackColor
         ? bill.fallbackColor
@@ -2889,6 +2896,7 @@ export const useNotesStore = create<NotesState>()(
           category: input.category,
           payMethod: input.payMethod,
           cycle: input.cycle,
+          startedAt: input.startedAt,
           nextDueAt: input.nextDueAt,
           status: "active",
           reminderOffsets:

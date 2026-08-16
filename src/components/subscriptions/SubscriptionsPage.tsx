@@ -6,6 +6,7 @@ import { BillList, BillRow } from "@/components/subscriptions/BillList";
 import { BillMonthGrid } from "@/components/subscriptions/BillMonthGrid";
 import { BillTrendChart } from "@/components/subscriptions/BillTrendChart";
 import { BillWeekStrip } from "@/components/subscriptions/BillWeekStrip";
+import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IconButton } from "@/components/ui/icon-button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -20,6 +21,7 @@ import {
 import { useNotesStore, type Bill } from "@/store/notesStore";
 
 const DAY_MS = 86_400_000;
+const CAL_VIEW_KEY = "toskr-bill-cal-view";
 
 /**
  * 「提醒 → 订阅」子视图：摘要条 + 周/月视图 + 当日账单 + 列表 + 迷你趋势。
@@ -27,7 +29,14 @@ const DAY_MS = 86_400_000;
  */
 export function SubscriptionsPage({ bills, now }: { bills: Bill[]; now: number }) {
   const currency = useNotesStore((s) => s.settings.currencySymbol);
-  const [view, setView] = useState<"week" | "month">("week");
+  // 周/月视图记忆（用户指定 2026-08-16）：轻量 UI 偏好走 localStorage，不进数据文件
+  const [view, setViewState] = useState<"week" | "month">(() =>
+    localStorage.getItem(CAL_VIEW_KEY) === "month" ? "month" : "week"
+  );
+  const setView = (v: "week" | "month") => {
+    setViewState(v);
+    localStorage.setItem(CAL_VIEW_KEY, v);
+  };
   const [filter, setFilter] = useState<"upcoming" | "all">("upcoming");
   const [selectedDay, setSelectedDay] = useState(() => startOfBillDay(now));
   const [flow, setFlow] = useState<{ open: boolean; edit?: Bill }>({ open: false });
@@ -58,12 +67,9 @@ export function SubscriptionsPage({ bills, now }: { bills: Bill[]; now: number }
           }
         />
         <div className="flex justify-center pb-4">
-          <button
-            onClick={() => setFlow({ open: true })}
-            className="flex items-center gap-1 rounded-lg bg-paper px-3 py-1.5 text-body font-medium shadow-sm ring-1 ring-border hover:bg-paper/80"
-          >
-            <Plus className="size-3.5" /> 添加订阅
-          </button>
+          <Button size="sm" onClick={() => setFlow({ open: true })}>
+            <Plus /> 添加订阅
+          </Button>
         </div>
         <AddBillFlow
           open={flow.open}
