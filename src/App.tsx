@@ -2705,7 +2705,19 @@ export default function App() {
         }
         return;
       }
-      if (e.key === "Backspace" && e.metaKey && ui.focusedId) {
+      // ⇧⌘⌫：清理当前页已完成（Finder 清空废纸篓同族手势；带撤销）。
+      // 剪贴/秘文页无「清理已完成」语义，不拦截以免吞掉按键
+      if (e.key === "Backspace" && e.metaKey && e.shiftKey) {
+        if (ui.page === "notes") {
+          e.preventDefault();
+          clearDoneWithUndo();
+        } else if (ui.page === "tasks") {
+          e.preventDefault();
+          clearDoneTasksWithUndo();
+        }
+        return;
+      }
+      if (e.key === "Backspace" && e.metaKey && !e.shiftKey && ui.focusedId) {
         e.preventDefault();
         const idx = navIds.indexOf(ui.focusedId);
         const nextFocus = navIds[idx + 1] ?? navIds[idx - 1] ?? null;
@@ -3234,15 +3246,15 @@ export default function App() {
                     <Tipped
                       label={
                         page === "notes"
-                          ? `清理 ${doneCount} 条已完成`
-                          : `清理 ${doneTaskCount} 个已完成任务`
+                          ? `清理 ${doneCount} 条已完成（⇧⌘⌫）`
+                          : `清理 ${doneTaskCount} 个已完成任务（⇧⌘⌫）`
                       }
                     >
                       <IconButton
                         label={
                           page === "notes"
-                            ? `清理 ${doneCount} 条已完成`
-                            : `清理 ${doneTaskCount} 个已完成任务`
+                            ? `清理 ${doneCount} 条已完成（⇧⌘⌫）`
+                            : `清理 ${doneTaskCount} 个已完成任务（⇧⌘⌫）`
                         }
                         withTitle={false}
                         onClick={
@@ -3327,6 +3339,9 @@ export default function App() {
                                   {page === "notes"
                                     ? `清理 ${doneCount} 条已完成`
                                     : `清理 ${doneTaskCount} 个已完成任务`}
+                                  <span className="ml-auto pl-2 text-micro text-muted-foreground">
+                                    ⇧⌘⌫
+                                  </span>
                                 </SimpleMenuItem>
                               )}
                             <SimpleMenuSeparator />
@@ -3587,8 +3602,16 @@ export default function App() {
                                   settings.cardDensity !== "compact" && "gap-1"
                                 )}
                               >
-                                {bandNotes.map((n) => (
-                                  <NoteCard key={n.id} note={n} query={q} />
+                                {bandNotes.map((n, i) => (
+                                  <NoteCard
+                                    key={n.id}
+                                    note={n}
+                                    query={q}
+                                    // 邻卡 id 只在时间段内传递：选中描边的
+                                    // 连续段不跨段头合并
+                                    prevId={bandNotes[i - 1]?.id}
+                                    nextId={bandNotes[i + 1]?.id}
+                                  />
                                 ))}
                               </div>
                             </div>

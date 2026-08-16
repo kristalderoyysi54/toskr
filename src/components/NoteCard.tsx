@@ -152,13 +152,27 @@ export const NoteCard = memo(function NoteCard({
   note,
   query = "",
   strip = false,
+  prevId,
+  nextId,
 }: {
   note: Note;
   query?: string;
   /** 横栏卡片串形态（上/下边栏）：固定宽方形卡、随栏高伸展。 */
   strip?: boolean;
+  /** 渲染序上的相邻卡 id（仅剪贴纵向流水传入）：相邻同选时合并选中描边。 */
+  prevId?: string;
+  nextId?: string;
 }) {
   const checked = useNotesStore((s) => s.checkedIds.includes(note.id));
+  // 紧缩流水行的连续选中段合并成一个选区块（描边/圆角在相接边断开）
+  const prevChecked = useNotesStore(
+    (s) => !!prevId && s.checkedIds.includes(prevId)
+  );
+  const nextChecked = useNotesStore(
+    (s) => !!nextId && s.checkedIds.includes(nextId)
+  );
+  const joinPrev = checked && prevChecked;
+  const joinNext = checked && nextChecked;
   const checkedCount = useNotesStore((s) => s.checkedIds.length);
   // 右键合并的目标集合 = 勾选项 ∪ 当前卡片
   const mergeCount = checked ? checkedCount : checkedCount + 1;
@@ -875,11 +889,16 @@ export const NoteCard = memo(function NoteCard({
             compact && !isClip && "transition-shadow duration-150 hover:elevation-2",
             // 无勾选框设计：选中态 = primary 光环（+ 舒适密度抬升）。
             // 只用 ring 不用 border：ring 画在布局盒之外，不会像边框那样把
-            // 通栏往内挤出一圈底色
+            // 通栏往内挤出一圈底色。
+            // 紧缩例外：外扩 ring 在密排列表里会与相邻选中卡叠色成嵌套弧
+            // 乱纹、还被滚动容器裁边——笔记卡改内嵌 ring；零间距流水行的
+            // 描边走下方覆盖层的分段 border，相邻选中行合并为连续选区块
             checked &&
               (compact
-                ? "ring-2 ring-primary/70"
+                ? !isClip && "ring-2 ring-inset ring-primary/70"
                 : "ring-2 ring-primary/70 elevation-2"),
+            joinPrev && compact && isClip && "rounded-t-none",
+            joinNext && compact && isClip && "rounded-b-none",
             // 键盘焦点：只抬升不描边（用户否决"随主题黑白的中性细环"——
             // 点击卡片也会置 focusedId，那圈线几乎常驻，观感像多了一层边框）
             focused && !checked && "elevation-2",
@@ -894,7 +913,12 @@ export const NoteCard = memo(function NoteCard({
                 "pointer-events-none absolute inset-0",
                 compact
                   ? "bg-primary/[0.12] dark:bg-primary/[0.2]"
-                  : "bg-primary/[0.1] dark:bg-primary/[0.16]"
+                  : "bg-primary/[0.1] dark:bg-primary/[0.16]",
+                // 紧缩流水行：选中描边画在行内（分段 border）——连续选中段
+                // 首行留上边、末行留下边、中段只留两侧，读作一个选区块
+                compact && isClip && "rounded-[inherit] border-x-2 border-primary/70",
+                compact && isClip && !joinPrev && "border-t-2",
+                compact && isClip && !joinNext && "border-b-2"
               )}
             />
           )}
