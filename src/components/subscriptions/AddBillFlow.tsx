@@ -224,7 +224,7 @@ export function AddBillFlow({
               </IconButton>
             )}
             <DialogPrimitive.Title className="min-w-0 flex-1 truncate text-title font-semibold">
-              {edit ? "编辑账单" : step === "pick" ? "添加账单" : "确认信息"}
+              {edit ? "编辑订阅" : step === "pick" ? "添加订阅" : "确认信息"}
             </DialogPrimitive.Title>
             <DialogPrimitive.Description className="sr-only">
               记录订阅服务或信用卡还款日，到期前自动提醒。

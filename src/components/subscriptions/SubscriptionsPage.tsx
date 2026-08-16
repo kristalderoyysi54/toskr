@@ -62,7 +62,7 @@ export function SubscriptionsPage({ bills, now }: { bills: Bill[]; now: number }
             onClick={() => setFlow({ open: true })}
             className="flex items-center gap-1 rounded-lg bg-paper px-3 py-1.5 text-body font-medium shadow-sm ring-1 ring-border hover:bg-paper/80"
           >
-            <Plus className="size-3.5" /> 添加账单
+            <Plus className="size-3.5" /> 添加订阅
           </button>
         </div>
         <AddBillFlow
@@ -99,7 +99,7 @@ export function SubscriptionsPage({ bills, now }: { bills: Bill[]; now: number }
           ]}
           onChange={setView}
         />
-        <IconButton label="添加账单" size="sm" onClick={() => setFlow({ open: true })}>
+        <IconButton label="添加订阅" size="sm" onClick={() => setFlow({ open: true })}>
           <Plus />
         </IconButton>
       </div>
