@@ -29,15 +29,23 @@ import { Segmented } from "@/components/ui/segmented";
 import { TextSelectionToolbar } from "@/components/TextSelectionToolbar";
 import {
   NOTE_EDIT_AUTOSAVE_INTERVAL_MS,
+  NOTE_TAGS_EVENT,
+  RUN_PENDING_UNDO_EVENT,
   type NoteEditPayload,
   type NotePreviewPayload,
+  type NoteTagsPayload,
 } from "@/lib/actions";
 import { requestAliasQuickAdd } from "@/lib/aliasQuickAdd";
 import { highlightCode, langLabel } from "@/lib/code";
 import { NOTE_EDITOR_SESSION_RELEASE_EVENT } from "@/lib/editorSessionMedia";
 import { useAppIcon } from "@/lib/icons";
 import { timeAgo, useNoteThumb } from "@/lib/media";
-import { looksLikeMarkdown, renderMarkdown } from "@/lib/markdown";
+import {
+  looksLikeMarkdown,
+  renderMarkdown,
+  toggleTaskListItem,
+} from "@/lib/markdown";
+import { textareaSelectionAnchor } from "@/lib/selectionAnchor";
 import { springSnappy } from "@/lib/motion";
 import {
   hasOrderedRichLayout,
@@ -71,8 +79,19 @@ import {
 import {
   api,
   TARGET_CHANGED_EVENT,
+  type PastedImage,
   type TargetSnapshot,
 } from "@/lib/tauri";
+import { imageFilePaths } from "@/lib/imageFiles";
+import {
+  DETAIL_FONT_SIZE_EVENT,
+  SETTINGS_PATCH,
+} from "@/lib/settingsSync";
+import {
+  clampDetailFontSize,
+  DETAIL_FONT_SIZE_DEFAULT,
+  NOTE_TAG_MAX_COUNT,
+} from "@/store/notesStore";
 import { tip } from "@/lib/tip";
 import { cn } from "@/lib/utils";
 import {
@@ -279,6 +298,11 @@ export default function TextPreviewView() {
     NoteContentBlock[]
   >([]);
   const [mdView, setMdView] = useState(false);
+  // 编辑态的 Markdown 预览开关：textarea 以 hidden 保留 DOM（原生撤销/草稿
+  // 不因卸载丢失），预览为当前草稿的只读渲染
+  const [editPreviewOn, setEditPreviewOn] = useState(false);
+  // 核对清单在预览里被点选后草稿（ref）已变，靠它触发重渲
+  const [, setTaskTick] = useState(0);
   const [textSelection, setTextSelection] = useState<TextSelection | null>(null);
   // 选词模式：正文按分词渲染为可点选区块，点选驱动 textSelection（复用选中工具条）
   const [pickMode, setPickMode] = useState(false);
@@ -289,6 +313,15 @@ export default function TextPreviewView() {
   const [pick, setPick] = useState<{ anchor: number; focus: number } | null>(null);
   // 每次唤起自增：窗口隐藏复用，重开也要重播内容浮现
   const [gen, setGen] = useState(0);
+  // 标签内联输入（null = 未在输入；"" = 输入框已开待输入）
+  const [tagDraft, setTagDraft] = useState<string | null>(null);
+  const tagInputRef = useRef<HTMLInputElement>(null);
+  // 拖拽图片悬停提示（松开添加）
+  const [dropActive, setDropActive] = useState(false);
+  // 正文字号（px）：⌘+/⌘- 调整、⌘0 复位；与设置页滑杆经主面板双向同步
+  const [fontSize, setFontSize] = useState(DETAIL_FONT_SIZE_DEFAULT);
+  const fontSizeRef = useRef(fontSize);
+  fontSizeRef.current = fontSize;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // 正文由 textarea DOM 持有，避免每次按键的 React 回写切断原生撤销分组。
   const draftRef = useRef("");
@@ -299,7 +332,14 @@ export default function TextPreviewView() {
   const composingRef = useRef(false);
   const skipNextBeforeInputRef = useRef(false);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const contentFrameRef = useRef<HTMLDivElement>(null);
   const previewContentRef = useRef<HTMLElement>(null);
+  // 选中工具条锚点（正文容器坐标系）；null = 取不到（选词模式等）回退底部居中
+  const [toolbarAnchor, setToolbarAnchor] = useState<{
+    left: number;
+    top: number;
+    bottom: number;
+  } | null>(null);
   const pendingSelectionRef = useRef<TextSelection | null>(null);
   const pendingTextEditRef = useRef<SelectionEdit | null>(null);
   const pendingTextEditImagesRef = useRef<string[] | null>(null);
@@ -397,6 +437,8 @@ export default function TextPreviewView() {
     return () => {
       window.clearInterval(timer);
       autosaveSessionRef.current = null;
+      // 会话结束顺带收掉编辑态 Markdown 预览（下次进入编辑从原文开始）
+      setEditPreviewOn(false);
     };
     // 依赖只认「会话身份」（进出编辑、换卡）；note 对象在保存时会换引用，
     // 不能让它触发重建，否则 origin 会被覆盖成编辑后的内容
@@ -444,6 +486,7 @@ export default function TextPreviewView() {
       draftContentBlocksRef.current = p.contentBlocks ?? [];
       setDraftContentBlocks(p.contentBlocks ?? []);
       setEditing(previewIsEditable(p) && p.edit);
+      setEditPreviewOn(false);
       setMdView(!p.codeLang && p.kind !== "link" && looksLikeMarkdown(p.text));
       // 窗口隐藏复用、组件不卸载：选词模式是单次查看态，换内容必须归位，
       // 否则一次开启会"传染"给之后打开的所有卡片
@@ -455,6 +498,8 @@ export default function TextPreviewView() {
       pendingTextEditImagesRef.current = null;
       pendingTextEditBeforeRef.current = null;
       textEditHistoryRef.current = freshTextEditHistory();
+      if (p.fontSize) setFontSize(clampDetailFontSize(p.fontSize));
+      setTagDraft(null);
       setGen((g) => g + 1);
       bodyRef.current?.scrollTo({ top: 0 });
       // 独立 WebView 只读同步当前 token；先注册 target event，让在途旧响应
@@ -564,6 +609,69 @@ export default function TextPreviewView() {
     };
   }, []);
 
+  // 正文字号：⌘+/⌘-/⌘0 全窗生效（capture 先于 textarea 的 stopPropagation）；
+  // 改动经 SETTINGS_PATCH 回主面板持久化，主面板再回声推送（幂等）。
+  useEffect(() => {
+    const applySize = (next: number) => {
+      const clamped = clampDetailFontSize(next);
+      if (clamped === fontSizeRef.current) return;
+      setFontSize(clamped);
+      void emitTo("main", SETTINGS_PATCH, { detailFontSize: clamped }).catch(
+        () => {}
+      );
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.metaKey || e.altKey || e.ctrlKey) return;
+      if (e.key === "=" || e.key === "+") {
+        e.preventDefault();
+        applySize(fontSizeRef.current + 1);
+      } else if (e.key === "-") {
+        e.preventDefault();
+        applySize(fontSizeRef.current - 1);
+      } else if (e.key === "0") {
+        e.preventDefault();
+        applySize(DETAIL_FONT_SIZE_DEFAULT);
+      }
+    };
+    window.addEventListener("keydown", onKey, { capture: true });
+    const push = listen<{ size: number }>(DETAIL_FONT_SIZE_EVENT, (event) => {
+      setFontSize(clampDetailFontSize(event.payload.size));
+    });
+    return () => {
+      window.removeEventListener("keydown", onKey, { capture: true });
+      push.then((stop) => stop());
+    };
+  }, []);
+
+  // 拖拽本地图片进窗（Tauri 层接管 file drop，HTML5 drop 收不到路径）。
+  // 回调是首帧闭包：判定与追加全部只读 ref。
+  useEffect(() => {
+    const un = getCurrentWebviewWindow().onDragDropEvent((event) => {
+      const payload = event.payload;
+      if (payload.type === "enter") {
+        setDropActive(
+          previewIsEditable(noteRef.current) &&
+            imageFilePaths(payload.paths).length > 0
+        );
+        return;
+      }
+      if (payload.type === "leave") {
+        setDropActive(false);
+        return;
+      }
+      if (payload.type === "drop") {
+        setDropActive(false);
+        if (!previewIsEditable(noteRef.current)) return;
+        importDroppedImages(payload.paths);
+      }
+    });
+    return () => {
+      un.then((stop) => stop());
+    };
+    // importDroppedImages 只读 ref，首帧闭包安全
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     const invalidate = () => {
       releaseEditorSession(noteRef.current);
@@ -585,6 +693,120 @@ export default function TextPreviewView() {
       invalidated.then((stop) => stop());
     };
   }, []);
+
+  // 工具条只在「选中文字」状态存在：除工具条自身外，任何位置鼠标按下都先
+  // 收起（正文里点选/拖选会经 onSelect/selectionchange 重新弹出）。点正文
+  // 空白处 WebKit 可能不塌缩 DOM 选区、点按钮又不转移焦点，只有这种
+  // 「按下即收」才能保证取消选中时工具条立刻消失
+  useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      // 选词模式选区由键帽点击驱动、Esc 撤选，另有通道，勿在按下时抢清
+      if (pickModeRef.current) return;
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest?.('[role="toolbar"]')) return;
+      setTextSelection(null);
+    };
+    window.addEventListener("pointerdown", onPointerDown, true);
+    return () => window.removeEventListener("pointerdown", onPointerDown, true);
+  }, []);
+
+  // 兜底：查看态 DOM 选区一塌缩（点正文任意处/空白处取消选中）立刻收工具条。
+  // 选词模式的选区不走 DOM Selection、编辑态由 textarea onSelect 负责，均不受影响
+  const pickModeRef = useRef(pickMode);
+  pickModeRef.current = pickMode;
+  useEffect(() => {
+    const onSelectionChange = () => {
+      if (pickModeRef.current || editSessionRef.current.editing) return;
+      const domSelection = document.getSelection();
+      if (!domSelection || domSelection.isCollapsed || !domSelection.rangeCount) {
+        setTextSelection(null);
+      }
+    };
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () =>
+      document.removeEventListener("selectionchange", onSelectionChange);
+  }, []);
+
+  // 选中工具条就近浮动：编辑态用 textarea 镜像测量、查看态用 DOM Range 矩形，
+  // 都换算到正文容器坐标；滚动实时跟随。取不到（选词模式等）回退底部居中。
+  useEffect(() => {
+    const compute = () => {
+      const frame = contentFrameRef.current;
+      if (!frame || !textSelection) {
+        setToolbarAnchor(null);
+        return;
+      }
+      const frameRect = frame.getBoundingClientRect();
+      if (editing) {
+        const textarea = textareaRef.current;
+        if (!textarea || textarea.classList.contains("hidden")) {
+          setToolbarAnchor(null);
+          return;
+        }
+        const anchor = textareaSelectionAnchor(textarea, textSelection);
+        if (!anchor) {
+          setToolbarAnchor(null);
+          return;
+        }
+        const taRect = textarea.getBoundingClientRect();
+        setToolbarAnchor({
+          left: taRect.left - frameRect.left + anchor.left,
+          top: taRect.top - frameRect.top + anchor.top,
+          bottom: taRect.top - frameRect.top + anchor.bottom,
+        });
+        return;
+      }
+      const domSelection = document.getSelection();
+      if (domSelection && domSelection.rangeCount && !domSelection.isCollapsed) {
+        const rect = domSelection.getRangeAt(0).getBoundingClientRect();
+        if (rect.width || rect.height) {
+          setToolbarAnchor({
+            left: rect.left - frameRect.left + rect.width / 2,
+            top: rect.top - frameRect.top,
+            bottom: rect.bottom - frameRect.top,
+          });
+          return;
+        }
+      }
+      setToolbarAnchor(null);
+    };
+    compute();
+    const body = bodyRef.current;
+    const textarea = textareaRef.current;
+    body?.addEventListener("scroll", compute, { passive: true });
+    textarea?.addEventListener("scroll", compute, { passive: true });
+    return () => {
+      body?.removeEventListener("scroll", compute);
+      textarea?.removeEventListener("scroll", compute);
+    };
+  }, [textSelection, editing, gen]);
+
+  // 锚点 → 工具条定位样式：上方优先，顶部放不下改到选区下方；水平方向钳入容器
+  const toolbarAnchorStyle = useMemo(() => {
+    if (!toolbarAnchor) return null;
+    const frame = contentFrameRef.current;
+    const width = frame?.clientWidth ?? 0;
+    const height = frame?.clientHeight ?? 0;
+    // token-exception: 158px≈工具条半宽估值，纯定位钳制非视觉样式
+    const left = width
+      ? Math.min(Math.max(toolbarAnchor.left, 158), Math.max(width - 158, 158))
+      : toolbarAnchor.left;
+    if (toolbarAnchor.top > 52) {
+      const top = Math.min(Math.max(toolbarAnchor.top - 6, 44), height || 9999);
+      return { left, top, transform: "translate(-50%, -100%)" };
+    }
+    const top = Math.max(toolbarAnchor.bottom + 6, 8);
+    return { left, top, transform: "translate(-50%, 0)" };
+  }, [toolbarAnchor]);
+
+  // 标签输入聚焦（WKWebView 焦点惰性 → 延时；autoFocus 在 DOM 复用下不重触发）
+  const tagInputOpen = tagDraft !== null;
+  useEffect(() => {
+    if (tagInputOpen) {
+      window.setTimeout(() => tagInputRef.current?.focus(), 30);
+    }
+  }, [tagInputOpen]);
 
   // 编辑态聚焦（WKWebView 焦点惰性 → 延时）
   useEffect(() => {
@@ -784,6 +1006,81 @@ export default function TextPreviewView() {
     setEditing(false);
   };
 
+  /**
+   * 渲染态核对清单点选：切换原文/草稿里第 N 个任务项的勾选。
+   * 查看态直接静默落库（高频微操作不出气泡）；编辑预览态改草稿并同步
+   * 隐藏 textarea（随自动保存持久化）。
+   */
+  const onMarkdownClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    const box = (event.target as HTMLElement).closest?.(".md-task-checkbox");
+    if (!box) return;
+    const index = Number(box.getAttribute("data-task-index"));
+    if (!Number.isFinite(index)) return;
+    const current = noteRef.current;
+    if (!previewIsEditable(current)) return;
+    if (editSessionRef.current.editing) {
+      const next = toggleTaskListItem(draftRef.current, index);
+      if (next === null) return;
+      const textarea = textareaRef.current;
+      if (textarea) {
+        checkpointTextEdit(
+          textEditHistoryRef.current,
+          snapshotTextarea(textarea, draftImagesRef.current)
+        );
+        textarea.value = next;
+      }
+      draftRef.current = next;
+      setDraftEmpty(!next.trim());
+      setTaskTick((t) => t + 1);
+      return;
+    }
+    const next = toggleTaskListItem(current.text, index);
+    if (next === null) return;
+    void emitTo("main", "toskr://note-edit", {
+      format: "flat",
+      id: current.id,
+      text: next,
+      images: current.images,
+      dataGeneration: current.dataGeneration,
+      autosave: true,
+    } satisfies NoteEditPayload);
+    const refreshed = refreshPreviewPayload({ ...current }, next);
+    setNote(refreshed.payload);
+    noteRef.current = refreshed.payload;
+    draftRef.current = refreshed.payload.text;
+  };
+
+  /** 标签写回主面板并同步本地 payload（详情窗只发事件，不直接写库）。 */
+  const applyTags = (tags: string[]) => {
+    const current = noteRef.current;
+    if (!previewIsEditable(current)) return;
+    void emitTo("main", NOTE_TAGS_EVENT, {
+      id: current.id,
+      tags,
+      dataGeneration: current.dataGeneration,
+    } satisfies NoteTagsPayload);
+    const next = { ...current, tags };
+    setNote(next);
+    noteRef.current = next;
+  };
+
+  const removeTag = (tag: string) =>
+    applyTags((noteRef.current?.tags ?? []).filter((item) => item !== tag));
+
+  /** 提交内联标签输入：去 # 前缀去重；提交后保持输入开启便于连续添加。 */
+  const commitTagDraft = () => {
+    const value = (tagDraft ?? "").trim().replace(/^#+/, "").trim();
+    if (!value) {
+      setTagDraft(null);
+      return;
+    }
+    const current = noteRef.current?.tags ?? [];
+    if (!current.includes(value) && current.length < NOTE_TAG_MAX_COUNT) {
+      applyTags([...current, value]);
+    }
+    setTagDraft("");
+  };
+
   /** 退出编辑（Esc/关窗/切卡）：自动保存语义下保留内容；清空草稿视为放弃。 */
   const exitEditing = () => {
     const current = noteRef.current;
@@ -796,38 +1093,145 @@ export default function TextPreviewView() {
     else save();
   };
 
-  /** 从系统剪贴板粘贴图片，先作为编辑草稿附件，保存时再写回主 store。 */
-  const pasteImage = async () => {
-    if (!previewIsEditable(note) || hasOrderedRichLayout(note.contentBlocks)) {
+  /**
+   * 把已入库图片追加到当前卡（四类卡统一入口，只读 ref 可被事件闭包调用）：
+   * 编辑态进草稿（自动保存持久化、取消可废弃）；查看态直接落库（收尾可撤销）。
+   * flat 卡追加为尾部附件，有序图文卡追加为末尾图片块。
+   */
+  const addImagesToCard = (images: PastedImage[]) => {
+    const current = noteRef.current;
+    if (!previewIsEditable(current)) return;
+    const editingNow = editSessionRef.current.editing;
+    if (hasOrderedRichLayout(current.contentBlocks) && current.contentBlocks) {
+      const baseBlocks = editingNow
+        ? draftContentBlocksRef.current
+        : current.contentBlocks;
+      const existing = new Set(
+        baseBlocks.flatMap((b) => (b.type === "image" ? [b.file] : []))
+      );
+      const fresh = images.filter((i) => !existing.has(i.file));
+      if (!fresh.length) {
+        tip("duplicate", "");
+        return;
+      }
+      const appended: NoteContentBlock[] = [
+        ...baseBlocks,
+        ...fresh.map((i) => ({
+          type: "image" as const,
+          file: i.file,
+          width: i.width,
+          height: i.height,
+        })),
+      ];
+      if (editingNow) {
+        fresh.forEach((i) => sessionPastedImagesRef.current.add(i.file));
+        draftContentBlocksRef.current = appended;
+        setDraftContentBlocks(appended);
+        return;
+      }
+      void emitTo("main", "toskr://note-edit", {
+        format: "blocks",
+        id: current.id,
+        contentBlocks: appended,
+        dataGeneration: current.dataGeneration,
+        origin: { contentBlocks: current.contentBlocks },
+      } satisfies NoteEditPayload);
+      const next = refreshPreviewPayload(
+        {
+          ...current,
+          contentBlocks: appended,
+          images: [...current.images, ...fresh.map((i) => i.file)],
+        },
+        textFromContentBlocks(appended)
+      );
+      setNote(next.payload);
+      noteRef.current = next.payload;
+      draftContentBlocksRef.current = appended;
+      setDraftContentBlocks(appended);
+      draftRef.current = next.payload.text;
+      setDraftEmpty(!next.payload.text.trim());
+      draftImagesRef.current = next.payload.images;
+      setDraftImages(next.payload.images);
       return;
     }
-    const sessionToken = editSessionTokenRef.current;
-    try {
-      const image = await api.pasteImageFromClipboard();
-      if (!image) {
-        tip("info", "剪贴板里没有可用图片");
-        return;
-      }
-      if (sessionToken !== editSessionTokenRef.current) {
-        discardDraftImages([], [image.file], note?.dataGeneration);
-        return;
-      }
-      const current = draftImagesRef.current;
-      if (current.includes(image.file)) return;
+    const baseImages = editingNow ? draftImagesRef.current : current.images;
+    const fresh = images.map((i) => i.file).filter((f) => !baseImages.includes(f));
+    if (!fresh.length) {
+      tip("duplicate", "");
+      return;
+    }
+    const nextImages = [...baseImages, ...fresh];
+    if (editingNow) {
       const textarea = textareaRef.current;
       if (textarea) {
         checkpointTextEdit(
           textEditHistoryRef.current,
-          snapshotTextarea(textarea, current)
+          snapshotTextarea(textarea, baseImages)
         );
       }
-      const next = [...current, image.file];
-      sessionPastedImagesRef.current.add(image.file);
-      draftImagesRef.current = next;
-      setDraftImages(next);
-    } catch (error) {
-      tip("warn", `粘贴图片失败：${error}`);
+      fresh.forEach((f) => sessionPastedImagesRef.current.add(f));
+      draftImagesRef.current = nextImages;
+      setDraftImages(nextImages);
+      return;
     }
+    void emitTo("main", "toskr://note-edit", {
+      format: "flat",
+      id: current.id,
+      text: current.text,
+      images: nextImages,
+      dataGeneration: current.dataGeneration,
+      origin: { text: current.text, images: current.images },
+    } satisfies NoteEditPayload);
+    const next = refreshPreviewPayload({ ...current, images: nextImages }, current.text);
+    setNote(next.payload);
+    noteRef.current = next.payload;
+    draftRef.current = next.payload.text;
+    setDraftEmpty(!next.payload.text.trim());
+    draftImagesRef.current = nextImages;
+    setDraftImages(nextImages);
+  };
+
+  /** 图片导入公共壳：等待期间换卡/换编辑会话则废弃刚入库的文件。 */
+  const importAndAdd = async (
+    fetchImages: () => Promise<PastedImage[]>,
+    emptyTip: string
+  ) => {
+    const before = noteRef.current;
+    if (!previewIsEditable(before)) return;
+    const sessionToken = editSessionTokenRef.current;
+    try {
+      const images = await fetchImages();
+      if (!images.length) {
+        tip("info", emptyTip);
+        return;
+      }
+      const current = noteRef.current;
+      if (
+        current?.id !== before.id ||
+        (editSessionRef.current.editing &&
+          sessionToken !== editSessionTokenRef.current)
+      ) {
+        discardDraftImages([], images.map((i) => i.file), before.dataGeneration);
+        return;
+      }
+      addImagesToCard(images);
+    } catch (error) {
+      tip("warn", `图片导入失败：${error}`);
+    }
+  };
+
+  /** 从系统剪贴板粘贴图片（位图或 Finder 复制的本地图片文件，可多张）。 */
+  const pasteImage = () =>
+    importAndAdd(() => api.pasteImagesFromClipboard(), "剪贴板里没有可用图片");
+
+  /** 拖入的本地文件：筛图片扩展名后入库追加。 */
+  const importDroppedImages = (paths: string[]) => {
+    const files = imageFilePaths(paths);
+    if (!files.length) {
+      tip("info", "仅支持图片文件");
+      return;
+    }
+    void importAndAdd(() => api.importImageFiles(files), "没有可导入的图片");
   };
 
   const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -1248,6 +1652,44 @@ export default function TextPreviewView() {
         setPick(null);
         return;
       }
+      // 分词（选词）模式本身也是一层：先退分词状态，再按 Esc 才关窗
+      if (e.key === "Escape" && !editing && pickMode) {
+        e.preventDefault();
+        exitPickMode();
+        return;
+      }
+      // 查看态 ⌘Z：撤销最近的可撤销动作（编辑保存/图片添加等，与 HUD「撤销」同路）
+      if (
+        e.metaKey &&
+        !e.shiftKey &&
+        !e.altKey &&
+        !e.ctrlKey &&
+        e.key.toLowerCase() === "z" &&
+        !editing
+      ) {
+        e.preventDefault();
+        void emitTo("main", RUN_PENDING_UNDO_EVENT, {}).catch(() => {});
+        return;
+      }
+      // 查看态 ⌘V：把剪贴板图片（位图/本地文件）直接追加进当前卡
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        e.key.toLowerCase() === "v" &&
+        !editing &&
+        previewIsEditable(noteRef.current)
+      ) {
+        e.preventDefault();
+        void pasteImage();
+        return;
+      }
+      // 编辑态下焦点不在 textarea（如 Markdown 预览）时的 Esc：先退预览，
+      // 再退编辑（自动保存语义保留内容），不再直接关窗丢会话
+      if (e.key === "Escape" && editing) {
+        e.preventDefault();
+        if (editPreviewOn) setEditPreviewOn(false);
+        else exitEditing();
+        return;
+      }
       if (e.key === "Escape" || (e.key === " " && !editing)) {
         e.preventDefault();
         const current = editSessionRef.current;
@@ -1264,9 +1706,10 @@ export default function TextPreviewView() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-    // pick 必须在依赖里：漏了会让 handler 闭包读到旧选中状态，撤选后第二次
-    // Esc 又被当成"还有选中"而关不掉窗
-  }, [editing, pick]);
+    // pick/pickMode 必须在依赖里：漏了会让 handler 闭包读到旧状态，退层后
+    // 第二次 Esc 又被当成"还在上一层"而关不掉窗
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, pick, pickMode, editPreviewOn]);
 
   if (!note) {
     // 内容未达的兜底空态：仍给关闭按钮 + 可拖动，不至于出现关不掉的白框
@@ -1323,6 +1766,14 @@ export default function TextPreviewView() {
       surfaceClassName="select-none bg-background text-foreground"
     >
       <DataReadOnlyGuard />
+      {dropActive && (
+        // 拖拽悬停提示：pointer-events-none 不拦 Tauri 层的 drop 事件
+        <div className="pointer-events-none absolute inset-2 z-50 flex items-center justify-center rounded-lg border-2 border-dashed border-primary/60 bg-primary/5">
+          <span className="rounded-md bg-background/95 px-3 py-1.5 text-body font-medium text-foreground shadow-sm">
+            松开以添加图片
+          </span>
+        </div>
+      )}
       {/* 标题栏：应用主色渐变（与卡顶同款）+ 顶缘内嵌高光（HUD 气泡同款
           玻璃质感）+ 与正文交界的一丝落影；可拖动窗口 */}
       <header
@@ -1333,9 +1784,15 @@ export default function TextPreviewView() {
         <div data-tauri-drag-region className="min-w-0 flex-1 leading-tight">
           <p
             data-tauri-drag-region
-            className="truncate text-body font-semibold text-white"
+            className="flex items-center gap-1.5 truncate text-body font-semibold text-white"
           >
-            {note.title || typeLabel}
+            <span className="truncate">{note.title || typeLabel}</span>
+            {editing && (
+              // 编辑态徽标：查看/编辑两态正文观感接近，标题栏给一眼可辨的状态锚点
+              <span className="shrink-0 rounded-full bg-white/25 px-1.5 py-px text-micro font-medium text-white">
+                编辑中
+              </span>
+            )}
           </p>
           <p data-tauri-drag-region className="truncate text-micro text-white/70">
             {note.subtitle ??
@@ -1344,9 +1801,6 @@ export default function TextPreviewView() {
                 note.createdAt ? `创建 ${timeAgo(note.createdAt)}` : null,
                 note.updatedAt && note.updatedAt > (note.createdAt ?? 0)
                   ? `改于 ${timeAgo(note.updatedAt)}`
-                  : null,
-                note.tags?.length
-                  ? note.tags.map((tag) => `#${tag}`).join(" ")
                   : null,
               ]
                 .filter(Boolean)
@@ -1363,15 +1817,68 @@ export default function TextPreviewView() {
         </button>
       </header>
 
+      {/* 标签行：chips 可摘除 + 内联新增；写回主面板持久化（详情窗不直接写库） */}
+      {writable && (
+        <div className="flex flex-wrap items-center gap-1 border-b border-black/5 px-3 py-1.5 dark:border-white/5">
+          {(note.tags ?? []).map((tag) => (
+            <span
+              key={tag}
+              className="group/tag inline-flex items-center gap-0.5 rounded-full bg-black/5 px-1.5 py-0.5 text-label text-muted-foreground dark:bg-white/10"
+            >
+              #{tag}
+              <button
+                aria-label={`移除标签 ${tag}`}
+                onClick={() => removeTag(tag)}
+                className="rounded-full p-px opacity-0 outline-none transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring group-hover/tag:opacity-100"
+              >
+                <X className="size-2.5" />
+              </button>
+            </span>
+          ))}
+          {tagDraft === null ? (
+            (note.tags?.length ?? 0) < NOTE_TAG_MAX_COUNT && (
+              <button
+                onClick={() => setTagDraft("")}
+                className="rounded-full px-1.5 py-0.5 text-label text-muted-foreground/70 outline-none hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring dark:hover:bg-white/10"
+              >
+                ＋ 标签
+              </button>
+            )
+          ) : (
+            <input
+              ref={tagInputRef}
+              value={tagDraft}
+              onChange={(e) => setTagDraft(e.target.value)}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Enter") commitTagDraft();
+                else if (e.key === "Escape") setTagDraft(null);
+              }}
+              onBlur={() => {
+                if (!tagDraft?.trim()) setTagDraft(null);
+              }}
+              placeholder="标签名，回车添加"
+              className="w-28 bg-transparent text-label outline-none placeholder:text-muted-foreground/50"
+            />
+          )}
+        </div>
+      )}
+
       {/* 正文：预览（Markdown 渲染 / 代码高亮 / 原文）或编辑；双击进入编辑 */}
-      <div className="relative min-h-0 flex-1">
+      <div ref={contentFrameRef} className="relative min-h-0 flex-1">
         <motion.div
           key={gen}
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
           transition={springSnappy}
           ref={bodyRef}
-          className="h-full select-text overflow-y-auto p-4"
+          data-detail-font
+          style={{ "--detail-font-size": `${fontSize}px` } as React.CSSProperties}
+          className={cn(
+            "h-full select-text overflow-y-auto p-4",
+            // 编辑态给正文区一圈内嵌焦点描边 + 极浅底色：与查看态一眼区分
+            editing && "bg-primary/[0.04] ring-1 ring-inset ring-primary/25"
+          )}
           onPointerUp={syncPreviewSelection}
           onDoubleClick={() => {
             if (editable && !editing) setEditing(true);
@@ -1389,6 +1896,7 @@ export default function TextPreviewView() {
               onCancel={exitEditing}
             />
           ) : editing ? (
+            <>
             <textarea
               ref={textareaRef}
               // 保持 DOM 原生编辑历史；受控 value 每次重写会把连续输入拆成逐字撤销。
@@ -1479,8 +1987,23 @@ export default function TextPreviewView() {
                   exitEditing();
                 }
               }}
-              className="h-full min-h-40 w-full resize-none bg-transparent font-mono text-body leading-relaxed outline-none"
+              className={cn(
+                "h-full min-h-40 w-full resize-none bg-transparent font-mono text-body leading-relaxed outline-none",
+                // 预览时隐藏而非卸载：卸载会重置 defaultValue、丢原生撤销分组
+                editPreviewOn && "hidden"
+              )}
             />
+            {editPreviewOn && (
+              // 草稿的只读 Markdown 预览（核对清单可点选）；再按「原文」回编辑
+              <div
+                className="md-preview text-title leading-relaxed"
+                onClick={onMarkdownClick}
+                dangerouslySetInnerHTML={{
+                  __html: renderMarkdown(draftRef.current),
+                }}
+              />
+            )}
+            </>
           ) : note.codeLang ? (
             <pre className="hljs whitespace-pre-wrap [overflow-wrap:anywhere] !bg-transparent font-mono text-body leading-relaxed">
               <code
@@ -1544,6 +2067,7 @@ export default function TextPreviewView() {
             <div
               ref={previewContentRef as React.RefObject<HTMLDivElement>}
               className="md-preview text-title leading-relaxed"
+              onClick={onMarkdownClick}
               dangerouslySetInnerHTML={{ __html: renderMarkdown(note.text) }}
             />
           ) : (
@@ -1560,6 +2084,7 @@ export default function TextPreviewView() {
           <TextSelectionToolbar
             text={editing ? draftRef.current : note.text}
             selection={textSelection}
+            anchorStyle={toolbarAnchorStyle}
             onApply={applySelectionEdit}
             onAddAlias={editing ? undefined : addSelectionToAliasDictionary}
             onSendSelection={writable ? sendSelection : undefined}
@@ -1622,11 +2147,20 @@ export default function TextPreviewView() {
         <div className="ml-auto flex items-center gap-1">
           {editing ? (
             <>
-              {!orderedRich && (
-                <IconButton label="粘贴图片（⌘V）" onClick={() => void pasteImage()}>
-                  <ImagePlus className="size-3.5" />
-                </IconButton>
+              {!orderedRich && !note.codeLang && !isLink && (
+                <button
+                  onClick={() => setEditPreviewOn((v) => !v)}
+                  className={cn(
+                    "rounded-md px-1.5 py-0.5 text-micro text-muted-foreground outline-none",
+                    "hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:hover:bg-white/10"
+                  )}
+                >
+                  {editPreviewOn ? "原文" : "渲染"}
+                </button>
               )}
+              <IconButton label="粘贴图片（⌘V）" onClick={() => void pasteImage()}>
+                <ImagePlus className="size-3.5" />
+              </IconButton>
               <Button
                 size="xs"
                 disabled={!orderedRich && draftEmpty && draftImages.length === 0}

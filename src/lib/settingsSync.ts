@@ -27,6 +27,8 @@ export type SettingsSectionPayload =
   | { section: string; targetProfileId?: string };
 export const SETTINGS_STATE = "toskr://settings-state";
 export const SETTINGS_PATCH = "toskr://settings-patch";
+/** 主面板 → 详情窗：详情正文字号变更实时推送（设置页滑杆 / ⌘+⌘- 回声）。 */
+export const DETAIL_FONT_SIZE_EVENT = "toskr://detail-font-size";
 /** 设置窗显式保存/删除 Keychain key 后通知 main 清理当前目录的旧迁移副本。 */
 export const SETTINGS_AI_KEY_CHANGED = "toskr://settings-ai-key-changed";
 /** 使用概览启动或继续受控安全发送演练。 */
@@ -82,6 +84,12 @@ export function applySettingsPatch(patch: Partial<Settings>) {
   ) {
     clearTargetProfileOverride();
     tip("info", "本次发送方案已被删除，已恢复自动匹配");
+  }
+  if ("detailFontSize" in patch) {
+    // 详情窗可能正开着：把新字号实时推过去（详情窗 ⌘+/⌘- 的回声推送幂等）
+    void emitTo("textpreview", DETAIL_FONT_SIZE_EVENT, {
+      size: s.detailFontSize,
+    }).catch(() => {});
   }
   if ("hotkeyModifier" in patch || "hotkeyGapMs" in patch) {
     void api.setHotkeyConfig(s.hotkeyModifier, s.hotkeyGapMs);

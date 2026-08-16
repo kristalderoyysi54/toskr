@@ -911,8 +911,9 @@ export const NoteCard = memo(function NoteCard({
               // 裁得只剩几像素（hover 显现名存实亡），列表左侧还得为它垫 pl-2
               compact
                 ? "relative ml-1 shrink-0 opacity-60 hover:opacity-100"
-                : "absolute left-1 top-1/2 -translate-y-1/2 rounded-md border border-foreground/10 bg-surface-raised/95 elevation-2 opacity-0",
-              "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+                : // 隐形态放行命中（opacity-0 仍会截走下方元素的点击）；键盘聚焦显现时恢复可抓
+                  "pointer-events-none absolute left-1 top-1/2 -translate-y-1/2 rounded-md border border-foreground/10 bg-surface-raised/95 elevation-2 opacity-0",
+              "focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
               "active:cursor-grabbing",
               note.done && "hidden"
             )}

@@ -8,6 +8,8 @@ import {
   NOTE_EDIT_AUTOSAVE_INTERVAL_MS,
   type NoteEditPayload,
 } from "@/lib/actions";
+import { imageFilePaths } from "@/lib/imageFiles";
+import { tip } from "@/lib/tip";
 import {
   FIT_VIEW,
   wheelZoomFactor,
@@ -26,6 +28,7 @@ import { DATA_CONTEXT_INVALIDATED_EVENT } from "@/lib/dataGeneration";
 import {
   api,
   TARGET_CHANGED_EVENT,
+  type PastedImage,
   type TargetSnapshot,
 } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
@@ -40,7 +43,7 @@ import {
  * 图片原尺寸预览窗（独立 webview，Paste 风格）：
  * 标题栏与图片区均可拖动窗口、可缩放；⊗ / Esc / Space 关闭（隐藏复用）。
  * 组合卡多图：←/→ 或两侧按钮翻看，标题与底栏显示第几张。
- * 滚轮以鼠标为锚缩放（1×–8×）；放大后拖拽平移图片（1× 时拖拽仍是拖窗），
+ * 滚轮以鼠标为锚缩放（0.2×–8×，1× 以下居中缩小）；放大后拖拽平移图片（≤1× 时拖拽仍是拖窗），
  * 双击 2× ⇄ 复位，翻页/重开自动回到适配。
  * 刻意不做失焦关闭——可拖动窗口的语义是「摆在一边对照看」。
  * 带笔记上下文（noteId）时底部显示文字备注条：查看 / 内联编辑，
@@ -70,9 +73,18 @@ export default function ImagePreviewView() {
   const [draft, setDraft] = useState("");
   const [dataGeneration, setDataGeneration] = useState<number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // 拖拽图片悬停提示（松开添加）
+  const [dropActive, setDropActive] = useState(false);
   // 备注编辑镜像 + 会话账本：interval / 事件监听闭包只读 ref，不受旧 state 影响
-  const captionRef = useRef({ editing, noteId, draft, noteText, dataGeneration });
-  captionRef.current = { editing, noteId, draft, noteText, dataGeneration };
+  const captionRef = useRef({
+    editing,
+    noteId,
+    draft,
+    noteText,
+    dataGeneration,
+    files,
+  });
+  captionRef.current = { editing, noteId, draft, noteText, dataGeneration, files };
   const captionSessionRef = useRef<{ origin: string; lastSent: string } | null>(
     null
   );
@@ -216,9 +228,9 @@ export default function ImagePreviewView() {
     panDragRef.current = null;
   };
 
-  // 双击复位（仅放大态：适配态的双击属于 drag-region 的窗口原生行为，勿抢）
+  // 双击复位（放大/缩小态均可；适配态的双击属于 drag-region 的窗口原生行为，勿抢）
   const onZoomDoubleClick = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (!zoomed) return;
+    if (view.zoom === 1) return;
     if ((event.target as HTMLElement).closest("button")) return;
     setView(FIT_VIEW);
   };
@@ -284,6 +296,97 @@ export default function ImagePreviewView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing, noteId]);
 
+  /**
+   * 把已入库图片追加到当前图片卡（只读 ref，可被事件闭包调用）：
+   * 直接经 note-edit 落库（主面板出可撤销「已保存」），本地同步 files。
+   * 备注编辑中拖入时带上当前草稿文字，避免旧文覆盖草稿。
+   */
+  const addImagesToCard = (images: PastedImage[]) => {
+    const state = captionRef.current;
+    if (!state.noteId || state.dataGeneration === null) return;
+    const fresh = images.map((i) => i.file).filter((f) => !state.files.includes(f));
+    if (!fresh.length) {
+      tip("duplicate", "");
+      return;
+    }
+    const nextImages = [...state.files, ...fresh];
+    const text = state.editing ? state.draft : state.noteText;
+    void emitTo("main", "toskr://note-edit", {
+      format: "flat",
+      id: state.noteId,
+      text,
+      images: nextImages,
+      dataGeneration: state.dataGeneration,
+      origin: { text: state.noteText, images: state.files },
+    } satisfies NoteEditPayload);
+    const session = captionSessionRef.current;
+    if (session) session.lastSent = text;
+    setFiles(nextImages);
+  };
+
+  /** 图片导入公共壳：等待期间换卡则废弃刚入库的文件。 */
+  const importAndAdd = async (
+    fetchImages: () => Promise<PastedImage[]>,
+    emptyTip: string
+  ) => {
+    const before = captionRef.current;
+    if (!before.noteId || before.dataGeneration === null) return;
+    try {
+      const images = await fetchImages();
+      if (!images.length) {
+        tip("info", emptyTip);
+        return;
+      }
+      if (captionRef.current.noteId !== before.noteId) {
+        void emitTo("main", "toskr://note-image-discard", {
+          files: images.map((i) => i.file),
+          dataGeneration: before.dataGeneration,
+        });
+        return;
+      }
+      addImagesToCard(images);
+    } catch (error) {
+      tip("warn", `图片导入失败：${error}`);
+    }
+  };
+
+  const pasteImages = () =>
+    importAndAdd(() => api.pasteImagesFromClipboard(), "剪贴板里没有可用图片");
+
+  // 拖拽本地图片进窗：Tauri 层接管 file drop；回调是首帧闭包，只读 ref
+  useEffect(() => {
+    const un = getCurrentWebviewWindow().onDragDropEvent((event) => {
+      const payload = event.payload;
+      if (payload.type === "enter") {
+        setDropActive(
+          !!captionRef.current.noteId &&
+            captionRef.current.dataGeneration !== null &&
+            imageFilePaths(payload.paths).length > 0
+        );
+        return;
+      }
+      if (payload.type === "leave") {
+        setDropActive(false);
+        return;
+      }
+      if (payload.type === "drop") {
+        setDropActive(false);
+        const paths = imageFilePaths(payload.paths);
+        if (!captionRef.current.noteId) return;
+        if (!paths.length) {
+          tip("info", "仅支持图片文件");
+          return;
+        }
+        void importAndAdd(() => api.importImageFiles(paths), "没有可导入的图片");
+      }
+    });
+    return () => {
+      un.then((stop) => stop());
+    };
+    // importAndAdd 只读 ref，首帧闭包安全
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const close = () => {
     // 关窗不丢备注草稿：编辑态先按保存收尾（自动保存语义）
     if (captionRef.current.editing) save();
@@ -329,6 +432,10 @@ export default function ImagePreviewView() {
       if (e.key === "Escape" || e.key === " ") {
         e.preventDefault();
         close();
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "v") {
+        // 查看态 ⌘V：把剪贴板图片（位图/本地文件）追加进当前图片卡
+        e.preventDefault();
+        void pasteImages();
       } else if (e.key === "ArrowLeft") {
         e.preventDefault();
         setIdx((i) => Math.max(0, i - 1));
@@ -349,6 +456,14 @@ export default function ImagePreviewView() {
       surfaceClassName="bg-surface-lightbox"
     >
       <DataReadOnlyGuard />
+      {dropActive && (
+        // 拖拽悬停提示：pointer-events-none 不拦 Tauri 层的 drop 事件
+        <div className="pointer-events-none absolute inset-2 z-50 flex items-center justify-center rounded-lg border-2 border-dashed border-primary/60 bg-primary/5">
+          <span className="rounded-md bg-background/95 px-3 py-1.5 text-body font-medium text-foreground shadow-sm">
+            松开以添加图片
+          </span>
+        </div>
+      )}
       {/* 标题栏：可拖动窗口 */}
       <div
         data-tauri-drag-region

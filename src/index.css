@@ -232,6 +232,17 @@ input {
 
 /* （HUD 入场动画已迁 motion/AnimatePresence，见 HudView.tsx——曲线参数原样保留在 JS 侧） */
 /* Markdown 渲染视图（预览层）：深浅色自适应的最小排版组 */
+/* 详情窗正文字号覆盖：--detail-font-size 由 TextPreviewView 内联下发
+   （⌘+/⌘-/⌘0 与设置页滑杆），只作用于正文区字阶 utility；行高走 leading-*
+   相对值随字号自适应，md 标题为 em 基准同步缩放。
+   token-exception: 用户可调字号是运行时动态值，无法收敛进固定字阶 */
+[data-detail-font] .text-body {
+  font-size: var(--detail-font-size, var(--text-body));
+}
+[data-detail-font] .text-title {
+  font-size: calc(var(--detail-font-size, var(--text-body)) + 1px);
+}
+
 .md-preview :is(h1, h2, h3, h4) {
   margin: 0.9em 0 0.4em;
   font-weight: 650;
@@ -244,6 +255,44 @@ input {
 .md-preview :is(ul, ol) {
   margin: 0.45em 0;
   padding-left: 1.4em;
+}
+/* 核对清单：GFM 任务项渲染为可点方框（样式对齐系统复选观感），
+   勾选态用主题主色；列表原生圆点让位给方框 */
+.md-preview li.md-task-item {
+  list-style: none;
+  margin-left: -1.15em;
+}
+.md-preview .md-task-checkbox {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  margin-right: 0.45em;
+  vertical-align: -0.12em;
+  border: 1.5px solid var(--muted-foreground);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background-color 100ms, border-color 100ms;
+}
+.md-preview .md-task-checkbox[data-checked] {
+  position: relative;
+  border-color: transparent;
+  background: var(--primary);
+}
+/* 已勾选项：正文划线变灰（line-through 不会穿透 inline-block 的方框本体） */
+.md-preview li.md-task-done {
+  color: var(--muted-foreground);
+  text-decoration: line-through;
+}
+.md-preview .md-task-checkbox[data-checked]::after {
+  content: "";
+  position: absolute;
+  left: 0.3em;
+  top: 0.1em;
+  width: 0.3em;
+  height: 0.55em;
+  border: solid var(--primary-foreground);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
 }
 .md-preview ul { list-style: disc; }
 .md-preview ol { list-style: decimal; }

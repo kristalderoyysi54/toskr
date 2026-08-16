@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
 import {
   Bold,
@@ -44,11 +44,16 @@ const BLOCK_FORMATS: ReadonlyArray<{
   { id: "heading3", label: "标题 3", shortcut: "⌥⌘3" },
   { id: "numbered-list", label: "编号列表", shortcut: "⌥⌘4" },
   { id: "bullet-list", label: "项目符号列表", shortcut: "⌥⌘5" },
-  { id: "code-block", label: "代码块", shortcut: "⌥⌘6" },
+  { id: "todo-list", label: "核对清单", shortcut: "⌥⌘6" },
+  { id: "code-block", label: "代码块", shortcut: "⌥⌘7" },
 ];
 
 const formatLabel = (id: BlockSelectionFormat) =>
   BLOCK_FORMATS.find((item) => item.id === id)?.label ?? "文本";
+
+/** 「文本」菜单展开态跨选区记忆：展开过的，下一次选中仍是展开（用户指定）。
+ *  组件随选区消失而卸载，状态只能挂模块级。 */
+let stickyFormatOpen = false;
 
 export function TextSelectionToolbar({
   text,
@@ -59,10 +64,13 @@ export function TextSelectionToolbar({
   onCopySelection,
   sendDisabledReason,
   readOnly = false,
+  anchorStyle = null,
 }: {
   text: string;
   selection: TextSelection;
   onApply: (edit: SelectionEdit) => void;
+  /** 选区附近的绝对定位样式（left/top/transform）；null 回退窗口底部居中。 */
+  anchorStyle?: React.CSSProperties | null;
   /** 传入即出现「加入词典」：把选中文字快速录为化名词条（原文可改、类别可换）。 */
   onAddAlias?: (originalText: string, category: string) => void;
   /** 传入即出现「发送选中」：只把选中片段发到当前目标（选词/选段模式的部分发送）。 */
@@ -75,9 +83,21 @@ export function TextSelectionToolbar({
   readOnly?: boolean;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const outerRef = useRef<HTMLDivElement>(null);
   const linkInputRef = useRef<HTMLInputElement>(null);
   const aliasInputRef = useRef<HTMLInputElement>(null);
-  const [formatOpen, setFormatOpen] = useState(false);
+  const [formatOpen, setFormatOpenState] = useState(() => stickyFormatOpen && !readOnly);
+  /** remember=false 的关闭只影响本次（如打开链接面板时让位），不改记忆。 */
+  const setFormatOpen = (
+    open: boolean | ((previous: boolean) => boolean),
+    remember = true
+  ) => {
+    setFormatOpenState((previous) => {
+      const next = typeof open === "function" ? open(previous) : open;
+      if (remember) stickyFormatOpen = next;
+      return next;
+    });
+  };
   const [linkOpen, setLinkOpen] = useState(false);
   const [href, setHref] = useState("");
   const [aliasOpen, setAliasOpen] = useState(false);
@@ -88,9 +108,33 @@ export function TextSelectionToolbar({
   const currentBlock = blockFormatAt(text, selection);
   const selectedText = text.slice(selection.start, selection.end);
   const canLink = !selectedText.includes("\n");
+  // 工具条就近浮动后可能贴着窗顶：上方放不下时弹层向下翻，避免被窗口裁掉
+  const [popBelow, setPopBelow] = useState(false);
+  useLayoutEffect(() => {
+    const rect = rootRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    // token-exception: 310≈格式菜单全高估值（8 项），纯翻转判定非视觉样式
+    setPopBelow(rect.top < 310);
+  }, [formatOpen, linkOpen, aliasOpen, selection.start, selection.end]);
+
+  // 就近定位按实测宽度钳回容器：绝对定位的 shrink-to-fit 会在贴近右缘时把
+  // 工具条压到竖排（外层已 w-max 定宽），这里再把 left 修到完整可见的位置。
+  // 直接改 style 不走 state，避免测量→渲染回环。
+  useLayoutEffect(() => {
+    const el = outerRef.current;
+    const parent = el?.offsetParent as HTMLElement | null;
+    if (!el || !parent || !anchorStyle) return;
+    const half = el.offsetWidth / 2;
+    const desired = Number.parseFloat(String(anchorStyle.left ?? "0"));
+    const clamped = Math.min(
+      Math.max(desired, half + 6),
+      Math.max(parent.clientWidth - half - 6, half + 6)
+    );
+    if (clamped !== desired) el.style.left = `${clamped}px`;
+  }, [anchorStyle]);
 
   const openAlias = () => {
-    setFormatOpen(false);
+    setFormatOpen(false, false);
     setLinkOpen(false);
     setAliasText(selectedText.trim());
     setAliasCategory(suggestAliasCategory(selectedText));
@@ -111,7 +155,7 @@ export function TextSelectionToolbar({
 
   const openLink = () => {
     if (!canLink) return;
-    setFormatOpen(false);
+    setFormatOpen(false, false);
     setHref(suggestedHref);
     setLinkOpen(true);
     window.setTimeout(() => linkInputRef.current?.focus(), 0);
@@ -124,9 +168,11 @@ export function TextSelectionToolbar({
   };
 
   useEffect(() => {
-    setFormatOpen(false);
+    // 展开态跨选区记忆：上次展开的，换个选区仍然展开
+    setFormatOpenState(stickyFormatOpen && !readOnly);
     setLinkOpen(false);
     setAliasOpen(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selection.start, selection.end]);
 
   useEffect(() => {
@@ -166,7 +212,7 @@ export function TextSelectionToolbar({
       } else if (!event.altKey && key === "k") {
         event.preventDefault();
         openLink();
-      } else if (event.altKey && /^Digit[0-6]$/.test(event.code)) {
+      } else if (event.altKey && /^Digit[0-7]$/.test(event.code)) {
         event.preventDefault();
         const format = BLOCK_FORMATS[Number(event.code.slice(-1))]?.id;
         if (format) onApply(applyBlockFormat(text, selection, format));
@@ -177,7 +223,15 @@ export function TextSelectionToolbar({
   });
 
   return (
-    <div className="absolute bottom-3 left-1/2 z-30 -translate-x-1/2">
+    <div
+      ref={outerRef}
+      className={cn(
+        // w-max：绝对定位贴近容器右缘时 shrink-to-fit 会把内容压成竖排
+        "absolute z-30 w-max",
+        !anchorStyle && "bottom-3 left-1/2 -translate-x-1/2"
+      )}
+      style={anchorStyle ?? undefined}
+    >
       <motion.div
         ref={rootRef}
         role="toolbar"
@@ -201,7 +255,8 @@ export function TextSelectionToolbar({
               applyLink();
             }}
             className={cn(
-              "absolute bottom-full left-1/2 mb-1 flex w-64 -translate-x-1/2 items-center gap-1 rounded-lg p-1.5",
+              "absolute left-1/2 flex w-64 -translate-x-1/2 items-center gap-1 rounded-lg p-1.5",
+              popBelow ? "top-full mt-1" : "bottom-full mb-1",
               floatingSurface(2)
             )}
           >
@@ -234,7 +289,8 @@ export function TextSelectionToolbar({
               applyAlias();
             }}
             className={cn(
-              "absolute bottom-full left-1/2 mb-1 flex w-72 -translate-x-1/2 flex-col gap-1.5 rounded-lg p-1.5",
+              "absolute left-1/2 flex w-72 -translate-x-1/2 flex-col gap-1.5 rounded-lg p-1.5",
+              popBelow ? "top-full mt-1" : "bottom-full mb-1",
               floatingSurface(2)
             )}
           >
@@ -385,7 +441,8 @@ export function TextSelectionToolbar({
             role="menu"
             aria-label="文字样式"
             className={cn(
-              "absolute bottom-full right-0 mb-1 w-48 rounded-lg p-1",
+              "absolute right-0 w-48 rounded-lg p-1",
+              popBelow ? "top-full mt-1" : "bottom-full mb-1",
               floatingSurface(2)
             )}
           >
@@ -399,7 +456,7 @@ export function TextSelectionToolbar({
                   aria-checked={active}
                   onClick={() => {
                     onApply(applyBlockFormat(text, selection, item.id));
-                    setFormatOpen(false);
+                    setFormatOpen(false, false);
                   }}
                   className={cn(
                     "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-body outline-none",
