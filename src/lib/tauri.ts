@@ -131,6 +131,8 @@ export interface HudPayload {
 export interface HudOpenPanelPayload {
   page?: "tasks";
   taskId?: string | null;
+  /** 账单到期提醒：跳「提醒 → 订阅」并高亮该账单行。 */
+  billId?: string | null;
   /** 改开设置窗并切到指定分区，不开面板。 */
   settings?: string;
   /** 打开面板并唤起更新对话框（更新提醒气泡）。 */
@@ -619,6 +621,8 @@ export const api = {
     invoke("set_panel_hotkey", { shortcut }),
   /** 抓取链接的网页标题/图标（curl，6s 超时）。 */
   fetchLinkMeta: (url: string) => invoke<LinkMeta>("fetch_link_meta", { url }),
+  /** 按域名抓 favicon 缓存进媒体库，返回文件名；失败 reject（前端回退首字色块）。 */
+  fetchFavicon: (domain: string) => invoke<string>("fetch_favicon", { domain }),
   /** `side`："right"（默认，贴目标窗口右缘）| "left"（贴左缘）。 */
   setCompanionConfig: (enabled: boolean, apps: string[], side: "left" | "right" = "right") =>
     invoke("set_companion_config", { enabled, apps, side }),

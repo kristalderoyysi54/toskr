@@ -8,6 +8,7 @@ mod data_integrity;
 mod delivery;
 mod diag;
 mod events;
+mod favicon;
 mod focus;
 mod input;
 mod image_firewall;
@@ -273,6 +274,7 @@ pub fn run() {
             commands::schedule_media_gc,
             commands::run_media_gc,
             linkmeta::fetch_link_meta,
+            favicon::fetch_favicon,
             ai::set_ai_api_key,
             ai::get_ai_key_status,
             ai::delete_ai_api_key,

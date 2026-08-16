@@ -96,7 +96,9 @@ export default function HudView() {
                         "main",
                         HUD_OPEN_PANEL_EVENT,
                         item.kind === "due"
-                          ? { page: "tasks", taskId: item.targetId ?? null }
+                          ? item.targetId?.startsWith("bill:")
+                            ? { page: "tasks", billId: item.targetId.slice("bill:".length) }
+                            : { page: "tasks", taskId: item.targetId ?? null }
                           : item.targetId === "update"
                             ? { update: true }
                             : item.targetId?.startsWith("settings:")
