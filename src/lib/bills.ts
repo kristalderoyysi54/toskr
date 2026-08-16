@@ -138,11 +138,15 @@ export interface MonthSpend {
   total: number;
 }
 
-/** 近 6 个月消费（含当月，按记账事件分桶；无数据月份补 0）。 */
-export function sixMonthTrend(bills: Bill[], now: number): MonthSpend[] {
+/** 近 N 个月消费（含当月，按记账事件分桶；无数据月份补 0）。 */
+export function monthlySpendTrend(
+  bills: Bill[],
+  now: number,
+  months: number
+): MonthSpend[] {
   const d = new Date(now);
   const buckets: MonthSpend[] = [];
-  for (let i = 5; i >= 0; i--) {
+  for (let i = months - 1; i >= 0; i--) {
     const m = new Date(d.getFullYear(), d.getMonth() - i, 1);
     buckets.push({
       year: m.getFullYear(),
@@ -161,6 +165,195 @@ export function sixMonthTrend(bills: Bill[], now: number): MonthSpend[] {
     }
   }
   return buckets;
+}
+
+/** 近 6 个月消费（迷你趋势图用）。 */
+export function sixMonthTrend(bills: Bill[], now: number): MonthSpend[] {
+  return monthlySpendTrend(bills, now, 6);
+}
+
+/** 近 N 年消费（含今年，按记账事件分年；无数据年补 0）。 */
+export function yearlySpendTrend(
+  bills: Bill[],
+  now: number,
+  years: number
+): { year: number; label: string; total: number }[] {
+  const current = new Date(now).getFullYear();
+  const buckets = Array.from({ length: years }, (_, i) => ({
+    year: current - (years - 1 - i),
+    label: String(current - (years - 1 - i)),
+    total: 0,
+  }));
+  for (const bill of bills) {
+    for (const ev of bill.history) {
+      const hit = buckets.find((b) => b.year === new Date(ev.paidAt).getFullYear());
+      if (hit) hit.total += ev.amount;
+    }
+  }
+  return buckets;
+}
+
+/** 单账单的月折算金额（周付按年均 52.18 周换算；金额留空按 0）。 */
+export function monthlyEquivalent(bill: Bill): number {
+  const amount = bill.amount ?? 0;
+  switch (bill.cycle) {
+    case "weekly":
+      return (amount * 52.18) / 12;
+    case "monthly":
+      return amount;
+    case "quarterly":
+      return amount / 3;
+    case "semiannual":
+      return amount / 6;
+    case "yearly":
+      return amount / 12;
+  }
+}
+
+/**
+ * 月固定支出 = 活跃订阅的月折算合计。刻意不含信用卡：还款额逐期波动，
+ * 不是可预期的固定订阅支出。
+ */
+export function monthlyFixedSpend(bills: Bill[]): number {
+  return bills
+    .filter((b) => b.kind === "subscription" && b.status === "active")
+    .reduce((sum, b) => sum + monthlyEquivalent(b), 0);
+}
+
+/** 类别构成（活跃订阅按月折算分桶；未填类别归 "other"）。降序。 */
+export function categoryBreakdown(
+  bills: Bill[]
+): { category: string; total: number }[] {
+  const map = new Map<string, number>();
+  for (const bill of bills) {
+    if (bill.kind !== "subscription" || bill.status !== "active") continue;
+    const key = bill.category || "other";
+    map.set(key, (map.get(key) ?? 0) + monthlyEquivalent(bill));
+  }
+  return [...map.entries()]
+    .map(([category, total]) => ({ category, total }))
+    .filter((entry) => entry.total > 0)
+    .sort((a, b) => b.total - a.total);
+}
+
+/** 今年记账累计。 */
+export function yearSpendTotal(bills: Bill[], now: number): number {
+  const year = new Date(now).getFullYear();
+  let total = 0;
+  for (const bill of bills) {
+    for (const ev of bill.history) {
+      if (new Date(ev.paidAt).getFullYear() === year) total += ev.amount;
+    }
+  }
+  return total;
+}
+
+export interface CurrencyTotal {
+  currency: string;
+  total: number;
+}
+
+function sortTotals(map: Map<string, number>, primary: string): CurrencyTotal[] {
+  return [...map.entries()]
+    .map(([currency, total]) => ({ currency, total }))
+    .sort((a, b) =>
+      a.currency === primary ? -1 : b.currency === primary ? 1 : b.total - a.total
+    );
+}
+
+/** 分币种小计的展示串：「¥68 + US$16」；空集显示主货币 0。 */
+export function formatCurrencyTotals(
+  totals: CurrencyTotal[],
+  primary: string
+): string {
+  if (!totals.length) return `${primary}0`;
+  return totals
+    .map((t) => `${t.currency}${formatBillAmount(t.total)}`)
+    .join(" + ");
+}
+
+/**
+ * 本月消费分币种小计（口径同 monthlySpendTotal：本月记账 + active 剩余投影）。
+ * 不做汇率，跨币种以并列小计呈现（用户可见的真话）。
+ */
+export function monthlySpendTotalsByCurrency(
+  bills: Bill[],
+  now: number,
+  primary: string
+): CurrencyTotal[] {
+  const d = new Date(now);
+  const monthStart = new Date(d.getFullYear(), d.getMonth(), 1).getTime();
+  const nextMonthStart = new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime();
+  const map = new Map<string, number>();
+  const add = (currency: string, amount: number) =>
+    map.set(currency, (map.get(currency) ?? 0) + amount);
+  for (const bill of bills) {
+    const currency = bill.currency ?? primary;
+    for (const ev of bill.history) {
+      if (ev.paidAt >= monthStart && ev.paidAt < nextMonthStart) add(currency, ev.amount);
+    }
+    if (bill.status !== "active") continue;
+    let due = bill.nextDueAt;
+    let guard = 0;
+    while (due < nextMonthStart && guard < 8) {
+      if (due >= monthStart) add(currency, bill.amount ?? 0);
+      due = advanceCycle(due, bill.cycle);
+      guard += 1;
+    }
+  }
+  return sortTotals(map, primary);
+}
+
+/** 月固定支出分币种小计（活跃订阅月折算）。 */
+export function monthlyFixedSpendByCurrency(
+  bills: Bill[],
+  primary: string
+): CurrencyTotal[] {
+  const map = new Map<string, number>();
+  for (const bill of bills) {
+    if (bill.kind !== "subscription" || bill.status !== "active") continue;
+    const currency = bill.currency ?? primary;
+    map.set(currency, (map.get(currency) ?? 0) + monthlyEquivalent(bill));
+  }
+  return sortTotals(map, primary);
+}
+
+/** 今年记账分币种小计。 */
+export function yearSpendTotalsByCurrency(
+  bills: Bill[],
+  now: number,
+  primary: string
+): CurrencyTotal[] {
+  const year = new Date(now).getFullYear();
+  const map = new Map<string, number>();
+  for (const bill of bills) {
+    const currency = bill.currency ?? primary;
+    for (const ev of bill.history) {
+      if (new Date(ev.paidAt).getFullYear() === year) {
+        map.set(currency, (map.get(currency) ?? 0) + ev.amount);
+      }
+    }
+  }
+  return sortTotals(map, primary);
+}
+
+/** 账单集里出现的币种数（缺省币按 primary 计）。 */
+export function distinctCurrencies(bills: Bill[], primary: string): string[] {
+  return [...new Set(bills.map((b) => b.currency ?? primary))];
+}
+
+/** 上月记账合计（环比基数；只看已发生的记账，不含投影）。 */
+export function prevMonthSpendTotal(bills: Bill[], now: number): number {
+  const d = new Date(now);
+  const start = new Date(d.getFullYear(), d.getMonth() - 1, 1).getTime();
+  const end = new Date(d.getFullYear(), d.getMonth(), 1).getTime();
+  let total = 0;
+  for (const bill of bills) {
+    for (const ev of bill.history) {
+      if (ev.paidAt >= start && ev.paidAt < end) total += ev.amount;
+    }
+  }
+  return total;
 }
 
 /**
