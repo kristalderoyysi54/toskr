@@ -177,6 +177,13 @@ describe("消费聚合", () => {
 });
 
 describe("文案与排序", () => {
+  it("billDueLabel 单笔货币优先于全局符号", () => {
+    const now = ts(2026, 8, 17, 9);
+    expect(
+      billDueLabel(bill({ currency: "US$", amount: 15.99, nextDueAt: ts(2026, 8, 20) }), now, "¥")
+    ).toBe("Netflix 3 天后续费 US$15.99");
+  });
+
   it("billDueLabel 覆盖 今天/明天/N天后/逾期 与信用卡动词", () => {
     const now = ts(2026, 8, 17, 9);
     expect(billDueLabel(bill({ nextDueAt: ts(2026, 8, 20) }), now, "¥")).toBe(
@@ -308,6 +315,25 @@ describe("持久化归一化", () => {
     expect(() => decodePersistedState(envelope({ kind: "loan" }))).toThrow(/bill\.kind/);
     expect(() => decodePersistedState(envelope({ cycle: "daily" }))).toThrow(/bill\.cycle/);
     expect(() => decodePersistedState(envelope({ status: "gone" }))).toThrow(/bill\.status/);
+  });
+
+  it("currency/category/payMethod 非字符串或空值归一为 undefined", () => {
+    const decoded = decodePersistedState(
+      JSON.stringify({
+        version: 19,
+        state: {
+          sections: [],
+          notes: [],
+          tasks: [],
+          taskSections: [],
+          bills: [{ ...bill(), currency: 5, category: "", payMethod: "支付宝" }],
+        },
+      })
+    );
+    const b = decoded.bills[0];
+    expect(b.currency).toBeUndefined();
+    expect(b.category).toBeUndefined();
+    expect(b.payMethod).toBe("支付宝");
   });
 
   it("非法提醒档过滤、remindedFor 账期不一致重置、history 裁剪保序", () => {

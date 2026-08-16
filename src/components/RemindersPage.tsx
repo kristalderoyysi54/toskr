@@ -14,15 +14,14 @@ export function RemindersPage({ buckets, now }: { buckets: TaskBuckets; now: num
   const bills = useNotesStore((s) => s.bills);
   return (
     <>
-      <div className="flex justify-center pb-1.5 pt-0.5">
-        {/* 宽松胶囊（用户指定 2026-08-16）：sm 档 + 选项加宽内距，一眼可点 */}
+      <div className="flex justify-center pb-1">
         <Segmented
-          size="sm"
+          size="xs"
           ariaLabel="提醒子视图"
           value={subview}
           options={[
-            { value: "tasks", label: <span className="px-4">任务</span> },
-            { value: "subscriptions", label: <span className="px-4">订阅</span> },
+            { value: "tasks", label: "任务" },
+            { value: "subscriptions", label: "订阅" },
           ]}
           onChange={(v) => useUIStore.getState().setRemindersSubview(v)}
         />
