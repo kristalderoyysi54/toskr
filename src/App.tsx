@@ -127,6 +127,7 @@ import { GlowingEffect } from "@/components/ui/glowing-effect";
 import { IconButton } from "@/components/ui/icon-button";
 import { Kbd } from "@/components/ui/kbd";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { StripScroller } from "@/components/ui/strip-scroller";
 import {
   Tooltip,
   TooltipContent,
@@ -576,32 +577,6 @@ function GroupPills({
         {row}
       </SortableContext>
     </DndContext>
-  );
-}
-
-/** 横栏滚动容器：细滚动条 + 纵向滚轮转横向滑动（Paste 手感）。 */
-function StripScroller({ children }: { children: React.ReactNode }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const onWheel = (e: WheelEvent) => {
-      if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
-        el.scrollLeft += e.deltaY;
-        e.preventDefault();
-      }
-    };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, []);
-  return (
-    <div
-      ref={ref}
-      data-strip-scroller
-      className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden [&::-webkit-scrollbar]:hidden"
-    >
-      {children}
-    </div>
   );
 }
 
@@ -3794,7 +3769,11 @@ export default function App() {
                   offset={orderOf("secret") - pageIndex}
                   contentRef={secretPageRef}
                 >
-                  <SecretPage notes={secretNotes} query={q} />
+                  <SecretPage
+                    notes={secretNotes}
+                    query={q}
+                    horizontal={horizontalBar}
+                  />
                 </PageSlide>
               </div>
 

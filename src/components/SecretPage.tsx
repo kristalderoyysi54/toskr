@@ -31,16 +31,19 @@ import { api } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { useNotesStore, type Note } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
+import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { floatingSurface } from "@/components/ui/floating-surface";
 import { IconButton } from "@/components/ui/icon-button";
+import { StripScroller } from "@/components/ui/strip-scroller";
 import { SimpleSelect } from "@/components/SimpleSelect";
 
 const FIELD =
   "w-full rounded-lg border border-border bg-transparent px-2.5 py-2 text-body text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-primary/50";
 
-/** 顶部收发条：选密钥 → 输明文 → 加密发送 / 加密复制。 */
-function SecretComposer() {
+/** 收发条：选密钥 → 输明文 → 加密发送 / 加密复制。
+ *  竖栏＝顶部通栏；横栏（上/下停靠）＝左侧定宽列，右边让给横排卡片串。 */
+function SecretComposer({ horizontal = false }: { horizontal?: boolean }) {
   const keys = useNotesStore((s) => s.settings.secretKeys);
   const defaultKeyId = useNotesStore((s) => s.settings.secretDefaultKeyId);
   const [draft, setDraft] = useState("");
@@ -56,7 +59,14 @@ function SecretComposer() {
 
   if (keys.length === 0) {
     return (
-      <div className="border-b border-border/60 px-3 py-2.5 text-label text-muted-foreground">
+      <div
+        className={cn(
+          "text-label text-muted-foreground",
+          horizontal
+            ? "flex w-72 shrink-0 items-center border-r border-border/60 px-3"
+            : "border-b border-border/60 px-3 py-2.5"
+        )}
+      >
         还没有共享密钥。去 设置 → 秘文 添加一组、与对方约定相同的暗号即可开始收发。
       </div>
     );
@@ -95,7 +105,14 @@ function SecretComposer() {
   }));
 
   return (
-    <div className="flex flex-col gap-2 border-b border-border/60 px-3 py-2.5">
+    <div
+      className={cn(
+        "flex flex-col gap-2 px-3 py-2.5",
+        horizontal
+          ? "w-72 shrink-0 border-r border-border/60"
+          : "border-b border-border/60"
+      )}
+    >
       <div className="flex items-center gap-2">
         <KeyRound className="size-3.5 shrink-0 text-muted-foreground" />
         <SimpleSelect
@@ -117,35 +134,37 @@ function SecretComposer() {
         }}
         rows={2}
         placeholder="写下要加密的话，⌘⏎ 加密并发送"
-        className={FIELD + " resize-none"}
+        className={cn(FIELD, "resize-none", horizontal && "min-h-0 flex-1")}
       />
       <div className="flex items-center justify-end gap-2">
         {draft.trim() && (
-          <span className="mr-auto text-micro text-muted-foreground">
+          <span className="mr-auto min-w-0 truncate text-micro text-muted-foreground">
             密文约 {estimateCipherLength(draft.trim())} 字 · 以「话说」开头
           </span>
         )}
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={() => void seal(false)}
           disabled={busy || !draft.trim()}
-          className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-label text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
         >
-          <Copy className="size-3.5" /> 加密复制
-        </button>
-        <button
+          <Copy /> 加密复制
+        </Button>
+        <Button
+          size="sm"
           onClick={() => void seal(true)}
           disabled={busy || !draft.trim()}
-          className="flex items-center gap-1 rounded-lg bg-paper px-3 py-1.5 text-label font-medium text-paper-foreground outline-none hover:brightness-105 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
         >
-          <SendHorizontal className="size-3.5" /> 加密发送
-        </button>
+          <SendHorizontal /> 加密发送
+        </Button>
       </div>
     </div>
   );
 }
 
-/** 单张秘文卡：默认遮罩，点击解密显现，可重新遮罩；多重兜底自动回遮罩。 */
-function SecretCard({ note }: { note: Note }) {
+/** 单张秘文卡：默认遮罩，点击解密显现，可重新遮罩；多重兜底自动回遮罩。
+ *  strip＝横栏瓷砖形态：定宽、随栏高伸展，正文区内部滚动。 */
+function SecretCard({ note, strip = false }: { note: Note; strip?: boolean }) {
   const secretKeys = useNotesStore((s) => s.settings.secretKeys);
   const revealTimeout = useNotesStore((s) => s.settings.secretRevealTimeoutMs);
   const open = useUIStore((s) => s.open);
@@ -219,7 +238,12 @@ function SecretCard({ note }: { note: Note }) {
   }, []);
 
   return (
-    <div className="rounded-lg border border-border/70 bg-card">
+    <div
+      className={cn(
+        "rounded-lg border border-border/70 bg-card",
+        strip && "flex h-full w-72 shrink-0 flex-col"
+      )}
+    >
       <div className="flex items-center gap-1.5 px-3 pt-2 text-micro text-muted-foreground">
         {outgoing ? (
           <SendHorizontal className="size-3" />
@@ -237,7 +261,19 @@ function SecretCard({ note }: { note: Note }) {
       <button
         onClick={() => void toggle()}
         aria-label={revealed ? "重新遮罩" : "点击解密查看"}
-        className="block w-full px-3 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        // 瓷砖内长明文自己滚动；能滚时拦下滚轮，别被横栏「纵滚转横滑」劫走
+        onWheel={
+          strip
+            ? (e) => {
+                if (e.currentTarget.scrollHeight > e.currentTarget.clientHeight)
+                  e.stopPropagation();
+              }
+            : undefined
+        }
+        className={cn(
+          "block w-full px-3 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          strip && "relative min-h-0 flex-1 overflow-y-auto"
+        )}
       >
         <AnimatePresence mode="wait" initial={false}>
           {revealed ? (
@@ -264,7 +300,11 @@ function SecretCard({ note }: { note: Note }) {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={tweenFade}
-              className="relative py-0.5"
+              className={cn(
+                "relative py-0.5",
+                // 瓷砖形态：遮罩内容随卡高垂直居中，解密药丸不再顶着头行
+                strip && "flex h-full flex-col justify-center"
+              )}
             >
               <p
                 aria-hidden
@@ -345,7 +385,38 @@ function SecretCard({ note }: { note: Note }) {
   );
 }
 
-export function SecretPage({ notes, query }: { notes: Note[]; query: string }) {
+export function SecretPage({
+  notes,
+  query,
+  horizontal = false,
+}: {
+  notes: Note[];
+  query: string;
+  /** 上/下横栏形态：Composer 收作左列，卡片改横排瓷砖串。 */
+  horizontal?: boolean;
+}) {
+  if (horizontal) {
+    return (
+      <div className="flex min-h-0 flex-1 items-stretch">
+        <SecretComposer horizontal />
+        <StripScroller>
+          {notes.length === 0 ? (
+            <p className="px-4 py-6 text-body text-muted-foreground">
+              {query
+                ? "没有匹配的秘文"
+                : "还没有秘文——选中对方发来的中文密文，连按两次 ⇧ Shift 即可解密到这里"}
+            </p>
+          ) : (
+            <div className="flex h-full items-stretch gap-2.5 px-3 pb-2 pt-1">
+              {notes.map((n) => (
+                <SecretCard key={n.id} note={n} strip />
+              ))}
+            </div>
+          )}
+        </StripScroller>
+      </div>
+    );
+  }
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <SecretComposer />
