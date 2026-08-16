@@ -1519,6 +1519,27 @@ function normalizeTaskRecord(task: Task, sectionIds: Set<string>): Task {
   };
 }
 
+/**
+ * 开始日期回填事件（开始日=首期付款日）。id 确定性生成（bf-账单-账期）：
+ * 水合归一化也会触发回填，随机 id 会让持久化内容每次加载漂移
+ * （rollback 快照比对失效、无意义写盘）。
+ */
+function backfillHistoryEvents(
+  billId: string,
+  startedAt: number,
+  nextDueAt: number,
+  cycle: BillCycle,
+  amount: number | null
+): BillPaymentEvent[] {
+  return backfillPeriods(startedAt, nextDueAt, cycle).map((periodDueAt) => ({
+    id: `bf-${billId}-${periodDueAt}`,
+    periodDueAt,
+    amount: amount ?? 0,
+    paidAt: periodDueAt,
+    method: "auto" as const,
+  }));
+}
+
 const BILL_KINDS = ["subscription", "creditCard"] as const;
 const BILL_CYCLES = ["weekly", "monthly", "quarterly", "semiannual", "yearly"] as const;
 const BILL_STATUSES = ["active", "paused", "canceled"] as const;
@@ -1564,7 +1585,7 @@ function normalizeBillRecord(bill: Bill): Bill {
     remindedRaw.dueAt === nextDueAt
       ? { dueAt: nextDueAt, offsets: normalizeReminderOffsets(remindedRaw.offsets) }
       : { dueAt: nextDueAt, offsets: [] as ReminderOffsetDays[] };
-  const history = dedupeById<BillPaymentEvent>(bill.history)
+  let history = dedupeById<BillPaymentEvent>(bill.history)
     .map((ev) => ({
       id: ev.id,
       periodDueAt: finiteNumberOrDefault(ev.periodDueAt, 0, "bill.history.periodDueAt"),
@@ -1573,6 +1594,26 @@ function normalizeBillRecord(bill: Bill): Bill {
       method: ev.method === "manual" ? ("manual" as const) : ("auto" as const),
     }))
     .slice(-BILL_HISTORY_MAX);
+  const startedAt =
+    typeof bill.startedAt === "number" && Number.isFinite(bill.startedAt)
+      ? bill.startedAt
+      : undefined;
+  // 有开始日期但历史为空的订阅（回填功能上线前的旧数据）：水合时自动补记，
+  // 不依赖用户重新保存；id 确定性，幂等
+  if (
+    bill.kind === "subscription" &&
+    history.length === 0 &&
+    startedAt != null &&
+    startedAt < nextDueAt
+  ) {
+    history = backfillHistoryEvents(
+      bill.id,
+      startedAt,
+      nextDueAt,
+      bill.cycle,
+      bill.amount ?? null
+    );
+  }
   return {
     ...bill,
     name: typeof bill.name === "string" ? bill.name : "",
@@ -1580,10 +1621,7 @@ function normalizeBillRecord(bill: Bill): Bill {
     category: typeof bill.category === "string" && bill.category ? bill.category : undefined,
     payMethod:
       typeof bill.payMethod === "string" && bill.payMethod ? bill.payMethod : undefined,
-    startedAt:
-      typeof bill.startedAt === "number" && Number.isFinite(bill.startedAt)
-        ? bill.startedAt
-        : undefined,
+    startedAt,
     fallbackColor:
       typeof bill.fallbackColor === "string" && bill.fallbackColor
         ? bill.fallbackColor
@@ -2885,22 +2923,21 @@ export const useNotesStore = create<NotesState>()(
       },
 
       addBill: (input) => {
+        const id = crypto.randomUUID();
         // 开始日期 = 首期付款日：回填开始日至下期（不含）的往期记账，
         // 让月历/本月消费/趋势立即反映既有订阅（仅订阅；信用卡无此语义）
         const history: BillPaymentEvent[] =
           input.kind === "subscription" && input.startedAt != null
-            ? backfillPeriods(input.startedAt, input.nextDueAt, input.cycle).map(
-                (periodDueAt) => ({
-                  id: crypto.randomUUID(),
-                  periodDueAt,
-                  amount: input.amount ?? 0,
-                  paidAt: periodDueAt,
-                  method: "auto" as const,
-                })
+            ? backfillHistoryEvents(
+                id,
+                input.startedAt,
+                input.nextDueAt,
+                input.cycle,
+                input.amount
               )
             : [];
         const bill: Bill = {
-          id: crypto.randomUUID(),
+          id,
           kind: input.kind,
           name: input.name.trim(),
           iconFile: input.iconFile,
@@ -2947,14 +2984,12 @@ export const useNotesStore = create<NotesState>()(
             ) {
               next.history =
                 next.startedAt != null
-                  ? backfillPeriods(next.startedAt, next.nextDueAt, next.cycle).map(
-                      (periodDueAt) => ({
-                        id: crypto.randomUUID(),
-                        periodDueAt,
-                        amount: next.amount ?? 0,
-                        paidAt: periodDueAt,
-                        method: "auto" as const,
-                      })
+                  ? backfillHistoryEvents(
+                      b.id,
+                      next.startedAt,
+                      next.nextDueAt,
+                      next.cycle,
+                      next.amount
                     )
                   : [];
             }
