@@ -1,0 +1,17 @@
+{
+  "name": "Toskr frontend",
+  "install": "pnpm install --frozen-lockfile",
+  "terminals": [
+    {
+      "name": "vite-dev",
+      "command": "pnpm dev",
+      "description": "Vite dev server for the Toskr React frontend at http://localhost:1420. Open /?styletile=1 for the standalone design surface; the main view needs the macOS Tauri backend (invoke rejects in a plain browser). The Rust/Tauri layer is macOS-only and does not build here."
+    }
+  ],
+  "ports": [
+    {
+      "name": "vite",
+      "port": 1420
+    }
+  ]
+}
