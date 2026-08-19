@@ -27,13 +27,16 @@ const SUBVIEWS = [
 export function RemindersPage({ buckets, now }: { buckets: TaskBuckets; now: number }) {
   const subview = useUIStore((s) => s.remindersSubview);
   const bills = useNotesStore((s) => s.bills);
+  const subscriptionsEnabled = useNotesStore((s) => s.settings.subscriptionsEnabled);
   // 默认不显示日历（用户指定）；会话态不持久化，每次启动都从隐藏开始
   const [taskCalendar, setTaskCalendar] = useState(false);
   return (
     <>
       {/* min-h 锁行高：订阅子视图无日历钮，避免切换时行高跳 2px。
-          上下留白（pt-1/pb-2）：上下相邻元素均无自带间距，呼吸全靠本行 */}
+          上下留白（pt-1/pb-2）：上下相邻元素均无自带间距，呼吸全靠本行。
+          订阅功能关闭时只剩纯任务页：藏掉二级 tabs，仅保留右端日历钮 */}
       <div className="flex min-h-6 items-center pb-2 pl-4 pr-3.5 pt-1">
+        {subscriptionsEnabled && (
         <div role="tablist" aria-label="提醒子视图" className="flex items-center gap-0.5">
           {SUBVIEWS.map(({ value, label }, i) => {
             const active = subview === value;
@@ -74,7 +77,8 @@ export function RemindersPage({ buckets, now }: { buckets: TaskBuckets; now: num
             );
           })}
         </div>
-        {subview === "tasks" && (
+        )}
+        {(subview === "tasks" || !subscriptionsEnabled) && (
           <IconButton
             label={taskCalendar ? "隐藏任务日历" : "显示任务日历"}
             size="sm"
@@ -86,7 +90,7 @@ export function RemindersPage({ buckets, now }: { buckets: TaskBuckets; now: num
           </IconButton>
         )}
       </div>
-      {subview === "tasks" ? (
+      {subview === "tasks" || !subscriptionsEnabled ? (
         <TaskPage buckets={buckets} now={now} calendar={taskCalendar} />
       ) : (
         <SubscriptionsPage bills={bills} now={now} />

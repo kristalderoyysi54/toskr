@@ -501,8 +501,12 @@ export interface Settings {
   panelTopOffset: number;
   /** 面板高度覆盖（pt；null = 自动同目标窗口/近全高）。 */
   panelHeight: number | null;
+  /** 首启欢迎导览是否已看过/跳过；设置页「重看导览」复位后再次显示。 */
+  welcomeTourSeen: boolean;
   /** 消息功能总开关；默认关闭，关闭时隐藏「内容 → 消息」入口与监听配置。 */
   messagesEnabled: boolean;
+  /** 订阅（账单）功能总开关；默认关闭，关闭时「提醒」页退为纯「任务」页。 */
+  subscriptionsEnabled: boolean;
   /** 秘文（中文加密通信）总开关；默认关闭，关闭时秘文页与捕获识别都不启用。 */
   secretEnabled: boolean;
   /** 共享密钥列表（明文随本地数据保存；威胁模型见设置页说明）。 */
@@ -757,8 +761,12 @@ export const defaultSettings = (): Settings => ({
   panelWidth: 380,
   panelTopOffset: 0,
   panelHeight: null,
+  // 首启显示欢迎导览（方案 B，2026-08-19 用户选定）
+  welcomeTourSeen: false,
   // 消息功能默认关闭（用户指定）：隐藏消息 tab 与监听配置，开启后才显示
   messagesEnabled: false,
+  // 订阅功能默认关闭（用户指定）：「提醒」页退为「任务」，开启后恢复二级导航
+  subscriptionsEnabled: false,
   // 秘文默认关闭（用户指定）：不显示秘文页、不做捕获识别
   secretEnabled: false,
   secretKeys: [],

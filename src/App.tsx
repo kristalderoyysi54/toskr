@@ -49,6 +49,7 @@ import { DraftInput } from "@/components/DraftInput";
 import { NoteCard } from "@/components/NoteCard";
 import { PermissionBanner } from "@/components/PermissionBanner";
 import { SafeDeliveryRehearsal } from "@/components/SafeDeliveryRehearsal";
+import { WelcomeTour } from "@/components/WelcomeTour";
 import { PreviewOverlay } from "@/components/PreviewOverlay";
 import { buildBackupPayload, buildMediaIntegrityPayload } from "@/lib/backup";
 import {
@@ -2530,6 +2531,8 @@ export default function App() {
   const clipHistory = useNotesStore((s) => s.settings.clipHistory);
   const secretEnabled = useNotesStore((s) => s.settings.secretEnabled);
   const messagesEnabled = useNotesStore((s) => s.settings.messagesEnabled);
+  const subscriptionsEnabled = useNotesStore((s) => s.settings.subscriptionsEnabled);
+  const welcomeTourSeen = useNotesStore((s) => s.settings.welcomeTourSeen);
   // 内容域（消息/秘文）都未启用时回到经典形态：一级页签「剪贴 · 笔记 · 提醒」，
   // 不出现「内容」二级导航；由设置页显式开关控制（均默认关闭）
   const contentDomainsOn = secretEnabled || messagesEnabled;
@@ -3130,7 +3133,11 @@ export default function App() {
             onClick={() => useUIStore.getState().setPage(id)}
             onDoubleClick={() => scrollTabPageToStart(id)}
           >
-            {id === "notes" && !contentDomainsOn ? "笔记" : PAGE_LABEL[id]}
+            {id === "notes" && !contentDomainsOn
+              ? "笔记"
+              : id === "tasks" && !subscriptionsEnabled
+                ? "任务"
+                : PAGE_LABEL[id]}
           </PageTab>
         ))}
       </SortableContext>
@@ -3225,6 +3232,8 @@ export default function App() {
                 proximity={64}
                 inactiveZone={0.55}
               />
+              {/* 首启欢迎导览（z-40 盖内容；数据锁定遮罩 z-50 仍优先） */}
+              {!welcomeTourSeen && open && <WelcomeTour />}
               {/* 左缘宽度拖拽把手 */}
               <div
                 onPointerDown={startResize}
@@ -3810,7 +3819,7 @@ export default function App() {
                 >
                 {contentDomainsOn && <ContentTabs />}
                 {contentSubview === "messages" ? (
-                  <MessagePage query={q} />
+                  <MessagePage query={q} horizontal={horizontalBar} />
                 ) : contentSubview === "secret" ? (
                   <SecretPage
                     notes={secretNotes}
