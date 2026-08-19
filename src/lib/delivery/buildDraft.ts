@@ -4,6 +4,12 @@ import {
   imageCaption,
   wrapAsCodeBlock,
 } from "@/lib/format";
+import {
+  noteContentBlocks,
+  textBlockRanges,
+  textFromContentBlocks,
+} from "@/lib/noteContentBlocks";
+import type { DeliverySegment } from "@/lib/tauri";
 import { noteImages, type Note, type Task } from "@/store/notesStore";
 
 import type {
@@ -65,6 +71,41 @@ function addWarning(
 }
 
 /**
+ * 单卡图文交错的发送顺序投影。文字段一律取自与 finalText 逐字节一致的
+ * 投影切片，保证发出的内容都经过同一次隐私扫描；块序无法与附件清单严格
+ * 对齐（重复图片、投影不一致、图不在清单）时返回 null，退回整段+附件顺序。
+ */
+export function buildDeliverySegments(
+  note: Note,
+  finalText: string,
+  imageFiles: readonly string[]
+): DeliverySegment[] | null {
+  const blocks = noteContentBlocks(note);
+  if (!blocks.some((block) => block.type === "image")) return null;
+  if (textFromContentBlocks(blocks) !== finalText) return null;
+  const ranges = textBlockRanges(blocks);
+  const segments: DeliverySegment[] = [];
+  const usedFiles = new Set<string>();
+  for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
+    const block = blocks[blockIndex];
+    if (block.type === "image") {
+      if (usedFiles.has(block.file)) return null;
+      usedFiles.add(block.file);
+      const fileIndex = imageFiles.indexOf(block.file);
+      if (fileIndex < 0) return null;
+      segments.push({ kind: "image", fileIndex });
+      continue;
+    }
+    const range = ranges.find((entry) => entry.blockIndex === blockIndex);
+    if (!range) return null;
+    const piece = finalText.slice(range.start, range.end);
+    if (piece.trim()) segments.push({ kind: "text", text: piece });
+  }
+  if (usedFiles.size !== imageFiles.length) return null;
+  return segments;
+}
+
+/**
  * 所有发送入口共享的纯构建器。时间、id、revision 均由调用方注入，确保相同
  * input/state 始终得到字节一致的 Draft。
  */
@@ -80,6 +121,7 @@ export function buildDeliveryDraft(
   let singleCodeLanguage: string | undefined;
   let isSecretSource = false;
   let appliedTextOverride: string | null = null;
+  let sourceNotes: Note[] = [];
 
   if (input.sourceKind === "task") {
     const selected = state.tasks.find((task) => requestedIds.has(task.id));
@@ -89,6 +131,7 @@ export function buildDeliveryDraft(
     }
   } else {
     const selected = orderedNotes(input.sourceItemIds, state.notes);
+    sourceNotes = selected;
     sourceItemIds = selected.map((note) => note.id);
     isSecretSource = selected.some((note) => note.kind === "secret");
     if (input.sourceTextOverride !== undefined && selected.length === 1) {
@@ -128,6 +171,15 @@ export function buildDeliveryDraft(
     addWarning(warnings, "empty-payload");
   }
 
+  // 图文交错顺序：finalText === rawText 证明模板/代码块/别名都未改动字节，
+  // 交错文字段与已扫描正文才能逐字节对应。
+  const segments =
+    sourceNotes.length === 1 &&
+    appliedTextOverride === null &&
+    finalText === rawText
+      ? buildDeliverySegments(sourceNotes[0], finalText, imageFiles)
+      : null;
+
   const profile = state.profileResolution.profile;
   const promptSnippetGroupId = input.promptSnippetId
     ? state.promptSnippets.find((snippet) => snippet.id === input.promptSnippetId)
@@ -146,6 +198,7 @@ export function buildDeliveryDraft(
     finalText,
     originalImageFiles: [...imageFiles],
     imageFiles,
+    segments,
     imageFirewall: imageFiles.map((file) => ({
       originalFile: file,
       sendFile: file,

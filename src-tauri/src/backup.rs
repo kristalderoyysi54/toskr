@@ -85,6 +85,9 @@ pub struct BackupCounts {
     /// v19 起的账单域；旧 manifest 无此键，默认 0 保持可读。
     #[serde(default)]
     pub bills: usize,
+    /// v20 起的外部消息结构化投影；旧 manifest 无此键时按 0。
+    #[serde(default)]
+    pub messages: usize,
     pub media: usize,
 }
 
@@ -892,6 +895,7 @@ fn inspect_legacy_json(path: &Path) -> Result<BackupInspection, BackupFailure> {
             task_sections: array_len(object.get("taskSections")),
             tasks: array_len(object.get("tasks")),
             bills: array_len(object.get("bills")),
+            messages: array_len(object.get("messages")),
             media: 0,
         },
         missing_media: media.into_iter().collect(),
@@ -1008,6 +1012,12 @@ fn summarize_state(value: &Value) -> Result<StateSummary, BackupFailure> {
             "完整备份状态缺少 bills".to_string(),
         ));
     }
+    if store_version >= 20 && !state.contains_key("messages") {
+        return Err(failure(
+            BackupFailureCode::InvalidState,
+            "完整备份状态缺少 messages".to_string(),
+        ));
+    }
     if !validate_settings_value_for_version(state.get("settings"), store_version) {
         return Err(failure(
             BackupFailureCode::InvalidState,
@@ -1023,6 +1033,11 @@ fn summarize_state(value: &Value) -> Result<StateSummary, BackupFailure> {
     } else {
         0
     };
+    let messages = if state.contains_key("messages") {
+        validate_record_array(state, "messages", "text")?
+    } else {
+        0
+    };
     validate_domain_fields(state)?;
     Ok(StateSummary {
         store_version,
@@ -1032,6 +1047,7 @@ fn summarize_state(value: &Value) -> Result<StateSummary, BackupFailure> {
             task_sections,
             tasks,
             bills,
+            messages,
             media: 0,
         },
         media: collect_media_references(root.get("state").unwrap())?,
@@ -1128,6 +1144,12 @@ fn validate_domain_fields(state: &serde_json::Map<String, Value>) -> Result<(), 
                 }
             }
         }
+        if object
+            .get("sourceRef")
+            .is_some_and(|value| !validate_message_source_ref(value))
+        {
+            return Err(invalid("task.sourceRef 字段无效".into()));
+        }
     }
     for bill in state
         .get("bills")
@@ -1212,7 +1234,79 @@ fn validate_domain_fields(state: &serde_json::Map<String, Value>) -> Result<(), 
             }
         }
     }
+    for message in state
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let object = message
+            .as_object()
+            .expect("record array was already validated");
+        if object.get("source").and_then(Value::as_str) != Some("tuitui")
+            || !object
+                .get("conversationId")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty())
+            || !object
+                .get("messageId")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty())
+        {
+            return Err(invalid("message 来源或标识无效".into()));
+        }
+        if !object.get("status").is_some_and(|value| {
+            matches!(value.as_str(), Some("new" | "waiting" | "done" | "archived"))
+        }) {
+            return Err(invalid("message.status 不是受支持枚举".into()));
+        }
+        validate_optional_nonnegative_number(object.get("occurredAtMs"), "message.occurredAtMs")?;
+        validate_optional_nonnegative_number(object.get("receivedAtMs"), "message.receivedAtMs")?;
+        validate_optional_nonnegative_number(object.get("aiDraftAtMs"), "message.aiDraftAtMs")?;
+        if object.get("matchedRuleIds").is_some_and(|value| {
+            !value.as_array().is_some_and(|items| {
+                let mut seen = BTreeSet::new();
+                items.len() <= 50
+                    && items.iter().all(|item| {
+                        item.as_str()
+                            .is_some_and(|id| !id.is_empty() && seen.insert(id))
+                    })
+            })
+        }) {
+            return Err(invalid("message.matchedRuleIds 字段无效".into()));
+        }
+        if object.get("context").is_some_and(|value| {
+            !value.as_array().is_some_and(|items| {
+                items.len() <= 8
+                    && items.iter().all(|item| {
+                        item.as_object().is_some_and(|item| {
+                            item.get("messageId")
+                                .and_then(Value::as_str)
+                                .is_some_and(|id| !id.is_empty())
+                                && item.get("text").is_some_and(Value::is_string)
+                        })
+                    })
+            })
+        }) {
+            return Err(invalid("message.context 字段无效".into()));
+        }
+    }
     Ok(())
+}
+
+fn validate_message_source_ref(value: &Value) -> bool {
+    value.as_object().is_some_and(|object| {
+        object.get("kind").and_then(Value::as_str) == Some("message")
+            && object.get("source").and_then(Value::as_str) == Some("tuitui")
+            && object
+                .get("conversationId")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty())
+            && object
+                .get("messageId")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty())
+    })
 }
 
 fn validate_optional_nonnegative_number(
@@ -1676,6 +1770,27 @@ mod tests {
                     "history": [],
                     "createdAt": 1
                 }],
+                "messages": [{
+                    "id": "[\"tuitui\",\"g1\",\"m1\"]",
+                    "source": "tuitui",
+                    "sourceApp": "推推",
+                    "sourceBundle": "mac.im.qihoo.net",
+                    "conversationId": "g1",
+                    "messageId": "m1",
+                    "conversationName": "项目群",
+                    "senderUid": "u1",
+                    "senderName": "小王",
+                    "occurredAtMs": 1,
+                    "receivedAtMs": 2,
+                    "mentionedSelf": true,
+                    "followedSender": false,
+                    "matchedRuleIds": [],
+                    "isGroup": true,
+                    "messageType": "text",
+                    "text": "完整消息",
+                    "context": [],
+                    "status": "new"
+                }],
                 "settings": {"theme": "system"}
             }
         })
@@ -1713,6 +1828,7 @@ mod tests {
                 task_sections: 1,
                 tasks: 1,
                 bills: 1,
+                messages: 1,
                 media: 1,
             }
         );
@@ -1896,6 +2012,7 @@ mod tests {
             "state": {
                 "sections": [], "notes": [], "taskSections": [], "tasks": [],
                 "bills": [{"id": "b1", "name": "X", "kind": "loan", "cycle": "monthly"}],
+                "messages": [],
                 "settings": {}
             }
         })
@@ -1919,6 +2036,7 @@ mod tests {
                     "id": "b1", "kind": "subscription", "name": "Netflix",
                     "cycle": "monthly", "iconFile": "icon.png"
                 }],
+                "messages": [],
                 "settings": {}
             }
         })
@@ -1946,6 +2064,7 @@ mod tests {
                 task_sections: 1,
                 tasks: 1,
                 bills: 1,
+                messages: 1,
                 media: 0,
             },
             files: vec![BackupFileEntry {

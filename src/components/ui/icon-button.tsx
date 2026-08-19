@@ -43,7 +43,10 @@ const iconButtonVariants = cva(
           "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
       },
       surface: {
-        true: "border border-foreground/10 bg-surface-raised/95 elevation-2",
+        // 实底不透明：钮常悬浮在卡片文字上方，半透明底会与底下文字混叠。
+        // hover 底色带 !：tone 的 hover:bg-black/5 特异性更高，会把实底换成
+        // 5% 黑（近乎全透明）——悬停反馈改走描边加深 + tone 的图标变色。
+        true: "border border-foreground/10 bg-surface-raised elevation-2 hover:border-foreground/25 hover:bg-surface-raised!",
         false: "",
       },
       pressedLook: {

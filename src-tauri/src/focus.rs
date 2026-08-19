@@ -36,6 +36,38 @@ pub struct FrontApp {
 fn launch_time_ms(app: &NSRunningApplication) -> Option<i64> {
     app.launchDate()
         .map(|date| (date.timeIntervalSince1970() * 1_000.0).round() as i64)
+        .or_else(|| process_start_time_ms(app.processIdentifier()))
+}
+
+/// bundle 是否已安装（LaunchServices 查询；不要求正在运行）。
+pub fn app_installed_for_bundle(bundle_id: &str) -> bool {
+    let workspace = unsafe { NSWorkspace::sharedWorkspace() };
+    unsafe {
+        workspace
+            .URLForApplicationWithBundleIdentifier(&NSString::from_str(bundle_id))
+            .is_some()
+    }
+}
+
+/// 内核记录的进程启动时刻（sysctl kinfo_proc）。
+/// launchDate 只覆盖经 LaunchServices 启动的进程——消息监听自动接入用
+/// Command::spawn 重启的推推拿不到 launchDate，目标身份校验会把它误判成
+/// 「无法验证身份」并锁死发送。内核启动时刻对任何进程都存在，同样能
+/// 识别 PID 被新进程复用（同一进程恒走同一来源，不会两源混比）。
+fn process_start_time_ms(pid: i32) -> Option<i64> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    let written = unsafe {
+        libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, info.as_mut_ptr().cast(), size)
+    };
+    if written < size {
+        return None;
+    }
+    let info = unsafe { info.assume_init() };
+    if info.pbi_start_tvsec == 0 {
+        return None;
+    }
+    Some(info.pbi_start_tvsec as i64 * 1_000 + (info.pbi_start_tvusec / 1_000) as i64)
 }
 
 fn running_app_info(app: &NSRunningApplication) -> FrontApp {
@@ -128,6 +160,15 @@ pub fn frontmost_info() -> Option<FrontApp> {
 /// 指定 PID 对应的完整进程身份。PID 不存在时返回 None。
 pub fn app_info_of(pid: i32) -> Option<FrontApp> {
     NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+        .map(|app| running_app_info(&app))
+}
+
+/// 按 bundle id 查找已运行应用。只读查询，不启动、不激活应用。
+pub fn running_app_info_for_bundle(bundle_id: &str) -> Option<FrontApp> {
+    let bundle_id = NSString::from_str(bundle_id);
+    NSRunningApplication::runningApplicationsWithBundleIdentifier(&bundle_id)
+        .iter()
+        .next()
         .map(|app| running_app_info(&app))
 }
 

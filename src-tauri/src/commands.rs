@@ -128,6 +128,68 @@ pub fn set_clip_watch(app: AppHandle, enabled: bool) {
         .store(enabled, Ordering::SeqCst);
 }
 
+/// 会话级实验开关：重启 Toskr 后默认关闭，不写持久设置。
+#[tauri::command]
+pub fn set_message_watch(
+    app: AppHandle,
+    enabled: bool,
+) -> Result<crate::message_watch::MessageWatchStatus, String> {
+    crate::message_watch::set_enabled(&app, enabled)
+}
+
+#[tauri::command]
+pub fn get_message_watch_status(
+    app: AppHandle,
+) -> crate::message_watch::MessageWatchStatus {
+    crate::message_watch::current_status(&app)
+}
+
+#[tauri::command]
+pub fn get_message_watch_bridge_info(
+    app: AppHandle,
+) -> Result<crate::message_watch::MessageWatchBridgeInfo, String> {
+    crate::message_watch::bridge_info(&app)
+}
+
+#[tauri::command]
+pub fn get_message_watch_captures(
+    app: AppHandle,
+    limit: Option<usize>,
+) -> Result<Vec<crate::message_watch::MessageWatchCapture>, String> {
+    crate::message_watch::recent_captures(&app, limit.unwrap_or(1_000))
+}
+
+/// 消息监听的兼容 IM（推推 macOS 版）是否已安装；设置页据此降级为「暂不支持」提示。
+#[tauri::command]
+pub fn message_watch_app_installed() -> bool {
+    crate::focus::app_installed_for_bundle("mac.im.qihoo.net")
+}
+
+/// 在来源应用中定位会话（滚动会话列表 + 高亮该行；不打开会话、不改已读）。
+/// AX 遍历 + 滚动轮询最长 ~1.5s：走 spawn_blocking，不占主线程与 async 运行时。
+#[tauri::command]
+pub async fn locate_message_source(
+    app: AppHandle,
+    payload: crate::window::SourceOverlayPayload,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::window::locate_source_conversation(&app, payload)
+    })
+    .await
+    .map_err(|error| format!("定位任务异常：{error}"))?
+}
+
+/// CDP 免手动监听开关（会话级）。开启需前端传入 transport=cdp 的桥脚本；
+/// Rust 侧会重启推推为调试模式并自动注入，免掉手动 DevTools 粘贴。
+#[tauri::command]
+pub fn set_message_watch_auto(
+    app: AppHandle,
+    enabled: bool,
+    script: Option<String>,
+) -> Result<crate::message_watch::MessageWatchStatus, String> {
+    crate::message_watch_cdp::set_enabled(&app, enabled, script)
+}
+
 /// 图片原尺寸预览（自建预览窗；面板 320-520pt 放不下大图）。
 /// 组合卡传全部图片，`index` 为起始张（预览窗内 ←/→ 翻看）。
 /// `note_id`/`note_text`：所属笔记的 id 与当前文字（图片卡详情内联编辑
@@ -276,6 +338,7 @@ pub async fn send_to_chat(
         text,
         image_files,
         expected_image_pixel_hashes,
+        segments: None,
         press_enter,
         keep_panel,
         delivery_id: format!(
@@ -921,7 +984,7 @@ pub fn bundle_id_of_app(path: String) -> Option<String> {
 
 /// 设置窗口主题（system/light/dark）：同时切换原生外观与
 /// webview 的 prefers-color-scheme，前端 CSS 深浅色自动跟随。
-const THEMED_WINDOW_LABELS: [&str; 3] = ["main", "settings", "imgpreview"];
+const THEMED_WINDOW_LABELS: [&str; 4] = ["main", "settings", "imgpreview", "sourceoverlay"];
 
 #[tauri::command]
 pub fn set_window_theme(app: AppHandle, theme: String) {
@@ -1405,7 +1468,10 @@ mod tests {
 
     #[test]
     fn manual_theme_reaches_the_image_preview_window() {
-        assert_eq!(THEMED_WINDOW_LABELS, ["main", "settings", "imgpreview"]);
+        assert_eq!(
+            THEMED_WINDOW_LABELS,
+            ["main", "settings", "imgpreview", "sourceoverlay"]
+        );
     }
 
     #[test]

@@ -36,6 +36,10 @@ tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
 tauri-plugin-global-shortcut = "2"
 objc2-vision = { version = "0.3.2", features = ["VNRecognizeTextRequest", "VNRequest", "VNObservation", "VNRequestHandler", "VNTypes"] }
+# 推推 CDP 免手动注入：连推推调试端口的 WebSocket 客户端（仅 ws:// 明文，无 TLS）
+tokio = { version = "1", features = ["rt", "time", "net", "sync", "io-util", "macros"] }
+tokio-tungstenite = "0.24"
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink", "async-await"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 window-vibrancy = "0.6"

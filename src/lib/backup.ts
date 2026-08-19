@@ -2,6 +2,7 @@ import {
   STORE_VERSION,
   type Bill,
   type Note,
+  type MessageItem,
   type Section,
   type Settings,
   type Task,
@@ -15,6 +16,7 @@ type BackupSource = {
   taskSections: TaskSection[];
   tasks: Task[];
   bills: Bill[];
+  messages: MessageItem[];
   settings: Settings;
 };
 
@@ -32,6 +34,7 @@ export function buildBackupPayload({
   taskSections,
   tasks,
   bills,
+  messages,
   settings,
 }: BackupSource) {
   return {
@@ -42,6 +45,7 @@ export function buildBackupPayload({
       taskSections,
       tasks,
       bills,
+      messages,
       settings: backupSafeSettings(settings),
     },
   };

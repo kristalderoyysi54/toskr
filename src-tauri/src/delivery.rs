@@ -17,9 +17,26 @@ pub struct SendDeliveryRequest {
     pub image_files: Vec<String>,
     #[serde(default)]
     pub expected_image_pixel_hashes: Vec<Option<String>>,
+    /// 图文交错发送顺序（可选）。缺省时保持「文字整段在前、图片按清单序在后」。
+    /// text 段必须是 `text` 字段的切片、image 段按下标引用 `image_files`，
+    /// 完整性预读与像素哈希校验仍按清单执行，段只决定粘贴次序。
+    #[serde(default)]
+    pub segments: Option<Vec<DeliverySegment>>,
     pub press_enter: bool,
     pub keep_panel: bool,
     pub delivery_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DeliverySegment {
+    Text {
+        text: String,
+    },
+    Image {
+        #[serde(rename = "fileIndex")]
+        file_index: usize,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -256,6 +273,51 @@ fn failed_result(
     }
 }
 
+enum PayloadStep<'a> {
+    Text(&'a str),
+    Image(usize),
+}
+
+/// 把请求规范化为有序粘贴步骤。有 segments 时按段交错并校验引用完整
+/// （下标越界、重复或漏图都判请求无效，宁可失败也不静默错序）；
+/// 无 segments 时保持旧顺序：文字整段在前、图片按清单序在后。
+fn payload_steps(request: &SendDeliveryRequest) -> Result<Vec<PayloadStep<'_>>, DeliveryFailure> {
+    let Some(segments) = &request.segments else {
+        let mut steps = Vec::with_capacity(1 + request.image_files.len());
+        if !request.text.trim().is_empty() {
+            steps.push(PayloadStep::Text(&request.text));
+        }
+        steps.extend((0..request.image_files.len()).map(PayloadStep::Image));
+        return Ok(steps);
+    };
+    let invalid =
+        || DeliveryFailure::new(DeliveryReasonCode::InternalError, "发送失败：图文顺序信息无效");
+    let mut used = vec![false; request.image_files.len()];
+    let mut steps = Vec::with_capacity(segments.len());
+    for segment in segments {
+        match segment {
+            DeliverySegment::Text { text } => {
+                if text.trim().is_empty() {
+                    return Err(invalid());
+                }
+                steps.push(PayloadStep::Text(text));
+            }
+            DeliverySegment::Image { file_index } => {
+                let slot = used.get_mut(*file_index).ok_or_else(invalid)?;
+                if *slot {
+                    return Err(invalid());
+                }
+                *slot = true;
+                steps.push(PayloadStep::Image(*file_index));
+            }
+        }
+    }
+    if used.contains(&false) {
+        return Err(invalid());
+    }
+    Ok(steps)
+}
+
 pub fn execute_delivery(
     runtime: &mut impl DeliveryRuntime,
     request: &SendDeliveryRequest,
@@ -296,6 +358,29 @@ pub fn execute_delivery(
             false,
         );
     }
+    let steps = match payload_steps(request) {
+        Ok(steps) if !steps.is_empty() => steps,
+        Ok(_) => {
+            return failed_result(
+                runtime,
+                &request.delivery_id,
+                DeliveryFailure::new(DeliveryReasonCode::PayloadEmpty, "发送失败：内容为空"),
+                Some(snapshot),
+                started_at_ms,
+                false,
+            );
+        }
+        Err(failure) => {
+            return failed_result(
+                runtime,
+                &request.delivery_id,
+                failure,
+                Some(snapshot),
+                started_at_ms,
+                false,
+            );
+        }
+    };
     if let Err(failure) = runtime.prepare_payload(request) {
         return failed_result(
             runtime,
@@ -382,65 +467,15 @@ pub fn execute_delivery(
         );
     }
     runtime.pause(180);
-    if !request.text.trim().is_empty() {
-        if let Err(reason) = runtime.validate_target(
-            &snapshot,
-            request.target_token.as_deref(),
-            ValidationGate::Frontmost,
-        ) {
-            return blocked_result(
-                runtime,
-                &request.delivery_id,
-                reason_code(reason),
-                Some(snapshot),
-                started_at_ms,
-                false,
-            );
+    // 统一按步粘贴：默认顺序与交错 segments 走同一条路径。首个文字段前不
+    // 加间隔（面板已让位），图片段以及后续任何段之间都留 700ms 给目标消化。
+    let expected_pastes = steps.len();
+    let mut completed_pastes = 0usize;
+    for (step_index, step) in steps.iter().enumerate() {
+        let needs_gap = step_index > 0 || matches!(step, PayloadStep::Image(_));
+        if needs_gap {
+            runtime.pause(700);
         }
-        if let Err(failure) = runtime.stage_text(&request.text) {
-            return failed_result(
-                runtime,
-                &request.delivery_id,
-                failure,
-                Some(snapshot),
-                started_at_ms,
-                false,
-            );
-        }
-        if let Err(reason) = runtime.validate_target(
-            &snapshot,
-            request.target_token.as_deref(),
-            ValidationGate::Frontmost,
-        ) {
-            let code = if reason == TargetReason::TargetNotFrontmost {
-                DeliveryReasonCode::TargetFocusDrift
-            } else {
-                reason_code(reason)
-            };
-            return blocked_result(
-                runtime,
-                &request.delivery_id,
-                code,
-                Some(snapshot),
-                started_at_ms,
-                false,
-            );
-        }
-        if let Err(failure) = runtime.paste_staged(PayloadKind::Text) {
-            return failed_result(
-                runtime,
-                &request.delivery_id,
-                failure,
-                Some(snapshot),
-                started_at_ms,
-                false,
-            );
-        }
-    }
-    let mut completed_pastes = usize::from(!request.text.trim().is_empty());
-    let expected_pastes = completed_pastes + request.image_files.len();
-    for index in 0..request.image_files.len() {
-        runtime.pause(700);
         if let Err(reason) = runtime.validate_target(
             &snapshot,
             request.target_token.as_deref(),
@@ -460,7 +495,11 @@ pub fn execute_delivery(
                 completed_pastes == expected_pastes,
             );
         }
-        if let Err(failure) = runtime.stage_image(index) {
+        let staged = match step {
+            PayloadStep::Text(text) => runtime.stage_text(text),
+            PayloadStep::Image(index) => runtime.stage_image(*index),
+        };
+        if let Err(failure) = staged {
             return failed_result(
                 runtime,
                 &request.delivery_id,
@@ -489,7 +528,11 @@ pub fn execute_delivery(
                 completed_pastes == expected_pastes,
             );
         }
-        if let Err(failure) = runtime.paste_staged(PayloadKind::Image) {
+        let kind = match step {
+            PayloadStep::Text(_) => PayloadKind::Text,
+            PayloadStep::Image(_) => PayloadKind::Image,
+        };
+        if let Err(failure) = runtime.paste_staged(kind) {
             return failed_result(
                 runtime,
                 &request.delivery_id,
@@ -847,6 +890,7 @@ mod tests {
         window_calls: usize,
         activation_calls: usize,
         stage_calls: usize,
+        staged_order: Vec<String>,
         paste_calls: usize,
         enter_calls: usize,
         clipboard_outcome: Option<ClipboardOutcome>,
@@ -882,6 +926,7 @@ mod tests {
                 window_calls: 0,
                 activation_calls: 0,
                 stage_calls: 0,
+                staged_order: Vec::new(),
                 paste_calls: 0,
                 enter_calls: 0,
                 clipboard_outcome: None,
@@ -942,13 +987,15 @@ mod tests {
 
         fn pause(&mut self, _millis: u64) {}
 
-        fn stage_text(&mut self, _text: &str) -> Result<(), DeliveryFailure> {
+        fn stage_text(&mut self, text: &str) -> Result<(), DeliveryFailure> {
             self.stage_calls += 1;
+            self.staged_order.push(format!("text:{text}"));
             Ok(())
         }
 
-        fn stage_image(&mut self, _index: usize) -> Result<(), DeliveryFailure> {
+        fn stage_image(&mut self, index: usize) -> Result<(), DeliveryFailure> {
             self.stage_calls += 1;
+            self.staged_order.push(format!("image:{index}"));
             Ok(())
         }
 
@@ -994,6 +1041,7 @@ mod tests {
             text: "hello".into(),
             image_files: vec![],
             expected_image_pixel_hashes: vec![],
+            segments: None,
             press_enter: true,
             keep_panel: false,
             delivery_id: "delivery-1".into(),
@@ -1200,6 +1248,75 @@ mod tests {
         );
         assert_eq!(runtime.paste_calls, 2);
         assert_eq!(runtime.enter_calls, 0);
+    }
+
+    #[test]
+    fn interleaved_segments_paste_in_declared_order() {
+        let mut req = request(Some("token-1"));
+        req.text = "开头\n结尾".into();
+        req.image_files = vec!["a.png".into(), "b.png".into()];
+        req.expected_image_pixel_hashes = vec![None, None];
+        req.segments = Some(vec![
+            DeliverySegment::Text {
+                text: "开头".into(),
+            },
+            DeliverySegment::Image { file_index: 0 },
+            DeliverySegment::Text {
+                text: "结尾".into(),
+            },
+            DeliverySegment::Image { file_index: 1 },
+        ]);
+        req.press_enter = false;
+        let mut runtime = FakeRuntime::default();
+
+        let result = execute_delivery(&mut runtime, &req);
+
+        assert_eq!(result.status, DeliveryStatus::Sent);
+        assert!(result.paste_completed);
+        assert_eq!(
+            runtime.staged_order,
+            vec!["text:开头", "image:0", "text:结尾", "image:1"]
+        );
+        assert_eq!(runtime.paste_calls, 4);
+        // 每段 stage 前后各一道 Frontmost 哨卡 + 起始两道 Identity
+        assert_eq!(runtime.validation_calls, 2 + 4 * 2);
+    }
+
+    #[test]
+    fn invalid_segments_fail_closed_before_any_input() {
+        let broken: [Vec<DeliverySegment>; 4] = [
+            // 下标越界
+            vec![DeliverySegment::Image { file_index: 1 }],
+            // 同图重复
+            vec![
+                DeliverySegment::Image { file_index: 0 },
+                DeliverySegment::Image { file_index: 0 },
+            ],
+            // 漏图（image_files 有 1 张、段里 0 张）
+            vec![DeliverySegment::Text {
+                text: "文字".into(),
+            }],
+            // 空文字段
+            vec![
+                DeliverySegment::Text { text: "  ".into() },
+                DeliverySegment::Image { file_index: 0 },
+            ],
+        ];
+        for segments in broken {
+            let mut req = request(Some("token-1"));
+            req.image_files = vec!["a.png".into()];
+            req.expected_image_pixel_hashes = vec![None];
+            req.segments = Some(segments);
+            let mut runtime = FakeRuntime::default();
+
+            let result = execute_delivery(&mut runtime, &req);
+
+            assert_eq!(result.status, DeliveryStatus::Failed);
+            assert_eq!(result.reason_code, DeliveryReasonCode::InternalError);
+            assert_eq!(runtime.stage_calls, 0);
+            assert_eq!(runtime.paste_calls, 0);
+            assert_eq!(runtime.window_calls, 0);
+        }
     }
 
     #[test]

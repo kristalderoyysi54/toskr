@@ -5,9 +5,15 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import App from "./App";
 import HudView from "./HudView";
 import ImagePreviewView from "./ImagePreviewView";
+import { installExternalLinkInterceptor } from "./lib/externalLinks";
+import { LocateHighlightView } from "./LocateHighlightView";
 import SettingsView from "./SettingsView";
+import SourceOverlayView from "./SourceOverlayView";
 import TextPreviewView from "./TextPreviewView";
 import "./index.css";
+
+// 所有窗口共用入口：链接点击一律不许 WebView 就地导航（详情窗曾被外部网页替换）
+installExternalLinkInterceptor();
 
 // 跟随系统深浅色（shadcn 的 .dark class 策略；set_theme 后 webview 的
 // prefers-color-scheme 也会变，故同一监听可覆盖手动主题）
@@ -20,6 +26,8 @@ if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
     "settings",
     "imgpreview",
     "textpreview",
+    "sourceoverlay",
+    "locatehl",
   ].includes(requestedLabel ?? "")
     ? requestedLabel!
     : "main";
@@ -76,6 +84,10 @@ const view =
     <ImagePreviewView />
   ) : label === "textpreview" ? (
     <TextPreviewView />
+  ) : label === "sourceoverlay" ? (
+    <SourceOverlayView />
+  ) : label === "locatehl" ? (
+    <LocateHighlightView />
   ) : (
     <App />
   );

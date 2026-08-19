@@ -36,6 +36,7 @@ function draft(patch: Partial<DeliveryDraft> = {}): DeliveryDraft {
     assembledText: "原始正文",
     finalText: "原始正文",
     originalImageFiles: [],
+    segments: null,
     imageFiles: [],
     imageFirewall: [],
     format: "plain",

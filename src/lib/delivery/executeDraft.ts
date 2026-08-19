@@ -160,6 +160,23 @@ function sameStrings(left: readonly string[], right: readonly string[]): boolean
     left.every((value, index) => value === right[index]);
 }
 
+/**
+ * 发送前复核交错顺序仍与 Draft 现状对齐：预检改过正文（finalText 漂离
+ * rawText）或图片清单数量变化都退回默认顺序，宁可不交错也不发错内容。
+ */
+function draftSegmentsForSend(draft: DeliveryDraft) {
+  const segments = draft.segments;
+  if (!segments || draft.finalText !== draft.rawText) return undefined;
+  const referenced = segments.flatMap((segment) =>
+    segment.kind === "image" ? [segment.fileIndex] : []
+  );
+  const valid =
+    referenced.length === draft.imageFiles.length &&
+    new Set(referenced).size === referenced.length &&
+    referenced.every((index) => index >= 0 && index < draft.imageFiles.length);
+  return valid ? segments : undefined;
+}
+
 /** 原文保留决定绑定当前 target token；发送前复核不能再轮换这枚 token。 */
 function draftHasTargetBoundPrivacyDecision(draft: DeliveryDraft): boolean {
   return draft.privacyDecision.excludedFindingIds.length > 0 ||
@@ -526,6 +543,7 @@ export async function executeDeliveryDraft(
           ? item.pixelHash
           : item.redactedPixelHash
       ),
+      segments: draftSegmentsForSend(draft),
       pressEnter,
       keepPanel: panelPlan.keepNativeWindow,
       deliveryId: draft.id,

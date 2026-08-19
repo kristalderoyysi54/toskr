@@ -117,6 +117,8 @@ import {
   TASK_SPARKS_COLLAPSED_KEY,
 } from "@/components/TaskPage";
 import { RemindersPage } from "@/components/RemindersPage";
+import { ContentTabs } from "@/components/ContentTabs";
+import { MessagePage } from "@/components/messages/MessagePage";
 import { TaskTile } from "@/components/TaskRow";
 import { SecretPage } from "@/components/SecretPage";
 import { TaskQuickAdd } from "@/components/TaskQuickAdd";
@@ -201,6 +203,7 @@ import {
   api,
   EDGE_HIDE_STATE_EVENT,
   HUD_OPEN_PANEL_EVENT,
+  MESSAGE_WATCH_EVENT,
   PANEL_MOVED_EVENT,
   CLIP_EVENT,
   CLIP_PAUSE_EVENT,
@@ -211,6 +214,7 @@ import {
   type ClipPayload,
   type EdgeHideStatePayload,
   type HudOpenPanelPayload,
+  type MessageWatchCapture,
   type TargetSnapshot,
   type TriggerPayload,
 } from "@/lib/tauri";
@@ -609,7 +613,7 @@ const lockYAxis: Modifier = ({ transform }) => ({ ...transform, y: 0 });
 /** 页签中文名（顺序由 settings.pageOrder 决定）。 */
 const PAGE_LABEL: Record<PageId, string> = {
   clipboard: "剪贴",
-  notes: "笔记",
+  notes: "内容",
   tasks: "提醒",
   secret: "秘文",
 };
@@ -630,21 +634,32 @@ function PageSlide({
   children: React.ReactNode;
 }) {
   const active = offset === 0;
+  // visibility 由 React 受控，不走 motion 的 transitionEnd：退出动画刚完成
+  // 或被打断的一两帧内切回该页时，延迟应用的 transitionEnd hidden 会盖过
+  // 切入时设置的 visible，把已激活页面整页藏掉（来回切 tab 概率性白屏）。
+  const [hidden, setHidden] = useState(!active);
+  if (active && hidden) setHidden(false);
+  const activeRef = useRef(active);
+  activeRef.current = active;
   return (
     <motion.div
       ref={contentRef}
       aria-hidden={!active}
       initial={false}
       animate={
-        active
-          ? { x: 0, opacity: 1, visibility: "visible" as const }
-          : {
-              x: offset < 0 ? -24 : 24,
-              opacity: 0,
-              transitionEnd: { visibility: "hidden" as const },
-            }
+        active ? { x: 0, opacity: 1 } : { x: offset < 0 ? -24 : 24, opacity: 0 }
       }
+      onAnimationComplete={(def) => {
+        // 仅「退出动画完成且此刻仍非激活」才停掉绘制；切入动画完成或
+        // 退出中途被切回打断（stop 也可能触发完成回调）都不隐藏
+        const isExit =
+          typeof def === "object" &&
+          def !== null &&
+          (def as { opacity?: number }).opacity === 0;
+        if (isExit && !activeRef.current) setHidden(true);
+      }}
       transition={springSnappy}
+      style={{ visibility: hidden ? "hidden" : "visible" }}
       className={cn(
         "absolute inset-0 flex min-h-0 flex-col",
         !active && "pointer-events-none"
@@ -661,6 +676,7 @@ export default function App() {
   const dataOperationPhase = useDataOperationStore((state) => state.phase);
   const open = useUIStore((s) => s.open);
   const page = useUIStore((s) => s.page);
+  const contentSubview = useUIStore((s) => s.contentSubview);
   const pinned = useUIStore((s) => s.pinned);
   const updateAvail = useUIStore((s) => s.updateAvail);
   const announce = useUIStore((s) => s.announce);
@@ -670,6 +686,7 @@ export default function App() {
   const sections = useNotesStore((s) => s.sections);
   const notes = useNotesStore((s) => s.notes);
   const tasks = useNotesStore((s) => s.tasks);
+  const messages = useNotesStore((s) => s.messages);
   const taskSections = useNotesStore((s) => s.taskSections);
   const settings = useNotesStore((s) => s.settings);
   const onboarding = settings.onboarding;
@@ -1499,6 +1516,59 @@ export default function App() {
     };
   }, []);
 
+  // 推推桥先把完整 raw 对象写入 JSONL；主窗口维护独立结构化消息投影。
+  useEffect(() => {
+    const unlisten = listen<MessageWatchCapture>(
+      MESSAGE_WATCH_EVENT,
+      (event) => {
+        if (isDataOperationLocked()) return;
+        const store = useNotesStore.getState();
+        const result = store.ingestMessageCaptures([event.payload]);
+        if (result.added > 0) {
+          void api.hudFeedback("added", "已捕获推推关注消息");
+        }
+      }
+    );
+    return () => {
+      unlisten.then((stop) => stop());
+    };
+  }, []);
+
+  // 水合/切换数据目录后，从 append-only JSONL 恢复消息投影。只读本地文件，
+  // 不连接、不打开也不切换推推会话。
+  useEffect(() => {
+    let alive = true;
+    let loading = false;
+    const restore = () => {
+      if (
+        !alive ||
+        loading ||
+        isDataOperationLocked() ||
+        !useNotesStore.persist.hasHydrated()
+      ) return;
+      loading = true;
+      void api
+        .getMessageWatchCaptures(1_000)
+        .then((captures) => {
+          if (alive && !isDataOperationLocked()) {
+            useNotesStore.getState().ingestMessageCaptures(captures);
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          loading = false;
+        });
+    };
+    if (useNotesStore.persist.hasHydrated()) restore();
+    const stopHydration = useNotesStore.persist.onFinishHydration(restore);
+    window.addEventListener(DATA_RUNTIME_READY_EVENT, restore);
+    return () => {
+      alive = false;
+      stopHydration();
+      window.removeEventListener(DATA_RUNTIME_READY_EVENT, restore);
+    };
+  }, []);
+
   // 失焦：自动隐藏（Pin 豁免）+ 刷新发送目标（防 Pin 场景目标漂移）
   useEffect(() => {
     const win = getCurrentWebviewWindow();
@@ -2152,7 +2222,7 @@ export default function App() {
       const inspection = await runCompleteBackupExport(path);
       tip(
         "ok",
-        `完整备份已验证：${inspection.counts.notes} 条笔记、${inspection.counts.tasks} 个任务、${inspection.counts.media} 个媒体`
+        `完整备份已验证：${inspection.counts.notes} 条笔记、${inspection.counts.messages} 条消息、${inspection.counts.tasks} 个任务、${inspection.counts.media} 个媒体`
       );
     } catch (e) {
       tip("warn", `导出失败：${userError(e)}`);
@@ -2180,7 +2250,7 @@ export default function App() {
       ];
       const confirmed = await ask(
         inspection.format === "complete"
-          ? `完整备份已通过 manifest/hash 预检。将恢复 ${counts.notes} 条笔记、${counts.tasks} 个任务、${counts.media} 个媒体，并先创建当前数据恢复点。API Key 不在备份中，恢复后需重新配置。继续吗？`
+          ? `完整备份已通过 manifest/hash 预检。将恢复 ${counts.notes} 条笔记、${counts.messages} 条消息、${counts.tasks} 个任务、${counts.media} 个媒体，并先创建当前数据恢复点。原始推推 JSONL 账本不在归档内，仍需按设置页路径单独备份；API Key 不在备份中，恢复后需重新配置。继续吗？`
           : `这是旧 JSON，将先创建当前数据恢复点，再按 ID 合并 ${counts.notes} 条笔记、${counts.tasks} 个任务。\n\n完整性限制：\n- ${legacyLimitations.join("\n- ")}\n\n继续吗？`,
         { title: "导入预检", kind: "warning" }
       );
@@ -2198,7 +2268,7 @@ export default function App() {
           phase: "complete",
           message: result.message,
         });
-        tip("ok", `完整备份恢复完成：笔记 ${counts.notes} 条，媒体 ${counts.media} 个`);
+        tip("ok", `完整备份恢复完成：笔记 ${counts.notes} 条，消息 ${counts.messages} 条，媒体 ${counts.media} 个`);
       } else {
         const { added } = await runLegacyJsonImport(
           path,
@@ -2303,6 +2373,27 @@ export default function App() {
   );
   const secretNavIds = useMemo(() => secretNotes.map((n) => n.id), [secretNotes]);
 
+  const messageSearchIds = useMemo(() => {
+    const needle = q.toLocaleLowerCase();
+    return messages
+      .filter((message) => {
+        if (!needle) return true;
+        return [
+          message.conversationName,
+          message.conversationId,
+          message.senderName,
+          message.senderUid,
+          message.text,
+          ...message.context.flatMap((item) => [item.senderName, item.text]),
+        ]
+          .filter(Boolean)
+          .join("\n")
+          .toLocaleLowerCase()
+          .includes(needle);
+      })
+      .map((message) => message.id);
+  }, [messages, q]);
+
   const noteMatchCount = grouped.reduce(
     (a, g) => a + g.active.length + g.done.length,
     0
@@ -2310,9 +2401,11 @@ export default function App() {
   const matchCount =
     page === "clipboard"
       ? clipNotes.length
-      : page === "secret"
+      : page === "notes" && contentSubview === "secret"
         ? secretNotes.length
-        : noteMatchCount;
+        : page === "notes" && contentSubview === "messages"
+          ? messageSearchIds.length
+          : noteMatchCount;
 
   /** 键盘导航覆盖的可见卡片序列（笔记页）。 */
   const noteNavIds = useMemo(
@@ -2409,11 +2502,13 @@ export default function App() {
         : taskNavIds
       : page === "clipboard"
         ? clipNavIds
-        : page === "secret"
+        : page === "notes" && contentSubview === "secret"
           ? secretNavIds
-          : horizontalBar
-            ? stripNoteIds
-            : noteNavIds;
+          : page === "notes" && contentSubview === "messages"
+            ? []
+            : horizontalBar
+              ? stripNoteIds
+              : noteNavIds;
 
   // 可见顺序同步到 uiStore，供 Shift 范围选中使用
   useEffect(() => {
@@ -2434,15 +2529,17 @@ export default function App() {
   const pageOrder = useNotesStore((s) => s.settings.pageOrder);
   const clipHistory = useNotesStore((s) => s.settings.clipHistory);
   const secretEnabled = useNotesStore((s) => s.settings.secretEnabled);
-  // 关掉剪贴板历史 / 秘文 = 该功能整体隐退：页签也不再出现（页序本身保持不变，
-  // 重新打开即回到原位置）。零依赖派生，useMemo 保持引用稳定
+  const messagesEnabled = useNotesStore((s) => s.settings.messagesEnabled);
+  // 内容域（消息/秘文）都未启用时回到经典形态：一级页签「剪贴 · 笔记 · 提醒」，
+  // 不出现「内容」二级导航；由设置页显式开关控制（均默认关闭）
+  const contentDomainsOn = secretEnabled || messagesEnabled;
+  // 秘文合并进「内容」二级导航，不再占一级页签；关闭剪贴历史则隐藏剪贴页。
   const visiblePages = useMemo(
     () =>
       pageOrder.filter(
-        (p) =>
-          (p !== "clipboard" || clipHistory) && (p !== "secret" || secretEnabled)
+        (p) => p !== "secret" && (p !== "clipboard" || clipHistory)
       ),
-    [pageOrder, clipHistory, secretEnabled]
+    [pageOrder, clipHistory]
   );
   const pageIndex = Math.max(0, pageOrder.indexOf(page));
   const orderOf = (p: PageId) => Math.max(0, pageOrder.indexOf(p));
@@ -2464,10 +2561,27 @@ export default function App() {
   };
   // 停在剪贴页时把功能关掉 → 该页已不可达，切到页序上的第一个可见页
   useEffect(() => {
+    if (page === "secret") {
+      useUIStore.getState().setPage("notes");
+      if (secretEnabled) useUIStore.getState().setContentSubview("secret");
+      return;
+    }
     if (!visiblePages.includes(page)) {
       useUIStore.getState().setPage(visiblePages[0] ?? "notes");
     }
-  }, [visiblePages, page]);
+  }, [visiblePages, page, secretEnabled]);
+
+  useEffect(() => {
+    if (!secretEnabled && contentSubview === "secret") {
+      useUIStore.getState().setContentSubview("notes");
+    }
+  }, [contentSubview, secretEnabled]);
+
+  useEffect(() => {
+    if (!messagesEnabled && contentSubview === "messages") {
+      useUIStore.getState().setContentSubview("notes");
+    }
+  }, [messagesEnabled, contentSubview]);
   /** 横栏下笔记输入通栏默认收起，由工具栏「添加笔记」按钮唤出。 */
   const [barDraftOpen, setBarDraftOpen] = useState(false);
 
@@ -2565,9 +2679,10 @@ export default function App() {
       // 以下发送/勾选类快捷键操作的是笔记 checkedIds——剪贴板卡也是笔记，
       // 两页均可用；任务页禁用（任务 id 污染勾选态）；秘文页也禁用——密文卡
       // 只用自身按钮操作，绝不走普通发送/多选/列表复制管线（会暴露/误发密文）。
+      const currentUi = useUIStore.getState();
       const onNotesPage =
-        useUIStore.getState().page !== "tasks" &&
-        useUIStore.getState().page !== "secret";
+        currentUi.page === "clipboard" ||
+        (currentUi.page === "notes" && currentUi.contentSubview === "notes");
       if (e.key === "Enter" && e.metaKey) {
         if (!onNotesPage) return;
         e.preventDefault();
@@ -2633,7 +2748,11 @@ export default function App() {
         ui.setFocusedId(next);
         // 笔记/剪贴板：左右导航即单选（蓝色选中态，回车可直发）；
         // 任务/秘文页无普通勾选语义，只保持焦点环
-        if (ui.page !== "tasks" && ui.page !== "secret" && next) {
+        if (
+          (ui.page === "clipboard" ||
+            (ui.page === "notes" && ui.contentSubview === "notes")) &&
+          next
+        ) {
           useNotesStore.getState().setChecked([next]);
           ui.setAnchorId(next);
         }
@@ -2644,7 +2763,7 @@ export default function App() {
       if (e.key === " " && ui.focusedId) {
         e.preventDefault();
         // 秘文页：Space 不开详情窗（会明文暴露密文正文）；解密走卡片自身点击
-        if (ui.page === "secret") return;
+        if (ui.page === "secret" || (ui.page === "notes" && ui.contentSubview !== "notes")) return;
         if (ui.page === "tasks") {
           useNotesStore.getState().toggleTaskDone(ui.focusedId);
           return;
@@ -2671,7 +2790,7 @@ export default function App() {
       if (e.key === "x" && !e.metaKey && ui.focusedId) {
         e.preventDefault();
         // 秘文页无勾选语义：不可见的勾选态会污染 checkedIds
-        if (ui.page === "secret") return;
+        if (ui.page === "secret" || (ui.page === "notes" && ui.contentSubview !== "notes")) return;
         if (ui.page === "tasks") {
           useNotesStore.getState().toggleTaskDone(ui.focusedId);
         } else {
@@ -2694,7 +2813,11 @@ export default function App() {
       }
       // p = 置顶/常用切换（keep 双域语义：剪贴卡=置顶不清理，笔记卡=常用）
       if (e.key === "p" && !e.metaKey && !e.ctrlKey && !e.altKey && ui.focusedId) {
-        if (ui.page === "secret" || ui.page === "tasks") return;
+        if (
+          ui.page === "secret" ||
+          ui.page === "tasks" ||
+          (ui.page === "notes" && ui.contentSubview !== "notes")
+        ) return;
         e.preventDefault();
         const st = useNotesStore.getState();
         const focused = st.notes.find((n) => n.id === ui.focusedId);
@@ -2728,7 +2851,7 @@ export default function App() {
       if (e.key === "Enter" && !e.metaKey && ui.focusedId) {
         e.preventDefault();
         // 秘文页：Enter 不开详情窗（同 Space，避免明文暴露/编辑损坏密文）
-        if (ui.page === "secret") return;
+        if (ui.page === "secret" || (ui.page === "notes" && ui.contentSubview !== "notes")) return;
         if (ui.page === "tasks") {
           ui.setEditingId(ui.focusedId);
         } else {
@@ -2740,7 +2863,7 @@ export default function App() {
       // ⇧⌘⌫：清理当前页已完成（Finder 清空废纸篓同族手势；带撤销）。
       // 剪贴/秘文页无「清理已完成」语义，不拦截以免吞掉按键
       if (e.key === "Backspace" && e.metaKey && e.shiftKey) {
-        if (ui.page === "notes") {
+        if (ui.page === "notes" && ui.contentSubview === "notes") {
           e.preventDefault();
           clearDoneWithUndo();
         } else if (ui.page === "tasks") {
@@ -2997,11 +3120,17 @@ export default function App() {
             key={id}
             id={id}
             active={page === id}
-            badge={id === "tasks" ? taskBuckets.overdue.length : undefined}
+            badge={
+              id === "tasks"
+                ? taskBuckets.overdue.length
+                : id === "notes" && messagesEnabled
+                  ? messages.filter((message) => message.status === "new").length
+                  : undefined
+            }
             onClick={() => useUIStore.getState().setPage(id)}
             onDoubleClick={() => scrollTabPageToStart(id)}
           >
-            {PAGE_LABEL[id]}
+            {id === "notes" && !contentDomainsOn ? "笔记" : PAGE_LABEL[id]}
           </PageTab>
         ))}
       </SortableContext>
@@ -3160,9 +3289,11 @@ export default function App() {
                     {pageTabs}
                   </div>
                 )}
-                {horizontalBar && (page === "notes" || page === "tasks") && (
+                {horizontalBar &&
+                  (page === "tasks" ||
+                    (page === "notes" && contentSubview === "notes")) && (
                   <div className="absolute left-1/2 top-1/2 flex max-w-[46%] -translate-x-1/2 -translate-y-1/2 items-center gap-1 overflow-x-auto [&::-webkit-scrollbar]:hidden">
-                    {page === "notes" && (
+                    {page === "notes" && contentSubview === "notes" && (
                       <GroupPills
                           bare
                           items={grouped.map((g) => g.section)}
@@ -3229,7 +3360,7 @@ export default function App() {
                 )}
                 <div className="ml-auto flex items-center gap-0.5">
                   {/* 横栏：输入通栏收起，这里按需唤出（仅上下布局出现） */}
-                  {horizontalBar && page === "notes" && (
+                  {horizontalBar && page === "notes" && contentSubview === "notes" && (
                     <Tipped label={barDraftOpen ? "收起输入" : "添加笔记"}>
                       <IconButton
                         label={barDraftOpen ? "收起输入" : "添加笔记"}
@@ -3274,6 +3405,7 @@ export default function App() {
                   )}
                   {horizontalBar &&
                     page !== "clipboard" &&
+                    (page !== "notes" || contentSubview === "notes") &&
                     (page === "notes" ? doneCount : doneTaskCount) > 0 && (
                     <Tipped
                       label={
@@ -3340,7 +3472,8 @@ export default function App() {
                         {!horizontalBar && (
                           <>
                             <SimpleMenuLabel>显示</SimpleMenuLabel>
-                            {page !== "tasks" && (
+                            {page !== "tasks" &&
+                              (page !== "notes" || contentSubview === "notes") && (
                               <SimpleMenuItem
                                 onClick={() => {
                                   close();
@@ -3359,6 +3492,7 @@ export default function App() {
                               </SimpleMenuItem>
                             )}
                             {page !== "clipboard" &&
+                              (page !== "notes" || contentSubview === "notes") &&
                               (page === "notes" ? doneCount : doneTaskCount) > 0 && (
                                 <SimpleMenuItem
                                   onClick={() => {
@@ -3519,7 +3653,13 @@ export default function App() {
                     ref={searchInputRef}
                     autoFocus
                     value={query}
-                    placeholder="搜索卡片…"
+                    placeholder={
+                      page === "notes" && contentSubview === "messages"
+                        ? "搜索消息、群或发送者…"
+                        : page === "notes" && contentSubview === "secret"
+                          ? "搜索秘文…"
+                          : "搜索卡片…"
+                    }
                     onChange={(e) => useUIStore.getState().setQuery(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === "Escape") {
@@ -3583,7 +3723,7 @@ export default function App() {
                     )}
                   </StripScroller>
                 ) : (
-                <ScrollArea className="min-h-0 flex-1 px-3.5">
+                <ScrollArea className="min-h-0 flex-1 px-2.5" viewportClassName="px-1">
                   {clipNotes.length === 0 ? (
                     <EmptyState
                       icon={<ClipboardList />}
@@ -3668,7 +3808,16 @@ export default function App() {
                   offset={orderOf("notes") - pageIndex}
                   contentRef={notesPageRef}
                 >
-                {horizontalBar ? (
+                {contentDomainsOn && <ContentTabs />}
+                {contentSubview === "messages" ? (
+                  <MessagePage query={q} />
+                ) : contentSubview === "secret" ? (
+                  <SecretPage
+                    notes={secretNotes}
+                    query={q}
+                    horizontal={horizontalBar}
+                  />
+                ) : horizontalBar ? (
                   <>
                   <StripScroller>
                     {stripNotes.length === 0 ? (
@@ -3698,7 +3847,7 @@ export default function App() {
                   </StripScroller>
                   </>
                 ) : (
-              <ScrollArea className="min-h-0 flex-1 px-3.5">
+              <ScrollArea className="min-h-0 flex-1 px-2.5" viewportClassName="px-1">
                 {(!onboarding.done || onboarding.rehearsalActive) && (
                   <SafeDeliveryRehearsal />
                 )}
@@ -3781,22 +3930,14 @@ export default function App() {
                     <RemindersPage buckets={taskBuckets} now={taskNow} />
                   )}
                 </PageSlide>
-                <PageSlide
-                  offset={orderOf("secret") - pageIndex}
-                  contentRef={secretPageRef}
-                >
-                  <SecretPage
-                    notes={secretNotes}
-                    query={q}
-                    horizontal={horizontalBar}
-                  />
-                </PageSlide>
               </div>
 
               {/* 横栏以右下紧凑浮条保留显式预检与模式选择，不占内容通栏。 */}
-              <SelectionBar compact={horizontalBar} />
+              {(page !== "notes" || contentSubview === "notes") && (
+                <SelectionBar compact={horizontalBar} />
+              )}
               {/* 横栏形态：输入通栏默认不占空间，工具栏 + 按钮唤出 */}
-              {page === "notes" && (!horizontalBar || barDraftOpen) && <DraftInput />}
+              {page === "notes" && contentSubview === "notes" && (!horizontalBar || barDraftOpen) && <DraftInput />}
 
               <PreviewOverlay />
               <PreflightComposer horizontal={horizontalBar} />
@@ -3915,7 +4056,7 @@ function PageTab({
       aria-selected={active}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
-      title={`切换到${PAGE_LABEL[id]}；双击返回列表起点`}
+      title={`切换到${typeof children === "string" ? children : PAGE_LABEL[id]}；双击返回列表起点`}
       className={cn(
         "relative flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-label outline-none",
         "transition-[color,background-color,transform] duration-(--duration-control)",

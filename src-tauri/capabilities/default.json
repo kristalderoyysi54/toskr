@@ -5,6 +5,7 @@
   "windows": [
     "main",
     "hud",
+    "sourceoverlay",
     "settings",
     "imgpreview",
     "textpreview"

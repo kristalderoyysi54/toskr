@@ -137,7 +137,7 @@ export function SubscriptionsPage({ bills, now }: { bills: Bill[]; now: number }
           <Plus />
         </IconButton>
       </div>
-      <ScrollArea className="min-h-0 flex-1 px-3.5">
+      <ScrollArea className="min-h-0 flex-1 px-2.5" viewportClassName="px-1">
         <div className="flex flex-col gap-2 pb-2 pt-1">
           {view === "week" ? (
             <BillWeekStrip

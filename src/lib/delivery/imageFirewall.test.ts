@@ -72,6 +72,7 @@ function draft(items: ImageFirewallItem[]): DeliveryDraft {
     assembledText: "",
     finalText: "",
     originalImageFiles: items.map((entry) => entry.originalFile),
+    segments: null,
     imageFiles: items.map((entry) => entry.sendFile),
     imageFirewall: items,
     format: "plain",
