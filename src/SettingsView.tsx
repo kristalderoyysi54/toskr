@@ -11,6 +11,7 @@ import {
   AlertCircle,
   ArrowDown,
   ArrowUp,
+  Blocks,
   Check,
   ClipboardList,
   Copy,
@@ -138,6 +139,7 @@ type SectionId =
   | "general"
   | "hotkey"
   | "clip"
+  | "features"
   | "message-watch"
   | "secret"
   | "target"
@@ -160,6 +162,7 @@ const SECTION_GROUPS: {
     items: [
       { id: "general", label: "通用", icon: <Settings2 className="size-4" /> },
       { id: "companion", label: "伴随停靠", icon: <Magnet className="size-4" /> },
+      { id: "features", label: "功能开关", icon: <Blocks className="size-4" /> },
     ],
   },
   {
@@ -225,6 +228,15 @@ function initialSettingsForView(): Settings {
 export default function SettingsView() {
   const [settings, setSettings] = useState<Settings>(initialSettingsForView);
   const [section, setSection] = useState<SectionId>("general");
+  // 功能域被关闭时其设置页从导航消失；若正停在该页则回退到功能开关页
+  useEffect(() => {
+    if (
+      (section === "message-watch" && !settings.messagesEnabled) ||
+      (section === "secret" && !settings.secretEnabled)
+    ) {
+      setSection("features");
+    }
+  }, [section, settings.messagesEnabled, settings.secretEnabled]);
   const [targetProfileRequest, setTargetProfileRequest] = useState<{
     profileId: string;
     sequence: number;
@@ -369,7 +381,14 @@ export default function SettingsView() {
             <p className="px-2.5 pb-0.5 pt-1.5 text-micro font-medium tracking-wide text-muted-foreground">
               {group.title}
             </p>
-            {group.items.map((s) => (
+            {group.items
+              .filter(
+                // 未开启的功能域不占导航；总开关集中在「功能开关」页
+                (s) =>
+                  (s.id !== "message-watch" || settings.messagesEnabled) &&
+                  (s.id !== "secret" || settings.secretEnabled)
+              )
+              .map((s) => (
               <button
                 key={s.id}
                 onClick={() => setSection(s.id)}
@@ -383,7 +402,7 @@ export default function SettingsView() {
                 {s.icon}
                 {s.label}
               </button>
-            ))}
+              ))}
           </div>
         ))}
       </aside>
@@ -397,6 +416,7 @@ export default function SettingsView() {
           </>
         )}
         {section === "clip" && <ClipboardSection settings={settings} patch={patch} />}
+        {section === "features" && <FeaturesSection settings={settings} patch={patch} />}
         {section === "message-watch" && (
           <MessageWatchSection settings={settings} patch={patch} />
         )}
@@ -612,6 +632,24 @@ function GeneralSection({ settings, patch }: SP) {
   return (
     <div>
       <SectionTitle>通用</SectionTitle>
+      <Group title="上手">
+        <Row
+          label="新手导览"
+          hint="重新播放首次启动的功能介绍轮播"
+          right={
+            <Button
+              size="xs"
+              onClick={() => {
+                patch({ welcomeTourSeen: false });
+                void api.showPanel();
+                tip("ok", "导览已就绪，回到主面板查看");
+              }}
+            >
+              重看导览
+            </Button>
+          }
+        />
+      </Group>
       <Group title="外观">
         <Row
           label="主题"
@@ -1436,6 +1474,62 @@ function SecretKeysEditor({ settings, patch }: SP) {
   );
 }
 
+/** 功能开关（用户 2026-08-19 指定集中）：三个默认关闭的功能域统一在此启停，
+ *  开启后对应设置页才出现在左侧导航。 */
+function FeaturesSection({ settings, patch }: SP) {
+  const FEATURES: {
+    key: "messagesEnabled" | "secretEnabled" | "subscriptionsEnabled";
+    label: string;
+    experimental?: boolean;
+    hint: string;
+    where: string;
+  }[] = [
+    {
+      key: "messagesEnabled",
+      label: "消息监听",
+      experimental: true,
+      hint: "只读监听 IM 群消息（@我/特别关注/组合规则），在「内容 → 消息」里处理、转任务、AI 草稿",
+      where: "开启后在左侧「捕获 → 消息监听」配置接入与规则",
+    },
+    {
+      key: "secretEnabled",
+      label: "秘文",
+      hint: "把文字加密成中文句式发进 IM，对方双击 ⇧ 捕获自动解密",
+      where: "开启后在左侧「捕获 → 秘文」管理密钥",
+    },
+    {
+      key: "subscriptionsEnabled",
+      label: "订阅",
+      hint: "账单/信用卡到期管理与提醒，「提醒」页出现订阅子页",
+      where: "开启后在左侧「助手 → 到期提醒」调整账单偏好",
+    },
+  ];
+  return (
+    <div>
+      <SectionTitle>功能开关</SectionTitle>
+      <p className="mb-3 text-body text-muted-foreground">
+        以下功能默认关闭，保持初始界面精简；开启后主面板出现对应入口，左侧导航出现其设置页。
+      </p>
+      <Group>
+        {FEATURES.map((feature) => (
+          <Row
+            key={feature.key}
+            label={feature.label + (feature.experimental ? "（实验）" : "")}
+            hint={settings[feature.key] ? feature.where : feature.hint}
+            right={
+              <Switch
+                aria-label={`启用${feature.label}`}
+                checked={settings[feature.key]}
+                onCheckedChange={(enabled) => patch({ [feature.key]: enabled })}
+              />
+            }
+          />
+        ))}
+      </Group>
+    </div>
+  );
+}
+
 /** 组合规则的人话描述：规则列表与新建预览共用同一句式，避免用户自行推演 AND/OR 逻辑。 */
 function ruleSummaryText(
   groupTerms: string[],
@@ -1600,22 +1694,6 @@ function MessageWatchSection({ settings, patch }: SP) {
         实验性监听 IM 软件的群消息。Toskr 的只读桥不主动打开会话，也不调用已读或发送接口。
       </p>
 
-      <Group>
-        <Row
-          label="启用消息功能"
-          hint="在「内容」页显示消息 tab 并开放下方监听配置；默认关闭"
-          right={
-            <Switch
-              aria-label="启用消息功能"
-              checked={settings.messagesEnabled}
-              onCheckedChange={(enabled) => patch({ messagesEnabled: enabled })}
-            />
-          }
-        />
-      </Group>
-
-      {settings.messagesEnabled && (
-        <>
       {appInstalled === false && (
         <Group title="接入方式">
           <div className="px-3.5 py-3">
@@ -1827,56 +1905,38 @@ function MessageWatchSection({ settings, patch }: SP) {
           )}
         </div>
       </Group>
-        </>
-      )}
     </div>
   );
 }
 
-/** 秘文（中文加密通信）：总开关 + 共享密钥管理 + 揭示超时。默认关闭。 */
+/** 秘文（中文加密通信）：共享密钥管理 + 揭示超时。
+ *  总开关集中在「功能开关」页；本页仅开启后可达。 */
 function SecretSection({ settings, patch }: SP) {
   return (
     <div>
       <SectionTitle>秘文</SectionTitle>
       <Group>
         <Row
-          label="启用秘文"
-          hint="本地把文字加密成中文句式发进 IM，对方双击 ⇧ 捕获自动解密。关闭时隐藏秘文页"
+          label="揭示后自动遮罩"
+          hint="卡片解密显现后，多久自动回到模糊（切走应用/隐藏面板也会立即遮罩）"
           right={
-            <Switch
-              aria-label="启用秘文"
-              checked={settings.secretEnabled}
-              onCheckedChange={(v) => patch({ secretEnabled: v })}
+            <Segmented
+              ariaLabel="揭示超时"
+              value={String(settings.secretRevealTimeoutMs)}
+              options={REVEAL_TIMEOUT_OPTIONS}
+              onChange={(v) => patch({ secretRevealTimeoutMs: Number(v) })}
             />
           }
         />
-        {settings.secretEnabled && (
-          <Row
-            label="揭示后自动遮罩"
-            hint="卡片解密显现后，多久自动回到模糊（切走应用/隐藏面板也会立即遮罩）"
-            right={
-              <Segmented
-                ariaLabel="揭示超时"
-                value={String(settings.secretRevealTimeoutMs)}
-                options={REVEAL_TIMEOUT_OPTIONS}
-                onChange={(v) => patch({ secretRevealTimeoutMs: Number(v) })}
-              />
-            }
-          />
-        )}
       </Group>
-      {settings.secretEnabled && (
-        <>
-          <SecretKeysEditor settings={settings} patch={patch} />
-          <p className="flex items-start gap-1.5 px-1 text-label text-muted-foreground">
-            <ShieldCheck className="mt-0.5 size-3.5 shrink-0" />
-            <span>
-              密钥以明文保存在本机数据目录并随备份进出——用于防 IM 服务器、旁人与肩窥，
-              不防本机取证。加解密全程在本机完成，不联网。
-            </span>
-          </p>
-        </>
-      )}
+      <SecretKeysEditor settings={settings} patch={patch} />
+      <p className="flex items-start gap-1.5 px-1 text-label text-muted-foreground">
+        <ShieldCheck className="mt-0.5 size-3.5 shrink-0" />
+        <span>
+          密钥以明文保存在本机数据目录并随备份进出——用于防 IM 服务器、旁人与肩窥，
+          不防本机取证。加解密全程在本机完成，不联网。
+        </span>
+      </p>
     </div>
   );
 }
@@ -2681,6 +2741,7 @@ function BillReminderDefaultsSection({ settings, patch }: SP) {
         : [...current, offset],
     });
   };
+  if (!settings.subscriptionsEnabled) return null;
   return (
     <div className="mt-6">
       <SectionTitle>账单到期提醒</SectionTitle>

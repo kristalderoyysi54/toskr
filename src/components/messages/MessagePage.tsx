@@ -19,6 +19,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { IconButton } from "@/components/ui/icon-button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { StripScroller } from "@/components/ui/strip-scroller";
 import { aiErrorTip, requestAi } from "@/lib/aiClient";
 import { presetCfgDue, presetCfgLabel } from "@/lib/tasks";
 import { api, type MessageSourceOverlayPayload } from "@/lib/tauri";
@@ -86,7 +87,14 @@ function aiInput(message: MessageItem): string {
   return `群：${message.conversationName || message.conversationId}\n发送者：${message.senderName || message.senderUid || "未知"}\n\n捕获时已加载的前文：\n${context}\n\n需要回复的消息：\n${message.text || `[${message.messageType || "非文本消息"}]`}`;
 }
 
-export function MessagePage({ query = "" }: { query?: string }) {
+export function MessagePage({
+  query = "",
+  horizontal = false,
+}: {
+  query?: string;
+  /** 上/下横栏形态：卡片改横排瓷砖串（与剪贴/秘文横栏同款），正文卡内滚动。 */
+  horizontal?: boolean;
+}) {
   const messages = useNotesStore((state) => state.messages);
   const rules = useNotesStore((state) => state.settings.messageWatchRules);
   const duePresets = useNotesStore((state) => state.settings.duePresets);
@@ -284,35 +292,69 @@ export function MessagePage({ query = "" }: { query?: string }) {
           )}
         </div>
       )}
-      <ScrollArea className="min-h-0 flex-1 px-2.5" viewportClassName="px-1">
-        {filtered.length ? (
-          <div className="flex flex-col gap-1.5 pb-3 pt-0.5">
-            {filtered.map((message) => (
-              <MessageCard
-                key={message.id}
-                message={message}
-                reasons={reasonLabels(message, ruleNames)}
-                busy={busyId === message.id}
-                duePresets={duePresets}
-                onDraft={() => void draftReply(message)}
-                checked={checkedIds.has(message.id)}
-                onCardClick={handleCardClick(message.id)}
-              />
-            ))}
-          </div>
-        ) : (
-          <EmptyState
-            title={query ? `没有匹配「${query}」的消息` : filter === "new" ? "没有待处理消息" : filter === "waiting" ? "没有等待回复的消息" : "还没有已处理消息"}
-            hint={
-              messages.length === 0
-                ? "开启只读监听后，@你、关注的人或组合规则命中的群消息会出现在这里。"
-                : undefined
-            }
-          />
-        )}
-      </ScrollArea>
+      {horizontal ? (
+        <StripScroller>
+          {filtered.length ? (
+            <div className="flex h-full items-stretch gap-2 px-3 pb-2 pt-0.5">
+              {filtered.map((message) => (
+                <MessageCard
+                  key={message.id}
+                  message={message}
+                  reasons={reasonLabels(message, ruleNames)}
+                  busy={busyId === message.id}
+                  duePresets={duePresets}
+                  onDraft={() => void draftReply(message)}
+                  checked={checkedIds.has(message.id)}
+                  onCardClick={handleCardClick(message.id)}
+                  strip
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="px-4 py-6 text-body text-muted-foreground">
+              {query ? `没有匹配「${query}」的消息` : emptyTitle(filter)}
+            </p>
+          )}
+        </StripScroller>
+      ) : (
+        <ScrollArea className="min-h-0 flex-1 px-2.5" viewportClassName="px-1">
+          {filtered.length ? (
+            <div className="flex flex-col gap-1.5 pb-3 pt-0.5">
+              {filtered.map((message) => (
+                <MessageCard
+                  key={message.id}
+                  message={message}
+                  reasons={reasonLabels(message, ruleNames)}
+                  busy={busyId === message.id}
+                  duePresets={duePresets}
+                  onDraft={() => void draftReply(message)}
+                  checked={checkedIds.has(message.id)}
+                  onCardClick={handleCardClick(message.id)}
+                />
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              title={query ? `没有匹配「${query}」的消息` : emptyTitle(filter)}
+              hint={
+                messages.length === 0
+                  ? "开启只读监听后，@你、关注的人或组合规则命中的群消息会出现在这里。"
+                  : undefined
+              }
+            />
+          )}
+        </ScrollArea>
+      )}
     </div>
   );
+}
+
+function emptyTitle(filter: Filter): string {
+  return filter === "new"
+    ? "没有待处理消息"
+    : filter === "waiting"
+      ? "没有等待回复的消息"
+      : "还没有已处理消息";
 }
 
 /** 个人触达信号（@我/特别关注）比规则命中更值得一眼看到。 */
@@ -326,6 +368,7 @@ function MessageCard({
   onDraft,
   checked = false,
   onCardClick,
+  strip = false,
 }: {
   message: MessageItem;
   reasons: string[];
@@ -335,6 +378,8 @@ function MessageCard({
   checked?: boolean;
   /** 整卡点击选择（Finder 语义在父层；卡内控件与文本划选已被父层过滤）。 */
   onCardClick?: (event: React.MouseEvent) => void;
+  /** 横栏瓷砖形态：定宽、随栏高伸展，正文区内滚（不再折叠/展开）。 */
+  strip?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
@@ -381,7 +426,8 @@ function MessageCard({
       className={cn(
         "group relative rounded-xl border border-foreground/10 bg-card/80 px-3 py-2.5 shadow-(--shadow-card) transition-[box-shadow] duration-(--duration-control)",
         // 与剪贴/笔记卡同款选中语言：ring 光环 + 抬升（不用 border，不挤内容）
-        checked && "ring-2 ring-primary/70 elevation-2"
+        checked && "ring-2 ring-primary/70 elevation-2",
+        strip && "flex h-full w-72 shrink-0 flex-col"
       )}
     >
       {checked && (
@@ -421,10 +467,17 @@ function MessageCard({
         </div>
       )}
 
-      <p className={cn("mt-1.5 whitespace-pre-wrap break-words text-body leading-relaxed", !expanded && "line-clamp-4")}>
+      {/* 瓷砖形态正文区内滚（含前文/草稿），竖排形态为普通文档流 */}
+      <div className={cn(strip && "slim-scroll min-h-0 flex-1 overflow-y-auto")}>
+      <p
+        className={cn(
+          "mt-1.5 whitespace-pre-wrap break-words text-body leading-relaxed",
+          !expanded && !strip && "line-clamp-4"
+        )}
+      >
         {body}
       </p>
-      {[...body].length > 120 && (
+      {!strip && [...body].length > 120 && (
         <button
           className="mt-1 text-label text-muted-foreground transition-colors hover:text-foreground"
           onClick={() => setExpanded((value) => !value)}
@@ -497,6 +550,7 @@ function MessageCard({
           </div>
         </div>
       )}
+      </div>
 
       {/* 悬停操作组：与笔记卡同语言（hover/键盘焦点显现；opacity 方案保 Tab 可达）。
           提醒弹层是 portal（焦点/hover 都不在卡内），开着时强制显形防触发钮凭空消失。 */}
