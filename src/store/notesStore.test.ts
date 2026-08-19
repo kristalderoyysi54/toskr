@@ -31,6 +31,7 @@ import {
   orderedCheckedNotes,
   replaceNotesStoreFromPersisted,
   sanitizeNoteTags,
+  SECRET_ID,
   STORE_VERSION,
   TASK_INBOX_ID,
   useNotesStore,
@@ -46,6 +47,8 @@ function reset() {
     notes: [],
     tasks: [],
     taskSections: [{ id: TASK_INBOX_ID, name: "收集箱" }],
+    bills: [],
+    messages: [],
     checkedIds: [],
     settings: defaultSettings(),
     undoStack: [],
@@ -86,7 +89,7 @@ describe("notesStore 基础", () => {
   });
 
   it("v12 迁移到最新版时正文不变、生成权威块，并补齐本地成效设置", () => {
-    expect(STORE_VERSION).toBe(19);
+    expect(STORE_VERSION).toBe(20);
     const decoded = decodePersistedState(JSON.stringify({
       version: 12,
       state: {
@@ -702,6 +705,22 @@ describe("notesStore 基础", () => {
     ).toBe(INBOX_ID);
   });
 
+  it("addNote 在特殊分组排到收件箱前时仍默认落入收件箱", () => {
+    useNotesStore.setState({
+      sections: [
+        { id: CLIPBOARD_ID, name: "剪贴板" },
+        { id: SECRET_ID, name: "秘文" },
+        { id: INBOX_ID, name: "收件箱" },
+      ],
+    });
+
+    const added = useNotesStore.getState().addNote("监听捕获正文");
+
+    expect(
+      useNotesStore.getState().notes.find((note) => note.id === added.id)?.sectionId
+    ).toBe(INBOX_ID);
+  });
+
   it("addNote 忽略纯空白", () => {
     expect(useNotesStore.getState().addNote("   \n  ").result).toBe("empty");
     expect(useNotesStore.getState().notes).toHaveLength(0);
@@ -782,6 +801,24 @@ describe("notesStore 基础", () => {
     expect(after).toHaveLength(2);
     expect(after.map((note) => note.createdAt)).toEqual([300, 200]);
     expect(after[0].sourceApp).toBe("Geelib");
+  });
+
+  it("addNote orderByTime：监听消息乱序到达仍按时间最新在上", () => {
+    const s = useNotesStore.getState();
+    const sectionId = s.ensureSection("推推");
+    // 桥批量上报顺序跟随 IM 列表（最新在前）：新的先到、旧的后到
+    s.addNote("最新消息", { sectionId, createdAt: 300, orderByTime: true });
+    s.addNote("中间消息", { sectionId, createdAt: 200, orderByTime: true });
+    s.addNote("最旧消息", { sectionId, createdAt: 100, orderByTime: true });
+    const texts = () =>
+      useNotesStore
+        .getState()
+        .notes.filter((n) => n.sectionId === sectionId)
+        .map((n) => n.text);
+    expect(texts()).toEqual(["最新消息", "中间消息", "最旧消息"]);
+    // 实时到达的更新消息插到分组顶部
+    s.addNote("更新的消息", { sectionId, createdAt: 400, orderByTime: true });
+    expect(texts()[0]).toBe("更新的消息");
   });
 
   it("addClipNote 重复图片（同像素哈希文件）：同样提升置顶", () => {
@@ -932,6 +969,116 @@ describe("notesStore 基础", () => {
       "二",
       "一",
     ]);
+  });
+});
+
+describe("消息投影与后续动作", () => {
+  beforeEach(reset);
+
+  const capture = {
+    conversationId: "group-1",
+    messageId: "message-1",
+    conversationName: "项目群",
+    senderUid: "user-1",
+    senderName: "小王",
+    occurredAtMs: 100,
+    receivedAtMs: 120,
+    mentionedSelf: true,
+    followedSender: false,
+    matchedRuleIds: ["release"],
+    isGroup: true,
+    messageType: "text",
+    text: "请确认今晚发布",
+    context: [
+      {
+        messageId: "message-0",
+        senderUid: "user-2",
+        senderName: "小李",
+        occurredAtMs: 90,
+        messageType: "text",
+        text: "前文保持完整",
+      },
+    ],
+  };
+
+  it("按来源消息去重并保留完整正文、上下文与工作流状态", () => {
+    const first = useNotesStore.getState().ingestMessageCaptures([capture]);
+    expect(first).toMatchObject({ added: 1, updated: 0 });
+    const id = first.ids[0];
+    useNotesStore.getState().setMessageStatus(id, "waiting");
+    useNotesStore.getState().saveMessageAiDraft(id, "收到，我先确认窗口。 ");
+
+    useNotesStore.getState().ingestMessageCaptures([
+      { ...capture, text: "请确认今晚发布，失败时立即回滚" },
+    ]);
+    const message = useNotesStore.getState().messages[0];
+    expect(message.text).toBe("请确认今晚发布，失败时立即回滚");
+    expect(message.context[0].text).toBe("前文保持完整");
+    expect(message.status).toBe("waiting");
+    expect(message.aiDraft).toBe("收到，我先确认窗口。");
+  });
+
+  it("setMessagesStatus 批量改状态且不波及未选中项", () => {
+    const other = { ...capture, messageId: "message-b", occurredAtMs: 60 };
+    const ids = useNotesStore.getState().ingestMessageCaptures([capture, other]).ids;
+    useNotesStore.getState().setMessagesStatus([ids[0]], "done");
+    const byId = new Map(useNotesStore.getState().messages.map((m) => [m.id, m.status]));
+    expect(byId.get(ids[0])).toBe("done");
+    expect(byId.get(ids[1])).toBe("new");
+    // 撤销语义：同一批 id 一步还原
+    useNotesStore.getState().setMessagesStatus([ids[0]], "new");
+    expect(
+      useNotesStore.getState().messages.every((m) => m.status === "new")
+    ).toBe(true);
+  });
+
+  it("removeMessages 删除投影，restoreMessages 按时间回插且跳过已存在的 id", () => {
+    const older = { ...capture, messageId: "message-old", occurredAtMs: 50 };
+    const ids = useNotesStore
+      .getState()
+      .ingestMessageCaptures([capture, older]).ids;
+    const removed = useNotesStore
+      .getState()
+      .messages.find((message) => message.id === ids[1])!;
+
+    useNotesStore.getState().removeMessages([removed.id]);
+    expect(useNotesStore.getState().messages.map((m) => m.id)).toEqual([ids[0]]);
+
+    // 回插归位：老消息按 occurredAtMs 排回列表末尾
+    useNotesStore.getState().restoreMessages([removed]);
+    expect(useNotesStore.getState().messages.map((m) => m.id)).toEqual([
+      ids[0],
+      removed.id,
+    ]);
+
+    // 已存在的 id 不重复插入
+    useNotesStore.getState().restoreMessages([removed]);
+    expect(useNotesStore.getState().messages).toHaveLength(2);
+  });
+
+  it("转任务一次完成引用关联，重复点击不产生第二个任务", () => {
+    const [{ id }] = [
+      useNotesStore.getState().ingestMessageCaptures([capture]),
+    ].map((result) => ({ id: result.ids[0] }));
+    const first = useNotesStore.getState().messageToTask(id, "reminder", 1_000);
+    const second = useNotesStore.getState().messageToTask(id, "task");
+
+    expect(first.result).toBe("added");
+    expect(second).toEqual({ result: "existing", taskId: first.taskId });
+    expect(useNotesStore.getState().tasks).toHaveLength(1);
+    expect(useNotesStore.getState().tasks[0]).toMatchObject({
+      dueAt: 1_000,
+      sourceRef: {
+        kind: "message",
+        source: "tuitui",
+        conversationId: "group-1",
+        messageId: "message-1",
+      },
+    });
+    expect(useNotesStore.getState().messages[0]).toMatchObject({
+      status: "done",
+      linkedTaskId: first.taskId,
+    });
   });
 });
 
@@ -1606,7 +1753,13 @@ describe("任务：CRUD / 撤销 / 转换原子性 / 导入", () => {
         },
       ],
     });
-    expect(r).toEqual({ notes: 0, tasks: 1, bills: 0, skippedDuplicates: 1 });
+    expect(r).toEqual({
+      notes: 0,
+      tasks: 1,
+      bills: 0,
+      messages: 0,
+      skippedDuplicates: 1,
+    });
     expect(useNotesStore.getState().tasks).toHaveLength(2);
     expect(useNotesStore.getState().tasks.find((t) => t.id === kept)?.text).toBe(
       "本地任务"
@@ -1992,5 +2145,20 @@ describe("标签与更新时间", () => {
     expect(() => decodePersistedState(JSON.stringify(bad))).toThrow(
       "note.tags"
     );
+  });
+});
+
+describe("ensureSection（来源自动归组）", () => {
+  it("同名分组复用其 id，否则新建一次", () => {
+    const name = "推推-ensure-test";
+    const before = useNotesStore.getState().sections.length;
+    const id1 = useNotesStore.getState().ensureSection(name);
+    const created = useNotesStore.getState().sections;
+    expect(created.some((s) => s.id === id1 && s.name === name)).toBe(true);
+    expect(created.length).toBe(before + 1);
+
+    const id2 = useNotesStore.getState().ensureSection(name);
+    expect(id2).toBe(id1);
+    expect(useNotesStore.getState().sections.length).toBe(before + 1);
   });
 });

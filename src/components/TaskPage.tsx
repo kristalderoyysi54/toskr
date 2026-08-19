@@ -148,7 +148,7 @@ export function TaskPage({
   return (
     <>
       <TaskQuickAdd />
-      <ScrollArea className="min-h-0 flex-1 px-3.5">
+      <ScrollArea className="min-h-0 flex-1 px-2.5" viewportClassName="px-1">
         {calendar && (
           <div className="pb-2 pt-1">
             <TaskCalendar now={now} />

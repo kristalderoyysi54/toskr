@@ -297,7 +297,9 @@ fn ensure_default_dataset(base: &Path) -> Result<(), DataOperationFailure> {
                     "sections": [],
                     "notes": [],
                     "tasks": [],
-                    "taskSections": []
+                    "taskSections": [],
+                    "bills": [],
+                    "messages": []
                 }
             });
             let document = serde_json::json!({ "toskr": persisted.to_string() }).to_string();

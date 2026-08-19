@@ -33,6 +33,7 @@ function draft(): DeliveryDraft {
     assembledText: "自动正文",
     finalText: "自动正文",
     originalImageFiles: [],
+    segments: null,
     imageFiles: [],
     imageFirewall: [],
     format: "plain",

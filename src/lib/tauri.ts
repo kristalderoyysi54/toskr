@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { DeliveryEvent } from "@/lib/deliveryActivityCore";
+import type { MessageContextItem } from "@/lib/messages";
 
 /** Rust 侧双击触发键事件。 */
 export const TRIGGER_EVENT = "toskr://trigger";
@@ -23,6 +24,10 @@ export const STEALTH_EVENT = "toskr://stealth-changed";
 export const CLIP_PAUSE_EVENT = "toskr://clip-pause-changed";
 /** 剪贴板历史 watcher → 主窗口入库。 */
 export const CLIP_EVENT = "toskr://clip";
+/** 推推 DevTools 只读桥 → 主窗口摘要入库；完整原始对象已先写本地账本。 */
+export const MESSAGE_WATCH_EVENT = "toskr://message-watch";
+/** Rust → 只读来源浮层：贴在 IM 窗口旁，不激活、不接收点击。 */
+export const SOURCE_OVERLAY_EVENT = "toskr://source-overlay";
 /** Rust → 主窗口：贴边隐藏运行态变化（进入/退出可介入布局、滑出/滑回）。 */
 export const EDGE_HIDE_STATE_EVENT = "toskr://edge-hide-state";
 /** Rust Keychain 状态变化；payload 永远不含 key。 */
@@ -75,6 +80,54 @@ export interface ClipPayload {
   imageH: number | null;
   appName: string | null;
   bundleId: string | null;
+}
+
+export interface MessageWatchStatus {
+  enabled: boolean;
+  bridgeReady: boolean;
+  sessionStartedAtMs: number | null;
+  acceptedCount: number;
+  duplicateCount: number;
+  lastAcceptedAtMs: number | null;
+  rendererConnected: boolean;
+  ledgerPath: string;
+  lastError: string | null;
+  transport: "cdp" | "http" | null;
+}
+
+export interface MessageWatchBridgeInfo {
+  endpoint: string;
+  sessionStartedAtMs: number;
+}
+
+export interface MessageWatchCapture {
+  conversationId: string;
+  messageId: string;
+  conversationName: string | null;
+  senderUid: string;
+  senderName: string | null;
+  occurredAtMs: number | null;
+  receivedAtMs: number;
+  mentionedSelf: boolean;
+  followedSender: boolean;
+  /** 命中的 Toskr 组合关注规则；@我/特别关注不依赖此字段。 */
+  matchedRuleIds: string[];
+  isGroup: boolean | null;
+  messageType: string | null;
+  text: string;
+  /** 捕获时客户端内存中已经存在的前文，不触发拉取或切换会话。 */
+  context: MessageContextItem[];
+}
+
+export interface MessageSourceOverlayPayload {
+  sourceApp: string;
+  sourceBundle: string;
+  conversationName: string;
+  senderName: string;
+  text: string;
+  reason: string;
+  /** Native 定位后补充：箭头在卡片哪一侧。 */
+  pointerSide?: "left" | "right";
 }
 
 export type TriggerPayload =
@@ -258,6 +311,8 @@ export interface BackupCounts {
   notes: number;
   taskSections: number;
   tasks: number;
+  bills: number;
+  messages: number;
   media: number;
 }
 
@@ -342,12 +397,22 @@ export type ClipboardOutcome =
   | "restoreFailed"
   | "notOwned";
 
+/** 图文交错粘贴顺序中的一段；image 按下标引用 imageFiles。 */
+export type DeliverySegment =
+  | { kind: "text"; text: string }
+  | { kind: "image"; fileIndex: number };
+
 export interface SendDeliveryRequest {
   targetToken: string | null;
   text: string;
   imageFiles: string[];
   /** 与 imageFiles 同序；已扫描/遮挡图片在 Native 副作用前复核像素 hash。 */
   expectedImagePixelHashes: Array<string | null>;
+  /**
+   * 可选交错顺序：text 段必须是 text 字段的切片、每张图恰好引用一次，
+   * Native 校验失败会整单拒发。缺省保持文字整段在前、图片在后。
+   */
+  segments?: DeliverySegment[];
   pressEnter: boolean;
   keepPanel: boolean;
   deliveryId: string;
@@ -679,6 +744,21 @@ export const api = {
   setDoubleTapMode: (captureOnly: boolean) =>
     invoke("set_double_tap_mode", { captureOnly }),
   setClipWatch: (enabled: boolean) => invoke("set_clip_watch", { enabled }),
+  setMessageWatch: (enabled: boolean) =>
+    invoke<MessageWatchStatus>("set_message_watch", { enabled }),
+  getMessageWatchStatus: () =>
+    invoke<MessageWatchStatus>("get_message_watch_status"),
+  getMessageWatchBridgeInfo: () =>
+    invoke<MessageWatchBridgeInfo>("get_message_watch_bridge_info"),
+  getMessageWatchCaptures: (limit = 1_000) =>
+    invoke<MessageWatchCapture[]>("get_message_watch_captures", { limit }),
+  /** 在推推中定位会话：滚动会话列表到该群并高亮；不打开会话、不改已读。 */
+  locateMessageSource: (payload: MessageSourceOverlayPayload) =>
+    invoke<void>("locate_message_source", { payload }),
+  /** 消息监听的兼容 IM 是否已安装（设置页前置检查）。 */
+  messageWatchAppInstalled: () => invoke<boolean>("message_watch_app_installed"),
+  setMessageWatchAuto: (enabled: boolean, script?: string) =>
+    invoke<MessageWatchStatus>("set_message_watch_auto", { enabled, script }),
   setClipRules: (
     ignoreConcealed: boolean,
     ignoreTransient: boolean,

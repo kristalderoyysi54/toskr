@@ -1,4 +1,4 @@
-import { CheckCheck, ChevronDown, Merge, Send, Tag, Trash2, X } from "lucide-react";
+import { ChevronDown, Merge, Send, Tag, Trash2, X } from "lucide-react";
 import { useMemo } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -216,12 +216,14 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
       role="toolbar"
       aria-label="批量操作"
       className={cn(
-        "flex items-center gap-0.5 rounded-xl border border-black/10 bg-white/70 px-2 py-1.5 elevation-3 dark:border-white/10 dark:bg-black/40",
+        // flex-wrap：按钮均为 shrink-0，面板拖到最窄（320px）放不下时
+        // 右组整体折行，而不是把「已选 N」挤成逐字竖排
+        "flex flex-wrap items-center gap-0.5 rounded-xl border border-black/10 bg-white/70 px-2 py-1.5 elevation-3 dark:border-white/10 dark:bg-black/40",
         // 竖栏形态四周等距：左右/底部均 8px，与列表卡片同一对齐系
         compact ? "absolute bottom-2 right-3 z-30" : "mx-2 mb-2"
       )}
     >
-      <span className="px-1 text-label tabular-nums text-muted-foreground">
+      <span className="shrink-0 whitespace-nowrap px-1 text-label tabular-nums text-muted-foreground">
         已选 {count}
       </span>
 
@@ -231,12 +233,8 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
             <IconAction label="合并笔记" disabled={count < 2} onClick={mergeCheckedWithUndo}>
               <Merge className="size-3.5" />
             </IconAction>
-            {/* 剪贴板历史无「完成」语义（发送也不标完成），该页隐藏 */}
-            {page !== "clipboard" && (
-              <IconAction label="标记完成" onClick={() => state.setDone(orderedIds(), true)}>
-                <CheckCheck className="size-3.5" />
-              </IconAction>
-            )}
+            {/* 「标记完成」不进批量条（2026-08-18 用户指定精简）：
+                单卡右键菜单与快捷键 D 仍可标完成 */}
             <SimpleMenu
               side="top"
               align="end"
@@ -302,7 +300,8 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
                 onClick={() => sendCheckedToChat()}
               >
                 <Send className="size-3" />
-                {internalSendAvailable ? "发送 / 添加" : "发送到对话"}
+                {/* 短文案保单行（2026-08-18 用户指定）：完整语义在 aria-label 与悬停预览 */}
+                发送
                 {/* token-exception: 9px 为重塑前原始尺寸，用户指定还原 */}
                 <Kbd inline className="ml-0.5 text-[9px]">⌘⏎</Kbd>
               </Button>

@@ -13,6 +13,7 @@ import {
   ArrowUp,
   Check,
   ClipboardList,
+  Copy,
   Database,
   Eye,
   Info,
@@ -23,6 +24,7 @@ import {
   Magnet,
   Pencil,
   Plus,
+  Radio,
   Settings2,
   ShieldCheck,
   Star,
@@ -36,6 +38,7 @@ import { AliasEntitySettings } from "@/components/settings/AliasEntitySettings";
 import { TargetProfileManager } from "@/components/settings/TargetProfileManager";
 import { OutcomeInsightsSection } from "@/components/settings/OutcomeInsightsSection";
 import { useAppIdentity } from "@/components/settings/useAppIdentity";
+import { Button } from "@/components/ui/button";
 import { Disclosure } from "@/components/ui/disclosure";
 import { IconButton } from "@/components/ui/icon-button";
 import { ProgressBar } from "@/components/ui/progress-bar";
@@ -77,7 +80,9 @@ import {
   type DataLocationStatus,
   type DataOperationPlan,
   type MediaIntegrityReport,
+  type MessageWatchStatus,
 } from "@/lib/tauri";
+import { buildMessageWatchBridgeScript } from "@/lib/messageWatch";
 
 async function requestStorageRecoveryAction(
   action: "retryStorage" | "loadDefault"
@@ -109,6 +114,7 @@ import {
   type ContextMenuItemId,
   type DuePresetCfg,
   type ReminderOffsetDays,
+  type MessageWatchRule,
   type PromptSnippet,
   type SecretKey,
   type Settings,
@@ -132,6 +138,7 @@ type SectionId =
   | "general"
   | "hotkey"
   | "clip"
+  | "message-watch"
   | "secret"
   | "target"
   | "outcome"
@@ -160,6 +167,7 @@ const SECTION_GROUPS: {
     items: [
       { id: "hotkey", label: "捕获与快捷键", icon: <Keyboard className="size-4" /> },
       { id: "clip", label: "剪贴板", icon: <ClipboardList className="size-4" /> },
+      { id: "message-watch", label: "消息监听", icon: <Radio className="size-4" /> },
       { id: "secret", label: "秘文", icon: <Lock className="size-4" /> },
     ],
   },
@@ -389,6 +397,9 @@ export default function SettingsView() {
           </>
         )}
         {section === "clip" && <ClipboardSection settings={settings} patch={patch} />}
+        {section === "message-watch" && (
+          <MessageWatchSection settings={settings} patch={patch} />
+        )}
         {section === "secret" && <SecretSection settings={settings} patch={patch} />}
         {section === "target" && (
           <TargetSection
@@ -1422,6 +1433,403 @@ function SecretKeysEditor({ settings, patch }: SP) {
         )}
       </div>
     </Group>
+  );
+}
+
+/** 组合规则的人话描述：规则列表与新建预览共用同一句式，避免用户自行推演 AND/OR 逻辑。 */
+function ruleSummaryText(
+  groupTerms: string[],
+  senderTerms: string[],
+  keywords: string[]
+): string {
+  const quote = (terms: string[]) => `「${terms.join("」或「")}」`;
+  return [
+    groupTerms.length ? `群名/群号含${quote(groupTerms)}` : "",
+    senderTerms.length ? `发送者是${quote(senderTerms)}` : "",
+    keywords.length ? `内容含${quote(keywords)}` : "",
+  ]
+    .filter(Boolean)
+    .join("，且");
+}
+
+/** IM 软件实验监听：会话级开关，重启自动关闭；完整原始消息由 Rust 先落账本。 */
+function MessageWatchSection({ settings, patch }: SP) {
+  const [status, setStatus] = useState<MessageWatchStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
+  // null = 未知（查询失败/浏览器诊断），只有明确 false 才降级为「暂不支持」
+  const [appInstalled, setAppInstalled] = useState<boolean | null>(null);
+  useEffect(() => {
+    void api
+      .messageWatchAppInstalled()
+      .then(setAppInstalled)
+      .catch(() => setAppInstalled(null));
+  }, []);
+  const [ruleName, setRuleName] = useState("");
+  const [groupTerms, setGroupTerms] = useState("");
+  const [senderTerms, setSenderTerms] = useState("");
+  const [keywords, setKeywords] = useState("");
+
+  const splitTerms = (value: string) =>
+    [...new Set(value.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean))];
+
+  const addRule = () => {
+    const rule: MessageWatchRule = {
+      id: crypto.randomUUID(),
+      name: ruleName.trim() || `关注规则 ${settings.messageWatchRules.length + 1}`,
+      enabled: true,
+      groupTerms: splitTerms(groupTerms),
+      senderTerms: splitTerms(senderTerms),
+      keywords: splitTerms(keywords),
+    };
+    if (!rule.groupTerms.length && !rule.senderTerms.length && !rule.keywords.length) {
+      tip("warn", "至少填写群、发送者或关键词中的一项");
+      return;
+    }
+    patch({ messageWatchRules: [...settings.messageWatchRules, rule] });
+    setRuleName("");
+    setGroupTerms("");
+    setSenderTerms("");
+    setKeywords("");
+    setFormOpen(false);
+    tip("ok", status?.enabled ? "规则已保存；下次重开监听后生效" : "组合关注规则已保存");
+  };
+
+  const reload = () => {
+    void api.getMessageWatchStatus().then(setStatus).catch(() => setStatus(null));
+  };
+
+  useEffect(() => {
+    reload();
+    const timer = window.setInterval(reload, 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const transport = status?.enabled ? status.transport : null;
+
+  // 自动接入（CDP）：前端生成 transport=cdp 脚本（含本次会话 STARTED_AT），交 Rust 注入；
+  // 重连复用同一脚本以复用同一起点门槛。
+  const toggleAuto = async (enabled: boolean) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const next = enabled
+        ? await api.setMessageWatchAuto(
+            true,
+            buildMessageWatchBridgeScript(
+              { endpoint: "cdp", sessionStartedAtMs: Date.now() },
+              "cdp",
+              settings.messageWatchRules
+            )
+          )
+        : await api.setMessageWatchAuto(false);
+      setStatus(next);
+      tip(
+        enabled ? "ok" : "info",
+        enabled
+          ? "正在以调试模式重启 IM 软件并自动注入…约 10 秒内完成"
+          : "已关闭自动接入，正在恢复 IM 软件正常启动"
+      );
+    } catch (error) {
+      tip("warn", `切换失败：${String(error).slice(0, 100)}`);
+      reload();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // 手动模式（HTTP fallback）：开本地接收端，用户手动复制脚本粘贴。
+  const toggleManual = async (enabled: boolean) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const next = await api.setMessageWatch(enabled);
+      setStatus(next);
+      tip(
+        enabled ? "ok" : "info",
+        enabled
+          ? "本地接收端已开启；请复制并手动粘贴脚本"
+          : "手动监听已关闭"
+      );
+    } catch (error) {
+      tip("warn", `切换失败：${String(error).slice(0, 100)}`);
+      reload();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copyBridge = async () => {
+    try {
+      const info = await api.getMessageWatchBridgeInfo();
+      await api.copyText(
+        buildMessageWatchBridgeScript(info, "http", settings.messageWatchRules)
+      );
+      tip("ok", "只读桥脚本已复制；请在 IM 软件 DevTools 的 Console 里手动粘贴执行");
+    } catch (error) {
+      tip("warn", `复制失败：${String(error).slice(0, 100)}`);
+    }
+  };
+
+  const copyLedgerPath = async () => {
+    if (!status?.ledgerPath) return;
+    await api.copyText(status.ledgerPath);
+    tip("ok", "原始消息账本路径已复制");
+  };
+
+  const connected = Boolean(status?.enabled && status.rendererConnected);
+  const stateText = !status?.enabled
+    ? "未开启"
+    : transport === "cdp"
+      ? connected
+        ? "已自动接入"
+        : "正在接入…"
+      : connected
+        ? "手动桥已连接"
+        : "等待粘贴脚本";
+  const formPreview = ruleSummaryText(
+    splitTerms(groupTerms),
+    splitTerms(senderTerms),
+    splitTerms(keywords)
+  );
+
+  return (
+    <div>
+      <SectionTitle>消息监听</SectionTitle>
+      <p className="mb-3 text-body text-muted-foreground">
+        实验性监听 IM 软件的群消息。Toskr 的只读桥不主动打开会话，也不调用已读或发送接口。
+      </p>
+
+      <Group>
+        <Row
+          label="启用消息功能"
+          hint="在「内容」页显示消息 tab 并开放下方监听配置；默认关闭"
+          right={
+            <Switch
+              aria-label="启用消息功能"
+              checked={settings.messagesEnabled}
+              onCheckedChange={(enabled) => patch({ messagesEnabled: enabled })}
+            />
+          }
+        />
+      </Group>
+
+      {settings.messagesEnabled && (
+        <>
+      {appInstalled === false && (
+        <Group title="接入方式">
+          <div className="px-3.5 py-3">
+            <p className="text-title font-medium">暂不支持：未检测到兼容的 IM 软件</p>
+            <p className="mt-0.5 text-label leading-normal text-muted-foreground">
+              消息监听目前仅支持推推（360家）macOS 版。安装并登录后重新打开设置即可启用；下方规则可以先行配置。
+            </p>
+          </div>
+        </Group>
+      )}
+      {appInstalled !== false && (
+      <Group title="接入方式（二选一）">
+        <Row
+          label="自动接入（推荐）"
+          hint={
+            transport === "http"
+              ? "手动模式运行中；先关闭手动监听再切换"
+              : "以调试模式重启 IM 软件并自动注入只读桥，免手动操作；开关时各重启一次（约 10 秒），登录状态通常保留"
+          }
+          right={
+            <Switch
+              aria-label="IM 软件自动监听"
+              checked={transport === "cdp"}
+              disabled={busy || status === null || transport === "http"}
+              onCheckedChange={(enabled) => void toggleAuto(enabled)}
+            />
+          }
+        />
+        {transport !== "http" && (
+          <p className="px-3.5 py-2 text-label text-warning">
+            ⚠️ 自动接入期间 IM 软件会开一个仅限本机、无需认证的调试端口，本机其他程序理论上可借此读取会话内容；关闭后立即恢复。
+          </p>
+        )}
+        <Row
+          label="手动模式（备选）"
+          hint={
+            transport === "cdp"
+              ? "自动接入运行中；先关闭自动接入再切换"
+              : "不重启 IM 软件；开启后复制脚本，在 IM 软件「查看 → 开发者工具」的 Console 里粘贴执行"
+          }
+          right={
+            <Switch
+              aria-label="IM 软件手动监听"
+              checked={transport === "http"}
+              disabled={busy || status === null || transport === "cdp"}
+              onCheckedChange={(enabled) => void toggleManual(enabled)}
+            />
+          }
+        />
+        {transport === "http" && (
+          <Row
+            label="安装 DevTools 只读桥"
+            hint="IM 软件刷新或重启后需重新复制执行；手动打开 DevTools 会激活窗口、当前会话可能被标记已读"
+            right={
+              <Button size="xs" onClick={() => void copyBridge()}>
+                <Copy data-icon="inline-start" />复制脚本
+              </Button>
+            }
+          />
+        )}
+        <div className="flex items-start gap-2 px-3.5 py-2.5">
+          <span
+            aria-hidden
+            className={cn(
+              "mt-[5px] size-1.5 shrink-0 rounded-full", // token-exception: 状态点对齐 text-label 首行的光学微调
+              !status?.enabled
+                ? "bg-muted-foreground/40"
+                : connected
+                  ? "bg-success"
+                  : "bg-warning"
+            )}
+          />
+          <div className="min-w-0 flex-1 space-y-0.5 text-label text-muted-foreground">
+            <p>
+              <span className="font-medium text-foreground">{stateText}</span>
+              {status?.enabled ? ` · 已完整落盘 ${status.acceptedCount} 条` : ""}
+            </p>
+            {status?.lastAcceptedAtMs && (
+              <p>
+                最近捕获：
+                {new Date(status.lastAcceptedAtMs).toLocaleString("zh-CN", { hour12: false })}
+              </p>
+            )}
+            {status?.lastError && <p className="text-warning">最近错误：{status.lastError}</p>}
+          </div>
+        </div>
+      </Group>
+      )}
+
+      <Group title="收哪些消息">
+        <div className="space-y-2 px-3.5 py-3">
+          <p className="text-label text-muted-foreground">
+            被 @ 和特别关注的消息<span className="font-medium text-foreground">始终</span>会收进「内容 → 消息」，无需配置。
+            组合规则用于在此之外盯住特定的群、人、关键词；多条规则任一命中即收。
+          </p>
+          {settings.messageWatchRules.map((rule) => (
+            <div
+              key={rule.id}
+              className="flex items-start gap-2 rounded-lg border border-border/70 bg-background/60 px-2.5 py-2"
+            >
+              <Switch
+                aria-label={`${rule.name}启用状态`}
+                checked={rule.enabled}
+                onCheckedChange={(enabled) =>
+                  patch({
+                    messageWatchRules: settings.messageWatchRules.map((item) =>
+                      item.id === rule.id ? { ...item, enabled } : item
+                    ),
+                  })
+                }
+              />
+              <div className="min-w-0 flex-1">
+                <p className="text-body font-medium">{rule.name}</p>
+                <p className="mt-0.5 break-words text-label text-muted-foreground">
+                  收下{" "}
+                  {ruleSummaryText(rule.groupTerms, rule.senderTerms, rule.keywords)}{" "}
+                  的消息
+                </p>
+              </div>
+              <IconButton
+                label={`删除${rule.name}`}
+                size="xs"
+                tone="danger"
+                onClick={() =>
+                  patch({
+                    messageWatchRules: settings.messageWatchRules.filter(
+                      (item) => item.id !== rule.id
+                    ),
+                  })
+                }
+              >
+                <Trash2 />
+              </IconButton>
+            </div>
+          ))}
+          {formOpen ? (
+            <div className="space-y-2 rounded-lg border border-border/70 bg-background/60 p-2.5">
+              <input
+                value={ruleName}
+                onChange={(event) => setRuleName(event.target.value)}
+                placeholder="规则名称（可选）"
+                className="w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-body outline-none focus:border-primary/60"
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  value={groupTerms}
+                  onChange={(event) => setGroupTerms(event.target.value)}
+                  placeholder="群名或群号，逗号分隔"
+                  className="rounded-lg border border-border bg-background px-2.5 py-1.5 text-body outline-none focus:border-primary/60"
+                />
+                <input
+                  value={senderTerms}
+                  onChange={(event) => setSenderTerms(event.target.value)}
+                  placeholder="发送者或 UID，逗号分隔"
+                  className="rounded-lg border border-border bg-background px-2.5 py-1.5 text-body outline-none focus:border-primary/60"
+                />
+                <input
+                  value={keywords}
+                  onChange={(event) => setKeywords(event.target.value)}
+                  placeholder="关键词，逗号分隔"
+                  className="col-span-2 rounded-lg border border-border bg-background px-2.5 py-1.5 text-body outline-none focus:border-primary/60"
+                />
+              </div>
+              <p className="text-label leading-normal text-muted-foreground">
+                {formPreview ? (
+                  <>
+                    将收下 <span className="text-foreground">{formPreview}</span> 的消息
+                  </>
+                ) : (
+                  "至少填一栏。同一栏内多个值任一匹配即可；填了多栏则需同时满足。"
+                )}
+              </p>
+              <div className="flex items-center gap-1.5">
+                <Button size="xs" onClick={addRule}>
+                  保存规则
+                </Button>
+                <Button variant="ghost" size="xs" onClick={() => setFormOpen(false)}>
+                  取消
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <Button size="xs" onClick={() => setFormOpen(true)}>
+              <Plus data-icon="inline-start" />添加规则
+            </Button>
+          )}
+          {status?.enabled && (
+            <p className="text-label text-warning">
+              监听运行中；为避免无提示重启 IM 软件，规则改动将在下次重开监听时生效。
+            </p>
+          )}
+        </div>
+      </Group>
+
+      <Group title="数据存储">
+        <div className="space-y-1.5 px-3.5 py-2.5 text-label text-muted-foreground">
+          <p>
+            原始消息整条写入权限 600 的 JSONL 账本（正文不截断；单条超 4MB 整条拒收并留队重试），「内容 → 消息」展示其结构化投影。
+          </p>
+          <p>实验账本不随 .toskr-backup 导出；需长期保留请单独备份账本文件。</p>
+          {status?.ledgerPath && (
+            <Button
+              size="xs"
+              onClick={() => void copyLedgerPath()}
+              title={status.ledgerPath}
+            >
+              <Copy data-icon="inline-start" />复制账本路径
+            </Button>
+          )}
+        </div>
+      </Group>
+        </>
+      )}
+    </div>
   );
 }
 

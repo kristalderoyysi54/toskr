@@ -9,6 +9,8 @@ interface UIState {
   page: PanelPage;
   /** 「提醒」页子视图：任务 / 订阅（会话态，同 page 约定不持久化）。 */
   remindersSubview: "tasks" | "subscriptions";
+  /** 「内容」页子视图：笔记 / 消息 / 秘文。 */
+  contentSubview: "notes" | "messages" | "secret";
   /** 图钉：钉住后失焦不自动隐藏。 */
   pinned: boolean;
   /** 搜索框是否展开。 */
@@ -60,6 +62,7 @@ interface UIState {
   setOpen: (open: boolean) => void;
   setPage: (page: PanelPage) => void;
   setRemindersSubview: (v: "tasks" | "subscriptions") => void;
+  setContentSubview: (v: "notes" | "messages" | "secret") => void;
   setPinned: (pinned: boolean) => void;
   setSearchOpen: (open: boolean) => void;
   setQuery: (query: string) => void;
@@ -97,6 +100,7 @@ export const useUIStore = create<UIState>()((set, get) => ({
   open: false,
   page: "notes",
   remindersSubview: "tasks",
+  contentSubview: "notes",
   pinned: false,
   searchOpen: false,
   query: "",
@@ -124,6 +128,14 @@ export const useUIStore = create<UIState>()((set, get) => ({
   // 切页清焦点：避免另一页残留的 focusedId 干扰键盘导航语义
   setPage: (page) => set({ page, focusedId: null }),
   setRemindersSubview: (remindersSubview) => set({ remindersSubview }),
+  setContentSubview: (contentSubview) =>
+    set({
+      contentSubview,
+      focusedId: null,
+      anchorId: null,
+      query: "",
+      searchOpen: false,
+    }),
   setPinned: (pinned) => set({ pinned }),
   setSearchOpen: (searchOpen) =>
     set(searchOpen ? { searchOpen } : { searchOpen, query: "" }),

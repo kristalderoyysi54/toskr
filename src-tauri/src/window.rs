@@ -4,7 +4,7 @@
 //! （tauri-apps/tauri#15170），所有显示器/几何查询必须在主线程执行；
 //! 跟随线程使用启动时快照的显示器信息。
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use tauri::{
@@ -21,6 +21,20 @@ const MARGIN: f64 = 12.0;
 const HUD_WIDTH: f64 = 264.0;
 // 气泡（两行 ≈48 含顶部投影余量）+ 尾巴/间距 6 + logo 36 + 底部投影余量 ≈ 100
 const HUD_HEIGHT: f64 = 100.0;
+static SOURCE_OVERLAY_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceOverlayPayload {
+    pub source_app: String,
+    pub source_bundle: String,
+    pub conversation_name: String,
+    pub sender_name: String,
+    pub text: String,
+    pub reason: String,
+    #[serde(default)]
+    pub pointer_side: Option<String>,
+}
 /// 伴随模式自动高度的下限（pt）。
 const COMPANION_MIN_HEIGHT: f64 = 400.0;
 /// 用户手动调节的高度下限（pt）。
@@ -1978,6 +1992,75 @@ fn order_front_without_focus(window: &tauri::WebviewWindow) {
             ns_window.orderFront(None);
         }
     }
+}
+
+/// 在来源应用中定位会话：用 AXScrollToVisible 把会话列表滚到该群那一行，
+/// 并在行上盖 Toskr 自绘的高亮框（穿透点击、约 2 秒渐隐）。
+/// 只滚动列表视口，绝不 AXPress/选中行——不打开会话、不改已读。
+/// 内含滚动轮询（最长约 1.5s），必须在非主线程调用（命令层 spawn_blocking）。
+pub fn locate_source_conversation(
+    app: &AppHandle,
+    payload: SourceOverlayPayload,
+) -> Result<(), String> {
+    let target = focus::running_app_info_for_bundle(&payload.source_bundle)
+        .ok_or_else(|| format!("{} 当前未运行", payload.source_app))?;
+    let started = std::time::Instant::now();
+    let outcome = ax::locate_conversation(target.pid, &payload.conversation_name);
+    let kind = match outcome {
+        ax::LocateOutcome::Row { .. } => "命中行",
+        ax::LocateOutcome::NotInList => "列表无此会话",
+        ax::LocateOutcome::NoList => "未识别列表",
+    };
+    crate::diag::push(
+        app,
+        format!("推推定位 结果={kind} 耗时={}ms", started.elapsed().as_millis()),
+    );
+    match outcome {
+        ax::LocateOutcome::Row { row, .. } => {
+            show_locate_highlight(app, row);
+            Ok(())
+        }
+        ax::LocateOutcome::NotInList => Err(format!(
+            "{}会话列表里没找到该群（列表可能处于搜索或过滤状态）",
+            payload.source_app
+        )),
+        ax::LocateOutcome::NoList => Err(format!(
+            "未能识别{}的会话列表（请确认主窗口已打开）",
+            payload.source_app
+        )),
+    }
+}
+
+/// 把高亮窗盖到目标行上并重播脉冲动画；约 2 秒后自动收起（新一次定位顶掉旧计时）。
+fn show_locate_highlight(app: &AppHandle, row: ax::AxWindowFrame) {
+    let generation = SOURCE_OVERLAY_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        const PAD: f64 = 3.0;
+        if let Some(window) = handle.get_webview_window("locatehl") {
+            let _ = window.set_size(LogicalSize::new(row.w + PAD * 2.0, row.h + PAD * 2.0));
+            let _ = window.set_position(LogicalPosition::new(row.x - PAD, row.y - PAD));
+            let _ = window.set_ignore_cursor_events(true);
+            ensure_fullscreen_auxiliary(&window);
+            order_front_without_focus(&window);
+        }
+    });
+
+    let hide_handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(2000));
+        if SOURCE_OVERLAY_GENERATION.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        let main_handle = hide_handle.clone();
+        let _ = hide_handle.run_on_main_thread(move || {
+            if SOURCE_OVERLAY_GENERATION.load(Ordering::SeqCst) == generation {
+                if let Some(window) = main_handle.get_webview_window("locatehl") {
+                    let _ = window.hide();
+                }
+            }
+        });
+    });
 }
 
 /// 独立模式下记录用户手动拖动后的位置（逻辑 pt）。

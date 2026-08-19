@@ -22,7 +22,7 @@ use crate::activity::{
 };
 use crate::storage::{DATA_FILE, MEDIA_DIR};
 
-pub const MAX_STORE_VERSION: u64 = 19;
+pub const MAX_STORE_VERSION: u64 = 20;
 const MISSING_REVISION: &str = "missing";
 const MEDIA_GC_FILE: &str = "toskr-media-gc.json";
 const DATA_JOURNAL_FILE: &str = "toskr-data-transaction.json";
@@ -2927,10 +2927,18 @@ fn parse_store_document(raw: &str) -> Option<StoreSummary> {
         |task| validate_task(task, allow_legacy_duplicates),
         allow_legacy_duplicates,
     )?;
+    let messages = validate_record_array(
+        state.get("messages"),
+        validate_message,
+        allow_legacy_duplicates,
+    )?;
+    if version >= 20 && state.get("messages").is_none() {
+        return None;
+    }
     if !validate_settings_value_for_version(state.get("settings"), version) {
         return None;
     }
-    let _ = (sections, task_sections);
+    let _ = (sections, task_sections, messages);
     Some(StoreSummary {
         version,
         note_count: notes,
@@ -3358,6 +3366,40 @@ pub(crate) fn validate_settings_value_for_version(
     }) {
         return false;
     }
+    if !optional_type(settings, "messageWatchRules", |value| {
+        let mut ids = BTreeSet::new();
+        value.as_array().is_some_and(|items| {
+            items.len() <= 50
+                && items.iter().all(|item| {
+                    item.as_object().is_some_and(|item| {
+                        item.get("id")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|id| !id.is_empty() && ids.insert(id))
+                            && item.get("name").is_some_and(serde_json::Value::is_string)
+                            && item
+                                .get("enabled")
+                                .is_some_and(serde_json::Value::is_boolean)
+                            && ["groupTerms", "senderTerms", "keywords"].iter().all(|key| {
+                                item.get(*key).and_then(serde_json::Value::as_array).is_some_and(
+                                    |terms| {
+                                        terms.len() <= 20
+                                            && terms.iter().all(|term| {
+                                                term.as_str().is_some_and(|term| !term.is_empty())
+                                            })
+                                    },
+                                )
+                            })
+                            && ["groupTerms", "senderTerms", "keywords"].iter().any(|key| {
+                                item.get(*key)
+                                    .and_then(serde_json::Value::as_array)
+                                    .is_some_and(|terms| !terms.is_empty())
+                            })
+                    })
+                })
+        })
+    }) {
+        return false;
+    }
     if !optional_type(settings, "aliasEntities", |value| {
         let mut ids = BTreeSet::new();
         let mut originals = BTreeSet::new();
@@ -3609,6 +3651,21 @@ fn validate_task(
         && optional_type(object, "remindedAt", valid_nullable_time)
         && optional_type(object, "createdAt", valid_nonnegative_number)
         && optional_type(object, "kind", |value| value.as_str() == Some("spark"))
+        && optional_type(object, "sourceRef", |value| {
+            value.as_object().is_some_and(|reference| {
+                reference.get("kind").and_then(serde_json::Value::as_str) == Some("message")
+                    && reference.get("source").and_then(serde_json::Value::as_str)
+                        == Some("tuitui")
+                    && reference
+                        .get("conversationId")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|value| !value.is_empty())
+                    && reference
+                        .get("messageId")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|value| !value.is_empty())
+            })
+        })
         && optional_type(object, "checklist", |value| {
             value.as_array().is_some_and(|items| {
                 let mut ids = BTreeSet::new();
@@ -3626,6 +3683,52 @@ fn validate_task(
                             && optional_type(item, "done", serde_json::Value::is_boolean)
                     })
                 })
+            })
+        })
+}
+
+fn validate_message(object: &serde_json::Map<String, serde_json::Value>) -> bool {
+    object.get("source").and_then(serde_json::Value::as_str) == Some("tuitui")
+        && object
+            .get("conversationId")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+        && object
+            .get("messageId")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+        && object.get("text").is_some_and(serde_json::Value::is_string)
+        && object.get("status").is_some_and(|value| {
+            matches!(value.as_str(), Some("new" | "waiting" | "done" | "archived"))
+        })
+        && optional_type(object, "occurredAtMs", |value| {
+            value.is_null() || valid_nonnegative_number(value)
+        })
+        && object
+            .get("receivedAtMs")
+            .is_some_and(valid_nonnegative_number)
+        && optional_type(object, "aiDraftAtMs", valid_nonnegative_number)
+        && optional_type(object, "matchedRuleIds", |value| {
+            let mut ids = BTreeSet::new();
+            value.as_array().is_some_and(|items| {
+                items.len() <= 50
+                    && items.iter().all(|item| {
+                        item.as_str()
+                            .is_some_and(|id| !id.is_empty() && ids.insert(id))
+                    })
+            })
+        })
+        && optional_type(object, "context", |value| {
+            value.as_array().is_some_and(|items| {
+                items.len() <= 8
+                    && items.iter().all(|item| {
+                        item.as_object().is_some_and(|item| {
+                            item.get("messageId")
+                                .and_then(serde_json::Value::as_str)
+                                .is_some_and(|id| !id.is_empty())
+                                && item.get("text").is_some_and(serde_json::Value::is_string)
+                        })
+                    })
             })
         })
 }
@@ -3965,7 +4068,7 @@ mod tests {
                 "activationWithin60s": null
             }
         });
-        assert_eq!(MAX_STORE_VERSION, 19);
+        assert_eq!(MAX_STORE_VERSION, 20);
         assert!(validate_settings_value_for_version(
             Some(&valid),
             MAX_STORE_VERSION
@@ -4181,7 +4284,8 @@ mod tests {
                 "sections": [{"id": "inbox", "name": "收件箱"}],
                 "notes": [{"id": note, "text": note}],
                 "taskSections": [{"id": "task-inbox", "name": "收集箱"}],
-                "tasks": []
+                "tasks": [],
+                "messages": []
             }
         });
         let bag = serde_json::json!({"toskr": persisted.to_string()});

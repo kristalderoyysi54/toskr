@@ -16,6 +16,8 @@ mod image_firewall;
 mod ocr;
 mod ai;
 mod linkmeta;
+mod message_watch;
+mod message_watch_cdp;
 mod pasteboard;
 mod privacy;
 mod rich_clipboard;
@@ -46,6 +48,7 @@ pub fn run() {
             None,
         ))
         .manage(AppState::default())
+        .manage(message_watch::MessageWatchState::default())
         .manage(diag::DiagLog::default())
         .manage(storage::Storage::default())
         .setup(|app| {
@@ -113,6 +116,14 @@ pub fn run() {
                 }
                 if let Some(win) = app.get_webview_window("hud") {
                     // HUD 自绘纸白气泡 + 尾巴 + logo（异形剪影），不再贴整窗 vibrancy 圆角膜
+                    let _ = win.set_ignore_cursor_events(true);
+                    window::ensure_fullscreen_auxiliary(&win);
+                }
+                if let Some(win) = app.get_webview_window("sourceoverlay") {
+                    let _ = win.set_ignore_cursor_events(true);
+                    window::ensure_fullscreen_auxiliary(&win);
+                }
+                if let Some(win) = app.get_webview_window("locatehl") {
                     let _ = win.set_ignore_cursor_events(true);
                     window::ensure_fullscreen_auxiliary(&win);
                 }
@@ -234,6 +245,13 @@ pub fn run() {
             commands::set_clip_watch,
             commands::set_clip_rules,
             commands::set_clip_pause,
+            commands::set_message_watch,
+            commands::get_message_watch_status,
+            commands::get_message_watch_bridge_info,
+            commands::get_message_watch_captures,
+            commands::locate_message_source,
+            commands::message_watch_app_installed,
+            commands::set_message_watch_auto,
             commands::quick_look,
             commands::show_text_preview,
             commands::ocr_image,

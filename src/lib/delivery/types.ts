@@ -1,4 +1,4 @@
-import type { TargetSnapshot } from "@/lib/tauri";
+import type { DeliverySegment, TargetSnapshot } from "@/lib/tauri";
 import type { TransformRecipeId } from "@/lib/aiTransform";
 import type {
   FirewallFinding,
@@ -73,6 +73,12 @@ export interface DeliveryDraft {
   originalImageFiles: string[];
   /** Native 实际读取的附件；只允许原图名或当前 Draft 的遮挡副本 token。 */
   imageFiles: string[];
+  /**
+   * 单卡图文交错发送顺序；null = 整段文字在前、图片在后。
+   * 仅在正文未经任何变换（finalText === rawText）时生成，发送前同一条件
+   * 复核，预检改过正文即自动退回默认顺序。
+   */
+  segments: DeliverySegment[] | null;
   imageFirewall: ImageFirewallItem[];
   format: DeliveryFormat;
   promptSnippetId: string | null;

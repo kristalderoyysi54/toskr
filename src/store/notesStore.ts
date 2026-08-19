@@ -50,6 +50,19 @@ import {
   type OnboardingState,
 } from "@/lib/onboarding";
 import type { SecretKey, SecretMeta } from "@/lib/secret/secret";
+import {
+  mergeMessageCapture,
+  messageItemFromCapture,
+  messageSourceRef,
+  messageTaskNote,
+  messageTaskTitle,
+  normalizeMessageWatchRules,
+  type MessageCaptureLike,
+  type MessageItem,
+  type MessageSourceRef,
+  type MessageStatus,
+  type MessageWatchRule,
+} from "@/lib/messages";
 import { tauriStateStorage } from "./persistStorage";
 
 export type { PromptGroup, PromptSnippet, TargetProfile } from "@/lib/targetProfiles";
@@ -57,6 +70,12 @@ export type { AliasCategoryDefinition, AliasEntity } from "@/lib/delivery/aliasE
 export type { OnboardingEvent, OnboardingState } from "@/lib/onboarding";
 export type { NoteContentBlock } from "@/lib/noteContentBlocks";
 export type { SecretKey, SecretMeta, SecretDirection } from "@/lib/secret/secret";
+export type {
+  MessageItem,
+  MessageSourceRef,
+  MessageStatus,
+  MessageWatchRule,
+} from "@/lib/messages";
 export { noteContentBlocks, textFromContentBlocks };
 
 export type NoteKind = "text" | "image" | "link" | "secret";
@@ -66,7 +85,7 @@ export type PageId = "notes" | "clipboard" | "tasks" | "secret";
 
 /** 页签默认顺序（剪贴最高频，居首；秘文默认关闭故垫底）。 */
 export const DEFAULT_PAGE_ORDER: PageId[] = ["clipboard", "notes", "tasks", "secret"];
-export const STORE_VERSION = 19;
+export const STORE_VERSION = 20;
 
 /**
  * 归一化页签顺序：去重、剔除未知项、补齐缺失页（按默认序追加）。
@@ -188,6 +207,8 @@ export interface Task {
   kind?: "spark";
   /** 所属任务分组（缺省归收集箱）。 */
   sectionId?: string;
+  /** 从来源消息转化时保留可追溯引用；不会触发 IM 导航或发送。 */
+  sourceRef?: MessageSourceRef;
 }
 
 /** 任务默认分组（收集箱）。 */
@@ -480,6 +501,8 @@ export interface Settings {
   panelTopOffset: number;
   /** 面板高度覆盖（pt；null = 自动同目标窗口/近全高）。 */
   panelHeight: number | null;
+  /** 消息功能总开关；默认关闭，关闭时隐藏「内容 → 消息」入口与监听配置。 */
+  messagesEnabled: boolean;
   /** 秘文（中文加密通信）总开关；默认关闭，关闭时秘文页与捕获识别都不启用。 */
   secretEnabled: boolean;
   /** 共享密钥列表（明文随本地数据保存；威胁模型见设置页说明）。 */
@@ -488,6 +511,8 @@ export interface Settings {
   secretDefaultKeyId: string | null;
   /** 秘文卡揭示明文后自动重新遮罩的超时（ms）；0 = 常驻不自动遮罩。 */
   secretRevealTimeoutMs: number;
+  /** 推推组合关注规则；同维度 OR、跨非空维度 AND。 */
+  messageWatchRules: MessageWatchRule[];
   onboarding: OnboardingState;
 }
 
@@ -732,11 +757,14 @@ export const defaultSettings = (): Settings => ({
   panelWidth: 380,
   panelTopOffset: 0,
   panelHeight: null,
+  // 消息功能默认关闭（用户指定）：隐藏消息 tab 与监听配置，开启后才显示
+  messagesEnabled: false,
   // 秘文默认关闭（用户指定）：不显示秘文页、不做捕获识别
   secretEnabled: false,
   secretKeys: [],
   secretDefaultKeyId: null,
   secretRevealTimeoutMs: 8000,
+  messageWatchRules: [],
   onboarding: defaultOnboardingState(),
 });
 
@@ -762,6 +790,7 @@ function repairSettingsTargetProfiles(settings: Settings): Settings {
     outcomeBaselines: normalizeOutcomeBaselines(settings.outcomeBaselines),
     outcomeProblemSessions: normalizeProblemSessions(settings.outcomeProblemSessions),
     onboarding: onboardingStateFromPersisted(settings.onboarding),
+    messageWatchRules: normalizeMessageWatchRules(settings.messageWatchRules),
     promptGroups: repaired.groups,
     promptSnippets: repaired.snippets,
     targetProfiles: repaired.profiles,
@@ -776,6 +805,7 @@ export interface UndoEntry {
   tasks: Task[];
   taskSections: TaskSection[];
   bills: Bill[];
+  messages?: MessageItem[];
 }
 
 export type AddNoteResult = "added" | "duplicate" | "empty";
@@ -789,6 +819,8 @@ export interface NotesState {
   taskSections: TaskSection[];
   /** 账单（「提醒」页订阅子视图；同一持久化 bag、同一条撤销栈）。 */
   bills: Bill[];
+  /** 外部 IM 消息的结构化本地投影；完整 raw 仍以 JSONL 账本为权威。 */
+  messages: MessageItem[];
   /** 勾选态（临时，不持久化）。 */
   checkedIds: string[];
   settings: Settings;
@@ -811,6 +843,9 @@ export interface NotesState {
       contentBlocks?: NoteContentBlock[];
       /** 来源侧捕获时间；异步图片本地化完成顺序不应改写原始时间。 */
       createdAt?: number;
+      /** 目标分组内按 createdAt 降序插入（最新在上）。监听类来源批量/乱序
+       *  上报时置顶语义会反序，传 true 让落点跟随消息时间而非到达顺序。 */
+      orderByTime?: boolean;
     }
   ) => { result: AddNoteResult; id?: string };
   /**
@@ -890,6 +925,8 @@ export interface NotesState {
   reorderNotes: (activeId: string, overId: string) => void;
 
   addSection: (name?: string) => void;
+  /** 找到同名分组返回其 id，否则新建并返回新 id（来源自动归组用，如推推消息监听）。 */
+  ensureSection: (name: string) => string;
   renameSection: (id: string, name: string) => void;
   setSectionColor: (id: string, color?: string) => void;
   deleteSection: (id: string) => void;
@@ -943,6 +980,24 @@ export interface NotesState {
     checklist: string[]
   ) => boolean;
 
+  // ===== 消息 =====
+  ingestMessageCaptures: (
+    captures: MessageCaptureLike[]
+  ) => { added: number; updated: number; ids: string[] };
+  setMessageStatus: (id: string, status: MessageStatus) => void;
+  /** 批量改状态（多选批量已处理及其撤销）。 */
+  setMessagesStatus: (ids: string[], status: MessageStatus) => void;
+  messageToTask: (
+    id: string,
+    mode: "task" | "reminder" | "waiting",
+    dueAt?: number | null
+  ) => { result: "added" | "existing" | "missing"; taskId?: string };
+  saveMessageAiDraft: (id: string, draft: string) => void;
+  /** 从工作投影删除消息（原始 JSONL 账本不受影响）。 */
+  removeMessages: (ids: string[]) => void;
+  /** HUD 撤销回插被删消息：按时间重新归位，已存在的 id 跳过。 */
+  restoreMessages: (items: MessageItem[]) => void;
+
   // ===== 账单 =====
   /** 新建账单（reminderOffsets 缺省取 settings.billDefaultReminderOffsets）。 */
   addBill: (input: {
@@ -990,14 +1045,21 @@ export interface NotesState {
     tasks?: Task[];
     taskSections?: TaskSection[];
     bills?: Bill[];
-  }) => { notes: number; tasks: number; bills: number; skippedDuplicates: number };
+    messages?: MessageItem[];
+  }) => {
+    notes: number;
+    tasks: number;
+    bills: number;
+    messages: number;
+    skippedDuplicates: number;
+  };
 }
 
 const UNDO_DEPTH = 5;
 
 type PersistentNotesState = Pick<
   NotesState,
-  "sections" | "notes" | "tasks" | "taskSections" | "bills" | "settings"
+  "sections" | "notes" | "tasks" | "taskSections" | "bills" | "messages" | "settings"
 >;
 
 export type NotesStoreSnapshot = PersistentNotesState &
@@ -1045,11 +1107,13 @@ function assertCurrentSchemaHasUniqueIds(
       assertUnique((bill as Bill).history, "bill.history");
     }
   }
+  assertUnique(persisted.messages, "messages");
   assertUnique(persisted.settings?.promptGroups, "settings.promptGroups");
   assertUnique(persisted.settings?.promptSnippets, "settings.promptSnippets");
   assertUnique(persisted.settings?.targetProfiles, "settings.targetProfiles");
   assertUnique(persisted.settings?.aliasEntities, "settings.aliasEntities");
   assertUnique(persisted.settings?.secretKeys, "settings.secretKeys");
+  assertUnique(persisted.settings?.messageWatchRules, "settings.messageWatchRules");
 }
 
 function validateSettingsShape(value: unknown, version: number): void {
@@ -1144,6 +1208,15 @@ function validateSettingsShape(value: unknown, version: number): void {
     )
   )) {
     throw new Error("settings.firewallDisabledWarnCategories 含不可关闭类别");
+  }
+  if (settings.messageWatchRules !== undefined) {
+    if (!Array.isArray(settings.messageWatchRules)) {
+      throw new Error("settings.messageWatchRules 必须是数组");
+    }
+    const normalized = normalizeMessageWatchRules(settings.messageWatchRules);
+    if (normalized.length !== settings.messageWatchRules.length) {
+      throw new Error("settings.messageWatchRules 含空规则、重复 id 或无效记录");
+    }
   }
   const validateNormalizedArray = (
     key: string,
@@ -1516,6 +1589,75 @@ function normalizeTaskRecord(task: Task, sectionIds: Set<string>): Task {
     checklist: checklist.length ? checklist : undefined,
     sectionId:
       task.sectionId && sectionIds.has(task.sectionId) ? task.sectionId : undefined,
+    sourceRef: normalizeMessageSourceRef(task.sourceRef),
+  };
+}
+
+function normalizeMessageSourceRef(value: unknown): MessageSourceRef | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const ref = value as Partial<MessageSourceRef>;
+  if (
+    ref.kind !== "message" ||
+    ref.source !== "tuitui" ||
+    typeof ref.conversationId !== "string" ||
+    !ref.conversationId ||
+    typeof ref.messageId !== "string" ||
+    !ref.messageId ||
+    typeof ref.senderUid !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    kind: "message",
+    source: "tuitui",
+    conversationId: ref.conversationId,
+    conversationName:
+      typeof ref.conversationName === "string" ? ref.conversationName : null,
+    messageId: ref.messageId,
+    senderUid: ref.senderUid,
+    senderName: typeof ref.senderName === "string" ? ref.senderName : null,
+  };
+}
+
+function normalizeMessageRecord(message: MessageItem): MessageItem {
+  if (
+    message.source !== "tuitui" ||
+    typeof message.conversationId !== "string" ||
+    !message.conversationId ||
+    typeof message.messageId !== "string" ||
+    !message.messageId ||
+    typeof message.text !== "string"
+  ) {
+    throw new Error("message 来源或标识无效");
+  }
+  const projected = messageItemFromCapture({
+    ...message,
+    receivedAtMs: finiteNumberOrDefault(
+      message.receivedAtMs,
+      0,
+      "message.receivedAtMs"
+    ),
+  });
+  const status = (["new", "waiting", "done", "archived"] as const).includes(
+    message.status
+  )
+    ? message.status
+    : "new";
+  return {
+    ...projected,
+    status,
+    linkedTaskId:
+      typeof message.linkedTaskId === "string" && message.linkedTaskId
+        ? message.linkedTaskId
+        : undefined,
+    aiDraft:
+      typeof message.aiDraft === "string" && message.aiDraft.trim()
+        ? message.aiDraft
+        : undefined,
+    aiDraftAtMs:
+      message.aiDraftAtMs === undefined
+        ? undefined
+        : finiteNumberOrDefault(message.aiDraftAtMs, 0, "message.aiDraftAtMs"),
   };
 }
 
@@ -1636,7 +1778,7 @@ function normalizeBillRecord(bill: Bill): Bill {
   };
 }
 
-/** Zustand persist v1-v18 向前迁移；未知字段保留，旧版本重复记录按首项去重。 */
+/** Zustand persist v1-v20 向前迁移；未知字段保留，旧版本重复记录按首项去重。 */
 export function migratePersistedState(
   persisted: unknown,
   version: number
@@ -1650,7 +1792,7 @@ export function migratePersistedState(
   const p = (persisted && typeof persisted === "object"
     ? { ...(persisted as Partial<NotesState>) }
     : {}) as Partial<NotesState>;
-  for (const key of ["sections", "notes", "taskSections", "tasks", "bills"] as const) {
+  for (const key of ["sections", "notes", "taskSections", "tasks", "bills", "messages"] as const) {
     if (p[key] !== undefined && !Array.isArray(p[key])) {
       throw new Error(`${key} 必须是数组`);
     }
@@ -1766,6 +1908,14 @@ export function migratePersistedState(
       billDefaultReminderOffsets: [3, 1],
     } as Settings;
   }
+  if (version < 20) {
+    // v20 将推推监听从普通笔记提升为独立消息域；旧笔记不擅自删除。
+    p.messages = [];
+    p.settings = {
+      ...(p.settings ?? {}),
+      messageWatchRules: [],
+    } as Settings;
+  }
   const sections = dedupeById<Section>(p.sections).map((section) => ({
     ...section,
     name: typeof section.name === "string" ? section.name : "未命名分组",
@@ -1789,7 +1939,10 @@ export function migratePersistedState(
     normalizeTaskRecord(task, taskSectionIds)
   );
   const bills = dedupeById<Bill>(p.bills).map((bill) => normalizeBillRecord(bill));
-  return { ...p, sections, notes, taskSections, tasks, bills };
+  const messages = dedupeById<MessageItem>(p.messages).map((message) =>
+    normalizeMessageRecord(message)
+  );
+  return { ...p, sections, notes, taskSections, tasks, bills, messages };
 }
 
 function normalizedPersistentState(
@@ -1811,6 +1964,7 @@ function normalizedPersistentState(
       ? persisted.taskSections
       : defaultTaskSections(),
     bills: persisted.bills ?? [],
+    messages: persisted.messages ?? [],
     settings,
   };
 }
@@ -1857,6 +2011,21 @@ export function mergePersistedNotesState(
   const persistedIds = new Set(merged.notes.map((n) => n.id));
   const early = current.notes.filter((n) => !persistedIds.has(n.id));
   if (early.length) merged.notes = [...early, ...merged.notes];
+  const persistedMessages = new Map(
+    merged.messages.map((message) => [message.id, message] as const)
+  );
+  for (const incoming of current.messages) {
+    const saved = persistedMessages.get(incoming.id);
+    persistedMessages.set(
+      incoming.id,
+      saved ? mergeMessageCapture(saved, incoming) : incoming
+    );
+  }
+  merged.messages = [...persistedMessages.values()].sort(
+    (a, b) =>
+      (b.occurredAtMs ?? b.receivedAtMs) -
+      (a.occurredAtMs ?? a.receivedAtMs)
+  );
   return merged;
 }
 
@@ -1867,6 +2036,7 @@ export function persistentStateOf(state: NotesState): PersistentNotesState {
     tasks: state.tasks,
     taskSections: state.taskSections,
     bills: state.bills,
+    messages: state.messages,
     settings: state.settings,
   };
 }
@@ -1911,15 +2081,20 @@ function contentBlocksForAdd(
   return normalizeNoteContentBlocks(blocks);
 }
 
-/** 剪贴记录按来源时间降序插入，异步图片本地化完成顺序不影响原始顺序。 */
-function insertClipboardNoteByTime(notes: Note[], note: Note): Note[] {
+/** 分组内按来源时间降序插入（最新在上），到达顺序不影响最终顺序：
+ *  剪贴记录的异步图片本地化、消息监听的批量/乱序上报都靠它守序。 */
+function insertNoteByTimeWithin(
+  notes: Note[],
+  note: Note,
+  sectionId: string
+): Note[] {
   const before = notes.findIndex(
-    (item) => item.sectionId === CLIPBOARD_ID && item.createdAt <= note.createdAt
+    (item) => item.sectionId === sectionId && item.createdAt <= note.createdAt
   );
   if (before >= 0) return [...notes.slice(0, before), note, ...notes.slice(before)];
   let last = -1;
   notes.forEach((item, index) => {
-    if (item.sectionId === CLIPBOARD_ID) last = index;
+    if (item.sectionId === sectionId) last = index;
   });
   if (last >= 0) return [...notes.slice(0, last + 1), note, ...notes.slice(last + 1)];
   return [note, ...notes];
@@ -1933,6 +2108,7 @@ export const useNotesStore = create<NotesState>()(
       tasks: [],
       taskSections: defaultTaskSections(),
       bills: [],
+      messages: [],
       checkedIds: [],
       settings: defaultSettings(),
       undoStack: [],
@@ -1974,12 +2150,17 @@ export const useNotesStore = create<NotesState>()(
         if (dup) return { result: "duplicate", id: dup.id };
 
         const sections = get().sections;
-        // 默认落点绝不能是剪贴板历史组：分组排序可能把隐藏的剪贴板组顶到
-        // 首位，导致双击捕获「消失」进剪贴页（现网踩坑 2026-08）
+        // 普通笔记默认落点固定为收件箱，不能依赖可调整的分组顺序：
+        // 剪贴板与秘文都是隐藏/专用域，误落其中会让捕获内容在笔记页「消失」。
+        const defaultSectionId = sections.some((s) => s.id === INBOX_ID)
+          ? INBOX_ID
+          : (sections.find(
+              (s) => s.id !== CLIPBOARD_ID && s.id !== SECRET_ID
+            )?.id ?? INBOX_ID);
         const sectionId =
           opts?.sectionId && sections.some((s) => s.id === opts.sectionId)
             ? opts.sectionId
-            : (sections.find((s) => s.id !== CLIPBOARD_ID)?.id ?? INBOX_ID);
+            : defaultSectionId;
         const note: Note = {
           id: crypto.randomUUID(),
           ...noteContentPatch(blocks),
@@ -2010,9 +2191,14 @@ export const useNotesStore = create<NotesState>()(
         };
         // 最新的卡片置顶（收件箱语义：新内容在最上面）
         set({
-          notes: targetClip
-            ? insertClipboardNoteByTime(get().notes, note)
-            : [note, ...get().notes],
+          notes:
+            targetClip || opts?.orderByTime
+              ? insertNoteByTimeWithin(
+                  get().notes,
+                  note,
+                  targetClip ? CLIPBOARD_ID : sectionId
+                )
+              : [note, ...get().notes],
         });
         return { result: "added", id: note.id };
       },
@@ -2052,9 +2238,10 @@ export const useNotesStore = create<NotesState>()(
               sourceBundle: opts?.sourceBundle ?? existing.sourceBundle,
               ...(autoKeep ? { keep: true } : {}),
             };
-            set({ notes: insertClipboardNoteByTime(
+            set({ notes: insertNoteByTimeWithin(
               notes.filter((n) => n.id !== res.id),
-              bumped
+              bumped,
+              CLIPBOARD_ID
             ) });
             if (autoKeep) {
               const trimmed = existing.text.trim();
@@ -2544,6 +2731,15 @@ export const useNotesStore = create<NotesState>()(
         });
       },
 
+      ensureSection: (name) => {
+        const trimmed = name.trim();
+        const existing = get().sections.find((s) => s.name === trimmed);
+        if (existing) return existing.id;
+        const id = crypto.randomUUID();
+        set({ sections: [...get().sections, { id, name: trimmed }] });
+        return id;
+      },
+
       renameSection: (id, name) => {
         const trimmed = name.trim();
         if (!trimmed) return;
@@ -2922,6 +3118,119 @@ export const useNotesStore = create<NotesState>()(
         return true;
       },
 
+      // ===== 消息 =====
+
+      ingestMessageCaptures: (captures) => {
+        if (!captures.length) return { added: 0, updated: 0, ids: [] };
+        const byId = new Map(get().messages.map((message) => [message.id, message]));
+        let added = 0;
+        let updated = 0;
+        const ids: string[] = [];
+        for (const capture of captures) {
+          const incoming = messageItemFromCapture(capture);
+          const current = byId.get(incoming.id);
+          byId.set(incoming.id, mergeMessageCapture(current, capture));
+          ids.push(incoming.id);
+          if (current) updated += 1;
+          else added += 1;
+        }
+        set({
+          messages: [...byId.values()].sort(
+            (a, b) =>
+              (b.occurredAtMs ?? b.receivedAtMs) -
+              (a.occurredAtMs ?? a.receivedAtMs)
+          ),
+        });
+        return { added, updated, ids };
+      },
+
+      setMessageStatus: (id, status) => {
+        set({
+          messages: get().messages.map((message) =>
+            message.id === id ? { ...message, status } : message
+          ),
+        });
+      },
+
+      setMessagesStatus: (ids, status) => {
+        const changing = new Set(ids);
+        set({
+          messages: get().messages.map((message) =>
+            changing.has(message.id) ? { ...message, status } : message
+          ),
+        });
+      },
+
+      messageToTask: (id, mode, dueAt = null) => {
+        const message = get().messages.find((item) => item.id === id);
+        if (!message) return { result: "missing" };
+        if (
+          message.linkedTaskId &&
+          get().tasks.some((task) => task.id === message.linkedTaskId)
+        ) {
+          return { result: "existing", taskId: message.linkedTaskId };
+        }
+        const taskId = crypto.randomUUID();
+        const task: Task = {
+          id: taskId,
+          text: messageTaskTitle(message),
+          status: mode === "waiting" ? "doing" : "todo",
+          priority: "none",
+          dueAt: mode === "reminder" ? dueAt : null,
+          createdAt: Date.now(),
+          remindedAt: null,
+          note: messageTaskNote(message),
+          sourceRef: messageSourceRef(message),
+        };
+        set({
+          tasks: [task, ...get().tasks],
+          messages: get().messages.map((item) =>
+            item.id === id
+              ? {
+                  ...item,
+                  linkedTaskId: taskId,
+                  status: mode === "waiting" ? "waiting" : "done",
+                }
+              : item
+          ),
+        });
+        return { result: "added", taskId };
+      },
+
+      saveMessageAiDraft: (id, draft) => {
+        const clean = draft.trim();
+        set({
+          messages: get().messages.map((message) =>
+            message.id === id
+              ? {
+                  ...message,
+                  aiDraft: clean || undefined,
+                  aiDraftAtMs: clean ? Date.now() : undefined,
+                }
+              : message
+          ),
+        });
+      },
+
+      removeMessages: (ids) => {
+        const removing = new Set(ids);
+        set({
+          messages: get().messages.filter((message) => !removing.has(message.id)),
+        });
+      },
+
+      restoreMessages: (items) => {
+        const existing = new Set(get().messages.map((message) => message.id));
+        const restored = items.filter((item) => !existing.has(item.id));
+        if (!restored.length) return;
+        set({
+          messages: [...get().messages, ...restored].sort(
+            (a, b) =>
+              (b.occurredAtMs ?? b.receivedAtMs) - (a.occurredAtMs ?? a.receivedAtMs)
+          ),
+        });
+      },
+
       addBill: (input) => {
         const id = crypto.randomUUID();
         // 开始日期 = 首期付款日：回填开始日至下期（不含）的往期记账，
@@ -3117,6 +3426,7 @@ export const useNotesStore = create<NotesState>()(
             tasks: structuredClone(get().tasks),
             taskSections: structuredClone(get().taskSections),
             bills: structuredClone(get().bills),
+            messages: structuredClone(get().messages),
           },
         ];
         while (stack.length > UNDO_DEPTH) stack.shift();
@@ -3135,6 +3445,7 @@ export const useNotesStore = create<NotesState>()(
           taskSections: entry.taskSections,
           // 旧撤销条目（无 bills 字段）不回滚账单域，保持当前值
           ...(entry.bills ? { bills: entry.bills } : {}),
+          ...(entry.messages ? { messages: entry.messages } : {}),
           checkedIds: [],
         });
         return entry.label;
@@ -3233,17 +3544,40 @@ export const useNotesStore = create<NotesState>()(
           billIds.add(bill.id);
           newBills.push(normalizeBillRecord(bill));
         }
+        const messageIds = new Set(state.messages.map((message) => message.id));
+        const newMessages: MessageItem[] = [];
+        for (const message of data.messages ?? []) {
+          if (!message || typeof message !== "object") continue;
+          let normalized: MessageItem;
+          try {
+            normalized = normalizeMessageRecord(message);
+          } catch {
+            continue;
+          }
+          if (messageIds.has(normalized.id)) {
+            skippedDuplicates += 1;
+            continue;
+          }
+          messageIds.add(normalized.id);
+          newMessages.push(normalized);
+        }
         set({
           sections: allSections,
           notes: [...state.notes, ...newNotes],
           tasks: [...state.tasks, ...newTasks],
           taskSections: allTaskSections,
           bills: [...state.bills, ...newBills],
+          messages: [...state.messages, ...newMessages].sort(
+            (a, b) =>
+              (b.occurredAtMs ?? b.receivedAtMs) -
+              (a.occurredAtMs ?? a.receivedAtMs)
+          ),
         });
         return {
           notes: newNotes.length,
           tasks: newTasks.length,
           bills: newBills.length,
+          messages: newMessages.length,
           skippedDuplicates,
         };
       },
@@ -3284,6 +3618,7 @@ export function restoreNotesStoreAfterRollback(
     tasks: snapshot.tasks,
     taskSections: snapshot.taskSections,
     bills: snapshot.bills,
+    messages: snapshot.messages,
     settings: snapshot.settings,
   };
   if (JSON.stringify(restored) === JSON.stringify(snapshotPersistent)) {

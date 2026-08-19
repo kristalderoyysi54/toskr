@@ -221,6 +221,47 @@ describe("buildDeliveryDraft", () => {
     });
   });
 
+  it("单张图文卡按块序生成交错段；正文被模板改动或多卡合选时退回默认顺序", () => {
+    const richNote = note("rich", "开头\n结尾", {
+      contentBlocks: [
+        { type: "text", text: "开头" },
+        { type: "image", file: "a.png" },
+        { type: "text", text: "结尾" },
+        { type: "image", file: "b.png" },
+      ],
+    });
+    const draft = buildDeliveryDraft(
+      input({ sourceKind: "note", sourceItemIds: ["rich"] }),
+      state({ notes: [richNote] })
+    );
+    expect(draft.finalText).toBe("开头\n结尾");
+    expect(draft.imageFiles).toEqual(["a.png", "b.png"]);
+    expect(draft.segments).toEqual([
+      { kind: "text", text: "开头" },
+      { kind: "image", fileIndex: 0 },
+      { kind: "text", text: "结尾" },
+      { kind: "image", fileIndex: 1 },
+    ]);
+
+    // 模板改动了正文字节 → 交错段与已扫描正文无法逐字对应，必须退回
+    const templated = buildDeliveryDraft(
+      input({
+        sourceKind: "note",
+        sourceItemIds: ["rich"],
+        promptTemplate: "请分析：{内容}",
+      }),
+      state({ notes: [richNote] })
+    );
+    expect(templated.segments).toBeNull();
+
+    // 多卡合选走编号列表正文，同样不交错
+    const batch = buildDeliveryDraft(
+      input({ sourceItemIds: ["rich", "plain"] }),
+      state({ notes: [richNote, note("plain", "另一条")] })
+    );
+    expect(batch.segments).toBeNull();
+  });
+
   it("片段发送：单卡 sourceTextOverride 取代正文且图片不随行；多卡忽略覆盖", () => {
     const fragment = buildDeliveryDraft(
       input({

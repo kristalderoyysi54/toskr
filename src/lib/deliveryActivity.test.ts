@@ -106,6 +106,7 @@ function draft(overrides: Partial<DeliveryDraft> = {}): DeliveryDraft {
     assembledText: "prompt secret raw body",
     finalText: "redacted body",
     originalImageFiles: ["/secret/image.png"],
+    segments: null,
     imageFiles: ["/secret/image.png"],
     imageFirewall: [{
       originalFile: "/secret/image.png",

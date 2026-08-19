@@ -156,8 +156,15 @@ body,
   background: transparent !important;
 }
 
+/* clip 而非 hidden：hidden 的视口仍可被程序化滚动（浮层在屏缘展开的瞬间
+   超宽、焦点/选区自动滚动就会把整页 scrollLeft 顶出且无人复位——症状是
+   内容整体偏左、右缘露出一条窗口底色）。窗口页面永不整页滚，直接 clip。 */
+html {
+  overflow: clip;
+}
+
 body {
-  overflow: hidden;
+  overflow: clip;
   cursor: default;
   user-select: none;
   -webkit-user-select: none;
@@ -615,4 +622,23 @@ input {
 }
 *::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+/* ============ 推推定位高亮框（locatehl 窗） ============ */
+/* 整窗即一个描边框，Rust 摆到目标会话行上；amber 高亮（蓝留状态、红留危险）。
+   刻意用无终态的呼吸循环：窗口可见就一定有高亮，不存在「播完停在透明」；
+   出现/消失时机完全由 Rust show/hide 控制（约 2s）。 */
+.locate-highlight {
+  border-radius: 10px;
+  border: 2px solid var(--warning);
+  background: color-mix(in oklch, var(--warning) 16%, transparent);
+  animation: locate-breathe 1.1s ease-in-out infinite;
+}
+@keyframes locate-breathe {
+  0% { opacity: 0.55; }
+  50% { opacity: 1; }
+  100% { opacity: 0.55; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .locate-highlight { animation: none; opacity: 1; }
 }

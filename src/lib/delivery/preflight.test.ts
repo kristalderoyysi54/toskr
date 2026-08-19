@@ -100,6 +100,7 @@ function draft(overrides: Partial<DeliveryDraft> = {}): DeliveryDraft {
     assembledText: "正文",
     finalText: "正文",
     originalImageFiles: [],
+    segments: null,
     imageFiles: [],
     imageFirewall: [],
     format: "plain",
