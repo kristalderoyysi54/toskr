@@ -44,21 +44,7 @@
 | ⌘F · Esc | 搜索 · 逐层退出 |
 | 长按 ⌥ | 完整快捷键速查层 |
 
-## 从源码构建
-
-需要 macOS 13+、Node.js 20+（pnpm）、Rust 稳定版。
-
-```bash
-pnpm install
-pnpm tauri dev     # 开发运行
-pnpm test && pnpm typecheck && cargo test
-pnpm build:app     # 打包 .app + .dmg
-```
-
-首次构建前在钥匙串创建代码签名证书 `Toskr Dev Signing`（或删去 `tauri.conf.json` 的 `signingIdentity` 退回 ad-hoc 签名）。手动验收清单见 [docs/manual-qa.md](docs/manual-qa.md)。
-
-技术栈：Tauri v2（Rust）· React 18 · TypeScript · Tailwind v4 · Zustand
 
 ## 致谢与许可
 
-灵感与原型来自 [shadcn](https://github.com/shadcn) 的 Copper。[Apache License 2.0](LICENSE)
+灵感来自 [shadcn](https://github.com/shadcn) 的 Copper。[Apache License 2.0](LICENSE)
