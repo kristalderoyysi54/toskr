@@ -251,6 +251,7 @@ pub fn run() {
             commands::get_message_watch_captures,
             commands::locate_message_source,
             commands::message_watch_app_installed,
+            commands::detect_running_im_candidates,
             commands::set_message_watch_auto,
             commands::quick_look,
             commands::show_text_preview,

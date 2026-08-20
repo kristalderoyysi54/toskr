@@ -1243,7 +1243,7 @@ fn validate_domain_fields(state: &serde_json::Map<String, Value>) -> Result<(), 
         let object = message
             .as_object()
             .expect("record array was already validated");
-        if object.get("source").and_then(Value::as_str) != Some("tuitui")
+        if !is_message_source(object.get("source").and_then(Value::as_str))
             || !object
                 .get("conversationId")
                 .and_then(Value::as_str)
@@ -1294,10 +1294,15 @@ fn validate_domain_fields(state: &serde_json::Map<String, Value>) -> Result<(), 
     Ok(())
 }
 
+/// 消息来源是否受支持：中性标识 `im`；`tuitui` 为历史品牌值，仅为兼容旧备份保留。
+fn is_message_source(source: Option<&str>) -> bool {
+    matches!(source, Some("im" | "tuitui"))
+}
+
 fn validate_message_source_ref(value: &Value) -> bool {
     value.as_object().is_some_and(|object| {
         object.get("kind").and_then(Value::as_str) == Some("message")
-            && object.get("source").and_then(Value::as_str) == Some("tuitui")
+            && is_message_source(object.get("source").and_then(Value::as_str))
             && object
                 .get("conversationId")
                 .and_then(Value::as_str)
@@ -1771,10 +1776,10 @@ mod tests {
                     "createdAt": 1
                 }],
                 "messages": [{
-                    "id": "[\"tuitui\",\"g1\",\"m1\"]",
-                    "source": "tuitui",
-                    "sourceApp": "推推",
-                    "sourceBundle": "mac.im.qihoo.net",
+                    "id": "[\"im\",\"g1\",\"m1\"]",
+                    "source": "im",
+                    "sourceApp": "示例 IM",
+                    "sourceBundle": "com.example.im",
                     "conversationId": "g1",
                     "messageId": "m1",
                     "conversationName": "项目群",

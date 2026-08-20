@@ -6,11 +6,11 @@ describe("parseRichClipboard", () => {
   it("按 Geelib 图文顺序输出块，并把表格转换为 TSV", () => {
     const result = parseRichClipboard({
       sourceUrl:
-        "https://geelib.qihoo.net/geelib/project/requirement/requirementList?demandId=113708",
+        "https://geelib.example.com/geelib/project/requirement/requirementList?demandId=113708",
       plainText: "不应在有有效图片时覆盖 HTML 顺序",
       html: `
         <div>路径：【审批管理-商户注册】查看</div>
-        <img src="https://geelib.qihoo.net/files/image_6a424239ba540.png"
+        <img src="https://geelib.example.com/files/image_6a424239ba540.png"
              alt="image_6a424239ba540.png">
         <h2>一、商户类型&amp;商户子类型</h2>
         <img src="data:image/png;base64,QUJDRA==" alt="第二张图">
@@ -34,9 +34,9 @@ describe("parseRichClipboard", () => {
         { type: "imageRef", index: 2, alt: "尾图" },
       ],
       imageSources: [
-        "https://geelib.qihoo.net/files/image_6a424239ba540.png",
+        "https://geelib.example.com/files/image_6a424239ba540.png",
         "data:image/png;base64,QUJDRA==",
-        "https://geelib.qihoo.net/files/image_tail.jpeg",
+        "https://geelib.example.com/files/image_tail.jpeg",
       ],
       omittedImageCount: 0,
       omittedSchemes: [],
@@ -59,7 +59,7 @@ describe("parseRichClipboard", () => {
         <noscript><img src="https://evil.test/from-noscript.png"></noscript>
         <p>安全 <img src="javascript:alert(1)"> 正文</p>
         <img src="file:///Users/kai/secret.png">
-        <img src="blob:https://geelib.qihoo.net/id">
+        <img src="blob:https://geelib.example.com/id">
         <img src="data:image/svg+xml;base64,PHN2Zz4=">
         <img src="https://safe.test/icon.svg?download=1">
         <img src="https://safe.test/ok.png" onerror="fetch('/leak')" alt=" 可用   图片 ">

@@ -53,7 +53,7 @@ export default function SourceOverlayView() {
         </p>
         <div className="mt-auto flex items-center gap-1 text-micro text-muted-foreground">
           <EyeOff className="size-3" />
-          未打开会话 · 未改变推推当前选中状态
+          未打开会话 · 未改变IM当前选中状态
         </div>
       </section>
     </div>

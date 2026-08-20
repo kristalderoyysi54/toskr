@@ -211,7 +211,7 @@ pub fn locate_conversation(pid: i32, needle: &str) -> LocateOutcome {
         if app_el.is_null() {
             return LocateOutcome::NoList;
         }
-        // Electron/Chromium 网页树未展开时手动展开（推推实测常开；属性不支持时忽略）
+        // Electron/Chromium 网页树未展开时手动展开（目标 IM实测常开；属性不支持时忽略）
         for attr in ["AXManualAccessibility", "AXEnhancedUserInterface"] {
             let cf_attr = CFString::from_static_string(attr);
             let _ = AXUIElementSetAttributeValue(
@@ -286,7 +286,7 @@ fn row_in_list_view(row: &AxWindowFrame, list: &AxWindowFrame) -> bool {
     row.h >= 8.0 && row.y >= list.y - 4.0 && row.y + row.h <= list.y + list.h + 8.0
 }
 
-/// 按结构特征找会话列表容器（推推实测：窗口左侧、宽 ≥120、高 ≥ 窗口 35%、
+/// 按结构特征找会话列表容器（目标 IM实测：窗口左侧、宽 ≥120、高 ≥ 窗口 35%、
 /// 子项多——借此排除同为 AXList 的窄图标侧栏与横向页签条）。
 /// 命中的元素已 CFRetain，调用方负责释放。
 unsafe fn find_conversation_list(

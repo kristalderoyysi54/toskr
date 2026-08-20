@@ -12,7 +12,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("推推实验监听", () => {
+describe("IM实验监听", () => {
   it("笔记摘要保留群、发送者、命中原因、正文与唯一标识", () => {
     const message: MessageWatchCapture = {
       conversationId: "group-1",
@@ -32,7 +32,7 @@ describe("推推实验监听", () => {
     };
 
     const note = formatMessageWatchNote(message);
-    expect(note).toContain("推推 · 项目群");
+    expect(note).toContain("【项目群】");
     expect(note).toContain("关注的人 · @我 + 特别关注");
     expect(note).toContain("第一行\n第二行");
     expect(note).toContain("消息标识：message-1");
@@ -72,7 +72,7 @@ describe("推推实验监听", () => {
     vi.spyOn(console, "info").mockImplementation(() => {});
 
     const script = buildMessageWatchBridgeScript({
-      endpoint: "http://127.0.0.1:3210/v1/tuitui/test-token",
+      endpoint: "http://127.0.0.1:3210/v1/im/test-token",
       sessionStartedAtMs: 1_000,
     });
     new Function(script)();
@@ -132,7 +132,7 @@ describe("推推实验监听", () => {
 
     const script = buildMessageWatchBridgeScript(
       {
-        endpoint: "http://127.0.0.1:3210/v1/tuitui/test-token",
+        endpoint: "http://127.0.0.1:3210/v1/im/test-token",
         sessionStartedAtMs: 1_000,
       },
       "cdp"
@@ -149,7 +149,7 @@ describe("推推实验监听", () => {
     (fakeWindow.__toskrMessageWatchV1 as { stop: () => void }).stop();
   });
 
-  it("临时观察钩子透传推推原方法，并捕获其已归类的完整消息体", async () => {
+  it("临时观察钩子透传IM原方法，并捕获其已归类的完整消息体", async () => {
     const fetch = vi.fn().mockResolvedValue({ ok: true });
     const original = vi.fn();
     const fakeWindow = {
@@ -173,7 +173,7 @@ describe("推推实验监听", () => {
 
     new Function(
       buildMessageWatchBridgeScript({
-        endpoint: "http://127.0.0.1:3210/v1/tuitui/test-token",
+        endpoint: "http://127.0.0.1:3210/v1/im/test-token",
         sessionStartedAtMs: 1_000,
       })
     )();
@@ -185,8 +185,8 @@ describe("推推实验监听", () => {
       from_name: "关注的人",
       send_time: 2,
       msg_type: "1",
-      content: "由推推解析的完整正文",
-      msg_body: JSON.stringify({ dt: [{ txt: { v: "由推推解析的完整正文" } }] }),
+      content: "由IM解析的完整正文",
+      msg_body: JSON.stringify({ dt: [{ txt: { v: "由IM解析的完整正文" } }] }),
       untouched: { rich: true },
     };
     let deep: Record<string, unknown> = { leaf: "80 层后的原字段" };
@@ -198,7 +198,7 @@ describe("推推实验监听", () => {
     expect(original).toHaveBeenCalledWith(signal);
     expect(fetch).toHaveBeenCalledOnce();
     const body = JSON.parse(String((fetch.mock.calls[0][1] as RequestInit).body));
-    expect(body.text).toBe("由推推解析的完整正文");
+    expect(body.text).toBe("由IM解析的完整正文");
     expect(body.mentionedSelf).toBe(true);
     expect(body.raw.signal.msg_body).toBe(signal.msg_body);
     expect(body.raw.signal.untouched.rich).toBe(true);
@@ -231,7 +231,7 @@ describe("推推实验监听", () => {
 
     new Function(
       buildMessageWatchBridgeScript({
-        endpoint: "http://127.0.0.1:3210/v1/tuitui/test-token",
+        endpoint: "http://127.0.0.1:3210/v1/im/test-token",
         sessionStartedAtMs: 10_000,
       })
     )();
@@ -240,7 +240,7 @@ describe("推推实验监听", () => {
     (fakeWindow.__toskrMessageWatchV1 as { stop: () => void }).stop();
   });
 
-  it("Toskr 关闭接收端后，心跳会停止观察并恢复推推原方法", async () => {
+  it("Toskr 关闭接收端后，心跳会停止观察并恢复IM原方法", async () => {
     vi.useFakeTimers();
     const original = vi.fn();
     const fetch = vi.fn().mockResolvedValue({ ok: false, status: 410 });
@@ -262,7 +262,7 @@ describe("推推实验监听", () => {
 
     new Function(
       buildMessageWatchBridgeScript({
-        endpoint: "http://127.0.0.1:3210/v1/tuitui/test-token",
+        endpoint: "http://127.0.0.1:3210/v1/im/test-token",
         sessionStartedAtMs: 1_000,
       })
     )();

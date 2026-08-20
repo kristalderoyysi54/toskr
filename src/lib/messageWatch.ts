@@ -7,13 +7,6 @@ import {
   type MessageWatchRule,
 } from "@/lib/messages";
 
-const SOURCE_BUNDLE = "mac.im.qihoo.net";
-
-export const MESSAGE_WATCH_SOURCE = {
-  app: "推推",
-  bundle: SOURCE_BUNDLE,
-} as const;
-
 function cleanLabel(value: string | null | undefined, fallback: string): string {
   const clean = value?.replace(/[\r\n\t]+/g, " ").trim();
   return clean || fallback;
@@ -36,11 +29,11 @@ export function formatMessageWatchNote(message: MessageWatchCapture): string {
   const body = message.text.trim() || `[${message.messageType || "非文本消息"}]`;
   const occurredAt = message.occurredAtMs ?? message.receivedAtMs;
   const stamp = new Date(occurredAt).toLocaleString("zh-CN", { hour12: false });
-  return `【推推 · ${group}】\n${sender} · ${reason} · ${stamp}\n${body}\n\n消息标识：${message.messageId}`;
+  return `【${group}】\n${sender} · ${reason} · ${stamp}\n${body}\n\n消息标识：${message.messageId}`;
 }
 
 /**
- * 复制给推推 DevTools Console 的临时桥。它只读 window.__ccImStore__ / 
+ * 复制给目标 IM 的 DevTools Console 的临时桥。它只读 window.__ccImStore__ /
  * window.__ccMainStore__，不切会话、不改 readUids、不调用发送接口。
  */
 export type MessageWatchTransport = "http" | "cdp";
@@ -587,7 +580,7 @@ export function buildMessageWatchBridgeScript(
       return { active: !stopped, pending: pending.length, delivered: delivered.size, ignored: ignored.size };
     },
   };
-  console.info("[Toskr] 推推只读消息桥已启动；未切换会话、未修改已读状态、未调用发送接口。");
+  console.info("[Toskr] IM 只读消息桥已启动；未切换会话、未修改已读状态、未调用发送接口。");
   return window.__toskrMessageWatchV1.status();
 })()`;
 }

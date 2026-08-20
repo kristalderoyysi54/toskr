@@ -153,7 +153,7 @@ export function MessagePage({
         maxTokens: 500,
       });
       useNotesStore.getState().saveMessageAiDraft(message.id, draft);
-      tip("ok", "回复草稿已生成；不会自动发送到推推");
+      tip("ok", "回复草稿已生成；不会自动发送到IM");
     } catch (error) {
       tip("warn", aiErrorTip(error));
     } finally {
@@ -391,8 +391,8 @@ function MessageCard({
   const showConversation = Boolean(conversation) && conversation !== sender;
   const done = message.status === "done" || message.status === "archived";
   const overlay: MessageSourceOverlayPayload = {
-    sourceApp: message.sourceApp,
-    sourceBundle: message.sourceBundle,
+    sourceApp: message.sourceApp ?? "",
+    sourceBundle: message.sourceBundle ?? "",
     conversationName: conversation,
     senderName: sender,
     text: body,
@@ -563,7 +563,7 @@ function MessageCard({
         )}
       >
         <IconButton
-          label="在推推中定位该群（滚动会话列表并高亮；不打开会话）"
+          label="在IM中定位该群（滚动会话列表并高亮；不打开会话）"
           size="xs"
           surface
           onClick={() =>

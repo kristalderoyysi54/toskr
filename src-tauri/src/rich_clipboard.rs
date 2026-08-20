@@ -805,7 +805,7 @@ fn public_ip(ip: IpAddr) -> bool {
 /// Surge 等增强 DNS（Fake-IP 模式）会把 HTTPS 域名映射到 RFC 2544 benchmark 段，
 /// 实际去向由代理按 TLS SNI 域名转发；无代理的机器该段不可路由，连接自然失败。
 /// 因此只要目标是域名形态的 HTTPS 就允许该段——本地应用（IM 等）复制的图文没有
-/// 网页 sourceUrl，同样受 Fake-IP 影响（实证：360 推推 im.live.360.cn → 198.18.x）。
+/// 网页 sourceUrl，同样受 Fake-IP 影响（某些 IM 客户端会把 im.live.<厂商> 域名解析成 198.18.x）。
 /// URL 直接写 benchmark IP 或走 HTTP 仍拒绝。TLS SNI 与手动逐跳 DNS 钉住继续
 /// 生效，因此不会放宽 loopback/RFC1918/link-local/metadata。
 fn fake_ip_proxy_allowed(url: &Url) -> bool {

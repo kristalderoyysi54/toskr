@@ -1,4 +1,5 @@
-export const MESSAGE_SOURCE = "tuitui" as const;
+/** 消息来源的中性标识（不绑定任何具体 IM 品牌）；旧值 "tuitui" 由持久化迁移转来。 */
+export const MESSAGE_SOURCE = "im" as const;
 
 export type MessageStatus = "new" | "waiting" | "done" | "archived";
 
@@ -37,8 +38,9 @@ export interface MessageSourceRef {
 export interface MessageItem {
   id: string;
   source: typeof MESSAGE_SOURCE;
-  sourceApp: "推推";
-  sourceBundle: "mac.im.qihoo.net";
+  /** 来源 IM 的显示名 / bundle：捕获时由用户指定的 profile 注入，历史数据保留原值。 */
+  sourceApp?: string;
+  sourceBundle?: string;
   conversationId: string;
   messageId: string;
   conversationName: string | null;
@@ -61,6 +63,8 @@ export interface MessageItem {
 }
 
 export interface MessageCaptureLike {
+  sourceApp?: string;
+  sourceBundle?: string;
   conversationId: string;
   messageId: string;
   conversationName: string | null;
@@ -192,8 +196,8 @@ export function messageItemFromCapture(capture: MessageCaptureLike): MessageItem
   return {
     id: messageSourceKey(MESSAGE_SOURCE, capture.conversationId, capture.messageId),
     source: MESSAGE_SOURCE,
-    sourceApp: "推推",
-    sourceBundle: "mac.im.qihoo.net",
+    sourceApp: capture.sourceApp,
+    sourceBundle: capture.sourceBundle,
     conversationId: capture.conversationId,
     messageId: capture.messageId,
     conversationName: capture.conversationName,
@@ -249,7 +253,7 @@ export function messageSourceRef(message: MessageItem): MessageSourceRef {
 }
 
 export function messageTaskTitle(message: MessageItem): string {
-  const group = message.conversationName?.trim() || "推推群消息";
+  const group = message.conversationName?.trim() || "群消息";
   const body = message.text.trim().replace(/\s+/g, " ");
   return body ? `[${group}] ${[...body].slice(0, 80).join("")}` : `[${group}] 处理消息`;
 }
@@ -260,7 +264,7 @@ export function messageTaskNote(message: MessageItem): string {
     hour12: false,
   });
   return [
-    `来源：推推 · ${message.conversationName || message.conversationId}`,
+    `来源：${message.sourceApp || "IM"} · ${message.conversationName || message.conversationId}`,
     `发送者：${sender}`,
     `时间：${stamp}`,
     `消息标识：${message.messageId}`,

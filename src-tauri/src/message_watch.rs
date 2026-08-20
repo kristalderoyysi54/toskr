@@ -1,8 +1,8 @@
-//! 推推实验性消息桥。
+//! 实验性 IM 消息桥。
 //!
-//! 只在用户显式开启后监听随机 loopback 端口；推推 DevTools 中的只读脚本把
+//! 只在用户显式开启后监听随机 loopback 端口；目标 IM 的 DevTools 只读脚本把
 //! 已被客户端判定为「@我 / 特别关注」的新消息送到这里。原始对象先落 JSONL，
-//! 再向主 WebView 发摘要事件。模块不操作推推窗口，也不调用任何已读/发送 API。
+//! 再向主 WebView 发摘要事件。模块不操作 IM 窗口，也不调用任何已读/发送 API。
 
 use std::collections::{HashSet, VecDeque};
 use std::fs::{File, OpenOptions};
@@ -21,7 +21,9 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager};
 
 pub const MESSAGE_WATCH_EVENT: &str = "toskr://message-watch";
-pub const LEDGER_FILE: &str = "toskr-tuitui-message-watch.jsonl";
+pub const LEDGER_FILE: &str = "toskr-im-message-watch.jsonl";
+/// 旧版账本文件名，仅供启动时一次性迁移到 `LEDGER_FILE`——全代码仅此一处引用。
+const LEGACY_LEDGER_FILE: &str = "toskr-tuitui-message-watch.jsonl";
 
 const BRIDGE_VERSION: u8 = 1;
 const MAX_HEADER_BYTES: usize = 16 * 1024;
@@ -186,6 +188,18 @@ fn ledger_path(app: &AppHandle) -> PathBuf {
     crate::storage::data_dir(app).join(LEDGER_FILE)
 }
 
+/// 一次性把旧账本迁移到中性文件名：仅当新文件尚不存在且旧文件是普通文件时原子改名。
+fn migrate_legacy_ledger(root: &Path) {
+    let current = root.join(LEDGER_FILE);
+    if current.exists() {
+        return;
+    }
+    let legacy = root.join(LEGACY_LEDGER_FILE);
+    if legacy.is_file() {
+        let _ = std::fs::rename(&legacy, &current);
+    }
+}
+
 fn status(app: &AppHandle, runtime: &Runtime) -> MessageWatchStatus {
     MessageWatchStatus {
         enabled: runtime.enabled,
@@ -211,7 +225,7 @@ pub fn bridge_info(app: &AppHandle) -> Result<MessageWatchBridgeInfo, String> {
     let state = app.state::<MessageWatchState>();
     let runtime = state.runtime.lock().unwrap();
     if !runtime.enabled {
-        return Err("请先开启推推实验监听".into());
+        return Err("请先开启实验消息监听".into());
     }
     Ok(MessageWatchBridgeInfo {
         endpoint: runtime
@@ -230,7 +244,7 @@ pub fn set_enabled(app: &AppHandle, enabled: bool) -> Result<MessageWatchStatus,
         runtime.endpoint = None;
         runtime.renderer_connected = false;
         runtime.transport = None;
-        crate::diag::push(app, "推推实验监听已关闭");
+        crate::diag::push(app, "实验消息监听已关闭");
         return Ok(status(app, &runtime));
     }
 
@@ -251,7 +265,7 @@ pub fn set_enabled(app: &AppHandle, enabled: bool) -> Result<MessageWatchStatus,
         .map_err(|error| format!("无法读取本地消息桥地址：{error}"))?
         .port();
     let token = random_token()?;
-    let endpoint = format!("http://127.0.0.1:{port}/v1/tuitui/{token}");
+    let endpoint = format!("http://127.0.0.1:{port}/v1/im/{token}");
     let started_at_ms = now_ms();
     let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
 
@@ -270,7 +284,7 @@ pub fn set_enabled(app: &AppHandle, enabled: bool) -> Result<MessageWatchStatus,
     thread::spawn(move || run_listener(handle, listener, token, generation));
     crate::diag::push(
         app,
-        "推推实验监听已开启（仅本机回环；等待 DevTools 只读桥）",
+        "实验消息监听已开启（仅本机回环；等待 DevTools 只读桥）",
     );
     Ok(current_status(app))
 }
@@ -336,7 +350,7 @@ fn run_listener(app: AppHandle, listener: TcpListener, token: String, generation
                 runtime.last_error = Some(format!("本地接收器异常：{error}"));
                 runtime.enabled = false;
                 runtime.endpoint = None;
-                crate::diag::push(&app, "推推实验监听接收器已停止");
+                crate::diag::push(&app, "实验消息监听接收器已停止");
                 return;
             }
         }
@@ -491,23 +505,24 @@ fn capture_from_message(message: IncomingMessage, received_at_ms: u64) -> Messag
     }
 }
 
-/// 从 append-only 原始账本重建结构化投影。只读取本地文件，不触碰推推进程。
+/// 从 append-only 原始账本重建结构化投影。只读取本地文件，不触碰 IM 进程。
 pub fn recent_captures(app: &AppHandle, limit: usize) -> Result<Vec<MessageWatchCapture>, String> {
     let limit = limit.clamp(1, 2_000);
     crate::storage::with_active_data_dir(app, |root| {
+        migrate_legacy_ledger(root);
         let path = root.join(LEDGER_FILE);
         match std::fs::symlink_metadata(&path) {
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(format!("无法读取推推消息账本：{error}")),
+            Err(error) => return Err(format!("无法读取消息账本：{error}")),
             Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-                return Err("推推消息账本路径不是普通文件".into())
+                return Err("消息账本路径不是普通文件".into())
             }
             Ok(_) => {}
         }
-        let file = File::open(&path).map_err(|error| format!("无法读取推推消息账本：{error}"))?;
+        let file = File::open(&path).map_err(|error| format!("无法读取消息账本：{error}"))?;
         let mut recent = VecDeque::with_capacity(limit);
         for line in BufReader::new(file).lines() {
-            let line = line.map_err(|error| format!("读取推推消息账本失败：{error}"))?;
+            let line = line.map_err(|error| format!("读取消息账本失败：{error}"))?;
             let Ok(record) = serde_json::from_str::<StoredLedgerRecord>(&line) else {
                 // 崩溃时末行可能不完整；原账本不修改，投影跳过坏行继续恢复其余消息。
                 continue;
@@ -533,10 +548,11 @@ fn append_to_dir(
     message: &IncomingMessage,
     received_at_ms: u64,
 ) -> Result<(), String> {
+    migrate_legacy_ledger(root);
     let path = root.join(LEDGER_FILE);
     if let Ok(metadata) = std::fs::symlink_metadata(&path) {
         if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err("推推消息账本路径不是普通文件".into());
+            return Err("消息账本路径不是普通文件".into());
         }
     }
     let record = LedgerRecord {
@@ -556,14 +572,14 @@ fn append_to_dir(
     }
     let mut file = options
         .open(&path)
-        .map_err(|error| format!("无法写入推推消息账本：{error}"))?;
+        .map_err(|error| format!("无法写入消息账本：{error}"))?;
     #[cfg(unix)]
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-        .map_err(|error| format!("无法收紧推推消息账本权限：{error}"))?;
+        .map_err(|error| format!("无法收紧消息账本权限：{error}"))?;
     file.write_all(&bytes)
         .and_then(|_| file.write_all(b"\n"))
         .and_then(|_| file.sync_data())
-        .map_err(|error| format!("推推消息账本落盘失败：{error}"))
+        .map_err(|error| format!("消息账本落盘失败：{error}"))
 }
 
 fn remember(runtime: &mut Runtime, key: String) {
@@ -613,7 +629,7 @@ pub(crate) fn accept_message(
         runtime.last_error = None;
     }
     let _ = app.emit(MESSAGE_WATCH_EVENT, capture);
-    crate::diag::push(app, "推推实验监听已完整落盘 1 条消息");
+    crate::diag::push(app, "实验消息监听已完整落盘 1 条消息");
     Ok(true)
 }
 
@@ -629,7 +645,7 @@ fn handle_connection(app: &AppHandle, mut stream: TcpStream, token: &str, genera
             return;
         }
     };
-    let expected_path = format!("/v1/tuitui/{token}");
+    let expected_path = format!("/v1/im/{token}");
     if request.path != expected_path {
         write_response(&mut stream, "404 Not Found", "{\"error\":\"not found\"}");
         return;
@@ -778,7 +794,7 @@ mod tests {
             let mut stream = TcpStream::connect(address).unwrap();
             write!(
                 stream,
-                "POST /v1/tuitui/token HTTP/1.1\r\nContent-Length: {}\r\n\r\n",
+                "POST /v1/im/token HTTP/1.1\r\nContent-Length: {}\r\n\r\n",
                 body.len()
             )
             .unwrap();
@@ -788,7 +804,7 @@ mod tests {
         let request = read_request(&mut stream).unwrap();
         sender.join().unwrap();
         assert_eq!(request.method, "POST");
-        assert_eq!(request.path, "/v1/tuitui/token");
+        assert_eq!(request.path, "/v1/im/token");
         assert_eq!(request.body, expected);
     }
 
@@ -803,12 +819,12 @@ mod tests {
 
         thread::sleep(Duration::from_millis(50));
         sender
-            .write_all(b"GET /v1/tuitui/token HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            .write_all(b"GET /v1/im/token HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
             .unwrap();
 
         let request = reader.join().unwrap().unwrap();
         assert_eq!(request.method, "GET");
-        assert_eq!(request.path, "/v1/tuitui/token");
+        assert_eq!(request.path, "/v1/im/token");
         assert!(request.body.is_empty());
     }
 }

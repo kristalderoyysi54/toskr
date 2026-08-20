@@ -2013,7 +2013,7 @@ pub fn locate_source_conversation(
     };
     crate::diag::push(
         app,
-        format!("推推定位 结果={kind} 耗时={}ms", started.elapsed().as_millis()),
+        format!("目标 IM定位 结果={kind} 耗时={}ms", started.elapsed().as_millis()),
     );
     match outcome {
         ax::LocateOutcome::Row { row, .. } => {

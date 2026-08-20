@@ -51,6 +51,7 @@ import {
 } from "@/lib/onboarding";
 import type { SecretKey, SecretMeta } from "@/lib/secret/secret";
 import {
+  MESSAGE_SOURCE,
   mergeMessageCapture,
   messageItemFromCapture,
   messageSourceRef,
@@ -63,6 +64,7 @@ import {
   type MessageStatus,
   type MessageWatchRule,
 } from "@/lib/messages";
+import { getImProfile } from "@/lib/imProfile";
 import { tauriStateStorage } from "./persistStorage";
 
 export type { PromptGroup, PromptSnippet, TargetProfile } from "@/lib/targetProfiles";
@@ -85,7 +87,7 @@ export type PageId = "notes" | "clipboard" | "tasks" | "secret";
 
 /** 页签默认顺序（剪贴最高频，居首；秘文默认关闭故垫底）。 */
 export const DEFAULT_PAGE_ORDER: PageId[] = ["clipboard", "notes", "tasks", "secret"];
-export const STORE_VERSION = 20;
+export const STORE_VERSION = 21;
 
 /**
  * 归一化页签顺序：去重、剔除未知项、补齐缺失页（按默认序追加）。
@@ -515,7 +517,7 @@ export interface Settings {
   secretDefaultKeyId: string | null;
   /** 秘文卡揭示明文后自动重新遮罩的超时（ms）；0 = 常驻不自动遮罩。 */
   secretRevealTimeoutMs: number;
-  /** 推推组合关注规则；同维度 OR、跨非空维度 AND。 */
+  /** IM 组合关注规则；同维度 OR、跨非空维度 AND。 */
   messageWatchRules: MessageWatchRule[];
   onboarding: OnboardingState;
 }
@@ -940,7 +942,7 @@ export interface NotesState {
   reorderNotes: (activeId: string, overId: string) => void;
 
   addSection: (name?: string) => void;
-  /** 找到同名分组返回其 id，否则新建并返回新 id（来源自动归组用，如推推消息监听）。 */
+  /** 找到同名分组返回其 id，否则新建并返回新 id（来源自动归组用，如 IM 消息监听）。 */
   ensureSection: (name: string) => string;
   renameSection: (id: string, name: string) => void;
   setSectionColor: (id: string, color?: string) => void;
@@ -1613,7 +1615,7 @@ function normalizeMessageSourceRef(value: unknown): MessageSourceRef | undefined
   const ref = value as Partial<MessageSourceRef>;
   if (
     ref.kind !== "message" ||
-    ref.source !== "tuitui" ||
+    ref.source !== MESSAGE_SOURCE ||
     typeof ref.conversationId !== "string" ||
     !ref.conversationId ||
     typeof ref.messageId !== "string" ||
@@ -1624,7 +1626,7 @@ function normalizeMessageSourceRef(value: unknown): MessageSourceRef | undefined
   }
   return {
     kind: "message",
-    source: "tuitui",
+    source: MESSAGE_SOURCE,
     conversationId: ref.conversationId,
     conversationName:
       typeof ref.conversationName === "string" ? ref.conversationName : null,
@@ -1636,7 +1638,7 @@ function normalizeMessageSourceRef(value: unknown): MessageSourceRef | undefined
 
 function normalizeMessageRecord(message: MessageItem): MessageItem {
   if (
-    message.source !== "tuitui" ||
+    message.source !== MESSAGE_SOURCE ||
     typeof message.conversationId !== "string" ||
     !message.conversationId ||
     typeof message.messageId !== "string" ||
@@ -1924,12 +1926,41 @@ export function migratePersistedState(
     } as Settings;
   }
   if (version < 20) {
-    // v20 将推推监听从普通笔记提升为独立消息域；旧笔记不擅自删除。
+    // v20 将 IM 监听从普通笔记提升为独立消息域；旧笔记不擅自删除。
     p.messages = [];
     p.settings = {
       ...(p.settings ?? {}),
       messageWatchRules: [],
     } as Settings;
+  }
+  if (version < 21) {
+    // v21：消息来源从历史品牌标识迁移到中性 "im"；重写受影响的 message.id 与
+    // task.sourceRef，使其能通过下方 normalize* 的来源校验。旧数据零残留。
+    const remapId = (id: string): string => {
+      try {
+        const parts = JSON.parse(id) as unknown[];
+        if (Array.isArray(parts) && parts.length === 3 && parts[0] === "tuitui") {
+          return JSON.stringify([MESSAGE_SOURCE, parts[1], parts[2]]);
+        }
+      } catch {
+        // 非标准 id 原样保留。
+      }
+      return id;
+    };
+    if (Array.isArray(p.messages)) {
+      p.messages = p.messages.map((message) => {
+        if ((message as { source?: string }).source !== "tuitui") return message;
+        const record = message as MessageItem;
+        return { ...record, id: remapId(record.id), source: MESSAGE_SOURCE };
+      });
+    }
+    if (Array.isArray(p.tasks)) {
+      p.tasks = p.tasks.map((task) => {
+        const ref = (task as { sourceRef?: { source?: string } }).sourceRef;
+        if (ref?.source !== "tuitui") return task;
+        return { ...(task as Task), sourceRef: { ...ref, source: MESSAGE_SOURCE } } as Task;
+      });
+    }
   }
   const sections = dedupeById<Section>(p.sections).map((section) => ({
     ...section,
@@ -3165,10 +3196,20 @@ export const useNotesStore = create<NotesState>()(
       ingestMessageCaptures: (captures) => {
         if (!captures.length) return { added: 0, updated: 0, ids: [] };
         const byId = new Map(get().messages.map((message) => [message.id, message]));
+        // 来源应用元数据由用户指定的 profile 注入（Rust 捕获本身不带品牌信息）；
+        // 历史重放的 capture 已带 sourceApp 时保留原值。
+        const profile = getImProfile();
         let added = 0;
         let updated = 0;
         const ids: string[] = [];
-        for (const capture of captures) {
+        for (const raw of captures) {
+          const capture: MessageCaptureLike = profile
+            ? {
+                ...raw,
+                sourceApp: raw.sourceApp ?? profile.appName,
+                sourceBundle: raw.sourceBundle ?? profile.bundleId,
+              }
+            : raw;
           const incoming = messageItemFromCapture(capture);
           const current = byId.get(incoming.id);
           byId.set(incoming.id, mergeMessageCapture(current, capture));

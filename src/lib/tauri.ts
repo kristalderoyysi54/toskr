@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { DeliveryEvent } from "@/lib/deliveryActivityCore";
 import type { MessageContextItem } from "@/lib/messages";
+import type { ImProfile } from "@/lib/imProfile";
 
 /** Rust 侧双击触发键事件。 */
 export const TRIGGER_EVENT = "toskr://trigger";
@@ -24,7 +25,7 @@ export const STEALTH_EVENT = "toskr://stealth-changed";
 export const CLIP_PAUSE_EVENT = "toskr://clip-pause-changed";
 /** 剪贴板历史 watcher → 主窗口入库。 */
 export const CLIP_EVENT = "toskr://clip";
-/** 推推 DevTools 只读桥 → 主窗口摘要入库；完整原始对象已先写本地账本。 */
+/** 目标 IM DevTools 只读桥 → 主窗口摘要入库；完整原始对象已先写本地账本。 */
 export const MESSAGE_WATCH_EVENT = "toskr://message-watch";
 /** Rust → 只读来源浮层：贴在 IM 窗口旁，不激活、不接收点击。 */
 export const SOURCE_OVERLAY_EVENT = "toskr://source-overlay";
@@ -117,6 +118,13 @@ export interface MessageWatchCapture {
   text: string;
   /** 捕获时客户端内存中已经存在的前文，不触发拉取或切换会话。 */
   context: MessageContextItem[];
+}
+
+/** 探测到的候选 IM（供用户确认监听目标）；字段与 Rust focus::RunningApp 对应。 */
+export interface ImCandidate {
+  name: string;
+  bundleId: string;
+  binPath: string;
 }
 
 export interface MessageSourceOverlayPayload {
@@ -752,13 +760,17 @@ export const api = {
     invoke<MessageWatchBridgeInfo>("get_message_watch_bridge_info"),
   getMessageWatchCaptures: (limit = 1_000) =>
     invoke<MessageWatchCapture[]>("get_message_watch_captures", { limit }),
-  /** 在推推中定位会话：滚动会话列表到该群并高亮；不打开会话、不改已读。 */
+  /** 在目标 IM中定位会话：滚动会话列表到该群并高亮；不打开会话、不改已读。 */
   locateMessageSource: (payload: MessageSourceOverlayPayload) =>
     invoke<void>("locate_message_source", { payload }),
-  /** 消息监听的兼容 IM 是否已安装（设置页前置检查）。 */
-  messageWatchAppInstalled: () => invoke<boolean>("message_watch_app_installed"),
-  setMessageWatchAuto: (enabled: boolean, script?: string) =>
-    invoke<MessageWatchStatus>("set_message_watch_auto", { enabled, script }),
+  /** 指定 bundle 的目标 IM 是否已安装（设置页前置检查）。 */
+  messageWatchAppInstalled: (bundleId: string) =>
+    invoke<boolean>("message_watch_app_installed", { bundleId }),
+  /** 探测当前运行的候选 IM，供用户确认监听目标（代码不预置任何具体应用）。 */
+  detectRunningImCandidates: () =>
+    invoke<ImCandidate[]>("detect_running_im_candidates"),
+  setMessageWatchAuto: (enabled: boolean, script?: string, profile?: ImProfile) =>
+    invoke<MessageWatchStatus>("set_message_watch_auto", { enabled, script, profile }),
   setClipRules: (
     ignoreConcealed: boolean,
     ignoreTransient: boolean,
