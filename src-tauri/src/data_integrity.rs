@@ -22,7 +22,7 @@ use crate::activity::{
 };
 use crate::storage::{DATA_FILE, MEDIA_DIR};
 
-pub const MAX_STORE_VERSION: u64 = 20;
+pub const MAX_STORE_VERSION: u64 = 21;
 const MISSING_REVISION: &str = "missing";
 const MEDIA_GC_FILE: &str = "toskr-media-gc.json";
 const DATA_JOURNAL_FILE: &str = "toskr-data-transaction.json";
@@ -3809,6 +3809,25 @@ mod tests {
     use std::os::unix::fs::{symlink, PermissionsExt};
     use tempfile::tempdir;
 
+    /// 前端 notesStore.ts 升 STORE_VERSION 时若漏改本文件的 MAX_STORE_VERSION，
+    /// 新数据会在下次启动被判 Unsupported、整库锁只读（v0.19.2 事故）。
+    #[test]
+    fn max_store_version_matches_frontend_store_version() {
+        let source = fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/store/notesStore.ts"),
+        )
+        .expect("读取前端 notesStore.ts");
+        let frontend: u64 = source
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("export const STORE_VERSION = "))
+            .and_then(|rest| rest.trim_end_matches(';').trim().parse().ok())
+            .expect("notesStore.ts 中应有 export const STORE_VERSION = <n>;");
+        assert_eq!(
+            MAX_STORE_VERSION, frontend,
+            "MAX_STORE_VERSION 必须与前端 STORE_VERSION 同步升级"
+        );
+    }
+
     #[test]
     fn inspection_distinguishes_empty_and_non_toskr_directories() {
         let root = tempdir().unwrap();
@@ -4074,7 +4093,7 @@ mod tests {
                 "activationWithin60s": null
             }
         });
-        assert_eq!(MAX_STORE_VERSION, 20);
+        assert_eq!(MAX_STORE_VERSION, 21);
         assert!(validate_settings_value_for_version(
             Some(&valid),
             MAX_STORE_VERSION
