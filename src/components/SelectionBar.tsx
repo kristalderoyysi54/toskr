@@ -1,4 +1,4 @@
-import { ChevronDown, Merge, Send, Tag, Trash2, X } from "lucide-react";
+import { ChevronDown, Inbox, Merge, Send, Tag, Trash2, X } from "lucide-react";
 import { useMemo } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,7 @@ import {
 import {
   deleteNotesWithUndo,
   mergeCheckedWithUndo,
+  moveClipsToNotesWithUndo,
   sendCheckedToChat,
 } from "@/lib/actions";
 import { currentDataGeneration } from "@/lib/dataGeneration";
@@ -51,6 +52,7 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
   const settings = useNotesStore((s) => s.settings);
   const page = useUIStore((s) => s.page);
   const pinned = useUIStore((s) => s.pinned);
+  const detailEditorNoteId = useUIStore((s) => s.detailEditorNoteId);
   const preflightMode = useDeliveryStore((s) => s.preflightMode);
   const targetStatus = useTargetStore((s) => s.status);
   const targetSnapshot = useTargetStore((s) => s.snapshot);
@@ -121,6 +123,10 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
   );
   const nativeTargetReady = resolution.isTargetReady;
   const internalSendAvailable = page === "clipboard";
+  // 主按钮标签跟发送漏斗同口径：预检 always 模式会跳过编辑器插入直接外发，
+  // 此时即便详情窗开着也不能标「添加到卡片」；执行层仍以窗口实测可见性为准
+  const editorInsertLikely =
+    internalSendAvailable && !!detailEditorNoteId && preflightMode !== "always";
   const targetReady =
     internalSendAvailable ||
     (nativeTargetReady && !profileOverrideNeedsConfirmation);
@@ -133,8 +139,8 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
     [resolution.promptGroup.id, settings.promptSnippets]
   );
   const count = checkedIds.length;
-  // 只在「当前页存在选中项」时显示：笔记页的选中切到剪贴板页不显示，
-  // 切回笔记页恢复（反之亦然；跨域混选则两页都显示）
+  // 只在「当前页存在选中项」时显示。切页已统一清空选择（App 内 uiStore
+  // 订阅），此过滤作为防御层保留：任何残留勾选都不该在无关页面亮出批量条
   const relevantHere = useMemo(
     () => {
       if (page === "tasks") return false;
@@ -151,6 +157,13 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
     () => orderedCheckedNotes({ notes, checkedIds }),
     [checkedIds, notes]
   );
+  /** 选中集全为剪贴卡：亮「移入笔记」批量钮，合并语义为「组合新卡」。 */
+  const allClips =
+    orderedSelection.length > 0 &&
+    orderedSelection.every((n) => n.sectionId === CLIPBOARD_ID);
+  // 切页清选后正常操作已到不了混选；防御性禁用与 store 侧拦截同口径
+  const mixedDomains =
+    !allClips && orderedSelection.some((n) => n.sectionId === CLIPBOARD_ID);
   const previewDraft = useMemo(
     () => {
       // 单选也出条（2026-08 曾试过「仅 ≥2 出现」，用户否决恢复）：
@@ -230,9 +243,27 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
       <div className="ml-auto flex items-center gap-0.5">
         {!compact && (
           <>
-            <IconAction label="合并笔记" disabled={count < 2} onClick={mergeCheckedWithUndo}>
+            <IconAction
+              label={
+                mixedDomains
+                  ? "剪贴卡与笔记不能混合合并"
+                  : allClips
+                    ? "合并为新卡（原剪贴卡保留）"
+                    : "合并笔记"
+              }
+              disabled={count < 2 || mixedDomains}
+              onClick={mergeCheckedWithUndo}
+            >
               <Merge className="size-3.5" />
             </IconAction>
+            {allClips && (
+              <IconAction
+                label="移入笔记"
+                onClick={() => moveClipsToNotesWithUndo(orderedIds())}
+              >
+                <Inbox className="size-3.5" />
+              </IconAction>
+            )}
             {/* 「标记完成」不进批量条（2026-08-18 用户指定精简）：
                 单卡右键菜单与快捷键 D 仍可标完成 */}
             <SimpleMenu
@@ -288,8 +319,10 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
                 size="xs"
                 disabled={!targetReady}
                 aria-label={
-                  internalSendAvailable
-                    ? "优先添加到当前卡片编辑器，否则发送到当前目标"
+                  editorInsertLikely
+                    ? "添加到打开的卡片编辑器"
+                    : internalSendAvailable
+                    ? "发送到当前目标；打开卡片编辑器时将改为添加进该卡"
                     : targetReady
                     ? `发送到当前目标，发送方案 ${resolution.profile.name}，粘贴后动作 ${ENTER_POLICY_STATUS_LABEL[resolution.profile.enterPolicy]}`
                     : profileOverrideNeedsConfirmation
@@ -300,14 +333,19 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
                 onClick={() => sendCheckedToChat()}
               >
                 <Send className="size-3" />
-                {/* 短文案保单行（2026-08-18 用户指定）：完整语义在 aria-label 与悬停预览 */}
-                发送
+                {/* 短文案保单行（2026-08-18 用户指定）；目的地必须如实：
+                    编辑器开着时内容进卡片而非外发（2026-08-20 收口） */}
+                {editorInsertLikely ? "添加到卡片" : "发送"}
                 {/* token-exception: 9px 为重塑前原始尺寸，用户指定还原 */}
                 <Kbd inline className="ml-0.5 text-[9px]">⌘⏎</Kbd>
               </Button>
             </TooltipTrigger>
             <TooltipContent side="top" className="max-w-72">
-              <p className="mb-1 text-micro font-medium opacity-70">将粘贴以下内容：</p>
+              <p className="mb-1 text-micro font-medium opacity-70">
+                {editorInsertLikely
+                  ? "将添加以下内容到打开的卡片："
+                  : "将粘贴以下内容："}
+              </p>
               <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words font-mono text-micro leading-relaxed">
                 {previewDraft.finalText}
               </pre>

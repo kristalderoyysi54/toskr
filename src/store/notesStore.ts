@@ -930,6 +930,13 @@ export interface NotesState {
 
   mergeNotes: (ids: string[]) => void;
   moveNotes: (ids: string[], sectionId: string) => void;
+  /**
+   * 剪贴卡收编为正式笔记（移动到收件箱，可撤销 snapshot）：done 清零、keep
+   * 不带（两域语义不同：剪贴=固定不清理，笔记=常用），并从勾选集摘除——
+   * 移走的卡已不在剪贴页可见，残留勾选会被快捷键作用于不可见卡片。
+   * 返回实际移动条数（非剪贴卡入参被忽略）。
+   */
+  moveClipsToNotes: (ids: string[]) => number;
   reorderNotes: (activeId: string, overId: string) => void;
 
   addSection: (name?: string) => void;
@@ -2606,6 +2613,12 @@ export const useNotesStore = create<NotesState>()(
         const notes = get().notes;
         const ordered = notes.filter((n) => pick.has(n.id));
         if (ordered.length < 2) return;
+        // 防御性拦截（UI 层另有提示）：剪贴域=组合新卡不消费原卡，笔记域=
+        // 就地合并消费其余卡，两种事务不可混合——混选静默不动任何数据
+        const clipCount = ordered.filter(
+          (n) => n.sectionId === CLIPBOARD_ID
+        ).length;
+        if (clipCount > 0 && clipCount < ordered.length) return;
         get().snapshot(`合并 ${ordered.length} 条`);
 
         // 列表新卡置顶，合并内容按列表底→顶（＝捕获先后）拼接：连续复制的
@@ -2719,6 +2732,27 @@ export const useNotesStore = create<NotesState>()(
             target.has(n.id) ? { ...n, sectionId } : n
           ),
         });
+      },
+
+      moveClipsToNotes: (ids) => {
+        const target = new Set(ids);
+        const picked = get().notes.filter(
+          (n) => target.has(n.id) && n.sectionId === CLIPBOARD_ID
+        );
+        if (!picked.length) return 0;
+        get().snapshot(
+          picked.length === 1 ? "移入笔记" : `移入笔记 ${picked.length} 条`
+        );
+        const moved = new Set(picked.map((n) => n.id));
+        set({
+          notes: get().notes.map((n) =>
+            moved.has(n.id)
+              ? { ...n, sectionId: INBOX_ID, done: false, keep: false }
+              : n
+          ),
+          checkedIds: get().checkedIds.filter((id) => !moved.has(id)),
+        });
+        return picked.length;
       },
 
       reorderNotes: (activeId, overId) => {

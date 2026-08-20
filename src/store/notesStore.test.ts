@@ -902,6 +902,66 @@ describe("notesStore 基础", () => {
     expect(useNotesStore.getState().notes).toHaveLength(3);
   });
 
+  it("mergeNotes 混域（剪贴卡 + 笔记卡）：拒绝执行，任何数据与撤销栈不动", () => {
+    const s = useNotesStore.getState();
+    s.addClipNote("剪贴内容", {});
+    s.addNote("笔记内容");
+    const before = useNotesStore.getState().notes;
+    useNotesStore.getState().mergeNotes(before.map((n) => n.id));
+    expect(useNotesStore.getState().notes).toEqual(before);
+    expect(useNotesStore.getState().undoStack).toHaveLength(0);
+  });
+
+  it("moveClipsToNotes：移入收件箱并重置 done/keep；非剪贴卡入参被忽略", () => {
+    const s = useNotesStore.getState();
+    s.addClipNote("要收编的", {});
+    const clip = useNotesStore.getState().notes[0];
+    s.setDone([clip.id], true);
+    s.toggleNoteKeep(clip.id);
+    s.addNote("普通笔记");
+    const note = useNotesStore
+      .getState()
+      .notes.find((n) => n.text === "普通笔记")!;
+    useNotesStore.getState().setChecked([clip.id, note.id]);
+    const moved = useNotesStore.getState().moveClipsToNotes([clip.id, note.id]);
+    expect(moved).toBe(1);
+    const movedCard = useNotesStore
+      .getState()
+      .notes.find((n) => n.id === clip.id)!;
+    expect(movedCard.sectionId).toBe(INBOX_ID);
+    expect(movedCard.done).toBe(false);
+    expect(movedCard.keep).toBe(false);
+    // 移走的卡从勾选集摘除（剪贴页已不可见），未移动的保留勾选
+    expect(useNotesStore.getState().checkedIds).toEqual([note.id]);
+    // 非剪贴卡原对象原样保留
+    expect(useNotesStore.getState().notes.find((n) => n.id === note.id)).toBe(
+      note
+    );
+  });
+
+  it("moveClipsToNotes 撤销：恢复原域、原位置与 done 状态", () => {
+    const s = useNotesStore.getState();
+    s.addClipNote("A", {});
+    s.addClipNote("B", {});
+    const before = useNotesStore.getState().notes; // [B, A]
+    const target = before[1];
+    useNotesStore.getState().setDone([target.id], true);
+    useNotesStore.getState().moveClipsToNotes([target.id]);
+    expect(
+      useNotesStore.getState().notes.find((n) => n.id === target.id)!.sectionId
+    ).toBe(INBOX_ID);
+    const label = useNotesStore.getState().undo();
+    expect(label).toBe("移入笔记");
+    const restored = useNotesStore
+      .getState()
+      .notes.find((n) => n.id === target.id)!;
+    expect(restored.sectionId).toBe(CLIPBOARD_ID);
+    expect(restored.done).toBe(true);
+    expect(useNotesStore.getState().notes.map((n) => n.id)).toEqual(
+      before.map((n) => n.id)
+    );
+  });
+
   it("reorderNotes 在数组内移动", () => {
     const s = useNotesStore.getState();
     s.addNote("一");

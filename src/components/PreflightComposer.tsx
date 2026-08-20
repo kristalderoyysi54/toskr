@@ -1105,6 +1105,22 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                     {draft.originalImageFiles.length} 张 · 点击查看原图
                   </span>
                 </div>
+                {/* 发送顺序如实展示：交错卡正文一经变换/手改即降级为
+                    「全文在前、图片在后」（与 draftSegmentsForSend 同判据），
+                    界面固定的「文本框 + 附件条」布局不能暗示保持原图文顺序 */}
+                {draft.segments && draft.finalText === draft.rawText ? (
+                  <p className="text-micro text-muted-foreground">
+                    发送顺序：按卡片原图文交错顺序
+                  </p>
+                ) : draft.segments ? (
+                  <p role="status" className="text-micro text-warning">
+                    正文已改动，发送顺序改为：全文 → {draft.originalImageFiles.length} 张图
+                  </p>
+                ) : (
+                  <p className="text-micro text-muted-foreground">
+                    发送顺序：全文 → {draft.originalImageFiles.length} 张图
+                  </p>
+                )}
                 <ul
                   aria-label={`图片附件原图，共 ${draft.originalImageFiles.length} 张`}
                   className="flex gap-1.5 overflow-x-auto pb-0.5"

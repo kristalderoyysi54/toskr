@@ -36,11 +36,12 @@ import {
   resultAssociationState,
 } from "@/lib/resultReturn";
 import { requestResultVerification } from "@/lib/resultVerification";
+import { activeAliasOccurrences } from "@/lib/delivery/aliasEntities";
 import {
-  activeAliasOccurrences,
-  restoreAliases,
-} from "@/lib/delivery/aliasEntities";
-import { openNoteBatchDetail, openNoteDetail, undoableTip } from "@/lib/actions";
+  openNoteBatchDetail,
+  openNoteDetail,
+  restoreNoteAliasesWithUndo,
+} from "@/lib/actions";
 import { timeAgo } from "@/lib/media";
 import { tip } from "@/lib/tip";
 import { cn } from "@/lib/utils";
@@ -237,13 +238,8 @@ export function RecentDeliveryList({
     (state) => state.settings.aliasEntitiesEnabled
   );
   const aliasEntities = useNotesStore((state) => state.settings.aliasEntities);
-  const restoreReplyAliases = (note: Note) => {
-    const { text, restoredCount } = restoreAliases(note.text, aliasEntities);
-    if (text === note.text) return;
-    useNotesStore.getState().snapshot("恢复化名");
-    useNotesStore.getState().updateNoteText(note.id, text);
-    undoableTip(`已恢复 ${restoredCount} 处化名`);
-  };
+  // 单实现（带图卡逐块处理、snapshot + 撤销）收敛在 actions，与卡片右键共用
+  const restoreReplyAliases = (note: Note) => restoreNoteAliasesWithUndo(note.id);
   // 回合视角：进行中的半次发送（准备中/预检未完成/发送中）不进主列表，收进底部折叠组
   const mainRecords = records.filter(
     (record) =>

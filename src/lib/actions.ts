@@ -5,6 +5,8 @@ import {
   formatAsNumberedList,
   imageCaption,
 } from "@/lib/format";
+import { mapNoteTextBlocks } from "@/lib/noteContentBlocks";
+import { restoreAliases } from "@/lib/delivery/aliasEntities";
 import {
   beginDataGenerationLease,
   currentDataGeneration,
@@ -375,6 +377,7 @@ export async function toggleNoteDetail(id: string) {
       if (lastDetailSessionId) {
         releaseEditorSessionMedia(lastDetailSessionId);
       }
+      useUIStore.getState().setDetailEditorNoteId(null);
       void win.hide();
       return;
     }
@@ -382,6 +385,16 @@ export async function toggleNoteDetail(id: string) {
     /* Tauri 环境外 */
   }
   openNoteDetail(id);
+}
+
+/**
+ * 详情窗会话释放回执：仅当释放的是当前会话才判定编辑器已关闭。切卡时旧
+ * 会话的释放事件晚于新会话建立到达，一概清空会把刚打开的编辑器标成关闭。
+ */
+export function noteEditorSessionReleased(sessionId: string) {
+  if (sessionId === lastDetailSessionId) {
+    useUIStore.getState().setDetailEditorNoteId(null);
+  }
 }
 
 /**
@@ -459,6 +472,10 @@ function openTextPreview(payload: Omit<NotePreviewPayload, "sessionId">) {
   lastDetailId = payload.id;
   const sessionId = crypto.randomUUID();
   lastDetailSessionId = sessionId;
+  // 只读会话（合并来源预览等）不是可添加目标，不亮「添加到卡片」
+  useUIStore
+    .getState()
+    .setDetailEditorNoteId(payload.readOnly ? null : payload.id);
   void api.showTextPreview();
   void emitTo("textpreview", "toskr://note-preview", {
     fontSize: clampDetailFontSize(
@@ -600,12 +617,22 @@ export async function sendTaskToChat(
   return dispatchDeliveryDraft(draft, { force: opts?.forcePreflight });
 }
 
+/** 剪贴历史与笔记队列合并事务不同（组合新卡 vs 就地消费），混选拒绝。 */
+function mergeDomainsMixed(notes: readonly Note[]): boolean {
+  const clips = notes.filter((n) => n.sectionId === CLIPBOARD_ID).length;
+  return clips > 0 && clips < notes.length;
+}
+
 /** 合并勾选（带撤销）。 */
 export function mergeCheckedWithUndo() {
-  const ids = orderedCheckedNotes(useNotesStore.getState()).map((n) => n.id);
-  if (ids.length < 2) return;
-  useNotesStore.getState().mergeNotes(ids);
-  undoableTip(`已合并 ${ids.length} 条`);
+  const picked = orderedCheckedNotes(useNotesStore.getState());
+  if (picked.length < 2) return;
+  if (mergeDomainsMixed(picked)) {
+    tip("warn", "剪贴卡与笔记不能混合合并");
+    return;
+  }
+  useNotesStore.getState().mergeNotes(picked.map((n) => n.id));
+  undoableTip(`已合并 ${picked.length} 条`);
 }
 
 /** 把指定卡片与勾选项合并为一张卡（右键菜单入口；顺序按队列排列）。 */
@@ -614,11 +641,54 @@ export function mergeNoteWithChecked(noteId: string) {
   const pick = new Set([...state.checkedIds, noteId]);
   const valid = state.notes.filter((n) => pick.has(n.id));
   if (valid.length < 2) return;
+  if (mergeDomainsMixed(valid)) {
+    tip("warn", "剪贴卡与笔记不能混合合并");
+    return;
+  }
   state.mergeNotes(valid.map((n) => n.id));
   undoableTip(`已合并 ${valid.length} 条`);
 }
 
-/** 把指定笔记复制为编号列表到系统剪贴板。 */
+/**
+ * 剪贴卡收编为正式笔记（移动语义，可撤销）：落收件箱并重置生命周期状态
+ * ——done 清零（收编即待办），keep 不带（剪贴域「固定不清理」≠ 笔记域「常用」）。
+ */
+export function moveClipsToNotesWithUndo(ids: string[]) {
+  const moved = useNotesStore.getState().moveClipsToNotes(ids);
+  if (!moved) return;
+  undoableTip(moved === 1 ? "已移入笔记" : `已移入笔记 ${moved} 条`);
+}
+
+/**
+ * 恢复卡片正文中的本机化名（带撤销）。带图卡逐文字块处理——图片块与块序
+ * 原样保留；纯文字卡维持旧扁平路径（保留 updateNoteText 的链接/代码再检测）。
+ */
+export function restoreNoteAliasesWithUndo(id: string) {
+  const st = useNotesStore.getState();
+  const note = st.notes.find((n) => n.id === id);
+  if (!note) return;
+  const dictionary = st.settings.aliasEntities;
+  const blocks = noteContentBlocks(note);
+  if (blocks.some((block) => block.type === "image")) {
+    let restoredCount = 0;
+    const next = mapNoteTextBlocks(blocks, (text) => {
+      const restored = restoreAliases(text, dictionary);
+      restoredCount += restored.restoredCount;
+      return restored.text;
+    });
+    if (restoredCount === 0) return;
+    st.snapshot("恢复化名");
+    st.updateNoteContent(id, next);
+    undoableTip(`已恢复 ${restoredCount} 处化名`);
+    return;
+  }
+  const restored = restoreAliases(note.text, dictionary);
+  if (restored.text === note.text) return;
+  st.snapshot("恢复化名");
+  st.updateNoteText(id, restored.text);
+  undoableTip(`已恢复 ${restored.restoredCount} 处化名`);
+}
+
 /** 复制单条笔记内容：有序图文写 plain+HTML；单图仍写原生 PNG。 */
 export async function copyNoteContent(note: Note) {
   const images = noteImages(note);
@@ -652,14 +722,21 @@ export async function copyNoteContent(note: Note) {
   }
 }
 
+/**
+ * 复制勾选文本：单条原样、多条转编号列表——与发送路径（buildSendText）
+ * 同规则。规则在此内联而非调用：delivery-routing 守卫测试禁止 actions
+ * 出现 buildSendText 调用（发送正文装配必须收敛在 builder 层）。
+ */
 export async function copyNotesAsList(ids: string[]) {
   const { notes } = useNotesStore.getState();
   const picked = new Set(ids);
   const texts = notes.filter((n) => picked.has(n.id)).map((n) => n.text);
   if (!texts.length) return;
   try {
-    await api.copyText(formatAsNumberedList(texts));
-    tip("ok", `已复制 ${texts.length} 条为列表`);
+    await api.copyText(
+      texts.length === 1 ? texts[0] : formatAsNumberedList(texts)
+    );
+    tip("ok", texts.length === 1 ? "已复制" : `已复制 ${texts.length} 条为列表`);
   } catch (e) {
     tip("warn", `复制失败：${e}`);
   }
