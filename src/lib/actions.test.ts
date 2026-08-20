@@ -53,9 +53,12 @@ vi.mock("@/lib/tauri", async (importOriginal) => {
 import {
   armNoteEditUndo,
   copyNoteContent,
+  mergeCheckedWithUndo,
+  moveClipsToNotesWithUndo,
   openNoteBatchDetail,
   openSafeRehearsalPreflight,
   openNoteDetail,
+  restoreNoteAliasesWithUndo,
   sendCheckedToChat,
   sendNotesToChat,
   sendTaskToChat,
@@ -1411,5 +1414,101 @@ describe("armNoteEditUndo 编辑收尾撤销", () => {
 
     const blocks = findNote(id).contentBlocks!;
     expect(blocks[0]).toEqual({ type: "text", text: "图前" });
+  });
+});
+
+describe("富卡逐块处理与剪贴收编（2026-08-20 契约收口）", () => {
+  beforeEach(() => {
+    vi.mocked(tip).mockClear();
+    vi.mocked(setPendingUndo).mockClear();
+    useNotesStore.setState({
+      sections: [
+        { id: CLIPBOARD_ID, name: "剪贴板" },
+        { id: INBOX_ID, name: "收件箱" },
+      ],
+      notes: [],
+      checkedIds: [],
+      undoStack: [],
+      settings: {
+        ...defaultSettings(),
+        aliasEntitiesEnabled: true,
+        aliasEntities: [
+          {
+            id: "alias-1",
+            category: "USER",
+            originalText: "小明",
+            placeholder: "[USER_01]",
+            createdAtMs: 1,
+            updatedAtMs: 1,
+          },
+        ],
+      },
+    });
+  });
+
+  it("restoreNoteAliasesWithUndo：交错富卡逐块恢复，图片块与交错顺序不变", () => {
+    const blocks = [
+      { type: "text" as const, text: "你好 [USER_01]" },
+      { type: "image" as const, file: "a.png", width: 10, height: 5 },
+      { type: "text" as const, text: "再见 [USER_01]" },
+      { type: "image" as const, file: "b.png" },
+    ];
+    const { id } = useNotesStore
+      .getState()
+      .addNote("占位", { contentBlocks: blocks });
+
+    restoreNoteAliasesWithUndo(id!);
+
+    const note = useNotesStore.getState().notes.find((n) => n.id === id)!;
+    expect(note.contentBlocks).toEqual([
+      { type: "text", text: "你好 小明" },
+      { type: "image", file: "a.png", width: 10, height: 5 },
+      { type: "text", text: "再见 小明" },
+      { type: "image", file: "b.png" },
+    ]);
+    expect(note.text).toBe("你好 小明\n再见 小明");
+    expect(vi.mocked(tip)).toHaveBeenCalledWith("ok", "已恢复 2 处化名", true);
+
+    // 快照撤销可还原编辑前的完整块结构
+    const label = useNotesStore.getState().undo();
+    expect(label).toBe("恢复化名");
+    expect(
+      useNotesStore.getState().notes.find((n) => n.id === id)!.contentBlocks
+    ).toEqual(blocks);
+  });
+
+  it("mergeCheckedWithUndo 混域勾选：警告提示且不动任何数据", () => {
+    useNotesStore.getState().addClipNote("剪贴内容", {});
+    const { id: noteId } = useNotesStore.getState().addNote("笔记内容");
+    const clip = useNotesStore
+      .getState()
+      .notes.find((n) => n.sectionId === CLIPBOARD_ID)!;
+    useNotesStore.getState().setChecked([clip.id, noteId!]);
+    const before = useNotesStore.getState().notes;
+
+    mergeCheckedWithUndo();
+
+    expect(useNotesStore.getState().notes).toEqual(before);
+    expect(vi.mocked(tip)).toHaveBeenCalledWith(
+      "warn",
+      "剪贴卡与笔记不能混合合并"
+    );
+    expect(vi.mocked(setPendingUndo)).not.toHaveBeenCalled();
+  });
+
+  it("moveClipsToNotesWithUndo：移动 + 状态重置 + 可撤销提示", () => {
+    useNotesStore.getState().addClipNote("要收编的", {});
+    const clip = useNotesStore.getState().notes[0];
+    useNotesStore.getState().setDone([clip.id], true);
+    useNotesStore.getState().toggleNoteKeep(clip.id);
+
+    moveClipsToNotesWithUndo([clip.id]);
+
+    const moved = useNotesStore.getState().notes.find((n) => n.id === clip.id)!;
+    expect(moved.sectionId).toBe(INBOX_ID);
+    expect(moved.done).toBe(false);
+    expect(moved.keep).toBe(false);
+    expect(vi.mocked(tip)).toHaveBeenCalledWith("ok", "已移入笔记", true);
+    expect(vi.mocked(setPendingUndo)).toHaveBeenCalled();
   });
 });

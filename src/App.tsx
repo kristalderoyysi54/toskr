@@ -145,6 +145,7 @@ import {
   deleteNotesWithUndo,
   deleteTasksWithUndo,
   enrichLinkMeta,
+  noteEditorSessionReleased,
   openNoteDetail,
   toggleNoteDetail,
   NOTE_TAGS_EVENT,
@@ -1966,6 +1967,8 @@ export default function App() {
         NOTE_EDITOR_SESSION_RELEASE_EVENT,
         (e) => {
           releaseEditorSessionMedia(e.payload.targetSessionId);
+          // 当前会话被释放 = 详情窗收起/关闭，发送按钮回落「发送」语义
+          noteEditorSessionReleased(e.payload.targetSessionId);
         }
       ),
     ];
@@ -2588,6 +2591,36 @@ export default function App() {
   /** 横栏下笔记输入通栏默认收起，由工具栏「添加笔记」按钮唤出。 */
   const [barDraftOpen, setBarDraftOpen] = useState(false);
 
+  // 落盘兜底：persist 有 400ms 防抖窗口，且没有任何退出路径主动冲刷——
+  // 面板隐藏（托盘退出前的必经态）立即 flush，压缩「改完即退」丢写窗口
+  useEffect(() => {
+    const flushOnHide = () => {
+      if (document.visibilityState === "hidden") {
+        void flushPendingWrites().catch(() => {
+          /* 冲突恢复流程已有专门提示通道 */
+        });
+      }
+    };
+    document.addEventListener("visibilitychange", flushOnHide);
+    return () => document.removeEventListener("visibilitychange", flushOnHide);
+  }, []);
+
+  // 视图即选择作用域：切走页面/子视图即清空多选。剪贴与笔记共用一份
+  // checkedIds，不清则快捷键（⌘⏎/⌘C/合并）会作用于另一页不可见的卡片。
+  // 用 store 订阅而非 React effect：setPage 内同步触发，跳转流程随后的
+  // setFocusedId/setChecked 不会被迟到的清空误伤
+  useEffect(() => {
+    return useUIStore.subscribe((state, prev) => {
+      if (
+        state.page === prev.page &&
+        state.contentSubview === prev.contentSubview
+      )
+        return;
+      const st = useNotesStore.getState();
+      if (st.checkedIds.length) st.clearChecked();
+    });
+  }, []);
+
   // ===== 面板内快捷键（Esc 分层 + 全键盘导航） =====
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -2749,7 +2782,7 @@ export default function App() {
             ? navIds[Math.min(idx + 1, navIds.length - 1)]
             : navIds[Math.max(idx - 1, 0)];
         ui.setFocusedId(next);
-        // 笔记/剪贴板：左右导航即单选（蓝色选中态，回车可直发）；
+        // 笔记/剪贴板：左右导航即单选（蓝色选中态，⌘⏎ 可直发）；
         // 任务/秘文页无普通勾选语义，只保持焦点环
         if (
           (ui.page === "clipboard" ||
@@ -2839,18 +2872,8 @@ export default function App() {
         );
         return;
       }
-      // 剪贴板页：已有选中卡时回车直接发送（无选中仍走预览编辑）
-      if (e.key === "Enter" && !e.metaKey && !editable && ui.page === "clipboard") {
-        const st = useNotesStore.getState();
-        const hasClipChecked = st.notes.some(
-          (n) => st.checkedIds.includes(n.id) && n.sectionId === CLIPBOARD_ID
-        );
-        if (hasClipChecked) {
-          e.preventDefault();
-          void sendCheckedToChat();
-          return;
-        }
-      }
+      // Enter 恒为编辑、发送恒 ⌘⏎（2026-08-20 收口）：剪贴页原「有勾选即
+      // 回车直发」随勾选状态翻转语义，←/→ 导航会静默单选，极易误发外部
       if (e.key === "Enter" && !e.metaKey && ui.focusedId) {
         e.preventDefault();
         // 秘文页：Enter 不开详情窗（同 Space，避免明文暴露/编辑损坏密文）

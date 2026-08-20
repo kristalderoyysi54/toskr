@@ -30,10 +30,8 @@ import {
   Wand2,
 } from "lucide-react";
 
-import {
-  activeAliasOccurrences,
-  restoreAliases,
-} from "@/lib/delivery/aliasEntities";
+import { activeAliasOccurrences } from "@/lib/delivery/aliasEntities";
+import { mapNoteTextBlocks } from "@/lib/noteContentBlocks";
 import { imageCaption, imageListLabel } from "@/lib/format";
 import { tip } from "@/lib/tip";
 import { IconButton } from "@/components/ui/icon-button";
@@ -55,7 +53,9 @@ import {
   copyNotesAsList,
   deleteNotesWithUndo,
   mergeNoteWithChecked,
+  moveClipsToNotesWithUndo,
   openNoteDetail,
+  restoreNoteAliasesWithUndo,
   sendNotesToChat,
   undoableTip,
 } from "@/lib/actions";
@@ -80,8 +80,8 @@ import { cn } from "@/lib/utils";
 import {
   CLIPBOARD_ID,
   groupContextMenuIds,
-  INBOX_ID,
   NOTE_TAG_MAX_COUNT,
+  noteContentBlocks,
   noteImages,
   normalizeContextMenu,
   orderedCheckedNotes,
@@ -390,8 +390,8 @@ export const NoteCard = memo(function NoteCard({
           </TargetSendMenuItem>
         );
       case "send-template": {
-        // 单选场景选模板发送的落点（底栏 ⌄ 仅多选可见后，这里是单卡唯一入口）。
-        // 菜单打开时才渲染，getState 一次性取解析结果即可，无需订阅
+        // 与底栏 ⌄ 的模板列表并存（底栏单选也显示）：右键路径服务未勾选直接
+        // 右键的场景。菜单打开时才渲染，getState 一次性取解析结果即可，无需订阅
         const snippetMenu = promptSnippetsForGroup(
           useNotesStore.getState().settings.promptSnippets,
           currentTargetProfileResolution().promptGroup.id
@@ -636,6 +636,20 @@ export const NoteCard = memo(function NoteCard({
 
   const applyTextOp = (textOp: TextOp) => {
     try {
+      const blocks = noteContentBlocks(note);
+      if (blocks.some((block) => block.type === "image")) {
+        // 带图卡逐文字块变换：经 note.text 投影往返（updateNoteText）会把
+        // 多段文字折叠成单块、压平图文交错顺序
+        const next = mapNoteTextBlocks(blocks, (text) => textOp.apply(text));
+        if (next.every((block, index) => block === blocks[index])) {
+          tip("info", "内容无变化");
+          return;
+        }
+        useNotesStore.getState().snapshot(`文本处理：${textOp.label}`);
+        useNotesStore.getState().updateNoteContent(note.id, next);
+        undoableTip(`已处理 · ${textOp.label}`);
+        return;
+      }
       const next = textOp.apply(note.text);
       if (next === note.text) {
         tip("info", "内容无变化");
@@ -660,11 +674,8 @@ export const NoteCard = memo(function NoteCard({
 
   const restoreCardAliases = () => {
     if (aliasRestorable.length === 0) return;
-    const { text } = restoreAliases(note.text, aliasEntities);
-    if (text === note.text) return;
-    useNotesStore.getState().snapshot("恢复化名");
-    useNotesStore.getState().updateNoteText(note.id, text);
-    undoableTip(`已恢复 ${aliasRestorable.length} 处化名`);
+    // 单实现（带图卡逐块处理）收敛在 actions，与发送历史抽屉共用
+    restoreNoteAliasesWithUndo(note.id);
   };
 
   const copyOne = () => void copyNoteContent(note);
@@ -732,10 +743,15 @@ export const NoteCard = memo(function NoteCard({
     !isClip && !strip
       ? sections.find((sec) => sec.id === note.sectionId)?.name
       : undefined;
-  const saveClipAsNote = () => {
+  /** 移入笔记：与删除/发送同款多选感知——卡在多选集合内 → 移整组。 */
+  const moveToNotesSelfOrChecked = () => {
     if (!isClip) return;
-    moveNotes([note.id], INBOX_ID);
-    tip("ok", "已保存为笔记");
+    const st = useNotesStore.getState();
+    const ids =
+      checked && st.checkedIds.length > 1
+        ? orderedCheckedNotes(st).map((n) => n.id)
+        : [note.id];
+    moveClipsToNotesWithUndo(ids);
   };
 
   const relationMenuItem = note.provenance ? (
@@ -1450,10 +1466,10 @@ export const NoteCard = memo(function NoteCard({
             )}
             {isClip && (
               <IconButton
-                label="保存为笔记"
+                label="移入笔记"
                 surface
                 reveal="hover-focus"
-                onClick={saveClipAsNote}
+                onClick={moveToNotesSelfOrChecked}
               >
                 <Inbox className="size-3" />
               </IconButton>

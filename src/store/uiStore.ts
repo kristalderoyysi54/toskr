@@ -2,6 +2,14 @@ import { create } from "zustand";
 
 export type PanelPage = "notes" | "clipboard" | "tasks" | "secret";
 
+/** 底部草稿输入暂存的待入卡图片（DraftInput 提升到会话级防切页丢失）。 */
+export type DraftPendingImage = {
+  file: string;
+  width: number;
+  height: number;
+  dataGeneration: number;
+};
+
 interface UIState {
   /** 面板内容是否展开（驱动滑入滑出动画；窗口显隐由 Rust 管）。 */
   open: boolean;
@@ -25,6 +33,10 @@ interface UIState {
   anchorId: string | null;
   /** 当前可见卡片顺序（键盘导航与范围选择共用）。 */
   navIds: string[];
+  /** 详情窗当前承载的可编辑卡 id（null = 未打开/只读会话）。openTextPreview
+   *  置值、会话释放/Space 收起清空；剪贴页发送按钮据此显示真实目的地
+   *  （「添加到卡片」vs「发送」），执行时仍以窗口实测可见性为准。 */
+  detailEditorNoteId: string | null;
   /** 全文预览层当前卡片（Space 弹出，Paste 风格）。 */
   previewId: string | null;
   /** 预览层是否处于编辑模式。 */
@@ -58,6 +70,9 @@ interface UIState {
   edgeHidden: boolean;
   /** 快捷键/双击呼出保护：真实拖动或 Esc 前，失焦与光标离开均不自动收起。 */
   shortcutHoldOpen: boolean;
+  /** 草稿输入暂存图片（会话级：DraftInput 随切页/收横栏卸载，在此保命；
+   *  文字走 localStorage 镜像抗重启，图片引用不入库故不跨重启恢复）。 */
+  draftImages: DraftPendingImage[];
 
   setOpen: (open: boolean) => void;
   setPage: (page: PanelPage) => void;
@@ -70,6 +85,7 @@ interface UIState {
   setAnchorId: (id: string | null) => void;
   setNavIds: (ids: string[]) => void;
   setEditingId: (id: string | null) => void;
+  setDetailEditorNoteId: (id: string | null) => void;
   openPreview: (id: string, editing?: boolean) => void;
   closePreview: () => void;
   setPreviewEditing: (editing: boolean) => void;
@@ -87,6 +103,7 @@ interface UIState {
   setUpdateDialogOpen: (updateDialogOpen: boolean) => void;
   setEdgeHideState: (active: boolean, hidden: boolean) => void;
   setShortcutHoldOpen: (hold: boolean) => void;
+  setDraftImages: (draftImages: DraftPendingImage[]) => void;
 }
 
 /** 可用更新的展示元数据（对话框：版本对比 + 更新内容）。 */
@@ -108,6 +125,7 @@ export const useUIStore = create<UIState>()((set, get) => ({
   anchorId: null,
   navIds: [],
   editingId: null,
+  detailEditorNoteId: null,
   previewId: null,
   previewEditing: false,
   flashId: null,
@@ -123,6 +141,7 @@ export const useUIStore = create<UIState>()((set, get) => ({
   edgeHideActive: false,
   edgeHidden: false,
   shortcutHoldOpen: false,
+  draftImages: [],
 
   setOpen: (open) => set({ open }),
   // 切页清焦点：避免另一页残留的 focusedId 干扰键盘导航语义
@@ -144,6 +163,7 @@ export const useUIStore = create<UIState>()((set, get) => ({
   setAnchorId: (anchorId) => set({ anchorId }),
   setNavIds: (navIds) => set({ navIds }),
   setEditingId: (editingId) => set({ editingId }),
+  setDetailEditorNoteId: (detailEditorNoteId) => set({ detailEditorNoteId }),
   openPreview: (previewId, editing = false) =>
     set({ previewId, previewEditing: editing, focusedId: previewId }),
   closePreview: () => set({ previewId: null, previewEditing: false }),
@@ -160,4 +180,5 @@ export const useUIStore = create<UIState>()((set, get) => ({
   setEdgeHideState: (edgeHideActive, edgeHidden) =>
     set({ edgeHideActive, edgeHidden }),
   setShortcutHoldOpen: (shortcutHoldOpen) => set({ shortcutHoldOpen }),
+  setDraftImages: (draftImages) => set({ draftImages }),
 }));

@@ -57,6 +57,23 @@ export function replaceNoteTextBlockAt(
   );
 }
 
+/**
+ * 逐文字块变换：图片块与块序原样保留，仅文字块经 transform 重写（未变化的
+ * 块保持原引用，调用方可按引用判断是否有实际改动）。卡片级「文本处理 /
+ * 恢复化名」对带图卡必须走这里——经 note.text 投影往返（updateNoteText →
+ * replaceNoteTextProjection）会把多段文字折叠成单块，压平交错结构。
+ */
+export function mapNoteTextBlocks(
+  blocks: readonly NoteContentBlock[],
+  transform: (text: string) => string
+): NoteContentBlock[] {
+  return blocks.map((block) => {
+    if (block.type !== "text") return block;
+    const text = transform(block.text);
+    return text === block.text ? block : { type: "text", text };
+  });
+}
+
 function optionalDimension(
   value: unknown,
   field: "width" | "height"

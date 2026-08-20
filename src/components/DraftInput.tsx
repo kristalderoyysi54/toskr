@@ -18,16 +18,30 @@ import { useNoteThumb } from "@/lib/media";
 import { api } from "@/lib/tauri";
 import { tip } from "@/lib/tip";
 import { useNotesStore } from "@/store/notesStore";
+import { useUIStore, type DraftPendingImage } from "@/store/uiStore";
 import {
   isDataOperationLocked,
   useDataOperationStore,
 } from "@/store/dataOperationStore";
 
-type PendingImage = {
-  file: string;
-  width: number;
-  height: number;
-  dataGeneration: number;
+/** 草稿文字的 localStorage 镜像键（抗重启；提交/清空时移除）。 */
+const DRAFT_TEXT_STORAGE_KEY = "toskr-draft-input-text";
+
+const readStoredDraftText = () => {
+  try {
+    return localStorage.getItem(DRAFT_TEXT_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+};
+
+const writeStoredDraftText = (text: string) => {
+  try {
+    if (text) localStorage.setItem(DRAFT_TEXT_STORAGE_KEY, text);
+    else localStorage.removeItem(DRAFT_TEXT_STORAGE_KEY);
+  } catch {
+    /* 存储不可用时草稿仅存活于当前挂载 */
+  }
 };
 
 /** 暂存图片缩略 chip：悬停/聚焦出移除钮。 */
@@ -71,8 +85,23 @@ function PendingThumb({
  * 回车把文字与全部暂存图打成一张组合卡（纯图无文字则成图片卡）。
  */
 export function DraftInput() {
-  const [value, setValue] = useState("");
-  const [pending, setPending] = useState<PendingImage[]>([]);
+  // 未提交草稿必须扛住组件卸载（切页/收横栏即卸载）：文字初值从 localStorage
+  // 恢复并写穿（重启也不丢）；暂存图片提升到 uiStore 会话级（图片文件未被
+  // 任何卡片引用，可能被媒体清理回收，刻意不跨重启恢复）
+  const [value, setValueState] = useState(readStoredDraftText);
+  const pending = useUIStore((s) => s.draftImages);
+  const setValue = (text: string) => {
+    setValueState(text);
+    writeStoredDraftText(text);
+  };
+  const setPending = (
+    update: DraftPendingImage[] | ((cur: DraftPendingImage[]) => DraftPendingImage[])
+  ) => {
+    const ui = useUIStore.getState();
+    ui.setDraftImages(
+      typeof update === "function" ? update(ui.draftImages) : update
+    );
+  };
   const dataLocked = useDataOperationStore((state) => state.locked);
   const sections = useNotesStore((s) => s.sections);
   const lastDraftSectionId = useNotesStore(

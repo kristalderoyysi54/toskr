@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   hasOrderedRichLayout,
+  mapNoteTextBlocks,
   normalizeNoteContentBlocks,
   noteContentBlocks,
   projectNoteContent,
@@ -11,6 +12,38 @@ import {
   textFromContentBlocks,
   type NoteContentBlock,
 } from "./noteContentBlocks";
+
+describe("mapNoteTextBlocks（卡片级文本处理/恢复化名的结构不变性）", () => {
+  const interleaved: NoteContentBlock[] = [
+    { type: "image", file: "a.png", width: 10, height: 5 },
+    { type: "text", text: "hello" },
+    { type: "image", file: "b.png", alt: "截图" },
+    { type: "text", text: "world" },
+    { type: "image", file: "c.png" },
+  ];
+
+  it("逐文字块变换：块数、交错顺序与图片块（含元数据引用）全部不变", () => {
+    const next = mapNoteTextBlocks(interleaved, (text) => text.toUpperCase());
+    expect(next.map((block) => block.type)).toEqual([
+      "image",
+      "text",
+      "image",
+      "text",
+      "image",
+    ]);
+    // 图片块保持原引用：alt/宽高元数据零拷贝、绝不重建
+    expect(next[0]).toBe(interleaved[0]);
+    expect(next[2]).toBe(interleaved[2]);
+    expect(next[4]).toBe(interleaved[4]);
+    expect(next[1]).toEqual({ type: "text", text: "HELLO" });
+    expect(next[3]).toEqual({ type: "text", text: "WORLD" });
+  });
+
+  it("变换无实际改动时保留原块引用（调用方按引用判断是否需要落库）", () => {
+    const next = mapNoteTextBlocks(interleaved, (text) => text);
+    next.forEach((block, index) => expect(block).toBe(interleaved[index]));
+  });
+});
 
 describe("noteContentBlocks", () => {
   it("保留文字与图片块顺序，并确定性生成旧字段投影", () => {
