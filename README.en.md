@@ -4,7 +4,7 @@
 
 # Toskr
 
-**A macOS menu-bar companion for AI workflows**
+**A macOS desktop companion for AI workflows**
 
 Capture as you select, then send it all back to the conversation in one keystroke.
 
