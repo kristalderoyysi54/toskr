@@ -108,6 +108,7 @@ static DATABASE_URL_RE: OnceLock<Regex> = OnceLock::new();
 static EMAIL_RE: OnceLock<Regex> = OnceLock::new();
 static PHONE_RE: OnceLock<Regex> = OnceLock::new();
 static NATIONAL_ID_RE: OnceLock<Regex> = OnceLock::new();
+static NATIONAL_ID_CONTEXT_RE: OnceLock<Regex> = OnceLock::new();
 static BANK_CARD_RE: OnceLock<Regex> = OnceLock::new();
 static IPV4_RE: OnceLock<Regex> = OnceLock::new();
 static COOKIE_HEADER_RE: OnceLock<Regex> = OnceLock::new();
@@ -511,7 +512,7 @@ fn collect_candidates(text: &str) -> Vec<Candidate> {
         text,
         built_in_regex(
             &PHONE_RE,
-            r#"(?i)(?:\b(?:phone|tel(?:ephone)?|mobile)\b|电话|手机|联系电话)["']?[ \t]*[:：=]?[ \t]*["']?(?P<secret>\+?[0-9][0-9() .\-]{5,22}[0-9])"#,
+            r#"(?i)(?:\b(?:phone|tel(?:ephone)?|mobile)(?:[ \t._-]*number)?\b|(?:电话|手机|联系电话)(?:号码|号)?)["']?[ \t]*[:：=]?[ \t]*["']?(?P<secret>\+?[0-9][0-9() .\-]{5,22}[0-9])"#,
         ),
         RuleSpec {
             capture_name: Some("secret"),
@@ -532,6 +533,27 @@ fn collect_candidates(text: &str) -> Vec<Candidate> {
             rule_id: "identity.cn_mainland_id",
         },
         |value, start, end, _| token_boundary(text, start, end, false) && valid_mainland_id(value),
+        &mut candidates,
+    );
+    // 显式「身份证」标签下放宽结构校验：抄错一位的真实证号同样是隐私泄露。
+    add_capture_candidates(
+        text,
+        built_in_regex(
+            &NATIONAL_ID_CONTEXT_RE,
+            r#"身份证(?:号码|号)?["']?[ \t]*[:：=]?[ \t]*["']?(?P<secret>[0-9]{17}[0-9Xx]|[0-9]{15})"#,
+        ),
+        RuleSpec {
+            capture_name: Some("secret"),
+            category: FindingCategory::NationalId,
+            severity: FindingSeverity::Warn,
+            rule_id: "identity.cn_mainland_id_context",
+        },
+        |value, start, end, _| {
+            token_boundary(text, start, end, false)
+                && value
+                    .bytes()
+                    .any(|digit| digit != value.as_bytes()[0])
+        },
         &mut candidates,
     );
     add_capture_candidates(
@@ -862,9 +884,13 @@ mod tests {
                 r#""phone": "+1 (415) 555-2671""#.into(),
                 "tel: 010-88886666".into(),
                 "联系电话：0755 1234 5678".into(),
+                "手机号：18888888888".into(),
+                "电话号码: 13912345678".into(),
+                "phone number: +1 415 555 2671".into(),
             ],
             &[
                 "订单号 13800138000",
+                "编号：13800138000",
                 "phone: 12345",
                 "日期 2026-08-11",
                 "phone: 2026-08-11",
@@ -889,14 +915,18 @@ mod tests {
 
     #[test]
     fn mainland_id_rules_have_five_positive_and_negative_cases() {
-        let positives = [
+        let mut positives = [
             "11010519491231002",
             "44052419800101001",
             "32031119770706001",
             "51010519900307001",
             "31010120000101002",
         ]
-        .map(|prefix| format!("身份证：{}", with_cn_checksum(prefix)));
+        .map(|prefix| format!("身份证：{}", with_cn_checksum(prefix)))
+        .to_vec();
+        // 显式「身份证」标签下即使日期段/校验位无效也要告警（可能是抄错一位的真实证号）。
+        positives.push("身份证号：411381188826261218".into());
+        positives.push("身份证号码: 110105194912310021".into());
         assert_rule_cases(
             FindingCategory::NationalId,
             &positives,
@@ -906,6 +936,7 @@ mod tests {
                 "01010519900101001X",
                 "1101051990010100100",
                 "身份证号码将在这里显示",
+                "身份证号：111111111111111111",
             ],
         );
     }
