@@ -61,6 +61,24 @@ const STATUS_LABEL: Record<DeliveryEvent["status"], string> = {
   verified: "回复已检查",
 };
 
+/** blocked 一词多因：不区分会让「目标未就绪中止」被误读成隐私拦截。 */
+const BLOCKED_REASON_LABEL: Record<string, string> = {
+  privacy_gate_blocked: "隐私拦截",
+  "target-not-ready": "目标未就绪，已中止",
+  "target-refresh-failed": "目标未就绪，已中止",
+  "draft-stale": "内容已变化，已中止",
+  "draft-source-changed": "内容已变化，已中止",
+  "draft-selection-changed": "内容已变化，已中止",
+  "send-generation-changed": "内容已变化，已中止",
+};
+
+function statusLabel(record: DeliveryEvent): string {
+  if (record.status === "blocked" && record.reasonCode) {
+    return BLOCKED_REASON_LABEL[record.reasonCode] ?? STATUS_LABEL.blocked;
+  }
+  return STATUS_LABEL[record.status];
+}
+
 const CLIPBOARD_LABEL: Record<NonNullable<DeliveryEvent["clipboardOutcome"]>, string> = {
   restored: "已恢复",
   restoredPartial: "部分恢复",
@@ -114,10 +132,10 @@ function roundtripBadge(
   hasReply: boolean
 ): { label: string; tone: "success" | "warning" | "muted" } {
   if (record.status === "failed" || record.status === "blocked") {
-    return { label: STATUS_LABEL[record.status], tone: "warning" };
+    return { label: statusLabel(record), tone: "warning" };
   }
   if (record.status !== "sent") {
-    return { label: STATUS_LABEL[record.status], tone: "muted" };
+    return { label: statusLabel(record), tone: "muted" };
   }
   return hasReply
     ? { label: "已收到回复", tone: "success" }
@@ -547,7 +565,7 @@ export function RecentDeliveryList({
                     {summary ? ` · ${summary}` : ""}
                   </span>
                   <span className="ml-auto shrink-0 text-micro text-muted-foreground">
-                    {STATUS_LABEL[record.status]}
+                    {statusLabel(record)}
                   </span>
                 </button>
               </li>
