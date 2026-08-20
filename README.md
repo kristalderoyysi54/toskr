@@ -19,7 +19,11 @@
 
 在 ChatGPT / Claude / Cursor / 微信之间穿梭时，随手捕获想留下的文字，暂存想试的 Prompt，攒够了一键发回对话。数据完全本地，无遥测。
 
-<!-- TODO: 应用截图 / 演示 GIF -->
+<p align="center">
+  <img src="docs/assets/readme/toskr-showcase.webp" alt="Toskr 剪贴板、笔记与任务核心界面" width="100%" />
+</p>
+
+<p align="center"><sub>剪贴板捕获 · 笔记整理与多选发送 · 任务提醒</sub></p>
 
 ## 特性
 

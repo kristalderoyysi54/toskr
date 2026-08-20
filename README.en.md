@@ -21,7 +21,11 @@ While hopping between ChatGPT / Claude / Cursor / IM apps, capture the text you 
 
 > Note: the app UI is currently Chinese-only.
 
-<!-- TODO: screenshot / demo GIF -->
+<p align="center">
+  <img src="docs/assets/readme/toskr-showcase.webp" alt="Toskr clipboard, notes, and tasks" width="100%" />
+</p>
+
+<p align="center"><sub>Clipboard capture · note organization and batch send · task reminders</sub></p>
 
 ## Features
 
