@@ -84,6 +84,8 @@ import {
   type MessageWatchStatus,
 } from "@/lib/tauri";
 import { buildMessageWatchBridgeScript } from "@/lib/messageWatch";
+import { getImProfile, setImProfile, type ImProfile } from "@/lib/imProfile";
+import type { ImCandidate } from "@/lib/tauri";
 
 async function requestStorageRecoveryAction(
   action: "retryStorage" | "loadDefault"
@@ -1551,14 +1553,44 @@ function MessageWatchSection({ settings, patch }: SP) {
   const [status, setStatus] = useState<MessageWatchStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
-  // null = 未知（查询失败/浏览器诊断），只有明确 false 才降级为「暂不支持」
-  const [appInstalled, setAppInstalled] = useState<boolean | null>(null);
-  useEffect(() => {
-    void api
-      .messageWatchAppInstalled()
-      .then(setAppInstalled)
-      .catch(() => setAppInstalled(null));
-  }, []);
+  // 监听目标由用户「探测并确认」后写入本机 profile；代码不预置任何具体应用。
+  const [profile, setProfileState] = useState<ImProfile | null>(() => getImProfile());
+  const [candidates, setCandidates] = useState<ImCandidate[] | null>(null);
+  const [detecting, setDetecting] = useState(false);
+
+  const detectTargets = async () => {
+    setDetecting(true);
+    try {
+      const list = await api.detectRunningImCandidates();
+      setCandidates(list);
+      if (!list.length) {
+        tip("warn", "未检测到正在运行的应用；请先打开要监听的 IM 再试");
+      }
+    } catch (error) {
+      tip("warn", `探测失败：${String(error).slice(0, 100)}`);
+    } finally {
+      setDetecting(false);
+    }
+  };
+
+  const confirmTarget = (candidate: ImCandidate) => {
+    const chosen: ImProfile = {
+      appName: candidate.name,
+      bundleId: candidate.bundleId,
+      binPath: candidate.binPath,
+    };
+    setImProfile(chosen);
+    setProfileState(chosen);
+    setCandidates(null);
+    tip("ok", `已选择监听目标：${candidate.name}`);
+  };
+
+  const clearTarget = () => {
+    setImProfile(null);
+    setProfileState(null);
+    setCandidates(null);
+    tip("info", "已清除监听目标");
+  };
   const [ruleName, setRuleName] = useState("");
   const [groupTerms, setGroupTerms] = useState("");
   const [senderTerms, setSenderTerms] = useState("");
@@ -1605,6 +1637,10 @@ function MessageWatchSection({ settings, patch }: SP) {
   // 重连复用同一脚本以复用同一起点门槛。
   const toggleAuto = async (enabled: boolean) => {
     if (busy) return;
+    if (enabled && !profile) {
+      void detectTargets();
+      return;
+    }
     setBusy(true);
     try {
       const next = enabled
@@ -1614,7 +1650,8 @@ function MessageWatchSection({ settings, patch }: SP) {
               { endpoint: "cdp", sessionStartedAtMs: Date.now() },
               "cdp",
               settings.messageWatchRules
-            )
+            ),
+            profile ?? undefined
           )
         : await api.setMessageWatchAuto(false);
       setStatus(next);
@@ -1694,17 +1731,52 @@ function MessageWatchSection({ settings, patch }: SP) {
         实验性监听 IM 软件的群消息。Toskr 的只读桥不主动打开会话，也不调用已读或发送接口。
       </p>
 
-      {appInstalled === false && (
-        <Group title="接入方式">
+      <Group title="监听目标">
+        {profile ? (
+          <Row
+            label={`当前目标：${profile.appName}`}
+            hint={profile.bundleId}
+            right={
+              <Button size="xs" onClick={clearTarget}>
+                更换
+              </Button>
+            }
+          />
+        ) : (
           <div className="px-3.5 py-3">
-            <p className="text-title font-medium">暂不支持：未检测到兼容的 IM 软件</p>
+            <p className="text-title font-medium">先选择要监听的 IM</p>
             <p className="mt-0.5 text-label leading-normal text-muted-foreground">
-              消息监听目前仅支持推推（360家）macOS 版。安装并登录后重新打开设置即可启用；下方规则可以先行配置。
+              点下方按钮探测当前正在运行的应用，选中你要监听的那个即可——Toskr 不预置任何应用。
             </p>
+            <Button
+              size="xs"
+              className="mt-2"
+              disabled={detecting}
+              onClick={() => void detectTargets()}
+            >
+              {detecting ? "探测中…" : "探测正在运行的应用"}
+            </Button>
+            {candidates && candidates.length > 0 && (
+              <div className="mt-2 flex flex-col gap-1">
+                {candidates.map((candidate) => (
+                  <button
+                    key={candidate.bundleId}
+                    type="button"
+                    onClick={() => confirmTarget(candidate)}
+                    className="flex flex-col items-start rounded-md border border-border px-2.5 py-1.5 text-left hover:bg-accent"
+                  >
+                    <span className="text-label font-medium">{candidate.name}</span>
+                    <span className="text-micro text-muted-foreground">
+                      {candidate.bundleId}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
-        </Group>
-      )}
-      {appInstalled !== false && (
+        )}
+      </Group>
+      {profile && (
       <Group title="接入方式（二选一）">
         <Row
           label="自动接入（推荐）"

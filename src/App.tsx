@@ -1518,7 +1518,7 @@ export default function App() {
     };
   }, []);
 
-  // 推推桥先把完整 raw 对象写入 JSONL；主窗口维护独立结构化消息投影。
+  // IM桥先把完整 raw 对象写入 JSONL；主窗口维护独立结构化消息投影。
   useEffect(() => {
     const unlisten = listen<MessageWatchCapture>(
       MESSAGE_WATCH_EVENT,
@@ -1527,7 +1527,7 @@ export default function App() {
         const store = useNotesStore.getState();
         const result = store.ingestMessageCaptures([event.payload]);
         if (result.added > 0) {
-          void api.hudFeedback("added", "已捕获推推关注消息");
+          void api.hudFeedback("added", "已捕获IM关注消息");
         }
       }
     );
@@ -1537,7 +1537,7 @@ export default function App() {
   }, []);
 
   // 水合/切换数据目录后，从 append-only JSONL 恢复消息投影。只读本地文件，
-  // 不连接、不打开也不切换推推会话。
+  // 不连接、不打开也不切换IM会话。
   useEffect(() => {
     let alive = true;
     let loading = false;
@@ -2254,7 +2254,7 @@ export default function App() {
       ];
       const confirmed = await ask(
         inspection.format === "complete"
-          ? `完整备份已通过 manifest/hash 预检。将恢复 ${counts.notes} 条笔记、${counts.messages} 条消息、${counts.tasks} 个任务、${counts.media} 个媒体，并先创建当前数据恢复点。原始推推 JSONL 账本不在归档内，仍需按设置页路径单独备份；API Key 不在备份中，恢复后需重新配置。继续吗？`
+          ? `完整备份已通过 manifest/hash 预检。将恢复 ${counts.notes} 条笔记、${counts.messages} 条消息、${counts.tasks} 个任务、${counts.media} 个媒体，并先创建当前数据恢复点。原始IM JSONL 账本不在归档内，仍需按设置页路径单独备份；API Key 不在备份中，恢复后需重新配置。继续吗？`
           : `这是旧 JSON，将先创建当前数据恢复点，再按 ID 合并 ${counts.notes} 条笔记、${counts.tasks} 个任务。\n\n完整性限制：\n- ${legacyLimitations.join("\n- ")}\n\n继续吗？`,
         { title: "导入预检", kind: "warning" }
       );

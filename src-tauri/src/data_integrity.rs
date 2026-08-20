@@ -3654,8 +3654,9 @@ fn validate_task(
         && optional_type(object, "sourceRef", |value| {
             value.as_object().is_some_and(|reference| {
                 reference.get("kind").and_then(serde_json::Value::as_str) == Some("message")
-                    && reference.get("source").and_then(serde_json::Value::as_str)
-                        == Some("tuitui")
+                    && is_message_source(
+                        reference.get("source").and_then(serde_json::Value::as_str),
+                    )
                     && reference
                         .get("conversationId")
                         .and_then(serde_json::Value::as_str)
@@ -3687,8 +3688,13 @@ fn validate_task(
         })
 }
 
+/// 消息来源是否受支持：中性标识 `im`；`tuitui` 为历史品牌值，仅为兼容旧备份/旧数据保留。
+fn is_message_source(source: Option<&str>) -> bool {
+    matches!(source, Some("im" | "tuitui"))
+}
+
 fn validate_message(object: &serde_json::Map<String, serde_json::Value>) -> bool {
-    object.get("source").and_then(serde_json::Value::as_str) == Some("tuitui")
+    is_message_source(object.get("source").and_then(serde_json::Value::as_str))
         && object
             .get("conversationId")
             .and_then(serde_json::Value::as_str)

@@ -1,13 +1,16 @@
-//! 推推 CDP 免手动注入。
+//! IM CDP 免手动注入。
 //!
-//! 用户开启「自动接入」后：Toskr 优雅退出推推 → 以 `--remote-debugging-port=<随机空闲>`
-//! 直起推推 Electron 主二进制 → 连其 CDP 调试通道 → attach 主 IM page → 注入与手动粘贴
+//! 用户开启「自动接入」后：Toskr 优雅退出目标 IM → 以 `--remote-debugging-port=<随机空闲>`
+//! 直起目标 IM 的 Electron 主二进制 → 连其 CDP 调试通道 → attach 主 IM page → 注入与手动粘贴
 //! **同一套**只读桥脚本（transport=cdp）→ 桥经 `__toskrEmit` binding 回传消息 → 解成
 //! `IncomingMessage` 后直接喂给 `message_watch::accept_message`，落账本/去重/emit 全复用。
 //!
 //! 免掉「手动开 DevTools + 复制粘贴 + 刷新重来」。传输走调试通道，绕开 fetch/CORS/PNA。
 //! 生命周期由 `message_watch` 的 generation 闸统一（开/关都 bump）；CDP 不可用时用户仍可
 //! 退回手动粘贴 fallback（HTTP loopback 保留未删）。
+//!
+//! 目标应用不由代码预置：调用方须传入用户「探测并确认」得到的 `ImProfile`
+//! （显示名 / bundle id / 主可执行路径），本模块只按 profile 编排进程。
 
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
@@ -19,6 +22,7 @@ use std::time::{Duration, Instant};
 
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 use tokio::net::TcpStream;
@@ -27,13 +31,46 @@ use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
 use crate::message_watch::{self, IncomingMessage, MessageWatchState, MessageWatchStatus};
 
-const TUITUI_APP: &str = "360家";
-const TUITUI_BIN: &str = "/Applications/360家.app/Contents/MacOS/360家";
-/// 主进程可执行路径（Helper 在 Contents/Frameworks 下，用它只匹配到主进程）。
-const TUITUI_MAIN: &str = "360家.app/Contents/MacOS/360家";
-/// Helper 进程路径前缀（GPU/Renderer/网络等都在此）。
-const TUITUI_HELPERS: &str = "360家.app/Contents/Frameworks";
 const BINDING_NAME: &str = "__toskrEmit";
+
+/// 目标 IM 的运行时档案：由用户在设置里「探测并确认」后指定，代码不预置任何具体应用。
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImProfile {
+    /// 显示名，兼作 `open -a` 目标与 Application Support 数据目录名。
+    pub app_name: String,
+    /// bundle identifier（安装校验用；本模块保留以便日志/未来扩展）。
+    #[allow(dead_code)]
+    pub bundle_id: String,
+    /// 主可执行文件绝对路径，用于带调试端口重启与主进程匹配。
+    pub bin_path: String,
+}
+
+impl ImProfile {
+    /// 主进程 pgrep -f 匹配串：完整主可执行路径，精确匹配主进程命令行、避开 Helper。
+    fn main_pattern(&self) -> &str {
+        &self.bin_path
+    }
+
+    /// Helper 进程路径前缀（<App>.app/Contents/Frameworks，GPU/Renderer/网络等都在此）。
+    fn helpers_pattern(&self) -> String {
+        if let Some(idx) = self.bin_path.find(".app/Contents/") {
+            format!("{}.app/Contents/Frameworks", &self.bin_path[..idx])
+        } else {
+            format!("{}/Contents/Frameworks", self.app_name)
+        }
+    }
+
+    /// 单例锁路径（~/Library/Application Support/<AppName>/SingletonLock）。
+    fn singleton_lock(&self) -> Option<PathBuf> {
+        std::env::var("HOME").ok().map(|home| {
+            PathBuf::from(home)
+                .join("Library/Application Support")
+                .join(&self.app_name)
+                .join("SingletonLock")
+        })
+    }
+}
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsWrite = SplitSink<WsStream, Message>;
@@ -42,27 +79,30 @@ type WsRead = SplitStream<WsStream>;
 // ── 对外入口 ──
 
 /// 开/关 CDP 免手动监听。开启时须由前端传入 transport=cdp 的桥脚本（含 STARTED_AT，
-/// 重连时复用同一脚本以复用同一起点门槛）。关闭走 generation 闸令后台 task 自行收尾。
+/// 重连时复用同一脚本以复用同一起点门槛）与目标 IM 的 profile。关闭走 generation 闸令
+/// 后台 task 自行收尾。
 pub fn set_enabled(
     app: &AppHandle,
     enabled: bool,
     script: Option<String>,
+    profile: Option<ImProfile>,
 ) -> Result<MessageWatchStatus, String> {
     if !enabled {
         message_watch::cdp_end(app);
-        crate::diag::push(app, "推推 CDP 监听关闭中（将恢复推推正常启动）");
+        crate::diag::push(app, "IM CDP 监听关闭中（将恢复目标 IM 正常启动）");
         return Ok(message_watch::current_status(app));
     }
 
     let script = script.ok_or("缺少 CDP 桥脚本")?;
+    let profile = profile.ok_or("未指定要监听的 IM（请先在设置里探测并确认）")?;
     let generation = message_watch::cdp_begin(app);
     let app_task = app.clone();
     tauri::async_runtime::spawn(async move {
-        run_cdp(app_task, generation, script).await;
+        run_cdp(app_task, generation, script, profile).await;
     });
     crate::diag::push(
         app,
-        "推推 CDP 监听已开启（将以调试模式重启推推并自动注入只读桥）",
+        "IM CDP 监听已开启（将以调试模式重启目标 IM 并自动注入只读桥）",
     );
     Ok(message_watch::current_status(app))
 }
@@ -74,22 +114,27 @@ fn generation_changed(app: &AppHandle, generation: u64) -> bool {
         != generation
 }
 
-// ── 后台驱动：确保带端口的推推在跑 → 连 CDP → 断连重连 → 收尾 ──
+// ── 后台驱动：确保带端口的目标 IM 在跑 → 连 CDP → 断连重连 → 收尾 ──
 
-async fn run_cdp(app: AppHandle, generation: u64, script: String) {
+async fn run_cdp(app: AppHandle, generation: u64, script: String, profile: ImProfile) {
     let mut current: Option<(String, Child)> = None;
 
     loop {
         if generation_changed(&app, generation) {
             break;
         }
-        // 确保有一个「带调试端口」的推推在跑；没有或已退出则杀净后重启。
-        if current.is_none() || !tuitui_running() {
+        // 确保有一个「带调试端口」的目标 IM 在跑；没有或已退出则杀净后重启。
+        if current.is_none() || !im_running(&profile) {
             if let Some((_, mut child)) = current.take() {
                 let _ = child.kill();
             }
             let app_blocking = app.clone();
-            match tokio::task::spawn_blocking(move || launch_tuitui_with_cdp(&app_blocking)).await {
+            let profile_blocking = profile.clone();
+            match tokio::task::spawn_blocking(move || {
+                launch_im_with_cdp(&app_blocking, &profile_blocking)
+            })
+            .await
+            {
                 Ok(Ok(endpoint)) => current = Some(endpoint),
                 Ok(Err(error)) => {
                     message_watch::cdp_set_error(&app, error);
@@ -108,7 +153,7 @@ async fn run_cdp(app: AppHandle, generation: u64, script: String) {
             Ok(()) => break,
             Err(error) => {
                 message_watch::cdp_set_error(&app, error);
-                // 退避后重连：推推若仍在跑，下一轮直接复用同一 browser_ws（不重启推推）
+                // 退避后重连：目标 IM 若仍在跑，下一轮直接复用同一 browser_ws（不重启）
                 if !sleep_interruptible(&app, generation, Duration::from_secs(2)).await {
                     break;
                 }
@@ -120,7 +165,8 @@ async fn run_cdp(app: AppHandle, generation: u64, script: String) {
         let _ = child.kill();
     }
     let app_cleanup = app.clone();
-    let _ = tokio::task::spawn_blocking(move || cleanup_tuitui(&app_cleanup)).await;
+    let profile_cleanup = profile.clone();
+    let _ = tokio::task::spawn_blocking(move || cleanup_im(&app_cleanup, &profile_cleanup)).await;
 }
 
 /// 可被 generation 变化打断的 sleep。返回 false 表示应当退出。
@@ -164,7 +210,7 @@ async fn cdp_session(
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
-    let page_target = page_target.ok_or("未找到推推 IM 页面（加载超时）")?;
+    let page_target = page_target.ok_or("未找到 IM 页面（加载超时）")?;
 
     // 2. attach（flatten：后续命令/事件带 sessionId）
     id += 1;
@@ -203,7 +249,7 @@ async fn cdp_session(
         await_result(&mut read, id, app, generation, Some(&session_id), &mut write).await?;
     }
     message_watch::cdp_mark_connected(app);
-    crate::diag::push(app, "推推 CDP 桥已注入（只读脚本，未改已读、未发送）");
+    crate::diag::push(app, "IM CDP 桥已注入（只读脚本，未改已读、未发送）");
 
     // 4. 事件循环：收 bindingCalled 喂下游；导航重发 binding；generation 变化优雅退出
     loop {
@@ -320,23 +366,10 @@ async fn handle_event(
     }
 }
 
-/// 从 Target.getTargets 结果里挑主 IM renderer：type=page 且 url 为推推的 file:// 页面。
+/// 从 Target.getTargets 结果里挑主 IM renderer：Electron IM 通常把界面装在
+/// `file://` 页里，取首个 type=page 且 url 为 file:// 的目标（IM 单窗口，稳定命中）。
 fn find_page_target(result: &Value) -> Option<String> {
     let targets = result.get("targetInfos")?.as_array()?;
-    let is_tuitui_page = |t: &Value| {
-        t.get("type").and_then(|x| x.as_str()) == Some("page")
-            && t.get("url")
-                .and_then(|x| x.as_str())
-                .map(|u| u.starts_with("file://") && u.contains("360"))
-                .unwrap_or(false)
-    };
-    if let Some(t) = targets.iter().find(|t| is_tuitui_page(t)) {
-        return t
-            .get("targetId")
-            .and_then(|x| x.as_str())
-            .map(String::from);
-    }
-    // 兜底：任意 file:// 的 page（推推单窗口，正常不会走到这）
     targets
         .iter()
         .find(|t| {
@@ -351,11 +384,11 @@ fn find_page_target(result: &Value) -> Option<String> {
 
 // ── 进程编排（同步，在 spawn_blocking 中调用）──
 
-/// 杀净推推 → 直起带调试端口 → 从 stderr 抓 `DevTools listening on ws://…`。
-fn launch_tuitui_with_cdp(app: &AppHandle) -> Result<(String, Child), String> {
+/// 杀净目标 IM → 直起带调试端口 → 从 stderr 抓 `DevTools listening on ws://…`。
+fn launch_im_with_cdp(app: &AppHandle, profile: &ImProfile) -> Result<(String, Child), String> {
     let port = pick_free_port()?;
-    kill_tuitui()?;
-    let mut child = spawn_tuitui(port)?;
+    kill_im(profile)?;
+    let mut child = spawn_im(profile, port)?;
     let browser_ws = match await_browser_ws(&mut child, Duration::from_secs(15)) {
         Ok(ws) => ws,
         Err(error) => {
@@ -363,15 +396,17 @@ fn launch_tuitui_with_cdp(app: &AppHandle) -> Result<(String, Child), String> {
             return Err(error);
         }
     };
-    crate::diag::push(app, "推推已以调试模式启动，CDP 通道就绪");
+    crate::diag::push(app, "目标 IM 已以调试模式启动，CDP 通道就绪");
     Ok((browser_ws, child))
 }
 
-/// 关闭时：杀净带端口实例，再以正常方式（无调试端口）恢复推推。
-fn cleanup_tuitui(app: &AppHandle) {
-    let _ = kill_tuitui();
-    let _ = Command::new("open").args(["-a", TUITUI_APP]).status();
-    crate::diag::push(app, "推推 CDP 监听已关闭，已恢复推推正常启动");
+/// 关闭时：杀净带端口实例，再以正常方式（无调试端口）恢复目标 IM。
+fn cleanup_im(app: &AppHandle, profile: &ImProfile) {
+    let _ = kill_im(profile);
+    let _ = Command::new("open")
+        .args(["-a", &profile.app_name])
+        .status();
+    crate::diag::push(app, "IM CDP 监听已关闭，已恢复目标 IM 正常启动");
 }
 
 fn pick_free_port() -> Result<u16, String> {
@@ -383,7 +418,7 @@ fn pick_free_port() -> Result<u16, String> {
         .map_err(|e| format!("读取端口失败：{e}"))
 }
 
-fn tuitui_pids(pattern: &str) -> Vec<i32> {
+fn im_pids(pattern: &str) -> Vec<i32> {
     Command::new("pgrep")
         .args(["-f", pattern])
         .output()
@@ -397,17 +432,16 @@ fn tuitui_pids(pattern: &str) -> Vec<i32> {
         .unwrap_or_default()
 }
 
-fn tuitui_running() -> bool {
-    !tuitui_pids(TUITUI_MAIN).is_empty()
+fn im_running(profile: &ImProfile) -> bool {
+    !im_pids(profile.main_pattern()).is_empty()
 }
 
 /// 单例锁是否已释放：SingletonLock 不存在，或其指向的 pid 已死。
-fn singleton_released() -> bool {
-    let home = match std::env::var("HOME") {
-        Ok(home) => home,
-        Err(_) => return true,
+fn singleton_released(profile: &ImProfile) -> bool {
+    let lock = match profile.singleton_lock() {
+        Some(lock) => lock,
+        None => return true,
     };
-    let lock = PathBuf::from(home).join("Library/Application Support/360家/SingletonLock");
     match std::fs::read_link(&lock) {
         Err(_) => true,
         Ok(target) => target
@@ -422,46 +456,47 @@ fn singleton_released() -> bool {
 
 /// 优雅退出（SIGTERM 主进程避开 osascript 的 TCC 弹窗，Electron 正常 quit + 清 Singleton），
 /// osascript 兜底，再按可执行路径精确杀残留 Helper，最后核验单例锁释放。
-fn kill_tuitui() -> Result<(), String> {
-    for pid in tuitui_pids(TUITUI_MAIN) {
+fn kill_im(profile: &ImProfile) -> Result<(), String> {
+    for pid in im_pids(profile.main_pattern()) {
         unsafe {
             libc::kill(pid, libc::SIGTERM);
         }
     }
-    if !wait_until(|| !tuitui_running(), Duration::from_secs(8)) {
+    if !wait_until(|| !im_running(profile), Duration::from_secs(8)) {
         let _ = Command::new("osascript")
-            .args(["-e", "quit app \"360家\""])
+            .args(["-e", &format!("quit app \"{}\"", profile.app_name)])
             .output();
-        wait_until(|| !tuitui_running(), Duration::from_secs(5));
+        wait_until(|| !im_running(profile), Duration::from_secs(5));
     }
-    for pid in tuitui_pids(TUITUI_HELPERS) {
+    let helpers = profile.helpers_pattern();
+    for pid in im_pids(&helpers) {
         unsafe {
             libc::kill(pid, libc::SIGKILL);
         }
     }
     if wait_until(
-        || !tuitui_running() && singleton_released(),
+        || !im_running(profile) && singleton_released(profile),
         Duration::from_secs(3),
     ) {
         Ok(())
     } else {
-        Err("推推未能完全退出，单例锁可能残留".into())
+        Err("目标 IM 未能完全退出，单例锁可能残留".into())
     }
 }
 
-fn spawn_tuitui(port: u16) -> Result<Child, String> {
-    Command::new(TUITUI_BIN)
+fn spawn_im(profile: &ImProfile, port: u16) -> Result<Child, String> {
+    Command::new(&profile.bin_path)
         .arg(format!("--remote-debugging-port={port}"))
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("启动推推失败：{e}"))
+        .map_err(|e| format!("启动目标 IM 失败：{e}"))
 }
 
 /// 后台线程读 stderr 抓首个 `ws://…`（DevTools listening），随后继续读丢以排空管道，
-/// 避免推推因 stderr 管道写满而卡住。
+/// 避免目标 IM 因 stderr 管道写满而卡住。
 fn await_browser_ws(child: &mut Child, timeout: Duration) -> Result<String, String> {
-    let stderr = child.stderr.take().ok_or("无法读取推推 stderr")?;
+    let stderr = child.stderr.take().ok_or("无法读取目标 IM 的 stderr")?;
     let (tx, rx) = std::sync::mpsc::channel();
     thread::spawn(move || {
         let reader = BufReader::new(stderr);
@@ -479,7 +514,7 @@ fn await_browser_ws(child: &mut Child, timeout: Duration) -> Result<String, Stri
         }
     });
     rx.recv_timeout(timeout)
-        .map_err(|_| "等待推推调试端口就绪超时".to_string())
+        .map_err(|_| "等待目标 IM 调试端口就绪超时".to_string())
 }
 
 fn wait_until(mut cond: impl FnMut() -> bool, timeout: Duration) -> bool {
@@ -499,6 +534,14 @@ fn wait_until(mut cond: impl FnMut() -> bool, timeout: Duration) -> bool {
 mod tests {
     use super::*;
 
+    fn sample_profile() -> ImProfile {
+        ImProfile {
+            app_name: "Demo IM".into(),
+            bundle_id: "com.example.demo-im".into(),
+            bin_path: "/Applications/Demo IM.app/Contents/MacOS/Demo IM".into(),
+        }
+    }
+
     #[test]
     fn picks_a_bindable_free_port() {
         let port = pick_free_port().unwrap();
@@ -509,18 +552,26 @@ mod tests {
     }
 
     #[test]
-    fn finds_tuitui_file_page_target() {
+    fn derives_helpers_prefix_from_bin_path() {
+        assert_eq!(
+            sample_profile().helpers_pattern(),
+            "/Applications/Demo IM.app/Contents/Frameworks"
+        );
+    }
+
+    #[test]
+    fn finds_first_file_page_target() {
         let result = json!({
             "targetInfos": [
                 { "type": "background_page", "url": "chrome://x", "targetId": "bg" },
-                { "type": "page", "url": "file:///Applications/360%E5%AE%B6.app/Contents/Resources/app/index.html", "targetId": "main" }
+                { "type": "page", "url": "file:///Applications/Demo%20IM.app/Contents/Resources/app/index.html", "targetId": "main" }
             ]
         });
         assert_eq!(find_page_target(&result).as_deref(), Some("main"));
     }
 
     #[test]
-    fn ignores_non_tuitui_pages() {
+    fn ignores_non_file_pages() {
         let result = json!({
             "targetInfos": [
                 { "type": "page", "url": "https://example.com", "targetId": "web" }

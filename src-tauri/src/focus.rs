@@ -5,8 +5,9 @@
 use block2::RcBlock;
 use objc2::{runtime::AnyObject, AnyThread};
 use objc2_app_kit::{
-    NSApplicationActivationOptions, NSBitmapImageFileType, NSBitmapImageRep, NSRunningApplication,
-    NSWorkspace, NSWorkspaceApplicationKey, NSWorkspaceDidActivateApplicationNotification,
+    NSApplicationActivationOptions, NSApplicationActivationPolicy, NSBitmapImageFileType,
+    NSBitmapImageRep, NSRunningApplication, NSWorkspace, NSWorkspaceApplicationKey,
+    NSWorkspaceDidActivateApplicationNotification,
 };
 use objc2_foundation::{NSDictionary, NSNotification, NSString};
 use std::{
@@ -49,9 +50,54 @@ pub fn app_installed_for_bundle(bundle_id: &str) -> bool {
     }
 }
 
+/// 当前运行的候选应用（供用户「探测并确认」监听目标）。
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunningApp {
+    pub name: String,
+    pub bundle_id: String,
+    pub bin_path: String,
+}
+
+/// 枚举当前运行的常规 GUI 应用（有 Dock 图标、可作为监听目标），排除 Toskr 自身与
+/// 无 bundle / 无可执行路径者，按名称排序去重。代码不预置任何具体应用——由用户从
+/// 结果里确认要监听哪一个。
+pub fn running_regular_apps() -> Vec<RunningApp> {
+    let workspace = unsafe { NSWorkspace::sharedWorkspace() };
+    let apps = unsafe { workspace.runningApplications() };
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for app in apps.iter() {
+        if app.activationPolicy() != NSApplicationActivationPolicy::Regular {
+            continue;
+        }
+        let Some(bundle) = app.bundleIdentifier() else {
+            continue;
+        };
+        let bundle_id = bundle.to_string();
+        if bundle_id == "com.toskr.app" || !seen.insert(bundle_id.clone()) {
+            continue;
+        }
+        let Some(path) = app.executableURL().and_then(|url| url.path()) else {
+            continue;
+        };
+        let name = app
+            .localizedName()
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| bundle_id.clone());
+        out.push(RunningApp {
+            name,
+            bundle_id,
+            bin_path: path.to_string(),
+        });
+    }
+    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out
+}
+
 /// 内核记录的进程启动时刻（sysctl kinfo_proc）。
 /// launchDate 只覆盖经 LaunchServices 启动的进程——消息监听自动接入用
-/// Command::spawn 重启的推推拿不到 launchDate，目标身份校验会把它误判成
+/// Command::spawn 重启的目标 IM拿不到 launchDate，目标身份校验会把它误判成
 /// 「无法验证身份」并锁死发送。内核启动时刻对任何进程都存在，同样能
 /// 识别 PID 被新进程复用（同一进程恒走同一来源，不会两源混比）。
 fn process_start_time_ms(pid: i32) -> Option<i64> {

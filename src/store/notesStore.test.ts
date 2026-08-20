@@ -89,7 +89,7 @@ describe("notesStore 基础", () => {
   });
 
   it("v12 迁移到最新版时正文不变、生成权威块，并补齐本地成效设置", () => {
-    expect(STORE_VERSION).toBe(20);
+    expect(STORE_VERSION).toBe(21);
     const decoded = decodePersistedState(JSON.stringify({
       version: 12,
       state: {
@@ -109,6 +109,44 @@ describe("notesStore 基础", () => {
       outcomeBaselines: [],
       outcomeProblemSessions: [],
     });
+  });
+
+  it("v21 将消息来源从旧品牌标识迁移为中性 im，并重写复合 id（旧数据零残留）", () => {
+    const decoded = decodePersistedState(JSON.stringify({
+      version: 20,
+      state: {
+        sections: [{ id: INBOX_ID, name: "收件箱" }],
+        notes: [],
+        messages: [{
+          id: JSON.stringify(["tuitui", "g1", "m1"]),
+          source: "tuitui",
+          sourceApp: "旧应用",
+          sourceBundle: "com.example.old",
+          conversationId: "g1",
+          messageId: "m1",
+          conversationName: "项目群",
+          senderUid: "u1",
+          senderName: "张三",
+          occurredAtMs: 1,
+          receivedAtMs: 2,
+          mentionedSelf: true,
+          followedSender: false,
+          matchedRuleIds: [],
+          isGroup: true,
+          messageType: "text",
+          text: "正文",
+          context: [],
+          status: "new",
+        }],
+        settings: defaultSettings(),
+      },
+    }));
+    expect(decoded.messages).toHaveLength(1);
+    expect(decoded.messages[0].source).toBe("im");
+    expect(decoded.messages[0].id).toBe(JSON.stringify(["im", "g1", "m1"]));
+    // 显示用的来源元数据属用户数据，原样保留
+    expect(decoded.messages[0].sourceApp).toBe("旧应用");
+    expect(decoded.messages[0].text).toBe("正文");
   });
 
   it("v14 迁移到 v17 补齐可逆化名默认值，不改动既有设置", () => {
@@ -805,7 +843,7 @@ describe("notesStore 基础", () => {
 
   it("addNote orderByTime：监听消息乱序到达仍按时间最新在上", () => {
     const s = useNotesStore.getState();
-    const sectionId = s.ensureSection("推推");
+    const sectionId = s.ensureSection("消息");
     // 桥批量上报顺序跟随 IM 列表（最新在前）：新的先到、旧的后到
     s.addNote("最新消息", { sectionId, createdAt: 300, orderByTime: true });
     s.addNote("中间消息", { sectionId, createdAt: 200, orderByTime: true });
@@ -1130,7 +1168,7 @@ describe("消息投影与后续动作", () => {
       dueAt: 1_000,
       sourceRef: {
         kind: "message",
-        source: "tuitui",
+        source: "im",
         conversationId: "group-1",
         messageId: "message-1",
       },
@@ -2210,7 +2248,7 @@ describe("标签与更新时间", () => {
 
 describe("ensureSection（来源自动归组）", () => {
   it("同名分组复用其 id，否则新建一次", () => {
-    const name = "推推-ensure-test";
+    const name = "消息-ensure-test";
     const before = useNotesStore.getState().sections.length;
     const id1 = useNotesStore.getState().ensureSection(name);
     const created = useNotesStore.getState().sections;
