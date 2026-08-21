@@ -205,9 +205,9 @@ function SectionHead({
       {hint && (
         <span
           className="flex shrink-0 items-center gap-1 text-micro text-muted-foreground"
-          title="在 AI 应用双击 ⇧ 划选回复内容，会自动带回并对应到该次发送"
+          title="在 AI 应用双击 ⇧ Shift 划选回复内容，会自动带回并对应到该次发送"
         >
-          划词 <Kbd>⇧⇧</Kbd> 自动带回
+          划词 <Kbd>⇧⇧ Shift</Kbd> 自动带回
         </span>
       )}
     </div>

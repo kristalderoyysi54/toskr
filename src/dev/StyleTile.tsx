@@ -144,7 +144,7 @@ function OnboardingMock() {
       <ul className="mt-2 flex flex-col gap-1.5">
         {[
           ["授权辅助功能", true],
-          ["双击 ⇧ 捕获一段文字", true],
+          ["双击 ⇧ Shift 捕获一段文字", true],
           ["按 ⌘⏎ 发回对话", false],
         ].map(([label, done]) => (
           <li key={label as string} className="flex items-center gap-2">

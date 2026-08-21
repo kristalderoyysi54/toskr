@@ -161,7 +161,7 @@ export function OutcomeMetricsSummary({
             </p>
             {!hasActivity && (
               <p className="mt-2 text-label text-muted-foreground">
-                发送第一条内容试试：双击 ⇧ 捕获选中文本，勾选后 ⌘⏎ 发送。
+                发送第一条内容试试：双击 ⇧ Shift 捕获选中文本，勾选后 ⌘⏎ 发送。
               </p>
             )}
             {hasActivity && onClearFilters && (

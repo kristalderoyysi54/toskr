@@ -22,7 +22,7 @@ const TASKS = [
   {
     id: "capture",
     title: "捕获第一条内容",
-    description: "用假邮箱示例体验双击 ⇧ 捕获",
+    description: "用假邮箱示例体验双击 ⇧ Shift 捕获",
   },
   {
     id: "safe-send",

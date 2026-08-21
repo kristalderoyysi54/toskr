@@ -22,7 +22,7 @@ use crate::activity::{
 };
 use crate::storage::{DATA_FILE, MEDIA_DIR};
 
-pub const MAX_STORE_VERSION: u64 = 21;
+pub const MAX_STORE_VERSION: u64 = 22;
 const MISSING_REVISION: &str = "missing";
 const MEDIA_GC_FILE: &str = "toskr-media-gc.json";
 const DATA_JOURNAL_FILE: &str = "toskr-data-transaction.json";
@@ -3467,7 +3467,17 @@ pub(crate) fn validate_settings_value_for_version(
                 .iter()
                 .all(|key| optional_type(onboarding, key, serde_json::Value::is_boolean))
                 && optional_type(onboarding, "onboardingVersion", |value| {
-                    value.as_u64() == Some(2)
+                    value.as_u64().is_some_and(|version| match store_version {
+                        0 => (1..=3).contains(&version),
+                        1..=21 => (1..=3).contains(&version),
+                        _ => version == 3,
+                    })
+                })
+                && optional_type(onboarding, "rehearsalStatus", |value| {
+                    matches!(
+                        value.as_str(),
+                        Some("notStarted" | "active" | "paused" | "skipped" | "completed")
+                    )
                 })
                 && optional_type(onboarding, "rehearsalStep", |value| {
                     matches!(
@@ -3489,7 +3499,10 @@ pub(crate) fn validate_settings_value_for_version(
                     "rehearsalStartedAtMs",
                     "rehearsalPausedAtMs",
                     "rehearsalCompletedAtMs",
+                    "rehearsalSkippedAtMs",
                     "rehearsalDeferredAtMs",
+                    "permissionsCompletedAtMs",
+                    "recoveryTutorialCompletedAtMs",
                     "activationStartedAtMs",
                 ]
                 .iter()
@@ -4076,42 +4089,70 @@ mod tests {
 
     #[test]
     fn current_store_validates_resumable_onboarding_state() {
-        let valid = serde_json::json!({
+        let current = serde_json::json!({
             "onboarding": {
                 "captured": true,
                 "sent": false,
                 "done": false,
-                "onboardingVersion": 2,
+                "onboardingVersion": 3,
+                "rehearsalStatus": "active",
                 "rehearsalStep": "firewall",
                 "rehearsalActive": true,
                 "rehearsalNoteId": "note-1",
                 "rehearsalStartedAtMs": 10,
                 "rehearsalPausedAtMs": null,
                 "rehearsalCompletedAtMs": null,
+                "rehearsalSkippedAtMs": null,
                 "rehearsalDeferredAtMs": null,
+                "permissionsCompletedAtMs": 15,
+                "recoveryTutorialCompletedAtMs": null,
                 "activationStartedAtMs": 20,
                 "activationWithin60s": null
             }
         });
-        assert_eq!(MAX_STORE_VERSION, 21);
+        assert_eq!(MAX_STORE_VERSION, 22);
         assert!(validate_settings_value_for_version(
-            Some(&valid),
+            Some(&current),
             MAX_STORE_VERSION
         ));
 
-        for invalid in [
+        let legacy_v21 = serde_json::json!({
+            "onboarding": {
+                "captured": true,
+                "sent": false,
+                "done": false,
+                "onboardingVersion": 2,
+                "rehearsalStep": "target",
+                "rehearsalActive": true,
+                "rehearsalNoteId": "note-legacy",
+                "rehearsalStartedAtMs": 10,
+                "rehearsalDeferredAtMs": null
+            }
+        });
+        assert!(validate_settings_value_for_version(Some(&legacy_v21), 21));
+        assert!(!validate_settings_value_for_version(
+            Some(&legacy_v21),
+            MAX_STORE_VERSION
+        ));
+
+        for invalid_current in [
             serde_json::json!({"onboarding": {
-                "onboardingVersion": 3, "rehearsalStep": "capture"
+                "onboardingVersion": 4, "rehearsalStatus": "active"
             }}),
             serde_json::json!({"onboarding": {
-                "onboardingVersion": 2, "rehearsalStep": "unknown"
+                "onboardingVersion": 3, "rehearsalStatus": "unknown"
             }}),
             serde_json::json!({"onboarding": {
-                "onboardingVersion": 2, "rehearsalStartedAtMs": -1
+                "onboardingVersion": 3, "rehearsalStatus": "active",
+                "rehearsalStep": "unknown"
+            }}),
+            serde_json::json!({"onboarding": {
+                "onboardingVersion": 3, "rehearsalStatus": "skipped",
+                "rehearsalSkippedAtMs": -1
             }}),
         ] {
             assert!(!validate_settings_value_for_version(
-                Some(&invalid),
+                Some(&invalid_current),
                 MAX_STORE_VERSION
             ));
         }
