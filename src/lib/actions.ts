@@ -1027,7 +1027,7 @@ export async function openSafeRehearsalPreflight(noteId: string) {
   const onboarding = state.settings.onboarding;
   const note = state.notes.find((item) => item.id === noteId);
   if (
-    !onboarding.rehearsalActive ||
+    onboarding.rehearsalStatus !== "active" ||
     onboarding.rehearsalNoteId !== noteId ||
     !["firewall", "delivery"].includes(onboarding.rehearsalStep) ||
     !note ||

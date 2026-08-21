@@ -692,6 +692,9 @@ export default function App() {
   const taskSections = useNotesStore((s) => s.taskSections);
   const settings = useNotesStore((s) => s.settings);
   const onboarding = settings.onboarding;
+  const rehearsalVisible =
+    onboarding.rehearsalStatus === "active" ||
+    onboarding.rehearsalStatus === "paused";
   /** 收起动画结束隐藏窗口时，是否归还焦点给原前台应用。 */
   const restoreFocusRef = useRef(true);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -844,7 +847,7 @@ export default function App() {
         const healthy = tap.installed && tap.receiving;
         // 就绪气泡只做「从故障恢复」的确认；普通启动后的首次按键不打扰
         if (wasStuck && healthy) {
-          tip("ok", "键盘监听已就绪，双击 ⇧ 试试 ✓");
+          tip("ok", "键盘监听已就绪，双击 ⇧ Shift 试试 ✓");
           wasStuck = false;
         } else if (stuck) {
           wasStuck = true;
@@ -1001,7 +1004,7 @@ export default function App() {
         if (id && isSafeRehearsalText(payload.text)) {
           const rehearsal = useNotesStore.getState().settings.onboarding;
           if (
-            rehearsal.rehearsalActive &&
+            rehearsal.rehearsalStatus === "active" &&
             rehearsal.rehearsalStep === "capture"
           ) {
             useNotesStore.getState().transitionOnboarding({
@@ -2140,7 +2143,7 @@ export default function App() {
 
     const showActiveOnboarding = (settings: Settings) => {
       const current = settings.onboarding;
-      if (current.done || !current.rehearsalActive) return;
+      if (current.rehearsalStatus !== "active") return;
       useUIStore.getState().setPinned(true);
       useUIStore.getState().setOpen(true);
       void api.showPanel();
@@ -2206,14 +2209,19 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 上手引导完成庆祝
-  const prevOnboardingDone = useRef(onboarding.done);
+  // 只有真实完成安全发送才庆祝；跳过演练同样会把 done 设为 true。
+  const prevRehearsalCompletedAtMs = useRef(
+    onboarding.rehearsalCompletedAtMs
+  );
   useEffect(() => {
-    if (onboarding.done && !prevOnboardingDone.current) {
+    if (
+      onboarding.rehearsalCompletedAtMs !== null &&
+      onboarding.rehearsalCompletedAtMs !== prevRehearsalCompletedAtMs.current
+    ) {
       tip("ok", "上手完成，Toskr 已就绪 🎉");
     }
-    prevOnboardingDone.current = onboarding.done;
-  }, [onboarding.done]);
+    prevRehearsalCompletedAtMs.current = onboarding.rehearsalCompletedAtMs;
+  }, [onboarding.rehearsalCompletedAtMs]);
 
   const exportBackup = async () => {
     try {
@@ -3880,11 +3888,11 @@ export default function App() {
                   </>
                 ) : (
               <ScrollArea className="min-h-0 flex-1 px-2.5" viewportClassName="px-1">
-                {(!onboarding.done || onboarding.rehearsalActive) && (
+                {rehearsalVisible && (
                   <SafeDeliveryRehearsal />
                 )}
                 {notes.length === 0 ? (
-                  onboarding.done ? (
+                  !rehearsalVisible ? (
                     <EmptyState
                       title="还没有内容"
                       hint={

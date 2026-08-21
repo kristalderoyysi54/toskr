@@ -34,7 +34,7 @@ const STEP_ORDER = [
   "firewall",
   "delivery",
 ] as const;
-const STEP_LABEL = ["权限", "捕获", "目标", "脱敏预检", "安全发送"];
+const STEP_LABEL = ["权限", "收集", "目标", "隐私", "粘贴"];
 
 export interface SafeDeliveryRehearsalViewProps {
   onboarding: OnboardingState;
@@ -48,7 +48,7 @@ export interface SafeDeliveryRehearsalViewProps {
   onOpenPreflight: () => void;
   onPause: () => void;
   onResume: () => void;
-  onDefer: () => void;
+  onSkip: () => void;
   onOpenAccessibility: () => void;
   onOpenInputMonitoring: () => void;
   onResetInputMonitoring: () => void;
@@ -145,8 +145,8 @@ function StepContent(props: SafeDeliveryRehearsalViewProps) {
             {SAFE_REHEARSAL_TEXT}
           </p>
           <p className="mt-1.5 text-label text-muted-foreground">
-            复制后粘贴到 TextEdit 等临时文档，选中全文并连按两次 <Kbd>⇧</Kbd>；
-            捕获成功会自动进入下一步。
+            复制后粘贴到 TextEdit 等临时文档，选中全文并连按两次{" "}
+            <Kbd>⇧ Shift</Kbd>；捕获成功会自动进入下一步。
           </p>
           <Button size="xs" className="mt-2" onClick={props.onCopySample}>
             <Copy className="size-3" aria-hidden /> 复制演练示例
@@ -179,12 +179,12 @@ function StepContent(props: SafeDeliveryRehearsalViewProps) {
     case "delivery":
       return (
         <>
-          <p className="text-body font-medium">脱敏、核对最终正文，再安全发送</p>
+          <p className="text-body font-medium">检查隐私和最终正文，再粘贴</p>
           <p className="mt-1 text-label text-muted-foreground">
-            本地隐私检查会识别假邮箱；请应用替换并检查最终正文。演练安全锁下自动回车始终关闭。
+            本地隐私检查会识别假邮箱。请应用替换并检查最终正文；示例始终不会自动回车。
           </p>
           <Button size="xs" className="mt-2" onClick={props.onOpenPreflight}>
-            {onboarding.rehearsalStep === "delivery" ? "重新打开演练预检" : "打开演练预检"}
+            {onboarding.rehearsalStep === "delivery" ? "重新检查" : "检查隐私和内容"}
           </Button>
         </>
       );
@@ -197,21 +197,25 @@ export function SafeDeliveryRehearsalView(
   props: SafeDeliveryRehearsalViewProps
 ) {
   const { onboarding } = props;
-  if (onboarding.rehearsalStep === "complete" && !onboarding.rehearsalActive) {
+  if (
+    onboarding.rehearsalStatus === "notStarted" ||
+    onboarding.rehearsalStatus === "skipped" ||
+    onboarding.rehearsalStatus === "completed"
+  ) {
     return null;
   }
-  if (!onboarding.rehearsalActive) {
+  if (onboarding.rehearsalStatus === "paused") {
     return (
       <section
-        aria-label="安全发送演练"
+        aria-label="示例演练"
         className="mx-1 mb-2 mt-1 rounded-xl border border-foreground/10 bg-surface-raised/90 p-3 elevation-3"
       >
-        <p className="text-body font-semibold">安全发送演练已暂停</p>
+        <p className="text-body font-semibold">已暂停示例</p>
         <p className="mt-1 text-label text-muted-foreground">
-          进度已保存在本机，继续时会从上一步恢复。
+          进度已保存在本机，可在「设置 → 使用概览」继续。
         </p>
         <Button size="xs" className="mt-2" onClick={props.onResume}>
-          继续演练
+          继续示例
         </Button>
       </section>
     );
@@ -223,16 +227,16 @@ export function SafeDeliveryRehearsalView(
   );
   return (
     <section
-      aria-label="安全发送演练"
+      aria-label="示例演练"
       className="mx-1 mb-2 mt-1 rounded-xl border border-foreground/10 bg-surface-raised/90 p-3 elevation-3"
     >
       <div className="flex items-center gap-2">
         <div className="min-w-0 flex-1">
-          <p className="text-body font-semibold">安全发送演练</p>
-          <p className="text-micro text-muted-foreground">真实链路 · 假数据 · 不自动回车</p>
+          <p className="text-body font-semibold">示例演练</p>
+          <p className="text-micro text-muted-foreground">使用假数据 · 默认不会按回车</p>
         </div>
         <Button size="xs" variant="ghost" onClick={props.onPause}>
-          暂停
+          稍后继续
         </Button>
       </div>
       <ol aria-label="演练进度" className="mt-2 grid grid-cols-5 gap-1">
@@ -264,10 +268,10 @@ export function SafeDeliveryRehearsalView(
       </div>
       <button
         type="button"
-        onClick={props.onDefer}
+        onClick={props.onSkip}
         className="mt-2 text-label text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
       >
-        稍后在真实应用演练
+        退出示例
       </button>
     </section>
   );
@@ -313,7 +317,7 @@ export function SafeDeliveryRehearsal() {
         void api.copyText(SAFE_REHEARSAL_TEXT).then(
           () => {
             transition({ type: "samplePrepared" });
-            tip("ok", "演练示例已复制，请粘贴到临时文档后双击 ⇧ 捕获");
+            tip("ok", "演练示例已复制，请粘贴到临时文档后双击 ⇧ Shift 捕获");
           },
           (error) => tip("warn", `复制演练示例失败：${error}`)
         );
@@ -326,11 +330,14 @@ export function SafeDeliveryRehearsal() {
         const noteId = onboarding.rehearsalNoteId;
         if (noteId) void openSafeRehearsalPreflight(noteId);
       }}
-      onPause={() => transition({ type: "pause" })}
+      onPause={() => {
+        transition({ type: "pause" });
+        tip("info", "已暂停示例，可在「设置 → 使用概览」继续");
+      }}
       onResume={() => transition({ type: "resume" })}
-      onDefer={() => {
-        transition({ type: "defer" });
-        tip("info", "已跳过演练，可随时在「设置 → 关于」重新运行");
+      onSkip={() => {
+        transition({ type: "skip" });
+        tip("info", "已退出示例，可在「设置 → 使用概览」重新开始");
       }}
       onOpenAccessibility={() =>
         void api.openPrivacySettings("accessibility")}

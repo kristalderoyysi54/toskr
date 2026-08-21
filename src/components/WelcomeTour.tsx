@@ -5,6 +5,11 @@ import tourMergeArt from "@/assets/tour-merge.png";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { cn } from "@/lib/utils";
+import {
+  WELCOME_TOUR_COPY,
+  welcomeTourExitEvent,
+  type WelcomeTourExitMode,
+} from "@/lib/welcomeTour";
 import { useNotesStore } from "@/store/notesStore";
 
 interface TourPage {
@@ -15,7 +20,25 @@ interface TourPage {
   body: string;
 }
 
-const PAGES: TourPage[] = [
+const WELCOME_TOUR_PAGES: readonly TourPage[] = [
+  {
+    art: (
+      <span className="flex items-center gap-1 whitespace-nowrap text-micro font-medium">
+        <span className="rounded-lg border border-paper-foreground/15 bg-background/50 px-1.5 py-1.5">
+          文字 · 图片
+        </span>
+        <span aria-hidden>→</span>
+        <span className="rounded-lg bg-paper-foreground px-2 py-1.5 text-paper">
+          Toskr
+        </span>
+        <span aria-hidden>→</span>
+        <span className="rounded-lg border border-paper-foreground/15 bg-background/50 px-1.5 py-1.5">
+          AI 输入框
+        </span>
+      </span>
+    ),
+    ...WELCOME_TOUR_COPY[0],
+  },
   {
     art: (
       <span className="flex items-center gap-1.5">
@@ -23,26 +46,7 @@ const PAGES: TourPage[] = [
         <Kbd className="px-2.5 py-1.5 text-2xl">⇧</Kbd>
       </span>
     ),
-    mini: "双击 Shift",
-    title: "随手一划，收进队列",
-    body: "在任何应用里选中文字或图片，双击 Shift 即刻捕获——不打断当前工作，右上角气泡确认入库。",
-  },
-  {
-    art: <span className="text-4xl">🗂</span>,
-    mini: "剪贴 · 笔记 · 任务",
-    title: "三个页面，各管一摊",
-    body: "剪贴板历史自动收集；笔记是待发送的队列；任务管到期提醒。消息监听、秘文、订阅在设置里按需开启。",
-  },
-  {
-    art: (
-      <span className="flex items-center gap-1.5">
-        <Kbd className="px-2.5 py-1.5 text-2xl">⌘</Kbd>
-        <Kbd className="px-2.5 py-1.5 text-2xl">⏎</Kbd>
-      </span>
-    ),
-    mini: "焦点归还 → 粘贴 → 还原剪贴板",
-    title: "一键发回对话",
-    body: "勾选卡片按 ⌘⏎，Toskr 自动切回目标窗口粘贴发送；目标未就绪会安全中止，绝不误发。",
+    ...WELCOME_TOUR_COPY[1],
   },
   {
     art: (
@@ -52,39 +56,42 @@ const PAGES: TourPage[] = [
         className="h-full w-full rounded-2xl object-cover"
       />
     ),
-    mini: "⌘ 点选 · Shift 范围选",
-    title: "多张卡片，合并一次发出",
-    body: "多选几张卡再发送，内容会按顺序自动合并成一条消息——拼报错日志、凑上下文，一步到位。",
+    ...WELCOME_TOUR_COPY[2],
   },
   {
-    art: <span className="text-4xl">🎭</span>,
-    mini: "发出化名 · 收回还原",
-    title: "隐私过滤，来回自动",
-    body: "发送前自动做敏感信息检查；配置过的名字、订单号等会替换成化名再发出，捕获对方回复时本机自动还原——真实信息不出本机。",
-  },
-  {
-    art: <span className="text-4xl">🚀</span>,
-    mini: "设置 → 通用 可随时重看",
-    title: "准备好了",
-    body: "选中一段文字双击 ⇧ 试试吧；也可以先跟着安全演练完整走一遍发送流程。",
+    art: (
+      <span className="flex items-center gap-2 text-label">
+        <span className="rounded-lg border border-paper-foreground/15 bg-background/50 px-2 py-1.5 line-through opacity-60">
+          demo@example.com
+        </span>
+        <span aria-hidden>→</span>
+        <span className="rounded-lg border border-paper-foreground/20 bg-background/70 px-2 py-1.5 font-medium">
+          [邮箱]
+        </span>
+      </span>
+    ),
+    ...WELCOME_TOUR_COPY[3],
   },
 ];
 
 /**
- * 首启欢迎轮播（方案 B，用户 2026-08-19 选定）：介绍核心功能与特色，
- * 末页衔接既有安全发送演练。看完/跳过持久化 welcomeTourSeen；
- * 设置 → 通用「重看导览」将其复位即可再次显示。
+ * 首启欢迎轮播：四屏说明“是什么 → 收集 → 粘贴 → 隐私”，
+ * 末页可选衔接安全发送演练。看完/跳过持久化 welcomeTourSeen；
+ * 设置 → 使用概览「重看导览」将其复位即可再次显示。
  */
 export function WelcomeTour() {
   const [page, setPage] = useState(0);
-  const current = PAGES[page];
-  const last = page === PAGES.length - 1;
+  const current = WELCOME_TOUR_PAGES[page];
+  const last = page === WELCOME_TOUR_PAGES.length - 1;
 
-  const finish = () => useNotesStore.getState().setSettings({ welcomeTourSeen: true });
-  const startRehearsal = () => {
-    finish();
-    useNotesStore.getState().transitionOnboarding({ type: "start" });
+  const leaveTour = (mode: WelcomeTourExitMode) => {
+    const store = useNotesStore.getState();
+    const event = welcomeTourExitEvent(mode);
+    store.setSettings({ welcomeTourSeen: true });
+    if (event) store.transitionOnboarding(event);
   };
+  const finish = () => leaveTour("use-now");
+  const startRehearsal = () => leaveTour("rehearse");
 
   return (
     <div
@@ -96,7 +103,7 @@ export function WelcomeTour() {
         onClick={finish}
         className="absolute right-4 top-3 rounded-md px-2 py-1 text-label text-muted-foreground outline-none transition-colors hover:text-foreground"
       >
-        跳过
+        跳过导览
       </button>
 
       {/* key 重挂载：翻页时轻淡入（reduced-motion 下由全局 MotionConfig/CSS 静止） */}
@@ -112,7 +119,7 @@ export function WelcomeTour() {
       </div>
 
       <div className="mb-5 flex items-center gap-1.5" aria-hidden>
-        {PAGES.map((_, index) => (
+        {WELCOME_TOUR_PAGES.map((_, index) => (
           <span
             key={index}
             className={cn(
@@ -125,10 +132,13 @@ export function WelcomeTour() {
 
       {last ? (
         <div className="flex flex-col items-center gap-2">
-          <Button onClick={finish}>开始使用</Button>
-          <Button variant="ghost" size="sm" onClick={startRehearsal}>
-            先做一次安全发送演练
+          <Button onClick={startRehearsal}>跟着示例试一次</Button>
+          <Button variant="ghost" size="sm" onClick={finish}>
+            直接开始使用
           </Button>
+          <p className="max-w-64 text-micro text-muted-foreground">
+            可在「设置 → 使用概览」重看介绍或运行示例
+          </p>
         </div>
       ) : (
         <div className="flex items-center gap-2">

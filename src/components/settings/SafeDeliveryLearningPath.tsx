@@ -86,9 +86,9 @@ export function SafeDeliveryLearningPath({
     );
   }
 
-  const resumeMode = onboarding.rehearsalStep === "complete"
-    ? "start"
-    : "resume";
+  const resumeMode = onboarding.rehearsalStatus === "paused"
+    ? "resume"
+    : "start";
 
   return (
     <section

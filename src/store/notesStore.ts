@@ -87,7 +87,7 @@ export type PageId = "notes" | "clipboard" | "tasks" | "secret";
 
 /** 页签默认顺序（剪贴最高频，居首；秘文默认关闭故垫底）。 */
 export const DEFAULT_PAGE_ORDER: PageId[] = ["clipboard", "notes", "tasks", "secret"];
-export const STORE_VERSION = 21;
+export const STORE_VERSION = 22;
 
 /**
  * 归一化页签顺序：去重、剔除未知项、补齐缺失页（按默认序追加）。
@@ -1050,7 +1050,9 @@ export interface NotesState {
   ) => void;
 
   setSettings: (patch: Partial<Settings>) => void;
-  markOnboarding: (patch: Partial<OnboardingState>) => void;
+  markOnboarding: (
+    patch: Partial<Pick<OnboardingState, "captured" | "sent">>
+  ) => void;
   transitionOnboarding: (event: OnboardingEvent) => void;
 
   snapshot: (label: string) => void;
@@ -1370,9 +1372,24 @@ function validateSettingsShape(value: unknown, version: number): void {
     if (!["captured", "sent", "done", "rehearsalActive"].every((key) =>
       value[key] === undefined || typeof value[key] === "boolean"
     )) return false;
+    if (value.onboardingVersion !== undefined) {
+      if (
+        typeof value.onboardingVersion !== "number" ||
+        !Number.isInteger(value.onboardingVersion)
+      ) return false;
+      // 旧 envelope 允许已知的新 onboarding 子版本，便于修复“只改子状态、
+      // 未同步外层版本”的历史数据；当前 v22 则必须严格使用 v3。
+      const expectedVersions = version >= 22
+        ? [ONBOARDING_VERSION]
+        : [1, 2, ONBOARDING_VERSION];
+      if (!expectedVersions.includes(value.onboardingVersion as number)) {
+        return false;
+      }
+    }
     if (
-      value.onboardingVersion !== undefined &&
-      value.onboardingVersion !== ONBOARDING_VERSION
+      value.rehearsalStatus !== undefined &&
+      !["notStarted", "active", "paused", "skipped", "completed"]
+        .includes(String(value.rehearsalStatus))
     ) return false;
     if (
       value.rehearsalStep !== undefined &&
@@ -1388,6 +1405,7 @@ function validateSettingsShape(value: unknown, version: number): void {
       "rehearsalStartedAtMs",
       "rehearsalPausedAtMs",
       "rehearsalCompletedAtMs",
+      "rehearsalSkippedAtMs",
       "rehearsalDeferredAtMs",
       "permissionsCompletedAtMs",
       "recoveryTutorialCompletedAtMs",
@@ -1795,7 +1813,7 @@ function normalizeBillRecord(bill: Bill): Bill {
   };
 }
 
-/** Zustand persist v1-v20 向前迁移；未知字段保留，旧版本重复记录按首项去重。 */
+/** Zustand persist v1-v21 向前迁移；未知字段保留，旧版本重复记录按首项去重。 */
 export function migratePersistedState(
   persisted: unknown,
   version: number
@@ -1896,6 +1914,12 @@ export function migratePersistedState(
       aliasCustomCategories: [],
       aliasNextNumberByCategory: {},
       aliasAutoRestoreOnCapture: true,
+    };
+  }
+  if (version < 22 && p.settings) {
+    p.settings = {
+      ...p.settings,
+      onboarding: onboardingStateFromPersisted(p.settings.onboarding),
     };
   }
   if (version < 17) {

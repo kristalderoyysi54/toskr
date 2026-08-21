@@ -219,6 +219,7 @@ function initialSettingsForView(): Settings {
       captured: true,
       sent,
       done: sent,
+      rehearsalStatus: sent ? "completed" : "active",
       rehearsalStep: sent ? "complete" : "target",
       rehearsalActive: !sent,
       rehearsalNoteId: "browser-tutorial-preview",
@@ -1496,7 +1497,7 @@ function FeaturesSection({ settings, patch }: SP) {
     {
       key: "secretEnabled",
       label: "秘文",
-      hint: "把文字加密成中文句式发进 IM，对方双击 ⇧ 捕获自动解密",
+      hint: "把文字加密成中文句式发进 IM，对方双击 ⇧ Shift 捕获自动解密",
       where: "开启后在左侧「捕获 → 秘文」管理密钥",
     },
     {

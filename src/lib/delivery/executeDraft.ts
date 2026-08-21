@@ -393,7 +393,7 @@ function applySuccessfulDelivery(draft: DeliveryDraft) {
     );
     if (
       draft.sourceItemIds.length === 1 &&
-      onboarding.rehearsalActive &&
+      onboarding.rehearsalStatus === "active" &&
       onboarding.rehearsalNoteId === draft.sourceItemIds[0] &&
       rehearsalNote &&
       isSafeRehearsalText(rehearsalNote.text)

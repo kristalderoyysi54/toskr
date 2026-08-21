@@ -7,11 +7,19 @@ import {
   type SafeDeliveryRehearsalViewProps,
 } from "./SafeDeliveryRehearsal";
 
+function activeOnboarding() {
+  return {
+    ...onboardingStateFromPersisted(undefined),
+    rehearsalStatus: "active" as const,
+    rehearsalActive: true,
+  };
+}
+
 function props(
   overrides: Partial<SafeDeliveryRehearsalViewProps> = {}
 ): SafeDeliveryRehearsalViewProps {
   return {
-    onboarding: onboardingStateFromPersisted(undefined),
+    onboarding: activeOnboarding(),
     permissionStatus: "ready",
     targetReady: false,
     targetName: "尚未识别",
@@ -22,7 +30,7 @@ function props(
     onOpenPreflight: vi.fn(),
     onPause: vi.fn(),
     onResume: vi.fn(),
-    onDefer: vi.fn(),
+    onSkip: vi.fn(),
     onOpenAccessibility: vi.fn(),
     onOpenInputMonitoring: vi.fn(),
     onResetInputMonitoring: vi.fn(),
@@ -37,7 +45,7 @@ describe("安全发送演练 UI", () => {
         {...props({ permissionStatus: "accessibilityDenied" })}
       />
     );
-    expect(denied).toContain('aria-label="安全发送演练"');
+    expect(denied).toContain('aria-label="示例演练"');
     expect(denied).toContain("辅助功能尚未授权");
     expect(denied).toContain("打开辅助功能设置");
 
@@ -52,7 +60,7 @@ describe("安全发送演练 UI", () => {
 
   it("示例捕获说明包含明显假邮箱，不显示 60 秒倒计时", () => {
     const state = {
-      ...onboardingStateFromPersisted(undefined),
+      ...activeOnboarding(),
       rehearsalStep: "capture" as const,
     };
     const html = renderToStaticMarkup(
@@ -65,7 +73,7 @@ describe("安全发送演练 UI", () => {
 
   it("目标步骤不把未就绪目标伪装成可确认", () => {
     const state = {
-      ...onboardingStateFromPersisted(undefined),
+      ...activeOnboarding(),
       rehearsalStep: "target" as const,
       rehearsalNoteId: "sample-note",
     };
@@ -80,7 +88,7 @@ describe("安全发送演练 UI", () => {
 
   it("预检步骤明确显示隐私检查、最终正文与回车安全锁，无英文术语泄漏", () => {
     const state = {
-      ...onboardingStateFromPersisted(undefined),
+      ...activeOnboarding(),
       rehearsalStep: "firewall" as const,
       rehearsalNoteId: "sample-note",
     };
@@ -91,7 +99,20 @@ describe("安全发送演练 UI", () => {
     expect(html).toContain("最终正文");
     expect(html).not.toContain("finalText");
     expect(html).not.toContain("Firewall");
-    expect(html).toContain("自动回车始终关闭");
-    expect(html).toContain("打开演练预检");
+    expect(html).toContain("默认不会按回车");
+    expect(html).toContain("检查隐私和内容");
+  });
+
+  it("暂停和退出使用两个明确动作", () => {
+    const html = renderToStaticMarkup(
+      <SafeDeliveryRehearsalView
+        {...props({
+          onboarding: activeOnboarding(),
+        })}
+      />
+    );
+    expect(html).toContain("稍后继续");
+    expect(html).toContain("退出示例");
+    expect(html).not.toContain("稍后在真实应用演练");
   });
 });

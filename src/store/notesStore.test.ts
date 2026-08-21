@@ -40,6 +40,7 @@ import {
   GENERAL_PROMPT_GROUP_ID,
   SAFETY_PROFILE_ID,
 } from "@/lib/targetProfiles";
+import { ONBOARDING_VERSION } from "@/lib/onboarding";
 
 function reset() {
   useNotesStore.setState({
@@ -89,7 +90,7 @@ describe("notesStore 基础", () => {
   });
 
   it("v12 迁移到最新版时正文不变、生成权威块，并补齐本地成效设置", () => {
-    expect(STORE_VERSION).toBe(21);
+    expect(STORE_VERSION).toBe(22);
     const decoded = decodePersistedState(JSON.stringify({
       version: 12,
       state: {
@@ -471,18 +472,87 @@ describe("notesStore 基础", () => {
 
     expect(decodeOnboarding({ captured: true, sent: true, done: true }))
       .toMatchObject({
-        onboardingVersion: 2,
+        onboardingVersion: ONBOARDING_VERSION,
+        rehearsalStatus: "completed",
         rehearsalStep: "complete",
         rehearsalActive: false,
         done: true,
       });
     expect(decodeOnboarding({ captured: true, sent: false, done: false }))
       .toMatchObject({
-        onboardingVersion: 2,
+        onboardingVersion: ONBOARDING_VERSION,
+        rehearsalStatus: "notStarted",
         rehearsalStep: "permissions",
-        rehearsalActive: true,
+        rehearsalActive: false,
         done: false,
       });
+  });
+
+  it("v21 演练状态迁到 v22，旧稍后不会再伪装成已完成", () => {
+    const current = defaultSettings().onboarding;
+    const {
+      rehearsalStatus: _status,
+      rehearsalSkippedAtMs: _skippedAt,
+      ...legacyBase
+    } = current;
+    const decodeV21 = (onboarding: object) =>
+      decodePersistedState(JSON.stringify({
+        version: 21,
+        state: {
+          settings: { ...defaultSettings(), onboarding },
+        },
+      })).settings.onboarding;
+
+    expect(decodeV21({
+      ...legacyBase,
+      onboardingVersion: 2,
+      rehearsalActive: true,
+      rehearsalStep: "target",
+      rehearsalNoteId: "legacy-note",
+      rehearsalStartedAtMs: 10,
+    })).toMatchObject({
+      onboardingVersion: ONBOARDING_VERSION,
+      rehearsalStatus: "active",
+      rehearsalStep: "target",
+      rehearsalNoteId: "legacy-note",
+    });
+
+    expect(decodeV21({
+      ...legacyBase,
+      onboardingVersion: 2,
+      sent: false,
+      done: true,
+      rehearsalActive: false,
+      rehearsalStep: "complete",
+      rehearsalCompletedAtMs: null,
+      rehearsalDeferredAtMs: 9_000,
+    })).toMatchObject({
+      onboardingVersion: ONBOARDING_VERSION,
+      rehearsalStatus: "skipped",
+      rehearsalStep: "permissions",
+      done: false,
+      rehearsalSkippedAtMs: 9_000,
+      rehearsalCompletedAtMs: null,
+    });
+  });
+
+  it("v22 拒绝旧演练版本与未知状态", () => {
+    const decodeOnboarding = (onboarding: object) => () =>
+      decodePersistedState(JSON.stringify({
+        version: STORE_VERSION,
+        state: {
+          settings: { ...defaultSettings(), onboarding },
+        },
+      }));
+
+    expect(decodeOnboarding({
+      ...defaultSettings().onboarding,
+      onboardingVersion: 2,
+    })).toThrow("settings.onboarding 字段无效");
+    expect(decodeOnboarding({
+      ...defaultSettings().onboarding,
+      rehearsalStatus: "unknown",
+    })).toThrow("settings.onboarding 字段无效");
   });
 
   it("v14 拒绝未来演练版本与损坏步骤", () => {
@@ -496,7 +566,7 @@ describe("notesStore 基础", () => {
 
     expect(decodeOnboarding({
       ...defaultSettings().onboarding,
-      onboardingVersion: 3,
+      onboardingVersion: ONBOARDING_VERSION + 1,
     })).toThrow("settings.onboarding 字段无效");
     expect(decodeOnboarding({
       ...defaultSettings().onboarding,

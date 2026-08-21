@@ -1,9 +1,9 @@
 import type { DeliveryDraft } from "@/lib/delivery/types";
 
-export const ONBOARDING_VERSION = 2;
+export const ONBOARDING_VERSION = 3;
 export const SAFE_REHEARSAL_ACTIVATION_MS = 60_000;
 export const SAFE_REHEARSAL_TEXT =
-  "安全演练：请把下面内容概括成一句话，并保留演练邮箱 demo.user@example.com。";
+  "请把这段内容概括成一句话。示例邮箱 demo.user@example.com。";
 
 export type OnboardingStep =
   | "permissions"
@@ -13,18 +13,28 @@ export type OnboardingStep =
   | "delivery"
   | "complete";
 
+export type RehearsalStatus =
+  | "notStarted"
+  | "active"
+  | "paused"
+  | "skipped"
+  | "completed";
+
 export interface OnboardingState {
   /** v1 三步引导兼容字段；旧调用仍只更新这三个布尔值。 */
   captured: boolean;
   sent: boolean;
   done: boolean;
   onboardingVersion: number;
+  rehearsalStatus: RehearsalStatus;
   rehearsalStep: OnboardingStep;
   rehearsalActive: boolean;
   rehearsalNoteId: string | null;
   rehearsalStartedAtMs: number | null;
   rehearsalPausedAtMs: number | null;
   rehearsalCompletedAtMs: number | null;
+  rehearsalSkippedAtMs: number | null;
+  /** v2 的 defer 兼容字段；新状态只写 rehearsalSkippedAtMs。 */
   rehearsalDeferredAtMs: number | null;
   /** Raycast 式入门任务：权限检查作为独立成就保留，重跑演练不清空。 */
   permissionsCompletedAtMs: number | null;
@@ -47,7 +57,7 @@ export type OnboardingEvent =
   | { type: "preflightOpened" }
   | { type: "deliverySent" }
   | { type: "recoveryTutorialCompleted" }
-  | { type: "defer" };
+  | { type: "skip" };
 
 export type PermissionRehearsalStatus =
   | "accessibilityDenied"
@@ -66,6 +76,13 @@ const STEPS = new Set<OnboardingStep>([
   "delivery",
   "complete",
 ]);
+const REHEARSAL_STATUSES = new Set<RehearsalStatus>([
+  "notStarted",
+  "active",
+  "paused",
+  "skipped",
+  "completed",
+]);
 
 function finiteTime(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
@@ -79,12 +96,14 @@ export function defaultOnboardingState(): OnboardingState {
     sent: false,
     done: false,
     onboardingVersion: ONBOARDING_VERSION,
+    rehearsalStatus: "notStarted",
     rehearsalStep: "permissions",
-    rehearsalActive: true,
+    rehearsalActive: false,
     rehearsalNoteId: null,
     rehearsalStartedAtMs: null,
     rehearsalPausedAtMs: null,
     rehearsalCompletedAtMs: null,
+    rehearsalSkippedAtMs: null,
     rehearsalDeferredAtMs: null,
     permissionsCompletedAtMs: null,
     recoveryTutorialCompletedAtMs: null,
@@ -101,45 +120,77 @@ export function onboardingStateFromPersisted(value: unknown): OnboardingState {
   const legacyDone = raw.done === true;
   const legacyCaptured = raw.captured === true;
   const legacySent = raw.sent === true;
-  const current = raw.onboardingVersion === ONBOARDING_VERSION;
-
-  if (!current) {
-    return {
-      ...raw,
-      ...defaultOnboardingState(),
-      captured: legacyCaptured,
-      sent: legacySent,
-      done: legacyDone,
-      rehearsalStep: legacyDone ? "complete" : "permissions",
-      rehearsalActive: !legacyDone,
-    } as OnboardingState;
-  }
-
   const step = STEPS.has(raw.rehearsalStep as OnboardingStep)
     ? raw.rehearsalStep as OnboardingStep
     : legacyDone
       ? "complete"
       : "permissions";
+  const completedAt = finiteTime(raw.rehearsalCompletedAtMs);
+  const skippedAt = finiteTime(raw.rehearsalSkippedAtMs);
+  const deferredAt = finiteTime(raw.rehearsalDeferredAtMs);
+  const pausedAt = finiteTime(raw.rehearsalPausedAtMs);
+  const startedAt = finiteTime(raw.rehearsalStartedAtMs);
+  const sourceVersion = Number.isInteger(raw.onboardingVersion)
+    ? raw.onboardingVersion as number
+    : null;
+  const noteId =
+    typeof raw.rehearsalNoteId === "string" && raw.rehearsalNoteId
+      ? raw.rehearsalNoteId
+      : null;
+  const hasSessionProgress =
+    startedAt !== null ||
+    pausedAt !== null ||
+    noteId !== null ||
+    finiteTime(raw.permissionsCompletedAtMs) !== null ||
+    finiteTime(raw.activationStartedAtMs) !== null ||
+    step !== "permissions";
+  // v2 的“稍后”曾被写成 done=true/step=complete。没有真实完成时间时，
+  // 这些记录只能说明用户退出了演练，不能宣称已经完成。
+  const v2FalseCompletion =
+    sourceVersion === 2 &&
+    completedAt === null &&
+    (deferredAt !== null || legacyDone || step === "complete");
+  const explicitStatus = REHEARSAL_STATUSES.has(
+    raw.rehearsalStatus as RehearsalStatus
+  )
+    ? raw.rehearsalStatus as RehearsalStatus
+    : null;
+  let rehearsalStatus: RehearsalStatus = "notStarted";
+  if (sourceVersion === ONBOARDING_VERSION && explicitStatus) {
+    rehearsalStatus = explicitStatus;
+  } else if (completedAt !== null || (sourceVersion !== 2 && legacyDone)) {
+    rehearsalStatus = "completed";
+  } else if (v2FalseCompletion) {
+    rehearsalStatus = "skipped";
+  } else if (hasSessionProgress) {
+    rehearsalStatus = raw.rehearsalActive === true ? "active" : "paused";
+  }
+  const completed =
+    rehearsalStatus === "completed" ||
+    completedAt !== null ||
+    (sourceVersion === ONBOARDING_VERSION && legacyDone);
   return {
     ...raw,
     ...defaultOnboardingState(),
     captured: legacyCaptured,
     sent: legacySent,
-    done: legacyDone,
+    done: completed,
     onboardingVersion: ONBOARDING_VERSION,
-    rehearsalStep: step,
-    rehearsalActive:
-      typeof raw.rehearsalActive === "boolean"
-        ? raw.rehearsalActive
-        : !legacyDone,
-    rehearsalNoteId:
-      typeof raw.rehearsalNoteId === "string" && raw.rehearsalNoteId
-        ? raw.rehearsalNoteId
-        : null,
-    rehearsalStartedAtMs: finiteTime(raw.rehearsalStartedAtMs),
-    rehearsalPausedAtMs: finiteTime(raw.rehearsalPausedAtMs),
-    rehearsalCompletedAtMs: finiteTime(raw.rehearsalCompletedAtMs),
-    rehearsalDeferredAtMs: finiteTime(raw.rehearsalDeferredAtMs),
+    rehearsalStatus,
+    rehearsalStep:
+      rehearsalStatus === "completed"
+        ? "complete"
+        : v2FalseCompletion
+          ? "permissions"
+          : step,
+    rehearsalActive: rehearsalStatus === "active",
+    rehearsalNoteId: noteId,
+    rehearsalStartedAtMs: startedAt,
+    rehearsalPausedAtMs: pausedAt,
+    rehearsalCompletedAtMs: completedAt,
+    rehearsalSkippedAtMs:
+      skippedAt ?? (v2FalseCompletion ? deferredAt : null),
+    rehearsalDeferredAtMs: deferredAt,
     permissionsCompletedAtMs: finiteTime(raw.permissionsCompletedAtMs),
     recoveryTutorialCompletedAtMs: finiteTime(
       raw.recoveryTutorialCompletedAtMs
@@ -158,35 +209,43 @@ export function onboardingAfter(
   now = Date.now()
 ): OnboardingState {
   const state = onboardingStateFromPersisted(current);
+  const active = state.rehearsalStatus === "active";
   switch (event.type) {
     case "start":
       return {
         ...state,
+        rehearsalStatus: "active",
         rehearsalStep: "permissions",
         rehearsalActive: true,
         rehearsalNoteId: null,
         rehearsalStartedAtMs: now,
         rehearsalPausedAtMs: null,
-        rehearsalCompletedAtMs: null,
+        rehearsalSkippedAtMs: null,
         rehearsalDeferredAtMs: null,
         activationStartedAtMs: null,
         activationWithin60s: null,
       };
     case "resume":
-      return {
-        ...state,
-        rehearsalActive: true,
-        rehearsalStartedAtMs: state.rehearsalStartedAtMs ?? now,
-        rehearsalPausedAtMs: null,
-      };
+      return state.rehearsalStatus === "paused" || active
+        ? {
+            ...state,
+            rehearsalStatus: "active",
+            rehearsalActive: true,
+            rehearsalStartedAtMs: state.rehearsalStartedAtMs ?? now,
+            rehearsalPausedAtMs: null,
+          }
+        : state;
     case "pause":
-      return {
-        ...state,
-        rehearsalActive: false,
-        rehearsalPausedAtMs: now,
-      };
+      return active
+        ? {
+            ...state,
+            rehearsalStatus: "paused",
+            rehearsalActive: false,
+            rehearsalPausedAtMs: now,
+          }
+        : state;
     case "permissionsReady":
-      return state.rehearsalStep === "permissions"
+      return active && state.rehearsalStep === "permissions"
         ? {
             ...state,
             rehearsalStep: "capture",
@@ -194,32 +253,44 @@ export function onboardingAfter(
           }
         : state;
     case "samplePrepared":
-      return {
-        ...state,
-        activationStartedAtMs: state.activationStartedAtMs ?? now,
-      };
+      return active && state.rehearsalStep === "capture"
+        ? {
+            ...state,
+            activationStartedAtMs: state.activationStartedAtMs ?? now,
+          }
+        : state;
     case "sampleCaptured":
-      return {
-        ...state,
-        captured: true,
-        rehearsalStep: "target",
-        rehearsalNoteId: event.noteId,
-        activationStartedAtMs: state.activationStartedAtMs ?? now,
-      };
+      return active && state.rehearsalStep === "capture" && event.noteId
+        ? {
+            ...state,
+            captured: true,
+            rehearsalStep: "target",
+            rehearsalNoteId: event.noteId,
+            activationStartedAtMs: state.activationStartedAtMs ?? now,
+          }
+        : state;
     case "targetConfirmed":
-      return state.rehearsalNoteId
+      return active && state.rehearsalStep === "target" && state.rehearsalNoteId
         ? { ...state, rehearsalStep: "firewall" }
         : state;
     case "preflightOpened":
-      return state.rehearsalNoteId
+      return active &&
+        ["firewall", "delivery"].includes(state.rehearsalStep) &&
+        state.rehearsalNoteId
         ? { ...state, rehearsalStep: "delivery" }
         : state;
     case "deliverySent": {
+      if (
+        !active ||
+        state.rehearsalStep !== "delivery" ||
+        !state.rehearsalNoteId
+      ) return state;
       const startedAt = state.activationStartedAtMs;
       return {
         ...state,
         sent: true,
         done: true,
+        rehearsalStatus: "completed",
         rehearsalStep: "complete",
         rehearsalActive: false,
         rehearsalCompletedAtMs: now,
@@ -236,16 +307,17 @@ export function onboardingAfter(
         recoveryTutorialCompletedAtMs:
           state.recoveryTutorialCompletedAtMs ?? now,
       };
-    case "defer":
-      return {
-        ...state,
-        done: true,
-        rehearsalStep: "complete",
-        rehearsalActive: false,
-        rehearsalDeferredAtMs: now,
-        rehearsalPausedAtMs: null,
-        activationWithin60s: null,
-      };
+    case "skip":
+      return active || state.rehearsalStatus === "paused"
+        ? {
+            ...state,
+            rehearsalStatus: "skipped",
+            rehearsalActive: false,
+            rehearsalSkippedAtMs: now,
+            rehearsalPausedAtMs: null,
+            activationWithin60s: null,
+          }
+        : state;
   }
 }
 
@@ -255,7 +327,8 @@ export function safeRehearsalLaunchEvent(
   mode: SafeRehearsalLaunchMode
 ): OnboardingEvent {
   const state = onboardingStateFromPersisted(current);
-  return mode === "resume" && state.rehearsalStep !== "complete"
+  return mode === "resume" &&
+    (state.rehearsalStatus === "paused" || state.rehearsalStatus === "active")
     ? { type: "resume" }
     : { type: "start" };
 }

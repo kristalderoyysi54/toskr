@@ -62,7 +62,7 @@ export function PermissionBanner() {
         需要「辅助功能」权限
       </div>
       <p className="mt-1 text-label leading-relaxed text-muted-foreground">
-        Toskr 依赖辅助功能权限监听双击 ⇧ 并读取选中文本。请在系统设置中勾选
+        Toskr 依赖辅助功能权限监听双击 ⇧ Shift 并读取选中文本。请在系统设置中勾选
         Toskr（若列表已有旧条目请先删除再重新添加），授权后几秒内自动生效。
       </p>
       <div className="mt-2 flex gap-1.5">
