@@ -75,7 +75,8 @@ import { linkParts } from "@/lib/link";
 import { useAppIcon } from "@/lib/icons";
 import { isMonoLike, splitMiddle } from "@/lib/cliprow";
 import { shouldScrollFocusedCard } from "@/lib/cardFocus";
-import { noteTimeLabel, useNoteThumb } from "@/lib/media";
+import { noteTimeLabel, useNoteThumb, useNoteThumbState } from "@/lib/media";
+import { useNearViewport } from "@/lib/viewportMedia";
 import { noteToTaskSmart, suggestTitle } from "@/lib/ai";
 import { splitHighlight } from "@/lib/search";
 import {
@@ -110,6 +111,8 @@ import { requestResultVerification } from "@/lib/resultVerification";
 
 /** 双击发送的第一击会塌掉多选：留档点击前的集合供 onDoubleClick 找回。 */
 let lastMultiSelection: { ids: string[]; at: number } | null = null;
+/** 一级页切换时显式清理紧缩行悬停态；WKWebView 不保证隐藏元素收到 leave。 */
+export const COMPACT_ROW_RELEASE_EVENT = "toskr:compact-row-release";
 
 /**
  * 卡顶通栏底色：应用主色的轻微对角渐变（左上亮 → 右下暗各偏 ~8%），
@@ -124,8 +127,16 @@ export function headerGradient(color: string): string {
 }
 
 /** 组合卡并排缩略图（独立组件实例规避可变数量 hook；overlay 显示「+N」）。 */
-function CardThumb({ file, overlay }: { file: string; overlay?: string }) {
-  const url = useNoteThumb(file);
+function CardThumb({
+  file,
+  overlay,
+  enabled,
+}: {
+  file: string;
+  overlay?: string;
+  enabled: boolean;
+}) {
+  const url = useNoteThumb(enabled ? file : undefined);
   return (
     <div className="relative flex h-full min-w-0 flex-1 items-center justify-center overflow-hidden rounded-sm bg-black/[0.04] dark:bg-white/[0.06]">
       {url ? (
@@ -207,6 +218,8 @@ export const NoteCard = memo(function NoteCard({
     useNotesStore.getState();
 
   const cardRef = useRef<HTMLDivElement | null>(null);
+  /** 指针点中的卡天然已在视口，跳过 focus effect 的同步 scrollIntoView/layout。 */
+  const pointerFocusedRef = useRef(false);
   const icon = useAppIcon(note.sourceBundle);
   const cardTint = useNotesStore((s) => s.settings.cardTint);
   // 笔记域头部渐变的分组色兜底（返回原始字符串，满足选择器稳定引用约束）；
@@ -235,7 +248,13 @@ export const NoteCard = memo(function NoteCard({
   /** 组合卡片：既有正文又带图片附件 */
   const isComposite = !isImage && images.length > 0;
   const link = isLink ? linkParts(note.url!) : null;
-  const imageUrl = useNoteThumb(isImage ? note.imageFile : undefined);
+  // 屏外图片不启动 Tauri IPC / data URL 解码；同一张卡进入视口前约 160px 再取。
+  // 纯文本卡不会注册 observer，紧缩组合卡复用这里的首图结果，避免双 hook。
+  const nearViewport = useNearViewport(cardRef, isImage || images.length > 0);
+  const primaryImage = isImage ? note.imageFile : compact ? images[0] : undefined;
+  const { url: imageUrl, loading: imageLoading } = useNoteThumbState(
+    nearViewport ? primaryImage : undefined
+  );
   const cardImages = isImage ? noteImages(note) : [];
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
@@ -246,7 +265,9 @@ export const NoteCard = memo(function NoteCard({
     const card = cardRef.current;
     if (!card) return;
     const insideHiddenPage = !!card.closest('[aria-hidden="true"]');
-    if (shouldScrollFocusedCard(focused, insideHiddenPage)) {
+    const pointerFocused = pointerFocusedRef.current;
+    pointerFocusedRef.current = false;
+    if (shouldScrollFocusedCard(focused, insideHiddenPage, pointerFocused)) {
       card.scrollIntoView({ block: "nearest" });
     }
   }, [focused]);
@@ -543,6 +564,7 @@ export const NoteCard = memo(function NoteCard({
               <ContextMenuItem
                 disabled={current.size >= NOTE_TAG_MAX_COUNT}
                 onClick={() => {
+                  useUIStore.getState().setFocusedId(note.id);
                   tagInputPendingRef.current = true;
                   tagInputOpenedAtRef.current = Date.now();
                   setTagDraft("");
@@ -731,6 +753,8 @@ export const NoteCard = memo(function NoteCard({
     setTagDraft(null);
   };
   const startRename = () => {
+    // 窗口化列表以 focusedId 保活本地草稿，滚动时不能卸载输入框。
+    useUIStore.getState().setFocusedId(note.id);
     setTitleDraft(note.title ?? "");
     setRenaming(true);
   };
@@ -829,10 +853,27 @@ export const NoteCard = memo(function NoteCard({
             transform: CSS.Transform.toString(transform),
             transition,
             "--card-alpha": `${Math.round(cardOpacity * 100)}%`,
+            "--list-intrinsic-size": compact
+              ? isClip
+                ? "32px"
+                : "40px"
+              : ticket
+                ? clipTemplate === "condensed"
+                  ? "52px"
+                  : "116px"
+                : "136px",
           } as React.CSSProperties}
           // 整卡可抓拖拽排序（4px 激活阈值不影响点击/双击）；键盘拾取走专用把手
           // （Tab 聚焦时浮现），避免 Tab 到悬浮操作按钮时 Space/Enter 被 dnd-kit 抢走
-          onPointerDown={(e) => listeners?.onPointerDown?.(e)}
+          onPointerDown={(e) => {
+            // 起拖不会触发 click：先保活源卡，避免自动滚动出窗口后被虚拟壳卸载。
+            const ui = useUIStore.getState();
+            if (ui.focusedId !== note.id) {
+              pointerFocusedRef.current = true;
+              ui.setFocusedId(note.id);
+            }
+            listeners?.onPointerDown?.(e);
+          }}
           onClick={(e) => {
             const ui = useUIStore.getState();
             if (e.shiftKey && ui.anchorId && ui.anchorId !== note.id) {
@@ -889,6 +930,7 @@ export const NoteCard = memo(function NoteCard({
             // 正是用户反复指出的那层描边（放大截图实测：面板 #2f3a4a →
             // 暗带 #1f2226 → 通栏 #cd7538）。选中态改用不占布局的 ring
             "group relative flex cursor-default select-none overflow-hidden",
+            !strip && "list-render-unit",
             compact && isClip ? "rounded-md" : "rounded-lg",
             strip
               ? // Paste 1:1：近方形卡（实测 496×526 → 16/17），宽随栏高推导
@@ -958,6 +1000,7 @@ export const NoteCard = memo(function NoteCard({
           <button
             {...attributes}
             data-drag-handle
+            onFocus={() => useUIStore.getState().setFocusedId(note.id)}
             onKeyDown={(e) => listeners?.onKeyDown?.(e)}
             onClick={(e) => e.stopPropagation()}
             aria-label="拖拽调整位置和分组（Space 拾起，方向键移动）"
@@ -995,6 +1038,8 @@ export const NoteCard = memo(function NoteCard({
                 icon={icon}
                 query={query}
                 dragOutProps={dragOutProps}
+                thumb={imageUrl}
+                thumbLoading={imageLoading}
               />
             </div>
           ) : (
@@ -1154,7 +1199,12 @@ export const NoteCard = memo(function NoteCard({
                     className="size-6 shrink-0 rounded-sm object-cover"
                   />
                 ) : (
-                  <span className="size-6 shrink-0 animate-pulse rounded-sm bg-black/[0.06] dark:bg-white/[0.08]" />
+                  <span
+                    className={cn(
+                      "size-6 shrink-0 rounded-sm bg-black/[0.06] dark:bg-white/[0.08]",
+                      imageLoading && "animate-pulse"
+                    )}
+                  />
                 ))}
               {isLink && note.linkIcon && <LinkFavicon src={note.linkIcon} />}
               <p
@@ -1217,6 +1267,7 @@ export const NoteCard = memo(function NoteCard({
                       <CardThumb
                         key={f}
                         file={f}
+                        enabled={nearViewport}
                         overlay={
                           i === 2 && cardImages.length > 3
                             ? `+${cardImages.length - 3}`
@@ -1297,7 +1348,7 @@ export const NoteCard = memo(function NoteCard({
           {clipTemplate === "standard" && isComposite && (
             <div className="mb-1 flex shrink-0 gap-1 overflow-hidden">
               {images.slice(0, 4).map((f) => (
-                <Thumb key={f} file={f} />
+                <Thumb key={f} file={f} enabled={nearViewport} />
               ))}
               {images.length > 4 && (
                 <span className="self-center text-micro text-muted-foreground">
@@ -1571,12 +1622,17 @@ function CompactRow({
   icon,
   query,
   dragOutProps,
+  thumb,
+  thumbLoading,
 }: {
   note: Note;
   icon: ReturnType<typeof useAppIcon>;
   query: string;
   /** 仅文本卡非空：拖出文本到外部应用 + 阻断冒泡（见 NoteCard 同名变量注释）。 */
   dragOutProps: React.HTMLAttributes<HTMLParagraphElement>;
+  /** NoteCard 统一做近视口加载；纯图/组合卡都复用这一个结果。 */
+  thumb: string | null;
+  thumbLoading: boolean;
 }) {
   const isImage = note.kind === "image";
   const isLink = note.kind === "link" && !!note.url;
@@ -1606,23 +1662,26 @@ function CompactRow({
   const [rowHover, setRowHover] = useState(false);
   /** 带图行悬停 → 原图窥视（行级触发，24px 缩略图太小不当靶子）。 */
   const peekFiles = images.length > 0 ? images : note.imageFile ? [note.imageFile] : [];
-  const peek = usePeekImage(peekFiles);
   /** 本行清态（悬停+窥视一体收）：闭包每渲染经 ref 取新，对外身份稳定，
    *  供全局认领表跨行调用。 */
-  const releaseRef = useRef(() => {});
-  releaseRef.current = () => {
+  const releaseRef = useRef((_owned: boolean) => {});
+  releaseRef.current = (owned) => {
     setRowHover(false);
-    peek.cancel();
+    if (owned) cancelPeekImage();
   };
   const release = useMemo(() => {
     const fn = () => {
-      dropRowHoverClaim(fn);
-      releaseRef.current();
+      releaseRef.current(dropRowHoverClaim(fn));
     };
     return fn;
   }, []);
-  // 卸载让出认领（窥视窗收起由 usePeekImage 自身的卸载兜底负责）
-  useEffect(() => () => dropRowHoverClaim(release), [release]);
+  // 卸载让出认领；仅 active 行负责收起全局单例窥视窗。
+  useEffect(
+    () => () => {
+      if (dropRowHoverClaim(release)) cancelPeekImage();
+    },
+    [release]
+  );
   // 悬停期间的边界兜底：指针离开 webview（relatedTarget=null 的 pointerout /
   // html 的 mouseleave）或页面隐藏时强制清态——行级 pointerleave 在 WKWebView
   // 里并非每次都来（悬停链断裂成因见 MarqueeLine 常驻挂载注释）
@@ -1637,10 +1696,12 @@ function CompactRow({
     document.addEventListener("pointerout", onOut, true);
     document.documentElement.addEventListener("mouseleave", release);
     document.addEventListener("visibilitychange", onVis);
+    window.addEventListener(COMPACT_ROW_RELEASE_EVENT, release);
     return () => {
       document.removeEventListener("pointerout", onOut, true);
       document.documentElement.removeEventListener("mouseleave", release);
       document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener(COMPACT_ROW_RELEASE_EVENT, release);
     };
   }, [rowHover, release]);
   /** 标题行内容（标题优先：加重标题 + 淡色摘要同行跟随），静态/滚动两形态共用。 */
@@ -1660,15 +1721,20 @@ function CompactRow({
       className="relative flex h-full w-full min-w-0 items-center gap-2 pl-2 pr-2"
       // move 而非 enter：列表滚动把行送到静止指针下会触发 enter（WebKit 悬停重算），
       // 造成「没碰鼠标某行自己在滚」；真实移动才算悬停意图。滚轮=正在翻列表，立即停
-      onPointerMove={() => {
+      onPointerMove={(event) => {
+        // 按键仍压着就是点击/拖拽，不启动 360ms 窥视计时。
+        if (event.buttons !== 0) {
+          release();
+          return;
+        }
         claimRowHover(release);
         setRowHover(true);
-        peek.arm();
+        armPeekImage(peekFiles);
       }}
       onPointerLeave={release}
       onWheel={release}
       // 按下=点选/拖拽意图，窥视让位
-      onPointerDown={peek.cancel}
+      onPointerDown={release}
     >
       {isLink && note.linkIcon ? (
         <LinkFavicon src={note.linkIcon} />
@@ -1676,7 +1742,9 @@ function CompactRow({
         <img src={icon.url} alt="" className="size-5 shrink-0" />
       ) : null}
       {/* 带图即给缩略图（纯图卡 + 组合卡同待遇），行悬停调起原始尺寸窥视窗 */}
-      {peekFiles.length > 0 && <CompactThumb file={peekFiles[0]} />}
+      {peekFiles.length > 0 && (
+        <CompactThumb thumb={thumb} loading={thumbLoading} />
+      )}
       <MarqueeLine
         active={rowHover}
         dragOutProps={dragOutProps}
@@ -1744,8 +1812,8 @@ function LinkFavicon({ src }: { src: string }) {
 }
 
 /** 组合卡片里的小缩略图。 */
-function Thumb({ file }: { file: string }) {
-  const url = useNoteThumb(file);
+function Thumb({ file, enabled }: { file: string; enabled: boolean }) {
+  const url = useNoteThumb(enabled ? file : undefined);
   return (
     <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-sm bg-black/[0.05] dark:bg-white/[0.08]">
       {url && <img src={url} alt="" className="max-h-full max-w-full object-contain" />}
@@ -1816,21 +1884,24 @@ function MarqueeLine({
       {...dragOutProps}
       className={cn(
         className,
+        "relative",
         // 滚动形态去省略号（text-overflow 按静态布局画「…」，滑动时会穿帮）
         scrolling ? "overflow-hidden text-clip whitespace-nowrap" : "truncate"
       )}
     >
-      {/* 两形态常驻挂载、仅切 display：形态切换发生在指针正下方，卸载会把
-          WebKit 悬停链挂到已脱离文档的节点上，此后该行 pointerout/leave 永不
-          派发（实测 2026-08-21：行停不下来、多行同滚、窥视窗失收）。
-          contents 不产生盒，静态布局与直挂完全一致 */}
-      <span className={scrolling ? "hidden" : "contents"}>{content}</span>
-      <span
-        ref={innerRef}
-        className={cn("inline-block whitespace-nowrap", !scrolling && "hidden")}
-      >
-        {scrollContent}
-      </span>
+      {/* 静态节点永不卸载：WKWebView 在指针正下方替换 target 会丢失
+          pointerleave。滚动层只给唯一 active 行临时挂载且不接管命中，
+          空闲 N 行不再各常驻一份重复全文 DOM。 */}
+      <span className={scrolling ? "opacity-0" : "contents"}>{content}</span>
+      {scrolling && (
+        <span
+          ref={innerRef}
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 left-0 inline-block whitespace-nowrap"
+        >
+          {scrollContent}
+        </span>
+      )}
     </p>
   );
 }
@@ -1850,8 +1921,10 @@ function claimRowHover(release: () => void) {
   }
 }
 
-function dropRowHoverClaim(release: () => void) {
-  if (activeRowRelease === release) activeRowRelease = null;
+function dropRowHoverClaim(release: () => void): boolean {
+  if (activeRowRelease !== release) return false;
+  activeRowRelease = null;
+  return true;
 }
 
 /**
@@ -1862,40 +1935,54 @@ function dropRowHoverClaim(release: () => void) {
  * 指针离行/按下/滚轮立即收起。触发靠 pointermove 而非 enter：列表滚动把行
  * 送到静止指针下不算悬停意图，不误弹。
  */
-function usePeekImage(files: string[]) {
-  const timer = useRef<number | null>(null);
-  const shown = useRef(false);
-  // 事件闭包每渲染重建，files 恒新鲜；仅卸载兜底 cleanup 走首帧闭包（只碰稳定 ref/api）
-  const cancel = () => {
-    if (timer.current !== null) {
-      window.clearTimeout(timer.current);
-      timer.current = null;
-    }
-    if (shown.current) {
-      shown.current = false;
-      void api.hidePeekImage();
-    }
-  };
-  const arm = () => {
-    if (timer.current !== null || shown.current || files.length === 0) return;
-    timer.current = window.setTimeout(() => {
-      timer.current = null;
-      shown.current = true;
-      void api.peekImage(files);
-    }, 360);
-  };
-  // 行删除/切页卸载时兜底收起，瞬态窗不残留
-  useEffect(() => cancel, []);
-  return { arm, cancel };
+// 全局同一时刻只可能有一个 active 行，timer/shown 也无需复制到每一行。
+let peekTimer: number | null = null;
+let peekShown = false;
+let peekGeneration = 0;
+
+function cancelPeekImage() {
+  peekGeneration += 1;
+  if (peekTimer !== null) {
+    window.clearTimeout(peekTimer);
+    peekTimer = null;
+  }
+  if (peekShown) {
+    peekShown = false;
+    void api.hidePeekImage();
+  }
 }
 
-/** 紧凑行缩略图（纯视觉）：卡面 24px 小图，窥视交互由行级 usePeekImage 承接。 */
-function CompactThumb({ file }: { file: string }) {
-  const thumb = useNoteThumb(file);
+function armPeekImage(files: string[]) {
+  if (peekTimer !== null || peekShown || files.length === 0) return;
+  const generation = ++peekGeneration;
+  peekTimer = window.setTimeout(() => {
+    if (generation !== peekGeneration) return;
+    peekTimer = null;
+    peekShown = true;
+    void api.peekImage(files).catch(() => {
+      // 原生拒绝/IPC 失败时允许本行下一次移动重新尝试。
+      if (generation === peekGeneration) peekShown = false;
+    });
+  }, 360);
+}
+
+/** 紧凑行缩略图（纯视觉）：卡面 24px 小图，窥视交互由行级事件承接。 */
+function CompactThumb({
+  thumb,
+  loading,
+}: {
+  thumb: string | null;
+  loading: boolean;
+}) {
   if (!thumb) {
-    // 缩略图解码中的骨架占位：同尺寸脉冲块，杜绝"空洞"
+    // 只有近视口且正在解码才动画；屏外 N 个 pulse 会持续占用合成资源。
     return (
-      <span className="size-6 shrink-0 animate-pulse rounded-sm bg-black/[0.06] dark:bg-white/[0.08]" />
+      <span
+        className={cn(
+          "size-6 shrink-0 rounded-sm bg-black/[0.06] dark:bg-white/[0.08]",
+          loading && "animate-pulse"
+        )}
+      />
     );
   }
   return (

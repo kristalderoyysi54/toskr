@@ -141,6 +141,17 @@
 
 /* ===== Toskr 定制 ===== */
 
+/* 视窗壳负责卸载远处重卡片；对缓冲区内已挂载但暂时屏外的卡片，再让
+   WebKit 跳过布局/绘制。auto 会记住渲染过的真实高度。 */
+.list-render-unit {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto var(--list-intrinsic-size, 40px);
+}
+
+.list-render-message {
+  --list-intrinsic-size: 160px;
+}
+
 /* 中英混排字体栈：Geist 负责西文，PingFang 负责中文 */
 @theme inline {
   --font-sans: "Geist Variable", -apple-system, "PingFang SC",

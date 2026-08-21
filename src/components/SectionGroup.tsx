@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 
 import { NoteCard } from "@/components/NoteCard";
+import { WindowedListItem } from "@/components/WindowedListItem";
 import {
   SimpleMenu,
   SimpleMenuItem,
@@ -42,11 +43,14 @@ export function SectionGroup({
   activeNotes,
   doneNotes,
   query,
+  eager = false,
 }: {
   section: Section;
   activeNotes: Note[];
   doneNotes: Note[];
   query: string;
+  /** 当前页首个分组首帧直出少量卡片，其余由共享视窗观察器挂载。 */
+  eager?: boolean;
 }) {
   const {
     setChecked,
@@ -58,7 +62,7 @@ export function SectionGroup({
     setSectionColor,
     setSettings,
   } = useNotesStore.getState();
-  const checkedIds = useNotesStore((s) => s.checkedIds);
+  const compact = useNotesStore((s) => s.settings.cardDensity === "compact");
   const doneOpen = useUIStore((s) => s.doneOpen[section.id] ?? false);
 
   const [renaming, setRenaming] = useState(false);
@@ -85,7 +89,11 @@ export function SectionGroup({
 
   const checkAll = () => {
     const ids = [...activeNotes, ...doneNotes].map((n) => n.id);
-    const merged = new Set([...checkedIds, ...ids]);
+    // 单卡勾选不应让分组父层重 map 全部窗口壳；批量动作触发时再即时读取。
+    const merged = new Set([
+      ...useNotesStore.getState().checkedIds,
+      ...ids,
+    ]);
     setChecked([...merged]);
   };
 
@@ -302,8 +310,15 @@ export function SectionGroup({
             <EmptyState variant="inline" title="此分组为空" />
           ) : (
             <div className="flex flex-col gap-1">
-              {activeNotes.map((note) => (
-                <NoteCard key={note.id} note={note} query={query} />
+              {activeNotes.map((note, index) => (
+                <WindowedListItem
+                  key={note.id}
+                  itemId={note.id}
+                  estimatedHeight={compact ? 40 : 136}
+                  eager={eager && index < 18}
+                >
+                  <NoteCard note={note} query={query} />
+                </WindowedListItem>
               ))}
 
               {doneNotes.length > 0 && (
@@ -321,7 +336,13 @@ export function SectionGroup({
                   </button>
                   {doneOpen &&
                     doneNotes.map((note) => (
-                      <NoteCard key={note.id} note={note} query={query} />
+                      <WindowedListItem
+                        key={note.id}
+                        itemId={note.id}
+                        estimatedHeight={compact ? 40 : 136}
+                      >
+                        <NoteCard note={note} query={query} />
+                      </WindowedListItem>
                     ))}
                 </>
               )}

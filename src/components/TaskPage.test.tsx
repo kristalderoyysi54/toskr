@@ -75,6 +75,7 @@ function overdueHeading(html: string): string {
 describe("TaskPage 已到期智能区", () => {
   beforeEach(() => {
     mockUIState.doneOpen = {};
+    mockUIState.editingId = null;
   });
 
   it("提供与灵感区一致的折叠箭头，并按状态隐藏任务", () => {
@@ -97,5 +98,17 @@ describe("TaskPage 已到期智能区", () => {
     expect(collapsedHeading).toContain("lucide-chevron-right");
     expect(collapsed).not.toContain("处理逾期任务");
     expect(collapsed).toContain("保留灵感");
+  });
+
+  it("展开详情不逐帧改变高度，避免长列表反复布局", () => {
+    mockUIState.editingId = "overdue-1";
+
+    const expanded = renderToStaticMarkup(<TaskPage buckets={buckets} now={NOW} />);
+    const detailRoot = expanded.match(/<div class="overflow-hidden"[^>]*>/)?.[0];
+
+    expect(expanded).toContain('placeholder="备注"');
+    expect(expanded).toContain("list-render-task");
+    expect(detailRoot).toBeDefined();
+    expect(detailRoot).not.toContain("height:");
   });
 });

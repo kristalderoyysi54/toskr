@@ -36,6 +36,7 @@ import {
 import { TaskCalendar } from "@/components/TaskCalendar";
 import { TaskQuickAdd } from "@/components/TaskQuickAdd";
 import { TaskRow } from "@/components/TaskRow";
+import { WindowedListItem } from "@/components/WindowedListItem";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IconButton } from "@/components/ui/icon-button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -182,6 +183,7 @@ export function TaskPage({
                   tasks={buckets.overdue}
                   now={now}
                   collapseKey={TASK_OVERDUE_COLLAPSED_KEY}
+                  eager
                 />
               )}
               {buckets.sparks.length > 0 && (
@@ -192,10 +194,21 @@ export function TaskPage({
                   tasks={buckets.sparks}
                   now={now}
                   collapseKey={TASK_SPARKS_COLLAPSED_KEY}
+                  eager={buckets.overdue.length === 0}
                 />
               )}
-              {buckets.groups.map(({ section, tasks }) => (
-                <TaskGroupBlock key={section.id} section={section} tasks={tasks} now={now} />
+              {buckets.groups.map(({ section, tasks }, index) => (
+                <TaskGroupBlock
+                  key={section.id}
+                  section={section}
+                  tasks={tasks}
+                  now={now}
+                  eager={
+                    index === 0 &&
+                    buckets.overdue.length === 0 &&
+                    buckets.sparks.length === 0
+                  }
+                />
               ))}
               <button
                 onClick={() => useNotesStore.getState().addTaskSection()}
@@ -219,7 +232,13 @@ export function TaskPage({
                   {doneOpen && (
                     <div className="mt-1 flex flex-col gap-1">
                       {buckets.done.map((t) => (
-                        <TaskRow key={t.id} task={t} now={now} />
+                        <WindowedListItem
+                          key={t.id}
+                          itemId={t.id}
+                          estimatedHeight={36}
+                        >
+                          <TaskRow task={t} now={now} />
+                        </WindowedListItem>
                       ))}
                     </div>
                   )}
@@ -241,6 +260,7 @@ function SmartSection({
   tasks,
   now,
   collapseKey,
+  eager = false,
 }: {
   title: string;
   tone: "red" | "violet";
@@ -248,6 +268,7 @@ function SmartSection({
   tasks: Task[];
   now: number;
   collapseKey?: string;
+  eager?: boolean;
 }) {
   // doneOpen 是通用的布尔切换器；这里语义存「是否折叠」，缺省展开
   const collapsed = useUIStore((s) => (collapseKey ? !!s.doneOpen[collapseKey] : false));
@@ -296,8 +317,15 @@ function SmartSection({
       )}
       {!collapsed && (
         <div className="flex flex-col gap-1">
-          {tasks.map((t) => (
-            <TaskRow key={t.id} task={t} now={now} />
+          {tasks.map((t, index) => (
+            <WindowedListItem
+              key={t.id}
+              itemId={t.id}
+              estimatedHeight={36}
+              eager={eager && index < 18}
+            >
+              <TaskRow task={t} now={now} />
+            </WindowedListItem>
           ))}
         </div>
       )}
@@ -310,10 +338,12 @@ function TaskGroupBlock({
   section,
   tasks,
   now,
+  eager = false,
 }: {
   section: TaskSection;
   tasks: Task[];
   now: number;
+  eager?: boolean;
 }) {
   const {
     renameTaskSection,
@@ -463,8 +493,15 @@ function TaskGroupBlock({
         >
           {tasks.length ? (
             <div className="flex flex-col gap-1">
-              {tasks.map((t) => (
-                <TaskRow key={t.id} task={t} now={now} />
+              {tasks.map((t, index) => (
+                <WindowedListItem
+                  key={t.id}
+                  itemId={t.id}
+                  estimatedHeight={36}
+                  eager={eager && index < 18}
+                >
+                  <TaskRow task={t} now={now} />
+                </WindowedListItem>
               ))}
             </div>
           ) : (
