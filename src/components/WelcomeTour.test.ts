@@ -9,7 +9,7 @@ describe("新手导览", () => {
   it("用四屏先解释产品，再说明收集、粘贴和隐私", () => {
     expect(WELCOME_TOUR_COPY).toHaveLength(4);
     expect(WELCOME_TOUR_COPY.map((page) => page.title)).toEqual([
-      "Mac 上的 AI 消息中转站",
+      "AI 消息中转站",
       "从其他应用收集内容",
       "整理后粘贴到目标",
       "粘贴前检查隐私",
