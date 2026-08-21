@@ -66,6 +66,9 @@ export default function ImagePreviewView() {
     originX: number;
     originY: number;
   } | null>(null);
+  // 悬停窥视瞬态形态：鼠标穿透、不抢焦点 → 任何按钮/编辑条都点不到，
+  // 渲染成纯图（无标题栏/翻页钮/底栏），窗即图
+  const [transientPeek, setTransientPeek] = useState(false);
   // 笔记上下文（备注编辑；null = 无编辑条，纯看图）
   const [noteId, setNoteId] = useState<string | null>(null);
   const [noteText, setNoteText] = useState("");
@@ -116,11 +119,13 @@ export default function ImagePreviewView() {
       noteText: string | null;
       dataGeneration: number | null;
       edit?: boolean;
+      transient?: boolean;
     }>("toskr://preview-image", (e) => {
       // 换内容先收尾旧备注编辑会话：自动保存语义下切换不丢稿
       if (captionRef.current.editing) {
         emitCaptionFinish(captionRef.current, captionSessionRef.current);
       }
+      setTransientPeek(e.payload.transient ?? false);
       setFiles(e.payload.files);
       setIdx(Math.min(e.payload.index, Math.max(0, e.payload.files.length - 1)));
       setNoteId(e.payload.noteId ?? null);
@@ -129,8 +134,8 @@ export default function ImagePreviewView() {
       setDataGeneration(e.payload.dataGeneration ?? null);
       setEditing(e.payload.edit ?? false);
       setGen((g) => g + 1);
-      // 独立 WebView 只读同步当前目标；发送仍由主面板统一执行。
-      void readTarget();
+      // 独立 WebView 只读同步当前目标；发送仍由主面板统一执行（窥视免同步）。
+      if (!e.payload.transient) void readTarget();
     });
     return () => {
       un.then((fn) => fn());
@@ -464,7 +469,8 @@ export default function ImagePreviewView() {
           </span>
         </div>
       )}
-      {/* 标题栏：可拖动窗口 */}
+      {/* 标题栏：可拖动窗口（瞬态窥视纯图免标题栏——穿透窗按钮点不到） */}
+      {!transientPeek && (
       <div
         data-tauri-drag-region
         className="flex h-8 shrink-0 cursor-grab items-center gap-1.5 px-2 active:cursor-grabbing"
@@ -508,6 +514,7 @@ export default function ImagePreviewView() {
           </>
         )}
       </div>
+      )}
       {/* 图片区：适配态整体拖窗；放大后拖拽转为平移图片（img 关闭指针事件） */}
       <div
         ref={zoomAreaRef}
@@ -517,7 +524,11 @@ export default function ImagePreviewView() {
         onPointerUp={onZoomPointerEnd}
         onPointerCancel={onZoomPointerEnd}
         onDoubleClick={onZoomDoubleClick}
-        className="relative flex min-h-0 flex-1 cursor-grab touch-none items-center justify-center overflow-hidden p-2 active:cursor-grabbing"
+        className={cn(
+          "relative flex min-h-0 flex-1 cursor-grab touch-none items-center justify-center overflow-hidden active:cursor-grabbing",
+          // 瞬态窥视窗即图：Rust 侧按零 chrome 定窗，去内边距保证「原始尺寸」
+          transientPeek ? "p-0" : "p-2"
+        )}
       >
         {url ? (
           <div
@@ -547,7 +558,7 @@ export default function ImagePreviewView() {
             <span className="sr-only">加载中…</span>
           </div>
         )}
-        {many && (
+        {many && !transientPeek && (
           <>
             <button
               aria-label="上一张"
@@ -569,7 +580,7 @@ export default function ImagePreviewView() {
         )}
       </div>
       {/* 备注条（有笔记上下文才显示）：查看态一行截断 + 铅笔；编辑态 textarea */}
-      {noteId && (
+      {noteId && !transientPeek && (
         <div className="shrink-0 border-t border-border px-3 py-1.5">
           {editing ? (
             <div className="flex items-end gap-1.5">
@@ -619,15 +630,17 @@ export default function ImagePreviewView() {
           )}
         </div>
       )}
-      <div className="flex h-6 shrink-0 items-center justify-center text-label tabular-nums text-muted-foreground">
-        {[
-          many ? `${idx + 1} / ${files.length}` : null,
-          dims || null,
-          zoomed ? `${Math.round(view.zoom * 100)}%` : null,
-        ]
-          .filter(Boolean)
-          .join(" · ")}
-      </div>
+      {!transientPeek && (
+        <div className="flex h-6 shrink-0 items-center justify-center text-label tabular-nums text-muted-foreground">
+          {[
+            many ? `${idx + 1} / ${files.length}` : null,
+            dims || null,
+            zoomed ? `${Math.round(view.zoom * 100)}%` : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </div>
+      )}
     </DetailWindowFrame>
   );
 }

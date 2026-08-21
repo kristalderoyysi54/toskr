@@ -1,4 +1,12 @@
-import { Fragment, memo, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
@@ -986,7 +994,6 @@ export const NoteCard = memo(function NoteCard({
                 note={note}
                 icon={icon}
                 query={query}
-                imageUrl={imageUrl}
                 dragOutProps={dragOutProps}
               />
             </div>
@@ -1563,13 +1570,11 @@ function CompactRow({
   note,
   icon,
   query,
-  imageUrl,
   dragOutProps,
 }: {
   note: Note;
   icon: ReturnType<typeof useAppIcon>;
   query: string;
-  imageUrl?: string | null;
   /** 仅文本卡非空：拖出文本到外部应用 + 阻断冒泡（见 NoteCard 同名变量注释）。 */
   dragOutProps: React.HTMLAttributes<HTMLParagraphElement>;
 }) {
@@ -1597,59 +1602,109 @@ function CompactRow({
     );
   /** keep 图标分域（与完整卡同规则）：剪贴=图钉，笔记=星标；只换图标不动布局 */
   const KeepGlyph = isClip ? Pin : Star;
+  /** 行悬停驱动文字跑马灯（只滚悬停行，列表整体安静）。 */
+  const [rowHover, setRowHover] = useState(false);
+  /** 带图行悬停 → 原图窥视（行级触发，24px 缩略图太小不当靶子）。 */
+  const peekFiles = images.length > 0 ? images : note.imageFile ? [note.imageFile] : [];
+  const peek = usePeekImage(peekFiles);
+  /** 本行清态（悬停+窥视一体收）：闭包每渲染经 ref 取新，对外身份稳定，
+   *  供全局认领表跨行调用。 */
+  const releaseRef = useRef(() => {});
+  releaseRef.current = () => {
+    setRowHover(false);
+    peek.cancel();
+  };
+  const release = useMemo(() => {
+    const fn = () => {
+      dropRowHoverClaim(fn);
+      releaseRef.current();
+    };
+    return fn;
+  }, []);
+  // 卸载让出认领（窥视窗收起由 usePeekImage 自身的卸载兜底负责）
+  useEffect(() => () => dropRowHoverClaim(release), [release]);
+  // 悬停期间的边界兜底：指针离开 webview（relatedTarget=null 的 pointerout /
+  // html 的 mouseleave）或页面隐藏时强制清态——行级 pointerleave 在 WKWebView
+  // 里并非每次都来（悬停链断裂成因见 MarqueeLine 常驻挂载注释）
+  useEffect(() => {
+    if (!rowHover) return;
+    const onOut = (e: PointerEvent) => {
+      if (e.relatedTarget === null) release();
+    };
+    const onVis = () => {
+      if (document.visibilityState === "hidden") release();
+    };
+    document.addEventListener("pointerout", onOut, true);
+    document.documentElement.addEventListener("mouseleave", release);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      document.removeEventListener("pointerout", onOut, true);
+      document.documentElement.removeEventListener("mouseleave", release);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [rowHover, release]);
+  /** 标题行内容（标题优先：加重标题 + 淡色摘要同行跟随），静态/滚动两形态共用。 */
+  const titleLine = title ? (
+    <>
+      <span className="font-medium">{highlightSegs(title)}</span>
+      {preview && (
+        <span className="text-muted-foreground"> — {highlightSegs(preview)}</span>
+      )}
+    </>
+  ) : null;
   // 紧凑行双调性（2026-08-12 用户定稿，替代 08-05「两域同款」）：骨架共用
   // （无左缘色条、来源由图标表达、等宽中段省略），差异由外层行高/底色
   // + 本行的「标题优先」与「剪贴相对时间戳」表达
   return (
-    <div className="relative flex h-full w-full min-w-0 items-center gap-2 pl-2 pr-2">
+    <div
+      className="relative flex h-full w-full min-w-0 items-center gap-2 pl-2 pr-2"
+      // move 而非 enter：列表滚动把行送到静止指针下会触发 enter（WebKit 悬停重算），
+      // 造成「没碰鼠标某行自己在滚」；真实移动才算悬停意图。滚轮=正在翻列表，立即停
+      onPointerMove={() => {
+        claimRowHover(release);
+        setRowHover(true);
+        peek.arm();
+      }}
+      onPointerLeave={release}
+      onWheel={release}
+      // 按下=点选/拖拽意图，窥视让位
+      onPointerDown={peek.cancel}
+    >
       {isLink && note.linkIcon ? (
         <LinkFavicon src={note.linkIcon} />
       ) : icon ? (
         <img src={icon.url} alt="" className="size-5 shrink-0" />
       ) : null}
-      {isImage &&
-        (imageUrl ? (
-          <img
-            src={imageUrl}
-            alt=""
-            className="size-6 shrink-0 rounded-sm object-cover"
-          />
-        ) : (
-          // 缩略图解码中的骨架占位：同尺寸脉冲块，杜绝"空洞"
-          <span className="size-6 shrink-0 animate-pulse rounded-sm bg-black/[0.06] dark:bg-white/[0.08]" />
-        ))}
-      <p
-        {...dragOutProps}
+      {/* 带图即给缩略图（纯图卡 + 组合卡同待遇），行悬停调起原始尺寸窥视窗 */}
+      {peekFiles.length > 0 && <CompactThumb file={peekFiles[0]} />}
+      <MarqueeLine
+        active={rowHover}
+        dragOutProps={dragOutProps}
         className={cn(
-          "min-w-0 flex-1 truncate text-body hover:cursor-grab",
+          "min-w-0 flex-1 text-body hover:cursor-grab",
           !title && (note.codeLang || mono) && "font-mono text-label",
           note.done && "text-muted-foreground line-through opacity-60"
         )}
-      >
-        {title ? (
-          // 标题优先：加重标题 + 淡色摘要同行跟随（长标题吃掉摘要，整行尾部省略）
-          <>
-            <span className="font-medium">{highlightSegs(title)}</span>
-            {preview && (
-              <span className="text-muted-foreground"> — {highlightSegs(preview)}</span>
-            )}
-          </>
-        ) : mono && !query ? (
-          // 中段省略：head 弹性截断 + tail 定长保留（路径尾段才是身份）。
-          // 搜索态回退到常规截断，保证高亮片段可见
-          (() => {
-            const { head, tail } = splitMiddle(firstLine);
-            return (
-              <span className="flex min-w-0">
-                <span className="truncate">{head}</span>
-                {tail && <span className="shrink-0">{tail}</span>}
-              </span>
-            );
-          })()
-        ) : (
-          highlightSegs(firstLine)
-        )}
-      </p>
+        content={
+          titleLine ??
+          (mono && !query ? (
+            // 中段省略：head 弹性截断 + tail 定长保留（路径尾段才是身份）。
+            // 搜索态回退到常规截断，保证高亮片段可见
+            (() => {
+              const { head, tail } = splitMiddle(firstLine);
+              return (
+                <span className="flex min-w-0">
+                  <span className="truncate">{head}</span>
+                  {tail && <span className="shrink-0">{tail}</span>}
+                </span>
+              );
+            })()
+          ) : (
+            highlightSegs(firstLine)
+          ))
+        }
+        scrollContent={titleLine ?? highlightSegs(firstLine)}
+      />
       {/* 尾部元数据在 hover 时淡出，给悬浮操作钮让位（原先是图标直接压在时间上打架） */}
       {note.keep && (
         <KeepGlyph className="size-3 shrink-0 fill-amber-400 text-amber-400 transition-opacity group-hover:opacity-0" />
@@ -1694,6 +1749,163 @@ function Thumb({ file }: { file: string }) {
   return (
     <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-sm bg-black/[0.05] dark:bg-white/[0.08]">
       {url && <img src={url} alt="" className="max-h-full max-w-full object-contain" />}
+    </span>
+  );
+}
+
+/** 系统「减弱动态效果」开启时跑马灯保持静态省略号（jsdom 无 matchMedia，可选链兜底）。 */
+function prefersReducedMotion(): boolean {
+  return !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+}
+
+/**
+ * 紧凑行文字跑马灯：行悬停且文本溢出时，全文匀速向左滚动播放被截断的部分，
+ * 尾端停顿后瞬时跳回开头循环（只向左滚，绝不向右回摆——用户 2026-08-20 点名），
+ * 离开行立即回位。
+ * 溢出量在切入滚动形态后实测（useLayoutEffect），未溢出的行悬停零视觉变化；
+ * 用 WAAPI 而非 CSS 动画：位移距离/时长逐行不同（匀速），CSS 关键帧给不了。
+ */
+function MarqueeLine({
+  active,
+  className,
+  content,
+  scrollContent,
+  dragOutProps,
+}: {
+  active: boolean;
+  className?: string;
+  /** 静态形态（截断省略，含等宽中段省略等静态优化）。 */
+  content: React.ReactNode;
+  /** 滚动形态（完整文本，中段省略还原全文）。 */
+  scrollContent: React.ReactNode;
+  dragOutProps: React.HTMLAttributes<HTMLParagraphElement>;
+}) {
+  const pRef = useRef<HTMLParagraphElement>(null);
+  const innerRef = useRef<HTMLSpanElement>(null);
+  const scrolling = active && !prefersReducedMotion();
+  useLayoutEffect(() => {
+    if (!scrolling) return;
+    const p = pRef.current;
+    const inner = innerRef.current;
+    if (!p || !inner) return;
+    const overflow = inner.scrollWidth - p.clientWidth;
+    if (overflow <= 4) return;
+    // 匀速 50px/s（读得过来），短溢出也给足 900ms；起步停 450ms、读完停 700ms，
+    // 然后借迭代边界瞬时跳回开头（direction 恒为 normal，无向右回摆）
+    const scrollMs = Math.max(900, (overflow / 50) * 1000);
+    const startHoldMs = 450;
+    const endHoldMs = 700;
+    const total = startHoldMs + scrollMs + endHoldMs;
+    const anim = inner.animate(
+      [
+        { transform: "translateX(0)", offset: 0 },
+        { transform: "translateX(0)", offset: startHoldMs / total },
+        {
+          transform: `translateX(${-overflow}px)`,
+          offset: (startHoldMs + scrollMs) / total,
+        },
+        { transform: `translateX(${-overflow}px)`, offset: 1 },
+      ],
+      { duration: total, iterations: Infinity, easing: "linear" }
+    );
+    return () => anim.cancel();
+  }, [scrolling]);
+  return (
+    <p
+      ref={pRef}
+      {...dragOutProps}
+      className={cn(
+        className,
+        // 滚动形态去省略号（text-overflow 按静态布局画「…」，滑动时会穿帮）
+        scrolling ? "overflow-hidden text-clip whitespace-nowrap" : "truncate"
+      )}
+    >
+      {/* 两形态常驻挂载、仅切 display：形态切换发生在指针正下方，卸载会把
+          WebKit 悬停链挂到已脱离文档的节点上，此后该行 pointerout/leave 永不
+          派发（实测 2026-08-21：行停不下来、多行同滚、窥视窗失收）。
+          contents 不产生盒，静态布局与直挂完全一致 */}
+      <span className={scrolling ? "hidden" : "contents"}>{content}</span>
+      <span
+        ref={innerRef}
+        className={cn("inline-block whitespace-nowrap", !scrolling && "hidden")}
+      >
+        {scrollContent}
+      </span>
+    </p>
+  );
+}
+
+/**
+ * 全局至多一行处于悬停态（跑马灯/窥视）：新行认领时先清上一行。
+ * WKWebView 会漏发行级 pointerleave（实测 2026-08-21：多行同滚、窥视窗失收），
+ * 单靠行自身的 leave 不可全信——认领表保证残留至多一行，且被下一次认领清掉；
+ * 「指针已离开面板」的残留由行内边界兜底监听（pointerout/mouseleave/visibility）收。
+ */
+let activeRowRelease: (() => void) | null = null;
+
+function claimRowHover(release: () => void) {
+  if (activeRowRelease !== release) {
+    activeRowRelease?.();
+    activeRowRelease = release;
+  }
+}
+
+function dropRowHoverClaim(release: () => void) {
+  if (activeRowRelease === release) activeRowRelease = null;
+}
+
+/**
+ * 带图行悬停原始尺寸窥视：整行悬停约 360ms 后调起原尺寸预览窗的瞬态形态
+ * （与 Space 预览同一窗口）——320pt 窄面板物理上放不下原图，「原始尺寸」由
+ * 独立窗口承接，Rust 按光标位置贴行弹出（上方优先）、小图不放大。
+ * 瞬态窗不抢焦点、鼠标穿透（不会截胡面板输入，也不会因盖住指针闪烁）；
+ * 指针离行/按下/滚轮立即收起。触发靠 pointermove 而非 enter：列表滚动把行
+ * 送到静止指针下不算悬停意图，不误弹。
+ */
+function usePeekImage(files: string[]) {
+  const timer = useRef<number | null>(null);
+  const shown = useRef(false);
+  // 事件闭包每渲染重建，files 恒新鲜；仅卸载兜底 cleanup 走首帧闭包（只碰稳定 ref/api）
+  const cancel = () => {
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
+    if (shown.current) {
+      shown.current = false;
+      void api.hidePeekImage();
+    }
+  };
+  const arm = () => {
+    if (timer.current !== null || shown.current || files.length === 0) return;
+    timer.current = window.setTimeout(() => {
+      timer.current = null;
+      shown.current = true;
+      void api.peekImage(files);
+    }, 360);
+  };
+  // 行删除/切页卸载时兜底收起，瞬态窗不残留
+  useEffect(() => cancel, []);
+  return { arm, cancel };
+}
+
+/** 紧凑行缩略图（纯视觉）：卡面 24px 小图，窥视交互由行级 usePeekImage 承接。 */
+function CompactThumb({ file }: { file: string }) {
+  const thumb = useNoteThumb(file);
+  if (!thumb) {
+    // 缩略图解码中的骨架占位：同尺寸脉冲块，杜绝"空洞"
+    return (
+      <span className="size-6 shrink-0 animate-pulse rounded-sm bg-black/[0.06] dark:bg-white/[0.08]" />
+    );
+  }
+  return (
+    <span className="flex size-6 shrink-0 overflow-hidden rounded-sm">
+      <img
+        src={thumb}
+        alt=""
+        draggable={false}
+        className="h-full w-full object-cover"
+      />
     </span>
   );
 }

@@ -513,6 +513,8 @@ fn show_panel_on_main(app: &AppHandle) -> tauri::Result<()> {
 
 /// 隐藏面板；`restore_focus` 时把焦点还给此前记录的前台应用。
 pub fn hide_panel(app: &AppHandle, restore_focus: bool) {
+    // 面板一藏，悬停窥视的瞬态预览窗一并收起（webview 隐藏后没有 pointerleave 兜底）
+    hide_transient_image_preview(app);
     stop_companion_tracker(app);
     set_panel_auto_hide_armed(app, true, "面板关闭");
     if let Some(state) = app.try_state::<AppState>() {
@@ -1591,9 +1593,66 @@ pub fn set_panel_vertical(app: &AppHandle, top_offset: f64, height: Option<f64>)
 
 // ============ 图片预览窗 ============
 
+/// 瞬态窥视态标记：悬停触发的预览窗不抢焦点、鼠标穿透；hide 只收瞬态形态，
+/// 不误伤 Space/点击打开的常规预览窗（两者复用同一个 imgpreview 窗口）。
+static TRANSIENT_PREVIEW: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// 窥视世代：每次 hide 递增，作废在途的瞬态 show——图片尺寸解码 + 主线程排队
+/// 期间指针可能已移走，晚到的 show 会把窥视窗永久留在屏上（再无 hide 跟进）。
+static PEEK_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 看门狗豁免区：触发行横带（逻辑 pt，show 时快照）。窥视可见 ⟺ 光标在带内，
+/// 光标去任何别处（含窥视图自身——穿透窗下方的行会被幻触发，不豁免）都收。
+static PEEK_ZONE: std::sync::Mutex<Option<(f64, f64, f64, f64)>> = std::sync::Mutex::new(None);
+
+/// 看门狗单例标记：瞬态窗可见期间只跑一个轮询线程。
+static PEEK_WATCHDOG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 窥视看门狗：webview 的 pointerleave/out 在真实 WKWebView 里会丢（多轮实测），
+/// 前端「移开即收」不可全信。瞬态窗可见期间每 150ms 用 CGEvent 查全局光标
+/// （无需权限），光标不在触发行横带内（含 12pt 余量）即强制收窗——
+/// 「鼠标移走 ⇒ 图消失」的保证下沉到 OS 层，不依赖任何 DOM 事件。
+fn spawn_peek_watchdog(app: &AppHandle) {
+    if PEEK_WATCHDOG.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        const EXEMPT_MARGIN: f64 = 12.0;
+        loop {
+            std::thread::sleep(Duration::from_millis(150));
+            if !TRANSIENT_PREVIEW.load(Ordering::SeqCst) {
+                break;
+            }
+            let (Some(band), Some((cx, cy))) = (*PEEK_ZONE.lock().unwrap(), cursor_point_pt())
+            else {
+                continue;
+            };
+            let inside = cx >= band.0 - EXEMPT_MARGIN
+                && cx <= band.0 + band.2 + EXEMPT_MARGIN
+                && cy >= band.1 - EXEMPT_MARGIN
+                && cy <= band.1 + band.3 + EXEMPT_MARGIN;
+            if inside {
+                continue;
+            }
+            crate::diag::push(&app, "窥视: 光标离开触发行，看门狗收起");
+            let handle = app.clone();
+            let _ = app.run_on_main_thread(move || hide_transient_image_preview(&handle));
+            break;
+        }
+        PEEK_WATCHDOG.store(false, Ordering::SeqCst);
+        // 退出与新 show 的竞态兜底：若窗仍可见（刚 show 完），补拉一次看门狗
+        if TRANSIENT_PREVIEW.load(Ordering::SeqCst) {
+            spawn_peek_watchdog(&app);
+        }
+    });
+}
+
 /// 自建图片原尺寸预览窗（qlmanage 的 [DEBUG] 窗口带无用调试按钮，观感差）：
 /// 按图片尺寸适配光标屏工作区 90% 居中；前端 Esc/点击/失焦即隐藏。任意线程可调。
 /// 多图时窗口按起始张定尺寸，其余图在窗内等比适配。
+/// `transient` = 悬停窥视形态：不抢焦点、鼠标穿透，由前端在指针移开时收起。
 pub fn preview_image(
     app: &AppHandle,
     files: Vec<String>,
@@ -1602,11 +1661,14 @@ pub fn preview_image(
     note_text: Option<String>,
     data_generation: Option<u64>,
     edit: bool,
+    transient: bool,
 ) {
     let index = if files.get(index).is_some() { index } else { 0 };
     let Some(anchor) = files.get(index) else {
         return;
     };
+    // 瞬态窥视记下入场世代：尺寸解码/主线程排队期间指针移走（hide 抢先），show 作废
+    let peek_gen = transient.then(|| PEEK_GENERATION.load(Ordering::SeqCst));
     let dims = crate::image_firewall::delivery_image_dimensions(app, anchor);
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
@@ -1619,10 +1681,26 @@ pub fn preview_image(
             note_text,
             data_generation,
             edit,
+            peek_gen,
         ) {
             eprintln!("[toskr] 图片预览失败: {e}");
         }
     });
+}
+
+/// 收起悬停窥视的瞬态预览窗；常规预览窗（用户主动打开）不受影响。任意线程可调。
+pub fn hide_transient_image_preview(app: &AppHandle) {
+    // 先递增世代作废在途 show，再收已可见的瞬态窗——两步顺序不能反，
+    // 否则「hide 先到、show 晚到」的竞态会把窥视窗永久留在屏上
+    PEEK_GENERATION.fetch_add(1, Ordering::SeqCst);
+    if !TRANSIENT_PREVIEW.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    crate::diag::push(app, "窥视: 收起");
+    if let Some(window) = app.get_webview_window("imgpreview") {
+        let _ = window.set_ignore_cursor_events(false);
+        let _ = window.hide();
+    }
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -1635,6 +1713,8 @@ struct PreviewPayload {
     note_text: Option<String>,
     data_generation: Option<u64>,
     edit: bool,
+    /// 悬停窥视瞬态形态：前端渲染纯图（无标题栏/翻页钮/底栏，零内边距）。
+    transient: bool,
 }
 
 fn preview_image_on_main(
@@ -1646,19 +1726,37 @@ fn preview_image_on_main(
     note_text: Option<String>,
     data_generation: Option<u64>,
     edit: bool,
+    // Some = 瞬态窥视及其入场世代；None = 常规预览
+    peek_gen: Option<u64>,
 ) -> tauri::Result<()> {
+    let transient = peek_gen.is_some();
     let window = app
         .get_webview_window("imgpreview")
         .ok_or(tauri::Error::WindowNotFound)?;
-    // 在「面板所在屏幕」弹出（预览由面板上的点击触发，注意力在该屏）；
-    // 拿不到面板位置时回退光标所在屏
+    if let Some(gen) = peek_gen {
+        // 世代已被 hide 推进 = 指针早已移走，在途窥视作废
+        if PEEK_GENERATION.load(Ordering::SeqCst) != gen {
+            crate::diag::push(app, "窥视: 在途作废（指针已移走）");
+            return Ok(());
+        }
+        // 常规预览（用户主动打开、有焦点）占着窗口时，悬停窥视不抢窗
+        if window.is_visible().unwrap_or(false) && !TRANSIENT_PREVIEW.load(Ordering::SeqCst) {
+            crate::diag::push(app, "窥视: 常规预览占窗，跳过");
+            return Ok(());
+        }
+    }
+    // 常规预览在「面板所在屏幕」居中（预览由面板上的点击触发，注意力在该屏）；
+    // 瞬态窥视贴光标所在屏。都拿不到时回退光标屏工作区
     let monitors = snapshot_monitors_pt(app);
+    let cursor = if transient { cursor_point_pt() } else { None };
     let panel_anchor = app.get_webview_window("main").and_then(|w| {
         let pos = w.outer_position().ok()?;
         let scale = w.scale_factor().ok()?.max(0.5);
         Some((pos.x as f64 / scale + 20.0, pos.y as f64 / scale + 20.0))
     });
-    let m = panel_anchor.and_then(|(x, y)| monitor_containing_pt(&monitors, x, y));
+    let m = cursor
+        .or(panel_anchor)
+        .and_then(|(x, y)| monitor_containing_pt(&monitors, x, y));
     let (wa_x, wa_y, wa_w, wa_h) = match m {
         Some(m) => (m.wa_x, m.wa_y, m.wa_w, m.wa_h),
         None => {
@@ -1674,16 +1772,22 @@ fn preview_image_on_main(
     let (img_w, img_h) = dims
         .map(|(w, h)| (w as f64, h as f64))
         .unwrap_or((800.0, 600.0));
-    // 顶部 32pt 标题栏 + 底部 24pt 尺寸标注条；带笔记上下文时再留 44pt
-    // 备注编辑条；不放大小图（ratio ≤ 1）。
-    let chrome = if note_id.is_some() { 100.0 } else { 56.0 };
-    let max_w = (wa_w * 0.9).max(240.0);
-    let max_h = (wa_h * 0.9 - chrome).max(180.0);
-    let ratio = (max_w / img_w).min(max_h / img_h).min(1.0);
-    let w = (img_w * ratio).max(280.0);
-    let h = img_h * ratio + chrome;
-    let x = wa_x + (wa_w - w) / 2.0;
-    let y = wa_y + (wa_h - h) / 2.0;
+    let (x, y, w, h) = if transient {
+        // 悬停窥视：贴光标弹出（上方优先），窗即图（前端瞬态形态零 chrome）
+        let (cx, cy) =
+            cursor.unwrap_or((wa_x + wa_w / 2.0, wa_y + wa_h / 2.0));
+        transient_peek_frame(cx, cy, wa_x, wa_y, wa_w, wa_h, img_w, img_h)
+    } else {
+        // 顶部 32pt 标题栏 + 底部 24pt 尺寸标注条；带笔记上下文时再留 44pt
+        // 备注编辑条；不放大小图（ratio ≤ 1）。
+        let chrome = if note_id.is_some() { 100.0 } else { 56.0 };
+        let max_w = (wa_w * 0.9).max(240.0);
+        let max_h = (wa_h * 0.9 - chrome).max(180.0);
+        let ratio = (max_w / img_w).min(max_h / img_h).min(1.0);
+        let w = (img_w * ratio).max(280.0);
+        let h = img_h * ratio + chrome;
+        (wa_x + (wa_w - w) / 2.0, wa_y + (wa_h - h) / 2.0, w, h)
+    };
     let _ = app.emit_to(
         "imgpreview",
         "toskr://preview-image",
@@ -1694,14 +1798,88 @@ fn preview_image_on_main(
             note_text,
             data_generation,
             edit,
+            transient,
         },
     );
     window.set_size(LogicalSize::new(w, h))?;
     window.set_position(LogicalPosition::new(x, y))?;
     ensure_fullscreen_auxiliary(&window);
+    // 瞬态窥视不抢焦点 + 鼠标穿透——预览窗可能盖住指针，吃鼠标会触发面板行
+    // leave→hide→enter→show 闪烁死循环（穿透技法同 HUD）；常规路径显式复原
+    let _ = window.set_ignore_cursor_events(transient);
+    TRANSIENT_PREVIEW.store(transient, Ordering::SeqCst);
+    if transient {
+        // 看门狗豁免区快照：触发行横带 = 面板横向范围 × 光标 y±24pt
+        // （拿不到面板矩形时以光标为中心近似）。停留触发行图不收，离行 150ms 内必收
+        let (band_x, band_w) = app
+            .get_webview_window("main")
+            .and_then(|p| {
+                let pos = p.outer_position().ok()?;
+                let size = p.outer_size().ok()?;
+                let scale = p.scale_factor().ok()?.max(0.5);
+                Some((pos.x as f64 / scale, size.width as f64 / scale))
+            })
+            .unwrap_or_else(|| {
+                let cx = cursor.map(|c| c.0).unwrap_or(x + w / 2.0);
+                (cx - 200.0, 400.0)
+            });
+        let band_cy = cursor.map(|c| c.1).unwrap_or(y + h + 24.0);
+        *PEEK_ZONE.lock().unwrap() = Some((band_x, band_cy - 24.0, band_w, 48.0));
+        crate::diag::push(
+            app,
+            format!("窥视: 弹出 {}×{} @({},{})", w as i64, h as i64, x as i64, y as i64),
+        );
+        spawn_peek_watchdog(app);
+    }
     window.show()?;
-    window.set_focus()?;
+    if !transient {
+        window.set_focus()?;
+    }
     Ok(())
+}
+
+/// 悬停窥视窗几何（纯计算）：水平居中于光标并钳入工作区；垂直贴光标**上方**
+/// （底边距光标 12pt，越过所悬停行的上缘），上方放不下翻到光标下方（顶距 24pt，
+/// 让出行本身）。原图不放大；超出可用空间等比缩小——可用高取光标上/下两侧
+/// 较大者（顶部行翻下方、底部行贴上方都拿整侧空间），钳在工作区 90% 内，
+/// 底线 320pt 保证挤也不把图缩成邮票。返回 (x, y, w, h)，
+/// 240×180 下限与 imgpreview 窗 min 尺寸一致（OS 反正会钳，先钳保定位准确）。
+fn transient_peek_frame(
+    cx: f64,
+    cy: f64,
+    wa_x: f64,
+    wa_y: f64,
+    wa_w: f64,
+    wa_h: f64,
+    img_w: f64,
+    img_h: f64,
+) -> (f64, f64, f64, f64) {
+    const GAP_ABOVE: f64 = 12.0;
+    const GAP_BELOW: f64 = 24.0;
+    const MIN_W: f64 = 240.0;
+    const MIN_H: f64 = 180.0;
+    let (img_w, img_h) = (img_w.max(1.0), img_h.max(1.0));
+    let space_above = cy - GAP_ABOVE - wa_y;
+    let space_below = wa_y + wa_h - (cy + GAP_BELOW);
+    let cap_h = (wa_h * 0.9).max(MIN_H);
+    let avail_h = space_above
+        .max(space_below)
+        .clamp(320.0_f64.min(cap_h), cap_h);
+    let max_w = (wa_w * 0.9).max(MIN_W);
+    let ratio = (max_w / img_w).min(avail_h / img_h).min(1.0);
+    let w = (img_w * ratio).max(MIN_W);
+    let h = (img_h * ratio).max(MIN_H);
+    let x = if wa_w > w {
+        (cx - w / 2.0).clamp(wa_x, wa_x + wa_w - w)
+    } else {
+        wa_x
+    };
+    let y = if h <= space_above {
+        cy - GAP_ABOVE - h
+    } else {
+        (cy + GAP_BELOW).min(wa_y + wa_h - h).max(wa_y)
+    };
+    (x, y, w, h)
 }
 
 // ============ 文本详情窗 ============
@@ -2686,5 +2864,58 @@ mod tests {
         let a = anchor(0);
         assert_ne!(a.screen_full_y, 25.0);
         assert_eq!(a.screen_full_y, MON.mon_y);
+    }
+
+    // ===== 悬停窥视窗几何 =====
+
+    #[test]
+    fn peek_sits_above_cursor_at_original_size() {
+        // 屏中部悬停一张 600×400 原图：不缩放，底边距光标 12pt，水平居中于光标
+        let (x, y, w, h) =
+            transient_peek_frame(700.0, 600.0, 0.0, 25.0, 1512.0, 950.0, 600.0, 400.0);
+        assert_eq!((w, h), (600.0, 400.0));
+        assert_eq!(y, 600.0 - 12.0 - 400.0);
+        assert_eq!(x, 700.0 - 300.0);
+    }
+
+    #[test]
+    fn peek_flips_below_when_no_room_above() {
+        // 悬停顶部行（光标 y=60，上方仅 23pt）：翻到光标下方，顶距 24pt
+        let (_, y, _, h) =
+            transient_peek_frame(700.0, 60.0, 0.0, 25.0, 1512.0, 950.0, 600.0, 400.0);
+        assert_eq!(h, 400.0);
+        assert_eq!(y, 60.0 + 24.0);
+    }
+
+    #[test]
+    fn peek_clamps_into_work_area_at_right_edge() {
+        // 面板贴右缘（光标 x≈1490）：窗不越出工作区右缘
+        let (x, _, w, _) =
+            transient_peek_frame(1490.0, 600.0, 0.0, 25.0, 1512.0, 950.0, 600.0, 400.0);
+        assert_eq!(x, 1512.0 - w);
+    }
+
+    #[test]
+    fn peek_shrinks_oversized_image_but_never_below_floor() {
+        // 4000×3000 大图：等比缩进可用空间（不超工作区 90% 高），且绝不放大
+        let (_, _, w, h) =
+            transient_peek_frame(700.0, 600.0, 0.0, 25.0, 1512.0, 950.0, 4000.0, 3000.0);
+        assert!(h <= 950.0 * 0.9 + 1e-9);
+        assert!((w / h - 4000.0 / 3000.0).abs() < 1e-9);
+        // 小图不放大：窗钳到 240×180 下限（与 imgpreview 窗 min 尺寸一致）
+        let (_, _, w2, h2) =
+            transient_peek_frame(700.0, 600.0, 0.0, 25.0, 1512.0, 950.0, 100.0, 80.0);
+        assert_eq!((w2, h2), (240.0, 180.0));
+    }
+
+    #[test]
+    fn peek_top_row_uses_below_space_for_sizing() {
+        // 顶部行悬停大图：可用高取光标下侧整段（不被上侧 23pt 掐死成邮票）
+        let (_, y, _, h) =
+            transient_peek_frame(700.0, 60.0, 0.0, 25.0, 1512.0, 950.0, 2000.0, 1600.0);
+        let space_below = 25.0 + 950.0 - (60.0 + 24.0);
+        assert!(h <= space_below + 1e-9);
+        assert!(h > 320.0);
+        assert_eq!(y, 60.0 + 24.0);
     }
 }

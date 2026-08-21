@@ -254,6 +254,7 @@ pub fn run() {
             commands::detect_running_im_candidates,
             commands::set_message_watch_auto,
             commands::quick_look,
+            commands::hide_transient_image_preview,
             commands::show_text_preview,
             commands::ocr_image,
             commands::prev_app_info,
