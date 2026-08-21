@@ -4,7 +4,7 @@
 
 # Toskr
 
-**An AI message relay for Mac**
+**An AI message relay**
 
 Collect text and images from different apps, organize and review privacy, then paste them into your current AI input.
 

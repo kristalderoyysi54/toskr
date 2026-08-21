@@ -5,7 +5,7 @@ export type WelcomeTourExitMode = "use-now" | "rehearse";
 export const WELCOME_TOUR_COPY = [
   {
     mini: "来源应用 → Toskr → AI 输入框",
-    title: "Mac 上的 AI 消息中转站",
+    title: "AI 消息中转站",
     body: "把各个应用里的文字和图片收进 Toskr。整理、组合并检查隐私后，再粘贴到当前 AI 输入框。",
   },
   {
