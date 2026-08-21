@@ -288,12 +288,13 @@ async fn run_delivery(
     app: AppHandle,
     request: crate::delivery::SendDeliveryRequest,
 ) -> Result<crate::delivery::SendDeliveryResult, String> {
+    let enter_requested = request.press_enter;
     let result = crate::delivery::execute_native(app.clone(), request).await?;
     let target = result.target.as_ref();
     crate::diag::push(
         &app,
         format!(
-            "delivery={} target={}({}) status={} reason={}",
+            "delivery={} target={}({}) status={} reason={} enter_requested={} enter_synthesized={}",
             result.delivery_id,
             target
                 .and_then(|snapshot| snapshot.bundle_id.as_deref())
@@ -303,6 +304,8 @@ async fn run_delivery(
                 .map_or_else(|| "?".into(), |pid| pid.to_string()),
             result.status.as_str(),
             result.reason_code.as_str(),
+            enter_requested,
+            result.enter_pressed,
         ),
     );
     let (hud_kind, hud_message) = crate::delivery::hud_feedback(&result);

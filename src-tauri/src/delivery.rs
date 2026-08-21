@@ -278,6 +278,17 @@ enum PayloadStep<'a> {
     Image(usize),
 }
 
+const TEXT_ENTER_SETTLE_MS: u64 = 500;
+const IMAGE_ENTER_SETTLE_MS: u64 = 900;
+
+fn enter_settle_ms(steps: &[PayloadStep<'_>]) -> u64 {
+    if matches!(steps.last(), Some(PayloadStep::Image(_))) {
+        IMAGE_ENTER_SETTLE_MS
+    } else {
+        TEXT_ENTER_SETTLE_MS
+    }
+}
+
 /// 把请求规范化为有序粘贴步骤。有 segments 时按段交错并校验引用完整
 /// （下标越界、重复或漏图都判请求无效，宁可失败也不静默错序）；
 /// 无 segments 时保持旧顺序：文字整段在前、图片按清单序在后。
@@ -546,7 +557,9 @@ pub fn execute_delivery(
     }
     let paste_completed = completed_pastes == expected_pastes;
     if request.press_enter {
-        runtime.pause(200);
+        // Electron/WebView 编辑器通常异步消费 paste；过早的 Return 即使成功投递到
+        // HID，也可能在编辑器提交状态就绪前被丢弃。图片落地更慢，单独留出余量。
+        runtime.pause(enter_settle_ms(&steps));
         if let Err(reason) = runtime.validate_target(
             &snapshot,
             request.target_token.as_deref(),
@@ -893,6 +906,10 @@ mod tests {
         staged_order: Vec<String>,
         paste_calls: usize,
         enter_calls: usize,
+        elapsed_ms: u64,
+        last_paste_at_ms: Option<u64>,
+        minimum_enter_settle_ms: u64,
+        target_consumed_enter: bool,
         clipboard_outcome: Option<ClipboardOutcome>,
         clipboard_delays: Vec<bool>,
     }
@@ -929,6 +946,10 @@ mod tests {
                 staged_order: Vec::new(),
                 paste_calls: 0,
                 enter_calls: 0,
+                elapsed_ms: 0,
+                last_paste_at_ms: None,
+                minimum_enter_settle_ms: 0,
+                target_consumed_enter: false,
                 clipboard_outcome: None,
                 clipboard_delays: Vec::new(),
             }
@@ -985,7 +1006,9 @@ mod tests {
             self.wait_ready
         }
 
-        fn pause(&mut self, _millis: u64) {}
+        fn pause(&mut self, millis: u64) {
+            self.elapsed_ms += millis;
+        }
 
         fn stage_text(&mut self, text: &str) -> Result<(), DeliveryFailure> {
             self.stage_calls += 1;
@@ -1007,12 +1030,16 @@ mod tests {
                     "发送失败：粘贴失败",
                 ))
             } else {
+                self.last_paste_at_ms = Some(self.elapsed_ms);
                 Ok(())
             }
         }
 
         fn press_enter(&mut self) -> Result<(), DeliveryFailure> {
             self.enter_calls += 1;
+            self.target_consumed_enter = self.last_paste_at_ms.is_some_and(|pasted_at| {
+                self.elapsed_ms.saturating_sub(pasted_at) >= self.minimum_enter_settle_ms
+            });
             if self.enter_failure {
                 Err(DeliveryFailure::new(
                     DeliveryReasonCode::EnterFailed,
@@ -1221,6 +1248,56 @@ mod tests {
         assert_eq!(result.clipboard_outcome, ClipboardOutcome::Restored);
         assert_eq!(runtime.clipboard_delays, vec![true]);
         assert_eq!(result.delivery_id, "delivery-1");
+    }
+
+    #[test]
+    fn auto_enter_waits_for_slow_text_editor_after_paste() {
+        let mut runtime = FakeRuntime {
+            minimum_enter_settle_ms: 500,
+            ..FakeRuntime::default()
+        };
+
+        let result = execute_delivery(&mut runtime, &request(Some("token-1")));
+
+        assert_eq!(result.status, DeliveryStatus::Sent);
+        assert_eq!(runtime.enter_calls, 1);
+        assert!(
+            runtime.target_consumed_enter,
+            "Return was synthesized before the target editor finished consuming the paste"
+        );
+    }
+
+    #[test]
+    fn auto_enter_waits_longer_after_interleaved_pastes_ending_in_an_image() {
+        let mut req = request(Some("token-1"));
+        req.text = "开头\n结尾".into();
+        req.image_files = vec!["a.png".into(), "b.png".into()];
+        req.expected_image_pixel_hashes = vec![None, None];
+        req.segments = Some(vec![
+            DeliverySegment::Text {
+                text: "开头".into(),
+            },
+            DeliverySegment::Image { file_index: 0 },
+            DeliverySegment::Text {
+                text: "结尾".into(),
+            },
+            DeliverySegment::Image { file_index: 1 },
+        ]);
+        let mut runtime = FakeRuntime {
+            minimum_enter_settle_ms: 900,
+            ..FakeRuntime::default()
+        };
+
+        let result = execute_delivery(&mut runtime, &req);
+
+        assert_eq!(result.status, DeliveryStatus::Sent);
+        assert_eq!(
+            runtime.staged_order,
+            vec!["text:开头", "image:0", "text:结尾", "image:1"]
+        );
+        assert_eq!(runtime.paste_calls, 4);
+        assert_eq!(runtime.enter_calls, 1);
+        assert!(runtime.target_consumed_enter);
     }
 
     #[test]
