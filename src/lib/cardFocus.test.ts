@@ -11,4 +11,8 @@ describe("shouldScrollFocusedCard", () => {
     expect(shouldScrollFocusedCard(true, false)).toBe(true);
     expect(shouldScrollFocusedCard(false, false)).toBe(false);
   });
+
+  it("指针刚点中的卡已经可见，不再强制同步布局", () => {
+    expect(shouldScrollFocusedCard(true, false, true)).toBe(false);
+  });
 });

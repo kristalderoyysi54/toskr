@@ -20,6 +20,7 @@ import { IconButton } from "@/components/ui/icon-button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { StripScroller } from "@/components/ui/strip-scroller";
+import { WindowedListItem } from "@/components/WindowedListItem";
 import { aiErrorTip, requestAi } from "@/lib/aiClient";
 import { presetCfgDue, presetCfgLabel } from "@/lib/tasks";
 import { api, type MessageSourceOverlayPayload } from "@/lib/tauri";
@@ -320,17 +321,23 @@ export function MessagePage({
         <ScrollArea className="min-h-0 flex-1 px-2.5" viewportClassName="px-1">
           {filtered.length ? (
             <div className="flex flex-col gap-1.5 pb-3 pt-0.5">
-              {filtered.map((message) => (
-                <MessageCard
+              {filtered.map((message, index) => (
+                <WindowedListItem
                   key={message.id}
-                  message={message}
-                  reasons={reasonLabels(message, ruleNames)}
-                  busy={busyId === message.id}
-                  duePresets={duePresets}
-                  onDraft={() => void draftReply(message)}
-                  checked={checkedIds.has(message.id)}
-                  onCardClick={handleCardClick(message.id)}
-                />
+                  itemId={`message:${message.id}`}
+                  estimatedHeight={160}
+                  eager={index < 12}
+                >
+                  <MessageCard
+                    message={message}
+                    reasons={reasonLabels(message, ruleNames)}
+                    busy={busyId === message.id}
+                    duePresets={duePresets}
+                    onDraft={() => void draftReply(message)}
+                    checked={checkedIds.has(message.id)}
+                    onCardClick={handleCardClick(message.id)}
+                  />
+                </WindowedListItem>
               ))}
             </div>
           ) : (
@@ -425,6 +432,7 @@ function MessageCard({
       }}
       className={cn(
         "group relative rounded-xl border border-foreground/10 bg-card/80 px-3 py-2.5 shadow-(--shadow-card) transition-[box-shadow] duration-(--duration-control)",
+        !strip && "list-render-unit list-render-message",
         // 与剪贴/笔记卡同款选中语言：ring 光环 + 抬升（不用 border，不挤内容）
         checked && "ring-2 ring-primary/70 elevation-2",
         strip && "flex h-full w-72 shrink-0 flex-col"

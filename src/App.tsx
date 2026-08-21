@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   closestCenter,
   DndContext,
@@ -46,7 +46,8 @@ import {
   X,
 } from "lucide-react";
 import { DraftInput } from "@/components/DraftInput";
-import { NoteCard } from "@/components/NoteCard";
+import { COMPACT_ROW_RELEASE_EVENT, NoteCard } from "@/components/NoteCard";
+import { WindowedListItem } from "@/components/WindowedListItem";
 import { PermissionBanner } from "@/components/PermissionBanner";
 import { SafeDeliveryRehearsal } from "@/components/SafeDeliveryRehearsal";
 import { WelcomeTour } from "@/components/WelcomeTour";
@@ -234,6 +235,7 @@ import {
   SECTION_COLORS,
   TASK_INBOX_ID,
   useNotesStore,
+  type Note,
   type NoteContentBlock,
   type PageId,
   type Settings,
@@ -519,8 +521,8 @@ function GroupPills({
   doneCount?: number;
 }) {
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+    useSensor(PointerSensor, CARD_POINTER_SENSOR_OPTIONS),
+    useSensor(KeyboardSensor, KEYBOARD_SENSOR_OPTIONS)
   );
   const row = (
     <div
@@ -620,11 +622,67 @@ const PAGE_LABEL: Record<PageId, string> = {
   secret: "秘文",
 };
 
+/** 剪贴列表每批挂载量：与首批一致，避免滚到底一次插入 200 张造成主线程尖峰。 */
+const CLIP_RENDER_BATCH = 60;
+/** dnd-kit 以 options 引用作为 sensor descriptor 依赖，不能在 render 内重建。 */
+const CARD_POINTER_SENSOR_OPTIONS = { activationConstraint: { distance: 4 } };
+const TAB_POINTER_SENSOR_OPTIONS = { activationConstraint: { distance: 6 } };
+const KEYBOARD_SENSOR_OPTIONS = { coordinateGetter: sortableKeyboardCoordinates };
+const TAB_STOP_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled]):not([type='hidden'])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[contenteditable='true']",
+  "[tabindex]:not([tabindex='-1'])",
+].join(",");
+
+/**
+ * aria-hidden 不会把后代移出 Tab 顺序；又不能在长页根切 inert/
+ * pointer-events（会让浏览器重算整棵树）。仅在原生 Tab 即将进入
+ * 非活动页时跳过该段，普通焦点顺序不接管。
+ */
+function skipInactivePageTab(event: React.KeyboardEvent<HTMLElement>) {
+  if (
+    event.key !== "Tab" ||
+    event.altKey ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.defaultPrevented
+  ) {
+    return;
+  }
+  const stops = Array.from(document.querySelectorAll<HTMLElement>(TAB_STOP_SELECTOR)).filter(
+    (element) =>
+      element.tabIndex >= 0 &&
+      !element.closest("[inert]") &&
+      element.getClientRects().length > 0 &&
+      window.getComputedStyle(element).visibility !== "hidden"
+  );
+  if (stops.length === 0) return;
+
+  const direction = event.shiftKey ? -1 : 1;
+  let index = stops.indexOf(document.activeElement as HTMLElement);
+  if (index < 0) index = direction > 0 ? -1 : 0;
+  const at = (step: number) =>
+    stops[(index + direction * step + stops.length) % stops.length]!;
+  if (!at(1).closest('[data-page-slide][aria-hidden="true"]')) return;
+
+  for (let step = 2; step <= stops.length; step += 1) {
+    const candidate = at(step);
+    if (candidate.closest('[data-page-slide][aria-hidden="true"]')) continue;
+    event.preventDefault();
+    candidate.focus({ preventScroll: true });
+    return;
+  }
+}
+
 /**
  * 常驻页面滑层：三页始终挂载，切页只动 transform/opacity（GPU 合成），
  * 零挂载成本——重列表页（剪贴板缩略图墙）切入不再掉帧。offset 为
- * 该页与当前页的序差：0=激活；负=藏左侧；正=藏右侧。动画结束后
- * visibility:hidden 停掉不活动页的绘制。
+ * 该页与当前页的序差：0=激活；负=藏左侧；正=藏右侧。不再切换
+ * visibility/content-visibility：WebKit 唤醒长子树的样式重算会直接卡住切页首帧。
  */
 function PageSlide({
   offset,
@@ -636,36 +694,21 @@ function PageSlide({
   children: React.ReactNode;
 }) {
   const active = offset === 0;
-  // visibility 由 React 受控，不走 motion 的 transitionEnd：退出动画刚完成
-  // 或被打断的一两帧内切回该页时，延迟应用的 transitionEnd hidden 会盖过
-  // 切入时设置的 visible，把已激活页面整页藏掉（来回切 tab 概率性白屏）。
-  const [hidden, setHidden] = useState(!active);
-  if (active && hidden) setHidden(false);
-  const activeRef = useRef(active);
-  activeRef.current = active;
+  useEffect(() => {
+    if (!active) window.dispatchEvent(new Event(COMPACT_ROW_RELEASE_EVENT));
+  }, [active]);
   return (
     <motion.div
       ref={contentRef}
+      data-page-slide
       aria-hidden={!active}
       initial={false}
       animate={
         active ? { x: 0, opacity: 1 } : { x: offset < 0 ? -24 : 24, opacity: 0 }
       }
-      onAnimationComplete={(def) => {
-        // 仅「退出动画完成且此刻仍非激活」才停掉绘制；切入动画完成或
-        // 退出中途被切回打断（stop 也可能触发完成回调）都不隐藏
-        const isExit =
-          typeof def === "object" &&
-          def !== null &&
-          (def as { opacity?: number }).opacity === 0;
-        if (isExit && !activeRef.current) setHidden(true);
-      }}
       transition={springSnappy}
-      style={{ visibility: hidden ? "hidden" : "visible" }}
-      className={cn(
-        "absolute inset-0 flex min-h-0 flex-col",
-        !active && "pointer-events-none"
-      )}
+      style={{ zIndex: active ? 1 : 0 }}
+      className="absolute inset-0 flex min-h-0 flex-col"
     >
       {children}
     </motion.div>
@@ -2337,29 +2380,20 @@ export default function App() {
   const [noteGroupFilter, setNoteGroupFilter] = useState<string | null>(null);
   const [taskGroupFilter, setTaskGroupFilter] = useState<string | null>(null);
 
-  const grouped = useMemo(
-    () =>
-      sections
-        .filter(
-          (section) => section.id !== CLIPBOARD_ID && section.id !== SECRET_ID
-        )
-        .map((section) => {
-          const inSection = notes.filter(
-            // kind!==secret 兜底：秘文卡即便分组孤儿也绝不在笔记页用 NoteCard 渲染
-            (n) =>
-              n.sectionId === section.id &&
-              n.kind !== "secret" &&
-              matchNote(n, q)
-          );
-          return {
-            section,
-            active: inSection.filter((n) => !n.done),
-            done: inSection.filter((n) => n.done),
-          };
-        })
-        .filter((g) => !q || g.active.length + g.done.length > 0),
-    [sections, notes, q]
-  );
+  const grouped = useMemo(() => {
+    const groups = sections
+      .filter((section) => section.id !== CLIPBOARD_ID && section.id !== SECRET_ID)
+      .map((section) => ({ section, active: [] as Note[], done: [] as Note[] }));
+    const bySection = new Map(groups.map((group) => [group.section.id, group]));
+    for (const note of notes) {
+      // kind!==secret 兜底：秘文卡即便分组孤儿也绝不在笔记页用 NoteCard 渲染
+      if (note.kind === "secret" || !matchNote(note, q)) continue;
+      const group = bySection.get(note.sectionId);
+      if (!group) continue;
+      (note.done ? group.done : group.active).push(note);
+    }
+    return groups.filter((group) => !q || group.active.length + group.done.length > 0);
+  }, [sections, notes, q]);
   /** 横栏形态：各分组未完成卡拍平成一条串（分组顺序 → 组内顺序），
    *  可按分组胶囊过滤。 */
   const stripNotes = useMemo(() => {
@@ -2476,8 +2510,8 @@ export default function App() {
   );
 
   // 剪贴板分页渲染：保留时长开到年/永久后可能上万条，一次性渲染会卡；
-  // 首屏 60 张在启动时随常驻页挂载（切页零成本），滚动哨兵按 200 递增
-  const [clipShown, setClipShown] = useState(60);
+  // 首批 60 张，后续也按同批量追加；屏外绘制由 list-render-unit 跳过。
+  const [clipShown, setClipShown] = useState(CLIP_RENDER_BATCH);
   const visibleClipNotes = useMemo(
     () => clipNotes.slice(0, clipShown),
     [clipNotes, clipShown]
@@ -2531,10 +2565,22 @@ export default function App() {
     }
   }, [navIds]);
 
-  const activeCount = notes.filter((n) => !n.done).length;
-  const doneCount = notes.length - activeCount;
-  const activeTaskCount = tasks.filter((t) => t.status !== "done").length;
-  const doneTaskCount = tasks.length - activeTaskCount;
+  const doneCount = useMemo(
+    () => notes.reduce((count, note) => count + Number(note.done), 0),
+    [notes]
+  );
+  const doneTaskCount = useMemo(
+    () => tasks.reduce((count, task) => count + Number(task.status === "done"), 0),
+    [tasks]
+  );
+  const newMessageCount = useMemo(
+    () =>
+      messages.reduce(
+        (count, message) => count + Number(message.status === "new"),
+        0
+      ),
+    [messages]
+  );
 
   // 页面序：用户可拖动页签重排（持久化）。常驻页按序差决定滑向
   // （左侧页藏左、右侧页藏右），所以顺序一变滑动方向立刻跟着变
@@ -2925,24 +2971,24 @@ export default function App() {
 
   // ===== 跨分组拖拽 =====
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+    useSensor(PointerSensor, CARD_POINTER_SENSOR_OPTIONS),
+    useSensor(KeyboardSensor, KEYBOARD_SENSOR_OPTIONS)
   );
   // 页签重排用更大的启动阈值：页签首要动作是切页，4px 容易把「手抖的点击」
   // 吃成拖拽（点了没反应）；6px 拖起来仍然跟手
   const tabSensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+    useSensor(PointerSensor, TAB_POINTER_SENSOR_OPTIONS),
+    useSensor(KeyboardSensor, KEYBOARD_SENSOR_OPTIONS)
   );
 
-  const clearDragExpand = () => {
+  const clearDragExpand = useCallback(() => {
     if (dragExpandRef.current) {
       window.clearTimeout(dragExpandRef.current.timer);
       dragExpandRef.current = null;
     }
-  };
+  }, []);
 
-  const onDragOver = (event: DragOverEvent) => {
+  const onDragOver = useCallback((event: DragOverEvent) => {
     const { active, over } = event;
     if (!over) return;
     const overId = String(over.id);
@@ -2978,9 +3024,9 @@ export default function App() {
     } else if (dragExpandRef.current) {
       clearDragExpand();
     }
-  };
+  }, [clearDragExpand]);
 
-  const onDragEnd = (event: DragEndEvent) => {
+  const onDragEnd = useCallback((event: DragEndEvent) => {
     clearDragExpand();
     const { active, over } = event;
     if (!over) return;
@@ -3011,7 +3057,7 @@ export default function App() {
     if (!overId.startsWith("sec:") && activeId !== overId) {
       state.reorderNotes(activeId, overId);
     }
-  };
+  }, [clearDragExpand]);
 
   // ===== 长按 ⌥ 显示快捷键提示层；⌘ 按住显示 ⌘1-9 快发角标 =====
   const [showShortcuts, setShowShortcuts] = useState(false);
@@ -3158,7 +3204,7 @@ export default function App() {
               id === "tasks"
                 ? taskBuckets.overdue.length
                 : id === "notes" && messagesEnabled
-                  ? messages.filter((message) => message.status === "new").length
+                  ? newMessageCount
                   : undefined
             }
             onClick={() => useUIStore.getState().setPage(id)}
@@ -3181,6 +3227,7 @@ export default function App() {
       <div
         className="h-screen w-screen overflow-hidden text-foreground"
         onContextMenu={(e) => e.preventDefault()}
+        onKeyDownCapture={skipInactivePageTab}
       >
         {dataOperationLocked && (
           <div
@@ -3723,14 +3770,18 @@ export default function App() {
                 </div>
               )}
 
-              {/* 三页常驻堆叠：切页只动 transform/opacity，零挂载成本（同面板开合方案） */}
+              {/* 三页常驻堆叠：切页只动 transform/opacity，零挂载成本。
+                  App 仍需响应页签/工具栏，列表 body 按完整数据依赖缓存，
+                  避免一次 chrome 状态变化 reconcile 三页 O(N) 窗口壳。 */}
               <div className="relative min-h-0 flex-1 overflow-hidden">
                 <PageSlide
                   offset={orderOf("clipboard") - pageIndex}
                   contentRef={clipboardPageRef}
                 >
-                {horizontalBar ? (
-                  <StripScroller>
+                  {useMemo(
+                    () =>
+                      horizontalBar ? (
+                        <StripScroller>
                     {clipNotes.length === 0 ? (
                       <p className="px-4 py-6 text-body text-muted-foreground">
                         {settings.clipHistory ? "还没有剪贴板记录" : "剪贴板历史未开启"}
@@ -3754,16 +3805,19 @@ export default function App() {
                             {clipNotes.length > clipShown && (
                               <ClipLoadMore
                                 remaining={clipNotes.length - clipShown}
-                                onLoad={() => setClipShown((v) => v + 200)}
+                                onLoad={() => setClipShown((v) => v + CLIP_RENDER_BATCH)}
                               />
                             )}
                           </div>
                         </SortableContext>
                       </DndContext>
                     )}
-                  </StripScroller>
-                ) : (
-                <ScrollArea className="min-h-0 flex-1 px-2.5" viewportClassName="px-1">
+                        </StripScroller>
+                      ) : (
+                        <ScrollArea
+                          className="min-h-0 flex-1 px-2.5"
+                          viewportClassName="px-1"
+                        >
                   {clipNotes.length === 0 ? (
                     <EmptyState
                       icon={<ClipboardList />}
@@ -3818,15 +3872,27 @@ export default function App() {
                                 )}
                               >
                                 {bandNotes.map((n, i) => (
-                                  <NoteCard
+                                  <WindowedListItem
                                     key={n.id}
-                                    note={n}
-                                    query={q}
-                                    // 邻卡 id 只在时间段内传递：选中描边的
-                                    // 连续段不跨段头合并
-                                    prevId={bandNotes[i - 1]?.id}
-                                    nextId={bandNotes[i + 1]?.id}
-                                  />
+                                    itemId={n.id}
+                                    estimatedHeight={
+                                      settings.cardDensity === "compact"
+                                        ? 32
+                                        : settings.clipCardTemplate === "condensed"
+                                          ? 52
+                                          : 116
+                                    }
+                                    eager={bi === 0 && i < 18}
+                                  >
+                                    <NoteCard
+                                      note={n}
+                                      query={q}
+                                      // 邻卡 id 只在时间段内传递：选中描边的
+                                      // 连续段不跨段头合并
+                                      prevId={bandNotes[i - 1]?.id}
+                                      nextId={bandNotes[i + 1]?.id}
+                                    />
+                                  </WindowedListItem>
                                 ))}
                               </div>
                             </div>
@@ -3834,22 +3900,42 @@ export default function App() {
                           {clipNotes.length > clipShown && (
                             <ClipLoadMore
                               remaining={clipNotes.length - clipShown}
-                              onLoad={() => setClipShown((v) => v + 200)}
+                              onLoad={() => setClipShown((v) => v + CLIP_RENDER_BATCH)}
                             />
                           )}
                         </div>
                       </SortableContext>
                     </DndContext>
                   )}
-                </ScrollArea>
-                )}
+                        </ScrollArea>
+                      ),
+                    [
+                      clearDragExpand,
+                      clipBands,
+                      clipNavIds,
+                      clipNotes,
+                      clipShown,
+                      horizontalBar,
+                      onDragEnd,
+                      onDragOver,
+                      q,
+                      sensors,
+                      settings.cardDensity,
+                      settings.clipCardTemplate,
+                      settings.clipHistory,
+                      visibleClipNotes,
+                    ]
+                  )}
                 </PageSlide>
                 <PageSlide
                   offset={orderOf("notes") - pageIndex}
                   contentRef={notesPageRef}
                 >
-                {contentDomainsOn && <ContentTabs />}
-                {contentSubview === "messages" ? (
+                  {useMemo(
+                    () => (
+                      <>
+                        {contentDomainsOn && <ContentTabs />}
+                        {contentSubview === "messages" ? (
                   <MessagePage query={q} horizontal={horizontalBar} />
                 ) : contentSubview === "secret" ? (
                   <SecretPage
@@ -3905,7 +3991,7 @@ export default function App() {
                       }
                     />
                   ) : null
-                ) : matchCount === 0 && q ? (
+                ) : noteMatchCount === 0 && q ? (
                   <EmptyState icon={<SearchX />} title={`没有匹配「${q}」的卡片`} />
                 ) : (
                   <DndContext
@@ -3920,13 +4006,14 @@ export default function App() {
                         items={grouped.map(({ section }) => `sec:${section.id}`)}
                         strategy={verticalListSortingStrategy}
                       >
-                        {grouped.map(({ section, active, done }) => (
+                        {grouped.map(({ section, active, done }, index) => (
                           <SectionGroup
                             key={section.id}
                             section={section}
                             activeNotes={active}
                             doneNotes={done}
                             query={q}
+                            eager={index === 0}
                           />
                         ))}
                       </SortableContext>
@@ -3942,14 +4029,36 @@ export default function App() {
                   </DndContext>
                 )}
               </ScrollArea>
-                )}
+                        )}
+                      </>
+                    ),
+                    [
+                      clearDragExpand,
+                      contentDomainsOn,
+                      contentSubview,
+                      grouped,
+                      horizontalBar,
+                      noteMatchCount,
+                      notes,
+                      onDragEnd,
+                      onDragOver,
+                      q,
+                      rehearsalVisible,
+                      secretNotes,
+                      sensors,
+                      stripNoteIds,
+                      stripNotes,
+                    ]
+                  )}
                 </PageSlide>
                 <PageSlide
                   offset={orderOf("tasks") - pageIndex}
                   contentRef={tasksPageRef}
                 >
-                  {horizontalBar ? (
-                    <>
+                  {useMemo(
+                    () =>
+                      horizontalBar ? (
+                        <>
                       <StripScroller>
                         {stripTasks.length === 0 ? (
                           <p className="px-4 py-6 text-body text-muted-foreground">
@@ -3965,9 +4074,11 @@ export default function App() {
                       </StripScroller>
                       {/* 横栏也保留快速添加（含 💡 灵感切换） */}
                       <TaskQuickAdd />
-                    </>
-                  ) : (
-                    <RemindersPage buckets={taskBuckets} now={taskNow} />
+                        </>
+                      ) : (
+                        <RemindersPage buckets={taskBuckets} now={taskNow} />
+                      ),
+                    [horizontalBar, stripTasks, taskBuckets, taskNow]
                   )}
                 </PageSlide>
               </div>

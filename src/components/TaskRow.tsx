@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { AnimatePresence, motion } from "motion/react";
+import { motion } from "motion/react";
 import {
   AlarmClock,
   CheckCircle2,
@@ -37,7 +37,7 @@ import {
 } from "@/components/ui/popover";
 import { deleteTasksWithUndo, sendTaskToChat } from "@/lib/actions";
 import { splitSubtasks } from "@/lib/ai";
-import { springDetail } from "@/lib/motion";
+import { tweenMenu } from "@/lib/motion";
 import {
   dueBadgeLabel,
   dueBadgeShortLabel,
@@ -187,20 +187,24 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
               transform: CSS.Transform.toString(transform),
               transition,
               "--card-alpha": `${Math.round(cardOpacity * 100)}%`,
+              "--list-intrinsic-size": "36px",
             } as CSSProperties
           }
           // 收起态抓行内任意处拖拽排序（4px 激活阈值不影响点击展开）；按钮/
           // 输入框已各自 stopPropagation 或靠距离阈值天然免疫（见文件顶部注释）。
           // 展开态只走左缘把手，避免编辑器内划选文字触发拖动
           onPointerDown={(e) => {
-            if (!expanded) listeners?.onPointerDown?.(e);
+            if (!expanded) {
+              useUIStore.getState().setFocusedId(task.id);
+              listeners?.onPointerDown?.(e);
+            }
           }}
           onClick={() => {
-            useUIStore.getState().setFocusedId(task.id);
-            useUIStore.getState().setEditingId(task.id);
+            // 一次更新同时切焦点与编辑态，避免长列表的 selector 被广播两轮。
+            useUIStore.setState({ focusedId: task.id, editingId: task.id });
           }}
           className={cn(
-            "group relative rounded-lg border border-transparent px-2 py-1.5",
+            "list-render-unit list-render-task group relative rounded-lg border border-transparent px-2 py-1.5",
             // 行 hover 轻投影浮起（不位移，任务是动词不是资产；同紧缩笔记卡的
             // 「只给影子」调性），删除/到期钮随 hover 同步显现
             "transition-shadow duration-150 hover:elevation-2",
@@ -222,9 +226,11 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
           <button
             {...attributes}
             data-drag-handle
+            onFocus={() => useUIStore.getState().setFocusedId(task.id)}
             onKeyDown={(e) => listeners?.onKeyDown?.(e)}
             onPointerDown={(e) => {
               e.stopPropagation();
+              useUIStore.getState().setFocusedId(task.id);
               listeners?.onPointerDown?.(e);
             }}
             onClick={(e) => e.stopPropagation()}
@@ -376,61 +382,58 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
             )}
           </div>
 
-          {/* ===== 展开详情：备注 + 检查列表（自上而下下拉展开）===== */}
-          <AnimatePresence initial={false}>
+          {/* ===== 展开详情：单次布局 + 合成层入场，避免长列表逐帧回流 ===== */}
           {expanded && (
             <motion.div
               key="detail"
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: "auto", opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              transition={springDetail}
+              initial={{ opacity: 0, y: -2 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={tweenMenu}
               className="overflow-hidden"
             >
-            <div className="ml-8 mt-1 flex flex-col gap-1.5 pb-1">
-              <textarea
-                value={noteDraft}
-                placeholder="备注"
-                rows={1}
-                onChange={(e) => {
-                  setNoteDraft(e.target.value);
-                  autoResize(e.target);
-                }}
-                onClick={(e) => e.stopPropagation()}
-                onBlur={saveNote}
-                onKeyDown={(e) => {
-                  e.stopPropagation();
-                  if (e.key === "Escape") collapse();
-                }}
-                className="resize-none bg-transparent text-body leading-relaxed text-muted-foreground outline-none placeholder:text-muted-foreground"
-              />
-              {checklist.length > 0 && (
-                <div className="flex flex-col">
-                  {checklist.map((c) => (
-                    <ChecklistRow key={c.id} taskId={task.id} item={c} />
-                  ))}
-                </div>
-              )}
-              <ChecklistAdder taskId={task.id} />
-              {/* 详情底部操作行：到期 + 删除（行头空间留给完整标题） */}
-              <div className="flex items-center gap-1.5 pt-0.5">
-                <DuePopover task={task} now={now} alwaysVisible />
-                <span className="flex-1" />
-                <button
-                  aria-label="删除任务"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    deleteTasksWithUndo([task.id], "已删除 1 个任务");
+              <div className="ml-8 mt-1 flex flex-col gap-1.5 pb-1">
+                <textarea
+                  value={noteDraft}
+                  placeholder="备注"
+                  rows={1}
+                  onChange={(e) => {
+                    setNoteDraft(e.target.value);
+                    autoResize(e.target);
                   }}
-                  className="rounded-sm p-0.5 text-muted-foreground outline-none hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
-                >
-                  <Trash2 className="size-3.5" />
-                </button>
+                  onClick={(e) => e.stopPropagation()}
+                  onBlur={saveNote}
+                  onKeyDown={(e) => {
+                    e.stopPropagation();
+                    if (e.key === "Escape") collapse();
+                  }}
+                  className="resize-none bg-transparent text-body leading-relaxed text-muted-foreground outline-none placeholder:text-muted-foreground"
+                />
+                {checklist.length > 0 && (
+                  <div className="flex flex-col">
+                    {checklist.map((c) => (
+                      <ChecklistRow key={c.id} taskId={task.id} item={c} />
+                    ))}
+                  </div>
+                )}
+                <ChecklistAdder taskId={task.id} />
+                {/* 详情底部操作行：到期 + 删除（行头空间留给完整标题） */}
+                <div className="flex items-center gap-1.5 pt-0.5">
+                  <DuePopover task={task} now={now} alwaysVisible />
+                  <span className="flex-1" />
+                  <button
+                    aria-label="删除任务"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteTasksWithUndo([task.id], "已删除 1 个任务");
+                    }}
+                    className="rounded-sm p-0.5 text-muted-foreground outline-none hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </div>
               </div>
-            </div>
             </motion.div>
           )}
-          </AnimatePresence>
         </div>
       </ContextMenuTrigger>
 
