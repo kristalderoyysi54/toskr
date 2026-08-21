@@ -22,7 +22,7 @@
 默认只粘贴，不会替你按回车。自动提交需要为目标应用单独开启。
 
 <p align="center">
-  <img src="docs/assets/readme/toskr-flow.svg" alt="来源应用、Toskr 和当前 AI 输入框组成的三步流程" width="100%" />
+  <img src="docs/assets/readme/toskr-flow.png" alt="来源应用、Toskr 和当前 AI 输入框组成的三步流程" width="100%" />
 </p>
 
 ## 三步上手

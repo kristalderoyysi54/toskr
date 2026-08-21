@@ -24,7 +24,7 @@ Collect text and images from different apps, organize and review privacy, then p
 Toskr pastes by default. It only submits when you enable auto-submit for that target app.
 
 <p align="center">
-  <img src="docs/assets/readme/toskr-flow.svg" alt="A three-step flow from source apps through Toskr to the current AI input" width="100%" />
+  <img src="docs/assets/readme/toskr-flow.png" alt="A three-step flow from source apps through Toskr to the current AI input" width="100%" />
 </p>
 
 ## Three steps
