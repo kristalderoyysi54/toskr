@@ -827,6 +827,19 @@ export const api = {
       dataGeneration: note?.dataGeneration ?? null,
       edit: note?.edit ?? false,
     }),
+  /** 悬停窥视：原尺寸预览窗的瞬态形态（不抢焦点、鼠标穿透），移开由 hidePeekImage 收起。 */
+  peekImage: (files: string[]) =>
+    invoke("quick_look", {
+      files,
+      index: 0,
+      noteId: null,
+      noteText: null,
+      dataGeneration: null,
+      edit: false,
+      transient: true,
+    }),
+  /** 收起悬停窥视的瞬态预览窗（常规预览窗不受影响）。 */
+  hidePeekImage: () => invoke("hide_transient_image_preview"),
   /** 文本详情窗（桌面居中；内容另行 emit 到 textpreview 窗口）。 */
   showTextPreview: () => invoke("show_text_preview"),
   ocrImage: (file: string) => invoke<string>("ocr_image", { file }),

@@ -201,7 +201,8 @@ pub fn set_message_watch_auto(
 /// 图片原尺寸预览（自建预览窗；面板 320-520pt 放不下大图）。
 /// 组合卡传全部图片，`index` 为起始张（预览窗内 ←/→ 翻看）。
 /// `note_id`/`note_text`：所属笔记的 id 与当前文字（图片卡详情内联编辑
-/// 备注用；不传则预览窗不显示编辑条）；`edit` 为 true 时直接进入编辑态。
+/// 备注用；不传则预览窗不显示编辑条）；`edit` 为 true 时直接进入编辑态；
+/// `transient` 为悬停窥视形态（不抢焦点、鼠标穿透，指针移开由前端收起）。
 #[tauri::command]
 pub fn quick_look(
     app: AppHandle,
@@ -211,6 +212,7 @@ pub fn quick_look(
     note_text: Option<String>,
     data_generation: Option<u64>,
     edit: bool,
+    transient: Option<bool>,
 ) {
     crate::window::preview_image(
         &app,
@@ -220,7 +222,14 @@ pub fn quick_look(
         note_text,
         data_generation,
         edit,
+        transient.unwrap_or(false),
     );
+}
+
+/// 收起悬停窥视的瞬态预览窗（Space/点击打开的常规预览窗不受影响）。
+#[tauri::command]
+pub fn hide_transient_image_preview(app: AppHandle) {
+    crate::window::hide_transient_image_preview(&app);
 }
 
 /// 文本详情窗（桌面居中弹出；窄面板放不下长文，预览/编辑都在这个窗口）。
