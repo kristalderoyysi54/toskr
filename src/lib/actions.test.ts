@@ -13,8 +13,9 @@ const apiMocks = vi.hoisted(() => ({
   copyText: vi.fn(),
   copyImage: vi.fn(),
   copyRichClipboard: vi.fn(),
+  exportNotesBundle: vi.fn(),
 }));
-const dialogMocks = vi.hoisted(() => ({ ask: vi.fn() }));
+const dialogMocks = vi.hoisted(() => ({ ask: vi.fn(), save: vi.fn() }));
 const eventMocks = vi.hoisted(() => ({
   emit: vi.fn(),
   emitTo: vi.fn(),
@@ -53,6 +54,7 @@ vi.mock("@/lib/tauri", async (importOriginal) => {
 import {
   armNoteEditUndo,
   copyNoteContent,
+  exportNotesBundle,
   mergeCheckedWithUndo,
   moveClipsToNotesWithUndo,
   openNoteBatchDetail,
@@ -154,7 +156,7 @@ function reset(status: DeliveryStatus) {
     settings: defaultSettings(),
     undoStack: [],
   });
-  useUIStore.setState({ open: true, pinned: false });
+  useUIStore.setState({ open: true, pinned: false, detailEditorNoteId: null });
   apiMocks.appIcon.mockReset().mockResolvedValue(null);
   resetTargetState();
   applyTargetEvent(target);
@@ -166,6 +168,7 @@ function reset(status: DeliveryStatus) {
   apiMocks.copyText.mockReset().mockResolvedValue(undefined);
   apiMocks.copyImage.mockReset().mockResolvedValue(undefined);
   apiMocks.copyRichClipboard.mockReset().mockResolvedValue(undefined);
+  apiMocks.exportNotesBundle.mockReset().mockResolvedValue(undefined);
   apiMocks.scanSensitiveText.mockReset().mockImplementation(async (text: string) => ({
     findings: [],
     warnings: [],
@@ -198,13 +201,14 @@ function reset(status: DeliveryStatus) {
     .mockReset()
     .mockImplementation(async (request: SendDeliveryRequest) => result(request, status));
   dialogMocks.ask.mockReset().mockResolvedValue(true);
+  dialogMocks.save.mockReset().mockResolvedValue(null);
   vi.mocked(tip).mockClear();
 }
 
 describe("结构化发送结果的 store 副作用", () => {
   beforeEach(() => reset("sent"));
 
-  it("图片卡编辑直接打开带编辑标记的原尺寸预览", () => {
+  it("图片卡编辑直接打开手动打码态的原尺寸预览", () => {
     const { id } = useNotesStore.getState().addNote("图片 231×242", {
       kind: "image",
       imageFile: "shot.png",
@@ -220,8 +224,13 @@ describe("结构化发送结果的 store 副作用", () => {
       expect.objectContaining({
         id,
         text: "",
-        edit: true,
         dataGeneration: expect.any(Number),
+      }),
+      expect.objectContaining({
+        kind: "note",
+        noteId: id,
+        dataGeneration: expect.any(Number),
+        startEditing: true,
       })
     );
   });
@@ -265,6 +274,48 @@ describe("结构化发送结果的 store 副作用", () => {
     ]);
     expect(apiMocks.copyText).not.toHaveBeenCalled();
     expect(apiMocks.copyImage).not.toHaveBeenCalled();
+  });
+
+  it("导出勾选笔记为单一 Markdown 媒体包且保留选择", async () => {
+    const firstId = useNotesStore.getState().addNote("前文", {
+      contentBlocks: [
+        { type: "text", text: "前文" },
+        { type: "image", file: "first.png" },
+      ],
+    }).id!;
+    const secondId = useNotesStore.getState().addNote("后文").id!;
+    useNotesStore.getState().setChecked([firstId, secondId]);
+    dialogMocks.save.mockResolvedValue("/tmp/Toskr-笔记.zip");
+    apiMocks.exportNotesBundle.mockResolvedValue(undefined);
+
+    await exportNotesBundle([firstId, secondId]);
+
+    expect(dialogMocks.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filters: [{ name: "Toskr Markdown 笔记包", extensions: ["zip"] }],
+      })
+    );
+    expect(apiMocks.exportNotesBundle).toHaveBeenCalledWith(
+      "/tmp/Toskr-笔记.zip",
+      expect.stringMatching(/后文[\s\S]*前文[\s\S]*media\/first\.png/),
+      ["first.png"]
+    );
+    expect(useNotesStore.getState().checkedIds).toEqual([firstId, secondId]);
+    expect(tip).toHaveBeenLastCalledWith("ok", "已导出 2 条笔记、1 张图");
+  });
+
+  it("导出前阻止仍在详情窗中的笔记，避免拿到未同步草稿", async () => {
+    const id = useNotesStore.getState().addNote("旧正文").id!;
+    useUIStore.getState().setDetailEditorNoteId(id);
+
+    await exportNotesBundle([id]);
+
+    expect(dialogMocks.save).not.toHaveBeenCalled();
+    expect(apiMocks.exportNotesBundle).not.toHaveBeenCalled();
+    expect(tip).toHaveBeenLastCalledWith(
+      "warn",
+      "请先关闭已打开的笔记详情，确认最新编辑已同步后再导出"
+    );
   });
 
   it("合并发送来源按发送规则重建图文只读预览", () => {

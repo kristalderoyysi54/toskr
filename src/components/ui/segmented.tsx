@@ -1,7 +1,8 @@
 import { useId } from "react";
-import { motion, MotionConfig } from "motion/react";
+import { MotionConfig } from "motion/react";
 
 import { focusRingWithin } from "@/components/ui/focus-ring";
+import { SlidingTabIndicator } from "@/components/ui/sliding-tab-indicator";
 import { cn } from "@/lib/utils";
 
 /**
@@ -52,10 +53,8 @@ export function Segmented<T extends string>({
                 className="sr-only"
               />
               {active && (
-                <motion.span
+                <SlidingTabIndicator
                   layoutId={`${groupName}-thumb`}
-                  transition={{ duration: 0.12, ease: [0.2, 0.9, 0.3, 1] }}
-                  className="absolute inset-0 rounded-md bg-segmented-thumb shadow-(--segmented-thumb-shadow)"
                 />
               )}
               <span

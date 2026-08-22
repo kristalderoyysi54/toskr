@@ -131,6 +131,7 @@ import { GlowingEffect } from "@/components/ui/glowing-effect";
 import { IconButton } from "@/components/ui/icon-button";
 import { Kbd } from "@/components/ui/kbd";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { SlidingTabIndicator } from "@/components/ui/sliding-tab-indicator";
 import { StripScroller } from "@/components/ui/strip-scroller";
 import {
   Tooltip,
@@ -150,6 +151,7 @@ import {
   openNoteDetail,
   toggleNoteDetail,
   NOTE_TAGS_EVENT,
+  NOTE_EDIT_SYNC_RESULT_EVENT,
   refreshOpenNoteDetail,
   RUN_PENDING_UNDO_EVENT,
   sendCheckedToChat,
@@ -157,6 +159,7 @@ import {
   undoableTip,
   warnWithPanel,
   type NoteEditPayload,
+  type NoteEditSyncResultPayload,
   type NoteTagsPayload,
 } from "@/lib/actions";
 import { clipTimeBand } from "@/lib/cliprow";
@@ -181,7 +184,7 @@ import {
   withoutLegacyAiApiKey,
 } from "@/lib/aiKeyMigration";
 import { matchNote, matchSecretNote } from "@/lib/search";
-import { isSecretEnvelope, openFromChinese } from "@/lib/secret/secret";
+import { isSecretEnvelope, openSecret } from "@/lib/secret/secret";
 import { scrollPageToStart } from "@/lib/pageScroll";
 import {
   shouldHidePanelOnBlur,
@@ -225,6 +228,17 @@ import { cn } from "@/lib/utils";
 import { registerAliasQuickAddListener } from "@/lib/aliasQuickAdd";
 import { restoreAliases } from "@/lib/delivery/aliasEntities";
 import { clearDeliveryDraftImages } from "@/lib/delivery/imageFirewall";
+import {
+  applyImageEditRequest,
+  cancelImageEditRequest,
+} from "@/lib/imageEditController";
+import {
+  IMAGE_EDIT_CANCEL_EVENT,
+  IMAGE_EDIT_CANCEL_RESULT_EVENT,
+  IMAGE_EDIT_REQUEST_EVENT,
+  IMAGE_EDIT_RESULT_EVENT,
+  type ImageEditRequestPayload,
+} from "@/lib/imageEditor";
 import {
   CLIPBOARD_ID,
   INBOX_ID,
@@ -272,7 +286,10 @@ function mediaIntegrityStateJson(): string {
   return JSON.stringify(
     buildMediaIntegrityPayload(
       useNotesStore.getState(),
-      editorSessionMediaFiles()
+      [
+        ...editorSessionMediaFiles(),
+        ...useUIStore.getState().draftImages.map((image) => image.file),
+      ]
     )
   );
 }
@@ -346,7 +363,7 @@ interface PillManage {
 
 const pillCls = (on: boolean) =>
   cn(
-    "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-label",
+    "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-label transition-[color,background-color,border-color] duration-(--duration-control)",
     on
       ? "border-border bg-primary/10 font-medium text-foreground dark:border-input"
       : "border-transparent text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
@@ -1097,7 +1114,7 @@ export default function App() {
           createdAt: capturedAt,
         };
         void (async () => {
-          const res = await openFromChinese(
+          const res = await openSecret(
             payload.text,
             useNotesStore.getState().settings.secretKeys
           );
@@ -1894,7 +1911,35 @@ export default function App() {
       }
     });
     const subs = [
+      listen<{ requestId: string }>(IMAGE_EDIT_CANCEL_EVENT, (event) => {
+        const requestId = event.payload?.requestId ?? "";
+        const status = cancelImageEditRequest(requestId);
+        void emitTo("imgpreview", IMAGE_EDIT_CANCEL_RESULT_EVENT, {
+          requestId,
+          status,
+        }).catch(() => {});
+      }),
+      listen<ImageEditRequestPayload>(IMAGE_EDIT_REQUEST_EVENT, (event) => {
+        void applyImageEditRequest(event.payload, scheduleMediaGc)
+          .then((result) =>
+            emitTo("imgpreview", IMAGE_EDIT_RESULT_EVENT, result).catch(() => {})
+          )
+          .catch((error) =>
+            emitTo("imgpreview", IMAGE_EDIT_RESULT_EVENT, {
+              requestId: event.payload?.requestId ?? "",
+              ok: false,
+              message: `图片打码失败：${userError(error)}`,
+            }).catch(() => {})
+          );
+      }),
       listen<NoteEditPayload>("toskr://note-edit", (e) => {
+        const replySync = (ok: boolean) => {
+          if (!e.payload.syncId) return;
+          void emitTo("textpreview", NOTE_EDIT_SYNC_RESULT_EVENT, {
+            syncId: e.payload.syncId,
+            ok,
+          } satisfies NoteEditSyncResultPayload).catch(() => {});
+        };
         if (
           isDataOperationLocked() ||
           !matchesDataGeneration(e.payload.dataGeneration)
@@ -1904,6 +1949,12 @@ export default function App() {
             "编辑未保存：数据上下文已变化，请复制内容后重新打开卡片",
             "note-edit rejected"
           );
+          replySync(false);
+          return;
+        }
+        if (!useNotesStore.getState().notes.some((note) => note.id === e.payload.id)) {
+          warnWithPanel("编辑未保存：卡片已不存在，请重新打开", "note-edit missing");
+          replySync(false);
           return;
         }
         if (e.payload.format === "blocks") {
@@ -1920,6 +1971,7 @@ export default function App() {
             e.payload.origin ? undefined : 0
           );
         }
+        replySync(true);
         // 编辑中的静默自动保存：会话未结束，不释放媒体会话、不提示、不抓链接
         if (e.payload.autosave) return;
         if (e.payload.sessionId) {
@@ -4210,22 +4262,21 @@ function PageTab({
       title={`切换到${typeof children === "string" ? children : PAGE_LABEL[id]}；双击返回列表起点`}
       className={cn(
         "relative flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-label outline-none",
-        "transition-[color,background-color,transform] duration-(--duration-control)",
+        "transition-[color,transform] duration-(--duration-control)",
         focusRing,
         "active:scale-[0.97]",
         isDragging && "cursor-grabbing opacity-80",
         active
-          ? // 浮起 thumb（2026-08-13 随 Segmented 轨道化联动，替代灰胶囊）：
-            // 白片+微投影承托选中，仍无描边无蓝色；轨道见 tablist 容器
-            "border-transparent bg-segmented-thumb font-medium text-foreground shadow-(--segmented-thumb-shadow)"
+          ? "border-transparent font-medium text-foreground"
           : "border-transparent text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
       )}
     >
-      {children}
+      {active && <SlidingTabIndicator layoutId="page-tab-thumb" />}
+      <span className="relative z-10">{children}</span>
       {/* 16px 正圆：min-w=h 锁死单数字为圆，两位数由 min-width 让位撑成胶囊。
           字号走 text-micro（10px）——9px 在 16px 圆里笔画糊、占比过小，视觉上「不正」 */}
       {!!badge && (
-        <span className="inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-destructive/90 px-1 text-micro font-semibold tabular-nums text-white">
+        <span className="relative z-10 inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-destructive/90 px-1 text-micro font-semibold tabular-nums text-white">
           {badge}
         </span>
       )}

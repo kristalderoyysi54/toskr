@@ -1661,6 +1661,7 @@ pub fn preview_image(
     note_text: Option<String>,
     data_generation: Option<u64>,
     edit: bool,
+    edit_context: Option<serde_json::Value>,
     transient: bool,
 ) {
     let index = if files.get(index).is_some() { index } else { 0 };
@@ -1681,6 +1682,7 @@ pub fn preview_image(
             note_text,
             data_generation,
             edit,
+            edit_context,
             peek_gen,
         ) {
             eprintln!("[toskr] 图片预览失败: {e}");
@@ -1713,6 +1715,7 @@ struct PreviewPayload {
     note_text: Option<String>,
     data_generation: Option<u64>,
     edit: bool,
+    edit_context: Option<serde_json::Value>,
     /// 悬停窥视瞬态形态：前端渲染纯图（无标题栏/翻页钮/底栏，零内边距）。
     transient: bool,
 }
@@ -1726,6 +1729,7 @@ fn preview_image_on_main(
     note_text: Option<String>,
     data_generation: Option<u64>,
     edit: bool,
+    edit_context: Option<serde_json::Value>,
     // Some = 瞬态窥视及其入场世代；None = 常规预览
     peek_gen: Option<u64>,
 ) -> tauri::Result<()> {
@@ -1780,7 +1784,7 @@ fn preview_image_on_main(
     } else {
         // 顶部 32pt 标题栏 + 底部 24pt 尺寸标注条；带笔记上下文时再留 44pt
         // 备注编辑条；不放大小图（ratio ≤ 1）。
-        let chrome = if note_id.is_some() { 100.0 } else { 56.0 };
+        let chrome = if note_id.is_some() || edit_context.is_some() { 100.0 } else { 56.0 };
         let max_w = (wa_w * 0.9).max(240.0);
         let max_h = (wa_h * 0.9 - chrome).max(180.0);
         let ratio = (max_w / img_w).min(max_h / img_h).min(1.0);
@@ -1798,6 +1802,7 @@ fn preview_image_on_main(
             note_text,
             data_generation,
             edit,
+            edit_context,
             transient,
         },
     );

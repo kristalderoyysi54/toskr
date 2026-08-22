@@ -29,9 +29,11 @@ import { Segmented } from "@/components/ui/segmented";
 import { TextSelectionToolbar } from "@/components/TextSelectionToolbar";
 import {
   NOTE_EDIT_AUTOSAVE_INTERVAL_MS,
+  NOTE_EDIT_SYNC_RESULT_EVENT,
   NOTE_TAGS_EVENT,
   RUN_PENDING_UNDO_EVENT,
   type NoteEditPayload,
+  type NoteEditSyncResultPayload,
   type NotePreviewPayload,
   type NoteTagsPayload,
 } from "@/lib/actions";
@@ -50,10 +52,17 @@ import { springSnappy } from "@/lib/motion";
 import {
   hasOrderedRichLayout,
   normalizeNoteContentBlocks,
+  replaceNoteImageFile,
   textBlockRanges,
   textFromContentBlocks,
   type NoteContentBlock,
 } from "@/lib/noteContentBlocks";
+import {
+  NOTE_IMAGE_REPLACED_EVENT,
+  advanceNoteImageEditSequence,
+  type ImagePreviewEditContext,
+  type NoteImageReplacedPayload,
+} from "@/lib/imageEditor";
 import {
   appendPreviewContent,
   editorInsertRejectionReason,
@@ -188,6 +197,9 @@ type PickSegment = {
 const sameFiles = (a: string[], b: string[]) =>
   a.length === b.length && a.every((file, index) => file === b[index]);
 
+const replaceImageRefs = (files: readonly string[], source: string, edited: string) =>
+  files.map((file) => file === source ? edited : file);
+
 /** 编辑会话账本：origin = 本次编辑前内容；persisted* = 最近一次已写库内容。 */
 type AutosaveSession = {
   origin: { text: string; images: string[]; blocks: NoteContentBlock[] | null };
@@ -289,6 +301,28 @@ function applyTextareaEdit(textarea: HTMLTextAreaElement, edit: SelectionEdit) {
   textarea.setSelectionRange(edit.selection.start, edit.selection.end);
 }
 
+async function emitNoteEditWithAck(payload: NoteEditPayload): Promise<boolean> {
+  const syncId = globalThis.crypto.randomUUID();
+  let resolveAck!: (ok: boolean) => void;
+  const ack = new Promise<boolean>((resolve) => { resolveAck = resolve; });
+  const stop = await listen<NoteEditSyncResultPayload>(
+    NOTE_EDIT_SYNC_RESULT_EVENT,
+    (event) => {
+      if (event.payload.syncId === syncId) resolveAck(event.payload.ok);
+    }
+  );
+  const timeout = window.setTimeout(() => resolveAck(false), 4_000);
+  try {
+    await emitTo("main", "toskr://note-edit", { ...payload, syncId });
+    return await ack;
+  } catch {
+    return false;
+  } finally {
+    window.clearTimeout(timeout);
+    stop();
+  }
+}
+
 export default function TextPreviewView() {
   const [note, setNote] = useState<NotePreviewPayload | null>(null);
   const [editing, setEditing] = useState(false);
@@ -347,6 +381,7 @@ export default function TextPreviewView() {
   const appliedInsertOperationsRef = useRef(new Map<string, number>());
   const noteRef = useRef<NotePreviewPayload | null>(null);
   const autosaveSessionRef = useRef<AutosaveSession | null>(null);
+  const noteImageEditSequencesRef = useRef(new Map<string, number>());
   const textEditHistoryRef = useRef<TextEditHistory>(freshTextEditHistory());
   const editSessionRef = useRef({
     original: [] as string[],
@@ -451,6 +486,136 @@ export default function TextPreviewView() {
     });
     return () => {
       changed.then((stop) => stop());
+    };
+  }, []);
+
+  useEffect(() => {
+    const replaced = listen<NoteImageReplacedPayload>(
+      NOTE_IMAGE_REPLACED_EVENT,
+      (event) => {
+        const payload = event.payload;
+        const current = noteRef.current;
+        if (!advanceNoteImageEditSequence(
+          noteImageEditSequencesRef.current,
+          payload.noteId,
+          payload.dataGeneration,
+          payload.sequence
+        )) return;
+        // 即使当前窗显示的是别卡，也记录该笔记水位，防止切回后接受迟到事件。
+        if (
+          !current || current.id !== payload.noteId ||
+          current.dataGeneration !== payload.dataGeneration ||
+          !payload.sourceFile || !payload.editedFile ||
+          !Number.isSafeInteger(payload.width) || payload.width <= 0 ||
+          !Number.isSafeInteger(payload.height) || payload.height <= 0
+        ) return;
+        const currentBlocks = current.contentBlocks ?? null;
+        const inBlocks = currentBlocks?.some(
+          (block) => block.type === "image" && block.file === payload.sourceFile
+        ) ?? false;
+        const inDraft = draftImagesRef.current.includes(payload.sourceFile) ||
+          draftContentBlocksRef.current.some(
+            (block) => block.type === "image" && block.file === payload.sourceFile
+          );
+        if (
+          !current.images.includes(payload.sourceFile) && !inBlocks && !inDraft
+        ) return;
+
+        const edit = {
+          file: payload.editedFile,
+          width: payload.width,
+          height: payload.height,
+        };
+        const nextBlocks = currentBlocks
+          ? replaceNoteImageFile(currentBlocks, payload.sourceFile, edit)
+          : currentBlocks;
+        const nextNote = {
+          ...current,
+          images: replaceImageRefs(
+            current.images,
+            payload.sourceFile,
+            payload.editedFile
+          ),
+          contentBlocks: nextBlocks,
+        };
+        noteRef.current = nextNote;
+        setNote(nextNote);
+
+        draftImagesRef.current = replaceImageRefs(
+          draftImagesRef.current,
+          payload.sourceFile,
+          payload.editedFile
+        );
+        setDraftImages(draftImagesRef.current);
+        if (draftContentBlocksRef.current.some(
+          (block) => block.type === "image" && block.file === payload.sourceFile
+        )) {
+          draftContentBlocksRef.current = replaceNoteImageFile(
+            draftContentBlocksRef.current,
+            payload.sourceFile,
+            edit
+          );
+          setDraftContentBlocks(draftContentBlocksRef.current);
+        }
+
+        const session = autosaveSessionRef.current;
+        if (session) {
+          session.origin.images = replaceImageRefs(
+            session.origin.images,
+            payload.sourceFile,
+            payload.editedFile
+          );
+          session.persistedImages = replaceImageRefs(
+            session.persistedImages,
+            payload.sourceFile,
+            payload.editedFile
+          );
+          if (session.origin.blocks) {
+            session.origin.blocks = replaceNoteImageFile(
+              session.origin.blocks,
+              payload.sourceFile,
+              edit
+            );
+          }
+          if (session.persistedBlocksJson) {
+            try {
+              session.persistedBlocksJson = JSON.stringify(
+                replaceNoteImageFile(
+                  normalizeNoteContentBlocks(
+                    JSON.parse(session.persistedBlocksJson) as unknown
+                  ),
+                  payload.sourceFile,
+                  edit
+                )
+              );
+            } catch {
+              // 下一次自动保存会按 draft ref 重建正确持久态。
+              session.persistedBlocksJson = null;
+            }
+          }
+        }
+        const history = textEditHistoryRef.current;
+        for (const snapshot of [...history.undo, ...history.redo]) {
+          snapshot.images = replaceImageRefs(
+            snapshot.images,
+            payload.sourceFile,
+            payload.editedFile
+          );
+        }
+        if (pendingTextEditImagesRef.current) {
+          pendingTextEditImagesRef.current = replaceImageRefs(
+            pendingTextEditImagesRef.current,
+            payload.sourceFile,
+            payload.editedFile
+          );
+        }
+        if (sessionPastedImagesRef.current.delete(payload.sourceFile)) {
+          sessionPastedImagesRef.current.add(payload.editedFile);
+        }
+      }
+    );
+    return () => {
+      replaced.then((stop) => stop());
     };
   }, []);
 
@@ -1756,6 +1921,71 @@ export default function TextPreviewView() {
         dataGeneration: note.dataGeneration,
       }
     : undefined;
+  const imageEditContext: ImagePreviewEditContext | undefined =
+    writable && editing
+      ? {
+          kind: "note",
+          noteId: note.id,
+          dataGeneration: note.dataGeneration,
+        }
+      : undefined;
+  /**
+   * 编辑器里的图片可能刚粘贴、尚未等到 2s 自动保存。先把当前草稿按同一
+   * autosave 协议推给主窗口，再开放图片编辑，保证 owner 的来源 CAS 可命中。
+   */
+  const openEditingImage = async (files: string[], index: number) => {
+    const current = noteRef.current;
+    if (!editing || !previewIsEditable(current)) {
+      await api.quickLook(files, index, imagePreviewSource, imageEditContext);
+      return;
+    }
+    const session = autosaveSessionRef.current;
+    try {
+      if (hasOrderedRichLayout(current.contentBlocks) && current.contentBlocks) {
+        const contentBlocks = normalizeNoteContentBlocks(
+          draftContentBlocksRef.current
+        );
+        const applied = await emitNoteEditWithAck({
+          format: "blocks",
+          id: current.id,
+          contentBlocks,
+          dataGeneration: current.dataGeneration,
+          autosave: true,
+        } satisfies NoteEditPayload);
+        if (!applied) {
+          tip("warn", "图片编辑未打开：当前草稿尚未同步");
+          return;
+        }
+        if (session) session.persistedBlocksJson = JSON.stringify(contentBlocks);
+      } else {
+        const text = draftRef.current;
+        const images = [...draftImagesRef.current];
+        const applied = await emitNoteEditWithAck({
+          format: "flat",
+          id: current.id,
+          text,
+          images,
+          dataGeneration: current.dataGeneration,
+          autosave: true,
+        } satisfies NoteEditPayload);
+        if (!applied) {
+          tip("warn", "图片编辑未打开：当前草稿尚未同步");
+          return;
+        }
+        if (session) {
+          session.persistedText = text;
+          session.persistedImages = images;
+        }
+      }
+      await api.quickLook(files, index, undefined, {
+        kind: "note",
+        noteId: current.id,
+        dataGeneration: current.dataGeneration,
+      });
+    } catch {
+      tip("warn", "图片编辑未打开，当前草稿仍保留");
+    }
+  };
   // 与来源卡片通栏同色：主面板决议的分组色/中性灰优先，应用主色兜底
   const detailHeaderBackground = headerGradient(
     note.headerColor ?? icon?.color ?? "#5b5b60"
@@ -1888,6 +2118,11 @@ export default function TextPreviewView() {
             <RichNoteTextEditor
               key={note.id}
               blocks={draftContentBlocks}
+              previewSource={imagePreviewSource}
+              editContext={imageEditContext}
+              onOpenImage={(files, index) => {
+                void openEditingImage(files, index);
+              }}
               onChange={(blocks) => {
                 draftContentBlocksRef.current = blocks;
                 setDraftContentBlocks(blocks);
@@ -2104,7 +2339,18 @@ export default function TextPreviewView() {
             <AttachThumb
               key={f}
               file={f}
-              onClick={() => void api.quickLook(shownImages, i, imagePreviewSource)}
+              onClick={() => {
+                if (editing) {
+                  void openEditingImage(shownImages, i);
+                  return;
+                }
+                void api.quickLook(
+                  shownImages,
+                  i,
+                  imagePreviewSource,
+                  imageEditContext
+                );
+              }}
               onRemove={editable ? () => {
                 if (editing) {
                   const current = draftImagesRef.current;

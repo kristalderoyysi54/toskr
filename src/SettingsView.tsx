@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
@@ -26,6 +26,7 @@ import {
   Pencil,
   Plus,
   Radio,
+  Search,
   Settings2,
   ShieldCheck,
   Star,
@@ -104,6 +105,10 @@ import { checkForUpdate, downloadAndInstall } from "@/lib/updater";
 import { cn } from "@/lib/utils";
 import { timeAgo } from "@/lib/media";
 import {
+  SECRET_CIPHER_STYLE_OPTIONS,
+  type SecretCipherStyle,
+} from "@/lib/secret/secret";
+import {
   CONTEXT_MENU_REGISTRY,
   HUD_DURATION_MAX_MS,
   HUD_DURATION_MIN_MS,
@@ -133,25 +138,25 @@ import { presetCfgLabel } from "@/lib/tasks";
 import { AI_PRESETS, matchPreset, testAiConnection } from "@/lib/ai";
 import { subscribeAiKeyStatus } from "@/lib/aiKeyStatus";
 import {
+  SETTINGS_SECTION_LABELS,
+  normalizeSettingsSearchText,
+  searchSettings,
+  type SettingsSearchEntry,
+  type SettingsSectionId,
+} from "@/lib/settingsSearch";
+import {
   useDataOperationStore,
   type DataActivity,
 } from "@/store/dataOperationStore";
 
-type SectionId =
-  | "general"
-  | "hotkey"
-  | "clip"
-  | "features"
-  | "message-watch"
-  | "secret"
-  | "target"
-  | "outcome"
-  | "due"
-  | "ai"
-  | "companion"
-  | "data"
-  | "diagnostics"
-  | "about";
+type SectionId = SettingsSectionId;
+
+const SECRET_STYLE_HINT: Record<SecretCipherStyle, string> = {
+  classic: "兼容此前秘文的中文文本格式",
+  code: "每次随机生成 JavaScript / Python / Go / Rust 代码",
+  log: "独立日志文本格式",
+  quote: "独立引用文本格式",
+};
 
 /** 侧栏分章（用户指定 2026-08：菜单要有章法——按 面板/捕获/发送/助手/系统
  *  五章组织，小项合并进相邻章节，次要细节在分区内做渐进式披露）。 */
@@ -231,6 +236,30 @@ function initialSettingsForView(): Settings {
 export default function SettingsView() {
   const [settings, setSettings] = useState<Settings>(initialSettingsForView);
   const [section, setSection] = useState<SectionId>("general");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchTarget, setSearchTarget] = useState<{
+    id: string;
+    value: string;
+    sequence: number;
+  } | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchResultsRef = useRef<HTMLDivElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
+  const activeSearchHighlightRef = useRef<HTMLElement | null>(null);
+  const searchResults = useMemo(
+    () => searchSettings(searchQuery, {
+      messagesEnabled: settings.messagesEnabled,
+      secretEnabled: settings.secretEnabled,
+      subscriptionsEnabled: settings.subscriptionsEnabled,
+    }),
+    [
+      searchQuery,
+      settings.messagesEnabled,
+      settings.secretEnabled,
+      settings.subscriptionsEnabled,
+    ]
+  );
+  const hasSearchQuery = Boolean(searchQuery.trim());
   // 功能域被关闭时其设置页从导航消失；若正停在该页则回退到功能开关页
   useEffect(() => {
     if (
@@ -240,16 +269,123 @@ export default function SettingsView() {
       setSection("features");
     }
   }, [section, settings.messagesEnabled, settings.secretEnabled]);
+  useEffect(() => {
+    if (
+      searchTarget &&
+      !searchResults.some((result) => result.id === searchTarget.id)
+    ) {
+      setSearchTarget(null);
+    }
+  }, [searchResults, searchTarget]);
   const [targetProfileRequest, setTargetProfileRequest] = useState<{
     profileId: string;
     sequence: number;
   } | null>(null);
   const dataActivity = useDataOperationStore();
 
+  const clearSearch = () => {
+    setSearchQuery("");
+    setSearchTarget(null);
+    activeSearchHighlightRef.current?.removeAttribute(
+      "data-settings-search-active"
+    );
+    activeSearchHighlightRef.current = null;
+  };
+
+  const selectSearchResult = (result: SettingsSearchEntry) => {
+    setSection(result.section);
+    setSearchTarget((previous) => ({
+      id: result.id,
+      value: result.target ?? result.title,
+      sequence: (previous?.sequence ?? 0) + 1,
+    }));
+  };
+
+  const moveSearchResultFocus = (
+    event: React.KeyboardEvent<HTMLButtonElement>,
+    direction: -1 | 1
+  ) => {
+    const buttons = Array.from(
+      searchResultsRef.current?.querySelectorAll<HTMLButtonElement>(
+        "[data-settings-search-result]"
+      ) ?? []
+    );
+    const current = buttons.indexOf(event.currentTarget);
+    const next = buttons[current + direction];
+    if (!next) return;
+    event.preventDefault();
+    next.focus();
+  };
+
+  useEffect(() => {
+    const onFind = (event: KeyboardEvent) => {
+      if (
+        !(event.metaKey || event.ctrlKey) ||
+        event.altKey ||
+        event.shiftKey ||
+        event.key.toLocaleLowerCase() !== "f"
+      ) return;
+      event.preventDefault();
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    };
+    window.addEventListener("keydown", onFind, { capture: true });
+    return () => window.removeEventListener("keydown", onFind, { capture: true });
+  }, []);
+
+  useEffect(() => {
+    if (!searchTarget) {
+      activeSearchHighlightRef.current?.removeAttribute(
+        "data-settings-search-active"
+      );
+      activeSearchHighlightRef.current = null;
+      return;
+    }
+    let clearTimer: number | null = null;
+    const frame = window.requestAnimationFrame(() => {
+      activeSearchHighlightRef.current?.removeAttribute(
+        "data-settings-search-active"
+      );
+      activeSearchHighlightRef.current = null;
+      const key = normalizeSettingsSearchText(searchTarget.value);
+      const candidates = Array.from(
+        mainRef.current?.querySelectorAll<HTMLElement>(
+          "[data-settings-search]"
+        ) ?? []
+      );
+      const target = candidates.find((element) =>
+        normalizeSettingsSearchText(element.dataset.settingsSearch ?? "") === key
+      );
+      if (!target) {
+        mainRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+        return;
+      }
+      target.dataset.settingsSearchActive = "true";
+      activeSearchHighlightRef.current = target;
+      target.scrollIntoView({ block: "center", behavior: "smooth" });
+      clearTimer = window.setTimeout(() => {
+        target.removeAttribute("data-settings-search-active");
+        if (activeSearchHighlightRef.current === target) {
+          activeSearchHighlightRef.current = null;
+        }
+      }, 1800);
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      if (clearTimer !== null) window.clearTimeout(clearTimer);
+    };
+  }, [section, searchTarget]);
+
   useEffect(() => {
     const un = listen<Settings>(SETTINGS_STATE, (e) => setSettings(e.payload));
     // 外部指路（更新提醒气泡点击等）→ 切到指定分区
     const unSection = listen<SettingsSectionPayload>(SETTINGS_SECTION, (e) => {
+      setSearchQuery("");
+      setSearchTarget(null);
+      activeSearchHighlightRef.current?.removeAttribute(
+        "data-settings-search-active"
+      );
+      activeSearchHighlightRef.current = null;
       const rawSection = typeof e.payload === "string"
         ? e.payload
         : e.payload.section;
@@ -378,39 +514,166 @@ export default function SettingsView() {
           </div>
         </div>
       )}
-      <aside className="flex w-44 shrink-0 flex-col gap-0.5 border-r border-border/60 bg-muted/40 p-2">
-        {SECTION_GROUPS.map((group) => (
-          <div key={group.title} className="mb-1 flex flex-col gap-0.5">
-            <p className="px-2.5 pb-0.5 pt-1.5 text-micro font-medium tracking-wide text-muted-foreground">
-              {group.title}
-            </p>
-            {group.items
-              .filter(
-                // 未开启的功能域不占导航；总开关集中在「功能开关」页
-                (s) =>
-                  (s.id !== "message-watch" || settings.messagesEnabled) &&
-                  (s.id !== "secret" || settings.secretEnabled)
-              )
-              .map((s) => (
-              <button
-                key={s.id}
-                onClick={() => setSection(s.id)}
-                className={cn(
-                  "flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-body outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
-                  section === s.id
-                    ? "bg-primary/10 font-medium text-foreground"
-                    : "text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
-                )}
+      <aside className="flex w-44 shrink-0 flex-col border-r border-border/60 bg-muted/40 p-2">
+        <div className="relative mb-1.5 shrink-0">
+          <Search
+            aria-hidden
+            className="pointer-events-none absolute left-2 top-2 size-3.5 text-muted-foreground"
+          />
+          <input
+            ref={searchInputRef}
+            id="settings-search"
+            name="settings-search"
+            type="search"
+            role="searchbox"
+            aria-label="搜索设置"
+            autoComplete="off"
+            value={searchQuery}
+            onChange={(event) => {
+              setSearchQuery(event.target.value);
+              setSearchTarget(null);
+            }}
+            onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing) return;
+              if (event.key === "Escape" && searchQuery) {
+                event.preventDefault();
+                clearSearch();
+                return;
+              }
+              if (event.key === "ArrowDown") {
+                const first = searchResultsRef.current?.querySelector<HTMLButtonElement>(
+                  "[data-settings-search-result]"
+                );
+                if (first) {
+                  event.preventDefault();
+                  first.focus();
+                }
+              }
+            }}
+            placeholder="搜索设置"
+            className="h-8 w-full appearance-none rounded-lg border border-border bg-background pl-7 pr-7 text-body outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background [&::-webkit-search-cancel-button]:hidden"
+          />
+          {searchQuery && (
+            <IconButton
+              label="清空设置搜索"
+              withTitle={false}
+              size="2xs"
+              stopPropagation={false}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2"
+              onClick={() => {
+                clearSearch();
+                window.requestAnimationFrame(() => searchInputRef.current?.focus());
+              }}
+            >
+              <X />
+            </IconButton>
+          )}
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto pr-0.5">
+          {hasSearchQuery ? (
+            <div
+              ref={searchResultsRef}
+              role="navigation"
+              aria-label="设置搜索结果"
+              onKeyDown={(event) => {
+                if (
+                  event.key !== "Escape" ||
+                  event.nativeEvent.isComposing ||
+                  !searchQuery
+                ) return;
+                event.preventDefault();
+                clearSearch();
+                window.requestAnimationFrame(() => searchInputRef.current?.focus());
+              }}
+            >
+              <p
+                role="status"
+                aria-live="polite"
+                className="px-2.5 pb-1 pt-1 text-micro text-muted-foreground"
               >
-                {s.icon}
-                {s.label}
-              </button>
-              ))}
-          </div>
-        ))}
+                {searchResults.length
+                  ? `${searchResults.length} 项设置`
+                  : "没有匹配设置"}
+              </p>
+              {searchResults.length ? (
+                <div className="flex flex-col gap-0.5">
+                  {searchResults.map((result, index) => (
+                    <button
+                      key={result.id}
+                      type="button"
+                      data-settings-search-result
+                      onClick={() => selectSearchResult(result)}
+                      onKeyDown={(event) => {
+                        if (event.key === "ArrowDown") {
+                          moveSearchResultFocus(event, 1);
+                        } else if (event.key === "ArrowUp") {
+                          if (index === 0) {
+                            event.preventDefault();
+                            searchInputRef.current?.focus();
+                          } else {
+                            moveSearchResultFocus(event, -1);
+                          }
+                        }
+                      }}
+                      className={cn(
+                        "rounded-lg px-2.5 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+                        searchTarget?.id === result.id
+                          ? "bg-primary/10 text-foreground"
+                          : "text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
+                      )}
+                    >
+                      <span className="block truncate text-body font-medium">
+                        {result.title}
+                      </span>
+                      <span className="block truncate text-micro text-muted-foreground">
+                        {SETTINGS_SECTION_LABELS[result.section]}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="px-2.5 py-2 text-label leading-relaxed text-muted-foreground">
+                  试试“快捷键”“隐私”或“备份”
+                </p>
+              )}
+            </div>
+          ) : (
+            SECTION_GROUPS.map((group) => (
+              <div key={group.title} className="mb-1 flex flex-col gap-0.5">
+                <p className="px-2.5 pb-0.5 pt-1.5 text-micro font-medium tracking-wide text-muted-foreground">
+                  {group.title}
+                </p>
+                {group.items
+                  .filter(
+                    // 未开启的功能域不占导航；总开关集中在「功能开关」页
+                    (item) =>
+                      (item.id !== "message-watch" || settings.messagesEnabled) &&
+                      (item.id !== "secret" || settings.secretEnabled)
+                  )
+                  .map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setSection(item.id)}
+                      className={cn(
+                        "flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-body outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+                        section === item.id
+                          ? "bg-primary/10 font-medium text-foreground"
+                          : "text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
+                      )}
+                    >
+                      {item.icon}
+                      {item.label}
+                    </button>
+                  ))}
+              </div>
+            ))
+          )}
+        </div>
       </aside>
 
-      <main className="min-w-0 flex-1 overflow-y-auto p-5">
+      <main ref={mainRef} className="min-w-0 flex-1 overflow-y-auto p-5">
         {section === "general" && <GeneralSection settings={settings} patch={patch} />}
         {section === "hotkey" && (
           <>
@@ -418,7 +681,14 @@ export default function SettingsView() {
             <ExcludeSection settings={settings} patch={patch} />
           </>
         )}
-        {section === "clip" && <ClipboardSection settings={settings} patch={patch} />}
+        {section === "clip" && (
+          <ClipboardSection
+            settings={settings}
+            patch={patch}
+            searchTarget={searchTarget?.value ?? null}
+            searchSequence={searchTarget?.sequence ?? 0}
+          />
+        )}
         {section === "features" && <FeaturesSection settings={settings} patch={patch} />}
         {section === "message-watch" && (
           <MessageWatchSection settings={settings} patch={patch} />
@@ -429,9 +699,18 @@ export default function SettingsView() {
             settings={settings}
             patch={patch}
             targetProfileRequest={targetProfileRequest}
+            searchTarget={searchTarget?.value ?? null}
+            searchSequence={searchTarget?.sequence ?? 0}
           />
         )}
-        {section === "outcome" && <OutcomeInsightsSection settings={settings} patch={patch} />}
+        {section === "outcome" && (
+          <div
+            data-settings-search="使用概览"
+            className="scroll-m-5 rounded-sm transition-shadow data-[settings-search-active=true]:ring-2 data-[settings-search-active=true]:ring-primary/40 data-[settings-search-active=true]:ring-offset-2 data-[settings-search-active=true]:ring-offset-background"
+          >
+            <OutcomeInsightsSection settings={settings} patch={patch} />
+          </div>
+        )}
         {section === "companion" && <CompanionSection settings={settings} patch={patch} />}
         {section === "due" && (
           <>
@@ -451,13 +730,22 @@ export default function SettingsView() {
 /* ============ 通用控件 ============ */
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
-  return <h2 className="mb-3 text-heading font-semibold">{children}</h2>;
+  return (
+    <h2
+      data-settings-search={typeof children === "string" ? children : undefined}
+      className="mb-3 scroll-m-5 rounded-sm text-heading font-semibold transition-shadow data-[settings-search-active=true]:ring-2 data-[settings-search-active=true]:ring-primary/40 data-[settings-search-active=true]:ring-offset-2 data-[settings-search-active=true]:ring-offset-background"
+    >
+      {children}
+    </h2>
+  );
 }
-
 
 function Group({ title, children }: { title?: string; children: React.ReactNode }) {
   return (
-    <div className="mb-4">
+    <div
+      data-settings-search={title}
+      className="mb-4 scroll-m-5 rounded-xl transition-shadow data-[settings-search-active=true]:ring-2 data-[settings-search-active=true]:ring-primary/40 data-[settings-search-active=true]:ring-offset-2 data-[settings-search-active=true]:ring-offset-background"
+    >
       {title && (
         <p className="mb-1.5 text-body font-medium text-muted-foreground">{title}</p>
       )}
@@ -478,7 +766,10 @@ function Row({
   right: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 px-3.5 py-2.5">
+    <div
+      data-settings-search={label}
+      className="flex scroll-m-5 items-center justify-between gap-4 rounded-lg px-3.5 py-2.5 transition-shadow data-[settings-search-active=true]:ring-2 data-[settings-search-active=true]:ring-inset data-[settings-search-active=true]:ring-primary/40"
+    >
       <div className="min-w-0">
         <p className="text-title">{label}</p>
         {hint && <p className="mt-0.5 text-label text-muted-foreground">{hint}</p>}
@@ -980,7 +1271,22 @@ function RetentionSlider({ settings, patch }: SP) {
 }
 
 /** 剪贴板独立配置：收集/暂停/保留/删除历史/规则（参照 Paste）。 */
-function ClipboardSection({ settings, patch }: SP) {
+function ClipboardSection({
+  settings,
+  patch,
+  searchTarget,
+  searchSequence,
+}: SP & { searchTarget: string | null; searchSequence: number }) {
+  const searchNeedsRules = [
+    "收集规则与忽略应用",
+    "规则",
+    "忽略机密内容",
+    "忽略瞬时内容",
+  ].includes(searchTarget ?? "");
+  const [rulesOpen, setRulesOpen] = useState(searchNeedsRules);
+  useEffect(() => {
+    if (searchNeedsRules) setRulesOpen(true);
+  }, [searchNeedsRules, searchSequence]);
   const paused =
     settings.clipPauseUntil !== null && settings.clipPauseUntil > Date.now();
   const resumeAt = (ms: number) => {
@@ -1085,41 +1391,50 @@ function ClipboardSection({ settings, patch }: SP) {
           }
         />
       </Group>
-      <Disclosure title="收集规则与忽略应用">
-      <Group title="规则">
-        <Row
-          label="忽略机密内容"
-          hint="检测到密码管理器的机密标记时不保存"
-          right={
-            <Switch
-              aria-label="忽略机密内容"
-              checked={settings.clipIgnoreConcealed}
-              onCheckedChange={(v) => patch({ clipIgnoreConcealed: v })}
+      <div
+        data-settings-search="收集规则与忽略应用"
+        className="scroll-m-5 rounded-md transition-shadow data-[settings-search-active=true]:ring-2 data-[settings-search-active=true]:ring-primary/40 data-[settings-search-active=true]:ring-offset-2 data-[settings-search-active=true]:ring-offset-background"
+      >
+        <Disclosure
+          title="收集规则与忽略应用"
+          open={rulesOpen}
+          onOpenChange={setRulesOpen}
+        >
+          <Group title="规则">
+            <Row
+              label="忽略机密内容"
+              hint="检测到密码管理器的机密标记时不保存"
+              right={
+                <Switch
+                  aria-label="忽略机密内容"
+                  checked={settings.clipIgnoreConcealed}
+                  onCheckedChange={(v) => patch({ clipIgnoreConcealed: v })}
+                />
+              }
             />
-          }
-        />
-        <Row
-          label="忽略瞬时内容"
-          hint="不保存其他程序生成的临时数据"
-          right={
-            <Switch
-              aria-label="忽略瞬时内容"
-              checked={settings.clipIgnoreTransient}
-              onCheckedChange={(v) => patch({ clipIgnoreTransient: v })}
+            <Row
+              label="忽略瞬时内容"
+              hint="不保存其他程序生成的临时数据"
+              right={
+                <Switch
+                  aria-label="忽略瞬时内容"
+                  checked={settings.clipIgnoreTransient}
+                  onCheckedChange={(v) => patch({ clipIgnoreTransient: v })}
+                />
+              }
             />
-          }
-        />
-      </Group>
-      <p className="mb-2 text-body font-medium text-muted-foreground">忽略应用程序</p>
-      <p className="mb-3 text-body text-muted-foreground">
-        不保存从以下应用复制的内容（独立于「捕获排除」列表）。
-      </p>
-      <AppListEditor
-        apps={settings.clipExcludedApps}
-        onChange={(apps) => patch({ clipExcludedApps: apps })}
-        addLabel="把当前应用加入忽略列表"
-      />
-      </Disclosure>
+          </Group>
+          <p className="mb-2 text-body font-medium text-muted-foreground">忽略应用程序</p>
+          <p className="mb-3 text-body text-muted-foreground">
+            不保存从以下应用复制的内容（独立于「捕获排除」列表）。
+          </p>
+          <AppListEditor
+            apps={settings.clipExcludedApps}
+            onChange={(apps) => patch({ clipExcludedApps: apps })}
+            addLabel="把当前应用加入忽略列表"
+          />
+        </Disclosure>
+      </div>
     </div>
   );
 }
@@ -1497,8 +1812,8 @@ function FeaturesSection({ settings, patch }: SP) {
     {
       key: "secretEnabled",
       label: "秘文",
-      hint: "把文字加密成中文句式发进 IM，对方双击 ⇧ Shift 捕获自动解密",
-      where: "开启后在左侧「捕获 → 秘文」管理密钥",
+      hint: "把文字本地加密成中文、随机代码、日志或引用等独立格式，支持该格式的接收端自动识别解密",
+      where: "开启后在左侧「捕获 → 秘文」管理密钥与默认格式",
     },
     {
       key: "subscriptionsEnabled",
@@ -1982,7 +2297,7 @@ function MessageWatchSection({ settings, patch }: SP) {
   );
 }
 
-/** 秘文（中文加密通信）：共享密钥管理 + 揭示超时。
+/** 秘文本地加密通信：共享密钥、密文格式与揭示超时。
  *  总开关集中在「功能开关」页；本页仅开启后可达。 */
 function SecretSection({ settings, patch }: SP) {
   return (
@@ -1998,6 +2313,22 @@ function SecretSection({ settings, patch }: SP) {
               value={String(settings.secretRevealTimeoutMs)}
               options={REVEAL_TIMEOUT_OPTIONS}
               onChange={(v) => patch({ secretRevealTimeoutMs: Number(v) })}
+            />
+          }
+        />
+        <Row
+          label="默认密文格式"
+          hint={`${SECRET_STYLE_HINT[settings.secretCipherStyle]}；支持该格式的接收端自动识别，无需选择相同格式`}
+          right={
+            <Segmented<SecretCipherStyle>
+              ariaLabel="默认密文格式"
+              value={settings.secretCipherStyle}
+              options={SECRET_CIPHER_STYLE_OPTIONS.map((option) => ({
+                value: option.value,
+                label: option.shortLabel,
+                title: option.label,
+              }))}
+              onChange={(value) => patch({ secretCipherStyle: value })}
             />
           }
         />
@@ -2357,9 +2688,27 @@ function TargetSection({
   settings,
   patch,
   targetProfileRequest,
+  searchTarget,
+  searchSequence,
 }: SP & {
   targetProfileRequest: { profileId: string; sequence: number } | null;
+  searchTarget: string | null;
+  searchSequence: number;
 }) {
+  const searchNeedsPrivacy = [
+    "隐私与化名",
+    "发送前隐私检查（仅本机文本检查）",
+    "启用隐私检查",
+  ].includes(searchTarget ?? "");
+  const searchNeedsPrompts = searchTarget === "提示词组";
+  const [privacyOpen, setPrivacyOpen] = useState(searchNeedsPrivacy);
+  const [promptsOpen, setPromptsOpen] = useState(searchNeedsPrompts);
+  useEffect(() => {
+    if (searchNeedsPrivacy) setPrivacyOpen(true);
+  }, [searchNeedsPrivacy, searchSequence]);
+  useEffect(() => {
+    if (searchNeedsPrompts) setPromptsOpen(true);
+  }, [searchNeedsPrompts, searchSequence]);
   return (
     <div>
       <SectionTitle>目标与发送方案</SectionTitle>
@@ -2372,13 +2721,31 @@ function TargetSection({
         requestedProfileId={targetProfileRequest?.profileId ?? null}
         requestSequence={targetProfileRequest?.sequence ?? 0}
       />
-      <Disclosure title="隐私与化名">
-        <FirewallSettings settings={settings} patch={patch} />
-        <AliasEntitySettings settings={settings} patch={patch} />
-      </Disclosure>
-      <Disclosure title="提示词组">
-        <SnippetsSection settings={settings} patch={patch} />
-      </Disclosure>
+      <div
+        data-settings-search="隐私与化名"
+        className="scroll-m-5 rounded-md transition-shadow data-[settings-search-active=true]:ring-2 data-[settings-search-active=true]:ring-primary/40 data-[settings-search-active=true]:ring-offset-2 data-[settings-search-active=true]:ring-offset-background"
+      >
+        <Disclosure
+          title="隐私与化名"
+          open={privacyOpen}
+          onOpenChange={setPrivacyOpen}
+        >
+          <FirewallSettings settings={settings} patch={patch} />
+          <AliasEntitySettings settings={settings} patch={patch} />
+        </Disclosure>
+      </div>
+      <div
+        data-settings-search="提示词组"
+        className="scroll-m-5 rounded-md transition-shadow data-[settings-search-active=true]:ring-2 data-[settings-search-active=true]:ring-primary/40 data-[settings-search-active=true]:ring-offset-2 data-[settings-search-active=true]:ring-offset-background"
+      >
+        <Disclosure
+          title="提示词组"
+          open={promptsOpen}
+          onOpenChange={setPromptsOpen}
+        >
+          <SnippetsSection settings={settings} patch={patch} />
+        </Disclosure>
+      </div>
     </div>
   );
 }

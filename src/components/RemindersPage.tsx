@@ -1,11 +1,11 @@
 import { Fragment, useState } from "react";
-import { motion } from "motion/react";
 import { CalendarDays } from "lucide-react";
 
 import { SubscriptionsPage } from "@/components/subscriptions/SubscriptionsPage";
 import { TaskPage } from "@/components/TaskPage";
 import { focusRing } from "@/components/ui/focus-ring";
 import { IconButton } from "@/components/ui/icon-button";
+import { SlidingTabIndicator } from "@/components/ui/sliding-tab-indicator";
 import { cn } from "@/lib/utils";
 import type { TaskBuckets } from "@/lib/tasks";
 import { useNotesStore } from "@/store/notesStore";
@@ -65,11 +65,9 @@ export function RemindersPage({ buckets, now }: { buckets: TaskBuckets; now: num
                 >
                   {label}
                   {active && (
-                    <motion.span
-                      aria-hidden
+                    <SlidingTabIndicator
                       layoutId="reminders-subtab-line"
-                      transition={{ duration: 0.12, ease: [0.2, 0.9, 0.3, 1] }}
-                      className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-foreground/85"
+                      variant="underline"
                     />
                   )}
                 </button>

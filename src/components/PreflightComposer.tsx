@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { floatingSurface } from "@/components/ui/floating-surface";
 import { IconButton } from "@/components/ui/icon-button";
 import { Kbd } from "@/components/ui/kbd";
+import { SlidingTabIndicator } from "@/components/ui/sliding-tab-indicator";
 import {
   inspectDeliveryDraft,
   inspectDeliveryDraftFreshness,
@@ -612,11 +613,20 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                   type="button"
                   role="tab"
                   size="xs"
-                  variant={activeSection === section ? "secondary" : "ghost"}
+                  variant="ghost"
                   aria-selected={activeSection === section}
                   onClick={() => useDeliveryStore.getState().setActiveSection(section)}
+                  className={cn(
+                    "relative",
+                    activeSection === section && "hover:bg-transparent"
+                  )}
                 >
-                  {section === "summary" ? "概览" : "内容"}
+                  {activeSection === section && (
+                    <SlidingTabIndicator layoutId="preflight-section-thumb" />
+                  )}
+                  <span className="relative z-10">
+                    {section === "summary" ? "概览" : "内容"}
+                  </span>
                 </Button>
               ))}
             </div>

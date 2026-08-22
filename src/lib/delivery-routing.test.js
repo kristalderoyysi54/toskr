@@ -240,15 +240,25 @@ describe("发送入口路由", () => {
     expect(preview).toContain('emitTo("main", "toskr://note-send"');
     expect(preview).toContain('id="image-preview-target-status"');
     expect(preview).toContain("disabled={!targetReady}");
-    expect(preview).toContain("!editing && noteId && dataGeneration !== null");
+    expect(preview).toContain("!imageEditing && !editing");
+    expect(preview).toContain("noteId && dataGeneration !== null");
     expect(preview).toContain("发送整张卡片（含 ${files.length} 张图片）");
-    expect(textPreview).toContain("const imagePreviewSource = writable && !editing");
     expect(textPreview).toContain(
-      "api.quickLook(shownImages, i, imagePreviewSource)"
+      "const imagePreviewSource = writable && !editing"
     );
+    expect(textPreview).toContain("const imageEditContext");
+    const editorSync = textPreview.indexOf(
+      "const applied = await emitNoteEditWithAck"
+    );
+    const editorQuickLook = textPreview.indexOf(
+      "await api.quickLook(files, index, undefined",
+      editorSync
+    );
+    expect(editorSync).toBeGreaterThanOrEqual(0);
+    expect(editorQuickLook).toBeGreaterThan(editorSync);
     expect(textPreview).toContain("previewSource={imagePreviewSource}");
     expect(richContent).toContain(
-      "api.quickLook(files, index, previewSource)"
+      "api.quickLook(files, index, previewSource, editContext)"
     );
     expect(overlay).toContain("previewSource={imagePreviewSource}");
     expect(app).toContain(

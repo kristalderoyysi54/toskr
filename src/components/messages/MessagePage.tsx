@@ -19,6 +19,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { IconButton } from "@/components/ui/icon-button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { SlidingTabIndicator } from "@/components/ui/sliding-tab-indicator";
 import { StripScroller } from "@/components/ui/strip-scroller";
 import { WindowedListItem } from "@/components/WindowedListItem";
 import { aiErrorTip, requestAi } from "@/lib/aiClient";
@@ -271,18 +272,23 @@ export function MessagePage({
                 aria-selected={filter === value}
                 onClick={() => setFilter(value)}
                 className={cn(
-                  "rounded-md px-2 py-1 text-label outline-none transition-colors",
+                  "relative rounded-md px-2 py-1 text-label outline-none transition-colors",
                   filter === value
-                    ? "bg-foreground/8 font-semibold text-foreground"
+                    ? "font-semibold text-foreground"
                     : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
                 )}
               >
-                {label}
-                {counts[value] > 0 && (
-                  <span className="ml-1 tabular-nums text-micro text-muted-foreground">
-                    {counts[value]}
-                  </span>
+                {filter === value && (
+                  <SlidingTabIndicator layoutId="message-filter-thumb" variant="quiet" />
                 )}
+                <span className="relative z-10">
+                  {label}
+                  {counts[value] > 0 && (
+                    <span className="ml-1 tabular-nums text-micro text-muted-foreground">
+                      {counts[value]}
+                    </span>
+                  )}
+                </span>
               </button>
             ))}
           </div>

@@ -147,6 +147,7 @@ export function rebuildPreflightDraft(
       ...item,
       findings: [...item.findings],
       redactedFindingIds: [...item.redactedFindingIds],
+      manualRegions: [...item.manualRegions],
       rawConfirmation: item.rawConfirmation
         ? { ...item.rawConfirmation }
         : null,

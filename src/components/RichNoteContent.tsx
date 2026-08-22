@@ -5,7 +5,11 @@ import {
   replaceNoteTextBlockAt,
   type NoteContentBlock,
 } from "@/lib/noteContentBlocks";
-import { api, type ImagePreviewSource } from "@/lib/tauri";
+import {
+  api,
+  type ImagePreviewSource,
+} from "@/lib/tauri";
+import type { ImagePreviewEditContext } from "@/lib/imageEditor";
 import { cn } from "@/lib/utils";
 
 export function RichImageBlock({
@@ -13,11 +17,15 @@ export function RichImageBlock({
   files,
   index,
   previewSource,
+  editContext,
+  onOpen,
 }: {
   block: Extract<NoteContentBlock, { type: "image" }>;
   files: string[];
   index: number;
   previewSource?: ImagePreviewSource;
+  editContext?: ImagePreviewEditContext;
+  onOpen?: (files: string[], index: number) => void;
 }) {
   const url = useNoteImage(block.file);
   const label = block.alt?.trim() || `图片 ${index + 1}`;
@@ -26,7 +34,11 @@ export function RichImageBlock({
       <button
         type="button"
         aria-label={`查看${label}`}
-        onClick={() => void api.quickLook(files, index, previewSource)}
+        onClick={() =>
+          onOpen
+            ? onOpen(files, index)
+            : void api.quickLook(files, index, previewSource, editContext)
+        }
         className={cn(
           "block w-full overflow-hidden rounded-lg border border-foreground/10 bg-black/[0.03] outline-none",
           "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:bg-white/[0.04]"
@@ -52,9 +64,11 @@ export function RichImageBlock({
 export function RichNoteContent({
   blocks,
   previewSource,
+  editContext,
 }: {
   blocks: NoteContentBlock[];
   previewSource?: ImagePreviewSource;
+  editContext?: ImagePreviewEditContext;
 }) {
   const imageFiles = blocks.flatMap((block) =>
     block.type === "image" ? [block.file] : []
@@ -81,6 +95,7 @@ export function RichNoteContent({
             files={imageFiles}
             index={currentImage}
             previewSource={previewSource}
+            editContext={editContext}
           />
         );
       })}
@@ -90,6 +105,9 @@ export function RichNoteContent({
 
 type RichNoteTextEditorProps = {
   blocks: NoteContentBlock[];
+  previewSource?: ImagePreviewSource;
+  editContext?: ImagePreviewEditContext;
+  onOpenImage?: (files: string[], index: number) => void;
   onChange: (blocks: NoteContentBlock[]) => void;
   onSave: () => void;
   onCancel: () => void;
@@ -101,6 +119,9 @@ type RichNoteTextEditorProps = {
  */
 export function RichNoteTextEditor({
   blocks,
+  previewSource,
+  editContext,
+  onOpenImage,
   onChange,
   onSave,
   onCancel,
@@ -122,7 +143,7 @@ export function RichNoteTextEditor({
       className="space-y-2 font-mono text-body leading-relaxed"
     >
       <p className="text-label text-muted-foreground">
-        仅编辑文字，图片位置已锁定
+        图片位置已锁定；点击图片可查看或打码
       </p>
       {blocks.map((block, index) => {
         if (block.type === "image") {
@@ -133,6 +154,9 @@ export function RichNoteTextEditor({
               block={block}
               files={imageFiles}
               index={currentImage}
+              previewSource={previewSource}
+              editContext={editContext}
+              onOpen={onOpenImage}
             />
           );
         }

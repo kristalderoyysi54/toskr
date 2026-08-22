@@ -2,6 +2,7 @@ import { api } from "@/lib/tauri";
 import type {
   FindingCategory,
   ImageFirewallFinding,
+  ImagePixelBox,
   RedactDeliveryImageResult,
   ScanImageFirewallResult,
 } from "@/lib/tauri";
@@ -453,6 +454,7 @@ export async function rescanOpenDeliveryDraftPrivacy(
     height: null,
     findings: [],
     redactedFindingIds: [],
+    manualRegions: [],
     rawConfirmation: null,
     failureMessage: null,
   }));
@@ -520,12 +522,16 @@ function selectedFindingIds(item: ImageFirewallItem, findingId?: string) {
 
 function uniqueRegions(
   item: ImageFirewallItem,
-  findingIds: ReadonlySet<string>
+  findingIds: ReadonlySet<string>,
+  manualRegions: readonly ImagePixelBox[] = item.manualRegions
 ) {
   const seen = new Set<string>();
-  return item.findings
+  return [
+    ...item.findings
     .filter((finding) => findingIds.has(finding.id))
-    .map((finding) => finding.pixelBox)
+    .map((finding) => finding.pixelBox),
+    ...manualRegions,
+  ]
     .filter((region) => {
       const key = `${region.x}:${region.y}:${region.width}:${region.height}`;
       if (seen.has(key)) return false;
@@ -539,31 +545,42 @@ function validRedactionResult(
   result: RedactDeliveryImageResult
 ) {
   return result.originalFile === item.originalFile &&
-    result.originalPixelHash === item.pixelHash &&
+    (!item.pixelHash || result.originalPixelHash === item.pixelHash) &&
     result.redactedFile.startsWith(REDACTED_PREFIX) &&
     result.redactedPixelHash.length === 64 &&
-    result.imageWidth === item.width && result.imageHeight === item.height;
+    (!item.width || result.imageWidth === item.width) &&
+    (!item.height || result.imageHeight === item.height);
 }
 
-export async function redactOpenDeliveryImage(
-  originalFile: string,
-  findingId?: string
-): Promise<boolean> {
-  const state = useDeliveryStore.getState();
-  const draft = state.draft;
-  const item = draft?.imageFirewall.find((entry) => entry.originalFile === originalFile);
-  if (!state.open || !draft || !item || item.status !== "ready") return false;
-  const findingIds = selectedFindingIds(item, findingId);
-  for (const id of item.redactedFindingIds) findingIds.add(id);
-  const regions = uniqueRegions(item, findingIds);
-  if (!regions.length) return false;
-  const scanningItem = { ...item, status: "redacting" as const, rawConfirmation: null };
+type AppliedImageRedaction = {
+  file: string;
+  width: number;
+  height: number;
+  draftRevision: number;
+};
+
+async function renderOpenDeliveryRedaction(input: {
+  draft: DeliveryDraft;
+  item: ImageFirewallItem;
+  findingIds: Set<string>;
+  manualRegions: ImagePixelBox[];
+  cancelled?: () => boolean;
+}): Promise<AppliedImageRedaction | null> {
+  const { draft, item, findingIds, manualRegions, cancelled } = input;
+  const regions = uniqueRegions(item, findingIds, manualRegions);
+  if (!regions.length) return null;
+  const returnStatus = item.status;
+  const scanningItem = {
+    ...item,
+    status: "redacting" as const,
+    rawConfirmation: null,
+  };
   useDeliveryStore.setState({
     draft: {
       ...draft,
       imageFirewall: replaceImageFirewallItem(
         draft.imageFirewall,
-        originalFile,
+        item.originalFile,
         scanningItem
       ),
     },
@@ -571,11 +588,12 @@ export async function redactOpenDeliveryImage(
   });
   let result: RedactDeliveryImageResult;
   try {
+    // 每次都从来源原图一次性合成 OCR + 手工区域，避免临时副本层层加工。
     result = await api.redactDeliveryImage(item.originalFile, regions);
   } catch {
     const current = useDeliveryStore.getState();
     const live = current.draft?.imageFirewall.find(
-      (entry) => entry.originalFile === originalFile
+      (entry) => entry.originalFile === item.originalFile
     );
     if (
       current.open && current.draft?.id === draft.id &&
@@ -586,22 +604,25 @@ export async function redactOpenDeliveryImage(
           ...current.draft,
           imageFirewall: replaceImageFirewallItem(
             current.draft.imageFirewall,
-            originalFile,
-            { ...live, status: "ready" }
+            item.originalFile,
+            { ...live, status: returnStatus }
           ),
         },
         lastError: "创建图片遮挡副本失败，原图未变更",
       });
     }
-    return false;
+    return null;
   }
   const current = useDeliveryStore.getState();
   const liveDraft = current.draft;
   const live = liveDraft?.imageFirewall.find(
-    (entry) => entry.originalFile === originalFile
+    (entry) => entry.originalFile === item.originalFile
   );
+  const wasCancelled = cancelled?.() ?? false;
   if (
+    wasCancelled ||
     !current.open || !liveDraft || liveDraft.id !== draft.id ||
+    liveDraft.revision !== draft.revision ||
     !live || live.status !== "redacting" ||
     live.scanRevision !== item.scanRevision || !validRedactionResult(item, result)
   ) {
@@ -615,26 +636,30 @@ export async function redactOpenDeliveryImage(
           ...liveDraft,
           imageFirewall: replaceImageFirewallItem(
             liveDraft.imageFirewall,
-            originalFile,
-            { ...live, status: "ready" }
+            item.originalFile,
+            { ...live, status: returnStatus }
           ),
         },
-        lastError: "遮挡结果已失效，请重试",
+        lastError: wasCancelled ? null : "遮挡结果已失效，请重试",
       });
     }
-    return false;
+    return null;
   }
   const replaced: ImageFirewallItem = {
     ...live,
     sendFile: result.redactedFile,
-    status: "ready",
+    status: returnStatus,
+    pixelHash: live.pixelHash ?? result.originalPixelHash,
     redactedPixelHash: result.redactedPixelHash,
+    width: live.width ?? result.imageWidth,
+    height: live.height ?? result.imageHeight,
     redactedFindingIds: [...findingIds],
+    manualRegions,
     rawConfirmation: null,
   };
   const items = replaceImageFirewallItem(
     liveDraft.imageFirewall,
-    originalFile,
+    item.originalFile,
     replaced
   );
   const revision = nextDeliveryDraftRevision(liveDraft.revision);
@@ -655,7 +680,88 @@ export async function redactOpenDeliveryImage(
   if (item.sendFile.startsWith(REDACTED_PREFIX)) {
     cleanupTokens([item.sendFile]);
   }
-  return true;
+  return {
+    file: result.redactedFile,
+    width: result.imageWidth,
+    height: result.imageHeight,
+    draftRevision: revision,
+  };
+}
+
+export async function redactOpenDeliveryImage(
+  originalFile: string,
+  findingId?: string
+): Promise<boolean> {
+  const state = useDeliveryStore.getState();
+  const draft = state.draft;
+  const item = draft?.imageFirewall.find((entry) => entry.originalFile === originalFile);
+  if (!state.open || !draft || !item || item.status !== "ready") return false;
+  const findingIds = selectedFindingIds(item, findingId);
+  for (const id of item.redactedFindingIds) findingIds.add(id);
+  return !!await renderOpenDeliveryRedaction({
+    draft,
+    item,
+    findingIds,
+    manualRegions: item.manualRegions,
+  });
+}
+
+function validManualRegion(region: ImagePixelBox) {
+  const maxU32 = 0xffff_ffff;
+  return [region.x, region.y, region.width, region.height].every(
+    (value) => Number.isSafeInteger(value) && value >= 0 && value <= maxU32
+  ) && region.width > 0 && region.height > 0;
+}
+
+function regionContains(outer: ImagePixelBox, inner: ImagePixelBox) {
+  return outer.x <= inner.x && outer.y <= inner.y &&
+    outer.x + outer.width >= inner.x + inner.width &&
+    outer.y + outer.height >= inner.y + inner.height;
+}
+
+export type ManualDeliveryRedactionRequest = {
+  draftId: string;
+  draftRevision: number;
+  originalFile: string;
+  sourceFile: string;
+  regions: ImagePixelBox[];
+};
+
+/** 手工实色打码：已知 finding 只有被完整覆盖时才计为已处理。 */
+export async function manuallyRedactOpenDeliveryImage(
+  request: ManualDeliveryRedactionRequest,
+  cancelled?: () => boolean
+): Promise<AppliedImageRedaction | null> {
+  const state = useDeliveryStore.getState();
+  const draft = state.draft;
+  const item = draft?.imageFirewall.find(
+    (entry) => entry.originalFile === request.originalFile
+  );
+  if (
+    !state.open || !draft || !item || state.busy ||
+    draft.id !== request.draftId || draft.revision !== request.draftRevision ||
+    item.sendFile !== request.sourceFile ||
+    !["ready", "failed", "disabled"].includes(item.status) ||
+    !request.regions.length || !request.regions.every(validManualRegion)
+  ) return null;
+  const manualRegions = uniqueRegions(
+    item,
+    new Set<string>(),
+    [...item.manualRegions, ...request.regions]
+  );
+  const findingIds = new Set(item.redactedFindingIds);
+  for (const finding of item.findings) {
+    if (manualRegions.some((region) => regionContains(region, finding.pixelBox))) {
+      findingIds.add(finding.id);
+    }
+  }
+  return renderOpenDeliveryRedaction({
+    draft,
+    item,
+    findingIds,
+    manualRegions,
+    cancelled,
+  });
 }
 
 export async function redactAllOpenDeliveryImages(): Promise<void> {
@@ -681,6 +787,7 @@ export function restoreOpenDeliveryImage(originalFile: string): void {
     sendFile: item.originalFile,
     redactedPixelHash: null,
     redactedFindingIds: [],
+    manualRegions: [],
     rawConfirmation: null,
   };
   const items = replaceImageFirewallItem(draft.imageFirewall, originalFile, restored);

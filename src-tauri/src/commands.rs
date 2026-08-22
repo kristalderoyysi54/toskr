@@ -82,7 +82,8 @@ pub async fn scan_image_firewall(
     .map_err(|_| "本地图片隐私检查任务失败".to_string())?
 }
 
-/// 从原图创建纯色遮挡副本；原图与常规媒体目录均不会写入。
+/// 从原图创建纯色遮挡副本；缺省只写会话临时目录，图片编辑显式要求时
+/// 可写内容寻址媒体文件。两种路径都不覆盖原图。
 #[tauri::command]
 pub async fn redact_delivery_image(
     app: AppHandle,
@@ -212,6 +213,7 @@ pub fn quick_look(
     note_text: Option<String>,
     data_generation: Option<u64>,
     edit: bool,
+    edit_context: Option<serde_json::Value>,
     transient: Option<bool>,
 ) {
     crate::window::preview_image(
@@ -222,6 +224,7 @@ pub fn quick_look(
         note_text,
         data_generation,
         edit,
+        edit_context,
         transient.unwrap_or(false),
     );
 }
@@ -1329,6 +1332,28 @@ pub async fn export_complete_backup(
     })
     .await
     .map_err(blocking_backup_failure)?
+}
+
+/// 把前端生成的 Markdown 与当前活动媒体打包为单一 ZIP。
+#[tauri::command]
+pub async fn export_notes_bundle(
+    app: AppHandle,
+    path: String,
+    markdown: String,
+    media_files: Vec<String>,
+) -> Result<(), crate::note_export::NoteExportFailure> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::storage::export_notes_bundle(
+            &app,
+            std::path::Path::new(&path),
+            &markdown,
+            &media_files,
+        )
+    })
+    .await
+    .map_err(|error| {
+        crate::note_export::NoteExportFailure::io(format!("后台笔记导出任务失败：{error}"))
+    })?
 }
 
 #[tauri::command]

@@ -398,6 +398,17 @@ export function PreviewOverlay() {
                 <RichNoteTextEditor
                   key={note.id}
                   blocks={draftBlocks}
+                  onOpenImage={(files, index) => {
+                    // 先结束文字编辑会话，避免图片独立保存后被旧草稿收尾覆盖。
+                    save();
+                    window.setTimeout(() => {
+                      void api.quickLook(files, index, {
+                        id: note.id,
+                        text: note.text,
+                        dataGeneration: currentDataGeneration(),
+                      });
+                    }, 0);
+                  }}
                   onChange={setDraftBlocks}
                   onSave={save}
                   // 自动保存语义：Esc 退出编辑保留内容，收尾气泡可撤销
@@ -549,19 +560,21 @@ function PreviewThumb({
   const url = useNoteThumb(files[index]);
   return (
     <div className="group relative">
-      <div
+      <button
+        type="button"
+        aria-label={`原尺寸预览第 ${index + 1} 张图片`}
         title="点击原尺寸预览"
         onClick={() =>
           void api.quickLook(files, Math.max(0, index), previewSource)
         }
-        className="flex cursor-zoom-in items-center justify-center overflow-hidden rounded-lg bg-black/[0.05] p-1 dark:bg-white/[0.08]"
+        className="flex w-full cursor-zoom-in items-center justify-center overflow-hidden rounded-lg bg-black/[0.05] p-1 outline-none focus-visible:ring-2 focus-visible:ring-ring dark:bg-white/[0.08]"
       >
         {url ? (
           <img src={url} alt="" className="max-h-40 max-w-full object-contain" />
         ) : (
           <span className="p-4 text-label text-muted-foreground">加载中…</span>
         )}
-      </div>
+      </button>
       <IconButton
         label="从卡片移除这张图片"
         withTitle

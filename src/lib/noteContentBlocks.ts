@@ -74,6 +74,35 @@ export function mapNoteTextBlocks(
   });
 }
 
+/**
+ * 图片编辑的无损写入原语：只替换命中的图片文件与尺寸，文字、块序、alt
+ * 以及未命中块的引用全部保持不变。相同内容图片在富文档中可重复出现，按
+ * 文件编辑时这些位置必须一起更新，避免兼容投影仍引用旧图。
+ */
+export function replaceNoteImageFile(
+  blocks: readonly NoteContentBlock[],
+  sourceFile: string,
+  edited: { file: string; width: number; height: number }
+): NoteContentBlock[] {
+  if (!sourceFile || !edited.file) throw new Error("图片文件名不能为空");
+  if (
+    !Number.isFinite(edited.width) || edited.width <= 0 ||
+    !Number.isFinite(edited.height) || edited.height <= 0
+  ) {
+    throw new Error("编辑后图片尺寸无效");
+  }
+  return blocks.map((block) =>
+    block.type === "image" && block.file === sourceFile
+      ? {
+          ...block,
+          file: edited.file,
+          width: edited.width,
+          height: edited.height,
+        }
+      : block
+  );
+}
+
 function optionalDimension(
   value: unknown,
   field: "width" | "height"
