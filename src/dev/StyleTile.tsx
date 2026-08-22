@@ -45,7 +45,7 @@ function PrimaryButton({ children }: { children: React.ReactNode }) {
   return (
     <button
       type="button"
-      className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-(--button-primary-border) bg-button-primary px-4 text-title font-medium text-button-primary-foreground shadow-(--button-primary-shadow) transition-all duration-(--duration-control) hover:bg-button-primary-hover active:translate-y-[0.5px] active:shadow-none"
+      className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-(--button-primary-border) bg-button-primary px-4 text-title font-medium text-button-primary-foreground shadow-(--button-primary-shadow) transition-[background-color,box-shadow,transform] duration-(--duration-control) hover:bg-button-primary-hover active:translate-y-[0.5px] active:shadow-none"
     >
       {children}
     </button>

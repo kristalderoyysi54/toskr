@@ -28,9 +28,11 @@ import {
   mergePersistedNotesState,
   NOTE_TAG_MAX_COUNT,
   noteContentBlocks,
+  normalizeSecretCipherStyle,
   orderedCheckedNotes,
   replaceNotesStoreFromPersisted,
   sanitizeNoteTags,
+  SECRET_CIPHER_STYLES,
   SECRET_ID,
   STORE_VERSION,
   TASK_INBOX_ID,
@@ -90,7 +92,7 @@ describe("notesStore 基础", () => {
   });
 
   it("v12 迁移到最新版时正文不变、生成权威块，并补齐本地成效设置", () => {
-    expect(STORE_VERSION).toBe(22);
+    expect(STORE_VERSION).toBe(23);
     const decoded = decodePersistedState(JSON.stringify({
       version: 12,
       state: {
@@ -212,6 +214,57 @@ describe("notesStore 基础", () => {
     expect(decoded.settings.pageOrder).toContain("secret");
   });
 
+  it("v22 迁到 v23 补齐秘文格式，已知提前写入值保留", () => {
+    const {
+      secretCipherStyle: _secretCipherStyle,
+      ...legacySettings
+    } = defaultSettings();
+    const decode = (secretCipherStyle?: unknown) =>
+      decodePersistedState(JSON.stringify({
+        version: 22,
+        state: {
+          settings: {
+            ...legacySettings,
+            ...(secretCipherStyle === undefined ? {} : { secretCipherStyle }),
+          },
+        },
+      })).settings.secretCipherStyle;
+
+    expect(decode()).toBe("classic");
+    expect(decode("log")).toBe("log");
+    expect(decode("future-style")).toBe("classic");
+  });
+
+  it("秘文格式只接受字符串形状，已知值保留、未知值归一为 classic", () => {
+    expect(defaultSettings().secretCipherStyle).toBe("classic");
+    for (const style of SECRET_CIPHER_STYLES) {
+      const decoded = decodePersistedState(JSON.stringify({
+        version: STORE_VERSION,
+        state: {
+          settings: { ...defaultSettings(), secretCipherStyle: style },
+        },
+      }));
+      expect(decoded.settings.secretCipherStyle).toBe(style);
+      expect(normalizeSecretCipherStyle(style)).toBe(style);
+    }
+
+    const unknown = decodePersistedState(JSON.stringify({
+      version: STORE_VERSION,
+      state: {
+        settings: { ...defaultSettings(), secretCipherStyle: "future-style" },
+      },
+    }));
+    expect(unknown.settings.secretCipherStyle).toBe("classic");
+    expect(normalizeSecretCipherStyle(null)).toBe("classic");
+
+    expect(() => decodePersistedState(JSON.stringify({
+      version: STORE_VERSION,
+      state: {
+        settings: { ...defaultSettings(), secretCipherStyle: 42 },
+      },
+    }))).toThrow("settings.secretCipherStyle 类型无效");
+  });
+
   it("v18 迁移到 v19 补齐账单域：bills 空数组 + 货币符号/默认提醒档", () => {
     const {
       currencySymbol: _currency,
@@ -253,7 +306,7 @@ describe("notesStore 基础", () => {
     expect(note.secretMeta).toEqual({ keyId: "k1", keyLabel: "同事", direction: "in" });
     // 同信封重复 → duplicate
     expect(
-      useNotesStore.getState().addSecretNote("「话说密文信封」", { keyId: "k1", direction: "in" }).result
+      useNotesStore.getState().addSecretNote("\n 「话说密文信封」 \n", { keyId: "k1", direction: "in" }).result
     ).toBe("duplicate");
 
     // 历史键名 secret 的旧数据经归一后迁到 secretMeta，且裸 secret 键被剥除（不触发备份黑名单）
@@ -277,6 +330,25 @@ describe("notesStore 基础", () => {
     const migrated = decoded.notes.find((n) => n.id === "legacy-secret")!;
     expect(migrated.secretMeta).toEqual({ keyId: "old", keyLabel: "旧钥", direction: "out" });
     expect(JSON.stringify(migrated)).not.toContain('"secret":{');
+  });
+
+  it("秘文按信封字节去重，不同格式不要求接收方选择且保留首个原文", () => {
+    const classic =
+      "「话说一的，一是了我不在，人他有这个上，们来到将月十\n" +
+      "实向声车全信，重三机都点把白加；高母向乐年自、对其会结没\n" +
+      "分西信就高关、当人全少重，但。」";
+    const code = `const cacheSnapshot = "${classic.replace(/\n/g, "\\n")}";`;
+    const meta = { keyId: "k1", keyLabel: "同事", direction: "in" } as const;
+
+    const first = useNotesStore.getState().addSecretNote(classic, meta);
+    const duplicate = useNotesStore.getState().addSecretNote(code, meta);
+
+    expect(first.result).toBe("added");
+    expect(duplicate).toEqual({ result: "duplicate", id: first.id });
+    expect(
+      useNotesStore.getState().notes.filter((note) => note.sectionId === SECRET_ID)
+    ).toHaveLength(1);
+    expect(useNotesStore.getState().notes[0].text).toBe(classic);
   });
 
   it("首装面板默认态仅留给新档案，v16 旧档案迁移后不触发", () => {
@@ -793,6 +865,126 @@ describe("notesStore 基础", () => {
     expect(note.text).toBe("统一编辑后的正文");
     expect(note.imageFile).toBe("one.png");
     expect(note.attachments).toEqual(["two.png"]);
+  });
+
+  it("replaceNoteImage 保留富图文块序与 alt，并同步图片兼容投影", () => {
+    const id = useNotesStore.getState().addNote("调用方旧文本会被忽略", {
+      contentBlocks: [
+        { type: "text", text: "操作前" },
+        {
+          type: "image",
+          file: "before.png",
+          alt: "审批截图",
+          width: 800,
+          height: 600,
+        },
+        { type: "text", text: "操作后" },
+        { type: "image", file: "other.png", alt: "补充截图" },
+      ],
+    }).id!;
+
+    expect(
+      useNotesStore.getState().replaceNoteImage(id, "before.png", {
+        file: "edited.png",
+        width: 400,
+        height: 300,
+      })
+    ).toBe(true);
+    const note = useNotesStore.getState().notes.find((item) => item.id === id)!;
+
+    expect(noteContentBlocks(note)).toEqual([
+      { type: "text", text: "操作前" },
+      {
+        type: "image",
+        file: "edited.png",
+        alt: "审批截图",
+        width: 400,
+        height: 300,
+      },
+      { type: "text", text: "操作后" },
+      { type: "image", file: "other.png", alt: "补充截图" },
+    ]);
+    expect(note).toMatchObject({
+      text: "操作前\n操作后",
+      imageFile: "edited.png",
+      attachments: ["other.png"],
+      imageW: 400,
+      imageH: 300,
+    });
+  });
+
+  it("replaceNoteImage 将同卡内同一图片的重复引用全部替换", () => {
+    const id = useNotesStore.getState().addNote("", {
+      contentBlocks: [
+        { type: "image", file: "shared.png", alt: "首次出现" },
+        { type: "text", text: "中间说明" },
+        { type: "image", file: "other.png" },
+        { type: "image", file: "shared.png", alt: "再次出现" },
+      ],
+    }).id!;
+
+    expect(
+      useNotesStore.getState().replaceNoteImage(id, "shared.png", {
+        file: "shared-edited.png",
+        width: 640,
+        height: 360,
+      })
+    ).toBe(true);
+    const note = useNotesStore.getState().notes.find((item) => item.id === id)!;
+
+    expect(noteContentBlocks(note)).toEqual([
+      {
+        type: "image",
+        file: "shared-edited.png",
+        alt: "首次出现",
+        width: 640,
+        height: 360,
+      },
+      { type: "text", text: "中间说明" },
+      { type: "image", file: "other.png" },
+      {
+        type: "image",
+        file: "shared-edited.png",
+        alt: "再次出现",
+        width: 640,
+        height: 360,
+      },
+    ]);
+  });
+
+  it("replaceNoteImage 可撤销恢复全部旧图片引用", () => {
+    const originalBlocks = [
+      { type: "text" as const, text: "前文" },
+      {
+        type: "image" as const,
+        file: "original.png",
+        alt: "原始截图",
+        width: 1200,
+        height: 800,
+      },
+      { type: "text" as const, text: "后文" },
+      { type: "image" as const, file: "original.png", alt: "重复引用" },
+    ];
+    const id = useNotesStore.getState().addNote("", {
+      contentBlocks: originalBlocks,
+    }).id!;
+
+    expect(
+      useNotesStore.getState().replaceNoteImage(id, "original.png", {
+        file: "edited.png",
+        width: 600,
+        height: 400,
+      })
+    ).toBe(true);
+    expect(useNotesStore.getState().undo()).toBe("编辑图片");
+
+    const restored = useNotesStore.getState().notes.find((item) => item.id === id)!;
+    expect(noteContentBlocks(restored)).toEqual(originalBlocks);
+    expect(restored).toMatchObject({
+      imageFile: "original.png",
+      imageW: 1200,
+      imageH: 800,
+    });
   });
 
   it("addNote 可指定目标分组，无效分组回退收件箱", () => {

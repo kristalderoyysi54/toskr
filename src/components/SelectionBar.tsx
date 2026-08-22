@@ -1,4 +1,4 @@
-import { ChevronDown, Inbox, Merge, Send, Tag, Trash2, X } from "lucide-react";
+import { ChevronDown, FileDown, Inbox, Merge, Send, Tag, Trash2, X } from "lucide-react";
 import { useMemo } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/tooltip";
 import {
   deleteNotesWithUndo,
+  exportNotesBundle,
   mergeCheckedWithUndo,
   moveClipsToNotesWithUndo,
   sendCheckedToChat,
@@ -307,6 +308,14 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
               <Trash2 className="size-3.5" />
             </IconAction>
           </>
+        )}
+        {page === "notes" && !allClips && !mixedDomains && (
+          <IconAction
+            label="导出笔记包"
+            onClick={() => void exportNotesBundle(orderedIds())}
+          >
+            <FileDown className="size-3.5" />
+          </IconAction>
         )}
         <IconAction label="清除选择" onClick={() => state.clearChecked()}>
           <X className="size-3.5" />

@@ -206,6 +206,7 @@ describe("shouldOpenPreflight", () => {
       scanRevision: 1,
       findings: [],
       redactedFindingIds: [],
+      manualRegions: [],
       rawConfirmation: null,
       failureMessage: null,
     });
@@ -349,6 +350,7 @@ describe("rebuildPreflightDraft", () => {
         scanRevision: 1,
         findings: [],
         redactedFindingIds: ["image-secret"],
+        manualRegions: [],
         rawConfirmation: {
           revision: 1,
           targetToken: target.token,

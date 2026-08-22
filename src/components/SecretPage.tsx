@@ -1,6 +1,6 @@
 /**
- * 秘文页：本地中文密写的收发中心。
- * 顶部 Composer 把明文加密成中文密文串（走既有发送链路发去 IM，或降级复制）；
+ * 秘文页：本地加密通信的收发中心。
+ * 顶部 Composer 把明文加密成可选文本格式（走既有发送链路发去 IM，或降级复制）；
  * 下方卡片列表默认磨砂遮罩、点击解密显现、可重新遮罩，面板隐藏/失焦/超时自动回遮罩。
  * 明文永不落盘：卡片 text 存密文信封，解密仅在内存，收起即丢弃。
  */
@@ -8,6 +8,7 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import {
+  Braces,
   Copy,
   EyeOff,
   KeyRound,
@@ -22,9 +23,11 @@ import { deleteNotesWithUndo, sendNotesToChat } from "@/lib/actions";
 import { timeAgo } from "@/lib/media";
 import { tweenFade, tweenMenu } from "@/lib/motion";
 import {
+  SECRET_CIPHER_STYLE_OPTIONS,
   estimateCipherLength,
-  openFromChinese,
-  sealToChinese,
+  isCipherLengthSupported,
+  openSecret,
+  sealSecret,
 } from "@/lib/secret/secret";
 import { tip } from "@/lib/tip";
 import { api } from "@/lib/tauri";
@@ -38,11 +41,17 @@ import { IconButton } from "@/components/ui/icon-button";
 import { StripScroller } from "@/components/ui/strip-scroller";
 import { SimpleSelect } from "@/components/SimpleSelect";
 
+const SECRET_STYLE_OPTIONS = SECRET_CIPHER_STYLE_OPTIONS.map((option) => ({
+  value: option.value,
+  label: option.shortLabel,
+}));
+
 /** 收发条：选密钥 → 输明文 → 加密发送 / 加密复制。
  *  竖栏＝顶部通栏；横栏（上/下停靠）＝左侧定宽列，右边让给横排卡片串。 */
 function SecretComposer({ horizontal = false }: { horizontal?: boolean }) {
   const keys = useNotesStore((s) => s.settings.secretKeys);
   const defaultKeyId = useNotesStore((s) => s.settings.secretDefaultKeyId);
+  const cipherStyle = useNotesStore((s) => s.settings.secretCipherStyle);
   const [draft, setDraft] = useState("");
   const [keyId, setKeyId] = useState<string>(defaultKeyId ?? keys[0]?.id ?? "");
   const [busy, setBusy] = useState(false);
@@ -73,9 +82,13 @@ function SecretComposer({ horizontal = false }: { horizontal?: boolean }) {
     const key = keys.find((k) => k.id === keyId);
     const text = draft.trim();
     if (!key || !text || busy) return;
+    if (!isCipherLengthSupported(text, cipherStyle)) {
+      tip("warn", "内容过长，无法生成可接收的秘文");
+      return;
+    }
     setBusy(true);
     try {
-      const cipher = await sealToChinese(text, key.passphrase);
+      const cipher = await sealSecret(text, key.passphrase, cipherStyle);
       const { id } = useNotesStore.getState().addSecretNote(cipher, {
         keyId: key.id,
         keyLabel: key.label,
@@ -100,6 +113,13 @@ function SecretComposer({ horizontal = false }: { horizontal?: boolean }) {
     value: k.id,
     label: k.label || "未命名密钥",
   }));
+  const selectedStyle = SECRET_CIPHER_STYLE_OPTIONS.find(
+    (option) => option.value === cipherStyle
+  );
+  const trimmedDraft = draft.trim();
+  const cipherTooLong = Boolean(
+    trimmedDraft && !isCipherLengthSupported(trimmedDraft, cipherStyle)
+  );
 
   return (
     <div
@@ -110,16 +130,30 @@ function SecretComposer({ horizontal = false }: { horizontal?: boolean }) {
           : "border-b border-border/60"
       )}
     >
-      {/* 密钥胶囊：钥匙收进边框内、宽度贴合密钥名，不再通栏抢走输入卡的视觉重量 */}
-      <SimpleSelect
-        value={keyId}
-        options={keyOptions}
-        onChange={setKeyId}
-        ariaLabel="选择加密密钥"
-        menuLabel="用哪把密钥"
-        icon={<KeyRound />}
-        className="w-fit max-w-full"
-      />
+      {/* 密钥与格式同属本次发送上下文；保持单行，长密钥名优先截断。 */}
+      <div className="flex min-w-0 items-center gap-1.5">
+        <SimpleSelect
+          value={keyId}
+          options={keyOptions}
+          onChange={setKeyId}
+          ariaLabel="选择加密密钥"
+          menuLabel="用哪把密钥"
+          icon={<KeyRound />}
+          className="min-w-0 flex-1"
+        />
+        <SimpleSelect
+          value={cipherStyle}
+          options={SECRET_STYLE_OPTIONS}
+          onChange={(value) =>
+            useNotesStore.getState().setSettings({ secretCipherStyle: value })
+          }
+          ariaLabel="选择密文格式"
+          menuLabel="密文格式 · 支持该格式的接收端自动识别"
+          icon={<Braces />}
+          align="end"
+          className="w-24 shrink-0"
+        />
+      </div>
       {/* 输入卡：明文输入与两个动作同框，读作一件事 */}
       <div
         className={cn(
@@ -144,23 +178,28 @@ function SecretComposer({ horizontal = false }: { horizontal?: boolean }) {
           )}
         />
         <div className="flex items-center justify-end gap-2">
-          {draft.trim() && (
-            <span className="mr-auto min-w-0 truncate text-micro text-muted-foreground">
-              密文约 {estimateCipherLength(draft.trim())} 字 · 以「话说」开头
+          {trimmedDraft && (
+            <span
+              className="mr-auto min-w-0 truncate text-micro text-muted-foreground"
+              title={selectedStyle?.label}
+            >
+              {cipherTooLong
+                ? "内容过长，无法生成可接收的秘文"
+                : `输出约 ${estimateCipherLength(trimmedDraft, cipherStyle)} 字 · ${selectedStyle?.label ?? ""}`}
             </span>
           )}
           <Button
             variant="ghost"
             size="sm"
             onClick={() => void seal(false)}
-            disabled={busy || !draft.trim()}
+            disabled={busy || !trimmedDraft || cipherTooLong}
           >
             <Copy /> 加密复制
           </Button>
           <Button
             size="sm"
             onClick={() => void seal(true)}
-            disabled={busy || !draft.trim()}
+            disabled={busy || !trimmedDraft || cipherTooLong}
           >
             <SendHorizontal /> 加密发送
           </Button>
@@ -203,7 +242,7 @@ function SecretCard({ note, strip = false }: { note: Note; strip?: boolean }) {
     setBusy(true);
     try {
       // 对当前全部密钥逐把试解（不依赖存储 keyId）：补配/重建密钥后锁定卡自愈
-      const res = await openFromChinese(note.text, secretKeys);
+      const res = await openSecret(note.text, secretKeys);
       if (res.status !== "plaintext") {
         tip("warn", "无匹配密钥，去 设置 → 秘文 添加后可解密");
         return;
@@ -412,7 +451,7 @@ export function SecretPage({
             <p className="px-4 py-6 text-body text-muted-foreground">
               {query
                 ? "没有匹配的秘文"
-                : "还没有秘文——选中对方发来的中文密文，连按两次 ⇧ Shift 即可解密到这里"}
+                : "还没有秘文——选中对方发来的密文内容，连按两次 ⇧ Shift 即可解密到这里"}
             </p>
           ) : (
             <div className="flex h-full items-stretch gap-2.5 px-3 pb-2 pt-1">
@@ -436,7 +475,7 @@ export function SecretPage({
             hint={
               query
                 ? "换个关键词试试（只按密钥名/标题/标签搜索）"
-                : "选中对方发来的中文密文，连按两次 ⇧ Shift 即可解密到这里"
+                : "选中对方发来的密文内容，连按两次 ⇧ Shift 即可解密到这里"
             }
           />
         ) : (

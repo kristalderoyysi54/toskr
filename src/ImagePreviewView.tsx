@@ -1,8 +1,19 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { motion } from "motion/react";
-import { Check, ChevronLeft, ChevronRight, Pencil, Send, X } from "lucide-react";
+import {
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Pencil,
+  Redo2,
+  Send,
+  Shield,
+  Trash2,
+  Undo2,
+  X,
+} from "lucide-react";
 
 import {
   NOTE_EDIT_AUTOSAVE_INTERVAL_MS,
@@ -19,6 +30,8 @@ import {
 import { springSnappy } from "@/lib/motion";
 import { DataReadOnlyGuard } from "@/components/DataReadOnlyGuard";
 import { DetailWindowFrame } from "@/components/DetailWindowFrame";
+import { ManualRedactionCanvas } from "@/components/ManualRedactionCanvas";
+import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import {
   DATA_ACTIVITY_EVENT,
@@ -26,9 +39,26 @@ import {
 } from "@/lib/dataOperations";
 import { DATA_CONTEXT_INVALIDATED_EVENT } from "@/lib/dataGeneration";
 import {
+  DRAFT_IMAGE_REPLACED_EVENT,
+  IMAGE_EDIT_CANCEL_EVENT,
+  IMAGE_EDIT_CANCEL_RESULT_EVENT,
+  IMAGE_EDIT_REQUEST_EVENT,
+  IMAGE_EDIT_RESULT_EVENT,
+  NOTE_IMAGE_REPLACED_EVENT,
+  advanceNoteImageEditSequence,
+  imageEditRequestId,
+  type DraftImageReplacedPayload,
+  type ImageEditCancelResultPayload,
+  type ImageEditResultPayload,
+  type ImageEditTarget,
+  type ImagePreviewEditContext,
+  type NoteImageReplacedPayload,
+} from "@/lib/imageEditor";
+import {
   api,
   TARGET_CHANGED_EVENT,
   type PastedImage,
+  type ImagePixelBox,
   type TargetSnapshot,
 } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
@@ -38,6 +68,18 @@ import {
   targetBlockMessage,
   useTargetStore,
 } from "@/store/targetStore";
+
+type RedactionHistory = {
+  past: ImagePixelBox[][];
+  present: ImagePixelBox[];
+  future: ImagePixelBox[][];
+};
+
+const freshRedactionHistory = (): RedactionHistory => ({
+  past: [],
+  present: [],
+  future: [],
+});
 
 /**
  * 图片原尺寸预览窗（独立 webview，Paste 风格）：
@@ -53,8 +95,12 @@ import {
 export default function ImagePreviewView() {
   const [files, setFiles] = useState<string[]>([]);
   const [idx, setIdx] = useState(0);
-  const [url, setUrl] = useState<string | null>(null);
-  const [dims, setDims] = useState("");
+  const [loadedImage, setLoadedImage] = useState<{
+    file: string;
+    url: string;
+    width: number;
+    height: number;
+  } | null>(null);
   // 每次唤起自增：窗口隐藏复用，重开同一张图也要重播入场动效
   const [gen, setGen] = useState(0);
   const [view, setView] = useState<ZoomView>(FIT_VIEW);
@@ -75,6 +121,20 @@ export default function ImagePreviewView() {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [dataGeneration, setDataGeneration] = useState<number | null>(null);
+  const [editContext, setEditContext] = useState<ImagePreviewEditContext | null>(null);
+  const [imageEditing, setImageEditing] = useState(false);
+  const [redactionHistory, setRedactionHistory] = useState<RedactionHistory>(
+    freshRedactionHistory
+  );
+  const redactionRegions = redactionHistory.present;
+  const [imageEditBusy, setImageEditBusy] = useState(false);
+  const pendingImageEditRef = useRef<string | null>(null);
+  const pendingImageEditCancelRef = useRef<string | null>(null);
+  const imageEditTimeoutRef = useRef<number | null>(null);
+  const imageEditTriggerRef = useRef<HTMLButtonElement>(null);
+  const restoreImageEditFocusRef = useRef(false);
+  const supersededImageEditRequestsRef = useRef(new Set<string>());
+  const noteImageEditSequencesRef = useRef(new Map<string, number>());
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // 拖拽图片悬停提示（松开添加）
   const [dropActive, setDropActive] = useState(false);
@@ -91,6 +151,8 @@ export default function ImagePreviewView() {
   const captionSessionRef = useRef<{ origin: string; lastSent: string } | null>(
     null
   );
+  const editContextRef = useRef(editContext);
+  editContextRef.current = editContext;
   const targetReady = useTargetStore(
     (state) => state.status === "ready" && !state.profileOverrideNeedsConfirmation
   );
@@ -101,6 +163,34 @@ export default function ImagePreviewView() {
         ? null
         : targetBlockMessage(state.status, state.reason)
   );
+
+  const clearImageEditWatchdog = useCallback(() => {
+    if (imageEditTimeoutRef.current !== null) {
+      window.clearTimeout(imageEditTimeoutRef.current);
+      imageEditTimeoutRef.current = null;
+    }
+  }, []);
+
+  const detachPendingImageEdit = useCallback(() => {
+    const requestId = pendingImageEditRef.current;
+    if (!requestId) return;
+    pendingImageEditRef.current = null;
+    pendingImageEditCancelRef.current = null;
+    clearImageEditWatchdog();
+    void emitTo("main", IMAGE_EDIT_CANCEL_EVENT, { requestId }).catch(() => {});
+  }, [clearImageEditWatchdog]);
+
+  const requestPendingImageEditCancellation = useCallback(() => {
+    const requestId = pendingImageEditRef.current;
+    if (!requestId || pendingImageEditCancelRef.current === requestId) return;
+    pendingImageEditCancelRef.current = requestId;
+    clearImageEditWatchdog();
+    void emitTo("main", IMAGE_EDIT_CANCEL_EVENT, { requestId }).catch(() => {
+      if (pendingImageEditRef.current !== requestId) return;
+      pendingImageEditCancelRef.current = null;
+      tip("warn", "图片仍在处理中，请等待主面板结果");
+    });
+  }, [clearImageEditWatchdog]);
 
   useEffect(() => {
     const changed = listen<TargetSnapshot>(TARGET_CHANGED_EVENT, (event) => {
@@ -119,8 +209,10 @@ export default function ImagePreviewView() {
       noteText: string | null;
       dataGeneration: number | null;
       edit?: boolean;
+      editContext?: ImagePreviewEditContext | null;
       transient?: boolean;
     }>("toskr://preview-image", (e) => {
+      detachPendingImageEdit();
       // 换内容先收尾旧备注编辑会话：自动保存语义下切换不丢稿
       if (captionRef.current.editing) {
         emitCaptionFinish(captionRef.current, captionSessionRef.current);
@@ -133,6 +225,18 @@ export default function ImagePreviewView() {
       setDraft(e.payload.noteText ?? "");
       setDataGeneration(e.payload.dataGeneration ?? null);
       setEditing(e.payload.edit ?? false);
+      const nextEditContext = e.payload.transient
+        ? null
+        : e.payload.editContext ?? null;
+      setEditContext(nextEditContext);
+      setImageEditing(Boolean(nextEditContext?.startEditing));
+      setRedactionHistory(freshRedactionHistory());
+      setImageEditBusy(false);
+      clearImageEditWatchdog();
+      pendingImageEditRef.current = null;
+      pendingImageEditCancelRef.current = null;
+      restoreImageEditFocusRef.current = false;
+      supersededImageEditRequestsRef.current.clear();
       setGen((g) => g + 1);
       // 独立 WebView 只读同步当前目标；发送仍由主面板统一执行（窥视免同步）。
       if (!e.payload.transient) void readTarget();
@@ -140,14 +244,20 @@ export default function ImagePreviewView() {
     return () => {
       un.then((fn) => fn());
     };
-  }, []);
+  }, [detachPendingImageEdit, clearImageEditWatchdog]);
 
   useEffect(() => {
     const invalidate = () => {
+      detachPendingImageEdit();
       setFiles([]);
       setNoteId(null);
       setDataGeneration(null);
       setEditing(false);
+      setEditContext(null);
+      setImageEditing(false);
+      setImageEditBusy(false);
+      clearImageEditWatchdog();
+      pendingImageEditRef.current = null;
       void getCurrentWebviewWindow().hide();
     };
     const activity = listen<{ locked: boolean }>(DATA_ACTIVITY_EVENT, (event) => {
@@ -160,18 +270,194 @@ export default function ImagePreviewView() {
       changed.then((stop) => stop());
       invalidated.then((stop) => stop());
     };
-  }, []);
+  }, [detachPendingImageEdit, clearImageEditWatchdog]);
 
   const file = files[idx] ?? null;
+  const visibleImage = loadedImage?.file === file ? loadedImage : null;
+  const url = visibleImage?.url ?? null;
+  const imageSize = visibleImage
+    ? { width: visibleImage.width, height: visibleImage.height }
+    : { width: 0, height: 0 };
+  const dims = imageSize.width && imageSize.height
+    ? `${imageSize.width} × ${imageSize.height}`
+    : "";
   useEffect(() => {
-    if (!file) return;
-    setUrl(null);
-    setDims("");
+    let active = true;
+    setLoadedImage(null);
+    if (!file) return () => { active = false; };
     void api
       .deliveryImageDataUrl(file, true)
-      .then((u) => setUrl(u))
-      .catch(() => setUrl(null));
+      .then((loadedUrl) => {
+        if (active && loadedUrl) {
+          setLoadedImage({ file, url: loadedUrl, width: 0, height: 0 });
+        }
+      })
+      .catch(() => {
+        if (active) setLoadedImage(null);
+      });
+    return () => { active = false; };
   }, [file]);
+
+  useEffect(() => {
+    const result = listen<ImageEditResultPayload>(
+      IMAGE_EDIT_RESULT_EVENT,
+      (event) => {
+        const payload = event.payload;
+        if (payload.requestId !== pendingImageEditRef.current) return;
+        clearImageEditWatchdog();
+        pendingImageEditRef.current = null;
+        pendingImageEditCancelRef.current = null;
+        setImageEditBusy(false);
+        if (
+          !payload.ok || !payload.editedFile ||
+          !payload.width || !payload.height
+        ) {
+          tip("warn", payload.message || "图片打码未保存");
+          return;
+        }
+        const resultNoteOwner = editContextRef.current?.kind === "note"
+          ? editContextRef.current
+          : captionRef.current.noteId &&
+              captionRef.current.dataGeneration !== null
+            ? {
+                noteId: captionRef.current.noteId,
+                dataGeneration: captionRef.current.dataGeneration,
+              }
+            : null;
+        if (payload.noteSequence !== undefined && resultNoteOwner) {
+          if (!advanceNoteImageEditSequence(
+            noteImageEditSequencesRef.current,
+            resultNoteOwner.noteId,
+            resultNoteOwner.dataGeneration,
+            payload.noteSequence
+          )) {
+            supersededImageEditRequestsRef.current.delete(payload.requestId);
+            restoreImageEditFocusRef.current = true;
+            setImageEditing(false);
+            setRedactionHistory(freshRedactionHistory());
+            return;
+          }
+        }
+        if (supersededImageEditRequestsRef.current.delete(payload.requestId)) {
+          restoreImageEditFocusRef.current = true;
+          setImageEditing(false);
+          setRedactionHistory(freshRedactionHistory());
+          return;
+        }
+        setFiles((current) => current.map((entry, index) =>
+          index === idx ? payload.editedFile! : entry
+        ));
+        setEditContext((current) =>
+          current?.kind === "delivery" && payload.draftRevision !== undefined
+            ? { ...current, draftRevision: payload.draftRevision }
+            : current
+        );
+        restoreImageEditFocusRef.current = true;
+        setImageEditing(false);
+        setRedactionHistory(freshRedactionHistory());
+      }
+    );
+    return () => {
+      result.then((stop) => stop());
+    };
+  }, [idx, clearImageEditWatchdog]);
+
+  useEffect(() => {
+    const cancelled = listen<ImageEditCancelResultPayload>(
+      IMAGE_EDIT_CANCEL_RESULT_EVENT,
+      (event) => {
+        const payload = event.payload;
+        if (
+          payload.requestId !== pendingImageEditRef.current ||
+          payload.requestId !== pendingImageEditCancelRef.current
+        ) return;
+        pendingImageEditCancelRef.current = null;
+        if (payload.status === "settled") {
+          tip("info", "图片已完成处理，正在同步结果");
+          return;
+        }
+        pendingImageEditRef.current = null;
+        setImageEditBusy(false);
+        tip("warn", "图片处理超时，结果未保存，请重试");
+      }
+    );
+    return () => {
+      cancelled.then((stop) => stop());
+    };
+  }, []);
+
+  useEffect(() => {
+    const replaced = listen<DraftImageReplacedPayload>(
+      DRAFT_IMAGE_REPLACED_EVENT,
+      (event) => {
+        const payload = event.payload;
+        const owner = editContextRef.current;
+        if (
+          owner?.kind !== "draft" ||
+          owner.dataGeneration !== payload.dataGeneration ||
+          payload.direction !== "undo"
+        ) return;
+        supersededImageEditRequestsRef.current.add(payload.operationId);
+        setFiles((entries) => entries.map((entry) =>
+          entry === payload.sourceFile ? payload.editedFile : entry
+        ));
+      }
+    );
+    return () => {
+      replaced.then((stop) => stop());
+    };
+  }, []);
+
+  useEffect(() => {
+    const replaced = listen<NoteImageReplacedPayload>(
+      NOTE_IMAGE_REPLACED_EVENT,
+      (event) => {
+        const payload = event.payload;
+        const current = captionRef.current;
+        if (!advanceNoteImageEditSequence(
+          noteImageEditSequencesRef.current,
+          payload.noteId,
+          payload.dataGeneration,
+          payload.sequence
+        )) return;
+        const noteOwner = editContextRef.current?.kind === "note"
+          ? editContextRef.current
+          : current.noteId && current.dataGeneration !== null
+            ? {
+                noteId: current.noteId,
+                dataGeneration: current.dataGeneration,
+              }
+            : null;
+        if (
+          noteOwner?.noteId !== payload.noteId ||
+          noteOwner.dataGeneration !== payload.dataGeneration
+        ) return;
+        // 撤销可能先于保存回执到达；按操作 ID 拒绝对应旧回执，避免内容寻址
+        // 生成同名文件时误伤后续合法编辑。
+        if (payload.direction === "undo") {
+          supersededImageEditRequestsRef.current.add(payload.operationId);
+        }
+        setFiles((entries) => entries.map((entry) =>
+          entry === payload.sourceFile ? payload.editedFile : entry
+        ));
+      }
+    );
+    return () => {
+      replaced.then((stop) => stop());
+    };
+  }, []);
+
+  useEffect(() => () => {
+    detachPendingImageEdit();
+    clearImageEditWatchdog();
+  }, [detachPendingImageEdit, clearImageEditWatchdog]);
+
+  useEffect(() => {
+    if (imageEditing || !restoreImageEditFocusRef.current) return;
+    restoreImageEditFocusRef.current = false;
+    const timer = window.setTimeout(() => imageEditTriggerRef.current?.focus(), 30);
+    return () => window.clearTimeout(timer);
+  }, [imageEditing]);
 
   // 翻页 / 重新唤起：缩放回适配（缩放是单次查看态，不跨图残留）
   useEffect(() => {
@@ -182,7 +468,7 @@ export default function ImagePreviewView() {
   // 滚轮缩放：原生监听（passive:false 才能 preventDefault），鼠标位置为锚
   useEffect(() => {
     const area = zoomAreaRef.current;
-    if (!area) return;
+    if (!area || imageEditing) return;
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
       const rect = area.getBoundingClientRect();
@@ -200,7 +486,7 @@ export default function ImagePreviewView() {
     };
     area.addEventListener("wheel", onWheel, { passive: false });
     return () => area.removeEventListener("wheel", onWheel);
-  }, []);
+  }, [imageEditing]);
 
   const zoomed = view.zoom > 1;
 
@@ -392,7 +678,110 @@ export default function ImagePreviewView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const imageEditTarget: ImageEditTarget | null = editContext
+    ? editContext.kind === "delivery"
+      ? {
+          kind: "delivery",
+          draftId: editContext.draftId,
+          draftRevision: editContext.draftRevision,
+          originalFile: editContext.originalFile,
+        }
+      : editContext.kind === "draft"
+        ? {
+          kind: "draft",
+          dataGeneration: editContext.dataGeneration,
+        }
+        : {
+            kind: "note",
+            noteId: editContext.noteId,
+            dataGeneration: editContext.dataGeneration,
+          }
+    : noteId && dataGeneration !== null
+      ? { kind: "note", noteId, dataGeneration }
+      : null;
+
+  const beginImageEdit = () => {
+    if (
+      !file || loadedImage?.file !== file || !url ||
+      !imageSize.width || !imageSize.height || !imageEditTarget
+    ) {
+      tip("info", "图片仍在加载，请稍后再编辑");
+      return;
+    }
+    setView(FIT_VIEW);
+    supersededImageEditRequestsRef.current.clear();
+    setRedactionHistory(freshRedactionHistory());
+    setImageEditing(true);
+  };
+
+  const cancelImageEdit = () => {
+    if (imageEditBusy) return;
+    restoreImageEditFocusRef.current = true;
+    setImageEditing(false);
+    setRedactionHistory(freshRedactionHistory());
+  };
+
+  const undoImageRegion = () => {
+    if (imageEditBusy) return;
+    setRedactionHistory((current) => {
+      const previous = current.past.at(-1);
+      if (!previous) return current;
+      return {
+        past: current.past.slice(0, -1),
+        present: previous,
+        future: [current.present, ...current.future],
+      };
+    });
+  };
+
+  const redoImageRegion = () => {
+    if (imageEditBusy) return;
+    setRedactionHistory((current) => {
+      const next = current.future[0];
+      if (!next) return current;
+      return {
+        past: [...current.past, current.present],
+        present: next,
+        future: current.future.slice(1),
+      };
+    });
+  };
+
+  const applyImageEdit = () => {
+    if (
+      imageEditBusy || !file || loadedImage?.file !== file || !imageEditTarget ||
+      !redactionRegions.length
+    ) return;
+    const requestId = imageEditRequestId();
+    pendingImageEditRef.current = requestId;
+    pendingImageEditCancelRef.current = null;
+    setImageEditBusy(true);
+    clearImageEditWatchdog();
+    imageEditTimeoutRef.current = window.setTimeout(() => {
+      if (pendingImageEditRef.current !== requestId) return;
+      imageEditTimeoutRef.current = null;
+      requestPendingImageEditCancellation();
+    }, 20_000);
+    void emitTo("main", IMAGE_EDIT_REQUEST_EVENT, {
+      requestId,
+      target: imageEditTarget,
+      sourceFile: file,
+      regions: redactionRegions,
+    }).catch(() => {
+      if (pendingImageEditRef.current !== requestId) return;
+      clearImageEditWatchdog();
+      pendingImageEditRef.current = null;
+      pendingImageEditCancelRef.current = null;
+      setImageEditBusy(false);
+      tip("warn", "图片编辑窗口通信失败，请重试");
+    });
+  };
+
   const close = () => {
+    if (imageEditing) {
+      cancelImageEdit();
+      return;
+    }
     // 关窗不丢备注草稿：编辑态先按保存收尾（自动保存语义）
     if (captionRef.current.editing) save();
     void getCurrentWebviewWindow().hide();
@@ -421,6 +810,20 @@ export default function ImagePreviewView() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (imageEditing) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          cancelImageEdit();
+        } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+          e.preventDefault();
+          applyImageEdit();
+        } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
+          e.preventDefault();
+          if (e.shiftKey) redoImageRegion();
+          else undoImageRegion();
+        }
+        return;
+      }
       // 编辑态接管：Esc 退出编辑（不关窗）、⌘⏎ 保存；翻页/空格关窗全部让位
       if (editing) {
         if (e.key === "Escape") {
@@ -434,7 +837,10 @@ export default function ImagePreviewView() {
         }
         return;
       }
-      if (e.key === "Escape" || e.key === " ") {
+      const interactiveTarget = (e.target as HTMLElement | null)?.closest(
+        "button, a, input, textarea, select, [role='button'], [contenteditable='true']"
+      );
+      if (e.key === "Escape" || (e.key === " " && !interactiveTarget)) {
         e.preventDefault();
         close();
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "v") {
@@ -453,7 +859,18 @@ export default function ImagePreviewView() {
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files.length, editing, noteText, noteId, draft, dataGeneration]);
+  }, [
+    files.length,
+    editing,
+    imageEditing,
+    imageEditBusy,
+    noteText,
+    noteId,
+    draft,
+    dataGeneration,
+    redactionRegions,
+    redactionHistory,
+  ]);
 
   return (
     <DetailWindowFrame
@@ -476,19 +893,37 @@ export default function ImagePreviewView() {
         className="flex h-8 shrink-0 cursor-grab items-center gap-1.5 px-2 active:cursor-grabbing"
       >
         <button
-          aria-label="关闭预览"
+          aria-label={imageEditing ? "取消图片编辑" : "关闭预览"}
+          disabled={imageEditBusy}
           onClick={close}
-          className="rounded-full p-0.5 text-foreground/60 outline-none hover:bg-foreground/10 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          className="rounded-full p-0.5 text-foreground/60 outline-none hover:bg-foreground/10 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
         >
           <X className="size-3.5" />
         </button>
         <span data-tauri-drag-region className="select-none text-body font-medium text-foreground/80">
-          {many ? `图片 ${idx + 1}/${files.length}` : "图片"}
+          {imageEditing
+            ? "编辑图片 · 手动打码"
+            : many
+              ? `图片 ${idx + 1}/${files.length}`
+              : "图片"}
         </span>
-        {!editing && noteId && dataGeneration !== null && (
-          <>
-            <p
-              id="image-preview-target-status"
+        {!imageEditing && !editing && (
+          <div className="ml-auto flex items-center gap-1">
+            {imageEditTarget && (
+              <IconButton
+                ref={imageEditTriggerRef}
+                label="编辑图片（手动打码）"
+                size="xs"
+                onClick={beginImageEdit}
+                className="text-foreground/60 hover:bg-foreground/10 hover:text-foreground focus-visible:ring-ring focus-visible:ring-offset-0"
+              >
+                <Shield className="size-3.5" />
+              </IconButton>
+            )}
+            {noteId && dataGeneration !== null && (
+            <>
+              <p
+                id="image-preview-target-status"
               role="status"
               aria-live="polite"
               className="sr-only"
@@ -507,30 +942,48 @@ export default function ImagePreviewView() {
                 targetReady ? undefined : "image-preview-target-status"
               }
               onClick={send}
-              className="ml-auto text-foreground/60 hover:bg-foreground/10 hover:text-foreground focus-visible:ring-ring focus-visible:ring-offset-0"
+              className="text-foreground/60 hover:bg-foreground/10 hover:text-foreground focus-visible:ring-ring focus-visible:ring-offset-0"
             >
               <Send className="size-3.5" />
             </IconButton>
-          </>
+            </>
+            )}
+          </div>
         )}
       </div>
       )}
       {/* 图片区：适配态整体拖窗；放大后拖拽转为平移图片（img 关闭指针事件） */}
       <div
         ref={zoomAreaRef}
-        data-tauri-drag-region={zoomed ? undefined : true}
-        onPointerDown={onZoomPointerDown}
-        onPointerMove={onZoomPointerMove}
-        onPointerUp={onZoomPointerEnd}
-        onPointerCancel={onZoomPointerEnd}
-        onDoubleClick={onZoomDoubleClick}
+        data-tauri-drag-region={imageEditing || zoomed ? undefined : true}
+        onPointerDown={imageEditing ? undefined : onZoomPointerDown}
+        onPointerMove={imageEditing ? undefined : onZoomPointerMove}
+        onPointerUp={imageEditing ? undefined : onZoomPointerEnd}
+        onPointerCancel={imageEditing ? undefined : onZoomPointerEnd}
+        onDoubleClick={imageEditing ? undefined : onZoomDoubleClick}
         className={cn(
-          "relative flex min-h-0 flex-1 cursor-grab touch-none items-center justify-center overflow-hidden active:cursor-grabbing",
+          "relative flex min-h-0 flex-1 touch-none items-center justify-center overflow-hidden",
+          imageEditing ? "cursor-crosshair" : "cursor-grab active:cursor-grabbing",
           // 瞬态窥视窗即图：Rust 侧按零 chrome 定窗，去内边距保证「原始尺寸」
           transientPeek ? "p-0" : "p-2"
         )}
       >
-        {url ? (
+        {imageEditing && url && imageSize.width > 0 && imageSize.height > 0 ? (
+          <ManualRedactionCanvas
+            url={url}
+            imageWidth={imageSize.width}
+            imageHeight={imageSize.height}
+            regions={redactionRegions}
+            disabled={imageEditBusy}
+            onAdd={(region) => {
+              setRedactionHistory((current) => ({
+                past: [...current.past, current.present],
+                present: [...current.present, region],
+                future: [],
+              }));
+            }}
+          />
+        ) : url ? (
           <div
             className="pointer-events-none flex h-full w-full items-center justify-center will-change-transform"
             style={{
@@ -545,11 +998,15 @@ export default function ImagePreviewView() {
               transition={springSnappy}
               src={url}
               alt=""
-              onLoad={(e) =>
-                setDims(
-                  `${e.currentTarget.naturalWidth} × ${e.currentTarget.naturalHeight}`
-                )
-              }
+              onLoad={(event) => {
+                const width = event.currentTarget.naturalWidth;
+                const height = event.currentTarget.naturalHeight;
+                setLoadedImage((current) =>
+                  current?.file === file
+                    ? { ...current, width, height }
+                    : current
+                );
+              }}
               className="max-h-full max-w-full object-contain"
             />
           </div>
@@ -558,7 +1015,7 @@ export default function ImagePreviewView() {
             <span className="sr-only">加载中…</span>
           </div>
         )}
-        {many && !transientPeek && (
+        {many && !transientPeek && !imageEditing && (
           <>
             <button
               aria-label="上一张"
@@ -580,7 +1037,7 @@ export default function ImagePreviewView() {
         )}
       </div>
       {/* 备注条（有笔记上下文才显示）：查看态一行截断 + 铅笔；编辑态 textarea */}
-      {noteId && !transientPeek && (
+      {noteId && !transientPeek && !imageEditing && (
         <div className="shrink-0 border-t border-border px-3 py-1.5">
           {editing ? (
             <div className="flex items-end gap-1.5">
@@ -597,7 +1054,7 @@ export default function ImagePreviewView() {
               />
               <button
                 aria-label="保存备注（⌘⏎）"
-                title="保存（⌘⏎）；Esc 取消"
+                title="保存（⌘⏎）；Esc 保存并退出"
                 onClick={save}
                 className="rounded-md bg-foreground/10 p-1.5 text-foreground/85 outline-none hover:bg-foreground/15 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
               >
@@ -630,7 +1087,61 @@ export default function ImagePreviewView() {
           )}
         </div>
       )}
-      {!transientPeek && (
+      {imageEditing && !transientPeek && (
+        <div className="flex h-10 shrink-0 items-center gap-1 border-t border-border px-2">
+          <IconButton
+            label="撤销上一步打码操作（⌘Z）"
+            size="xs"
+            disabled={imageEditBusy || redactionHistory.past.length === 0}
+            onClick={undoImageRegion}
+          >
+            <Undo2 className="size-3.5" />
+          </IconButton>
+          <IconButton
+            label="重做打码区域（⌘Shift+Z）"
+            size="xs"
+            disabled={imageEditBusy || redactionHistory.future.length === 0}
+            onClick={redoImageRegion}
+          >
+            <Redo2 className="size-3.5" />
+          </IconButton>
+          <IconButton
+            label="清空打码区域"
+            size="xs"
+            disabled={imageEditBusy || redactionRegions.length === 0}
+            onClick={() => {
+              setRedactionHistory((current) => ({
+                past: [...current.past, current.present],
+                present: [],
+                future: [],
+              }));
+            }}
+          >
+            <Trash2 className="size-3.5" />
+          </IconButton>
+          <span className="ml-1 truncate text-micro text-muted-foreground">
+            拖动/方向键选区 · 滚轮缩放 · Space 平移
+          </span>
+          <Button
+            type="button"
+            size="xs"
+            className="ml-auto"
+            disabled={imageEditBusy}
+            onClick={cancelImageEdit}
+          >
+            取消
+          </Button>
+          <Button
+            type="button"
+            size="xs"
+            disabled={imageEditBusy || redactionRegions.length === 0}
+            onClick={applyImageEdit}
+          >
+            {imageEditBusy ? "保存中…" : "应用打码"}
+          </Button>
+        </div>
+      )}
+      {!transientPeek && !imageEditing && (
         <div className="flex h-6 shrink-0 items-center justify-center text-label tabular-nums text-muted-foreground">
           {[
             many ? `${idx + 1} / ${files.length}` : null,

@@ -46,13 +46,15 @@ const writeStoredDraftText = (text: string) => {
 
 /** 暂存图片缩略 chip：悬停/聚焦出移除钮。 */
 function PendingThumb({
-  file,
+  image,
+  onOpen,
   onRemove,
 }: {
-  file: string;
+  image: DraftPendingImage;
+  onOpen: () => void;
   onRemove: () => void;
 }) {
-  const url = useNoteThumb(file);
+  const url = useNoteThumb(image.file);
   return (
     <span
       className={
@@ -60,12 +62,20 @@ function PendingThumb({
         "border border-foreground/10 bg-black/[0.04] dark:bg-white/[0.06]"
       }
     >
-      {url ? (
-        <img src={url} alt="" className="h-full w-full object-cover" />
-      ) : (
-        <span className="m-auto size-4 animate-pulse rounded-sm bg-black/10 dark:bg-white/10" />
-      )}
       <button
+        type="button"
+        aria-label="查看或编辑这张草稿图片"
+        onClick={onOpen}
+        className="size-full outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      >
+        {url ? (
+          <img src={url} alt="" className="size-full object-cover" />
+        ) : (
+          <span className="m-auto block size-4 animate-pulse rounded-sm bg-black/10 dark:bg-white/10" />
+        )}
+      </button>
+      <button
+        type="button"
         aria-label="移除这张图片"
         onClick={onRemove}
         className={
@@ -254,7 +264,13 @@ export function DraftInput() {
               {pending.map((p) => (
                 <PendingThumb
                   key={p.file}
-                  file={p.file}
+                  image={p}
+                  onOpen={() => void api.quickLook(
+                    pending.map((image) => image.file),
+                    pending.findIndex((image) => image.file === p.file),
+                    undefined,
+                    { kind: "draft", dataGeneration: p.dataGeneration }
+                  )}
                   onRemove={() =>
                     // 只从暂存移除；媒体文件按内容哈希命名，可能被其他卡共享，不删盘
                     setPending((cur) => cur.filter((x) => x.file !== p.file))

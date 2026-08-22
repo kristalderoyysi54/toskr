@@ -4,6 +4,7 @@ import type {
   FirewallFinding,
   FindingCategory,
   ImageFirewallFinding,
+  ImagePixelBox,
 } from "@/lib/tauri";
 import type {
   DeliveryFormat,
@@ -41,6 +42,8 @@ export interface ImageFirewallItem {
   scanRevision: number;
   findings: ImageFirewallFinding[];
   redactedFindingIds: string[];
+  /** 用户手工框选的实色遮挡区域；与 OCR finding 决策分开保存。 */
+  manualRegions: ImagePixelBox[];
   rawConfirmation: RawPrivacyConfirmation | null;
   failureMessage: string | null;
 }

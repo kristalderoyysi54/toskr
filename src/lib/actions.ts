@@ -6,6 +6,7 @@ import {
   imageCaption,
 } from "@/lib/format";
 import { mapNoteTextBlocks } from "@/lib/noteContentBlocks";
+import { buildNotesExportPlan, notesExportFilename } from "@/lib/noteExport";
 import { restoreAliases } from "@/lib/delivery/aliasEntities";
 import {
   beginDataGenerationLease,
@@ -115,6 +116,8 @@ export type NoteEditPayload = {
   id: string;
   sessionId?: string;
   dataGeneration: number;
+  /** 需要主窗口明确确认已处理时携带；普通自动保存可省略。 */
+  syncId?: string;
   /** true = 编辑中的静默自动保存：只持久化，不释放会话、不提示、不抓链接。 */
   autosave?: boolean;
   /** 会话收尾保存随带：本次编辑开始前的内容，主面板用它装配 HUD「撤销」。 */
@@ -131,6 +134,12 @@ export type NoteEditPayload = {
       contentBlocks: NoteContentBlock[];
     }
 );
+
+export const NOTE_EDIT_SYNC_RESULT_EVENT = "toskr://note-edit-sync-result";
+export type NoteEditSyncResultPayload = {
+  syncId: string;
+  ok: boolean;
+};
 
 /** 详情窗 → 主面板：触发当前待撤销动作（等价点击 HUD 气泡的「撤销」）。 */
 export const RUN_PENDING_UNDO_EVENT = "toskr://run-pending-undo";
@@ -415,7 +424,7 @@ export async function refreshOpenNoteDetail() {
 
 /**
  * 打开卡片明细：文字类（文本/代码/链接编辑）→ 桌面居中的文本详情窗；
- * 图片编辑直接进入原尺寸预览窗的备注编辑态。
+ * 图片编辑直接进入原尺寸预览窗的手动打码态；文字备注仍可在查看态单独编辑。
  */
 export function openNoteDetail(id: string, edit = false) {
   const { notes, sections, settings } = useNotesStore.getState();
@@ -436,11 +445,16 @@ export function openNoteDetail(id: string, edit = false) {
   const headerColor = settings.cardTint ? sectionColor ?? null : "#5b5b60";
   if (note.kind === "image") {
     if (edit && note.imageFile) {
+      const dataGeneration = currentDataGeneration();
       void api.quickLook(noteImages(note), 0, {
         id: note.id,
         text: imageCaption(note),
-        dataGeneration: currentDataGeneration(),
-        edit: true,
+        dataGeneration,
+      }, {
+        kind: "note",
+        noteId: note.id,
+        dataGeneration,
+        startEditing: true,
       });
       return;
     }
@@ -739,6 +753,53 @@ export async function copyNotesAsList(ids: string[]) {
     tip("ok", texts.length === 1 ? "已复制" : `已复制 ${texts.length} 条为列表`);
   } catch (e) {
     tip("warn", `复制失败：${e}`);
+  }
+}
+
+function exportErrorMessage(error: unknown): string {
+  if (typeof error === "string") return error;
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object" && "message" in error) {
+    return String(error.message);
+  }
+  return "未知错误";
+}
+
+/** 导出普通笔记为单文件 Markdown 媒体包；取消静默，且不改变当前选择。 */
+export async function exportNotesBundle(ids: string[]) {
+  if (isDataOperationLocked()) {
+    tip("warn", "数据操作进行中，请稍后再导出");
+    return;
+  }
+  const state = useNotesStore.getState();
+  const picked = new Set(ids);
+  const openEditorId = useUIStore.getState().detailEditorNoteId;
+  if (openEditorId && picked.has(openEditorId)) {
+    tip("warn", "请先关闭已打开的笔记详情，确认最新编辑已同步后再导出");
+    return;
+  }
+  const notes = state.notes.filter((note) => picked.has(note.id));
+  try {
+    const plan = buildNotesExportPlan({ notes, sections: state.sections });
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    const path = await save({
+      defaultPath: notesExportFilename(plan.noteCount),
+      filters: [{ name: "Toskr Markdown 笔记包", extensions: ["zip"] }],
+    });
+    if (!path) return;
+    tip("info", "正在导出笔记包…");
+    await api.exportNotesBundle(path, plan.markdown, plan.mediaFiles);
+    const mediaCount = plan.mediaFiles.length;
+    tip(
+      "ok",
+      plan.noteCount === 1
+        ? `笔记包已导出${mediaCount ? `（含 ${mediaCount} 张图）` : ""}`
+        : `已导出 ${plan.noteCount} 条笔记${
+            mediaCount ? `、${mediaCount} 张图` : ""
+          }`
+    );
+  } catch (error) {
+    tip("warn", `导出失败：${exportErrorMessage(error)}`);
   }
 }
 

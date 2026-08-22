@@ -17,6 +17,7 @@ import {
   applyImageScanResult,
   cleanupDeliveryDraftImages,
   evaluateImageFirewallPolicy,
+  manuallyRedactOpenDeliveryImage,
   redactOpenDeliveryImage,
   rescanOpenDeliveryDraftPrivacy,
   replaceImageFirewallItem,
@@ -53,6 +54,7 @@ function item(patch: Partial<ImageFirewallItem> = {}): ImageFirewallItem {
     scanRevision: 1,
     findings: [blockFinding],
     redactedFindingIds: [],
+    manualRegions: [],
     rawConfirmation: null,
     failureMessage: null,
     ...patch,
@@ -410,6 +412,146 @@ describe("image Firewall", () => {
     cleanupDeliveryDraftImages(current);
     expect(cleanup).toHaveBeenCalledWith(["toskr-redacted:redacted-owned.png"]);
     expect(cleanup.mock.calls.flat()).not.toContain("img-original.png");
+  });
+
+  it("手动画框与自动 finding 从原图一次合成，只有完整覆盖才标记已处理", async () => {
+    const coveredFinding: ImageFirewallFinding = {
+      ...blockFinding,
+      id: "image-1-covered",
+      observationIndex: 1,
+      pixelBox: { x: 130, y: 80, width: 20, height: 20 },
+    };
+    const partiallyCoveredFinding: ImageFirewallFinding = {
+      ...blockFinding,
+      id: "image-2-partially-covered",
+      observationIndex: 2,
+      pixelBox: { x: 165, y: 80, width: 25, height: 20 },
+    };
+    const manualRegion = { x: 125, y: 75, width: 50, height: 30 };
+    const redact = vi.spyOn(api, "redactDeliveryImage").mockResolvedValue({
+      originalFile: "img-original.png",
+      redactedFile: "toskr-redacted:manual-merged.png",
+      originalPixelHash: "a".repeat(64),
+      redactedPixelHash: "d".repeat(64),
+      imageWidth: 200,
+      imageHeight: 200,
+    });
+    vi.spyOn(api, "cleanupRedactedImages").mockResolvedValue();
+    const opened = draft([item({
+      sendFile: "toskr-redacted:existing.png",
+      redactedPixelHash: "c".repeat(64),
+      findings: [blockFinding, coveredFinding, partiallyCoveredFinding],
+      redactedFindingIds: [blockFinding.id],
+    })]);
+    useDeliveryStore.getState().openDraft(opened);
+
+    const result = await manuallyRedactOpenDeliveryImage({
+      draftId: opened.id,
+      draftRevision: opened.revision,
+      originalFile: "img-original.png",
+      sourceFile: "toskr-redacted:existing.png",
+      regions: [manualRegion],
+    });
+
+    expect(result).toMatchObject({ file: "toskr-redacted:manual-merged.png" });
+    expect(redact).toHaveBeenCalledTimes(1);
+    expect(redact.mock.calls[0]?.[0]).toBe("img-original.png");
+    expect(redact.mock.calls[0]?.[1]).toEqual(expect.arrayContaining([
+      blockFinding.pixelBox,
+      manualRegion,
+    ]));
+    const current = useDeliveryStore.getState().draft!.imageFirewall[0];
+    expect(current.manualRegions).toEqual([manualRegion]);
+    expect(current.redactedFindingIds).toEqual(expect.arrayContaining([
+      blockFinding.id,
+      coveredFinding.id,
+    ]));
+    expect(current.redactedFindingIds).not.toContain(partiallyCoveredFinding.id);
+  });
+
+  it("手工遮挡回执到达前 revision 变化时 fail-closed 并回收迟到副本", async () => {
+    let resolve!: (value: Awaited<ReturnType<typeof api.redactDeliveryImage>>) => void;
+    const pending = new Promise<Awaited<ReturnType<typeof api.redactDeliveryImage>>>(
+      (done) => { resolve = done; }
+    );
+    vi.spyOn(api, "redactDeliveryImage").mockReturnValue(pending);
+    const cleanup = vi.spyOn(api, "cleanupRedactedImages").mockResolvedValue();
+    const opened = draft([item()]);
+    useDeliveryStore.getState().openDraft(opened);
+
+    const operation = manuallyRedactOpenDeliveryImage({
+      draftId: opened.id,
+      draftRevision: opened.revision,
+      originalFile: "img-original.png",
+      sourceFile: "img-original.png",
+      regions: [{ x: 15, y: 35, width: 110, height: 30 }],
+    });
+    useDeliveryStore.getState().setFinalText("revision 已变化");
+    resolve({
+      originalFile: "img-original.png",
+      redactedFile: "toskr-redacted:manual-late.png",
+      originalPixelHash: "a".repeat(64),
+      redactedPixelHash: "e".repeat(64),
+      imageWidth: 200,
+      imageHeight: 200,
+    });
+
+    expect(await operation).toBeNull();
+    expect(useDeliveryStore.getState().draft).toMatchObject({
+      finalText: "revision 已变化",
+      imageFiles: ["img-original.png"],
+      imageFirewall: [{
+        sendFile: "img-original.png",
+        status: "ready",
+        manualRegions: [],
+        redactedFindingIds: [],
+      }],
+    });
+    expect(useDeliveryStore.getState().lastError).toBe("遮挡结果已失效，请重试");
+    expect(cleanup).toHaveBeenCalledWith(["toskr-redacted:manual-late.png"]);
+  });
+
+  it("手工遮挡处理中取消时恢复原状态且不残留 stale 错误", async () => {
+    let resolve!: (value: Awaited<ReturnType<typeof api.redactDeliveryImage>>) => void;
+    const pending = new Promise<Awaited<ReturnType<typeof api.redactDeliveryImage>>>(
+      (done) => { resolve = done; }
+    );
+    vi.spyOn(api, "redactDeliveryImage").mockReturnValue(pending);
+    const cleanup = vi.spyOn(api, "cleanupRedactedImages").mockResolvedValue();
+    const opened = draft([item()]);
+    useDeliveryStore.getState().openDraft(opened);
+    let cancelled = false;
+
+    const operation = manuallyRedactOpenDeliveryImage({
+      draftId: opened.id,
+      draftRevision: opened.revision,
+      originalFile: "img-original.png",
+      sourceFile: "img-original.png",
+      regions: [{ x: 15, y: 35, width: 110, height: 30 }],
+    }, () => cancelled);
+    cancelled = true;
+    resolve({
+      originalFile: "img-original.png",
+      redactedFile: "toskr-redacted:manual-cancelled.png",
+      originalPixelHash: "a".repeat(64),
+      redactedPixelHash: "e".repeat(64),
+      imageWidth: 200,
+      imageHeight: 200,
+    });
+
+    expect(await operation).toBeNull();
+    expect(useDeliveryStore.getState().draft).toMatchObject({
+      imageFiles: ["img-original.png"],
+      imageFirewall: [{
+        sendFile: "img-original.png",
+        status: "ready",
+        manualRegions: [],
+      }],
+    });
+    expect(useDeliveryStore.getState().lastError).toBeNull();
+    expect(cleanup).toHaveBeenCalledWith([
+      "toskr-redacted:manual-cancelled.png",
+    ]);
   });
 
   it("遮挡 IPC 迟到时不写入已关闭 Draft，并回收迟到副本", async () => {

@@ -177,7 +177,7 @@ export function ImageFirewallPanel({
         </span>
       </div>
       <p className="text-micro text-muted-foreground">
-        OCR 仅在本机运行；首版使用不可逆纯色遮挡，原图不会修改
+        OCR 仅在本机运行；自动与手动打码都使用不可逆纯色遮挡，原图不会修改
       </p>
       <div className="space-y-2">
         {draft.imageFirewall.map((item, index) => {
@@ -216,12 +216,16 @@ export function ImageFirewallPanel({
                         : item.status === "redacting"
                           ? "正在生成发送副本…"
                           : item.status === "failed"
-                            ? item.failureMessage
+                            ? `${item.failureMessage}${
+                                item.manualRegions.length ? " · 已应用手动打码" : ""
+                              }`
                             : item.status === "disabled"
-                              ? "检查已关闭 · 发送原图"
+                              ? item.sendFile === item.originalFile
+                                ? "检查已关闭 · 发送原图"
+                                : `检查已关闭 · ${item.manualRegions.length} 个手工区域已遮挡 · 发送副本`
                               : item.sendFile === item.originalFile
                                 ? `${item.findings.length} 项 · 发送原图`
-                                : `${item.redactedFindingIds.length} 项已遮挡 · 发送副本`}
+                                : `${item.redactedFindingIds.length} 项识别区域、${item.manualRegions.length} 个手工区域已遮挡 · 发送副本`}
                   </p>
                   {item.width && item.height && (
                     <p className="text-muted-foreground">
@@ -266,6 +270,28 @@ export function ImageFirewallPanel({
                 </ul>
               )}
               <div className="flex flex-wrap gap-1">
+                <Button
+                  type="button"
+                  size="xs"
+                  disabled={
+                    busy ||
+                    !["ready", "failed", "disabled"].includes(item.status)
+                  }
+                  onClick={() => void api.quickLook(
+                    [item.sendFile],
+                    0,
+                    undefined,
+                    {
+                      kind: "delivery",
+                      draftId: draft.id,
+                      draftRevision: draft.revision,
+                      originalFile: item.originalFile,
+                      startEditing: true,
+                    }
+                  )}
+                >
+                  手动打码
+                </Button>
                 {item.findings.length > 0 &&
                   item.redactedFindingIds.length < item.findings.length && (
                     <Button
@@ -283,7 +309,7 @@ export function ImageFirewallPanel({
                     type="button"
                     size="xs"
                     variant="ghost"
-                    disabled={busy || item.status !== "ready"}
+                    disabled={busy || !["ready", "failed", "disabled"].includes(item.status)}
                     onClick={() => restoreOpenDeliveryImage(item.originalFile)}
                   >
                     恢复发送原图

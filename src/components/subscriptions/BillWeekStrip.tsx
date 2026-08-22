@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 
 import { BillAvatar } from "@/components/subscriptions/BillList";
+import { SlidingTabIndicator } from "@/components/ui/sliding-tab-indicator";
 import { billOccurrencesInRange, startOfBillDay } from "@/lib/bills";
 import { cn } from "@/lib/utils";
 import type { Bill } from "@/store/notesStore";
@@ -56,24 +57,29 @@ export function BillWeekStrip({
             aria-selected={selected}
             onClick={() => onSelectDay(day)}
             className={cn(
-              "flex flex-col items-center gap-1 rounded-lg px-0.5 py-1.5 outline-none transition-colors",
+              "relative flex flex-col items-center gap-1 rounded-lg px-0.5 py-1.5 outline-none transition-colors",
               "focus-visible:ring-2 focus-visible:ring-ring",
               selected
-                ? "bg-primary text-primary-foreground"
+                ? "text-primary-foreground"
                 : "hover:bg-black/5 dark:hover:bg-white/10"
             )}
           >
+            {selected && (
+              <SlidingTabIndicator layoutId="bill-week-thumb" variant="primary" />
+            )}
             <span
               className={cn(
-                "text-micro",
+                "relative z-10 text-micro",
                 selected ? "text-primary-foreground/80" : "text-muted-foreground"
               )}
             >
               {WEEKDAY[d.getDay()]}
             </span>
-            <span className="text-body font-semibold tabular-nums">{d.getDate()}</span>
+            <span className="relative z-10 text-body font-semibold tabular-nums">
+              {d.getDate()}
+            </span>
             {/* 到期点位：无到期给虚线空位（对齐参考稿的占位圆） */}
-            <span className="flex h-3.5 items-center gap-0.5">
+            <span className="relative z-10 flex h-3.5 items-center gap-0.5">
               {dueBills.length ? (
                 <>
                   <BillAvatar bill={dueBills[0]} size="sm" />

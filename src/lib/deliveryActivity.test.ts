@@ -128,6 +128,7 @@ function draft(overrides: Partial<DeliveryDraft> = {}): DeliveryDraft {
         ruleId: "ocr-rule-secret",
       }],
       redactedFindingIds: ["image-region-secret"],
+      manualRegions: [],
       rawConfirmation: null,
       failureMessage: null,
     }],

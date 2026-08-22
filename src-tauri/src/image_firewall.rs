@@ -86,6 +86,9 @@ pub struct ScanImageFirewallResult {
 pub struct RedactImageRequest {
     pub original_file: String,
     pub regions: Vec<PixelBox>,
+    /// false/缺省 = 当前发送会话的临时副本；true = 内容寻址媒体文件。
+    #[serde(default)]
+    pub persist: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -508,14 +511,24 @@ pub fn redact(app: &AppHandle, request: RedactImageRequest) -> Result<RedactImag
     }
     let redacted = solid_redacted_copy(&original, &regions);
     let redacted_pixel_hash = pixel_hash(&redacted);
-    let sequence = REDACTION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let name = redacted_name(&redacted_pixel_hash, sequence);
-    let root = transient_root(app);
-    ensure_transient_root(&root)?;
-    write_png_create_new(&root.join(&name), &redacted)?;
+    let redacted_file = if request.persist {
+        crate::storage::save_image_rgba(
+            app,
+            width,
+            height,
+            redacted.as_raw(),
+        )?
+    } else {
+        let sequence = REDACTION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let name = redacted_name(&redacted_pixel_hash, sequence);
+        let root = transient_root(app);
+        ensure_transient_root(&root)?;
+        write_png_create_new(&root.join(&name), &redacted)?;
+        format!("{TOKEN_PREFIX}{name}")
+    };
     Ok(RedactImageResult {
         original_file: request.original_file,
-        redacted_file: format!("{TOKEN_PREFIX}{name}"),
+        redacted_file,
         original_pixel_hash,
         redacted_pixel_hash,
         image_width: width as u32,
@@ -662,6 +675,24 @@ mod tests {
         assert_ne!(pixel_hash(&redacted), before);
         assert_eq!(redacted.get_pixel(3, 2), &Rgba([20, 20, 22, 255]));
         assert_eq!(original.get_pixel(3, 2), &Rgba([240, 240, 240, 255]));
+    }
+
+    #[test]
+    fn redaction_request_defaults_to_transient_and_accepts_explicit_persistence() {
+        let transient: RedactImageRequest = serde_json::from_value(serde_json::json!({
+            "originalFile": "img-source.png",
+            "regions": [{ "x": 1, "y": 2, "width": 3, "height": 4 }]
+        }))
+        .unwrap();
+        assert!(!transient.persist);
+
+        let persistent: RedactImageRequest = serde_json::from_value(serde_json::json!({
+            "originalFile": "img-source.png",
+            "regions": [{ "x": 1, "y": 2, "width": 3, "height": 4 }],
+            "persist": true
+        }))
+        .unwrap();
+        assert!(persistent.persist);
     }
 
     #[test]

@@ -10,6 +10,7 @@ import {
   normalizeNoteContentBlocks,
   noteContentBlocks,
   projectNoteContent,
+  replaceNoteImageFile,
   replaceNoteTextProjection,
   textFromContentBlocks,
   type NoteContentBlock,
@@ -49,7 +50,16 @@ import {
   type OnboardingEvent,
   type OnboardingState,
 } from "@/lib/onboarding";
-import type { SecretKey, SecretMeta } from "@/lib/secret/secret";
+import {
+  secretEnvelopeFingerprint,
+  type SecretKey,
+  type SecretMeta,
+} from "@/lib/secret/secret";
+import {
+  SECRET_CIPHER_STYLES,
+  normalizeSecretCipherStyle,
+  type SecretCipherStyle,
+} from "@/lib/secret/appearanceCodec";
 import {
   MESSAGE_SOURCE,
   mergeMessageCapture,
@@ -72,6 +82,8 @@ export type { AliasCategoryDefinition, AliasEntity } from "@/lib/delivery/aliasE
 export type { OnboardingEvent, OnboardingState } from "@/lib/onboarding";
 export type { NoteContentBlock } from "@/lib/noteContentBlocks";
 export type { SecretKey, SecretMeta, SecretDirection } from "@/lib/secret/secret";
+export { SECRET_CIPHER_STYLES, normalizeSecretCipherStyle };
+export type { SecretCipherStyle };
 export type {
   MessageItem,
   MessageSourceRef,
@@ -87,7 +99,7 @@ export type PageId = "notes" | "clipboard" | "tasks" | "secret";
 
 /** 页签默认顺序（剪贴最高频，居首；秘文默认关闭故垫底）。 */
 export const DEFAULT_PAGE_ORDER: PageId[] = ["clipboard", "notes", "tasks", "secret"];
-export const STORE_VERSION = 22;
+export const STORE_VERSION = 23;
 
 /**
  * 归一化页签顺序：去重、剔除未知项、补齐缺失页（按默认序追加）。
@@ -517,6 +529,8 @@ export interface Settings {
   secretDefaultKeyId: string | null;
   /** 秘文卡揭示明文后自动重新遮罩的超时（ms）；0 = 常驻不自动遮罩。 */
   secretRevealTimeoutMs: number;
+  /** 秘文文本格式；仅影响发送时呈现，不影响既有密文解密。 */
+  secretCipherStyle: SecretCipherStyle;
   /** IM 组合关注规则；同维度 OR、跨非空维度 AND。 */
   messageWatchRules: MessageWatchRule[];
   onboarding: OnboardingState;
@@ -539,6 +553,7 @@ export type ContextMenuItemId =
   | "send-preflight"
   | "copy"
   | "copy-list"
+  | "export"
   | "edit"
   | "ocr"
   | "done"
@@ -558,6 +573,7 @@ export const CONTEXT_MENU_REGISTRY: { id: ContextMenuItemId; label: string }[] =
   { id: "send-preflight", label: "预检并发送" },
   { id: "copy", label: "复制内容" },
   { id: "copy-list", label: "复制为列表" },
+  { id: "export", label: "导出笔记包" },
   { id: "edit", label: "编辑" },
   { id: "ocr", label: "识别文字 (OCR)" },
   { id: "done", label: "标记完成" },
@@ -589,6 +605,7 @@ const CONTEXT_MENU_GROUP_BY_ITEM: Record<ContextMenuItemId, ContextMenuGroupId> 
   rename: "view",
   copy: "content",
   "copy-list": "content",
+  export: "content",
   textops: "content",
   ocr: "content",
   "ai-title": "content",
@@ -774,6 +791,7 @@ export const defaultSettings = (): Settings => ({
   secretKeys: [],
   secretDefaultKeyId: null,
   secretRevealTimeoutMs: 8000,
+  secretCipherStyle: "classic",
   messageWatchRules: [],
   onboarding: defaultOnboardingState(),
 });
@@ -801,6 +819,7 @@ function repairSettingsTargetProfiles(settings: Settings): Settings {
     outcomeProblemSessions: normalizeProblemSessions(settings.outcomeProblemSessions),
     onboarding: onboardingStateFromPersisted(settings.onboarding),
     messageWatchRules: normalizeMessageWatchRules(settings.messageWatchRules),
+    secretCipherStyle: normalizeSecretCipherStyle(settings.secretCipherStyle),
     promptGroups: repaired.groups,
     promptSnippets: repaired.snippets,
     targetProfiles: repaired.profiles,
@@ -900,6 +919,13 @@ export interface NotesState {
   updateNoteText: (id: string, text: string, imageFiles?: string[]) => void;
   /** 原子替换富卡权威块，并同步所有兼容投影。 */
   updateNoteContent: (id: string, blocks: NoteContentBlock[]) => void;
+  /** 非破坏式替换图片文件，保留富图文块序；返回 false 表示来源已失效。 */
+  replaceNoteImage: (
+    id: string,
+    sourceFile: string,
+    edited: { file: string; width: number; height: number },
+    options?: { snapshot?: boolean }
+  ) => boolean;
   /**
    * 从卡片移除一张图片（组合卡详情页的 ⊗）。剩余图片顺次补位；一张不剩时：
    * 有文字 → 退化为纯文本卡，无文字 → 整张卡删除。可撤销，故刻意不删磁盘
@@ -1378,7 +1404,7 @@ function validateSettingsShape(value: unknown, version: number): void {
         !Number.isInteger(value.onboardingVersion)
       ) return false;
       // 旧 envelope 允许已知的新 onboarding 子版本，便于修复“只改子状态、
-      // 未同步外层版本”的历史数据；当前 v22 则必须严格使用 v3。
+      // 未同步外层版本”的历史数据；v22 起必须严格使用 v3。
       const expectedVersions = version >= 22
         ? [ONBOARDING_VERSION]
         : [1, 2, ONBOARDING_VERSION];
@@ -1813,7 +1839,7 @@ function normalizeBillRecord(bill: Bill): Bill {
   };
 }
 
-/** Zustand persist v1-v21 向前迁移；未知字段保留，旧版本重复记录按首项去重。 */
+/** Zustand persist v1-v22 向前迁移；未知字段保留，旧版本重复记录按首项去重。 */
 export function migratePersistedState(
   persisted: unknown,
   version: number
@@ -1920,6 +1946,15 @@ export function migratePersistedState(
     p.settings = {
       ...p.settings,
       onboarding: onboardingStateFromPersisted(p.settings.onboarding),
+    };
+  }
+  if (version < 23 && p.settings) {
+    p.settings = {
+      ...p.settings,
+      // 格式不进入加密信封：旧库默认中文，提前写入的已知值仍予保留。
+      secretCipherStyle: normalizeSecretCipherStyle(
+        (p.settings as unknown as Record<string, unknown>).secretCipherStyle
+      ),
     };
   }
   if (version < 17) {
@@ -2334,9 +2369,17 @@ export const useNotesStore = create<NotesState>()(
           const sec: Section = { id: SECRET_ID, name: "秘文" };
           set({ sections: first ? [first, sec, ...rest] : [sec] });
         }
-        // 去重：同一中文密文信封重复捕获（域=秘文组）视为重复
+        // 去重以信封字节为准：代码/日志/引用格式变化仍是同一条秘文；
+        // 无法解析的历史文本保留旧行为，仅按去空白原文判断。
+        const fingerprint = secretEnvelopeFingerprint(trimmed);
         const dup = get().notes.find(
-          (n) => n.sectionId === SECRET_ID && n.text === trimmed
+          (n) => {
+            if (n.sectionId !== SECRET_ID) return false;
+            const existing = n.text.trim();
+            if (existing === trimmed) return true;
+            return fingerprint !== null &&
+              secretEnvelopeFingerprint(existing) === fingerprint;
+          }
         );
         if (dup) return { result: "duplicate", id: dup.id };
         const note: Note = {
@@ -2486,6 +2529,26 @@ export const useNotesStore = create<NotesState>()(
             };
           }),
         });
+      },
+
+      replaceNoteImage: (id, sourceFile, edited, options) => {
+        const note = get().notes.find((entry) => entry.id === id);
+        if (!note || !noteImages(note).includes(sourceFile)) return false;
+        const currentBlocks = noteContentBlocks(note);
+        const nextBlocks = replaceNoteImageFile(currentBlocks, sourceFile, edited);
+        if (nextBlocks.every((block, index) => block === currentBlocks[index])) {
+          return false;
+        }
+        if (options?.snapshot !== false) get().snapshot("编辑图片");
+        const contentPatch = noteContentPatch(nextBlocks);
+        set({
+          notes: get().notes.map((entry) =>
+            entry.id === id
+              ? { ...entry, ...contentPatch, updatedAt: Date.now() }
+              : entry
+          ),
+        });
+        return true;
       },
 
       removeNoteImage: (id, file) => {

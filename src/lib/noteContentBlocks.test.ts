@@ -6,6 +6,7 @@ import {
   normalizeNoteContentBlocks,
   noteContentBlocks,
   projectNoteContent,
+  replaceNoteImageFile,
   replaceNoteTextBlockAt,
   replaceNoteTextProjection,
   textBlockRanges,
@@ -76,6 +77,50 @@ describe("noteContentBlocks", () => {
     expect(projection.contentBlocks).toHaveLength(3);
     expect(projection.imageFiles).toEqual(["same.png"]);
     expect(projection.attachments).toBeUndefined();
+  });
+
+  it("编辑图片只替换命中图片并保留富图文顺序、alt 与其他块引用", () => {
+    const text = { type: "text" as const, text: "前文" };
+    const untouched = {
+      type: "image" as const,
+      file: "b.png",
+      width: 20,
+      height: 10,
+    };
+    const blocks: NoteContentBlock[] = [
+      text,
+      { type: "image", file: "a.png", alt: "截图", width: 100, height: 80 },
+      untouched,
+      { type: "image", file: "a.png" },
+    ];
+
+    const next = replaceNoteImageFile(blocks, "a.png", {
+      file: "edited.png",
+      width: 640,
+      height: 480,
+    });
+
+    expect(next.map((block) => block.type)).toEqual([
+      "text",
+      "image",
+      "image",
+      "image",
+    ]);
+    expect(next[0]).toBe(text);
+    expect(next[2]).toBe(untouched);
+    expect(next[1]).toEqual({
+      type: "image",
+      file: "edited.png",
+      alt: "截图",
+      width: 640,
+      height: 480,
+    });
+    expect(next[3]).toEqual({
+      type: "image",
+      file: "edited.png",
+      width: 640,
+      height: 480,
+    });
   });
 
   it("已有块边界换行不重复，左侧显式空行保持", () => {

@@ -16,7 +16,7 @@
  * 而非外扩——窗口外没有可绘制区域，宿主 overflow-hidden 也会裁掉外扩。
  */
 import { memo, useCallback, useEffect, useRef, type CSSProperties } from "react";
-import { animate } from "motion/react";
+import { animate, useReducedMotion } from "motion/react";
 
 import { cn } from "@/lib/utils";
 
@@ -50,6 +50,7 @@ export const GlowingEffect = memo(function GlowingEffect({
   borderWidth = 1,
   disabled = false,
 }: GlowingEffectProps) {
+  const reduceMotion = useReducedMotion();
   const containerRef = useRef<HTMLDivElement>(null);
   const lastPosition = useRef({ x: 0, y: 0 });
   const animationFrameRef = useRef<number>(0);
@@ -159,6 +160,8 @@ export const GlowingEffect = memo(function GlowingEffect({
     if (disabled) return;
     // 首帧按真实宽高比落好对角双弧
     toIdle(true);
+    // 减弱动态效果下保留静态双弧信息，不再监听指针或驱动逐帧动画。
+    if (reduceMotion) return;
     const handleScroll = () => handleMove();
     const handlePointerMove = (e: PointerEvent) => handleMove(e);
     // 指针离开窗口 / 窗口失焦：线性归位（独立窗口出界后收不到 move 事件）
@@ -182,7 +185,7 @@ export const GlowingEffect = memo(function GlowingEffect({
       document.documentElement.removeEventListener("pointerleave", handleAway);
       window.removeEventListener("blur", handleAway);
     };
-  }, [handleMove, disabled, toIdle]);
+  }, [handleMove, disabled, reduceMotion, toIdle]);
 
   if (disabled) return null;
 

@@ -18,7 +18,7 @@ function Switch({
       data-slot="switch"
       data-size={size}
       className={cn(
-        "peer group/switch relative inline-flex shrink-0 items-center rounded-full border border-transparent transition-all outline-none after:absolute after:-inset-x-3 after:-inset-y-2",
+        "peer group/switch relative inline-flex shrink-0 items-center rounded-full border border-transparent transition-[background-color,border-color,box-shadow] outline-none after:absolute after:-inset-x-3 after:-inset-y-2",
         focusRing,
         "aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 data-[size=default]:h-[18px] data-[size=default]:w-8 data-[size=sm]:h-[14px] data-[size=sm]:w-6 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 data-checked:bg-primary data-checked:border-transparent data-unchecked:bg-(--switch-track-off) data-unchecked:border-(--switch-track-off-border) data-disabled:cursor-not-allowed data-disabled:opacity-45 shadow-[inset_0_1px_2px_oklch(0_0_0/0.18)] dark:shadow-[inset_0_1px_2px_oklch(0_0_0/0.45)]",
         className

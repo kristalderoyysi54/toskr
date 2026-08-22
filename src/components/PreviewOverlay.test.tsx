@@ -96,7 +96,7 @@ describe("PreviewOverlay 富图文保序", () => {
     expect(html.match(/<textarea/g)).toHaveLength(2);
     expect(html).toContain('aria-label="文字段落 1"');
     expect(html).toContain('aria-label="文字段落 2"');
-    expect(html).toContain("仅编辑文字，图片位置已锁定");
+    expect(html).toContain("图片位置已锁定；点击图片可查看或打码");
     expect(html).not.toContain("从卡片移除这张图片");
     expect(html).toContain("保存");
   });

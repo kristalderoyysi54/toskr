@@ -791,6 +791,32 @@ pub fn export_complete_backup(
     Ok(inspection)
 }
 
+/// 导出人类可读的 Markdown + 媒体 ZIP。与数据目录事务共用写闸，确保导出
+/// 期间活动目录不会切换、媒体也不会被 GC 隔离。
+pub fn export_notes_bundle(
+    app: &AppHandle,
+    destination: &Path,
+    markdown: &str,
+    media_files: &[String],
+) -> Result<(), crate::note_export::NoteExportFailure> {
+    let storage = app.state::<Storage>();
+    let _write = storage.write_gate.lock().unwrap();
+    let transaction_pending = { storage.runtime.lock().unwrap().pending.is_some() };
+    if transaction_pending || recovery_required(app) {
+        return Err(
+            crate::note_export::NoteExportFailure::operation_in_progress(
+                "数据目录事务或恢复进行中，已阻止笔记导出",
+            ),
+        );
+    }
+    crate::note_export::export_notes_bundle(
+        &data_dir(app).join(MEDIA_DIR),
+        destination,
+        markdown,
+        media_files,
+    )
+}
+
 pub fn export_conflict_recovery_backup(
     app: &AppHandle,
     destination: &Path,

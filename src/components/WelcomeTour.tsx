@@ -123,7 +123,7 @@ export function WelcomeTour() {
           <span
             key={index}
             className={cn(
-              "h-1.5 rounded-full transition-all duration-(--duration-control)",
+              "h-1.5 rounded-full transition-[width,background-color] duration-(--duration-control)",
               index === page ? "w-4.5 bg-foreground" : "w-1.5 bg-foreground/15"
             )}
           />

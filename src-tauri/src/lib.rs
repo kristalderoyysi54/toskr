@@ -18,6 +18,7 @@ mod ai;
 mod linkmeta;
 mod message_watch;
 mod message_watch_cdp;
+mod note_export;
 mod pasteboard;
 mod privacy;
 mod rich_clipboard;
@@ -285,6 +286,7 @@ pub fn run() {
             commands::write_data_if_current,
             commands::image_data_url,
             commands::image_thumb_url,
+            commands::export_notes_bundle,
             commands::export_complete_backup,
             commands::export_conflict_recovery_backup,
             commands::inspect_backup,

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { DeliveryEvent } from "@/lib/deliveryActivityCore";
+import type { ImagePreviewEditContext } from "@/lib/imageEditor";
 import type { MessageContextItem } from "@/lib/messages";
 import type { ImProfile } from "@/lib/imProfile";
 
@@ -650,9 +651,13 @@ export const api = {
     }),
   scanImageFirewall: (file: string, force = false) =>
     invoke<ScanImageFirewallResult>("scan_image_firewall", { file, force }),
-  redactDeliveryImage: (originalFile: string, regions: ImagePixelBox[]) =>
+  redactDeliveryImage: (
+    originalFile: string,
+    regions: ImagePixelBox[],
+    persist = false
+  ) =>
     invoke<RedactDeliveryImageResult>("redact_delivery_image", {
-      request: { originalFile, regions },
+      request: { originalFile, regions, persist },
     }),
   cleanupRedactedImages: (files: string[]) =>
     invoke<void>("cleanup_redacted_images", { files }),
@@ -817,7 +822,8 @@ export const api = {
   quickLook: (
     files: string[],
     index = 0,
-    note?: ImagePreviewSource
+    note?: ImagePreviewSource,
+    editContext?: ImagePreviewEditContext
   ) =>
     invoke("quick_look", {
       files,
@@ -826,6 +832,7 @@ export const api = {
       noteText: note?.text ?? null,
       dataGeneration: note?.dataGeneration ?? null,
       edit: note?.edit ?? false,
+      editContext: editContext ?? null,
     }),
   /** 悬停窥视：原尺寸预览窗的瞬态形态（不抢焦点、鼠标穿透），移开由 hidePeekImage 收起。 */
   peekImage: (files: string[]) =>
@@ -836,6 +843,7 @@ export const api = {
       noteText: null,
       dataGeneration: null,
       edit: false,
+      editContext: null,
       transient: true,
     }),
   /** 收起悬停窥视的瞬态预览窗（常规预览窗不受影响）。 */
@@ -888,6 +896,12 @@ export const api = {
       path,
       stateJson,
       expectedRevision,
+    }),
+  exportNotesBundle: (path: string, markdown: string, mediaFiles: string[]) =>
+    invoke<void>("export_notes_bundle", {
+      path,
+      markdown,
+      mediaFiles,
     }),
   exportConflictRecoveryBackup: (path: string, stateJson: string) =>
     invoke<BackupInspection>("export_conflict_recovery_backup", {

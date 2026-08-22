@@ -22,7 +22,7 @@ use crate::activity::{
 };
 use crate::storage::{DATA_FILE, MEDIA_DIR};
 
-pub const MAX_STORE_VERSION: u64 = 22;
+pub const MAX_STORE_VERSION: u64 = 23;
 const MISSING_REVISION: &str = "missing";
 const MEDIA_GC_FILE: &str = "toskr-media-gc.json";
 const DATA_JOURNAL_FILE: &str = "toskr-data-transaction.json";
@@ -3084,7 +3084,14 @@ pub(crate) fn validate_settings_value_for_version(
             return false;
         }
     }
-    for key in ["aiBaseUrl", "aiApiKey", "aiModel", "dataDir"] {
+    for key in [
+        "aiBaseUrl",
+        "aiApiKey",
+        "aiModel",
+        "dataDir",
+        // 只验证持久化形状；未知外观由前端归一为 classic，不能让整库只读。
+        "secretCipherStyle",
+    ] {
         if !optional_type(settings, key, serde_json::Value::is_string) {
             return false;
         }
@@ -4088,6 +4095,20 @@ mod tests {
     }
 
     #[test]
+    fn current_store_accepts_secret_cipher_style_strings_for_normalization() {
+        for style in ["classic", "code", "log", "quote", "future-style"] {
+            assert!(validate_settings_value_for_version(
+                Some(&serde_json::json!({"secretCipherStyle": style})),
+                MAX_STORE_VERSION
+            ));
+        }
+        assert!(!validate_settings_value_for_version(
+            Some(&serde_json::json!({"secretCipherStyle": 42})),
+            MAX_STORE_VERSION
+        ));
+    }
+
+    #[test]
     fn current_store_validates_resumable_onboarding_state() {
         let current = serde_json::json!({
             "onboarding": {
@@ -4110,7 +4131,7 @@ mod tests {
                 "activationWithin60s": null
             }
         });
-        assert_eq!(MAX_STORE_VERSION, 22);
+        assert_eq!(MAX_STORE_VERSION, 23);
         assert!(validate_settings_value_for_version(
             Some(&current),
             MAX_STORE_VERSION

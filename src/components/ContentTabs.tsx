@@ -1,7 +1,7 @@
 import { Fragment } from "react";
-import { motion } from "motion/react";
 
 import { focusRing } from "@/components/ui/focus-ring";
+import { SlidingTabIndicator } from "@/components/ui/sliding-tab-indicator";
 import { cn } from "@/lib/utils";
 import { useNotesStore } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
@@ -60,11 +60,9 @@ export function ContentTabs() {
                   </span>
                 ) : null}
                 {selected && (
-                  <motion.span
-                    aria-hidden
+                  <SlidingTabIndicator
                     layoutId="content-subtab-line"
-                    transition={{ duration: 0.12, ease: [0.2, 0.9, 0.3, 1] }}
-                    className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-foreground/85"
+                    variant="underline"
                   />
                 )}
               </button>

@@ -13,6 +13,7 @@ import {
   Check,
   Copy,
   Expand,
+  FileDown,
   FileText,
   FolderInput,
   GripVertical,
@@ -60,6 +61,7 @@ import {
   copyNoteContent,
   copyNotesAsList,
   deleteNotesWithUndo,
+  exportNotesBundle,
   mergeNoteWithChecked,
   moveClipsToNotesWithUndo,
   openNoteDetail,
@@ -95,6 +97,7 @@ import {
   normalizeContextMenu,
   orderedCheckedNotes,
   sanitizeNoteTags,
+  SECRET_ID,
   useNotesStore,
   type ContextMenuItemId,
   type Note,
@@ -299,6 +302,16 @@ export const NoteCard = memo(function NoteCard({
     void sendNotesToChat(ids, prefix, opts);
   };
 
+  /** 导出：当前卡属于多选集合时导出整组，否则只导出当前卡。 */
+  const exportSelfOrChecked = () => {
+    const state = useNotesStore.getState();
+    const ids =
+      checked && state.checkedIds.length > 1
+        ? orderedCheckedNotes(state).map((item) => item.id)
+        : [note.id];
+    void exportNotesBundle(ids);
+  };
+
   const openPreview = (editing = false) => {
     // 链接卡「查看明细」= 直接打开网页；编辑仍走预览层编辑链接文本
     if (isLink && !editing) {
@@ -478,6 +491,19 @@ export const NoteCard = memo(function NoteCard({
           <ContextMenuItem key={id} onClick={() => void copyWithChecked()}>
             <ListOrdered className="size-3.5" /> 复制为列表
             <ContextMenuShortcut>⌘C</ContextMenuShortcut>
+          </ContextMenuItem>
+        );
+      case "export":
+        if (
+          note.kind === "secret" ||
+          note.sectionId === SECRET_ID ||
+          note.sectionId === CLIPBOARD_ID
+        ) {
+          return null;
+        }
+        return (
+          <ContextMenuItem key={id} onClick={exportSelfOrChecked}>
+            <FileDown className="size-3.5" /> 导出笔记包…
           </ContextMenuItem>
         );
       case "edit":
