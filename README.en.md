@@ -21,7 +21,7 @@ Collect text and images from different apps, organize and review privacy, then p
 
 > The app UI is currently Chinese-only.
 
-Toskr pastes by default. It only submits when you enable auto-submit for that target app.
+Customize auto-submit per target app — `⌘ Enter` pastes and delivers in one step.
 
 <p align="center">
   <img src="docs/assets/readme/toskr-flow.png" alt="A three-step flow from source apps through Toskr to the current AI input" width="100%" />
@@ -31,7 +31,7 @@ Toskr pastes by default. It only submits when you enable auto-submit for that ta
 
 1. **Collect** Select text and double-tap `⇧ Shift`. Copied text and images also appear in Clipboard History.
 2. **Prepare** Select one or more cards, change their order, and group them for this delivery. Review sensitive text or images when needed.
-3. **Paste** Focus the destination input, open Toskr, and press `⌘ Enter`. Toskr returns to that app and pastes the content. It does not press Enter by default.
+3. **Paste** Focus the destination input, open Toskr, and press `⌘ Enter`. Toskr returns to that app and pastes the content; for apps with auto-submit enabled, it presses Enter for you as well.
 
 <p align="center">
   <img src="docs/assets/readme/toskr-showcase.webp" alt="Toskr clipboard history, card organization, and task reminders" width="100%" />
@@ -56,7 +56,6 @@ Toskr pastes by default. It only submits when you enable auto-submit for that ta
 ## Important boundaries
 
 - Toskr identifies the target app, not a specific conversation, window, or browser tab. Check the current input before pasting.
-- `⌘ Enter` pastes without submitting by default. Automatic submission must be enabled explicitly for a target.
 - Image OCR handles supported sensitive text only. It does not detect faces, QR codes, or every kind of visual private information.
 - Core records and privacy processing are local by default, with no account system or telemetry. Optional AI, remote images, link summaries, exchange rates, and update checks may use the network.
 - Clipboard capture and task reminders work only while Toskr is running.
