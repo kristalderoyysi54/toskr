@@ -200,7 +200,10 @@ export function DraftInput() {
   };
 
   return (
-    <div data-note-draft-input className="px-3 pb-3 pt-1.5">
+    // 必须自成定位层：三页堆叠层（PageSlide）激活页是 z-1，而本组件的
+    // PillInput 因 backdrop-blur 自成层叠上下文、只等效 z-0——分组下拉向上
+    // 弹出时会整体沉到页层之下，被 ScrollArea 的透明视口截走点击（看得见点不到）
+    <div data-note-draft-input className="relative z-10 px-3 pb-3 pt-1.5">
       <PillInput
         multiline
         value={value}
