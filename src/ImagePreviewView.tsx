@@ -902,7 +902,7 @@ export default function ImagePreviewView() {
         </button>
         <span data-tauri-drag-region className="select-none text-body font-medium text-foreground/80">
           {imageEditing
-            ? "编辑图片 · 手动打码"
+            ? "图片打码"
             : many
               ? `图片 ${idx + 1}/${files.length}`
               : "图片"}
@@ -912,7 +912,7 @@ export default function ImagePreviewView() {
             {imageEditTarget && (
               <IconButton
                 ref={imageEditTriggerRef}
-                label="编辑图片（手动打码）"
+                label="图片打码"
                 size="xs"
                 onClick={beginImageEdit}
                 className="text-foreground/60 hover:bg-foreground/10 hover:text-foreground focus-visible:ring-ring focus-visible:ring-offset-0"

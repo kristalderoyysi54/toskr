@@ -424,7 +424,7 @@ export async function refreshOpenNoteDetail() {
 
 /**
  * 打开卡片明细：文字类（文本/代码/链接编辑）→ 桌面居中的文本详情窗；
- * 图片编辑直接进入原尺寸预览窗的手动打码态；文字备注仍可在查看态单独编辑。
+ * 图片卡编辑优先进入文字备注，低频的图片打码由预览窗独立按钮触发。
  */
 export function openNoteDetail(id: string, edit = false) {
   const { notes, sections, settings } = useNotesStore.getState();
@@ -445,16 +445,11 @@ export function openNoteDetail(id: string, edit = false) {
   const headerColor = settings.cardTint ? sectionColor ?? null : "#5b5b60";
   if (note.kind === "image") {
     if (edit && note.imageFile) {
-      const dataGeneration = currentDataGeneration();
       void api.quickLook(noteImages(note), 0, {
         id: note.id,
         text: imageCaption(note),
-        dataGeneration,
-      }, {
-        kind: "note",
-        noteId: note.id,
-        dataGeneration,
-        startEditing: true,
+        dataGeneration: currentDataGeneration(),
+        edit: true,
       });
       return;
     }

@@ -2987,7 +2987,7 @@ export default function App() {
         if (ui.page === "tasks") {
           ui.setEditingId(ui.focusedId);
         } else {
-          // 文字类 → 文本详情窗直接进入编辑；图片仍走面板内预览层
+          // 文字类 → 文本详情窗直接进入编辑；图片卡优先编辑文字备注
           openNoteDetail(ui.focusedId, true);
         }
         return;

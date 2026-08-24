@@ -208,7 +208,7 @@ function reset(status: DeliveryStatus) {
 describe("结构化发送结果的 store 副作用", () => {
   beforeEach(() => reset("sent"));
 
-  it("图片卡编辑直接打开手动打码态的原尺寸预览", () => {
+  it("图片卡编辑优先打开文字备注输入，不直接进入打码", () => {
     const { id } = useNotesStore.getState().addNote("图片 231×242", {
       kind: "image",
       imageFile: "shot.png",
@@ -221,17 +221,12 @@ describe("结构化发送结果的 store 副作用", () => {
     expect(apiMocks.quickLook).toHaveBeenCalledWith(
       ["shot.png"],
       0,
-      expect.objectContaining({
+      {
         id,
         text: "",
         dataGeneration: expect.any(Number),
-      }),
-      expect.objectContaining({
-        kind: "note",
-        noteId: id,
-        dataGeneration: expect.any(Number),
-        startEditing: true,
-      })
+        edit: true,
+      }
     );
   });
 
@@ -258,14 +253,15 @@ describe("结构化发送结果的 store 副作用", () => {
     const { id } = useNotesStore.getState().addNote("", { contentBlocks });
     const note = useNotesStore.getState().notes.find((item) => item.id === id)!;
 
-    openNoteDetail(id!);
+    openNoteDetail(id!, true);
     await copyNoteContent(note);
 
     const payload = eventMocks.emitTo.mock.calls.find(
       ([label, event]) =>
         label === "textpreview" && event === "toskr://note-preview"
     )?.[2];
-    expect(payload).toMatchObject({ contentBlocks });
+    expect(payload).toMatchObject({ contentBlocks, edit: true });
+    expect(apiMocks.quickLook).not.toHaveBeenCalled();
     expect(apiMocks.copyRichClipboard).toHaveBeenCalledWith([
       { kind: "text", text: "路径：审批管理" },
       { kind: "image", file: "first.png", alt: "第一张" },

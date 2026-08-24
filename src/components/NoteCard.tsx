@@ -248,6 +248,11 @@ export const NoteCard = memo(function NoteCard({
   const isImage = note.kind === "image";
   const isLink = note.kind === "link" && !!note.url;
   const images = noteImages(note);
+  const editLabel = isImage
+    ? imageCaption(note)
+      ? "编辑文字备注"
+      : "添加文字备注"
+    : "编辑";
   /** 组合卡片：既有正文又带图片附件 */
   const isComposite = !isImage && images.length > 0;
   const link = isLink ? linkParts(note.url!) : null;
@@ -328,7 +333,7 @@ export const NoteCard = memo(function NoteCard({
       });
       return;
     }
-    // 文字类 → 桌面居中的文本详情窗；图片编辑等仍走面板内预览层
+    // 文字类 → 桌面居中的文本详情窗；图片卡编辑优先进入文字备注
     openNoteDetail(note.id, editing);
   };
 
@@ -509,7 +514,7 @@ export const NoteCard = memo(function NoteCard({
       case "edit":
         return (
           <ContextMenuItem key={id} onClick={() => openPreview(true)}>
-            <Pencil className="size-3.5" /> 编辑
+            <Pencil className="size-3.5" /> {editLabel}
             <ContextMenuShortcut>⏎</ContextMenuShortcut>
           </ContextMenuItem>
         );
@@ -1581,7 +1586,7 @@ export const NoteCard = memo(function NoteCard({
               )}
             </IconButton>
             <IconButton
-              label="编辑"
+              label={editLabel}
               surface
               reveal="hover-focus"
               onClick={() => openPreview(true)}
