@@ -877,12 +877,18 @@ export default function TextPreviewView() {
   }, []);
 
   // 兜底：查看态 DOM 选区一塌缩（点正文任意处/空白处取消选中）立刻收工具条。
-  // 选词模式的选区不走 DOM Selection、编辑态由 textarea onSelect 负责，均不受影响
+  // 选词模式的选区不走 DOM Selection、编辑态由 textarea onSelect 负责，均不受影响。
+  // 编辑态屏障必须用渲染期直赋的镜像（pickModeRef 同款），不能读 editSessionRef：
+  // 那个 ref 靠 useEffect 异步镜像，与 selectionchange 任务无顺序保证——查看态
+  // 双击进编辑时正文 DOM 卸载、选区塌缩，事件若抢在镜像 effect 前到达，会把
+  // 刚随选区出现的工具条误杀（闪出即消失）
   const pickModeRef = useRef(pickMode);
   pickModeRef.current = pickMode;
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
   useEffect(() => {
     const onSelectionChange = () => {
-      if (pickModeRef.current || editSessionRef.current.editing) return;
+      if (pickModeRef.current || editingRef.current) return;
       const domSelection = document.getSelection();
       if (!domSelection || domSelection.isCollapsed || !domSelection.rangeCount) {
         setTextSelection(null);

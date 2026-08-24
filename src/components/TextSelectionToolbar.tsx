@@ -108,14 +108,17 @@ export function TextSelectionToolbar({
   const currentBlock = blockFormatAt(text, selection);
   const selectedText = text.slice(selection.start, selection.end);
   const canLink = !selectedText.includes("\n");
-  // 工具条就近浮动后可能贴着窗顶：上方放不下时弹层向下翻，避免被窗口裁掉
+  // 工具条就近浮动后可能贴着窗顶：上方放不下时弹层向下翻，避免被窗口裁掉。
+  // anchorStyle 必须在依赖里：展开态跨选区记忆下重新挂载时，首帧 anchorStyle
+  // 尚为 null（底部居中，top 很大→判上弹），随后锚点到位跳到选区旁却不再重测，
+  // 靠顶选区的菜单就会向上弹出窗顶（只见下半截）。锚点变化一律重测。
   const [popBelow, setPopBelow] = useState(false);
   useLayoutEffect(() => {
     const rect = rootRef.current?.getBoundingClientRect();
     if (!rect) return;
     // token-exception: 310≈格式菜单全高估值（8 项），纯翻转判定非视觉样式
     setPopBelow(rect.top < 310);
-  }, [formatOpen, linkOpen, aliasOpen, selection.start, selection.end]);
+  }, [formatOpen, linkOpen, aliasOpen, selection.start, selection.end, anchorStyle]);
 
   // 就近定位按实测宽度钳回容器：绝对定位的 shrink-to-fit 会在贴近右缘时把
   // 工具条压到竖排（外层已 w-max 定宽），这里再把 left 修到完整可见的位置。
