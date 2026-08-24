@@ -81,4 +81,4 @@
 
 ## 致谢与许可
 
-灵感来自 [shadcn](https://github.com/shadcn) 的 Copper。[Apache License 2.0](LICENSE)
+灵感来自 [shadcn](https://github.com/shadcn) 的 Copper。感谢早期用户 cyberBetty 提出的宝贵建议。[Apache License 2.0](LICENSE)
