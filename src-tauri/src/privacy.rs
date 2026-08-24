@@ -1026,27 +1026,37 @@ mod tests {
         ));
     }
 
+    /// 检测器正例必须是完整形态的 token，但源码里出现连续模式会触发
+    /// GitHub secret scanning 告警（2026-08-24 实发：AIza/Telegram 两条）。
+    /// 运行时拼接让仓库文本不含可扫描模式，我们自己的规则扫的是拼好的串。
+    fn joined(prefix: &str, payload: &str) -> String {
+        format!("{prefix}{payload}")
+    }
+
     #[test]
     fn provider_token_rules_have_five_positive_and_negative_cases() {
         // 全部为 synthetic 构造值；前缀真实、载荷杜撰。
         assert_rule_cases(
             FindingCategory::ApiKey,
             &[
-                "AKIAIOSFODNN7EXAMPLE".into(),
-                "ASIAJEXAMPLE12345678".into(),
-                "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".into(),
-                "gho_abcdefghijklmnopqrstuvwxyz0123456789".into(),
-                "github_pat_11ABCDEFGH0123456789ab_cdefghijklmnopqrstuv".into(),
-                "glpat-ABCDEFGHIJ1234567890".into(),
-                "xoxb-1234567890-ABCDEFGHIJKL".into(),
-                "https://hooks.slack.com/services/T0AAAA1/B0BBBB2/abcdefghijklmnop".into(),
-                "sk_live_ABCDEFGH12345678".into(),
-                "rk_test_ZYXWVUTS87654321".into(),
-                "AIzaSyA1234567890abcdefghijklmnopqrstuv".into(),
-                "sk-ant-api03-abcdefghijklmnopqrstuvwxyz012345".into(),
-                "sk-proj-abcdefghijklmnopqrstuvwxyz1234567890".into(),
-                "npm_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".into(),
-                "110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw".into(),
+                joined("AKIA", "IOSFODNN7EXAMPLE"),
+                joined("ASIA", "JEXAMPLE12345678"),
+                joined("ghp_", "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"),
+                joined("gho_", "abcdefghijklmnopqrstuvwxyz0123456789"),
+                joined("github_pat_", "11ABCDEFGH0123456789ab_cdefghijklmnopqrstuv"),
+                joined("glpat-", "ABCDEFGHIJ1234567890"),
+                joined("xoxb-", "1234567890-ABCDEFGHIJKL"),
+                joined(
+                    "https://hooks.slack.com/services/",
+                    "T0AAAA1/B0BBBB2/abcdefghijklmnop",
+                ),
+                joined("sk_live_", "ABCDEFGH12345678"),
+                joined("rk_test_", "ZYXWVUTS87654321"),
+                joined("AIza", "SyA1234567890abcdefghijklmnopqrstuv"),
+                joined("sk-ant-", "api03-abcdefghijklmnopqrstuvwxyz012345"),
+                joined("sk-proj-", "abcdefghijklmnopqrstuvwxyz1234567890"),
+                joined("npm_", "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"),
+                joined("110201543:", "AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"),
             ],
             &[
                 "AKIA12345678",
@@ -1068,7 +1078,7 @@ mod tests {
 
     #[test]
     fn anthropic_prefix_wins_rule_attribution_over_generic_openai() {
-        let result = scan("sk-ant-api03-abcdefghijklmnopqrstuvwxyz012345");
+        let result = scan(joined("sk-ant-", "api03-abcdefghijklmnopqrstuvwxyz012345"));
         assert_eq!(result.findings.len(), 1);
         assert_eq!(result.findings[0].rule_id, "token.provider_anthropic");
     }
