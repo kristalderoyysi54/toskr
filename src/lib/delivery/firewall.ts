@@ -45,7 +45,7 @@ export type FirewallWarnCategory = (typeof FIREWALL_WARN_CATEGORIES)[number];
 export const FIREWALL_CATEGORY_LABEL: Record<FindingCategory, string> = {
   privateKey: "私钥",
   authorization: "授权凭据",
-  apiKey: "API 密钥",
+  apiKey: "密钥/凭据",
   databaseUrl: "数据库连接",
   email: "邮箱",
   phone: "手机号",
@@ -65,6 +65,28 @@ export const FIREWALL_SEVERITY_LABEL: Record<FindingSeverity, string> = {
 /** 全局占位符形态（[CODE_NN]）；resultVerification 与化名词典共用同一定义。 */
 export const PLACEHOLDER_PATTERN = /\[[A-Z][A-Z0-9_]*_[0-9]{2,}\]/g;
 export const PLACEHOLDER_NAME_PATTERN = /^\[[A-Z][A-Z0-9_]*_[0-9]{2,}\]$/;
+
+/**
+ * privacy.rs Block 类别（凭据 Secret）的占位符码。命中者只出不进：
+ * 发送后不得进入任何可逆还原映射，AI 回复里的占位符永不恢复为原文。
+ * EMAIL/PHONE/NATIONAL_ID/BANK_CARD/IP_ADDRESS 属 PII，保持可逆化名语义。
+ */
+export const IRREVERSIBLE_PLACEHOLDER_CODES: readonly string[] = [
+  "PRIVATE_KEY",
+  "AUTHORIZATION",
+  "API_KEY",
+  "DATABASE_URL",
+  "COOKIE",
+  "SESSION",
+];
+
+const IRREVERSIBLE_PLACEHOLDER_RE = new RegExp(
+  `^\\[(?:${IRREVERSIBLE_PLACEHOLDER_CODES.join("|")})_[0-9]{2,}\\]$`
+);
+
+export function isIrreversiblePlaceholder(placeholder: string): boolean {
+  return IRREVERSIBLE_PLACEHOLDER_RE.test(placeholder);
+}
 
 /** 替换/裁决算法需要的最小结构；FirewallFinding 天然满足，词典命中也可复用。 */
 export interface PlaceholderMatch {
@@ -211,6 +233,31 @@ export function rawConfirmationIsCurrent(input: {
     input.confirmation.revision === input.revision &&
     input.confirmation.targetToken === input.targetToken &&
     input.confirmation.level === input.requiredLevel;
+}
+
+/**
+ * 发送请求随行的 Block 白名单：只收「已逐项明确保留」或「当前全局 block 级
+ * 确认覆盖」的 finding id。Native 复扫最终正文后逐一核对，名单外即拒发；
+ * id 含 UTF-16 偏移，正文一改即失配，陈旧授权自动作废。
+ */
+export function allowedBlockFindingIds(input: {
+  findings: readonly FirewallFinding[];
+  excludedFindingIds: readonly string[];
+  rawConfirmation: RawPrivacyConfirmation | null;
+  revision: number;
+  targetToken: string | null;
+}): string[] {
+  const excluded = new Set(input.excludedFindingIds);
+  const globallyConfirmed = rawConfirmationIsCurrent({
+    confirmation: input.rawConfirmation,
+    revision: input.revision,
+    targetToken: input.targetToken,
+    requiredLevel: "block",
+  });
+  return input.findings
+    .filter((finding) => finding.severity === "block")
+    .filter((finding) => globallyConfirmed || excluded.has(finding.id))
+    .map((finding) => finding.id);
 }
 
 /** UI 与 Native IPC 前共用的唯一策略矩阵。 */

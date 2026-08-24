@@ -2,6 +2,7 @@ import {
   recordDeliveryEvent,
   type DeliveryEvent,
 } from "@/lib/deliveryActivityCore";
+import { isIrreversiblePlaceholder } from "@/lib/delivery/firewall";
 import { useNotesStore, type Note, type NoteProvenance } from "@/store/notesStore";
 
 export const RESULT_ASSOCIATION_WINDOW_MS = 30 * 60 * 1_000;
@@ -178,9 +179,14 @@ export function rememberDeliveryRedactionMap(
       return [placeholder, Math.max(1, count)];
     })
   );
+  // 凭据 Secret 的映射在此边界不可逆丢弃：占位符仍参与计数与指纹证据，
+  // 但 raw→placeholder 不驻留，恢复预览永远还原不出 Secret 原文。
+  const reversibleEntries = entries.filter(
+    ([, placeholder]) => !isIrreversiblePlaceholder(placeholder)
+  );
   redactionSessions.delete(deliveryId);
   redactionSessions.set(deliveryId, {
-    map: Object.freeze(Object.fromEntries(entries)),
+    map: Object.freeze(Object.fromEntries(reversibleEntries)),
     placeholderCounts: Object.freeze(placeholderCounts),
   });
   while (redactionSessions.size > MAX_REDACTION_SESSIONS) {
@@ -190,8 +196,10 @@ export function rememberDeliveryRedactionMap(
   }
 }
 
+/** 是否存在可还原条目；Secret 已在写入口丢弃，全 Secret 的发送视为不可用。 */
 export function deliveryRedactionMapAvailable(deliveryId: string): boolean {
-  return redactionSessions.has(deliveryId);
+  const map = redactionSessions.get(deliveryId)?.map;
+  return !!map && Object.keys(map).length > 0;
 }
 
 /** 只暴露不可逆占位符及发送时次数，不暴露 raw→placeholder 映射。 */

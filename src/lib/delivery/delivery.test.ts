@@ -622,6 +622,8 @@ describe("executeDeliveryDraft", () => {
       text: draft.finalText,
       imageFiles: draft.imageFiles,
       expectedImagePixelHashes: [],
+      allowedTextFindingIds: [],
+      firewallTextEnabled: true,
       pressEnter: draft.pressEnter,
       keepPanel: draft.keepPanel,
       deliveryId: draft.id,
@@ -715,6 +717,40 @@ describe("executeDeliveryDraft", () => {
     expect(tip).toHaveBeenCalledWith(
       "warn",
       expect.stringContaining("请替换或明确保留")
+    );
+  });
+
+  it("逐项保留的 block 随发送带上 Native 白名单并钳制回车", async () => {
+    const id = useNotesStore.getState().addNote("api_key=fake_phase08_value").id!;
+    useNotesStore.getState().setChecked([id]);
+    const draft = executableNoteDraft([id]);
+
+    const outcome = await executeDeliveryDraft({
+      ...draft,
+      pressEnter: true,
+      findings: [{
+        id: "api-key-1",
+        category: "apiKey",
+        severity: "block",
+        startUtf16: 0,
+        endUtf16: 7,
+        maskedPreview: "api•••ue",
+        suggestedPlaceholder: "[API_KEY]",
+        ruleId: "test.api-key",
+      }],
+      privacyDecision: {
+        ...draft.privacyDecision,
+        excludedFindingIds: ["api-key-1"],
+      },
+    });
+
+    expect(outcome?.status).toBe("sent");
+    expect(apiMocks.sendDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedTextFindingIds: ["api-key-1"],
+        firewallTextEnabled: true,
+        pressEnter: false,
+      })
     );
   });
 

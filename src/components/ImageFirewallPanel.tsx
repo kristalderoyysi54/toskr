@@ -6,6 +6,7 @@ import {
   confirmOpenDeliveryImageRaw,
   containedImageRegionStyle,
   evaluateImageFirewallPolicy,
+  keepOpenDeliveryImageFinding,
   redactAllOpenDeliveryImages,
   redactOpenDeliveryImage,
   restoreOpenDeliveryImage,
@@ -182,6 +183,7 @@ export function ImageFirewallPanel({
       <div className="space-y-2">
         {draft.imageFirewall.map((item, index) => {
           const redacted = new Set(item.redactedFindingIds);
+          const kept = new Set(item.keptFindingIds);
           const itemPolicy = evaluateImageFirewallPolicy({
             enabled: draft.firewallEnabled,
             items: [item],
@@ -265,6 +267,22 @@ export function ImageFirewallPanel({
                       >
                         {redacted.has(finding.id) ? "已遮挡" : "遮挡此文字区域"}
                       </Button>
+                      {!redacted.has(finding.id) && (
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="ghost"
+                          className="text-muted-foreground"
+                          title="不遮挡这一处，按原样发出（仅本次发送有效）"
+                          disabled={busy || item.status !== "ready" || kept.has(finding.id)}
+                          onClick={() => keepOpenDeliveryImageFinding(
+                            item.originalFile,
+                            finding.id
+                          )}
+                        >
+                          {kept.has(finding.id) ? "已确认保留原文" : "保留原文发送"}
+                        </Button>
+                      )}
                     </li>
                   ))}
                 </ul>

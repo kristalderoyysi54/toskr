@@ -5,10 +5,10 @@
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::AllocAnyThread;
-use objc2_foundation::{NSArray, NSData, NSDictionary, NSString};
+use objc2_foundation::{NSArray, NSData, NSDictionary, NSRange, NSString};
 use objc2_vision::{
-    VNImageRequestHandler, VNRecognizeTextRequest, VNRecognizedTextObservation, VNRequest,
-    VNRequestTextRecognitionLevel,
+    VNImageRequestHandler, VNRecognizeTextRequest, VNRecognizedText, VNRecognizedTextObservation,
+    VNRequest, VNRequestTextRecognitionLevel,
 };
 use tauri::AppHandle;
 
@@ -17,6 +17,45 @@ pub struct RecognizedObservation {
     pub text: String,
     pub confidence: f32,
     pub vision_box: (f64, f64, f64, f64),
+    /// Vision 识别句柄：仅在识别线程内消费（!Send），用于字符级子框。
+    recognized: Option<Retained<VNRecognizedText>>,
+}
+
+impl RecognizedObservation {
+    /// UTF-16 范围的字符级 Vision 框（左下原点，归一化）。范围非法或
+    /// Vision 拒绝该范围时返回 None，由调用方回退整条 observation 框。
+    pub fn char_range_box(
+        &self,
+        start_utf16: usize,
+        end_utf16: usize,
+    ) -> Option<(f64, f64, f64, f64)> {
+        let recognized = self.recognized.as_ref()?;
+        if start_utf16 >= end_utf16 || end_utf16 > self.text.encode_utf16().count() {
+            return None;
+        }
+        let range = NSRange {
+            location: start_utf16,
+            length: end_utf16 - start_utf16,
+        };
+        let rect = unsafe { recognized.boundingBoxForRange_error(range) }.ok()?;
+        let bounds = unsafe { rect.boundingBox() };
+        Some((
+            bounds.origin.x,
+            bounds.origin.y,
+            bounds.size.width,
+            bounds.size.height,
+        ))
+    }
+
+    #[cfg(test)]
+    pub fn synthetic(text: &str, confidence: f32, vision_box: (f64, f64, f64, f64)) -> Self {
+        Self {
+            text: text.into(),
+            confidence,
+            vision_box,
+            recognized: None,
+        }
+    }
 }
 
 pub fn recognize_observations(bytes: &[u8]) -> Result<Vec<RecognizedObservation>, String> {
@@ -60,6 +99,7 @@ pub fn recognize_observations(bytes: &[u8]) -> Result<Vec<RecognizedObservation>
                                 bounds.size.width,
                                 bounds.size.height,
                             ),
+                            recognized: Some(best),
                         });
                     }
                 }
@@ -120,6 +160,55 @@ mod tests {
                 .iter()
                 .any(|finding| finding.category == crate::privacy::FindingCategory::ApiKey),
             "synthetic API key 未被识别"
+        );
+
+        // 字符级框应落在所属 observation 框内（允许 Vision 的松弛容差）
+        const TOLERANCE: f64 = 0.05;
+        for finding in &result.findings {
+            let observation = &result.observations[finding.observation_index];
+            let outer = observation.bounding_box;
+            let inner = finding.bounding_box;
+            assert!(inner.x >= outer.x - TOLERANCE, "finding 框超出 observation 左缘");
+            assert!(
+                inner.x + inner.width <= outer.x + outer.width + TOLERANCE,
+                "finding 框超出 observation 右缘"
+            );
+            assert!(inner.y >= outer.y - TOLERANCE, "finding 框超出 observation 上缘");
+            assert!(
+                inner.y + inner.height <= outer.y + outer.height + TOLERANCE,
+                "finding 框超出 observation 下缘"
+            );
+        }
+
+        // 遮挡复检闭环：按 finding 区域实色遮挡后重新 OCR，遮挡区域内不得再识别出文字
+        let regions: Vec<_> = result
+            .findings
+            .iter()
+            .map(|finding| finding.pixel_box)
+            .collect();
+        assert!(!regions.is_empty());
+        let original = image::load_from_memory(&bytes).expect("解码 fixture 失败").to_rgba8();
+        let redacted = crate::image_firewall::solid_redacted_copy(&original, &regions);
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(redacted)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .expect("编码遮挡副本失败");
+        let residual = crate::ocr::recognize_observations(png.get_ref()).expect("复检 OCR 失败");
+        let boxes: Vec<_> = residual
+            .iter()
+            .map(|observation| {
+                let (x, y, width, height) = observation.vision_box;
+                crate::image_firewall::normalized_to_pixels(
+                    crate::image_firewall::vision_box_to_top_left(x, y, width, height),
+                    result.image_width,
+                    result.image_height,
+                    0,
+                )
+            })
+            .collect();
+        assert!(
+            !crate::image_firewall::redacted_regions_still_show_text(&boxes, &regions),
+            "遮挡区域内复检仍识别出文字"
         );
     }
 }

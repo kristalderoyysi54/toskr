@@ -210,6 +210,7 @@ export function buildDeliveryDraft(
       scanRevision: 0,
       findings: [],
       redactedFindingIds: [],
+      keptFindingIds: [],
       manualRegions: [],
       rawConfirmation: null,
       failureMessage: null,

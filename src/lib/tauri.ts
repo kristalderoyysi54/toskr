@@ -394,6 +394,8 @@ export type DeliveryReasonCode =
   | "payload_empty"
   | "image_unreadable"
   | "image_changed"
+  | "privacy_incomplete"
+  | "privacy_native_blocked"
   | "paste_failed"
   | "enter_failed"
   | "internal_error";
@@ -422,6 +424,13 @@ export interface SendDeliveryRequest {
    * Native 校验失败会整单拒发。缺省保持文字整段在前、图片在后。
    */
   segments?: DeliverySegment[];
+  /**
+   * 预检授权保留的高风险文本 finding id（ruleId:start:end）。Native 发送前
+   * 复扫 text，名单外的 Block finding 一律拒发；正文改动会使 id 失配自动作废。
+   */
+  allowedTextFindingIds: string[];
+  /** 文本防火墙总开关快照；false 时 Native 跳过复扫（缺省按开启 fail-closed）。 */
+  firewallTextEnabled: boolean;
   pressEnter: boolean;
   keepPanel: boolean;
   deliveryId: string;
@@ -559,6 +568,8 @@ const DELIVERY_REASONS = new Set<DeliveryReasonCode>([
   "payload_empty",
   "image_unreadable",
   "image_changed",
+  "privacy_incomplete",
+  "privacy_native_blocked",
   "paste_failed",
   "enter_failed",
   "internal_error",

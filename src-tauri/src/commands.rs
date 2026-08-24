@@ -362,6 +362,9 @@ pub async fn send_to_chat(
         image_files,
         expected_image_pixel_hashes,
         segments: None,
+        // 旧入口没有预检流程，按 fail-closed 全量执行原生防火墙复核。
+        allowed_text_finding_ids: vec![],
+        firewall_text_enabled: true,
         press_enter,
         keep_panel,
         delivery_id: format!(

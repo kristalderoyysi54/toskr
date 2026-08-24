@@ -2768,7 +2768,7 @@ function FirewallSettings({ settings, patch }: SP) {
       <div className="px-3.5 py-2.5">
         <p className="text-title">提示级类别</p>
         <p className="mt-0.5 text-label text-muted-foreground">
-          可按类别关闭提示；私钥、授权、API 密钥、数据库连接、Cookie 与会话等高风险规则不能单独关闭。
+          可按类别关闭提示；私钥、授权、密钥/凭据、数据库连接、Cookie 与会话等高风险规则不能单独关闭。
         </p>
         <div className="mt-2 grid grid-cols-2 gap-2">
           {FIREWALL_WARN_CATEGORIES.map((category) => (

@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest";
 import type { FirewallFinding } from "@/lib/tauri";
 
 import {
+  allowedBlockFindingIds,
   assignStablePlaceholders,
   evaluateFirewallPolicy,
   filterFirewallFindings,
+  isIrreversiblePlaceholder,
   replaceFirewallFindings,
 } from "./firewall";
 
@@ -81,6 +83,77 @@ describe("Firewall redaction", () => {
 
     expect(result.text).toBe("😀 alice@[APIKEY_01] 尾");
     expect(result.replacedFindingIds).toEqual(["block"]);
+  });
+});
+
+describe("Secret 不可逆语义", () => {
+  it("凭据类占位符判定为不可逆，PII 与词典类保持可逆", () => {
+    for (const irreversible of [
+      "[PRIVATE_KEY_01]",
+      "[AUTHORIZATION_02]",
+      "[API_KEY_10]",
+      "[DATABASE_URL_01]",
+      "[COOKIE_03]",
+      "[SESSION_01]",
+    ]) {
+      expect(isIrreversiblePlaceholder(irreversible)).toBe(true);
+    }
+    for (const reversible of [
+      "[EMAIL_01]",
+      "[PHONE_02]",
+      "[NATIONAL_ID_01]",
+      "[BANK_CARD_01]",
+      "[IP_ADDRESS_01]",
+      "[USER_01]",
+      "[ORDER_07]",
+      "[API_KEY]",
+      "普通文本",
+    ]) {
+      expect(isIrreversiblePlaceholder(reversible)).toBe(false);
+    }
+  });
+});
+
+describe("Native 门禁白名单组装", () => {
+  const warnFinding = finding("warn-1", "email", "warn", 0, 3);
+  const blockA = finding("block-a", "apiKey", "block", 4, 7);
+  const blockB = finding("block-b", "cookie", "block", 8, 12);
+
+  it("仅收逐项保留的 block；warn 与未保留 block 不进名单", () => {
+    expect(allowedBlockFindingIds({
+      findings: [warnFinding, blockA, blockB],
+      excludedFindingIds: ["block-a", "warn-1"],
+      rawConfirmation: null,
+      revision: 1,
+      targetToken: "t1",
+    })).toEqual(["block-a"]);
+  });
+
+  it("当前有效的 block 级全局确认覆盖全部 block", () => {
+    expect(allowedBlockFindingIds({
+      findings: [warnFinding, blockA, blockB],
+      excludedFindingIds: [],
+      rawConfirmation: { revision: 1, targetToken: "t1", level: "block" },
+      revision: 1,
+      targetToken: "t1",
+    })).toEqual(["block-a", "block-b"]);
+  });
+
+  it("revision 或 target token 漂移后全局确认失效", () => {
+    expect(allowedBlockFindingIds({
+      findings: [blockA],
+      excludedFindingIds: [],
+      rawConfirmation: { revision: 1, targetToken: "t1", level: "block" },
+      revision: 2,
+      targetToken: "t1",
+    })).toEqual([]);
+    expect(allowedBlockFindingIds({
+      findings: [blockA],
+      excludedFindingIds: [],
+      rawConfirmation: { revision: 1, targetToken: "t1", level: "block" },
+      revision: 1,
+      targetToken: "t2",
+    })).toEqual([]);
   });
 });
 

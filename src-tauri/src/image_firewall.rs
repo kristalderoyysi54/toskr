@@ -8,7 +8,6 @@ use std::time::{Duration, Instant};
 
 use base64::Engine;
 use image::{DynamicImage, Rgba, RgbaImage};
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
@@ -110,7 +109,6 @@ struct CachedScan {
 }
 
 static SCAN_CACHE: OnceLock<Mutex<VecDeque<CachedScan>>> = OnceLock::new();
-static OCR_PUNCTUATION_SPACING: OnceLock<Regex> = OnceLock::new();
 
 fn finite(value: f64) -> f64 {
     if value.is_finite() {
@@ -354,33 +352,95 @@ fn decode_image(bytes: &[u8]) -> Result<RgbaImage, String> {
         .map(|image| image.to_rgba8())
 }
 
+/// 归一化 OCR 文本（与旧正则 `[ \t]*([@=._])[ \t]*`→`$1` 语义一致：Vision 偶尔
+/// 在邮箱/API key 标点两侧插入空白），并返回 normalized→original 的 UTF-16
+/// 单元映射：normalized 的每个单元逐一对应原文中的一个单元。
+pub(crate) fn normalize_observation_text(text: &str) -> (String, Vec<u32>) {
+    let chars: Vec<char> = text.chars().collect();
+    let mut char_utf16 = Vec::with_capacity(chars.len());
+    let mut offset = 0u32;
+    for ch in &chars {
+        char_utf16.push(offset);
+        offset += ch.len_utf16() as u32;
+    }
+    let is_ws = |ch: char| ch == ' ' || ch == '\t';
+    let is_punct = |ch: char| matches!(ch, '@' | '=' | '.' | '_');
+    let mut normalized = String::with_capacity(text.len());
+    let mut map: Vec<u32> = Vec::with_capacity(chars.len());
+    let emit = |char_index: usize, normalized: &mut String, map: &mut Vec<u32>| {
+        let ch = chars[char_index];
+        normalized.push(ch);
+        for unit in 0..ch.len_utf16() as u32 {
+            map.push(char_utf16[char_index] + unit);
+        }
+    };
+    let mut index = 0;
+    while index < chars.len() {
+        // 与正则等价的非重叠贪婪匹配：可选空白 + 标点 + 可选空白 → 只保标点。
+        let mut probe = index;
+        while probe < chars.len() && is_ws(chars[probe]) {
+            probe += 1;
+        }
+        if probe < chars.len() && is_punct(chars[probe]) {
+            let mut end = probe + 1;
+            while end < chars.len() && is_ws(chars[end]) {
+                end += 1;
+            }
+            emit(probe, &mut normalized, &mut map);
+            index = end;
+        } else {
+            emit(index, &mut normalized, &mut map);
+            index += 1;
+        }
+    }
+    (normalized, map)
+}
+
+/// 对单条 OCR 文本执行敏感扫描，返回 finding 及其在**原始识别文本**中的
+/// UTF-16 范围（供字符级框查询）。observation.text 保留原始识别结果不变。
+pub(crate) fn scan_observation_text(
+    text: &str,
+) -> Vec<(crate::privacy::FirewallFinding, (usize, usize))> {
+    let (normalized, map) = normalize_observation_text(text);
+    crate::privacy::scan_sensitive_text(ScanSensitiveRequest { text: normalized })
+        .findings
+        .into_iter()
+        .filter_map(|finding| {
+            let (start, end) = (finding.start_utf16, finding.end_utf16);
+            if start >= end || end > map.len() {
+                return None;
+            }
+            let original = (map[start] as usize, map[end - 1] as usize + 1);
+            Some((finding, original))
+        })
+        .collect()
+}
+
 pub(crate) fn findings_for_observation(
     observation_index: usize,
     text: &str,
     bounding_box: NormalizedBox,
     pixel_box: PixelBox,
+    refine: impl Fn(usize, usize) -> Option<(NormalizedBox, PixelBox)>,
 ) -> Vec<ImageFirewallFinding> {
-    // Vision 偶尔会在邮箱/API key 标点两侧插入空白；只规范化规则输入，
-    // observation.text 仍保留原始识别结果，坐标继续覆盖完整 observation。
-    let normalized = OCR_PUNCTUATION_SPACING
-        .get_or_init(|| Regex::new(r"[ \t]*([@=._])[ \t]*").expect("内建 OCR 归一化规则有效"))
-        .replace_all(text, "$1");
-    crate::privacy::scan_sensitive_text(ScanSensitiveRequest {
-        text: normalized.into_owned(),
-    })
-    .findings
-    .into_iter()
-    .map(|finding| ImageFirewallFinding {
-        id: format!("image-{observation_index}-{}", finding.id),
-        observation_index,
-        category: finding.category,
-        severity: finding.severity,
-        bounding_box,
-        pixel_box,
-        masked_preview: finding.masked_preview,
-        rule_id: finding.rule_id,
-    })
-    .collect()
+    scan_observation_text(text)
+        .into_iter()
+        .map(|(finding, (start, end))| {
+            // 字符级子框优先；Vision 拒绝该范围（或无句柄）时回退整条 observation 框。
+            let (finding_box, finding_pixels) =
+                refine(start, end).unwrap_or((bounding_box, pixel_box));
+            ImageFirewallFinding {
+                id: format!("image-{observation_index}-{}", finding.id),
+                observation_index,
+                category: finding.category,
+                severity: finding.severity,
+                bounding_box: finding_box,
+                pixel_box: finding_pixels,
+                masked_preview: finding.masked_preview,
+                rule_id: finding.rule_id,
+            }
+        })
+        .collect()
 }
 
 fn scan_uncached(
@@ -406,6 +466,19 @@ fn scan_uncached(
             &recognized.text,
             bounding_box,
             pixel_box,
+            |start, end| {
+                recognized
+                    .char_range_box(start, end)
+                    .map(|(x, y, w, h)| vision_box_to_top_left(x, y, w, h))
+                    .filter(|bounds| bounds.width > 0.0 && bounds.height > 0.0)
+                    .map(|bounds| {
+                        (
+                            bounds,
+                            normalized_to_pixels(bounds, width, height, MASK_PADDING_PX),
+                        )
+                    })
+                    .filter(|(_, pixels)| pixels.width > 0 && pixels.height > 0)
+            },
         ));
         if findings.len() > MAX_MASK_REGIONS {
             return Err("图片敏感区域过多，无法完整检查".into());
@@ -476,6 +549,87 @@ pub fn diagnostic_summary(result: &ScanImageFirewallResult, elapsed: Duration) -
     )
 }
 
+/// 复检的最小重叠比：observation 框过半落入遮挡区域才判失败。实色矩形内
+/// 不存在字形，过半重叠只可能来自坐标映射缺陷；小比例边缘相触是 Vision
+/// 框松弛的正常现象，不作为失败依据。
+const VERIFY_COVERED_RATIO_DENOMINATOR: u64 = 2;
+
+fn pixel_box_intersection_area(a: &PixelBox, b: &PixelBox) -> u64 {
+    let left = a.x.max(b.x);
+    let right = a.x.saturating_add(a.width).min(b.x.saturating_add(b.width));
+    let top = a.y.max(b.y);
+    let bottom = a.y.saturating_add(a.height).min(b.y.saturating_add(b.height));
+    if right <= left || bottom <= top {
+        return 0;
+    }
+    u64::from(right - left) * u64::from(bottom - top)
+}
+
+/// 复检契约（纯函数）：任何 OCR observation 框都不得有一半以上落在遮挡区域内。
+pub(crate) fn redacted_regions_still_show_text(
+    observation_boxes: &[PixelBox],
+    regions: &[PixelBox],
+) -> bool {
+    observation_boxes.iter().any(|observation| {
+        let area = u64::from(observation.width) * u64::from(observation.height);
+        if area == 0 {
+            return false;
+        }
+        let covered: u64 = regions
+            .iter()
+            .map(|region| pixel_box_intersection_area(observation, region))
+            .sum();
+        // 区域互相重叠会高估 covered——高估只会更严格，fail-closed 可接受。
+        covered * VERIFY_COVERED_RATIO_DENOMINATOR >= area
+    })
+}
+
+/// 对遮挡副本重新 OCR，证明「用户看到的黑框 = 机器读不到的区域」。
+/// Vision 基础设施错误不阻断（实色填充是确定性像素写入；复检针对的是
+/// 坐标映射缺陷，这类缺陷只会以「区域内识别出文字」的形态出现）。
+fn verify_redaction(
+    app: &AppHandle,
+    redacted: &RgbaImage,
+    regions: &[PixelBox],
+) -> Result<(), String> {
+    let mut png = Cursor::new(Vec::new());
+    DynamicImage::ImageRgba8(redacted.clone())
+        .write_to(&mut png, image::ImageFormat::Png)
+        .map_err(|error| format!("编码遮挡副本失败：{error}"))?;
+    let observations = match crate::ocr::recognize_observations(png.get_ref()) {
+        Ok(observations) => observations,
+        Err(_) => {
+            crate::diag::push(app, "图片遮挡复检跳过：复检 OCR 不可用");
+            return Ok(());
+        }
+    };
+    let (width, height) = (redacted.width(), redacted.height());
+    let boxes: Vec<PixelBox> = observations
+        .iter()
+        .map(|observation| {
+            let (x, y, box_width, box_height) = observation.vision_box;
+            normalized_to_pixels(
+                vision_box_to_top_left(x, y, box_width, box_height),
+                width,
+                height,
+                0,
+            )
+        })
+        .collect();
+    if redacted_regions_still_show_text(&boxes, regions) {
+        return Err("遮挡校验未通过：遮挡区域内仍能识别出文字，请扩大遮挡区域后重试".into());
+    }
+    crate::diag::push(
+        app,
+        format!(
+            "图片遮挡复检通过 regions={} residual_observations={}",
+            regions.len(),
+            boxes.len()
+        ),
+    );
+    Ok(())
+}
+
 pub fn redact(app: &AppHandle, request: RedactImageRequest) -> Result<RedactImageResult, String> {
     if request.regions.is_empty() {
         return Err("至少选择一个遮挡区域".into());
@@ -510,6 +664,7 @@ pub fn redact(app: &AppHandle, request: RedactImageRequest) -> Result<RedactImag
         return Err("遮挡区域不在图片范围内".into());
     }
     let redacted = solid_redacted_copy(&original, &regions);
+    verify_redaction(app, &redacted, &regions)?;
     let redacted_pixel_hash = pixel_hash(&redacted);
     let redacted_file = if request.persist {
         crate::storage::save_image_rgba(
@@ -833,9 +988,15 @@ mod tests {
             width: 60,
             height: 15,
         };
-        let first = findings_for_observation(0, "alice@example.com", first_box, first_pixels);
-        let second =
-            findings_for_observation(1, "api_key=abcdefghijklmnop", second_box, second_pixels);
+        let first =
+            findings_for_observation(0, "alice@example.com", first_box, first_pixels, |_, _| None);
+        let second = findings_for_observation(
+            1,
+            "api_key=abcdefghijklmnop",
+            second_box,
+            second_pixels,
+            |_, _| None,
+        );
 
         assert_eq!(first[0].observation_index, 0);
         assert_eq!(first[0].bounding_box, first_box);
@@ -864,6 +1025,7 @@ mod tests {
                 width: 80,
                 height: 20,
             },
+            |_, _| None,
         );
         assert!(findings
             .iter()
@@ -897,6 +1059,7 @@ mod tests {
                 width: 60,
                 height: 10,
             },
+            |_, _| None,
         )
         .remove(0);
         let json = serde_json::to_value(ScanImageFirewallResult {
@@ -916,5 +1079,99 @@ mod tests {
         assert!(json["findings"][0].get("observationIndex").is_some());
         assert!(json["findings"][0].get("pixelBox").is_some());
         assert_eq!(json["findings"][0]["category"], "email");
+    }
+
+    #[test]
+    fn redaction_verification_flags_text_majorly_inside_masks_only() {
+        let mask = PixelBox { x: 100, y: 100, width: 200, height: 50 };
+        let inside = PixelBox { x: 120, y: 110, width: 100, height: 30 };
+        let touching = PixelBox { x: 60, y: 96, width: 50, height: 10 };
+        let outside = PixelBox { x: 400, y: 300, width: 80, height: 20 };
+        assert!(redacted_regions_still_show_text(&[inside], &[mask]));
+        assert!(!redacted_regions_still_show_text(&[touching], &[mask]));
+        assert!(!redacted_regions_still_show_text(&[outside], &[mask]));
+        assert!(!redacted_regions_still_show_text(&[], &[mask]));
+
+        // 跨多个遮挡区域拼起来过半同样失败；恰好一半也按失败处理（fail-closed）
+        let left = PixelBox { x: 0, y: 0, width: 60, height: 20 };
+        let right = PixelBox { x: 60, y: 0, width: 60, height: 20 };
+        let spanning = PixelBox { x: 20, y: 0, width: 100, height: 20 };
+        assert!(redacted_regions_still_show_text(&[spanning], &[left, right]));
+        let half = PixelBox { x: 70, y: 0, width: 100, height: 20 };
+        assert!(redacted_regions_still_show_text(&[half], &[left, right]));
+    }
+
+    #[test]
+    fn normalization_offset_map_projects_units_back_including_cjk_and_emoji() {
+        let (normalized, map) = normalize_observation_text("a @ b");
+        assert_eq!(normalized, "a@b");
+        assert_eq!(map, vec![0, 2, 4]);
+
+        let (normalized, map) = normalize_observation_text("中 . 😀");
+        assert_eq!(normalized, "中.😀");
+        // 😀 占两个 UTF-16 单元，逐单元映射
+        assert_eq!(map, vec![0, 2, 4, 5]);
+
+        let (normalized, map) = normalize_observation_text("x=1");
+        assert_eq!(normalized, "x=1");
+        assert_eq!(map, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn scan_observation_text_returns_ranges_in_original_recognized_text() {
+        let text = "mail: fake.user @example.test 后缀";
+        let matches = scan_observation_text(text);
+        let (finding, (start, end)) = matches
+            .iter()
+            .find(|(finding, _)| finding.category == FindingCategory::Email)
+            .expect("email finding");
+        assert_eq!(finding.severity, FindingSeverity::Warn);
+        let units: Vec<u16> = text.encode_utf16().collect();
+        assert_eq!(
+            String::from_utf16(&units[*start..*end]).unwrap(),
+            "fake.user @example.test"
+        );
+    }
+
+    #[test]
+    fn refined_character_boxes_replace_observation_box_and_fall_back_on_none() {
+        let observation_box = NormalizedBox {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 0.2,
+        };
+        let observation_pixels = PixelBox {
+            x: 0,
+            y: 0,
+            width: 1_000,
+            height: 40,
+        };
+        let refined_box = NormalizedBox {
+            x: 0.4,
+            y: 0.02,
+            width: 0.3,
+            height: 0.16,
+        };
+        let refined_pixels = PixelBox {
+            x: 400,
+            y: 4,
+            width: 300,
+            height: 32,
+        };
+        let text = "联系 alice@example.com";
+        let refined = findings_for_observation(0, text, observation_box, observation_pixels, |start, end| {
+            assert!(start < end);
+            Some((refined_box, refined_pixels))
+        });
+        assert_eq!(refined[0].bounding_box, refined_box);
+        assert_eq!(refined[0].pixel_box, refined_pixels);
+
+        let fallback =
+            findings_for_observation(0, text, observation_box, observation_pixels, |_, _| None);
+        assert_eq!(fallback[0].bounding_box, observation_box);
+        assert_eq!(fallback[0].pixel_box, observation_pixels);
+        // 两条路径的 finding id 一致：细化只改框，不改身份
+        assert_eq!(refined[0].id, fallback[0].id);
     }
 }

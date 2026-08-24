@@ -42,6 +42,8 @@ export interface ImageFirewallItem {
   scanRevision: number;
   findings: ImageFirewallFinding[];
   redactedFindingIds: string[];
+  /** 用户逐项「明确保留」的 finding（与文本 excludedFindingIds 同语义）；重扫/还原即失效。 */
+  keptFindingIds: string[];
   /** 用户手工框选的实色遮挡区域；与 OCR finding 决策分开保存。 */
   manualRegions: ImagePixelBox[];
   rawConfirmation: RawPrivacyConfirmation | null;

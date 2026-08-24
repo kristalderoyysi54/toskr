@@ -35,6 +35,7 @@ import { rememberDeliveryRedactionMap } from "@/lib/resultReturn";
 import { isSafeRehearsalText } from "@/lib/onboarding";
 
 import type { DeliveryDraft } from "./types";
+import { allowedBlockFindingIds } from "./firewall";
 import { evaluateDeliveryDraftFirewall } from "./firewallController";
 import { evaluateDeliveryDraftImages } from "./imageFirewall";
 
@@ -544,6 +545,14 @@ export async function executeDeliveryDraft(
           : item.redactedPixelHash
       ),
       segments: draftSegmentsForSend(draft),
+      allowedTextFindingIds: allowedBlockFindingIds({
+        findings: draft.findings,
+        excludedFindingIds: draft.privacyDecision.excludedFindingIds,
+        rawConfirmation: draft.privacyDecision.rawConfirmation,
+        revision: draft.scanRevision,
+        targetToken: draft.targetSnapshot?.token ?? null,
+      }),
+      firewallTextEnabled: draft.firewallEnabled,
       pressEnter,
       keepPanel: panelPlan.keepNativeWindow,
       deliveryId: draft.id,

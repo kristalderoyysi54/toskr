@@ -374,7 +374,7 @@ describe("PreflightComposer", () => {
 
     const html = renderToStaticMarkup(<PreflightComposer />);
     expect(html).toContain('aria-label="本地隐私检查"');
-    expect(html).toContain("API 密钥 · 高风险 ×1");
+    expect(html).toContain("密钥/凭据 · 高风险 ×1");
     expect(html).toContain("fa•••en");
     expect(html).toContain("替换为占位符");
     expect(html).toContain("同类全部替换");
@@ -443,7 +443,7 @@ describe("PreflightComposer", () => {
     const html = renderToStaticMarkup(<PreflightComposer />);
 
     expect(html).toContain('aria-label="图片隐私检查"');
-    expect(html).toContain("请遮挡全部图片敏感区域");
+    expect(html).toContain("请遮挡或逐项明确保留全部图片敏感区域");
     expect(html).toContain("原图");
     expect(html).toContain('aria-label="查看图片 1 原图"');
     expect(html).toContain('title="点击查看原图"');

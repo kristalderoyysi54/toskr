@@ -9,6 +9,10 @@ pub use crate::pasteboard::ClipboardOutcome;
 use crate::pasteboard::PasteboardTransaction;
 use crate::target::{TargetReason, TargetSnapshot, ValidationGate};
 
+fn firewall_enabled_default() -> bool {
+    true
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendDeliveryRequest {
@@ -17,6 +21,14 @@ pub struct SendDeliveryRequest {
     pub image_files: Vec<String>,
     #[serde(default)]
     pub expected_image_pixel_hashes: Vec<Option<String>>,
+    /// 预检中被用户逐项保留/确认的高风险文本 finding id（`rule_id:start:end`）。
+    /// Native 发送前对 `text` 复扫，任何名单外的 Block finding 都拒发；
+    /// id 绑定内容与位置，正文一改即失配，陈旧确认自动失效。
+    #[serde(default)]
+    pub allowed_text_finding_ids: Vec<String>,
+    /// 缺省 true（fail-closed）：调用方漏传时按防火墙开启复核。
+    #[serde(default = "firewall_enabled_default")]
+    pub firewall_text_enabled: bool,
     /// 图文交错发送顺序（可选）。缺省时保持「文字整段在前、图片按清单序在后」。
     /// text 段必须是 `text` 字段的切片、image 段按下标引用 `image_files`，
     /// 完整性预读与像素哈希校验仍按清单执行，段只决定粘贴次序。
@@ -74,6 +86,8 @@ pub enum DeliveryReasonCode {
     PayloadEmpty,
     ImageUnreadable,
     ImageChanged,
+    PrivacyIncomplete,
+    PrivacyNativeBlocked,
     PasteFailed,
     EnterFailed,
     InternalError,
@@ -96,6 +110,8 @@ impl DeliveryReasonCode {
             Self::PayloadEmpty => "payload_empty",
             Self::ImageUnreadable => "image_unreadable",
             Self::ImageChanged => "image_changed",
+            Self::PrivacyIncomplete => "privacy_incomplete",
+            Self::PrivacyNativeBlocked => "privacy_native_blocked",
             Self::PasteFailed => "paste_failed",
             Self::EnterFailed => "enter_failed",
             Self::InternalError => "internal_error",
@@ -200,6 +216,12 @@ fn blocked_message(reason: DeliveryReasonCode) -> &'static str {
             "发送中止：目标应用未处于前台"
         }
         DeliveryReasonCode::DeliveryInProgress => "发送中止：已有发送正在进行",
+        DeliveryReasonCode::PrivacyIncomplete => {
+            "发送中止：文本超出本地隐私扫描上限，无法在发送前复核"
+        }
+        DeliveryReasonCode::PrivacyNativeBlocked => {
+            "发送中止：内容含未经预检确认的高风险敏感信息，请重新预检"
+        }
         _ => "发送中止",
     }
 }
@@ -368,6 +390,44 @@ pub fn execute_delivery(
             started_at_ms,
             false,
         );
+    }
+    // 原生防火墙门禁：不信任前端状态，对将要粘贴的最终文本原样复扫。
+    // 任何名单外的 Block finding 拒发；只要存在 Block（含已确认保留）就
+    // 强制关闭自动回车。此闸先于剪贴板事务与图片预读，无副作用可回滚。
+    let mut press_enter = request.press_enter;
+    if request.firewall_text_enabled && !request.text.is_empty() {
+        let scan = crate::privacy::scan_sensitive_text(crate::privacy::ScanSensitiveRequest {
+            text: request.text.clone(),
+        });
+        if !scan.complete {
+            return blocked_result(
+                runtime,
+                &request.delivery_id,
+                DeliveryReasonCode::PrivacyIncomplete,
+                Some(snapshot),
+                started_at_ms,
+                false,
+            );
+        }
+        let blocks = scan
+            .findings
+            .iter()
+            .filter(|finding| finding.severity == crate::privacy::FindingSeverity::Block)
+            .collect::<Vec<_>>();
+        if blocks
+            .iter()
+            .any(|finding| !request.allowed_text_finding_ids.contains(&finding.id))
+        {
+            return blocked_result(
+                runtime,
+                &request.delivery_id,
+                DeliveryReasonCode::PrivacyNativeBlocked,
+                Some(snapshot),
+                started_at_ms,
+                false,
+            );
+        }
+        press_enter = press_enter && blocks.is_empty();
     }
     let steps = match payload_steps(request) {
         Ok(steps) if !steps.is_empty() => steps,
@@ -556,7 +616,7 @@ pub fn execute_delivery(
         completed_pastes += 1;
     }
     let paste_completed = completed_pastes == expected_pastes;
-    if request.press_enter {
+    if press_enter {
         // Electron/WebView 编辑器通常异步消费 paste；过早的 Return 即使成功投递到
         // HID，也可能在编辑器提交状态就绪前被丢弃。图片落地更慢，单独留出余量。
         runtime.pause(enter_settle_ms(&steps));
@@ -1069,6 +1129,8 @@ mod tests {
             image_files: vec![],
             expected_image_pixel_hashes: vec![],
             segments: None,
+            allowed_text_finding_ids: vec![],
+            firewall_text_enabled: true,
             press_enter: true,
             keep_panel: false,
             delivery_id: "delivery-1".into(),
@@ -1097,6 +1159,109 @@ mod tests {
         )
         .expect_err("redacted tokens always require an expected hash");
         assert_eq!(missing.reason_code, DeliveryReasonCode::ImageChanged);
+    }
+
+    fn block_finding_ids(text: &str) -> Vec<String> {
+        crate::privacy::scan_sensitive_text(crate::privacy::ScanSensitiveRequest {
+            text: text.into(),
+        })
+        .findings
+        .into_iter()
+        .filter(|finding| finding.severity == crate::privacy::FindingSeverity::Block)
+        .map(|finding| finding.id)
+        .collect()
+    }
+
+    #[test]
+    fn native_gate_blocks_unauthorized_block_finding_without_side_effects() {
+        let mut runtime = FakeRuntime::default();
+        let mut req = request(Some("token-1"));
+        req.text = "api_key=super_secret_value_123456789".into();
+
+        let result = execute_delivery(&mut runtime, &req);
+
+        assert_eq!(result.status, DeliveryStatus::Blocked);
+        assert_eq!(result.reason_code, DeliveryReasonCode::PrivacyNativeBlocked);
+        assert!(!result.message.contains("super_secret_value"));
+        assert_eq!(runtime.window_calls, 0);
+        assert_eq!(runtime.activation_calls, 0);
+        assert_eq!(runtime.stage_calls, 0);
+        assert_eq!(runtime.paste_calls, 0);
+        assert_eq!(runtime.enter_calls, 0);
+    }
+
+    #[test]
+    fn native_gate_allows_explicitly_confirmed_block_but_clamps_enter() {
+        let mut runtime = FakeRuntime::default();
+        let text = "api_key=super_secret_value_123456789";
+        let mut req = request(Some("token-1"));
+        req.text = text.into();
+        req.allowed_text_finding_ids = block_finding_ids(text);
+        assert!(!req.allowed_text_finding_ids.is_empty());
+        req.press_enter = true;
+
+        let result = execute_delivery(&mut runtime, &req);
+
+        assert_eq!(result.status, DeliveryStatus::Sent);
+        assert!(!result.enter_pressed, "Block 命中存在时必须钳制自动回车");
+        assert_eq!(runtime.enter_calls, 0);
+        assert_eq!(runtime.paste_calls, 1);
+    }
+
+    #[test]
+    fn native_gate_rejects_stale_allowance_after_text_edit() {
+        let mut runtime = FakeRuntime::default();
+        let confirmed = "api_key=super_secret_value_123456789";
+        let mut req = request(Some("token-1"));
+        // 预检确认发生在旧正文；随后正文被改写（偏移漂移），旧名单必须失效。
+        req.allowed_text_finding_ids = block_finding_ids(confirmed);
+        req.text = format!("前缀改动 {confirmed}");
+
+        let result = execute_delivery(&mut runtime, &req);
+
+        assert_eq!(result.status, DeliveryStatus::Blocked);
+        assert_eq!(result.reason_code, DeliveryReasonCode::PrivacyNativeBlocked);
+        assert_eq!(runtime.paste_calls, 0);
+    }
+
+    #[test]
+    fn native_gate_fails_closed_on_oversize_text() {
+        let mut runtime = FakeRuntime::default();
+        let mut req = request(Some("token-1"));
+        req.text = "x".repeat(crate::privacy::MAX_SCAN_INPUT_BYTES + 1);
+
+        let result = execute_delivery(&mut runtime, &req);
+
+        assert_eq!(result.status, DeliveryStatus::Blocked);
+        assert_eq!(result.reason_code, DeliveryReasonCode::PrivacyIncomplete);
+        assert_eq!(runtime.paste_calls, 0);
+    }
+
+    #[test]
+    fn native_gate_passthrough_when_firewall_disabled() {
+        let mut runtime = FakeRuntime::default();
+        let mut req = request(Some("token-1"));
+        req.text = "api_key=super_secret_value_123456789".into();
+        req.firewall_text_enabled = false;
+        req.press_enter = true;
+
+        let result = execute_delivery(&mut runtime, &req);
+
+        assert_eq!(result.status, DeliveryStatus::Sent);
+        assert!(result.enter_pressed, "防火墙关闭时不做原生钳制");
+    }
+
+    #[test]
+    fn native_gate_ignores_warn_findings() {
+        let mut runtime = FakeRuntime::default();
+        let mut req = request(Some("token-1"));
+        req.text = "请联系 alice@example.com 获取报告".into();
+        req.press_enter = true;
+
+        let result = execute_delivery(&mut runtime, &req);
+
+        assert_eq!(result.status, DeliveryStatus::Sent);
+        assert!(result.enter_pressed, "Warn 级命中不触发原生拦截或回车钳制");
     }
 
     #[test]

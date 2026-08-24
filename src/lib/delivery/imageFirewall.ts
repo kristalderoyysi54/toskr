@@ -140,12 +140,14 @@ export function evaluateImageFirewallPolicy(
   let unresolvedWarns = 0;
   let anyBlock = failed.length > 0;
   let allWarnConfirmed = true;
+  let allBlockConfirmed = true;
   for (const item of input.items) {
-    const redacted = new Set(item.redactedFindingIds);
+    // 已遮挡与逐项「明确保留」的 finding 均视为已处理（与文本 excluded 同语义）。
+    const resolved = new Set([...item.redactedFindingIds, ...item.keptFindingIds]);
     const unresolved = item.findings.filter(
       (finding) =>
         (finding.severity === "warn" || finding.severity === "block") &&
-        !redacted.has(finding.id)
+        !resolved.has(finding.id)
     );
     const blocks = unresolved.filter((finding) => finding.severity === "block");
     const warns = unresolved.filter((finding) => finding.severity === "warn");
@@ -156,6 +158,9 @@ export function evaluateImageFirewallPolicy(
     if (warns.length) {
       allWarnConfirmed &&= confirmationCurrent(item, input.targetToken, "warn");
     }
+    if (blocks.length) {
+      allBlockConfirmed &&= confirmationCurrent(item, input.targetToken, "block");
+    }
   }
 
   if (input.policy === "requireRedaction") {
@@ -164,7 +169,7 @@ export function evaluateImageFirewallPolicy(
       forcePressEnterOff: anyBlock,
       needsRawConfirmation: null,
       unresolvedCount,
-      reason: unresolvedCount ? "请遮挡全部图片敏感区域" : null,
+      reason: unresolvedCount ? "请遮挡或逐项明确保留全部图片敏感区域" : null,
     };
   }
   if (input.policy === "confirmRaw") {
@@ -174,7 +179,7 @@ export function evaluateImageFirewallPolicy(
         forcePressEnterOff: true,
         needsRawConfirmation: null,
         unresolvedCount,
-        reason: "图片高风险区域必须遮挡",
+        reason: "图片高风险区域必须遮挡或逐项明确保留",
       };
     }
     return {
@@ -189,12 +194,14 @@ export function evaluateImageFirewallPolicy(
           : null,
     };
   }
+  // allowRaw：未处理 block 可经 item 级 block 确认放行（与文本全局确认对齐）。
+  const blocksConfirmed = unresolvedBlocks === 0 || allBlockConfirmed;
   return {
-    canSend: unresolvedBlocks === 0,
+    canSend: blocksConfirmed,
     forcePressEnterOff: anyBlock,
-    needsRawConfirmation: null,
+    needsRawConfirmation: blocksConfirmed ? null : "block",
     unresolvedCount,
-    reason: unresolvedBlocks > 0 ? "图片高风险区域必须遮挡" : null,
+    reason: blocksConfirmed ? null : "图片高风险原文需要再次确认",
   };
 }
 
@@ -454,6 +461,7 @@ export async function rescanOpenDeliveryDraftPrivacy(
     height: null,
     findings: [],
     redactedFindingIds: [],
+    keptFindingIds: [],
     manualRegions: [],
     rawConfirmation: null,
     failureMessage: null,
@@ -508,14 +516,20 @@ export function clearDeliveryDraftImages(): void {
   });
 }
 
+function pixelBoxKey(box: ImagePixelBox) {
+  return `${box.x}:${box.y}:${box.width}:${box.height}`;
+}
+
 function selectedFindingIds(item: ImageFirewallItem, findingId?: string) {
   if (!findingId) return new Set(item.findings.map((finding) => finding.id));
   const selected = item.findings.find((finding) => finding.id === findingId);
   if (!selected) return new Set<string>();
-  // Vision 给出的是整条观察框；遮挡一个 finding 会实际覆盖同一观察内全部 finding。
+  // 字符级框各自独立遮挡；仅当多个 finding 退回同一整条观察框（像素框完全
+  // 相同）时，遮挡一个才顺带覆盖其余同框 finding。
+  const selectedKey = pixelBoxKey(selected.pixelBox);
   return new Set(
     item.findings
-      .filter((finding) => finding.observationIndex === selected.observationIndex)
+      .filter((finding) => pixelBoxKey(finding.pixelBox) === selectedKey)
       .map((finding) => finding.id)
   );
 }
@@ -787,6 +801,7 @@ export function restoreOpenDeliveryImage(originalFile: string): void {
     sendFile: item.originalFile,
     redactedPixelHash: null,
     redactedFindingIds: [],
+    keptFindingIds: [],
     manualRegions: [],
     rawConfirmation: null,
   };
@@ -824,6 +839,40 @@ export function confirmOpenDeliveryImageRaw(
       targetToken: draft.targetSnapshot?.token ?? null,
       level,
     },
+  };
+  useDeliveryStore.setState({
+    draft: {
+      ...draft,
+      imageFirewall: replaceImageFirewallItem(
+        draft.imageFirewall,
+        originalFile,
+        replacement
+      ),
+    },
+    lastError: null,
+  });
+}
+
+/**
+ * 逐项「明确保留」图片 finding：与文本 excludeFirewallFinding 同语义。
+ * 保留会作废该图旧的批量确认；重扫、还原原图后保留决定随之失效。
+ */
+export function keepOpenDeliveryImageFinding(
+  originalFile: string,
+  findingId: string
+): void {
+  const state = useDeliveryStore.getState();
+  const draft = state.draft;
+  const item = draft?.imageFirewall.find((entry) => entry.originalFile === originalFile);
+  if (
+    !state.open || !draft || !item || item.status !== "ready" ||
+    !item.findings.some((finding) => finding.id === findingId) ||
+    item.keptFindingIds.includes(findingId)
+  ) return;
+  const replacement = {
+    ...item,
+    keptFindingIds: [...item.keptFindingIds, findingId],
+    rawConfirmation: null,
   };
   useDeliveryStore.setState({
     draft: {

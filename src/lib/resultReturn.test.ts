@@ -174,6 +174,46 @@ describe("result return", () => {
     expect(previewRestoredPlaceholders("delivery-1", "Hi [EMAIL_01]")).toBeNull();
   });
 
+  it("凭据 Secret 占位符不进入可逆映射，PII 照常还原", () => {
+    rememberDeliveryRedactionMap("delivery-1", {
+      "sk_live_secret_value_123456": "[API_KEY_01]",
+      "-----BEGIN PRIVATE KEY-----abc": "[PRIVATE_KEY_01]",
+      "postgres://a:b@db/app": "[DATABASE_URL_01]",
+      "Bearer abcdefghijklmnop": "[AUTHORIZATION_01]",
+      "sid=abcdefghijklmnop": "[COOKIE_01]",
+      "sess_abcdefghijklmnop": "[SESSION_01]",
+      "alice@example.com": "[EMAIL_01]",
+      "13800138000": "[PHONE_01]",
+      "张三": "[USER_01]",
+    }, "[API_KEY_01] [EMAIL_01] [USER_01] [PHONE_01]");
+    const restored = previewRestoredPlaceholders(
+      "delivery-1",
+      "[API_KEY_01] [PRIVATE_KEY_01] [DATABASE_URL_01] [AUTHORIZATION_01] [COOKIE_01] [SESSION_01] [EMAIL_01] [PHONE_01] [USER_01]"
+    );
+    expect(restored).toEqual({
+      text: "[API_KEY_01] [PRIVATE_KEY_01] [DATABASE_URL_01] [AUTHORIZATION_01] [COOKIE_01] [SESSION_01] alice@example.com 13800138000 张三",
+      replacedCount: 3,
+    });
+    // 计数与指纹证据保留全量占位符（含 Secret），用于自动归位判定
+    expect(deliveryPlaceholderCounts("delivery-1")).toMatchObject({
+      "[API_KEY_01]": 1,
+      "[EMAIL_01]": 1,
+    });
+    expect(deliveryPlaceholderEvidence("delivery-1", "回复 [API_KEY_01]")).toBe(true);
+  });
+
+  it("全部命中都是 Secret 时映射视为不可用，但指纹证据仍在", () => {
+    rememberDeliveryRedactionMap("delivery-1", {
+      "sk_live_secret_value_123456": "[API_KEY_01]",
+    }, "请求头 [API_KEY_01]");
+    expect(deliveryRedactionMapAvailable("delivery-1")).toBe(false);
+    expect(previewRestoredPlaceholders("delivery-1", "[API_KEY_01]")).toEqual({
+      text: "[API_KEY_01]",
+      replacedCount: 0,
+    });
+    expect(deliveryPlaceholderEvidence("delivery-1", "回复 [API_KEY_01]")).toBe(true);
+  });
+
   it("会话映射最多保留 32 个 delivery，淘汰最旧项", () => {
     for (let index = 0; index < 33; index += 1) {
       rememberDeliveryRedactionMap(`delivery-${index}`, {

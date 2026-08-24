@@ -64,6 +64,8 @@ const STATUS_LABEL: Record<DeliveryEvent["status"], string> = {
 /** blocked 一词多因：不区分会让「目标未就绪中止」被误读成隐私拦截。 */
 const BLOCKED_REASON_LABEL: Record<string, string> = {
   privacy_gate_blocked: "隐私拦截",
+  privacy_native_blocked: "隐私拦截（发送前复核）",
+  privacy_incomplete: "内容超长，隐私复核未完成",
   "target-not-ready": "目标未就绪，已中止",
   "target-refresh-failed": "目标未就绪，已中止",
   "draft-stale": "内容已变化，已中止",

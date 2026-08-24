@@ -54,6 +54,7 @@ function item(patch: Partial<ImageFirewallItem> = {}): ImageFirewallItem {
     scanRevision: 1,
     findings: [blockFinding],
     redactedFindingIds: [],
+    keptFindingIds: [],
     manualRegions: [],
     rawConfirmation: null,
     failureMessage: null,
@@ -131,6 +132,18 @@ describe("image Firewall", () => {
       targetToken: "target-a",
     })).toMatchObject({ canSend: true, unresolvedCount: 0 });
 
+    // 用户裁决（2026-08-24）：allowRaw 下未处理 block 可经 item 级 block 确认
+    // 放行（与文本 allowRaw 全局确认对齐），但自动回车仍强制关闭。
+    expect(evaluateImageFirewallPolicy({
+      enabled: true,
+      items: [item()],
+      policy: "allowRaw",
+      targetToken: "target-a",
+    })).toMatchObject({
+      canSend: false,
+      needsRawConfirmation: "block",
+      reason: "图片高风险原文需要再次确认",
+    });
     expect(evaluateImageFirewallPolicy({
       enabled: true,
       items: [item({
@@ -142,11 +155,35 @@ describe("image Firewall", () => {
       })],
       policy: "allowRaw",
       targetToken: "target-a",
-    })).toMatchObject({
-      canSend: false,
-      needsRawConfirmation: null,
-      reason: "图片高风险区域必须遮挡",
-    });
+    })).toMatchObject({ canSend: true, forcePressEnterOff: true });
+    expect(evaluateImageFirewallPolicy({
+      enabled: true,
+      items: [item({
+        rawConfirmation: {
+          revision: 1,
+          targetToken: "target-a",
+          level: "block",
+        },
+      })],
+      policy: "allowRaw",
+      targetToken: "target-b",
+    })).toMatchObject({ canSend: false, needsRawConfirmation: "block" });
+  });
+
+  it("逐项明确保留视为已处理：三档策略均放行，自动回车仍禁", () => {
+    for (const policy of ["requireRedaction", "confirmRaw", "allowRaw"] as const) {
+      expect(evaluateImageFirewallPolicy({
+        enabled: true,
+        items: [item({ keptFindingIds: [blockFinding.id] })],
+        policy,
+        targetToken: "target-a",
+      })).toMatchObject({
+        canSend: true,
+        unresolvedCount: 0,
+        forcePressEnterOff: true,
+        needsRawConfirmation: null,
+      });
+    }
   });
 
   it("OCR 失败不会静默当安全：严格方案阻断，其他方案也必须显式确认", () => {

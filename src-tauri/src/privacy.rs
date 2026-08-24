@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_SCAN_INPUT_BYTES: usize = 2 * 1024 * 1024;
 /// OCR 缓存与规则结果的显式失效版本。任何检测规则语义变化都必须递增。
-pub const FIREWALL_RULE_VERSION: u32 = 1;
+/// v2：新增 provider 规则包（AWS/GitHub/GitLab/Slack/Stripe/Google/OpenAI/
+/// Anthropic/npm/Telegram/JWT/PGP）与 .env 敏感字段行规则。
+pub const FIREWALL_RULE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -114,6 +116,19 @@ static IPV4_RE: OnceLock<Regex> = OnceLock::new();
 static COOKIE_HEADER_RE: OnceLock<Regex> = OnceLock::new();
 static COOKIE_FIELD_RE: OnceLock<Regex> = OnceLock::new();
 static SESSION_FIELD_RE: OnceLock<Regex> = OnceLock::new();
+static AWS_ACCESS_KEY_RE: OnceLock<Regex> = OnceLock::new();
+static GITHUB_TOKEN_RE: OnceLock<Regex> = OnceLock::new();
+static GITLAB_TOKEN_RE: OnceLock<Regex> = OnceLock::new();
+static SLACK_TOKEN_RE: OnceLock<Regex> = OnceLock::new();
+static SLACK_WEBHOOK_RE: OnceLock<Regex> = OnceLock::new();
+static STRIPE_KEY_RE: OnceLock<Regex> = OnceLock::new();
+static GOOGLE_API_KEY_RE: OnceLock<Regex> = OnceLock::new();
+static ANTHROPIC_KEY_RE: OnceLock<Regex> = OnceLock::new();
+static OPENAI_KEY_RE: OnceLock<Regex> = OnceLock::new();
+static NPM_TOKEN_RE: OnceLock<Regex> = OnceLock::new();
+static TELEGRAM_BOT_RE: OnceLock<Regex> = OnceLock::new();
+static JWT_RE: OnceLock<Regex> = OnceLock::new();
+static ENV_SECRET_RE: OnceLock<Regex> = OnceLock::new();
 
 fn built_in_regex(cell: &'static OnceLock<Regex>, pattern: &'static str) -> &'static Regex {
     cell.get_or_init(|| Regex::new(pattern).expect("内建隐私规则必须是有效正则"))
@@ -218,6 +233,66 @@ fn basic_secret(value: &str, _: usize, _: usize, _: &Captures<'_>) -> bool {
 fn pem_block(value: &str, _: usize, _: usize, captures: &Captures<'_>) -> bool {
     !value.is_empty()
         && captures.name("begin").map(|m| m.as_str()) == captures.name("end").map(|m| m.as_str())
+}
+
+/// JWT：三段 base64url 之外，还要求首段可解码且是含 "alg" 的 JSON 头。
+fn jwt_token(value: &str, _: usize, _: usize, _: &Captures<'_>) -> bool {
+    let mut parts = value.split('.');
+    let (Some(header), Some(_payload), Some(signature)) =
+        (parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    if parts.next().is_some() || signature.is_empty() {
+        return false;
+    }
+    let Ok(decoded) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(header) else {
+        return false;
+    };
+    std::str::from_utf8(&decoded).is_ok_and(|text| {
+        text.trim_start().starts_with('{') && text.contains("\"alg\"")
+    })
+}
+
+/// .env/配置行敏感字段值：排除占位词、插值表达式、纯 URL 与文件路径。
+fn env_secret(value: &str, _: usize, _: usize, _: &Captures<'_>) -> bool {
+    if value.chars().count() < 8 {
+        return false;
+    }
+    if matches!(
+        value.to_ascii_lowercase().as_str(),
+        "placeholder"
+            | "changeme"
+            | "change_me"
+            | "your_password"
+            | "your_api_key"
+            | "your_secret"
+            | "example_value"
+            | "disabled"
+            | "redacted"
+    ) {
+        return false;
+    }
+    // ${VAR} / $(cmd) / <填写> / %VAR% 这类模板值不是真实凭据。
+    if value.starts_with("${")
+        || value.starts_with("$(")
+        || value.starts_with('<')
+        || value.starts_with('%')
+    {
+        return false;
+    }
+    // 不带 userinfo 的裸 URL（token 端点等）与多段文件路径不按凭据值告警；
+    // 带凭据的 URL 由 databaseUrl/authorization 规则负责。
+    let lower = value.to_ascii_lowercase();
+    if (lower.starts_with("http://") || lower.starts_with("https://")) && !value.contains('@') {
+        return false;
+    }
+    if (value.starts_with('/') || value.starts_with("./") || value.starts_with("~/"))
+        && value[1..].contains('/')
+    {
+        return false;
+    }
+    true
 }
 
 fn valid_email(value: &str, _: usize, _: usize, _: &Captures<'_>) -> bool {
@@ -397,7 +472,7 @@ fn collect_candidates(text: &str) -> Vec<Candidate> {
         text,
         built_in_regex(
             &PEM_RE,
-            r"(?s)-----BEGIN (?P<begin>(?:(?:RSA|EC|DSA|OPENSSH|ENCRYPTED) )?PRIVATE KEY)-----.*?-----END (?P<end>(?:(?:RSA|EC|DSA|OPENSSH|ENCRYPTED) )?PRIVATE KEY)-----",
+            r"(?s)-----BEGIN (?P<begin>(?:(?:RSA|EC|DSA|OPENSSH|ENCRYPTED|PGP) )?PRIVATE KEY(?: BLOCK)?)-----.*?-----END (?P<end>(?:(?:RSA|EC|DSA|OPENSSH|ENCRYPTED|PGP) )?PRIVATE KEY(?: BLOCK)?)-----",
         ),
         RuleSpec {
             capture_name: None,
@@ -593,6 +668,112 @@ fn collect_candidates(text: &str) -> Vec<Candidate> {
             },
         });
     }
+    // Provider 规则包：前缀/结构高置信 token，无需上下文关键词即可判定。
+    // 都挂在既有类别下（rule_id 区分 provider），避免扩散前端类别契约。
+    for (cell, pattern, rule_id, validator) in [
+        (
+            &AWS_ACCESS_KEY_RE,
+            r"\b(?P<secret>(?:AKIA|ASIA)[0-9A-Z]{16})\b",
+            "token.provider_aws_access_key_id",
+            always_valid as fn(&str, usize, usize, &Captures<'_>) -> bool,
+        ),
+        (
+            &GITHUB_TOKEN_RE,
+            r"\b(?P<secret>gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{22,255})\b",
+            "token.provider_github",
+            always_valid,
+        ),
+        (
+            &GITLAB_TOKEN_RE,
+            r"\b(?P<secret>glpat-[A-Za-z0-9_\-]{20,})\b",
+            "token.provider_gitlab",
+            always_valid,
+        ),
+        (
+            &SLACK_TOKEN_RE,
+            r"\b(?P<secret>xox[baprs]-[A-Za-z0-9\-]{10,})\b",
+            "token.provider_slack",
+            always_valid,
+        ),
+        (
+            &SLACK_WEBHOOK_RE,
+            r"(?P<secret>https://hooks\.slack\.com/services/T[A-Za-z0-9]{5,}/B[A-Za-z0-9]{5,}/[A-Za-z0-9]{10,})",
+            "token.provider_slack_webhook",
+            always_valid,
+        ),
+        (
+            &STRIPE_KEY_RE,
+            r"\b(?P<secret>[rs]k_(?:live|test)_[A-Za-z0-9]{16,})\b",
+            "token.provider_stripe",
+            always_valid,
+        ),
+        (
+            &GOOGLE_API_KEY_RE,
+            r"\b(?P<secret>AIza[0-9A-Za-z_\-]{35})\b",
+            "token.provider_google_api_key",
+            always_valid,
+        ),
+        (
+            &ANTHROPIC_KEY_RE,
+            r"\b(?P<secret>sk-ant-[A-Za-z0-9_\-]{24,})\b",
+            "token.provider_anthropic",
+            always_valid,
+        ),
+        (
+            &OPENAI_KEY_RE,
+            r"\b(?P<secret>sk-[A-Za-z0-9_\-]{32,})\b",
+            "token.provider_openai",
+            always_valid,
+        ),
+        (
+            &NPM_TOKEN_RE,
+            r"\b(?P<secret>npm_[A-Za-z0-9]{36})\b",
+            "token.provider_npm",
+            always_valid,
+        ),
+        (
+            &TELEGRAM_BOT_RE,
+            r"\b(?P<secret>[0-9]{8,10}:AA[A-Za-z0-9_\-]{30,40})\b",
+            "token.provider_telegram_bot",
+            always_valid,
+        ),
+        (
+            &ENV_SECRET_RE,
+            // 敏感词干后缀锚定：PASSWORD_MIN_LENGTH / SECRET_KEY_FILE 这类
+            // 「词干在中间」的配置键天然不命中，降低 Block 级误报。
+            r#"(?im)^[ \t]*(?:export[ \t]+)?[A-Z0-9_]*(?:PASSWORD|PASSWD|SECRET|TOKEN|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIALS?)[ \t]*[:=][ \t]*["']?(?P<secret>[^\s"']{8,})"#,
+            "token.env_sensitive_field",
+            env_secret,
+        ),
+    ] {
+        add_capture_candidates(
+            text,
+            built_in_regex(cell, pattern),
+            RuleSpec {
+                capture_name: Some("secret"),
+                category: FindingCategory::ApiKey,
+                severity: FindingSeverity::Block,
+                rule_id,
+            },
+            validator,
+            &mut candidates,
+        );
+    }
+    add_capture_candidates(
+        text,
+        built_in_regex(
+            &JWT_RE,
+            r"\b(?P<secret>eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{6,}\.[A-Za-z0-9_\-]{10,})\b",
+        ),
+        RuleSpec {
+            capture_name: Some("secret"),
+            category: FindingCategory::Authorization,
+            severity: FindingSeverity::Block,
+            rule_id: "credential.jwt",
+        },
+        jwt_token,
+        &mut candidates,
+    );
     for (cell, pattern, category, rule_id) in [
         (
             &COOKIE_HEADER_RE,
@@ -826,7 +1007,122 @@ mod tests {
                 "api_key = short",
                 "secret: disabled",
                 "token count = 12",
-                "not_api_key = abcdefghijklmnop",
+                // 行中位置：上下文规则仍须 \b 边界，env 行规则只认行首键
+                "note: not_api_key = abcdefghijklmnop",
+                "the secret garden is a book",
+            ],
+        );
+    }
+
+    #[test]
+    fn pgp_private_key_block_is_detected() {
+        let result = scan(
+            "-----BEGIN PGP PRIVATE KEY BLOCK-----\nYWJjZGVmZ2hpamtsbW5vcA==\n-----END PGP PRIVATE KEY BLOCK-----",
+        );
+        assert!(has_category(&result, FindingCategory::PrivateKey));
+        assert!(!has_category(
+            &scan("-----BEGIN PGP PUBLIC KEY BLOCK-----\nYWJj\n-----END PGP PUBLIC KEY BLOCK-----"),
+            FindingCategory::PrivateKey
+        ));
+    }
+
+    #[test]
+    fn provider_token_rules_have_five_positive_and_negative_cases() {
+        // 全部为 synthetic 构造值；前缀真实、载荷杜撰。
+        assert_rule_cases(
+            FindingCategory::ApiKey,
+            &[
+                "AKIAIOSFODNN7EXAMPLE".into(),
+                "ASIAJEXAMPLE12345678".into(),
+                "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".into(),
+                "gho_abcdefghijklmnopqrstuvwxyz0123456789".into(),
+                "github_pat_11ABCDEFGH0123456789ab_cdefghijklmnopqrstuv".into(),
+                "glpat-ABCDEFGHIJ1234567890".into(),
+                "xoxb-1234567890-ABCDEFGHIJKL".into(),
+                "https://hooks.slack.com/services/T0AAAA1/B0BBBB2/abcdefghijklmnop".into(),
+                "sk_live_ABCDEFGH12345678".into(),
+                "rk_test_ZYXWVUTS87654321".into(),
+                "AIzaSyA1234567890abcdefghijklmnopqrstuv".into(),
+                "sk-ant-api03-abcdefghijklmnopqrstuvwxyz012345".into(),
+                "sk-proj-abcdefghijklmnopqrstuvwxyz1234567890".into(),
+                "npm_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".into(),
+                "110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw".into(),
+            ],
+            &[
+                "AKIA12345678",
+                "akiaiosfodnn7example",
+                "ghp_short",
+                "glpat-short",
+                "xoxq-1234567890-ABCDEFGHIJKL",
+                "pk_live_ABCDEFGH12345678",
+                "sk_live_short",
+                "AIzaShort",
+                "sk-learn",
+                "sk-proj",
+                "npm_tooshort",
+                "12345:AAshort",
+                "version 1.2.3 released",
+            ],
+        );
+    }
+
+    #[test]
+    fn anthropic_prefix_wins_rule_attribution_over_generic_openai() {
+        let result = scan("sk-ant-api03-abcdefghijklmnopqrstuvwxyz012345");
+        assert_eq!(result.findings.len(), 1);
+        assert_eq!(result.findings[0].rule_id, "token.provider_anthropic");
+    }
+
+    fn fake_jwt(header_json: &str, payload_json: &str) -> String {
+        let encode = |part: &str| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(part.as_bytes())
+        };
+        format!(
+            "{}.{}.{}",
+            encode(header_json),
+            encode(payload_json),
+            "sig-abcdefghijklmnop"
+        )
+    }
+
+    #[test]
+    fn jwt_rules_have_five_positive_and_negative_cases() {
+        assert_rule_cases(
+            FindingCategory::Authorization,
+            &[
+                fake_jwt(r#"{"alg":"HS256","typ":"JWT"}"#, r#"{"sub":"1234567890"}"#),
+                fake_jwt(r#"{"alg":"RS256","typ":"JWT"}"#, r#"{"scope":"admin"}"#),
+                fake_jwt(r#"{"alg":"ES256"}"#, r#"{"exp":1700000000}"#),
+                fake_jwt(r#"{"alg":"none"}"#, r#"{"uid":"synthetic"}"#),
+                format!("请求头 token: {}", fake_jwt(r#"{"alg":"HS512"}"#, r#"{"k":"v"}"#)),
+            ],
+            &[
+                "abc.def.ghi",
+                "eyJub2FsZyI6dHJ1ZX0.eyJzdWIiOiIxIn0.abcdefghijklmnop",
+                "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0",
+                "file.name.txt",
+                "版本 1.10.2 与 2.11.3 对比",
+            ],
+        );
+    }
+
+    #[test]
+    fn env_sensitive_field_rules_have_five_positive_and_negative_cases() {
+        assert_rule_cases(
+            FindingCategory::ApiKey,
+            &[
+                "DB_PASSWORD=hunter2secret".into(),
+                "export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIK7MDENGbPxSYNTHETIC".into(),
+                "REDIS_PASSWORD: redis_pass_123".into(),
+                "MY_APP_TOKEN='tok_abcdef123456'".into(),
+                "SERVICE_CREDENTIALS=cred_0123456789".into(),
+            ],
+            &[
+                "PASSWORD_MIN_LENGTH=12",
+                "TOKEN_ENV=${SECRET_FROM_ENV}",
+                "SECRET_KEY_FILE=/run/secrets/app_key",
+                "PASSWORD_RESET_URL=https://example.com/reset",
+                "API_KEY=changeme",
                 "the secret garden is a book",
             ],
         );
