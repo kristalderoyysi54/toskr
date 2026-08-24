@@ -11,7 +11,7 @@ import {
   VenetianMask,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ApplicationIcon } from "@/components/ApplicationIcon";
 import { ImageFirewallPanel } from "@/components/ImageFirewallPanel";
@@ -52,6 +52,7 @@ import {
   updateOpenPreflightDraft,
 } from "@/lib/delivery/preflight";
 import { imageListLabel } from "@/lib/format";
+import { textareaSelectionAnchor } from "@/lib/selectionAnchor";
 import { useNoteThumb } from "@/lib/media";
 import { tip } from "@/lib/tip";
 import { ENTER_POLICY_STATUS_LABEL } from "@/lib/targetLens";
@@ -143,6 +144,17 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
   );
   const dialogRef = useRef<HTMLDivElement>(null);
   const finalTextRef = useRef<HTMLTextAreaElement>(null);
+  // 命中定位的闪烁高亮框（相对最终文本框的视口坐标）；2s 自动消失
+  const [locateHighlight, setLocateHighlight] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const locateHighlightTimer = useRef(0);
+  // 定位自身的程序化 scrollTop 也会异步触发 scroll 事件，不能把刚设的高亮清掉
+  const locateScrollGuardUntil = useRef(0);
+  useEffect(() => () => window.clearTimeout(locateHighlightTimer.current), []);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
   const staleCacheRef = useRef<{
     inputs: readonly unknown[];
@@ -473,8 +485,40 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
   const locateFinding = (start: number, end: number) => {
     useDeliveryStore.getState().setActiveSection("content");
     window.setTimeout(() => {
-      finalTextRef.current?.focus();
-      finalTextRef.current?.setSelectionRange(start, end);
+      const textarea = finalTextRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(start, end);
+      // 长文本里原生选区可能在视口外且不显眼（用户反馈「不知道在哪」）：
+      // 镜像测量命中坐标 → textarea 内部滚到命中行居中 → 叠 2s 呼吸高亮框
+      const head = textareaSelectionAnchor(textarea, { start, end });
+      if (!head) return;
+      const contentTop = head.top + textarea.scrollTop;
+      const lineHeight = head.bottom - head.top;
+      textarea.scrollTop = Math.max(
+        0,
+        contentTop - (textarea.clientHeight - lineHeight) / 2
+      );
+      textarea.scrollIntoView({ block: "nearest" });
+      const tail = textareaSelectionAnchor(textarea, { start: end, end });
+      const sameLine =
+        tail && Math.abs(tail.top + textarea.scrollTop - contentTop) < 1;
+      // 跨行命中只框起始行到行尾（原生选区仍整段高亮，框负责引导视线）
+      const width = sameLine
+        ? Math.max(tail.left - head.left, 12)
+        : Math.max(textarea.clientWidth - head.left - 8, 12);
+      setLocateHighlight({
+        left: head.left - 4,
+        top: contentTop - textarea.scrollTop - 3,
+        width: width + 8,
+        height: lineHeight + 6,
+      });
+      locateScrollGuardUntil.current = performance.now() + 200;
+      window.clearTimeout(locateHighlightTimer.current);
+      locateHighlightTimer.current = window.setTimeout(
+        () => setLocateHighlight(null),
+        2000
+      );
     });
   };
   /** 隐私命中一键升级为词典实体；草稿未被手工编辑时顺带重建（自动替换+重扫描）。 */
@@ -1098,15 +1142,32 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                 <RotateCcw className="size-3" /> 恢复自动组装
               </Button>
             </div>
-            <textarea
-              ref={finalTextRef}
-              id="preflight-final-text"
-              value={draft.finalText}
-              disabled={busy}
-              spellCheck={false}
-              onChange={(event) => useDeliveryStore.getState().setFinalText(event.target.value)}
-              className="min-h-24 flex-1 resize-none rounded-lg border border-border bg-background/70 p-2 font-mono text-body leading-relaxed outline-none focus:border-primary/60 focus:ring-2 focus:ring-primary/20"
-            />
+            <div className="relative min-h-24 flex-1">
+              <textarea
+                ref={finalTextRef}
+                id="preflight-final-text"
+                value={draft.finalText}
+                disabled={busy}
+                spellCheck={false}
+                onChange={(event) => {
+                  setLocateHighlight(null); // 文本一改，命中坐标即失效
+                  useDeliveryStore.getState().setFinalText(event.target.value);
+                }}
+                onScroll={() => {
+                  // 手动滚动时高亮框不跟随内容，立即撤（定位自身的滚动除外）
+                  if (performance.now() < locateScrollGuardUntil.current) return;
+                  setLocateHighlight(null);
+                }}
+                className="size-full resize-none rounded-lg border border-border bg-background/70 p-2 font-mono text-body leading-relaxed outline-none focus:border-primary/60 focus:ring-2 focus:ring-primary/20"
+              />
+              {locateHighlight && (
+                <div
+                  aria-hidden
+                  className="locate-highlight pointer-events-none absolute"
+                  style={locateHighlight}
+                />
+              )}
+            </div>
             {draft.originalImageFiles.length > 0 && (
               <div className="shrink-0 space-y-1">
                 <div className="flex items-center gap-2">
