@@ -7,6 +7,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Pencil,
+  Pin,
   Redo2,
   Send,
   Shield,
@@ -138,6 +139,8 @@ export default function ImagePreviewView() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // 拖拽图片悬停提示（松开添加）
   const [dropActive, setDropActive] = useState(false);
+  // 📌 固定窗口：发送后不自动关窗；主动关闭（X/Esc/空格）与数据失效关窗不受影响
+  const [winPinned, setWinPinned] = useState(false);
   // 备注编辑镜像 + 会话账本：interval / 事件监听闭包只读 ref，不受旧 state 影响
   const captionRef = useRef({
     editing,
@@ -793,7 +796,7 @@ export default function ImagePreviewView() {
 
   const send = () => {
     if (!noteId || dataGeneration === null) return;
-    close();
+    if (!winPinned) close();
     void emitTo("main", "toskr://note-send", {
       id: noteId,
       dataGeneration,
@@ -909,6 +912,20 @@ export default function ImagePreviewView() {
         </span>
         {!imageEditing && !editing && (
           <div className="ml-auto flex items-center gap-1">
+            {noteId && dataGeneration !== null && (
+              <IconButton
+                label={winPinned ? "取消固定（发送后恢复自动关窗）" : "固定窗口：发送后保持打开"}
+                size="xs"
+                pressed={winPinned}
+                onClick={() => setWinPinned((value) => !value)}
+                className={cn(
+                  "text-foreground/60 hover:bg-foreground/10 hover:text-foreground focus-visible:ring-ring focus-visible:ring-offset-0",
+                  winPinned && "bg-foreground/10 text-foreground"
+                )}
+              >
+                <Pin className="size-3.5" fill={winPinned ? "currentColor" : "none"} />
+              </IconButton>
+            )}
             {imageEditTarget && (
               <IconButton
                 ref={imageEditTriggerRef}

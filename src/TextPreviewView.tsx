@@ -8,6 +8,7 @@ import {
   ExternalLink,
   ImagePlus,
   Pencil,
+  Pin,
   Send,
   TextSelect,
   X,
@@ -332,6 +333,8 @@ export default function TextPreviewView() {
     NoteContentBlock[]
   >([]);
   const [mdView, setMdView] = useState(false);
+  // 📌 固定窗口：发送/发送选中后不自动关窗；主动关闭（X/Esc/空格）与数据失效关窗不受影响
+  const [winPinned, setWinPinned] = useState(false);
   // 编辑态的 Markdown 预览开关：textarea 以 hidden 保留 DOM（原生撤销/草稿
   // 不因卸载丢失），预览为当前草稿的只读渲染
   const [editPreviewOn, setEditPreviewOn] = useState(false);
@@ -865,15 +868,32 @@ export default function TextPreviewView() {
   // 「按下即收」才能保证取消选中时工具条立刻消失
   useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      // 手势起点落在正文滚动区内才算「选择手势」：pointerup 兜底同步只认它，
+      // 页脚/标题栏/工具条上的按下不会在抬起时把刚收起的工具条又拉回来
+      selectionGestureRef.current = !!(
+        target && bodyRef.current?.contains(target)
+      );
       // 选词模式选区由键帽点击驱动、Esc 撤选，另有通道，勿在按下时抢清
       if (pickModeRef.current) return;
-      const target = event.target as HTMLElement | null;
       if (!target) return;
       if (target.closest?.('[role="toolbar"]')) return;
       setTextSelection(null);
     };
+    // 拖选的抬手点经常落在正文区外（页脚/标题栏/缩略条/窗口边缘甚至窗外），
+    // 只挂在正文 div 的 onPointerUp 收不到 → 文本已选中但工具条不弹（偶发）。
+    // 窗口级捕获监听兜底，顺带对子元素 stopPropagation 免疫
+    const onPointerUp = () => {
+      if (!selectionGestureRef.current) return;
+      selectionGestureRef.current = false;
+      syncPreviewSelectionRef.current();
+    };
     window.addEventListener("pointerdown", onPointerDown, true);
-    return () => window.removeEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("pointerup", onPointerUp, true);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("pointerup", onPointerUp, true);
+    };
   }, []);
 
   // 兜底：查看态 DOM 选区一塌缩（点正文任意处/空白处取消选中）立刻收工具条。
@@ -886,6 +906,10 @@ export default function TextPreviewView() {
   pickModeRef.current = pickMode;
   const editingRef = useRef(editing);
   editingRef.current = editing;
+  const selectionGestureRef = useRef(false);
+  // syncPreviewSelection 每轮渲染重建（闭包持有 note/editing），窗口级监听经
+  // 渲染期直赋镜像取最新实现，避免 [] effect 里的陈旧闭包
+  const syncPreviewSelectionRef = useRef<() => void>(() => {});
   useEffect(() => {
     const onSelectionChange = () => {
       if (pickModeRef.current || editingRef.current) return;
@@ -1679,6 +1703,7 @@ export default function TextPreviewView() {
     setTextSelection(mapped);
     pendingSelectionRef.current = mapped;
   };
+  syncPreviewSelectionRef.current = syncPreviewSelection;
 
   const applySelectionEdit = (edit: SelectionEdit) => {
     if (!previewIsEditable(note) || hasOrderedRichLayout(note.contentBlocks)) {
@@ -1734,7 +1759,7 @@ export default function TextPreviewView() {
 
   const send = () => {
     if (!previewIsEditable(note)) return;
-    close();
+    if (!winPinned) close();
     void emitTo("main", "toskr://note-send", {
       id: note.id,
       dataGeneration: note.dataGeneration,
@@ -1744,7 +1769,7 @@ export default function TextPreviewView() {
   // 片段发送：只发选中文字（选词/选段驱动），仍以本卡为来源；发完关窗与整卡发送一致
   const sendSelection = (fragment: string) => {
     if (!note || !fragment.trim()) return;
-    close();
+    if (!winPinned) close();
     void emitTo("main", "toskr://note-send", {
       id: note.id,
       dataGeneration: note.dataGeneration,
@@ -2044,6 +2069,18 @@ export default function TextPreviewView() {
           </p>
         </div>
         {icon && <img src={icon.url} alt="" className="size-6 rounded-[5px]" />}
+        <IconButton
+          label={winPinned ? "取消固定（发送后恢复自动关窗）" : "固定窗口：发送后保持打开"}
+          size="xs"
+          pressed={winPinned}
+          onClick={() => setWinPinned((value) => !value)}
+          className={cn(
+            "text-white/70 hover:bg-white/15 hover:text-white focus-visible:ring-white/60 focus-visible:ring-offset-0",
+            winPinned && "bg-white/25 text-white"
+          )}
+        >
+          <Pin className="size-3.5" fill={winPinned ? "currentColor" : "none"} />
+        </IconButton>
         <button
           aria-label="关闭"
           onClick={close}
@@ -2115,7 +2152,6 @@ export default function TextPreviewView() {
             // 编辑态给正文区一圈内嵌焦点描边 + 极浅底色：与查看态一眼区分
             editing && "bg-primary/[0.04] ring-1 ring-inset ring-primary/25"
           )}
-          onPointerUp={syncPreviewSelection}
           onDoubleClick={() => {
             if (editable && !editing) setEditing(true);
           }}
