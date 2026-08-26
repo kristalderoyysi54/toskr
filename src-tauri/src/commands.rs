@@ -1331,6 +1331,7 @@ pub async fn export_complete_backup(
             &state_json,
             created_at_ms,
             Some(&expected_revision),
+            false,
         )
     })
     .await
@@ -1416,12 +1417,14 @@ pub async fn create_data_recovery_backup(
         let created_at_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |duration| duration.as_millis() as u64);
+        // 自动恢复备份留在应用内部目录：整包封 Recovery 信封，避免明文残留
         crate::storage::export_complete_backup(
             &app,
             &path,
             &state_json,
             created_at_ms,
             Some(&expected_revision),
+            true,
         )?;
         Ok(path.to_string_lossy().into_owned())
     })

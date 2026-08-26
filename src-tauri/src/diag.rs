@@ -32,11 +32,28 @@ pub fn push(app: &AppHandle, msg: impl Into<String>) {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
     // 同时落盘到应用数据目录 toskr-diag.log：`open` 启动的 GUI 进程没有
-    // 可见的 stderr，落盘让报障可以事后取证（低频追加写，不做轮转）。
+    // 可见的 stderr，落盘让报障可以事后取证。超 2MiB 轮转到 .log.1
+    // （单档覆盖式，best-effort）；日志只含元数据，但前台应用名/时间线也算
+    // 行为痕迹，文件权限同样收紧到 0600。
     // 注意用应用数据目录而非用户自定义数据目录——日志是应用内部产物，
     // 不该混进用户挑的资料文件夹（且后者可能在 TCC 保护路径下）。
     let path = crate::storage::app_data_dir(app).join("toskr-diag.log");
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
+    if std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.len() > 2 * 1024 * 1024) {
+        let _ = std::fs::rename(&path, path.with_file_name("toskr-diag.log.1"));
+    }
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    if let Ok(mut f) = options.open(&path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
         let _ = writeln!(f, "{at_ms} {msg}");
     }
     if let Some(log) = app.try_state::<DiagLog>() {

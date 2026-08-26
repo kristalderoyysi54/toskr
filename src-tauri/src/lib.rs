@@ -4,6 +4,7 @@ mod backup;
 mod capture;
 mod clipwatch;
 mod commands;
+mod data_crypto;
 mod data_integrity;
 mod delivery;
 mod diag;
@@ -53,12 +54,16 @@ pub fn run() {
         .manage(diag::DiagLog::default())
         .manage(storage::Storage::default())
         .setup(|app| {
-            if let Err(error) = storage::initialize_storage(app.handle()) {
-                diag::push(
-                    app.handle(),
-                    format!("数据存储进入只读恢复模式: {:?}", error.code),
-                );
-                storage::enter_storage_recovery_mode(app.handle(), error);
+            match storage::initialize_storage(app.handle()) {
+                // 初始化成功后台清扫旧明文媒体文件（幂等，事务开始即让路）
+                Ok(()) => storage::spawn_media_encryption_sweep(app.handle()),
+                Err(error) => {
+                    diag::push(
+                        app.handle(),
+                        format!("数据存储进入只读恢复模式: {:?}", error.code),
+                    );
+                    storage::enter_storage_recovery_mode(app.handle(), error);
+                }
             }
             // Draft 遮挡副本只活在当前进程会话；启动即清理崩溃遗留。
             if let Err(error) = image_firewall::initialize_transient_store(app.handle()) {

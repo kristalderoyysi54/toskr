@@ -25,5 +25,7 @@ export function availableDataActions(
   if (inspection.kind === "valid") {
     return ["loadExistingTarget", "replaceTargetWithCurrent", "cancel"];
   }
+  // corrupt / unsupported / nonToskr / encrypted（外机加密数据本机解不开，
+  // 正路是「导入完整备份」而非切目录）都只能取消
   return ["cancel"];
 }

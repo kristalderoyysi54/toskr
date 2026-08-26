@@ -164,9 +164,17 @@ pub fn initialize_storage(app: &AppHandle) -> Result<(), DataOperationFailure> {
                     data_integrity::DataLocationKind::Corrupt => {
                         DataOperationFailureCode::CorruptData
                     }
+                    data_integrity::DataLocationKind::Encrypted => {
+                        DataOperationFailureCode::EncryptionKeyUnavailable
+                    }
                     _ => DataOperationFailureCode::TargetMissing,
                 },
-                message: "自定义数据目录不可用；已阻止回落到默认目录".into(),
+                message: match inspection.kind {
+                    data_integrity::DataLocationKind::Encrypted => {
+                        "自定义数据目录已加密但本机钥匙串无法解开；请解锁钥匙串后重试，或用「导入完整备份」恢复".into()
+                    }
+                    _ => "自定义数据目录不可用；已阻止回落到默认目录".into(),
+                },
             });
         }
         custom
@@ -177,6 +185,24 @@ pub fn initialize_storage(app: &AppHandle) -> Result<(), DataOperationFailure> {
         code: DataOperationFailureCode::PermissionDenied,
         message: format!("创建活动数据目录失败：{error}"),
     })?;
+    // 数据根目录收紧到 0700（best-effort：外置卷/同步盘可能不支持）
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&active, fs::Permissions::from_mode(0o700));
+    }
+    // 钥匙串读取是同步阻塞的：自签证书下新二进制首访可能弹授权框，期间应用
+    // 看起来"没启动"。先落一条日志，让诊断能看出卡在哪（应选「始终允许」，
+    // 一次性「允许」会导致每次启动重弹）。
+    crate::diag::push(
+        app,
+        "读取数据加密密钥（若系统弹出钥匙串授权，请点「始终允许」）".to_string(),
+    );
+    prepare_data_key(&active)?;
+    let migrated = migrate_data_file(&base, &active)?;
+    if migrated {
+        crate::diag::push(app, "数据文件已迁移为加密存储（TSK1）".to_string());
+    }
     if active.join(DATA_FILE).exists() {
         let inspection = data_integrity::inspect_location(&active, None);
         if inspection.kind != data_integrity::DataLocationKind::Valid {
@@ -184,6 +210,9 @@ pub fn initialize_storage(app: &AppHandle) -> Result<(), DataOperationFailure> {
                 code: match inspection.kind {
                     data_integrity::DataLocationKind::Unsupported => {
                         DataOperationFailureCode::UnsupportedSchema
+                    }
+                    data_integrity::DataLocationKind::Encrypted => {
+                        DataOperationFailureCode::EncryptionKeyUnavailable
                     }
                     _ => DataOperationFailureCode::CorruptData,
                 },
@@ -209,12 +238,78 @@ pub fn initialize_storage(app: &AppHandle) -> Result<(), DataOperationFailure> {
             message: format!("创建媒体目录失败：{error}"),
         })?;
     }
+    // 媒体目录收紧到 0700（已存在的目录也补齐，best-effort：外置卷可能不支持）。
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&media, fs::Permissions::from_mode(0o700));
+        // 存量落盘文件权限一次性补齐：新写入路径已 0600，这里覆盖升级后
+        // 尚未被重写过的旧文件（活动账本/GC/meta 等）。
+        for path in [
+            active.join(crate::activity::ACTIVITY_FILE),
+            active.join(crate::activity::ACTIVITY_ARCHIVE_FILE),
+            active.join("toskr-media-gc.json"),
+            base.join(DATA_META_FILE),
+        ] {
+            if path.is_file() {
+                let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+            }
+        }
+    }
     let storage = app.state::<Storage>();
     let mut runtime = storage.runtime.lock().unwrap();
     runtime.cached_dir = Some(active.clone());
     runtime.configured_dir = Some(active);
     runtime.initialization_failure = None;
     Ok(())
+}
+
+/// 数据文件已是加密信封则只校验密钥可用（缺失即 fail-closed，绝不重建——
+/// 重建会永久锁死存量密文）；未加密/全新安装才允许首次创建密钥。
+fn prepare_data_key(active: &Path) -> Result<(), DataOperationFailure> {
+    let result = if data_file_sealed(&active.join(DATA_FILE)) {
+        crate::data_crypto::require_key()
+    } else {
+        crate::data_crypto::ensure_key()
+    };
+    result.map_err(data_integrity::crypto_failure)
+}
+
+/// 只读文件头 4 字节判断是否加密信封（无需密钥；缺文件/读失败按未加密处理）。
+fn data_file_sealed(path: &Path) -> bool {
+    let mut prefix = [0u8; 4];
+    File::open(path)
+        .and_then(|mut file| file.read_exact(&mut prefix))
+        .map(|_| crate::data_crypto::looks_sealed(&prefix))
+        .unwrap_or(false)
+}
+
+/// 旧明文数据文件一次性迁移为加密信封（幂等；返回是否真的迁移了）。
+/// 必须在 Tauri `.setup()` 内急切完成：事件循环启动前改写 revision，前端
+/// persistStorage 尚未缓存基线快照；挪到懒迁移会让升级后首次防抖落盘必撞
+/// ExternalConflict。单向迁移，磁盘不留明文残留——迁移前把原文封成
+/// Recovery 信封存入 recovery/ 作过程保险。
+fn migrate_data_file(base: &Path, active: &Path) -> Result<bool, DataOperationFailure> {
+    let path = active.join(DATA_FILE);
+    let (snapshot, sealed) = data_integrity::read_data_snapshot_with_format(&path)?;
+    if sealed {
+        return Ok(false);
+    }
+    let Some(content) = snapshot.content else {
+        return Ok(false); // 全新安装：尚无数据文件
+    };
+    let insurance = crate::data_crypto::seal(crate::data_crypto::Purpose::Recovery, content.as_bytes())
+        .map_err(data_integrity::crypto_failure)?;
+    let insurance_path = base
+        .join("recovery")
+        .join(format!("pre-encrypt-{}.bak", now_ms()));
+    data_integrity::atomic_write_file(
+        &insurance_path,
+        &insurance,
+        DataOperationFailureCode::RecoveryPointFailed,
+    )?;
+    data_integrity::write_if_current(&path, &content, &snapshot.revision)?;
+    Ok(true)
 }
 
 fn configured_dir_from_pointer(base: &Path) -> PathBuf {
@@ -245,7 +340,11 @@ pub fn retry_storage_initialization(
     let storage = app.state::<Storage>();
     let _write = storage.write_gate.lock().unwrap();
     match initialize_storage(app) {
-        Ok(()) => Ok(data_location_status(app)),
+        Ok(()) => {
+            // 恢复模式经重试成功也要补启媒体清扫（幂等；启动成功路径同款）
+            spawn_media_encryption_sweep(app);
+            Ok(data_location_status(app))
+        }
         Err(failure) => {
             enter_storage_recovery_mode(app, failure.clone());
             Err(failure)
@@ -287,6 +386,7 @@ pub fn load_default_from_recovery(
 }
 
 fn ensure_default_dataset(base: &Path) -> Result<(), DataOperationFailure> {
+    prepare_data_key(base)?;
     let inspection = data_integrity::inspect_location(base, None);
     match inspection.kind {
         data_integrity::DataLocationKind::Valid => Ok(()),
@@ -738,6 +838,7 @@ pub fn export_complete_backup(
     state_json: &str,
     created_at_ms: u64,
     expected_revision: Option<&str>,
+    seal_archive: bool,
 ) -> Result<crate::backup::BackupInspection, crate::backup::BackupFailure> {
     let storage = app.state::<Storage>();
     let _write = storage.write_gate.lock().unwrap();
@@ -770,6 +871,7 @@ pub fn export_complete_backup(
         state_json,
         &app.package_info().version.to_string(),
         created_at_ms,
+        seal_archive,
     )?;
     let source_stable = read_data_snapshot(app)
         .is_ok_and(|after| after.revision == before.revision);
@@ -922,16 +1024,24 @@ pub fn save_image_rgba(
         .ok_or("媒体目录不是活动数据目录内的普通目录")?
         .join(&name);
     if path.exists() {
-        if let Some(bytes) = read_regular_media_file(&path) {
-            if let Ok(existing) = image::load_from_memory(&bytes) {
-                let existing = existing.to_rgba8();
-                if existing.width() == width_u32
-                    && existing.height() == height_u32
-                    && existing.as_raw() == rgba
-                {
-                    return Ok(name);
+        match read_media_file_checked(&path) {
+            // 密钥不可用时同名文件解不开是密钥问题而非文件损坏，绝不能隔离
+            Err(error) if error.key_unavailable() => {
+                return Err(format!("媒体密钥不可用，已停止图片写入：{}", error.message()));
+            }
+            Ok(Some(bytes)) => {
+                if let Ok(existing) = image::load_from_memory(&bytes) {
+                    let existing = existing.to_rgba8();
+                    if existing.width() == width_u32
+                        && existing.height() == height_u32
+                        && existing.as_raw() == rgba
+                    {
+                        return Ok(name);
+                    }
                 }
             }
+            // 密文损坏/读失败 → 按损坏文件走下方隔离重写
+            _ => {}
         }
         let quarantine = path.with_file_name(format!(
             ".toskr-invalid-image-{}-{}.png",
@@ -950,14 +1060,16 @@ pub fn save_image_rgba(
     image::DynamicImage::ImageRgba8(buf)
         .write_to(&mut png, image::ImageFormat::Png)
         .map_err(|error| error.to_string())?;
+    let sealed = crate::data_crypto::seal(crate::data_crypto::Purpose::Media, png.get_ref())
+        .map_err(|error| error.message())?;
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
-    options.custom_flags(libc::O_NOFOLLOW);
+    options.custom_flags(libc::O_NOFOLLOW).mode(0o600);
     let mut file = options
         .open(&path)
         .map_err(|error| format!("创建内容寻址图片失败：{error}"))?;
-    file.write_all(png.get_ref()).map_err(|error| error.to_string())?;
+    file.write_all(&sealed).map_err(|error| error.to_string())?;
     file.sync_all().map_err(|error| error.to_string())?;
     File::open(path.parent().ok_or("图片路径没有父目录")?)
         .and_then(|directory| directory.sync_all())
@@ -1021,7 +1133,7 @@ fn verified_media_dir(app: &AppHandle) -> Option<PathBuf> {
     (resolved.parent() == Some(root.as_path())).then_some(resolved)
 }
 
-fn read_regular_media_file(path: &Path) -> Option<Vec<u8>> {
+fn read_raw_media_file(path: &Path) -> Option<Vec<u8>> {
     let metadata = fs::symlink_metadata(path).ok()?;
     if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 1024 * 1024 * 1024 {
         return None;
@@ -1037,6 +1149,23 @@ fn read_regular_media_file(path: &Path) -> Option<Vec<u8>> {
         .read_to_end(&mut bytes)
         .ok()?;
     (bytes.len() <= 1024 * 1024 * 1024).then_some(bytes)
+}
+
+/// 读媒体文件并解开加密信封（清扫前的旧明文 PNG 永久直通）。
+/// `Ok(None)`=缺失/非普通文件；`Err`=密钥不可用或密文损坏——
+/// save_image_rgba 需要区分这两种失败，避免把解不开的好文件当坏文件隔离。
+fn read_media_file_checked(
+    path: &Path,
+) -> Result<Option<Vec<u8>>, crate::data_crypto::CryptoError> {
+    let Some(bytes) = read_raw_media_file(path) else {
+        return Ok(None);
+    };
+    crate::data_crypto::open_or_passthrough(crate::data_crypto::Purpose::Media, bytes)
+        .map(|(plain, _sealed)| Some(plain))
+}
+
+fn read_regular_media_file(path: &Path) -> Option<Vec<u8>> {
+    read_media_file_checked(path).ok().flatten()
 }
 
 pub fn inspect_media_integrity(
@@ -1173,14 +1302,27 @@ pub fn image_thumb_data_url(app: &AppHandle, name: &str) -> Option<String> {
         if !tdir.exists() {
             fs::create_dir(&tdir).ok()?;
         }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&tdir, fs::Permissions::from_mode(0o700));
+        }
+        let sealed = crate::data_crypto::seal(crate::data_crypto::Purpose::Media, png.get_ref())
+            .ok()?;
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
-        options.custom_flags(libc::O_NOFOLLOW);
-        let mut file = options.open(&tpath).ok()?;
-        file.write_all(png.get_ref()).ok()?;
-        file.sync_all().ok()?;
-        File::open(&tdir).ok()?.sync_all().ok()?;
+        options.custom_flags(libc::O_NOFOLLOW).mode(0o600);
+        match options.open(&tpath) {
+            Ok(mut file) => {
+                file.write_all(&sealed).ok()?;
+                file.sync_all().ok()?;
+                File::open(&tdir).ok()?.sync_all().ok()?;
+            }
+            // 并发首渲染撞车：另一个调用者已写好同名缩略图，直接回读即可
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(_) => return None,
+        }
     }
     let bytes = read_regular_media_file(&tpath)?;
     let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
@@ -1206,16 +1348,78 @@ pub fn read_image_rgba(app: &AppHandle, name: &str) -> Option<(usize, usize, Vec
     Some((w, h, img.into_raw()))
 }
 
-/// 图片附件绝对路径（Quick Look 预览用；含文件名安全检查，不存在返回 None）。
-pub fn image_path(app: &AppHandle, name: &str) -> Option<std::path::PathBuf> {
-    if !safe_media_name(name) {
-        return None;
+/// 后台清扫：把清扫前遗留的明文 PNG（media/ 与 media/thumbs/）就地改写成加密
+/// 信封。每个文件独立持写闸并复查事务状态——media 重写会改 managed_revision，
+/// 目录切换/导入事务开始后必须整体中止（幂等，下次启动续扫）。先扫 thumbs
+/// （不进 manifest，免费热身），再扫 media 根。
+pub fn spawn_media_encryption_sweep(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        // 错开首帧渲染与启动 IO
+        std::thread::sleep(std::time::Duration::from_secs(8));
+        match run_media_encryption_sweep(&app) {
+            Ok(0) => {}
+            Ok(count) => crate::diag::push(&app, format!("媒体加密清扫完成：改写 {count} 个文件")),
+            Err(reason) => crate::diag::push(&app, format!("媒体加密清扫中止：{reason}")),
+        }
+    });
+}
+
+fn run_media_encryption_sweep(app: &AppHandle) -> Result<usize, String> {
+    // IM 账本历史明文行一次性封装（同一把写闸独占追加方；幂等）
+    {
+        let storage = app.state::<Storage>();
+        let _write = storage.write_gate.lock().unwrap();
+        if storage.runtime.lock().unwrap().pending.is_some() || recovery_required(app) {
+            return Err("数据目录事务进行中".into());
+        }
+        if crate::message_watch::seal_legacy_ledger_lines(&data_dir(app))? {
+            crate::diag::push(app, "消息账本历史明文行已封装".to_string());
+        }
     }
-    let p = verified_media_dir(app)?.join(name);
-    fs::symlink_metadata(&p)
-        .ok()
-        .filter(|metadata| !metadata.file_type().is_symlink() && metadata.is_file())
-        .map(|_| p)
+    let media = data_dir(app).join(MEDIA_DIR);
+    let mut converted = 0usize;
+    for dir in [media.join("thumbs"), media] {
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        let files: Vec<PathBuf> = entries
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                // 只碰常规 png；跳过 .toskr-gc-* 隔离件等点前缀文件
+                !name.starts_with('.') && name.ends_with(".png")
+            })
+            .map(|entry| entry.path())
+            .collect();
+        for path in files {
+            let storage = app.state::<Storage>();
+            let _write = storage.write_gate.lock().unwrap();
+            if storage.runtime.lock().unwrap().pending.is_some() || recovery_required(app) {
+                return Err("数据目录事务进行中".into());
+            }
+            let Some(bytes) = read_raw_media_file(&path) else {
+                continue;
+            };
+            if crate::data_crypto::looks_sealed(&bytes) || !bytes.starts_with(b"\x89PNG") {
+                continue;
+            }
+            let sealed = crate::data_crypto::seal(crate::data_crypto::Purpose::Media, &bytes)
+                .map_err(|error| error.message())?;
+            data_integrity::atomic_write_file(
+                &path,
+                &sealed,
+                DataOperationFailureCode::WriteFailed,
+            )
+            .map_err(|failure| failure.message)?;
+            converted += 1;
+            drop(_write);
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
+    Ok(converted)
 }
 
 #[cfg(test)]
@@ -1264,6 +1468,149 @@ mod tests {
         for unsafe_name in ["", "../x.png", "a/b.png", "a\\b.png", ".hidden..png"] {
             assert!(!safe_media_name(unsafe_name));
         }
+    }
+
+    #[test]
+    fn legacy_plaintext_data_file_migrates_once_and_is_idempotent() {
+        crate::data_crypto::install_test_key();
+        let root = tempdir().unwrap();
+        let base = root.path().join("base");
+        let active = root.path().join("active");
+        fs::create_dir_all(&base).unwrap();
+        fs::create_dir_all(&active).unwrap();
+        let document = r#"{"toskr":"legacy-plaintext"}"#;
+        fs::write(active.join(DATA_FILE), document).unwrap();
+
+        assert!(migrate_data_file(&base, &active).unwrap(), "首次应发生迁移");
+        let sealed_bytes = fs::read(active.join(DATA_FILE)).unwrap();
+        assert!(sealed_bytes.starts_with(b"TSK1"));
+        assert_eq!(
+            data_integrity::read_data_snapshot(&active.join(DATA_FILE))
+                .unwrap()
+                .content
+                .as_deref(),
+            Some(document)
+        );
+        // 迁移保险副本已封装写入 recovery/，且能解回迁移前的完整原文
+        // （逃生通道必须可用，不能只验存在）
+        let insurance = fs::read_dir(base.join("recovery"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .find(|entry| entry.file_name().to_string_lossy().starts_with("pre-encrypt-"))
+            .expect("应存在迁移前保险副本");
+        let insurance_bytes = fs::read(insurance.path()).unwrap();
+        assert!(insurance_bytes.starts_with(b"TSK1"));
+        assert_eq!(
+            crate::data_crypto::open(crate::data_crypto::Purpose::Recovery, &insurance_bytes)
+                .unwrap(),
+            document.as_bytes(),
+            "保险副本解开后必须与迁移前原文逐字节一致"
+        );
+
+        assert!(!migrate_data_file(&base, &active).unwrap(), "重复调用应为幂等空转");
+        assert_eq!(fs::read(active.join(DATA_FILE)).unwrap(), sealed_bytes);
+    }
+
+    #[test]
+    fn media_seam_reads_sealed_and_legacy_plaintext_and_flags_key_loss() {
+        crate::data_crypto::install_test_key();
+        let root = tempdir().unwrap();
+        let png = {
+            let img = image::RgbaImage::from_pixel(2, 2, image::Rgba([1, 2, 3, 255]));
+            let mut cursor = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgba8(img)
+                .write_to(&mut cursor, image::ImageFormat::Png)
+                .unwrap();
+            cursor.into_inner()
+        };
+
+        // 清扫前的旧明文 PNG 永久直通
+        let plain_path = root.path().join("plain.png");
+        fs::write(&plain_path, &png).unwrap();
+        assert_eq!(read_media_file_checked(&plain_path).unwrap().as_deref(), Some(png.as_slice()));
+
+        // 加密信封读回同样明文，且磁盘字节不再是 PNG
+        let sealed_path = root.path().join("sealed.png");
+        let sealed = crate::data_crypto::seal(crate::data_crypto::Purpose::Media, &png).unwrap();
+        assert!(sealed.starts_with(b"TSK1"));
+        fs::write(&sealed_path, &sealed).unwrap();
+        assert_eq!(read_media_file_checked(&sealed_path).unwrap().as_deref(), Some(png.as_slice()));
+
+        // 用途标签调包（Data 信封冒充媒体）按损坏报错，而非解出内容
+        let swapped_path = root.path().join("swapped.png");
+        let swapped = crate::data_crypto::seal(crate::data_crypto::Purpose::Data, &png).unwrap();
+        fs::write(&swapped_path, &swapped).unwrap();
+        let error = read_media_file_checked(&swapped_path).unwrap_err();
+        assert!(!error.key_unavailable());
+
+        // 无钥时是密钥失败（save_image_rgba 依赖该区分避免误隔离），明文仍直通
+        crate::data_crypto::clear_test_key();
+        assert!(read_media_file_checked(&sealed_path).unwrap_err().key_unavailable());
+        assert_eq!(read_media_file_checked(&plain_path).unwrap().as_deref(), Some(png.as_slice()));
+        crate::data_crypto::install_test_key();
+    }
+
+    #[test]
+    fn fresh_install_migration_is_a_noop_and_creates_nothing() {
+        crate::data_crypto::install_test_key();
+        let root = tempdir().unwrap();
+        let base = root.path().join("base");
+        let active = root.path().join("active");
+        fs::create_dir_all(&base).unwrap();
+        fs::create_dir_all(&active).unwrap();
+
+        assert!(
+            !migrate_data_file(&base, &active).unwrap(),
+            "无数据文件时迁移应为空转"
+        );
+        assert!(!active.join(DATA_FILE).exists(), "空转不得凭空创建数据文件");
+        assert!(
+            !base.join("recovery").exists(),
+            "空转不得生成迁移保险副本"
+        );
+    }
+
+    #[test]
+    fn fresh_install_prepare_data_key_creates_key_without_data() {
+        // 全新安装：无数据文件 + 本机无钥 → 允许首次创建密钥（对应生产端
+        // ensure_key 走 errSecItemNotFound → 生成并写入钥匙串，全程无授权弹窗）
+        crate::data_crypto::clear_test_key();
+        let root = tempdir().unwrap();
+        assert!(prepare_data_key(root.path()).is_ok());
+        assert!(crate::data_crypto::require_key().is_ok(), "密钥应已就位");
+        crate::data_crypto::install_test_key();
+    }
+
+    #[test]
+    fn ensure_default_dataset_materializes_a_sealed_valid_store() {
+        crate::data_crypto::install_test_key();
+        let root = tempdir().unwrap();
+        ensure_default_dataset(root.path()).unwrap();
+
+        let raw = fs::read(root.path().join(DATA_FILE)).unwrap();
+        assert!(raw.starts_with(b"TSK1"), "默认空数据集应生而加密");
+        assert_eq!(
+            data_integrity::inspect_location(root.path(), None).kind,
+            data_integrity::DataLocationKind::Valid
+        );
+    }
+
+    #[test]
+    fn prepare_data_key_never_recreates_over_sealed_data() {
+        crate::data_crypto::install_test_key();
+        let root = tempdir().unwrap();
+        let active = root.path().to_path_buf();
+        let sealed = crate::data_crypto::seal(crate::data_crypto::Purpose::Data, b"{}").unwrap();
+        fs::write(active.join(DATA_FILE), &sealed).unwrap();
+        assert!(prepare_data_key(&active).is_ok());
+
+        crate::data_crypto::clear_test_key();
+        let failure = prepare_data_key(&active).unwrap_err();
+        assert_eq!(
+            failure.code,
+            DataOperationFailureCode::EncryptionKeyUnavailable
+        );
+        crate::data_crypto::install_test_key();
     }
 
     #[test]

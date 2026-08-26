@@ -2226,11 +2226,27 @@ export default function App() {
     // 应用级首启（webview localStorage，跨数据档案）：安装后第一次启动默认
     // 亮出主面板——新档案的完整 setup 在下方另有流程；老档案（迁移已标记
     // initialPanelSetupDone）只做展示，不改伴随/图钉偏好
+    let appFirstLaunch = false;
     try {
       if (!window.localStorage.getItem("toskr-first-launch-shown")) {
+        appFirstLaunch = true;
         window.localStorage.setItem("toskr-first-launch-shown", "1");
         useUIStore.getState().setOpen(true);
         void api.showPanel();
+      }
+    } catch {
+      /* localStorage 不可用则跳过 */
+    }
+
+    // 加密存储一次性提示（升级用户）：明文数据已自动迁移为加密落盘，钥匙串
+    // 密钥丢失即数据丢失，提醒补一份明文完整备份兜底。全新安装不打扰
+    // （首启无数据可备份，设置页文案已覆盖教育）。
+    try {
+      if (!window.localStorage.getItem("toskr-encryption-tip-shown")) {
+        window.localStorage.setItem("toskr-encryption-tip-shown", "1");
+        if (!appFirstLaunch) {
+          tip("info", "本机数据已启用加密存储；建议在设置 → 数据导出一份完整备份");
+        }
       }
     } catch {
       /* localStorage 不可用则跳过 */

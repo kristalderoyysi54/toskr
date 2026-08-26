@@ -2337,8 +2337,8 @@ function SecretSection({ settings, patch }: SP) {
       <p className="flex items-start gap-1.5 px-1 text-label text-muted-foreground">
         <ShieldCheck className="mt-0.5 size-3.5 shrink-0" />
         <span>
-          密钥以明文保存在本机数据目录并随备份进出——用于防 IM 服务器、旁人与肩窥，
-          不防本机取证。加解密全程在本机完成，不联网。
+          密钥随本机数据文件一起加密保存（导出的完整备份中仍为明文）——用于防
+          IM 服务器、旁人与肩窥，不防已解锁本机的内存取证。加解密全程在本机完成，不联网。
         </span>
       </p>
     </div>
@@ -3825,6 +3825,7 @@ function DataSection() {
     valid: "有效 Toskr 数据",
     corrupt: "Toskr JSON 损坏",
     unsupported: "schema 高于当前版本",
+    encrypted: "已加密数据（本机钥匙串打不开）",
   };
   const availableActions: DataOperationPlan["action"][] = inspection
     ? status?.initializationFailure
@@ -3838,7 +3839,10 @@ function DataSection() {
     <div>
       <SectionTitle>数据</SectionTitle>
       <p className="mb-3 text-body text-muted-foreground">
-        所有数据仅保存在本机，无账号、无同步、无遥测。
+        所有数据仅保存在本机，无账号、无同步、无遥测。笔记、图片与消息账本以
+        AES-256-GCM 加密落盘，密钥存放在 macOS 登录钥匙串——其他应用读不了、
+        改不动（篡改会被校验拒载）。注意：导出的完整备份是明文（用于跨机迁移）；
+        钥匙串密钥一旦丢失数据将无法解开，请定期导出完整备份。
       </p>
       <Group title="存储位置">
         <div className="px-3.5 py-2.5">
@@ -3960,6 +3964,12 @@ function DataSection() {
               {inspection.externalSyncLikely && (
                 <p className="mt-1 text-label text-muted-foreground">
                   检测到外部同步目录：并发修改会被阻止，但本阶段不自动合并。
+                </p>
+              )}
+              {inspection.kind === "encrypted" && (
+                <p className="mt-1 text-label text-muted-foreground">
+                  这份数据由其他机器（或已重置的钥匙串）加密，无法直接切换加载；
+                  请回到原机器「导出完整备份」，再在本机「导入完整备份」。
                 </p>
               )}
               {!inspection.writable && (

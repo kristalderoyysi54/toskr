@@ -20,6 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::activity::{
     ACTIVITY_ARCHIVE_FILE, ACTIVITY_FILE, ARCHIVE_FILE_BYTES, MAIN_FILE_BYTES,
 };
+use crate::data_crypto;
 use crate::storage::{DATA_FILE, MEDIA_DIR};
 
 pub const MAX_STORE_VERSION: u64 = 23;
@@ -28,6 +29,11 @@ const MEDIA_GC_FILE: &str = "toskr-media-gc.json";
 const DATA_JOURNAL_FILE: &str = "toskr-data-transaction.json";
 const JOURNAL_VERSION: u64 = 1;
 const MAX_DATA_FILE_BYTES: u64 = 256 * 1024 * 1024;
+/// 数据文件的磁盘字节上限 = 明文上限 + 信封固定膨胀。旧版按明文上限顶格写入
+/// 的文件加密迁移后会多 33B，读/写/复制/清单一律按此校验，保证升级迁移对
+/// 存量数据零影响（用户可感知的明文有效上限保持 256MiB 不变）。
+const MAX_SEALED_DATA_FILE_BYTES: u64 =
+    MAX_DATA_FILE_BYTES + data_crypto::ENVELOPE_OVERHEAD as u64;
 const MAX_MANAGED_FILE_BYTES: u64 = 1024 * 1024 * 1024;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -40,6 +46,8 @@ pub enum DataLocationKind {
     Valid,
     Corrupt,
     Unsupported,
+    /// 数据文件是加密信封，但本机钥匙串没有可用密钥（多半来自其他机器）。
+    Encrypted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +90,7 @@ pub enum DataOperationFailureCode {
     TargetHasData,
     CorruptData,
     UnsupportedSchema,
+    EncryptionKeyUnavailable,
     PermissionDenied,
     ReplaceConfirmationRequired,
     RecoveryPointFailed,
@@ -1504,7 +1513,7 @@ pub(crate) fn atomic_write_file(
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
-        options.custom_flags(libc::O_NOFOLLOW);
+        options.custom_flags(libc::O_NOFOLLOW).mode(0o600);
         let mut file = options
             .open(&temp)
             .map_err(|error| failure(code, format!("创建原子临时文件失败：{error}")))?;
@@ -1650,6 +1659,10 @@ fn validate_target_for_action(
                 DataOperationFailureCode::TargetNotEmpty,
                 "目标含普通文件，必须选择空目录",
             )),
+            DataLocationKind::Encrypted => Err(failure(
+                DataOperationFailureCode::EncryptionKeyUnavailable,
+                "目标已有加密的 Toskr 数据（本机钥匙串无法解开），禁止覆盖",
+            )),
         },
         DataOperationAction::LoadExistingTarget => match inspection.kind {
             DataLocationKind::Valid => Ok(()),
@@ -1664,6 +1677,10 @@ fn validate_target_for_action(
             DataLocationKind::Corrupt => Err(failure(
                 DataOperationFailureCode::CorruptData,
                 "目标数据损坏",
+            )),
+            DataLocationKind::Encrypted => Err(failure(
+                DataOperationFailureCode::EncryptionKeyUnavailable,
+                "目标数据已加密且本机钥匙串无法解开；请改用「导入完整备份」",
             )),
             _ => Err(failure(
                 DataOperationFailureCode::TargetHasNoData,
@@ -1704,7 +1721,7 @@ fn copy_managed(source: &Path, destination: &Path) -> Result<(), DataOperationFa
     copy_regular_file(
         &source.join(DATA_FILE),
         &destination.join(DATA_FILE),
-        MAX_DATA_FILE_BYTES,
+        MAX_SEALED_DATA_FILE_BYTES,
     )?;
     let source_media = source.join(MEDIA_DIR);
     let destination_media = destination.join(MEDIA_DIR);
@@ -1898,7 +1915,7 @@ fn collect_manifest(
         .to_string_lossy()
         .replace('\\', "/");
     let max = if relative == DATA_FILE || relative == MEDIA_GC_FILE {
-        MAX_DATA_FILE_BYTES
+        MAX_SEALED_DATA_FILE_BYTES
     } else {
         MAX_MANAGED_FILE_BYTES
     };
@@ -2522,15 +2539,27 @@ fn pointer_error(error: std::io::Error) -> DataOperationFailure {
 }
 
 pub fn read_data_snapshot(path: &Path) -> Result<DataFileSnapshot, DataOperationFailure> {
+    read_data_snapshot_with_format(path).map(|(snapshot, _sealed)| snapshot)
+}
+
+/// 同 `read_data_snapshot`，另返回文件是否为加密信封（迁移判断用）。
+/// revision/size 永远按磁盘原始字节计算（CAS 对格式不敏感），content 是解密后
+/// 明文；旧明文文件永久直通——RENAME_SWAP 提交会回读被换下的迁移前文件。
+pub(crate) fn read_data_snapshot_with_format(
+    path: &Path,
+) -> Result<(DataFileSnapshot, bool), DataOperationFailure> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(DataFileSnapshot {
-                content: None,
-                revision: MISSING_REVISION.into(),
-                size: 0,
-                modified_at_ms: None,
-            });
+            return Ok((
+                DataFileSnapshot {
+                    content: None,
+                    revision: MISSING_REVISION.into(),
+                    size: 0,
+                    modified_at_ms: None,
+                },
+                false,
+            ));
         }
         Err(error) => {
             return Err(DataOperationFailure {
@@ -2545,17 +2574,35 @@ pub fn read_data_snapshot(path: &Path) -> Result<DataFileSnapshot, DataOperation
             "数据路径不是普通文件",
         ));
     }
-    let bytes = read_regular_file(path, MAX_DATA_FILE_BYTES)?;
-    let content = String::from_utf8(bytes.clone()).map_err(|_| DataOperationFailure {
+    let bytes = read_regular_file(path, MAX_SEALED_DATA_FILE_BYTES)?;
+    let revision = revision_for(&bytes);
+    let (plain, sealed) = data_crypto::open_or_passthrough(data_crypto::Purpose::Data, bytes)
+        .map_err(crypto_failure)?;
+    let content = String::from_utf8(plain).map_err(|_| DataOperationFailure {
         code: DataOperationFailureCode::ReadFailed,
         message: "数据文件不是有效 UTF-8".into(),
     })?;
-    Ok(DataFileSnapshot {
-        content: Some(content),
-        revision: revision_for(&bytes),
-        size: metadata.len(),
-        modified_at_ms: metadata.modified().ok().and_then(system_time_ms),
-    })
+    Ok((
+        DataFileSnapshot {
+            content: Some(content),
+            revision,
+            size: metadata.len(),
+            modified_at_ms: metadata.modified().ok().and_then(system_time_ms),
+        },
+        sealed,
+    ))
+}
+
+pub(crate) fn crypto_failure(error: data_crypto::CryptoError) -> DataOperationFailure {
+    use data_crypto::CryptoError;
+    let code = if error.key_unavailable() {
+        DataOperationFailureCode::EncryptionKeyUnavailable
+    } else if matches!(error, CryptoError::AuthFailed | CryptoError::Malformed) {
+        DataOperationFailureCode::CorruptData
+    } else {
+        DataOperationFailureCode::ReadFailed
+    };
+    failure(code, error.message())
 }
 
 pub fn write_if_current(
@@ -2563,7 +2610,11 @@ pub fn write_if_current(
     content: &str,
     expected_revision: &str,
 ) -> Result<DataFileSnapshot, DataOperationFailure> {
-    if content.len() as u64 > MAX_DATA_FILE_BYTES {
+    // 落盘前封装信封；大小上限按密文长度校验（含 +33B 膨胀），否则贴着
+    // 上限写入的文件下次会被 read_regular_file 拒读。
+    let payload =
+        data_crypto::seal(data_crypto::Purpose::Data, content.as_bytes()).map_err(crypto_failure)?;
+    if payload.len() as u64 > MAX_SEALED_DATA_FILE_BYTES {
         return Err(failure(
             DataOperationFailureCode::WriteFailed,
             "数据文件超过写入上限",
@@ -2585,14 +2636,14 @@ pub fn write_if_current(
         message: format!("创建数据目录失败：{error}"),
     })?;
     let tmp = next_temp_path(parent, DATA_FILE);
-    let new_revision = revision_for(content.as_bytes());
+    let new_revision = revision_for(&payload);
     let attempt = (|| {
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
-        options.custom_flags(libc::O_NOFOLLOW);
+        options.custom_flags(libc::O_NOFOLLOW).mode(0o600);
         let mut file = options.open(&tmp).map_err(write_error)?;
-        file.write_all(content.as_bytes()).map_err(write_error)?;
+        file.write_all(&payload).map_err(write_error)?;
         file.sync_all().map_err(write_error)?;
         // 写临时文件期间外部 writer 仍可能抢先，提交前必须再核一次。
         if read_data_snapshot(path)?.revision != expected_revision {
@@ -2846,9 +2897,20 @@ pub fn inspect_location(path: &Path, active: Option<&Path>) -> DataLocationInspe
         };
     }
 
-    let parsed = read_regular_file(&data_path, MAX_DATA_FILE_BYTES)
+    // 加密信封解不开要区分两种结局：本机无钥 → Encrypted（引导走备份导入），
+    // 认证失败/格式坏 → Corrupt（按损坏处理）。
+    let mut encrypted_locked = false;
+    let parsed = read_regular_file(&data_path, MAX_SEALED_DATA_FILE_BYTES)
         .ok()
-        .and_then(|raw| String::from_utf8(raw).ok())
+        .and_then(
+            |raw| match data_crypto::open_or_passthrough(data_crypto::Purpose::Data, raw) {
+                Ok((plain, _sealed)) => String::from_utf8(plain).ok(),
+                Err(error) => {
+                    encrypted_locked = error.key_unavailable();
+                    None
+                }
+            },
+        )
         .and_then(|raw| parse_store_document(&raw));
     let (mut kind, store_version, note_count, task_count) = match parsed {
         Some(StoreSummary {
@@ -2867,6 +2929,7 @@ pub fn inspect_location(path: &Path, active: Option<&Path>) -> DataLocationInspe
             summary.note_count,
             summary.task_count,
         ),
+        None if encrypted_locked => (DataLocationKind::Encrypted, None, 0, 0),
         None => (DataLocationKind::Corrupt, None, 0, 0),
     };
 
@@ -4361,6 +4424,106 @@ mod tests {
 
         assert_eq!(failure.code, DataOperationFailureCode::ExternalConflict);
         assert_eq!(fs::read_to_string(&data).unwrap(), "B from another writer");
+    }
+
+    #[test]
+    fn data_file_is_sealed_on_disk_and_read_back_transparently() {
+        crate::data_crypto::install_test_key();
+        let root = tempdir().unwrap();
+        let data = root.path().join(DATA_FILE);
+        let based_on = read_data_snapshot(&data).unwrap();
+        let content = r#"{"toskr":"机密笔记内容"}"#;
+        let written = write_if_current(&data, content, &based_on.revision).unwrap();
+
+        let raw = fs::read(&data).unwrap();
+        assert!(raw.starts_with(b"TSK1"), "落盘必须是加密信封");
+        let needle = "机密笔记内容".as_bytes();
+        assert!(
+            !raw.windows(needle.len()).any(|window| window == needle),
+            "明文不得出现在磁盘字节中"
+        );
+        assert_eq!(written.revision, revision_for(&raw), "revision 按密文字节计算");
+        assert_eq!(
+            read_data_snapshot(&data).unwrap().content.as_deref(),
+            Some(content)
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&data).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[test]
+    fn cas_rejects_stale_writes_over_sealed_files() {
+        crate::data_crypto::install_test_key();
+        let root = tempdir().unwrap();
+        let data = root.path().join(DATA_FILE);
+        let base = read_data_snapshot(&data).unwrap();
+        write_if_current(&data, "A", &base.revision).unwrap();
+        let based_on_a = read_data_snapshot(&data).unwrap();
+        write_if_current(&data, "B", &based_on_a.revision).unwrap();
+
+        let failure = write_if_current(&data, "C", &based_on_a.revision).unwrap_err();
+
+        assert_eq!(failure.code, DataOperationFailureCode::ExternalConflict);
+        assert_eq!(
+            read_data_snapshot(&data).unwrap().content.as_deref(),
+            Some("B")
+        );
+    }
+
+    #[test]
+    fn tampered_sealed_data_file_reads_as_corrupt_data() {
+        crate::data_crypto::install_test_key();
+        let root = tempdir().unwrap();
+        write_valid_store(root.path(), "tamper-note");
+        let path = root.path().join(DATA_FILE);
+        let plain = fs::read(&path).unwrap();
+        let sealed = crate::data_crypto::seal(crate::data_crypto::Purpose::Data, &plain).unwrap();
+        fs::write(&path, &sealed).unwrap();
+        assert_eq!(inspect_location(root.path(), None).kind, DataLocationKind::Valid);
+
+        let mut broken = sealed;
+        let last = broken.len() - 1;
+        broken[last] ^= 0x01;
+        fs::write(&path, &broken).unwrap();
+
+        assert_eq!(
+            read_data_snapshot(&path).unwrap_err().code,
+            DataOperationFailureCode::CorruptData
+        );
+        assert_eq!(
+            inspect_location(root.path(), None).kind,
+            DataLocationKind::Corrupt
+        );
+    }
+
+    #[test]
+    fn inspect_location_reports_encrypted_not_corrupt_without_a_key() {
+        crate::data_crypto::install_test_key();
+        let root = tempdir().unwrap();
+        write_valid_store(root.path(), "sealed-note");
+        let path = root.path().join(DATA_FILE);
+        let plain = fs::read(&path).unwrap();
+        let sealed = crate::data_crypto::seal(crate::data_crypto::Purpose::Data, &plain).unwrap();
+        fs::write(&path, &sealed).unwrap();
+
+        crate::data_crypto::clear_test_key();
+        assert_eq!(
+            inspect_location(root.path(), None).kind,
+            DataLocationKind::Encrypted
+        );
+        assert_eq!(
+            read_data_snapshot(&path).unwrap_err().code,
+            DataOperationFailureCode::EncryptionKeyUnavailable
+        );
+
+        crate::data_crypto::install_test_key();
+        assert_eq!(inspect_location(root.path(), None).kind, DataLocationKind::Valid);
     }
 
     fn write_valid_store(dir: &Path, note: &str) {

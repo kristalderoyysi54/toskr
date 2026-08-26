@@ -523,8 +523,7 @@ pub fn recent_captures(app: &AppHandle, limit: usize) -> Result<Vec<MessageWatch
         let mut recent = VecDeque::with_capacity(limit);
         for line in BufReader::new(file).lines() {
             let line = line.map_err(|error| format!("读取消息账本失败：{error}"))?;
-            let Ok(record) = serde_json::from_str::<StoredLedgerRecord>(&line) else {
-                // 崩溃时末行可能不完整；原账本不修改，投影跳过坏行继续恢复其余消息。
+            let Some(record) = decode_ledger_line(&line)? else {
                 continue;
             };
             if validate_message(&record.message).is_err() {
@@ -537,6 +536,70 @@ pub fn recent_captures(app: &AppHandle, limit: usize) -> Result<Vec<MessageWatch
         }
         Ok(recent.into_iter().collect())
     })
+}
+
+/// 一次性把账本中的旧明文行封成信封（原子整档重写）：可解析的明文行加密，
+/// 密文行与无法解析的崩尾行字节原样保留。**调用方必须已持 storage 写闸**
+/// （追加方走 with_active_data_dir 同一把闸，重写期间不会有并发追加）。
+/// 返回是否发生了重写；幂等。
+pub(crate) fn seal_legacy_ledger_lines(root: &Path) -> Result<bool, String> {
+    let path = root.join(LEDGER_FILE);
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(_) => return Ok(false),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Ok(false);
+    }
+    let content =
+        std::fs::read_to_string(&path).map_err(|error| format!("读取消息账本失败：{error}"))?;
+    let mut changed = false;
+    let mut output = String::with_capacity(content.len() * 2);
+    for line in content.lines() {
+        if line.starts_with('{') && serde_json::from_str::<StoredLedgerRecord>(line).is_ok() {
+            let sealed = crate::data_crypto::seal(
+                crate::data_crypto::Purpose::ImWatch,
+                line.as_bytes(),
+            )
+            .map_err(|error| error.message())?;
+            use base64::Engine;
+            output.push_str(&base64::engine::general_purpose::STANDARD.encode(sealed));
+            changed = true;
+        } else {
+            output.push_str(line);
+        }
+        output.push('\n');
+    }
+    if !changed {
+        return Ok(false);
+    }
+    crate::data_integrity::atomic_write_file(
+        &path,
+        output.as_bytes(),
+        crate::data_integrity::DataOperationFailureCode::WriteFailed,
+    )
+    .map_err(|failure| failure.message)?;
+    Ok(true)
+}
+
+/// 解析账本单行：旧版明文 `{` 行永久兼容，新版行是 base64(ImWatch 信封)。
+/// `Ok(None)` = 坏行（崩溃末行/篡改），投影跳过继续；密钥不可用必须显式报错——
+/// 静默空投影会被误读成消息丢失。
+fn decode_ledger_line(line: &str) -> Result<Option<StoredLedgerRecord>, String> {
+    if line.starts_with('{') {
+        return Ok(serde_json::from_str::<StoredLedgerRecord>(line).ok());
+    }
+    use base64::Engine;
+    let Ok(sealed) = base64::engine::general_purpose::STANDARD.decode(line.trim_end()) else {
+        return Ok(None);
+    };
+    match crate::data_crypto::open(crate::data_crypto::Purpose::ImWatch, &sealed) {
+        Ok(plain) => Ok(serde_json::from_slice::<StoredLedgerRecord>(&plain).ok()),
+        Err(error) if error.key_unavailable() => {
+            Err(format!("消息账本密钥不可用：{}", error.message()))
+        }
+        Err(_) => Ok(None),
+    }
 }
 
 fn capture_key(message: &IncomingMessage) -> String {
@@ -564,6 +627,15 @@ fn append_to_dir(
     if bytes.len() > MAX_BODY_BYTES + 256 * 1024 {
         return Err("消息账本记录超过安全上限".into());
     }
+    // 消息正文敏感：逐行封 ImWatch 信封再 base64——GCM 密文可能含换行字节，
+    // 必须 base64 保住行框架。追加型文件不做整档重写迁移，读侧永久兼容
+    // 旧版明文行与新版密文行混排。
+    let sealed = crate::data_crypto::seal(crate::data_crypto::Purpose::ImWatch, &bytes)
+        .map_err(|error| format!("消息账本加密失败：{}", error.message()))?;
+    let line = {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(sealed)
+    };
     let mut options = OpenOptions::new();
     options.create(true).append(true).write(true);
     #[cfg(unix)]
@@ -576,7 +648,7 @@ fn append_to_dir(
     #[cfg(unix)]
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
         .map_err(|error| format!("无法收紧消息账本权限：{error}"))?;
-    file.write_all(&bytes)
+    file.write_all(line.as_bytes())
         .and_then(|_| file.write_all(b"\n"))
         .and_then(|_| file.sync_data())
         .map_err(|error| format!("消息账本落盘失败：{error}"))
@@ -762,18 +834,88 @@ mod tests {
 
     #[test]
     fn ledger_keeps_full_raw_payload_and_private_permissions() {
+        crate::data_crypto::install_test_key();
         let root = tempfile::tempdir().unwrap();
         append_to_dir(root.path(), &message(), 1_765_000_000_200).unwrap();
         let path = root.path().join(LEDGER_FILE);
         let raw = std::fs::read_to_string(&path).unwrap();
-        let value: Value = serde_json::from_str(raw.trim()).unwrap();
-        assert_eq!(value["message"]["raw"]["msg"]["dt"][0]["text"], "完整正文");
-        assert_eq!(value["message"]["context"][0]["text"], "完整前文");
+        assert!(
+            !raw.contains("完整正文"),
+            "消息正文不得以明文出现在账本文件字节中"
+        );
+        let record = decode_ledger_line(raw.trim())
+            .unwrap()
+            .expect("信封行应可解出完整记录");
+        assert_eq!(record.message.raw["msg"]["dt"][0]["text"], "完整正文");
+        assert_eq!(record.message.context[0].text, "完整前文");
         #[cfg(unix)]
         assert_eq!(
             std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    #[test]
+    fn ledger_mixed_legacy_and_sealed_lines_decode_and_key_loss_is_loud() {
+        crate::data_crypto::install_test_key();
+        // 旧版明文行永久兼容
+        let legacy = serde_json::to_string(&LedgerRecord {
+            schema_version: 1,
+            received_at_ms: 1,
+            message: &message(),
+        })
+        .unwrap();
+        assert!(decode_ledger_line(&legacy).unwrap().is_some());
+        // 坏行（崩尾/篡改）静默跳过
+        assert!(decode_ledger_line("不是合法行").unwrap().is_none());
+        // 无钥时密文行必须报错而非装作空账本
+        let sealed_line = {
+            use base64::Engine;
+            let bytes = serde_json::to_vec(&LedgerRecord {
+                schema_version: 1,
+                received_at_ms: 2,
+                message: &message(),
+            })
+            .unwrap();
+            base64::engine::general_purpose::STANDARD.encode(
+                crate::data_crypto::seal(crate::data_crypto::Purpose::ImWatch, &bytes).unwrap(),
+            )
+        };
+        assert!(decode_ledger_line(&sealed_line).unwrap().is_some());
+        crate::data_crypto::clear_test_key();
+        assert!(decode_ledger_line(&sealed_line).is_err());
+        crate::data_crypto::install_test_key();
+    }
+
+    #[test]
+    fn legacy_ledger_lines_are_sealed_once_by_sweep_and_stay_decodable() {
+        crate::data_crypto::install_test_key();
+        let root = tempfile::tempdir().unwrap();
+        let legacy_line = serde_json::to_string(&LedgerRecord {
+            schema_version: 1,
+            received_at_ms: 1,
+            message: &message(),
+        })
+        .unwrap();
+        // 一条旧明文行 + 一条崩尾坏行，再经正常追加落一条新密文行
+        std::fs::write(
+            root.path().join(LEDGER_FILE),
+            format!("{legacy_line}\n{{\"broken\n"),
+        )
+        .unwrap();
+        append_to_dir(root.path(), &message(), 2).unwrap();
+
+        assert!(seal_legacy_ledger_lines(root.path()).unwrap(), "首次应发生重写");
+        let content = std::fs::read_to_string(root.path().join(LEDGER_FILE)).unwrap();
+        assert!(!content.contains("完整正文"), "历史明文正文应已封装");
+        assert!(content.contains("{\"broken"), "崩尾坏行字节原样保留");
+        let decoded = content
+            .lines()
+            .filter(|line| decode_ledger_line(line).unwrap().is_some())
+            .count();
+        assert_eq!(decoded, 2, "两条有效记录都应可解");
+
+        assert!(!seal_legacy_ledger_lines(root.path()).unwrap(), "重复调用应幂等空转");
     }
 
     #[test]

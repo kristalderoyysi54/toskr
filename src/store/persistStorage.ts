@@ -263,6 +263,8 @@ export function createPersistenceController(
 }
 
 let legacyStore: Promise<Store> | null = null;
+/** legacy 明文抹除每会话只查一次，避免每次防抖落盘都多一轮 store IO。 */
+let legacyScrubbed = false;
 
 function getLegacyStore(): Promise<Store> {
   legacyStore ??= load("toskr-store.json", { autoSave: false });
@@ -281,9 +283,24 @@ const controller = createPersistenceController(api, {
   },
   markInitialized: async () => {
     const store = await getLegacyStore();
-    if (await store.get<boolean>("toskr-data-initialized")) return;
-    await store.set("toskr-data-initialized", true);
-    await store.save();
+    let dirty = false;
+    if (!(await store.get<boolean>("toskr-data-initialized"))) {
+      await store.set("toskr-data-initialized", true);
+      dirty = true;
+    }
+    // 旧版曾把整份状态明文留在 toskr-store.json（含项目改名前的 "copper"
+    // 包，代码已零引用）；主存储加密落地后一次性抹掉旧明文包，只保留初始化
+    // 标记。本回调只在成功写盘后触发，失败路径仍保有 legacy 兜底。
+    if (!legacyScrubbed) {
+      legacyScrubbed = true;
+      for (const legacyKey of ["toskr", "copper"]) {
+        if ((await store.get<string>(legacyKey)) != null) {
+          await store.delete(legacyKey);
+          dirty = true;
+        }
+      }
+    }
+    if (dirty) await store.save();
   },
 });
 

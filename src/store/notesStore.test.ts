@@ -114,6 +114,32 @@ describe("notesStore 基础", () => {
     });
   });
 
+  it("draftText 持久化解码：缺字段/坏类型回空串，字符串原样保留", () => {
+    const withoutDraft = decodePersistedState(JSON.stringify({
+      version: STORE_VERSION,
+      state: { sections: [{ id: INBOX_ID, name: "收件箱" }], notes: [] },
+    }));
+    expect(withoutDraft.draftText).toBe("");
+    const withDraft = decodePersistedState(JSON.stringify({
+      version: STORE_VERSION,
+      state: {
+        sections: [{ id: INBOX_ID, name: "收件箱" }],
+        notes: [],
+        draftText: "写到一半的 prompt",
+      },
+    }));
+    expect(withDraft.draftText).toBe("写到一半的 prompt");
+    const badType = decodePersistedState(JSON.stringify({
+      version: STORE_VERSION,
+      state: {
+        sections: [{ id: INBOX_ID, name: "收件箱" }],
+        notes: [],
+        draftText: 42,
+      },
+    }));
+    expect(badType.draftText).toBe("");
+  });
+
   it("v21 将消息来源从旧品牌标识迁移为中性 im，并重写复合 id（旧数据零残留）", () => {
     const decoded = decodePersistedState(JSON.stringify({
       version: 20,

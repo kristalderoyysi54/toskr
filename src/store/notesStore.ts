@@ -855,7 +855,11 @@ export interface NotesState {
   settings: Settings;
   /** 撤销栈（内存，不持久化）。 */
   undoStack: UndoEntry[];
+  /** 输入框未提交草稿。随主数据文件加密落盘（旧版存 WebKit localStorage
+   *  明文，已迁移）；提交/清空时归零。 */
+  draftText: string;
 
+  setDraftText: (text: string) => void;
   addNote: (
     text: string,
     opts?: {
@@ -1104,7 +1108,14 @@ const UNDO_DEPTH = 5;
 
 type PersistentNotesState = Pick<
   NotesState,
-  "sections" | "notes" | "tasks" | "taskSections" | "bills" | "messages" | "settings"
+  | "sections"
+  | "notes"
+  | "tasks"
+  | "taskSections"
+  | "bills"
+  | "messages"
+  | "settings"
+  | "draftText"
 >;
 
 export type NotesStoreSnapshot = PersistentNotesState &
@@ -2071,6 +2082,8 @@ function normalizedPersistentState(
     bills: persisted.bills ?? [],
     messages: persisted.messages ?? [],
     settings,
+    draftText:
+      typeof persisted.draftText === "string" ? persisted.draftText : "",
   };
 }
 
@@ -2143,6 +2156,7 @@ export function persistentStateOf(state: NotesState): PersistentNotesState {
     bills: state.bills,
     messages: state.messages,
     settings: state.settings,
+    draftText: state.draftText,
   };
 }
 
@@ -2217,7 +2231,9 @@ export const useNotesStore = create<NotesState>()(
       checkedIds: [],
       settings: defaultSettings(),
       undoStack: [],
+      draftText: "",
 
+      setDraftText: (text) => set({ draftText: text }),
       addNote: (text, opts) => {
         const blocks = contentBlocksForAdd(text, opts);
         const content = projectNoteContent(blocks);
@@ -3790,6 +3806,7 @@ export function restoreNotesStoreAfterRollback(
     bills: snapshot.bills,
     messages: snapshot.messages,
     settings: snapshot.settings,
+    draftText: snapshot.draftText,
   };
   if (JSON.stringify(restored) === JSON.stringify(snapshotPersistent)) {
     restoreNotesStoreSnapshot(snapshot);

@@ -8,7 +8,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Component, Path, PathBuf};
@@ -123,12 +123,16 @@ struct StateSummary {
     media: BTreeSet<String>,
 }
 
+/// 用户主动导出的完整备份**刻意保持明文 ZIP**：这是跨机迁移与钥匙串丢失时
+/// 的唯一逃生通道。`seal_archive=true` 仅用于应用内部的自动恢复备份
+/// （recovery/），整包封 Recovery 信封，只有本机密钥能解开。
 pub fn export_complete_backup(
     data_dir: &Path,
     destination: &Path,
     state_json: &str,
     app_version: &str,
     created_at_ms: u64,
+    seal_archive: bool,
 ) -> Result<BackupInspection, BackupFailure> {
     export_backup_inner(
         data_dir,
@@ -137,6 +141,7 @@ pub fn export_complete_backup(
         app_version,
         created_at_ms,
         false,
+        seal_archive,
     )
 }
 
@@ -154,6 +159,7 @@ pub fn export_conflict_recovery_backup(
         app_version,
         created_at_ms,
         true,
+        false,
     )
 }
 
@@ -164,6 +170,7 @@ fn export_backup_inner(
     app_version: &str,
     created_at_ms: u64,
     require_content_identity: bool,
+    seal_archive: bool,
 ) -> Result<BackupInspection, BackupFailure> {
     if destination.exists() {
         return Err(failure(
@@ -217,7 +224,9 @@ fn export_backup_inner(
                 format!("媒体不是普通文件：{name}"),
             ));
         }
-        if metadata.len() > MAX_ARCHIVE_FILE_BYTES {
+        // 磁盘上是加密信封（+33B 开销），预检上限按信封长度放宽；明文尺寸
+        // 由 sha256_file 解密后精确校验
+        if metadata.len() > MAX_ARCHIVE_FILE_BYTES + crate::data_crypto::ENVELOPE_OVERHEAD as u64 {
             return Err(failure(
                 BackupFailureCode::FileTooLarge,
                 format!("媒体文件超过 256 MiB：{name}"),
@@ -282,11 +291,11 @@ fn export_backup_inner(
         std::process::id()
     ));
     let result = (|| {
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)
-            .map_err(io_failure)?;
+        let mut tmp_options = OpenOptions::new();
+        tmp_options.write(true).create_new(true);
+        #[cfg(unix)]
+        tmp_options.mode(0o600);
+        let file = tmp_options.open(&tmp).map_err(io_failure)?;
         let mut writer = ZipWriter::new(file);
         let options = SimpleFileOptions::default()
             .compression_method(CompressionMethod::Stored)
@@ -306,10 +315,29 @@ fn export_backup_inner(
         let file = writer.finish().map_err(zip_failure)?;
         file.sync_all().map_err(io_failure)?;
         drop(file);
+        let publish = if seal_archive {
+            // 自动恢复备份整包封 Recovery 信封（AES-GCM 无流式，整包读入内存
+            // 一次；恢复备份仅在数据目录事务前生成，属低频路径）
+            let zip_bytes = fs::read(&tmp).map_err(io_failure)?;
+            let sealed = crate::data_crypto::seal(crate::data_crypto::Purpose::Recovery, &zip_bytes)
+                .map_err(|error| {
+                    failure(
+                        BackupFailureCode::IoFailed,
+                        format!("封装恢复备份失败：{}", error.message()),
+                    )
+                })?;
+            drop(zip_bytes);
+            let sealed_tmp = sealed_tmp_path(&tmp);
+            write_new_file(&sealed_tmp, &sealed)?;
+            fs::remove_file(&tmp).map_err(io_failure)?;
+            sealed_tmp
+        } else {
+            tmp.clone()
+        };
         // ownership 必须来自仍由本事务持有的 tmp inode，不能发布后再从
         // destination 反推；外部 writer 可能在 hard-link 发布后立即换路径。
-        let owned_revision = archive_revision(&tmp)?;
-        commit_without_overwrite(&tmp, destination)?;
+        let owned_revision = archive_revision(&publish)?;
+        commit_without_overwrite(&publish, destination)?;
         let _ = File::open(parent).and_then(|directory| directory.sync_all());
         if archive_revision(destination).ok().as_deref() != Some(owned_revision.as_str()) {
             return Err(failure(
@@ -317,15 +345,24 @@ fn export_backup_inner(
                 "备份目标在发布后被外部替换；未把外部版本认作成功备份",
             ));
         }
-        fs::remove_file(&tmp).map_err(io_failure)?;
+        fs::remove_file(&publish).map_err(io_failure)?;
         let mut inspection = inspection_from_manifest(&manifest, Vec::new());
         inspection.archive_revision = owned_revision;
         Ok(inspection)
     })();
     if result.is_err() {
         let _ = fs::remove_file(&tmp);
+        let _ = fs::remove_file(sealed_tmp_path(&tmp));
     }
     result
+}
+
+fn sealed_tmp_path(tmp: &Path) -> PathBuf {
+    let name = tmp
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("toskr-backup.partial");
+    tmp.with_file_name(format!("{name}-sealed"))
 }
 
 fn verify_content_addressed_media(path: &Path, name: &str) -> Result<(), BackupFailure> {
@@ -339,7 +376,7 @@ fn verify_content_addressed_media(path: &Path, name: &str) -> Result<(), BackupF
                 format!("媒体缺少可证明的内容身份：{name}"),
             )
         })?;
-    let bytes = fs::read(path).map_err(io_failure)?;
+    let bytes = read_media_plaintext(path)?;
     let image = image::load_from_memory(&bytes).map_err(|_| {
         failure(
             BackupFailureCode::SourceChanged,
@@ -501,7 +538,15 @@ pub fn inspect_backup(path: &Path) -> Result<BackupInspection, BackupFailure> {
 fn validated_complete_archive(
     path: &Path,
     expected_revision: &str,
-) -> Result<(ZipArchive<File>, BackupInspection, Vec<u8>, BackupManifest), BackupFailure> {
+) -> Result<
+    (
+        ZipArchive<Box<dyn ReadSeek>>,
+        BackupInspection,
+        Vec<u8>,
+        BackupManifest,
+    ),
+    BackupFailure,
+> {
     let (file, revision) = open_archive_with_revision(path)?;
     ensure_archive_revision(&revision, expected_revision)?;
     let archive = ZipArchive::new(file).map_err(zip_failure)?;
@@ -547,10 +592,21 @@ pub fn materialize_complete_backup(
     let bag = serde_json::json!({"toskr": persisted.to_string()});
     let result = (|| {
         fs::create_dir_all(staging_dir.join(MEDIA_DIR)).map_err(io_failure)?;
-        write_new_file(
-            &staging_dir.join(DATA_FILE),
-            &serde_json::to_vec_pretty(&bag).map_err(json_failure)?,
-        )?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(staging_dir, fs::Permissions::from_mode(0o700));
+            let _ = fs::set_permissions(
+                staging_dir.join(MEDIA_DIR),
+                fs::Permissions::from_mode(0o700),
+            );
+        }
+        // 备份包内是明文；落进 staging 前重新封信封（state 与媒体一致）
+        let state_plain = serde_json::to_vec_pretty(&bag).map_err(json_failure)?;
+        let state_sealed =
+            crate::data_crypto::seal(crate::data_crypto::Purpose::Data, &state_plain)
+                .map_err(crypto_backup_failure)?;
+        write_new_file(&staging_dir.join(DATA_FILE), &state_sealed)?;
         let mut extracted_total = 0u64;
         for index in 0..archive.len() {
             let mut entry = archive.by_index(index).map_err(zip_failure)?;
@@ -572,12 +628,9 @@ pub fn materialize_complete_backup(
                 )
             })?;
             let output_path = staging_dir.join(MEDIA_DIR).join(name);
-            let mut output = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(output_path)
-                .map_err(io_failure)?;
-            let mut hasher = Sha256::new();
+            // 先整条读入校验（单条已限 256MiB），hash/大小对上再封信封落盘；
+            // 峰值内存仍是单个条目
+            let mut content = Vec::new();
             let mut actual_size = 0u64;
             let mut buffer = [0u8; 64 * 1024];
             loop {
@@ -598,16 +651,17 @@ pub fn materialize_complete_backup(
                         "媒体实际解包大小超过安全上限",
                     ));
                 }
-                hasher.update(&buffer[..read]);
-                output.write_all(&buffer[..read]).map_err(io_failure)?;
+                content.extend_from_slice(&buffer[..read]);
             }
-            if actual_size != expected.size || hex_digest(hasher.finalize()) != expected.sha256 {
+            if actual_size != expected.size || sha256_hex(&content) != expected.sha256 {
                 return Err(failure(
                     BackupFailureCode::HashMismatch,
                     format!("提取时媒体 hash/大小发生变化：{relative}"),
                 ));
             }
-            output.sync_all().map_err(io_failure)?;
+            let sealed = crate::data_crypto::seal(crate::data_crypto::Purpose::Media, &content)
+                .map_err(crypto_backup_failure)?;
+            write_new_file(&output_path, &sealed)?;
         }
         File::open(staging_dir.join(MEDIA_DIR))
             .and_then(|directory| directory.sync_all())
@@ -629,8 +683,8 @@ pub fn materialize_complete_backup(
     result
 }
 
-fn inspect_complete_archive(
-    archive: ZipArchive<File>,
+fn inspect_complete_archive<R: Read + Seek>(
+    archive: ZipArchive<R>,
     max_file: u64,
     max_total: u64,
 ) -> Result<BackupInspection, BackupFailure> {
@@ -643,11 +697,11 @@ struct ObservedArchiveFile {
     size: u64,
 }
 
-fn read_complete_archive(
-    mut archive: ZipArchive<File>,
+fn read_complete_archive<R: Read + Seek>(
+    mut archive: ZipArchive<R>,
     max_file: u64,
     max_total: u64,
-) -> Result<(ZipArchive<File>, BackupInspection, Vec<u8>, BackupManifest), BackupFailure> {
+) -> Result<(ZipArchive<R>, BackupInspection, Vec<u8>, BackupManifest), BackupFailure> {
     if archive.len() > MAX_ARCHIVE_ENTRIES {
         return Err(failure(
             BackupFailureCode::FileTooLarge,
@@ -1592,11 +1646,32 @@ fn revision_for_open_file(file: &mut File) -> Result<String, BackupFailure> {
     Ok(format!("sha256:{}:{size}", hex_digest(hasher.finalize())))
 }
 
-fn open_archive_with_revision(path: &Path) -> Result<(File, String), BackupFailure> {
+/// ZipArchive 的统一读源：普通备份直接给 File，封装过的恢复备份解开后给内存游标。
+pub(crate) trait ReadSeek: Read + Seek {}
+impl<T: Read + Seek> ReadSeek for T {}
+
+fn open_archive_with_revision(path: &Path) -> Result<(Box<dyn ReadSeek>, String), BackupFailure> {
     let mut file = open_regular_nofollow(path, MAX_ARCHIVE_TOTAL_BYTES + 64 * 1024 * 1024)?;
+    // revision 永远按磁盘原始字节计算（封装与否都一致，外部替换检测不受影响）
     let revision = revision_for_open_file(&mut file)?;
     file.seek(SeekFrom::Start(0)).map_err(io_failure)?;
-    Ok((file, revision))
+    let mut magic = [0u8; 4];
+    let sniffed = file.read(&mut magic).map_err(io_failure)?;
+    file.seek(SeekFrom::Start(0)).map_err(io_failure)?;
+    if sniffed == 4 && crate::data_crypto::looks_sealed(&magic) {
+        // 应用内部的自动恢复备份：整包 Recovery 信封，只有本机密钥能解开
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).map_err(io_failure)?;
+        let plain = crate::data_crypto::open(crate::data_crypto::Purpose::Recovery, &bytes)
+            .map_err(|error| {
+                failure(
+                    BackupFailureCode::CorruptArchive,
+                    format!("恢复备份由本机密钥封装，无法在此打开：{}", error.message()),
+                )
+            })?;
+        return Ok((Box::new(Cursor::new(plain)), revision));
+    }
+    Ok((Box::new(file), revision))
 }
 
 fn archive_revision(path: &Path) -> Result<String, BackupFailure> {
@@ -1605,22 +1680,36 @@ fn archive_revision(path: &Path) -> Result<String, BackupFailure> {
     Ok(revision)
 }
 
-fn sha256_file(path: &Path) -> Result<(String, u64), BackupFailure> {
-    let mut file = open_regular_nofollow(path, MAX_ARCHIVE_FILE_BYTES)?;
-    let mut hasher = Sha256::new();
-    let mut size = 0u64;
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let read = file.read(&mut buffer).map_err(io_failure)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-        size = size
-            .checked_add(read as u64)
-            .ok_or_else(|| failure(BackupFailureCode::FileTooLarge, "媒体大小溢出"))?;
+/// 读媒体文件并解开加密信封，返回明文字节（清扫前的旧明文 PNG 直通）。
+/// manifest 哈希/大小自此按**明文**计——清扫改写密文不影响备份等价性，
+/// 旧明文时代导出的备份与加密后导出的备份逐字节一致。
+fn read_media_plaintext(path: &Path) -> Result<Vec<u8>, BackupFailure> {
+    let mut file = open_regular_nofollow(
+        path,
+        MAX_ARCHIVE_FILE_BYTES + crate::data_crypto::ENVELOPE_OVERHEAD as u64,
+    )?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(io_failure)?;
+    let (plain, _sealed) =
+        crate::data_crypto::open_or_passthrough(crate::data_crypto::Purpose::Media, bytes)
+            .map_err(|error| {
+                failure(
+                    BackupFailureCode::IoFailed,
+                    format!("媒体解密失败：{}", error.message()),
+                )
+            })?;
+    if plain.len() as u64 > MAX_ARCHIVE_FILE_BYTES {
+        return Err(failure(
+            BackupFailureCode::FileTooLarge,
+            "媒体文件超过 256 MiB",
+        ));
     }
-    Ok((hex_digest(hasher.finalize()), size))
+    Ok(plain)
+}
+
+fn sha256_file(path: &Path) -> Result<(String, u64), BackupFailure> {
+    let plain = read_media_plaintext(path)?;
+    Ok((sha256_hex(&plain), plain.len() as u64))
 }
 
 fn copy_file_and_verify(
@@ -1629,34 +1718,16 @@ fn copy_file_and_verify(
     expected_hash: &str,
     expected_size: u64,
 ) -> Result<(), BackupFailure> {
-    let mut file = open_regular_nofollow(path, MAX_ARCHIVE_FILE_BYTES)?;
-    let mut hasher = Sha256::new();
-    let mut size = 0u64;
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let read = file.read(&mut buffer).map_err(io_failure)?;
-        if read == 0 {
-            break;
-        }
-        writer.write_all(&buffer[..read]).map_err(io_failure)?;
-        hasher.update(&buffer[..read]);
-        size = size
-            .checked_add(read as u64)
-            .ok_or_else(|| failure(BackupFailureCode::FileTooLarge, "媒体大小溢出"))?;
-        if size > expected_size || size > MAX_ARCHIVE_FILE_BYTES {
-            return Err(failure(
-                BackupFailureCode::HashMismatch,
-                "媒体在导出期间增长或超过安全上限",
-            ));
-        }
-    }
-    if size != expected_size || hex_digest(hasher.finalize()) != expected_hash {
+    // AES-GCM 无流式解密：整文件解密后写入（单条 256MiB 上限内），
+    // 两遍结构不变，峰值内存仍是单个文件
+    let plain = read_media_plaintext(path)?;
+    if plain.len() as u64 != expected_size || sha256_hex(&plain) != expected_hash {
         return Err(failure(
             BackupFailureCode::HashMismatch,
             "媒体在导出期间发生变化，已取消备份",
         ));
     }
-    Ok(())
+    writer.write_all(&plain).map_err(io_failure)
 }
 
 fn hex_digest(digest: impl AsRef<[u8]>) -> String {
@@ -1670,11 +1741,11 @@ fn hex_digest(digest: impl AsRef<[u8]>) -> String {
 }
 
 fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), BackupFailure> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(io_failure)?;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(path).map_err(io_failure)?;
     file.write_all(bytes).map_err(io_failure)?;
     file.sync_all().map_err(io_failure)
 }
@@ -1719,6 +1790,13 @@ fn commit_without_overwrite(source: &Path, destination: &Path) -> Result<(), Bac
     }
 }
 
+fn crypto_backup_failure(error: crate::data_crypto::CryptoError) -> BackupFailure {
+    failure(
+        BackupFailureCode::IoFailed,
+        format!("加密失败：{}", error.message()),
+    )
+}
+
 fn failure(code: BackupFailureCode, message: impl Into<String>) -> BackupFailure {
     BackupFailure {
         code,
@@ -1752,6 +1830,24 @@ mod tests {
     use super::*;
     use std::io::Cursor;
     use tempfile::tempdir;
+
+    /// 测试便捷封装：与旧签名一致，默认不整包封装（封装路径由专门测试覆盖）。
+    fn export_complete_backup(
+        data_dir: &Path,
+        destination: &Path,
+        state_json: &str,
+        app_version: &str,
+        created_at_ms: u64,
+    ) -> Result<BackupInspection, BackupFailure> {
+        super::export_complete_backup(
+            data_dir,
+            destination,
+            state_json,
+            app_version,
+            created_at_ms,
+            false,
+        )
+    }
 
     fn state_json(image: Option<&str>) -> String {
         serde_json::json!({
@@ -2245,10 +2341,73 @@ mod tests {
             crate::data_integrity::inspect_location(&staging, None).kind,
             crate::data_integrity::DataLocationKind::Valid
         );
+        // 导入落进 staging 的媒体重新封了信封，解开后才是备份包里的明文
+        let staged = fs::read(staging.join(MEDIA_DIR).join("a.png")).unwrap();
+        assert!(staged.starts_with(b"TSK1"));
         assert_eq!(
-            fs::read(staging.join(MEDIA_DIR).join("a.png")).unwrap(),
+            crate::data_crypto::open(crate::data_crypto::Purpose::Media, &staged).unwrap(),
             b"png-bytes"
         );
+        let staged_state = fs::read(staging.join(DATA_FILE)).unwrap();
+        assert!(staged_state.starts_with(b"TSK1"), "staging 状态文件也应封装");
+    }
+
+    #[test]
+    fn export_decrypts_sealed_media_into_plaintext_archive() {
+        crate::data_crypto::install_test_key();
+        let root = tempdir().unwrap();
+        let data = root.path().join("data");
+        fs::create_dir_all(data.join(MEDIA_DIR)).unwrap();
+        let sealed =
+            crate::data_crypto::seal(crate::data_crypto::Purpose::Media, b"png-bytes").unwrap();
+        fs::write(data.join(MEDIA_DIR).join("a.png"), &sealed).unwrap();
+        let output = root.path().join("backup.toskr-backup");
+        export_complete_backup(&data, &output, &state_json(Some("a.png")), "0.20.0", 7).unwrap();
+
+        let mut archive = ZipArchive::new(File::open(&output).unwrap()).unwrap();
+        let mut bytes = Vec::new();
+        archive
+            .by_name("media/a.png")
+            .unwrap()
+            .read_to_end(&mut bytes)
+            .unwrap();
+        assert_eq!(bytes, b"png-bytes", "备份包内媒体必须是明文（跨机逃生通道）");
+        let mut manifest = String::new();
+        archive
+            .by_name(MANIFEST_PATH)
+            .unwrap()
+            .read_to_string(&mut manifest)
+            .unwrap();
+        assert!(
+            manifest.contains(&sha256_hex(b"png-bytes")),
+            "manifest 哈希按明文计，对清扫前后保持不变量"
+        );
+    }
+
+    #[test]
+    fn sealed_recovery_archive_round_trips_and_requires_local_key() {
+        crate::data_crypto::install_test_key();
+        let root = tempdir().unwrap();
+        let data = root.path().join("data");
+        fs::create_dir_all(data.join(MEDIA_DIR)).unwrap();
+        let output = root.path().join("recovery.toskr-backup");
+        super::export_complete_backup(&data, &output, &state_json(None), "0.20.0", 7, true)
+            .unwrap();
+
+        let raw = fs::read(&output).unwrap();
+        assert!(raw.starts_with(b"TSK1"), "自动恢复备份应整包封装");
+
+        let revision = inspect_backup(&output).unwrap().archive_revision;
+        let staging = root.path().join("staging");
+        materialize_complete_backup(&output, &staging, &revision).unwrap();
+        assert_eq!(
+            crate::data_integrity::inspect_location(&staging, None).kind,
+            crate::data_integrity::DataLocationKind::Valid
+        );
+
+        crate::data_crypto::clear_test_key();
+        assert!(inspect_backup(&output).is_err(), "外机（无钥）不应能打开恢复档");
+        crate::data_crypto::install_test_key();
     }
 
     #[test]

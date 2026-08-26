@@ -185,7 +185,7 @@ export function AliasEntitySettings({
             <div className="px-3.5 py-2.5">
               <p className="text-title">实体词典</p>
               <p className="mt-0.5 text-label text-muted-foreground">
-                词典原文以明文随本地数据文件保存，并包含在完整备份中；删除条目不回收占位符编号
+                词典原文随本地数据文件加密保存，并包含在完整备份中（备份为明文）；删除条目不回收占位符编号
               </p>
 
               {settings.aliasEntities.length === 0 ? (

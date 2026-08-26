@@ -211,7 +211,9 @@ fn remove_root_entry(path: &Path) -> Result<(), String> {
 
 pub(crate) fn initialize_transient_root(path: &Path) -> Result<(), String> {
     remove_root_entry(path)?;
-    fs::create_dir_all(path).map_err(|error| format!("创建临时图片目录失败：{error}"))
+    fs::create_dir_all(path).map_err(|error| format!("创建临时图片目录失败：{error}"))?;
+    tighten_dir_permissions(path);
+    Ok(())
 }
 
 fn ensure_transient_root(path: &Path) -> Result<(), String> {
@@ -219,10 +221,22 @@ fn ensure_transient_root(path: &Path) -> Result<(), String> {
         Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => Ok(()),
         Ok(_) => Err("临时图片目录类型异常".into()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir_all(path).map_err(|error| format!("创建临时图片目录失败：{error}"))
+            fs::create_dir_all(path).map_err(|error| format!("创建临时图片目录失败：{error}"))?;
+            tighten_dir_permissions(path);
+            Ok(())
         }
         Err(error) => Err(format!("读取临时图片目录失败：{error}")),
     }
+}
+
+fn tighten_dir_permissions(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o700));
+    }
+    #[cfg(not(unix))]
+    let _ = path;
 }
 
 pub fn initialize_transient_store(app: &AppHandle) -> Result<(), String> {
@@ -261,23 +275,34 @@ fn transient_file(app: &AppHandle, token: &str) -> Option<PathBuf> {
         .map(|_| path)
 }
 
+/// 读临时遮挡图片并解开加密信封（崩溃遗留的旧版明文直通，反正启动即清理）。
+fn read_transient_bytes(app: &AppHandle, token: &str) -> Option<Vec<u8>> {
+    let bytes = fs::read(transient_file(app, token)?).ok()?;
+    crate::data_crypto::open_or_passthrough(crate::data_crypto::Purpose::Media, bytes)
+        .ok()
+        .map(|(plain, _sealed)| plain)
+}
+
 fn write_png_create_new(path: &Path, image: &RgbaImage) -> Result<(), String> {
     let mut bytes = Cursor::new(Vec::new());
     DynamicImage::ImageRgba8(image.clone())
         .write_to(&mut bytes, image::ImageFormat::Png)
         .map_err(|error| format!("编码遮挡图片失败：{error}"))?;
+    // 遮挡副本可能在崩溃后残留到下次启动，同样封信封防明文截图落盘
+    let sealed = crate::data_crypto::seal(crate::data_crypto::Purpose::Media, bytes.get_ref())
+        .map_err(|error| error.message())?;
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
+        options.custom_flags(libc::O_NOFOLLOW).mode(0o600);
     }
     let mut file = options
         .open(path)
         .map_err(|error| format!("创建遮挡图片失败：{error}"))?;
     if let Err(error) = file
-        .write_all(bytes.get_ref())
+        .write_all(&sealed)
         .and_then(|_| file.sync_all())
     {
         drop(file);
@@ -721,7 +746,7 @@ pub fn read_delivery_image_rgba(app: &AppHandle, file: &str) -> Option<(usize, u
     if !file.starts_with(TOKEN_PREFIX) {
         return crate::storage::read_image_rgba(app, file);
     }
-    let bytes = fs::read(transient_file(app, file)?).ok()?;
+    let bytes = read_transient_bytes(app, file)?;
     let image = image::load_from_memory(&bytes).ok()?.to_rgba8();
     Some((
         image.width() as usize,
@@ -738,7 +763,7 @@ pub fn delivery_image_data_url(app: &AppHandle, file: &str, full_size: bool) -> 
             crate::storage::image_thumb_data_url(app, file)
         };
     }
-    let bytes = fs::read(transient_file(app, file)?).ok()?;
+    let bytes = read_transient_bytes(app, file)?;
     if full_size {
         return Some(format!(
             "data:image/png;base64,{}",
@@ -755,12 +780,17 @@ pub fn delivery_image_data_url(app: &AppHandle, file: &str, full_size: bool) -> 
 }
 
 pub fn delivery_image_dimensions(app: &AppHandle, file: &str) -> Option<(u32, u32)> {
-    let path = if file.starts_with(TOKEN_PREFIX) {
-        transient_file(app, file)?
+    // 媒体文件已加密，尺寸探测改从解密字节读（与 decode_image 同款 ImageReader）
+    let bytes = if file.starts_with(TOKEN_PREFIX) {
+        read_transient_bytes(app, file)?
     } else {
-        crate::storage::image_path(app, file)?
+        crate::storage::read_image_bytes(app, file)?
     };
-    image::image_dimensions(path).ok()
+    image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()
 }
 
 #[cfg(test)]

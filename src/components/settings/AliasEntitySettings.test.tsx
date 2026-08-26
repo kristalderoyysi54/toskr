@@ -22,7 +22,7 @@ describe("AliasEntitySettings", () => {
     expect(html).toContain("发出前化名 → 捕获回复时恢复");
     expect(html).toContain("不会发送、不会访问剪贴板");
     expect(html).toContain("捕获时自动恢复化名");
-    expect(html).toContain("明文随本地数据文件保存");
+    expect(html).toContain("随本地数据文件加密保存");
   });
 
   it("列出词典条目：类别标签、原文与固定占位符，自定义类别用自定义显示名", () => {

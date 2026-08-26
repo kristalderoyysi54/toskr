@@ -242,7 +242,8 @@ export type DataLocationKind =
   | "nonToskr"
   | "valid"
   | "corrupt"
-  | "unsupported";
+  | "unsupported"
+  | "encrypted";
 
 export interface DataLocationInspection {
   path: string;

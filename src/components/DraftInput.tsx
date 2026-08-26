@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Check, ChevronUp, FolderInput, X } from "lucide-react";
 
@@ -24,23 +24,17 @@ import {
   useDataOperationStore,
 } from "@/store/dataOperationStore";
 
-/** 草稿文字的 localStorage 镜像键（抗重启；提交/清空时移除）。 */
-const DRAFT_TEXT_STORAGE_KEY = "toskr-draft-input-text";
+/** 旧版草稿的 localStorage 键：仅用于一次性收编 + 清除明文残留。
+ *  草稿现随主数据文件加密落盘（store.draftText），不再写 WebKit localStorage。 */
+const LEGACY_DRAFT_TEXT_STORAGE_KEY = "toskr-draft-input-text";
 
-const readStoredDraftText = () => {
+const takeLegacyDraftText = () => {
   try {
-    return localStorage.getItem(DRAFT_TEXT_STORAGE_KEY) ?? "";
+    const legacy = localStorage.getItem(LEGACY_DRAFT_TEXT_STORAGE_KEY) ?? "";
+    localStorage.removeItem(LEGACY_DRAFT_TEXT_STORAGE_KEY);
+    return legacy;
   } catch {
     return "";
-  }
-};
-
-const writeStoredDraftText = (text: string) => {
-  try {
-    if (text) localStorage.setItem(DRAFT_TEXT_STORAGE_KEY, text);
-    else localStorage.removeItem(DRAFT_TEXT_STORAGE_KEY);
-  } catch {
-    /* 存储不可用时草稿仅存活于当前挂载 */
   }
 };
 
@@ -95,15 +89,57 @@ function PendingThumb({
  * 回车把文字与全部暂存图打成一张组合卡（纯图无文字则成图片卡）。
  */
 export function DraftInput() {
-  // 未提交草稿必须扛住组件卸载（切页/收横栏即卸载）：文字初值从 localStorage
-  // 恢复并写穿（重启也不丢）；暂存图片提升到 uiStore 会话级（图片文件未被
-  // 任何卡片引用，可能被媒体清理回收，刻意不跨重启恢复）
-  const [value, setValueState] = useState(readStoredDraftText);
+  // 未提交草稿必须扛住组件卸载（切页/收横栏即卸载）：文字持久化在
+  // store.draftText（随主数据文件加密落盘，重启也不丢；旧版 localStorage
+  // 明文在下方一次性收编）。打字手感优先：本地 state 即时渲染，镜像进
+  // store 走 300ms 防抖——store 每次 set 会整包序列化，逐键直写大库会拖输入。
+  // 暂存图片提升到 uiStore 会话级（图片文件未被任何卡片引用，可能被媒体
+  // 清理回收，刻意不跨重启恢复）
+  const [value, setValueState] = useState(
+    () => useNotesStore.getState().draftText || takeLegacyDraftText()
+  );
+  const valueRef = useRef(value);
+  const mirrorTimer = useRef<number | null>(null);
   const pending = useUIStore((s) => s.draftImages);
   const setValue = (text: string) => {
     setValueState(text);
-    writeStoredDraftText(text);
+    valueRef.current = text;
+    if (mirrorTimer.current !== null) window.clearTimeout(mirrorTimer.current);
+    if (text) {
+      mirrorTimer.current = window.setTimeout(() => {
+        mirrorTimer.current = null;
+        useNotesStore.getState().setDraftText(text);
+      }, 300);
+    } else {
+      // 提交/清空立刻落定，避免防抖窗口内退出把已提交草稿复活
+      mirrorTimer.current = null;
+      useNotesStore.getState().setDraftText("");
+    }
   };
+  const storeDraft = useNotesStore((s) => s.draftText);
+  useEffect(() => {
+    // 水合可能晚于挂载（skipHydration）：持久草稿到达且本地仍为空时采纳；
+    // 用户已开始输入则以本地为准，不覆盖
+    if (storeDraft && !valueRef.current) {
+      setValueState(storeDraft);
+      valueRef.current = storeDraft;
+    }
+  }, [storeDraft]);
+  useEffect(() => {
+    // 挂载时若收编了旧版 localStorage 草稿（store 尚空），补写进 store
+    const state = useNotesStore.getState();
+    if (valueRef.current && !state.draftText) {
+      state.setDraftText(valueRef.current);
+    }
+    return () => {
+      // 卸载前把防抖中的镜像冲出去，切页不丢最后一击键
+      if (mirrorTimer.current !== null) {
+        window.clearTimeout(mirrorTimer.current);
+        mirrorTimer.current = null;
+        useNotesStore.getState().setDraftText(valueRef.current);
+      }
+    };
+  }, []);
   const setPending = (
     update: DraftPendingImage[] | ((cur: DraftPendingImage[]) => DraftPendingImage[])
   ) => {
