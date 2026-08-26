@@ -2,12 +2,14 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import {
   AlertTriangle,
   Check,
+  ChevronRight,
   Image as ImageIcon,
   LocateFixed,
   RefreshCw,
   RotateCcw,
   Send,
   ShieldAlert,
+  ShieldCheck,
   VenetianMask,
   X,
 } from "lucide-react";
@@ -600,6 +602,367 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
     );
   };
 
+
+  // ——— B 版式「先处理，后确认」派生：分区归属与顶部横幅文案 ———
+  const unresolvedTextCount = draft.findings.filter(
+    (finding) => !excludedFindingIds.has(finding.id)
+  ).length;
+  const unresolvedImageCount = draft.imageFirewall.reduce(
+    (total, item) =>
+      total +
+      item.findings.filter(
+        (finding) =>
+          !item.redactedFindingIds.includes(finding.id) &&
+          !item.keptFindingIds.includes(finding.id)
+      ).length,
+    0
+  );
+  const enterPending =
+    !draft.safeRehearsal &&
+    draft.enterPolicy === "confirm" &&
+    !draft.enterDecisionConfirmed;
+  // 有未了结命中（含按方案放行的）也算待处理：可发送 ≠ 不需要人看一眼
+  const textAttention = Boolean(
+    draft.firewallEnabled &&
+      ((firewall && !firewall.canSend) ||
+        unresolvedTextCount > 0 ||
+        draft.firewallStatus === "failed" ||
+        draft.firewallStatus === "incomplete")
+  );
+  const imageAttention =
+    draft.imageFirewall.length > 0 &&
+    Boolean(
+      (imageFirewall && !imageFirewall.canSend) ||
+        unresolvedImageCount > 0 ||
+        draft.imageFirewall.some(
+          (item) => item.status !== "ready" && item.status !== "disabled"
+        )
+    );
+  const checksPass = Boolean(
+    firewall?.canSend && imageFirewall?.canSend && !enterPending
+  );
+  const textPassSummary =
+    draft.firewallStatus === "disabled"
+      ? "检查已关闭"
+      : draft.findings.length === 0
+        ? draft.privacyDecision.replacedCount > 0
+          ? `已替换 ${draft.privacyDecision.replacedCount} 处敏感内容`
+          : "未发现敏感内容"
+        : unresolvedTextCount === 0
+          ? `已确认保留 ${draft.findings.length} 处原文`
+          : `${unresolvedTextCount} 处命中按方案保留原文`;
+  const keptImageFindingCount = draft.imageFirewall.reduce(
+    (total, item) => total + item.keptFindingIds.length,
+    0
+  );
+  const imagePassSummary = draft.imageFirewall.every(
+    (item) => item.status === "disabled"
+  )
+    ? `检查已关闭，${hasImageRedactions ? "发送副本" : "发送原图"}`
+    : hasImageRedactions
+      ? "已遮挡敏感区域，发送副本"
+      : keptImageFindingCount > 0
+        ? `已确认保留 ${keptImageFindingCount} 处，发送原图`
+        : "无敏感区域，发送原图";
+  const attentionCount =
+    unresolvedTextCount + unresolvedImageCount + (enterPending ? 1 : 0);
+  const bannerTitle = privacyScanPending
+    ? "本地隐私检测中…"
+    : checksPass
+      ? draft.safeRehearsal
+        ? "检查全部通过，可安全粘贴"
+        : "检查全部通过，可发送"
+      : attentionCount > 0
+        ? `${attentionCount} 项处理完才能发送`
+        : "检查未通过，暂不能发送";
+  const bannerDetail = privacyScanPending
+    ? "文本检测与图片 OCR 均在本机运行，内容不会上传"
+    : checksPass
+      ? textAttention || imageAttention
+        ? "部分命中按当前方案保留原文，建议复查下方明细"
+        : [
+            textPassSummary,
+            draft.imageFirewall.length
+              ? `${draft.imageFirewall.length} 张图片${
+                  hasImageRedactions ? "已遮挡" : "发送原图"
+                }`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")
+      : [
+          unresolvedTextCount > 0 ? `${unresolvedTextCount} 处文本敏感项` : null,
+          unresolvedImageCount > 0 ? `${unresolvedImageCount} 处图片区域` : null,
+          enterPending ? "回车动作待确认" : null,
+        ]
+          .filter(Boolean)
+          .join(" · ") ||
+        (firewall?.reason ?? imageFirewall?.reason ?? "详见下方检查明细");
+  const enterDecisionFieldset = (
+    <fieldset className="space-y-1">
+      <legend className="sr-only">选择本次粘贴后的回车动作</legend>
+      {([
+        [false, "本次不按回车"],
+        [true, "本次粘贴后按回车"],
+      ] as const).map(([pressEnter, label]) => (
+        <label key={label} className="flex items-center gap-1.5">
+          <input
+            type="radio"
+            name="preflight-enter-decision"
+            checked={
+              draft.enterDecisionConfirmed &&
+              draft.pressEnter === pressEnter
+            }
+            disabled={busy}
+            onChange={() =>
+              useDeliveryStore.getState().confirmEnter(pressEnter)
+            }
+          />
+          {label}
+        </label>
+      ))}
+    </fieldset>
+  );
+  const imageCheckPanel =
+    draft.imageFirewall.length > 0 && imageFirewall ? (
+      <ImageFirewallPanel draft={draft} busy={busy} evaluation={imageFirewall} />
+    ) : null;
+  const privacyCheckSection = (
+    <section
+      aria-label="本地隐私检查"
+      className="space-y-2 rounded-lg border border-border/70 p-2"
+    >
+      <div className="flex items-center gap-1.5">
+        <ShieldAlert className="size-3.5 text-warning" aria-hidden />
+        <p className="text-label font-medium">本地隐私检查</p>
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          <span aria-live="polite" className="text-micro text-muted-foreground">
+            {draft.firewallStatus === "disabled"
+              ? "已关闭"
+              : draft.firewallStatus === "scanning"
+                ? "扫描中…"
+                : draft.firewallStatus === "ready"
+                  ? draft.findings.length
+                    ? `${draft.findings.length} 项待处理`
+                    : "无待处理项"
+                  : draft.firewallStatus === "incomplete"
+                    ? "检查不完整"
+                    : draft.firewallStatus === "failed"
+                      ? "检查失败"
+                      : "等待检查"}
+          </span>
+          {draft.firewallEnabled && (
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              aria-label={privacyRescanLabel}
+              title={privacyRescanLabel}
+              disabled={busy || privacyScanPending}
+              onClick={() => void rerunPrivacyScan()}
+            >
+              <RefreshCw
+                aria-hidden
+                className={cn(
+                  "size-3",
+                  privacyScanPending && "animate-spin motion-reduce:animate-none"
+                )}
+              />
+              {privacyScanPending ? "检测中" : "重新检测"}
+            </Button>
+          )}
+        </div>
+      </div>
+      <p className="text-micro text-muted-foreground">
+        {privacyPolicyLabel} · 检测可能存在误报或漏报
+      </p>
+      {draft.firewallStatus === "ready" && draft.findings.length === 0 && (
+        <p role="status" className="text-label text-success">
+          {draft.privacyDecision.replacedCount > 0
+            ? `已替换 ${draft.privacyDecision.replacedCount} 处敏感内容，本项检查通过`
+            : "未发现敏感内容，本项检查通过"}
+        </p>
+      )}
+      {draft.findings.length > 0 && firewall?.canSend && (
+        <p role="status" className="text-label text-success">
+          敏感项已全部处理，可以发送
+        </p>
+      )}
+      {firewallSummary.length > 0 && (
+        <div className="flex flex-wrap gap-1" aria-label="敏感项分类汇总">
+          {firewallSummary.map((item) => (
+            <span
+              key={item.category}
+              className={cn(
+                "rounded-sm px-1.5 py-0.5 text-micro",
+                item.severity === "block"
+                  ? "bg-destructive/10 text-destructive"
+                  : "bg-warning/10 text-warning"
+              )}
+            >
+              {FIREWALL_CATEGORY_LABEL[item.category]} · {FIREWALL_SEVERITY_LABEL[item.severity]} ×{item.count}
+            </span>
+          ))}
+        </div>
+      )}
+      {draft.findings.length > 0 && (
+        <>
+          <p className="text-micro text-muted-foreground">
+            推荐替换为占位符（本机替换、发出的是占位符）；确需按原文发出时选「保留原文发送」
+          </p>
+          <ul className="space-y-1.5" aria-label="敏感项列表">
+            {draft.findings.map((finding) => {
+              const excluded = excludedFindingIds.has(finding.id);
+              return (
+                <li
+                  key={finding.id}
+                  className="rounded-md bg-background/60 p-1.5"
+                >
+                  <div className="flex items-center gap-1 text-label">
+                    <span className="font-medium">
+                      {FIREWALL_CATEGORY_LABEL[finding.category]}
+                    </span>
+                    <span className={cn(
+                      "rounded-sm px-1 py-0.5 text-micro",
+                      finding.severity === "block"
+                        ? "bg-destructive/10 text-destructive"
+                        : "bg-warning/10 text-warning"
+                    )}>
+                      {FIREWALL_SEVERITY_LABEL[finding.severity]}
+                    </span>
+                    <code className="min-w-0 flex-1 truncate text-right text-micro text-muted-foreground">
+                      {finding.maskedPreview}
+                    </code>
+                    <IconButton
+                      label="在正文中定位这一项"
+                      size="2xs"
+                      disabled={busy}
+                      onClick={() => locateFinding(
+                        finding.startUtf16,
+                        finding.endUtf16
+                      )}
+                    >
+                      <LocateFixed className="size-3" />
+                    </IconButton>
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="secondary"
+                      disabled={busy}
+                      onClick={() =>
+                        useDeliveryStore.getState()
+                          .replaceFirewallFinding(finding.id)}
+                    >
+                      替换为占位符
+                    </Button>
+                    <Button
+                      type="button"
+                      size="xs"
+                      disabled={busy}
+                      onClick={() =>
+                        useDeliveryStore.getState()
+                          .replaceFirewallCategory(finding.category)}
+                    >
+                      同类全部替换
+                    </Button>
+                    {finding.severity === "warn" && (
+                      <SimpleMenu
+                        side="bottom"
+                        align="start"
+                        trigger={({ toggle }) => (
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="ghost"
+                            disabled={busy}
+                            title="把这个值升级为持久词典实体：以后自动替换、捕获回复自动恢复"
+                            onClick={toggle}
+                          >
+                            加入词典
+                          </Button>
+                        )}
+                      >
+                        {(close) => (
+                          <>
+                            {aliasQuickAddCategories(
+                              settings.aliasCustomCategories
+                            ).map((category) => (
+                              <SimpleMenuItem
+                                key={category.code}
+                                onClick={() => {
+                                  close();
+                                  addFindingToAliasDictionary(
+                                    finding,
+                                    category.code
+                                  );
+                                }}
+                              >
+                                {category.label}
+                              </SimpleMenuItem>
+                            ))}
+                          </>
+                        )}
+                      </SimpleMenu>
+                    )}
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="ghost"
+                      className="ml-auto text-muted-foreground"
+                      title="不替换这一项，按原文发出（仅本次发送有效）"
+                      disabled={busy || excluded}
+                      onClick={() =>
+                        useDeliveryStore.getState()
+                          .excludeFirewallFinding(finding.id)}
+                    >
+                      {excluded ? "已确认保留原文" : "保留原文发送"}
+                    </Button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+          {draft.findings.length > 1 && (
+            <Button
+              type="button"
+              size="xs"
+              variant="secondary"
+              disabled={busy}
+              title="把上面所有命中一次性替换为占位符"
+              onClick={() =>
+                useDeliveryStore.getState().replaceAllFirewallFindings()}
+            >
+              一键全部替换
+            </Button>
+          )}
+        </>
+      )}
+      {firewall?.needsRawConfirmation && (
+        <Button
+          type="button"
+          size="xs"
+          variant="secondary"
+          disabled={busy}
+          onClick={() =>
+            useDeliveryStore.getState().confirmRawPrivacy(
+              firewall.needsRawConfirmation!
+            )}
+        >
+          {firewall.needsRawConfirmation === "block"
+            ? "再次确认保留高风险原文"
+            : "确认本次保留提示级原文"}
+        </Button>
+      )}
+      {(firewall?.reason || imageFirewall?.reason) && (
+        <p role="status" className="text-micro text-warning">
+          {firewall?.reason ?? imageFirewall?.reason}
+        </p>
+      )}
+    </section>
+  );
+
   return (
     <>
       <div
@@ -695,129 +1058,44 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
               !showSummary && "hidden"
             )}
           >
-            <div className="flex items-center gap-2">
-              <ApplicationIcon src={icon} name={targetDisplayName} className="size-8 rounded-lg" />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-body font-medium">{targetDisplayName}</p>
-                <p className="text-micro text-muted-foreground">
-                  {readyDifferentTarget
-                    ? "待确认新目标"
-                    : staleReason === "target"
-                      ? "目标已变化"
-                      : "可发送"}
-                </p>
-              </div>
-              <span className="rounded-md bg-secondary px-1.5 py-0.5 text-micro">
-                {readyDifferentTarget ? "待重算方案" : profileName}
-              </span>
-            </div>
-
-            <details className="rounded-lg border border-border/70 p-2">
-              <summary className="cursor-pointer text-label font-medium">
-                来源 {draft.sourceItemIds.length} 项
-              </summary>
-              <ol className="mt-1 space-y-1 pl-4 text-label text-muted-foreground">
-                {sourceLabels.map((label, index) => (
-                  <li key={`${draft.sourceItemIds[index]}-${index}`} className="list-decimal truncate">
-                    {label}
-                  </li>
-                ))}
-              </ol>
-            </details>
-
-            {draft.imageFirewall.length > 0 && (
-              <ImageFirewallPanel
-                draft={draft}
-                busy={busy}
-                evaluation={imageFirewall!}
-              />
-            )}
-
-            <div className="grid grid-cols-2 gap-2">
-              <label className="space-y-1 text-label">
-                <span className="text-muted-foreground">提示词模板</span>
-                <SimpleSelect
-                  value={promptValue}
-                  options={promptOptions}
-                  ariaLabel="本次提示词模板"
-                  size="micro"
-                  disabled={busy}
-                  onChange={(value) => {
-                    if (value === "custom") return;
-                    const snippet = settings.promptSnippets.find((item) => item.id === value);
-                    updateOpenPreflightDraft({
-                      promptSnippetId: snippet?.id ?? null,
-                      promptTemplate: snippet?.text ?? null,
-                    });
-                  }}
-                />
-              </label>
-              <label className="space-y-1 text-label">
-                <span className="text-muted-foreground">输出格式</span>
-                <SimpleSelect
-                  value={draft.format}
-                  options={FORMAT_OPTIONS}
-                  ariaLabel="本次输出格式"
-                  size="micro"
-                  disabled={busy}
-                  onChange={(format) => updateOpenPreflightDraft({ format })}
-                />
-              </label>
-            </div>
-
-            {draft.promptTemplate && (
-              <pre className="max-h-16 overflow-y-auto whitespace-pre-wrap break-words rounded-lg bg-background/60 p-2 font-mono text-micro text-muted-foreground">
-                {draft.promptTemplate}
-              </pre>
-            )}
-
-            <div className="space-y-1 rounded-lg border border-border/70 p-2 text-label">
-              <p>
-                粘贴后动作：{ENTER_POLICY_STATUS_LABEL[draft.enterPolicy]}
-                <span className="text-muted-foreground">
-                  {` · ${enterDecisionLabel}`}
-                </span>
-              </p>
-              {draft.safeRehearsal ? (
-                <p role="status" className="font-medium text-success">
-                  演练安全锁：只粘贴，不按回车
-                </p>
-              ) : draft.enterPolicy === "confirm" && (
-                <fieldset className="space-y-1">
-                  <legend className="sr-only">选择本次粘贴后的回车动作</legend>
-                  {([
-                    [false, "本次不按回车"],
-                    [true, "本次粘贴后按回车"],
-                  ] as const).map(([pressEnter, label]) => (
-                    <label key={label} className="flex items-center gap-1.5">
-                      <input
-                        type="radio"
-                        name="preflight-enter-decision"
-                        checked={
-                          draft.enterDecisionConfirmed &&
-                          draft.pressEnter === pressEnter
-                        }
-                        disabled={busy}
-                        onChange={() =>
-                          useDeliveryStore.getState().confirmEnter(pressEnter)
-                        }
-                      />
-                      {label}
-                    </label>
-                  ))}
-                </fieldset>
+            {/* B 版式（2026-08-26 用户选定）：状态横幅 → 需要处理 → 本次发送 → 已通过存档 */}
+            <div
+              className={cn(
+                "flex items-start gap-2 rounded-lg p-2.5",
+                privacyScanPending
+                  ? "bg-muted/60"
+                  : checksPass
+                    ? "bg-success/10"
+                    : "bg-warning/10"
               )}
-              <label className="flex items-center gap-1.5">
-                <input
-                  type="checkbox"
-                  checked={draft.keepPanel}
-                  disabled={busy || draft.safeRehearsal}
-                  onChange={(event) =>
-                    useDeliveryStore.getState().setKeepPanel(event.target.checked)
-                  }
+            >
+              {privacyScanPending ? (
+                <RefreshCw
+                  className="mt-px size-3.5 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none"
+                  aria-hidden
                 />
-                发送后保留面板
-              </label>
+              ) : checksPass ? (
+                <ShieldCheck className="mt-px size-3.5 shrink-0 text-success" aria-hidden />
+              ) : (
+                <AlertTriangle className="mt-px size-3.5 shrink-0 text-warning" aria-hidden />
+              )}
+              <div className="min-w-0 flex-1">
+                <p
+                  className={cn(
+                    "text-label font-semibold",
+                    privacyScanPending
+                      ? "text-foreground"
+                      : checksPass
+                        ? "text-success"
+                        : "text-warning"
+                  )}
+                >
+                  {bannerTitle}
+                </p>
+                {bannerDetail && (
+                  <p className="text-micro text-muted-foreground">{bannerDetail}</p>
+                )}
+              </div>
             </div>
 
             {draft.warnings.length > 0 && (
@@ -833,24 +1111,175 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
               </div>
             )}
 
-            {aliasOccurrences.length > 0 && (
-              <section
-                aria-label="可逆化名"
-                className="space-y-2 rounded-lg border border-border/70 p-2"
-              >
-                <div className="flex items-center gap-1.5">
-                  <VenetianMask
-                    className="size-3.5 text-muted-foreground"
+            {(textAttention || imageAttention || enterPending) && (
+              <div className="space-y-2">
+                <p className="px-0.5 text-micro font-semibold text-warning">需要处理</p>
+                {textAttention && privacyCheckSection}
+                {imageAttention && imageCheckPanel}
+                {enterPending && (
+                  <div className="space-y-1 rounded-lg border border-warning/40 p-2 text-label">
+                    <p className="font-medium">
+                      粘贴后动作：{ENTER_POLICY_STATUS_LABEL[draft.enterPolicy]}
+                      <span className="text-muted-foreground">
+                        {` · ${enterDecisionLabel}`}
+                      </span>
+                    </p>
+                    {enterDecisionFieldset}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <section
+              aria-label="本次发送"
+              className="space-y-2 rounded-lg border border-border/70 p-2"
+            >
+              <div className="flex items-center gap-2">
+                <ApplicationIcon src={icon} name={targetDisplayName} className="size-8 rounded-lg" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-body font-medium">{targetDisplayName}</p>
+                  <p className="text-micro text-muted-foreground">
+                    {readyDifferentTarget
+                      ? "待确认新目标"
+                      : staleReason === "target"
+                        ? "目标已变化"
+                        : "可发送"}
+                  </p>
+                </div>
+                <span className="rounded-md bg-secondary px-1.5 py-0.5 text-micro">
+                  {readyDifferentTarget ? "待重算方案" : profileName}
+                </span>
+              </div>
+
+              <details>
+                <summary className="cursor-pointer text-label font-medium">
+                  来源 {draft.sourceItemIds.length} 项
+                </summary>
+                <ol className="mt-1 space-y-1 pl-4 text-label text-muted-foreground">
+                  {sourceLabels.map((label, index) => (
+                    <li key={`${draft.sourceItemIds[index]}-${index}`} className="list-decimal truncate">
+                      {label}
+                    </li>
+                  ))}
+                </ol>
+              </details>
+
+              <div className="grid grid-cols-2 gap-2">
+                <label className="space-y-1 text-label">
+                  <span className="text-muted-foreground">提示词模板</span>
+                  <SimpleSelect
+                    value={promptValue}
+                    options={promptOptions}
+                    ariaLabel="本次提示词模板"
+                    size="micro"
+                    disabled={busy}
+                    onChange={(value) => {
+                      if (value === "custom") return;
+                      const snippet = settings.promptSnippets.find((item) => item.id === value);
+                      updateOpenPreflightDraft({
+                        promptSnippetId: snippet?.id ?? null,
+                        promptTemplate: snippet?.text ?? null,
+                      });
+                    }}
+                  />
+                </label>
+                <label className="space-y-1 text-label">
+                  <span className="text-muted-foreground">输出格式</span>
+                  <SimpleSelect
+                    value={draft.format}
+                    options={FORMAT_OPTIONS}
+                    ariaLabel="本次输出格式"
+                    size="micro"
+                    disabled={busy}
+                    onChange={(format) => updateOpenPreflightDraft({ format })}
+                  />
+                </label>
+              </div>
+
+              {draft.promptTemplate && (
+                <pre className="max-h-16 overflow-y-auto whitespace-pre-wrap break-words rounded-lg bg-background/60 p-2 font-mono text-micro text-muted-foreground">
+                  {draft.promptTemplate}
+                </pre>
+              )}
+
+              <div className="space-y-1 text-label">
+                {!enterPending && (
+                  <p>
+                    粘贴后动作：{ENTER_POLICY_STATUS_LABEL[draft.enterPolicy]}
+                    <span className="text-muted-foreground">
+                      {` · ${enterDecisionLabel}`}
+                    </span>
+                  </p>
+                )}
+                {draft.safeRehearsal ? (
+                  <p role="status" className="font-medium text-success">
+                    演练安全锁：只粘贴，不按回车
+                  </p>
+                ) : (
+                  draft.enterPolicy === "confirm" &&
+                  !enterPending &&
+                  enterDecisionFieldset
+                )}
+                <label className="flex items-center gap-1.5">
+                  <input
+                    type="checkbox"
+                    checked={draft.keepPanel}
+                    disabled={busy || draft.safeRehearsal}
+                    onChange={(event) =>
+                      useDeliveryStore.getState().setKeepPanel(event.target.checked)
+                    }
+                  />
+                  发送后保留面板
+                </label>
+              </div>
+            </section>
+
+            {!textAttention && (
+              <details className="group px-1">
+                <summary className="flex cursor-pointer list-none items-center gap-1.5 py-1 text-label text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
+                  <Check className="size-3 shrink-0 text-success" aria-hidden />
+                  <span className="min-w-0 flex-1 truncate">
+                    文本隐私 · {textPassSummary}
+                  </span>
+                  <ChevronRight
+                    className="size-3 shrink-0 transition-transform group-open:rotate-90"
                     aria-hidden
                   />
-                  <p className="text-label font-medium">可逆化名</p>
-                  <span
-                    aria-live="polite"
-                    className="ml-auto shrink-0 text-micro text-muted-foreground"
-                  >
-                    已自动替换 {aliasOccurrences.length} 处
+                </summary>
+                <div className="mt-1">{privacyCheckSection}</div>
+              </details>
+            )}
+            {!imageAttention && draft.imageFirewall.length > 0 && (
+              <details className="group px-1">
+                <summary className="flex cursor-pointer list-none items-center gap-1.5 py-1 text-label text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
+                  <Check className="size-3 shrink-0 text-success" aria-hidden />
+                  <span className="min-w-0 flex-1 truncate">
+                    图片隐私 {draft.imageFirewall.length} 张 · {imagePassSummary}
                   </span>
-                </div>
+                  <ChevronRight
+                    className="size-3 shrink-0 transition-transform group-open:rotate-90"
+                    aria-hidden
+                  />
+                </summary>
+                <div className="mt-1">{imageCheckPanel}</div>
+              </details>
+            )}
+            {aliasOccurrences.length > 0 && (
+              <details className="group px-1">
+                <summary className="flex cursor-pointer list-none items-center gap-1.5 py-1 text-label text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
+                  <VenetianMask className="size-3 shrink-0" aria-hidden />
+                  <span aria-live="polite" className="min-w-0 flex-1 truncate">
+                    可逆化名 · 已自动替换 {aliasOccurrences.length} 处
+                  </span>
+                  <ChevronRight
+                    className="size-3 shrink-0 transition-transform group-open:rotate-90"
+                    aria-hidden
+                  />
+                </summary>
+              <section
+                aria-label="可逆化名"
+                className="mt-1 space-y-2 rounded-lg border border-border/70 p-2"
+              >
                 <ul className="space-y-1" aria-label="化名替换列表">
                   {aliasOccurrences.map((occurrence) => (
                     <li
@@ -881,241 +1310,33 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                   已按词典自动替换，发送后可在本机恢复；如需保留原文可逐项还原（仅本次发送有效）
                 </p>
               </section>
+              </details>
             )}
-
-            <section
-              aria-label="本地隐私检查"
-              className="space-y-2 rounded-lg border border-border/70 p-2"
-            >
-              <div className="flex items-center gap-1.5">
-                <ShieldAlert className="size-3.5 text-warning" aria-hidden />
-                <p className="text-label font-medium">本地隐私检查</p>
-                <div className="ml-auto flex shrink-0 items-center gap-1">
-                  <span aria-live="polite" className="text-micro text-muted-foreground">
-                    {draft.firewallStatus === "disabled"
-                      ? "已关闭"
-                      : draft.firewallStatus === "scanning"
-                        ? "扫描中…"
-                        : draft.firewallStatus === "ready"
-                          ? draft.findings.length
-                            ? `${draft.findings.length} 项待处理`
-                            : "无待处理项"
-                          : draft.firewallStatus === "incomplete"
-                            ? "检查不完整"
-                            : draft.firewallStatus === "failed"
-                              ? "检查失败"
-                              : "等待检查"}
-                  </span>
-                  {draft.firewallEnabled && (
-                    <Button
-                      type="button"
-                      size="xs"
-                      variant="ghost"
-                      aria-label={privacyRescanLabel}
-                      title={privacyRescanLabel}
-                      disabled={busy || privacyScanPending}
-                      onClick={() => void rerunPrivacyScan()}
-                    >
-                      <RefreshCw
-                        aria-hidden
-                        className={cn(
-                          "size-3",
-                          privacyScanPending && "animate-spin motion-reduce:animate-none"
-                        )}
-                      />
-                      {privacyScanPending ? "检测中" : "重新检测"}
-                    </Button>
-                  )}
-                </div>
-              </div>
-              <p className="text-micro text-muted-foreground">
-                {privacyPolicyLabel} · 检测可能存在误报或漏报
-              </p>
-              {draft.firewallStatus === "ready" && draft.findings.length === 0 && (
-                <p role="status" className="text-label text-success">
-                  {draft.privacyDecision.replacedCount > 0
-                    ? `已替换 ${draft.privacyDecision.replacedCount} 处敏感内容，本项检查通过`
-                    : "未发现敏感内容，本项检查通过"}
-                </p>
-              )}
-              {draft.findings.length > 0 && firewall?.canSend && (
-                <p role="status" className="text-label text-success">
-                  敏感项已全部处理，可以发送
-                </p>
-              )}
-              {firewallSummary.length > 0 && (
-                <div className="flex flex-wrap gap-1" aria-label="敏感项分类汇总">
-                  {firewallSummary.map((item) => (
-                    <span
-                      key={item.category}
-                      className={cn(
-                        "rounded-sm px-1.5 py-0.5 text-micro",
-                        item.severity === "block"
-                          ? "bg-destructive/10 text-destructive"
-                          : "bg-warning/10 text-warning"
-                      )}
-                    >
-                      {FIREWALL_CATEGORY_LABEL[item.category]} · {FIREWALL_SEVERITY_LABEL[item.severity]} ×{item.count}
-                    </span>
-                  ))}
-                </div>
-              )}
-              {draft.findings.length > 0 && (
-                <>
-                  <p className="text-micro text-muted-foreground">
-                    推荐替换为占位符（本机替换、发出的是占位符）；确需按原文发出时选「保留原文发送」
-                  </p>
-                  <ul className="space-y-1.5" aria-label="敏感项列表">
-                    {draft.findings.map((finding) => {
-                      const excluded = excludedFindingIds.has(finding.id);
-                      return (
-                        <li
-                          key={finding.id}
-                          className="rounded-md bg-background/60 p-1.5"
-                        >
-                          <div className="flex items-center gap-1 text-label">
-                            <span className="font-medium">
-                              {FIREWALL_CATEGORY_LABEL[finding.category]}
-                            </span>
-                            <span className={cn(
-                              "rounded-sm px-1 py-0.5 text-micro",
-                              finding.severity === "block"
-                                ? "bg-destructive/10 text-destructive"
-                                : "bg-warning/10 text-warning"
-                            )}>
-                              {FIREWALL_SEVERITY_LABEL[finding.severity]}
-                            </span>
-                            <code className="min-w-0 flex-1 truncate text-right text-micro text-muted-foreground">
-                              {finding.maskedPreview}
-                            </code>
-                            <IconButton
-                              label="在正文中定位这一项"
-                              size="2xs"
-                              disabled={busy}
-                              onClick={() => locateFinding(
-                                finding.startUtf16,
-                                finding.endUtf16
-                              )}
-                            >
-                              <LocateFixed className="size-3" />
-                            </IconButton>
-                          </div>
-                          <div className="mt-1.5 flex flex-wrap items-center gap-1">
-                            <Button
-                              type="button"
-                              size="xs"
-                              variant="secondary"
-                              disabled={busy}
-                              onClick={() =>
-                                useDeliveryStore.getState()
-                                  .replaceFirewallFinding(finding.id)}
-                            >
-                              替换为占位符
-                            </Button>
-                            <Button
-                              type="button"
-                              size="xs"
-                              disabled={busy}
-                              onClick={() =>
-                                useDeliveryStore.getState()
-                                  .replaceFirewallCategory(finding.category)}
-                            >
-                              同类全部替换
-                            </Button>
-                            {finding.severity === "warn" && (
-                              <SimpleMenu
-                                side="bottom"
-                                align="start"
-                                trigger={({ toggle }) => (
-                                  <Button
-                                    type="button"
-                                    size="xs"
-                                    variant="ghost"
-                                    disabled={busy}
-                                    title="把这个值升级为持久词典实体：以后自动替换、捕获回复自动恢复"
-                                    onClick={toggle}
-                                  >
-                                    加入词典
-                                  </Button>
-                                )}
-                              >
-                                {(close) => (
-                                  <>
-                                    {aliasQuickAddCategories(
-                                      settings.aliasCustomCategories
-                                    ).map((category) => (
-                                      <SimpleMenuItem
-                                        key={category.code}
-                                        onClick={() => {
-                                          close();
-                                          addFindingToAliasDictionary(
-                                            finding,
-                                            category.code
-                                          );
-                                        }}
-                                      >
-                                        {category.label}
-                                      </SimpleMenuItem>
-                                    ))}
-                                  </>
-                                )}
-                              </SimpleMenu>
-                            )}
-                            <Button
-                              type="button"
-                              size="xs"
-                              variant="ghost"
-                              className="ml-auto text-muted-foreground"
-                              title="不替换这一项，按原文发出（仅本次发送有效）"
-                              disabled={busy || excluded}
-                              onClick={() =>
-                                useDeliveryStore.getState()
-                                  .excludeFirewallFinding(finding.id)}
-                            >
-                              {excluded ? "已确认保留原文" : "保留原文发送"}
-                            </Button>
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                  {draft.findings.length > 1 && (
-                    <Button
-                      type="button"
-                      size="xs"
-                      variant="secondary"
-                      disabled={busy}
-                      title="把上面所有命中一次性替换为占位符"
-                      onClick={() =>
-                        useDeliveryStore.getState().replaceAllFirewallFindings()}
-                    >
-                      一键全部替换
-                    </Button>
-                  )}
-                </>
-              )}
-              {firewall?.needsRawConfirmation && (
+            {!textAttention && draft.firewallEnabled && (
+              <div className="flex items-center gap-1.5 px-1 text-micro text-muted-foreground">
+                <span className="min-w-0 flex-1 truncate">
+                  检测均在本机运行 · 结果可能有误报或漏报
+                </span>
                 <Button
                   type="button"
                   size="xs"
-                  variant="secondary"
-                  disabled={busy}
-                  onClick={() =>
-                    useDeliveryStore.getState().confirmRawPrivacy(
-                      firewall.needsRawConfirmation!
-                    )}
+                  variant="ghost"
+                  aria-label={privacyRescanLabel}
+                  title={privacyRescanLabel}
+                  disabled={busy || privacyScanPending}
+                  onClick={() => void rerunPrivacyScan()}
                 >
-                  {firewall.needsRawConfirmation === "block"
-                    ? "再次确认保留高风险原文"
-                    : "确认本次保留提示级原文"}
+                  <RefreshCw
+                    aria-hidden
+                    className={cn(
+                      "size-3",
+                      privacyScanPending && "animate-spin motion-reduce:animate-none"
+                    )}
+                  />
+                  重新检测
                 </Button>
-              )}
-              {(firewall?.reason || imageFirewall?.reason) && (
-                <p role="status" className="text-micro text-warning">
-                  {firewall?.reason ?? imageFirewall?.reason}
-                </p>
-              )}
-            </section>
+              </div>
+            )}
           </section>
 
           <section
