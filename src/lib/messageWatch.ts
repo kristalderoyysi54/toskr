@@ -59,6 +59,9 @@ export function buildMessageWatchBridgeScript(
   const ignored = new Set();
   const queued = new Set();
   const delivered = new Set();
+  // 已终态化的 messageInfo 条目键（历史忽略 / 非群 / 不命中 / 已入队）：
+  // 稳态 scan 直接跳过，不再对其做 parseJson / findText / snapshot 等重活。
+  const processed = new Set();
   const pending = [];
   const restorers = [];
   let stopped = false;
@@ -85,6 +88,16 @@ export function buildMessageWatchBridgeScript(
     if (Array.isArray(value)) return value.map((item, index) => [String(index), item]);
     if (typeof value === "object") return Object.entries(value);
     return [];
+  };
+  // 遍历 messageInfo 但不物化成数组（Object 走 for-in、Map 走迭代器）：
+  // 推推 messageInfo 可达数万条，每轮 scan 物化整表是持续的 GC 压力。
+  const forEachEntry = (value, cb) => {
+    if (!value) return;
+    if (value instanceof Map) { for (const [k, v] of value) cb(k, v); return; }
+    if (Array.isArray(value)) { for (let i = 0; i < value.length; i += 1) cb(String(i), value[i]); return; }
+    if (typeof value === "object") {
+      for (const k in value) if (Object.prototype.hasOwnProperty.call(value, k)) cb(k, value[k]);
+    }
   };
   const listOf = (value) => {
     if (!value) return [];
@@ -412,6 +425,7 @@ export function buildMessageWatchBridgeScript(
     clearInterval(healthTimer);
     pending.length = 0;
     queued.clear();
+    processed.clear();
     for (const restore of restorers.splice(0)) {
       try { restore(); } catch (_) {}
     }
@@ -550,26 +564,33 @@ export function buildMessageWatchBridgeScript(
     const messageState = im.message || {};
     const infos = messageState.messageInfo;
     const sessions = (im.session && im.session.sessionInfo) || {};
-    const index = conversationIndex(messageState);
+    // 会话索引惰性构建：只有真要处理新条目（envelopeFor 内兜底解析会话号）时
+    // 才全量遍历 messageList；稳态无新消息时根本不构建，且一轮 scan 内只建一次。
+    let indexCache = null;
+    const index = { get: (key) => (indexCache || (indexCache = conversationIndex(messageState))).get(key) };
     installHooks();
     for (const signal of signalLists(main)) {
       acceptSignal(signal.record, signal.mentionedSelf, signal.followedSender, initialScan);
     }
-    for (const [entryKey, record] of entriesOf(infos)) {
+    forEachEntry(infos, (entryKey, record) => {
+      // 只在条目首次出现时做昂贵解析；已终态化的条目稳态下 O(1) 跳过，
+      // 这样卡顿从「每轮全量 parse」降为「仅处理新增消息」。
+      if (processed.has(entryKey)) return;
       const message = envelopeFor(entryKey, record, index, sessions, main, messageState);
-      if (!message) continue;
+      if (!message) { processed.add(entryKey); return; }
       const key = message.conversationId + "\\u0000" + message.messageId;
       if (initialScan && (!message.occurredAtMs || message.occurredAtMs < STARTED_AT - 2000)) {
         ignored.add(key);
       } else {
         enqueue(key, message);
       }
-    }
+      processed.add(entryKey);
+    });
     initialScan = false;
   };
 
   scan();
-  scanTimer = setInterval(scan, 250);
+  scanTimer = setInterval(scan, 500);
   if (TRANSPORT === "http") {
     healthTimer = setInterval(() => { void heartbeat(); }, 2_000);
   }

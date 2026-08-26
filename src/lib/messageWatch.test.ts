@@ -240,6 +240,72 @@ describe("IM实验监听", () => {
     (fakeWindow.__toskrMessageWatchV1 as { stop: () => void }).stop();
   });
 
+  it("稳态增量：已投递消息多轮扫描不重复上报，新消息仍被捕获", async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn().mockResolvedValue({ ok: true });
+    const messageInfo = new Map<string, Record<string, unknown>>([
+      [
+        "m1",
+        {
+          msg_id: "m1",
+          session_id: "g",
+          from_uid: "42",
+          from_name: "关注的人",
+          at_me_msg: 1,
+          msg_time: 2,
+          msg: { dt: [{ text: "第一条" }] },
+        },
+      ],
+    ]);
+    const fakeWindow = {
+      __ccImStore__: {
+        state: {
+          message: { messageInfo, messageList: new Map([["g", [{ id: "m1" }]]]) },
+          session: { sessionInfo: new Map([["g", { gid: "g", name: "项目群" }]]) },
+        },
+      },
+      __ccMainStore__: { state: { login: { uid: "self" }, msgTrain: { followUsers: [] } } },
+    } as Record<string, unknown>;
+    vi.stubGlobal("window", fakeWindow);
+    vi.stubGlobal("fetch", fetch);
+    vi.spyOn(console, "info").mockImplementation(() => {});
+
+    new Function(
+      buildMessageWatchBridgeScript({
+        endpoint: "http://127.0.0.1:3210/v1/im/test-token",
+        sessionStartedAtMs: 1_000,
+      })
+    )();
+    // 装载即同步扫一次，microtask 冲刷投递首条
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String((fetch.mock.calls[0][1] as RequestInit).body)).text).toBe(
+      "第一条"
+    );
+
+    // 稳态：无新消息时多轮 500ms 扫描不再重复上报同一条
+    await vi.advanceTimersByTimeAsync(999);
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    // 新消息进入 messageInfo → 下一轮扫描捕获（增量不漏新）
+    messageInfo.set("m2", {
+      msg_id: "m2",
+      session_id: "g",
+      from_uid: "42",
+      from_name: "关注的人",
+      at_me_msg: 1,
+      msg_time: 3,
+      msg: { dt: [{ text: "第二条" }] },
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String((fetch.mock.calls[1][1] as RequestInit).body)).text).toBe(
+      "第二条"
+    );
+
+    (fakeWindow.__toskrMessageWatchV1 as { stop: () => void }).stop();
+  });
+
   it("Toskr 关闭接收端后，心跳会停止观察并恢复IM原方法", async () => {
     vi.useFakeTimers();
     const original = vi.fn();
