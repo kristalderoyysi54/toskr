@@ -4,16 +4,10 @@
  * 在选区起点插 marker 读它的偏移，再扣掉 textarea 自身滚动量。
  */
 const MIRROR_STYLE_PROPS = [
-  "box-sizing",
-  "width",
   "padding-top",
   "padding-right",
   "padding-bottom",
   "padding-left",
-  "border-top-width",
-  "border-right-width",
-  "border-bottom-width",
-  "border-left-width",
   "font-family",
   "font-size",
   "font-weight",
@@ -23,6 +17,11 @@ const MIRROR_STYLE_PROPS = [
   "text-transform",
   "text-indent",
   "tab-size",
+  // 换行规则整组照抄：镜像换行点必须与 textarea 逐字一致
+  "white-space",
+  "word-break",
+  "line-break",
+  "overflow-wrap",
 ] as const;
 
 export function textareaSelectionAnchor(
@@ -38,9 +37,12 @@ export function textareaSelectionAnchor(
   mirror.style.top = "0";
   mirror.style.left = "-99999px";
   mirror.style.visibility = "hidden";
-  // 与 textarea 换行规则一致（softwrap + 长词断行）
-  mirror.style.whiteSpace = "pre-wrap";
-  mirror.style.overflowWrap = "break-word";
+  // 排版宽度必须取内容盒：clientWidth 已扣掉边框和滚动条占位（全局
+  // ::-webkit-scrollbar 细滚动条是占位式的）。按 computed width 排版时
+  // 镜像每行多容纳几个像素，软换行点逐行错开，长文本命中定位会框错行
+  mirror.style.boxSizing = "border-box";
+  mirror.style.border = "0";
+  mirror.style.width = `${textarea.clientWidth}px`;
   mirror.textContent = textarea.value.slice(0, selection.start);
   const marker = document.createElement("span");
   marker.textContent =
