@@ -112,8 +112,12 @@ export function WindowedListItem({
       data-windowed-item={itemId}
       aria-hidden={mounted ? undefined : true}
       style={
+        // 挂载的条目按内容自然高度：estimatedHeight 只是屏外占位的估算，
+        // 拿它当 minHeight 会把真实高度小于估算值的卡（典型是短消息卡，
+        // estimatedHeight=160 但内容仅 ~70px）撑出大片留白。屏外占位仍用
+        // （测量后的）placeholderHeight 稳住滚动高度，不影响挂载卡的真实高度。
         mounted
-          ? { minHeight: estimatedHeight }
+          ? undefined
           : { height: placeholderHeight, minHeight: placeholderHeight }
       }
     >
