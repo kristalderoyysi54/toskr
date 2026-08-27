@@ -78,6 +78,13 @@ import {
   currentDataGeneration,
   matchesDataGeneration,
 } from "@/lib/dataGeneration";
+import { resolveDraftSectionId } from "@/lib/draftSection";
+import {
+  DETAIL_STATE_EVENT,
+  emitToDetailWindows,
+  recordDetailWindowState,
+  type DetailWindowState,
+} from "@/lib/detailWindows";
 import { UpdateDialog } from "@/components/UpdateDialog";
 import { SectionGroup } from "@/components/SectionGroup";
 import { Button } from "@/components/ui/button";
@@ -945,7 +952,7 @@ export default function App() {
     () =>
       useTargetStore.subscribe((state, previous) => {
         if (state.snapshot && state.snapshot !== previous.snapshot) {
-          void emitTo("textpreview", TARGET_CHANGED_EVENT, state.snapshot).catch(() => {});
+          emitToDetailWindows(TARGET_CHANGED_EVENT, state.snapshot);
         }
       }),
     []
@@ -1122,7 +1129,7 @@ export default function App() {
             const { result } = useNotesStore
               .getState()
               .addSecretNote(payload.text, { keyId: null, direction: "in" }, secretOpts);
-            if (result !== "empty") tip("warn", "识别到密文，但没有匹配的密钥");
+            if (result !== "empty") tip("warn", "识别到密文，但没有匹配的密钥", false, "page:secret");
             return;
           }
           if (res.status === "plaintext") {
@@ -1134,14 +1141,14 @@ export default function App() {
                 secretOpts
               );
             if (result === "duplicate") {
-              tip("duplicate", "这条秘文已在秘文页");
+              tip("duplicate", "这条秘文已在秘文页", false, "page:secret");
             } else if (result === "added" && id) {
               // undoable=true：HUD 悬停出「撤销」，与普通捕获一致
               setPendingUndo(() => {
                 useNotesStore.getState().deleteNotes([id], "撤销解密");
                 void api.hudFeedback("undone", "已撤销");
               });
-              tip("added", `已解密 1 条 · 用【${res.keyLabel}】`, true);
+              tip("added", `已解密 1 条 · 用【${res.keyLabel}】`, true, "page:secret");
             }
           }
         })();
@@ -1349,7 +1356,10 @@ export default function App() {
           }
         }, 1800);
       };
-      if (p.page === "tasks") {
+      if (p.page === "secret") {
+        // 秘文捕获气泡：直达秘文页列表（卡片本体在秘文页，普通定位流程够不到）
+        useUIStore.getState().setPage("secret");
+      } else if (p.page === "tasks") {
         // 先切页（setPage 会清 focusedId），再定位目标任务/账单
         useUIStore.getState().setPage("tasks");
         if (p.billId) {
@@ -1935,10 +1945,10 @@ export default function App() {
       listen<NoteEditPayload>("toskr://note-edit", (e) => {
         const replySync = (ok: boolean) => {
           if (!e.payload.syncId) return;
-          void emitTo("textpreview", NOTE_EDIT_SYNC_RESULT_EVENT, {
+          emitToDetailWindows(NOTE_EDIT_SYNC_RESULT_EVENT, {
             syncId: e.payload.syncId,
             ok,
-          } satisfies NoteEditSyncResultPayload).catch(() => {});
+          } satisfies NoteEditSyncResultPayload);
         };
         if (
           isDataOperationLocked() ||
@@ -1984,12 +1994,55 @@ export default function App() {
           tip("ok", "已保存");
         }
       }),
+      // 多详情窗（📌 并存）：各窗自报 {pinned, noteId}，主面板据此挑窗路由
+      listen<DetailWindowState>(DETAIL_STATE_EVENT, (e) => {
+        recordDetailWindowState(e.payload);
+      }),
+      // 空白「新笔记」占位回收：详情窗关窗时上报；这里终审（文本仍是占位、
+      // 无图无标题无标签）才删，静默不弹气泡
+      listen<{ id: string; dataGeneration: number }>(
+        "toskr://note-discard-blank",
+        (e) => {
+          if (isDataOperationLocked()) return;
+          const store = useNotesStore.getState();
+          const note = store.notes.find((n) => n.id === e.payload.id);
+          if (
+            note &&
+            note.text.trim() === "新笔记" &&
+            !note.imageFile &&
+            !note.contentBlocks?.length &&
+            !note.title &&
+            !note.tags?.length
+          ) {
+            store.deleteNotes([note.id], "空白草稿回收");
+          }
+        }
+      ),
+      // 全局新建笔记快捷键：任意前台落草稿卡并开详情大窗（占位整选）
+      listen("toskr://new-note", () => {
+        if (isDataOperationLocked()) return;
+        const state = useNotesStore.getState();
+        const sectionId = resolveDraftSectionId(
+          state.sections,
+          state.settings.lastDraftSectionId
+        );
+        const { result, id } = state.addNote("新笔记", { sectionId });
+        if (id && (result === "added" || result === "duplicate")) {
+          openNoteDetail(id, true, true);
+        }
+      }),
       listen<{ id: string; dataGeneration: number; text?: string }>(
         "toskr://note-send",
         (e) => {
+        if (isDataOperationLocked()) {
+          warnWithPanel("数据只读期间不能发送", "note-send locked");
+          return;
+        }
+        // 载荷代数过期（📌 长开的详情窗常见）：发送本就按 id 从现行数据取
+        // 内容，卡还在就照发；卡真没了才拒绝——否则固定窗放一阵就永远发不出
         if (
-          isDataOperationLocked() ||
-          !matchesDataGeneration(e.payload.dataGeneration)
+          !matchesDataGeneration(e.payload.dataGeneration) &&
+          !useNotesStore.getState().notes.some((n) => n.id === e.payload.id)
         ) {
           warnWithPanel(
             "发送已取消：数据上下文已变化，请重新打开卡片后再发送",

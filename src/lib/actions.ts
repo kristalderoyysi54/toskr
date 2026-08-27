@@ -14,6 +14,11 @@ import {
   matchesDataGeneration,
 } from "@/lib/dataGeneration";
 import { api } from "@/lib/tauri";
+import {
+  detailWindowKnown,
+  pickDetailWindowLabel,
+  queueDetailPayload,
+} from "@/lib/detailWindows";
 import { setPendingUndo, tip } from "@/lib/tip";
 import { currentTargetProfileResolution } from "@/lib/currentTargetProfile";
 import {
@@ -104,6 +109,8 @@ export type NotePreviewPayload = {
   fontSize?: number;
   /** true = 打开即进入编辑态。 */
   edit: boolean;
+  /** 打开即整选正文（新建笔记占位文案「落指即替换」）。 */
+  selectAll?: boolean;
   /** 合并发送来源等临时视图不可编辑、移除附件或再次发送。 */
   readOnly?: boolean;
 };
@@ -426,7 +433,7 @@ export async function refreshOpenNoteDetail() {
  * 打开卡片明细：文字类（文本/代码/链接编辑）→ 桌面居中的文本详情窗；
  * 图片卡编辑优先进入文字备注，低频的图片打码由预览窗独立按钮触发。
  */
-export function openNoteDetail(id: string, edit = false) {
+export function openNoteDetail(id: string, edit = false, selectAll = false) {
   const { notes, sections, settings } = useNotesStore.getState();
   const note = notes.find((n) => n.id === id);
   if (!note) return;
@@ -442,7 +449,7 @@ export function openNoteDetail(id: string, edit = false) {
     note.sectionId === CLIPBOARD_ID
       ? undefined
       : sections.find((sec) => sec.id === note.sectionId)?.color;
-  const headerColor = settings.cardTint ? sectionColor ?? null : "#5b5b60";
+  const headerColor = settings.cardTint ? sectionColor ?? null : "#7c8494";
   if (note.kind === "image") {
     if (edit && note.imageFile) {
       void api.quickLook(noteImages(note), 0, {
@@ -473,6 +480,7 @@ export function openNoteDetail(id: string, edit = false) {
     createdAt: note.createdAt,
     updatedAt: note.updatedAt,
     edit,
+    selectAll,
   });
 }
 
@@ -485,15 +493,24 @@ function openTextPreview(payload: Omit<NotePreviewPayload, "sessionId">) {
   useUIStore
     .getState()
     .setDetailEditorNoteId(payload.readOnly ? null : payload.id);
-  void api.showTextPreview();
-  void emitTo("textpreview", "toskr://note-preview", {
+  // 多详情窗：📌 固定的窗不被顶掉——同卡复用 > 未固定窗 > 动态新窗
+  const label = pickDetailWindowLabel(payload.id);
+  const isNewWindow = label !== "textpreview" && !detailWindowKnown(label);
+  void api.showTextPreview(label);
+  const previewPayload = {
     fontSize: clampDetailFontSize(
       useNotesStore.getState().settings.detailFontSize ??
         DETAIL_FONT_SIZE_DEFAULT
     ),
     ...payload,
     sessionId,
-  } satisfies NotePreviewPayload);
+  } satisfies NotePreviewPayload;
+  if (isNewWindow) {
+    // 新窗 webview 未挂载就 emit 会丢：入队，等窗口自报就绪冲洗
+    queueDetailPayload(label, "toskr://note-preview", previewPayload);
+  } else {
+    void emitTo(label, "toskr://note-preview", previewPayload);
+  }
 }
 
 /**

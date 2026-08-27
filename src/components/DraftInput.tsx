@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Check, ChevronUp, FolderInput, X } from "lucide-react";
+import { ArrowUpRight, Check, ChevronUp, FolderInput, X } from "lucide-react";
 
 import { SimpleMenu, SimpleMenuItem } from "@/components/SimpleMenu";
+import { IconButton } from "@/components/ui/icon-button";
 import { PillInput } from "@/components/ui/pill-input";
-import { enrichLinkMeta } from "@/lib/actions";
+import { enrichLinkMeta, openNoteDetail } from "@/lib/actions";
 import {
   draftTargetSections,
   resolveDraftSectionId,
@@ -208,6 +209,42 @@ export function DraftInput() {
     setPending([]);
   };
 
+  /** ↗ 转大窗：当前草稿（文字 + 暂存图）落卡后直接开详情窗接着写；
+   *  空草稿等价「新建笔记」大窗流程（占位文案整选，落指即替换）。 */
+  const expandToDetail = () => {
+    if (isDataOperationLocked()) return;
+    const text = value.trim();
+    const validPending = pending.filter((image) =>
+      matchesDataGeneration(image.dataGeneration)
+    );
+    if (lastDraftSectionId !== sectionId) {
+      useNotesStore.getState().setSettings({ lastDraftSectionId: sectionId });
+    }
+    const first = validPending[0];
+    const { result, id } = useNotesStore.getState().addNote(
+      text ||
+        (first
+          ? validPending.length > 1
+            ? `图片 ${validPending.length} 张`
+            : `图片 ${first.width}×${first.height}`
+          : "新笔记"),
+      first
+        ? {
+            sectionId,
+            kind: text ? "text" : "image",
+            imageFile: first.file,
+            imageW: first.width,
+            imageH: first.height,
+            attachments: validPending.slice(1).map((p) => p.file),
+          }
+        : { sectionId }
+    );
+    if (!id || (result !== "added" && result !== "duplicate")) return;
+    setValue("");
+    setPending([]);
+    openNoteDetail(id, true, !text && !first);
+  };
+
   /** 粘贴图片：Rust 直读剪贴板入库（哈希去重），暂存为 chip 不立即成卡。 */
   const pasteImage = async () => {
     if (isDataOperationLocked()) return;
@@ -318,6 +355,17 @@ export function DraftInput() {
               ))}
             </div>
           ) : undefined
+        }
+        rightSlot={
+          <IconButton
+            label="转大窗编辑（草稿与暂存图一起带走）"
+            stopPropagation={false}
+            disabled={dataLocked}
+            onClick={expandToDetail}
+            className="mb-0.5"
+          >
+            <ArrowUpRight className="size-3.5" />
+          </IconButton>
         }
         placeholder={pending.length > 0 ? "配点文字，回车一起入卡…" : "添加笔记或提示词…"}
       />

@@ -14,6 +14,7 @@ import {
   type NoteImageReplacedPayload,
 } from "@/lib/imageEditor";
 import { api } from "@/lib/tauri";
+import { emitToDetailWindows } from "@/lib/detailWindows";
 import { setPendingUndo, tip } from "@/lib/tip";
 import {
   isDataOperationLocked,
@@ -116,7 +117,7 @@ function broadcastNoteImageReplacement(
   payload: NoteImageReplacedPayload,
   includeImagePreview = false
 ) {
-  void emitTo("textpreview", NOTE_IMAGE_REPLACED_EVENT, payload).catch(() => {});
+  emitToDetailWindows(NOTE_IMAGE_REPLACED_EVENT, payload);
   if (includeImagePreview) {
     void emitTo("imgpreview", NOTE_IMAGE_REPLACED_EVENT, payload).catch(() => {});
   }

@@ -330,6 +330,52 @@ fn emit_target_change(
 pub fn observe_front(app: &AppHandle, front: &FrontApp) -> TargetSnapshot {
     let state = app.state::<AppState>();
     let at_ms = now_ms();
+    // 磁吸目标锁（2026-08-27 用户需求）：伴随接管期间，前台短暂切到伴随列表
+    // 外的应用（截图工具等）不换发送目标——沿用吸附应用并保持/恢复 ready，
+    // 仅推进 observation 序号（解除失焦 pending 屏障）；切到列表内应用仍正常换。
+    let locked_pid =
+        state.companion_tracked_pid.load(std::sync::atomic::Ordering::SeqCst) as i32;
+    if locked_pid > 0
+        && state.docked.load(std::sync::atomic::Ordering::SeqCst)
+        && front.pid != locked_pid
+    {
+        let in_list = front
+            .bundle_id
+            .as_deref()
+            .map(|b| state.companion.lock().unwrap().apps.iter().any(|a| a == b))
+            .unwrap_or(false);
+        if !in_list {
+            let mut target = state.delivery_target.lock().unwrap();
+            if target.current.as_ref().and_then(|c| c.pid) == Some(locked_pid) {
+                let previous = target.current.clone();
+                target.accept_observation(front.observation_revision);
+                let current = target.current.clone().unwrap_or_else(|| {
+                    TargetSnapshot::missing(at_ms)
+                });
+                let snapshot = if current.ready {
+                    current
+                } else {
+                    let mut restored = TargetSnapshot {
+                        ready: true,
+                        reason: None,
+                        captured_at_ms: at_ms,
+                        ..current
+                    };
+                    restored.revision = target.next_revision();
+                    target.current = Some(restored.clone());
+                    crate::diag::push(
+                        app,
+                        "磁吸目标锁: 忽略瞬时前台切换，发送目标保持吸附应用",
+                    );
+                    restored
+                };
+                emit_target_change(app, previous.as_ref(), &snapshot);
+                drop(target);
+                return snapshot;
+            }
+            drop(target);
+        }
+    }
     let mut target = state.delivery_target.lock().unwrap();
     let accepted =
         target.current.is_none() || front.observation_revision > target.last_observation_revision;
@@ -362,6 +408,76 @@ pub fn require_observation_after(app: &AppHandle, observation_revision: u64) -> 
     emit_target_change(app, previous.as_ref(), &snapshot);
     drop(target);
     snapshot
+}
+
+/// 手动指定发送目标（详情窗长按发送选单）：按 pid 采信为当前目标（新 token、
+/// 清除 pending 屏障），焦点归还也指向它。进程无身份（已退出等）返回 None。
+pub fn adopt_target_pid(app: &AppHandle, pid: i32) -> Option<TargetSnapshot> {
+    let front = crate::focus::app_info_of(pid)?;
+    let identity = target_identity(&front)?;
+    let state = app.state::<AppState>();
+    let at_ms = now_ms();
+    let mut target = state.delivery_target.lock().unwrap();
+    let previous = target.current.clone();
+    target.pending_observation_after = None;
+    let snapshot = target.capture(identity, at_ms);
+    emit_target_change(app, previous.as_ref(), &snapshot);
+    drop(target);
+    *state.prev_app_pid.lock().unwrap() = Some(pid);
+    crate::diag::push(
+        app,
+        format!(
+            "手动指定发送目标: {}({pid})",
+            snapshot.app_name.as_deref().unwrap_or("?")
+        ),
+    );
+    Some(snapshot)
+}
+
+/// 面板自己在前台、目标因短暂失焦被降级时按历史沿用最近目标：进程身份仍
+/// 有效（活着且同一次启动）即恢复 ready 并清除 pending 屏障（用户 2026-08-27：
+/// 截图等瞬时前台切换后，不该还要再点一次目标应用才能发送）。
+pub fn recover_recent_target(app: &AppHandle) -> TargetSnapshot {
+    let state = app.state::<AppState>();
+    let at_ms = now_ms();
+    let mut target = state.delivery_target.lock().unwrap();
+    let previous = target.current.clone();
+    let Some(current) = target.current.clone() else {
+        drop(target);
+        return TargetSnapshot::missing(at_ms);
+    };
+    let recovered = match validate_snapshot(
+        &current,
+        current.token.as_deref(),
+        &SystemTargetProbe,
+        ValidationGate::Identity,
+    ) {
+        Ok(_) if !current.ready => {
+            target.pending_observation_after = None;
+            let mut restored = TargetSnapshot {
+                ready: true,
+                reason: None,
+                captured_at_ms: at_ms,
+                ..current
+            };
+            restored.revision = target.next_revision();
+            target.current = Some(restored.clone());
+            crate::diag::push(
+                app,
+                format!(
+                    "目标恢复: 沿用最近目标 {}（面板前台）",
+                    restored.app_name.as_deref().unwrap_or("?")
+                ),
+            );
+            restored
+        }
+        Ok(_) => current,
+        // 进程已退出/换代：维持降级，让用户重新识别
+        Err(_) => target.current(at_ms),
+    };
+    emit_target_change(app, previous.as_ref(), &recovered);
+    drop(target);
+    recovered
 }
 
 /// Toskr 自己在前台（尤其 Pin）时没有新目标可观察，仍复核当前进程身份。

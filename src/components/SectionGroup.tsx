@@ -27,6 +27,7 @@ import {
 } from "@/components/SimpleMenu";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IconButton } from "@/components/ui/icon-button";
+import { openNoteDetail } from "@/lib/actions";
 import { focusNoteDraftInput } from "@/lib/noteDraftFocus";
 import { cn } from "@/lib/utils";
 import {
@@ -100,7 +101,16 @@ export function SectionGroup({
   const addContent = () => {
     setSettings({ lastDraftSectionId: section.id });
     if (collapsed) toggleSectionCollapsed(section.id);
-    focusNoteDraftInput();
+    // 大窗创作（用户 2026-08-27）：落一张草稿卡直接开详情窗编辑——面板太窄
+    // 不适合写长内容。失败（数据只读等）时退回聚焦底部输入条的旧行为
+    const { result, id } = useNotesStore
+      .getState()
+      .addNote("新笔记", { sectionId: section.id });
+    if (id && (result === "added" || result === "duplicate")) {
+      openNoteDetail(id, true, true);
+    } else {
+      focusNoteDraftInput();
+    }
   };
 
   const commitRename = () => {

@@ -79,6 +79,33 @@ pub fn run() {
                 ),
             );
 
+            // 首次安装 / 版本更新后的第一次启动：直接展示主面板（用户 2026-08-27
+            // 指定，避免装完/更完像没启动一样）。日常同版本启动保持安静驻留。
+            {
+                let version = app.package_info().version.to_string();
+                let marker = app
+                    .path()
+                    .app_data_dir()
+                    .ok()
+                    .map(|dir| dir.join("toskr-last-run-version.txt"));
+                let seen = marker
+                    .as_ref()
+                    .and_then(|p| std::fs::read_to_string(p).ok())
+                    .map(|s| s.trim() == version)
+                    .unwrap_or(false);
+                if !seen {
+                    if let Some(p) = &marker {
+                        if let Some(parent) = p.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        let _ = std::fs::write(p, &version);
+                    }
+                    diag::push(app.handle(), "首启/更新后首启: 自动展示面板");
+                    window::set_panel_auto_hide_armed(app.handle(), true, "首启展示");
+                    window::request_show_panel(app.handle());
+                }
+            }
+
             // 前台应用观察者：持续更新窗口布局用的 prev_app_pid，以及“下一次发送”
             // 的目标快照。相同进程身份保持 token；一次发送开始后持有自己的不可变
             // snapshot，不会被观察器后续切到 B 的更新改写。
@@ -220,6 +247,10 @@ pub fn run() {
             commands::set_window_theme,
             commands::open_settings_window,
             commands::set_vibrancy,
+            commands::get_vibrancy_enabled,
+            commands::set_new_note_hotkey,
+            commands::list_send_targets,
+            commands::adopt_send_target,
             commands::set_window_alpha,
             commands::set_panel_free_pos,
             commands::open_privacy_settings,

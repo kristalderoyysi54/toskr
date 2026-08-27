@@ -13,6 +13,8 @@ import {
   Check,
   Copy,
   Expand,
+  Eye,
+  EyeOff,
   FileDown,
   FileText,
   FolderInput,
@@ -217,7 +219,7 @@ export const NoteCard = memo(function NoteCard({
     const i = s.navIds.indexOf(note.id);
     return i >= 0 && i < 9 ? i + 1 : 0;
   });
-  const { toggleChecked, toggleDone, toggleNoteKeep, moveNotes } =
+  const { toggleChecked, toggleDone, toggleNoteKeep, toggleNoteBlur, moveNotes } =
     useNotesStore.getState();
 
   const cardRef = useRef<HTMLDivElement | null>(null);
@@ -393,14 +395,9 @@ export const NoteCard = memo(function NoteCard({
             </ContextMenuItem>
           );
         }
-        if (isImage && note.imageFile) {
-          return (
-            <ContextMenuItem key={id} onClick={() => openPreview()}>
-              <Expand className="size-3.5" /> 原尺寸预览
-              <ContextMenuShortcut>Space</ContextMenuShortcut>
-            </ContextMenuItem>
-          );
-        }
+        // 图片卡不出「原尺寸预览」菜单项（用户 2026-08-27 裁掉：Space/悬停
+        // 窥视已是主入口，菜单里属低频冗余）
+        if (isImage && note.imageFile) return null;
         return (
           <ContextMenuItem key={id} onClick={() => openPreview()}>
             <Expand className="size-3.5" /> 预览
@@ -512,6 +509,9 @@ export const NoteCard = memo(function NoteCard({
           </ContextMenuItem>
         );
       case "edit":
+        // 图片卡不出「添加/编辑文字备注」菜单项（用户 2026-08-27 裁掉：
+        // 预览窗内联编辑仍在，⏎ 快捷键不受影响）
+        if (isImage) return null;
         return (
           <ContextMenuItem key={id} onClick={() => openPreview(true)}>
             <Pencil className="size-3.5" /> {editLabel}
@@ -541,9 +541,21 @@ export const NoteCard = memo(function NoteCard({
                 ? "取消固定"
                 : "固定 · 不被清理"
               : note.keep
-                ? "取消常用"
-                : "设为常用 · 发送后保留"}
+                ? "取消 Pin"
+                : "Pin · 发送后保留"}
             <ContextMenuShortcut>P</ContextMenuShortcut>
+          </ContextMenuItem>
+        );
+      case "blur":
+        // 防肩窥：卡面内容打码，悬停临时揭示；详情窗/发送内容不受影响
+        return (
+          <ContextMenuItem key={id} onClick={() => toggleNoteBlur(note.id)}>
+            {note.blur ? (
+              <Eye className="size-3.5" />
+            ) : (
+              <EyeOff className="size-3.5" />
+            )}{" "}
+            {note.blur ? "取消模糊" : "模糊内容"}
           </ContextMenuItem>
         );
       case "rename":
@@ -794,7 +806,11 @@ export const NoteCard = memo(function NoteCard({
     setRenaming(false);
   };
 
-  /** keep 图标分域：剪贴=图钉（固定置顶·不被清理），笔记=星标（常用·发送后保留） */
+  /** 笔记通栏兜底中性灰（2026-08-27 用户嫌旧 #5b5b60 发闷，改冷调蓝灰）：
+    带一点蓝底色与 --primary 同族，白字对比度仍达标；详情窗晕光同源。 */
+const NEUTRAL_HEADER_GRAY = "#7c8494";
+
+/** keep 图标分域：剪贴=图钉（固定置顶·不被清理），笔记=星标（常用·发送后保留） */
   const KeepGlyph = isClip ? Pin : Star;
   // 通栏底色：竖栏笔记=资产牌（A 案），分组色优先（归属即身份）> 应用主色 > 中性灰；
   // 横栏串维持现状——应用主色优先，图标色未就绪时不闪分组色
@@ -1028,6 +1044,16 @@ export const NoteCard = memo(function NoteCard({
               )}
             />
           )}
+          {note.blur && (
+            // 模糊内容（防肩窥，右键切换）：backdrop 磨砂盖住整张卡面，
+            // 悬停临时揭示；详情窗与实际发送内容不受影响
+            <span
+              aria-hidden
+              // 强度对齐秘文页（用户 2026-08-27：9px 还能看清）：大半径 + 洗白
+              // 降饱和，正文彻底不可辨；悬停仍临时揭示
+              className="pointer-events-none absolute inset-0 z-10 rounded-[inherit] bg-muted-foreground/20 backdrop-blur-[14px] backdrop-saturate-[0.85] transition-opacity duration-(--duration-control) group-hover:opacity-0 motion-reduce:transition-none"
+            />
+          )}
           <button
             {...attributes}
             data-drag-handle
@@ -1162,7 +1188,7 @@ export const NoteCard = memo(function NoteCard({
             className="-mx-2 -mt-1.5 mb-1.5 flex h-9 shrink-0 items-center gap-1.5 rounded-t-lg px-2"
             style={{
               backgroundImage: headerGradient(
-                (cardTint && headerTint) || "#5b5b60"
+                (cardTint && headerTint) || NEUTRAL_HEADER_GRAY
               ),
             }}
           >
@@ -1592,6 +1618,19 @@ export const NoteCard = memo(function NoteCard({
               onClick={() => openPreview(true)}
             >
               <Pencil className="size-3" />
+            </IconButton>
+            <IconButton
+              label={note.blur ? "取消模糊" : "模糊内容"}
+              surface
+              reveal="hover-focus"
+              pressed={note.blur === true}
+              onClick={() => toggleNoteBlur(note.id)}
+            >
+              {note.blur ? (
+                <Eye className="size-3" />
+              ) : (
+                <EyeOff className="size-3" />
+              )}
             </IconButton>
             <IconButton
               label="删除"

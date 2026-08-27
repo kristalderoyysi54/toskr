@@ -82,7 +82,8 @@ const view =
     <SettingsView />
   ) : label === "imgpreview" ? (
     <ImagePreviewView />
-  ) : label === "textpreview" ? (
+  ) : label.startsWith("textpreview") ? (
+    // 多详情窗（📌 并存）：textpreview 与动态创建的 textpreview-N 同一视图
     <TextPreviewView />
   ) : label === "sourceoverlay" ? (
     <SourceOverlayView />
@@ -91,6 +92,26 @@ const view =
   ) : (
     <App />
   );
+
+// 详情窗渲染自证 + 前端异常上诊断日志（多详情窗首开空白排查，2026-08-27）：
+// 空白窗若无「挂载」指纹 = webview 没起来；有挂载但有 JS 错误 = 渲染崩了
+if (label.startsWith("textpreview")) {
+  void import("./lib/tauri").then(({ api }) => {
+    void api.diagNote(`详情窗 webview 挂载 label=${label}`).catch(() => {});
+    window.addEventListener("error", (e) => {
+      void api
+        .diagNote(`详情窗 JS 错误 label=${label}: ${String(e.message).slice(0, 160)}`)
+        .catch(() => {});
+    });
+    window.addEventListener("unhandledrejection", (e) => {
+      void api
+        .diagNote(
+          `详情窗未处理拒绝 label=${label}: ${String(e.reason).slice(0, 160)}`
+        )
+        .catch(() => {});
+    });
+  });
+}
 
 // 设计样张（dev-only，编译期死代码消除）：浏览器开 /?styletile=1 查看
 if (import.meta.env.DEV && new URLSearchParams(location.search).has("styletile")) {

@@ -2,14 +2,28 @@
 
 import * as React from "react"
 import { ContextMenu as ContextMenuPrimitive } from "radix-ui"
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow"
 
 import { cn } from "@/lib/utils"
 import { ChevronRightIcon, CheckIcon } from "lucide-react"
 
 function ContextMenu({
+  onOpenChange,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Root>) {
-  return <ContextMenuPrimitive.Root data-slot="context-menu" {...props} />
+  return (
+    <ContextMenuPrimitive.Root
+      data-slot="context-menu"
+      onOpenChange={(open) => {
+        // macOS 只给 key window 派发 mouseMoved：窗口非激活时右键能弹出菜单
+        // （acceptFirstMouse），但 hover 不生效，靠 hover 展开的二级菜单打不
+        // 开，得先点一下窗口。菜单一开就把当前窗口提为 key window 补齐 hover。
+        if (open) void getCurrentWebviewWindow().setFocus().catch(() => {})
+        onOpenChange?.(open)
+      }}
+      {...props}
+    />
+  )
 }
 
 function ContextMenuTrigger({

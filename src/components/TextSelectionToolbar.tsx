@@ -230,8 +230,8 @@ export function TextSelectionToolbar({
       ref={outerRef}
       className={cn(
         // w-max：绝对定位贴近容器右缘时 shrink-to-fit 会把内容压成竖排
-        "absolute z-30 w-max",
-        !anchorStyle && "bottom-3 left-1/2 -translate-x-1/2"
+        "absolute z-40 w-max",
+        !anchorStyle && "bottom-14 left-1/2 -translate-x-1/2"
       )}
       style={anchorStyle ?? undefined}
     >

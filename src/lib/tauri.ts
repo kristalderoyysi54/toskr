@@ -191,7 +191,7 @@ export interface HudPayload {
 
 /** 点击 HUD 气泡打开面板的载荷（空对象 = 定位最近捕获的笔记）。 */
 export interface HudOpenPanelPayload {
-  page?: "tasks";
+  page?: "tasks" | "secret";
   taskId?: string | null;
   /** 账单到期提醒：跳「提醒 → 订阅」并高亮该账单行。 */
   billId?: string | null;
@@ -688,6 +688,16 @@ export const api = {
     invoke("set_panel_free_pos", { x, y }),
   setVibrancy: (enabled: boolean, material: string) =>
     invoke("set_vibrancy", { enabled, material }),
+  /** 详情窗查询毛玻璃开关：决定膜层用半透明还是不透明底。 */
+  getVibrancyEnabled: () => invoke<boolean>("get_vibrancy_enabled"),
+  /** 运行中的可选发送目标（长按发送选单）；排除 Toskr 自身。 */
+  listSendTargets: () =>
+    invoke<{ pid: number; name: string; bundleId: string }[]>(
+      "list_send_targets"
+    ),
+  /** 手动采信 pid 为当前发送目标（选单点选后走常规发送）。 */
+  adoptSendTarget: (pid: number) =>
+    invoke<TargetSnapshot | null>("adopt_send_target", { pid }),
   setWindowAlpha: (alpha: number) => invoke("set_window_alpha", { alpha }),
   retryTap: () => invoke("retry_tap"),
   openPrivacySettings: (pane: "accessibility" | "input-monitoring") =>
@@ -709,6 +719,9 @@ export const api = {
   /** 注册/清除面板显示隐藏快捷键；被占用等注册失败时 reject。 */
   setPanelHotkey: (shortcut: string | null) =>
     invoke("set_panel_hotkey", { shortcut }),
+  /** 注册/清除全局「新建笔记」快捷键（任意前台开详情大窗）。 */
+  setNewNoteHotkey: (shortcut: string | null) =>
+    invoke("set_new_note_hotkey", { shortcut }),
   /** 抓取链接的网页标题/图标（curl，6s 超时）。 */
   fetchLinkMeta: (url: string) => invoke<LinkMeta>("fetch_link_meta", { url }),
   /** 按域名抓 favicon 缓存进媒体库，返回文件名；失败 reject（前端回退首字色块）。 */
@@ -861,7 +874,8 @@ export const api = {
   /** 收起悬停窥视的瞬态预览窗（常规预览窗不受影响）。 */
   hidePeekImage: () => invoke("hide_transient_image_preview"),
   /** 文本详情窗（桌面居中；内容另行 emit 到 textpreview 窗口）。 */
-  showTextPreview: () => invoke("show_text_preview"),
+  showTextPreview: (label?: string) =>
+    invoke("show_text_preview", { label }),
   ocrImage: (file: string) => invoke<string>("ocr_image", { file }),
   prevAppInfo: () => invoke<PrevAppInfo | null>("prev_app_info"),
   refreshPrevApp: () => invoke<TargetSnapshot>("refresh_prev_app"),

@@ -2406,6 +2406,17 @@ function HotkeySection({ settings, patch }: SP) {
             />
           }
         />
+        <Row
+          label="全局新建笔记"
+          hint="任意应用下直接打开详情大窗写新笔记（默认 ⌘⇧N，可清除关闭）"
+          right={
+            <HotkeyRecorder
+              value={settings.newNoteHotkey}
+              onChange={(v) => patch({ newNoteHotkey: v })}
+              tryRegister={(shortcut) => api.setNewNoteHotkey(shortcut)}
+            />
+          }
+        />
       </Group>
       <Group title="面板内快捷键（长按 ⌥ 可随时速查）">
         {SHORTCUTS.map(([k, d]) => (
@@ -2481,9 +2492,12 @@ const HOTKEY_CODE_RE =
 function HotkeyRecorder({
   value,
   onChange,
+  tryRegister = (shortcut) => api.setPanelHotkey(shortcut),
 }: {
   value: string | null;
   onChange: (v: string | null) => void;
+  /** 试注册通道（默认面板键；新建笔记键等复用录制交互时传各自命令）。 */
+  tryRegister?: (shortcut: string | null) => Promise<unknown>;
 }) {
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -2518,8 +2532,7 @@ function HotkeyRecorder({
         e.shiftKey && "Shift",
       ].filter(Boolean) as string[];
       const shortcut = [...mods, code].join("+");
-      void api
-        .setPanelHotkey(shortcut)
+      void tryRegister(shortcut)
         .then(() => {
           onChange(shortcut);
           setRecording(false);
@@ -2530,7 +2543,7 @@ function HotkeyRecorder({
     window.addEventListener("keydown", handler, { capture: true });
     return () =>
       window.removeEventListener("keydown", handler, { capture: true });
-  }, [recording, onChange]);
+  }, [recording, onChange, tryRegister]);
 
   return (
     <div className="flex items-center gap-1.5">

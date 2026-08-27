@@ -149,6 +149,8 @@ export interface Note {
   done: boolean;
   /** 常用内容：发送后不标记完成，长期复用（右键「设为常用」；剪贴板卡=固定不清理）。 */
   keep?: boolean;
+  /** 模糊内容：卡面打码防肩窥（右键「模糊内容」；悬停临时揭示，详情窗不受影响）。 */
+  blur?: boolean;
   /** 自定义标题（右键「重命名」；卡片通栏显示，便于识别长内容）。 */
   title?: string;
   /** 标签（右键「标签」/多选条批量添加；归一去重，最多 8 个）。 */
@@ -434,6 +436,8 @@ export interface Settings {
   /** 面板显示/隐藏专用快捷键（global-shortcut 格式如 "Cmd+Shift+KeyV"，null=未设置）。
    *  与双击触发独立：只开关面板不捕获，钉住时也可收起。 */
   panelToggleHotkey: string | null;
+  /** 全局新建笔记快捷键：任意前台下直接开详情大窗写新笔记（null=关闭）。 */
+  newNoteHotkey: string | null;
   /** 隐身模式：捕获照常入库但不弹 HUD（会议投屏用）。 */
   stealth: boolean;
   /** 捕获成功音效（隐身模式下强制静音）。 */
@@ -558,6 +562,7 @@ export type ContextMenuItemId =
   | "ocr"
   | "done"
   | "keep"
+  | "blur"
   | "rename"
   | "tags"
   | "to-task"
@@ -578,6 +583,7 @@ export const CONTEXT_MENU_REGISTRY: { id: ContextMenuItemId; label: string }[] =
   { id: "ocr", label: "识别文字 (OCR)" },
   { id: "done", label: "标记完成" },
   { id: "keep", label: "设为常用 / 固定" },
+  { id: "blur", label: "模糊内容" },
   { id: "rename", label: "重命名" },
   { id: "tags", label: "标签" },
   { id: "to-task", label: "转为任务" },
@@ -616,6 +622,7 @@ const CONTEXT_MENU_GROUP_BY_ITEM: Record<ContextMenuItemId, ContextMenuGroupId> 
   "ai-to-task": "send",
   done: "organize",
   keep: "organize",
+  blur: "organize",
   tags: "organize",
   move: "organize",
 };
@@ -738,6 +745,7 @@ export const defaultSettings = (): Settings => ({
   hotkeyGapMs: 400,
   doubleTapCaptureOnly: false,
   panelToggleHotkey: null,
+  newNoteHotkey: "Cmd+Shift+KeyN",
   stealth: false,
   soundEnabled: true,
   hudDurationMs: HUD_DURATION_DEFAULT_MS,
@@ -953,6 +961,8 @@ export interface NotesState {
   clearDone: () => number;
   /** 切换卡片「常用」（发送后不标完成）。 */
   toggleNoteKeep: (id: string) => void;
+  /** 切换卡片「模糊内容」（卡面打码防肩窥）。 */
+  toggleNoteBlur: (id: string) => void;
   /** 切换分组「发送后保留」。 */
   toggleSectionKeep: (id: string) => void;
 
@@ -1187,6 +1197,7 @@ function validateSettingsShape(value: unknown, version: number): void {
   const nullableTypes: Record<string, "number" | "string"> = {
     clipPauseUntil: "number",
     panelToggleHotkey: "string",
+    newNoteHotkey: "string",
     panelFreeX: "number",
     panelFreeY: "number",
     panelHeight: "number",
@@ -2704,6 +2715,14 @@ export const useNotesStore = create<NotesState>()(
         set({
           notes: get().notes.map((n) =>
             n.id === id ? { ...n, keep: !n.keep } : n
+          ),
+        });
+      },
+
+      toggleNoteBlur: (id) => {
+        set({
+          notes: get().notes.map((n) =>
+            n.id === id ? { ...n, blur: !n.blur } : n
           ),
         });
       },

@@ -200,8 +200,9 @@ describe("发送入口路由", () => {
     const targetListener = preview.indexOf(
       "listen<TargetSnapshot>(TARGET_CHANGED_EVENT"
     );
+    // 多详情窗后 note-preview 是窗口级监听（emitTo 定向不串台）
     const previewListener = preview.indexOf(
-      'listen<NotePreviewPayload>("toskr://note-preview"'
+      ".listen<NotePreviewPayload>("
     );
 
     expect(targetListener).toBeGreaterThanOrEqual(0);

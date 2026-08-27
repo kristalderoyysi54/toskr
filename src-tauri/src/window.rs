@@ -1076,6 +1076,16 @@ pub fn spawn_edge_hide_supervisor(app: &AppHandle) {
                 }
                 if touching {
                     animate_edge_slide(&handle, anchor, false);
+                    // 触边唤回是用户的主动动作：滑回的同时前置到最顶层并接管
+                    // 键盘焦点（makeKeyAndOrderFront + 激活），否则面板可能滑回
+                    // 在别的窗口后面，且还得再点一下才能操作。伴随接管/开关
+                    // 关闭等被动滑回不走这里，不会抢正在使用的应用的焦点。
+                    let h_focus = handle.clone();
+                    let _ = handle.run_on_main_thread(move || {
+                        if let Some(win) = h_focus.get_webview_window("main") {
+                            let _ = win.set_focus();
+                        }
+                    });
                 }
                 away_ms = 0;
             } else {
@@ -1207,6 +1217,7 @@ fn start_companion_tracker(app: &AppHandle, target_pid: i32, monitors: Vec<Monit
             std::thread::sleep(Duration::from_millis(60));
             let state = handle.state::<AppState>();
             if state.companion_gen.load(Ordering::SeqCst) != generation {
+                state.companion_tracked_pid.store(0, Ordering::SeqCst);
                 return;
             }
             if !state.companion.lock().unwrap().enabled {
@@ -1214,6 +1225,7 @@ fn start_companion_tracker(app: &AppHandle, target_pid: i32, monitors: Vec<Monit
                 // 拖拽入坞共用的一票否决门，留着 true 会把两者一起静默卡死
                 // （现场：切磁吸再切回，拖到屏缘零反应、日志零输出）
                 state.docked.store(false, Ordering::SeqCst);
+                state.companion_tracked_pid.store(0, Ordering::SeqCst);
                 return;
             }
             // 面板隐藏即停（hide 也会 bump gen，这里是双保险）
@@ -1222,6 +1234,7 @@ fn start_companion_tracker(app: &AppHandle, target_pid: i32, monitors: Vec<Monit
                 .and_then(|w| w.is_visible().ok())
                 .unwrap_or(false);
             if !visible {
+                state.companion_tracked_pid.store(0, Ordering::SeqCst);
                 return;
             }
             // 切到「伴随列表内」的另一应用 → 换吸附目标；
@@ -1251,6 +1264,7 @@ fn start_companion_tracker(app: &AppHandle, target_pid: i32, monitors: Vec<Monit
                 }
                 None => -1,
             };
+            state.companion_tracked_pid.store(target as i64, Ordering::SeqCst);
             let width_pt = *state.panel_width_pt.lock().unwrap();
             let top_offset = *state.panel_top_offset.lock().unwrap();
             let height_override = *state.panel_height_pt.lock().unwrap();
@@ -1889,25 +1903,58 @@ fn transient_peek_frame(
 
 // ============ 文本详情窗 ============
 
-/// 首次展示标记：窗口隐藏复用，之后保留用户手动调的尺寸、仅重新居中。
-static TEXT_PREVIEW_SIZED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+/// 已做过首次定尺寸的窗口标签：窗口隐藏复用，之后保留用户手动调的尺寸、
+/// 仅重新居中。多详情窗（📌 并存）后按标签分别记录。
+static TEXT_PREVIEW_SIZED: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashSet<String>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
 
 /// 展示文本详情窗：居中于面板所在屏（拿不到面板位置回退光标屏）。
-/// 内容由前端另行 emit 到 textpreview 窗口。可从任意线程调用。
-pub fn show_text_preview(app: &AppHandle) {
+/// 内容由前端另行 emit 到对应标签窗口。可从任意线程调用。
+/// `label`：基础窗 "textpreview"；📌 固定并存时前端派生 "textpreview-N"，
+/// 不存在则动态创建（配置与基础窗一致）。
+pub fn show_text_preview(app: &AppHandle, label: String) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
-        if let Err(e) = text_preview_on_main(&handle) {
+        if let Err(e) = text_preview_on_main(&handle, &label) {
             eprintln!("[toskr] 文本详情窗展示失败: {e}");
         }
     });
 }
 
-fn text_preview_on_main(app: &AppHandle) -> tauri::Result<()> {
-    let window = app
-        .get_webview_window("textpreview")
-        .ok_or(tauri::Error::WindowNotFound)?;
+/// 动态创建一扇文本详情窗（配置对齐 tauri.conf 的基础 textpreview 窗），
+/// 并套用当前毛玻璃状态。仅限主线程调用。
+fn create_text_preview_window(
+    app: &AppHandle,
+    label: &str,
+) -> tauri::Result<tauri::WebviewWindow> {
+    let window = tauri::WebviewWindowBuilder::new(
+        app,
+        label,
+        tauri::WebviewUrl::App("index.html".into()),
+    )
+    .title("内容详情")
+    .inner_size(560.0, 540.0)
+    .min_inner_size(380.0, 300.0)
+    .visible(false)
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .resizable(true)
+    .shadow(true)
+    .accept_first_mouse(true)
+    .visible_on_all_workspaces(true)
+    .build()?;
+    crate::commands::apply_window_vibrancy_from_state(app, &window);
+    Ok(window)
+}
+
+fn text_preview_on_main(app: &AppHandle, label: &str) -> tauri::Result<()> {
+    let window = match app.get_webview_window(label) {
+        Some(w) => w,
+        None => create_text_preview_window(app, label)?,
+    };
     let monitors = snapshot_monitors_pt(app);
     let panel_anchor = app.get_webview_window("main").and_then(|w| {
         let pos = w.outer_position().ok()?;
@@ -1927,7 +1974,8 @@ fn text_preview_on_main(app: &AppHandle) -> tauri::Result<()> {
             )
         }
     };
-    let (w, h) = if !TEXT_PREVIEW_SIZED.swap(true, Ordering::SeqCst) {
+    let first_show = TEXT_PREVIEW_SIZED.lock().unwrap().insert(label.to_string());
+    let (w, h) = if first_show {
         // 首次：阅读友好的默认尺寸（约半屏宽、七成高，钳制在舒适区间）
         let w = (wa_w * 0.5).clamp(480.0, 640.0).min(wa_w - 24.0);
         let h = (wa_h * 0.7).clamp(400.0, 680.0).min(wa_h - 24.0);
@@ -1938,10 +1986,27 @@ fn text_preview_on_main(app: &AppHandle) -> tauri::Result<()> {
         let size = window.outer_size()?;
         (size.width as f64 / scale, size.height as f64 / scale)
     };
-    let x = wa_x + (wa_w - w) / 2.0;
-    let y = wa_y + (wa_h - h) / 2.0;
+    // 多窗平铺（📌 并存）：已有可见详情窗时按 28pt 级联偏移，新窗不完全
+    // 盖住固定住的窗；仍钳在工作区内
+    let visible_others = app
+        .webview_windows()
+        .iter()
+        .filter(|(l, win)| {
+            l.starts_with("textpreview")
+                && l.as_str() != label
+                && win.is_visible().unwrap_or(false)
+        })
+        .count() as f64;
+    let x = (wa_x + (wa_w - w) / 2.0 + visible_others * 28.0)
+        .min(wa_x + wa_w - w - 8.0)
+        .max(wa_x);
+    let y = (wa_y + (wa_h - h) / 2.0 + visible_others * 28.0)
+        .min(wa_y + wa_h - h - 8.0)
+        .max(wa_y);
     window.set_position(LogicalPosition::new(x, y))?;
     ensure_fullscreen_auxiliary(&window);
+    // 交通灯最小化过的窗口（无 Dock 图标，Accessory 应用）：重开卡片即复原
+    let _ = window.unminimize();
     window.show()?;
     window.set_focus()?;
     Ok(())

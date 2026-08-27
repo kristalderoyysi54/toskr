@@ -1,6 +1,7 @@
 import { emitTo, listen } from "@tauri-apps/api/event";
 
 import { api } from "@/lib/tauri";
+import { emitToDetailWindows } from "@/lib/detailWindows";
 import { isDataOperationLocked } from "@/store/dataOperationStore";
 import { useDataOperationStore } from "@/store/dataOperationStore";
 import { DATA_ACTIVITY_EVENT } from "@/lib/dataOperations";
@@ -87,9 +88,9 @@ export function applySettingsPatch(patch: Partial<Settings>) {
   }
   if ("detailFontSize" in patch) {
     // 详情窗可能正开着：把新字号实时推过去（详情窗 ⌘+/⌘- 的回声推送幂等）
-    void emitTo("textpreview", DETAIL_FONT_SIZE_EVENT, {
+    emitToDetailWindows(DETAIL_FONT_SIZE_EVENT, {
       size: s.detailFontSize,
-    }).catch(() => {});
+    });
   }
   if ("hotkeyModifier" in patch || "hotkeyGapMs" in patch) {
     void api.setHotkeyConfig(s.hotkeyModifier, s.hotkeyGapMs);
@@ -97,6 +98,9 @@ export function applySettingsPatch(patch: Partial<Settings>) {
   if ("panelToggleHotkey" in patch) {
     // 录制器已先试注册成功才发 patch；这里重复注册幂等，失败静默
     void api.setPanelHotkey(s.panelToggleHotkey).catch(() => {});
+  }
+  if ("newNoteHotkey" in patch) {
+    void api.setNewNoteHotkey(s.newNoteHotkey).catch(() => {});
   }
   if (
     "companionEnabled" in patch ||

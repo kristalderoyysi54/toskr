@@ -9,6 +9,7 @@ function runtimeEffects(settings: Settings): Promise<unknown>[] {
   return [
     api.setHotkeyConfig(settings.hotkeyModifier, settings.hotkeyGapMs),
     api.setPanelHotkey(settings.panelToggleHotkey),
+    api.setNewNoteHotkey(settings.newNoteHotkey),
     api.setCompanionConfig(
       settings.companionEnabled,
       settings.companionApps,

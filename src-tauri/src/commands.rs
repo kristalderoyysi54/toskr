@@ -238,8 +238,8 @@ pub fn hide_transient_image_preview(app: AppHandle) {
 /// 文本详情窗（桌面居中弹出；窄面板放不下长文，预览/编辑都在这个窗口）。
 /// 内容由前端 emit 到 textpreview 窗口。
 #[tauri::command]
-pub fn show_text_preview(app: AppHandle) {
-    crate::window::show_text_preview(&app);
+pub fn show_text_preview(app: AppHandle, label: Option<String>) {
+    crate::window::show_text_preview(&app, label.unwrap_or_else(|| "textpreview".into()));
 }
 
 /// 暂停剪贴板收集下发（设置页改动 → 同步 Rust 与托盘菜单；0 = 恢复）。
@@ -571,25 +571,57 @@ pub fn set_hotkey_config(state: State<'_, AppState>, modifier: String, gap_ms: u
 /// `shortcut` 为 global-shortcut 格式（如 "Cmd+Shift+KeyV"），None/空串 = 清除。
 #[tauri::command]
 pub fn set_panel_hotkey(app: AppHandle, shortcut: Option<String>) -> Result<(), String> {
+    *app.state::<AppState>().panel_hotkey_binding.lock().unwrap() =
+        shortcut.filter(|s| !s.trim().is_empty());
+    rebind_global_hotkeys(&app)
+}
+
+/// 注册/清除全局「新建笔记」快捷键：任意前台下直接开详情大窗写新笔记
+/// （main 收 toskr://new-note 事件落卡并开窗）。注册失败不连坐面板键。
+#[tauri::command]
+pub fn set_new_note_hotkey(app: AppHandle, shortcut: Option<String>) -> Result<(), String> {
+    *app.state::<AppState>().new_note_hotkey_binding.lock().unwrap() =
+        shortcut.filter(|s| !s.trim().is_empty());
+    rebind_global_hotkeys(&app)
+}
+
+/// 插件按「整体清空再全量注册」管理：两个快捷键共用注册器，改任一必须重放另一。
+fn rebind_global_hotkeys(app: &AppHandle) -> Result<(), String> {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
     let gs = app.global_shortcut();
-    // 该插件只承载这一个快捷键，整体清空即完成换绑/清除
     gs.unregister_all().map_err(|e| e.to_string())?;
-    let Some(s) = shortcut.filter(|s| !s.trim().is_empty()) else {
-        return Ok(());
-    };
-    gs.on_shortcut(s.as_str(), move |app, _sc, event| {
-        if event.state() == ShortcutState::Pressed {
-            on_panel_hotkey(app);
+    let state = app.state::<AppState>();
+    let panel = state.panel_hotkey_binding.lock().unwrap().clone();
+    let new_note = state.new_note_hotkey_binding.lock().unwrap().clone();
+    if let Some(s) = &panel {
+        gs.on_shortcut(s.as_str(), move |app, _sc, event| {
+            if event.state() == ShortcutState::Pressed {
+                on_panel_hotkey(app);
+            }
+        })
+        .map_err(|e| {
+            let msg = format!("快捷键注册失败：{e}");
+            crate::diag::push(app, format!("{msg} ({s})"));
+            msg
+        })?;
+        crate::diag::push(app, format!("面板快捷键已绑定: {s}"));
+    }
+    if let Some(s) = new_note {
+        if panel.as_deref() == Some(s.as_str()) {
+            crate::diag::push(app, "新建笔记快捷键与面板键相同，已跳过绑定");
+        } else if let Err(e) = gs.on_shortcut(s.as_str(), move |app, _sc, event| {
+            if event.state() == ShortcutState::Pressed {
+                crate::diag::push(app, "全局新建笔记快捷键触发");
+                let _ = app.emit_to("main", "toskr://new-note", ());
+            }
+        }) {
+            // 新建键被占用等失败只记诊断，不让整次 rebind 报错拖垮面板键
+            crate::diag::push(app, format!("新建笔记快捷键注册失败：{e} ({s})"));
+        } else {
+            crate::diag::push(app, format!("新建笔记快捷键已绑定: {s}"));
         }
-    })
-    .map_err(|e| {
-        let msg = format!("快捷键注册失败：{e}");
-        crate::diag::push(&app, format!("{msg} ({s})"));
-        msg
-    })?;
-    crate::diag::push(&app, format!("面板快捷键已绑定: {s}"));
+    }
     Ok(())
 }
 
@@ -696,8 +728,18 @@ pub fn refresh_prev_app(app: AppHandle) -> crate::target::TargetSnapshot {
     let (observation_revision, front) = crate::focus::frontmost_info_with_revision();
     let snapshot = match front {
         Some(front) if front.pid != me => crate::target::observe_front(&app, &front),
-        _ if internal_aux_window_focused(&app) => crate::target::revalidate_observed_target(&app),
-        _ => crate::target::require_observation_after(&app, observation_revision),
+        _ => {
+            // 短暂失焦恢复（P）：Toskr 自家窗口在前台时，目标进程仍在就
+            // 直接沿用最近目标，免去「再点一次目标应用」；恢复不了再走原路
+            let recovered = crate::target::recover_recent_target(&app);
+            if recovered.ready {
+                recovered
+            } else if internal_aux_window_focused(&app) {
+                crate::target::revalidate_observed_target(&app)
+            } else {
+                crate::target::require_observation_after(&app, observation_revision)
+            }
+        }
     };
     crate::window::maybe_redock(&app);
     snapshot
@@ -1030,35 +1072,91 @@ pub fn set_window_theme(app: AppHandle, theme: String) {
 /// material: "hud" | "popover" | "sidebar" | "under-window" | "fullscreen"
 #[tauri::command]
 pub fn set_vibrancy(app: AppHandle, enabled: bool, material: String) {
+    let state = app.state::<crate::state::AppState>();
+    state
+        .vibrancy_enabled
+        .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    *state.vibrancy_material.lock().unwrap() = material.clone();
     #[cfg(target_os = "macos")]
     {
-        use window_vibrancy::{
-            apply_vibrancy, clear_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
-        };
-        let Some(window) = app.get_webview_window("main") else {
-            return;
-        };
-        if !enabled {
-            let _ = clear_vibrancy(&window);
-            return;
+        // 主面板与全部文本详情窗（含动态创建的 textpreview-N）同款材质
+        let labels: Vec<String> = app
+            .webview_windows()
+            .keys()
+            .filter(|l| l.as_str() == "main" || l.starts_with("textpreview"))
+            .cloned()
+            .collect();
+        for label in labels {
+            let Some(window) = app.get_webview_window(&label) else {
+                continue;
+            };
+            apply_vibrancy_material(&window, enabled, &material);
         }
-        let mat = match material.as_str() {
-            "popover" => NSVisualEffectMaterial::Popover,
-            "sidebar" => NSVisualEffectMaterial::Sidebar,
-            "under-window" => NSVisualEffectMaterial::UnderWindowBackground,
-            "fullscreen" => NSVisualEffectMaterial::FullScreenUI,
-            _ => NSVisualEffectMaterial::HudWindow,
-        };
-        // 切材质需先清除旧的效果视图，否则会叠加。
-        // state=Active：强制常亮材质，否则窗口失焦时系统会切到 inactive 外观，
-        // 变成更实的灰底，通透感消失。
-        let _ = clear_vibrancy(&window);
-        let _ = apply_vibrancy(&window, mat, Some(NSVisualEffectState::Active), Some(14.0));
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (app, enabled, material);
     }
+}
+
+/// 对单扇窗口应用/清除毛玻璃材质（set_vibrancy 与动态详情窗创建共用）。
+#[cfg(target_os = "macos")]
+fn apply_vibrancy_material(window: &tauri::WebviewWindow, enabled: bool, material: &str) {
+    use window_vibrancy::{
+        apply_vibrancy, clear_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
+    };
+    if !enabled {
+        let _ = clear_vibrancy(window);
+        return;
+    }
+    let mat = match material {
+        "popover" => NSVisualEffectMaterial::Popover,
+        "sidebar" => NSVisualEffectMaterial::Sidebar,
+        "under-window" => NSVisualEffectMaterial::UnderWindowBackground,
+        "fullscreen" => NSVisualEffectMaterial::FullScreenUI,
+        _ => NSVisualEffectMaterial::HudWindow,
+    };
+    // 切材质需先清除旧的效果视图，否则会叠加。
+    // state=Active：强制常亮材质，否则窗口失焦时系统会切到 inactive 外观，
+    // 变成更实的灰底，通透感消失。
+    let _ = clear_vibrancy(window);
+    let _ = apply_vibrancy(window, mat, Some(NSVisualEffectState::Active), Some(14.0));
+}
+
+/// 按 AppState 当前毛玻璃状态给新建窗口套材质（动态详情窗创建时用）。
+pub fn apply_window_vibrancy_from_state(app: &AppHandle, window: &tauri::WebviewWindow) {
+    let state = app.state::<crate::state::AppState>();
+    let enabled = state
+        .vibrancy_enabled
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let material = state.vibrancy_material.lock().unwrap().clone();
+    #[cfg(target_os = "macos")]
+    apply_vibrancy_material(window, enabled, &material);
+    #[cfg(not(target_os = "macos"))]
+    let _ = (enabled, material, window);
+}
+
+/// 运行中的可选发送目标（详情窗长按发送选单）；排除 Toskr 自身。
+#[tauri::command]
+pub fn list_send_targets() -> Vec<crate::focus::SendTargetApp> {
+    crate::focus::running_send_targets()
+}
+
+/// 手动采信 pid 为当前发送目标（长按选单点选后调用，随后走常规发送）。
+#[tauri::command]
+pub fn adopt_send_target(
+    app: AppHandle,
+    pid: i32,
+) -> Option<crate::target::TargetSnapshot> {
+    crate::target::adopt_target_pid(&app, pid)
+}
+
+/// 详情窗查询毛玻璃是否开启：决定膜层用半透明还是不透明底。
+#[tauri::command]
+pub fn get_vibrancy_enabled(app: AppHandle) -> bool {
+    app.state::<crate::state::AppState>()
+        .vibrancy_enabled
+        .load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// 窗口整体不透明度（毛玻璃层一并变透，实现真正的穿透查看）。

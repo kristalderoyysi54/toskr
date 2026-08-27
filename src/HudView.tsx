@@ -103,7 +103,9 @@ export default function HudView() {
                             ? { update: true }
                             : item.targetId?.startsWith("settings:")
                               ? { settings: item.targetId.slice("settings:".length) }
-                              : {}
+                              : item.targetId === "page:secret"
+                                ? { page: "secret" }
+                                : {}
                       );
                       dismiss();
                     }}

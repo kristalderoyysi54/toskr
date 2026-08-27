@@ -4,17 +4,12 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { motion } from "motion/react";
 import {
   Check,
-  Copy,
-  ExternalLink,
   ImagePlus,
-  Pencil,
   Pin,
   Send,
-  TextSelect,
   X,
 } from "lucide-react";
 
-import { headerGradient } from "@/components/NoteCard";
 import { DataReadOnlyGuard } from "@/components/DataReadOnlyGuard";
 import { DetailWindowFrame } from "@/components/DetailWindowFrame";
 import {
@@ -26,7 +21,10 @@ import { stats } from "@/components/PreviewOverlay";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Kbd } from "@/components/ui/kbd";
+import { MacTrafficLights } from "@/components/ui/mac-close-button";
+import { DETAIL_STATE_EVENT } from "@/lib/detailWindows";
 import { Segmented } from "@/components/ui/segmented";
+import { SimpleMenu, SimpleMenuItem } from "@/components/SimpleMenu";
 import { TextSelectionToolbar } from "@/components/TextSelectionToolbar";
 import {
   NOTE_EDIT_AUTOSAVE_INTERVAL_MS,
@@ -39,7 +37,7 @@ import {
   type NoteTagsPayload,
 } from "@/lib/actions";
 import { requestAliasQuickAdd } from "@/lib/aliasQuickAdd";
-import { highlightCode, langLabel } from "@/lib/code";
+import { highlightCode } from "@/lib/code";
 import { NOTE_EDITOR_SESSION_RELEASE_EVENT } from "@/lib/editorSessionMedia";
 import { useAppIcon } from "@/lib/icons";
 import { timeAgo, useNoteThumb } from "@/lib/media";
@@ -167,6 +165,26 @@ function AttachThumb({
 }
 
 /** 详情窗只上报本次编辑新增且放弃的文件；主窗口会再按全库引用过滤后删盘。 */
+/** 操作坞文字钮（无界剧场）：ghost 样式；active = 开关型按下态（选词/渲染） */
+function DockOp({
+  active,
+  className,
+  ...props
+}: React.ComponentProps<"button"> & { active?: boolean }) {
+  return (
+    <button
+      {...props}
+      className={cn(
+        "rounded-lg px-3 py-1.5 text-body text-muted-foreground outline-none",
+        "transition-colors hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10",
+        "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+        active && "bg-black/5 text-foreground dark:bg-white/10",
+        className
+      )}
+    />
+  );
+}
+
 function discardDraftImages(
   original: string[],
   draft: string[],
@@ -358,6 +376,18 @@ export default function TextPreviewView() {
   // 正文字号（px）：⌘+/⌘- 调整、⌘0 复位；与设置页滑杆经主面板双向同步
   const [fontSize, setFontSize] = useState(DETAIL_FONT_SIZE_DEFAULT);
   const fontSizeRef = useRef(fontSize);
+  // ——— 无界剧场（A×E，2026-08-27 用户选定）：贴缘唤出 chrome / 毛玻璃膜层 ———
+  const [chromeOn, setChromeOn] = useState(true);
+  const chromeHideTimerRef = useRef<number | null>(null);
+  const [glassOn, setGlassOn] = useState(true);
+  /** 本次载荷是否新建占位（selectAll 只有新建流程传）：关窗未改则回收。 */
+  const blankDraftRef = useRef(false);
+  // 长按发送选目标：候选 = 运行中的常规 GUI 应用；点选后采信为目标再发送
+  const [sendTargets, setSendTargets] = useState<
+    { pid: number; name: string; bundleId: string }[]
+  >([]);
+  const sendLongPressTimerRef = useRef<number | null>(null);
+  const sendLongPressFiredRef = useRef(false);
   fontSizeRef.current = fontSize;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // 正文由 textarea DOM 持有，避免每次按键的 React 回写切断原生撤销分组。
@@ -392,6 +422,10 @@ export default function TextPreviewView() {
     dataGeneration: undefined as number | undefined,
   });
   const icon = useAppIcon(note?.sourceBundle ?? undefined);
+  // 发送键前置目标名（「发送到 Chrome」）：发去哪里按之前就看得见
+  const targetAppName = useTargetStore(
+    (state) => state.snapshot?.appName ?? null
+  );
   const targetReady = useTargetStore(
     (state) => state.status === "ready" && !state.profileOverrideNeedsConfirmation
   );
@@ -623,7 +657,11 @@ export default function TextPreviewView() {
   }, []);
 
   useEffect(() => {
-    const un = listen<NotePreviewPayload>("toskr://note-preview", (e) => {
+    // 必须窗口级监听：Tauri v2 全局 listen 是 Any 目标，emitTo 定向到别的
+    // 详情窗的载荷这里也会收到——📌 多窗并存时 pinned 窗会被新窗内容串台
+    const un = getCurrentWebviewWindow().listen<NotePreviewPayload>(
+      "toskr://note-preview",
+      (e) => {
       const p = e.payload;
       // 换内容先收尾旧编辑会话：自动保存语义下切卡不丢稿
       // （保留内容；空草稿还原原文）。save/cancel 只读 ref，不受闭包旧 state 影响
@@ -647,6 +685,11 @@ export default function TextPreviewView() {
       appliedInsertOperationsRef.current.clear();
       noteRef.current = p;
       setNote(p);
+      void api
+        .diagNote(
+          `详情窗载荷 label=${getCurrentWebviewWindow().label} note=${p.id.slice(0, 8)}`
+        )
+        .catch(() => {});
       draftRef.current = p.text;
       setDraftEmpty(!p.text.trim());
       draftImagesRef.current = p.images;
@@ -659,9 +702,17 @@ export default function TextPreviewView() {
       // 窗口隐藏复用、组件不卸载：选词模式是单次查看态，换内容必须归位，
       // 否则一次开启会"传染"给之后打开的所有卡片
       setPickMode(false);
+      // 📌 同理不跨卡传染（用户 2026-08-27）：打开另一张卡回到未固定，
+      // 每次要用再手动开；同卡内容刷新不动它
+      if (previousNote?.id !== p.id) setWinPinned(false);
       setPick(null);
       setTextSelection(null);
-      pendingSelectionRef.current = null;
+      blankDraftRef.current = !!p.selectAll;
+      // 新建笔记：整选占位文案，落指即替换（编辑聚焦 effect 消费该选区）
+      pendingSelectionRef.current =
+        p.selectAll && p.edit && previewIsEditable(p)
+          ? { start: 0, end: p.text.length }
+          : null;
       pendingTextEditRef.current = null;
       pendingTextEditImagesRef.current = null;
       pendingTextEditBeforeRef.current = null;
@@ -673,7 +724,8 @@ export default function TextPreviewView() {
       // 独立 WebView 只读同步当前 token；先注册 target event，让在途旧响应
       // 服从更新事件，但不能因打开详情窗轮换 Native token。
       void readTarget();
-    });
+      }
+    );
     return () => {
       un.then((fn) => fn());
     };
@@ -799,6 +851,11 @@ export default function TextPreviewView() {
       } else if (e.key === "0") {
         e.preventDefault();
         applySize(DETAIL_FONT_SIZE_DEFAULT);
+      } else if (!e.shiftKey && e.key.toLowerCase() === "w") {
+        // ⌘W 关当前详情窗（mac 肌肉记忆；close 经渲染期直赋镜像防陈旧闭包）
+        e.preventDefault();
+        e.stopPropagation();
+        closeRef.current();
       }
     };
     window.addEventListener("keydown", onKey, { capture: true });
@@ -910,6 +967,90 @@ export default function TextPreviewView() {
   // syncPreviewSelection 每轮渲染重建（闭包持有 note/editing），窗口级监听经
   // 渲染期直赋镜像取最新实现，避免 [] effect 里的陈旧闭包
   const syncPreviewSelectionRef = useRef<() => void>(() => {});
+
+  // 无界剧场 chrome 唤出：光标移动/按下、任意按键、焦点进入任一控件都算活跃，
+  // 静止 2.5s 或光标离窗淡出；编辑/选词/标签输入由 chromeVisible 兜底常显。
+  // 一律窗口级 capture 监听（WKWebView 焦点不可赌的项目约定；textarea 的
+  // stopPropagation 也拦不住 capture 阶段）。
+  useEffect(() => {
+    let lastPoke = 0;
+    let pointerInside = false;
+    const poke = () => {
+      const now = performance.now();
+      if (now - lastPoke < 250) return;
+      lastPoke = now;
+      setChromeOn(true);
+      if (chromeHideTimerRef.current) {
+        window.clearTimeout(chromeHideTimerRef.current);
+      }
+      // 光标仍在窗内时不因静止淡出（反复出没的闪烁感即用户反馈的「不丝滑」）；
+      // 键盘唤出（光标在外）静止 2.5s 后收
+      chromeHideTimerRef.current = window.setTimeout(() => {
+        if (!pointerInside) setChromeOn(false);
+      }, 2500);
+    };
+    const pointerPoke = () => {
+      pointerInside = true;
+      poke();
+    };
+    const hide = () => {
+      pointerInside = false;
+      if (chromeHideTimerRef.current) {
+        window.clearTimeout(chromeHideTimerRef.current);
+      }
+      setChromeOn(false);
+    };
+    window.addEventListener("pointermove", pointerPoke, { capture: true });
+    window.addEventListener("pointerdown", pointerPoke, { capture: true });
+    window.addEventListener("keydown", poke, { capture: true });
+    window.addEventListener("focusin", poke, { capture: true });
+    document.documentElement.addEventListener("mouseleave", hide);
+    return () => {
+      window.removeEventListener("pointermove", pointerPoke, { capture: true });
+      window.removeEventListener("pointerdown", pointerPoke, { capture: true });
+      window.removeEventListener("keydown", poke, { capture: true });
+      window.removeEventListener("focusin", poke, { capture: true });
+      document.documentElement.removeEventListener("mouseleave", hide);
+      if (chromeHideTimerRef.current) {
+        window.clearTimeout(chromeHideTimerRef.current);
+      }
+    };
+  }, []);
+
+  // 毛玻璃开关（设置项）：开着时膜层半透明透出系统模糊；关着时透明窗没有
+  // 模糊垫底，必须退回不透明底，否则桌面直接透进来
+  useEffect(() => {
+    void api.getVibrancyEnabled().then(setGlassOn).catch(() => {});
+  }, []);
+
+  // 多详情窗（📌 并存）：把本窗 {pinned, noteId} 上报主面板——
+  // 首报兼作「新窗就绪」信号（主面板冲洗排队中的 note-preview 载荷）
+  const winLabel = useMemo(() => {
+    try {
+      return getCurrentWebviewWindow().label;
+    } catch {
+      return "textpreview";
+    }
+  }, []);
+  useEffect(() => {
+    void emitTo("main", DETAIL_STATE_EVENT, {
+      label: winLabel,
+      pinned: winPinned,
+      noteId: note?.id ?? null,
+    }).catch(() => {});
+  }, [winLabel, winPinned, note?.id]);
+
+  // 大文渲染 memo：chrome 唤出/淡出只改顶条与坞的 opacity，正文的
+  // Markdown/代码高亮不许跟着重算（动画首帧掉帧的主因）
+  const mdHtml = useMemo(
+    () => (note && !note.codeLang ? renderMarkdown(note.text) : ""),
+    [note]
+  );
+  const codeHtml = useMemo(
+    () => (note?.codeLang ? highlightCode(note.text, note.codeLang) : ""),
+    [note]
+  );
+
   useEffect(() => {
     const onSelectionChange = () => {
       if (pickModeRef.current || editingRef.current) return;
@@ -952,6 +1093,33 @@ export default function TextPreviewView() {
         });
         return;
       }
+      if (pickMode) {
+        // 选词模式没有 DOM Selection：用选中键帽的并集矩形做锚点，
+        // 工具条贴着选中词浮动（与普通划选一致），不再退到底部与坞叠置
+        const chips =
+          previewContentRef.current?.querySelectorAll("[data-pick-selected]");
+        if (chips && chips.length) {
+          let left = Infinity;
+          let right = -Infinity;
+          let top = Infinity;
+          let bottom = -Infinity;
+          chips.forEach((chip) => {
+            const r = chip.getBoundingClientRect();
+            left = Math.min(left, r.left);
+            right = Math.max(right, r.right);
+            top = Math.min(top, r.top);
+            bottom = Math.max(bottom, r.bottom);
+          });
+          setToolbarAnchor({
+            left: (left + right) / 2 - frameRect.left,
+            top: top - frameRect.top,
+            bottom: bottom - frameRect.top,
+          });
+          return;
+        }
+        setToolbarAnchor(null);
+        return;
+      }
       const domSelection = document.getSelection();
       if (domSelection && domSelection.rangeCount && !domSelection.isCollapsed) {
         const rect = domSelection.getRangeAt(0).getBoundingClientRect();
@@ -975,7 +1143,7 @@ export default function TextPreviewView() {
       body?.removeEventListener("scroll", compute);
       textarea?.removeEventListener("scroll", compute);
     };
-  }, [textSelection, editing, gen]);
+  }, [textSelection, editing, gen, pickMode, pick]);
 
   // 锚点 → 工具条定位样式：上方优先，顶部放不下改到选区下方；水平方向钳入容器
   const toolbarAnchorStyle = useMemo(() => {
@@ -1083,8 +1251,27 @@ export default function TextPreviewView() {
       exitEditing();
     }
     releaseEditorSession(noteRef.current);
+    // 空白「新笔记」占位回收：本次是新建流程（selectAll 标记）且关窗时
+    // 一个字没改 → 请主面板删掉这张占位卡，列表不留壳（校验在主面板侧）
+    const current = noteRef.current;
+    if (
+      blankDraftRef.current &&
+      current &&
+      current.text.trim() === "新笔记" &&
+      current.images.length === 0
+    ) {
+      void emitTo("main", "toskr://note-discard-blank", {
+        id: current.id,
+        dataGeneration: current.dataGeneration,
+      }).catch(() => {});
+    }
+    blankDraftRef.current = false;
+    // 📌 只对本次打开生效（用户 2026-08-27）：关窗即复位，重开同卡/换卡都不继承
+    setWinPinned(false);
     void getCurrentWebviewWindow().hide();
   };
+  const closeRef = useRef(close);
+  closeRef.current = close;
 
   /** 放弃修改：还原到本次编辑前内容（清空草稿退出、数据失效等兜底路径）。 */
   const cancelEditing = () => {
@@ -1109,6 +1296,10 @@ export default function TextPreviewView() {
     setDraftContentBlocks(current.contentBlocks ?? []);
     setTextSelection(null);
     setEditing(false);
+    // 编辑完自动回渲染视图（Typora 心智，2026-08-27 用户指定）：源码只在编辑时可见
+    setMdView(
+      !current.codeLang && current.kind !== "link" && looksLikeMarkdown(current.text)
+    );
   };
 
   const save = () => {
@@ -1149,6 +1340,12 @@ export default function TextPreviewView() {
       } else {
         revertAutosavedDraft();
         releaseEditorSession(current);
+        // 无变更退出同样自动回渲染视图（编辑完 = 看到渲染结果）
+        setMdView(
+          !current.codeLang &&
+            current.kind !== "link" &&
+            looksLikeMarkdown(current.text)
+        );
       }
       setTextSelection(null);
       setEditing(false);
@@ -1194,6 +1391,12 @@ export default function TextPreviewView() {
       revertAutosavedDraft();
       discardDraftImages(images, discardedImages, current.dataGeneration);
       releaseEditorSession(current);
+      // 无变更退出同样自动回渲染视图（编辑完 = 看到渲染结果）
+      setMdView(
+        !current.codeLang &&
+          current.kind !== "link" &&
+          looksLikeMarkdown(current.text)
+      );
     }
     sessionPastedImagesRef.current.clear();
     setTextSelection(null);
@@ -1563,6 +1766,7 @@ export default function TextPreviewView() {
       <button
         key={`${segment.start}-${index}`}
         type="button"
+        data-pick-selected={inRange || undefined}
         onClick={() => onPickToken(index)}
         className={cn(
           // token-exception: 键帽方块（用户选定模板 B）——底边厚度/按压位移/
@@ -1930,16 +2134,9 @@ export default function TextPreviewView() {
   const editable = writable;
   const flatEditable = writable && !orderedRich;
   const isMd = !note.codeLang && !isLink && looksLikeMarkdown(note.text);
-  const typeLabel = isLink
-    ? "链接"
-    : orderedRich
-      ? "图文快照"
-    : note.kind === "image"
-      ? "图片"
-    : note.codeLang
-      ? langLabel(note.codeLang)
-      : "文本";
   const s = stats(note.text);
+  // 编辑/选词/标签输入期间 chrome 常显（有操作要落地）；其余靠活跃度唤出
+  const chromeVisible = chromeOn || editing || pickMode || tagDraft !== null;
   // 选区工具条一露面，页脚的「发送」就和它的「发送选中」同屏了，两个发送必须
   // 一眼分辨发的是什么——此时页脚改口「发送整卡」，与「发送选中」动宾对仗
   const selectionToolbarOpen =
@@ -2017,14 +2214,19 @@ export default function TextPreviewView() {
       tip("warn", "图片编辑未打开，当前草稿仍保留");
     }
   };
-  // 与来源卡片通栏同色：主面板决议的分组色/中性灰优先，应用主色兜底
-  const detailHeaderBackground = headerGradient(
-    note.headerColor ?? icon?.color ?? "#5b5b60"
-  );
+  // 与来源卡片通栏同色：主面板决议的分组色/中性灰优先，应用主色兜底。
+  // 无界剧场后该色只保留两处：顶部晕光 + 阅读进度线（A×E 用户选定）
+  const accent = note.headerColor ?? icon?.color ?? "#7c8494";
+  const glowBackground = `linear-gradient(180deg, color-mix(in srgb, ${accent} 26%, transparent), transparent 80%)`;
 
   return (
     <DetailWindowFrame
-      surfaceClassName="select-none bg-background text-foreground"
+      surfaceClassName={cn(
+        "select-none text-foreground",
+        // 毛玻璃开启时半透明膜层透出系统模糊（与主面板同款材质）；关闭退回不透明。
+        // 60%：用户 2026-08-27 要求比首版（75%）更通透
+        glassOn ? "bg-background/60" : "bg-background"
+      )}
     >
       <DataReadOnlyGuard />
       {dropActive && (
@@ -2035,64 +2237,83 @@ export default function TextPreviewView() {
           </span>
         </div>
       )}
-      {/* 标题栏：应用主色渐变（与卡顶同款）+ 顶缘内嵌高光（HUD 气泡同款
-          玻璃质感）+ 与正文交界的一丝落影；可拖动窗口 */}
-      <header
+      {/* ——— 无界剧场（A×E）：零标题栏。常驻元素只有顶部晕光；信息条/操作坞随 chromeVisible 贴缘唤出 ——— */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 top-0 z-0 h-32"
+        style={{ background: glowBackground }}
+      />
+      {/* 无标题栏后的拖动区：顶部 40px 皆可拖窗（正文首行从其下开始） */}
+      <div
         data-tauri-drag-region
-        className="relative z-10 flex h-11 shrink-0 cursor-grab items-center gap-2 px-3 shadow-[inset_0_1px_0_oklch(1_0_0/0.2),0_1px_3px_oklch(0_0_0/0.12)] active:cursor-grabbing"
-        style={{ backgroundImage: detailHeaderBackground }}
+        className="absolute inset-x-0 top-0 z-20 h-10 cursor-grab active:cursor-grabbing"
+      />
+      <div
+        // 容器也要标拖动区：Tauri 判定只看点击目标自身（不冒泡），唤出态它
+        // 盖在下方拖动条上，不标的话顶部只剩标题文字一小条能拖窗
+        data-tauri-drag-region
+        className={cn(
+          "absolute inset-x-0 top-0 z-30 flex cursor-grab items-center gap-2 px-3 py-2 active:cursor-grabbing",
+          "transition-[opacity,transform] duration-(--duration-overlay) ease-(--ease-standard) motion-reduce:transition-none",
+          chromeVisible
+            ? "translate-y-0 opacity-100"
+            : "pointer-events-none -translate-y-1 opacity-0"
+        )}
       >
-        <div data-tauri-drag-region className="min-w-0 flex-1 leading-tight">
-          <p
-            data-tauri-drag-region
-            className="flex items-center gap-1.5 truncate text-body font-semibold text-white"
-          >
-            <span className="truncate">{note.title || typeLabel}</span>
-            {editing && (
-              // 编辑态徽标：查看/编辑两态正文观感接近，标题栏给一眼可辨的状态锚点
-              <span className="shrink-0 rounded-full bg-white/25 px-1.5 py-px text-micro font-medium text-white">
-                编辑中
-              </span>
-            )}
-          </p>
-          <p data-tauri-drag-region className="truncate text-micro text-white/70">
-            {note.subtitle ??
-              [
-                note.sourceApp ? `来自 ${note.sourceApp}` : "笔记",
-                note.createdAt ? `创建 ${timeAgo(note.createdAt)}` : null,
-                note.updatedAt && note.updatedAt > (note.createdAt ?? 0)
-                  ? `改于 ${timeAgo(note.updatedAt)}`
-                  : null,
-              ]
-                .filter(Boolean)
-                .join(" · ")}
-          </p>
-        </div>
-        {icon && <img src={icon.url} alt="" className="size-6 rounded-[5px]" />}
+        <MacTrafficLights onClose={close} />
+        {editing && (
+          // 编辑态指示：一枚呼吸主色点 + 小字（类型徽标已按用户要求移除）
+          <span className="flex shrink-0 items-center gap-1.5 text-micro font-medium text-primary">
+            <span
+              aria-hidden
+              className="size-1.5 animate-pulse rounded-full bg-primary shadow-[0_0_8px_1px_var(--primary)]"
+            />
+            编辑中
+          </span>
+        )}
+        <p
+          data-tauri-drag-region
+          className="min-w-0 flex-1 truncate text-micro text-muted-foreground"
+          title={`${s.chars} 字符 · ${s.words} 词 · ${s.lines} 行`}
+        >
+          {note.title && (
+            <span className="font-medium text-foreground">{note.title} · </span>
+          )}
+          {note.subtitle ??
+            [
+              note.sourceApp ? `来自 ${note.sourceApp}` : "笔记",
+              note.createdAt ? `创建 ${timeAgo(note.createdAt)}` : null,
+              note.updatedAt && note.updatedAt > (note.createdAt ?? 0)
+                ? `改于 ${timeAgo(note.updatedAt)}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          {` · ${s.chars} 字`}
+        </p>
+        {icon && <img src={icon.url} alt="" className="size-5 rounded-[5px]" />}
         <IconButton
           label={winPinned ? "取消固定（发送后恢复自动关窗）" : "固定窗口：发送后保持打开"}
           size="xs"
           pressed={winPinned}
           onClick={() => setWinPinned((value) => !value)}
-          className={cn(
-            "text-white/70 hover:bg-white/15 hover:text-white focus-visible:ring-white/60 focus-visible:ring-offset-0",
-            winPinned && "bg-white/25 text-white"
-          )}
         >
           <Pin className="size-3.5" fill={winPinned ? "currentColor" : "none"} />
         </IconButton>
-        <button
-          aria-label="关闭"
-          onClick={close}
-          className="rounded-sm p-1 text-white/70 outline-none hover:text-white focus-visible:ring-2 focus-visible:ring-white/60"
-        >
-          <X className="size-3.5" />
-        </button>
-      </header>
-
-      {/* 标签行：chips 可摘除 + 内联新增；写回主面板持久化（详情窗不直接写库） */}
+      </div>
+      {/* 标签行：chips 可摘除 + 内联新增；写回主面板持久化（详情窗不直接写库）。
+          无界剧场后是随 chrome 唤出的浮层（tagDraft 输入期间 chromeVisible 兜底常显） */}
       {writable && (
-        <div className="flex flex-wrap items-center gap-1 border-b border-black/5 px-3 py-1.5 dark:border-white/5">
+        <div
+          data-tauri-drag-region
+          className={cn(
+            "absolute inset-x-0 top-9 z-30 flex flex-wrap items-center gap-1 px-3 py-1",
+            "transition-[opacity,transform] duration-(--duration-overlay) ease-(--ease-standard) motion-reduce:transition-none",
+            chromeVisible
+              ? "translate-y-0 opacity-100"
+              : "pointer-events-none -translate-y-1 opacity-0"
+          )}
+        >
           {(note.tags ?? []).map((tag) => (
             <span
               key={tag}
@@ -2147,9 +2368,11 @@ export default function TextPreviewView() {
           ref={bodyRef}
           data-detail-font
           style={{ "--detail-font-size": `${fontSize}px` } as React.CSSProperties}
+          // 编辑态一圈内嵌描边 + 浅蓝底（用户指定保留旧样式）；上下留白给
+          // 贴缘 chrome 让位（可编辑卡多让 16px：标签行浮在 top-9）
           className={cn(
-            "h-full select-text overflow-y-auto p-4",
-            // 编辑态给正文区一圈内嵌焦点描边 + 极浅底色：与查看态一眼区分
+            "h-full select-text overflow-y-auto px-5 pb-16",
+            writable ? "pt-16" : "pt-12",
             editing && "bg-primary/[0.04] ring-1 ring-inset ring-primary/25"
           )}
           onDoubleClick={() => {
@@ -2284,9 +2507,7 @@ export default function TextPreviewView() {
           ) : note.codeLang ? (
             <pre className="hljs whitespace-pre-wrap [overflow-wrap:anywhere] !bg-transparent font-mono text-body leading-relaxed">
               <code
-                dangerouslySetInnerHTML={{
-                  __html: highlightCode(note.text, note.codeLang),
-                }}
+                dangerouslySetInnerHTML={{ __html: codeHtml }}
               />
             </pre>
           ) : pickMode ? (
@@ -2345,7 +2566,7 @@ export default function TextPreviewView() {
               ref={previewContentRef as React.RefObject<HTMLDivElement>}
               className="md-preview text-title leading-relaxed"
               onClick={onMarkdownClick}
-              dangerouslySetInnerHTML={{ __html: renderMarkdown(note.text) }}
+              dangerouslySetInnerHTML={{ __html: mdHtml }}
             />
           ) : (
             <pre
@@ -2376,7 +2597,8 @@ export default function TextPreviewView() {
           悬停 ⊗ 从卡片移除。移除本身回主面板执行（唯一持久化写入方），这里
           先本地摘掉该图，界面不等回程 */}
       {shownImages.length > 0 && (
-        <div className="flex shrink-0 gap-1.5 overflow-x-auto border-t border-black/5 px-3 py-2 dark:border-white/5">
+        // mb-12 给底部操作坞让位：坞是浮层，不让位时盖住缩略图，悬停 ⊗ 点不到
+        <div className="mb-12 flex shrink-0 gap-1.5 overflow-x-auto border-t border-black/5 px-3 py-2 dark:border-white/5">
           {shownImages.map((f, i) => (
             <AttachThumb
               key={f}
@@ -2428,134 +2650,214 @@ export default function TextPreviewView() {
         </div>
       )}
 
-      <footer className="flex items-center gap-1 border-t border-black/5 px-3 py-2 dark:border-white/5">
-        <span className="text-micro tabular-nums text-muted-foreground">
-          {`${s.chars} 字符 · ${s.words} 词 · ${s.lines} 行`}
-        </span>
-        <div className="ml-auto flex items-center gap-1">
-          {editing ? (
-            <>
-              {!orderedRich && !note.codeLang && !isLink && (
-                <button
-                  onClick={() => setEditPreviewOn((v) => !v)}
-                  className={cn(
-                    "rounded-md px-1.5 py-0.5 text-micro text-muted-foreground outline-none",
-                    "hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:hover:bg-white/10"
-                  )}
-                >
-                  {editPreviewOn ? "原文" : "渲染"}
-                </button>
-              )}
-              <IconButton label="粘贴图片（⌘V）" onClick={() => void pasteImage()}>
-                <ImagePlus className="size-3.5" />
-              </IconButton>
-              <Button
-                size="xs"
-                disabled={!orderedRich && draftEmpty && draftImages.length === 0}
-                onClick={save}
+      {/* 底部操作坞（E）：贴缘唤出、语境切换（查看/编辑），发送键前置目标名 */}
+      <div
+        className={cn(
+          "absolute inset-x-0 bottom-0 z-30 flex items-center justify-center gap-1 px-4 pb-3 pt-10",
+          "bg-gradient-to-t from-background/90 via-background/55 to-transparent",
+          "transition-[opacity,transform] duration-(--duration-overlay) ease-(--ease-standard) motion-reduce:transition-none",
+          chromeVisible
+            ? "translate-y-0 opacity-100"
+            : "pointer-events-none translate-y-1.5 opacity-0"
+        )}
+      >
+        {editing ? (
+          <>
+            {!orderedRich && !note.codeLang && !isLink && (
+              <DockOp
+                active={editPreviewOn}
+                onClick={() => setEditPreviewOn((v) => !v)}
               >
-                <Check className="size-3" /> 保存
-                {/* token-exception: 9px 为重塑前原始尺寸，用户指定还原 */}
-                <Kbd inline className="text-[9px]">⌘⏎</Kbd>
-              </Button>
-            </>
-          ) : (
-            <>
-              {!isLink && !note.codeLang && (
-                <>
-                  <IconButton
-                    label={
-                      pickMode
-                        ? "退出选词模式（W）"
-                        : "选词模式：点选词/段，可发送或复制选中片段（W）"
-                    }
-                    pressed={pickMode}
-                    onClick={() => {
-                      if (pickMode) exitPickMode();
-                      else enterPickMode();
-                    }}
-                  >
-                    <TextSelect className="size-3.5" />
-                  </IconButton>
-                  {pickMode && (
-                    <Segmented
-                      ariaLabel="选取粒度"
-                      size="xs"
-                      value={pickGranularity}
-                      options={[
-                        { value: "word", label: "词" },
-                        { value: "paragraph", label: "段" },
-                      ]}
-                      onChange={(value) => {
-                        setPickGranularity(value);
-                        setPick(null);
-                        setTextSelection(null);
-                      }}
-                    />
-                  )}
-                </>
-              )}
-              {!orderedRich && isMd && !pickMode && (
-                <button
-                  onClick={() => setMdView(!mdView)}
-                  className={cn(
-                    "rounded-md px-1.5 py-0.5 text-micro text-muted-foreground outline-none",
-                    "hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:hover:bg-white/10"
-                  )}
+                {editPreviewOn ? "原文" : "渲染"}
+              </DockOp>
+            )}
+            <IconButton label="粘贴图片（⌘V）" onClick={() => void pasteImage()}>
+              <ImagePlus className="size-3.5" />
+            </IconButton>
+            <Button
+              className="rounded-full px-5 shadow-(--shadow-card)"
+              disabled={!orderedRich && draftEmpty && draftImages.length === 0}
+              onClick={save}
+            >
+              <Check className="size-3" /> 保存
+              {/* token-exception: 9px 为重塑前原始尺寸，用户指定还原 */}
+              <Kbd inline className="text-[9px]">⌘⏎</Kbd>
+            </Button>
+          </>
+        ) : (
+          <>
+            {!isLink && !note.codeLang && (
+              <>
+                <DockOp
+                  active={pickMode}
+                  title={
+                    pickMode
+                      ? "退出选词模式（W）"
+                      : "选词模式：点选词/段，可发送或复制选中片段（W）"
+                  }
+                  onClick={() => {
+                    if (pickMode) exitPickMode();
+                    else enterPickMode();
+                  }}
                 >
-                  {mdView ? "原文" : "渲染"}
-                </button>
-              )}
-              {isLink && (
-                <IconButton label="打开链接" onClick={() => void api.openUrl(note.url!)}>
-                  <ExternalLink className="size-3.5" />
-                </IconButton>
-              )}
-              {editable && (
-                <IconButton
-                  label={orderedRich ? "编辑文字（图片位置固定）" : "编辑"}
-                  onClick={() => setEditing(true)}
-                >
-                  <Pencil className="size-3.5" />
-                </IconButton>
-              )}
-              <IconButton label="复制" onClick={() => void copy()}>
-                <Copy className="size-3.5" />
-              </IconButton>
-              {writable && (
-                <>
-                  <p
-                    id="text-preview-target-status"
-                    role="status"
-                    aria-live="polite"
-                    className="sr-only"
-                  >
-                    {targetBlockedMessage ?? ""}
-                  </p>
-                  <Button
+                  选词
+                </DockOp>
+                {pickMode && (
+                  <Segmented
+                    ariaLabel="选取粒度"
                     size="xs"
-                    disabled={!targetReady}
-                    aria-label={
-                      targetReady
-                        ? selectionToolbarOpen
-                          ? "发送整卡到当前目标（不是选中片段）"
-                          : "发送到当前目标"
-                        : `发送不可用：${targetBlockedMessage}`
-                    }
-                    aria-describedby={
-                      targetReady ? undefined : "text-preview-target-status"
-                    }
-                    onClick={send}
-                  >
-                    <Send className="size-3" />{" "}
-                    {selectionToolbarOpen ? "发送整卡" : "发送"}
-                  </Button>
-                </>
-              )}
-            </>
-          )}
-        </div>
-      </footer>
+                    value={pickGranularity}
+                    options={[
+                      { value: "word", label: "词" },
+                      { value: "paragraph", label: "段" },
+                    ]}
+                    onChange={(value) => {
+                      setPickGranularity(value);
+                      setPick(null);
+                      setTextSelection(null);
+                    }}
+                  />
+                )}
+              </>
+            )}
+            {!orderedRich && isMd && !pickMode && (
+              <DockOp onClick={() => setMdView(!mdView)}>
+                {mdView ? "原文" : "渲染"}
+              </DockOp>
+            )}
+            {isLink && (
+              <DockOp onClick={() => void api.openUrl(note.url!)}>打开链接</DockOp>
+            )}
+            <DockOp onClick={() => void copy()}>复制</DockOp>
+            {editable && (
+              <DockOp
+                title={orderedRich ? "编辑文字（图片位置固定）" : undefined}
+                onClick={() => setEditing(true)}
+              >
+                编辑
+              </DockOp>
+            )}
+            {writable && (
+              <>
+                <p
+                  id="text-preview-target-status"
+                  role="status"
+                  aria-live="polite"
+                  className="sr-only"
+                >
+                  {targetBlockedMessage ?? ""}
+                </p>
+                <SimpleMenu
+                  align="end"
+                  side="top"
+                  menuClassName="max-h-64 w-48 overflow-y-auto"
+                  trigger={({ toggle }) => {
+                    const openTargetMenu = () => {
+                      void api
+                        .listSendTargets()
+                        .then((list) => {
+                          setSendTargets(list);
+                          toggle();
+                        })
+                        .catch(() => {});
+                    };
+                    return (
+                      <Button
+                        className={cn(
+                          "rounded-full px-5 shadow-(--shadow-card)",
+                          !targetReady && "opacity-60"
+                        )}
+                        aria-label={
+                          targetReady
+                            ? selectionToolbarOpen
+                              ? "发送整卡到当前目标（不是选中片段）；长按换目标"
+                              : "发送到当前目标；长按换目标"
+                            : `目标不可用（点击换目标）：${targetBlockedMessage}`
+                        }
+                        aria-describedby={
+                          targetReady ? undefined : "text-preview-target-status"
+                        }
+                        onPointerDown={() => {
+                          sendLongPressFiredRef.current = false;
+                          sendLongPressTimerRef.current = window.setTimeout(
+                            () => {
+                              sendLongPressFiredRef.current = true;
+                              openTargetMenu();
+                            },
+                            450
+                          );
+                        }}
+                        onPointerUp={() => {
+                          if (sendLongPressTimerRef.current) {
+                            window.clearTimeout(sendLongPressTimerRef.current);
+                          }
+                        }}
+                        onPointerLeave={() => {
+                          if (sendLongPressTimerRef.current) {
+                            window.clearTimeout(sendLongPressTimerRef.current);
+                          }
+                        }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          openTargetMenu();
+                        }}
+                        onClick={() => {
+                          // 长按已弹选单：这次抬起的 click 不当作发送
+                          if (sendLongPressFiredRef.current) {
+                            sendLongPressFiredRef.current = false;
+                            return;
+                          }
+                          // 目标失效时点击直接弹目标选单，免去先点一次目标应用
+                          if (!targetReady) {
+                            openTargetMenu();
+                            return;
+                          }
+                          send();
+                        }}
+                      >
+                        <Send className="size-3" />{" "}
+                        {selectionToolbarOpen
+                          ? "发送整卡"
+                          : targetAppName
+                            ? `发送到 ${targetAppName}`
+                            : "发送"}
+                        {/* token-exception: 9px 为重塑前原始尺寸，用户指定还原 */}
+                        <Kbd inline className="text-[9px]">⌘⏎</Kbd>
+                      </Button>
+                    );
+                  }}
+                >
+                  {(close) => (
+                    <>
+                      <p className="px-2 py-1 text-micro font-medium text-muted-foreground">
+                        发送到…
+                      </p>
+                      {sendTargets.map((t) => (
+                        <SimpleMenuItem
+                          key={t.pid}
+                          onClick={() => {
+                            close();
+                            void api.adoptSendTarget(t.pid).then((snap) => {
+                              if (!snap?.ready) {
+                                tip("warn", "该应用暂不可作为发送目标");
+                                return;
+                              }
+                              // 等 target 事件先落主面板 store 再发
+                              window.setTimeout(() => send(), 60);
+                            });
+                          }}
+                        >
+                          <span className="truncate">{t.name}</span>
+                        </SimpleMenuItem>
+                      ))}
+                    </>
+                  )}
+                </SimpleMenu>
+              </>
+            )}
+          </>
+        )}
+      </div>
     </DetailWindowFrame>
   );
 }

@@ -145,6 +145,8 @@ pub struct AppState {
     pub excluded_apps: Mutex<Vec<String>>,
     /// 伴随跟随任务代数（bump 即停止旧任务）。
     pub companion_gen: AtomicU64,
+    /// 伴随 tracker 当前吸附的目标 pid（0=未在接管）：发送目标的磁吸锁依据。
+    pub companion_tracked_pid: AtomicI64,
     /// HUD 运行态。
     pub hud: Mutex<HudRuntime>,
     /// 应用图标缓存：bundle id → (data URL, 主色)。
@@ -169,6 +171,14 @@ pub struct AppState {
     pub sidebar_edge: AtomicU8,
     /// 面板置顶偏好（用户设置）；伴随磁吸期间强制同层级，脱离后按此恢复。
     pub panel_topmost: AtomicBool,
+    /// 毛玻璃（系统 vibrancy）当前是否开启：详情窗前端据此决定膜层透明度
+    /// （关闭时窗口透明但无系统模糊，必须退回不透明底，否则直接透出桌面）。
+    pub vibrancy_enabled: AtomicBool,
+    /// 毛玻璃材质名（hud/popover/…）：动态创建详情窗时按此套用。
+    pub vibrancy_material: Mutex<String>,
+    /// 全局快捷键绑定串（插件是整体清空再注册的语义，改任一都要整组重放）。
+    pub panel_hotkey_binding: Mutex<Option<String>>,
+    pub new_note_hotkey_binding: Mutex<Option<String>>,
     /// 双击触发仅捕获（面板开关完全交给专用快捷键）。
     pub double_tap_capture_only: AtomicBool,
     /// 贴边隐藏兼容开关；当前运行态固定开启，是否介入由用户拖动建立的锚点决定。
@@ -240,6 +250,7 @@ impl Default for AppState {
                 .collect(),
             ),
             companion_gen: AtomicU64::new(0),
+            companion_tracked_pid: AtomicI64::new(0),
             hud: Mutex::new(HudRuntime::default()),
             icon_cache: Mutex::new(HashMap::new()),
             // 与前端 defaultSettings.clipHistory 一致（首装默认开）：两边不一致
@@ -266,6 +277,10 @@ impl Default for AppState {
             right_sidebar: AtomicBool::new(false),
             sidebar_edge: AtomicU8::new(0),
             panel_topmost: AtomicBool::new(true),
+            vibrancy_enabled: AtomicBool::new(true),
+            vibrancy_material: Mutex::new("hud".into()),
+            panel_hotkey_binding: Mutex::new(None),
+            new_note_hotkey_binding: Mutex::new(None),
             double_tap_capture_only: AtomicBool::new(false),
             // 与前端 defaultSettings.autoEdgeHide 一致（首装默认开）
             auto_edge_hide: AtomicBool::new(true),

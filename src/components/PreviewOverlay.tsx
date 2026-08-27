@@ -330,7 +330,7 @@ export function PreviewOverlay() {
             >
             <header
               className="flex items-center gap-2 px-3 py-2"
-              style={{ backgroundImage: headerGradient(icon?.color ?? "#5b5b60") }}
+              style={{ backgroundImage: headerGradient(icon?.color ?? "#7c8494") }}
             >
               <div className="min-w-0 flex-1 leading-tight">
                 <p id="preview-title" className="truncate text-body font-semibold text-white">

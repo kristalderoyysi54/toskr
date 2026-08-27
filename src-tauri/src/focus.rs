@@ -95,6 +95,46 @@ pub fn running_regular_apps() -> Vec<RunningApp> {
     out
 }
 
+/// 长按发送选单的候选目标（带 pid，可直接采信为发送目标）。
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendTargetApp {
+    pub pid: i32,
+    pub name: String,
+    pub bundle_id: String,
+}
+
+/// 枚举可作为发送目标的运行中常规 GUI 应用（排除 Toskr 自身），按名称排序。
+pub fn running_send_targets() -> Vec<SendTargetApp> {
+    let workspace = unsafe { NSWorkspace::sharedWorkspace() };
+    let apps = unsafe { workspace.runningApplications() };
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for app in apps.iter() {
+        if app.activationPolicy() != NSApplicationActivationPolicy::Regular {
+            continue;
+        }
+        let Some(bundle) = app.bundleIdentifier() else {
+            continue;
+        };
+        let bundle_id = bundle.to_string();
+        if bundle_id == "com.toskr.app" || !seen.insert(bundle_id.clone()) {
+            continue;
+        }
+        let name = app
+            .localizedName()
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| bundle_id.clone());
+        out.push(SendTargetApp {
+            pid: unsafe { app.processIdentifier() },
+            name,
+            bundle_id,
+        });
+    }
+    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out
+}
+
 /// 内核记录的进程启动时刻（sysctl kinfo_proc）。
 /// launchDate 只覆盖经 LaunchServices 启动的进程——消息监听自动接入用
 /// Command::spawn 重启的目标 IM拿不到 launchDate，目标身份校验会把它误判成

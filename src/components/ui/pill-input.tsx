@@ -25,6 +25,8 @@ type PillInputProps = {
   onPasteImage?: () => void;
   /** 输入行上方的附件区（如暂存图片缩略 chips）。 */
   attachmentsSlot?: React.ReactNode;
+  /** 右槽（提交钮之前，如「转大窗编辑」）。 */
+  rightSlot?: React.ReactNode;
   /** 文本为空时也允许提交（有暂存附件的场景）。 */
   canSubmitEmpty?: boolean;
 };
@@ -46,6 +48,7 @@ export function PillInput({
   disabled = false,
   onPasteImage,
   attachmentsSlot,
+  rightSlot,
   canSubmitEmpty = false,
 }: PillInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -134,6 +137,7 @@ export function PillInput({
           className={fieldCls}
         />
       )}
+      {rightSlot}
       {submittable && (
         <IconButton
           label={submitLabel}

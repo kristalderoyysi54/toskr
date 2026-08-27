@@ -13,7 +13,6 @@ import {
   Shield,
   Trash2,
   Undo2,
-  X,
 } from "lucide-react";
 
 import {
@@ -33,6 +32,7 @@ import { DataReadOnlyGuard } from "@/components/DataReadOnlyGuard";
 import { DetailWindowFrame } from "@/components/DetailWindowFrame";
 import { ManualRedactionCanvas } from "@/components/ManualRedactionCanvas";
 import { Button } from "@/components/ui/button";
+import { MacTrafficLights } from "@/components/ui/mac-close-button";
 import { IconButton } from "@/components/ui/icon-button";
 import {
   DATA_ACTIVITY_EVENT,
@@ -787,6 +787,8 @@ export default function ImagePreviewView() {
     }
     // 关窗不丢备注草稿：编辑态先按保存收尾（自动保存语义）
     if (captionRef.current.editing) save();
+    // 📌 只对本次打开生效（与文本详情窗同规则）：关窗即复位
+    setWinPinned(false);
     void getCurrentWebviewWindow().hide();
   };
   const many = files.length > 1;
@@ -813,6 +815,16 @@ export default function ImagePreviewView() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (
+        e.metaKey && !e.altKey && !e.ctrlKey && !e.shiftKey &&
+        e.key.toLowerCase() === "w"
+      ) {
+        // ⌘W 与红点同效：打码态先取消编辑，否则关窗
+        e.preventDefault();
+        e.stopPropagation();
+        close();
+        return;
+      }
       if (imageEditing) {
         if (e.key === "Escape") {
           e.preventDefault();
@@ -895,14 +907,11 @@ export default function ImagePreviewView() {
         data-tauri-drag-region
         className="flex h-8 shrink-0 cursor-grab items-center gap-1.5 px-2 active:cursor-grabbing"
       >
-        <button
-          aria-label={imageEditing ? "取消图片编辑" : "关闭预览"}
-          disabled={imageEditBusy}
-          onClick={close}
-          className="rounded-full p-0.5 text-foreground/60 outline-none hover:bg-foreground/10 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
-        >
-          <X className="size-3.5" />
-        </button>
+        <MacTrafficLights
+          closeLabel={imageEditing ? "取消图片编辑" : "关闭预览"}
+          closeDisabled={imageEditBusy}
+          onClose={close}
+        />
         <span data-tauri-drag-region className="select-none text-body font-medium text-foreground/80">
           {imageEditing
             ? "图片打码"

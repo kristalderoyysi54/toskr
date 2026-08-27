@@ -427,7 +427,6 @@ function MessageCard({
     setPendingUndo(() => useNotesStore.getState().setMessageStatus(message.id, prev));
     tip("ok", "已标记处理", true);
   };
-
   return (
     <article
       data-checked={checked || undefined}
@@ -438,7 +437,10 @@ function MessageCard({
       }}
       className={cn(
         "group relative rounded-xl border border-foreground/10 bg-card/80 px-3 py-2.5 shadow-(--shadow-card) transition-[box-shadow] duration-(--duration-control)",
-        !strip && "list-render-unit list-render-message",
+        // 不加 list-render-unit：WebKit 对 content-visibility 卡片的首帧绘制
+        // 偶发丢 SVG <path>（操作图标只剩空圆，滚出滚回经历一次 skipped→揭示
+        // 循环才画全，2026-08-27 实机复现）。消息列表已有 WindowedListItem
+        // 卸载远处卡片，去掉 c-v 只损失屏外缓冲区的跳绘，换首帧图标必定完整
         // 与剪贴/笔记卡同款选中语言：ring 光环 + 抬升（不用 border，不挤内容）
         checked && "ring-2 ring-primary/70 elevation-2",
         strip && "flex h-full w-72 shrink-0 flex-col"
