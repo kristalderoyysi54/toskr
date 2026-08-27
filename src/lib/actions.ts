@@ -16,6 +16,7 @@ import {
 import { api } from "@/lib/tauri";
 import {
   detailWindowKnown,
+  expectDetailDelivery,
   pickDetailWindowLabel,
   queueDetailPayload,
 } from "@/lib/detailWindows";
@@ -510,6 +511,8 @@ function openTextPreview(payload: Omit<NotePreviewPayload, "sessionId">) {
     queueDetailPayload(label, "toskr://note-preview", previewPayload);
   } else {
     void emitTo(label, "toskr://note-preview", previewPayload);
+    // 投递握手：webview 若已被系统回收（空白窗），超时自动销毁重建补发
+    expectDetailDelivery(label, previewPayload.id, "toskr://note-preview", previewPayload);
   }
 }
 

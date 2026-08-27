@@ -695,6 +695,9 @@ export const api = {
     invoke<{ pid: number; name: string; bundleId: string }[]>(
       "list_send_targets"
     ),
+  /** 详情窗 webview 失活（空白窗）自愈：销毁重建该窗。 */
+  reviveTextPreview: (label: string) =>
+    invoke("revive_text_preview", { label }),
   /** 手动采信 pid 为当前发送目标（选单点选后走常规发送）。 */
   adoptSendTarget: (pid: number) =>
     invoke<TargetSnapshot | null>("adopt_send_target", { pid }),

@@ -1922,6 +1922,31 @@ pub fn show_text_preview(app: &AppHandle, label: String) {
     });
 }
 
+/// 详情窗 webview 失活自愈（前端投递握手超时触发）：隐藏窗的 WebContent
+/// 会被系统回收，窗口只剩透明壳、事件无人接收。销毁死窗并重建同标签窗，
+/// 前端随后经「就绪冲洗」补发载荷。
+pub fn revive_text_preview(app: &AppHandle, label: String) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(w) = handle.get_webview_window(&label) {
+            let _ = w.destroy();
+        }
+        crate::diag::push(&handle, format!("详情窗 webview 失活，销毁重建: {label}"));
+        let h2 = handle.clone();
+        std::thread::spawn(move || {
+            // 给 destroy 一拍完成注销，再以同标签重建
+            std::thread::sleep(Duration::from_millis(80));
+            let h3 = h2.clone();
+            let _ = h2.run_on_main_thread(move || {
+                if let Err(e) = text_preview_on_main(&h3, &label) {
+                    eprintln!("[toskr] 详情窗重建失败: {e}");
+                    crate::diag::push(&h3, format!("详情窗重建失败: {e}"));
+                }
+            });
+        });
+    });
+}
+
 /// 动态创建一扇文本详情窗（配置对齐 tauri.conf 的基础 textpreview 窗），
 /// 并套用当前毛玻璃状态。仅限主线程调用。
 fn create_text_preview_window(

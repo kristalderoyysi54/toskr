@@ -249,6 +249,7 @@ pub fn run() {
             commands::set_vibrancy,
             commands::get_vibrancy_enabled,
             commands::set_new_note_hotkey,
+            commands::revive_text_preview,
             commands::list_send_targets,
             commands::adopt_send_target,
             commands::set_window_alpha,

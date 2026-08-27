@@ -353,6 +353,8 @@ export default function TextPreviewView() {
   const [mdView, setMdView] = useState(false);
   // 📌 固定窗口：发送/发送选中后不自动关窗；主动关闭（X/Esc/空格）与数据失效关窗不受影响
   const [winPinned, setWinPinned] = useState(false);
+  const winPinnedRef = useRef(winPinned);
+  winPinnedRef.current = winPinned;
   // 编辑态的 Markdown 预览开关：textarea 以 hidden 保留 DOM（原生撤销/草稿
   // 不因卸载丢失），预览为当前草稿的只读渲染
   const [editPreviewOn, setEditPreviewOn] = useState(false);
@@ -690,6 +692,13 @@ export default function TextPreviewView() {
           `详情窗载荷 label=${getCurrentWebviewWindow().label} note=${p.id.slice(0, 8)}`
         )
         .catch(() => {});
+      // 投递回执必须即刻发（同卡重开 note.id 不变，状态上报 effect 不会触发）；
+      // pinned 走 ref 镜像，别把主面板注册表里的 📌 冲成 false
+      void emitTo("main", DETAIL_STATE_EVENT, {
+        label: getCurrentWebviewWindow().label,
+        pinned: winPinnedRef.current,
+        noteId: p.id,
+      }).catch(() => {});
       draftRef.current = p.text;
       setDraftEmpty(!p.text.trim());
       draftImagesRef.current = p.images;

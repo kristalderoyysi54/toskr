@@ -1136,6 +1136,12 @@ pub fn apply_window_vibrancy_from_state(app: &AppHandle, window: &tauri::Webview
     let _ = (enabled, material, window);
 }
 
+/// 详情窗 webview 失活自愈：销毁并重建指定详情窗（前端握手超时时调用）。
+#[tauri::command]
+pub fn revive_text_preview(app: AppHandle, label: String) {
+    crate::window::revive_text_preview(&app, label);
+}
+
 /// 运行中的可选发送目标（详情窗长按发送选单）；排除 Toskr 自身。
 #[tauri::command]
 pub fn list_send_targets() -> Vec<crate::focus::SendTargetApp> {
