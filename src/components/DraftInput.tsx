@@ -24,18 +24,29 @@ import {
   isDataOperationLocked,
   useDataOperationStore,
 } from "@/store/dataOperationStore";
+import {
+  flushPendingWrites,
+  hasLoadedPersistenceAuthority,
+  isPersistencePaused,
+} from "@/store/persistStorage";
 
 /** 旧版草稿的 localStorage 键：仅用于一次性收编 + 清除明文残留。
  *  草稿现随主数据文件加密落盘（store.draftText），不再写 WebKit localStorage。 */
 const LEGACY_DRAFT_TEXT_STORAGE_KEY = "toskr-draft-input-text";
 
-const takeLegacyDraftText = () => {
+const readLegacyDraftText = () => {
   try {
-    const legacy = localStorage.getItem(LEGACY_DRAFT_TEXT_STORAGE_KEY) ?? "";
-    localStorage.removeItem(LEGACY_DRAFT_TEXT_STORAGE_KEY);
-    return legacy;
+    return localStorage.getItem(LEGACY_DRAFT_TEXT_STORAGE_KEY) ?? "";
   } catch {
     return "";
+  }
+};
+
+const clearLegacyDraftText = () => {
+  try {
+    localStorage.removeItem(LEGACY_DRAFT_TEXT_STORAGE_KEY);
+  } catch {
+    /* WebKit storage 不可用时保持主数据路径正常 */
   }
 };
 
@@ -97,7 +108,7 @@ export function DraftInput() {
   // 暂存图片提升到 uiStore 会话级（图片文件未被任何卡片引用，可能被媒体
   // 清理回收，刻意不跨重启恢复）
   const [value, setValueState] = useState(
-    () => useNotesStore.getState().draftText || takeLegacyDraftText()
+    () => useNotesStore.getState().draftText
   );
   const valueRef = useRef(value);
   const mirrorTimer = useRef<number | null>(null);
@@ -127,12 +138,48 @@ export function DraftInput() {
     }
   }, [storeDraft]);
   useEffect(() => {
-    // 挂载时若收编了旧版 localStorage 草稿（store 尚空），补写进 store
-    const state = useNotesStore.getState();
-    if (valueRef.current && !state.draftText) {
-      state.setDraftText(valueRef.current);
+    // skipHydration 下绝不能在权威磁盘读取前把默认 store 写回。等水合完成后
+    // 再收编旧 localStorage 草稿，且仅在主存储没有草稿时采用；确认加密主存
+    // flush 成功后才删除明文，崩溃重启仍有退路。
+    let cancelled = false;
+    const migrateLegacyDraft = async () => {
+      if (!hasLoadedPersistenceAuthority() || isPersistencePaused()) return;
+      const state = useNotesStore.getState();
+      if (state.draftText) {
+        clearLegacyDraftText();
+        return;
+      }
+      const legacy = readLegacyDraftText();
+      if (!legacy) return;
+      state.setDraftText(legacy);
+      if (!valueRef.current && !cancelled) {
+        setValueState(legacy);
+        valueRef.current = legacy;
+      }
+      try {
+        await flushPendingWrites();
+        if (
+          !cancelled &&
+          hasLoadedPersistenceAuthority() &&
+          !isPersistencePaused()
+        ) {
+          clearLegacyDraftText();
+        }
+      } catch {
+        // 主存失败时保留 localStorage 明文副本，等待下次安全迁移。
+      }
+    };
+    let stop: (() => void) | undefined;
+    if (useNotesStore.persist.hasHydrated()) {
+      void migrateLegacyDraft();
+    } else {
+      stop = useNotesStore.persist.onFinishHydration(() => {
+        void migrateLegacyDraft();
+      });
     }
     return () => {
+      cancelled = true;
+      stop?.();
       // 卸载前把防抖中的镜像冲出去，切页不丢最后一击键
       if (mirrorTimer.current !== null) {
         window.clearTimeout(mirrorTimer.current);

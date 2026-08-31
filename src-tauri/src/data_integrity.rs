@@ -2969,7 +2969,12 @@ struct StoreSummary {
 
 fn parse_store_document(raw: &str) -> Option<StoreSummary> {
     let bag: serde_json::Value = serde_json::from_str(raw).ok()?;
-    let persisted = bag.get("toskr")?.as_str()?;
+    // 项目早期包名为 copper。仅在 canonical toskr 缺失时读取旧别名；
+    // 两者并存始终以 toskr 为权威，避免不确定 merge。
+    let persisted = bag
+        .get("toskr")
+        .or_else(|| bag.get("copper"))?
+        .as_str()?;
     let root: serde_json::Value = serde_json::from_str(persisted).ok()?;
     let version = root.get("version").and_then(serde_json::Value::as_u64)?;
     let state = root.get("state")?.as_object()?;
@@ -3924,6 +3929,34 @@ mod tests {
         let inspected = inspect_location(&ordinary, None);
         assert_eq!(inspected.kind, DataLocationKind::NonToskr);
         assert_eq!(inspected.ordinary_file_count, 1);
+    }
+
+    #[test]
+    fn inspection_accepts_copper_only_legacy_alias_without_overriding_toskr() {
+        let root = tempdir().unwrap();
+        let legacy = root.path().join("legacy-alias");
+        write_valid_store(&legacy, "legacy-note");
+        let mut bag: serde_json::Value = serde_json::from_slice(
+            &fs::read(legacy.join(DATA_FILE)).unwrap(),
+        )
+        .unwrap();
+        let persisted = bag.as_object_mut().unwrap().remove("toskr").unwrap();
+        bag["copper"] = persisted;
+        fs::write(legacy.join(DATA_FILE), bag.to_string()).unwrap();
+
+        let inspected = inspect_location(&legacy, None);
+        assert_eq!(inspected.kind, DataLocationKind::Valid);
+        assert_eq!(inspected.note_count, 1);
+
+        let mut bag: serde_json::Value =
+            serde_json::from_slice(&fs::read(legacy.join(DATA_FILE)).unwrap()).unwrap();
+        bag["toskr"] = serde_json::Value::Null;
+        fs::write(legacy.join(DATA_FILE), bag.to_string()).unwrap();
+        assert_eq!(
+            inspect_location(&legacy, None).kind,
+            DataLocationKind::Corrupt,
+            "canonical toskr 存在但损坏时不得退回陈旧 copper"
+        );
     }
 
     #[test]

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { messageItemFromCapture } from "@/lib/messages";
 
 // 单测环境没有 Tauri runtime，把持久化后端替换为内存实现
 vi.mock("./persistStorage", () => {
@@ -19,6 +20,7 @@ vi.mock("./persistStorage", () => {
 import {
   CLIPBOARD_ID,
   CONTEXT_MENU_REGISTRY,
+  captureNotesStoreSnapshot,
   decodePersistedState,
   defaultSettings,
   doneIdsAfterSend,
@@ -26,11 +28,13 @@ import {
   HUD_DURATION_DEFAULT_MS,
   INBOX_ID,
   mergePersistedNotesState,
+  mergePreEncryptSnapshotWithCurrent,
   NOTE_TAG_MAX_COUNT,
   noteContentBlocks,
   normalizeSecretCipherStyle,
   orderedCheckedNotes,
   replaceNotesStoreFromPersisted,
+  serializePersistentState,
   sanitizeNoteTags,
   SECRET_CIPHER_STYLES,
   SECRET_ID,
@@ -55,11 +59,141 @@ function reset() {
     checkedIds: [],
     settings: defaultSettings(),
     undoStack: [],
+    draftText: "",
   });
 }
 
 describe("notesStore 基础", () => {
   beforeEach(reset);
+
+  it("迁移保险档恢复以历史为基线并保留当前新增记录与草稿", () => {
+    useNotesStore.getState().addNote("历史笔记");
+    useNotesStore.getState().setSettings({ theme: "dark" });
+    useNotesStore.getState().setDraftText("历史草稿");
+    const recoveredRaw = serializePersistentState(useNotesStore.getState());
+
+    reset();
+    useNotesStore.getState().addNote("重装后新增");
+    useNotesStore.getState().setDraftText("当前未提交草稿");
+    const current = captureNotesStoreSnapshot();
+
+    const merged = mergePreEncryptSnapshotWithCurrent(recoveredRaw, current);
+
+    expect(merged.notes.map((note) => note.text)).toEqual([
+      "重装后新增",
+      "历史笔记",
+    ]);
+    expect(merged.settings.theme).toBe("dark");
+    expect(merged.draftText).toBe("当前未提交草稿");
+  });
+
+  it("迁移保险档同 ID 按域合并：历史分组不被默认态覆盖，笔记取较新，消息保留工作流与丰富正文", () => {
+    const historicMessage = {
+      ...messageItemFromCapture({
+        sourceApp: "IM",
+        conversationId: "conversation-1",
+        messageId: "message-1",
+        conversationName: "历史会话",
+        senderUid: "sender-1",
+        senderName: "发送者",
+        occurredAtMs: 100,
+        receivedAtMs: 101,
+        mentionedSelf: true,
+        followedSender: false,
+        matchedRuleIds: ["historic-rule"],
+        isGroup: true,
+        messageType: "text",
+        text: "历史完整正文",
+        context: [
+          {
+            messageId: "context-1",
+            senderUid: "sender-2",
+            senderName: "上下文发送者",
+            occurredAtMs: 90,
+            messageType: "text",
+            text: "历史上下文",
+          },
+        ],
+      }),
+      status: "archived" as const,
+    };
+    useNotesStore.setState({
+      sections: [
+        {
+          id: INBOX_ID,
+          name: "历史收件箱",
+          color: "#112233",
+          collapsed: true,
+        },
+      ],
+      notes: [
+        {
+          id: "shared-note",
+          text: "历史较新正文",
+          sectionId: INBOX_ID,
+          done: false,
+          createdAt: 10,
+          updatedAt: 200,
+        },
+      ],
+      messages: [historicMessage],
+    });
+    const recoveredRaw = serializePersistentState(useNotesStore.getState());
+
+    useNotesStore.setState({
+      sections: [{ id: INBOX_ID, name: "收件箱" }],
+      notes: [
+        {
+          id: "shared-note",
+          text: "当前较旧正文",
+          sectionId: INBOX_ID,
+          done: false,
+          createdAt: 10,
+          updatedAt: 100,
+        },
+      ],
+      messages: [
+        {
+          ...historicMessage,
+          status: "done",
+          linkedTaskId: "task-1",
+          text: "",
+          context: [],
+          matchedRuleIds: ["live-rule"],
+        },
+      ],
+    });
+    const merged = mergePreEncryptSnapshotWithCurrent(
+      recoveredRaw,
+      captureNotesStoreSnapshot()
+    );
+
+    expect(merged.sections[0]).toMatchObject({
+      name: "历史收件箱",
+      color: "#112233",
+      collapsed: true,
+    });
+    expect(merged.notes[0].text).toBe("历史较新正文");
+    expect(merged.messages[0]).toMatchObject({
+      status: "done",
+      linkedTaskId: "task-1",
+      text: "历史完整正文",
+    });
+    expect(merged.messages[0].context).toHaveLength(1);
+    expect(merged.messages[0].matchedRuleIds).toEqual(
+      expect.arrayContaining(["historic-rule", "live-rule"])
+    );
+
+    const liveNewer = captureNotesStoreSnapshot();
+    liveNewer.notes[0] = {
+      ...liveNewer.notes[0],
+      text: "当前更新正文",
+      updatedAt: 300,
+    };
+    expect(
+      mergePreEncryptSnapshotWithCurrent(recoveredRaw, liveNewer).notes[0].text
+    ).toBe("当前更新正文");
+  });
 
   it("右键菜单按语义完整分组，并保留每组内的用户顺序", () => {
     const allIds = CONTEXT_MENU_REGISTRY.map((item) => item.id);

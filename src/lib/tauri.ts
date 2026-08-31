@@ -327,7 +327,8 @@ export interface BackupCounts {
 }
 
 export interface BackupInspection {
-  format: "complete" | "legacyJson";
+  format: "complete" | "legacyJson" | "nativeData" | "preEncryptSnapshot";
+  sourceDirectory: string | null;
   archiveRevision: string;
   backupSchemaVersion: number | null;
   storeSchemaVersion: number | null;
@@ -963,6 +964,8 @@ export const api = {
     }),
   readLegacyBackup: (path: string, expectedRevision: string) =>
     invoke<string>("read_legacy_backup", { path, expectedRevision }),
+  readPreEncryptSnapshot: (path: string, expectedRevision: string) =>
+    invoke<string>("read_pre_encrypt_snapshot", { path, expectedRevision }),
   inspectMediaIntegrity: (stateJson: string) =>
     invoke<MediaIntegrityReport>("inspect_media_integrity", { stateJson }),
   scheduleMediaGc: (files: string[], notBeforeMs: number) =>

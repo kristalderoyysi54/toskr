@@ -16,6 +16,7 @@ type PersistenceController = {
   pausePersistence: () => Promise<void>;
   resumePersistence: () => void;
   isPersistencePaused: () => boolean;
+  hasLoadedAuthority: () => boolean;
   hasPersistenceConflict: () => boolean;
   enterExternalConflict: (error: unknown) => void;
   clearExternalConflict: () => void;
@@ -30,6 +31,7 @@ type ControllerOptions = {
   debounceMs?: number;
   legacyGet?: (name: string) => Promise<string | null>;
   markInitialized?: () => Promise<void>;
+  onMaintenanceError?: (error: unknown) => void;
   onConflict?: (error: unknown) => void;
 };
 
@@ -45,6 +47,10 @@ export function createPersistenceController(
   let pendingValues: Record<string, string> = {};
   let writeTimer: ReturnType<typeof setTimeout> | null = null;
   let baseSnapshot: DataFileSnapshot | null = null;
+  // skipHydration 下，React 子树可能先于显式 rehydrate 触发持久域 mutation。
+  // 在权威磁盘/legacy 读取完成前，这些内存变更可由 notesStore.merge 保留，
+  // 但绝不能进入 pendingValues，否则会遮住 getItem 并以合法 CAS 覆盖旧数据。
+  let authorityLoaded = false;
   let paused = false;
   let conflicted = false;
   let flushChain: Promise<void> = Promise.resolve();
@@ -67,9 +73,31 @@ export function createPersistenceController(
     return value as Record<string, string>;
   };
 
+  const valueFromBag = (bag: Record<string, string>, name: string) => {
+    if (Object.prototype.hasOwnProperty.call(bag, name)) {
+      if (typeof bag[name] !== "string") {
+        throw new Error(`持久化状态 ${name} 类型无效`);
+      }
+      return bag[name];
+    }
+    return name === "toskr" && typeof bag.copper === "string"
+      ? bag.copper
+      : null;
+  };
+
   const ensureBase = async () => {
     baseSnapshot ??= await backend.readDataSnapshot();
     return baseSnapshot;
+  };
+
+  const markInitializedBestEffort = async () => {
+    try {
+      await options.markInitialized?.();
+    } catch (error) {
+      // legacy marker/scrub 只是清理工作。权威 snapshot 已读/写成功时，
+      // 辅助 plugin-store 故障不得伪装成主数据失败或冻结水合。
+      options.onMaintenanceError?.(error);
+    }
   };
 
   const runFlush = async () => {
@@ -80,11 +108,12 @@ export function createPersistenceController(
         const basedOn = await ensureBase();
         const bag = readBag(basedOn);
         Object.assign(bag, values);
+        if ("toskr" in values) delete bag.copper;
         baseSnapshot = await backend.writeDataIfCurrent(
           JSON.stringify(bag),
           basedOn.revision
         );
-        await options.markInitialized?.();
+        await markInitializedBestEffort();
       } catch (error) {
         // 后到的值优先；失败批次仍保留，等待用户“重新加载/另存恢复副本”决策。
         pendingValues = { ...values, ...pendingValues };
@@ -117,13 +146,16 @@ export function createPersistenceController(
 
   const storage: StateStorage = {
     getItem: async (name) => {
-      if (name in pendingValues) return pendingValues[name];
+      if (authorityLoaded && name in pendingValues) return pendingValues[name];
       try {
         const snapshot = await backend.readDataSnapshot();
+        const bag = readBag(snapshot);
         baseSnapshot = snapshot;
         if (snapshot.content) {
-          await options.markInitialized?.();
-          return readBag(snapshot)[name] ?? null;
+          const value = valueFromBag(bag, name);
+          authorityLoaded = true;
+          void markInitializedBestEffort();
+          return value;
         }
       } catch (error) {
         // fail-closed：活动数据读取/解析失败时冻结持久化并走冲突恢复，
@@ -134,25 +166,28 @@ export function createPersistenceController(
         signalConflict(error);
         return null;
       }
-      return options.legacyGet?.(name) ?? null;
+      const legacyValue = await options.legacyGet?.(name) ?? null;
+      authorityLoaded = true;
+      return legacyValue;
     },
     setItem: async (name, value) => {
-      if (paused) return;
+      if (paused || !authorityLoaded) return;
       pendingValues[name] = value;
       scheduleFlush();
     },
     removeItem: async (name) => {
-      if (paused) return;
+      if (paused || !authorityLoaded) return;
       await flushPendingWrites();
       const basedOn = await ensureBase();
       const bag = readBag(basedOn);
       delete bag[name];
+      if (name === "toskr") delete bag.copper;
       try {
         baseSnapshot = await backend.writeDataIfCurrent(
           JSON.stringify(bag),
           basedOn.revision
         );
-        await options.markInitialized?.();
+        await markInitializedBestEffort();
       } catch (error) {
         paused = true;
         conflicted = true;
@@ -185,6 +220,7 @@ export function createPersistenceController(
       if (!conflicted) paused = false;
     },
     isPersistencePaused: () => paused,
+    hasLoadedAuthority: () => authorityLoaded,
     hasPersistenceConflict: () => conflicted,
     enterExternalConflict: (error) => {
       paused = true;
@@ -200,9 +236,12 @@ export function createPersistenceController(
         throw new Error("重新水合前必须冻结持久化");
       }
       const snapshot = await backend.readDataSnapshot();
-      const value = snapshot.content ? readBag(snapshot)[name] ?? null : null;
+      const value = snapshot.content
+        ? valueFromBag(readBag(snapshot), name)
+        : null;
       baseSnapshot = snapshot;
       pendingValues = {};
+      authorityLoaded = true;
       return value;
     },
     commitValueWhilePaused: async (name, value) => {
@@ -210,12 +249,13 @@ export function createPersistenceController(
       const basedOn = await ensureBase();
       const bag = readBag(basedOn);
       bag[name] = value;
+      if (name === "toskr") delete bag.copper;
       try {
         baseSnapshot = await backend.writeDataIfCurrent(
           JSON.stringify(bag),
           basedOn.revision
         );
-        await options.markInitialized?.();
+        await markInitializedBestEffort();
       } catch (error) {
         conflicted = true;
         signalConflict(error);
@@ -231,7 +271,8 @@ export function createPersistenceController(
           basedOn.revision
         );
         pendingValues = {};
-        await options.markInitialized?.();
+        authorityLoaded = true;
+        await markInitializedBestEffort();
       } catch (error) {
         conflicted = true;
         signalConflict(error);
@@ -249,7 +290,7 @@ export function createPersistenceController(
       let value: string | null = null;
       if (snapshot.content) {
         try {
-          value = readBag(snapshot)[name] ?? null;
+          value = valueFromBag(readBag(snapshot), name);
         } catch {
           // 用户明确选择“重新加载”后，损坏/缺失版本可进入受控空 store
           // 重建；实际 CAS 写入由 replaceValueWhilePaused 完成。
@@ -257,6 +298,7 @@ export function createPersistenceController(
       }
       baseSnapshot = snapshot;
       conflicted = false;
+      authorityLoaded = true;
       return value;
     },
   };
@@ -302,6 +344,11 @@ const controller = createPersistenceController(api, {
     }
     if (dirty) await store.save();
   },
+  onMaintenanceError: (error) => {
+    void api
+      .diagNote(`旧存储清理延后：${String(error).slice(0, 160)}`)
+      .catch(() => {});
+  },
 });
 
 export const tauriStateStorage = controller.storage;
@@ -309,6 +356,7 @@ export const flushPendingWrites = controller.flushPendingWrites;
 export const pausePersistence = controller.pausePersistence;
 export const resumePersistence = controller.resumePersistence;
 export const isPersistencePaused = controller.isPersistencePaused;
+export const hasLoadedPersistenceAuthority = controller.hasLoadedAuthority;
 export const hasPersistenceConflict = controller.hasPersistenceConflict;
 export const enterPersistenceConflict = controller.enterExternalConflict;
 export const clearPersistenceConflict = controller.clearExternalConflict;

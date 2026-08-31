@@ -9,7 +9,10 @@ import {
   advanceDataGeneration,
   hasDataGenerationLeases,
 } from "@/lib/dataGeneration";
-import { buildBackupPayload } from "@/lib/backup";
+import {
+  buildBackupPayload,
+  buildMediaIntegrityPayload,
+} from "@/lib/backup";
 import { applyRuntimeSettingsStrict } from "@/lib/runtimeSettings";
 import {
   api,
@@ -17,6 +20,7 @@ import {
   type BackupInspection,
   type DataOperationPlan,
   type DataOperationResult,
+  type MediaIntegrityReport,
 } from "@/lib/tauri";
 import {
   hasPersistenceConflict,
@@ -32,6 +36,7 @@ import {
 } from "@/store/persistStorage";
 import {
   captureNotesStoreSnapshot,
+  mergePreEncryptSnapshotWithCurrent,
   serializePersistentState,
   replaceNotesStoreFromPersisted,
   restoreNotesStoreAfterRollback,
@@ -125,6 +130,12 @@ function errorCode(error: unknown): string | undefined {
   return error && typeof error === "object" && "code" in error
     ? String((error as { code: unknown }).code)
     : undefined;
+}
+
+function errorMessage(error: unknown): string {
+  return error && typeof error === "object" && "message" in error
+    ? String((error as { message: unknown }).message)
+    : String(error);
 }
 
 export async function runDataLocationOperation(
@@ -322,6 +333,115 @@ export async function runLegacyJsonImport(
     updateActivity({ locked: false, phase: "idle", message: "" });
     throw error;
   }
+  });
+}
+
+export async function runPreEncryptSnapshotImport(
+  path: string,
+  operationId: string,
+  expectedRevision: string
+): Promise<{
+  counts: { notes: number; tasks: number; bills: number; messages: number };
+  recoveryPath: string;
+  health: MediaIntegrityReport;
+  warning: string | null;
+}> {
+  return withDataOperationMutex("恢复迁移保险档", async () => {
+    if (hasDataGenerationLeases()) {
+      throw new Error("发送或 AI 操作仍在进行，请完成后再恢复数据");
+    }
+    const memory = captureNotesStoreSnapshot();
+    let committed = false;
+    updateActivity({
+      locked: true,
+      phase: "prepare",
+      message: "正在备份当前索引并验证迁移保险档…",
+    });
+    try {
+      await pausePersistence();
+      const activeRevision = currentPersistenceRevision();
+      if (!activeRevision) throw new Error("持久化基线尚未建立");
+      const recoveryPath = await api.createDataRecoveryBackup(
+        JSON.stringify(buildBackupPayload(useNotesStore.getState())),
+        operationId,
+        activeRevision
+      );
+      const recoveredRaw = await api.readPreEncryptSnapshot(
+        path,
+        expectedRevision
+      );
+      const merged = mergePreEncryptSnapshotWithCurrent(recoveredRaw, memory);
+      const mediaStateJson = JSON.stringify(
+        buildMediaIntegrityPayload({ ...merged, undoStack: [] })
+      );
+      const preflightHealth = await api.inspectMediaIntegrity(mediaStateJson);
+      if (preflightHealth.missing.length) {
+        throw new Error(
+          `迁移保险档引用的 ${preflightHealth.missing.length} 个媒体文件不在当前数据目录；已停止恢复。请加载原数据目录或改用包含媒体的完整备份`
+        );
+      }
+      useNotesStore.setState({
+        ...merged,
+        checkedIds: [],
+        undoStack: [],
+      });
+      await commitPersistedValueWhilePaused(
+        "toskr",
+        serializePersistentState(useNotesStore.getState())
+      );
+      committed = true;
+      resumePersistence();
+      const warnings: string[] = [];
+      try {
+        await broadcastRehydratedSettings();
+      } catch (error) {
+        warnings.push(`Native 设置刷新失败：${errorMessage(error)}；重启后会重新应用`);
+      }
+      let health = preflightHealth;
+      try {
+        health = await api.inspectMediaIntegrity(mediaStateJson);
+        if (health.missing.length) {
+          warnings.push(`提交后检测到 ${health.missing.length} 个媒体文件缺失`);
+        }
+      } catch (error) {
+        warnings.push(`提交后媒体复检失败：${errorMessage(error)}`);
+      }
+      const warning = warnings.length ? warnings.join("；") : null;
+      updateActivity({
+        locked: false,
+        phase: "complete",
+        message: warning
+          ? `迁移保险档已恢复；${warning}`
+          : "迁移保险档已恢复，当前新增记录已按 ID 保留",
+      });
+      return {
+        counts: {
+          notes: merged.notes.length,
+          tasks: merged.tasks.length,
+          bills: merged.bills.length,
+          messages: merged.messages.length,
+        },
+        recoveryPath,
+        health,
+        warning,
+      };
+    } catch (error) {
+      if (!committed) restoreNotesStoreSnapshot(memory);
+      if (errorCode(error) === "sourceChanged") {
+        enterPersistenceConflict(error);
+      }
+      if (hasPersistenceConflict()) {
+        updateActivity({
+          locked: true,
+          phase: "rollback",
+          message: "恢复期间检测到外部数据变化；持久化保持冻结",
+        });
+      } else {
+        resumePersistence();
+        updateActivity({ locked: false, phase: "idle", message: "" });
+      }
+      throw error;
+    }
   });
 }
 

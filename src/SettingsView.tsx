@@ -50,6 +50,7 @@ import {
   SETTINGS_CLEAR_CLIP,
   SETTINGS_DATA_HEALTH,
   SETTINGS_DATA_HEALTH_RESULT,
+  SETTINGS_DATA_INSPECT_PATH,
   SETTINGS_DATA_CONFLICT_ACTION,
   SETTINGS_DATA_OPERATION,
   SETTINGS_DATA_RECOVERY_OPERATION,
@@ -3777,6 +3778,9 @@ function DataSection() {
       listen<MediaIntegrityReport>(SETTINGS_DATA_HEALTH_RESULT, (event) =>
         setHealth(event.payload)
       ),
+      listen<string>(SETTINGS_DATA_INSPECT_PATH, (event) => {
+        void inspectPath(event.payload);
+      }),
     ];
     return () => subscriptions.forEach((subscription) => subscription.then((stop) => stop()));
   }, []);
@@ -4054,7 +4058,7 @@ function DataSection() {
         />
         <Row
           label="导入并预检"
-          hint="完整备份原子恢复（不含 API Key）；旧 JSON 仅兼容合并并显示缺失能力"
+          hint="完整备份原子恢复；重装可选 recovery/pre-encrypt-*.bak；旧 JSON 仅兼容合并"
           right={
             <button
               onClick={() => void emitTo("main", SETTINGS_IMPORT, {})}

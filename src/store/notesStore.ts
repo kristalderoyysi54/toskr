@@ -1116,7 +1116,7 @@ export interface NotesState {
 
 const UNDO_DEPTH = 5;
 
-type PersistentNotesState = Pick<
+export type PersistentNotesState = Pick<
   NotesState,
   | "sections"
   | "notes"
@@ -2112,6 +2112,77 @@ export function decodePersistedState(raw: string): PersistentNotesState {
     version
   );
   return normalizedPersistentState(migrated);
+}
+
+function mergeRecoveredRecords<T extends { id: string }>(
+  recovered: T[],
+  current: T[],
+  currentOnlyFirst: boolean,
+  resolveSameId: (recovered: T, current: T) => T = (_, current) => current
+): T[] {
+  const recoveredIds = new Set(recovered.map((item) => item.id));
+  const currentById = new Map(current.map((item) => [item.id, item] as const));
+  const updatedRecovered = recovered.map((item) => {
+    const currentItem = currentById.get(item.id);
+    return currentItem ? resolveSameId(item, currentItem) : item;
+  });
+  const currentOnly = current.filter((item) => !recoveredIds.has(item.id));
+  return currentOnlyFirst
+    ? [...currentOnly, ...updatedRecovered]
+    : [...updatedRecovered, ...currentOnly];
+}
+
+/**
+ * 迁移保险档恢复：以保险档为完整基线，同时保留保险档生成后当前索引中新建/
+ * 更新过的记录。设置以保险档为准，避免重装后的默认设置覆盖历史配置；当前
+ * 未提交草稿非空时优先保留。纯函数便于在真正 CAS 写盘前完成全量校验。
+ */
+export function mergePreEncryptSnapshotWithCurrent(
+  recoveredRaw: string,
+  current: NotesStoreSnapshot
+): PersistentNotesState {
+  const recovered = decodePersistedState(recoveredRaw);
+  return {
+    // 收件箱等分组 ID 是稳定常量；重装后的默认分组不得覆盖历史名称/颜色/折叠态。
+    sections: mergeRecoveredRecords(
+      recovered.sections,
+      current.sections,
+      false,
+      (historic) => historic
+    ),
+    // 同一笔记只采用时间上更新的一侧；缺 updatedAt 时以 createdAt 兜底。
+    notes: mergeRecoveredRecords(
+      recovered.notes,
+      current.notes,
+      true,
+      (historic, live) =>
+        (live.updatedAt ?? live.createdAt) >=
+        (historic.updatedAt ?? historic.createdAt)
+          ? live
+          : historic
+    ),
+    taskSections: mergeRecoveredRecords(
+      recovered.taskSections,
+      current.taskSections,
+      false,
+      (historic) => historic
+    ),
+    tasks: mergeRecoveredRecords(recovered.tasks, current.tasks, true),
+    bills: mergeRecoveredRecords(recovered.bills, current.bills, true),
+    messages: mergeRecoveredRecords(
+      recovered.messages,
+      current.messages,
+      true,
+      // 当前工作流状态优先；正文/上下文/规则仍走既有“更丰富捕获”合并语义。
+      (historic, live) => mergeMessageCapture(live, historic)
+    ).sort(
+      (a, b) =>
+        (b.occurredAtMs ?? b.receivedAtMs) -
+        (a.occurredAtMs ?? a.receivedAtMs)
+    ),
+    settings: recovered.settings,
+    draftText: current.draftText || recovered.draftText,
+  };
 }
 
 /**

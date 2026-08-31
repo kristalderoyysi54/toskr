@@ -71,6 +71,7 @@ import {
   runDataLocationOperation,
   runRecoveryDataLocationOperation,
   runLegacyJsonImport,
+  runPreEncryptSnapshotImport,
 } from "@/lib/dataOperations";
 import {
   beginDataGenerationLease,
@@ -204,6 +205,7 @@ import {
   installSettingsSyncHost,
   SETTINGS_AI_KEY_CHANGED,
   SETTINGS_DATA_HEALTH_RESULT,
+  SETTINGS_DATA_INSPECT_PATH,
   SETTINGS_SECTION,
   SETTINGS_START_SAFE_REHEARSAL,
   type SafeRehearsalLaunchRequest,
@@ -2409,14 +2411,40 @@ export default function App() {
     let importCommitted = false;
     try {
       const { ask, open } = await import("@tauri-apps/plugin-dialog");
+      const location = await api.getDataLocationStatus().catch(() => null);
       const path = await open({
         multiple: false,
+        ...(location
+          ? { defaultPath: `${location.defaultDir}/recovery` }
+          : {}),
         filters: [
-          { name: "Toskr 备份", extensions: ["toskr-backup", "json"] },
+          {
+            name: "Toskr 备份与迁移保险档",
+            extensions: ["toskr-backup", "json", "bak"],
+          },
         ],
       });
       if (typeof path !== "string") return;
       const inspection = await api.inspectBackup(path);
+      if (inspection.format === "nativeData") {
+        if (inspection.sourceDirectory) {
+          await emitTo(
+            "settings",
+            SETTINGS_DATA_INSPECT_PATH,
+            inspection.sourceDirectory
+          );
+          tip(
+            "info",
+            "已识别为加密活动数据文件；请在上方目录预检中加载它所在的文件夹"
+          );
+        } else {
+          tip(
+            "warn",
+            "已识别为加密主数据副本，但文件名不是 toskr-data.json；请先复制到独立文件夹并改为标准文件名，再预检该文件夹"
+          );
+        }
+        return;
+      }
       const counts = inspection.counts;
       const legacyLimitations = [
         ...inspection.warnings,
@@ -2427,6 +2455,8 @@ export default function App() {
       const confirmed = await ask(
         inspection.format === "complete"
           ? `完整备份已通过 manifest/hash 预检。将恢复 ${counts.notes} 条笔记、${counts.messages} 条消息、${counts.tasks} 个任务、${counts.media} 个媒体，并先创建当前数据恢复点。原始IM JSONL 账本不在归档内，仍需按设置页路径单独备份；API Key 不在备份中，恢复后需重新配置。继续吗？`
+          : inspection.format === "preEncryptSnapshot"
+            ? `迁移保险档已通过本机密钥认证与 schema 预检：${counts.notes} 条笔记、${counts.messages} 条消息、${counts.tasks} 个任务、${counts.bills} 个账单、${counts.media} 个媒体引用。\n\n将先创建当前数据恢复点，再以保险档为基线恢复，并按 ID 保留当前新增/更新记录；媒体文件不会被删除。继续吗？`
           : `这是旧 JSON，将先创建当前数据恢复点，再按 ID 合并 ${counts.notes} 条笔记、${counts.tasks} 个任务。\n\n完整性限制：\n- ${legacyLimitations.join("\n- ")}\n\n继续吗？`,
         { title: "导入预检", kind: "warning" }
       );
@@ -2445,6 +2475,20 @@ export default function App() {
           message: result.message,
         });
         tip("ok", `完整备份恢复完成：笔记 ${counts.notes} 条，消息 ${counts.messages} 条，媒体 ${counts.media} 个`);
+      } else if (inspection.format === "preEncryptSnapshot") {
+        const restored = await runPreEncryptSnapshotImport(
+          path,
+          operationId,
+          inspection.archiveRevision
+        );
+        importCommitted = true;
+        await emitTo("settings", SETTINGS_DATA_HEALTH_RESULT, restored.health);
+        tip(
+          restored.warning ? "warn" : "ok",
+          restored.warning
+            ? `历史索引已恢复，但需留意：${restored.warning}`
+            : `历史索引恢复完成：笔记 ${restored.counts.notes} 条、任务 ${restored.counts.tasks} 个、账单 ${restored.counts.bills} 个；当前新增记录已保留`
+        );
       } else {
         const { added } = await runLegacyJsonImport(
           path,

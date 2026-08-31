@@ -93,20 +93,20 @@ const view =
     <App />
   );
 
-// 详情窗渲染自证 + 前端异常上诊断日志（多详情窗首开空白排查，2026-08-27）：
+// 渲染自证 + 前端异常上诊断日志（空白窗排查，2026-08-27）：
 // 空白窗若无「挂载」指纹 = webview 没起来；有挂载但有 JS 错误 = 渲染崩了
-if (label.startsWith("textpreview")) {
+if (label.startsWith("textpreview") || label === "main") {
   void import("./lib/tauri").then(({ api }) => {
-    void api.diagNote(`详情窗 webview 挂载 label=${label}`).catch(() => {});
+    void api.diagNote(`webview 挂载 label=${label}`).catch(() => {});
     window.addEventListener("error", (e) => {
       void api
-        .diagNote(`详情窗 JS 错误 label=${label}: ${String(e.message).slice(0, 160)}`)
+        .diagNote(`webview JS 错误 label=${label}: ${String(e.message).slice(0, 160)}`)
         .catch(() => {});
     });
     window.addEventListener("unhandledrejection", (e) => {
       void api
         .diagNote(
-          `详情窗未处理拒绝 label=${label}: ${String(e.reason).slice(0, 160)}`
+          `webview 未处理拒绝 label=${label}: ${String(e.reason).slice(0, 160)}`
         )
         .catch(() => {});
     });
@@ -126,4 +126,12 @@ if (import.meta.env.DEV && new URLSearchParams(location.search).has("styletile")
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <React.StrictMode>{view}</React.StrictMode>
   );
+  if (label === "main") {
+    // 首帧渲染完成再报到：首启自动展示等这个信号，不弹未渲染的空壳面板
+    requestAnimationFrame(() => {
+      void import("@tauri-apps/api/event").then(({ emit }) => {
+        void emit("toskr://frontend-ready").catch(() => {});
+      });
+    });
+  }
 }

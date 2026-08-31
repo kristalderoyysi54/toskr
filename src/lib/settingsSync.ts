@@ -44,6 +44,8 @@ export const SETTINGS_DATA_OPERATION = "toskr://do-data-operation";
 export const SETTINGS_DATA_RECOVERY_OPERATION = "toskr://do-data-recovery-operation";
 export const SETTINGS_DATA_HEALTH = "toskr://do-data-health";
 export const SETTINGS_DATA_HEALTH_RESULT = "toskr://data-health-result";
+/** 主面板识别到用户选的是 native data file 后，让设置页预检其父目录。 */
+export const SETTINGS_DATA_INSPECT_PATH = "toskr://data-inspect-path";
 export const SETTINGS_DATA_CONFLICT_ACTION = "toskr://data-conflict-action";
 export type DataConflictAction =
   | "reload"

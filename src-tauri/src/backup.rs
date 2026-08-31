@@ -35,6 +35,10 @@ const MAX_ARCHIVE_ENTRIES: usize = 100_000;
 pub enum BackupFormat {
     Complete,
     LegacyJson,
+    /// 当前活动数据文件（Data AAD 的 TSK1 信封）；不是可直接合并的旧 JSON。
+    NativeData,
+    /// 加密迁移前自动留下的原始索引保险档（Recovery AAD + outer bag JSON）。
+    PreEncryptSnapshot,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,6 +110,8 @@ pub struct BackupManifest {
 #[serde(rename_all = "camelCase")]
 pub struct BackupInspection {
     pub format: BackupFormat,
+    /// NativeData 时供前端转入“数据文件夹预检”；其他格式为空。
+    pub source_directory: Option<String>,
     pub archive_revision: String,
     pub backup_schema_version: Option<u64>,
     pub store_schema_version: Option<u64>,
@@ -511,6 +517,51 @@ pub(crate) fn finalize_export_destination(
 }
 
 pub fn inspect_backup(path: &Path) -> Result<BackupInspection, BackupFailure> {
+    let mut probe = open_regular_nofollow(path, MAX_ARCHIVE_TOTAL_BYTES + 64 * 1024 * 1024)?;
+    let mut magic = [0u8; 4];
+    let sniffed = probe.read(&mut magic).map_err(io_failure)?;
+    drop(probe);
+
+    if sniffed == 4 && crate::data_crypto::looks_sealed(&magic) {
+        let bytes = read_source_bytes(path, MAX_ARCHIVE_TOTAL_BYTES + 64 * 1024 * 1024)?;
+        let revision = revision_for_bytes(&bytes);
+        // TSK1 的 AAD 才是格式权威；扩展名可以被用户改名，不能据此把当前
+        // Data 信封或 Recovery 保险档投给错误 reader。
+        let data_error = match crate::data_crypto::open(crate::data_crypto::Purpose::Data, &bytes) {
+            Ok(plain) => {
+                return inspect_native_store(path, &plain, revision, BackupFormat::NativeData)
+                    .map(|(_, inspection)| inspection);
+            }
+            Err(error) => error,
+        };
+        let plain = crate::data_crypto::open(crate::data_crypto::Purpose::Recovery, &bytes)
+            .map_err(|recovery_error| {
+                let error = if data_error.key_unavailable() {
+                    data_error
+                } else {
+                    recovery_error
+                };
+                encrypted_source_failure("加密导入来源", error)
+            })?;
+        if let Ok((_, inspection)) = inspect_native_store(
+            path,
+            &plain,
+            revision.clone(),
+            BackupFormat::PreEncryptSnapshot,
+        ) {
+            return Ok(inspection);
+        }
+        return ZipArchive::new(Cursor::new(plain))
+            .map_err(zip_failure)
+            .and_then(|archive| {
+                inspect_complete_archive(archive, MAX_ARCHIVE_FILE_BYTES, MAX_ARCHIVE_TOTAL_BYTES)
+            })
+            .map(|mut inspection| {
+                inspection.archive_revision = revision;
+                inspection
+            });
+    }
+
     if path
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
@@ -533,6 +584,151 @@ pub fn inspect_backup(path: &Path) -> Result<BackupInspection, BackupFailure> {
             format!("完整备份容器损坏：{error}"),
         )),
     }
+}
+
+fn read_source_bytes(path: &Path, max: u64) -> Result<Vec<u8>, BackupFailure> {
+    let mut file = open_regular_nofollow(path, max)?;
+    let mut bytes = Vec::new();
+    std::io::Read::by_ref(&mut file)
+        .take(max + 1)
+        .read_to_end(&mut bytes)
+        .map_err(io_failure)?;
+    if bytes.len() as u64 > max {
+        return Err(failure(
+            BackupFailureCode::FileTooLarge,
+            "导入来源超过允许大小",
+        ));
+    }
+    Ok(bytes)
+}
+
+fn encrypted_source_failure(label: &str, error: crate::data_crypto::CryptoError) -> BackupFailure {
+    failure(
+        BackupFailureCode::CorruptArchive,
+        format!("{label}无法解锁：{}", error.message()),
+    )
+}
+
+fn inspect_native_store(
+    path: &Path,
+    plain: &[u8],
+    revision: String,
+    format: BackupFormat,
+) -> Result<(String, BackupInspection), BackupFailure> {
+    let bag: Value = serde_json::from_slice(plain).map_err(|error| {
+        failure(
+            BackupFailureCode::InvalidState,
+            format!("原生数据 outer bag 无效：{error}"),
+        )
+    })?;
+    let bag = bag
+        .as_object()
+        .ok_or_else(|| failure(BackupFailureCode::InvalidState, "原生数据顶层必须是对象"))?;
+    let (store_key, persisted) = match bag.get("toskr") {
+        Some(Value::String(value)) => ("toskr", value.as_str()),
+        Some(_) => {
+            return Err(failure(
+                BackupFailureCode::InvalidState,
+                "原生数据 toskr 状态包类型无效",
+            ));
+        }
+        None => match bag.get("copper") {
+            Some(Value::String(value)) => ("copper", value.as_str()),
+            Some(_) => {
+                return Err(failure(
+                    BackupFailureCode::InvalidState,
+                    "原生数据 copper 状态包类型无效",
+                ));
+            }
+            None => {
+                return Err(failure(
+                    BackupFailureCode::InvalidState,
+                    "原生数据缺少 toskr/copper 状态包",
+                ));
+            }
+        },
+    };
+    let envelope: Value = serde_json::from_str(persisted).map_err(|error| {
+        failure(
+            BackupFailureCode::InvalidState,
+            format!("原生数据状态 envelope 无效：{error}"),
+        )
+    })?;
+    let version = envelope
+        .get("version")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| failure(BackupFailureCode::InvalidState, "原生数据缺少 version"))?;
+    let state = envelope
+        .get("state")
+        .cloned()
+        .ok_or_else(|| failure(BackupFailureCode::InvalidState, "原生数据缺少 state"))?;
+    let summary = summarize_state(&serde_json::json!({
+        "storeVersion": version,
+        "state": state,
+    }))?;
+    let mut warnings = match format {
+        BackupFormat::NativeData => {
+            vec!["这是加密活动数据文件，不是旧 JSON；将转为预检它所在的数据文件夹".into()]
+        }
+        BackupFormat::PreEncryptSnapshot => vec![
+            "这是加密迁移前自动保留的索引保险档；恢复前会先备份当前数据并按 ID 保留新增记录".into(),
+        ],
+        _ => Vec::new(),
+    };
+    if store_key == "copper" {
+        warnings.push("检测到旧版 copper 状态别名，恢复时会迁为 toskr".into());
+    }
+    let counts = BackupCounts {
+        media: summary.media.len(),
+        ..summary.counts
+    };
+    let canonical_native_path = format == BackupFormat::NativeData
+        && path.file_name().is_some_and(|name| name == DATA_FILE);
+    if format == BackupFormat::NativeData && !canonical_native_path {
+        warnings.push(
+            "文件名不是 toskr-data.json；请复制到独立文件夹并改为标准文件名后再预检"
+                .into(),
+        );
+    }
+    Ok((
+        persisted.to_string(),
+        BackupInspection {
+            format,
+            source_directory: canonical_native_path
+                .then(|| {
+                    path.parent()
+                        .map(|parent| parent.to_string_lossy().into_owned())
+                })
+                .flatten(),
+            archive_revision: revision,
+            backup_schema_version: None,
+            store_schema_version: Some(summary.store_version),
+            app_version: None,
+            created_at_ms: None,
+            counts,
+            missing_media: Vec::new(),
+            warnings,
+        },
+    ))
+}
+
+pub fn read_pre_encrypt_snapshot(
+    path: &Path,
+    expected_revision: &str,
+) -> Result<String, BackupFailure> {
+    let bytes = read_source_bytes(path, MAX_ARCHIVE_FILE_BYTES + 64 * 1024)?;
+    let revision = revision_for_bytes(&bytes);
+    ensure_archive_revision(&revision, expected_revision)?;
+    if !crate::data_crypto::looks_sealed(&bytes) {
+        return Err(failure(
+            BackupFailureCode::InvalidState,
+            "迁移保险档不是 TSK1 加密信封",
+        ));
+    }
+    let plain = crate::data_crypto::open(crate::data_crypto::Purpose::Recovery, &bytes)
+        .map_err(|error| encrypted_source_failure("迁移保险档", error))?;
+    inspect_native_store(path, &plain, revision, BackupFormat::PreEncryptSnapshot)
+        .map(|(persisted, _)| persisted)
 }
 
 fn validated_complete_archive(
@@ -938,6 +1134,7 @@ fn inspect_legacy_json(path: &Path) -> Result<BackupInspection, BackupFailure> {
     }
     Ok(BackupInspection {
         format: BackupFormat::LegacyJson,
+        source_directory: None,
         archive_revision: revision_for_bytes(&bytes),
         backup_schema_version: None,
         store_schema_version: None,
@@ -1587,6 +1784,7 @@ fn normalized_relative_path(path: &Path) -> Result<String, BackupFailure> {
 fn inspection_from_manifest(manifest: &BackupManifest, warnings: Vec<String>) -> BackupInspection {
     BackupInspection {
         format: BackupFormat::Complete,
+        source_directory: None,
         archive_revision: String::new(),
         backup_schema_version: Some(manifest.backup_schema_version),
         store_schema_version: Some(manifest.store_schema_version),
@@ -2322,6 +2520,116 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.contains("taskSections")));
+    }
+
+    #[test]
+    fn reinstall_recovery_preflight_recognizes_current_encrypted_store_and_keeps_legacy_json() {
+        crate::data_crypto::install_test_key();
+        let root = tempdir().unwrap();
+
+        let legacy_path = root.path().join("old.json");
+        fs::write(
+            &legacy_path,
+            serde_json::json!({
+                "notes": [{"id": "legacy-note", "text": "legacy"}],
+                "tasks": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            inspect_backup(&legacy_path).unwrap().format,
+            BackupFormat::LegacyJson,
+            "修复当前加密 store 识别时不得破坏明文旧 JSON 兼容"
+        );
+
+        let business: Value = serde_json::from_str(&state_json(None)).unwrap();
+        let persisted = serde_json::json!({
+            "version": business["storeVersion"],
+            "state": business["state"],
+        });
+        let store_document = serde_json::json!({ "toskr": persisted.to_string() }).to_string();
+        let sealed =
+            crate::data_crypto::seal(crate::data_crypto::Purpose::Data, store_document.as_bytes())
+                .unwrap();
+        let current_store_path = root.path().join(DATA_FILE);
+        fs::write(&current_store_path, sealed).unwrap();
+
+        let inspection = inspect_backup(&current_store_path)
+            .expect("重装恢复预检应识别当前 TSK1 加密 store，不能报‘文件不是有效旧 JSON’");
+        assert_eq!(inspection.format, BackupFormat::NativeData);
+        assert_eq!(
+            inspection.source_directory.as_deref(),
+            Some(root.path().to_string_lossy().as_ref())
+        );
+        assert_eq!(inspection.counts.notes, 1);
+        assert_eq!(inspection.counts.tasks, 1);
+
+        // 改成 .bak 仍应按 Data AAD 识别，但不能假装父目录预检会加载改名副本。
+        let renamed_path = root.path().join("renamed-current.bak");
+        fs::copy(&current_store_path, &renamed_path).unwrap();
+        let renamed = inspect_backup(&renamed_path).unwrap();
+        assert_eq!(renamed.format, BackupFormat::NativeData);
+        assert_eq!(renamed.source_directory, None);
+        assert!(renamed
+            .warnings
+            .iter()
+            .any(|warning| warning.contains(DATA_FILE)));
+
+        let malformed_canonical = serde_json::json!({
+            "toskr": null,
+            "copper": persisted.to_string(),
+        })
+        .to_string();
+        fs::write(
+            &current_store_path,
+            crate::data_crypto::seal(
+                crate::data_crypto::Purpose::Data,
+                malformed_canonical.as_bytes(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            inspect_backup(&current_store_path).unwrap_err().code,
+            BackupFailureCode::InvalidState,
+            "canonical toskr 存在但损坏时不得回退陈旧 copper"
+        );
+    }
+
+    #[test]
+    fn pre_encrypt_snapshot_is_inspectable_and_revision_guarded_for_recovery() {
+        crate::data_crypto::install_test_key();
+        let root = tempdir().unwrap();
+        let business: Value = serde_json::from_str(&state_json(None)).unwrap();
+        let persisted = serde_json::json!({
+            "version": business["storeVersion"],
+            "state": business["state"],
+        });
+        let store_document = serde_json::json!({ "toskr": persisted.to_string() }).to_string();
+        let sealed = crate::data_crypto::seal(
+            crate::data_crypto::Purpose::Recovery,
+            store_document.as_bytes(),
+        )
+        .unwrap();
+        // 改成 .json 也必须按 Recovery AAD 识别，不能误投 Data/legacy reader。
+        let path = root.path().join("pre-encrypt-1.json");
+        fs::write(&path, sealed).unwrap();
+
+        let inspection = inspect_backup(&path).expect("迁移保险档应有明确恢复格式");
+        assert_eq!(inspection.format, BackupFormat::PreEncryptSnapshot);
+        assert_eq!(inspection.counts.notes, 1);
+        assert_eq!(inspection.counts.tasks, 1);
+        assert_eq!(
+            read_pre_encrypt_snapshot(&path, &inspection.archive_revision).unwrap(),
+            persisted.to_string()
+        );
+        assert_eq!(
+            read_pre_encrypt_snapshot(&path, "sha256:stale:1")
+                .unwrap_err()
+                .code,
+            BackupFailureCode::ExternalConflict
+        );
     }
 
     #[test]

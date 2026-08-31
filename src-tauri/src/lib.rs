@@ -79,8 +79,9 @@ pub fn run() {
                 ),
             );
 
-            // 首次安装 / 版本更新后的第一次启动：直接展示主面板（用户 2026-08-27
-            // 指定，避免装完/更完像没启动一样）。日常同版本启动保持安静驻留。
+            // 首次安装 / 版本更新后的第一次启动：自动展示主面板（用户 2026-08-27
+            // 指定）。必须等前端首帧渲染完成（toskr://frontend-ready）再弹——
+            // setup 阶段直接 show 弹出的是未渲染的灰色空壳（v0.19.11 实测翻车）。
             {
                 let version = app.package_info().version.to_string();
                 let marker = app
@@ -100,9 +101,17 @@ pub fn run() {
                         }
                         let _ = std::fs::write(p, &version);
                     }
-                    diag::push(app.handle(), "首启/更新后首启: 自动展示面板");
-                    window::set_panel_auto_hide_armed(app.handle(), true, "首启展示");
-                    window::request_show_panel(app.handle());
+                    use tauri::Listener;
+                    let pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+                    let handle = app.handle().clone();
+                    let pending_for_event = pending.clone();
+                    app.listen_any("toskr://frontend-ready", move |_| {
+                        if pending_for_event.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                            diag::push(&handle, "首启/更新后首启: 前端就绪，自动展示面板");
+                            window::set_panel_auto_hide_armed(&handle, true, "首启展示");
+                            window::request_show_panel(&handle);
+                        }
+                    });
                 }
             }
 
@@ -330,6 +339,7 @@ pub fn run() {
             commands::create_data_recovery_backup,
             commands::begin_complete_backup_import,
             commands::read_legacy_backup,
+            commands::read_pre_encrypt_snapshot,
             commands::inspect_media_integrity,
             commands::schedule_media_gc,
             commands::run_media_gc,

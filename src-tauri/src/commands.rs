@@ -1578,6 +1578,21 @@ pub async fn read_legacy_backup(
 }
 
 #[tauri::command]
+pub async fn read_pre_encrypt_snapshot(
+    path: String,
+    expected_revision: String,
+) -> Result<String, crate::backup::BackupFailure> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::backup::read_pre_encrypt_snapshot(
+            std::path::Path::new(&path),
+            &expected_revision,
+        )
+    })
+    .await
+    .map_err(blocking_backup_failure)?
+}
+
+#[tauri::command]
 pub async fn inspect_media_integrity(
     app: AppHandle,
     state_json: String,
