@@ -49,7 +49,7 @@ import {
 import { textareaSelectionAnchor } from "@/lib/selectionAnchor";
 import { springSnappy } from "@/lib/motion";
 import {
-  hasOrderedRichLayout,
+  hasMixedNoteContent,
   normalizeNoteContentBlocks,
   replaceNoteImageFile,
   textBlockRanges,
@@ -455,7 +455,7 @@ export default function TextPreviewView() {
     const current = noteRef.current;
     if (!previewIsEditable(current)) return;
     const blocks =
-      hasOrderedRichLayout(current.contentBlocks) && current.contentBlocks
+      hasMixedNoteContent(current.contentBlocks) && current.contentBlocks
         ? current.contentBlocks
         : null;
     autosaveSessionRef.current = {
@@ -768,8 +768,8 @@ export default function TextPreviewView() {
           respond("rejected", rejection);
           return;
         }
-        if (hasOrderedRichLayout(currentNote?.contentBlocks)) {
-          respond("rejected", "有序图文卡仅支持编辑现有文字段落");
+        if (hasMixedNoteContent(currentNote?.contentBlocks)) {
+          respond("rejected", "图文混合卡仅支持编辑现有文字段落");
           return;
         }
         const applied = appliedInsertOperationsRef.current;
@@ -1315,7 +1315,7 @@ export default function TextPreviewView() {
     const current = noteRef.current;
     if (!previewIsEditable(current)) return;
     const session = autosaveSessionRef.current;
-    if (hasOrderedRichLayout(current.contentBlocks) && current.contentBlocks) {
+    if (hasMixedNoteContent(current.contentBlocks) && current.contentBlocks) {
       const contentBlocks = normalizeNoteContentBlocks(
         draftContentBlocksRef.current
       );
@@ -1493,7 +1493,7 @@ export default function TextPreviewView() {
     const current = noteRef.current;
     if (!previewIsEditable(current)) return;
     const flatEmpty =
-      !hasOrderedRichLayout(current.contentBlocks) &&
+      !hasMixedNoteContent(current.contentBlocks) &&
       !draftRef.current.trim() &&
       draftImagesRef.current.length === 0;
     if (flatEmpty) cancelEditing();
@@ -1503,13 +1503,13 @@ export default function TextPreviewView() {
   /**
    * 把已入库图片追加到当前卡（四类卡统一入口，只读 ref 可被事件闭包调用）：
    * 编辑态进草稿（自动保存持久化、取消可废弃）；查看态直接落库（收尾可撤销）。
-   * flat 卡追加为尾部附件，有序图文卡追加为末尾图片块。
+   * flat 卡追加为尾部附件，图文混合卡追加为末尾图片块。
    */
   const addImagesToCard = (images: PastedImage[]) => {
     const current = noteRef.current;
     if (!previewIsEditable(current)) return;
     const editingNow = editSessionRef.current.editing;
-    if (hasOrderedRichLayout(current.contentBlocks) && current.contentBlocks) {
+    if (hasMixedNoteContent(current.contentBlocks) && current.contentBlocks) {
       const baseBlocks = editingNow
         ? draftContentBlocksRef.current
         : current.contentBlocks;
@@ -1713,7 +1713,7 @@ export default function TextPreviewView() {
    */
   const pickBlocks = useMemo(() => {
     const blocks = note?.contentBlocks;
-    if (!pickMode || !blocks || !hasOrderedRichLayout(blocks)) return null;
+    if (!pickMode || !blocks || !hasMixedNoteContent(blocks)) return null;
     // 区间是相对块投影算的，正文却来自 payload.text。两者本该同源（Store 一律
     // 走 projectNoteContent），万一不是就退回平铺——宁可图片不内联，也不能让
     // 选中的词和实际发出的片段错位
@@ -1888,7 +1888,7 @@ export default function TextPreviewView() {
       !note ||
       note.codeLang ||
       note.kind === "link" ||
-      hasOrderedRichLayout(note.contentBlocks)
+      hasMixedNoteContent(note.contentBlocks)
     ) return;
     const root = previewContentRef.current;
     const domSelection = window.getSelection();
@@ -1919,7 +1919,7 @@ export default function TextPreviewView() {
   syncPreviewSelectionRef.current = syncPreviewSelection;
 
   const applySelectionEdit = (edit: SelectionEdit) => {
-    if (!previewIsEditable(note) || hasOrderedRichLayout(note.contentBlocks)) {
+    if (!previewIsEditable(note) || hasMixedNoteContent(note.contentBlocks)) {
       return;
     }
     setTextSelection(edit.selection);
@@ -1945,7 +1945,7 @@ export default function TextPreviewView() {
   const copy = async () => {
     if (!note) return;
     try {
-      const richBlocks = !editing && hasOrderedRichLayout(note.contentBlocks)
+      const richBlocks = !editing && hasMixedNoteContent(note.contentBlocks)
         ? note.contentBlocks
         : null;
       if (richBlocks) {
@@ -2138,10 +2138,10 @@ export default function TextPreviewView() {
   }
 
   const isLink = note.kind === "link" && !!note.url;
-  const orderedRich = hasOrderedRichLayout(note.contentBlocks);
+  const mixedContent = hasMixedNoteContent(note.contentBlocks);
   const writable = previewIsEditable(note);
   const editable = writable;
-  const flatEditable = writable && !orderedRich;
+  const flatEditable = writable && !mixedContent;
   const isMd = !note.codeLang && !isLink && looksLikeMarkdown(note.text);
   const s = stats(note.text);
   // 编辑/选词/标签输入期间 chrome 常显（有操作要落地）；其余靠活跃度唤出
@@ -2150,7 +2150,7 @@ export default function TextPreviewView() {
   // 一眼分辨发的是什么——此时页脚改口「发送整卡」，与「发送选中」动宾对仗
   const selectionToolbarOpen =
     (flatEditable || pickMode) && !!textSelection && !note.codeLang && !isLink;
-  const shownImages = orderedRich ? [] : editing ? draftImages : note.images;
+  const shownImages = mixedContent ? [] : editing ? draftImages : note.images;
   const imagePreviewSource = writable && !editing
     ? {
         id: note.id,
@@ -2178,7 +2178,7 @@ export default function TextPreviewView() {
     }
     const session = autosaveSessionRef.current;
     try {
-      if (hasOrderedRichLayout(current.contentBlocks) && current.contentBlocks) {
+      if (hasMixedNoteContent(current.contentBlocks) && current.contentBlocks) {
         const contentBlocks = normalizeNoteContentBlocks(
           draftContentBlocksRef.current
         );
@@ -2388,7 +2388,7 @@ export default function TextPreviewView() {
             if (editable && !editing) setEditing(true);
           }}
         >
-          {editing && orderedRich && note.contentBlocks ? (
+          {editing && mixedContent && note.contentBlocks ? (
             <RichNoteTextEditor
               key={note.id}
               blocks={draftContentBlocks}
@@ -2565,7 +2565,7 @@ export default function TextPreviewView() {
                     renderPickSegment(segment, index)
                   )}
             </div>
-          ) : orderedRich && note.contentBlocks ? (
+          ) : mixedContent && note.contentBlocks ? (
             <RichNoteContent
               blocks={note.contentBlocks}
               previewSource={imagePreviewSource}
@@ -2606,8 +2606,8 @@ export default function TextPreviewView() {
           悬停 ⊗ 从卡片移除。移除本身回主面板执行（唯一持久化写入方），这里
           先本地摘掉该图，界面不等回程 */}
       {shownImages.length > 0 && (
-        // mb-12 给底部操作坞让位：坞是浮层，不让位时盖住缩略图，悬停 ⊗ 点不到
-        <div className="mb-12 flex shrink-0 gap-1.5 overflow-x-auto border-t border-black/5 px-3 py-2 dark:border-white/5">
+        // z-40 保证缩略图/删除钮高于 z-30 底部坞；mb-12 再为按钮实体让位
+        <div className="relative z-40 mb-12 flex shrink-0 gap-1.5 overflow-x-auto border-t border-black/5 px-3 py-2 dark:border-white/5">
           {shownImages.map((f, i) => (
             <AttachThumb
               key={f}
@@ -2662,17 +2662,17 @@ export default function TextPreviewView() {
       {/* 底部操作坞（E）：贴缘唤出、语境切换（查看/编辑），发送键前置目标名 */}
       <div
         className={cn(
-          "absolute inset-x-0 bottom-0 z-30 flex items-center justify-center gap-1 px-4 pb-3 pt-10",
+          "pointer-events-none absolute inset-x-0 bottom-0 z-30 flex items-center justify-center gap-1 px-4 pb-3 pt-10",
           "bg-gradient-to-t from-background/90 via-background/55 to-transparent",
           "transition-[opacity,transform] duration-(--duration-overlay) ease-(--ease-standard) motion-reduce:transition-none",
           chromeVisible
-            ? "translate-y-0 opacity-100"
-            : "pointer-events-none translate-y-1.5 opacity-0"
+            ? "[&>*]:pointer-events-auto translate-y-0 opacity-100"
+            : "translate-y-1.5 opacity-0"
         )}
       >
         {editing ? (
           <>
-            {!orderedRich && !note.codeLang && !isLink && (
+            {!mixedContent && !note.codeLang && !isLink && (
               <DockOp
                 active={editPreviewOn}
                 onClick={() => setEditPreviewOn((v) => !v)}
@@ -2685,7 +2685,7 @@ export default function TextPreviewView() {
             </IconButton>
             <Button
               className="rounded-full px-5 shadow-(--shadow-card)"
-              disabled={!orderedRich && draftEmpty && draftImages.length === 0}
+              disabled={!mixedContent && draftEmpty && draftImages.length === 0}
               onClick={save}
             >
               <Check className="size-3" /> 保存
@@ -2729,7 +2729,7 @@ export default function TextPreviewView() {
                 )}
               </>
             )}
-            {!orderedRich && isMd && !pickMode && (
+            {!mixedContent && isMd && !pickMode && (
               <DockOp onClick={() => setMdView(!mdView)}>
                 {mdView ? "原文" : "渲染"}
               </DockOp>
@@ -2740,7 +2740,7 @@ export default function TextPreviewView() {
             <DockOp onClick={() => void copy()}>复制</DockOp>
             {editable && (
               <DockOp
-                title={orderedRich ? "编辑文字（图片位置固定）" : undefined}
+                title={mixedContent ? "编辑图文" : undefined}
                 onClick={() => setEditing(true)}
               >
                 编辑

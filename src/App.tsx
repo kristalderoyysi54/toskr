@@ -230,9 +230,9 @@ import {
   type EdgeHideStatePayload,
   type HudOpenPanelPayload,
   type MessageWatchCapture,
-  type TargetSnapshot,
   type TriggerPayload,
 } from "@/lib/tauri";
+import { installTargetSnapshotSync } from "@/lib/targetSnapshotSync";
 import { cn } from "@/lib/utils";
 import { registerAliasQuickAddListener } from "@/lib/aliasQuickAdd";
 import { restoreAliases } from "@/lib/delivery/aliasEntities";
@@ -276,7 +276,6 @@ import {
   PERSISTENCE_CONFLICT_EVENT,
 } from "@/store/persistStorage";
 import {
-  applyTargetEvent,
   beginTargetBlurObservation,
   observeTargetAfterBlur,
   refreshTarget,
@@ -939,14 +938,11 @@ export default function App() {
 
   // ===== Rust 事件闭环 =====
 
-  // 前台观察器只在目标语义变化时推送快照；事件本身即新基线，不做前端轮询。
+  // Native 观察器只在目标语义变化时推送；WebView 单独重载后先订阅增量，
+  // 再主动补读 Native 已有基线，避免目标不变时发送永久停在 unknown。
   useEffect(() => {
-    const unlisten = listen<TargetSnapshot>(TARGET_CHANGED_EVENT, (event) => {
-      applyTargetEvent(event.payload);
-    });
-    return () => {
-      unlisten.then((fn) => fn());
-    };
+    const sync = installTargetSnapshotSync();
+    return sync.dispose;
   }, []);
 
   // 独立详情窗也有发送按钮；只同步最新快照，不让它建立第二套目标推断。

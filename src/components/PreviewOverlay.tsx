@@ -28,7 +28,7 @@ import { springModal, tweenFade } from "@/lib/motion";
 import { api, type ImagePreviewSource } from "@/lib/tauri";
 import { currentDataGeneration } from "@/lib/dataGeneration";
 import {
-  hasOrderedRichLayout,
+  hasMixedNoteContent,
   normalizeNoteContentBlocks,
   type NoteContentBlock,
 } from "@/lib/noteContentBlocks";
@@ -82,7 +82,7 @@ export function PreviewOverlay() {
   const icon = useAppIcon(note?.sourceBundle);
   const isImage = note?.kind === "image";
   const isLink = note?.kind === "link" && !!note?.url;
-  const orderedRich = hasOrderedRichLayout(note?.contentBlocks);
+  const mixedContent = hasMixedNoteContent(note?.contentBlocks);
   const activeEditing = editing && !isImage;
   const imagePreviewSource: ImagePreviewSource | undefined =
     note && !activeEditing
@@ -130,7 +130,7 @@ export function PreviewOverlay() {
 
   useEffect(() => {
     if (activeEditing && note) {
-      if (orderedRich && note.contentBlocks) {
+      if (mixedContent && note.contentBlocks) {
         setDraftBlocks(note.contentBlocks);
         return;
       }
@@ -140,7 +140,7 @@ export function PreviewOverlay() {
     // 只认「会话身份」：note 是 store 活引用，自动保存每次写库都会换对象，
     // 让它进依赖会把正在输入的草稿重置回已落库文本
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeEditing, note?.id, orderedRich]);
+  }, [activeEditing, note?.id, mixedContent]);
 
   // 草稿镜像：自动保存的 interval 与收尾 cleanup 只读 ref，不受闭包旧 state 影响
   const draftRef = useRef(draft);
@@ -156,7 +156,7 @@ export function PreviewOverlay() {
     if (!activeEditing || !note) return;
     const id = note.id;
     const originBlocks =
-      orderedRich && note.contentBlocks ? note.contentBlocks : null;
+      mixedContent && note.contentBlocks ? note.contentBlocks : null;
     const originBlocksJson = originBlocks
       ? JSON.stringify(normalizeNoteContentBlocks(originBlocks))
       : null;
@@ -217,7 +217,7 @@ export function PreviewOverlay() {
     };
     // 同上：只认会话身份，origin 在会话内必须保持稳定
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeEditing, note?.id, orderedRich]);
+  }, [activeEditing, note?.id, mixedContent]);
 
   /** 保存按钮/⌘⏎：真正的落库与「已保存」气泡由编辑会话 cleanup 统一收尾。 */
   const save = () => useUIStore.getState().setPreviewEditing(false);
@@ -394,7 +394,7 @@ export function PreviewOverlay() {
                     <span className="text-body text-muted-foreground">加载中…</span>
                   )}
                 </div>
-              ) : activeEditing && orderedRich && note.contentBlocks ? (
+              ) : activeEditing && mixedContent && note.contentBlocks ? (
                 <RichNoteTextEditor
                   key={note.id}
                   blocks={draftBlocks}
@@ -430,7 +430,7 @@ export function PreviewOverlay() {
                   }}
                   className="h-full min-h-40 w-full resize-none bg-transparent font-mono text-body leading-relaxed outline-none"
                 />
-              ) : orderedRich && note.contentBlocks ? (
+              ) : mixedContent && note.contentBlocks ? (
                 <RichNoteContent
                   blocks={note.contentBlocks}
                   previewSource={imagePreviewSource}
@@ -454,7 +454,7 @@ export function PreviewOverlay() {
                 </pre>
               )}
 
-              {!orderedRich && extraImages.length > 0 && (
+              {!mixedContent && extraImages.length > 0 && (
                 <div className="mt-3 grid grid-cols-2 gap-2">
                   {extraImages.map((f) => (
                     <PreviewThumb
@@ -486,7 +486,7 @@ export function PreviewOverlay() {
                   </Button>
                 ) : (
                   <>
-                    {!orderedRich && isMd && (
+                    {!mixedContent && isMd && (
                       <button
                         onClick={() => setMdView(!mdView)}
                         className="rounded-md px-1.5 py-0.5 text-micro text-muted-foreground outline-none hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:hover:bg-white/10"
@@ -501,7 +501,7 @@ export function PreviewOverlay() {
                     )}
                     {!isImage && (
                       <IconButton
-                        label={orderedRich ? "编辑文字（图片位置固定）" : "编辑"}
+                        label={mixedContent ? "编辑图文" : "编辑"}
                         onClick={() => useUIStore.getState().setPreviewEditing(true)}
                       >
                         <Pencil className="size-3.5" />

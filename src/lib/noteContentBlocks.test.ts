@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   hasOrderedRichLayout,
+  hasMixedNoteContent,
   mapNoteTextBlocks,
   normalizeNoteContentBlocks,
   noteContentBlocks,
   projectNoteContent,
+  removeNoteContentBlockAt,
   replaceNoteImageFile,
   replaceNoteTextBlockAt,
   replaceNoteTextProjection,
@@ -218,6 +220,21 @@ describe("noteContentBlocks", () => {
     );
   });
 
+  it("按块位置只删除当前图片，不误删同文件的其他出现位置", () => {
+    const before: NoteContentBlock[] = [
+      { type: "image", file: "same.png", alt: "第一次" },
+      { type: "text", text: "中间正文" },
+      { type: "image", file: "same.png", alt: "第二次" },
+    ];
+
+    const after = removeNoteContentBlockAt(before, 2);
+
+    expect(after).toEqual([before[0], before[1]]);
+    expect(after[0]).toBe(before[0]);
+    expect(after[1]).toBe(before[1]);
+    expect(() => removeNoteContentBlockAt(before, 1)).toThrow("只能删除图片块");
+  });
+
   it("只在图片后仍有正文时判定为必须块级编辑", () => {
     expect(
       hasOrderedRichLayout([
@@ -231,6 +248,23 @@ describe("noteContentBlocks", () => {
         { type: "text", text: "后文" },
       ])
     ).toBe(true);
+  });
+
+  it("文字在前图片在末尾也属于可块内编辑的图文混合卡", () => {
+    expect(
+      hasMixedNoteContent([
+        { type: "text", text: "正文" },
+        { type: "image", file: "tail.png" },
+      ])
+    ).toBe(true);
+    expect(
+      hasMixedNoteContent([
+        { type: "image", file: "inline.png" },
+        { type: "text", text: "图后正文" },
+      ])
+    ).toBe(true);
+    expect(hasMixedNoteContent([{ type: "image", file: "only.png" }])).toBe(false);
+    expect(hasMixedNoteContent([{ type: "text", text: "只有文字" }])).toBe(false);
   });
 
   it("文字块区间切出的正是投影文本本身（选词模式据此把分词分派回各块）", () => {

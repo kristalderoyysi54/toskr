@@ -391,6 +391,34 @@ describe("结构化发送结果的 store 副作用", () => {
     expect(useNotesStore.getState().checkedIds).toEqual([]);
   });
 
+  it("剪贴卡详情页发送选中绕过同窗内部追加并投递到外部目标", async () => {
+    useNotesStore.getState().addClipNote("完整正文", {});
+    const sourceId = useNotesStore.getState().notes[0].id;
+    openNoteDetail(sourceId, false);
+    eventMocks.emitTo.mockClear();
+    webviewMocks.getByLabel.mockResolvedValue({
+      isVisible: vi.fn().mockResolvedValue(true),
+    });
+
+    await sendNotesToChat([sourceId], undefined, {
+      overrideText: "选中片段",
+    });
+
+    expect(eventMocks.emitTo).not.toHaveBeenCalledWith(
+      "textpreview",
+      "toskr://note-editor-insert",
+      expect.anything()
+    );
+    expect(apiMocks.sendDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "选中片段",
+        imageFiles: [],
+        targetToken: "token-1",
+      })
+    );
+    expect(tip).not.toHaveBeenCalledWith("warn", "不能把卡片内容添加到自身");
+  });
+
   it.each([
     ["显式预检", "off", { forcePreflight: true }],
     ["always 模式", "always", undefined],

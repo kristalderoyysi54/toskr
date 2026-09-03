@@ -96,7 +96,8 @@ describe("PreviewOverlay 富图文保序", () => {
     expect(html.match(/<textarea/g)).toHaveLength(2);
     expect(html).toContain('aria-label="文字段落 1"');
     expect(html).toContain('aria-label="文字段落 2"');
-    expect(html).toContain("图片位置已锁定；点击图片可查看或打码");
+    expect(html).toContain("图片位置已锁定；点图片选中，双击或点右上角查看");
+    expect(html).toContain('aria-label="删除流程图"');
     expect(html).not.toContain("从卡片移除这张图片");
     expect(html).toContain("保存");
   });
@@ -116,7 +117,7 @@ describe("PreviewOverlay 富图文保序", () => {
     expect(html.indexOf("图前正文")).toBeLessThan(html.indexOf("查看图片 1"));
     expect(html.indexOf("查看图片 1")).toBeLessThan(html.indexOf("图后正文"));
     expect(html).not.toContain("<textarea");
-    expect(html).toContain('aria-label="编辑文字（图片位置固定）"');
+    expect(html).toContain('aria-label="编辑图文"');
   });
 
   it("普通文本仍可进入原有编辑态", () => {
@@ -129,7 +130,7 @@ describe("PreviewOverlay 富图文保序", () => {
     expect(html).toContain("保存");
   });
 
-  it("正文后只有普通附件时保留原有编辑行为", () => {
+  it("正文后只有普通附件时也进入图文块编辑并可原位删除", () => {
     const { id } = useNotesStore.getState().addNote("普通组合卡", {
       attachments: ["tail.png"],
     });
@@ -137,7 +138,9 @@ describe("PreviewOverlay 富图文保序", () => {
 
     const html = renderPreview();
 
-    expect(html).toContain("<textarea");
+    expect(html).toContain('aria-label="图文文字编辑器"');
+    expect(html).toContain('data-rich-image-edit-block="1"');
+    expect(html).toContain('aria-label="删除图片 1"');
     expect(html).toContain("保存");
   });
 });

@@ -23,6 +23,7 @@ import { SlidingTabIndicator } from "@/components/ui/sliding-tab-indicator";
 import { StripScroller } from "@/components/ui/strip-scroller";
 import { WindowedListItem } from "@/components/WindowedListItem";
 import { aiErrorTip, requestAi } from "@/lib/aiClient";
+import { messageSelectAllIds } from "@/lib/messageSelection";
 import { presetCfgDue, presetCfgLabel } from "@/lib/tasks";
 import { api, type MessageSourceOverlayPayload } from "@/lib/tauri";
 import { setPendingUndo, tip } from "@/lib/tip";
@@ -32,6 +33,9 @@ import {
   useNotesStore,
   type MessageItem,
 } from "@/store/notesStore";
+import { isDataOperationLocked } from "@/store/dataOperationStore";
+import { useDeliveryStore } from "@/store/deliveryStore";
+import { useUIStore } from "@/store/uiStore";
 
 type Filter = "new" | "waiting" | "done";
 
@@ -123,6 +127,37 @@ export function MessagePage({
       ),
     [filter, messages, query]
   );
+  const visibleIds = useMemo(
+    () => filtered.map((message) => message.id),
+    [filtered]
+  );
+  // 消息卡使用页面内独立选择态，不能复用笔记 checkedIds；在此接住 App
+  // 未处理的 ⌘A，同时核对活动页，避免切到提醒页后误选隐藏消息。
+  useEffect(() => {
+    const selectAllVisibleMessages = (event: KeyboardEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const editable = Boolean(
+        target?.closest("input, textarea, select, [contenteditable='true']")
+      );
+      const ui = useUIStore.getState();
+      const ids = messageSelectAllIds(event, visibleIds, {
+        active:
+          !event.defaultPrevented &&
+          !isDataOperationLocked() &&
+          !useDeliveryStore.getState().open &&
+          !ui.previewId &&
+          ui.page === "notes" &&
+          ui.contentSubview === "messages",
+        editable,
+      });
+      if (!ids) return;
+      event.preventDefault();
+      setCheckedIds(new Set(ids));
+      setAnchorId(null);
+    };
+    window.addEventListener("keydown", selectAllVisibleMessages);
+    return () => window.removeEventListener("keydown", selectAllVisibleMessages);
+  }, [visibleIds]);
   const counts = useMemo(
     () => ({
       new: messages.filter((message) => message.status === "new").length,

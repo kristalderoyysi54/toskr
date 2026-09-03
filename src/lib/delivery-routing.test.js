@@ -140,12 +140,20 @@ describe("发送入口路由", () => {
   it("目标变化由 Rust 事件驱动，前端 target store 不增加轮询", () => {
     const store = readFileSync(path.join(srcRoot, "store", "targetStore.ts"), "utf8");
     const app = readFileSync(path.join(srcRoot, "App.tsx"), "utf8");
+    const sync = readFileSync(
+      path.join(srcRoot, "lib", "targetSnapshotSync.ts"),
+      "utf8"
+    );
     const target = readFileSync(
       path.join(repoRoot, "src-tauri", "src", "target.rs"),
       "utf8"
     );
 
-    expect(app).toContain("listen<TargetSnapshot>(TARGET_CHANGED_EVENT");
+    expect(app).toContain("installTargetSnapshotSync()");
+    expect(sync).toContain("listen<TargetSnapshot>(TARGET_CHANGED_EVENT");
+    expect(sync.indexOf("listenToChanges(")).toBeLessThan(
+      sync.indexOf("await readTarget()")
+    );
     expect(target).toContain("target_event_changed");
     expect(target).toContain("TARGET_CHANGED_EVENT");
     expect(store).not.toContain("setInterval");

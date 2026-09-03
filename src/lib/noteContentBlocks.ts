@@ -40,6 +40,21 @@ export function hasOrderedRichLayout(
   return false;
 }
 
+/** 同时含文字和图片即进入块编辑器；图片位于末尾也要能原位查看、删除。 */
+export function hasMixedNoteContent(
+  blocks: readonly NoteContentBlock[] | null | undefined
+): boolean {
+  if (!blocks?.length) return false;
+  let hasText = false;
+  let hasImage = false;
+  for (const block of blocks) {
+    if (block.type === "text") hasText = true;
+    else hasImage = true;
+    if (hasText && hasImage) return true;
+  }
+  return false;
+}
+
 /**
  * 富卡编辑的唯一写入原语：只替换指定文字块，图片块及全部块顺序原样保留。
  * 空文字在草稿期允许存在，保存时再由 normalizeNoteContentBlocks 去除。
@@ -55,6 +70,17 @@ export function replaceNoteTextBlockAt(
   return blocks.map((block, blockIndex) =>
     blockIndex === index ? { type: "text", text } : block
   );
+}
+
+/** 按块位置只删除当前图片；同一文件在正文中可重复出现。 */
+export function removeNoteContentBlockAt(
+  blocks: readonly NoteContentBlock[],
+  index: number
+): NoteContentBlock[] {
+  if (!Number.isInteger(index) || blocks[index]?.type !== "image") {
+    throw new Error("只能删除图片块");
+  }
+  return blocks.filter((_, blockIndex) => blockIndex !== index);
 }
 
 /**

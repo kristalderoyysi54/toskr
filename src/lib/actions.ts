@@ -1043,8 +1043,12 @@ export async function sendNotesToChat(
       opts?.forcePreflight ||
       opts?.safeRehearsal ||
       useDeliveryStore.getState().preflightMode === "always";
+    // overrideText 只来自详情页「发送选中」：这是明确的外部投递意图。
+    // 若仍探测可见编辑器，剪贴卡会被误路由成“添加到自身”并在发送前返回。
+    const sendsExternalFragment = opts?.overrideText !== undefined;
     if (
       !requiresPreflight &&
+      !sendsExternalFragment &&
       (await insertClipboardNotesIntoOpenEditor(
         targets,
         dataGeneration,

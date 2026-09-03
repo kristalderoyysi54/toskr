@@ -1,7 +1,10 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Maximize2, Trash2 } from "lucide-react";
 
+import { IconButton } from "@/components/ui/icon-button";
 import { useNoteImage } from "@/lib/media";
 import {
+  removeNoteContentBlockAt,
   replaceNoteTextBlockAt,
   type NoteContentBlock,
 } from "@/lib/noteContentBlocks";
@@ -19,6 +22,8 @@ export function RichImageBlock({
   previewSource,
   editContext,
   onOpen,
+  selected,
+  onSelect,
 }: {
   block: Extract<NoteContentBlock, { type: "image" }>;
   files: string[];
@@ -26,22 +31,29 @@ export function RichImageBlock({
   previewSource?: ImagePreviewSource;
   editContext?: ImagePreviewEditContext;
   onOpen?: (files: string[], index: number) => void;
+  selected?: boolean;
+  onSelect?: () => void;
 }) {
   const url = useNoteImage(block.file);
   const label = block.alt?.trim() || `图片 ${index + 1}`;
+  const open = () =>
+    onOpen
+      ? onOpen(files, index)
+      : void api.quickLook(files, index, previewSource, editContext);
   return (
-    <figure className="my-3">
+    <figure className="my-3 flex justify-center">
       <button
         type="button"
-        aria-label={`查看${label}`}
-        onClick={() =>
-          onOpen
-            ? onOpen(files, index)
-            : void api.quickLook(files, index, previewSource, editContext)
-        }
+        aria-label={`${onSelect ? "选择" : "查看"}${label}`}
+        title={onSelect ? "单击选中，双击查看" : "查看原图"}
+        aria-pressed={onSelect ? selected : undefined}
+        onClick={onSelect ?? open}
+        onDoubleClick={onSelect ? open : undefined}
         className={cn(
-          "block w-full overflow-hidden rounded-lg border border-foreground/10 bg-black/[0.03] outline-none",
-          "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:bg-white/[0.04]"
+          "inline-flex min-h-12 min-w-12 max-w-full items-center justify-center overflow-hidden rounded-lg",
+          "border border-foreground/10 bg-black/[0.03] outline-none dark:bg-white/[0.04]",
+          "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+          selected && "border-primary/60 ring-2 ring-primary/45"
         )}
       >
         {url ? (
@@ -50,13 +62,78 @@ export function RichImageBlock({
             alt={label}
             width={block.width}
             height={block.height}
-            className="h-auto max-h-[70vh] w-full object-contain"
+            className="h-auto max-h-[70vh] max-w-full object-contain"
           />
         ) : (
-          <span className="block h-28 w-full animate-pulse bg-black/5 dark:bg-white/5" />
+          <span className="block h-28 w-48 max-w-full animate-pulse bg-black/5 dark:bg-white/5" />
         )}
       </button>
     </figure>
+  );
+}
+
+/** 编辑态图片块：显示稳定边界和常驻操作，避免小图靠猜命中区域。 */
+export function EditableRichImageBlock({
+  block,
+  files,
+  imageIndex,
+  blockIndex,
+  previewSource,
+  editContext,
+  selected,
+  onSelect,
+  onOpen,
+  onRemove,
+}: {
+  block: Extract<NoteContentBlock, { type: "image" }>;
+  files: string[];
+  imageIndex: number;
+  blockIndex: number;
+  previewSource?: ImagePreviewSource;
+  editContext?: ImagePreviewEditContext;
+  selected: boolean;
+  onSelect: () => void;
+  onOpen: () => void;
+  onRemove: () => void;
+}) {
+  const number = imageIndex + 1;
+  const label = block.alt?.trim() || `图片 ${number}`;
+  return (
+    <section
+      data-rich-image-edit-block={blockIndex}
+      data-selected={selected}
+      className={cn(
+        "rounded-xl border border-dashed border-foreground/15 bg-muted/15 p-2",
+        selected && "border-primary/55 bg-primary/[0.04]"
+      )}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-label text-muted-foreground">图片 {number}</span>
+        <div role="toolbar" aria-label={`图片 ${number} 操作`} className="flex gap-1">
+          <IconButton label={`查看${label}`} size="xs" onClick={onOpen}>
+            <Maximize2 />
+          </IconButton>
+          <IconButton
+            label={`删除${label}`}
+            size="xs"
+            tone="danger"
+            onClick={onRemove}
+          >
+            <Trash2 />
+          </IconButton>
+        </div>
+      </div>
+      <RichImageBlock
+        block={block}
+        files={files}
+        index={imageIndex}
+        previewSource={previewSource}
+        editContext={editContext}
+        onOpen={() => onOpen()}
+        selected={selected}
+        onSelect={onSelect}
+      />
+    </section>
   );
 }
 
@@ -114,7 +191,7 @@ type RichNoteTextEditorProps = {
 };
 
 /**
- * 有序图文卡的无损编辑 seam：只开放现有文字块，图片作为不可移动锚点。
+ * 图文混合卡的无损编辑 seam：文字按块编辑，图片保序且可在原位删除。
  * textarea 使用 defaultValue，避免 React 回写切断 WKWebView 原生撤销分组。
  */
 export function RichNoteTextEditor({
@@ -127,6 +204,7 @@ export function RichNoteTextEditor({
   onCancel,
 }: RichNoteTextEditorProps) {
   const firstTextRef = useRef<HTMLTextAreaElement>(null);
+  const [selectedImageBlock, setSelectedImageBlock] = useState<number | null>(null);
   useEffect(() => {
     const timer = window.setTimeout(() => firstTextRef.current?.focus(), 30);
     return () => window.clearTimeout(timer);
@@ -143,20 +221,27 @@ export function RichNoteTextEditor({
       className="space-y-2 font-mono text-body leading-relaxed"
     >
       <p className="text-label text-muted-foreground">
-        图片位置已锁定；点击图片可查看或打码
+        图片位置已锁定；点图片选中，双击或点右上角查看
       </p>
       {blocks.map((block, index) => {
         if (block.type === "image") {
           const currentImage = imageIndex++;
           return (
-            <RichImageBlock
+            <EditableRichImageBlock
               key={`image-${index}-${block.file}`}
               block={block}
               files={imageFiles}
-              index={currentImage}
+              imageIndex={currentImage}
+              blockIndex={index}
               previewSource={previewSource}
               editContext={editContext}
-              onOpen={onOpenImage}
+              selected={selectedImageBlock === index}
+              onSelect={() => setSelectedImageBlock(index)}
+              onOpen={() => onOpenImage?.(imageFiles, currentImage)}
+              onRemove={() => {
+                onChange(removeNoteContentBlockAt(blocks, index));
+                setSelectedImageBlock(null);
+              }}
             />
           );
         }
