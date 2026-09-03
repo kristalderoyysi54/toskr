@@ -57,3 +57,4 @@ ds-bundle/
 
 # 本地临时产物（设计稿/生成图等个人内容不入库）
 /tmp/
+.alma-snapshots
