@@ -200,6 +200,7 @@ describe("applySettingsPatch 面板布局策略", () => {
           bundleIds: ["com.openai.codex"],
           promptGroupId: settings.promptGroups[0].id,
           defaultFormat: "plain",
+          defaultMarkdownMode: "preserve",
           enterPolicy: "never",
           privacyPolicy: "requireRedaction",
           keepPanel: false,

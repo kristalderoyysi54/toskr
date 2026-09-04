@@ -1,6 +1,6 @@
 import type { NotePreviewPayload } from "@/lib/actions";
 import { looksLikeMarkdown } from "@/lib/markdown";
-import { normalizeNoteContent } from "@/lib/noteContent";
+import { normalizeEditedNoteContent } from "@/lib/noteContent";
 
 export const NOTE_EDITOR_INSERT_EVENT = "toskr://note-editor-insert";
 export const NOTE_EDITOR_INSERT_RESULT_EVENT =
@@ -109,7 +109,8 @@ export function appendPreviewContent(
 
 /** Keep the reusable detail window in lockstep with the main note store. */
 export function refreshPreviewPayload(note: NotePreviewPayload, draft: string) {
-  const { text, kind, url, codeLang } = normalizeNoteContent(
+  const { text, kind, url, codeLang } = normalizeEditedNoteContent(
+    note,
     draft,
     note.images.length > 0
   );

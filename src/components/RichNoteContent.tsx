@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Maximize2, Trash2 } from "lucide-react";
+import { Maximize2, Send, Trash2 } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { useNoteImage } from "@/lib/media";
+import type { TextSelection } from "@/lib/selectionFormat";
 import {
   removeNoteContentBlockAt,
   replaceNoteTextBlockAt,
@@ -84,6 +86,8 @@ export function EditableRichImageBlock({
   onSelect,
   onOpen,
   onRemove,
+  onSend,
+  sendDisabledReason,
 }: {
   block: Extract<NoteContentBlock, { type: "image" }>;
   files: string[];
@@ -95,6 +99,8 @@ export function EditableRichImageBlock({
   onSelect: () => void;
   onOpen: () => void;
   onRemove: () => void;
+  onSend?: () => void;
+  sendDisabledReason?: string | null;
 }) {
   const number = imageIndex + 1;
   const label = block.alt?.trim() || `图片 ${number}`;
@@ -133,6 +139,25 @@ export function EditableRichImageBlock({
         selected={selected}
         onSelect={onSelect}
       />
+      {selected && onSend && (
+        <div className="flex justify-end">
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            disabled={!!sendDisabledReason}
+            title={
+              sendDisabledReason
+                ? `发送选中不可用：${sendDisabledReason}`
+                : `只发送图片 ${number}`
+            }
+            onClick={onSend}
+          >
+            <Send />
+            发送选中
+          </Button>
+        </div>
+      )}
     </section>
   );
 }
@@ -188,6 +213,16 @@ type RichNoteTextEditorProps = {
   onChange: (blocks: NoteContentBlock[]) => void;
   onSave: () => void;
   onCancel: () => void;
+  onSendSelection?: (blocks: NoteContentBlock[]) => void;
+  sendDisabledReason?: string | null;
+  onSelectionActiveChange?: (active: boolean) => void;
+  onTextSelectionChange?: (
+    value: {
+      text: string;
+      selection: TextSelection;
+      textarea: HTMLTextAreaElement;
+    } | null
+  ) => void;
 };
 
 /**
@@ -202,17 +237,49 @@ export function RichNoteTextEditor({
   onChange,
   onSave,
   onCancel,
+  onSendSelection,
+  sendDisabledReason,
+  onSelectionActiveChange,
+  onTextSelectionChange,
 }: RichNoteTextEditorProps) {
   const firstTextRef = useRef<HTMLTextAreaElement>(null);
+  const selectionActiveChangeRef = useRef(onSelectionActiveChange);
+  selectionActiveChangeRef.current = onSelectionActiveChange;
+  const textSelectionChangeRef = useRef(onTextSelectionChange);
+  textSelectionChangeRef.current = onTextSelectionChange;
   const [selectedImageBlock, setSelectedImageBlock] = useState<number | null>(null);
   useEffect(() => {
     const timer = window.setTimeout(() => firstTextRef.current?.focus(), 30);
-    return () => window.clearTimeout(timer);
+    selectionActiveChangeRef.current?.(false);
+    textSelectionChangeRef.current?.(null);
+    return () => {
+      window.clearTimeout(timer);
+      selectionActiveChangeRef.current?.(false);
+      textSelectionChangeRef.current?.(null);
+    };
   }, []);
 
   const imageFiles = blocks.flatMap((block) =>
     block.type === "image" ? [block.file] : []
   );
+  const syncTextSelection = (textarea: HTMLTextAreaElement) => {
+    const selection = {
+      start: textarea.selectionStart,
+      end: textarea.selectionEnd,
+    };
+    if (selection.start === selection.end) {
+      onSelectionActiveChange?.(false);
+      onTextSelectionChange?.(null);
+      return;
+    }
+    setSelectedImageBlock(null);
+    onSelectionActiveChange?.(true);
+    onTextSelectionChange?.({
+      text: textarea.value,
+      selection,
+      textarea,
+    });
+  };
   let imageIndex = 0;
   let textIndex = 0;
   return (
@@ -221,7 +288,7 @@ export function RichNoteTextEditor({
       className="space-y-2 font-mono text-body leading-relaxed"
     >
       <p className="text-label text-muted-foreground">
-        图片位置已锁定；点图片选中，双击或点右上角查看
+        图片位置已锁定；点图片选中，双击或点右上角查看；选中文字或图片后可发送选中
       </p>
       {blocks.map((block, index) => {
         if (block.type === "image") {
@@ -236,12 +303,19 @@ export function RichNoteTextEditor({
               previewSource={previewSource}
               editContext={editContext}
               selected={selectedImageBlock === index}
-              onSelect={() => setSelectedImageBlock(index)}
+              onSelect={() => {
+                setSelectedImageBlock(index);
+                onSelectionActiveChange?.(true);
+                onTextSelectionChange?.(null);
+              }}
               onOpen={() => onOpenImage?.(imageFiles, currentImage)}
               onRemove={() => {
                 onChange(removeNoteContentBlockAt(blocks, index));
                 setSelectedImageBlock(null);
+                onSelectionActiveChange?.(false);
               }}
+              onSend={onSendSelection ? () => onSendSelection([block]) : undefined}
+              sendDisabledReason={sendDisabledReason}
             />
           );
         }
@@ -256,6 +330,9 @@ export function RichNoteTextEditor({
             onChange={(event) =>
               onChange(replaceNoteTextBlockAt(blocks, index, event.target.value))
             }
+            onSelect={(event) => syncTextSelection(event.currentTarget)}
+            onScroll={(event) => syncTextSelection(event.currentTarget)}
+            onPointerDown={() => setSelectedImageBlock(null)}
             onKeyDown={(event) => {
               event.stopPropagation();
               if (event.key === "Enter" && event.metaKey) {

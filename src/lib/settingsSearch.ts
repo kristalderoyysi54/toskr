@@ -152,7 +152,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
 
   entry("target", "target", "目标与发送方案", ["发送对象", "应用方案", "profile"]),
   entry("target", "profiles", "发送方案", ["目标应用", "应用分配", "默认方案"], { target: "目标与发送方案" }),
-  entry("target", "output-format", "输出格式", ["纯文本", "markdown", "格式化"], { target: "目标与发送方案" }),
+  entry("target", "output-format", "默认发送方式", ["原文", "无 markdown", "去格式", "代码块"], { target: "目标与发送方案" }),
   entry("target", "enter-policy", "粘贴后动作", ["回车", "自动发送", "仅粘贴"], { target: "目标与发送方案" }),
   entry("target", "aliases", "隐私与化名", ["可逆化名", "词典", "恢复原文"]),
   entry("target", "prompt-groups", "提示词组", ["prompt", "模板", "提示词"]),

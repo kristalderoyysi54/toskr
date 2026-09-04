@@ -4,6 +4,7 @@ import {
   hasOrderedRichLayout,
   hasMixedNoteContent,
   mapNoteTextBlocks,
+  mapNoteTextSelection,
   normalizeNoteContentBlocks,
   noteContentBlocks,
   projectNoteContent,
@@ -45,6 +46,40 @@ describe("mapNoteTextBlocks（卡片级文本处理/恢复化名的结构不变�
   it("变换无实际改动时保留原块引用（调用方按引用判断是否需要落库）", () => {
     const next = mapNoteTextBlocks(interleaved, (text) => text);
     next.forEach((block, index) => expect(block).toBe(interleaved[index]));
+  });
+});
+
+describe("mapNoteTextSelection（图文选词文本处理）", () => {
+  it("跨图片选区只处理命中的文字片段，图片与块序不变", () => {
+    const image = { type: "image" as const, file: "mid.png", alt: "截图" };
+    const blocks: NoteContentBlock[] = [
+      { type: "text", text: "前 abc" },
+      image,
+      { type: "text", text: "def 后" },
+    ];
+
+    const next = mapNoteTextSelection(blocks, { start: 2, end: 9 }, (text) =>
+      text.toUpperCase()
+    );
+
+    expect(next).toEqual([
+      { type: "text", text: "前 ABC" },
+      image,
+      { type: "text", text: "DEF 后" },
+    ]);
+    expect(next[1]).toBe(image);
+  });
+
+  it("投影省略的后续块前导换行不造成局部索引漂移", () => {
+    const blocks: NoteContentBlock[] = [
+      { type: "text", text: "甲\n" },
+      { type: "image", file: "mid.png" },
+      { type: "text", text: "\nabc" },
+    ];
+    const next = mapNoteTextSelection(blocks, { start: 2, end: 5 }, (text) =>
+      text.toUpperCase()
+    );
+    expect(next[2]).toEqual({ type: "text", text: "\nABC" });
   });
 });
 

@@ -1,8 +1,11 @@
 import type {
   DeliveryFormat,
+  DeliveryOutputMode,
   EnterPolicy,
+  MarkdownSendMode,
   TargetProfileResolutionSource,
 } from "@/lib/targetProfiles";
+import { targetProfileOutputMode } from "@/lib/targetProfiles";
 
 export interface TargetLensDisclosureState {
   expanded: boolean;
@@ -34,8 +37,9 @@ export function targetLensDetailsExpanded(
   return state.expanded;
 }
 
-export const DELIVERY_FORMAT_LABEL: Record<DeliveryFormat, string> = {
-  plain: "纯文本",
+export const DELIVERY_FORMAT_LABEL: Record<DeliveryOutputMode, string> = {
+  plain: "原文",
+  "strip-markdown": "无 Markdown",
   code: "代码块",
 };
 
@@ -89,6 +93,7 @@ export interface QuickProfileOption {
   promptGroupId: string;
   promptGroupName: string;
   defaultFormat: DeliveryFormat;
+  defaultMarkdownMode: MarkdownSendMode;
   enterPolicy: EnterPolicy;
   keepPanel: boolean;
 }
@@ -106,8 +111,9 @@ export function profileDiffSummary(
   if (profile.promptGroupName !== current.promptGroupName) {
     diffs.push(`提示词组改为${profile.promptGroupName}`);
   }
-  if (profile.defaultFormat !== current.defaultFormat) {
-    diffs.push(`输出改为${DELIVERY_FORMAT_LABEL[profile.defaultFormat]}`);
+  const outputMode = targetProfileOutputMode(profile);
+  if (outputMode !== targetProfileOutputMode(current)) {
+    diffs.push(`输出改为${DELIVERY_FORMAT_LABEL[outputMode]}`);
   }
   if (profile.enterPolicy !== current.enterPolicy) {
     diffs.push(`粘贴后改为${ENTER_POLICY_STATUS_LABEL[profile.enterPolicy]}`);

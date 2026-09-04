@@ -8,6 +8,7 @@ import {
 
 import { observeRenderWindow } from "@/lib/viewportWindow";
 import { useUIStore } from "@/store/uiStore";
+import { shouldResetPlaceholderHeight } from "@/components/windowedListHeight";
 
 const activityListeners = new Map<string, Set<() => void>>();
 let activeItemIds = new Set<string>();
@@ -56,12 +57,18 @@ export function WindowedListItem({
   itemId,
   estimatedHeight,
   eager = false,
+  renderMarginPx,
+  scrollIdleUnmountMs,
   children,
 }: {
   itemId: string;
   estimatedHeight: number;
   /** 每段最前面的少量条目首帧直出，避免等待 Observer 的空白闪烁。 */
   eager?: boolean;
+  /** 预挂载距离；默认 240px，快速滚动页面可按自身卡片成本扩大。 */
+  renderMarginPx?: number;
+  /** 滚动停止后再卸载离窗内容；默认立即卸载。 */
+  scrollIdleUnmountMs?: number;
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -69,6 +76,7 @@ export function WindowedListItem({
     () => eager || typeof IntersectionObserver === "undefined"
   );
   const [placeholderHeight, setPlaceholderHeight] = useState(estimatedHeight);
+  const previousEstimatedHeightRef = useRef(estimatedHeight);
   const [uiActive, setUiActive] = useState(() => currentActiveIds().has(itemId));
   const mounted = eager || insideRenderWindow || uiActive;
 
@@ -80,8 +88,13 @@ export function WindowedListItem({
   useEffect(() => {
     const element = ref.current;
     if (!element) return;
-    return observeRenderWindow(element, setInsideRenderWindow);
-  }, []);
+    return observeRenderWindow(
+      element,
+      setInsideRenderWindow,
+      renderMarginPx,
+      scrollIdleUnmountMs
+    );
+  }, [renderMarginPx, scrollIdleUnmountMs]);
 
   useLayoutEffect(() => {
     const element = ref.current;
@@ -101,9 +114,21 @@ export function WindowedListItem({
     return () => resizeObserver.disconnect();
   }, [mounted]);
 
-  // 密度切换或详情收起后，屏外占位立即回到该形态的标准高度，避免滚动范围漂移。
+  // 离开渲染窗时保留最后实测高度；若立刻退回估算值，短卡会在真实高度与
+  // 估算高度间往返，触发浏览器滚动锚定并造成快速滑动时整列上下抖动。
+  // 只有密度等外部形态确实改变 estimatedHeight，且条目已经屏外时才重置。
   useEffect(() => {
-    if (!mounted) setPlaceholderHeight(estimatedHeight);
+    const previousEstimatedHeight = previousEstimatedHeightRef.current;
+    previousEstimatedHeightRef.current = estimatedHeight;
+    if (
+      shouldResetPlaceholderHeight(
+        previousEstimatedHeight,
+        estimatedHeight,
+        mounted
+      )
+    ) {
+      setPlaceholderHeight(estimatedHeight);
+    }
   }, [estimatedHeight, mounted]);
 
   return (

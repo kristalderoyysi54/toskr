@@ -15,6 +15,7 @@ const profiles: QuickProfileOption[] = [
     promptGroupId: "terminal-qa",
     promptGroupName: "终端问答",
     defaultFormat: "code",
+    defaultMarkdownMode: "preserve",
     enterPolicy: "allow",
     keepPanel: false,
   },
@@ -24,6 +25,7 @@ const profiles: QuickProfileOption[] = [
     promptGroupId: "writing-polish",
     promptGroupName: "文字润色",
     defaultFormat: "plain",
+    defaultMarkdownMode: "preserve",
     enterPolicy: "confirm",
     keepPanel: true,
   },
@@ -33,6 +35,7 @@ const profiles: QuickProfileOption[] = [
     promptGroupId: "deep-research",
     promptGroupName: "深度研究",
     defaultFormat: "plain",
+    defaultMarkdownMode: "preserve",
     enterPolicy: "never",
     keepPanel: false,
   },
@@ -42,6 +45,7 @@ const profiles: QuickProfileOption[] = [
     promptGroupId: "misc",
     promptGroupName: "其他",
     defaultFormat: "plain",
+    defaultMarkdownMode: "preserve",
     enterPolicy: "never",
     keepPanel: false,
   },
@@ -85,7 +89,7 @@ describe("TargetProfileQuickSwitch", () => {
     expect(html).not.toContain("匹配来源：");
     // 选中项用「当前」胶囊标注；候选副行只报与当前的差异
     expect(html).toContain(">当前</span>");
-    expect(html).toContain("输出改为纯文本");
+    expect(html).toContain("输出改为原文");
     expect(html).toContain("以后发给 Otty 都使用此方案");
     expect(html).toContain('title="编辑 Otty 的发送方案"');
     expect(html).toContain("编辑方案");
@@ -103,7 +107,7 @@ describe("TargetProfileQuickSwitch", () => {
   it("差异摘要只报不同维度，回车差异必须携带风险措辞", () => {
     expect(profileDiffSummary(profiles[1], profiles[0])).toEqual([
       "提示词组改为文字润色",
-      "输出改为纯文本",
+      "输出改为原文",
       "粘贴后改为每次发送前确认",
       "完成后保持打开",
     ]);
@@ -111,6 +115,10 @@ describe("TargetProfileQuickSwitch", () => {
       "粘贴后改为自动按回车 · 高风险"
     );
     expect(profileDiffSummary(profiles[0], profiles[0])).toEqual([]);
+    expect(profileDiffSummary(
+      { ...profiles[1], defaultMarkdownMode: "strip" },
+      profiles[0]
+    )).toContain("输出改为无 Markdown");
   });
 
   it("Arrow 循环移动，Enter 选择，Escape 关闭", () => {

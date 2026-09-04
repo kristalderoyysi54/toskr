@@ -18,9 +18,11 @@ import {
   quickSwitchKeyboardCommand,
   type QuickProfileOption,
 } from "@/lib/targetLens";
-import type {
-  TargetRuleOverrideKey,
-  TargetRuleOverrides,
+import {
+  targetProfileOutputMode,
+  type DeliveryOutputMode,
+  type TargetRuleOverrideKey,
+  type TargetRuleOverrides,
 } from "@/lib/targetProfiles";
 import { cn } from "@/lib/utils";
 import { targetStatusLabel, type TargetStatus } from "@/store/targetStore";
@@ -37,6 +39,18 @@ export interface RuleLedgerInteractive {
   onOverride: (patch: TargetRuleOverrides) => void;
   onReset: () => void;
 }
+
+const OUTPUT_MODE_OPTIONS: readonly {
+  value: DeliveryOutputMode;
+  label: string;
+}[] = [
+  { value: "plain", label: DELIVERY_FORMAT_LABEL.plain },
+  {
+    value: "strip-markdown",
+    label: DELIVERY_FORMAT_LABEL["strip-markdown"],
+  },
+  { value: "code", label: DELIVERY_FORMAT_LABEL.code },
+];
 
 /** 覆盖行的「本次」徽标：提示该值只对当前目标临时生效。 */
 function OverriddenBadge() {
@@ -99,19 +113,16 @@ export function ProfileRuleLedger({
               ariaLabel="本次输出格式"
               size="micro"
               disabled={interactive.disabled}
-              value={profile.defaultFormat}
-              options={[
-                { value: "plain", label: DELIVERY_FORMAT_LABEL.plain },
-                { value: "code", label: DELIVERY_FORMAT_LABEL.code },
-              ]}
-              onChange={(defaultFormat) =>
-                interactive.onOverride({ defaultFormat })
+              value={targetProfileOutputMode(profile)}
+              options={OUTPUT_MODE_OPTIONS}
+              onChange={(defaultOutputMode) =>
+                interactive.onOverride({ defaultOutputMode })
               }
             />
           ) : (
-            DELIVERY_FORMAT_LABEL[profile.defaultFormat]
+            DELIVERY_FORMAT_LABEL[targetProfileOutputMode(profile)]
           )}
-          {interactive?.overriddenKeys.includes("defaultFormat") && (
+          {interactive?.overriddenKeys.includes("defaultOutputMode") && (
             <OverriddenBadge />
           )}
         </dd>

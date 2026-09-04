@@ -29,7 +29,7 @@ describe("发送入口路由", () => {
     ]);
   });
 
-  it("最终正文只在 buildDeliveryDraft 组装，Tooltip 直接消费 finalText", () => {
+  it("基础正文只在 buildDeliveryDraft 组装，输出投影集中且 Tooltip 直接消费 finalText", () => {
     const actions = readFileSync(path.join(srcRoot, "lib", "actions.ts"), "utf8");
     const selection = readFileSync(
       path.join(srcRoot, "components", "SelectionBar.tsx"),
@@ -43,6 +43,10 @@ describe("发送入口路由", () => {
       path.join(srcRoot, "lib", "delivery", "preflight.ts"),
       "utf8"
     );
+    const outputCodec = readFileSync(
+      path.join(srcRoot, "lib", "delivery", "outputCodec.ts"),
+      "utf8"
+    );
 
     expect(actions).toContain("buildDeliveryDraft(");
     expect(actions).toContain("dispatchDeliveryDraft(");
@@ -50,7 +54,9 @@ describe("发送入口路由", () => {
     expect(actions).not.toMatch(/buildSendText\(|applyPromptTemplate\(|wrapAsCodeBlock\(/);
     expect(builder).toContain("buildSendText(");
     expect(builder).toContain("applyPromptTemplate(");
-    expect(builder).toContain("wrapAsCodeBlock(");
+    expect(builder).toContain("applyDeliveryOutputCodec(");
+    expect(outputCodec).toContain("markdownToPlainText(");
+    expect(outputCodec).toContain("wrapAsCodeBlock(");
     expect(selection).toContain("buildDeliveryDraft(");
     expect(selection).toContain("{previewDraft.finalText}");
     expect(selection).not.toContain("sendPreview(");
@@ -235,6 +241,7 @@ describe("发送入口路由", () => {
       path.join(srcRoot, "components", "PreviewOverlay.tsx"),
       "utf8"
     );
+    const actions = readFileSync(path.join(srcRoot, "lib", "actions.ts"), "utf8");
     const app = readFileSync(path.join(srcRoot, "App.tsx"), "utf8");
     const targetListener = preview.indexOf(
       "listen<TargetSnapshot>(TARGET_CHANGED_EVENT"
@@ -271,11 +278,58 @@ describe("发送入口路由", () => {
     );
     expect(overlay).toContain("previewSource={imagePreviewSource}");
     expect(app).toContain(
-      'listen<{ id: string; dataGeneration: number; text?: string }>(\n        "toskr://note-send"'
+      'listen<NoteSendPayload>(\n        "toskr://note-send"'
     );
     // 片段发送：text 存在时以 overrideText 只发选中片段，仍以该卡为来源
-    expect(app).toContain("void sendNotesToChat(\n          [e.payload.id],");
+    expect(app).toContain("void sendNotesToChat([e.payload.id], undefined, options)");
     expect(app).toContain("{ overrideText: e.payload.text }");
+    expect(textPreview).toContain(
+      'send({ format: "plain", markdownMode: "strip" })'
+    );
+    expect(textPreview).toContain(
+      'send({ format: "plain", markdownMode: "preserve" })'
+    );
+    expect(app).toContain('e.payload.markdownMode === "strip"');
+    expect(app).toContain('e.payload.markdownMode === "preserve"');
+    expect(app).toContain("{ markdownMode }");
+    expect(app).toContain("{ format }");
+    expect(app).toContain("forceExternal: true");
+    expect(actions).toContain("!sendsExternal &&");
+  });
+
+  it("主发送菜单与预检都提供仅本次去 Markdown 的入口", () => {
+    const selection = readFileSync(
+      path.join(srcRoot, "components", "SelectionBar.tsx"),
+      "utf8"
+    );
+    const composer = readFileSync(
+      path.join(srcRoot, "components", "PreflightComposer.tsx"),
+      "utf8"
+    );
+    const actions = readFileSync(path.join(srcRoot, "lib", "actions.ts"), "utf8");
+
+    expect(selection).toContain("去 Markdown 后发送");
+    expect(selection).toContain('markdownMode: "strip"');
+    expect(composer).toContain('value: "strip-markdown"');
+    expect(composer).toContain('markdownMode: "strip"');
+    expect(selection).toContain("targetProfileOutputMode(resolution.profile)");
+    expect(selection).toContain('activeOutputMode === "strip-markdown"');
+    expect(selection).toContain('markdownMode: "preserve"');
+    expect(actions).toContain('markdownMode: opts?.markdownMode ?? "preserve"');
+  });
+
+  it("详情页发送分体按钮的右侧箭头收窄并与左侧共用边框", () => {
+    const preview = readFileSync(path.join(srcRoot, "TextPreviewView.tsx"), "utf8");
+    const arrowButton = preview.match(
+      /label="选择发送方式或目标"[\s\S]*?className="([^"]+)"/
+    );
+
+    expect(arrowButton).not.toBeNull();
+    expect(arrowButton[1]).toContain("-ml-px");
+    expect(arrowButton[1]).toContain("w-7");
+    expect(arrowButton[1]).toContain("p-0");
+    expect(arrowButton[1]).toContain("shadow-none");
+    expect(arrowButton[1]).not.toContain("px-2");
   });
 
   it("剪贴板卡内部追加由共享事件契约连接 actions 与文本编辑器", () => {

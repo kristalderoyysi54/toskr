@@ -28,10 +28,13 @@ function fetchIcon(bundleId: string): Promise<AppIconInfo | null> {
 }
 
 /** 按 bundle id 取应用图标与主色（未就绪/取不到为 null）。 */
-export function useAppIcon(bundleId: string | undefined): AppIconInfo | null {
+export function useAppIcon(
+  bundleId: string | undefined,
+  enabled = true
+): AppIconInfo | null {
   const [info, setInfo] = useState<AppIconInfo | null>(null);
   useEffect(() => {
-    if (!bundleId) return;
+    if (!bundleId || !enabled) return;
     let alive = true;
     fetchIcon(bundleId).then((i) => {
       if (alive) setInfo(i);
@@ -39,6 +42,6 @@ export function useAppIcon(bundleId: string | undefined): AppIconInfo | null {
     return () => {
       alive = false;
     };
-  }, [bundleId]);
-  return bundleId ? info : null;
+  }, [bundleId, enabled]);
+  return bundleId && enabled ? info : null;
 }

@@ -22,6 +22,7 @@ import {
   clearDeliveryEvents,
   DELIVERY_ACTIVITY_MAX_EVENTS,
   deliveryActivityRecords,
+  deliveryEventOutputMode,
   deliveryEventSourceAvailability,
   deliverySourceItems,
   getRecentDeliveryEvents,
@@ -29,6 +30,7 @@ import {
   type DeliveryActivityRecord,
   type DeliveryEvent,
 } from "@/lib/deliveryActivity";
+import { DELIVERY_FORMAT_LABEL } from "@/lib/targetLens";
 import {
   RESULT_LINK_CHANGED_EVENT,
   requestResultLinkForDelivery,
@@ -307,6 +309,9 @@ export function RecentDeliveryList({
   const renderRound = (record: DeliveryActivityRecord) => {
         const availability = deliveryEventSourceAvailability(record, notes, tasks);
         const recoverable = record.status === "failed" || record.status === "blocked";
+        const outputMode = deliveryEventOutputMode(record);
+        const outputLabel = outputMode ? DELIVERY_FORMAT_LABEL[outputMode] : null;
+        const repreparable = recoverable || (record.status === "sent" && outputMode !== null);
         // 报告/问题 Note 也保留 delivery provenance；抽屉的“结果”必须只认
         // 活动事件明确记录的 resultNoteId，不能把派生笔记误当成原结果。
         const linkedResults = record.resultNoteId
@@ -333,6 +338,14 @@ export function RecentDeliveryList({
               <span className="min-w-0 flex-1 truncate text-body font-medium" title={record.targetAppName ?? undefined}>
                 {record.targetAppName || record.targetBundleId || "未识别目标"}
               </span>
+              {outputLabel && (
+                <span
+                  className="shrink-0 rounded-full bg-background/70 px-1.5 py-px text-micro text-muted-foreground"
+                  title="本次实际发送方式"
+                >
+                  {outputLabel}
+                </span>
+              )}
               <time
                 className="shrink-0 text-micro tabular-nums text-muted-foreground"
                 dateTime={new Date(record.timestampMs).toISOString()}
@@ -401,7 +414,7 @@ export function RecentDeliveryList({
                     手动选择回复
                   </button>
                 )}
-                {recoverable && (
+                {repreparable && (
                   <button
                     type="button"
                     disabled={availability !== "available" || busyEventId !== null}
@@ -411,9 +424,12 @@ export function RecentDeliveryList({
                       onReprepare(record);
                     }}
                     className={cn("flex items-center gap-1", FOOT_LINK)}
+                    title={outputMode
+                      ? "重读当前来源，沿用本条记录的发送方式，并对当前前台目标重新预检"
+                      : "重读当前来源，并对当前前台目标重新预检"}
                   >
                     <RotateCcw className={cn("size-3", busyEventId === record.eventId && "animate-spin motion-reduce:animate-none")} aria-hidden />
-                    重新准备
+                    {outputMode ? "按同格式再准备" : "重新准备"}
                   </button>
                 )}
                 {linkedResult && onVerify && (
@@ -463,6 +479,10 @@ export function RecentDeliveryList({
                   <dt className="text-muted-foreground">原内容</dt>
                   <dd className="truncate text-right">
                     {sourceLabel(record, availability)} · {payloadLabel(record)}
+                  </dd>
+                  <dt className="text-muted-foreground">发送方式</dt>
+                  <dd className="text-right">
+                    {outputLabel ?? "旧记录未保存"}
                   </dd>
                   <dt className="text-muted-foreground">隐私保护</dt>
                   <dd className="text-right">
@@ -644,7 +664,12 @@ export function RecentDeliveryDrawer({
     setBusyEventId(null);
     if (result.ok) {
       onOpenChange(false);
-      tip("info", "已按当前来源重新准备，请在预检中确认后发送");
+      tip(
+        "info",
+        deliveryEventOutputMode(event)
+          ? "已沿用历史发送方式；目标为当前应用，请在预检中确认后发送"
+          : "已按当前来源重新准备，请在预检中确认后发送"
+      );
       return;
     }
     setError(RECOVERY_ERROR[result.reason]);

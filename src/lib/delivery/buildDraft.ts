@@ -2,14 +2,16 @@ import {
   applyPromptTemplate,
   buildSendText,
   imageCaption,
-  wrapAsCodeBlock,
 } from "@/lib/format";
 import {
+  mapNoteTextBlocks,
   noteContentBlocks,
   textBlockRanges,
   textFromContentBlocks,
+  type NoteContentBlock,
 } from "@/lib/noteContentBlocks";
 import type { DeliverySegment } from "@/lib/tauri";
+import { markdownToPlainText } from "@/lib/markdown";
 import { noteImages, type Note, type Task } from "@/store/notesStore";
 
 import type {
@@ -20,6 +22,7 @@ import type {
 } from "./types";
 import { applyAliasEntities } from "./aliasEntities";
 import { EMPTY_PRIVACY_DECISION } from "./firewall";
+import { applyDeliveryOutputCodec } from "./outputCodec";
 
 export function buildTaskMarkdown(task: Task): string {
   const sections = [task.text];
@@ -48,14 +51,47 @@ function uniqueImages(notes: readonly Note[]): string[] {
   return [...new Set(notes.flatMap((note) => noteImages(note)))];
 }
 
+function blockImages(blocks: readonly NoteContentBlock[]): string[] {
+  return [
+    ...new Set(
+      blocks.flatMap((block) => (block.type === "image" ? [block.file] : []))
+    ),
+  ];
+}
+
+/** 单张图文卡逐文字块去格式，保证图片位置与转换后的发送段仍同源。 */
+function markdownPlainNoteContent(note: Note): {
+  text: string;
+  segmentNote: Note;
+} | null {
+  const sourceText = noteText(note);
+  if (sourceText === null) return null;
+  const sourceBlocks = noteContentBlocks(note);
+  if (textFromContentBlocks(sourceBlocks) !== sourceText) return null;
+  const contentBlocks = noteContentBlocks({
+    contentBlocks: mapNoteTextBlocks(sourceBlocks, markdownToPlainText),
+  });
+  return {
+    text: textFromContentBlocks(contentBlocks),
+    segmentNote: { ...note, contentBlocks },
+  };
+}
+
 /** 多卡发送与只读来源预览共享同一正文、附件组装规则。 */
-export function buildNoteSourceContent(notes: readonly Note[]) {
+export function buildNoteSourceContent(
+  notes: readonly Note[],
+  transformText?: (note: Note, text: string) => string
+) {
   const textNotes = notes
     .map((note) => ({ note, text: noteText(note) }))
     .filter((entry): entry is { note: Note; text: string } => entry.text !== null);
   return {
     rawText: textNotes.length
-      ? buildSendText(textNotes.map((entry) => entry.text))
+      ? buildSendText(
+          textNotes.map((entry) =>
+            transformText?.(entry.note, entry.text) ?? entry.text
+          )
+        )
       : "",
     imageFiles: uniqueImages(notes),
     singleCodeLanguage:
@@ -121,28 +157,90 @@ export function buildDeliveryDraft(
   let singleCodeLanguage: string | undefined;
   let isSecretSource = false;
   let appliedTextOverride: string | null = null;
-  let sourceNotes: Note[] = [];
+  let appliedContentOverride: NoteContentBlock[] | null = null;
+  let segmentSourceNote: Note | null = null;
+  let markdownPlainText: string | null = null;
+  let markdownTransformBypassed = false;
+  const profile = state.profileResolution.profile;
+  const requestedFormat = input.format ?? profile.defaultFormat;
+  // 显式本次选择优先；未指定时才采用目标方案的 Markdown 默认模式。
+  const requestedMarkdownMode = input.markdownMode ?? profile.defaultMarkdownMode;
 
   if (input.sourceKind === "task") {
     const selected = state.tasks.find((task) => requestedIds.has(task.id));
     if (selected) {
       sourceItemIds = [selected.id];
       rawText = buildTaskMarkdown(selected);
+      if (requestedMarkdownMode === "strip") {
+        markdownPlainText = markdownToPlainText(rawText);
+      }
     }
   } else {
     const selected = orderedNotes(input.sourceItemIds, state.notes);
-    sourceNotes = selected;
+    segmentSourceNote = selected.length === 1 ? selected[0] : null;
     sourceItemIds = selected.map((note) => note.id);
     isSecretSource = selected.some((note) => note.kind === "secret");
-    if (input.sourceTextOverride !== undefined && selected.length === 1) {
+    markdownTransformBypassed =
+      isSecretSource ||
+      (selected.length > 0 && selected.every((note) => Boolean(note.codeLang)));
+    if (input.sourceContentOverride !== undefined && selected.length === 1) {
+      // 图文编辑器片段发送：块级快照保留图片引用与相对顺序，仍经统一
+      // Markdown、化名、文本/图片隐私扫描和 Native segments 下发。
+      const source = selected[0]!;
+      appliedContentOverride = noteContentBlocks({
+        contentBlocks: input.sourceContentOverride,
+      });
+      const effectiveBlocks =
+        requestedMarkdownMode === "strip" &&
+        !source.codeLang &&
+        source.kind !== "secret"
+          ? mapNoteTextBlocks(appliedContentOverride, markdownToPlainText)
+          : appliedContentOverride;
+      rawText = textFromContentBlocks(appliedContentOverride);
+      imageFiles = blockImages(effectiveBlocks);
+      singleCodeLanguage = source.codeLang;
+      segmentSourceNote = {
+        ...source,
+        text: textFromContentBlocks(effectiveBlocks),
+        contentBlocks: effectiveBlocks,
+      };
+      if (effectiveBlocks !== appliedContentOverride) {
+        markdownPlainText = segmentSourceNote.text;
+      }
+    } else if (input.sourceTextOverride !== undefined && selected.length === 1) {
       // 片段发送：正文取选中片段，图片不随行；模板/别名等后续环节照常
       rawText = input.sourceTextOverride;
       appliedTextOverride = input.sourceTextOverride;
+      if (
+        requestedMarkdownMode === "strip" &&
+        !selected[0]?.codeLang &&
+        selected[0]?.kind !== "secret"
+      ) {
+        markdownPlainText = markdownToPlainText(rawText);
+      }
     } else {
       const content = buildNoteSourceContent(selected);
       rawText = content.rawText;
       imageFiles = content.imageFiles;
       singleCodeLanguage = content.singleCodeLanguage;
+      if (requestedMarkdownMode === "strip" && !isSecretSource) {
+        const transformedSingle =
+          selected.length === 1 && !selected[0].codeLang
+            ? markdownPlainNoteContent(selected[0])
+            : null;
+        if (transformedSingle) {
+          markdownPlainText = transformedSingle.text;
+          segmentSourceNote = transformedSingle.segmentNote;
+        } else {
+          markdownPlainText = buildNoteSourceContent(
+            selected,
+            (note, text) => note.codeLang
+              ? text
+              : markdownToPlainText(text)
+          ).rawText;
+          segmentSourceNote = null;
+        }
+      }
     }
   }
 
@@ -150,10 +248,26 @@ export function buildDeliveryDraft(
     addWarning(warnings, "source-missing");
   }
 
-  const format = input.format ?? state.profileResolution.profile.defaultFormat;
-  const formattedText = rawText && format === "code"
-    ? wrapAsCodeBlock(rawText, singleCodeLanguage)
-    : rawText;
+  // 代码卡/秘文明确绕过 Markdown 转换；Draft 记录实际生效模式，避免历史记录
+  // 把“原样发送”误标成“无 Markdown”。混合普通文本仍保留 strip，因其中确有转换。
+  const markdownMode =
+    requestedMarkdownMode === "strip" && markdownTransformBypassed
+      ? "preserve"
+      : requestedMarkdownMode;
+  // 「去 Markdown」承诺目标文本框里不再出现代码围栏；秘文也必须保持字节原样。
+  // 两者都钳制为 plain；若要代码块，预检切回该格式时会同时恢复 preserve。
+  const format = isSecretSource || requestedMarkdownMode === "strip"
+    ? "plain"
+    : requestedFormat;
+  const sourceText = markdownPlainText ?? rawText;
+  // strip 已按卡片/文字块做过一次，外层只负责 plain/code 包装；重复解析会把
+  // 第一次留下的转义字面量或代码围栏正文误当成第二层 Markdown。
+  const formattedText = applyDeliveryOutputCodec(
+    sourceText,
+    format,
+    "preserve",
+    singleCodeLanguage
+  );
   // 秘文正文是字节精确的密文信封：套 Prompt 模板会破坏语义、别名字面替换可能改掉
   // 与词典原文同形的码位子串导致永久不可解，故秘文来源一律跳过这两步，原样发送。
   const assembledBase =
@@ -171,16 +285,15 @@ export function buildDeliveryDraft(
     addWarning(warnings, "empty-payload");
   }
 
-  // 图文交错顺序：finalText === rawText 证明模板/代码块/别名都未改动字节，
-  // 交错文字段与已扫描正文才能逐字节对应。
+  // 图文交错顺序：finalText === sourceText 证明模板/代码块/别名未继续改动
+  // 当前（原文或已去 Markdown）投影，交错文字段与已扫描正文仍同源。
   const segments =
-    sourceNotes.length === 1 &&
+    segmentSourceNote &&
     appliedTextOverride === null &&
-    finalText === rawText
-      ? buildDeliverySegments(sourceNotes[0], finalText, imageFiles)
+    finalText === sourceText
+      ? buildDeliverySegments(segmentSourceNote, finalText, imageFiles)
       : null;
 
-  const profile = state.profileResolution.profile;
   const promptSnippetGroupId = input.promptSnippetId
     ? state.promptSnippets.find((snippet) => snippet.id === input.promptSnippetId)
         ?.groupId ?? null
@@ -194,6 +307,7 @@ export function buildDeliveryDraft(
     selectionItemIds: [...state.checkedItemIds],
     rawText,
     sourceTextOverride: appliedTextOverride,
+    sourceContentOverride: appliedContentOverride,
     assembledText: finalText,
     finalText,
     originalImageFiles: [...imageFiles],
@@ -216,6 +330,7 @@ export function buildDeliveryDraft(
       failureMessage: null,
     })),
     format,
+    markdownMode,
     promptSnippetId: input.promptSnippetId ?? null,
     transformRecipeId: null,
     promptSnippetGroupId,
@@ -225,6 +340,7 @@ export function buildDeliveryDraft(
     promptGroupId: state.profileResolution.promptGroup.id,
     profileSource: state.profileResolution.source,
     profileDefaultFormat: profile.defaultFormat,
+    profileDefaultMarkdownMode: profile.defaultMarkdownMode,
     profileKeepPanel: profile.keepPanel,
     privacyPolicy: profile.privacyPolicy,
     firewallEnabled: state.firewallEnabled,

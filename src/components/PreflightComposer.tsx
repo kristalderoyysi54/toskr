@@ -59,7 +59,10 @@ import { useNoteThumb } from "@/lib/media";
 import { tip } from "@/lib/tip";
 import { ENTER_POLICY_STATUS_LABEL } from "@/lib/targetLens";
 import { api, type FirewallFinding } from "@/lib/tauri";
-import { promptSnippetsForGroup } from "@/lib/targetProfiles";
+import {
+  promptSnippetsForGroup,
+  type DeliveryOutputMode,
+} from "@/lib/targetProfiles";
 import { cn } from "@/lib/utils";
 import { useDeliveryStore } from "@/store/deliveryStore";
 import { noteImages, useNotesStore } from "@/store/notesStore";
@@ -67,9 +70,10 @@ import { sameTargetIdentity, useTargetStore } from "@/store/targetStore";
 import { closeOpenDraftWithTransforms } from "@/lib/aiTransform";
 
 const FORMAT_OPTIONS = [
-  { value: "plain", label: "纯文本" },
+  { value: "plain", label: "原文" },
+  { value: "strip-markdown", label: "无 Markdown" },
   { value: "code", label: "代码块" },
-] as const satisfies readonly SimpleSelectOption<"plain" | "code">[];
+] as const satisfies readonly SimpleSelectOption<DeliveryOutputMode>[];
 
 const WARNING_LABEL: Record<string, string> = {
   "source-missing": "部分来源已不存在",
@@ -177,6 +181,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
     draft?.originalImageFiles,
     draft?.privacyPolicy,
     draft?.profileDefaultFormat,
+    draft?.profileDefaultMarkdownMode,
     draft?.profileKeepPanel,
     draft?.profileSource,
     draft?.promptGroupId,
@@ -1184,14 +1189,22 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                   />
                 </label>
                 <label className="space-y-1 text-label">
-                  <span className="text-muted-foreground">输出格式</span>
+                  <span className="text-muted-foreground">发送格式</span>
                   <SimpleSelect
-                    value={draft.format}
+                    value={
+                      draft.markdownMode === "strip"
+                        ? "strip-markdown"
+                        : draft.format
+                    }
                     options={FORMAT_OPTIONS}
-                    ariaLabel="本次输出格式"
+                    ariaLabel="本次发送格式"
                     size="micro"
                     disabled={busy}
-                    onChange={(format) => updateOpenPreflightDraft({ format })}
+                    onChange={(mode) => updateOpenPreflightDraft(
+                      mode === "strip-markdown"
+                        ? { format: "plain", markdownMode: "strip" }
+                        : { format: mode, markdownMode: "preserve" }
+                    )}
                   />
                 </label>
               </div>
@@ -1397,10 +1410,9 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                     {draft.originalImageFiles.length} 张 · 点击查看原图
                   </span>
                 </div>
-                {/* 发送顺序如实展示：交错卡正文一经变换/手改即降级为
-                    「全文在前、图片在后」（与 draftSegmentsForSend 同判据），
-                    界面固定的「文本框 + 附件条」布局不能暗示保持原图文顺序 */}
-                {draft.segments && draft.finalText === draft.rawText ? (
+                {/* 发送顺序如实展示：自动去 Markdown 后仍可保持同源交错段；
+                    用户手改/AI/隐私替换使正文偏离组装基线时才安全降级。 */}
+                {draft.segments && draft.finalText === draft.assembledText ? (
                   <p className="text-micro text-muted-foreground">
                     发送顺序：按卡片原图文交错顺序
                   </p>

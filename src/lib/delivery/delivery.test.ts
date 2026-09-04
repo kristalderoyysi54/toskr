@@ -34,7 +34,11 @@ vi.mock("@/lib/tauri", async (importOriginal) => {
 });
 
 import { buildDeliveryDraft, buildTaskMarkdown } from "./buildDraft";
-import { submitPreflightDraft, updateOpenPreflightDraft } from "./preflight";
+import {
+  rebuildPreflightDraft,
+  submitPreflightDraft,
+  updateOpenPreflightDraft,
+} from "./preflight";
 import {
   executeDeliveryDraft,
   inspectDeliveryDraft,
@@ -96,6 +100,7 @@ const profile: TargetProfileResolution = {
     bundleIds: ["com.openai.codex"],
     promptGroupId: "engineering",
     defaultFormat: "plain",
+    defaultMarkdownMode: "preserve",
     enterPolicy: "allow",
     privacyPolicy: "confirmRaw",
     keepPanel: false,
@@ -295,6 +300,45 @@ describe("buildDeliveryDraft", () => {
     expect(batch.rawText).toBe("1. 甲\n2. 乙");
   });
 
+  it("块级片段发送：只保留选中的图文块并继续生成交错发送段", () => {
+    const sourceContentOverride = [
+      { type: "text" as const, text: "选中文字" },
+      { type: "image" as const, file: "selected.png", alt: "选中图片" },
+    ];
+    const buildState = state({
+      notes: [
+        note("rich", "整卡正文", {
+          contentBlocks: [
+            { type: "text", text: "整卡正文" },
+            { type: "image", file: "ignored.png" },
+          ],
+        }),
+      ],
+    });
+    const draft = buildDeliveryDraft(
+      input({
+        sourceKind: "note",
+        sourceItemIds: ["rich"],
+        sourceContentOverride,
+      }),
+      buildState
+    );
+
+    expect(draft.rawText).toBe("选中文字");
+    expect(draft.imageFiles).toEqual(["selected.png"]);
+    expect(draft.segments).toEqual([
+      { kind: "text", text: "选中文字" },
+      { kind: "image", fileIndex: 0 },
+    ]);
+    expect(draft.sourceContentOverride).toEqual(sourceContentOverride);
+    expect(draft.sourceTextOverride).toBeNull();
+
+    const rebuilt = rebuildPreflightDraft(draft, {}, buildState, 2);
+    expect(rebuilt.sourceContentOverride).toEqual(sourceContentOverride);
+    expect(rebuilt.imageFiles).toEqual(["selected.png"]);
+    expect(rebuilt.segments).toEqual(draft.segments);
+  });
+
   it("代码格式仅为单条保留语言，多条使用无语言代码块", () => {
     const single = buildDeliveryDraft(
       input({ sourceKind: "note", sourceItemIds: ["one"], format: "code" }),
@@ -312,6 +356,229 @@ describe("buildDeliveryDraft", () => {
 
     expect(single.finalText).toBe("```typescript\nconst n = 1\n```");
     expect(multiple.finalText).toBe("```\n1. const n = 1\n2. print(n)\n```");
+  });
+
+  it("去 Markdown 只改变本次正文，保留多卡编号与来源原文", () => {
+    const single = buildDeliveryDraft(
+      input({
+        sourceKind: "note",
+        sourceItemIds: ["one"],
+        markdownMode: "strip",
+      }),
+      state({ notes: [note("one", "# 标题\n\n**正文**与[链接](https://x.com)")] })
+    );
+    const multiple = buildDeliveryDraft(
+      input({ sourceItemIds: ["one", "two"], markdownMode: "strip" }),
+      state({
+        notes: [
+          note("one", "# 第一条"),
+          note("two", "- **要点**"),
+        ],
+      })
+    );
+
+    expect(single.rawText).toBe("# 标题\n\n**正文**与[链接](https://x.com)");
+    expect(single.finalText).toBe("标题\n\n正文与链接（https://x.com）");
+    expect(single.markdownMode).toBe("strip");
+    expect(multiple.rawText).toBe("1. # 第一条\n2. - **要点**");
+    expect(multiple.finalText).toBe("1. 第一条\n2. • 要点");
+  });
+
+  it("去 Markdown 只投影一次，保留转义字面量与代码围栏正文", () => {
+    const escaped = buildDeliveryDraft(
+      input({
+        sourceKind: "note",
+        sourceItemIds: ["escaped"],
+        markdownMode: "strip",
+      }),
+      state({ notes: [note("escaped", "\\*literal\\* 与 \\[literal\\](not-link)")] })
+    );
+    const fenced = buildDeliveryDraft(
+      input({
+        sourceKind: "note",
+        sourceItemIds: ["fenced"],
+        markdownMode: "strip",
+      }),
+      state({
+        notes: [note("fenced", "```text\n# literal heading\n**literal stars**\n```")],
+      })
+    );
+
+    expect(escaped.finalText).toBe("*literal* 与 [literal](not-link)");
+    expect(fenced.finalText).toBe("# literal heading\n**literal stars**");
+  });
+
+  it("目标方案可默认去 Markdown，显式原文仍能单次覆盖", () => {
+    const markdownFreeProfile = {
+      ...profile,
+      profile: {
+        ...profile.profile,
+        defaultFormat: "plain" as const,
+        defaultMarkdownMode: "strip" as const,
+      },
+    };
+    const build = (markdownMode?: "preserve") => buildDeliveryDraft(
+      input({
+        sourceKind: "note",
+        sourceItemIds: ["one"],
+        ...(markdownMode ? { format: "plain", markdownMode } : {}),
+      }),
+      state({
+        notes: [note("one", "# 标题\n\n**正文**")],
+        profileResolution: markdownFreeProfile,
+      })
+    );
+
+    const byProfile = build();
+    const originalOverride = build("preserve");
+    const originalFromCodeProfile = buildDeliveryDraft(
+      input({
+        sourceKind: "note",
+        sourceItemIds: ["one"],
+        format: "plain",
+        markdownMode: "preserve",
+      }),
+      state({
+        notes: [note("one", "# 标题\n\n**正文**")],
+        profileResolution: {
+          ...profile,
+          profile: { ...profile.profile, defaultFormat: "code" },
+        },
+      })
+    );
+
+    expect(byProfile.profileDefaultFormat).toBe("plain");
+    expect(byProfile.profileDefaultMarkdownMode).toBe("strip");
+    expect(byProfile.format).toBe("plain");
+    expect(byProfile.markdownMode).toBe("strip");
+    expect(byProfile.finalText).toBe("标题\n\n正文");
+    expect(originalOverride.markdownMode).toBe("preserve");
+    expect(originalOverride.finalText).toBe("# 标题\n\n**正文**");
+    expect(originalFromCodeProfile.format).toBe("plain");
+    expect(originalFromCodeProfile.finalText).toBe("# 标题\n\n**正文**");
+  });
+
+  it("目标方案默认去 Markdown 时仍不改代码卡和秘文信封", () => {
+    const markdownFreeDefault = {
+      ...profile,
+      profile: {
+        ...profile.profile,
+        defaultFormat: "plain" as const,
+        defaultMarkdownMode: "strip" as const,
+      },
+    };
+    const code = buildDeliveryDraft(
+      input({
+        sourceKind: "note",
+        sourceItemIds: ["code"],
+      }),
+      state({
+        notes: [note("code", "#include <stdio.h>", { codeLang: "c" })],
+        profileResolution: markdownFreeDefault,
+      })
+    );
+    const codeBatch = buildDeliveryDraft(
+      input({
+        sourceKind: "note-batch",
+        sourceItemIds: ["code-a", "code-b"],
+      }),
+      state({
+        notes: [
+          note("code-a", "const a = 1", { codeLang: "typescript" }),
+          note("code-b", "print('b')", { codeLang: "python" }),
+        ],
+        profileResolution: markdownFreeDefault,
+      })
+    );
+    const secret = buildDeliveryDraft(
+      input({
+        sourceKind: "note",
+        sourceItemIds: ["secret"],
+      }),
+      state({
+        notes: [note("secret", "TSK1#**cipher**", { kind: "secret" })],
+        profileResolution: markdownFreeDefault,
+      })
+    );
+    const secretUnderCodeProfile = buildDeliveryDraft(
+      input({ sourceKind: "note", sourceItemIds: ["secret"] }),
+      state({
+        notes: [note("secret", "TSK1#**cipher**", { kind: "secret" })],
+        profileResolution: {
+          ...profile,
+          profile: {
+            ...profile.profile,
+            defaultFormat: "code",
+            defaultMarkdownMode: "preserve",
+          },
+        },
+      })
+    );
+
+    expect(code.markdownMode).toBe("preserve");
+    expect(code.format).toBe("plain");
+    expect(code.finalText).toBe("#include <stdio.h>");
+    expect(codeBatch.markdownMode).toBe("preserve");
+    expect(codeBatch.format).toBe("plain");
+    expect(codeBatch.finalText).toContain("const a = 1");
+    expect(codeBatch.finalText).toContain("print('b')");
+    expect(secret.markdownMode).toBe("preserve");
+    expect(secret.format).toBe("plain");
+    expect(secret.finalText).toBe("TSK1#**cipher**");
+    expect(secretUnderCodeProfile.format).toBe("plain");
+    expect(secretUnderCodeProfile.finalText).toBe("TSK1#**cipher**");
+  });
+
+  it("去 Markdown 后图文卡逐文字块转换并保持交错发送顺序", () => {
+    const rich = note("rich", "# 开头\n**结尾**", {
+      contentBlocks: [
+        { type: "text", text: "# 开头" },
+        { type: "image", file: "a.png" },
+        { type: "text", text: "**结尾**" },
+      ],
+    });
+    const draft = buildDeliveryDraft(
+      input({
+        sourceKind: "note",
+        sourceItemIds: ["rich"],
+        markdownMode: "strip",
+      }),
+      state({ notes: [rich] })
+    );
+
+    expect(draft.finalText).toBe("开头\n结尾");
+    expect(draft.imageFiles).toEqual(["a.png"]);
+    expect(draft.segments).toEqual([
+      { kind: "text", text: "开头" },
+      { kind: "image", fileIndex: 0 },
+      { kind: "text", text: "结尾" },
+    ]);
+  });
+
+  it("提醒来源去 Markdown 时保留备注与核对项状态", () => {
+    const draft = buildDeliveryDraft(
+      input({
+        sourceKind: "task",
+        sourceItemIds: ["task"],
+        markdownMode: "strip",
+      }),
+      state({
+        tasks: [task("task", "# 发布", {
+          note: "**先检查**",
+          checklist: [
+            { id: "done", text: "构建", done: true },
+            { id: "todo", text: "上传", done: false },
+          ],
+        })],
+      })
+    );
+
+    expect(draft.rawText).toBe(
+      "# 发布\n\n备注：**先检查**\n\n- [x] 构建\n- [ ] 上传"
+    );
+    expect(draft.finalText).toBe(
+      "发布\n\n备注：先检查\n\n• ☒ 构建\n• ☐ 上传"
+    );
   });
 
   it("图片尺寸占位不进入正文，链接仍按列表顺序参与 Draft", () => {
@@ -534,6 +801,57 @@ describe("executeDeliveryDraft", () => {
     expect(draft.keepPanel).toBe(true);
     expect(draft.profileKeepPanel).toBe(false);
     expect(inspectDeliveryDraft(draft)).toBeNull();
+  });
+
+  it("去 Markdown 的图文交错段会原样进入 Native 请求", async () => {
+    const settings = useNotesStore.getState().settings;
+    useNotesStore.getState().setSettings({
+      firewallEnabled: false,
+      targetProfiles: settings.targetProfiles.map((item) =>
+        item.id === settings.defaultTargetProfileId
+          ? { ...item, defaultMarkdownMode: "strip" }
+          : item
+      ),
+    });
+    const id = useNotesStore.getState().addNote("# 开头\n**结尾**", {
+      contentBlocks: [
+        { type: "text", text: "# 开头" },
+        { type: "image", file: "a.png" },
+        { type: "text", text: "**结尾**" },
+      ],
+    }).id!;
+    useNotesStore.getState().setChecked([id]);
+    const draft = executableNoteDraft([id]);
+
+    await executeDeliveryDraft(draft);
+
+    expect(apiMocks.sendDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "开头\n结尾",
+        segments: [
+          { kind: "text", text: "开头" },
+          { kind: "image", fileIndex: 0 },
+          { kind: "text", text: "结尾" },
+        ],
+      })
+    );
+  });
+
+  it("Profile 的 Markdown 默认变化会使已打开 Draft 失效", () => {
+    const id = useNotesStore.getState().addNote("# 待发送").id!;
+    useNotesStore.getState().setChecked([id]);
+    const draft = executableNoteDraft([id]);
+    const current = useNotesStore.getState().settings;
+    useNotesStore.getState().setSettings({
+      targetProfiles: current.targetProfiles.map((item) =>
+        item.id === current.defaultTargetProfileId
+          ? { ...item, defaultMarkdownMode: "strip" }
+          : item
+      ),
+    });
+
+    expect(draft.profileDefaultMarkdownMode).toBe("preserve");
+    expect(inspectDeliveryDraft(draft)).toBe("profile");
   });
 
   it("Prompt 文本未变但被移到别组时，旧 Draft 仍判定来源过期", () => {
@@ -850,6 +1168,7 @@ describe("executeDeliveryDraft", () => {
         bundleIds: [target.bundleId!],
         promptGroupId: "general",
         defaultFormat: "plain",
+        defaultMarkdownMode: "preserve",
         enterPolicy: "allow",
         privacyPolicy: "allowRaw",
         keepPanel: false,
@@ -899,6 +1218,7 @@ describe("executeDeliveryDraft", () => {
         bundleIds: [target.bundleId!],
         promptGroupId: "general",
         defaultFormat: "plain",
+        defaultMarkdownMode: "preserve",
         enterPolicy: "never",
         privacyPolicy: "allowRaw",
         keepPanel: false,

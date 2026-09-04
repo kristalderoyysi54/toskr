@@ -52,4 +52,24 @@ describe("EditableRichImageBlock", () => {
     expect(html).toContain('data-rich-image-edit-block="1"');
     expect(html).toContain('aria-label="删除图片 1"');
   });
+
+  it("图文编辑态选中图片后显示发送选中入口", () => {
+    const html = renderToStaticMarkup(
+      <EditableRichImageBlock
+        block={{ type: "image", file: "selected.png", alt: "订单截图" }}
+        files={["selected.png"]}
+        imageIndex={0}
+        blockIndex={1}
+        selected
+        onSelect={vi.fn()}
+        onOpen={vi.fn()}
+        onRemove={vi.fn()}
+        onSend={vi.fn()}
+      />
+    );
+
+    expect(html).toContain('data-selected="true"');
+    expect(html).toContain("发送选中");
+    expect(html).toContain("只发送图片 1");
+  });
 });

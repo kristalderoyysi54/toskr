@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { ArrowUpRight, Check, ChevronUp, FolderInput, X } from "lucide-react";
+import { ArrowUpRight, Check, ChevronUp, FolderInput, Wand2, X } from "lucide-react";
 
-import { SimpleMenu, SimpleMenuItem } from "@/components/SimpleMenu";
+import {
+  SimpleMenu,
+  SimpleMenuItem,
+  SimpleMenuLabel,
+} from "@/components/SimpleMenu";
 import { IconButton } from "@/components/ui/icon-button";
 import { PillInput } from "@/components/ui/pill-input";
 import { enrichLinkMeta, openNoteDetail } from "@/lib/actions";
@@ -17,7 +21,8 @@ import {
 } from "@/lib/dataGeneration";
 import { useNoteThumb } from "@/lib/media";
 import { api } from "@/lib/tauri";
-import { tip } from "@/lib/tip";
+import { TEXT_OPS, type TextOp } from "@/lib/textops";
+import { setPendingUndo, tip } from "@/lib/tip";
 import { useNotesStore } from "@/store/notesStore";
 import { useUIStore, type DraftPendingImage } from "@/store/uiStore";
 import {
@@ -129,6 +134,14 @@ export function DraftInput() {
     }
   };
   const storeDraft = useNotesStore((s) => s.draftText);
+  /** 显式操作立即同步加密 Store，避免 300ms 输入防抖覆盖处理/撤销结果。 */
+  const replaceValueImmediately = (text: string) => {
+    if (mirrorTimer.current !== null) window.clearTimeout(mirrorTimer.current);
+    mirrorTimer.current = null;
+    setValueState(text);
+    valueRef.current = text;
+    useNotesStore.getState().setDraftText(text);
+  };
   useEffect(() => {
     // 水合可能晚于挂载（skipHydration）：持久草稿到达且本地仍为空时采纳；
     // 用户已开始输入则以本地为准，不覆盖
@@ -254,6 +267,23 @@ export function DraftInput() {
     }
     setValue("");
     setPending([]);
+  };
+
+  const applyDraftTextOp = (textOp: TextOp) => {
+    const before = valueRef.current;
+    if (!before) return;
+    try {
+      const after = textOp.apply(before);
+      if (after === before) {
+        tip("info", "内容无变化");
+        return;
+      }
+      replaceValueImmediately(after);
+      setPendingUndo(() => replaceValueImmediately(before));
+      tip("ok", `已处理草稿 · ${textOp.label}`, true);
+    } catch {
+      tip("warn", `${textOp.label}失败：草稿内容不符合格式`);
+    }
   };
 
   /** ↗ 转大窗：当前草稿（文字 + 暂存图）落卡后直接开详情窗接着写；
@@ -404,15 +434,57 @@ export function DraftInput() {
           ) : undefined
         }
         rightSlot={
-          <IconButton
-            label="转大窗编辑（草稿与暂存图一起带走）"
-            stopPropagation={false}
-            disabled={dataLocked}
-            onClick={expandToDetail}
-            className="mb-0.5"
-          >
-            <ArrowUpRight className="size-3.5" />
-          </IconButton>
+          <div className="flex items-center gap-0.5">
+            {!!value && (
+              <SimpleMenu
+                align="end"
+                side="top"
+                className="flex"
+                menuAriaLabel="处理新增草稿"
+                menuClassName="w-40"
+                trigger={({ open, toggle, controls }) => (
+                  <IconButton
+                    label="处理新增草稿"
+                    stopPropagation={false}
+                    pressed={open}
+                    aria-haspopup="menu"
+                    aria-expanded={open}
+                    aria-controls={controls}
+                    onClick={toggle}
+                    className="mb-0.5"
+                  >
+                    <Wand2 className="size-3.5" />
+                  </IconButton>
+                )}
+              >
+                {(close) => (
+                  <>
+                    <SimpleMenuLabel>处理当前草稿</SimpleMenuLabel>
+                    {TEXT_OPS.map((textOp) => (
+                      <SimpleMenuItem
+                        key={textOp.id}
+                        onClick={() => {
+                          close();
+                          applyDraftTextOp(textOp);
+                        }}
+                      >
+                        {textOp.label}
+                      </SimpleMenuItem>
+                    ))}
+                  </>
+                )}
+              </SimpleMenu>
+            )}
+            <IconButton
+              label="转大窗编辑（草稿与暂存图一起带走）"
+              stopPropagation={false}
+              disabled={dataLocked}
+              onClick={expandToDetail}
+              className="mb-0.5"
+            >
+              <ArrowUpRight className="size-3.5" />
+            </IconButton>
+          </div>
         }
         placeholder={pending.length > 0 ? "配点文字，回车一起入卡…" : "添加笔记或提示词…"}
       />

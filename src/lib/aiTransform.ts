@@ -103,6 +103,8 @@ export interface TransformSession {
   result: TransformResult | null;
   error: string | null;
   restoreText: string | null;
+  /** 当前 applied 状态对应的最终输出投影；用于区分后续正文改写。 */
+  appliedText: string | null;
   transportPending: boolean;
 }
 
@@ -113,6 +115,7 @@ export function emptyTransformSession(): TransformSession {
     result: null,
     error: null,
     restoreText: null,
+    appliedText: null,
     transportPending: false,
   };
 }

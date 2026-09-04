@@ -151,6 +151,7 @@ function sameDraftProfile(draft: DeliveryDraft): boolean {
     current.profileId === draft.targetProfileId &&
     current.promptGroup.id === draft.promptGroupId &&
     current.profile.defaultFormat === draft.profileDefaultFormat &&
+    current.profile.defaultMarkdownMode === draft.profileDefaultMarkdownMode &&
     current.profile.enterPolicy === draft.enterPolicy &&
     current.profile.keepPanel === draft.profileKeepPanel &&
     privacyCurrent;
@@ -162,12 +163,12 @@ function sameStrings(left: readonly string[], right: readonly string[]): boolean
 }
 
 /**
- * 发送前复核交错顺序仍与 Draft 现状对齐：预检改过正文（finalText 漂离
- * rawText）或图片清单数量变化都退回默认顺序，宁可不交错也不发错内容。
+ * 发送前复核交错顺序仍与 Draft 的自动组装基线对齐：预检手改正文
+ * （finalText 漂离 assembledText）或图片清单数量变化都退回默认顺序。
  */
 function draftSegmentsForSend(draft: DeliveryDraft) {
   const segments = draft.segments;
-  if (!segments || draft.finalText !== draft.rawText) return undefined;
+  if (!segments || draft.finalText !== draft.assembledText) return undefined;
   const referenced = segments.flatMap((segment) =>
     segment.kind === "image" ? [segment.fileIndex] : []
   );
@@ -207,9 +208,11 @@ function draftSourceIsCurrent(draft: DeliveryDraft): boolean {
       sourceKind: draft.sourceKind,
       sourceItemIds: draft.sourceItemIds,
       format: draft.format,
+      markdownMode: draft.markdownMode,
       promptSnippetId: draft.promptSnippetId,
       promptTemplate: draft.promptTemplate ?? undefined,
       sourceTextOverride: draft.sourceTextOverride ?? undefined,
+      sourceContentOverride: draft.sourceContentOverride ?? undefined,
     },
     {
       notes: state.notes,

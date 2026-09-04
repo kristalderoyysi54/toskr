@@ -33,6 +33,7 @@ import {
   type NoteContentBlock,
 } from "@/lib/noteContentBlocks";
 import { cn } from "@/lib/utils";
+import { stats } from "@/lib/textStats";
 import { headerGradient } from "@/components/NoteCard";
 import {
   CLIPBOARD_ID,
@@ -41,14 +42,6 @@ import {
 } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
 import { useTargetStore } from "@/store/targetStore";
-
-/** 文本统计（Paste 风格）：字符 / 单词（CJK 按字计）/ 行。 */
-export function stats(text: string) {
-  const chars = [...text].length;
-  const words = (text.match(/[一-鿿぀-ヿ]|[a-zA-Z0-9_'-]+/g) ?? []).length;
-  const lines = text.split("\n").length;
-  return { chars, words, lines };
-}
 
 type Rect = { top: number; left: number; width: number; height: number };
 

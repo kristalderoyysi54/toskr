@@ -2,6 +2,7 @@ import { useEffect, useState, type RefObject } from "react";
 
 const verticalPreloadMargin = "160px 0px";
 const horizontalPreloadMargin = "0px 160px";
+const menuPreloadMargin = "32px 0px";
 interface RootObserver {
   observer: IntersectionObserver;
   listeners: Map<Element, Set<() => void>>;
@@ -10,14 +11,19 @@ const roots = new Map<Element | null, RootObserver>();
 
 function scrollRoot(target: Element): Element | null {
   return typeof target.closest === "function"
-    ? target.closest("[data-radix-scroll-area-viewport], [data-strip-scroller]")
+    ? target.closest(
+        "[data-radix-scroll-area-viewport], [data-strip-scroller], [data-deferred-media-root]"
+      )
     : null;
 }
 
 function preloadMargin(root: Element | null): string {
-  return root && typeof root.hasAttribute === "function" && root.hasAttribute("data-strip-scroller")
-    ? horizontalPreloadMargin
-    : verticalPreloadMargin;
+  if (!root || typeof root.hasAttribute !== "function") {
+    return verticalPreloadMargin;
+  }
+  if (root.hasAttribute("data-strip-scroller")) return horizontalPreloadMargin;
+  if (root.hasAttribute("data-deferred-media-root")) return menuPreloadMargin;
+  return verticalPreloadMargin;
 }
 
 function rootObserver(root: Element | null): RootObserver {

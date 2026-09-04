@@ -9,9 +9,10 @@ import {
   ENTER_POLICY_STATUS_LABEL,
   TARGET_PROFILE_SOURCE_LABEL,
 } from "@/lib/targetLens";
-import type {
-  TargetProfile,
-  TargetProfileResolution,
+import {
+  targetProfileOutputMode,
+  type TargetProfile,
+  type TargetProfileResolution,
 } from "@/lib/targetProfiles";
 import { cn } from "@/lib/utils";
 
@@ -62,15 +63,13 @@ export function DeliveryTrack({
   targetBundleId: string | null;
   targetName: string;
 }) {
-  const configuredFormat = DELIVERY_FORMAT_OPTIONS.find(
-    (option) => option.value === configuredProfile.defaultFormat
-  ) ?? DELIVERY_FORMAT_OPTIONS[0];
-  const previewFormat = DELIVERY_FORMAT_OPTIONS.find(
-    (option) => option.value === previewResolution.profile.defaultFormat
-  ) ?? DELIVERY_FORMAT_OPTIONS[0];
-  const currentFormat = DELIVERY_FORMAT_OPTIONS.find(
-    (option) => option.value === currentResolution.profile.defaultFormat
-  ) ?? DELIVERY_FORMAT_OPTIONS[0];
+  const optionForProfile = (profile: TargetProfile) =>
+    DELIVERY_FORMAT_OPTIONS.find(
+      (option) => option.value === targetProfileOutputMode(profile)
+    ) ?? DELIVERY_FORMAT_OPTIONS[0];
+  const configuredFormat = optionForProfile(configuredProfile);
+  const previewFormat = optionForProfile(previewResolution.profile);
+  const currentFormat = optionForProfile(currentResolution.profile);
   const configuredPrivacy = PRIVACY_POLICY_OPTIONS.find(
     (option) => option.value === configuredProfile.privacyPolicy
   )?.label ?? "未设置";
@@ -167,15 +166,6 @@ export function DeliveryTrack({
         </TrackCard>
       </ol>
 
-      <div className="mt-2 rounded-lg border border-border/60 bg-card px-2 py-1.5">
-        <p className="text-micro font-medium text-muted-foreground">本地预演输出示例（不会发送）</p>
-        <pre className="mt-0.5 max-w-full whitespace-pre-wrap break-words font-mono text-micro leading-relaxed text-foreground">
-          {previewFormat.example}
-        </pre>
-      </div>
-      <p className="mt-2 text-micro text-muted-foreground">
-        预览只解析规则，不会访问剪贴板，也不会模拟粘贴或回车。
-      </p>
     </div>
   );
 }

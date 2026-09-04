@@ -3,6 +3,7 @@ import { useMemo } from "react";
 
 import { AppAssignmentPicker } from "@/components/settings/AppAssignmentPicker";
 import { DeliveryTrack } from "@/components/settings/DeliveryTrack";
+import { ProfileOutputPreview } from "@/components/settings/ProfileOutputPreview";
 import { SimpleSelect } from "@/components/SimpleSelect";
 import { Segmented } from "@/components/ui/segmented";
 import {
@@ -15,6 +16,8 @@ import {
 import type { TargetSnapshot } from "@/lib/tauri";
 import {
   resolveTargetProfile,
+  targetProfileOutputMode,
+  targetProfileOutputPatch,
   type PromptGroup,
   type PromptSnippet,
   type TargetProfile,
@@ -179,10 +182,10 @@ export function ProfileEditor({
         </p>
 
         <fieldset className="mt-3">
-          <legend className="mb-1 text-label text-muted-foreground">输出格式</legend>
-          <div className="grid gap-2 sm:grid-cols-2">
+          <legend className="mb-1 text-label text-muted-foreground">默认发送方式</legend>
+          <div className="grid gap-2 sm:grid-cols-3">
             {DELIVERY_FORMAT_OPTIONS.map((option) => {
-              const selected = profile.defaultFormat === option.value;
+              const selected = targetProfileOutputMode(profile) === option.value;
               return (
                 <label
                   key={option.value}
@@ -192,7 +195,7 @@ export function ProfileEditor({
                     type="radio"
                     name={`profile-output-format-${profile.id}`}
                     checked={selected}
-                    onChange={() => onUpdate({ defaultFormat: option.value })}
+                    onChange={() => onUpdate(targetProfileOutputPatch(option.value))}
                     className="peer sr-only"
                   />
                   <span className={cn(
@@ -209,7 +212,11 @@ export function ProfileEditor({
               );
             })}
           </div>
+          <p className="mt-1 text-micro text-muted-foreground">
+            仅影响发送副本；代码卡和秘文始终保留原内容。
+          </p>
         </fieldset>
+        <ProfileOutputPreview mode={targetProfileOutputMode(profile)} />
       </EditorSection>
 
       <EditorSection number={4} title="发送行为">

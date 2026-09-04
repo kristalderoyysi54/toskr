@@ -1,4 +1,5 @@
 import {
+  deliveryEventOutputMode,
   recordDeliveryEvent,
   type DeliveryEvent,
 } from "@/lib/deliveryActivityCore";
@@ -156,6 +157,9 @@ export function resultCapturedEvent(
     metricsEligible: delivery.metricsEligible !== false,
     metricsEpoch: delivery.metricsEpoch ?? 0,
     transformRecipeId: delivery.transformRecipeId ?? null,
+    ...(deliveryEventOutputMode(delivery)
+      ? { format: delivery.format, markdownMode: delivery.markdownMode }
+      : {}),
     verificationStatus: null,
     verificationCheckCount: null,
     verificationIssueCount: null,

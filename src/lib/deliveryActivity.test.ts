@@ -42,6 +42,7 @@ vi.mock("@/lib/tauri", async (importOriginal) => {
 import {
   deliveryActivityRecords,
   deliveryEventFromDraft,
+  deliveryEventOutputMode,
   flushDeliveryActivityWrites,
   getRecentDeliveryEventsCached,
   invalidateDeliveryActivityCache,
@@ -134,6 +135,7 @@ function draft(overrides: Partial<DeliveryDraft> = {}): DeliveryDraft {
       failureMessage: null,
     }],
     format: "plain",
+    markdownMode: "preserve",
     promptSnippetId: "snippet-secret",
     transformRecipeId: null,
     promptSnippetGroupId: "general",
@@ -143,6 +145,7 @@ function draft(overrides: Partial<DeliveryDraft> = {}): DeliveryDraft {
     promptGroupId: "general",
     profileSource: "exact",
     profileDefaultFormat: "plain",
+    profileDefaultMarkdownMode: "preserve",
     profileKeepPanel: false,
     privacyPolicy: "requireRedaction",
     firewallEnabled: true,
@@ -274,7 +277,9 @@ describe("delivery activity", () => {
       "eventId",
       "eventType",
       "firewallCounts",
+      "format",
       "imageCount",
+      "markdownMode",
       "metricsEligible",
       "metricsEpoch",
       "profileId",
@@ -298,6 +303,7 @@ describe("delivery activity", () => {
     expect(event.redactionCount).toBe(2);
     expect(event.textCharCount).toBe("redacted body".length);
     expect(event.transformRecipeId).toBe("summarize");
+    expect(deliveryEventOutputMode(event)).toBe("plain");
     for (const forbidden of [
       "secret raw body",
       "secret prompt",
@@ -405,6 +411,70 @@ describe("delivery activity", () => {
     expect(useDeliveryStore.getState().draft?.targetSnapshot?.token).not.toBe(
       "old-secret-token"
     );
+  });
+
+  it("成功发送可沿用历史格式重新准备，但仍刷新当前目标并强制预检", async () => {
+    const noteId = useNotesStore.getState().addNote("# 标题\n\n**重点**").id!;
+    const scan = vi.fn(async (text: string) => ({
+      findings: [],
+      warnings: [],
+      inputUtf16: text.length,
+      scannedUtf16: text.length,
+      complete: true,
+    }));
+    const refresh = vi.fn(async () => {
+      useTargetStore.setState({
+        snapshot: refreshedTarget,
+        status: "ready",
+        reason: null,
+      });
+      return refreshedTarget;
+    });
+
+    const result = await reprepareDeliveryEvent(
+      failedEvent({
+        eventType: "sendSent",
+        status: "sent",
+        reasonCode: null,
+        sourceItemIds: [noteId],
+        format: "plain",
+        markdownMode: "strip",
+      }),
+      { refresh, scan }
+    );
+
+    const prepared = useDeliveryStore.getState().draft;
+    expect(result).toEqual({ ok: true });
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(sendDelivery).not.toHaveBeenCalled();
+    expect(prepared).toMatchObject({
+      format: "plain",
+      markdownMode: "strip",
+      targetSnapshot: refreshedTarget,
+    });
+    expect(prepared?.finalText).not.toContain("#");
+    expect(prepared?.finalText).not.toContain("**");
+    expect(scan).toHaveBeenCalledWith(prepared?.finalText);
+  });
+
+  it("旧成功记录未保存格式时拒绝伪装成同格式重发", async () => {
+    const noteId = useNotesStore.getState().addNote("仍存在的来源").id!;
+    const refresh = vi.fn();
+
+    const result = await reprepareDeliveryEvent(
+      failedEvent({
+        eventType: "sendSent",
+        status: "sent",
+        reasonCode: null,
+        sourceItemIds: [noteId],
+      }),
+      { refresh }
+    );
+
+    expect(result).toEqual({ ok: false, reason: "unsupported" });
+    expect(refresh).not.toHaveBeenCalled();
+    expect(useDeliveryStore.getState().open).toBe(false);
+    expect(sendDelivery).not.toHaveBeenCalled();
   });
 
   it("图片 Firewall 阻止记录可重新准备，并以无正文元数据标记重试", async () => {

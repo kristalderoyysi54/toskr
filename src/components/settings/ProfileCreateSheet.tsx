@@ -7,13 +7,18 @@ import { Button } from "@/components/ui/button";
 import { floatingSurface } from "@/components/ui/floating-surface";
 import { IconButton } from "@/components/ui/icon-button";
 import {
+  DELIVERY_FORMAT_OPTIONS,
   PROFILE_PRESETS,
   buildAppMoveQuestion,
   createProfileFromPreset,
+  recommendNewTargetProfileOutput,
   type ProfilePresetId,
 } from "@/lib/profileManager";
 import type { TargetSnapshot } from "@/lib/tauri";
-import type { TargetProfile } from "@/lib/targetProfiles";
+import {
+  targetProfileOutputMode,
+  type TargetProfile,
+} from "@/lib/targetProfiles";
 import { cn } from "@/lib/utils";
 
 export function ProfileCreateSheet({
@@ -36,6 +41,7 @@ export function ProfileCreateSheet({
   const [presetId, setPresetId] = useState<ProfilePresetId>("safe");
   const [name, setName] = useState("稳妥发送");
   const [includeCurrent, setIncludeCurrent] = useState(false);
+  const [presetTouched, setPresetTouched] = useState(false);
   const [confirmedMoveBundleId, setConfirmedMoveBundleId] = useState<string | null>(null);
   const currentBundleId = currentTarget?.ready ? currentTarget.bundleId : null;
   const currentAppName = currentTarget?.appName || currentBundleId || "当前目标";
@@ -51,12 +57,32 @@ export function ProfileCreateSheet({
   const moveConfirmed = Boolean(
     currentBundleId && confirmedMoveBundleId === currentBundleId
   );
+  const outputRecommendation = useMemo(
+    () =>
+      recommendNewTargetProfileOutput({
+        bundleId: currentBundleId,
+        appName: currentTarget?.appName,
+        profiles,
+      }),
+    [currentBundleId, currentTarget?.appName, profiles]
+  );
+  const selectedPreset =
+    PROFILE_PRESETS.find((item) => item.id === presetId) ?? PROFILE_PRESETS[3];
+  const selectedOutputLabel =
+    DELIVERY_FORMAT_OPTIONS.find(
+      (option) => option.value === targetProfileOutputMode(selectedPreset)
+    )?.label ?? "原文";
+  const recommendedOutputLabel =
+    DELIVERY_FORMAT_OPTIONS.find(
+      (option) => option.value === outputRecommendation?.outputMode
+    )?.label ?? "原文";
 
   useEffect(() => {
     if (!open) return;
     setPresetId("safe");
     setName("稳妥发送");
     setIncludeCurrent(false);
+    setPresetTouched(false);
     setConfirmedMoveBundleId(null);
   }, [open]);
 
@@ -73,6 +99,7 @@ export function ProfileCreateSheet({
     const previous = PROFILE_PRESETS.find((item) => item.id === presetId);
     const next = PROFILE_PRESETS.find((item) => item.id === nextId);
     setPresetId(nextId);
+    setPresetTouched(true);
     if (!name.trim() || name === previous?.name) setName(next?.name ?? "自定义");
     setConfirmedMoveBundleId(null);
   };
@@ -85,6 +112,10 @@ export function ProfileCreateSheet({
       name,
       promptGroupId,
       bundleId: includeCurrent ? currentBundleId : null,
+      defaultOutputMode:
+        includeCurrent && !presetTouched
+          ? outputRecommendation?.outputMode
+          : undefined,
     });
     onCreate(profile, needsMoveConfirmation);
     onOpenChange(false);
@@ -153,6 +184,23 @@ export function ProfileCreateSheet({
                 })}
               </div>
             </fieldset>
+
+            {outputRecommendation && (
+              <p
+                aria-live="polite"
+                className="mt-2 rounded-lg border border-primary/20 bg-primary/5 p-2 text-label text-muted-foreground"
+              >
+                {presetTouched
+                  ? `已手动选择“${selectedPreset.name}”，将采用其“${selectedOutputLabel}”输出；应用类型推荐不再覆盖。`
+                  : outputRecommendation.appKind === "unknown"
+                    ? includeCurrent
+                      ? "未识别应用类型，新方案安全回退为“原文”；不会修改已有方案。"
+                      : "未识别应用类型；勾选“添加当前目标应用”后，新方案将安全回退为“原文”。"
+                    : includeCurrent
+                      ? `已识别为${outputRecommendation.appKindLabel}：新方案推荐“${recommendedOutputLabel}”。仅改变输出初始值，回车与隐私策略仍按“${selectedPreset.name}”。`
+                      : `识别为${outputRecommendation.appKindLabel}；勾选“添加当前目标应用”后，新方案输出将推荐为“${recommendedOutputLabel}”。`}
+              </p>
+            )}
 
             <label className="mt-4 block text-label font-medium text-muted-foreground">
               方案名称

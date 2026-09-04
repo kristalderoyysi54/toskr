@@ -72,6 +72,7 @@ const profileResolution: TargetProfileResolution = {
     bundleIds: ["com.openai.codex"],
     promptGroupId: "general",
     defaultFormat: "plain",
+    defaultMarkdownMode: "preserve",
     enterPolicy: "never",
     privacyPolicy: "requireRedaction",
     keepPanel: false,
@@ -104,6 +105,7 @@ function draft(overrides: Partial<DeliveryDraft> = {}): DeliveryDraft {
     imageFiles: [],
     imageFirewall: [],
     format: "plain",
+    markdownMode: "preserve",
     promptSnippetId: null,
     promptSnippetGroupId: null,
     promptTemplate: null,
@@ -112,6 +114,7 @@ function draft(overrides: Partial<DeliveryDraft> = {}): DeliveryDraft {
     promptGroupId: "general",
     profileSource: "exact",
     profileDefaultFormat: "plain",
+    profileDefaultMarkdownMode: "preserve",
     profileKeepPanel: false,
     privacyPolicy: "requireRedaction",
     firewallEnabled: true,
@@ -186,6 +189,7 @@ describe("shouldOpenPreflight", () => {
       draft({ imageFiles: ["one.png"] }),
       draft({ promptSnippetId: "review", promptTemplate: "审查：{内容}" }),
       draft({ format: "code" }),
+      draft({ markdownMode: "strip" }),
       draft({ enterPolicy: "confirm", enterDecisionConfirmed: false }),
       draft({ enterPolicy: "allow", pressEnter: true }),
       draft({ warnings: ["source-missing"] }),
@@ -301,6 +305,56 @@ describe("rebuildPreflightDraft", () => {
     expect(original.finalText).toBe("正文");
   });
 
+  it("预检切换去 Markdown 后重建实际正文并保留原始来源", () => {
+    const original = draft({
+      sourceItemIds: ["one"],
+      selectionItemIds: ["one"],
+      rawText: "# 标题\n\n**正文**",
+      assembledText: "# 标题\n\n**正文**",
+      finalText: "# 标题\n\n**正文**",
+    });
+    const buildState: DeliveryDraftBuildState = {
+      notes: [{
+        id: "one",
+        text: "# 标题\n\n**正文**",
+        sectionId: "inbox",
+        done: false,
+        createdAt: 1,
+      }],
+      tasks: [],
+      promptSnippets: [],
+      checkedItemIds: ["one"],
+      targetSnapshot: target,
+      profileResolution,
+      panelPinned: false,
+      dataGeneration: 1,
+      firewallEnabled: true,
+      firewallDisabledWarnCategories: [],
+      aliasEntitiesEnabled: true,
+      aliasEntities: [],
+    };
+    const rebuilt = rebuildPreflightDraft(
+      original,
+      { format: "plain", markdownMode: "strip" },
+      buildState,
+      2
+    );
+
+    expect(rebuilt.rawText).toBe("# 标题\n\n**正文**");
+    expect(rebuilt.finalText).toBe("标题\n\n正文");
+    expect(rebuilt.markdownMode).toBe("strip");
+
+    const code = rebuildPreflightDraft(
+      rebuilt,
+      { format: "code", markdownMode: "preserve" },
+      buildState,
+      3
+    );
+    expect(code.rawText).toBe("# 标题\n\n**正文**");
+    expect(code.finalText).toBe("```\n# 标题\n\n**正文**\n```");
+    expect(code.markdownMode).toBe("preserve");
+  });
+
   it("确认新目标会保留本次内容与图片遮挡，但撤销旧目标的原文放行", () => {
     const nextTarget: TargetSnapshot = {
       ...target,
@@ -329,6 +383,7 @@ describe("rebuildPreflightDraft", () => {
     };
     const original = draft({
       finalText: "用户修改后的正文",
+      markdownMode: "strip",
       privacyDecision: {
         excludedFindingIds: ["text-secret"],
         rawConfirmation: {
@@ -381,6 +436,8 @@ describe("rebuildPreflightDraft", () => {
       targetProfileId: "target-b",
       promptGroupId: "coding",
       profileDefaultFormat: "code",
+      profileDefaultMarkdownMode: "preserve",
+      markdownMode: "strip",
       privacyPolicy: "confirmRaw",
       enterPolicy: "confirm",
       enterDecisionConfirmed: false,

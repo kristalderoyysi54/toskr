@@ -1,12 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { motion } from "motion/react";
 import {
   Check,
+  ChevronDown,
   ImagePlus,
   Pin,
   Send,
+  Wand2,
   X,
 } from "lucide-react";
 
@@ -17,14 +19,22 @@ import {
   RichNoteContent,
   RichNoteTextEditor,
 } from "@/components/RichNoteContent";
-import { stats } from "@/components/PreviewOverlay";
+import {
+  SendTargetAppItem,
+  type SendTargetApp,
+} from "@/components/SendTargetAppItem";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Kbd } from "@/components/ui/kbd";
 import { MacTrafficLights } from "@/components/ui/mac-close-button";
 import { DETAIL_STATE_EVENT } from "@/lib/detailWindows";
 import { Segmented } from "@/components/ui/segmented";
-import { SimpleMenu, SimpleMenuItem } from "@/components/SimpleMenu";
+import {
+  SimpleMenu,
+  SimpleMenuItem,
+  SimpleMenuLabel,
+  SimpleMenuSeparator,
+} from "@/components/SimpleMenu";
 import { TextSelectionToolbar } from "@/components/TextSelectionToolbar";
 import {
   NOTE_EDIT_AUTOSAVE_INTERVAL_MS,
@@ -34,8 +44,11 @@ import {
   type NoteEditPayload,
   type NoteEditSyncResultPayload,
   type NotePreviewPayload,
+  type NoteSendPayload,
   type NoteTagsPayload,
 } from "@/lib/actions";
+import type { MarkdownSendMode } from "@/lib/delivery/types";
+import type { DeliveryFormat } from "@/lib/targetProfiles";
 import { requestAliasQuickAdd } from "@/lib/aliasQuickAdd";
 import { highlightCode } from "@/lib/code";
 import { NOTE_EDITOR_SESSION_RELEASE_EVENT } from "@/lib/editorSessionMedia";
@@ -50,6 +63,8 @@ import { textareaSelectionAnchor } from "@/lib/selectionAnchor";
 import { springSnappy } from "@/lib/motion";
 import {
   hasMixedNoteContent,
+  mapNoteTextBlocks,
+  mapNoteTextSelection,
   normalizeNoteContentBlocks,
   replaceNoteImageFile,
   textBlockRanges,
@@ -85,6 +100,11 @@ import {
   type TextSelection,
 } from "@/lib/selectionFormat";
 import {
+  applyTextOpToSelection,
+  TEXT_OPS,
+  type TextOp,
+} from "@/lib/textops";
+import {
   api,
   TARGET_CHANGED_EVENT,
   type PastedImage,
@@ -102,6 +122,8 @@ import {
 } from "@/store/notesStore";
 import { tip } from "@/lib/tip";
 import { cn } from "@/lib/utils";
+import { stats } from "@/lib/textStats";
+import { planTextPreviewRender } from "@/lib/textPreviewPerformance";
 import {
   applyTargetEvent,
   readTarget,
@@ -351,6 +373,9 @@ export default function TextPreviewView() {
     NoteContentBlock[]
   >([]);
   const [mdView, setMdView] = useState(false);
+  // 超长内容先提交轻量首屏，再跨一个真实绘制帧挂载完整编辑器/渲染树。
+  const [fullContentReady, setFullContentReady] = useState(true);
+  const contentRevealFramesRef = useRef<number[]>([]);
   // 📌 固定窗口：发送/发送选中后不自动关窗；主动关闭（X/Esc/空格）与数据失效关窗不受影响
   const [winPinned, setWinPinned] = useState(false);
   const winPinnedRef = useRef(winPinned);
@@ -361,6 +386,11 @@ export default function TextPreviewView() {
   // 核对清单在预览里被点选后草稿（ref）已变，靠它触发重渲
   const [, setTaskTick] = useState(0);
   const [textSelection, setTextSelection] = useState<TextSelection | null>(null);
+  const [richSelectionActive, setRichSelectionActive] = useState(false);
+  const [richTextSelection, setRichTextSelection] = useState<{
+    text: string;
+    selection: TextSelection;
+  } | null>(null);
   // 选词模式：正文按分词渲染为可点选区块，点选驱动 textSelection（复用选中工具条）
   const [pickMode, setPickMode] = useState(false);
   // 粒度：词（Intl.Segmenter 分词）/ 段（按换行分段）；切换即清空已选范围
@@ -384,12 +414,8 @@ export default function TextPreviewView() {
   const [glassOn, setGlassOn] = useState(true);
   /** 本次载荷是否新建占位（selectAll 只有新建流程传）：关窗未改则回收。 */
   const blankDraftRef = useRef(false);
-  // 长按发送选目标：候选 = 运行中的常规 GUI 应用；点选后采信为目标再发送
-  const [sendTargets, setSendTargets] = useState<
-    { pid: number; name: string; bundleId: string }[]
-  >([]);
-  const sendLongPressTimerRef = useRef<number | null>(null);
-  const sendLongPressFiredRef = useRef(false);
+  // 发送菜单候选 = 运行中的常规 GUI 应用；点选后采信为目标再发送
+  const [sendTargets, setSendTargets] = useState<SendTargetApp[]>([]);
   fontSizeRef.current = fontSize;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // 正文由 textarea DOM 持有，避免每次按键的 React 回写切断原生撤销分组。
@@ -685,6 +711,22 @@ export default function TextPreviewView() {
       }
       sessionPastedImagesRef.current.clear();
       appliedInsertOperationsRef.current.clear();
+      for (const frame of contentRevealFramesRef.current) {
+        window.cancelAnimationFrame(frame);
+      }
+      contentRevealFramesRef.current = [];
+      const renderPlan = planTextPreviewRender(p.text);
+      setFullContentReady(!renderPlan.deferred);
+      if (renderPlan.deferred) {
+        const first = window.requestAnimationFrame(() => {
+          const second = window.requestAnimationFrame(() => {
+            contentRevealFramesRef.current = [];
+            setFullContentReady(true);
+          });
+          contentRevealFramesRef.current = [second];
+        });
+        contentRevealFramesRef.current = [first];
+      }
       noteRef.current = p;
       setNote(p);
       void api
@@ -739,6 +781,15 @@ export default function TextPreviewView() {
       un.then((fn) => fn());
     };
   }, []);
+
+  useEffect(
+    () => () => {
+      for (const frame of contentRevealFramesRef.current) {
+        window.cancelAnimationFrame(frame);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     const un = listen<NoteEditorInsertPayload>(
@@ -943,7 +994,11 @@ export default function TextPreviewView() {
       // 选词模式选区由键帽点击驱动、Esc 撤选，另有通道，勿在按下时抢清
       if (pickModeRef.current) return;
       if (!target) return;
-      if (target.closest?.('[role="toolbar"]')) return;
+      if (
+        target.closest?.(
+          '[role="toolbar"], [data-preserve-text-selection="true"]'
+        )
+      ) return;
       setTextSelection(null);
     };
     // 拖选的抬手点经常落在正文区外（页脚/标题栏/缩略条/窗口边缘甚至窗外），
@@ -1049,15 +1104,34 @@ export default function TextPreviewView() {
     }).catch(() => {});
   }, [winLabel, winPinned, note?.id]);
 
-  // 大文渲染 memo：chrome 唤出/淡出只改顶条与坞的 opacity，正文的
-  // Markdown/代码高亮不许跟着重算（动画首帧掉帧的主因）
+  const noteText = note?.text ?? "";
+  const textRenderPlan = useMemo(
+    () => planTextPreviewRender(noteText),
+    [noteText]
+  );
+  const noteStats = useMemo(() => stats(noteText), [noteText]);
+  const noteLooksLikeMarkdown = useMemo(
+    () =>
+      !!note &&
+      !note.codeLang &&
+      note.kind !== "link" &&
+      looksLikeMarkdown(noteText),
+    [note, noteText]
+  );
+  // 原文/编辑态不预做 Markdown DOM；chrome 唤出也不重复扫描全文。
   const mdHtml = useMemo(
-    () => (note && !note.codeLang ? renderMarkdown(note.text) : ""),
-    [note]
+    () =>
+      note && fullContentReady && mdView && !note.codeLang
+        ? renderMarkdown(noteText)
+        : "",
+    [fullContentReady, mdView, note, noteText]
   );
   const codeHtml = useMemo(
-    () => (note?.codeLang ? highlightCode(note.text, note.codeLang) : ""),
-    [note]
+    () =>
+      note?.codeLang && fullContentReady
+        ? highlightCode(noteText, note.codeLang)
+        : "",
+    [fullContentReady, note, noteText]
   );
 
   useEffect(() => {
@@ -1172,6 +1246,37 @@ export default function TextPreviewView() {
     return { left, top, transform: "translate(-50%, 0)" };
   }, [toolbarAnchor]);
 
+  const handleRichTextSelection = useCallback(
+    (
+      value: {
+        text: string;
+        selection: TextSelection;
+        textarea: HTMLTextAreaElement;
+      } | null
+    ) => {
+      if (!value) {
+        setRichTextSelection(null);
+        setToolbarAnchor(null);
+        return;
+      }
+      setRichTextSelection({ text: value.text, selection: value.selection });
+      const frame = contentFrameRef.current;
+      const anchor = textareaSelectionAnchor(value.textarea, value.selection);
+      if (!frame || !anchor) {
+        setToolbarAnchor(null);
+        return;
+      }
+      const frameRect = frame.getBoundingClientRect();
+      const textareaRect = value.textarea.getBoundingClientRect();
+      setToolbarAnchor({
+        left: textareaRect.left - frameRect.left + anchor.left,
+        top: textareaRect.top - frameRect.top + anchor.top,
+        bottom: textareaRect.top - frameRect.top + anchor.bottom,
+      });
+    },
+    []
+  );
+
   // 标签输入聚焦（WKWebView 焦点惰性 → 延时；autoFocus 在 DOM 复用下不重触发）
   const tagInputOpen = tagDraft !== null;
   useEffect(() => {
@@ -1214,7 +1319,7 @@ export default function TextPreviewView() {
         pendingSelectionRef.current = null;
       }, 30);
     }
-  }, [editing, note?.id]);
+  }, [editing, fullContentReady, note?.id]);
 
   /** 收尾无改动/取消时，把编辑中已静默写库的内容还原回本次编辑前。 */
   const revertAutosavedDraft = () => {
@@ -1662,7 +1767,6 @@ export default function TextPreviewView() {
   };
 
   // —— 选词模式：Intl.Segmenter 分词（旧 WebKit 退回空白/标点粗分） ——
-  const noteText = note?.text ?? "";
   const pickSegments = useMemo(() => {
     if (!pickMode || !noteText) return [];
     const out: PickSegment[] = [];
@@ -1859,13 +1963,7 @@ export default function TextPreviewView() {
         return;
       }
       const current = noteRef.current;
-      if (
-        !current ||
-        current.codeLang ||
-        (current.kind === "link" && !!current.url)
-      ) {
-        return;
-      }
+      if (!current?.text) return;
       event.preventDefault();
       if (pickMode) exitPickMode();
       else enterPickMode();
@@ -1886,8 +1984,6 @@ export default function TextPreviewView() {
     if (
       editing ||
       !note ||
-      note.codeLang ||
-      note.kind === "link" ||
       hasMixedNoteContent(note.contentBlocks)
     ) return;
     const root = previewContentRef.current;
@@ -1942,6 +2038,91 @@ export default function TextPreviewView() {
     pendingSelectionRef.current = null;
   };
 
+  /** 选区文本处理：纯文本走 textarea 撤销栈；图文选词按块改写后进入编辑。 */
+  const applySelectionTextOp = (textOp: TextOp) => {
+    const current = noteRef.current;
+    const selection = textSelection;
+    if (!previewIsEditable(current) || !selection) return;
+    try {
+      if (hasMixedNoteContent(current.contentBlocks) && current.contentBlocks) {
+        const blocks = mapNoteTextSelection(
+          current.contentBlocks,
+          selection,
+          textOp.apply
+        );
+        if (blocks.every((block, index) => block === current.contentBlocks![index])) {
+          tip("info", "内容无变化");
+          return;
+        }
+        draftContentBlocksRef.current = blocks;
+        setDraftContentBlocks(blocks);
+        setPickMode(false);
+        setPick(null);
+        setTextSelection(null);
+        setEditing(true);
+        return;
+      }
+
+      const source = editing ? draftRef.current : current.text;
+      const edit = applyTextOpToSelection(source, selection, textOp);
+      if (edit.text === source) {
+        tip("info", "内容无变化");
+        return;
+      }
+      if (pickMode) {
+        setPickMode(false);
+        setPick(null);
+      }
+      applySelectionEdit(edit);
+    } catch {
+      tip("warn", `${textOp.label}失败：选中内容不符合格式`);
+    }
+  };
+
+  /** 详情页整篇/草稿处理：图文卡逐文字块执行，图片位置始终不变。 */
+  const applyWholeTextOp = (textOp: TextOp) => {
+    const current = noteRef.current;
+    if (!previewIsEditable(current)) return;
+    try {
+      if (hasMixedNoteContent(current.contentBlocks) && current.contentBlocks) {
+        const source = editing
+          ? draftContentBlocksRef.current
+          : current.contentBlocks;
+        const blocks = mapNoteTextBlocks(source, textOp.apply);
+        if (blocks.every((block, index) => block === source[index])) {
+          tip("info", "内容无变化");
+          return;
+        }
+        draftContentBlocksRef.current = blocks;
+        setDraftContentBlocks(blocks);
+        setTextSelection(null);
+        if (!editing) setEditing(true);
+        return;
+      }
+
+      const source = editing ? draftRef.current : current.text;
+      const text = textOp.apply(source);
+      if (text === source) {
+        tip("info", "内容无变化");
+        return;
+      }
+      applySelectionEdit({
+        text,
+        selection: { start: text.length, end: text.length },
+      });
+      setTextSelection(null);
+    } catch {
+      tip("warn", `${textOp.label}失败：内容不符合格式`);
+    }
+  };
+
+  const applyContextualTextOp = (textOp: TextOp) => {
+    // 查看态的 DOM 选区点击页脚后可能塌缩；此时以浮动工具条为选区入口，
+    // 页脚保持“整篇”。编辑 textarea / 选词键帽的选区状态则不会因点菜单丢失。
+    if ((editing || pickMode) && textSelection) applySelectionTextOp(textOp);
+    else applyWholeTextOp(textOp);
+  };
+
   const copy = async () => {
     if (!note) return;
     try {
@@ -1970,13 +2151,22 @@ export default function TextPreviewView() {
     }
   };
 
-  const send = () => {
+  const send = (options?: {
+    format: DeliveryFormat;
+    markdownMode: MarkdownSendMode;
+  }) => {
     if (!previewIsEditable(note)) return;
     if (!winPinned) close();
     void emitTo("main", "toskr://note-send", {
       id: note.id,
       dataGeneration: note.dataGeneration,
-    });
+      ...options,
+    } satisfies NoteSendPayload);
+  };
+
+  const refreshSendTargets = () => {
+    setSendTargets([]);
+    void api.listSendTargets().then(setSendTargets).catch(() => {});
   };
 
   // 片段发送：只发选中文字（选词/选段驱动），仍以本卡为来源；发完关窗与整卡发送一致
@@ -1987,7 +2177,18 @@ export default function TextPreviewView() {
       id: note.id,
       dataGeneration: note.dataGeneration,
       text: fragment,
-    });
+    } satisfies NoteSendPayload);
+  };
+
+  // 图文编辑器选中图片/文字块：发送块级快照，不依赖 2s 自动保存是否已落库。
+  const sendContentSelection = (contentBlocks: NoteContentBlock[]) => {
+    if (!note || contentBlocks.length === 0) return;
+    if (!winPinned) close();
+    void emitTo("main", "toskr://note-send", {
+      id: note.id,
+      dataGeneration: note.dataGeneration,
+      contentBlocks: normalizeNoteContentBlocks(contentBlocks),
+    } satisfies NoteSendPayload);
   };
 
   const copySelection = (fragment: string) => {
@@ -2142,14 +2343,16 @@ export default function TextPreviewView() {
   const writable = previewIsEditable(note);
   const editable = writable;
   const flatEditable = writable && !mixedContent;
-  const isMd = !note.codeLang && !isLink && looksLikeMarkdown(note.text);
-  const s = stats(note.text);
+  const isMd = noteLooksLikeMarkdown;
+  const s = noteStats;
   // 编辑/选词/标签输入期间 chrome 常显（有操作要落地）；其余靠活跃度唤出
   const chromeVisible = chromeOn || editing || pickMode || tagDraft !== null;
   // 选区工具条一露面，页脚的「发送」就和它的「发送选中」同屏了，两个发送必须
   // 一眼分辨发的是什么——此时页脚改口「发送整卡」，与「发送选中」动宾对仗
   const selectionToolbarOpen =
-    (flatEditable || pickMode) && !!textSelection && !note.codeLang && !isLink;
+    (!mixedContent || pickMode) && !!textSelection;
+  const anySelectionSendOpen =
+    selectionToolbarOpen || (editing && mixedContent && richSelectionActive);
   const shownImages = mixedContent ? [] : editing ? draftImages : note.images;
   const imagePreviewSource = writable && !editing
     ? {
@@ -2227,6 +2430,53 @@ export default function TextPreviewView() {
   // 无界剧场后该色只保留两处：顶部晕光 + 阅读进度线（A×E 用户选定）
   const accent = note.headerColor ?? icon?.color ?? "#7c8494";
   const glowBackground = `linear-gradient(180deg, color-mix(in srgb, ${accent} 26%, transparent), transparent 80%)`;
+  const textOpsAvailable = editable && !!noteText;
+  const textOpScopeLabel = (editing || pickMode) && textSelection
+    ? "处理选中内容"
+    : editing
+      ? "处理当前草稿"
+      : "处理整篇内容";
+  const renderTextOpMenu = () =>
+    textOpsAvailable ? (
+      <SimpleMenu
+        align="end"
+        side="top"
+        className="flex"
+        preserveTextSelection
+        menuAriaLabel={textOpScopeLabel}
+        menuClassName="w-40"
+        trigger={({ open, toggle, controls }) => (
+          <DockOp
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded={open}
+            aria-controls={controls}
+            title={textOpScopeLabel}
+            onClick={toggle}
+            className="flex items-center gap-1"
+          >
+            <Wand2 className="size-3" /> 处理
+          </DockOp>
+        )}
+      >
+        {(close) => (
+          <>
+            <SimpleMenuLabel>{textOpScopeLabel}</SimpleMenuLabel>
+            {TEXT_OPS.map((textOp) => (
+              <SimpleMenuItem
+                key={textOp.id}
+                onClick={() => {
+                  close();
+                  applyContextualTextOp(textOp);
+                }}
+              >
+                {textOp.label}
+              </SimpleMenuItem>
+            ))}
+          </>
+        )}
+      </SimpleMenu>
+    ) : null;
 
   return (
     <DetailWindowFrame
@@ -2388,7 +2638,16 @@ export default function TextPreviewView() {
             if (editable && !editing) setEditing(true);
           }}
         >
-          {editing && mixedContent && note.contentBlocks ? (
+          {!fullContentReady ? (
+            <div className="relative min-h-full" aria-label="正在加载完整长文本">
+              <pre className="whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-body leading-relaxed">
+                {textRenderPlan.warmupText}
+              </pre>
+              <span className="sticky bottom-0 mt-3 inline-flex rounded-full bg-background/90 px-2 py-1 text-micro text-muted-foreground shadow-sm backdrop-blur-sm">
+                正在加载完整内容…
+              </span>
+            </div>
+          ) : editing && mixedContent && note.contentBlocks ? (
             <RichNoteTextEditor
               key={note.id}
               blocks={draftContentBlocks}
@@ -2403,6 +2662,10 @@ export default function TextPreviewView() {
               }}
               onSave={save}
               onCancel={exitEditing}
+              onSendSelection={sendContentSelection}
+              sendDisabledReason={targetReady ? null : targetBlockedMessage}
+              onSelectionActiveChange={setRichSelectionActive}
+              onTextSelectionChange={handleRichTextSelection}
             />
           ) : editing ? (
             <>
@@ -2513,12 +2776,6 @@ export default function TextPreviewView() {
               />
             )}
             </>
-          ) : note.codeLang ? (
-            <pre className="hljs whitespace-pre-wrap [overflow-wrap:anywhere] !bg-transparent font-mono text-body leading-relaxed">
-              <code
-                dangerouslySetInnerHTML={{ __html: codeHtml }}
-              />
-            </pre>
           ) : pickMode ? (
             // 选词优先于图文渲染：图文卡也要能选词，只是键帽按块回到图片之间
             <div
@@ -2565,6 +2822,13 @@ export default function TextPreviewView() {
                     renderPickSegment(segment, index)
                   )}
             </div>
+          ) : note.codeLang ? (
+            <pre
+              ref={previewContentRef as React.RefObject<HTMLPreElement>}
+              className="hljs whitespace-pre-wrap [overflow-wrap:anywhere] !bg-transparent font-mono text-body leading-relaxed"
+            >
+              <code dangerouslySetInnerHTML={{ __html: codeHtml }} />
+            </pre>
           ) : mixedContent && note.contentBlocks ? (
             <RichNoteContent
               blocks={note.contentBlocks}
@@ -2594,10 +2858,25 @@ export default function TextPreviewView() {
             anchorStyle={toolbarAnchorStyle}
             onApply={applySelectionEdit}
             onAddAlias={editing ? undefined : addSelectionToAliasDictionary}
+            onTextOperation={writable ? applySelectionTextOp : undefined}
             onSendSelection={writable ? sendSelection : undefined}
             onCopySelection={copySelection}
             sendDisabledReason={targetReady ? null : targetBlockedMessage}
             readOnly={!flatEditable}
+          />
+        )}
+        {editing && mixedContent && richTextSelection && (
+          <TextSelectionToolbar
+            text={richTextSelection.text}
+            selection={richTextSelection.selection}
+            anchorStyle={toolbarAnchorStyle}
+            onApply={() => {}}
+            onSendSelection={(text) =>
+              sendContentSelection([{ type: "text", text }])
+            }
+            onCopySelection={copySelection}
+            sendDisabledReason={targetReady ? null : targetBlockedMessage}
+            readOnly
           />
         )}
       </div>
@@ -2680,6 +2959,7 @@ export default function TextPreviewView() {
                 {editPreviewOn ? "原文" : "渲染"}
               </DockOp>
             )}
+            {renderTextOpMenu()}
             <IconButton label="粘贴图片（⌘V）" onClick={() => void pasteImage()}>
               <ImagePlus className="size-3.5" />
             </IconButton>
@@ -2695,7 +2975,7 @@ export default function TextPreviewView() {
           </>
         ) : (
           <>
-            {!isLink && !note.codeLang && (
+            {!!noteText && (
               <>
                 <DockOp
                   active={pickMode}
@@ -2737,6 +3017,7 @@ export default function TextPreviewView() {
             {isLink && (
               <DockOp onClick={() => void api.openUrl(note.url!)}>打开链接</DockOp>
             )}
+            {renderTextOpMenu()}
             <DockOp onClick={() => void copy()}>复制</DockOp>
             {editable && (
               <DockOp
@@ -2759,92 +3040,102 @@ export default function TextPreviewView() {
                 <SimpleMenu
                   align="end"
                   side="top"
+                  className="flex"
+                  menuAriaLabel="发送方式或目标"
                   menuClassName="max-h-64 w-48 overflow-y-auto"
-                  trigger={({ toggle }) => {
-                    const openTargetMenu = () => {
-                      void api
-                        .listSendTargets()
-                        .then((list) => {
-                          setSendTargets(list);
-                          toggle();
-                        })
-                        .catch(() => {});
+                  trigger={({ open, toggle, controls }) => {
+                    const toggleSendMenu = () => {
+                      if (!open) refreshSendTargets();
+                      toggle();
                     };
                     return (
-                      <Button
-                        className={cn(
-                          "rounded-full px-5 shadow-(--shadow-card)",
-                          !targetReady && "opacity-60"
-                        )}
-                        aria-label={
-                          targetReady
-                            ? selectionToolbarOpen
-                              ? "发送整卡到当前目标（不是选中片段）；长按换目标"
-                              : "发送到当前目标；长按换目标"
-                            : `目标不可用（点击换目标）：${targetBlockedMessage}`
-                        }
-                        aria-describedby={
-                          targetReady ? undefined : "text-preview-target-status"
-                        }
-                        onPointerDown={() => {
-                          sendLongPressFiredRef.current = false;
-                          sendLongPressTimerRef.current = window.setTimeout(
-                            () => {
-                              sendLongPressFiredRef.current = true;
-                              openTargetMenu();
-                            },
-                            450
-                          );
-                        }}
-                        onPointerUp={() => {
-                          if (sendLongPressTimerRef.current) {
-                            window.clearTimeout(sendLongPressTimerRef.current);
+                      <div
+                        className="flex rounded-full shadow-(--shadow-card)"
+                        onKeyDownCapture={(event) => {
+                          if (!open && ["ArrowDown", "ArrowUp"].includes(event.key)) {
+                            refreshSendTargets();
                           }
-                        }}
-                        onPointerLeave={() => {
-                          if (sendLongPressTimerRef.current) {
-                            window.clearTimeout(sendLongPressTimerRef.current);
-                          }
-                        }}
-                        onContextMenu={(e) => {
-                          e.preventDefault();
-                          openTargetMenu();
-                        }}
-                        onClick={() => {
-                          // 长按已弹选单：这次抬起的 click 不当作发送
-                          if (sendLongPressFiredRef.current) {
-                            sendLongPressFiredRef.current = false;
-                            return;
-                          }
-                          // 目标失效时点击直接弹目标选单，免去先点一次目标应用
-                          if (!targetReady) {
-                            openTargetMenu();
-                            return;
-                          }
-                          send();
                         }}
                       >
-                        <Send className="size-3" />{" "}
-                        {selectionToolbarOpen
-                          ? "发送整卡"
-                          : targetAppName
-                            ? `发送到 ${targetAppName}`
-                            : "发送"}
-                        {/* token-exception: 9px 为重塑前原始尺寸，用户指定还原 */}
-                        <Kbd inline className="text-[9px]">⌘⏎</Kbd>
-                      </Button>
+                        <Button
+                          className={cn(
+                            "rounded-l-full rounded-r-none pl-5 pr-3",
+                            !targetReady && "opacity-60"
+                          )}
+                          aria-label={
+                            targetReady
+                              ? anySelectionSendOpen
+                                ? "发送整卡到当前目标（不是选中片段）"
+                                : "发送到当前目标"
+                              : `目标不可用（点击选择目标）：${targetBlockedMessage}`
+                          }
+                          aria-describedby={
+                            targetReady ? undefined : "text-preview-target-status"
+                          }
+                          onClick={() => targetReady ? send() : toggleSendMenu()}
+                        >
+                          <Send className="size-3" />{" "}
+                          {anySelectionSendOpen
+                            ? "发送整卡"
+                            : targetAppName
+                              ? `发送到 ${targetAppName}`
+                              : "发送"}
+                          {/* token-exception: 9px 为重塑前原始尺寸，用户指定还原 */}
+                          <Kbd inline className="text-[9px]">⌘⏎</Kbd>
+                        </Button>
+                        <IconButton
+                          label="选择发送方式或目标"
+                          stopPropagation={false}
+                          size="xs"
+                          className="-ml-px h-8 w-7 rounded-l-none rounded-r-full border border-(--button-primary-border) bg-button-primary p-0 text-button-primary-foreground shadow-none hover:bg-button-primary-hover hover:text-button-primary-foreground active:shadow-none"
+                          aria-haspopup="menu"
+                          aria-expanded={open}
+                          aria-controls={controls}
+                          onClick={toggleSendMenu}
+                        >
+                          <ChevronDown className="size-3" />
+                        </IconButton>
+                      </div>
                     );
                   }}
                 >
                   {(close) => (
                     <>
-                      <p className="px-2 py-1 text-micro font-medium text-muted-foreground">
-                        发送到…
-                      </p>
+                      <SimpleMenuLabel>发送方式</SimpleMenuLabel>
+                      <SimpleMenuItem
+                        disabled={!targetReady}
+                        onClick={() => {
+                          close();
+                          send({ format: "plain", markdownMode: "preserve" });
+                        }}
+                      >
+                        原文发送
+                      </SimpleMenuItem>
+                      <SimpleMenuItem
+                        disabled={
+                          !targetReady || Boolean(note.codeLang) || note.kind === "secret"
+                        }
+                        title={
+                          note.codeLang
+                            ? "代码卡保留原文，避免误删代码语法"
+                            : note.kind === "secret"
+                              ? "秘文信封保持字节原样，不能清洗格式"
+                            : "去除标题、粗体、链接括号等；仅影响本次发送"
+                        }
+                        onClick={() => {
+                          close();
+                          send({ format: "plain", markdownMode: "strip" });
+                        }}
+                      >
+                        去 Markdown 后发送
+                      </SimpleMenuItem>
+                      <SimpleMenuSeparator />
+                      <SimpleMenuLabel>发送到…</SimpleMenuLabel>
                       {sendTargets.map((t) => (
-                        <SimpleMenuItem
+                        <SendTargetAppItem
                           key={t.pid}
-                          onClick={() => {
+                          target={t}
+                          onSelect={() => {
                             close();
                             void api.adoptSendTarget(t.pid).then((snap) => {
                               if (!snap?.ready) {
@@ -2855,10 +3146,13 @@ export default function TextPreviewView() {
                               window.setTimeout(() => send(), 60);
                             });
                           }}
-                        >
-                          <span className="truncate">{t.name}</span>
-                        </SimpleMenuItem>
+                        />
                       ))}
+                      {sendTargets.length === 0 && (
+                        <SimpleMenuItem disabled onClick={() => {}}>
+                          暂无其他可用应用
+                        </SimpleMenuItem>
+                      )}
                     </>
                   )}
                 </SimpleMenu>

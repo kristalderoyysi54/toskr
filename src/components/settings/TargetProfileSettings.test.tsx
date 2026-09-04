@@ -35,6 +35,7 @@ function profile(id: string, patch: Partial<TargetProfile> = {}): TargetProfile 
     privacyPolicy: "requireRedaction",
     keepPanel: false,
     ...patch,
+    defaultMarkdownMode: patch.defaultMarkdownMode ?? "preserve",
   };
 }
 
@@ -216,6 +217,7 @@ describe("发送方案设置组件", () => {
     }
     expect(html).toContain("编程 · 2 条 · 解释代码、代码审查");
     expect(html).toContain("保持内容自然排版");
+    expect(html).toContain("发送时去除 Markdown 标记");
     expect(html).toContain("用代码围栏包裹文本");
     expect(html).toContain("从不按回车");
     expect(html).toContain("每次发送前确认");
@@ -231,11 +233,82 @@ describe("发送方案设置组件", () => {
     expect(html).toContain("匹配来源：未识别应用的默认方案");
     expect(html).toContain("发送前隐私门禁");
     expect(html).toContain("当前生效策略：要求逐项处理");
-    expect(html).toContain("本地预演输出示例（不会发送）");
-    expect(html).toContain("示例：```");
-    expect(html).toContain("预览只解析规则，不会访问剪贴板，也不会模拟粘贴或回车");
+    expect(html).toContain("测试内容（可编辑，最多 4000 字符）");
+    expect(html).toContain('maxLength="4000"');
+    expect(html).toContain("格式预览 · 代码块");
+    expect(html).toContain("```\n# 项目更新");
+    expect(html).toContain('tabindex="0"');
+    expect(html).toContain('role="status"');
+    expect(html).toContain('aria-live="polite"');
+    expect(html).toContain('aria-atomic="true"');
+    expect(html).toContain("代码块预览已更新，共");
+    expect(html).toContain("不会读取剪贴板、修改卡片或执行发送");
     expect(html).toContain('type="radio"');
+    expect(html).toContain("sm:grid-cols-3");
     expect(html).not.toContain("overflow-x-auto");
+  });
+
+  it("无 Markdown 方案在配置、预演和当前生效轨道中保持一致", () => {
+    const edited = profile("markdown-free", {
+      name: "聊天纯净文本",
+      bundleIds: [target.bundleId as string],
+      defaultFormat: "plain",
+      defaultMarkdownMode: "strip",
+    });
+    const html = renderToStaticMarkup(
+      <ProfileEditor
+        profile={edited}
+        profiles={[profile("default"), edited]}
+        groups={groups}
+        snippets={snippets}
+        defaultProfileId="default"
+        currentTarget={target}
+        recentApps={[]}
+        onUpdate={vi.fn()}
+        onProfilesChange={vi.fn()}
+        onSetDefault={vi.fn()}
+      />
+    );
+
+    expect(html).toContain('checked=""');
+    expect(html.match(/输出格式：无 Markdown/g)).toHaveLength(3);
+    expect(html).toContain("格式预览 · 无 Markdown");
+    expect(html).toContain("• 完成：修复发送");
+    expect(html).toContain("查看文档（https://example.com）");
+
+    const profileList = renderToStaticMarkup(
+      <ProfileList
+        profiles={[edited]}
+        groups={groups}
+        defaultProfileId={edited.id}
+        selectedProfileId={edited.id}
+        currentProfileId={edited.id}
+        onSelect={vi.fn()}
+        onCreate={vi.fn()}
+        onMove={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    expect(profileList).toContain("通用 · 无 Markdown");
+
+    const currentTarget = renderToStaticMarkup(
+      <CurrentTargetPreview
+        snapshot={target}
+        resolution={resolveTargetProfile({
+          bundleId: target.bundleId,
+          isTargetReady: true,
+          groups,
+          profiles: [edited],
+          defaultProfileId: edited.id,
+        })}
+        refreshing={false}
+        testMessage={null}
+        onRefresh={vi.fn()}
+        onTest={vi.fn()}
+        onEditProfile={vi.fn()}
+      />
+    );
+    expect(currentTarget).toContain("输出格式：无 Markdown");
   });
 
   it("提示词组被删除时同时展示原配置缺失与 resolver 的安全回退", () => {

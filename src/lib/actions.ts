@@ -35,7 +35,11 @@ import {
   nextDeliveryDraftRevision,
   warnWithPanel,
 } from "@/lib/delivery/executeDraft";
-import type { DeliveryDraftInput } from "@/lib/delivery/types";
+import type {
+  DeliveryDraftInput,
+  MarkdownSendMode,
+} from "@/lib/delivery/types";
+import type { DeliveryFormat } from "@/lib/targetProfiles";
 import {
   EDITOR_INSERT_OPERATION_TTL_MS,
   EDITOR_INSERT_REQUEST_TTL_MS,
@@ -114,6 +118,16 @@ export type NotePreviewPayload = {
   selectAll?: boolean;
   /** 合并发送来源等临时视图不可编辑、移除附件或再次发送。 */
   readOnly?: boolean;
+};
+
+/** 详情窗 → 主面板的发送意图；转换只影响本次 Draft，不写回卡片。 */
+export type NoteSendPayload = {
+  id: string;
+  dataGeneration: number;
+  text?: string;
+  contentBlocks?: NoteContentBlock[];
+  format?: DeliveryFormat;
+  markdownMode?: MarkdownSendMode;
 };
 
 /**
@@ -273,11 +287,16 @@ function nextDeliveryId() {
 
 type NoteDeliveryOptions = {
   asCode?: boolean;
-  format?: "plain" | "code";
+  format?: DeliveryFormat;
+  markdownMode?: MarkdownSendMode;
+  /** 详情窗发送等明确外投意图，不得被剪贴卡内部追加路由截获。 */
+  forceExternal?: boolean;
   promptSnippetId?: string;
   forcePreflight?: boolean;
   /** 片段发送：以该文本取代来源笔记正文（详情窗「发送选中」）；仅单卡有效。 */
   overrideText?: string;
+  /** 块级片段发送：保留选中的文字/图片块并继续走完整发送预检。 */
+  overrideContentBlocks?: NoteContentBlock[];
   /** 仅内部上手演练使用；不能由普通发送菜单构造。 */
   safeRehearsal?: boolean;
 };
@@ -305,10 +324,13 @@ function draftInput(
     sourceKind,
     sourceItemIds,
     format: opts?.format ?? (opts?.asCode ? "code" : undefined),
+    markdownMode: opts?.markdownMode,
     promptSnippetId: opts?.promptSnippetId ?? null,
     promptTemplate: prefix,
     sourceTextOverride:
       sourceItemIds.length === 1 ? opts?.overrideText : undefined,
+    sourceContentOverride:
+      sourceItemIds.length === 1 ? opts?.overrideContentBlocks : undefined,
   };
 }
 
@@ -826,7 +848,7 @@ async function insertClipboardNotesIntoOpenEditor(
   targets: Note[],
   dataGeneration: number,
   prefix?: string,
-  opts?: { asCode?: boolean; format?: "plain" | "code" }
+  opts?: NoteDeliveryOptions
 ): Promise<"not-target" | "handled"> {
   if (
     !lastDetailId ||
@@ -924,7 +946,12 @@ async function insertClipboardNotesIntoOpenEditor(
         sources.map((note) => note.id),
         dataGeneration,
         prefix,
-        { ...opts, format }
+        {
+          ...opts,
+          format,
+          // 内部追加不是外部目标发送：默认保留来源，只响应用户显式去格式。
+          markdownMode: opts?.markdownMode ?? "preserve",
+        }
       );
       const fingerprint = editorInsertFingerprint(
         targetId,
@@ -1043,12 +1070,15 @@ export async function sendNotesToChat(
       opts?.forcePreflight ||
       opts?.safeRehearsal ||
       useDeliveryStore.getState().preflightMode === "always";
-    // overrideText 只来自详情页「发送选中」：这是明确的外部投递意图。
-    // 若仍探测可见编辑器，剪贴卡会被误路由成“添加到自身”并在发送前返回。
-    const sendsExternalFragment = opts?.overrideText !== undefined;
+    // 详情窗整卡/片段发送都是明确外投意图。若仍探测可见编辑器，剪贴卡会
+    // 被误路由成“添加到自身”并在发送前返回。
+    const sendsExternal =
+      opts?.forceExternal ||
+      opts?.overrideText !== undefined ||
+      opts?.overrideContentBlocks !== undefined;
     if (
       !requiresPreflight &&
-      !sendsExternalFragment &&
+      !sendsExternal &&
       (await insertClipboardNotesIntoOpenEditor(
         targets,
         dataGeneration,

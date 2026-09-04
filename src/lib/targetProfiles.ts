@@ -1,4 +1,7 @@
 export type DeliveryFormat = "plain" | "code";
+export type MarkdownSendMode = "preserve" | "strip";
+/** 设置页的三态视图；底层仍保持格式包装与 Markdown 转换两个正交字段。 */
+export type DeliveryOutputMode = DeliveryFormat | "strip-markdown";
 export type EnterPolicy = "never" | "confirm" | "allow";
 export type PrivacyPolicy = "requireRedaction" | "confirmRaw" | "allowRaw";
 
@@ -21,6 +24,7 @@ export interface TargetProfile {
   bundleIds: string[];
   promptGroupId: string;
   defaultFormat: DeliveryFormat;
+  defaultMarkdownMode: MarkdownSendMode;
   enterPolicy: EnterPolicy;
   privacyPolicy: PrivacyPolicy;
   keepPanel: boolean;
@@ -47,6 +51,7 @@ const SAFETY_PROFILE: TargetProfile = {
   bundleIds: [],
   promptGroupId: GENERAL_PROMPT_GROUP_ID,
   defaultFormat: "plain",
+  defaultMarkdownMode: "preserve",
   enterPolicy: "never",
   privacyPolicy: "requireRedaction",
   keepPanel: false,
@@ -70,6 +75,7 @@ export function createDefaultTargetProfiles(
       bundleIds: [...TERMINAL_BUNDLE_IDS],
       promptGroupId: GENERAL_PROMPT_GROUP_ID,
       defaultFormat: "code",
+      defaultMarkdownMode: "preserve",
       enterPolicy: "never",
       privacyPolicy: "requireRedaction",
       keepPanel: false,
@@ -99,12 +105,29 @@ export type TargetProfileResolutionReason =
  */
 export interface TargetRuleOverrides {
   promptGroupId?: string;
-  defaultFormat?: DeliveryFormat;
+  defaultOutputMode?: DeliveryOutputMode;
   enterPolicy?: EnterPolicy;
   keepPanel?: boolean;
 }
 
 export type TargetRuleOverrideKey = keyof TargetRuleOverrides;
+
+export function targetProfileOutputMode(
+  profile: Pick<TargetProfile, "defaultFormat" | "defaultMarkdownMode">
+): DeliveryOutputMode {
+  return profile.defaultFormat === "plain" && profile.defaultMarkdownMode === "strip"
+    ? "strip-markdown"
+    : profile.defaultFormat;
+}
+
+export function targetProfileOutputPatch(
+  mode: DeliveryOutputMode
+): Pick<TargetProfile, "defaultFormat" | "defaultMarkdownMode"> {
+  if (mode === "strip-markdown") {
+    return { defaultFormat: "plain", defaultMarkdownMode: "strip" };
+  }
+  return { defaultFormat: mode, defaultMarkdownMode: "preserve" };
+}
 
 export interface TargetProfileResolution {
   profileId: string;
@@ -213,11 +236,11 @@ export function resolveTargetProfile(input: {
       ruleOverriddenKeys.push("promptGroupId");
     }
     if (
-      rules.defaultFormat !== undefined &&
-      rules.defaultFormat !== profile.defaultFormat
+      rules.defaultOutputMode !== undefined &&
+      rules.defaultOutputMode !== targetProfileOutputMode(profile)
     ) {
-      profile = { ...profile, defaultFormat: rules.defaultFormat };
-      ruleOverriddenKeys.push("defaultFormat");
+      profile = { ...profile, ...targetProfileOutputPatch(rules.defaultOutputMode) };
+      ruleOverriddenKeys.push("defaultOutputMode");
     }
     if (
       rules.enterPolicy !== undefined &&
@@ -411,12 +434,17 @@ export function repairTargetProfileConfiguration(
   const sourceProfiles = input.profiles.length
     ? input.profiles
     : [{ ...SAFETY_PROFILE, bundleIds: [] }];
-  const profiles = sourceProfiles.map((item) => ({
+  const profiles: TargetProfile[] = sourceProfiles.map((item) => ({
     ...item,
     bundleIds: [...new Set(item.bundleIds.filter(Boolean))],
     promptGroupId: groupIds.has(item.promptGroupId)
       ? item.promptGroupId
       : GENERAL_PROMPT_GROUP_ID,
+    // 输出方式只允许三个可表达状态；防御运行时/旧草稿留下 code + strip。
+    defaultMarkdownMode:
+      item.defaultFormat === "plain" && item.defaultMarkdownMode === "strip"
+        ? "strip"
+        : "preserve",
   }));
   const defaultProfileId = profiles.some(
     (item) => item.id === input.defaultProfileId

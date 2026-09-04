@@ -66,6 +66,40 @@ describe("buildBackupPayload", () => {
     });
     expect(JSON.stringify(payload)).not.toContain("redactionMap");
   });
+
+  it("完整备份保留目标方案的 Markdown 默认模式", () => {
+    const settings = defaultSettings();
+    const profileId = settings.defaultTargetProfileId;
+    const payload = buildBackupPayload({
+      sections: [],
+      notes: [],
+      taskSections: [],
+      tasks: [],
+      bills: [],
+      messages: [],
+      settings: {
+        ...settings,
+        targetProfiles: settings.targetProfiles.map((profile) =>
+          profile.id === profileId
+            ? {
+                ...profile,
+                defaultFormat: "plain",
+                defaultMarkdownMode: "strip",
+              }
+            : profile
+        ),
+      },
+    });
+
+    expect(
+      payload.state.settings.targetProfiles.find(
+        (profile) => profile.id === profileId
+      )
+    ).toMatchObject({
+      defaultFormat: "plain",
+      defaultMarkdownMode: "strip",
+    });
+  });
 });
 
 describe("buildMediaIntegrityPayload", () => {

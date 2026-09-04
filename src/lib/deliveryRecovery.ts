@@ -14,7 +14,10 @@ import {
   deliveryDraftPreparationPending,
   dispatchDeliveryDraft,
 } from "@/lib/delivery/preflight";
-import type { DeliveryEvent } from "@/lib/deliveryActivityCore";
+import {
+  deliveryEventOutputMode,
+  type DeliveryEvent,
+} from "@/lib/deliveryActivityCore";
 import type { TargetSnapshot } from "@/lib/tauri";
 import { isDataOperationLocked } from "@/store/dataOperationStore";
 import { useDeliveryStore } from "@/store/deliveryStore";
@@ -57,17 +60,22 @@ function recoveryBusy(): boolean {
 }
 
 /**
- * 历史事件只提供来源 id；恢复永远重读当前 Store、刷新目标并强制打开预检。
- * 这里没有 execute 注入点，结构上杜绝“历史记录一键自动重发”。
+ * 历史事件只提供来源 id 与可选输出方式；恢复永远重读当前 Store、刷新目标
+ * 并强制打开预检。这里没有 execute 注入点，结构上杜绝“历史记录一键自动重发”。
  */
 export async function reprepareDeliveryEvent(
   event: DeliveryEvent,
   options: RecoveryOptions = {}
 ): Promise<DeliveryRecoveryResult> {
-  if (
-    !["firewallBlocked", "sendBlocked", "sendFailed"].includes(event.eventType) ||
-    !["blocked", "failed"].includes(event.status)
-  ) {
+  const recordedOutputMode = deliveryEventOutputMode(event);
+  const failedAttempt =
+    ["firewallBlocked", "sendBlocked", "sendFailed"].includes(event.eventType) &&
+    ["blocked", "failed"].includes(event.status);
+  const completedSend =
+    event.eventType === "sendSent" &&
+    event.status === "sent" &&
+    recordedOutputMode !== null;
+  if (!failedAttempt && !completedSend) {
     return { ok: false, reason: "unsupported" };
   }
   if (!sourcesExist(event)) return { ok: false, reason: "sourceMissing" };
@@ -103,6 +111,12 @@ export async function reprepareDeliveryEvent(
         createdAtMs: Date.now(),
         sourceKind: event.sourceKind,
         sourceItemIds: [...event.sourceItemIds],
+        ...(recordedOutputMode
+          ? {
+              format: event.format,
+              markdownMode: event.markdownMode,
+            }
+          : {}),
       },
       {
         notes: notes.notes,

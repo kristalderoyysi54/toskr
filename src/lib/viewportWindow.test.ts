@@ -34,6 +34,7 @@ class FakeIntersectionObserver {
 describe("observeRenderWindow", () => {
   afterEach(() => {
     FakeIntersectionObserver.instances = [];
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -62,6 +63,61 @@ describe("observeRenderWindow", () => {
     expect(FakeIntersectionObserver.instances).toHaveLength(1);
     stopFirst();
     stopSecond();
+  });
+
+  it("不同预加载距离按 root 隔离 observer，避免消息页扩大缓冲拖累其他列表", () => {
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    const root = {} as Element;
+    const target = () =>
+      ({ closest: vi.fn(() => root) }) as unknown as Element;
+
+    const stopDefault = observeRenderWindow(target(), vi.fn());
+    const stopWideFirst = observeRenderWindow(target(), vi.fn(), 1440);
+    const stopWideSecond = observeRenderWindow(target(), vi.fn(), 1440);
+
+    expect(FakeIntersectionObserver.instances).toHaveLength(2);
+    expect(FakeIntersectionObserver.instances.map((item) => item.rootMargin)).toEqual([
+      "240px 0px",
+      "1440px 0px",
+    ]);
+    stopDefault();
+    stopWideFirst();
+    stopWideSecond();
+  });
+
+  it("快速滚动期间延后离窗通知，停止后再释放远处卡片", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    const listeners: { scroll?: EventListener } = {};
+    const root = {
+      addEventListener: vi.fn((_type: string, listener: EventListener) => {
+        listeners.scroll = listener;
+      }),
+      removeEventListener: vi.fn(),
+    } as unknown as Element;
+    const target = {
+      closest: vi.fn(() => root),
+    } as unknown as Element;
+    const states: boolean[] = [];
+    const stop = observeRenderWindow(
+      target,
+      (visible) => states.push(visible),
+      1440,
+      180
+    );
+    const observer = FakeIntersectionObserver.instances[0]!;
+
+    observer.emit(target, true);
+    observer.emit(target, false);
+    vi.advanceTimersByTime(100);
+    listeners.scroll?.(new Event("scroll"));
+    vi.advanceTimersByTime(179);
+    expect(states).toEqual([true]);
+    vi.advanceTimersByTime(1);
+
+    expect(states).toEqual([true, false]);
+    stop();
+    expect(root.removeEventListener).toHaveBeenCalled();
   });
 
   it("以最近的 Radix ScrollArea viewport 为 root，让 overscan 不被祖先裁掉", () => {

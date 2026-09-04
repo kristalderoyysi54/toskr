@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { TEXT_OPS } from "./textops";
+import { applyTextOpToSelection, TEXT_OPS } from "./textops";
 
 const op = (id: string) => {
   const found = TEXT_OPS.find((o) => o.id === id);
@@ -40,10 +40,32 @@ describe("textops", () => {
 
   it("去 Markdown 标记", () => {
     const input = "# 标题\n\n- **加粗**项\n> 引用\n`code` 与 [链接](https://x.com)";
-    expect(op("strip-md")(input)).toBe("标题\n\n加粗项\n引用\ncode 与 链接");
+    expect(op("strip-md")(input)).toBe(
+      "标题\n\n• 加粗项\n\n引用\ncode 与 链接（https://x.com）"
+    );
   });
 
   it("去 Markdown：代码围栏行移除、内容保留", () => {
     expect(op("strip-md")("```js\nconst a = 1;\n```")).toBe("const a = 1;");
+  });
+
+  it("选区适配器只替换选中片段，并把选区留在处理结果上", () => {
+    const textOp = TEXT_OPS.find((item) => item.id === "upper")!;
+    expect(
+      applyTextOpToSelection("前 abc 后", { start: 2, end: 5 }, textOp)
+    ).toEqual({
+      text: "前 ABC 后",
+      selection: { start: 2, end: 5 },
+    });
+  });
+
+  it("选区适配器支持长度变化并钳制越界区间", () => {
+    const textOp = TEXT_OPS.find((item) => item.id === "trim")!;
+    expect(
+      applyTextOpToSelection("  hello  ", { start: 99, end: -9 }, textOp)
+    ).toEqual({
+      text: "hello",
+      selection: { start: 0, end: 5 },
+    });
   });
 });

@@ -91,6 +91,8 @@ function sentEvent(): DeliveryEvent {
     redactionCount: 1,
     clipboardOutcome: "restored",
     resultNoteId: null,
+    format: "code",
+    markdownMode: "preserve",
     verificationStatus: null,
     verificationCheckCount: null,
     verificationIssueCount: null,
@@ -526,10 +528,11 @@ describe("result verification", () => {
     expect(serialized).not.toContain("数字需复核");
     expect(Object.keys(event).sort()).toEqual([
       "clipboardOutcome", "deliveryId", "durationMs", "eventId", "eventType",
-      "firewallCounts", "imageCount", "metricsEligible", "metricsEpoch", "profileId", "reasonCode", "redactionCount",
+      "firewallCounts", "format", "imageCount", "markdownMode", "metricsEligible", "metricsEpoch", "profileId", "reasonCode", "redactionCount",
       "resultNoteId", "sourceItemIds", "sourceKind", "status", "targetAppName",
       "targetBundleId", "textCharCount", "timestampMs", "transformRecipeId", "verificationCheckCount",
       "verificationIssueCount", "verificationStatus",
     ].sort());
+    expect(event).toMatchObject({ format: "code", markdownMode: "preserve" });
   });
 });

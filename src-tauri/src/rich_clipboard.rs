@@ -27,7 +27,7 @@ const HTML_TYPES: &[&str] = &["public.html"];
 const SOURCE_URL_TYPES: &[&str] = &["org.chromium.source-url", "public.url"];
 
 const MAX_READ_ITEMS: usize = 32;
-const MAX_PLAIN_BYTES: usize = 512 * 1024;
+pub(crate) const MAX_PLAIN_BYTES: usize = 512 * 1024;
 const MAX_HTML_BYTES: usize = 4 * 1024 * 1024;
 const MAX_SOURCE_URL_BYTES: usize = 16 * 1024;
 const MAX_READ_TOTAL_BYTES: usize = MAX_PLAIN_BYTES + MAX_HTML_BYTES + MAX_SOURCE_URL_BYTES;

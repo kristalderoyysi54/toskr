@@ -13,7 +13,11 @@ import {
   profileReorderAvailability,
   shouldShowProfileSearch,
 } from "@/lib/profileManager";
-import type { PromptGroup, TargetProfile } from "@/lib/targetProfiles";
+import {
+  targetProfileOutputMode,
+  type PromptGroup,
+  type TargetProfile,
+} from "@/lib/targetProfiles";
 import { cn } from "@/lib/utils";
 
 export function ProfileList({
@@ -180,7 +184,7 @@ export function ProfileList({
                     profile.enterPolicy === "allow" ? "text-warning" : "text-muted-foreground"
                   )}
                 >
-                  {groupNames.get(profile.promptGroupId) ?? "通用"} · {DELIVERY_FORMAT_LABEL[profile.defaultFormat]} · {ENTER_POLICY_STATUS_LABEL[profile.enterPolicy]}
+                  {groupNames.get(profile.promptGroupId) ?? "通用"} · {DELIVERY_FORMAT_LABEL[targetProfileOutputMode(profile)]} · {ENTER_POLICY_STATUS_LABEL[profile.enterPolicy]}
                 </span>
               </button>
 

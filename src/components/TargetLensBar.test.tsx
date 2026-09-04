@@ -40,6 +40,7 @@ function render(props: Partial<TargetLensViewProps>) {
       promptGroupName="通用"
       profileSource="fallback"
       defaultFormat="plain"
+      defaultMarkdownMode="preserve"
       enterPolicy="never"
       keepPanel={false}
       privacyCapabilityActive={false}
@@ -54,6 +55,7 @@ function render(props: Partial<TargetLensViewProps>) {
           promptGroupId: "general",
           promptGroupName: "通用",
           defaultFormat: "plain",
+          defaultMarkdownMode: "preserve",
           enterPolicy: "never",
           keepPanel: false,
         },
@@ -233,6 +235,17 @@ describe("TargetLensView", () => {
     expect(html).not.toContain('aria-haspopup="dialog"');
     expect(html).toContain('aria-live="off"');
     expect(html).toContain('tabindex="0"');
+  });
+
+  it("VoiceOver 名称区分方案默认的无 Markdown 输出", () => {
+    const html = render({
+      status: "ready",
+      snapshot: readySnapshot,
+      defaultFormat: "plain",
+      defaultMarkdownMode: "strip",
+    });
+
+    expect(html).toContain("输出格式 无 Markdown");
   });
 
   it("无目标明确锁定发送，长应用与长方案保持窄宽截断和两行规则", () => {

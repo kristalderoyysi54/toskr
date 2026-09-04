@@ -23,7 +23,7 @@ use crate::activity::{
 use crate::data_crypto;
 use crate::storage::{DATA_FILE, MEDIA_DIR};
 
-pub const MAX_STORE_VERSION: u64 = 23;
+pub const MAX_STORE_VERSION: u64 = 24;
 const MISSING_REVISION: &str = "missing";
 const MEDIA_GC_FILE: &str = "toskr-media-gc.json";
 const DATA_JOURNAL_FILE: &str = "toskr-data-transaction.json";
@@ -3370,6 +3370,21 @@ pub(crate) fn validate_settings_value_for_version(
             items.iter().all(|item| {
                 item.as_object().is_some_and(|item| {
                     let id = item.get("id").and_then(serde_json::Value::as_str);
+                    let default_format = item
+                        .get("defaultFormat")
+                        .and_then(serde_json::Value::as_str);
+                    let default_markdown_mode = item
+                        .get("defaultMarkdownMode")
+                        .and_then(serde_json::Value::as_str);
+                    let markdown_mode_valid = match item.get("defaultMarkdownMode") {
+                        Some(value) => matches!(value.as_str(), Some("preserve" | "strip")),
+                        None => store_version < 24,
+                    };
+                    let output_pair_valid = store_version < 24
+                        || !matches!(
+                            (default_format, default_markdown_mode),
+                            (Some("code"), Some("strip"))
+                        );
                     id.is_some_and(|id| !id.is_empty())
                         && item.get("name").is_some_and(serde_json::Value::is_string)
                         && item
@@ -3379,11 +3394,9 @@ pub(crate) fn validate_settings_value_for_version(
                         && item
                             .get("promptGroupId")
                             .is_some_and(serde_json::Value::is_string)
-                        && matches!(
-                            item.get("defaultFormat")
-                                .and_then(serde_json::Value::as_str),
-                            Some("plain" | "code")
-                        )
+                        && matches!(default_format, Some("plain" | "code"))
+                        && markdown_mode_valid
+                        && output_pair_valid
                         && matches!(
                             item.get("enterPolicy").and_then(serde_json::Value::as_str),
                             Some("never" | "confirm" | "allow")
@@ -4191,6 +4204,62 @@ mod tests {
     }
 
     #[test]
+    fn target_profile_markdown_defaults_are_versioned_and_canonical() {
+        let settings = |default_format: &str, default_markdown_mode: Option<serde_json::Value>| {
+            let mut profile = serde_json::json!({
+                "id": "profile",
+                "name": "Profile",
+                "bundleIds": [],
+                "promptGroupId": "general",
+                "defaultFormat": default_format,
+                "enterPolicy": "never",
+                "privacyPolicy": "requireRedaction",
+                "keepPanel": false
+            });
+            if let Some(mode) = default_markdown_mode {
+                profile
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("defaultMarkdownMode".to_string(), mode);
+            }
+            serde_json::json!({"targetProfiles": [profile]})
+        };
+
+        // v23 允许缺字段和预写的合法枚举；前端迁移再将 code + strip 收敛为 preserve。
+        for legacy in [
+            settings("plain", None),
+            settings("plain", Some(serde_json::json!("strip"))),
+            settings("code", Some(serde_json::json!("strip"))),
+        ] {
+            assert!(validate_settings_value_for_version(Some(&legacy), 23));
+        }
+
+        for current in [
+            settings("plain", Some(serde_json::json!("preserve"))),
+            settings("plain", Some(serde_json::json!("strip"))),
+            settings("code", Some(serde_json::json!("preserve"))),
+        ] {
+            assert!(validate_settings_value_for_version(
+                Some(&current),
+                MAX_STORE_VERSION
+            ));
+        }
+
+        for invalid in [
+            settings("plain", None),
+            settings("plain", Some(serde_json::json!("future"))),
+            settings("plain", Some(serde_json::json!(42))),
+            settings("code", Some(serde_json::json!("strip"))),
+            settings("strip-markdown", Some(serde_json::json!("preserve"))),
+        ] {
+            assert!(!validate_settings_value_for_version(
+                Some(&invalid),
+                MAX_STORE_VERSION
+            ));
+        }
+    }
+
+    #[test]
     fn current_store_accepts_secret_cipher_style_strings_for_normalization() {
         for style in ["classic", "code", "log", "quote", "future-style"] {
             assert!(validate_settings_value_for_version(
@@ -4227,7 +4296,7 @@ mod tests {
                 "activationWithin60s": null
             }
         });
-        assert_eq!(MAX_STORE_VERSION, 23);
+        assert_eq!(MAX_STORE_VERSION, 24);
         assert!(validate_settings_value_for_version(
             Some(&current),
             MAX_STORE_VERSION

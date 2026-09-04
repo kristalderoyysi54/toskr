@@ -9,12 +9,14 @@ import type {
 import type {
   DeliveryFormat,
   EnterPolicy,
+  MarkdownSendMode,
   PromptSnippet,
   PrivacyPolicy,
   TargetProfileResolution,
   TargetProfileResolutionSource,
 } from "@/lib/targetProfiles";
 import type { Note, Task } from "@/store/notesStore";
+import type { NoteContentBlock } from "@/lib/noteContentBlocks";
 import type { AliasEntity } from "./aliasEntities";
 import type {
   FirewallStatus,
@@ -51,6 +53,7 @@ export interface ImageFirewallItem {
 }
 
 export type DeliverySourceKind = "note" | "note-batch" | "task";
+export type { MarkdownSendMode } from "@/lib/targetProfiles";
 
 export type DeliveryDraftWarning =
   | "source-missing"
@@ -71,6 +74,11 @@ export interface DeliveryDraft {
    * 新鲜度复核与预检重组的重建入参必须回传它，否则片段会被误判「来源已变化」。
    */
   sourceTextOverride: string | null;
+  /**
+   * 块级片段发送快照（图文编辑器「发送选中」）；缺省/null = 非块级片段。
+   * 目前用于单张选中图片，也保留图文顺序，继续经过同一图片防火墙。
+   */
+  sourceContentOverride?: NoteContentBlock[] | null;
   /** 纯构建器生成的正文基线；本次手工编辑可恢复到这里。 */
   assembledText: string;
   finalText: string;
@@ -86,6 +94,8 @@ export interface DeliveryDraft {
   segments: DeliverySegment[] | null;
   imageFirewall: ImageFirewallItem[];
   format: DeliveryFormat;
+  /** Markdown 只在本次发送时转换；来源卡片始终保留原文。 */
+  markdownMode: MarkdownSendMode;
   promptSnippetId: string | null;
   /** 最后一次实际应用到正文的 AI 配方；手工修改/恢复后清空。 */
   transformRecipeId: TransformRecipeId | null;
@@ -98,6 +108,7 @@ export interface DeliveryDraft {
   promptGroupId: string;
   profileSource: TargetProfileResolutionSource;
   profileDefaultFormat: DeliveryFormat;
+  profileDefaultMarkdownMode: MarkdownSendMode;
   /** Profile 的原始 keepPanel；与本次可覆写的 keepPanel 分离。 */
   profileKeepPanel: boolean;
   privacyPolicy: PrivacyPolicy;
@@ -131,6 +142,7 @@ export interface DeliveryDraftInput {
   sourceKind: DeliverySourceKind;
   sourceItemIds: string[];
   format?: DeliveryFormat;
+  markdownMode?: MarkdownSendMode;
   promptSnippetId?: string | null;
   promptTemplate?: string;
   /**
@@ -138,6 +150,11 @@ export interface DeliveryDraftInput {
    * 仅单条 note 来源生效；片段是纯文字，图片附件不随行。
    */
   sourceTextOverride?: string;
+  /**
+   * 块级片段发送：以这些块取代单条来源卡内容；文字与图片均走正常预检。
+   * 仅单条 note 来源生效，与 sourceTextOverride 互斥。
+   */
+  sourceContentOverride?: NoteContentBlock[];
 }
 
 /** 纯构建所需的只读会话状态。 */

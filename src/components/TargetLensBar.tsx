@@ -44,8 +44,10 @@ import { cn } from "@/lib/utils";
 import {
   assignTargetProfileBundle,
   resolveTargetProfile,
+  targetProfileOutputMode,
   type DeliveryFormat,
   type EnterPolicy,
+  type MarkdownSendMode,
   type PromptGroup,
   type TargetProfile,
   type TargetProfileResolutionSource,
@@ -77,6 +79,7 @@ export interface TargetLensViewProps {
   promptGroupName: string;
   profileSource: TargetProfileResolutionSource;
   defaultFormat: DeliveryFormat;
+  defaultMarkdownMode: MarkdownSendMode;
   enterPolicy: EnterPolicy;
   keepPanel: boolean;
   privacyCapabilityActive: boolean;
@@ -110,6 +113,7 @@ function toQuickProfile(
     promptGroupName:
       groups.find((group) => group.id === profile.promptGroupId)?.name ?? "通用",
     defaultFormat: profile.defaultFormat,
+    defaultMarkdownMode: profile.defaultMarkdownMode,
     enterPolicy: profile.enterPolicy,
     keepPanel: profile.keepPanel,
   };
@@ -153,6 +157,7 @@ export function TargetLensView({
   promptGroupName,
   profileSource,
   defaultFormat,
+  defaultMarkdownMode,
   enterPolicy,
   keepPanel,
   privacyCapabilityActive,
@@ -201,7 +206,7 @@ export function TargetLensView({
   const accessibleLabel = [
     `目标 ${appName}，状态 ${statusLabel}，发送方案 ${profileName}`,
     `匹配来源 ${matchReason}`,
-    `提示词组 ${promptGroupName}，输出格式 ${DELIVERY_FORMAT_LABEL[defaultFormat]}`,
+    `提示词组 ${promptGroupName}，输出格式 ${DELIVERY_FORMAT_LABEL[targetProfileOutputMode({ defaultFormat, defaultMarkdownMode })]}`,
     `粘贴后动作 ${enterLabel}，发送完成后 ${keepPanel ? "保持打开" : "关闭面板"}，${privacyLabel}`,
   ].join("，");
   const statusTone = profileConfirmationRequired
@@ -248,11 +253,13 @@ export function TargetLensView({
       promptGroupId,
       promptGroupName,
       defaultFormat,
+      defaultMarkdownMode,
       enterPolicy,
       keepPanel,
     }),
     [
       defaultFormat,
+      defaultMarkdownMode,
       enterPolicy,
       keepPanel,
       profileId,
@@ -708,6 +715,7 @@ export function TargetLensBar() {
         profileSource={resolution.source}
         profileId={resolution.profileId}
         defaultFormat={resolution.profile.defaultFormat}
+        defaultMarkdownMode={resolution.profile.defaultMarkdownMode}
         enterPolicy={resolution.profile.enterPolicy}
         keepPanel={resolution.profile.keepPanel}
         privacyCapabilityActive={resolution.privacyCapabilityActive}

@@ -11,6 +11,7 @@ import {
 import type {
   DeliveryDraft,
   DeliveryDraftBuildState,
+  MarkdownSendMode,
 } from "./types";
 import type { SendDeliveryResult, TargetSnapshot } from "@/lib/tauri";
 import type { DeliveryFormat } from "@/lib/targetProfiles";
@@ -72,6 +73,7 @@ export function shouldOpenPreflight(
     (draft.imageFiles.length > 0 && !imagesCleared) ||
     draft.promptTemplate !== null ||
     draft.format === "code" ||
+    draft.markdownMode === "strip" ||
     draft.enterPolicy === "confirm" ||
     draft.enterPolicy === "allow" ||
     draft.warnings.length > 0;
@@ -79,6 +81,7 @@ export function shouldOpenPreflight(
 
 export type PreflightDraftChanges = {
   format?: DeliveryFormat;
+  markdownMode?: MarkdownSendMode;
   promptSnippetId?: string | null;
   promptTemplate?: string | null;
 };
@@ -116,9 +119,11 @@ export function rebuildPreflightDraft(
       sourceKind: draft.sourceKind,
       sourceItemIds: draft.sourceItemIds,
       format: changes.format ?? draft.format,
+      markdownMode: changes.markdownMode ?? draft.markdownMode,
       promptSnippetId,
       promptTemplate: promptTemplate ?? undefined,
       sourceTextOverride: draft.sourceTextOverride ?? undefined,
+      sourceContentOverride: draft.sourceContentOverride ?? undefined,
     },
     state
   );
@@ -130,6 +135,7 @@ export function rebuildPreflightDraft(
     promptGroupId: draft.promptGroupId,
     profileSource: draft.profileSource,
     profileDefaultFormat: draft.profileDefaultFormat,
+    profileDefaultMarkdownMode: draft.profileDefaultMarkdownMode,
     profileKeepPanel: draft.profileKeepPanel,
     privacyPolicy: draft.privacyPolicy,
     firewallEnabled: draft.firewallEnabled,
@@ -290,6 +296,7 @@ export function rebindPreflightDraftTarget(
     promptGroupId: state.profileResolution.promptGroup.id,
     profileSource: state.profileResolution.source,
     profileDefaultFormat: profile.defaultFormat,
+    profileDefaultMarkdownMode: profile.defaultMarkdownMode,
     profileKeepPanel: profile.keepPanel,
     privacyPolicy: draft.safeRehearsal
       ? "requireRedaction"

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DELIVERY_FORMAT_OPTIONS,
   buildAppMoveQuestion,
   createProfileFromPreset,
   filterAndPinProfiles,
@@ -10,6 +11,8 @@ import {
   profileReorderAvailability,
   profileListKeyboardIndex,
   previewSelectedProfile,
+  recommendNewTargetProfileOutput,
+  recommendTargetProfileOutput,
   reorderProfilesKeepingDefault,
   shouldShowProfileSearch,
   settingsTargetAfterObservation,
@@ -28,6 +31,7 @@ function profile(id: string, name = id): TargetProfile {
     bundleIds: [],
     promptGroupId: GENERAL_PROMPT_GROUP_ID,
     defaultFormat: "plain",
+    defaultMarkdownMode: "preserve",
     enterPolicy: "never",
     privacyPolicy: "requireRedaction",
     keepPanel: false,
@@ -35,6 +39,19 @@ function profile(id: string, name = id): TargetProfile {
 }
 
 describe("发送方案管理器纯数据契约", () => {
+  it("输出模式同时提供原文、无 Markdown 与代码块", () => {
+    expect(DELIVERY_FORMAT_OPTIONS.map((option) => option.value)).toEqual([
+      "plain",
+      "strip-markdown",
+      "code",
+    ]);
+    expect(DELIVERY_FORMAT_OPTIONS.map((option) => option.label)).toEqual([
+      "原文",
+      "无 Markdown",
+      "代码块",
+    ]);
+  });
+
   it("默认方案只在视图中置顶，不改变存储顺序", () => {
     const stored = [profile("first"), profile("default"), profile("last")];
     const visible = filterAndPinProfiles(stored, "default", "");
@@ -108,7 +125,100 @@ describe("发送方案管理器纯数据契约", () => {
       promptGroupId: "coding",
       bundleIds: ["com.example.Terminal"],
       defaultFormat: "code",
+      defaultMarkdownMode: "preserve",
       enterPolicy: "never",
+    });
+  });
+
+  it("应用类型推荐区分终端、对话与文档，未知应用安全回退原文", () => {
+    expect(
+      recommendTargetProfileOutput({
+        bundleId: "com.apple.Terminal",
+        appName: "Terminal",
+      })
+    ).toMatchObject({ appKind: "terminal", outputMode: "code" });
+    expect(
+      recommendTargetProfileOutput({
+        bundleId: "com.openai.chat",
+        appName: "ChatGPT",
+      })
+    ).toMatchObject({ appKind: "chat", outputMode: "plain" });
+    expect(
+      recommendTargetProfileOutput({
+        bundleId: "com.tencent.xinWeChat",
+        appName: "微信",
+      })
+    ).toMatchObject({ appKind: "chat", outputMode: "strip-markdown" });
+    expect(
+      recommendTargetProfileOutput({
+        bundleId: "com.apple.TextEdit",
+        appName: "TextEdit",
+      })
+    ).toMatchObject({ appKind: "document", outputMode: "strip-markdown" });
+    expect(
+      recommendTargetProfileOutput({
+        bundleId: "md.obsidian",
+        appName: "Obsidian",
+      })
+    ).toMatchObject({ appKind: "document", outputMode: "plain" });
+    expect(
+      recommendTargetProfileOutput({
+        bundleId: "com.example.unknown",
+        appName: "Unknown",
+      })
+    ).toMatchObject({ appKind: "unknown", outputMode: "plain" });
+    expect(
+      recommendTargetProfileOutput({
+        bundleId: "com.apple.TextEdit",
+        appName: "Terminal",
+      })
+    ).toMatchObject({ appKind: "document", outputMode: "strip-markdown" });
+  });
+
+  it("应用类型推荐只用于尚未绑定的目标，不覆盖已有方案", () => {
+    const profiles = [
+      { ...profile("existing"), bundleIds: ["com.apple.TextEdit"] },
+    ];
+
+    expect(
+      recommendNewTargetProfileOutput({
+        bundleId: "com.apple.TextEdit",
+        appName: "TextEdit",
+        profiles,
+      })
+    ).toBeNull();
+    expect(
+      recommendNewTargetProfileOutput({
+        bundleId: "com.apple.Terminal",
+        appName: "Terminal",
+        profiles,
+      })
+    ).toMatchObject({ appKind: "terminal", outputMode: "code" });
+    expect(
+      recommendNewTargetProfileOutput({
+        bundleId: null,
+        appName: "Terminal",
+        profiles: [],
+      })
+    ).toBeNull();
+  });
+
+  it("新建时的输出推荐不放宽所选方案的回车与隐私策略", () => {
+    expect(
+      createProfileFromPreset({
+        id: "safe-terminal",
+        presetId: "safe",
+        name: "Terminal 安全方案",
+        promptGroupId: GENERAL_PROMPT_GROUP_ID,
+        bundleId: "com.apple.Terminal",
+        defaultOutputMode: "code",
+      })
+    ).toMatchObject({
+      defaultFormat: "code",
+      defaultMarkdownMode: "preserve",
+      enterPolicy: "never",
+      privacyPolicy: "requireRedaction",
+      keepPanel: false,
     });
   });
 

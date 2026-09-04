@@ -1,6 +1,6 @@
 import { DELIVERY_FORMAT_LABEL, ENTER_POLICY_STATUS_LABEL } from "@/lib/targetLens";
 import { cn } from "@/lib/utils";
-import type { TargetProfile } from "@/lib/targetProfiles";
+import { targetProfileOutputMode, type TargetProfile } from "@/lib/targetProfiles";
 
 export function DeliveryPolicySummary({
   profile,
@@ -15,7 +15,7 @@ export function DeliveryPolicySummary({
 }) {
   const rules = [
     { label: `提示词组：${promptGroupName}`, warning: false },
-    { label: `输出格式：${DELIVERY_FORMAT_LABEL[profile.defaultFormat]}`, warning: false },
+    { label: `输出格式：${DELIVERY_FORMAT_LABEL[targetProfileOutputMode(profile)]}`, warning: false },
     {
       label: `粘贴后动作：${ENTER_POLICY_STATUS_LABEL[profile.enterPolicy]}`,
       warning: profile.enterPolicy === "allow",

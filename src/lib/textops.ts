@@ -3,31 +3,13 @@
  * 失败（如 JSON 解析）抛错，由调用方 tip warn，不改动原卡。
  */
 
+import { markdownToPlainText } from "@/lib/markdown";
+import type { SelectionEdit, TextSelection } from "@/lib/selectionFormat";
+
 export interface TextOp {
   id: string;
   label: string;
   apply: (text: string) => string;
-}
-
-/** 去 Markdown 标记：剥常见行内与块级记号，保留正文与结构缩进。 */
-function stripMarkdown(text: string): string {
-  return (
-    text
-      // 代码围栏行整行去掉（保留围栏内内容）
-      .replace(/^```[^\n]*$/gm, "")
-      // 标题/引用/列表前缀
-      .replace(/^#{1,6}\s+/gm, "")
-      .replace(/^>\s?/gm, "")
-      .replace(/^(\s*)[-*+]\s+/gm, "$1")
-      .replace(/^(\s*)\d+\.\s+/gm, "$1")
-      // 行内记号：链接 → 文字，加粗/斜体/行内代码/删除线
-      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-      .replace(/(\*\*|__)(.*?)\1/g, "$2")
-      .replace(/(\*|_)(?=\S)(.*?)(?<=\S)\1/g, "$2")
-      .replace(/~~(.*?)~~/g, "$1")
-      .replace(/`([^`]*)`/g, "$1")
-      .trim()
-  );
 }
 
 export const TEXT_OPS: TextOp[] = [
@@ -53,5 +35,26 @@ export const TEXT_OPS: TextOp[] = [
     label: "URL 解码",
     apply: (t) => decodeURIComponent(t),
   },
-  { id: "strip-md", label: "去 Markdown 标记", apply: stripMarkdown },
+  { id: "strip-md", label: "去 Markdown 标记", apply: markdownToPlainText },
 ];
+
+/**
+ * 选区适配器：文本操作只接收纯字符串，这里统一负责截取、替换并把新选区
+ * 留在处理后的片段上。卡片右键、详情编辑和选词因此共享同一组操作语义。
+ */
+export function applyTextOpToSelection(
+  text: string,
+  selection: TextSelection,
+  textOp: TextOp
+): SelectionEdit {
+  const start = Math.max(0, Math.min(selection.start, selection.end, text.length));
+  const end = Math.max(
+    start,
+    Math.min(Math.max(selection.start, selection.end), text.length)
+  );
+  const replacement = textOp.apply(text.slice(start, end));
+  return {
+    text: text.slice(0, start) + replacement + text.slice(end),
+    selection: { start, end: start + replacement.length },
+  };
+}

@@ -38,6 +38,10 @@ import { useDeliveryStore } from "@/store/deliveryStore";
 import { useUIStore } from "@/store/uiStore";
 
 type Filter = "new" | "waiting" | "done";
+// 消息卡较轻且用户会连续甩动列表；约 1.5 个主面板高度的双向缓冲可覆盖
+// Observer 到 React 提交的一帧延迟，避免空占位先进入视口。
+const MESSAGE_RENDER_MARGIN_PX = 1440;
+const MESSAGE_SCROLL_IDLE_UNMOUNT_MS = 180;
 
 const FILTERS: Array<{ value: Filter; label: string }> = [
   { value: "new", label: "待处理" },
@@ -368,6 +372,8 @@ export function MessagePage({
                   itemId={`message:${message.id}`}
                   estimatedHeight={160}
                   eager={index < 12}
+                  renderMarginPx={MESSAGE_RENDER_MARGIN_PX}
+                  scrollIdleUnmountMs={MESSAGE_SCROLL_IDLE_UNMOUNT_MS}
                 >
                   <MessageCard
                     message={message}

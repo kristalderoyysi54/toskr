@@ -64,6 +64,8 @@ function sent(overrides: Partial<DeliveryEvent> = {}): DeliveryEvent {
     redactionCount: 1,
     clipboardOutcome: "restored",
     resultNoteId: null,
+    format: "plain",
+    markdownMode: "strip",
     ...overrides,
   };
 }
@@ -135,11 +137,12 @@ describe("result return", () => {
     const serialized = JSON.stringify(event);
     expect(Object.keys(event).sort()).toEqual([
       "clipboardOutcome", "deliveryId", "durationMs", "eventId", "eventType",
-      "firewallCounts", "imageCount", "metricsEligible", "metricsEpoch", "profileId", "reasonCode", "redactionCount",
+      "firewallCounts", "format", "imageCount", "markdownMode", "metricsEligible", "metricsEpoch", "profileId", "reasonCode", "redactionCount",
       "resultNoteId", "sourceItemIds", "sourceKind", "status", "targetAppName",
       "targetBundleId", "textCharCount", "timestampMs", "transformRecipeId", "verificationCheckCount",
       "verificationIssueCount", "verificationStatus",
     ].sort());
+    expect(event).toMatchObject({ format: "plain", markdownMode: "strip" });
     expect(serialized).not.toContain("answer [EMAIL_01]");
     expect(serialized).not.toContain("must-not-spread");
   });

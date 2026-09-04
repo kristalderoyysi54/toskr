@@ -11,6 +11,11 @@ import {
 import type { FindingCategory } from "@/lib/tauri";
 import type { TransformRecipeId } from "@/lib/aiTransform";
 import type { DeliveryDraft, DeliverySourceKind } from "@/lib/delivery/types";
+import type {
+  DeliveryFormat,
+  DeliveryOutputMode,
+  MarkdownSendMode,
+} from "@/lib/targetProfiles";
 import { isDataOperationLocked } from "@/store/dataOperationStore";
 import { useNotesStore, type Note, type Task } from "@/store/notesStore";
 
@@ -76,6 +81,9 @@ export interface DeliveryEvent {
   metricsEpoch?: number;
   /** 最后实际应用到本次正文的配方；未应用或手工改写后为 null。 */
   transformRecipeId?: TransformRecipeId | null;
+  /** 最终发送草稿的输出字段；旧 JSONL 行允许同时缺失。 */
+  format?: DeliveryFormat;
+  markdownMode?: MarkdownSendMode;
   /** v13+；旧 JSONL 行允许缺失，只有 resultVerified 必须非空。 */
   verificationStatus?: VerificationActivityStatus | null;
   verificationCheckCount?: number | null;
@@ -102,6 +110,15 @@ export type DeliveryEventOverrides = {
   targetBundleId?: string | null;
   targetAppName?: string | null;
 };
+
+/** 将账本中的两个正交字段还原为用户看到的三态发送方式。 */
+export function deliveryEventOutputMode(
+  event: Pick<DeliveryEvent, "format" | "markdownMode">
+): DeliveryOutputMode | null {
+  if (!event.format || !event.markdownMode) return null;
+  if (event.format === "code" && event.markdownMode === "strip") return null;
+  return event.markdownMode === "strip" ? "strip-markdown" : event.format;
+}
 
 const FINDING_CATEGORIES = [
   "privateKey",
@@ -173,6 +190,8 @@ export function deliveryEventFromDraft(
     metricsEligible: true,
     metricsEpoch: 0,
     transformRecipeId: draft.transformRecipeId,
+    format: draft.format,
+    markdownMode: draft.markdownMode,
     verificationStatus: null,
     verificationCheckCount: null,
     verificationIssueCount: null,

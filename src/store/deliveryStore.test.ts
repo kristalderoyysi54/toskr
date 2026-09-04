@@ -37,6 +37,7 @@ function draft(): DeliveryDraft {
     imageFiles: [],
     imageFirewall: [],
     format: "plain",
+    markdownMode: "preserve",
     promptSnippetId: null,
     transformRecipeId: null,
     promptSnippetGroupId: null,
@@ -46,6 +47,7 @@ function draft(): DeliveryDraft {
     promptGroupId: "general",
     profileSource: "fallback",
     profileDefaultFormat: "plain",
+    profileDefaultMarkdownMode: "preserve",
     profileKeepPanel: false,
     privacyPolicy: "requireRedaction",
     firewallEnabled: true,
@@ -132,6 +134,78 @@ describe("deliveryStore", () => {
 
     useDeliveryStore.getState().setFinalText("人工改写");
     expect(useDeliveryStore.getState().draft?.transformRecipeId).toBeNull();
+  });
+
+  it("AI 结果重新经过无 Markdown 输出投影，并可恢复应用前正文", () => {
+    const initial = {
+      ...draft(),
+      assembledText: "原始纯文本",
+      finalText: "原始纯文本",
+      markdownMode: "strip" as const,
+    };
+    useDeliveryStore.getState().openDraft(initial);
+    const request = {
+      requestId: "request-strip",
+      draftId: initial.id,
+      draftRevision: initial.revision,
+      recipeId: "summarize" as const,
+      provider: "local",
+      model: "test",
+      inputChars: initial.finalText.length,
+      startedAtMs: 1,
+    };
+    useDeliveryStore.getState().beginTransform(request);
+    useDeliveryStore.getState().finishTransform({
+      ...request,
+      text: "- **重点**：[文档](https://example.com)",
+      createdAtMs: 2,
+    });
+
+    expect(useDeliveryStore.getState().applyTransformResult()).toBe(true);
+    expect(useDeliveryStore.getState().draft).toMatchObject({
+      finalText: "• 重点：文档（https://example.com）",
+      transformRecipeId: "summarize",
+    });
+    expect(useDeliveryStore.getState().restoreTransformText()).toBe(true);
+    expect(useDeliveryStore.getState().draft).toMatchObject({
+      finalText: "原始纯文本",
+      transformRecipeId: null,
+    });
+  });
+
+  it("AI 结果重新经过代码块输出投影，非正文设置不误判为过期", () => {
+    const initial = {
+      ...draft(),
+      assembledText: "```\n原始正文\n```",
+      finalText: "```\n原始正文\n```",
+      format: "code" as const,
+    };
+    useDeliveryStore.getState().openDraft(initial);
+    const request = {
+      requestId: "request-code",
+      draftId: initial.id,
+      draftRevision: initial.revision,
+      recipeId: "improve-prompt" as const,
+      provider: "local",
+      model: "test",
+      inputChars: initial.finalText.length,
+      startedAtMs: 1,
+    };
+    useDeliveryStore.getState().beginTransform(request);
+    useDeliveryStore.getState().finishTransform({
+      ...request,
+      text: "const answer = 42;",
+      createdAtMs: 2,
+    });
+
+    expect(useDeliveryStore.getState().applyTransformResult()).toBe(true);
+    expect(useDeliveryStore.getState().draft?.finalText).toBe(
+      "```\nconst answer = 42;\n```"
+    );
+    useDeliveryStore.getState().setKeepPanel(true);
+    expect(useDeliveryStore.getState().transform.status).toBe("applied");
+    useDeliveryStore.getState().setFinalText("人工改写");
+    expect(useDeliveryStore.getState().transform.status).toBe("stale");
   });
 
   it("confirm 回车必须由本次预检明确确认", () => {

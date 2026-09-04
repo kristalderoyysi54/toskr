@@ -101,6 +101,49 @@ export function mapNoteTextBlocks(
 }
 
 /**
+ * 图文投影选区适配器：只改选区碰到的文字块，图片块与块序保持原样。
+ * 跨图片的选区会按各文字块分别执行操作；人为补出的块间换行没有所属块，
+ * 因此不会被写回。这样既能在选词模式处理跨段内容，也不会压平图文结构。
+ */
+export function mapNoteTextSelection(
+  blocks: readonly NoteContentBlock[],
+  selection: Readonly<{ start: number; end: number }>,
+  transform: (text: string) => string
+): NoteContentBlock[] {
+  const projection = projectBlockText(blocks);
+  const start = Math.max(
+    0,
+    Math.min(selection.start, selection.end, projection.text.length)
+  );
+  const end = Math.max(
+    start,
+    Math.min(Math.max(selection.start, selection.end), projection.text.length)
+  );
+  if (start === end) return [...blocks];
+
+  const ranges = new Map(
+    projection.ranges.map((range) => [range.blockIndex, range] as const)
+  );
+  return blocks.map((block, blockIndex) => {
+    if (block.type !== "text") return block;
+    const range = ranges.get(blockIndex);
+    if (!range) return block;
+    const overlapStart = Math.max(start, range.start);
+    const overlapEnd = Math.min(end, range.end);
+    if (overlapStart >= overlapEnd) return block;
+
+    // projectBlockText 只可能去掉后续文字块的前导换行；长度差就是原块偏移。
+    const sourceOffset = block.text.length - (range.end - range.start);
+    const localStart = sourceOffset + overlapStart - range.start;
+    const localEnd = sourceOffset + overlapEnd - range.start;
+    const replacement = transform(block.text.slice(localStart, localEnd));
+    const text =
+      block.text.slice(0, localStart) + replacement + block.text.slice(localEnd);
+    return text === block.text ? block : { type: "text", text };
+  });
+}
+
+/**
  * 图片编辑的无损写入原语：只替换命中的图片文件与尺寸，文字、块序、alt
  * 以及未命中块的引用全部保持不变。相同内容图片在富文档中可重复出现，按
  * 文件编辑时这些位置必须一起更新，避免兼容投影仍引用旧图。

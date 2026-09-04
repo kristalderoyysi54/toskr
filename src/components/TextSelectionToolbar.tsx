@@ -9,6 +9,7 @@ import {
   Link2,
   Send,
   VenetianMask,
+  Wand2,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -31,6 +32,7 @@ import {
   type SelectionEdit,
   type TextSelection,
 } from "@/lib/selectionFormat";
+import { TEXT_OPS, type TextOp } from "@/lib/textops";
 import { cn } from "@/lib/utils";
 
 const BLOCK_FORMATS: ReadonlyArray<{
@@ -60,6 +62,7 @@ export function TextSelectionToolbar({
   selection,
   onApply,
   onAddAlias,
+  onTextOperation,
   onSendSelection,
   onCopySelection,
   sendDisabledReason,
@@ -73,6 +76,8 @@ export function TextSelectionToolbar({
   anchorStyle?: React.CSSProperties | null;
   /** 传入即出现「加入词典」：把选中文字快速录为化名词条（原文可改、类别可换）。 */
   onAddAlias?: (originalText: string, category: string) => void;
+  /** 对当前选中片段复用卡片右键的同一组文本操作。 */
+  onTextOperation?: (textOp: TextOp) => void;
   /** 传入即出现「发送选中」：只把选中片段发到当前目标（选词/选段模式的部分发送）。 */
   onSendSelection?: (selectedText: string) => void;
   /** 传入即出现「复制选中」。 */
@@ -99,6 +104,7 @@ export function TextSelectionToolbar({
     });
   };
   const [linkOpen, setLinkOpen] = useState(false);
+  const [textOpOpen, setTextOpOpen] = useState(false);
   const [href, setHref] = useState("");
   const [aliasOpen, setAliasOpen] = useState(false);
   const [aliasText, setAliasText] = useState("");
@@ -118,7 +124,7 @@ export function TextSelectionToolbar({
     if (!rect) return;
     // token-exception: 310≈格式菜单全高估值（8 项），纯翻转判定非视觉样式
     setPopBelow(rect.top < 310);
-  }, [formatOpen, linkOpen, aliasOpen, selection.start, selection.end, anchorStyle]);
+  }, [formatOpen, linkOpen, textOpOpen, aliasOpen, selection.start, selection.end, anchorStyle]);
 
   // 就近定位按实测宽度钳回容器：绝对定位的 shrink-to-fit 会在贴近右缘时把
   // 工具条压到竖排（外层已 w-max 定宽），这里再把 left 修到完整可见的位置。
@@ -139,6 +145,7 @@ export function TextSelectionToolbar({
   const openAlias = () => {
     setFormatOpen(false, false);
     setLinkOpen(false);
+    setTextOpOpen(false);
     setAliasText(selectedText.trim());
     setAliasCategory(suggestAliasCategory(selectedText));
     setAliasOpen(true);
@@ -159,6 +166,7 @@ export function TextSelectionToolbar({
   const openLink = () => {
     if (!canLink) return;
     setFormatOpen(false, false);
+    setTextOpOpen(false);
     setHref(suggestedHref);
     setLinkOpen(true);
     window.setTimeout(() => linkInputRef.current?.focus(), 0);
@@ -174,31 +182,37 @@ export function TextSelectionToolbar({
     // 展开态跨选区记忆：上次展开的，换个选区仍然展开
     setFormatOpenState(stickyFormatOpen && !readOnly);
     setLinkOpen(false);
+    setTextOpOpen(false);
     setAliasOpen(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selection.start, selection.end]);
 
   useEffect(() => {
-    if (!formatOpen && !linkOpen && !aliasOpen) return;
+    if (!formatOpen && !linkOpen && !textOpOpen && !aliasOpen) return;
     const onPointerDown = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) {
         setFormatOpen(false);
         setLinkOpen(false);
+        setTextOpOpen(false);
         setAliasOpen(false);
       }
     };
     window.addEventListener("pointerdown", onPointerDown, true);
     return () => window.removeEventListener("pointerdown", onPointerDown, true);
-  }, [aliasOpen, formatOpen, linkOpen]);
+  }, [aliasOpen, formatOpen, linkOpen, textOpOpen]);
 
   // WKWebView 的 button 不保证接管焦点；工具条挂载期间从窗口捕获快捷键最稳。
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && (formatOpen || linkOpen || aliasOpen)) {
+      if (
+        event.key === "Escape" &&
+        (formatOpen || linkOpen || textOpOpen || aliasOpen)
+      ) {
         event.preventDefault();
         event.stopPropagation();
         setFormatOpen(false);
         setLinkOpen(false);
+        setTextOpOpen(false);
         setAliasOpen(false);
         return;
       }
@@ -238,7 +252,7 @@ export function TextSelectionToolbar({
       <motion.div
         ref={rootRef}
         role="toolbar"
-        aria-label="文字格式"
+        aria-label="选区操作"
         initial={{ opacity: 0, y: 4, scale: 0.98 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ duration: 0.12 }}
@@ -343,6 +357,36 @@ export function TextSelectionToolbar({
           </form>
         )}
 
+        {textOpOpen && onTextOperation && (
+          <div
+            role="menu"
+            aria-label="处理选中内容"
+            className={cn(
+              "absolute right-0 w-40 rounded-lg p-1",
+              popBelow ? "top-full mt-1" : "bottom-full mb-1",
+              floatingSurface(2)
+            )}
+          >
+            {TEXT_OPS.map((textOp) => (
+              <button
+                key={textOp.id}
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  onTextOperation(textOp);
+                  setTextOpOpen(false);
+                }}
+                className={cn(
+                  "flex w-full items-center rounded-md px-2 py-1.5 text-left text-body outline-none",
+                  "hover:bg-black/5 focus-visible:bg-black/5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:hover:bg-white/10 dark:focus-visible:bg-white/10"
+                )}
+              >
+                {textOp.label}
+              </button>
+            ))}
+          </div>
+        )}
+
         {(onSendSelection || onCopySelection) && (
           <>
             {/* 工具条作用于「选中的那段」而非整卡——首次使用光看图标看不出来，
@@ -377,7 +421,7 @@ export function TextSelectionToolbar({
                 <Copy />
               </IconButton>
             )}
-            {(onAddAlias || !readOnly) && (
+            {(onAddAlias || onTextOperation || !readOnly) && (
               <div className="mx-0.5 h-4 w-px bg-foreground/10" />
             )}
           </>
@@ -430,12 +474,32 @@ export function TextSelectionToolbar({
               aria-expanded={formatOpen}
               onClick={() => {
                 setLinkOpen(false);
+                setTextOpOpen(false);
                 setFormatOpen((open) => !open);
               }}
             >
               {formatLabel(currentBlock)}
               <ChevronDown className={cn("transition-transform", formatOpen && "rotate-180")} />
             </Button>
+          </>
+        )}
+
+        {onTextOperation && (
+          <>
+            {!readOnly && <div className="mx-0.5 h-4 w-px bg-foreground/10" />}
+            <IconButton
+              label="处理选中内容"
+              pressed={textOpOpen}
+              stopPropagation={false}
+              onClick={() => {
+                setFormatOpen(false, false);
+                setLinkOpen(false);
+                setAliasOpen(false);
+                setTextOpOpen((open) => !open);
+              }}
+            >
+              <Wand2 />
+            </IconButton>
           </>
         )}
 

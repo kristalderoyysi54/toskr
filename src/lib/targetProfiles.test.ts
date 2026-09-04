@@ -14,6 +14,8 @@ import {
   promptSnippetsForGroup,
   repairTargetProfileConfiguration,
   resolveTargetProfile,
+  targetProfileOutputMode,
+  targetProfileOutputPatch,
   updateTargetProfileBundleIds,
   type PromptGroup,
   type PromptSnippet,
@@ -31,6 +33,7 @@ function profile(
     bundleIds,
     promptGroupId: GENERAL_PROMPT_GROUP_ID,
     defaultFormat: "plain",
+    defaultMarkdownMode: "preserve",
     enterPolicy: "never",
     privacyPolicy: "requireRedaction",
     keepPanel: true,
@@ -64,6 +67,37 @@ describe("Target Profile resolver", () => {
     }),
   ];
 
+  it.each([
+    ["plain", { defaultFormat: "plain", defaultMarkdownMode: "preserve" }],
+    ["strip-markdown", { defaultFormat: "plain", defaultMarkdownMode: "strip" }],
+    ["code", { defaultFormat: "code", defaultMarkdownMode: "preserve" }],
+  ] as const)("输出模式 %s 与底层双字段原子往返", (mode, expected) => {
+    const patch = targetProfileOutputPatch(mode);
+
+    expect(patch).toEqual(expected);
+    expect(targetProfileOutputMode(patch)).toBe(mode);
+  });
+
+  it("修复非法 code+strip 组合时保留代码格式并恢复 Markdown 原文", () => {
+    const invalid = profile("invalid", [], {
+      defaultFormat: "code",
+      defaultMarkdownMode: "strip",
+    });
+
+    const repaired = repairTargetProfileConfiguration({
+      groups,
+      snippets: [],
+      profiles: [invalid],
+      defaultProfileId: invalid.id,
+    }).profiles[0];
+
+    expect(repaired).toMatchObject({
+      defaultFormat: "code",
+      defaultMarkdownMode: "preserve",
+    });
+    expect(targetProfileOutputMode(repaired)).toBe("code");
+  });
+
   it("精确匹配返回唯一发送方案契约且不虚构隐私能力", () => {
     expect(
       resolveTargetProfile({
@@ -95,7 +129,7 @@ describe("Target Profile resolver", () => {
       defaultProfileId: "default",
       ruleOverrides: {
         promptGroupId: GENERAL_PROMPT_GROUP_ID,
-        defaultFormat: "plain",
+        defaultOutputMode: "plain",
         enterPolicy: "allow",
         keepPanel: false,
       },
@@ -105,12 +139,13 @@ describe("Target Profile resolver", () => {
       id: "codex",
       promptGroupId: GENERAL_PROMPT_GROUP_ID,
       defaultFormat: "plain",
+      defaultMarkdownMode: "preserve",
       enterPolicy: "allow",
       keepPanel: false,
     });
     expect(resolved.promptGroup.name).toBe("通用");
     expect(resolved.ruleOverriddenKeys.sort()).toEqual(
-      ["defaultFormat", "enterPolicy", "keepPanel", "promptGroupId"].sort()
+      ["defaultOutputMode", "enterPolicy", "keepPanel", "promptGroupId"].sort()
     );
   });
 
@@ -123,13 +158,32 @@ describe("Target Profile resolver", () => {
       profiles,
       defaultProfileId: "default",
       ruleOverrides: {
-        defaultFormat: "code", // codex 基线即 code → 不算覆盖
+        defaultOutputMode: "code", // codex 基线即 code → 不算覆盖
         promptGroupId: "no-such-group",
       },
       ruleOverridesTargetIdentity: "codex:42:500",
     });
     expect(resolved.profile.promptGroupId).toBe("coding");
     expect(resolved.ruleOverriddenKeys).toEqual([]);
+  });
+
+  it("规则级无 Markdown 覆盖原子更新格式与 Markdown 模式", () => {
+    const resolved = resolveTargetProfile({
+      bundleId: "com.openai.codex",
+      isTargetReady: true,
+      targetIdentity: "codex:42:500",
+      groups,
+      profiles,
+      defaultProfileId: "default",
+      ruleOverrides: { defaultOutputMode: "strip-markdown" },
+      ruleOverridesTargetIdentity: "codex:42:500",
+    });
+
+    expect(resolved.profile).toMatchObject({
+      defaultFormat: "plain",
+      defaultMarkdownMode: "strip",
+    });
+    expect(resolved.ruleOverriddenKeys).toEqual(["defaultOutputMode"]);
   });
 
   it("规则覆盖绑定旧目标身份时整组失效", () => {

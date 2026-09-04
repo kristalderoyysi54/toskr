@@ -5,7 +5,7 @@ import { advanceCycle, backfillPeriods, billFallbackColor } from "@/lib/bills";
 import { detectCode } from "@/lib/code";
 import { detectLink } from "@/lib/link";
 import { imageCaption } from "@/lib/format";
-import { normalizeNoteContent } from "@/lib/noteContent";
+import { normalizeEditedNoteContent } from "@/lib/noteContent";
 import {
   normalizeNoteContentBlocks,
   noteContentBlocks,
@@ -99,7 +99,7 @@ export type PageId = "notes" | "clipboard" | "tasks" | "secret";
 
 /** 页签默认顺序（剪贴最高频，居首；秘文默认关闭故垫底）。 */
 export const DEFAULT_PAGE_ORDER: PageId[] = ["clipboard", "notes", "tasks", "secret"];
-export const STORE_VERSION = 23;
+export const STORE_VERSION = 24;
 
 /**
  * 归一化页签顺序：去重、剔除未知项、补齐缺失页（按默认序追加）。
@@ -1330,13 +1330,24 @@ function validateSettingsShape(value: unknown, version: number): void {
   if (profiles !== undefined && (!Array.isArray(profiles) || !profiles.every((item) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) return false;
     const profile = item as Record<string, unknown>;
+    const defaultFormat = profile.defaultFormat;
+    const defaultMarkdownMode = profile.defaultMarkdownMode;
+    const markdownModeValid = defaultMarkdownMode === undefined
+      ? version < 24
+      : typeof defaultMarkdownMode === "string"
+        && ["preserve", "strip"].includes(defaultMarkdownMode);
+    const outputPairValid = version < 24
+      || !(defaultFormat === "code" && defaultMarkdownMode === "strip");
     return typeof profile.id === "string"
       && profile.id.length > 0
       && typeof profile.name === "string"
       && Array.isArray(profile.bundleIds)
       && profile.bundleIds.every((bundleId) => typeof bundleId === "string")
       && typeof profile.promptGroupId === "string"
-      && ["plain", "code"].includes(String(profile.defaultFormat))
+      && typeof defaultFormat === "string"
+      && ["plain", "code"].includes(defaultFormat)
+      && markdownModeValid
+      && outputPairValid
       && ["never", "confirm", "allow"].includes(String(profile.enterPolicy))
       && ["requireRedaction", "confirmRaw", "allowRaw"].includes(String(profile.privacyPolicy))
       && typeof profile.keepPanel === "boolean";
@@ -1861,7 +1872,7 @@ function normalizeBillRecord(bill: Bill): Bill {
   };
 }
 
-/** Zustand persist v1-v22 向前迁移；未知字段保留，旧版本重复记录按首项去重。 */
+/** Zustand persist v1-v23 向前迁移；未知字段保留，旧版本重复记录按首项去重。 */
 export function migratePersistedState(
   persisted: unknown,
   version: number
@@ -1977,6 +1988,24 @@ export function migratePersistedState(
       secretCipherStyle: normalizeSecretCipherStyle(
         (p.settings as unknown as Record<string, unknown>).secretCipherStyle
       ),
+    };
+  }
+  if (version < 24 && p.settings?.targetProfiles) {
+    p.settings = {
+      ...p.settings,
+      targetProfiles: p.settings.targetProfiles.map((profile) => {
+        const persistedProfile = profile as unknown as Record<string, unknown>;
+        return {
+          ...profile,
+          // 旧库默认保留 Markdown；兼容 v23 提前写入的 plain + strip。
+          // code + strip 无可表达语义，迁移时安全收敛为 preserve。
+          defaultMarkdownMode:
+            profile.defaultFormat === "plain"
+              && persistedProfile.defaultMarkdownMode === "strip"
+              ? ("strip" as const)
+              : ("preserve" as const),
+        };
+      }),
     };
   }
   if (version < 17) {
@@ -2573,7 +2602,11 @@ export const useNotesStore = create<NotesState>()(
             const t = trimmed || (hasImages ? "" : n.text);
             const blocks = replaceNoteTextProjection(currentBlocks, t, imageFiles);
             const contentPatch = noteContentPatch(blocks);
-            const normalized = normalizeNoteContent(contentPatch.text, hasImages);
+            const normalized = normalizeEditedNoteContent(
+              n,
+              contentPatch.text,
+              hasImages
+            );
             if (normalized.url) {
               // 编辑为/仍为纯链接：URL 变化时清掉旧简介，等待重抓
               const same = normalized.url === n.url;
@@ -2610,10 +2643,14 @@ export const useNotesStore = create<NotesState>()(
         const contentPatch = noteContentPatch(blocks);
         const hasImages = !!contentPatch.imageFile;
         if (!contentPatch.text.trim() && !hasImages) return;
-        const normalized = normalizeNoteContent(contentPatch.text, hasImages);
         set({
           notes: get().notes.map((note) => {
             if (note.id !== id) return note;
+            const normalized = normalizeEditedNoteContent(
+              note,
+              contentPatch.text,
+              hasImages
+            );
             const sameUrl = normalized.url === note.url;
             return {
               ...note,

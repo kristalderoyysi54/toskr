@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import { nextDeliveryDraftRevision } from "@/lib/delivery/executeDraft";
+import { applyDeliveryOutputCodec } from "@/lib/delivery/outputCodec";
 import type {
   DeliveryDraft,
   DeliveryDraftWarning,
@@ -73,6 +74,7 @@ function emptyTransform(): TransformSession {
     result: null,
     error: null,
     restoreText: null,
+    appliedText: null,
     transportPending: false,
   };
 }
@@ -130,8 +132,8 @@ function staleTransform(
 ): TransformSession {
   if (
     transform.status === "applied" &&
-    transform.result &&
-    draft.finalText !== transform.result.text
+    transform.appliedText !== null &&
+    draft.finalText !== transform.appliedText
   ) return { ...transform, status: "stale" };
   if (
     transform.status !== "ready" ||
@@ -410,6 +412,7 @@ export const useDeliveryStore = create<DeliveryState>()((set, get) => ({
         result: null,
         error: null,
         restoreText: state.transform.restoreText,
+        appliedText: null,
         transportPending: true,
       },
     });
@@ -474,8 +477,13 @@ export const useDeliveryStore = create<DeliveryState>()((set, get) => ({
       result.draftId !== draft.id ||
       result.draftRevision !== draft.revision
     ) return false;
+    const appliedText = applyDeliveryOutputCodec(
+      result.text,
+      draft.format,
+      draft.markdownMode
+    );
     const next = revise(draft, {
-      finalText: result.text,
+      finalText: appliedText,
       transformRecipeId: result.recipeId,
       enterDecisionConfirmed:
         draft.enterPolicy === "confirm" ? false : draft.enterDecisionConfirmed,
@@ -489,6 +497,7 @@ export const useDeliveryStore = create<DeliveryState>()((set, get) => ({
         status: "applied",
         error: null,
         restoreText: draft.finalText,
+        appliedText,
       },
     });
     return true;
@@ -514,6 +523,7 @@ export const useDeliveryStore = create<DeliveryState>()((set, get) => ({
         ...state.transform,
         status: state.transform.result ? "stale" : "idle",
         restoreText: null,
+        appliedText: null,
       },
     });
     return true;

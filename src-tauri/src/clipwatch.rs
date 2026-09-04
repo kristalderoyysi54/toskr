@@ -16,9 +16,14 @@ use crate::state::AppState;
 
 pub const CLIP_EVENT: &str = "toskr://clip";
 
-/// 文本超过此长度不收集（粘贴板里的巨型内容多为文件/二进制转储）。
-const MAX_TEXT_BYTES: usize = 100 * 1024;
+/// 与富剪贴板读取 seam 共用上限：可收 3000+ 行常规长文，同时继续拦截
+/// 巨型文件/二进制转储，避免常驻 watcher 向前端搬运无界字符串。
+const MAX_TEXT_BYTES: usize = crate::rich_clipboard::MAX_PLAIN_BYTES;
 const POLL: Duration = Duration::from_millis(500);
+
+fn text_within_history_limit(text: &str) -> bool {
+    text.len() <= MAX_TEXT_BYTES
+}
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -197,7 +202,7 @@ pub fn spawn(app: AppHandle) {
             match crate::rich_clipboard::read_expected(count as isize) {
                 Ok(rich) if rich.plain_text.is_some() || rich.html.is_some() => {
                     let text = rich.plain_text.unwrap_or_default();
-                    if text.len() > MAX_TEXT_BYTES {
+                    if !text_within_history_limit(&text) {
                         crate::diag::push(
                             &app,
                             format!("剪贴板: 文本超限 {}KB，跳过", text.len() / 1024),
@@ -251,7 +256,7 @@ pub fn spawn(app: AppHandle) {
                 if trimmed.is_empty() {
                     continue;
                 }
-                if text.len() > MAX_TEXT_BYTES {
+                if !text_within_history_limit(&text) {
                     crate::diag::push(
                         &app,
                         format!("剪贴板: 文本超限 {}KB，跳过", text.len() / 1024),
@@ -330,6 +335,14 @@ pub fn spawn(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clipboard_history_accepts_three_thousand_line_text_but_keeps_a_hard_cap() {
+        let long_text = "0123456789abcdefghijklmnopqrstuvwxyz一行内容\n".repeat(3_500);
+        assert!(long_text.len() > 100 * 1024);
+        assert!(text_within_history_limit(&long_text));
+        assert!(!text_within_history_limit(&"x".repeat(MAX_TEXT_BYTES + 1)));
+    }
 
     #[test]
     fn exact_self_generation_never_adopts_a_later_user_generation() {

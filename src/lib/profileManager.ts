@@ -1,10 +1,14 @@
 import {
+  TERMINAL_BUNDLE_IDS,
   resolveTargetProfile,
+  targetProfileOutputPatch,
   type DeliveryFormat,
+  type DeliveryOutputMode,
   type EnterPolicy,
   type PrivacyPolicy,
   type PromptGroup,
   type PromptSnippet,
+  type MarkdownSendMode,
   type TargetProfile,
   type TargetProfileResolution,
 } from "@/lib/targetProfiles";
@@ -40,6 +44,7 @@ export interface ProfilePreset {
   name: string;
   description: string;
   defaultFormat: DeliveryFormat;
+  defaultMarkdownMode: MarkdownSendMode;
   enterPolicy: EnterPolicy;
   privacyPolicy: PrivacyPolicy;
   keepPanel: boolean;
@@ -49,8 +54,9 @@ export const PROFILE_PRESETS: readonly ProfilePreset[] = [
   {
     id: "safe",
     name: "稳妥发送",
-    description: "纯文本粘贴，不自动按回车",
+    description: "原文粘贴，不自动按回车",
     defaultFormat: "plain",
+    defaultMarkdownMode: "preserve",
     enterPolicy: "never",
     privacyPolicy: "requireRedaction",
     keepPanel: false,
@@ -58,8 +64,9 @@ export const PROFILE_PRESETS: readonly ProfilePreset[] = [
   {
     id: "ai",
     name: "AI 对话",
-    description: "纯文本输出，每次确认后再按回车",
+    description: "原文输出，每次确认后再按回车",
     defaultFormat: "plain",
+    defaultMarkdownMode: "preserve",
     enterPolicy: "confirm",
     privacyPolicy: "confirmRaw",
     keepPanel: true,
@@ -69,6 +76,7 @@ export const PROFILE_PRESETS: readonly ProfilePreset[] = [
     name: "终端只粘贴",
     description: "代码格式粘贴，绝不自动执行",
     defaultFormat: "code",
+    defaultMarkdownMode: "preserve",
     enterPolicy: "never",
     privacyPolicy: "requireRedaction",
     keepPanel: false,
@@ -78,23 +86,162 @@ export const PROFILE_PRESETS: readonly ProfilePreset[] = [
     name: "自定义",
     description: "从安全的空白方案开始配置",
     defaultFormat: "plain",
+    defaultMarkdownMode: "preserve",
     enterPolicy: "never",
     privacyPolicy: "requireRedaction",
     keepPanel: false,
   },
 ] as const;
 
+export type TargetAppKind = "terminal" | "chat" | "document" | "unknown";
+
+export interface TargetProfileOutputRecommendation {
+  readonly appKind: TargetAppKind;
+  readonly appKindLabel: string;
+  readonly outputMode: DeliveryOutputMode;
+}
+
+interface TargetAppOutputRule extends TargetProfileOutputRecommendation {
+  bundleIds: ReadonlySet<string>;
+  appNames: ReadonlySet<string>;
+}
+
+const normalizedSet = (values: readonly string[]) =>
+  new Set(values.map((value) => value.trim().toLowerCase()));
+
+/**
+ * 只为明确识别的本机应用提供确定性推荐；规则不联网、不采集使用行为。
+ * 同类应用也按其 Markdown 能力细分，避免把 ChatGPT 与微信一概去格式。
+ */
+const TARGET_APP_OUTPUT_RULES: readonly TargetAppOutputRule[] = [
+  {
+    appKind: "terminal",
+    appKindLabel: "终端",
+    outputMode: "code",
+    bundleIds: normalizedSet([...TERMINAL_BUNDLE_IDS, "io.appmakes.otty"]),
+    appNames: normalizedSet([
+      "Terminal",
+      "iTerm2",
+      "Warp",
+      "WezTerm",
+      "Kitty",
+      "Alacritty",
+      "Ghostty",
+      "Otty",
+      "终端",
+    ]),
+  },
+  {
+    appKind: "chat",
+    appKindLabel: "支持 Markdown 的对话应用",
+    outputMode: "plain",
+    bundleIds: normalizedSet([
+      "com.openai.chat",
+      "com.openai.codex",
+      "com.anthropic.claudefordesktop",
+    ]),
+    appNames: normalizedSet(["ChatGPT", "Claude", "Codex"]),
+  },
+  {
+    appKind: "chat",
+    appKindLabel: "普通聊天应用",
+    outputMode: "strip-markdown",
+    bundleIds: normalizedSet([
+      "com.apple.MobileSMS",
+      "com.tencent.xinWeChat",
+      "com.tencent.qq",
+    ]),
+    appNames: normalizedSet(["Messages", "信息", "微信", "WeChat", "QQ"]),
+  },
+  {
+    appKind: "document",
+    appKindLabel: "Markdown 文档应用",
+    outputMode: "plain",
+    bundleIds: normalizedSet(["md.obsidian"]),
+    appNames: normalizedSet(["Obsidian", "Typora"]),
+  },
+  {
+    appKind: "document",
+    appKindLabel: "普通文档编辑器",
+    outputMode: "strip-markdown",
+    bundleIds: normalizedSet([
+      "com.apple.TextEdit",
+      "com.apple.Notes",
+      "com.apple.iWork.Pages",
+      "com.microsoft.Word",
+    ]),
+    appNames: normalizedSet([
+      "TextEdit",
+      "文本编辑",
+      "Notes",
+      "备忘录",
+      "Pages",
+      "Microsoft Word",
+    ]),
+  },
+] as const;
+
+const FALLBACK_OUTPUT_RECOMMENDATION: TargetProfileOutputRecommendation = {
+  appKind: "unknown",
+  appKindLabel: "未识别应用",
+  outputMode: "plain",
+};
+
+export function recommendTargetProfileOutput(input: {
+  bundleId?: string | null;
+  appName?: string | null;
+}): TargetProfileOutputRecommendation {
+  const bundleId = input.bundleId?.trim().toLowerCase() ?? "";
+  const appName = input.appName?.trim().toLowerCase() ?? "";
+  // bundleId 是系统身份，优先级高于可能被本地化、重名或短暂陈旧的显示名称。
+  const matchedByBundle = bundleId
+    ? TARGET_APP_OUTPUT_RULES.find((rule) => rule.bundleIds.has(bundleId))
+    : undefined;
+  const matched = matchedByBundle ?? (appName
+    ? TARGET_APP_OUTPUT_RULES.find((rule) => rule.appNames.has(appName))
+    : undefined);
+  return matched
+    ? {
+        appKind: matched.appKind,
+        appKindLabel: matched.appKindLabel,
+        outputMode: matched.outputMode,
+      }
+    : FALLBACK_OUTPUT_RECOMMENDATION;
+}
+
+/** 已有 owner 表示并非首次建方案；此时不提供自动初始值，保护用户配置。 */
+export function recommendNewTargetProfileOutput(input: {
+  bundleId?: string | null;
+  appName?: string | null;
+  profiles: Pick<TargetProfile, "bundleIds">[];
+}): TargetProfileOutputRecommendation | null {
+  const bundleId = input.bundleId?.trim();
+  if (
+    !bundleId ||
+    input.profiles.some((profile) => profile.bundleIds.includes(bundleId))
+  ) {
+    return null;
+  }
+  return recommendTargetProfileOutput({ bundleId, appName: input.appName });
+}
+
 export const DELIVERY_FORMAT_OPTIONS: readonly {
-  value: DeliveryFormat;
+  value: DeliveryOutputMode;
   label: string;
   description: string;
   example: string;
 }[] = [
   {
     value: "plain",
-    label: "纯文本",
-    description: "保持内容自然排版，适合聊天与文档应用。",
-    example: "示例：这是准备发送的内容。",
+    label: "原文",
+    description: "保持内容自然排版并保留 Markdown 标记。",
+    example: "示例：**这是准备发送的内容**",
+  },
+  {
+    value: "strip-markdown",
+    label: "无 Markdown",
+    description: "发送时去除 Markdown 标记；智能预检会先展示结果。",
+    example: "示例：标题\n• 要点 · 链接（https://example.com）",
   },
   {
     value: "code",
@@ -286,15 +433,23 @@ export function createProfileFromPreset(input: {
   name: string;
   promptGroupId: string;
   bundleId?: string | null;
+  /** 仅用于新建时的应用类型推荐；不改变 preset 的安全策略。 */
+  defaultOutputMode?: DeliveryOutputMode;
 }): TargetProfile {
   const preset = PROFILE_PRESETS.find((item) => item.id === input.presetId) ?? PROFILE_PRESETS[3];
   const bundleId = input.bundleId?.trim();
+  const output = input.defaultOutputMode
+    ? targetProfileOutputPatch(input.defaultOutputMode)
+    : {
+        defaultFormat: preset.defaultFormat,
+        defaultMarkdownMode: preset.defaultMarkdownMode,
+      };
   return {
     id: input.id,
     name: input.name.trim() || preset.name,
     bundleIds: bundleId ? [bundleId] : [],
     promptGroupId: input.promptGroupId,
-    defaultFormat: preset.defaultFormat,
+    ...output,
     enterPolicy: preset.enterPolicy,
     privacyPolicy: preset.privacyPolicy,
     keepPanel: preset.keepPanel,

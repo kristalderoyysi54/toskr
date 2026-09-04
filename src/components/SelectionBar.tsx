@@ -29,6 +29,7 @@ import { cn } from "@/lib/utils";
 import {
   promptSnippetsForGroup,
   resolveTargetProfile,
+  targetProfileOutputMode,
 } from "@/lib/targetProfiles";
 import {
   CLIPBOARD_ID,
@@ -64,6 +65,10 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
   const profileOverrideNeedsConfirmation = useTargetStore(
     (s) => s.profileOverrideNeedsConfirmation
   );
+  const ruleOverrides = useTargetStore((s) => s.ruleOverrides);
+  const ruleOverridesTargetIdentity = useTargetStore(
+    (s) => s.ruleOverridesTargetIdentity
+  );
   const targetIdentity = useMemo(
     () => targetProfileIdentity(targetSnapshot),
     [targetSnapshot]
@@ -80,12 +85,16 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
         temporaryProfileId: profileOverrideId,
         temporaryTargetIdentity: profileOverrideTargetIdentity,
         temporaryNeedsConfirmation: profileOverrideNeedsConfirmation,
+        ruleOverrides,
+        ruleOverridesTargetIdentity,
         privacyCapabilityActive: settings.firewallEnabled,
       }),
     [
       profileOverrideId,
       profileOverrideTargetIdentity,
       profileOverrideNeedsConfirmation,
+      ruleOverrides,
+      ruleOverridesTargetIdentity,
       settings.defaultTargetProfileId,
       settings.firewallEnabled,
       settings.promptGroups,
@@ -122,6 +131,12 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
         ?.name ?? null,
     [profileOverrideId, settings.targetProfiles]
   );
+  const activeOutputMode = targetProfileOutputMode(resolution.profile);
+  const outputModeMarker = resolution.ruleOverriddenKeys.includes(
+    "defaultOutputMode"
+  )
+    ? "（本次）"
+    : "（方案默认）";
   const nativeTargetReady = resolution.isTargetReady;
   const internalSendAvailable = page === "clipboard";
   // 主按钮标签跟发送漏斗同口径：预检 always 模式会跳过编辑器插入直接外发，
@@ -413,20 +428,41 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
                   disabled={!targetReady}
                   onClick={() => {
                     close();
-                    void sendCheckedToChat(undefined, { format: "plain" });
+                    void sendCheckedToChat(undefined, {
+                      format: "plain",
+                      markdownMode: "preserve",
+                    });
                   }}
                 >
-                  纯文本{resolution.profile.defaultFormat === "plain" ? "（方案默认）" : ""}
+                  原文（保留 Markdown）
+                  {activeOutputMode === "plain" ? outputModeMarker : ""}
+                </SimpleMenuItem>
+                <SimpleMenuItem
+                  disabled={!targetReady}
+                  title="去除标题、粗体、链接括号等；仅影响本次发送，不修改卡片"
+                  onClick={() => {
+                    close();
+                    void sendCheckedToChat(undefined, {
+                      format: "plain",
+                      markdownMode: "strip",
+                    });
+                  }}
+                >
+                  去 Markdown 后发送
+                  {activeOutputMode === "strip-markdown" ? outputModeMarker : ""}
                 </SimpleMenuItem>
                 <SimpleMenuItem
                   disabled={!targetReady}
                   title="包裹为 Markdown 代码块，单条会带上检测到的语言"
                   onClick={() => {
                     close();
-                    void sendCheckedToChat(undefined, { format: "code" });
+                    void sendCheckedToChat(undefined, {
+                      format: "code",
+                      markdownMode: "preserve",
+                    });
                   }}
                 >
-                  代码块 ```{resolution.profile.defaultFormat === "code" ? "（方案默认）" : ""}
+                  代码块 ```{activeOutputMode === "code" ? outputModeMarker : ""}
                 </SimpleMenuItem>
                 <SimpleMenuSeparator />
                 <SimpleMenuLabel>本次发送方案</SimpleMenuLabel>

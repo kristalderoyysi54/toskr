@@ -105,4 +105,23 @@ describe("observeNearViewport", () => {
     expect(FakeIntersectionObserver.instances[0]?.rootMargin).toBe("0px 160px");
     stop();
   });
+
+  it("轻量菜单以内层滚动容器为 root，图标只在邻近行加载", () => {
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    const root = {
+      hasAttribute: vi.fn((name: string) => name === "data-deferred-media-root"),
+    } as unknown as Element;
+    const target = {
+      closest: vi.fn(() => root),
+    } as unknown as Element;
+
+    const stop = observeNearViewport(target, vi.fn());
+
+    expect(target.closest).toHaveBeenCalledWith(
+      "[data-radix-scroll-area-viewport], [data-strip-scroller], [data-deferred-media-root]"
+    );
+    expect(FakeIntersectionObserver.instances[0]?.root).toBe(root);
+    expect(FakeIntersectionObserver.instances[0]?.rootMargin).toBe("32px 0px");
+    stop();
+  });
 });

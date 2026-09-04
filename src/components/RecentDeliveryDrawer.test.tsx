@@ -188,6 +188,64 @@ describe("RecentDeliveryDrawer", () => {
     expect(html).not.toContain("当前正文不会进入活动组件");
   });
 
+  it("展示实际发送方式，并将成功记录按同格式重新准备到当前目标", () => {
+    const source: Note = {
+      id: "note-1",
+      text: "# 当前来源",
+      sectionId: "inbox",
+      done: false,
+      createdAt: 1,
+    };
+    const html = renderToStaticMarkup(
+      <RecentDeliveryList
+        records={deliveryActivityRecords([event({
+          eventType: "sendSent",
+          status: "sent",
+          reasonCode: null,
+          format: "plain",
+          markdownMode: "strip",
+        })])}
+        notes={[source]}
+        tasks={[]}
+        busyEventId={null}
+        onReprepare={vi.fn()}
+      />
+    );
+
+    expect(html).toContain("本次实际发送方式");
+    expect(html).toContain("无 Markdown");
+    expect(html).toContain("按同格式再准备");
+    expect(html).toContain("当前前台目标重新预检");
+    expect(html).not.toContain("重试发送");
+  });
+
+  it("旧成功记录不提供无法保证格式一致的再次发送入口", () => {
+    const source: Note = {
+      id: "note-1",
+      text: "旧来源",
+      sectionId: "inbox",
+      done: false,
+      createdAt: 1,
+    };
+    const html = renderToStaticMarkup(
+      <RecentDeliveryList
+        records={deliveryActivityRecords([event({
+          eventType: "sendSent",
+          status: "sent",
+          reasonCode: null,
+        })])}
+        notes={[source]}
+        tasks={[]}
+        busyEventId={null}
+        onReprepare={vi.fn()}
+      />
+    );
+
+    expect(html).toContain("旧记录未保存");
+    expect(html).not.toContain("按同格式再准备");
+    expect(html).not.toContain("重新准备");
+  });
+
   it("结果事件折叠到原发送，结果存在时提供来源与结果入口", () => {
     const records = deliveryActivityRecords([
       event({

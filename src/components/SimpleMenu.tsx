@@ -21,6 +21,7 @@ export function SimpleMenu({
   menuAriaLabel,
   menuClassName,
   className,
+  preserveTextSelection = false,
 }: {
   trigger: (props: { open: boolean; toggle: () => void; controls: string }) => React.ReactNode;
   children: (close: () => void) => React.ReactNode;
@@ -29,6 +30,8 @@ export function SimpleMenu({
   menuRole?: SimpleMenuRole;
   menuAriaLabel?: string;
   menuClassName?: string;
+  /** 菜单交互期间保留正文选区，供依赖选区的命令在菜单抢焦点后继续使用。 */
+  preserveTextSelection?: boolean;
   /** 根容器附加类。默认 block 会让触发按钮参与基线对齐产生亚像素错位，
    *  与相邻按钮拼「分裂按钮」时传 "flex" 消除。 */
   className?: string;
@@ -136,6 +139,7 @@ export function SimpleMenu({
   return (
     <div
       ref={rootRef}
+      data-preserve-text-selection={preserveTextSelection || undefined}
       className={cn("relative", className)}
       onKeyDown={(event) => {
         if (open || (event.key !== "ArrowDown" && event.key !== "ArrowUp")) return;
@@ -162,6 +166,7 @@ export function SimpleMenu({
           id={menuId}
           role={menuRole}
           aria-label={menuAriaLabel}
+          data-deferred-media-root
           data-state={open ? "open" : "closed"}
           // 兜底计时器触发前也停在透明末帧，杜绝动画结束后闪回 opacity:1。
           style={!open ? { animationFillMode: "forwards" } : undefined}

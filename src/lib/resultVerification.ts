@@ -5,7 +5,10 @@ import {
   startAiRequest,
   type AiRequestHandle,
 } from "@/lib/aiClient";
-import type { DeliveryEvent } from "@/lib/deliveryActivityCore";
+import {
+  deliveryEventOutputMode,
+  type DeliveryEvent,
+} from "@/lib/deliveryActivityCore";
 import {
   PLACEHOLDER_NAME_PATTERN,
   PLACEHOLDER_PATTERN,
@@ -728,6 +731,9 @@ export function resultVerifiedEvent(
     metricsEligible: delivery.metricsEligible !== false,
     metricsEpoch: delivery.metricsEpoch ?? 0,
     transformRecipeId: delivery.transformRecipeId ?? null,
+    ...(deliveryEventOutputMode(delivery)
+      ? { format: delivery.format, markdownMode: delivery.markdownMode }
+      : {}),
     verificationStatus: report.status,
     verificationCheckCount: report.checks.length,
     verificationIssueCount: verificationIssueCount(report),

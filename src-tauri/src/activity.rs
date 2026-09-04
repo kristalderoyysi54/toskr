@@ -72,6 +72,20 @@ pub enum DeliverySourceKind {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DeliveryFormat {
+    Plain,
+    Code,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MarkdownSendMode {
+    Preserve,
+    Strip,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TransformRecipeId {
     Summarize,
@@ -123,6 +137,10 @@ pub struct DeliveryEvent {
     pub metrics_epoch: u64,
     #[serde(default)]
     pub transform_recipe_id: Option<TransformRecipeId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<DeliveryFormat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub markdown_mode: Option<MarkdownSendMode>,
     #[serde(default)]
     pub verification_status: Option<VerificationStatus>,
     #[serde(default)]
@@ -188,6 +206,14 @@ fn validate_event(event: &DeliveryEvent) -> Result<(), String> {
     }
     if let Some(value) = &event.result_note_id {
         validate_text(value, "resultNoteId", 160, false)?;
+    }
+    match (event.format, event.markdown_mode) {
+        (None, None) => {} // 兼容新增字段前的本地 JSONL 行
+        (Some(DeliveryFormat::Code), Some(MarkdownSendMode::Strip)) => {
+            return Err("代码块不能同时去除 Markdown".into());
+        }
+        (Some(_), Some(_)) => {}
+        _ => return Err("发送活动的输出字段不完整".into()),
     }
     let verification_fields = event.verification_status.is_some()
         || event.verification_check_count.is_some()
@@ -514,6 +540,8 @@ mod tests {
             metrics_eligible: true,
             metrics_epoch: 0,
             transform_recipe_id: None,
+            format: Some(DeliveryFormat::Plain),
+            markdown_mode: Some(MarkdownSendMode::Preserve),
             verification_status: None,
             verification_check_count: None,
             verification_issue_count: None,
@@ -542,8 +570,10 @@ mod tests {
             );
         }
         let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        assert_eq!(value.as_object().unwrap().len(), 24);
+        assert_eq!(value.as_object().unwrap().len(), 26);
         assert_eq!(value["resultNoteId"], "result-note-1");
+        assert_eq!(value["format"], "plain");
+        assert_eq!(value["markdownMode"], "preserve");
 
         let mut forbidden = value;
         forbidden["resultBody"] = serde_json::json!("secret result");
@@ -556,12 +586,28 @@ mod tests {
         value.as_object_mut().unwrap().remove("metricsEligible");
         value.as_object_mut().unwrap().remove("metricsEpoch");
         value.as_object_mut().unwrap().remove("transformRecipeId");
+        value.as_object_mut().unwrap().remove("format");
+        value.as_object_mut().unwrap().remove("markdownMode");
 
         let decoded: DeliveryEvent = serde_json::from_value(value).unwrap();
 
         assert!(decoded.metrics_eligible);
         assert_eq!(decoded.metrics_epoch, 0);
         assert_eq!(decoded.transform_recipe_id, None);
+        assert_eq!(decoded.format, None);
+        assert_eq!(decoded.markdown_mode, None);
+    }
+
+    #[test]
+    fn output_fields_are_paired_and_reject_incompatible_modes() {
+        let mut missing_mode = event(8, 100);
+        missing_mode.markdown_mode = None;
+        assert!(validate_event(&missing_mode).is_err());
+
+        let mut incompatible = event(9, 100);
+        incompatible.format = Some(DeliveryFormat::Code);
+        incompatible.markdown_mode = Some(MarkdownSendMode::Strip);
+        assert!(validate_event(&incompatible).is_err());
     }
 
     #[test]

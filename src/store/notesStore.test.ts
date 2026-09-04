@@ -226,7 +226,7 @@ describe("notesStore 基础", () => {
   });
 
   it("v12 迁移到最新版时正文不变、生成权威块，并补齐本地成效设置", () => {
-    expect(STORE_VERSION).toBe(23);
+    expect(STORE_VERSION).toBe(24);
     const decoded = decodePersistedState(JSON.stringify({
       version: 12,
       state: {
@@ -1838,6 +1838,126 @@ describe("store v13 migration and directory rehydrate", () => {
     }))).toThrow("settings.targetProfiles 字段无效");
   });
 
+  it("v23 目标方案缺失 Markdown 模式时迁移为保留原文", () => {
+    const settings = defaultSettings();
+    const legacyProfiles = settings.targetProfiles.map((profile) => {
+      const persisted = { ...profile } as Record<string, unknown>;
+      delete persisted.defaultMarkdownMode;
+      return persisted;
+    });
+    const decoded = decodePersistedState(JSON.stringify({
+      version: 23,
+      state: {
+        sections: [],
+        notes: [],
+        tasks: [],
+        taskSections: [],
+        settings: {
+          ...settings,
+          targetProfiles: legacyProfiles,
+        },
+      },
+    }));
+
+    expect(decoded.settings.targetProfiles.map((profile) => ({
+      format: profile.defaultFormat,
+      markdownMode: profile.defaultMarkdownMode,
+    }))).toEqual([
+      { format: "plain", markdownMode: "preserve" },
+      { format: "code", markdownMode: "preserve" },
+    ]);
+  });
+
+  it("v23 兼容预写的 Markdown 模式，并把 code + strip 收敛为保留原文", () => {
+    const settings = defaultSettings();
+    const decoded = decodePersistedState(JSON.stringify({
+      version: 23,
+      state: {
+        sections: [],
+        notes: [],
+        tasks: [],
+        taskSections: [],
+        settings: {
+          ...settings,
+          targetProfiles: settings.targetProfiles.map((profile, index) => ({
+            ...profile,
+            defaultMarkdownMode: "strip",
+            defaultFormat: index === 0 ? "plain" : "code",
+          })),
+        },
+      },
+    }));
+
+    expect(decoded.settings.targetProfiles[0].defaultMarkdownMode).toBe("strip");
+    expect(decoded.settings.targetProfiles[1]).toMatchObject({
+      defaultFormat: "code",
+      defaultMarkdownMode: "preserve",
+    });
+  });
+
+  it("当前 schema 往返保留 plain + strip 目标方案", () => {
+    const settings = defaultSettings();
+    const decoded = decodePersistedState(JSON.stringify({
+      version: STORE_VERSION,
+      state: {
+        sections: [],
+        notes: [],
+        tasks: [],
+        taskSections: [],
+        settings: {
+          ...settings,
+          targetProfiles: settings.targetProfiles.map((profile, index) =>
+            index === 0
+              ? { ...profile, defaultFormat: "plain", defaultMarkdownMode: "strip" }
+              : profile
+          ),
+        },
+      },
+    }));
+
+    expect(decoded.settings.targetProfiles[0]).toMatchObject({
+      defaultFormat: "plain",
+      defaultMarkdownMode: "strip",
+    });
+  });
+
+  it.each([
+    ["缺失 Markdown 模式", (profile: Record<string, unknown>) => {
+      delete profile.defaultMarkdownMode;
+    }],
+    ["Markdown 模式非法", (profile: Record<string, unknown>) => {
+      profile.defaultMarkdownMode = "future";
+    }],
+    ["Markdown 模式类型非法", (profile: Record<string, unknown>) => {
+      profile.defaultMarkdownMode = ["preserve"];
+    }],
+    ["code + strip 非法组合", (profile: Record<string, unknown>) => {
+      profile.defaultFormat = "code";
+      profile.defaultMarkdownMode = "strip";
+    }],
+    ["输出格式非法", (profile: Record<string, unknown>) => {
+      profile.defaultFormat = "strip-markdown";
+    }],
+  ])("当前 schema 严格拒绝%s", (_label, mutateProfile) => {
+    const settings = defaultSettings();
+    const profile = { ...settings.targetProfiles[0] } as Record<string, unknown>;
+    mutateProfile(profile);
+
+    expect(() => decodePersistedState(JSON.stringify({
+      version: STORE_VERSION,
+      state: {
+        sections: [],
+        notes: [],
+        tasks: [],
+        taskSections: [],
+        settings: {
+          ...settings,
+          targetProfiles: [profile, ...settings.targetProfiles.slice(1)],
+        },
+      },
+    }))).toThrow("settings.targetProfiles 字段无效");
+  });
+
   it.each([
     ["present non-array records", { notes: "corrupt" }],
     ["wrong settings array type", { settings: { promptSnippets: "corrupt" } }],
@@ -2031,6 +2151,37 @@ describe("链接卡片：updateNoteText 升降级与 setLinkMeta", () => {
     expect(n.kind).toBe("text");
     expect(n.url).toBeUndefined();
     expect(n.linkTitle).toBeUndefined();
+  });
+
+  it("链接卡新增粗体格式后按 Markdown 文本保存", () => {
+    const { id } = useNotesStore.getState().addNote("https://example.com");
+    const formatted = "https://**example**.com";
+    useNotesStore
+      .getState()
+      .updateNoteText(id!, formatted);
+    // 自动保存后收尾保存会以相同正文再写一次，格式意图必须保持。
+    useNotesStore.getState().updateNoteText(id!, formatted);
+    const n = useNotesStore.getState().notes.find((x) => x.id === id)!;
+
+    expect(n.kind).toBe("text");
+    expect(n.url).toBeUndefined();
+    expect(n.codeLang).toBeUndefined();
+  });
+
+  it("代码卡新增粗体格式后按 Markdown 文本保存", () => {
+    const source = "#!/bin/bash\nfunction deploy() {\n  echo ready;\n}";
+    const { id } = useNotesStore.getState().addNote(source);
+    expect(
+      useNotesStore.getState().notes.find((x) => x.id === id)?.codeLang
+    ).toBeTruthy();
+
+    const formatted = source.replace("ready", "**ready**");
+    useNotesStore.getState().updateNoteText(id!, formatted);
+    useNotesStore.getState().updateNoteText(id!, formatted);
+    const n = useNotesStore.getState().notes.find((x) => x.id === id)!;
+
+    expect(n.kind).toBe("text");
+    expect(n.codeLang).toBeUndefined();
   });
 
   it("文本卡编辑成 URL：升级为链接卡", () => {

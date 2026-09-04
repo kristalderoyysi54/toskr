@@ -71,6 +71,39 @@ describe("refreshPreviewPayload", () => {
     expect(result.payload.url).toBeNull();
   });
 
+  it("lets an explicit inline format turn detected code into Markdown", () => {
+    const result = refreshPreviewPayload(
+      note({ codeLang: "bash" }),
+      "#!/bin/bash\necho **ready**\nexit 0"
+    );
+
+    expect(result.payload.codeLang).toBeNull();
+    expect(result.markdownView).toBe(true);
+  });
+
+  it("does not reinterpret an existing Bash glob as newly authored Markdown", () => {
+    const original =
+      "#!/bin/bash\nfunction deploy() {\n  find . -path '**/node_modules/**'\n}";
+    const result = refreshPreviewPayload(
+      note({ text: original, codeLang: "bash" }),
+      `${original}\ndeploy`
+    );
+
+    expect(result.payload.codeLang).not.toBeNull();
+    expect(result.markdownView).toBe(false);
+  });
+
+  it("lets an explicit inline format turn a bare link into Markdown", () => {
+    const result = refreshPreviewPayload(
+      note({ kind: "link", url: "https://example.com" }),
+      "https://**example**.com"
+    );
+
+    expect(result.payload.kind).toBe("text");
+    expect(result.payload.url).toBeNull();
+    expect(result.markdownView).toBe(true);
+  });
+
   it("带粘贴图片时 URL 正文保持图文卡，不升级为链接卡", () => {
     const result = refreshPreviewPayload(
       note({ images: ["paste.png"] }),

@@ -391,6 +391,97 @@ describe("结构化发送结果的 store 副作用", () => {
     expect(useNotesStore.getState().checkedIds).toEqual([]);
   });
 
+  it("剪贴板去 Markdown 后追加到另一张卡片，只转换本次插入正文", async () => {
+    const destination = useNotesStore.getState().addNote("目标卡片").id!;
+    openNoteDetail(destination, true);
+    eventMocks.emitTo.mockClear();
+    useNotesStore.getState().addClipNote("# 标题\n\n**正文**", {});
+    const sourceId = useNotesStore.getState().notes[0].id;
+    webviewMocks.getByLabel.mockResolvedValue({
+      isVisible: vi.fn().mockResolvedValue(true),
+    });
+
+    await sendNotesToChat([sourceId], undefined, { markdownMode: "strip" });
+
+    expect(eventMocks.emitTo).toHaveBeenCalledWith(
+      "textpreview",
+      "toskr://note-editor-insert",
+      expect.objectContaining({ text: "标题\n\n正文", images: [] })
+    );
+    expect(apiMocks.sendDelivery).not.toHaveBeenCalled();
+    expect(
+      useNotesStore.getState().notes.find((note) => note.id === sourceId)?.text
+    ).toBe("# 标题\n\n**正文**");
+  });
+
+  it("内部追加默认保留原文，不继承外部目标方案的去 Markdown 默认", async () => {
+    const settings = useNotesStore.getState().settings;
+    useNotesStore.getState().setSettings({
+      targetProfiles: [{
+        id: "markdown-free",
+        name: "无 Markdown",
+        bundleIds: ["com.openai.codex"],
+        promptGroupId: settings.promptGroups[0].id,
+        defaultFormat: "plain",
+        defaultMarkdownMode: "strip",
+        enterPolicy: "never",
+        privacyPolicy: "requireRedaction",
+        keepPanel: false,
+      }],
+      defaultTargetProfileId: "markdown-free",
+    });
+    const destination = useNotesStore.getState().addNote("目标卡片").id!;
+    openNoteDetail(destination, true);
+    eventMocks.emitTo.mockClear();
+    useNotesStore.getState().addClipNote("# 标题\n\n**正文**", {});
+    const sourceId = useNotesStore.getState().notes[0].id;
+    webviewMocks.getByLabel.mockResolvedValue({
+      isVisible: vi.fn().mockResolvedValue(true),
+    });
+
+    await sendNotesToChat([sourceId]);
+
+    expect(eventMocks.emitTo).toHaveBeenCalledWith(
+      "textpreview",
+      "toskr://note-editor-insert",
+      expect.objectContaining({ text: "# 标题\n\n**正文**", images: [] })
+    );
+    expect(apiMocks.sendDelivery).not.toHaveBeenCalled();
+  });
+
+  it("外部发送采用目标方案的去 Markdown 默认，显式 preserve 可单次覆盖", async () => {
+    const settings = useNotesStore.getState().settings;
+    useNotesStore.getState().setSettings({
+      targetProfiles: [{
+        id: "markdown-free",
+        name: "无 Markdown",
+        bundleIds: ["com.openai.codex"],
+        promptGroupId: settings.promptGroups[0].id,
+        defaultFormat: "plain",
+        defaultMarkdownMode: "strip",
+        enterPolicy: "never",
+        privacyPolicy: "requireRedaction",
+        keepPanel: false,
+      }],
+      defaultTargetProfileId: "markdown-free",
+    });
+    const sourceId = useNotesStore.getState().addNote("# 标题\n\n**正文**").id!;
+
+    await sendNotesToChat([sourceId]);
+    expect(apiMocks.sendDelivery).toHaveBeenLastCalledWith(
+      expect.objectContaining({ text: "标题\n\n正文" })
+    );
+
+    apiMocks.sendDelivery.mockClear();
+    await sendNotesToChat([sourceId], undefined, {
+      format: "plain",
+      markdownMode: "preserve",
+    });
+    expect(apiMocks.sendDelivery).toHaveBeenLastCalledWith(
+      expect.objectContaining({ text: "# 标题\n\n**正文**" })
+    );
+  });
+
   it("剪贴卡详情页发送选中绕过同窗内部追加并投递到外部目标", async () => {
     useNotesStore.getState().addClipNote("完整正文", {});
     const sourceId = useNotesStore.getState().notes[0].id;
@@ -415,6 +506,38 @@ describe("结构化发送结果的 store 副作用", () => {
         imageFiles: [],
         targetToken: "token-1",
       })
+    );
+    expect(tip).not.toHaveBeenCalledWith("warn", "不能把卡片内容添加到自身");
+  });
+
+  it.each([
+    ["原文", "preserve", "# 标题\n\n**正文**"],
+    ["去 Markdown", "strip", "标题\n\n正文"],
+  ] as const)("剪贴卡详情页%s整卡发送明确绕过内部追加", async (
+    _label,
+    markdownMode,
+    expectedText
+  ) => {
+    useNotesStore.getState().addClipNote("# 标题\n\n**正文**", {});
+    const sourceId = useNotesStore.getState().notes[0].id;
+    openNoteDetail(sourceId, false);
+    eventMocks.emitTo.mockClear();
+    webviewMocks.getByLabel.mockResolvedValue({
+      isVisible: vi.fn().mockResolvedValue(true),
+    });
+
+    await sendNotesToChat([sourceId], undefined, {
+      forceExternal: true,
+      markdownMode,
+    });
+
+    expect(eventMocks.emitTo).not.toHaveBeenCalledWith(
+      "textpreview",
+      "toskr://note-editor-insert",
+      expect.anything()
+    );
+    expect(apiMocks.sendDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expectedText, targetToken: "token-1" })
     );
     expect(tip).not.toHaveBeenCalledWith("warn", "不能把卡片内容添加到自身");
   });
@@ -1104,6 +1227,7 @@ describe("结构化发送结果的 store 副作用", () => {
           bundleIds: ["com.openai.codex"],
           promptGroupId: settings.promptGroups[0].id,
           defaultFormat: "code",
+          defaultMarkdownMode: "preserve",
           enterPolicy: "allow",
           privacyPolicy: "confirmRaw",
           keepPanel: true,
@@ -1135,6 +1259,7 @@ describe("结构化发送结果的 store 副作用", () => {
           bundleIds: ["com.openai.codex"],
           promptGroupId: settings.promptGroups[0].id,
           defaultFormat: "plain",
+          defaultMarkdownMode: "preserve",
           enterPolicy: "confirm",
           privacyPolicy: "requireRedaction",
           keepPanel: false,
@@ -1168,6 +1293,7 @@ describe("结构化发送结果的 store 副作用", () => {
           bundleIds: [],
           promptGroupId: settings.promptGroups[0].id,
           defaultFormat: "plain",
+          defaultMarkdownMode: "preserve",
           enterPolicy: "allow",
           privacyPolicy: "allowRaw",
           keepPanel: false,
@@ -1215,6 +1341,7 @@ describe("结构化发送结果的 store 副作用", () => {
         bundleIds: [],
         promptGroupId: settings.promptGroups[0].id,
         defaultFormat: "plain",
+        defaultMarkdownMode: "preserve",
         enterPolicy: "confirm",
         privacyPolicy: "requireRedaction",
         keepPanel: false,
@@ -1260,6 +1387,7 @@ describe("结构化发送结果的 store 副作用", () => {
       bundleIds: ["com.openai.codex"],
       promptGroupId: settings.promptGroups[0].id,
       defaultFormat: "plain" as const,
+      defaultMarkdownMode: "preserve" as const,
       enterPolicy: "confirm" as const,
       privacyPolicy: "requireRedaction" as const,
       keepPanel: false,

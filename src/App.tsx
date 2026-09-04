@@ -168,6 +168,7 @@ import {
   warnWithPanel,
   type NoteEditPayload,
   type NoteEditSyncResultPayload,
+  type NoteSendPayload,
   type NoteTagsPayload,
 } from "@/lib/actions";
 import { clipTimeBand } from "@/lib/cliprow";
@@ -2029,7 +2030,7 @@ export default function App() {
           openNoteDetail(id, true, true);
         }
       }),
-      listen<{ id: string; dataGeneration: number; text?: string }>(
+      listen<NoteSendPayload>(
         "toskr://note-send",
         (e) => {
         if (isDataOperationLocked()) {
@@ -2049,13 +2050,27 @@ export default function App() {
           return;
         }
         // text 存在 = 详情窗「发送选中」：只发选中片段，仍以该卡为来源
-        void sendNotesToChat(
-          [e.payload.id],
-          undefined,
-          e.payload.text !== undefined
+        const markdownMode =
+          e.payload.markdownMode === "strip" ||
+          e.payload.markdownMode === "preserve"
+            ? e.payload.markdownMode
+            : undefined;
+        const format =
+          e.payload.format === "plain" || e.payload.format === "code"
+            ? e.payload.format
+            : undefined;
+        const options = {
+          forceExternal: true,
+          ...(e.payload.text !== undefined
             ? { overrideText: e.payload.text }
-            : undefined
-        );
+            : {}),
+          ...(e.payload.contentBlocks !== undefined
+            ? { overrideContentBlocks: e.payload.contentBlocks }
+            : {}),
+          ...(markdownMode ? { markdownMode } : {}),
+          ...(format ? { format } : {}),
+        };
+        void sendNotesToChat([e.payload.id], undefined, options);
         }
       ),
       // 详情窗移除组合卡里的某张图（可撤销；磁盘文件保留，撤销要还原得回来）
