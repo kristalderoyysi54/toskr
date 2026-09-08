@@ -10,7 +10,70 @@ pub const MAX_SCAN_INPUT_BYTES: usize = 2 * 1024 * 1024;
 /// OCR 缓存与规则结果的显式失效版本。任何检测规则语义变化都必须递增。
 /// v2：新增 provider 规则包（AWS/GitHub/GitLab/Slack/Stripe/Google/OpenAI/
 /// Anthropic/npm/Telegram/JWT/PGP）与 .env 敏感字段行规则。
-pub const FIREWALL_RULE_VERSION: u32 = 2;
+// v3：标准占位符免于重复命中，补齐应用配置凭据与 OCR 字段关联。
+// v4：自定义敏感字段、短值预览全遮挡。
+pub const FIREWALL_RULE_VERSION: u32 = 4;
+
+/// 配置只含字段名；请求内复用已编译规则，OCR 不逐块读盘。
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CustomSensitiveRules {
+    pub fields: Vec<String>,
+    regex: Option<Regex>,
+}
+
+pub(crate) fn valid_custom_sensitive_fields(value: &serde_json::Value) -> bool {
+    let Some(fields) = value.as_array() else { return false; };
+    static FIELD_NAME_RE: OnceLock<Regex> = OnceLock::new();
+    let field_name_re = built_in_regex(&FIELD_NAME_RE, r"^[A-Za-z0-9\p{Han}_.-]+$");
+    let mut seen = std::collections::HashSet::new();
+    fields.len() <= 32 && fields.iter().all(|field| {
+        let Some(field) = field.as_str() else { return false; };
+        !field.is_empty() && field.chars().count() <= 64
+            && field_name_re.is_match(field)
+            && seen.insert(field.to_ascii_lowercase())
+    })
+}
+
+impl CustomSensitiveRules {
+    pub(crate) fn new(fields: Vec<String>) -> Result<Self, String> {
+        if !valid_custom_sensitive_fields(&serde_json::json!(fields)) {
+            return Err("自定义敏感字段配置无效，请在设置中检查字段名".into());
+        }
+        let mut fields: Vec<_> = fields.into_iter().map(|field| field.to_ascii_lowercase()).collect();
+        fields.sort();
+        if fields.is_empty() { return Ok(Self::default()); }
+        let names = fields.iter().map(|field| field.chars().map(|ch| {
+            if ch.is_ascii_alphabetic() { format!("[{}{}]", ch, ch.to_ascii_uppercase()) }
+            else { regex::escape(&ch.to_string()) }
+        }).collect::<String>()).collect::<Vec<_>>().join("|");
+        // 字段两侧不可延伸为另一字段；说明括号内不跨行。值支持引号包裹的空格。
+        let pattern = format!(r#"(?:^|[^\p{{L}}\p{{N}}_.-])(?:{names})["']?(?:[ \t]*[（(][^\r\n）)]*[）)])?(?:[ \t]*[:：=][ \t]*|[ \t]+)(?P<secret>"[^"\r\n]+"|'[^'\r\n]+'|[^\s"'<>，,;；}}]+)"#);
+        let regex = Regex::new(&pattern).map_err(|_| "无法编译自定义敏感字段规则".to_string())?;
+        Ok(Self { fields, regex: Some(regex) })
+    }
+}
+
+fn custom_rules_from_document(raw: Option<&str>) -> Result<CustomSensitiveRules, String> {
+    let Some(raw) = raw else { return Ok(CustomSensitiveRules::default()); };
+    let bag: serde_json::Value = serde_json::from_str(raw).map_err(|_| "无法读取敏感字段配置".to_string())?;
+    // 首次安装的空 store 尚无持久化状态；已有但损坏的 canonical 项不得回退。
+    if bag.as_object().is_some_and(serde_json::Map::is_empty) {
+        return Ok(CustomSensitiveRules::default());
+    }
+    let persisted = bag.get("toskr").or_else(|| bag.get("copper")).and_then(serde_json::Value::as_str)
+        .ok_or("无法读取敏感字段配置")?;
+    let root: serde_json::Value = serde_json::from_str(persisted).map_err(|_| "无法读取敏感字段配置".to_string())?;
+    let settings = root.get("state").and_then(|state| state.get("settings")).and_then(serde_json::Value::as_object)
+        .ok_or("无法读取敏感字段配置")?;
+    let Some(value) = settings.get("firewallCustomSensitiveFields") else { return Ok(CustomSensitiveRules::default()); };
+    let fields: Vec<String> = serde_json::from_value(value.clone()).map_err(|_| "自定义敏感字段配置无效".to_string())?;
+    CustomSensitiveRules::new(fields)
+}
+
+pub(crate) fn load_custom_rules(app: &tauri::AppHandle) -> Result<CustomSensitiveRules, String> {
+    let snapshot = crate::storage::read_data_snapshot(app).map_err(|_| "无法读取敏感字段配置，请检查数据存储状态".to_string())?;
+    custom_rules_from_document(snapshot.content.as_deref())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -128,6 +191,9 @@ static OPENAI_KEY_RE: OnceLock<Regex> = OnceLock::new();
 static NPM_TOKEN_RE: OnceLock<Regex> = OnceLock::new();
 static TELEGRAM_BOT_RE: OnceLock<Regex> = OnceLock::new();
 static JWT_RE: OnceLock<Regex> = OnceLock::new();
+static LABELED_APP_CREDENTIAL_RE: OnceLock<Regex> = OnceLock::new();
+static REDACTION_PLACEHOLDER_RE: OnceLock<Regex> = OnceLock::new();
+static CUSTOM_REDACTION_PLACEHOLDER_RE: OnceLock<Regex> = OnceLock::new();
 static ENV_SECRET_RE: OnceLock<Regex> = OnceLock::new();
 
 fn built_in_regex(cell: &'static OnceLock<Regex>, pattern: &'static str) -> &'static Regex {
@@ -171,7 +237,28 @@ fn add_capture_candidates<F>(
         let Some(matched) = matched else {
             continue;
         };
-        let (start_byte, end_byte) = trim_match(text, matched.start(), matched.end());
+        // 必须在 trim_match 去掉右方括号之前识别完整占位符。
+        // 允许尾随语法括号（兼容旧替换留下的 ]），但不允许夹带任何凭据字符。
+        let is_placeholder = if spec.rule_id == "token.custom_sensitive_field" {
+            // 自定义字段值可很短，也可含符号；只豁免完整占位符，不吞掉附加字符。
+            let raw_value = matched.as_str().trim_matches(['\'', '"']);
+            built_in_regex(&CUSTOM_REDACTION_PLACEHOLDER_RE, r"^\[[A-Z][A-Z0-9_]*_[0-9]{2,}\]$")
+                .is_match(raw_value)
+        } else {
+            let raw_value = matched.as_str().trim().trim_end_matches([',', ';', '.', ')', '}']).trim_matches(['\'', '"']);
+            built_in_regex(&REDACTION_PLACEHOLDER_RE, r"^\[[A-Z][A-Z0-9_]*_[0-9]{2,}\][\]]*$")
+                .is_match(raw_value)
+        };
+        if is_placeholder {
+            continue;
+        }
+        let (start_byte, end_byte) = if spec.rule_id == "token.custom_sensitive_field" {
+            let value = matched.as_str().trim_matches(['\'', '"']);
+            let leading = matched.as_str().len() - matched.as_str().trim_start_matches(['\'', '"']).len();
+            (matched.start() + leading, matched.start() + leading + value.len())
+        } else {
+            trim_match(text, matched.start(), matched.end())
+        };
         if start_byte >= end_byte {
             continue;
         }
@@ -431,6 +518,9 @@ fn placeholder(category: FindingCategory) -> &'static str {
 }
 
 fn masked_preview(value: &str) -> String {
+    if value.chars().count() <= 4 {
+        return "••••".into();
+    }
     let mut chars = value.chars();
     let Some(first) = chars.next() else {
         return "••••".into();
@@ -553,6 +643,22 @@ fn collect_candidates(text: &str) -> Vec<Candidate> {
             &mut candidates,
         );
     }
+    // 配置表/OCR 常用空白分列；仅对明确的凭据字段使用这一语法，普通 ID 不纳入。
+    add_capture_candidates(
+        text,
+        built_in_regex(
+            &LABELED_APP_CREDENTIAL_RE,
+            r#"(?im)^[ \t]*["']?(?:[\p{Han}A-Za-z0-9_]{0,24}[ \t]*app[_ -]?(?:key|secret)|encoding[_ -]?aes[_ -]?key|aes[_ -]?key|token|password|passwd)["']?(?:[ \t]*[（(][^\r\n()（）]{1,40}[）)])?(?:[ \t]*[:：=][ \t]*|[ \t]+)["']?(?P<secret>[^\s"'<>]{8,})"#,
+        ),
+        RuleSpec {
+            capture_name: Some("secret"),
+            category: FindingCategory::ApiKey,
+            severity: FindingSeverity::Block,
+            rule_id: "token.labeled_app_credential",
+        },
+        |value, start, end, captures| value.is_ascii() && env_secret(value, start, end, captures),
+        &mut candidates,
+    );
     add_capture_candidates(
         text,
         built_in_regex(
@@ -841,6 +947,10 @@ fn resolve_overlaps(mut candidates: Vec<Candidate>) -> Vec<Candidate> {
 }
 
 pub fn scan_sensitive_text(request: ScanSensitiveRequest) -> ScanSensitiveResult {
+    scan_sensitive_text_with_rules(request, &CustomSensitiveRules::default())
+}
+
+pub(crate) fn scan_sensitive_text_with_rules(request: ScanSensitiveRequest, rules: &CustomSensitiveRules) -> ScanSensitiveResult {
     let input_utf16 = request.text.encode_utf16().count();
     if request.text.len() > MAX_SCAN_INPUT_BYTES {
         return ScanSensitiveResult {
@@ -860,7 +970,14 @@ pub fn scan_sensitive_text(request: ScanSensitiveRequest) -> ScanSensitiveResult
         };
     }
     let utf16 = utf16_index(&request.text);
-    let findings = resolve_overlaps(collect_candidates(&request.text))
+    let mut candidates = collect_candidates(&request.text);
+    if let Some(regex) = &rules.regex {
+        add_capture_candidates(&request.text, regex, RuleSpec {
+            capture_name: Some("secret"), category: FindingCategory::ApiKey,
+            severity: FindingSeverity::Block, rule_id: "token.custom_sensitive_field",
+        }, always_valid, &mut candidates);
+    }
+    let findings = resolve_overlaps(candidates)
         .into_iter()
         .map(|candidate| {
             let start_utf16 = utf16[candidate.start_byte] as usize;
@@ -914,6 +1031,68 @@ pub fn diagnostic_summary(result: &ScanSensitiveResult, elapsed: Duration) -> St
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn custom_sensitive_fields_match_exact_labels_and_replacements_are_stable() {
+        let rules = super::CustomSensitiveRules::new(vec!["内部编号".into(), "Acme.Pin".into()]).unwrap();
+        for (text, secret) in [
+            ("内部编号：甲", "甲"), ("Acme.Pin=7", "7"),
+            ("acME.pIN (专属)  xyz", "xyz"), ("\"内部编号\": \"张 三\"", "张 三"),
+        ] {
+            let scan = super::scan_sensitive_text_with_rules(super::ScanSensitiveRequest { text: text.into() }, &rules);
+            assert_eq!(scan.findings.len(), 1, "{text}");
+            let finding = &scan.findings[0];
+            assert_eq!(finding.rule_id, "token.custom_sensitive_field");
+            assert_eq!(finding.masked_preview, "••••");
+            let units: Vec<_> = text.encode_utf16().collect();
+            assert_eq!(String::from_utf16(&units[finding.start_utf16..finding.end_utf16]).unwrap(), secret);
+            let replaced = format!("{}[API_KEY_01]{}", String::from_utf16(&units[..finding.start_utf16]).unwrap(), String::from_utf16(&units[finding.end_utf16..]).unwrap());
+            assert!(super::scan_sensitive_text_with_rules(super::ScanSensitiveRequest { text: replaced }, &rules).findings.is_empty());
+        }
+        for text in ["其他内部编号=abc", "内部编号后缀=abc", "Acme.PinExtra=abc", "内部编号=", "内部编号\nabc", "内部编号=[API_KEY_01]"] {
+            assert!(super::scan_sensitive_text_with_rules(super::ScanSensitiveRequest { text: text.into() }, &rules).findings.is_empty(), "{text}");
+        }
+    }
+
+    #[test]
+    fn quoted_custom_values_replace_once_without_exempting_attached_credentials() {
+        let rules = super::CustomSensitiveRules::new(vec!["内部口令".into()]).unwrap();
+        for quote in ['\'', '"'] {
+            let text = format!("内部口令={quote}private-test-value{quote}");
+            let scan = super::scan_sensitive_text_with_rules(super::ScanSensitiveRequest { text: text.clone() }, &rules);
+            assert_eq!(scan.findings.len(), 1);
+            let finding = &scan.findings[0];
+            let units: Vec<_> = text.encode_utf16().collect();
+            let replaced = format!("{}[API_KEY_01]{}", String::from_utf16(&units[..finding.start_utf16]).unwrap(), String::from_utf16(&units[finding.end_utf16..]).unwrap());
+            assert_eq!(replaced, format!("内部口令={quote}[API_KEY_01]{quote}"));
+            assert!(super::scan_sensitive_text_with_rules(super::ScanSensitiveRequest { text: replaced }, &rules).findings.is_empty());
+            for value in ["[API_KEY_01]real-secret", "real-secret[API_KEY_01]", "[API_KEY_01] real-secret", "[API_KEY_01].", "[API_KEY_01]]"] {
+                let text = format!("内部口令={quote}{value}{quote}");
+                assert_eq!(super::scan_sensitive_text_with_rules(super::ScanSensitiveRequest { text }, &rules).findings.len(), 1, "{value}");
+            }
+        }
+    }
+
+    #[test]
+    fn custom_field_configuration_is_bounded_and_legacy_compatible() {
+        assert!(super::custom_rules_from_document(None).unwrap().fields.is_empty());
+        for alias in ["toskr", "copper"] {
+            let raw = serde_json::json!({alias: serde_json::json!({"state": {"settings": {}}}).to_string()}).to_string();
+            assert!(super::custom_rules_from_document(Some(&raw)).unwrap().fields.is_empty());
+            let raw = serde_json::json!({alias: serde_json::json!({"state": {"settings": {"firewallCustomSensitiveFields": ["PIN"]}}}).to_string()}).to_string();
+            assert_eq!(super::custom_rules_from_document(Some(&raw)).unwrap().fields, ["pin"]);
+        }
+        for value in [serde_json::json!(["a b"]), serde_json::json!(["a", "A"]), serde_json::json!([""]), serde_json::json!([".*"]), serde_json::json!(["x".repeat(65)]), serde_json::json!((0..33).map(|i| format!("x{i}")).collect::<Vec<_>>())] {
+            assert!(!super::valid_custom_sensitive_fields(&value));
+        }
+        assert!(super::custom_rules_from_document(Some("{}")).unwrap().fields.is_empty());
+        for raw in [r#"{"toskr":null}"#, r#"{"toskr":"invalid"}"#, r#"{"toskr":"{}"}"#, "null", "[]"] {
+            assert!(super::custom_rules_from_document(Some(raw)).is_err(), "{raw}");
+        }
+        let legacy = serde_json::json!({"state":{"settings":{}}}).to_string();
+        let corrupt_canonical = serde_json::json!({"toskr":null,"copper":legacy}).to_string();
+        assert!(super::custom_rules_from_document(Some(&corrupt_canonical)).is_err());
+    }
     use std::time::{Duration, Instant};
 
     use super::*;
@@ -1136,6 +1315,77 @@ mod tests {
                 "the secret garden is a book",
             ],
         );
+    }
+
+    #[test]
+    fn app_configuration_credentials_detect_values_without_masking_identifiers() {
+        for label in ["AppSecret(小程序密钥)", "沙箱AppKey", "现网AppKey", "EncodingAESKey", "token", "APP_SECRET"] {
+            for separator in ["=", ": ", "：", "  ", "\t"] {
+                let value = "syntheticOnly_7abC902deF456";
+                let text = format!("{label}{separator}{value}");
+                let result = scan(&text);
+                assert_eq!(result.findings.len(), 1, "{text}: {:?}", result.findings);
+                let f = &result.findings[0];
+                assert_eq!(f.category, FindingCategory::ApiKey);
+                assert_eq!(f.severity, FindingSeverity::Block);
+                let units: Vec<_> = text.encode_utf16().collect();
+                assert_eq!(String::from_utf16(&units[f.start_utf16..f.end_utf16]).unwrap(), value);
+            }
+        }
+        for text in [
+            "AppID(小程序ID) wxSyntheticOnly012345",
+            "OfferId（支付应用ID） 1234567890",
+            "虚拟微信支付商户号 1234567890",
+            "收款主体简称 示例公司",
+            "spaceId=1762&docId=453233",
+            "token count is calculated locally",
+            "token=disabled", "AppSecret=changeme", "AppKey=https://example.com/key",
+            "AppSecret说明 这里填写申请密钥的操作步骤",
+            "AppSecret 此处填写申请到的小程序密钥",
+        ] {
+            assert!(!has_category(&scan(text), FindingCategory::ApiKey), "{text}");
+        }
+    }
+
+    #[test]
+    fn replacing_scanned_credentials_reaches_a_stable_clean_result() {
+        for text in [
+            "API_KEY=syntheticOnly_7abC902deF456",
+            "DB_PASSWORD=syntheticOnly_7abC902deF456",
+            "AppSecret(小程序密钥) syntheticOnly_7abC902deF456",
+            "沙箱AppKey syntheticSandbox_123456\n现网AppKey syntheticLive_234567",
+            "EncodingAESKey syntheticAesValue_1234567890",
+            "token: syntheticToken_1234567890",
+            "Cookie: session_id=syntheticCookie_1234567890",
+        ] {
+            let result = scan(text);
+            assert!(!result.findings.is_empty(), "{text}");
+            let mut units: Vec<_> = text.encode_utf16().collect();
+            for (i, f) in result.findings.iter().enumerate().rev() {
+                let base = f.suggested_placeholder.trim_matches(['[', ']']);
+                let placeholder = format!("[{base}_{:02}]", i + 1);
+                units.splice(f.start_utf16..f.end_utf16, placeholder.encode_utf16());
+            }
+            let replaced = String::from_utf16(&units).unwrap();
+            assert!(scan(&replaced).findings.is_empty(), "{replaced}");
+            assert!(scan(&replaced).findings.is_empty(), "repeat: {replaced}");
+        }
+    }
+
+    #[test]
+    fn only_complete_placeholders_are_exempt_from_credential_detection() {
+        for value in ["[API_KEY_01]", "[API_KEY_123]", "[API_KEY_02]]]", "[AUTHORIZATION_01]", "[DATABASE_URL_01]"] {
+            for label in ["API_KEY=", "AppSecret ", "Cookie: "] {
+                assert!(scan(format!("{label}{value}")).findings.is_empty(), "{label}{value}");
+            }
+        }
+        for value in [
+            "[API_KEY_01]realSecret123", "realSecret123[API_KEY_01]",
+            "[API_KEY_realSecret123]", "[API_KEY_01", "[api_key_01]",
+        ] {
+            assert!(has_category(&scan(format!("API_KEY={value}")), FindingCategory::ApiKey), "{value}");
+        }
+        assert!(has_category(&scan("API_KEY=[API_KEY_01]\nAppSecret=syntheticOther_123456"), FindingCategory::ApiKey));
     }
 
     #[test]

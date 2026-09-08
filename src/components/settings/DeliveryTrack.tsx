@@ -132,7 +132,7 @@ export function DeliveryTrack({
         </TrackCard>
         <Connector />
         <TrackCard
-          title="当前真实生效值"
+          title="应用默认生效值"
           warning={currentResolution.source === "conflict" || !currentResolution.isTargetReady || currentResolution.safetyClamped}
         >
           <p>目标应用：{targetName}</p>

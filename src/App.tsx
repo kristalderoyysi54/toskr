@@ -28,18 +28,10 @@ import {
   ArrowRight,
   ArrowUpCircle,
   CheckCheck,
-  Eraser,
-  Menu,
-  PanelBottom,
-  PanelLeft,
-  PanelRight,
-  PanelTop,
   Pencil,
-  Pin,
   Plus,
   Star,
   Trash2,
-  Rows3,
   Search,
   SearchX,
   Settings2,
@@ -80,6 +72,7 @@ import {
   matchesDataGeneration,
 } from "@/lib/dataGeneration";
 import { resolveDraftSectionId } from "@/lib/draftSection";
+import { normalizeMaterialStyle } from "@/lib/materialStyle";
 import {
   DETAIL_STATE_EVENT,
   emitToDetailWindows,
@@ -115,12 +108,7 @@ import {
   getRecentDeliveryEventsCached,
   invalidateDeliveryActivityCache,
 } from "@/lib/deliveryActivity";
-import {
-  SimpleMenu,
-  SimpleMenuItem,
-  SimpleMenuLabel,
-  SimpleMenuSeparator,
-} from "@/components/SimpleMenu";
+import { PanelOptionsMenu } from "@/components/PanelOptionsMenu";
 import {
   TASK_DONE_KEY,
   TASK_OVERDUE_COLLAPSED_KEY,
@@ -189,9 +177,9 @@ import { clearPendingUndo, runPendingUndo, setPendingUndo, tip } from "@/lib/tip
 import { silentUpdateFlow } from "@/lib/updater";
 import {
   legacyAiApiKey,
-  migrateLegacyAiApiKey,
   withoutLegacyAiApiKey,
 } from "@/lib/aiKeyMigration";
+import { installAiKeyAccessHost } from "@/lib/aiKeyAccess";
 import { matchNote, matchSecretNote } from "@/lib/search";
 import { isSecretEnvelope, openSecret } from "@/lib/secret/secret";
 import { scrollPageToStart } from "@/lib/pageScroll";
@@ -201,7 +189,6 @@ import {
 } from "@/lib/panelBehavior";
 import { applyRuntimeSettings } from "@/lib/runtimeSettings";
 import {
-  applySettingsPatch,
   broadcastSettings,
   installSettingsSyncHost,
   SETTINGS_AI_KEY_CHANGED,
@@ -612,29 +599,6 @@ function GroupPills({
       </SortableContext>
     </DndContext>
   );
-}
-
-const SIDEBAR_EDGE_LABEL = {
-  right: "靠右显示",
-  left: "靠左显示",
-  top: "靠上显示",
-  bottom: "靠下显示",
-} as const;
-
-/** 应用边栏停靠：开=接管位置（清手动拖动）；关=恢复自动停靠。
- *  `set_sidebar_mode` 在 Rust 侧面板可见时会自行 request_show_panel 重排
- *  （开/关两种方向都会），这里不再额外调用 api.showPanel()——本菜单只能
- *  从已展开的面板内点开，重复调用曾导致贴边隐藏锚点在关闭边栏时被连续
- *  建立两次（诊断日志里 2ms 内两条「锚点建立」）。 */
-async function applySidebar(on: boolean, edge: Settings["sidebarEdge"]) {
-  useNotesStore.getState().setSettings({
-    rightSidebar: on,
-    sidebarEdge: edge,
-    panelFreeX: null,
-    panelFreeY: null,
-  });
-  await api.setPanelFreePos(null, null).catch(() => {});
-  await api.setSidebarMode(on, edge).catch(() => {});
 }
 
 /** 页签拖拽只允许横向位移（@dnd-kit/modifiers 不在依赖里，就地实现）。 */
@@ -1278,6 +1242,7 @@ export default function App() {
             event.payload?.mode ?? "start"
           )
         );
+        useUIStore.getState().setContentSubview("notes");
         useUIStore.getState().setPage("notes");
         useUIStore.getState().setPinned(true);
         useUIStore.getState().setOpen(true);
@@ -1716,6 +1681,8 @@ export default function App() {
 
   // 外观：面板不透明度写入 CSS 变量（实时生效）
   const panelOpacity = useNotesStore((s) => s.settings.panelOpacity);
+  const vibrancy = useNotesStore((s) => s.settings.vibrancy);
+  const vibrancyMaterial = useNotesStore((s) => s.settings.vibrancyMaterial);
   useEffect(() => {
     document.documentElement.style.setProperty("--panel-alpha", String(panelOpacity));
   }, [panelOpacity]);
@@ -1855,7 +1822,7 @@ export default function App() {
             phase: "conflict",
             message,
           });
-          tip("warn", `${message}；请在设置 → 数据中选择处理方式`);
+          tip("warn", `${message}；请在设置 → 数据与备份中选择处理方式`);
         })
         .catch((error) => {
           reportDataActivity({
@@ -2147,44 +2114,6 @@ export default function App() {
 
   // 持久化水合后把运行时配置下发给 Rust
   useEffect(() => {
-    const pendingMigrations = new Set<number>();
-    const migrateAiKey = (source: Settings) => {
-      const legacyKey = legacyAiApiKey(source);
-      const generation = currentDataGeneration();
-      if (
-        !legacyKey ||
-        isDataOperationLocked() ||
-        pendingMigrations.has(generation)
-      ) return;
-      pendingMigrations.add(generation);
-      void migrateLegacyAiApiKey(source, {
-        setAiApiKey: api.setAiApiKey,
-        commit: () => {
-          // Keychain IPC 在途时可能切换数据目录或修改其他设置：只移除当前
-          // 仍匹配的旧 secret，绝不把 source 快照覆盖回新 settings。
-          const current = useNotesStore.getState().settings;
-          if (
-            !matchesDataGeneration(generation) ||
-            isDataOperationLocked() ||
-            legacyAiApiKey(current) !== legacyKey
-          ) return;
-          useNotesStore.setState({
-            settings: withoutLegacyAiApiKey(current),
-          });
-        },
-      }).then((result) => {
-        if (
-          result === "failed" &&
-          matchesDataGeneration(generation) &&
-          legacyAiApiKey(useNotesStore.getState().settings) === legacyKey
-        ) {
-          tip(
-            "warn",
-            "AI 密钥迁移到 macOS 钥匙串失败；旧副本仍保留，请到设置中重试"
-          );
-        }
-      }).finally(() => pendingMigrations.delete(generation));
-    };
     // 历史状态自愈：贴边隐藏已是无开关的默认能力；伴随只在命中目标时接管，
     // 因此两者不再互斥。固定边栏仍与伴随接管互斥。
     const heal = (settings: Settings): Settings => {
@@ -2213,12 +2142,10 @@ export default function App() {
     if (useNotesStore.persist.hasHydrated()) {
       const settings = applyModeDefaults(heal(useNotesStore.getState().settings));
       applyRuntimeSettings(settings);
-      migrateAiKey(settings);
     }
     const unsub = useNotesStore.persist.onFinishHydration((state) => {
       const settings = applyModeDefaults(heal(state.settings));
       applyRuntimeSettings(settings);
-      migrateAiKey(settings);
       // 迁移提交：新数据文件尚不存在（数据还在旧存储）时立即落盘一次
       void api
         .readDataSnapshot()
@@ -2227,19 +2154,13 @@ export default function App() {
         })
         .catch(() => {});
     });
-    const stopDataActivity = useDataOperationStore.subscribe((state, previous) => {
-      if (
-        previous.locked &&
-        !state.locked &&
-        useNotesStore.persist.hasHydrated()
-      ) {
-        migrateAiKey(useNotesStore.getState().settings);
-      }
-    });
-    return () => {
-      unsub();
-      stopDataActivity();
-    };
+    return unsub;
+  }, []);
+
+  // 进入 AI 设置时才请求旧密钥迁移；普通启动和数据目录解锁均不访问 AI 钥匙串。
+  useEffect(() => {
+    const subscription = installAiKeyAccessHost();
+    return () => { void subscription.then((stop) => stop()); };
   }, []);
 
   // 设置窗显式 set/delete 后清除当前数据目录可能残留的旧 JSON key；数据事务
@@ -2311,7 +2232,7 @@ export default function App() {
       if (!window.localStorage.getItem("toskr-encryption-tip-shown")) {
         window.localStorage.setItem("toskr-encryption-tip-shown", "1");
         if (!appFirstLaunch) {
-          tip("info", "本机数据已启用加密存储；建议在设置 → 数据导出一份完整备份");
+          tip("info", "本机数据已启用加密存储；建议在设置 → 数据与备份导出一份完整备份");
         }
       }
     } catch {
@@ -2321,6 +2242,8 @@ export default function App() {
     const showActiveOnboarding = (settings: Settings) => {
       const current = settings.onboarding;
       if (current.rehearsalStatus !== "active") return;
+      useUIStore.getState().setContentSubview("notes");
+      useUIStore.getState().setPage("notes");
       useUIStore.getState().setPinned(true);
       useUIStore.getState().setOpen(true);
       void api.showPanel();
@@ -3476,6 +3399,7 @@ export default function App() {
                 "panel-surface relative flex h-full w-full flex-col overflow-hidden rounded-xl",
                 !open && "pointer-events-none"
               )}
+              data-material={vibrancy ? normalizeMaterialStyle(vibrancyMaterial) : "none"}
             >
               {/* 整体外边框光晕：锥形弧沿边框追随指针（z-30 盖过内容边缘，
                   pointer-events-none 不挡任何交互；浮层 z-50 仍在其上） */}
@@ -3666,219 +3590,12 @@ export default function App() {
                       </IconButton>
                     </Tipped>
                   )}
-                  {horizontalBar &&
-                    page !== "clipboard" &&
-                    (page !== "notes" || contentSubview === "notes") &&
-                    (page === "notes" ? doneCount : doneTaskCount) > 0 && (
-                    <Tipped
-                      label={
-                        page === "notes"
-                          ? `清理 ${doneCount} 条已完成（⇧⌘⌫）`
-                          : `清理 ${doneTaskCount} 个已完成任务（⇧⌘⌫）`
-                      }
-                    >
-                      <IconButton
-                        label={
-                          page === "notes"
-                            ? `清理 ${doneCount} 条已完成（⇧⌘⌫）`
-                            : `清理 ${doneTaskCount} 个已完成任务（⇧⌘⌫）`
-                        }
-                        withTitle={false}
-                        onClick={
-                          page === "notes" ? clearDoneWithUndo : clearDoneTasksWithUndo
-                        }
-                      >
-                        <Eraser />
-                      </IconButton>
-                    </Tipped>
-                  )}
-                  {horizontalBar && (page !== "tasks" || doneTaskCount > 0) && (
-                    <span aria-hidden className="mx-0.5 h-3.5 w-px bg-border" />
-                  )}
-                  {/* 横栏保留现有停靠工具；竖向把密度、停靠和固定收进单一菜单。 */}
-                  <SimpleMenu
-                    side="bottom"
-                    align="end"
-                    className="flex"
-                    trigger={({ toggle }) => {
-                      const EdgeIcon =
-                        settings.sidebarEdge === "left"
-                          ? PanelLeft
-                          : settings.sidebarEdge === "top"
-                            ? PanelTop
-                            : settings.sidebarEdge === "bottom"
-                              ? PanelBottom
-                              : PanelRight;
-                      const label = horizontalBar
-                        ? settings.rightSidebar
-                          ? `停靠：${SIDEBAR_EDGE_LABEL[settings.sidebarEdge]} · 点击调整位置`
-                          : settings.companionEnabled
-                            ? "伴随磁吸与方向"
-                            : "面板位置与伴随磁吸"
-                        : "竖向面板选项";
-                      return (
-                        <Tipped label={label}>
-                          <IconButton
-                            label={label}
-                            withTitle={false}
-                            pressed={horizontalBar ? settings.rightSidebar : undefined}
-                            onClick={toggle}
-                          >
-                            {horizontalBar ? <EdgeIcon /> : <Menu />}
-                          </IconButton>
-                        </Tipped>
-                      );
-                    }}
-                  >
-                    {(close) => (
-                      <>
-                        {!horizontalBar && (
-                          <>
-                            <SimpleMenuLabel>显示</SimpleMenuLabel>
-                            {page !== "tasks" &&
-                              (page !== "notes" || contentSubview === "notes") && (
-                              <SimpleMenuItem
-                                onClick={() => {
-                                  close();
-                                  const current =
-                                    useNotesStore.getState().settings.cardDensity;
-                                  useNotesStore.getState().setSettings({
-                                    cardDensity:
-                                      current === "compact" ? "comfortable" : "compact",
-                                  });
-                                }}
-                              >
-                                <Rows3 className="size-3.5" />
-                                {settings.cardDensity === "compact"
-                                  ? "使用舒适卡片"
-                                  : "使用紧缩列表"}
-                              </SimpleMenuItem>
-                            )}
-                            {page !== "clipboard" &&
-                              (page !== "notes" || contentSubview === "notes") &&
-                              (page === "notes" ? doneCount : doneTaskCount) > 0 && (
-                                <SimpleMenuItem
-                                  onClick={() => {
-                                    close();
-                                    if (page === "notes") clearDoneWithUndo();
-                                    else clearDoneTasksWithUndo();
-                                  }}
-                                >
-                                  <Eraser className="size-3.5" />
-                                  {/* nowrap 撑宽菜单：min-w 下长文案+快捷键会折行错位 */}
-                                  <span className="whitespace-nowrap">
-                                    {page === "notes"
-                                      ? `清理 ${doneCount} 条已完成`
-                                      : `清理 ${doneTaskCount} 个已完成任务`}
-                                  </span>
-                                  <span className="ml-auto pl-2 text-micro text-muted-foreground">
-                                    ⇧⌘⌫
-                                  </span>
-                                </SimpleMenuItem>
-                              )}
-                            <SimpleMenuSeparator />
-                          </>
-                        )}
-                        {/* 伴随开启时选择目标窗口左右侧；未开启时边栏为可选项，
-                            不选择即自由摆放，真实拖到外侧屏缘后自动收起。 */}
-                        <SimpleMenuLabel>
-                          {settings.companionEnabled ? "磁吸方向" : "固定边栏（可选）"}
-                        </SimpleMenuLabel>
-                        {(settings.companionEnabled
-                          ? (["right", "left"] as const)
-                          : (["right", "bottom"] as const)
-                        ).map((edge) => {
-                          const activeEdge =
-                            settings.rightSidebar && settings.sidebarEdge === edge;
-                          if (settings.companionEnabled) {
-                            // 磁吸模式：左右选磁吸在软件哪一侧
-                            const vertical = edge === "bottom";
-                            const side =
-                              settings.sidebarEdge === "left" ? "left" : "right";
-                            const checked = !vertical && edge === side;
-                            return (
-                              <SimpleMenuItem
-                                key={edge}
-                                disabled={vertical}
-                                title={
-                                  vertical
-                                    ? "伴随磁吸仅支持左右侧"
-                                    : "面板磁吸在目标软件的这一侧"
-                                }
-                                onClick={() => {
-                                  close();
-                                  // 上下项已 disabled 不会进到这里；类型上仍需收窄。
-                                  // 走 applySettingsPatch：磁吸方向同步 + 持久化 + 广播一条路径
-                                  applySettingsPatch({
-                                    sidebarEdge: edge === "left" ? "left" : "right",
-                                  });
-                                }}
-                              >
-                                {checked ? "✓ " : ""}
-                                {SIDEBAR_EDGE_LABEL[edge]}
-                              </SimpleMenuItem>
-                            );
-                          }
-                          // 默认自由摆放；固定边栏只是显式可选布局。
-                          return (
-                            <SimpleMenuItem
-                              key={edge}
-                              title={
-                                activeEdge
-                                  ? "再次点击取消边栏，恢复自由拖动"
-                                  : "固定为屏幕边栏；自由模式拖到外侧屏缘也会自动收起"
-                              }
-                              onClick={() => {
-                                close();
-                                void applySidebar(!activeEdge, edge);
-                              }}
-                            >
-                              {activeEdge ? "✓ " : ""}
-                              {SIDEBAR_EDGE_LABEL[edge]}
-                            </SimpleMenuItem>
-                          );
-                        })}
-                        <SimpleMenuSeparator />
-                        <SimpleMenuItem
-                          title="目标应用存在时吸附并跟随；没有可用目标时保持自由拖动，拖到外侧屏缘后自动收起（应用清单在 设置 → 伴随停靠）"
-                          onClick={() => {
-                            applySettingsPatch({
-                              companionEnabled:
-                                !useNotesStore.getState().settings.companionEnabled,
-                            });
-                          }}
-                        >
-                          {settings.companionEnabled ? "✓ " : ""}伴随磁吸
-                        </SimpleMenuItem>
-                        {!horizontalBar && (
-                          <>
-                            <SimpleMenuSeparator />
-                            <SimpleMenuItem
-                              onClick={() => {
-                                close();
-                                useUIStore.getState().setPinned(!pinned);
-                              }}
-                            >
-                              <Pin className={cn("size-3.5", pinned && "fill-current")} />
-                              {pinned ? "取消固定" : "固定 · 失焦不隐藏"}
-                            </SimpleMenuItem>
-                          </>
-                        )}
-                      </>
-                    )}
-                  </SimpleMenu>
-                  {horizontalBar && (
-                    <Tipped label={pinned ? "取消固定" : "固定（失焦不隐藏）"}>
-                      <IconButton
-                        label={pinned ? "取消固定" : "固定（失焦不隐藏）"}
-                        withTitle={false}
-                        pressed={pinned}
-                        onClick={() => useUIStore.getState().setPinned(!pinned)}
-                      >
-                        <Pin className={cn("size-3.5", pinned && "fill-current")} />
-                      </IconButton>
-                    </Tipped>
-                  )}
+                  <PanelOptionsMenu
+                    doneCount={doneCount}
+                    doneTaskCount={doneTaskCount}
+                    onClearNotes={clearDoneWithUndo}
+                    onClearTasks={clearDoneTasksWithUndo}
+                  />
                   <Tipped label="设置">
                     <IconButton
                       label="设置"
@@ -4007,7 +3724,7 @@ export default function App() {
                       hint={
                         !settings.clipHistory ? (
                           <>
-                            在 设置 → 通用 开启「剪贴板历史」后，
+                            在 设置 → 剪贴板 开启「剪贴板历史」后，
                             <br />
                             复制过的内容会自动收集到这里。
                           </>
@@ -4120,7 +3837,12 @@ export default function App() {
                     horizontal={horizontalBar}
                   />
                 ) : horizontalBar ? (
-                  <>
+                  <div className="flex min-h-0 flex-1">
+                  {rehearsalVisible && (
+                    <ScrollArea className="min-h-0 w-80 shrink-0" viewportClassName="px-1">
+                      <SafeDeliveryRehearsal />
+                    </ScrollArea>
+                  )}
                   <StripScroller>
                     {stripNotes.length === 0 ? (
                       <p className="px-4 py-6 text-body text-muted-foreground">
@@ -4147,7 +3869,7 @@ export default function App() {
                       </DndContext>
                     )}
                   </StripScroller>
-                  </>
+                  </div>
                 ) : (
               <ScrollArea className="min-h-0 flex-1 px-2.5" viewportClassName="px-1">
                 {rehearsalVisible && (

@@ -13,7 +13,7 @@
     "typecheck": "tsc -b",
     "check:tokens": "bash script/check-tokens.sh",
     "tauri": "tauri",
-    "build:app": "PATH=/usr/bin:$PATH TAURI_SIGNING_PRIVATE_KEY=$HOME/.tauri/toskr-updater.key TAURI_SIGNING_PRIVATE_KEY_PASSWORD= tauri build"
+    "build:app": "PATH=/usr/bin:$PATH TAURI_SIGNING_PRIVATE_KEY=$HOME/.tauri/toskr-updater.key TAURI_SIGNING_PRIVATE_KEY_PASSWORD= tauri build && python3 script/keychain-helper.py check --app src-tauri/target/release/bundle/macos/Toskr.app"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

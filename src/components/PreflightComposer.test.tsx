@@ -223,8 +223,16 @@ describe("PreflightComposer", () => {
     syncServerSnapshots();
 
     const html = renderToStaticMarkup(<PreflightComposer />);
+    expect(html).toContain("检查并粘贴");
+    expect(html).toContain("到「内容」检查正文");
+    expect(html).not.toContain("安全发送演练预检");
+    useDeliveryStore.getState().setActiveSection("content");
+    syncServerSnapshots();
+    const contentHtml = renderToStaticMarkup(<PreflightComposer />);
+    expect(contentHtml).toContain("确认正文后，点下方「安全粘贴」");
+    const horizontalHtml = renderToStaticMarkup(<PreflightComposer horizontal />);
+    expect(horizontalHtml).toContain("检查右侧正文");
 
-    expect(html).toContain("安全发送演练预检");
     expect(html).toContain("演练安全锁：只粘贴，不按回车");
     expect(html).toContain("安全粘贴");
     expect(html).not.toContain('name="preflight-enter-decision"');
@@ -366,7 +374,7 @@ describe("PreflightComposer", () => {
         endUtf16: built.finalText.length,
         maskedPreview: "fa•••en",
         suggestedPlaceholder: "[API_KEY]",
-        ruleId: "test.api-key",
+        ruleId: "token.custom_sensitive_field",
       }],
       pressEnter: false,
     });
@@ -376,6 +384,9 @@ describe("PreflightComposer", () => {
     expect(html).toContain('aria-label="本地隐私检查"');
     expect(html).toContain("密钥/凭据 · 高风险 ×1");
     expect(html).toContain("fa•••en");
+    expect(html).toContain("命中依据");
+    expect(html).toContain("匹配你添加的敏感字段");
+    expect(html).not.toContain("token.custom_sensitive_field");
     expect(html).toContain("替换为占位符");
     expect(html).toContain("同类全部替换");
     expect(html).toContain("保留原文发送");
@@ -383,6 +394,26 @@ describe("PreflightComposer", () => {
     // 单条命中时不出现批量按钮，降低误当选项卡的噪音
     expect(html).not.toContain("一键全部替换");
     expect(html).toContain("再次确认保留高风险原文");
+
+    const current = useDeliveryStore.getState().draft!;
+    useDeliveryStore.getState().replaceDraft({
+      ...current,
+      privacyPolicy: "requireRedaction",
+      findings: [...current.findings, { ...current.findings[0], id: "second-hit" }],
+    });
+    syncServerSnapshots();
+    const batchHtml = renderToStaticMarkup(<PreflightComposer />);
+    expect(batchHtml).toContain("一键保留原文");
+    expect(batchHtml.indexOf("一键保留原文")).toBeLessThan(batchHtml.indexOf('aria-label="敏感项列表"'));
+    expect(batchHtml).toContain("仅本次有效");
+    useDeliveryStore.getState().excludeAllFirewallFindings();
+    syncServerSnapshots();
+    const confirmedHtml = renderToStaticMarkup(<PreflightComposer />);
+    expect(confirmedHtml).toContain("已全部保留原文");
+    expect(confirmedHtml).toContain("敏感项已全部处理，可以发送");
+    expect(confirmedHtml).toContain("无待处理项");
+    expect(confirmedHtml).not.toContain("2 项待处理");
+    expect(confirmedHtml).not.toContain("请替换或明确保留全部敏感项");
   });
 
   it("图片预检展示区域框、原图与发送状态，未遮挡 block 时禁用发送", () => {
@@ -434,7 +465,7 @@ describe("PreflightComposer", () => {
           boundingBox: { x: 0.1, y: 0.2, width: 0.5, height: 0.15 },
           pixelBox: { x: 38, y: 38, width: 204, height: 34 },
           maskedPreview: "sk••••89",
-          ruleId: "test.image-api-key",
+          ruleId: "token.labeled_app_credential",
         }],
       }],
     });
@@ -443,6 +474,9 @@ describe("PreflightComposer", () => {
     const html = renderToStaticMarkup(<PreflightComposer />);
 
     expect(html).toContain('aria-label="图片隐私检查"');
+    expect(html).toContain("命中依据");
+    expect(html).toContain("应用密钥、加密密钥、令牌或密码字段后存在凭据值");
+    expect(html).not.toContain("token.labeled_app_credential");
     expect(html).toContain("请遮挡或逐项明确保留全部图片敏感区域");
     expect(html).toContain("原图");
     expect(html).toContain('aria-label="查看图片 1 原图"');
@@ -476,6 +510,9 @@ describe("PreflightComposer", () => {
     const redactedHtml = renderToStaticMarkup(<PreflightComposer />);
     expect(redactedHtml).toContain('aria-label="查看图片 1 实际发送图"');
     expect(redactedHtml).toContain('title="点击查看实际发送图"');
+    // 对比缩略图与说明垂直排列，说明不再与固定宽度图片争抢横向空间。
+    expect(redactedHtml).toContain('<div class="min-w-0 space-y-2"><div class="grid min-w-0 shrink gap-1.5 w-48 max-w-full grid-cols-2"');
+    expect(redactedHtml).toContain('<div class="min-w-0 break-words text-micro"><p class="font-medium">图片 1</p>');
   });
 
   it("内容页展示富内容图片附件，并提供逐张查看入口", () => {

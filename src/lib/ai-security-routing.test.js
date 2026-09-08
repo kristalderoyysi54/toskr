@@ -28,10 +28,13 @@ describe("AI secret and transport architecture", () => {
 
   it("clears legacy JSON only inside the current writable data generation", () => {
     const app = source("../App.tsx");
-    expect(app).toContain("matchesDataGeneration(generation)");
-    expect(app).toContain("isDataOperationLocked()");
-    expect(app).toContain("legacyAiApiKey(current) !== legacyKey");
+    const access = source("./aiKeyAccess.ts");
+    expect(access).toContain("matchesDataGeneration(generation)");
+    expect(access).toContain("isDataOperationLocked()");
+    expect(access).toContain("legacyAiApiKey(current) !== legacyKey");
     expect(app).toContain("SETTINGS_AI_KEY_CHANGED");
+    expect(app).not.toContain("migrateLegacyAiApiKey");
+    expect(source("../SettingsView.tsx")).toContain("requestAiKeyStatusForSettings,");
   });
 
   it("only returns boolean/timestamp key status to WebViews", () => {

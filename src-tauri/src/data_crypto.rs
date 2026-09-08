@@ -18,15 +18,6 @@ use std::sync::Mutex;
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 
-#[cfg(all(target_os = "macos", not(test)))]
-use security_framework::passwords::{get_generic_password, set_generic_password};
-#[cfg(all(target_os = "macos", not(test)))]
-use security_framework_sys::base::errSecItemNotFound;
-
-#[cfg(all(target_os = "macos", not(test)))]
-const KEYCHAIN_SERVICE: &str = "com.toskr.app.data";
-#[cfg(all(target_os = "macos", not(test)))]
-const KEYCHAIN_ACCOUNT: &str = "data-encryption-key-v1";
 
 const MAGIC: &[u8; 4] = b"TSK1";
 const VERSION: u8 = 1;
@@ -36,8 +27,6 @@ const TAG_LEN: usize = 16;
 /// 信封相对明文的固定膨胀（写入方校验大小上限时按密文长度算）。
 pub const ENVELOPE_OVERHEAD: usize = HEADER_LEN + TAG_LEN;
 
-#[cfg(all(target_os = "macos", not(test)))]
-static KEYCHAIN_LOCK: Mutex<()> = Mutex::new(());
 /// 进程内密钥缓存：仅在钥匙串读取成功后写入，弹窗被拒后可整链重试。
 #[cfg(not(test))]
 static KEY_CACHE: Mutex<Option<[u8; 32]>> = Mutex::new(None);
@@ -246,30 +235,22 @@ fn random_bytes<const N: usize>() -> Result<[u8; N], CryptoError> {
 
 #[cfg(all(target_os = "macos", not(test)))]
 fn keychain_load() -> Result<Option<[u8; 32]>, CryptoError> {
-    let _guard = match KEYCHAIN_LOCK.lock() {
-        Ok(guard) => guard,
-        Err(poison) => poison.into_inner(),
-    };
-    match get_generic_password(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT) {
-        Ok(bytes) => {
+    match crate::keychain_broker::load(crate::keychain_broker::Slot::Data) {
+        Ok(Some(bytes)) => {
             let key: [u8; 32] = bytes
                 .as_slice()
                 .try_into()
                 .map_err(|_| CryptoError::Internal("钥匙串中的数据密钥长度异常".into()))?;
             Ok(Some(key))
         }
-        Err(error) if error.code() == errSecItemNotFound => Ok(None),
+        Ok(None) => Ok(None),
         Err(_) => Err(CryptoError::KeychainDenied),
     }
 }
 
 #[cfg(all(target_os = "macos", not(test)))]
 fn keychain_store(key: &[u8; 32]) -> Result<(), CryptoError> {
-    let _guard = match KEYCHAIN_LOCK.lock() {
-        Ok(guard) => guard,
-        Err(poison) => poison.into_inner(),
-    };
-    set_generic_password(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT, key)
+    crate::keychain_broker::store(crate::keychain_broker::Slot::Data, key)
         .map_err(|_| CryptoError::KeychainDenied)
 }
 

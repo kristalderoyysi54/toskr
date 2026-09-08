@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+import { settingsPrimarySection, settingsSectionFromLink } from "./settingsSearch";
 
 const srcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = path.resolve(srcRoot, "..");
@@ -408,13 +409,14 @@ describe("发送入口路由", () => {
     expect(lens).toContain("canPermanentlyAssignTargetProfileOverride");
     expect(lens).toContain("快速切换发送方案");
     expect(lens).toContain("原临时发送方案已暂停");
-    expect(selection).toContain("当前提示词组 ·");
+    expect(selection).toContain("用模板发送 · 常用");
+    expect(selection).toContain("otherTemplatesOpen &&");
     expect(selection).toContain("其他模板");
     expect(selection).toContain("snippetMenu.remaining");
     expect(selection).toContain("setTargetProfileOverride");
   });
 
-  it("Settings 分区：目标与发送方案主从管理，提示词仍在同区，伴随停靠独立", () => {
+  it("Settings 分区：提示词仍在粘贴与隐私，伴随停靠归属窗口与外观", () => {
     const settings = readFileSync(path.join(srcRoot, "SettingsView.tsx"), "utf8");
     const manager = readFileSync(
       path.join(srcRoot, "components", "settings", "TargetProfileManager.tsx"),
@@ -429,12 +431,14 @@ describe("发送入口路由", () => {
       "utf8"
     );
 
-    expect(settings).toContain('{ id: "target", label: "目标与发送方案"');
-    expect(settings).toContain('{ id: "companion", label: "伴随停靠"');
+    expect(settingsPrimarySection("target")).toBe("target");
+    expect(settingsPrimarySection("companion")).toBe("general");
     // 提示词不独立成区：snippets/prompts 深链仍落到目标与发送方案
     expect(settings).not.toContain('{ id: "snippets", label:');
     expect(settings).not.toContain('{ id: "prompts", label:');
-    expect(settings).toContain('["snippets", "prompts"].includes(rawSection)');
+    const gates = { messagesEnabled: false, secretEnabled: false, subscriptionsEnabled: false };
+    expect(settingsSectionFromLink("snippets", gates)).toBe("target");
+    expect(settingsSectionFromLink("prompts", gates)).toBe("target");
     expect(settings).toContain("TargetProfileManager");
     expect(settings).not.toContain("TargetProfilesEditor");
     expect(settings).toContain("deletePromptGroup");
@@ -553,8 +557,7 @@ describe("发送入口路由", () => {
       "utf8"
     );
 
-    expect(menu).toContain('role={menuRole === "listbox" ? "option" : "menuitem"}');
-    expect(menu).toContain('["ArrowDown", "ArrowUp", "Home", "End"]');
+    expect(menu).toContain("onKeyDown={handleSimpleMenuKeyDown}");
     expect(menu).toContain("restoreTriggerFocus");
     expect(select).toContain('menuRole="listbox"');
     expect(select).toContain("aria-controls={controls}");

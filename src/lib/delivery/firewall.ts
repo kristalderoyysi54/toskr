@@ -236,7 +236,7 @@ export function rawConfirmationIsCurrent(input: {
 }
 
 /**
- * 发送请求随行的 Block 白名单：只收「已逐项明确保留」或「当前全局 block 级
+ * 发送请求随行的 Block 白名单：只收「已明确保留（单项或批量）」或「当前全局 block 级
  * 确认覆盖」的 finding id。Native 复扫最终正文后逐一核对，名单外即拒发；
  * id 含 UTF-16 偏移，正文一改即失配，陈旧授权自动作废。
  */
@@ -319,7 +319,7 @@ export function evaluateFirewallPolicy(input: {
         forcePressEnterOff: true,
         needsRawConfirmation: null,
         unresolvedCount: unresolved.length,
-        reason: "高风险项必须替换或逐项明确保留",
+        reason: "高风险项必须替换或明确保留",
       };
     }
     const unresolvedWarns = unresolved.filter((finding) => finding.severity === "warn");

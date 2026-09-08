@@ -1,3 +1,7 @@
+import { isCustomSensitiveFieldsValid } from "@/lib/delivery/customSensitiveFields";
+import { registerPrivacySettingsSave } from "@/lib/delivery/privacySettingsBarrier";
+import { useDeliveryStore } from "@/store/deliveryStore";
+import { flushPendingWrites, hasLoadedPersistenceAuthority, isPersistencePaused } from "@/store/persistStorage";
 import { emitTo, listen } from "@tauri-apps/api/event";
 
 import { api } from "@/lib/tauri";
@@ -53,12 +57,52 @@ export type DataConflictAction =
   | "retryStorage"
   | "loadDefault";
 
+let privacySaveSequence = 0;
+
+async function finishPrivacySettingsSave(sequence: number, draftId?: string, scanRevision?: number) {
+  try {
+    await flushPendingWrites();
+    if (isPersistencePaused() || !hasLoadedPersistenceAuthority()) throw new Error("设置未写入磁盘");
+    if (sequence !== privacySaveSequence) return;
+    tip("ok", draftId ? "敏感字段已保存，请重新检查当前发送内容" : "敏感字段已保存");
+  } catch (error) {
+    if (sequence === privacySaveSequence) tip("warn", "敏感字段保存失败，尚未生效；请处理存储问题后重新保存");
+    throw error;
+  } finally {
+    const current = useDeliveryStore.getState();
+    if (sequence === privacySaveSequence && draftId && current.draft?.id === draftId
+      && current.draft.scanRevision === scanRevision) {
+      useDeliveryStore.setState({ busy: false });
+    }
+    if (sequence === privacySaveSequence) broadcastSettings();
+  }
+}
+
 /** 应用设置补丁并执行对应的 Rust 侧副作用（主面板调用）。 */
 export function applySettingsPatch(patch: Partial<Settings>) {
   if (isDataOperationLocked()) {
     tip("warn", "数据操作进行中，设置暂时只读");
     broadcastSettings();
     return;
+  }
+  const savesSensitiveFields = "firewallCustomSensitiveFields" in patch;
+  if (savesSensitiveFields) {
+    const delivery = useDeliveryStore.getState();
+    if (!isCustomSensitiveFieldsValid(patch.firewallCustomSensitiveFields)) {
+      tip("warn", "敏感字段格式无效，请检查字段名称");
+      broadcastSettings();
+      return;
+    }
+    if (delivery.busy || delivery.draft?.imageFirewall.some((item) => item.status === "redacting")) {
+      tip("warn", "发送或图片打码进行中，请完成后再修改敏感字段");
+      broadcastSettings();
+      return;
+    }
+    if (isPersistencePaused() || !hasLoadedPersistenceAuthority()) {
+      tip("warn", "存储尚未就绪，敏感字段未保存");
+      broadcastSettings();
+      return;
+    }
   }
   // 贴边隐藏已是默认能力且不再与伴随互斥；旧设置/备份中的 false 静默归一。
   if (!useNotesStore.getState().settings.autoEdgeHide || patch.autoEdgeHide === false) {
@@ -78,7 +122,39 @@ export function applySettingsPatch(patch: Partial<Settings>) {
   if (patch.companionEnabled === true) {
     useUIStore.getState().setPinned(true);
   }
+  let protectedDraftId: string | undefined;
+  let protectedScanRevision: number | undefined;
+  if (savesSensitiveFields) {
+    const current = useDeliveryStore.getState();
+    if (current.open && current.draft) {
+      protectedDraftId = current.draft.id;
+      protectedScanRevision = current.draft.scanRevision + 1;
+      useDeliveryStore.setState({
+        busy: true,
+        draft: {
+          ...current.draft,
+          firewallStatus: "failed",
+          findings: [],
+          scanRevision: protectedScanRevision,
+          pressEnter: false,
+          imageFirewall: current.draft.imageFirewall.map((item) => item.status === "disabled" ? item : {
+            ...item,
+            status: "failed",
+            scanRevision: item.scanRevision + 1,
+            keptFindingIds: [],
+            rawConfirmation: null,
+            failureMessage: "敏感字段已更新，请重新检查图片",
+          }),
+          privacyDecision: { ...current.draft.privacyDecision, excludedFindingIds: [], rawConfirmation: null },
+        },
+      });
+    }
+  }
   useNotesStore.getState().setSettings(patch);
+  if (savesSensitiveFields) {
+    const saving = finishPrivacySettingsSave(++privacySaveSequence, protectedDraftId, protectedScanRevision);
+    registerPrivacySettingsSave(saving);
+  }
   const s = useNotesStore.getState().settings;
   const profileOverrideId = useTargetStore.getState().profileOverrideId;
   if (

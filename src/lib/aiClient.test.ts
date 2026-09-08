@@ -26,10 +26,12 @@ import {
   startAiRequest,
 } from "./aiClient";
 import { defaultSettings, useNotesStore } from "@/store/notesStore";
+import { useDataOperationStore } from "@/store/dataOperationStore";
 
 describe("aiClient", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useDataOperationStore.setState({ locked: false, phase: "idle", message: "" });
     useNotesStore.setState({
       settings: {
         ...defaultSettings(),

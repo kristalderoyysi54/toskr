@@ -1,4 +1,5 @@
 import { api } from "@/lib/tauri";
+import { getAiKeyStatusForUse } from "@/lib/aiKeyAccess";
 import { useNotesStore, type Settings } from "@/store/notesStore";
 
 export interface AiPreset {
@@ -71,7 +72,7 @@ export class AiError extends Error {
 export function aiErrorTip(error: unknown): string {
   if (error instanceof AiError) {
     if (error.kind === "not-configured") {
-      return "请先在 设置 → AI 智能 中配置并启用";
+      return "请先在 设置 → 更多功能 → AI 智能 中配置并启用";
     }
     if (error.kind === "parse") return "AI 返回内容无法解析";
     if (error.kind === "cancelled") return "AI 转换已取消";
@@ -160,7 +161,7 @@ export function startAiRequest(input: AiRequestInput): AiRequestHandle {
       throw new AiError("not-configured", "AI 未配置或未启用");
     }
     try {
-      const keyStatus = await api.getAiKeyStatus();
+      const keyStatus = await getAiKeyStatusForUse();
       if (controller.signal.aborted) throw cancelledError();
       if (!keyStatus.configured) {
         throw new AiError("not-configured", "AI API Key 尚未配置");

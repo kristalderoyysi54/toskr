@@ -11,6 +11,8 @@ import {
   GripVertical,
   ListChecks,
   Plus,
+  Pencil,
+  MoreHorizontal,
   Send,
   Sparkles,
   Trash2,
@@ -96,6 +98,7 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const [draft, setDraft] = useState(task.text);
   const [noteDraft, setNoteDraft] = useState(task.note ?? "");
+  const [dueOpen, setDueOpen] = useState(false);
 
   const { cycleTaskStatus, cycleTaskPriority } = useNotesStore.getState();
 
@@ -212,7 +215,7 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
             // （设置 → 卡片透明度），与笔记/剪贴板卡同一套配方
             task.kind === "spark"
               ? "bg-[rgb(245_243_255/var(--card-alpha,100%))] dark:bg-[rgb(167_139_250/calc(var(--card-alpha,100%)*0.1))]"
-              : "bg-[rgb(255_255_255/var(--card-alpha,100%))] dark:bg-[rgb(39_39_42/var(--card-alpha,100%))]",
+              : "material-card",
             focused && "ring-1 ring-black/20 dark:ring-white/25",
             expanded && "ring-1 ring-primary/40",
             flashing && "flash-highlight",
@@ -368,7 +371,7 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
             )}
 
             {/* 收起态才在行头放到期/删除；展开态移到详情底部操作行，把宽度留给标题 */}
-            {!expanded && <DuePopover task={task} now={now} shortLabel />}
+            {!expanded && <DuePopover task={task} now={now} shortLabel open={dueOpen} onOpenChange={setDueOpen} />}
             {!expanded && (
               <IconButton
                 label="删除任务"
@@ -418,7 +421,7 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
                 <ChecklistAdder taskId={task.id} />
                 {/* 详情底部操作行：到期 + 删除（行头空间留给完整标题） */}
                 <div className="flex items-center gap-1.5 pt-0.5">
-                  <DuePopover task={task} now={now} alwaysVisible />
+                  <DuePopover task={task} now={now} alwaysVisible open={dueOpen} onOpenChange={setDueOpen} />
                   <span className="flex-1" />
                   <button
                     aria-label="删除任务"
@@ -437,87 +440,109 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
         </div>
       </ContextMenuTrigger>
 
-      <TaskMenu task={task} />
+      <TaskMenu
+        task={task}
+        onEdit={() => {
+          useUIStore.setState({ focusedId: task.id, editingId: task.id });
+          titleRef.current?.focus();
+        }}
+        onReminder={() => setDueOpen(true)}
+      />
     </ContextMenu>
   );
 }
 
 /** 任务右键菜单（行与横栏瓷砖共用）。 */
-function TaskMenu({ task }: { task: Task }) {
+function TaskMenu({ task, onEdit, onReminder }: {
+  task: Task;
+  onEdit: () => void;
+  onReminder: () => void;
+}) {
+  const pendingAction = useRef<(() => void) | null>(null);
   return (
-        <ContextMenuContent className="w-40">
+    <ContextMenuContent
+      className="w-44"
+      onCloseAutoFocus={(event) => {
+        if (!pendingAction.current) return;
+        event.preventDefault();
+        const run = pendingAction.current;
+        pendingAction.current = null;
+        run();
+      }}
+    >
+      <ContextMenuItem onClick={() => useNotesStore.getState().setTaskStatus(
+        task.id, task.status === "done" ? "todo" : "done"
+      )}>
+        <CheckCircle2 className="size-3.5" /> {task.status === "done" ? "恢复为待办" : "标记完成"}
+      </ContextMenuItem>
+      <ContextMenuItem onClick={() => useNotesStore.getState().setTaskStatus(
+        task.id, task.status === "doing" ? "todo" : "doing"
+      )}>
+        <CircleDot className="size-3.5" /> {task.status === "doing" ? "恢复为待办" : "标记进行中"}
+      </ContextMenuItem>
+      <ContextMenuItem onSelect={() => { pendingAction.current = onEdit; }}>
+        <Pencil className="size-3.5" /> 编辑任务
+      </ContextMenuItem>
+      <ContextMenuItem onSelect={() => { pendingAction.current = onReminder; }}>
+        <AlarmClock className="size-3.5" /> {task.dueAt === null ? "设置提醒时间" : "修改提醒时间"}
+      </ContextMenuItem>
+      {task.kind === "spark" && (
+        <ContextMenuItem onClick={() => useNotesStore.getState().sparkToTask(task.id)}>
+          <Lightbulb className="size-3.5" /> 转为待办
+        </ContextMenuItem>
+      )}
+      <ContextMenuSeparator />
+      <div className="px-2 py-1">
+        <p className="mb-1 text-micro text-muted-foreground">优先级</p>
+        <div className="flex gap-1">
+          {PRIORITY_CYCLE.map((priority) => (
+            <button
+              key={priority}
+              aria-label={`优先级：${PRIORITY_LABEL[priority]}`}
+              aria-pressed={task.priority === priority}
+              onClick={() => {
+                useNotesStore.getState().setTaskPriority(task.id, priority);
+                closeContextMenu();
+              }}
+              className={cn(
+                "flex-1 rounded-md border px-1 py-0.5 text-label",
+                task.priority === priority
+                  ? "border-border bg-primary/10 font-medium dark:border-input"
+                  : "border-border text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {priority === "none" ? "无" : PRIORITY_LABEL[priority]}
+            </button>
+          ))}
+        </div>
+      </div>
+      <MoveToSectionSub task={task} />
+      <ContextMenuSeparator />
+      <ContextMenuSub>
+        <ContextMenuSubTrigger>
+          <MoreHorizontal className="size-3.5" /> 更多操作
+        </ContextMenuSubTrigger>
+        <ContextMenuSubContent className="w-44">
           <TargetSendMenuItem onClick={() => void sendTaskToChat(task.id)}>
             <Send className="size-3.5" /> 发送到对话
           </TargetSendMenuItem>
-          <TargetSendMenuItem
-            onClick={() => void sendTaskToChat(task.id, { forcePreflight: true })}
-          >
-            <ListChecks className="size-3.5" /> 预检并发送
+          <TargetSendMenuItem onClick={() => void sendTaskToChat(task.id, { forcePreflight: true })}>
+            <ListChecks className="size-3.5" /> 检查后发送…
           </TargetSendMenuItem>
+          <ContextMenuSeparator />
           <ContextMenuItem onClick={() => void splitSubtasks(task.id)}>
             <Sparkles className="size-3.5" /> AI 拆解子任务
           </ContextMenuItem>
-          {task.kind === "spark" && (
-            <ContextMenuItem onClick={() => useNotesStore.getState().sparkToTask(task.id)}>
-              <Lightbulb className="size-3.5" /> 转为待办
-            </ContextMenuItem>
-          )}
-          <ContextMenuSeparator />
-          {/* 状态/优先级平铺行内选择：窄面板下二级子菜单会翻转遮挡主菜单 */}
-          <div className="px-2 py-1">
-            <p className="mb-1 text-micro text-muted-foreground">状态</p>
-            <div className="flex gap-1">
-              {(Object.keys(STATUS_LABEL) as TaskStatus[]).map((s) => (
-                <button
-                  key={s}
-                  onClick={() => {
-                    useNotesStore.getState().setTaskStatus(task.id, s);
-                    closeContextMenu();
-                  }}
-                  className={cn(
-                    "flex-1 rounded-md border px-1 py-0.5 text-label",
-                    task.status === s
-                      ? "border-border bg-primary/10 font-medium dark:border-input"
-                      : "border-border text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  {STATUS_LABEL[s]}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="px-2 py-1">
-            <p className="mb-1 text-micro text-muted-foreground">优先级</p>
-            <div className="flex gap-1">
-              {PRIORITY_CYCLE.map((p) => (
-                <button
-                  key={p}
-                  title={PRIORITY_LABEL[p]}
-                  onClick={() => {
-                    useNotesStore.getState().setTaskPriority(task.id, p);
-                    closeContextMenu();
-                  }}
-                  className={cn(
-                    "flex h-6 flex-1 items-center justify-center rounded-md border",
-                    task.priority === p
-                      ? "border-border bg-primary/10 dark:border-input"
-                      : "border-border hover:bg-black/5 dark:hover:bg-white/10"
-                  )}
-                >
-                  <span className={cn("h-3.5 w-[3px] rounded-full", PRIORITY_BAR[p])} />
-                </button>
-              ))}
-            </div>
-          </div>
-          <MoveToSectionSub task={task} />
-          <ContextMenuSeparator />
-          <ContextMenuItem
-            variant="destructive"
-            onClick={() => deleteTasksWithUndo([task.id], "已删除 1 个任务")}
-          >
-            <Trash2 className="size-3.5" /> 删除
-          </ContextMenuItem>
-        </ContextMenuContent>
+        </ContextMenuSubContent>
+      </ContextMenuSub>
+      <ContextMenuSeparator />
+      <ContextMenuItem
+        variant="destructive"
+        onClick={() => deleteTasksWithUndo([task.id], "已删除 1 个任务")}
+      >
+        <Trash2 className="size-3.5" /> 删除
+      </ContextMenuItem>
+    </ContextMenuContent>
   );
 }
 
@@ -648,6 +673,8 @@ function DuePopover({
   alwaysVisible,
   dense,
   shortLabel,
+  open,
+  onOpenChange,
 }: {
   task: Task;
   now: number;
@@ -657,14 +684,15 @@ function DuePopover({
   dense?: boolean;
   /** 短文案（竖栏收起行）：剥掉逾期「到期」后缀去重——区头已声明；全文进 tooltip。 */
   shortLabel?: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
 }) {
   const duePresets = useNotesStore((s) => s.settings.duePresets);
-  const [open, setOpenRaw] = useState(false);
   // 关闭后按钮多驻留一拍：Radix 退出动画（100ms）期间锚点若被 hidden
   // 收走，弹层会失锚闪到屏幕角落
   const [lingering, setLingering] = useState(false);
   const setOpen = (v: boolean) => {
-    setOpenRaw(v);
+    onOpenChange(v);
     if (!v) {
       setLingering(true);
       window.setTimeout(() => setLingering(false), 180);
@@ -799,10 +827,14 @@ function TileDetail({
   task,
   now,
   onClose,
+  dueOpen,
+  onDueOpenChange,
 }: {
   task: Task;
   now: number;
   onClose: () => void;
+  dueOpen: boolean;
+  onDueOpenChange: (open: boolean) => void;
 }) {
   const [draft, setDraft] = useState(task.text);
   const [noteDraft, setNoteDraft] = useState(task.note ?? "");
@@ -861,7 +893,7 @@ function TileDetail({
       )}
       <ChecklistAdder taskId={task.id} />
       <div className="flex items-center gap-1.5 pt-0.5">
-        <DuePopover task={task} now={now} alwaysVisible dense />
+        <DuePopover task={task} now={now} alwaysVisible dense open={dueOpen} onOpenChange={onDueOpenChange} />
         <span className="flex-1" />
         <button
           aria-label="删除任务"
@@ -887,6 +919,7 @@ export function TaskTile({ task, now }: { task: Task; now: number }) {
   const cardOpacity = useNotesStore((s) => s.settings.cardOpacity);
   const tileRef = useRef<HTMLDivElement>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [dueOpen, setDueOpen] = useState(false);
   useEffect(() => {
     if (focused) {
       tileRef.current?.scrollIntoView({ inline: "nearest", block: "nearest" });
@@ -929,8 +962,8 @@ export function TaskTile({ task, now }: { task: Task; now: number }) {
           className={cn(
             "group relative flex h-auto shrink-0 cursor-default select-none flex-col overflow-hidden rounded-lg px-2 pb-1.5 pt-1.5 transition-[width] duration-150",
             detailOpen ? "w-96" : "aspect-[16/17]",
-            "bg-[rgb(255_255_255/var(--card-alpha,100%))] dark:bg-[rgb(39_39_42/var(--card-alpha,100%))]",
-            // 闪念紫底同样乘上 --card-alpha（基础配方在上一行，spark 覆盖之）
+            !spark && "material-card",
+            // 闪念保留紫色语义与原有透明度，不套用中性材质。
             spark &&
               "bg-[rgb(245_243_255/calc(var(--card-alpha,100%)*0.9))] dark:bg-[rgb(46_16_101/calc(var(--card-alpha,100%)*0.4))]",
             // 横栏 ←/→ 导航的「选中」视觉：与笔记卡选中同款蓝框（任务无勾选
@@ -941,7 +974,7 @@ export function TaskTile({ task, now }: { task: Task; now: number }) {
           )}
         >
           {detailOpen ? (
-            <TileDetail task={task} now={now} onClose={() => setDetailOpen(false)} />
+            <TileDetail task={task} now={now} onClose={() => setDetailOpen(false)} dueOpen={dueOpen} onDueOpenChange={setDueOpen} />
           ) : (
             <>
               <div className="mb-1 flex items-center gap-1">
@@ -1001,7 +1034,7 @@ export function TaskTile({ task, now }: { task: Task; now: number }) {
                   </span>
                 )}
                 <span className="ml-auto" onClick={(e) => e.stopPropagation()}>
-                  <DuePopover task={task} now={now} alwaysVisible dense />
+                  <DuePopover task={task} now={now} alwaysVisible dense open={dueOpen} onOpenChange={setDueOpen} />
                 </span>
               </div>
               <p
@@ -1068,7 +1101,14 @@ export function TaskTile({ task, now }: { task: Task; now: number }) {
           )}
         </div>
       </ContextMenuTrigger>
-      <TaskMenu task={task} />
+      <TaskMenu
+        task={task}
+        onEdit={() => {
+          setDetailOpen(true);
+          tileRef.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
+        }}
+        onReminder={() => setDueOpen(true)}
+      />
     </ContextMenu>
   );
 }

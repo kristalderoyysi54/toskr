@@ -148,6 +148,38 @@
   contain-intrinsic-block-size: auto var(--list-intrinsic-size, 40px);
 }
 
+/* 列表选中态：边缘颜色最浓，连续向内衰减；不单独绘制硬描边。 */
+:root {
+  --selection-rim: color-mix(in oklab, var(--primary) 58%, transparent);
+  --selection-halo: color-mix(in oklab, var(--primary) 22%, transparent);
+  --selection-glow-size: 24px;
+  --selection-glow-compact-size: 8px;
+}
+.dark {
+  --selection-rim: color-mix(in oklab, var(--primary) 78%, transparent);
+  --selection-halo: color-mix(in oklab, var(--primary) 38%, transparent);
+}
+.list-selection-glow {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+  border-radius: inherit;
+  box-shadow:
+    inset 0 0 8px 1px var(--selection-rim),
+    inset 0 0 var(--selection-glow-size) 2px var(--selection-halo);
+}
+.list-selection-glow--compact {
+  --selection-glow-size: var(--selection-glow-compact-size);
+}
+/* 连续剪贴选区把接缝处的光晕移出行的裁切区，整段只保留外轮廓。 */
+.list-selection-glow--join-prev {
+  top: calc(-2 * var(--selection-glow-size));
+}
+.list-selection-glow--join-next {
+  bottom: calc(-2 * var(--selection-glow-size));
+}
+
 /* 中英混排字体栈：Geist 负责西文，PingFang 负责中文 */
 @theme inline {
   --font-sans: "Geist Variable", -apple-system, "PingFang SC",
@@ -184,12 +216,93 @@ input {
   -webkit-user-select: text;
 }
 
+/* 三档材质由面板与设置样片共用。alpha 仍为用户设定值；100% 卡面也保留
+   材质的明暗差异，不依赖被实色卡遮住的原生 vibrancy，不增加逐卡模糊层。 */
+[data-material] {
+  --material-panel: 252 252 252;
+  --material-card-top: 255 255 255;
+  --material-card-middle: 255 255 255;
+  --material-card-bottom: 255 255 255;
+}
+[data-material="sidebar"] {
+  --material-panel: 234 238 244;
+  --material-card-top: 255 255 255;
+  --material-card-middle: 248 249 252;
+  --material-card-bottom: 235 239 245;
+}
+[data-material="under-window"] {
+  --material-panel: 194 203 216;
+  --material-card-top: 249 250 252;
+  --material-card-middle: 230 234 240;
+  --material-card-bottom: 208 216 228;
+}
+.dark [data-material] {
+  --material-panel: 15 15 15;
+  --material-card-top: 39 39 42;
+  --material-card-middle: 39 39 42;
+  --material-card-bottom: 39 39 42;
+}
+.dark [data-material="sidebar"] {
+  --material-panel: 28 33 41;
+  --material-card-top: 53 59 69;
+  --material-card-middle: 44 49 59;
+  --material-card-bottom: 37 41 50;
+}
+.dark [data-material="under-window"] {
+  --material-panel: 17 23 33;
+  --material-card-top: 83 94 111;
+  --material-card-middle: 61 71 88;
+  --material-card-bottom: 43 51 66;
+}
+
+/* 单层渐变：每个色阶使用相同 alpha，避免多层叠色让滑杆实际更不透明。
+   不画硬边或高光线，原有选择柔光、hover elevation 独立保留。 */
+.material-card {
+  background: linear-gradient(155deg,
+    rgb(var(--material-card-top, 255 255 255) / var(--card-alpha, 100%)),
+    rgb(var(--material-card-middle, 255 255 255) / var(--card-alpha, 100%)) 52%,
+    rgb(var(--material-card-bottom, 255 255 255) / var(--card-alpha, 100%)));
+}
+.material-card-actions {
+  /* 与整张卡同尺寸、同背景定位，仅遮盖右端正文，避免渐变接缝。 */
+  background: inherit;
+  -webkit-mask-image: linear-gradient(to right, transparent 60%, black 78%);
+  mask-image: linear-gradient(to right, transparent 60%, black 78%);
+}
+.material-card.flash-highlight {
+  /* 渐变卡面会遮住旧的 background-color 动画，捕获提示改在卡面之上。 */
+  animation: none;
+  background-color: transparent;
+}
+.material-card.flash-highlight::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  border-radius: inherit;
+  background: oklch(0.72 0.15 60 / 30%);
+  animation: material-flash var(--duration-emphasis) ease-out forwards;
+}
+@keyframes material-flash {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
 /* 面板内容膜层：半透明底色叠在系统 vibrancy 上；不透明度可在设置里调 */
 .panel-surface {
-  background: oklch(0.99 0 0 / calc(var(--panel-alpha, 0.62) * 100%));
+  background: rgb(var(--material-panel, 252 252 252) / var(--panel-alpha, 0.62));
 }
 .dark .panel-surface {
-  background: oklch(0.17 0 0 / calc(var(--panel-alpha, 0.62) * 0.9 * 100%));
+  background: rgb(var(--material-panel, 15 15 15) / calc(var(--panel-alpha, 0.62) * 0.9));
+}
+
+/* 固定的模拟桌面让三个设置样片可直接比较；不冒充原生桌面采样。 */
+.material-sample-backdrop {
+  background: linear-gradient(125deg, #99bccc, #d4d4de 48%, #b9aaba);
+}
+.dark .material-sample-backdrop {
+  background: linear-gradient(125deg, #334859, #414352 48%, #514254);
 }
 
 /* === 代码语法高亮配色（浅/深各一套，跟随主题）===
@@ -562,6 +675,20 @@ input {
   overflow: hidden;
   border-radius: var(--radius-xl);
 }
+/* 只模糊坞后面的正文；渐隐遮罩消除上缘硬切，独立底层不影响按钮和菜单。 */
+.detail-bottom-dock::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(to top, var(--background), transparent);
+  -webkit-backdrop-filter: blur(var(--blur-xl));
+  backdrop-filter: blur(var(--blur-xl));
+  -webkit-mask-image: linear-gradient(to bottom, transparent, black 65%);
+  mask-image: linear-gradient(to bottom, transparent, black 65%);
+}
+
 /* —— letterpress 微压印：仅限 wordmark 级大标题 —— */
 :root {
   --text-shadow-letterpress: 0 1px 0 oklch(1 0 0 / 0.5);
@@ -590,6 +717,10 @@ input {
   .flash-highlight {
     animation: none !important;
     background-color: oklch(0.72 0.15 60 / 22%);
+  }
+  .material-card.flash-highlight::before {
+    animation: none !important;
+    background: oklch(0.72 0.15 60 / 22%);
   }
   /* 骨架脉冲同理：静态占位仍在，仅去闪烁 */
   .animate-pulse {

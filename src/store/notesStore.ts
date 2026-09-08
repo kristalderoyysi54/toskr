@@ -15,6 +15,7 @@ import {
   textFromContentBlocks,
   type NoteContentBlock,
 } from "@/lib/noteContentBlocks";
+import { isCustomSensitiveFieldsValid, normalizeCustomSensitiveFields } from "@/lib/delivery/customSensitiveFields";
 import { FIREWALL_WARN_CATEGORIES } from "@/lib/delivery/firewall";
 import {
   isAliasCategoryRecordValid,
@@ -75,8 +76,14 @@ import {
   type MessageWatchRule,
 } from "@/lib/messages";
 import { getImProfile } from "@/lib/imProfile";
+import {
+  DEFAULT_PROMPT_SNIPPETS,
+  WORKFLOW_PROMPT_SNIPPETS,
+  isUnmodifiedLegacyPromptSnippet,
+} from "@/lib/promptTemplates";
 import { tauriStateStorage } from "./persistStorage";
 
+export { DEFAULT_PROMPT_SNIPPETS } from "@/lib/promptTemplates";
 export type { PromptGroup, PromptSnippet, TargetProfile } from "@/lib/targetProfiles";
 export type { AliasCategoryDefinition, AliasEntity } from "@/lib/delivery/aliasEntities";
 export type { OnboardingEvent, OnboardingState } from "@/lib/onboarding";
@@ -99,7 +106,7 @@ export type PageId = "notes" | "clipboard" | "tasks" | "secret";
 
 /** 页签默认顺序（剪贴最高频，居首；秘文默认关闭故垫底）。 */
 export const DEFAULT_PAGE_ORDER: PageId[] = ["clipboard", "notes", "tasks", "secret"];
-export const STORE_VERSION = 24;
+export const STORE_VERSION = 26;
 
 /**
  * 归一化页签顺序：去重、剔除未知项、补齐缺失页（按默认序追加）。
@@ -340,45 +347,13 @@ export const DEFAULT_DUE_PRESETS: DuePresetCfg[] = [
   { id: "next-mon-9", kind: "weekday", weekday: 1, hour: 9, minute: 0 },
 ];
 
-export const DEFAULT_PROMPT_SNIPPETS: PromptSnippet[] = [
-  {
-    id: "review",
-    label: "代码审查",
-    text: "请帮我 review 以下代码，指出问题与改进建议：\n\n{内容}",
-    groupId: GENERAL_PROMPT_GROUP_ID,
-  },
-  {
-    id: "translate",
-    label: "翻译成中文",
-    text: "请把以下内容翻译成中文：\n\n{内容}",
-    groupId: GENERAL_PROMPT_GROUP_ID,
-  },
-  {
-    id: "summarize",
-    label: "总结要点",
-    text: "请总结以下内容的要点：\n\n{内容}",
-    groupId: GENERAL_PROMPT_GROUP_ID,
-  },
-  {
-    id: "explain",
-    label: "解释内容",
-    text: "请解释以下内容：\n\n{内容}",
-    groupId: GENERAL_PROMPT_GROUP_ID,
-  },
-  {
-    id: "optimize-prompt",
-    label: "优化提示词",
-    text: "请你不要执行接下来的任务。你现在的身份是世界顶级的提示工程专家，请仔细阅读我提供的提示词：\n\n{内容}\n\n并从清晰度、专业度、结构化、模型适应性四个维度进行批判性优化。请仅输出优化后的提示词内容，并用 ``` 包裹起来。",
-    groupId: GENERAL_PROMPT_GROUP_ID,
-  },
-];
-
 export type VibrancyMaterial =
   | "hud"
   | "popover"
   | "sidebar"
   | "under-window"
-  | "fullscreen";
+  | "fullscreen"
+  | "liquid";
 
 export interface Settings {
   /** 主题：跟随系统 / 浅色 / 深色。 */
@@ -491,6 +466,8 @@ export interface Settings {
   firewallEnabled: boolean;
   /** 用户本次关闭的提示级类别；block 规则不允许进入此列表。 */
   firewallDisabledWarnCategories: FindingCategory[];
+  /** 仅保存字段名；对应值由本机文本与图片扫描判为高风险。 */
+  firewallCustomSensitiveFields: string[];
   /** 可逆化名总开关（词典为空时天然惰性）。 */
   aliasEntitiesEnabled: boolean;
   /** 化名词典：用户主动录入的原文 → 稳定占位符（明文随本地数据与完整备份保存）。 */
@@ -774,6 +751,7 @@ export const defaultSettings = (): Settings => ({
   defaultTargetProfileId: SAFETY_PROFILE_ID,
   firewallEnabled: true,
   firewallDisabledWarnCategories: [],
+  firewallCustomSensitiveFields: [],
   aliasEntitiesEnabled: true,
   aliasEntities: [],
   aliasCustomCategories: [],
@@ -813,6 +791,7 @@ function repairSettingsTargetProfiles(settings: Settings): Settings {
   });
   return {
     ...settings,
+    firewallCustomSensitiveFields: normalizeCustomSensitiveFields(settings.firewallCustomSensitiveFields),
     firewallDisabledWarnCategories: [
       ...new Set(settings.firewallDisabledWarnCategories),
     ].filter((category) =>
@@ -1234,7 +1213,7 @@ function validateSettingsShape(value: unknown, version: number): void {
     }
   };
   enumField("theme", ["system", "light", "dark"]);
-  enumField("vibrancyMaterial", ["hud", "popover", "sidebar", "under-window", "fullscreen"]);
+  enumField("vibrancyMaterial", ["hud", "popover", "sidebar", "under-window", "fullscreen", "liquid"]);
   enumField("cardDensity", ["comfortable", "compact"]);
   // banner 是已移除的旧「单行」模板，仅为读取旧数据保留；迁移后统一写成 condensed。
   enumField("clipCardTemplate", ["standard", "condensed", "banner"]);
@@ -1266,6 +1245,9 @@ function validateSettingsShape(value: unknown, version: number): void {
     if (current !== undefined && (!Array.isArray(current) || !current.every((item) => typeof item === "string"))) {
       throw new Error(`settings.${key} 必须是字符串数组`);
     }
+  }
+  if (settings.firewallCustomSensitiveFields !== undefined && !isCustomSensitiveFieldsValid(settings.firewallCustomSensitiveFields)) {
+    throw new Error("settings.firewallCustomSensitiveFields 含无效或重复字段");
   }
   const disabledWarnCategories = settings.firewallDisabledWarnCategories;
   if (disabledWarnCategories !== undefined && (
@@ -1872,7 +1854,7 @@ function normalizeBillRecord(bill: Bill): Bill {
   };
 }
 
-/** Zustand persist v1-v23 向前迁移；未知字段保留，旧版本重复记录按首项去重。 */
+/** Zustand persist v1-v25 向前迁移；未知字段保留，旧版本重复记录按首项去重。 */
 export function migratePersistedState(
   persisted: unknown,
   version: number
@@ -1917,15 +1899,6 @@ export function migratePersistedState(
         ]),
       ],
     };
-  }
-  if (version < 7 && p.settings?.promptSnippets) {
-    const fresh = DEFAULT_PROMPT_SNIPPETS.find((item) => item.id === "optimize-prompt");
-    if (fresh && !p.settings.promptSnippets.some((snippet) => snippet.id === fresh.id)) {
-      p.settings = {
-        ...p.settings,
-        promptSnippets: [...p.settings.promptSnippets, fresh],
-      };
-    }
   }
   if (version < 9 && p.settings) {
     const legacyAutoEnter = p.settings.autoEnter === true;
@@ -2006,6 +1979,28 @@ export function migratePersistedState(
               : ("preserve" as const),
         };
       }),
+    };
+  }
+  if (version < 25 && p.settings?.promptSnippets) {
+    const existingIds = new Set(p.settings.promptSnippets.map((snippet) => snippet.id));
+    p.settings = {
+      ...p.settings,
+      // 仅升级时补充新常用模板；保留既有内容、分组和顺序，同版本不补回已删除项。
+      promptSnippets: [
+        ...WORKFLOW_PROMPT_SNIPPETS
+          .filter((snippet) => !existingIds.has(snippet.id))
+          .map((snippet) => ({ ...snippet })),
+        ...p.settings.promptSnippets,
+      ],
+    };
+  }
+  if (version < 26 && p.settings?.promptSnippets) {
+    p.settings = {
+      ...p.settings,
+      // 只清理完整匹配的旧预设；用户新增、改名、改文或改组的模板均保留。
+      promptSnippets: p.settings.promptSnippets.filter(
+        (snippet) => !isUnmodifiedLegacyPromptSnippet(snippet)
+      ),
     };
   }
   if (version < 17) {

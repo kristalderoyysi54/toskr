@@ -35,6 +35,7 @@ touch src-tauri/src/lib.rs
 export TAURI_SIGNING_PRIVATE_KEY="$KEY"
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
 PATH=/usr/bin:$PATH pnpm tauri build
+python3 script/keychain-helper.py check --app "$BUNDLE/Toskr.app"
 [[ -f "$BUNDLE/Toskr.app.tar.gz" && -f "$BUNDLE/Toskr.app.tar.gz.sig" ]] \
   || { echo "缺少 updater 产物（检查 createUpdaterArtifacts）"; exit 1; }
 [[ -d "$DMG_DIR" ]] || { echo "缺少 DMG 产物目录"; exit 1; }

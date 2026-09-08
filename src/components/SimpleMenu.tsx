@@ -1,8 +1,10 @@
 import { createContext, useContext, useEffect, useId, useRef, useState } from "react";
+import { Check } from "lucide-react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 import { floatingSurface } from "@/components/ui/floating-surface";
 import { cn } from "@/lib/utils";
+import { handleSimpleMenuEscape, handleSimpleMenuKeyDown } from "@/lib/menuKeyboard";
 
 type SimpleMenuRole = "menu" | "listbox";
 const SimpleMenuRoleContext = createContext<SimpleMenuRole>("menu");
@@ -22,6 +24,7 @@ export function SimpleMenu({
   menuClassName,
   className,
   preserveTextSelection = false,
+  onOpenChange,
 }: {
   trigger: (props: { open: boolean; toggle: () => void; controls: string }) => React.ReactNode;
   children: (close: () => void) => React.ReactNode;
@@ -32,6 +35,7 @@ export function SimpleMenu({
   menuClassName?: string;
   /** 菜单交互期间保留正文选区，供依赖选区的命令在菜单抢焦点后继续使用。 */
   preserveTextSelection?: boolean;
+  onOpenChange?: (open: boolean) => void;
   /** 根容器附加类。默认 block 会让触发按钮参与基线对齐产生亚像素错位，
    *  与相邻按钮拼「分裂按钮」时传 "flex" 消除。 */
   className?: string;
@@ -53,6 +57,7 @@ export function SimpleMenu({
   };
   const setOpen = (v: boolean, restoreFocus = false) => {
     setOpenRaw(v);
+    onOpenChange?.(v);
     window.clearTimeout(lingerTimer.current);
     if (v) setRendered(true);
     else lingerTimer.current = window.setTimeout(() => setRendered(false), 160);
@@ -72,13 +77,7 @@ export function SimpleMenu({
     const onDown = (e: PointerEvent) => {
       if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        setOpen(false, true);
-      }
-    };
+    const onKey = (e: KeyboardEvent) => handleSimpleMenuEscape(e, () => setOpen(false, true));
     window.addEventListener("pointerdown", onDown, true);
     window.addEventListener("keydown", onKey, true);
     // 窗口失焦即关：切到别的应用时本窗口收不到 pointerdown，菜单会一直
@@ -114,27 +113,6 @@ export function SimpleMenu({
     });
     return () => cancelAnimationFrame(frame);
   }, [open, rendered]);
-
-  const moveMenuFocus = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
-    const items = Array.from(
-      menuRef.current?.querySelectorAll<HTMLButtonElement>(
-        "[data-simple-menu-item]:not(:disabled)"
-      ) ?? []
-    );
-    if (items.length === 0) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
-    const nextIndex = event.key === "Home"
-      ? 0
-      : event.key === "End"
-        ? items.length - 1
-        : event.key === "ArrowUp"
-          ? (currentIndex - 1 + items.length) % items.length
-          : (currentIndex + 1 + items.length) % items.length;
-    items[nextIndex]?.focus();
-  };
 
   return (
     <div
@@ -175,7 +153,7 @@ export function SimpleMenu({
             window.clearTimeout(lingerTimer.current);
             setRendered(false);
           }}
-          onKeyDown={moveMenuFocus}
+          onKeyDown={handleSimpleMenuKeyDown}
           className={cn(
             "absolute z-50 max-h-[calc(100vh-4rem)] min-w-40 overflow-y-auto overscroll-contain rounded-lg p-1",
             floatingSurface(2),
@@ -205,6 +183,10 @@ export function SimpleMenuItem({
   disabled,
   destructive,
   selected,
+  checked,
+  radio = false,
+  expanded,
+  controls,
 }: {
   onClick: () => void;
   children: React.ReactNode;
@@ -212,13 +194,20 @@ export function SimpleMenuItem({
   disabled?: boolean;
   destructive?: boolean;
   selected?: boolean;
+  checked?: boolean;
+  radio?: boolean;
+  expanded?: boolean;
+  controls?: string;
 }) {
   const menuRole = useContext(SimpleMenuRoleContext);
   return (
     <button
       type="button"
-      role={menuRole === "listbox" ? "option" : "menuitem"}
+      role={menuRole === "listbox" ? "option" : checked === undefined ? "menuitem" : radio ? "menuitemradio" : "menuitemcheckbox"}
+      aria-checked={menuRole === "menu" ? checked : undefined}
       aria-selected={menuRole === "listbox" ? Boolean(selected) : undefined}
+      aria-expanded={expanded}
+      aria-controls={controls}
       data-simple-menu-item
       data-selected={selected ? "true" : undefined}
       title={title}
@@ -231,6 +220,9 @@ export function SimpleMenuItem({
       )}
     >
       {children}
+      {checked !== undefined && (checked
+        ? <Check className="ml-auto size-3.5 shrink-0" aria-hidden />
+        : <span className="ml-auto size-3.5 shrink-0" aria-hidden />)}
     </button>
   );
 }

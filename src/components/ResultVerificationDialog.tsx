@@ -614,7 +614,7 @@ export function ResultVerificationDialog() {
                     prepared={prepared}
                   />
                   {!descriptor.ready && (
-                    <p className="text-label text-warning">请先在设置 → AI 智能中配置并启用。</p>
+                    <p className="text-label text-warning">请先在设置 → 更多功能 → AI 智能中配置并启用。</p>
                   )}
                   <div className="flex gap-1.5">
                     {busy ? (

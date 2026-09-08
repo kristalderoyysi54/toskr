@@ -1,18 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { CustomSensitiveFields } from "@/components/settings/CustomSensitiveFields";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { ask } from "@tauri-apps/plugin-dialog";
 import type { Update } from "@tauri-apps/plugin-updater";
 import {
-  Activity,
-  AlarmClock,
-  Bot,
   AlertCircle,
   ArrowDown,
   ArrowUp,
   Blocks,
-  Check,
   ClipboardList,
   Copy,
   Database,
@@ -21,24 +18,22 @@ import {
   Keyboard,
   KeyRound,
   Crosshair,
-  Lock,
-  Magnet,
   Pencil,
   Plus,
-  Radio,
   Search,
   Settings2,
   ShieldCheck,
   Star,
   Trash2,
-  TrendingUp,
   X,
 } from "lucide-react";
 
 import { SimpleSelect } from "@/components/SimpleSelect";
 import { AliasEntitySettings } from "@/components/settings/AliasEntitySettings";
+import { MaterialStylePicker } from "@/components/settings/MaterialStylePicker";
 import { TargetProfileManager } from "@/components/settings/TargetProfileManager";
 import { OutcomeInsightsSection } from "@/components/settings/OutcomeInsightsSection";
+import { PromptTemplateEditor } from "@/components/settings/PromptTemplateEditor";
 import { useAppIdentity } from "@/components/settings/useAppIdentity";
 import { Button } from "@/components/ui/button";
 import { Disclosure } from "@/components/ui/disclosure";
@@ -128,21 +123,32 @@ import {
   type SecretKey,
   type Settings,
   type ThemePref,
-  type VibrancyMaterial,
 } from "@/store/notesStore";
 import {
   GENERAL_PROMPT_GROUP_ID,
   deletePromptGroup,
 } from "@/lib/targetProfiles";
 import { onboardingStateFromPersisted } from "@/lib/onboarding";
+import { promptSnippetSourceLabel, WORKFLOW_PROMPT_SNIPPET_IDS } from "@/lib/promptTemplates";
+import { exportPromptTemplates } from "@/lib/promptTemplateExport";
 import { presetCfgLabel } from "@/lib/tasks";
 import { AI_PRESETS, matchPreset, testAiConnection } from "@/lib/ai";
+import { requestAiKeyStatusForSettings } from "@/lib/aiKeyAccess";
 import { subscribeAiKeyStatus } from "@/lib/aiKeyStatus";
 import {
+  SETTINGS_PRIMARY_LABELS,
+  SETTINGS_PRIMARY_SECTIONS,
   SETTINGS_SECTION_LABELS,
   normalizeSettingsSearchText,
   searchSettings,
+  settingsChildSections,
+  settingsPrimarySection,
+  settingsSearchNeedsGeneralDetails,
+  targetSettingsPageForSearch,
+  settingsSectionFromLink,
+  type SettingsPrimarySection,
   type SettingsSearchEntry,
+  type SettingsSearchGates,
   type SettingsSectionId,
 } from "@/lib/settingsSearch";
 import {
@@ -159,54 +165,77 @@ const SECRET_STYLE_HINT: Record<SecretCipherStyle, string> = {
   quote: "独立引用文本格式",
 };
 
-/** 侧栏分章（用户指定 2026-08：菜单要有章法——按 面板/捕获/发送/助手/系统
- *  五章组织，小项合并进相邻章节，次要细节在分区内做渐进式披露）。 */
-const SECTION_GROUPS: {
-  title: string;
-  items: { id: SectionId; label: string; icon: React.ReactNode }[];
-}[] = [
-  {
-    title: "面板",
-    items: [
-      { id: "general", label: "通用", icon: <Settings2 className="size-4" /> },
-      { id: "companion", label: "伴随停靠", icon: <Magnet className="size-4" /> },
-      { id: "features", label: "功能开关", icon: <Blocks className="size-4" /> },
-    ],
-  },
-  {
-    title: "捕获",
-    items: [
-      { id: "hotkey", label: "捕获与快捷键", icon: <Keyboard className="size-4" /> },
-      { id: "clip", label: "剪贴板", icon: <ClipboardList className="size-4" /> },
-      { id: "message-watch", label: "消息监听", icon: <Radio className="size-4" /> },
-      { id: "secret", label: "秘文", icon: <Lock className="size-4" /> },
-    ],
-  },
-  {
-    title: "发送",
-    items: [
-      { id: "target", label: "目标与发送方案", icon: <Crosshair className="size-4" /> },
-      { id: "outcome", label: "使用概览", icon: <TrendingUp className="size-4" /> },
-    ],
-  },
-  {
-    title: "助手",
-    items: [
-      { id: "due", label: "到期提醒", icon: <AlarmClock className="size-4" /> },
-      { id: "ai", label: "AI 智能", icon: <Bot className="size-4" /> },
-    ],
-  },
-  {
-    title: "系统",
-    items: [
-      { id: "data", label: "数据", icon: <Database className="size-4" /> },
-      { id: "diagnostics", label: "诊断", icon: <Activity className="size-4" /> },
-      { id: "about", label: "关于", icon: <Info className="size-4" /> },
-    ],
-  },
-];
+const PRIMARY_ICONS: Record<SettingsPrimarySection, React.ReactNode> = {
+  general: <Settings2 className="size-4" />,
+  hotkey: <Keyboard className="size-4" />,
+  clip: <ClipboardList className="size-4" />,
+  target: <Crosshair className="size-4" />,
+  features: <Blocks className="size-4" />,
+  data: <Database className="size-4" />,
+  outcome: <Info className="size-4" />,
+};
 
-/** 独立设置窗口：主面板是唯一持久化写入方，这里只收 state / 发 patch。 */
+export function SettingsNavigation({
+  section,
+  onSelect,
+}: {
+  section: SectionId;
+  onSelect: (section: SectionId) => void;
+}) {
+  const primary = settingsPrimarySection(section);
+  return (
+    <nav aria-label="设置分类" className="flex flex-col gap-1">
+      {SETTINGS_PRIMARY_SECTIONS.map((id) => (
+        <button
+          key={id}
+          type="button"
+          onClick={() => onSelect(id)}
+          aria-current={primary === id ? "page" : undefined}
+          className={cn(
+            "flex items-center gap-2 rounded-lg px-2.5 py-2 text-left text-body outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+            primary === id
+              ? "bg-primary/10 font-medium text-foreground"
+              : "text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
+          )}
+        >
+          {PRIMARY_ICONS[id]}
+          {SETTINGS_PRIMARY_LABELS[id]}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+export function SettingsChildNavigation({
+  section,
+  settings,
+  onSelect,
+}: {
+  section: SectionId;
+  settings: SettingsSearchGates;
+  onSelect: (section: SectionId) => void;
+}) {
+  const primary = settingsPrimarySection(section);
+  const children = settingsChildSections(primary, settings);
+  if (!children.length) return null;
+  return (
+    <nav aria-label={`${SETTINGS_PRIMARY_LABELS[primary]}选项`} className="mb-4 flex flex-wrap gap-1.5">
+      {children.map((id) => (
+        <Button
+          key={id}
+          variant="ghost"
+          size="sm"
+          aria-current={section === id ? "page" : undefined}
+          className={cn(section === id && "border-primary/50 bg-primary/10")}
+          onClick={() => onSelect(id)}
+        >
+          {SETTINGS_SECTION_LABELS[id]}
+        </Button>
+      ))}
+    </nav>
+  );
+}
+
 function initialSettingsForView(): Settings {
   const settings = defaultSettings();
   if (!import.meta.env.DEV || typeof location === "undefined") {
@@ -234,8 +263,11 @@ function initialSettingsForView(): Settings {
   };
 }
 
+/** 独立设置窗口：主面板是唯一持久化写入方，这里只收 state / 发 patch。 */
 export default function SettingsView() {
   const [settings, setSettings] = useState<Settings>(initialSettingsForView);
+  const currentSettingsRef = useRef(settings);
+  currentSettingsRef.current = settings;
   const [section, setSection] = useState<SectionId>("general");
   const [searchQuery, setSearchQuery] = useState("");
   const [searchTarget, setSearchTarget] = useState<{
@@ -261,7 +293,7 @@ export default function SettingsView() {
     ]
   );
   const hasSearchQuery = Boolean(searchQuery.trim());
-  // 功能域被关闭时其设置页从导航消失；若正停在该页则回退到功能开关页
+  // 功能域关闭后隐藏内部子导航；若正停在该页则回到更多功能。
   useEffect(() => {
     if (
       (section === "message-watch" && !settings.messagesEnabled) ||
@@ -282,11 +314,13 @@ export default function SettingsView() {
     profileId: string;
     sequence: number;
   } | null>(null);
+  const targetProfileRequestSequence = useRef(0);
   const dataActivity = useDataOperationStore();
 
   const clearSearch = () => {
     setSearchQuery("");
     setSearchTarget(null);
+    setTargetProfileRequest(null);
     activeSearchHighlightRef.current?.removeAttribute(
       "data-settings-search-active"
     );
@@ -294,12 +328,19 @@ export default function SettingsView() {
   };
 
   const selectSearchResult = (result: SettingsSearchEntry) => {
+    setTargetProfileRequest(null);
     setSection(result.section);
     setSearchTarget((previous) => ({
       id: result.id,
       value: result.target ?? result.title,
       sequence: (previous?.sequence ?? 0) + 1,
     }));
+  };
+
+  const selectSection = (next: SectionId) => {
+    setTargetProfileRequest(null);
+    setSearchTarget(null);
+    setSection(next);
   };
 
   const moveSearchResultFocus = (
@@ -378,7 +419,10 @@ export default function SettingsView() {
   }, [section, searchTarget]);
 
   useEffect(() => {
-    const un = listen<Settings>(SETTINGS_STATE, (e) => setSettings(e.payload));
+    const un = listen<Settings>(SETTINGS_STATE, (e) => {
+      currentSettingsRef.current = e.payload;
+      setSettings(e.payload);
+    });
     // 外部指路（更新提醒气泡点击等）→ 切到指定分区
     const unSection = listen<SettingsSectionPayload>(SETTINGS_SECTION, (e) => {
       setSearchQuery("");
@@ -390,21 +434,22 @@ export default function SettingsView() {
       const rawSection = typeof e.payload === "string"
         ? e.payload
         : e.payload.section;
-      const requested = ["snippets", "prompts"].includes(rawSection)
-        ? "target"
-        : rawSection === "exclude"
-          ? "hotkey"
-          : rawSection;
+      if (rawSection === "snippets" || rawSection === "prompts") {
+        setSearchTarget({ id: "prompt-groups", value: "提示词组", sequence: Date.now() });
+      }
+      const requested = settingsSectionFromLink(rawSection, currentSettingsRef.current);
       const targetProfileId = typeof e.payload === "string"
         ? null
         : e.payload.targetProfileId ?? null;
       if (targetProfileId) {
-        setTargetProfileRequest((previous) => ({
+        setTargetProfileRequest({
           profileId: targetProfileId,
-          sequence: (previous?.sequence ?? 0) + 1,
-        }));
+          sequence: ++targetProfileRequestSequence.current,
+        });
+      } else {
+        setTargetProfileRequest(null);
       }
-      setSection(requested as SectionId);
+      setSection(requested);
     });
     const unDataActivity = listen<DataActivity>(
       DATA_ACTIVITY_EVENT,
@@ -628,7 +673,9 @@ export default function SettingsView() {
                         {result.title}
                       </span>
                       <span className="block truncate text-micro text-muted-foreground">
-                        {SETTINGS_SECTION_LABELS[result.section]}
+                        {SETTINGS_PRIMARY_LABELS[settingsPrimarySection(result.section)]}
+                        {SETTINGS_SECTION_LABELS[result.section] !== SETTINGS_PRIMARY_LABELS[settingsPrimarySection(result.section)] &&
+                          ` · ${SETTINGS_SECTION_LABELS[result.section]}`}
                       </span>
                     </button>
                   ))}
@@ -640,42 +687,21 @@ export default function SettingsView() {
               )}
             </div>
           ) : (
-            SECTION_GROUPS.map((group) => (
-              <div key={group.title} className="mb-1 flex flex-col gap-0.5">
-                <p className="px-2.5 pb-0.5 pt-1.5 text-micro font-medium tracking-wide text-muted-foreground">
-                  {group.title}
-                </p>
-                {group.items
-                  .filter(
-                    // 未开启的功能域不占导航；总开关集中在「功能开关」页
-                    (item) =>
-                      (item.id !== "message-watch" || settings.messagesEnabled) &&
-                      (item.id !== "secret" || settings.secretEnabled)
-                  )
-                  .map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => setSection(item.id)}
-                      className={cn(
-                        "flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-body outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
-                        section === item.id
-                          ? "bg-primary/10 font-medium text-foreground"
-                          : "text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
-                      )}
-                    >
-                      {item.icon}
-                      {item.label}
-                    </button>
-                  ))}
-              </div>
-            ))
+            <SettingsNavigation section={section} onSelect={selectSection} />
           )}
         </div>
       </aside>
 
       <main ref={mainRef} className="min-w-0 flex-1 overflow-y-auto p-5">
-        {section === "general" && <GeneralSection settings={settings} patch={patch} />}
+        <SettingsChildNavigation section={section} settings={settings} onSelect={selectSection} />
+        {section === "general" && (
+          <GeneralSection
+            settings={settings}
+            patch={patch}
+            searchId={searchTarget?.id ?? null}
+            searchSequence={searchTarget?.sequence ?? 0}
+          />
+        )}
         {section === "hotkey" && (
           <>
             <HotkeySection settings={settings} patch={patch} />
@@ -690,7 +716,7 @@ export default function SettingsView() {
             searchSequence={searchTarget?.sequence ?? 0}
           />
         )}
-        {section === "features" && <FeaturesSection settings={settings} patch={patch} />}
+        {section === "features" && <FeaturesSection settings={settings} patch={patch} onConfigure={setSection} />}
         {section === "message-watch" && (
           <MessageWatchSection settings={settings} patch={patch} />
         )}
@@ -705,12 +731,15 @@ export default function SettingsView() {
           />
         )}
         {section === "outcome" && (
-          <div
-            data-settings-search="使用概览"
-            className="scroll-m-5 rounded-sm transition-shadow data-[settings-search-active=true]:ring-2 data-[settings-search-active=true]:ring-primary/40 data-[settings-search-active=true]:ring-offset-2 data-[settings-search-active=true]:ring-offset-background"
-          >
-            <OutcomeInsightsSection settings={settings} patch={patch} />
-          </div>
+          <>
+            <WelcomeTourSettings patch={patch} />
+            <div
+              data-settings-search="使用概览"
+              className="scroll-m-5 rounded-sm transition-shadow data-[settings-search-active=true]:ring-2 data-[settings-search-active=true]:ring-primary/40 data-[settings-search-active=true]:ring-offset-2 data-[settings-search-active=true]:ring-offset-background"
+            >
+              <OutcomeInsightsSection settings={settings} patch={patch} />
+            </div>
+          </>
         )}
         {section === "companion" && <CompanionSection settings={settings} patch={patch} />}
         {section === "due" && (
@@ -909,7 +938,16 @@ function ContextMenuGroup({ settings, patch }: SP) {
 
 /* ============ 各分区 ============ */
 
-function GeneralSection({ settings, patch }: SP) {
+export function GeneralSection({ settings, patch, searchId = null, searchSequence = 0 }: SP & {
+  searchId?: string | null;
+  searchSequence?: number;
+}) {
+  const searchNeedsDetails = settingsSearchNeedsGeneralDetails(searchId);
+  const [detailsOpen, setDetailsOpen] = useState(searchNeedsDetails);
+  // 搜索定位只查询一帧：先提交展开后的 DOM，避免父层 RAF 仍查到收起态。
+  useLayoutEffect(() => {
+    if (searchNeedsDetails) setDetailsOpen(true);
+  }, [searchNeedsDetails, searchSequence]);
   const [autostart, setAutostart] = useState(false);
   useEffect(() => {
     isEnabled().then(setAutostart).catch(() => {});
@@ -926,26 +964,8 @@ function GeneralSection({ settings, patch }: SP) {
 
   return (
     <div>
-      <SectionTitle>通用</SectionTitle>
-      <Group title="上手">
-        <Row
-          label="新手导览"
-          hint="重新播放首次启动的功能介绍轮播"
-          right={
-            <Button
-              size="xs"
-              onClick={() => {
-                patch({ welcomeTourSeen: false });
-                void api.showPanel();
-                tip("ok", "导览已就绪，回到主面板查看");
-              }}
-            >
-              重看导览
-            </Button>
-          }
-        />
-      </Group>
-      <Group title="外观">
+      <SectionTitle>窗口与外观</SectionTitle>
+      <Group title="常用外观">
         <Row
           label="主题"
           right={
@@ -962,84 +982,6 @@ function GeneralSection({ settings, patch }: SP) {
           }
         />
         <Row
-          label="窗口整体不透明度"
-          hint="连毛玻璃一起变透，可真正看穿下层窗口内容"
-          right={
-            <PercentSlider
-              ariaLabel="窗口整体不透明度"
-              value={Math.round(settings.windowOpacity * 100)}
-              min={30}
-              max={100}
-              step={5}
-              onChange={(v) => patch({ windowOpacity: v / 100 })}
-            />
-          }
-        />
-        <Row
-          label="内容底色浓度"
-          hint="面板自绘膜层的浓淡（毛玻璃关闭时效果最直观）"
-          right={
-            <PercentSlider
-              ariaLabel="内容底色浓度"
-              value={Math.round(settings.panelOpacity * 100)}
-              min={25}
-              max={100}
-              step={1}
-              onChange={(v) => patch({ panelOpacity: v / 100 })}
-            />
-          }
-        />
-        <Row
-          label="毛玻璃背景"
-          hint="macOS 原生 vibrancy 模糊效果"
-          right={
-            <Switch
-              aria-label="毛玻璃背景"
-              checked={settings.vibrancy}
-              onCheckedChange={(v) => patch({ vibrancy: v })}
-            />
-          }
-        />
-        {settings.vibrancy && (
-          <Row
-            label="毛玻璃风格"
-            hint="从最通透到最厚重；配合下方不透明度调整感受最直观"
-            right={
-              <Segmented<VibrancyMaterial>
-                // 原生材质有 5 种枚举，但叠上面板内容膜层后视觉差异极小，
-                // 五选一等于盲选（用户实测否决）。压缩为 3 档可感知风格：
-                // 通透=hud（最亮最透）、柔和=sidebar（居中）、厚重=
-                // under-window（最实）。旧持久化值就近映射高亮，选择即写规范值
-                value={
-                  settings.vibrancyMaterial === "popover"
-                    ? "sidebar"
-                    : settings.vibrancyMaterial === "fullscreen"
-                      ? "hud"
-                      : settings.vibrancyMaterial
-                }
-                options={[
-                  { value: "hud", label: "通透" },
-                  { value: "sidebar", label: "柔和" },
-                  { value: "under-window", label: "厚重" },
-                ]}
-                onChange={(v) => patch({ vibrancyMaterial: v })}
-                ariaLabel="毛玻璃风格"
-              />
-            }
-          />
-        )}
-        <Row
-          label="卡片彩色通栏"
-          hint="笔记卡顶栏底色：分组色优先、无分组色用来源应用主色；关闭统一中性灰"
-          right={
-            <Switch
-              aria-label="卡片彩色通栏"
-              checked={settings.cardTint}
-              onCheckedChange={(v) => patch({ cardTint: v })}
-            />
-          }
-        />
-        <Row
           label="卡片密度"
           hint="紧凑模式单行展示，一屏可见更多卡片"
           right={
@@ -1051,37 +993,6 @@ function GeneralSection({ settings, patch }: SP) {
               ]}
               onChange={(v) => patch({ cardDensity: v })}
               ariaLabel="卡片密度"
-            />
-          }
-        />
-        {settings.cardDensity === "comfortable" && (
-          <Row
-            label="剪贴卡模板"
-            hint="只影响剪贴页：标准显示完整票据；浓缩保留票据头＋单行摘要"
-            right={
-              <Segmented<Settings["clipCardTemplate"]>
-                value={settings.clipCardTemplate}
-                options={[
-                  { value: "standard", label: "标准" },
-                  { value: "condensed", label: "浓缩" },
-                ]}
-                onChange={(v) => patch({ clipCardTemplate: v })}
-                ariaLabel="剪贴卡模板"
-              />
-            }
-          />
-        )}
-        <Row
-          label="卡片底色不透明度"
-          hint="调低可透出毛玻璃背景；100% 为实色卡片"
-          right={
-            <PercentSlider
-              ariaLabel="卡片底色不透明度"
-              value={Math.round(settings.cardOpacity * 100)}
-              min={30}
-              max={100}
-              step={5}
-              onChange={(v) => patch({ cardOpacity: v / 100 })}
             />
           }
         />
@@ -1101,7 +1012,7 @@ function GeneralSection({ settings, patch }: SP) {
           }
         />
       </Group>
-      <Group title="系统">
+      <Group title="窗口与提示">
         <Row
           label="开机启动"
           hint="登录后自动在后台待命"
@@ -1113,8 +1024,6 @@ function GeneralSection({ settings, patch }: SP) {
             />
           }
         />
-      </Group>
-      <Group title="行为">
         <Row
           label="面板置顶"
           hint="显示在屏幕最上层；关闭后可被其他窗口盖住"
@@ -1159,36 +1068,153 @@ function GeneralSection({ settings, patch }: SP) {
             />
           }
         />
-        <Row
-          label="提示显示时长"
-          hint="适用于所有自动关闭的提示气泡；悬停时暂停倒计时"
-          right={
-            <PercentSlider
-              ariaLabel="提示显示时长"
-              value={settings.hudDurationMs / 1_000}
-              min={HUD_DURATION_MIN_MS / 1_000}
-              max={HUD_DURATION_MAX_MS / 1_000}
-              step={1}
-              onChange={(seconds) => patch({ hudDurationMs: seconds * 1_000 })}
-              onCommit={(seconds) => {
-                void api
-                  .setHudDuration(seconds * 1_000)
-                  .then(() => tip("info", `提示会显示 ${seconds} 秒`))
-                  .catch(() => {});
-              }}
-              format={(seconds) => `${seconds} 秒`}
-            />
-          }
-        />
       </Group>
-      <ContextMenuGroup settings={settings} patch={patch} />
+      <div data-settings-search="更多外观与行为">
+        <Disclosure title="更多外观与行为" open={detailsOpen} onOpenChange={setDetailsOpen}>
+          <Group title="外观细节">
+            <Row
+              label="窗口整体不透明度"
+              hint="连毛玻璃一起变透，可真正看穿下层窗口内容"
+              right={
+                <PercentSlider
+                  ariaLabel="窗口整体不透明度"
+                  value={Math.round(settings.windowOpacity * 100)}
+                  min={30}
+                  max={100}
+                  step={5}
+                  onChange={(v) => patch({ windowOpacity: v / 100 })}
+                />
+              }
+            />
+            <Row
+              label="内容底色浓度"
+              hint="面板自绘膜层的浓淡（毛玻璃关闭时效果最直观）"
+              right={
+                <PercentSlider
+                  ariaLabel="内容底色浓度"
+                  value={Math.round(settings.panelOpacity * 100)}
+                  min={25}
+                  max={100}
+                  step={1}
+                  onChange={(v) => patch({ panelOpacity: v / 100 })}
+                />
+              }
+            />
+            <Row
+              label="毛玻璃背景"
+              hint="macOS 原生 vibrancy 模糊效果"
+              right={
+                <Switch
+                  aria-label="毛玻璃背景"
+                  checked={settings.vibrancy}
+                  onCheckedChange={(v) => patch({ vibrancy: v })}
+                />
+              }
+            />
+            {settings.vibrancy && (
+              <MaterialStylePicker
+                value={settings.vibrancyMaterial}
+                panelOpacity={settings.panelOpacity}
+                cardOpacity={settings.cardOpacity}
+                onChange={(v) => patch({ vibrancyMaterial: v })}
+              />
+            )}
+            <Row
+              label="卡片彩色通栏"
+              hint="笔记卡顶栏底色：分组色优先、无分组色用来源应用主色；关闭统一中性灰"
+              right={
+                <Switch
+                  aria-label="卡片彩色通栏"
+                  checked={settings.cardTint}
+                  onCheckedChange={(v) => patch({ cardTint: v })}
+                />
+              }
+            />
+            {settings.cardDensity === "comfortable" && (
+              <Row
+                label="剪贴卡模板"
+                hint="只影响剪贴页：标准显示完整票据；浓缩保留票据头＋单行摘要"
+                right={
+                  <Segmented<Settings["clipCardTemplate"]>
+                    value={settings.clipCardTemplate}
+                    options={[
+                      { value: "standard", label: "标准" },
+                      { value: "condensed", label: "浓缩" },
+                    ]}
+                    onChange={(v) => patch({ clipCardTemplate: v })}
+                    ariaLabel="剪贴卡模板"
+                  />
+                }
+              />
+            )}
+            <Row
+              label="卡片底色不透明度"
+              hint="调低可透出毛玻璃背景；100% 为实色卡片"
+              right={
+                <PercentSlider
+                  ariaLabel="卡片底色不透明度"
+                  value={Math.round(settings.cardOpacity * 100)}
+                  min={30}
+                  max={100}
+                  step={5}
+                  onChange={(v) => patch({ cardOpacity: v / 100 })}
+                />
+              }
+            />
+          </Group>
+          <Group title="提示细节">
+            <Row
+              label="提示显示时长"
+              hint="适用于所有自动关闭的提示气泡；悬停时暂停倒计时"
+              right={
+                <PercentSlider
+                  ariaLabel="提示显示时长"
+                  value={settings.hudDurationMs / 1_000}
+                  min={HUD_DURATION_MIN_MS / 1_000}
+                  max={HUD_DURATION_MAX_MS / 1_000}
+                  step={1}
+                  onChange={(seconds) => patch({ hudDurationMs: seconds * 1_000 })}
+                  onCommit={(seconds) => {
+                    void api
+                      .setHudDuration(seconds * 1_000)
+                      .then(() => tip("info", `提示会显示 ${seconds} 秒`))
+                      .catch(() => {});
+                  }}
+                  format={(seconds) => `${seconds} 秒`}
+                />
+              }
+            />
+          </Group>
+          <ContextMenuGroup settings={settings} patch={patch} />
+        </Disclosure>
+      </div>
     </div>
   );
 }
 
+function WelcomeTourSettings({ patch }: Pick<SP, "patch">) {
+  return (
+    <Group title="使用帮助">
+      <Row
+        label="新手导览"
+        hint="重看收集内容、选择位置和粘贴的说明"
+        right={
+          <Button
+            size="xs"
+            onClick={() => {
+              patch({ welcomeTourSeen: false });
+              void api.showPanel();
+              tip("ok", "导览已就绪，回到主面板查看");
+            }}
+          >
+            重看导览
+          </Button>
+        }
+      />
+    </Group>
+  );
+}
 
-
-/** 保留时长滑杆（Paste 风格连续细分：1 天 ~ 2 年 ~ 无限，共 23 档）。 */
 const RETENTION_STEPS: { days: number | null; label: string }[] = [
   ...[1, 2, 3, 4, 5, 6].map((d) => ({ days: d, label: `${d} 天` })),
   ...[1, 2, 3].map((w) => ({ days: w * 7, label: `${w} 周` })),
@@ -1793,41 +1819,46 @@ function SecretKeysEditor({ settings, patch }: SP) {
   );
 }
 
-/** 功能开关（用户 2026-08-19 指定集中）：三个默认关闭的功能域统一在此启停，
- *  开启后对应设置页才出现在左侧导航。 */
-function FeaturesSection({ settings, patch }: SP) {
+/** 扩展功能集中启停，开启后可直接配置；未开启的内部页面不占子导航。 */
+export function FeaturesSection({ settings, patch, onConfigure }: SP & {
+  onConfigure: (section: SectionId) => void;
+}) {
   const FEATURES: {
     key: "messagesEnabled" | "secretEnabled" | "subscriptionsEnabled";
     label: string;
     experimental?: boolean;
     hint: string;
     where: string;
+    section: SectionId;
   }[] = [
     {
       key: "messagesEnabled",
       label: "消息监听",
       experimental: true,
       hint: "只读监听 IM 群消息（@我/特别关注/组合规则），在「内容 → 消息」里处理、转任务、AI 草稿",
-      where: "开启后在左侧「捕获 → 消息监听」配置接入与规则",
+      where: "已开启，可设置监听应用、接入方式和收集规则",
+      section: "message-watch",
     },
     {
       key: "secretEnabled",
       label: "秘文",
       hint: "把文字本地加密成中文、随机代码、日志或引用等独立格式，支持该格式的接收端自动识别解密",
-      where: "开启后在左侧「捕获 → 秘文」管理密钥与默认格式",
+      where: "已开启，可管理共享密钥与默认格式",
+      section: "secret",
     },
     {
       key: "subscriptionsEnabled",
       label: "订阅",
       hint: "账单/信用卡到期管理与提醒，「提醒」页出现订阅子页",
-      where: "开启后在左侧「助手 → 到期提醒」调整账单偏好",
+      where: "已开启，可设置账单的默认提前提醒时间",
+      section: "due",
     },
   ];
   return (
     <div>
-      <SectionTitle>功能开关</SectionTitle>
+      <SectionTitle>更多功能</SectionTitle>
       <p className="mb-3 text-body text-muted-foreground">
-        以下功能默认关闭，保持初始界面精简；开启后主面板出现对应入口，左侧导航出现其设置页。
+        按需要开启。开启后，主面板会显示对应入口，也可以在这里继续配置。
       </p>
       <Group>
         {FEATURES.map((feature) => (
@@ -1836,11 +1867,18 @@ function FeaturesSection({ settings, patch }: SP) {
             label={feature.label + (feature.experimental ? "（实验）" : "")}
             hint={settings[feature.key] ? feature.where : feature.hint}
             right={
-              <Switch
-                aria-label={`启用${feature.label}`}
-                checked={settings[feature.key]}
-                onCheckedChange={(enabled) => patch({ [feature.key]: enabled })}
-              />
+              <div className="flex items-center gap-2">
+                {settings[feature.key] && (
+                  <Button size="xs" onClick={() => onConfigure(feature.section)}>
+                    设置{feature.label}
+                  </Button>
+                )}
+                <Switch
+                  aria-label={`启用${feature.label}`}
+                  checked={settings[feature.key]}
+                  onCheckedChange={(enabled) => patch({ [feature.key]: enabled })}
+                />
+              </div>
             }
           />
         ))}
@@ -2299,7 +2337,7 @@ function MessageWatchSection({ settings, patch }: SP) {
 }
 
 /** 秘文本地加密通信：共享密钥、密文格式与揭示超时。
- *  总开关集中在「功能开关」页；本页仅开启后可达。 */
+ *  总开关集中在「更多功能」页；本页仅开启后可达。 */
 function SecretSection({ settings, patch }: SP) {
   return (
     <div>
@@ -2349,7 +2387,7 @@ function SecretSection({ settings, patch }: SP) {
 function HotkeySection({ settings, patch }: SP) {
   return (
     <div>
-      <SectionTitle>捕获与快捷键</SectionTitle>
+      <SectionTitle>快捷键</SectionTitle>
       <Group title="全局触发">
         <Row
           label="触发键（双击）"
@@ -2698,7 +2736,7 @@ function AppListEditor({
   );
 }
 
-function TargetSection({
+export function TargetSection({
   settings,
   patch,
   targetProfileRequest,
@@ -2709,106 +2747,128 @@ function TargetSection({
   searchTarget: string | null;
   searchSequence: number;
 }) {
-  const searchNeedsPrivacy = [
-    "隐私与化名",
-    "发送前隐私检查（仅本机文本检查）",
-    "启用隐私检查",
-  ].includes(searchTarget ?? "");
-  const searchNeedsPrompts = searchTarget === "提示词组";
-  const [privacyOpen, setPrivacyOpen] = useState(searchNeedsPrivacy);
-  const [promptsOpen, setPromptsOpen] = useState(searchNeedsPrompts);
-  useEffect(() => {
-    if (searchNeedsPrivacy) setPrivacyOpen(true);
-  }, [searchNeedsPrivacy, searchSequence]);
-  useEffect(() => {
-    if (searchNeedsPrompts) setPromptsOpen(true);
-  }, [searchNeedsPrompts, searchSequence]);
+  const pageId = useId();
+  const [page, setPage] = useState(() => targetSettingsPageForSearch(searchTarget));
+  const [aliasesOpen, setAliasesOpen] = useState(searchTarget === "隐私与化名");
+  useLayoutEffect(() => {
+    if (searchTarget) setPage(targetSettingsPageForSearch(searchTarget));
+    if (searchTarget === "隐私与化名") setAliasesOpen(true);
+  }, [searchTarget, searchSequence]);
+  useLayoutEffect(() => {
+    if (targetProfileRequest) setPage("paste");
+  }, [targetProfileRequest]);
+  const pages = [
+    ["paste", "粘贴规则"], ["privacy", "隐私保护"], ["templates", "提示词模板"],
+  ] as const;
   return (
     <div>
-      <SectionTitle>目标与发送方案</SectionTitle>
-      <p className="mb-3 text-body text-muted-foreground">
-        Toskr 会根据当前目标应用自动选择发送方案。方案决定提示词组、输出格式、粘贴后动作和出站隐私策略。
-      </p>
-      <TargetProfileManager
-        settings={settings}
-        patch={patch}
-        requestedProfileId={targetProfileRequest?.profileId ?? null}
-        requestSequence={targetProfileRequest?.sequence ?? 0}
-      />
-      <div
-        data-settings-search="隐私与化名"
-        className="scroll-m-5 rounded-md transition-shadow data-[settings-search-active=true]:ring-2 data-[settings-search-active=true]:ring-primary/40 data-[settings-search-active=true]:ring-offset-2 data-[settings-search-active=true]:ring-offset-background"
-      >
-        <Disclosure
-          title="隐私与化名"
-          open={privacyOpen}
-          onOpenChange={setPrivacyOpen}
-        >
-          <FirewallSettings settings={settings} patch={patch} />
-          <AliasEntitySettings settings={settings} patch={patch} />
-        </Disclosure>
+      <SectionTitle>粘贴与隐私</SectionTitle>
+      <nav aria-label="粘贴与隐私选项" className="mb-4 flex flex-wrap gap-1 border-b border-border pb-2">
+        {pages.map(([id, label]) => (
+          <Button
+            key={id}
+            id={`${pageId}-${id}-tab`}
+            size="sm"
+            variant="ghost"
+            aria-current={page === id ? "page" : undefined}
+            aria-controls={`${pageId}-${id}`}
+            className={cn(page === id && "bg-muted font-medium text-foreground")}
+            onClick={() => setPage(id)}
+          >{label}</Button>
+        ))}
+      </nav>
+      {/* 子页保持挂载，切换时不丢失尚未保存的模板或化名输入。 */}
+      <div id={`${pageId}-paste`} hidden={page !== "paste"} aria-labelledby={`${pageId}-paste-tab`}>
+        <p className="mb-3 text-body text-muted-foreground">设置内容如何粘贴，以及粘贴后是否按回车。不同应用可以使用不同规则。</p>
+        <TargetProfileManager
+          settings={settings}
+          patch={patch}
+          requestedProfileId={targetProfileRequest?.profileId ?? null}
+          requestSequence={targetProfileRequest?.sequence ?? 0}
+          searchTarget={page === "paste" ? searchTarget : null}
+          searchSequence={searchSequence}
+        />
       </div>
-      <div
-        data-settings-search="提示词组"
-        className="scroll-m-5 rounded-md transition-shadow data-[settings-search-active=true]:ring-2 data-[settings-search-active=true]:ring-primary/40 data-[settings-search-active=true]:ring-offset-2 data-[settings-search-active=true]:ring-offset-background"
-      >
-        <Disclosure
-          title="提示词组"
-          open={promptsOpen}
-          onOpenChange={setPromptsOpen}
-        >
-          <SnippetsSection settings={settings} patch={patch} />
-        </Disclosure>
+      <div id={`${pageId}-privacy`} hidden={page !== "privacy"} aria-labelledby={`${pageId}-privacy-tab`}>
+        <p className="mb-3 text-body text-muted-foreground">先检查敏感内容，再决定替换或保留。原始卡片不会被改写。</p>
+        <FirewallSettings settings={settings} patch={patch} searchTarget={searchTarget} searchSequence={searchSequence} />
+        <div data-settings-search="隐私与化名">
+          <p className="mb-1 text-body text-muted-foreground">指定名称也可以自动换成化名，收到回复后恢复。{settings.aliasEntitiesEnabled ? `已启用 · ${settings.aliasEntities.length} 条词典` : "当前未启用"}</p>
+          <Disclosure title="用化名替换指定内容" open={aliasesOpen} onOpenChange={setAliasesOpen}>
+            <AliasEntitySettings settings={settings} patch={patch} />
+          </Disclosure>
+        </div>
+      </div>
+      <div id={`${pageId}-templates`} hidden={page !== "templates"} aria-labelledby={`${pageId}-templates-tab`}>
+        <div data-settings-search="提示词组">
+          <SnippetsSection settings={settings} patch={patch} searchTarget={searchTarget} searchSequence={searchSequence} />
+        </div>
       </div>
     </div>
   );
 }
 
-function FirewallSettings({ settings, patch }: SP) {
+function FirewallSettings({ settings, patch, searchTarget, searchSequence }: SP & { searchTarget: string | null; searchSequence: number }) {
   const disabled = new Set(settings.firewallDisabledWarnCategories);
+  const [customFieldsOpen, setCustomFieldsOpen] = useState(searchTarget === "自定义敏感字段");
+  const [categoriesOpen, setCategoriesOpen] = useState(searchTarget === "提示级类别");
+  useLayoutEffect(() => {
+    if (searchTarget === "提示级类别") setCategoriesOpen(true);
+    if (searchTarget === "自定义敏感字段") setCustomFieldsOpen(true);
+  }, [searchTarget, searchSequence]);
   return (
-    <Group title="发送前隐私检查（仅本机文本检查）">
-      <Row
-        label="启用隐私检查"
-        hint="默认开启；快速发送也会先检查，有风险时自动进入预检"
-        right={
-          <Switch
-            aria-label="发送前隐私检查"
-            checked={settings.firewallEnabled}
-            onCheckedChange={(firewallEnabled) => patch({ firewallEnabled })}
-          />
-        }
-      />
-      <div className="px-3.5 py-2.5">
-        <p className="text-title">提示级类别</p>
-        <p className="mt-0.5 text-label text-muted-foreground">
-          可按类别关闭提示；私钥、授权、密钥/凭据、数据库连接、Cookie 与会话等高风险规则不能单独关闭。
-        </p>
-        <div className="mt-2 grid grid-cols-2 gap-2">
-          {FIREWALL_WARN_CATEGORIES.map((category) => (
-            <label key={category} className="flex items-center justify-between gap-2 rounded-lg bg-muted/40 px-2 py-1.5 text-body">
-              {FIREWALL_CATEGORY_LABEL[category]}
-              <Switch
-                size="sm"
-                disabled={!settings.firewallEnabled}
-                aria-label={`${FIREWALL_CATEGORY_LABEL[category]}提示`}
-                checked={!disabled.has(category)}
-                onCheckedChange={(enabled) => patch({
-                  firewallDisabledWarnCategories: enabled
-                    ? settings.firewallDisabledWarnCategories.filter(
-                        (item) => item !== category
-                      )
-                    : [...settings.firewallDisabledWarnCategories, category],
-                })}
-              />
-            </label>
-          ))}
+    <div data-settings-search="发送前隐私检查（仅本机文本检查）">
+      <Group title="发送前隐私检查">
+        <Row
+          label="启用隐私检查"
+          hint={settings.firewallEnabled ? "在本机检查文字和图片，发现敏感内容时进入预检处理" : "已关闭：发送前不做隐私检测；化名替换仍由下方独立控制"}
+          right={
+            <Switch
+              aria-label="发送前隐私检查"
+              checked={settings.firewallEnabled}
+              onCheckedChange={(firewallEnabled) => patch({ firewallEnabled })}
+            />
+          }
+        />
+        <div className="px-3.5 py-2.5">
+          <div data-settings-search="提示级类别">
+            <Disclosure title="调整检测类别" open={categoriesOpen} onOpenChange={setCategoriesOpen}>
+              <p className="text-title">提示级类别</p>
+              <p className="mt-0.5 text-label text-muted-foreground">
+                可按类别关闭提示；私钥、授权、密钥/凭据、数据库连接、Cookie 与会话等高风险规则不能单独关闭。
+              </p>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                {FIREWALL_WARN_CATEGORIES.map((category) => (
+                  <label key={category} className="flex items-center justify-between gap-2 rounded-lg bg-muted/40 px-2 py-1.5 text-body">
+                    {FIREWALL_CATEGORY_LABEL[category]}
+                    <Switch
+                      size="sm"
+                      disabled={!settings.firewallEnabled}
+                      aria-label={`${FIREWALL_CATEGORY_LABEL[category]}提示`}
+                      checked={!disabled.has(category)}
+                      onCheckedChange={(enabled) => patch({
+                        firewallDisabledWarnCategories: enabled
+                          ? settings.firewallDisabledWarnCategories.filter(
+                              (item) => item !== category
+                            )
+                          : [...settings.firewallDisabledWarnCategories, category],
+                      })}
+                    />
+                  </label>
+                ))}
+              </div>
+            </Disclosure>
+          </div>
+          <div data-settings-search="自定义敏感字段" className="my-2">
+            <Disclosure title={`自定义敏感字段 · ${settings.firewallCustomSensitiveFields.length} 个`} open={customFieldsOpen} onOpenChange={setCustomFieldsOpen}>
+              <CustomSensitiveFields fields={settings.firewallCustomSensitiveFields} enabled={settings.firewallEnabled}
+                onChange={(firewallCustomSensitiveFields) => patch({ firewallCustomSensitiveFields })} />
+            </Disclosure>
+          </div>
+          <p className="text-label text-muted-foreground">本机规则可能漏检。发送前仍可在预检中检查最终内容；具体处理要求由粘贴规则决定。</p>
         </div>
-        <p className="mt-2 text-label text-warning">
-          检测基于本地规则，可能存在误报或漏报；“未发现”不代表绝对安全。
-        </p>
-      </div>
-    </Group>
+      </Group>
+    </div>
   );
 }
 
@@ -2917,7 +2977,7 @@ function AiSection({ settings, patch }: SP) {
         setKeyStatusKnown(true);
         setKeyStatusError(false);
       },
-      api.getAiKeyStatus,
+      requestAiKeyStatusForSettings,
       () => {
         if (disposed) return;
         setKeyStatusKnown(true);
@@ -3421,7 +3481,12 @@ function DuePresetsSection({ settings, patch }: SP) {
   );
 }
 
-function SnippetsSection({ settings, patch }: SP) {
+const workflowPromptSnippetIds = new Set<string>(WORKFLOW_PROMPT_SNIPPET_IDS);
+
+export function SnippetsSection({ settings, patch, searchTarget = null, searchSequence = 0 }: SP & {
+  searchTarget?: string | null;
+  searchSequence?: number;
+}) {
   const sortedGroups = useMemo(
     () => [...settings.promptGroups].sort((a, b) => a.order - b.order),
     [settings.promptGroups]
@@ -3438,6 +3503,23 @@ function SnippetsSection({ settings, patch }: SP) {
   const [editLabel, setEditLabel] = useState("");
   const [editText, setEditText] = useState("");
   const [editGroupId, setEditGroupId] = useState(GENERAL_PROMPT_GROUP_ID);
+  const [exporting, setExporting] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [othersOpen, setOthersOpen] = useState(false);
+  const [editPreviewOpen, setEditPreviewOpen] = useState(false);
+  const [addPreviewOpen, setAddPreviewOpen] = useState(false);
+  const consumedPreviewRequest = useRef<number | null>(null);
+  const exportTemplates = async () => {
+    setExporting(true);
+    try {
+      const result = await exportPromptTemplates(settings.promptSnippets, settings.promptGroups);
+      if (result) tip("ok", `已导出 ${result.count} 个提示词模板`);
+    } catch (error) {
+      tip("warn", `模板导出失败：${String(error)}`);
+    } finally {
+      setExporting(false);
+    }
+  };
   const addGroup = () => {
     const name = groupName.trim();
     if (!name) return;
@@ -3502,7 +3584,32 @@ function SnippetsSection({ settings, patch }: SP) {
     setEditLabel(sn.label);
     setEditText(sn.text);
     setEditGroupId(sn.groupId);
+    setEditPreviewOpen(false);
   };
+  // 在父级搜索定位的 RAF 前展开目标；同一请求只消费一次，保存/取消不会重新打开。
+  useLayoutEffect(() => {
+    if (searchTarget !== "试用预览") {
+      consumedPreviewRequest.current = null;
+      return;
+    }
+    if (consumedPreviewRequest.current === searchSequence) return;
+    consumedPreviewRequest.current = searchSequence;
+    if (editingId) {
+      if (!workflowPromptSnippetIds.has(editingId)) setOthersOpen(true);
+      setEditPreviewOpen(true);
+    } else if (addOpen || label || text || settings.promptSnippets.length === 0) {
+      setAddOpen(true);
+      setAddPreviewOpen(true);
+    } else {
+      const first = settings.promptSnippets[0];
+      setEditingId(first.id);
+      setEditLabel(first.label);
+      setEditText(first.text);
+      setEditGroupId(first.groupId);
+      if (!workflowPromptSnippetIds.has(first.id)) setOthersOpen(true);
+      setEditPreviewOpen(true);
+    }
+  }, [searchTarget, searchSequence, editingId, addOpen, label, text, settings.promptSnippets]);
   const saveEdit = () => {
     if (!editingId || !editLabel.trim() || !editText.trim()) return;
     patch({
@@ -3521,225 +3628,210 @@ function SnippetsSection({ settings, patch }: SP) {
   };
   const move = (id: string, dir: -1 | 1) => {
     const list = [...settings.promptSnippets];
+    const common = workflowPromptSnippetIds.has(id);
+    const visible = list.filter((snippet) => workflowPromptSnippetIds.has(snippet.id) === common);
+    const visibleIndex = visible.findIndex((snippet) => snippet.id === id);
+    const neighbor = visible[visibleIndex + dir];
+    if (visibleIndex < 0 || !neighbor) return;
     const i = list.findIndex((s) => s.id === id);
-    const j = i + dir;
-    if (i < 0 || j < 0 || j >= list.length) return;
+    const j = list.findIndex((s) => s.id === neighbor.id);
     [list[i], list[j]] = [list[j], list[i]];
     patch({ promptSnippets: list });
   };
+  // 区内移动按相邻可见项定位，再按 id 回完整数组交换，避免跨区移动没有可见变化。
+  const commonSnippets = settings.promptSnippets.filter((snippet) => workflowPromptSnippetIds.has(snippet.id));
+  const otherSnippets = settings.promptSnippets.filter((snippet) => !workflowPromptSnippetIds.has(snippet.id));
+  const renderSnippet = (sn: PromptSnippet, index: number) => (
+    editingId === sn.id ? (
+      <div key={sn.id} className="px-3.5 py-3">
+        <PromptTemplateEditor
+          label={editLabel}
+          text={editText}
+          groupId={editGroupId}
+          groupOptions={groupOptions}
+          onLabelChange={setEditLabel}
+          onTextChange={setEditText}
+          onGroupChange={setEditGroupId}
+          onSave={saveEdit}
+          onCancel={() => setEditingId(null)}
+          previewOpen={editPreviewOpen}
+          onPreviewOpenChange={setEditPreviewOpen}
+        />
+      </div>
+    ) : (
+      <div key={sn.id} className="group flex items-center gap-2 px-3.5 py-2">
+        <span className="shrink-0 text-title font-medium">{sn.label}</span>
+        <span className="shrink-0 text-micro text-muted-foreground">{promptSnippetSourceLabel(sn)}</span>
+        <span className="truncate text-body text-muted-foreground">
+          {sn.text.replace(/\n+/g, " ⏎ ")}
+        </span>
+        <SimpleSelect
+          ariaLabel={`${sn.label} 所属提示词组`}
+          className="w-28 shrink-0"
+          align="end"
+          value={sn.groupId}
+          options={groupOptions}
+          onChange={(groupId) =>
+            patch({
+              promptSnippets: settings.promptSnippets.map((item) =>
+                item.id === sn.id ? { ...item, groupId } : item
+              ),
+            })
+          }
+        />
+        <div className="ml-auto flex shrink-0 items-center gap-0.5">
+          <IconButton
+            label="上移"
+            size="2xs"
+            reveal="hover-focus"
+            disabled={index === 0}
+            onClick={() => move(sn.id, -1)}
+          >
+            <ArrowUp />
+          </IconButton>
+          <IconButton
+            label="下移"
+            size="2xs"
+            reveal="hover-focus"
+            disabled={index === (workflowPromptSnippetIds.has(sn.id) ? commonSnippets : otherSnippets).length - 1}
+            onClick={() => move(sn.id, 1)}
+          >
+            <ArrowDown />
+          </IconButton>
+          <IconButton
+            label="编辑模板"
+            size="2xs"
+            reveal="hover-focus"
+            onClick={() => startEdit(sn)}
+          >
+            <Pencil />
+          </IconButton>
+          <IconButton
+            label="删除模板"
+            tone="danger"
+            size="2xs"
+            reveal="hover-focus"
+            onClick={() =>
+              patch({
+                promptSnippets: settings.promptSnippets.filter(
+                  (s) => s.id !== sn.id
+                ),
+              })
+            }
+          >
+            <X />
+          </IconButton>
+        </div>
+      </div>
+    )
+  );
   return (
     <div>
-      <p className="mb-1.5 text-body font-medium text-muted-foreground">提示词组</p>
-      <div className="mb-2 divide-y divide-border/50 rounded-xl border border-border/60 bg-card">
-        {sortedGroups.map((group, index) => (
-          <div key={group.id} className="flex items-center gap-2 px-3.5 py-2">
-            <input
-              aria-label={`${group.name} 提示词组名称`}
-              value={group.name}
-              disabled={group.id === GENERAL_PROMPT_GROUP_ID}
-              onChange={(event) =>
-                patch({
-                  promptGroups: settings.promptGroups.map((item) =>
-                    item.id === group.id ? { ...item, name: event.target.value } : item
-                  ),
-                })
-              }
-              className="h-8 min-w-0 flex-1 rounded-lg border border-border bg-transparent px-2 text-title disabled:border-transparent disabled:opacity-100"
-            />
-            <IconButton
-              label="上移提示词组"
-              size="2xs"
-              disabled={index === 0}
-              onClick={() => moveGroup(group.id, -1)}
-            ><ArrowUp /></IconButton>
-            <IconButton
-              label="下移提示词组"
-              size="2xs"
-              disabled={index === sortedGroups.length - 1}
-              onClick={() => moveGroup(group.id, 1)}
-            ><ArrowDown /></IconButton>
-            <IconButton
-              label={`删除提示词组 ${group.name}`}
-              tone="danger"
-              size="2xs"
-              disabled={group.id === GENERAL_PROMPT_GROUP_ID}
-              onClick={() => removeGroup(group.id)}
-            ><X /></IconButton>
-          </div>
-        ))}
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="text-body font-medium text-muted-foreground">提示词模板</p>
+        <Button size="sm" disabled={exporting || settings.promptSnippets.length === 0} onClick={exportTemplates}>
+          {exporting ? "正在导出…" : "导出所有模板"}
+        </Button>
       </div>
-      <div className="mb-5 flex items-center gap-2">
-        <input
-          aria-label="新提示词组名称"
-          value={groupName}
-          onChange={(event) => setGroupName(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") addGroup();
-          }}
-          placeholder="新提示词组名称"
-          className="h-8 min-w-0 flex-1 rounded-lg border border-border bg-transparent px-2 text-body"
-        />
-        <button
-          type="button"
-          onClick={addGroup}
-          className="flex h-8 items-center gap-1 rounded-lg border border-border px-3 text-body text-primary"
-        >
-          <Plus className="size-3.5" /> 新建提示词组
-        </button>
-      </div>
-      <p className="mb-1.5 text-body font-medium text-muted-foreground">提示词模板</p>
       <p className="mb-3 text-body text-muted-foreground">
-        发送时可在「发送到对话 ▾」下拉里选择模板（按此处顺序排列），与勾选内容组装后发出。
-        模板中写 <code className="rounded-sm bg-muted px-1">{"{内容}"}</code>{" "}
-        指定内容插入位置（可多处）；不写则内容拼在模板之后。
+        普通发送保持内容原文。选用模板后，模板会与选中内容组合，发送到当前目标。
       </p>
-      <div className="mb-3 divide-y divide-border/50 rounded-xl border border-border/60 bg-card">
-        {settings.promptSnippets.map((sn, i) =>
-          editingId === sn.id ? (
-            <div key={sn.id} className="flex items-start gap-2 px-3.5 py-2">
-              <input
-                value={editLabel}
-                onChange={(e) => setEditLabel(e.target.value)}
-                placeholder="模板名"
-                className="h-8 w-32 rounded-lg border border-border bg-transparent px-2 text-body outline-none focus:border-primary/50"
-              />
-              <textarea
-                value={editText}
-                rows={3}
-                autoFocus
-                onChange={(e) => setEditText(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && e.metaKey) {
-                    e.preventDefault();
-                    saveEdit();
-                  } else if (e.key === "Escape") {
-                    setEditingId(null);
-                  }
-                }}
-                className="min-h-8 flex-1 resize-y rounded-lg border border-border bg-transparent px-2 py-1.5 text-body leading-relaxed outline-none focus:border-primary/50"
-              />
-              <SimpleSelect
-                ariaLabel="模板所属提示词组"
-                className="w-28 shrink-0"
-                align="end"
-                value={editGroupId}
-                options={groupOptions}
-                onChange={setEditGroupId}
-              />
-              <button
-                onClick={saveEdit}
-                title="保存（⌘⏎）"
-                className="flex h-8 items-center gap-1 rounded-lg bg-primary px-2.5 text-body text-primary-foreground hover:opacity-90"
-              >
-                <Check className="size-3.5" /> 保存
-              </button>
-              <button
-                onClick={() => setEditingId(null)}
-                title="取消（Esc）"
-                aria-label="取消编辑"
-                className="flex h-8 items-center rounded-lg border border-border px-2 text-body text-muted-foreground hover:text-foreground"
-              >
-                <X className="size-3.5" />
-              </button>
-            </div>
-          ) : (
-            <div key={sn.id} className="group flex items-center gap-2 px-3.5 py-2">
-              <span className="shrink-0 text-title font-medium">{sn.label}</span>
-              <span className="truncate text-body text-muted-foreground">
-                {sn.text.replace(/\n+/g, " ⏎ ")}
-              </span>
-              <SimpleSelect
-                ariaLabel={`${sn.label} 所属提示词组`}
-                className="w-28 shrink-0"
-                align="end"
-                value={sn.groupId}
-                options={groupOptions}
-                onChange={(groupId) =>
-                  patch({
-                    promptSnippets: settings.promptSnippets.map((item) =>
-                      item.id === sn.id ? { ...item, groupId } : item
-                    ),
-                  })
-                }
-              />
-              <div className="ml-auto flex shrink-0 items-center gap-0.5">
-                <IconButton
-                  label="上移"
-                  size="2xs"
-                  reveal="hover-focus"
-                  disabled={i === 0}
-                  onClick={() => move(sn.id, -1)}
-                >
-                  <ArrowUp />
-                </IconButton>
-                <IconButton
-                  label="下移"
-                  size="2xs"
-                  reveal="hover-focus"
-                  disabled={i === settings.promptSnippets.length - 1}
-                  onClick={() => move(sn.id, 1)}
-                >
-                  <ArrowDown />
-                </IconButton>
-                <IconButton
-                  label="编辑模板"
-                  size="2xs"
-                  reveal="hover-focus"
-                  onClick={() => startEdit(sn)}
-                >
-                  <Pencil />
-                </IconButton>
-                <IconButton
-                  label="删除模板"
-                  tone="danger"
-                  size="2xs"
-                  reveal="hover-focus"
-                  onClick={() =>
+      <p className="mb-3 text-label text-muted-foreground">
+        <code className="rounded-sm bg-muted px-1">{"{内容}"}</code>{" "}
+        指定内容插入位置；不写时内容接在模板后。
+      </p>
+      {commonSnippets.length > 0 && (
+        <>
+          <p className="mb-1.5 text-body font-medium text-muted-foreground">常用模板</p>
+          <div className="mb-3 divide-y divide-border/50 rounded-xl border border-border/60 bg-card">
+            {commonSnippets.map(renderSnippet)}
+          </div>
+        </>
+      )}
+      {otherSnippets.length > 0 && (
+        <Disclosure title={`其他模板（${otherSnippets.length}）`} open={othersOpen} onOpenChange={setOthersOpen}>
+          <div className="divide-y divide-border/50 rounded-xl border border-border/60 bg-card">
+            {otherSnippets.map(renderSnippet)}
+          </div>
+        </Disclosure>
+      )}
+      {settings.promptSnippets.length === 0 && (
+        <p className="mb-3 text-body text-muted-foreground">暂无模板</p>
+      )}
+      <Disclosure title="新增模板" open={addOpen} onOpenChange={setAddOpen}>
+        <PromptTemplateEditor
+          label={label}
+          text={text}
+          groupId={groupId}
+          groupOptions={groupOptions}
+          onLabelChange={setLabel}
+          onTextChange={setText}
+          onGroupChange={setGroupId}
+          onSave={add}
+          previewOpen={addPreviewOpen}
+          onPreviewOpenChange={setAddPreviewOpen}
+        />
+      </Disclosure>
+      <div className="mt-5">
+        <Disclosure title="管理提示词组">
+          <div className="mb-2 divide-y divide-border/50 rounded-xl border border-border/60 bg-card">
+            {sortedGroups.map((group, index) => (
+              <div key={group.id} className="flex items-center gap-2 px-3.5 py-2">
+                <input
+                  aria-label={`${group.name} 提示词组名称`}
+                  value={group.name}
+                  disabled={group.id === GENERAL_PROMPT_GROUP_ID}
+                  onChange={(event) =>
                     patch({
-                      promptSnippets: settings.promptSnippets.filter(
-                        (s) => s.id !== sn.id
+                      promptGroups: settings.promptGroups.map((item) =>
+                        item.id === group.id ? { ...item, name: event.target.value } : item
                       ),
                     })
                   }
-                >
-                  <X />
-                </IconButton>
+                  className="h-8 min-w-0 flex-1 rounded-lg border border-border bg-transparent px-2 text-title disabled:border-transparent disabled:opacity-100"
+                />
+                <IconButton
+                  label="上移提示词组"
+                  size="2xs"
+                  disabled={index === 0}
+                  onClick={() => moveGroup(group.id, -1)}
+                ><ArrowUp /></IconButton>
+                <IconButton
+                  label="下移提示词组"
+                  size="2xs"
+                  disabled={index === sortedGroups.length - 1}
+                  onClick={() => moveGroup(group.id, 1)}
+                ><ArrowDown /></IconButton>
+                <IconButton
+                  label={`删除提示词组 ${group.name}`}
+                  tone="danger"
+                  size="2xs"
+                  disabled={group.id === GENERAL_PROMPT_GROUP_ID}
+                  onClick={() => removeGroup(group.id)}
+                ><X /></IconButton>
               </div>
-            </div>
-          )
-        )}
-        {settings.promptSnippets.length === 0 && (
-          <p className="px-3.5 py-2 text-body text-muted-foreground">暂无模板</p>
-        )}
-      </div>
-      <div className="flex items-start gap-2">
-        <input
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-          placeholder="模板名"
-          className="h-8 w-32 rounded-lg border border-border bg-transparent px-2 text-body outline-none focus:border-primary/50"
-        />
-        <textarea
-          value={text}
-          rows={2}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="模板内容，写 {内容} 指定插入位置，支持多行"
-          className="min-h-8 flex-1 resize-y rounded-lg border border-border bg-transparent px-2 py-1.5 text-body leading-relaxed outline-none focus:border-primary/50"
-        />
-        <SimpleSelect
-          ariaLabel="新模板所属提示词组"
-          className="w-28 shrink-0"
-          align="end"
-          value={groupId}
-          options={groupOptions}
-          onChange={setGroupId}
-        />
-        <button
-          onClick={add}
-          className="flex h-8 items-center gap-1 rounded-lg bg-primary px-3 text-body text-primary-foreground hover:opacity-90"
-        >
-          <Plus className="size-3.5" /> 添加
-        </button>
+            ))}
+          </div>
+          <div className="mb-5 flex items-center gap-2">
+            <input
+              aria-label="新提示词组名称"
+              value={groupName}
+              onChange={(event) => setGroupName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") addGroup();
+              }}
+              placeholder="新提示词组名称"
+              className="h-8 min-w-0 flex-1 rounded-lg border border-border bg-transparent px-2 text-body"
+            />
+            <button
+              type="button"
+              onClick={addGroup}
+              className="flex h-8 items-center gap-1 rounded-lg border border-border px-3 text-body text-primary"
+            >
+              <Plus className="size-3.5" /> 新建提示词组
+            </button>
+          </div>
+        </Disclosure>
       </div>
     </div>
   );
@@ -3854,7 +3946,7 @@ function DataSection() {
 
   return (
     <div>
-      <SectionTitle>数据</SectionTitle>
+      <SectionTitle>数据与备份</SectionTitle>
       <p className="mb-3 text-body text-muted-foreground">
         所有数据仅保存在本机，无账号、无同步、无遥测。笔记、图片与消息账本以
         AES-256-GCM 加密落盘，密钥存放在 macOS 登录钥匙串——其他应用读不了、

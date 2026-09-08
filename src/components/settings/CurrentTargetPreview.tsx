@@ -4,6 +4,7 @@ import { AppIcon } from "@/components/settings/AppIdentity";
 import { DeliveryPolicySummary } from "@/components/settings/DeliveryPolicySummary";
 import { useAppIdentity } from "@/components/settings/useAppIdentity";
 import { IconButton } from "@/components/ui/icon-button";
+import { Button } from "@/components/ui/button";
 import { TARGET_PROFILE_SOURCE_LABEL } from "@/lib/targetLens";
 import type { TargetSnapshot } from "@/lib/tauri";
 import type { TargetProfileResolution } from "@/lib/targetProfiles";
@@ -15,7 +16,7 @@ function targetPreviewReason(
   resolution: TargetProfileResolution
 ): string {
   if (!snapshot?.bundleId) return "尚未识别发送目标";
-  if (!snapshot.ready) return "目标应用已失效";
+  if (!snapshot.ready) return "需要重新确认粘贴位置";
   const base = TARGET_PROFILE_SOURCE_LABEL[resolution.source];
   switch (resolution.source) {
     case "conflict":
@@ -42,7 +43,7 @@ export function CurrentTargetPreview({
   testMessage: string | null;
   onRefresh: () => void;
   onTest: () => void;
-  /** 「编辑此方案」直达：选中当前解析到的方案并展开方案管理区。 */
+  /** 直达当前应用的长期方案，并展开规则管理区。 */
   onEditProfile: () => void;
 }) {
   const identity = useAppIdentity(snapshot?.bundleId, snapshot?.appName);
@@ -50,12 +51,12 @@ export function CurrentTargetPreview({
   const targetStatus = !snapshot?.bundleId
     ? "尚未识别"
     : snapshot.ready
-      ? "可发送"
-      : "目标已失效";
+      ? "可粘贴"
+      : snapshot.reason === "target_exited" ? "应用已退出" : "请重新选择输入框";
   const reason = targetPreviewReason(snapshot, resolution);
   const statusTone = snapshot?.ready
     ? "bg-success/10 text-success"
-    : snapshot?.bundleId
+    : snapshot?.reason === "target_exited"
       ? "bg-destructive/10 text-destructive"
       : "bg-muted text-muted-foreground";
 
@@ -68,7 +69,7 @@ export function CurrentTargetPreview({
         <AppIcon bundleId={snapshot?.bundleId ?? null} appName={appName} size="md" />
         <div className="min-w-40 flex-1">
           <p id="current-target-preview-title" className="text-micro font-medium text-muted-foreground">
-            当前匹配
+            当前粘贴目标
           </p>
           <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-1.5">
             <h3 className="min-w-0 truncate text-title font-semibold" title={appName}>
@@ -83,90 +84,67 @@ export function CurrentTargetPreview({
               {targetStatus}
             </span>
           </div>
-          <p className={cn(
-            "mt-0.5 line-clamp-2 break-words text-label",
-            resolution.source === "conflict" ? "text-warning" : "text-muted-foreground"
-          )}>
-            匹配来源：{reason}
-          </p>
         </div>
-        <div className="ml-auto flex shrink-0 items-center gap-1">
-          <IconButton
-            label="刷新（重新识别系统前台应用）"
-            size="sm"
-            disabled={refreshing}
-            onClick={onRefresh}
-          >
-            <RefreshCw
-              className={cn(
-                "size-3.5 transition-opacity duration-100 motion-reduce:transition-none",
-                refreshing && "opacity-50"
-              )}
-            />
-          </IconButton>
-          <button
-            type="button"
-            onClick={onEditProfile}
-            title="编辑当前解析到的发送方案"
-            className="inline-flex h-8 items-center gap-1 rounded-lg border border-border px-2 text-body outline-none hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:hover:bg-white/10"
-          >
-            <Pencil aria-hidden className="size-3.5" />
-            编辑此方案
-          </button>
-          <button
-            type="button"
-            disabled={!snapshot?.bundleId || refreshing}
-            onClick={onTest}
-            title="仅本地重新计算发送方案，不重新识别前台应用、不访问剪贴板"
-            className="inline-flex h-8 items-center gap-1 rounded-lg border border-border px-2 text-body outline-none hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:opacity-40 dark:hover:bg-white/10"
-          >
-            <FlaskConical aria-hidden className="size-3.5" />
-            测试当前目标
-          </button>
-        </div>
+        <Button type="button" size="sm" onClick={onEditProfile}>
+          <Pencil aria-hidden className="size-3.5" /> 调整粘贴规则
+        </Button>
       </div>
 
-      <div className="mt-2 rounded-lg bg-muted/35 px-2.5 py-2">
-        <p className="text-micro text-muted-foreground">解析到的发送方案</p>
-        <p className="line-clamp-2 break-words text-body font-semibold" title={resolution.profile.name}>
-          {resolution.profile.name}
+      {!snapshot?.ready && (
+        <p className="mt-2 text-label text-muted-foreground">
+          请先点目标应用的输入框，再唤出 Toskr。位置未确认前不会粘贴。
         </p>
+      )}
+
+      <div className="mt-2 rounded-lg bg-muted/35 px-2.5 py-2">
         <DeliveryPolicySummary
-          className="mt-1.5"
           profile={resolution.profile}
-          promptGroupName={resolution.promptGroup.name}
           privacyCapabilityActive={resolution.privacyCapabilityActive}
         />
       </div>
+      <p className="mt-2 text-micro text-muted-foreground">
+        这里显示应用默认规则；本次临时调整以主面板为准。
+      </p>
 
-      {(resolution.source === "conflict" || !snapshot?.ready || !resolution.privacyCapabilityActive) && (
-        <div className="mt-2 flex flex-wrap gap-1" aria-label="当前匹配警告">
-          {resolution.source === "conflict" && (
-            <span className="rounded-sm bg-warning/10 px-1.5 py-0.5 text-micro text-warning">
-              重复应用绑定待修复
-            </span>
-          )}
-          {snapshot?.bundleId && !snapshot.ready && (
-            <span className="rounded-sm bg-destructive/10 px-1.5 py-0.5 text-micro text-destructive">
-              目标失效，发送已锁定
-            </span>
-          )}
-          {!resolution.privacyCapabilityActive && (
-            <span className="rounded-sm bg-warning/10 px-1.5 py-0.5 text-micro text-warning">
-              隐私检查尚未启用 · 本次未检查
-            </span>
-          )}
-        </div>
+      {resolution.source === "conflict" && (
+        <p className="mt-2 text-label text-warning">
+          此应用有重复绑定，请在下方选择保留哪套规则。
+        </p>
       )}
 
       <p className="sr-only" aria-live="polite" aria-atomic="true">
-        当前目标 {appName}，{targetStatus}，发送方案 {resolution.profile.name}
+        当前粘贴目标 {appName}，{targetStatus}，默认方案 {resolution.profile.name}
       </p>
-      {testMessage && (
-        <p role="status" aria-live="polite" className="mt-2 text-label text-muted-foreground">
-          {testMessage}
+      <details className="mt-3 border-t border-border/60 pt-2">
+        <summary className="cursor-pointer text-label text-muted-foreground">规则详情</summary>
+        <p className="mt-2 break-words text-label" title={resolution.profile.name}>
+          使用方案：{resolution.profile.name}
         </p>
-      )}
+        <p className="mt-1 text-label text-muted-foreground">规则来源：{reason}</p>
+        <p className="mt-1 text-label text-muted-foreground">
+          其他模板优先显示「{resolution.promptGroup.name}」组；不会自动套用模板。
+        </p>
+        <div className="mt-2 flex items-center gap-1">
+          <Button
+            type="button"
+            size="xs"
+            variant="secondary"
+            disabled={!snapshot?.bundleId || refreshing}
+            onClick={onTest}
+            title="重新计算此应用的默认规则，不会执行粘贴或回车"
+          >
+            <FlaskConical aria-hidden className="size-3.5" /> 检查规则
+          </Button>
+          <IconButton label="重新识别粘贴目标" size="sm" disabled={refreshing} onClick={onRefresh}>
+            <RefreshCw className={cn("size-3.5", refreshing && "opacity-50")} />
+          </IconButton>
+        </div>
+        {testMessage && (
+          <p role="status" aria-live="polite" className="mt-2 text-label text-muted-foreground">
+            {testMessage}
+          </p>
+        )}
+      </details>
     </section>
   );
 }

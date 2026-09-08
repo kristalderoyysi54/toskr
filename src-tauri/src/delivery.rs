@@ -150,6 +150,9 @@ impl DeliveryFailure {
 }
 
 pub trait DeliveryRuntime {
+    fn custom_sensitive_rules(&self) -> Result<crate::privacy::CustomSensitiveRules, String> {
+        Ok(crate::privacy::CustomSensitiveRules::default())
+    }
     fn now_ms(&self) -> i64;
     fn target_snapshot(&self) -> TargetSnapshot;
     fn validate_target(
@@ -396,9 +399,14 @@ pub fn execute_delivery(
     // 强制关闭自动回车。此闸先于剪贴板事务与图片预读，无副作用可回滚。
     let mut press_enter = request.press_enter;
     if request.firewall_text_enabled && !request.text.is_empty() {
-        let scan = crate::privacy::scan_sensitive_text(crate::privacy::ScanSensitiveRequest {
+        let rules = match runtime.custom_sensitive_rules() {
+            Ok(rules) => rules,
+            Err(_) => return blocked_result(runtime, &request.delivery_id,
+                DeliveryReasonCode::PrivacyIncomplete, Some(snapshot), started_at_ms, false),
+        };
+        let scan = crate::privacy::scan_sensitive_text_with_rules(crate::privacy::ScanSensitiveRequest {
             text: request.text.clone(),
-        });
+        }, &rules);
         if !scan.complete {
             return blocked_result(
                 runtime,
@@ -711,6 +719,9 @@ impl NativeDeliveryRuntime {
 }
 
 impl DeliveryRuntime for NativeDeliveryRuntime {
+    fn custom_sensitive_rules(&self) -> Result<crate::privacy::CustomSensitiveRules, String> {
+        crate::privacy::load_custom_rules(&self.app)
+    }
     fn now_ms(&self) -> i64 {
         crate::target::now_ms()
     }
@@ -949,6 +960,8 @@ mod tests {
     use std::collections::VecDeque;
 
     struct FakeRuntime {
+        custom_fields: Vec<String>,
+        custom_rules_failed: bool,
         snapshot: TargetSnapshot,
         validations: VecDeque<Result<TargetSnapshot, TargetReason>>,
         validation_calls: usize,
@@ -989,6 +1002,8 @@ mod tests {
                 window_id: None,
             };
             Self {
+                custom_fields: Vec::new(),
+                custom_rules_failed: false,
                 validations: VecDeque::new(),
                 snapshot,
                 validation_calls: 0,
@@ -1017,6 +1032,11 @@ mod tests {
     }
 
     impl DeliveryRuntime for FakeRuntime {
+        fn custom_sensitive_rules(&self) -> Result<crate::privacy::CustomSensitiveRules, String> {
+            if self.custom_rules_failed { return Err("unreadable settings".into()); }
+            crate::privacy::CustomSensitiveRules::new(self.custom_fields.clone())
+        }
+
         fn now_ms(&self) -> i64 {
             1_000
         }
@@ -1170,6 +1190,21 @@ mod tests {
         .filter(|finding| finding.severity == crate::privacy::FindingSeverity::Block)
         .map(|finding| finding.id)
         .collect()
+    }
+
+    #[test]
+    fn native_gate_uses_authoritative_custom_fields_and_fails_closed_on_config_error() {
+        let mut runtime = FakeRuntime::default();
+        runtime.custom_fields = vec!["内部编号".into()];
+        let mut req = request(Some("token-1"));
+        req.text = "内部编号=甲".into();
+        let result = execute_delivery(&mut runtime, &req);
+        assert_eq!(result.reason_code, DeliveryReasonCode::PrivacyNativeBlocked);
+        assert_eq!(runtime.stage_calls, 0);
+        runtime.custom_rules_failed = true;
+        let result = execute_delivery(&mut runtime, &req);
+        assert_eq!(result.reason_code, DeliveryReasonCode::PrivacyIncomplete);
+        assert_eq!(runtime.stage_calls, 0);
     }
 
     #[test]

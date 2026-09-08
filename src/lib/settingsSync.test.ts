@@ -4,6 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../store/persistStorage", () => {
   const memory = new Map<string, string>();
   return {
+    flushPendingWrites: (...args: unknown[]) => mocks.flush(...args),
+    isPersistencePaused: () => mocks.paused,
+    hasLoadedPersistenceAuthority: () => mocks.authority,
     tauriStateStorage: {
       getItem: async (name: string) => memory.get(name) ?? null,
       setItem: async (name: string, value: string) => {
@@ -28,7 +31,7 @@ const mocks = vi.hoisted(() => {
       },
     }
   );
-  return { api, fns, tip: vi.fn() };
+  return { api, fns, tip: vi.fn(), flush: vi.fn<(...args: unknown[]) => Promise<void>>(() => Promise.resolve()), paused: false, authority: true };
 });
 vi.mock("@/lib/tauri", () => ({ api: mocks.api }));
 vi.mock("@/lib/tip", () => ({ tip: mocks.tip }));
@@ -48,6 +51,9 @@ import {
   setTargetProfileOverride,
   useTargetStore,
 } from "../store/targetStore";
+import { useDeliveryStore, resetDeliveryStore } from "../store/deliveryStore";
+import type { DeliveryDraft } from "./delivery/types";
+import { registerPrivacySettingsSave, waitForPrivacySettingsSave } from "./delivery/privacySettingsBarrier";
 import type { TargetSnapshot } from "./tauri";
 
 function seed(overrides: Partial<ReturnType<typeof defaultSettings>>) {
@@ -57,10 +63,107 @@ function seed(overrides: Partial<ReturnType<typeof defaultSettings>>) {
 describe("applySettingsPatch 面板布局策略", () => {
   beforeEach(() => {
     mocks.fns.clear();
+    mocks.flush.mockReset().mockResolvedValue();
+    mocks.paused = false;
+    mocks.authority = true;
+    resetDeliveryStore();
+    registerPrivacySettingsSave(Promise.resolve());
     mocks.tip.mockClear();
     vi.mocked(emitTo).mockClear();
     useDataOperationStore.setState({ locked: false, phase: "idle", message: "" });
     resetTargetState();
+  });
+
+  it("敏感字段保存期间冻结旧预检并失效扫描回执，落盘后才提示成功且保留手工打码", async () => {
+    seed({});
+    let resolveSave!: () => void;
+    mocks.flush.mockImplementationOnce(() => new Promise<void>((resolve) => { resolveSave = resolve; }));
+    const images = [{ status: "scanning", scanRevision: 3, originalFile: "original.png", sendFile: "redacted.png", redactedFindingIds: ["masked"], manualRegions: [{ x: 1, y: 2, width: 3, height: 4 }], keptFindingIds: ["kept"], rawConfirmation: { revision: 3 } }, { status: "disabled", scanRevision: 1 }];
+    useDeliveryStore.setState({ open: true, draft: {
+      id: "existing", scanRevision: 7, firewallStatus: "ready", findings: [{ id: "old" }],
+      imageFirewall: images, privacyDecision: { excludedFindingIds: ["old"], rawConfirmation: {}, replacedCount: 2 },
+    } as unknown as DeliveryDraft });
+
+    applySettingsPatch({ firewallCustomSensitiveFields: ["internal_key"] });
+    expect(mocks.flush).toHaveBeenCalledOnce();
+    expect(useDeliveryStore.getState().busy).toBe(true);
+    expect(useDeliveryStore.getState().draft).toMatchObject({ scanRevision: 8, firewallStatus: "failed", findings: [], privacyDecision: { excludedFindingIds: [], rawConfirmation: null } });
+    const updatedImages = useDeliveryStore.getState().draft!.imageFirewall;
+    expect(updatedImages[0]).toMatchObject({
+      status: "failed", scanRevision: 4, keptFindingIds: [], rawConfirmation: null,
+      failureMessage: "敏感字段已更新，请重新检查图片",
+      originalFile: "original.png", sendFile: "redacted.png", redactedFindingIds: ["masked"],
+    });
+    // 图片扫描协调器要求scanRevision相等；已发出的旧OCR回执无法匹配新版本。
+    expect(updatedImages[0].scanRevision).not.toBe(images[0].scanRevision);
+    expect(updatedImages[0].manualRegions).toBe(images[0].manualRegions);
+    expect(updatedImages[1]).toBe(images[1]);
+    expect(mocks.tip).not.toHaveBeenCalledWith("ok", expect.anything());
+    resolveSave();
+    await waitForPrivacySettingsSave();
+    expect(useDeliveryStore.getState().busy).toBe(false);
+    expect(useDeliveryStore.getState().draft?.firewallStatus).toBe("failed");
+    expect(mocks.tip).toHaveBeenCalledWith("ok", "敏感字段已保存，请重新检查当前发送内容");
+  });
+
+  it("保存失败持续阻止扫描，重新保存成功后才解除", async () => {
+    seed({});
+    mocks.flush.mockRejectedValueOnce(new Error("disk failure"));
+    applySettingsPatch({ firewallCustomSensitiveFields: ["internal_key"] });
+    await expect(waitForPrivacySettingsSave()).rejects.toThrow("disk failure");
+    await expect(waitForPrivacySettingsSave()).rejects.toThrow("disk failure");
+    expect(mocks.tip).not.toHaveBeenCalledWith("ok", expect.anything());
+    expect(mocks.tip).toHaveBeenCalledWith("warn", expect.stringContaining("保存失败"));
+    applySettingsPatch({ firewallCustomSensitiveFields: ["internal_key"] });
+    await waitForPrivacySettingsSave();
+    expect(mocks.tip).toHaveBeenCalledWith("ok", "敏感字段已保存");
+  });
+
+  it("发送忙碌、打码中、无权威存储或字段无效时拒绝并回播原设置", () => {
+    seed({});
+    useDeliveryStore.setState({ busy: true });
+    applySettingsPatch({ firewallCustomSensitiveFields: ["internal_key"] });
+    useDeliveryStore.setState({ busy: false, draft: { imageFirewall: [{ status: "redacting" }] } as DeliveryDraft });
+    applySettingsPatch({ firewallCustomSensitiveFields: ["internal_key"] });
+    resetDeliveryStore();
+    mocks.authority = false;
+    applySettingsPatch({ firewallCustomSensitiveFields: ["internal_key"] });
+    mocks.authority = true;
+    applySettingsPatch({ firewallCustomSensitiveFields: ["bad field"] });
+    expect(useNotesStore.getState().settings.firewallCustomSensitiveFields).toEqual([]);
+    expect(mocks.flush).not.toHaveBeenCalled();
+    expect(emitTo).toHaveBeenCalledTimes(4);
+  });
+
+  it("旧保存回执不解除新草稿的busy", async () => {
+    seed({});
+    let resolveSave!: () => void;
+    mocks.flush.mockImplementationOnce(() => new Promise<void>((resolve) => { resolveSave = resolve; }));
+    useDeliveryStore.setState({ open: true, draft: { id: "old", scanRevision: 0, imageFirewall: [], privacyDecision: {} } as unknown as DeliveryDraft });
+    applySettingsPatch({ firewallCustomSensitiveFields: ["key"] });
+    useDeliveryStore.setState({ busy: true, draft: { id: "new", scanRevision: 1 } as DeliveryDraft });
+    resolveSave();
+    await waitForPrivacySettingsSave();
+    expect(useDeliveryStore.getState().busy).toBe(true);
+  });
+
+  it("并发保存时只由最新回执提示成功，其他设置不强制flush", async () => {
+    seed({});
+    let resolveFirst!: () => void;
+    let resolveSecond!: () => void;
+    mocks.flush.mockImplementationOnce(() => new Promise<void>((resolve) => { resolveFirst = resolve; }))
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { resolveSecond = resolve; }));
+    applySettingsPatch({ firewallCustomSensitiveFields: ["first"] });
+    applySettingsPatch({ firewallCustomSensitiveFields: ["second"] });
+    applySettingsPatch({ detailFontSize: 16 });
+    expect(mocks.flush).toHaveBeenCalledTimes(2);
+    resolveFirst();
+    await Promise.resolve();
+    expect(mocks.tip).not.toHaveBeenCalledWith("ok", expect.anything());
+    resolveSecond();
+    await waitForPrivacySettingsSave();
+    expect(mocks.tip).toHaveBeenCalledTimes(1);
+    expect(useNotesStore.getState().settings.firewallCustomSensitiveFields).toEqual(["second"]);
   });
 
   it("广播到设置 WebView 前剥离旧 JSON 密钥恢复副本", () => {

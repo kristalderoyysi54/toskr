@@ -1,8 +1,10 @@
+import { waitForPrivacySettingsSave } from "@/lib/delivery/privacySettingsBarrier";
 import { invoke } from "@tauri-apps/api/core";
 import type { DeliveryEvent } from "@/lib/deliveryActivityCore";
 import type { ImagePreviewEditContext } from "@/lib/imageEditor";
 import type { MessageContextItem } from "@/lib/messages";
 import type { ImProfile } from "@/lib/imProfile";
+import type { PromptTemplatesExport } from "@/lib/promptTemplateExport";
 
 /** Rust 侧双击触发键事件。 */
 export const TRIGGER_EVENT = "toskr://trigger";
@@ -658,12 +660,16 @@ export const api = {
     invoke<TargetSnapshot>("validate_target_snapshot", { targetToken }),
   sendDelivery: (request: SendDeliveryRequest) =>
     invoke<SendDeliveryResult>("send_delivery", { request }),
-  scanSensitiveText: (text: string) =>
-    invoke<ScanSensitiveResult>("scan_sensitive_text", {
+  scanSensitiveText: async (text: string) => {
+    await waitForPrivacySettingsSave();
+    return invoke<ScanSensitiveResult>("scan_sensitive_text", {
       request: { text } satisfies ScanSensitiveRequest,
-    }),
-  scanImageFirewall: (file: string, force = false) =>
-    invoke<ScanImageFirewallResult>("scan_image_firewall", { file, force }),
+    });
+  },
+  scanImageFirewall: async (file: string, force = false) => {
+    await waitForPrivacySettingsSave();
+    return invoke<ScanImageFirewallResult>("scan_image_firewall", { file, force });
+  },
   redactDeliveryImage: (
     originalFile: string,
     regions: ImagePixelBox[],
@@ -933,6 +939,8 @@ export const api = {
       markdown,
       mediaFiles,
     }),
+  exportPromptTemplates: (path: string, payload: PromptTemplatesExport) =>
+    invoke<void>("export_prompt_templates", { path, payload }),
   exportConflictRecoveryBackup: (path: string, stateJson: string) =>
     invoke<BackupInspection>("export_conflict_recovery_backup", {
       path,

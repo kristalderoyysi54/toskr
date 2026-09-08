@@ -491,31 +491,29 @@ describe("Target Profile resolver", () => {
     ]);
   });
 
-  it("Prompt 菜单优先当前分组，其他模板不重复且保留原顺序", () => {
+  it("常用动作在首层，其他模板优先目标分组且保留自定义顺序和内容", () => {
     const snippets: PromptSnippet[] = [
       { id: "a", label: "A", text: "a", groupId: GENERAL_PROMPT_GROUP_ID },
+      { id: "workflow-review-plan", label: "我的审查", text: "自定义审查", groupId: "coding" },
       { id: "b", label: "B", text: "b", groupId: "coding" },
+      { id: "workflow-requirements", label: "整理需求", text: "需求", groupId: GENERAL_PROMPT_GROUP_ID },
       { id: "c", label: "C", text: "c", groupId: "coding" },
     ];
-
     const menu = promptSnippetsForGroup(snippets, "coding");
-    expect(menu.prioritized.map((item) => item.id)).toEqual(["b", "c"]);
-    expect(menu.remaining.map((item) => item.id)).toEqual(["a"]);
-
+    expect(menu.prioritized).toEqual([snippets[1], snippets[3]]);
+    expect(menu.remaining).toEqual([snippets[2], snippets[4], snippets[0]]);
     const generalMenu = promptSnippetsForGroup(snippets, GENERAL_PROMPT_GROUP_ID);
-    expect(generalMenu.prioritized.map((item) => item.id)).toEqual(["a"]);
-    expect(generalMenu.remaining.map((item) => item.id)).toEqual(["b", "c"]);
+    expect(generalMenu.prioritized).toEqual(menu.prioritized);
+    expect(generalMenu.remaining).toEqual([snippets[0], snippets[2], snippets[4]]);
+    expect([...menu.prioritized, ...menu.remaining]).toHaveLength(snippets.length);
+  });
 
-    const singleGroupMenu = promptSnippetsForGroup(
-      snippets.map((item) => ({ ...item, groupId: "coding" })),
-      "coding"
-    );
-    expect(singleGroupMenu.prioritized.map((item) => item.id)).toEqual([
-      "a",
-      "b",
-      "c",
-    ]);
-    expect(singleGroupMenu.remaining).toEqual([]);
+  it("删除全部常用动作后，不将旧模板自动提升到首层或补入缺失模板", () => {
+    const custom = { id: "mine", label: "我的模板", text: "自定义原文", groupId: "coding" };
+    expect(promptSnippetsForGroup([custom], "coding")).toEqual({
+      prioritized: [], remaining: [custom],
+    });
+    expect(promptSnippetsForGroup([], "coding")).toEqual({ prioritized: [], remaining: [] });
   });
 });
 

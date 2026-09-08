@@ -2942,7 +2942,7 @@ export default function TextPreviewView() {
       <div
         className={cn(
           "pointer-events-none absolute inset-x-0 bottom-0 z-30 flex items-center justify-center gap-1 px-4 pb-3 pt-10",
-          "bg-gradient-to-t from-background/90 via-background/55 to-transparent",
+          "detail-bottom-dock",
           "transition-[opacity,transform] duration-(--duration-overlay) ease-(--ease-standard) motion-reduce:transition-none",
           chromeVisible
             ? "[&>*]:pointer-events-auto translate-y-0 opacity-100"

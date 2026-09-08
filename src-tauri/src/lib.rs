@@ -14,6 +14,8 @@ mod favicon;
 mod focus;
 mod input;
 mod image_firewall;
+#[cfg(target_os = "macos")]
+mod keychain_broker;
 mod ocr;
 mod ai;
 mod linkmeta;
@@ -22,6 +24,7 @@ mod message_watch_cdp;
 mod note_export;
 mod pasteboard;
 mod privacy;
+mod prompt_export;
 mod rich_clipboard;
 mod state;
 mod storage;
@@ -333,6 +336,7 @@ pub fn run() {
             commands::image_data_url,
             commands::image_thumb_url,
             commands::export_notes_bundle,
+            commands::export_prompt_templates,
             commands::export_complete_backup,
             commands::export_conflict_recovery_backup,
             commands::inspect_backup,

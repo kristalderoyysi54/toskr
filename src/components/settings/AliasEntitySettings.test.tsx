@@ -18,8 +18,9 @@ describe("AliasEntitySettings", () => {
     expect(html).toContain("启用可逆化名");
     expect(html).toContain("实体词典");
     expect(html).toContain("暂无词典条目");
-    expect(html).toContain("本地预演");
-    expect(html).toContain("发出前化名 → 捕获回复时恢复");
+    expect(html).toContain("本地替换与恢复示例");
+    expect(html).toContain("查看替换成化名和恢复原文的效果");
+    expect(html).not.toContain("完整闭环");
     expect(html).toContain("不会发送、不会访问剪贴板");
     expect(html).toContain("捕获时自动恢复化名");
     expect(html).toContain("随本地数据文件加密保存");
@@ -70,7 +71,7 @@ describe("AliasEntitySettings", () => {
     );
     expect(html).toContain("启用可逆化名");
     expect(html).not.toContain("实体词典");
-    expect(html).not.toContain("本地预演");
+    expect(html).not.toContain("本地替换与恢复示例");
     expect(html).not.toContain("捕获时自动恢复化名");
   });
 });

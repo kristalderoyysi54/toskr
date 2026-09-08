@@ -373,9 +373,9 @@ export function AliasEntitySettings({
             </div>
 
             <div className="px-3.5 py-2.5">
-              <p className="text-title">本地预演（发出 → 收回 完整闭环）</p>
+              <p className="text-title">本地替换与恢复示例</p>
               <label className="mt-0.5 block text-label text-muted-foreground">
-                输入示例文字，查看「发出前化名 → 捕获回复时恢复」的往返效果
+                输入示例文字，查看替换成化名和恢复原文的效果
                 <input
                   aria-label="化名预演输入"
                   value={rehearsalText}
@@ -389,7 +389,7 @@ export function AliasEntitySettings({
                 <div className="mt-2 space-y-1.5">
                   <div>
                     <p className="text-micro text-muted-foreground">
-                      ① 发出前 · 已自动化名（AI 只看到占位符，替换 {rehearsal.replacedCount} 处）
+                      ① 替换后 · 匹配到的原文变为占位符（{rehearsal.replacedCount} 处）
                     </p>
                     <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-muted/40 p-2 text-micro">
                       {rehearsal.text}
@@ -397,21 +397,21 @@ export function AliasEntitySettings({
                   </div>
                   <div>
                     <p className="text-micro text-muted-foreground">
-                      ② 捕获回复时 · 本机自动恢复
+                      ② 恢复原文后
                     </p>
                     <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-muted/40 p-2 text-micro">
                       {rehearsalRestored?.text ?? rehearsal.text}
                     </pre>
                     {rehearsalRestored?.text === rehearsalText && (
                       <p className="mt-0.5 text-micro text-success">
-                        与原文一致，可逆闭环验证通过
+                        本地替换与恢复示例通过
                       </p>
                     )}
                   </div>
                 </div>
               )}
               <p className="mt-1.5 text-label text-muted-foreground">
-                本地预演，不会发送、不会访问剪贴板
+                仅在本机显示示例，不会发送、不会访问剪贴板
               </p>
             </div>
 

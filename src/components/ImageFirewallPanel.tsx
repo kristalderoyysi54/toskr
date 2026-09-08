@@ -18,6 +18,7 @@ import {
   FIREWALL_CATEGORY_LABEL,
   FIREWALL_SEVERITY_LABEL,
 } from "@/lib/delivery/firewall";
+import { findingReason } from "@/lib/delivery/findingReason";
 import { useNoteThumb } from "@/lib/media";
 import { api } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
@@ -101,7 +102,7 @@ function AttachmentComparison({
   return (
     <div className={cn(
       "grid min-w-0 shrink gap-1.5",
-      redacted ? "w-48 grid-cols-2" : "w-24 grid-cols-1"
+      redacted ? "w-48 max-w-full grid-cols-2" : "w-24 max-w-full grid-cols-1"
     )}>
       <div className="min-w-0 space-y-0.5 text-center">
         <AttachmentPreview
@@ -195,14 +196,14 @@ export function ImageFirewallPanel({
               key={item.originalFile}
               className="space-y-1.5 rounded-md bg-background/60 p-1.5"
             >
-              <div className="flex gap-2">
+              <div className="min-w-0 space-y-2">
                 <AttachmentComparison
                   item={item}
                   index={index}
                   originalFiles={originalFiles}
                   sendFiles={sendFiles}
                 />
-                <div className="min-w-0 flex-1 text-micro">
+                <div className="min-w-0 break-words text-micro">
                   <p className="font-medium">图片 {index + 1}</p>
                   <p className={cn(
                     item.status === "failed"
@@ -283,6 +284,10 @@ export function ImageFirewallPanel({
                           {kept.has(finding.id) ? "已确认保留原文" : "保留原文发送"}
                         </Button>
                       )}
+                      <details className="w-full min-w-0 text-muted-foreground">
+                        <summary className="cursor-pointer">命中依据</summary>
+                        <p className="mt-1 break-words">{findingReason(finding)}</p>
+                      </details>
                     </li>
                   ))}
                 </ul>

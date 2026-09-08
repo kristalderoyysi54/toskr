@@ -1,3 +1,5 @@
+import { WORKFLOW_PROMPT_SNIPPET_IDS } from "@/lib/promptTemplates";
+
 export type DeliveryFormat = "plain" | "code";
 export type MarkdownSendMode = "preserve" | "strip";
 /** 设置页的三态视图；底层仍保持格式包装与 Markdown 转换两个正交字段。 */
@@ -407,13 +409,20 @@ export function findDuplicateBundleAssignments(
     }));
 }
 
+const workflowSnippetIds = new Set<string>(WORKFLOW_PROMPT_SNIPPET_IDS);
+
+/** 三个常用动作始终在首层；其余模板展开后优先显示当前目标的分组。 */
 export function promptSnippetsForGroup(
   snippets: PromptSnippet[],
   groupId: string
 ): { prioritized: PromptSnippet[]; remaining: PromptSnippet[] } {
+  const remaining = snippets.filter((item) => !workflowSnippetIds.has(item.id));
   return {
-    prioritized: snippets.filter((item) => item.groupId === groupId),
-    remaining: snippets.filter((item) => item.groupId !== groupId),
+    prioritized: snippets.filter((item) => workflowSnippetIds.has(item.id)),
+    remaining: [
+      ...remaining.filter((item) => item.groupId === groupId),
+      ...remaining.filter((item) => item.groupId !== groupId),
+    ],
   };
 }
 

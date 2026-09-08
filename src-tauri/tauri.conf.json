@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "python3 script/keychain-helper.py check && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -142,6 +142,9 @@
     "macOS": {
       "minimumSystemVersion": "13.0",
       "signingIdentity": "Toskr Dev Signing",
+      "files": {
+        "Helpers/toskr-keychain-helper": "keychain-helper/artifacts/toskr-keychain-helper"
+      },
       "dmg": {
         "background": "dmg/background.png",
         "windowSize": {

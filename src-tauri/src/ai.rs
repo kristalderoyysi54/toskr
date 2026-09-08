@@ -1,6 +1,6 @@
 //! OpenAI 兼容 AI 传输边界。
 //!
-//! API key 只存在 macOS Keychain 与当前 Rust 请求内存，不进入 WebView 状态、
+//! API key 只存在 macOS Keychain 与 Rust 进程内存，不进入 WebView 状态、
 //! 进程参数或诊断日志。HTTP 使用进程内 reqwest；远端只允许 HTTPS，HTTP 仅允许
 //! 精确 loopback。响应错误只返回状态级信息，不回显 provider body。
 
@@ -12,13 +12,6 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use url::{Host, Url};
 
-#[cfg(target_os = "macos")]
-use security_framework::passwords::{get_generic_password, set_generic_password};
-#[cfg(target_os = "macos")]
-use security_framework_sys::base::errSecItemNotFound;
-
-const KEYCHAIN_SERVICE: &str = "com.toskr.app.ai";
-const KEYCHAIN_ACCOUNT: &str = "openai-compatible";
 const AI_KEY_STATUS_EVENT: &str = "toskr://ai-key-status";
 const MAX_KEY_BYTES: usize = 8 * 1024;
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
@@ -47,20 +40,31 @@ trait AiKeyStore {
 
 struct SystemAiKeyStore;
 
+// 一次成功授权在本进程内复用；只缓存成功读取/写入，拒绝授权不缓存为空。
+#[cfg(target_os = "macos")]
+static KEY_CACHE: Mutex<Option<StoredAiKey>> = Mutex::new(None);
+
 #[cfg(target_os = "macos")]
 impl AiKeyStore for SystemAiKeyStore {
     fn load(&self) -> Result<Option<StoredAiKey>, String> {
-        match get_generic_password(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT) {
-            Ok(bytes) => decode_keychain_record(&bytes).map(Some),
-            Err(error) if error.code() == errSecItemNotFound => Ok(None),
-            Err(_) => Err("无法访问 macOS 钥匙串".into()),
+        let mut cache = KEY_CACHE.lock().map_err(|_| "AI 密钥缓存暂不可用".to_string())?;
+        if let Some(record) = cache.as_ref() {
+            return Ok(Some(record.clone()));
         }
+        let record = crate::keychain_broker::load(crate::keychain_broker::Slot::Ai)
+            .map_err(|error| error.to_string())?
+            .map(|bytes| decode_keychain_record(&bytes))
+            .transpose()?;
+        *cache = record.clone();
+        Ok(record)
     }
 
     fn save(&self, record: &StoredAiKey) -> Result<(), String> {
         let encoded = serde_json::to_vec(record).map_err(|_| "无法编码 AI 密钥记录".to_string())?;
-        set_generic_password(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT, &encoded)
-            .map_err(|_| "无法写入 macOS 钥匙串".to_string())
+        crate::keychain_broker::store(crate::keychain_broker::Slot::Ai, &encoded)
+            .map_err(|error| error.to_string())?;
+        *KEY_CACHE.lock().map_err(|_| "AI 密钥缓存暂不可用".to_string())? = Some(record.clone());
+        Ok(())
     }
 }
 

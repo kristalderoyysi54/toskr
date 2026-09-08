@@ -33,20 +33,90 @@ export type SettingsSearchEntry = {
 };
 
 export const SETTINGS_SECTION_LABELS: Record<SettingsSectionId, string> = {
-  general: "通用",
-  hotkey: "捕获与快捷键",
+  general: "窗口与外观",
+  hotkey: "快捷键",
   clip: "剪贴板",
-  features: "功能开关",
+  features: "更多功能",
   "message-watch": "消息监听",
   secret: "秘文",
-  target: "目标与发送方案",
+  target: "粘贴与隐私",
   outcome: "使用概览",
   due: "到期提醒",
   ai: "AI 智能",
   companion: "伴随停靠",
-  data: "数据",
+  data: "数据与备份",
   diagnostics: "诊断",
   about: "关于",
+};
+
+export const SETTINGS_PRIMARY_SECTIONS = [
+  "general", "hotkey", "clip", "target", "features", "data", "outcome",
+] as const satisfies readonly SettingsSectionId[];
+export type SettingsPrimarySection = (typeof SETTINGS_PRIMARY_SECTIONS)[number];
+
+export const SETTINGS_PRIMARY_LABELS: Record<SettingsPrimarySection, string> = {
+  general: "窗口与外观",
+  hotkey: "快捷键",
+  clip: "剪贴板",
+  target: "粘贴与隐私",
+  features: "更多功能",
+  data: "数据与备份",
+  outcome: "帮助与更新",
+};
+
+/** 保留现有分区 ID 与外部深链，只改变它们在设置中的归属。 */
+export function settingsPrimarySection(section: SettingsSectionId): SettingsPrimarySection {
+  if (section === "companion") return "general";
+  if (["ai", "due", "message-watch", "secret"].includes(section)) return "features";
+  if (section === "about" || section === "diagnostics") return "outcome";
+  return section as SettingsPrimarySection;
+}
+
+export function settingsChildSections(
+  primary: SettingsPrimarySection,
+  gates: SettingsSearchGates
+): SettingsSectionId[] {
+  if (primary === "general") return ["general", "companion"];
+  if (primary === "outcome") return ["outcome", "about", "diagnostics"];
+  if (primary !== "features") return [];
+  return [
+    "features", "ai", "due",
+    ...(gates.messagesEnabled ? ["message-watch" as const] : []),
+    ...(gates.secretEnabled ? ["secret" as const] : []),
+  ];
+}
+
+export function settingsSectionFromLink(
+  value: string,
+  gates: SettingsSearchGates
+): SettingsSectionId {
+  if (value === "snippets" || value === "prompts") return "target";
+  if (value === "exclude") return "hotkey";
+  if ((value === "message-watch" && !gates.messagesEnabled) ||
+    (value === "secret" && !gates.secretEnabled)) return "features";
+  return Object.hasOwn(SETTINGS_SECTION_LABELS, value) ? value as SettingsSectionId : "general";
+}
+
+export function settingsSearchNeedsGeneralDetails(id: string | null): boolean {
+  return id !== null && [
+    "general-details", "window-opacity", "panel-opacity", "vibrancy", "vibrancy-style",
+    "card-tint", "clip-template", "card-opacity", "hud-duration", "context-menu",
+  ].includes(id);
+}
+
+/** 旧深链和搜索锚点继续可用，只将目标定位到对应的设置子页。 */
+export function targetSettingsPageForSearch(target: string | null): "paste" | "privacy" | "templates" {
+  if (["提示词组", "提示词模板", "模板来源", "导出模板", "试用预览"].includes(target ?? "")) return "templates";
+  if (["隐私保护", "隐私与化名", "发送前隐私检查（仅本机文本检查）", "发送前隐私检查", "启用隐私检查", "提示级类别", "自定义敏感字段"].includes(target ?? "")) return "privacy";
+  return "paste";
+}
+
+const SETTINGS_SECTION_ALIASES: Partial<Record<SettingsSectionId, readonly string[]>> = {
+  general: ["通用"],
+  hotkey: ["捕获与快捷键"],
+  features: ["功能开关"],
+  target: ["目标与发送方案"],
+  data: ["数据"],
 };
 
 const entry = (
@@ -62,8 +132,9 @@ const entry = (
  * 功能域内部项带 gate；总开关本身始终可搜，关闭时仍有明确开启入口。
  */
 export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
-  entry("general", "general", "通用", ["偏好", "设置"]),
-  entry("general", "tour", "新手导览", ["教程", "首次启动", "重看", "welcome", "tour"]),
+  entry("general", "general", "窗口与外观", ["通用", "偏好", "设置"]),
+  entry("outcome", "tour", "新手导览", ["教程", "首次启动", "重看", "welcome", "tour"]),
+  entry("general", "general-details", "更多外观与行为", ["外观细节", "菜单自定义", "透明度"]),
   entry("general", "theme", "主题", ["外观", "浅色", "深色", "跟随系统", "theme"]),
   entry("general", "window-opacity", "窗口整体不透明度", ["透明", "窗口", "opacity"]),
   entry("general", "panel-opacity", "内容底色浓度", ["面板", "膜层", "透明度"]),
@@ -88,12 +159,12 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   entry("companion", "companion-enabled", "启用伴随停靠", ["打开停靠", "磁吸"]),
   entry("companion", "companion-gap", "与窗口的间隙", ["距离", "边距", "gap"]),
 
-  entry("features", "features", "功能开关", ["启用功能", "实验功能", "默认关闭"]),
+  entry("features", "features", "更多功能", ["功能开关", "启用功能", "实验功能", "默认关闭"]),
   entry("features", "feature-message", "消息监听（实验）", ["开启消息", "im", "只读监听"], { target: "消息监听（实验）" }),
   entry("features", "feature-secret", "秘文", ["开启秘文", "加密", "密钥"]),
   entry("features", "feature-subscriptions", "订阅", ["开启订阅", "账单", "信用卡"]),
 
-  entry("hotkey", "hotkey", "捕获与快捷键", ["键盘", "热键", "hotkey", "shortcut", "shift"]),
+  entry("hotkey", "hotkey", "快捷键", ["捕获与快捷键", "键盘", "热键", "hotkey", "shortcut", "shift"]),
   entry("hotkey", "trigger-key", "触发键（双击）", ["双击 shift", "捕获键", "全局触发"]),
   entry("hotkey", "double-interval", "双击间隔", ["速度", "毫秒", "触发间隔"]),
   entry("hotkey", "double-action", "双击行为", ["划词", "显示面板", "捕获行为"]),
@@ -150,17 +221,23 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     { requires: "secretEnabled" }
   ),
 
-  entry("target", "target", "目标与发送方案", ["发送对象", "应用方案", "profile"]),
-  entry("target", "profiles", "发送方案", ["目标应用", "应用分配", "默认方案"], { target: "目标与发送方案" }),
-  entry("target", "output-format", "默认发送方式", ["原文", "无 markdown", "去格式", "代码块"], { target: "目标与发送方案" }),
-  entry("target", "enter-policy", "粘贴后动作", ["回车", "自动发送", "仅粘贴"], { target: "目标与发送方案" }),
+  entry("target", "target", "粘贴与隐私", ["目标与发送方案", "发送对象", "应用方案", "profile"]),
+  entry("target", "profiles", "发送方案", ["目标应用", "应用分配", "默认方案", "粘贴规则"]),
+  entry("target", "output-format", "默认发送方式", ["原文", "无 markdown", "去格式", "代码块", "粘贴格式"]),
+  entry("target", "enter-policy", "粘贴后动作", ["回车", "自动发送", "仅粘贴"]),
+  entry("target", "privacy-policy", "敏感内容处理", ["原文确认", "逐项处理", "脱敏策略"]),
   entry("target", "aliases", "隐私与化名", ["可逆化名", "词典", "恢复原文"]),
   entry("target", "prompt-groups", "提示词组", ["prompt", "模板", "提示词"]),
+  entry("target", "prompt-origin", "模板来源", ["内置", "自建", "已修改"], { target: "提示词组" }),
+  entry("target", "prompt-export", "导出模板", ["模板备份", "模板 json"], { target: "提示词组" }),
+  entry("target", "prompt-preview", "试用预览", ["模板预览", "示例内容"]),
   entry("target", "firewall", "发送前隐私检查", ["敏感内容", "本机检查", "防火墙", "privacy"], { target: "发送前隐私检查（仅本机文本检查）" }),
   entry("target", "firewall-enabled", "启用隐私检查", ["快速发送检查", "预检"]),
-  entry("target", "firewall-categories", "提示级类别", ["身份证", "手机号", "地址", "敏感类别"], { target: "发送前隐私检查（仅本机文本检查）" }),
+  entry("target", "firewall-custom-fields", "自定义敏感字段", ["内部口令", "字段名", "自定义检测", "AppSecret", "敏感字段"]),
+  entry("target", "firewall-categories", "提示级类别", ["身份证", "手机号", "地址", "敏感类别", "检测哪些内容"]),
 
   entry("outcome", "outcome", "使用概览", ["统计", "发送记录", "本机数据"]),
+  entry("outcome", "help", "帮助与更新", ["帮助", "上手", "教程"], { target: "使用概览" }),
   entry("outcome", "learning", "安全发送入门", ["演练", "教程", "恢复教学"], { target: "使用概览" }),
   entry("outcome", "success-rate", "发送成功率", ["完成次数", "失败", "受阻"], { target: "使用概览" }),
   entry("outcome", "timing", "发送用时", ["准备到发送", "完整流程", "节省时间"], { target: "使用概览" }),
@@ -181,7 +258,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   entry("ai", "model", "模型名", ["model", "模型选择"], { target: "启用 AI 智能" }),
   entry("ai", "connection", "连接测试", ["测试 ai", "连通性"], { target: "启用 AI 智能" }),
 
-  entry("data", "data", "数据", ["本地存储", "无同步", "无遥测"]),
+  entry("data", "data", "数据与备份", ["数据", "本地存储", "无同步", "无遥测"]),
   entry("data", "data-folder", "数据文件夹", ["存储位置", "数据目录", "路径"], { target: "存储位置" }),
   entry("data", "switch-folder", "切换数据目录", ["迁移", "加载目录", "icloud", "dropbox"], { target: "存储位置" }),
   entry("data", "storage-recovery", "数据目录恢复", ["只读", "挂载失败", "默认目录", "冲突"], { target: "存储位置" }),
@@ -223,8 +300,12 @@ export function searchSettings(
       if (item.requires && !gates[item.requires]) return null;
       const title = normalizeSettingsSearchText(item.title);
       const section = normalizeSettingsSearchText(SETTINGS_SECTION_LABELS[item.section]);
-      const keywords = (item.keywords ?? []).map(normalizeSettingsSearchText);
-      const fields = [title, section, ...keywords];
+      const keywords = [
+        ...(item.keywords ?? []),
+        ...(SETTINGS_SECTION_ALIASES[item.section] ?? []),
+      ].map(normalizeSettingsSearchText);
+      const primary = normalizeSettingsSearchText(SETTINGS_PRIMARY_LABELS[settingsPrimarySection(item.section)]);
+      const fields = [title, section, primary, ...keywords];
       if (!tokens.every((token) => fields.some((field) => field.includes(token)))) {
         return null;
       }

@@ -48,6 +48,7 @@ interface DeliveryState {
   replaceFirewallCategory: (category: FindingCategory) => void;
   replaceAllFirewallFindings: () => void;
   excludeFirewallFinding: (findingId: string) => void;
+  excludeAllFirewallFindings: () => void;
   /** 词典化名单次豁免：把 finalText 中一处占位符还原为原文并触发隐私重扫描。 */
   revertAliasFinding: (occurrence: {
     startUtf16: number;
@@ -371,6 +372,21 @@ export const useDeliveryStore = create<DeliveryState>()((set, get) => ({
             ...draft.privacyDecision.excludedFindingIds,
             findingId,
           ],
+          rawConfirmation: null,
+        },
+      },
+      lastError: null,
+    });
+  },
+  excludeAllFirewallFindings: () => {
+    const { draft, busy } = get();
+    if (!draft || busy || draft.firewallStatus !== "ready" || !draft.findings.length) return;
+    set({
+      draft: {
+        ...draft,
+        privacyDecision: {
+          ...draft.privacyDecision,
+          excludedFindingIds: draft.findings.map((finding) => finding.id),
           rawConfirmation: null,
         },
       },

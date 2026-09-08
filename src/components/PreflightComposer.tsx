@@ -17,6 +17,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ApplicationIcon } from "@/components/ApplicationIcon";
 import { ImageFirewallPanel } from "@/components/ImageFirewallPanel";
+import { PromptTemplateSelect } from "@/components/PromptTemplateSelect";
 import { SimpleMenu, SimpleMenuItem } from "@/components/SimpleMenu";
 import { SimpleSelect, type SimpleSelectOption } from "@/components/SimpleSelect";
 import { Button } from "@/components/ui/button";
@@ -41,6 +42,7 @@ import {
   aliasQuickAddCategories,
 } from "@/lib/aliasQuickAdd";
 import { activeAliasOccurrences } from "@/lib/delivery/aliasEntities";
+import { findingReason } from "@/lib/delivery/findingReason";
 import { findingSourceText } from "@/lib/privacy";
 import {
   FIREWALL_CATEGORY_LABEL,
@@ -282,19 +284,6 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
   );
   const draftPromptSnippetId = draft?.promptSnippetId;
   const draftPromptTemplate = draft?.promptTemplate;
-  const promptOptions = useMemo(() => {
-    const seen = new Set<string>();
-    const options: SimpleSelectOption[] = [{ value: "none", label: "无模板" }];
-    for (const snippet of [...promptMenu.prioritized, ...promptMenu.remaining]) {
-      if (seen.has(snippet.id)) continue;
-      seen.add(snippet.id);
-      options.push({ value: snippet.id, label: snippet.label });
-    }
-    if (draftPromptTemplate && !draftPromptSnippetId) {
-      options.push({ value: "custom", label: "本次自定义模板" });
-    }
-    return options;
-  }, [draftPromptSnippetId, draftPromptTemplate, promptMenu]);
   const promptValue = draftPromptSnippetId ?? (draftPromptTemplate ? "custom" : "none");
   const targetProfileId = draft?.targetProfileId;
   const profileName = useMemo(
@@ -747,8 +736,8 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
               : draft.firewallStatus === "scanning"
                 ? "扫描中…"
                 : draft.firewallStatus === "ready"
-                  ? draft.findings.length
-                    ? `${draft.findings.length} 项待处理`
+                  ? unresolvedTextCount
+                    ? `${unresolvedTextCount} 项待处理`
                     : "无待处理项"
                   : draft.firewallStatus === "incomplete"
                     ? "检查不完整"
@@ -815,6 +804,37 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
           <p className="text-micro text-muted-foreground">
             推荐替换为占位符（本机替换、发出的是占位符）；确需按原文发出时选「保留原文发送」
           </p>
+          {draft.findings.length > 1 && (
+            <div className="space-y-1">
+              <div className="flex flex-wrap gap-1.5">
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="secondary"
+                  disabled={busy || draft.firewallStatus !== "ready"}
+                  title="把本次全部命中一次性替换为占位符"
+                  onClick={() => useDeliveryStore.getState().replaceAllFirewallFindings()}
+                >
+                  一键全部替换
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  disabled={busy || draft.firewallStatus !== "ready" ||
+                    draft.findings.every((finding) => excludedFindingIds.has(finding.id))}
+                  title="确认本次检测到的全部文本敏感项按原文保留，不改变默认脱敏策略"
+                  onClick={() => useDeliveryStore.getState().excludeAllFirewallFindings()}
+                >
+                  {draft.findings.every((finding) => excludedFindingIds.has(finding.id))
+                    ? "已全部保留原文"
+                    : "一键保留原文"}
+                </Button>
+              </div>
+              <p className="text-micro text-muted-foreground">
+                仅本次有效，随后点击「确认发送」；已替换的内容不会恢复。
+              </p>
+            </div>
+          )}
           <ul className="space-y-1.5" aria-label="敏感项列表">
             {draft.findings.map((finding) => {
               const excluded = excludedFindingIds.has(finding.id);
@@ -850,6 +870,10 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                       <LocateFixed className="size-3" />
                     </IconButton>
                   </div>
+                  <details className="mt-1 text-micro text-muted-foreground">
+                    <summary className="cursor-pointer">命中依据</summary>
+                    <p className="mt-1 break-words">{findingReason(finding)}</p>
+                  </details>
                   <div className="mt-1.5 flex flex-wrap items-center gap-1">
                     <Button
                       type="button"
@@ -929,19 +953,6 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
               );
             })}
           </ul>
-          {draft.findings.length > 1 && (
-            <Button
-              type="button"
-              size="xs"
-              variant="secondary"
-              disabled={busy}
-              title="把上面所有命中一次性替换为占位符"
-              onClick={() =>
-                useDeliveryStore.getState().replaceAllFirewallFindings()}
-            >
-              一键全部替换
-            </Button>
-          )}
         </>
       )}
       {firewall?.needsRawConfirmation && (
@@ -1009,11 +1020,17 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
         <header className="flex items-center gap-2 border-b border-border px-3 py-2">
           <div className="min-w-0 flex-1">
             <h2 id="preflight-title" className="text-title font-semibold">
-              {draft.safeRehearsal ? "安全发送演练预检" : "发送预检"}
+              {draft.safeRehearsal ? "检查并粘贴" : "发送预检"}
             </h2>
-            <p className="truncate text-micro text-muted-foreground">
+            <p className={cn("text-micro text-muted-foreground", !draft.safeRehearsal && "truncate")}>
               {draft.safeRehearsal
-                ? "真实目标 · 假数据 · 只粘贴"
+                ? horizontal
+                  ? "处理示例邮箱，检查右侧正文，再点「安全粘贴」。"
+                  : activeSection === "content"
+                    ? "确认正文后，点下方「安全粘贴」。教程不会自动按回车。"
+                    : textAttention
+                      ? "点「替换为占位符」处理示例邮箱，再到「内容」检查正文。"
+                      : "到「内容」检查正文，再点「安全粘贴」。"
                 : "确认目标、内容与粘贴后动作"}
             </p>
           </div>
@@ -1172,11 +1189,10 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
               <div className="grid grid-cols-2 gap-2">
                 <label className="space-y-1 text-label">
                   <span className="text-muted-foreground">提示词模板</span>
-                  <SimpleSelect
+                  <PromptTemplateSelect
                     value={promptValue}
-                    options={promptOptions}
-                    ariaLabel="本次提示词模板"
-                    size="micro"
+                    prioritized={promptMenu.prioritized}
+                    remaining={promptMenu.remaining}
                     disabled={busy}
                     onChange={(value) => {
                       if (value === "custom") return;

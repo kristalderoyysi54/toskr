@@ -22,6 +22,7 @@ import {
   CONTEXT_MENU_REGISTRY,
   captureNotesStoreSnapshot,
   decodePersistedState,
+  DEFAULT_PROMPT_SNIPPETS,
   defaultSettings,
   doneIdsAfterSend,
   groupContextMenuIds,
@@ -47,6 +48,10 @@ import {
   SAFETY_PROFILE_ID,
 } from "@/lib/targetProfiles";
 import { ONBOARDING_VERSION } from "@/lib/onboarding";
+import {
+  WORKFLOW_PROMPT_SNIPPET_IDS,
+  WORKFLOW_PROMPT_SNIPPETS,
+} from "@/lib/promptTemplates";
 
 function reset() {
   useNotesStore.setState({
@@ -226,7 +231,7 @@ describe("notesStore 基础", () => {
   });
 
   it("v12 迁移到最新版时正文不变、生成权威块，并补齐本地成效设置", () => {
-    expect(STORE_VERSION).toBe(24);
+    expect(STORE_VERSION).toBe(26);
     const decoded = decodePersistedState(JSON.stringify({
       version: 12,
       state: {
@@ -1602,6 +1607,133 @@ describe("消息投影与后续动作", () => {
   });
 });
 
+describe("store v25-v26 prompt templates migration", () => {
+  beforeEach(reset);
+
+  const legacySnippets = [
+    { id: "review", label: "代码审查", text: "请帮我 review 以下代码，指出问题与改进建议：\n\n{内容}", groupId: "general" },
+    { id: "translate", label: "翻译成中文", text: "请把以下内容翻译成中文：\n\n{内容}", groupId: "general" },
+    { id: "summarize", label: "总结要点", text: "请总结以下内容的要点：\n\n{内容}", groupId: "general" },
+    { id: "explain", label: "解释内容", text: "请解释以下内容：\n\n{内容}", groupId: "general" },
+    { id: "optimize-prompt", label: "优化提示词", text: "请你不要执行接下来的任务。你现在的身份是世界顶级的提示工程专家，请仔细阅读我提供的提示词：\n\n{内容}\n\n并从清晰度、专业度、结构化、模型适应性四个维度进行批判性优化。请仅输出优化后的提示词内容，并用 ``` 包裹起来。", groupId: "general" },
+  ];
+  const envelope = (promptSnippets: typeof legacySnippets, version = 24) =>
+    JSON.stringify({
+      version,
+      state: {
+        settings: {
+          ...defaultSettings(),
+          promptGroups: [
+            { id: "general", name: "通用", order: 0 },
+            { id: "project", name: "项目", order: 1 },
+          ],
+          promptSnippets,
+        },
+      },
+    });
+
+  it("新用户只安装三项常用模板，正文使用批准的任务约束", () => {
+    expect(defaultSettings().promptSnippets).toEqual(DEFAULT_PROMPT_SNIPPETS);
+    expect(DEFAULT_PROMPT_SNIPPETS.map((item) => item.id)).toEqual([
+      ...WORKFLOW_PROMPT_SNIPPET_IDS,
+    ]);
+    expect(WORKFLOW_PROMPT_SNIPPETS.map((item) => [item.label, item.text])).toEqual([
+      ["整理需求", "把以下内容整理为清楚的任务说明，保留目标和约束，列出影响实施的待确认问题。不补造需求，不执行任务。\n\n{内容}"],
+      ["分析问题", "分析以下问题，区分已知事实与推测，给出可能原因和优先验证步骤。证据不足时说明缺什么，先不修改。\n\n{内容}"],
+      ["审查方案", "检查以下方案是否解决目标，指出关键遗漏、风险和不必要的复杂度，给出最小调整建议。没有明确问题就直说。\n\n{内容}"],
+    ]);
+  });
+
+  it("v24 五项未修改的旧模板移除，三项常用只前置一次", () => {
+    const raw = envelope(legacySnippets);
+    const expected = WORKFLOW_PROMPT_SNIPPETS;
+    expect(decodePersistedState(raw).settings.promptSnippets).toEqual(expected);
+    expect(decodePersistedState(raw).settings.promptSnippets).toEqual(expected);
+    replaceNotesStoreFromPersisted(raw);
+    const saved = serializePersistentState(useNotesStore.getState());
+    expect(JSON.parse(saved).version).toBe(26);
+    const decoded = decodePersistedState(saved);
+    expect(decoded.settings.promptSnippets).toEqual(expected);
+    expect(mergePersistedNotesState(decoded, useNotesStore.getState()).settings.promptSnippets)
+      .toEqual(expected);
+  });
+
+  it("v24 自定义旧模板内容、分组和相对顺序不变，已删除旧模板不补回", () => {
+    const existing = [
+      { id: "custom", label: "我的模板", text: "自定义 {内容}", groupId: "project" },
+      { ...legacySnippets[3], label: "我的解释", text: "按我的方式解释", groupId: "project" },
+      legacySnippets[0],
+    ];
+    expect(decodePersistedState(envelope(existing)).settings.promptSnippets)
+      .toEqual([...WORKFLOW_PROMPT_SNIPPETS, ...existing.slice(0, 2)]);
+    expect(decodePersistedState(envelope([])).settings.promptSnippets)
+      .toEqual(WORKFLOW_PROMPT_SNIPPETS);
+    expect(decodePersistedState(envelope([], STORE_VERSION)).settings.promptSnippets)
+      .toEqual([]);
+  });
+
+  it("同 ID 自定义模板不覆盖也不移动，只前置尚不存在的新模板", () => {
+    const existing = [
+      legacySnippets[1],
+      { id: WORKFLOW_PROMPT_SNIPPET_IDS[1], label: "自定义分析", text: "保留我的提示词", groupId: "project" },
+      legacySnippets[0],
+    ];
+    const expected = [WORKFLOW_PROMPT_SNIPPETS[0], WORKFLOW_PROMPT_SNIPPETS[2], existing[1]];
+    expect(decodePersistedState(envelope(existing)).settings.promptSnippets).toEqual(expected);
+    expect(decodePersistedState(envelope(expected)).settings.promptSnippets).toEqual(expected);
+  });
+
+  it("v25 清理旧预设，保留新增、同名复制及逐字段修改的模板", () => {
+    const custom = [
+      { id: "my-minimal", label: "最小修改提示词", text: "只修改必要部分：{内容}", groupId: "general" },
+      { ...legacySnippets[0], id: "my-copy" },
+      { ...legacySnippets[1], label: "我的翻译" },
+      { ...legacySnippets[2], text: "我的总结：{内容}" },
+      { ...legacySnippets[3], groupId: "project" },
+    ];
+    const expected = [...WORKFLOW_PROMPT_SNIPPETS, ...custom];
+    const input = [...WORKFLOW_PROMPT_SNIPPETS, legacySnippets[0], ...custom, legacySnippets[4]];
+    replaceNotesStoreFromPersisted(envelope(input, 25));
+    expect(useNotesStore.getState().settings.promptSnippets).toEqual(expected);
+    const saved = serializePersistentState(useNotesStore.getState());
+    expect(decodePersistedState(saved).settings.promptSnippets).toEqual(expected);
+  });
+
+  it("v25 已删除的新模板不补回，v26 用户主动重建的旧预设不再次清理", () => {
+    const remaining = [WORKFLOW_PROMPT_SNIPPETS[1], legacySnippets[0]];
+    expect(decodePersistedState(envelope(remaining, 25)).settings.promptSnippets)
+      .toEqual([WORKFLOW_PROMPT_SNIPPETS[1]]);
+    expect(decodePersistedState(envelope(remaining, STORE_VERSION)).settings.promptSnippets)
+      .toEqual(remaining);
+  });
+
+  it.each([
+    ["一项", false],
+    ["全部", true],
+  ] as const)("删除%s新模板后，当前版本读盘与重启不复活", (_, removeAll) => {
+    replaceNotesStoreFromPersisted(envelope(legacySnippets));
+    const kept = useNotesStore.getState().settings.promptSnippets.filter((item) =>
+      removeAll
+        ? !WORKFLOW_PROMPT_SNIPPETS.some((workflow) => workflow.id === item.id)
+        : item.id !== WORKFLOW_PROMPT_SNIPPET_IDS[0]
+    );
+    useNotesStore.getState().setSettings({ promptSnippets: kept });
+    const saved = serializePersistentState(useNotesStore.getState());
+    reset();
+    replaceNotesStoreFromPersisted(saved);
+    expect(useNotesStore.getState().settings.promptSnippets).toEqual(kept);
+    const decoded = decodePersistedState(serializePersistentState(useNotesStore.getState()));
+    expect(decoded.settings.promptSnippets).toEqual(kept);
+    expect(mergePersistedNotesState(decoded, useNotesStore.getState()).settings.promptSnippets)
+      .toEqual(kept);
+  });
+
+  it("v6 升级只增加新常用，不再经历史迁移补回已删除的优化提示词", () => {
+    expect(decodePersistedState(envelope([legacySnippets[0]], 6)).settings.promptSnippets)
+      .toEqual(WORKFLOW_PROMPT_SNIPPETS);
+  });
+});
+
 describe("store v13 migration and directory rehydrate", () => {
   it("v10 旧 key 只保留为 Keychain 迁移恢复副本，默认 v11 不再创建该字段", () => {
     const decoded = decodePersistedState(JSON.stringify({
@@ -1708,12 +1840,13 @@ describe("store v13 migration and directory rehydrate", () => {
     expect(decoded.settings.promptGroups).toEqual([
       { id: GENERAL_PROMPT_GROUP_ID, name: "通用", order: 0 },
     ]);
-    expect(decoded.settings.promptSnippets).toEqual(
-      legacySnippets.map((snippet) => ({
+    expect(decoded.settings.promptSnippets).toEqual([
+      ...WORKFLOW_PROMPT_SNIPPETS,
+      ...legacySnippets.map((snippet) => ({
         ...snippet,
         groupId: GENERAL_PROMPT_GROUP_ID,
-      }))
-    );
+      })),
+    ]);
     expect(decoded.settings.targetProfiles.find((item) => item.id === SAFETY_PROFILE_ID))
       .toMatchObject({ enterPolicy: "confirm" });
     expect(decoded.settings.targetProfiles.every((item) => item.enterPolicy !== "allow"))
@@ -1721,7 +1854,7 @@ describe("store v13 migration and directory rehydrate", () => {
     expect(decoded.settings.autoEnter).toBe(false);
   });
 
-  it("v8 重复或空 snippet id 稳定重编号，v9 round-trip 不丢模板", () => {
+  it("v8 重复或空 snippet id 稳定重编号，当前版本 round-trip 不丢模板", () => {
     const legacySnippets = [
       { id: "same", label: "一", text: "first" },
       { id: "same", label: "二", text: "second" },
@@ -1739,8 +1872,8 @@ describe("store v13 migration and directory rehydrate", () => {
     }));
     const migrated = decoded.settings.promptSnippets;
 
-    expect(migrated.map((item) => item.text)).toEqual(["first", "second", "third"]);
-    expect(new Set(migrated.map((item) => item.id)).size).toBe(3);
+    expect(migrated.slice(3).map((item) => item.text)).toEqual(["first", "second", "third"]);
+    expect(new Set(migrated.map((item) => item.id)).size).toBe(6);
     expect(migrated.every((item) => item.groupId === GENERAL_PROMPT_GROUP_ID)).toBe(true);
 
     const roundTrip = decodePersistedState(JSON.stringify({

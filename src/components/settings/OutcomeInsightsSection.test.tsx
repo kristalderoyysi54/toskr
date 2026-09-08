@@ -130,14 +130,14 @@ describe("OutcomeInsightsSection", () => {
     expect(html).not.toContain("成效与隐私");
     expect(html).toContain("开始使用 Toskr");
     expect(html).toContain("安全发送入门");
-    expect(html).toContain("体验安全发送");
-    expect(html).toContain("恢复脱敏结果");
+    expect(html).toContain("检查并粘贴");
+    expect(html).toContain("可选进阶");
     expect(html).toContain("aria-label=\"本机使用统计\"");
     expect(html).toContain("aria-label=\"统计保留时间\"");
     expect(html).toContain("高级工具");
     expect(html).toContain("数据与隐私");
     expect(html).toContain("清除统计");
-    expect(html.match(/<details/g)).toHaveLength(2);
+    expect(html.match(/<details/g)).toHaveLength(3);
     expect(html).not.toContain("<details open");
     expect(html).toContain("开始计时");
     expect(html).toContain("disabled");

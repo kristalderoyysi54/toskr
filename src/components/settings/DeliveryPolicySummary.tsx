@@ -1,56 +1,48 @@
 import { DELIVERY_FORMAT_LABEL, ENTER_POLICY_STATUS_LABEL } from "@/lib/targetLens";
+import { PRIVACY_POLICY_OPTIONS } from "@/lib/profileManager";
 import { cn } from "@/lib/utils";
 import { targetProfileOutputMode, type TargetProfile } from "@/lib/targetProfiles";
 
 export function DeliveryPolicySummary({
   profile,
-  promptGroupName,
   privacyCapabilityActive = false,
   className,
 }: {
   profile: TargetProfile;
-  promptGroupName: string;
   privacyCapabilityActive?: boolean;
   className?: string;
 }) {
   const rules = [
-    { label: `提示词组：${promptGroupName}`, warning: false },
-    { label: `输出格式：${DELIVERY_FORMAT_LABEL[targetProfileOutputMode(profile)]}`, warning: false },
+    { label: "粘贴格式", value: DELIVERY_FORMAT_LABEL[targetProfileOutputMode(profile)], warning: false },
     {
-      label: `粘贴后动作：${ENTER_POLICY_STATUS_LABEL[profile.enterPolicy]}`,
+      label: "粘贴后动作", value: ENTER_POLICY_STATUS_LABEL[profile.enterPolicy],
       warning: profile.enterPolicy === "allow",
     },
     {
-      label: profile.keepPanel ? "发送完成后：保持打开" : "发送完成后：关闭面板",
+      label: "完成后面板", value: profile.keepPanel ? "保持打开" : "关闭面板",
+      warning: false,
+    },
+    {
+      label: "隐私检查", value: privacyCapabilityActive ? "已开启" : "已关闭 · 不检查",
+      warning: !privacyCapabilityActive,
+    },
+    {
+      label: "发现敏感内容",
+      value: `${PRIVACY_POLICY_OPTIONS.find((option) => option.value === profile.privacyPolicy)?.label ?? "未设置"}${privacyCapabilityActive ? "" : "（检查关闭时不生效）"}`,
       warning: false,
     },
   ];
 
   return (
-    <div className={cn("flex min-w-0 flex-wrap gap-1", className)} aria-label="当前生效规则摘要">
+    <dl className={cn("space-y-1.5 text-label", className)} aria-label="应用默认粘贴规则">
       {rules.map((rule) => (
-        <span
-          key={rule.label}
-          className={cn(
-            "line-clamp-2 max-w-full break-words rounded-sm px-1.5 py-0.5 text-micro leading-tight",
-            rule.warning
-              ? "bg-warning/10 text-warning"
-              : "bg-muted/60 text-muted-foreground"
-          )}
-        >
-          {rule.label}
-        </span>
+        <div key={rule.label} className="flex min-w-0 items-start justify-between gap-3">
+          <dt className="shrink-0 text-muted-foreground">{rule.label}</dt>
+          <dd className={cn("min-w-0 break-words text-right", rule.warning && "text-warning")}>
+            {rule.value}
+          </dd>
+        </div>
       ))}
-      <span
-        className={cn(
-          "line-clamp-2 max-w-full break-words rounded-sm px-1.5 py-0.5 text-micro leading-tight",
-          privacyCapabilityActive
-            ? "bg-muted/60 text-muted-foreground"
-            : "bg-warning/10 text-warning"
-        )}
-      >
-        {privacyCapabilityActive ? "隐私检查：已启用" : "隐私检查：尚未启用"}
-      </span>
-    </div>
+    </dl>
   );
 }

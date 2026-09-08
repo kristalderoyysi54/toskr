@@ -9,6 +9,7 @@ vi.mock("@/store/persistStorage", () => ({
 }));
 
 import type { DeliveryDraft } from "@/lib/delivery/types";
+import { allowedBlockFindingIds, evaluateFirewallPolicy } from "@/lib/delivery/firewall";
 import { scanOpenDeliveryDraft } from "@/lib/delivery/firewallController";
 import type { ScanSensitiveResult } from "@/lib/tauri";
 import {
@@ -73,6 +74,64 @@ function draft(): DeliveryDraft {
 
 describe("deliveryStore", () => {
   beforeEach(() => resetDeliveryStore());
+
+  function draftWithFindings(): DeliveryDraft {
+    return {
+      ...draft(),
+      findings: [
+        { id: "email", category: "email", severity: "warn", startUtf16: 0, endUtf16: 1,
+          maskedPreview: "a•••", suggestedPlaceholder: "[EMAIL]", ruleId: "test.email" },
+        { id: "credential", category: "apiKey", severity: "block", startUtf16: 1, endUtf16: 2,
+          maskedPreview: "b•••", suggestedPlaceholder: "[API_KEY]", ruleId: "test.credential" },
+      ],
+    };
+  }
+
+  it("一键保留本次全部文本命中，严格策略可发送且高风险仍关闭自动回车", () => {
+    const initial = draftWithFindings();
+    useDeliveryStore.getState().openDraft(initial);
+    useDeliveryStore.getState().excludeFirewallFinding("email");
+    useDeliveryStore.getState().excludeAllFirewallFindings();
+    const current = useDeliveryStore.getState().draft!;
+    expect(current.finalText).toBe(initial.finalText);
+    expect(current.privacyPolicy).toBe("requireRedaction");
+    expect(current.privacyDecision.excludedFindingIds).toEqual(["email", "credential"]);
+    const input = {
+      status: current.firewallStatus,
+      findings: current.findings,
+      excludedFindingIds: current.privacyDecision.excludedFindingIds,
+      policy: current.privacyPolicy,
+      rawConfirmation: current.privacyDecision.rawConfirmation,
+      revision: current.scanRevision,
+      targetToken: null,
+    };
+    expect(evaluateFirewallPolicy(input)).toMatchObject({
+      canSend: true, unresolvedCount: 0, forcePressEnterOff: true,
+    });
+    expect(allowedBlockFindingIds(input)).toEqual(["credential"]);
+    expect(useDeliveryStore.getState()).toMatchObject({ open: true, busy: false });
+
+    useDeliveryStore.getState().setFinalText("修改后的正文");
+    expect(useDeliveryStore.getState().draft!.privacyDecision.excludedFindingIds).toEqual([]);
+    expect(useDeliveryStore.getState().draft!.firewallStatus).toBe("idle");
+    useDeliveryStore.getState().openDraft(draftWithFindings());
+    expect(useDeliveryStore.getState().draft!.privacyDecision.excludedFindingIds).toEqual([]);
+  });
+
+  it.each(["idle", "scanning", "incomplete", "failed"] as const)(
+    "%s 时不能批量豁免旧命中", (firewallStatus) => {
+      useDeliveryStore.getState().openDraft({ ...draftWithFindings(), firewallStatus });
+      useDeliveryStore.getState().excludeAllFirewallFindings();
+      expect(useDeliveryStore.getState().draft!.privacyDecision.excludedFindingIds).toEqual([]);
+    }
+  );
+
+  it("发送中不能追加批量原文授权", () => {
+    useDeliveryStore.getState().openDraft(draftWithFindings());
+    useDeliveryStore.getState().setBusy(true);
+    useDeliveryStore.getState().excludeAllFirewallFindings();
+    expect(useDeliveryStore.getState().draft!.privacyDecision.excludedFindingIds).toEqual([]);
+  });
 
   it("默认 smart 且正文只保存在会话态", () => {
     expect(useDeliveryStore.getState()).toMatchObject({

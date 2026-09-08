@@ -1,5 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { CurrentTargetPreview } from "@/components/settings/CurrentTargetPreview";
 import { Disclosure } from "@/components/ui/disclosure";
@@ -28,11 +28,15 @@ export function TargetProfileManager({
   patch,
   requestedProfileId = null,
   requestSequence = 0,
+  searchTarget = null,
+  searchSequence = 0,
 }: {
   settings: Settings;
   patch: (patch: Partial<Settings>) => void;
   requestedProfileId?: string | null;
   requestSequence?: number;
+  searchTarget?: string | null;
+  searchSequence?: number;
 }) {
   const [selectedProfileId, setSelectedProfileId] = useState(
     settings.defaultTargetProfileId
@@ -114,9 +118,15 @@ export function TargetProfileManager({
 
   // 方案管理默认折叠（回答「现在会发生什么」的当前目标卡常驻即可）；
   // 深链首帧直接展开，避免先收起再展开的闪动
+  const searchNeedsManagement = [
+    "发送方案", "默认发送方式", "粘贴后动作", "敏感内容处理",
+  ].includes(searchTarget ?? "");
   const [managementOpen, setManagementOpen] = useState(
-    () => Boolean(requestedProfileId) && requestSequence > 0
+    () => (Boolean(requestedProfileId) && requestSequence > 0) || searchNeedsManagement
   );
+  useLayoutEffect(() => {
+    if (searchNeedsManagement) setManagementOpen(true);
+  }, [searchNeedsManagement, searchSequence]);
   const [scrollRequestId, setScrollRequestId] = useState(0);
   const openManagementAndScroll = () => {
     setManagementOpen(true);
@@ -212,12 +222,12 @@ export function TargetProfileManager({
 
   const testCurrentTarget = () => {
     const availability = !currentTarget?.bundleId
-      ? "尚未识别，发送已锁定"
+      ? "尚未识别粘贴目标"
       : currentResolution.isTargetReady
-        ? "可发送"
-        : "目标已失效，发送已锁定";
+        ? "已识别粘贴位置"
+        : "请重新选择目标输入框";
     setTestMessage(
-      `解析完成：${currentResolution.profile.name} · ${availability}。未访问剪贴板，未模拟粘贴或回车。`
+      `规则已重新计算：${currentResolution.profile.name} · ${availability}。未执行粘贴或回车。`
     );
   };
 
@@ -249,71 +259,73 @@ export function TargetProfileManager({
         }}
       />
 
-      <Disclosure
-        title="发送方案管理"
-        id="target-profile-management"
-        open={managementOpen}
-        onOpenChange={setManagementOpen}
-      >
-      <div className="grid min-w-0 gap-3 lg:grid-cols-3">
-        <ProfileList
-          profiles={settings.targetProfiles}
-          groups={settings.promptGroups}
-          defaultProfileId={settings.defaultTargetProfileId}
-          selectedProfileId={selectedProfile?.id ?? ""}
-          currentProfileId={currentResolution.profileId}
-          onSelect={(profileId) => {
-            selectionTouched.current = true;
-            setSelectedProfileId(profileId);
-          }}
-          onCreate={(trigger) => {
-            createReturnFocusRef.current = trigger;
-            setCreateOpen(true);
-          }}
-          onMove={moveProfile}
-          onDelete={removeProfile}
-        />
-
-        {selectedProfile && (
-          <div className="min-w-0 lg:col-span-2">
-            <ProfileEditor
-              profile={selectedProfile}
+      <div data-settings-search="发送方案" className="scroll-m-5 rounded-md transition-shadow data-[settings-search-active=true]:ring-2 data-[settings-search-active=true]:ring-primary/40 data-[settings-search-active=true]:ring-offset-2 data-[settings-search-active=true]:ring-offset-background">
+        <Disclosure
+          title="管理应用粘贴规则"
+          id="target-profile-management"
+          open={managementOpen}
+          onOpenChange={setManagementOpen}
+        >
+          <div className="grid min-w-0 gap-3 lg:grid-cols-3">
+            <ProfileList
               profiles={settings.targetProfiles}
               groups={settings.promptGroups}
-              snippets={settings.promptSnippets}
               defaultProfileId={settings.defaultTargetProfileId}
-              firewallEnabled={settings.firewallEnabled}
-              currentTarget={currentTarget}
-              recentApps={recentApps}
-              onUpdate={updateSelectedProfile}
-              onProfilesChange={(targetProfiles) => patch({ targetProfiles })}
-              onSetDefault={() =>
-                patch({ defaultTargetProfileId: selectedProfile.id })
-              }
+              selectedProfileId={selectedProfile?.id ?? ""}
+              currentProfileId={currentResolution.profileId}
+              onSelect={(profileId) => {
+                selectionTouched.current = true;
+                setSelectedProfileId(profileId);
+              }}
+              onCreate={(trigger) => {
+                createReturnFocusRef.current = trigger;
+                setCreateOpen(true);
+              }}
+              onMove={moveProfile}
+              onDelete={removeProfile}
             />
-          </div>
-        )}
-      </div>
 
-      <ProfileCreateSheet
-        open={createOpen}
-        returnFocusRef={createReturnFocusRef}
-        currentTarget={currentTarget}
-        profiles={settings.targetProfiles}
-        promptGroupId={settings.promptGroups[0]?.id ?? "general"}
-        onOpenChange={setCreateOpen}
-        onCreate={(profile, moveCurrentBundle) => {
-          let next = [...settings.targetProfiles, profile];
-          const includedBundleId = profile.bundleIds[0];
-          if (moveCurrentBundle && includedBundleId) {
-            next = assignTargetProfileBundle(next, includedBundleId, profile.id);
-          }
-          patch({ targetProfiles: next });
-          selectionTouched.current = true;
-          setSelectedProfileId(profile.id);
-        }}
-      />
-      </Disclosure>
+            {selectedProfile && (
+              <div className="min-w-0 lg:col-span-2">
+                <ProfileEditor
+                  profile={selectedProfile}
+                  profiles={settings.targetProfiles}
+                  groups={settings.promptGroups}
+                  snippets={settings.promptSnippets}
+                  defaultProfileId={settings.defaultTargetProfileId}
+                  firewallEnabled={settings.firewallEnabled}
+                  currentTarget={currentTarget}
+                  recentApps={recentApps}
+                  onUpdate={updateSelectedProfile}
+                  onProfilesChange={(targetProfiles) => patch({ targetProfiles })}
+                  onSetDefault={() =>
+                    patch({ defaultTargetProfileId: selectedProfile.id })
+                  }
+                />
+              </div>
+            )}
+          </div>
+
+          <ProfileCreateSheet
+            open={createOpen}
+            returnFocusRef={createReturnFocusRef}
+            currentTarget={currentTarget}
+            profiles={settings.targetProfiles}
+            promptGroupId={settings.promptGroups[0]?.id ?? "general"}
+            onOpenChange={setCreateOpen}
+            onCreate={(profile, moveCurrentBundle) => {
+              let next = [...settings.targetProfiles, profile];
+              const includedBundleId = profile.bundleIds[0];
+              if (moveCurrentBundle && includedBundleId) {
+                next = assignTargetProfileBundle(next, includedBundleId, profile.id);
+              }
+              patch({ targetProfiles: next });
+              selectionTouched.current = true;
+              setSelectedProfileId(profile.id);
+            }}
+          />
+        </Disclosure>
+      </div>
     </div>
   );
 }

@@ -11,6 +11,8 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
   Check,
+  ChevronLeft,
+  ChevronRight,
   Copy,
   Expand,
   Eye,
@@ -25,6 +27,7 @@ import {
   ListTodo,
   Link2,
   Merge,
+  MoreHorizontal,
   Pencil,
   PenLine,
   Pin,
@@ -46,11 +49,17 @@ import { mapNoteTextBlocks } from "@/lib/noteContentBlocks";
 import { imageCaption, imageListLabel } from "@/lib/format";
 import { tip } from "@/lib/tip";
 import { IconButton } from "@/components/ui/icon-button";
+import { CardMenuPageItem, type CardMenuPage } from "@/components/CardMenuPageItem";
+import {
+  flattenContextMenuSubmenu,
+  partitionCardMenuIds,
+} from "@/components/cardMenuLayout";
 import { TargetSendMenuItem } from "@/components/TargetSendMenuItem";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuLabel,
   ContextMenuSeparator,
   ContextMenuShortcut,
   ContextMenuSub,
@@ -372,6 +381,15 @@ export const NoteCard = memo(function NoteCard({
         }
       : {};
 
+  const [menuPage, setMenuPage] = useState<CardMenuPage>("main");
+  const parentMenuPage = menuPage === "other-templates" ? "send" : "main";
+  const menuPageRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const menu = menuPageRef.current;
+    if (!menu) return;
+    menu.closest<HTMLElement>("[data-slot='context-menu-content']")?.scrollTo({ top: 0 });
+    menu.querySelector<HTMLElement>("[role='menuitem']:not([data-disabled])")?.focus();
+  }, [menuPage]);
   // 只订阅稳定引用，派生数组用 useMemo——选择器里 new 数组会造成
   // getSnapshot 永不相等 → React 无限重渲染崩溃（主窗口白屏、面板无法唤起）
   const menuCfgRaw = useNotesStore((s) => s.settings.contextMenu);
@@ -381,6 +399,19 @@ export const NoteCard = memo(function NoteCard({
         .filter((i) => i.on)
         .map((i) => i.id),
     [menuCfgRaw]
+  );
+  const snippetMenu = promptSnippetsForGroup(
+    useNotesStore.getState().settings.promptSnippets,
+    currentTargetProfileResolution().promptGroup.id
+  );
+  const renderSnippet = (sn: { id: string; label: string; text: string }) => (
+    <ContextMenuItem
+      key={sn.id}
+      title={sn.text}
+      onClick={() => sendSelfOrChecked(sn.text, { promptSnippetId: sn.id })}
+    >
+      {sn.label}
+    </ContextMenuItem>
   );
 
   /** 右键菜单中段：按配置顺序渲染，卡片类型不适用返回 null。 */
@@ -435,20 +466,7 @@ export const NoteCard = memo(function NoteCard({
         );
       case "send-template": {
         // 与底栏 ⌄ 的模板列表并存（底栏单选也显示）：右键路径服务未勾选直接
-        // 右键的场景。菜单打开时才渲染，getState 一次性取解析结果即可，无需订阅
-        const snippetMenu = promptSnippetsForGroup(
-          useNotesStore.getState().settings.promptSnippets,
-          currentTargetProfileResolution().promptGroup.id
-        );
-        const renderSnippet = (sn: { id: string; label: string; text: string }) => (
-          <ContextMenuItem
-            key={sn.id}
-            title={sn.text}
-            onClick={() => sendSelfOrChecked(sn.text, { promptSnippetId: sn.id })}
-          >
-            {sn.label}
-          </ContextMenuItem>
-        );
+        // 右键的场景。其他模板同位切页，避免窄面板横向展开或默认铺满旧模板。
         return (
           <ContextMenuSub key={id}>
             <ContextMenuSubTrigger>
@@ -456,17 +474,18 @@ export const NoteCard = memo(function NoteCard({
             </ContextMenuSubTrigger>
             <ContextMenuSubContent className="w-44">
               {snippetMenu.prioritized.map(renderSnippet)}
-              {snippetMenu.prioritized.length === 0 && (
+              {snippetMenu.prioritized.length === 0 && snippetMenu.remaining.length === 0 && (
                 <ContextMenuItem disabled>
-                  {snippetMenu.remaining.length > 0
-                    ? "当前分组暂无模板"
-                    : "去设置里添加模板"}
+                  去设置里添加模板
                 </ContextMenuItem>
               )}
               {snippetMenu.remaining.length > 0 && (
                 <>
                   <ContextMenuSeparator />
-                  {snippetMenu.remaining.map(renderSnippet)}
+                  <CardMenuPageItem page="other-templates" onNavigate={setMenuPage}>
+                    其他模板（{snippetMenu.remaining.length}）
+                    <ChevronRight className="ml-auto size-3.5" />
+                  </CardMenuPageItem>
                 </>
               )}
             </ContextMenuSubContent>
@@ -479,7 +498,7 @@ export const NoteCard = memo(function NoteCard({
             key={id}
             onClick={() => sendSelfOrChecked(undefined, { forcePreflight: true })}
           >
-            <ListChecks className="size-3.5" /> 预检并发送
+            <ListChecks className="size-3.5" /> 检查后发送…
           </ContextMenuItem>
         );
       case "copy":
@@ -874,20 +893,26 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
   // 多选时将「移动到」提升到合并之后；单选仍保留用户配置的组内顺序。
   const promotedMoveItem =
     mergeCount >= 2 && menuIds.includes("move") ? renderMenuItem("move") : null;
-  const menuSections = groupContextMenuIds(
-    promotedMoveItem ? menuIds.filter((id) => id !== "move") : menuIds
-  )
+  const menuLayout = partitionCardMenuIds(
+    promotedMoveItem ? menuIds.filter((id) => id !== "move") : menuIds,
+    isClip
+  );
+  const primaryMenuItems = menuLayout.primary.map(renderMenuItem).filter(Boolean);
+  const sendOptions = [
+    ...menuLayout.sendOptions.map(renderMenuItem).filter(Boolean),
+    relationMenuItem,
+  ];
+  const moreSections = groupContextMenuIds(menuLayout.more)
     .map((group) => ({
       ...group,
-      items: [
-        ...group.ids.map((id) => renderMenuItem(id)).filter(Boolean),
-        ...(group.id === "send" ? [relationMenuItem] : []),
-      ],
+      items: group.ids.map(renderMenuItem).filter(Boolean),
     }))
     .filter((group) => group.items.length > 0);
 
   return (
-    <ContextMenu>
+    <ContextMenu onOpenChange={(open) => {
+      if (open) setMenuPage("main");
+    }}>
       <ContextMenuTrigger asChild>
         <div
           ref={(el) => {
@@ -975,7 +1000,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
             // `-mx-2` 只抵消 padding、抵消不掉这 1px，卡片底色就从边框里透出来，
             // 在彩色通栏两侧形成一圈「深色主题黑、浅色主题白」的细边——
             // 正是用户反复指出的那层描边（放大截图实测：面板 #2f3a4a →
-            // 暗带 #1f2226 → 通栏 #cd7538）。选中态改用不占布局的 ring
+            // 暗带 #1f2226 → 通栏 #cd7538）。选中态使用不占布局的覆盖层
             "group relative flex cursor-default select-none overflow-hidden",
             !strip && "list-render-unit",
             compact && isClip ? "rounded-md" : "rounded-lg",
@@ -995,30 +1020,22 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
                       : "h-[116px] flex-col px-2 pb-1 pt-1.5"
                   : // 舒适竖栏笔记=资产牌（A 案）/ 横栏串：维持通栏瓷砖
                     "h-[136px] flex-col px-2 pb-1.5 pt-1.5",
-            // 实色卡片（Paste 风格）：与毛玻璃面板分层；透明度由设置项调节。
+            // 卡片材质继承面板风格；每个渐变色阶共用用户设定的透明度。
             // 静息态不给阴影——shadow-sm 是紧贴边缘的 1px 硬阴影，在深色面板上
             // 会读成一条描边（用户实测否决；详情层同理只用大而柔的 elevation）。
             // 卡底与面板底本身对比足够，不靠边线也分得开。
             // 剪贴板紧缩行例外：去卡片化（hover 才浮现行底）——临时流水的调性
             compact && isClip
               ? "transition-colors hover:bg-black/[0.05] dark:hover:bg-white/[0.06]"
-              : "bg-[rgb(255_255_255/var(--card-alpha,100%))] dark:bg-[rgb(39_39_42/var(--card-alpha,100%))]",
+              : "material-card",
             // 舒适密度的悬浮微升：位移只作用于卡片刚体（内部图标区相对位置不变）；
             // reduced-motion 下 transition 被全局压到 0.01ms，等效"去位移保影子"
             !compact &&
               "transition-[transform,box-shadow] duration-150 hover:-translate-y-px hover:elevation-2",
             // 紧缩笔记卡 hover 只给影子不位移（资产感；流水行只亮底不抬）
             compact && !isClip && "transition-shadow duration-150 hover:elevation-2",
-            // 无勾选框设计：选中态 = primary 光环（+ 舒适密度抬升）。
-            // 只用 ring 不用 border：ring 画在布局盒之外，不会像边框那样把
-            // 通栏往内挤出一圈底色。
-            // 紧缩例外：外扩 ring 在密排列表里会与相邻选中卡叠色成嵌套弧
-            // 乱纹、还被滚动容器裁边——笔记卡改内嵌 ring；零间距流水行的
-            // 描边走下方覆盖层的分段 border，相邻选中行合并为连续选区块
-            checked &&
-              (compact
-                ? !isClip && "ring-2 ring-inset ring-primary/70"
-                : "ring-2 ring-primary/70 elevation-2"),
+            // 选中柔光由下方覆盖层向内绘制；舒适密度保持抬升。
+            checked && !compact && "elevation-2",
             joinPrev && compact && isClip && "rounded-t-none",
             joinNext && compact && isClip && "rounded-b-none",
             // 键盘焦点：只抬升不描边（用户否决"随主题黑白的中性细环"——
@@ -1028,22 +1045,6 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
             isDragging && "z-10 opacity-70 elevation-3"
           )}
         >
-          {checked && (
-            <span
-              aria-hidden
-              className={cn(
-                "pointer-events-none absolute inset-0",
-                compact
-                  ? "bg-primary/[0.12] dark:bg-primary/[0.2]"
-                  : "bg-primary/[0.1] dark:bg-primary/[0.16]",
-                // 紧缩流水行：选中描边画在行内（分段 border）——连续选中段
-                // 首行留上边、末行留下边、中段只留两侧，读作一个选区块
-                compact && isClip && "rounded-[inherit] border-x-2 border-primary/70",
-                compact && isClip && !joinPrev && "border-t-2",
-                compact && isClip && !joinNext && "border-b-2"
-              )}
-            />
-          )}
           {note.blur && (
             // 模糊内容（防肩窥，右键切换）：backdrop 磨砂盖住整张卡面，
             // 悬停临时揭示；详情窗与实际发送内容不受影响
@@ -1052,6 +1053,17 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
               // 强度对齐秘文页（用户 2026-08-27：9px 还能看清）：大半径 + 洗白
               // 降饱和，正文彻底不可辨；悬停仍临时揭示
               className="pointer-events-none absolute inset-0 z-10 rounded-[inherit] bg-muted-foreground/20 backdrop-blur-[14px] backdrop-saturate-[0.85] transition-opacity duration-(--duration-control) group-hover:opacity-0 motion-reduce:transition-none"
+            />
+          )}
+          {checked && (
+            <span
+              aria-hidden
+              className={cn(
+                "list-selection-glow",
+                compact && "list-selection-glow--compact",
+                compact && isClip && joinPrev && "list-selection-glow--join-prev",
+                compact && isClip && joinNext && "list-selection-glow--join-next"
+              )}
             />
           )}
           <button
@@ -1527,10 +1539,9 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
           {/* 紧缩笔记卡：操作钮显现时右端先铺同卡底色渐变垫底，钮不再悬空压字；
               剪贴流水行无实底可渐变（毛玻璃面板），维持右端元数据淡出的现状 */}
           {compact && !isClip && (
-            // token-exception: 渐变终点必须精确等于卡底色（含 --card-alpha 用户透明度），无对应 token
             <span
               aria-hidden
-              className="pointer-events-none absolute inset-y-0 right-0 w-2/5 rounded-[inherit] bg-gradient-to-l from-[rgb(255_255_255/var(--card-alpha,100%))] from-55% to-transparent opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 dark:from-[rgb(39_39_42/var(--card-alpha,100%))]"
+              className="material-card-actions pointer-events-none absolute inset-0 rounded-[inherit] opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100"
             />
           )}
           {/* 悬停操作钮：hover/键盘焦点显现（opacity 方案，Tab 可达） */}
@@ -1646,7 +1657,14 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
       </ContextMenuTrigger>
 
       <ContextMenuContent
-        className="w-44"
+        className="w-56"
+        onKeyDownCapture={(event) => {
+          if (menuPage !== "main" && event.key === "ArrowLeft") {
+            event.preventDefault();
+            event.stopPropagation();
+            setMenuPage(parentMenuPage);
+          }
+        }}
         // 「新标签…」点击后菜单关闭会把焦点归还给卡片，正好抢走刚挂载的
         // 标签输入框焦点 → onBlur 立即提交关闭（表现为浮条闪现即失）。
         // 仅在该次关闭阻止归还，让 autoFocus 的输入框保住焦点。
@@ -1657,29 +1675,66 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
           }
         }}
       >
-        {/* 多选场景优先展示合并与移动；移动仍遵循用户显隐配置。 */}
-        {mergeCount >= 2 && (
-          <ContextMenuItem onClick={() => mergeNoteWithChecked(note.id)}>
-            <Merge className="size-3.5" /> 合并笔记 ×{mergeCount}
-          </ContextMenuItem>
-        )}
-        {promotedMoveItem}
-        {mergeCount >= 2 && <ContextMenuSeparator />}
-        {/* 一级菜单按用途分组；保留设置中的组内顺序与显隐。 */}
-        {menuSections.map((group, index) => (
-          <Fragment key={group.id}>
-            {index > 0 && <ContextMenuSeparator />}
-            {group.items}
-          </Fragment>
-        ))}
-        <ContextMenuSeparator />
-        <ContextMenuItem
-          variant="destructive"
-          onClick={deleteSelfOrChecked}
-        >
-          <Trash2 className="size-3.5" /> 删除
-          {checked && checkedCount > 1 ? ` ${checkedCount} 项` : ""}
-        </ContextMenuItem>
+        <div ref={menuPageRef}>
+          {menuPage === "main" ? (
+            <>
+              {/* 多选场景优先展示合并与移动；移动仍遵循用户显隐配置。 */}
+              {mergeCount >= 2 && (
+                <ContextMenuItem onClick={() => mergeNoteWithChecked(note.id)}>
+                  <Merge className="size-3.5" /> 合并笔记 ×{mergeCount}
+                </ContextMenuItem>
+              )}
+              {promotedMoveItem}
+              {mergeCount >= 2 && <ContextMenuSeparator />}
+              {primaryMenuItems}
+              {(sendOptions.length > 0 || moreSections.length > 0) && <ContextMenuSeparator />}
+              {sendOptions.length > 0 && (
+                <CardMenuPageItem page="send" onNavigate={setMenuPage}>
+                  <Send className="size-3.5" /> 发送选项
+                  <ChevronRight className="ml-auto size-3.5" />
+                </CardMenuPageItem>
+              )}
+              {moreSections.length > 0 && (
+                <CardMenuPageItem page="more" onNavigate={setMenuPage}>
+                  <MoreHorizontal className="size-3.5" /> 更多操作
+                  <ChevronRight className="ml-auto size-3.5" />
+                </CardMenuPageItem>
+              )}
+              <ContextMenuSeparator />
+              <ContextMenuItem variant="destructive" onClick={deleteSelfOrChecked}>
+                <Trash2 className="size-3.5" /> 删除
+                {checked && checkedCount > 1 ? ` ${checkedCount} 项` : ""}
+              </ContextMenuItem>
+            </>
+          ) : (
+            <>
+              <CardMenuPageItem page={parentMenuPage} back onNavigate={setMenuPage}>
+                <ChevronLeft className="size-3.5" />
+                {menuPage === "other-templates" ? "返回发送选项" : "返回"}
+              </CardMenuPageItem>
+              <ContextMenuSeparator />
+              {menuPage === "send" ? (
+                <>
+                  <ContextMenuLabel>发送选项</ContextMenuLabel>
+                  {sendOptions.map(flattenContextMenuSubmenu)}
+                </>
+              ) : menuPage === "other-templates" ? (
+                <>
+                  <ContextMenuLabel>其他模板</ContextMenuLabel>
+                  {snippetMenu.remaining.map(renderSnippet)}
+                </>
+              ) : (
+                moreSections.map((group, index) => (
+                  <Fragment key={group.id}>
+                    {index > 0 && <ContextMenuSeparator />}
+                    <ContextMenuLabel>{group.label}</ContextMenuLabel>
+                    {group.items.map(flattenContextMenuSubmenu)}
+                  </Fragment>
+                ))
+              )}
+            </>
+          )}
+        </div>
       </ContextMenuContent>
     </ContextMenu>
   );

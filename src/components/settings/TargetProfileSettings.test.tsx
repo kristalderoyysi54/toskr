@@ -2,10 +2,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { CurrentTargetPreview } from "@/components/settings/CurrentTargetPreview";
+import { DeliveryPolicySummary } from "@/components/settings/DeliveryPolicySummary";
+import { TargetProfileManager } from "@/components/settings/TargetProfileManager";
 import { AppAssignmentPicker } from "@/components/settings/AppAssignmentPicker";
 import { ProfileEditor } from "@/components/settings/ProfileEditor";
 import { ProfileList } from "@/components/settings/ProfileList";
 import { appIdentityForCurrentBundle } from "@/components/settings/useAppIdentity";
+import { defaultSettings } from "@/store/notesStore";
 import type { TargetSnapshot } from "@/lib/tauri";
 import {
   GENERAL_PROMPT_GROUP_ID,
@@ -54,10 +57,70 @@ const target: TargetSnapshot = {
 
 describe("发送方案设置组件", () => {
   it.each([
+    ["requireRedaction", "要求逐项处理"],
+    ["confirmRaw", "提示项原文需确认"],
+    ["allowRaw", "允许原文（高风险二次确认）"],
+  ] as const)("规则摘要区分检查开关和 %s 的命中处理策略", (privacyPolicy, label) => {
+    const configured = profile("rules", { privacyPolicy });
+    const active = renderToStaticMarkup(<DeliveryPolicySummary profile={configured} privacyCapabilityActive />);
+    expect(active).toContain("发现敏感内容");
+    expect(active).toContain(label);
+    expect(active).toContain("已开启");
+    expect(active).not.toMatch(/自动脱敏|已保护|绝对安全/);
+    const disabled = renderToStaticMarkup(<DeliveryPolicySummary profile={configured} privacyCapabilityActive={false} />);
+    expect(disabled).toContain("已关闭 · 不检查");
+    expect(disabled).toContain(`${label}（检查关闭时不生效）`);
+  });
+
+  it.each(["发送方案", "默认发送方式", "粘贴后动作", "敏感内容处理"])("搜索 %s 首帧即可找到已展开的设置", (searchTarget) => {
+    const html = renderToStaticMarkup(
+      <TargetProfileManager settings={defaultSettings()} patch={vi.fn()} searchTarget={searchTarget} searchSequence={1} />
+    );
+    expect(html).toContain('id="target-profile-management"');
+    expect(html).toContain(`data-settings-search="${searchTarget}"`);
+    expect(html).toContain('data-settings-search="默认发送方式"');
+    expect(html).toContain('data-settings-search="敏感内容处理"');
+  });
+
+  it("管理默认收起，方案深链仍在首帧展开", () => {
+    const settings = defaultSettings();
+    const collapsed = renderToStaticMarkup(<TargetProfileManager settings={settings} patch={vi.fn()} />);
+    expect(collapsed).toContain("管理应用粘贴规则");
+    expect(collapsed).not.toContain('data-settings-search="默认发送方式"');
+    const linked = renderToStaticMarkup(
+      <TargetProfileManager settings={settings} patch={vi.fn()} requestedProfileId={settings.defaultTargetProfileId} requestSequence={1} />
+    );
+    expect(linked).toContain('data-settings-search="默认发送方式"');
+    expect(linked).toContain('data-settings-search="敏感内容处理"');
+  });
+
+  it("检查关闭时不把已保存隐私策略描述成正在生效的保护", () => {
+    const edited = profile("default", { privacyPolicy: "allowRaw", enterPolicy: "allow" });
+    const html = renderToStaticMarkup(
+      <ProfileEditor
+        profile={edited}
+        profiles={[edited]}
+        groups={groups}
+        snippets={snippets}
+        defaultProfileId={edited.id}
+        firewallEnabled={false}
+        currentTarget={target}
+        recentApps={[]}
+        onUpdate={vi.fn()}
+        onProfilesChange={vi.fn()}
+        onSetDefault={vi.fn()}
+      />
+    );
+    expect(html).toContain("全局隐私检查已关闭，这项规则暂不生效");
+    expect(html).toContain("隐私检查开启时，保留高风险原文不会自动按回车");
+    expect(html).toContain("隐私检查开启时，敏感内容仍需明确处理");
+  });
+
+  it.each([
     ["exact", [profile("default"), profile("otty", { name: "AI 对话", bundleIds: [target.bundleId as string] })], "已为 Otty 指定"],
     ["fallback", [profile("default", { name: "稳妥发送" })], "未识别应用的默认方案"],
     ["conflict", [profile("first", { bundleIds: [target.bundleId as string] }), profile("second", { bundleIds: [target.bundleId as string] })], "重复绑定冲突"],
-  ] as const)("当前匹配卡准确展示 %s", (_source, profiles, expectedReason) => {
+  ] as const)("当前粘贴目标卡准确展示 %s，默认规则先于匹配详情", (_source, profiles, expectedReason) => {
     const resolution = resolveTargetProfile({
       bundleId: target.bundleId,
       isTargetReady: true,
@@ -77,14 +140,18 @@ describe("发送方案设置组件", () => {
       />
     );
 
-    expect(html).toContain("当前匹配");
-    expect(html).toContain("可发送");
+    expect(html).toContain("当前粘贴目标");
+    expect(html).toContain("可粘贴");
     expect(html).toContain(expectedReason);
-    expect(html).toContain("隐私检查：尚未启用");
-    expect(html).toContain("隐私检查尚未启用 · 本次未检查");
+    expect(html).toContain("已关闭 · 不检查");
+    expect(html).toContain("检查关闭时不生效");
     expect(html).toContain('aria-label="Otty 应用图标"');
-    expect(html).toContain('aria-label="刷新（重新识别系统前台应用）"');
-    expect(html).toContain("测试当前目标");
+    expect(html).toContain('aria-label="重新识别粘贴目标"');
+    expect(html).toContain("检查规则");
+    expect(html).not.toContain("测试当前目标");
+    expect(html).toContain("应用默认规则；本次临时调整以主面板为准");
+    expect(html.split("<details")[0]).toContain("调整粘贴规则");
+    expect(html.split("<details")[0]).not.toContain("规则来源");
     expect(html).not.toMatch(/已脱敏|已保护|隐私检查：安全/);
   });
 
@@ -128,8 +195,8 @@ describe("发送方案设置组件", () => {
         onEditProfile={vi.fn()}
       />
     );
-    expect(unavailable).toContain("目标已失效");
-    expect(unavailable).toContain("发送已锁定");
+    expect(unavailable).toContain("应用已退出");
+    expect(unavailable).toContain("位置未确认前不会粘贴");
 
     const assignment = renderToStaticMarkup(
       <AppAssignmentPicker
@@ -205,12 +272,11 @@ describe("发送方案设置组件", () => {
     );
 
     const headings = [
-      "基本信息",
-      "适用应用",
-      "内容与格式",
-      "发送行为",
-      "隐私命中后处理策略",
-      "实时效果预览",
+      "粘贴格式",
+      "粘贴后动作",
+      "敏感内容处理",
+      "名称、应用与模板组",
+      "规则生效预览",
     ];
     for (let index = 1; index < headings.length; index += 1) {
       expect(html.indexOf(headings[index - 1])).toBeLessThan(html.indexOf(headings[index]));
@@ -224,12 +290,13 @@ describe("发送方案设置组件", () => {
     expect(html).toContain("自动按回车");
     expect(html).toContain("关闭面板");
     expect(html).toContain("保持打开");
-    expect(html).toContain("已启用");
-    expect(html).toContain("发送前在本机检查最终文本");
+    expect(html).toContain("隐私检查已开启");
+    expect(html).toContain("每个敏感项都需替换或明确保留");
+    expect(html).toContain("只调整“其他模板”的显示顺序，不会自动套用模板");
     expect(html).toContain("配置值");
     expect(html).toContain("测试预演值（不影响当前发送）");
     expect(html).toContain("匹配来源：仅本次手动选择");
-    expect(html).toContain("当前真实生效值");
+    expect(html).toContain("应用默认生效值");
     expect(html).toContain("匹配来源：未识别应用的默认方案");
     expect(html).toContain("发送前隐私门禁");
     expect(html).toContain("当前生效策略：要求逐项处理");
@@ -246,6 +313,16 @@ describe("发送方案设置组件", () => {
     expect(html).toContain('type="radio"');
     expect(html).toContain("sm:grid-cols-3");
     expect(html).not.toContain("overflow-x-auto");
+    const primary = html.split("<details")[0];
+    expect(primary).toContain('data-settings-search="默认发送方式"');
+    expect(primary).toContain('data-settings-search="粘贴后动作"');
+    expect(primary).toContain('data-settings-search="敏感内容处理"');
+    expect(primary).not.toMatch(/aria-label="[^"]* 方案名称"/);
+    expect(primary).not.toContain("添加当前目标应用");
+    expect(primary).not.toContain("提示词组 · 数量 · 摘要");
+    expect(primary).not.toContain("测试内容（可编辑");
+    expect(html.match(/<details\b[^>]*>/g)).toHaveLength(2);
+    expect(html).not.toMatch(/<details\b[^>]*\bopen(?:=|>)/);
   });
 
   it("无 Markdown 方案在配置、预演和当前生效轨道中保持一致", () => {
@@ -308,7 +385,7 @@ describe("发送方案设置组件", () => {
         onEditProfile={vi.fn()}
       />
     );
-    expect(currentTarget).toContain("输出格式：无 Markdown");
+    expect(currentTarget).toMatch(/粘贴格式<\/dt><dd[^>]*>无 Markdown/);
   });
 
   it("提示词组被删除时同时展示原配置缺失与 resolver 的安全回退", () => {
@@ -335,7 +412,7 @@ describe("发送方案设置组件", () => {
     expect(html).toContain("当前生效：通用");
   });
 
-  it("当前真实生效值不把编辑预演冒充为 fallback，并展示安全收紧", () => {
+  it("应用默认生效值不把编辑预演冒充为 fallback，并展示安全收紧", () => {
     const riskyDefault = profile("default", {
       name: "高风险默认",
       enterPolicy: "allow",
@@ -356,12 +433,12 @@ describe("发送方案设置组件", () => {
     );
 
     expect(html).toMatch(
-      /测试预演值（不影响当前发送）[\s\S]*粘贴后动作：自动按回车 · 高风险[\s\S]*当前真实生效值[\s\S]*粘贴后动作：从不按回车/
+      /测试预演值（不影响当前发送）[\s\S]*粘贴后动作：自动按回车 · 高风险[\s\S]*应用默认生效值[\s\S]*粘贴后动作：从不按回车/
     );
     expect(html).toContain("默认回退已收紧为从不按回车");
   });
 
-  it("当前真实生效值保留历史冲突来源，不被编辑预演遮蔽", () => {
+  it("应用默认生效值保留历史冲突来源，不被编辑预演遮蔽", () => {
     const first = profile("first", { bundleIds: [target.bundleId as string] });
     const second = profile("second", { bundleIds: [target.bundleId as string] });
     const html = renderToStaticMarkup(
@@ -380,7 +457,7 @@ describe("发送方案设置组件", () => {
     );
 
     expect(html).toMatch(
-      /当前真实生效值[\s\S]*匹配来源：重复绑定冲突/
+      /应用默认生效值[\s\S]*匹配来源：重复绑定冲突/
     );
   });
 

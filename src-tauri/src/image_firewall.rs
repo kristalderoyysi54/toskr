@@ -192,6 +192,10 @@ pub(crate) fn cache_key(pixel_hash: &str) -> String {
     format!("{pixel_hash}:v{FIREWALL_RULE_VERSION}")
 }
 
+fn cache_key_with_rules(pixel_hash: &str, rules: &crate::privacy::CustomSensitiveRules) -> String {
+    format!("{}:{}", cache_key(pixel_hash), rules.fields.join("|"))
+}
+
 fn transient_root(app: &AppHandle) -> PathBuf {
     crate::storage::app_data_dir(app).join(TRANSIENT_DIR)
 }
@@ -426,8 +430,12 @@ pub(crate) fn normalize_observation_text(text: &str) -> (String, Vec<u32>) {
 pub(crate) fn scan_observation_text(
     text: &str,
 ) -> Vec<(crate::privacy::FirewallFinding, (usize, usize))> {
+    scan_observation_text_with_rules(text, &crate::privacy::CustomSensitiveRules::default())
+}
+
+fn scan_observation_text_with_rules(text: &str, rules: &crate::privacy::CustomSensitiveRules) -> Vec<ObservationFinding> {
     let (normalized, map) = normalize_observation_text(text);
-    crate::privacy::scan_sensitive_text(ScanSensitiveRequest { text: normalized })
+    crate::privacy::scan_sensitive_text_with_rules(ScanSensitiveRequest { text: normalized }, rules)
         .findings
         .into_iter()
         .filter_map(|finding| {
@@ -441,6 +449,82 @@ pub(crate) fn scan_observation_text(
         .collect()
 }
 
+type ObservationFinding = (crate::privacy::FirewallFinding, (usize, usize));
+
+/// 仅关联同一行标签右侧最近的 OCR 块；保留值块自身的 UTF-16 坐标。
+#[cfg(test)]
+fn scan_image_observations(observations: &[crate::ocr::RecognizedObservation]) -> Vec<Vec<ObservationFinding>> {
+    scan_image_observations_with_rules(observations, &crate::privacy::CustomSensitiveRules::default())
+}
+
+fn scan_image_observations_with_rules(
+    observations: &[crate::ocr::RecognizedObservation],
+    rules: &crate::privacy::CustomSensitiveRules,
+) -> Vec<Vec<ObservationFinding>> {
+    let mut matches: Vec<_> = observations
+        .iter()
+        .map(|observation| scan_observation_text_with_rules(&observation.text, rules))
+        .collect();
+    const PROBE: &str = "aB3dE5fG7hJ9kL2m";
+    for label in observations {
+        let label_text = label
+            .text
+            .trim()
+            .trim_end_matches([':', '：', '='])
+            .trim_end();
+        let prefix = format!("{label_text}=");
+        let prefix_len = prefix.encode_utf16().count();
+        // 标签是否合法由文本扫描器统一判定，不另维护一份字段名规则。
+        if !scan_observation_text_with_rules(&format!("{prefix}{PROBE}"), rules)
+            .iter()
+            .any(|(finding, range)| {
+                finding.category == FindingCategory::ApiKey
+                    && *range == (prefix_len, prefix_len + PROBE.len())
+            })
+        {
+            continue;
+        }
+        let (lx, ly, lw, lh) = label.vision_box;
+        // 短标签到固定值列的空白较宽，按行高放宽，但不跨越远处表格列。
+        let max_gap = (lh * 6.0).clamp(0.25, 0.35);
+        let nearest = observations
+            .iter()
+            .enumerate()
+            .filter(|(_, value)| {
+                let (x, y, _, h) = value.vision_box;
+                let overlap = (ly + lh).min(y + h) - ly.max(y);
+                lh > 0.0
+                    && h > 0.0
+                    && x >= lx + lw
+                    && x - (lx + lw) <= max_gap
+                    && overlap >= lh.min(h) * 0.6
+                    && ((ly + lh / 2.0) - (y + h / 2.0)).abs() <= lh.max(h) * 0.35
+            })
+            .min_by(|(_, left), (_, right)| left.vision_box.0.total_cmp(&right.vision_box.0));
+        let Some((index, value)) = nearest else {
+            continue;
+        };
+        for (mut finding, (start, end)) in scan_observation_text_with_rules(&format!("{prefix}{}", value.text), rules)
+        {
+            if finding.category != FindingCategory::ApiKey || start < prefix_len {
+                continue;
+            }
+            let range = (start - prefix_len, end - prefix_len);
+            if matches[index]
+                .iter()
+                .any(|(_, existing)| range.0 < existing.1 && range.1 > existing.0)
+            {
+                continue;
+            }
+            finding.start_utf16 = range.0;
+            finding.end_utf16 = range.1;
+            matches[index].push((finding, range));
+        }
+    }
+    matches
+}
+
+#[cfg(test)]
 pub(crate) fn findings_for_observation(
     observation_index: usize,
     text: &str,
@@ -448,7 +532,23 @@ pub(crate) fn findings_for_observation(
     pixel_box: PixelBox,
     refine: impl Fn(usize, usize) -> Option<(NormalizedBox, PixelBox)>,
 ) -> Vec<ImageFirewallFinding> {
-    scan_observation_text(text)
+    findings_for_scanned_observation(
+        observation_index,
+        scan_observation_text(text),
+        bounding_box,
+        pixel_box,
+        refine,
+    )
+}
+
+fn findings_for_scanned_observation(
+    observation_index: usize,
+    findings: Vec<ObservationFinding>,
+    bounding_box: NormalizedBox,
+    pixel_box: PixelBox,
+    refine: impl Fn(usize, usize) -> Option<(NormalizedBox, PixelBox)>,
+) -> Vec<ImageFirewallFinding> {
+    findings
         .into_iter()
         .map(|(finding, (start, end))| {
             // 字符级子框优先；Vision 拒绝该范围（或无句柄）时回退整条 observation 框。
@@ -473,6 +573,7 @@ fn scan_uncached(
     bytes: &[u8],
     original: &RgbaImage,
     source_pixel_hash: String,
+    rules: &crate::privacy::CustomSensitiveRules,
 ) -> Result<ScanImageFirewallResult, String> {
     let width = original.width();
     let height = original.height();
@@ -482,13 +583,16 @@ fn scan_uncached(
     }
     let mut observations = Vec::with_capacity(recognized.len());
     let mut findings = Vec::new();
-    for (observation_index, recognized) in recognized.into_iter().enumerate() {
+    let scanned = scan_image_observations_with_rules(&recognized, rules);
+    for (observation_index, (recognized, matches)) in
+        recognized.into_iter().zip(scanned).enumerate()
+    {
         let (x, y, box_width, box_height) = recognized.vision_box;
         let bounding_box = vision_box_to_top_left(x, y, box_width, box_height);
         let pixel_box = normalized_to_pixels(bounding_box, width, height, MASK_PADDING_PX);
-        findings.extend(findings_for_observation(
+        findings.extend(findings_for_scanned_observation(
             observation_index,
-            &recognized.text,
+            matches,
             bounding_box,
             pixel_box,
             |start, end| {
@@ -534,19 +638,20 @@ pub(crate) fn scan_fixture_bytes(
     bytes: &[u8],
 ) -> Result<ScanImageFirewallResult, String> {
     let original = decode_image(bytes)?;
-    scan_uncached(file, bytes, &original, pixel_hash(&original))
+    scan_uncached(file, bytes, &original, pixel_hash(&original), &crate::privacy::CustomSensitiveRules::default())
 }
 
 pub fn scan(app: &AppHandle, file: &str, force: bool) -> Result<ScanImageFirewallResult, String> {
     let bytes = crate::storage::read_image_bytes(app, file).ok_or("图片不存在或不可读取")?;
     let original = decode_image(&bytes)?;
     let pixel_hash = pixel_hash(&original);
-    let key = cache_key(&pixel_hash);
+    let rules = crate::privacy::load_custom_rules(app)?;
+    let key = cache_key_with_rules(&pixel_hash, &rules);
     if let Some(result) = cached_scan_for_request(&key, file, force) {
         return Ok(result);
     }
     let started = Instant::now();
-    let result = scan_uncached(file, &bytes, &original, pixel_hash)?;
+    let result = scan_uncached(file, &bytes, &original, pixel_hash, &rules)?;
     crate::diag::push(app, diagnostic_summary(&result, started.elapsed()));
     store_scan(key, &result);
     Ok(result)
@@ -993,6 +1098,148 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "设置 TOSKR_SYNTHETIC_CREDENTIAL_FIXTURE 后运行原生 Vision 门禁"]
+    fn synthetic_credential_fixture_detects_every_value_with_value_geometry() {
+        let path = std::env::var("TOSKR_SYNTHETIC_CREDENTIAL_FIXTURE")
+            .expect("缺少 synthetic credential fixture 路径");
+        let bytes = std::fs::read(path).expect("读取 synthetic fixture 失败");
+        let result = scan_fixture_bytes("synthetic-credentials.png", &bytes)
+            .expect("图片隐私检查失败");
+        let recognized = crate::ocr::recognize_observations(&bytes).expect("Vision 复核失败");
+        for value in [
+            "FakeAppSecret12345", "FakeSandboxKey12345", "FakeLiveKey12345",
+            "FakeEncodingKey12345", "FakeToken12345",
+        ] {
+            let (index, observation, start) = recognized.iter().enumerate().find_map(|(index, observation)| {
+                observation.text.find(value).map(|start| (index, observation, start))
+            }).unwrap_or_else(|| panic!("合成凭据值 {value} 未被 OCR 完整识别"));
+            let start_utf16 = observation.text[..start].encode_utf16().count();
+            let (x, y, w, h) = observation.char_range_box(start_utf16, start_utf16 + value.len())
+                .expect("合成凭据字符框不可用");
+            let expected = normalized_to_pixels(vision_box_to_top_left(x, y, w, h), result.image_width, result.image_height, MASK_PADDING_PX);
+            assert!(result.findings.iter().any(|finding| finding.observation_index == index
+                && finding.severity == FindingSeverity::Block
+                && finding.pixel_box == expected), "合成凭据 {value} 缺少精确值区域命中");
+        }
+        let original = decode_image(&bytes).expect("合成图片解码失败");
+        let regions: Vec<_> = result.findings.iter()
+            .filter(|finding| finding.severity == FindingSeverity::Block)
+            .map(|finding| finding.pixel_box).collect();
+        let redacted = solid_redacted_copy(&original, &regions);
+        let mut png = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(redacted).write_to(&mut png, image::ImageFormat::Png)
+            .expect("合成遮挡副本编码失败");
+        let residual = crate::ocr::recognize_observations(png.get_ref()).expect("遮挡后 Vision 复核失败");
+        let residual_text = residual.iter().map(|item| item.text.as_str()).collect::<Vec<_>>().join("\n");
+        for value in ["FakeAppSecret12345", "FakeSandboxKey12345", "FakeLiveKey12345", "FakeEncodingKey12345", "FakeToken12345"] {
+            assert!(!residual_text.contains(value), "合成值 {value} 遮挡后仍可识别");
+        }
+        assert!(residual_text.contains("wxSyntheticOnly012345"), "普通 AppID 应完整保留");
+        if let Ok(path) = std::env::var("TOSKR_SYNTHETIC_REDACTED_OUTPUT") {
+            std::fs::write(path, png.get_ref()).expect("合成遮挡副本写入失败");
+        }
+    }
+
+    #[test]
+    fn same_row_credential_labels_map_to_value_block_ranges_and_boxes() {
+        for label in [
+            "AppSecret(小程序密钥)",
+            "业务 AppKey：",
+            "EncodingAESKey",
+            "token",
+        ] {
+            let observations = vec![
+                crate::ocr::RecognizedObservation::synthetic(label, 1.0, (0.05, 0.8, 0.3, 0.04)),
+                crate::ocr::RecognizedObservation::synthetic(
+                    "  abCD1234efGH5678  复制",
+                    1.0,
+                    (0.4, 0.8, 0.4, 0.04),
+                ),
+            ];
+            let mut matches = scan_image_observations(&observations);
+            assert!(matches[0].is_empty(), "标签不应成为遮挡区");
+            assert_eq!(matches[1].len(), 1, "{label}");
+            assert_eq!(matches[1][0].1, (2, 18));
+            let bounds = NormalizedBox {
+                x: 0.4,
+                y: 0.16,
+                width: 0.4,
+                height: 0.04,
+            };
+            let pixels = normalized_to_pixels(bounds, 1000, 1000, MASK_PADDING_PX);
+            let findings = findings_for_scanned_observation(
+                1,
+                matches.remove(1),
+                bounds,
+                pixels,
+                |start, end| {
+                    // 范围属于值块，不能包含前置合成标签长度；原生 char_range_box 可直接消费。
+                    assert_eq!((start, end), (2, 18));
+                    Some((bounds, pixels))
+                },
+            );
+            assert_eq!(findings[0].observation_index, 1);
+            assert_eq!(findings[0].pixel_box, pixels);
+        }
+    }
+
+    #[test]
+    fn short_credential_label_reaches_the_same_row_value_column() {
+        let observations = vec![
+            crate::ocr::RecognizedObservation::synthetic("token：", 1.0, (0.025, 0.4, 0.082, 0.052)),
+            crate::ocr::RecognizedObservation::synthetic("FakeToken12345", 1.0, (0.358, 0.4, 0.187, 0.046)),
+        ];
+        let matches = scan_image_observations(&observations);
+        assert_eq!(matches[1].len(), 1);
+        assert_eq!(matches[1][0].1, (0, "FakeToken12345".len()));
+    }
+
+    #[test]
+    fn credential_block_linking_rejects_other_rows_ids_and_intervening_text() {
+        for (label, value_box) in [
+            ("AppSecret", (0.4, 0.7, 0.4, 0.04)),
+            ("AppID", (0.4, 0.8, 0.4, 0.04)),
+            ("AppSecret", (0.75, 0.8, 0.2, 0.04)),
+        ] {
+            let observations = vec![
+                crate::ocr::RecognizedObservation::synthetic(label, 1.0, (0.05, 0.8, 0.3, 0.04)),
+                crate::ocr::RecognizedObservation::synthetic("abCD1234efGH5678", 1.0, value_box),
+            ];
+            assert!(scan_image_observations(&observations)
+                .iter()
+                .all(Vec::is_empty));
+        }
+        let observations = vec![
+            crate::ocr::RecognizedObservation::synthetic("AppSecret", 1.0, (0.05, 0.8, 0.15, 0.04)),
+            crate::ocr::RecognizedObservation::synthetic("未设置", 1.0, (0.22, 0.8, 0.06, 0.04)),
+            crate::ocr::RecognizedObservation::synthetic(
+                "abCD1234efGH5678",
+                1.0,
+                (0.3, 0.8, 0.4, 0.04),
+            ),
+        ];
+        assert!(scan_image_observations(&observations)
+            .iter()
+            .all(Vec::is_empty));
+    }
+
+    #[test]
+    fn credential_block_linking_does_not_duplicate_existing_provider_match() {
+        let observations = vec![
+            crate::ocr::RecognizedObservation::synthetic("AppSecret", 1.0, (0.05, 0.8, 0.3, 0.04)),
+            crate::ocr::RecognizedObservation::synthetic(
+                "ghp_abcdefghijklmnopqrstuvwxyz1234567890",
+                1.0,
+                (0.4, 0.8, 0.4, 0.04),
+            ),
+        ];
+        let direct = scan_observation_text(&observations[1].text);
+        assert!(!direct.is_empty());
+        let matches = scan_image_observations(&observations);
+        assert_eq!(matches[1].len(), direct.len());
+    }
+
+    #[test]
     fn multiline_observations_keep_independent_boxes_and_severity() {
         let first_box = NormalizedBox {
             x: 0.1,
@@ -1145,6 +1392,22 @@ mod tests {
         let (normalized, map) = normalize_observation_text("x=1");
         assert_eq!(normalized, "x=1");
         assert_eq!(map, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn custom_fields_apply_to_ocr_columns_and_invalidate_cached_results() {
+        let rules = crate::privacy::CustomSensitiveRules::new(vec!["内部编号".into()]).unwrap();
+        let observations = vec![
+            crate::ocr::RecognizedObservation::synthetic("内部编号", 1.0, (0.05, 0.8, 0.3, 0.04)),
+            crate::ocr::RecognizedObservation::synthetic("甲", 1.0, (0.4, 0.8, 0.2, 0.04)),
+        ];
+        assert!(scan_image_observations(&observations).iter().all(Vec::is_empty));
+        let matches = scan_image_observations_with_rules(&observations, &rules);
+        assert!(matches[0].is_empty());
+        assert_eq!(matches[1].len(), 1);
+        assert_eq!(matches[1][0].0.rule_id, "token.custom_sensitive_field");
+        assert_eq!(matches[1][0].1, (0, 1));
+        assert_ne!(cache_key_with_rules("same", &rules), cache_key_with_rules("same", &crate::privacy::CustomSensitiveRules::default()));
     }
 
     #[test]

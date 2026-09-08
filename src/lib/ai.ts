@@ -355,7 +355,7 @@ export async function splitSubtasks(taskId: string): Promise<void> {
     const task = useNotesStore.getState().tasks.find((t) => t.id === taskId);
     if (!task) return;
     if (!aiReady(useNotesStore.getState().settings)) {
-      tip("info", "请先在 设置 → AI 智能 中配置并启用");
+      tip("info", "请先在 设置 → 更多功能 → AI 智能 中配置并启用");
       return;
     }
     tip("info", "AI 正在拆解子任务…");
@@ -399,7 +399,7 @@ export async function noteToTaskSmart(noteId: string): Promise<void> {
     const note = useNotesStore.getState().notes.find((n) => n.id === noteId);
     if (!note || note.kind === "image") return;
     if (!aiReady(useNotesStore.getState().settings)) {
-      tip("info", "请先在 设置 → AI 智能 中配置并启用");
+      tip("info", "请先在 设置 → 更多功能 → AI 智能 中配置并启用");
       return;
     }
     tip("info", "AI 正在提炼任务…");
@@ -443,7 +443,7 @@ export async function suggestTitle(noteId: string): Promise<void> {
     const note = useNotesStore.getState().notes.find((n) => n.id === noteId);
     if (!note || note.kind === "image") return;
     if (!aiReady(useNotesStore.getState().settings)) {
-      tip("info", "请先在 设置 → AI 智能 中配置并启用");
+      tip("info", "请先在 设置 → 更多功能 → AI 智能 中配置并启用");
       return;
     }
     tip("info", "AI 正在起标题…");

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   AlarmClock,
   Check,
@@ -7,6 +8,7 @@ import {
   Crosshair,
   Hourglass,
   ListTodo,
+  MoreHorizontal,
   NotebookPen,
   RotateCcw,
   Sparkles,
@@ -414,7 +416,7 @@ function emptyTitle(filter: Filter): string {
 /** 个人触达信号（@我/特别关注）比规则命中更值得一眼看到。 */
 const STRONG_REASONS = new Set(["@我", "特别关注"]);
 
-function MessageCard({
+export function MessageCard({
   message,
   reasons,
   busy,
@@ -438,6 +440,18 @@ function MessageCard({
   const [expanded, setExpanded] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const [remindOpen, setRemindOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  useEffect(() => {
+    if (!moreOpen) return;
+    const unlisten = getCurrentWebviewWindow().onFocusChanged(
+      ({ payload: focused }) => {
+        if (!focused) setMoreOpen(false);
+      }
+    );
+    return () => {
+      void unlisten.then((stop) => stop()).catch(() => {});
+    };
+  }, [moreOpen]);
   const body = message.text || `[${message.messageType || "非文本消息"}]`;
   const sender = message.senderName || message.senderUid || "未知发送者";
   const conversation = message.conversationName || message.conversationId;
@@ -468,6 +482,13 @@ function MessageCard({
     setPendingUndo(() => useNotesStore.getState().setMessageStatus(message.id, prev));
     tip("ok", "已标记处理", true);
   };
+  const remove = () => {
+    const snapshot = useNotesStore.getState().messages.find((item) => item.id === message.id);
+    if (!snapshot) return;
+    useNotesStore.getState().removeMessages([message.id]);
+    setPendingUndo(() => useNotesStore.getState().restoreMessages([snapshot]));
+    tip("ok", "已删除这条消息", true);
+  };
   return (
     <article
       data-checked={checked || undefined}
@@ -482,15 +503,15 @@ function MessageCard({
         // 偶发丢 SVG <path>（操作图标只剩空圆，滚出滚回经历一次 skipped→揭示
         // 循环才画全，2026-08-27 实机复现）。消息列表已有 WindowedListItem
         // 卸载远处卡片，去掉 c-v 只损失屏外缓冲区的跳绘，换首帧图标必定完整
-        // 与剪贴/笔记卡同款选中语言：ring 光环 + 抬升（不用 border，不挤内容）
-        checked && "ring-2 ring-primary/70 elevation-2",
+        // 与剪贴/笔记卡共用内侧柔光，保持内容尺寸不变。
+        checked && "elevation-2",
         strip && "flex h-full w-72 shrink-0 flex-col"
       )}
     >
       {checked && (
         <span
           aria-hidden
-          className="pointer-events-none absolute inset-0 rounded-[inherit] bg-primary/[0.1] dark:bg-primary/[0.16]"
+          className="list-selection-glow"
         />
       )}
       <div className="flex items-center gap-1.5">
@@ -609,45 +630,39 @@ function MessageCard({
       )}
       </div>
 
-      {/* 悬停操作组：与笔记卡同语言（hover/键盘焦点显现；opacity 方案保 Tab 可达）。
-          提醒弹层是 portal（焦点/hover 都不在卡内），开着时强制显形防触发钮凭空消失。 */}
+      {/* 卡面仅保留处理、提醒与更多；菜单展开时保持触发按钮可见。 */}
       <div
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => event.stopPropagation()}
         className={cn(
           "absolute bottom-1.5 right-1.5 flex gap-0.5",
           "pointer-events-none opacity-0 transition-opacity duration-(--duration-control) motion-reduce:transition-none",
           "group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100",
-          (busy || remindOpen) && "pointer-events-auto opacity-100"
+          (busy || remindOpen || moreOpen) && "pointer-events-auto opacity-100"
         )}
       >
-        <IconButton
-          label="在IM中定位该群（滚动会话列表并高亮；不打开会话）"
-          size="xs"
-          surface
-          onClick={() =>
-            void api
-              .locateMessageSource(overlay)
-              .catch((error) => tip("warn", String(error).slice(0, 60) || "定位失败"))
-          }
-        >
-          <Crosshair />
-        </IconButton>
-        <IconButton
-          label={busy ? "AI 草稿生成中…" : "生成 AI 回复草稿（仅保存，不自动发送）"}
-          size="xs"
-          surface
-          disabled={busy}
-          onClick={onDraft}
-        >
-          <Sparkles className={cn(busy && "animate-pulse")} />
-        </IconButton>
-        <IconButton label="转为任务" size="xs" surface onClick={() => convert("task")}>
-          <ListTodo />
-        </IconButton>
+        {done ? (
+          <IconButton
+            label="恢复为待处理"
+            size="xs"
+            surface
+            onClick={() => {
+              useNotesStore.getState().setMessageStatus(message.id, "new");
+              tip("ok", "已恢复为待处理");
+            }}
+          >
+            <RotateCcw />
+          </IconButton>
+        ) : (
+          <IconButton label="标记已处理" size="xs" surface onClick={markDone}>
+            <Check />
+          </IconButton>
+        )}
         {/* Radix Popover（portal + 自动避让）：卡片在列表顶/底时 SimpleMenu 的
             inline 弹层会被 ScrollArea 视口裁剪，portal 弹层不受任何祖先 overflow 影响 */}
         <Popover open={remindOpen} onOpenChange={setRemindOpen}>
           <PopoverTrigger asChild>
-            <IconButton label="创建提醒" size="xs" surface>
+            <IconButton label="提醒我" size="xs" surface>
               <AlarmClock />
             </IconButton>
           </PopoverTrigger>
@@ -672,49 +687,84 @@ function MessageCard({
             ))}
           </PopoverContent>
         </Popover>
-        {message.status !== "waiting" && (
-          <IconButton label="转入等待回复" size="xs" surface onClick={() => convert("waiting")}>
-            <Hourglass />
-          </IconButton>
-        )}
-        {done ? (
-          <>
+        <Popover open={moreOpen} onOpenChange={setMoreOpen}>
+          <PopoverTrigger asChild>
             <IconButton
-              label="恢复为待处理"
+              label="更多消息操作"
               size="xs"
               surface
+            >
+              <MoreHorizontal />
+            </IconButton>
+          </PopoverTrigger>
+          <PopoverContent
+            align="end"
+            side="top"
+            aria-label="更多消息操作"
+            className="slim-scroll max-h-[var(--radix-popover-content-available-height)] w-52 gap-0 overflow-y-auto p-1.5"
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => event.stopPropagation()}
+          >
+            <p className="px-2 py-1 text-micro font-medium text-muted-foreground">更多消息操作</p>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full justify-start"
+              title="滚动并高亮 IM 会话列表中的来源，不打开会话"
               onClick={() => {
-                useNotesStore.getState().setMessageStatus(message.id, "new");
-                tip("ok", "已恢复为待处理");
+                setMoreOpen(false);
+                void api.locateMessageSource(overlay)
+                  .catch((error) => tip("warn", String(error).slice(0, 60) || "定位失败"));
               }}
             >
-              <RotateCcw />
-            </IconButton>
-            <IconButton
-              label="删除这条消息（原始账本不受影响）"
-              size="xs"
-              surface
-              tone="danger"
-              onClick={() => {
-                const snapshot = useNotesStore
-                  .getState()
-                  .messages.find((item) => item.id === message.id);
-                if (!snapshot) return;
-                useNotesStore.getState().removeMessages([message.id]);
-                setPendingUndo(() =>
-                  useNotesStore.getState().restoreMessages([snapshot])
-                );
-                tip("ok", "已删除这条消息", true);
-              }}
+              <Crosshair data-icon="inline-start" />定位原会话
+            </Button>
+            <div role="separator" className="my-1 h-px bg-border" />
+            {message.status !== "waiting" && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full justify-start"
+                onClick={() => { setMoreOpen(false); convert("waiting"); }}
+              >
+                <Hourglass data-icon="inline-start" />等待回复
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full justify-start"
+              onClick={() => { setMoreOpen(false); convert("task"); }}
             >
-              <Trash2 />
-            </IconButton>
-          </>
-        ) : (
-          <IconButton label="标记已处理" size="xs" surface onClick={markDone}>
-            <Check />
-          </IconButton>
-        )}
+              <ListTodo data-icon="inline-start" />转为任务
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full justify-start"
+              title="仅保存回复草稿，不自动发送"
+              disabled={busy}
+              onClick={() => { setMoreOpen(false); onDraft(); }}
+            >
+              <Sparkles data-icon="inline-start" className={cn(busy && "animate-pulse")} />
+              {busy ? "AI 草稿生成中…" : "生成 AI 回复草稿"}
+            </Button>
+            {done && (
+              <>
+                <div role="separator" className="my-1 h-px bg-border" />
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  className="w-full justify-start"
+                  title="原始账本不受影响"
+                  onClick={() => { setMoreOpen(false); remove(); }}
+                >
+                  <Trash2 data-icon="inline-start" />删除消息
+                </Button>
+              </>
+            )}
+          </PopoverContent>
+        </Popover>
       </div>
     </article>
   );

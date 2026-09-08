@@ -1,32 +1,84 @@
-import { describe, expect, it } from "vitest";
+import { createElement, type ButtonHTMLAttributes } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  WELCOME_TOUR_COPY,
-  welcomeTourExitEvent,
-} from "@/lib/welcomeTour";
+import { welcomeTourExitEvent } from "@/lib/welcomeTour";
+import { WelcomeTour } from "./WelcomeTour";
+
+const controls = vi.hoisted(() => ({
+  buttons: new Map<string, () => void>(),
+  setSettings: vi.fn(),
+  transitionOnboarding: vi.fn(),
+  setContentSubview: vi.fn(),
+  setPage: vi.fn(),
+}));
+
+vi.mock("@/components/ui/button", () => ({
+  Button: ({ variant: _variant, size: _size, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & {
+    variant?: string;
+    size?: string;
+  }) => {
+    if (typeof props.children === "string" && props.onClick) {
+      controls.buttons.set(props.children, props.onClick as () => void);
+    }
+    return createElement("button", props);
+  },
+}));
+
+vi.mock("@/store/notesStore", () => ({
+  useNotesStore: { getState: () => controls },
+}));
+
+vi.mock("@/store/uiStore", () => ({
+  useUIStore: { getState: () => controls },
+}));
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  controls.buttons.clear();
+});
 
 describe("新手导览", () => {
-  it("用四屏先解释产品，再说明收集、粘贴和隐私", () => {
-    expect(WELCOME_TOUR_COPY).toHaveLength(4);
-    expect(WELCOME_TOUR_COPY.map((page) => page.title)).toEqual([
-      "AI 消息中转站",
-      "从其他应用收集内容",
-      "整理后粘贴到目标",
-      "粘贴前检查隐私",
-    ]);
-    expect(WELCOME_TOUR_COPY[0]?.body).toContain("当前 AI 输入框");
-    expect(WELCOME_TOUR_COPY[2]?.body).toContain("默认不按回车");
-    expect(WELCOME_TOUR_COPY[3]?.body).toContain("原图不变");
-    expect(WELCOME_TOUR_COPY[3]?.body).toContain("人脸和二维码不在检查范围");
+  it("在第一页说明一次完整操作，并直接提供尝试和使用入口", () => {
+    const html = renderToStaticMarkup(createElement(WelcomeTour));
 
-    const copy = WELCOME_TOUR_COPY
-      .map((page) => `${page.mini}${page.title}${page.body}`)
-      .join(" ");
-    expect(copy).not.toMatch(/消息监听|秘文|订阅|可逆化名/);
+    expect(html).toContain("AI 消息中转站");
+    expect(html).toContain("选中一句话");
+    expect(html).toContain("收成一张卡片");
+    expect(html).toContain("粘贴到 AI 输入框");
+    expect(html).toContain("周五前完成首页设计稿。");
+    expect(html).toContain("设置 → 帮助与更新");
+    expect([...controls.buttons.keys()]).toEqual([
+      "试着收一条内容",
+      "直接开始使用",
+    ]);
+    expect(html).not.toMatch(/下一页|上一页|OCR|IP|脱敏|演练|事件流/);
+    expect(controls.setSettings).not.toHaveBeenCalled();
+    expect(controls.transitionOnboarding).not.toHaveBeenCalled();
   });
 
-  it("开始使用不改演练状态，只有示例按钮才启动", () => {
+  it("直接开始使用只记住导览已看，不强制启动教程或切换所在页面", () => {
+    renderToStaticMarkup(createElement(WelcomeTour));
+    controls.buttons.get("直接开始使用")!();
+
+    expect(controls.setSettings).toHaveBeenCalledExactlyOnceWith({ welcomeTourSeen: true });
+    expect(controls.transitionOnboarding).not.toHaveBeenCalled();
+    expect(controls.setContentSubview).not.toHaveBeenCalled();
+    expect(controls.setPage).not.toHaveBeenCalled();
     expect(welcomeTourExitEvent("use-now")).toBeNull();
-    expect(welcomeTourExitEvent("rehearse")).toEqual({ type: "start" });
+  });
+
+  it("尝试收集前切到内容笔记页，让当前教程可见，再启动真实操作", () => {
+    renderToStaticMarkup(createElement(WelcomeTour));
+    controls.buttons.get("试着收一条内容")!();
+
+    expect(controls.setContentSubview).toHaveBeenCalledExactlyOnceWith("notes");
+    expect(controls.setPage).toHaveBeenCalledExactlyOnceWith("notes");
+    expect(controls.setSettings).toHaveBeenCalledExactlyOnceWith({ welcomeTourSeen: true });
+    expect(controls.transitionOnboarding).toHaveBeenCalledExactlyOnceWith({ type: "start" });
+    expect(controls.setContentSubview.mock.invocationCallOrder[0])
+      .toBeLessThan(controls.setPage.mock.invocationCallOrder[0]);
+    expect(controls.setPage.mock.invocationCallOrder[0])
+      .toBeLessThan(controls.transitionOnboarding.mock.invocationCallOrder[0]);
   });
 });

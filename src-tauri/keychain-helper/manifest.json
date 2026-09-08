@@ -1,0 +1,14 @@
+{
+  "protocol": 1,
+  "identifier": "com.toskr.keychain-helper",
+  "certificateSha1": "6e960d8b61e1fc9c534e41cb812803d07e85e87b",
+  "sha256": "f71e75fac21ae2bfc831451c433a6ec883077def01ba2dbc8c3d8d4fd60c4fa6",
+  "cdhash": {
+    "arm64": "5008368f7af34fde0f4ca7d5277eecb4a5218ef0",
+    "x86_64": "3ef817d1670e8e9d27175545ccfc48e0794e1f88"
+  },
+  "sources": {
+    "main.m": "07fea37ba7e6a85690c6040f48eb7594a43a963724a8df72649c3f798e024117",
+    "config.h": "6532cabf48cf944baed95126f8826f9ee9b8311150ab4092e6fe2c77c9c7c053"
+  }
+}

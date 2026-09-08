@@ -333,10 +333,11 @@ pub async fn scan_sensitive_text(
     request: crate::privacy::ScanSensitiveRequest,
 ) -> Result<crate::privacy::ScanSensitiveResult, String> {
     let started = std::time::Instant::now();
-    let result =
-        tauri::async_runtime::spawn_blocking(move || crate::privacy::scan_sensitive_text(request))
-            .await
-            .map_err(|error| format!("本地隐私扫描任务失败：{error}"))?;
+    let worker_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let rules = crate::privacy::load_custom_rules(&worker_app)?;
+        Ok::<_, String>(crate::privacy::scan_sensitive_text_with_rules(request, &rules))
+    }).await.map_err(|error| format!("本地隐私扫描任务失败：{error}"))??;
     crate::diag::push(
         &app,
         crate::privacy::diagnostic_summary(&result, started.elapsed()),
@@ -1110,10 +1111,9 @@ fn apply_vibrancy_material(window: &tauri::WebviewWindow, enabled: bool, materia
         return;
     }
     let mat = match material {
-        "popover" => NSVisualEffectMaterial::Popover,
-        "sidebar" => NSVisualEffectMaterial::Sidebar,
+        // 与前端三档样式一致：旧值按设置页一直显示的档位兼容。
+        "popover" | "sidebar" => NSVisualEffectMaterial::Sidebar,
         "under-window" => NSVisualEffectMaterial::UnderWindowBackground,
-        "fullscreen" => NSVisualEffectMaterial::FullScreenUI,
         _ => NSVisualEffectMaterial::HudWindow,
     };
     // 切材质需先清除旧的效果视图，否则会叠加。
@@ -1462,6 +1462,19 @@ pub async fn export_notes_bundle(
     .map_err(|error| {
         crate::note_export::NoteExportFailure::io(format!("后台笔记导出任务失败：{error}"))
     })?
+}
+
+/// 只保存模板与其分组；不读取笔记、完整设置或发送接口。
+#[tauri::command]
+pub async fn export_prompt_templates(
+    path: String,
+    payload: crate::prompt_export::PromptTemplatesExport,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::prompt_export::export_prompt_templates(std::path::Path::new(&path), payload)
+    })
+    .await
+    .map_err(|error| format!("后台模板导出任务失败：{error}"))?
 }
 
 #[tauri::command]

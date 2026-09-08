@@ -1,5 +1,5 @@
 import { ChevronDown, FileDown, Inbox, Merge, Send, Tag, Trash2, X } from "lucide-react";
-import { useMemo } from "react";
+import { useId, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -49,6 +49,8 @@ import {
 
 /** 勾选 ≥1 条时出现的批量操作条。 */
 export function SelectionBar({ compact = false }: { compact?: boolean }) {
+  const [otherTemplatesOpen, setOtherTemplatesOpen] = useState(false);
+  const otherTemplatesId = useId();
   const checkedIds = useNotesStore((s) => s.checkedIds);
   const notes = useNotesStore((s) => s.notes);
   const settings = useNotesStore((s) => s.settings);
@@ -379,10 +381,14 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
             side="top"
             align="end"
             className="flex"
-            trigger={({ toggle }) => (
+            onOpenChange={() => setOtherTemplatesOpen(false)}
+            trigger={({ open, toggle, controls }) => (
               <Button
                 size="xs"
                 aria-label="选择本次发送方案、输出格式或提示词模板"
+                aria-haspopup="menu"
+                aria-expanded={open}
+                aria-controls={controls}
                 disabled={!nativeTargetReady && !internalSendAvailable}
                 onClick={toggle}
                 className="rounded-l-none rounded-r-lg border-l border-border px-1"
@@ -497,7 +503,7 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
                 ))}
                 <SimpleMenuSeparator />
                 <SimpleMenuLabel>
-                  当前提示词组 · {resolution.promptGroup.name}
+                  用模板发送 · 常用
                 </SimpleMenuLabel>
                 {snippetMenu.prioritized.map((sn) => (
                   <SimpleMenuItem
@@ -515,27 +521,38 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
                 {snippetMenu.prioritized.length === 0 && (
                   <SimpleMenuItem disabled onClick={() => {}}>
                     {snippetMenu.remaining.length > 0
-                      ? "当前分组暂无模板"
+                      ? "暂无常用模板"
                       : "去设置里添加模板"}
                   </SimpleMenuItem>
                 )}
                 {snippetMenu.remaining.length > 0 && (
                   <>
-                    <SimpleMenuSeparator />
-                    <SimpleMenuLabel>其他模板</SimpleMenuLabel>
-                    {snippetMenu.remaining.map((sn) => (
-                      <SimpleMenuItem
-                        key={`remaining-${sn.id}`}
-                        disabled={!targetReady}
-                        title={sn.text}
-                        onClick={() => {
-                          close();
-                          void sendCheckedToChat(sn.text, { promptSnippetId: sn.id });
-                        }}
-                      >
-                        {sn.label}
-                      </SimpleMenuItem>
-                    ))}
+                    <SimpleMenuItem
+                      expanded={otherTemplatesOpen}
+                      controls={otherTemplatesId}
+                      onClick={() => setOtherTemplatesOpen((open) => !open)}
+                    >
+                      其他模板（{snippetMenu.remaining.length}）
+                      <ChevronDown aria-hidden className={cn("ml-auto size-3.5", otherTemplatesOpen && "rotate-180")} />
+                    </SimpleMenuItem>
+                    {otherTemplatesOpen && (
+                      <div id={otherTemplatesId}>
+                        <SimpleMenuLabel>{resolution.promptGroup.name}组优先</SimpleMenuLabel>
+                        {snippetMenu.remaining.map((sn) => (
+                          <SimpleMenuItem
+                            key={`remaining-${sn.id}`}
+                            disabled={!targetReady}
+                            title={sn.text}
+                            onClick={() => {
+                              close();
+                              void sendCheckedToChat(sn.text, { promptSnippetId: sn.id });
+                            }}
+                          >
+                            {sn.label}
+                          </SimpleMenuItem>
+                        ))}
+                      </div>
+                    )}
                   </>
                 )}
               </>

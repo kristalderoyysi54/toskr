@@ -23,7 +23,7 @@ use crate::activity::{
 use crate::data_crypto;
 use crate::storage::{DATA_FILE, MEDIA_DIR};
 
-pub const MAX_STORE_VERSION: u64 = 24;
+pub const MAX_STORE_VERSION: u64 = 26;
 const MISSING_REVISION: &str = "missing";
 const MEDIA_GC_FILE: &str = "toskr-media-gc.json";
 const DATA_JOURNAL_FILE: &str = "toskr-data-transaction.json";
@@ -3199,7 +3199,7 @@ pub(crate) fn validate_settings_value_for_version(
         ("theme", &["system", "light", "dark"][..]),
         (
             "vibrancyMaterial",
-            &["hud", "popover", "sidebar", "under-window", "fullscreen"][..],
+            &["hud", "popover", "sidebar", "under-window", "fullscreen", "liquid"][..],
         ),
         ("cardDensity", &["comfortable", "compact"][..]),
         ("hotkeyModifier", &["shift", "control", "option"][..]),
@@ -3219,6 +3219,9 @@ pub(crate) fn validate_settings_value_for_version(
         }) {
             return false;
         }
+    }
+    if !optional_type(settings, "firewallCustomSensitiveFields", crate::privacy::valid_custom_sensitive_fields) {
+        return false;
     }
     if !optional_type(settings, "firewallDisabledWarnCategories", |value| {
         value.as_array().is_some_and(|items| {
@@ -4160,6 +4163,16 @@ mod tests {
     }
 
     #[test]
+    fn current_store_validates_custom_sensitive_fields_without_requiring_legacy_migration() {
+        for settings in [serde_json::json!({}), serde_json::json!({"firewallCustomSensitiveFields": []}), serde_json::json!({"firewallCustomSensitiveFields": ["内部编号", "Acme.Pin"]})] {
+            assert!(validate_settings_value_for_version(Some(&settings), MAX_STORE_VERSION));
+        }
+        for fields in [serde_json::json!(["a", "A"]), serde_json::json!(["x y"]), serde_json::json!(["é"]), serde_json::json!(null), serde_json::json!(["x".repeat(65)])] {
+            assert!(!validate_settings_value_for_version(Some(&serde_json::json!({"firewallCustomSensitiveFields": fields})), MAX_STORE_VERSION));
+        }
+    }
+
+    #[test]
     fn current_store_accepts_only_disableable_firewall_warn_categories() {
         let settings = serde_json::json!({
             "firewallEnabled": true,
@@ -4296,7 +4309,7 @@ mod tests {
                 "activationWithin60s": null
             }
         });
-        assert_eq!(MAX_STORE_VERSION, 24);
+        assert_eq!(MAX_STORE_VERSION, 26);
         assert!(validate_settings_value_for_version(
             Some(&current),
             MAX_STORE_VERSION
