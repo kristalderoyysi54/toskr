@@ -4,6 +4,7 @@ import * as React from "react"
 import { ContextMenu as ContextMenuPrimitive } from "radix-ui"
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow"
 
+import { clampedContextMenuX } from "@/lib/contextMenuAnchor"
 import { cn } from "@/lib/utils"
 import { ChevronRightIcon, CheckIcon } from "lucide-react"
 
@@ -26,14 +27,38 @@ function ContextMenu({
   )
 }
 
+type AdjustedContextMenuEvent = MouseEvent & { toskrAdjusted?: boolean }
+
 function ContextMenuTrigger({
   className,
+  onContextMenuCapture,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Trigger>) {
   return (
     <ContextMenuPrimitive.Trigger
       data-slot="context-menu-trigger"
       className={cn("select-none", className)}
+      onContextMenuCapture={(event) => {
+        onContextMenuCapture?.(event)
+        if (event.defaultPrevented) return
+        if ((event.nativeEvent as AdjustedContextMenuEvent).toskrAdjusted) return
+        const x = clampedContextMenuX(event.clientX, window.innerWidth)
+        if (x === event.clientX) return
+        // 拦下原事件（顺带压掉系统菜单），以挪过的坐标重放给 Radix
+        event.preventDefault()
+        event.stopPropagation()
+        const replay: AdjustedContextMenuEvent = new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: x,
+          clientY: event.clientY,
+          screenX: event.screenX,
+          screenY: event.screenY,
+          button: 2,
+        })
+        replay.toskrAdjusted = true
+        event.currentTarget.dispatchEvent(replay)
+      }}
       {...props}
     />
   )
@@ -55,10 +80,34 @@ function ContextMenuPortal({
   )
 }
 
+/** 子菜单开合由本层托管：SubTrigger 指针一进入就展开，不等 Radix 的 100ms 移动计时器。 */
+const ContextMenuSubOpenContext = React.createContext<((open: boolean) => void) | null>(null)
+
 function ContextMenuSub({
+  open: openProp,
+  defaultOpen = false,
+  onOpenChange,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Sub>) {
-  return <ContextMenuPrimitive.Sub data-slot="context-menu-sub" {...props} />
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen)
+  const open = openProp ?? uncontrolledOpen
+  const change = React.useCallback(
+    (next: boolean) => {
+      if (openProp === undefined) setUncontrolledOpen(next)
+      onOpenChange?.(next)
+    },
+    [openProp, onOpenChange]
+  )
+  return (
+    <ContextMenuSubOpenContext.Provider value={change}>
+      <ContextMenuPrimitive.Sub
+        data-slot="context-menu-sub"
+        open={open}
+        onOpenChange={change}
+        {...props}
+      />
+    </ContextMenuSubOpenContext.Provider>
+  )
 }
 
 function ContextMenuRadioGroup({
@@ -118,14 +167,23 @@ function ContextMenuSubTrigger({
   className,
   inset,
   children,
+  onPointerEnter,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.SubTrigger> & {
   inset?: boolean
 }) {
+  const setOpen = React.useContext(ContextMenuSubOpenContext)
   return (
     <ContextMenuPrimitive.SubTrigger
       data-slot="context-menu-sub-trigger"
       data-inset={inset}
+      onPointerEnter={(event) => {
+        onPointerEnter?.(event)
+        // 悬停即展开（用户 2026-09-11：滑到「发送选项 ›」应直接展开，不必点击）
+        if (!event.defaultPrevented && !props.disabled && event.pointerType !== "touch") {
+          setOpen?.(true)
+        }
+      }}
       className={cn(
         "flex cursor-default items-center gap-1.5 rounded-sm px-1.5 py-1 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-inset:pl-7 data-open:bg-accent data-open:text-accent-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
         className

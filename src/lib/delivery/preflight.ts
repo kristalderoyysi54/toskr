@@ -198,6 +198,7 @@ export function updateOpenPreflightDraft(
     {
       notes: notes.notes,
       tasks: notes.tasks,
+      messages: notes.messages,
       promptSnippets: notes.settings.promptSnippets,
       checkedItemIds: notes.checkedIds,
       targetSnapshot: useTargetStore.getState().snapshot,
@@ -512,6 +513,13 @@ export async function submitPreflightDraft(options: {
     useDeliveryStore.setState({ draft: scanned, busy: false });
     draft = scanned;
   }
+  if (draft.enterPolicy === "confirm" && !draft.enterDecisionConfirmed) {
+    // 预检里点「发送」即视为本次确认（用户 2026-09-11：不单独提供回车单选）
+    useDeliveryStore.getState().confirmEnter(true);
+    const confirmed = useDeliveryStore.getState().draft;
+    if (!confirmed || confirmed.id !== draft.id) return null;
+    draft = confirmed;
+  }
   const inspect = options.inspect ?? inspectDeliveryDraft;
   const rebase = options.rebase ?? rebaseDeliveryDraftForRetry;
   let reason = inspect(draft);
@@ -542,10 +550,6 @@ export async function submitPreflightDraft(options: {
     const current = useDeliveryStore.getState();
     if (busyClaimed) current.setBusy(false);
     current.setLastError(staleMessages[reason]);
-    return null;
-  }
-  if (draft.enterPolicy === "confirm" && !draft.enterDecisionConfirmed) {
-    state.setLastError("请先确认本次粘贴后是否按回车");
     return null;
   }
   const firewall = evaluateDeliveryDraftFirewall(draft);

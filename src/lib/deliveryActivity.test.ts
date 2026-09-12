@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DeliveryEvent as DeliveryEventShape } from "./deliveryActivityCore";
+import { deliveryEventsFromResult, type DeliveryEvent as DeliveryEventShape } from "./deliveryActivityCore";
 
 vi.mock("@/store/persistStorage", () => ({
   tauriStateStorage: {
@@ -583,5 +583,17 @@ describe("delivery activity", () => {
     ]);
     expect(sendDelivery).toHaveBeenCalledOnce();
     expect(deliveryRedactionMapAvailable(prepared.id)).toBe(true);
+  });
+});
+
+it("分段失败回执与接收未知状态保留到历史聚合", () => {
+  const events = deliveryEventsFromResult(draft(), {
+    deliveryId: "draft-1", status: "failed", reasonCode: "paste_failed",
+    message: "请核对目标后再重试", target: null, pasteCompleted: false,
+    enterPressed: false, clipboardOutcome: "restored", startedAtMs: 1, finishedAtMs: 2,
+    receiptLevel: "unknown", completedSteps: 1, totalSteps: 3,
+  });
+  expect(deliveryActivityRecords(events)[0]).toMatchObject({
+    receiptLevel: "unknown", completedSteps: 1, totalSteps: 3,
   });
 });

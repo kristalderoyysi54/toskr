@@ -20,14 +20,13 @@ import {
   Lightbulb,
 } from "lucide-react";
 
+import { collectMenuFlyoutEntries } from "@/components/cardMenuLayout";
+import { MenuFlyoutTrigger } from "@/components/MenuFlyoutTrigger";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
-  ContextMenuSub,
-  ContextMenuSubContent,
-  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { IconButton } from "@/components/ui/icon-button";
@@ -39,6 +38,11 @@ import {
 } from "@/components/ui/popover";
 import { deleteTasksWithUndo, sendTaskToChat } from "@/lib/actions";
 import { splitSubtasks } from "@/lib/ai";
+import {
+  closeMenuFlyout,
+  createMenuFlyoutRegistry,
+  handleMenuFlyoutKeyDown,
+} from "@/lib/menuFlyout";
 import { tweenMenu } from "@/lib/motion";
 import {
   dueBadgeLabel,
@@ -67,6 +71,11 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
   done: "完成",
 };
 const PRIORITY_CYCLE: TaskPriority[] = ["none", "low", "mid", "high"];
+
+/** 主菜单关闭（含退场动画期间）立即收起子菜单小窗，不等触发行卸载。 */
+function closeFlyoutWithMenu(open: boolean) {
+  if (!open) closeMenuFlyout();
+}
 
 /** 关闭 Radix 右键菜单：自定义按钮不走 Item onSelect，主动派发 Esc。 */
 function closeContextMenu() {
@@ -178,7 +187,7 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
   const checklistDone = checklist.filter((c) => c.done).length;
 
   return (
-    <ContextMenu>
+    <ContextMenu onOpenChange={closeFlyoutWithMenu}>
       <ContextMenuTrigger asChild>
         <div
           ref={(el) => {
@@ -459,9 +468,33 @@ function TaskMenu({ task, onEdit, onReminder }: {
   onReminder: () => void;
 }) {
   const pendingAction = useRef<(() => void) | null>(null);
+  // 子菜单改为独立原生小窗（与卡片菜单一致）：展开时才把 JSX 投影成条目
+  const moreFlyoutSource = () => {
+    const source = createMenuFlyoutRegistry();
+    source.entries = collectMenuFlyoutEntries(
+      <>
+        <TargetSendMenuItem onClick={() => void sendTaskToChat(task.id)}>
+          <Send className="size-3.5" /> 发送到对话
+        </TargetSendMenuItem>
+        <TargetSendMenuItem onClick={() => void sendTaskToChat(task.id, { forcePreflight: true })}>
+          <ListChecks className="size-3.5" /> 检查后发送…
+        </TargetSendMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem onClick={() => void splitSubtasks(task.id)}>
+          <Sparkles className="size-3.5" /> AI 拆解子任务
+        </ContextMenuItem>
+      </>,
+      source.register
+    );
+    return source;
+  };
   return (
     <ContextMenuContent
       className="w-44"
+      onKeyDownCapture={(event) => {
+        // 子菜单小窗打开时：方向键/回车转发给小窗，←/Esc 只收起小窗
+        handleMenuFlyoutKeyDown(event);
+      }}
       onCloseAutoFocus={(event) => {
         if (!pendingAction.current) return;
         event.preventDefault();
@@ -516,25 +549,14 @@ function TaskMenu({ task, onEdit, onReminder }: {
           ))}
         </div>
       </div>
-      <MoveToSectionSub task={task} />
+      <MoveToSectionFlyout task={task} />
       <ContextMenuSeparator />
-      <ContextMenuSub>
-        <ContextMenuSubTrigger>
-          <MoreHorizontal className="size-3.5" /> 更多操作
-        </ContextMenuSubTrigger>
-        <ContextMenuSubContent className="w-44">
-          <TargetSendMenuItem onClick={() => void sendTaskToChat(task.id)}>
-            <Send className="size-3.5" /> 发送到对话
-          </TargetSendMenuItem>
-          <TargetSendMenuItem onClick={() => void sendTaskToChat(task.id, { forcePreflight: true })}>
-            <ListChecks className="size-3.5" /> 检查后发送…
-          </TargetSendMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem onClick={() => void splitSubtasks(task.id)}>
-            <Sparkles className="size-3.5" /> AI 拆解子任务
-          </ContextMenuItem>
-        </ContextMenuSubContent>
-      </ContextMenuSub>
+      <MenuFlyoutTrigger
+        label="更多操作"
+        icon={<MoreHorizontal className="size-3.5" />}
+        width={176}
+        getSource={moreFlyoutSource}
+      />
       <ContextMenuSeparator />
       <ContextMenuItem
         variant="destructive"
@@ -546,31 +568,29 @@ function TaskMenu({ task, onEdit, onReminder }: {
   );
 }
 
-/** 「移动到分组」子菜单（多于一个分组时显示）。 */
-function MoveToSectionSub({ task }: { task: Task }) {
+/** 「移动到分组」子菜单小窗（多于一个分组时显示）。 */
+function MoveToSectionFlyout({ task }: { task: Task }) {
   const taskSections = useNotesStore((s) => s.taskSections);
   if (taskSections.length <= 1) return null;
   const currentId = task.sectionId ?? TASK_INBOX_ID;
+  const getSource = () => {
+    const source = createMenuFlyoutRegistry();
+    source.entries = taskSections
+      .filter((s) => s.id !== currentId)
+      .map((s) => ({
+        kind: "item" as const,
+        id: source.register(() => useNotesStore.getState().moveTasksToSection([task.id], s.id)),
+        label: s.name,
+      }));
+    return source;
+  };
   return (
-    <ContextMenuSub>
-      <ContextMenuSubTrigger>
-        <FolderInput className="mr-2 size-3.5" /> 移动到
-      </ContextMenuSubTrigger>
-      <ContextMenuSubContent className="w-32">
-        {taskSections
-          .filter((s) => s.id !== currentId)
-          .map((s) => (
-            <ContextMenuItem
-              key={s.id}
-              onClick={() =>
-                useNotesStore.getState().moveTasksToSection([task.id], s.id)
-              }
-            >
-              {s.name}
-            </ContextMenuItem>
-          ))}
-      </ContextMenuSubContent>
-    </ContextMenuSub>
+    <MenuFlyoutTrigger
+      label="移动到"
+      icon={<FolderInput className="size-3.5" />}
+      width={128}
+      getSource={getSource}
+    />
   );
 }
 
@@ -950,7 +970,7 @@ export function TaskTile({ task, now }: { task: Task; now: number }) {
         ? CircleDot
         : Circle;
   return (
-    <ContextMenu>
+    <ContextMenu onOpenChange={closeFlyoutWithMenu}>
       <ContextMenuTrigger asChild>
         <div
           ref={tileRef}

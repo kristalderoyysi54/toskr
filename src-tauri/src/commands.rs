@@ -12,11 +12,7 @@ use crate::state::{AppState, MOD_CONTROL, MOD_OPTION, MOD_SHIFT};
 /// 定位到目标位置并显示面板。快捷键呼出可要求在真实拖动/Esc 前保持展开。
 #[tauri::command]
 pub fn show_panel(app: AppHandle, shortcut_hold: Option<bool>) {
-    crate::window::set_panel_auto_hide_armed(
-        &app,
-        !shortcut_hold.unwrap_or(false),
-        "显示入口",
-    );
+    crate::window::set_panel_auto_hide_armed(&app, !shortcut_hold.unwrap_or(false), "显示入口");
     crate::window::request_show_panel(&app);
 }
 
@@ -139,9 +135,7 @@ pub fn set_message_watch(
 }
 
 #[tauri::command]
-pub fn get_message_watch_status(
-    app: AppHandle,
-) -> crate::message_watch::MessageWatchStatus {
+pub fn get_message_watch_status(app: AppHandle) -> crate::message_watch::MessageWatchStatus {
     crate::message_watch::current_status(&app)
 }
 
@@ -336,8 +330,12 @@ pub async fn scan_sensitive_text(
     let worker_app = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let rules = crate::privacy::load_custom_rules(&worker_app)?;
-        Ok::<_, String>(crate::privacy::scan_sensitive_text_with_rules(request, &rules))
-    }).await.map_err(|error| format!("本地隐私扫描任务失败：{error}"))??;
+        Ok::<_, String>(crate::privacy::scan_sensitive_text_with_rules(
+            request, &rules,
+        ))
+    })
+    .await
+    .map_err(|error| format!("本地隐私扫描任务失败：{error}"))??;
     crate::diag::push(
         &app,
         crate::privacy::diagnostic_summary(&result, started.elapsed()),
@@ -581,8 +579,10 @@ pub fn set_panel_hotkey(app: AppHandle, shortcut: Option<String>) -> Result<(), 
 /// （main 收 toskr://new-note 事件落卡并开窗）。注册失败不连坐面板键。
 #[tauri::command]
 pub fn set_new_note_hotkey(app: AppHandle, shortcut: Option<String>) -> Result<(), String> {
-    *app.state::<AppState>().new_note_hotkey_binding.lock().unwrap() =
-        shortcut.filter(|s| !s.trim().is_empty());
+    *app.state::<AppState>()
+        .new_note_hotkey_binding
+        .lock()
+        .unwrap() = shortcut.filter(|s| !s.trim().is_empty());
     rebind_global_hotkeys(&app)
 }
 
@@ -962,9 +962,185 @@ pub fn set_sidebar_mode(app: AppHandle, enabled: bool, edge: String) {
 }
 
 /// 立即隐藏 HUD（点击气泡打开面板时调用）。
+/// 编辑窗口的事件桥：原生限制事件、载荷和接收方，不能借主窗口修改管理设置。
+#[tauri::command]
+pub fn preview_event(app: AppHandle, window: tauri::WebviewWindow, event: String, payload: serde_json::Value) -> Result<(), String> {
+    validate_preview_event(window.label(), &event, &payload)?;
+    app.emit_to("main", &event, payload).map_err(|_| "预览动作失败".into())
+}
+
+fn validate_preview_event(label: &str, event: &str, payload: &serde_json::Value) -> Result<(), String> {
+    let text_editor = label == "textpreview" || label.starts_with("textpreview-");
+    if !text_editor && label != "imgpreview" { return Err("窗口不能提交预览动作".into()); }
+    let object = payload.as_object().ok_or("预览载荷必须是对象")?;
+    let string = |key: &str| object.get(key).and_then(|v| v.as_str()).is_some_and(|s| !s.is_empty());
+    let generation = || object.get("dataGeneration").and_then(|v| v.as_u64()).is_some();
+    let valid = match event {
+        "toskr://settings-patch" => text_editor && object.len() == 1 &&
+            object.get("detailFontSize").and_then(|v| v.as_u64()).is_some_and(|n| (10..=24).contains(&n)),
+        "toskr://detail-state" => text_editor && object.get("label").and_then(|v| v.as_str()) == Some(label)
+            && object.get("pinned").is_some_and(|v| v.is_boolean())
+            && object.get("noteId").is_some_and(|v| v.is_null() || v.is_string()),
+        "toskr://note-edit" | "toskr://note-send" | "toskr://note-discard-blank" => string("id") && generation(),
+        "toskr://note-image-remove" => text_editor && string("id") && string("file") && generation(),
+        "toskr://note-tags" => text_editor && string("id") && generation()
+            && object.get("tags").and_then(|v| v.as_array()).is_some_and(|items| items.iter().all(|v| v.is_string())),
+        "toskr://note-image-discard" => generation() && object.get("files").and_then(|v| v.as_array())
+            .is_some_and(|items| items.iter().all(|v| v.is_string())),
+        "toskr://image-edit-cancel" => label == "imgpreview" && string("requestId"),
+        "toskr://image-edit-request" => label == "imgpreview" && string("requestId") && string("sourceFile")
+            && object.get("target").is_some_and(|v| v.is_object())
+            && object.get("regions").is_some_and(|v| v.is_array()),
+        "toskr://note-editor-session-release" => text_editor && string("targetSessionId") && generation(),
+        "toskr://note-editor-insert-result" => text_editor && string("requestId") && string("targetSessionId") && generation(),
+        "toskr://run-pending-undo" => text_editor && object.is_empty(),
+        _ => false,
+    };
+    if valid { Ok(()) } else { Err("此预览事件或载荷不被允许".into()) }
+}
+
+/// HUD 只允许固定动作和固定主窗口目标，不开放任意事件转发。
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HudAction { Open, Undo }
+
+#[tauri::command]
+pub fn hud_action(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    action: HudAction,
+    target_id: Option<String>,
+    due: Option<bool>,
+) -> Result<(), String> {
+    if window.label() != "hud" { return Err("仅 HUD 可调用此动作".into()); }
+    let (event, payload) = hud_action_event(action, target_id.as_deref(), due.unwrap_or(false));
+    app.emit_to("main", event, payload).map_err(|_| "HUD 动作失败".into())
+}
+
+fn hud_action_event(action: HudAction, target: Option<&str>, due: bool) -> (&'static str, serde_json::Value) {
+    use serde_json::json;
+    match action {
+        HudAction::Undo => ("toskr://undo-capture", json!({})),
+        HudAction::Open => {
+            let payload = if due {
+                match target.and_then(|id| id.strip_prefix("bill:")) {
+                    Some(id) => json!({ "page": "tasks", "billId": id }),
+                    None => json!({ "page": "tasks", "taskId": target }),
+                }
+            } else if target == Some("update") { json!({ "update": true }) }
+            else if let Some(section) = target.and_then(|id| id.strip_prefix("settings:")) {
+                json!({ "settings": section })
+            } else if target == Some("page:secret") { json!({ "page": "secret" }) }
+            else { json!({}) };
+            ("toskr://hud-open-panel", payload)
+        }
+    }
+}
+
 #[tauri::command]
 pub fn hide_hud(app: AppHandle) {
     crate::window::hide_hud_now(&app);
+}
+
+/// 主窗口内逻辑坐标的锚点 → 屏幕 pt（仅主窗口可调子菜单小窗）。
+fn menu_flyout_anchor_on_screen(
+    window: &tauri::WebviewWindow,
+    anchor: crate::state::MenuFlyoutAnchorPt,
+) -> Result<crate::state::MenuFlyoutAnchorPt, String> {
+    if window.label() != "main" {
+        return Err("仅主窗口可操作子菜单小窗".into());
+    }
+    let scale = window.scale_factor().map_err(|e| e.to_string())?.max(0.5);
+    let origin = window.outer_position().map_err(|e| e.to_string())?;
+    let ox = origin.x as f64 / scale;
+    let oy = origin.y as f64 / scale;
+    Ok(crate::state::MenuFlyoutAnchorPt {
+        menu_left: ox + anchor.menu_left,
+        menu_right: ox + anchor.menu_right,
+        top: oy + anchor.top,
+    })
+}
+
+/// 打开右键子菜单小窗（仅主窗口）。
+#[tauri::command]
+pub fn show_menu_flyout(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    anchor: crate::state::MenuFlyoutAnchorPt,
+    width: f64,
+    height: f64,
+    entries: serde_json::Value,
+) -> Result<(), String> {
+    let anchor = menu_flyout_anchor_on_screen(&window, anchor)?;
+    crate::window::show_menu_flyout(&app, anchor, width.max(120.0), height.max(24.0), entries);
+    Ok(())
+}
+
+/// 主菜单滚动后重报锚点，小窗跟着触发行移动（仅主窗口）。
+#[tauri::command]
+pub fn menu_flyout_move(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    anchor: crate::state::MenuFlyoutAnchorPt,
+) -> Result<(), String> {
+    let anchor = menu_flyout_anchor_on_screen(&window, anchor)?;
+    crate::window::move_menu_flyout(&app, anchor);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn hide_menu_flyout(app: AppHandle) {
+    crate::window::hide_menu_flyout(&app);
+}
+
+/// 小窗渲染完成后回报真实高度（仅 menuflyout 窗口）。
+#[tauri::command]
+pub fn menu_flyout_resize(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    height: f64,
+) -> Result<(), String> {
+    if window.label() != "menuflyout" {
+        return Err("仅子菜单小窗可回报尺寸".into());
+    }
+    crate::window::resize_menu_flyout(&app, height.max(24.0));
+    Ok(())
+}
+
+/// 小窗内选中条目 → 主窗口执行对应动作（仅 menuflyout 窗口）。
+#[tauri::command]
+pub fn menu_flyout_select(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    id: String,
+) -> Result<(), String> {
+    if window.label() != "menuflyout" {
+        return Err("仅子菜单小窗可提交选择".into());
+    }
+    app.emit_to(
+        "main",
+        crate::events::MENU_FLYOUT_SELECT_EVENT,
+        serde_json::json!({ "id": id }),
+    )
+    .map_err(|_| "子菜单选择回传失败".into())
+}
+
+/// 主窗口把键盘导航转发给小窗（仅主窗口）。
+#[tauri::command]
+pub fn menu_flyout_key(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    key: String,
+) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("仅主窗口可转发按键".into());
+    }
+    app.emit_to(
+        "menuflyout",
+        crate::events::MENU_FLYOUT_KEY_EVENT,
+        serde_json::json!({ "key": key }),
+    )
+    .map_err(|_| "子菜单按键转发失败".into())
 }
 
 /// 通用 HUD 反馈（操作确认、错误提示等；`undoable` 时悬停可撤销；
@@ -991,7 +1167,7 @@ pub fn hud_feedback(
 /// 前端链路诊断回执（Toggle 处理结果等落盘，报障时诊断页可见）。
 #[tauri::command]
 pub fn diag_note(app: AppHandle, msg: String) {
-    crate::diag::push(&app, msg);
+    crate::diag::push(&app, crate::diag::frontend_event(&msg));
 }
 
 /// 应用图标 data URL + 主色（卡片顶部通栏底色用；带缓存，主线程命令）。
@@ -1150,10 +1326,7 @@ pub fn list_send_targets() -> Vec<crate::focus::SendTargetApp> {
 
 /// 手动采信 pid 为当前发送目标（长按选单点选后调用，随后走常规发送）。
 #[tauri::command]
-pub fn adopt_send_target(
-    app: AppHandle,
-    pid: i32,
-) -> Option<crate::target::TargetSnapshot> {
+pub fn adopt_send_target(app: AppHandle, pid: i32) -> Option<crate::target::TargetSnapshot> {
     crate::target::adopt_target_pid(&app, pid)
 }
 
@@ -1596,10 +1769,7 @@ pub async fn read_pre_encrypt_snapshot(
     expected_revision: String,
 ) -> Result<String, crate::backup::BackupFailure> {
     tauri::async_runtime::spawn_blocking(move || {
-        crate::backup::read_pre_encrypt_snapshot(
-            std::path::Path::new(&path),
-            &expected_revision,
-        )
+        crate::backup::read_pre_encrypt_snapshot(std::path::Path::new(&path), &expected_revision)
     })
     .await
     .map_err(blocking_backup_failure)?
@@ -1648,6 +1818,31 @@ pub async fn run_media_gc(
 #[cfg(test)]
 mod tests {
     use super::{capture_hud_feedback, THEMED_WINDOW_LABELS};
+
+    #[test]
+    fn preview_bridge_blocks_management_and_spoofed_window_events() {
+        use super::validate_preview_event;
+        use serde_json::json;
+        assert!(validate_preview_event("imgpreview", "toskr://settings-patch", &json!({"clipHistory": true})).is_err());
+        assert!(validate_preview_event("textpreview-2", "toskr://settings-patch", &json!({"detailFontSize": 16, "messageWatch": true})).is_err());
+        assert!(validate_preview_event("textpreview-2", "toskr://settings-patch", &json!({"detailFontSize": 16})).is_ok());
+        assert!(validate_preview_event("textpreview-2", "toskr://do-data-operation", &json!({})).is_err());
+        assert!(validate_preview_event("textpreview-2", "toskr://detail-state", &json!({"label": "main", "pinned": false, "noteId": null})).is_err());
+        assert!(validate_preview_event("imgpreview", "toskr://note-send", &json!({"id": "note-1", "dataGeneration": 4})).is_ok());
+        assert!(validate_preview_event("imgpreview", "toskr://note-send", &json!({"id": "note-1"})).is_err());
+    }
+
+    #[test]
+    fn hud_actions_only_route_fixed_events() {
+        use super::{hud_action_event, HudAction};
+        assert!(serde_json::from_str::<HudAction>("\"set_message_watch_auto\"").is_err());
+        let (event, payload) = hud_action_event(HudAction::Undo, Some("settings:arbitrary"), true);
+        assert_eq!(event, "toskr://undo-capture");
+        assert_eq!(payload, serde_json::json!({}));
+        let (event, payload) = hud_action_event(HudAction::Open, Some("bill:42"), true);
+        assert_eq!(event, "toskr://hud-open-panel");
+        assert_eq!(payload, serde_json::json!({ "page": "tasks", "billId": "42" }));
+    }
 
     #[test]
     fn manual_theme_reaches_the_image_preview_window() {
@@ -1715,7 +1910,10 @@ mod tests {
         let (kind, text, _) =
             capture_hud_feedback("added", "回复内容".into(), None, true, Some(1), true);
         assert_eq!(kind, "added");
-        assert_eq!(text, "回复内容\n已恢复 1 处化名\n已自动保存为最近发送的回复");
+        assert_eq!(
+            text,
+            "回复内容\n已恢复 1 处化名\n已自动保存为最近发送的回复"
+        );
         assert!(!text.contains("右键确认"));
 
         // 重复捕获不追加自动归位行

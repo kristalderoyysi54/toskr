@@ -18,6 +18,7 @@ import { SafeDeliveryLearningPath } from "@/components/settings/SafeDeliveryLear
 import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
 import { Switch } from "@/components/ui/switch";
+import { TweenNumber } from "@/components/ui/tween-number";
 import { TRANSFORM_RECIPES, type TransformRecipeId } from "@/lib/aiTransform";
 import {
   DELIVERY_ACTIVITY_CLEARED_EVENT,
@@ -79,9 +80,20 @@ function formatDuration(value: number | null): string {
   return `${minutes < 10 ? minutes.toFixed(1) : Math.round(minutes)} 分钟`;
 }
 
+/* 案 4（2026-09-11）：指标数字切换时从旧值缓动到新值；空值仍显示「—」不参与过渡 */
+function tweenCount(value: number): ReactNode {
+  return <TweenNumber value={value} />;
+}
+function tweenPercent(value: number | null): ReactNode {
+  return value === null ? "—" : <TweenNumber value={value} format={formatPercent} />;
+}
+function tweenDuration(value: number | null): ReactNode {
+  return value === null ? "—" : <TweenNumber value={value} format={formatDuration} />;
+}
+
 function MetricCard({ label, value, hint }: {
   label: string;
-  value: string | number;
+  value: ReactNode;
   hint?: string;
 }) {
   return (
@@ -116,7 +128,7 @@ function Distribution({ title, values }: {
 
 function PrimaryMetric({ label, value, hint }: {
   label: string;
-  value: string | number;
+  value: ReactNode;
   hint: string;
 }) {
   return (
@@ -157,7 +169,7 @@ export function OutcomeMetricsSummary({
             <p className="mt-1 max-w-xl text-body leading-relaxed text-muted-foreground">
               {hasActivity
                 ? "换一个时间范围或清除详细筛选后再看。"
-                : "完成一次发送后，这里会显示成功率、用时和敏感内容保护情况。"}
+                : "完成一次发送后，这里会显示按键执行完成率、用时和敏感内容保护情况。"}
             </p>
             {!hasActivity && (
               <p className="mt-2 text-label text-muted-foreground">
@@ -204,18 +216,18 @@ export function OutcomeMetricsSummary({
       </div>
       <div className="grid grid-cols-3 divide-x divide-border/50">
         <PrimaryMetric
-          label="发送完成"
-          value={metrics.sentCount}
-          hint={unresolved ? `受阻或失败 ${unresolved} 次` : "全部完成"}
+          label="按键执行完成"
+          value={tweenCount(metrics.sentCount)}
+          hint={unresolved ? `受阻或失败 ${unresolved} 次` : "接收与提交未确认"}
         />
         <PrimaryMetric
-          label="成功率"
-          value={formatPercent(metrics.successRate)}
-          hint={metrics.insufficientSample ? "样本仍较少" : "按当前筛选计算"}
+          label="按键执行完成率"
+          value={tweenPercent(metrics.successRate)}
+          hint={metrics.insufficientSample ? "样本仍较少" : "不代表目标接收率"}
         />
         <PrimaryMetric
           label="已保护敏感内容"
-          value={metrics.redactionCount}
+          value={tweenCount(metrics.redactionCount)}
           hint={metrics.firewallFindingCount
             ? `共发现 ${metrics.firewallFindingCount} 项`
             : "未发现需替换内容"}
@@ -241,12 +253,12 @@ export function OutcomeMetricsDetails({ metrics }: { metrics: OutcomeMetrics }) 
       <section aria-labelledby="outcome-process-title">
         <h4 id="outcome-process-title" className="mb-1.5 text-label font-medium text-muted-foreground">发送过程</h4>
         <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-          <MetricCard label="发送尝试" value={metrics.deliveryAttempts} />
-          <MetricCard label="重试次数" value={metrics.retryCount} />
-          <MetricCard label="目标变化阻止" value={metrics.targetInvalidationBlocks} />
+          <MetricCard label="发送尝试" value={tweenCount(metrics.deliveryAttempts)} />
+          <MetricCard label="重试次数" value={tweenCount(metrics.retryCount)} />
+          <MetricCard label="目标变化阻止" value={tweenCount(metrics.targetInvalidationBlocks)} />
           <MetricCard
             label="结果核验"
-            value={metrics.verificationStatuses.pass + metrics.verificationStatuses.needsReview + metrics.verificationStatuses.blocked}
+            value={tweenCount(metrics.verificationStatuses.pass + metrics.verificationStatuses.needsReview + metrics.verificationStatuses.blocked)}
             hint={`通过 ${metrics.verificationStatuses.pass} · 复核 ${metrics.verificationStatuses.needsReview} · 阻止 ${metrics.verificationStatuses.blocked}`}
           />
         </div>
@@ -255,15 +267,15 @@ export function OutcomeMetricsDetails({ metrics }: { metrics: OutcomeMetrics }) 
       <section aria-labelledby="outcome-time-title">
         <h4 id="outcome-time-title" className="mb-1.5 text-label font-medium text-muted-foreground">用时</h4>
         <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-          <MetricCard label="准备到发送（中位）" value={formatDuration(metrics.draftToSendMedianMs)} />
-          <MetricCard label="发送到回收（中位）" value={formatDuration(metrics.sendToResultMedianMs)} />
-          <MetricCard label="完整流程（中位）" value={formatDuration(metrics.actualWorkflowMedianMs)} />
+          <MetricCard label="准备到发送（中位）" value={tweenDuration(metrics.draftToSendMedianMs)} />
+          <MetricCard label="发送到回收（中位）" value={tweenDuration(metrics.sendToResultMedianMs)} />
+          <MetricCard label="完整流程（中位）" value={tweenDuration(metrics.actualWorkflowMedianMs)} />
           {metrics.estimatedTimeSavedMs === null ? (
             <MetricCard label="节省时间估算" value="未设置" hint="可在高级工具中填写传统用时" />
           ) : (
             <MetricCard
               label="估算累计节省"
-              value={formatDuration(metrics.estimatedTimeSavedMs)}
+              value={tweenDuration(metrics.estimatedTimeSavedMs)}
               hint={`估算 · ${metrics.estimatedSampleSize} 个传统用时样本`}
             />
           )}
@@ -273,9 +285,9 @@ export function OutcomeMetricsDetails({ metrics }: { metrics: OutcomeMetrics }) 
       <section aria-labelledby="outcome-safety-title">
         <h4 id="outcome-safety-title" className="mb-1.5 text-label font-medium text-muted-foreground">隐私与结果</h4>
         <div className="grid grid-cols-2 gap-2 lg:grid-cols-3">
-          <MetricCard label="发现敏感内容" value={metrics.firewallFindingCount} />
-          <MetricCard label="已保护敏感内容" value={metrics.redactionCount} />
-          <MetricCard label="问题解决用时（中位）" value={formatDuration(metrics.problemResolutionMedianMs)} hint="仅包含主动计时" />
+          <MetricCard label="发现敏感内容" value={tweenCount(metrics.firewallFindingCount)} />
+          <MetricCard label="已保护敏感内容" value={tweenCount(metrics.redactionCount)} />
+          <MetricCard label="问题解决用时（中位）" value={tweenDuration(metrics.problemResolutionMedianMs)} hint="仅包含主动计时" />
         </div>
       </section>
 
@@ -297,23 +309,27 @@ export function OutcomeMetricsDetails({ metrics }: { metrics: OutcomeMetrics }) 
         </div>
         {metrics.dailyTrend.length ? (
           <div
-            className="mt-2 flex h-20 items-end gap-1"
+            className="trend-bars mt-2 flex h-20 items-end gap-1"
             role="img"
             aria-label={`每日发送柱状图，共 ${metrics.dailyTrend.length} 天`}
           >
-            {metrics.dailyTrend.map((item) => (
+            {metrics.dailyTrend.map((item, index) => (
               <div
                 key={item.day}
                 className="group flex min-w-0 flex-1 flex-col items-center justify-end"
                 title={`${item.day}：尝试 ${item.attempts}，成功 ${item.sent}`}
               >
                 <div
-                  className="w-full max-w-5 rounded-t-sm bg-primary/25"
+                  className="trend-bar w-full max-w-5 rounded-t-sm bg-primary/25"
                   style={{ height: `${Math.max(4, item.attempts / maxAttempts * 64)}px` }}
                 >
+                  {/* 案 4：成功占比用 scaleY 过渡，逐根 20ms 错开（token-exception: 错开步进无 token） */}
                   <div
-                    className="w-full rounded-t-sm bg-primary"
-                    style={{ height: `${item.attempts ? item.sent / item.attempts * 100 : 0}%` }}
+                    className="trend-bar-fill h-full w-full rounded-t-sm bg-primary"
+                    style={{
+                      transform: `scaleY(${item.attempts ? item.sent / item.attempts : 0})`,
+                      transitionDelay: `${index * 20}ms`,
+                    }}
                   />
                 </div>
               </div>

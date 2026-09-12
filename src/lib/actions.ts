@@ -339,6 +339,7 @@ function currentDraftState(dataGeneration: number) {
   return {
     notes: state.notes,
     tasks: state.tasks,
+    messages: state.messages,
     promptSnippets: state.settings.promptSnippets,
     checkedItemIds: state.checkedIds,
     targetSnapshot: useTargetStore.getState().snapshot,
@@ -584,12 +585,12 @@ export function openNoteBatchDetail(
 }
 
 /** 链接卡片补抓网页标题/图标（幂等：已有标题跳过；离线/超时静默保持 URL 展示）。 */
-export async function enrichLinkMeta(id: string) {
+export async function enrichLinkMeta(id: string, manual = false) {
   const dataGeneration = currentDataGeneration();
   const note = useNotesStore.getState().notes.find((n) => n.id === id);
-  if (!note || note.kind !== "link" || !note.url || note.linkTitle) return;
+  if (!note || note.kind !== "link" || !note.url || (note.linkTitle && !manual)) return;
   try {
-    const meta = await api.fetchLinkMeta(note.url);
+    const meta = await api.fetchLinkMeta(note.url, manual);
     const cur = useNotesStore.getState().notes.find((n) => n.id === id);
     // 抓取期间卡片被删除或 URL 被改：丢弃过期结果
     if (!matchesDataGeneration(dataGeneration) || !cur || cur.url !== note.url) return;
@@ -598,7 +599,7 @@ export async function enrichLinkMeta(id: string) {
       icon: meta.icon ?? undefined,
     });
   } catch {
-    /* 静默：卡片保持 URL 展示 */
+    if (manual) tip("info", "未获取预览（取消、网络失败或地址受限）");
   }
 }
 
@@ -668,6 +669,34 @@ export async function sendTaskToChat(
   return dispatchDeliveryDraft(draft, { force: opts?.forcePreflight });
 }
 
+/** 把一条捕获的 IM 消息正文发送到当前对话目标（消息卡「发送到对话」，2026-09-11）。 */
+export async function sendMessageToChat(
+  messageId: string,
+  opts?: { forcePreflight?: boolean }
+) {
+  const message = useNotesStore.getState().messages.find((m) => m.id === messageId);
+  if (!message) return;
+  if (!message.text.trim()) {
+    tip("warn", "这条消息没有可发送的文字");
+    return null;
+  }
+  if (
+    preflightBlocksNewIntent() ||
+    deliveryDraftPending() ||
+    deliveryDraftPreparationPending() ||
+    editorInsertPending
+  ) {
+    if (useDeliveryStore.getState().open) return null;
+    warnWithPanel("已有发送正在进行，请稍候", "delivery-pending");
+    return null;
+  }
+  const draft = buildDeliveryDraft(
+    draftInput([messageId], "message"),
+    currentDraftState(currentDataGeneration())
+  );
+  return dispatchDeliveryDraft(draft, { force: opts?.forcePreflight });
+}
+
 /** 剪贴历史与笔记队列合并事务不同（组合新卡 vs 就地消费），混选拒绝。 */
 function mergeDomainsMixed(notes: readonly Note[]): boolean {
   const clips = notes.filter((n) => n.sectionId === CLIPBOARD_ID).length;
@@ -701,13 +730,16 @@ export function mergeNoteWithChecked(noteId: string) {
 }
 
 /**
- * 剪贴卡收编为正式笔记（移动语义，可撤销）：落收件箱并重置生命周期状态
+ * 剪贴卡收编为正式笔记（移动语义，可撤销）：默认落收件箱，可指定普通笔记分组并重置生命周期状态
  * ——done 清零（收编即待办），keep 不带（剪贴域「固定不清理」≠ 笔记域「常用」）。
  */
-export function moveClipsToNotesWithUndo(ids: string[]) {
-  const moved = useNotesStore.getState().moveClipsToNotes(ids);
+export function moveClipsToNotesWithUndo(ids: string[], sectionId?: string) {
+  const state = useNotesStore.getState();
+  const moved = state.moveClipsToNotes(ids, sectionId);
   if (!moved) return;
-  undoableTip(moved === 1 ? "已移入笔记" : `已移入笔记 ${moved} 条`);
+  const section = sectionId && state.sections.find((item) => item.id === sectionId);
+  const destination = section ? `「${section.name}」` : "笔记";
+  undoableTip(moved === 1 ? `已移入${destination}` : `已移入${destination} ${moved} 条`);
 }
 
 /**
@@ -757,7 +789,7 @@ export async function copyNoteContent(note: Note) {
               }
         )
       );
-      tip("ok", `已复制图文（${images.length} 张图）`);
+      tip("ok", `已复制原始图文（${images.length} 张图，未脱敏）`);
     } else if (note.kind === "image" && images.length > 0) {
       await api.copyImage(images[0]);
       tip(
@@ -766,7 +798,7 @@ export async function copyNoteContent(note: Note) {
       );
     } else {
       await api.copyText(note.text);
-      tip("ok", "已复制");
+      tip("ok", "已复制原文（未脱敏）");
     }
   } catch (e) {
     tip("warn", `复制失败：${e}`);
@@ -787,7 +819,7 @@ export async function copyNotesAsList(ids: string[]) {
     await api.copyText(
       texts.length === 1 ? texts[0] : formatAsNumberedList(texts)
     );
-    tip("ok", texts.length === 1 ? "已复制" : `已复制 ${texts.length} 条为列表`);
+    tip("ok", texts.length === 1 ? "已复制原文（未脱敏）" : `已复制 ${texts.length} 条原文为列表（未脱敏）`);
   } catch (e) {
     tip("warn", `复制失败：${e}`);
   }

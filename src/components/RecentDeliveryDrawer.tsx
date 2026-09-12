@@ -48,13 +48,14 @@ import { timeAgo } from "@/lib/media";
 import { tip } from "@/lib/tip";
 import { cn } from "@/lib/utils";
 import { useNotesStore, type Note, type Task } from "@/store/notesStore";
+import type { MessageItem } from "@/lib/messages";
 import { useUIStore } from "@/store/uiStore";
 
 const STATUS_LABEL: Record<DeliveryEvent["status"], string> = {
   prepared: "准备中",
   opened: "预检未完成",
   started: "发送中",
-  sent: "已发送",
+  sent: "按键已执行，接收未确认",
   blocked: "已拦截",
   failed: "发送失败",
   restored: "剪贴板已恢复",
@@ -77,6 +78,10 @@ const BLOCKED_REASON_LABEL: Record<string, string> = {
 };
 
 function statusLabel(record: DeliveryEvent): string {
+  if (record.receiptLevel === "unknown") return "投递结果不确定，请核对目标";
+  if (record.completedSteps !== undefined && record.totalSteps !== undefined && record.totalSteps > 0) {
+    return `已执行 ${record.completedSteps}/${record.totalSteps} 段按键，接收未确认`;
+  }
   if (record.status === "blocked" && record.reasonCode) {
     return BLOCKED_REASON_LABEL[record.reasonCode] ?? STATUS_LABEL.blocked;
   }
@@ -222,13 +227,14 @@ function SectionHead({
 function outboundSummary(
   record: DeliveryEvent,
   notes: readonly Note[],
-  tasks: readonly Task[]
+  tasks: readonly Task[],
+  messages: readonly MessageItem[] = []
 ): string | null {
-  const sources = deliverySourceItems(record, notes, tasks);
+  const sources = deliverySourceItems(record, notes, tasks, messages);
   const text =
     sources.notes
       .map((note) => (note.kind === "image" ? "" : note.text))
-      .find(Boolean) ?? sources.tasks[0]?.text;
+      .find(Boolean) ?? sources.tasks[0]?.text ?? sources.messages[0]?.text;
   const firstLine = text?.split("\n", 1)[0]?.trim();
   return firstLine || null;
 }
@@ -237,6 +243,7 @@ export function RecentDeliveryList({
   records,
   notes,
   tasks,
+  messages = [],
   busyEventId,
   onReprepare,
   onOpenSource,
@@ -248,6 +255,7 @@ export function RecentDeliveryList({
   records: readonly DeliveryActivityRecord[];
   notes: readonly Note[];
   tasks: readonly Task[];
+  messages?: readonly MessageItem[];
   busyEventId: string | null;
   onReprepare: (event: DeliveryEvent) => void;
   onOpenSource?: (event: DeliveryEvent) => void;
@@ -307,7 +315,7 @@ export function RecentDeliveryList({
     { key: "settled", label: "已完成", records: settled, hint: false },
   ].filter((section) => section.records.length > 0);
   const renderRound = (record: DeliveryActivityRecord) => {
-        const availability = deliveryEventSourceAvailability(record, notes, tasks);
+        const availability = deliveryEventSourceAvailability(record, notes, tasks, messages);
         const recoverable = record.status === "failed" || record.status === "blocked";
         const outputMode = deliveryEventOutputMode(record);
         const outputLabel = outputMode ? DELIVERY_FORMAT_LABEL[outputMode] : null;
@@ -326,7 +334,7 @@ export function RecentDeliveryList({
           linkedResult && aliasEntitiesEnabled
             ? activeAliasOccurrences(linkedResult.text, aliasEntities)
             : [];
-        const summary = outboundSummary(record, notes, tasks);
+        const summary = outboundSummary(record, notes, tasks, messages);
         const waitingReply = record.status === "sent" && !linkedResult;
         return (
           <li
@@ -570,8 +578,8 @@ export function RecentDeliveryList({
         </summary>
         <ol className="mt-1.5 space-y-1.5" aria-label="未发出的记录">
           {unfinishedRecords.map((record) => {
-            const availability = deliveryEventSourceAvailability(record, notes, tasks);
-            const summary = outboundSummary(record, notes, tasks);
+            const availability = deliveryEventSourceAvailability(record, notes, tasks, messages);
+            const summary = outboundSummary(record, notes, tasks, messages);
             return (
               <li key={record.deliveryId}>
                 <button
@@ -611,6 +619,7 @@ export function RecentDeliveryDrawer({
 }) {
   const notes = useNotesStore((state) => state.notes);
   const tasks = useNotesStore((state) => state.tasks);
+  const messages = useNotesStore((state) => state.messages);
   const retentionDays = useNotesStore(
     (state) => state.settings.outcomeRetentionDays
   );
@@ -751,6 +760,7 @@ export function RecentDeliveryDrawer({
                 records={records}
                 notes={notes}
                 tasks={tasks}
+                messages={messages}
                 busyEventId={busyEventId}
                 onReprepare={(event) => void reprepare(event)}
                 onOpenSource={openSource}

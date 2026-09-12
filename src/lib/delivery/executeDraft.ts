@@ -1,5 +1,6 @@
 import { ask } from "@tauri-apps/plugin-dialog";
-
+import { captureExecutionManifest } from "./executionManifest";
+import { currentDraftSegments } from "./orderedSegments";
 import { currentTargetProfileResolution } from "@/lib/currentTargetProfile";
 import { buildDeliveryDraft } from "@/lib/delivery/buildDraft";
 import {
@@ -25,7 +26,7 @@ import {
   targetSendDisabled,
   useTargetStore,
 } from "@/store/targetStore";
-import { useUIStore } from "@/store/uiStore";
+import { useUIStore, type DeliveryBandState } from "@/store/uiStore";
 import {
   deliveryEventFromDraft,
   recordDeliveryEvent,
@@ -162,23 +163,6 @@ function sameStrings(left: readonly string[], right: readonly string[]): boolean
     left.every((value, index) => value === right[index]);
 }
 
-/**
- * 发送前复核交错顺序仍与 Draft 的自动组装基线对齐：预检手改正文
- * （finalText 漂离 assembledText）或图片清单数量变化都退回默认顺序。
- */
-function draftSegmentsForSend(draft: DeliveryDraft) {
-  const segments = draft.segments;
-  if (!segments || draft.finalText !== draft.assembledText) return undefined;
-  const referenced = segments.flatMap((segment) =>
-    segment.kind === "image" ? [segment.fileIndex] : []
-  );
-  const valid =
-    referenced.length === draft.imageFiles.length &&
-    new Set(referenced).size === referenced.length &&
-    referenced.every((index) => index >= 0 && index < draft.imageFiles.length);
-  return valid ? segments : undefined;
-}
-
 /** 原文保留决定绑定当前 target token；发送前复核不能再轮换这枚 token。 */
 function draftHasTargetBoundPrivacyDecision(draft: DeliveryDraft): boolean {
   return draft.privacyDecision.excludedFindingIds.length > 0 ||
@@ -217,6 +201,7 @@ function draftSourceIsCurrent(draft: DeliveryDraft): boolean {
     {
       notes: state.notes,
       tasks: state.tasks,
+      messages: state.messages,
       promptSnippets: state.settings.promptSnippets,
       checkedItemIds: state.checkedIds,
       targetSnapshot: useTargetStore.getState().snapshot,
@@ -259,6 +244,7 @@ export function inspectDeliveryDraftFreshness(
   if (!draftSourceIsCurrent(draft)) return "source";
   if (
     draft.sourceKind !== "task" &&
+    draft.sourceKind !== "message" &&
     !sameStrings(draft.selectionItemIds, useNotesStore.getState().checkedIds)
   ) {
     return "selection";
@@ -370,22 +356,23 @@ async function discardStaleResult(
     return true;
   }
   const messages: Record<DeliveryDraftFreshnessIssue, string> = {
-    generation: "发送已完成，但数据上下文已变化，未修改卡片状态",
-    source: "发送已完成，但来源内容已变化，未修改卡片状态",
-    selection: "发送已完成，但选择已变化，未修改卡片状态",
-    revision: "发送已完成，但发送内容版本已变化，未修改卡片状态",
+    generation: "粘贴按键已执行，但数据上下文已变化，未修改卡片状态",
+    source: "粘贴按键已执行，但来源内容已变化，未修改卡片状态",
+    selection: "粘贴按键已执行，但选择已变化，未修改卡片状态",
+    revision: "粘贴按键已执行，但发送内容版本已变化，未修改卡片状态",
   };
   tip("warn", messages[issue]);
   return true;
 }
 
-function applySuccessfulDelivery(draft: DeliveryDraft) {
-  if (draft.sourceKind === "task") return;
+/** 返回本次被标记完成的卡 id（供回执带「撤销」恢复）。 */
+function applySuccessfulDelivery(draft: DeliveryDraft): string[] {
+  if (draft.sourceKind === "task" || draft.sourceKind === "message") return [];
   const state = useNotesStore.getState();
   const liveIds = new Set(state.notes.map((note) => note.id));
   if (draft.sourceItemIds.some((id) => !liveIds.has(id))) {
-    tip("warn", "发送已完成，但来源卡片已变化，未修改卡片状态");
-    return;
+    tip("warn", "粘贴按键已执行，但来源卡片已变化，未修改卡片状态");
+    return [];
   }
   const doneIds = doneIdsAfterSend(state, draft.sourceItemIds);
   if (doneIds.length) state.setDone(doneIds, true);
@@ -404,11 +391,78 @@ function applySuccessfulDelivery(draft: DeliveryDraft) {
     ) {
       state.transitionOnboarding({ type: "deliverySent" });
     } else {
-      tip("warn", "演练发送已完成，但演练会话已变化，未改写上手进度");
+      tip("warn", "演练粘贴按键已执行，但演练会话已变化，未改写上手进度");
     }
-    return;
+    return doneIds;
   }
   state.markOnboarding({ sent: true });
+  return doneIds;
+}
+
+let deliveryBandTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 案 6（2026-09-11）：卡片底缘状态带。原生派发开始置 sending。 */
+function beginDeliveryBand(ids: readonly string[]) {
+  if (deliveryBandTimer) clearTimeout(deliveryBandTimer);
+  deliveryBandTimer = null;
+  useUIStore.getState().setDeliveryBand({ ids, phase: "sending" });
+}
+
+/** 回执落定：sent 停 1.2s、failed 停 2.4s，再经 leaving（140ms 收回）清空。 */
+/** 回执带停留：sent 3.2s（悬停在卡上时续 1.5s）、failed 2.4s，再经 leaving（160ms 收回）清空。 */
+const BAND_HOLD_SENT_MS = 3200;
+const BAND_HOLD_FAILED_MS = 2400;
+const BAND_HOVER_EXTEND_MS = 1500;
+
+function bandCardHovered(ids: readonly string[]): boolean {
+  if (typeof document === "undefined") return false;
+  return ids.some((id) => {
+    try {
+      return !!document.querySelector(`[data-note-id="${CSS.escape(id)}"]:hover`);
+    } catch {
+      return false;
+    }
+  });
+}
+
+function settleDeliveryBand(
+  phase: "sent" | "failed",
+  receipt?: DeliveryBandState["receipt"]
+) {
+  const band = useUIStore.getState().deliveryBand;
+  if (!band || band.phase !== "sending") return;
+  useUIStore.getState().setDeliveryBand({ ids: band.ids, phase, receipt });
+  if (deliveryBandTimer) clearTimeout(deliveryBandTimer);
+  const collapse = () => {
+    const current = useUIStore.getState();
+    if (current.deliveryBand?.phase !== phase || current.deliveryBand.leaving) return;
+    if (phase === "sent" && bandCardHovered(band.ids)) {
+      deliveryBandTimer = setTimeout(collapse, BAND_HOVER_EXTEND_MS);
+      return;
+    }
+    current.setDeliveryBand({ ...current.deliveryBand, leaving: true });
+    deliveryBandTimer = setTimeout(() => {
+      const latest = useUIStore.getState();
+      if (latest.deliveryBand?.leaving) latest.setDeliveryBand(null);
+      deliveryBandTimer = null;
+    }, 160);
+  };
+  deliveryBandTimer = setTimeout(
+    collapse,
+    phase === "sent" ? BAND_HOLD_SENT_MS : BAND_HOLD_FAILED_MS
+  );
+}
+
+/** 回执带「撤销」：把本次发送后标记完成的卡恢复为未完成，并收起回执带。 */
+export function undoDeliveryBandCompletion() {
+  const band = useUIStore.getState().deliveryBand;
+  const ids = band?.receipt?.undoIds ?? [];
+  if (ids.length === 0) return;
+  useNotesStore.getState().setDone([...ids], false);
+  if (deliveryBandTimer) clearTimeout(deliveryBandTimer);
+  deliveryBandTimer = null;
+  useUIStore.getState().setDeliveryBand(null);
+  tip("undone", `已恢复 ${ids.length} 张卡为未完成`);
 }
 
 /** 所有外部发送唯一执行器；只消费不可变 Draft，不再自行拼装正文。 */
@@ -474,10 +528,13 @@ export async function executeDeliveryDraft(
   deliveryPending = true;
   let nativeDispatchTarget: TargetSnapshot | null = null;
   try {
-    let pressEnter = draft.safeRehearsal ||
-      firewall.forcePressEnterOff || imageFirewall.forcePressEnterOff
-      ? false
-      : draft.pressEnter;
+    // 回车按方案请求（用户 2026-09-11 确认，撤回审计 F02 的强制关闭）：allow 直接、
+    // confirm 需本次确认；敏感命中强制关闭；原生仍在回车前复核前台身份。
+    const enterClamped =
+      draft.safeRehearsal ||
+      firewall.forcePressEnterOff ||
+      imageFirewall.forcePressEnterOff;
+    let pressEnter = enterClamped ? false : draft.pressEnter;
     if (
       !draft.safeRehearsal &&
       draft.enterPolicy === "confirm" &&
@@ -492,7 +549,7 @@ export async function executeDeliveryDraft(
         tip("info", "已取消发送，内容和选择保持不变");
         return null;
       }
-      pressEnter = true;
+      pressEnter = !enterClamped;
     }
 
     const preserveConfirmedToken = draftHasTargetBoundPrivacyDecision(draft);
@@ -535,6 +592,8 @@ export async function executeDeliveryDraft(
     const panelPlan = planDeliveryPanel(draft.keepPanel);
     if (!panelPlan.keepNativeWindow) useUIStore.getState().setOpen(false);
     nativeDispatchTarget = refreshedTarget;
+    beginDeliveryBand(draft.sourceItemIds);
+    draft = { ...draft, executionManifest: captureExecutionManifest(draft) };
     void recordDeliveryEvent(
       deliveryEventFromDraft(draft, "sendStarted", { status: "started" })
     );
@@ -547,7 +606,7 @@ export async function executeDeliveryDraft(
           ? item.pixelHash
           : item.redactedPixelHash
       ),
-      segments: draftSegmentsForSend(draft),
+      segments: currentDraftSegments(draft),
       allowedTextFindingIds: allowedBlockFindingIds({
         findings: draft.findings,
         excludedFindingIds: draft.privacyDecision.excludedFindingIds,
@@ -564,11 +623,22 @@ export async function executeDeliveryDraft(
       throw new Error("原生发送回执无效");
     }
     recordDeliveryResult(draft, result);
+    if (result.status !== "sent") settleDeliveryBand("failed");
     if (result.status === "sent") {
       rememberDeliveryRedactionMap(draft.id, draft.redactionMap, draft.finalText);
       settlePanelAfterSuccessfulDelivery(panelPlan);
     }
-    if (await discardStaleResult(draft, result)) return result;
+    if (await discardStaleResult(draft, result)) {
+      // 粘贴已发生但卡片状态未改：回执照常落定，只是没有可撤销项
+      if (result.status === "sent") {
+        settleDeliveryBand("sent", {
+          pasted: result.pasteCompleted,
+          entered: result.enterPressed,
+          undoIds: [],
+        });
+      }
+      return result;
+    }
     const targetState = useTargetStore.getState();
     if (
       result.status === "sent" &&
@@ -583,12 +653,18 @@ export async function executeDeliveryDraft(
       clearTargetProfileOverride();
     }
     if (result.status === "sent") {
-      applySuccessfulDelivery(draft);
+      const undoIds = applySuccessfulDelivery(draft);
+      settleDeliveryBand("sent", {
+        pasted: result.pasteCompleted,
+        entered: result.enterPressed,
+        undoIds,
+      });
     } else {
       await restorePanelAfterDelivery(draft.keepPanel);
     }
     return result;
   } catch (error) {
+    settleDeliveryBand("failed");
     await restorePanelAfterDelivery(draft.keepPanel);
     tip("warn", `发送失败：${error}`);
     // 只有进入 Native IPC 后的异常才属于“结果不确定”。调用前的失败没有
@@ -608,6 +684,7 @@ export async function executeDeliveryDraft(
       status: "failed",
       reasonCode: "internal_error",
       message: "发送结果不确定，请先核对目标内容",
+      receiptLevel: "unknown",
       target: nativeDispatchTarget,
       pasteCompleted: false,
       enterPressed: false,

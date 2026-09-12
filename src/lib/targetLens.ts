@@ -66,12 +66,10 @@ export const ENTER_POLICY_STATUS_LABEL: Record<EnterPolicy, string> = {
 /** 折叠态隐藏风险的具体原因；供 chevron 的 title/aria 拼接，解释警示圆点。 */
 export function hiddenWarningReasons(input: {
   privacyCapabilityActive: boolean;
-  enterPolicy: EnterPolicy;
   profileSource: TargetProfileResolutionSource;
 }): string[] {
   const reasons: string[] = [];
   if (!input.privacyCapabilityActive) reasons.push("隐私检查已关闭");
-  if (input.enterPolicy === "allow") reasons.push("自动回车已开启");
   if (input.profileSource === "conflict") reasons.push("方案存在重复绑定冲突");
   return reasons;
 }

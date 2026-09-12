@@ -43,7 +43,7 @@ export function Disclosure({
         />
         {title}
       </button>
-      {open && <div className="mt-1.5">{children}</div>}
+      {open && <div className="reveal-in mt-1.5">{children}</div>}
     </div>
   );
 }

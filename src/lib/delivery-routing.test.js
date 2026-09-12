@@ -125,7 +125,7 @@ describe("发送入口路由", () => {
     expect(app).toContain("if (useDeliveryStore.getState().open) return;");
     expect(composer).toContain("event.stopImmediatePropagation()");
     expect(app).toContain("useDeliveryStore.getState().closeDraft()");
-    expect(app).toContain("<SelectionBar compact={horizontalBar} />");
+    expect(app).toMatch(/<SelectionBar\b[^>]*\bcompact=\{horizontalBar\}/);
     expect(app).toContain("<PreflightComposer horizontal={horizontalBar} />");
     expect(readFileSync(path.join(srcRoot, "components", "TaskRow.tsx"), "utf8"))
       .toContain("sendTaskToChat(task.id, { forcePreflight: true })");

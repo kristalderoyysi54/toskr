@@ -42,9 +42,9 @@ describe("OutcomeInsightsSection", () => {
       <OutcomeMetricsSummary metrics={metrics()} rangeLabel="近 30 天" />
     );
 
-    expect(html).toContain("发送完成");
+    expect(html).toContain("按键执行完成");
     expect(html).toContain("共 3 次尝试");
-    expect(html).toContain("成功率");
+    expect(html).toContain("按键执行完成率");
     expect(html).toContain("已保护敏感内容");
     expect(html).toContain("累计约节省 4.0 分钟");
     expect(html).toContain("近 30 天");
@@ -98,7 +98,7 @@ describe("OutcomeInsightsSection", () => {
     expect(firstUse).toContain("还没有可统计的发送");
     expect(firstUse).toContain("完成一次发送后");
     expect(firstUse).toContain("发送第一条内容试试");
-    expect(firstUse).not.toContain("发送完成");
+    expect(firstUse).not.toContain("共 0 次尝试");
 
     const filtered = renderToStaticMarkup(
       <OutcomeMetricsSummary metrics={empty} hasActivity />

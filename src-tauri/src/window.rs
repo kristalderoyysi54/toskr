@@ -12,9 +12,13 @@ use tauri::{
 };
 
 use crate::ax::{self, AxWindowFrame};
-use crate::events::{HudHoverPayload, HudPayload, HUD_EVENT, HUD_EXIT_EVENT, HUD_HOVER_EVENT};
+use crate::events::{
+    HudHoverPayload, HudPayload, MenuFlyoutCursorPayload, MenuFlyoutPointerPayload, HUD_EVENT,
+    HUD_EXIT_EVENT, HUD_HOVER_EVENT, MENU_FLYOUT_CLICK_EVENT, MENU_FLYOUT_CURSOR_EVENT,
+    MENU_FLYOUT_EVENT, MENU_FLYOUT_POINTER_EVENT,
+};
 use crate::focus;
-use crate::state::{AppState, EdgeHideAnchor};
+use crate::state::{AppState, EdgeHideAnchor, MenuFlyoutAnchorPt};
 
 /// 面板与 HUD 距工作区边缘的逻辑边距（pt）。
 const MARGIN: f64 = 12.0;
@@ -356,6 +360,7 @@ fn show_panel_on_main(app: &AppHandle) -> tauri::Result<()> {
         window.set_position(LogicalPosition::new(x, y))?;
         ensure_fullscreen_auxiliary(&window);
         window.show()?;
+        let _ = app.emit_to("main", "toskr://panel-shown", ());
         window.set_focus()?;
         return Ok(());
     }
@@ -417,6 +422,7 @@ fn show_panel_on_main(app: &AppHandle) -> tauri::Result<()> {
             window.set_position(LogicalPosition::new(x, y))?;
             ensure_fullscreen_auxiliary(&window);
             window.show()?;
+            let _ = app.emit_to("main", "toskr://panel-shown", ());
             window.set_focus()?;
             start_companion_tracker(app, pid, monitors);
         }
@@ -505,6 +511,7 @@ fn show_panel_on_main(app: &AppHandle) -> tauri::Result<()> {
             window.set_position(LogicalPosition::new(x, y))?;
             ensure_fullscreen_auxiliary(&window);
             window.show()?;
+            let _ = app.emit_to("main", "toskr://panel-shown", ());
             window.set_focus()?;
         }
     }
@@ -515,6 +522,7 @@ fn show_panel_on_main(app: &AppHandle) -> tauri::Result<()> {
 pub fn hide_panel(app: &AppHandle, restore_focus: bool) {
     // 面板一藏，悬停窥视的瞬态预览窗一并收起（webview 隐藏后没有 pointerleave 兜底）
     hide_transient_image_preview(app);
+    hide_menu_flyout(app);
     stop_companion_tracker(app);
     set_panel_auto_hide_armed(app, true, "面板关闭");
     if let Some(state) = app.try_state::<AppState>() {
@@ -2224,6 +2232,253 @@ fn hud_lifecycle(app: AppHandle, generation: u64, sticky: bool, duration_ms: u64
     }
 }
 
+// ============ 右键子菜单独立小窗（menuflyout） ============
+
+const MENU_FLYOUT_LABEL: &str = "menuflyout";
+/// 小窗与主菜单之间的间隙（pt）。
+const MENU_FLYOUT_GAP: f64 = 2.0;
+/// 小窗内边距（与 ContextMenuContent 的 p-1 一致），让首项与触发行顶部对齐。
+const MENU_FLYOUT_PADDING: f64 = 4.0;
+/// 小窗四周留给 CSS 投影的透明边距（pt）；MenuFlyoutView 的外层内边距须同值。
+/// 窗口本身 shadow=false（透明窗的系统阴影随内容变化会残影），投影由前端画在这圈边距里。
+pub const MENU_FLYOUT_SHADOW_PAD: f64 = 12.0;
+
+/// 菜单盒（不含投影）矩形 → 窗口实际框（四周各扩一圈投影边距）。
+pub fn menu_flyout_frame(x: f64, y: f64, width: f64, height: f64) -> (f64, f64, f64, f64) {
+    (
+        x - MENU_FLYOUT_SHADOW_PAD,
+        y - MENU_FLYOUT_SHADOW_PAD,
+        width + MENU_FLYOUT_SHADOW_PAD * 2.0,
+        height + MENU_FLYOUT_SHADOW_PAD * 2.0,
+    )
+}
+
+/// 按菜单盒矩形摆放窗口框。
+fn apply_menu_flyout_frame(window: &tauri::WebviewWindow, x: f64, y: f64, width: f64, height: f64) {
+    let (fx, fy, fw, fh) = menu_flyout_frame(x, y, width, height);
+    let _ = window.set_size(LogicalSize::new(fw, fh));
+    let _ = window.set_position(LogicalPosition::new(fx, fy));
+}
+
+/// 子菜单小窗落点（纯函数，可测）：优先主菜单右侧；右侧放不下则贴到主菜单左侧；
+/// 纵向夹在锚点所在屏幕的工作区内。
+pub fn place_menu_flyout(
+    monitors: &[MonitorPt],
+    anchor: MenuFlyoutAnchorPt,
+    width: f64,
+    height: f64,
+) -> (f64, f64) {
+    let (ax, ay) = (anchor.menu_right, anchor.top);
+    let monitor = monitors
+        .iter()
+        .find(|m| {
+            ax >= m.wa_x - MARGIN
+                && ax <= m.wa_x + m.wa_w + MARGIN
+                && ay >= m.wa_y - MARGIN * 4.0
+                && ay <= m.wa_y + m.wa_h + MARGIN
+        })
+        .or_else(|| monitors.first());
+    let mut x = anchor.menu_right + MENU_FLYOUT_GAP;
+    let mut y = anchor.top - MENU_FLYOUT_PADDING;
+    if let Some(m) = monitor {
+        if x + width > m.wa_x + m.wa_w - MARGIN {
+            x = anchor.menu_left - MENU_FLYOUT_GAP - width;
+        }
+        if x < m.wa_x + MARGIN {
+            x = m.wa_x + MARGIN;
+        }
+        if y + height > m.wa_y + m.wa_h - MARGIN {
+            y = m.wa_y + m.wa_h - MARGIN - height;
+        }
+        if y < m.wa_y + MARGIN {
+            y = m.wa_y + MARGIN;
+        }
+    }
+    (x, y)
+}
+
+/// 显示子菜单小窗：锚点为屏幕逻辑 pt。先按估算高度摆放，前端渲染后经
+/// [`resize_menu_flyout`] 回报真实高度再夹紧一次。窗口不可聚焦（focusable=false），
+/// 悬停高亮与点击均由光标轮询驱动，不依赖 key window。
+pub fn show_menu_flyout(
+    app: &AppHandle,
+    anchor: MenuFlyoutAnchorPt,
+    width: f64,
+    height: f64,
+    entries: serde_json::Value,
+) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let Some(window) = handle.get_webview_window(MENU_FLYOUT_LABEL) else {
+            return;
+        };
+        let (x, y) = place_menu_flyout(&snapshot_monitors_pt(&handle), anchor, width, height);
+        crate::diag::push(
+            &handle,
+            format!(
+                "子菜单小窗: 锚点 L{:.0} R{:.0} T{:.0} → 落点 ({:.0},{:.0}) {:.0}×{:.0}",
+                anchor.menu_left, anchor.menu_right, anchor.top, x, y, width, height
+            ),
+        );
+        let _ = handle.emit_to(MENU_FLYOUT_LABEL, MENU_FLYOUT_EVENT, entries);
+        apply_menu_flyout_frame(&window, x, y, width, height);
+        ensure_fullscreen_auxiliary(&window);
+        order_front_without_focus(&window);
+
+        let state = handle.state::<AppState>();
+        {
+            let mut fly = state.menu_flyout.lock().unwrap();
+            fly.visible = true;
+            fly.hovered = false;
+            fly.rect_pt = (x, y, width, height);
+            fly.anchor = anchor;
+            fly.width = width;
+        }
+        let generation = state.menu_flyout_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let poll = handle.clone();
+        tauri::async_runtime::spawn_blocking(move || menu_flyout_lifecycle(poll, generation));
+    });
+}
+
+/// 前端渲染完成后回报真实高度：按同一锚点重新夹紧摆放。
+pub fn resize_menu_flyout(app: &AppHandle, height: f64) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let Some(window) = handle.get_webview_window(MENU_FLYOUT_LABEL) else {
+            return;
+        };
+        let state = handle.state::<AppState>();
+        let (anchor, width, visible) = {
+            let fly = state.menu_flyout.lock().unwrap();
+            (fly.anchor, fly.width, fly.visible)
+        };
+        if !visible {
+            return;
+        }
+        let (x, y) = place_menu_flyout(&snapshot_monitors_pt(&handle), anchor, width, height);
+        apply_menu_flyout_frame(&window, x, y, width, height);
+        state.menu_flyout.lock().unwrap().rect_pt = (x, y, width, height);
+    });
+}
+
+/// 主菜单内容滚动后触发行位置变了：按新锚点、当前尺寸重新摆放（不重发条目、不重启轮询）。
+pub fn move_menu_flyout(app: &AppHandle, anchor: MenuFlyoutAnchorPt) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let Some(window) = handle.get_webview_window(MENU_FLYOUT_LABEL) else {
+            return;
+        };
+        let state = handle.state::<AppState>();
+        let (width, height, visible) = {
+            let fly = state.menu_flyout.lock().unwrap();
+            (fly.width, fly.rect_pt.3, fly.visible)
+        };
+        if !visible {
+            return;
+        }
+        let (x, y) = place_menu_flyout(&snapshot_monitors_pt(&handle), anchor, width, height);
+        let (fx, fy, _, _) = menu_flyout_frame(x, y, width, height);
+        let _ = window.set_position(LogicalPosition::new(fx, fy));
+        let mut fly = state.menu_flyout.lock().unwrap();
+        fly.rect_pt = (x, y, width, height);
+        fly.anchor = anchor;
+    });
+}
+
+/// 隐藏子菜单小窗；任意线程可调。
+pub fn hide_menu_flyout(app: &AppHandle) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    {
+        let mut fly = state.menu_flyout.lock().unwrap();
+        if !fly.visible {
+            return;
+        }
+        fly.visible = false;
+        fly.hovered = false;
+    }
+    state.menu_flyout_generation.fetch_add(1, Ordering::SeqCst);
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(w) = handle.get_webview_window(MENU_FLYOUT_LABEL) {
+            let _ = w.hide();
+        }
+    });
+}
+
+/// 左键是否按下（HID 系统状态快照，无需权限）。
+fn mouse_left_button_down() -> bool {
+    extern "C" {
+        fn CGEventSourceButtonState(state_id: i32, button: u32) -> bool;
+    }
+    // kCGEventSourceStateHIDSystemState = 1；kCGMouseButtonLeft = 0
+    unsafe { CGEventSourceButtonState(1, 0) }
+}
+
+/// 子菜单小窗生命周期：光标命中判定（进出通知主窗口、位置通知小窗做高亮）
+/// 与左键点击兜底（不可聚焦窗口收不到 mouseMoved，click 也不保证送达）。
+fn menu_flyout_lifecycle(app: AppHandle, generation: u64) {
+    const TICK: u64 = 40;
+    let mut button_was_down = mouse_left_button_down();
+    loop {
+        std::thread::sleep(Duration::from_millis(TICK));
+        let state = app.state::<AppState>();
+        if state.menu_flyout_generation.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        let rect = {
+            let fly = state.menu_flyout.lock().unwrap();
+            if !fly.visible {
+                return;
+            }
+            fly.rect_pt
+        };
+        let cursor = cursor_point_pt();
+        let inside = cursor
+            .map(|(cx, cy)| {
+                cx >= rect.0 && cx <= rect.0 + rect.2 && cy >= rect.1 && cy <= rect.1 + rect.3
+            })
+            .unwrap_or(false);
+        let changed = {
+            let mut fly = state.menu_flyout.lock().unwrap();
+            let changed = fly.hovered != inside;
+            fly.hovered = inside;
+            changed
+        };
+        if changed {
+            let _ = app.emit_to(
+                "main",
+                MENU_FLYOUT_POINTER_EVENT,
+                MenuFlyoutPointerPayload { inside },
+            );
+        }
+        // 回给小窗的坐标以窗口框（含投影边距）左上角为原点，供 elementFromPoint 命中
+        let (frame_x, frame_y, _, _) = menu_flyout_frame(rect.0, rect.1, rect.2, rect.3);
+        if inside || changed {
+            let (x, y) = cursor
+                .map(|(cx, cy)| (cx - frame_x, cy - frame_y))
+                .unwrap_or((-1.0, -1.0));
+            let _ = app.emit_to(
+                MENU_FLYOUT_LABEL,
+                MENU_FLYOUT_CURSOR_EVENT,
+                MenuFlyoutCursorPayload { inside, x, y },
+            );
+        }
+        let button_down = mouse_left_button_down();
+        if button_was_down && !button_down && inside {
+            if let Some((cx, cy)) = cursor {
+                let _ = app.emit_to(
+                    MENU_FLYOUT_LABEL,
+                    MENU_FLYOUT_CLICK_EVENT,
+                    MenuFlyoutCursorPayload { inside: true, x: cx - frame_x, y: cy - frame_y },
+                );
+            }
+        }
+        button_was_down = button_down;
+    }
+}
+
 /// 立即隐藏 HUD（点击气泡打开面板后收起提示）。任意线程可调。
 pub fn hide_hud_now(app: &AppHandle) {
     let state = app.state::<AppState>();
@@ -2528,6 +2783,47 @@ fn cursor_work_area(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn flyout_monitor() -> MonitorPt {
+        MonitorPt {
+            wa_x: 0.0,
+            wa_y: 25.0,
+            wa_w: 1440.0,
+            wa_h: 875.0,
+            mon_x: 0.0,
+            mon_y: 0.0,
+            mon_w: 1440.0,
+            mon_h: 900.0,
+        }
+    }
+
+    #[test]
+    fn menu_flyout_prefers_right_side_and_aligns_first_item() {
+        let anchor = MenuFlyoutAnchorPt { menu_left: 900.0, menu_right: 1124.0, top: 300.0 };
+        let (x, y) = place_menu_flyout(&[flyout_monitor()], anchor, 208.0, 240.0);
+        assert_eq!((x, y), (1126.0, 296.0));
+    }
+
+    #[test]
+    fn menu_flyout_flips_left_when_right_edge_lacks_room() {
+        let anchor = MenuFlyoutAnchorPt { menu_left: 1180.0, menu_right: 1404.0, top: 300.0 };
+        let (x, _) = place_menu_flyout(&[flyout_monitor()], anchor, 208.0, 240.0);
+        assert_eq!(x, 1180.0 - 2.0 - 208.0);
+    }
+
+    #[test]
+    fn menu_flyout_frame_expands_box_by_shadow_pad_on_every_side() {
+        let (fx, fy, fw, fh) = menu_flyout_frame(100.0, 200.0, 208.0, 240.0);
+        assert_eq!((fx, fy), (100.0 - MENU_FLYOUT_SHADOW_PAD, 200.0 - MENU_FLYOUT_SHADOW_PAD));
+        assert_eq!((fw, fh), (208.0 + MENU_FLYOUT_SHADOW_PAD * 2.0, 240.0 + MENU_FLYOUT_SHADOW_PAD * 2.0));
+    }
+
+    #[test]
+    fn menu_flyout_clamps_to_work_area_bottom() {
+        let anchor = MenuFlyoutAnchorPt { menu_left: 100.0, menu_right: 324.0, top: 850.0 };
+        let (_, y) = place_menu_flyout(&[flyout_monitor()], anchor, 208.0, 240.0);
+        assert_eq!(y, 25.0 + 875.0 - 12.0 - 240.0);
+    }
 
     #[test]
     fn stealth_never_suppresses_clipboard_warnings() {

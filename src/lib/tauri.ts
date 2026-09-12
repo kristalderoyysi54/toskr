@@ -1,3 +1,4 @@
+import type { AiPurpose } from "./aiClient";
 import { waitForPrivacySettingsSave } from "@/lib/delivery/privacySettingsBarrier";
 import { invoke } from "@tauri-apps/api/core";
 import type { DeliveryEvent } from "@/lib/deliveryActivityCore";
@@ -20,6 +21,18 @@ export const HUD_EXIT_EVENT = "toskr://hud-exit";
 export const UNDO_CAPTURE_EVENT = "toskr://undo-capture";
 /** HUD → 主窗口：点击气泡打开面板并定位到刚捕获的卡片。 */
 export const HUD_OPEN_PANEL_EVENT = "toskr://hud-open-panel";
+/** Rust → menuflyout 窗口：展示子菜单条目。 */
+export const MENU_FLYOUT_EVENT = "toskr://menu-flyout";
+/** Rust → menuflyout：光标在小窗内的位置（窗口内逻辑 pt）或已离开。 */
+export const MENU_FLYOUT_CURSOR_EVENT = "toskr://menu-flyout-cursor";
+/** Rust → menuflyout：轮询到的左键点击（不可聚焦窗口不保证收到原生 click）。 */
+export const MENU_FLYOUT_CLICK_EVENT = "toskr://menu-flyout-click";
+/** Rust → 主窗口：光标是否在子菜单小窗内。 */
+export const MENU_FLYOUT_POINTER_EVENT = "toskr://menu-flyout-pointer";
+/** menuflyout → 主窗口：用户选中了条目。 */
+export const MENU_FLYOUT_SELECT_EVENT = "toskr://menu-flyout-select";
+/** 主窗口 → menuflyout：键盘导航转发。 */
+export const MENU_FLYOUT_KEY_EVENT = "toskr://menu-flyout-key";
 /** 独立模式下面板被拖动 → 主窗口持久化新位置。 */
 export const PANEL_MOVED_EVENT = "toskr://panel-moved";
 /** 托盘隐身模式切换 → 主窗口同步持久化。 */
@@ -128,6 +141,13 @@ export interface ImCandidate {
   name: string;
   bundleId: string;
   binPath: string;
+}
+
+/** 子菜单小窗锚点：主菜单在主窗口内的左右缘与触发行顶部（CSS px）。 */
+export interface MenuFlyoutAnchor {
+  menuLeft: number;
+  menuRight: number;
+  top: number;
 }
 
 export interface MessageSourceOverlayPayload {
@@ -412,9 +432,9 @@ export type ClipboardOutcome =
   | "restoreFailed"
   | "notOwned";
 
-/** 图文交错粘贴顺序中的一段；image 按下标引用 imageFiles。 */
+/** 图文交错粘贴顺序；text 为正文 UTF-8 字节区间，image 引用 imageFiles。 */
 export type DeliverySegment =
-  | { kind: "text"; text: string }
+  | { kind: "text"; start: number; end: number }
   | { kind: "image"; fileIndex: number };
 
 export interface SendDeliveryRequest {
@@ -440,14 +460,20 @@ export interface SendDeliveryRequest {
   deliveryId: string;
 }
 
+export type DeliveryReceiptLevel = "notAttempted" | "keysExecuted" | "unknown";
+
 export interface SendDeliveryResult {
   deliveryId: string;
   status: DeliveryStatus;
   reasonCode: DeliveryReasonCode;
   message: string;
   target: TargetSnapshot | null;
+  /** 仅代表粘贴按键执行完成，不代表目标接收。 */
   pasteCompleted: boolean;
   enterPressed: boolean;
+  receiptLevel?: DeliveryReceiptLevel;
+  completedSteps?: number;
+  totalSteps?: number;
   clipboardOutcome: ClipboardOutcome;
   startedAtMs: number;
   finishedAtMs: number;
@@ -632,9 +658,19 @@ export function isSendDeliveryResult(value: unknown): value is SendDeliveryResul
     Number.isFinite(value.finishedAtMs) &&
     value.finishedAtMs >= value.startedAtMs;
   if (!structurallyValid) return false;
+  if (value.receiptLevel !== undefined &&
+      !["notAttempted", "keysExecuted", "unknown"].includes(String(value.receiptLevel))) return false;
+  if (value.completedSteps !== undefined || value.totalSteps !== undefined) {
+    if (!Number.isSafeInteger(value.completedSteps) || !Number.isSafeInteger(value.totalSteps) ||
+        (value.completedSteps as number) < 0 ||
+        (value.completedSteps as number) > (value.totalSteps as number)) return false;
+  }
   if (value.status === "sent") {
     return (
       value.reasonCode === "ok" &&
+      (value.receiptLevel === undefined || value.receiptLevel === "keysExecuted") &&
+      (value.totalSteps === undefined ||
+        (value.completedSteps === value.totalSteps && (value.totalSteps as number) > 0)) &&
       value.pasteCompleted === true &&
       isTargetSnapshot(value.target) &&
       value.target.ready
@@ -733,7 +769,7 @@ export const api = {
   setNewNoteHotkey: (shortcut: string | null) =>
     invoke("set_new_note_hotkey", { shortcut }),
   /** 抓取链接的网页标题/图标（curl，6s 超时）。 */
-  fetchLinkMeta: (url: string) => invoke<LinkMeta>("fetch_link_meta", { url }),
+  fetchLinkMeta: (url: string, manual = false) => invoke<LinkMeta>("fetch_link_meta", { url, manual }),
   /** 按域名抓 favicon 缓存进媒体库，返回文件名；失败 reject（前端回退首字色块）。 */
   fetchFavicon: (domain: string) => invoke<string>("fetch_favicon", { domain }),
   /** 抓当日汇率（USD 基准 code→rate）；前端按日缓存，失败 reject。 */
@@ -840,15 +876,22 @@ export const api = {
     invoke<AiKeyStatus>("set_ai_api_key", { apiKey, overwriteExisting }),
   getAiKeyStatus: () => invoke<AiKeyStatus>("get_ai_key_status"),
   deleteAiApiKey: () => invoke<AiKeyStatus>("delete_ai_api_key"),
+  beginAiRequest: () => invoke<string>("begin_ai_request"),
+  authorizeAiRequest: (requestId: string, request: {
+    baseUrl: string; model: string; system: string; user: string; maxTokens: number; purpose: AiPurpose;
+  }) => invoke<void>("authorize_ai_request", { requestId, request }),
+  cancelAiRequest: (requestId: string) => invoke<void>("cancel_ai_request", { requestId }),
   /** OpenAI 兼容对话补全；Rust 从 Keychain 读取 key。 */
   aiChat: (
     baseUrl: string,
     model: string,
     system: string,
     user: string,
-    maxTokens: number
+    maxTokens: number,
+    requestId: string,
+    purpose: AiPurpose
   ) =>
-    invoke<string>("ai_chat", { baseUrl, model, system, user, maxTokens }),
+    invoke<string>("ai_chat", { requestId, request: { baseUrl, model, system, user, maxTokens, purpose } }),
   /** 拉取提供商可用模型列表（GET /v1/models）。 */
   aiListModels: (baseUrl: string) =>
     invoke<string[]>("ai_list_models", { baseUrl }),
@@ -911,7 +954,21 @@ export const api = {
     sticky?: boolean,
     targetId?: string
   ) => invoke("hud_feedback", { kind, text, undoable, sticky, targetId }),
+  hudAction: (action: "open" | "undo", targetId?: string, due = false) =>
+    invoke<void>("hud_action", { action, targetId, due }),
   hideHud: () => invoke("hide_hud"),
+  /** 打开右键子菜单小窗（主窗口）；entries 为序列化后的条目。 */
+  showMenuFlyout: (anchor: MenuFlyoutAnchor, width: number, height: number, entries: unknown) =>
+    invoke<void>("show_menu_flyout", { anchor, width, height, entries }),
+  hideMenuFlyout: () => invoke<void>("hide_menu_flyout"),
+  /** 子菜单小窗回报渲染后的高度。 */
+  menuFlyoutResize: (height: number) => invoke<void>("menu_flyout_resize", { height }),
+  /** 子菜单小窗内选中条目 → 主窗口执行。 */
+  menuFlyoutSelect: (id: string) => invoke<void>("menu_flyout_select", { id }),
+  /** 主窗口把键盘导航转发给子菜单小窗。 */
+  menuFlyoutKey: (key: string) => invoke<void>("menu_flyout_key", { key }),
+  /** 主菜单滚动后重报锚点：小窗跟着触发行移动。 */
+  menuFlyoutMove: (anchor: MenuFlyoutAnchor) => invoke<void>("menu_flyout_move", { anchor }),
   diagNote: (msg: string) => invoke("diag_note", { msg }),
   appIcon: (bundleId: string) =>
     invoke<{ url: string; color: string } | null>("app_icon", { bundleId }),

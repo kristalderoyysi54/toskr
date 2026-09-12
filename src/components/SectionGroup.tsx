@@ -131,7 +131,7 @@ export function SectionGroup({
         isDragging && "z-10 opacity-70 elevation-2"
       )}
     >
-      <div className="group mb-1.5 flex h-5 items-center gap-1 pl-0.5 pr-1">
+      <div className="group sticky top-1 z-10 mb-1.5 flex h-5 items-center gap-1 pl-0.5 pr-1">
         <IconButton
           label={collapsed ? "展开分组" : "折叠分组"}
           aria-expanded={!collapsed}
@@ -161,14 +161,14 @@ export function SectionGroup({
                 setRenaming(false);
               }
             }}
-            className="h-5 w-32 bg-transparent text-label font-semibold uppercase tracking-[0.08em] outline-none"
+            className="h-5 min-w-0 w-32 bg-transparent text-label font-semibold uppercase tracking-[0.08em] outline-none"
           />
         ) : (
           <h3
             {...attributes}
             {...listeners}
-            title="拖动调整分组顺序 · 点击折叠/展开 · 双击重命名"
-            className="cursor-grab select-none touch-none text-label font-semibold uppercase tracking-[0.08em] text-muted-foreground hover:text-foreground active:cursor-grabbing"
+            title={`${section.name} · 拖动调整分组顺序 · 点击折叠/展开 · 双击重命名`}
+            className="min-w-0 cursor-grab select-none touch-none truncate text-label font-semibold uppercase tracking-[0.08em] text-muted-foreground hover:text-foreground active:cursor-grabbing"
             onClick={() => {
               window.clearTimeout(clickTimer.current);
               clickTimer.current = window.setTimeout(
@@ -191,9 +191,9 @@ export function SectionGroup({
             aria-label="发送后保留"
           />
         )}
-        <span className="text-micro tabular-nums text-muted-foreground">{total}</span>
+        <span className="shrink-0 text-micro tabular-nums text-muted-foreground">{total}</span>
 
-        <div className="ml-auto flex items-center gap-0.5">
+        <div className="ml-auto flex shrink-0 items-center gap-0.5">
           <IconButton
             label={`在「${section.name}」中添加内容`}
             size="2xs"
@@ -203,6 +203,7 @@ export function SectionGroup({
             <Plus />
           </IconButton>
           <SimpleMenu
+            portal
             align="end"
             trigger={({ open, toggle }) => (
               <IconButton
@@ -324,7 +325,7 @@ export function SectionGroup({
                 <WindowedListItem
                   key={note.id}
                   itemId={note.id}
-                  estimatedHeight={compact ? 40 : 136}
+                  estimatedHeight={compact ? 40 : 116}
                   eager={eager && index < 18}
                 >
                   <NoteCard note={note} query={query} />
@@ -349,7 +350,7 @@ export function SectionGroup({
                       <WindowedListItem
                         key={note.id}
                         itemId={note.id}
-                        estimatedHeight={compact ? 40 : 136}
+                        estimatedHeight={compact ? 40 : 116}
                       >
                         <NoteCard note={note} query={query} />
                       </WindowedListItem>

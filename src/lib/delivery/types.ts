@@ -16,6 +16,7 @@ import type {
   TargetProfileResolutionSource,
 } from "@/lib/targetProfiles";
 import type { Note, Task } from "@/store/notesStore";
+import type { MessageItem } from "@/lib/messages";
 import type { NoteContentBlock } from "@/lib/noteContentBlocks";
 import type { AliasEntity } from "./aliasEntities";
 import type {
@@ -52,7 +53,7 @@ export interface ImageFirewallItem {
   failureMessage: string | null;
 }
 
-export type DeliverySourceKind = "note" | "note-batch" | "task";
+export type DeliverySourceKind = "note" | "note-batch" | "task" | "message";
 export type { MarkdownSendMode } from "@/lib/targetProfiles";
 
 export type DeliveryDraftWarning =
@@ -63,6 +64,7 @@ export type DeliveryDraftWarning =
 export interface DeliveryDraft {
   id: string;
   revision: number;
+  executionManifest?: import("./executionManifest").ExecutionManifest;
   createdAtMs: number;
   sourceKind: DeliverySourceKind;
   sourceItemIds: string[];
@@ -92,6 +94,8 @@ export interface DeliveryDraft {
    * 复核，预检改过正文即自动退回默认顺序。
    */
   segments: DeliverySegment[] | null;
+  /** 段范围绑定的正文；历史草稿缺省时使用 assembledText。 */
+  segmentsText?: string;
   imageFirewall: ImageFirewallItem[];
   format: DeliveryFormat;
   /** Markdown 只在本次发送时转换；来源卡片始终保留原文。 */
@@ -161,6 +165,8 @@ export interface DeliveryDraftInput {
 export interface DeliveryDraftBuildState {
   notes: readonly Note[];
   tasks: readonly Task[];
+  /** 消息来源（消息卡「发送到对话」，2026-09-11）；缺省视为无消息。 */
+  messages?: readonly MessageItem[];
   promptSnippets: readonly PromptSnippet[];
   checkedItemIds: readonly string[];
   targetSnapshot: TargetSnapshot | null;

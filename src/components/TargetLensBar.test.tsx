@@ -163,9 +163,30 @@ describe("TargetLensView", () => {
     expect(html).toContain('aria-expanded="false"');
     expect(html).toContain('aria-controls="');
     expect(html).toContain(
-      'aria-label="展开发送详情 · 隐私检查已关闭、自动回车已开启"'
+      'aria-label="展开发送详情 · 隐私检查已关闭"'
     );
     expect(html).toContain("data-target-lens-warning-indicator");
+  });
+
+  it("折叠状态保留异常风险，不常驻显示应用级确认说明", () => {
+    const html = render({
+      status: "ready", snapshot: readySnapshot, enterPolicy: "allow",
+      privacyCapabilityActive: false, profileSource: "conflict",
+    });
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain('data-target-lens-risk-summary="true"');
+    expect(html).not.toContain("仅确认目标应用，未确认输入位置");
+    expect(html).toMatch(/<p[^>]*data-target-lens-risk-summary[^>]*>隐私检查已关闭；方案存在重复绑定冲突<\/p>/);
+  });
+
+  it("仅开启自动回车配置时不显示异常警告", () => {
+    const html = render({
+      status: "ready", snapshot: readySnapshot, enterPolicy: "allow",
+      privacyCapabilityActive: true, profileSource: "exact",
+    });
+    expect(html).not.toContain("data-target-lens-risk-summary");
+    expect(html).not.toContain("data-target-lens-warning-indicator");
+    expect(html).not.toContain("本次需手动提交");
   });
 
   it("详情状态只响应箭头切换，Escape 收起", () => {
@@ -299,5 +320,33 @@ describe("TargetLensView", () => {
     expect(html).toContain("目标应用已退出，请重新识别");
     expect(html).toContain("隐私检查：尚未启用");
     expect(html).toContain("重新识别");
+  });
+});
+
+describe("可恢复失效（O1）", () => {
+  it.each([
+    ["target_not_frontmost", "目标应用已不在前台"],
+    ["refresh_failed", "目标确认失败"],
+    ["target_identity_unavailable", "无法验证目标身份"],
+  ] as const)("%s 只展示原因，无倒计时或行内重新识别入口", (reason, label) => {
+    const recoverable = render({
+      status: "blocked",
+      snapshot: readySnapshot,
+      reason,
+    });
+    expect(recoverable).toContain("data-target-lens-recovery");
+    const recoveryNotice = recoverable.split("data-target-lens-recovery")[1]!.split("</div>")[0]!;
+    expect(recoveryNotice).toContain(label);
+    expect(recoveryNotice).not.toContain("<button");
+    expect(recoveryNotice).not.toContain("重新识别");
+    expect(recoveryNotice).not.toContain("自动重试");
+    expect(recoverable).not.toContain('role="alert"');
+    expect(recoverable).toContain('aria-label="重新识别发送目标"');
+  });
+
+  it("退出类失效仍为红色告警", () => {
+    const fatal = render({ status: "blocked", snapshot: readySnapshot, reason: "target_exited" });
+    expect(fatal).toContain('role="alert"');
+    expect(fatal).not.toContain("data-target-lens-recovery");
   });
 });

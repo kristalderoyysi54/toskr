@@ -224,7 +224,7 @@ export function TargetProfileManager({
     const availability = !currentTarget?.bundleId
       ? "尚未识别粘贴目标"
       : currentResolution.isTargetReady
-        ? "已识别粘贴位置"
+        ? "已识别目标应用，输入位置未确认"
         : "请重新选择目标输入框";
     setTestMessage(
       `规则已重新计算：${currentResolution.profile.name} · ${availability}。未执行粘贴或回车。`

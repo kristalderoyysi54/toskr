@@ -27,8 +27,11 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUpCircle,
+  ArrowUp,
+  ArrowDown,
   CheckCheck,
   Pencil,
+  PanelLeft,
   Plus,
   Star,
   Trash2,
@@ -80,6 +83,8 @@ import {
   type DetailWindowState,
 } from "@/lib/detailWindows";
 import { UpdateDialog } from "@/components/UpdateDialog";
+import { CommandPalette } from "@/components/CommandPalette";
+import { KeyHintRow } from "@/components/KeyHintRow";
 import { SectionGroup } from "@/components/SectionGroup";
 import { Button } from "@/components/ui/button";
 import {
@@ -115,7 +120,7 @@ import {
   TASK_SPARKS_COLLAPSED_KEY,
 } from "@/components/TaskPage";
 import { RemindersPage } from "@/components/RemindersPage";
-import { ContentTabs } from "@/components/ContentTabs";
+import { ContentTabPanels, ContentTabs } from "@/components/ContentTabs";
 import { MessagePage } from "@/components/messages/MessagePage";
 import { TaskTile } from "@/components/TaskRow";
 import { SecretPage } from "@/components/SecretPage";
@@ -202,6 +207,7 @@ import {
   isSafeRehearsalText,
   safeRehearsalLaunchEvent,
 } from "@/lib/onboarding";
+import { PANEL_SHOWN_EVENT, syncPanelVisibility } from "@/lib/panelVisibilitySync";
 import {
   api,
   EDGE_HIDE_STATE_EVENT,
@@ -339,7 +345,7 @@ function userError(error: unknown): string {
   return String(error);
 }
 
-/** 横栏分组胶囊管理能力（与竖栏分组头对齐）。 */
+/** 分组导航管理能力（与列表分组头对齐）。 */
 interface PillManage {
   rename: (id: string, name: string) => void;
   move: (id: string, dir: -1 | 1) => void;
@@ -357,12 +363,13 @@ interface PillManage {
   add?: () => void;
 }
 
-const pillCls = (on: boolean) =>
+const pillCls = (on: boolean, vertical = false) =>
   cn(
     "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-label transition-[color,background-color,border-color] duration-(--duration-control)",
     on
       ? "border-border bg-primary/10 font-medium text-foreground dark:border-input"
-      : "border-transparent text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
+      : "border-transparent text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5",
+    vertical && "min-w-0 w-full gap-1 rounded-md px-0.5 py-1.5 text-left"
   );
 
 /** 单个分组胶囊：点选过滤；双击改名；右键管理菜单（改名/色板/保留/移动/删除）。 */
@@ -371,13 +378,15 @@ function GroupPill({
   on,
   onPick,
   manage,
+  vertical = false,
 }: {
   item: { id: string; name: string; color?: string };
   on: boolean;
   onPick: () => void;
   manage?: PillManage;
+  vertical?: boolean;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging, active: dragged } =
     useSortable({
       id: `pill:${item.id}`,
       disabled: !manage?.reorder,
@@ -406,7 +415,11 @@ function GroupPill({
           else if (e.key === "Escape") setRenaming(false);
         }}
         onBlur={commit}
-        className="h-6 w-24 shrink-0 rounded-full border border-border bg-transparent px-2.5 text-label outline-none"
+        aria-label="分组名称"
+        className={cn(
+          "h-6 w-24 shrink-0 rounded-full border border-border bg-transparent px-2.5 text-label outline-none",
+          vertical && "min-w-0 w-full rounded-md px-1"
+        )}
       />
     );
   }
@@ -415,6 +428,20 @@ function GroupPill({
       ref={manage?.reorder ? setNodeRef : undefined}
       {...(manage?.reorder ? attributes : {})}
       {...(manage?.reorder ? listeners : {})}
+      aria-pressed={on}
+      data-group-dragging={isDragging || undefined}
+      title={item.name}
+      onKeyDown={(event) => {
+        if (vertical && (event.metaKey || event.ctrlKey || event.altKey)) return;
+        // Enter 选组，Space 拾起排序；排序中的 Enter 仍交给 dnd-kit 确认。
+        if (vertical && !dragged && event.key === "Enter") {
+          event.preventDefault();
+          event.stopPropagation();
+          onPick();
+          return;
+        }
+        listeners?.onKeyDown?.(event);
+      }}
       style={
         manage?.reorder
           ? {
@@ -431,16 +458,16 @@ function GroupPill({
         }
       }}
       className={cn(
-        pillCls(on),
+        pillCls(on, vertical),
         manage?.reorder && "cursor-grab touch-none active:cursor-grabbing",
         isDragging && "z-10 opacity-70 elevation-2"
       )}
     >
       <span
-        className="size-2 shrink-0 rounded-full"
+        className={cn("size-2 shrink-0 rounded-full", vertical && "size-1.5")}
         style={{ backgroundColor: item.color ?? "#98989d" }}
       />
-      {item.name}
+      <span className={vertical ? "min-w-0 truncate" : undefined}>{item.name}</span>
     </button>
   );
   if (!manage) return trigger();
@@ -449,7 +476,12 @@ function GroupPill({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{trigger()}</ContextMenuTrigger>
-      <ContextMenuContent className="w-44">
+      <ContextMenuContent
+        data-group-navigation-menu={vertical || undefined}
+        className="w-44"
+        onEscapeKeyDown={vertical ? (event) => event.stopPropagation() : undefined}
+        onKeyDown={vertical ? (event) => event.stopPropagation() : undefined}
+      >
         {manage.checkAll && (
           <ContextMenuItem onClick={() => manage.checkAll?.(item.id)}>
             <CheckCheck className="size-3.5" /> 全选此组
@@ -494,10 +526,12 @@ function GroupPill({
         )}
         <ContextMenuSeparator />
         <ContextMenuItem onClick={() => manage.move(item.id, -1)}>
-          <ArrowLeft className="size-3.5" /> 左移
+          {vertical ? <ArrowUp className="size-3.5" /> : <ArrowLeft className="size-3.5" />}
+          {vertical ? "上移" : "左移"}
         </ContextMenuItem>
         <ContextMenuItem onClick={() => manage.move(item.id, 1)}>
-          <ArrowRight className="size-3.5" /> 右移
+          {vertical ? <ArrowDown className="size-3.5" /> : <ArrowRight className="size-3.5" />}
+          {vertical ? "下移" : "右移"}
         </ContextMenuItem>
         {item.id !== manage.lockedId && (
           <>
@@ -515,7 +549,7 @@ function GroupPill({
   );
 }
 
-/** 横栏分组胶囊行（Paste 顶栏样式）：全部 + 各分组（带色点），点选过滤。 */
+/** 全部 + 各分组：横栏为胶囊，竖栏笔记页为左侧列表。 */
 function GroupPills({
   items,
   active,
@@ -523,6 +557,7 @@ function GroupPills({
   bare,
   manage,
   doneCount,
+  vertical = false,
 }: {
   items: { id: string; name: string; color?: string }[];
   active: string | null;
@@ -532,6 +567,7 @@ function GroupPills({
   manage?: PillManage;
   /** 已完成数量（>0 时显示「已完成」胶囊，选中值为 DONE_FILTER）。 */
   doneCount?: number;
+  vertical?: boolean;
 }) {
   const sensors = useSensors(
     useSensor(PointerSensor, CARD_POINTER_SENSOR_OPTIONS),
@@ -540,12 +576,24 @@ function GroupPills({
   const row = (
     <div
       className={
-        bare
+        vertical
+          ? "flex min-w-0 flex-col items-stretch gap-1"
+          : bare
           ? "flex shrink-0 items-center gap-1"
           : "slim-scroll flex shrink-0 items-center gap-1 overflow-x-auto px-3 pb-1 pt-0.5"
       }
     >
-      <button onClick={() => onPick(null)} className={pillCls(active === null)}>
+      <button
+        onClick={() => onPick(null)}
+        onKeyDown={(event) => {
+          if (vertical && event.key === " " && !event.metaKey && !event.ctrlKey && !event.altKey) {
+            event.preventDefault();
+            onPick(null);
+          }
+        }}
+        aria-pressed={active === null}
+        className={cn(pillCls(active === null, vertical), vertical && "justify-center text-center")}
+      >
         全部
       </button>
       {items.map((s) => (
@@ -553,8 +601,9 @@ function GroupPills({
           key={s.id}
           item={s}
           on={active === s.id}
-          onPick={() => onPick(active === s.id ? null : s.id)}
+          onPick={() => onPick(!vertical && active === s.id ? null : s.id)}
           manage={manage}
+          vertical={vertical}
         />
       ))}
       {doneCount !== undefined && doneCount > 0 && (
@@ -565,7 +614,17 @@ function GroupPills({
           ✓ 已完成 {doneCount}
         </button>
       )}
-      {manage?.add && (
+      {manage?.add && (vertical ? (
+        <Button
+          size="xs"
+          variant="ghost"
+          aria-label="新建分组"
+          onClick={manage.add}
+          className="mt-1 w-full justify-start gap-1 px-1 font-normal text-muted-foreground/60 hover:text-foreground focus-visible:text-foreground"
+        >
+          <Plus className="size-3" /> 新建
+        </Button>
+      ) : (
         <button
           aria-label="新建分组"
           title="新建分组（双击胶囊可改名）"
@@ -574,7 +633,7 @@ function GroupPills({
         >
           <Plus className="size-3.5" />
         </button>
-      )}
+      ))}
     </div>
   );
 
@@ -593,11 +652,121 @@ function GroupPills({
     >
       <SortableContext
         items={items.map((item) => `pill:${item.id}`)}
-        strategy={horizontalListSortingStrategy}
+        strategy={vertical ? verticalListSortingStrategy : horizontalListSortingStrategy}
       >
         {row}
       </SortableContext>
     </DndContext>
+  );
+}
+
+/** 收起时不占宽度；展开内嵌列表并让卡片随宽度过渡向右让位。 */
+function NoteGroupRail({ items, active, onPick, manage }: {
+  items: { id: string; name: string; color?: string }[];
+  active: string | null;
+  onPick: (id: string | null) => void;
+  manage: PillManage;
+}) {
+  const panelOpen = useUIStore((s) => s.open);
+  const page = useUIStore((s) => s.page);
+  const [expanded, setExpanded] = useState(false);
+  const selected = useRef(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const contentRef = useRef<HTMLElement>(null);
+  const visible = panelOpen && page === "notes";
+  const shown = expanded && visible;
+  const changeOpen = useCallback((next: boolean, restoreFocus = false) => {
+    if (!next) contentRef.current?.querySelector("input")?.blur();
+    selected.current = false;
+    setExpanded(next);
+    const ui = useUIStore.getState();
+    if (restoreFocus && ui.open && ui.page === "notes" && document.hasFocus()) {
+      triggerRef.current?.focus({ preventScroll: true });
+    }
+  }, []);
+  useEffect(() => {
+    if (!visible) changeOpen(false);
+  }, [visible, changeOpen]);
+  useEffect(() => {
+    if (!shown) return;
+    const close = () => changeOpen(false);
+    const outside = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node) || rootRef.current?.contains(target)) return;
+      if (target instanceof Element && target.closest("[data-group-navigation-menu]")) return;
+      close();
+    };
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || document.querySelector("[data-group-navigation-menu]")) return;
+      if (contentRef.current?.querySelector('input, [data-group-dragging="true"]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      changeOpen(false, true);
+    };
+    contentRef.current?.querySelector<HTMLElement>('[aria-pressed="true"]')?.focus({ preventScroll: true });
+    // WKWebView 按钮点击可能先把焦点退回页面；不能用 focusin 在 click 前卸载导航。
+    window.addEventListener("pointerdown", outside, true);
+    window.addEventListener("keydown", keydown, true);
+    window.addEventListener("blur", close);
+    return () => {
+      window.removeEventListener("pointerdown", outside, true);
+      window.removeEventListener("keydown", keydown, true);
+      window.removeEventListener("blur", close);
+    };
+  }, [shown, changeOpen]);
+  const continueInteraction = () => { selected.current = false; };
+  return (
+    <div
+      ref={rootRef}
+      data-note-group-rail
+      className={cn(
+        "relative min-h-0 shrink-0 transition-[width] duration-(--duration-slow) ease-(--ease-standard) motion-reduce:transition-none",
+        shown ? "w-16" : "w-0"
+      )}
+    >
+      <div className="group/group-edge absolute inset-y-0 left-0 z-20 w-2">
+        <IconButton
+          ref={triggerRef}
+          label={shown ? "收起笔记分组" : "选择笔记分组"}
+          aria-label={`${shown ? "收起" : "选择"}笔记分组，当前：${items.find((item) => item.id === active)?.name ?? "全部"}`}
+          aria-expanded={shown}
+          aria-controls="note-group-navigation"
+          onClick={() => changeOpen(!shown)}
+          onKeyDown={(event) => {
+            if (!event.metaKey && !event.ctrlKey && !event.altKey && (event.key === " " || event.key === "Enter")) event.stopPropagation();
+          }}
+          className="mt-1 h-5 w-3 rounded-l-none p-0 text-muted-foreground/35 after:inset-0 group-hover/group-edge:bg-muted/60 group-hover/group-edge:text-foreground focus-visible:text-foreground aria-expanded:text-foreground"
+        >
+          <PanelLeft className="size-3" />
+        </IconButton>
+      </div>
+      <div className="h-full overflow-hidden">
+        <nav
+          id="note-group-navigation"
+          ref={contentRef}
+          aria-label="笔记分组"
+          aria-hidden={!shown}
+          data-group-navigation
+          className={cn("h-full w-16 overflow-x-hidden overflow-y-auto border-r border-border/40 pb-1 pl-2 pr-0 pt-8", !shown && "invisible")}
+          onPointerDownCapture={continueInteraction}
+          onDoubleClickCapture={continueInteraction}
+          onContextMenuCapture={continueInteraction}
+          onKeyDownCapture={continueInteraction}
+          onKeyUp={(event) => {
+            if (selected.current && (event.key === "Enter" || event.key === " ")) changeOpen(false, true);
+          }}
+          onPointerLeave={() => {
+            if (selected.current) changeOpen(false, true);
+          }}
+        >
+          {shown && <GroupPills vertical items={items} active={active} manage={manage} onPick={(id) => {
+            onPick(id);
+            selected.current = true;
+          }} />}
+        </nav>
+      </div>
+    </div>
   );
 }
 
@@ -788,6 +957,18 @@ export default function App() {
       alive = false;
     };
   }, []);
+
+  useEffect(() => syncPanelVisibility({
+    listenShown: (shown) => listen(PANEL_SHOWN_EVENT, shown),
+    isVisible: () => getCurrentWebviewWindow().isVisible(),
+    showContent: () => {
+      useUIStore.getState().setOpen(true);
+      void refreshTarget();
+    },
+    subscribeOpenChanges: (changed) => useUIStore.subscribe((state, previous) => {
+      if (state.open !== previous.open) changed();
+    }),
+  }), []);
 
   const openPanel = async (shortcutHoldOpen = false) => {
     useUIStore.getState().setShortcutHoldOpen(shortcutHoldOpen);
@@ -2475,13 +2656,23 @@ export default function App() {
 
   const q = query.trim();
   // 笔记页不再显示「剪贴板」分组——剪贴板历史提升为平级 tab
-  /** 横栏分组过滤（null=全部；笔记/任务各自独立）。 */
+  /** 分组过滤（null=全部；笔记/任务各自独立）。 */
   const [noteGroupFilter, setNoteGroupFilter] = useState<string | null>(null);
   const [taskGroupFilter, setTaskGroupFilter] = useState<string | null>(null);
+  const noteSections = useMemo(
+    () => sections.filter((section) => section.id !== CLIPBOARD_ID && section.id !== SECRET_ID),
+    [sections]
+  );
+  const pickNoteGroup = useCallback((id: string | null) => {
+    if (id === noteGroupFilter) return;
+    setNoteGroupFilter(id);
+    useNotesStore.getState().clearChecked();
+    useUIStore.getState().setFocusedId(null);
+    useUIStore.getState().setAnchorId(null);
+  }, [noteGroupFilter]);
 
   const grouped = useMemo(() => {
-    const groups = sections
-      .filter((section) => section.id !== CLIPBOARD_ID && section.id !== SECRET_ID)
+    const groups = noteSections
       .map((section) => ({ section, active: [] as Note[], done: [] as Note[] }));
     const bySection = new Map(groups.map((group) => [group.section.id, group]));
     for (const note of notes) {
@@ -2492,7 +2683,7 @@ export default function App() {
       (note.done ? group.done : group.active).push(note);
     }
     return groups.filter((group) => !q || group.active.length + group.done.length > 0);
-  }, [sections, notes, q]);
+  }, [noteSections, notes, q]);
   /** 横栏形态：各分组未完成卡拍平成一条串（分组顺序 → 组内顺序），
    *  可按分组胶囊过滤。 */
   const stripNotes = useMemo(() => {
@@ -2502,6 +2693,37 @@ export default function App() {
       .flatMap((g) => g.active);
   }, [grouped, noteGroupFilter]);
   const stripNoteIds = useMemo(() => stripNotes.map((n) => n.id), [stripNotes]);
+  /** 选中某组只显示该组；null = 全部。 */
+  const visibleGrouped = useMemo(
+    () =>
+      noteGroupFilter && noteGroupFilter !== DONE_FILTER
+        ? grouped.filter((g) => g.section.id === noteGroupFilter)
+        : grouped,
+    [grouped, noteGroupFilter]
+  );
+  /** 分组管理菜单：横栏标题行与笔记左侧列表共用。 */
+  const noteGroupManage = useMemo<PillManage>(() => ({
+    rename: (id, n) => useNotesStore.getState().renameSection(id, n),
+    move: (id, d) => useNotesStore.getState().moveSection(id, d),
+    reorder: (activeId, overId) =>
+      useNotesStore.getState().reorderSections(activeId, overId),
+    remove: (id) => {
+      if (noteGroupFilter === id) pickNoteGroup(null);
+      useNotesStore.getState().deleteSection(id);
+    },
+    lockedId: INBOX_ID,
+    setColor: (id, c) => useNotesStore.getState().setSectionColor(id, c),
+    toggleKeep: (id) => useNotesStore.getState().toggleSectionKeep(id),
+    keepOn: (id) =>
+      !!useNotesStore.getState().sections.find((s) => s.id === id)?.keepAfterSend,
+    checkAll: (id) => {
+      const g = grouped.find((x) => x.section.id === id);
+      if (g?.active.length) {
+        useNotesStore.getState().setChecked(g.active.map((n) => n.id));
+      }
+    },
+    add: () => useNotesStore.getState().addSection(),
+  }), [grouped, noteGroupFilter, pickNoteGroup]);
 
   /** 剪贴板 tab：固定（keep）置顶，其余按时间流水（notes 数组新在前）。 */
   const clipNotes = useMemo(() => {
@@ -2539,7 +2761,7 @@ export default function App() {
       .map((message) => message.id);
   }, [messages, q]);
 
-  const noteMatchCount = grouped.reduce(
+  const noteMatchCount = visibleGrouped.reduce(
     (a, g) => a + g.active.length + g.done.length,
     0
   );
@@ -2555,7 +2777,7 @@ export default function App() {
   /** 键盘导航覆盖的可见卡片序列（笔记页）。 */
   const noteNavIds = useMemo(
     () =>
-      grouped.flatMap((g) =>
+      visibleGrouped.flatMap((g) =>
         g.section.collapsed
           ? []
           : [
@@ -2563,7 +2785,7 @@ export default function App() {
               ...(doneOpen[g.section.id] ? g.done.map((n) => n.id) : []),
             ]
       ),
-    [grouped, doneOpen]
+    [visibleGrouped, doneOpen]
   );
 
   // ===== 任务页派生 =====
@@ -2637,6 +2859,12 @@ export default function App() {
   const horizontalBar =
     settings.rightSidebar &&
     (settings.sidebarEdge === "top" || settings.sidebarEdge === "bottom");
+  useEffect(() => {
+    if (noteGroupFilter === null) return;
+    if (noteGroupFilter === DONE_FILTER ? !horizontalBar : !noteSections.some((section) => section.id === noteGroupFilter)) {
+      pickNoteGroup(null);
+    }
+  }, [horizontalBar, noteGroupFilter, noteSections, pickNoteGroup]);
   const stripTaskIds = useMemo(() => stripTasks.map((t) => t.id), [stripTasks]);
 
   /** 当前页的键盘导航序列（横栏 = 胶囊过滤后的卡片串序）。 */
@@ -2821,6 +3049,8 @@ export default function App() {
       // 拖拽把手聚焦中 = 键盘拖拽模式：Space/方向键让给 dnd-kit
       // （否则任务页 Space 会同时拾起排序 + 切完成，双动作打架）
       if (target?.closest?.("[data-drag-handle]")) return;
+      // 左侧分组的选取、滚动和键盘排序不操作正文卡片；修饰键快捷键继续可用。
+      if (target?.closest?.("[data-group-navigation]") && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key !== "Escape" || e.defaultPrevented)) return;
 
       // ⌃Tab：按页签顺序循环（⌘1-9 已被快发占用，取浏览器切标签页惯例）。
       // 用可见页序而非硬编码：页签可拖动重排，剪贴板关闭时该页也不该被切到
@@ -2863,6 +3093,11 @@ export default function App() {
         e.preventDefault();
         useUIStore.getState().setSearchOpen(true);
         window.setTimeout(() => searchInputRef.current?.focus(), 30);
+        return;
+      }
+      if (e.key === "k" && e.metaKey) {
+        e.preventDefault();
+        useUIStore.getState().setCommandPaletteOpen(true);
         return;
       }
       // 以下发送/勾选类快捷键操作的是笔记 checkedIds——剪贴板卡也是笔记，
@@ -3485,40 +3720,9 @@ export default function App() {
                           bare
                           items={grouped.map((g) => g.section)}
                           active={noteGroupFilter}
-                          onPick={setNoteGroupFilter}
+                          onPick={pickNoteGroup}
                           doneCount={grouped.reduce((n, g) => n + g.done.length, 0)}
-                          manage={{
-                            rename: (id, n) =>
-                              useNotesStore.getState().renameSection(id, n),
-                            move: (id, d) =>
-                              useNotesStore.getState().moveSection(id, d),
-                            reorder: (activeId, overId) =>
-                              useNotesStore
-                                .getState()
-                                .reorderSections(activeId, overId),
-                            remove: (id) => {
-                              if (noteGroupFilter === id) setNoteGroupFilter(null);
-                              useNotesStore.getState().deleteSection(id);
-                            },
-                            lockedId: INBOX_ID,
-                            setColor: (id, c) =>
-                              useNotesStore.getState().setSectionColor(id, c),
-                            toggleKeep: (id) =>
-                              useNotesStore.getState().toggleSectionKeep(id),
-                            keepOn: (id) =>
-                              !!useNotesStore
-                                .getState()
-                                .sections.find((s) => s.id === id)?.keepAfterSend,
-                            checkAll: (id) => {
-                              const g = grouped.find((x) => x.section.id === id);
-                              if (g?.active.length) {
-                                useNotesStore
-                                  .getState()
-                                  .setChecked(g.active.map((n) => n.id));
-                              }
-                            },
-                            add: () => useNotesStore.getState().addSection(),
-                          }}
+                          manage={noteGroupManage}
                         />
                     )}
                     {page === "tasks" && (
@@ -3828,6 +4032,7 @@ export default function App() {
                     () => (
                       <>
                         {contentDomainsOn && <ContentTabs />}
+                        <ContentTabPanels active={contentSubview} messagesEnabled={messagesEnabled} secretEnabled={secretEnabled}>
                         {contentSubview === "messages" ? (
                   <MessagePage query={q} horizontal={horizontalBar} />
                 ) : contentSubview === "secret" ? (
@@ -3871,7 +4076,14 @@ export default function App() {
                   </StripScroller>
                   </div>
                 ) : (
-              <ScrollArea className="min-h-0 flex-1 px-2.5" viewportClassName="px-1">
+              <div className="flex min-h-0 min-w-0 flex-1">
+                  <NoteGroupRail
+                    items={noteSections}
+                    active={noteGroupFilter}
+                    onPick={pickNoteGroup}
+                    manage={noteGroupManage}
+                  />
+              <ScrollArea className="min-h-0 min-w-0 flex-1 px-1.5" viewportClassName="px-1">
                 {rehearsalVisible && (
                   <SafeDeliveryRehearsal />
                 )}
@@ -3901,10 +4113,10 @@ export default function App() {
                   >
                     <div className="pb-2 pt-1">
                       <SortableContext
-                        items={grouped.map(({ section }) => `sec:${section.id}`)}
+                        items={visibleGrouped.map(({ section }) => `sec:${section.id}`)}
                         strategy={verticalListSortingStrategy}
                       >
-                        {grouped.map(({ section, active, done }, index) => (
+                        {visibleGrouped.map(({ section, active, done }, index) => (
                           <SectionGroup
                             key={section.id}
                             section={section}
@@ -3915,26 +4127,26 @@ export default function App() {
                           />
                         ))}
                       </SortableContext>
-                      {!q && (
-                        <button
-                          onClick={() => useNotesStore.getState().addSection()}
-                          className="mb-2 ml-2 flex items-center gap-1 rounded-md px-1.5 py-1 text-label text-muted-foreground outline-none hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:hover:bg-white/10"
-                        >
-                          <Plus className="size-3" /> 新建分组
-                        </button>
-                      )}
                     </div>
                   </DndContext>
                 )}
               </ScrollArea>
+              </div>
                         )}
+                        </ContentTabPanels>
                       </>
                     ),
                     [
                       clearDragExpand,
                       contentDomainsOn,
                       contentSubview,
-                      grouped,
+                      messagesEnabled,
+                      secretEnabled,
+                      noteGroupFilter,
+                      noteGroupManage,
+                      noteSections,
+                      pickNoteGroup,
+                      visibleGrouped,
                       horizontalBar,
                       noteMatchCount,
                       notes,
@@ -3981,12 +4193,13 @@ export default function App() {
                 </PageSlide>
               </div>
 
-              {/* 横栏以右下紧凑浮条保留显式预检与模式选择，不占内容通栏。 */}
-              {(page !== "notes" || contentSubview === "notes") && (
-                <SelectionBar compact={horizontalBar} />
-              )}
               {/* 横栏形态：输入通栏默认不占空间，工具栏 + 按钮唤出 */}
+              {!horizontalBar && <KeyHintRow />}
               {page === "notes" && contentSubview === "notes" && (!horizontalBar || barDraftOpen) && <DraftInput />}
+              {/* 操作条留在面板最下方；横栏沿用底部紧凑按钮组。 */}
+              {(page !== "notes" || contentSubview === "notes") && (
+                <SelectionBar compact={horizontalBar} reserveSpace={page === "notes" && barDraftOpen} />
+              )}
 
               <PreviewOverlay />
               <PreflightComposer horizontal={horizontalBar} />
@@ -3994,6 +4207,7 @@ export default function App() {
               <ResultVerificationDialog />
               <UpdateDialog />
               {showShortcuts && <ShortcutHelp />}
+              <CommandPalette />
               {/* HUD 是独立无焦点窗口，屏幕阅读器听不到——tip() 文案镜像到此播报 */}
               <div aria-live="polite" role="status" className="sr-only">
                 {announce}

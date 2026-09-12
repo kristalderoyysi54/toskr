@@ -289,6 +289,23 @@ input {
   to { opacity: 0; }
 }
 
+/* 资产牌通栏：--band-tint 由 NoteCard 内联下发（分组色 > 应用主色 > 中性灰），
+   两端同吃 --card-alpha；深色下不再灰底白字，改为应用色 28% 叠卡面 + 前景色文字
+   （2026-09-12 用户选 C 案）。PreviewOverlay 的晕光仍走 headerGradient()。 */
+.asset-band {
+  color: #fff;
+  background-image: linear-gradient(
+    135deg,
+    color-mix(in srgb, color-mix(in srgb, var(--band-tint) 86%, white) var(--card-alpha, 100%), transparent),
+    color-mix(in srgb, color-mix(in srgb, var(--band-tint) 92%, black) var(--card-alpha, 100%), transparent)
+  );
+}
+.dark .asset-band {
+  color: var(--foreground);
+  background-image: none;
+  background-color: color-mix(in srgb, color-mix(in srgb, var(--band-tint) 28%, var(--card)) var(--card-alpha, 100%), transparent);
+}
+
 /* 面板内容膜层：半透明底色叠在系统 vibrancy 上；不透明度可在设置里调 */
 .panel-surface {
   background: rgb(var(--material-panel, 252 252 252) / var(--panel-alpha, 0.62));
@@ -358,6 +375,133 @@ input {
 }
 
 /* （HUD 入场动画已迁 motion/AnimatePresence，见 HudView.tsx——曲线参数原样保留在 JS 侧） */
+
+/* ============ 动效移植（2026-09-11，motionsites 调研，用户确认案 1/2/3/4/6） ============ */
+
+/* 案 2：目标「正在确认」时状态点呼吸。周期是等待节奏不是交互时长，故不走 --duration-*；
+   reduce-motion 由下方全局规则压成静态，文案仍在。 */
+.target-dot-refreshing {
+  animation: live-signal 1.55s ease-in-out infinite;
+}
+@keyframes live-signal {
+  0%, 18%, 100% { opacity: 1; transform: scale(1); }
+  42%, 62% { opacity: 0.22; transform: scale(0.72); }
+  78% { opacity: 0.95; transform: scale(1.08); }
+}
+
+/* 案 3：展开区/分区揭示——自上而下 clip-path 揭开 + 8px 上移。
+   fill 用 backwards 而非 both：播完回到无 clip-path 的静态样式，区内 absolute 下拉不被裁。 */
+.reveal-in {
+  animation: reveal-unmask var(--duration-base) var(--ease-standard) backwards;
+}
+@keyframes reveal-unmask {
+  from { opacity: 0; transform: translateY(8px); clip-path: inset(0 0 100% 0); }
+  to { opacity: 1; transform: none; clip-path: inset(0); }
+}
+
+/* 案 4：每日发送柱状图——外柱高度、内柱 scaleY 连续过渡；首次出现自下而上揭开 */
+.trend-bars {
+  animation: chart-unmask var(--duration-slow) var(--ease-standard) both;
+}
+@keyframes chart-unmask {
+  from { opacity: 0; transform: translateY(10px); clip-path: inset(100% 0 0 0); }
+  to { opacity: 1; transform: none; clip-path: inset(0); }
+}
+.trend-bar {
+  transition: height var(--duration-slow) var(--ease-standard);
+}
+.trend-bar-fill {
+  transform-origin: bottom;
+  transition: transform var(--duration-slow) var(--ease-standard);
+}
+
+/* 案 6：发送中卡片底缘状态带（sending → sent/failed 停留 → leaving 收回）。
+   只在发送期间挂载；光晕仅 sending 阶段运行，不常驻。 */
+@property --band-tone {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+.delivery-band {
+  --band-h: 22px;
+  --band-tone: var(--info);
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+  clip-path: inset(calc(100% - var(--band-h)) 0 0 0);
+  border-bottom: 2px solid var(--band-tone);
+  background: linear-gradient(
+    to top,
+    color-mix(in oklab, var(--band-tone) 22%, transparent) 0,
+    color-mix(in oklab, var(--band-tone) 5%, transparent) var(--band-h),
+    transparent calc(var(--band-h) + 14px)
+  );
+  animation: band-in var(--duration-base) var(--ease-standard) backwards;
+  transition:
+    clip-path var(--duration-base) var(--ease-standard),
+    --band-tone var(--duration-base) var(--ease-standard);
+}
+.delivery-band--compact {
+  --band-h: 12px;
+}
+.delivery-band[data-phase="sent"] {
+  --band-tone: var(--success);
+}
+.delivery-band[data-phase="failed"] {
+  --band-tone: var(--warning);
+}
+.delivery-band[data-leaving] {
+  clip-path: inset(100% 0 0 0);
+  transition-duration: var(--duration-exit);
+  transition-timing-function: ease-in;
+}
+@keyframes band-in {
+  from { clip-path: inset(100% 0 0 0); }
+}
+.delivery-band::before {
+  content: "";
+  position: absolute;
+  left: -10%;
+  right: -10%;
+  bottom: -30%;
+  height: 60%;
+  opacity: 0;
+  filter: blur(10px);
+  background: radial-gradient(
+    ellipse 30% 100% at 30% 100%,
+    color-mix(in oklab, var(--band-tone) 55%, transparent),
+    transparent 70%
+  );
+  animation: band-drift 1.4s ease-in-out infinite alternate;
+  animation-play-state: paused;
+  transition: opacity var(--duration-slow) ease-out;
+}
+.delivery-band[data-phase="sending"]::before {
+  opacity: 0.9;
+  animation-play-state: running;
+}
+@keyframes band-drift {
+  from { transform: translateX(0); }
+  to { transform: translateX(40%); }
+}
+.delivery-band__label {
+  position: absolute;
+  right: 6px;
+  bottom: 4px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--card) 88%, transparent);
+  color: var(--band-tone);
+  font-size: var(--text-micro);
+  line-height: 14px;
+  font-weight: 500;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+.delivery-band--compact .delivery-band__label,
+.delivery-band[data-leaving] .delivery-band__label {
+  opacity: 0;
+}
 /* Markdown 渲染视图（预览层）：深浅色自适应的最小排版组 */
 /* 详情窗正文字号覆盖：--detail-font-size 由 TextPreviewView 内联下发
    （⌘+/⌘-/⌘0 与设置页滑杆），只作用于正文区字阶 utility；行高走 leading-*
@@ -490,6 +634,10 @@ input {
      蓝（--primary/--ring）只做焦点/选中/开关等状态色 */
   --paper: oklch(0.965 0.012 90);
   --paper-foreground: oklch(0.24 0.01 90);
+  /* HUD 残影（被新气泡顶替的上一条）：比纸白暗两档，浅色桌面上才分得开（2026-09-11 案 1） */
+  --paper-ghost: oklch(0.885 0.014 90);
+  /* 进行中状态色（发送中底缘状态带）= sky-600，与 HUD sent 圆点同色系（2026-09-11 案 6） */
+  --info: oklch(0.588 0.158 241.97);
   /* —— 主按钮白实体（2026-08-13 定稿）：纯白抬升件=最高视觉重量；
         描边款退居 secondary/outline，红字 ghost 做 destructive —— */
   --button-primary: oklch(1 0 0);
@@ -513,6 +661,8 @@ input {
   --surface-lightbox: oklch(0.205 0 0 / 95%);
   --paper: oklch(0.9 0.014 90);
   --paper-foreground: oklch(0.205 0 0);
+  --paper-ghost: oklch(0.8 0.014 90);
+  --info: oklch(0.746 0.16 232.66); /* = sky-400 */
   --button-primary: oklch(0.92 0 0);
   --button-primary-hover: oklch(0.87 0 0);
   --button-primary-foreground: oklch(0.205 0 0);
@@ -535,6 +685,8 @@ input {
   --color-surface-lightbox: var(--surface-lightbox);
   --color-paper: var(--paper);
   --color-paper-foreground: var(--paper-foreground);
+  --color-paper-ghost: var(--paper-ghost);
+  --color-info: var(--info);
   --color-button-primary: var(--button-primary);
   --color-button-primary-hover: var(--button-primary-hover);
   --color-button-primary-foreground: var(--button-primary-foreground);

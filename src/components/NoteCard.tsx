@@ -11,17 +11,15 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
   Check,
-  ChevronLeft,
-  ChevronRight,
   Copy,
   Expand,
   Eye,
+  EyeClosed,
   EyeOff,
   FileDown,
   FileText,
   FolderInput,
   GripVertical,
-  Inbox,
   ListChecks,
   ListOrdered,
   ListTodo,
@@ -49,9 +47,10 @@ import { mapNoteTextBlocks } from "@/lib/noteContentBlocks";
 import { imageCaption, imageListLabel } from "@/lib/format";
 import { tip } from "@/lib/tip";
 import { IconButton } from "@/components/ui/icon-button";
-import { CardMenuPageItem, type CardMenuPage } from "@/components/CardMenuPageItem";
+import { MenuFlyoutTrigger } from "@/components/MenuFlyoutTrigger";
+import { MoveToNotesButton } from "@/components/MoveToNotesButton";
 import {
-  flattenContextMenuSubmenu,
+  collectMenuFlyoutEntries,
   partitionCardMenuIds,
 } from "@/components/cardMenuLayout";
 import { TargetSendMenuItem } from "@/components/TargetSendMenuItem";
@@ -73,6 +72,7 @@ import {
   copyNotesAsList,
   deleteNotesWithUndo,
   exportNotesBundle,
+  enrichLinkMeta,
   mergeNoteWithChecked,
   moveClipsToNotesWithUndo,
   openNoteDetail,
@@ -98,6 +98,12 @@ import {
   matchesDataGeneration,
 } from "@/lib/dataGeneration";
 import { api } from "@/lib/tauri";
+import { undoDeliveryBandCompletion } from "@/lib/delivery/executeDraft";
+import {
+  closeMenuFlyout,
+  createMenuFlyoutRegistry,
+  handleMenuFlyoutKeyDown,
+} from "@/lib/menuFlyout";
 import { cn } from "@/lib/utils";
 import {
   CLIPBOARD_ID,
@@ -222,6 +228,14 @@ export const NoteCard = memo(function NoteCard({
     return count === ids.length ? "available" as const : count ? "partial" as const : "missing" as const;
   });
   const flashing = useUIStore((s) => s.flashId === note.id);
+  // 案 6（2026-09-11）：本卡是否在发送状态带里；选择器只返回原始值，避免新对象触发重渲染
+  const deliveryPhase = useUIStore((s) =>
+    s.deliveryBand && s.deliveryBand.ids.includes(note.id) ? s.deliveryBand.phase : null
+  );
+  const deliveryLeaving = useUIStore((s) => !!s.deliveryBand?.leaving);
+  const deliveryReceipt = useUIStore((s) =>
+    s.deliveryBand && s.deliveryBand.ids.includes(note.id) ? s.deliveryBand.receipt ?? null : null
+  );
   // ⌘ 按住时前 9 张卡显示 ⌘N 快发角标
   const quickSlot = useUIStore((s) => {
     if (!s.cmdHeld) return 0;
@@ -373,6 +387,8 @@ export const NoteCard = memo(function NoteCard({
     !isImage && !isLink
       ? {
           draggable: true,
+          title: "拖出原文（不脱敏，目标由拖放位置决定）",
+          "data-raw-export": true,
           onDragStart: (e: React.DragEvent) => {
             e.dataTransfer.setData("text/plain", note.text);
             e.dataTransfer.effectAllowed = "copy" as const;
@@ -381,15 +397,6 @@ export const NoteCard = memo(function NoteCard({
         }
       : {};
 
-  const [menuPage, setMenuPage] = useState<CardMenuPage>("main");
-  const parentMenuPage = menuPage === "other-templates" ? "send" : "main";
-  const menuPageRef = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    const menu = menuPageRef.current;
-    if (!menu) return;
-    menu.closest<HTMLElement>("[data-slot='context-menu-content']")?.scrollTo({ top: 0 });
-    menu.querySelector<HTMLElement>("[role='menuitem']:not([data-disabled])")?.focus();
-  }, [menuPage]);
   // 只订阅稳定引用，派生数组用 useMemo——选择器里 new 数组会造成
   // getSnapshot 永不相等 → React 无限重渲染崩溃（主窗口白屏、面板无法唤起）
   const menuCfgRaw = useNotesStore((s) => s.settings.contextMenu);
@@ -420,10 +427,15 @@ export const NoteCard = memo(function NoteCard({
       case "preview":
         if (isLink) {
           return (
-            <ContextMenuItem key={id} onClick={() => void api.openUrl(note.url!)}>
-              <ExternalLink className="size-3.5" /> 打开链接
-              <ContextMenuShortcut>Space</ContextMenuShortcut>
-            </ContextMenuItem>
+            <Fragment key={id}>
+              <ContextMenuItem onClick={() => void api.openUrl(note.url!)}>
+                <ExternalLink className="size-3.5" /> 打开链接
+                <ContextMenuShortcut>Space</ContextMenuShortcut>
+              </ContextMenuItem>
+              <ContextMenuItem onClick={() => void enrichLinkMeta(note.id, true)}>
+                <Link2 className="size-3.5" /> 确认获取链接预览…
+              </ContextMenuItem>
+            </Fragment>
           );
         }
         // 图片卡不出「原尺寸预览」菜单项（用户 2026-08-27 裁掉：Space/悬停
@@ -466,7 +478,7 @@ export const NoteCard = memo(function NoteCard({
         );
       case "send-template": {
         // 与底栏 ⌄ 的模板列表并存（底栏单选也显示）：右键路径服务未勾选直接
-        // 右键的场景。其他模板同位切页，避免窄面板横向展开或默认铺满旧模板。
+        // 右键的场景。其他模板直接列在常用模板之后（用户 2026-09-11：不再折叠成子页）。
         return (
           <ContextMenuSub key={id}>
             <ContextMenuSubTrigger>
@@ -482,10 +494,7 @@ export const NoteCard = memo(function NoteCard({
               {snippetMenu.remaining.length > 0 && (
                 <>
                   <ContextMenuSeparator />
-                  <CardMenuPageItem page="other-templates" onNavigate={setMenuPage}>
-                    其他模板（{snippetMenu.remaining.length}）
-                    <ChevronRight className="ml-auto size-3.5" />
-                  </CardMenuPageItem>
+                  {snippetMenu.remaining.map(renderSnippet)}
                 </>
               )}
             </ContextMenuSubContent>
@@ -504,13 +513,13 @@ export const NoteCard = memo(function NoteCard({
       case "copy":
         return (
           <ContextMenuItem key={id} onClick={copyOne}>
-            <Copy className="size-3.5" /> 复制内容
+            <Copy className="size-3.5" /> 复制原文（不脱敏）
           </ContextMenuItem>
         );
       case "copy-list":
         return (
           <ContextMenuItem key={id} onClick={() => void copyWithChecked()}>
-            <ListOrdered className="size-3.5" /> 复制为列表
+            <ListOrdered className="size-3.5" /> 复制原文为列表（不脱敏）
             <ContextMenuShortcut>⌘C</ContextMenuShortcut>
           </ContextMenuItem>
         );
@@ -836,20 +845,15 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
   const headerTint = strip
     ? icon?.color ?? (note.sourceBundle ? undefined : sectionColor)
     : sectionColor ?? icon?.color;
-  /** 竖栏笔记通栏副行展示的分组名（组织轴）；其余形态不消费。 */
-  const sectionName =
-    !isClip && !strip
-      ? sections.find((sec) => sec.id === note.sectionId)?.name
-      : undefined;
   /** 移入笔记：与删除/发送同款多选感知——卡在多选集合内 → 移整组。 */
-  const moveToNotesSelfOrChecked = () => {
+  const moveToNotesSelfOrChecked = (sectionId?: string) => {
     if (!isClip) return;
     const st = useNotesStore.getState();
     const ids =
       checked && st.checkedIds.length > 1
         ? orderedCheckedNotes(st).map((n) => n.id)
         : [note.id];
-    moveClipsToNotesWithUndo(ids);
+    moveClipsToNotesWithUndo(ids, sectionId);
   };
 
   const relationMenuItem = note.provenance ? (
@@ -908,10 +912,30 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
       items: group.ids.map(renderMenuItem).filter(Boolean),
     }))
     .filter((group) => group.items.length > 0);
+  // 子菜单改为独立原生小窗（用户 2026-09-11 选定）：展开时才把 JSX 投影成条目
+  const sendFlyoutSource = () => {
+    const source = createMenuFlyoutRegistry();
+    source.entries = collectMenuFlyoutEntries(sendOptions, source.register);
+    return source;
+  };
+  const moreFlyoutSource = () => {
+    const source = createMenuFlyoutRegistry();
+    source.entries = collectMenuFlyoutEntries(
+      moreSections.map((group, index) => (
+        <Fragment key={group.id}>
+          {index > 0 && <ContextMenuSeparator />}
+          <ContextMenuLabel>{group.label}</ContextMenuLabel>
+          {group.items}
+        </Fragment>
+      )),
+      source.register
+    );
+    return source;
+  };
 
   return (
     <ContextMenu onOpenChange={(open) => {
-      if (open) setMenuPage("main");
+      if (!open) closeMenuFlyout();
     }}>
       <ContextMenuTrigger asChild>
         <div
@@ -933,7 +957,9 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
                 ? clipTemplate === "condensed"
                   ? "52px"
                   : "116px"
-                : "136px",
+                : strip
+                  ? "136px"
+                  : "116px",
           } as React.CSSProperties}
           // 整卡可抓拖拽排序（4px 激活阈值不影响点击/双击）；键盘拾取走专用把手
           // （Tab 聚焦时浮现），避免 Tab 到悬浮操作按钮时 Space/Enter 被 dnd-kit 抢走
@@ -984,7 +1010,9 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
               useNotesStore.getState().setChecked([note.id]);
             }
           }}
-          onDoubleClick={() => {
+          onDoubleClick={(event) => {
+            // 按钮的 click 阻止冒泡不会阻止独立的 dblclick 事件。
+            if ((event.target as HTMLElement).closest("button, input, textarea, a, [role='button']")) return;
             // 双击在多选集合内的卡：发送整个集合（第一击已塌选，从留档找回）
             const stash = lastMultiSelection;
             lastMultiSelection = null;
@@ -1018,8 +1046,11 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
                     clipTemplate === "condensed"
                       ? "h-[52px] flex-col px-2 pb-1 pt-1.5"
                       : "h-[116px] flex-col px-2 pb-1 pt-1.5"
-                  : // 舒适竖栏笔记=资产牌（A 案）/ 横栏串：维持通栏瓷砖
-                    "h-[136px] flex-col px-2 pb-1.5 pt-1.5",
+                  : strip
+                    ? // 横栏串：维持通栏瓷砖定高
+                      "h-[136px] flex-col px-2 pb-1.5 pt-1.5"
+                    : // 舒适竖栏笔记=资产牌（A 案，2026-09-12 收窄通栏）：高度与剪贴票据卡一致（用户指定）
+                      "h-[116px] flex-col px-2 pb-1.5 pt-1.5",
             // 卡片材质继承面板风格；每个渐变色阶共用用户设定的透明度。
             // 静息态不给阴影——shadow-sm 是紧贴边缘的 1px 硬阴影，在深色面板上
             // 会读成一条描边（用户实测否决；详情层同理只用大而柔的 elevation）。
@@ -1046,14 +1077,20 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
           )}
         >
           {note.blur && (
-            // 模糊内容（防肩窥，右键切换）：backdrop 磨砂盖住整张卡面，
-            // 悬停临时揭示；详情窗与实际发送内容不受影响
+            // 不透明底遮住原文；磨砂仅模糊装饰色块，不透出真实内容。
             <span
               aria-hidden
-              // 强度对齐秘文页（用户 2026-08-27：9px 还能看清）：大半径 + 洗白
-              // 降饱和，正文彻底不可辨；悬停仍临时揭示
-              className="pointer-events-none absolute inset-0 z-10 rounded-[inherit] bg-muted-foreground/20 backdrop-blur-[14px] backdrop-saturate-[0.85] transition-opacity duration-(--duration-control) group-hover:opacity-0 motion-reduce:transition-none"
-            />
+              data-card-privacy="true"
+              className="absolute inset-0 z-10 flex items-center justify-center overflow-hidden rounded-[inherit] bg-surface-raised text-muted-foreground"
+            >
+              <span className="absolute inset-0 bg-gradient-to-br from-muted/70 via-transparent to-muted/40" />
+              <span className="absolute inset-x-6 top-1/4 h-6 rounded-full bg-muted-foreground/10 blur-xl" />
+              <span className="absolute inset-x-10 bottom-1/4 h-4 rounded-full bg-muted-foreground/10 blur-xl" />
+              <EyeClosed
+                className={cn("relative opacity-60", compact || strip ? "size-4" : "size-5")}
+                strokeWidth={1.5}
+              />
+            </span>
           )}
           {checked && (
             <span
@@ -1197,12 +1234,14 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
               （白字）+ 右端应用图标；渐变两端与卡底同吃 --card-alpha */}
           {!ticket && (
           <div
-            className="-mx-2 -mt-1.5 mb-1.5 flex h-9 shrink-0 items-center gap-1.5 rounded-t-lg px-2"
+            className={cn(
+              "asset-band -mx-2 -mt-1.5 flex shrink-0 items-center gap-1.5 rounded-t-lg px-2",
+              // 竖栏资产牌收窄到 28px 只放标题（2026-09-12 用户选 A 案）；横栏串维持 36px
+              strip ? "mb-1.5 h-9" : "mb-1 h-7"
+            )}
             style={{
-              backgroundImage: headerGradient(
-                (cardTint && headerTint) || NEUTRAL_HEADER_GRAY
-              ),
-            }}
+              "--band-tint": (cardTint && headerTint) || NEUTRAL_HEADER_GRAY,
+            } as React.CSSProperties}
           >
             <div className="min-w-0 flex-1 leading-tight">
               {renaming ? (
@@ -1218,11 +1257,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
                     if (e.key === "Enter" && !e.nativeEvent.isComposing) commitRename();
                     if (e.key === "Escape") setRenaming(false);
                   }}
-                  className={cn(
-                    "w-full bg-transparent font-semibold text-white outline-none placeholder:text-white/50",
-                    // 竖栏笔记标题升一档（资产感）；横栏串维持现状字阶
-                    strip ? "text-label" : "text-title"
-                  )}
+                  className="w-full bg-transparent text-label font-semibold outline-none placeholder:text-current/50"
                 />
               ) : (
                 <p
@@ -1231,27 +1266,25 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
                     e.stopPropagation();
                     startRename();
                   }}
-                  className={cn(
-                    "cursor-text truncate font-semibold text-white",
-                    strip ? "text-label" : "text-title"
-                  )}
+                  className="cursor-text truncate text-label font-semibold"
                 >
                   {note.title ?? typeLabel}
                 </p>
               )}
-              <p className="truncate text-micro text-white/70">
-                {/* 竖栏笔记副行=分组名（组织轴，时间移至右下角）；横栏串维持相对时间 */}
-                {!strip && sectionName ? sectionName : noteTimeLabel(note)}
-              </p>
+              {/* 横栏串副行=相对时间；竖栏资产牌副行已删（分组名在组头，时间在右下角） */}
+              {strip && (
+                <p className="truncate text-micro opacity-70">{noteTimeLabel(note)}</p>
+              )}
             </div>
             {note.keep && (
-              <KeepGlyph className="size-3 shrink-0 fill-white/90 text-white/90" />
+              <KeepGlyph className="size-3 shrink-0 fill-current opacity-90" />
             )}
             {icon && (
               // 应用图标嵌入通栏右端（Paste 风格）：左缘完整可见，
-              // 上/右/下被通栏边缘裁去少许——左对齐 + 垂直居中的大图标
-              <span className="-mr-2 flex h-9 w-11 shrink-0 items-center justify-start overflow-hidden">
-                <img src={icon.url} alt="" className="size-[52px] max-w-none" />
+              // 上/右/下被通栏边缘裁去少许——左对齐 + 垂直居中的大图标；
+              // 竖栏通栏收窄后图标等比缩小（52→40）
+              <span className={cn("-mr-2 flex shrink-0 items-center justify-start overflow-hidden", strip ? "h-9 w-11" : "h-7 w-9")}>
+                <img src={icon.url} alt="" className={cn("max-w-none", strip ? "size-[52px]" : "size-10")} />
               </span>
             )}
           </div>
@@ -1377,7 +1410,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
                 {...dragOutProps}
                 className={cn(
                   "hljs !bg-transparent",
-                  strip ? "line-clamp-[6]" : "line-clamp-3",
+                  strip ? "line-clamp-[6]" : ticket ? "line-clamp-3" : "line-clamp-4",
                   "whitespace-pre-wrap font-mono text-label leading-normal [overflow-wrap:anywhere] hover:cursor-grab",
                   note.done && "text-muted-foreground line-through opacity-60"
                 )}
@@ -1391,7 +1424,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
                 {...dragOutProps}
                 className={cn(
                   // hover:cursor-grab：正文可拖出到外部应用的唯一可见暗示
-                  strip ? "line-clamp-[6]" : "line-clamp-3",
+                  strip ? "line-clamp-[6]" : ticket ? "line-clamp-3" : "line-clamp-4",
                   "whitespace-pre-wrap text-body leading-normal [overflow-wrap:anywhere] hover:cursor-grab",
                   note.codeLang && "font-mono text-label",
                   note.done && "text-muted-foreground line-through opacity-60"
@@ -1547,14 +1580,17 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
           {/* 悬停操作钮：hover/键盘焦点显现（opacity 方案，Tab 可达） */}
           <div
             className={cn(
-              "absolute flex gap-0.5",
+              "absolute z-20 flex gap-0.5",
               compact
                 ? // 紧凑列表行：钮垂直居中（行内元数据 hover 让位）
                   "right-1 top-1/2 -translate-y-1/2"
                 : clipTemplate === "condensed"
                   ? // 浓缩票据：钮挂票据头行右端（头行元数据 hover 让位）
                     "right-1 top-1"
-                  : "bottom-1 right-1.5"
+                  : deliveryPhase
+                    ? // 回执带在底缘时整组上移，不压住「已粘贴 · 已按回车 · 撤销」（O2）
+                      "bottom-7 right-1.5"
+                    : "bottom-1 right-1.5"
             )}
           >
             <IconButton
@@ -1582,7 +1618,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
             )}
             {isClip && (
               <IconButton
-                label="复制内容"
+                label="复制原文（不脱敏）"
                 surface
                 reveal="hover-focus"
                 onClick={copyOne}
@@ -1591,14 +1627,13 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
               </IconButton>
             )}
             {isClip && (
-              <IconButton
-                label="移入笔记"
-                surface
-                reveal="hover-focus"
-                onClick={moveToNotesSelfOrChecked}
-              >
-                <Inbox className="size-3" />
-              </IconButton>
+              <MoveToNotesButton
+                onMove={moveToNotesSelfOrChecked}
+                onMenuOpen={() => {
+                  pointerFocusedRef.current = true;
+                  useUIStore.getState().setFocusedId(note.id);
+                }}
+              />
             )}
             {aliasRestorable.length > 0 && (
               <IconButton
@@ -1653,17 +1688,47 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
               <Trash2 className="size-3" />
             </IconButton>
           </div>
+          {deliveryPhase && (
+            // 案 6：底缘状态带——sending 天蓝、sent 绿、failed 琥珀；紧缩行只留细带不放文字
+            <span
+              aria-hidden={!deliveryReceipt?.undoIds.length || undefined}
+              data-phase={deliveryPhase}
+              data-leaving={deliveryLeaving || undefined}
+              className={cn("delivery-band", compact && "delivery-band--compact")}
+            >
+              <span className="delivery-band__label">
+                {deliveryPhase === "sending"
+                  ? "发送中…"
+                  : deliveryPhase === "failed"
+                    ? "发送未完成"
+                    : deliveryReceipt
+                      ? // O2：回执事实（粘贴/回车）+ 撤销（仅当本次有卡被标记完成）
+                        `✓ ${deliveryReceipt.pasted ? "已粘贴" : "粘贴未确认"} · ${deliveryReceipt.entered ? "已按回车" : "未按回车"}`
+                      : "已发送"}
+                {deliveryPhase === "sent" && !!deliveryReceipt?.undoIds.length && (
+                  <button
+                    type="button"
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      undoDeliveryBandCompletion();
+                    }}
+                    className="pointer-events-auto ml-1.5 rounded-sm px-0.5 font-medium underline decoration-current/40 underline-offset-2 outline-none hover:decoration-current focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    撤销
+                  </button>
+                )}
+              </span>
+            </span>
+          )}
         </div>
       </ContextMenuTrigger>
 
       <ContextMenuContent
         className="w-56"
         onKeyDownCapture={(event) => {
-          if (menuPage !== "main" && event.key === "ArrowLeft") {
-            event.preventDefault();
-            event.stopPropagation();
-            setMenuPage(parentMenuPage);
-          }
+          // 子菜单小窗打开时：方向键/回车转发给小窗，←/Esc 只收起小窗
+          handleMenuFlyoutKeyDown(event);
         }}
         // 「新标签…」点击后菜单关闭会把焦点归还给卡片，正好抢走刚挂载的
         // 标签输入框焦点 → onBlur 立即提交关闭（表现为浮条闪现即失）。
@@ -1675,66 +1740,36 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
           }
         }}
       >
-        <div ref={menuPageRef}>
-          {menuPage === "main" ? (
-            <>
-              {/* 多选场景优先展示合并与移动；移动仍遵循用户显隐配置。 */}
-              {mergeCount >= 2 && (
-                <ContextMenuItem onClick={() => mergeNoteWithChecked(note.id)}>
-                  <Merge className="size-3.5" /> 合并笔记 ×{mergeCount}
-                </ContextMenuItem>
-              )}
-              {promotedMoveItem}
-              {mergeCount >= 2 && <ContextMenuSeparator />}
-              {primaryMenuItems}
-              {(sendOptions.length > 0 || moreSections.length > 0) && <ContextMenuSeparator />}
-              {sendOptions.length > 0 && (
-                <CardMenuPageItem page="send" onNavigate={setMenuPage}>
-                  <Send className="size-3.5" /> 发送选项
-                  <ChevronRight className="ml-auto size-3.5" />
-                </CardMenuPageItem>
-              )}
-              {moreSections.length > 0 && (
-                <CardMenuPageItem page="more" onNavigate={setMenuPage}>
-                  <MoreHorizontal className="size-3.5" /> 更多操作
-                  <ChevronRight className="ml-auto size-3.5" />
-                </CardMenuPageItem>
-              )}
-              <ContextMenuSeparator />
-              <ContextMenuItem variant="destructive" onClick={deleteSelfOrChecked}>
-                <Trash2 className="size-3.5" /> 删除
-                {checked && checkedCount > 1 ? ` ${checkedCount} 项` : ""}
-              </ContextMenuItem>
-            </>
-          ) : (
-            <>
-              <CardMenuPageItem page={parentMenuPage} back onNavigate={setMenuPage}>
-                <ChevronLeft className="size-3.5" />
-                {menuPage === "other-templates" ? "返回发送选项" : "返回"}
-              </CardMenuPageItem>
-              <ContextMenuSeparator />
-              {menuPage === "send" ? (
-                <>
-                  <ContextMenuLabel>发送选项</ContextMenuLabel>
-                  {sendOptions.map(flattenContextMenuSubmenu)}
-                </>
-              ) : menuPage === "other-templates" ? (
-                <>
-                  <ContextMenuLabel>其他模板</ContextMenuLabel>
-                  {snippetMenu.remaining.map(renderSnippet)}
-                </>
-              ) : (
-                moreSections.map((group, index) => (
-                  <Fragment key={group.id}>
-                    {index > 0 && <ContextMenuSeparator />}
-                    <ContextMenuLabel>{group.label}</ContextMenuLabel>
-                    {group.items.map(flattenContextMenuSubmenu)}
-                  </Fragment>
-                ))
-              )}
-            </>
-          )}
-        </div>
+        {/* 多选场景优先展示合并与移动；移动仍遵循用户显隐配置。 */}
+        {mergeCount >= 2 && (
+          <ContextMenuItem onClick={() => mergeNoteWithChecked(note.id)}>
+            <Merge className="size-3.5" /> 合并笔记 ×{mergeCount}
+          </ContextMenuItem>
+        )}
+        {promotedMoveItem}
+        {mergeCount >= 2 && <ContextMenuSeparator />}
+        {primaryMenuItems}
+        {(sendOptions.length > 0 || moreSections.length > 0) && <ContextMenuSeparator />}
+        {sendOptions.length > 0 && (
+          <MenuFlyoutTrigger
+            label="发送选项"
+            icon={<Send className="size-3.5" />}
+            getSource={sendFlyoutSource}
+          />
+        )}
+        {moreSections.length > 0 && (
+          <MenuFlyoutTrigger
+            label="更多操作"
+            icon={<MoreHorizontal className="size-3.5" />}
+            width={224}
+            getSource={moreFlyoutSource}
+          />
+        )}
+        <ContextMenuSeparator />
+        <ContextMenuItem variant="destructive" onClick={deleteSelfOrChecked}>
+          <Trash2 className="size-3.5" /> 删除
+          {checked && checkedCount > 1 ? ` ${checkedCount} 项` : ""}
+        </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -1925,7 +1960,7 @@ function CompactRow({
 
 function LinkFavicon({ src }: { src: string }) {
   const [failed, setFailed] = useState(false);
-  if (failed) return null;
+  if (failed || !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(src) || src.length > 65536) return null;
   return (
     <img
       src={src}

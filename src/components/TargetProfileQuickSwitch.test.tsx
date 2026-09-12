@@ -80,7 +80,7 @@ describe("TargetProfileQuickSwitch", () => {
     // A 版台账：键值拆分渲染，警示值完整携带风险措辞
     expect(html).toContain("本次生效规则");
     expect(html).toContain(">粘贴后</dt>");
-    expect(html).toContain("自动按回车 · 高风险");
+    expect(html).toContain("每次发送前确认");
     expect(html).toContain(">完成后</dt>");
     expect(html).toContain(">隐私检查</dt>");
     expect(html).toContain("尚未启用");

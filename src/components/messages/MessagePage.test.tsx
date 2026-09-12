@@ -104,11 +104,11 @@ describe("消息卡操作层级", () => {
     captured.panels = [];
   });
 
-  it("待处理卡只保留三个主入口，更多按定位、跟进、AI 顺序展示且不增加删除权限", () => {
+  it("待处理卡外提定位入口，更多保留跟进与AI且不增加删除权限", () => {
     const { actions, html, more } = render({ checked: true });
-    expect(captured.icons.map((icon) => icon.label)).toEqual(["标记已处理", "提醒我", "更多消息操作"]);
+    expect(captured.icons.map((icon) => icon.label)).toEqual(["发送到对话", "标记已处理", "提醒我", "定位原会话", "更多消息操作"]);
     expect(actions.map((action) => textOf(action.children))).toEqual([
-      "定位原会话", "等待回复", "转为任务", "生成 AI 回复草稿",
+      "等待回复", "转为任务", "生成 AI 回复草稿",
     ]);
     expect(html).toContain("list-selection-glow");
     expect(html).toContain('data-checked="true"');
@@ -119,7 +119,7 @@ describe("消息卡操作层级", () => {
 
   it("定位、等待回复、转任务和 AI 保持原动作参数", () => {
     const { click, onDraft } = render();
-    click("定位原会话");
+    captured.icons.find((icon) => icon.label === "定位原会话")!.onClick!({} as React.MouseEvent<HTMLButtonElement>);
     expect(captured.locate).toHaveBeenCalledWith({
       sourceApp: "测试 IM", sourceBundle: "com.example.im", conversationName: "项目群",
       senderName: "发送者", text: "请确认发布时间", reason: "@我",
@@ -135,8 +135,8 @@ describe("消息卡操作层级", () => {
   it("已处理卡提供恢复入口，删除独立放最后并可撤销", () => {
     const done = { ...message, status: "done" as const };
     const { actions, click, html } = render({ message: done });
-    expect(captured.icons.map((icon) => icon.label)).toEqual(["恢复为待处理", "提醒我", "更多消息操作"]);
-    captured.icons[0].onClick!({} as React.MouseEvent<HTMLButtonElement>);
+    expect(captured.icons.map((icon) => icon.label)).toEqual(["发送到对话", "恢复为待处理", "提醒我", "定位原会话", "更多消息操作"]);
+    captured.icons.find((icon) => icon.label === "恢复为待处理")!.onClick!({} as React.MouseEvent<HTMLButtonElement>);
     expect(captured.state.setMessageStatus).toHaveBeenLastCalledWith("message-1", "new");
     expect(textOf(actions.at(-1)!.children)).toBe("删除消息");
     expect(html).toMatch(/role="separator"[^>]*><\/div><button[^>]*data-variant="destructive"/);
@@ -149,14 +149,14 @@ describe("消息卡操作层级", () => {
   it("等待回复卡不重复提供等待操作，AI 忙碌时禁用生成", () => {
     const { actions } = render({ message: { ...message, status: "waiting" }, busy: true });
     expect(actions.map((action) => textOf(action.children))).toEqual([
-      "定位原会话", "转为任务", "AI 草稿生成中…",
+      "转为任务", "AI 草稿生成中…",
     ]);
     expect(actions.at(-1)!.disabled).toBe(true);
   });
 
   it("处理动作仍可撤销，两个浮层阻止事件到达整卡选择与页面快捷键", () => {
     const { more } = render({ message: { ...message, status: "waiting" } });
-    captured.icons[0].onClick!({} as React.MouseEvent<HTMLButtonElement>);
+    captured.icons.find((icon) => icon.label === "标记已处理")!.onClick!({} as React.MouseEvent<HTMLButtonElement>);
     expect(captured.state.setMessageStatus).toHaveBeenLastCalledWith("message-1", "done");
     captured.undo.mock.calls.at(-1)![0]();
     expect(captured.state.setMessageStatus).toHaveBeenLastCalledWith("message-1", "waiting");

@@ -130,16 +130,17 @@ describe("PreflightComposer", () => {
     expect(html).toContain('aria-modal="true"');
     expect(html).toContain("Codex");
     expect(html).toContain("粘贴后动作");
-    expect(html).toContain("本次尚未确认");
-    expect(html).toContain("本次不按回车");
-    expect(html).toContain("本次粘贴后按回车");
-    expect(html).toContain('type="radio"');
+    expect(html).toContain("点击发送即确认，粘贴后按回车");
+    expect(html).not.toContain("本次尚未确认");
+    expect(html).not.toContain('name="preflight-enter-decision"');
+    expect(html).not.toContain('type="radio"');
     expect(html).toContain('aria-label="发送警告"');
     expect(html).toContain("部分来源已不存在");
     expect(html).toContain('aria-label="最终发送内容"');
     expect(html).toContain("需要发送的正文");
     expect(html).toContain('aria-describedby="preflight-status"');
-    expect(html).toContain("确认发送");
+    expect(html).toContain("粘贴并按回车");
+    expect(html).toContain('aria-label="将要粘贴的内容"');
     expect(html).toContain('aria-label="重新检测当前文本"');
     expect(html).toContain("重新检测");
     expect(html).toContain("disabled");
@@ -388,6 +389,9 @@ describe("PreflightComposer", () => {
     expect(html).toContain("匹配你添加的敏感字段");
     expect(html).not.toContain("token.custom_sensitive_field");
     expect(html).toContain("替换为占位符");
+    // P2：原文标注视图与详细列表并存
+    expect(html).toContain("data-finding-inline");
+    expect(html).toContain("详细列表");
     expect(html).toContain("同类全部替换");
     expect(html).toContain("保留原文发送");
     expect(html).toContain('aria-label="在正文中定位这一项"');

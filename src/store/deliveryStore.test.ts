@@ -267,7 +267,7 @@ describe("deliveryStore", () => {
     expect(useDeliveryStore.getState().transform.status).toBe("stale");
   });
 
-  it("confirm 回车必须由本次预检明确确认", () => {
+  it("确认后回车：confirmEnter 按用户选择写入 pressEnter", () => {
     useDeliveryStore.getState().openDraft(draft());
 
     useDeliveryStore.getState().confirmEnter(false);

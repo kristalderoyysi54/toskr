@@ -2,9 +2,37 @@ import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+type FlyoutSource = {
+  entries: { kind: string; id: string; label?: string; disabled?: boolean }[];
+  handlers: Map<string, () => void>;
+};
+
 const menu = vi.hoisted(() => ({
   items: new Map<string, { onClick?: () => void; onSelect?: () => void }>(),
+  flyouts: new Map<string, () => { entries: { kind: string; id: string; label?: string }[]; handlers: Map<string, () => void> }>(),
   close: undefined as ((event: { preventDefault: () => void }) => void) | undefined,
+}));
+
+// 子菜单走独立小窗：触发行渲染成「标签 + 展开后的条目文字」便于断言层级，并记下 getSource
+vi.mock("@/components/MenuFlyoutTrigger", () => ({
+  MenuFlyoutTrigger: (props: { label: string; getSource: () => FlyoutSource }) => {
+    menu.flyouts.set(props.label, props.getSource);
+    return createElement(
+      "div",
+      { "data-submenu": props.label },
+      props.label,
+      ...props.getSource().entries.map((entry) => entry.label ?? "")
+    );
+  },
+}));
+
+vi.mock("@/lib/ai", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/ai")>(),
+  splitSubtasks: vi.fn(),
+}));
+vi.mock("@/lib/actions", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/actions")>(),
+  sendTaskToChat: vi.fn(),
 }));
 
 vi.mock("@/components/ui/context-menu", () => {
@@ -12,9 +40,12 @@ vi.mock("@/components/ui/context-menu", () => {
   return {
     ContextMenu: wrapper,
     ContextMenuTrigger: wrapper,
-    ContextMenuSubContent: wrapper,
+    // cardMenuLayout 的投影器会引用这些导出（本文件的菜单不再用 Radix 子菜单）
+    ContextMenuLabel: wrapper,
+    ContextMenuShortcut: wrapper,
+    ContextMenuSub: wrapper,
     ContextMenuSubTrigger: wrapper,
-    ContextMenuSub: ({ children }: { children: ReactNode }) => createElement("div", { "data-submenu": "" }, children),
+    ContextMenuSubContent: wrapper,
     ContextMenuSeparator: () => createElement("hr"),
     ContextMenuContent: ({ children, onCloseAutoFocus }: {
       children: ReactNode;
@@ -37,6 +68,8 @@ vi.mock("@/components/ui/context-menu", () => {
   };
 });
 
+import { splitSubtasks } from "@/lib/ai";
+import { sendTaskToChat } from "@/lib/actions";
 import { TASK_INBOX_ID, useNotesStore, type Task } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
 import { TaskRow, TaskTile } from "./TaskRow";
@@ -54,6 +87,7 @@ const task: Task = {
 
 beforeEach(() => {
   menu.items.clear();
+  menu.flyouts.clear();
   menu.close = undefined;
   useNotesStore.setState({ tasks: [task], taskSections: [{ id: TASK_INBOX_ID, name: "收集箱" }] });
   useUIStore.setState({ focusedId: null, editingId: null });
@@ -62,7 +96,7 @@ beforeEach(() => {
 describe("任务菜单", () => {
   it.each([TaskRow, TaskTile])("行与横栏菜单都优先完成、编辑和提醒，发送留在更多操作", (Component) => {
     const html = renderToStaticMarkup(createElement(Component, { task, now: 10 }));
-    const firstLevel = html.split('data-task-menu=""')[1]!.split('data-submenu=""')[0]!;
+    const firstLevel = html.split('data-task-menu=""')[1]!.split('data-submenu="更多操作"')[0]!;
     expect(firstLevel).toContain("标记完成");
     expect(firstLevel).toContain("编辑任务");
     expect(firstLevel).toContain("设置提醒时间");
@@ -71,6 +105,19 @@ describe("任务菜单", () => {
     expect(html).toContain("更多操作");
     expect(html).toContain("AI 拆解子任务");
     expect(html).toContain('data-variant="destructive"');
+  });
+
+  it("更多操作小窗的条目与动作投影自同一份菜单 JSX", () => {
+    renderToStaticMarkup(createElement(TaskRow, { task, now: 10 }));
+    const source = menu.flyouts.get("更多操作")!();
+    expect(source.entries.map((entry) => entry.label ?? entry.kind)).toEqual([
+      "发送到对话", "检查后发送…", "separator", "AI 拆解子任务",
+    ]);
+    const byLabel = (label: string) => source.handlers.get(source.entries.find((e) => e.label === label)!.id)!;
+    byLabel("AI 拆解子任务")();
+    expect(splitSubtasks).toHaveBeenCalledWith(task.id);
+    byLabel("检查后发送…")();
+    expect(sendTaskToChat).toHaveBeenCalledWith(task.id, { forcePreflight: true });
   });
 
   it("编辑在菜单关闭后才打开真实任务编辑态，避免焦点被菜单抢回", () => {

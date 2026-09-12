@@ -20,7 +20,8 @@ import type {
   DeliveryDraftInput,
   DeliveryDraftWarning,
 } from "./types";
-import { applyAliasEntities } from "./aliasEntities";
+import { applyAliasEntities, scanAliasEntities } from "./aliasEntities";
+import { orderedSourceSegments, wrapOrderedSegments, remapOrderedSegments } from "./orderedSegments";
 import { EMPTY_PRIVACY_DECISION } from "./firewall";
 import { applyDeliveryOutputCodec } from "./outputCodec";
 
@@ -73,7 +74,7 @@ function markdownPlainNoteContent(note: Note): {
   });
   return {
     text: textFromContentBlocks(contentBlocks),
-    segmentNote: { ...note, contentBlocks },
+    segmentNote: { ...note, text: textFromContentBlocks(contentBlocks), contentBlocks },
   };
 }
 
@@ -122,6 +123,9 @@ export function buildDeliverySegments(
   const ranges = textBlockRanges(blocks);
   const segments: DeliverySegment[] = [];
   const usedFiles = new Set<string>();
+  const encoder = new TextEncoder();
+  let textOffset = 0;
+  let byteOffset = 0;
   for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
     const block = blocks[blockIndex];
     if (block.type === "image") {
@@ -135,7 +139,13 @@ export function buildDeliverySegments(
     const range = ranges.find((entry) => entry.blockIndex === blockIndex);
     if (!range) return null;
     const piece = finalText.slice(range.start, range.end);
-    if (piece.trim()) segments.push({ kind: "text", text: piece });
+    if (piece.trim()) {
+      byteOffset += encoder.encode(finalText.slice(textOffset, range.start)).length;
+      const start = byteOffset;
+      byteOffset += encoder.encode(piece).length;
+      textOffset = range.end;
+      segments.push({ kind: "text", start, end: byteOffset });
+    }
   }
   if (usedFiles.size !== imageFiles.length) return null;
   return segments;
@@ -159,6 +169,7 @@ export function buildDeliveryDraft(
   let appliedTextOverride: string | null = null;
   let appliedContentOverride: NoteContentBlock[] | null = null;
   let segmentSourceNote: Note | null = null;
+  let segmentNotes: Note[] | null = null;
   let markdownPlainText: string | null = null;
   let markdownTransformBypassed = false;
   const profile = state.profileResolution.profile;
@@ -175,9 +186,20 @@ export function buildDeliveryDraft(
         markdownPlainText = markdownToPlainText(rawText);
       }
     }
+  } else if (input.sourceKind === "message") {
+    // 消息来源：只发正文文字；非文本消息（无 text）视为无可发内容
+    const selected = (state.messages ?? []).find((item) => requestedIds.has(item.id));
+    if (selected && selected.text.trim()) {
+      sourceItemIds = [selected.id];
+      rawText = selected.text;
+      if (requestedMarkdownMode === "strip") {
+        markdownPlainText = markdownToPlainText(rawText);
+      }
+    }
   } else {
     const selected = orderedNotes(input.sourceItemIds, state.notes);
     segmentSourceNote = selected.length === 1 ? selected[0] : null;
+    segmentNotes = selected;
     sourceItemIds = selected.map((note) => note.id);
     isSecretSource = selected.some((note) => note.kind === "secret");
     markdownTransformBypassed =
@@ -211,6 +233,7 @@ export function buildDeliveryDraft(
       // 片段发送：正文取选中片段，图片不随行；模板/别名等后续环节照常
       rawText = input.sourceTextOverride;
       appliedTextOverride = input.sourceTextOverride;
+      segmentNotes = null;
       if (
         requestedMarkdownMode === "strip" &&
         !selected[0]?.codeLang &&
@@ -232,12 +255,9 @@ export function buildDeliveryDraft(
           markdownPlainText = transformedSingle.text;
           segmentSourceNote = transformedSingle.segmentNote;
         } else {
-          markdownPlainText = buildNoteSourceContent(
-            selected,
-            (note, text) => note.codeLang
-              ? text
-              : markdownToPlainText(text)
-          ).rawText;
+          segmentNotes = selected.map(note => note.codeLang
+            ? note : markdownPlainNoteContent(note)?.segmentNote ?? note);
+          markdownPlainText = buildNoteSourceContent(segmentNotes).rawText;
           segmentSourceNote = null;
         }
       }
@@ -285,14 +305,17 @@ export function buildDeliveryDraft(
     addWarning(warnings, "empty-payload");
   }
 
-  // 图文交错顺序：finalText === sourceText 证明模板/代码块/别名未继续改动
-  // 当前（原文或已去 Markdown）投影，交错文字段与已扫描正文仍同源。
-  const segments =
-    segmentSourceNote &&
-    appliedTextOverride === null &&
-    finalText === sourceText
-      ? buildDeliverySegments(segmentSourceNote, finalText, imageFiles)
-      : null;
+  const ordered = appliedTextOverride === null
+    ? orderedSourceSegments(segmentSourceNote ? [segmentSourceNote] : segmentNotes ?? [], sourceText, imageFiles)
+    : null;
+  const wrapped = wrapOrderedSegments(sourceText, assembledBase, ordered);
+  const segments = finalText === assembledBase ? wrapped : remapOrderedSegments(
+    assembledBase, finalText, wrapped,
+    scanAliasEntities(assembledBase, state.aliasEntities).map(match => ({
+      startUtf16: match.startUtf16, endUtf16: match.endUtf16,
+      replacement: aliasResult.redactionMap[match.originalText],
+    }))
+  );
 
   const promptSnippetGroupId = input.promptSnippetId
     ? state.promptSnippets.find((snippet) => snippet.id === input.promptSnippetId)
@@ -313,6 +336,7 @@ export function buildDeliveryDraft(
     originalImageFiles: [...imageFiles],
     imageFiles,
     segments,
+    segmentsText: segments ? finalText : undefined,
     imageFirewall: imageFiles.map((file) => ({
       originalFile: file,
       sendFile: file,
@@ -352,6 +376,8 @@ export function buildDeliveryDraft(
     scanRevision: 0,
     privacyDecision: { ...EMPTY_PRIVACY_DECISION },
     enterPolicy: profile.enterPolicy,
+    // allow 方案直接请求回车（用户 2026-09-11 确认：预检里点发送即视为确认）；
+    // confirm 方案需本次确认后才置 pressEnter
     enterDecisionConfirmed: profile.enterPolicy !== "confirm",
     pressEnter: profile.enterPolicy === "allow",
     keepPanel: state.panelPinned || profile.keepPanel,

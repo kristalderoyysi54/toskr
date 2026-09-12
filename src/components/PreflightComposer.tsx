@@ -1,3 +1,4 @@
+import { currentDraftSegments, deliverySequencePreview } from "@/lib/delivery/orderedSegments";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
   AlertTriangle,
@@ -43,6 +44,8 @@ import {
 } from "@/lib/aliasQuickAdd";
 import { activeAliasOccurrences } from "@/lib/delivery/aliasEntities";
 import { findingReason } from "@/lib/delivery/findingReason";
+import { FindingInlineText } from "@/components/preflight/FindingInlineText";
+import { SendPreviewText } from "@/components/preflight/SendPreviewText";
 import { findingSourceText } from "@/lib/privacy";
 import {
   FIREWALL_CATEGORY_LABEL,
@@ -59,12 +62,12 @@ import { imageListLabel } from "@/lib/format";
 import { textareaSelectionAnchor } from "@/lib/selectionAnchor";
 import { useNoteThumb } from "@/lib/media";
 import { tip } from "@/lib/tip";
-import { ENTER_POLICY_STATUS_LABEL } from "@/lib/targetLens";
 import { api, type FirewallFinding } from "@/lib/tauri";
 import {
   promptSnippetsForGroup,
   type DeliveryOutputMode,
 } from "@/lib/targetProfiles";
+import { ENTER_POLICY_STATUS_LABEL } from "@/lib/targetLens";
 import { cn } from "@/lib/utils";
 import { useDeliveryStore } from "@/store/deliveryStore";
 import { noteImages, useNotesStore } from "@/store/notesStore";
@@ -295,15 +298,16 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
     [settings.targetProfiles, targetProfileId]
   );
   const hasPayload = Boolean(draft && (draft.finalText || draft.imageFiles.length));
-  const enterReady = Boolean(
-    draft && (draft.enterPolicy !== "confirm" || draft.enterDecisionConfirmed)
-  );
-  const enterDecisionLabel = draft?.enterPolicy === "confirm" &&
-    !draft.enterDecisionConfirmed
-    ? "本次尚未确认"
-    : draft?.safeRehearsal
-      ? "演练安全锁：只粘贴，不按回车"
+  // 粘贴后动作不再要求单独选择（用户 2026-09-11）：confirm 方案在预检里点「发送」即确认
+  const enterDecisionLabel = draft?.safeRehearsal
+    ? "本次不按回车"
+    : draft?.enterPolicy === "confirm" && !draft.enterDecisionConfirmed
+      ? "点击发送即确认，粘贴后按回车"
       : `本次${draft?.pressEnter ? "会按回车" : "不按回车"}`;
+  // P3：确认按钮文案直接写出动作（confirm 方案点发送即确认回车）
+  const willPressEnter =
+    !!draft && !draft.safeRehearsal &&
+    (draft.pressEnter || (draft.enterPolicy === "confirm" && !draft.enterDecisionConfirmed));
   const canRecoverTarget = safeRetryPending &&
     staleReason === "target" &&
     !hiddenStaleReason;
@@ -355,7 +359,6 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
     !retryBlocked &&
     (!staleMessage || canRecoverTarget) &&
     hasPayload &&
-    enterReady &&
     firewall?.canSend &&
     imageFirewall?.canSend
     && transformStatus !== "running"
@@ -389,13 +392,11 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
           ? firewall.reason ?? "本地隐私检查未通过"
           : imageFirewall && !imageFirewall.canSend
             ? imageFirewall.reason ?? "图片隐私检查未通过"
-            : !enterReady
-              ? "请先在上方确认粘贴后是否按回车"
-              : transformStatus === "running"
-                ? "AI 处理进行中，完成后可发送"
-                : retryBlocked
-                  ? lastError ?? "上次发送未完成处理，暂不能重试"
-                  : null;
+            : transformStatus === "running"
+              ? "AI 处理进行中，完成后可发送"
+              : retryBlocked
+                ? lastError ?? "上次发送未完成处理，暂不能重试"
+                : null;
 
   // 目标失效自动恢复：切回同一目标（仅 token 轮换）时静默重基线，兑现底栏「切回后自动恢复」的承诺
   useEffect(() => {
@@ -611,10 +612,6 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
       ).length,
     0
   );
-  const enterPending =
-    !draft.safeRehearsal &&
-    draft.enterPolicy === "confirm" &&
-    !draft.enterDecisionConfirmed;
   // 有未了结命中（含按方案放行的）也算待处理：可发送 ≠ 不需要人看一眼
   const textAttention = Boolean(
     draft.firewallEnabled &&
@@ -633,7 +630,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
         )
     );
   const checksPass = Boolean(
-    firewall?.canSend && imageFirewall?.canSend && !enterPending
+    firewall?.canSend && imageFirewall?.canSend
   );
   const textPassSummary =
     draft.firewallStatus === "disabled"
@@ -659,7 +656,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
         ? `已确认保留 ${keptImageFindingCount} 处，发送原图`
         : "无敏感区域，发送原图";
   const attentionCount =
-    unresolvedTextCount + unresolvedImageCount + (enterPending ? 1 : 0);
+    unresolvedTextCount + unresolvedImageCount;
   const bannerTitle = privacyScanPending
     ? "本地隐私检测中…"
     : checksPass
@@ -687,36 +684,10 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
       : [
           unresolvedTextCount > 0 ? `${unresolvedTextCount} 处文本敏感项` : null,
           unresolvedImageCount > 0 ? `${unresolvedImageCount} 处图片区域` : null,
-          enterPending ? "回车动作待确认" : null,
         ]
           .filter(Boolean)
           .join(" · ") ||
         (firewall?.reason ?? imageFirewall?.reason ?? "详见下方检查明细");
-  const enterDecisionFieldset = (
-    <fieldset className="space-y-1">
-      <legend className="sr-only">选择本次粘贴后的回车动作</legend>
-      {([
-        [false, "本次不按回车"],
-        [true, "本次粘贴后按回车"],
-      ] as const).map(([pressEnter, label]) => (
-        <label key={label} className="flex items-center gap-1.5">
-          <input
-            type="radio"
-            name="preflight-enter-decision"
-            checked={
-              draft.enterDecisionConfirmed &&
-              draft.pressEnter === pressEnter
-            }
-            disabled={busy}
-            onChange={() =>
-              useDeliveryStore.getState().confirmEnter(pressEnter)
-            }
-          />
-          {label}
-        </label>
-      ))}
-    </fieldset>
-  );
   const imageCheckPanel =
     draft.imageFirewall.length > 0 && imageFirewall ? (
       <ImageFirewallPanel draft={draft} busy={busy} evaluation={imageFirewall} />
@@ -804,6 +775,17 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
           <p className="text-micro text-muted-foreground">
             推荐替换为占位符（本机替换、发出的是占位符）；确需按原文发出时选「保留原文发送」
           </p>
+          {/* P2（2026-09-12）：命中就地处理——原文高亮可点；详细列表折叠保留批量按钮与命中依据 */}
+          <FindingInlineText
+            text={draft.finalText}
+            findings={draft.findings}
+            excludedIds={excludedFindingIds}
+            busy={busy || draft.firewallStatus !== "ready"}
+            aliasCategories={aliasQuickAddCategories(settings.aliasCustomCategories)}
+            onReplace={(finding) => useDeliveryStore.getState().replaceFirewallFinding(finding.id)}
+            onExclude={(finding) => useDeliveryStore.getState().excludeFirewallFinding(finding.id)}
+            onAlias={(finding, category) => addFindingToAliasDictionary(finding, category)}
+          />
           {draft.findings.length > 1 && (
             <div className="space-y-1">
               <div className="flex flex-wrap gap-1.5">
@@ -835,7 +817,12 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
               </p>
             </div>
           )}
-          <ul className="space-y-1.5" aria-label="敏感项列表">
+          <details className="group">
+            <summary className="flex cursor-pointer list-none items-center gap-1 py-0.5 text-micro text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
+              <ChevronRight className="size-3 transition-transform group-open:rotate-90" aria-hidden />
+              详细列表（命中依据 · 同类替换 · 定位）
+            </summary>
+          <ul className="mt-1 space-y-1.5" aria-label="敏感项列表">
             {draft.findings.map((finding) => {
               const excluded = excludedFindingIds.has(finding.id);
               return (
@@ -953,6 +940,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
               );
             })}
           </ul>
+          </details>
         </>
       )}
       {firewall?.needsRawConfirmation && (
@@ -1076,7 +1064,8 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
           <section
             aria-label="发送概览"
             className={cn(
-              "min-h-0 space-y-2 overflow-y-auto rounded-lg bg-muted/30 p-2",
+              // 案 3（2026-09-11）：分区从 hidden 切回可见时自上而下揭示
+              "reveal-in min-h-0 space-y-2 overflow-y-auto rounded-lg bg-muted/30 p-2",
               !showSummary && "hidden"
             )}
           >
@@ -1133,22 +1122,11 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
               </div>
             )}
 
-            {(textAttention || imageAttention || enterPending) && (
+            {(textAttention || imageAttention) && (
               <div className="space-y-2">
                 <p className="px-0.5 text-micro font-semibold text-warning">需要处理</p>
                 {textAttention && privacyCheckSection}
                 {imageAttention && imageCheckPanel}
-                {enterPending && (
-                  <div className="space-y-1 rounded-lg border border-warning/40 p-2 text-label">
-                    <p className="font-medium">
-                      粘贴后动作：{ENTER_POLICY_STATUS_LABEL[draft.enterPolicy]}
-                      <span className="text-muted-foreground">
-                        {` · ${enterDecisionLabel}`}
-                      </span>
-                    </p>
-                    {enterDecisionFieldset}
-                  </div>
-                )}
               </div>
             )}
 
@@ -1232,22 +1210,16 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
               )}
 
               <div className="space-y-1 text-label">
-                {!enterPending && (
-                  <p>
-                    粘贴后动作：{ENTER_POLICY_STATUS_LABEL[draft.enterPolicy]}
-                    <span className="text-muted-foreground">
-                      {` · ${enterDecisionLabel}`}
-                    </span>
-                  </p>
-                )}
-                {draft.safeRehearsal ? (
+                <p role="status">
+                  粘贴后动作：{ENTER_POLICY_STATUS_LABEL[draft.enterPolicy]}
+                  <span className="text-muted-foreground">
+                    {` · ${enterDecisionLabel}`}
+                  </span>
+                </p>
+                {draft.safeRehearsal && (
                   <p role="status" className="font-medium text-success">
                     演练安全锁：只粘贴，不按回车
                   </p>
-                ) : (
-                  draft.enterPolicy === "confirm" &&
-                  !enterPending &&
-                  enterDecisionFieldset
                 )}
                 <label className="flex items-center gap-1.5">
                   <input
@@ -1366,12 +1338,41 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                 </Button>
               </div>
             )}
+            {/* P3（2026-09-12）：常驻预演——确认的是最终会粘贴出去的字 */}
+            {!draft.safeRehearsal && (
+              <section
+                aria-label="将要粘贴的内容"
+                className="space-y-1 rounded-lg border border-border/70 p-2"
+              >
+                <div className="flex items-center gap-2">
+                  <p className="text-label font-medium">将要粘贴的内容</p>
+                  <span className="ml-auto text-micro tabular-nums text-muted-foreground">
+                    {draft.finalText.length} 字符
+                  </span>
+                  {!horizontal && (
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="ghost"
+                      disabled={busy}
+                      onClick={() => useDeliveryStore.getState().setActiveSection("content")}
+                    >
+                      编辑
+                    </Button>
+                  )}
+                </div>
+                <SendPreviewText
+                  text={draft.finalText}
+                  placeholders={Object.values(draft.redactionMap)}
+                />
+              </section>
+            )}
           </section>
 
           <section
             aria-label="最终发送内容"
             className={cn(
-              "min-h-0 flex-1 flex-col gap-2 overflow-y-auto rounded-lg bg-muted/30 p-2",
+              "reveal-in min-h-0 flex-1 flex-col gap-2 overflow-y-auto rounded-lg bg-muted/30 p-2",
               showContent ? "flex" : "hidden"
             )}
           >
@@ -1428,7 +1429,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                 </div>
                 {/* 发送顺序如实展示：自动去 Markdown 后仍可保持同源交错段；
                     用户手改/AI/隐私替换使正文偏离组装基线时才安全降级。 */}
-                {draft.segments && draft.finalText === draft.assembledText ? (
+                {currentDraftSegments(draft) ? (
                   <p className="text-micro text-muted-foreground">
                     发送顺序：按卡片原图文交错顺序
                   </p>
@@ -1441,6 +1442,11 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                     发送顺序：全文 → {draft.originalImageFiles.length} 张图
                   </p>
                 )}
+                <ol aria-label="实际投递顺序" className="space-y-1 text-micro text-muted-foreground">
+                  {deliverySequencePreview(draft).map((label, index) => (
+                    <li key={index} className="break-words">{index + 1}. {label}</li>
+                  ))}
+                </ol>
                 <ul
                   aria-label={`图片附件原图，共 ${draft.originalImageFiles.length} 张`}
                   className="flex gap-1.5 overflow-x-auto pb-0.5"
@@ -1523,7 +1529,9 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                   ? "重新识别并重试"
                   : draft.safeRehearsal
                     ? "安全粘贴"
-                    : "确认发送"}
+                    : willPressEnter
+                      ? "粘贴并按回车"
+                      : "粘贴，不按回车"}
               {!showTargetChangeAction && <Kbd inline>⌘⏎</Kbd>}
             </Button>
           </span>

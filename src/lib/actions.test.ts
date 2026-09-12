@@ -62,10 +62,12 @@ import {
   openNoteDetail,
   restoreNoteAliasesWithUndo,
   sendCheckedToChat,
+  sendMessageToChat,
   sendNotesToChat,
   sendTaskToChat,
   warnWithPanel,
 } from "./actions";
+import { MESSAGE_SOURCE } from "./messages";
 import { SAFE_REHEARSAL_TEXT } from "./onboarding";
 import { submitPreflightDraft } from "./delivery/preflight";
 import { setPendingUndo, tip } from "./tip";
@@ -1170,6 +1172,39 @@ describe("结构化发送结果的 store 副作用", () => {
     expect(useUIStore.getState().open).toBe(true);
   });
 
+  it("消息发送以正文为来源，走同一个 send_delivery 契约", async () => {
+    reset("sent");
+    useNotesStore.setState({
+      messages: [{
+        id: "m1",
+        source: MESSAGE_SOURCE,
+        conversationId: "c1",
+        messageId: "m1",
+        conversationName: "研发群",
+        senderUid: "u1",
+        senderName: "张三",
+        occurredAtMs: null,
+        receivedAtMs: 1_000,
+        mentionedSelf: true,
+        followedSender: false,
+        matchedRuleIds: [],
+        isGroup: true,
+        messageType: "text",
+        text: "帮我看下这个报错",
+        context: [],
+        status: "new",
+      }],
+    });
+
+    const response = await sendMessageToChat("m1");
+
+    expect(response?.status).toBe("sent");
+    expect(apiMocks.sendDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "帮我看下这个报错" })
+    );
+    expect(useNotesStore.getState().messages[0].status).toBe("new");
+  });
+
   it("单条与勾选批量都委托同一个 send_delivery 契约", async () => {
     reset("blocked");
     const first = useNotesStore.getState().addNote("one").id!;
@@ -1216,7 +1251,7 @@ describe("结构化发送结果的 store 副作用", () => {
     );
   });
 
-  it("精确 Profile 同时驱动默认格式、Enter 与 keepPanel", async () => {
+  it("精确 Profile 保留格式、keepPanel 与自动回车", async () => {
     const noteId = useNotesStore.getState().addNote("const answer = 42").id!;
     const settings = useNotesStore.getState().settings;
     useNotesStore.getState().setSettings({
@@ -1279,6 +1314,32 @@ describe("结构化发送结果的 store 副作用", () => {
     );
   });
 
+  it("enterPolicy=allow 直接请求回车，不弹确认框", async () => {
+    const noteId = useNotesStore.getState().addNote("auto enter").id!;
+    const settings = useNotesStore.getState().settings;
+    useNotesStore.getState().setSettings({
+      targetProfiles: [
+        {
+          id: "codex",
+          name: "Codex",
+          bundleIds: ["com.openai.codex"],
+          promptGroupId: settings.promptGroups[0].id,
+          defaultFormat: "plain",
+          defaultMarkdownMode: "preserve",
+          enterPolicy: "allow",
+          privacyPolicy: "requireRedaction",
+          keepPanel: false,
+        },
+      ],
+      defaultTargetProfileId: "codex",
+    });
+    await sendNotesToChat([noteId]);
+    expect(dialogMocks.ask).not.toHaveBeenCalled();
+    expect(apiMocks.sendDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ pressEnter: true })
+    );
+  });
+
   it("未知 bundle 即使默认 Profile 配置高风险值也会安全收紧", async () => {
     const unknown = { ...target, bundleId: "com.example.unknown", revision: 100 };
     applyTargetEvent(unknown);
@@ -1331,7 +1392,7 @@ describe("结构化发送结果的 store 副作用", () => {
     );
   });
 
-  it("A→B→A 发生在 Enter 确认期间仍阻止旧临时 Profile", async () => {
+  it("A→B→A 发生在目标复核期间仍阻止旧临时 Profile", async () => {
     const noteId = useNotesStore.getState().addNote("race override").id!;
     const settings = useNotesStore.getState().settings;
     useNotesStore.getState().setSettings({
@@ -1349,13 +1410,13 @@ describe("结构化发送结果的 store 副作用", () => {
       defaultTargetProfileId: "temporary-confirm",
     });
     setTargetProfileOverride("temporary-confirm");
-    let resolveAsk!: (confirmed: boolean) => void;
-    dialogMocks.ask.mockReturnValue(new Promise<boolean>((resolve) => {
-      resolveAsk = resolve;
+    let resolveTarget!: (snapshot: TargetSnapshot) => void;
+    apiMocks.refreshTargetSnapshot.mockReturnValueOnce(new Promise<TargetSnapshot>((resolve) => {
+      resolveTarget = resolve;
     }));
 
     const pending = sendNotesToChat([noteId]);
-    await vi.waitFor(() => expect(dialogMocks.ask).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(apiMocks.refreshTargetSnapshot).toHaveBeenCalledOnce());
     applyTargetEvent({
       ...target,
       token: "target-b",
@@ -1367,18 +1428,18 @@ describe("结构化发送结果的 store 副作用", () => {
     const returnedA = { ...target, token: "target-a2", revision: 101 };
     applyTargetEvent(returnedA);
     apiMocks.refreshTargetSnapshot.mockResolvedValue(returnedA);
-    resolveAsk(true);
+    resolveTarget(target);
 
     await expect(pending).resolves.toBeNull();
     expect(apiMocks.sendDelivery).not.toHaveBeenCalled();
     expect(useTargetStore.getState().profileOverrideNeedsConfirmation).toBe(true);
     expect(tip).toHaveBeenCalledWith(
       "warn",
-      "原临时发送方案已暂停，请确认或恢复自动匹配"
+      "发送目标刚刚发生变化，请重试发送"
     );
   });
 
-  it("确认框期间 Profile 策略改变时不沿用旧 Enter 决策", async () => {
+  it("目标复核期间 Profile 策略改变时拒绝旧草稿", async () => {
     const noteId = useNotesStore.getState().addNote("changed policy").id!;
     const settings = useNotesStore.getState().settings;
     const profile = {
@@ -1396,17 +1457,17 @@ describe("结构化发送结果的 store 副作用", () => {
       targetProfiles: [profile],
       defaultTargetProfileId: profile.id,
     });
-    let resolveAsk!: (confirmed: boolean) => void;
-    dialogMocks.ask.mockReturnValue(new Promise<boolean>((resolve) => {
-      resolveAsk = resolve;
+    let resolveTarget!: (snapshot: TargetSnapshot) => void;
+    apiMocks.refreshTargetSnapshot.mockReturnValueOnce(new Promise<TargetSnapshot>((resolve) => {
+      resolveTarget = resolve;
     }));
 
     const pending = sendNotesToChat([noteId]);
-    await vi.waitFor(() => expect(dialogMocks.ask).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(apiMocks.refreshTargetSnapshot).toHaveBeenCalledOnce());
     useNotesStore.getState().setSettings({
       targetProfiles: [{ ...profile, enterPolicy: "never" }],
     });
-    resolveAsk(true);
+    resolveTarget(target);
 
     await expect(pending).resolves.toBeNull();
     expect(apiMocks.sendDelivery).not.toHaveBeenCalled();
@@ -1713,5 +1774,34 @@ describe("富卡逐块处理与剪贴收编（2026-08-20 契约收口）", () =>
     expect(moved.keep).toBe(false);
     expect(vi.mocked(tip)).toHaveBeenCalledWith("ok", "已移入笔记", true);
     expect(vi.mocked(setPendingUndo)).toHaveBeenCalled();
+  });
+
+  it("moveClipsToNotesWithUndo：指定分类批量移动，提示目标并能从 HUD 撤销", () => {
+    const state = useNotesStore.getState();
+    const sectionId = state.ensureSection("工作");
+    state.addClipNote("A", {});
+    state.addClipNote("B", {});
+    const before = useNotesStore.getState().notes;
+
+    moveClipsToNotesWithUndo(before.map((note) => note.id), sectionId);
+
+    expect(useNotesStore.getState().notes.every((note) => note.sectionId === sectionId)).toBe(true);
+    expect(tip).toHaveBeenCalledWith("ok", "已移入「工作」 2 条", true);
+    expect(setPendingUndo).toHaveBeenCalledTimes(1);
+    vi.mocked(setPendingUndo).mock.calls[0][0]();
+    expect(useNotesStore.getState().notes).toEqual(before);
+    expect(tip).toHaveBeenLastCalledWith("undone", "已撤销");
+  });
+
+  it("moveClipsToNotesWithUndo：菜单打开后分类失效，不移动也不覆盖现有撤销提示", () => {
+    useNotesStore.getState().addClipNote("保留在剪贴", {});
+    const before = useNotesStore.getState().notes;
+
+    moveClipsToNotesWithUndo([before[0].id], "deleted-section");
+
+    expect(useNotesStore.getState().notes).toBe(before);
+    expect(tip).not.toHaveBeenCalled();
+    expect(setPendingUndo).not.toHaveBeenCalled();
+    expect(useNotesStore.getState().undoStack).toHaveLength(0);
   });
 });

@@ -1,63 +1,25 @@
-import { Children, isValidElement, type KeyboardEvent, type ReactNode } from "react";
+import { Fragment } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import {
   ContextMenuItem,
   ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuShortcut,
   ContextMenuSub,
   ContextMenuSubContent,
   ContextMenuSubTrigger,
 } from "@/components/ui/context-menu";
+import { TargetSendMenuItem } from "@/components/TargetSendMenuItem";
+import { FileText, Send } from "lucide-react";
 import {
   CONTEXT_MENU_REGISTRY,
   normalizeContextMenu,
 } from "@/store/notesStore";
-import { CardMenuPageItem } from "./CardMenuPageItem";
-import { flattenContextMenuSubmenu, partitionCardMenuIds } from "./cardMenuLayout";
+import { useTargetStore } from "@/store/targetStore";
+import { collectMenuFlyoutEntries, menuNodeText, partitionCardMenuIds } from "./cardMenuLayout";
 
 describe("卡片菜单层级", () => {
-  it.each(["send", "more", "main", "other-templates"] as const)("点击 %s 切页入口保留当前菜单", (page) => {
-    const navigate = vi.fn();
-    const item = CardMenuPageItem({ page, onNavigate: navigate, children: "菜单入口" });
-    const event = new Event("select", { cancelable: true });
-    item.props.onSelect(event);
-    expect(event.defaultPrevented).toBe(true);
-    expect(navigate).toHaveBeenCalledWith(page);
-  });
-
-  it.each([
-    ["send", "ArrowRight"],
-    ["more", "ArrowRight"],
-    ["other-templates", "ArrowRight"],
-    ["main", "ArrowLeft"],
-  ] as const)("%s 入口用 %s 切页，不把方向键继续交给父菜单", (page, key) => {
-    const navigate = vi.fn();
-    const item = CardMenuPageItem({ page, onNavigate: navigate, children: "菜单入口" });
-    const preventDefault = vi.fn();
-    const stopPropagation = vi.fn();
-    const press = (pressedKey: string) => item.props.onKeyDown({
-      key: pressedKey, preventDefault, stopPropagation,
-    } as unknown as KeyboardEvent<HTMLDivElement>);
-    press("ArrowDown");
-    expect(navigate).not.toHaveBeenCalled();
-    expect(preventDefault).not.toHaveBeenCalled();
-    press(key);
-    expect(navigate).toHaveBeenCalledWith(page);
-    expect(preventDefault).toHaveBeenCalledOnce();
-    expect(stopPropagation).toHaveBeenCalledOnce();
-  });
-
-  it("返回发送选项的入口用左方向键，而不是重新向右进入", () => {
-    const navigate = vi.fn();
-    const item = CardMenuPageItem({ page: "send", back: true, onNavigate: navigate, children: "返回发送选项" });
-    const event = {
-      key: "ArrowLeft", preventDefault: vi.fn(), stopPropagation: vi.fn(),
-    } as unknown as KeyboardEvent<HTMLDivElement>;
-    item.props.onKeyDown(event);
-    expect(navigate).toHaveBeenCalledWith("send");
-    expect(event.preventDefault).toHaveBeenCalledOnce();
-  });
-
   it("默认笔记只保留五个主要动作，每个原有能力仍恰好出现一次", () => {
     const ids = CONTEXT_MENU_REGISTRY.map((item) => item.id);
     const layout = partitionCardMenuIds(ids, false);
@@ -92,24 +54,74 @@ describe("卡片菜单层级", () => {
     expect(layout.more).not.toContain("ai-title");
   });
 
-  it("二级中展开原有子菜单，保留实际操作回调与禁用状态", () => {
+});
+
+describe("子菜单小窗条目序列化", () => {
+  const register = () => {
+    const handlers = new Map<string, () => void>();
+    return {
+      handlers,
+      register: (handler: () => void) => {
+        const id = `fly-${handlers.size + 1}`;
+        handlers.set(id, handler);
+        return id;
+      },
+    };
+  };
+
+  it("二级子菜单展开为标题 + 原操作，图标名、快捷键、禁用与危险态原样投影", () => {
     const action = vi.fn();
-    const item = <ContextMenuItem onClick={action} disabled>添加标签</ContextMenuItem>;
-    const flattened = flattenContextMenuSubmenu(
-      <ContextMenuSub key="tags">
-        <ContextMenuSubTrigger>标签</ContextMenuSubTrigger>
-        <ContextMenuSubContent>{item}</ContextMenuSubContent>
-      </ContextMenuSub>
+    const registry = register();
+    const entries = collectMenuFlyoutEntries(
+      <Fragment>
+        <ContextMenuSub key="template">
+          <ContextMenuSubTrigger>
+            <FileText className="mr-2 size-3.5" /> 用模板发送
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent>
+            <ContextMenuItem onClick={action}>整理需求</ContextMenuItem>
+            <ContextMenuItem disabled>去设置里添加模板</ContextMenuItem>
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+        <ContextMenuSeparator />
+        <ContextMenuLabel>内容</ContextMenuLabel>
+        <ContextMenuItem variant="destructive" onClick={() => {}}>
+          <Send className="size-3.5" /> 删除
+          <ContextMenuShortcut>⌘⌫</ContextMenuShortcut>
+        </ContextMenuItem>
+      </Fragment>,
+      registry.register
     );
-    expect(isValidElement<{ children: ReactNode }>(flattened)).toBe(true);
-    if (!isValidElement<{ children: ReactNode }>(flattened)) return;
-    const [label, preservedItem] = Children.toArray(flattened.props.children);
-    expect(isValidElement(label) && label.type).toBe(ContextMenuLabel);
-    expect(isValidElement(preservedItem) && preservedItem.type).toBe(ContextMenuItem);
-    if (!isValidElement<{ disabled: boolean; onClick: () => void }>(preservedItem)) return;
-    expect(preservedItem.props.disabled).toBe(true);
-    preservedItem.props.onClick();
+    expect(entries.map((entry) => entry.kind)).toEqual([
+      "label", "item", "item", "separator", "label", "item",
+    ]);
+    expect(entries[0]).toMatchObject({ kind: "label", label: "用模板发送" });
+    expect(entries[1]).toMatchObject({ kind: "item", label: "整理需求", disabled: false, destructive: false });
+    expect(entries[2]).toMatchObject({ kind: "item", label: "去设置里添加模板", disabled: true });
+    expect(entries[5]).toMatchObject({
+      kind: "item", label: "删除", icon: "Send", shortcut: "⌘⌫", destructive: true,
+    });
+    const templateId = (entries[1] as { id: string }).id;
+    registry.handlers.get(templateId)!();
     expect(action).toHaveBeenCalledOnce();
-    expect(flattenContextMenuSubmenu(item)).toBe(item);
+  });
+
+  it("目标发送项按目标就绪态决定禁用；文字提取跳过图标与快捷键", () => {
+    const registry = register();
+    useTargetStore.setState({ status: "blocked", profileOverrideNeedsConfirmation: false });
+    const blocked = collectMenuFlyoutEntries(
+      <TargetSendMenuItem onClick={() => {}}>
+        <Send className="size-3.5" /> 发送到对话
+        <ContextMenuShortcut>⌘⏎</ContextMenuShortcut>
+      </TargetSendMenuItem>,
+      registry.register
+    );
+    expect(blocked[0]).toMatchObject({ label: "发送到对话", shortcut: "⌘⏎", disabled: true });
+    const allowed = collectMenuFlyoutEntries(
+      <TargetSendMenuItem allowInternal onClick={() => {}}>发送 / 添加</TargetSendMenuItem>,
+      registry.register
+    );
+    expect(allowed[0]).toMatchObject({ label: "发送 / 添加", disabled: false });
+    expect(menuNodeText(<span><Send className="size-3.5" /> 标签 <span className="truncate">工作</span></span>)).toBe("标签 工作");
   });
 });

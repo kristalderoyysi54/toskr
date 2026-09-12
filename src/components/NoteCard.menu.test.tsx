@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const menu = vi.hoisted(() => ({
   page: "main",
   items: new Map<string, { onClick?: () => void; onSelect?: (event: Event) => void }>(),
+  flyouts: new Map<string, () => { entries: unknown[]; handlers: Map<string, () => void> }>(),
   open: undefined as ((open: boolean) => void) | undefined,
   keydown: undefined as ((event: { key: string; preventDefault: () => void; stopPropagation: () => void }) => void) | undefined,
   snippets: {
@@ -33,6 +34,13 @@ vi.mock("react", async (importOriginal) => {
 vi.mock("@/lib/targetProfiles", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/targetProfiles")>(),
   promptSnippetsForGroup: () => menu.snippets,
+}));
+
+vi.mock("@/components/MenuFlyoutTrigger", () => ({
+  MenuFlyoutTrigger: (props: { label: string; getSource: () => { entries: unknown[]; handlers: Map<string, () => void> } }) => {
+    menu.flyouts.set(props.label, props.getSource);
+    return createElement("button", { "data-flyout-trigger": props.label }, props.label);
+  },
 }));
 
 vi.mock("@/lib/actions", async (importOriginal) => ({
@@ -78,11 +86,6 @@ const renderMenu = () => {
   menu.items.clear();
   return renderToStaticMarkup(createElement(NoteCard, { note })).split('data-note-menu=""')[1]!;
 };
-const select = (label: string) => {
-  const event = new Event("select", { cancelable: true });
-  menu.items.get(label)!.onSelect!(event);
-  return event;
-};
 
 beforeEach(() => {
   menu.page = "main";
@@ -90,48 +93,33 @@ beforeEach(() => {
   useNotesStore.setState({ notes: [note], checkedIds: [] });
 });
 
-describe("笔记的其他模板页", () => {
-  it("常用模板直接显示，展开其他模板只切页，旧模板按原文和原 id 发送", () => {
+describe("发送选项子菜单小窗", () => {
+  it("主层只留触发行，子菜单条目按顺序投影：模板列表、检查后发送、保存为某次回复", () => {
+    const html = renderMenu();
+    expect(html).toContain('data-flyout-trigger="发送选项"');
+    expect(html).not.toContain("其他模板（2）");
+    expect(html).not.toContain("整理需求");
+    const source = menu.flyouts.get("发送选项")!();
+    const labels = source.entries.map((entry) => (entry as { label?: string; kind: string }).label ?? entry);
+    expect(labels).toEqual([
+      "用模板发送",
+      "整理需求", "分析问题", "审查方案",
+      { kind: "separator", id: expect.any(String) },
+      "最小修改提示词", "翻译成中文",
+      "检查后发送…",
+      "保存为某次回复",
+    ]);
+  });
+
+  it("小窗回传条目 id 后按原模板正文与原 id 发送", () => {
     renderMenu();
-    expect(select("发送选项").defaultPrevented).toBe(true);
-    const mainTemplates = renderMenu();
-    expect(mainTemplates).toContain("整理需求");
-    expect(mainTemplates).toContain("分析问题");
-    expect(mainTemplates).toContain("审查方案");
-    expect(mainTemplates).toContain("其他模板（2）");
-    expect(mainTemplates).not.toContain("最小修改提示词");
-    expect(mainTemplates).not.toContain("翻译成中文");
-    expect(select("其他模板（2）").defaultPrevented).toBe(true);
-    expect(sendNotesToChat).not.toHaveBeenCalled();
-    const otherTemplates = renderMenu();
-    expect(otherTemplates).toContain("最小修改提示词");
-    expect(otherTemplates).toContain("翻译成中文");
-    expect(otherTemplates).not.toContain("data-submenu");
-    menu.items.get("最小修改提示词")!.onClick!();
+    const source = menu.flyouts.get("发送选项")!();
+    const entry = source.entries.find(
+      (item) => (item as { label?: string }).label === "最小修改提示词"
+    ) as { id: string };
+    source.handlers.get(entry.id)!();
     expect(sendNotesToChat).toHaveBeenCalledExactlyOnceWith(
       [note.id], menu.snippets.remaining[0]!.text, { promptSnippetId: "custom-minimal" }
     );
-  });
-
-  it("返回按钮和左方向键回发送选项，菜单重新打开回主层", () => {
-    menu.page = "other-templates";
-    renderMenu();
-    expect(select("返回发送选项").defaultPrevented).toBe(true);
-    expect(menu.page).toBe("send");
-    menu.page = "other-templates";
-    renderMenu();
-    const preventDefault = vi.fn();
-    const stopPropagation = vi.fn();
-    menu.keydown!({ key: "ArrowLeft", preventDefault, stopPropagation });
-    expect(menu.page).toBe("send");
-    expect(preventDefault).toHaveBeenCalledOnce();
-    expect(stopPropagation).toHaveBeenCalledOnce();
-    menu.page = "other-templates";
-    menu.open!(true);
-    expect(menu.page).toBe("main");
-    const reopened = renderMenu();
-    expect(reopened).toContain("发送选项");
-    expect(reopened).not.toContain("最小修改提示词");
-    expect(sendNotesToChat).not.toHaveBeenCalled();
   });
 });

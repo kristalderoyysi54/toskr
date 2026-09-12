@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { remapOrderedSegments } from "@/lib/delivery/orderedSegments";
 
 import { nextDeliveryDraftRevision } from "@/lib/delivery/executeDraft";
 import { applyDeliveryOutputCodec } from "@/lib/delivery/outputCodec";
@@ -9,6 +10,7 @@ import type {
 import {
   EMPTY_PRIVACY_DECISION,
   replaceFirewallFindings,
+  nonOverlappingFindings,
 } from "@/lib/delivery/firewall";
 import { findingUtf16RangeIsValid } from "@/lib/privacy";
 import type { FindingCategory } from "@/lib/tauri";
@@ -108,6 +110,7 @@ function revise(
   const finalText = patch.finalText ?? draft.finalText;
   const next: DeliveryDraft = {
     ...draft,
+    ...(finalText !== draft.finalText && patch.segments === undefined ? { segments: null, segmentsText: undefined } : {}),
     ...patch,
     revision: nextDeliveryDraftRevision(draft.revision),
     warnings: warningsForText(draft, finalText),
@@ -159,6 +162,14 @@ function applyFirewallReplacement(
     draft,
     {
       finalText: result.text,
+      segmentsText: result.text,
+      segments: remapOrderedSegments(
+        draft.finalText, result.text,
+        draft.finalText === (draft.segmentsText ?? draft.assembledText) ? draft.segments : null,
+        nonOverlappingFindings(draft.finalText, draft.findings.filter(finding => findingIds.has(finding.id)))
+          .map(finding => ({ startUtf16: finding.startUtf16, endUtf16: finding.endUtf16,
+            replacement: result.redactionMap[draft.finalText.slice(finding.startUtf16, finding.endUtf16)] }))
+      ),
       redactionMap: result.redactionMap,
     },
     true

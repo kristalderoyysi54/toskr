@@ -53,6 +53,7 @@ import {
   type TargetProfileResolutionSource,
 } from "@/lib/targetProfiles";
 import { useNotesStore } from "@/store/notesStore";
+import { useUIStore } from "@/store/uiStore";
 import {
   clearTargetProfileOverride,
   clearTargetRuleOverrides,
@@ -60,6 +61,7 @@ import {
   setTargetProfileOverride,
   setTargetRuleOverride,
   refreshTarget,
+  isRecoverableTargetReason,
   targetProfileIdentity,
   targetReasonLabel,
   targetStatusLabel,
@@ -130,7 +132,8 @@ function targetMatchReason(input: {
   if (input.status === "unknown") return "尚未识别发送目标，发送已锁定";
   if (input.status === "refreshing") return "正在重新确认目标与发送方案";
   if (input.status === "blocked") {
-    return `目标应用已失效：${targetReasonLabel(input.reason)}`;
+    const reason = targetReasonLabel(input.reason);
+    return `目标应用已失效：${isRecoverableTargetReason(input.reason) ? reason.split("，")[0] : reason}`;
   }
   if (input.overrideNeedsConfirmation) {
     return "原临时发送方案已暂停，当前已按目标重新选择";
@@ -209,7 +212,10 @@ export function TargetLensView({
     `提示词组 ${promptGroupName}，输出格式 ${DELIVERY_FORMAT_LABEL[targetProfileOutputMode({ defaultFormat, defaultMarkdownMode })]}`,
     `粘贴后动作 ${enterLabel}，发送完成后 ${keepPanel ? "保持打开" : "关闭面板"}，${privacyLabel}`,
   ].join("，");
-  const statusTone = profileConfirmationRequired
+  // O1（2026-09-12）：可恢复的失效（不在前台/确认失败/身份不可验）按「等待」用 warning，
+  // 不可恢复（退出/身份变化）与未识别仍用 destructive
+  const recoverableBlock = status === "blocked" && isRecoverableTargetReason(reason);
+  const statusTone = profileConfirmationRequired || recoverableBlock
     ? "text-warning"
     : status === "blocked" || status === "unknown"
       ? "text-destructive"
@@ -221,7 +227,9 @@ export function TargetLensView({
       : status === "blocked" || status === "unknown"
         ? "bg-destructive"
         : "bg-muted-foreground";
-  const reasonTone = status === "blocked" || status === "unknown"
+  const reasonTone = recoverableBlock
+    ? "text-warning"
+    : status === "blocked" || status === "unknown"
     ? "text-destructive"
     : profileSource === "conflict" || profileOverrideNeedsConfirmation
       ? "text-warning"
@@ -230,16 +238,13 @@ export function TargetLensView({
     status === "blocked" || status === "unknown" || status === "refreshing";
   const hasHiddenWarning =
     status === "ready" &&
-    (!privacyCapabilityActive ||
-      enterPolicy === "allow" ||
-      profileSource === "conflict");
+    (!privacyCapabilityActive || profileSource === "conflict");
   // hover chevron 即见具体风险原因（同时解释右上角警示圆点），不必先展开
   const hiddenWarningDetail = hasHiddenWarning
     ? hiddenWarningReasons({
         privacyCapabilityActive,
-        enterPolicy,
         profileSource,
-      }).join("、")
+      }).join("；")
     : "";
   const disclosureLabel = detailsExpanded
     ? "收起发送详情"
@@ -325,7 +330,12 @@ export function TargetLensView({
           >
             <span
               aria-hidden
-              className={cn("size-1.5 rounded-full", statusDotTone)}
+              className={cn(
+                "size-1.5 rounded-full",
+                statusDotTone,
+                // 案 2：确认中只让状态点呼吸，条与发送钮维持原状（2026-09-11）
+                status === "refreshing" && "target-dot-refreshing"
+              )}
             />
             {statusLabel}
           </span>
@@ -371,7 +381,24 @@ export function TargetLensView({
           </IconButton>
         </div>
       </div>
-      {!detailsExpanded && (status === "blocked" || status === "unknown") && (
+      {hasHiddenWarning && (
+        <p role="status" data-target-lens-risk-summary className="mt-0.5 break-words pl-7 text-micro leading-tight text-warning">
+          {hiddenWarningDetail}
+        </p>
+      )}
+      {!detailsExpanded && recoverableBlock && (
+        // 可恢复失效只展示原因，目标确认沿用面板显示/聚焦时的既有流程。
+        <div
+          role="status"
+          data-target-lens-recovery
+          className="mt-1 flex min-w-0 items-center gap-1.5 rounded-sm bg-warning/10 px-1.5 py-1"
+        >
+          <p className="min-w-0 flex-1 line-clamp-2 break-words text-micro leading-tight text-warning">
+            {matchReason}
+          </p>
+        </div>
+      )}
+      {!detailsExpanded && !recoverableBlock && (status === "blocked" || status === "unknown") && (
         <p
           role="alert"
           className="mt-0.5 line-clamp-2 break-words pl-7 text-micro leading-tight text-destructive"
@@ -401,8 +428,13 @@ export function TargetLensView({
           id={detailsId}
           role="group"
           aria-label="完整发送详情"
-          className="mt-1 origin-top rounded-lg bg-muted/30 px-2 py-1.5 animate-in fade-in zoom-in-95 duration-100 motion-reduce:animate-none"
+          className="reveal-in mt-1 rounded-lg bg-muted/30 px-2 py-1.5"
         >
+          {status === "ready" && (
+            <p className="mb-1 text-micro leading-tight text-muted-foreground">
+              仅确认目标应用，未确认输入位置
+            </p>
+          )}
           <div className="flex min-w-0 items-center gap-1.5">
             <span className="shrink-0 text-micro text-muted-foreground">
               方案
@@ -488,6 +520,11 @@ export function TargetLensView({
 export function TargetLensBar() {
   const [quickSwitchOpen, setQuickSwitchOpen] = useState(false);
   const [activityOpen, setActivityOpen] = useState(false);
+  // 命令面板「最近发送记录」：计数器变化即打开抽屉
+  const recentDeliveryRequest = useUIStore((s) => s.recentDeliveryRequest);
+  useEffect(() => {
+    if (recentDeliveryRequest > 0) setActivityOpen(true);
+  }, [recentDeliveryRequest]);
   const activityButtonRef = useRef<HTMLButtonElement>(null);
   const snapshot = useTargetStore((state) => state.snapshot);
   const status = useTargetStore((state) => state.status);

@@ -40,10 +40,12 @@ pub struct SendDeliveryRequest {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DeliverySegment {
     Text {
-        text: String,
+        /// SendDeliveryRequest.text 的 UTF-8 字节区间（右端不含）。
+        start: usize,
+        end: usize,
     },
     Image {
         #[serde(rename = "fileIndex")]
@@ -119,6 +121,15 @@ impl DeliveryReasonCode {
     }
 }
 
+/// 原生只确认按键执行，不确认编辑器接收或业务提交。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DeliveryReceiptLevel {
+    NotAttempted,
+    KeysExecuted,
+    Unknown,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendDeliveryResult {
@@ -129,6 +140,9 @@ pub struct SendDeliveryResult {
     pub target: Option<TargetSnapshot>,
     pub paste_completed: bool,
     pub enter_pressed: bool,
+    pub receipt_level: DeliveryReceiptLevel,
+    pub completed_steps: usize,
+    pub total_steps: usize,
     pub clipboard_outcome: ClipboardOutcome,
     pub started_at_ms: i64,
     pub finished_at_ms: i64,
@@ -246,6 +260,9 @@ fn blocked_result(
         target,
         paste_completed,
         enter_pressed: false,
+        receipt_level: DeliveryReceiptLevel::NotAttempted,
+        completed_steps: 0,
+        total_steps: 0,
         clipboard_outcome,
         started_at_ms,
         finished_at_ms: runtime.now_ms().max(started_at_ms),
@@ -265,10 +282,20 @@ fn sent_result(
         delivery_id: delivery_id.into(),
         status: DeliveryStatus::Sent,
         reason_code: DeliveryReasonCode::Ok,
-        message: message_with_clipboard(format!("已发送到 {app_name}"), clipboard_outcome),
+        message: message_with_clipboard(
+            if enter_pressed {
+                format!("已向 {app_name} 执行粘贴与回车按键；接收未确认")
+            } else {
+                format!("已向 {app_name} 执行粘贴按键；接收未确认，请手动提交")
+            },
+            clipboard_outcome,
+        ),
         target: Some(target),
         paste_completed: true,
         enter_pressed,
+        receipt_level: DeliveryReceiptLevel::NotAttempted,
+        completed_steps: 0,
+        total_steps: 0,
         clipboard_outcome,
         started_at_ms,
         finished_at_ms: runtime.now_ms().max(started_at_ms),
@@ -292,6 +319,9 @@ fn failed_result(
         target,
         paste_completed,
         enter_pressed: false,
+        receipt_level: DeliveryReceiptLevel::NotAttempted,
+        completed_steps: 0,
+        total_steps: 0,
         clipboard_outcome,
         started_at_ms,
         finished_at_ms: runtime.now_ms().max(started_at_ms),
@@ -326,16 +356,26 @@ fn payload_steps(request: &SendDeliveryRequest) -> Result<Vec<PayloadStep<'_>>, 
         steps.extend((0..request.image_files.len()).map(PayloadStep::Image));
         return Ok(steps);
     };
-    let invalid =
-        || DeliveryFailure::new(DeliveryReasonCode::InternalError, "发送失败：图文顺序信息无效");
+    let invalid = || {
+        DeliveryFailure::new(
+            DeliveryReasonCode::InternalError,
+            "发送失败：图文顺序信息无效",
+        )
+    };
     let mut used = vec![false; request.image_files.len()];
     let mut steps = Vec::with_capacity(segments.len());
+    let mut text_end = 0;
     for segment in segments {
         match segment {
-            DeliverySegment::Text { text } => {
-                if text.trim().is_empty() {
+            DeliverySegment::Text { start, end } => {
+                // 只从已扫描正文物化；准备剪贴板前拒绝重叠、错序、漏正文和
+                // 落在 UTF-8 字符内部的边界。块间纯空白投影分隔可省略。
+                let gap = request.text.get(text_end..*start).ok_or_else(invalid)?;
+                let text = request.text.get(*start..*end).ok_or_else(invalid)?;
+                if !gap.trim().is_empty() || text.trim().is_empty() {
                     return Err(invalid());
                 }
+                text_end = *end;
                 steps.push(PayloadStep::Text(text));
             }
             DeliverySegment::Image { file_index } => {
@@ -348,15 +388,47 @@ fn payload_steps(request: &SendDeliveryRequest) -> Result<Vec<PayloadStep<'_>>, 
             }
         }
     }
-    if used.contains(&false) {
+    if used.contains(&false) || !request.text[text_end..].trim().is_empty() {
         return Err(invalid());
     }
     Ok(steps)
 }
 
+#[derive(Default)]
+struct DeliveryProgress {
+    attempted: usize,
+    completed: usize,
+    total: usize,
+}
+
 pub fn execute_delivery(
     runtime: &mut impl DeliveryRuntime,
     request: &SendDeliveryRequest,
+) -> SendDeliveryResult {
+    let mut progress = DeliveryProgress::default();
+    let mut result = execute_delivery_inner(runtime, request, &mut progress);
+    result.completed_steps = progress.completed;
+    result.total_steps = progress.total;
+    result.receipt_level = if progress.attempted > progress.completed {
+        DeliveryReceiptLevel::Unknown
+    } else if progress.completed > 0 {
+        DeliveryReceiptLevel::KeysExecuted
+    } else {
+        DeliveryReceiptLevel::NotAttempted
+    };
+    if result.status != DeliveryStatus::Sent && progress.attempted > 0 {
+        result.message.push_str(&format!(
+            " · 已执行 {}/{} 段粘贴按键，接收未确认；请核对目标后再重试",
+            progress.completed, progress.total
+        ));
+    }
+    result
+}
+
+fn execute_delivery_inner(
+    runtime: &mut impl DeliveryRuntime,
+    request: &SendDeliveryRequest,
+    progress: &mut DeliveryProgress,
 ) -> SendDeliveryResult {
     let started_at_ms = runtime.now_ms();
     if request.target_token.as_deref().is_none_or(str::is_empty) {
@@ -397,16 +469,29 @@ pub fn execute_delivery(
     // 原生防火墙门禁：不信任前端状态，对将要粘贴的最终文本原样复扫。
     // 任何名单外的 Block finding 拒发；只要存在 Block（含已确认保留）就
     // 强制关闭自动回车。此闸先于剪贴板事务与图片预读，无副作用可回滚。
+    // 回车由调用方按方案请求（allow 直接、confirm 需本次确认；2026-09-11 用户撤回
+    // 审计 F02 的强制关闭）；原生仍对 Block 命中强制关闭，并在回车前复核前台身份。
     let mut press_enter = request.press_enter;
     if request.firewall_text_enabled && !request.text.is_empty() {
         let rules = match runtime.custom_sensitive_rules() {
             Ok(rules) => rules,
-            Err(_) => return blocked_result(runtime, &request.delivery_id,
-                DeliveryReasonCode::PrivacyIncomplete, Some(snapshot), started_at_ms, false),
+            Err(_) => {
+                return blocked_result(
+                    runtime,
+                    &request.delivery_id,
+                    DeliveryReasonCode::PrivacyIncomplete,
+                    Some(snapshot),
+                    started_at_ms,
+                    false,
+                )
+            }
         };
-        let scan = crate::privacy::scan_sensitive_text_with_rules(crate::privacy::ScanSensitiveRequest {
-            text: request.text.clone(),
-        }, &rules);
+        let scan = crate::privacy::scan_sensitive_text_with_rules(
+            crate::privacy::ScanSensitiveRequest {
+                text: request.text.clone(),
+            },
+            &rules,
+        );
         if !scan.complete {
             return blocked_result(
                 runtime,
@@ -460,6 +545,7 @@ pub fn execute_delivery(
             );
         }
     };
+    progress.total = steps.len();
     if let Err(failure) = runtime.prepare_payload(request) {
         return failed_result(
             runtime,
@@ -611,6 +697,7 @@ pub fn execute_delivery(
             PayloadStep::Text(_) => PayloadKind::Text,
             PayloadStep::Image(_) => PayloadKind::Image,
         };
+        progress.attempted += 1;
         if let Err(failure) = runtime.paste_staged(kind) {
             return failed_result(
                 runtime,
@@ -622,6 +709,7 @@ pub fn execute_delivery(
             );
         }
         completed_pastes += 1;
+        progress.completed = completed_pastes;
     }
     let paste_completed = completed_pastes == expected_pastes;
     if press_enter {
@@ -931,6 +1019,9 @@ fn busy_result(app: &AppHandle, request: &SendDeliveryRequest) -> SendDeliveryRe
         target: Some(crate::target::current_snapshot(&app.state())),
         paste_completed: false,
         enter_pressed: false,
+        receipt_level: DeliveryReceiptLevel::NotAttempted,
+        completed_steps: 0,
+        total_steps: 0,
         clipboard_outcome: ClipboardOutcome::NothingToRestore,
         started_at_ms: at_ms,
         finished_at_ms: at_ms,
@@ -971,6 +1062,7 @@ mod tests {
         activation_context_calls: usize,
         activation_ready: bool,
         prepare_failure: Option<DeliveryFailure>,
+        prepare_calls: usize,
         paste_failure_at: Option<usize>,
         enter_failure: bool,
         window_calls: usize,
@@ -1013,6 +1105,7 @@ mod tests {
                 activation_context_calls: 0,
                 activation_ready: true,
                 prepare_failure: None,
+                prepare_calls: 0,
                 paste_failure_at: None,
                 enter_failure: false,
                 window_calls: 0,
@@ -1033,7 +1126,9 @@ mod tests {
 
     impl DeliveryRuntime for FakeRuntime {
         fn custom_sensitive_rules(&self) -> Result<crate::privacy::CustomSensitiveRules, String> {
-            if self.custom_rules_failed { return Err("unreadable settings".into()); }
+            if self.custom_rules_failed {
+                return Err("unreadable settings".into());
+            }
             crate::privacy::CustomSensitiveRules::new(self.custom_fields.clone())
         }
 
@@ -1062,6 +1157,7 @@ mod tests {
             &mut self,
             _request: &SendDeliveryRequest,
         ) -> Result<(), DeliveryFailure> {
+            self.prepare_calls += 1;
             match self.prepare_failure.take() {
                 Some(failure) => Err(failure),
                 None => Ok(()),
@@ -1193,6 +1289,20 @@ mod tests {
     }
 
     #[test]
+    fn expanded_credentials_are_blocked_before_native_side_effects() {
+        for text in ["我的密码是 123456".to_string(), format!("hf_{}", "aB".repeat(17))] {
+            let mut runtime = FakeRuntime::default();
+            let mut req = request(Some("token-1"));
+            req.text = text;
+            let result = execute_delivery(&mut runtime, &req);
+            assert_eq!(result.reason_code, DeliveryReasonCode::PrivacyNativeBlocked);
+            assert_eq!(runtime.stage_calls, 0);
+            assert_eq!(runtime.paste_calls, 0);
+            assert_eq!(runtime.enter_calls, 0);
+        }
+    }
+
+    #[test]
     fn native_gate_uses_authoritative_custom_fields_and_fails_closed_on_config_error() {
         let mut runtime = FakeRuntime::default();
         runtime.custom_fields = vec!["内部编号".into()];
@@ -1284,6 +1394,7 @@ mod tests {
 
         assert_eq!(result.status, DeliveryStatus::Sent);
         assert!(result.enter_pressed, "防火墙关闭时不做原生钳制");
+        assert_eq!(runtime.enter_calls, 1);
     }
 
     #[test]
@@ -1382,6 +1493,23 @@ mod tests {
     }
 
     #[test]
+    fn partial_delivery_reports_progress_without_claiming_reception() {
+        let mut req = request(Some("token-1"));
+        req.image_files = vec!["a.png".into()];
+        let mut runtime = FakeRuntime {
+            paste_failure_at: Some(2),
+            ..FakeRuntime::default()
+        };
+        let result = execute_delivery(&mut runtime, &req);
+        assert_eq!(result.status, DeliveryStatus::Failed);
+        assert_eq!(result.receipt_level, DeliveryReceiptLevel::Unknown);
+        assert_eq!(result.completed_steps, 1);
+        assert_eq!(result.total_steps, 2);
+        assert!(result.message.contains("请核对目标后再重试"));
+        assert_eq!(runtime.enter_calls, 0);
+    }
+
+    #[test]
     fn focus_drift_after_paste_suppresses_enter() {
         let snapshot = FakeRuntime::default().snapshot;
         let mut runtime = FakeRuntime {
@@ -1403,7 +1531,6 @@ mod tests {
         assert!(!result.enter_pressed);
         assert_eq!(runtime.paste_calls, 1);
         assert_eq!(runtime.enter_calls, 0);
-        assert_eq!(runtime.clipboard_delays, vec![false]);
     }
 
     #[test]
@@ -1422,7 +1549,7 @@ mod tests {
     }
 
     #[test]
-    fn normal_text_send_pastes_then_enters() {
+    fn normal_text_send_pastes_then_enters_when_requested() {
         let mut runtime = FakeRuntime::default();
 
         let result = execute_delivery(&mut runtime, &request(Some("token-1")));
@@ -1444,7 +1571,10 @@ mod tests {
         );
         assert_eq!(runtime.paste_calls, 1);
         assert_eq!(runtime.enter_calls, 1);
-        assert_eq!(result.message, "已发送到 Codex · 原剪贴板已恢复");
+        assert_eq!(
+            result.message,
+            "已向 Codex 执行粘贴与回车按键；接收未确认 · 原剪贴板已恢复"
+        );
         assert_eq!(result.clipboard_outcome, ClipboardOutcome::Restored);
         assert_eq!(runtime.clipboard_delays, vec![true]);
         assert_eq!(result.delivery_id, "delivery-1");
@@ -1465,6 +1595,9 @@ mod tests {
             runtime.target_consumed_enter,
             "Return was synthesized before the target editor finished consuming the paste"
         );
+        assert_eq!(result.receipt_level, DeliveryReceiptLevel::KeysExecuted);
+        assert_eq!(result.completed_steps, 1);
+        assert_eq!(result.total_steps, 1);
     }
 
     #[test]
@@ -1474,13 +1607,9 @@ mod tests {
         req.image_files = vec!["a.png".into(), "b.png".into()];
         req.expected_image_pixel_hashes = vec![None, None];
         req.segments = Some(vec![
-            DeliverySegment::Text {
-                text: "开头".into(),
-            },
+            DeliverySegment::Text { start: 0, end: 6 },
             DeliverySegment::Image { file_index: 0 },
-            DeliverySegment::Text {
-                text: "结尾".into(),
-            },
+            DeliverySegment::Text { start: 7, end: 13 },
             DeliverySegment::Image { file_index: 1 },
         ]);
         let mut runtime = FakeRuntime {
@@ -1534,13 +1663,9 @@ mod tests {
         req.image_files = vec!["a.png".into(), "b.png".into()];
         req.expected_image_pixel_hashes = vec![None, None];
         req.segments = Some(vec![
-            DeliverySegment::Text {
-                text: "开头".into(),
-            },
+            DeliverySegment::Text { start: 0, end: 6 },
             DeliverySegment::Image { file_index: 0 },
-            DeliverySegment::Text {
-                text: "结尾".into(),
-            },
+            DeliverySegment::Text { start: 7, end: 13 },
             DeliverySegment::Image { file_index: 1 },
         ]);
         req.press_enter = false;
@@ -1570,12 +1695,10 @@ mod tests {
                 DeliverySegment::Image { file_index: 0 },
             ],
             // 漏图（image_files 有 1 张、段里 0 张）
-            vec![DeliverySegment::Text {
-                text: "文字".into(),
-            }],
+            vec![DeliverySegment::Text { start: 0, end: 6 }],
             // 空文字段
             vec![
-                DeliverySegment::Text { text: "  ".into() },
+                DeliverySegment::Text { start: 0, end: 0 },
                 DeliverySegment::Image { file_index: 0 },
             ],
         ];
@@ -1594,6 +1717,80 @@ mod tests {
             assert_eq!(runtime.paste_calls, 0);
             assert_eq!(runtime.window_calls, 0);
         }
+    }
+
+    #[test]
+    fn independent_segment_text_is_not_an_ipc_payload() {
+        // Legacy/free-standing text cannot reach execute_delivery through IPC.
+        assert!(
+            serde_json::from_value::<DeliverySegment>(serde_json::json!({
+                "kind": "text", "text": "unscanned secret"
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn range_payload_rejects_untrusted_independent_text() {
+        assert!(
+            serde_json::from_value::<DeliverySegment>(serde_json::json!({
+                "kind": "text", "start": 0, "end": 4, "text": "unscanned secret"
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn invalid_text_ranges_fail_before_payload_preparation() {
+        let ranges = [
+            vec![(0, 6)],                  // omitted suffix
+            vec![(7, 13)],                 // omitted prefix
+            vec![(0, 6), (0, 6), (7, 13)], // duplicate
+            vec![(7, 13), (0, 6)],         // reordered
+            vec![(0, 5), (7, 13)],         // inside UTF-8 code point
+            vec![(0, 6), (6, 14)],         // out of bounds
+            vec![(0, 6), (8, 13)],         // invalid start boundary
+            vec![(6, 0)],                  // reversed range
+            vec![],                        // all text omitted
+        ];
+        for ranges in ranges {
+            let mut req = request(Some("token-1"));
+            req.text = "开头\n结尾".into();
+            req.segments = Some(
+                ranges
+                    .into_iter()
+                    .map(|(start, end)| DeliverySegment::Text { start, end })
+                    .collect(),
+            );
+            let mut runtime = FakeRuntime::default();
+            let result = execute_delivery(&mut runtime, &req);
+            assert_eq!(result.status, DeliveryStatus::Failed);
+            assert_eq!(runtime.prepare_calls, 0);
+            assert_eq!(runtime.stage_calls, 0);
+            assert_eq!(runtime.window_calls, 0);
+            assert_eq!(runtime.paste_calls, 0);
+            assert_eq!(runtime.enter_calls, 0);
+        }
+    }
+
+    #[test]
+    fn text_ranges_materialize_unicode_with_projection_whitespace() {
+        let mut req = request(Some("token-1"));
+        req.text = "  开😀\n\n  结尾 \n".into();
+        req.image_files = vec!["a.png".into()];
+        req.expected_image_pixel_hashes = vec![None];
+        req.segments = Some(vec![
+            DeliverySegment::Text { start: 2, end: 9 },
+            DeliverySegment::Image { file_index: 0 },
+            DeliverySegment::Text { start: 13, end: 19 },
+        ]);
+        let mut runtime = FakeRuntime::default();
+        let result = execute_delivery(&mut runtime, &req);
+        assert_eq!(result.status, DeliveryStatus::Sent);
+        assert_eq!(
+            runtime.staged_order,
+            vec!["text:开😀", "image:0", "text:结尾"]
+        );
     }
 
     #[test]
@@ -1814,7 +2011,10 @@ mod tests {
             let result = execute_delivery(&mut runtime, &request(Some("token-1")));
 
             assert_eq!(result.clipboard_outcome, clipboard_outcome);
-            assert_eq!(result.message, format!("已发送到 Codex{suffix}"));
+            assert_eq!(
+                result.message,
+                format!("已向 Codex 执行粘贴与回车按键；接收未确认{suffix}")
+            );
             let expected_kind = if clipboard_outcome.warning_message().is_some() {
                 "warn"
             } else {

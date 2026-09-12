@@ -62,6 +62,22 @@ pub struct HudHoverPayload {
     pub hovered: bool,
 }
 
+/// 子菜单小窗内光标位置（Rust → menuflyout）。
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MenuFlyoutCursorPayload {
+    pub inside: bool,
+    pub x: f64,
+    pub y: f64,
+}
+
+/// 光标是否在子菜单小窗内（Rust → 主窗口）。
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MenuFlyoutPointerPayload {
+    pub inside: bool,
+}
+
 /// 贴边隐藏运行态变化（Rust → 主窗口）：`active` = 当前是否已有可收起的
 /// 屏缘锚点且未被伴随目标接管；`hidden` = 面板当前是否已滑出仅露出细条。
 /// 前端据此在 active 时豁免失焦自动隐藏（滑出取代真实 hide），
@@ -84,6 +100,18 @@ pub const HUD_HOVER_EVENT: &str = "toskr://hud-hover";
 pub const HUD_EXIT_EVENT: &str = "toskr://hud-exit";
 /// 贴边隐藏运行态变化，载荷见 [`EdgeHideStatePayload`]。
 pub const EDGE_HIDE_STATE_EVENT: &str = "toskr://edge-hide-state";
+/// Rust → menuflyout 窗口：展示子菜单条目（载荷为前端序列化的 entries JSON）。
+pub const MENU_FLYOUT_EVENT: &str = "toskr://menu-flyout";
+/// Rust → menuflyout：光标在小窗内的位置（窗口内逻辑 pt）或已离开。
+pub const MENU_FLYOUT_CURSOR_EVENT: &str = "toskr://menu-flyout-cursor";
+/// Rust → menuflyout：轮询到的左键点击（不可聚焦窗口可能收不到原生 click）。
+pub const MENU_FLYOUT_CLICK_EVENT: &str = "toskr://menu-flyout-click";
+/// Rust → 主窗口：光标是否在子菜单小窗内（主菜单据此决定是否收起）。
+pub const MENU_FLYOUT_POINTER_EVENT: &str = "toskr://menu-flyout-pointer";
+/// menuflyout → 主窗口：用户选中了条目。
+pub const MENU_FLYOUT_SELECT_EVENT: &str = "toskr://menu-flyout-select";
+/// 主窗口 → menuflyout：键盘导航转发。
+pub const MENU_FLYOUT_KEY_EVENT: &str = "toskr://menu-flyout-key";
 
 #[cfg(test)]
 mod tests {

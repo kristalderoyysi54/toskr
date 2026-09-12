@@ -11,6 +11,7 @@ import {
   MoreHorizontal,
   NotebookPen,
   RotateCcw,
+  Send,
   Sparkles,
   Trash2,
   X,
@@ -24,6 +25,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { SlidingTabIndicator } from "@/components/ui/sliding-tab-indicator";
 import { StripScroller } from "@/components/ui/strip-scroller";
 import { WindowedListItem } from "@/components/WindowedListItem";
+import { sendMessageToChat } from "@/lib/actions";
 import { aiErrorTip, requestAi } from "@/lib/aiClient";
 import { messageSelectAllIds } from "@/lib/messageSelection";
 import { presetCfgDue, presetCfgLabel } from "@/lib/tasks";
@@ -180,16 +182,8 @@ export function MessagePage({
     setBusyId(message.id);
     try {
       const input = aiInput(message);
-      const scan = await api.scanSensitiveText(input);
-      if (!scan.complete || scan.warnings.length) {
-        tip("warn", "隐私检查未完整覆盖消息，未发送给 AI");
-        return;
-      }
-      if (scan.findings.length) {
-        tip("warn", `检测到 ${scan.findings.length} 处敏感信息，未发送给 AI`);
-        return;
-      }
       const draft = await requestAi({
+        purpose: "message-draft",
         system:
           "你是工作沟通回复助手。基于用户给出的有限上下文，写一条简洁、可编辑的中文回复草稿。不得编造事实；信息不足时用澄清问题。只输出草稿，不要解释。",
         user: input,
@@ -498,7 +492,7 @@ export function MessageCard({
         if (event.shiftKey) event.preventDefault();
       }}
       className={cn(
-        "group relative rounded-xl border border-foreground/10 bg-card/80 px-3 py-2.5 shadow-(--shadow-card) transition-[box-shadow] duration-(--duration-control)",
+        "group relative rounded-xl bg-card/80 px-3 py-2.5 transition-[box-shadow] duration-(--duration-control)",
         // 不加 list-render-unit：WebKit 对 content-visibility 卡片的首帧绘制
         // 偶发丢 SVG <path>（操作图标只剩空圆，滚出滚回经历一次 skipped→揭示
         // 循环才画全，2026-08-27 实机复现）。消息列表已有 WindowedListItem
@@ -630,7 +624,7 @@ export function MessageCard({
       )}
       </div>
 
-      {/* 卡面仅保留处理、提醒与更多；菜单展开时保持触发按钮可见。 */}
+      {/* 卡面提供处理、提醒、定位与更多；菜单展开时保持触发按钮可见。 */}
       <div
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => event.stopPropagation()}
@@ -641,6 +635,16 @@ export function MessageCard({
           (busy || remindOpen || moreOpen) && "pointer-events-auto opacity-100"
         )}
       >
+        {/* 发送到当前对话目标（用户 2026-09-11 需求）：正文走与笔记相同的预检/发送管线 */}
+        <IconButton
+          label="发送到对话"
+          size="xs"
+          surface
+          disabled={!message.text.trim()}
+          onClick={() => void sendMessageToChat(message.id)}
+        >
+          <Send />
+        </IconButton>
         {done ? (
           <IconButton
             label="恢复为待处理"
@@ -687,6 +691,18 @@ export function MessageCard({
             ))}
           </PopoverContent>
         </Popover>
+        <IconButton
+          label="定位原会话"
+          size="xs"
+          surface
+          title="滚动并高亮 IM 会话列表中的来源，不打开会话"
+          onClick={() => {
+            void api.locateMessageSource(overlay)
+              .catch((error) => tip("warn", String(error).slice(0, 60) || "定位失败"));
+          }}
+        >
+          <Crosshair />
+        </IconButton>
         <Popover open={moreOpen} onOpenChange={setMoreOpen}>
           <PopoverTrigger asChild>
             <IconButton
@@ -706,20 +722,6 @@ export function MessageCard({
             onKeyDown={(event) => event.stopPropagation()}
           >
             <p className="px-2 py-1 text-micro font-medium text-muted-foreground">更多消息操作</p>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="w-full justify-start"
-              title="滚动并高亮 IM 会话列表中的来源，不打开会话"
-              onClick={() => {
-                setMoreOpen(false);
-                void api.locateMessageSource(overlay)
-                  .catch((error) => tip("warn", String(error).slice(0, 60) || "定位失败"));
-              }}
-            >
-              <Crosshair data-icon="inline-start" />定位原会话
-            </Button>
-            <div role="separator" className="my-1 h-px bg-border" />
             {message.status !== "waiting" && (
               <Button
                 variant="ghost"

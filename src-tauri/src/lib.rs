@@ -1,5 +1,6 @@
-mod ax;
 mod activity;
+mod ai;
+mod ax;
 mod backup;
 mod capture;
 mod clipwatch;
@@ -12,16 +13,16 @@ mod events;
 mod exchange;
 mod favicon;
 mod focus;
-mod input;
 mod image_firewall;
+mod input;
 #[cfg(target_os = "macos")]
 mod keychain_broker;
-mod ocr;
-mod ai;
 mod linkmeta;
+mod preview_network;
 mod message_watch;
 mod message_watch_cdp;
 mod note_export;
+mod ocr;
 mod pasteboard;
 mod privacy;
 mod prompt_export;
@@ -312,6 +313,14 @@ pub fn run() {
             commands::show_capture_hud,
             commands::hud_feedback,
             commands::hide_hud,
+            commands::hud_action,
+            commands::show_menu_flyout,
+            commands::hide_menu_flyout,
+            commands::menu_flyout_resize,
+            commands::menu_flyout_select,
+            commands::menu_flyout_key,
+            commands::menu_flyout_move,
+            commands::preview_event,
             commands::app_icon,
             commands::app_list_info,
             commands::bundle_id_of_app,
@@ -353,6 +362,9 @@ pub fn run() {
             ai::set_ai_api_key,
             ai::get_ai_key_status,
             ai::delete_ai_api_key,
+            ai::begin_ai_request,
+            ai::authorize_ai_request,
+            ai::cancel_ai_request,
             ai::ai_chat,
             ai::ai_list_models,
         ])

@@ -22,3 +22,7 @@ export const tweenExit: Transition = { duration: 0.14, ease: "easeIn" };
 export const tweenFade: Transition = { duration: 0.12 };
 /** 菜单/HUD 内容替换等微交互：快速干脆的出场（新增，对应 --ease-standard）。 */
 export const tweenMenu: Transition = { duration: 0.12, ease: [0.2, 0.9, 0.3, 1] };
+/** 浮层/HUD 到达式入场：160ms，对应 --duration-overlay + --ease-standard（2026-09-11 案 1）。 */
+export const tweenOverlay: Transition = { duration: 0.16, ease: [0.2, 0.9, 0.3, 1] };
+/** 数值/图表切换的连续过渡：280ms，对应 --duration-slow + --ease-standard（2026-09-11 案 4）。 */
+export const tweenValue: Transition = { duration: 0.28, ease: [0.2, 0.9, 0.3, 1] };

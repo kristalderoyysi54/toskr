@@ -73,6 +73,13 @@ interface UIState {
   /** 草稿输入暂存图片（会话级：DraftInput 随切页/收横栏卸载，在此保命；
    *  文字走 localStorage 镜像抗重启，图片引用不入库故不跨重启恢复）。 */
   draftImages: DraftPendingImage[];
+  /** 发送中卡片底缘状态带（2026-09-11 案 6）：executeDraft 推进相位，NoteCard 按 id 读；
+   *  sent/failed 停留后 leaving 收回再清空。null = 无发送进行。 */
+  deliveryBand: DeliveryBandState | null;
+  /** ⌘K 命令面板（O3）。 */
+  commandPaletteOpen: boolean;
+  /** 请求打开「最近发送」抽屉的计数器：每 +1 一次，TargetLensBar 据此打开。 */
+  recentDeliveryRequest: number;
 
   setOpen: (open: boolean) => void;
   setPage: (page: PanelPage) => void;
@@ -104,7 +111,19 @@ interface UIState {
   setEdgeHideState: (active: boolean, hidden: boolean) => void;
   setShortcutHoldOpen: (hold: boolean) => void;
   setDraftImages: (draftImages: DraftPendingImage[]) => void;
+  setDeliveryBand: (band: DeliveryBandState | null) => void;
+  setCommandPaletteOpen: (open: boolean) => void;
+  requestRecentDelivery: () => void;
 }
+
+/** 发送中状态带相位：sending 进行中 → sent/failed 停留 → leaving 收回。 */
+export type DeliveryBandState = {
+  ids: readonly string[];
+  phase: "sending" | "sent" | "failed";
+  leaving?: boolean;
+  /** O2（2026-09-12）：落定后的回执——粘贴/回车事实 + 可恢复为未完成的卡。 */
+  receipt?: { pasted: boolean; entered: boolean; undoIds: readonly string[] };
+};
 
 /** 可用更新的展示元数据（对话框：版本对比 + 更新内容）。 */
 export type UpdateMeta = {
@@ -124,6 +143,8 @@ export const useUIStore = create<UIState>()((set, get) => ({
   focusedId: null,
   anchorId: null,
   navIds: [],
+  commandPaletteOpen: false,
+  recentDeliveryRequest: 0,
   editingId: null,
   detailEditorNoteId: null,
   previewId: null,
@@ -142,6 +163,7 @@ export const useUIStore = create<UIState>()((set, get) => ({
   edgeHidden: false,
   shortcutHoldOpen: false,
   draftImages: [],
+  deliveryBand: null,
 
   setOpen: (open) => set({ open }),
   // 切页清焦点：避免另一页残留的 focusedId 干扰键盘导航语义
@@ -159,6 +181,9 @@ export const useUIStore = create<UIState>()((set, get) => ({
   setSearchOpen: (searchOpen) =>
     set(searchOpen ? { searchOpen } : { searchOpen, query: "" }),
   setQuery: (query) => set({ query }),
+  setCommandPaletteOpen: (commandPaletteOpen) => set({ commandPaletteOpen }),
+  requestRecentDelivery: () =>
+    set((state) => ({ recentDeliveryRequest: state.recentDeliveryRequest + 1 })),
   setFocusedId: (focusedId) => set({ focusedId }),
   setAnchorId: (anchorId) => set({ anchorId }),
   setNavIds: (navIds) => set({ navIds }),
@@ -181,4 +206,5 @@ export const useUIStore = create<UIState>()((set, get) => ({
     set({ edgeHideActive, edgeHidden }),
   setShortcutHoldOpen: (shortcutHoldOpen) => set({ shortcutHoldOpen }),
   setDraftImages: (draftImages) => set({ draftImages }),
+  setDeliveryBand: (deliveryBand) => set({ deliveryBand }),
 }));

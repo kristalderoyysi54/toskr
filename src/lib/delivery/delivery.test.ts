@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MESSAGE_SOURCE, type MessageItem } from "@/lib/messages";
 
 const apiMocks = vi.hoisted(() => ({
   appIcon: vi.fn(),
@@ -33,6 +34,7 @@ vi.mock("@/lib/tauri", async (importOriginal) => {
   };
 });
 
+import { deliverySequencePreview, remapOrderedSegments } from "./orderedSegments";
 import { buildDeliveryDraft, buildTaskMarkdown } from "./buildDraft";
 import {
   rebuildPreflightDraft,
@@ -226,7 +228,27 @@ describe("buildDeliveryDraft", () => {
     });
   });
 
-  it("单张图文卡按块序生成交错段；正文被模板改动或多卡合选时退回默认顺序", () => {
+  it("交错文字段使用 UTF-8 字节范围并保留空白分隔投影", () => {
+    const richNote = note("rich", "开😀\n结尾", {
+      contentBlocks: [
+        { type: "text", text: "开😀\n" },
+        { type: "image", file: "a.png" },
+        { type: "text", text: "\n结尾" },
+      ],
+    });
+    const draft = buildDeliveryDraft(
+      input({ sourceKind: "note", sourceItemIds: ["rich"] }),
+      state({ notes: [richNote] })
+    );
+    expect(draft.finalText).toBe("开😀\n结尾");
+    expect(draft.segments).toEqual([
+      { kind: "text", start: 0, end: 8 },
+      { kind: "image", fileIndex: 0 },
+      { kind: "text", start: 8, end: 14 },
+    ]);
+  });
+
+  it("单卡、模板和多卡编号正文保持可核验图文顺序", () => {
     const richNote = note("rich", "开头\n结尾", {
       contentBlocks: [
         { type: "text", text: "开头" },
@@ -242,13 +264,13 @@ describe("buildDeliveryDraft", () => {
     expect(draft.finalText).toBe("开头\n结尾");
     expect(draft.imageFiles).toEqual(["a.png", "b.png"]);
     expect(draft.segments).toEqual([
-      { kind: "text", text: "开头" },
+      { kind: "text", start: 0, end: 6 },
       { kind: "image", fileIndex: 0 },
-      { kind: "text", text: "结尾" },
+      { kind: "text", start: 6, end: 13 },
       { kind: "image", fileIndex: 1 },
     ]);
 
-    // 模板改动了正文字节 → 交错段与已扫描正文无法逐字对应，必须退回
+    // 模板前缀参与正文扫描，并保留图片锚点。
     const templated = buildDeliveryDraft(
       input({
         sourceKind: "note",
@@ -257,14 +279,50 @@ describe("buildDeliveryDraft", () => {
       }),
       state({ notes: [richNote] })
     );
-    expect(templated.segments).toBeNull();
+    expect(deliverySequencePreview(templated)).toEqual(["文字：请分析：开头", "图片 1", "文字：\n结尾", "图片 2"]);
 
-    // 多卡合选走编号列表正文，同样不交错
+    // 编号和卡间分隔同样属于已扫描正文。
     const batch = buildDeliveryDraft(
       input({ sourceItemIds: ["rich", "plain"] }),
       state({ notes: [richNote, note("plain", "另一条")] })
     );
-    expect(batch.segments).toBeNull();
+    expect(deliverySequencePreview(batch)).toEqual(["文字：1. 开头", "图片 1", "文字：\n结尾", "图片 2", "文字：\n2. 另一条"]);
+  });
+
+  it("两张图文卡套模板、化名、隐私替换后预览仍与物化段一致", () => {
+    const first = note("a", "客户甲\nalice@example.com", { contentBlocks: [
+      {type:"text",text:"客户甲"}, {type:"image",file:"a.png"}, {type:"text",text:"alice@example.com"},
+    ]});
+    const second = note("b", "第二段\n收尾", {contentBlocks:[
+      {type:"text",text:"第二段"}, {type:"image",file:"b.png"}, {type:"text",text:"收尾"},
+    ]});
+    const built = buildDeliveryDraft(input({sourceItemIds:["a","b"],promptTemplate:"分析：{内容}\n完成"}), state({notes:[first,second],aliasEntities:[
+      {id:"alias",category:"USER",originalText:"客户甲",placeholder:"[USER_01]",createdAtMs:1,updatedAtMs:1},
+    ]}));
+    const start = built.finalText.indexOf("alice@example.com");
+    useDeliveryStore.getState().openDraft({...built,firewallStatus:"ready", findings:[{
+      id:"email",category:"email",severity:"warn",startUtf16:start,endUtf16:start+17,
+      maskedPreview:"a***m",suggestedPlaceholder:"[EMAIL]",ruleId:"email",
+    }]});
+    useDeliveryStore.getState().replaceAllFirewallFindings();
+    const redacted = useDeliveryStore.getState().draft!;
+    expect(redacted.finalText).not.toContain("alice@example.com");
+    expect(deliverySequencePreview(redacted)).toEqual([
+      "文字：分析：1. [USER_01]", "图片 1", "文字：\n[EMAIL_01]\n2. 第二段", "图片 2", "文字：\n收尾\n完成",
+    ]);
+    const bytes=new TextEncoder().encode(redacted.finalText);
+    const materialized=redacted.segments!.filter(segment=>segment.kind==="text")
+      .map(segment=>new TextDecoder().decode(bytes.slice(segment.start,segment.end))).join("");
+    expect(materialized).toBe(redacted.finalText);
+  });
+
+  it("跨图片替换和重复正文模板明确降级，不能伪造图片位置", () => {
+    expect(remapOrderedSegments("ab", "x", [{kind:"text",start:0,end:1},{kind:"image",fileIndex:0},{kind:"text",start:1,end:2}],
+      [{startUtf16:0,endUtf16:2,replacement:"x"}])).toBeNull();
+    const rich=note("a","正文",{contentBlocks:[{type:"text",text:"正文"},{type:"image",file:"a.png"}]});
+    const repeated=buildDeliveryDraft(input({sourceItemIds:["a"],promptTemplate:"{内容} / {内容}"}),state({notes:[rich]}));
+    expect(repeated.segments).toBeNull();
+    expect(deliverySequencePreview(repeated)).toEqual(["文字：正文 / 正文", "图片 1"]);
   });
 
   it("片段发送：单卡 sourceTextOverride 取代正文且图片不随行；多卡忽略覆盖", () => {
@@ -327,7 +385,7 @@ describe("buildDeliveryDraft", () => {
     expect(draft.rawText).toBe("选中文字");
     expect(draft.imageFiles).toEqual(["selected.png"]);
     expect(draft.segments).toEqual([
-      { kind: "text", text: "选中文字" },
+      { kind: "text", start: 0, end: 12 },
       { kind: "image", fileIndex: 0 },
     ]);
     expect(draft.sourceContentOverride).toEqual(sourceContentOverride);
@@ -549,9 +607,9 @@ describe("buildDeliveryDraft", () => {
     expect(draft.finalText).toBe("开头\n结尾");
     expect(draft.imageFiles).toEqual(["a.png"]);
     expect(draft.segments).toEqual([
-      { kind: "text", text: "开头" },
+      { kind: "text", start: 0, end: 6 },
       { kind: "image", fileIndex: 0 },
-      { kind: "text", text: "结尾" },
+      { kind: "text", start: 6, end: 13 },
     ]);
   });
 
@@ -671,6 +729,43 @@ describe("buildDeliveryDraft", () => {
     expect(draft.enterPolicy).toBe("confirm");
     expect(draft.pressEnter).toBe(false);
     expect(draft.keepPanel).toBe(true);
+  });
+
+  it("消息来源：正文取消息文字，非文本消息没有可发内容", () => {
+    const message = (id: string, text: string): MessageItem => ({
+      id,
+      source: MESSAGE_SOURCE,
+      conversationId: "c1",
+      messageId: id,
+      conversationName: "研发群",
+      senderUid: "u1",
+      senderName: "张三",
+      occurredAtMs: null,
+      receivedAtMs: 1_000,
+      mentionedSelf: true,
+      followedSender: false,
+      matchedRuleIds: [],
+      isGroup: true,
+      messageType: "text",
+      text,
+      context: [],
+      status: "new",
+    });
+    const draft = buildDeliveryDraft(
+      input({ sourceKind: "message", sourceItemIds: ["m1"] }),
+      state({ messages: [message("m1", "帮我看下这个报错")] })
+    );
+    expect(draft.sourceKind).toBe("message");
+    expect(draft.sourceItemIds).toEqual(["m1"]);
+    expect(draft.rawText).toBe("帮我看下这个报错");
+    expect(draft.finalText).toContain("帮我看下这个报错");
+
+    const empty = buildDeliveryDraft(
+      input({ sourceKind: "message", sourceItemIds: ["m2"] }),
+      state({ messages: [message("m2", "   ")] })
+    );
+    expect(empty.sourceItemIds).toEqual([]);
+    expect(empty.warnings).toContain("empty-payload");
   });
 });
 
@@ -829,9 +924,9 @@ describe("executeDeliveryDraft", () => {
       expect.objectContaining({
         text: "开头\n结尾",
         segments: [
-          { kind: "text", text: "开头" },
+          { kind: "text", start: 0, end: 6 },
           { kind: "image", fileIndex: 0 },
-          { kind: "text", text: "结尾" },
+          { kind: "text", start: 6, end: 13 },
         ],
       })
     );
@@ -990,6 +1085,26 @@ describe("executeDeliveryDraft", () => {
     );
     expect(apiMocks.edgeHideNow).not.toHaveBeenCalled();
     expect(useUIStore.getState().open).toBe(true);
+  });
+
+  it("confirm 方案已本次确认回车时，执行器原样请求回车且不再弹框", async () => {
+    const settings = useNotesStore.getState().settings;
+    useNotesStore.getState().setSettings({
+      targetProfiles: settings.targetProfiles.map((item) =>
+        item.id === settings.defaultTargetProfileId
+          ? { ...item, bundleIds: ["com.openai.codex"], enterPolicy: "confirm" as const }
+          : item
+      ),
+    });
+    const id = useNotesStore.getState().addNote("普通正文").id!;
+    useNotesStore.getState().setChecked([id]);
+    await executeDeliveryDraft({
+      ...executableNoteDraft([id]),
+      enterDecisionConfirmed: true,
+      pressEnter: true,
+    });
+    expect(dialogMocks.ask).not.toHaveBeenCalled();
+    expect(apiMocks.sendDelivery).toHaveBeenCalledWith(expect.objectContaining({ pressEnter: true }));
   });
 
   it("安全演练即使命中 allow 方案也只粘贴、不按回车", async () => {
@@ -1473,7 +1588,7 @@ describe("executeDeliveryDraft", () => {
     expect(useNotesStore.getState().checkedIds).toEqual([id]);
     expect(tip).toHaveBeenCalledWith(
       "warn",
-      "发送已完成，但来源内容已变化，未修改卡片状态"
+      "粘贴按键已执行，但来源内容已变化，未修改卡片状态"
     );
   });
 
@@ -1498,7 +1613,7 @@ describe("executeDeliveryDraft", () => {
     expect(useNotesStore.getState().checkedIds).toEqual([id, later]);
     expect(tip).toHaveBeenCalledWith(
       "warn",
-      "发送已完成，但选择已变化，未修改卡片状态"
+      "粘贴按键已执行，但选择已变化，未修改卡片状态"
     );
   });
 

@@ -324,6 +324,15 @@ export function targetReasonLabel(reason: TargetStateReason): string {
   }
 }
 
+/** 可自行恢复的失效原因：目标只是暂时不在前台 / 一次确认失败 / 身份暂不可验，切回再来即可。 */
+export function isRecoverableTargetReason(reason: TargetStateReason): boolean {
+  return (
+    reason === "target_not_frontmost" ||
+    reason === "refresh_failed" ||
+    reason === "target_identity_unavailable"
+  );
+}
+
 export function targetBlockMessage(
   status: TargetStatus,
   reason: TargetStateReason

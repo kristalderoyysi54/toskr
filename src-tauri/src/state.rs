@@ -97,6 +97,27 @@ pub struct HudRuntime {
     pub streak: u32,
 }
 
+/// 右键子菜单小窗（menuflyout）的锚点：主菜单在屏幕上的左右缘与触发行顶部（逻辑 pt）。
+#[derive(Clone, Copy, Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MenuFlyoutAnchorPt {
+    pub menu_left: f64,
+    pub menu_right: f64,
+    pub top: f64,
+}
+
+/// 右键子菜单小窗运行态（光标轮询命中判定与点击兜底）。
+#[derive(Default)]
+pub struct MenuFlyoutRuntime {
+    pub visible: bool,
+    pub hovered: bool,
+    /// 小窗逻辑坐标矩形（顶左原点全局 pt）。
+    pub rect_pt: (f64, f64, f64, f64),
+    /// 显示时的锚点与宽度：前端回报真实高度后据此重定位。
+    pub anchor: MenuFlyoutAnchorPt,
+    pub width: f64,
+}
+
 /// 全局共享状态。
 pub struct AppState {
     /// 面板弹出/触发前记录的前台应用 PID，仅供窗口布局、伴随与焦点归还。
@@ -149,6 +170,10 @@ pub struct AppState {
     pub companion_tracked_pid: AtomicI64,
     /// HUD 运行态。
     pub hud: Mutex<HudRuntime>,
+    /// 右键子菜单小窗运行态。
+    pub menu_flyout: Mutex<MenuFlyoutRuntime>,
+    /// 子菜单小窗生命周期代数（bump 即停止旧轮询）。
+    pub menu_flyout_generation: AtomicU64,
     /// 应用图标缓存：bundle id → (data URL, 主色)。
     pub icon_cache: Mutex<HashMap<String, Option<(String, String)>>>,
     /// 剪贴板历史收集开关（设置项下发；watcher 线程常驻按此门控）。
@@ -252,6 +277,8 @@ impl Default for AppState {
             companion_gen: AtomicU64::new(0),
             companion_tracked_pid: AtomicI64::new(0),
             hud: Mutex::new(HudRuntime::default()),
+            menu_flyout: Mutex::new(MenuFlyoutRuntime::default()),
+            menu_flyout_generation: AtomicU64::new(0),
             icon_cache: Mutex::new(HashMap::new()),
             // 与前端 defaultSettings.clipHistory 一致（首装默认开）：两边不一致
             // 会在「启动 → 前端水合下发」之间漏收/多收一段剪贴板内容

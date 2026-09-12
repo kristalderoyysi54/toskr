@@ -6,9 +6,11 @@ import {
 import {
   api,
   type ClipboardOutcome,
+  type DeliveryReceiptLevel,
   type SendDeliveryResult,
 } from "@/lib/tauri";
 import type { FindingCategory } from "@/lib/tauri";
+import type { MessageItem } from "@/lib/messages";
 import type { TransformRecipeId } from "@/lib/aiTransform";
 import type { DeliveryDraft, DeliverySourceKind } from "@/lib/delivery/types";
 import type {
@@ -73,6 +75,10 @@ export interface DeliveryEvent {
   imageCount: number;
   firewallCounts: FirewallCounts;
   redactionCount: number;
+  executionManifest?: import("./delivery/executionManifest").ExecutionManifest;
+  receiptLevel?: DeliveryReceiptLevel;
+  completedSteps?: number;
+  totalSteps?: number;
   clipboardOutcome: ClipboardOutcome | null;
   resultNoteId: string | null;
   /** false 时仅供最近发送恢复，不进入成效聚合；旧行缺省视为 true。 */
@@ -175,6 +181,7 @@ export function deliveryEventFromDraft(
     status: overrides.status,
     reasonCode: overrides.reasonCode ?? null,
     durationMs: overrides.durationMs ?? null,
+    ...(draft.executionManifest ? { executionManifest: draft.executionManifest } : {}),
     textCharCount: draft.finalText.length,
     imageCount: draft.imageFiles.length,
     firewallCounts,
@@ -220,6 +227,9 @@ export function deliveryEventsFromResult(
     ...shared,
     status: result.status,
   });
+  delivery.receiptLevel = result.receiptLevel ?? (result.status === "sent" ? "keysExecuted" : "unknown");
+  delivery.completedSteps = result.completedSteps;
+  delivery.totalSteps = result.totalSteps;
   const restored = result.clipboardOutcome === "restored" ||
     result.clipboardOutcome === "restoredPartial";
   const clipboard = deliveryEventFromDraft(
@@ -329,40 +339,39 @@ export type DeliverySourceAvailability = "available" | "partial" | "missing";
 export function deliverySourceItems(
   event: DeliveryEvent,
   notes: readonly Note[],
-  tasks: readonly Task[]
-): { notes: Note[]; tasks: Task[] } {
+  tasks: readonly Task[],
+  messages: readonly MessageItem[] = []
+): { notes: Note[]; tasks: Task[]; messages: MessageItem[] } {
   const sourceIds = new Set(event.sourceItemIds);
-  const notesById = new Map(
-    notes.filter((item) => sourceIds.has(item.id)).map((item) => [item.id, item])
-  );
-  const tasksById = new Map(
-    tasks.filter((item) => sourceIds.has(item.id)).map((item) => [item.id, item])
-  );
+  const pick = <T extends { id: string }>(items: readonly T[]): T[] => {
+    const byId = new Map(
+      items.filter((item) => sourceIds.has(item.id)).map((item) => [item.id, item])
+    );
+    return event.sourceItemIds.flatMap((id) => {
+      const item = byId.get(id);
+      return item ? [item] : [];
+    });
+  };
   return {
-    notes: event.sourceKind === "task"
-      ? []
-      : event.sourceItemIds.flatMap((id) => {
-          const note = notesById.get(id);
-          return note ? [note] : [];
-        }),
-    tasks: event.sourceKind === "task"
-      ? event.sourceItemIds.flatMap((id) => {
-          const task = tasksById.get(id);
-          return task ? [task] : [];
-        })
-      : [],
+    notes:
+      event.sourceKind === "task" || event.sourceKind === "message" ? [] : pick(notes),
+    tasks: event.sourceKind === "task" ? pick(tasks) : [],
+    messages: event.sourceKind === "message" ? pick(messages) : [],
   };
 }
 
 export function deliveryEventSourceAvailability(
   event: DeliveryEvent,
   notes: readonly Note[],
-  tasks: readonly Task[]
+  tasks: readonly Task[],
+  messages: readonly MessageItem[] = []
 ): DeliverySourceAvailability {
   const existing = new Set(
     event.sourceKind === "task"
       ? tasks.map((item) => item.id)
-      : notes.map((item) => item.id)
+      : event.sourceKind === "message"
+        ? messages.map((item) => item.id)
+        : notes.map((item) => item.id)
   );
   const count = event.sourceItemIds.filter((id) => existing.has(id)).length;
   if (count === event.sourceItemIds.length && count > 0) return "available";
