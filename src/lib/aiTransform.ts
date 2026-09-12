@@ -60,7 +60,7 @@ export const TRANSFORM_RECIPES: readonly TransformRecipe[] = [
     label: "结构化需求",
     description: "整理目标、范围、约束、验收与待确认问题。",
     systemPrompt:
-      '把用户需求整理为 JSON 对象，只输出合法 JSON：{"goal":string,"scope":string[],"constraints":string[],"acceptance":string[],"openQuestions":string[]}。不得补造事实。',
+      '把用户需求整理为 JSON 对象，只输出合法 JSON：{"goal":string,"scope":string[],"constraints":string[],"acceptance":string[],"openQuestions":string[]}。不得增加其他字段；字符串必须非空且不超过 4000 字符，数组最多 50 项，无内容时用空数组。不得补造事实。',
     outputMode: "json",
     maxTokens: 1_200,
   },
@@ -164,6 +164,19 @@ function normalizeResult(recipe: TransformRecipe, raw: string): string {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new AiError("parse", "AI 返回结构不符合要求");
   }
+  const fields = parsed as Record<string, unknown>;
+  // 固定配方的业务约束；拒绝错误内容，不能静默截断用户的约束或验收条件。
+  const validText = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0 && value.length <= 4_000;
+  const arrayFields = ["scope", "constraints", "acceptance", "openQuestions"] as const;
+  if (!validText(fields.goal) || arrayFields.some((field) => {
+    const value = fields[field];
+    return !Array.isArray(value) || value.length > 50 || !value.every(validText);
+  }) || Object.keys(fields).some((field) =>
+    field !== "goal" && !arrayFields.some((expected) => field === expected)
+  )) {
+    throw new AiError("parse", "AI 返回结构不符合要求");
+  }
   return JSON.stringify(parsed, null, 2);
 }
 
@@ -215,6 +228,7 @@ export async function runOpenDraftTransform(
   if (state.transform.status === "running" || activeByKey.has(key)) return null;
   const startRequest = options.startRequest ?? startAiRequest;
   const handle = startRequest({
+    purpose: recipe.id,
     system: recipe.systemPrompt,
     user: draft.finalText,
     maxTokens: recipe.maxTokens,

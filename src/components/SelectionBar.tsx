@@ -9,6 +9,7 @@ import {
   SimpleMenuSeparator,
 } from "@/components/SimpleMenu";
 import { IconButton } from "@/components/ui/icon-button";
+import { floatingSurface } from "@/components/ui/floating-surface";
 import { Kbd } from "@/components/ui/kbd";
 import {
   Tooltip,
@@ -48,7 +49,13 @@ import {
 } from "@/store/targetStore";
 
 /** 勾选 ≥1 条时出现的批量操作条。 */
-export function SelectionBar({ compact = false }: { compact?: boolean }) {
+export function SelectionBar({
+  compact = false,
+  reserveSpace = false,
+}: {
+  compact?: boolean;
+  reserveSpace?: boolean;
+}) {
   const [otherTemplatesOpen, setOtherTemplatesOpen] = useState(false);
   const otherTemplatesId = useId();
   const checkedIds = useNotesStore((s) => s.checkedIds);
@@ -185,7 +192,7 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
   const previewDraft = useMemo(
     () => {
       // 单选也出条（2026-08 曾试过「仅 ≥2 出现」，用户否决恢复）：
-      // ⌄ 里的模板/格式/方案选择在单选同样高频，底栏是它们的恒定锚点，
+      // ⌄ 里的模板/格式/方案选择在单选同样高频，操作条是它们的入口，
       // 右键子菜单替代路径被用户评价为不便。勿再改成多选门槛。
       if (count === 0 || !relevantHere) return null;
       return buildDeliveryDraft(
@@ -249,16 +256,21 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
       className={cn(
         // flex-wrap：按钮均为 shrink-0，面板拖到最窄（320px）放不下时
         // 右组整体折行，而不是把「已选 N」挤成逐字竖排
-        "flex flex-wrap items-center gap-0.5 rounded-xl border border-black/10 bg-white/70 px-2 py-1.5 elevation-3 dark:border-white/10 dark:bg-black/40",
-        // 竖栏形态四周等距：左右/底部均 8px，与列表卡片同一对齐系
-        compact ? "absolute bottom-2 right-3 z-30" : "mx-2 mb-2"
+        "relative z-30 flex shrink-0 flex-wrap items-center gap-0.5 rounded-xl px-2 py-1.5",
+        compact
+          ? cn(
+              "w-max max-w-[calc(100%-1.5rem)]",
+              reserveSpace ? "mx-3 mb-2 self-end" : "absolute bottom-2 right-3"
+            )
+          : "mx-2 mb-2",
+        floatingSurface(2)
       )}
     >
       <span className="shrink-0 whitespace-nowrap px-1 text-label tabular-nums text-muted-foreground">
         已选 {count}
       </span>
 
-      <div className="ml-auto flex items-center gap-0.5">
+      <div className="ml-auto flex flex-wrap items-center justify-end gap-0.5">
         {!compact && (
           <>
             <IconAction
@@ -285,10 +297,11 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
             {/* 「标记完成」不进批量条（2026-08-18 用户指定精简）：
                 单卡右键菜单与快捷键 D 仍可标完成 */}
             <SimpleMenu
+              portal
               side="top"
               align="end"
-              // flex 消除包裹层行盒：block div 内联按钮会吃基线下沉，图标偏上错位
               className="flex"
+              menuClassName="w-72"
               trigger={({ toggle }) => (
                 <IconAction label="打标签" onClick={toggle}>
                   <Tag className="size-3.5" />
@@ -378,9 +391,11 @@ export function SelectionBar({ compact = false }: { compact?: boolean }) {
             </TooltipContent>
           </Tooltip>
           <SimpleMenu
+            portal
             side="top"
             align="end"
             className="flex"
+            menuClassName="w-72"
             onOpenChange={() => setOtherTemplatesOpen(false)}
             trigger={({ open, toggle, controls }) => (
               <Button

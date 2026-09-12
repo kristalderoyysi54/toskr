@@ -121,6 +121,7 @@ export async function reprepareDeliveryEvent(
       {
         notes: notes.notes,
         tasks: notes.tasks,
+        messages: notes.messages,
         promptSnippets: notes.settings.promptSnippets,
         checkedItemIds: notes.checkedIds,
         targetSnapshot: target,

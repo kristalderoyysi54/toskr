@@ -15,6 +15,7 @@ import {
   aiErrorTip,
   aiReady,
   requestAi,
+  type AiPurpose,
 } from "@/lib/aiClient";
 
 export {
@@ -67,7 +68,8 @@ function toMs(v: unknown): number | null {
     typeof v === "number" ? v : typeof v === "string" ? Number(v.trim()) : NaN;
   if (!Number.isFinite(n) || n <= 0) return null;
   // 秒级纪元（~1e9）自动升毫秒
-  return n < 1e11 ? n * 1000 : n;
+  const ms = n < 1e11 ? n * 1000 : n;
+  return Number.isFinite(new Date(ms).getTime()) ? ms : null;
 }
 
 function normalizePriority(v: unknown): TaskPriority {
@@ -84,25 +86,33 @@ function dateTimeToMs(date: unknown, time: unknown): number | null {
   if (typeof date !== "string") return null;
   const dm = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/.exec(date.trim());
   if (!dm) return null;
+  const year = Number(dm[1]);
+  const month = Number(dm[2]);
+  const day = Number(dm[3]);
   let hh = 9;
   let mm = 0;
-  if (typeof time === "string") {
-    const tm = /^(\d{1,2}):(\d{1,2})/.exec(time.trim());
-    if (tm) {
-      hh = Number(tm[1]);
-      mm = Number(tm[2]);
-    }
+  if (time !== undefined && time !== null) {
+    if (typeof time !== "string") return null;
+    const tm = /^(\d{1,2}):(\d{2})$/.exec(time.trim());
+    if (!tm) return null;
+    hh = Number(tm[1]);
+    mm = Number(tm[2]);
   }
-  const ms = new Date(
-    Number(dm[1]),
-    Number(dm[2]) - 1,
-    Number(dm[3]),
-    hh,
-    mm,
-    0,
-    0
-  ).getTime();
-  return Number.isFinite(ms) ? ms : null;
+  if (month < 1 || month > 12 || day < 1 || day > 31 || hh > 23 || mm > 59) {
+    return null;
+  }
+  // setFullYear 避免 Date 构造器把 0–99 年解释为 1900–1999 年。
+  const parsed = new Date(0);
+  parsed.setFullYear(year, month - 1, day);
+  parsed.setHours(hh, mm, 0, 0);
+  // Date 会自动顺延无效日及夏令时缺失的钟点，逐分量回读后才接受。
+  return parsed.getFullYear() === year &&
+    parsed.getMonth() === month - 1 &&
+    parsed.getDate() === day &&
+    parsed.getHours() === hh &&
+    parsed.getMinutes() === mm
+    ? parsed.getTime()
+    : null;
 }
 
 /**
@@ -136,7 +146,10 @@ export function normalizeParsedTask(
     if (dueAtMs === null) dueAtMs = dateTimeToMs(d.date, d.time);
   }
   if (dueAtMs === null) dueAtMs = toMs(o.dueAtMs);
-  if (dueAtMs !== null && dueAtMs < now - 60_000) dueAtMs = null;
+  if (dueAtMs !== null &&
+    (!Number.isFinite(new Date(dueAtMs).getTime()) || dueAtMs < now - 60_000)) {
+    dueAtMs = null;
+  }
 
   const checklist = Array.isArray(o.checklist)
     ? o.checklist
@@ -214,13 +227,14 @@ export function parseAiJson<T>(raw: string, guard: (v: unknown) => v is T): T {
 }
 
 async function callAiJson<T>(
+  purpose: AiPurpose,
   system: string,
   user: string,
   guard: (v: unknown) => v is T,
   maxTokens: number
 ): Promise<T> {
   return parseAiJson(
-    await requestAi({ system, user, maxTokens }),
+    await requestAi({ purpose, system, user, maxTokens }),
     guard
   );
 }
@@ -237,18 +251,18 @@ function withLock(key: string): boolean {
 
 const ONLY_JSON = "只输出 JSON，不要任何解释文字，不要使用 markdown 代码块。";
 
-function nowContext(): string {
-  const d = new Date();
+function nowContext(now: number): string {
+  const d = new Date(now);
   const week = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][d.getDay()];
   const pad = (n: number) => String(n).padStart(2, "0");
   const iso = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   return `当前本地时间：${iso}（${week}）`;
 }
 
-function parseTaskSystem(): string {
+function parseTaskSystem(now: number): string {
   return `你是任务解析助手。将用户输入的一句话解析为结构化任务 JSON。
 
-${nowContext()}
+${nowContext(now)}
 
 规则：
 1. title：任务核心内容，去掉"提醒我""帮我"等口语外壳与时间短语，保留动作本身，不超过30字。
@@ -316,12 +330,14 @@ export async function parseTaskInput(rawText: string): Promise<void> {
   const lease = beginAiLease();
   if (!lease) return;
   try {
+    const referenceNow = Date.now();
     const raw = await requestAi({
-      system: parseTaskSystem(),
+      purpose: "create-task",
+      system: parseTaskSystem(referenceNow),
       user: text,
       maxTokens: 600,
     });
-    const r = normalizeParsedTask(parseAiRaw(raw), text, Date.now());
+    const r = normalizeParsedTask(parseAiRaw(raw), text, referenceNow);
     if (!r) throw new AiError("parse", "AI 返回内容缺少必要字段");
     if (!matchesDataGeneration(lease.generation)) return;
     const store = useNotesStore.getState();
@@ -363,7 +379,7 @@ export async function splitSubtasks(taskId: string): Promise<void> {
     if (task.note) user += `\n备注：${task.note}`;
     const existing = (task.checklist ?? []).map((c) => c.text);
     if (existing.length) user += `\n已有检查项：${existing.join("、")}`;
-    const r = await callAiJson(SPLIT_SYSTEM, user, isSplitResult, 600);
+    const r = await callAiJson("split-subtasks", SPLIT_SYSTEM, user, isSplitResult, 600);
     const items = r.items.map((t) => t.trim()).filter(Boolean).slice(0, 8);
     const store = useNotesStore.getState();
     const current = store.tasks.find((candidate) => candidate.id === taskId);
@@ -404,6 +420,7 @@ export async function noteToTaskSmart(noteId: string): Promise<void> {
     }
     tip("info", "AI 正在提炼任务…");
     const r = await callAiJson(
+      "note-to-task",
       NOTE_TO_TASK_SYSTEM,
       note.text,
       isNoteToTaskResult,
@@ -447,7 +464,7 @@ export async function suggestTitle(noteId: string): Promise<void> {
       return;
     }
     tip("info", "AI 正在起标题…");
-    const r = await callAiJson(TITLE_SYSTEM, note.text, isTitleResult, 100);
+    const r = await callAiJson("suggest-title", TITLE_SYSTEM, note.text, isTitleResult, 100);
     if (
       !matchesDataGeneration(lease.generation) ||
       useNotesStore.getState().notes.find((candidate) => candidate.id === noteId) !== note
@@ -473,6 +490,7 @@ export async function testAiConnection(
   model: string
 ): Promise<void> {
   const reply = await requestAi({
+    purpose: "test-connection",
     system: "你是连通性测试助手。",
     user: "收到请只回复：OK",
     maxTokens: 50,

@@ -10,6 +10,9 @@ vi.mock("@/lib/tauri", () => ({
   api: {
     getAiKeyStatus: mocks.getAiKeyStatus,
     aiChat: mocks.aiChat,
+    beginAiRequest: vi.fn(async () => "request-test"),
+    authorizeAiRequest: vi.fn(async () => undefined),
+    cancelAiRequest: vi.fn(async () => undefined),
   },
 }));
 vi.mock("@/lib/tip", () => ({ tip: mocks.tip }));

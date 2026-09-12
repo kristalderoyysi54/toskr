@@ -15,8 +15,18 @@ DMG_DIR=src-tauri/target/release/bundle/dmg
 
 [[ -f "$KEY" ]] || { echo "缺少 updater 私钥: $KEY"; exit 1; }
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "版本号须为 x.y.z"; exit 1; }
-git diff --quiet && git diff --cached --quiet \
-  || { echo "存在未提交的已跟踪改动，请先提交功能代码再发版"; exit 1; }
+[[ -z "$(git status --porcelain --untracked-files=all)" ]] \
+  || { echo "存在未提交改动，请先提交功能代码再发版"; exit 1; }
+
+# 在改版本和产生发布副作用前验证固定提交。任意门禁失败立即退出。
+TESTED_COMMIT=$(git rev-parse HEAD)
+pnpm typecheck
+pnpm lint
+pnpm test
+(cd src-tauri && cargo test)
+STRICT=1 pnpm check:tokens
+[[ "$(git rev-parse HEAD)" == "$TESTED_COMMIT" && -z "$(git status --porcelain --untracked-files=all)" ]] \
+  || { echo "验证期间源码发生变化，请重新发版"; exit 1; }
 
 # 1. 写入版本号
 python3 - "$VERSION" <<'EOF'
@@ -27,6 +37,7 @@ d['version'] = sys.argv[1]
 open(p, 'w').write(json.dumps(d, ensure_ascii=False, indent=2) + '\n')
 EOF
 echo "→ 版本号已写入 $VERSION"
+VERSION_DIFF=$(git diff --binary | shasum -a 256)
 
 # 2. 签名打包（updater 签名走环境变量；app 签名走 conf 里的证书）
 # touch 强制重编译：generate_context! 在编译期读 tauri.conf.json 嵌入版本号，
@@ -58,9 +69,28 @@ print(json.dumps({
 EOF
 
 # 4. 提交版本号变更 + 打 tag + 发 Release
+[[ "$(git rev-parse HEAD)" == "$TESTED_COMMIT" && "$(git diff --binary | shasum -a 256)" == "$VERSION_DIFF" ]] \
+  && git diff --cached --quiet \
+  && [[ -z "$(git ls-files --others --exclude-standard)" ]] \
+  || { echo "构建期间源码发生变化，拒绝发布"; exit 1; }
+python3 - "$TESTED_COMMIT" "$VERSION" "$DMG" "$BUNDLE" <<'EOF'
+import hashlib, json, pathlib, sys
+commit, version, dmg, bundle = sys.argv[1:]
+paths = [pathlib.Path(dmg)] + [pathlib.Path(bundle) / name for name in
+    ('Toskr.app.tar.gz', 'Toskr.app.tar.gz.sig', 'latest.json')]
+def sha256(path):
+    digest = hashlib.sha256()
+    with path.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+evidence = {'testedCommit': commit, 'version': version, 'sha256': {
+    p.name: sha256(p) for p in paths}}
+(pathlib.Path(bundle) / 'release-evidence.json').write_text(json.dumps(evidence, indent=2) + '\n')
+EOF
 git add "$CONF" && git commit -m "release: v$VERSION" && git push
 gh release create "v$VERSION" --repo "$REPO" --title "Toskr v$VERSION" --notes "$NOTES" \
-  "$DMG" "$BUNDLE/Toskr.app.tar.gz" "$BUNDLE/Toskr.app.tar.gz.sig" "$BUNDLE/latest.json"
+  "$DMG" "$BUNDLE/Toskr.app.tar.gz" "$BUNDLE/Toskr.app.tar.gz.sig" "$BUNDLE/latest.json" "$BUNDLE/release-evidence.json"
 
 echo "✅ v$VERSION 已发布：https://github.com/$REPO/releases/tag/v$VERSION"
 echo "   新用户下载 DMG，打开后把 Toskr 拖入 Applications 即可安装。"

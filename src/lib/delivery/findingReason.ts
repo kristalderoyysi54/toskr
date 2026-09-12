@@ -1,6 +1,16 @@
 import type { FindingCategory } from "@/lib/tauri";
 
 const RULE_REASONS: Record<string, string> = {
+  "credential.context_password": "密码或口令标签后存在具体值，短密码也需保护",
+  "contact.phone_cn_unlabeled": "匹配中国大陆手机号格式，未发现紧邻的业务编号标签",
+  "financial.bank_card_unlabeled": "数字串通过银行卡校验，未发现紧邻的业务编号标签",
+  "token.alibaba_access_key_id": "匹配阿里云访问密钥 ID 的前缀和长度",
+  "token.cloudflare_api_token": "Cloudflare 凭据字段后存在符合格式的值",
+  "token.cloudflare_global_api_key": "Cloudflare 全局密钥字段后存在符合格式的值",
+  "token.cloudflare_origin_ca_key": "匹配 Cloudflare 源站证书密钥格式",
+  "token.huggingface": "匹配 Hugging Face 令牌的前缀和长度",
+  "token.digitalocean": "匹配 DigitalOcean 令牌的前缀和长度",
+  "token.sendgrid": "匹配 SendGrid API 密钥的分段格式",
   "credential.pem_private_key": "匹配私钥文件的起止标记和内容结构",
   "auth.authorization_header_bearer": "授权请求头中包含 Bearer 凭据",
   "auth.authorization_header_basic": "授权请求头中包含 Basic 凭据",

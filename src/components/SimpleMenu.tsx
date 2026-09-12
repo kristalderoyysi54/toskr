@@ -1,4 +1,5 @@
-import { createContext, useContext, useEffect, useId, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Check } from "lucide-react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
@@ -25,6 +26,7 @@ export function SimpleMenu({
   className,
   preserveTextSelection = false,
   onOpenChange,
+  portal = false,
 }: {
   trigger: (props: { open: boolean; toggle: () => void; controls: string }) => React.ReactNode;
   children: (close: () => void) => React.ReactNode;
@@ -36,6 +38,8 @@ export function SimpleMenu({
   /** 菜单交互期间保留正文选区，供依赖选区的命令在菜单抢焦点后继续使用。 */
   preserveTextSelection?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** 卡片内部有裁切时挂到 body，仍使用普通按钮，不引入焦点锁。 */
+  portal?: boolean;
   /** 根容器附加类。默认 block 会让触发按钮参与基线对齐产生亚像素错位，
    *  与相邻按钮拼「分裂按钮」时传 "flex" 消除。 */
   className?: string;
@@ -52,18 +56,59 @@ export function SimpleMenu({
   // 会把「已经重新打开」的菜单直接卸载——open=true 却无渲染，状态与画面
   // 脱节（外点监听还挂着），表现为「点图标闪一下菜单就没了」。
   const lingerTimer = useRef(0);
-  const restoreTriggerFocus = () => {
+  const restoreTriggerFocus = useCallback(() => {
+    if (portal) { triggerRef.current?.focus({ preventScroll: true }); return; }
     requestAnimationFrame(() => triggerRef.current?.focus());
-  };
-  const setOpen = (v: boolean, restoreFocus = false) => {
+  }, [portal]);
+  const setOpen = useCallback((v: boolean, restoreFocus = false) => {
     setOpenRaw(v);
     onOpenChange?.(v);
     window.clearTimeout(lingerTimer.current);
     if (v) setRendered(true);
     else lingerTimer.current = window.setTimeout(() => setRendered(false), 160);
     if (!v && restoreFocus) restoreTriggerFocus();
-  };
+  }, [onOpenChange, restoreTriggerFocus]);
   const rootRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState<{ left: number; top: number; maxHeight: number } | null>(null);
+  const positionReady = !portal || position !== null;
+
+  useLayoutEffect(() => {
+    if (!portal || !open || !rendered) return;
+    const place = () => {
+      const anchor = rootRef.current?.getBoundingClientRect();
+      const menu = menuRef.current;
+      if (!anchor || !menu) return;
+      const inset = 8;
+      const gap = 4;
+      const above = Math.max(0, anchor.top - inset - gap);
+      const below = Math.max(0, window.innerHeight - anchor.bottom - inset - gap);
+      const height = menu.scrollHeight + menu.offsetHeight - menu.clientHeight;
+      const atTop = side === "top"
+        ? above >= height || above >= below
+        : !(below >= height || below >= above);
+      const maxHeight = atTop ? above : below;
+      const width = menu.offsetWidth;
+      const left = align === "end" ? anchor.right - width : anchor.left;
+      setPosition({
+        left: Math.max(inset, Math.min(left, window.innerWidth - width - inset)),
+        top: atTop ? anchor.top - gap - Math.min(height, maxHeight) : anchor.bottom + gap,
+        maxHeight,
+      });
+    };
+    place();
+    const resize = new ResizeObserver(place);
+    if (menuRef.current) resize.observe(menuRef.current);
+    const onScroll = (event: Event) => {
+      if (!menuRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      resize.disconnect();
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [portal, open, rendered, align, side, setOpen]);
 
   useEffect(
     () => () => {
@@ -75,9 +120,33 @@ export function SimpleMenu({
   useEffect(() => {
     if (!open) return;
     const onDown = (e: PointerEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+      if (!rootRef.current?.contains(e.target as Node) && !menuRef.current?.contains(e.target as Node)) setOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => handleSimpleMenuEscape(e, () => setOpen(false, true));
+    const onKey = (e: KeyboardEvent) => {
+      handleSimpleMenuEscape(e, () => setOpen(false, true));
+      const menu = menuRef.current;
+      if (!portal || !menu || e.key === "Escape") return;
+      if (e.key === "Tab") { setOpen(false); return; }
+      // WKWebView 按钮焦点可能晚于菜单显示；临时接管窗口键盘，避免按键落到卡片。
+      e.stopImmediatePropagation();
+      if (!menu.contains(document.activeElement)) {
+        const items = menu.querySelectorAll<HTMLButtonElement>("[data-simple-menu-item]:not(:disabled)");
+        (initialFocusEdge.current === "last" ? items[items.length - 1] : items[0])?.focus();
+      }
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        if (menu.contains(document.activeElement)) {
+          (document.activeElement as HTMLButtonElement | null)?.click();
+        }
+      } else {
+        handleSimpleMenuKeyDown({
+          key: e.key,
+          currentTarget: menu,
+          stopPropagation: () => e.stopImmediatePropagation(),
+          preventDefault: () => e.preventDefault(),
+        });
+      }
+    };
     window.addEventListener("pointerdown", onDown, true);
     window.addEventListener("keydown", onKey, true);
     // 窗口失焦即关：切到别的应用时本窗口收不到 pointerdown，菜单会一直
@@ -94,11 +163,11 @@ export function SimpleMenu({
       window.removeEventListener("keydown", onKey, true);
       void unlistenFocus.then((fn) => fn()).catch(() => {});
     };
-  }, [open]);
+  }, [open, portal, setOpen]);
 
-  useEffect(() => {
-    if (!open || !rendered) return;
-    const frame = requestAnimationFrame(() => {
+  useLayoutEffect(() => {
+    if (!open || !rendered || !positionReady) return;
+    const focusMenu = () => {
       const items = Array.from(
         menuRef.current?.querySelectorAll<HTMLButtonElement>(
           "[data-simple-menu-item]:not(:disabled)"
@@ -108,11 +177,70 @@ export function SimpleMenu({
       const edge = initialFocusEdge.current === "last"
         ? items.at(-1)
         : selected ?? items[0];
-      edge?.focus();
-      initialFocusEdge.current = "first";
-    });
+      edge?.focus({ preventScroll: portal });
+      // 首次定位完成后才聚焦；只滚菜单自身，不连带滚动源卡所在列表。
+      if (portal && edge && menuRef.current) {
+        const menu = menuRef.current;
+        if (edge.offsetTop < menu.scrollTop) menu.scrollTop = edge.offsetTop;
+        else if (edge.offsetTop + edge.offsetHeight > menu.scrollTop + menu.clientHeight) {
+          menu.scrollTop = edge.offsetTop + edge.offsetHeight - menu.clientHeight;
+        }
+      }
+      if (!portal || document.activeElement === edge) initialFocusEdge.current = "first";
+    };
+    if (portal) {
+      // 等本次 DOM 提交完成再聚焦，不依赖可能在后台停摆的动画帧。
+      let active = true;
+      queueMicrotask(() => { if (active) focusMenu(); });
+      return () => { active = false; };
+    }
+    const frame = requestAnimationFrame(focusMenu);
     return () => cancelAnimationFrame(frame);
-  }, [open, rendered]);
+  }, [open, rendered, portal, positionReady]);
+
+  const menu = rendered && (
+    <div
+      ref={menuRef}
+      id={menuId}
+      role={menuRole}
+      aria-label={menuAriaLabel}
+      data-deferred-media-root
+      data-state={open ? "open" : "closed"}
+      // 兜底计时器触发前也停在透明末帧，杜绝动画结束后闪回 opacity:1。
+      style={{
+        ...(!open ? { animationFillMode: "forwards" as const } : {}),
+        ...(portal ? position ?? { opacity: 0, pointerEvents: "none" as const } : {}),
+      }}
+      onPointerDown={portal ? (event) => event.stopPropagation() : undefined}
+      onClick={portal ? (event) => event.stopPropagation() : undefined}
+      onDoubleClick={portal ? (event) => event.stopPropagation() : undefined}
+      onContextMenu={portal ? (event) => { event.preventDefault(); event.stopPropagation(); } : undefined}
+      onAnimationEnd={(event) => {
+        if (event.target !== event.currentTarget || open) return;
+        window.clearTimeout(lingerTimer.current);
+        setRendered(false);
+      }}
+      onKeyDown={handleSimpleMenuKeyDown}
+      className={cn(
+        "z-50 min-w-40 overflow-y-auto overscroll-contain rounded-lg p-1",
+        floatingSurface(2),
+        // 与 Radix 菜单同一套 tw-animate 进出场（duration-overlay 对齐）
+        positionReady && "data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95",
+        "data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+        "duration-(--duration-overlay) ease-(--ease-standard) motion-reduce:!animate-none motion-reduce:!transition-none",
+        portal ? "fixed max-w-[calc(100vw-1rem)]" : [
+          "absolute max-h-[calc(100vh-4rem)]",
+          side === "bottom" ? "top-full mt-1 origin-top" : "bottom-full mb-1 origin-bottom",
+          align === "end" ? "right-0" : "left-0",
+        ],
+        menuClassName
+      )}
+    >
+      <SimpleMenuRoleContext.Provider value={menuRole}>
+        {children(() => setOpen(false, true))}
+      </SimpleMenuRoleContext.Provider>
+    </div>
+  );
 
   return (
     <div
@@ -138,39 +266,7 @@ export function SimpleMenu({
           setOpen(!open, open);
         },
       })}
-      {rendered && (
-        <div
-          ref={menuRef}
-          id={menuId}
-          role={menuRole}
-          aria-label={menuAriaLabel}
-          data-deferred-media-root
-          data-state={open ? "open" : "closed"}
-          // 兜底计时器触发前也停在透明末帧，杜绝动画结束后闪回 opacity:1。
-          style={!open ? { animationFillMode: "forwards" } : undefined}
-          onAnimationEnd={(event) => {
-            if (event.target !== event.currentTarget || open) return;
-            window.clearTimeout(lingerTimer.current);
-            setRendered(false);
-          }}
-          onKeyDown={handleSimpleMenuKeyDown}
-          className={cn(
-            "absolute z-50 max-h-[calc(100vh-4rem)] min-w-40 overflow-y-auto overscroll-contain rounded-lg p-1",
-            floatingSurface(2),
-            // 与 Radix 菜单同一套 tw-animate 进出场（duration-overlay 对齐）
-            "data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95",
-            "data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
-            "duration-(--duration-overlay) ease-(--ease-standard) motion-reduce:!animate-none motion-reduce:!transition-none",
-            side === "bottom" ? "top-full mt-1 origin-top" : "bottom-full mb-1 origin-bottom",
-            align === "end" ? "right-0" : "left-0",
-            menuClassName
-          )}
-        >
-          <SimpleMenuRoleContext.Provider value={menuRole}>
-            {children(() => setOpen(false, true))}
-          </SimpleMenuRoleContext.Provider>
-        </div>
-      )}
+      {portal && menu ? createPortal(menu, document.body) : menu}
     </div>
   );
 }

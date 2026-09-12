@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { emitTo, listen } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
+import { emitToMain as emitTo } from "@/lib/previewEvents";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { motion } from "motion/react";
 import {
@@ -425,6 +426,7 @@ export default function TextPreviewView() {
   const sessionPastedImagesRef = useRef<Set<string>>(new Set());
   const editSessionTokenRef = useRef(0);
   const composingRef = useRef(false);
+  const imeSelectionBlockedRef = useRef(false);
   const skipNextBeforeInputRef = useRef(false);
   const bodyRef = useRef<HTMLDivElement>(null);
   const contentFrameRef = useRef<HTMLDivElement>(null);
@@ -1759,6 +1761,10 @@ export default function TextPreviewView() {
   };
 
   const syncTextareaSelection = (textarea: HTMLTextAreaElement) => {
+    if (composingRef.current || imeSelectionBlockedRef.current) {
+      setTextSelection(null);
+      return;
+    }
     const selection = {
       start: textarea.selectionStart,
       end: textarea.selectionEnd,
@@ -2691,6 +2697,8 @@ export default function TextPreviewView() {
                 );
               }}
               onCompositionStart={(event) => {
+                imeSelectionBlockedRef.current = true;
+                setTextSelection(null);
                 if (composingRef.current) return;
                 composingRef.current = true;
                 checkpointTextEdit(
@@ -2700,6 +2708,7 @@ export default function TextPreviewView() {
               }}
               onCompositionEnd={() => {
                 composingRef.current = false;
+                // 上屏后的 select 仍可能携带组合区间，等下一次用户操作再恢复。
                 textEditHistoryRef.current.group = null;
                 // WebKit 可能在 compositionend 后补一条 insertFromComposition。
                 skipNextBeforeInputRef.current = true;
@@ -2715,11 +2724,13 @@ export default function TextPreviewView() {
               onSelect={(event) => syncTextareaSelection(event.currentTarget)}
               onPaste={handlePaste}
               onPointerDown={() => {
+                if (!composingRef.current) imeSelectionBlockedRef.current = false;
                 textEditHistoryRef.current.group = null;
               }}
               onKeyDown={(e) => {
                 e.stopPropagation();
-                if (e.nativeEvent.isComposing || composingRef.current) return;
+                if (e.nativeEvent.isComposing || composingRef.current || e.keyCode === 229) return;
+                imeSelectionBlockedRef.current = false;
                 const keyGroup =
                   e.key === "Backspace"
                     ? ("backspace" as const)

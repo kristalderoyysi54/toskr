@@ -157,6 +157,7 @@ export function resultCapturedEvent(
     metricsEligible: delivery.metricsEligible !== false,
     metricsEpoch: delivery.metricsEpoch ?? 0,
     transformRecipeId: delivery.transformRecipeId ?? null,
+    ...(delivery.executionManifest ? { executionManifest: { ...delivery.executionManifest, parts: [...delivery.executionManifest.parts] } } : {}),
     ...(deliveryEventOutputMode(delivery)
       ? { format: delivery.format, markdownMode: delivery.markdownMode }
       : {}),
@@ -240,6 +241,7 @@ export async function linkCapturedNoteToDelivery(
   if (!note || note.provenance || !delivery.targetBundleId) return false;
   const provenance: NoteProvenance = {
     kind: "deliveryResult",
+    executionVersion: delivery.executionManifest?.version,
     deliveryId: delivery.deliveryId,
     capturedAtMs: note.createdAt,
     sourceBundle: delivery.targetBundleId,

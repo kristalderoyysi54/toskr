@@ -2134,11 +2134,11 @@ function MessageWatchSection({ settings, patch }: SP) {
       {profile && (
       <Group title="接入方式（二选一）">
         <Row
-          label="自动接入（推荐）"
+          label="自动接入（实验功能）"
           hint={
             transport === "http"
               ? "手动模式运行中；先关闭手动监听再切换"
-              : "以调试模式重启 IM 软件并自动注入只读桥，免手动操作；开关时各重启一次（约 10 秒），登录状态通常保留"
+              : "会退出并重启所选 IM，请先保存工作。关闭时仅结束本次启动的主进程，再验证恢复；恢复失败需手动处理"
           }
           right={
             <Switch
@@ -2151,7 +2151,7 @@ function MessageWatchSection({ settings, patch }: SP) {
         />
         {transport !== "http" && (
           <p className="px-3.5 py-2 text-label text-warning">
-            ⚠️ 自动接入期间 IM 软件会开一个仅限本机、无需认证的调试端口，本机其他程序理论上可借此读取会话内容；关闭后立即恢复。
+            ⚠️ 自动接入期间 IM 软件会开一个仅限本机、无需认证的调试端口，本机其他程序理论上可借此读取会话内容；关闭后会核验调试进程退出与正常启动，失败时需手动处理。
           </p>
         )}
         <Row

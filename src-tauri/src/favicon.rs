@@ -7,38 +7,29 @@
 
 use tauri::AppHandle;
 
-use crate::linkmeta::{extract_meta, UA};
+use crate::linkmeta::extract_meta;
 use crate::storage::save_image_rgba;
 
 /// 图标文件大小上限（比 og 图小得多，1MB 足够并防 zip bomb 型 PNG）。
-const MAX_ICON_BYTES: &str = "1048576";
+const MAX_ICON_BYTES: usize = 1024 * 1024;
 
 #[tauri::command]
 pub async fn fetch_favicon(app: AppHandle, domain: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || fetch_blocking(&app, &domain))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-fn fetch_blocking(app: &AppHandle, domain: &str) -> Result<String, String> {
-    let domain = sanitize_domain(domain)?;
+    let domain = sanitize_domain(&domain)?;
     let fallback = format!("https://{domain}/favicon.ico");
-    // HTML 里声明的 icon 优先；抓不到 HTML / data: 内联 / SVG 都退到 /favicon.ico
     let mut candidates = Vec::new();
-    if let Some(icon) = html_icon_url(&format!("https://{domain}")) {
-        if !icon.starts_with("data:") && icon != fallback {
-            candidates.push(icon);
+    if let Ok((body, effective)) = crate::preview_network::fetch(&format!("https://{domain}"), 3 * 1024 * 1024, None).await {
+        if let Some(icon) = extract_meta(&String::from_utf8_lossy(&body), effective.as_str()).icon {
+            if icon != fallback { candidates.push(icon); }
         }
     }
     candidates.push(fallback);
-    let mut last_err = String::from("未找到可用图标");
     for url in candidates {
-        match download_and_store(app, &url) {
-            Ok(name) => return Ok(name),
-            Err(e) => last_err = e,
+        if let Ok(image) = download_icon(&url, None).await {
+            return save_image_rgba(&app, image.width() as usize, image.height() as usize, image.as_raw());
         }
     }
-    Err(last_err)
+    Err("未找到可用图标".into())
 }
 
 /// 域名白名单校验：仅主机名字符，杜绝把任意 URL/本地路径塞进 curl。
@@ -57,64 +48,26 @@ fn sanitize_domain(input: &str) -> Result<String, String> {
     }
 }
 
-/// 抓站点首页 HTML，返回其中声明的 icon 绝对 URL（失败返回 None，不阻断主流程）。
-fn html_icon_url(page_url: &str) -> Option<String> {
-    let out = std::process::Command::new("curl")
-        .args([
-            "-sL",
-            "--compressed",
-            "--max-time",
-            "6",
-            "--max-filesize",
-            "3145728",
-            "-A",
-            UA,
-            "-w",
-            "\u{1}%{url_effective}",
-            "--",
-            page_url,
-        ])
-        .output()
-        .ok()?;
-    let raw = String::from_utf8_lossy(&out.stdout);
-    let (body, effective) = raw.rsplit_once('\u{1}').unwrap_or((raw.as_ref(), page_url));
-    let effective = if effective.starts_with("http") { effective } else { page_url };
-    if body.trim().is_empty() {
-        return None;
-    }
-    extract_meta(body, effective).icon
+async fn download_icon(url: &str, private_origin: Option<&str>) -> Result<image::RgbaImage, String> {
+    let (bytes, _) = crate::preview_network::fetch(url, MAX_ICON_BYTES, private_origin).await?;
+    if looks_like_svg(&bytes) { return Err("SVG 图标暂不支持".into()); }
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format().map_err(|_| "图标格式无效")?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(1024);
+    limits.max_image_height = Some(1024);
+    limits.max_alloc = Some(8 * 1024 * 1024);
+    reader.limits(limits);
+    let decoded = reader.decode().map_err(|_| "图标解码失败或尺寸超限")?;
+    Ok(decoded.thumbnail(64, 64).to_rgba8())
 }
 
-fn download_and_store(app: &AppHandle, url: &str) -> Result<String, String> {
-    if !url.starts_with("https://") && !url.starts_with("http://") {
-        return Err("图标地址不是 http(s)".into());
-    }
-    let out = std::process::Command::new("curl")
-        .args([
-            "-sL",
-            "--max-time",
-            "6",
-            "--max-filesize",
-            MAX_ICON_BYTES,
-            "-A",
-            UA,
-            "--",
-            url,
-        ])
-        .output()
-        .map_err(|e| format!("curl 启动失败: {e}"))?;
-    let bytes = out.stdout;
-    if bytes.is_empty() {
-        return Err("图标下载为空".into());
-    }
-    if looks_like_svg(&bytes) {
-        // image crate 不解 SVG；不为图标引入光栅化依赖（YAGNI）
-        return Err("SVG 图标暂不支持".into());
-    }
-    let decoded = image::load_from_memory(&bytes).map_err(|e| format!("图标解码失败: {e}"))?;
-    let rgba = decoded.to_rgba8();
-    let (width, height) = (rgba.width() as usize, rgba.height() as usize);
-    save_image_rgba(app, width, height, rgba.as_raw())
+pub(crate) async fn icon_data_url(url: &str, private_origin: Option<&str>) -> Result<String, String> {
+    use base64::Engine;
+    let image = download_icon(url, private_origin).await?;
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut bytes, image::ImageFormat::Png).map_err(|_| "图标编码失败")?;
+    Ok(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes.into_inner())))
 }
 
 /// 嗅探 SVG：跳过 BOM/空白后以 `<svg` 或 `<?xml` 开头（favicon 场景足够）。

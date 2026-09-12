@@ -186,7 +186,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
 
   entry("message-watch", "message-watch", "消息监听", ["im", "群消息", "只读监听"], { requires: "messagesEnabled" }),
   entry("message-watch", "watch-target", "监听目标", ["im 软件", "应用探测", "确认应用"], { requires: "messagesEnabled" }),
-  entry("message-watch", "watch-auto", "自动接入（推荐）", ["cdp", "自动监听", "devtools"], { target: "监听目标", requires: "messagesEnabled" }),
+  entry("message-watch", "watch-auto", "自动接入（实验功能）", ["cdp", "自动监听", "devtools"], { target: "监听目标", requires: "messagesEnabled" }),
   entry("message-watch", "watch-manual", "手动模式（备选）", ["端口", "手动监听", "websocket"], { target: "监听目标", requires: "messagesEnabled" }),
   entry("message-watch", "watch-bridge", "安装 DevTools 只读桥", ["浏览器桥", "runtime binding"], { target: "监听目标", requires: "messagesEnabled" }),
   entry("message-watch", "watch-rules", "消息监听规则", ["@我", "特别关注", "关键词", "群名", "发送者"], { target: "收哪些消息", requires: "messagesEnabled" }),

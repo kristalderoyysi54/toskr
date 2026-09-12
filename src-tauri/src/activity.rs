@@ -112,6 +112,17 @@ pub struct FirewallCounts {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecutionManifest {
+    version: String,
+    template_id: Option<String>,
+    parts: Vec<ExecutionPart>,
+}
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExecutionPart { Text, Image }
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DeliveryEvent {
     pub event_id: String,
     pub delivery_id: String,
@@ -131,6 +142,14 @@ pub struct DeliveryEvent {
     pub redaction_count: u64,
     pub clipboard_outcome: Option<ClipboardOutcome>,
     pub result_note_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_manifest: Option<ExecutionManifest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_level: Option<crate::delivery::DeliveryReceiptLevel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_steps: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_steps: Option<u64>,
     #[serde(default = "default_true")]
     pub metrics_eligible: bool,
     #[serde(default)]
@@ -178,6 +197,13 @@ fn validate_text(value: &str, label: &str, max: usize, allow_empty: bool) -> Res
 }
 
 fn validate_event(event: &DeliveryEvent) -> Result<(), String> {
+    if let Some(manifest) = &event.execution_manifest {
+        if manifest.version.len() != 36 || !manifest.version.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
+            || manifest.parts.len() > 1024 {
+            return Err("执行清单版本或分段无效".into());
+        }
+        if let Some(id) = &manifest.template_id { validate_text(id, "templateId", 160, false)?; }
+    }
     validate_text(&event.event_id, "eventId", 160, false)?;
     validate_text(&event.delivery_id, "deliveryId", 160, false)?;
     validate_text(&event.profile_id, "profileId", 160, false)?;
@@ -264,6 +290,12 @@ fn validate_event(event: &DeliveryEvent) -> Result<(), String> {
         || event.metrics_epoch > 9_007_199_254_740_991
     {
         return Err("发送活动计数超限".into());
+    }
+    if event.completed_steps.is_some() != event.total_steps.is_some()
+        || event.completed_steps.unwrap_or(0) > event.total_steps.unwrap_or(0)
+        || event.total_steps.unwrap_or(0) > 100_000
+    {
+        return Err("投递分段进度无效".into());
     }
     let counts = &event.firewall_counts;
     if [
@@ -537,6 +569,10 @@ mod tests {
             redaction_count: 0,
             clipboard_outcome: Some(ClipboardOutcome::NotOwned),
             result_note_id: None,
+            execution_manifest: None,
+            receipt_level: None,
+            completed_steps: None,
+            total_steps: None,
             metrics_eligible: true,
             metrics_epoch: 0,
             transform_recipe_id: None,
@@ -546,6 +582,41 @@ mod tests {
             verification_check_count: None,
             verification_issue_count: None,
         }
+    }
+
+    #[test]
+    fn execution_manifest_is_metadata_only_and_validated() {
+        let mut value = event(1, 100);
+        value.execution_manifest = Some(ExecutionManifest {
+            version: "12345678-1234-1234-1234-123456789012".into(),
+            template_id: Some("template-a".into()),
+            parts: vec![ExecutionPart::Text, ExecutionPart::Image],
+        });
+        assert!(validate_event(&value).is_ok());
+        let mut json = serde_json::to_value(&value).unwrap();
+        json["executionManifest"]["text"] = serde_json::json!("private body");
+        assert!(serde_json::from_value::<DeliveryEvent>(json).is_err());
+        value.execution_manifest.as_mut().unwrap().version = "private body".into();
+        assert!(validate_event(&value).is_err());
+    }
+
+    #[test]
+    fn receipt_progress_roundtrips_and_rejects_impossible_counts() {
+        let mut progress = event(1, 100);
+        progress.receipt_level = Some(crate::delivery::DeliveryReceiptLevel::Unknown);
+        progress.completed_steps = Some(1);
+        progress.total_steps = Some(3);
+        validate_event(&progress).unwrap();
+        let raw = serde_json::to_string(&progress).unwrap();
+        let restored: DeliveryEvent = serde_json::from_str(&raw).unwrap();
+        assert_eq!(restored.completed_steps, Some(1));
+        assert_eq!(restored.total_steps, Some(3));
+        assert_eq!(
+            restored.receipt_level,
+            Some(crate::delivery::DeliveryReceiptLevel::Unknown)
+        );
+        progress.completed_steps = Some(4);
+        assert!(validate_event(&progress).is_err());
     }
 
     #[test]

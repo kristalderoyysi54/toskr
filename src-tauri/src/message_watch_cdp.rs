@@ -6,17 +6,19 @@
 //! `IncomingMessage` 后直接喂给 `message_watch::accept_message`，落账本/去重/emit 全复用。
 //!
 //! 免掉「手动开 DevTools + 复制粘贴 + 刷新重来」。传输走调试通道，绕开 fetch/CORS/PNA。
-//! 生命周期由 `message_watch` 的 generation 闸统一（开/关都 bump）；CDP 不可用时用户仍可
+//! 生命周期由 generation 取消信号与串行会话锁共同控制，旧会话恢复后新会话才能启动。用户仍可
 //! 退回手动粘贴 fallback（HTTP loopback 保留未删）。
 //!
 //! 目标应用不由代码预置：调用方须传入用户「探测并确认」得到的 `ImProfile`
-//! （显示名 / bundle id / 主可执行路径），本模块只按 profile 编排进程。
+//! （bundle id / 主可执行路径），原生重查运行态后只操作已确认主进程与本次 Child。
 
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::Ordering;
+
+static SESSION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -37,39 +39,71 @@ const BINDING_NAME: &str = "__toskrEmit";
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImProfile {
-    /// 显示名，兼作 `open -a` 目标与 Application Support 数据目录名。
-    pub app_name: String,
-    /// bundle identifier（安装校验用；本模块保留以便日志/未来扩展）。
-    #[allow(dead_code)]
+    /// 原生运行态校验的 bundle identifier。
     pub bundle_id: String,
     /// 主可执行文件绝对路径，用于带调试端口重启与主进程匹配。
     pub bin_path: String,
 }
 
-impl ImProfile {
-    /// 主进程 pgrep -f 匹配串：完整主可执行路径，精确匹配主进程命令行、避开 Helper。
-    fn main_pattern(&self) -> &str {
-        &self.bin_path
-    }
+#[derive(Clone, Debug, PartialEq)]
+struct ProcessIdentity {
+    pid: i32,
+    launched_at_ms: i64,
+    bundle_id: String,
+    bin_path: PathBuf,
+}
 
-    /// Helper 进程路径前缀（<App>.app/Contents/Frameworks，GPU/Renderer/网络等都在此）。
-    fn helpers_pattern(&self) -> String {
-        if let Some(idx) = self.bin_path.find(".app/Contents/") {
-            format!("{}.app/Contents/Frameworks", &self.bin_path[..idx])
-        } else {
-            format!("{}/Contents/Frameworks", self.app_name)
-        }
-    }
+#[derive(Clone)]
+struct VerifiedProfile {
+    profile: ImProfile,
+    bundle_path: PathBuf,
+    initial: ProcessIdentity,
+}
 
-    /// 单例锁路径（~/Library/Application Support/<AppName>/SingletonLock）。
-    fn singleton_lock(&self) -> Option<PathBuf> {
-        std::env::var("HOME").ok().map(|home| {
-            PathBuf::from(home)
-                .join("Library/Application Support")
-                .join(&self.app_name)
-                .join("SingletonLock")
+fn process_identity(pid: i32) -> Option<ProcessIdentity> {
+    let info = crate::focus::app_info_of(pid)?;
+    let app = objc2_app_kit::NSRunningApplication::runningApplicationWithProcessIdentifier(pid)?;
+    Some(ProcessIdentity {
+        pid,
+        launched_at_ms: info.launched_at_ms?,
+        bundle_id: info.bundle_id?,
+        bin_path: std::fs::canonicalize(app.executableURL()?.path()?.to_string()).ok()?,
+    })
+}
+
+fn verify_profile(profile: ImProfile) -> Result<VerifiedProfile, String> {
+    let bin_path =
+        std::fs::canonicalize(&profile.bin_path).map_err(|_| "目标 IM 可执行路径无效")?;
+    let candidate = crate::focus::running_regular_apps()
+        .into_iter()
+        .find(|candidate| {
+            candidate.bundle_id == profile.bundle_id
+                && std::fs::canonicalize(&candidate.bin_path).ok().as_ref() == Some(&bin_path)
         })
+        .ok_or("目标应用身份已变化，请重新探测并确认")?;
+    let info = crate::focus::running_app_info_for_bundle(&candidate.bundle_id)
+        .ok_or("目标 IM 已退出，请重新探测")?;
+    let initial = process_identity(info.pid).ok_or("无法确认目标 IM 进程身份")?;
+    if initial.bin_path != bin_path || initial.bundle_id != profile.bundle_id {
+        return Err("目标 IM 的 bundle 与可执行路径不匹配".into());
     }
+    let macos = bin_path.parent().ok_or("目标路径无效")?;
+    let contents = macos.parent().ok_or("目标路径无效")?;
+    let bundle_path = contents.parent().ok_or("目标路径无效")?;
+    if macos.file_name().is_none_or(|name| name != "MacOS")
+        || contents.file_name().is_none_or(|name| name != "Contents")
+        || bundle_path.extension().is_none_or(|ext| ext != "app")
+    {
+        return Err("仅支持应用包内的主可执行文件".into());
+    }
+    Ok(VerifiedProfile {
+        bundle_path: bundle_path.to_path_buf(),
+        profile: ImProfile {
+            bundle_id: candidate.bundle_id,
+            bin_path: bin_path.to_string_lossy().into_owned(),
+        },
+        initial,
+    })
 }
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -95,6 +129,7 @@ pub fn set_enabled(
 
     let script = script.ok_or("缺少 CDP 桥脚本")?;
     let profile = profile.ok_or("未指定要监听的 IM（请先在设置里探测并确认）")?;
+    let profile = verify_profile(profile)?;
     let generation = message_watch::cdp_begin(app);
     let app_task = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -114,59 +149,85 @@ fn generation_changed(app: &AppHandle, generation: u64) -> bool {
         != generation
 }
 
+fn fail_current_session(app: &AppHandle, generation: u64, error: String) {
+    if !generation_changed(app, generation) {
+        message_watch::cdp_end(app);
+        message_watch::cdp_set_error(app, error);
+    }
+}
+
 // ── 后台驱动：确保带端口的目标 IM 在跑 → 连 CDP → 断连重连 → 收尾 ──
 
-async fn run_cdp(app: AppHandle, generation: u64, script: String, profile: ImProfile) {
-    let mut current: Option<(String, Child)> = None;
-
-    loop {
-        if generation_changed(&app, generation) {
+async fn run_cdp(app: AppHandle, generation: u64, script: String, profile: VerifiedProfile) {
+    // 新会话必须等旧会话完成恢复；旧 generation 不能与新会话交叉操作进程。
+    let _session = SESSION.lock().await;
+    if generation_changed(&app, generation) {
+        return;
+    }
+    // 排队期间旧会话可能已恢复了另一个 PID，重新核实用户选定的 bundle/路径。
+    let profile = match verify_profile(profile.profile) {
+        Ok(profile) => profile,
+        Err(error) => {
+            fail_current_session(&app, generation, error);
+            return;
+        }
+    };
+    let launch_profile = profile.clone();
+    let started = tokio::task::spawn_blocking(move || launch_im_with_cdp(&launch_profile)).await;
+    let (browser_ws, child, port) = match started {
+        Ok(Ok(session)) => session,
+        Ok(Err(error)) => {
+            fail_current_session(&app, generation, error);
+            return;
+        }
+        Err(_) => {
+            fail_current_session(
+                &app,
+                generation,
+                "IM 启动任务异常，请手动检查目标应用".into(),
+            );
+            return;
+        }
+    };
+    crate::diag::push(&app, "目标 IM 已以调试模式启动，CDP 通道就绪");
+    let mut runtime = NativeSession {
+        profile,
+        child: Some(child),
+        port,
+    };
+    while !generation_changed(&app, generation) {
+        if runtime
+            .child
+            .as_mut()
+            .is_none_or(|child| child.try_wait().ok().flatten().is_some())
+        {
+            message_watch::cdp_set_error(&app, "目标 IM 已退出，自动接入结束".into());
             break;
         }
-        // 确保有一个「带调试端口」的目标 IM 在跑；没有或已退出则杀净后重启。
-        if current.is_none() || !im_running(&profile) {
-            if let Some((_, mut child)) = current.take() {
-                let _ = child.kill();
-            }
-            let app_blocking = app.clone();
-            let profile_blocking = profile.clone();
-            match tokio::task::spawn_blocking(move || {
-                launch_im_with_cdp(&app_blocking, &profile_blocking)
-            })
-            .await
-            {
-                Ok(Ok(endpoint)) => current = Some(endpoint),
-                Ok(Err(error)) => {
-                    message_watch::cdp_set_error(&app, error);
-                    if !sleep_interruptible(&app, generation, Duration::from_secs(3)).await {
-                        break;
-                    }
-                    continue;
-                }
-                Err(_) => break,
-            }
-        }
-
-        let browser_ws = current.as_ref().unwrap().0.clone();
         match cdp_session(&app, &browser_ws, &script, generation).await {
-            // 正常返回只发生在 generation 变化（toggle off / 被顶替）
             Ok(()) => break,
             Err(error) => {
-                message_watch::cdp_set_error(&app, error);
-                // 退避后重连：目标 IM 若仍在跑，下一轮直接复用同一 browser_ws（不重启）
+                if !generation_changed(&app, generation) {
+                    message_watch::cdp_set_error(&app, error);
+                }
                 if !sleep_interruptible(&app, generation, Duration::from_secs(2)).await {
                     break;
                 }
             }
         }
     }
-
-    if let Some((_, mut child)) = current.take() {
-        let _ = child.kill();
+    let cleanup = tokio::task::spawn_blocking(move || finish_session(&mut runtime)).await;
+    if !generation_changed(&app, generation) {
+        message_watch::cdp_end(&app);
     }
-    let app_cleanup = app.clone();
-    let profile_cleanup = profile.clone();
-    let _ = tokio::task::spawn_blocking(move || cleanup_im(&app_cleanup, &profile_cleanup)).await;
+    match cleanup {
+        Ok(Ok(())) => crate::diag::push(&app, "IM CDP 监听已关闭，已核验目标 IM 正常启动"),
+        Ok(Err(error)) => {
+            crate::diag::push(&app, "IM CDP 恢复失败，需要手动检查目标应用");
+            message_watch::cdp_set_error(&app, error);
+        }
+        Err(_) => message_watch::cdp_set_error(&app, "IM 恢复任务异常，需要手动检查".into()),
+    }
 }
 
 /// 可被 generation 变化打断的 sleep。返回 false 表示应当退出。
@@ -246,7 +307,18 @@ async fn cdp_session(
     for (method, params) in inject {
         id += 1;
         send_cmd(&mut write, id, method, params, Some(&session_id)).await?;
-        await_result(&mut read, id, app, generation, Some(&session_id), &mut write).await?;
+        await_result(
+            &mut read,
+            id,
+            app,
+            generation,
+            Some(&session_id),
+            &mut write,
+        )
+        .await?;
+    }
+    if generation_changed(app, generation) {
+        return Ok(());
     }
     message_watch::cdp_mark_connected(app);
     crate::diag::push(app, "IM CDP 桥已注入（只读脚本，未改已读、未发送）");
@@ -384,29 +456,144 @@ fn find_page_target(result: &Value) -> Option<String> {
 
 // ── 进程编排（同步，在 spawn_blocking 中调用）──
 
-/// 杀净目标 IM → 直起带调试端口 → 从 stderr 抓 `DevTools listening on ws://…`。
-fn launch_im_with_cdp(app: &AppHandle, profile: &ImProfile) -> Result<(String, Child), String> {
-    let port = pick_free_port()?;
-    kill_im(profile)?;
-    let mut child = spawn_im(profile, port)?;
-    let browser_ws = match await_browser_ws(&mut child, Duration::from_secs(15)) {
-        Ok(ws) => ws,
-        Err(error) => {
-            let _ = child.kill();
-            return Err(error);
-        }
-    };
-    crate::diag::push(app, "目标 IM 已以调试模式启动，CDP 通道就绪");
-    Ok((browser_ws, child))
+trait SessionRuntime {
+    fn stop_owned(&mut self) -> Result<(), String>;
+    fn restore_normal(&mut self) -> Result<(), String>;
 }
 
-/// 关闭时：杀净带端口实例，再以正常方式（无调试端口）恢复目标 IM。
-fn cleanup_im(app: &AppHandle, profile: &ImProfile) {
-    let _ = kill_im(profile);
-    let _ = Command::new("open")
-        .args(["-a", &profile.app_name])
-        .status();
-    crate::diag::push(app, "IM CDP 监听已关闭，已恢复目标 IM 正常启动");
+fn finish_session(runtime: &mut impl SessionRuntime) -> Result<(), String> {
+    runtime.stop_owned()?;
+    runtime.restore_normal()
+}
+
+struct NativeSession {
+    profile: VerifiedProfile,
+    child: Option<Child>,
+    port: u16,
+}
+
+impl SessionRuntime for NativeSession {
+    fn stop_owned(&mut self) -> Result<(), String> {
+        let Some(child) = self.child.as_mut() else {
+            return Ok(());
+        };
+        if child
+            .try_wait()
+            .map_err(|_| "读取本次 IM 进程状态失败")?
+            .is_some()
+        {
+            self.child.take();
+            return Ok(());
+        }
+        // Child 未被 wait 回收时 PID 不会重用。只请求本次主进程正常退出，不强杀 Helper。
+        if unsafe { libc::kill(child.id() as i32, libc::SIGTERM) } != 0 {
+            return Err("无法结束本次 IM 调试进程，请手动关闭".into());
+        }
+        if !wait_until(
+            || child.try_wait().ok().flatten().is_some(),
+            Duration::from_secs(8),
+        ) {
+            return Err("本次 IM 调试进程尚未退出，未启动恢复实例；请手动关闭".into());
+        }
+        self.child.take();
+        Ok(())
+    }
+
+    fn restore_normal(&mut self) -> Result<(), String> {
+        let address = std::net::SocketAddr::from(([127, 0, 0, 1], self.port));
+        if std::net::TcpStream::connect_timeout(&address, Duration::from_millis(200)).is_ok() {
+            return Err("本次调试端口仍可访问，未确认恢复；请手动关闭目标 IM".into());
+        }
+        if crate::focus::running_app_info_for_bundle(&self.profile.profile.bundle_id).is_some() {
+            return Err("检测到会话外启动的 IM，未操作该进程；请手动确认调试模式已关闭".into());
+        }
+        let status = Command::new("/usr/bin/open")
+            .arg(&self.profile.bundle_path)
+            .status()
+            .map_err(|_| "无法启动目标 IM 的正常模式")?;
+        if !status.success() {
+            return Err("目标 IM 正常启动命令失败".into());
+        }
+        if !wait_until(
+            || {
+                crate::focus::running_app_info_for_bundle(&self.profile.profile.bundle_id)
+                    .and_then(|info| process_identity(info.pid))
+                    .is_some_and(|identity| identity.bin_path == self.profile.initial.bin_path)
+            },
+            Duration::from_secs(8),
+        ) {
+            return Err("未能核验目标 IM 正常启动，请手动打开应用".into());
+        }
+        Ok(())
+    }
+}
+
+fn launch_im_with_cdp(profile: &VerifiedProfile) -> Result<(String, Child, u16), String> {
+    let port = pick_free_port()?;
+    terminate_confirmed(&profile.initial)?;
+    let mut runtime = NativeSession {
+        profile: profile.clone(),
+        child: None,
+        port,
+    };
+    let launch: Result<String, String> = (|| {
+        runtime.child = Some(spawn_im(&profile.profile, port)?);
+        let ws = await_browser_ws(runtime.child.as_mut().unwrap(), Duration::from_secs(15))?;
+        let endpoint = reqwest::Url::parse(&ws).map_err(|_| "IM 调试端点格式无效")?;
+        if endpoint.scheme() != "ws"
+            || endpoint.host_str() != Some("127.0.0.1")
+            || endpoint.port() != Some(port)
+        {
+            return Err("IM 调试端点与本次本机端口不匹配".into());
+        }
+        Ok(ws)
+    })();
+    match launch {
+        Ok(ws) => Ok((ws, runtime.child.take().unwrap(), port)),
+        Err(error) => match finish_session(&mut runtime) {
+            Ok(()) => Err(format!("{error}；已核验恢复正常启动")),
+            Err(recovery) => Err(format!("{error}；{recovery}")),
+        },
+    }
+}
+
+fn identity_matches(expected: &ProcessIdentity, current: Option<&ProcessIdentity>) -> bool {
+    current == Some(expected)
+}
+
+fn terminate_checked(
+    identity: &ProcessIdentity,
+    current: Option<&ProcessIdentity>,
+    terminate: impl FnOnce() -> bool,
+    wait_for_exit: impl FnOnce() -> bool,
+) -> Result<(), String> {
+    if !identity_matches(identity, current) {
+        return Err("目标 IM 进程身份已变化，未执行重启".into());
+    }
+    if !terminate() {
+        return Err("目标 IM 拒绝退出，请先保存工作并手动关闭".into());
+    }
+    if !wait_for_exit() {
+        return Err("目标 IM 尚未退出，未强制结束进程".into());
+    }
+    Ok(())
+}
+
+fn terminate_confirmed(identity: &ProcessIdentity) -> Result<(), String> {
+    let app =
+        objc2_app_kit::NSRunningApplication::runningApplicationWithProcessIdentifier(identity.pid)
+            .ok_or("目标 IM 已退出")?;
+    terminate_checked(
+        identity,
+        process_identity(identity.pid).as_ref(),
+        || app.terminate(),
+        || {
+            wait_until(
+                || !identity_matches(identity, process_identity(identity.pid).as_ref()),
+                Duration::from_secs(8),
+            )
+        },
+    )
 }
 
 fn pick_free_port() -> Result<u16, String> {
@@ -418,75 +605,10 @@ fn pick_free_port() -> Result<u16, String> {
         .map_err(|e| format!("读取端口失败：{e}"))
 }
 
-fn im_pids(pattern: &str) -> Vec<i32> {
-    Command::new("pgrep")
-        .args(["-f", pattern])
-        .output()
-        .ok()
-        .map(|out| {
-            String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .filter_map(|line| line.trim().parse::<i32>().ok())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn im_running(profile: &ImProfile) -> bool {
-    !im_pids(profile.main_pattern()).is_empty()
-}
-
-/// 单例锁是否已释放：SingletonLock 不存在，或其指向的 pid 已死。
-fn singleton_released(profile: &ImProfile) -> bool {
-    let lock = match profile.singleton_lock() {
-        Some(lock) => lock,
-        None => return true,
-    };
-    match std::fs::read_link(&lock) {
-        Err(_) => true,
-        Ok(target) => target
-            .to_string_lossy()
-            .rsplit('-')
-            .next()
-            .and_then(|pid| pid.parse::<i32>().ok())
-            .map(|pid| unsafe { libc::kill(pid, 0) } != 0)
-            .unwrap_or(true),
-    }
-}
-
-/// 优雅退出（SIGTERM 主进程避开 osascript 的 TCC 弹窗，Electron 正常 quit + 清 Singleton），
-/// osascript 兜底，再按可执行路径精确杀残留 Helper，最后核验单例锁释放。
-fn kill_im(profile: &ImProfile) -> Result<(), String> {
-    for pid in im_pids(profile.main_pattern()) {
-        unsafe {
-            libc::kill(pid, libc::SIGTERM);
-        }
-    }
-    if !wait_until(|| !im_running(profile), Duration::from_secs(8)) {
-        let _ = Command::new("osascript")
-            .args(["-e", &format!("quit app \"{}\"", profile.app_name)])
-            .output();
-        wait_until(|| !im_running(profile), Duration::from_secs(5));
-    }
-    let helpers = profile.helpers_pattern();
-    for pid in im_pids(&helpers) {
-        unsafe {
-            libc::kill(pid, libc::SIGKILL);
-        }
-    }
-    if wait_until(
-        || !im_running(profile) && singleton_released(profile),
-        Duration::from_secs(3),
-    ) {
-        Ok(())
-    } else {
-        Err("目标 IM 未能完全退出，单例锁可能残留".into())
-    }
-}
-
 fn spawn_im(profile: &ImProfile, port: u16) -> Result<Child, String> {
     Command::new(&profile.bin_path)
         .arg(format!("--remote-debugging-port={port}"))
+        .arg("--remote-debugging-address=127.0.0.1")
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
@@ -504,7 +626,11 @@ fn await_browser_ws(child: &mut Child, timeout: Duration) -> Result<String, Stri
         for line in reader.lines().map_while(Result::ok) {
             if !sent {
                 if let Some(idx) = line.find("ws://") {
-                    let ws = line[idx..].split_whitespace().next().unwrap_or("").to_string();
+                    let ws = line[idx..]
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("")
+                        .to_string();
                     if !ws.is_empty() {
                         let _ = tx.send(ws);
                         sent = true;
@@ -534,12 +660,120 @@ fn wait_until(mut cond: impl FnMut() -> bool, timeout: Duration) -> bool {
 mod tests {
     use super::*;
 
-    fn sample_profile() -> ImProfile {
-        ImProfile {
-            app_name: "Demo IM".into(),
-            bundle_id: "com.example.demo-im".into(),
-            bin_path: "/Applications/Demo IM.app/Contents/MacOS/Demo IM".into(),
+    #[derive(Default)]
+    struct FakeRuntime {
+        events: Vec<&'static str>,
+        stop_error: bool,
+        restore_error: bool,
+    }
+
+    impl SessionRuntime for FakeRuntime {
+        fn stop_owned(&mut self) -> Result<(), String> {
+            self.events.push("stop owned");
+            if self.stop_error {
+                Err("owned still running".into())
+            } else {
+                Ok(())
+            }
         }
+        fn restore_normal(&mut self) -> Result<(), String> {
+            self.events.push("restore and verify");
+            if self.restore_error {
+                Err("restore unverified".into())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn launch_failure_or_cancel_stops_owned_before_verified_restore() {
+        let mut runtime = FakeRuntime::default();
+        finish_session(&mut runtime).unwrap();
+        assert_eq!(runtime.events, ["stop owned", "restore and verify"]);
+    }
+
+    #[test]
+    fn owned_process_refusing_exit_does_not_launch_another_instance() {
+        let mut runtime = FakeRuntime {
+            stop_error: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            finish_session(&mut runtime).unwrap_err(),
+            "owned still running"
+        );
+        assert_eq!(runtime.events, ["stop owned"]);
+    }
+
+    #[test]
+    fn failed_restore_is_not_reported_as_success() {
+        let mut runtime = FakeRuntime {
+            restore_error: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            finish_session(&mut runtime).unwrap_err(),
+            "restore unverified"
+        );
+    }
+
+    #[test]
+    fn changed_pid_launch_time_bundle_or_path_is_never_terminated() {
+        let expected = ProcessIdentity {
+            pid: 42,
+            launched_at_ms: 123,
+            bundle_id: "example.im".into(),
+            bin_path: PathBuf::from("/Applications/IM.app/Contents/MacOS/IM"),
+        };
+        let mut changed = vec![expected.clone(); 4];
+        changed[0].pid += 1;
+        changed[1].launched_at_ms += 1;
+        changed[2].bundle_id = "another.app".into();
+        changed[3].bin_path = PathBuf::from("/tmp/untrusted");
+        for current in changed.iter().map(Some).chain(std::iter::once(None)) {
+            assert!(terminate_checked(
+                &expected,
+                current,
+                || panic!("must not signal an unconfirmed process"),
+                || panic!("must not wait on an unconfirmed process")
+            )
+            .is_err());
+        }
+        assert!(terminate_checked(&expected, Some(&expected), || true, || true).is_ok());
+        assert!(terminate_checked(
+            &expected,
+            Some(&expected),
+            || false,
+            || panic!("must not wait after rejected quit")
+        )
+        .is_err());
+        assert!(terminate_checked(&expected, Some(&expected), || true, || false).is_err());
+    }
+
+    #[tokio::test]
+    async fn rapid_reenable_waits_for_old_session_cleanup_before_new_start() {
+        use std::sync::{Arc, Mutex};
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let old_session = SESSION.lock().await;
+        let (queued, ready) = tokio::sync::oneshot::channel();
+        let new_events = events.clone();
+        let next = tokio::spawn(async move {
+            queued.send(()).unwrap();
+            let _session = SESSION.lock().await;
+            new_events.lock().unwrap().push("start new");
+        });
+        ready.await.unwrap();
+        assert!(events.lock().unwrap().is_empty());
+        let mut old = FakeRuntime::default();
+        finish_session(&mut old).unwrap();
+        events.lock().unwrap().extend(old.events);
+        drop(old_session);
+        next.await.unwrap();
+        assert_eq!(
+            *events.lock().unwrap(),
+            ["stop owned", "restore and verify", "start new"]
+        );
     }
 
     #[test]
@@ -549,14 +783,6 @@ mod tests {
         // 选出的端口应可再次 bind（确证空闲）
         let again = TcpListener::bind(("127.0.0.1", port));
         assert!(again.is_ok());
-    }
-
-    #[test]
-    fn derives_helpers_prefix_from_bin_path() {
-        assert_eq!(
-            sample_profile().helpers_pattern(),
-            "/Applications/Demo IM.app/Contents/Frameworks"
-        );
     }
 
     #[test]

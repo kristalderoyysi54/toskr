@@ -1,10 +1,12 @@
 import privacySource from "../../../src-tauri/src/privacy.rs?raw";
+import contextSource from "../../../src-tauri/src/privacy/context.rs?raw";
+import providerSource from "../../../src-tauri/src/privacy/providers.rs?raw";
 import { describe, expect, it } from "vitest";
 import { findingReason } from "./findingReason";
 
 describe("findingReason", () => {
   it("现有后端规则均有具体说明，新增规则时提醒补齐用户文案", () => {
-    const source = privacySource.split("#[cfg(test)]")[0];
+    const source = [privacySource, contextSource, providerSource].map((source) => source.split("#[cfg(test)]")[0]).join("\n");
     const ruleIds = [...source.matchAll(/"((?:credential|auth|token|contact|identity|financial|network|session)\.[a-z_]+)"/g)]
       .map((match) => match[1]);
     expect(ruleIds.length).toBeGreaterThan(30);

@@ -40,6 +40,7 @@ export interface OutcomeDailyPoint {
 export interface OutcomeMetrics {
   deliveryAttempts: number;
   sentCount: number;
+  /** 历史 sendSent 仅证明按键执行完成，不证明接收或业务提交。 */
   successRate: number | null;
   blockedReasons: Record<string, number>;
   failedReasons: Record<string, number>;

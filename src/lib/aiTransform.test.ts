@@ -281,6 +281,64 @@ describe("显式 AI 转换", () => {
     expect(useDeliveryStore.getState().transform.status).toBe("error");
   });
 
+  it.each([
+    {},
+    { goal: "需求" },
+    { goal: 123, scope: [], constraints: [], acceptance: [], openQuestions: [] },
+    { goal: " ", scope: [], constraints: [], acceptance: [], openQuestions: [] },
+    { goal: "需求", scope: "范围", constraints: [], acceptance: [], openQuestions: [] },
+    { goal: "需求", scope: [123], constraints: [], acceptance: [], openQuestions: [] },
+    { goal: "需求", scope: [], constraints: [null], acceptance: [], openQuestions: [] },
+    { goal: "需求", scope: [], constraints: [], acceptance: [" "], openQuestions: [] },
+    { goal: "需求", scope: [], constraints: [], acceptance: [], openQuestions: [{}] },
+    { goal: "需求", scope: [], constraints: [], acceptance: [], openQuestions: [], unexpected: true },
+    { goal: "字".repeat(4_001), scope: [], constraints: [], acceptance: [], openQuestions: [] },
+    { goal: "需求", scope: Array(51).fill("范围"), constraints: [], acceptance: [], openQuestions: [] },
+    { goal: "需求", scope: [], constraints: ["字".repeat(4_001)], acceptance: [], openQuestions: [] },
+  ])("结构化需求拒绝错误业务字段，保留原稿且不能应用候选 %#", async (output) => {
+    const before = useDeliveryStore.getState().draft;
+    await expect(runOpenDraftTransform("structure-requirements", {
+      startRequest: () => resolvedHandle(JSON.stringify(output)),
+    })).resolves.toBeNull();
+    expect(useDeliveryStore.getState().draft).toBe(before);
+    expect(useDeliveryStore.getState().transform).toMatchObject({ status: "error", result: null });
+    await expect(applyOpenDraftTransform()).resolves.toBe(false);
+  });
+
+  it("结构化字段上限内完整保留内容，不截断或改写", async () => {
+    const output = {
+      goal: "字".repeat(4_000),
+      scope: Array(50).fill("范围"),
+      constraints: ["字".repeat(4_000)],
+      acceptance: [],
+      openQuestions: [],
+    };
+    const result = await runOpenDraftTransform("structure-requirements", {
+      startRequest: () => resolvedHandle(JSON.stringify(output)),
+    });
+    expect(JSON.parse(result!.text)).toEqual(output);
+    expect(useDeliveryStore.getState().draft?.finalText).toBe("原始正文");
+  });
+
+  it("结构错误后可重试合法业务对象，应用及恢复仍保留原稿", async () => {
+    await runOpenDraftTransform("structure-requirements", {
+      startRequest: () => resolvedHandle('{}'),
+    });
+    const output = { goal: "整理需求", scope: ["资料"], constraints: [], acceptance: ["可恢复原文"], openQuestions: [] };
+    const text = JSON.stringify(output, null, 2);
+    await runOpenDraftTransform("structure-requirements", {
+      startRequest: () => resolvedHandle('```json\n' + JSON.stringify(output) + '\n```'),
+    });
+    expect(useDeliveryStore.getState().transform).toMatchObject({ status: "ready", result: { text } });
+    const scan = vi.fn(async (value: string): Promise<ScanSensitiveResult> => ({
+      ...cleanScan, inputUtf16: value.length, scannedUtf16: value.length,
+    }));
+    await expect(applyOpenDraftTransform(scan)).resolves.toBe(true);
+    expect(useDeliveryStore.getState().draft?.finalText).toBe(text);
+    await expect(restoreOpenDraftTransform(scan)).resolves.toBe(true);
+    expect(useDeliveryStore.getState().draft?.finalText).toBe("原始正文");
+  });
+
   it("同一 Draft 重复点击只发一次，并在调用前记录 provider/model/数据范围", async () => {
     const pending = deferredHandle("DeepSeek");
     const startRequest = vi.fn(() => pending.handle);

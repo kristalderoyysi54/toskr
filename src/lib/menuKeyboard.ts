@@ -1,7 +1,7 @@
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
 /** 菜单内按键不能同时操作底层卡片；Enter/Space 仍交给原生按钮激活。 */
-export function handleSimpleMenuKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+export function handleSimpleMenuKeyDown(event: Pick<ReactKeyboardEvent<HTMLDivElement>, "key" | "currentTarget" | "stopPropagation" | "preventDefault">) {
   event.stopPropagation();
   if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
   const items = Array.from(

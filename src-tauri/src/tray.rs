@@ -165,14 +165,6 @@ fn handle_menu(app: &AppHandle, id: &str) {
             } else {
                 crate::window::set_panel_auto_hide_armed(app, true, "托盘打开");
                 crate::window::request_show_panel(app);
-                let _ = app.emit_to(
-                    "main",
-                    TRIGGER_EVENT,
-                    TriggerPayload::Toggle {
-                        force: false,
-                        source: TriggerSource::Tray,
-                    },
-                );
             }
         }
         "fix-permission" => {

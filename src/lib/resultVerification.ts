@@ -1,3 +1,4 @@
+import { executionBaseline } from "@/lib/delivery/executionManifest";
 import { parseAiJson } from "@/lib/ai";
 import {
   AiError,
@@ -90,6 +91,9 @@ type VerificationSource =
 
 export interface ResultVerificationContext {
   resultNote: Note;
+  baselineKind?: "execution" | "current";
+  baselineImageCount?: number;
+  executionVersion?: string;
   sources: VerificationSource[];
   missingSourceIds: string[];
   sourceText: string;
@@ -112,11 +116,13 @@ function entityRevision(entity: object): number {
 }
 
 function sourceRevisionOf(context: ResultVerificationContext): string {
+  const availableVersion = executionBaseline(context.resultNote.provenance?.deliveryId ?? "", context.executionVersion)
+    ? context.executionVersion : "unavailable";
   const sources = context.sources.map((source) =>
     `${source.kind === "note" ? "n" : "t"}${entityRevision(source.entity)}`
   );
   const missing = context.missingSourceIds.map((_, index) => `m${index}`);
-  return `source:${[...sources, ...missing].join(",") || "none"}`;
+  return `source:${context.baselineKind}:${availableVersion}:${[...sources, ...missing].join(",") || "none"}`;
 }
 
 function resultRevisionOf(context: ResultVerificationContext): string {
@@ -158,11 +164,15 @@ export function buildVerificationContext(
   const sourceText = buildSendText(
     sources.map((source) => source.text.trim()).filter(Boolean)
   );
+  const baseline = executionBaseline(resultNote.provenance?.deliveryId ?? "", resultNote.provenance?.executionVersion);
   const context: ResultVerificationContext = {
+    baselineKind: baseline ? "execution" : "current",
+    baselineImageCount: baseline?.imageCount,
+    executionVersion: baseline ? resultNote.provenance?.executionVersion : undefined,
     resultNote,
     sources,
     missingSourceIds,
-    sourceText,
+    sourceText: baseline?.text ?? sourceText,
     resultText: resultNote.text,
     sourceRevision: "",
     resultRevision: "",
@@ -389,24 +399,31 @@ export function verifyResultDeterministically(
     );
   }
 
-  const sourceMissing = context.missingSourceIds.length > 0 || !context.sources.length;
+  const exactBaseline = context.baselineKind === "execution" && !!executionBaseline(
+    context.resultNote.provenance?.deliveryId ?? "", context.executionVersion, now
+  );
+  addCheck(checks, "source.execution-baseline", exactBaseline ? "pass" : "needsReview",
+    exactBaseline ? "参照本次交给原生执行的正文（不代表目标已接收）"
+      : "原投递正文基线不可用；当前来源仅供参考，不能证明与历史投递一致");
+  if (!exactBaseline) risks.push("未保留原投递正文或会话已过期，不能完成历史投递一致性核验");
+  const sourceMissing = !exactBaseline && (context.missingSourceIds.length > 0 || !context.sources.length);
   addCheck(
     checks,
     "source.references",
     sourceMissing ? "blocked" : "pass",
     sourceMissing
       ? `来源引用缺失 ${context.missingSourceIds.length || 1} 项`
-      : `当前来源 ${context.sources.length} 项均存在`
+      : exactBaseline ? "本次执行正文可用；不依赖当前来源重建" : `当前来源 ${context.sources.length} 项均存在`
   );
-  missing.push(...context.missingSourceIds.map((id) => `来源 ${id}`));
-  if (!context.sources.length && !context.missingSourceIds.length) missing.push("来源关联");
+  if (!exactBaseline) missing.push(...context.missingSourceIds.map((id) => `来源 ${id}`));
+  if (!exactBaseline && !context.sources.length && !context.missingSourceIds.length) missing.push("来源关联");
 
   const sourceTextMissing = context.sources.length > 0 && !context.sourceText.trim();
   addCheck(
     checks,
     "source.content",
     sourceTextMissing ? "blocked" : "pass",
-    sourceTextMissing ? "当前来源没有可核验文本" : "当前来源包含可核验文本"
+    sourceTextMissing ? "参照正文没有可核验文本" : "参照正文包含可核验文本"
   );
   if (sourceTextMissing) missing.push("来源文本");
 
@@ -420,7 +437,7 @@ export function verifyResultDeterministically(
   );
   if (sourceChanged) risks.push("来源版本已变化，请重新打开核验");
 
-  const sourceImageCount = context.sources.reduce((count, source) =>
+  const sourceImageCount = context.baselineImageCount ?? context.sources.reduce((count, source) =>
     count + (source.kind === "note" ? noteImages(source.entity).length : 0), 0);
   const resultImageCount = noteImages(context.resultNote).length;
   const hasImagesOutsideScope = sourceImageCount + resultImageCount > 0;
@@ -474,7 +491,10 @@ export async function prepareVerificationAiInput(
   context: ResultVerificationContext,
   scan: ScanSensitiveText = api.scanSensitiveText
 ): Promise<PreparedVerificationAiInput> {
-  if (!context.sourceText.trim() || !context.resultText.trim() || context.missingSourceIds.length) {
+  if (context.baselineKind === "execution" && !executionBaseline(
+    context.resultNote.provenance?.deliveryId ?? "", context.executionVersion
+  )) return { status: "blocked", reason: "本次执行正文已过期，请重新打开核验" };
+  if (!context.sourceText.trim() || !context.resultText.trim() || (context.baselineKind !== "execution" && context.missingSourceIds.length)) {
     return { status: "blocked", reason: "来源或结果不完整，不能调用 AI 核验" };
   }
   try {
@@ -615,7 +635,7 @@ function mergeVerificationReports(
   };
 }
 
-const VERIFICATION_SYSTEM = `你是结果核验助手。只比较提供的“当前来源”和“当前结果”，不得补造事实，不得宣称已发现全部错误，也不得替代人工审批。
+const VERIFICATION_SYSTEM = `你是结果核验助手。只比较提供的“参照正文”和“当前结果”；参照范围以 localChecks 中的 source.execution-baseline 为准，不得补造事实，不得宣称已发现全部错误，也不得替代人工审批。
 只输出 JSON，不要 Markdown 或解释。严格 schema：
 {"status":"pass|needsReview|blocked","checks":[{"id":string,"status":"pass|needsReview|blocked","message":string}],"missing":string[],"newAssumptions":string[],"risks":string[],"questions":string[]}`;
 
@@ -630,6 +650,7 @@ export async function runAiResultVerification(
   if (activeVerification.size > 0) return { status: "duplicate" };
   const requestId = (options.requestId ?? nextVerificationRequestId)();
   const handle = (options.startRequest ?? startAiRequest)({
+    purpose: "result-verification",
     system: VERIFICATION_SYSTEM,
     user: JSON.stringify({
       schemaVersion: 1,
@@ -731,6 +752,7 @@ export function resultVerifiedEvent(
     metricsEligible: delivery.metricsEligible !== false,
     metricsEpoch: delivery.metricsEpoch ?? 0,
     transformRecipeId: delivery.transformRecipeId ?? null,
+    ...(delivery.executionManifest ? { executionManifest: { ...delivery.executionManifest, parts: [...delivery.executionManifest.parts] } } : {}),
     ...(deliveryEventOutputMode(delivery)
       ? { format: delivery.format, markdownMode: delivery.markdownMode }
       : {}),

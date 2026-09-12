@@ -1,3 +1,5 @@
+import { captureExecutionManifest, executionBaseline } from "./delivery/executionManifest";
+import type { DeliveryDraft } from "./delivery/types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/store/persistStorage", () => ({
@@ -137,7 +139,8 @@ describe("result verification", () => {
       requiredJsonFields: ["answer", "items"],
       requiredSections: ["摘要"],
     }), 4_000);
-    expect(passed.status).toBe("pass");
+    expect(passed.status).toBe("needsReview");
+    expect(passed.checks.find((check) => check.id === "source.execution-baseline")?.status).toBe("needsReview");
     expect(passed.missing).toEqual([]);
 
     const failed = verifyResultDeterministically(
@@ -534,5 +537,33 @@ describe("result verification", () => {
       "verificationIssueCount", "verificationStatus",
     ].sort());
     expect(event).toMatchObject({ format: "code", markdownMode: "preserve" });
+  });
+});
+
+
+describe("实际执行正文基线", () => {
+  it("模板及脱敏后的正文不被后来来源改写，版本错误和过期均不可冒用", () => {
+    const now = Date.now();
+    const draft = {
+      id: "execution-test", finalText: "模板：[EMAIL_01]", promptSnippetId: "template-a",
+      imageFiles: [], segments: null,
+    } as unknown as DeliveryDraft;
+    const manifest = captureExecutionManifest(draft, now);
+    expect(JSON.stringify(manifest)).not.toContain(draft.finalText);
+    expect(manifest.parts).toEqual(["text"]);
+    const source = sourceNote();
+    const result = resultNote("这是与实际投递正文对照的完整回复 [EMAIL_01]，已经处理全部事项。");
+    result.provenance = { ...result.provenance!, deliveryId: draft.id, executionVersion: manifest.version };
+    const context = buildVerificationContext(result, [{ ...source, text: "后来修改的来源" }], []);
+    expect(context.sourceText).toBe(draft.finalText);
+    expect(context.baselineKind).toBe("execution");
+    const checked = verifyResultDeterministically(context, expectation(), now);
+    expect(checked.checks.find((check) => check.id === "source.execution-baseline")?.status).toBe("pass");
+    expect(executionBaseline("different-delivery", manifest.version, now)).toBeNull();
+    expect(executionBaseline(draft.id, manifest.version, now + 31 * 60 * 1000)).toBeNull();
+    const reopened = buildVerificationContext(result, [source], []);
+    expect(reopened.baselineKind).toBe("current");
+    expect(reopened.sourceText).toBe(source.text);
+    expect(isVerificationReportStale(checked, reopened)).toBe(true);
   });
 });

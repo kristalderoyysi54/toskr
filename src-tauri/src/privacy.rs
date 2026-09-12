@@ -12,7 +12,11 @@ pub const MAX_SCAN_INPUT_BYTES: usize = 2 * 1024 * 1024;
 /// Anthropic/npm/Telegram/JWT/PGP）与 .env 敏感字段行规则。
 // v3：标准占位符免于重复命中，补齐应用配置凭据与 OCR 字段关联。
 // v4：自定义敏感字段、短值预览全遮挡。
-pub const FIREWALL_RULE_VERSION: u32 = 4;
+// v5：自然语言密码、号码扩展、远程地址排除与精选供应商规则。
+pub const FIREWALL_RULE_VERSION: u32 = 5;
+
+mod context;
+mod providers;
 
 /// 配置只含字段名；请求内复用已编译规则，OCR 不逐块读盘。
 #[derive(Debug, Clone, Default)]
@@ -239,9 +243,11 @@ fn add_capture_candidates<F>(
         };
         // 必须在 trim_match 去掉右方括号之前识别完整占位符。
         // 允许尾随语法括号（兼容旧替换留下的 ]），但不允许夹带任何凭据字符。
-        let is_placeholder = if spec.rule_id == "token.custom_sensitive_field" {
+        let is_placeholder = if matches!(spec.rule_id, "token.custom_sensitive_field" | "credential.context_password") {
             // 自定义字段值可很短，也可含符号；只豁免完整占位符，不吞掉附加字符。
-            let raw_value = matched.as_str().trim_matches(['\'', '"']);
+            let raw_value = if spec.rule_id == "credential.context_password" {
+                context::unquote(matched.as_str())
+            } else { matched.as_str().trim_matches(['\'', '"']) };
             built_in_regex(&CUSTOM_REDACTION_PLACEHOLDER_RE, r"^\[[A-Z][A-Z0-9_]*_[0-9]{2,}\]$")
                 .is_match(raw_value)
         } else {
@@ -252,7 +258,12 @@ fn add_capture_candidates<F>(
         if is_placeholder {
             continue;
         }
-        let (start_byte, end_byte) = if spec.rule_id == "token.custom_sensitive_field" {
+        let (start_byte, end_byte) = if spec.rule_id == "credential.context_password" {
+            let raw = matched.as_str();
+            let value = context::unquote(raw);
+            let leading = usize::from(value.len() != raw.len());
+            (matched.start() + leading, matched.start() + leading + value.len())
+        } else if spec.rule_id == "token.custom_sensitive_field" {
             let value = matched.as_str().trim_matches(['\'', '"']);
             let leading = matched.as_str().len() - matched.as_str().trim_start_matches(['\'', '"']).len();
             (matched.start() + leading, matched.start() + leading + value.len())
@@ -349,6 +360,8 @@ fn env_secret(value: &str, _: usize, _: usize, _: &Captures<'_>) -> bool {
     if matches!(
         value.to_ascii_lowercase().as_str(),
         "placeholder"
+            | "required"
+            | "optional"
             | "changeme"
             | "change_me"
             | "your_password"
@@ -686,7 +699,8 @@ fn collect_candidates(text: &str) -> Vec<Candidate> {
             severity: FindingSeverity::Warn,
             rule_id: "contact.email",
         },
-        valid_email,
+        |value, start, end, captures| valid_email(value, start, end, captures)
+            && !context::email_is_remote_target(text, start, end),
         &mut candidates,
     );
     add_capture_candidates(
@@ -913,6 +927,8 @@ fn collect_candidates(text: &str) -> Vec<Candidate> {
             &mut candidates,
         );
     }
+    context::collect(text, &mut candidates);
+    providers::collect(text, &mut candidates);
     candidates
 }
 

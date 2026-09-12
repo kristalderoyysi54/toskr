@@ -243,6 +243,8 @@ export function RichNoteTextEditor({
   onTextSelectionChange,
 }: RichNoteTextEditorProps) {
   const firstTextRef = useRef<HTMLTextAreaElement>(null);
+  const composingRef = useRef(false);
+  const imeSelectionBlockedRef = useRef(false);
   const selectionActiveChangeRef = useRef(onSelectionActiveChange);
   selectionActiveChangeRef.current = onSelectionActiveChange;
   const textSelectionChangeRef = useRef(onTextSelectionChange);
@@ -267,7 +269,7 @@ export function RichNoteTextEditor({
       start: textarea.selectionStart,
       end: textarea.selectionEnd,
     };
-    if (selection.start === selection.end) {
+    if (composingRef.current || imeSelectionBlockedRef.current || selection.start === selection.end) {
       onSelectionActiveChange?.(false);
       onTextSelectionChange?.(null);
       return;
@@ -332,9 +334,23 @@ export function RichNoteTextEditor({
             }
             onSelect={(event) => syncTextSelection(event.currentTarget)}
             onScroll={(event) => syncTextSelection(event.currentTarget)}
-            onPointerDown={() => setSelectedImageBlock(null)}
+            onCompositionStart={(event) => {
+              composingRef.current = true;
+              imeSelectionBlockedRef.current = true;
+              syncTextSelection(event.currentTarget);
+            }}
+            onCompositionEnd={() => {
+              composingRef.current = false;
+              // 上屏后的延迟 select 不算用户选择，等下一次鼠标/键盘操作。
+            }}
+            onPointerDown={() => {
+              if (!composingRef.current) imeSelectionBlockedRef.current = false;
+              setSelectedImageBlock(null);
+            }}
             onKeyDown={(event) => {
               event.stopPropagation();
+              if (event.nativeEvent.isComposing || composingRef.current || event.keyCode === 229) return;
+              imeSelectionBlockedRef.current = false;
               if (event.key === "Enter" && event.metaKey) {
                 event.preventDefault();
                 onSave();

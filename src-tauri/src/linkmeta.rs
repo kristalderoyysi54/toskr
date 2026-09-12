@@ -1,7 +1,4 @@
-//! 链接元数据抓取：curl 拉 HTML，手写轻量解析 og:title / <title> / <link rel=icon>。
-//!
-//! 不引入 HTTP/HTML 解析依赖：macOS 自带 curl（TLS/重定向/压缩全代劳），
-//! 解析目标只有三个固定模式，字符串扫描足够且可单测。
+//! 链接元数据抓取：统一受限网络通道，轻量解析标题与图标。
 //! 索引技巧：to_ascii_lowercase 不改变字节布局，lower 串上定位、原串上取值。
 
 use serde::Serialize;
@@ -17,41 +14,27 @@ pub struct LinkMeta {
 pub(crate) const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15";
 
 #[tauri::command]
-pub async fn fetch_link_meta(url: String) -> Result<LinkMeta, String> {
-    if !(url.starts_with("http://") || url.starts_with("https://")) {
-        return Err("仅支持 http(s) 链接".into());
-    }
-    tauri::async_runtime::spawn_blocking(move || fetch_blocking(&url))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-fn fetch_blocking(url: &str) -> Result<LinkMeta, String> {
-    let out = std::process::Command::new("curl")
-        .args([
-            "-sL",
-            "--compressed",
-            "--max-time",
-            "6",
-            "--max-filesize",
-            "3145728",
-            "-A",
-            UA,
-            // \x01 分隔正文与重定向后的最终 URL（icon 相对路径要基于它绝对化）
-            "-w",
-            "\u{1}%{url_effective}",
-            "--",
-            url,
-        ])
-        .output()
-        .map_err(|e| format!("curl 启动失败: {e}"))?;
-    let raw = String::from_utf8_lossy(&out.stdout);
-    let (body, effective) = raw.rsplit_once('\u{1}').unwrap_or((raw.as_ref(), url));
-    let effective = if effective.starts_with("http") { effective } else { url };
-    if body.trim().is_empty() {
-        return Err("页面为空或抓取失败".into());
-    }
-    Ok(extract_meta(body, effective))
+pub async fn fetch_link_meta(window: tauri::WebviewWindow, url: String, manual: Option<bool>) -> Result<LinkMeta, String> {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+    let parsed = crate::preview_network::parse_url(&url)?;
+    let origin = parsed.origin().ascii_serialization();
+    let private_origin = if manual == Some(true) {
+        let (send, receive) = tokio::sync::oneshot::channel();
+        window.dialog().message(format!("本次将访问 {origin} 获取标题和图标，允许此地址访问内网。不会发送应用中的其他内容；授权不覆盖其他内网地址的重定向。"))
+            .title("确认获取链接预览")
+            .buttons(MessageDialogButtons::OkCancelCustom("仅本次允许".into(), "取消".into()))
+            .parent(&window).show(move |approved| { let _ = send.send(approved); });
+        if !receive.await.unwrap_or(false) { return Err("已取消获取预览".into()); }
+        Some(origin.as_str())
+    } else { None };
+    let (bytes, effective) = crate::preview_network::fetch(&url, 3 * 1024 * 1024, private_origin).await?;
+    let mut meta = extract_meta(&String::from_utf8_lossy(&bytes), effective.as_str());
+    // WebView 只收到有界栅格图标，不直接访问 HTML 声明的远程 URL。
+    meta.icon = match meta.icon {
+        Some(icon) => crate::favicon::icon_data_url(&icon, private_origin).await.ok(),
+        None => None,
+    };
+    Ok(meta)
 }
 
 /// 从 HTML 提取标题与图标（纯函数）。

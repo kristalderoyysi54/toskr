@@ -49,7 +49,7 @@ describe("looksLikeMarkdown", () => {
   });
 });
 
-import { toggleTaskListItem } from "./markdown";
+import { parseMarkdownTasks, toggleTaskListItem } from "./markdown";
 
 describe("toggleTaskListItem", () => {
   const doc = "标题\n- [ ] 第一项\n- [x] 第二项\n```\n- [ ] 代码里的不算\n```\n- [ ] 第三项";
@@ -70,5 +70,48 @@ describe("toggleTaskListItem", () => {
   it("缩进与编号列表形式的任务项同样可切换", () => {
     expect(toggleTaskListItem("  - [ ] 缩进项", 0)).toBe("  - [x] 缩进项");
     expect(toggleTaskListItem("1. [x] 编号任务", 0)).toBe("1. [ ] 编号任务");
+  });
+});
+
+
+describe("Markdown 渲染任务与源码位置一致", () => {
+  const cases = [
+    ["波浪号围栏", "~~~md\n- [ ] 示例\n~~~\n\n- [ ] 真实"],
+    ["不等长围栏", "````md\n```\n- [ ] 示例\n```\n````\n\n- [ ] 真实"],
+    ["引用中的围栏", "> ~~~\n> - [ ] 示例\n> ~~~\n>\n> - [ ] 真实"],
+    ["缩进代码", "    - [ ] 示例\n\n- [ ] 真实"],
+    ["原始 HTML checkbox", '<ul><li><input type="checkbox">示例</li></ul>\n\n- [ ] 真实'],
+    ["CRLF", "~~~\r\n- [ ] 示例\r\n~~~\r\n\r\n- [ ] 真实\r\n"],
+  ];
+  it.each(cases)("%s 只修改真实任务的一个字符", (_, source) => {
+    const parsed = parseMarkdownTasks(source);
+    expect(parsed.positions).toHaveLength(1);
+    expect([...parsed.indices.values()]).toEqual([0]);
+    expect(toggleTaskListItem(source, 0)).toBe(source.replace("[ ] 真实", "[x] 真实"));
+    expect(toggleTaskListItem(source, 1)).toBeNull();
+  });
+
+  it("引用和嵌套任务按渲染顺序修改，代码示例不占索引", () => {
+    const source = "> - [ ] 引用\n>   - [x] 子项\n\n- [ ] 外层\n  ~~~\n  - [ ] 示例\n  ~~~\n  - [ ] 内层";
+    const parsed = parseMarkdownTasks(source);
+    expect(parsed.positions).toHaveLength(4);
+    expect([...parsed.indices.values()]).toEqual([0, 1, 2, 3]);
+    for (const [index, name] of ["引用", "子项", "外层", "内层"].entries()) {
+      const before = name === "子项" ? "[x] 子项" : `[ ] ${name}`;
+      const after = name === "子项" ? "[ ] 子项" : `[x] ${name}`;
+      expect(toggleTaskListItem(source, index)).toBe(source.replace(before, after));
+    }
+  });
+
+  it("空行分隔的松散列表也映射到真正的 checkbox token", () => {
+    const source = "- [ ] 第一项\n\n- [x] 第二项";
+    const parsed = parseMarkdownTasks(source);
+    expect([...parsed.indices.values()]).toEqual([0, 1]);
+    expect(toggleTaskListItem(source, 1)).toBe("- [ ] 第一项\n\n- [ ] 第二项");
+  });
+
+  it("重复文本不会把引用中的任务定位到前面的代码示例", () => {
+    const source = "~~~\n- [ ] 相同\n~~~\n\n> - [ ] 相同";
+    expect(toggleTaskListItem(source, 0)).toBe("~~~\n- [ ] 相同\n~~~\n\n> - [x] 相同");
   });
 });

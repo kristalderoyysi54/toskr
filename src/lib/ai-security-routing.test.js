@@ -21,7 +21,7 @@ describe("AI secret and transport architecture", () => {
     const tauri = source("./tauri.ts");
     const sync = source("./settingsSync.ts");
     expect(store).not.toMatch(/aiApiKey:\s*string/);
-    expect(tauri).toContain('invoke<string>("ai_chat", { baseUrl, model, system, user, maxTokens })');
+    expect(tauri).toContain('invoke<string>("ai_chat", { requestId, request: { baseUrl, model, system, user, maxTokens, purpose } })');
     expect(tauri).not.toMatch(/aiChat:[\s\S]{0,250}apiKey/);
     expect(sync).toContain("withoutLegacyAiApiKey(useNotesStore.getState().settings)");
   });

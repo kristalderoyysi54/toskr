@@ -1427,6 +1427,57 @@ describe("notesStore 基础", () => {
     );
   });
 
+  it("moveClipsToNotes 指定分类：批量移入目标分组，撤销恢复完整卡片及原顺序", () => {
+    const s = useNotesStore.getState();
+    const sectionId = s.ensureSection("工作");
+    s.addClipNote("剪贴 A", {});
+    s.addClipNote("剪贴 B", {});
+    s.addNote("原有笔记");
+    const clipIds = useNotesStore.getState().notes
+      .filter((note) => note.sectionId === CLIPBOARD_ID)
+      .map((note) => note.id);
+    s.setDone(clipIds, true);
+    s.toggleNoteKeep(clipIds[0]);
+    const before = useNotesStore.getState().notes;
+    s.setChecked(before.map((note) => note.id));
+
+    expect(s.moveClipsToNotes(before.map((note) => note.id), sectionId)).toBe(2);
+
+    const moved = useNotesStore.getState().notes;
+    for (const id of clipIds) {
+      expect(moved.find((note) => note.id === id)).toMatchObject({
+        sectionId,
+        done: false,
+        keep: false,
+      });
+    }
+    expect(moved[0]).toBe(before[0]);
+    expect(useNotesStore.getState().checkedIds).toEqual([before[0].id]);
+    expect(s.undo()).toBe("移入笔记 2 条");
+    expect(useNotesStore.getState().notes).toEqual(before);
+  });
+
+  it.each([CLIPBOARD_ID, SECRET_ID, "deleted-section"])(
+    "moveClipsToNotes 拒绝无效目标 %s，保留卡片、勾选与撤销栈",
+    (sectionId) => {
+      const s = useNotesStore.getState();
+      s.addClipNote("待归类剪贴", {});
+      useNotesStore.setState({
+        sections: [...useNotesStore.getState().sections, { id: SECRET_ID, name: "秘文" }],
+      });
+      const clip = useNotesStore.getState().notes[0];
+      s.setChecked([clip.id]);
+      s.snapshot("先前操作");
+      const before = useNotesStore.getState();
+
+      expect(s.moveClipsToNotes([clip.id], sectionId)).toBe(0);
+
+      expect(useNotesStore.getState().notes).toBe(before.notes);
+      expect(useNotesStore.getState().checkedIds).toBe(before.checkedIds);
+      expect(useNotesStore.getState().undoStack).toBe(before.undoStack);
+    }
+  );
+
   it("reorderNotes 在数组内移动", () => {
     const s = useNotesStore.getState();
     s.addNote("一");

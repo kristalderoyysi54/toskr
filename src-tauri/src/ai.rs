@@ -4,12 +4,18 @@
 //! 进程参数或诊断日志。HTTP 使用进程内 reqwest；远端只允许 HTTPS，HTTP 仅允许
 //! 精确 loopback。响应错误只返回状态级信息，不回显 provider body。
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::privacy::{CustomSensitiveRules, FindingCategory, ScanSensitiveRequest};
 use reqwest::redirect::Policy;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
+use sha2::{Digest, Sha256};
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tokio::sync::watch;
 use url::{Host, Url};
 
 const AI_KEY_STATUS_EVENT: &str = "toskr://ai-key-status";
@@ -18,6 +24,362 @@ const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 
 static KEYCHAIN_LOCK: Mutex<()> = Mutex::new(());
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+struct AiRequestState {
+    owner: String,
+    cancel: watch::Sender<bool>,
+    phase: AiRequestPhase,
+    created: Instant,
+}
+
+enum AiRequestPhase {
+    Prepared,
+    Authorizing,
+    Authorized(AiGrant),
+    Running,
+}
+
+struct AiGrant {
+    binding: AiBinding,
+    issued: Instant,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AiBinding {
+    endpoint: String,
+    purpose: AiPurpose,
+    payload_hash: [u8; 32],
+    policy_hash: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AiPurpose {
+    CreateTask,
+    SplitSubtasks,
+    NoteToTask,
+    SuggestTitle,
+    TestConnection,
+    MessageDraft,
+    ResultVerification,
+    Summarize,
+    ExtractActions,
+    ImprovePrompt,
+    StructureRequirements,
+}
+
+impl AiPurpose {
+    fn label(self) -> &'static str {
+        match self {
+            Self::CreateTask => "创建任务",
+            Self::SplitSubtasks => "拆解子任务",
+            Self::NoteToTask => "笔记转任务",
+            Self::SuggestTitle => "生成标题",
+            Self::TestConnection => "测试 AI 连接",
+            Self::MessageDraft => "生成消息回复",
+            Self::ResultVerification => "结果核验",
+            Self::Summarize => "总结要点",
+            Self::ExtractActions => "提取行动项",
+            Self::ImprovePrompt => "优化 Prompt",
+            Self::StructureRequirements => "结构化需求",
+        }
+    }
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AiPayload {
+    base_url: String,
+    model: String,
+    system: String,
+    user: String,
+    max_tokens: u32,
+    purpose: AiPurpose,
+}
+
+fn ai_binding(payload: &AiPayload, rules: &CustomSensitiveRules) -> Result<AiBinding, String> {
+    if payload.system.len() > crate::privacy::MAX_SCAN_INPUT_BYTES
+        || payload.user.len() > crate::privacy::MAX_SCAN_INPUT_BYTES
+    {
+        return Err("AI 请求超过隐私检查上限，未发送".into());
+    }
+    let endpoint = build_ai_endpoint(&payload.base_url, "v1/chat/completions")?;
+    let payload_bytes = serde_json::to_vec(&(
+        &payload.model,
+        &payload.system,
+        &payload.user,
+        payload.max_tokens,
+    ))
+    .map_err(|_| "无法核验 AI 请求")?;
+    let policy_bytes =
+        serde_json::to_vec(&(1u32, crate::privacy::FIREWALL_RULE_VERSION, &rules.fields))
+            .map_err(|_| "无法核验 AI 隐私规则")?;
+    Ok(AiBinding {
+        endpoint: endpoint.to_string(),
+        purpose: payload.purpose,
+        payload_hash: Sha256::digest(payload_bytes).into(),
+        policy_hash: Sha256::digest(policy_bytes).into(),
+    })
+}
+
+fn ai_sensitive_summary(
+    payload: &AiPayload,
+    rules: &CustomSensitiveRules,
+) -> Result<Vec<String>, String> {
+    let mut counts = std::collections::BTreeMap::<&str, usize>::new();
+    for text in [&payload.system, &payload.user] {
+        let scan = crate::privacy::scan_sensitive_text_with_rules(
+            ScanSensitiveRequest { text: text.clone() },
+            rules,
+        );
+        if !scan.complete || !scan.warnings.is_empty() {
+            return Err("隐私检查未完整覆盖 AI 请求，未发送".into());
+        }
+        for finding in scan.findings {
+            let label = match finding.category {
+                FindingCategory::PrivateKey => "私钥",
+                FindingCategory::Authorization => "授权凭据",
+                FindingCategory::ApiKey => "密钥或敏感字段",
+                FindingCategory::DatabaseUrl => "数据库地址",
+                FindingCategory::Email => "邮箱",
+                FindingCategory::Phone => "电话号码",
+                FindingCategory::NationalId => "身份证号",
+                FindingCategory::BankCard => "银行卡号",
+                FindingCategory::IpAddress => "IP 地址",
+                FindingCategory::Cookie => "Cookie",
+                FindingCategory::Session => "会话标识",
+            };
+            *counts.entry(label).or_default() += 1;
+        }
+    }
+    Ok(counts
+        .into_iter()
+        .map(|(label, count)| format!("{label} {count} 处"))
+        .collect())
+}
+
+#[derive(Default)]
+struct AiRequests {
+    sequence: AtomicU64,
+    entries: Mutex<HashMap<String, AiRequestState>>,
+}
+
+static AI_REQUESTS: OnceLock<AiRequests> = OnceLock::new();
+
+impl AiRequests {
+    fn prepare(&self, owner: &str) -> Result<String, String> {
+        let mut entries = self.entries.lock().map_err(|_| "AI 请求状态不可用")?;
+        entries.retain(|_, entry| {
+            matches!(entry.phase, AiRequestPhase::Running)
+                || entry.created.elapsed() < Duration::from_secs(60)
+        });
+        if entries.len() >= 64 {
+            return Err("AI 请求过多，请稍后重试".into());
+        }
+        let id = format!("ai-{}", self.sequence.fetch_add(1, Ordering::Relaxed));
+        let (cancel, _) = watch::channel(false);
+        entries.insert(
+            id.clone(),
+            AiRequestState {
+                owner: owner.to_string(),
+                cancel,
+                phase: AiRequestPhase::Prepared,
+                created: Instant::now(),
+            },
+        );
+        Ok(id)
+    }
+
+    fn begin_authorization(&self, owner: &str, id: &str) -> Result<watch::Receiver<bool>, String> {
+        let mut entries = self.entries.lock().map_err(|_| "AI 请求状态不可用")?;
+        let entry = entries.get_mut(id).ok_or("AI 请求已取消或失效")?;
+        if entry.owner != owner
+            || !matches!(entry.phase, AiRequestPhase::Prepared)
+            || entry.created.elapsed() >= Duration::from_secs(60)
+        {
+            return Err("AI 请求已取消或失效".into());
+        }
+        entry.phase = AiRequestPhase::Authorizing;
+        Ok(entry.cancel.subscribe())
+    }
+
+    fn authorize(&self, owner: &str, id: &str, binding: AiBinding) -> Result<(), String> {
+        let mut entries = self.entries.lock().map_err(|_| "AI 请求状态不可用")?;
+        let entry = entries.get_mut(id).ok_or("AI 请求已取消或失效")?;
+        if entry.owner != owner || !matches!(entry.phase, AiRequestPhase::Authorizing) {
+            return Err("AI 请求已取消或失效".into());
+        }
+        entry.phase = AiRequestPhase::Authorized(AiGrant {
+            binding,
+            issued: Instant::now(),
+        });
+        Ok(())
+    }
+
+    fn start(
+        &self,
+        owner: &str,
+        id: &str,
+        binding: &AiBinding,
+    ) -> Result<watch::Receiver<bool>, String> {
+        let mut entries = self.entries.lock().map_err(|_| "AI 请求状态不可用")?;
+        let entry = entries.get_mut(id).ok_or("AI 请求已取消或失效")?;
+        if entry.owner != owner {
+            return Err("AI 请求窗口不匹配".into());
+        }
+        if !matches!(entry.phase, AiRequestPhase::Authorized(_)) {
+            return Err("AI 请求缺少本次隐私授权".into());
+        }
+        let AiRequestPhase::Authorized(grant) =
+            std::mem::replace(&mut entry.phase, AiRequestPhase::Running)
+        else {
+            unreachable!()
+        };
+        if &grant.binding != binding || grant.issued.elapsed() >= Duration::from_secs(60) {
+            entries.remove(id);
+            return Err("AI 内容、服务或隐私规则已变化，请重新确认".into());
+        }
+        Ok(entry.cancel.subscribe())
+    }
+
+    fn cancel(&self, owner: &str, id: &str) -> Result<(), String> {
+        let mut entries = self.entries.lock().map_err(|_| "AI 请求状态不可用")?;
+        if let Some(entry) = entries.get(id) {
+            if entry.owner != owner {
+                return Err("不能取消其他窗口的 AI 请求".into());
+            }
+            entry.cancel.send_replace(true);
+            entries.remove(id);
+        }
+        Ok(())
+    }
+
+    fn finish(&self, id: &str) {
+        if let Ok(mut entries) = self.entries.lock() {
+            entries.remove(id);
+        }
+    }
+}
+
+fn ai_requests() -> &'static AiRequests {
+    AI_REQUESTS.get_or_init(AiRequests::default)
+}
+
+/// 先登记再提交，保证取消早于 ai_chat 调度时也不会开始网络请求。
+#[tauri::command]
+pub fn begin_ai_request(window: WebviewWindow) -> Result<String, String> {
+    ai_requests().prepare(window.label())
+}
+
+#[tauri::command]
+pub fn cancel_ai_request(window: WebviewWindow, request_id: String) -> Result<(), String> {
+    ai_requests().cancel(window.label(), &request_id)
+}
+
+async fn authorize_payload(
+    requests: &AiRequests,
+    owner: &str,
+    id: &str,
+    payload: &AiPayload,
+    rules: &CustomSensitiveRules,
+    confirm: impl FnOnce(String) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>,
+) -> Result<(), String> {
+    let cancel = requests.begin_authorization(owner, id)?;
+    let result = run_cancellable(cancel, async {
+        let binding = ai_binding(payload, rules)?;
+        let summary = ai_sensitive_summary(payload, rules)?;
+        if !summary.is_empty() {
+            let message = format!(
+                "用途：{}\nAI 服务：{}\n\n原文包含：{}。\n这些敏感内容将发送给上述 AI 服务。此前向其他应用保留原文的决定不适用于本次 AI 请求。\n\n是否仅允许本次发送？",
+                payload.purpose.label(), binding.endpoint, summary.join("、")
+            );
+            if !confirm(message).await {
+                return Err("已取消向 AI 发送敏感原文".into());
+            }
+        }
+        requests.authorize(owner, id, binding)
+    }).await;
+    if result.is_err() {
+        requests.finish(id);
+    }
+    result
+}
+
+#[tauri::command]
+pub async fn authorize_ai_request(
+    window: WebviewWindow,
+    request_id: String,
+    request: AiPayload,
+) -> Result<(), String> {
+    let rules = crate::privacy::load_custom_rules(window.app_handle())?;
+    let owner = window.label().to_string();
+    authorize_payload(
+        ai_requests(),
+        &owner,
+        &request_id,
+        &request,
+        &rules,
+        |message| {
+            Box::pin(async move {
+                let (send, receive) = tokio::sync::oneshot::channel();
+                window
+                    .dialog()
+                    .message(message)
+                    .title("确认 AI 敏感内容外发")
+                    .kind(MessageDialogKind::Warning)
+                    .buttons(MessageDialogButtons::OkCancelCustom(
+                        "仅本次发送原文".into(),
+                        "取消".into(),
+                    ))
+                    .parent(&window)
+                    .show(move |approved| {
+                        let _ = send.send(approved);
+                    });
+                receive.await.unwrap_or(false)
+            })
+        },
+    )
+    .await
+}
+
+async fn run_cancellable<T>(
+    mut cancel: watch::Receiver<bool>,
+    operation: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    if *cancel.borrow() {
+        return Err("AI 请求已取消".into());
+    }
+    tokio::select! {
+        biased;
+        _ = cancel.changed() => Err("AI 请求已取消".into()),
+        result = operation => result,
+    }
+}
+
+async fn run_authorized<T>(
+    requests: &AiRequests,
+    owner: &str,
+    id: &str,
+    payload: &AiPayload,
+    rules: &CustomSensitiveRules,
+    operation: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    let binding = ai_binding(payload, rules)?;
+    let cancel = requests.start(owner, id, &binding)?;
+    let _cleanup = AiRequestCleanup { requests, id };
+    run_cancellable(cancel, operation).await
+}
+
+struct AiRequestCleanup<'a> {
+    requests: &'a AiRequests,
+    id: &'a str,
+}
+
+impl Drop for AiRequestCleanup<'_> {
+    fn drop(&mut self) {
+        self.requests.finish(self.id);
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,7 +409,9 @@ static KEY_CACHE: Mutex<Option<StoredAiKey>> = Mutex::new(None);
 #[cfg(target_os = "macos")]
 impl AiKeyStore for SystemAiKeyStore {
     fn load(&self) -> Result<Option<StoredAiKey>, String> {
-        let mut cache = KEY_CACHE.lock().map_err(|_| "AI 密钥缓存暂不可用".to_string())?;
+        let mut cache = KEY_CACHE
+            .lock()
+            .map_err(|_| "AI 密钥缓存暂不可用".to_string())?;
         if let Some(record) = cache.as_ref() {
             return Ok(Some(record.clone()));
         }
@@ -63,7 +427,9 @@ impl AiKeyStore for SystemAiKeyStore {
         let encoded = serde_json::to_vec(record).map_err(|_| "无法编码 AI 密钥记录".to_string())?;
         crate::keychain_broker::store(crate::keychain_broker::Slot::Ai, &encoded)
             .map_err(|error| error.to_string())?;
-        *KEY_CACHE.lock().map_err(|_| "AI 密钥缓存暂不可用".to_string())? = Some(record.clone());
+        *KEY_CACHE
+            .lock()
+            .map_err(|_| "AI 密钥缓存暂不可用".to_string())? = Some(record.clone());
         Ok(())
     }
 }
@@ -330,28 +696,42 @@ async fn send_get(endpoint: Url, key: &str) -> Result<Vec<u8>, String> {
 /// 通用对话补全。前端只传 endpoint/model/content；key 在 Rust 内从 Keychain 读取。
 #[tauri::command]
 pub async fn ai_chat(
-    base_url: String,
-    model: String,
-    system: String,
-    user: String,
-    max_tokens: u32,
+    window: WebviewWindow,
+    request_id: String,
+    request: AiPayload,
 ) -> Result<String, String> {
-    let endpoint = build_ai_endpoint(&base_url, "v1/chat/completions")?;
-    let key = tauri::async_runtime::spawn_blocking(configured_key)
-        .await
-        .map_err(|_| "AI 密钥读取任务失败".to_string())??;
-    let body = serde_json::json!({
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "max_tokens": max_tokens.clamp(50, 4000),
-        "temperature": 0.3,
-        "stream": false,
-    });
-    let response = send_json(endpoint, &key, body).await?;
-    extract_content(&response)
+    let rules = crate::privacy::load_custom_rules(window.app_handle())?;
+    let binding = ai_binding(&request, &rules)?;
+    let app = window.app_handle().clone();
+    run_authorized(
+        ai_requests(),
+        window.label(),
+        &request_id,
+        &request,
+        &rules,
+        async {
+            let endpoint = build_ai_endpoint(&request.base_url, "v1/chat/completions")?;
+            let key = tauri::async_runtime::spawn_blocking(configured_key)
+                .await
+                .map_err(|_| "AI 密钥读取任务失败".to_string())??;
+            if ai_binding(&request, &crate::privacy::load_custom_rules(&app)?)? != binding {
+                return Err("AI 隐私规则已变化，请重新确认".into());
+            }
+            let body = serde_json::json!({
+                "model": request.model,
+                "messages": [
+                    {"role": "system", "content": request.system},
+                    {"role": "user", "content": request.user},
+                ],
+                "max_tokens": request.max_tokens.clamp(50, 4000),
+                "temperature": 0.3,
+                "stream": false,
+            });
+            let response = send_json(endpoint, &key, body).await?;
+            extract_content(&response)
+        },
+    )
+    .await
 }
 
 /// 列出可用模型（GET /v1/models）。
@@ -404,6 +784,324 @@ fn extract_content(body: &[u8]) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_payload() -> AiPayload {
+        AiPayload {
+            base_url: "https://api.example.test".into(),
+            model: "test".into(),
+            system: "system".into(),
+            user: "public content".into(),
+            max_tokens: 300,
+            purpose: AiPurpose::Summarize,
+        }
+    }
+
+    fn test_binding() -> AiBinding {
+        ai_binding(&test_payload(), &CustomSensitiveRules::default()).unwrap()
+    }
+
+    fn authorized_request(requests: &AiRequests, owner: &str) -> String {
+        let id = requests.prepare(owner).unwrap();
+        requests.begin_authorization(owner, &id).unwrap();
+        requests.authorize(owner, &id, test_binding()).unwrap();
+        id
+    }
+
+    #[tokio::test]
+    async fn sensitive_payload_needs_independent_native_approval_before_any_transport() {
+        let requests = AiRequests::default();
+        let mut payload = test_payload();
+        payload.user = "Authorization: Bearer abcdefghijklmnop".into();
+        let rules = CustomSensitiveRules::default();
+        let id = requests.prepare("main").unwrap();
+        let sends = AtomicU64::new(0);
+        let denied = run_authorized(&requests, "main", &id, &payload, &rules, async {
+            sends.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        })
+        .await;
+        assert!(denied.is_err());
+        let confirmation_count = AtomicU64::new(0);
+        let approval = authorize_payload(&requests, "main", &id, &payload, &rules, |message| {
+            confirmation_count.fetch_add(1, Ordering::Relaxed);
+            assert!(message.contains("https://api.example.test/v1/chat/completions"));
+            assert!(message.contains("总结要点"));
+            assert!(message.contains("授权凭据"));
+            assert!(!message.contains("abcdefghijklmnop"));
+            Box::pin(async { false })
+        })
+        .await;
+        assert!(approval.is_err());
+        assert!(
+            run_authorized(&requests, "main", &id, &payload, &rules, async {
+                sends.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            })
+            .await
+            .is_err()
+        );
+        assert_eq!(confirmation_count.load(Ordering::Relaxed), 1);
+        assert_eq!(sends.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn native_approval_is_single_use_and_all_binding_changes_reject_transport() {
+        let requests = AiRequests::default();
+        let rules = CustomSensitiveRules::default();
+        let mut payload = test_payload();
+        payload.user = "Authorization: Bearer abcdefghijklmnop".into();
+        let sends = AtomicU64::new(0);
+        for changed in 0..8 {
+            let id = requests.prepare("main").unwrap();
+            authorize_payload(&requests, "main", &id, &payload, &rules, |_| {
+                Box::pin(async { true })
+            })
+            .await
+            .unwrap();
+            let mut altered = payload.clone();
+            let mut changed_rules = rules.clone();
+            let owner = if changed == 7 { "settings" } else { "main" };
+            match changed {
+                0 => altered.user.push('!'),
+                1 => altered.system.push('!'),
+                2 => altered.base_url = "https://another.example.test".into(),
+                3 => altered.purpose = AiPurpose::SuggestTitle,
+                4 => altered.model = "another-model".into(),
+                5 => altered.max_tokens += 1,
+                6 => {
+                    changed_rules = CustomSensitiveRules::new(vec!["privateField".into()]).unwrap()
+                }
+                _ => {}
+            }
+            assert!(
+                run_authorized(&requests, owner, &id, &altered, &changed_rules, async {
+                    sends.fetch_add(1, Ordering::Relaxed);
+                    Ok(())
+                })
+                .await
+                .is_err(),
+                "binding case {changed}"
+            );
+            requests.cancel("main", &id).unwrap();
+        }
+        assert_eq!(sends.load(Ordering::Relaxed), 0);
+        let id = requests.prepare("main").unwrap();
+        authorize_payload(&requests, "main", &id, &payload, &rules, |_| {
+            Box::pin(async { true })
+        })
+        .await
+        .unwrap();
+        run_authorized(&requests, "main", &id, &payload, &rules, async {
+            sends.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        })
+        .await
+        .unwrap();
+        assert!(
+            run_authorized(&requests, "main", &id, &payload, &rules, async {
+                sends.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            })
+            .await
+            .is_err()
+        );
+        assert_eq!(sends.load(Ordering::Relaxed), 1);
+        assert!(requests.entries.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn cancellation_during_native_confirmation_cannot_issue_late_grant() {
+        let requests = AiRequests::default();
+        let id = requests.prepare("main").unwrap();
+        let mut payload = test_payload();
+        payload.system = "Authorization: Bearer abcdefghijklmnop".into();
+        let rules = CustomSensitiveRules::default();
+        let (approve, wait) = tokio::sync::oneshot::channel();
+        let authorization = authorize_payload(&requests, "main", &id, &payload, &rules, |_| {
+            requests.cancel("main", &id).unwrap();
+            Box::pin(async move { wait.await.unwrap_or(false) })
+        })
+        .await;
+        assert!(authorization.is_err());
+        assert!(approve.send(true).is_err());
+        assert!(requests
+            .start("main", &id, &ai_binding(&payload, &rules).unwrap())
+            .is_err());
+        assert!(requests.entries.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn custom_rules_and_both_message_roles_are_scanned_without_frontend_policy_flags() {
+        let requests = AiRequests::default();
+        let rules = CustomSensitiveRules::new(vec!["internalPin".into()]).unwrap();
+        let mut payload = test_payload();
+        payload.system = "internalPin=abc123".into();
+        let id = requests.prepare("main").unwrap();
+        let confirmations = AtomicU64::new(0);
+        authorize_payload(&requests, "main", &id, &payload, &rules, |message| {
+            confirmations.fetch_add(1, Ordering::Relaxed);
+            assert!(message.contains("敏感字段"));
+            assert!(!message.contains("abc123"));
+            Box::pin(async { true })
+        })
+        .await
+        .unwrap();
+        assert_eq!(confirmations.load(Ordering::Relaxed), 1);
+        if let AiRequestPhase::Authorized(grant) =
+            &mut requests.entries.lock().unwrap().get_mut(&id).unwrap().phase
+        {
+            grant.issued = Instant::now() - Duration::from_secs(61);
+        }
+        let sent = AtomicU64::new(0);
+        assert!(
+            run_authorized(&requests, "main", &id, &payload, &rules, async {
+                sent.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            })
+            .await
+            .is_err()
+        );
+        assert_eq!(sent.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn incomplete_scan_is_never_authorized_and_clean_content_needs_no_prompt() {
+        let requests = AiRequests::default();
+        let rules = CustomSensitiveRules::default();
+        let mut payload = test_payload();
+        payload.user = "x".repeat(crate::privacy::MAX_SCAN_INPUT_BYTES + 1);
+        let id = requests.prepare("main").unwrap();
+        assert!(
+            authorize_payload(&requests, "main", &id, &payload, &rules, |_| {
+                panic!("不完整扫描不得显示保留原文确认")
+            })
+            .await
+            .is_err()
+        );
+        let clean = test_payload();
+        let id = requests.prepare("main").unwrap();
+        authorize_payload(&requests, "main", &id, &clean, &rules, |_| {
+            panic!("干净内容不重复询问")
+        })
+        .await
+        .unwrap();
+        assert!(
+            run_authorized(&requests, "main", &id, &clean, &rules, async { Ok(()) })
+                .await
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn cancellation_before_start_and_window_ownership_are_enforced() {
+        let requests = AiRequests::default();
+        let id = authorized_request(&requests, "main");
+        assert!(requests.start("settings", &id, &test_binding()).is_err());
+        assert!(requests.cancel("settings", &id).is_err());
+        requests.cancel("main", &id).unwrap();
+        assert!(requests.start("main", &id, &test_binding()).is_err());
+        requests.cancel("main", &id).unwrap();
+        assert!(requests.entries.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn cancellation_wins_over_ready_result_and_duplicate_start_is_rejected() {
+        let requests = AiRequests::default();
+        let id = authorized_request(&requests, "main");
+        let receiver = requests.start("main", &id, &test_binding()).unwrap();
+        assert!(requests.start("main", &id, &test_binding()).is_err());
+        requests.cancel("main", &id).unwrap();
+        let result = run_cancellable(receiver, async { Ok("late result") }).await;
+        assert_eq!(result.unwrap_err(), "AI 请求已取消");
+    }
+
+    #[test]
+    fn abandoned_registrations_are_bounded_and_expire() {
+        let requests = AiRequests::default();
+        for _ in 0..64 {
+            authorized_request(&requests, "main");
+        }
+        assert!(requests.prepare("main").is_err());
+        for entry in requests.entries.lock().unwrap().values_mut() {
+            entry.created = Instant::now() - Duration::from_secs(61);
+        }
+        let id = authorized_request(&requests, "main");
+        assert_eq!(requests.entries.lock().unwrap().len(), 1);
+        drop(AiRequestCleanup {
+            requests: &requests,
+            id: &id,
+        });
+        assert!(requests.entries.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn cancellation_drops_live_http_response_and_closes_connection() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint =
+            Url::parse(&format!("http://{}/chat", listener.local_addr().unwrap())).unwrap();
+        let (ready, waiting) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                let count = socket.read(&mut chunk).await.unwrap();
+                assert!(count > 0);
+                request.extend_from_slice(&chunk[..count]);
+                if let Some(end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&request[..end]);
+                    let length: usize = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse().unwrap())
+                        })
+                        .unwrap_or(0);
+                    if request.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+            }
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10000\r\n\r\n{")
+                .await
+                .unwrap();
+            ready.send(()).unwrap();
+            // 服务端不返回剩余响应；取消必须实际断开连接，不能只丢弃 UI 回执。
+            match tokio::time::timeout(Duration::from_secs(2), socket.read(&mut chunk)).await {
+                Ok(Ok(0)) | Ok(Err(_)) => {}
+                other => panic!("取消未关闭 HTTP 连接: {other:?}"),
+            }
+        });
+        let requests = AiRequests::default();
+        let id = authorized_request(&requests, "main");
+        let receiver = requests.start("main", &id, &test_binding()).unwrap();
+        let transport = tokio::spawn(async move {
+            run_cancellable(
+                receiver,
+                send_json(
+                    endpoint,
+                    "local-test-key",
+                    serde_json::json!({"test": true}),
+                ),
+            )
+            .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), waiting)
+            .await
+            .unwrap()
+            .unwrap();
+        requests.cancel("main", &id).unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(2), transport)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.unwrap_err(), "AI 请求已取消");
+        server.await.unwrap();
+        assert!(requests.entries.lock().unwrap().is_empty());
+    }
 
     #[derive(Default)]
     struct MemoryKeyStore {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { emitTo, listen } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
+import { emitToMain as emitTo } from "@/lib/previewEvents";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { motion } from "motion/react";
 import {

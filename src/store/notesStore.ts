@@ -183,6 +183,7 @@ export interface Note {
 }
 
 export interface NoteProvenance {
+  executionVersion?: string;
   kind: "deliveryResult";
   deliveryId: string;
   capturedAtMs: number;
@@ -952,12 +953,12 @@ export interface NotesState {
   mergeNotes: (ids: string[]) => void;
   moveNotes: (ids: string[], sectionId: string) => void;
   /**
-   * 剪贴卡收编为正式笔记（移动到收件箱，可撤销 snapshot）：done 清零、keep
+   * 剪贴卡收编为正式笔记（默认移到收件箱，可指定普通笔记分组，可撤销 snapshot）：done 清零、keep
    * 不带（两域语义不同：剪贴=固定不清理，笔记=常用），并从勾选集摘除——
    * 移走的卡已不在剪贴页可见，残留勾选会被快捷键作用于不可见卡片。
    * 返回实际移动条数（非剪贴卡入参被忽略）。
    */
-  moveClipsToNotes: (ids: string[]) => number;
+  moveClipsToNotes: (ids: string[], sectionId?: string) => number;
   reorderNotes: (activeId: string, overId: string) => void;
 
   addSection: (name?: string) => void;
@@ -1529,6 +1530,8 @@ function normalizeNoteProvenance(value: unknown): NoteProvenance | undefined {
   }
   const provenance = value as Record<string, unknown>;
   if (
+    (provenance.executionVersion !== undefined &&
+      (typeof provenance.executionVersion !== "string" || !/^[0-9a-f-]{36}$/.test(provenance.executionVersion))) ||
     provenance.kind !== "deliveryResult" ||
     typeof provenance.deliveryId !== "string" ||
     !provenance.deliveryId ||
@@ -2990,7 +2993,12 @@ export const useNotesStore = create<NotesState>()(
         });
       },
 
-      moveClipsToNotes: (ids) => {
+      moveClipsToNotes: (ids, sectionId = INBOX_ID) => {
+        if (
+          sectionId === CLIPBOARD_ID ||
+          sectionId === SECRET_ID ||
+          !get().sections.some((section) => section.id === sectionId)
+        ) return 0;
         const target = new Set(ids);
         const picked = get().notes.filter(
           (n) => target.has(n.id) && n.sectionId === CLIPBOARD_ID
@@ -3003,7 +3011,7 @@ export const useNotesStore = create<NotesState>()(
         set({
           notes: get().notes.map((n) =>
             moved.has(n.id)
-              ? { ...n, sectionId: INBOX_ID, done: false, keep: false }
+              ? { ...n, sectionId, done: false, keep: false }
               : n
           ),
           checkedIds: get().checkedIds.filter((id) => !moved.has(id)),

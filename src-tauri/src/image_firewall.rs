@@ -1411,6 +1411,19 @@ mod tests {
     }
 
     #[test]
+    fn expanded_rules_keep_ocr_original_value_ranges() {
+        for (prefix, value) in [("🙂我的密码是 ", "123456".to_string()), ("令牌 ", format!("hf_{}", "aB".repeat(17)))] {
+            let text = format!("{prefix}{value}");
+            let hits = scan_observation_text(&text);
+            assert_eq!(hits.len(), 1);
+            let (finding, (start, end)) = &hits[0];
+            let units: Vec<_> = text.encode_utf16().collect();
+            assert_eq!(String::from_utf16(&units[*start..*end]).unwrap(), value);
+            assert_eq!(finding.severity, FindingSeverity::Block);
+        }
+    }
+
+    #[test]
     fn scan_observation_text_returns_ranges_in_original_recognized_text() {
         let text = "mail: fake.user @example.test 后缀";
         let matches = scan_observation_text(text);

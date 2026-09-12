@@ -23,6 +23,47 @@ pub struct DiagEntry {
 #[derive(Default)]
 pub struct DiagLog(Mutex<VecDeque<DiagEntry>>);
 
+/// WebView 文本不可信：仅映射固定事件码，不将异常、URL、卡片 ID 或正文落盘。
+pub(crate) fn frontend_event(message: &str) -> &'static str {
+    const EVENTS: &[(&str, &str)] = &[
+        ("webview 挂载", "frontend.mounted"),
+        ("webview JS 错误", "frontend.render_error"),
+        ("webview 未处理拒绝", "frontend.unhandled_rejection"),
+        ("前端收到 Toggle:", "frontend.toggle_received"),
+        ("贴边: 快捷键唤出", "frontend.edge_revealed"),
+        ("富图片: 解析丢弃", "frontend.rich_image_omitted"),
+        ("详情窗载荷", "frontend.detail_payload_received"),
+        ("详情窗投递超时", "frontend.detail_delivery_timeout"),
+        ("数据冲突事件:", "frontend.data_conflict"),
+        ("旧存储清理延后", "frontend.legacy_cleanup_deferred"),
+        ("图片隐私临时副本清理失败", "frontend.image_cleanup_failed"),
+        ("图片隐私会话清理失败", "frontend.image_session_cleanup_failed"),
+        ("前端阻断:", "frontend.delivery_blocked"),
+    ];
+    EVENTS.iter().find(|(prefix, _)| message.starts_with(prefix))
+        .map(|(_, event)| *event).unwrap_or("frontend.unclassified")
+}
+
+#[cfg(test)]
+mod frontend_tests {
+    use super::frontend_event;
+
+    #[test]
+    fn arbitrary_frontend_content_never_enters_diagnostics() {
+        for prefix in ["webview JS 错误", "前端阻断:", "数据冲突事件:", "旧存储清理延后", "详情窗载荷", "unknown"] {
+            let message = format!("{prefix} API_KEY=synthetic-secret https://example.com/?token=private\n正文");
+            let result = frontend_event(&message);
+            assert!(result.starts_with("frontend."));
+            assert!(!result.contains("private"));
+            assert!(!result.contains("synthetic"));
+            assert!(!result.contains("https"));
+            assert!(!result.contains('\n'));
+        }
+        assert_eq!(frontend_event("webview 挂载 label=main"), "frontend.mounted");
+        assert_eq!(frontend_event("前端收到 Toggle: source=keyboard"), "frontend.toggle_received");
+    }
+}
+
 /// 记录一条诊断（同时输出到 stderr 供命令行调试）。任意线程可调。
 pub fn push(app: &AppHandle, msg: impl Into<String>) {
     let msg = msg.into();

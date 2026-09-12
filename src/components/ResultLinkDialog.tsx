@@ -417,6 +417,7 @@ export function ResultLinkDialog() {
     ) return;
     const provenance: NoteProvenance = {
       kind: "deliveryResult",
+      executionVersion: delivery.executionManifest?.version,
       deliveryId: delivery.deliveryId,
       capturedAtMs: note.createdAt,
       sourceBundle: delivery.targetBundleId,

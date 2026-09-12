@@ -121,7 +121,13 @@ export function describeAiClient(
   };
 }
 
+export type AiPurpose =
+  | "create-task" | "split-subtasks" | "note-to-task" | "suggest-title"
+  | "test-connection" | "message-draft" | "result-verification"
+  | "summarize" | "extract-actions" | "improve-prompt" | "structure-requirements";
+
 export interface AiRequestInput {
+  purpose: AiPurpose;
   system: string;
   user: string;
   maxTokens: number;
@@ -133,7 +139,7 @@ export interface AiRequestInput {
 export interface AiRequestHandle {
   descriptor: AiClientDescriptor;
   result: Promise<string>;
-  /** 只能保证本地结果立即取消；已进入 Native 的网络请求由其自身超时收口。 */
+  /** 立即取消本地结果，并通知 Native 终止对应网络请求。 */
   cancel: () => void;
   /** 底层 invoke 真正结束；转换层用它阻止取消后的同配方并发。 */
   transportSettled: Promise<void>;
@@ -145,11 +151,28 @@ function cancelledError(): AiError {
 
 /**
  * 唯一前端 AI transport。密钥始终由 Rust 从 Keychain 读取；这里既不接收也不
- * 返回密钥。取消只切断本地结果，迟到 Native 回执仍由调用者 requestId guard。
+ * 返回密钥。原生登记后才提交请求，取消和超时同时终止原生传输。
  */
 export function startAiRequest(input: AiRequestInput): AiRequestHandle {
   const descriptor = describeAiClient(input.connection);
+  const payload = {
+    baseUrl: descriptor.baseUrl,
+    model: descriptor.model,
+    system: input.system,
+    user: input.user,
+    maxTokens: input.maxTokens,
+    purpose: input.purpose,
+  };
   const controller = new AbortController();
+  let nativeRequestId: string | null = null;
+  let cancelRequested = false;
+  const cancelNative = () => {
+    if (!nativeRequestId || cancelRequested) return;
+    cancelRequested = true;
+    // 本地结果先取消；即使 IPC 失败，原生 HTTP 超时仍会收口。
+    void api.cancelAiRequest(nativeRequestId).catch(() => undefined);
+  };
+  controller.signal.addEventListener("abort", cancelNative);
   const cancel = () => controller.abort();
   const externalAbort = () => cancel();
   input.signal?.addEventListener("abort", externalAbort, { once: true });
@@ -166,16 +189,28 @@ export function startAiRequest(input: AiRequestInput): AiRequestHandle {
       if (!keyStatus.configured) {
         throw new AiError("not-configured", "AI API Key 尚未配置");
       }
+      nativeRequestId = await api.beginAiRequest();
+      if (controller.signal.aborted) {
+        cancelNative();
+        throw cancelledError();
+      }
+      // 所有入口共用最终载荷授权；Native 读取当前隐私规则并独立确认敏感原文。
+      await api.authorizeAiRequest(nativeRequestId, payload);
+      if (controller.signal.aborted) throw cancelledError();
       const result = await api.aiChat(
-        descriptor.baseUrl,
-        descriptor.model,
-        input.system,
-        input.user,
-        input.maxTokens
+        payload.baseUrl,
+        payload.model,
+        payload.system,
+        payload.user,
+        payload.maxTokens,
+        nativeRequestId,
+        payload.purpose
       );
       if (controller.signal.aborted) throw cancelledError();
       return result;
     } catch (error) {
+      cancelNative();
+      if (controller.signal.aborted) throw cancelledError();
       if (error instanceof AiError) throw error;
       // Rust 侧错误串已是脱敏后的人话（HTTP 状态、URL 校验、密钥未配置等），
       // 必须透传——吞成固定文案会让「换了密钥连不上」这类问题无从定位
@@ -214,6 +249,7 @@ export function startAiRequest(input: AiRequestInput): AiRequestHandle {
     () => undefined
   ).finally(() => {
     input.signal?.removeEventListener("abort", externalAbort);
+    controller.signal.removeEventListener("abort", cancelNative);
   });
 
   return { descriptor, result, cancel, transportSettled };
