@@ -13,6 +13,9 @@ export function buildPromptTemplatesExport(
   snippets: readonly PromptSnippet[],
   groups: readonly PromptGroup[]
 ): PromptTemplatesExport {
+  if (snippets.some((snippet) => snippet.isCommon !== undefined && typeof snippet.isCommon !== "boolean")) {
+    throw new Error("模板的常用标记必须是布尔值");
+  }
   const referencedGroupIds = new Set(snippets.map((snippet) => snippet.groupId));
   const exportedGroups = groups
     .filter((group) => referencedGroupIds.has(group.id))
@@ -24,7 +27,10 @@ export function buildPromptTemplatesExport(
     format: "toskr-prompt-templates",
     version: 1,
     groups: exportedGroups,
-    snippets: snippets.map(({ id, label, text, groupId }) => ({ id, label, text, groupId })),
+    snippets: snippets.map(({ id, label, text, groupId, isCommon }) => ({
+      id, label, text, groupId,
+      ...(isCommon === undefined ? {} : { isCommon }),
+    })),
   };
 }
 

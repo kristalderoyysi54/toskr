@@ -3344,6 +3344,7 @@ pub(crate) fn validate_settings_value_for_version(
                         .all(|key| item.get(*key).is_some_and(serde_json::Value::is_string));
                     let id = item.get("id").and_then(serde_json::Value::as_str);
                     fields_valid
+                        && optional_type(item, "isCommon", serde_json::Value::is_boolean)
                         && (store_version < 9
                             || item
                                 .get("groupId")
@@ -4513,6 +4514,29 @@ mod tests {
         .unwrap();
 
         assert_eq!(inspect_location(&dir, None).kind, DataLocationKind::Valid);
+    }
+
+    #[test]
+    fn prompt_snippet_common_flag_accepts_only_missing_or_boolean() {
+        for version in [8, 26] {
+            let settings = serde_json::json!({"promptSnippets": [
+                {"id": "custom", "label": "模板", "text": "{内容}", "groupId": "general"}
+            ]});
+            assert!(validate_settings_value_for_version(Some(&settings), version));
+            for flag in [true, false] {
+                let mut value = settings.clone();
+                value["promptSnippets"][0]["isCommon"] = serde_json::json!(flag);
+                assert!(validate_settings_value_for_version(Some(&value), version));
+            }
+            for invalid in [
+                serde_json::json!(null), serde_json::json!("false"), serde_json::json!(0),
+                serde_json::json!([]), serde_json::json!({}),
+            ] {
+                let mut value = settings.clone();
+                value["promptSnippets"][0]["isCommon"] = invalid;
+                assert!(!validate_settings_value_for_version(Some(&value), version));
+            }
+        }
     }
 
     #[test]

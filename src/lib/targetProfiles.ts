@@ -1,4 +1,4 @@
-import { WORKFLOW_PROMPT_SNIPPET_IDS } from "@/lib/promptTemplates";
+import { isCommonPromptSnippet } from "@/lib/promptTemplates";
 
 export type DeliveryFormat = "plain" | "code";
 export type MarkdownSendMode = "preserve" | "strip";
@@ -18,6 +18,8 @@ export interface PromptSnippet {
   label: string;
   text: string;
   groupId: string;
+  /** 缺省按内置 ID 判断；显式值覆盖默认常用身份。 */
+  isCommon?: boolean;
 }
 
 export interface TargetProfile {
@@ -409,16 +411,14 @@ export function findDuplicateBundleAssignments(
     }));
 }
 
-const workflowSnippetIds = new Set<string>(WORKFLOW_PROMPT_SNIPPET_IDS);
-
-/** 三个常用动作始终在首层；其余模板展开后优先显示当前目标的分组。 */
+/** 常用模板按数组顺序在首层；其余模板展开后优先显示当前目标的分组。 */
 export function promptSnippetsForGroup(
   snippets: PromptSnippet[],
   groupId: string
 ): { prioritized: PromptSnippet[]; remaining: PromptSnippet[] } {
-  const remaining = snippets.filter((item) => !workflowSnippetIds.has(item.id));
+  const remaining = snippets.filter((item) => !isCommonPromptSnippet(item));
   return {
-    prioritized: snippets.filter((item) => workflowSnippetIds.has(item.id)),
+    prioritized: snippets.filter(isCommonPromptSnippet),
     remaining: [
       ...remaining.filter((item) => item.groupId === groupId),
       ...remaining.filter((item) => item.groupId !== groupId),

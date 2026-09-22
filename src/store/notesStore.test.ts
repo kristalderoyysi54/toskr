@@ -1683,6 +1683,27 @@ describe("store v25-v26 prompt templates migration", () => {
       },
     });
 
+  it("可选常用标记经保存、读盘与重启保留，无标记旧模板不补字段", () => {
+    const snippets = [
+      { id: "mine", label: "我的常用", text: "自定义 {内容}", groupId: "project", isCommon: true },
+      { ...WORKFLOW_PROMPT_SNIPPETS[0], isCommon: false },
+      WORKFLOW_PROMPT_SNIPPETS[1],
+    ];
+    replaceNotesStoreFromPersisted(envelope(snippets, STORE_VERSION));
+    expect(useNotesStore.getState().settings.promptSnippets).toEqual(snippets);
+    const saved = serializePersistentState(useNotesStore.getState());
+    reset();
+    replaceNotesStoreFromPersisted(saved);
+    expect(useNotesStore.getState().settings.promptSnippets).toEqual(snippets);
+    expect(decodePersistedState(saved).settings.promptSnippets).toEqual(snippets);
+  });
+
+  it.each([null, 0, 1, "true", "false", [], {}])("拒绝非布尔常用标记 %j", (isCommon) => {
+    const snippets = [{ ...WORKFLOW_PROMPT_SNIPPETS[0], isCommon }];
+    expect(() => decodePersistedState(envelope(snippets, STORE_VERSION)))
+      .toThrow("settings.promptSnippets 字段无效");
+  });
+
   it("新用户只安装三项常用模板，正文使用批准的任务约束", () => {
     expect(defaultSettings().promptSnippets).toEqual(DEFAULT_PROMPT_SNIPPETS);
     expect(DEFAULT_PROMPT_SNIPPETS.map((item) => item.id)).toEqual([

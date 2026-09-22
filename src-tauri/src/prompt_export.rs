@@ -28,6 +28,19 @@ struct PromptSnippet {
     label: String,
     text: String,
     group_id: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_common_flag"
+    )]
+    is_common: Option<bool>,
+}
+
+// 缺省保留旧模板语义；显式 null 与其他非布尔值都不是合法覆盖。
+fn deserialize_common_flag<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<bool>, D::Error> {
+    bool::deserialize(deserializer).map(Some)
 }
 
 pub fn export_prompt_templates(
@@ -122,6 +135,35 @@ mod tests {
         for field in ["groups", "snippets"] {
             let mut value = payload();
             value[field][0]["aiApiKey"] = json!("must not export");
+            assert!(serde_json::from_value::<PromptTemplatesExport>(value).is_err());
+        }
+    }
+
+    #[test]
+    fn exports_explicit_common_flags_and_omits_legacy_missing_flag() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("templates.json");
+        for flag in [None, Some(true), Some(false)] {
+            let mut value = payload();
+            if let Some(flag) = flag {
+                value["snippets"][0]["isCommon"] = json!(flag);
+            }
+            export_prompt_templates(&path, serde_json::from_value(value).unwrap()).unwrap();
+            let exported: serde_json::Value =
+                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            assert_eq!(exported["version"], json!(1));
+            assert_eq!(
+                exported["snippets"][0].get("isCommon"),
+                flag.map(|flag| json!(flag)).as_ref()
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_non_boolean_common_flags() {
+        for invalid in [json!(null), json!("false"), json!(0), json!([]), json!({})] {
+            let mut value = payload();
+            value["snippets"][0]["isCommon"] = invalid;
             assert!(serde_json::from_value::<PromptTemplatesExport>(value).is_err());
         }
     }

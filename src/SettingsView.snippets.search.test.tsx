@@ -42,7 +42,7 @@ vi.mock("react", async (importOriginal) => {
 import { SnippetsSection } from "./SettingsView";
 import { PromptTemplateEditor } from "@/components/settings/PromptTemplateEditor";
 import { Disclosure } from "@/components/ui/disclosure";
-import { defaultSettings } from "@/store/notesStore";
+import { defaultSettings, type PromptSnippet } from "@/store/notesStore";
 import { WORKFLOW_PROMPT_SNIPPETS } from "@/lib/promptTemplates";
 
 type Node = ReactElement<Record<string, unknown>>;
@@ -55,7 +55,7 @@ function visibleElements(node: ReactNode): Node[] {
 }
 
 const custom = { id: "custom-first", label: "自建模板", text: "保留原文：{内容}", groupId: "general" };
-function mount(snippets = [custom, WORKFLOW_PROMPT_SNIPPETS[0]!]) {
+function mount(snippets: PromptSnippet[] = [custom, WORKFLOW_PROMPT_SNIPPETS[0]!]) {
   let props: ComponentProps<typeof SnippetsSection> = {
     settings: { ...defaultSettings(), promptSnippets: snippets },
     patch: vi.fn(),
@@ -87,11 +87,71 @@ beforeEach(() => {
 });
 
 describe("试用预览搜索直达", () => {
+  it("AI 创建入口打开新增区及助手，保留草稿且传入最新 AI 配置", () => {
+    const view = mount();
+    const create = () => (view.nodes().find((node) => node.props.children === "AI 创建模板")!.props.onClick as () => void)();
+    create();
+    view.render();
+    expect(view.disclosure("新增模板").open).toBe(true);
+    expect(view.editor().aiOpen).toBe(true);
+    view.editor().onLabelChange("新增草稿");
+    view.editor().onTextChange("草稿正文：{内容}");
+    view.disclosure("新增模板").onOpenChange!(false);
+    view.render();
+    create();
+    const settings = { ...defaultSettings(), promptSnippets: [custom], aiEnabled: true, aiBaseUrl: "https://new.example/v1", aiModel: "new-model" };
+    view.render({ settings });
+    expect(view.editor()).toMatchObject({ label: "新增草稿", text: "草稿正文：{内容}", aiOpen: true, aiSettings: settings });
+    expect(view.patch).not.toHaveBeenCalled();
+  });
+
+  it("保存新增模板后关闭新增和 AI 面板，展开其他模板且不被同一搜索请求重新打开", () => {
+    const view = mount();
+    (view.nodes().find((node) => node.props.children === "AI 创建模板")!.props.onClick as () => void)();
+    view.render();
+    view.editor().onLabelChange("新增模板名称");
+    view.editor().onTextChange("新增正文");
+    view.render();
+    view.search();
+    view.editor().onSave();
+    view.render();
+    expect(view.disclosure("新增模板").open).toBe(false);
+    expect(view.disclosure("其他模板（1）").open).toBe(true);
+    expect(view.nodes().some((node) => node.type === PromptTemplateEditor)).toBe(false);
+    expect(view.patch).toHaveBeenCalledOnce();
+    expect(view.patch.mock.calls[0]![0].promptSnippets.at(-1)).toMatchObject({ label: "新增模板名称", text: "新增正文", groupId: "general" });
+    view.disclosure("新增模板").onOpenChange!(true);
+    view.render();
+    expect(view.editor()).toMatchObject({ aiOpen: false, label: "", text: "" });
+  });
+
   it("没有草稿时打开第一个现有模板及其他模板父区，不写入设置", () => {
     const view = mount();
     view.search();
     expect(view.disclosure("其他模板（1）").open).toBe(true);
     expect(view.editor()).toMatchObject({ label: custom.label, text: custom.text, previewOpen: true });
+    expect(view.patch).not.toHaveBeenCalled();
+  });
+
+  it("被替换的内置模板搜索时展开其他模板，并保留修改草稿", () => {
+    const builtin = { ...WORKFLOW_PROMPT_SNIPPETS[0]!, isCommon: false };
+    const view = mount([builtin, { ...custom, isCommon: true }]);
+    view.search();
+    expect(view.disclosure("其他模板（1）").open).toBe(true);
+    view.editor().onTextChange("内置模板的未保存修改");
+    view.disclosure("其他模板（1）").onOpenChange!(false);
+    view.render();
+    view.search(2);
+    expect(view.disclosure("其他模板（1）").open).toBe(true);
+    expect(view.editor()).toMatchObject({ label: builtin.label, text: "内置模板的未保存修改", previewOpen: true });
+    expect(view.patch).not.toHaveBeenCalled();
+  });
+
+  it("自建常用模板的预览搜索不展开无关的其他模板", () => {
+    const view = mount([{ ...custom, isCommon: true }, { ...WORKFLOW_PROMPT_SNIPPETS[0]!, isCommon: false }]);
+    view.search();
+    expect(view.disclosure("其他模板（1）").open).toBe(false);
+    expect(view.editor()).toMatchObject({ label: custom.label, previewOpen: true });
     expect(view.patch).not.toHaveBeenCalled();
   });
 

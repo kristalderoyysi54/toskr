@@ -1620,6 +1620,51 @@ describe("armNoteEditUndo 编辑收尾撤销", () => {
   const findNote = (id: string) =>
     useNotesStore.getState().notes.find((n) => n.id === id)!;
 
+  it.each([false, true])("撤销同时还原标题与正文（图文=%s）", (rich) => {
+    const originalBlocks = [
+      { type: "text" as const, text: "原正文" },
+      { type: "image" as const, file: "inline.png" },
+      { type: "text" as const, text: "图后" },
+    ];
+    const id = useNotesStore.getState().addNote("原正文", rich ? { contentBlocks: originalBlocks } : {}).id!;
+    useNotesStore.getState().updateNoteTitle(id, "新标题");
+    useNotesStore.getState().updateNoteText(id, "新正文");
+
+    armNoteEditUndo(id, rich
+      ? { contentBlocks: originalBlocks, title: "原标题" }
+      : { text: "原正文", title: "原标题" });
+    vi.mocked(setPendingUndo).mock.calls[0][0]();
+
+    expect(findNote(id).title).toBe("原标题");
+    if (rich) expect(findNote(id).contentBlocks).toEqual(originalBlocks);
+    else expect(findNote(id).text).toBe("原正文");
+  });
+
+  it("清空标题后撤销恢复原标题", () => {
+    const id = useNotesStore.getState().addNote("正文").id!;
+    useNotesStore.getState().updateNoteTitle(id, "原标题");
+    useNotesStore.getState().updateNoteTitle(id, "");
+    armNoteEditUndo(id, { text: "正文", title: "原标题" });
+    vi.mocked(setPendingUndo).mock.calls[0][0]();
+    expect(findNote(id).title).toBe("原标题");
+  });
+
+  it("原本无标题的编辑会话撤销后清空新增标题", () => {
+    const id = useNotesStore.getState().addNote("正文").id!;
+    useNotesStore.getState().updateNoteTitle(id, "新增标题");
+    armNoteEditUndo(id, { text: "正文", title: "" });
+    vi.mocked(setPendingUndo).mock.calls[0][0]();
+    expect(findNote(id).title).toBeUndefined();
+  });
+
+  it("旧版 origin 不含 title 时，撤销正文不误删现有标题", () => {
+    const id = useNotesStore.getState().addNote("新正文").id!;
+    useNotesStore.getState().updateNoteTitle(id, "保留标题");
+    armNoteEditUndo(id, { text: "原正文" });
+    vi.mocked(setPendingUndo).mock.calls[0][0]();
+    expect(findNote(id)).toMatchObject({ text: "原正文", title: "保留标题" });
+  });
+
   it("出可撤销「已保存」；撤销把正文还原到本次编辑前", () => {
     const id = useNotesStore.getState().addNote("编辑前的原文").id!;
     useNotesStore.getState().updateNoteText(id, "编辑后的新内容");

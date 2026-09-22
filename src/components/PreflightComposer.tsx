@@ -775,7 +775,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
           <p className="text-micro text-muted-foreground">
             推荐替换为占位符（本机替换、发出的是占位符）；确需按原文发出时选「保留原文发送」
           </p>
-          {/* P2（2026-09-12）：命中就地处理——原文高亮可点；详细列表折叠保留批量按钮与命中依据 */}
+          {/* 命中就地处理：原文高亮可点；详细列表默认展开，也可手动收起。 */}
           <FindingInlineText
             text={draft.finalText}
             findings={draft.findings}
@@ -817,7 +817,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
               </p>
             </div>
           )}
-          <details className="group">
+          <details open className="group">
             <summary className="flex cursor-pointer list-none items-center gap-1 py-0.5 text-micro text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
               <ChevronRight className="size-3 transition-transform group-open:rotate-90" aria-hidden />
               详细列表（命中依据 · 同类替换 · 定位）

@@ -1293,6 +1293,7 @@ function validateSettingsShape(value: unknown, version: number): void {
     return typeof snippet.id === "string"
       && (version < 9 || snippet.id.length > 0)
       && ["label", "text"].every((key) => typeof snippet[key] === "string")
+      && (snippet.isCommon === undefined || typeof snippet.isCommon === "boolean")
       && (version < 9 || typeof snippet.groupId === "string");
   }))) {
     throw new Error("settings.promptSnippets 字段无效");

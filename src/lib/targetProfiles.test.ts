@@ -515,6 +515,23 @@ describe("Target Profile resolver", () => {
     });
     expect(promptSnippetsForGroup([], "coding")).toEqual({ prioritized: [], remaining: [] });
   });
+
+  it("用户常用标记优先内置 ID，菜单仍按数组顺序且其他模板按目标组优先", () => {
+    const snippets: PromptSnippet[] = [
+      { id: "mine", label: "我的常用", text: "我的正文", groupId: "general", isCommon: true },
+      { id: "workflow-requirements", label: "整理需求", text: "原正文", groupId: "general", isCommon: false },
+      { id: "coding", label: "代码模板", text: "代码正文", groupId: "coding" },
+      { id: "workflow-diagnose", label: "分析问题", text: "分析正文", groupId: "general" },
+    ];
+    expect(promptSnippetsForGroup(snippets, "coding")).toEqual({
+      prioritized: [snippets[0], snippets[3]],
+      remaining: [snippets[2], snippets[1]],
+    });
+    expect(promptSnippetsForGroup(snippets, "general")).toEqual({
+      prioritized: [snippets[0], snippets[3]],
+      remaining: [snippets[1], snippets[2]],
+    });
+  });
 });
 
 describe("Prompt/Profile reference repair", () => {

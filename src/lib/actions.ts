@@ -142,6 +142,8 @@ export type NoteEditPayload = {
   syncId?: string;
   /** true = 编辑中的静默自动保存：只持久化，不释放会话、不提示、不抓链接。 */
   autosave?: boolean;
+  /** 缺省不修改标题；空串清除标题。 */
+  title?: string;
   /** 会话收尾保存随带：本次编辑开始前的内容，主面板用它装配 HUD「撤销」。 */
   origin?: NoteEditOrigin;
 } & (
@@ -174,9 +176,10 @@ export type NoteTagsPayload = {
   dataGeneration: number;
 };
 
-export type NoteEditOrigin =
+export type NoteEditOrigin = { title?: string } & (
   | { text: string; images?: string[] }
-  | { contentBlocks: NoteContentBlock[] };
+  | { contentBlocks: NoteContentBlock[] }
+);
 
 /** 编辑态每隔这么久把草稿静默写回 store（崩溃/关窗最多丢这窗口内的输入）。 */
 export const NOTE_EDIT_AUTOSAVE_INTERVAL_MS = 2000;
@@ -192,6 +195,9 @@ export function armNoteEditUndo(id: string, origin: NoteEditOrigin) {
       useNotesStore.getState().updateNoteContent(id, origin.contentBlocks);
     } else {
       useNotesStore.getState().updateNoteText(id, origin.text, origin.images);
+    }
+    if (origin.title !== undefined) {
+      useNotesStore.getState().updateNoteTitle(id, origin.title);
     }
     tip("undone", "已撤销");
   });

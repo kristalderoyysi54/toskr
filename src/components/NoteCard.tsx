@@ -400,6 +400,7 @@ export const NoteCard = memo(function NoteCard({
   // 只订阅稳定引用，派生数组用 useMemo——选择器里 new 数组会造成
   // getSnapshot 永不相等 → React 无限重渲染崩溃（主窗口白屏、面板无法唤起）
   const menuCfgRaw = useNotesStore((s) => s.settings.contextMenu);
+  const promptSnippets = useNotesStore((s) => s.settings.promptSnippets);
   const menuIds = useMemo(
     () =>
       normalizeContextMenu(menuCfgRaw)
@@ -408,7 +409,7 @@ export const NoteCard = memo(function NoteCard({
     [menuCfgRaw]
   );
   const snippetMenu = promptSnippetsForGroup(
-    useNotesStore.getState().settings.promptSnippets,
+    promptSnippets,
     currentTargetProfileResolution().promptGroup.id
   );
   const renderSnippet = (sn: { id: string; label: string; text: string }) => (

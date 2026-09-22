@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { promptSnippetSourceLabel, WORKFLOW_PROMPT_SNIPPETS } from "./promptTemplates";
+import {
+  isCommonPromptSnippet,
+  promptSnippetSourceLabel,
+  replaceCommonPromptSnippet,
+  WORKFLOW_PROMPT_SNIPPETS,
+} from "./promptTemplates";
 
 describe("模板来源标记", () => {
   it("新常用预设按原 ID、名称、正文和分组识别为内置", () => {
@@ -32,5 +37,47 @@ describe("模板来源标记", () => {
   it("其他 ID 即使正文与预设相同也只标记自建，不推测导入历史", () => {
     expect(promptSnippetSourceLabel({ ...WORKFLOW_PROMPT_SNIPPETS[0], id: "my-template" }))
       .toBe("自建");
+  });
+});
+
+describe("替换常用模板", () => {
+  const original = WORKFLOW_PROMPT_SNIPPETS[0];
+  const custom = { id: "custom", label: "我的模板", text: "原始正文 {内容}", groupId: "project" };
+  const untouched = WORKFLOW_PROMPT_SNIPPETS[1];
+
+  it("缺省使用原内置常用身份，显式标记覆盖默认", () => {
+    expect(isCommonPromptSnippet(original)).toBe(true);
+    expect(isCommonPromptSnippet(custom)).toBe(false);
+    expect(isCommonPromptSnippet({ ...original, isCommon: false })).toBe(false);
+    expect(isCommonPromptSnippet({ ...custom, isCommon: true })).toBe(true);
+  });
+
+  it.each([false, true])("双向位置均可替换，保留两份模板字段且不修改输入（候选在前=%s）", (before) => {
+    const input = before ? [custom, untouched, original] : [original, untouched, custom];
+    const snapshot = structuredClone(input);
+    const next = replaceCommonPromptSnippet(input, original.id, custom.id);
+    expect(next).not.toBe(input);
+    expect(input).toEqual(snapshot);
+    expect(next[before ? 2 : 0]).toEqual({ ...custom, isCommon: true });
+    expect(next[before ? 0 : 2]).toEqual({ ...original, isCommon: false });
+    expect(next[1]).toBe(untouched);
+    expect(next).toHaveLength(input.length);
+    expect(new Set(next.map((snippet) => snippet.id))).toEqual(new Set(input.map((snippet) => snippet.id)));
+  });
+
+  it("可以再换回原模板，来源标记不受常用身份影响", () => {
+    const replaced = replaceCommonPromptSnippet([original, untouched, custom], original.id, custom.id);
+    expect(promptSnippetSourceLabel(replaced[0])).toBe("自建");
+    expect(promptSnippetSourceLabel(replaced[2])).toBe("内置");
+    const restored = replaceCommonPromptSnippet(replaced, custom.id, original.id);
+    expect(restored).toEqual([{ ...original, isCommon: true }, untouched, { ...custom, isCommon: false }]);
+  });
+
+  it.each([
+    [original.id, original.id], ["missing", custom.id], [original.id, "missing"],
+    [custom.id, original.id], [original.id, untouched.id],
+  ])("无效替换 %s → %s 返回原数组", (currentId, replacementId) => {
+    const input = [original, untouched, custom];
+    expect(replaceCommonPromptSnippet(input, currentId, replacementId)).toBe(input);
   });
 });

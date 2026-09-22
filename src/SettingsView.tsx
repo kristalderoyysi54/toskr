@@ -34,6 +34,7 @@ import { MaterialStylePicker } from "@/components/settings/MaterialStylePicker";
 import { TargetProfileManager } from "@/components/settings/TargetProfileManager";
 import { OutcomeInsightsSection } from "@/components/settings/OutcomeInsightsSection";
 import { PromptTemplateEditor } from "@/components/settings/PromptTemplateEditor";
+import { PromptTemplateCommonAction } from "@/components/settings/PromptTemplateCommonAction";
 import { useAppIdentity } from "@/components/settings/useAppIdentity";
 import { Button } from "@/components/ui/button";
 import { Disclosure } from "@/components/ui/disclosure";
@@ -129,7 +130,7 @@ import {
   deletePromptGroup,
 } from "@/lib/targetProfiles";
 import { onboardingStateFromPersisted } from "@/lib/onboarding";
-import { promptSnippetSourceLabel, WORKFLOW_PROMPT_SNIPPET_IDS } from "@/lib/promptTemplates";
+import { isCommonPromptSnippet, promptSnippetSourceLabel } from "@/lib/promptTemplates";
 import { exportPromptTemplates } from "@/lib/promptTemplateExport";
 import { presetCfgLabel } from "@/lib/tasks";
 import { AI_PRESETS, matchPreset, testAiConnection } from "@/lib/ai";
@@ -3481,8 +3482,6 @@ function DuePresetsSection({ settings, patch }: SP) {
   );
 }
 
-const workflowPromptSnippetIds = new Set<string>(WORKFLOW_PROMPT_SNIPPET_IDS);
-
 export function SnippetsSection({ settings, patch, searchTarget = null, searchSequence = 0 }: SP & {
   searchTarget?: string | null;
   searchSequence?: number;
@@ -3505,6 +3504,7 @@ export function SnippetsSection({ settings, patch, searchTarget = null, searchSe
   const [editGroupId, setEditGroupId] = useState(GENERAL_PROMPT_GROUP_ID);
   const [exporting, setExporting] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  const [addAiOpen, setAddAiOpen] = useState(false);
   const [othersOpen, setOthersOpen] = useState(false);
   const [editPreviewOpen, setEditPreviewOpen] = useState(false);
   const [addPreviewOpen, setAddPreviewOpen] = useState(false);
@@ -3578,6 +3578,9 @@ export function SnippetsSection({ settings, patch, searchTarget = null, searchSe
     patch({ promptSnippets: [...settings.promptSnippets, snippet] });
     setLabel("");
     setText("");
+    setAddOpen(false);
+    setAddAiOpen(false);
+    setOthersOpen(true);
   };
   const startEdit = (sn: PromptSnippet) => {
     setEditingId(sn.id);
@@ -3595,7 +3598,8 @@ export function SnippetsSection({ settings, patch, searchTarget = null, searchSe
     if (consumedPreviewRequest.current === searchSequence) return;
     consumedPreviewRequest.current = searchSequence;
     if (editingId) {
-      if (!workflowPromptSnippetIds.has(editingId)) setOthersOpen(true);
+      const editingSnippet = settings.promptSnippets.find((snippet) => snippet.id === editingId);
+      if (editingSnippet && !isCommonPromptSnippet(editingSnippet)) setOthersOpen(true);
       setEditPreviewOpen(true);
     } else if (addOpen || label || text || settings.promptSnippets.length === 0) {
       setAddOpen(true);
@@ -3606,7 +3610,7 @@ export function SnippetsSection({ settings, patch, searchTarget = null, searchSe
       setEditLabel(first.label);
       setEditText(first.text);
       setEditGroupId(first.groupId);
-      if (!workflowPromptSnippetIds.has(first.id)) setOthersOpen(true);
+      if (!isCommonPromptSnippet(first)) setOthersOpen(true);
       setEditPreviewOpen(true);
     }
   }, [searchTarget, searchSequence, editingId, addOpen, label, text, settings.promptSnippets]);
@@ -3628,8 +3632,10 @@ export function SnippetsSection({ settings, patch, searchTarget = null, searchSe
   };
   const move = (id: string, dir: -1 | 1) => {
     const list = [...settings.promptSnippets];
-    const common = workflowPromptSnippetIds.has(id);
-    const visible = list.filter((snippet) => workflowPromptSnippetIds.has(snippet.id) === common);
+    const moving = list.find((snippet) => snippet.id === id);
+    if (!moving) return;
+    const common = isCommonPromptSnippet(moving);
+    const visible = list.filter((snippet) => isCommonPromptSnippet(snippet) === common);
     const visibleIndex = visible.findIndex((snippet) => snippet.id === id);
     const neighbor = visible[visibleIndex + dir];
     if (visibleIndex < 0 || !neighbor) return;
@@ -3639,12 +3645,13 @@ export function SnippetsSection({ settings, patch, searchTarget = null, searchSe
     patch({ promptSnippets: list });
   };
   // 区内移动按相邻可见项定位，再按 id 回完整数组交换，避免跨区移动没有可见变化。
-  const commonSnippets = settings.promptSnippets.filter((snippet) => workflowPromptSnippetIds.has(snippet.id));
-  const otherSnippets = settings.promptSnippets.filter((snippet) => !workflowPromptSnippetIds.has(snippet.id));
+  const commonSnippets = settings.promptSnippets.filter(isCommonPromptSnippet);
+  const otherSnippets = settings.promptSnippets.filter((snippet) => !isCommonPromptSnippet(snippet));
   const renderSnippet = (sn: PromptSnippet, index: number) => (
     editingId === sn.id ? (
       <div key={sn.id} className="px-3.5 py-3">
         <PromptTemplateEditor
+          aiSettings={settings}
           label={editLabel}
           text={editText}
           groupId={editGroupId}
@@ -3659,68 +3666,80 @@ export function SnippetsSection({ settings, patch, searchTarget = null, searchSe
         />
       </div>
     ) : (
-      <div key={sn.id} className="group flex items-center gap-2 px-3.5 py-2">
-        <span className="shrink-0 text-title font-medium">{sn.label}</span>
-        <span className="shrink-0 text-micro text-muted-foreground">{promptSnippetSourceLabel(sn)}</span>
-        <span className="truncate text-body text-muted-foreground">
-          {sn.text.replace(/\n+/g, " ⏎ ")}
-        </span>
-        <SimpleSelect
-          ariaLabel={`${sn.label} 所属提示词组`}
-          className="w-28 shrink-0"
-          align="end"
-          value={sn.groupId}
-          options={groupOptions}
-          onChange={(groupId) =>
-            patch({
-              promptSnippets: settings.promptSnippets.map((item) =>
-                item.id === sn.id ? { ...item, groupId } : item
-              ),
-            })
-          }
-        />
-        <div className="ml-auto flex shrink-0 items-center gap-0.5">
-          <IconButton
-            label="上移"
-            size="2xs"
-            reveal="hover-focus"
-            disabled={index === 0}
-            onClick={() => move(sn.id, -1)}
-          >
-            <ArrowUp />
-          </IconButton>
-          <IconButton
-            label="下移"
-            size="2xs"
-            reveal="hover-focus"
-            disabled={index === (workflowPromptSnippetIds.has(sn.id) ? commonSnippets : otherSnippets).length - 1}
-            onClick={() => move(sn.id, 1)}
-          >
-            <ArrowDown />
-          </IconButton>
-          <IconButton
-            label="编辑模板"
-            size="2xs"
-            reveal="hover-focus"
-            onClick={() => startEdit(sn)}
-          >
-            <Pencil />
-          </IconButton>
-          <IconButton
-            label="删除模板"
-            tone="danger"
-            size="2xs"
-            reveal="hover-focus"
-            onClick={() =>
+      <div key={sn.id} className="group flex flex-wrap items-center gap-2 px-3.5 py-2">
+        <div className="flex min-w-0 flex-1 basis-40 items-center gap-2">
+          <span className="max-w-40 shrink-0 truncate text-title font-medium" title={sn.label}>{sn.label}</span>
+          <span className="shrink-0 text-micro text-muted-foreground">{promptSnippetSourceLabel(sn)}</span>
+          <span className="min-w-0 truncate text-body text-muted-foreground">
+            {sn.text.replace(/\n+/g, " ⏎ ")}
+          </span>
+        </div>
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <PromptTemplateCommonAction
+            snippet={sn}
+            snippets={settings.promptSnippets}
+            onChange={(promptSnippets) => {
+              patch({ promptSnippets });
+              setOthersOpen(true);
+            }}
+          />
+          <SimpleSelect
+            ariaLabel={`${sn.label} 所属提示词组`}
+            className="w-28 shrink-0"
+            align="end"
+            value={sn.groupId}
+            options={groupOptions}
+            onChange={(groupId) =>
               patch({
-                promptSnippets: settings.promptSnippets.filter(
-                  (s) => s.id !== sn.id
+                promptSnippets: settings.promptSnippets.map((item) =>
+                  item.id === sn.id ? { ...item, groupId } : item
                 ),
               })
             }
-          >
-            <X />
-          </IconButton>
+          />
+          <div className="ml-auto flex shrink-0 items-center gap-0.5">
+            <IconButton
+              label="上移"
+              size="2xs"
+              reveal="hover-focus"
+              disabled={index === 0}
+              onClick={() => move(sn.id, -1)}
+            >
+              <ArrowUp />
+            </IconButton>
+            <IconButton
+              label="下移"
+              size="2xs"
+              reveal="hover-focus"
+              disabled={index === (isCommonPromptSnippet(sn) ? commonSnippets : otherSnippets).length - 1}
+              onClick={() => move(sn.id, 1)}
+            >
+              <ArrowDown />
+            </IconButton>
+            <IconButton
+              label="编辑模板"
+              size="2xs"
+              reveal="hover-focus"
+              onClick={() => startEdit(sn)}
+            >
+              <Pencil />
+            </IconButton>
+            <IconButton
+              label="删除模板"
+              tone="danger"
+              size="2xs"
+              reveal="hover-focus"
+              onClick={() =>
+                patch({
+                  promptSnippets: settings.promptSnippets.filter(
+                    (s) => s.id !== sn.id
+                  ),
+                })
+              }
+            >
+              <X />
+            </IconButton>
+          </div>
         </div>
       </div>
     )
@@ -3729,9 +3748,14 @@ export function SnippetsSection({ settings, patch, searchTarget = null, searchSe
     <div>
       <div className="mb-2 flex items-center justify-between gap-2">
         <p className="text-body font-medium text-muted-foreground">提示词模板</p>
-        <Button size="sm" disabled={exporting || settings.promptSnippets.length === 0} onClick={exportTemplates}>
-          {exporting ? "正在导出…" : "导出所有模板"}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" onClick={() => { setAddOpen(true); setAddAiOpen(true); }}>
+            AI 创建模板
+          </Button>
+          <Button size="sm" disabled={exporting || settings.promptSnippets.length === 0} onClick={exportTemplates}>
+            {exporting ? "正在导出…" : "导出所有模板"}
+          </Button>
+        </div>
       </div>
       <p className="mb-3 text-body text-muted-foreground">
         普通发送保持内容原文。选用模板后，模板会与选中内容组合，发送到当前目标。
@@ -3740,26 +3764,11 @@ export function SnippetsSection({ settings, patch, searchTarget = null, searchSe
         <code className="rounded-sm bg-muted px-1">{"{内容}"}</code>{" "}
         指定内容插入位置；不写时内容接在模板后。
       </p>
-      {commonSnippets.length > 0 && (
-        <>
-          <p className="mb-1.5 text-body font-medium text-muted-foreground">常用模板</p>
-          <div className="mb-3 divide-y divide-border/50 rounded-xl border border-border/60 bg-card">
-            {commonSnippets.map(renderSnippet)}
-          </div>
-        </>
-      )}
-      {otherSnippets.length > 0 && (
-        <Disclosure title={`其他模板（${otherSnippets.length}）`} open={othersOpen} onOpenChange={setOthersOpen}>
-          <div className="divide-y divide-border/50 rounded-xl border border-border/60 bg-card">
-            {otherSnippets.map(renderSnippet)}
-          </div>
-        </Disclosure>
-      )}
-      {settings.promptSnippets.length === 0 && (
-        <p className="mb-3 text-body text-muted-foreground">暂无模板</p>
-      )}
       <Disclosure title="新增模板" open={addOpen} onOpenChange={setAddOpen}>
         <PromptTemplateEditor
+          aiSettings={settings}
+          aiOpen={addAiOpen}
+          onAiOpenChange={setAddAiOpen}
           label={label}
           text={text}
           groupId={groupId}
@@ -3772,6 +3781,28 @@ export function SnippetsSection({ settings, patch, searchTarget = null, searchSe
           onPreviewOpenChange={setAddPreviewOpen}
         />
       </Disclosure>
+      {commonSnippets.length > 0 && (
+        <>
+          <p className="mb-1.5 text-body font-medium text-muted-foreground">常用模板</p>
+          <p className="mb-2 text-label text-muted-foreground">优先显示在发送菜单。替换后，原模板保留在“其他模板”。</p>
+          <div className="mb-3 divide-y divide-border/50 rounded-xl border border-border/60 bg-card">
+            {commonSnippets.map(renderSnippet)}
+          </div>
+        </>
+      )}
+      {commonSnippets.length === 0 && otherSnippets.length > 0 && (
+        <p className="mb-3 text-body text-muted-foreground">暂无常用模板，可在“其他模板”中选择“设为常用”。</p>
+      )}
+      {otherSnippets.length > 0 && (
+        <Disclosure title={`其他模板（${otherSnippets.length}）`} open={othersOpen} onOpenChange={setOthersOpen}>
+          <div className="divide-y divide-border/50 rounded-xl border border-border/60 bg-card">
+            {otherSnippets.map(renderSnippet)}
+          </div>
+        </Disclosure>
+      )}
+      {settings.promptSnippets.length === 0 && (
+        <p className="mb-3 text-body text-muted-foreground">暂无模板</p>
+      )}
       <div className="mt-5">
         <Disclosure title="管理提示词组">
           <div className="mb-2 divide-y divide-border/50 rounded-xl border border-border/60 bg-card">

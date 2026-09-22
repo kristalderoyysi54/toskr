@@ -6,6 +6,12 @@ const mocks = vi.hoisted(() => ({
   beginAiRequest: vi.fn(),
   authorizeAiRequest: vi.fn(),
   cancelAiRequest: vi.fn(),
+  requestAiKeyStatusForSettings: vi.fn(),
+}));
+
+vi.mock("@/lib/aiKeyAccess", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/aiKeyAccess")>(),
+  requestAiKeyStatusForSettings: mocks.requestAiKeyStatusForSettings,
 }));
 
 vi.mock("@/lib/tauri", () => ({
@@ -50,6 +56,7 @@ describe("aiClient", () => {
       },
     });
     mocks.getAiKeyStatus.mockResolvedValue({ configured: true, updatedAtMs: 1 });
+    mocks.requestAiKeyStatusForSettings.mockResolvedValue({ configured: true, updatedAtMs: 1 });
   });
 
   afterEach(() => vi.useRealTimers());
@@ -79,6 +86,63 @@ describe("aiClient", () => {
       model: "deepseek-chat",
       ready: true,
     });
+  });
+
+  it("设置窗显式快照覆盖旧 store，密钥状态委托主窗，最终载荷仍需授权", async () => {
+    useNotesStore.setState({ settings: { ...defaultSettings(), aiEnabled: false } });
+    mocks.aiChat.mockResolvedValue("草稿");
+    await expect(requestAi({
+      purpose: "improve-prompt", system: "模板系统", user: "想法", maxTokens: 4000,
+      settings: { aiEnabled: true, aiBaseUrl: "https://fresh.example.com", aiModel: "fresh-model" },
+      keyAccess: "settings",
+    })).resolves.toBe("草稿");
+    expect(mocks.requestAiKeyStatusForSettings).toHaveBeenCalledTimes(1);
+    expect(mocks.getAiKeyStatus).not.toHaveBeenCalled();
+    expect(mocks.authorizeAiRequest).toHaveBeenCalledWith("native-request-1", {
+      baseUrl: "https://fresh.example.com", model: "fresh-model", purpose: "improve-prompt",
+      system: "模板系统", user: "想法", maxTokens: 4000,
+    });
+    expect(mocks.aiChat).toHaveBeenCalledWith(
+      "https://fresh.example.com", "fresh-model", "模板系统", "想法", 4000,
+      "native-request-1", "improve-prompt"
+    );
+  });
+
+  it("设置窗快照关闭 AI 时不读密钥也不发请求，不受 store 已启用影响", async () => {
+    await expect(requestAi({
+      purpose: "improve-prompt", system: "系统", user: "想法", maxTokens: 4000,
+      settings: { aiEnabled: false, aiBaseUrl: "https://fresh.example.com", aiModel: "fresh" },
+      keyAccess: "settings",
+    })).rejects.toMatchObject({ kind: "not-configured" });
+    expect(mocks.requestAiKeyStatusForSettings).not.toHaveBeenCalled();
+    expect(mocks.getAiKeyStatus).not.toHaveBeenCalled();
+    expect(mocks.beginAiRequest).not.toHaveBeenCalled();
+    expect(mocks.aiChat).not.toHaveBeenCalled();
+  });
+
+  it("测试连接仍可在 AI 关闭时使用显式连接", async () => {
+    useNotesStore.setState({ settings: { ...defaultSettings(), aiEnabled: false } });
+    mocks.aiChat.mockResolvedValue("OK");
+    await expect(requestAi({
+      purpose: "test-connection", system: "系统", user: "测试", maxTokens: 50,
+      connection: { baseUrl: "https://test.example.com", model: "test" },
+    })).resolves.toBe("OK");
+  });
+
+  it("等待主窗密钥状态时取消，迟到状态不触发授权或网络", async () => {
+    let respond!: (status: { configured: boolean; updatedAtMs: number }) => void;
+    mocks.requestAiKeyStatusForSettings.mockReturnValue(new Promise((resolve) => { respond = resolve; }));
+    const handle = startAiRequest({
+      purpose: "improve-prompt", system: "系统", user: "想法", maxTokens: 4000, keyAccess: "settings",
+    });
+    await vi.waitFor(() => expect(mocks.requestAiKeyStatusForSettings).toHaveBeenCalledTimes(1));
+    handle.cancel();
+    await expect(handle.result).rejects.toMatchObject({ kind: "cancelled" });
+    respond({ configured: true, updatedAtMs: 1 });
+    await handle.transportSettled;
+    expect(mocks.beginAiRequest).not.toHaveBeenCalled();
+    expect(mocks.authorizeAiRequest).not.toHaveBeenCalled();
+    expect(mocks.aiChat).not.toHaveBeenCalled();
   });
 
   it("本地取消立即释放结果等待，底层迟到响应不可重新完成", async () => {

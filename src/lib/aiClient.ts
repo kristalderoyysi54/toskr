@@ -1,5 +1,5 @@
 import { api } from "@/lib/tauri";
-import { getAiKeyStatusForUse } from "@/lib/aiKeyAccess";
+import { getAiKeyStatusForUse, requestAiKeyStatusForSettings } from "@/lib/aiKeyAccess";
 import { useNotesStore, type Settings } from "@/store/notesStore";
 
 export interface AiPreset {
@@ -132,6 +132,10 @@ export interface AiRequestInput {
   user: string;
   maxTokens: number;
   connection?: AiConnectionOverride;
+  /** 独立设置窗使用其最新快照，不读取该 WebView 中未同步的 store。 */
+  settings?: Pick<Settings, "aiEnabled" | "aiBaseUrl" | "aiModel">;
+  /** 设置窗委托主窗迁移旧密钥，只接收配置状态。 */
+  keyAccess?: "settings";
   signal?: AbortSignal;
   timeoutMs?: number;
 }
@@ -154,7 +158,7 @@ function cancelledError(): AiError {
  * 返回密钥。原生登记后才提交请求，取消和超时同时终止原生传输。
  */
 export function startAiRequest(input: AiRequestInput): AiRequestHandle {
-  const descriptor = describeAiClient(input.connection);
+  const descriptor = describeAiClient(input.connection, input.settings);
   const payload = {
     baseUrl: descriptor.baseUrl,
     model: descriptor.model,
@@ -184,7 +188,9 @@ export function startAiRequest(input: AiRequestInput): AiRequestHandle {
       throw new AiError("not-configured", "AI 未配置或未启用");
     }
     try {
-      const keyStatus = await getAiKeyStatusForUse();
+      const keyStatus = await (input.keyAccess === "settings"
+        ? requestAiKeyStatusForSettings()
+        : getAiKeyStatusForUse());
       if (controller.signal.aborted) throw cancelledError();
       if (!keyStatus.configured) {
         throw new AiError("not-configured", "AI API Key 尚未配置");

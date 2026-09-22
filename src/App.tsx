@@ -2128,6 +2128,9 @@ export default function App() {
             e.payload.origin ? undefined : 0
           );
         }
+        if (e.payload.title !== undefined) {
+          useNotesStore.getState().updateNoteTitle(e.payload.id, e.payload.title);
+        }
         replySync(true);
         // 编辑中的静默自动保存：会话未结束，不释放媒体会话、不提示、不抓链接
         if (e.payload.autosave) return;

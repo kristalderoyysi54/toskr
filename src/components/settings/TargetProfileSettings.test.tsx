@@ -82,14 +82,22 @@ describe("发送方案设置组件", () => {
     expect(html).toContain('data-settings-search="敏感内容处理"');
   });
 
-  it("管理默认收起，方案深链仍在首帧展开", () => {
+  it("默认展开应用优先管理，高级共享管理收起，方案深链首帧展开高级管理", () => {
     const settings = defaultSettings();
-    const collapsed = renderToStaticMarkup(<TargetProfileManager settings={settings} patch={vi.fn()} />);
-    expect(collapsed).toContain("管理应用粘贴规则");
-    expect(collapsed).not.toContain('data-settings-search="默认发送方式"');
+    const initial = renderToStaticMarkup(<TargetProfileManager settings={settings} patch={vi.fn()} />);
+    expect(initial).toContain("管理应用粘贴规则");
+    expect(initial).toMatch(/<details[^>]*id="target-profile-management"[^>]*open=""/);
+    expect(initial).toContain('aria-label="应用列表"');
+    expect(initial).toContain('aria-label="搜索应用或方案"');
+    expect(initial).toContain('data-settings-search="默认发送方式"');
+    expect(initial).toContain('data-settings-search="敏感内容处理"');
+    expect(initial).toMatch(/id="target-profile-advanced"[\s\S]*?aria-expanded="false"/);
+    expect(initial).not.toContain('data-profile-select=');
     const linked = renderToStaticMarkup(
       <TargetProfileManager settings={settings} patch={vi.fn()} requestedProfileId={settings.defaultTargetProfileId} requestSequence={1} />
     );
+    expect(linked).toMatch(/id="target-profile-advanced"[\s\S]*?aria-expanded="true"/);
+    expect(linked).toContain('data-profile-select=');
     expect(linked).toContain('data-settings-search="默认发送方式"');
     expect(linked).toContain('data-settings-search="敏感内容处理"');
   });

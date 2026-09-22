@@ -244,7 +244,8 @@ const replaceImageRefs = (files: readonly string[], source: string, edited: stri
 
 /** 编辑会话账本：origin = 本次编辑前内容；persisted* = 最近一次已写库内容。 */
 type AutosaveSession = {
-  origin: { text: string; images: string[]; blocks: NoteContentBlock[] | null };
+  origin: { text: string; title: string; images: string[]; blocks: NoteContentBlock[] | null };
+  persistedTitle: string;
   persistedText: string;
   persistedImages: string[];
   persistedBlocksJson: string | null;
@@ -368,6 +369,9 @@ async function emitNoteEditWithAck(payload: NoteEditPayload): Promise<boolean> {
 export default function TextPreviewView() {
   const [note, setNote] = useState<NotePreviewPayload | null>(null);
   const [editing, setEditing] = useState(false);
+  const [draftTitle, setDraftTitle] = useState("");
+  const draftTitleRef = useRef("");
+  const titleComposingRef = useRef(false);
   const [draftEmpty, setDraftEmpty] = useState(true);
   const [draftImages, setDraftImages] = useState<string[]>([]);
   const [draftContentBlocks, setDraftContentBlocks] = useState<
@@ -487,7 +491,8 @@ export default function TextPreviewView() {
         ? current.contentBlocks
         : null;
     autosaveSessionRef.current = {
-      origin: { text: current.text, images: [...current.images], blocks },
+      origin: { text: current.text, title: current.title ?? "", images: [...current.images], blocks },
+      persistedTitle: current.title ?? "",
       persistedText: current.text,
       persistedImages: [...current.images],
       persistedBlocksJson: blocks
@@ -497,21 +502,24 @@ export default function TextPreviewView() {
     const tick = () => {
       const session = autosaveSessionRef.current;
       const target = noteRef.current;
-      if (!session || !previewIsEditable(target)) return;
+      if (!session || !previewIsEditable(target) || titleComposingRef.current) return;
+      const title = draftTitleRef.current.trim();
       if (session.origin.blocks) {
         const nextBlocks = normalizeNoteContentBlocks(
           draftContentBlocksRef.current
         );
         const json = JSON.stringify(nextBlocks);
-        if (json === session.persistedBlocksJson) return;
+        if (json === session.persistedBlocksJson && title === session.persistedTitle) return;
         void emitTo("main", "toskr://note-edit", {
           format: "blocks",
           id: target.id,
           contentBlocks: nextBlocks,
+          title,
           dataGeneration: target.dataGeneration,
           autosave: true,
         } satisfies NoteEditPayload);
         session.persistedBlocksJson = json;
+        session.persistedTitle = title;
         return;
       }
       const text = draftRef.current;
@@ -520,7 +528,8 @@ export default function TextPreviewView() {
       if (!text.trim() && images.length === 0) return;
       if (
         text === session.persistedText &&
-        sameFiles(images, session.persistedImages)
+        sameFiles(images, session.persistedImages) &&
+        title === session.persistedTitle
       ) {
         return;
       }
@@ -528,11 +537,13 @@ export default function TextPreviewView() {
         format: "flat",
         id: target.id,
         text,
+        title,
         images,
         dataGeneration: target.dataGeneration,
         autosave: true,
       } satisfies NoteEditPayload);
       session.persistedText = text;
+      session.persistedTitle = title;
       session.persistedImages = [...images];
     };
     const timer = window.setInterval(tick, NOTE_EDIT_AUTOSAVE_INTERVAL_MS);
@@ -731,6 +742,8 @@ export default function TextPreviewView() {
       }
       noteRef.current = p;
       setNote(p);
+      draftTitleRef.current = p.title ?? "";
+      setDraftTitle(draftTitleRef.current);
       void api
         .diagNote(
           `详情窗载荷 label=${getCurrentWebviewWindow().label} note=${p.id.slice(0, 8)}`
@@ -1332,20 +1345,23 @@ export default function TextPreviewView() {
       const originJson = JSON.stringify(
         normalizeNoteContentBlocks(session.origin.blocks)
       );
-      if (session.persistedBlocksJson === originJson) return;
+      if (session.persistedBlocksJson === originJson && session.persistedTitle === session.origin.title) return;
       void emitTo("main", "toskr://note-edit", {
         format: "blocks",
         id: current.id,
         contentBlocks: session.origin.blocks,
+        title: session.origin.title,
         dataGeneration: current.dataGeneration,
         autosave: true,
       } satisfies NoteEditPayload);
       session.persistedBlocksJson = originJson;
+      session.persistedTitle = session.origin.title;
       return;
     }
     if (
       session.persistedText === session.origin.text &&
-      sameFiles(session.persistedImages, session.origin.images)
+      sameFiles(session.persistedImages, session.origin.images) &&
+      session.persistedTitle === session.origin.title
     ) {
       return;
     }
@@ -1353,11 +1369,13 @@ export default function TextPreviewView() {
       format: "flat",
       id: current.id,
       text: session.origin.text,
+      title: session.origin.title,
       images: session.origin.images,
       dataGeneration: current.dataGeneration,
       autosave: true,
     } satisfies NoteEditPayload);
     session.persistedText = session.origin.text;
+    session.persistedTitle = session.origin.title;
     session.persistedImages = [...session.origin.images];
   };
 
@@ -1404,6 +1422,8 @@ export default function TextPreviewView() {
     sessionPastedImagesRef.current.clear();
     releaseEditorSession(current);
     draftRef.current = current.text;
+    draftTitleRef.current = current.title ?? "";
+    setDraftTitle(draftTitleRef.current);
     setDraftEmpty(!current.text.trim());
     textEditHistoryRef.current = freshTextEditHistory();
     draftImagesRef.current = current.images;
@@ -1422,16 +1442,20 @@ export default function TextPreviewView() {
     const current = noteRef.current;
     if (!previewIsEditable(current)) return;
     const session = autosaveSessionRef.current;
+    const title = draftTitleRef.current.trim();
+    draftTitleRef.current = title;
+    setDraftTitle(title);
+    const titleChanged = title !== (current.title ?? "");
     if (hasMixedNoteContent(current.contentBlocks) && current.contentBlocks) {
       const contentBlocks = normalizeNoteContentBlocks(
         draftContentBlocksRef.current
       );
       const changed =
-        JSON.stringify(contentBlocks) !== JSON.stringify(current.contentBlocks);
+        JSON.stringify(contentBlocks) !== JSON.stringify(current.contentBlocks) || titleChanged;
       editSessionTokenRef.current += 1;
       if (changed) {
         const text = textFromContentBlocks(contentBlocks);
-        const next = refreshPreviewPayload({ ...current, contentBlocks }, text);
+        const next = refreshPreviewPayload({ ...current, contentBlocks, title: title || null }, text);
         void emitTo(
           "main",
           "toskr://note-edit",
@@ -1440,9 +1464,10 @@ export default function TextPreviewView() {
             id: current.id,
             sessionId: current.sessionId,
             contentBlocks,
+            title,
             dataGeneration: current.dataGeneration,
             origin: session?.origin.blocks
-              ? { contentBlocks: session.origin.blocks }
+              ? { contentBlocks: session.origin.blocks, title: session.origin.title }
               : undefined,
           } satisfies NoteEditPayload
         );
@@ -1480,8 +1505,8 @@ export default function TextPreviewView() {
       ...new Set([...current.images, ...sessionPastedImagesRef.current]),
     ].filter((file) => !images.includes(file));
     editSessionTokenRef.current += 1;
-    if (text !== current.text || imagesChanged) {
-      const next = refreshPreviewPayload({ ...current, images }, text);
+    if (text !== current.text || imagesChanged || titleChanged) {
+      const next = refreshPreviewPayload({ ...current, images, title: title || null }, text);
       void emitTo(
         "main",
         "toskr://note-edit",
@@ -1490,11 +1515,12 @@ export default function TextPreviewView() {
           id: current.id,
           sessionId: current.sessionId,
           text: next.payload.text,
+          title,
           images,
           discardedImages,
           dataGeneration: current.dataGeneration,
           origin: session
-            ? { text: session.origin.text, images: session.origin.images }
+            ? { text: session.origin.text, images: session.origin.images, title: session.origin.title }
             : undefined,
         } satisfies NoteEditPayload
       );
@@ -2644,6 +2670,36 @@ export default function TextPreviewView() {
             if (editable && !editing) setEditing(true);
           }}
         >
+          {editing && writable ? (
+            <div className="mb-4 flex flex-wrap items-center gap-2 border-b border-border/50 pb-2">
+              <input
+                aria-label="笔记标题"
+                placeholder="添加标题（可选）"
+                value={draftTitle}
+                onChange={(event) => {
+                  draftTitleRef.current = event.target.value;
+                  setDraftTitle(event.target.value);
+                }}
+                onCompositionStart={() => { titleComposingRef.current = true; }}
+                onCompositionEnd={() => { titleComposingRef.current = false; }}
+                onKeyDown={(event) => {
+                  event.stopPropagation();
+                  if (event.nativeEvent.isComposing || titleComposingRef.current || event.keyCode === 229) return;
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    if (event.metaKey) save();
+                    else textareaRef.current?.focus();
+                  } else if (event.key === "Escape") {
+                    event.preventDefault();
+                    exitEditing();
+                  }
+                }}
+                className="min-w-0 flex-1 rounded-sm bg-transparent px-1 py-1 text-heading font-semibold outline-none placeholder:text-muted-foreground/50 focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            </div>
+          ) : note.title ? (
+            <h1 className="mb-4 break-words text-heading font-semibold">{note.title}</h1>
+          ) : null}
           {!fullContentReady ? (
             <div className="relative min-h-full" aria-label="正在加载完整长文本">
               <pre className="whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-body leading-relaxed">
@@ -2771,7 +2827,7 @@ export default function TextPreviewView() {
                 }
               }}
               className={cn(
-                "h-full min-h-40 w-full resize-none bg-transparent font-mono text-body leading-relaxed outline-none",
+                "min-h-full w-full resize-none bg-transparent font-mono text-body leading-relaxed outline-none",
                 // 预览时隐藏而非卸载：卸载会重置 defaultValue、丢原生撤销分组
                 editPreviewOn && "hidden"
               )}

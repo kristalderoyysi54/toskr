@@ -6,6 +6,31 @@ export const WORKFLOW_PROMPT_SNIPPET_IDS = [
   "workflow-review-plan",
 ] as const;
 
+const workflowSnippetIds = new Set<string>(WORKFLOW_PROMPT_SNIPPET_IDS);
+
+/** 缺省沿用内置常用模板；显式 true/false 保存用户的替换选择。 */
+export function isCommonPromptSnippet(snippet: PromptSnippet): boolean {
+  return snippet.isCommon ?? workflowSnippetIds.has(snippet.id);
+}
+
+/** 交换常用与其他模板的位置，只改变常用标记，保留两份模板。 */
+export function replaceCommonPromptSnippet(
+  snippets: PromptSnippet[],
+  currentId: string,
+  replacementId: string
+): PromptSnippet[] {
+  if (currentId === replacementId) return snippets;
+  const currentIndex = snippets.findIndex((snippet) => snippet.id === currentId);
+  const replacementIndex = snippets.findIndex((snippet) => snippet.id === replacementId);
+  if (currentIndex < 0 || replacementIndex < 0 ||
+    !isCommonPromptSnippet(snippets[currentIndex]) ||
+    isCommonPromptSnippet(snippets[replacementIndex])) return snippets;
+  const next = [...snippets];
+  next[currentIndex] = { ...snippets[replacementIndex], isCommon: true };
+  next[replacementIndex] = { ...snippets[currentIndex], isCommon: false };
+  return next;
+}
+
 export const WORKFLOW_PROMPT_SNIPPETS: PromptSnippet[] = [
   {
     id: WORKFLOW_PROMPT_SNIPPET_IDS[0],

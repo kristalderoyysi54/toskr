@@ -153,6 +153,31 @@ describe("设置中的常用提示词模板", () => {
     ]);
   });
 
+  it("自建常用与降级内置项按覆盖标记分区，移动使用新的同区邻居", () => {
+    const customized = snippets.map((snippet) => snippet.id === "custom-first"
+      ? { ...snippet, isCommon: true }
+      : snippet.id === WORKFLOW_PROMPT_SNIPPET_IDS[1]
+        ? { ...snippet, isCommon: false }
+        : snippet);
+    const { html, lastSnippets } = render(customized);
+    expect(html).toContain("自定义甲正文");
+    expect(html).not.toContain("常用乙正文");
+    expect(html).toContain("其他模板（3）");
+    click("下移", 0);
+    expect(lastSnippets().map((snippet) => snippet.id)).toEqual([
+      snippets[3]!.id, snippets[1]!.id, snippets[2]!.id,
+      snippets[0]!.id, snippets[4]!.id, snippets[5]!.id,
+    ]);
+    expect(lastSnippets().find((snippet) => snippet.id === "custom-first")?.isCommon).toBe(true);
+    expect(lastSnippets().find((snippet) => snippet.id === WORKFLOW_PROMPT_SNIPPET_IDS[1])?.isCommon).toBe(false);
+  });
+
+  it("全部移出常用后保留其他模板及设置入口", () => {
+    const { html } = render(snippets.map((snippet) => ({ ...snippet, isCommon: false })));
+    expect(html).toContain("暂无常用模板");
+    expect(html).toContain("其他模板（6）");
+  });
+
   it("其他模板移动与删除都命中原id，不使用折叠分区的局部下标", () => {
     controls.expandOthers = true;
     const { lastSnippets } = render();

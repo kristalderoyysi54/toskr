@@ -5,6 +5,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ save: calls.save }));
 vi.mock("@/lib/tauri", () => ({ api: { exportPromptTemplates: calls.exportPromptTemplates } }));
 
 import { buildPromptTemplatesExport, exportPromptTemplates } from "./promptTemplateExport";
+import type { PromptSnippet } from "./targetProfiles";
 
 const groups = [
   { id: "general", name: "通用", order: 0 },
@@ -42,6 +43,28 @@ describe("模板独立导出", () => {
     expect(buildPromptTemplatesExport([], groups)).toEqual({
       format: "toskr-prompt-templates", version: 1, groups: [], snippets: [],
     });
+  });
+
+  it("导出保留显式 true/false，旧模板及 undefined 不增加常用字段", () => {
+    const input: PromptSnippet[] = [
+      { ...snippets[0], isCommon: true },
+      { ...snippets[1], isCommon: false },
+      { ...snippets[0], id: "legacy" },
+      { ...snippets[0], id: "unset", isCommon: undefined },
+    ];
+    const exported = buildPromptTemplatesExport(input, groups);
+    expect(exported.version).toBe(1);
+    expect(exported.snippets.slice(0, 2)).toEqual(input.slice(0, 2));
+    expect(exported.snippets[2]).not.toHaveProperty("isCommon");
+    expect(exported.snippets[3]).not.toHaveProperty("isCommon");
+    expect(JSON.parse(JSON.stringify(exported)).snippets[1].isCommon).toBe(false);
+  });
+
+  it.each([null, "false", 0, [], {}])("拒绝无效常用标记 %j，不打开保存对话框", async (isCommon) => {
+    const input = [{ ...snippets[0], isCommon }] as unknown as PromptSnippet[];
+    await expect(exportPromptTemplates(input, groups)).rejects.toThrow("常用标记必须是布尔值");
+    expect(calls.save).not.toHaveBeenCalled();
+    expect(calls.exportPromptTemplates).not.toHaveBeenCalled();
   });
 
   it("缺少引用分组时中止导出，不生成无法还原的模板文件", async () => {

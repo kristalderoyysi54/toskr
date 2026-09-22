@@ -2,17 +2,29 @@ import { Children, isValidElement, type ComponentProps, type ReactElement, type 
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const sample = vi.hoisted(() => ({ value: "" }));
+const sample = vi.hoisted(() => ({ value: "", cursor: 0, values: [] as unknown[], effects: [] as (() => void)[] }));
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
   return {
     ...actual,
     useId: () => "template-trial",
-    useState: () => [sample.value, (value: string) => { sample.value = value; }],
+    useState: (initial: unknown) => {
+      const index = sample.cursor++;
+      if (index === 0) return [sample.value, (value: string) => { sample.value = value; }];
+      if (!(index in sample.values)) sample.values[index] = initial;
+      return [sample.values[index], (value: unknown) => { sample.values[index] = value; }];
+    },
+    useRef: (initial: unknown) => {
+      const index = sample.cursor++;
+      if (!(index in sample.values)) sample.values[index] = { current: initial };
+      return sample.values[index];
+    },
+    useLayoutEffect: (effect: () => void) => { sample.effects.push(effect); },
   };
 });
 
 import { PromptTemplateEditor } from "./PromptTemplateEditor";
+import { PromptTemplateAssistant } from "./PromptTemplateAssistant";
 
 function elements(node: ReactNode): ReactElement<Record<string, unknown>>[] {
   return Children.toArray(node).flatMap((child) => isValidElement<Record<string, unknown>>(child)
@@ -33,18 +45,20 @@ function render(overrides: Partial<ComponentProps<typeof PromptTemplateEditor>> 
     onCancel: vi.fn(),
     ...overrides,
   };
+  sample.cursor = 0;
   const nodes = elements(PromptTemplateEditor(props));
+  sample.effects.splice(0).forEach((effect) => effect());
   const byId = (suffix: string) => nodes.find((node) => node.props.id === `template-trial-${suffix}`)!;
   const preview = nodes.find((node) => node.type === "pre")!;
   return { props, nodes, byId, preview: preview.props.children as string };
 }
 
-beforeEach(() => { sample.value = ""; });
+beforeEach(() => { sample.value = ""; sample.values = []; sample.effects = []; });
 
 describe("模板编辑试用预览", () => {
   it("默认收起且使用具体示例，每个标签只关联一个输入控件", () => {
     const { nodes, byId, preview } = render();
-    expect(nodes.find((node) => node.type === "details")!.props.open).toBeUndefined();
+    expect(nodes.find((node) => node.type === "details")!.props.open).toBe(false);
     expect(preview).toBe(`请分析：\n${byId("material").props.placeholder}\n先不修改。`);
     for (const label of nodes.filter((node) => node.type === "label")) {
       expect(nodes.filter((node) => node.props.id === label.props.htmlFor)).toHaveLength(1);
@@ -79,12 +93,12 @@ describe("模板编辑试用预览", () => {
     const current = render();
     (current.byId("text").props.onChange as (event: { target: { value: string } }) => void)({ target: { value: "新模板" } });
     expect(current.props.onTextChange).toHaveBeenCalledExactlyOnceWith("新模板");
-    const key = current.byId("text").props.onKeyDown as (event: { key: string; metaKey?: boolean; preventDefault: () => void }) => void;
+    const key = current.byId("text").props.onKeyDown as (event: { key: string; metaKey?: boolean; nativeEvent: { isComposing: boolean }; preventDefault: () => void }) => void;
     const preventDefault = vi.fn();
-    key({ key: "Enter", metaKey: true, preventDefault });
+    key({ key: "Enter", metaKey: true, nativeEvent: { isComposing: false }, preventDefault });
     expect(current.props.onSave).toHaveBeenCalledOnce();
     expect(preventDefault).toHaveBeenCalledOnce();
-    key({ key: "Escape", preventDefault });
+    key({ key: "Escape", nativeEvent: { isComposing: false }, preventDefault });
     expect(current.props.onCancel).toHaveBeenCalledOnce();
     const empty = render({ label: "", text: "", onCancel: undefined });
     expect(empty.nodes.find((node) => node.props.children === "添加模板")!.props.disabled).toBe(true);
@@ -102,5 +116,73 @@ describe("模板编辑试用预览", () => {
     expect(onPreviewOpenChange).toHaveBeenCalledExactlyOnceWith(false);
     expect(sample.value).toBe("正在使用的示例材料");
     expect(current.props.onSave).not.toHaveBeenCalled();
+  });
+
+  it("名称和正文的快捷键在输入法组合期间不保存或取消", () => {
+    const current = render();
+    for (const field of ["name", "text"]) {
+      const key = current.byId(field).props.onKeyDown as (event: unknown) => void;
+      for (const nativeEvent of [{ isComposing: true }, { isComposing: false, keyCode: 229 }]) {
+        key({ key: "Enter", metaKey: true, nativeEvent, preventDefault: vi.fn() });
+        key({ key: "Escape", nativeEvent, preventDefault: vi.fn() });
+      }
+    }
+    expect(current.props.onSave).not.toHaveBeenCalled();
+    expect(current.props.onCancel).not.toHaveBeenCalled();
+    const key = current.byId("name").props.onKeyDown as (event: unknown) => void;
+    key({ key: "Enter", metaKey: true, nativeEvent: { isComposing: false }, preventDefault: vi.fn() });
+    expect(current.props.onSave).toHaveBeenCalledOnce();
+  });
+
+  it("在正文选区插入占位符并选中它，已有占位符只定位而不重复插入", () => {
+    const current = render({ text: "请分析旧内容并给建议" });
+    const input = { focus: vi.fn(), setSelectionRange: vi.fn(), selectionStart: 3, selectionEnd: 6 };
+    (current.byId("text") as unknown as { ref: { current: unknown } }).ref.current = input;
+    (current.nodes.find((node) => node.props.children === "插入 {内容}")!.props.onClick as () => void)();
+    expect(current.props.onTextChange).toHaveBeenCalledExactlyOnceWith("请分析{内容}并给建议");
+    const updated = render({ ...current.props, text: "请分析{内容}并给建议" });
+    expect(input.setSelectionRange).toHaveBeenCalledExactlyOnceWith(3, 7);
+    expect(input.focus).toHaveBeenCalledOnce();
+    vi.mocked(current.props.onTextChange).mockClear();
+    input.setSelectionRange.mockClear();
+    (updated.nodes.find((node) => node.props.children === "插入 {内容}")!.props.onClick as () => void)();
+    expect(current.props.onTextChange).not.toHaveBeenCalled();
+    expect(input.setSelectionRange).toHaveBeenCalledExactlyOnceWith(3, 7);
+  });
+
+  it("AI 默认收起，采用候选只更新草稿并展开预览，不保存或改变分组", () => {
+    const aiSettings = { aiEnabled: true, aiBaseUrl: "https://ai.example.test/v1", aiModel: "model" };
+    const current = render({ aiSettings });
+    expect(current.nodes.some((node) => node.type === PromptTemplateAssistant)).toBe(false);
+    (current.nodes.find((node) => node.props.children === "AI 调整")!.props.onClick as () => void)();
+    const opened = render(current.props);
+    const assistant = opened.nodes.find((node) => node.type === PromptTemplateAssistant)!.props as ComponentProps<typeof PromptTemplateAssistant>;
+    expect(assistant).toMatchObject({ label: current.props.label, text: current.props.text, settings: aiSettings });
+    assistant.onApply({ label: "新名称", text: "新模板：{内容}" });
+    expect(current.props.onLabelChange).toHaveBeenCalledExactlyOnceWith("新名称");
+    expect(current.props.onTextChange).toHaveBeenCalledExactlyOnceWith("新模板：{内容}");
+    expect(current.props.onSave).not.toHaveBeenCalled();
+    expect(current.props.onGroupChange).not.toHaveBeenCalled();
+    const applied = render(current.props);
+    expect(applied.nodes.some((node) => node.type === PromptTemplateAssistant)).toBe(false);
+    expect(applied.nodes.find((node) => node.type === "details")!.props.open).toBe(true);
+  });
+
+  it("外部可打开 AI 创建，采用候选通过受控回调收起 AI 并展开预览", () => {
+    const onAiOpenChange = vi.fn();
+    const onPreviewOpenChange = vi.fn();
+    const current = render({
+      onCancel: undefined,
+      aiSettings: { aiEnabled: false, aiBaseUrl: "", aiModel: "" },
+      aiOpen: true,
+      previewOpen: false,
+      onAiOpenChange,
+      onPreviewOpenChange,
+    });
+    expect(current.nodes.find((node) => node.props.children === "AI 创建")!.props["aria-expanded"]).toBe(true);
+    const assistant = current.nodes.find((node) => node.type === PromptTemplateAssistant)!.props as ComponentProps<typeof PromptTemplateAssistant>;
+    assistant.onApply({ label: "新建", text: "整理：{内容}" });
+    expect(onAiOpenChange).toHaveBeenCalledExactlyOnceWith(false);
+    expect(onPreviewOpenChange).toHaveBeenCalledExactlyOnceWith(true);
   });
 });
