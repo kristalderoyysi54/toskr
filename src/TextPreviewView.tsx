@@ -27,7 +27,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Kbd } from "@/components/ui/kbd";
-import { MacTrafficLights } from "@/components/ui/mac-close-button";
+import { MacTrafficLights, PlatinumTrailingBoxes } from "@/components/ui/mac-close-button";
+import { useColorScheme } from "@/lib/colorScheme";
 import { DETAIL_STATE_EVENT } from "@/lib/detailWindows";
 import { Segmented } from "@/components/ui/segmented";
 import {
@@ -36,15 +37,18 @@ import {
   SimpleMenuLabel,
   SimpleMenuSeparator,
 } from "@/components/SimpleMenu";
+import { SaveToNotesMenu } from "@/components/SaveToNotesMenu";
 import { TextSelectionToolbar } from "@/components/TextSelectionToolbar";
 import {
   NOTE_EDIT_AUTOSAVE_INTERVAL_MS,
   NOTE_EDIT_SYNC_RESULT_EVENT,
+  NOTE_SAVE_TO_NOTES_EVENT,
   NOTE_TAGS_EVENT,
   RUN_PENDING_UNDO_EVENT,
   type NoteEditPayload,
   type NoteEditSyncResultPayload,
   type NotePreviewPayload,
+  type NoteSaveToNotesPayload,
   type NoteSendPayload,
   type NoteTagsPayload,
 } from "@/lib/actions";
@@ -417,6 +421,7 @@ export default function TextPreviewView() {
   const [chromeOn, setChromeOn] = useState(true);
   const chromeHideTimerRef = useRef<number | null>(null);
   const [glassOn, setGlassOn] = useState(true);
+  const platinum = useColorScheme() === "platinum";
   /** 本次载荷是否新建占位（selectAll 只有新建流程传）：关窗未改则回收。 */
   const blankDraftRef = useRef(false);
   // 发送菜单候选 = 运行中的常规 GUI 应用；点选后采信为目标再发送
@@ -1604,6 +1609,22 @@ export default function TextPreviewView() {
     noteRef.current = next;
   };
 
+  /** 剪贴卡存入笔记分组：主面板执行移动；本窗先收起入口并换上分组定色，未移动时主面板会重推复原。 */
+  const saveToNotes = (sectionId: string) => {
+    const current = noteRef.current;
+    if (!previewIsEditable(current)) return;
+    const destination = current.clipDestinations?.find((item) => item.id === sectionId);
+    if (!destination) return;
+    void emitTo("main", NOTE_SAVE_TO_NOTES_EVENT, {
+      id: current.id,
+      sectionId,
+      dataGeneration: current.dataGeneration,
+    } satisfies NoteSaveToNotesPayload);
+    const next = { ...current, clipDestinations: null, headerColor: destination.headerColor };
+    setNote(next);
+    noteRef.current = next;
+  };
+
   const removeTag = (tag: string) =>
     applyTags((noteRef.current?.tags ?? []).filter((item) => item !== tag));
 
@@ -2531,7 +2552,7 @@ export default function TextPreviewView() {
       {/* ——— 无界剧场（A×E）：零标题栏。常驻元素只有顶部晕光；信息条/操作坞随 chromeVisible 贴缘唤出 ——— */}
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-x-0 top-0 z-0 h-32"
+        className={cn("pointer-events-none absolute inset-x-0 top-0 z-0 h-32", platinum && "hidden")}
         style={{ background: glowBackground }}
       />
       {/* 无标题栏后的拖动区：顶部 40px 皆可拖窗（正文首行从其下开始） */}
@@ -2546,12 +2567,15 @@ export default function TextPreviewView() {
         className={cn(
           "absolute inset-x-0 top-0 z-30 flex cursor-grab items-center gap-2 px-3 py-2 active:cursor-grabbing",
           "transition-[opacity,transform] duration-(--duration-overlay) ease-(--ease-standard) motion-reduce:transition-none",
-          chromeVisible
+          // Platinum 标题栏常驻（Mac OS 9 窗口没有贴缘唤出）
+          chromeVisible || platinum
             ? "translate-y-0 opacity-100"
-            : "pointer-events-none -translate-y-1 opacity-0"
+            : "pointer-events-none -translate-y-1 opacity-0",
+          platinum && "platinum-detail-titlebar"
         )}
       >
         <MacTrafficLights onClose={close} />
+        <span aria-hidden data-tauri-drag-region className="platinum-stripe platinum-stripe--lead" />
         {editing && (
           // 编辑态指示：一枚呼吸主色点 + 小字（类型徽标已按用户要求移除）
           <span className="flex shrink-0 items-center gap-1.5 text-micro font-medium text-primary">
@@ -2582,7 +2606,11 @@ export default function TextPreviewView() {
               .join(" · ")}
           {` · ${s.chars} 字`}
         </p>
+        <span aria-hidden data-tauri-drag-region className="platinum-stripe" />
         {icon && <img src={icon.url} alt="" className="size-5 rounded-[5px]" />}
+        {writable && note.clipDestinations && (
+          <SaveToNotesMenu size="xs" sections={note.clipDestinations} onPick={saveToNotes} />
+        )}
         <IconButton
           label={winPinned ? "取消固定（发送后恢复自动关窗）" : "固定窗口：发送后保持打开"}
           size="xs"
@@ -2591,6 +2619,7 @@ export default function TextPreviewView() {
         >
           <Pin className="size-3.5" fill={winPinned ? "currentColor" : "none"} />
         </IconButton>
+        <PlatinumTrailingBoxes />
       </div>
       {/* 标签行：chips 可摘除 + 内联新增；写回主面板持久化（详情窗不直接写库）。
           无界剧场后是随 chrome 唤出的浮层（tagDraft 输入期间 chromeVisible 兜底常显） */}

@@ -298,6 +298,7 @@ export function TargetLensView({
       // 根容器不能 overflow-hidden：展开区里各下拉（完成后/粘贴后/输出格式…）
       // 的菜单是 absolute，会被一并纵向裁掉——实测「完成后」只剩第一项、
       // 第二项点不到。横向截断下移到身份行（那行不含浮层），语义不变
+      data-target-lens
       className="mx-3 mb-1.5 min-w-0 px-1 py-1"
     >
       <span className="sr-only" aria-live="polite" aria-atomic="true">

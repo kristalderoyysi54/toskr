@@ -8,7 +8,8 @@ import { cn } from "@/lib/utils";
  */
 export function floatingSurface(tier: 2 | 3 = 2) {
   return cn(
-    "border border-foreground/10 bg-surface-raised/95",
+    // floating-surface 是配色方案的样式钩子（Platinum 下改硬边投影），默认主题无样式
+    "floating-surface border border-foreground/10 bg-surface-raised/95",
     tier === 2 ? "elevation-2" : "elevation-3"
   );
 }

@@ -244,6 +244,7 @@ export function SelectionBar({
     <div
       role="toolbar"
       aria-label="批量操作"
+      data-selection-bar={compact ? "compact" : "docked"}
       className={cn(
         // flex-wrap：按钮均为 shrink-0，面板拖到最窄（320px）放不下时
         // 右组整体折行，而不是把「已选 N」挤成逐字竖排
@@ -316,6 +317,7 @@ export function SelectionBar({
                       ? "发送不可用：原临时发送方案已暂停"
                       : "发送不可用：发送目标未就绪"
                 }
+                data-default-action
                 className="rounded-l-lg rounded-r-none"
                 onClick={() => sendCheckedToChat()}
               >
@@ -354,6 +356,7 @@ export function SelectionBar({
                 aria-controls={controls}
                 disabled={!nativeTargetReady && !internalSendAvailable}
                 onClick={toggle}
+                data-popup-trigger
                 className="rounded-l-none rounded-r-lg border-l border-border px-1"
               >
                 <ChevronDown className="size-3" />

@@ -98,6 +98,7 @@ export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
       <button
         ref={ref}
         type="button"
+        data-icon-button
         tabIndex={0}
         aria-label={label}
         title={withTitle ? label : undefined}

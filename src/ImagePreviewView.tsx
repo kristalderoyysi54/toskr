@@ -33,7 +33,8 @@ import { DataReadOnlyGuard } from "@/components/DataReadOnlyGuard";
 import { DetailWindowFrame } from "@/components/DetailWindowFrame";
 import { ManualRedactionCanvas } from "@/components/ManualRedactionCanvas";
 import { Button } from "@/components/ui/button";
-import { MacTrafficLights } from "@/components/ui/mac-close-button";
+import { MacTrafficLights, PlatinumTrailingBoxes } from "@/components/ui/mac-close-button";
+import { useColorScheme } from "@/lib/colorScheme";
 import { IconButton } from "@/components/ui/icon-button";
 import {
   DATA_ACTIVITY_EVENT,
@@ -142,6 +143,7 @@ export default function ImagePreviewView() {
   const [dropActive, setDropActive] = useState(false);
   // 📌 固定窗口：发送后不自动关窗；主动关闭（X/Esc/空格）与数据失效关窗不受影响
   const [winPinned, setWinPinned] = useState(false);
+  const platinum = useColorScheme() === "platinum";
   // 备注编辑镜像 + 会话账本：interval / 事件监听闭包只读 ref，不受旧 state 影响
   const captionRef = useRef({
     editing,
@@ -906,13 +908,17 @@ export default function ImagePreviewView() {
       {!transientPeek && (
       <div
         data-tauri-drag-region
-        className="flex h-8 shrink-0 cursor-grab items-center gap-1.5 px-2 active:cursor-grabbing"
+        className={cn(
+          "flex h-8 shrink-0 cursor-grab items-center gap-1.5 px-2 active:cursor-grabbing",
+          platinum && "platinum-detail-titlebar"
+        )}
       >
         <MacTrafficLights
           closeLabel={imageEditing ? "取消图片编辑" : "关闭预览"}
           closeDisabled={imageEditBusy}
           onClose={close}
         />
+        <span aria-hidden data-tauri-drag-region className="platinum-stripe platinum-stripe--lead" />
         <span data-tauri-drag-region className="select-none text-body font-medium text-foreground/80">
           {imageEditing
             ? "图片打码"
@@ -920,6 +926,7 @@ export default function ImagePreviewView() {
               ? `图片 ${idx + 1}/${files.length}`
               : "图片"}
         </span>
+        <span aria-hidden data-tauri-drag-region className="platinum-stripe" />
         {!imageEditing && !editing && (
           <div className="ml-auto flex items-center gap-1">
             {noteId && dataGeneration !== null && (
@@ -977,6 +984,7 @@ export default function ImagePreviewView() {
             )}
           </div>
         )}
+        <PlatinumTrailingBoxes />
       </div>
       )}
       {/* 图片区：适配态整体拖窗；放大后拖拽转为平移图片（img 关闭指针事件） */}

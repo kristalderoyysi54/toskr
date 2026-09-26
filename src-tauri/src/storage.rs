@@ -474,7 +474,13 @@ pub fn default_data_dir(app: &AppHandle) -> PathBuf {
 }
 
 pub fn inspect_data_location(app: &AppHandle, path: &Path) -> DataLocationInspection {
-    data_integrity::inspect_location(path, Some(&data_dir(app)))
+    let active = data_dir(app);
+    let mut inspection = data_integrity::inspect_location(path, Some(&active));
+    // 附上当前数据集摘要，前端据此提示「目标比当前旧/新」，避免误载陈旧目录
+    if !inspection.same_as_active {
+        inspection.current = Some(data_integrity::inspect_location(&active, None).summary());
+    }
+    inspection
 }
 
 pub fn data_location_status(app: &AppHandle) -> DataLocationStatus {
@@ -977,6 +983,102 @@ fn update_runtime_metadata(app: &AppHandle, update: impl FnOnce(&mut DataRuntime
     }
 }
 
+/// 启动恢复点：每次启动、前端水合之前，把活动数据重封为 Recovery 保险档
+/// （`recovery/pre-launch-<ms>-v<版本>.bak`），可直接走「导入 → 保险档合并」恢复。
+/// 2026-09-25 事故：新构建水合失败以默认态覆盖了数据，且磁盘上没有任何近期副本。
+pub const LAUNCH_SNAPSHOT_PREFIX: &str = "pre-launch-";
+pub const LAUNCH_SNAPSHOT_KEEP: usize = 8;
+
+pub fn snapshot_data_on_launch(app: &AppHandle) -> Result<Option<PathBuf>, String> {
+    let version = app.package_info().version.to_string();
+    snapshot_data_dir(&data_dir(app), &version, now_ms())
+}
+
+/// 与最近一份内容相同则跳过；保留最近 `LAUNCH_SNAPSHOT_KEEP` 份。
+pub fn snapshot_data_dir(
+    active: &Path,
+    version: &str,
+    now: u64,
+) -> Result<Option<PathBuf>, String> {
+    let Ok(bytes) = fs::read(active.join(DATA_FILE)) else {
+        return Ok(None); // 全新安装尚无数据
+    };
+    let plain = if crate::data_crypto::looks_sealed(&bytes) {
+        crate::data_crypto::open(crate::data_crypto::Purpose::Data, &bytes)
+            .map_err(|error| error.message())?
+    } else {
+        bytes
+    };
+    let recovery = active.join("recovery");
+    fs::create_dir_all(&recovery).map_err(|error| format!("创建恢复点目录失败：{error}"))?;
+    let mut existing = launch_snapshots(&recovery);
+    if let Some((latest, _)) = existing.last() {
+        let same = fs::read(latest)
+            .ok()
+            .and_then(|sealed| {
+                crate::data_crypto::open(crate::data_crypto::Purpose::Recovery, &sealed).ok()
+            })
+            .is_some_and(|previous| previous == plain);
+        if same {
+            return Ok(None);
+        }
+    }
+    let sealed = crate::data_crypto::seal(crate::data_crypto::Purpose::Recovery, &plain)
+        .map_err(|error| error.message())?;
+    let path = recovery.join(format!("{LAUNCH_SNAPSHOT_PREFIX}{now:013}-v{version}.bak"));
+    data_integrity::atomic_write_file(
+        &path,
+        &sealed,
+        DataOperationFailureCode::RecoveryPointFailed,
+    )
+    .map_err(|failure| failure.message)?;
+    existing.push((path.clone(), sealed.len() as u64));
+    for stale in launch_snapshots_to_prune(&existing, LAUNCH_SNAPSHOT_KEEP) {
+        let _ = fs::remove_file(stale);
+    }
+    Ok(Some(path))
+}
+
+/// 按文件名（毫秒时间戳定宽）升序列出启动恢复点及大小。
+fn launch_snapshots(recovery: &Path) -> Vec<(PathBuf, u64)> {
+    let mut files = fs::read_dir(recovery)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with(LAUNCH_SNAPSHOT_PREFIX) && name.ends_with(".bak")
+        })
+        .filter_map(|entry| {
+            let metadata = entry.metadata().ok()?;
+            metadata.is_file().then(|| (entry.path(), metadata.len()))
+        })
+        .collect::<Vec<_>>();
+    files.sort_by(|a, b| a.0.file_name().cmp(&b.0.file_name()));
+    files
+}
+
+/// 保留最近 `keep` 份；更早的里始终再留体积最大的一份（高水位），防止坏数据
+/// 连续启动几次就把最后一份好恢复点挤出轮转。
+pub fn launch_snapshots_to_prune(files: &[(PathBuf, u64)], keep: usize) -> Vec<PathBuf> {
+    if files.len() <= keep {
+        return Vec::new();
+    }
+    let older = &files[..files.len() - keep];
+    let high_water = older
+        .iter()
+        .enumerate()
+        .max_by_key(|(index, (_, size))| (*size, *index))
+        .map(|(index, _)| index);
+    older
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| Some(*index) != high_water)
+        .map(|(_, (path, _))| path.clone())
+        .collect()
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1426,6 +1528,44 @@ fn run_media_encryption_sweep(app: &AppHandle) -> Result<usize, String> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn launch_snapshot_reseals_as_recovery_and_skips_identical_content() {
+        let root = tempdir().unwrap();
+        let sealed = crate::data_crypto::seal(crate::data_crypto::Purpose::Data, b"{\"toskr\":1}").unwrap();
+        fs::write(root.path().join(DATA_FILE), &sealed).unwrap();
+
+        let first = snapshot_data_dir(root.path(), "1.2.3", 1_000).unwrap().expect("首次启动应留恢复点");
+        assert!(first.file_name().unwrap().to_string_lossy().starts_with("pre-launch-0000000001000-v1.2.3"));
+        let reopened = crate::data_crypto::open(crate::data_crypto::Purpose::Recovery, &fs::read(&first).unwrap()).unwrap();
+        assert_eq!(reopened, b"{\"toskr\":1}", "必须是 Recovery 保险档，才能走导入合并恢复");
+
+        assert!(snapshot_data_dir(root.path(), "1.2.3", 2_000).unwrap().is_none(), "内容未变不重复留档");
+
+        let changed = crate::data_crypto::seal(crate::data_crypto::Purpose::Data, b"{\"toskr\":2}").unwrap();
+        fs::write(root.path().join(DATA_FILE), &changed).unwrap();
+        assert!(snapshot_data_dir(root.path(), "1.2.3", 3_000).unwrap().is_some());
+    }
+
+    #[test]
+    fn launch_snapshot_is_noop_without_data_file() {
+        let root = tempdir().unwrap();
+        assert!(snapshot_data_dir(root.path(), "1.0.0", 1).unwrap().is_none());
+        assert!(!root.path().join("recovery").exists());
+    }
+
+    #[test]
+    fn launch_snapshot_pruning_keeps_recent_and_high_water_mark() {
+        let files: Vec<(PathBuf, u64)> = [900, 50, 40, 30, 20, 10]
+            .iter()
+            .enumerate()
+            .map(|(index, size)| (PathBuf::from(format!("pre-launch-{index}.bak")), *size))
+            .collect();
+        // 保留最近 3 份；更早 3 份里 900 字节那份是高水位（事故前的完整数据），必须留下
+        let pruned = launch_snapshots_to_prune(&files, 3);
+        assert_eq!(pruned, vec![PathBuf::from("pre-launch-1.bak"), PathBuf::from("pre-launch-2.bak")]);
+        assert!(launch_snapshots_to_prune(&files[..3], 3).is_empty());
+    }
 
     #[test]
     fn image_identity_hashes_every_pixel_byte_and_dimensions() {

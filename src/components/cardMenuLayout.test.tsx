@@ -30,11 +30,28 @@ describe("卡片菜单层级", () => {
     expect(new Set(all)).toEqual(new Set(ids));
   });
 
-  it("剪贴卡首层只留发送、复制和保留，编辑与完成仍能在更多中找到", () => {
+  it("剪贴卡首层为发送、复制、保留与移入笔记分组，编辑与完成仍能在更多中找到", () => {
     const layout = partitionCardMenuIds(CONTEXT_MENU_REGISTRY.map((item) => item.id), true);
-    expect(layout.primary).toEqual(["send", "copy", "keep"]);
+    expect(layout.primary).toEqual(["send", "copy", "keep", "move"]);
     expect(layout.more).toContain("edit");
     expect(layout.more).toContain("done");
+    expect(layout.more).not.toContain("move");
+  });
+
+  it("普通笔记的移动到仍留在更多操作", () => {
+    const layout = partitionCardMenuIds(CONTEXT_MENU_REGISTRY.map((item) => item.id), false);
+    expect(layout.primary).not.toContain("move");
+    expect(layout.more).toContain("move");
+  });
+
+  it("文本处理已移出卡片右键菜单（详情窗工具栏提供），旧配置里的该项被剔除", () => {
+    expect(CONTEXT_MENU_REGISTRY.map((item) => item.id)).not.toContain("textops");
+    const config = normalizeContextMenu([
+      { id: "textops" as never, on: true },
+      { id: "copy", on: true },
+    ]);
+    expect(config.map((item) => item.id)).not.toContain("textops");
+    expect(config[0]).toEqual({ id: "copy", on: true });
   });
 
   it("不复活用户隐藏的操作，并保留用户配置的组内顺序", () => {

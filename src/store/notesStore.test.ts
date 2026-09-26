@@ -214,11 +214,11 @@ describe("notesStore 基础", () => {
       "edit",
       "keep",
       "send",
-      "textops",
+      "copy-list",
     ]);
     expect(custom.map((group) => [group.id, group.ids])).toEqual([
       ["view", ["preview", "edit"]],
-      ["content", ["copy", "textops"]],
+      ["content", ["copy", "copy-list"]],
       ["send", ["send"]],
       ["organize", ["move", "keep"]],
     ]);
@@ -228,6 +228,26 @@ describe("notesStore 基础", () => {
       "send",
       "organize",
     ]);
+  });
+
+  it("已下线的右键菜单项（textops）不让整份数据判无效，解码后被剔除（2026-09-25 丢数据回归）", () => {
+    const decoded = decodePersistedState(JSON.stringify({
+      version: STORE_VERSION,
+      state: {
+        notes: [],
+        settings: {
+          contextMenu: [
+            { id: "textops", on: true },
+            { id: "copy", on: false },
+            { id: "future-item", on: true },
+          ],
+        },
+      },
+    }));
+    const ids = decoded.settings.contextMenu.map((item) => item.id);
+    expect(ids).not.toContain("textops");
+    expect(ids).not.toContain("future-item");
+    expect(decoded.settings.contextMenu.find((item) => item.id === "copy")).toEqual({ id: "copy", on: false });
   });
 
   it("v12 迁移到最新版时正文不变、生成权威块，并补齐本地成效设置", () => {

@@ -3,6 +3,7 @@ import ts from "typescript";
 import settingsSource from "./SettingsView.tsx?raw";
 import {
   searchSettings,
+  settingsSearchLocation,
   settingsSectionFromLink,
   targetSettingsPageForSearch,
   type SettingsSearchEntry,
@@ -61,6 +62,8 @@ function navigation() {
     currentSettingsRef: { current: gates },
     activeSearchHighlightRef: { current: null },
     settingsSectionFromLink,
+    settingsSearchLocation,
+    getColorScheme: () => "default",
   };
   const handlers = new Function(...Object.keys(runtime), navigationCode)(...Object.values(runtime)) as {
     link: (event: { payload: string | { section: string; targetProfileId?: string } }) => void;

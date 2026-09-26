@@ -85,6 +85,7 @@ import {
   CLIPBOARD_ID,
   defaultSettings,
   INBOX_ID,
+  SECRET_ID,
   TASK_INBOX_ID,
   useNotesStore,
 } from "../store/notesStore";
@@ -243,6 +244,39 @@ describe("结构化发送结果的 store 副作用", () => {
     )?.[2];
     expect(payload).toBeDefined();
     expect(payload).not.toHaveProperty("detailFrameNotchSide");
+  });
+
+  it("剪贴卡详情载荷带可存入的笔记分组（不含剪贴板/秘文），普通笔记不带", () => {
+    const state = useNotesStore.getState();
+    const workId = state.ensureSection("工作");
+    state.setSectionColor(workId, "#ff8800");
+    state.addClipNote("剪贴正文", {});
+    const clip = useNotesStore.getState().notes[0];
+    const { id: noteId } = state.addNote("笔记正文");
+    const previewPayload = () => eventMocks.emitTo.mock.calls.filter(
+      ([label, event]) => label === "textpreview" && event === "toskr://note-preview"
+    ).at(-1)?.[2] as { clipDestinations?: { id: string; headerColor: string | null }[] | null };
+
+    openNoteDetail(clip.id);
+    const destinations = previewPayload().clipDestinations!;
+    expect(destinations.map((item) => item.id)).not.toContain(CLIPBOARD_ID);
+    expect(destinations.map((item) => item.id)).not.toContain(SECRET_ID);
+    expect(destinations[0].id).toBe(INBOX_ID);
+    expect(destinations.find((item) => item.id === workId)).toMatchObject({
+      name: "工作",
+      headerColor: useNotesStore.getState().settings.cardTint ? "#ff8800" : "#7c8494",
+    });
+
+    openNoteDetail(noteId!);
+    expect(previewPayload().clipDestinations).toBeNull();
+  });
+
+  it("moveClipsToNotesWithUndo 返回实际移动条数，失败返回 0", () => {
+    useNotesStore.getState().addClipNote("A", {});
+    const clip = useNotesStore.getState().notes[0];
+    expect(moveClipsToNotesWithUndo([clip.id], "deleted-section")).toBe(0);
+    expect(moveClipsToNotesWithUndo([clip.id], INBOX_ID)).toBe(1);
+    expect(moveClipsToNotesWithUndo([clip.id], INBOX_ID)).toBe(0);
   });
 
   it("交错图文卡把权威块传给详情并按原顺序富复制", async () => {

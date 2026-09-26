@@ -1318,7 +1318,8 @@ fn validate_domain_fields(state: &serde_json::Map<String, Value>) -> Result<(), 
             .expect("record array was already validated");
         if object
             .get("kind")
-            .is_some_and(|value| !matches!(value.as_str(), Some("text" | "image" | "link")))
+            // 与 data_integrity 及前端 NoteKind 保持一致；漏掉 secret 曾让含秘文的库无法导出/导入
+            .is_some_and(|value| !matches!(value.as_str(), Some("text" | "image" | "link" | "secret")))
         {
             return Err(invalid("note.kind 不是受支持枚举".into()));
         }
@@ -2028,6 +2029,19 @@ mod tests {
     use super::*;
     use std::io::Cursor;
     use tempfile::tempdir;
+
+    #[test]
+    fn domain_validation_accepts_every_note_kind_and_rejects_unknown() {
+        for kind in ["text", "image", "link", "secret"] {
+            let state = serde_json::json!({ "notes": [{ "id": "n", "kind": kind }] });
+            assert!(
+                validate_domain_fields(state.as_object().unwrap()).is_ok(),
+                "{kind} 必须可导出/导入（含秘文的库曾整份导出失败）"
+            );
+        }
+        let state = serde_json::json!({ "notes": [{ "id": "n", "kind": "bogus" }] });
+        assert!(validate_domain_fields(state.as_object().unwrap()).is_err());
+    }
 
     /// 测试便捷封装：与旧签名一致，默认不整包封装（封装路径由专门测试覆盖）。
     fn export_complete_backup(

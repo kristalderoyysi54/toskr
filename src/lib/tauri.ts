@@ -280,6 +280,25 @@ export interface DataLocationInspection {
   taskCount: number;
   mediaCount: number;
   ordinaryFileCount: number;
+  /** 数据文件最后写入时间（缺失/不可读为 null）。 */
+  dataModifiedAtMs?: number | null;
+  /** 当前活动数据集摘要；目标即当前目录时为 null。 */
+  current?: DataSetSummary | null;
+}
+
+export interface AutoBackupResult {
+  path: string;
+  dir: string;
+  pruned: number;
+  notes: number;
+  media: number;
+}
+
+export interface DataSetSummary {
+  noteCount: number;
+  taskCount: number;
+  mediaCount: number;
+  dataModifiedAtMs: number | null;
 }
 
 export interface DataOperationFailure {
@@ -970,6 +989,8 @@ export const api = {
   /** 主菜单滚动后重报锚点：小窗跟着触发行移动。 */
   menuFlyoutMove: (anchor: MenuFlyoutAnchor) => invoke<void>("menu_flyout_move", { anchor }),
   diagNote: (msg: string) => invoke("diag_note", { msg }),
+  reportHydration: (ok: boolean, notes = 0, tasks = 0, sections = 0) =>
+    invoke("report_hydration", { ok, notes, tasks, sections }),
   appIcon: (bundleId: string) =>
     invoke<{ url: string; color: string } | null>("app_icon", { bundleId }),
   /** 设置里应用列表展示信息（不要求应用在运行）。 */
@@ -980,6 +1001,21 @@ export const api = {
   /** 从 .app 路径读 bundle id。 */
   bundleIdOfApp: (path: string) =>
     invoke<string | null>("bundle_id_of_app", { path }),
+  runAutoBackup: (
+    dir: string | null,
+    fileName: string,
+    stateJson: string,
+    expectedRevision: string,
+    keep: number
+  ) =>
+    invoke<AutoBackupResult>("run_auto_backup", {
+      dir,
+      fileName,
+      stateJson,
+      expectedRevision,
+      keep,
+    }),
+  defaultAutoBackupDir: () => invoke<string | null>("default_auto_backup_dir"),
   exportCompleteBackup: (
     path: string,
     stateJson: string,

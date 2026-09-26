@@ -3,6 +3,7 @@
 import * as React from "react"
 import { ScrollArea as ScrollAreaPrimitive } from "radix-ui"
 
+import { useColorScheme } from "@/lib/colorScheme"
 import { cn } from "@/lib/utils"
 
 function ScrollArea({
@@ -22,10 +23,13 @@ function ScrollArea({
    *  scrollLeft 恒 0，ring 的 4px 余量也保住。 */
   viewportClassName?: string
 }) {
+  // Platinum 滚动条常显（Mac OS 9 无悬停隐藏）；undefined 时 Radix 仍取默认 hover
+  const platinum = useColorScheme() === "platinum"
   return (
     <ScrollAreaPrimitive.Root
       data-slot="scroll-area"
       className={cn("relative", className)}
+      type={platinum ? "always" : undefined}
       {...props}
     >
       <ScrollAreaPrimitive.Viewport

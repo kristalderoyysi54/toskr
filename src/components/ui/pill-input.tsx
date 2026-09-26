@@ -85,6 +85,7 @@ export function PillInput({
 
   return (
     <div
+      data-slot="pill-input"
       className={cn(
         "rounded-xl border px-2.5 py-2 backdrop-blur-sm",
         "surface-inset elevation-1",

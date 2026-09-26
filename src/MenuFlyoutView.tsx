@@ -8,7 +8,9 @@ import {
   EyeOff,
   FileDown,
   FileText,
+  Folder,
   FolderInput,
+  Inbox,
   Link2,
   ListChecks,
   ListOrdered,
@@ -37,8 +39,8 @@ import { cn } from "@/lib/utils";
 
 /** 小窗里允许的图标白名单（按 lucide displayName 映射；主窗口序列化时只传名字）。 */
 const ICONS: Record<string, LucideIcon> = {
-  Check, Copy, Expand, Eye, EyeOff, FileDown, FileText, FolderInput, Link2, ListChecks,
-  ListOrdered, Merge, Pencil, PenLine, Plus, ScanText, Send, Sparkles, Tag, Trash2, Wand2,
+  Check, Copy, Expand, Eye, EyeOff, FileDown, FileText, Folder, FolderInput, Inbox, Link2,
+  ListChecks, ListOrdered, Merge, Pencil, PenLine, Plus, ScanText, Send, Sparkles, Tag, Trash2, Wand2,
 };
 
 /** 原生 click 与 Rust 轮询点击可能同时到达，同一条目 150ms 内只提交一次。 */

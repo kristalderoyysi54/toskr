@@ -1,3 +1,4 @@
+import { nativeVibrancy, nativeWindowTheme } from "@/lib/colorScheme";
 import { api } from "@/lib/tauri";
 import type { Settings } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
@@ -33,9 +34,9 @@ function runtimeEffects(settings: Settings): Promise<unknown>[] {
       settings.clipIgnoreTransient,
       settings.clipExcludedApps
     ),
-    api.setWindowTheme(settings.theme),
+    api.setWindowTheme(nativeWindowTheme(settings)),
     api.setExcludedApps(settings.excludedApps),
-    api.setVibrancy(settings.vibrancy, settings.vibrancyMaterial),
+    api.setVibrancy(nativeVibrancy(settings), settings.vibrancyMaterial),
     api.setWindowAlpha(settings.windowOpacity),
   ];
 }

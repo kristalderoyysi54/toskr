@@ -6,6 +6,7 @@ import {
   imageCaption,
 } from "@/lib/format";
 import { mapNoteTextBlocks } from "@/lib/noteContentBlocks";
+import { noteSectionOptions, type NoteSectionOption } from "@/lib/noteSections";
 import { buildNotesExportPlan, notesExportFilename } from "@/lib/noteExport";
 import { restoreAliases } from "@/lib/delivery/aliasEntities";
 import {
@@ -118,7 +119,11 @@ export type NotePreviewPayload = {
   selectAll?: boolean;
   /** 合并发送来源等临时视图不可编辑、移除附件或再次发送。 */
   readOnly?: boolean;
+  /** 仅剪贴卡：可存入的笔记分组（headerColor 为存入后标题栏定色，规则同上）。 */
+  clipDestinations?: ClipDestination[] | null;
 };
+
+export type ClipDestination = NoteSectionOption & { headerColor: string | null };
 
 /** 详情窗 → 主面板的发送意图；转换只影响本次 Draft，不写回卡片。 */
 export type NoteSendPayload = {
@@ -173,6 +178,14 @@ export const NOTE_TAGS_EVENT = "toskr://note-tags";
 export type NoteTagsPayload = {
   id: string;
   tags: string[];
+  dataGeneration: number;
+};
+
+/** 详情窗 → 主面板：剪贴卡存入指定笔记分组（主面板执行可撤销移动）。 */
+export const NOTE_SAVE_TO_NOTES_EVENT = "toskr://note-save-to-notes";
+export type NoteSaveToNotesPayload = {
+  id: string;
+  sectionId: string;
   dataGeneration: number;
 };
 
@@ -479,7 +492,8 @@ export function openNoteDetail(id: string, edit = false, selectAll = false) {
     note.sectionId === CLIPBOARD_ID
       ? undefined
       : sections.find((sec) => sec.id === note.sectionId)?.color;
-  const headerColor = settings.cardTint ? sectionColor ?? null : "#7c8494";
+  const tintHeader = (color?: string) => settings.cardTint ? color ?? null : "#7c8494";
+  const headerColor = tintHeader(sectionColor);
   if (note.kind === "image") {
     if (edit && note.imageFile) {
       void api.quickLook(noteImages(note), 0, {
@@ -511,6 +525,12 @@ export function openNoteDetail(id: string, edit = false, selectAll = false) {
     updatedAt: note.updatedAt,
     edit,
     selectAll,
+    clipDestinations: note.sectionId === CLIPBOARD_ID
+      ? noteSectionOptions(sections).map((section) => ({
+          ...section,
+          headerColor: tintHeader(section.color),
+        }))
+      : null,
   });
 }
 
@@ -739,13 +759,14 @@ export function mergeNoteWithChecked(noteId: string) {
  * 剪贴卡收编为正式笔记（移动语义，可撤销）：默认落收件箱，可指定普通笔记分组并重置生命周期状态
  * ——done 清零（收编即待办），keep 不带（剪贴域「固定不清理」≠ 笔记域「常用」）。
  */
-export function moveClipsToNotesWithUndo(ids: string[], sectionId?: string) {
+export function moveClipsToNotesWithUndo(ids: string[], sectionId?: string): number {
   const state = useNotesStore.getState();
   const moved = state.moveClipsToNotes(ids, sectionId);
-  if (!moved) return;
+  if (!moved) return 0;
   const section = sectionId && state.sections.find((item) => item.id === sectionId);
   const destination = section ? `「${section.name}」` : "笔记";
   undoableTip(moved === 1 ? `已移入${destination}` : `已移入${destination} ${moved} 条`);
+  return moved;
 }
 
 /**

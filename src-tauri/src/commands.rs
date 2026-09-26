@@ -1170,6 +1170,20 @@ pub fn diag_note(app: AppHandle, msg: String) {
     crate::diag::push(&app, crate::diag::frontend_event(&msg));
 }
 
+/// 主窗口水合结果指纹：只收条数（不含任何内容），install-app.sh 部署后据此比对
+/// 前后笔记数、发现水合失败（2026-09-25 默认态覆盖数据事故的兜底告警）。
+#[tauri::command]
+pub fn report_hydration(app: AppHandle, ok: bool, notes: u32, tasks: u32, sections: u32) {
+    crate::diag::push(
+        &app,
+        if ok {
+            format!("数据水合完成 笔记={notes} 任务={tasks} 分组={sections}")
+        } else {
+            "数据水合失败，已冻结写入".to_string()
+        },
+    );
+}
+
 /// 应用图标 data URL + 主色（卡片顶部通栏底色用；带缓存，主线程命令）。
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -1480,6 +1494,34 @@ pub fn mark_data_conflict(
     crate::storage::mark_data_conflict(&app)
 }
 
+/// 数据事务全程写诊断日志：切换/导入/回滚曾只在 meta 留一个时间戳，事后无从判断谁把数据换成了哪份。
+fn log_data_operation<T>(
+    app: &AppHandle,
+    what: &str,
+    operation_id: &str,
+    result: &Result<T, crate::data_integrity::DataOperationFailure>,
+    active_dir: impl Fn(&T) -> &str,
+) {
+    let line = match result {
+        Ok(value) => format!("数据事务 {what} id={operation_id} 活动目录={}", active_dir(value)),
+        Err(failure) => format!(
+            "数据事务 {what}失败 id={operation_id} code={:?} {}",
+            failure.code, failure.message
+        ),
+    };
+    crate::diag::push(app, line);
+}
+
+fn log_data_plan(app: &AppHandle, what: &str, plan: &crate::data_integrity::DataOperationPlan) {
+    crate::diag::push(
+        app,
+        format!(
+            "数据事务 {what}开始 id={} action={:?} 源={} → 目标={}",
+            plan.operation_id, plan.action, plan.source_path, plan.target_path
+        ),
+    );
+}
+
 #[tauri::command]
 pub async fn inspect_data_location(
     app: AppHandle,
@@ -1501,11 +1543,16 @@ pub async fn begin_recovery_data_operation(
     plan: crate::data_integrity::DataOperationPlan,
 ) -> Result<crate::data_integrity::DataOperationResult, crate::data_integrity::DataOperationFailure>
 {
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::storage::begin_recovery_data_operation(&app, &plan)
+    log_data_plan(&app, "恢复模式加载", &plan);
+    let operation_id = plan.operation_id.clone();
+    let worker_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        crate::storage::begin_recovery_data_operation(&worker_app, &plan)
     })
     .await
-    .map_err(blocking_data_failure)?
+    .map_err(blocking_data_failure)?;
+    log_data_operation(&app, "恢复模式加载已提交", &operation_id, &result, |r| &r.active_dir);
+    result
 }
 
 #[tauri::command]
@@ -1514,9 +1561,16 @@ pub async fn begin_data_operation(
     plan: crate::data_integrity::DataOperationPlan,
 ) -> Result<crate::data_integrity::DataOperationResult, crate::data_integrity::DataOperationFailure>
 {
-    tauri::async_runtime::spawn_blocking(move || crate::storage::begin_data_operation(&app, &plan))
-        .await
-        .map_err(blocking_data_failure)?
+    log_data_plan(&app, "目录操作", &plan);
+    let operation_id = plan.operation_id.clone();
+    let worker_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        crate::storage::begin_data_operation(&worker_app, &plan)
+    })
+    .await
+    .map_err(blocking_data_failure)?;
+    log_data_operation(&app, "目录操作已提交", &operation_id, &result, |r| &r.active_dir);
+    result
 }
 
 #[tauri::command]
@@ -1526,11 +1580,14 @@ pub async fn finalize_data_operation(
 ) -> Result<crate::data_integrity::DataOperationResult, crate::data_integrity::DataOperationFailure>
 {
     let worker_app = app.clone();
+    let worker_id = operation_id.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        crate::storage::finalize_data_operation(&worker_app, &operation_id)
+        crate::storage::finalize_data_operation(&worker_app, &worker_id)
     })
     .await
-    .map_err(blocking_data_failure)??;
+    .map_err(blocking_data_failure)?;
+    log_data_operation(&app, "完成", &operation_id, &result, |r| &r.active_dir);
+    let result = result?;
     let _ = app.emit("toskr://data-location-changed", &result);
     Ok(result)
 }
@@ -1542,11 +1599,14 @@ pub async fn rollback_data_operation(
 ) -> Result<crate::data_integrity::DataOperationResult, crate::data_integrity::DataOperationFailure>
 {
     let worker_app = app.clone();
+    let worker_id = operation_id.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        crate::storage::rollback_data_operation(&worker_app, &operation_id)
+        crate::storage::rollback_data_operation(&worker_app, &worker_id)
     })
     .await
-    .map_err(blocking_data_failure)??;
+    .map_err(blocking_data_failure)?;
+    log_data_operation(&app, "回滚", &operation_id, &result, |r| &r.active_dir);
+    let result = result?;
     let _ = app.emit("toskr://data-location-changed", &result);
     Ok(result)
 }
@@ -1722,6 +1782,122 @@ pub async fn create_data_recovery_backup(
     .map_err(blocking_backup_failure)?
 }
 
+/// 定期自动备份：只认本功能生成的文件名，清理时绝不碰目录里的其他文件。
+const AUTO_BACKUP_PREFIX: &str = "Toskr-自动备份-";
+const AUTO_BACKUP_SUFFIX: &str = ".toskr-backup";
+
+fn is_auto_backup_name(name: &str) -> bool {
+    name.strip_prefix(AUTO_BACKUP_PREFIX)
+        .and_then(|rest| rest.strip_suffix(AUTO_BACKUP_SUFFIX))
+        .is_some_and(|stamp| {
+            // YYYYMMDD-HHMMSS
+            stamp.len() == 15
+                && stamp.bytes().enumerate().all(|(index, byte)| {
+                    if index == 8 { byte == b'-' } else { byte.is_ascii_digit() }
+                })
+        })
+}
+
+/// 文件名内嵌定宽时间戳，按名称排序即时间序；返回需删除的最旧若干份。
+pub(crate) fn auto_backups_to_prune(mut names: Vec<String>, keep: usize) -> Vec<String> {
+    names.retain(|name| is_auto_backup_name(name));
+    names.sort();
+    let excess = names.len().saturating_sub(keep);
+    names.truncate(excess);
+    names
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoBackupResult {
+    pub path: String,
+    pub dir: String,
+    pub pruned: usize,
+    pub notes: usize,
+    pub media: usize,
+}
+
+#[tauri::command]
+pub fn default_auto_backup_dir(app: AppHandle) -> Option<String> {
+    app.path()
+        .document_dir()
+        .ok()
+        .map(|dir| dir.join("Toskr 自动备份").to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub async fn run_auto_backup(
+    app: AppHandle,
+    dir: Option<String>,
+    file_name: String,
+    state_json: String,
+    expected_revision: String,
+    keep: u32,
+) -> Result<AutoBackupResult, crate::backup::BackupFailure> {
+    let invalid = |message: &str| crate::backup::BackupFailure {
+        code: crate::backup::BackupFailureCode::InvalidState,
+        message: message.into(),
+    };
+    if !is_auto_backup_name(&file_name) {
+        return Err(invalid("自动备份文件名格式无效"));
+    }
+    let dir = match dir.filter(|dir| !dir.trim().is_empty()) {
+        Some(dir) => std::path::PathBuf::from(dir),
+        None => default_auto_backup_dir(app.clone())
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| invalid("无法确定默认备份目录"))?,
+    };
+    if !dir.is_absolute() {
+        return Err(invalid("备份目录必须是绝对路径"));
+    }
+    let keep = keep.clamp(1, 60) as usize;
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::create_dir_all(&dir).map_err(blocking_backup_failure)?;
+        let path = dir.join(&file_name);
+        let created_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_millis() as u64);
+        // 整包封 Recovery 信封：备份常驻磁盘，不留明文；导入走现有完整备份流程
+        let inspection = crate::storage::export_complete_backup(
+            &app,
+            &path,
+            &state_json,
+            created_at_ms,
+            Some(&expected_revision),
+            true,
+        )?;
+        let names = std::fs::read_dir(&dir)
+            .map_err(blocking_backup_failure)?
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        let stale = auto_backups_to_prune(names, keep);
+        for name in &stale {
+            let _ = std::fs::remove_file(dir.join(name));
+        }
+        crate::diag::push(
+            &app,
+            format!(
+                "自动备份完成 笔记={} 媒体={} 清理旧备份={} 目录={}",
+                inspection.counts.notes,
+                inspection.counts.media,
+                stale.len(),
+                dir.display()
+            ),
+        );
+        Ok(AutoBackupResult {
+            path: path.to_string_lossy().into_owned(),
+            dir: dir.to_string_lossy().into_owned(),
+            pruned: stale.len(),
+            notes: inspection.counts.notes,
+            media: inspection.counts.media,
+        })
+    })
+    .await
+    .map_err(blocking_backup_failure)?
+}
+
 #[tauri::command]
 pub async fn begin_complete_backup_import(
     app: AppHandle,
@@ -1730,6 +1906,12 @@ pub async fn begin_complete_backup_import(
     expected_revision: String,
     expected_active_revision: String,
 ) -> Result<BackupImportPrepared, crate::storage::BackupImportFailure> {
+    crate::diag::push(
+        &app,
+        format!("数据事务 完整备份导入开始 id={operation_id} 备份={path}"),
+    );
+    let log_app = app.clone();
+    let log_id = operation_id.clone();
     let prepared = tauri::async_runtime::spawn_blocking(move || {
         crate::storage::begin_complete_backup_import(
             &app,
@@ -1744,6 +1926,19 @@ pub async fn begin_complete_backup_import(
         code: "ioFailed".into(),
         message: format!("后台导入任务失败：{error}"),
     })?;
+    crate::diag::push(
+        &log_app,
+        match &prepared {
+            Ok((_, operation)) => format!(
+                "数据事务 完整备份已置换 id={log_id} 活动目录={}",
+                operation.active_dir
+            ),
+            Err(failure) => format!(
+                "数据事务 完整备份导入失败 id={log_id} code={} {}",
+                failure.code, failure.message
+            ),
+        },
+    );
     let (inspection, operation) = prepared?;
     Ok(BackupImportPrepared {
         inspection,
@@ -1920,5 +2115,39 @@ mod tests {
         let (_, text, _) =
             capture_hud_feedback("duplicate", "预览".into(), None, false, None, true);
         assert_eq!(text, "预览");
+    }
+}
+
+#[cfg(test)]
+mod auto_backup_tests {
+    use super::*;
+
+    #[test]
+    fn auto_backup_name_accepts_only_generated_pattern() {
+        assert!(is_auto_backup_name("Toskr-自动备份-20260925-213000.toskr-backup"));
+        for name in [
+            "Toskr-自动备份-2026925-213000.toskr-backup",
+            "Toskr-自动备份-20260925-213000.toskr-backup.bak",
+            "我的备份.toskr-backup",
+            "Toskr-自动备份-../../x-213000.toskr-backup",
+            "Toskr-自动备份-20260925_213000.toskr-backup",
+        ] {
+            assert!(!is_auto_backup_name(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn pruning_removes_only_oldest_generated_backups() {
+        let names = vec![
+            "Toskr-自动备份-20260920-090000.toskr-backup".to_string(),
+            "手动导出.toskr-backup".to_string(),
+            "Toskr-自动备份-20260925-090000.toskr-backup".to_string(),
+            "Toskr-自动备份-20260922-090000.toskr-backup".to_string(),
+        ];
+        assert_eq!(
+            auto_backups_to_prune(names.clone(), 2),
+            vec!["Toskr-自动备份-20260920-090000.toskr-backup".to_string()]
+        );
+        assert!(auto_backups_to_prune(names, 3).is_empty());
     }
 }

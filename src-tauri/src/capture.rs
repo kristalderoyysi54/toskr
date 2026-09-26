@@ -7,7 +7,7 @@
 //!    按所有权安全恢复。这样富选区不会被 AX 的纯文本结果提前截断。
 
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Manager};
 
@@ -174,11 +174,19 @@ fn capture_via_clipboard(
         source: source.clone(),
         input_generation,
     };
+    let started = Instant::now();
     let attempt = execute_clipboard_capture(&mut runtime);
     drop(permit);
     crate::diag::push(
         app,
-        format!("捕获: 剪贴板事务 {}", attempt.clipboard_outcome.as_str()),
+        format!(
+            "捕获: 剪贴板事务 {} result={} elapsed_ms={} source={} context_valid={} input_changed={} front_same={} revision_delta={}",
+            attempt.clipboard_outcome.as_str(), attempt.reason, started.elapsed().as_millis(),
+            source.bundle_id.as_deref().unwrap_or("unknown"), same_capture_context(app, source, input_generation),
+            app.state::<crate::state::AppState>().physical_input_generation.load(Ordering::Acquire) != input_generation,
+            same_front_identity(source),
+            runtime.transaction.current_change_count().wrapping_sub(runtime.transaction.original_change_count()),
+        ),
     );
     let clipboard_warning = attempt.clipboard_outcome.warning_message();
 
@@ -290,6 +298,7 @@ enum CopyPayload {
 }
 
 struct CaptureAttempt {
+    reason: &'static str,
     payload: Option<CopyPayload>,
     clipboard_outcome: ClipboardOutcome,
 }
@@ -317,25 +326,43 @@ fn claim_current(runtime: &mut impl ClipboardCaptureRuntime, change_count: isize
 
 fn execute_clipboard_capture(runtime: &mut impl ClipboardCaptureRuntime) -> CaptureAttempt {
     let before = runtime.original_change_count();
-    let observed = if runtime.context_valid() && runtime.press_copy() {
-        runtime.wait_for_change(before)
-    } else {
+    let mut reason = "no_copy_change";
+    let observed = if !runtime.context_valid() {
+        reason = "context_before_copy";
         CopyObservation::None
+    } else if !runtime.press_copy() {
+        reason = "copy_failed";
+        CopyObservation::None
+    } else {
+        runtime.wait_for_change(before)
     };
     let payload = match observed {
         CopyObservation::Accepted(change_count) => {
             let context_valid_for_payload = runtime.context_valid();
-            if !claim_current(runtime, change_count) || !context_valid_for_payload {
+            if !claim_current(runtime, change_count) {
+                reason = "ownership_before_read";
+                None
+            } else if !context_valid_for_payload {
+                reason = "context_before_read";
                 None
             } else {
                 let payload = runtime.read_payload();
                 let context_valid = runtime.context_valid();
                 let still_owned = runtime.current_change_count() == change_count;
                 if context_valid && still_owned {
+                    reason = if payload.is_some() {
+                        "accepted"
+                    } else {
+                        "empty_payload"
+                    };
                     payload
                 } else {
-                    // claim 后的普通键鼠输入只影响 payload 可信度；若 generation 未变，
-                    // 仍安全恢复原剪贴板。只有 pasteboard 真正改写才放弃所有权。
+                    reason = if !still_owned {
+                        "ownership_after_read"
+                    } else {
+                        "context_after_read"
+                    };
+                    // 只有 pasteboard 真正改写才放弃所有权；真实输入仅使 payload 失效。
                     if !still_owned {
                         runtime.abandon_change();
                     }
@@ -344,17 +371,23 @@ fn execute_clipboard_capture(runtime: &mut impl ClipboardCaptureRuntime) -> Capt
             }
         }
         CopyObservation::Late(change_count) | CopyObservation::RecoveryOnly(change_count) => {
-            // 超过采纳窗的写入只认领后恢复，绝不作为捕获结果。
+            reason = if matches!(observed, CopyObservation::Late(_)) {
+                "copy_late"
+            } else {
+                "context_during_wait"
+            };
             let _ = claim_current(runtime, change_count);
             None
         }
         CopyObservation::Invalid => {
+            reason = "invalid_observation";
             runtime.abandon_change();
             None
         }
         _ => None,
     };
     CaptureAttempt {
+        reason,
         payload,
         clipboard_outcome: runtime.restore(),
     }

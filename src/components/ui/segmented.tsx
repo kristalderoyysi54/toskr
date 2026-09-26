@@ -2,7 +2,9 @@ import { useId } from "react";
 import { MotionConfig } from "motion/react";
 
 import { focusRingWithin } from "@/components/ui/focus-ring";
+import { PlatinumPopup } from "@/components/ui/platinum-popup";
 import { SlidingTabIndicator } from "@/components/ui/sliding-tab-indicator";
+import { useColorScheme } from "@/lib/colorScheme";
 import { cn } from "@/lib/utils";
 
 /**
@@ -31,6 +33,33 @@ export function Segmented<T extends string>({
   className?: string;
 }) {
   const groupName = useId();
+  const scheme = useColorScheme();
+  const plainLabels = options.every((o) => typeof o.label === "string");
+  if (scheme === "platinum" && size === "sm" && plainLabels) {
+    return options.length === 2 ? (
+      <fieldset aria-label={ariaLabel} className={cn("platinum-radios", className)}>
+        {options.map((o) => (
+          <label key={o.value} title={o.title} className="platinum-radio">
+            <input
+              type="radio"
+              name={groupName}
+              checked={value === o.value}
+              onChange={() => onChange(o.value)}
+            />
+            {o.label}
+          </label>
+        ))}
+      </fieldset>
+    ) : (
+      <PlatinumPopup
+        value={value}
+        options={options.map((o) => ({ value: o.value, label: o.label as string }))}
+        onChange={onChange}
+        ariaLabel={ariaLabel}
+        className={className}
+      />
+    );
+  }
   return (
     <MotionConfig reducedMotion="user">
       <fieldset

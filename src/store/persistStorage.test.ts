@@ -10,6 +10,46 @@ function snapshot(content: string | null, revision: string): DataFileSnapshot {
 }
 
 describe("persistence transaction controller", () => {
+  it("merge 校验失败时 fail-closed：默认态永远不会写回磁盘（2026-09-25 丢数据回归）", async () => {
+    const persisted = JSON.stringify({ state: { notes: ["existing"] }, version: 0 });
+    const original = JSON.stringify({ toskr: persisted });
+    let disk = snapshot(original, "rev-existing");
+    const backend = {
+      readDataSnapshot: vi.fn(async () => disk),
+      writeDataIfCurrent: vi.fn(async (content: string) => {
+        disk = snapshot(content, "rev-overwritten");
+        return disk;
+      }),
+    };
+    const conflicts: unknown[] = [];
+    const controller = createPersistenceController(backend, {
+      debounceMs: 0,
+      onConflict: (error) => conflicts.push(error),
+    });
+    type Data = { notes: string[] };
+    const store = createStore<Data>()(
+      persist<Data>(() => ({ notes: [] }), {
+        name: "toskr",
+        storage: createJSONStorage(() => controller.storage),
+        skipHydration: true,
+        merge: () => {
+          controller.failClosed({ code: "corruptData", message: "校验失败" });
+          throw new Error("校验失败");
+        },
+      })
+    );
+
+    await Promise.resolve(store.persist.rehydrate()).catch(() => {});
+    store.setState({ notes: ["默认态上的新操作"] });
+    await controller.flushPendingWrites();
+
+    expect(backend.writeDataIfCurrent).not.toHaveBeenCalled();
+    expect(disk.content).toBe(original);
+    expect(controller.isPersistencePaused()).toBe(true);
+    expect(controller.hasPersistenceConflict()).toBe(true);
+    expect(conflicts).toHaveLength(1);
+  });
+
   it("does not let pre-hydration legacy draft migration overwrite existing disk state", async () => {
     const persisted = JSON.stringify({ state: { notes: ["existing"] }, version: 0 });
     let disk = snapshot(JSON.stringify({ toskr: persisted }), "rev-existing");

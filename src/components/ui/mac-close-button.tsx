@@ -1,6 +1,8 @@
 import { Minus, Plus, X } from "lucide-react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
+import { PlatinumBox } from "@/components/ui/platinum-titlebar";
+import { useColorScheme } from "@/lib/colorScheme";
 import { cn } from "@/lib/utils";
 
 /**
@@ -36,6 +38,15 @@ export function MacTrafficLights({
   className?: string;
 }) {
   const win = getCurrentWebviewWindow();
+  const scheme = useColorScheme();
+  if (scheme === "platinum") {
+    // Platinum：左侧只有关闭框，缩放 / 收起框由 PlatinumTrailingBoxes 放到标题栏右端
+    return (
+      <div className={cn("flex shrink-0 items-center", className)}>
+        <PlatinumBox kind="close" label={closeLabel} disabled={closeDisabled} onClick={onClose} />
+      </div>
+    );
+  }
   return (
     <div className={cn("group/traffic flex shrink-0 items-center gap-2", className)}>
       <button
@@ -66,6 +77,19 @@ export function MacTrafficLights({
       >
         <Plus className={cn(GLYPH_BASE, "text-[#0b6120]")} strokeWidth={3} />
       </button>
+    </div>
+  );
+}
+
+/** Platinum 标题栏右端的缩放框 + 收起框（收起＝最小化）；默认方案不渲染任何节点。 */
+export function PlatinumTrailingBoxes() {
+  const scheme = useColorScheme();
+  if (scheme !== "platinum") return null;
+  const win = getCurrentWebviewWindow();
+  return (
+    <div className="flex shrink-0 items-center gap-1">
+      <PlatinumBox kind="zoom" label="缩放：占满/还原" onClick={() => void win.toggleMaximize()} />
+      <PlatinumBox kind="shade" label="最小化（重开卡片即复原）" onClick={() => void win.minimize()} />
     </div>
   );
 }

@@ -3,14 +3,15 @@ set -euo pipefail
 
 MODE="${1:-run}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_BUNDLE="$ROOT_DIR/src-tauri/target/release/bundle/macos/Toskr.app"
+APP_BUNDLE="/Applications/Toskr.app"
 PROCESS_NAME="toskr"
 BUNDLE_ID="com.toskr.app"
 
 pkill -x "$PROCESS_NAME" >/dev/null 2>&1 || true
 
 cd "$ROOT_DIR"
-pnpm build:app
+# build:app 会覆盖安装到 /Applications；启动交给下方各模式
+OPEN_APP=0 pnpm build:app
 
 open_app() {
   /usr/bin/open -n "$APP_BUNDLE"

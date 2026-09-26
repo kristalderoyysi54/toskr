@@ -6,6 +6,7 @@ import { imageCaption } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { floatingSurface } from "@/components/ui/floating-surface";
 import { IconButton } from "@/components/ui/icon-button";
+import { SaveToNotesMenu } from "@/components/SaveToNotesMenu";
 import { Kbd } from "@/components/ui/kbd";
 import {
   RichNoteContent,
@@ -16,11 +17,13 @@ import {
   copyNoteContent,
   deleteNotesWithUndo,
   enrichLinkMeta,
+  moveClipsToNotesWithUndo,
   NOTE_EDIT_AUTOSAVE_INTERVAL_MS,
   sendNotesToChat,
   undoableTip,
 } from "@/lib/actions";
 import { highlightCode, langLabel } from "@/lib/code";
+import { noteSectionOptions } from "@/lib/noteSections";
 import { looksLikeMarkdown, renderMarkdown } from "@/lib/markdown";
 import { useAppIcon } from "@/lib/icons";
 import { useNoteImage, useNoteThumb } from "@/lib/media";
@@ -71,6 +74,8 @@ export function PreviewOverlay() {
   );
   const note = useNotesStore((s) => s.notes.find((n) => n.id === previewId));
   const internalSendAvailable = note?.sectionId === CLIPBOARD_ID;
+  const sections = useNotesStore((s) => s.sections);
+  const clipDestinations = useMemo(() => noteSectionOptions(sections), [sections]);
   const canSend = targetReady || internalSendAvailable;
   const icon = useAppIcon(note?.sourceBundle);
   const isImage = note?.kind === "image";
@@ -499,6 +504,12 @@ export function PreviewOverlay() {
                       >
                         <Pencil className="size-3.5" />
                       </IconButton>
+                    )}
+                    {internalSendAvailable && (
+                      <SaveToNotesMenu
+                        sections={clipDestinations}
+                        onPick={(sectionId) => moveClipsToNotesWithUndo([note.id], sectionId)}
+                      />
                     )}
                     <IconButton label="复制" onClick={copy}>
                       <Copy className="size-3.5" />

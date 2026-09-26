@@ -4,6 +4,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 import { FrontendReady } from "./components/FrontendReady";
 import { WindowErrorBoundary } from "./components/WindowErrorBoundary";
+import { installColorScheme } from "./lib/colorScheme";
 import { installExternalLinkInterceptor } from "./lib/externalLinks";
 import "./index.css";
 
@@ -19,8 +20,6 @@ const TextPreviewView = React.lazy(() => import("./TextPreviewView"));
 // 所有窗口共用入口：链接点击一律不许 WebView 就地导航（详情窗曾被外部网页替换）
 installExternalLinkInterceptor();
 
-// 跟随系统深浅色（shadcn 的 .dark class 策略；set_theme 后 webview 的
-// prefers-color-scheme 也会变，故同一监听可覆盖手动主题）
 // 临时诊断：纯浏览器打开时垫一个最小 Tauri 桩，让 UI 可渲染（invoke 全部拒绝）
 if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
   const requestedLabel = new URLSearchParams(location.search).get("view");
@@ -65,11 +64,7 @@ if (import.meta.env.DEV) {
   });
 }
 
-const media = window.matchMedia("(prefers-color-scheme: dark)");
-const applyTheme = () =>
-  document.documentElement.classList.toggle("dark", media.matches);
-applyTheme();
-media.addEventListener("change", applyTheme);
+installColorScheme();
 
 // 同一前端按窗口 label 分流：main → 面板；hud → 提示气泡；settings → 设置窗口
 // （临时诊断：纯浏览器环境无 Tauri 上下文时回退 main，便于 DOM 排查）

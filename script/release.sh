@@ -92,6 +92,9 @@ git add "$CONF" && git commit -m "release: v$VERSION" && git push
 gh release create "v$VERSION" --repo "$REPO" --title "Toskr v$VERSION" --notes "$NOTES" \
   "$DMG" "$BUNDLE/Toskr.app.tar.gz" "$BUNDLE/Toskr.app.tar.gz.sig" "$BUNDLE/latest.json" "$BUNDLE/release-evidence.json"
 
+# 本机应用文件夹同步到刚发布的版本；失败不影响已完成的发布
+script/install-app.sh || echo "⚠ 覆盖 /Applications 失败，可稍后手动执行 script/install-app.sh"
+
 echo "✅ v$VERSION 已发布：https://github.com/$REPO/releases/tag/v$VERSION"
 echo "   新用户下载 DMG，打开后把 Toskr 拖入 Applications 即可安装。"
 echo "   旧版本用户将在启动 8 秒后收到更新提醒，或在设置 → 关于中手动更新。"

@@ -13,6 +13,7 @@ type PersistenceBackend = Pick<
 type PersistenceController = {
   storage: StateStorage;
   flushPendingWrites: () => Promise<void>;
+  failClosed: (error: unknown) => void;
   pausePersistence: () => Promise<void>;
   resumePersistence: () => void;
   isPersistencePaused: () => boolean;
@@ -200,6 +201,17 @@ export function createPersistenceController(
   return {
     storage,
     flushPendingWrites,
+    /** 水合后校验/合并失败：丢弃待写、冻结持久化并走冲突恢复，绝不以默认态落盘。 */
+    failClosed: (error: unknown) => {
+      if (writeTimer) {
+        clearTimeout(writeTimer);
+        writeTimer = null;
+      }
+      pendingValues = {};
+      paused = true;
+      conflicted = true;
+      signalConflict(error);
+    },
     pausePersistence: async () => {
       await flushPendingWrites();
       const basedOn = await ensureBase();
@@ -353,6 +365,11 @@ const controller = createPersistenceController(api, {
 
 export const tauriStateStorage = controller.storage;
 export const flushPendingWrites = controller.flushPendingWrites;
+/** 水合校验失败：冻结写入并写诊断日志（install-app.sh 部署后据此报警）。 */
+export const failPersistenceClosed = (error: unknown) => {
+  controller.failClosed(error);
+  void api.reportHydration(false).catch(() => {});
+};
 export const pausePersistence = controller.pausePersistence;
 export const resumePersistence = controller.resumePersistence;
 export const isPersistencePaused = controller.isPersistencePaused;

@@ -60,7 +60,20 @@ pub fn run() {
         .setup(|app| {
             match storage::initialize_storage(app.handle()) {
                 // 初始化成功后台清扫旧明文媒体文件（幂等，事务开始即让路）
-                Ok(()) => storage::spawn_media_encryption_sweep(app.handle()),
+                Ok(()) => {
+                    // 必须在前端水合（WebView 事件循环启动）之前同步完成
+                    match storage::snapshot_data_on_launch(app.handle()) {
+                        Ok(Some(path)) => diag::push(
+                            app.handle(),
+                            format!("启动恢复点已保存: {}", path.display()),
+                        ),
+                        Ok(None) => {}
+                        Err(error) => {
+                            diag::push(app.handle(), format!("启动恢复点保存失败: {error}"))
+                        }
+                    }
+                    storage::spawn_media_encryption_sweep(app.handle())
+                }
                 Err(error) => {
                     diag::push(
                         app.handle(),
@@ -325,6 +338,7 @@ pub fn run() {
             commands::app_list_info,
             commands::bundle_id_of_app,
             commands::diag_note,
+            commands::report_hydration,
             commands::get_diagnostics,
             commands::append_delivery_event,
             commands::get_recent_delivery_events,
@@ -347,6 +361,8 @@ pub fn run() {
             commands::export_notes_bundle,
             commands::export_prompt_templates,
             commands::export_complete_backup,
+            commands::run_auto_backup,
+            commands::default_auto_backup_dir,
             commands::export_conflict_recovery_backup,
             commands::inspect_backup,
             commands::create_data_recovery_backup,

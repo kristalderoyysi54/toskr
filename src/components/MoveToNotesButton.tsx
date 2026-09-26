@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Folder, Inbox } from "lucide-react";
+import { Inbox } from "lucide-react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
-import { SimpleMenu, SimpleMenuItem, SimpleMenuLabel } from "@/components/SimpleMenu";
+import { NoteSectionMenuItems } from "@/components/SaveToNotesMenu";
+import { SimpleMenu, SimpleMenuLabel } from "@/components/SimpleMenu";
 import { IconButton } from "@/components/ui/icon-button";
 import { createLongPress } from "@/lib/longPress";
-import { CLIPBOARD_ID, INBOX_ID, SECRET_ID, useNotesStore } from "@/store/notesStore";
+import { noteSectionOptions } from "@/lib/noteSections";
+import { useNotesStore } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
 
 /** 单击收件箱、长按选分类；沿用卡片的多选感知移动回调。 */
@@ -17,6 +19,7 @@ export function MoveToNotesButton({
   onMenuOpen: () => void;
 }) {
   const sections = useNotesStore((state) => state.sections);
+  const options = useMemo(() => noteSectionOptions(sections), [sections]);
   const page = useUIStore((state) => state.page);
   const visible = useUIStore((state) => state.open);
   const [pressing, setPressing] = useState(false);
@@ -96,18 +99,7 @@ export function MoveToNotesButton({
       {(close) => (
         <>
           <SimpleMenuLabel>移入笔记分类</SimpleMenuLabel>
-          {sections.filter((section) => section.id !== CLIPBOARD_ID && section.id !== SECRET_ID)
-            .map((section) => (
-              <SimpleMenuItem key={section.id} title={section.name} onClick={() => {
-                close();
-                onMove(section.id);
-              }}>
-                {section.id === INBOX_ID
-                  ? <Inbox className="size-3.5 shrink-0" />
-                  : <Folder className="size-3.5 shrink-0" style={{ color: section.color }} />}
-                <span className="min-w-0 flex-1 truncate">{section.name}</span>
-              </SimpleMenuItem>
-            ))}
+          <NoteSectionMenuItems sections={options} onPick={(id) => onMove(id)} close={close} />
         </>
       )}
     </SimpleMenu>

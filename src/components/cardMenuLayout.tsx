@@ -20,8 +20,10 @@ export function partitionCardMenuIds(ids: readonly ContextMenuItemId[], clipboar
   const sendOptions: ContextMenuItemId[] = [];
   const more: ContextMenuItemId[] = [];
   for (const id of ids) {
+    // 剪贴卡「移入笔记分组」是收编主路径，提到一级（用户 2026-09-25 指定）
     if (["send", "copy", "keep"].includes(id) ||
-      (!clipboard && ["edit", "done"].includes(id))) {
+      (!clipboard && ["edit", "done"].includes(id)) ||
+      (clipboard && id === "move")) {
       primary.push(id);
     } else if (id === "send-template" || id === "send-preflight") {
       sendOptions.push(id);

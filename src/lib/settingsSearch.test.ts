@@ -8,6 +8,7 @@ import {
   searchSettings,
   settingsChildSections,
   settingsPrimarySection,
+  settingsSearchLocation,
   settingsSearchNeedsGeneralDetails,
   settingsSectionFromLink,
   type SettingsSectionId,
@@ -131,5 +132,20 @@ describe("设置搜索", () => {
         "监听目标"
       );
     }
+  });
+
+  it("Platinum 下主题与毛玻璃行不渲染，搜索改落到配色方案且不展开更多外观", () => {
+    const byId = (id: string) => SETTINGS_SEARCH_ENTRIES.find((e) => e.id === id)!;
+    for (const id of ["theme", "vibrancy", "vibrancy-style"]) {
+      const location = settingsSearchLocation(byId(id), "platinum");
+      expect(location).toEqual({ id: "color-scheme", value: "配色方案" });
+      expect(settingsSearchNeedsGeneralDetails(location.id)).toBe(false);
+    }
+    expect(settingsSearchLocation(byId("theme"), "default")).toEqual({ id: "theme", value: "主题" });
+    expect(settingsSearchLocation(byId("vibrancy-style"), "default")).toEqual({
+      id: "vibrancy-style",
+      value: "毛玻璃背景",
+    });
+    expect(settingsSearchLocation(byId("card-density"), "platinum").id).toBe("card-density");
   });
 });

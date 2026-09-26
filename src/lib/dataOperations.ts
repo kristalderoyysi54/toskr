@@ -17,6 +17,7 @@ import { applyRuntimeSettingsStrict } from "@/lib/runtimeSettings";
 import {
   api,
   type BackupImportPrepared,
+  type AutoBackupResult,
   type BackupInspection,
   type DataOperationPlan,
   type DataOperationResult,
@@ -240,10 +241,12 @@ export async function runCompleteBackupImport(
   });
 }
 
-export async function runCompleteBackupExport(
-  path: string
-): Promise<BackupInspection> {
-  return withDataOperationMutex("导出完整备份", async () => {
+/** 冻结持久化 → 以当前内存状态导出 → 恢复；源数据外部变化时保持冻结走冲突恢复。 */
+async function frozenBackupExport<T>(
+  label: string,
+  run: (stateJson: string, activeRevision: string) => Promise<T>
+): Promise<T> {
+  return withDataOperationMutex(label, async () => {
     if (hasDataGenerationLeases()) {
       throw new Error("发送或 AI 操作仍在进行，请完成后再导出备份");
     }
@@ -252,14 +255,13 @@ export async function runCompleteBackupExport(
       await pausePersistence();
       const activeRevision = currentPersistenceRevision();
       if (!activeRevision) throw new Error("持久化基线尚未建立");
-      const inspection = await api.exportCompleteBackup(
-        path,
+      const result = await run(
         JSON.stringify(buildBackupPayload(useNotesStore.getState())),
         activeRevision
       );
       resumePersistence();
       updateActivity({ locked: false, phase: "complete", message: "完整备份已验证" });
-      return inspection;
+      return result;
     } catch (error) {
       if (errorCode(error) === "sourceChanged") {
         enterPersistenceConflict(error);
@@ -277,6 +279,25 @@ export async function runCompleteBackupExport(
       throw error;
     }
   });
+}
+
+export async function runCompleteBackupExport(
+  path: string
+): Promise<BackupInspection> {
+  return frozenBackupExport("导出完整备份", (stateJson, revision) =>
+    api.exportCompleteBackup(path, stateJson, revision)
+  );
+}
+
+/** 定期自动备份：加密完整备份写入备份目录，并只清理本功能生成的旧文件。 */
+export async function runAutoBackup(
+  dir: string | null,
+  fileName: string,
+  keep: number
+): Promise<AutoBackupResult> {
+  return frozenBackupExport("自动备份", (stateJson, revision) =>
+    api.runAutoBackup(dir, fileName, stateJson, revision, keep)
+  );
 }
 
 export async function runLegacyJsonImport(
