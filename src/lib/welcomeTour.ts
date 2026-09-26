@@ -3,10 +3,16 @@ import type { OnboardingEvent } from "@/lib/onboarding";
 export type WelcomeTourExitMode = "use-now" | "rehearse";
 
 export const WELCOME_TOUR_COPY = {
-  title: "AI 消息中转站",
-  body: "把其他应用里的文字收成卡片，再一起粘贴到 AI 输入框。先试着收一条内容。",
-  sample: "周五前完成首页设计稿。",
+  title: "把散落各处的文字，一次安全地交给 AI",
+  points: [
+    "选中文字，连按两次快捷键收成卡片",
+    "勾选多张，⌘⏎ 合成一次粘贴",
+    "邮箱、密钥等敏感信息发送前自动替换",
+  ],
 } as const;
+
+/** 触发键在动画键帽里的符号。 */
+export const CAPTURE_KEY_SYMBOL = { shift: "⇧", control: "⌃", option: "⌥" } as const;
 
 /** 导览与演练解耦：只有用户主动选示例时才启动状态机。 */
 export function welcomeTourExitEvent(

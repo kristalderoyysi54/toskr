@@ -226,7 +226,6 @@ export function ApplicationRuleInspector({ settings, patch, currentTarget, recen
           </div>
           {!visibleApps.length && <p className="py-2 text-label text-muted-foreground">{apps.length ? "没有匹配的应用" : "选择一个应用，为它设置粘贴规则。"}</p>}
           <Button size="sm" disabled={picking || locked} onClick={() => void pickApp()} className="w-full"><FolderOpen aria-hidden className="size-3.5" />{picking ? "正在选择…" : "选择应用…"}</Button>
-          <p className="text-micro text-muted-foreground">选择应用只打开编辑，点击应用后才改变规则。</p>
           {otherDrafts > 0 && <p className="text-micro text-muted-foreground">另有 {otherDrafts} 个应用的修改尚未应用。</p>}
         </section>
 
@@ -237,11 +236,11 @@ export function ApplicationRuleInspector({ settings, patch, currentTarget, recen
           </header>
           <section aria-label="规则影响范围" className="mb-3 space-y-2 rounded-lg bg-muted/35 p-2.5">
             <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-              <div className="min-w-0"><p className="break-words text-body font-medium">{sourceProfile?.name ?? "默认规则"}</p><p className="text-micro text-muted-foreground">{!selected ? "修改默认格式、面板和模板排序" : owners.length === 0 ? "尚未单独设置，当前使用安全默认规则" : `共 ${sourceProfile?.bundleIds.length ?? 0} 个应用使用此方案`}</p></div>
+              <div className="min-w-0"><p className="break-words text-body font-medium">{sourceProfile?.name ?? "默认规则"}</p>{selected && <p className="text-micro text-muted-foreground">{owners.length === 0 ? "尚未单独设置，当前使用默认规则" : `共 ${sourceProfile?.bundleIds.length ?? 0} 个应用使用此方案`}</p>}</div>
               {canShare && <Segmented<"app" | "shared"> ariaLabel="修改范围" value={scope} options={[{ value: "app", label: "仅此应用" }, { value: "shared", label: "共享方案" }]} onChange={nextScope => changeDraft({}, nextScope)} />}
             </div>
             {!!sourceProfile?.bundleIds.length && <div className="flex min-w-0 flex-wrap gap-1" aria-label="共享此方案的应用">{sourceProfile.bundleIds.map(bundleId => <SharedApplicationName key={bundleId} bundleId={bundleId} />)}</div>}
-            <p className="text-label text-muted-foreground">{resetting ? "待恢复默认：下方展示恢复后的规则。应用后仅解除当前应用的绑定，原方案和其他应用保持不变；以后跟随默认规则。" : !selected ? "未绑定应用仍不自动回车；隐私检查开启时，敏感内容需逐项处理。上方明确绑定此方案的应用也会更新格式、面板和模板排序。" : scope === "shared" ? `修改会同时影响上方全部应用${sourceProfile?.id === settings.defaultTargetProfileId ? "，以及未单独设置应用的默认格式、面板和模板排序" : ""}。` : owners.length === 1 && sourceProfile?.bundleIds.length === 1 && sourceProfile.id !== settings.defaultTargetProfileId ? "这套规则仅用于当前应用。" : "应用修改时，为当前应用建立独立规则，其他应用保持原设置。"}</p>
+            <p className="text-label text-muted-foreground">{resetting ? "待恢复默认：应用后此应用改为跟随默认规则，原方案和其他应用不变。" : !selected ? "默认规则固定为不自动回车、敏感内容逐项处理；绑定此方案的应用会一起更新格式、面板和模板排序。" : scope === "shared" ? `修改会同时影响上方全部应用${sourceProfile?.id === settings.defaultTargetProfileId ? "，以及未单独设置应用的默认格式、面板和模板排序" : ""}。` : owners.length === 1 && sourceProfile?.bundleIds.length === 1 && sourceProfile.id !== settings.defaultTargetProfileId ? "这套规则仅用于当前应用。" : "应用修改时，为当前应用建立独立规则，其他应用保持原设置。"}</p>
           </section>
           {conflicts && <p role="alert" className="mb-3 rounded-lg bg-warning/10 p-2 text-label text-warning">此应用有重复绑定，请先在上方选择唯一保留方案。</p>}
           {stale && <div role="alert" className="mb-3 space-y-2 rounded-lg bg-warning/10 p-2 text-label text-warning"><p>此应用的规则或绑定已在其他位置更改。当前草稿已保留，请重新载入后再编辑。</p><Button size="sm" onClick={discard}>放弃草稿并载入最新规则</Button></div>}

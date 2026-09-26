@@ -65,6 +65,32 @@ pub struct DataLocationInspection {
     pub task_count: usize,
     pub media_count: usize,
     pub ordinary_file_count: usize,
+    /// 数据文件最后写入时间（加载/替换前与当前数据对比新旧用）。
+    #[serde(default)]
+    pub data_modified_at_ms: Option<u64>,
+    /// 当前活动数据集摘要（目标即当前目录时为 None）；由 storage 层填充。
+    #[serde(default)]
+    pub current: Option<DataSetSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataSetSummary {
+    pub note_count: usize,
+    pub task_count: usize,
+    pub media_count: usize,
+    pub data_modified_at_ms: Option<u64>,
+}
+
+impl DataLocationInspection {
+    pub fn summary(&self) -> DataSetSummary {
+        DataSetSummary {
+            note_count: self.note_count,
+            task_count: self.task_count,
+            media_count: self.media_count,
+            data_modified_at_ms: self.data_modified_at_ms,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2822,6 +2848,8 @@ pub fn inspect_location(path: &Path, active: Option<&Path>) -> DataLocationInspe
             task_count: 0,
             media_count: 0,
             ordinary_file_count: 0,
+            data_modified_at_ms: None,
+            current: None,
         };
     }
 
@@ -2841,6 +2869,8 @@ pub fn inspect_location(path: &Path, active: Option<&Path>) -> DataLocationInspe
             task_count: 0,
             media_count: 0,
             ordinary_file_count: usize::from(path.exists()),
+            data_modified_at_ms: None,
+            current: None,
         };
     }
 
@@ -2894,9 +2924,15 @@ pub fn inspect_location(path: &Path, active: Option<&Path>) -> DataLocationInspe
             task_count: 0,
             media_count,
             ordinary_file_count,
+            data_modified_at_ms: None,
+            current: None,
         };
     }
 
+    let data_modified_at_ms = data_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(system_time_ms);
     // 加密信封解不开要区分两种结局：本机无钥 → Encrypted（引导走备份导入），
     // 认证失败/格式坏 → Corrupt（按损坏处理）。
     let mut encrypted_locked = false;
@@ -2957,6 +2993,8 @@ pub fn inspect_location(path: &Path, active: Option<&Path>) -> DataLocationInspe
         task_count,
         media_count,
         ordinary_file_count,
+        data_modified_at_ms,
+        current: None,
     }
 }
 
@@ -3188,6 +3226,15 @@ pub(crate) fn validate_settings_value_for_version(
     }) {
         return false;
     }
+    if !optional_type(settings, "autoBackupEnabled", serde_json::Value::is_boolean)
+        || !optional_type(settings, "autoBackupDir", |value| value.is_null() || value.is_string())
+        || !optional_type(settings, "autoBackupKeep", |value| {
+            value.as_u64().is_some_and(|keep| (1..=60).contains(&keep))
+        })
+        || !optional_type(settings, "autoBackupLastAtMs", |value| value.is_null() || finite(value))
+    {
+        return false;
+    }
     if !optional_type(settings, "hudDurationMs", |value| {
         value
             .as_u64()
@@ -3197,6 +3244,9 @@ pub(crate) fn validate_settings_value_for_version(
     }
     for (key, allowed) in [
         ("theme", &["system", "light", "dark"][..]),
+        ("colorScheme", &["default", "platinum"][..]),
+        ("platinumHighlight", &["lavender", "blue", "teal", "graphite"][..]),
+        ("platinumScrollbar", &["classic", "thin"][..]),
         (
             "vibrancyMaterial",
             &["hud", "popover", "sidebar", "under-window", "fullscreen", "liquid"][..],
@@ -3595,6 +3645,7 @@ pub(crate) fn validate_settings_value_for_version(
                     "rehearsalDeferredAtMs",
                     "permissionsCompletedAtMs",
                     "recoveryTutorialCompletedAtMs",
+                    "mergeTutorialCompletedAtMs",
                     "activationStartedAtMs",
                 ]
                 .iter()
@@ -3946,6 +3997,25 @@ mod tests {
         let inspected = inspect_location(&ordinary, None);
         assert_eq!(inspected.kind, DataLocationKind::NonToskr);
         assert_eq!(inspected.ordinary_file_count, 1);
+    }
+
+    #[test]
+    fn inspection_reports_data_file_modified_time_and_summary() {
+        let root = tempdir().unwrap();
+        let store = root.path().join("store");
+        write_valid_store(&store, "note");
+        let written = fs::metadata(store.join(DATA_FILE)).unwrap().modified().unwrap();
+
+        let inspected = inspect_location(&store, None);
+        assert_eq!(inspected.data_modified_at_ms, system_time_ms(written));
+        assert!(inspected.current.is_none(), "storage 层才填当前数据集摘要");
+        let summary = inspected.summary();
+        assert_eq!(summary.note_count, inspected.note_count);
+        assert_eq!(summary.data_modified_at_ms, inspected.data_modified_at_ms);
+
+        let empty = root.path().join("empty");
+        fs::create_dir_all(&empty).unwrap();
+        assert_eq!(inspect_location(&empty, None).data_modified_at_ms, None);
     }
 
     #[test]
@@ -4334,6 +4404,16 @@ mod tests {
             Some(&legacy_v21),
             MAX_STORE_VERSION
         ));
+
+        // 进阶课「合并发送」完成时间：可缺省、可为 null 或非负时间；其他类型拒绝
+        for merge_value in [serde_json::json!(null), serde_json::json!(1_700)] {
+            let mut with_merge = current.clone();
+            with_merge["onboarding"]["mergeTutorialCompletedAtMs"] = merge_value;
+            assert!(validate_settings_value_for_version(Some(&with_merge), MAX_STORE_VERSION));
+        }
+        let mut bad_merge = current.clone();
+        bad_merge["onboarding"]["mergeTutorialCompletedAtMs"] = serde_json::json!("done");
+        assert!(!validate_settings_value_for_version(Some(&bad_merge), MAX_STORE_VERSION));
 
         for invalid_current in [
             serde_json::json!({"onboarding": {

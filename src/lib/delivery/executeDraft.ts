@@ -26,6 +26,7 @@ import {
   targetSendDisabled,
   useTargetStore,
 } from "@/store/targetStore";
+import { advanceLessonAfterDelivery } from "@/lib/lessonProgress";
 import { useUIStore, type DeliveryBandState } from "@/store/uiStore";
 import {
   deliveryEventFromDraft,
@@ -396,6 +397,7 @@ function applySuccessfulDelivery(draft: DeliveryDraft): string[] {
     return doneIds;
   }
   state.markOnboarding({ sent: true });
+  advanceLessonAfterDelivery(draft.sourceItemIds);
   return doneIds;
 }
 

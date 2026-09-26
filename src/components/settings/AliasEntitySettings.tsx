@@ -1,7 +1,13 @@
 import { ask } from "@tauri-apps/plugin-dialog";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { Pencil, Plus, Trash2, VenetianMask } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import {
+  DisclosureRow,
+  FeatureRow,
+  SettingsGroup,
+  SettingsRow,
+} from "@/components/settings/SettingsLayout";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Switch } from "@/components/ui/switch";
@@ -46,6 +52,7 @@ export function AliasEntitySettings({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState("");
   const [rehearsalText, setRehearsalText] = useState("");
+  const [rehearsalOpen, setRehearsalOpen] = useState(false);
 
   const categories = useMemo(
     () => [...ALIAS_PRESET_CATEGORIES, ...settings.aliasCustomCategories],
@@ -160,280 +167,266 @@ export function AliasEntitySettings({
   };
 
   return (
-    <div className="mb-4">
-      <p className="mb-1.5 text-body font-medium text-muted-foreground">可逆化名</p>
-      <div className="divide-y divide-border/50 rounded-xl border border-border/60 bg-card">
-        <div className="flex items-center justify-between gap-4 px-3.5 py-2.5">
-          <div className="min-w-0">
-            <p className="text-title">启用可逆化名</p>
-            <p className="mt-0.5 text-label text-muted-foreground">
-              发送前自动把词典原文替换为稳定占位符（如 张三 → [USER_01]）；捕获回复时在本机恢复
-            </p>
-          </div>
-          <div className="shrink-0">
-            <Switch
-              aria-label="启用可逆化名"
-              checked={settings.aliasEntitiesEnabled}
-              onCheckedChange={(aliasEntitiesEnabled) =>
-                patch({ aliasEntitiesEnabled })}
-            />
-          </div>
-        </div>
+    <SettingsGroup
+      footer={
+        settings.aliasEntitiesEnabled
+          ? "词典加密保存在本机；导出的完整备份中为明文。删除条目后，它的占位符编号不再复用。"
+          : undefined
+      }
+    >
+      <FeatureRow
+        icon={<VenetianMask />}
+        title="可逆化名"
+        switchLabel="启用可逆化名"
+        description="发送时把词典里的名称换成占位符（张三 → [USER_01]），收到回复后在本机还原"
+        checked={settings.aliasEntitiesEnabled}
+        onCheckedChange={(aliasEntitiesEnabled) => patch({ aliasEntitiesEnabled })}
+      />
 
-        {settings.aliasEntitiesEnabled && (
-          <>
-            <div className="px-3.5 py-2.5">
-              <p className="text-title">实体词典</p>
-              <p className="mt-0.5 text-label text-muted-foreground">
-                词典原文随本地数据文件加密保存，并包含在完整备份中（备份为明文）；删除条目不回收占位符编号
+      {settings.aliasEntitiesEnabled && (
+        <>
+          <SettingsRow
+            label="词典"
+            value={`${settings.aliasEntities.length} 条`}
+            right={
+              formOpen ? undefined : (
+                <Button type="button" size="xs" variant="ghost" onClick={() => setFormOpen(true)}>
+                  <Plus className="size-3" /> 添加
+                </Button>
+              )
+            }
+          >
+            {settings.aliasEntities.length === 0 ? (
+              <p className="mt-1 text-label text-muted-foreground">
+                暂无词典条目。添加后，发送内容里出现的原文会自动换成占位符。
               </p>
-
-              {settings.aliasEntities.length === 0 ? (
-                <p className="mt-2 text-body text-muted-foreground">
-                  暂无词典条目。添加后，发送内容里出现的原文会自动替换为占位符。
-                </p>
-              ) : (
-                <ul className="mt-2 space-y-1" aria-label="化名词典条目">
-                  {settings.aliasEntities.map((entity) => (
-                    <li
-                      key={entity.id}
-                      className="flex items-center gap-2 rounded-lg bg-muted/40 px-2 py-1.5"
-                    >
-                      <span className="shrink-0 rounded-sm bg-background/70 px-1 py-0.5 text-micro text-muted-foreground">
-                        {categoryLabelOf(entity.category, settings.aliasCustomCategories)}
-                      </span>
-                      {editingId === entity.id ? (
-                        <input
-                          aria-label={`编辑 ${entity.originalText} 的原文`}
-                          value={editingText}
-                          maxLength={120}
-                          autoFocus
-                          onChange={(event) => setEditingText(event.target.value)}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") saveEdit(entity);
-                            if (event.key === "Escape") setEditingId(null);
-                          }}
-                          onBlur={() => saveEdit(entity)}
-                          className="h-7 min-w-0 flex-1 rounded-md border border-border bg-transparent px-1.5 text-body outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
-                        />
-                      ) : (
-                        <span
-                          className="min-w-0 flex-1 truncate text-body"
-                          title={entity.originalText}
-                        >
-                          {entity.originalText}
-                        </span>
-                      )}
-                      <code className="shrink-0 text-micro text-muted-foreground">
-                        {entity.placeholder}
-                      </code>
-                      <IconButton
-                        label="编辑原文"
-                        size="xs"
-                        onClick={() => {
-                          setEditingId(entity.id);
-                          setEditingText(entity.originalText);
-                          setFormIssue(null);
+            ) : (
+              <ul className="mt-2 space-y-1" aria-label="化名词典条目">
+                {settings.aliasEntities.map((entity) => (
+                  <li
+                    key={entity.id}
+                    className="flex items-center gap-2 rounded-lg bg-muted/40 px-2 py-1.5"
+                  >
+                    <span className="shrink-0 rounded-sm bg-background/70 px-1 py-0.5 text-micro text-muted-foreground">
+                      {categoryLabelOf(entity.category, settings.aliasCustomCategories)}
+                    </span>
+                    {editingId === entity.id ? (
+                      <input
+                        aria-label={`编辑 ${entity.originalText} 的原文`}
+                        value={editingText}
+                        maxLength={120}
+                        autoFocus
+                        onChange={(event) => setEditingText(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") saveEdit(entity);
+                          if (event.key === "Escape") setEditingId(null);
                         }}
+                        onBlur={() => saveEdit(entity)}
+                        className="h-7 min-w-0 flex-1 rounded-md border border-border bg-transparent px-1.5 text-body outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+                      />
+                    ) : (
+                      <span
+                        className="min-w-0 flex-1 truncate text-body"
+                        title={entity.originalText}
                       >
-                        <Pencil className="size-3" />
-                      </IconButton>
-                      <IconButton
-                        label="删除条目"
-                        size="xs"
-                        tone="danger"
-                        onClick={() => void removeEntity(entity)}
-                      >
-                        <Trash2 className="size-3" />
-                      </IconButton>
-                    </li>
-                  ))}
-                </ul>
-              )}
-
-              {formOpen ? (
-                <div className="mt-2 rounded-lg border border-border/60 p-2">
-                  <label className="block text-label text-muted-foreground">
-                    原文（精确匹配，区分大小写）
-                    <input
-                      aria-label="词典原文"
-                      value={draftText}
-                      maxLength={120}
-                      autoFocus
-                      placeholder="如：张三 / 商户 12345 / SO-2026-001"
-                      onChange={(event) => {
-                        setDraftText(event.target.value);
+                        {entity.originalText}
+                      </span>
+                    )}
+                    <code className="shrink-0 text-micro text-muted-foreground">
+                      {entity.placeholder}
+                    </code>
+                    <IconButton
+                      label="编辑原文"
+                      size="xs"
+                      onClick={() => {
+                        setEditingId(entity.id);
+                        setEditingText(entity.originalText);
                         setFormIssue(null);
                       }}
-                      className={inputClass}
-                    />
-                  </label>
-                  <p className="mt-2 text-label text-muted-foreground">类别</p>
-                  <div
-                    className="mt-1 flex flex-wrap gap-1"
-                    role="radiogroup"
-                    aria-label="化名类别"
-                  >
-                    {categories.map((category) => (
-                      <button
-                        key={category.code}
-                        type="button"
-                        role="radio"
-                        aria-checked={selectedCode === category.code}
-                        onClick={() => setSelectedCode(category.code)}
-                        className={cn(
-                          "rounded-md px-2 py-1 text-label outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
-                          selectedCode === category.code
-                            ? "bg-primary/10 text-foreground"
-                            : "bg-muted/40 text-muted-foreground hover:text-foreground"
-                        )}
-                      >
-                        {category.label}
-                      </button>
-                    ))}
+                    >
+                      <Pencil className="size-3" />
+                    </IconButton>
+                    <IconButton
+                      label="删除条目"
+                      size="xs"
+                      tone="danger"
+                      onClick={() => void removeEntity(entity)}
+                    >
+                      <Trash2 className="size-3" />
+                    </IconButton>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {formOpen && (
+              <div className="mt-2 rounded-lg border border-border/60 p-2">
+                <label className="block text-label text-muted-foreground">
+                  原文（精确匹配，区分大小写）
+                  <input
+                    aria-label="词典原文"
+                    value={draftText}
+                    maxLength={120}
+                    autoFocus
+                    placeholder="如：张三 / 商户 12345 / SO-2026-001"
+                    onChange={(event) => {
+                      setDraftText(event.target.value);
+                      setFormIssue(null);
+                    }}
+                    className={inputClass}
+                  />
+                </label>
+                <p className="mt-2 text-label text-muted-foreground">类别</p>
+                <div
+                  className="mt-1 flex flex-wrap gap-1"
+                  role="radiogroup"
+                  aria-label="化名类别"
+                >
+                  {categories.map((category) => (
                     <button
+                      key={category.code}
                       type="button"
                       role="radio"
-                      aria-checked={customSelected}
-                      onClick={() => setSelectedCode(CUSTOM_CODE)}
+                      aria-checked={selectedCode === category.code}
+                      onClick={() => setSelectedCode(category.code)}
                       className={cn(
                         "rounded-md px-2 py-1 text-label outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
-                        customSelected
+                        selectedCode === category.code
                           ? "bg-primary/10 text-foreground"
                           : "bg-muted/40 text-muted-foreground hover:text-foreground"
                       )}
                     >
-                      + 自定义类别
+                      {category.label}
                     </button>
-                  </div>
-                  {customSelected && (
-                    <div className="mt-2 grid grid-cols-2 gap-2">
-                      <label className="block text-label text-muted-foreground">
-                        类别码（英文大写）
-                        <input
-                          aria-label="自定义类别码"
-                          value={customCode}
-                          maxLength={16}
-                          placeholder="如 VENDOR"
-                          onChange={(event) => {
-                            setCustomCode(event.target.value.toUpperCase());
-                            setFormIssue(null);
-                          }}
-                          className={inputClass}
-                        />
-                      </label>
-                      <label className="block text-label text-muted-foreground">
-                        显示名（可选）
-                        <input
-                          aria-label="自定义类别显示名"
-                          value={customLabel}
-                          maxLength={16}
-                          placeholder="如 供应商"
-                          onChange={(event) => setCustomLabel(event.target.value)}
-                          className={inputClass}
-                        />
-                      </label>
-                    </div>
-                  )}
-                  <p className="mt-2 text-label text-muted-foreground" aria-live="polite">
-                    {previewPlaceholder
-                      ? `将分配占位符：${previewPlaceholder}`
-                      : "填写合法类别码后显示将分配的占位符"}
-                  </p>
-                  {formIssue && (
-                    <p role="alert" className="mt-1 text-label text-warning">
-                      {formIssue}
-                    </p>
-                  )}
-                  <div className="mt-2 flex gap-1.5">
-                    <Button type="button" size="xs" variant="secondary" onClick={addEntity}>
-                      添加
-                    </Button>
-                    <Button type="button" size="xs" variant="ghost" onClick={resetForm}>
-                      取消
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="ghost"
-                  className="mt-2"
-                  onClick={() => setFormOpen(true)}
-                >
-                  <Plus className="size-3" /> 新增条目
-                </Button>
-              )}
-              {!formOpen && formIssue && (
-                <p role="alert" className="mt-1 text-label text-warning">
-                  {formIssue}
-                </p>
-              )}
-            </div>
-
-            <div className="px-3.5 py-2.5">
-              <p className="text-title">本地替换与恢复示例</p>
-              <label className="mt-0.5 block text-label text-muted-foreground">
-                输入示例文字，查看替换成化名和恢复原文的效果
-                <input
-                  aria-label="化名预演输入"
-                  value={rehearsalText}
-                  maxLength={400}
-                  placeholder="粘贴一句包含词典原文的示例文字"
-                  onChange={(event) => setRehearsalText(event.target.value)}
-                  className={inputClass}
-                />
-              </label>
-              {rehearsal && (
-                <div className="mt-2 space-y-1.5">
-                  <div>
-                    <p className="text-micro text-muted-foreground">
-                      ① 替换后 · 匹配到的原文变为占位符（{rehearsal.replacedCount} 处）
-                    </p>
-                    <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-muted/40 p-2 text-micro">
-                      {rehearsal.text}
-                    </pre>
-                  </div>
-                  <div>
-                    <p className="text-micro text-muted-foreground">
-                      ② 恢复原文后
-                    </p>
-                    <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-muted/40 p-2 text-micro">
-                      {rehearsalRestored?.text ?? rehearsal.text}
-                    </pre>
-                    {rehearsalRestored?.text === rehearsalText && (
-                      <p className="mt-0.5 text-micro text-success">
-                        本地替换与恢复示例通过
-                      </p>
+                  ))}
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={customSelected}
+                    onClick={() => setSelectedCode(CUSTOM_CODE)}
+                    className={cn(
+                      "rounded-md px-2 py-1 text-label outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+                      customSelected
+                        ? "bg-primary/10 text-foreground"
+                        : "bg-muted/40 text-muted-foreground hover:text-foreground"
                     )}
-                  </div>
+                  >
+                    + 自定义类别
+                  </button>
                 </div>
-              )}
-              <p className="mt-1.5 text-label text-muted-foreground">
-                仅在本机显示示例，不会发送、不会访问剪贴板
-              </p>
-            </div>
-
-            <div className="flex items-center justify-between gap-4 px-3.5 py-2.5">
-              <div className="min-w-0">
-                <p className="text-title">捕获时自动恢复化名</p>
-                <p className="mt-0.5 text-label text-muted-foreground">
-                  划词捕获的新卡片自动把已知占位符还原为原文；关闭后可在卡片上手动恢复
+                {customSelected && (
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <label className="block text-label text-muted-foreground">
+                      类别码（英文大写）
+                      <input
+                        aria-label="自定义类别码"
+                        value={customCode}
+                        maxLength={16}
+                        placeholder="如 VENDOR"
+                        onChange={(event) => {
+                          setCustomCode(event.target.value.toUpperCase());
+                          setFormIssue(null);
+                        }}
+                        className={inputClass}
+                      />
+                    </label>
+                    <label className="block text-label text-muted-foreground">
+                      显示名（可选）
+                      <input
+                        aria-label="自定义类别显示名"
+                        value={customLabel}
+                        maxLength={16}
+                        placeholder="如 供应商"
+                        onChange={(event) => setCustomLabel(event.target.value)}
+                        className={inputClass}
+                      />
+                    </label>
+                  </div>
+                )}
+                <p className="mt-2 text-label text-muted-foreground" aria-live="polite">
+                  {previewPlaceholder
+                    ? `将分配占位符：${previewPlaceholder}`
+                    : "填写合法类别码后显示将分配的占位符"}
                 </p>
+                {formIssue && (
+                  <p role="alert" className="mt-1 text-label text-warning">
+                    {formIssue}
+                  </p>
+                )}
+                <div className="mt-2 flex gap-1.5">
+                  <Button type="button" size="xs" variant="secondary" onClick={addEntity}>
+                    添加
+                  </Button>
+                  <Button type="button" size="xs" variant="ghost" onClick={resetForm}>
+                    取消
+                  </Button>
+                </div>
               </div>
-              <div className="shrink-0">
-                <Switch
-                  aria-label="捕获时自动恢复化名"
-                  checked={settings.aliasAutoRestoreOnCapture}
-                  onCheckedChange={(aliasAutoRestoreOnCapture) =>
-                    patch({ aliasAutoRestoreOnCapture })}
-                />
+            )}
+            {!formOpen && formIssue && (
+              <p role="alert" className="mt-1 text-label text-warning">
+                {formIssue}
+              </p>
+            )}
+          </SettingsRow>
+
+          <SettingsRow
+            label="捕获回复时自动还原"
+            searchKey="捕获时自动恢复化名"
+            hint="关闭后可在卡片上手动还原"
+            right={
+              <Switch
+                aria-label="捕获时自动恢复化名"
+                checked={settings.aliasAutoRestoreOnCapture}
+                onCheckedChange={(aliasAutoRestoreOnCapture) =>
+                  patch({ aliasAutoRestoreOnCapture })}
+              />
+            }
+          />
+
+          {/* 示例输入与结果收起时保留，重新展开不丢失 */}
+          <DisclosureRow
+            label="试一试替换效果"
+            open={rehearsalOpen}
+            onOpenChange={setRehearsalOpen}
+            keepMounted
+          >
+            <input
+              aria-label="化名预演输入"
+              value={rehearsalText}
+              maxLength={400}
+              placeholder="输入一句包含词典原文的示例，只在本机演示"
+              onChange={(event) => setRehearsalText(event.target.value)}
+              className={inputClass}
+            />
+            {rehearsal && (
+              <div className="mt-2 space-y-1.5">
+                <div>
+                  <p className="text-micro text-muted-foreground">
+                    ① 替换后 · 匹配到的原文变为占位符（{rehearsal.replacedCount} 处）
+                  </p>
+                  <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-muted/40 p-2 text-micro">
+                    {rehearsal.text}
+                  </pre>
+                </div>
+                <div>
+                  <p className="text-micro text-muted-foreground">
+                    ② 恢复原文后
+                  </p>
+                  <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-muted/40 p-2 text-micro">
+                    {rehearsalRestored?.text ?? rehearsal.text}
+                  </pre>
+                  {rehearsalRestored?.text === rehearsalText && (
+                    <p className="mt-0.5 text-micro text-success">
+                      还原结果与原文一致
+                    </p>
+                  )}
+                </div>
               </div>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
+            )}
+          </DisclosureRow>
+        </>
+      )}
+    </SettingsGroup>
   );
 }

@@ -3,6 +3,7 @@ import { FlaskConical, Pencil, RefreshCw } from "lucide-react";
 import { AppIcon } from "@/components/settings/AppIdentity";
 import { DeliveryPolicySummary } from "@/components/settings/DeliveryPolicySummary";
 import { useAppIdentity } from "@/components/settings/useAppIdentity";
+import { DetailsSummary } from "@/components/ui/disclosure";
 import { IconButton } from "@/components/ui/icon-button";
 import { Button } from "@/components/ui/button";
 import { TARGET_PROFILE_SOURCE_LABEL } from "@/lib/targetLens";
@@ -103,7 +104,7 @@ export function CurrentTargetPreview({
         />
       </div>
       <p className="mt-2 text-micro text-muted-foreground">
-        这里显示应用默认规则；本次临时调整以主面板为准。
+        本次临时调整以主面板为准。
       </p>
 
       {resolution.source === "conflict" && (
@@ -116,7 +117,7 @@ export function CurrentTargetPreview({
         当前粘贴目标 {appName}，{targetStatus}，默认方案 {resolution.profile.name}
       </p>
       <details className="mt-3 border-t border-border/60 pt-2">
-        <summary className="cursor-pointer text-label text-muted-foreground">规则详情</summary>
+        <DetailsSummary className="text-label text-muted-foreground">规则详情</DetailsSummary>
         <p className="mt-2 break-words text-label" title={resolution.profile.name}>
           使用方案：{resolution.profile.name}
         </p>

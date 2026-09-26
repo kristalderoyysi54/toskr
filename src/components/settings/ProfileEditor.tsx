@@ -5,6 +5,7 @@ import { AppAssignmentPicker } from "@/components/settings/AppAssignmentPicker";
 import { DeliveryTrack } from "@/components/settings/DeliveryTrack";
 import { ProfileOutputPreview } from "@/components/settings/ProfileOutputPreview";
 import { SimpleSelect } from "@/components/SimpleSelect";
+import { DetailsSummary } from "@/components/ui/disclosure";
 import { Segmented } from "@/components/ui/segmented";
 import {
   DELIVERY_FORMAT_OPTIONS,
@@ -255,7 +256,7 @@ export function ProfileEditor({
       </EditorSection>
 
       <details className="border-t border-border/60 py-3">
-        <summary className="cursor-pointer text-label font-semibold text-muted-foreground">名称、应用与模板组</summary>
+        <DetailsSummary className="text-label font-semibold text-muted-foreground">名称、应用与模板组</DetailsSummary>
         <div className="mt-3">
           <EditorSection number={4} title="方案名称">
             <label className="block text-label text-muted-foreground">
@@ -314,7 +315,7 @@ export function ProfileEditor({
       </details>
 
       <details className="border-t border-border/60 py-3">
-        <summary className="cursor-pointer text-label font-semibold text-muted-foreground">规则生效预览</summary>
+        <DetailsSummary className="text-label font-semibold text-muted-foreground">规则生效预览</DetailsSummary>
         <p className="mt-2 text-label text-muted-foreground">
           对比方案配置与应用默认规则，不包含主面板的本次临时调整。
         </p>

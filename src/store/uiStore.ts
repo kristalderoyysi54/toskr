@@ -47,6 +47,10 @@ interface UIState {
   doneOpen: Record<string, boolean>;
   /** ⌘ 按住中（前 9 张卡显示 ⌘1-9 快发角标）。 */
   cmdHeld: boolean;
+  /** 正在拖动的笔记卡片（侧栏分组自动展开作为落点；浮动卡片显示其内容）。 */
+  noteDragId: string | null;
+  /** 拖动中指针下方的分组药丸（高亮落点）。 */
+  noteDropSection: string | null;
   /** 辅助功能授权状态（应用级常驻轮询写入）。 */
   permissionAx: boolean;
   /** 键盘监听 tap 是否已创建。 */
@@ -98,6 +102,7 @@ interface UIState {
   setPreviewEditing: (editing: boolean) => void;
   setFlashId: (id: string | null) => void;
   setCmdHeld: (held: boolean) => void;
+  setNoteDrag: (noteId: string | null, dropSection?: string | null) => void;
   toggleDoneOpen: (sectionId: string) => void;
   setPermission: (
     ax: boolean,
@@ -152,6 +157,8 @@ export const useUIStore = create<UIState>()((set, get) => ({
   flashId: null,
   doneOpen: {},
   cmdHeld: false,
+  noteDragId: null,
+  noteDropSection: null,
   permissionAx: true,
   permissionInstalled: true,
   permissionReceiving: true,
@@ -195,6 +202,12 @@ export const useUIStore = create<UIState>()((set, get) => ({
   setPreviewEditing: (previewEditing) => set({ previewEditing }),
   setFlashId: (flashId) => set({ flashId }),
   setCmdHeld: (cmdHeld) => set({ cmdHeld }),
+  setNoteDrag: (noteDragId, noteDropSection = null) =>
+    set((state) =>
+      state.noteDragId === noteDragId && state.noteDropSection === noteDropSection
+        ? state
+        : { noteDragId, noteDropSection }
+    ),
   toggleDoneOpen: (sectionId) =>
     set({ doneOpen: { ...get().doneOpen, [sectionId]: !get().doneOpen[sectionId] } }),
   setPermission: (permissionAx, permissionInstalled, permissionReceiving, eventsStuck) =>

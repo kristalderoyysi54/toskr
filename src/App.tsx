@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   closestCenter,
   DndContext,
@@ -7,8 +8,11 @@ import {
   useSensor,
   useSensors,
   type DragEndEvent,
+  type DragMoveEvent,
   type DragOverEvent,
+  type DragStartEvent,
   type Modifier,
+  DragOverlay,
 } from "@dnd-kit/core";
 import {
   arrayMove,
@@ -20,6 +24,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { emitTo, listen } from "@tauri-apps/api/event";
+import { installAutoBackupScheduler, performAutoBackup } from "@/lib/autoBackup";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { motion, MotionConfig } from "motion/react";
 import {
@@ -45,6 +50,11 @@ import { COMPACT_ROW_RELEASE_EVENT, NoteCard } from "@/components/NoteCard";
 import { WindowedListItem } from "@/components/WindowedListItem";
 import { PermissionBanner } from "@/components/PermissionBanner";
 import { SafeDeliveryRehearsal } from "@/components/SafeDeliveryRehearsal";
+import { LessonCoach } from "@/components/onboarding/LessonCoach";
+import { advanceLessonAfterCapture } from "@/lib/lessonProgress";
+import { startAdvancedLesson } from "@/lib/lessonActions";
+import type { LessonId } from "@/lib/lessons";
+import { useLessonStore } from "@/store/lessonStore";
 import { WelcomeTour } from "@/components/WelcomeTour";
 import { PreviewOverlay } from "@/components/PreviewOverlay";
 import { buildBackupPayload, buildMediaIntegrityPayload } from "@/lib/backup";
@@ -76,6 +86,8 @@ import {
 } from "@/lib/dataGeneration";
 import { resolveDraftSectionId } from "@/lib/draftSection";
 import { normalizeMaterialStyle } from "@/lib/materialStyle";
+import { appearanceFromSettings, publishAppearance } from "@/lib/colorScheme";
+import { PlatinumBox } from "@/components/ui/platinum-titlebar";
 import {
   DETAIL_STATE_EVENT,
   emitToDetailWindows,
@@ -151,8 +163,10 @@ import {
   noteEditorSessionReleased,
   openNoteDetail,
   toggleNoteDetail,
+  NOTE_SAVE_TO_NOTES_EVENT,
   NOTE_TAGS_EVENT,
   NOTE_EDIT_SYNC_RESULT_EVENT,
+  moveClipsToNotesWithUndo,
   refreshOpenNoteDetail,
   RUN_PENDING_UNDO_EVENT,
   sendCheckedToChat,
@@ -162,6 +176,7 @@ import {
   type NoteEditPayload,
   type NoteEditSyncResultPayload,
   type NoteSendPayload,
+  type NoteSaveToNotesPayload,
   type NoteTagsPayload,
 } from "@/lib/actions";
 import { clipTimeBand } from "@/lib/cliprow";
@@ -201,6 +216,8 @@ import {
   SETTINGS_DATA_INSPECT_PATH,
   SETTINGS_SECTION,
   SETTINGS_START_SAFE_REHEARSAL,
+  SETTINGS_START_LESSON,
+  applySettingsPatch,
   type SafeRehearsalLaunchRequest,
 } from "@/lib/settingsSync";
 import {
@@ -394,6 +411,7 @@ function GroupPill({
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(item.name);
   const inputRef = useRef<HTMLInputElement>(null);
+  const dropHover = useUIStore((s) => s.noteDropSection === item.id);
   useEffect(() => {
     if (renaming) window.setTimeout(() => inputRef.current?.focus(), 30);
   }, [renaming]);
@@ -430,6 +448,7 @@ function GroupPill({
       {...(manage?.reorder ? listeners : {})}
       aria-pressed={on}
       data-group-dragging={isDragging || undefined}
+      data-drop-section={item.id}
       title={item.name}
       onKeyDown={(event) => {
         if (vertical && (event.metaKey || event.ctrlKey || event.altKey)) return;
@@ -460,7 +479,8 @@ function GroupPill({
       className={cn(
         pillCls(on, vertical),
         manage?.reorder && "cursor-grab touch-none active:cursor-grabbing",
-        isDragging && "z-10 opacity-70 elevation-2"
+        isDragging && "z-10 opacity-70 elevation-2",
+        dropHover && "bg-primary/15 text-foreground ring-2 ring-primary/60"
       )}
     >
       <span
@@ -675,7 +695,9 @@ function NoteGroupRail({ items, active, onPick, manage }: {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const contentRef = useRef<HTMLElement>(null);
   const visible = panelOpen && page === "notes";
-  const shown = expanded && visible;
+  // 拖动笔记卡片时侧栏自动展开当落点，松手后回到原来的展开状态
+  const noteDragging = useUIStore((s) => s.noteDragId !== null);
+  const shown = (expanded || noteDragging) && visible;
   const changeOpen = useCallback((next: boolean, restoreFocus = false) => {
     if (!next) contentRef.current?.querySelector("input")?.blur();
     selected.current = false;
@@ -767,6 +789,61 @@ function NoteGroupRail({ items, active, onPick, manage }: {
         </nav>
       </div>
     </div>
+  );
+}
+
+/** 浮动卡片左上角相对指针的偏移（px）。 */
+const NOTE_GHOST_OFFSET = 14;
+
+/** 浮动卡片左上角贴在指针左上方：卡片到哪、指针就在哪，瞄准分组不再错位。 */
+const NOTE_GHOST_MODIFIERS: Modifier[] = [
+  ({ transform, activatorEvent, draggingNodeRect }) => {
+    if (!draggingNodeRect || !(activatorEvent instanceof MouseEvent)) return transform;
+    return {
+      ...transform,
+      x: transform.x + activatorEvent.clientX - draggingNodeRect.left - NOTE_GHOST_OFFSET,
+      y: transform.y + activatorEvent.clientY - draggingNodeRect.top - NOTE_GHOST_OFFSET,
+    };
+  },
+];
+
+/**
+ * 拖动笔记时的浮动卡片：挂到 body，不受滚动容器裁剪、始终在分组栏之上；
+ * 只在笔记拖动时挂载，分组与剪贴卡的拖拽保持原样。
+ */
+function NoteDragGhost() {
+  const dragId = useUIStore((s) => s.noteDragId);
+  const dropSectionId = useUIStore((s) => s.noteDropSection);
+  const note = useNotesStore((s) => (dragId ? s.notes.find((n) => n.id === dragId) : undefined));
+  const checkedCount = useNotesStore((s) => (dragId && s.checkedIds.includes(dragId) ? s.checkedIds.length : 1));
+  const dropName = useNotesStore((s) => s.sections.find((section) => section.id === dropSectionId)?.name);
+  if (!dragId || !note) return null;
+  return createPortal(
+    <DragOverlay modifiers={NOTE_GHOST_MODIFIERS} dropAnimation={null} zIndex={60}>
+      <div className="pointer-events-none relative w-56">
+        {/* 多张一起拖：身后叠两层卡片边，右上角显示张数 */}
+        {checkedCount > 1 && (
+          <>
+            {checkedCount > 2 && (
+              <div aria-hidden className="absolute inset-0 translate-x-2 translate-y-2 rounded-xl border border-border/70 bg-card elevation-1" />
+            )}
+            <div aria-hidden className="absolute inset-0 translate-x-1 translate-y-1 rounded-xl border border-border/70 bg-card elevation-1" />
+          </>
+        )}
+        <div className="relative rounded-xl border border-border/70 bg-card p-2.5 text-card-foreground elevation-3">
+          <p className="line-clamp-2 text-body">{note.title || note.text || "图片"}</p>
+          <p className={cn("mt-1 text-micro", dropName ? "text-primary" : "text-muted-foreground")}>
+            {dropName ? `松手移到「${dropName}」` : "拖到分组上即可归档"}
+          </p>
+        </div>
+        {checkedCount > 1 && (
+          <span className="absolute -right-2 -top-2 grid h-5 min-w-5 place-items-center rounded-full bg-primary px-1 text-micro font-semibold tabular-nums text-primary-foreground elevation-2">
+            {checkedCount}
+          </span>
+        )}
+      </div>
+    </DragOverlay>,
+    document.body
   );
 }
 
@@ -894,9 +971,11 @@ export default function App() {
   const taskSections = useNotesStore((s) => s.taskSections);
   const settings = useNotesStore((s) => s.settings);
   const onboarding = settings.onboarding;
+  const lessonVisible = useLessonStore((state) => state.session !== null);
   const rehearsalVisible =
     onboarding.rehearsalStatus === "active" ||
-    onboarding.rehearsalStatus === "paused";
+    onboarding.rehearsalStatus === "paused" ||
+    lessonVisible;
   /** 收起动画结束隐藏窗口时，是否归还焦点给原前台应用。 */
   const restoreFocusRef = useRef(true);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -1173,6 +1252,7 @@ export default function App() {
           createdAt: capturedAt,
         });
         if (result === "empty") return result;
+        if (result === "added") advanceLessonAfterCapture(id ?? null, aliasRestoredCount);
         const imageCount =
           contentBlocks?.filter((block) => block.type === "image").length ?? 0;
         const capturePreview =
@@ -1430,6 +1510,22 @@ export default function App() {
         void api.showPanel();
       }
     );
+    return () => {
+      void subscription.then((unlisten) => unlisten());
+    };
+  }, []);
+
+  // 使用概览开始进阶课：示例准备与清理都在主面板完成
+  useEffect(() => {
+    const subscription = listen<LessonId>(SETTINGS_START_LESSON, (event) => {
+      if (isDataOperationLocked()) {
+        tip("warn", "数据操作进行中，暂不能开始课程");
+        return;
+      }
+      if (event.payload === "merge" || event.payload === "privacy") {
+        startAdvancedLesson(event.payload);
+      }
+    });
     return () => {
       void subscription.then((unlisten) => unlisten());
     };
@@ -1867,11 +1963,34 @@ export default function App() {
   useEffect(() => {
     document.documentElement.style.setProperty("--panel-alpha", String(panelOpacity));
   }, [panelOpacity]);
+  const colorScheme = useNotesStore((s) => s.settings.colorScheme);
+  const platinumHighlight = useNotesStore((s) => s.settings.platinumHighlight);
+  const platinumScrollbar = useNotesStore((s) => s.settings.platinumScrollbar);
+  // 水合前的默认值不广播：否则启动瞬间会把各窗口缓存改回 default 再切回来
+  useEffect(() => installAutoBackupScheduler(), []);
+
+  // 水合成功写条数指纹：install-app.sh 部署后比对前后笔记数，骤降即报警
+  useEffect(
+    () =>
+      useNotesStore.persist.onFinishHydration((state) => {
+        void api
+          .reportHydration(true, state.notes.length, state.tasks.length, state.sections.length)
+          .catch(() => {});
+      }),
+    []
+  );
+
+  useEffect(() => {
+    const publish = () => publishAppearance(appearanceFromSettings(useNotesStore.getState().settings));
+    if (useNotesStore.persist.hasHydrated()) publish();
+    return useNotesStore.persist.onFinishHydration(publish);
+  }, [colorScheme, platinumHighlight, platinumScrollbar]);
 
   // 设置窗口同步宿主：响应 state 请求 / 应用 patch / 代理导出导入
   useEffect(() => {
     const cleanup = installSettingsSyncHost({
       onExport: () => void exportBackup(),
+      onAutoBackupNow: () => void performAutoBackup(true),
       onImport: () => void importBackup(),
       onClearClip: () => {
         const { removed, orphanImages } = useNotesStore.getState().clearClipHistory();
@@ -2265,6 +2384,19 @@ export default function App() {
         }
         useNotesStore.getState().setNoteTags(e.payload.id, e.payload.tags);
       }),
+      // 详情窗「存入笔记分组」：详情窗已先行收起按钮，未移动时重推 payload 让它复原
+      listen<NoteSaveToNotesPayload>(NOTE_SAVE_TO_NOTES_EVENT, (e) => {
+        const moved =
+          !isDataOperationLocked() &&
+          matchesDataGeneration(e.payload.dataGeneration) &&
+          moveClipsToNotesWithUndo([e.payload.id], e.payload.sectionId) > 0;
+        if (moved) return;
+        warnWithPanel(
+          "未存入笔记：卡片已不在剪贴板或数据上下文已变化",
+          "note-save-to-notes rejected"
+        );
+        void refreshOpenNoteDetail();
+      }),
       // 详情编辑取消时仅删本次新增、且没有被任意卡片引用的图片；剪贴板
       // 内容哈希可能命中已有文件，不能由详情窗直接删盘。
       listen<{ files: string[]; dataGeneration: number }>(
@@ -2533,7 +2665,7 @@ export default function App() {
       const path = await open({
         multiple: false,
         ...(location
-          ? { defaultPath: `${location.defaultDir}/recovery` }
+          ? { defaultPath: `${location.activeDir}/recovery` }
           : {}),
         filters: [
           {
@@ -2862,6 +2994,8 @@ export default function App() {
   const horizontalBar =
     settings.rightSidebar &&
     (settings.sidebarEdge === "top" || settings.sidebarEdge === "bottom");
+  /** Platinum 窗口布局（标题栏框、选项卡面板、底部状态栏）；横栏形态只换配色不换布局。 */
+  const platinumLayout = settings.colorScheme === "platinum" && !horizontalBar;
   useEffect(() => {
     if (noteGroupFilter === null) return;
     if (noteGroupFilter === DONE_FILTER ? !horizontalBar : !noteSections.some((section) => section.id === noteGroupFilter)) {
@@ -3325,6 +3459,125 @@ export default function App() {
     }
   }, []);
 
+  /**
+   * 拖动中的归档落点：
+   * 1. 指针直接在分组药丸上（侧栏或顶部分组条）；拖动卡会挡在指针下，所以查整叠元素；
+   * 2. 卡片左缘已进入侧栏：按指针高度取侧栏里纵向最近的分组。用户瞄的是卡片而不是指针，
+   *    宽卡片被拖进侧栏时指针往往还在列表区，只看指针会判不中。
+   */
+  const dropSectionAt = useCallback((event: DragMoveEvent | DragEndEvent) => {
+    const origin = event.activatorEvent;
+    if (!(origin instanceof MouseEvent)) return null; // 键盘拖拽不参与
+    const x = origin.clientX + event.delta.x;
+    const y = origin.clientY + event.delta.y;
+    for (const element of document.elementsFromPoint(x, y)) {
+      const pill = (element as HTMLElement).closest?.<HTMLElement>("[data-drop-section]");
+      if (pill?.dataset.dropSection) return pill.dataset.dropSection;
+    }
+    // 浮动卡片左上角贴着指针（NOTE_GHOST_MODIFIERS），卡片左缘 ≈ 指针 x − 偏移
+    const cardLeft = x - NOTE_GHOST_OFFSET;
+    const rail = document.querySelector<HTMLElement>("[data-group-navigation]")?.getBoundingClientRect();
+    if (!rail || rail.width === 0 || cardLeft > rail.right) return null;
+    let best: { id: string; distance: number } | null = null;
+    for (const pill of document.querySelectorAll<HTMLElement>("[data-group-navigation] [data-drop-section]")) {
+      const box = pill.getBoundingClientRect();
+      if (!box.height || !pill.dataset.dropSection) continue;
+      const distance = y < box.top ? box.top - y : y > box.bottom ? y - box.bottom : 0;
+      if (!best || distance < best.distance) best = { id: pill.dataset.dropSection, distance };
+    }
+    // 离所有分组都超过一个药丸高度（如指针在侧栏顶部空白），不算落点
+    return best && best.distance <= 24 ? best.id : null;
+  }, []);
+
+  // 只有普通笔记参与分组归档：剪贴卡、秘文的拖拽保持原样
+  const isNoteDrag = (id: string) =>
+    !id.startsWith("sec:") &&
+    useNotesStore.getState().notes.some(
+      (n) => n.id === id && n.sectionId !== CLIPBOARD_ID && n.sectionId !== SECRET_ID
+    );
+
+  const onDragStart = useCallback((event: DragStartEvent) => {
+    const id = String(event.active.id);
+    if (isNoteDrag(id)) useUIStore.getState().setNoteDrag(id);
+  }, []);
+
+  // 命中检测会强制布局：每帧最多算一次，指针事件再密也不拖慢
+  const dragMoveFrame = useRef<{ raf: number; event: DragMoveEvent | null }>({ raf: 0, event: null });
+  /** 侧栏边缘自动滚动：指针停住不动也要持续滚，所以单独跑一个帧循环。 */
+  const railScroll = useRef<{ raf: number; speed: number }>({ raf: 0, speed: 0 });
+
+  const refreshDropSection = useCallback(() => {
+    const latest = dragMoveFrame.current.event;
+    const dragId = useUIStore.getState().noteDragId;
+    if (!latest || dragId === null) return;
+    useUIStore.getState().setNoteDrag(dragId, dropSectionAt(latest));
+  }, [dropSectionAt]);
+
+  const updateRailScroll = useCallback((event: DragMoveEvent) => {
+    const state = railScroll.current;
+    state.speed = 0;
+    const origin = event.activatorEvent;
+    const nav = document.querySelector<HTMLElement>("[data-group-navigation]");
+    if (origin instanceof MouseEvent && nav) {
+      const x = origin.clientX + event.delta.x;
+      const y = origin.clientY + event.delta.y;
+      const rail = nav.getBoundingClientRect();
+      // 与落点判定一致：卡片左缘进入侧栏即算在侧栏里
+      if (rail.width > 0 && x - NOTE_GHOST_OFFSET <= rail.right) {
+        const zone = 36;
+        const topDepth = rail.top + zone - y;
+        const bottomDepth = y - (rail.bottom - zone);
+        // 越靠边滚得越快，最快每帧 12px
+        if (topDepth > 0) state.speed = -Math.min(12, 2 + topDepth / 3);
+        else if (bottomDepth > 0) state.speed = Math.min(12, 2 + bottomDepth / 3);
+      }
+    }
+    if (!state.speed || state.raf) return;
+    const tick = () => {
+      const nav = document.querySelector<HTMLElement>("[data-group-navigation]");
+      if (!state.speed || !nav || useUIStore.getState().noteDragId === null) {
+        state.raf = 0;
+        return;
+      }
+      nav.scrollTop += state.speed;
+      // 滚到头后也要刷新一次：高亮必须对应最终停下时指针下的分组
+      refreshDropSection();
+      state.raf = window.requestAnimationFrame(tick);
+    };
+    state.raf = window.requestAnimationFrame(tick);
+  }, [refreshDropSection]);
+
+  const onDragMove = useCallback((event: DragMoveEvent) => {
+    if (useUIStore.getState().noteDragId === null) return;
+    const frame = dragMoveFrame.current;
+    frame.event = event;
+    if (frame.raf) return;
+    frame.raf = window.requestAnimationFrame(() => {
+      frame.raf = 0;
+      const latest = frame.event;
+      if (!latest) return;
+      refreshDropSection();
+      updateRailScroll(latest);
+    });
+  }, [refreshDropSection, updateRailScroll]);
+
+  const stopDragMoveFrame = () => {
+    const frame = dragMoveFrame.current;
+    if (frame.raf) window.cancelAnimationFrame(frame.raf);
+    frame.raf = 0;
+    frame.event = null;
+    const scroll = railScroll.current;
+    if (scroll.raf) window.cancelAnimationFrame(scroll.raf);
+    scroll.raf = 0;
+    scroll.speed = 0;
+  };
+
+  const onDragCancel = useCallback(() => {
+    clearDragExpand();
+    stopDragMoveFrame();
+    useUIStore.getState().setNoteDrag(null);
+  }, [clearDragExpand]);
+
   const onDragOver = useCallback((event: DragOverEvent) => {
     const { active, over } = event;
     if (!over) return;
@@ -3365,9 +3618,36 @@ export default function App() {
 
   const onDragEnd = useCallback((event: DragEndEvent) => {
     clearDragExpand();
+    stopDragMoveFrame();
+    const noteDrag = useUIStore.getState().noteDragId !== null;
+    useUIStore.getState().setNoteDrag(null);
     const { active, over } = event;
-    if (!over) return;
     const activeId = String(active.id);
+    // 松手在分组药丸上：快速归档（勾选中的卡片一起移动），可撤销
+    const dropSection = noteDrag ? dropSectionAt(event) : null;
+    if (dropSection) {
+      const state = useNotesStore.getState();
+      const ids = state.checkedIds.includes(activeId) ? state.checkedIds : [activeId];
+      // 剪贴卡入笔记须走收编流程、秘文有独立加密域：都不走这条快捷归档
+      const moving = ids.filter((id) =>
+        state.notes.some((n) =>
+          n.id === id &&
+          n.sectionId !== dropSection &&
+          n.sectionId !== CLIPBOARD_ID &&
+          n.sectionId !== SECRET_ID
+        )
+      );
+      const section = dropSection === CLIPBOARD_ID || dropSection === SECRET_ID
+        ? undefined
+        : state.sections.find((s) => s.id === dropSection);
+      if (moving.length && section) {
+        state.snapshot("移动到分组");
+        state.moveNotes(moving, dropSection);
+        undoableTip(`已移到「${section.name}」${moving.length > 1 ? ` · ${moving.length} 张` : ""}`);
+      }
+      return;
+    }
+    if (!over) return;
     const overId = String(over.id);
     if (activeId.startsWith("sec:")) {
       const state = useNotesStore.getState();
@@ -3394,7 +3674,7 @@ export default function App() {
     if (!overId.startsWith("sec:") && activeId !== overId) {
       state.reorderNotes(activeId, overId);
     }
-  }, [clearDragExpand]);
+  }, [clearDragExpand, dropSectionAt]);
 
   // ===== 长按 ⌥ 显示快捷键提示层；⌘ 按住显示 ⌘1-9 快发角标 =====
   const [showShortcuts, setShowShortcuts] = useState(false);
@@ -3558,6 +3838,70 @@ export default function App() {
     </DndContext>
   );
 
+  const headerTools = (
+    <div className="ml-auto flex items-center gap-0.5">
+      {/* 横栏：输入通栏收起，这里按需唤出（仅上下布局出现） */}
+      {horizontalBar && page === "notes" && contentSubview === "notes" && (
+        <Tipped label={barDraftOpen ? "收起输入" : "添加笔记"}>
+          <IconButton
+            label={barDraftOpen ? "收起输入" : "添加笔记"}
+            withTitle={false}
+            pressed={barDraftOpen}
+            onClick={() =>
+              setBarDraftOpen((v) => {
+                const next = !v;
+                if (next) {
+                  // WKWebView 点击不给焦点：唤出后主动聚焦输入框
+                  window.setTimeout(() => {
+                    document
+                      .querySelector<HTMLTextAreaElement>(
+                        'textarea[placeholder*="添加笔记"]'
+                      )
+                      ?.focus();
+                  }, 60);
+                }
+                return next;
+              })
+            }
+          >
+            <Plus />
+          </IconButton>
+        </Tipped>
+      )}
+      {/* 页面级工具：搜索 / 清理 / 密度 —— 与右侧全局工具用分隔线区分 */}
+      {page !== "tasks" && (
+        <Tipped label="搜索（⌘F）">
+          <IconButton
+            label="搜索（⌘F）"
+            withTitle={false}
+            pressed={searchOpen}
+            onClick={() => {
+              useUIStore.getState().setSearchOpen(!searchOpen);
+              window.setTimeout(() => searchInputRef.current?.focus(), 30);
+            }}
+          >
+            <Search />
+          </IconButton>
+        </Tipped>
+      )}
+      <PanelOptionsMenu
+        doneCount={doneCount}
+        doneTaskCount={doneTaskCount}
+        onClearNotes={clearDoneWithUndo}
+        onClearTasks={clearDoneTasksWithUndo}
+      />
+      <Tipped label="设置">
+        <IconButton
+          label="设置"
+          withTitle={false}
+          onClick={() => api.openSettingsWindow()}
+        >
+          <Settings2 />
+        </IconButton>
+      </Tipped>
+    </div>
+  );
+
   return (
     <MotionConfig reducedMotion="user">
     <TooltipProvider delayDuration={400}>
@@ -3685,8 +4029,15 @@ export default function App() {
 
               <header
                 data-tauri-drag-region
-                className="relative flex items-center gap-2 px-4 pb-2 pt-3.5"
+                className={cn(
+                  "relative flex items-center gap-2 px-4 pb-2 pt-3.5",
+                  platinumLayout && "platinum-titlebar"
+                )}
               >
+                {platinumLayout && (
+                  <PlatinumBox kind="close" label="收起面板（Esc）" onClick={() => closePanel(true)} />
+                )}
+                <span aria-hidden data-tauri-drag-region className="platinum-stripe platinum-stripe--lead" />
                 <h1
                   data-tauri-drag-region
                   title="拖动此处可移动面板（未吸附时）"
@@ -3706,6 +4057,9 @@ export default function App() {
                   >
                     <ArrowUpCircle className="size-3" /> 更新
                   </button>
+                )}
+                {!horizontalBar && (
+                  <span aria-hidden data-tauri-drag-region className="platinum-stripe" />
                 )}
                 {/* 横栏：页签固定在标题旁（左），分组胶囊独立居中——
                     切页时页签位置不动，胶囊各自居中，互不牵连 */}
@@ -3752,76 +4106,43 @@ export default function App() {
                     )}
                   </div>
                 )}
-                <div className="ml-auto flex items-center gap-0.5">
-                  {/* 横栏：输入通栏收起，这里按需唤出（仅上下布局出现） */}
-                  {horizontalBar && page === "notes" && contentSubview === "notes" && (
-                    <Tipped label={barDraftOpen ? "收起输入" : "添加笔记"}>
-                      <IconButton
-                        label={barDraftOpen ? "收起输入" : "添加笔记"}
-                        withTitle={false}
-                        pressed={barDraftOpen}
-                        onClick={() =>
-                          setBarDraftOpen((v) => {
-                            const next = !v;
-                            if (next) {
-                              // WKWebView 点击不给焦点：唤出后主动聚焦输入框
-                              window.setTimeout(() => {
-                                document
-                                  .querySelector<HTMLTextAreaElement>(
-                                    'textarea[placeholder*="添加笔记"]'
-                                  )
-                                  ?.focus();
-                              }, 60);
-                            }
-                            return next;
-                          })
-                        }
-                      >
-                        <Plus />
-                      </IconButton>
-                    </Tipped>
-                  )}
-                  {/* 页面级工具：搜索 / 清理 / 密度 —— 与右侧全局工具用分隔线区分 */}
-                  {page !== "tasks" && (
-                    <Tipped label="搜索（⌘F）">
-                      <IconButton
-                        label="搜索（⌘F）"
-                        withTitle={false}
-                        pressed={searchOpen}
-                        onClick={() => {
-                          useUIStore.getState().setSearchOpen(!searchOpen);
-                          window.setTimeout(() => searchInputRef.current?.focus(), 30);
-                        }}
-                      >
-                        <Search />
-                      </IconButton>
-                    </Tipped>
-                  )}
-                  <PanelOptionsMenu
-                    doneCount={doneCount}
-                    doneTaskCount={doneTaskCount}
-                    onClearNotes={clearDoneWithUndo}
-                    onClearTasks={clearDoneTasksWithUndo}
-                  />
-                  <Tipped label="设置">
-                    <IconButton
-                      label="设置"
-                      withTitle={false}
-                      onClick={() => api.openSettingsWindow()}
-                    >
-                      <Settings2 />
-                    </IconButton>
-                  </Tipped>
-                </div>
+                {platinumLayout ? (
+                  <>
+                    <PlatinumBox kind="zoom" label="复位自动高度" onClick={resetVertical} />
+                    <PlatinumBox
+                      kind="shade"
+                      label={settings.cardDensity === "compact" ? "展开为舒适卡片" : "收起为紧凑列表"}
+                      onClick={() =>
+                        applySettingsPatch({
+                          cardDensity: settings.cardDensity === "compact" ? "comfortable" : "compact",
+                        })
+                      }
+                    />
+                  </>
+                ) : (
+                  headerTools
+                )}
               </header>
 
+              {/* Platinum：选项卡压在面板框上缘，工具钮移到页签行右端 */}
+              {platinumLayout && (
+                <div className="platinum-tabrow">
+                  <div role="tablist" aria-label="页面" className="platinum-tabs">
+                    {pageTabs}
+                  </div>
+                  {headerTools}
+                </div>
+              )}
+
+              {/* 默认方案下 display:contents，不参与布局；Platinum 下成为选项卡面板框 */}
+              <div className={cn("contents", platinumLayout && "platinum-pane")}>
               <TargetLensBar />
 
               {/* 页面切换：笔记 / 任务 / 剪贴板（⌃Tab 循环）。
                   横栏形态并入标题行居中（Paste 式单行头部），不再单占一行。
                   两处轨道均不加 elevation-1：深色毛玻璃上 inset 黑影读成
                   一圈最外层黑框（2026-08-14 用户否决），只留 surface-inset 底 */}
-              {!horizontalBar && (
+              {!horizontalBar && !platinumLayout && (
                 <div
                   role="tablist"
                   aria-label="页面"
@@ -3873,7 +4194,12 @@ export default function App() {
               {/* 三页常驻堆叠：切页只动 transform/opacity，零挂载成本。
                   App 仍需响应页签/工具栏，列表 body 按完整数据依赖缓存，
                   避免一次 chrome 状态变化 reconcile 三页 O(N) 窗口壳。 */}
-              <div className="relative min-h-0 flex-1 overflow-hidden">
+              <div
+                className={cn(
+                  "relative min-h-0 flex-1 overflow-hidden",
+                  platinumLayout && "platinum-listframe"
+                )}
+              >
                 <PageSlide
                   offset={orderOf("clipboard") - pageIndex}
                   contentRef={clipboardPageRef}
@@ -3892,7 +4218,9 @@ export default function App() {
                         collisionDetection={closestCenter}
                         onDragOver={onDragOver}
                         onDragEnd={onDragEnd}
-                        onDragCancel={clearDragExpand}
+                        onDragStart={onDragStart}
+                        onDragMove={onDragMove}
+                        onDragCancel={onDragCancel}
                       >
                         <SortableContext
                           items={clipNavIds}
@@ -3944,7 +4272,9 @@ export default function App() {
                       collisionDetection={closestCenter}
                       onDragOver={onDragOver}
                       onDragEnd={onDragEnd}
-                      onDragCancel={clearDragExpand}
+                      onDragStart={onDragStart}
+                        onDragMove={onDragMove}
+                        onDragCancel={onDragCancel}
                     >
                       <SortableContext
                         items={clipNavIds}
@@ -4010,13 +4340,15 @@ export default function App() {
                         </ScrollArea>
                       ),
                     [
-                      clearDragExpand,
                       clipBands,
                       clipNavIds,
                       clipNotes,
                       clipShown,
                       horizontalBar,
+                      onDragCancel,
                       onDragEnd,
+                      onDragMove,
+                      onDragStart,
                       onDragOver,
                       q,
                       sensors,
@@ -4049,6 +4381,7 @@ export default function App() {
                   {rehearsalVisible && (
                     <ScrollArea className="min-h-0 w-80 shrink-0" viewportClassName="px-1">
                       <SafeDeliveryRehearsal />
+                      <LessonCoach />
                     </ScrollArea>
                   )}
                   <StripScroller>
@@ -4062,8 +4395,11 @@ export default function App() {
                         collisionDetection={closestCenter}
                         onDragOver={onDragOver}
                         onDragEnd={onDragEnd}
-                        onDragCancel={clearDragExpand}
+                        onDragStart={onDragStart}
+                        onDragMove={onDragMove}
+                        onDragCancel={onDragCancel}
                       >
+                        <NoteDragGhost />
                         <SortableContext
                           items={stripNoteIds}
                           strategy={horizontalListSortingStrategy}
@@ -4088,7 +4424,10 @@ export default function App() {
                   />
               <ScrollArea className="min-h-0 min-w-0 flex-1 px-1.5" viewportClassName="px-1">
                 {rehearsalVisible && (
-                  <SafeDeliveryRehearsal />
+                  <>
+                    <SafeDeliveryRehearsal />
+                    <LessonCoach />
+                  </>
                 )}
                 {notes.length === 0 ? (
                   !rehearsalVisible ? (
@@ -4112,8 +4451,11 @@ export default function App() {
                     collisionDetection={closestCenter}
                     onDragOver={onDragOver}
                     onDragEnd={onDragEnd}
-                    onDragCancel={clearDragExpand}
+                    onDragStart={onDragStart}
+                        onDragMove={onDragMove}
+                        onDragCancel={onDragCancel}
                   >
+                    <NoteDragGhost />
                     <div className="pb-2 pt-1">
                       <SortableContext
                         items={visibleGrouped.map(({ section }) => `sec:${section.id}`)}
@@ -4140,7 +4482,6 @@ export default function App() {
                       </>
                     ),
                     [
-                      clearDragExpand,
                       contentDomainsOn,
                       contentSubview,
                       messagesEnabled,
@@ -4153,7 +4494,10 @@ export default function App() {
                       horizontalBar,
                       noteMatchCount,
                       notes,
+                      onDragCancel,
                       onDragEnd,
+                      onDragMove,
+                      onDragStart,
                       onDragOver,
                       q,
                       rehearsalVisible,
@@ -4195,13 +4539,20 @@ export default function App() {
                   )}
                 </PageSlide>
               </div>
+              </div>
 
               {/* 横栏形态：输入通栏默认不占空间，工具栏 + 按钮唤出 */}
-              {!horizontalBar && <KeyHintRow />}
+              {!horizontalBar && !platinumLayout && <KeyHintRow />}
               {page === "notes" && contentSubview === "notes" && (!horizontalBar || barDraftOpen) && <DraftInput />}
               {/* 操作条留在面板最下方；横栏沿用底部紧凑按钮组。 */}
               {(page !== "notes" || contentSubview === "notes") && (
                 <SelectionBar compact={horizontalBar} reserveSpace={page === "notes" && barDraftOpen} />
+              )}
+              {/* Platinum：快捷键提示行下沉为窗口底部状态栏 */}
+              {platinumLayout && (
+                <div className="platinum-statusbar">
+                  <KeyHintRow />
+                </div>
               )}
 
               <PreviewOverlay />

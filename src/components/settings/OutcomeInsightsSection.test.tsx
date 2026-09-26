@@ -46,7 +46,7 @@ describe("OutcomeInsightsSection", () => {
     expect(html).toContain("共 3 次尝试");
     expect(html).toContain("按键执行完成率");
     expect(html).toContain("已保护敏感内容");
-    expect(html).toContain("累计约节省 4.0 分钟");
+    expect(html).not.toContain("节省");
     expect(html).toContain("近 30 天");
     expect(html).toContain("aria-label=\"使用摘要\"");
     expect(html).not.toContain("重试次数");
@@ -55,19 +55,12 @@ describe("OutcomeInsightsSection", () => {
 
     const details = renderToStaticMarkup(<OutcomeMetricsDetails metrics={metrics()} />);
     expect(details).toContain("完整流程（中位）");
-    expect(details).toContain("估算累计节省");
-    expect(details).toContain("估算 · 2 个传统用时样本");
+    expect(details).not.toContain("节省");
+    expect(details).not.toContain("问题解决用时");
     expect(details).toContain("样本少于 5 次，不给出趋势结论");
     expect(details).toContain("aria-label=\"详细使用数据\"");
     expect(details).toContain("role=\"img\"");
 
-    const withoutBaseline = renderToStaticMarkup(<OutcomeMetricsDetails metrics={metrics({
-        estimatedTimeSavedMs: null,
-        estimatedSampleSize: 0,
-      })} />);
-    expect(withoutBaseline).not.toContain("估算累计节省");
-    expect(withoutBaseline).toContain("节省时间估算");
-    expect(withoutBaseline).toContain("未设置");
 
     const oneDay = renderToStaticMarkup(
       <OutcomeMetricsDetails metrics={metrics({
@@ -120,27 +113,26 @@ describe("OutcomeInsightsSection", () => {
     expect(neverUsed).not.toContain("清除筛选");
   });
 
-  it("设置页优先展示使用概览，高级工具和隐私控制默认折叠", () => {
+  it("设置页优先展示使用概览，隐私控制默认折叠，已移除高级工具", () => {
     const settings = { ...defaultSettings(), outcomeMetricsEnabled: false };
     const html = renderToStaticMarkup(
       <OutcomeInsightsSection settings={settings} patch={vi.fn()} />
     );
 
-    expect(html).toContain("使用概览");
+    expect(html).toContain("发送统计");
     expect(html).not.toContain("成效与隐私");
-    expect(html).toContain("开始使用 Toskr");
-    expect(html).toContain("安全发送入门");
-    expect(html).toContain("检查并粘贴");
-    expect(html).toContain("可选进阶");
+    // 上手课程已移到设置页的「上手课程」卡（LearningCourses），统计区不再重复
+    expect(html).not.toContain("开始使用 Toskr");
+    expect(html).not.toContain("可选进阶");
     expect(html).toContain("aria-label=\"本机使用统计\"");
     expect(html).toContain("aria-label=\"统计保留时间\"");
-    expect(html).toContain("高级工具");
+    expect(html).not.toContain("高级工具");
+    expect(html).not.toContain("传统用时");
     expect(html).toContain("数据与隐私");
     expect(html).toContain("清除统计");
-    expect(html.match(/<details/g)).toHaveLength(3);
+    expect(html.match(/<details/g)).toHaveLength(1);
     expect(html).not.toContain("<details open");
-    expect(html).toContain("开始计时");
-    expect(html).toContain("disabled");
+    expect(html).not.toContain("开始计时");
     // 统计开关已下沉进「数据与隐私」折叠区（details 收起时内容仍在 DOM）
     expect(html.indexOf("数据与隐私")).toBeLessThan(
       html.indexOf('aria-label="本机使用统计"')

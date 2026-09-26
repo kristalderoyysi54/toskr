@@ -15,15 +15,18 @@ describe("AliasEntitySettings", () => {
     const html = renderToStaticMarkup(
       <AliasEntitySettings settings={settingsWith()} patch={() => {}} />
     );
-    expect(html).toContain("启用可逆化名");
-    expect(html).toContain("实体词典");
+    expect(html).toContain('aria-label="启用可逆化名"');
+    expect(html).toContain(">词典</p>");
+    expect(html).toContain(">0 条</span>");
     expect(html).toContain("暂无词典条目");
-    expect(html).toContain("本地替换与恢复示例");
-    expect(html).toContain("查看替换成化名和恢复原文的效果");
+    expect(html).toContain("试一试替换效果");
+    // 预演区默认收起但保持挂载，展开后不丢输入
+    expect(html).toContain('aria-label="化名预演输入"');
+    expect(html).toContain("只在本机演示");
     expect(html).not.toContain("完整闭环");
-    expect(html).toContain("不会发送、不会访问剪贴板");
-    expect(html).toContain("捕获时自动恢复化名");
-    expect(html).toContain("随本地数据文件加密保存");
+    expect(html).toContain('aria-label="捕获时自动恢复化名"');
+    expect(html).toContain("词典加密保存在本机");
+    expect(html).toContain("完整备份中为明文");
   });
 
   it("列出词典条目：类别标签、原文与固定占位符，自定义类别用自定义显示名", () => {
@@ -69,9 +72,9 @@ describe("AliasEntitySettings", () => {
         patch={() => {}}
       />
     );
-    expect(html).toContain("启用可逆化名");
-    expect(html).not.toContain("实体词典");
-    expect(html).not.toContain("本地替换与恢复示例");
+    expect(html).toContain('aria-label="启用可逆化名"');
+    expect(html).not.toContain(">词典</p>");
+    expect(html).not.toContain("试一试替换效果");
     expect(html).not.toContain("捕获时自动恢复化名");
   });
 });

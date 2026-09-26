@@ -1,28 +1,35 @@
 import { CustomSensitiveFields } from "@/components/settings/CustomSensitiveFields";
+import { LearningCourses } from "@/components/settings/LearningCourses";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { emitTo, listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { ask } from "@tauri-apps/plugin-dialog";
 import type { Update } from "@tauri-apps/plugin-updater";
 import {
   AlertCircle,
+  Archive,
   ArrowDown,
   ArrowUp,
   Blocks,
   ClipboardList,
   Copy,
+  CreditCard,
   Database,
   Eye,
   Info,
   Keyboard,
   KeyRound,
   Crosshair,
+  Magnet,
+  MessagesSquare,
   Pencil,
   Plus,
   Search,
   Settings2,
   ShieldCheck,
+  Sparkles,
   Star,
   Trash2,
   X,
@@ -36,10 +43,21 @@ import { OutcomeInsightsSection } from "@/components/settings/OutcomeInsightsSec
 import { PromptTemplateEditor } from "@/components/settings/PromptTemplateEditor";
 import { PromptTemplateCommonAction } from "@/components/settings/PromptTemplateCommonAction";
 import { useAppIdentity } from "@/components/settings/useAppIdentity";
+import {
+  DisclosureRow,
+  FeatureRow,
+  NavigateRow,
+  SETTINGS_SEARCH_HIGHLIGHT,
+  SettingsGroup as Group,
+  SettingsIntro,
+  SettingsPageTitle,
+  SettingsRow as Row,
+} from "@/components/settings/SettingsLayout";
 import { Button } from "@/components/ui/button";
 import { Disclosure } from "@/components/ui/disclosure";
 import { IconButton } from "@/components/ui/icon-button";
 import { ProgressBar } from "@/components/ui/progress-bar";
+import { PlatinumTitlebar } from "@/components/ui/platinum-titlebar";
 import { Segmented } from "@/components/ui/segmented";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -50,12 +68,15 @@ import {
   SETTINGS_DATA_CONFLICT_ACTION,
   SETTINGS_DATA_OPERATION,
   SETTINGS_DATA_RECOVERY_OPERATION,
+  SETTINGS_AUTO_BACKUP_NOW,
   SETTINGS_EXPORT,
   SETTINGS_IMPORT,
   SETTINGS_AI_KEY_CHANGED,
   SETTINGS_PATCH,
   SETTINGS_REQUEST,
   SETTINGS_SECTION,
+  SETTINGS_START_LESSON,
+  SETTINGS_START_SAFE_REHEARSAL,
   SETTINGS_STATE,
   type SettingsSectionPayload,
 } from "@/lib/settingsSync";
@@ -66,6 +87,7 @@ import {
 import {
   availableDataActions,
   needsBlockingDataOverlay,
+  targetDataFreshness,
 } from "@/lib/dataLocation";
 import { SHORTCUTS } from "@/lib/shortcuts";
 import {
@@ -76,6 +98,7 @@ import {
   api,
   type AiKeyStatus,
   type DataLocationInspection,
+  type DataSetSummary,
   type DataLocationStatus,
   type DataOperationPlan,
   type MediaIntegrityReport,
@@ -100,6 +123,7 @@ async function requestStorageRecoveryAction(
 import { tip } from "@/lib/tip";
 import { checkForUpdate, downloadAndInstall } from "@/lib/updater";
 import { cn } from "@/lib/utils";
+import { getColorScheme, useColorScheme } from "@/lib/colorScheme";
 import { timeAgo } from "@/lib/media";
 import {
   SECRET_CIPHER_STYLE_OPTIONS,
@@ -124,6 +148,9 @@ import {
   type SecretKey,
   type Settings,
   type ThemePref,
+  type ColorScheme,
+  type PlatinumHighlight,
+  type PlatinumScrollbar,
 } from "@/store/notesStore";
 import {
   GENERAL_PROMPT_GROUP_ID,
@@ -144,6 +171,7 @@ import {
   searchSettings,
   settingsChildSections,
   settingsPrimarySection,
+  settingsSearchLocation,
   settingsSearchNeedsGeneralDetails,
   targetSettingsPageForSearch,
   settingsSectionFromLink,
@@ -185,7 +213,7 @@ export function SettingsNavigation({
 }) {
   const primary = settingsPrimarySection(section);
   return (
-    <nav aria-label="设置分类" className="flex flex-col gap-1">
+    <nav aria-label="设置分类" data-settings-nav className="flex flex-col gap-1">
       {SETTINGS_PRIMARY_SECTIONS.map((id) => (
         <button
           key={id}
@@ -220,7 +248,7 @@ export function SettingsChildNavigation({
   const children = settingsChildSections(primary, settings);
   if (!children.length) return null;
   return (
-    <nav aria-label={`${SETTINGS_PRIMARY_LABELS[primary]}选项`} className="mb-4 flex flex-wrap gap-1.5">
+    <nav aria-label={`${SETTINGS_PRIMARY_LABELS[primary]}选项`} data-settings-child-nav className="mb-4 flex flex-wrap gap-1.5">
       {children.map((id) => (
         <Button
           key={id}
@@ -332,8 +360,7 @@ export default function SettingsView() {
     setTargetProfileRequest(null);
     setSection(result.section);
     setSearchTarget((previous) => ({
-      id: result.id,
-      value: result.target ?? result.title,
+      ...settingsSearchLocation(result, getColorScheme()),
       sequence: (previous?.sequence ?? 0) + 1,
     }));
   };
@@ -467,6 +494,16 @@ export default function SettingsView() {
     };
   }, []);
 
+  const platinum = useColorScheme() === "platinum";
+  // Platinum 自绘条纹标题栏：去掉系统窗框（红绿灯）；只在切出 Platinum 时恢复，
+  // 默认方案启动时不碰原生窗框
+  const decorationsRemovedRef = useRef(false);
+  useEffect(() => {
+    if (platinum === decorationsRemovedRef.current) return;
+    decorationsRemovedRef.current = platinum;
+    void getCurrentWindow().setDecorations(!platinum).catch(() => {});
+  }, [platinum]);
+
   const patch = (p: Partial<Settings>) => {
     if (dataActivity.locked) {
       tip("warn", "数据操作进行中，设置暂时只读");
@@ -477,7 +514,14 @@ export default function SettingsView() {
   };
 
   return (
-    <div className="flex h-screen w-screen select-none bg-background text-foreground">
+    <div data-settings-root className="flex h-screen w-screen select-none bg-background text-foreground">
+      {platinum && (
+        <PlatinumTitlebar
+          title="Toskr 设置"
+          onClose={() => void getCurrentWindow().hide().catch(() => {})}
+          onZoom={() => void getCurrentWindow().toggleMaximize().catch(() => {})}
+        />
+      )}
       {needsBlockingDataOverlay(dataActivity) && (
         <div
           role="status"
@@ -511,34 +555,37 @@ export default function SettingsView() {
           <div className="mt-2 flex flex-wrap gap-2">
             {dataActivity.phase === "storageRecovery" ? (
               <>
-                <button
+                <Button
+                  size="sm"
                   onClick={() =>
                     void requestStorageRecoveryAction("retryStorage")
                   }
-                  className="rounded-lg bg-primary px-3 py-1 text-body text-primary-foreground"
                 >
                   重试挂载
-                </button>
-                <button
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
                   onClick={() =>
                     void requestStorageRecoveryAction("loadDefault")
                   }
-                  className="rounded-lg border border-border px-3 py-1 text-body"
                 >
                   明确加载默认目录
-                </button>
+                </Button>
               </>
             ) : (
               <>
-                <button
+                <Button
+                  size="sm"
                   onClick={() =>
                     void emitTo("main", SETTINGS_DATA_CONFLICT_ACTION, "reload")
                   }
-                  className="rounded-lg bg-primary px-3 py-1 text-body text-primary-foreground"
                 >
                   重新加载磁盘
-                </button>
-                <button
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
                   onClick={() =>
                     void emitTo(
                       "main",
@@ -546,18 +593,18 @@ export default function SettingsView() {
                       "saveRecovery"
                     )
                   }
-                  className="rounded-lg border border-border px-3 py-1 text-body"
                 >
                   另存恢复副本后加载
-                </button>
+                </Button>
               </>
             )}
-            <button
+            <Button
+              size="sm"
+              variant="ghost"
               onClick={() => tip("info", "已保持只读；冲突仍待处理")}
-              className="rounded-lg border border-border px-3 py-1 text-body text-muted-foreground"
             >
               暂不处理
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -694,7 +741,12 @@ export default function SettingsView() {
       </aside>
 
       <main ref={mainRef} className="min-w-0 flex-1 overflow-y-auto p-5">
+        {/* 内容限宽居中：宽窗口下标签与开关不再相隔过远（Platinum 面板仍铺满，见 index.css） */}
+        <div data-settings-content className="mx-auto w-full max-w-[720px]">
+        <SettingsPageTitle>{SETTINGS_PRIMARY_LABELS[settingsPrimarySection(section)]}</SettingsPageTitle>
         <SettingsChildNavigation section={section} settings={settings} onSelect={selectSection} />
+        {/* 默认方案 display:contents；Platinum 下成为选项卡面板框 */}
+        <div data-settings-pane className="contents">
         {section === "general" && (
           <GeneralSection
             settings={settings}
@@ -705,8 +757,12 @@ export default function SettingsView() {
         )}
         {section === "hotkey" && (
           <>
-            <HotkeySection settings={settings} patch={patch} />
-            <ExcludeSection settings={settings} patch={patch} />
+            <HotkeySection
+              settings={settings}
+              patch={patch}
+              searchTarget={searchTarget?.value ?? null}
+              searchSequence={searchTarget?.sequence ?? 0}
+            />
           </>
         )}
         {section === "clip" && (
@@ -733,7 +789,7 @@ export default function SettingsView() {
         )}
         {section === "outcome" && (
           <>
-            <WelcomeTourSettings patch={patch} />
+            <WelcomeTourSettings settings={settings} patch={patch} />
             <div
               data-settings-search="使用概览"
               className="scroll-m-5 rounded-sm transition-shadow data-[settings-search-active=true]:ring-2 data-[settings-search-active=true]:ring-primary/40 data-[settings-search-active=true]:ring-offset-2 data-[settings-search-active=true]:ring-offset-background"
@@ -750,65 +806,17 @@ export default function SettingsView() {
           </>
         )}
         {section === "ai" && <AiSection settings={settings} patch={patch} />}
-        {section === "data" && <DataSection />}
+        {section === "data" && <DataSection settings={settings} patch={patch} />}
         {section === "diagnostics" && <DiagnosticsSection />}
         {section === "about" && <AboutSection settings={settings} patch={patch} />}
+        </div>
+        </div>
       </main>
     </div>
   );
 }
 
 /* ============ 通用控件 ============ */
-
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  return (
-    <h2
-      data-settings-search={typeof children === "string" ? children : undefined}
-      className="mb-3 scroll-m-5 rounded-sm text-heading font-semibold transition-shadow data-[settings-search-active=true]:ring-2 data-[settings-search-active=true]:ring-primary/40 data-[settings-search-active=true]:ring-offset-2 data-[settings-search-active=true]:ring-offset-background"
-    >
-      {children}
-    </h2>
-  );
-}
-
-function Group({ title, children }: { title?: string; children: React.ReactNode }) {
-  return (
-    <div
-      data-settings-search={title}
-      className="mb-4 scroll-m-5 rounded-xl transition-shadow data-[settings-search-active=true]:ring-2 data-[settings-search-active=true]:ring-primary/40 data-[settings-search-active=true]:ring-offset-2 data-[settings-search-active=true]:ring-offset-background"
-    >
-      {title && (
-        <p className="mb-1.5 text-body font-medium text-muted-foreground">{title}</p>
-      )}
-      <div className="divide-y divide-border/50 rounded-xl border border-border/60 bg-card">
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function Row({
-  label,
-  hint,
-  right,
-}: {
-  label: string;
-  hint?: string;
-  right: React.ReactNode;
-}) {
-  return (
-    <div
-      data-settings-search={label}
-      className="flex scroll-m-5 items-center justify-between gap-4 rounded-lg px-3.5 py-2.5 transition-shadow data-[settings-search-active=true]:ring-2 data-[settings-search-active=true]:ring-inset data-[settings-search-active=true]:ring-primary/40"
-    >
-      <div className="min-w-0">
-        <p className="text-title">{label}</p>
-        {hint && <p className="mt-0.5 text-label text-muted-foreground">{hint}</p>}
-      </div>
-      <div className="shrink-0">{right}</div>
-    </div>
-  );
-}
 
 type SP = { settings: Settings; patch: (p: Partial<Settings>) => void };
 
@@ -874,7 +882,7 @@ function ContextMenuGroup({ settings, patch }: SP) {
     patch({ contextMenu: next });
   };
   return (
-    <Group title="卡片右键菜单（勾选显示 · 组内调序；合并、回复关系与删除固定）">
+    <Group title="卡片右键菜单" footer="勾选要显示的项，组内可调整顺序；合并、回复关系与删除始终显示。">
       {groups.map((group, groupIndex) => (
         <div key={group.id}>
           <div
@@ -963,28 +971,86 @@ export function GeneralSection({ settings, patch, searchId = null, searchSequenc
     }
   };
 
+  // 方案在前决定下方可选项：Platinum 固定浅色且停用毛玻璃，主题与毛玻璃行换成 Platinum 细项
+  const platinum = settings.colorScheme === "platinum";
+
   return (
     <div>
-      <SectionTitle>窗口与外观</SectionTitle>
       <Group title="常用外观">
         <Row
-          label="主题"
+          label="配色方案"
+          hint={
+            platinum
+              ? "固定浅色、整窗不透明；切回 Toskr 恢复原主题与毛玻璃"
+              : "Platinum 为 Mac OS 9 经典外观"
+          }
           right={
-            <Segmented<ThemePref>
-              value={settings.theme}
+            <Segmented<ColorScheme>
+              value={settings.colorScheme}
               options={[
-                { value: "system", label: "跟随系统" },
-                { value: "light", label: "浅色" },
-                { value: "dark", label: "深色" },
+                { value: "default", label: "Toskr" },
+                { value: "platinum", label: "Platinum" },
               ]}
-              onChange={(v) => patch({ theme: v })}
-              ariaLabel="主题"
+              onChange={(v) => patch({ colorScheme: v })}
+              ariaLabel="配色方案"
             />
           }
         />
+        {platinum ? (
+          <>
+            <Row
+              label="高亮颜色"
+              hint="选中卡片与菜单高亮的颜色"
+              right={
+                <Segmented<PlatinumHighlight>
+                  value={settings.platinumHighlight}
+                  options={[
+                    { value: "lavender", label: "薰衣草（默认）" },
+                    { value: "blue", label: "蓝色" },
+                    { value: "teal", label: "青色" },
+                    { value: "graphite", label: "石墨" },
+                  ]}
+                  onChange={(v) => patch({ platinumHighlight: v })}
+                  ariaLabel="高亮颜色"
+                />
+              }
+            />
+            <Row
+              label="滚动条"
+              hint="经典款带箭头和条纹滑块"
+              right={
+                <Segmented<PlatinumScrollbar>
+                  value={settings.platinumScrollbar}
+                  options={[
+                    { value: "classic", label: "经典 Platinum" },
+                    { value: "thin", label: "细条" },
+                  ]}
+                  onChange={(v) => patch({ platinumScrollbar: v })}
+                  ariaLabel="滚动条"
+                />
+              }
+            />
+          </>
+        ) : (
+          <Row
+            label="主题"
+            right={
+              <Segmented<ThemePref>
+                value={settings.theme}
+                options={[
+                  { value: "system", label: "跟随系统" },
+                  { value: "light", label: "浅色" },
+                  { value: "dark", label: "深色" },
+                ]}
+                onChange={(v) => patch({ theme: v })}
+                ariaLabel="主题"
+              />
+            }
+          />
+        )}
         <Row
           label="卡片密度"
-          hint="紧凑模式单行展示，一屏可见更多卡片"
+          hint="紧凑模式单行显示，一屏看到更多"
           right={
             <Segmented<Settings["cardDensity"]>
               value={settings.cardDensity}
@@ -999,7 +1065,7 @@ export function GeneralSection({ settings, patch, searchId = null, searchSequenc
         />
         <Row
           label="详情窗字号"
-          hint="文本详情窗正文字号；窗内 ⌘+ / ⌘− 同步调整，⌘0 复位"
+          hint="详情窗内也可用 ⌘+ / ⌘− 调整，⌘0 复位"
           right={
             <PercentSlider
               ariaLabel="详情窗字号"
@@ -1016,7 +1082,7 @@ export function GeneralSection({ settings, patch, searchId = null, searchSequenc
       <Group title="窗口与提示">
         <Row
           label="开机启动"
-          hint="登录后自动在后台待命"
+          hint="登录后在后台待命"
           right={
             <Switch
               aria-label="开机启动"
@@ -1027,7 +1093,7 @@ export function GeneralSection({ settings, patch, searchId = null, searchSequenc
         />
         <Row
           label="面板置顶"
-          hint="显示在屏幕最上层；关闭后可被其他窗口盖住"
+          hint="面板保持在其他窗口之上"
           right={
             <Switch
               aria-label="面板置顶"
@@ -1038,7 +1104,7 @@ export function GeneralSection({ settings, patch, searchId = null, searchSequenc
         />
         <Row
           label="失焦自动隐藏"
-          hint="点击其他应用时收起面板（钉住豁免）；关闭则面板保持显示"
+          hint="切到其他应用时收起面板，钉住时除外"
           right={
             <Switch
               aria-label="失焦自动隐藏"
@@ -1049,7 +1115,7 @@ export function GeneralSection({ settings, patch, searchId = null, searchSequenc
         />
         <Row
           label="隐身模式"
-          hint="不弹「已捕获」气泡（投屏/会议用，失败警示仍显示）"
+          hint="不弹「已捕获」气泡，适合投屏；失败提醒仍会显示"
           right={
             <Switch
               aria-label="隐身模式"
@@ -1060,7 +1126,7 @@ export function GeneralSection({ settings, patch, searchId = null, searchSequenc
         />
         <Row
           label="音效"
-          hint="捕获成功时轻响一声（隐身模式下自动静音）"
+          hint="捕获成功时轻响一声，隐身模式下静音"
           right={
             <Switch
               aria-label="音效"
@@ -1071,11 +1137,11 @@ export function GeneralSection({ settings, patch, searchId = null, searchSequenc
         />
       </Group>
       <div data-settings-search="更多外观与行为">
-        <Disclosure title="更多外观与行为" open={detailsOpen} onOpenChange={setDetailsOpen}>
+        <Disclosure title="更多外观与行为" summary="透明度、卡片样式、提示时长、右键菜单" open={detailsOpen} onOpenChange={setDetailsOpen}>
           <Group title="外观细节">
             <Row
               label="窗口整体不透明度"
-              hint="连毛玻璃一起变透，可真正看穿下层窗口内容"
+              hint="连同毛玻璃一起变透明，可看到下层窗口"
               right={
                 <PercentSlider
                   ariaLabel="窗口整体不透明度"
@@ -1089,7 +1155,7 @@ export function GeneralSection({ settings, patch, searchId = null, searchSequenc
             />
             <Row
               label="内容底色浓度"
-              hint="面板自绘膜层的浓淡（毛玻璃关闭时效果最直观）"
+              hint="面板底色的浓淡，关闭毛玻璃时最明显"
               right={
                 <PercentSlider
                   ariaLabel="内容底色浓度"
@@ -1101,28 +1167,33 @@ export function GeneralSection({ settings, patch, searchId = null, searchSequenc
                 />
               }
             />
-            <Row
-              label="毛玻璃背景"
-              hint="macOS 原生 vibrancy 模糊效果"
-              right={
-                <Switch
-                  aria-label="毛玻璃背景"
-                  checked={settings.vibrancy}
-                  onCheckedChange={(v) => patch({ vibrancy: v })}
+            {/* Platinum 整窗不透明、原生毛玻璃已停用（nativeVibrancy），开关无效果故不展示 */}
+            {!platinum && (
+              <>
+                <Row
+                  label="毛玻璃背景"
+                  hint="macOS 原生模糊效果"
+                  right={
+                    <Switch
+                      aria-label="毛玻璃背景"
+                      checked={settings.vibrancy}
+                      onCheckedChange={(v) => patch({ vibrancy: v })}
+                    />
+                  }
                 />
-              }
-            />
-            {settings.vibrancy && (
-              <MaterialStylePicker
-                value={settings.vibrancyMaterial}
-                panelOpacity={settings.panelOpacity}
-                cardOpacity={settings.cardOpacity}
-                onChange={(v) => patch({ vibrancyMaterial: v })}
-              />
+                {settings.vibrancy && (
+                  <MaterialStylePicker
+                    value={settings.vibrancyMaterial}
+                    panelOpacity={settings.panelOpacity}
+                    cardOpacity={settings.cardOpacity}
+                    onChange={(v) => patch({ vibrancyMaterial: v })}
+                  />
+                )}
+              </>
             )}
             <Row
               label="卡片彩色通栏"
-              hint="笔记卡顶栏底色：分组色优先、无分组色用来源应用主色；关闭统一中性灰"
+              hint="卡片顶栏用分组色或来源应用色；关闭为中性灰"
               right={
                 <Switch
                   aria-label="卡片彩色通栏"
@@ -1134,7 +1205,7 @@ export function GeneralSection({ settings, patch, searchId = null, searchSequenc
             {settings.cardDensity === "comfortable" && (
               <Row
                 label="剪贴卡模板"
-                hint="只影响剪贴页：标准显示完整票据；浓缩保留票据头＋单行摘要"
+                hint="只影响剪贴页：标准显示完整内容，浓缩只留摘要"
                 right={
                   <Segmented<Settings["clipCardTemplate"]>
                     value={settings.clipCardTemplate}
@@ -1150,7 +1221,7 @@ export function GeneralSection({ settings, patch, searchId = null, searchSequenc
             )}
             <Row
               label="卡片底色不透明度"
-              hint="调低可透出毛玻璃背景；100% 为实色卡片"
+              hint="调低可透出毛玻璃；100% 为实色"
               right={
                 <PercentSlider
                   ariaLabel="卡片底色不透明度"
@@ -1166,7 +1237,7 @@ export function GeneralSection({ settings, patch, searchId = null, searchSequenc
           <Group title="提示细节">
             <Row
               label="提示显示时长"
-              hint="适用于所有自动关闭的提示气泡；悬停时暂停倒计时"
+              hint="自动关闭的气泡停留多久；悬停时暂停"
               right={
                 <PercentSlider
                   ariaLabel="提示显示时长"
@@ -1193,26 +1264,22 @@ export function GeneralSection({ settings, patch, searchId = null, searchSequenc
   );
 }
 
-function WelcomeTourSettings({ patch }: Pick<SP, "patch">) {
+function WelcomeTourSettings({ settings, patch }: SP) {
   return (
-    <Group title="使用帮助">
-      <Row
-        label="新手导览"
-        hint="重看收集内容、选择位置和粘贴的说明"
-        right={
-          <Button
-            size="xs"
-            onClick={() => {
-              patch({ welcomeTourSeen: false });
-              void api.showPanel();
-              tip("ok", "导览已就绪，回到主面板查看");
-            }}
-          >
-            重看导览
-          </Button>
-        }
-      />
-    </Group>
+    <LearningCourses
+      onboarding={settings.onboarding}
+      onRunRehearsal={(mode) => {
+        void emitTo("main", SETTINGS_START_SAFE_REHEARSAL, { mode });
+      }}
+      onStartLesson={(id) => {
+        void emitTo("main", SETTINGS_START_LESSON, id);
+      }}
+      onReplayTour={() => {
+        patch({ welcomeTourSeen: false });
+        void api.showPanel();
+        tip("ok", "导览已就绪，回到主面板查看");
+      }}
+    />
   );
 }
 
@@ -1290,9 +1357,7 @@ function RetentionSlider({ settings, patch }: SP) {
         <span>无限</span>
       </div>
       {shown.days === null && (
-        <p className="mt-1 text-label text-amber-600 dark:text-amber-500">
-          ⚠️ 无限历史可能会增加您的磁盘空间使用量
-        </p>
+        <p className="mt-1 text-label text-warning">无限保留会持续占用磁盘空间</p>
       )}
     </div>
   );
@@ -1322,15 +1387,12 @@ function ClipboardSection({
     const pad = (n: number) => String(n).padStart(2, "0");
     return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
   };
-  const pauseBtn =
-    "rounded-md border border-border px-1.5 py-0.5 text-label text-muted-foreground hover:text-foreground";
   return (
     <div>
-      <SectionTitle>剪贴板</SectionTitle>
       <Group title="收集">
         <Row
           label="剪贴板历史"
-          hint="自动收集复制的内容到「剪贴板」页"
+          hint="自动收集复制过的内容"
           right={
             <Switch
               aria-label="剪贴板历史"
@@ -1342,31 +1404,25 @@ function ClipboardSection({
         {settings.clipHistory && (
           <Row
             label="暂停收集"
-            hint={
-              paused
-                ? `已暂停 · ${resumeAt(settings.clipPauseUntil!)} 自动恢复`
-                : "临时停止收集，到点自动恢复"
-            }
+            hint={paused ? undefined : "临时停止，到点自动恢复"}
+            value={paused ? `${resumeAt(settings.clipPauseUntil!)} 恢复` : undefined}
             right={
               paused ? (
-                <button
-                  onClick={() => patch({ clipPauseUntil: null })}
-                  className="rounded-md border border-primary/50 bg-primary/10 px-2 py-0.5 text-label font-medium"
-                >
+                <Button size="xs" onClick={() => patch({ clipPauseUntil: null })}>
                   立即恢复
-                </button>
+                </Button>
               ) : (
                 <div className="flex gap-1">
                   {[15, 30, 60, 480].map((m) => (
-                    <button
+                    <Button
                       key={m}
+                      size="xs"
                       onClick={() =>
                         patch({ clipPauseUntil: Date.now() + m * 60_000 })
                       }
-                      className={pauseBtn}
                     >
-                      {m < 60 ? `${m}分` : `${m / 60}时`}
-                    </button>
+                      {m < 60 ? `${m} 分` : `${m / 60} 小时`}
+                    </Button>
                   ))}
                 </div>
               )
@@ -1376,7 +1432,7 @@ function ClipboardSection({
         {settings.clipHistory && (
           <Row
             label="连续复制两次自动置顶"
-            hint="10 秒内再次复制同一内容，视为想留住它：自动固定 ★，气泡可撤销"
+            hint="10 秒内复制两次同一内容，自动固定 ★"
             right={
               <Switch
                 aria-label="连续复制两次自动置顶"
@@ -1390,14 +1446,16 @@ function ClipboardSection({
       <Group title="保留历史">
         <Row
           label="保留时长"
-          hint="超龄记录自动清理（固定 ★ 不清理）"
+          hint="超过时长的记录自动清理，固定 ★ 的保留"
           right={<RetentionSlider settings={settings} patch={patch} />}
         />
         <Row
           label="删除历史"
-          hint="清空全部非固定的剪贴板记录（可在主面板撤销）"
+          hint="清空未固定的记录，可在主面板撤销"
           right={
-            <button
+            <Button
+              size="xs"
+              variant="destructive"
               onClick={() => {
                 // 破坏性操作先原生确认框（Paste 同款 NSAlert）
                 void ask(
@@ -1412,10 +1470,9 @@ function ClipboardSection({
                   if (yes) void emitTo("main", SETTINGS_CLEAR_CLIP, {});
                 });
               }}
-              className="rounded-md border border-destructive/40 px-2 py-0.5 text-label text-destructive hover:bg-destructive/10"
             >
               删除历史…
-            </button>
+            </Button>
           }
         />
       </Group>
@@ -1425,13 +1482,14 @@ function ClipboardSection({
       >
         <Disclosure
           title="收集规则与忽略应用"
+          summary="机密内容、临时数据、忽略的应用"
           open={rulesOpen}
           onOpenChange={setRulesOpen}
         >
           <Group title="规则">
             <Row
               label="忽略机密内容"
-              hint="检测到密码管理器的机密标记时不保存"
+              hint="密码管理器标记为机密的内容不保存"
               right={
                 <Switch
                   aria-label="忽略机密内容"
@@ -1452,15 +1510,13 @@ function ClipboardSection({
               }
             />
           </Group>
-          <p className="mb-2 text-body font-medium text-muted-foreground">忽略应用程序</p>
-          <p className="mb-3 text-body text-muted-foreground">
-            不保存从以下应用复制的内容（独立于「捕获排除」列表）。
-          </p>
-          <AppListEditor
-            apps={settings.clipExcludedApps}
-            onChange={(apps) => patch({ clipExcludedApps: apps })}
-            addLabel="把当前应用加入忽略列表"
-          />
+          <Group title="忽略的应用" footer="不保存从这些应用复制的内容；与快捷键页的「捕获排除」分开设置。">
+            <AppListEditor
+              apps={settings.clipExcludedApps}
+              onChange={(apps) => patch({ clipExcludedApps: apps })}
+              addLabel="加入当前应用"
+            />
+          </Group>
         </Disclosure>
       </div>
     </div>
@@ -1578,18 +1634,17 @@ function SecretKeysEditor({ settings, patch }: SP) {
   };
 
   return (
-    <Group title="共享密钥">
+    <Group
+      title="共享密钥"
+      footer="每位聊天对象一把，双方密钥文本须完全一致；加密默认用 ★ 密钥，收到密文时自动逐把尝试。"
+    >
       <div className="px-3.5 py-2.5">
-        <p className="text-label text-muted-foreground">
-          每位聊天对象一把；密钥文本双方须一字不差。加密发送默认用 ★ 密钥，收到密文时自动逐把匹配
-        </p>
-
         {keys.length === 0 ? (
-          <p className="mt-2 text-body text-muted-foreground">
+          <p className="text-body text-muted-foreground">
             还没有密钥。点「添加密钥」，与对方约定同一句暗号即可开始收发。
           </p>
         ) : (
-          <ul className="mt-2 space-y-1" aria-label="共享密钥列表">
+          <ul className="space-y-1" aria-label="共享密钥列表">
             {keys.map((k) => {
               const isDefault = settings.secretDefaultKeyId === k.id;
               const revealed = revealedId === k.id;
@@ -1827,6 +1882,7 @@ export function FeaturesSection({ settings, patch, onConfigure }: SP & {
   const FEATURES: {
     key: "messagesEnabled" | "secretEnabled" | "subscriptionsEnabled";
     label: string;
+    icon: React.ReactNode;
     experimental?: boolean;
     hint: string;
     where: string;
@@ -1835,51 +1891,54 @@ export function FeaturesSection({ settings, patch, onConfigure }: SP & {
     {
       key: "messagesEnabled",
       label: "消息监听",
+      icon: <MessagesSquare />,
       experimental: true,
-      hint: "只读监听 IM 群消息（@我/特别关注/组合规则），在「内容 → 消息」里处理、转任务、AI 草稿",
-      where: "已开启，可设置监听应用、接入方式和收集规则",
+      hint: "只读监听 IM 群消息，在「内容 → 消息」里处理、转任务",
+      where: "可设置监听应用、接入方式和收集规则",
       section: "message-watch",
     },
     {
       key: "secretEnabled",
       label: "秘文",
-      hint: "把文字本地加密成中文、随机代码、日志或引用等独立格式，支持该格式的接收端自动识别解密",
-      where: "已开启，可管理共享密钥与默认格式",
+      icon: <KeyRound />,
+      hint: "在本机把文字加密成中文、代码、日志等格式，对方自动识别解密",
+      where: "可管理共享密钥和默认格式",
       section: "secret",
     },
     {
       key: "subscriptionsEnabled",
       label: "订阅",
-      hint: "账单/信用卡到期管理与提醒，「提醒」页出现订阅子页",
-      where: "已开启，可设置账单的默认提前提醒时间",
+      icon: <CreditCard />,
+      hint: "管理账单与信用卡到期，在「提醒」页按时提醒",
+      where: "可设置新账单的默认提醒",
       section: "due",
     },
   ];
   return (
     <div>
-      <SectionTitle>更多功能</SectionTitle>
-      <p className="mb-3 text-body text-muted-foreground">
-        按需要开启。开启后，主面板会显示对应入口，也可以在这里继续配置。
-      </p>
+      <SettingsIntro>开启后，主面板会出现对应入口。</SettingsIntro>
       <Group>
         {FEATURES.map((feature) => (
-          <Row
+          <FeatureRow
             key={feature.key}
-            label={feature.label + (feature.experimental ? "（实验）" : "")}
-            hint={settings[feature.key] ? feature.where : feature.hint}
-            right={
-              <div className="flex items-center gap-2">
-                {settings[feature.key] && (
-                  <Button size="xs" onClick={() => onConfigure(feature.section)}>
-                    设置{feature.label}
-                  </Button>
-                )}
-                <Switch
-                  aria-label={`启用${feature.label}`}
-                  checked={settings[feature.key]}
-                  onCheckedChange={(enabled) => patch({ [feature.key]: enabled })}
-                />
-              </div>
+            icon={feature.icon}
+            title={feature.label}
+            badge={feature.experimental ? "实验" : undefined}
+            searchKey={feature.label + (feature.experimental ? "（实验）" : "")}
+            description={settings[feature.key] ? feature.where : feature.hint}
+            switchLabel={`启用${feature.label}`}
+            checked={settings[feature.key]}
+            onCheckedChange={(enabled) => patch({ [feature.key]: enabled })}
+            actions={
+              settings[feature.key] ? (
+                <Button
+                  size="xs"
+                  aria-label={`设置${feature.label}`}
+                  onClick={() => onConfigure(feature.section)}
+                >
+                  设置
+                </Button>
+              ) : undefined
             }
           />
         ))}
@@ -2082,10 +2141,9 @@ function MessageWatchSection({ settings, patch }: SP) {
 
   return (
     <div>
-      <SectionTitle>消息监听</SectionTitle>
-      <p className="mb-3 text-body text-muted-foreground">
-        实验性监听 IM 软件的群消息。Toskr 的只读桥不主动打开会话，也不调用已读或发送接口。
-      </p>
+      <SettingsIntro>
+        实验功能：只读监听 IM 群消息，不主动打开会话，也不调用已读或发送接口。
+      </SettingsIntro>
 
       <Group title="监听目标">
         {profile ? (
@@ -2101,8 +2159,8 @@ function MessageWatchSection({ settings, patch }: SP) {
         ) : (
           <div className="px-3.5 py-3">
             <p className="text-title font-medium">先选择要监听的 IM</p>
-            <p className="mt-0.5 text-label leading-normal text-muted-foreground">
-              点下方按钮探测当前正在运行的应用，选中你要监听的那个即可——Toskr 不预置任何应用。
+            <p className="mt-0.5 text-label text-muted-foreground">
+              探测正在运行的应用，选中要监听的那个。
             </p>
             <Button
               size="xs"
@@ -2139,7 +2197,7 @@ function MessageWatchSection({ settings, patch }: SP) {
           hint={
             transport === "http"
               ? "手动模式运行中；先关闭手动监听再切换"
-              : "会退出并重启所选 IM，请先保存工作。关闭时仅结束本次启动的主进程，再验证恢复；恢复失败需手动处理"
+              : "会重启所选 IM，请先保存工作；关闭后自动恢复，失败时需手动处理"
           }
           right={
             <Switch
@@ -2152,7 +2210,7 @@ function MessageWatchSection({ settings, patch }: SP) {
         />
         {transport !== "http" && (
           <p className="px-3.5 py-2 text-label text-warning">
-            ⚠️ 自动接入期间 IM 软件会开一个仅限本机、无需认证的调试端口，本机其他程序理论上可借此读取会话内容；关闭后会核验调试进程退出与正常启动，失败时需手动处理。
+            自动接入期间 IM 会开放一个仅限本机、无需认证的调试端口，本机其他程序理论上可借此读取会话；关闭后会检查调试进程已退出。
           </p>
         )}
         <Row
@@ -2160,7 +2218,7 @@ function MessageWatchSection({ settings, patch }: SP) {
           hint={
             transport === "cdp"
               ? "自动接入运行中；先关闭自动接入再切换"
-              : "不重启 IM 软件；开启后复制脚本，在 IM 软件「查看 → 开发者工具」的 Console 里粘贴执行"
+              : "不重启 IM；开启后复制脚本，粘贴到 IM 开发者工具的 Console 执行"
           }
           right={
             <Switch
@@ -2174,7 +2232,7 @@ function MessageWatchSection({ settings, patch }: SP) {
         {transport === "http" && (
           <Row
             label="安装 DevTools 只读桥"
-            hint="IM 软件刷新或重启后需重新复制执行；手动打开 DevTools 会激活窗口、当前会话可能被标记已读"
+            hint="IM 刷新或重启后需重新执行；打开开发者工具可能把当前会话标为已读"
             right={
               <Button size="xs" onClick={() => void copyBridge()}>
                 <Copy data-icon="inline-start" />复制脚本
@@ -2214,8 +2272,7 @@ function MessageWatchSection({ settings, patch }: SP) {
       <Group title="收哪些消息">
         <div className="space-y-2 px-3.5 py-3">
           <p className="text-label text-muted-foreground">
-            被 @ 和特别关注的消息<span className="font-medium text-foreground">始终</span>会收进「内容 → 消息」，无需配置。
-            组合规则用于在此之外盯住特定的群、人、关键词；多条规则任一命中即收。
+            @我 和特别关注的消息<span className="font-medium text-foreground">始终</span>会收进「内容 → 消息」；下面的规则用来额外盯住特定的群、人或关键词，任一规则命中即收。
           </p>
           {settings.messageWatchRules.map((rule) => (
             <div
@@ -2318,10 +2375,8 @@ function MessageWatchSection({ settings, patch }: SP) {
 
       <Group title="数据存储">
         <div className="space-y-1.5 px-3.5 py-2.5 text-label text-muted-foreground">
-          <p>
-            原始消息整条写入权限 600 的 JSONL 账本（正文不截断；单条超 4MB 整条拒收并留队重试），「内容 → 消息」展示其结构化投影。
-          </p>
-          <p>实验账本不随 .toskr-backup 导出；需长期保留请单独备份账本文件。</p>
+          <p>原始消息完整保存在本机账本（仅当前用户可读），「内容 → 消息」显示整理后的结果。</p>
+          <p>账本不包含在完整备份中，需要长期保留请单独备份。</p>
           {status?.ledgerPath && (
             <Button
               size="xs"
@@ -2342,11 +2397,10 @@ function MessageWatchSection({ settings, patch }: SP) {
 function SecretSection({ settings, patch }: SP) {
   return (
     <div>
-      <SectionTitle>秘文</SectionTitle>
       <Group>
         <Row
           label="揭示后自动遮罩"
-          hint="卡片解密显现后，多久自动回到模糊（切走应用/隐藏面板也会立即遮罩）"
+          hint="解密显示后多久重新模糊；切走应用时立即遮罩"
           right={
             <Segmented
               ariaLabel="揭示超时"
@@ -2358,7 +2412,7 @@ function SecretSection({ settings, patch }: SP) {
         />
         <Row
           label="默认密文格式"
-          hint={`${SECRET_STYLE_HINT[settings.secretCipherStyle]}；支持该格式的接收端自动识别，无需选择相同格式`}
+          hint={`${SECRET_STYLE_HINT[settings.secretCipherStyle]}；对方无需选择相同格式`}
           right={
             <Segmented<SecretCipherStyle>
               ariaLabel="默认密文格式"
@@ -2374,21 +2428,26 @@ function SecretSection({ settings, patch }: SP) {
         />
       </Group>
       <SecretKeysEditor settings={settings} patch={patch} />
-      <p className="flex items-start gap-1.5 px-1 text-label text-muted-foreground">
-        <ShieldCheck className="mt-0.5 size-3.5 shrink-0" />
-        <span>
-          密钥随本机数据文件一起加密保存（导出的完整备份中仍为明文）——用于防
-          IM 服务器、旁人与肩窥，不防已解锁本机的内存取证。加解密全程在本机完成，不联网。
-        </span>
+      <p className="px-3.5 text-label text-muted-foreground">
+        密钥加密保存在本机（导出的完整备份中为明文）；可防 IM 服务器和旁人窥看，不防已解锁本机上的取证。加解密全程离线。
       </p>
     </div>
   );
 }
 
-function HotkeySection({ settings, patch }: SP) {
+function HotkeySection({
+  settings,
+  patch,
+  searchTarget,
+  searchSequence,
+}: SP & { searchTarget: string | null; searchSequence: number }) {
+  // 面板内快捷键是只读速查，默认收起，让可设置的全局触发留在首屏
+  const [shortcutsOpen, setShortcutsOpen] = useState(searchTarget === "面板内快捷键");
+  useLayoutEffect(() => {
+    if (searchTarget === "面板内快捷键") setShortcutsOpen(true);
+  }, [searchTarget, searchSequence]);
   return (
     <div>
-      <SectionTitle>快捷键</SectionTitle>
       <Group title="全局触发">
         <Row
           label="触发键（双击）"
@@ -2423,7 +2482,7 @@ function HotkeySection({ settings, patch }: SP) {
         />
         <Row
           label="双击行为"
-          hint="仅捕获：无选中只轻提示、不开关面板（配合下方专用面板快捷键）"
+          hint="仅捕获：没有选中文字时只提示，不开关面板"
           right={
             <Segmented
               value={settings.doubleTapCaptureOnly ? "capture" : "smart"}
@@ -2438,7 +2497,7 @@ function HotkeySection({ settings, patch }: SP) {
         />
         <Row
           label="面板显示 / 隐藏"
-          hint="独立快捷键，只开关面板不捕获内容；钉住时也可收起"
+          hint="只开关面板，不捕获内容；钉住时也能收起"
           right={
             <HotkeyRecorder
               value={settings.panelToggleHotkey}
@@ -2448,7 +2507,7 @@ function HotkeySection({ settings, patch }: SP) {
         />
         <Row
           label="全局新建笔记"
-          hint="任意应用下直接打开详情大窗写新笔记（默认 ⌘⇧N，可清除关闭）"
+          hint="在任意应用中直接打开新笔记窗口，可清除关闭"
           right={
             <HotkeyRecorder
               value={settings.newNoteHotkey}
@@ -2458,20 +2517,33 @@ function HotkeySection({ settings, patch }: SP) {
           }
         />
       </Group>
-      <Group title="面板内快捷键（长按 ⌥ 可随时速查）">
-        {SHORTCUTS.map(([k, d]) => (
-          <Row
-              key={k}
-              label={d}
-              right={
-                // 还原重塑前键帽形态（用户定稿）：11px / bg-muted / 不撑最小宽
-                <kbd className="rounded-sm border border-border bg-muted px-1.5 py-0.5 text-label tabular-nums">
-                  {k}
-                </kbd>
-              }
-            />
-        ))}
-      </Group>
+      <ExcludeSection settings={settings} patch={patch} />
+      <div
+        data-settings-search="面板内快捷键"
+        className={cn("rounded-md", SETTINGS_SEARCH_HIGHLIGHT)}
+      >
+        <Disclosure
+          title="面板内快捷键"
+          summary={`${SHORTCUTS.length} 项 · 面板里长按 ⌥ 也能速查`}
+          open={shortcutsOpen}
+          onOpenChange={setShortcutsOpen}
+        >
+          <Group>
+            {SHORTCUTS.map(([k, d]) => (
+              <Row
+                key={k}
+                label={d}
+                right={
+                  // 还原重塑前键帽形态（用户定稿）：11px / bg-muted / 不撑最小宽
+                  <kbd className="rounded-sm border border-border bg-muted px-1.5 py-0.5 text-label tabular-nums">
+                    {k}
+                  </kbd>
+                }
+              />
+            ))}
+          </Group>
+        </Disclosure>
+      </div>
     </div>
   );
 }
@@ -2706,20 +2778,14 @@ function AppListEditor({
     }
   };
   return (
-    <div className="rounded-xl border border-border/60 bg-card p-2">
-      <div className="mb-1 flex items-center gap-1">
-        <button
-          onClick={pickApp}
-          className="flex items-center gap-1 rounded-md px-1.5 py-1 text-body text-primary hover:bg-primary/10"
-        >
-          <Plus className="size-3.5" /> 选择应用…
-        </button>
-        <button
-          onClick={addCurrent}
-          className="flex items-center gap-1 rounded-md px-1.5 py-1 text-body text-primary hover:bg-primary/10"
-        >
-          <Plus className="size-3.5" /> {addLabel}
-        </button>
+    <div className="px-3.5 py-2.5">
+      <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+        <Button size="xs" onClick={pickApp}>
+          <Plus /> 选择应用…
+        </Button>
+        <Button size="xs" onClick={addCurrent}>
+          <Plus /> {addLabel}
+        </Button>
       </div>
       <div className="max-h-56 overflow-y-auto">
         {apps.map((bundle) => (
@@ -2730,7 +2796,7 @@ function AppListEditor({
           />
         ))}
         {apps.length === 0 && (
-          <p className="px-1.5 py-1 text-body text-muted-foreground">空</p>
+          <p className="px-1.5 py-1 text-body text-muted-foreground">还没有应用</p>
         )}
       </div>
     </div>
@@ -2750,10 +2816,8 @@ export function TargetSection({
 }) {
   const pageId = useId();
   const [page, setPage] = useState(() => targetSettingsPageForSearch(searchTarget));
-  const [aliasesOpen, setAliasesOpen] = useState(searchTarget === "隐私与化名");
   useLayoutEffect(() => {
     if (searchTarget) setPage(targetSettingsPageForSearch(searchTarget));
-    if (searchTarget === "隐私与化名") setAliasesOpen(true);
   }, [searchTarget, searchSequence]);
   useLayoutEffect(() => {
     if (targetProfileRequest) setPage("paste");
@@ -2763,8 +2827,8 @@ export function TargetSection({
   ] as const;
   return (
     <div>
-      <SectionTitle>粘贴与隐私</SectionTitle>
-      <nav aria-label="粘贴与隐私选项" className="mb-4 flex flex-wrap gap-1 border-b border-border pb-2">
+      {/* 与其他分区的子页签同款（SettingsChildNavigation）：选中态用 primary 浅底 */}
+      <nav aria-label="粘贴与隐私选项" className="mb-4 flex flex-wrap gap-1.5">
         {pages.map(([id, label]) => (
           <Button
             key={id}
@@ -2773,14 +2837,14 @@ export function TargetSection({
             variant="ghost"
             aria-current={page === id ? "page" : undefined}
             aria-controls={`${pageId}-${id}`}
-            className={cn(page === id && "bg-muted font-medium text-foreground")}
+            className={cn(page === id && "border-primary/50 bg-primary/10")}
             onClick={() => setPage(id)}
           >{label}</Button>
         ))}
       </nav>
       {/* 子页保持挂载，切换时不丢失尚未保存的模板或化名输入。 */}
       <div id={`${pageId}-paste`} hidden={page !== "paste"} aria-labelledby={`${pageId}-paste-tab`}>
-        <p className="mb-3 text-body text-muted-foreground">设置内容如何粘贴，以及粘贴后是否按回车。不同应用可以使用不同规则。</p>
+        <SettingsIntro>设置内容怎样粘贴、粘贴后是否回车；每个应用可以单独设置。</SettingsIntro>
         <TargetProfileManager
           settings={settings}
           patch={patch}
@@ -2791,14 +2855,15 @@ export function TargetSection({
         />
       </div>
       <div id={`${pageId}-privacy`} hidden={page !== "privacy"} aria-labelledby={`${pageId}-privacy-tab`}>
-        <p className="mb-3 text-body text-muted-foreground">先检查敏感内容，再决定替换或保留。原始卡片不会被改写。</p>
-        <FirewallSettings settings={settings} patch={patch} searchTarget={searchTarget} searchSequence={searchSequence} />
-        <div data-settings-search="隐私与化名">
-          <p className="mb-1 text-body text-muted-foreground">指定名称也可以自动换成化名，收到回复后恢复。{settings.aliasEntitiesEnabled ? `已启用 · ${settings.aliasEntities.length} 条词典` : "当前未启用"}</p>
-          <Disclosure title="用化名替换指定内容" open={aliasesOpen} onOpenChange={setAliasesOpen}>
-            <AliasEntitySettings settings={settings} patch={patch} />
-          </Disclosure>
-        </div>
+        <SettingsIntro>发送前在本机检查敏感内容，原始卡片不会被改写。</SettingsIntro>
+        <FirewallSettings
+          settings={settings}
+          patch={patch}
+          searchTarget={searchTarget}
+          searchSequence={searchSequence}
+          onShowPasteRules={() => setPage("paste")}
+        />
+        <AliasEntitySettings settings={settings} patch={patch} />
       </div>
       <div id={`${pageId}-templates`} hidden={page !== "templates"} aria-labelledby={`${pageId}-templates-tab`}>
         <div data-settings-search="提示词组">
@@ -2809,97 +2874,109 @@ export function TargetSection({
   );
 }
 
-function FirewallSettings({ settings, patch, searchTarget, searchSequence }: SP & { searchTarget: string | null; searchSequence: number }) {
+function FirewallSettings({
+  settings,
+  patch,
+  searchTarget,
+  searchSequence,
+  onShowPasteRules,
+}: SP & {
+  searchTarget: string | null;
+  searchSequence: number;
+  onShowPasteRules: () => void;
+}) {
   const disabled = new Set(settings.firewallDisabledWarnCategories);
   const [customFieldsOpen, setCustomFieldsOpen] = useState(searchTarget === "自定义敏感字段");
-  const [categoriesOpen, setCategoriesOpen] = useState(searchTarget === "提示级类别");
+  const [categoriesOpen, setCategoriesOpen] = useState(searchTarget === "检测类别");
   useLayoutEffect(() => {
-    if (searchTarget === "提示级类别") setCategoriesOpen(true);
+    if (searchTarget === "检测类别") setCategoriesOpen(true);
     if (searchTarget === "自定义敏感字段") setCustomFieldsOpen(true);
   }, [searchTarget, searchSequence]);
+  const enabledCount = FIREWALL_WARN_CATEGORIES.filter((category) => !disabled.has(category)).length;
+  const fieldCount = settings.firewallCustomSensitiveFields.length;
   return (
-    <div data-settings-search="发送前隐私检查（仅本机文本检查）">
-      <Group title="发送前隐私检查">
-        <Row
-          label="启用隐私检查"
-          hint={settings.firewallEnabled ? "在本机检查文字和图片，发现敏感内容时进入预检处理" : "已关闭：发送前不做隐私检测；化名替换仍由下方独立控制"}
-          right={
-            <Switch
-              aria-label="发送前隐私检查"
-              checked={settings.firewallEnabled}
-              onCheckedChange={(firewallEnabled) => patch({ firewallEnabled })}
-            />
-          }
-        />
-        <div className="px-3.5 py-2.5">
-          <div data-settings-search="提示级类别">
-            <Disclosure title="调整检测类别" open={categoriesOpen} onOpenChange={setCategoriesOpen}>
-              <p className="text-title">提示级类别</p>
-              <p className="mt-0.5 text-label text-muted-foreground">
-                可按类别关闭提示；私钥、授权、密钥/凭据、数据库连接、Cookie 与会话等高风险规则不能单独关闭。
-              </p>
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                {FIREWALL_WARN_CATEGORIES.map((category) => (
-                  <label key={category} className="flex items-center justify-between gap-2 rounded-lg bg-muted/40 px-2 py-1.5 text-body">
-                    {FIREWALL_CATEGORY_LABEL[category]}
-                    <Switch
-                      size="sm"
-                      disabled={!settings.firewallEnabled}
-                      aria-label={`${FIREWALL_CATEGORY_LABEL[category]}提示`}
-                      checked={!disabled.has(category)}
-                      onCheckedChange={(enabled) => patch({
-                        firewallDisabledWarnCategories: enabled
-                          ? settings.firewallDisabledWarnCategories.filter(
-                              (item) => item !== category
-                            )
-                          : [...settings.firewallDisabledWarnCategories, category],
-                      })}
-                    />
-                  </label>
-                ))}
-              </div>
-            </Disclosure>
-          </div>
-          <div data-settings-search="自定义敏感字段" className="my-2">
-            <Disclosure title={`自定义敏感字段 · ${settings.firewallCustomSensitiveFields.length} 个`} open={customFieldsOpen} onOpenChange={setCustomFieldsOpen}>
-              <CustomSensitiveFields fields={settings.firewallCustomSensitiveFields} enabled={settings.firewallEnabled}
-                onChange={(firewallCustomSensitiveFields) => patch({ firewallCustomSensitiveFields })} />
-            </Disclosure>
-          </div>
-          <p className="text-label text-muted-foreground">本机规则可能漏检。发送前仍可在预检中检查最终内容；具体处理要求由粘贴规则决定。</p>
+    <Group footer="本机规则可能漏检，发送前仍可在预检中核对最终内容。">
+      <FeatureRow
+        icon={<ShieldCheck />}
+        title="发送前隐私检查"
+        description={
+          settings.firewallEnabled
+            ? "检查文字和图片，发现敏感内容时先让你确认"
+            : "已关闭：发送前不检查；可逆化名不受影响"
+        }
+        checked={settings.firewallEnabled}
+        onCheckedChange={(firewallEnabled) => patch({ firewallEnabled })}
+      />
+      <DisclosureRow
+        label="检测类别"
+        value={
+          !settings.firewallEnabled
+            ? "未生效"
+            : enabledCount === FIREWALL_WARN_CATEGORIES.length
+              ? "全部开启"
+              : `已开启 ${enabledCount}/${FIREWALL_WARN_CATEGORIES.length}`
+        }
+        open={categoriesOpen}
+        onOpenChange={setCategoriesOpen}
+      >
+        <div className="grid grid-cols-2 gap-2">
+          {FIREWALL_WARN_CATEGORIES.map((category) => (
+            <label key={category} className="flex items-center justify-between gap-2 rounded-lg bg-muted/40 px-2.5 py-1.5 text-body">
+              {FIREWALL_CATEGORY_LABEL[category]}
+              <Switch
+                size="sm"
+                disabled={!settings.firewallEnabled}
+                aria-label={`${FIREWALL_CATEGORY_LABEL[category]}提示`}
+                checked={!disabled.has(category)}
+                onCheckedChange={(enabled) => patch({
+                  firewallDisabledWarnCategories: enabled
+                    ? settings.firewallDisabledWarnCategories.filter(
+                        (item) => item !== category
+                      )
+                    : [...settings.firewallDisabledWarnCategories, category],
+                })}
+              />
+            </label>
+          ))}
         </div>
-      </Group>
-    </div>
+        <p className="mt-2 text-label text-muted-foreground">
+          私钥、授权凭据、密钥、数据库连接、Cookie 等高风险内容始终检测，不能关闭。
+        </p>
+      </DisclosureRow>
+      <DisclosureRow
+        label="自定义敏感字段"
+        value={fieldCount ? `${fieldCount} 个` : "未添加"}
+        open={customFieldsOpen}
+        onOpenChange={setCustomFieldsOpen}
+      >
+        <CustomSensitiveFields fields={settings.firewallCustomSensitiveFields} enabled={settings.firewallEnabled}
+          onChange={(firewallCustomSensitiveFields) => patch({ firewallCustomSensitiveFields })} />
+      </DisclosureRow>
+      <NavigateRow label="发现后如何处理" value="按粘贴规则" onClick={onShowPasteRules} />
+    </Group>
   );
 }
 
 function CompanionSection({ settings, patch }: SP) {
-  return (
-    <div>
-      <SectionTitle>伴随停靠</SectionTitle>
-      <CompanionSettings settings={settings} patch={patch} />
-    </div>
-  );
+  return <CompanionSettings settings={settings} patch={patch} />;
 }
 
 function CompanionSettings({ settings, patch }: SP) {
   return (
-    <div className="mb-5">
+    <div>
       <Group>
-        <Row
-          label="启用伴随停靠"
-          hint="有目标时磁吸并跟随；无可用目标时自由拖动，拖到屏幕外缘会自动收起"
-          right={
-            <Switch
-              aria-label="启用伴随停靠"
-              checked={settings.companionEnabled}
-              onCheckedChange={(v) => patch({ companionEnabled: v })}
-            />
-          }
+        <FeatureRow
+          icon={<Magnet />}
+          title="伴随停靠"
+          searchKey="启用伴随停靠"
+          switchLabel="启用伴随停靠"
+          description="面板贴靠目标应用窗口并跟随移动；拖到屏幕边缘可收起"
+          checked={settings.companionEnabled}
+          onCheckedChange={(v) => patch({ companionEnabled: v })}
         />
         <Row
           label="与窗口的间隙"
-          hint="面板贴靠目标窗口时留出的空隙（0 为紧贴）"
+          hint="0 为紧贴"
           right={
             <PercentSlider
               ariaLabel="与窗口的间隙"
@@ -2913,31 +2990,32 @@ function CompanionSettings({ settings, patch }: SP) {
           }
         />
       </Group>
-      <p className="mb-1.5 text-body font-medium text-muted-foreground">
-        伴随应用列表（bundle id）
-      </p>
-      <AppListEditor
-        apps={settings.companionApps}
-        onChange={(apps) => patch({ companionApps: apps })}
-        addLabel="把当前应用加入伴随列表（先在目标应用里呼出过面板）"
-      />
+      <Group
+        title="伴随的应用"
+        footer="这些应用在前台时面板自动停靠；加入当前应用前，需先在该应用中呼出过面板。"
+      >
+        <AppListEditor
+          apps={settings.companionApps}
+          onChange={(apps) => patch({ companionApps: apps })}
+          addLabel="加入当前应用"
+        />
+      </Group>
     </div>
   );
 }
 
 function ExcludeSection({ settings, patch }: SP) {
   return (
-    <div>
-      <p className="mb-2 text-body font-medium text-muted-foreground">捕获排除</p>
-      <p className="mb-3 text-body text-muted-foreground">
-        列表内的应用中双击只开关面板、绝不读取任何内容（密码管理器等敏感应用）。
-      </p>
+    <Group
+      title="捕获排除"
+      footer="在这些应用中双击只开关面板，不读取任何内容，适合密码管理器等敏感应用。"
+    >
       <AppListEditor
         apps={settings.excludedApps}
         onChange={(apps) => patch({ excludedApps: apps })}
-        addLabel="把当前应用加入排除列表"
+        addLabel="加入当前应用"
       />
-    </div>
+    </Group>
   );
 }
 
@@ -3084,29 +3162,28 @@ function AiSection({ settings, patch }: SP) {
       ? "正在读取 macOS 钥匙串…"
       : keyStatus.configured
         ? `已配置${keyStatus.updatedAtMs ? ` · ${new Date(keyStatus.updatedAtMs).toLocaleString()}` : ""}`
-        : "未配置；输入新密钥后只可覆盖或删除，不会回显";
+        : "未配置；保存后只能覆盖或删除，不会回显";
 
   return (
     <div>
-      <SectionTitle>AI 智能</SectionTitle>
-      <p className="mb-3 text-body text-muted-foreground">
-        配置 OpenAI 兼容的 AI 提供商后：任务输入框 ✨ 模式支持自然语言建任务；
-        任务可 AI 拆解，笔记可 AI 转任务或起标题。
-      </p>
+      <SettingsIntro>
+        连接 OpenAI 兼容的服务后，可用自然语言建任务、拆解任务，给笔记起标题或转成任务。
+      </SettingsIntro>
       <Group>
-        <Row
-          label="启用 AI 智能"
-          hint="关闭后各 AI 入口不发起请求"
-          right={
-            <Switch
-              aria-label="启用 AI 智能"
-              checked={settings.aiEnabled}
-              onCheckedChange={(value) => patch({ aiEnabled: value })}
-            />
-          }
+        <FeatureRow
+          icon={<Sparkles />}
+          title="AI 智能"
+          searchKey="启用 AI 智能"
+          switchLabel="启用 AI 智能"
+          description="关闭后所有 AI 入口都不会发起请求"
+          checked={settings.aiEnabled}
+          onCheckedChange={(value) => patch({ aiEnabled: value })}
         />
       </Group>
-      <Group title="提供商（OpenAI 兼容）">
+      <Group
+        title="提供商（OpenAI 兼容）"
+        footer="API Key 只存在 macOS 钥匙串；只有你主动使用 AI 时，相关文本才会发送到所选服务。"
+      >
         <div className="flex flex-wrap items-center gap-1 px-3.5 py-2.5">
           {AI_PRESETS.map((item) => (
             <button
@@ -3134,7 +3211,7 @@ function AiSection({ settings, patch }: SP) {
         </div>
         <Row
           label="Base URL"
-          hint="远端仅允许 HTTPS；HTTP 只允许 localhost、127.0.0.1 或 ::1"
+          hint="远程地址需 HTTPS；本机地址可用 HTTP"
           right={
             <input
               value={settings.aiBaseUrl}
@@ -3158,28 +3235,29 @@ function AiSection({ settings, patch }: SP) {
                 autoComplete="new-password"
                 className="h-8 w-48 rounded-lg border border-border bg-transparent px-2 text-body outline-none focus:border-primary/50"
               />
-              <button
+              <Button
+                size="xs"
                 onClick={() => void saveKey()}
                 disabled={!newKey.trim() || savingKey}
-                className="rounded-lg border border-border px-2 py-1 text-label text-muted-foreground hover:text-foreground disabled:opacity-50"
               >
                 {savingKey ? "保存中…" : keyStatus.configured ? "覆盖" : "保存"}
-              </button>
+              </Button>
               {keyStatus.configured && (
-                <button
+                <Button
+                  size="xs"
+                  variant="destructive"
                   onClick={() => void removeKey()}
                   disabled={deletingKey}
-                  className="rounded-lg border border-destructive/30 px-2 py-1 text-label text-destructive disabled:opacity-50"
                 >
                   {deletingKey ? "删除中…" : "删除"}
-                </button>
+                </Button>
               )}
             </div>
           }
         />
         <Row
           label="模型名"
-          hint={models.length ? `已获取 ${models.length} 个模型` : "手动填写，或从已配置服务获取列表"}
+          hint={models.length ? `已获取 ${models.length} 个模型` : "手动填写，或从服务获取列表"}
           right={
             <div className="flex items-center gap-1">
               {models.length ? (
@@ -3207,34 +3285,22 @@ function AiSection({ settings, patch }: SP) {
                   className="h-8 w-44 rounded-lg border border-border bg-transparent px-2 text-body outline-none focus:border-primary/50"
                 />
               )}
-              <button
-                onClick={() => void fetchModels()}
-                disabled={fetchingModels}
-                className="shrink-0 rounded-lg border border-border px-2 py-1 text-label text-muted-foreground hover:text-foreground disabled:opacity-50"
-              >
+              <Button size="xs" onClick={() => void fetchModels()} disabled={fetchingModels}>
                 {fetchingModels ? "获取中…" : models.length ? "刷新" : "获取列表"}
-              </button>
+              </Button>
             </div>
           }
         />
         <Row
           label="连接测试"
-          hint="从 macOS 钥匙串读取密钥并发送一次最小请求（无需先启用）"
+          hint="发送一次最小请求，无需先启用"
           right={
-            <button
-              onClick={() => void runTest()}
-              disabled={testing}
-              className="rounded-lg border border-border px-2.5 py-1 text-label text-muted-foreground hover:text-foreground disabled:opacity-50"
-            >
+            <Button size="xs" onClick={() => void runTest()} disabled={testing}>
               {testing ? "测试中…" : "测试连接"}
-            </button>
+            </Button>
           }
         />
       </Group>
-      <p className="text-label text-muted-foreground">
-        隐私说明：API Key 只保存在 macOS 钥匙串，不进入数据文件、完整备份、
-        诊断或进程参数；只有你主动触发 AI 功能时，相关文本才会直达所选服务。
-      </p>
     </div>
   );
 }
@@ -3258,43 +3324,45 @@ function BillReminderDefaultsSection({ settings, patch }: SP) {
   };
   if (!settings.subscriptionsEnabled) return null;
   return (
-    <div className="mt-6">
-      <SectionTitle>账单到期提醒</SectionTitle>
-      <p className="mb-3 text-body text-muted-foreground">
-        「提醒 → 订阅」里新建账单默认勾选的提前提醒档；只影响之后新建的账单，
-        已有账单在各自编辑页单独调整。
-      </p>
-      <div className="mb-3 flex flex-wrap gap-1.5">
-        {OFFSETS.map(({ value, label }) => {
-          const on = current.includes(value);
-          return (
-            <button
-              key={value}
-              role="checkbox"
-              aria-checked={on}
-              onClick={() => toggle(value)}
-              className={cn(
-                "rounded-full px-2.5 py-1 text-label transition-colors",
-                on
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-black/5 text-muted-foreground hover:text-foreground dark:bg-white/10"
-              )}
-            >
-              {label}
-            </button>
-          );
-        })}
-      </div>
-      <div className="flex items-center gap-2">
-        <span className="text-body text-muted-foreground">金额货币符号</span>
-        <input
-          value={settings.currencySymbol}
-          onChange={(e) => patch({ currencySymbol: e.target.value.slice(0, 3) || "¥" })}
-          className="h-8 w-14 rounded-lg border border-border bg-transparent px-2 text-center text-body outline-none focus:border-primary/50"
-          aria-label="金额货币符号"
-        />
-      </div>
-    </div>
+    <Group title="账单到期提醒" footer="新建账单时默认勾选这些提醒；不影响已有账单。">
+      <Row
+        label="默认提醒"
+        right={
+          <div className="flex flex-wrap justify-end gap-1.5">
+            {OFFSETS.map(({ value, label }) => {
+              const on = current.includes(value);
+              return (
+                <button
+                  key={value}
+                  role="checkbox"
+                  aria-checked={on}
+                  onClick={() => toggle(value)}
+                  className={cn(
+                    "rounded-full px-2.5 py-1 text-label transition-colors",
+                    on
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-black/5 text-muted-foreground hover:text-foreground dark:bg-white/10"
+                  )}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        }
+      />
+      <Row
+        label="金额货币符号"
+        right={
+          <input
+            value={settings.currencySymbol}
+            onChange={(e) => patch({ currencySymbol: e.target.value.slice(0, 3) || "¥" })}
+            className="h-8 w-14 rounded-lg border border-border bg-transparent px-2 text-center text-body outline-none focus:border-primary/50"
+            aria-label="金额货币符号"
+          />
+        }
+      />
+    </Group>
   );
 }
 
@@ -3350,135 +3418,119 @@ function DuePresetsSection({ settings, patch }: SP) {
   };
 
   return (
-    <div>
-      <SectionTitle>到期提醒快捷档</SectionTitle>
-      <p className="mb-3 text-body text-muted-foreground">
-        任务「到期」弹层里的快捷选项（按此处顺序排列）。相对档从点选时刻起算；
-        「今天」定点即使已过也不隐式跳到明天；周几档为「下一个」该周几（不含当天）。
-      </p>
-      <div className="mb-3 divide-y divide-border/50 rounded-xl border border-border/60 bg-card">
-        {settings.duePresets.map((p) =>
-          editingId === p.id && draft ? (
-            <div key={p.id} className="flex flex-col gap-2 px-3.5 py-2.5">
-              <Segmented<"relative" | "today" | "tomorrow" | "weekday">
-                value={draft.kind}
-                onChange={switchKind}
-                options={[
-                  { value: "relative", label: "多久后" },
-                  { value: "today", label: "今天" },
-                  { value: "tomorrow", label: "明天" },
-                  { value: "weekday", label: "下个周几" },
-                ]}
-              />
-              <div className="flex items-center gap-2">
-                {draft.kind === "relative" ? (
-                  <>
-                    <input
-                      type="number"
-                      min={1}
-                      step={unit === "h" ? 0.5 : 1}
-                      value={unit === "h" ? draft.minutes / 60 : draft.minutes}
-                      onChange={(e) => {
-                        const n = Number(e.target.value);
-                        if (!Number.isFinite(n) || n <= 0) return;
-                        setDraft({
-                          ...draft,
-                          minutes: Math.max(1, Math.round(unit === "h" ? n * 60 : n)),
-                        });
-                      }}
-                      className="h-8 w-20 rounded-lg border border-border bg-transparent px-2 text-body tabular-nums outline-none focus:border-primary/50"
-                    />
-                    <Segmented<"m" | "h">
-                      value={unit}
-                      onChange={setUnit}
-                      options={[
-                        { value: "m", label: "分钟" },
-                        { value: "h", label: "小时" },
-                      ]}
-                    />
-                  </>
-                ) : (
-                  <>
-                    {draft.kind === "weekday" && (
-                      <select
-                        value={String(draft.weekday)}
-                        onChange={(e) =>
-                          setDraft({ ...draft, weekday: Number(e.target.value) })
-                        }
-                        className="h-8 rounded-lg border border-border bg-transparent px-2 text-body outline-none focus:border-primary/50"
-                      >
-                        {WEEKDAY_OPTIONS.map((w) => (
-                          <option key={w.value} value={w.value}>
-                            {w.label}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                    <input
-                      type="time"
-                      value={hmStr(draft.hour, draft.minute)}
-                      onChange={(e) => patchTime(e.target.value)}
-                      className="h-8 rounded-lg border border-border bg-transparent px-2 text-body tabular-nums outline-none focus:border-primary/50"
-                    />
-                  </>
-                )}
-                <span className="text-body text-muted-foreground">
-                  → {presetCfgLabel(draft)}
-                </span>
-                <div className="ml-auto flex items-center gap-1">
-                  <button
-                    onClick={save}
-                    className="rounded-lg bg-primary px-2.5 py-1 text-body text-primary-foreground hover:opacity-90"
-                  >
-                    保存
-                  </button>
-                  <button
-                    onClick={() => {
-                      setEditingId(null);
-                      setDraft(null);
+    <Group title="到期提醒快捷档" footer="任务「到期」菜单里的快捷选项，按此顺序显示。">
+      {settings.duePresets.map((p) =>
+        editingId === p.id && draft ? (
+          <div key={p.id} className="flex flex-col gap-2 px-3.5 py-2.5">
+            <Segmented<"relative" | "today" | "tomorrow" | "weekday">
+              value={draft.kind}
+              onChange={switchKind}
+              options={[
+                { value: "relative", label: "多久后" },
+                { value: "today", label: "今天" },
+                { value: "tomorrow", label: "明天" },
+                { value: "weekday", label: "下个周几" },
+              ]}
+            />
+            <div className="flex items-center gap-2">
+              {draft.kind === "relative" ? (
+                <>
+                  <input
+                    type="number"
+                    min={1}
+                    step={unit === "h" ? 0.5 : 1}
+                    value={unit === "h" ? draft.minutes / 60 : draft.minutes}
+                    onChange={(e) => {
+                      const n = Number(e.target.value);
+                      if (!Number.isFinite(n) || n <= 0) return;
+                      setDraft({
+                        ...draft,
+                        minutes: Math.max(1, Math.round(unit === "h" ? n * 60 : n)),
+                      });
                     }}
-                    className="rounded-lg px-2 py-1 text-body text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
-                  >
-                    取消
-                  </button>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div key={p.id} className="flex items-center gap-2 px-3.5 py-2">
-              <span className="text-title">{presetCfgLabel(p)}</span>
-              <div className="ml-auto flex items-center gap-0.5">
+                    className="h-8 w-20 rounded-lg border border-border bg-transparent px-2 text-body tabular-nums outline-none focus:border-primary/50"
+                  />
+                  <Segmented<"m" | "h">
+                    value={unit}
+                    onChange={setUnit}
+                    options={[
+                      { value: "m", label: "分钟" },
+                      { value: "h", label: "小时" },
+                    ]}
+                  />
+                </>
+              ) : (
+                <>
+                  {draft.kind === "weekday" && (
+                    <select
+                      value={String(draft.weekday)}
+                      onChange={(e) =>
+                        setDraft({ ...draft, weekday: Number(e.target.value) })
+                      }
+                      className="h-8 rounded-lg border border-border bg-transparent px-2 text-body outline-none focus:border-primary/50"
+                    >
+                      {WEEKDAY_OPTIONS.map((w) => (
+                        <option key={w.value} value={w.value}>
+                          {w.label}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <input
+                    type="time"
+                    value={hmStr(draft.hour, draft.minute)}
+                    onChange={(e) => patchTime(e.target.value)}
+                    className="h-8 rounded-lg border border-border bg-transparent px-2 text-body tabular-nums outline-none focus:border-primary/50"
+                  />
+                </>
+              )}
+              <span className="text-body text-muted-foreground">
+                → {presetCfgLabel(draft)}
+              </span>
+              <div className="ml-auto flex items-center gap-1">
                 <button
-                  aria-label="编辑"
-                  onClick={() => startEdit(p)}
-                  className="rounded-md p-1 text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
+                  onClick={save}
+                  className="rounded-lg bg-primary px-2.5 py-1 text-body text-primary-foreground hover:opacity-90"
                 >
-                  <Pencil className="size-3.5" />
+                  保存
                 </button>
                 <button
-                  aria-label="删除"
-                  onClick={() => remove(p.id)}
-                  className="rounded-md p-1 text-muted-foreground hover:bg-black/5 hover:text-destructive dark:hover:bg-white/10"
+                  onClick={() => {
+                    setEditingId(null);
+                    setDraft(null);
+                  }}
+                  className="rounded-lg px-2 py-1 text-body text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
                 >
-                  <X className="size-3.5" />
+                  取消
                 </button>
               </div>
             </div>
-          )
-        )}
-        {settings.duePresets.length === 0 && (
-          <p className="px-3.5 py-3 text-body text-muted-foreground">
-            没有快捷档，弹层里只剩自定义日期时间。
-          </p>
-        )}
+          </div>
+        ) : (
+          <div key={p.id} className="flex items-center gap-2 px-3.5 py-2">
+            <span className="text-title">{presetCfgLabel(p)}</span>
+            <div className="ml-auto flex items-center gap-0.5">
+              <IconButton label="编辑" size="xs" onClick={() => startEdit(p)}>
+                <Pencil />
+              </IconButton>
+              <IconButton label="删除" size="xs" tone="danger" onClick={() => remove(p.id)}>
+                <X />
+              </IconButton>
+            </div>
+          </div>
+        )
+      )}
+      {settings.duePresets.length === 0 && (
+        <p className="px-3.5 py-3 text-body text-muted-foreground">
+          没有快捷档，菜单里只剩自定义日期时间。
+        </p>
+      )}
+      <div className="px-3.5 py-2">
+        <Button size="xs" onClick={add}>
+          <Plus /> 添加档位
+        </Button>
       </div>
-      <button
-        onClick={add}
-        className="flex items-center gap-1 rounded-lg border border-border/60 px-2.5 py-1.5 text-body text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
-      >
-        <Plus className="size-3.5" /> 添加档位
-      </button>
-    </div>
+    </Group>
   );
 }
 
@@ -3746,9 +3798,13 @@ export function SnippetsSection({ settings, patch, searchTarget = null, searchSe
   );
   return (
     <div>
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <p className="text-body font-medium text-muted-foreground">提示词模板</p>
-        <div className="flex items-center gap-2">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+        <p className="min-w-0 flex-1 basis-60 text-body text-muted-foreground">
+          选用模板后，模板会和选中内容组合后发送；
+          <code className="rounded-sm bg-muted px-1">{"{内容}"}</code>{" "}
+          标记内容插入的位置，不写时接在模板后。
+        </p>
+        <div className="flex shrink-0 items-center gap-2">
           <Button size="sm" onClick={() => { setAddOpen(true); setAddAiOpen(true); }}>
             AI 创建模板
           </Button>
@@ -3757,13 +3813,6 @@ export function SnippetsSection({ settings, patch, searchTarget = null, searchSe
           </Button>
         </div>
       </div>
-      <p className="mb-3 text-body text-muted-foreground">
-        普通发送保持内容原文。选用模板后，模板会与选中内容组合，发送到当前目标。
-      </p>
-      <p className="mb-3 text-label text-muted-foreground">
-        <code className="rounded-sm bg-muted px-1">{"{内容}"}</code>{" "}
-        指定内容插入位置；不写时内容接在模板后。
-      </p>
       <Disclosure title="新增模板" open={addOpen} onOpenChange={setAddOpen}>
         <PromptTemplateEditor
           aiSettings={settings}
@@ -3782,30 +3831,24 @@ export function SnippetsSection({ settings, patch, searchTarget = null, searchSe
         />
       </Disclosure>
       {commonSnippets.length > 0 && (
-        <>
-          <p className="mb-1.5 text-body font-medium text-muted-foreground">常用模板</p>
-          <p className="mb-2 text-label text-muted-foreground">优先显示在发送菜单。替换后，原模板保留在“其他模板”。</p>
-          <div className="mb-3 divide-y divide-border/50 rounded-xl border border-border/60 bg-card">
-            {commonSnippets.map(renderSnippet)}
-          </div>
-        </>
+        <Group title="常用模板" footer="优先显示在发送菜单；替换后原模板保留在「其他模板」。">
+          {commonSnippets.map(renderSnippet)}
+        </Group>
       )}
       {commonSnippets.length === 0 && otherSnippets.length > 0 && (
         <p className="mb-3 text-body text-muted-foreground">暂无常用模板，可在“其他模板”中选择“设为常用”。</p>
       )}
       {otherSnippets.length > 0 && (
-        <Disclosure title={`其他模板（${otherSnippets.length}）`} open={othersOpen} onOpenChange={setOthersOpen}>
-          <div className="divide-y divide-border/50 rounded-xl border border-border/60 bg-card">
-            {otherSnippets.map(renderSnippet)}
-          </div>
+        <Disclosure title="其他模板" summary={`${otherSnippets.length} 个`} open={othersOpen} onOpenChange={setOthersOpen}>
+          <Group>{otherSnippets.map(renderSnippet)}</Group>
         </Disclosure>
       )}
       {settings.promptSnippets.length === 0 && (
         <p className="mb-3 text-body text-muted-foreground">暂无模板</p>
       )}
-      <div className="mt-5">
-        <Disclosure title="管理提示词组">
-          <div className="mb-2 divide-y divide-border/50 rounded-xl border border-border/60 bg-card">
+      <div>
+        <Disclosure title="管理提示词组" summary={`${sortedGroups.length} 个组`}>
+          <Group>
             {sortedGroups.map((group, index) => (
               <div key={group.id} className="flex items-center gap-2 px-3.5 py-2">
                 <input
@@ -3842,33 +3885,119 @@ export function SnippetsSection({ settings, patch, searchTarget = null, searchSe
                 ><X /></IconButton>
               </div>
             ))}
-          </div>
-          <div className="mb-5 flex items-center gap-2">
-            <input
-              aria-label="新提示词组名称"
-              value={groupName}
-              onChange={(event) => setGroupName(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") addGroup();
-              }}
-              placeholder="新提示词组名称"
-              className="h-8 min-w-0 flex-1 rounded-lg border border-border bg-transparent px-2 text-body"
-            />
-            <button
-              type="button"
-              onClick={addGroup}
-              className="flex h-8 items-center gap-1 rounded-lg border border-border px-3 text-body text-primary"
-            >
-              <Plus className="size-3.5" /> 新建提示词组
-            </button>
-          </div>
+            <div className="flex items-center gap-2 px-3.5 py-2.5">
+              <input
+                aria-label="新提示词组名称"
+                value={groupName}
+                onChange={(event) => setGroupName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") addGroup();
+                }}
+                placeholder="新提示词组名称"
+                className="h-8 min-w-0 flex-1 rounded-lg border border-border bg-transparent px-2 text-body"
+              />
+              <Button type="button" onClick={addGroup}>
+                <Plus /> 新建提示词组
+              </Button>
+            </div>
+          </Group>
         </Disclosure>
       </div>
     </div>
   );
 }
 
-function DataSection() {
+/** 定期自动备份：开关、位置、保留份数、上次时间 + 立即备份（执行在主面板）。 */
+function AutoBackupRows({ settings, patch, disabled }: SP & { disabled: boolean }) {
+  const [defaultDir, setDefaultDir] = useState<string | null>(null);
+  useEffect(() => {
+    void api.defaultAutoBackupDir().then(setDefaultDir).catch(() => {});
+  }, []);
+  const chooseDir = async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const picked = await open({
+      directory: true,
+      multiple: false,
+      defaultPath: settings.autoBackupDir ?? defaultDir ?? undefined,
+    });
+    if (typeof picked === "string") patch({ autoBackupDir: picked });
+  };
+  const last = settings.autoBackupLastAtMs;
+  return (
+    <>
+      <FeatureRow
+        icon={<Archive />}
+        title="定期自动备份"
+        description="每天加密备份一次（含图片），只能在本机恢复；换电脑请用「导出完整备份」"
+        checked={settings.autoBackupEnabled}
+        onCheckedChange={(v) => patch({ autoBackupEnabled: v })}
+      />
+      {settings.autoBackupEnabled && (
+        <>
+          <Row
+            label="上次备份"
+            value={last ? new Date(last).toLocaleString() : "尚未备份"}
+            hint={last ? undefined : "启动 2 分钟后自动执行"}
+            right={
+              <Button
+                size="xs"
+                disabled={disabled}
+                onClick={() => void emitTo("main", SETTINGS_AUTO_BACKUP_NOW, {})}
+              >
+                立即备份
+              </Button>
+            }
+          />
+          <Row
+            label="备份位置"
+            hint={settings.autoBackupDir ?? defaultDir ?? "默认：文稿/Toskr 自动备份"}
+            right={
+              <div className="flex gap-2">
+                {settings.autoBackupDir && (
+                  <Button size="xs" onClick={() => patch({ autoBackupDir: null })}>
+                    恢复默认
+                  </Button>
+                )}
+                <Button size="xs" onClick={() => void chooseDir()}>
+                  选择…
+                </Button>
+              </div>
+            }
+          />
+          <Row
+            label="保留份数"
+            hint="更早的自动备份会被删除，其他文件不受影响"
+            right={
+              <Segmented<"3" | "7" | "14" | "30">
+                value={String(settings.autoBackupKeep) as "3" | "7" | "14" | "30"}
+                options={[
+                  { value: "3", label: "3 份" },
+                  { value: "7", label: "7 份" },
+                  { value: "14", label: "14 份" },
+                  { value: "30", label: "30 份" },
+                ]}
+                onChange={(v) => patch({ autoBackupKeep: Number(v) })}
+                ariaLabel="保留份数"
+              />
+            }
+          />
+        </>
+      )}
+    </>
+  );
+}
+
+/** 预检里的数据集一行：条数 + 最后写入时间（判断新旧的依据）。 */
+function dataSetLine(
+  set: Omit<DataSetSummary, "dataModifiedAtMs"> & { dataModifiedAtMs?: number | null }
+): string {
+  const written = set.dataModifiedAtMs
+    ? ` · 最后写入 ${new Date(set.dataModifiedAtMs).toLocaleString()}`
+    : "";
+  return `笔记 ${set.noteCount} · 任务 ${set.taskCount} · 媒体 ${set.mediaCount}${written}`;
+}
+
+function DataSection({ settings, patch }: SP) {
   const [status, setStatus] = useState<DataLocationStatus | null>(null);
   const [inspection, setInspection] = useState<DataLocationInspection | null>(null);
   const [activity, setActivity] = useState({
@@ -3967,6 +4096,7 @@ function DataSection() {
     unsupported: "schema 高于当前版本",
     encrypted: "已加密数据（本机钥匙串打不开）",
   };
+  const freshness = inspection ? targetDataFreshness(inspection) : "unknown";
   const availableActions: DataOperationPlan["action"][] = inspection
     ? status?.initializationFailure
       ? inspection.kind === "valid" && !inspection.sameAsActive
@@ -3977,22 +4107,36 @@ function DataSection() {
 
   return (
     <div>
-      <SectionTitle>数据与备份</SectionTitle>
-      <p className="mb-3 text-body text-muted-foreground">
-        所有数据仅保存在本机，无账号、无同步、无遥测。笔记、图片与消息账本以
-        AES-256-GCM 加密落盘，密钥存放在 macOS 登录钥匙串——其他应用读不了、
-        改不动（篡改会被校验拒载）。注意：导出的完整备份是明文（用于跨机迁移）；
-        钥匙串密钥一旦丢失数据将无法解开，请定期导出完整备份。
-      </p>
-      <Group title="存储位置">
+      <SettingsIntro>
+        数据只保存在本机，用 macOS 钥匙串中的密钥加密；无账号、无同步、无遥测。
+      </SettingsIntro>
+      <Group
+        title="存储位置"
+        footer="更换前会先预检目标并创建恢复点；iCloud、Dropbox 等同步盘不保证多台设备同时修改不冲突。"
+      >
         <div className="px-3.5 py-2.5">
-          <p className="text-title">数据文件夹</p>
-          <p className="mt-1 break-all rounded-lg bg-muted/60 px-2 py-1 font-mono text-label text-muted-foreground">
+          <div className="flex min-h-7 flex-wrap items-center justify-between gap-x-4 gap-y-1.5">
+            <p className="text-title">数据文件夹</p>
+            <div className="flex shrink-0 gap-1.5">
+              <Button
+                size="xs"
+                onClick={pick}
+                disabled={activity.locked && !status?.initializationFailure}
+              >
+                更换位置…
+              </Button>
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={() => void inspectDefault()}
+                disabled={activity.locked || !status}
+              >
+                预检默认目录
+              </Button>
+            </div>
+          </div>
+          <p className="mt-1.5 break-all rounded-lg bg-muted/60 px-2 py-1 font-mono text-label text-muted-foreground">
             {status?.activeDir || "读取中…"}
-          </p>
-          <p className="mt-1 text-label text-muted-foreground">
-            切换前会刷新待写数据、预检目标、创建恢复点并重新水合。
-            iCloud、Dropbox 等目录只作为外部同步位置，不承诺无冲突多设备同步。
           </p>
           {status?.lastSuccessfulSwitchAtMs && (
             <p className="mt-1 text-label text-muted-foreground">
@@ -4017,22 +4161,23 @@ function DataSection() {
                 已配置目录：{status.activeDir}
               </p>
               <div className="mt-2 flex flex-wrap gap-2">
-                <button
+                <Button
+                  size="sm"
                   onClick={() =>
                     void requestStorageRecoveryAction("retryStorage")
                   }
-                  className="rounded-lg bg-primary px-3 py-1 text-body text-primary-foreground"
                 >
                   重试挂载
-                </button>
-                <button
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
                   onClick={() =>
                     void requestStorageRecoveryAction("loadDefault")
                   }
-                  className="rounded-lg border border-border px-3 py-1 text-body"
                 >
                   明确加载默认目录
-                </button>
+                </Button>
               </div>
             </div>
           )}
@@ -4040,49 +4185,35 @@ function DataSection() {
             <div className="mt-2 rounded-lg border border-destructive/40 p-2" role="alert">
               <p className="text-body">外部版本尚未处理，自动写入已停止。</p>
               <div className="mt-2 flex flex-wrap gap-2">
-                <button
+                <Button
+                  size="sm"
                   onClick={() =>
                     void emitTo("main", SETTINGS_DATA_CONFLICT_ACTION, "reload")
                   }
-                  className="rounded-lg bg-primary px-3 py-1 text-body text-primary-foreground"
                 >
                   重新加载磁盘
-                </button>
-                <button
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
                   onClick={() =>
                     void emitTo("main", SETTINGS_DATA_CONFLICT_ACTION, "saveRecovery")
                   }
-                  className="rounded-lg border border-border px-3 py-1 text-body"
                 >
                   另存恢复副本后加载
-                </button>
-                <button
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
                   onClick={() =>
                     tip("info", "已保持只读；冲突仍待处理，不会覆盖磁盘新版本")
                   }
-                  className="rounded-lg border border-border px-3 py-1 text-body text-muted-foreground"
                 >
                   暂不处理
-                </button>
+                </Button>
               </div>
             </div>
           )}
-          <div className="mt-2 flex gap-2">
-            <button
-              onClick={pick}
-              disabled={activity.locked && !status?.initializationFailure}
-              className="rounded-lg border border-border px-3 py-1 text-body hover:bg-black/5 dark:hover:bg-white/5"
-            >
-              预检新目录…
-            </button>
-            <button
-              onClick={() => void inspectDefault()}
-              disabled={activity.locked || !status}
-              className="rounded-lg border border-border px-3 py-1 text-body text-muted-foreground hover:bg-black/5 dark:hover:bg-white/5"
-            >
-              预检默认目录
-            </button>
-          </div>
           {activity.message && (
             <div
               role="status"
@@ -4099,8 +4230,26 @@ function DataSection() {
                 {inspection.path}
               </p>
               <p className="mt-1 text-label text-muted-foreground">
-                笔记 {inspection.noteCount} · 任务 {inspection.taskCount} · 媒体 {inspection.mediaCount}
+                {inspection.current ? "目标：" : ""}
+                {dataSetLine(inspection)}
               </p>
+              {inspection.current && (
+                <p className="mt-0.5 text-label text-muted-foreground">
+                  当前：{dataSetLine(inspection.current)}
+                </p>
+              )}
+              {freshness === "older" && availableActions.includes("loadExistingTarget") && (
+                <p role="alert" className="mt-1.5 text-label text-destructive">
+                  目标数据比当前旧：加载后面板将显示这份较旧的数据。当前目录不会被修改，
+                  误载可再预检当前目录并加载切回。
+                </p>
+              )}
+              {freshness === "newer" && availableActions.includes("replaceTargetWithCurrent") && (
+                <p role="alert" className="mt-1.5 text-label text-destructive">
+                  目标数据比当前新：「创建恢复点后替换目标」会用当前较旧的数据覆盖它，
+                  想用目标里的新数据请选「加载目标数据」。
+                </p>
+              )}
               {inspection.externalSyncLikely && (
                 <p className="mt-1 text-label text-muted-foreground">
                   检测到外部同步目录：并发修改会被阻止，但本阶段不自动合并。
@@ -4119,42 +4268,45 @@ function DataSection() {
                 {inspection.sameAsActive ? (
                   <span className="text-label text-muted-foreground">这就是当前活动目录，无需切换。</span>
                 ) : availableActions.includes("migrateCurrentToTarget") ? (
-                  <button
+                  <Button
+                    size="sm"
                     onClick={() => void execute("migrateCurrentToTarget")}
                     disabled={activity.locked}
-                    className="rounded-lg bg-primary px-3 py-1 text-body text-primary-foreground"
                   >
                     迁移当前数据
-                  </button>
+                  </Button>
                 ) : availableActions.includes("loadExistingTarget") ? (
                   <>
-                    <button
+                    <Button
+                      size="sm"
+                      variant={freshness === "older" ? "destructive" : "default"}
                       onClick={() => void execute("loadExistingTarget")}
                       disabled={activity.locked && !status?.initializationFailure}
-                      className="rounded-lg bg-primary px-3 py-1 text-body text-primary-foreground"
                     >
-                      加载目标数据
-                    </button>
-                    <button
+                      {freshness === "older" ? "仍加载较旧的目标数据" : "加载目标数据"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="destructive"
                       onClick={() => void execute("replaceTargetWithCurrent")}
                       disabled={activity.locked}
-                      className="rounded-lg border border-destructive/40 px-3 py-1 text-body text-destructive"
                     >
                       创建恢复点后替换目标
-                    </button>
+                    </Button>
                   </>
                 ) : (
                   <span className="text-label text-muted-foreground">
                     当前目标不可安全加载或覆盖，请修复后重新预检。
                   </span>
                 )}
-                <button
+                <Button
+                  size="sm"
+                  variant="ghost"
                   onClick={() => setInspection(null)}
                   disabled={activity.locked && !status?.initializationFailure}
-                  className="rounded-lg border border-border px-3 py-1 text-body text-muted-foreground"
                 >
                   取消
-                </button>
+                </Button>
               </div>
               {inspection.kind === "valid" && (
                 <p className="mt-2 text-label text-muted-foreground">
@@ -4165,43 +4317,55 @@ function DataSection() {
           )}
         </div>
       </Group>
-      <Group title="备份">
+      <Group
+        title="备份"
+        footer="钥匙串密钥丢失后数据无法解开，建议定期导出完整备份。"
+      >
+        <AutoBackupRows settings={settings} patch={patch} disabled={activity.locked} />
+      </Group>
+      <Group title="迁移与恢复">
         <Row
           label="导出完整备份"
-          hint="版本化 manifest + 状态 + taskSections + 被引用媒体；缺媒体会失败"
+          hint="用于换电脑；文件未加密，请妥善保管"
+          hintTone="warning"
           right={
-            <button
+            <Button
+              size="xs"
               onClick={() => void emitTo("main", SETTINGS_EXPORT, {})}
               disabled={activity.locked}
-              className="rounded-lg border border-border px-3 py-1 text-body hover:bg-black/5 dark:hover:bg-white/5"
             >
               导出…
-            </button>
+            </Button>
           }
         />
         <Row
-          label="导入并预检"
-          hint="完整备份原子恢复；重装可选 recovery/pre-encrypt-*.bak；旧 JSON 仅兼容合并"
+          label="从备份恢复"
+          hint="先预检内容，确认后才写入；也可选择每次启动自动留存的恢复点"
           right={
-            <button
+            <Button
+              size="xs"
               onClick={() => void emitTo("main", SETTINGS_IMPORT, {})}
               disabled={activity.locked}
-              className="rounded-lg border border-border px-3 py-1 text-body hover:bg-black/5 dark:hover:bg-white/5"
             >
               导入…
-            </button>
+            </Button>
           }
         />
       </Group>
       <Group title="数据健康">
-        <div className="px-3.5 py-2.5">
-          <button
-            onClick={() => void emitTo("main", SETTINGS_DATA_HEALTH, {})}
-            disabled={activity.locked}
-            className="rounded-lg border border-border px-3 py-1 text-body hover:bg-black/5 dark:hover:bg-white/5"
-          >
-            运行健康检查
-          </button>
+        <Row
+          label="健康检查"
+          hint="检查数据文件与图片是否完整，不会自动删除文件"
+          right={
+            <Button
+              size="xs"
+              onClick={() => void emitTo("main", SETTINGS_DATA_HEALTH, {})}
+              disabled={activity.locked}
+            >
+              运行检查
+            </Button>
+          }
+        >
           {health && (
             <div className="mt-2 text-label text-muted-foreground" role="status" aria-live="polite">
               <p>
@@ -4211,11 +4375,11 @@ function DataSection() {
                 <p key={suggestion} className="mt-1">• {suggestion}</p>
               ))}
               {!health.missing.length && !health.orphaned.length && !health.unsafeEntries.length && (
-                <p className="mt-1 text-primary">媒体引用完整，未自动删除任何可疑文件。</p>
+                <p className="mt-1 text-success">媒体引用完整，未自动删除任何可疑文件。</p>
               )}
             </div>
           )}
-        </div>
+        </Row>
       </Group>
     </div>
   );
@@ -4233,10 +4397,7 @@ function DiagnosticsSection() {
   }, []);
   return (
     <div>
-      <SectionTitle>诊断</SectionTitle>
-      <p className="mb-3 text-body text-muted-foreground">
-        最近 50 条链路事件（自动刷新）：双击触发/拒绝原因、捕获分支、发送结果。
-      </p>
+      <SettingsIntro>最近 50 条事件，自动刷新：触发、捕获与发送的结果。</SettingsIntro>
       <div className="rounded-xl border border-border/60 bg-card p-2 font-mono">
         {entries.length === 0 ? (
           <p className="px-1.5 py-1 text-body text-muted-foreground">
@@ -4297,9 +4458,7 @@ function AboutSection({
 
   return (
     <div>
-      <SectionTitle>关于</SectionTitle>
-
-      <div className="mb-4 rounded-xl border border-border/60 bg-card p-4 text-center">
+      <div className="mb-6 rounded-xl border border-border/60 bg-card p-4 text-center">
         <p className="text-heading font-semibold">Toskr</p>
         <p className="mt-0.5 text-body tabular-nums text-muted-foreground">
           v{version || "…"}
@@ -4332,26 +4491,19 @@ function AboutSection({
                   </span>
                 </div>
               ) : (
-                <button
-                  onClick={() => void onInstall()}
-                  className="rounded-md bg-primary px-2.5 py-1 text-body font-medium text-primary-foreground hover:opacity-90"
-                >
+                <Button size="xs" onClick={() => void onInstall()}>
                   下载并安装
-                </button>
+                </Button>
               )
             ) : (
-              <button
-                onClick={() => void onCheck()}
-                disabled={phase === "checking"}
-                className="rounded-md border border-border px-2.5 py-1 text-body hover:bg-muted disabled:opacity-50"
-              >
+              <Button size="xs" onClick={() => void onCheck()} disabled={phase === "checking"}>
                 {phase === "checking" ? "检查中…" : "检查更新"}
-              </button>
+              </Button>
             )
           }
         />
         {update?.body && (
-          <div className="px-3 py-2.5">
+          <div className="px-3.5 py-2.5">
             <p className="mb-1 text-label font-medium text-muted-foreground">
               本次更新内容
             </p>
@@ -4362,7 +4514,7 @@ function AboutSection({
         )}
         <Row
           label="自动检查更新"
-          hint="启动后静默检查；关闭后仅手动点击「检查更新」时查找"
+          hint="启动后在后台检查；关闭后只在手动检查时查找"
           right={
             <Switch
               aria-label="自动检查更新"
@@ -4373,7 +4525,7 @@ function AboutSection({
         />
         <Row
           label="自动安装更新"
-          hint="发现新版后台静默下载替换，重启应用后生效（不打断使用）"
+          hint="在后台下载新版，下次启动时生效"
           right={
             <Switch
               aria-label="自动安装更新"
@@ -4400,7 +4552,7 @@ function LinkRow({ label, value, url }: { label: string; value: string; url: str
   return (
     <button
       onClick={() => void api.openUrl(url)}
-      className="flex w-full items-center px-3 py-2.5 text-left hover:bg-muted/50"
+      className="flex min-h-12 w-full items-center px-3.5 py-2.5 text-left hover:bg-muted/50"
     >
       <span className="flex-1 text-title">{label}</span>
       <span className="text-body text-muted-foreground">{value} ↗</span>

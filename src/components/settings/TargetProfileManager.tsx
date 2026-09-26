@@ -3,7 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 
 import { ApplicationRuleInspector } from "@/components/settings/ApplicationRuleInspector";
 import { CurrentTargetPreview } from "@/components/settings/CurrentTargetPreview";
-import { Disclosure } from "@/components/ui/disclosure";
+import { DetailsSummary, Disclosure } from "@/components/ui/disclosure";
 import { ProfileConflictResolver } from "@/components/settings/ProfileConflictResolver";
 import { ProfileCreateSheet } from "@/components/settings/ProfileCreateSheet";
 import { ProfileEditor } from "@/components/settings/ProfileEditor";
@@ -257,8 +257,8 @@ export function TargetProfileManager({
       />
 
       <div data-settings-search="发送方案" className="scroll-m-5 rounded-md transition-shadow data-[settings-search-active=true]:ring-2 data-[settings-search-active=true]:ring-primary/40 data-[settings-search-active=true]:ring-offset-2 data-[settings-search-active=true]:ring-offset-background">
-        <details id="target-profile-management" open={managementOpen} onToggle={event => setManagementOpen(event.currentTarget.open)} className="mb-5">
-          <summary className="mb-3 cursor-pointer rounded-md text-body font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring">管理应用粘贴规则</summary>
+        <details id="target-profile-management" open={managementOpen} onToggle={event => setManagementOpen(event.currentTarget.open)} className="mb-6">
+          <DetailsSummary className="mb-3 text-title font-semibold">管理应用粘贴规则</DetailsSummary>
           <ApplicationRuleInspector
             settings={settings}
             patch={patch}
@@ -268,8 +268,8 @@ export function TargetProfileManager({
           />
 
           <div className="mt-4">
-            <Disclosure title="共享方案与高级管理" id="target-profile-advanced" open={advancedOpen} onOpenChange={setAdvancedOpen}>
-              <p className="mb-3 text-label text-muted-foreground">管理共享方案的名称、应用绑定、排序与默认项。这里的修改立即应用到共用方案的应用。</p>
+            <Disclosure title="共享方案与高级管理" summary="名称、应用绑定、排序与默认方案" id="target-profile-advanced" open={advancedOpen} onOpenChange={setAdvancedOpen}>
+              <p className="mb-3 text-label text-muted-foreground">这里的修改会立即应用到使用该方案的所有应用。</p>
               <div className="grid min-w-0 gap-3 lg:grid-cols-3">
                 <ProfileList
                   profiles={settings.targetProfiles}
@@ -332,7 +332,7 @@ export function TargetProfileManager({
           </div>
         </details>
       </div>
-      <Disclosure title="当前目标与规则检查" open={targetDetailsOpen} onOpenChange={setTargetDetailsOpen}>
+      <Disclosure title="当前目标与规则检查" summary="看看现在会粘贴到哪里、用哪套规则" open={targetDetailsOpen} onOpenChange={setTargetDetailsOpen}>
         <CurrentTargetPreview
           snapshot={currentTarget}
           resolution={currentResolution}

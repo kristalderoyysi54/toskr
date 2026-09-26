@@ -49,7 +49,7 @@ describe("应用粘贴规则紧凑字段", () => {
     expect(vi.mocked(view.props.onUpdate).mock.calls).toEqual([
       [{ enterPolicy: "never" }], [{ privacyPolicy: "requireRedaction" }], [{ keepPanel: true }], [{ promptGroupId: "writing" }],
     ]);
-    expect(view.html()).toContain("固定面板时始终保持打开");
+    expect(view.html()).toContain("钉住时始终打开");
   });
 
   it("输出格式沿用设置搜索的默认发送方式锚点", () => {
@@ -66,7 +66,7 @@ describe("应用粘贴规则紧凑字段", () => {
     view.select("发送前隐私策略").onChange("allowRaw");
     expect(view.props.onUpdate).not.toHaveBeenCalled();
     expect(view.select("输出格式").disabled).not.toBe(true);
-    expect(view.html()).toContain("默认兜底用于未单独配置的应用");
+    expect(view.html()).toContain("默认规则始终只粘贴，不自动回车");
   });
 
   it("隐私关闭时明确规则不生效，仍可预设策略且不声称高风险保护正在运行", () => {
@@ -80,21 +80,20 @@ describe("应用粘贴规则紧凑字段", () => {
   it("辅助模板组按组顺序排列，缺失组显示通用回退说明", () => {
     const view = render();
     expect(view.select("提示词组").options.map((group) => group.value)).toEqual(["general", "writing"]);
-    expect(view.html()).toContain("常用模板不受影响");
+    expect(view.html()).toContain("只影响「其他模板」的顺序");
     expect(view.html()).toContain("不会自动套用模板");
     const missing = render({ profile: { ...view.props.profile, promptGroupId: "removed" } });
     expect(missing.select("提示词组").options[0]).toMatchObject({ value: "removed", label: "已删除的提示词组 · 请选择替代项" });
     expect(missing.html()).toContain("当前生效：通用");
   });
 
-  it("真实格式预览常驻在辅助 details 外，并明确示例与临时覆盖边界", () => {
+  it("真实格式预览常驻在辅助 details 外，并说明只预览格式、不会真实粘贴", () => {
     const view = render();
     expect(view.nodes.filter((node) => node.type === ProfileOutputPreview)).toHaveLength(1);
     const details = view.nodes.find((node) => node.type === "details")!;
     expect(elements(details.props.children as ReactNode).some((node) => node.type === ProfileOutputPreview)).toBe(false);
-    expect(view.html()).toContain("使用可编辑的示例内容");
-    expect(view.html()).toContain("不模拟隐私处理");
-    expect(view.html()).toContain("不包含主面板的本次临时覆盖");
-    expect(view.html()).toContain("不会执行真实粘贴或回车");
+    expect(view.html()).toContain("用示例内容预览输出格式");
+    expect(view.html()).toContain("不做隐私处理");
+    expect(view.html()).toContain("不会真实粘贴或回车");
   });
 });

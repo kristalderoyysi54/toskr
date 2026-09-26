@@ -157,7 +157,7 @@ describe("发送方案设置组件", () => {
     expect(html).toContain('aria-label="重新识别粘贴目标"');
     expect(html).toContain("检查规则");
     expect(html).not.toContain("测试当前目标");
-    expect(html).toContain("应用默认规则；本次临时调整以主面板为准");
+    expect(html).toContain("本次临时调整以主面板为准");
     expect(html.split("<details")[0]).toContain("调整粘贴规则");
     expect(html.split("<details")[0]).not.toContain("规则来源");
     expect(html).not.toMatch(/已脱敏|已保护|隐私检查：安全/);
@@ -317,7 +317,7 @@ describe("发送方案设置组件", () => {
     expect(html).toContain('aria-live="polite"');
     expect(html).toContain('aria-atomic="true"');
     expect(html).toContain("代码块预览已更新，共");
-    expect(html).toContain("不会读取剪贴板、修改卡片或执行发送");
+    expect(html).toContain("不包含主面板的本次临时调整");
     expect(html).toContain('type="radio"');
     expect(html).toContain("sm:grid-cols-3");
     expect(html).not.toContain("overflow-x-auto");

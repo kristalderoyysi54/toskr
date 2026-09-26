@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 import { ProfileOutputPreview } from "@/components/settings/ProfileOutputPreview";
 import { SimpleSelect } from "@/components/SimpleSelect";
+import { DetailsSummary } from "@/components/ui/disclosure";
 import { Segmented } from "@/components/ui/segmented";
 import type { ApplicationRuleValues } from "@/lib/applicationRules";
 import {
@@ -27,8 +28,8 @@ function RuleField({ label, description, searchTarget, children }: {
   return (
     <div data-settings-search={searchTarget} className="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 py-3">
       <div className="min-w-0 flex-1 basis-40">
-        <p className="text-body font-medium">{label}</p>
-        <p className="mt-1 text-label leading-relaxed text-muted-foreground">{description}</p>
+        <p className="text-title">{label}</p>
+        <p className="mt-0.5 text-label text-muted-foreground">{description}</p>
       </div>
       <div className="max-w-full shrink-0">{children}</div>
     </div>
@@ -48,7 +49,7 @@ export function ApplicationRuleFields({ profile, groups, snippets, firewallEnabl
   const privacyPolicy = fallback ? "requireRedaction" : profile.privacyPolicy;
   const formatDescription = DELIVERY_FORMAT_OPTIONS.find((option) => option.value === outputMode)!.description;
   const enterDescription = fallback
-    ? "未单独配置的应用始终只粘贴，不自动回车。"
+    ? "默认规则始终只粘贴，不自动回车。"
     : ENTER_POLICY_OPTIONS.find((option) => option.value === enterPolicy)!.risk;
   const privacyDescription = !firewallEnabled
     ? "全局隐私检查已关闭，这项规则暂不生效；开启后使用所选策略。"
@@ -72,11 +73,6 @@ export function ApplicationRuleFields({ profile, groups, snippets, firewallEnabl
 
   return (
     <div className="min-w-0 space-y-4">
-      {fallback && (
-        <p className="rounded-lg bg-muted/40 px-3 py-2 text-label leading-relaxed text-muted-foreground">
-          默认兜底用于未单独配置的应用。回车与敏感处理保持安全设置；输出格式、面板行为和模板排序仍可调整。
-        </p>
-      )}
       <div className="divide-y divide-border/60">
         <RuleField label="输出格式" description={formatDescription} searchTarget="默认发送方式">
           <SimpleSelect
@@ -110,7 +106,7 @@ export function ApplicationRuleFields({ profile, groups, snippets, firewallEnabl
             onChange={(value) => { if (!fallback) onUpdate({ privacyPolicy: value }); }}
           />
         </RuleField>
-        <RuleField label="完成后面板" description="成功粘贴后收起或保持打开；固定面板时始终保持打开。">
+        <RuleField label="完成后面板" description="粘贴成功后收起或保持打开；钉住时始终打开。">
           <Segmented<"close" | "keep">
             ariaLabel={`${profile.name} 发送完成后`}
             value={profile.keepPanel ? "keep" : "close"}
@@ -122,15 +118,10 @@ export function ApplicationRuleFields({ profile, groups, snippets, firewallEnabl
           />
         </RuleField>
       </div>
-      {firewallEnabled && (
-        <p className="text-label leading-relaxed text-muted-foreground">
-          保留高风险原文仍需确认，且不会自动回车。
-        </p>
-      )}
       <details className="rounded-lg border border-border/60 px-3 py-2">
-        <summary className="cursor-pointer text-label font-medium text-muted-foreground">辅助设置 · 模板排序</summary>
+        <DetailsSummary className="text-label font-medium text-muted-foreground">模板排序</DetailsSummary>
         <div data-settings-search="模板组" className="mt-3 space-y-2">
-          <p className="text-label text-muted-foreground">其他模板优先显示</p>
+          <p className="text-label text-muted-foreground">「其他模板」里优先显示</p>
           <SimpleSelect
             ariaLabel={`${profile.name} 提示词组`}
             menuLabel="提示词组 · 数量 · 摘要"
@@ -141,15 +132,15 @@ export function ApplicationRuleFields({ profile, groups, snippets, firewallEnabl
           <p className="text-micro text-muted-foreground">
             {selectedGroup ? `${selectedGroup.count} 条提示词 · ${selectedGroup.summary}` : "暂无可用提示词组"}
           </p>
-          <p className="text-label leading-relaxed text-muted-foreground">
-            只调整“其他模板”的显示顺序，不会自动套用模板；常用模板不受影响。
+          <p className="text-label text-muted-foreground">
+            只影响「其他模板」的顺序，不会自动套用模板。
           </p>
         </div>
       </details>
       <section data-settings-search="规则生效预览" aria-label="输出格式预览" className="min-w-0 border-t border-border/60 pt-4">
-        <h3 className="text-body font-medium">输出预览</h3>
-        <p className="mt-1 text-label leading-relaxed text-muted-foreground">
-          使用可编辑的示例内容，仅预览格式变化，不模拟隐私处理；不包含主面板的本次临时覆盖，也不会执行真实粘贴或回车。
+        <h3 className="text-title">输出预览</h3>
+        <p className="mt-0.5 text-label text-muted-foreground">
+          用示例内容预览输出格式，不做隐私处理，也不会真实粘贴或回车。
         </p>
         <ProfileOutputPreview mode={outputMode} />
       </section>

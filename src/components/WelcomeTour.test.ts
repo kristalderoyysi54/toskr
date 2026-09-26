@@ -26,7 +26,11 @@ vi.mock("@/components/ui/button", () => ({
 }));
 
 vi.mock("@/store/notesStore", () => ({
-  useNotesStore: { getState: () => controls },
+  useNotesStore: Object.assign(
+    (select: (state: { settings: { hotkeyModifier: string } }) => unknown) =>
+      select({ settings: { hotkeyModifier: "option" } }),
+    { getState: () => controls }
+  ),
 }));
 
 vi.mock("@/store/uiStore", () => ({
@@ -39,17 +43,19 @@ beforeEach(() => {
 });
 
 describe("新手导览", () => {
-  it("在第一页说明一次完整操作，并直接提供尝试和使用入口", () => {
+  it("一页讲清收集、合并发送、自动替换三件事，并直接提供尝试和使用入口", () => {
     const html = renderToStaticMarkup(createElement(WelcomeTour));
 
-    expect(html).toContain("AI 消息中转站");
-    expect(html).toContain("选中一句话");
-    expect(html).toContain("收成一张卡片");
-    expect(html).toContain("粘贴到 AI 输入框");
-    expect(html).toContain("周五前完成首页设计稿。");
+    expect(html).toContain("把散落各处的文字，一次安全地交给 AI");
+    expect(html).toContain("收成卡片");
+    expect(html).toContain("⌘⏎ 合成一次粘贴");
+    expect(html).toContain("发送前自动替换");
+    // 动画是带名称的 SVG，键帽跟随用户配置的触发键
+    expect(html).toContain('role="img"');
+    expect(html).toContain("⌥ ⌥");
     expect(html).toContain("设置 → 帮助与更新");
     expect([...controls.buttons.keys()]).toEqual([
-      "试着收一条内容",
+      "花 1 分钟试一下",
       "直接开始使用",
     ]);
     expect(html).not.toMatch(/下一页|上一页|OCR|IP|脱敏|演练|事件流/);
@@ -70,7 +76,7 @@ describe("新手导览", () => {
 
   it("尝试收集前切到内容笔记页，让当前教程可见，再启动真实操作", () => {
     renderToStaticMarkup(createElement(WelcomeTour));
-    controls.buttons.get("试着收一条内容")!();
+    controls.buttons.get("花 1 分钟试一下")!();
 
     expect(controls.setContentSubview).toHaveBeenCalledExactlyOnceWith("notes");
     expect(controls.setPage).toHaveBeenCalledExactlyOnceWith("notes");

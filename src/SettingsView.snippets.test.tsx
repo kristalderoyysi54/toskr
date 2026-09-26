@@ -52,6 +52,7 @@ vi.mock("@/components/SimpleSelect", async (importOriginal) => {
 vi.mock("@/components/ui/disclosure", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/ui/disclosure")>();
   return {
+    ...actual,
     Disclosure: (props: ComponentProps<typeof Disclosure>) => (
       <actual.Disclosure
         {...props}
@@ -118,12 +119,12 @@ describe("设置中的常用提示词模板", () => {
     expect(html).toContain("常用甲正文");
     expect(html).toContain("常用乙正文");
     expect(html).toContain("常用丙正文");
-    expect(html).toContain("其他模板（3）");
+    expect(html).toContain(">其他模板</span>");
+    expect(html).toContain(">3 个</span>");
     expect(html).toContain('aria-expanded="false"');
     expect(html).not.toContain("自定义甲正文");
     expect(html).not.toContain("旧审查正文");
-    expect(html).toContain("普通发送保持内容原文");
-    expect(html).toContain("发送到当前目标");
+    expect(html).toContain("选用模板后，模板会和选中内容组合后发送");
     expect(html).toContain("管理提示词组");
     expect(html).not.toContain("新建提示词组");
     expect(html).toContain("新增模板");
@@ -162,7 +163,7 @@ describe("设置中的常用提示词模板", () => {
     const { html, lastSnippets } = render(customized);
     expect(html).toContain("自定义甲正文");
     expect(html).not.toContain("常用乙正文");
-    expect(html).toContain("其他模板（3）");
+    expect(html).toContain(">3 个</span>");
     click("下移", 0);
     expect(lastSnippets().map((snippet) => snippet.id)).toEqual([
       snippets[3]!.id, snippets[1]!.id, snippets[2]!.id,
@@ -175,7 +176,8 @@ describe("设置中的常用提示词模板", () => {
   it("全部移出常用后保留其他模板及设置入口", () => {
     const { html } = render(snippets.map((snippet) => ({ ...snippet, isCommon: false })));
     expect(html).toContain("暂无常用模板");
-    expect(html).toContain("其他模板（6）");
+    expect(html).toContain(">其他模板</span>");
+    expect(html).toContain(">6 个</span>");
   });
 
   it("其他模板移动与删除都命中原id，不使用折叠分区的局部下标", () => {

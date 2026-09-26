@@ -116,7 +116,7 @@ describe("试用预览搜索直达", () => {
     view.editor().onSave();
     view.render();
     expect(view.disclosure("新增模板").open).toBe(false);
-    expect(view.disclosure("其他模板（1）").open).toBe(true);
+    expect(view.disclosure("其他模板").open).toBe(true);
     expect(view.nodes().some((node) => node.type === PromptTemplateEditor)).toBe(false);
     expect(view.patch).toHaveBeenCalledOnce();
     expect(view.patch.mock.calls[0]![0].promptSnippets.at(-1)).toMatchObject({ label: "新增模板名称", text: "新增正文", groupId: "general" });
@@ -128,7 +128,7 @@ describe("试用预览搜索直达", () => {
   it("没有草稿时打开第一个现有模板及其他模板父区，不写入设置", () => {
     const view = mount();
     view.search();
-    expect(view.disclosure("其他模板（1）").open).toBe(true);
+    expect(view.disclosure("其他模板").open).toBe(true);
     expect(view.editor()).toMatchObject({ label: custom.label, text: custom.text, previewOpen: true });
     expect(view.patch).not.toHaveBeenCalled();
   });
@@ -137,12 +137,12 @@ describe("试用预览搜索直达", () => {
     const builtin = { ...WORKFLOW_PROMPT_SNIPPETS[0]!, isCommon: false };
     const view = mount([builtin, { ...custom, isCommon: true }]);
     view.search();
-    expect(view.disclosure("其他模板（1）").open).toBe(true);
+    expect(view.disclosure("其他模板").open).toBe(true);
     view.editor().onTextChange("内置模板的未保存修改");
-    view.disclosure("其他模板（1）").onOpenChange!(false);
+    view.disclosure("其他模板").onOpenChange!(false);
     view.render();
     view.search(2);
-    expect(view.disclosure("其他模板（1）").open).toBe(true);
+    expect(view.disclosure("其他模板").open).toBe(true);
     expect(view.editor()).toMatchObject({ label: builtin.label, text: "内置模板的未保存修改", previewOpen: true });
     expect(view.patch).not.toHaveBeenCalled();
   });
@@ -150,7 +150,7 @@ describe("试用预览搜索直达", () => {
   it("自建常用模板的预览搜索不展开无关的其他模板", () => {
     const view = mount([{ ...custom, isCommon: true }, { ...WORKFLOW_PROMPT_SNIPPETS[0]!, isCommon: false }]);
     view.search();
-    expect(view.disclosure("其他模板（1）").open).toBe(false);
+    expect(view.disclosure("其他模板").open).toBe(false);
     expect(view.editor()).toMatchObject({ label: custom.label, previewOpen: true });
     expect(view.patch).not.toHaveBeenCalled();
   });
@@ -161,11 +161,11 @@ describe("试用预览搜索直达", () => {
     view.editor().onTextChange("尚未保存的新正文：{内容}");
     view.editor().onLabelChange("尚未保存的新名称");
     view.editor().onPreviewOpenChange!(false);
-    view.disclosure("其他模板（1）").onOpenChange!(false);
+    view.disclosure("其他模板").onOpenChange!(false);
     view.render();
     view.search(2);
     expect(view.editor()).toMatchObject({ label: "尚未保存的新名称", text: "尚未保存的新正文：{内容}", previewOpen: true });
-    expect(view.disclosure("其他模板（1）").open).toBe(true);
+    expect(view.disclosure("其他模板").open).toBe(true);
     expect(view.patch).not.toHaveBeenCalled();
   });
 

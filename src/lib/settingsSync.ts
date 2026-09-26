@@ -5,6 +5,7 @@ import { flushPendingWrites, hasLoadedPersistenceAuthority, isPersistencePaused 
 import { emitTo, listen } from "@tauri-apps/api/event";
 
 import { api } from "@/lib/tauri";
+import { nativeVibrancy, nativeWindowTheme } from "@/lib/colorScheme";
 import { emitToDetailWindows } from "@/lib/detailWindows";
 import { isDataOperationLocked } from "@/store/dataOperationStore";
 import { useDataOperationStore } from "@/store/dataOperationStore";
@@ -38,10 +39,13 @@ export const DETAIL_FONT_SIZE_EVENT = "toskr://detail-font-size";
 export const SETTINGS_AI_KEY_CHANGED = "toskr://settings-ai-key-changed";
 /** 使用概览启动或继续受控安全发送演练。 */
 export const SETTINGS_START_SAFE_REHEARSAL = "toskr://start-safe-rehearsal";
+/** 设置 → 使用概览：开始进阶上手课（payload: "merge" | "privacy"）。 */
+export const SETTINGS_START_LESSON = "toskr://start-lesson";
 export interface SafeRehearsalLaunchRequest {
   mode?: "start" | "resume";
 }
 export const SETTINGS_EXPORT = "toskr://do-export";
+export const SETTINGS_AUTO_BACKUP_NOW = "toskr://do-auto-backup-now";
 export const SETTINGS_IMPORT = "toskr://do-import";
 export const SETTINGS_CLEAR_CLIP = "toskr://do-clear-clip";
 export const SETTINGS_DATA_OPERATION = "toskr://do-data-operation";
@@ -243,11 +247,11 @@ export function applySettingsPatch(patch: Partial<Settings>) {
   if ("doubleTapCaptureOnly" in patch) {
     void api.setDoubleTapMode(s.doubleTapCaptureOnly);
   }
-  if ("theme" in patch) {
-    void api.setWindowTheme(s.theme);
+  if ("theme" in patch || "colorScheme" in patch) {
+    void api.setWindowTheme(nativeWindowTheme(s));
   }
-  if ("vibrancy" in patch || "vibrancyMaterial" in patch) {
-    void api.setVibrancy(s.vibrancy, s.vibrancyMaterial);
+  if ("vibrancy" in patch || "vibrancyMaterial" in patch || "colorScheme" in patch) {
+    void api.setVibrancy(nativeVibrancy(s), s.vibrancyMaterial);
   }
   if ("windowOpacity" in patch) {
     void api.setWindowAlpha(s.windowOpacity);
@@ -267,6 +271,7 @@ export function broadcastSettings() {
 /** 主面板安装同步监听（request/patch/export/import）。返回清理函数。 */
 export function installSettingsSyncHost(handlers: {
   onExport: () => void;
+  onAutoBackupNow: () => void;
   onImport: () => void;
   onClearClip: () => void;
   onDataOperation: (plan: import("@/lib/tauri").DataOperationPlan) => void;
@@ -293,6 +298,7 @@ export function installSettingsSyncHost(handlers: {
     }),
     listen<Partial<Settings>>(SETTINGS_PATCH, (e) => applySettingsPatch(e.payload)),
     listen(SETTINGS_EXPORT, () => whileWritable(handlers.onExport)),
+    listen(SETTINGS_AUTO_BACKUP_NOW, () => whileWritable(handlers.onAutoBackupNow)),
     listen(SETTINGS_IMPORT, () => whileWritable(handlers.onImport)),
     listen(SETTINGS_CLEAR_CLIP, () => whileWritable(handlers.onClearClip)),
     listen<import("@/lib/tauri").DataOperationPlan>(SETTINGS_DATA_OPERATION, (event) =>

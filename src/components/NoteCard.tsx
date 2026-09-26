@@ -18,8 +18,10 @@ import {
   EyeOff,
   FileDown,
   FileText,
+  Folder,
   FolderInput,
   GripVertical,
+  Inbox,
   ListChecks,
   ListOrdered,
   ListTodo,
@@ -39,15 +41,14 @@ import {
   Trash2,
   Unlink,
   VenetianMask,
-  Wand2,
 } from "lucide-react";
 
 import { activeAliasOccurrences } from "@/lib/delivery/aliasEntities";
-import { mapNoteTextBlocks } from "@/lib/noteContentBlocks";
 import { imageCaption, imageListLabel } from "@/lib/format";
 import { tip } from "@/lib/tip";
 import { IconButton } from "@/components/ui/icon-button";
 import { MenuFlyoutTrigger } from "@/components/MenuFlyoutTrigger";
+import { noteSectionOptions } from "@/lib/noteSections";
 import { MoveToNotesButton } from "@/components/MoveToNotesButton";
 import {
   collectMenuFlyoutEntries,
@@ -78,11 +79,9 @@ import {
   openNoteDetail,
   restoreNoteAliasesWithUndo,
   sendNotesToChat,
-  undoableTip,
 } from "@/lib/actions";
 import { currentTargetProfileResolution } from "@/lib/currentTargetProfile";
 import { promptSnippetsForGroup } from "@/lib/targetProfiles";
-import { TEXT_OPS, type TextOp } from "@/lib/textops";
 import { highlightCode, langLabel } from "@/lib/code";
 import { linkParts } from "@/lib/link";
 import { useAppIcon } from "@/lib/icons";
@@ -107,9 +106,9 @@ import {
 import { cn } from "@/lib/utils";
 import {
   CLIPBOARD_ID,
+  INBOX_ID,
   groupContextMenuIds,
   NOTE_TAG_MAX_COUNT,
-  noteContentBlocks,
   noteImages,
   normalizeContextMenu,
   orderedCheckedNotes,
@@ -217,6 +216,7 @@ export const NoteCard = memo(function NoteCard({
   // 右键合并的目标集合 = 勾选项 ∪ 当前卡片
   const mergeCount = checked ? checkedCount : checkedCount + 1;
   const sections = useNotesStore((s) => s.sections);
+  const clipDestinations = useMemo(() => noteSectionOptions(sections), [sections]);
   const focused = useUIStore((s) => s.focusedId === note.id);
   const provenanceSourceState = useNotesStore((state) => {
     if (!note.provenance) return "available" as const;
@@ -292,6 +292,8 @@ export const NoteCard = memo(function NoteCard({
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: note.id, disabled: note.done });
+  // 拖向分组时由浮动卡片跟手，原卡留作半透明占位
+  const dragGhosted = useUIStore((s) => s.noteDragId === note.id);
 
   // 键盘导航焦点滚动可见
   useEffect(() => {
@@ -447,22 +449,6 @@ export const NoteCard = memo(function NoteCard({
             <Expand className="size-3.5" /> 预览
             <ContextMenuShortcut>Space</ContextMenuShortcut>
           </ContextMenuItem>
-        );
-      case "textops":
-        if (isImage || isLink) return null;
-        return (
-          <ContextMenuSub key={id}>
-            <ContextMenuSubTrigger>
-              <Wand2 className="mr-2 size-3.5" /> 文本处理
-            </ContextMenuSubTrigger>
-            <ContextMenuSubContent className="w-36">
-              {TEXT_OPS.map((tOp) => (
-                <ContextMenuItem key={tOp.id} onClick={() => applyTextOp(tOp)}>
-                  {tOp.label}
-                </ContextMenuItem>
-              ))}
-            </ContextMenuSubContent>
-          </ContextMenuSub>
         );
       case "send":
         return (
@@ -671,6 +657,18 @@ export const NoteCard = memo(function NoteCard({
           </ContextMenuItem>
         );
       case "move":
+        // 剪贴卡：一级「移入笔记分组」小窗，走收编路径（重置生命周期、可撤销、多选感知）
+        if (isClip) {
+          if (!clipDestinations.length) return null;
+          return (
+            <MenuFlyoutTrigger
+              key={id}
+              label="移入笔记分组"
+              icon={<FolderInput className="size-3.5" />}
+              getSource={clipMoveFlyoutSource}
+            />
+          );
+        }
         if (sections.length <= 1) return null;
         return (
           <ContextMenuSub key={id}>
@@ -733,35 +731,6 @@ export const NoteCard = memo(function NoteCard({
       else tip("warn", `识别失败：${msg}`);
     } finally {
       lease.release();
-    }
-  };
-
-  const applyTextOp = (textOp: TextOp) => {
-    try {
-      const blocks = noteContentBlocks(note);
-      if (blocks.some((block) => block.type === "image")) {
-        // 带图卡逐文字块变换：经 note.text 投影往返（updateNoteText）会把
-        // 多段文字折叠成单块、压平图文交错顺序
-        const next = mapNoteTextBlocks(blocks, (text) => textOp.apply(text));
-        if (next.every((block, index) => block === blocks[index])) {
-          tip("info", "内容无变化");
-          return;
-        }
-        useNotesStore.getState().snapshot(`文本处理：${textOp.label}`);
-        useNotesStore.getState().updateNoteContent(note.id, next);
-        undoableTip(`已处理 · ${textOp.label}`);
-        return;
-      }
-      const next = textOp.apply(note.text);
-      if (next === note.text) {
-        tip("info", "内容无变化");
-        return;
-      }
-      useNotesStore.getState().snapshot(`文本处理：${textOp.label}`);
-      useNotesStore.getState().updateNoteText(note.id, next);
-      undoableTip(`已处理 · ${textOp.label}`);
-    } catch {
-      tip("warn", `${textOp.label}失败：内容不符合格式`);
     }
   };
 
@@ -855,6 +824,22 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
         ? orderedCheckedNotes(st).map((n) => n.id)
         : [note.id];
     moveClipsToNotesWithUndo(ids, sectionId);
+  };
+
+  const clipMoveFlyoutSource = () => {
+    const source = createMenuFlyoutRegistry();
+    source.entries = collectMenuFlyoutEntries(
+      clipDestinations.map((section) => (
+        <ContextMenuItem key={section.id} onClick={() => moveToNotesSelfOrChecked(section.id)}>
+          {section.id === INBOX_ID
+            ? <Inbox className="size-3.5" />
+            : <Folder className="size-3.5" />}
+          {section.name}
+        </ContextMenuItem>
+      )),
+      source.register
+    );
+    return source;
   };
 
   const relationMenuItem = note.provenance ? (
@@ -1074,7 +1059,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
             // 点击卡片也会置 focusedId，那圈线几乎常驻，观感像多了一层边框）
             focused && !checked && "elevation-2",
             flashing && "flash-highlight",
-            isDragging && "z-10 opacity-70 elevation-3"
+            isDragging && (dragGhosted ? "opacity-40" : "z-10 opacity-70 elevation-3")
           )}
         >
           {note.blur && (

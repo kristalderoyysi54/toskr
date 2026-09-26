@@ -81,7 +81,7 @@ import {
   WORKFLOW_PROMPT_SNIPPETS,
   isUnmodifiedLegacyPromptSnippet,
 } from "@/lib/promptTemplates";
-import { tauriStateStorage } from "./persistStorage";
+import { failPersistenceClosed, tauriStateStorage } from "./persistStorage";
 
 export { DEFAULT_PROMPT_SNIPPETS } from "@/lib/promptTemplates";
 export type { PromptGroup, PromptSnippet, TargetProfile } from "@/lib/targetProfiles";
@@ -331,6 +331,12 @@ export const SECTION_COLORS = [
 ];
 
 export type ThemePref = "system" | "light" | "dark";
+/** 配色方案：default = Toskr 毛玻璃；platinum = Mac OS 9 Platinum（仅浅色、整窗不透明）。 */
+export type ColorScheme = "default" | "platinum";
+/** Platinum 高亮色（Mac OS 9 外观控制面板的 Highlight Color）。 */
+export type PlatinumHighlight = "lavender" | "blue" | "teal" | "graphite";
+/** Platinum 滚动条：经典 16px 带箭头 / 沿用细条。 */
+export type PlatinumScrollbar = "classic" | "thin";
 
 /** 到期快捷档配置：相对分钟 / 今天定点 / 明天定点 / 下个周几定点。 */
 export type DuePresetCfg =
@@ -359,6 +365,12 @@ export type VibrancyMaterial =
 export interface Settings {
   /** 主题：跟随系统 / 浅色 / 深色。 */
   theme: ThemePref;
+  /** 配色方案；platinum 下 theme 与 vibrancy 保留原值但不生效。 */
+  colorScheme: ColorScheme;
+  /** Platinum 高亮色（选中底、菜单高亮、主色）。 */
+  platinumHighlight: PlatinumHighlight;
+  /** Platinum 滚动条样式。 */
+  platinumScrollbar: PlatinumScrollbar;
   /** 内容膜层不透明度（0.25–1）：影响面板底色，毛玻璃关闭时最直观。 */
   panelOpacity: number;
   /** 窗口整体不透明度（0.3–1）：连毛玻璃层一起变透，真正能看穿下层窗口。 */
@@ -509,6 +521,13 @@ export interface Settings {
   secretKeys: SecretKey[];
   /** 发送时默认使用的密钥 id；null = 用列表首个。 */
   secretDefaultKeyId: string | null;
+  /** 定期自动备份（加密完整备份，含媒体；每 24 小时一次）。 */
+  autoBackupEnabled: boolean;
+  /** 备份目录；null = 默认 ~/Documents/Toskr 自动备份。 */
+  autoBackupDir: string | null;
+  /** 保留最近几份（更早的自动删除，只删本功能生成的文件）。 */
+  autoBackupKeep: number;
+  autoBackupLastAtMs: number | null;
   /** 秘文卡揭示明文后自动重新遮罩的超时（ms）；0 = 常驻不自动遮罩。 */
   secretRevealTimeoutMs: number;
   /** 秘文文本格式；仅影响发送时呈现，不影响既有密文解密。 */
@@ -529,7 +548,6 @@ export const SECRET_ID = "secret";
 /** 卡片右键菜单可自定义项（顺序即默认顺序；具体卡片类型不适用的项自动隐藏）。 */
 export type ContextMenuItemId =
   | "preview"
-  | "textops"
   | "send"
   | "send-template"
   | "send-preflight"
@@ -550,7 +568,6 @@ export type ContextMenuItemId =
 
 export const CONTEXT_MENU_REGISTRY: { id: ContextMenuItemId; label: string }[] = [
   { id: "preview", label: "预览 / 打开链接" },
-  { id: "textops", label: "文本处理" },
   { id: "send", label: "发送到对话" },
   { id: "send-template", label: "用模板发送" },
   { id: "send-preflight", label: "预检并发送" },
@@ -590,7 +607,6 @@ const CONTEXT_MENU_GROUP_BY_ITEM: Record<ContextMenuItemId, ContextMenuGroupId> 
   copy: "content",
   "copy-list": "content",
   export: "content",
-  textops: "content",
   ocr: "content",
   "ai-title": "content",
   send: "send",
@@ -695,6 +711,9 @@ export const clampDetailFontSize = (size: number): number =>
 
 export const defaultSettings = (): Settings => ({
   theme: "system",
+  colorScheme: "default",
+  platinumHighlight: "lavender",
+  platinumScrollbar: "classic",
   panelOpacity: 0.62,
   windowOpacity: 1,
   vibrancy: true,
@@ -779,6 +798,10 @@ export const defaultSettings = (): Settings => ({
   secretDefaultKeyId: null,
   secretRevealTimeoutMs: 8000,
   secretCipherStyle: "classic",
+  autoBackupEnabled: true,
+  autoBackupDir: null,
+  autoBackupKeep: 7,
+  autoBackupLastAtMs: null,
   messageWatchRules: [],
   onboarding: defaultOnboardingState(),
 });
@@ -1183,6 +1206,8 @@ function validateSettingsShape(value: unknown, version: number): void {
     panelHeight: "number",
     lastDraftSectionId: "string",
     secretDefaultKeyId: "string",
+    autoBackupDir: "string",
+    autoBackupLastAtMs: "number",
   };
   for (const [key, fallback] of Object.entries(defaults)) {
     const current = settings[key];
@@ -1214,6 +1239,9 @@ function validateSettingsShape(value: unknown, version: number): void {
     }
   };
   enumField("theme", ["system", "light", "dark"]);
+  enumField("colorScheme", ["default", "platinum"]);
+  enumField("platinumHighlight", ["lavender", "blue", "teal", "graphite"]);
+  enumField("platinumScrollbar", ["classic", "thin"]);
   enumField("vibrancyMaterial", ["hud", "popover", "sidebar", "under-window", "fullscreen", "liquid"]);
   enumField("cardDensity", ["comfortable", "compact"]);
   // banner 是已移除的旧「单行」模板，仅为读取旧数据保留；迁移后统一写成 condensed。
@@ -1396,12 +1424,14 @@ function validateSettingsShape(value: unknown, version: number): void {
     !isAliasCounterRecordValid(settings.aliasNextNumberByCategory)) {
     throw new Error("settings.aliasNextNumberByCategory 字段无效");
   }
+  // 只校验形状，不校验 id 是否在注册表：菜单项会随版本下线（如 textops），
+  // 未知 id 交给 normalizeContextMenu 剔除。按注册表严格校验曾让整份数据判
+  // 无效、以默认态覆盖落盘（2026-09-25 丢数据事故）。
   const menu = settings.contextMenu;
-  const menuIds = new Set(CONTEXT_MENU_REGISTRY.map((item) => item.id));
   if (menu !== undefined && (!Array.isArray(menu) || !menu.every((item) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) return false;
     const entry = item as Record<string, unknown>;
-    return typeof entry.id === "string" && menuIds.has(entry.id as ContextMenuItemId) && typeof entry.on === "boolean";
+    return typeof entry.id === "string" && typeof entry.on === "boolean";
   }))) {
     throw new Error("settings.contextMenu 字段无效");
   }
@@ -1452,6 +1482,7 @@ function validateSettingsShape(value: unknown, version: number): void {
       "rehearsalDeferredAtMs",
       "permissionsCompletedAtMs",
       "recoveryTutorialCompletedAtMs",
+      "mergeTutorialCompletedAtMs",
       "activationStartedAtMs",
     ];
     if (!optionalTimes.every((key) =>
@@ -3908,7 +3939,21 @@ export const useNotesStore = create<NotesState>()(
       skipHydration: true,
       migrate: migratePersistedState,
       partialize: persistentStateOf,
-      merge: mergePersistedNotesState,
+      // 水合校验失败必须 fail-closed：否则内存停留在默认态，下一次 set 会把
+      // 默认数据写回磁盘覆盖真实数据（2026-09-25 事故）。
+      merge: (persisted, current) => {
+        try {
+          return mergePersistedNotesState(persisted, current);
+        } catch (error) {
+          failPersistenceClosed({
+            code: "corruptData",
+            message: `数据校验失败，已冻结写入以保护磁盘数据：${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          });
+          throw error;
+        }
+      },
     }
   )
 );

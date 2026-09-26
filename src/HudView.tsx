@@ -134,20 +134,21 @@ export default function HudView() {
                   <motion.div
                     variants={balloonVariants}
                     onClick={dismiss}
-                    title="点击关闭"
-                    className="flex max-w-full cursor-default items-center gap-1.5 rounded-full bg-paper py-1 pl-1.5 pr-3 text-paper-foreground elevation-2"
+                    title={`${titleOf(item)}（点击关闭）`}
+                    // 窗口宽度固定：长提示折行（最多 3 行）而不是截断；单行时 2xl 圆角仍是药丸形
+                    className="hud-pill flex max-w-full cursor-default items-center gap-1.5 rounded-2xl bg-paper py-1 pl-1.5 pr-3 text-paper-foreground elevation-2"
                   >
                     <HudIcon kind={item.kind} />
-                    <p className="min-w-0 truncate text-body font-medium leading-tight">{titleOf(item)}</p>
+                    <p className="line-clamp-3 min-w-0 break-words text-body font-medium leading-tight">{titleOf(item)}</p>
                   </motion.div>
                 </div>
               ) : (
               /* token-exception: 气泡与尾巴合成一个异形剪影，须用多层 drop-shadow
                  统一投影 + 0.5px 描边（elevation 系列是 box-shadow，罩不住尾巴） */
-              <div className="relative w-full [filter:drop-shadow(0_1px_1px_rgb(20_20_24/0.10))_drop-shadow(0_4px_10px_rgb(20_20_24/0.16))_drop-shadow(0_0_0.5px_rgb(20_20_24/0.30))] dark:[filter:drop-shadow(0_1px_1px_rgb(0_0_0/0.35))_drop-shadow(0_5px_14px_rgb(0_0_0/0.45))_drop-shadow(0_0_0.5px_rgb(0_0_0/0.60))]">
+              <div className="hud-balloon-shape relative w-full [filter:drop-shadow(0_1px_1px_rgb(20_20_24/0.10))_drop-shadow(0_4px_10px_rgb(20_20_24/0.16))_drop-shadow(0_0_0.5px_rgb(20_20_24/0.30))] dark:[filter:drop-shadow(0_1px_1px_rgb(0_0_0/0.35))_drop-shadow(0_5px_14px_rgb(0_0_0/0.45))_drop-shadow(0_0_0.5px_rgb(0_0_0/0.60))]">
                 <motion.div
                   variants={balloonVariants}
-                  className="flex w-full items-center gap-2 rounded-2xl bg-paper py-1.5 pl-2.5 pr-1.5 text-paper-foreground"
+                  className="hud-balloon flex w-full items-center gap-2 rounded-2xl bg-paper py-1.5 pl-2.5 pr-1.5 text-paper-foreground"
                 >
                   <HudIcon kind={item.kind} />
                   <div

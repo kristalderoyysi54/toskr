@@ -918,3 +918,947 @@ input {
 @media (prefers-reduced-motion: reduce) {
   .locate-highlight { animation: none; opacity: 1; }
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   配色方案 · Platinum（Mac OS 8/9 Appearance Manager）
+   根属性 data-theme="platinum" 由 lib/colorScheme 挂载，且此时不挂 .dark。
+   像素规格取自 hub.v2core.com 的 Platinum chrome；字体沿用应用默认栈。
+   本段不入 @layer：需要压过 Tailwind utilities（圆角、柔影、hover 底色），
+   所以凡是改写 box-shadow 的控件都在本段自带 hover/active/焦点态。
+   ═══════════════════════════════════════════════════════════════ */
+:root[data-theme="platinum"] {
+  color-scheme: light;
+  --pt-black: #262626;
+  --pt-g200: #eeeeee;
+  --pt-g300: #dddddd;
+  --pt-g400: #cccccc;
+  --pt-g500: #bbbbbb;
+  --pt-g600: #999999;
+  --pt-g700: #808080;
+  --pt-g800: #666666;
+  --pt-hl: #333399;
+  --pt-lav: #ccccff;
+  --pt-lav-deep: #9999cc;
+  --pt-lav-hi: #eeeeff;
+  --pt-bevel-button: inset 1px 1px 0 var(--pt-g300), inset -1px -1px 0 #777777,
+    inset 2px 2px 0 #ffffff, inset -2px -2px 0 #aaaaaa;
+  --pt-bevel-pressed: inset 1px 1px 0 #444444, inset -1px -1px 0 #888888,
+    inset 2px 2px 0 #555555, inset -2px -2px 0 #777777;
+  --pt-drop: 2px 2px 0 rgb(38 38 38 / 0.85);
+
+  --background: var(--pt-g300);
+  --foreground: var(--pt-black);
+  --card: #ffffff;
+  --card-foreground: var(--pt-black);
+  --popover: var(--pt-g300);
+  --popover-foreground: var(--pt-black);
+  --primary: var(--pt-hl);
+  --primary-foreground: #ffffff;
+  --secondary: var(--pt-g200);
+  --secondary-foreground: var(--pt-black);
+  --muted: var(--pt-g200);
+  --muted-foreground: #555555;
+  /* accent 只用于菜单/命令面板的高亮项：Platinum 菜单高亮是深蓝紫反白 */
+  --accent: var(--pt-hl);
+  --accent-foreground: #ffffff;
+  --destructive: #cc3333;
+  --border: var(--pt-g600);
+  --input: var(--pt-g700);
+  --ring: var(--pt-lav-deep);
+  --radius: 0.1875rem;
+
+  --success: #339933;
+  --warning: #cc8800;
+  --info: #3366cc;
+  --surface-lightbox: var(--pt-g300);
+  --paper: #ffffe1;
+  --paper-foreground: var(--pt-black);
+  --paper-ghost: #eeeecc;
+  --button-primary: var(--pt-g300);
+  --button-primary-hover: var(--pt-g200);
+  --button-primary-foreground: var(--pt-black);
+  --button-primary-border: var(--pt-black);
+  --button-primary-shadow: var(--pt-bevel-button);
+  --segmented-thumb: var(--pt-g200);
+  --segmented-thumb-shadow: 0 0 0 1px var(--pt-black), inset 1px 1px 0 #ffffff,
+    inset -1px -1px 0 var(--pt-g600);
+  --switch-track-off: var(--pt-g500);
+  --switch-track-off-border: var(--pt-black);
+
+  --elevation-1: inset 1px 1px 0 var(--pt-g600), inset -1px -1px 0 #ffffff;
+  --elevation-2: inset 1px 1px 0 #ffffff, inset -1px -1px 0 var(--pt-g500), var(--pt-drop);
+  --elevation-3: inset 1px 1px 0 #ffffff, inset -1px -1px 0 var(--pt-g500),
+    3px 3px 0 rgb(38 38 38 / 0.6);
+  --surface-inset-bg: var(--pt-g400);
+  --glass-sheen-top: transparent;
+  --glass-sheen-mid: transparent;
+  --glass-rim-light: #ffffff;
+  --glass-rim-shade: var(--pt-g600);
+  --text-shadow-letterpress: none;
+}
+/* 高亮颜色（设置 → 配色方案 → 高亮颜色）：token 引用 --pt-* 在根上解析，改这四个即全局生效 */
+:root[data-theme="platinum"][data-pt-highlight="blue"] {
+  --pt-hl: #3366cc;
+  --pt-lav: #bbd6ff;
+  --pt-lav-deep: #6f98d6;
+  --pt-lav-hi: #e6f0ff;
+}
+:root[data-theme="platinum"][data-pt-highlight="teal"] {
+  --pt-hl: #006666;
+  --pt-lav: #b8e6e0;
+  --pt-lav-deep: #66aaa4;
+  --pt-lav-hi: #e4f6f4;
+}
+:root[data-theme="platinum"][data-pt-highlight="graphite"] {
+  --pt-hl: #555555;
+  --pt-lav: #cccccc;
+  --pt-lav-deep: #999999;
+  --pt-lav-hi: #eeeeee;
+}
+/* 材质变量挂在带 data-material 的元素上，需在同一层级覆盖 */
+:root[data-theme="platinum"] [data-material] {
+  --material-panel: 221 221 221;
+  --material-card-top: 255 255 255;
+  --material-card-middle: 255 255 255;
+  --material-card-bottom: 255 255 255;
+}
+
+/* —— 窗口外壳：不透明灰底 + 黑边 + 内斜面，方角 —— */
+:root[data-theme="platinum"] .panel-surface {
+  border-radius: 0;
+  background: var(--pt-g300);
+  box-shadow: inset 0 0 0 1px var(--pt-black), inset 2px 2px 0 #ffffff,
+    inset -2px -2px 0 var(--pt-g600);
+}
+:root[data-theme="platinum"] .panel-surface > :has(> .glow) {
+  display: none;
+}
+/* 详情窗的「毛玻璃膜层」只在挂载时读一次原生毛玻璃状态，预创建复用的窗口会一直
+   按 60% 半透明绘制；Platinum 已停用毛玻璃，底下没有模糊垫底，必须按主题强制实底 */
+:root[data-theme="platinum"] .detail-window-frame__surface {
+  border-radius: 0;
+  background-color: var(--background);
+  outline: 1px solid var(--pt-black);
+  outline-offset: -1px;
+}
+
+/* 标题栏条纹：默认主题不渲染 */
+.platinum-stripe {
+  display: none;
+}
+:root[data-theme="platinum"] .platinum-stripe {
+  position: relative;
+  display: block;
+  flex: 1 1 0;
+  min-width: 8px;
+  height: 12px;
+  background-color: var(--pt-g300);
+  background-image: linear-gradient(#ffffff, #ffffff 50%, #777777 50%, #777777);
+  background-size: 100% 2px;
+  box-shadow: inset 1px 0 0 #ffffff, inset -1px 0 0 var(--pt-g400);
+}
+:root[data-theme="platinum"] .platinum-stripe--lead {
+  flex: 0 0 12px;
+  min-width: 12px;
+}
+
+/* —— 卡片：白底黑框（outline 不占 box-shadow，hover/选中的 elevation 仍生效） —— */
+:root[data-theme="platinum"] .material-card {
+  border-radius: 0;
+  background: #ffffff;
+  outline: 1px solid var(--pt-black);
+  outline-offset: -1px;
+}
+:root[data-theme="platinum"] .asset-band {
+  border-radius: 0;
+  color: var(--pt-black);
+  background-image: none;
+  background-color: color-mix(in srgb, var(--band-tint) 22%, var(--pt-g300));
+  box-shadow: inset 0 -1px 0 var(--pt-black), inset 1px 1px 0 rgb(255 255 255 / 60%);
+}
+/* 选中：Platinum 高亮色（正片叠底保留文字对比） */
+:root[data-theme="platinum"] .list-selection-glow {
+  border-radius: 0;
+  background: var(--pt-lav);
+  mix-blend-mode: multiply;
+  box-shadow: inset 0 0 0 2px var(--pt-hl);
+}
+
+/* —— 按钮：双层斜面推钮 —— */
+:root[data-theme="platinum"] [data-button]:is([data-variant="default"], [data-variant="outline"], [data-variant="secondary"]) {
+  border: 1px solid var(--pt-black);
+  border-radius: 3px;
+  background: var(--pt-g300);
+  color: var(--pt-black);
+  font-weight: 600;
+  box-shadow: var(--pt-bevel-button);
+}
+:root[data-theme="platinum"] [data-button]:is([data-variant="default"], [data-variant="outline"], [data-variant="secondary"]):hover:not(:disabled) {
+  background: var(--pt-g200);
+}
+:root[data-theme="platinum"] [data-button]:is([data-variant="default"], [data-variant="outline"], [data-variant="secondary"]):is(:active, [aria-expanded="true"]):not(:disabled) {
+  background: var(--pt-g800);
+  color: #ffffff;
+  box-shadow: var(--pt-bevel-pressed);
+}
+:root[data-theme="platinum"] :is([data-button], [data-icon-button]):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+/* —— 图标钮：静息无框，悬停浮出斜面钮，按下/开启态反相 —— */
+:root[data-theme="platinum"] [data-icon-button] {
+  border-radius: 0;
+}
+:root[data-theme="platinum"] [data-icon-button]:hover:not(:disabled) {
+  background: var(--pt-g200);
+  box-shadow: inset 0 0 0 1px var(--pt-g700), inset 2px 2px 0 #ffffff,
+    inset -2px -2px 0 var(--pt-g500);
+}
+:root[data-theme="platinum"] [data-icon-button]:is(:active, [aria-pressed="true"]):not(:disabled) {
+  background: var(--pt-g700);
+  color: #ffffff;
+  box-shadow: inset 0 0 0 1px var(--pt-black), inset 2px 2px 0 #555555;
+}
+
+/* —— 浮层：灰底黑边 + 硬投影 —— */
+:root[data-theme="platinum"] :is(.floating-surface, [data-slot="popover-content"], [data-slot="context-menu-content"], [data-slot="context-menu-sub-content"]) {
+  border: 1px solid var(--pt-black);
+  border-radius: 0;
+  background: var(--pt-g300);
+  box-shadow: inset 1px 1px 0 #ffffff, inset -1px -1px 0 var(--pt-g500), var(--pt-drop);
+}
+:root[data-theme="platinum"] :is([data-simple-menu-item], [data-slot^="context-menu-"][role^="menuitem"]) {
+  border-radius: 0;
+}
+:root[data-theme="platinum"] [data-simple-menu-item]:is(:hover, :focus-visible):not(:disabled),
+:root[data-theme="platinum"] [data-slot^="context-menu-"][data-highlighted] {
+  background: var(--pt-hl);
+  color: #ffffff;
+}
+:root[data-theme="platinum"] [data-simple-menu-item]:is(:hover, :focus-visible):not(:disabled) * {
+  color: inherit;
+}
+/* 蚀刻分隔线 */
+:root[data-theme="platinum"] :is(.floating-surface [role="separator"], [data-slot="context-menu-separator"]) {
+  height: 0;
+  background: transparent;
+  border-top: 1px solid var(--pt-g600);
+  border-bottom: 1px solid #ffffff;
+}
+/* 提示：Help Tag 黄底，无箭头 */
+:root[data-theme="platinum"] [data-slot="tooltip-content"] {
+  border: 1px solid var(--pt-black);
+  border-radius: 0;
+  background: var(--paper);
+  color: var(--pt-black);
+  box-shadow: 1px 1px 0 rgb(38 38 38 / 50%);
+}
+/* Radix PopperArrow 给箭头写了行内 display:block，display:none 压不住，改用 visibility */
+:root[data-theme="platinum"] [data-slot="tooltip-content"] svg.rotate-45 {
+  visibility: hidden;
+}
+
+/* —— 文本框：白底黑框凹陷 —— */
+:root[data-theme="platinum"] .surface-inset:has(> input:not([type="radio"], [type="checkbox"]), > textarea),
+:root[data-theme="platinum"] :is(input:not([type="radio"], [type="checkbox"], [type="range"]), textarea)[class*="border"] {
+  border-color: var(--pt-black);
+  border-radius: 0;
+  background: #ffffff;
+  box-shadow: -1px -1px 0 var(--pt-g600), 1px 1px 0 #ffffff;
+}
+
+/* —— 开关：Platinum 没有拨动开关，渲染为复选框（勾号溢出框外，同 Mac OS 9） —— */
+:root[data-theme="platinum"] [data-slot="switch"] {
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--pt-black);
+  border-radius: 0;
+  background: var(--pt-g200);
+  box-shadow: inset 1px 1px 0 #ffffff, inset -1px -1px 0 var(--pt-g500);
+}
+:root[data-theme="platinum"] [data-slot="switch"]:active:not([data-disabled]) {
+  background: var(--pt-g600);
+}
+:root[data-theme="platinum"] [data-slot="switch"][data-state="checked"]::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: -5px;
+  width: 14px;
+  height: 13px;
+  pointer-events: none;
+  background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="13" shape-rendering="crispEdges"><path fill="%23262626" d="M11 1h2v2h-1v1h-1v1h-1v1H9v1H8v1H7v1H6v2H4V9H3V8H2V6h2v1h1v1h1V7h1V6h1V5h1V4h1V3h1V2z"/></svg>') no-repeat;
+}
+:root[data-theme="platinum"] [data-slot="switch-thumb"] {
+  display: none;
+}
+
+/* ═══ Platinum 窗口布局（样张 tasks/platinum-theme-preview.html 的结构还原） ═══ */
+
+/* 标题栏：关闭框 · 条纹 · 标题 · 条纹 · 缩放框 · 收起框 */
+:root[data-theme="platinum"] .platinum-titlebar {
+  gap: 4px;
+  padding: 5px 6px 3px;
+}
+:root[data-theme="platinum"] .platinum-titlebar h1 {
+  padding: 0 3px;
+  font-size: 12px;
+  line-height: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+:root[data-theme="platinum"] .platinum-titlebar .platinum-stripe--lead {
+  flex: 1 1 0;
+  min-width: 8px;
+}
+:root[data-theme="platinum"] .platinum-tbox {
+  position: relative;
+  display: block;
+  flex: none;
+  width: 13px;
+  height: 13px;
+  padding: 0;
+  border: none;
+  background: linear-gradient(135deg, #9a9a9a 0%, #f1f1f1 100%) 50% / 9px 9px no-repeat;
+  box-shadow: inset 1px 1px 0 var(--pt-g700), inset -1px -1px 0 #ffffff,
+    inset 0 0 0 2px var(--pt-black), inset 3px 3px 0 #ffffff, inset -3px -3px 0 var(--pt-g700);
+}
+:root[data-theme="platinum"] .platinum-tbox:active::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  z-index: 1;
+  background-image: linear-gradient(135deg, #353535cc 0%, #9c9c9ccc 100%);
+}
+:root[data-theme="platinum"] .platinum-tbox--zoom::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  z-index: 2;
+  width: 6px;
+  height: 6px;
+  box-shadow: inset 0 0 0 1px var(--pt-black);
+}
+:root[data-theme="platinum"] .platinum-tbox--shade::before {
+  content: "";
+  position: absolute;
+  top: 5px;
+  right: 2px;
+  left: 2px;
+  z-index: 2;
+  height: 3px;
+  border-top: 1px solid var(--pt-black);
+  border-bottom: 1px solid var(--pt-black);
+}
+:root[data-theme="platinum"] .platinum-tbox:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+/* 详情窗 / 图片预览标题栏：常驻灰条 + 条纹夹居中标题，底边黑线 */
+:root[data-theme="platinum"] .platinum-detail-titlebar {
+  gap: 4px;
+  height: auto;
+  padding: 4px 6px 3px;
+  border-bottom: 1px solid var(--pt-black);
+  background: var(--pt-g300);
+  box-shadow: inset 1px 1px 0 #ffffff;
+}
+:root[data-theme="platinum"] .platinum-detail-titlebar .platinum-stripe--lead {
+  flex: 1 1 0;
+  min-width: 8px;
+}
+:root[data-theme="platinum"] .platinum-detail-titlebar > :is(p, span:not(.platinum-stripe)) {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 0 3px;
+  overflow: hidden;
+  color: var(--pt-black);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:root[data-theme="platinum"] .platinum-detail-titlebar > :is(p, span:not(.platinum-stripe)) * {
+  color: inherit;
+}
+:root[data-theme="platinum"] .platinum-detail-titlebar > div.ml-auto {
+  margin-left: 0;
+}
+:root[data-theme="platinum"] .platinum-detail-titlebar [data-icon-button] {
+  width: 20px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--pt-g800);
+  border-radius: 0;
+  background: var(--pt-g300);
+  color: var(--pt-black);
+  box-shadow: inset 1px 1px 0 #ffffff, inset -1px -1px 0 var(--pt-g600);
+}
+:root[data-theme="platinum"] .platinum-detail-titlebar [data-icon-button]:hover:not(:disabled) {
+  background: var(--pt-g200);
+  box-shadow: inset 1px 1px 0 #ffffff, inset -1px -1px 0 var(--pt-g600);
+}
+:root[data-theme="platinum"] .platinum-detail-titlebar [data-icon-button]:is(:active, [aria-pressed="true"]):not(:disabled) {
+  border-color: var(--pt-black);
+  background: var(--pt-g700);
+  color: #ffffff;
+  box-shadow: inset 1px 1px 0 #555555, inset -1px -1px 0 var(--pt-g600);
+}
+:root[data-theme="platinum"] .platinum-tbox:disabled {
+  opacity: 0.45;
+}
+
+/* 选项卡：压住下方面板框上缘；右端斜面图标钮 */
+/* 不设 z-index：否则自成层叠上下文，右端工具钮弹出的菜单会被面板框里的列表层盖住 */
+:root[data-theme="platinum"] .platinum-tabrow {
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 6px;
+  margin: 2px 6px -1px;
+  padding-left: 8px;
+}
+:root[data-theme="platinum"] .platinum-tabs,
+:root[data-theme="platinum"] [data-settings-child-nav] {
+  display: flex;
+  min-width: 0;
+  align-items: flex-end;
+}
+:root[data-theme="platinum"] .platinum-tabs [role="tab"],
+:root[data-theme="platinum"] [data-settings-child-nav] > [data-button] {
+  position: relative;
+  height: 19px;
+  margin-right: -1px;
+  padding: 1px 11px 0;
+  gap: 4px;
+  border: 1px solid var(--pt-black);
+  border-radius: 5px 5px 0 0;
+  background: var(--pt-g400);
+  color: var(--pt-black);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  box-shadow: inset 1px 1px 0 var(--pt-g200);
+}
+:root[data-theme="platinum"] .platinum-tabs [role="tab"]:hover,
+:root[data-theme="platinum"] [data-settings-child-nav] > [data-button]:hover {
+  background: var(--pt-g500);
+}
+:root[data-theme="platinum"] .platinum-tabs [role="tab"][aria-selected="true"],
+:root[data-theme="platinum"] [data-settings-child-nav] > [data-button][aria-current="page"] {
+  z-index: 2;
+  height: 22px;
+  padding-top: 3px;
+  border-bottom-color: var(--pt-g300);
+  background: var(--pt-g300);
+  box-shadow: inset 1px 1px 0 #ffffff, inset -1px 0 0 var(--pt-g600);
+}
+:root[data-theme="platinum"] .platinum-tabs [role="tab"] > span[aria-hidden] {
+  display: none;
+}
+:root[data-theme="platinum"] .platinum-tabrow > :last-child {
+  gap: 3px;
+  padding-bottom: 4px;
+}
+:root[data-theme="platinum"] .platinum-tabrow [data-icon-button] {
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--pt-g800);
+  border-radius: 0;
+  background: var(--pt-g300);
+  color: var(--pt-black);
+  box-shadow: inset 1px 1px 0 #ffffff, inset -1px -1px 0 var(--pt-g600);
+}
+:root[data-theme="platinum"] .platinum-tabrow [data-icon-button]:hover:not(:disabled) {
+  background: var(--pt-g200);
+  box-shadow: inset 1px 1px 0 #ffffff, inset -1px -1px 0 var(--pt-g600);
+}
+:root[data-theme="platinum"] .platinum-tabrow [data-icon-button]:is(:active, [aria-pressed="true"], [aria-expanded="true"]):not(:disabled) {
+  border-color: var(--pt-black);
+  background: var(--pt-g700);
+  color: #ffffff;
+  box-shadow: inset 1px 1px 0 #555555, inset -1px -1px 0 var(--pt-g600);
+}
+
+/* 选项卡面板框：目标条（带子）、搜索框、白底列表框 */
+:root[data-theme="platinum"] .platinum-pane {
+  display: flex;
+  flex: 1 1 0;
+  min-height: 0;
+  flex-direction: column;
+  margin: 0 6px;
+  padding-top: 7px;
+  border: 1px solid var(--pt-black);
+  background: var(--pt-g300);
+  box-shadow: inset 1px 0 0 #ffffff, inset -1px -1px 0 var(--pt-g600);
+}
+:root[data-theme="platinum"] .platinum-pane [data-target-lens] {
+  margin: 0 7px 6px;
+  padding: 0 6px;
+  border: 1px solid var(--pt-g700);
+  background: var(--pt-g200);
+  box-shadow: inset 1px 1px 0 #ffffff, inset -1px -1px 0 var(--pt-g500);
+}
+:root[data-theme="platinum"] .platinum-pane > .surface-inset {
+  margin-right: 7px;
+  margin-left: 7px;
+}
+:root[data-theme="platinum"] .platinum-listframe {
+  margin: 0 7px 7px;
+  border: 1px solid var(--pt-black);
+  background: #ffffff;
+  box-shadow: -1px -1px 0 var(--pt-g600), 1px 1px 0 #ffffff;
+}
+:root[data-theme="platinum"] .platinum-listframe .material-card {
+  outline-color: var(--pt-g600);
+}
+
+/* 底部：凹陷输入框 · 发送条（默认按钮外圈）· 状态栏 */
+:root[data-theme="platinum"] [data-slot="pill-input"] {
+  border-color: var(--pt-black);
+  border-radius: 0;
+  background: #ffffff;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: -1px -1px 0 var(--pt-g600), 1px 1px 0 #ffffff;
+}
+:root[data-theme="platinum"] [data-slot="pill-input"]:focus-within {
+  box-shadow: -1px -1px 0 var(--pt-g600), 1px 1px 0 #ffffff, 0 0 0 2px var(--ring);
+}
+:root[data-theme="platinum"] .panel-surface [data-note-draft-input] {
+  padding: 7px 12px 8px;
+}
+:root[data-theme="platinum"] .panel-surface [data-selection-bar="docked"] {
+  margin: 0 2px;
+  padding: 8px 10px 9px;
+  border: 0;
+  border-top: 1px solid var(--pt-black);
+  border-radius: 0;
+  background: var(--pt-g300);
+  box-shadow: inset 1px 1px 0 rgb(255 255 255 / 70%), inset -1px -1px 0 #aaaaaa;
+}
+:root[data-theme="platinum"] [data-selection-bar] [data-button][data-default-action] {
+  border-radius: 3px;
+  outline: 2px solid var(--pt-black);
+  outline-offset: 1px;
+}
+:root[data-theme="platinum"] [data-selection-bar] [data-button][data-default-action]:disabled {
+  outline-color: var(--pt-g600);
+}
+:root[data-theme="platinum"] [data-selection-bar] [data-button][data-default-action]:focus-visible {
+  outline-color: var(--ring);
+}
+:root[data-theme="platinum"] [data-selection-bar] [data-button][data-popup-trigger] {
+  width: 21px;
+  min-width: 21px;
+  margin-left: 8px;
+  padding: 0;
+  border: 1px solid var(--pt-black);
+  border-radius: 3px;
+  background: var(--pt-g300) url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="7" height="10" shape-rendering="crispEdges"><path fill="black" d="M3 0h1v1H3zM2 1h3v1H2zM1 2h5v1H1zM0 3h7v1H0zM0 6h7v1H0zM1 7h5v1H1zM2 8h3v1H2zM3 9h1v1H3z"/></svg>') center no-repeat;
+}
+:root[data-theme="platinum"] [data-selection-bar] [data-popup-trigger] svg {
+  display: none;
+}
+:root[data-theme="platinum"] .platinum-statusbar {
+  flex-shrink: 0;
+  margin: 0 2px 2px;
+  padding: 1px 0;
+  border-top: 1px solid var(--pt-black);
+  background: var(--pt-g300);
+  box-shadow: inset 1px 1px 0 rgb(255 255 255 / 60%), inset -1px -1px 0 #aaaaaa;
+  color: #333333;
+}
+
+/* 设置窗：选项卡面板 + 分组框 + 侧栏高亮 */
+:root[data-theme="platinum"] [data-settings-child-nav] {
+  position: relative;
+  z-index: 1;
+  flex-wrap: nowrap;
+  gap: 0;
+  margin-bottom: -1px;
+  padding-left: 8px;
+}
+/* 默认方案的内容区限宽居中；Platinum 选项卡面板保持铺满，与经典控制面板一致 */
+:root[data-theme="platinum"] [data-settings-content] {
+  max-width: none;
+}
+:root[data-theme="platinum"] [data-settings-pane] {
+  display: block;
+  padding: 14px 14px 2px;
+  border: 1px solid var(--pt-black);
+  background: var(--pt-g300);
+  box-shadow: inset 1px 1px 0 #ffffff, inset -1px -1px 0 var(--pt-g600);
+}
+:root[data-theme="platinum"] [data-settings-group] {
+  position: relative;
+  margin-top: 14px;
+  border-radius: 0;
+}
+:root[data-theme="platinum"] [data-settings-group-title] {
+  position: absolute;
+  top: -8px;
+  left: 8px;
+  z-index: 1;
+  margin: 0;
+  padding: 0 4px;
+  background: var(--pt-g300);
+  color: var(--pt-black);
+  font-weight: 700;
+  line-height: 16px;
+}
+:root[data-theme="platinum"] [data-settings-group-box] {
+  padding-top: 6px;
+  border: 1px solid var(--pt-g600);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: inset 1px 1px 0 #ffffff, 1px 1px 0 #ffffff;
+}
+:root[data-theme="platinum"] [data-settings-group-box] > * {
+  border-color: transparent;
+}
+/* 设置窗整窗：条纹标题栏横跨顶部 + 黑框内斜面；侧栏灰底，分类列表进白底列表框 */
+:root[data-theme="platinum"] [data-settings-root] {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+:root[data-theme="platinum"] [data-settings-root]::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px var(--pt-black), inset 2px 2px 0 #ffffff,
+    inset -2px -2px 0 var(--pt-g600);
+}
+:root[data-theme="platinum"] [data-settings-root] > aside,
+:root[data-theme="platinum"] [data-settings-root] > main {
+  min-height: 0;
+}
+:root[data-theme="platinum"] .platinum-window-titlebar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  background: var(--pt-g300);
+  user-select: none;
+}
+:root[data-theme="platinum"] .platinum-window-titlebar__title {
+  padding: 0 3px;
+  font-size: 12px;
+  line-height: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+:root[data-theme="platinum"] [data-settings-root] > aside {
+  padding: 10px 0 12px 12px;
+  border-right: 0;
+  background: var(--pt-g300);
+}
+:root[data-theme="platinum"] [data-settings-root] > aside > div:last-child {
+  padding: 2px;
+  border: 1px solid var(--pt-black);
+  background: #ffffff;
+  box-shadow: -1px -1px 0 var(--pt-g600), 1px 1px 0 #ffffff;
+}
+:root[data-theme="platinum"] [data-settings-nav] {
+  gap: 0;
+}
+:root[data-theme="platinum"] :is([data-settings-nav] > button, [data-settings-search-result]) {
+  border-radius: 0;
+}
+:root[data-theme="platinum"] [data-settings-nav] > button[aria-current="page"] {
+  background: var(--pt-hl);
+  color: #ffffff;
+}
+
+/* 单选钮 · 弹出菜单（分段控件在 Platinum 下的两种形态） */
+:root[data-theme="platinum"] .platinum-radios {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+:root[data-theme="platinum"] .platinum-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+/* 滑杆：凹槽轨道 + 薰衣草尖头滑块 */
+:root[data-theme="platinum"] input[type="range"] {
+  height: 16px;
+  margin: 0;
+  appearance: none;
+  background: transparent;
+}
+:root[data-theme="platinum"] input[type="range"]::-webkit-slider-runnable-track {
+  height: 5px;
+  border: 1px solid var(--pt-black);
+  background: var(--pt-g500);
+  box-shadow: inset 1px 1px 0 var(--pt-g700), 1px 1px 0 #ffffff;
+}
+:root[data-theme="platinum"] input[type="range"]::-webkit-slider-thumb {
+  width: 11px;
+  height: 15px;
+  margin-top: -6px;
+  appearance: none;
+  border: 1px solid var(--pt-black);
+  background: linear-gradient(90deg, var(--pt-lav-hi), var(--pt-lav) 50%, var(--pt-lav-deep));
+  clip-path: polygon(0 0, 100% 0, 100% 66%, 50% 100%, 0 66%);
+}
+:root[data-theme="platinum"] input[type="range"]:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+:root[data-theme="platinum"] .platinum-radio input {
+  position: relative;
+  flex: none;
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  appearance: none;
+  border: 1px solid var(--pt-black);
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #ffffff 0 25%, var(--pt-g300) 70%);
+}
+:root[data-theme="platinum"] .platinum-radio input:active {
+  background: var(--pt-g600);
+}
+:root[data-theme="platinum"] .platinum-radio input:checked::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  background: var(--pt-black);
+}
+:root[data-theme="platinum"] .platinum-radio input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+:root[data-theme="platinum"] .platinum-popup {
+  position: relative;
+  display: inline-block;
+  height: 19px;
+  overflow: hidden;
+  border: 1px solid #000000;
+  border-radius: 3px;
+  background: var(--pt-g300);
+  vertical-align: middle;
+}
+:root[data-theme="platinum"] .platinum-popup::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: calc(100% - 21px);
+  pointer-events: none;
+  border-top: 1px solid #ffffff;
+  border-left: 1px solid #ffffff;
+  border-bottom: 1px solid #aaaaaa;
+}
+:root[data-theme="platinum"] .platinum-popup__well {
+  position: absolute;
+  top: 1px;
+  right: 0;
+  bottom: 0;
+  width: 21px;
+  pointer-events: none;
+  border-left: 1px solid #aaaaaa;
+}
+:root[data-theme="platinum"] .platinum-popup__well i {
+  position: absolute;
+  inset: 0 0 0 1px;
+  border-right: 1px solid #777777;
+  border-bottom: 1px solid #777777;
+}
+:root[data-theme="platinum"] .platinum-popup__well b {
+  position: absolute;
+  inset: 0;
+  border-top: 1px solid #ffffff;
+  border-left: 1px solid #ffffff;
+  border-right: 1px solid #aaaaaa;
+  border-bottom: 1px solid #aaaaaa;
+  background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="7" height="10" shape-rendering="crispEdges"><path fill="black" d="M3 0h1v1H3zM2 1h3v1H2zM1 2h5v1H1zM0 3h7v1H0zM0 6h7v1H0zM1 7h5v1H1zM2 8h3v1H2zM3 9h1v1H3z"/></svg>') 4px 1px no-repeat;
+}
+:root[data-theme="platinum"] .platinum-popup select {
+  position: relative;
+  display: block;
+  min-width: 96px;
+  height: 17px;
+  margin: 0;
+  padding: 0 29px 0 7px;
+  appearance: none;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #000000;
+  font: inherit;
+  font-size: 12px;
+  line-height: 17px;
+  outline: none;
+}
+:root[data-theme="platinum"] .platinum-popup:focus-within {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+/* —— HUD：Balloon Help 气泡，1px 黑描边沿气泡+尾巴剪影 —— */
+:root[data-theme="platinum"] .hud-balloon-shape {
+  filter: drop-shadow(1px 0 0 var(--pt-black)) drop-shadow(-1px 0 0 var(--pt-black))
+    drop-shadow(0 1px 0 var(--pt-black)) drop-shadow(0 -1px 0 var(--pt-black))
+    drop-shadow(2px 2px 0 rgb(0 0 0 / 45%));
+}
+:root[data-theme="platinum"] .hud-pill {
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px var(--pt-black), 2px 2px 0 rgb(0 0 0 / 45%);
+}
+
+/* —— 滚动条（设置 → 配色方案 → 滚动条）。用户 2026-09-24 指定 Platinum 默认经典款，
+      是「全局细条」约定的唯一例外；选「细条」时回到 5px 细条。
+      根限定必须写 html 而非 :root：:root 与 ::-webkit-scrollbar-* 的 :vertical / :start
+      等伪类组合时 WebKit/Chromium 不匹配（实测滑块渐变与箭头按钮全部失效） —— */
+html[data-theme="platinum"][data-pt-scrollbar="thin"] *::-webkit-scrollbar-thumb,
+html[data-theme="platinum"][data-pt-scrollbar="thin"] [data-slot="scroll-area-thumb"] {
+  border-radius: 1px;
+  background: var(--pt-g700);
+}
+html[data-theme="platinum"][data-pt-scrollbar="classic"] {
+  --pt-grip-v: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" shape-rendering="crispEdges"><path fill="%23fff" d="M0 0h7v1H0zM0 2h7v1H0zM0 4h7v1H0zM0 6h7v1H0z"/><path fill="%23555" d="M1 1h7v1H1zM1 3h7v1H1zM1 5h7v1H1zM1 7h7v1H1z"/></svg>');
+  --pt-grip-h: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" shape-rendering="crispEdges"><path fill="%23fff" d="M0 0h1v7H0zM2 0h1v7H2zM4 0h1v7H4zM6 0h1v7H6z"/><path fill="%23555" d="M1 1h1v7H1zM3 1h1v7H3zM5 1h1v7H5zM7 1h1v7H7z"/></svg>');
+  --pt-arrow-up: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="7" height="4" shape-rendering="crispEdges"><path fill="black" d="M3 0h1v1H3zM2 1h3v1H2zM1 2h5v1H1zM0 3h7v1H0z"/></svg>');
+  --pt-arrow-down: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="7" height="4" shape-rendering="crispEdges"><path fill="black" d="M0 0h7v1H0zM1 1h5v1H1zM2 2h3v1H2zM3 3h1v1H3z"/></svg>');
+  --pt-arrow-left: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="4" height="7" shape-rendering="crispEdges"><path fill="black" d="M0 3h1v1H0zM1 2h1v3H1zM2 1h1v5H2zM3 0h1v7H3z"/></svg>');
+  --pt-arrow-right: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="4" height="7" shape-rendering="crispEdges"><path fill="black" d="M0 0h1v7H0zM1 1h1v5H1zM2 2h1v3H2zM3 3h1v1H3z"/></svg>');
+  --pt-scroll-track: inset 2px 1px 0 var(--pt-g700), inset -1px -1px 0 var(--pt-g300);
+  --pt-scroll-bevel: inset 1px 1px 0 #ffffff, inset -1px -1px 0 var(--pt-g600);
+}
+/* 原生滚动条：设置窗、菜单、详情窗等所有 overflow 区域 */
+html[data-theme="platinum"][data-pt-scrollbar="classic"] *::-webkit-scrollbar {
+  width: 16px;
+  height: 16px;
+}
+html[data-theme="platinum"][data-pt-scrollbar="classic"] *::-webkit-scrollbar-track {
+  background: var(--pt-g500);
+  box-shadow: var(--pt-scroll-track);
+}
+html[data-theme="platinum"][data-pt-scrollbar="classic"] *::-webkit-scrollbar-track:vertical {
+  border-left: 1px solid var(--pt-black);
+}
+html[data-theme="platinum"][data-pt-scrollbar="classic"] *::-webkit-scrollbar-track:horizontal {
+  border-top: 1px solid var(--pt-black);
+}
+html[data-theme="platinum"][data-pt-scrollbar="classic"] *::-webkit-scrollbar-thumb {
+  border: 1px solid var(--pt-black);
+  border-radius: 0;
+  box-shadow: inset 1px 1px 0 rgb(255 255 255 / 70%), inset -1px -1px 0 rgb(0 0 0 / 25%);
+}
+html[data-theme="platinum"][data-pt-scrollbar="classic"] *::-webkit-scrollbar-thumb:vertical {
+  border-right: 0;
+  background: var(--pt-grip-v) center no-repeat,
+    linear-gradient(90deg, var(--pt-lav-hi), var(--pt-lav) 45%, var(--pt-lav-deep));
+}
+html[data-theme="platinum"][data-pt-scrollbar="classic"] *::-webkit-scrollbar-thumb:horizontal {
+  border-bottom: 0;
+  background: var(--pt-grip-h) center no-repeat,
+    linear-gradient(180deg, var(--pt-lav-hi), var(--pt-lav) 45%, var(--pt-lav-deep));
+}
+html[data-theme="platinum"][data-pt-scrollbar="classic"] *::-webkit-scrollbar-button:vertical:start:increment,
+html[data-theme="platinum"][data-pt-scrollbar="classic"] *::-webkit-scrollbar-button:vertical:end:decrement,
+html[data-theme="platinum"][data-pt-scrollbar="classic"] *::-webkit-scrollbar-button:horizontal:start:increment,
+html[data-theme="platinum"][data-pt-scrollbar="classic"] *::-webkit-scrollbar-button:horizontal:end:decrement {
+  display: none;
+}
+html[data-theme="platinum"][data-pt-scrollbar="classic"] *::-webkit-scrollbar-button:vertical:start:decrement,
+html[data-theme="platinum"][data-pt-scrollbar="classic"] *::-webkit-scrollbar-button:vertical:end:increment,
+html[data-theme="platinum"][data-pt-scrollbar="classic"] *::-webkit-scrollbar-button:horizontal:start:decrement,
+html[data-theme="platinum"][data-pt-scrollbar="classic"] *::-webkit-scrollbar-button:horizontal:end:increment {
+  display: block;
+  width: 16px;
+  height: 16px;
+  background-color: var(--pt-g300);
+  background-position: center;
+  background-repeat: no-repeat;
+  box-shadow: var(--pt-scroll-bevel);
+}
+html[data-theme="platinum"][data-pt-scrollbar="classic"] *::-webkit-scrollbar-button:vertical:start:decrement {
+  border-left: 1px solid var(--pt-black);
+  border-bottom: 1px solid var(--pt-black);
+  background-image: var(--pt-arrow-up);
+}
+html[data-theme="platinum"][data-pt-scrollbar="classic"] *::-webkit-scrollbar-button:vertical:end:increment {
+  border-left: 1px solid var(--pt-black);
+  border-top: 1px solid var(--pt-black);
+  background-image: var(--pt-arrow-down);
+}
+html[data-theme="platinum"][data-pt-scrollbar="classic"] *::-webkit-scrollbar-button:horizontal:start:decrement {
+  border-top: 1px solid var(--pt-black);
+  border-right: 1px solid var(--pt-black);
+  background-image: var(--pt-arrow-left);
+}
+html[data-theme="platinum"][data-pt-scrollbar="classic"] *::-webkit-scrollbar-button:horizontal:end:increment {
+  border-top: 1px solid var(--pt-black);
+  border-left: 1px solid var(--pt-black);
+  background-image: var(--pt-arrow-right);
+}
+html[data-theme="platinum"][data-pt-scrollbar="classic"] *::-webkit-scrollbar-button:active {
+  background-color: var(--pt-g700);
+  box-shadow: inset 1px 1px 0 #555555;
+}
+html[data-theme="platinum"][data-pt-scrollbar="classic"] *::-webkit-scrollbar-corner {
+  background: var(--pt-g300);
+}
+/* Radix ScrollArea（卡片列表）：同款外观；上下 padding 留给箭头框，Radix 会按 padding 计算滑块行程 */
+html[data-theme="platinum"][data-pt-scrollbar="classic"] [data-slot="scroll-area"]:has(> [data-slot="scroll-area-scrollbar"][data-orientation="vertical"]) {
+  padding-right: 16px;
+}
+html[data-theme="platinum"][data-pt-scrollbar="classic"] [data-slot="scroll-area-scrollbar"][data-orientation="vertical"] {
+  width: 16px;
+  padding: 16px 0;
+  border-left: 1px solid var(--pt-black);
+  background: var(--pt-g500);
+  box-shadow: var(--pt-scroll-track);
+}
+html[data-theme="platinum"][data-pt-scrollbar="classic"] [data-slot="scroll-area-scrollbar"][data-orientation="vertical"]::before,
+html[data-theme="platinum"][data-pt-scrollbar="classic"] [data-slot="scroll-area-scrollbar"][data-orientation="vertical"]::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  left: 0;
+  height: 16px;
+  background-color: var(--pt-g300);
+  background-position: center;
+  background-repeat: no-repeat;
+  box-shadow: var(--pt-scroll-bevel);
+}
+html[data-theme="platinum"][data-pt-scrollbar="classic"] [data-slot="scroll-area-scrollbar"][data-orientation="vertical"]::before {
+  top: 0;
+  border-bottom: 1px solid var(--pt-black);
+  background-image: var(--pt-arrow-up);
+}
+html[data-theme="platinum"][data-pt-scrollbar="classic"] [data-slot="scroll-area-scrollbar"][data-orientation="vertical"]::after {
+  bottom: 0;
+  border-top: 1px solid var(--pt-black);
+  background-image: var(--pt-arrow-down);
+}
+html[data-theme="platinum"][data-pt-scrollbar="classic"] [data-slot="scroll-area-scrollbar"][data-orientation="vertical"] [data-slot="scroll-area-thumb"] {
+  border: 1px solid var(--pt-black);
+  border-right: 0;
+  border-radius: 0;
+  background: var(--pt-grip-v) center no-repeat,
+    linear-gradient(90deg, var(--pt-lav-hi), var(--pt-lav) 45%, var(--pt-lav-deep));
+  box-shadow: inset 1px 1px 0 rgb(255 255 255 / 70%), inset -1px -1px 0 rgb(0 0 0 / 25%);
+}

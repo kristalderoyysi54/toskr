@@ -57,9 +57,6 @@ export function ProfileOutputPreview({ mode }: { mode: DeliveryOutputMode }) {
           </span>
         </div>
       </div>
-      <p className="mt-1 text-micro text-muted-foreground">
-        这里只预览格式变化；测试内容不会读取剪贴板、修改卡片或执行发送。
-      </p>
     </div>
   );
 }

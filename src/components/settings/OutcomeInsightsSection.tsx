@@ -1,20 +1,15 @@
-import { emitTo, listen } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
-  CheckCircle2,
-  ChevronDown,
+  ChevronRight,
   CircleAlert,
-  Clock3,
-  Play,
   RefreshCw,
   Send,
   Trash2,
-  X,
 } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 
 import { SimpleSelect } from "@/components/SimpleSelect";
-import { SafeDeliveryLearningPath } from "@/components/settings/SafeDeliveryLearningPath";
 import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
 import { Switch } from "@/components/ui/switch";
@@ -23,22 +18,15 @@ import { TRANSFORM_RECIPES, type TransformRecipeId } from "@/lib/aiTransform";
 import {
   DELIVERY_ACTIVITY_CLEARED_EVENT,
   DELIVERY_ACTIVITY_MAX_EVENTS,
-  deliveryActivityRecords,
   getRecentDeliveryEvents,
   type DeliveryEvent,
 } from "@/lib/deliveryActivity";
 import {
   aggregateOutcomeMetrics,
   cancelProblemSession,
-  linkProblemSession,
-  normalizeOutcomeBaselines,
-  solveProblemSession,
-  startProblemSession,
   type OutcomeMetrics,
   type OutcomeRange,
 } from "@/lib/outcomeIntelligence";
-import { onboardingAfter } from "@/lib/onboarding";
-import { SETTINGS_START_SAFE_REHEARSAL } from "@/lib/settingsSync";
 import { tip } from "@/lib/tip";
 import { cn } from "@/lib/utils";
 import { useDataOperationStore } from "@/store/dataOperationStore";
@@ -194,16 +182,11 @@ export function OutcomeMetricsSummary({
   }
 
   const unresolved = Math.max(0, metrics.deliveryAttempts - metrics.sentCount);
-  const estimate = metrics.estimatedTimeSavedMs === null
-    ? null
-    : formatDuration(metrics.estimatedTimeSavedMs);
-  const summaryNote = estimate
-    ? `按你设置的传统用时，累计约节省 ${estimate}。`
-    : metrics.actualWorkflowMedianMs !== null
-      ? `一次完整流程通常用时 ${formatDuration(metrics.actualWorkflowMedianMs)}。在高级工具中填写传统用时后，可查看节省时间估算。`
-      : metrics.insufficientSample
-        ? "继续完成几次发送，累计 5 次后会开始显示趋势。"
-        : "在高级工具中填写传统用时后，可查看节省时间估算。";
+  const summaryNote = metrics.actualWorkflowMedianMs !== null
+    ? `一次完整流程通常用时 ${formatDuration(metrics.actualWorkflowMedianMs)}。`
+    : metrics.insufficientSample
+      ? "继续完成几次发送，累计 5 次后会开始显示趋势。"
+      : null;
 
   return (
     <section aria-label="使用摘要" className="overflow-hidden rounded-xl border border-border/60 bg-card">
@@ -233,9 +216,11 @@ export function OutcomeMetricsSummary({
             : "未发现需替换内容"}
         />
       </div>
-      <p className="border-t border-border/50 bg-muted/30 px-3 py-2 text-label text-muted-foreground" role="status">
-        {summaryNote}
-      </p>
+      {summaryNote && (
+        <p className="border-t border-border/50 bg-muted/30 px-3 py-2 text-label text-muted-foreground" role="status">
+          {summaryNote}
+        </p>
+      )}
     </section>
   );
 }
@@ -266,28 +251,18 @@ export function OutcomeMetricsDetails({ metrics }: { metrics: OutcomeMetrics }) 
 
       <section aria-labelledby="outcome-time-title">
         <h4 id="outcome-time-title" className="mb-1.5 text-label font-medium text-muted-foreground">用时</h4>
-        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-2 lg:grid-cols-3">
           <MetricCard label="准备到发送（中位）" value={tweenDuration(metrics.draftToSendMedianMs)} />
           <MetricCard label="发送到回收（中位）" value={tweenDuration(metrics.sendToResultMedianMs)} />
           <MetricCard label="完整流程（中位）" value={tweenDuration(metrics.actualWorkflowMedianMs)} />
-          {metrics.estimatedTimeSavedMs === null ? (
-            <MetricCard label="节省时间估算" value="未设置" hint="可在高级工具中填写传统用时" />
-          ) : (
-            <MetricCard
-              label="估算累计节省"
-              value={tweenDuration(metrics.estimatedTimeSavedMs)}
-              hint={`估算 · ${metrics.estimatedSampleSize} 个传统用时样本`}
-            />
-          )}
         </div>
       </section>
 
       <section aria-labelledby="outcome-safety-title">
         <h4 id="outcome-safety-title" className="mb-1.5 text-label font-medium text-muted-foreground">隐私与结果</h4>
-        <div className="grid grid-cols-2 gap-2 lg:grid-cols-3">
+        <div className="grid grid-cols-2 gap-2">
           <MetricCard label="发现敏感内容" value={tweenCount(metrics.firewallFindingCount)} />
           <MetricCard label="已保护敏感内容" value={tweenCount(metrics.redactionCount)} />
-          <MetricCard label="问题解决用时（中位）" value={tweenDuration(metrics.problemResolutionMedianMs)} hint="仅包含主动计时" />
         </div>
       </section>
 
@@ -366,20 +341,14 @@ function ProgressiveSection({ title, description, children }: {
           <span className="block text-title font-medium">{title}</span>
           <span className="mt-0.5 block text-label text-muted-foreground">{description}</span>
         </span>
-        <ChevronDown
+        <ChevronRight
           aria-hidden
-          className="size-4 shrink-0 text-muted-foreground transition-transform duration-100 group-open:rotate-180 motion-reduce:transition-none"
+          className="size-4 shrink-0 text-muted-foreground transition-transform duration-(--duration-control) group-open:rotate-90 motion-reduce:transition-none"
         />
       </summary>
       <div className="border-t border-border/50 p-3">{children}</div>
     </details>
   );
-}
-
-function nextSessionId(): string {
-  return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-    ? crypto.randomUUID()
-    : `problem-${Date.now().toString(36)}`;
 }
 
 export function OutcomeInsightsSection({ settings, patch }: Props) {
@@ -390,10 +359,6 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
   const [range, setRange] = useState<OutcomeRange>("30d");
   const [profileId, setProfileId] = useState("all");
   const [recipeId, setRecipeId] = useState("all");
-  const [baselineScope, setBaselineScope] = useState(
-    settings.targetProfiles[0] ? `profile:${settings.targetProfiles[0].id}` : "recipe:summarize"
-  );
-  const [baselineMinutes, setBaselineMinutes] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -439,43 +404,13 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
     settings.outcomeProblemSessions,
   ]);
 
-  const records = useMemo(
-    () => deliveryActivityRecords(events.filter((event) =>
-      event.metricsEligible !== false &&
-      (event.metricsEpoch ?? 0) === settings.outcomeMetricsEpoch
-    )).filter((event) => event.status === "sent"),
-    [events, settings.outcomeMetricsEpoch]
-  );
   const activeSession = [...settings.outcomeProblemSessions]
     .reverse()
     .find((session) => session.solvedAtMs === null && session.cancelledAtMs === null) ?? null;
-  const activeRecord = activeSession?.deliveryId
-    ? records.find((record) => record.deliveryId === activeSession.deliveryId) ?? null
-    : null;
-
-  const addBaseline = () => {
-    const minutes = Number(baselineMinutes);
-    const separator = baselineScope.indexOf(":");
-    const scope = baselineScope.slice(0, separator);
-    const scopeId = baselineScope.slice(separator + 1);
-    const validScope = scope === "profile"
-      ? settings.targetProfiles.some((profile) => profile.id === scopeId)
-      : scope === "recipe" && TRANSFORM_RECIPES.some((recipe) => recipe.id === scopeId);
-    if (!validScope || !Number.isFinite(minutes) || minutes <= 0 || minutes > 10_080) {
-      tip("warn", "请输入大于 0 的传统流程分钟数");
-      return;
-    }
-    const next = normalizeOutcomeBaselines([
-      ...settings.outcomeBaselines,
-      { scope: scope as "profile" | "recipe", scopeId, minutes },
-    ]);
-    patch({ outcomeBaselines: next });
-    setBaselineMinutes("");
-  };
 
   const clearMetrics = async () => {
     const confirmed = await ask(
-      "清除使用统计和问题计时？最近发送记录、卡片、任务、附件及传统用时设置不会改变。",
+      "清除使用统计？最近发送记录、卡片、任务和附件不会改变。",
       { title: "清除使用统计", kind: "warning" }
     );
     if (!confirmed) return;
@@ -490,40 +425,16 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
     tip("ok", "使用统计已清除；最近发送记录仍保留");
   };
 
-  const baselineOptions = [
-    ...settings.targetProfiles.map((profile) => ({
-      value: `profile:${profile.id}`,
-      label: `发送方案 · ${profile.name}`,
-    })),
-    ...TRANSFORM_RECIPES.map((recipe) => ({
-      value: `recipe:${recipe.id}`,
-      label: `AI 处理 · ${recipe.label}`,
-    })),
-  ];
-
   return (
     <div>
-      <div className="mb-1 flex items-start justify-between gap-3">
-        <h2 className="text-heading font-semibold">使用概览</h2>
+      {/* 页签已标明「使用概览」，这里只给统计块一个分组标题 */}
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <h3 className="px-0.5 text-title font-semibold">发送统计</h3>
         <Button type="button" size="sm" variant="secondary" onClick={() => void load()} disabled={loading}>
           <RefreshCw className={cn("size-3.5", loading && "animate-spin motion-reduce:animate-none")} />
           刷新
         </Button>
       </div>
-
-      <SafeDeliveryLearningPath
-        onboarding={settings.onboarding}
-        onRunRehearsal={(mode) => {
-          void emitTo("main", SETTINGS_START_SAFE_REHEARSAL, { mode });
-        }}
-        onCompleteRecoveryTutorial={() => patch({
-          onboarding: onboardingAfter(
-            settings.onboarding,
-            { type: "recoveryTutorialCompleted" }
-          ),
-        })}
-      />
-
       {error && !events.length ? (
         <div role="alert" className="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-4">
           <div className="flex items-start gap-3">
@@ -605,154 +516,6 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
           )}
         </>
       )}
-
-      <ProgressiveSection
-        title="高级工具"
-        description="估算节省时间，或记录一次完整的问题处理用时"
-      >
-      <div className="grid gap-3 lg:grid-cols-2">
-        <section className="rounded-xl border border-border/60 bg-card p-3" aria-labelledby="outcome-baseline-title">
-          <div className="flex items-start gap-2">
-            <Clock3 className="mt-0.5 size-4 text-muted-foreground" aria-hidden />
-            <div>
-              <h3 id="outcome-baseline-title" className="text-title font-medium">传统用时（可选）</h3>
-              <p className="mt-0.5 text-label text-muted-foreground">填写不用 Toskr 时完成同类工作的分钟数，用来估算节省时间。</p>
-            </div>
-          </div>
-          <div className="mt-2 flex gap-2">
-            <SimpleSelect ariaLabel="传统用时适用范围" className="min-w-0 flex-1" value={baselineScope} options={baselineOptions} onChange={setBaselineScope} />
-            <input
-              type="number"
-              min={0.1}
-              max={10_080}
-              step={0.5}
-              aria-label="传统流程分钟数"
-              value={baselineMinutes}
-              onChange={(event) => setBaselineMinutes(event.target.value)}
-              placeholder="分钟"
-              className="h-8 w-24 rounded-lg border border-border bg-transparent px-2 text-body outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
-            />
-            <Button type="button" size="sm" onClick={addBaseline}>保存</Button>
-          </div>
-          <ul className="mt-2 space-y-1">
-            {settings.outcomeBaselines.map((baseline) => {
-              const key = `${baseline.scope}:${baseline.scopeId}`;
-              const label = baselineOptions.find((option) => option.value === key)?.label ?? baseline.scopeId;
-              return (
-                <li key={key} className="flex items-center gap-2 rounded-lg bg-muted/50 px-2 py-1.5 text-label">
-                  <span className="min-w-0 flex-1 truncate">{label}</span>
-                  <span className="tabular-nums">{baseline.minutes} 分钟</span>
-                  <button
-                    type="button"
-                    aria-label={`删除传统用时 ${label}`}
-                    onClick={() => patch({ outcomeBaselines: settings.outcomeBaselines.filter((item) => `${item.scope}:${item.scopeId}` !== key) })}
-                    className="rounded-sm p-0.5 text-muted-foreground hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
-                  ><X className="size-3.5" /></button>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-
-        <section className="rounded-xl border border-border/60 bg-card p-3" aria-labelledby="problem-session-title">
-          <div className="flex items-start gap-2">
-            <Play className="mt-0.5 size-4 text-muted-foreground" aria-hidden />
-            <div className="min-w-0 flex-1">
-              <h3 id="problem-session-title" className="text-title font-medium">完整问题用时（可选）</h3>
-              <p className="mt-0.5 text-label text-muted-foreground">从开始处理到解决，只记录时间和关联发送，不记录问题内容。</p>
-            </div>
-          </div>
-          {!activeSession ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              className="mt-3"
-              disabled={!settings.outcomeMetricsEnabled}
-              onClick={() => patch({
-                outcomeProblemSessions: startProblemSession(
-                  settings.outcomeProblemSessions,
-                  { id: nextSessionId(), startedAtMs: Date.now() }
-                ),
-              })}
-            >
-              <Play className="size-3.5" /> 开始计时
-            </Button>
-          ) : (
-            <div className="mt-3 space-y-2">
-              <p className="text-label text-muted-foreground">
-                开始于 {new Date(activeSession.startedAtMs).toLocaleString("zh-CN", { hour12: false })}
-              </p>
-              <SimpleSelect
-                ariaLabel="关联问题会话到最近发送"
-                value={activeSession.deliveryId ?? "none"}
-                options={[
-                  { value: "none", label: "尚未关联发送" },
-                  ...records.map((record) => ({
-                    value: record.deliveryId,
-                    label: `${record.targetAppName || record.targetBundleId || "未识别目标"} · ${new Date(record.timestampMs).toLocaleString("zh-CN", { hour12: false })}`,
-                  })),
-                ]}
-                onChange={(deliveryId) => {
-                  if (deliveryId === "none") return;
-                  patch({ outcomeProblemSessions: linkProblemSession(
-                    settings.outcomeProblemSessions,
-                    activeSession.id,
-                    deliveryId,
-                    Date.now(),
-                    records.find((record) => record.deliveryId === deliveryId)?.resultNoteId ?? null
-                  ) });
-                }}
-              />
-              {activeSession.deliveryId && (
-                <div className="flex items-center justify-between gap-2 text-label text-muted-foreground">
-                  <span>
-                    {activeSession.resultNoteId
-                      ? "已关联发送与结果"
-                      : "已关联发送，结果尚未回收"}
-                  </span>
-                  {activeRecord?.resultNoteId && activeRecord.resultNoteId !== activeSession.resultNoteId && (
-                    <Button
-                      type="button"
-                      size="xs"
-                      variant="ghost"
-                      onClick={() => patch({ outcomeProblemSessions: linkProblemSession(
-                        settings.outcomeProblemSessions,
-                        activeSession.id,
-                        activeRecord.deliveryId,
-                        Date.now(),
-                        activeRecord.resultNoteId
-                      ) })}
-                    >同步结果关联</Button>
-                  )}
-                </div>
-              )}
-              <div className="flex gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={() => patch({ outcomeProblemSessions: solveProblemSession(
-                    settings.outcomeProblemSessions,
-                    activeSession.id,
-                    Date.now()
-                  ) })}
-                ><CheckCircle2 className="size-3.5" /> 标记解决</Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => patch({ outcomeProblemSessions: cancelProblemSession(
-                    settings.outcomeProblemSessions,
-                    activeSession.id,
-                    Date.now()
-                  ) })}
-                ><X className="size-3.5" /> 取消计时</Button>
-              </div>
-            </div>
-          )}
-        </section>
-      </div>
-      </ProgressiveSection>
 
       <ProgressiveSection
         title="数据与隐私"

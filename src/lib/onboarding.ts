@@ -40,6 +40,8 @@ export interface OnboardingState {
   permissionsCompletedAtMs: number | null;
   /** 可逆占位符本地恢复教学已完成；不保存任何真实映射或正文。 */
   recoveryTutorialCompletedAtMs: number | null;
+  /** 进阶课「合并发送」已完成；示例卡片在完成时清理，不保存正文。 */
+  mergeTutorialCompletedAtMs: number | null;
   /** 从权限就绪后的首个示例动作起算；不包含系统设置停留时间。 */
   activationStartedAtMs: number | null;
   /** 仅作本机内部激活信号；UI 不展示倒计时或失败结论。 */
@@ -57,6 +59,7 @@ export type OnboardingEvent =
   | { type: "preflightOpened" }
   | { type: "deliverySent" }
   | { type: "recoveryTutorialCompleted" }
+  | { type: "mergeTutorialCompleted" }
   | { type: "skip" };
 
 export type PermissionRehearsalStatus =
@@ -107,6 +110,7 @@ export function defaultOnboardingState(): OnboardingState {
     rehearsalDeferredAtMs: null,
     permissionsCompletedAtMs: null,
     recoveryTutorialCompletedAtMs: null,
+    mergeTutorialCompletedAtMs: null,
     activationStartedAtMs: null,
     activationWithin60s: null,
   };
@@ -195,6 +199,7 @@ export function onboardingStateFromPersisted(value: unknown): OnboardingState {
     recoveryTutorialCompletedAtMs: finiteTime(
       raw.recoveryTutorialCompletedAtMs
     ),
+    mergeTutorialCompletedAtMs: finiteTime(raw.mergeTutorialCompletedAtMs),
     activationStartedAtMs: finiteTime(raw.activationStartedAtMs),
     activationWithin60s:
       typeof raw.activationWithin60s === "boolean"
@@ -306,6 +311,11 @@ export function onboardingAfter(
         ...state,
         recoveryTutorialCompletedAtMs:
           state.recoveryTutorialCompletedAtMs ?? now,
+      };
+    case "mergeTutorialCompleted":
+      return {
+        ...state,
+        mergeTutorialCompletedAtMs: state.mergeTutorialCompletedAtMs ?? now,
       };
     case "skip":
       return active || state.rehearsalStatus === "paused"

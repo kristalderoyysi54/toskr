@@ -2,6 +2,7 @@ import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "re
 
 import { SimpleSelect } from "@/components/SimpleSelect";
 import { Button } from "@/components/ui/button";
+import { DetailsSummary } from "@/components/ui/disclosure";
 import { applyPromptTemplate } from "@/lib/format";
 import type { Settings } from "@/store/notesStore";
 import { PromptTemplateAssistant } from "./PromptTemplateAssistant";
@@ -153,7 +154,7 @@ export function PromptTemplateEditor({
         onToggle={(event) => setPreviewOpen(event.currentTarget.open)}
         className="rounded-lg border border-border/60 px-3 py-2"
       >
-        <summary className="cursor-pointer text-body font-medium text-muted-foreground">试用预览</summary>
+        <DetailsSummary className="text-body font-medium text-muted-foreground">试用预览</DetailsSummary>
         <div className="mt-3 space-y-2">
           <p className="text-label text-muted-foreground">仅在本地组合文本，不调用 AI 或发送。留空时使用下面的示例。</p>
           <label htmlFor={`${id}-material`} className="block text-label text-muted-foreground">示例材料</label>
