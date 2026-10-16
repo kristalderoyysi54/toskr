@@ -45,6 +45,7 @@ Customize auto-submit per target app — `⌘ Enter` pastes and delivers in one 
 - **Prepare several items together** Select text and image cards and group them, in their current order, into one delivery
 - **Review sensitive text before pasting** Locally detect supported emails, IP addresses, phone numbers, secrets, and other sensitive text, then replace it when needed
 - **Mask sensitive text in images** Use local OCR to find supported regions and mask them on a generated sending copy while keeping the original unchanged
+- **Encrypted local storage** Notes, images, and message records are written with AES-256-GCM. The key stays in the macOS login keychain, so other apps cannot read or tamper with those files
 
 ## Useful extras
 
@@ -59,6 +60,7 @@ Customize auto-submit per target app — `⌘ Enter` pastes and delivers in one 
 - Image OCR handles supported sensitive text only. It does not detect faces, QR codes, or every kind of visual private information.
 - Core records and privacy processing are local by default, with no account system or telemetry. Optional AI, remote images, link summaries, exchange rates, and update checks may use the network.
 - Clipboard capture and task reminders work only while Toskr is running.
+- Encrypted storage stops other apps from reading or tampering with data files offline. It does not stop memory-level inspection on an unlocked machine. A full exported backup is plaintext, used to move data between machines, and the only recovery path if the keychain key is lost — keep it safe and export regularly.
 
 ## Install
 
