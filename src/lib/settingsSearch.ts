@@ -258,6 +258,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   entry("outcome", "details", "趋势和详细数据", ["每日变化", "筛选"], { target: "使用概览" }),
 
   entry("due", "due", "到期提醒", ["任务提醒", "deadline", "日期"]),
+  entry("due", "task-reminder-channel", "任务提醒方式", ["系统通知", "通知中心", "气泡", "锁屏"]),
   entry("due", "due-presets", "到期提醒快捷档", ["多久后", "今天", "明天", "下个周几"]),
   entry("due", "relative-due", "相对提醒时间", ["分钟", "小时", "多久后"], { target: "到期提醒快捷档" }),
   entry("due", "bill-reminders", "账单到期提醒", ["订阅", "信用卡", "提前提醒"], { requires: "subscriptionsEnabled" }),

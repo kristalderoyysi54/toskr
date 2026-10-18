@@ -1,13 +1,15 @@
 import { useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
 
+import { BillRow } from "@/components/subscriptions/BillList";
 import { TaskRow } from "@/components/TaskRow";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IconButton } from "@/components/ui/icon-button";
-import { startOfBillDay } from "@/lib/bills";
+import { billOccurrencesInRange, startOfBillDay } from "@/lib/bills";
 import { tip } from "@/lib/tip";
 import { cn } from "@/lib/utils";
-import { useNotesStore, type Task } from "@/store/notesStore";
+import { useNotesStore, type Bill, type Task } from "@/store/notesStore";
+import { useUIStore } from "@/store/uiStore";
 
 const WEEK_HEADER = ["一", "二", "三", "四", "五", "六", "日"];
 
@@ -21,9 +23,15 @@ const HATCH_STYLE = {
  * 任务月历（默认隐藏，由「提醒」页头部日历开关唤出）：
  * 有到期任务的天显示计数点；点选某天列出当天任务，并可直接为该天添加任务
  * （今天默认 20:00 到期、未来天 9:00——避免「刚加就逾期」）。
+ * 订阅功能开启时同时显示账单扣款日（青色点），两类可分别开关（会话态）。
  */
 export function TaskCalendar({ now }: { now: number }) {
   const tasks = useNotesStore((s) => s.tasks);
+  const bills = useNotesStore((s) => s.bills);
+  const billsEnabled = useNotesStore((s) => s.settings.subscriptionsEnabled);
+  const [showTasks, setShowTasks] = useState(true);
+  const [showBills, setShowBills] = useState(true);
+  const withBills = billsEnabled && showBills;
   const [monthOffset, setMonthOffset] = useState(0);
   const [selectedDay, setSelectedDay] = useState(() => startOfBillDay(now));
   const [draft, setDraft] = useState("");
@@ -31,7 +39,7 @@ export function TaskCalendar({ now }: { now: number }) {
   const base = new Date(now);
   const monthFirst = new Date(base.getFullYear(), base.getMonth() + monthOffset, 1);
 
-  const { cells, byDay } = useMemo(() => {
+  const { cells, byDay, billsByDay } = useMemo(() => {
     const y = monthFirst.getFullYear();
     const m = monthFirst.getMonth();
     const lead = (new Date(y, m, 1).getDay() + 6) % 7;
@@ -54,12 +62,25 @@ export function TaskCalendar({ now }: { now: number }) {
     for (const list of byDay.values()) {
       list.sort((a, b) => (a.dueAt ?? 0) - (b.dueAt ?? 0));
     }
-    return { cells, byDay };
+    const billsByDay = new Map<number, Bill[]>();
+    if (withBills) {
+      const gridStart = cells[0].day;
+      const gridEnd = cells[cells.length - 1].day + 86_400_000;
+      for (const bill of bills) {
+        for (const day of billOccurrencesInRange(bill, gridStart, gridEnd)) {
+          const list = billsByDay.get(day) ?? [];
+          list.push(bill);
+          billsByDay.set(day, list);
+        }
+      }
+    }
+    return { cells, byDay, billsByDay };
     // monthFirst 由 monthOffset 派生
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tasks, monthOffset, now]);
+  }, [tasks, bills, withBills, monthOffset, now]);
 
-  const dayTasks = byDay.get(selectedDay) ?? [];
+  const dayTasks = showTasks ? (byDay.get(selectedDay) ?? []) : [];
+  const dayBills = billsByDay.get(selectedDay) ?? [];
 
   const addForDay = () => {
     const text = draft.trim();
@@ -83,6 +104,16 @@ export function TaskCalendar({ now }: { now: number }) {
           <p className="flex-1 pl-1 text-label font-semibold tabular-nums">
             {monthFirst.getFullYear()} 年 {monthFirst.getMonth() + 1} 月
           </p>
+          {billsEnabled && (
+            <span className="flex items-center gap-0.5">
+              <CalendarToggle on={showTasks} onClick={() => setShowTasks((v) => !v)}>
+                任务
+              </CalendarToggle>
+              <CalendarToggle on={showBills} onClick={() => setShowBills((v) => !v)}>
+                账单
+              </CalendarToggle>
+            </span>
+          )}
           {monthOffset !== 0 && (
             <button
               onClick={() => setMonthOffset(0)}
@@ -106,15 +137,16 @@ export function TaskCalendar({ now }: { now: number }) {
           ))}
           {cells.map(({ day, inMonth }) => {
             const selected = day === selectedDay;
-            const due = byDay.get(day) ?? [];
+            const due = showTasks ? (byDay.get(day) ?? []) : [];
             const pending = due.filter((t) => t.status !== "done").length;
+            const billCount = billsByDay.get(day)?.length ?? 0;
             return (
               <button
                 key={day}
                 onClick={() => setSelectedDay(day)}
                 aria-label={`${new Date(day).getMonth() + 1}月${new Date(day).getDate()}日${
                   due.length ? `，${due.length} 个任务` : ""
-                }`}
+                }${billCount ? `，${billCount} 笔账单` : ""}`}
                 className={cn(
                   "relative flex h-9 flex-col items-center justify-center rounded-lg outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
                   selected
@@ -153,6 +185,15 @@ export function TaskCalendar({ now }: { now: number }) {
                       {pending}
                     </span>
                   )}
+                  {billCount > 0 && (
+                    <span
+                      aria-hidden
+                      className={cn(
+                        "size-1.5 rounded-full",
+                        selected ? "bg-primary-foreground/90" : "bg-teal-500"
+                      )}
+                    />
+                  )}
                 </span>
               </button>
             );
@@ -186,10 +227,49 @@ export function TaskCalendar({ now }: { now: number }) {
             ))}
           </div>
         ) : (
-          <EmptyState variant="inline" title="当天没有到期任务" />
+          showTasks && <EmptyState variant="inline" title="当天没有到期任务" />
+        )}
+        {dayBills.length > 0 && (
+          <div className="mt-1 flex flex-col gap-0.5">
+            {dayBills.map((bill) => (
+              <BillRow
+                key={bill.id}
+                bill={bill}
+                now={now}
+                // 账单编辑在订阅子视图：切过去处理，月历只负责「这天要扣钱」
+                onEdit={() => useUIStore.getState().setRemindersSubview("subscriptions")}
+              />
+            ))}
+          </div>
         )}
       </div>
     </div>
+  );
+}
+
+function CalendarToggle({
+  on,
+  onClick,
+  children,
+}: {
+  on: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      onClick={onClick}
+      className={cn(
+        "rounded-full border px-1.5 py-px text-micro outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        on
+          ? "border-primary/50 bg-primary/10 text-primary"
+          : "border-border text-muted-foreground hover:text-foreground"
+      )}
+    >
+      {children}
+    </button>
   );
 }
 

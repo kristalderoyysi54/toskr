@@ -62,7 +62,20 @@ objc2-foundation = { version = "0.3", features = [
   "NSArray",
   "NSError",
   "NSDate",
+  "NSBundle",
   "block2",
+] }
+# 任务到期的系统通知（设置 → 到期提醒 → 提醒方式）
+objc2-user-notifications = { version = "0.3", default-features = false, features = [
+  "std",
+  "block2",
+  "UNNotification",
+  "UNNotificationContent",
+  "UNNotificationRequest",
+  "UNNotificationResponse",
+  "UNNotificationSound",
+  "UNNotificationTrigger",
+  "UNUserNotificationCenter",
 ] }
 objc2-app-kit = { version = "0.3", features = [
   "NSWorkspace",

@@ -143,6 +143,7 @@ import {
   type ContextMenuItemId,
   type DuePresetCfg,
   type ReminderOffsetDays,
+  type TaskReminderChannel,
   type MessageWatchRule,
   type PromptSnippet,
   type SecretKey,
@@ -801,6 +802,7 @@ export default function SettingsView() {
         {section === "companion" && <CompanionSection settings={settings} patch={patch} />}
         {section === "due" && (
           <>
+            <TaskReminderChannelSection settings={settings} patch={patch} />
             <DuePresetsSection settings={settings} patch={patch} />
             <BillReminderDefaultsSection settings={settings} patch={patch} />
           </>
@@ -3302,6 +3304,33 @@ function AiSection({ settings, patch }: SP) {
         />
       </Group>
     </div>
+  );
+}
+
+/** 任务到期提醒方式：HUD 气泡 / 系统通知中心 / 两者。 */
+function TaskReminderChannelSection({ settings, patch }: SP) {
+  return (
+    <Group
+      title="任务提醒方式"
+      footer="系统通知在锁屏、面板关闭时也能看到，首次使用时 macOS 会请求通知权限。气泡里可直接完成或稍后提醒。"
+    >
+      <Row
+        label="提醒方式"
+        right={
+          <Segmented<TaskReminderChannel>
+            size="xs"
+            ariaLabel="任务提醒方式"
+            value={settings.taskReminderChannel}
+            options={[
+              { value: "hud", label: "气泡" },
+              { value: "system", label: "系统通知" },
+              { value: "both", label: "两者" },
+            ]}
+            onChange={(taskReminderChannel) => patch({ taskReminderChannel })}
+          />
+        }
+      />
+    </Group>
   );
 }
 

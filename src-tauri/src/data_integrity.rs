@@ -3805,6 +3805,7 @@ fn validate_task(
         })
         && optional_type(object, "dueAt", valid_nullable_time)
         && optional_type(object, "remindedAt", valid_nullable_time)
+        && optional_type(object, "completedAt", valid_nonnegative_number)
         && optional_type(object, "createdAt", valid_nonnegative_number)
         && optional_type(object, "kind", |value| value.as_str() == Some("spark"))
         && optional_type(object, "sourceRef", |value| {

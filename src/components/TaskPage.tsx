@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   closestCenter,
   DndContext,
@@ -18,12 +18,15 @@ import {
 import {
   ArrowDown,
   ArrowUp,
+  CalendarClock,
+  CalendarX2,
   ChevronDown,
   ChevronRight,
   ListTodo,
   MoreHorizontal,
   Pencil,
   Plus,
+  Search,
   Trash2,
   Lightbulb,
 } from "lucide-react";
@@ -41,7 +44,15 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { IconButton } from "@/components/ui/icon-button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useStickyHeader } from "@/lib/stickyHeader";
-import { isSmartBandTask, type TaskBuckets } from "@/lib/tasks";
+import { undoableTip } from "@/lib/actions";
+import {
+  filterTasks,
+  isSmartBandTask,
+  taskFilterActive,
+  type TaskBuckets,
+  type TaskFilter,
+  type TaskFilterChip,
+} from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 import {
   TASK_INBOX_ID,
@@ -65,12 +76,28 @@ export function TaskPage({
   buckets,
   now,
   calendar = false,
+  filterOpen = false,
+  onCloseFilter,
 }: {
   buckets: TaskBuckets;
   now: number;
   calendar?: boolean;
+  /** 搜索与筛选栏（「提醒」页头部筛选钮唤出）；有条件时打平分组显示命中结果。 */
+  filterOpen?: boolean;
+  onCloseFilter?: () => void;
 }) {
   const doneOpen = useUIStore((s) => s.doneOpen[TASK_DONE_KEY] ?? false);
+  const allTasks = useNotesStore((s) => s.tasks);
+  const [filter, setFilter] = useState<TaskFilter>(EMPTY_FILTER);
+  // 关闭筛选栏即清空条件（会话态，不记忆）
+  useEffect(() => {
+    if (!filterOpen) setFilter(EMPTY_FILTER);
+  }, [filterOpen]);
+  const filtering = filterOpen && taskFilterActive(filter);
+  const filtered = useMemo(
+    () => (filtering ? filterTasks(allTasks, filter, now) : []),
+    [filtering, allTasks, filter, now]
+  );
   const empty =
     !buckets.overdue.length &&
     !buckets.sparks.length &&
@@ -150,13 +177,33 @@ export function TaskPage({
   return (
     <>
       <TaskQuickAdd />
+      {filterOpen && (
+        <TaskFilterBar
+          filter={filter}
+          onChange={setFilter}
+          count={filtering ? filtered.length : null}
+          onClose={() => onCloseFilter?.()}
+        />
+      )}
       <ScrollArea className="min-h-0 flex-1 px-2.5" viewportClassName="px-1">
         {calendar && (
           <div className="pb-2 pt-1">
             <TaskCalendar now={now} />
           </div>
         )}
-        {empty ? (
+        {filtering ? (
+          filtered.length ? (
+            <div className="flex flex-col gap-1 pb-2 pt-1">
+              {filtered.map((t, index) => (
+                <WindowedListItem key={t.id} itemId={t.id} estimatedHeight={36} eager={index < 18}>
+                  <TaskRow task={t} now={now} />
+                </WindowedListItem>
+              ))}
+            </div>
+          ) : (
+            <EmptyState icon={<Search />} title="没有符合条件的任务" />
+          )
+        ) : empty ? (
           <EmptyState
             icon={<ListTodo />}
             title="还没有任务"
@@ -185,6 +232,7 @@ export function TaskPage({
                   now={now}
                   collapseKey={TASK_OVERDUE_COLLAPSED_KEY}
                   eager
+                  action={<OverdueRescheduleMenu tasks={buckets.overdue} />}
                 />
               )}
               {buckets.sparks.length > 0 && (
@@ -253,6 +301,85 @@ export function TaskPage({
   );
 }
 
+const EMPTY_FILTER: TaskFilter = { query: "", chips: [] };
+
+const FILTER_CHIPS: { value: TaskFilterChip; label: string }[] = [
+  { value: "week", label: "7 天内到期" },
+  { value: "high", label: "高优先级" },
+  { value: "checklist", label: "有检查项" },
+  { value: "message", label: "来自消息" },
+  { value: "recurring", label: "重复" },
+  { value: "done", label: "已完成" },
+];
+
+/** 搜索框 + 条件 chip（chip 之间取交集）。 */
+function TaskFilterBar({
+  filter,
+  onChange,
+  count,
+  onClose,
+}: {
+  filter: TaskFilter;
+  onChange: (f: TaskFilter) => void;
+  count: number | null;
+  onClose: () => void;
+}) {
+  const toggle = (chip: TaskFilterChip) =>
+    onChange({
+      ...filter,
+      chips: filter.chips.includes(chip)
+        ? filter.chips.filter((c) => c !== chip)
+        : [...filter.chips, chip],
+    });
+  return (
+    <div className="mx-3 mb-1.5 flex flex-col gap-1.5">
+      <label className="flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1">
+        <Search className="size-3.5 shrink-0 text-muted-foreground" />
+        <input
+          autoFocus
+          value={filter.query}
+          onChange={(e) => onChange({ ...filter, query: e.target.value })}
+          onKeyDown={(e) => {
+            // 阻断到全局快捷键；Esc 先清空关键词，再按一次关闭筛选栏
+            e.stopPropagation();
+            if (e.key === "Escape" && !e.nativeEvent.isComposing) {
+              if (filter.query) onChange({ ...filter, query: "" });
+              else onClose();
+            }
+          }}
+          placeholder="搜索标题、备注、检查项…"
+          aria-label="搜索任务"
+          className="min-w-0 flex-1 bg-transparent text-body outline-none placeholder:text-muted-foreground"
+        />
+        {count !== null && (
+          <span className="shrink-0 text-micro tabular-nums text-muted-foreground">{count} 条</span>
+        )}
+      </label>
+      <div className="flex flex-wrap gap-1">
+        {FILTER_CHIPS.map(({ value, label }) => {
+          const on = filter.chips.includes(value);
+          return (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={on}
+              onClick={() => toggle(value)}
+              className={cn(
+                "rounded-full border px-2 py-0.5 text-micro outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                on
+                  ? "border-primary/50 bg-primary/10 text-primary"
+                  : "border-border text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /** 智能区（已到期 / 灵感）：跨分组横切；带 collapseKey 时标题可点击折叠。 */
 function SmartSection({
   title,
@@ -262,6 +389,7 @@ function SmartSection({
   now,
   collapseKey,
   eager = false,
+  action,
 }: {
   title: string;
   tone: "red" | "violet";
@@ -270,6 +398,8 @@ function SmartSection({
   now: number;
   collapseKey?: string;
   eager?: boolean;
+  /** 区头右端操作（已到期区的「全部顺延」）。 */
+  action?: React.ReactNode;
 }) {
   // doneOpen 是通用的布尔切换器；这里语义存「是否折叠」，缺省展开
   const collapsed = useUIStore((s) => (collapseKey ? !!s.doneOpen[collapseKey] : false));
@@ -290,14 +420,14 @@ function SmartSection({
     </>
   );
   const headingCls = cn(
-    "sticky top-0 z-10 mb-1.5 flex select-none items-center gap-1 pl-0.5 text-label font-semibold uppercase tracking-[0.08em]",
+    "flex min-w-0 flex-1 select-none items-center gap-1 pl-0.5 text-label font-semibold uppercase tracking-[0.08em]",
     tone === "red" ? "text-destructive" : "text-violet-600 dark:text-violet-400"
   );
   return (
     <section>
+      <div ref={headerRef} className="sticky top-0 z-10 mb-1.5 flex items-center gap-1 pr-1">
       {collapseKey ? (
         <button
-          ref={headerRef}
           type="button"
           onClick={() => {
             if (!scrollToStartIfStuck()) useUIStore.getState().toggleDoneOpen(collapseKey);
@@ -318,10 +448,12 @@ function SmartSection({
           {heading}
         </button>
       ) : (
-        <h3 ref={headerRef} className={headingCls}>
+        <h3 className={headingCls}>
           {heading}
         </h3>
       )}
+      {action}
+      </div>
       {!collapsed && (
         <div ref={bodyRef} className="-mx-1 -mb-1 flex flex-col gap-1 px-1 pb-1">
           {tasks.map((t, index) => (
@@ -337,6 +469,74 @@ function SmartSection({
         </div>
       )}
     </section>
+  );
+}
+
+/** 顺延目标：每次打开菜单按当下时刻算（今晚 20:00 已过则不给）。 */
+function rescheduleOptions(now: number): { label: string; at: number }[] {
+  const d = new Date(now);
+  const at = (addDays: number, hour: number) =>
+    new Date(d.getFullYear(), d.getMonth(), d.getDate() + addDays, hour, 0, 0, 0).getTime();
+  const toMonday = ((8 - d.getDay()) % 7) || 7;
+  return [
+    { label: "今天 20:00", at: at(0, 20) },
+    { label: "明天 09:00", at: at(1, 9) },
+    { label: "下周一 09:00", at: at(toMonday, 9) },
+  ].filter((o) => o.at > now);
+}
+
+/** 已到期区头「全部顺延」：积压的逾期任务一次挪到同一时间点，可撤销。 */
+export function OverdueRescheduleMenu({ tasks }: { tasks: Task[] }) {
+  const run = (dueAt: number | null, label: string) => {
+    const ids = tasks.map((t) => t.id);
+    useNotesStore.getState().rescheduleTasks(ids, dueAt);
+    undoableTip(
+      dueAt === null ? `已清除 ${ids.length} 个任务的到期时间` : `已顺延 ${ids.length} 个任务到${label}`
+    );
+  };
+  return (
+    <SimpleMenu
+      align="end"
+      trigger={({ open, toggle }) => (
+        <button
+          type="button"
+          onClick={toggle}
+          aria-expanded={open}
+          className={cn(
+            "flex shrink-0 items-center gap-0.5 rounded-sm px-1 text-micro text-muted-foreground outline-none hover:text-foreground",
+            "focus-visible:ring-2 focus-visible:ring-ring",
+            open && "text-foreground"
+          )}
+        >
+          全部顺延 <ChevronDown className="size-2.5" />
+        </button>
+      )}
+    >
+      {(close) => (
+        <>
+          {rescheduleOptions(Date.now()).map((o) => (
+            <SimpleMenuItem
+              key={o.label}
+              onClick={() => {
+                close();
+                run(o.at, o.label);
+              }}
+            >
+              <CalendarClock className="size-3.5" /> {o.label}
+            </SimpleMenuItem>
+          ))}
+          <SimpleMenuSeparator />
+          <SimpleMenuItem
+            onClick={() => {
+              close();
+              run(null, "");
+            }}
+          >
+            <CalendarX2 className="size-3.5" /> 清除到期时间
+          </SimpleMenuItem>
+        </>
+      )}
+    </SimpleMenu>
   );
 }
 

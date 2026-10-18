@@ -22,6 +22,7 @@ mod preview_network;
 mod message_watch;
 mod message_watch_cdp;
 mod note_export;
+mod notify;
 mod ocr;
 mod pasteboard;
 mod privacy;
@@ -327,6 +328,7 @@ pub fn run() {
             commands::hud_feedback,
             commands::hide_hud,
             commands::hud_action,
+            commands::system_notify,
             commands::show_menu_flyout,
             commands::hide_menu_flyout,
             commands::menu_flyout_resize,

@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 import { advanceCycle, backfillPeriods, billFallbackColor } from "@/lib/bills";
+import { nextRecurrence, nextRecurrenceDue } from "@/lib/taskRecurrence";
 import { detectCode } from "@/lib/code";
 import { detectLink } from "@/lib/link";
 import { imageCaption } from "@/lib/format";
@@ -233,7 +234,37 @@ export interface Task {
   sectionId?: string;
   /** 从来源消息转化时保留可追溯引用；不会触发 IM 导航或发送。 */
   sourceRef?: MessageSourceRef;
+  /** 完成时刻（epoch ms）；转回未完成时清除。字段补入前完成的任务缺省。 */
+  completedAt?: number;
+  /** 重复规则：完成时按规则生成下一期（本期去掉规则，避免反复勾选重复生成）。 */
+  recurrence?: TaskRecurrence;
+  /** 提醒档（到期前多少分钟；0 = 到期时）。缺省 = [0]，空数组 = 不提醒。 */
+  reminderOffsets?: TaskReminderOffset[];
+  /** 当前 dueAt 已提醒过的提前档（>0）；到期档仍由 remindedAt 记录。改 dueAt 时清空。 */
+  earlyRemindedOffsets?: TaskReminderOffset[];
 }
+
+export type TaskReminderChannel = "hud" | "system" | "both";
+
+export type TaskRecurrenceFreq = "daily" | "weekdays" | "weekly" | "monthly" | "yearly";
+
+export interface TaskRecurrence {
+  freq: TaskRecurrenceFreq;
+  /** weekly：重复的星期（0=周日…6=周六）；缺省取 dueAt 当天的星期。 */
+  weekdays?: number[];
+  /** monthly：每月第几日（1–31，小月取月末）；缺省取 dueAt 的日期。 */
+  monthDay?: number;
+  /** "completion" = 下一期从完成时刻起算（浇花、换滤芯）；缺省按计划日期。 */
+  basis?: "completion";
+  /** 结束日（含当天，epoch ms 取当天 00:00）：下一期落在此日之后就不再生成。 */
+  until?: number;
+  /** 剩余期数（含当前这期）：每完成一期减 1，到 0 不再生成。 */
+  count?: number;
+}
+
+/** 任务提醒档（分钟）：到期时 / 15 分钟 / 1 小时 / 1 天 / 3 天前。 */
+export type TaskReminderOffset = 0 | 15 | 60 | 1440 | 4320;
+export const TASK_REMINDER_OFFSET_OPTIONS: TaskReminderOffset[] = [0, 15, 60, 1440, 4320];
 
 /** 任务默认分组（收集箱）。 */
 export const TASK_INBOX_ID = "task-inbox";
@@ -459,6 +490,8 @@ export interface Settings {
   currencySymbol: string;
   /** 新建账单默认勾选的提前提醒档；只作用于此后新建，不回写已有账单。 */
   billDefaultReminderOffsets: ReminderOffsetDays[];
+  /** 任务到期提醒方式：HUD 气泡 / 系统通知中心 / 两者（系统通知可在锁屏与面板外看到）。 */
+  taskReminderChannel: TaskReminderChannel;
   /** AI 提供商（OpenAI 兼容）：Base URL（如 https://api.deepseek.com）。 */
   aiBaseUrl: string;
   /** AI 模型名（如 deepseek-chat）。 */
@@ -761,6 +794,7 @@ export const defaultSettings = (): Settings => ({
   duePresets: DEFAULT_DUE_PRESETS.map((p) => ({ ...p })),
   currencySymbol: "¥",
   billDefaultReminderOffsets: [3, 1],
+  taskReminderChannel: "hud",
   aiBaseUrl: "",
   aiModel: "",
   aiEnabled: false,
@@ -1022,7 +1056,15 @@ export interface NotesState {
   cycleTaskPriority: (id: string) => void;
   /** 设置/清除到期时间；改动会清空 remindedAt 以便对新时间重新提醒。 */
   setTaskDue: (id: string, dueAt: number | null) => void;
-  markTasksReminded: (ids: string[]) => void;
+  /** 批量改期（逾期区「全部顺延」）：一次快照，可整体撤销。 */
+  rescheduleTasks: (ids: string[], dueAt: number | null) => void;
+  /** 稍后提醒：到期改为 now + minutes 并重置提醒记录（到期气泡里点）。 */
+  snoozeTasks: (ids: string[], minutes: number) => void;
+  /** 记录本轮已提醒的档位（0 → remindedAt，其余进 earlyRemindedOffsets）。 */
+  markTaskReminders: (hits: { id: string; offsets: TaskReminderOffset[] }[]) => void;
+  setTaskReminderOffsets: (id: string, offsets: TaskReminderOffset[]) => void;
+  /** 设置/清除重复规则；无到期时间的任务设规则时补到下一期的 9:00。 */
+  setTaskRecurrence: (id: string, recurrence: TaskRecurrence | null) => void;
   /** 更新备注（空串视为清除）。 */
   updateTaskNote: (id: string, note: string) => void;
   addChecklistItem: (taskId: string, text: string) => void;
@@ -1667,6 +1709,73 @@ function normalizeNoteRecord(
   };
 }
 
+/** 改到期时间：清空两类提醒记录，让新时间重新走一遍全部提醒档。 */
+function withTaskDue(t: Task, dueAt: number | null): Task {
+  return { ...t, dueAt, remindedAt: null, earlyRemindedOffsets: undefined };
+}
+
+/** 新规则首期：今天 9:00 本身是否落在规则上（每周三的规则周三设，首期就是今天）。 */
+function recurrenceMatchesDay(rec: TaskRecurrence, at: number): boolean {
+  const d = new Date(at);
+  switch (rec.freq) {
+    case "daily":
+      return true;
+    case "weekdays":
+      return d.getDay() >= 1 && d.getDay() <= 5;
+    case "weekly":
+      return !rec.weekdays?.length || rec.weekdays.includes(d.getDay());
+    case "monthly":
+      return !rec.monthDay || rec.monthDay === d.getDate();
+    case "yearly":
+      return true;
+  }
+}
+
+/**
+ * 统一的状态切换：进入完成记 completedAt、离开完成清除；带重复规则的任务
+ * 完成时紧挨原位插入下一期（复制标题/优先级/备注/检查项/分组/提醒档，检查项重置），
+ * 本期去掉规则——否则取消勾选再勾选会重复生成。
+ */
+export function withTaskStatus(
+  tasks: Task[],
+  id: string,
+  status: TaskStatus,
+  now: number
+): Task[] {
+  const index = tasks.findIndex((t) => t.id === id);
+  if (index < 0) return tasks;
+  const task = tasks[index];
+  if (task.status === status) return tasks;
+  const next = [...tasks];
+  if (status !== "done") {
+    next[index] = { ...task, status, completedAt: undefined };
+    return next;
+  }
+  next[index] = { ...task, status, completedAt: now, recurrence: undefined };
+  const upcoming =
+    task.recurrence && task.dueAt !== null
+      ? nextRecurrence(task.recurrence, task.dueAt, now)
+      : null;
+  if (upcoming) {
+    const spawned: Task = {
+      id: crypto.randomUUID(),
+      text: task.text,
+      status: "todo",
+      priority: task.priority,
+      dueAt: upcoming.dueAt,
+      createdAt: now,
+      remindedAt: null,
+      note: task.note,
+      checklist: task.checklist?.map((c) => ({ ...c, id: crypto.randomUUID(), done: false })),
+      sectionId: task.sectionId,
+      recurrence: upcoming.recurrence,
+      reminderOffsets: task.reminderOffsets,
+    };
+    next.splice(index, 0, spawned);
+  }
+  return next;
+}
+
 function normalizeTaskRecord(task: Task, sectionIds: Set<string>): Task {
   const status = task.status ?? "todo";
   const priority = task.priority ?? "none";
@@ -1701,7 +1810,57 @@ function normalizeTaskRecord(task: Task, sectionIds: Set<string>): Task {
     sectionId:
       task.sectionId && sectionIds.has(task.sectionId) ? task.sectionId : undefined,
     sourceRef: normalizeMessageSourceRef(task.sourceRef),
+    // 新字段只做归一化、不抛错：旧版本写不出非法值，坏值丢弃好过整库判无效
+    completedAt:
+      status === "done" &&
+      typeof task.completedAt === "number" &&
+      Number.isFinite(task.completedAt) &&
+      task.completedAt >= 0
+        ? task.completedAt
+        : undefined,
+    recurrence: normalizeTaskRecurrence(task.recurrence),
+    reminderOffsets: normalizeTaskReminderOffsets(task.reminderOffsets),
+    earlyRemindedOffsets: normalizeTaskReminderOffsets(task.earlyRemindedOffsets)?.filter(
+      (offset) => offset > 0
+    ),
   };
+}
+
+function normalizeTaskRecurrence(value: unknown): TaskRecurrence | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const rec = value as Partial<TaskRecurrence>;
+  if (!(["daily", "weekdays", "weekly", "monthly", "yearly"] as const).includes(rec.freq!)) {
+    return undefined;
+  }
+  const weekdays = Array.isArray(rec.weekdays)
+    ? [...new Set(rec.weekdays.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort()
+    : [];
+  const monthDay =
+    typeof rec.monthDay === "number" && Number.isInteger(rec.monthDay) &&
+    rec.monthDay >= 1 && rec.monthDay <= 31
+      ? rec.monthDay
+      : undefined;
+  const until =
+    typeof rec.until === "number" && Number.isFinite(rec.until) && rec.until >= 0
+      ? rec.until
+      : undefined;
+  const count =
+    typeof rec.count === "number" && Number.isInteger(rec.count) && rec.count >= 1 && rec.count <= 999
+      ? rec.count
+      : undefined;
+  return {
+    freq: rec.freq!,
+    ...(rec.freq === "weekly" && weekdays.length ? { weekdays } : {}),
+    ...(rec.freq === "monthly" && monthDay ? { monthDay } : {}),
+    ...(rec.basis === "completion" ? { basis: "completion" as const } : {}),
+    // 两种结束条件互斥：同时出现（坏数据）以结束日为准
+    ...(until !== undefined ? { until } : count !== undefined ? { count } : {}),
+  };
+}
+
+function normalizeTaskReminderOffsets(value: unknown): TaskReminderOffset[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return TASK_REMINDER_OFFSET_OPTIONS.filter((offset) => value.includes(offset));
 }
 
 function normalizeMessageSourceRef(value: unknown): MessageSourceRef | undefined {
@@ -3252,27 +3411,26 @@ export const useNotesStore = create<NotesState>()(
           doing: "done",
           done: "todo",
         };
-        set({
-          tasks: get().tasks.map((t) =>
-            t.id === id ? { ...t, status: next[t.status] } : t
-          ),
-        });
+        const task = get().tasks.find((t) => t.id === id);
+        if (task) set({ tasks: withTaskStatus(get().tasks, id, next[task.status], Date.now()) });
       },
 
       toggleTaskDone: (id) => {
-        set({
-          tasks: get().tasks.map((t) =>
-            t.id === id
-              ? { ...t, status: t.status === "done" ? "todo" : "done" }
-              : t
-          ),
-        });
+        const task = get().tasks.find((t) => t.id === id);
+        if (task) {
+          set({
+            tasks: withTaskStatus(
+              get().tasks,
+              id,
+              task.status === "done" ? "todo" : "done",
+              Date.now()
+            ),
+          });
+        }
       },
 
       setTaskStatus: (id, status) => {
-        set({
-          tasks: get().tasks.map((t) => (t.id === id ? { ...t, status } : t)),
-        });
+        set({ tasks: withTaskStatus(get().tasks, id, status, Date.now()) });
       },
 
       setTaskPriority: (id, priority) => {
@@ -3298,18 +3456,80 @@ export const useNotesStore = create<NotesState>()(
       setTaskDue: (id, dueAt) => {
         set({
           tasks: get().tasks.map((t) =>
-            t.id === id ? { ...t, dueAt, remindedAt: null } : t
+            t.id === id ? withTaskDue(t, dueAt) : t
           ),
         });
       },
 
-      markTasksReminded: (ids) => {
+      rescheduleTasks: (ids, dueAt) => {
+        if (!ids.length) return;
+        get().snapshot(`顺延 ${ids.length} 个任务`);
         const picked = new Set(ids);
-        const at = Date.now();
+        set({
+          tasks: get().tasks.map((t) => (picked.has(t.id) ? withTaskDue(t, dueAt) : t)),
+        });
+      },
+
+      snoozeTasks: (ids, minutes) => {
+        const picked = new Set(ids);
+        const dueAt = Date.now() + Math.max(1, minutes) * 60_000;
         set({
           tasks: get().tasks.map((t) =>
-            picked.has(t.id) ? { ...t, remindedAt: at } : t
+            picked.has(t.id) && t.status !== "done" ? withTaskDue(t, dueAt) : t
           ),
+        });
+      },
+
+      markTaskReminders: (hits) => {
+        const byId = new Map(hits.map((h) => [h.id, h.offsets]));
+        const at = Date.now();
+        set({
+          tasks: get().tasks.map((t) => {
+            const offsets = byId.get(t.id);
+            if (!offsets) return t;
+            const early = offsets.filter((o) => o > 0);
+            return {
+              ...t,
+              remindedAt: offsets.includes(0) ? at : t.remindedAt,
+              earlyRemindedOffsets: early.length
+                ? [...new Set([...(t.earlyRemindedOffsets ?? []), ...early])]
+                : t.earlyRemindedOffsets,
+            };
+          }),
+        });
+      },
+
+      setTaskReminderOffsets: (id, offsets) => {
+        const normalized = TASK_REMINDER_OFFSET_OPTIONS.filter((o) => offsets.includes(o));
+        set({
+          tasks: get().tasks.map((t) =>
+            t.id === id
+              ? {
+                  ...t,
+                  // 缺省语义即 [0]：回到默认就删字段，不给旧数据凭空加键
+                  reminderOffsets:
+                    normalized.length === 1 && normalized[0] === 0 ? undefined : normalized,
+                }
+              : t
+          ),
+        });
+      },
+
+      setTaskRecurrence: (id, recurrence) => {
+        set({
+          tasks: get().tasks.map((t) => {
+            if (t.id !== id) return t;
+            if (!recurrence) return { ...t, recurrence: undefined };
+            if (t.dueAt !== null) return { ...t, recurrence };
+            // 重复需要锚点：从今天起算下一期 9:00
+            const d = new Date();
+            const seed = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 9, 0).getTime();
+            const dueAt =
+              seed > Date.now() && recurrenceMatchesDay(recurrence, seed)
+                ? seed
+                : nextRecurrenceDue(recurrence, seed, Date.now());
+            return { ...withTaskDue(t, dueAt), recurrence };
+          }),
         });
       },
 

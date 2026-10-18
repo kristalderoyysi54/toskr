@@ -1002,7 +1002,10 @@ fn validate_preview_event(label: &str, event: &str, payload: &serde_json::Value)
 /// HUD 只允许固定动作和固定主窗口目标，不开放任意事件转发。
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum HudAction { Open, Undo }
+pub enum HudAction { Open, Undo, Complete, Snooze }
+
+/// 任务到期气泡的批量目标（多个任务同时到期，主窗口按最近一批处理）。
+const HUD_TASK_BATCH: &str = "task-batch";
 
 #[tauri::command]
 pub fn hud_action(
@@ -1011,20 +1014,46 @@ pub fn hud_action(
     action: HudAction,
     target_id: Option<String>,
     due: Option<bool>,
+    minutes: Option<u32>,
 ) -> Result<(), String> {
     if window.label() != "hud" { return Err("仅 HUD 可调用此动作".into()); }
-    let (event, payload) = hud_action_event(action, target_id.as_deref(), due.unwrap_or(false));
+    let (event, payload) =
+        hud_action_event(action, target_id.as_deref(), due.unwrap_or(false), minutes)?;
     app.emit_to("main", event, payload).map_err(|_| "HUD 动作失败".into())
 }
 
-fn hud_action_event(action: HudAction, target: Option<&str>, due: bool) -> (&'static str, serde_json::Value) {
+fn hud_action_event(
+    action: HudAction,
+    target: Option<&str>,
+    due: bool,
+    minutes: Option<u32>,
+) -> Result<(&'static str, serde_json::Value), String> {
     use serde_json::json;
-    match action {
+    // 完成 / 稍后提醒只作用于任务到期气泡：账单与非到期目标一律拒绝
+    let task_target = || match target {
+        Some(HUD_TASK_BATCH) => Ok(serde_json::Value::Null),
+        Some(id) if !id.is_empty() && !id.contains(':') => Ok(json!(id)),
+        _ => Err("此气泡没有可操作的任务".to_string()),
+    };
+    Ok(match action {
         HudAction::Undo => ("toskr://undo-capture", json!({})),
+        HudAction::Complete => (
+            "toskr://hud-due-action",
+            json!({ "action": "complete", "taskId": task_target()? }),
+        ),
+        HudAction::Snooze => (
+            "toskr://hud-due-action",
+            json!({
+                "action": "snooze",
+                "taskId": task_target()?,
+                "minutes": minutes.unwrap_or(10).clamp(1, 24 * 60),
+            }),
+        ),
         HudAction::Open => {
             let payload = if due {
                 match target.and_then(|id| id.strip_prefix("bill:")) {
                     Some(id) => json!({ "page": "tasks", "billId": id }),
+                    None if target == Some(HUD_TASK_BATCH) => json!({ "page": "tasks", "taskId": null }),
                     None => json!({ "page": "tasks", "taskId": target }),
                 }
             } else if target == Some("update") { json!({ "update": true }) }
@@ -1034,7 +1063,27 @@ fn hud_action_event(action: HudAction, target: Option<&str>, due: bool) -> (&'st
             else { json!({}) };
             ("toskr://hud-open-panel", payload)
         }
+    })
+}
+
+/// 任务到期的系统通知（仅主窗口）。隐身模式与 HUD 同规则：一律静默。
+#[tauri::command]
+pub fn system_notify(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    id: String,
+    title: String,
+    body: String,
+) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("仅主窗口可发送系统通知".into());
     }
+    let state = app.state::<AppState>();
+    if state.stealth.load(std::sync::atomic::Ordering::SeqCst) {
+        return Ok(());
+    }
+    let clip = |s: &str, n: usize| s.chars().take(n).collect::<String>();
+    crate::notify::post(&app, &clip(&id, 80), &clip(&title, 80), &clip(&body, 240))
 }
 
 #[tauri::command]
@@ -2031,12 +2080,35 @@ mod tests {
     fn hud_actions_only_route_fixed_events() {
         use super::{hud_action_event, HudAction};
         assert!(serde_json::from_str::<HudAction>("\"set_message_watch_auto\"").is_err());
-        let (event, payload) = hud_action_event(HudAction::Undo, Some("settings:arbitrary"), true);
+        let (event, payload) =
+            hud_action_event(HudAction::Undo, Some("settings:arbitrary"), true, None).unwrap();
         assert_eq!(event, "toskr://undo-capture");
         assert_eq!(payload, serde_json::json!({}));
-        let (event, payload) = hud_action_event(HudAction::Open, Some("bill:42"), true);
+        let (event, payload) =
+            hud_action_event(HudAction::Open, Some("bill:42"), true, None).unwrap();
         assert_eq!(event, "toskr://hud-open-panel");
         assert_eq!(payload, serde_json::json!({ "page": "tasks", "billId": "42" }));
+        let (_, payload) =
+            hud_action_event(HudAction::Open, Some("task-batch"), true, None).unwrap();
+        assert_eq!(payload, serde_json::json!({ "page": "tasks", "taskId": null }));
+    }
+
+    #[test]
+    fn hud_due_actions_only_target_tasks() {
+        use super::{hud_action_event, HudAction};
+        let (event, payload) =
+            hud_action_event(HudAction::Snooze, Some("t1"), true, Some(99_999)).unwrap();
+        assert_eq!(event, "toskr://hud-due-action");
+        assert_eq!(
+            payload,
+            serde_json::json!({ "action": "snooze", "taskId": "t1", "minutes": 1440 })
+        );
+        let (_, payload) =
+            hud_action_event(HudAction::Complete, Some("task-batch"), true, None).unwrap();
+        assert_eq!(payload, serde_json::json!({ "action": "complete", "taskId": null }));
+        assert!(hud_action_event(HudAction::Complete, Some("bill:1"), true, None).is_err());
+        assert!(hud_action_event(HudAction::Snooze, Some("settings:x"), true, None).is_err());
+        assert!(hud_action_event(HudAction::Complete, None, true, None).is_err());
     }
 
     #[test]

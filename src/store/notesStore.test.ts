@@ -2549,10 +2549,78 @@ describe("任务：CRUD / 撤销 / 转换原子性 / 导入", () => {
   it("setTaskDue 变更会清空 remindedAt", () => {
     const id = useNotesStore.getState().addTask("任务").id!;
     useNotesStore.getState().setTaskDue(id, 1000);
-    useNotesStore.getState().markTasksReminded([id]);
+    useNotesStore.getState().markTaskReminders([{ id, offsets: [0, 15] }]);
     expect(useNotesStore.getState().tasks[0].remindedAt).not.toBeNull();
+    expect(useNotesStore.getState().tasks[0].earlyRemindedOffsets).toEqual([15]);
     useNotesStore.getState().setTaskDue(id, 2000);
     expect(useNotesStore.getState().tasks[0].remindedAt).toBeNull();
+    expect(useNotesStore.getState().tasks[0].earlyRemindedOffsets).toBeUndefined();
+  });
+
+  it("完成记 completedAt，转回未完成清除", () => {
+    const id = useNotesStore.getState().addTask("任务").id!;
+    useNotesStore.getState().setTaskStatus(id, "done");
+    expect(useNotesStore.getState().tasks[0].completedAt).toEqual(expect.any(Number));
+    useNotesStore.getState().toggleTaskDone(id);
+    expect(useNotesStore.getState().tasks[0].completedAt).toBeUndefined();
+  });
+
+  it("重复任务完成：原位插入下一期（检查项重置），本期去掉规则", () => {
+    const id = useNotesStore.getState().addTask("周报").id!;
+    const due = new Date(2026, 7, 7, 17, 0).getTime();
+    useNotesStore.getState().setTaskDue(id, due);
+    useNotesStore.getState().setTaskRecurrence(id, { freq: "weekly" });
+    useNotesStore.getState().addChecklistItem(id, "汇总");
+    useNotesStore.getState().toggleChecklistItem(id, useNotesStore.getState().tasks[0].checklist![0].id);
+    useNotesStore.getState().cycleTaskStatus(id); // doing
+    useNotesStore.getState().cycleTaskStatus(id); // done
+    const [next, done] = useNotesStore.getState().tasks;
+    expect(done.id).toBe(id);
+    expect(done.recurrence).toBeUndefined();
+    expect(next.text).toBe("周报");
+    expect(next.status).toBe("todo");
+    expect(next.recurrence).toEqual({ freq: "weekly" });
+    expect(new Date(next.dueAt!).getDay()).toBe(5);
+    expect(next.dueAt! > Date.now()).toBe(true);
+    expect(next.checklist![0].done).toBe(false);
+    // 取消勾选再勾选不会再生成
+    useNotesStore.getState().toggleTaskDone(id);
+    useNotesStore.getState().toggleTaskDone(id);
+    expect(useNotesStore.getState().tasks).toHaveLength(2);
+  });
+
+  it("重复次数用完：最后一期完成后不再生成", () => {
+    const id = useNotesStore.getState().addTask("吃药").id!;
+    useNotesStore.getState().setTaskDue(id, Date.now() + 3_600_000);
+    useNotesStore.getState().setTaskRecurrence(id, { freq: "daily", count: 2 });
+    useNotesStore.getState().setTaskStatus(id, "done");
+    const next = useNotesStore.getState().tasks.find((t) => t.status === "todo")!;
+    expect(next.recurrence).toEqual({ freq: "daily", count: 1 });
+    useNotesStore.getState().setTaskStatus(next.id, "done");
+    expect(useNotesStore.getState().tasks).toHaveLength(2);
+    expect(useNotesStore.getState().tasks.every((t) => t.status === "done")).toBe(true);
+  });
+
+  it("无到期时间设重复规则：补上首期", () => {
+    const id = useNotesStore.getState().addTask("浇花").id!;
+    useNotesStore.getState().setTaskRecurrence(id, { freq: "daily" });
+    expect(useNotesStore.getState().tasks[0].dueAt! > Date.now()).toBe(true);
+  });
+
+  it("rescheduleTasks 批量改期可撤销；snoozeTasks 跳过已完成", () => {
+    const a = useNotesStore.getState().addTask("A").id!;
+    const b = useNotesStore.getState().addTask("B").id!;
+    useNotesStore.getState().setTaskDue(a, 1000);
+    useNotesStore.getState().setTaskDue(b, 1000);
+    useNotesStore.getState().rescheduleTasks([a, b], 5000);
+    expect(useNotesStore.getState().tasks.map((t) => t.dueAt)).toEqual([5000, 5000]);
+    useNotesStore.getState().undo();
+    expect(useNotesStore.getState().tasks.map((t) => t.dueAt)).toEqual([1000, 1000]);
+    useNotesStore.getState().setTaskStatus(a, "done");
+    useNotesStore.getState().snoozeTasks([a, b], 10);
+    const byId = Object.fromEntries(useNotesStore.getState().tasks.map((t) => [t.id, t.dueAt]));
+    expect(byId[a]).toBe(1000);
+    expect(byId[b]! > Date.now()).toBe(true);
   });
 
   it("deleteTasks / clearDoneTasks 可撤销", () => {

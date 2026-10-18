@@ -25,6 +25,21 @@ const MARGIN: f64 = 12.0;
 const HUD_WIDTH: f64 = 264.0;
 // 气泡（两行 ≈48 含顶部投影余量）+ 尾巴/间距 6 + logo 36 + 底部投影余量 ≈ 100
 const HUD_HEIGHT: f64 = 100.0;
+/// 任务到期气泡多一行操作钮（完成 / 稍后提醒）：+28pt。
+const HUD_DUE_HEIGHT: f64 = 128.0;
+
+/// 任务到期气泡（目标非账单）才带操作行，窗口要加高。
+fn hud_height(payload: &HudPayload) -> f64 {
+    let bill = payload
+        .target_id
+        .as_deref()
+        .is_some_and(|id| id.starts_with("bill:"));
+    if payload.kind == "due" && payload.target_id.is_some() && !bill {
+        HUD_DUE_HEIGHT
+    } else {
+        HUD_HEIGHT
+    }
+}
 static SOURCE_OVERLAY_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -2095,6 +2110,7 @@ pub fn show_hud(
 fn show_hud_on_main(app: &AppHandle, payload: HudPayload) -> tauri::Result<()> {
     // bool 是 Copy：先取出，随后 emit_to 整体 move payload 不受影响
     let sticky = payload.sticky;
+    let height = hud_height(&payload);
     let window = app
         .get_webview_window("hud")
         .ok_or(tauri::Error::WindowNotFound)?;
@@ -2106,7 +2122,7 @@ fn show_hud_on_main(app: &AppHandle, payload: HudPayload) -> tauri::Result<()> {
     let y = wa_y + MARGIN;
 
     let _ = app.emit_to("hud", HUD_EVENT, payload);
-    window.set_size(LogicalSize::new(HUD_WIDTH, HUD_HEIGHT))?;
+    window.set_size(LogicalSize::new(HUD_WIDTH, height))?;
     window.set_position(LogicalPosition::new(x, y))?;
     let _ = window.set_ignore_cursor_events(true);
     ensure_fullscreen_auxiliary(&window);
@@ -2117,7 +2133,7 @@ fn show_hud_on_main(app: &AppHandle, payload: HudPayload) -> tauri::Result<()> {
         let mut hud = state.hud.lock().unwrap();
         hud.visible = true;
         hud.hovered = false;
-        hud.rect_pt = (x, y, HUD_WIDTH, HUD_HEIGHT);
+        hud.rect_pt = (x, y, HUD_WIDTH, height);
     }
     let generation = state.hud_generation.fetch_add(1, Ordering::SeqCst) + 1;
     let duration_ms = state.hud_duration_ms.load(Ordering::Relaxed);
@@ -2167,13 +2183,14 @@ fn hud_lifecycle(app: AppHandle, generation: u64, sticky: bool, duration_ms: u64
                         && (ay - (m.wa_y + MARGIN)).abs() <= 2.0
                 });
                 let st = h2.state::<AppState>();
+                let height = st.hud.lock().unwrap().rect_pt.3;
                 if anchored {
-                    st.hud.lock().unwrap().rect_pt = (ax, ay, HUD_WIDTH, HUD_HEIGHT);
+                    st.hud.lock().unwrap().rect_pt = (ax, ay, HUD_WIDTH, height);
                 } else if let Ok((origin, area, s2)) = cursor_work_area(&h2) {
                     let x = origin.x as f64 / s2 + area.width as f64 / s2 - HUD_WIDTH - MARGIN;
                     let y = origin.y as f64 / s2 + MARGIN;
                     let _ = w.set_position(LogicalPosition::new(x, y));
-                    st.hud.lock().unwrap().rect_pt = (x, y, HUD_WIDTH, HUD_HEIGHT);
+                    st.hud.lock().unwrap().rect_pt = (x, y, HUD_WIDTH, height);
                 }
             });
         }

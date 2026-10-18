@@ -21,6 +21,16 @@ export const HUD_EXIT_EVENT = "toskr://hud-exit";
 export const UNDO_CAPTURE_EVENT = "toskr://undo-capture";
 /** HUD → 主窗口：点击气泡打开面板并定位到刚捕获的卡片。 */
 export const HUD_OPEN_PANEL_EVENT = "toskr://hud-open-panel";
+/** 到期气泡里点「完成 / 稍后提醒」：taskId 为 null 表示最近一批到期任务。 */
+export const HUD_DUE_ACTION_EVENT = "toskr://hud-due-action";
+/** 多个任务同时到期时气泡的目标（Rust 侧同名常量）。 */
+export const HUD_TASK_BATCH = "task-batch";
+
+export interface HudDueActionPayload {
+  action: "complete" | "snooze";
+  taskId: string | null;
+  minutes?: number;
+}
 /** Rust → menuflyout 窗口：展示子菜单条目。 */
 export const MENU_FLYOUT_EVENT = "toskr://menu-flyout";
 /** Rust → menuflyout：光标在小窗内的位置（窗口内逻辑 pt）或已离开。 */
@@ -973,8 +983,15 @@ export const api = {
     sticky?: boolean,
     targetId?: string
   ) => invoke("hud_feedback", { kind, text, undoable, sticky, targetId }),
-  hudAction: (action: "open" | "undo", targetId?: string, due = false) =>
-    invoke<void>("hud_action", { action, targetId, due }),
+  hudAction: (
+    action: "open" | "undo" | "complete" | "snooze",
+    targetId?: string,
+    due = false,
+    minutes?: number
+  ) => invoke<void>("hud_action", { action, targetId, due, minutes }),
+  /** 任务到期的系统通知（仅打包版可用；隐身模式下 Rust 侧静默）。 */
+  systemNotify: (id: string, title: string, body: string) =>
+    invoke<void>("system_notify", { id, title, body }),
   hideHud: () => invoke("hide_hud"),
   /** 打开右键子菜单小窗（主窗口）；entries 为序列化后的条目。 */
   showMenuFlyout: (anchor: MenuFlyoutAnchor, width: number, height: number, entries: unknown) =>

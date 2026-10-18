@@ -6,12 +6,17 @@ import {
   compareTasks,
   dueBadgeLabel,
   dueBadgeShortLabel,
-  dueTasksToRemind,
+  filterTasks,
   isSmartBandTask,
   presetCfgDue,
   presetCfgLabel,
+  reminderHitLabel,
   sortTasks,
+  taskRemindersDue,
+  todayAgenda,
+  todayDefaultDue,
 } from "./tasks";
+import { nextRecurrence, nextRecurrenceDue, recurrenceLabel } from "./taskRecurrence";
 
 let seq = 0;
 function task(patch: Partial<Task> = {}): Task {
@@ -143,10 +148,12 @@ describe("isSmartBandTask", () => {
   });
 });
 
-describe("dueTasksToRemind", () => {
-  it("未完成 + 已到期 + 未提醒 → 命中", () => {
+describe("taskRemindersDue", () => {
+  const ids = (hits: { task: Task }[]) => hits.map((h) => h.task.id);
+
+  it("缺省只有到期档：未完成 + 已到期 + 未提醒 → 命中", () => {
     const hit = task({ dueAt: NOW - 1 });
-    expect(dueTasksToRemind([hit], NOW).map((t) => t.id)).toEqual([hit.id]);
+    expect(taskRemindersDue([hit], NOW)).toEqual([{ task: hit, offsets: [0] }]);
   });
 
   it("已提醒 / 已完成 / 无到期 / 未来 均不命中", () => {
@@ -154,7 +161,110 @@ describe("dueTasksToRemind", () => {
     const done = task({ status: "done", dueAt: NOW - 1 });
     const noDue = task({});
     const future = task({ dueAt: NOW + 60_000 });
-    expect(dueTasksToRemind([reminded, done, noDue, future], NOW)).toEqual([]);
+    expect(taskRemindersDue([reminded, done, noDue, future], NOW)).toEqual([]);
+  });
+
+  it("提前档：进入提前窗口命中一次，已记录的档位不再命中", () => {
+    const soon = task({ dueAt: NOW + 10 * 60_000, reminderOffsets: [0, 15, 60] });
+    expect(taskRemindersDue([soon], NOW)[0].offsets).toEqual([15, 60]);
+    const marked = { ...soon, earlyRemindedOffsets: [15, 60] as Task["earlyRemindedOffsets"] };
+    expect(taskRemindersDue([marked], NOW)).toEqual([]);
+  });
+
+  it("已逾期不补发提前档；空数组 = 不提醒", () => {
+    const overdue = task({ dueAt: NOW - 1, reminderOffsets: [15] });
+    const silent = task({ dueAt: NOW - 1, reminderOffsets: [] });
+    expect(ids(taskRemindersDue([overdue, silent], NOW))).toEqual([]);
+  });
+
+  it("提前档文案带剩余时间，到期档只用标题", () => {
+    const soon = task({ dueAt: NOW + 15 * 60_000 });
+    expect(reminderHitLabel({ task: soon, offsets: [15] }, NOW, "开会")).toBe("开会 · 15 分钟后到期");
+    expect(reminderHitLabel({ task: soon, offsets: [0] }, NOW, "开会")).toBe("开会");
+  });
+});
+
+describe("nextRecurrenceDue（NOW = 2026-08-05 周三 12:00）", () => {
+  const local = (mo: number, day: number, h: number, y = 2026) =>
+    new Date(y, mo, day, h, 0, 0, 0).getTime();
+  const due = local(7, 5, 9);
+
+  it("每天：按计划推一天并保留时刻", () => {
+    expect(nextRecurrenceDue({ freq: "daily" }, due, NOW)).toBe(local(7, 6, 9));
+  });
+
+  it("逾期多日才完成：跳过已过去的期次", () => {
+    expect(nextRecurrenceDue({ freq: "daily" }, local(7, 1, 9), NOW)).toBe(local(7, 6, 9));
+  });
+
+  it("工作日：周五 → 下周一", () => {
+    expect(nextRecurrenceDue({ freq: "weekdays" }, local(7, 7, 9), local(7, 7, 10))).toBe(local(7, 10, 9));
+  });
+
+  it("每周指定周几：周三 → 同周周五", () => {
+    expect(nextRecurrenceDue({ freq: "weekly", weekdays: [1, 5] }, due, NOW)).toBe(local(7, 7, 9));
+  });
+
+  it("每周缺省星期取本期当天", () => {
+    expect(nextRecurrenceDue({ freq: "weekly" }, due, NOW)).toBe(local(7, 12, 9));
+  });
+
+  it("每月 31 日：小月取月末，下一期回到 31 日", () => {
+    const jan31 = local(0, 31, 9);
+    const feb = nextRecurrenceDue({ freq: "monthly", monthDay: 31 }, jan31, jan31);
+    expect(feb).toBe(local(1, 28, 9));
+    expect(nextRecurrenceDue({ freq: "monthly", monthDay: 31 }, feb, feb)).toBe(local(2, 31, 9));
+  });
+
+  it("每年：同月同日", () => {
+    expect(nextRecurrenceDue({ freq: "yearly" }, due, NOW)).toBe(local(7, 5, 9, 2027));
+  });
+
+  it("从完成时起算：以完成日为基准", () => {
+    const done = local(7, 9, 15);
+    expect(nextRecurrenceDue({ freq: "daily", basis: "completion" }, due, done)).toBe(local(7, 10, 9));
+  });
+
+  it("共 N 次：下一期减 1，剩 1 次时不再生成", () => {
+    expect(nextRecurrence({ freq: "daily", count: 3 }, due, NOW)).toEqual({
+      dueAt: local(7, 6, 9),
+      recurrence: { freq: "daily", count: 2 },
+    });
+    expect(nextRecurrence({ freq: "daily", count: 1 }, due, NOW)).toBeNull();
+  });
+
+  it("到某天为止：含结束当天，之后不再生成", () => {
+    const rec = { freq: "daily" as const, until: local(7, 6, 0) };
+    expect(nextRecurrence(rec, due, NOW)?.dueAt).toBe(local(7, 6, 9));
+    expect(nextRecurrence(rec, local(7, 6, 9), local(7, 6, 10))).toBeNull();
+  });
+
+  it("标签", () => {
+    expect(recurrenceLabel({ freq: "weekly", weekdays: [1, 5] }, due)).toBe("每周一五");
+    expect(recurrenceLabel({ freq: "monthly" }, due)).toBe("每月 5 日");
+    expect(recurrenceLabel({ freq: "daily", basis: "completion" }, due)).toBe("每天（完成后起算）");
+    expect(recurrenceLabel({ freq: "daily", count: 3 }, due)).toBe("每天，剩 3 次");
+    expect(recurrenceLabel({ freq: "daily", until: local(11, 31, 0) }, due)).toBe("每天，到 2026/12/31");
+  });
+});
+
+describe("filterTasks", () => {
+  it("关键词匹配标题/备注/检查项，默认排除已完成", () => {
+    const a = task({ text: "发布 v1" });
+    const b = task({ text: "写文档", note: "发布说明" });
+    const c = task({ text: "杂事", checklist: [{ id: "c", text: "发布前检查", done: false }] });
+    const d = task({ text: "发布 v0", status: "done" });
+    const hit = filterTasks([a, b, c, d], { query: "发布", chips: [] }, NOW).map((t) => t.id);
+    expect(hit.sort()).toEqual([a.id, b.id, c.id].sort());
+  });
+
+  it("chip 取交集：本周 + 高优先级；已完成 chip 只看已完成", () => {
+    const a = task({ priority: "high", dueAt: NOW + 86_400_000 });
+    const b = task({ priority: "high", dueAt: NOW + 10 * 86_400_000 });
+    const c = task({ priority: "low", dueAt: NOW + 86_400_000 });
+    const d = task({ status: "done" });
+    expect(filterTasks([a, b, c, d], { query: "", chips: ["week", "high"] }, NOW)).toEqual([a]);
+    expect(filterTasks([a, b, c, d], { query: "", chips: ["done"] }, NOW)).toEqual([d]);
   });
 });
 
@@ -228,5 +338,33 @@ describe("dueBadgeLabel", () => {
     expect(dueBadgeShortLabel(NOW - 3 * 3_600_000, NOW)).toBe("3 小时前");
     const at = (d: number, h: number) => new Date(2026, 7, d, h, 0).getTime();
     expect(dueBadgeShortLabel(at(5, 20), NOW)).toBe("今天 20:00");
+  });
+});
+
+describe("todayAgenda（NOW = 2026-08-05 12:00）", () => {
+  const at = (day: number, h: number) => new Date(2026, 7, day, h, 0, 0, 0).getTime();
+
+  it("今天到期进时间轴（含已完成、按时刻），往日未完成进 earlier，其余忽略", () => {
+    const morning = task({ dueAt: at(5, 9), status: "done", completedAt: at(5, 10) });
+    const evening = task({ dueAt: at(5, 20) });
+    const noon = task({ dueAt: at(5, 11) });
+    const old = task({ dueAt: at(3, 9) });
+    const oldDone = task({ dueAt: at(3, 9), status: "done" });
+    const tomorrow = task({ dueAt: at(6, 9) });
+    const noDue = task({});
+    const r = todayAgenda([evening, morning, old, oldDone, tomorrow, noDue, noon], NOW);
+    expect(r.timeline.map((t) => t.id)).toEqual([morning.id, noon.id, evening.id]);
+    expect(r.earlier.map((t) => t.id)).toEqual([old.id]);
+    expect(r.doneToday).toBe(1);
+    expect(r.overdue).toBe(2);
+  });
+});
+
+describe("todayDefaultDue", () => {
+  const at = (h: number, m = 0) => new Date(2026, 7, 5, h, m, 0, 0).getTime();
+  it("20:00 前取 20:00；之后取下一个整点；不跨过今天", () => {
+    expect(todayDefaultDue(at(12))).toBe(at(20));
+    expect(todayDefaultDue(at(20, 15))).toBe(at(21));
+    expect(todayDefaultDue(at(23, 30))).toBe(at(23, 59));
   });
 });

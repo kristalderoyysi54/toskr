@@ -20,6 +20,7 @@ import {
   HUD_EVENT,
   HUD_EXIT_EVENT,
   HUD_HOVER_EVENT,
+  HUD_TASK_BATCH,
   type HudHoverPayload,
   type HudPayload,
 } from "@/lib/tauri";
@@ -105,6 +106,7 @@ export default function HudView() {
 
   const undoable = !!item?.undoable;
   const pill = !!item && !hudActionable(item);
+  const dueActions = item ? taskDueActions(item) : null;
 
   const dismiss = () => {
     // 与点击气泡同一退场节奏：先本地播退场，再让窗口隐藏
@@ -151,6 +153,7 @@ export default function HudView() {
                   className="hud-balloon flex w-full items-center gap-2 rounded-2xl bg-paper py-1.5 pl-2.5 pr-1.5 text-paper-foreground"
                 >
                   <HudIcon kind={item.kind} />
+                  <div className="min-w-0 flex-1">
                   <div
                     onClick={() => {
                       // 点击气泡本体：打开面板。到期提醒跳任务页并定位该任务；
@@ -160,9 +163,9 @@ export default function HudView() {
                       dismiss();
                     }}
                     title="点击查看"
-                    className="min-w-0 flex-1 cursor-pointer"
+                    className="cursor-pointer"
                   >
-                    <p className="text-body font-medium leading-tight">
+                    <p className={cn("text-body font-medium leading-tight", dueActions && "line-clamp-2")}>
                       {titleOf(item)}
                     </p>
                     {/* warn/undone/sent 的 text 已是标题本身，副行只给捕获类展示预览 */}
@@ -172,6 +175,33 @@ export default function HudView() {
                           {item.text}
                         </p>
                       )}
+                  </div>
+                  {/* 任务到期：气泡内直接完成或稍后提醒（窗口已由 Rust 侧加高一行） */}
+                  {dueActions && (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {dueActions.batch ? null : (
+                        <HudActionButton
+                          onClick={() => {
+                            void api.hudAction("complete", item.targetId ?? undefined, true);
+                            dismiss();
+                          }}
+                        >
+                          <Check className="size-2.5" strokeWidth={3} /> 完成
+                        </HudActionButton>
+                      )}
+                      {SNOOZE_MINUTES.map(({ minutes, label }) => (
+                        <HudActionButton
+                          key={minutes}
+                          onClick={() => {
+                            void api.hudAction("snooze", item.targetId ?? undefined, true, minutes);
+                            dismiss();
+                          }}
+                        >
+                          {dueActions.batch ? `全部${label}` : label}
+                        </HudActionButton>
+                      ))}
+                    </div>
+                  )}
                   </div>
                   {undoable && (
                     <button
@@ -233,6 +263,38 @@ export default function HudView() {
         </AnimatePresence>
       </div>
     </MotionConfig>
+  );
+}
+
+const SNOOZE_MINUTES = [
+  { minutes: 10, label: "10 分钟后" },
+  { minutes: 60, label: "1 小时后" },
+];
+
+/** 任务到期气泡才有完成/稍后（账单到期跳订阅页处理，不在气泡里改）。 */
+function taskDueActions(item: HudPayload): { batch: boolean } | null {
+  if (item.kind !== "due" || !item.targetId || item.targetId.startsWith("bill:")) return null;
+  return { batch: item.targetId === HUD_TASK_BATCH };
+}
+
+function HudActionButton({
+  onClick,
+  children,
+}: {
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "flex items-center gap-0.5 rounded-sm border border-paper-foreground/25 px-1.5 py-0.5 outline-none",
+        "text-micro text-paper-foreground/80 hover:bg-paper-foreground/10",
+        "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+      )}
+    >
+      {children}
+    </button>
   );
 }
 

@@ -1,8 +1,9 @@
 import { Fragment, useState } from "react";
-import { CalendarDays } from "lucide-react";
+import { CalendarDays, ListFilter } from "lucide-react";
 
 import { SubscriptionsPage } from "@/components/subscriptions/SubscriptionsPage";
 import { TaskPage } from "@/components/TaskPage";
+import { TodayPage } from "@/components/TodayPage";
 import { focusRing } from "@/components/ui/focus-ring";
 import { IconButton } from "@/components/ui/icon-button";
 import { SlidingTabIndicator } from "@/components/ui/sliding-tab-indicator";
@@ -12,12 +13,13 @@ import { useNotesStore } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
 
 const SUBVIEWS = [
+  { value: "today", label: "今天" },
   { value: "tasks", label: "任务" },
   { value: "subscriptions", label: "订阅" },
 ] as const;
 
 /**
- * 「提醒」页外壳：顶部「任务 / 订阅」二段切换，各子视图独立满屏
+ * 「提醒」页外壳：顶部「今天 / 任务 / 订阅」切换，各子视图独立满屏
  * （单屏只展现一类内容）。任务子视图行末可唤出月历（默认隐藏，会话态）。
  *
  * 二级导航＝文字页签（2026-08-16 用户选定 B 案）：一级页签独占「轨道+浮块」
@@ -25,20 +27,27 @@ const SUBVIEWS = [
  * 左轴线（pl-4 + px-2 ≈ 一级页签文字起点），日历钮右对齐收尾。
  */
 export function RemindersPage({ buckets, now }: { buckets: TaskBuckets; now: number }) {
-  const subview = useUIStore((s) => s.remindersSubview);
+  const storedSubview = useUIStore((s) => s.remindersSubview);
   const bills = useNotesStore((s) => s.bills);
   const subscriptionsEnabled = useNotesStore((s) => s.settings.subscriptionsEnabled);
+  // 订阅功能关闭时没有订阅页签：残留的 subscriptions 落回「今天」
+  const subview =
+    storedSubview === "subscriptions" && !subscriptionsEnabled ? "today" : storedSubview;
+  const subviews = subscriptionsEnabled
+    ? SUBVIEWS
+    : SUBVIEWS.filter((v) => v.value !== "subscriptions");
   // 默认不显示日历（用户指定）；会话态不持久化，每次启动都从隐藏开始
   const [taskCalendar, setTaskCalendar] = useState(false);
+  // 筛选栏同为会话态：关闭即清空条件，回到分组视图
+  const [taskFilter, setTaskFilter] = useState(false);
   return (
     <>
-      {/* min-h 锁行高：订阅子视图无日历钮，避免切换时行高跳 2px。
+      {/* min-h 锁行高：今天/订阅子视图无筛选/日历钮，避免切换时行高跳 2px。
           上下留白（pt-1/pb-2）：上下相邻元素均无自带间距，呼吸全靠本行。
-          订阅功能关闭时只剩纯任务页：藏掉二级 tabs，仅保留右端日历钮 */}
+          订阅功能关闭时只剩「今天 · 任务」两个页签 */}
       <div className="flex min-h-6 items-center pb-2 pl-4 pr-3.5 pt-1">
-        {subscriptionsEnabled && (
         <div role="tablist" aria-label="提醒子视图" className="flex items-center gap-0.5">
-          {SUBVIEWS.map(({ value, label }, i) => {
+          {subviews.map(({ value, label }, i) => {
             const active = subview === value;
             return (
               <Fragment key={value}>
@@ -75,21 +84,39 @@ export function RemindersPage({ buckets, now }: { buckets: TaskBuckets; now: num
             );
           })}
         </div>
-        )}
-        {(subview === "tasks" || !subscriptionsEnabled) && (
-          <IconButton
-            label={taskCalendar ? "隐藏任务日历" : "显示任务日历"}
-            size="sm"
-            aria-pressed={taskCalendar}
-            onClick={() => setTaskCalendar((v) => !v)}
-            className={cn("ml-auto", taskCalendar && "text-primary")}
-          >
-            <CalendarDays />
-          </IconButton>
+        {subview === "tasks" && (
+          <>
+            <IconButton
+              label={taskFilter ? "关闭搜索与筛选" : "搜索与筛选任务"}
+              size="sm"
+              aria-pressed={taskFilter}
+              onClick={() => setTaskFilter((v) => !v)}
+              className={cn("ml-auto", taskFilter && "text-primary")}
+            >
+              <ListFilter />
+            </IconButton>
+            <IconButton
+              label={taskCalendar ? "隐藏任务日历" : "显示任务日历"}
+              size="sm"
+              aria-pressed={taskCalendar}
+              onClick={() => setTaskCalendar((v) => !v)}
+              className={cn(taskCalendar && "text-primary")}
+            >
+              <CalendarDays />
+            </IconButton>
+          </>
         )}
       </div>
-      {subview === "tasks" || !subscriptionsEnabled ? (
-        <TaskPage buckets={buckets} now={now} calendar={taskCalendar} />
+      {subview === "today" ? (
+        <TodayPage now={now} />
+      ) : subview === "tasks" ? (
+        <TaskPage
+          buckets={buckets}
+          now={now}
+          calendar={taskCalendar}
+          filterOpen={taskFilter}
+          onCloseFilter={() => setTaskFilter(false)}
+        />
       ) : (
         <SubscriptionsPage bills={bills} now={now} />
       )}

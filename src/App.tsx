@@ -185,7 +185,7 @@ import {
   restoreRichCaptureAliases,
 } from "@/lib/richCapture";
 import { billDueLabel, dueBillsToRemind } from "@/lib/bills";
-import { bucketTasksForDisplay, dueTasksToRemind } from "@/lib/tasks";
+import { bucketTasksForDisplay, reminderHitLabel, taskRemindersDue } from "@/lib/tasks";
 import { springSnappy, tweenExit } from "@/lib/motion";
 import {
   advancePermissionGuard,
@@ -228,7 +228,10 @@ import { PANEL_SHOWN_EVENT, syncPanelVisibility } from "@/lib/panelVisibilitySyn
 import {
   api,
   EDGE_HIDE_STATE_EVENT,
+  HUD_DUE_ACTION_EVENT,
   HUD_OPEN_PANEL_EVENT,
+  HUD_TASK_BATCH,
+  type HudDueActionPayload,
   MESSAGE_WATCH_EVENT,
   PANEL_MOVED_EVENT,
   CLIP_EVENT,
@@ -1607,9 +1610,10 @@ export default function App() {
           useUIStore.getState().setRemindersSubview("subscriptions");
           // bill: 前缀隔离账单/任务的高亮 id 空间（BillRow 按前缀比对）
           flash(`bill:${p.billId}`);
-        } else if (p.taskId) {
+        } else {
+          // 多任务批量（taskId 为空）也落到任务子视图，「已到期」区就在顶部
           useUIStore.getState().setRemindersSubview("tasks");
-          flash(p.taskId);
+          if (p.taskId) flash(p.taskId);
         }
       } else {
         const lastEntry = captureHistory[captureHistory.length - 1];
@@ -1628,22 +1632,56 @@ export default function App() {
 
   // 任务到期提醒：水合后即扫一次（补发休眠/重启期间错过的），此后每 30s。
   // 粘性 HUD 可能被后续捕获气泡顶掉，任务页「已到期」红区是兜底真相来源。
+  // 渠道按设置走 HUD / 系统通知 / 两者；最近一批 id 留给气泡里的「全部稍后」。
+  const dueBatchRef = useRef<string[]>([]);
   useEffect(() => {
     const check = () => {
       if (isDataOperationLocked()) return;
-      const { tasks: all, markTasksReminded } = useNotesStore.getState();
-      const due = dueTasksToRemind(all, Date.now());
-      if (!due.length) return;
+      const { tasks: all, markTaskReminders, settings } = useNotesStore.getState();
+      const now = Date.now();
+      const hits = taskRemindersDue(all, now);
+      if (!hits.length) return;
       const text =
-        due.length === 1 ? previewOf(due[0].text) : `${due.length} 个任务已到期`;
-      void api.hudFeedback(
-        "due",
-        text,
-        false,
-        true,
-        due.length === 1 ? due[0].id : undefined
-      );
-      markTasksReminded(due.map((t) => t.id));
+        hits.length === 1
+          ? reminderHitLabel(hits[0], now, previewOf(hits[0].task.text))
+          : `${hits.length} 个任务提醒`;
+      dueBatchRef.current = hits.map((h) => h.task.id);
+      const channel = settings.taskReminderChannel;
+      if (channel !== "system") {
+        void api.hudFeedback(
+          "due",
+          text,
+          false,
+          true,
+          hits.length === 1 ? hits[0].task.id : HUD_TASK_BATCH
+        );
+      }
+      if (channel === "system" || channel === "both") {
+        const body =
+          hits.length === 1
+            ? text
+            : hits.map((h) => previewOf(h.task.text)).slice(0, 4).join("、");
+        void api
+          .systemNotify(
+            // identifier 带任务 id：点通知由 Rust 侧解析后定位（同点到期气泡）
+            hits.length === 1 ? `task:${hits[0].task.id}:${now}` : `${HUD_TASK_BATCH}:${now}`,
+            "Toskr 任务提醒",
+            body
+          )
+          .catch(() => {
+            // 未打包/未授权：系统通知不可用时回落 HUD，提醒不能凭空消失
+            if (channel === "system") {
+              void api.hudFeedback(
+                "due",
+                text,
+                false,
+                true,
+                hits.length === 1 ? hits[0].task.id : HUD_TASK_BATCH
+              );
+            }
+          });
+      }
+      markTaskReminders(hits.map((h) => ({ id: h.task.id, offsets: h.offsets })));
     };
     if (useNotesStore.persist.hasHydrated()) check();
     const unsub = useNotesStore.persist.onFinishHydration(() => check());
@@ -1653,6 +1691,36 @@ export default function App() {
       unsub();
       window.removeEventListener(DATA_RUNTIME_READY_EVENT, check);
       window.clearInterval(timer);
+    };
+  }, []);
+
+  // 到期气泡里的「完成 / 稍后提醒」（不必打开面板就处理完）
+  useEffect(() => {
+    const unlisten = listen<HudDueActionPayload>(HUD_DUE_ACTION_EVENT, (event) => {
+      if (isDataOperationLocked()) return;
+      const { action, taskId, minutes } = event.payload;
+      const state = useNotesStore.getState();
+      const ids = (taskId ? [taskId] : dueBatchRef.current).filter((id) =>
+        state.tasks.some((t) => t.id === id && t.status !== "done")
+      );
+      if (!ids.length) {
+        tip("info", "任务已处理或已删除");
+        return;
+      }
+      if (action === "complete") {
+        for (const id of ids) state.setTaskStatus(id, "done");
+        tip("ok", ids.length === 1 ? "已完成" : `已完成 ${ids.length} 个任务`);
+        return;
+      }
+      state.snoozeTasks(ids, minutes ?? 10);
+      const at = new Date(Date.now() + (minutes ?? 10) * 60_000);
+      tip(
+        "ok",
+        `已推迟到 ${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`
+      );
+    });
+    return () => {
+      unlisten.then((fn) => fn());
     };
   }, []);
 

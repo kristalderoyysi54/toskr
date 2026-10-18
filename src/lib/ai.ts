@@ -8,6 +8,8 @@ import { tip } from "@/lib/tip";
 import {
   useNotesStore,
   type TaskPriority,
+  type TaskRecurrence,
+  type TaskRecurrenceFreq,
 } from "@/store/notesStore";
 import { isDataOperationLocked } from "@/store/dataOperationStore";
 import {
@@ -60,6 +62,23 @@ export interface ParseTaskResult {
   dueAtMs: number | null;
   priority: TaskPriority;
   checklist: string[];
+  recurrence: TaskRecurrence | null;
+  /** 模型给出的分组名（原样）；由调用方按现有分组名精确匹配成 id。 */
+  sectionName: string | null;
+}
+
+const RECURRENCE_FREQS: TaskRecurrenceFreq[] = ["daily", "weekdays", "weekly", "monthly", "yearly"];
+
+function normalizeParsedRecurrence(v: unknown): TaskRecurrence | null {
+  if (typeof v !== "object" || v === null) return null;
+  const o = v as Record<string, unknown>;
+  const freq = o.freq as TaskRecurrenceFreq;
+  if (!RECURRENCE_FREQS.includes(freq)) return null;
+  if (freq !== "weekly") return { freq };
+  const weekdays = Array.isArray(o.weekdays)
+    ? [...new Set(o.weekdays.filter((d): d is number => Number.isInteger(d) && d >= 0 && d <= 6))].sort()
+    : [];
+  return weekdays.length ? { freq, weekdays } : { freq };
 }
 
 /** 把宽松数值（number/数字字符串/秒级时间戳）归一为毫秒时间戳。 */
@@ -158,7 +177,14 @@ export function normalizeParsedTask(
         .filter(Boolean)
     : [];
 
-  return { title, dueAtMs, priority: normalizePriority(o.priority), checklist };
+  return {
+    title,
+    dueAtMs,
+    priority: normalizePriority(o.priority),
+    checklist,
+    recurrence: normalizeParsedRecurrence(o.recurrence),
+    sectionName: typeof o.section === "string" && o.section.trim() ? o.section.trim() : null,
+  };
 }
 
 export interface SplitResult {
@@ -259,7 +285,7 @@ function nowContext(now: number): string {
   return `当前本地时间：${iso}（${week}）`;
 }
 
-function parseTaskSystem(now: number): string {
+function parseTaskSystem(now: number, sectionNames: string[]): string {
   return `你是任务解析助手。将用户输入的一句话解析为结构化任务 JSON。
 
 ${nowContext(now)}
@@ -279,16 +305,22 @@ ${nowContext(now)}
       或一句话里明显包含多个并列任务）→ 把每件事各作一条 checklist，保留用户原表述（可轻度精简）。
 5. 当 checklist 非空时，title 必须是对整组事项的概括性短标题（不超过30字），
    绝不要把整段原文塞进 title。
+6. recurrence：用户说了周期（"每天""每个工作日""每周一""每周二四""每月""每年"）才给，否则 null：
+   {"freq": "daily"|"weekdays"|"weekly"|"monthly"|"yearly", "weekdays": number[]}
+   weekdays 仅 weekly 时给，0=周日 1=周一 … 6=周六。有周期时 due 给最近一期的日期与时间。
+7. section：用户点名放进某个分组（"放工作组""归到家务"）且与下列分组名之一对应时，给出该分组名原文；否则 null。
+   现有分组：${sectionNames.join("、") || "（无）"}
 
 输出结构（所有键都必须出现）：
-{"title": string, "due": {"minutesFromNow": number} | {"date": string, "time": string} | null, "priority": string, "checklist": string[]}
+{"title": string, "due": {"minutesFromNow": number} | {"date": string, "time": string} | null, "priority": string, "checklist": string[], "recurrence": {"freq": string, "weekdays"?: number[]} | null, "section": string | null}
 
 示例（假设当前是 2026-08-05 周三 10:00）：
 输入"下午3点提醒我开会" → {"title":"开会","due":{"date":"2026-08-05","time":"15:00"},"priority":"none","checklist":[]}
 输入"20分钟后提醒我关火" → {"title":"关火","due":{"minutesFromNow":20},"priority":"high","checklist":[]}
 输入"晚上8点提醒我复盘"（当前已 21:00）→ {"title":"复盘","due":{"date":"2026-08-06","time":"20:00"},"priority":"none","checklist":[]}
 输入"明早9点前交周报，拆一下步骤" → {"title":"交周报","due":{"date":"2026-08-06","time":"09:00"},"priority":"mid","checklist":["整理本周完成事项","汇总下周计划","检查数据与附件","发送周报"]}
-输入"增加补单适配JSAPI方式 结算表增加jsAPI类型，这两个做成待办事项" → {"title":"JSAPI 适配改造","due":null,"priority":"none","checklist":["增加补单适配JSAPI方式","结算表增加jsAPI类型"]}
+输入"增加补单适配JSAPI方式 结算表增加jsAPI类型，这两个做成待办事项" → {"title":"JSAPI 适配改造","due":null,"priority":"none","checklist":["增加补单适配JSAPI方式","结算表增加jsAPI类型"],"recurrence":null,"section":null}
+输入"每周一上午10点交周报，放工作组"（现有分组含「工作」）→ {"title":"交周报","due":{"date":"2026-08-10","time":"10:00"},"priority":"none","checklist":[],"recurrence":{"freq":"weekly","weekdays":[1]},"section":"工作"}
 
 ${ONLY_JSON}`;
 }
@@ -320,42 +352,83 @@ function beginAiLease(): DataGenerationLease | null {
   return beginDataGenerationLease();
 }
 
+/** AI 解析出、等待用户确认的任务草稿（速记框预览，确认后才入库）。 */
+export interface TaskDraft {
+  original: string;
+  title: string;
+  dueAtMs: number | null;
+  priority: TaskPriority;
+  checklist: string[];
+  recurrence: TaskRecurrence | null;
+  sectionId: string | null;
+  generation: number;
+}
+
 /**
- * ✨ 自然语言建任务。任何失败（未配置/网络/解析）都回退为普通文本任务入库
- * ——回车的语义是「存下这句话」，AI 只是增强，用户输入绝不能凭空消失。
+ * ✨ 自然语言解析为草稿，不入库。任何失败（未配置/网络/解析）都按原文建普通任务
+ * 并返回 null——回车的语义是「存下这句话」，AI 只是增强，用户输入绝不能凭空消失。
  */
-export async function parseTaskInput(rawText: string): Promise<void> {
+export async function parseTaskDraft(rawText: string): Promise<TaskDraft | null> {
   const text = rawText.trim();
-  if (!text) return;
+  if (!text) return null;
   const lease = beginAiLease();
-  if (!lease) return;
+  if (!lease) return null;
   try {
     const referenceNow = Date.now();
+    const sections = useNotesStore.getState().taskSections;
     const raw = await requestAi({
       purpose: "create-task",
-      system: parseTaskSystem(referenceNow),
+      system: parseTaskSystem(referenceNow, sections.map((s) => s.name)),
       user: text,
       maxTokens: 600,
     });
     const r = normalizeParsedTask(parseAiRaw(raw), text, referenceNow);
     if (!r) throw new AiError("parse", "AI 返回内容缺少必要字段");
-    if (!matchesDataGeneration(lease.generation)) return;
-    const store = useNotesStore.getState();
-    const { result, id } = store.addTask(truncateChars(r.title, 30) || text);
-    if (result !== "added" || !id) return;
-    if (r.dueAtMs !== null) store.setTaskDue(id, r.dueAtMs);
-    if (r.priority !== "none") store.setTaskPriority(id, r.priority);
-    for (const item of r.checklist.slice(0, 8)) {
-      store.addChecklistItem(id, item);
-    }
-    tip("ok", `已创建任务「${truncateChars(r.title, 12)}」`);
+    if (!matchesDataGeneration(lease.generation)) return null;
+    const section = r.sectionName
+      ? useNotesStore.getState().taskSections.find((s) => s.name === r.sectionName)
+      : undefined;
+    return {
+      original: text,
+      title: truncateChars(r.title, 30) || text,
+      dueAtMs: r.dueAtMs,
+      priority: r.priority,
+      checklist: r.checklist.slice(0, 8),
+      recurrence: r.recurrence,
+      sectionId: section?.id ?? null,
+      generation: lease.generation,
+    };
   } catch (e) {
-    if (!matchesDataGeneration(lease.generation)) return;
+    if (!matchesDataGeneration(lease.generation)) return null;
     useNotesStore.getState().addTask(text);
     tip("warn", `${aiErrorTip(e)} · 已按原文创建任务`);
+    return null;
   } finally {
     lease.release();
   }
+}
+
+/** 确认草稿入库（预览里改过的字段以草稿为准）。数据代际已变则放弃。 */
+export function commitTaskDraft(draft: TaskDraft): boolean {
+  if (!matchesDataGeneration(draft.generation)) return false;
+  const store = useNotesStore.getState();
+  const { result, id } = store.addTask(draft.title.trim() || draft.original, {
+    sectionId: draft.sectionId ?? undefined,
+  });
+  if (result !== "added" || !id) return false;
+  if (draft.dueAtMs !== null) store.setTaskDue(id, draft.dueAtMs);
+  if (draft.priority !== "none") store.setTaskPriority(id, draft.priority);
+  // 规则在到期之后设：无到期时 setTaskRecurrence 会自己补首期
+  if (draft.recurrence) store.setTaskRecurrence(id, draft.recurrence);
+  for (const item of draft.checklist) store.addChecklistItem(id, item);
+  tip("ok", `已创建任务「${truncateChars(draft.title, 12)}」`);
+  return true;
+}
+
+/** 解析并直接入库（无预览；保留给不需要确认的调用方与测试）。 */
+export async function parseTaskInput(rawText: string): Promise<void> {
+  const draft = await parseTaskDraft(rawText);
+  if (draft) commitTaskDraft(draft);
 }
 
 /** 右键「AI 拆解子任务」：拆成检查项批量写入（一次快照，可整体撤销）。 */

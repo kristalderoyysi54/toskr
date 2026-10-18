@@ -2,6 +2,8 @@ import { create } from "zustand";
 
 export type PanelPage = "notes" | "clipboard" | "tasks" | "secret";
 
+export type RemindersSubview = "today" | "tasks" | "subscriptions";
+
 /** 底部草稿输入暂存的待入卡图片（DraftInput 提升到会话级防切页丢失）。 */
 export type DraftPendingImage = {
   file: string;
@@ -15,8 +17,8 @@ interface UIState {
   open: boolean;
   /** 当前页面：笔记 / 任务（会话态，每次呼出从笔记页开始）。 */
   page: PanelPage;
-  /** 「提醒」页子视图：任务 / 订阅（会话态，同 page 约定不持久化）。 */
-  remindersSubview: "tasks" | "subscriptions";
+  /** 「提醒」页子视图：今天 / 任务 / 订阅（会话态，同 page 约定不持久化）。 */
+  remindersSubview: RemindersSubview;
   /** 「内容」页子视图：笔记 / 消息 / 秘文。 */
   contentSubview: "notes" | "messages" | "secret";
   /** 图钉：钉住后失焦不自动隐藏。 */
@@ -87,7 +89,7 @@ interface UIState {
 
   setOpen: (open: boolean) => void;
   setPage: (page: PanelPage) => void;
-  setRemindersSubview: (v: "tasks" | "subscriptions") => void;
+  setRemindersSubview: (v: RemindersSubview) => void;
   setContentSubview: (v: "notes" | "messages" | "secret") => void;
   setPinned: (pinned: boolean) => void;
   setSearchOpen: (open: boolean) => void;
@@ -140,7 +142,8 @@ export type UpdateMeta = {
 export const useUIStore = create<UIState>()((set, get) => ({
   open: false,
   page: "notes",
-  remindersSubview: "tasks",
+  // 「今天」为默认子视图：打开提醒页先看今天要做什么（会话态，不持久化）
+  remindersSubview: "today",
   contentSubview: "notes",
   pinned: false,
   searchOpen: false,

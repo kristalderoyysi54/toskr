@@ -124,6 +124,10 @@ describe("normalizeParsedTask（宽容归一化）", () => {
     expect(normalizeParsedTask({ dueAtMs: 1e300 }, "原文", NOW)!.dueAtMs).toBeNull();
   });
   it("非对象返回 null", () => {
+    expect(normalizeParsedTask({ title: "a", recurrence: { freq: "weekly", weekdays: [1, 9, 1] }, section: " 工作 " }, "f", NOW))
+      .toMatchObject({ recurrence: { freq: "weekly", weekdays: [1] }, sectionName: "工作" });
+    expect(normalizeParsedTask({ title: "a", recurrence: { freq: "hourly" }, section: "" }, "f", NOW))
+      .toMatchObject({ recurrence: null, sectionName: null });
     expect(normalizeParsedTask("字符串", "f", NOW)).toBeNull();
     expect(normalizeParsedTask(null, "f", NOW)).toBeNull();
   });

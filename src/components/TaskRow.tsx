@@ -13,6 +13,7 @@ import {
   Plus,
   Pencil,
   MoreHorizontal,
+  Repeat,
   Send,
   Sparkles,
   Trash2,
@@ -52,15 +53,20 @@ import {
   presetCfgLabel,
   PRIORITY_BAR,
   PRIORITY_LABEL,
+  REMINDER_OFFSET_LABEL,
 } from "@/lib/tasks";
+import { recurrenceLabel } from "@/lib/taskRecurrence";
 import { TEXTAREA_MAX_H } from "@/lib/textarea";
 import { cn } from "@/lib/utils";
 import {
   TASK_INBOX_ID,
+  TASK_REMINDER_OFFSET_OPTIONS,
   useNotesStore,
   type ChecklistItem,
   type Task,
   type TaskPriority,
+  type TaskRecurrence,
+  type TaskRecurrenceFreq,
   type TaskStatus,
 } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
@@ -379,6 +385,16 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
               </span>
             )}
 
+            {/* 重复任务标记：图标 + tooltip 给完整规则（行宽有限，不写文字） */}
+            {!expanded && task.recurrence && (
+              <span
+                title={`重复：${recurrenceLabel(task.recurrence, task.dueAt)}`}
+                aria-label={`重复：${recurrenceLabel(task.recurrence, task.dueAt)}`}
+                className="shrink-0 text-teal-600 dark:text-teal-400"
+              >
+                <Repeat className="size-3" />
+              </span>
+            )}
             {/* 收起态才在行头放到期/删除；展开态移到详情底部操作行，把宽度留给标题 */}
             {!expanded && <DuePopover task={task} now={now} shortLabel open={dueOpen} onOpenChange={setDueOpen} />}
             {!expanded && (
@@ -789,7 +805,12 @@ function DuePopover({
         // 阻断到全局快捷键（Esc 关面板等）；Radix 自身的 Esc 关闭走 capture 不受影响
         onKeyDown={(e) => {
           e.stopPropagation();
-          if (e.key === "Enter") {
+          // 只在到期日期/时间输入框里回车才提交：快捷档、chip、重复结束日/次数里的回车不算
+          if (
+            e.key === "Enter" &&
+            e.target instanceof HTMLInputElement &&
+            e.target.dataset.dueDraft !== undefined
+          ) {
             e.preventDefault();
             commitCustom();
           }
@@ -811,12 +832,14 @@ function DuePopover({
           <div className="flex items-center gap-1">
             <input
               type="date"
+              data-due-draft
               value={dateDraft}
               onChange={(e) => setDateDraft(e.target.value)}
               className="min-w-0 flex-1 rounded-md border border-border bg-transparent px-1.5 py-1 text-body outline-none focus:border-primary/50"
             />
             <input
               type="time"
+              data-due-draft
               value={timeDraft}
               onChange={(e) => setTimeDraft(e.target.value)}
               className="w-20 shrink-0 rounded-md border border-border bg-transparent px-1.5 py-1 text-body tabular-nums outline-none focus:border-primary/50"
@@ -836,9 +859,226 @@ function DuePopover({
               清除到期
             </button>
           )}
+          <div className="my-1 h-px bg-border/60" />
+          <RecurrenceEditor task={task} />
+          {task.dueAt !== null && <ReminderOffsetsEditor task={task} />}
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/** 弹层内的小号开关 chip（重复 / 提醒档共用）。 */
+function OptionChip({
+  on,
+  onClick,
+  children,
+  label,
+}: {
+  on: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+  label?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={on}
+      aria-label={label}
+      onClick={onClick}
+      className={cn(
+        "rounded-full border px-2 py-0.5 text-micro outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+        on
+          ? "border-primary/50 bg-primary/10 text-primary"
+          : "border-border text-muted-foreground hover:text-foreground"
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+const RECURRENCE_OPTIONS: { freq: TaskRecurrenceFreq | null; label: string }[] = [
+  { freq: null, label: "不重复" },
+  { freq: "daily", label: "每天" },
+  { freq: "weekdays", label: "工作日" },
+  { freq: "weekly", label: "每周" },
+  { freq: "monthly", label: "每月" },
+  { freq: "yearly", label: "每年" },
+];
+const WEEKDAY_PICKER = [1, 2, 3, 4, 5, 6, 0];
+
+/** 重复规则：选档即生效（不走「设定」草稿）；每周可多选星期，可改为从完成时起算。 */
+function RecurrenceEditor({ task }: { task: Task }) {
+  const rec = task.recurrence;
+  const anchor = task.dueAt !== null ? new Date(task.dueAt) : new Date();
+  const set = (next: TaskRecurrence | null) =>
+    useNotesStore.getState().setTaskRecurrence(task.id, next);
+  // 换频率时保留「起算方式」与「结束条件」，只换周期本身
+  const withBasis = (next: TaskRecurrence): TaskRecurrence => ({
+    ...next,
+    ...(rec?.basis ? { basis: rec.basis } : {}),
+    ...(rec?.until !== undefined ? { until: rec.until } : {}),
+    ...(rec?.count !== undefined ? { count: rec.count } : {}),
+  });
+  const weekdays = rec?.weekdays?.length ? rec.weekdays : [anchor.getDay()];
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="px-1 text-micro text-muted-foreground">重复</p>
+      <div className="flex flex-wrap gap-1 px-0.5">
+        {RECURRENCE_OPTIONS.map(({ freq, label }) => (
+          <OptionChip
+            key={label}
+            on={(rec?.freq ?? null) === freq}
+            onClick={() =>
+              set(
+                freq === null
+                  ? null
+                  : withBasis(
+                      freq === "monthly"
+                        ? { freq, monthDay: anchor.getDate() }
+                        : { freq }
+                    )
+              )
+            }
+          >
+            {label}
+          </OptionChip>
+        ))}
+      </div>
+      {rec?.freq === "weekly" && (
+        <div className="grid grid-cols-7 gap-0.5 px-0.5">
+          {WEEKDAY_PICKER.map((d) => {
+            const on = weekdays.includes(d);
+            return (
+              <OptionChip
+                key={d}
+                on={on}
+                label={`周${"日一二三四五六"[d]}`}
+                onClick={() => {
+                  const next = on ? weekdays.filter((x) => x !== d) : [...weekdays, d];
+                  // 至少保留一天：全部取消等于无意义规则
+                  if (next.length) set({ ...rec, weekdays: next.sort() });
+                }}
+              >
+                {"日一二三四五六"[d]}
+              </OptionChip>
+            );
+          })}
+        </div>
+      )}
+      {rec && (
+        <div className="flex flex-wrap items-center gap-1 px-0.5">
+          <OptionChip on={!rec.basis} onClick={() => set({ ...rec, basis: undefined })}>
+            按计划日期
+          </OptionChip>
+          <OptionChip on={rec.basis === "completion"} onClick={() => set({ ...rec, basis: "completion" })}>
+            从完成时算起
+          </OptionChip>
+        </div>
+      )}
+      {rec && <RecurrenceEndEditor rec={rec} anchor={anchor} onChange={set} />}
+    </div>
+  );
+}
+
+/** 结束条件：永不 / 到某天为止 / 共 N 次（互斥；N 含当前这期）。 */
+function RecurrenceEndEditor({
+  rec,
+  anchor,
+  onChange,
+}: {
+  rec: TaskRecurrence;
+  anchor: Date;
+  onChange: (next: TaskRecurrence) => void;
+}) {
+  const base: TaskRecurrence = { ...rec, until: undefined, count: undefined };
+  const mode = rec.until !== undefined ? "until" : rec.count !== undefined ? "count" : "never";
+  // 默认值：结束日取本期一个月后，次数取 10 次
+  const defaultUntil = new Date(anchor.getFullYear(), anchor.getMonth() + 1, anchor.getDate()).getTime();
+  return (
+    <div className="flex flex-col gap-1 pt-0.5">
+      <p className="px-1 text-micro text-muted-foreground">结束</p>
+      <div className="flex flex-wrap items-center gap-1 px-0.5">
+        <OptionChip on={mode === "never"} onClick={() => onChange(base)}>
+          永不
+        </OptionChip>
+        <OptionChip
+          on={mode === "until"}
+          onClick={() => mode !== "until" && onChange({ ...base, until: defaultUntil })}
+        >
+          到某天
+        </OptionChip>
+        <OptionChip
+          on={mode === "count"}
+          onClick={() => mode !== "count" && onChange({ ...base, count: 10 })}
+        >
+          共几次
+        </OptionChip>
+      </div>
+      {mode === "until" && (
+        <input
+          type="date"
+          aria-label="重复结束日期"
+          value={toDateInput(new Date(rec.until!))}
+          onChange={(e) => {
+            const [y, m, d] = e.target.value.split("-").map(Number);
+            if (y && m && d) onChange({ ...base, until: new Date(y, m - 1, d).getTime() });
+          }}
+          className="mx-0.5 rounded-md border border-border bg-transparent px-1.5 py-1 text-body outline-none focus:border-primary/50"
+        />
+      )}
+      {mode === "count" && (
+        <label className="mx-0.5 flex items-center gap-1.5 text-body text-muted-foreground">
+          还剩
+          <input
+            type="number"
+            min={1}
+            max={999}
+            aria-label="剩余重复次数（含本期）"
+            value={rec.count}
+            onChange={(e) => {
+              const n = Math.round(Number(e.target.value));
+              if (Number.isFinite(n) && n >= 1 && n <= 999) onChange({ ...base, count: n });
+            }}
+            className="w-16 rounded-md border border-border bg-transparent px-1.5 py-1 text-body tabular-nums text-foreground outline-none focus:border-primary/50"
+          />
+          次（含本期）
+        </label>
+      )}
+    </div>
+  );
+}
+
+/** 提醒档：可多选；缺省只在到期时提醒，全部取消 = 不提醒（仍会进已到期区）。 */
+function ReminderOffsetsEditor({ task }: { task: Task }) {
+  const current = task.reminderOffsets ?? [0];
+  return (
+    <div className="flex flex-col gap-1 pt-1">
+      <p className="px-1 text-micro text-muted-foreground">提醒我</p>
+      <div className="flex flex-wrap gap-1 px-0.5">
+        {TASK_REMINDER_OFFSET_OPTIONS.map((offset) => {
+          const on = current.includes(offset);
+          return (
+            <OptionChip
+              key={offset}
+              on={on}
+              onClick={() =>
+                useNotesStore
+                  .getState()
+                  .setTaskReminderOffsets(
+                    task.id,
+                    on ? current.filter((o) => o !== offset) : [...current, offset]
+                  )
+              }
+            >
+              {REMINDER_OFFSET_LABEL[offset]}
+            </OptionChip>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

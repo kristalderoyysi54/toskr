@@ -3,6 +3,7 @@ import {
   type DuePresetCfg,
   type Task,
   type TaskPriority,
+  type TaskReminderOffset,
   type TaskSection,
 } from "@/store/notesStore";
 
@@ -91,8 +92,8 @@ export function bucketTasksForDisplay(
   overdue.sort((a, b) => (a.dueAt ?? 0) - (b.dueAt ?? 0));
   // 灵感是流水：新想法在最上面
   sparks.sort((a, b) => b.createdAt - a.createdAt);
-  // 已完成不再关心优先级/到期，按完成先后的近似（创建时间）倒序
-  done.sort((a, b) => b.createdAt - a.createdAt);
+  // 已完成按完成时刻倒序；字段补入前完成的旧任务缺 completedAt，退回创建时间
+  done.sort((a, b) => (b.completedAt ?? b.createdAt) - (a.completedAt ?? a.createdAt));
   const groups = sections.map((section) => ({
     section,
     tasks: byGroup.get(section.id) ?? [],
@@ -100,14 +101,133 @@ export function bucketTasksForDisplay(
   return { overdue, sparks, groups, done };
 }
 
-/** 需要弹到期提醒的任务：未完成、已到期、且尚未对该到期时间提醒过。 */
-export function dueTasksToRemind(tasks: Task[], now: number): Task[] {
-  return tasks.filter(
-    (t) =>
-      t.status !== "done" &&
-      t.dueAt !== null &&
-      t.dueAt <= now &&
-      t.remindedAt === null
+/** 一次提醒命中：该任务本轮触发的档位（可能多档同时补发，如休眠唤醒后）。 */
+export interface TaskReminderHit {
+  task: Task;
+  offsets: TaskReminderOffset[];
+}
+
+/**
+ * 需要弹提醒的任务：未完成、有到期时间，且按 reminderOffsets（缺省 [0]）有档位
+ * 已到点而未提醒过。到期档用 remindedAt 记录；提前档只在到期前有效——
+ * 已经逾期的任务不再补发「还有 15 分钟」这种过时提醒，只留到期档。
+ */
+export function taskRemindersDue(tasks: Task[], now: number): TaskReminderHit[] {
+  const hits: TaskReminderHit[] = [];
+  for (const t of tasks) {
+    if (t.status === "done" || t.dueAt === null) continue;
+    const offsets: TaskReminderOffset[] = [];
+    for (const offset of t.reminderOffsets ?? [0]) {
+      if (offset === 0) {
+        if (t.dueAt <= now && t.remindedAt === null) offsets.push(0);
+      } else if (
+        t.dueAt > now &&
+        t.dueAt - offset * 60_000 <= now &&
+        !(t.earlyRemindedOffsets ?? []).includes(offset)
+      ) {
+        offsets.push(offset);
+      }
+    }
+    if (offsets.length) hits.push({ task: t, offsets });
+  }
+  return hits;
+}
+
+/** 提醒气泡文案：到期档用标题本身，提前档补「还有多久」。 */
+export function reminderHitLabel(hit: TaskReminderHit, now: number, preview: string): string {
+  if (hit.offsets.includes(0) || hit.task.dueAt === null) return preview;
+  const mins = Math.max(1, Math.round((hit.task.dueAt - now) / 60_000));
+  const left =
+    mins < 60 ? `${mins} 分钟` : mins < 1440 ? `${Math.round(mins / 60)} 小时` : `${Math.round(mins / 1440)} 天`;
+  return `${preview} · ${left}后到期`;
+}
+
+export const REMINDER_OFFSET_LABEL: Record<TaskReminderOffset, string> = {
+  0: "到期时",
+  15: "提前 15 分钟",
+  60: "提前 1 小时",
+  1440: "提前 1 天",
+  4320: "提前 3 天",
+};
+
+// ===== 「今天」时间轴 =====
+
+export interface TodayAgenda {
+  /** 往日到期仍未完成（今天之前），按到期升序。 */
+  earlier: Task[];
+  /** 今天到期的全部任务（含已完成），按到期时刻排列。 */
+  timeline: Task[];
+  /** 今天完成的任务数（按 completedAt，不限是否今天到期）。 */
+  doneToday: number;
+  /** 已过到期时刻仍未完成（往日 + 今天已过点）。 */
+  overdue: number;
+}
+
+export function todayAgenda(tasks: Task[], now: number): TodayAgenda {
+  const d = new Date(now);
+  const start = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const end = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
+  const earlier: Task[] = [];
+  const timeline: Task[] = [];
+  let doneToday = 0;
+  for (const t of tasks) {
+    if (t.completedAt !== undefined && t.completedAt >= start && t.completedAt < end) doneToday++;
+    if (t.dueAt === null) continue;
+    if (t.dueAt >= start && t.dueAt < end) timeline.push(t);
+    else if (t.dueAt < start && t.status !== "done") earlier.push(t);
+  }
+  earlier.sort((a, b) => a.dueAt! - b.dueAt!);
+  timeline.sort((a, b) => a.dueAt! - b.dueAt! || a.createdAt - b.createdAt);
+  const overdue =
+    earlier.length + timeline.filter((t) => t.status !== "done" && t.dueAt! <= now).length;
+  return { earlier, timeline, doneToday, overdue };
+}
+
+/** 今天新建任务的默认到期：20:00 前取 20:00，之后取下一个整点（不跨过今天）。 */
+export function todayDefaultDue(now: number): number {
+  const d = new Date(now);
+  const eight = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 20, 0).getTime();
+  if (now < eight) return eight;
+  const nextHour = new Date(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours() + 1, 0).getTime();
+  const lastMinute = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59).getTime();
+  return Math.min(nextHour, lastMinute);
+}
+
+// ===== 搜索与快捷筛选 =====
+
+export type TaskFilterChip = "week" | "high" | "checklist" | "message" | "recurring" | "done";
+
+export interface TaskFilter {
+  query: string;
+  chips: TaskFilterChip[];
+}
+
+export function taskFilterActive(filter: TaskFilter): boolean {
+  return filter.query.trim() !== "" || filter.chips.length > 0;
+}
+
+/**
+ * 筛选（打平分组）：关键词匹配标题/备注/检查项（不区分大小写），chip 之间取交集。
+ * 已完成默认排除，勾选「已完成」chip 后只看已完成。结果按 compareTasks 排序。
+ */
+export function filterTasks(tasks: Task[], filter: TaskFilter, now: number): Task[] {
+  const q = filter.query.trim().toLowerCase();
+  const chips = new Set(filter.chips);
+  const today = new Date(now);
+  const weekEnd = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 7).getTime();
+  return sortTasks(
+    tasks.filter((t) => {
+      if (chips.has("done") ? t.status !== "done" : t.status === "done") return false;
+      if (chips.has("week") && (t.dueAt === null || t.dueAt >= weekEnd)) return false;
+      if (chips.has("high") && t.priority !== "high") return false;
+      if (chips.has("checklist") && !t.checklist?.length) return false;
+      if (chips.has("message") && !t.sourceRef) return false;
+      if (chips.has("recurring") && !t.recurrence) return false;
+      if (!q) return true;
+      return [t.text, t.note ?? "", ...(t.checklist ?? []).map((c) => c.text)].some((s) =>
+        s.toLowerCase().includes(q)
+      );
+    })
   );
 }
 

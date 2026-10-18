@@ -74,6 +74,7 @@ const COMMANDS: &[&str] = &[
     "refresh_prev_app",
     "show_capture_hud",
     "hud_feedback",
+    "system_notify",
     "hide_hud",
     "hud_action",
     "show_menu_flyout",

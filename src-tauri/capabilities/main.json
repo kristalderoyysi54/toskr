@@ -98,6 +98,7 @@
     "allow-refresh-prev-app",
     "allow-show-capture-hud",
     "allow-hud-feedback",
+    "allow-system-notify",
     "allow-hide-hud",
     "allow-show-menu-flyout",
     "allow-hide-menu-flyout",

@@ -1372,6 +1372,7 @@ fn validate_domain_fields(state: &serde_json::Map<String, Value>) -> Result<(), 
         validate_optional_nonnegative_number(object.get("createdAt"), "task.createdAt")?;
         validate_optional_nullable_time(object.get("dueAt"), "task.dueAt")?;
         validate_optional_nullable_time(object.get("remindedAt"), "task.remindedAt")?;
+        validate_optional_nonnegative_number(object.get("completedAt"), "task.completedAt")?;
         if let Some(checklist) = object.get("checklist") {
             let items = checklist
                 .as_array()
