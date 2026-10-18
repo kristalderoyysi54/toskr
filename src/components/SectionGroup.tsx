@@ -29,6 +29,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { IconButton } from "@/components/ui/icon-button";
 import { openNoteDetail } from "@/lib/actions";
 import { focusNoteDraftInput } from "@/lib/noteDraftFocus";
+import { useStickyHeader } from "@/lib/stickyHeader";
 import { cn } from "@/lib/utils";
 import {
   INBOX_ID,
@@ -85,6 +86,11 @@ export function SectionGroup({
     data: { type: "section", sectionId: section.id },
   });
 
+  // 吸顶栏保持透明（与毛玻璃底一致），卡片滚到栏下沿渐隐，不与标题叠印
+  const { headerRef, bodyRef, scrollToStartIfStuck } = useStickyHeader(
+    !!section.collapsed
+  );
+
   const total = activeNotes.length + doneNotes.length;
   const collapsed = !!section.collapsed;
 
@@ -131,7 +137,10 @@ export function SectionGroup({
         isDragging && "z-10 opacity-70 elevation-2"
       )}
     >
-      <div className="group sticky top-1 z-10 mb-1.5 flex h-5 items-center gap-1 pl-0.5 pr-1">
+      <div
+        ref={headerRef}
+        className="group sticky top-0 z-10 mb-1.5 flex h-5 items-center gap-1 pl-0.5 pr-1"
+      >
         <IconButton
           label={collapsed ? "展开分组" : "折叠分组"}
           aria-expanded={!collapsed}
@@ -167,14 +176,13 @@ export function SectionGroup({
           <h3
             {...attributes}
             {...listeners}
-            title={`${section.name} · 拖动调整分组顺序 · 点击折叠/展开 · 双击重命名`}
+            title={`${section.name} · 拖动调整分组顺序 · 点击折叠/展开（吸顶时回到组首） · 双击重命名`}
             className="min-w-0 cursor-grab select-none touch-none truncate text-label font-semibold uppercase tracking-[0.08em] text-muted-foreground hover:text-foreground active:cursor-grabbing"
             onClick={() => {
               window.clearTimeout(clickTimer.current);
-              clickTimer.current = window.setTimeout(
-                () => toggleSectionCollapsed(section.id),
-                220
-              );
+              clickTimer.current = window.setTimeout(() => {
+                if (!scrollToStartIfStuck()) toggleSectionCollapsed(section.id);
+              }, 220);
             }}
             onDoubleClick={() => {
               window.clearTimeout(clickTimer.current);
@@ -313,6 +321,7 @@ export function SectionGroup({
       </div>
 
       {!collapsed && (
+        <div ref={bodyRef} className="-mx-1 -mb-1 px-1 pb-1">
         <SortableContext
           items={[...activeNotes, ...doneNotes].map((n) => n.id)}
           strategy={verticalListSortingStrategy}
@@ -360,6 +369,7 @@ export function SectionGroup({
             </div>
           )}
         </SortableContext>
+        </div>
       )}
     </section>
   );

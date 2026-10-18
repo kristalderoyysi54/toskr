@@ -40,6 +40,7 @@ import { WindowedListItem } from "@/components/WindowedListItem";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IconButton } from "@/components/ui/icon-button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useStickyHeader } from "@/lib/stickyHeader";
 import { isSmartBandTask, type TaskBuckets } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 import {
@@ -272,6 +273,7 @@ function SmartSection({
 }) {
   // doneOpen 是通用的布尔切换器；这里语义存「是否折叠」，缺省展开
   const collapsed = useUIStore((s) => (collapseKey ? !!s.doneOpen[collapseKey] : false));
+  const { headerRef, bodyRef, scrollToStartIfStuck } = useStickyHeader(collapsed);
   const heading = (
     <>
       {icon}
@@ -288,15 +290,18 @@ function SmartSection({
     </>
   );
   const headingCls = cn(
-    "mb-1.5 flex select-none items-center gap-1 pl-0.5 text-label font-semibold uppercase tracking-[0.08em]",
+    "sticky top-0 z-10 mb-1.5 flex select-none items-center gap-1 pl-0.5 text-label font-semibold uppercase tracking-[0.08em]",
     tone === "red" ? "text-destructive" : "text-violet-600 dark:text-violet-400"
   );
   return (
     <section>
       {collapseKey ? (
         <button
+          ref={headerRef}
           type="button"
-          onClick={() => useUIStore.getState().toggleDoneOpen(collapseKey)}
+          onClick={() => {
+            if (!scrollToStartIfStuck()) useUIStore.getState().toggleDoneOpen(collapseKey);
+          }}
           title={collapsed ? "展开" : "折叠"}
           aria-label={`${collapsed ? "展开" : "折叠"}${title}分组`}
           aria-expanded={!collapsed}
@@ -313,10 +318,12 @@ function SmartSection({
           {heading}
         </button>
       ) : (
-        <h3 className={headingCls}>{heading}</h3>
+        <h3 ref={headerRef} className={headingCls}>
+          {heading}
+        </h3>
       )}
       {!collapsed && (
-        <div className="flex flex-col gap-1">
+        <div ref={bodyRef} className="-mx-1 -mb-1 flex flex-col gap-1 px-1 pb-1">
           {tasks.map((t, index) => (
             <WindowedListItem
               key={t.id}
@@ -356,6 +363,7 @@ function TaskGroupBlock({
   const collapsed = !!section.collapsed;
   // 单击组名折叠 / 双击改名：延迟消歧，双击时取消未执行的折叠
   const clickTimer = useRef(0);
+  const { headerRef, bodyRef, scrollToStartIfStuck } = useStickyHeader(collapsed);
 
   // 跨分组拖拽的投放目标：空分组/折叠分组也可投放（同笔记 SectionGroup）
   const { setNodeRef, isOver } = useDroppable({ id: `sec:${section.id}` });
@@ -373,7 +381,10 @@ function TaskGroupBlock({
         isOver && "bg-primary/[0.06] ring-1 ring-primary/30"
       )}
     >
-      <div className="group mb-1.5 flex h-5 items-center gap-1 pl-0.5 pr-1">
+      <div
+        ref={headerRef}
+        className="group sticky top-0 z-10 mb-1.5 flex h-5 items-center gap-1 pl-0.5 pr-1"
+      >
         <button
           aria-label={collapsed ? "展开分组" : "折叠分组"}
           aria-expanded={!collapsed}
@@ -404,14 +415,13 @@ function TaskGroupBlock({
           />
         ) : (
           <h3
-            title="点击折叠/展开 · 双击重命名"
+            title="点击折叠/展开（吸顶时回到组首） · 双击重命名"
             className="cursor-pointer select-none text-label font-semibold uppercase tracking-[0.08em] text-muted-foreground hover:text-foreground"
             onClick={() => {
               window.clearTimeout(clickTimer.current);
-              clickTimer.current = window.setTimeout(
-                () => toggleTaskSectionCollapsed(section.id),
-                220
-              );
+              clickTimer.current = window.setTimeout(() => {
+                if (!scrollToStartIfStuck()) toggleTaskSectionCollapsed(section.id);
+              }, 220);
             }}
             onDoubleClick={() => {
               window.clearTimeout(clickTimer.current);
@@ -487,6 +497,7 @@ function TaskGroupBlock({
         </div>
       </div>
       {!collapsed && (
+        <div ref={bodyRef} className="-mx-1 -mb-1 px-1 pb-1">
         <SortableContext
           items={tasks.map((t) => t.id)}
           strategy={verticalListSortingStrategy}
@@ -508,6 +519,7 @@ function TaskGroupBlock({
             <EmptyState variant="inline" title="此分组为空" />
           )}
         </SortableContext>
+        </div>
       )}
     </section>
   );
