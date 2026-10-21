@@ -86,6 +86,7 @@ import { highlightCode, langLabel } from "@/lib/code";
 import { linkParts } from "@/lib/link";
 import { useAppIcon } from "@/lib/icons";
 import { isMonoLike, splitMiddle } from "@/lib/cliprow";
+import { detectClipSmart, type ClipSmart } from "@/lib/clipSmart";
 import { shouldScrollFocusedCard } from "@/lib/cardFocus";
 import { noteTimeLabel, useNoteThumb, useNoteThumbState } from "@/lib/media";
 import { useNearViewport } from "@/lib/viewportMedia";
@@ -752,6 +753,11 @@ export const NoteCard = memo(function NoteCard({
   const copyOne = () => void copyNoteContent(note);
 
   const segments = splitHighlight(note.text, query);
+  // 剪贴票据卡的智能卡面（颜色/JSON/时间戳/邮箱）：只对挂载卡算一次，不入库
+  const smart = useMemo(
+    () => (ticket && clipTemplate === "standard" && !isImage && !isLink ? detectClipSmart(note.text) : null),
+    [ticket, clipTemplate, isImage, isLink, note.text]
+  );
   // 卡面代码高亮：只算可见头部（600 字符足够 3-6 行），memo 防重复计算
   const cardCodeHtml = useMemo(
     () =>
@@ -1390,6 +1396,8 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
                   </p>
                 )}
               </div>
+            ) : smart && !query ? (
+              <ClipSmartFace smart={smart} raw={note.text} />
             ) : note.codeLang && !query ? (
               // 代码卡卡面直接语法高亮（与预览层同源）；搜索时让位给命中高亮
               <pre
@@ -1942,6 +1950,94 @@ function CompactRow({
       )}
     </div>
   );
+}
+
+/** 智能卡面的转换按钮：复制转换结果（copy_text 已标记自写，不会被再次收集）。 */
+function SmartChip({ label, value }: { label: React.ReactNode; value: string }) {
+  return (
+    <button
+      type="button"
+      title={`复制 ${value}`}
+      onPointerDown={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation();
+        void api
+          .copyText(value)
+          .then(() => tip("ok", "已复制"))
+          .catch(() => tip("warn", "复制失败，请稍后重试"));
+      }}
+      className="h-5 shrink-0 truncate rounded-md border border-border bg-background px-1.5 font-mono text-micro text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      {label}
+    </button>
+  );
+}
+
+function ClipSmartFace({ smart, raw }: { smart: ClipSmart; raw: string }) {
+  switch (smart.kind) {
+    case "color":
+      return (
+        <div className="flex w-full items-center gap-2">
+          <span
+            aria-hidden
+            className="size-9 shrink-0 rounded-md ring-1 ring-inset ring-black/10 dark:ring-white/15"
+            style={{ background: smart.swatch }}
+          />
+          <div className="flex min-w-0 flex-col gap-1">
+            <p className="truncate font-mono text-title font-semibold">{raw.trim()}</p>
+            <div className="flex min-w-0 gap-1 overflow-hidden">
+              <SmartChip label="HEX" value={smart.hex} />
+              <SmartChip label="RGB" value={smart.rgb} />
+              <SmartChip label="HSL" value={smart.hsl} />
+              <SmartChip label="OKLCH" value={smart.oklch} />
+            </div>
+          </div>
+        </div>
+      );
+    case "json":
+      return (
+        <div className="flex w-full min-w-0 flex-col gap-1">
+          <p className="line-clamp-2 font-mono text-label leading-normal [overflow-wrap:anywhere]">
+            {smart.minified}
+          </p>
+          <div className="flex items-center gap-1">
+            <span className="text-micro text-success">✓ {smart.summary}</span>
+            <SmartChip label="格式化" value={smart.pretty} />
+            <SmartChip label="压缩" value={smart.minified} />
+          </div>
+        </div>
+      );
+    case "timestamp":
+      return (
+        <div className="flex w-full min-w-0 flex-col gap-1">
+          <p className="truncate font-mono text-body">{raw.trim()}</p>
+          <div className="flex items-center gap-1 text-label">
+            <span className="truncate">→ {smart.local}</span>
+            <span className="text-micro text-muted-foreground">（{smart.unit}）</span>
+            <SmartChip label="复制时间" value={smart.local} />
+          </div>
+        </div>
+      );
+    case "email":
+      return (
+        <div className="flex w-full min-w-0 items-center gap-2">
+          <p className="min-w-0 flex-1 truncate text-body">{smart.address}</p>
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              void api.openUrl(`mailto:${smart.address}`);
+            }}
+            className="h-5 shrink-0 rounded-md border border-border bg-background px-1.5 text-micro hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            写邮件
+          </button>
+        </div>
+      );
+  }
 }
 
 function LinkFavicon({ src }: { src: string }) {

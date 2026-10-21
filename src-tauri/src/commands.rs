@@ -413,7 +413,8 @@ pub fn retry_tap(app: AppHandle) {
 /// 用默认浏览器打开链接（仅放行 http/https）。
 #[tauri::command]
 pub fn open_url(url: String) {
-    if url.starts_with("http://") || url.starts_with("https://") {
+    // mailto: 供剪贴邮箱卡「写邮件」；其余协议一律拒绝
+    if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("mailto:") {
         let _ = std::process::Command::new("open").arg(url).spawn();
     }
 }
