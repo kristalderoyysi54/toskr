@@ -4486,9 +4486,18 @@ export default function App() {
                               {clipView === "images" ? (
                                 // 图片网格：复用横栏方形卡（右键菜单/预览/发送/拖动一并保留）；
                                 // 卡宽下限 104px 保证 4 个悬停钮不溢出，列数随面板宽度 2～4 列
+                                // 每格同样窗口化：首帧只挂前 12 格，其余滚到附近才挂（整批 60 张卡
+                                // 一次挂载会让首次切到图片视图卡一下）
                                 <div className="grid grid-cols-[repeat(auto-fill,minmax(104px,1fr))] gap-1.5">
-                                  {bandNotes.map((n) => (
-                                    <NoteCard key={n.id} note={n} query={q} strip grid />
+                                  {bandNotes.map((n, i) => (
+                                    <WindowedListItem
+                                      key={n.id}
+                                      itemId={n.id}
+                                      estimatedHeight={113}
+                                      eager={bi === 0 && i < 12}
+                                    >
+                                      <NoteCard note={n} query={q} strip grid />
+                                    </WindowedListItem>
                                   ))}
                                 </div>
                               ) : (
