@@ -153,6 +153,7 @@ import { floatingSurface } from "@/components/ui/floating-surface";
 import { focusRing } from "@/components/ui/focus-ring";
 import { ApplicationIcon } from "@/components/ApplicationIcon";
 import { useAppIcon } from "@/lib/icons";
+import { useNearViewport } from "@/lib/viewportMedia";
 import { Segmented } from "@/components/ui/segmented";
 import { SimpleMenu, SimpleMenuItem } from "@/components/SimpleMenu";
 import { GlowingEffect } from "@/components/ui/glowing-effect";
@@ -4908,7 +4909,10 @@ function ClipSourceBandHeader({
   trailing?: React.ReactNode;
   onToggle: () => void;
 }) {
-  const icon = useAppIcon(pinned ? undefined : bundle);
+  const rowRef = useRef<HTMLDivElement>(null);
+  // 图标走主线程同步取（NSImage → PNG）：几十个来源同时请求会卡住首次切换，只取视野附近的
+  const near = useNearViewport(rowRef, !pinned && !!bundle);
+  const icon = useAppIcon(pinned ? undefined : bundle, near);
   const appDays = useNotesStore((s) => s.settings.clipAppRetentionDays[sourceKey]);
   const globalDays = useNotesStore((s) => s.settings.clipRetentionDays);
   const excluded = useNotesStore((s) => !!bundle && s.settings.clipExcludedApps.includes(bundle));
@@ -4941,7 +4945,7 @@ function ClipSourceBandHeader({
   };
 
   const row = (
-    <div className={cn("flex items-center gap-2 pb-1", first ? "pt-0.5" : "pt-2.5")}>
+    <div ref={rowRef} className={cn("flex items-center gap-2 pb-1", first ? "pt-0.5" : "pt-2.5")}>
       <button
         type="button"
         aria-expanded={!collapsed}
