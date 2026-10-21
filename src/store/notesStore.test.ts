@@ -41,7 +41,9 @@ import {
   SECRET_ID,
   STORE_VERSION,
   TASK_INBOX_ID,
+  type TaskRecurrence,
   useNotesStore,
+  withTaskStatus,
 } from "./notesStore";
 import {
   GENERAL_PROMPT_GROUP_ID,
@@ -2599,6 +2601,53 @@ describe("任务：CRUD / 撤销 / 转换原子性 / 导入", () => {
     useNotesStore.getState().setTaskStatus(next.id, "done");
     expect(useNotesStore.getState().tasks).toHaveLength(2);
     expect(useNotesStore.getState().tasks.every((t) => t.status === "done")).toBe(true);
+  });
+
+  it("每年闰日任务：锚点经保存重载不丢，下个闰年回到 2/29", () => {
+    const id = useNotesStore.getState().addTask("闰日").id!;
+    useNotesStore.getState().setTaskDue(id, new Date(2024, 1, 29, 9).getTime());
+    useNotesStore.getState().setTaskRecurrence(id, { freq: "yearly" });
+    const done = (taskId: string, at: number) => {
+      const tasks = withTaskStatus(useNotesStore.getState().tasks, taskId, "done", at);
+      useNotesStore.setState({ tasks });
+      // 每期完成后走一遍真实持久化往返
+      const reloaded = decodePersistedState(serializePersistentState(useNotesStore.getState()));
+      useNotesStore.setState({ tasks: reloaded.tasks });
+      return useNotesStore.getState().tasks.find((t) => t.status === "todo")!;
+    };
+    let cur = useNotesStore.getState().tasks[0];
+    const dues: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      cur = done(cur.id, cur.dueAt!);
+      const d = new Date(cur.dueAt!);
+      dues.push(`${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`);
+    }
+    expect(dues).toEqual(["2025-2-28", "2026-2-28", "2027-2-28", "2028-2-29"]);
+    expect(cur.recurrence).toEqual({ freq: "yearly", yearlyAnchor: { month: 1, day: 29 } });
+  });
+
+  it("重复规则归一化：yearlyAnchor 只为每年按计划保留，坏值丢弃", () => {
+    const roundTrip = (recurrence: unknown) => {
+      useNotesStore.setState({
+        tasks: [
+          {
+            id: "r", text: "r", status: "todo", priority: "none", dueAt: 1, createdAt: 1,
+            remindedAt: null, recurrence: recurrence as TaskRecurrence,
+          },
+        ],
+      });
+      return decodePersistedState(serializePersistentState(useNotesStore.getState())).tasks[0].recurrence;
+    };
+    const ok = { month: 1, day: 29 };
+    expect(roundTrip({ freq: "yearly", yearlyAnchor: ok })).toEqual({ freq: "yearly", yearlyAnchor: ok });
+    expect(roundTrip({ freq: "yearly", basis: "completion", yearlyAnchor: ok })).toEqual({
+      freq: "yearly",
+      basis: "completion",
+    });
+    expect(roundTrip({ freq: "monthly", yearlyAnchor: ok })).toEqual({ freq: "monthly" });
+    for (const bad of [{ month: 1, day: 30 }, { month: 12, day: 1 }, { month: 3, day: 31 }, { month: 0.5, day: 1 }, "2/29"]) {
+      expect(roundTrip({ freq: "yearly", yearlyAnchor: bad })).toEqual({ freq: "yearly" });
+    }
   });
 
   it("无到期时间设重复规则：补上首期", () => {

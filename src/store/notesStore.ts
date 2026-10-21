@@ -254,6 +254,11 @@ export interface TaskRecurrence {
   weekdays?: number[];
   /** monthly：每月第几日（1–31，小月取月末）；缺省取 dueAt 的日期。 */
   monthDay?: number;
+  /**
+   * yearly 按计划：原始计划月日（month 为 Date 月份下标，0=一月）。闰日任务平年落到
+   * 2/28 后靠它回到 2/29；首次生成下一期时从本期 dueAt 补齐。从完成时起算不用。
+   */
+  yearlyAnchor?: { month: number; day: number };
   /** "completion" = 下一期从完成时刻起算（浇花、换滤芯）；缺省按计划日期。 */
   basis?: "completion";
   /** 结束日（含当天，epoch ms 取当天 00:00）：下一期落在此日之后就不再生成。 */
@@ -1840,6 +1845,12 @@ function normalizeTaskRecurrence(value: unknown): TaskRecurrence | undefined {
     rec.monthDay >= 1 && rec.monthDay <= 31
       ? rec.monthDay
       : undefined;
+  const ya = rec.yearlyAnchor;
+  const yearlyAnchor =
+    ya && typeof ya === "object" && Number.isInteger(ya.month) && ya.month >= 0 && ya.month <= 11 &&
+    Number.isInteger(ya.day) && ya.day >= 1 && ya.day <= new Date(2000, ya.month + 1, 0).getDate()
+      ? { month: ya.month, day: ya.day }
+      : undefined;
   const until =
     typeof rec.until === "number" && Number.isFinite(rec.until) && rec.until >= 0
       ? rec.until
@@ -1852,6 +1863,7 @@ function normalizeTaskRecurrence(value: unknown): TaskRecurrence | undefined {
     freq: rec.freq!,
     ...(rec.freq === "weekly" && weekdays.length ? { weekdays } : {}),
     ...(rec.freq === "monthly" && monthDay ? { monthDay } : {}),
+    ...(rec.freq === "yearly" && rec.basis !== "completion" && yearlyAnchor ? { yearlyAnchor } : {}),
     ...(rec.basis === "completion" ? { basis: "completion" as const } : {}),
     // 两种结束条件互斥：同时出现（坏数据）以结束日为准
     ...(until !== undefined ? { until } : count !== undefined ? { count } : {}),

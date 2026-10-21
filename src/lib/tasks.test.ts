@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { TASK_INBOX_ID, type Task } from "@/store/notesStore";
+import { TASK_INBOX_ID, type Task, type TaskRecurrence } from "@/store/notesStore";
 import {
   bucketTasksForDisplay,
   compareTasks,
@@ -245,6 +245,98 @@ describe("nextRecurrenceDue（NOW = 2026-08-05 周三 12:00）", () => {
     expect(recurrenceLabel({ freq: "daily", basis: "completion" }, due)).toBe("每天（完成后起算）");
     expect(recurrenceLabel({ freq: "daily", count: 3 }, due)).toBe("每天，剩 3 次");
     expect(recurrenceLabel({ freq: "daily", until: local(11, 31, 0) }, due)).toBe("每天，到 2026/12/31");
+  });
+});
+
+describe("每年重复：闰日与从完成时起算", () => {
+  const at = (y: number, mo: number, day: number, h = 9, min = 0) =>
+    new Date(y, mo, day, h, min, 0, 0).getTime();
+  /** 连续完成 n 期（每期到期即完成），返回各期到期日。 */
+  const chain = (rec: TaskRecurrence, dueAt: number, n: number) => {
+    const out = [dueAt];
+    let cur: { dueAt: number; recurrence: TaskRecurrence } | null = { dueAt, recurrence: rec };
+    for (let i = 0; i < n && cur; i++) {
+      cur = nextRecurrence(cur.recurrence, cur.dueAt, cur.dueAt);
+      if (cur) out.push(cur.dueAt);
+    }
+    return out;
+  };
+
+  it("按计划：2/29 平年取 2/28，下个闰年回到 2/29", () => {
+    expect(chain({ freq: "yearly" }, at(2024, 1, 29, 8, 30), 4)).toEqual([
+      at(2024, 1, 29, 8, 30),
+      at(2025, 1, 28, 8, 30),
+      at(2026, 1, 28, 8, 30),
+      at(2027, 1, 28, 8, 30),
+      at(2028, 1, 29, 8, 30),
+    ]);
+  });
+
+  it("按计划：首期补齐锚点并带进下一期规则", () => {
+    expect(nextRecurrence({ freq: "yearly" }, at(2024, 1, 29), at(2024, 1, 29))?.recurrence).toEqual({
+      freq: "yearly",
+      yearlyAnchor: { month: 1, day: 29 },
+    });
+  });
+
+  it("按计划：2100 年非闰年仍取 2/28，2104 年回到 2/29", () => {
+    const rec = { freq: "yearly" as const, yearlyAnchor: { month: 1, day: 29 } };
+    expect(nextRecurrenceDue(rec, at(2096, 1, 29), at(2096, 1, 29))).toBe(at(2097, 1, 28));
+    expect(nextRecurrenceDue(rec, at(2099, 1, 28), at(2099, 1, 28))).toBe(at(2100, 1, 28));
+    expect(nextRecurrenceDue(rec, at(2103, 1, 28), at(2103, 1, 28))).toBe(at(2104, 1, 29));
+  });
+
+  it("按计划：逾期多年才完成，跳过已过去的期次且保留原始月日", () => {
+    const rec = { freq: "yearly" as const, yearlyAnchor: { month: 1, day: 29 } };
+    expect(nextRecurrenceDue(rec, at(2025, 1, 28), at(2027, 5, 1))).toBe(at(2028, 1, 29));
+  });
+
+  it("按计划：本期改过日期，规则仍按锚点", () => {
+    const rec = { freq: "yearly" as const, yearlyAnchor: { month: 1, day: 29 } };
+    expect(nextRecurrenceDue(rec, at(2027, 2, 3), at(2027, 2, 3))).toBe(at(2028, 1, 29));
+  });
+
+  it("按计划：次数与结束日照常生效，锚点随规则带下去", () => {
+    expect(nextRecurrence({ freq: "yearly", count: 3 }, at(2024, 1, 29), at(2024, 1, 29))).toEqual({
+      dueAt: at(2025, 1, 28),
+      recurrence: { freq: "yearly", count: 2, yearlyAnchor: { month: 1, day: 29 } },
+    });
+    const until = { freq: "yearly" as const, until: at(2027, 11, 31, 0) };
+    expect(chain(until, at(2024, 1, 29), 10)).toEqual([
+      at(2024, 1, 29),
+      at(2025, 1, 28),
+      at(2026, 1, 28),
+      at(2027, 1, 28),
+    ]);
+  });
+
+  it("从完成时：完成日加一个日历年，保留本期时刻", () => {
+    const rec = { freq: "yearly" as const, basis: "completion" as const };
+    expect(nextRecurrenceDue(rec, at(2024, 1, 29, 8, 30), at(2024, 2, 10, 15))).toBe(at(2025, 2, 10, 8, 30));
+  });
+
+  it("从完成时：逾期跨年完成不再空出近两年", () => {
+    const rec = { freq: "yearly" as const, basis: "completion" as const };
+    expect(nextRecurrenceDue(rec, at(2024, 11, 31), at(2025, 0, 5, 10))).toBe(at(2026, 0, 5));
+  });
+
+  it("从完成时：2/29 完成，次年取 2/28；不写锚点，之后按实际完成日", () => {
+    const rec = { freq: "yearly" as const, basis: "completion" as const, yearlyAnchor: { month: 1, day: 29 } };
+    const first = nextRecurrence(rec, at(2024, 1, 29), at(2024, 1, 29, 10));
+    expect(first).toEqual({ dueAt: at(2025, 1, 28), recurrence: { freq: "yearly", basis: "completion" } });
+    expect(chain(first!.recurrence, first!.dueAt, 3).slice(1)).toEqual([
+      at(2026, 1, 28),
+      at(2027, 1, 28),
+      at(2028, 1, 28),
+    ]);
+  });
+
+  it("标签：按计划显示原始月日，从完成时不显示固定日期", () => {
+    expect(recurrenceLabel({ freq: "yearly", yearlyAnchor: { month: 1, day: 29 } }, at(2025, 1, 28))).toBe(
+      "每年 2/29"
+    );
+    expect(recurrenceLabel({ freq: "yearly" }, at(2025, 4, 3))).toBe("每年 5/3");
+    expect(recurrenceLabel({ freq: "yearly", basis: "completion" }, at(2025, 4, 3))).toBe("每年（完成后起算）");
   });
 });
 

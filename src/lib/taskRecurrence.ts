@@ -29,8 +29,14 @@ function stepAfter(rec: TaskRecurrence, base: number, timeOf: Date, anchor: Date
     }
     case "monthly":
       return clampedMonthDate(b.getFullYear(), b.getMonth() + 1, rec.monthDay ?? anchor.getDate(), h, min);
-    case "yearly":
-      return clampedMonthDate(b.getFullYear() + 1, anchor.getMonth(), anchor.getDate(), h, min);
+    case "yearly": {
+      // 从完成时：完成日加一个日历年；按计划：原始月日（闰日平年取 2/28，闰年回到 2/29）
+      const { month, day } =
+        rec.basis === "completion"
+          ? { month: b.getMonth(), day: b.getDate() }
+          : rec.yearlyAnchor ?? { month: anchor.getMonth(), day: anchor.getDate() };
+      return clampedMonthDate(b.getFullYear() + 1, month, day, h, min);
+    }
   }
 }
 
@@ -63,7 +69,17 @@ export function nextRecurrence(
   completedAt: number
 ): { dueAt: number; recurrence: TaskRecurrence } | null {
   if (rec.count !== undefined && rec.count <= 1) return null;
-  const next = nextRecurrenceDue(rec, dueAt, completedAt);
+  // 每年按计划：把原始月日写进规则带下去，否则 2/29 落到 2/28 后再也回不来
+  let carried = rec;
+  if (rec.freq === "yearly") {
+    const { yearlyAnchor, ...rest } = rec;
+    const d = new Date(dueAt);
+    carried =
+      rec.basis === "completion"
+        ? rest
+        : { ...rest, yearlyAnchor: yearlyAnchor ?? { month: d.getMonth(), day: d.getDate() } };
+  }
+  const next = nextRecurrenceDue(carried, dueAt, completedAt);
   if (rec.until !== undefined) {
     const u = new Date(rec.until);
     const endOfUntil = new Date(u.getFullYear(), u.getMonth(), u.getDate() + 1).getTime();
@@ -71,7 +87,7 @@ export function nextRecurrence(
   }
   return {
     dueAt: next,
-    recurrence: rec.count !== undefined ? { ...rec, count: rec.count - 1 } : rec,
+    recurrence: carried.count !== undefined ? { ...carried, count: carried.count - 1 } : carried,
   };
 }
 
@@ -98,7 +114,10 @@ export function recurrenceLabel(rec: TaskRecurrence, dueAt: number | null): stri
     }
     case "monthly":
       return `每月 ${rec.monthDay ?? anchor.getDate()} 日${suffix}`;
-    case "yearly":
-      return `每年 ${anchor.getMonth() + 1}/${anchor.getDate()}${suffix}`;
+    case "yearly": {
+      if (rec.basis === "completion") return `每年${suffix}`;
+      const { month, day } = rec.yearlyAnchor ?? { month: anchor.getMonth(), day: anchor.getDate() };
+      return `每年 ${month + 1}/${day}${suffix}`;
+    }
   }
 }
