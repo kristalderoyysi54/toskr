@@ -12,6 +12,7 @@ import {
   type ImageEditRequestPayload,
   type ImageEditResultPayload,
   type NoteImageReplacedPayload,
+  validRedactionStyle,
 } from "@/lib/imageEditor";
 import { api } from "@/lib/tauri";
 import { emitToDetailWindows } from "@/lib/detailWindows";
@@ -91,7 +92,8 @@ function validImageEditRequest(payload: ImageEditRequestPayload): boolean {
         [region.x, region.y, region.width, region.height].every(
           (value) =>
             Number.isSafeInteger(value) && value >= 0 && value <= maxU32
-        ) && region.width > 0 && region.height > 0
+        ) && region.width > 0 && region.height > 0 &&
+        validRedactionStyle(region.style)
       )
     ) &&
     payload.target &&

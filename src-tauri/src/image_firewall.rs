@@ -80,11 +80,39 @@ pub struct ScanImageFirewallResult {
     pub findings: Vec<ImageFirewallFinding>,
 }
 
+/// 遮挡样式。全部是不可还原的像素覆盖；不提供模糊（字体已知时可被还原）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RedactionStyle {
+    /// 实色填充（RGB）。
+    Solid { color: [u8; 3] },
+    /// 取框外一圈像素的平均色填充。
+    Pick,
+    /// 马赛克：每块取原图平均色，块边长下限见 mosaic_block。
+    Mosaic,
+}
+
+impl Default for RedactionStyle {
+    fn default() -> Self {
+        RedactionStyle::Solid { color: [20, 20, 22] }
+    }
+}
+
+/// 请求里的一个遮挡框；缺省 style = 旧版近黑实色，自动遮挡路径不受影响。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RedactRegion {
+    #[serde(flatten)]
+    pub bounds: PixelBox,
+    #[serde(default)]
+    pub style: RedactionStyle,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RedactImageRequest {
     pub original_file: String,
-    pub regions: Vec<PixelBox>,
+    pub regions: Vec<RedactRegion>,
     /// false/缺省 = 当前发送会话的临时副本；true = 内容寻址媒体文件。
     #[serde(default)]
     pub persist: bool,
@@ -170,18 +198,104 @@ fn pixel_hash(image: &RgbaImage) -> String {
     )
 }
 
+#[cfg(test)]
 pub(crate) fn solid_redacted_copy(original: &RgbaImage, boxes: &[PixelBox]) -> RgbaImage {
+    let pairs: Vec<_> = boxes.iter().map(|bounds| (*bounds, RedactionStyle::default())).collect();
+    styled_redacted_copy(original, &pairs)
+}
+
+/// 马赛克块边长：至少 12px，且不小于框短边的 1/3，保证一行字最多被切成 3 行色块。
+pub(crate) fn mosaic_block(bounds: &PixelBox) -> u32 {
+    (bounds.width.min(bounds.height) / 3).max(12)
+}
+
+fn average_rgb(image: &RgbaImage, pixels: impl Iterator<Item = (u32, u32)>) -> Option<Rgba<u8>> {
+    let (mut r, mut g, mut b, mut n) = (0u64, 0u64, 0u64, 0u64);
+    for (x, y) in pixels {
+        let p = image.get_pixel(x, y);
+        r += u64::from(p[0]);
+        g += u64::from(p[1]);
+        b += u64::from(p[2]);
+        n += 1;
+    }
+    (n > 0).then(|| Rgba([(r / n) as u8, (g / n) as u8, (b / n) as u8, 255]))
+}
+
+/// 框外紧贴的一圈像素（越界部分跳过）。
+fn ring_pixels(bounds: &PixelBox, width: u32, height: u32) -> Vec<(u32, u32)> {
+    let (left, top) = (i64::from(bounds.x) - 1, i64::from(bounds.y) - 1);
+    let (right, bottom) = (
+        i64::from(bounds.x) + i64::from(bounds.width),
+        i64::from(bounds.y) + i64::from(bounds.height),
+    );
+    let inside = |x: i64, y: i64| x >= 0 && y >= 0 && x < i64::from(width) && y < i64::from(height);
+    let mut out = Vec::new();
+    for x in left..=right {
+        for y in [top, bottom] {
+            if inside(x, y) {
+                out.push((x as u32, y as u32));
+            }
+        }
+    }
+    for y in (top + 1)..bottom {
+        for x in [left, right] {
+            if inside(x, y) {
+                out.push((x as u32, y as u32));
+            }
+        }
+    }
+    out
+}
+
+/// 按样式出图：取色与马赛克都只读原图像素，框之间互不影响。
+pub(crate) fn styled_redacted_copy(original: &RgbaImage, regions: &[(PixelBox, RedactionStyle)]) -> RgbaImage {
+    let (width, height) = (original.width(), original.height());
     let mut redacted = original.clone();
-    let fill = Rgba([20, 20, 22, 255]);
-    for bounds in boxes {
-        let right = bounds.x.saturating_add(bounds.width).min(redacted.width());
-        let bottom = bounds
-            .y
-            .saturating_add(bounds.height)
-            .min(redacted.height());
-        for y in bounds.y.min(redacted.height())..bottom {
-            for x in bounds.x.min(redacted.width())..right {
-                redacted.put_pixel(x, y, fill);
+    for (bounds, style) in regions {
+        let right = bounds.x.saturating_add(bounds.width).min(width);
+        let bottom = bounds.y.saturating_add(bounds.height).min(height);
+        let (left, top) = (bounds.x.min(width), bounds.y.min(height));
+        match style {
+            RedactionStyle::Solid { color } => {
+                let fill = Rgba([color[0], color[1], color[2], 255]);
+                for y in top..bottom {
+                    for x in left..right {
+                        redacted.put_pixel(x, y, fill);
+                    }
+                }
+            }
+            RedactionStyle::Pick => {
+                let ring = ring_pixels(bounds, width, height);
+                // 框占满整图时没有外圈，回落到框内平均色（同样不可还原）
+                let fill = average_rgb(original, ring.into_iter())
+                    .or_else(|| average_rgb(original, (top..bottom).flat_map(|y| (left..right).map(move |x| (x, y)))))
+                    .unwrap_or(Rgba([20, 20, 22, 255]));
+                for y in top..bottom {
+                    for x in left..right {
+                        redacted.put_pixel(x, y, fill);
+                    }
+                }
+            }
+            RedactionStyle::Mosaic => {
+                let block = mosaic_block(bounds);
+                let mut by = top;
+                while by < bottom {
+                    let block_bottom = by.saturating_add(block).min(bottom);
+                    let mut bx = left;
+                    while bx < right {
+                        let block_right = bx.saturating_add(block).min(right);
+                        let cells = (by..block_bottom).flat_map(|y| (bx..block_right).map(move |x| (x, y)));
+                        if let Some(fill) = average_rgb(original, cells) {
+                            for y in by..block_bottom {
+                                for x in bx..block_right {
+                                    redacted.put_pixel(x, y, fill);
+                                }
+                            }
+                        }
+                        bx = block_right;
+                    }
+                    by = block_bottom;
+                }
             }
         }
     }
@@ -695,6 +809,27 @@ fn pixel_box_intersection_area(a: &PixelBox, b: &PixelBox) -> u64 {
     u64::from(right - left) * u64::from(bottom - top)
 }
 
+/// 复检未通过时定位责任框：每个越线的 observation 归到与它交集最大的遮挡框，返回去重升序的框序号。
+pub(crate) fn regions_still_showing_text(
+    observation_boxes: &[PixelBox],
+    regions: &[PixelBox],
+) -> Vec<usize> {
+    let mut failing: Vec<usize> = observation_boxes
+        .iter()
+        .filter(|observation| redacted_regions_still_show_text(std::slice::from_ref(observation), regions))
+        .filter_map(|observation| {
+            regions
+                .iter()
+                .enumerate()
+                .max_by_key(|(_, region)| pixel_box_intersection_area(observation, region))
+                .map(|(index, _)| index)
+        })
+        .collect();
+    failing.sort_unstable();
+    failing.dedup();
+    failing
+}
+
 /// 复检契约（纯函数）：任何 OCR observation 框都不得有一半以上落在遮挡区域内。
 pub(crate) fn redacted_regions_still_show_text(
     observation_boxes: &[PixelBox],
@@ -721,6 +856,7 @@ fn verify_redaction(
     app: &AppHandle,
     redacted: &RgbaImage,
     regions: &[PixelBox],
+    region_order: &[usize],
 ) -> Result<(), String> {
     let mut png = Cursor::new(Vec::new());
     DynamicImage::ImageRgba8(redacted.clone())
@@ -746,8 +882,17 @@ fn verify_redaction(
             )
         })
         .collect();
-    if redacted_regions_still_show_text(&boxes, regions) {
-        return Err("遮挡校验未通过：遮挡区域内仍能识别出文字，请扩大遮挡区域后重试".into());
+    let failing = regions_still_showing_text(&boxes, regions);
+    if !failing.is_empty() {
+        // 「第 N 处」按请求里的框顺序（1 起），前端据此标红对应框
+        let list: Vec<String> = failing
+            .iter()
+            .map(|index| (region_order.get(*index).copied().unwrap_or(*index) + 1).to_string())
+            .collect();
+        return Err(format!(
+            "遮挡校验未通过：第 {} 处遮挡区域内仍能识别出文字，请扩大后重试",
+            list.join("、")
+        ));
     }
     crate::diag::push(
         app,
@@ -772,11 +917,12 @@ pub fn redact(app: &AppHandle, request: RedactImageRequest) -> Result<RedactImag
     let original = decode_image(&bytes)?;
     let (width, height) = (original.width() as usize, original.height() as usize);
     let original_pixel_hash = pixel_hash(&original);
-    let regions: Vec<_> = request
+    let styled: Vec<(usize, PixelBox, RedactionStyle)> = request
         .regions
         .into_iter()
-        .map(|region| {
-            normalized_to_pixels(
+        .enumerate()
+        .map(|(order, RedactRegion { bounds: region, style })| {
+            let bounds = normalized_to_pixels(
                 NormalizedBox {
                     x: region.x as f64 / width.max(1) as f64,
                     y: region.y as f64 / height.max(1) as f64,
@@ -786,15 +932,20 @@ pub fn redact(app: &AppHandle, request: RedactImageRequest) -> Result<RedactImag
                 width as u32,
                 height as u32,
                 0,
-            )
+            );
+            (order, bounds, style)
         })
-        .filter(|region| region.width > 0 && region.height > 0)
+        .filter(|(_, region, _)| region.width > 0 && region.height > 0)
         .collect();
-    if regions.is_empty() {
+    if styled.is_empty() {
         return Err("遮挡区域不在图片范围内".into());
     }
-    let redacted = solid_redacted_copy(&original, &regions);
-    verify_redaction(app, &redacted, &regions)?;
+    let regions: Vec<PixelBox> = styled.iter().map(|(_, bounds, _)| *bounds).collect();
+    let region_order: Vec<usize> = styled.iter().map(|(order, _, _)| *order).collect();
+    let pairs: Vec<(PixelBox, RedactionStyle)> =
+        styled.iter().map(|(_, bounds, style)| (*bounds, *style)).collect();
+    let redacted = styled_redacted_copy(&original, &pairs);
+    verify_redaction(app, &redacted, &regions, &region_order)?;
     let redacted_pixel_hash = pixel_hash(&redacted);
     let redacted_file = if request.persist {
         crate::storage::save_image_rgba(
@@ -965,6 +1116,96 @@ mod tests {
         assert_ne!(pixel_hash(&redacted), before);
         assert_eq!(redacted.get_pixel(3, 2), &Rgba([20, 20, 22, 255]));
         assert_eq!(original.get_pixel(3, 2), &Rgba([240, 240, 240, 255]));
+    }
+
+    #[test]
+    fn redaction_style_defaults_to_solid_and_parses_each_kind() {
+        let request: RedactImageRequest = serde_json::from_value(serde_json::json!({
+            "originalFile": "img-source.png",
+            "regions": [
+                { "x": 1, "y": 2, "width": 3, "height": 4 },
+                { "x": 1, "y": 2, "width": 3, "height": 4, "style": { "kind": "solid", "color": [255, 255, 255] } },
+                { "x": 1, "y": 2, "width": 3, "height": 4, "style": { "kind": "pick" } },
+                { "x": 1, "y": 2, "width": 3, "height": 4, "style": { "kind": "mosaic" } }
+            ]
+        }))
+        .unwrap();
+        let styles: Vec<_> = request.regions.iter().map(|region| region.style).collect();
+        assert_eq!(
+            styles,
+            vec![
+                RedactionStyle::Solid { color: [20, 20, 22] },
+                RedactionStyle::Solid { color: [255, 255, 255] },
+                RedactionStyle::Pick,
+                RedactionStyle::Mosaic,
+            ]
+        );
+        assert_eq!(request.regions[0].bounds, PixelBox { x: 1, y: 2, width: 3, height: 4 });
+        let unknown = serde_json::from_value::<RedactImageRequest>(serde_json::json!({
+            "originalFile": "img-source.png",
+            "regions": [{ "x": 1, "y": 2, "width": 3, "height": 4, "style": { "kind": "blur" } }]
+        }));
+        assert!(unknown.is_err(), "未知样式（如模糊）必须拒绝，不能静默回落");
+    }
+
+    #[test]
+    fn mosaic_block_has_floor_and_scales_with_short_side() {
+        assert_eq!(mosaic_block(&PixelBox { x: 0, y: 0, width: 300, height: 22 }), 12);
+        assert_eq!(mosaic_block(&PixelBox { x: 0, y: 0, width: 300, height: 60 }), 20);
+        assert_eq!(mosaic_block(&PixelBox { x: 0, y: 0, width: 4, height: 4 }), 12);
+    }
+
+    #[test]
+    fn mosaic_fills_each_block_with_its_average_and_leaves_outside_untouched() {
+        // 左半黑右半白：24×12 框按 12px 分两块，每块内部是单色 → 保持原色；跨界块取平均
+        let mut original = RgbaImage::from_pixel(30, 12, Rgba([255, 255, 255, 255]));
+        for y in 0..12 {
+            for x in 0..18 {
+                original.put_pixel(x, y, Rgba([0, 0, 0, 255]));
+            }
+        }
+        let redacted = styled_redacted_copy(
+            &original,
+            &[(PixelBox { x: 0, y: 0, width: 24, height: 12 }, RedactionStyle::Mosaic)],
+        );
+        assert_eq!(redacted.get_pixel(5, 5), &Rgba([0, 0, 0, 255]));
+        // 第二块 x=12..24：6 列黑 + 6 列白 → 平均 127
+        assert_eq!(redacted.get_pixel(13, 3), &Rgba([127, 127, 127, 255]));
+        assert_eq!(redacted.get_pixel(23, 11), &Rgba([127, 127, 127, 255]));
+        assert_eq!(redacted.get_pixel(26, 5), &Rgba([255, 255, 255, 255]));
+    }
+
+    #[test]
+    fn pick_uses_ring_average_and_falls_back_when_box_covers_image() {
+        let mut original = RgbaImage::from_pixel(10, 10, Rgba([200, 100, 50, 255]));
+        for y in 3..7 {
+            for x in 3..7 {
+                original.put_pixel(x, y, Rgba([0, 0, 0, 255]));
+            }
+        }
+        let redacted = styled_redacted_copy(
+            &original,
+            &[(PixelBox { x: 3, y: 3, width: 4, height: 4 }, RedactionStyle::Pick)],
+        );
+        assert_eq!(redacted.get_pixel(4, 4), &Rgba([200, 100, 50, 255]));
+        let full = styled_redacted_copy(
+            &original,
+            &[(PixelBox { x: 0, y: 0, width: 10, height: 10 }, RedactionStyle::Pick)],
+        );
+        // 无外圈：取框内平均（84 个底色 + 16 个黑）
+        assert_eq!(full.get_pixel(0, 0), &Rgba([168, 84, 42, 255]));
+    }
+
+    #[test]
+    fn failing_regions_point_to_box_with_largest_overlap() {
+        let regions = [
+            PixelBox { x: 0, y: 0, width: 50, height: 10 },
+            PixelBox { x: 0, y: 20, width: 50, height: 10 },
+        ];
+        let still_visible = PixelBox { x: 5, y: 21, width: 20, height: 8 };
+        let clear = PixelBox { x: 60, y: 0, width: 20, height: 8 };
+        assert_eq!(regions_still_showing_text(&[still_visible, clear], &regions), vec![1]);
+        assert!(regions_still_showing_text(&[clear], &regions).is_empty());
     }
 
     #[test]

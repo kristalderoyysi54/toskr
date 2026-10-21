@@ -568,6 +568,15 @@ export interface ImagePixelBox {
   height: number;
 }
 
+/** 遮挡样式（与 Rust RedactionStyle 同构）；全部是不可还原的像素覆盖，不提供模糊。 */
+export type RedactionStyle =
+  | { kind: "solid"; color: [number, number, number] }
+  | { kind: "pick" }
+  | { kind: "mosaic" };
+
+/** 带样式的遮挡框；缺省 style = 近黑实色（自动遮挡沿用）。 */
+export type RedactionRegion = ImagePixelBox & { style?: RedactionStyle };
+
 export interface ImageOcrObservation {
   text: string;
   confidence: number;
@@ -737,7 +746,7 @@ export const api = {
   },
   redactDeliveryImage: (
     originalFile: string,
-    regions: ImagePixelBox[],
+    regions: RedactionRegion[],
     persist = false
   ) =>
     invoke<RedactDeliveryImageResult>("redact_delivery_image", {

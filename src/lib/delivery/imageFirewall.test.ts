@@ -443,7 +443,10 @@ describe("image Firewall", () => {
 
     expect(await redactOpenDeliveryImage("img-original.png", blockFinding.id)).toBe(true);
     const current = useDeliveryStore.getState().draft!;
-    expect(redact).toHaveBeenCalledWith("img-original.png", [blockFinding.pixelBox]);
+    // 没有存过偏好：自动遮挡默认马赛克
+    expect(redact).toHaveBeenCalledWith("img-original.png", [
+      { ...blockFinding.pixelBox, style: { kind: "mosaic" } },
+    ]);
     expect(current.originalImageFiles).toEqual(["img-original.png"]);
     expect(current.imageFiles).toEqual(["toskr-redacted:redacted-owned.png"]);
     expect(current.imageFirewall[0].redactedPixelHash).toBe("c".repeat(64));
@@ -451,6 +454,28 @@ describe("image Firewall", () => {
     cleanupDeliveryDraftImages(current);
     expect(cleanup).toHaveBeenCalledWith(["toskr-redacted:redacted-owned.png"]);
     expect(cleanup.mock.calls.flat()).not.toContain("img-original.png");
+  });
+
+  it("自动遮挡沿用打码工具里存的样式", async () => {
+    const saved = JSON.stringify({ kind: "solid", color: [255, 255, 255] });
+    vi.stubGlobal("localStorage", { getItem: () => saved, setItem: () => {} });
+    try {
+      const redact = vi.spyOn(api, "redactDeliveryImage").mockResolvedValue({
+        originalFile: "img-original.png",
+        redactedFile: "toskr-redacted:redacted-white.png",
+        originalPixelHash: "a".repeat(64),
+        redactedPixelHash: "d".repeat(64),
+        imageWidth: 200,
+        imageHeight: 200,
+      });
+      useDeliveryStore.getState().openDraft(draft([item()]));
+      expect(await redactOpenDeliveryImage("img-original.png", blockFinding.id)).toBe(true);
+      expect(redact).toHaveBeenCalledWith("img-original.png", [
+        { ...blockFinding.pixelBox, style: { kind: "solid", color: [255, 255, 255] } },
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("手动画框与自动 finding 从原图一次合成，只有完整覆盖才标记已处理", async () => {
@@ -496,7 +521,7 @@ describe("image Firewall", () => {
     expect(redact).toHaveBeenCalledTimes(1);
     expect(redact.mock.calls[0]?.[0]).toBe("img-original.png");
     expect(redact.mock.calls[0]?.[1]).toEqual(expect.arrayContaining([
-      blockFinding.pixelBox,
+      { ...blockFinding.pixelBox, style: { kind: "mosaic" } },
       manualRegion,
     ]));
     const current = useDeliveryStore.getState().draft!.imageFirewall[0];

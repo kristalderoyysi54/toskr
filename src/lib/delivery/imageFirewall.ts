@@ -1,8 +1,10 @@
+import { loadRedactionStyle, validRedactionStyle } from "@/lib/imageEditor";
 import { api } from "@/lib/tauri";
 import type {
   FindingCategory,
   ImageFirewallFinding,
   ImagePixelBox,
+  RedactionRegion,
   RedactDeliveryImageResult,
   ScanImageFirewallResult,
 } from "@/lib/tauri";
@@ -537,13 +539,14 @@ function selectedFindingIds(item: ImageFirewallItem, findingId?: string) {
 function uniqueRegions(
   item: ImageFirewallItem,
   findingIds: ReadonlySet<string>,
-  manualRegions: readonly ImagePixelBox[] = item.manualRegions
+  manualRegions: readonly RedactionRegion[] = item.manualRegions
 ) {
   const seen = new Set<string>();
   return [
     ...item.findings
     .filter((finding) => findingIds.has(finding.id))
-    .map((finding) => finding.pixelBox),
+    // 自动遮挡用打码工具里选的样式；手动框带着自己的样式
+    .map((finding): RedactionRegion => ({ ...finding.pixelBox, style: loadRedactionStyle() })),
     ...manualRegions,
   ]
     .filter((region) => {
@@ -577,7 +580,7 @@ async function renderOpenDeliveryRedaction(input: {
   draft: DeliveryDraft;
   item: ImageFirewallItem;
   findingIds: Set<string>;
-  manualRegions: ImagePixelBox[];
+  manualRegions: RedactionRegion[];
   cancelled?: () => boolean;
 }): Promise<AppliedImageRedaction | null> {
   const { draft, item, findingIds, manualRegions, cancelled } = input;
@@ -738,10 +741,10 @@ export type ManualDeliveryRedactionRequest = {
   draftRevision: number;
   originalFile: string;
   sourceFile: string;
-  regions: ImagePixelBox[];
+  regions: RedactionRegion[];
 };
 
-/** 手工实色打码：已知 finding 只有被完整覆盖时才计为已处理。 */
+/** 手工打码（实色 / 取色 / 马赛克）：已知 finding 只有被完整覆盖时才计为已处理。 */
 export async function manuallyRedactOpenDeliveryImage(
   request: ManualDeliveryRedactionRequest,
   cancelled?: () => boolean
@@ -756,7 +759,8 @@ export async function manuallyRedactOpenDeliveryImage(
     draft.id !== request.draftId || draft.revision !== request.draftRevision ||
     item.sendFile !== request.sourceFile ||
     !["ready", "failed", "disabled"].includes(item.status) ||
-    !request.regions.length || !request.regions.every(validManualRegion)
+    !request.regions.length ||
+    !request.regions.every((region) => validManualRegion(region) && validRedactionStyle(region.style))
   ) return null;
   const manualRegions = uniqueRegions(
     item,

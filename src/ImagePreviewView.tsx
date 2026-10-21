@@ -9,10 +9,12 @@ import {
   ChevronRight,
   Pencil,
   Pin,
+  CircleHelp,
+  Loader2,
   Redo2,
   Send,
   Shield,
-  Trash2,
+  Sparkles,
   Undo2,
 } from "lucide-react";
 
@@ -31,7 +33,14 @@ import {
 import { springSnappy } from "@/lib/motion";
 import { DataReadOnlyGuard } from "@/components/DataReadOnlyGuard";
 import { DetailWindowFrame } from "@/components/DetailWindowFrame";
-import { ManualRedactionCanvas } from "@/components/ManualRedactionCanvas";
+import {
+  ManualRedactionCanvas,
+  RedactionStyleGlyph,
+  type RedactionCandidate,
+} from "@/components/ManualRedactionCanvas";
+import { floatingSurface } from "@/components/ui/floating-surface";
+import { focusRing } from "@/components/ui/focus-ring";
+import { FIREWALL_CATEGORY_LABEL } from "@/lib/delivery/firewall";
 import { Button } from "@/components/ui/button";
 import { MacTrafficLights, PlatinumTrailingBoxes } from "@/components/ui/mac-close-button";
 import { useColorScheme } from "@/lib/colorScheme";
@@ -48,8 +57,14 @@ import {
   IMAGE_EDIT_REQUEST_EVENT,
   IMAGE_EDIT_RESULT_EVENT,
   NOTE_IMAGE_REPLACED_EVENT,
+  REDACTION_BLACK,
+  REDACTION_STYLE_OPTIONS,
   advanceNoteImageEditSequence,
+  failedRegionNumbers,
   imageEditRequestId,
+  loadRedactionStyle,
+  sameRedactionStyle,
+  saveRedactionStyle,
   type DraftImageReplacedPayload,
   type ImageEditCancelResultPayload,
   type ImageEditResultPayload,
@@ -61,7 +76,8 @@ import {
   api,
   TARGET_CHANGED_EVENT,
   type PastedImage,
-  type ImagePixelBox,
+  type RedactionRegion,
+  type RedactionStyle,
   type TargetSnapshot,
 } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
@@ -73,10 +89,11 @@ import {
 } from "@/store/targetStore";
 
 type RedactionHistory = {
-  past: ImagePixelBox[][];
-  present: ImagePixelBox[];
-  future: ImagePixelBox[][];
+  past: RedactionRegion[][];
+  present: RedactionRegion[];
+  future: RedactionRegion[][];
 };
+
 
 const freshRedactionHistory = (): RedactionHistory => ({
   past: [],
@@ -130,6 +147,15 @@ export default function ImagePreviewView() {
     freshRedactionHistory
   );
   const redactionRegions = redactionHistory.present;
+  // 识别是异步的：回来时用最新框列表判断「已被遮挡」
+  const redactionRegionsRef = useRef(redactionRegions);
+  redactionRegionsRef.current = redactionRegions;
+  const [drawStyle, setDrawStyleState] = useState<RedactionStyle>(loadRedactionStyle);
+  const [selectedRegion, setSelectedRegion] = useState<number | null>(null);
+  const [candidates, setCandidates] = useState<RedactionCandidate[]>([]);
+  const [detecting, setDetecting] = useState(false);
+  /** 复检未通过的框（0 起），任何改动后清除。 */
+  const [failedRegions, setFailedRegions] = useState<number[]>([]);
   const [imageEditBusy, setImageEditBusy] = useState(false);
   const pendingImageEditRef = useRef<string | null>(null);
   const pendingImageEditCancelRef = useRef<string | null>(null);
@@ -279,6 +305,8 @@ export default function ImagePreviewView() {
   }, [detachPendingImageEdit, clearImageEditWatchdog]);
 
   const file = files[idx] ?? null;
+  const fileRef = useRef(file);
+  fileRef.current = file;
   const visibleImage = loadedImage?.file === file ? loadedImage : null;
   const url = visibleImage?.url ?? null;
   const imageSize = visibleImage
@@ -319,6 +347,10 @@ export default function ImagePreviewView() {
           !payload.width || !payload.height
         ) {
           tip("warn", payload.message || "图片打码未保存");
+          // 发送副本路径会把自动遮挡框排在前面，序号对不上手动框，只标笔记 / 草稿
+          if (editContextRef.current?.kind !== "delivery") {
+            setFailedRegions(failedRegionNumbers(payload.message ?? "").map((n) => n - 1));
+          }
           return;
         }
         const resultNoteOwner = editContextRef.current?.kind === "note"
@@ -717,7 +749,77 @@ export default function ImagePreviewView() {
     setView(FIT_VIEW);
     supersededImageEditRequestsRef.current.clear();
     setRedactionHistory(freshRedactionHistory());
+    resetRedactionUi();
     setImageEditing(true);
+  };
+
+  function resetRedactionUi() {
+    setSelectedRegion(null);
+    setCandidates([]);
+    setDetecting(false);
+    setFailedRegions([]);
+  }
+
+  /** 记一步撤销历史并更新框列表。 */
+  const commitRegions = (update: (present: RedactionRegion[]) => RedactionRegion[]) => {
+    setRedactionHistory((current) => ({
+      past: [...current.past, current.present],
+      present: update(current.present),
+      future: [],
+    }));
+    setFailedRegions([]);
+  };
+
+  const setDrawStyle = (style: RedactionStyle) => {
+    setDrawStyleState(style);
+    saveRedactionStyle(style);
+  };
+
+  const removeRegion = (index: number) => {
+    commitRegions((present) => present.filter((_, i) => i !== index));
+    setSelectedRegion(null);
+  };
+
+  const acceptCandidates = (indices: number[]) => {
+    const picked = indices.map((i) => candidates[i]).filter(Boolean) as RedactionCandidate[];
+    if (!picked.length) return;
+    commitRegions((present) => [...present, ...picked.map((c) => ({ ...c.box, style: drawStyle }))]);
+    setCandidates((current) => current.filter((_, i) => !indices.includes(i)));
+  };
+
+  const detectSensitive = async () => {
+    if (!file || detecting || imageEditBusy) return;
+    const scannedFile = file;
+    setDetecting(true);
+    try {
+      const result = await api.scanImageFirewall(scannedFile);
+      if (scannedFile !== fileRef.current) return;
+      const covered = (box: RedactionRegion) =>
+        redactionRegionsRef.current.some((r) =>
+          r.x <= box.x && r.y <= box.y &&
+          r.x + r.width >= box.x + box.width && r.y + r.height >= box.y + box.height
+        );
+      const seen = new Set<string>();
+      const next = result.findings
+        .filter((finding) => {
+          const key = `${finding.pixelBox.x}:${finding.pixelBox.y}:${finding.pixelBox.width}:${finding.pixelBox.height}`;
+          if (seen.has(key) || covered(finding.pixelBox)) return false;
+          seen.add(key);
+          return true;
+        })
+        .map((finding) => ({
+          box: finding.pixelBox,
+          label: FIREWALL_CATEGORY_LABEL[finding.category],
+        }));
+      setCandidates(next);
+      if (!next.length) {
+        tip("info", result.findings.length ? "识别到的敏感文字都已遮挡" : "没有发现敏感文字，可以手动框选");
+      }
+    } catch (error) {
+      tip("warn", `识别失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setDetecting(false);
+    }
   };
 
   const cancelImageEdit = () => {
@@ -725,10 +827,13 @@ export default function ImagePreviewView() {
     restoreImageEditFocusRef.current = true;
     setImageEditing(false);
     setRedactionHistory(freshRedactionHistory());
+    resetRedactionUi();
   };
 
   const undoImageRegion = () => {
     if (imageEditBusy) return;
+    setSelectedRegion(null);
+    setFailedRegions([]);
     setRedactionHistory((current) => {
       const previous = current.past.at(-1);
       if (!previous) return current;
@@ -742,6 +847,8 @@ export default function ImagePreviewView() {
 
   const redoImageRegion = () => {
     if (imageEditBusy) return;
+    setSelectedRegion(null);
+    setFailedRegions([]);
     setRedactionHistory((current) => {
       const next = current.future[0];
       if (!next) return current;
@@ -829,9 +936,19 @@ export default function ImagePreviewView() {
         return;
       }
       if (imageEditing) {
+        const typing = (e.target as HTMLElement | null)?.closest("input, textarea, [contenteditable='true']");
         if (e.key === "Escape") {
           e.preventDefault();
-          cancelImageEdit();
+          // 逐层退出：先取消选中，再收起候选，最后才退出打码
+          if (selectedRegion !== null) setSelectedRegion(null);
+          else if (candidates.length) setCandidates([]);
+          else cancelImageEdit();
+        } else if (
+          (e.key === "Backspace" || e.key === "Delete") && !typing &&
+          selectedRegion !== null && !imageEditBusy
+        ) {
+          e.preventDefault();
+          removeRegion(selectedRegion);
         } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
           e.preventDefault();
           applyImageEdit();
@@ -888,6 +1005,8 @@ export default function ImagePreviewView() {
     dataGeneration,
     redactionRegions,
     redactionHistory,
+    selectedRegion,
+    candidates,
   ]);
 
   return (
@@ -1009,14 +1128,21 @@ export default function ImagePreviewView() {
             imageWidth={imageSize.width}
             imageHeight={imageSize.height}
             regions={redactionRegions}
+            drawStyle={drawStyle}
+            selected={selectedRegion}
+            candidates={candidates}
+            failed={failedRegions}
             disabled={imageEditBusy}
+            onSelect={setSelectedRegion}
             onAdd={(region) => {
-              setRedactionHistory((current) => ({
-                past: [...current.past, current.present],
-                present: [...current.present, region],
-                future: [],
-              }));
+              commitRegions((present) => [...present, region]);
+              setSelectedRegion(redactionRegions.length);
             }}
+            onChange={(index, region) => {
+              commitRegions((present) => present.map((r, i) => (i === index ? region : r)))
+            }}
+            onRemove={removeRegion}
+            onAcceptCandidate={(index) => acceptCandidates([index])}
           />
         ) : url ? (
           <div
@@ -1049,6 +1175,45 @@ export default function ImagePreviewView() {
           <div className="flex h-24 w-32 animate-pulse items-center justify-center rounded-lg bg-foreground/10">
             <span className="sr-only">加载中…</span>
           </div>
+        )}
+        {imageEditing && !transientPeek && candidates.length > 0 && (
+          <div
+            role="status"
+            className={cn(
+              floatingSurface(2),
+              "absolute left-1/2 top-2 z-20 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-lg py-1 pl-3 pr-1 text-label"
+            )}
+          >
+            <span className="size-2 rounded-full bg-warning" aria-hidden />
+            识别到 {candidates.length} 处敏感文字，点虚线框逐个打码
+            <Button
+              type="button"
+              size="xs"
+              disabled={imageEditBusy}
+              onClick={() => acceptCandidates(candidates.map((_, i) => i))}
+            >
+              全部打码
+            </Button>
+            <Button type="button" size="xs" variant="ghost" onClick={() => setCandidates([])}>
+              忽略
+            </Button>
+          </div>
+        )}
+        {imageEditing && !transientPeek && (
+          <RedactionToolbar
+            drawStyle={drawStyle}
+            onDrawStyle={setDrawStyle}
+            count={redactionRegions.length}
+            busy={imageEditBusy}
+            detecting={detecting}
+            canUndo={redactionHistory.past.length > 0}
+            canRedo={redactionHistory.future.length > 0}
+            onDetect={() => void detectSensitive()}
+            onUndo={undoImageRegion}
+            onRedo={redoImageRegion}
+            onCancel={cancelImageEdit}
+            onApply={applyImageEdit}
+          />
         )}
         {many && !transientPeek && !imageEditing && (
           <>
@@ -1122,60 +1287,6 @@ export default function ImagePreviewView() {
           )}
         </div>
       )}
-      {imageEditing && !transientPeek && (
-        <div className="flex h-10 shrink-0 items-center gap-1 border-t border-border px-2">
-          <IconButton
-            label="撤销上一步打码操作（⌘Z）"
-            size="xs"
-            disabled={imageEditBusy || redactionHistory.past.length === 0}
-            onClick={undoImageRegion}
-          >
-            <Undo2 className="size-3.5" />
-          </IconButton>
-          <IconButton
-            label="重做打码区域（⌘Shift+Z）"
-            size="xs"
-            disabled={imageEditBusy || redactionHistory.future.length === 0}
-            onClick={redoImageRegion}
-          >
-            <Redo2 className="size-3.5" />
-          </IconButton>
-          <IconButton
-            label="清空打码区域"
-            size="xs"
-            disabled={imageEditBusy || redactionRegions.length === 0}
-            onClick={() => {
-              setRedactionHistory((current) => ({
-                past: [...current.past, current.present],
-                present: [],
-                future: [],
-              }));
-            }}
-          >
-            <Trash2 className="size-3.5" />
-          </IconButton>
-          <span className="ml-1 truncate text-micro text-muted-foreground">
-            拖动/方向键选区 · 滚轮缩放 · Space 平移
-          </span>
-          <Button
-            type="button"
-            size="xs"
-            className="ml-auto"
-            disabled={imageEditBusy}
-            onClick={cancelImageEdit}
-          >
-            取消
-          </Button>
-          <Button
-            type="button"
-            size="xs"
-            disabled={imageEditBusy || redactionRegions.length === 0}
-            onClick={applyImageEdit}
-          >
-            {imageEditBusy ? "保存中…" : "应用打码"}
-          </Button>
-        </div>
-      )}
       {!transientPeek && !imageEditing && (
         <div className="flex h-6 shrink-0 items-center justify-center text-label tabular-nums text-muted-foreground">
           {[
@@ -1190,3 +1301,133 @@ export default function ImagePreviewView() {
     </DetailWindowFrame>
   );
 }
+
+/** 打码工具栏（浮在图片底部，用户 2026-10-21 选定方案 A）：新框样式 / 识别 / 撤销重做 / 应用。 */
+function RedactionToolbar({
+  drawStyle,
+  onDrawStyle,
+  count,
+  busy,
+  detecting,
+  canUndo,
+  canRedo,
+  onDetect,
+  onUndo,
+  onRedo,
+  onCancel,
+  onApply,
+}: {
+  drawStyle: RedactionStyle;
+  onDrawStyle: (style: RedactionStyle) => void;
+  count: number;
+  busy: boolean;
+  detecting: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
+  onDetect: () => void;
+  onUndo: () => void;
+  onRedo: () => void;
+  onCancel: () => void;
+  onApply: () => void;
+}) {
+  // 两组：马赛克 | 实色（实色下再选 黑 / 白 / 取色）
+  const fillMode = drawStyle.kind !== "mosaic";
+  const lastFill = useRef<RedactionStyle>(
+    fillMode ? drawStyle : { kind: "solid", color: REDACTION_BLACK }
+  );
+  if (fillMode) lastFill.current = drawStyle;
+  const segment = (active: boolean) =>
+    cn(
+      "flex h-6 items-center gap-1.5 rounded-md px-2 text-label",
+      active
+        ? "bg-background text-foreground shadow-sm"
+        : "text-muted-foreground hover:text-foreground",
+      focusRing
+    );
+  return (
+    <div
+      role="toolbar"
+      aria-label="打码工具"
+      className={cn(
+        floatingSurface(2),
+        "absolute bottom-3 left-1/2 z-20 flex max-w-[calc(100%-16px)] -translate-x-1/2 items-center gap-1 overflow-x-auto whitespace-nowrap rounded-xl p-1 [&::-webkit-scrollbar]:hidden"
+      )}
+    >
+      <div className="surface-inset flex items-center gap-px rounded-lg p-0.5">
+        <button
+          type="button"
+          aria-pressed={!fillMode}
+          disabled={busy}
+          onClick={() => onDrawStyle({ kind: "mosaic" })}
+          className={segment(!fillMode)}
+        >
+          <RedactionStyleGlyph style={{ kind: "mosaic" }} />
+          马赛克
+        </button>
+        <button
+          type="button"
+          aria-pressed={fillMode}
+          disabled={busy}
+          onClick={() => onDrawStyle(lastFill.current)}
+          className={segment(fillMode)}
+        >
+          <RedactionStyleGlyph style={{ kind: "solid", color: REDACTION_BLACK }} />
+          实色
+        </button>
+      </div>
+      {fillMode && (
+        <div className="flex items-center" aria-label="填充颜色">
+          {REDACTION_STYLE_OPTIONS.filter((o) => o.style.kind !== "mosaic").map((option) => {
+            const active = sameRedactionStyle(drawStyle, option.style);
+            return (
+              <IconButton
+                key={option.label}
+                label={option.label}
+                pressed={active}
+                disabled={busy}
+                onClick={() => onDrawStyle(option.style)}
+              >
+                <RedactionStyleGlyph style={option.style} />
+              </IconButton>
+            );
+          })}
+        </div>
+      )}
+      <span aria-hidden className="mx-0.5 h-4 w-px shrink-0 bg-border" />
+      <Button
+        type="button"
+        size="xs"
+        variant="outline"
+        disabled={busy || detecting}
+        onClick={onDetect}
+        className="border-warning/50 text-warning"
+      >
+        {detecting ? <Loader2 className="animate-spin" /> : <Sparkles />}
+        {detecting ? "识别中…" : "识别敏感文字"}
+      </Button>
+      <span aria-hidden className="mx-0.5 h-4 w-px shrink-0 bg-border" />
+      <IconButton label="撤销（⌘Z）" size="xs" disabled={busy || !canUndo} onClick={onUndo}>
+        <Undo2 className="size-3.5" />
+      </IconButton>
+      <IconButton label="重做（⌘⇧Z）" size="xs" disabled={busy || !canRedo} onClick={onRedo}>
+        <Redo2 className="size-3.5" />
+      </IconButton>
+      <span className="min-w-8 text-center text-micro tabular-nums text-muted-foreground">
+        {count} 处
+      </span>
+      <IconButton
+        label="拖动画框 · 点框选中后可移动、拖角缩放、⌫ 删除 · 方向键微移（⇧ 加大步长）· 滚轮缩放 · 按住 Space 平移 · ⌘⏎ 应用 · Esc 逐层退出"
+        size="xs"
+      >
+        <CircleHelp className="size-3.5" />
+      </IconButton>
+      <Button type="button" size="xs" variant="ghost" disabled={busy} onClick={onCancel}>
+        取消
+      </Button>
+      <Button type="button" size="xs" disabled={busy || count === 0} onClick={onApply}>
+        {busy ? "复检中…" : "应用"}
+      </Button>
+    </div>
+  );
+}
+
