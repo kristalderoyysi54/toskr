@@ -735,6 +735,29 @@ describe("notesStore 基础", () => {
     expect(decodeView(legacy).settings.clipView).toBe("time");
   });
 
+  it("按来源保留天数：坏值丢弃，缺字段为空表", () => {
+    const decode = (settings: object) =>
+      decodePersistedState(JSON.stringify({
+        version: STORE_VERSION,
+        state: {
+          sections: [{ id: INBOX_ID, name: "收件箱" }],
+          notes: [],
+          tasks: [],
+          taskSections: [],
+          settings,
+        },
+      }));
+    expect(
+      decode({
+        ...defaultSettings(),
+        clipAppRetentionDays: { a: 1, b: 0, c: -3, d: 1.5, e: "7", f: 30 },
+      }).settings.clipAppRetentionDays
+    ).toEqual({ a: 1, f: 30 });
+    expect(decode({ ...defaultSettings(), clipAppRetentionDays: [1] }).settings.clipAppRetentionDays).toEqual({});
+    const { clipAppRetentionDays: _r, ...legacy } = defaultSettings();
+    expect(decode(legacy).settings.clipAppRetentionDays).toEqual({});
+  });
+
   it("v13 上手状态迁入可恢复演练，已完成旧用户不会被强制重做", () => {
     const decodeOnboarding = (onboarding: object) =>
       decodePersistedState(JSON.stringify({
@@ -2999,6 +3022,38 @@ describe("剪贴板 tab：发送不标完成 / 清空 / 超龄清理", () => {
     expect(
       useNotesStore.getState().notes.filter((n) => n.sectionId === CLIPBOARD_ID)
     ).toHaveLength(2);
+  });
+
+  it("pruneClipHistory 按来源单独设定的天数优先，其余跟随全局", () => {
+    const D = 86_400_000;
+    const setSource = (id: string, sourceBundle: string) =>
+      useNotesStore.setState({
+        notes: useNotesStore.getState().notes.map((n) => (n.id === id ? { ...n, sourceBundle } : n)),
+      });
+    const term = addClip("终端 2 天前", Date.now() - 2 * D);
+    setSource(term, "com.apple.Terminal");
+    const figma = addClip("Figma 2 天前", Date.now() - 2 * D);
+    setSource(figma, "com.figma.Desktop");
+    const other = addClip("其它 10 天前", Date.now() - 10 * D);
+    // 全局永久 + 终端 1 天：只清终端
+    useNotesStore.getState().setSettings({
+      clipRetentionDays: null,
+      clipAppRetentionDays: { "com.apple.Terminal": 1 },
+    });
+    useNotesStore.getState().pruneClipHistory();
+    let ids = useNotesStore.getState().notes.map((n) => n.id);
+    expect(ids).not.toContain(term);
+    expect(ids).toContain(figma);
+    expect(ids).toContain(other);
+    // 全局 7 天 + Figma 30 天：其它被全局清理，Figma 按单独设定保留
+    useNotesStore.getState().setSettings({
+      clipRetentionDays: 7,
+      clipAppRetentionDays: { "com.figma.Desktop": 30 },
+    });
+    useNotesStore.getState().pruneClipHistory();
+    ids = useNotesStore.getState().notes.map((n) => n.id);
+    expect(ids).toContain(figma);
+    expect(ids).not.toContain(other);
   });
 
   it("pruneClipHistory 按保留时长清理超龄非固定卡；永久不清", () => {

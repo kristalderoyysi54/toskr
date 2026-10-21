@@ -31,6 +31,7 @@ import { motion, MotionConfig } from "motion/react";
 import {
   AppWindow,
   ChevronRight,
+  EyeOff,
   ClipboardList,
   Clock,
   Image as ImageIcon,
@@ -108,7 +109,12 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { SelectionBar } from "@/components/SelectionBar";
@@ -881,7 +887,7 @@ type ClipBand = {
   key: string;
   band: string;
   notes: Note[];
-  source?: { key: string; bundle?: string; total: number };
+  source?: { key: string; bundle?: string; total: number; all: Note[] };
 };
 const CLIP_VIEW_OPTIONS: { value: ClipView; label: string }[] = [
   { value: "time", label: "按时间" },
@@ -3105,7 +3111,7 @@ export default function App() {
           key: `src-${g.key}`,
           band: g.label,
           notes: g.notes.slice(0, limit),
-          source: { key: g.key, bundle: g.bundle, total: g.notes.length },
+          source: { key: g.key, bundle: g.bundle, total: g.notes.length, all: g.notes },
         };
       });
     }
@@ -4442,9 +4448,10 @@ export default function App() {
                               {source ? (
                                 <ClipSourceBandHeader
                                   label={band}
+                                  sourceKey={source.key}
                                   bundle={source.bundle}
                                   pinned={source.key === CLIP_PINNED_BAND}
-                                  total={source.total}
+                                  notes={source.all}
                                   collapsed={!!clipSourceCollapsed[source.key]}
                                   first={bi === 0}
                                   trailing={
@@ -4876,28 +4883,64 @@ function ClipViewMenuButton({
   );
 }
 
-/** 按来源视图的段头：应用图标 + 名称 + 总数，点击折叠/展开。 */
+const CLIP_APP_RETENTION_STEPS = [1, 7, 30, 365];
+
+/** 按来源视图的段头：应用图标 + 名称 + 总数，点击折叠/展开。
+ *  右键（置顶段除外）：全选 / 删除本来源全部记录、单独保留时长、不再收集此应用。 */
 function ClipSourceBandHeader({
   label,
+  sourceKey,
   bundle,
   pinned,
-  total,
+  notes,
   collapsed,
   first,
   trailing,
   onToggle,
 }: {
   label: string;
+  sourceKey: string;
   bundle?: string;
   pinned: boolean;
-  total: number;
+  notes: Note[];
   collapsed: boolean;
   first: boolean;
   trailing?: React.ReactNode;
   onToggle: () => void;
 }) {
   const icon = useAppIcon(pinned ? undefined : bundle);
-  return (
+  const appDays = useNotesStore((s) => s.settings.clipAppRetentionDays[sourceKey]);
+  const globalDays = useNotesStore((s) => s.settings.clipRetentionDays);
+  const excluded = useNotesStore((s) => !!bundle && s.settings.clipExcludedApps.includes(bundle));
+  const total = notes.length;
+
+  const setRetention = async (days: number | null) => {
+    const current = useNotesStore.getState().settings.clipAppRetentionDays;
+    if ((current[sourceKey] ?? null) === days) return;
+    const next = { ...current };
+    if (days === null) delete next[sourceKey];
+    else next[sourceKey] = days;
+    const effective = days ?? globalDays;
+    const cutoff = effective ? Date.now() - effective * 86_400_000 : null;
+    const doomed = cutoff === null ? 0 : notes.filter((n) => n.createdAt < cutoff).length;
+    if (doomed > 0) {
+      const { ask } = await import("@tauri-apps/plugin-dialog");
+      const yes = await ask(
+        `「${label}」有 ${doomed} 条记录超过新的保留时长，会被立即清理。\n已固定（★）的记录不会被删除。`,
+        {
+          title: `确定把「${label}」的保留时长调整为「${days === null ? "默认" : formatRetention(days)}」吗？`,
+          kind: "warning",
+          okLabel: "调整并清理",
+          cancelLabel: "取消",
+        }
+      );
+      if (!yes) return;
+    }
+    applySettingsPatch({ clipAppRetentionDays: next });
+    tip("ok", doomed > 0 ? `已调整「${label}」保留时长，清理 ${doomed} 条` : `已调整「${label}」保留时长`);
+  };
+
+  const row = (
     <div className={cn("flex items-center gap-2 pb-1", first ? "pt-0.5" : "pt-2.5")}>
       <button
         type="button"
@@ -4919,10 +4962,74 @@ function ClipSourceBandHeader({
         )}
         <span className="truncate text-micro font-medium text-muted-foreground">{label}</span>
         <span className="text-micro tabular-nums text-muted-foreground">{total}</span>
+        {!pinned && appDays !== undefined && (
+          <span className="shrink-0 text-micro text-muted-foreground">· 保留 {formatRetention(appDays)}</span>
+        )}
         <span className="h-px flex-1 bg-border/60" />
       </button>
       {trailing}
     </div>
+  );
+  if (pinned) return row;
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+      <ContextMenuContent className="w-56">
+        <ContextMenuItem
+          onClick={() => {
+            useNotesStore.getState().setChecked(notes.map((n) => n.id));
+            tip("info", `已选中「${label}」的 ${total} 条`);
+          }}
+        >
+          <CheckCheck className="size-3.5" /> 全选这 {total} 条
+        </ContextMenuItem>
+        <ContextMenuItem
+          variant="destructive"
+          onClick={() => deleteNotesWithUndo(notes.map((n) => n.id), `已删除「${label}」的 ${total} 条`)}
+        >
+          <Trash2 className="size-3.5" /> 删除这 {total} 条
+        </ContextMenuItem>
+        {sourceKey && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuSub>
+              <ContextMenuSubTrigger>
+                <Clock className="size-3.5" /> 保留时长
+              </ContextMenuSubTrigger>
+              <ContextMenuSubContent className="whitespace-nowrap">
+                <ContextMenuRadioGroup
+                  value={appDays === undefined ? "follow" : String(appDays)}
+                  onValueChange={(v) => void setRetention(v === "follow" ? null : Number(v))}
+                >
+                  <ContextMenuRadioItem value="follow">
+                    默认（{globalDays ? formatRetention(globalDays) : "永久"}）
+                  </ContextMenuRadioItem>
+                  {CLIP_APP_RETENTION_STEPS.map((d) => (
+                    <ContextMenuRadioItem key={d} value={String(d)}>
+                      {formatRetention(d)}
+                    </ContextMenuRadioItem>
+                  ))}
+                </ContextMenuRadioGroup>
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+            {bundle && (
+              <ContextMenuItem
+                disabled={excluded}
+                onClick={() => {
+                  const cur = useNotesStore.getState().settings.clipExcludedApps;
+                  applySettingsPatch({ clipExcludedApps: [...cur, bundle] });
+                  tip("ok", `已不再收集来自「${label}」的复制，现有记录保留`);
+                }}
+              >
+                <EyeOff className="size-3.5" />
+                {excluded ? `已不收集「${label}」` : `不再收集来自「${label}」`}
+              </ContextMenuItem>
+            )}
+          </>
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 

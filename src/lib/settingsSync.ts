@@ -220,7 +220,7 @@ export function applySettingsPatch(patch: Partial<Settings>) {
   if ("clipPauseUntil" in patch) {
     void api.setClipPause(s.clipPauseUntil ?? 0);
   }
-  if ("clipRetentionDays" in patch) {
+  if ("clipRetentionDays" in patch || "clipAppRetentionDays" in patch) {
     // 缩短时长即刻更新记录；媒体实体由主窗口的引用差分统一进入延迟 GC。
     useNotesStore.getState().pruneClipHistory();
   }

@@ -57,6 +57,11 @@ export function splitMiddle(
 
 export const CLIP_PINNED_BAND = "__pinned__";
 
+/** 剪贴来源键：bundle id 优先，其次应用名；都没有为空串（「未知来源」）。 */
+export function clipSourceKey(n: { sourceApp?: string; sourceBundle?: string }): string {
+  return n.sourceBundle || n.sourceApp || "";
+}
+
 export interface ClipSourceBand<T> {
   /** 分组键：bundle id 优先，其次应用名；置顶段为 CLIP_PINNED_BAND。 */
   key: string;
@@ -79,7 +84,7 @@ export function groupClipsBySource<
       pinned.push(n);
       continue;
     }
-    const key = n.sourceBundle || n.sourceApp || "";
+    const key = clipSourceKey(n);
     let band = bands.get(key);
     if (!band) {
       band = { key, label: n.sourceApp || "未知来源", bundle: n.sourceBundle, notes: [] };

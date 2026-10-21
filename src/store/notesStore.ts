@@ -76,6 +76,7 @@ import {
   type MessageStatus,
   type MessageWatchRule,
 } from "@/lib/messages";
+import { clipSourceKey } from "@/lib/cliprow";
 import { getImProfile } from "@/lib/imProfile";
 import {
   DEFAULT_PROMPT_SNIPPETS,
@@ -425,6 +426,8 @@ export interface Settings {
   detailFontSize: number;
   /** 剪贴卡模板（仅舒适密度竖栏生效）：标准瓷砖 / 浓缩（票据头+单行摘要）。 */
   clipCardTemplate: "standard" | "condensed";
+  /** 按来源应用单独设定的保留天数（键见 clipSourceKey）；未列出的跟随 clipRetentionDays。 */
+  clipAppRetentionDays: Record<string, number>;
   /** 剪贴页视图（竖栏生效）：按时间分段 / 按来源分组 / 仅图片网格。 */
   clipView: ClipView;
   /** 卡片右键菜单项显隐与顺序（合并置顶、删除垫底不参与自定义）。 */
@@ -767,6 +770,7 @@ export const defaultSettings = (): Settings => ({
   detailFontSize: DETAIL_FONT_SIZE_DEFAULT,
   clipCardTemplate: "standard",
   clipView: "time",
+  clipAppRetentionDays: {},
   contextMenu: CONTEXT_MENU_REGISTRY.map((i) => ({ id: i.id, on: true })),
   autoCheckUpdate: true,
   autoInstallUpdate: false,
@@ -2093,6 +2097,17 @@ export function migratePersistedState(
   ) {
     p.settings = { ...p.settings, clipCardTemplate: "condensed" };
   }
+  // 按来源保留天数：只留正整数天，坏值丢弃（不让整份数据判无效）
+  if (p.settings) {
+    const raw = (p.settings as unknown as Record<string, unknown>).clipAppRetentionDays;
+    const clean: Record<string, number> = {};
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      for (const [k, v] of Object.entries(raw)) {
+        if (typeof v === "number" && Number.isInteger(v) && v > 0) clean[k] = v;
+      }
+    }
+    p.settings = { ...p.settings, clipAppRetentionDays: clean };
+  }
   // clipView 不进 enumField：未知值（未来下线的视图）归一化回 time，不让整份数据判无效
   if (p.settings && !CLIP_VIEWS.includes(p.settings.clipView)) {
     p.settings = { ...p.settings, clipView: "time" };
@@ -2777,12 +2792,15 @@ export const useNotesStore = create<NotesState>()(
       },
 
       pruneClipHistory: () => {
-        const days = get().settings.clipRetentionDays;
-        if (!days) return [];
-        const cutoff = Date.now() - days * 86_400_000;
-        const evicted = get().notes.filter(
-          (n) => n.sectionId === CLIPBOARD_ID && !n.keep && n.createdAt < cutoff
-        );
+        const { clipRetentionDays: days, clipAppRetentionDays: perApp } = get().settings;
+        if (!days && Object.keys(perApp).length === 0) return [];
+        const now = Date.now();
+        // 来源单独设定的天数优先，其余跟随全局（全局永久时只清理有单独设定的来源）
+        const evicted = get().notes.filter((n) => {
+          if (n.sectionId !== CLIPBOARD_ID || n.keep) return false;
+          const limit = perApp[clipSourceKey(n)] ?? days;
+          return !!limit && n.createdAt < now - limit * 86_400_000;
+        });
         if (!evicted.length) return [];
         const drop = new Set(evicted.map((n) => n.id));
         const survivors = get().notes.filter((n) => !drop.has(n.id));
