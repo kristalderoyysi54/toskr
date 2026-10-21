@@ -17,6 +17,7 @@ import {
 import {
   arrayMove,
   horizontalListSortingStrategy,
+  rectSortingStrategy,
   SortableContext,
   sortableKeyboardCoordinates,
   useSortable,
@@ -28,7 +29,11 @@ import { installAutoBackupScheduler, performAutoBackup } from "@/lib/autoBackup"
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { motion, MotionConfig } from "motion/react";
 import {
+  AppWindow,
+  ChevronRight,
   ClipboardList,
+  Clock,
+  Image as ImageIcon,
   ArrowLeft,
   ArrowRight,
   ArrowUpCircle,
@@ -140,6 +145,10 @@ import { TaskQuickAdd } from "@/components/TaskQuickAdd";
 import { EmptyState } from "@/components/ui/empty-state";
 import { floatingSurface } from "@/components/ui/floating-surface";
 import { focusRing } from "@/components/ui/focus-ring";
+import { ApplicationIcon } from "@/components/ApplicationIcon";
+import { useAppIcon } from "@/lib/icons";
+import { Segmented } from "@/components/ui/segmented";
+import { SimpleMenu, SimpleMenuItem } from "@/components/SimpleMenu";
 import { GlowingEffect } from "@/components/ui/glowing-effect";
 import { IconButton } from "@/components/ui/icon-button";
 import { Kbd } from "@/components/ui/kbd";
@@ -179,7 +188,7 @@ import {
   type NoteSaveToNotesPayload,
   type NoteTagsPayload,
 } from "@/lib/actions";
-import { clipTimeBand } from "@/lib/cliprow";
+import { CLIP_PINNED_BAND, clipTimeBand, groupClipsBySource } from "@/lib/cliprow";
 import {
   materializeRichCapture,
   restoreRichCaptureAliases,
@@ -264,6 +273,7 @@ import {
 } from "@/lib/imageEditor";
 import {
   CLIPBOARD_ID,
+  DEFAULT_EXCLUDED_APPS,
   INBOX_ID,
   noteImages,
   PANEL_WIDTH_MAX,
@@ -272,6 +282,7 @@ import {
   SECTION_COLORS,
   TASK_INBOX_ID,
   useNotesStore,
+  type ClipView,
   type Note,
   type NoteContentBlock,
   type PageId,
@@ -863,6 +874,20 @@ const PAGE_LABEL: Record<PageId, string> = {
 
 /** 剪贴列表每批挂载量：与首批一致，避免滚到底一次插入 200 张造成主线程尖峰。 */
 const CLIP_RENDER_BATCH = 60;
+/** 按来源视图每段首屏条数。 */
+const CLIP_SOURCE_PREVIEW = 5;
+/** 剪贴列表的一个分段；来源视图额外带来源信息（段头图标、总数、折叠键）。 */
+type ClipBand = {
+  key: string;
+  band: string;
+  notes: Note[];
+  source?: { key: string; bundle?: string; total: number };
+};
+const CLIP_VIEW_OPTIONS: { value: ClipView; label: string }[] = [
+  { value: "time", label: "按时间" },
+  { value: "source", label: "按来源" },
+  { value: "images", label: "图片" },
+];
 /** dnd-kit 以 options 引用作为 sensor descriptor 依赖，不能在 render 内重建。 */
 const CARD_POINTER_SENSOR_OPTIONS = { activationConstraint: { distance: 4 } };
 const TAB_POINTER_SENSOR_OPTIONS = { activationConstraint: { distance: 6 } };
@@ -2936,6 +2961,21 @@ export default function App() {
     return [...list.filter((n) => n.keep), ...list.filter((n) => !n.keep)];
   }, [notes, q]);
 
+  /** 上/下横栏形态：三页走方形卡片串（导航序也切到串序）。 */
+  const horizontalBar =
+    settings.rightSidebar &&
+    (settings.sidebarEdge === "top" || settings.sidebarEdge === "bottom");
+  /** 剪贴页视图：横栏形态固定按时间（横栏本身就是方形卡串）。 */
+  const clipView: ClipView = horizontalBar ? "time" : settings.clipView;
+  /** 图片视图只列纯图剪贴（组合图文仍在列表视图里）。 */
+  const clipBaseNotes = useMemo(
+    () =>
+      clipView === "images"
+        ? clipNotes.filter((n) => n.kind === "image")
+        : clipNotes,
+    [clipNotes, clipView]
+  );
+
   /** 秘文 tab：按 kind 筛（对 section 孤儿健壮），时间流水（新在前）。 */
   const secretNotes = useMemo(
     () => notes.filter((n) => n.kind === "secret" && matchSecretNote(n, q)),
@@ -2970,7 +3010,7 @@ export default function App() {
   );
   const matchCount =
     page === "clipboard"
-      ? clipNotes.length
+      ? clipBaseNotes.length
       : page === "notes" && contentSubview === "secret"
         ? secretNotes.length
         : page === "notes" && contentSubview === "messages"
@@ -3037,31 +3077,59 @@ export default function App() {
   // 首批 60 张，后续也按同批量追加；屏外绘制由 list-render-unit 跳过。
   const [clipShown, setClipShown] = useState(CLIP_RENDER_BATCH);
   const visibleClipNotes = useMemo(
-    () => clipNotes.slice(0, clipShown),
-    [clipNotes, clipShown]
+    () => clipBaseNotes.slice(0, clipShown),
+    [clipBaseNotes, clipShown]
   );
-  const clipNavIds = useMemo(
-    () => visibleClipNotes.map((n) => n.id),
-    [visibleClipNotes]
+  // 按来源视图不走全局分页（大来源会把其余来源挤到底部）：每段先挂
+  // CLIP_SOURCE_PREVIEW 条，段内「显示更多」按批追加；段头可折叠。仅内存态。
+  const [clipSourceShown, setClipSourceShown] = useState<Record<string, number>>({});
+  const [clipSourceCollapsed, setClipSourceCollapsed] = useState<Record<string, boolean>>({});
+  /** 列表内的视图切换滚出视野时，标题行补一个视图按钮（用户 2026-10-21 选定）。 */
+  const [clipSwitchHidden, setClipSwitchHidden] = useState(false);
+  const clipSourceGroups = useMemo(
+    () => (clipView === "source" ? groupClipsBySource(clipNotes) : []),
+    [clipNotes, clipView]
   );
-  /** 纵向列表的时间分组（Raycast 剪贴板风格）：置顶独立一组，其余按时间段
-   *  连续合并；手动拖动重排后同段名可能再现，key 取组首元素 id 保证稳定。
-   *  taskNow 30s 心跳顺带驱动段边界随时间推移（刚刚 → 1 小时内）。 */
+  /** 纵向列表的分段：时间 / 图片视图按时间段（Raycast 剪贴板风格），置顶独立
+   *  一组，其余按时间段连续合并；手动拖动重排后同段名可能再现，key 取组首
+   *  元素 id 保证稳定。taskNow 30s 心跳顺带驱动段边界随时间推移。
+   *  来源视图按来源应用分段，段内截取当前挂载量。 */
   const clipBands = useMemo(() => {
-    const bands: { band: string; notes: typeof visibleClipNotes }[] = [];
+    if (clipView === "source") {
+      return clipSourceGroups.map((g): ClipBand => {
+        const limit = clipSourceCollapsed[g.key]
+          ? 0
+          : (clipSourceShown[g.key] ??
+            (g.key === CLIP_PINNED_BAND ? g.notes.length : CLIP_SOURCE_PREVIEW));
+        return {
+          key: `src-${g.key}`,
+          band: g.label,
+          notes: g.notes.slice(0, limit),
+          source: { key: g.key, bundle: g.bundle, total: g.notes.length },
+        };
+      });
+    }
+    const bands: ClipBand[] = [];
     for (const n of visibleClipNotes) {
       const band = n.keep ? "置顶" : clipTimeBand(n.createdAt, taskNow);
       const last = bands[bands.length - 1];
       if (last && last.band === band) last.notes.push(n);
-      else bands.push({ band, notes: [n] });
+      else bands.push({ key: `${band}-${n.id}`, band, notes: [n] });
     }
     return bands;
-  }, [visibleClipNotes, taskNow]);
+  }, [
+    clipView,
+    clipSourceGroups,
+    clipSourceCollapsed,
+    clipSourceShown,
+    visibleClipNotes,
+    taskNow,
+  ]);
+  const clipNavIds = useMemo(
+    () => clipBands.flatMap((b) => b.notes.map((n) => n.id)),
+    [clipBands]
+  );
 
-  /** 上/下横栏形态：三页走方形卡片串（导航序也切到串序）。 */
-  const horizontalBar =
-    settings.rightSidebar &&
-    (settings.sidebarEdge === "top" || settings.sidebarEdge === "bottom");
   /** Platinum 窗口布局（标题栏框、选项卡面板、底部状态栏）；横栏形态只换配色不换布局。 */
   const platinumLayout = settings.colorScheme === "platinum" && !horizontalBar;
   useEffect(() => {
@@ -3936,6 +4004,15 @@ export default function App() {
           </IconButton>
         </Tipped>
       )}
+      {page === "clipboard" && !horizontalBar && settings.clipHistory && clipSwitchHidden && (
+        <ClipViewMenuButton
+          value={clipView}
+          onPick={(v) => {
+            applySettingsPatch({ clipView: v });
+            scrollTabPageToStart("clipboard");
+          }}
+        />
+      )}
       {/* 页面级工具：搜索 / 清理 / 密度 —— 与右侧全局工具用分隔线区分 */}
       {page !== "tasks" && (
         <Tipped label="搜索（⌘F）">
@@ -4314,26 +4391,33 @@ export default function App() {
                           className="min-h-0 flex-1 px-2.5"
                           viewportClassName="px-1"
                         >
-                  {clipNotes.length === 0 ? (
+                  {!settings.clipHistory && clipNotes.length === 0 ? (
+                    <ClipHistoryOff
+                      retentionDays={settings.clipRetentionDays}
+                      ignoreConcealed={settings.clipIgnoreConcealed}
+                      excludedApps={settings.clipExcludedApps}
+                    />
+                  ) : clipBaseNotes.length === 0 ? (
+                    <>
+                    <div className="flex justify-end pt-0.5">
+                      <ClipViewSwitch value={clipView} onHiddenChange={setClipSwitchHidden} />
+                    </div>
                     <EmptyState
-                      icon={<ClipboardList />}
+                      icon={clipView === "images" ? <ImageIcon /> : <ClipboardList />}
                       title={
-                        !settings.clipHistory
-                          ? "剪贴板历史未开启"
-                          : q
-                            ? `没有匹配「${q}」的记录`
+                        q
+                          ? `没有匹配「${q}」的${clipView === "images" ? "图片" : "记录"}`
+                          : clipView === "images"
+                            ? "还没有图片记录"
                             : "还没有剪贴板记录"
                       }
                       hint={
-                        !settings.clipHistory ? (
-                          <>
-                            在 设置 → 剪贴板 开启「剪贴板历史」后，
-                            <br />
-                            复制过的内容会自动收集到这里。
-                          </>
-                        ) : undefined
+                        q ? undefined : clipView === "images"
+                          ? "复制的截图和图片会出现在这里。"
+                          : "复制任意文字、链接或图片试试，会自动出现在这里。"
                       }
                     />
+                    </>
                   ) : (
                     <DndContext
                       sensors={sensors}
@@ -4346,58 +4430,114 @@ export default function App() {
                     >
                       <SortableContext
                         items={clipNavIds}
-                        strategy={verticalListSortingStrategy}
+                        strategy={
+                          clipView === "images"
+                            ? rectSortingStrategy
+                            : verticalListSortingStrategy
+                        }
                       >
                         <div className="flex flex-col pb-2 pt-1">
-                          {clipBands.map(({ band, notes: bandNotes }, bi) => (
-                            <div key={`${band}-${bandNotes[0]!.id}`}>
-                              <div
-                                className={cn(
-                                  "flex items-center gap-2 pb-1",
-                                  bi === 0 ? "pt-0.5" : "pt-2.5"
-                                )}
-                              >
-                                <span className="text-micro font-medium text-muted-foreground">
-                                  {band}
-                                </span>
-                                <span className="h-px flex-1 bg-border/60" />
-                              </div>
-                              {/* 紧缩=零间距流水（行底 hover 才浮现，靠行高节奏分行）；舒适=卡片间距 */}
-                              <div
-                                className={cn(
-                                  "flex flex-col",
-                                  settings.cardDensity !== "compact" && "gap-1"
-                                )}
-                              >
-                                {bandNotes.map((n, i) => (
-                                  <WindowedListItem
-                                    key={n.id}
-                                    itemId={n.id}
-                                    estimatedHeight={
-                                      settings.cardDensity === "compact"
-                                        ? 32
-                                        : settings.clipCardTemplate === "condensed"
-                                          ? 52
-                                          : 116
-                                    }
-                                    eager={bi === 0 && i < 18}
-                                  >
-                                    <NoteCard
-                                      note={n}
-                                      query={q}
-                                      // 邻卡 id 只在时间段内传递：选中描边的
-                                      // 连续段不跨段头合并
-                                      prevId={bandNotes[i - 1]?.id}
-                                      nextId={bandNotes[i + 1]?.id}
-                                    />
-                                  </WindowedListItem>
-                                ))}
-                              </div>
+                          {clipBands.map(({ key, band, notes: bandNotes, source }, bi) => (
+                            <div key={key}>
+                              {source ? (
+                                <ClipSourceBandHeader
+                                  label={band}
+                                  bundle={source.bundle}
+                                  pinned={source.key === CLIP_PINNED_BAND}
+                                  total={source.total}
+                                  collapsed={!!clipSourceCollapsed[source.key]}
+                                  first={bi === 0}
+                                  trailing={
+                                    bi === 0 ? (
+                                      <ClipViewSwitch value={clipView} onHiddenChange={setClipSwitchHidden} />
+                                    ) : undefined
+                                  }
+                                  onToggle={() =>
+                                    setClipSourceCollapsed((prev) => ({
+                                      ...prev,
+                                      [source.key]: !prev[source.key],
+                                    }))
+                                  }
+                                />
+                              ) : (
+                                <div
+                                  className={cn(
+                                    "flex items-center gap-2 pb-1",
+                                    bi === 0 ? "pt-0.5" : "pt-2.5"
+                                  )}
+                                >
+                                  <span className="text-micro font-medium text-muted-foreground">
+                                    {band}
+                                  </span>
+                                  <span className="h-px flex-1 bg-border/60" />
+                                  {bi === 0 && (
+                                    <ClipViewSwitch value={clipView} onHiddenChange={setClipSwitchHidden} />
+                                  )}
+                                </div>
+                              )}
+                              {clipView === "images" ? (
+                                // 图片网格：复用横栏方形卡（右键菜单/预览/发送/拖动一并保留）；
+                                // 卡宽下限 104px 保证 4 个悬停钮不溢出，列数随面板宽度 2～4 列
+                                <div className="grid grid-cols-[repeat(auto-fill,minmax(104px,1fr))] gap-1.5">
+                                  {bandNotes.map((n) => (
+                                    <NoteCard key={n.id} note={n} query={q} strip grid />
+                                  ))}
+                                </div>
+                              ) : (
+                                // 紧缩=零间距流水（行底 hover 才浮现，靠行高节奏分行）；舒适=卡片间距
+                                <div
+                                  className={cn(
+                                    "flex flex-col",
+                                    settings.cardDensity !== "compact" && "gap-1"
+                                  )}
+                                >
+                                  {bandNotes.map((n, i) => (
+                                    <WindowedListItem
+                                      key={n.id}
+                                      itemId={n.id}
+                                      estimatedHeight={
+                                        settings.cardDensity === "compact"
+                                          ? 32
+                                          : settings.clipCardTemplate === "condensed"
+                                            ? 52
+                                            : 116
+                                      }
+                                      eager={bi === 0 && i < 18}
+                                    >
+                                      <NoteCard
+                                        note={n}
+                                        query={q}
+                                        // 邻卡 id 只在分段内传递：选中描边的
+                                        // 连续段不跨段头合并
+                                        prevId={bandNotes[i - 1]?.id}
+                                        nextId={bandNotes[i + 1]?.id}
+                                      />
+                                    </WindowedListItem>
+                                  ))}
+                                </div>
+                              )}
+                              {source && bandNotes.length > 0 && source.total > bandNotes.length && (
+                                <button
+                                  type="button"
+                                  className={cn(
+                                    "mt-1 w-full rounded-md py-1 text-label text-muted-foreground hover:bg-black/[0.04] hover:text-foreground dark:hover:bg-white/[0.06]",
+                                    focusRing
+                                  )}
+                                  onClick={() =>
+                                    setClipSourceShown((prev) => ({
+                                      ...prev,
+                                      [source.key]: bandNotes.length + CLIP_RENDER_BATCH,
+                                    }))
+                                  }
+                                >
+                                  显示更多（还有 {source.total - bandNotes.length} 条）
+                                </button>
+                              )}
                             </div>
                           ))}
-                          {clipNotes.length > clipShown && (
+                          {clipView !== "source" && clipBaseNotes.length > clipShown && (
                             <ClipLoadMore
-                              remaining={clipNotes.length - clipShown}
+                              remaining={clipBaseNotes.length - clipShown}
                               onLoad={() => setClipShown((v) => v + CLIP_RENDER_BATCH)}
                             />
                           )}
@@ -4409,9 +4549,12 @@ export default function App() {
                       ),
                     [
                       clipBands,
+                      clipBaseNotes,
                       clipNavIds,
                       clipNotes,
                       clipShown,
+                      clipSourceCollapsed,
+                      clipView,
                       horizontalBar,
                       onDragCancel,
                       onDragEnd,
@@ -4422,7 +4565,10 @@ export default function App() {
                       sensors,
                       settings.cardDensity,
                       settings.clipCardTemplate,
+                      settings.clipExcludedApps,
                       settings.clipHistory,
+                      settings.clipIgnoreConcealed,
+                      settings.clipRetentionDays,
                       visibleClipNotes,
                     ]
                   )}
@@ -4638,6 +4784,214 @@ export default function App() {
       </div>
     </TooltipProvider>
     </MotionConfig>
+  );
+}
+
+const CLIP_VIEW_ICON: Record<ClipView, React.ReactNode> = {
+  time: <Clock />,
+  source: <AppWindow />,
+  images: <ImageIcon />,
+};
+
+/** 剪贴页视图切换：挂在列表首个段头右侧，不单占一行（用户 2026-10-21 指定）。
+ *  onHiddenChange 上报是否滚出列表视野，供标题行显示替代按钮。 */
+function ClipViewSwitch({
+  value,
+  onHiddenChange,
+}: {
+  value: ClipView;
+  onHiddenChange?: (hidden: boolean) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !onHiddenChange) return;
+    // IntersectionObserver 已计入 ScrollArea 的 overflow 裁剪，root 用默认视口即可
+    const ob = new IntersectionObserver(([entry]) => {
+      if (entry) onHiddenChange(!entry.isIntersecting);
+    });
+    ob.observe(el);
+    return () => {
+      ob.disconnect();
+      onHiddenChange(false);
+    };
+  }, [onHiddenChange]);
+  return (
+    <div ref={ref} className="flex shrink-0">
+      <Segmented<ClipView>
+        size="xs"
+        ariaLabel="剪贴页视图"
+        value={value}
+        options={CLIP_VIEW_OPTIONS}
+        onChange={(v) => applySettingsPatch({ clipView: v })}
+      />
+    </div>
+  );
+}
+
+/** 列表内切换滚走后的替代入口：图标显示当前视图，点开三项菜单。 */
+function ClipViewMenuButton({
+  value,
+  onPick,
+}: {
+  value: ClipView;
+  onPick: (v: ClipView) => void;
+}) {
+  return (
+    <SimpleMenu
+      className="flex animate-in fade-in-0 duration-100 motion-reduce:animate-none"
+      menuClassName="w-32"
+      menuAriaLabel="剪贴页视图"
+      trigger={({ open, toggle, controls }) => (
+        <Tipped label="切换视图">
+          <IconButton
+            label="切换视图"
+            withTitle={false}
+            aria-haspopup="menu"
+            aria-expanded={open}
+            aria-controls={open ? controls : undefined}
+            onClick={toggle}
+          >
+            {CLIP_VIEW_ICON[value]}
+          </IconButton>
+        </Tipped>
+      )}
+    >
+      {(close) =>
+        CLIP_VIEW_OPTIONS.map((o) => (
+          <SimpleMenuItem
+            key={o.value}
+            radio
+            checked={value === o.value}
+            onClick={() => {
+              close();
+              onPick(o.value);
+            }}
+          >
+            <span className="[&_svg]:size-3.5">{CLIP_VIEW_ICON[o.value]}</span> {o.label}
+          </SimpleMenuItem>
+        ))
+      }
+    </SimpleMenu>
+  );
+}
+
+/** 按来源视图的段头：应用图标 + 名称 + 总数，点击折叠/展开。 */
+function ClipSourceBandHeader({
+  label,
+  bundle,
+  pinned,
+  total,
+  collapsed,
+  first,
+  trailing,
+  onToggle,
+}: {
+  label: string;
+  bundle?: string;
+  pinned: boolean;
+  total: number;
+  collapsed: boolean;
+  first: boolean;
+  trailing?: React.ReactNode;
+  onToggle: () => void;
+}) {
+  const icon = useAppIcon(pinned ? undefined : bundle);
+  return (
+    <div className={cn("flex items-center gap-2 pb-1", first ? "pt-0.5" : "pt-2.5")}>
+      <button
+        type="button"
+        aria-expanded={!collapsed}
+        onClick={onToggle}
+        className={cn("flex min-w-0 flex-1 items-center gap-1.5 rounded-sm text-left", focusRing)}
+      >
+        <ChevronRight
+          aria-hidden
+          className={cn(
+            "size-3 shrink-0 text-muted-foreground transition-transform",
+            !collapsed && "rotate-90"
+          )}
+        />
+        {pinned ? (
+          <Star aria-hidden className="size-3 shrink-0 text-muted-foreground" />
+        ) : (
+          <ApplicationIcon src={icon?.url} name={label} className="size-3.5 rounded-[3px]" />
+        )}
+        <span className="truncate text-micro font-medium text-muted-foreground">{label}</span>
+        <span className="text-micro tabular-nums text-muted-foreground">{total}</span>
+        <span className="h-px flex-1 bg-border/60" />
+      </button>
+      {trailing}
+    </div>
+  );
+}
+
+function formatRetention(days: number): string {
+  if (days % 365 === 0) return `${days / 365} 年`;
+  if (days % 30 === 0) return `${days / 30} 个月`;
+  if (days % 7 === 0) return `${days / 7} 周`;
+  return `${days} 天`;
+}
+
+/** 剪贴板历史关闭时的空态：说明隐私处理（文案随当前设置生成）+ 就地开启。 */
+function ClipHistoryOff({
+  retentionDays,
+  ignoreConcealed,
+  excludedApps,
+}: {
+  retentionDays: number | null;
+  ignoreConcealed: boolean;
+  excludedApps: string[];
+}) {
+  const ignoresPasswordApps = DEFAULT_EXCLUDED_APPS.some((id) => excludedApps.includes(id));
+  const ignoreLine =
+    ignoresPasswordApps && ignoreConcealed
+      ? "自动忽略密码管理器和标记为隐藏的内容"
+      : ignoresPasswordApps
+        ? "自动忽略密码管理器里的复制"
+        : ignoreConcealed
+          ? "自动忽略标记为隐藏的内容"
+          : null;
+  const lines = [
+    "只存在本机，加密保存，不上传",
+    ...(ignoreLine ? [ignoreLine] : []),
+    ...(retentionDays != null
+      ? [`超过 ${formatRetention(retentionDays)} 自动清理，固定 ★ 的保留`]
+      : []),
+  ];
+  return (
+    <div className="flex flex-col items-center gap-2 px-6 pb-10 pt-12 text-center">
+      <span className="text-muted-foreground/50 [&_svg]:size-6">
+        <ClipboardList />
+      </span>
+      <p className="text-title font-medium text-muted-foreground">剪贴板历史未开启</p>
+      <p className="text-label leading-normal text-muted-foreground">
+        开启后，复制过的文字、链接和图片会自动收集到这里
+      </p>
+      <ul className="my-2 flex flex-col gap-1.5 text-left text-label text-muted-foreground">
+        {lines.map((line) => (
+          <li key={line} className="flex items-start gap-1.5">
+            <span aria-hidden className="mt-1.5 size-1 shrink-0 rounded-full bg-muted-foreground" />
+            {line}
+          </li>
+        ))}
+      </ul>
+      <div className="flex items-center gap-2">
+        <Button size="sm" onClick={() => applySettingsPatch({ clipHistory: true })}>
+          开启剪贴板历史
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            void api.openSettingsWindow();
+            void emitTo("settings", SETTINGS_SECTION, "clip");
+          }}
+        >
+          调整规则
+        </Button>
+      </div>
+    </div>
   );
 }
 

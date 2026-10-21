@@ -192,6 +192,7 @@ export const NoteCard = memo(function NoteCard({
   note,
   query = "",
   strip = false,
+  grid = false,
   prevId,
   nextId,
 }: {
@@ -199,6 +200,8 @@ export const NoteCard = memo(function NoteCard({
   query?: string;
   /** 横栏卡片串形态（上/下边栏）：固定宽方形卡、随栏高伸展。 */
   strip?: boolean;
+  /** 剪贴页图片网格瓷砖（配合 strip）：卡窄，悬停钮只留发送/复制/预览/删除，其余走右键菜单。 */
+  grid?: boolean;
   /** 渲染序上的相邻卡 id（仅剪贴纵向流水传入）：相邻同选时合并选中描边。 */
   prevId?: string;
   nextId?: string;
@@ -1025,8 +1028,11 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
             !strip && "list-render-unit",
             compact && isClip ? "rounded-md" : "rounded-lg",
             strip
-              ? // Paste 1:1：近方形卡（实测 496×526 → 16/17），宽随栏高推导
-                "h-auto aspect-[16/17] shrink-0 flex-col px-2 pb-1.5 pt-1.5"
+              ? grid
+                ? // 图片网格瓷砖：无通栏，正方形，图片区尽量大
+                  "h-auto aspect-square shrink-0 flex-col p-1.5"
+                : // Paste 1:1：近方形卡（实测 496×526 → 16/17），宽随栏高推导
+                  "h-auto aspect-[16/17] shrink-0 flex-col px-2 pb-1.5 pt-1.5"
               : compact
                 ? // 紧缩双调性（2026-08-12 用户定稿）：剪贴=流水行更密，笔记=资产卡呼吸
                   isClip
@@ -1224,7 +1230,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
 
           {/* 顶部通栏（竖栏笔记=资产牌 / 横栏串维持现状）：渐变底 + 标题与副行
               （白字）+ 右端应用图标；渐变两端与卡底同吃 --card-alpha */}
-          {!ticket && (
+          {!ticket && !grid && (
           <div
             className={cn(
               "asset-band -mx-2 -mt-1.5 flex shrink-0 items-center gap-1.5 rounded-t-lg px-2",
@@ -1454,7 +1460,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
             </div>
           )}
 
-          {clipTemplate === "standard" && (
+          {clipTemplate === "standard" && !grid && (
           <div
             className={cn(
               "flex shrink-0 items-center gap-1 text-micro text-muted-foreground",
@@ -1528,6 +1534,20 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
             </span>
           </div>
           )}
+          {grid && (
+            // 网格瓷砖底行（用户 2026-10-21 选定）：时间在段头、类型都是图片，
+            // 只留来源小图标 + 尺寸；悬停时淡出，让位给操作钮
+            <div className="flex h-4 shrink-0 items-center gap-1 text-micro text-muted-foreground transition-opacity group-hover:opacity-0">
+              {icon && (
+                <img src={icon.url} alt={note.sourceApp ?? ""} className="size-3.5 shrink-0" />
+              )}
+              {!!note.imageW && (
+                <span className="ml-auto shrink-0 tabular-nums">
+                  {note.imageW} × {note.imageH}
+                </span>
+              )}
+            </div>
+          )}
             </>
           )}
 
@@ -1599,7 +1619,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
             >
               <Send className="size-3" />
             </IconButton>
-            {isClip && (
+            {isClip && !grid && (
               <IconButton
                 label={note.keep ? "取消置顶" : "置顶（固定不清理）"}
                 surface
@@ -1620,7 +1640,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
                 <Copy className="size-3" />
               </IconButton>
             )}
-            {isClip && (
+            {isClip && !grid && (
               <MoveToNotesButton
                 onMove={moveToNotesSelfOrChecked}
                 onMenuOpen={() => {
@@ -1629,7 +1649,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
                 }}
               />
             )}
-            {aliasRestorable.length > 0 && (
+            {!grid && aliasRestorable.length > 0 && (
               <IconButton
                 label="恢复化名"
                 surface
@@ -1651,27 +1671,31 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
                 <Expand className="size-3" />
               )}
             </IconButton>
-            <IconButton
-              label={editLabel}
-              surface
-              reveal="hover-focus"
-              onClick={() => openPreview(true)}
-            >
-              <Pencil className="size-3" />
-            </IconButton>
-            <IconButton
-              label={note.blur ? "取消模糊" : "模糊内容"}
-              surface
-              reveal="hover-focus"
-              pressed={note.blur === true}
-              onClick={() => toggleNoteBlur(note.id)}
-            >
-              {note.blur ? (
-                <Eye className="size-3" />
-              ) : (
-                <EyeOff className="size-3" />
-              )}
-            </IconButton>
+            {!grid && (
+              <IconButton
+                label={editLabel}
+                surface
+                reveal="hover-focus"
+                onClick={() => openPreview(true)}
+              >
+                <Pencil className="size-3" />
+              </IconButton>
+            )}
+            {!grid && (
+              <IconButton
+                label={note.blur ? "取消模糊" : "模糊内容"}
+                surface
+                reveal="hover-focus"
+                pressed={note.blur === true}
+                onClick={() => toggleNoteBlur(note.id)}
+              >
+                {note.blur ? (
+                  <Eye className="size-3" />
+                ) : (
+                  <EyeOff className="size-3" />
+                )}
+              </IconButton>
+            )}
             <IconButton
               label="删除"
               surface

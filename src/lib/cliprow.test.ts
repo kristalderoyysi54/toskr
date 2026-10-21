@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { clipTimeBand, isMonoLike, splitMiddle } from "./cliprow";
+import {
+  CLIP_PINNED_BAND,
+  clipTimeBand,
+  groupClipsBySource,
+  isMonoLike,
+  splitMiddle,
+} from "./cliprow";
 
 const H = 3_600_000;
 const D = 86_400_000;
@@ -62,5 +68,33 @@ describe("splitMiddle", () => {
     const { head, tail } = splitMiddle("short\n第二行");
     expect(head).toBe("short");
     expect(tail).toBe("");
+  });
+});
+
+describe("groupClipsBySource", () => {
+  it("置顶在前，其余按最近活跃来源排序，同 bundle 合并、无来源归入未知", () => {
+    const notes = [
+      { id: "p", keep: true, sourceApp: "备忘录", sourceBundle: "com.apple.Notes" },
+      { id: "a1", sourceApp: "Safari", sourceBundle: "com.apple.Safari" },
+      { id: "b1", sourceApp: "终端", sourceBundle: "com.apple.Terminal" },
+      { id: "a2", sourceApp: "Safari", sourceBundle: "com.apple.Safari" },
+      { id: "u1" },
+      { id: "n1", sourceApp: "备忘录", sourceBundle: "com.apple.Notes" },
+    ];
+    const bands = groupClipsBySource(notes);
+    expect(bands.map((b) => b.key)).toEqual([
+      CLIP_PINNED_BAND,
+      "com.apple.Safari",
+      "com.apple.Terminal",
+      "",
+      "com.apple.Notes",
+    ]);
+    expect(bands.map((b) => b.label)).toEqual(["置顶", "Safari", "终端", "未知来源", "备忘录"]);
+    expect(bands[1]!.notes.map((n) => n.id)).toEqual(["a1", "a2"]);
+  });
+
+  it("没有置顶时不产生空置顶段", () => {
+    expect(groupClipsBySource([{ sourceApp: "Safari" }]).map((b) => b.key)).toEqual(["Safari"]);
+    expect(groupClipsBySource([])).toEqual([]);
   });
 });

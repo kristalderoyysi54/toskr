@@ -425,6 +425,8 @@ export interface Settings {
   detailFontSize: number;
   /** 剪贴卡模板（仅舒适密度竖栏生效）：标准瓷砖 / 浓缩（票据头+单行摘要）。 */
   clipCardTemplate: "standard" | "condensed";
+  /** 剪贴页视图（竖栏生效）：按时间分段 / 按来源分组 / 仅图片网格。 */
+  clipView: ClipView;
   /** 卡片右键菜单项显隐与顺序（合并置顶、删除垫底不参与自定义）。 */
   contextMenu: { id: ContextMenuItemId; on: boolean }[];
   /** 启动时自动检查更新。 */
@@ -728,6 +730,9 @@ export const DEFAULT_COMPANION_APPS = [
   "com.openai.codex",
 ];
 
+export const CLIP_VIEWS = ["time", "source", "images"] as const;
+export type ClipView = (typeof CLIP_VIEWS)[number];
+
 export const DEFAULT_EXCLUDED_APPS = [
   "com.1password.1password",
   "com.agilebits.onepassword7",
@@ -761,6 +766,7 @@ export const defaultSettings = (): Settings => ({
   cardDensity: "comfortable",
   detailFontSize: DETAIL_FONT_SIZE_DEFAULT,
   clipCardTemplate: "standard",
+  clipView: "time",
   contextMenu: CONTEXT_MENU_REGISTRY.map((i) => ({ id: i.id, on: true })),
   autoCheckUpdate: true,
   autoInstallUpdate: false,
@@ -2086,6 +2092,10 @@ export function migratePersistedState(
     (p.settings as unknown as Record<string, unknown>).clipCardTemplate === "banner"
   ) {
     p.settings = { ...p.settings, clipCardTemplate: "condensed" };
+  }
+  // clipView 不进 enumField：未知值（未来下线的视图）归一化回 time，不让整份数据判无效
+  if (p.settings && !CLIP_VIEWS.includes(p.settings.clipView)) {
+    p.settings = { ...p.settings, clipView: "time" };
   }
   if (version < 5 && p.settings?.companionApps) {
     p.settings = {

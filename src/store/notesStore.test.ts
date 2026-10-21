@@ -716,6 +716,25 @@ describe("notesStore 基础", () => {
     ).toThrow(/枚举无效/);
   });
 
+  it("剪贴页视图：合法值保留，未知值与缺字段回落为按时间，不让整份数据判无效", () => {
+    const decodeView = (settings: object) =>
+      decodePersistedState(JSON.stringify({
+        version: STORE_VERSION,
+        state: {
+          sections: [{ id: INBOX_ID, name: "收件箱" }],
+          notes: [],
+          tasks: [],
+          taskSections: [],
+          settings,
+        },
+      }));
+    expect(decodeView({ ...defaultSettings(), clipView: "source" }).settings.clipView).toBe("source");
+    expect(decodeView({ ...defaultSettings(), clipView: "images" }).settings.clipView).toBe("images");
+    expect(decodeView({ ...defaultSettings(), clipView: "retired" }).settings.clipView).toBe("time");
+    const { clipView: _view, ...legacy } = defaultSettings();
+    expect(decodeView(legacy).settings.clipView).toBe("time");
+  });
+
   it("v13 上手状态迁入可恢复演练，已完成旧用户不会被强制重做", () => {
     const decodeOnboarding = (onboarding: object) =>
       decodePersistedState(JSON.stringify({

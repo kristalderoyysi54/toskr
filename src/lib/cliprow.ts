@@ -54,3 +54,41 @@ export function splitMiddle(
     tail: chars.slice(chars.length - tailLen).join(""),
   };
 }
+
+export const CLIP_PINNED_BAND = "__pinned__";
+
+export interface ClipSourceBand<T> {
+  /** 分组键：bundle id 优先，其次应用名；置顶段为 CLIP_PINNED_BAND。 */
+  key: string;
+  label: string;
+  bundle?: string;
+  notes: T[];
+}
+
+/**
+ * 按来源应用分组：置顶独立成段排最前；其余按入参顺序（新在前）首次出现
+ * 的先后排列，即「最近活跃的来源在上」。无来源信息的归入「未知来源」。
+ */
+export function groupClipsBySource<
+  T extends { keep?: boolean; sourceApp?: string; sourceBundle?: string },
+>(notes: T[]): ClipSourceBand<T>[] {
+  const pinned: T[] = [];
+  const bands = new Map<string, ClipSourceBand<T>>();
+  for (const n of notes) {
+    if (n.keep) {
+      pinned.push(n);
+      continue;
+    }
+    const key = n.sourceBundle || n.sourceApp || "";
+    let band = bands.get(key);
+    if (!band) {
+      band = { key, label: n.sourceApp || "未知来源", bundle: n.sourceBundle, notes: [] };
+      bands.set(key, band);
+    }
+    band.notes.push(n);
+  }
+  const rest = [...bands.values()];
+  return pinned.length > 0
+    ? [{ key: CLIP_PINNED_BAND, label: "置顶", notes: pinned }, ...rest]
+    : rest;
+}
