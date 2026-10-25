@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
+import { t, type LanguagePref, type MessageKey } from "@/lib/i18n";
 import { advanceCycle, backfillPeriods, billFallbackColor } from "@/lib/bills";
 import { nextRecurrence, nextRecurrenceDue } from "@/lib/taskRecurrence";
 import { detectCode } from "@/lib/code";
@@ -400,6 +401,8 @@ export type VibrancyMaterial =
   | "liquid";
 
 export interface Settings {
+  /** 界面语言：跟随系统 / 简体中文 / English。 */
+  language: LanguagePref;
   /** 主题：跟随系统 / 浅色 / 深色。 */
   theme: ThemePref;
   /** 配色方案；platinum 下 theme 与 vibrancy 保留原值但不生效。 */
@@ -609,7 +612,7 @@ export type ContextMenuItemId =
   | "ai-title"
   | "move";
 
-export const CONTEXT_MENU_REGISTRY: { id: ContextMenuItemId; label: string }[] = [
+export const CONTEXT_MENU_REGISTRY: { id: ContextMenuItemId; label: MessageKey }[] = [
   { id: "preview", label: "预览 / 打开链接" },
   { id: "send", label: "发送到对话" },
   { id: "send-template", label: "用模板发送" },
@@ -756,6 +759,7 @@ export const clampDetailFontSize = (size: number): number =>
   );
 
 export const defaultSettings = (): Settings => ({
+  language: "system",
   theme: "system",
   colorScheme: "default",
   platinumHighlight: "lavender",
@@ -1295,6 +1299,7 @@ function validateSettingsShape(value: unknown, version: number): void {
       throw new Error(`settings.${key} 枚举无效`);
     }
   };
+  enumField("language", ["system", "zh", "en"]);
   enumField("theme", ["system", "light", "dark"]);
   enumField("colorScheme", ["default", "platinum"]);
   enumField("platinumHighlight", ["lavender", "blue", "teal", "graphite"]);
@@ -2705,7 +2710,7 @@ export const useNotesStore = create<NotesState>()(
               const trimmed = existing.text.trim();
               const preview = trimmed
                 ? [...trimmed].slice(0, 20).join("")
-                : "图片";
+                : t("图片");
               return { orphanImages: [], autoKept: { id: existing.id, preview } };
             }
           }

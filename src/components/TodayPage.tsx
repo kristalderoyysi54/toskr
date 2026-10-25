@@ -9,6 +9,8 @@ import { PillInput } from "@/components/ui/pill-input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { billOccurrencesInRange, startOfBillDay } from "@/lib/bills";
 import { todayAgenda, todayDefaultDue } from "@/lib/tasks";
+import { useT } from "@/lib/i18n";
+import { clockLabel } from "@/lib/taskRecurrence";
 import { tip } from "@/lib/tip";
 import { cn } from "@/lib/utils";
 import { useNotesStore } from "@/store/notesStore";
@@ -27,6 +29,7 @@ const hm = (ms: number) => {
  * 只读视图：数据源仍是任务与账单，行内操作与任务子视图完全一致。
  */
 export function TodayPage({ now }: { now: number }) {
+  const t = useT();
   const tasks = useNotesStore((s) => s.tasks);
   const bills = useNotesStore((s) => s.bills);
   const billsEnabled = useNotesStore((s) => s.settings.subscriptionsEnabled);
@@ -50,17 +53,17 @@ export function TodayPage({ now }: { now: number }) {
       <ScrollArea className="min-h-0 flex-1 px-2.5" viewportClassName="px-1">
         <div className="flex flex-col gap-3 pb-2 pt-1">
           <div className={cn("grid gap-1.5", billsEnabled ? "grid-cols-4" : "grid-cols-3")}>
-            <Stat value={pending} label="待办" />
-            <Stat value={agenda.doneToday} label="已完成" />
-            <Stat value={agenda.overdue} label="已逾期" tone={agenda.overdue ? "red" : undefined} />
-            {billsEnabled && <Stat value={todayBills.length} label="扣款" />}
+            <Stat value={pending} label={t("待办")} />
+            <Stat value={agenda.doneToday} label={t("已完成")} />
+            <Stat value={agenda.overdue} label={t("已逾期")} tone={agenda.overdue ? "red" : undefined} />
+            {billsEnabled && <Stat value={todayBills.length} label={t("扣款")} />}
           </div>
 
           {empty ? (
             <EmptyState
               icon={<CalendarCheck />}
-              title="今天没有安排"
-              hint="在上方记下今天要做的事，或在任务的到期弹层里把它排到今天。"
+              title={t("今天没有安排")}
+              hint={t("在上方记下今天要做的事，或在任务的到期弹层里把它排到今天。")}
             />
           ) : (
             <>
@@ -68,7 +71,7 @@ export function TodayPage({ now }: { now: number }) {
                 <section className="flex flex-col gap-1">
                   <div className="flex items-center gap-1 pl-0.5 pr-1">
                     <h3 className="flex-1 text-label font-semibold uppercase tracking-[0.08em] text-destructive">
-                      往日未完成
+                      {t("往日未完成")}
                       <span className="ml-1 rounded-sm bg-destructive/10 px-1 py-px text-micro tabular-nums">
                         {agenda.earlier.length}
                       </span>
@@ -83,7 +86,7 @@ export function TodayPage({ now }: { now: number }) {
 
               {agenda.timeline.length > 0 && (
                 // token-exception: 时间列定宽 2.75rem 容下「23:59」，与 NowLine 的 w-11 对齐
-                <section aria-label="今天时间轴" className="grid grid-cols-[2.75rem_minmax(0,1fr)] gap-x-1.5 gap-y-1">
+                <section aria-label={t("今天时间轴")} className="grid grid-cols-[2.75rem_minmax(0,1fr)] gap-x-1.5 gap-y-1">
                   {agenda.timeline.map((t, i) => (
                     <Fragment key={t.id}>
                       {i === nowIndex && <NowLine now={now} />}
@@ -107,7 +110,7 @@ export function TodayPage({ now }: { now: number }) {
               {todayBills.length > 0 && (
                 <section className="flex flex-col gap-0.5">
                   <h3 className="pl-0.5 text-label font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-                    今天扣款
+                    {t("今天扣款")}
                   </h3>
                   {todayBills.map((bill) => (
                     <BillRow
@@ -146,8 +149,9 @@ function Stat({ value, label, tone }: { value: number; label: string; tone?: "re
 /** 当前时刻红线（横跨时间列与内容列）。
  *  token-exception: 7px 圆点 / -3px 偏移为红线端点几何，非间距 token。 */
 function NowLine({ now }: { now: number }) {
+  const t = useT();
   return (
-    <div aria-label={`现在 ${hm(now)}`} className="col-span-2 flex items-center gap-1.5">
+    <div aria-label={t("现在 {time}", { time: hm(now) })} className="col-span-2 flex items-center gap-1.5">
       <span className="w-11 text-right text-micro font-semibold tabular-nums text-destructive">
         {hm(now)}
       </span>
@@ -160,6 +164,7 @@ function NowLine({ now }: { now: number }) {
 
 /** 今天速记：回车即建一条今天到期的任务（默认 20:00，已过则下一个整点）。 */
 function TodayQuickAdd() {
+  const t = useT();
   const [value, setValue] = useState("");
   const submit = () => {
     const text = value.trim();
@@ -169,7 +174,8 @@ function TodayQuickAdd() {
     if (result !== "added" || !id) return;
     const dueAt = todayDefaultDue(Date.now());
     store.setTaskDue(id, dueAt);
-    tip("added", `已加到今天 ${hm(dueAt)}`);
+    const d = new Date(dueAt);
+    tip("added", t("已加到今天 {time}", { time: clockLabel(d.getHours(), d.getMinutes()) }));
     setValue("");
   };
   return (
@@ -178,7 +184,10 @@ function TodayQuickAdd() {
         value={value}
         onChange={setValue}
         onSubmit={submit}
-        placeholder={`添加今天的任务，回车保存（${hm(todayDefaultDue(Date.now()))} 到期）…`}
+        placeholder={(() => {
+          const due = new Date(todayDefaultDue(Date.now()));
+          return t("添加今天的任务，回车保存（{time} 到期）…", { time: clockLabel(due.getHours(), due.getMinutes()) });
+        })()}
       />
     </div>
   );

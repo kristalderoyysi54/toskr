@@ -1,3 +1,4 @@
+import type { MessageKey } from "@/lib/i18n";
 import type { ImagePixelBox, RedactionRegion, RedactionStyle } from "@/lib/tauri";
 
 export const IMAGE_EDIT_REQUEST_EVENT = "toskr://image-edit-request";
@@ -216,8 +217,8 @@ export function saveRedactionStyle(style: RedactionStyle) {
   }
 }
 
-/** 选中框浮条与工具栏共用的样式选项。 */
-export const REDACTION_STYLE_OPTIONS: { style: RedactionStyle; label: string }[] = [
+/** 选中框浮条与工具栏共用的样式选项。label 存中文 key，渲染处 t(label)。 */
+export const REDACTION_STYLE_OPTIONS: { style: RedactionStyle; label: MessageKey }[] = [
   { style: { kind: "mosaic" }, label: "马赛克" },
   { style: { kind: "solid", color: REDACTION_BLACK }, label: "黑色" },
   { style: { kind: "solid", color: REDACTION_WHITE }, label: "白色" },

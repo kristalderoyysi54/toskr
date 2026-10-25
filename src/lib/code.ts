@@ -12,6 +12,8 @@ import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 
+import { t } from "@/lib/i18n";
+
 const LANGS: Record<string, unknown> = {
   bash,
   css,
@@ -71,6 +73,6 @@ export function highlightCode(text: string, lang?: string): string {
 
 /** 语言标签的简短展示名。 */
 export function langLabel(lang?: string): string {
-  if (!lang || lang === "plaintext") return "代码";
+  if (!lang || lang === "plaintext") return t("代码");
   return lang === "javascript" ? "js" : lang === "typescript" ? "ts" : lang;
 }

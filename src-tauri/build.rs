@@ -44,6 +44,8 @@ const COMMANDS: &[&str] = &[
     "adjust_panel_edge",
     "set_panel_vertical",
     "set_stealth",
+    "system_locale",
+    "set_locale",
     "set_sound",
     "set_hud_duration",
     "set_sidebar_mode",

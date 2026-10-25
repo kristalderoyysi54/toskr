@@ -55,7 +55,7 @@ import {
   PRIORITY_LABEL,
   REMINDER_OFFSET_LABEL,
 } from "@/lib/tasks";
-import { recurrenceLabel } from "@/lib/taskRecurrence";
+import { recurrenceLabel, weekdayChar, weekdayLabel } from "@/lib/taskRecurrence";
 import { TEXTAREA_MAX_H } from "@/lib/textarea";
 import { cn } from "@/lib/utils";
 import {
@@ -70,8 +70,10 @@ import {
   type TaskStatus,
 } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
+import { sectionName } from "@/lib/i18n/builtinNames";
+import { useT, type MessageKey } from "@/lib/i18n";
 
-const STATUS_LABEL: Record<TaskStatus, string> = {
+const STATUS_LABEL: Record<TaskStatus, MessageKey> = {
   todo: "待办",
   doing: "进行中",
   done: "完成",
@@ -105,6 +107,7 @@ function toTimeInput(d: Date): string {
  * 完整标题编辑 + 备注 + 检查列表（子任务）。Esc / 点击行外收起（失焦即保存）。
  */
 export function TaskRow({ task, now }: { task: Task; now: number }) {
+  const t = useT();
   const focused = useUIStore((s) => s.focusedId === task.id);
   const flashing = useUIStore((s) => s.flashId === task.id);
   const expanded = useUIStore((s) => s.editingId === task.id);
@@ -252,7 +255,7 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
               listeners?.onPointerDown?.(e);
             }}
             onClick={(e) => e.stopPropagation()}
-            aria-label="拖拽排序（Space 拾起，方向键移动）"
+            aria-label={t("拖拽排序（Space 拾起，方向键移动）")}
             className={cn(
               "absolute left-1 top-1.5 cursor-grab touch-none rounded-md border border-foreground/10 bg-surface-raised/95 p-0.5 elevation-2",
               // 隐形态必须连命中也放行：opacity-0 仍参与 hit-testing，会把
@@ -271,8 +274,8 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
           <div className="flex items-center gap-2">
             {/* 优先级色条：点击循环 无→低→中→高 */}
             <button
-              aria-label={`优先级：${PRIORITY_LABEL[task.priority]}（点击切换）`}
-              title={`优先级：${PRIORITY_LABEL[task.priority]}`}
+              aria-label={t("优先级：{priority}（点击切换）", { priority: t(PRIORITY_LABEL[task.priority]) })}
+              title={t("优先级：{priority}", { priority: t(PRIORITY_LABEL[task.priority]) })}
               onClick={(e) => {
                 e.stopPropagation();
                 cycleTaskPriority(task.id);
@@ -294,8 +297,8 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
             {/* 闪念：💡（点击转正式待办）；普通任务：状态点三态循环 */}
             {task.kind === "spark" && !done ? (
               <button
-                aria-label="灵感转为待办"
-                title="💡 灵感 · 点击转为待办"
+                aria-label={t("灵感转为待办")}
+                title={t("💡 灵感 · 点击转为待办")}
                 onClick={(e) => {
                   e.stopPropagation();
                   useNotesStore.getState().sparkToTask(task.id);
@@ -306,8 +309,8 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
               </button>
             ) : (
               <button
-                aria-label={`状态：${STATUS_LABEL[task.status]}（点击切换）`}
-                title={`状态：${STATUS_LABEL[task.status]}`}
+                aria-label={t("状态：{status}（点击切换）", { status: t(STATUS_LABEL[task.status]) })}
+                title={t("状态：{status}", { status: t(STATUS_LABEL[task.status]) })}
                 onClick={(e) => {
                   e.stopPropagation();
                   cycleTaskStatus(task.id);
@@ -370,7 +373,7 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
             {/* 收起态：检查列表微型进度条（完成度一眼可读） */}
             {!expanded && checklist.length > 0 && (
               <span
-                title={`检查列表 ${checklistDone}/${checklist.length}`}
+                title={t("检查列表 {done}/{total}", { done: checklistDone, total: checklist.length })}
                 className="flex shrink-0 items-center gap-1 text-micro tabular-nums text-muted-foreground"
               >
                 <span className="h-[3px] w-5 overflow-hidden rounded-full surface-inset">
@@ -388,8 +391,8 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
             {/* 重复任务标记：图标 + tooltip 给完整规则（行宽有限，不写文字） */}
             {!expanded && task.recurrence && (
               <span
-                title={`重复：${recurrenceLabel(task.recurrence, task.dueAt)}`}
-                aria-label={`重复：${recurrenceLabel(task.recurrence, task.dueAt)}`}
+                title={t("重复：{rule}", { rule: recurrenceLabel(task.recurrence, task.dueAt) })}
+                aria-label={t("重复：{rule}", { rule: recurrenceLabel(task.recurrence, task.dueAt) })}
                 className="shrink-0 text-teal-600 dark:text-teal-400"
               >
                 <Repeat className="size-3" />
@@ -399,11 +402,11 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
             {!expanded && <DuePopover task={task} now={now} shortLabel open={dueOpen} onOpenChange={setDueOpen} />}
             {!expanded && (
               <IconButton
-                label="删除任务"
+                label={t("删除任务")}
                 size="2xs"
                 reveal="hover-focus"
                 tone="danger"
-                onClick={() => deleteTasksWithUndo([task.id], "已删除 1 个任务")}
+                onClick={() => deleteTasksWithUndo([task.id], t("已删除 1 个任务"))}
               >
                 <Trash2 />
               </IconButton>
@@ -422,7 +425,7 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
               <div className="ml-8 mt-1 flex flex-col gap-1.5 pb-1">
                 <textarea
                   value={noteDraft}
-                  placeholder="备注"
+                  placeholder={t("备注")}
                   rows={1}
                   onChange={(e) => {
                     setNoteDraft(e.target.value);
@@ -449,10 +452,10 @@ export function TaskRow({ task, now }: { task: Task; now: number }) {
                   <DuePopover task={task} now={now} alwaysVisible open={dueOpen} onOpenChange={setDueOpen} />
                   <span className="flex-1" />
                   <button
-                    aria-label="删除任务"
+                    aria-label={t("删除任务")}
                     onClick={(e) => {
                       e.stopPropagation();
-                      deleteTasksWithUndo([task.id], "已删除 1 个任务");
+                      deleteTasksWithUndo([task.id], t("已删除 1 个任务"));
                     }}
                     className="rounded-sm p-0.5 text-muted-foreground outline-none hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
                   >
@@ -483,6 +486,7 @@ function TaskMenu({ task, onEdit, onReminder }: {
   onEdit: () => void;
   onReminder: () => void;
 }) {
+  const t = useT();
   const pendingAction = useRef<(() => void) | null>(null);
   // 子菜单改为独立原生小窗（与卡片菜单一致）：展开时才把 JSX 投影成条目
   const moreFlyoutSource = () => {
@@ -490,14 +494,14 @@ function TaskMenu({ task, onEdit, onReminder }: {
     source.entries = collectMenuFlyoutEntries(
       <>
         <TargetSendMenuItem onClick={() => void sendTaskToChat(task.id)}>
-          <Send className="size-3.5" /> 发送到对话
+          <Send className="size-3.5" /> {t("发送到对话")}
         </TargetSendMenuItem>
         <TargetSendMenuItem onClick={() => void sendTaskToChat(task.id, { forcePreflight: true })}>
-          <ListChecks className="size-3.5" /> 检查后发送…
+          <ListChecks className="size-3.5" /> {t("检查后发送…")}
         </TargetSendMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onClick={() => void splitSubtasks(task.id)}>
-          <Sparkles className="size-3.5" /> AI 拆解子任务
+          <Sparkles className="size-3.5" /> {t("AI 拆解子任务")}
         </ContextMenuItem>
       </>,
       source.register
@@ -522,32 +526,32 @@ function TaskMenu({ task, onEdit, onReminder }: {
       <ContextMenuItem onClick={() => useNotesStore.getState().setTaskStatus(
         task.id, task.status === "done" ? "todo" : "done"
       )}>
-        <CheckCircle2 className="size-3.5" /> {task.status === "done" ? "恢复为待办" : "标记完成"}
+        <CheckCircle2 className="size-3.5" /> {task.status === "done" ? t("恢复为待办") : t("标记完成")}
       </ContextMenuItem>
       <ContextMenuItem onClick={() => useNotesStore.getState().setTaskStatus(
         task.id, task.status === "doing" ? "todo" : "doing"
       )}>
-        <CircleDot className="size-3.5" /> {task.status === "doing" ? "恢复为待办" : "标记进行中"}
+        <CircleDot className="size-3.5" /> {task.status === "doing" ? t("恢复为待办") : t("标记进行中")}
       </ContextMenuItem>
       <ContextMenuItem onSelect={() => { pendingAction.current = onEdit; }}>
-        <Pencil className="size-3.5" /> 编辑任务
+        <Pencil className="size-3.5" /> {t("编辑任务")}
       </ContextMenuItem>
       <ContextMenuItem onSelect={() => { pendingAction.current = onReminder; }}>
-        <AlarmClock className="size-3.5" /> {task.dueAt === null ? "设置提醒时间" : "修改提醒时间"}
+        <AlarmClock className="size-3.5" /> {task.dueAt === null ? t("设置提醒时间") : t("修改提醒时间")}
       </ContextMenuItem>
       {task.kind === "spark" && (
         <ContextMenuItem onClick={() => useNotesStore.getState().sparkToTask(task.id)}>
-          <Lightbulb className="size-3.5" /> 转为待办
+          <Lightbulb className="size-3.5" /> {t("转为待办")}
         </ContextMenuItem>
       )}
       <ContextMenuSeparator />
       <div className="px-2 py-1">
-        <p className="mb-1 text-micro text-muted-foreground">优先级</p>
+        <p className="mb-1 text-micro text-muted-foreground">{t("优先级")}</p>
         <div className="flex gap-1">
           {PRIORITY_CYCLE.map((priority) => (
             <button
               key={priority}
-              aria-label={`优先级：${PRIORITY_LABEL[priority]}`}
+              aria-label={t("优先级：{priority}", { priority: t(PRIORITY_LABEL[priority]) })}
               aria-pressed={task.priority === priority}
               onClick={() => {
                 useNotesStore.getState().setTaskPriority(task.id, priority);
@@ -560,7 +564,7 @@ function TaskMenu({ task, onEdit, onReminder }: {
                   : "border-border text-muted-foreground hover:text-foreground"
               )}
             >
-              {priority === "none" ? "无" : PRIORITY_LABEL[priority]}
+              {priority === "none" ? t("无") : t(PRIORITY_LABEL[priority])}
             </button>
           ))}
         </div>
@@ -568,7 +572,7 @@ function TaskMenu({ task, onEdit, onReminder }: {
       <MoveToSectionFlyout task={task} />
       <ContextMenuSeparator />
       <MenuFlyoutTrigger
-        label="更多操作"
+        label={t("更多操作")}
         icon={<MoreHorizontal className="size-3.5" />}
         width={176}
         getSource={moreFlyoutSource}
@@ -576,9 +580,9 @@ function TaskMenu({ task, onEdit, onReminder }: {
       <ContextMenuSeparator />
       <ContextMenuItem
         variant="destructive"
-        onClick={() => deleteTasksWithUndo([task.id], "已删除 1 个任务")}
+        onClick={() => deleteTasksWithUndo([task.id], t("已删除 1 个任务"))}
       >
-        <Trash2 className="size-3.5" /> 删除
+        <Trash2 className="size-3.5" /> {t("删除")}
       </ContextMenuItem>
     </ContextMenuContent>
   );
@@ -586,6 +590,7 @@ function TaskMenu({ task, onEdit, onReminder }: {
 
 /** 「移动到分组」子菜单小窗（多于一个分组时显示）。 */
 function MoveToSectionFlyout({ task }: { task: Task }) {
+  const t = useT();
   const taskSections = useNotesStore((s) => s.taskSections);
   if (taskSections.length <= 1) return null;
   const currentId = task.sectionId ?? TASK_INBOX_ID;
@@ -596,13 +601,13 @@ function MoveToSectionFlyout({ task }: { task: Task }) {
       .map((s) => ({
         kind: "item" as const,
         id: source.register(() => useNotesStore.getState().moveTasksToSection([task.id], s.id)),
-        label: s.name,
+        label: sectionName(s),
       }));
     return source;
   };
   return (
     <MenuFlyoutTrigger
-      label="移动到"
+      label={t("移动到")}
       icon={<FolderInput className="size-3.5" />}
       width={128}
       getSource={getSource}
@@ -612,6 +617,7 @@ function MoveToSectionFlyout({ task }: { task: Task }) {
 
 /** 检查列表项：圆圈勾选 + 行内编辑（清空文本即删除）+ 悬停删除。 */
 function ChecklistRow({ taskId, item }: { taskId: string; item: ChecklistItem }) {
+  const t = useT();
   const [text, setText] = useState(item.text);
   // 外部变化（勾选等重渲染）时同步最新文本
   useEffect(() => setText(item.text), [item.text]);
@@ -625,7 +631,7 @@ function ChecklistRow({ taskId, item }: { taskId: string; item: ChecklistItem })
   return (
     <div className="group flex items-center gap-1.5 rounded-sm px-0.5 py-0.5 hover:bg-black/[0.03] dark:hover:bg-white/[0.05]">
       <button
-        aria-label={item.done ? "取消勾选" : "勾选"}
+        aria-label={item.done ? t("取消勾选") : t("勾选")}
         onClick={(e) => {
           e.stopPropagation();
           useNotesStore.getState().toggleChecklistItem(taskId, item.id);
@@ -657,7 +663,7 @@ function ChecklistRow({ taskId, item }: { taskId: string; item: ChecklistItem })
         )}
       />
       <IconButton
-        label="删除检查项"
+        label={t("删除检查项")}
         size="2xs"
         reveal="hover-focus"
         tone="danger"
@@ -671,6 +677,7 @@ function ChecklistRow({ taskId, item }: { taskId: string; item: ChecklistItem })
 
 /** 新增检查项输入：回车连续添加。 */
 function ChecklistAdder({ taskId }: { taskId: string }) {
+  const t = useT();
   const [text, setText] = useState("");
   const submit = () => {
     const t = text.trim();
@@ -683,7 +690,7 @@ function ChecklistAdder({ taskId }: { taskId: string }) {
       <Plus className="size-3.5 shrink-0 text-muted-foreground/50" />
       <input
         value={text}
-        placeholder="添加检查项…"
+        placeholder={t("添加检查项…")}
         onChange={(e) => setText(e.target.value)}
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
@@ -723,6 +730,7 @@ function DuePopover({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const t = useT();
   const duePresets = useNotesStore((s) => s.settings.duePresets);
   // 关闭后按钮多驻留一拍：Radix 退出动画（100ms）期间锚点若被 hidden
   // 收走，弹层会失锚闪到屏幕角落
@@ -766,8 +774,8 @@ function DuePopover({
             onClick={(e) => e.stopPropagation()}
             title={
               shortLabel
-                ? `${dueBadgeLabel(task.dueAt, now)} · 点击修改`
-                : "修改到期时间"
+                ? t("{label} · 点击修改", { label: dueBadgeLabel(task.dueAt, now) })
+                : t("修改到期时间")
             }
             className={cn(
               // 还原重塑前形态（用户定稿）：纯文字 tone chip，不带图标
@@ -782,7 +790,7 @@ function DuePopover({
         ) : (
           <button
             onClick={(e) => e.stopPropagation()}
-            title="设置到期提醒"
+            title={t("设置到期提醒")}
             className={cn(
               "shrink-0 items-center gap-0.5 rounded-md px-1 py-0.5 text-micro text-muted-foreground hover:text-foreground",
               // 弹层开着（含退出动画驻留期）必须留在布局里：hidden 会让
@@ -790,7 +798,7 @@ function DuePopover({
               alwaysVisible || open || lingering ? "flex" : "hidden group-hover:flex"
             )}
           >
-            <AlarmClock className="size-2.5" /> 到期
+            <AlarmClock className="size-2.5" /> {t("到期")}
           </button>
         )}
       </PopoverTrigger>
@@ -849,14 +857,14 @@ function DuePopover({
             onClick={commitCustom}
             className="rounded-md bg-primary px-2 py-1 text-body text-primary-foreground hover:opacity-90"
           >
-            设定该时间
+            {t("设定该时间")}
           </button>
           {task.dueAt !== null && (
             <button
               onClick={() => setDue(null)}
               className="rounded-md px-2 py-1 text-left text-body text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
             >
-              清除到期
+              {t("清除到期")}
             </button>
           )}
           <div className="my-1 h-px bg-border/60" />
@@ -899,7 +907,7 @@ function OptionChip({
   );
 }
 
-const RECURRENCE_OPTIONS: { freq: TaskRecurrenceFreq | null; label: string }[] = [
+const RECURRENCE_OPTIONS: { freq: TaskRecurrenceFreq | null; label: MessageKey }[] = [
   { freq: null, label: "不重复" },
   { freq: "daily", label: "每天" },
   { freq: "weekdays", label: "工作日" },
@@ -911,6 +919,7 @@ const WEEKDAY_PICKER = [1, 2, 3, 4, 5, 6, 0];
 
 /** 重复规则：选档即生效（不走「设定」草稿）；每周可多选星期，可改为从完成时起算。 */
 function RecurrenceEditor({ task }: { task: Task }) {
+  const t = useT();
   const rec = task.recurrence;
   const anchor = task.dueAt !== null ? new Date(task.dueAt) : new Date();
   const set = (next: TaskRecurrence | null) =>
@@ -925,7 +934,7 @@ function RecurrenceEditor({ task }: { task: Task }) {
   const weekdays = rec?.weekdays?.length ? rec.weekdays : [anchor.getDay()];
   return (
     <div className="flex flex-col gap-1">
-      <p className="px-1 text-micro text-muted-foreground">重复</p>
+      <p className="px-1 text-micro text-muted-foreground">{t("重复")}</p>
       <div className="flex flex-wrap gap-1 px-0.5">
         {RECURRENCE_OPTIONS.map(({ freq, label }) => (
           <OptionChip
@@ -943,7 +952,7 @@ function RecurrenceEditor({ task }: { task: Task }) {
               )
             }
           >
-            {label}
+            {t(label)}
           </OptionChip>
         ))}
       </div>
@@ -955,14 +964,14 @@ function RecurrenceEditor({ task }: { task: Task }) {
               <OptionChip
                 key={d}
                 on={on}
-                label={`周${"日一二三四五六"[d]}`}
+                label={weekdayLabel(d)}
                 onClick={() => {
                   const next = on ? weekdays.filter((x) => x !== d) : [...weekdays, d];
                   // 至少保留一天：全部取消等于无意义规则
                   if (next.length) set({ ...rec, weekdays: next.sort() });
                 }}
               >
-                {"日一二三四五六"[d]}
+                {weekdayChar(d)}
               </OptionChip>
             );
           })}
@@ -971,10 +980,10 @@ function RecurrenceEditor({ task }: { task: Task }) {
       {rec && (
         <div className="flex flex-wrap items-center gap-1 px-0.5">
           <OptionChip on={!rec.basis} onClick={() => set({ ...rec, basis: undefined })}>
-            按计划日期
+            {t("按计划日期")}
           </OptionChip>
           <OptionChip on={rec.basis === "completion"} onClick={() => set({ ...rec, basis: "completion" })}>
-            从完成时算起
+            {t("从完成时算起")}
           </OptionChip>
         </div>
       )}
@@ -993,34 +1002,35 @@ function RecurrenceEndEditor({
   anchor: Date;
   onChange: (next: TaskRecurrence) => void;
 }) {
+  const t = useT();
   const base: TaskRecurrence = { ...rec, until: undefined, count: undefined };
   const mode = rec.until !== undefined ? "until" : rec.count !== undefined ? "count" : "never";
   // 默认值：结束日取本期一个月后，次数取 10 次
   const defaultUntil = new Date(anchor.getFullYear(), anchor.getMonth() + 1, anchor.getDate()).getTime();
   return (
     <div className="flex flex-col gap-1 pt-0.5">
-      <p className="px-1 text-micro text-muted-foreground">结束</p>
+      <p className="px-1 text-micro text-muted-foreground">{t("结束")}</p>
       <div className="flex flex-wrap items-center gap-1 px-0.5">
         <OptionChip on={mode === "never"} onClick={() => onChange(base)}>
-          永不
+          {t("永不")}
         </OptionChip>
         <OptionChip
           on={mode === "until"}
           onClick={() => mode !== "until" && onChange({ ...base, until: defaultUntil })}
         >
-          到某天
+          {t("到某天")}
         </OptionChip>
         <OptionChip
           on={mode === "count"}
           onClick={() => mode !== "count" && onChange({ ...base, count: 10 })}
         >
-          共几次
+          {t("共几次")}
         </OptionChip>
       </div>
       {mode === "until" && (
         <input
           type="date"
-          aria-label="重复结束日期"
+          aria-label={t("重复结束日期")}
           value={toDateInput(new Date(rec.until!))}
           onChange={(e) => {
             const [y, m, d] = e.target.value.split("-").map(Number);
@@ -1031,12 +1041,12 @@ function RecurrenceEndEditor({
       )}
       {mode === "count" && (
         <label className="mx-0.5 flex items-center gap-1.5 text-body text-muted-foreground">
-          还剩
+          {t("还剩")}
           <input
             type="number"
             min={1}
             max={999}
-            aria-label="剩余重复次数（含本期）"
+            aria-label={t("剩余重复次数（含本期）")}
             value={rec.count}
             onChange={(e) => {
               const n = Math.round(Number(e.target.value));
@@ -1044,7 +1054,7 @@ function RecurrenceEndEditor({
             }}
             className="w-16 rounded-md border border-border bg-transparent px-1.5 py-1 text-body tabular-nums text-foreground outline-none focus:border-primary/50"
           />
-          次（含本期）
+          {t("次（含本期）")}
         </label>
       )}
     </div>
@@ -1053,10 +1063,11 @@ function RecurrenceEndEditor({
 
 /** 提醒档：可多选；缺省只在到期时提醒，全部取消 = 不提醒（仍会进已到期区）。 */
 function ReminderOffsetsEditor({ task }: { task: Task }) {
+  const t = useT();
   const current = task.reminderOffsets ?? [0];
   return (
     <div className="flex flex-col gap-1 pt-1">
-      <p className="px-1 text-micro text-muted-foreground">提醒我</p>
+      <p className="px-1 text-micro text-muted-foreground">{t("提醒我")}</p>
       <div className="flex flex-wrap gap-1 px-0.5">
         {TASK_REMINDER_OFFSET_OPTIONS.map((offset) => {
           const on = current.includes(offset);
@@ -1073,7 +1084,7 @@ function ReminderOffsetsEditor({ task }: { task: Task }) {
                   )
               }
             >
-              {REMINDER_OFFSET_LABEL[offset]}
+              {t(REMINDER_OFFSET_LABEL[offset])}
             </OptionChip>
           );
         })}
@@ -1096,6 +1107,7 @@ function TileDetail({
   dueOpen: boolean;
   onDueOpenChange: (open: boolean) => void;
 }) {
+  const t = useT();
   const [draft, setDraft] = useState(task.text);
   const [noteDraft, setNoteDraft] = useState(task.note ?? "");
   const checklist = task.checklist ?? [];
@@ -1139,7 +1151,7 @@ function TileDetail({
       <textarea
         value={noteDraft}
         rows={2}
-        placeholder="备注…"
+        placeholder={t("备注…")}
         onChange={(e) => setNoteDraft(e.target.value)}
         onBlur={saveNote}
         className="resize-none bg-transparent text-body leading-relaxed text-muted-foreground outline-none placeholder:text-muted-foreground"
@@ -1156,10 +1168,10 @@ function TileDetail({
         <DuePopover task={task} now={now} alwaysVisible dense open={dueOpen} onOpenChange={onDueOpenChange} />
         <span className="flex-1" />
         <button
-          aria-label="删除任务"
+          aria-label={t("删除任务")}
           onClick={() => {
             onClose();
-            deleteTasksWithUndo([task.id], "已删除 1 个任务");
+            deleteTasksWithUndo([task.id], t("已删除 1 个任务"));
           }}
           className="rounded-sm p-0.5 text-muted-foreground hover:text-destructive"
         >
@@ -1175,6 +1187,7 @@ function TileDetail({
  *  双击原位展开为详情编辑卡（标题/备注/子任务，卡内滚动），
  *  点卡外/Esc 收起，键盘焦点环。 */
 export function TaskTile({ task, now }: { task: Task; now: number }) {
+  const t = useT();
   const focused = useUIStore((s) => s.focusedId === task.id);
   const cardOpacity = useNotesStore((s) => s.settings.cardOpacity);
   const tileRef = useRef<HTMLDivElement>(null);
@@ -1240,8 +1253,8 @@ export function TaskTile({ task, now }: { task: Task; now: number }) {
               <div className="mb-1 flex items-center gap-1">
                 {spark && !done ? (
                   <button
-                    aria-label="灵感转为待办"
-                    title="💡 灵感 · 点击转为待办"
+                    aria-label={t("灵感转为待办")}
+                    title={t("💡 灵感 · 点击转为待办")}
                     onClick={(e) => {
                       e.stopPropagation();
                       useNotesStore.getState().sparkToTask(task.id);
@@ -1252,8 +1265,8 @@ export function TaskTile({ task, now }: { task: Task; now: number }) {
                   </button>
                 ) : (
                   <button
-                    aria-label={`状态：${STATUS_LABEL[task.status]}（点击切换）`}
-                    title={`状态：${STATUS_LABEL[task.status]}`}
+                    aria-label={t("状态：{status}（点击切换）", { status: t(STATUS_LABEL[task.status]) })}
+                    title={t("状态：{status}", { status: t(STATUS_LABEL[task.status]) })}
                     onClick={(e) => {
                       e.stopPropagation();
                       useNotesStore.getState().cycleTaskStatus(task.id);
@@ -1269,8 +1282,8 @@ export function TaskTile({ task, now }: { task: Task; now: number }) {
                 )}
                 {/* 优先级色条：点击循环 无→低→中→高（与任务行一致） */}
                 <button
-                  aria-label={`优先级：${PRIORITY_LABEL[task.priority]}（点击切换）`}
-                  title={`优先级：${PRIORITY_LABEL[task.priority]}`}
+                  aria-label={t("优先级：{priority}（点击切换）", { priority: t(PRIORITY_LABEL[task.priority]) })}
+                  title={t("优先级：{priority}", { priority: t(PRIORITY_LABEL[task.priority]) })}
                   onClick={(e) => {
                     e.stopPropagation();
                     useNotesStore.getState().cycleTaskPriority(task.id);
@@ -1286,7 +1299,7 @@ export function TaskTile({ task, now }: { task: Task; now: number }) {
                 </button>
                 {checklist.length > 0 && (
                   <span
-                    title={`检查列表 ${checklistDone}/${checklist.length}`}
+                    title={t("检查列表 {done}/{total}", { done: checklistDone, total: checklist.length })}
                     className="flex shrink-0 items-center gap-0.5 text-micro tabular-nums text-muted-foreground"
                   >
                     <ListChecks className="size-3" />
@@ -1315,7 +1328,7 @@ export function TaskTile({ task, now }: { task: Task; now: number }) {
                       className="flex min-w-0 items-center gap-1.5 text-label"
                     >
                       <button
-                        aria-label={c.done ? "标记未完成" : "标记完成"}
+                        aria-label={c.done ? t("标记未完成") : t("标记完成")}
                         onClick={(e) => {
                           e.stopPropagation();
                           useNotesStore
@@ -1347,7 +1360,7 @@ export function TaskTile({ task, now }: { task: Task; now: number }) {
                   ))}
                   {checklist.length > 4 && (
                     <span className="text-micro text-muted-foreground">
-                      还有 {checklist.length - 4} 条…
+                      {t("还有 {n} 条…", { n: checklist.length - 4 })}
                     </span>
                   )}
                 </div>

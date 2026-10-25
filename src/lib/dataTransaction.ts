@@ -1,3 +1,5 @@
+import { t } from "@/lib/i18n";
+
 export class DataRollbackFailure extends Error {
   readonly operationError: unknown;
   readonly rollbackError: unknown;
@@ -6,7 +8,7 @@ export class DataRollbackFailure extends Error {
     operationError: unknown,
     rollbackError: unknown
   ) {
-    super("数据事务失败且自动回滚未完成；持久化保持冻结");
+    super(t("数据事务失败且自动回滚未完成；持久化保持冻结"));
     this.name = "DataRollbackFailure";
     this.operationError = operationError;
     this.rollbackError = rollbackError;
@@ -43,7 +45,7 @@ export async function runDataTransaction<Snapshot, Prepared, Result>(
     const prepared = await dependencies.begin();
     operationId = dependencies.operationIdOf(prepared);
     const raw = await dependencies.rehydrate();
-    if (!raw) throw new Error("目标目录没有可重新水合的 Toskr 状态");
+    if (!raw) throw new Error(t("目标目录没有可重新水合的 Toskr 状态"));
     await dependencies.replaceMemory(raw);
     await dependencies.completeHydration();
     const result = await dependencies.finalize(operationId);
@@ -58,7 +60,7 @@ export async function runDataTransaction<Snapshot, Prepared, Result>(
         // rehydrate 已把 CAS 基线切到失败目标；native 回滚后仍保持 paused，
         // 必须重新读取旧活动目录，下一次正常写入才不会产生伪冲突。
         const restoredRaw = await dependencies.rehydrate();
-        if (!restoredRaw) throw new Error("回滚后的活动目录没有可重新水合状态");
+        if (!restoredRaw) throw new Error(t("回滚后的活动目录没有可重新水合状态"));
         // recovery 捕获的是 native begin 时的真实源版本，可能已由外部同步从
         // 事务前内存 A 更新为 B。必须采用回滚后的磁盘 B，不能再把 A 写回。
         await dependencies.restoreRollbackMemory(memory, restoredRaw);
@@ -104,7 +106,7 @@ export async function resumePendingDataTransaction<Result>(
   try {
     await dependencies.pausePersistence();
     const raw = await dependencies.rehydrate();
-    if (!raw) throw new Error("待完成目标没有可重新水合的 Toskr 状态");
+    if (!raw) throw new Error(t("待完成目标没有可重新水合的 Toskr 状态"));
     await dependencies.replaceMemory(raw);
     await dependencies.completeHydration();
     const result = await dependencies.finalize(operationId);
@@ -115,7 +117,7 @@ export async function resumePendingDataTransaction<Result>(
     try {
       await dependencies.rollback(operationId);
       const restoredRaw = await dependencies.rehydrate();
-      if (!restoredRaw) throw new Error("回滚后的活动目录没有可重新水合状态");
+      if (!restoredRaw) throw new Error(t("回滚后的活动目录没有可重新水合状态"));
       await dependencies.replaceMemory(restoredRaw);
       await dependencies.completeHydration();
     } catch (rollbackError) {

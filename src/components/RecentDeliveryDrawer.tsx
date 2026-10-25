@@ -45,13 +45,14 @@ import {
   restoreNoteAliasesWithUndo,
 } from "@/lib/actions";
 import { timeAgo } from "@/lib/media";
+import { intlLocale, t, tNode, useT, type MessageKey } from "@/lib/i18n";
 import { tip } from "@/lib/tip";
 import { cn } from "@/lib/utils";
 import { useNotesStore, type Note, type Task } from "@/store/notesStore";
 import type { MessageItem } from "@/lib/messages";
 import { useUIStore } from "@/store/uiStore";
 
-const STATUS_LABEL: Record<DeliveryEvent["status"], string> = {
+const STATUS_LABEL: Record<DeliveryEvent["status"], MessageKey> = {
   prepared: "准备中",
   opened: "预检未完成",
   started: "发送中",
@@ -65,7 +66,7 @@ const STATUS_LABEL: Record<DeliveryEvent["status"], string> = {
 };
 
 /** blocked 一词多因：不区分会让「目标未就绪中止」被误读成隐私拦截。 */
-const BLOCKED_REASON_LABEL: Record<string, string> = {
+const BLOCKED_REASON_LABEL: Record<string, MessageKey> = {
   privacy_gate_blocked: "隐私拦截",
   privacy_native_blocked: "隐私拦截（发送前复核）",
   privacy_incomplete: "内容超长，隐私复核未完成",
@@ -78,17 +79,17 @@ const BLOCKED_REASON_LABEL: Record<string, string> = {
 };
 
 function statusLabel(record: DeliveryEvent): string {
-  if (record.receiptLevel === "unknown") return "投递结果不确定，请核对目标";
+  if (record.receiptLevel === "unknown") return t("投递结果不确定，请核对目标");
   if (record.completedSteps !== undefined && record.totalSteps !== undefined && record.totalSteps > 0) {
-    return `已执行 ${record.completedSteps}/${record.totalSteps} 段按键，接收未确认`;
+    return t("已执行 {done}/{total} 段按键，接收未确认", { done: record.completedSteps, total: record.totalSteps });
   }
   if (record.status === "blocked" && record.reasonCode) {
-    return BLOCKED_REASON_LABEL[record.reasonCode] ?? STATUS_LABEL.blocked;
+    return t(BLOCKED_REASON_LABEL[record.reasonCode] ?? STATUS_LABEL.blocked);
   }
-  return STATUS_LABEL[record.status];
+  return t(STATUS_LABEL[record.status]);
 }
 
-const CLIPBOARD_LABEL: Record<NonNullable<DeliveryEvent["clipboardOutcome"]>, string> = {
+const CLIPBOARD_LABEL: Record<NonNullable<DeliveryEvent["clipboardOutcome"]>, MessageKey> = {
   restored: "已恢复",
   restoredPartial: "部分恢复",
   skippedUserChanged: "保留新复制内容",
@@ -103,36 +104,36 @@ const RECOVERY_ERROR = {
   busy: "请先完成当前发送或预检",
   dataChanged: "数据目录已变化，请重新打开最近发送",
   targetUnavailable: "当前没有可用发送目标",
-} as const;
+} as const satisfies Record<string, MessageKey>;
 
 function localTime(timestampMs: number): string {
-  return new Date(timestampMs).toLocaleString("zh-CN", { hour12: false });
+  return new Date(timestampMs).toLocaleString(intlLocale(), { hour12: false });
 }
 
 function payloadLabel(record: DeliveryEvent): string {
   const parts: string[] = [];
-  if (record.textCharCount) parts.push(`${record.textCharCount} 字文字`);
-  if (record.imageCount) parts.push(`${record.imageCount} 张图片`);
-  return parts.length ? parts.join(" + ") : "无正文内容";
+  if (record.textCharCount) parts.push(t("{n} 字文字", { n: record.textCharCount }));
+  if (record.imageCount) parts.push(t("{n} 张图片", { n: record.imageCount }));
+  return parts.length ? parts.join(" + ") : t("无正文内容");
 }
 
 function sourceLabel(
   record: DeliveryEvent,
   availability: ReturnType<typeof deliveryEventSourceAvailability>
 ): string {
-  if (availability === "missing") return "原内容已删除";
-  if (availability === "partial") return "部分原内容已删除";
-  const unit = record.sourceKind === "task" ? "个任务" : "张卡片";
-  return `${record.sourceItemIds.length} ${unit}可查看`;
+  if (availability === "missing") return t("原内容已删除");
+  if (availability === "partial") return t("部分原内容已删除");
+  const n = record.sourceItemIds.length;
+  return record.sourceKind === "task" ? t("{n} 个任务可查看", { n }) : t("{n} 张卡片可查看", { n });
 }
 
 function verificationLabel(record: DeliveryEvent): string {
-  if (record.verificationStatus === "pass") return "检查完成，未发现问题";
-  if (record.verificationStatus === "blocked") return "暂时无法完成检查";
+  if (record.verificationStatus === "pass") return t("检查完成，未发现问题");
+  if (record.verificationStatus === "blocked") return t("暂时无法完成检查");
   if (record.verificationStatus === "needsReview") {
-    return `检查发现 ${record.verificationIssueCount ?? 0} 个问题`;
+    return t("检查发现 {n} 个问题", { n: record.verificationIssueCount ?? 0 });
   }
-  return "可查看或检查";
+  return t("可查看或检查");
 }
 
 /** 回合视角的行徽章：等待回复 / 已收到回复 / 问题态沿用状态词。 */
@@ -147,8 +148,8 @@ function roundtripBadge(
     return { label: statusLabel(record), tone: "muted" };
   }
   return hasReply
-    ? { label: "已收到回复", tone: "success" }
-    : { label: "等待回复", tone: "muted" };
+    ? { label: t("已收到回复"), tone: "success" }
+    : { label: t("等待回复"), tone: "muted" };
 }
 
 /** 卡脚/明细里的文字链操作（低视觉重量，替代原 Button 组）。 */
@@ -163,6 +164,7 @@ function StatusPill({
   record: DeliveryActivityRecord;
   hasReply: boolean;
 }) {
+  useT();
   const badge = roundtripBadge(record, hasReply);
   const waiting = record.status === "sent" && !hasReply;
   return (
@@ -205,6 +207,7 @@ function SectionHead({
   count: number;
   hint?: boolean;
 }) {
+  const t = useT();
   return (
     <div className="mb-1.5 flex items-center gap-2 px-0.5 pt-3 first:pt-0.5">
       <span className="shrink-0 text-micro font-medium text-muted-foreground">
@@ -214,9 +217,9 @@ function SectionHead({
       {hint && (
         <span
           className="flex shrink-0 items-center gap-1 text-micro text-muted-foreground"
-          title="在 AI 应用双击 ⇧ Shift 划选回复内容，会自动带回并对应到该次发送"
+          title={t("在 AI 应用双击 ⇧ Shift 划选回复内容，会自动带回并对应到该次发送")}
         >
-          划词 <Kbd>⇧⇧ Shift</Kbd> 自动带回
+          {tNode("划词 {key} 自动带回", { key: <Kbd>⇧⇧ Shift</Kbd> })}
         </span>
       )}
     </div>
@@ -264,6 +267,7 @@ export function RecentDeliveryList({
   onAssociate?: (event: DeliveryEvent) => void;
   onUnlink?: (note: Note) => void;
 }) {
+  const t = useT();
   const aliasEntitiesEnabled = useNotesStore(
     (state) => state.settings.aliasEntitiesEnabled
   );
@@ -284,9 +288,9 @@ export function RecentDeliveryList({
     return (
       <div className="flex min-h-36 flex-col items-center justify-center text-center text-body text-muted-foreground">
         <Clock3 className="mb-2 size-5 opacity-50" aria-hidden />
-        暂无发送记录
+        {t("暂无发送记录")}
         <p className="mt-1 text-label text-muted-foreground">
-          勾选卡片后 ⌘⏎ 发送，这里会出现你和 AI 的一问一答
+          {t("勾选卡片后 ⌘⏎ 发送，这里会出现你和 AI 的一问一答")}
         </p>
       </div>
     );
@@ -309,16 +313,17 @@ export function RecentDeliveryList({
   const settled = mainRecords.filter(
     (record) => !attention.includes(record) && !waiting.includes(record)
   );
-  const sections = [
+  const sections: { key: string; label: MessageKey; records: DeliveryActivityRecord[]; hint: boolean }[] = [
     { key: "attention", label: "需处理", records: attention, hint: false },
     { key: "waiting", label: "等待回复", records: waiting, hint: true },
     { key: "settled", label: "已完成", records: settled, hint: false },
-  ].filter((section) => section.records.length > 0);
+  ];
+  const visibleSections = sections.filter((section) => section.records.length > 0);
   const renderRound = (record: DeliveryActivityRecord) => {
         const availability = deliveryEventSourceAvailability(record, notes, tasks, messages);
         const recoverable = record.status === "failed" || record.status === "blocked";
         const outputMode = deliveryEventOutputMode(record);
-        const outputLabel = outputMode ? DELIVERY_FORMAT_LABEL[outputMode] : null;
+        const outputLabel = outputMode ? t(DELIVERY_FORMAT_LABEL[outputMode]) : null;
         const repreparable = recoverable || (record.status === "sent" && outputMode !== null);
         // 报告/问题 Note 也保留 delivery provenance；抽屉的“结果”必须只认
         // 活动事件明确记录的 resultNoteId，不能把派生笔记误当成原结果。
@@ -344,12 +349,12 @@ export function RecentDeliveryList({
             {/* 行头：应用名（署名位）＋ 时间紧贴状态药丸（不悬在行中间） */}
             <div className="flex min-w-0 items-center gap-2">
               <span className="min-w-0 flex-1 truncate text-body font-medium" title={record.targetAppName ?? undefined}>
-                {record.targetAppName || record.targetBundleId || "未识别目标"}
+                {record.targetAppName || record.targetBundleId || t("未识别目标")}
               </span>
               {outputLabel && (
                 <span
                   className="shrink-0 rounded-full bg-background/70 px-1.5 py-px text-micro text-muted-foreground"
-                  title="本次实际发送方式"
+                  title={t("本次实际发送方式")}
                 >
                   {outputLabel}
                 </span>
@@ -369,7 +374,7 @@ export function RecentDeliveryList({
               type="button"
               disabled={availability === "missing" || !onOpenSource}
               onClick={() => onOpenSource?.(record)}
-              title="查看发送内容"
+              title={t("查看发送内容")}
               className="mt-1 block w-full min-w-0 truncate rounded-md px-1 py-0.5 text-left text-body text-foreground/90 outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:cursor-default disabled:opacity-60"
             >
               {summary ? `“${summary}”` : sourceLabel(record, availability)}
@@ -380,26 +385,26 @@ export function RecentDeliveryList({
               <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 border-l-2 border-success/40 py-0.5 pl-2">
                 <span className="flex items-center gap-1 text-micro text-muted-foreground">
                   <MessageSquareReply className="size-3 shrink-0 text-success" aria-hidden />
-                  回复已入库
+                  {t("回复已入库")}
                 </span>
                 {onOpenResult && (
                   <button
                     type="button"
-                    title="打开回复"
+                    title={t("打开回复")}
                     onClick={() => onOpenResult(linkedResult)}
                     className="rounded-md border border-border/60 px-1.5 py-px text-micro text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
                   >
-                    打开
+                    {t("打开")}
                   </button>
                 )}
                 {aliasRestorable.length > 0 && (
                   <button
                     type="button"
-                    title="把词典占位符还原为原文（本机操作，可撤销）"
+                    title={t("把词典占位符还原为原文（本机操作，可撤销）")}
                     onClick={() => restoreReplyAliases(linkedResult)}
                     className="flex items-center gap-1 rounded-md border border-border/60 px-1.5 py-px text-micro text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
                   >
-                    <VenetianMask className="size-3" aria-hidden /> 恢复化名（{aliasRestorable.length} 处）
+                    <VenetianMask className="size-3" aria-hidden /> {t("恢复化名（{n} 处）", { n: aliasRestorable.length })}
                   </button>
                 )}
               </div>
@@ -419,7 +424,7 @@ export function RecentDeliveryList({
                     }}
                     className={FOOT_LINK}
                   >
-                    手动选择回复
+                    {t("手动选择回复")}
                   </button>
                 )}
                 {repreparable && (
@@ -433,11 +438,11 @@ export function RecentDeliveryList({
                     }}
                     className={cn("flex items-center gap-1", FOOT_LINK)}
                     title={outputMode
-                      ? "重读当前来源，沿用本条记录的发送方式，并对当前前台目标重新预检"
-                      : "重读当前来源，并对当前前台目标重新预检"}
+                      ? t("重读当前来源，沿用本条记录的发送方式，并对当前前台目标重新预检")
+                      : t("重读当前来源，并对当前前台目标重新预检")}
                   >
                     <RotateCcw className={cn("size-3", busyEventId === record.eventId && "animate-spin motion-reduce:animate-none")} aria-hidden />
-                    {outputMode ? "按同格式再准备" : "重新准备"}
+                    {outputMode ? t("按同格式再准备") : t("重新准备")}
                   </button>
                 )}
                 {linkedResult && onVerify && (
@@ -450,7 +455,7 @@ export function RecentDeliveryList({
                     }}
                     className={FOOT_LINK}
                   >
-                    检查回复
+                    {t("检查回复")}
                   </button>
                 )}
                 {linkedResult && onAssociate && (
@@ -463,77 +468,77 @@ export function RecentDeliveryList({
                     }}
                     className={FOOT_LINK}
                   >
-                    更换回复
+                    {t("更换回复")}
                   </button>
                 )}
                 <span
                   className="ml-auto flex items-center gap-1 text-micro text-muted-foreground transition-colors hover:text-foreground"
-                  title="更多信息"
+                  title={t("更多信息")}
                 >
-                  更多
+                  {t("更多")}
                   <ChevronDown className="size-3 transition-transform group-open:rotate-180 motion-reduce:transition-none" aria-hidden />
                 </span>
               </summary>
               <div className="px-1 pb-1 pt-1.5">
                 <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-micro">
                   <dt className="text-muted-foreground">
-                    {record.status === "sent" ? "发送于" : "记录于"}
+                    {record.status === "sent" ? t("发送于") : t("记录于")}
                   </dt>
                   <dd className="text-right tabular-nums">
                     <time dateTime={new Date(record.timestampMs).toISOString()}>
                       {localTime(record.timestampMs)}
                     </time>
                   </dd>
-                  <dt className="text-muted-foreground">原内容</dt>
+                  <dt className="text-muted-foreground">{t("原内容")}</dt>
                   <dd className="truncate text-right">
                     {sourceLabel(record, availability)} · {payloadLabel(record)}
                   </dd>
-                  <dt className="text-muted-foreground">发送方式</dt>
+                  <dt className="text-muted-foreground">{t("发送方式")}</dt>
                   <dd className="text-right">
-                    {outputLabel ?? "旧记录未保存"}
+                    {outputLabel ?? t("旧记录未保存")}
                   </dd>
-                  <dt className="text-muted-foreground">隐私保护</dt>
+                  <dt className="text-muted-foreground">{t("隐私保护")}</dt>
                   <dd className="text-right">
                     {record.redactionCount
-                      ? `发送前隐藏了 ${record.redactionCount} 项敏感内容`
-                      : "发送前未替换敏感内容"}
+                      ? t("发送前隐藏了 {n} 项敏感内容", { n: record.redactionCount })
+                      : t("发送前未替换敏感内容")}
                   </dd>
                   {record.clipboardOutcome && (
                     <>
-                      <dt className="text-muted-foreground">剪贴板</dt>
-                      <dd className="text-right">{CLIPBOARD_LABEL[record.clipboardOutcome]}</dd>
+                      <dt className="text-muted-foreground">{t("剪贴板")}</dt>
+                      <dd className="text-right">{t(CLIPBOARD_LABEL[record.clipboardOutcome])}</dd>
                     </>
                   )}
                   {record.resultLinkedAtMs && (
                     <>
                       <dt className="text-muted-foreground">
-                        {association === "linked" ? "保存回复" : "曾保存回复"}
+                        {association === "linked" ? t("保存回复") : t("曾保存回复")}
                       </dt>
                       <dd className="text-right tabular-nums">{localTime(record.resultLinkedAtMs)}</dd>
                     </>
                   )}
                   {record.verificationAtMs && (
                     <>
-                      <dt className="text-muted-foreground">检查回复</dt>
+                      <dt className="text-muted-foreground">{t("检查回复")}</dt>
                       <dd className="text-right tabular-nums">{localTime(record.verificationAtMs)}</dd>
                     </>
                   )}
                   {linkedResult && (
                     <>
-                      <dt className="text-muted-foreground">核验</dt>
+                      <dt className="text-muted-foreground">{t("核验")}</dt>
                       <dd className="text-right">{verificationLabel(record)}</dd>
                     </>
                   )}
                   {!linkedResult && association === "unlinked" && (
                     <>
-                      <dt className="text-muted-foreground">历史回复</dt>
-                      <dd className="text-right">曾保存，现已取消或更换</dd>
+                      <dt className="text-muted-foreground">{t("历史回复")}</dt>
+                      <dd className="text-right">{t("曾保存，现已取消或更换")}</dd>
                     </>
                   )}
                   {!linkedResult && association === "missing" && (
                     <>
-                      <dt className="text-muted-foreground">历史回复</dt>
-                      <dd className="text-right text-warning">回复卡已删除</dd>
+                      <dt className="text-muted-foreground">{t("历史回复")}</dt>
+                      <dd className="text-right text-warning">{t("回复卡已删除")}</dd>
                     </>
                   )}
                 </dl>
@@ -546,7 +551,7 @@ export function RecentDeliveryList({
                       onClick={() => onUnlink(linkedResult)}
                       className={cn("flex items-center gap-1", FOOT_LINK)}
                     >
-                      <Unlink className="size-3" aria-hidden /> 这不是对应回复
+                      <Unlink className="size-3" aria-hidden /> {t("这不是对应回复")}
                     </button>
                   </div>
                 )}
@@ -557,14 +562,14 @@ export function RecentDeliveryList({
   };
   return (
     <div>
-    {sections.map((section) => (
+    {visibleSections.map((section) => (
       <Fragment key={section.key}>
         <SectionHead
-          label={section.label}
+          label={t(section.label)}
           count={section.records.length}
           hint={section.hint}
         />
-        <ol className="space-y-1.5" aria-label={`${section.label}记录`}>
+        <ol className="space-y-1.5" aria-label={t("{label}记录", { label: t(section.label) })}>
           {section.records.map(renderRound)}
         </ol>
       </Fragment>
@@ -573,10 +578,10 @@ export function RecentDeliveryList({
     {unfinishedRecords.length > 0 && (
       <details className="group mt-3">
         <summary className="flex cursor-pointer list-none items-center gap-1 rounded-md px-1 py-1 text-micro text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background [&::-webkit-details-marker]:hidden">
-          未发出的记录 {unfinishedRecords.length} 条
+          {t("未发出的记录 {n} 条", { n: unfinishedRecords.length })}
           <ChevronDown className="ml-auto size-3 transition-transform group-open:rotate-180 motion-reduce:transition-none" aria-hidden />
         </summary>
-        <ol className="mt-1.5 space-y-1.5" aria-label="未发出的记录">
+        <ol className="mt-1.5 space-y-1.5" aria-label={t("未发出的记录")}>
           {unfinishedRecords.map((record) => {
             const availability = deliveryEventSourceAvailability(record, notes, tasks, messages);
             const summary = outboundSummary(record, notes, tasks, messages);
@@ -586,12 +591,12 @@ export function RecentDeliveryList({
                   type="button"
                   disabled={availability === "missing" || !onOpenSource}
                   onClick={() => onOpenSource?.(record)}
-                  title="查看内容"
+                  title={t("查看内容")}
                   className="flex w-full min-w-0 items-center gap-1.5 rounded-lg border border-border/50 px-2 py-1.5 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:cursor-default disabled:opacity-60"
                 >
                   <Clock3 className="size-3 shrink-0 text-muted-foreground" aria-hidden />
                   <span className="min-w-0 truncate text-label">
-                    {record.targetAppName || record.targetBundleId || "未识别目标"}
+                    {record.targetAppName || record.targetBundleId || t("未识别目标")}
                     {summary ? ` · ${summary}` : ""}
                   </span>
                   <span className="ml-auto shrink-0 text-micro text-muted-foreground">
@@ -617,6 +622,7 @@ export function RecentDeliveryDrawer({
   onOpenChange: (open: boolean) => void;
   returnFocusRef: React.RefObject<HTMLButtonElement>;
 }) {
+  const t = useT();
   const notes = useNotesStore((state) => state.notes);
   const tasks = useNotesStore((state) => state.tasks);
   const messages = useNotesStore((state) => state.messages);
@@ -635,11 +641,11 @@ export function RecentDeliveryDrawer({
     try {
       setEvents(await getRecentDeliveryEvents(DELIVERY_ACTIVITY_MAX_EVENTS));
     } catch {
-      setError("最近发送读取失败，请稍后重试");
+      setError(t("最近发送读取失败，请稍后重试"));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (open) void load();
@@ -652,17 +658,17 @@ export function RecentDeliveryDrawer({
   }, [load, open]);
 
   const clear = async () => {
-    const confirmed = await ask("仅清除本数据目录中的发送元数据记录，不影响卡片、任务和附件。确认继续吗？", {
-      title: "清除最近发送",
+    const confirmed = await ask(t("仅清除本数据目录中的发送元数据记录，不影响卡片、任务和附件。确认继续吗？"), {
+      title: t("清除最近发送"),
       kind: "warning",
     });
     if (!confirmed) return;
     try {
       await clearDeliveryEvents();
       setEvents([]);
-      tip("ok", "最近发送已清除");
+      tip("ok", t("最近发送已清除"));
     } catch {
-      setError("清除失败，数据目录可能正在切换");
+      setError(t("清除失败，数据目录可能正在切换"));
     }
   };
 
@@ -676,12 +682,12 @@ export function RecentDeliveryDrawer({
       tip(
         "info",
         deliveryEventOutputMode(event)
-          ? "已沿用历史发送方式；目标为当前应用，请在预检中确认后发送"
-          : "已按当前来源重新准备，请在预检中确认后发送"
+          ? t("已沿用历史发送方式；目标为当前应用，请在预检中确认后发送")
+          : t("已按当前来源重新准备，请在预检中确认后发送")
       );
       return;
     }
-    setError(RECOVERY_ERROR[result.reason]);
+    setError(t(RECOVERY_ERROR[result.reason]));
   };
 
   const openSource = (event: DeliveryEvent) => {
@@ -707,7 +713,7 @@ export function RecentDeliveryDrawer({
       const ui = useUIStore.getState();
       ui.setPage("tasks");
       ui.setFocusedId(sourceTask.id);
-      tip("info", "已定位原始任务");
+      tip("info", t("已定位原始任务"));
     }
   };
 
@@ -729,13 +735,13 @@ export function RecentDeliveryDrawer({
               清除记录收进头部图标位 */}
           <header className="flex items-center gap-1 border-b border-border/70 pb-2">
             <DialogPrimitive.Title className="min-w-0 flex-1 truncate text-title font-semibold">
-              最近发送
+              {t("最近发送")}
             </DialogPrimitive.Title>
             <DialogPrimitive.Description className="sr-only">
-              发出的内容和收到的回复，一问一答都在这里；划词捕获的回复会自动对应。
+              {t("发出的内容和收到的回复，一问一答都在这里；划词捕获的回复会自动对应。")}
             </DialogPrimitive.Description>
             <IconButton
-              label="清除记录"
+              label={t("清除记录")}
               size="sm"
               tone="danger"
               onClick={() => void clear()}
@@ -744,7 +750,7 @@ export function RecentDeliveryDrawer({
               <Trash2 />
             </IconButton>
             <DialogPrimitive.Close asChild>
-              <IconButton label="关闭最近发送" size="sm"><X /></IconButton>
+              <IconButton label={t("关闭最近发送")} size="sm"><X /></IconButton>
             </DialogPrimitive.Close>
           </header>
           {error && (
@@ -754,7 +760,7 @@ export function RecentDeliveryDrawer({
           )}
           <div className="mt-2 min-h-0 flex-1 overflow-y-auto pr-0.5">
             {loading ? (
-              <p role="status" className="py-8 text-center text-body text-muted-foreground">读取中…</p>
+              <p role="status" className="py-8 text-center text-body text-muted-foreground">{t("读取中…")}</p>
             ) : (
               <RecentDeliveryList
                 records={records}
@@ -804,10 +810,10 @@ export function RecentDeliveryDrawer({
           {/* 隐私说明沉底为尾注（常显、不与列表争视线） */}
           <p
             className="mt-2 flex items-center gap-1.5 border-t border-border/50 pt-2 text-micro text-muted-foreground"
-            title={`仅保存时间、状态与数量，不保存正文；最多 ${DELIVERY_ACTIVITY_MAX_EVENTS} 条或 ${retentionDays} 天`}
+            title={t("仅保存时间、状态与数量，不保存正文；最多 {max} 条或 {days} 天", { max: DELIVERY_ACTIVITY_MAX_EVENTS, days: retentionDays })}
           >
             <ShieldCheck className="size-3 shrink-0 text-success" aria-hidden />
-            记录仅存状态与计数 · 摘要来自当前卡片
+            {t("记录仅存状态与计数 · 摘要来自当前卡片")}
           </p>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>

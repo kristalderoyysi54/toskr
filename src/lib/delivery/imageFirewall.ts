@@ -1,4 +1,5 @@
 import { loadRedactionStyle, validRedactionStyle } from "@/lib/imageEditor";
+import { t } from "@/lib/i18n";
 import { api } from "@/lib/tauri";
 import type {
   FindingCategory,
@@ -116,8 +117,8 @@ export function evaluateImageFirewallPolicy(
       needsRawConfirmation: null,
       unresolvedCount: pending.length,
       reason: pending.some((item) => item.status === "redacting")
-        ? "正在生成图片遮挡副本"
-        : "图片本地隐私检查尚未完成",
+        ? t("正在生成图片遮挡副本")
+        : t("图片本地隐私检查尚未完成"),
     };
   }
 
@@ -132,8 +133,8 @@ export function evaluateImageFirewallPolicy(
       needsRawConfirmation: input.policy === "requireRedaction" ? null : "block",
       unresolvedCount: failed.length,
       reason: input.policy === "requireRedaction"
-        ? "图片 OCR 失败；当前方案禁止发送未经检查的原图"
-        : "图片 OCR 失败，请显式确认本次发送未经检查的原图",
+        ? t("图片 OCR 失败；当前方案禁止发送未经检查的原图")
+        : t("图片 OCR 失败，请显式确认本次发送未经检查的原图"),
     };
   }
 
@@ -171,7 +172,7 @@ export function evaluateImageFirewallPolicy(
       forcePressEnterOff: anyBlock,
       needsRawConfirmation: null,
       unresolvedCount,
-      reason: unresolvedCount ? "请遮挡或逐项明确保留全部图片敏感区域" : null,
+      reason: unresolvedCount ? t("请遮挡或逐项明确保留全部图片敏感区域") : null,
     };
   }
   if (input.policy === "confirmRaw") {
@@ -181,7 +182,7 @@ export function evaluateImageFirewallPolicy(
         forcePressEnterOff: true,
         needsRawConfirmation: null,
         unresolvedCount,
-        reason: "图片高风险区域必须遮挡或逐项明确保留",
+        reason: t("图片高风险区域必须遮挡或逐项明确保留"),
       };
     }
     return {
@@ -192,7 +193,7 @@ export function evaluateImageFirewallPolicy(
       unresolvedCount,
       reason:
         unresolvedWarns > 0 && !allWarnConfirmed
-          ? "请确认本次保留图片中的提示级原文"
+          ? t("请确认本次保留图片中的提示级原文")
           : null,
     };
   }
@@ -203,7 +204,7 @@ export function evaluateImageFirewallPolicy(
     forcePressEnterOff: anyBlock,
     needsRawConfirmation: blocksConfirmed ? null : "block",
     unresolvedCount,
-    reason: blocksConfirmed ? null : "图片高风险原文需要再次确认",
+    reason: blocksConfirmed ? null : t("图片高风险原文需要再次确认"),
   };
 }
 
@@ -279,7 +280,7 @@ export function applyImageScanResult(
       status: "failed",
       findings: [],
       rawConfirmation: null,
-      failureMessage: "图片隐私检查返回了无效结果",
+      failureMessage: t("图片隐私检查返回了无效结果"),
     };
   }
   const disabled = new Set(disabledWarnCategories);
@@ -314,7 +315,7 @@ function failedImageScan(item: ImageFirewallItem): ImageFirewallItem {
     status: "failed",
     findings: [],
     rawConfirmation: null,
-    failureMessage: "本地 OCR 失败；未将图片标记为安全",
+    failureMessage: t("本地 OCR 失败；未将图片标记为安全"),
   };
 }
 
@@ -625,7 +626,7 @@ async function renderOpenDeliveryRedaction(input: {
             { ...live, status: returnStatus }
           ),
         },
-        lastError: "创建图片遮挡副本失败，原图未变更",
+        lastError: t("创建图片遮挡副本失败，原图未变更"),
       });
     }
     return null;
@@ -657,7 +658,7 @@ async function renderOpenDeliveryRedaction(input: {
             { ...live, status: returnStatus }
           ),
         },
-        lastError: wasCancelled ? null : "遮挡结果已失效，请重试",
+        lastError: wasCancelled ? null : t("遮挡结果已失效，请重试"),
       });
     }
     return null;

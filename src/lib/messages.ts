@@ -1,3 +1,5 @@
+import { intlLocale, t } from "@/lib/i18n";
+
 /** 消息来源的中性标识（不绑定任何具体 IM 品牌）；旧值 "tuitui" 由持久化迁移转来。 */
 export const MESSAGE_SOURCE = "im" as const;
 
@@ -120,7 +122,7 @@ export function normalizeMessageWatchRules(value: unknown): MessageWatchRule[] {
     seen.add(id);
     const rule: MessageWatchRule = {
       id,
-      name: clipped(record.name, 40) || `关注规则 ${out.length + 1}`,
+      name: clipped(record.name, 40) || t("关注规则 {n}", { n: out.length + 1 }),
       enabled: record.enabled !== false,
       groupTerms: terms(record.groupTerms),
       senderTerms: terms(record.senderTerms),
@@ -253,22 +255,26 @@ export function messageSourceRef(message: MessageItem): MessageSourceRef {
 }
 
 export function messageTaskTitle(message: MessageItem): string {
-  const group = message.conversationName?.trim() || "群消息";
+  const group = message.conversationName?.trim() || t("群消息");
   const body = message.text.trim().replace(/\s+/g, " ");
-  return body ? `[${group}] ${[...body].slice(0, 80).join("")}` : `[${group}] 处理消息`;
+  return body
+    ? `[${group}] ${[...body].slice(0, 80).join("")}`
+    : t("[{group}] 处理消息", { group });
 }
 
 export function messageTaskNote(message: MessageItem): string {
-  const sender = message.senderName || message.senderUid || "未知发送者";
-  const stamp = new Date(message.occurredAtMs ?? message.receivedAtMs).toLocaleString("zh-CN", {
+  const sender = message.senderName || message.senderUid || t("未知发送者");
+  const stamp = new Date(message.occurredAtMs ?? message.receivedAtMs).toLocaleString(intlLocale(), {
     hour12: false,
   });
   return [
-    `来源：${message.sourceApp || "IM"} · ${message.conversationName || message.conversationId}`,
-    `发送者：${sender}`,
-    `时间：${stamp}`,
-    `消息标识：${message.messageId}`,
+    t("来源：{source}", {
+      source: `${message.sourceApp || "IM"} · ${message.conversationName || message.conversationId}`,
+    }),
+    t("发送者：{sender}", { sender }),
+    t("时间：{time}", { time: stamp }),
+    t("消息标识：{id}", { id: message.messageId }),
     "",
-    message.text || `[${message.messageType || "非文本消息"}]`,
+    message.text || `[${message.messageType || t("非文本消息")}]`,
   ].join("\n");
 }

@@ -1,6 +1,7 @@
+import { t, type MessageKey } from "@/lib/i18n";
 import type { FindingCategory } from "@/lib/tauri";
 
-const RULE_REASONS: Record<string, string> = {
+const RULE_REASONS: Record<string, MessageKey> = {
   "credential.context_password": "密码或口令标签后存在具体值，短密码也需保护",
   "contact.phone_cn_unlabeled": "匹配中国大陆手机号格式，未发现紧邻的业务编号标签",
   "financial.bank_card_unlabeled": "数字串通过银行卡校验，未发现紧邻的业务编号标签",
@@ -47,7 +48,7 @@ const RULE_REASONS: Record<string, string> = {
   "session.explicit_field": "会话标识或会话令牌字段后存在凭据值",
 };
 
-const CATEGORY_REASONS: Record<FindingCategory, string> = {
+const CATEGORY_REASONS: Record<FindingCategory, MessageKey> = {
   privateKey: "内容符合私钥识别规则",
   authorization: "内容符合授权凭据识别规则",
   apiKey: "内容符合密钥或凭据识别规则",
@@ -63,7 +64,9 @@ const CATEGORY_REASONS: Record<FindingCategory, string> = {
 
 /** 只使用规则元数据，避免解释中再次泄露命中的原文。 */
 export function findingReason(finding: { ruleId: string; category: FindingCategory }): string {
-  return (Object.hasOwn(RULE_REASONS, finding.ruleId) ? RULE_REASONS[finding.ruleId] : undefined)
-    ?? CATEGORY_REASONS[finding.category]
-    ?? "内容符合本地敏感信息识别规则";
+  return t(
+    (Object.hasOwn(RULE_REASONS, finding.ruleId) ? RULE_REASONS[finding.ruleId] : undefined)
+      ?? CATEGORY_REASONS[finding.category]
+      ?? "内容符合本地敏感信息识别规则"
+  );
 }

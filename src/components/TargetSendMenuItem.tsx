@@ -1,4 +1,5 @@
 import { ContextMenuItem } from "@/components/ui/context-menu";
+import { useT } from "@/lib/i18n";
 import { useTargetStore } from "@/store/targetStore";
 
 /** 仅右键菜单打开时挂载订阅，避免每次发送刷新让全部 NoteCard 重渲染。 */
@@ -11,6 +12,7 @@ export function TargetSendMenuItem({
   children: React.ReactNode;
   allowInternal?: boolean;
 }) {
+  const t = useT();
   const ready = useTargetStore(
     (state) => state.status === "ready" && !state.profileOverrideNeedsConfirmation
   );
@@ -23,12 +25,12 @@ export function TargetSendMenuItem({
       disabled={!enabled}
       aria-label={
         ready
-          ? "发送到当前目标"
+          ? t("发送到当前目标")
           : allowInternal
-            ? "优先添加到当前卡片编辑器"
+            ? t("优先添加到当前卡片编辑器")
           : profileChanged
-            ? "发送不可用：原临时发送方案已暂停"
-            : "发送不可用：发送目标未就绪"
+            ? t("发送不可用：原临时发送方案已暂停")
+            : t("发送不可用：发送目标未就绪")
       }
       onClick={onClick}
     >

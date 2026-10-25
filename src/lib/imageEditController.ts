@@ -16,6 +16,7 @@ import {
 } from "@/lib/imageEditor";
 import { api } from "@/lib/tauri";
 import { emitToDetailWindows } from "@/lib/detailWindows";
+import { t } from "@/lib/i18n";
 import { setPendingUndo, tip } from "@/lib/tip";
 import {
   isDataOperationLocked,
@@ -143,10 +144,10 @@ export async function applyImageEditRequest(
     ok: false,
     message,
   });
-  if (!validImageEditRequest(payload)) return rejected("图片编辑请求无效，请重试");
-  if (isDataOperationLocked()) return rejected("数据操作进行中，图片未修改");
+  if (!validImageEditRequest(payload)) return rejected(t("图片编辑请求无效，请重试"));
+  if (isDataOperationLocked()) return rejected(t("数据操作进行中，图片未修改"));
   if (imageEditWasCancelled(payload.requestId)) {
-    return rejected("图片编辑已取消");
+    return rejected(t("图片编辑已取消"));
   }
   rememberImageEditRequest(payload.requestId, "processing");
 
@@ -158,7 +159,7 @@ export async function applyImageEditRequest(
         typeof target.draftId !== "string" || !target.draftId ||
         !Number.isSafeInteger(target.draftRevision) || target.draftRevision < 0 ||
         typeof target.originalFile !== "string" || !target.originalFile
-      ) return rejected("发送预检已变化，请重新打开图片");
+      ) return rejected(t("发送预检已变化，请重新打开图片"));
       const applied = await manuallyRedactOpenDeliveryImage({
         draftId: target.draftId,
         draftRevision: target.draftRevision,
@@ -170,13 +171,13 @@ export async function applyImageEditRequest(
         ? {
             requestId: payload.requestId,
             ok: true,
-            message: "手动打码已应用到本次发送副本",
+            message: t("手动打码已应用到本次发送副本"),
             editedFile: applied.file,
             width: applied.width,
             height: applied.height,
             draftRevision: applied.draftRevision,
           }
-        : rejected("发送预检已变化，打码结果未应用");
+        : rejected(t("发送预检已变化，打码结果未应用"));
     }
 
     const target = payload.target;
@@ -185,7 +186,7 @@ export async function applyImageEditRequest(
       !Number.isSafeInteger(generation) ||
       generation !== lease.generation ||
       !matchesDataGeneration(generation)
-    ) return rejected("数据上下文已变化，图片未修改");
+    ) return rejected(t("数据上下文已变化，图片未修改"));
 
     let noteForwardSequence: number | undefined;
     if (target.kind === "note") {
@@ -193,13 +194,13 @@ export async function applyImageEditRequest(
         (entry) => entry.id === target.noteId
       );
       if (!note || !noteImages(note).includes(payload.sourceFile)) {
-        return rejected("卡片中的图片已变化，请重新打开");
+        return rejected(t("卡片中的图片已变化，请重新打开"));
       }
     } else {
       const current = useUIStore.getState().draftImages;
       if (!current.some((image) =>
         image.file === payload.sourceFile && image.dataGeneration === generation
-      )) return rejected("草稿图片已变化，请重新打开");
+      )) return rejected(t("草稿图片已变化，请重新打开"));
     }
 
     const result = await api.redactDeliveryImage(
@@ -211,14 +212,14 @@ export async function applyImageEditRequest(
       if (typeof result.redactedFile === "string" && result.redactedFile) {
         scheduleMediaGc([result.redactedFile], 0);
       }
-      return rejected("图片编辑已取消，结果未保存");
+      return rejected(t("图片编辑已取消，结果未保存"));
     }
     if (!validPersistentResult(payload.sourceFile, result)) {
-      return rejected("图片处理结果无效，原图未修改");
+      return rejected(t("图片处理结果无效，原图未修改"));
     }
     if (!matchesDataGeneration(generation)) {
       scheduleMediaGc([result.redactedFile], 0);
-      return rejected("数据上下文已变化，打码结果未保存");
+      return rejected(t("数据上下文已变化，打码结果未保存"));
     }
 
     if (target.kind === "note") {
@@ -227,7 +228,7 @@ export async function applyImageEditRequest(
       );
       if (!liveNote || !noteImages(liveNote).includes(payload.sourceFile)) {
         scheduleMediaGc([result.redactedFile], 0);
-        return rejected("卡片中的图片已变化，打码结果未保存");
+        return rejected(t("卡片中的图片已变化，打码结果未保存"));
       }
       if (
         result.redactedFile === payload.sourceFile ||
@@ -235,8 +236,8 @@ export async function applyImageEditRequest(
       ) {
         return rejected(
           result.redactedFile === payload.sourceFile
-            ? "所选区域未改变图片"
-            : "打码结果与卡片现有图片重复，未应用"
+            ? t("所选区域未改变图片")
+            : t("打码结果与卡片现有图片重复，未应用")
         );
       }
       const beforeBlocks = noteContentBlocks(liveNote);
@@ -252,7 +253,7 @@ export async function applyImageEditRequest(
       );
       if (!replaced) {
         scheduleMediaGc([result.redactedFile], 0);
-        return rejected("卡片中的图片已变化，打码结果未保存");
+        return rejected(t("卡片中的图片已变化，打码结果未保存"));
       }
       if (result.redactedFile !== payload.sourceFile) {
         scheduleMediaGc([payload.sourceFile]);
@@ -320,19 +321,19 @@ export async function applyImageEditRequest(
             },
             true
           );
-          tip("undone", "已撤销编辑图片");
+          tip("undone", t("已撤销编辑图片"));
           return;
         }
-        tip("info", "图片或数据已变化，未撤销打码");
+        tip("info", t("图片或数据已变化，未撤销打码"));
       });
-      tip("ok", "图片已打码", true);
+      tip("ok", t("图片已打码"), true);
     } else {
       const current = useUIStore.getState().draftImages;
       if (!current.some((image) =>
         image.file === payload.sourceFile && image.dataGeneration === generation
       )) {
         scheduleMediaGc([result.redactedFile], 0);
-        return rejected("草稿图片已变化，打码结果未保存");
+        return rejected(t("草稿图片已变化，打码结果未保存"));
       }
       if (
         result.redactedFile === payload.sourceFile ||
@@ -340,8 +341,8 @@ export async function applyImageEditRequest(
       ) {
         return rejected(
           result.redactedFile === payload.sourceFile
-            ? "所选区域未改变图片"
-            : "打码结果与草稿现有图片重复，未应用"
+            ? t("所选区域未改变图片")
+            : t("打码结果与草稿现有图片重复，未应用")
         );
       }
       const originalImage = current.find((image) =>
@@ -385,17 +386,17 @@ export async function applyImageEditRequest(
             width: originalImage.width,
             height: originalImage.height,
           });
-          tip("undone", "已撤销编辑草稿图片");
+          tip("undone", t("已撤销编辑草稿图片"));
           return;
         }
-        tip("info", "草稿图片或数据已变化，未撤销打码");
+        tip("info", t("草稿图片或数据已变化，未撤销打码"));
       });
-      tip("ok", "草稿图片已打码", true);
+      tip("ok", t("草稿图片已打码"), true);
     }
     return {
       requestId: payload.requestId,
       ok: true,
-      message: "图片打码已保存",
+      message: t("图片打码已保存"),
       editedFile: result.redactedFile,
       width: result.imageWidth,
       height: result.imageHeight,
@@ -404,7 +405,7 @@ export async function applyImageEditRequest(
         : {}),
     };
   } catch (error) {
-    return rejected(`图片打码失败：${userError(error)}`);
+    return rejected(t("图片打码失败：{error}", { error: userError(error) }));
   } finally {
     if (!imageEditWasCancelled(payload.requestId)) {
       rememberImageEditRequest(payload.requestId, "settled");

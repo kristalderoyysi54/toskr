@@ -36,6 +36,7 @@ import {
   MENU_FLYOUT_KEY_EVENT,
 } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n";
 
 /** 小窗里允许的图标白名单（按 lucide displayName 映射；主窗口序列化时只传名字）。 */
 const ICONS: Record<string, LucideIcon> = {
@@ -52,6 +53,8 @@ const SELECT_DEDUPE_MS = 150;
  * 键盘导航由主窗口转发；选中后只回传 id，动作在主窗口执行。
  */
 export default function MenuFlyoutView() {
+  // 独立窗口：订阅语言广播（菜单项文案由主窗口按当前语言生成后下发）
+  const t = useT();
   const [payload, setPayload] = useState<MenuFlyoutPayload | null>(null);
   const [highlight, setHighlight] = useState<string | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
@@ -143,7 +146,7 @@ export default function MenuFlyoutView() {
       <div
         ref={boxRef}
         role="menu"
-        aria-label="子菜单"
+        aria-label={t("子菜单")}
         // 与 ContextMenuContent 同款材质与投影；小窗本身透明、不带系统阴影
         className="max-h-[560px] overflow-y-auto rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 [&::-webkit-scrollbar]:hidden"
       >

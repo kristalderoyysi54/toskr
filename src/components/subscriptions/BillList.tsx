@@ -18,6 +18,7 @@ import {
   formatBillAmount,
   startOfBillDay,
 } from "@/lib/bills";
+import { t as translate, useT, type MessageKey } from "@/lib/i18n";
 import { useNoteThumb } from "@/lib/media";
 import { setPendingUndo, tip } from "@/lib/tip";
 import { cn } from "@/lib/utils";
@@ -58,15 +59,14 @@ export function billDueBadge(bill: Bill, now: number): { text: string; tone: "ov
   );
   const d = new Date(bill.nextDueAt);
   const date = `${d.getMonth() + 1}/${d.getDate()}`;
-  if (days < 0) return { text: `逾期 ${-days} 天`, tone: "overdue" };
-  if (days === 0) return { text: "今天", tone: "today" };
-  if (days === 1) return { text: "明天", tone: "today" };
-  if (days < 7) return { text: `${days} 天后`, tone: "later" };
+  if (days < 0) return { text: translate("逾期 {n} 天", { n: -days }), tone: "overdue" };
+  if (days === 0) return { text: translate("今天"), tone: "today" };
+  if (days === 1) return { text: translate("明天"), tone: "today" };
+  if (days < 7) return { text: translate("{n} 天后", { n: days }), tone: "later" };
   return { text: date, tone: "later" };
 }
 
-const STATUS_LABEL: Record<Bill["status"], string> = {
-  active: "",
+const STATUS_LABEL: Record<Exclude<Bill["status"], "active">, MessageKey> = {
   paused: "已暂停",
   canceled: "已取消",
 };
@@ -81,6 +81,7 @@ export function BillRow({
   now: number;
   onEdit: (bill: Bill) => void;
 }) {
+  const t = useT();
   const globalCurrency = useNotesStore((s) => s.settings.currencySymbol);
   const currency = bill.currency ?? globalCurrency;
   const flash = useUIStore((s) => s.flashId === `bill:${bill.id}`);
@@ -101,18 +102,18 @@ export function BillRow({
     setPendingUndo(() => {
       useNotesStore.getState().undo();
     });
-    tip("info", `已删除「${bill.name}」`, true);
+    tip("info", t("已删除「{name}」", { name: bill.name }), true);
   };
 
   const confirmPaid = () => {
     const amount = Number(payAmount);
     if (!Number.isFinite(amount) || amount < 0) {
-      tip("warn", "金额无效");
+      tip("warn", t("金额无效"));
       return;
     }
     useNotesStore.getState().markBillPaid(bill.id, amount);
     setPaying(false);
-    tip("ok", `「${bill.name}」本期已还 ${currency}${formatBillAmount(amount)}`);
+    tip("ok", t("「{name}」本期已还 {amount}", { name: bill.name, amount: `${currency}${formatBillAmount(amount)}` }));
   };
 
   return (
@@ -131,18 +132,18 @@ export function BillRow({
           </p>
           <p className="truncate text-micro text-muted-foreground">
             {bill.kind === "creditCard"
-              ? `每月 ${new Date(bill.nextDueAt).getDate()} 日还款`
-              : CYCLE_LABEL[bill.cycle]}
+              ? t("每月 {day} 日还款", { day: new Date(bill.nextDueAt).getDate() })
+              : t(CYCLE_LABEL[bill.cycle])}
             {bill.amount != null &&
               bill.amount !== 0 &&
               ` · ${currency}${formatBillAmount(bill.amount)}`}
             {bill.payMethod && ` · ${bill.payMethod}`}
-            {inactive && ` · ${STATUS_LABEL[bill.status]}`}
+            {bill.status !== "active" && ` · ${t(STATUS_LABEL[bill.status])}`}
           </p>
         </div>
         {bill.kind === "creditCard" && !inactive && !paying && !paidThisCycle && (
           <IconButton
-            label="标记已还"
+            label={t("标记已还")}
             size="xs"
             reveal="hover-focus"
             onClick={() => {
@@ -157,7 +158,7 @@ export function BillRow({
           className="flex"
           trigger={({ toggle, controls, open }) => (
             <IconButton
-              label={`「${bill.name}」更多操作`}
+              label={t("「{name}」更多操作", { name: bill.name })}
               size="xs"
               reveal="hover-focus"
               aria-expanded={open}
@@ -176,35 +177,35 @@ export function BillRow({
                   onEdit(bill);
                 }}
               >
-                编辑
+                {t("编辑")}
               </SimpleMenuItem>
               {bill.status === "active" ? (
                 <>
                   <SimpleMenuItem
                     onClick={() => {
                       close();
-                      setStatus("paused", `已暂停「${bill.name}」`);
+                      setStatus("paused", t("已暂停「{name}」", { name: bill.name }));
                     }}
                   >
-                    暂停（不再提醒）
+                    {t("暂停（不再提醒）")}
                   </SimpleMenuItem>
                   <SimpleMenuItem
                     onClick={() => {
                       close();
-                      setStatus("canceled", `已标记取消「${bill.name}」`);
+                      setStatus("canceled", t("已标记取消「{name}」", { name: bill.name }));
                     }}
                   >
-                    标记已取消
+                    {t("标记已取消")}
                   </SimpleMenuItem>
                 </>
               ) : (
                 <SimpleMenuItem
                   onClick={() => {
                     close();
-                    setStatus("active", `已恢复「${bill.name}」`);
+                    setStatus("active", t("已恢复「{name}」", { name: bill.name }));
                   }}
                 >
-                  恢复启用
+                  {t("恢复启用")}
                 </SimpleMenuItem>
               )}
               <SimpleMenuSeparator />
@@ -215,7 +216,7 @@ export function BillRow({
                   remove();
                 }}
               >
-                删除
+                {t("删除")}
               </SimpleMenuItem>
             </>
           )}
@@ -225,8 +226,9 @@ export function BillRow({
         {!inactive &&
           (paidThisCycle ? (
             <span className="shrink-0 rounded-sm bg-success/10 px-1 py-px text-right text-micro tabular-nums text-success">
-              已还 · 下期 {new Date(bill.nextDueAt).getMonth() + 1}/
-              {new Date(bill.nextDueAt).getDate()}
+              {t("已还 · 下期 {date}", {
+                date: `${new Date(bill.nextDueAt).getMonth() + 1}/${new Date(bill.nextDueAt).getDate()}`,
+              })}
             </span>
           ) : (
             <span
@@ -243,7 +245,7 @@ export function BillRow({
       </div>
       {paying && (
         <div className="mt-1.5 flex items-center gap-1.5 pl-8">
-          <span className="text-micro text-muted-foreground">本期实付</span>
+          <span className="text-micro text-muted-foreground">{t("本期实付")}</span>
           <input
             autoFocus
             type="number"
@@ -256,12 +258,12 @@ export function BillRow({
               if (e.key === "Escape") setPaying(false);
             }}
             className="w-20 rounded-md border border-border bg-transparent px-1.5 py-0.5 text-body tabular-nums outline-none focus:border-primary/50"
-            aria-label="本期实付金额"
+            aria-label={t("本期实付金额")}
           />
-          <IconButton label="确认已还" size="xs" onClick={confirmPaid}>
+          <IconButton label={t("确认已还")} size="xs" onClick={confirmPaid}>
             <Check />
           </IconButton>
-          <IconButton label="取消" size="xs" onClick={() => setPaying(false)}>
+          <IconButton label={t("取消")} size="xs" onClick={() => setPaying(false)}>
             <X />
           </IconButton>
         </div>
@@ -282,6 +284,7 @@ export function BillList({
   filter: "upcoming" | "all";
   onEdit: (bill: Bill) => void;
 }) {
+  const t = useT();
   const list =
     filter === "upcoming"
       ? billsDueWithinDays(bills, now, 7)
@@ -290,7 +293,7 @@ export function BillList({
     return (
       <EmptyState
         variant="inline"
-        title={filter === "upcoming" ? "未来 7 天没有到期账单" : "还没有账单"}
+        title={filter === "upcoming" ? t("未来 7 天没有到期账单") : t("还没有账单")}
       />
     );
   }
@@ -315,9 +318,9 @@ export function BillList({
     );
   return (
     <div className="flex flex-col gap-0.5">
-      {group("订阅", subs)}
+      {group(t("订阅"), subs)}
       {/* 组头去「信用卡」字眼（用户指定 2026-08-16）：还款偏私人，标签低调 */}
-      {group("还款", cards)}
+      {group(t("还款"), cards)}
     </div>
   );
 }

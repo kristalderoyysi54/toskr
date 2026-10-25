@@ -3,12 +3,14 @@
  * 失败（如 JSON 解析）抛错，由调用方 tip warn，不改动原卡。
  */
 
+import type { MessageKey } from "@/lib/i18n";
 import { markdownToPlainText } from "@/lib/markdown";
 import type { SelectionEdit, TextSelection } from "@/lib/selectionFormat";
 
 export interface TextOp {
   id: string;
-  label: string;
+  /** 中文 key，渲染处 t(label)。 */
+  label: MessageKey;
   apply: (text: string) => string;
 }
 

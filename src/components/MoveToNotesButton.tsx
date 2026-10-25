@@ -7,6 +7,7 @@ import { SimpleMenu, SimpleMenuLabel } from "@/components/SimpleMenu";
 import { IconButton } from "@/components/ui/icon-button";
 import { createLongPress } from "@/lib/longPress";
 import { noteSectionOptions } from "@/lib/noteSections";
+import { useT } from "@/lib/i18n";
 import { useNotesStore } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
 
@@ -18,6 +19,7 @@ export function MoveToNotesButton({
   onMove: (sectionId?: string) => void;
   onMenuOpen: () => void;
 }) {
+  const t = useT();
   const sections = useNotesStore((state) => state.sections);
   const options = useMemo(() => noteSectionOptions(sections), [sections]);
   const page = useUIStore((state) => state.page);
@@ -53,7 +55,7 @@ export function MoveToNotesButton({
       portal
       side="top"
       className="flex"
-      menuAriaLabel="移入笔记分类"
+      menuAriaLabel={t("移入笔记分类")}
       menuClassName="w-52"
       onOpenChange={(open) => { if (open) onMenuOpen(); }}
       trigger={({ open, toggle, controls }) => {
@@ -61,7 +63,7 @@ export function MoveToNotesButton({
         closeMenu.current = () => { if (open) toggle(); };
         return (
           <IconButton
-            label="移入笔记（长按选择分类）"
+            label={t("移入笔记（长按选择分类）")}
             surface
             reveal={open ? "always" : "hover-focus"}
             aria-haspopup="menu"
@@ -98,7 +100,7 @@ export function MoveToNotesButton({
     >
       {(close) => (
         <>
-          <SimpleMenuLabel>移入笔记分类</SimpleMenuLabel>
+          <SimpleMenuLabel>{t("移入笔记分类")}</SimpleMenuLabel>
           <NoteSectionMenuItems sections={options} onPick={(id) => onMove(id)} close={close} />
         </>
       )}

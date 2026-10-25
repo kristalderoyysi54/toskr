@@ -7,6 +7,7 @@ import { TodayPage } from "@/components/TodayPage";
 import { focusRing } from "@/components/ui/focus-ring";
 import { IconButton } from "@/components/ui/icon-button";
 import { SlidingTabIndicator } from "@/components/ui/sliding-tab-indicator";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { TaskBuckets } from "@/lib/tasks";
 import { useNotesStore } from "@/store/notesStore";
@@ -27,6 +28,7 @@ const SUBVIEWS = [
  * 左轴线（pl-4 + px-2 ≈ 一级页签文字起点），日历钮右对齐收尾。
  */
 export function RemindersPage({ buckets, now }: { buckets: TaskBuckets; now: number }) {
+  const t = useT();
   const storedSubview = useUIStore((s) => s.remindersSubview);
   const bills = useNotesStore((s) => s.bills);
   const subscriptionsEnabled = useNotesStore((s) => s.settings.subscriptionsEnabled);
@@ -46,7 +48,7 @@ export function RemindersPage({ buckets, now }: { buckets: TaskBuckets; now: num
           上下留白（pt-1/pb-2）：上下相邻元素均无自带间距，呼吸全靠本行。
           订阅功能关闭时只剩「今天 · 任务」两个页签 */}
       <div className="flex min-h-6 items-center pb-2 pl-4 pr-3.5 pt-1">
-        <div role="tablist" aria-label="提醒子视图" className="flex items-center gap-0.5">
+        <div role="tablist" aria-label={t("提醒子视图")} className="flex items-center gap-0.5">
           {subviews.map(({ value, label }, i) => {
             const active = subview === value;
             return (
@@ -72,7 +74,7 @@ export function RemindersPage({ buckets, now }: { buckets: TaskBuckets; now: num
                       : "text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
                   )}
                 >
-                  {label}
+                  {t(label)}
                   {active && (
                     <SlidingTabIndicator
                       layoutId="reminders-subtab-line"
@@ -87,7 +89,7 @@ export function RemindersPage({ buckets, now }: { buckets: TaskBuckets; now: num
         {subview === "tasks" && (
           <>
             <IconButton
-              label={taskFilter ? "关闭搜索与筛选" : "搜索与筛选任务"}
+              label={taskFilter ? t("关闭搜索与筛选") : t("搜索与筛选任务")}
               size="sm"
               aria-pressed={taskFilter}
               onClick={() => setTaskFilter((v) => !v)}
@@ -96,7 +98,7 @@ export function RemindersPage({ buckets, now }: { buckets: TaskBuckets; now: num
               <ListFilter />
             </IconButton>
             <IconButton
-              label={taskCalendar ? "隐藏任务日历" : "显示任务日历"}
+              label={taskCalendar ? t("隐藏任务日历") : t("显示任务日历")}
               size="sm"
               aria-pressed={taskCalendar}
               onClick={() => setTaskCalendar((v) => !v)}

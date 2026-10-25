@@ -1,23 +1,25 @@
 /** 剪贴板行样式的纯函数：时间分组 / 等宽内容判定 / 中段省略拆分。 */
 
+import { t } from "@/lib/i18n";
+
 /** 时间分组段名（连续同段在渲染层合并为一个小节头，Raycast 剪贴板风格）。 */
 export function clipTimeBand(ts: number, now: number): string {
   const diff = now - ts;
   const M = 60_000;
   const H = 3_600_000;
   const D = 86_400_000;
-  if (diff < 15 * M) return "刚刚";
-  if (diff < H) return "1 小时内";
+  if (diff < 15 * M) return t("刚刚");
+  if (diff < H) return t("1 小时内");
   const dt = new Date(ts);
   const dn = new Date(now);
   const sameDay = (a: Date, b: Date) =>
     a.getFullYear() === b.getFullYear() &&
     a.getMonth() === b.getMonth() &&
     a.getDate() === b.getDate();
-  if (sameDay(dt, dn)) return "今天";
-  if (sameDay(dt, new Date(now - D))) return "昨天";
-  if (diff < 7 * D) return "7 天内";
-  return "更早";
+  if (sameDay(dt, dn)) return t("今天");
+  if (sameDay(dt, new Date(now - D))) return t("昨天");
+  if (diff < 7 * D) return t("7 天内");
+  return t("更早");
 }
 
 const CMD_HEADS = new Set([
@@ -87,13 +89,13 @@ export function groupClipsBySource<
     const key = clipSourceKey(n);
     let band = bands.get(key);
     if (!band) {
-      band = { key, label: n.sourceApp || "未知来源", bundle: n.sourceBundle, notes: [] };
+      band = { key, label: n.sourceApp || t("未知来源"), bundle: n.sourceBundle, notes: [] };
       bands.set(key, band);
     }
     band.notes.push(n);
   }
   const rest = [...bands.values()];
   return pinned.length > 0
-    ? [{ key: CLIP_PINNED_BAND, label: "置顶", notes: pinned }, ...rest]
+    ? [{ key: CLIP_PINNED_BAND, label: t("置顶"), notes: pinned }, ...rest]
     : rest;
 }

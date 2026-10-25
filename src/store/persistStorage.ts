@@ -1,6 +1,7 @@
 import { load, type Store } from "@tauri-apps/plugin-store";
 import type { StateStorage } from "zustand/middleware";
 
+import { t } from "@/lib/i18n";
 import { api, type DataFileSnapshot } from "@/lib/tauri";
 
 export const PERSISTENCE_CONFLICT_EVENT = "toskr:persistence-conflict";
@@ -69,7 +70,7 @@ export function createPersistenceController(
     if (!snapshot.content) return {};
     const value: unknown = JSON.parse(snapshot.content);
     if (!value || typeof value !== "object" || Array.isArray(value)) {
-      throw new Error("toskr-data.json 顶层不是对象");
+      throw new Error(t("toskr-data.json 顶层不是对象"));
     }
     return value as Record<string, string>;
   };
@@ -77,7 +78,7 @@ export function createPersistenceController(
   const valueFromBag = (bag: Record<string, string>, name: string) => {
     if (Object.prototype.hasOwnProperty.call(bag, name)) {
       if (typeof bag[name] !== "string") {
-        throw new Error(`持久化状态 ${name} 类型无效`);
+        throw new Error(t("持久化状态 {name} 类型无效", { name }));
       }
       return bag[name];
     }
@@ -219,7 +220,7 @@ export function createPersistenceController(
       if (current.revision !== basedOn.revision) {
         const error = {
           code: "externalConflict",
-          message: "活动数据自上次读取后已被外部修改",
+          message: t("活动数据自上次读取后已被外部修改"),
         };
         paused = true;
         conflicted = true;
@@ -245,7 +246,7 @@ export function createPersistenceController(
     currentBaseRevision: () => baseSnapshot?.revision ?? null,
     rehydrateFromActiveDataDir: async (name = "toskr") => {
       if (!paused) {
-        throw new Error("重新水合前必须冻结持久化");
+        throw new Error(t("重新水合前必须冻结持久化"));
       }
       const snapshot = await backend.readDataSnapshot();
       const value = snapshot.content
@@ -257,7 +258,7 @@ export function createPersistenceController(
       return value;
     },
     commitValueWhilePaused: async (name, value) => {
-      if (!paused) throw new Error("原子提交持久化值前必须冻结写入");
+      if (!paused) throw new Error(t("原子提交持久化值前必须冻结写入"));
       const basedOn = await ensureBase();
       const bag = readBag(basedOn);
       bag[name] = value;
@@ -275,7 +276,7 @@ export function createPersistenceController(
       }
     },
     replaceValueWhilePaused: async (name, value) => {
-      if (!paused) throw new Error("冲突恢复写入前必须冻结持久化");
+      if (!paused) throw new Error(t("冲突恢复写入前必须冻结持久化"));
       const basedOn = await ensureBase();
       try {
         baseSnapshot = await backend.writeDataIfCurrent(

@@ -1,10 +1,13 @@
 import { Kbd } from "@/components/ui/kbd";
 import { keyHintsFor } from "@/lib/commandItems";
+import { useLocale } from "@/lib/i18n";
 import { useNotesStore } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
 
 /** 列表底部随焦点上下文变化的快捷键提示行；长按 Option 显示完整速查表。 */
 export function KeyHintRow() {
+  // keyHintsFor 返回已翻译文案，订阅语言以便切换后刷新
+  useLocale();
   const page = useUIStore((s) => s.page);
   const contentSubview = useUIStore((s) => s.contentSubview);
   const editing = useUIStore((s) => s.editingId !== null);

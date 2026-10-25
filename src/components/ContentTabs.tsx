@@ -3,6 +3,7 @@ import { Fragment, type ReactNode } from "react";
 import { focusRing } from "@/components/ui/focus-ring";
 import { SlidingTabIndicator } from "@/components/ui/sliding-tab-indicator";
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n";
 import { useNotesStore } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
 
@@ -34,22 +35,23 @@ export function ContentTabPanels({ active, messagesEnabled, secretEnabled, child
 }
 
 export function ContentTabs() {
+  const t = useT();
   const active = useUIStore((state) => state.contentSubview);
   const messages = useNotesStore((state) => state.messages);
   const messagesEnabled = useNotesStore((state) => state.settings.messagesEnabled);
   const secretEnabled = useNotesStore((state) => state.settings.secretEnabled);
   const items = [
-    { value: "notes" as const, label: "笔记" },
+    { value: "notes" as const, label: t("笔记") },
     ...(messagesEnabled
       ? [
           {
             value: "messages" as const,
-            label: "消息",
+            label: t("消息"),
             badge: messages.filter((message) => message.status === "new").length,
           },
         ]
       : []),
-    ...(secretEnabled ? [{ value: "secret" as const, label: "秘文" }] : []),
+    ...(secretEnabled ? [{ value: "secret" as const, label: t("秘文") }] : []),
   ];
 
   const select = (value: ContentSubview) => {
@@ -59,7 +61,7 @@ export function ContentTabs() {
 
   return (
     <div className="flex min-h-6 items-center pb-2 pl-4 pr-3.5 pt-1">
-      <div role="tablist" aria-label="内容子视图" className="flex items-center gap-0.5">
+      <div role="tablist" aria-label={t("内容子视图")} className="flex items-center gap-0.5">
         {items.map((item, index) => {
           const selected = active === item.value;
           return (

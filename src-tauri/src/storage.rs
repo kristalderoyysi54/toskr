@@ -7,6 +7,7 @@
 //! dataDir 默认是应用数据目录，可在设置里改到任意文件夹（如 iCloud/同步盘）。
 //! 切换目录时把已有数据文件与 media 一并搬过去，避免用户数据割裂。
 
+use crate::i18n::pick;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
@@ -97,14 +98,14 @@ fn import_managed_baseline(
     if snapshot.revision != expected_business_revision {
         return Err(BackupImportFailure {
             code: "sourceChanged".into(),
-            message: "活动业务数据自冻结后已变化".into(),
+            message: pick("活动业务数据自冻结后已变化", "Active data changed after it was frozen").into(),
         });
     }
     data_integrity::inspect_location(active, None)
         .revision
         .ok_or_else(|| BackupImportFailure {
             code: "corruptData".into(),
-            message: "活动数据目录无法生成完整受管 revision".into(),
+            message: pick("活动数据目录无法生成完整受管 revision", "Can't compute a complete revision for the active data folder").into(),
         })
 }
 
@@ -127,31 +128,31 @@ pub fn initialize_storage(app: &AppHandle) -> Result<(), DataOperationFailure> {
     let base = app_data_dir(app);
     fs::create_dir_all(&base).map_err(|error| DataOperationFailure {
         code: DataOperationFailureCode::PermissionDenied,
-        message: format!("创建默认数据目录失败：{error}"),
+        message: crate::tr_fmt!("创建默认数据目录失败：{error}", "Failed to create the default data folder: {error}"),
     })?;
     let pointer = base.join(DIR_CONFIG);
     let _ = data_integrity::recover_pending_data_operation(&pointer, &base)?;
     let active = if pointer.exists() {
         let metadata = fs::symlink_metadata(&pointer).map_err(|error| DataOperationFailure {
             code: DataOperationFailureCode::ReadFailed,
-            message: format!("读取数据目录指针失败：{error}"),
+            message: crate::tr_fmt!("读取数据目录指针失败：{error}", "Failed to read the data folder pointer: {error}"),
         })?;
         if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 16 * 1024 {
             return Err(DataOperationFailure {
                 code: DataOperationFailureCode::CorruptData,
-                message: "数据目录指针不是大小合规的普通文件".into(),
+                message: pick("数据目录指针不是大小合规的普通文件", "Data folder pointer isn't a valid regular file").into(),
             });
         }
         let raw = String::from_utf8(data_integrity::read_regular_file(&pointer, 16 * 1024)?)
             .map_err(|_| DataOperationFailure {
                 code: DataOperationFailureCode::CorruptData,
-                message: "数据目录指针不是 UTF-8".into(),
+                message: pick("数据目录指针不是 UTF-8", "Data folder pointer isn't UTF-8").into(),
             })?;
         let custom = PathBuf::from(raw.trim());
         if !custom.is_absolute() {
             return Err(DataOperationFailure {
                 code: DataOperationFailureCode::CorruptData,
-                message: "数据目录指针必须是绝对路径".into(),
+                message: pick("数据目录指针必须是绝对路径", "Data folder pointer must be an absolute path").into(),
             });
         }
         let inspection = data_integrity::inspect_location(&custom, None);
@@ -171,9 +172,9 @@ pub fn initialize_storage(app: &AppHandle) -> Result<(), DataOperationFailure> {
                 },
                 message: match inspection.kind {
                     data_integrity::DataLocationKind::Encrypted => {
-                        "自定义数据目录已加密但本机钥匙串无法解开；请解锁钥匙串后重试，或用「导入完整备份」恢复".into()
+                        pick("自定义数据目录已加密但本机钥匙串无法解开；请解锁钥匙串后重试，或用「导入完整备份」恢复", "The custom data folder is encrypted and this Mac's Keychain can't unlock it. Unlock the Keychain and try again, or restore with \"Import full backup\"").into()
                     }
-                    _ => "自定义数据目录不可用；已阻止回落到默认目录".into(),
+                    _ => pick("自定义数据目录不可用；已阻止回落到默认目录", "Custom data folder unavailable; Toskr won't fall back to the default folder").into(),
                 },
             });
         }
@@ -183,7 +184,7 @@ pub fn initialize_storage(app: &AppHandle) -> Result<(), DataOperationFailure> {
     };
     fs::create_dir_all(&active).map_err(|error| DataOperationFailure {
         code: DataOperationFailureCode::PermissionDenied,
-        message: format!("创建活动数据目录失败：{error}"),
+        message: crate::tr_fmt!("创建活动数据目录失败：{error}", "Failed to create the active data folder: {error}"),
     })?;
     // 数据根目录收紧到 0700（best-effort：外置卷/同步盘可能不支持）
     #[cfg(unix)]
@@ -216,7 +217,7 @@ pub fn initialize_storage(app: &AppHandle) -> Result<(), DataOperationFailure> {
                     }
                     _ => DataOperationFailureCode::CorruptData,
                 },
-                message: "活动数据文件 schema 或字段类型无效；已阻止启动写入".into(),
+                message: pick("活动数据文件 schema 或字段类型无效；已阻止启动写入", "Active data file has an invalid schema or field type; writes are blocked").into(),
             });
         }
     }
@@ -224,18 +225,18 @@ pub fn initialize_storage(app: &AppHandle) -> Result<(), DataOperationFailure> {
     if media.exists() {
         let metadata = fs::symlink_metadata(&media).map_err(|error| DataOperationFailure {
             code: DataOperationFailureCode::ReadFailed,
-            message: format!("读取媒体目录失败：{error}"),
+            message: crate::tr_fmt!("读取媒体目录失败：{error}", "Failed to read the media folder: {error}"),
         })?;
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
             return Err(DataOperationFailure {
                 code: DataOperationFailureCode::CorruptData,
-                message: "media 路径不是普通目录".into(),
+                message: pick("media 路径不是普通目录", "media path isn't a regular folder").into(),
             });
         }
     } else {
         fs::create_dir(&media).map_err(|error| DataOperationFailure {
             code: DataOperationFailureCode::PermissionDenied,
-            message: format!("创建媒体目录失败：{error}"),
+            message: crate::tr_fmt!("创建媒体目录失败：{error}", "Failed to create the media folder: {error}"),
         })?;
     }
     // 媒体目录收紧到 0700（已存在的目录也补齐，best-effort：外置卷可能不支持）。
@@ -372,7 +373,7 @@ pub fn load_default_from_recovery(
     let backup = base.join(format!(".toskr-datadir-recovery-{}", now_ms()));
     data_integrity::rename_no_replace(&pointer, &backup).map_err(|error| DataOperationFailure {
         code: DataOperationFailureCode::PointerCommitFailed,
-        message: format!("隔离旧数据目录指针失败：{error}"),
+        message: crate::tr_fmt!("隔离旧数据目录指针失败：{error}", "Failed to quarantine the old data folder pointer: {error}"),
     })?;
     let _ = File::open(&base).and_then(|directory| directory.sync_all());
     match initialize_storage(app) {
@@ -414,14 +415,14 @@ fn ensure_default_dataset(base: &Path) -> Result<(), DataOperationFailure> {
             {
                 return Err(DataOperationFailure {
                     code: DataOperationFailureCode::VerificationFailed,
-                    message: "默认空数据集物化后校验失败".into(),
+                    message: pick("默认空数据集物化后校验失败", "Default empty data set failed verification").into(),
                 });
             }
             Ok(())
         }
         _ => Err(DataOperationFailure {
             code: DataOperationFailureCode::CorruptData,
-            message: "默认数据目录不是可安全采用的空目录或有效数据集".into(),
+            message: pick("默认数据目录不是可安全采用的空目录或有效数据集", "Default data folder is neither empty nor a valid data set").into(),
         }),
     }
 }
@@ -448,7 +449,7 @@ pub(crate) fn with_active_data_dir<T>(
     let _write = storage.write_gate.lock().unwrap();
     let transaction_pending = { storage.runtime.lock().unwrap().pending.is_some() };
     if transaction_pending || recovery_required(app) {
-        return Err("数据目录事务进行中".into());
+        return Err(pick("数据目录事务进行中", "Data folder transaction in progress").into());
     }
     let root = data_dir(app);
     action(&root)
@@ -538,7 +539,7 @@ pub fn begin_data_operation(
     if !source_matches {
         return Err(DataOperationFailure {
             code: DataOperationFailureCode::InvalidPlan,
-            message: "操作计划的源目录已过期，请重新预检".into(),
+            message: pick("操作计划的源目录已过期，请重新预检", "The plan's source folder is out of date. Check again").into(),
         });
     }
     let default_dir = default_data_dir(app);
@@ -555,7 +556,7 @@ pub fn begin_data_operation(
         phase: DataOperationPhase::Rehydrate,
         active_dir: active_dir.to_string_lossy().into_owned(),
         rolled_back: false,
-        message: "目录事务已提交指针，等待从目标目录重新水合".into(),
+        message: pick("目录事务已提交指针，等待从目标目录重新水合", "Folder switch committed; waiting to reload from the target folder").into(),
     })
 }
 
@@ -575,14 +576,14 @@ pub fn begin_recovery_data_operation(
         }) {
             return Err(DataOperationFailure {
                 code: DataOperationFailureCode::InvalidPlan,
-                message: "恢复计划的源目录已变化，请重新预检".into(),
+                message: pick("恢复计划的源目录已变化，请重新预检", "The recovery plan's source folder changed. Check again").into(),
             });
         }
     }
     if plan.action != data_integrity::DataOperationAction::LoadExistingTarget {
         return Err(DataOperationFailure {
             code: DataOperationFailureCode::InvalidPlan,
-            message: "恢复模式只允许加载已预检的有效数据目录".into(),
+            message: pick("恢复模式只允许加载已预检的有效数据目录", "Recovery mode can only load a checked, valid data folder").into(),
         });
     }
     let default_dir = default_data_dir(app);
@@ -599,7 +600,7 @@ pub fn begin_recovery_data_operation(
         phase: DataOperationPhase::Rehydrate,
         active_dir: active_dir.to_string_lossy().into_owned(),
         rolled_back: false,
-        message: "恢复目录指针已提交，等待重新水合".into(),
+        message: pick("恢复目录指针已提交，等待重新水合", "Recovery folder committed; waiting to reload").into(),
     })
 }
 
@@ -620,7 +621,7 @@ pub fn begin_complete_backup_import(
     if recovery_required(app) {
         return Err(BackupImportFailure {
             code: "operationInProgress".into(),
-            message: "存在未恢复的数据事务，已阻止新的完整导入".into(),
+            message: pick("存在未恢复的数据事务，已阻止新的完整导入", "An unrecovered data transaction exists; new full imports are blocked").into(),
         });
     }
     {
@@ -628,7 +629,7 @@ pub fn begin_complete_backup_import(
         if runtime.pending.is_some() {
             return Err(BackupImportFailure {
                 code: "operationInProgress".into(),
-                message: "已有数据事务正在等待完成".into(),
+                message: pick("已有数据事务正在等待完成", "Another data transaction is waiting to finish").into(),
             });
         }
     }
@@ -650,7 +651,7 @@ pub fn begin_complete_backup_import(
         .parent()
         .ok_or_else(|| BackupImportFailure {
             code: "invalidPlan".into(),
-            message: "活动数据目录没有父目录，无法创建隔离导入区".into(),
+            message: pick("活动数据目录没有父目录，无法创建隔离导入区", "Active data folder has no parent folder; can't create an import staging area").into(),
         })?
         .join(format!(".toskr-import-source-{operation_id}"));
     let inspection = crate::backup::materialize_complete_backup(
@@ -669,7 +670,7 @@ pub fn begin_complete_backup_import(
         });
         return Err(BackupImportFailure {
             code: "sourceChanged".into(),
-            message: "完整备份解包期间活动数据发生外部变化；未修改活动目录".into(),
+            message: pick("完整备份解包期间活动数据发生外部变化；未修改活动目录", "Active data changed while the backup was unpacking; the active folder was not modified").into(),
         });
     }
     let default_dir = default_data_dir(app);
@@ -712,7 +713,7 @@ pub fn begin_complete_backup_import(
             phase: DataOperationPhase::Rehydrate,
             active_dir: active.to_string_lossy().into_owned(),
             rolled_back: false,
-            message: "完整备份已原子置换，等待重新水合".into(),
+            message: pick("完整备份已原子置换，等待重新水合", "Full backup swapped in; waiting to reload").into(),
         },
     ))
 }
@@ -744,7 +745,7 @@ pub fn finalize_data_operation(
         phase: DataOperationPhase::Complete,
         active_dir: active.to_string_lossy().into_owned(),
         rolled_back: false,
-        message: "数据事务已验证完成".into(),
+        message: pick("数据事务已验证完成", "Data transaction verified").into(),
     })
 }
 
@@ -777,14 +778,14 @@ pub fn rollback_data_operation(
         phase: DataOperationPhase::Rollback,
         active_dir: restored.to_string_lossy().into_owned(),
         rolled_back: true,
-        message: "数据目录指针、目标内容与内存基线已回滚".into(),
+        message: pick("数据目录指针、目标内容与内存基线已回滚", "Data folder pointer, target content and in-memory baseline rolled back").into(),
     })
 }
 
 fn operation_in_progress() -> DataOperationFailure {
     DataOperationFailure {
         code: DataOperationFailureCode::OperationInProgress,
-        message: "没有匹配的待完成事务，或已有事务正在进行".into(),
+        message: pick("没有匹配的待完成事务，或已有事务正在进行", "No matching pending transaction, or another one is in progress").into(),
     }
 }
 
@@ -829,7 +830,7 @@ pub fn mark_data_conflict(app: &AppHandle) -> Result<(), DataOperationFailure> {
     metadata.conflict_pending = true;
     let bytes = serde_json::to_vec_pretty(&metadata).map_err(|error| DataOperationFailure {
         code: DataOperationFailureCode::WriteFailed,
-        message: format!("序列化数据冲突状态失败：{error}"),
+        message: crate::tr_fmt!("序列化数据冲突状态失败：{error}", "Failed to serialize data conflict state: {error}"),
     })?;
     data_integrity::atomic_write_file(
         &runtime_metadata_path(app),
@@ -851,7 +852,7 @@ pub fn export_complete_backup(
     if storage.runtime.lock().unwrap().pending.is_some() || recovery_required(app) {
         return Err(crate::backup::BackupFailure {
             code: crate::backup::BackupFailureCode::OperationInProgress,
-            message: "数据目录事务进行中，已阻止备份读取".into(),
+            message: pick("数据目录事务进行中，已阻止备份读取", "Data folder transaction in progress; backup read blocked").into(),
         });
     }
     let source_changed = |message: String| {
@@ -868,7 +869,7 @@ pub fn export_complete_backup(
         .map_err(|failure| source_changed(failure.message))?;
     if expected_revision.is_some_and(|expected| expected != before.revision) {
         return Err(source_changed(
-            "活动数据自冻结后已变化；已阻止导出陈旧内存".into(),
+            pick("活动数据自冻结后已变化；已阻止导出陈旧内存", "Active data changed after it was frozen; stale export blocked").into(),
         ));
     }
     let inspection = crate::backup::export_complete_backup(
@@ -913,7 +914,7 @@ pub fn export_notes_bundle(
     if transaction_pending || recovery_required(app) {
         return Err(
             crate::note_export::NoteExportFailure::operation_in_progress(
-                "数据目录事务或恢复进行中，已阻止笔记导出",
+                pick("数据目录事务或恢复进行中，已阻止笔记导出", "Data folder transaction or recovery in progress; note export blocked"),
             ),
         );
     }
@@ -936,13 +937,13 @@ pub fn export_conflict_recovery_backup(
     if storage.runtime.lock().unwrap().pending.is_some() || recovery_required(app) {
         return Err(crate::backup::BackupFailure {
             code: crate::backup::BackupFailureCode::OperationInProgress,
-            message: "数据目录事务进行中，已阻止恢复副本读取".into(),
+            message: pick("数据目录事务进行中，已阻止恢复副本读取", "Data folder transaction in progress; recovery copy read blocked").into(),
         });
     }
     if !read_runtime_metadata(app).conflict_pending {
         return Err(crate::backup::BackupFailure {
             code: crate::backup::BackupFailureCode::InvalidState,
-            message: "当前没有待处理的数据冲突".into(),
+            message: pick("当前没有待处理的数据冲突", "No pending data conflict").into(),
         });
     }
     let inspection = crate::backup::export_conflict_recovery_backup(
@@ -1010,7 +1011,7 @@ pub fn snapshot_data_dir(
         bytes
     };
     let recovery = active.join("recovery");
-    fs::create_dir_all(&recovery).map_err(|error| format!("创建恢复点目录失败：{error}"))?;
+    fs::create_dir_all(&recovery).map_err(|error| crate::tr_fmt!("创建恢复点目录失败：{error}", "Failed to create the recovery point folder: {error}"))?;
     let mut existing = launch_snapshots(&recovery);
     if let Some((latest, _)) = existing.last() {
         let same = fs::read(latest)
@@ -1110,26 +1111,26 @@ pub fn save_image_rgba(
     let storage = app.state::<Storage>();
     let _write = storage.write_gate.lock().unwrap();
     if storage.runtime.lock().unwrap().pending.is_some() || recovery_required(app) {
-        return Err("数据目录事务进行中，已阻止媒体写入".into());
+        return Err(pick("数据目录事务进行中，已阻止媒体写入", "Data folder transaction in progress; media write blocked").into());
     }
     let expected_len = width
         .checked_mul(height)
         .and_then(|pixels| pixels.checked_mul(4))
-        .ok_or("图片尺寸溢出")?;
+        .ok_or(pick("图片尺寸溢出", "Image dimensions overflow"))?;
     if width == 0 || height == 0 || rgba.len() != expected_len {
-        return Err("图片数据尺寸不匹配".into());
+        return Err(pick("图片数据尺寸不匹配", "Image data size mismatch").into());
     }
-    let width_u32 = u32::try_from(width).map_err(|_| "图片宽度过大")?;
-    let height_u32 = u32::try_from(height).map_err(|_| "图片高度过大")?;
+    let width_u32 = u32::try_from(width).map_err(|_| pick("图片宽度过大", "Image is too wide"))?;
+    let height_u32 = u32::try_from(height).map_err(|_| pick("图片高度过大", "Image is too tall"))?;
     let name = format!("img-{}.png", content_hash(width, height, rgba));
     let path = verified_media_dir(app)
-        .ok_or("媒体目录不是活动数据目录内的普通目录")?
+        .ok_or(pick("媒体目录不是活动数据目录内的普通目录", "Media folder isn't a regular folder inside the active data folder"))?
         .join(&name);
     if path.exists() {
         match read_media_file_checked(&path) {
             // 密钥不可用时同名文件解不开是密钥问题而非文件损坏，绝不能隔离
             Err(error) if error.key_unavailable() => {
-                return Err(format!("媒体密钥不可用，已停止图片写入：{}", error.message()));
+                return Err(crate::tr_fmt!("媒体密钥不可用，已停止图片写入：{}", "Media key unavailable; image write stopped: {}", error.message()));
             }
             Ok(Some(bytes)) => {
                 if let Ok(existing) = image::load_from_memory(&bytes) {
@@ -1151,13 +1152,13 @@ pub fn save_image_rgba(
             now_ms()
         ));
         fs::rename(&path, quarantine)
-            .map_err(|error| format!("隔离损坏的内容寻址图片失败：{error}"))?;
-        File::open(path.parent().ok_or("图片路径没有父目录")?)
+            .map_err(|error| crate::tr_fmt!("隔离损坏的内容寻址图片失败：{error}", "Failed to quarantine a corrupted image: {error}"))?;
+        File::open(path.parent().ok_or(pick("图片路径没有父目录", "Image path has no parent folder"))?)
             .and_then(|directory| directory.sync_all())
-            .map_err(|error| format!("同步图片隔离目录失败：{error}"))?;
+            .map_err(|error| crate::tr_fmt!("同步图片隔离目录失败：{error}", "Failed to sync the image quarantine folder: {error}"))?;
     }
     let buf = image::RgbaImage::from_raw(width_u32, height_u32, rgba.to_vec())
-        .ok_or("图片数据尺寸不匹配")?;
+        .ok_or(pick("图片数据尺寸不匹配", "Image data size mismatch"))?;
     let mut png = std::io::Cursor::new(Vec::new());
     image::DynamicImage::ImageRgba8(buf)
         .write_to(&mut png, image::ImageFormat::Png)
@@ -1170,12 +1171,12 @@ pub fn save_image_rgba(
     options.custom_flags(libc::O_NOFOLLOW).mode(0o600);
     let mut file = options
         .open(&path)
-        .map_err(|error| format!("创建内容寻址图片失败：{error}"))?;
+        .map_err(|error| crate::tr_fmt!("创建内容寻址图片失败：{error}", "Failed to create image file: {error}"))?;
     file.write_all(&sealed).map_err(|error| error.to_string())?;
     file.sync_all().map_err(|error| error.to_string())?;
-    File::open(path.parent().ok_or("图片路径没有父目录")?)
+    File::open(path.parent().ok_or(pick("图片路径没有父目录", "Image path has no parent folder"))?)
         .and_then(|directory| directory.sync_all())
-        .map_err(|error| format!("同步图片目录失败：{error}"))?;
+        .map_err(|error| crate::tr_fmt!("同步图片目录失败：{error}", "Failed to sync the image folder: {error}"))?;
     Ok(name)
 }
 
@@ -1199,14 +1200,14 @@ const MAX_IMPORT_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
 /// 同图重复导入复用同一文件名）。返回 (媒体文件名, 宽, 高)。
 pub fn import_image_file(app: &AppHandle, path: &str) -> Result<(String, u32, u32), String> {
     if !is_image_file_path(path) {
-        return Err("不支持的图片格式".into());
+        return Err(pick("不支持的图片格式", "Unsupported image format").into());
     }
     let meta = std::fs::metadata(path).map_err(|error| error.to_string())?;
     if !meta.is_file() {
-        return Err("不是普通文件".into());
+        return Err(pick("不是普通文件", "Not a regular file").into());
     }
     if meta.len() > MAX_IMPORT_IMAGE_BYTES {
-        return Err("图片超过 64MB 上限".into());
+        return Err(pick("图片超过 64MB 上限", "Image exceeds the 64 MB limit").into());
     }
     let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
     let decoded = image::load_from_memory(&bytes).map_err(|error| error.to_string())?;
@@ -1314,7 +1315,7 @@ pub fn run_media_gc(
         });
         return Err(DataOperationFailure {
             code: DataOperationFailureCode::ExternalConflict,
-            message: "媒体 GC 前活动数据 revision 已变化；未删除媒体".into(),
+            message: pick("媒体 GC 前活动数据 revision 已变化；未删除媒体", "Active data changed before media cleanup; no media deleted").into(),
         });
     }
     let authoritative_state = snapshot
@@ -1335,7 +1336,7 @@ pub fn run_media_gc(
             } else {
                 Err(DataOperationFailure {
                     code: DataOperationFailureCode::ExternalConflict,
-                    message: "媒体 GC 提交边界检测到活动数据变化；已恢复隔离媒体".into(),
+                    message: pick("媒体 GC 提交边界检测到活动数据变化；已恢复隔离媒体", "Active data changed during media cleanup; quarantined media restored").into(),
                 })
             }
         },
@@ -1473,7 +1474,7 @@ fn run_media_encryption_sweep(app: &AppHandle) -> Result<usize, String> {
         let storage = app.state::<Storage>();
         let _write = storage.write_gate.lock().unwrap();
         if storage.runtime.lock().unwrap().pending.is_some() || recovery_required(app) {
-            return Err("数据目录事务进行中".into());
+            return Err(pick("数据目录事务进行中", "Data folder transaction in progress").into());
         }
         if crate::message_watch::seal_legacy_ledger_lines(&data_dir(app))? {
             crate::diag::push(app, "消息账本历史明文行已封装".to_string());
@@ -1500,7 +1501,7 @@ fn run_media_encryption_sweep(app: &AppHandle) -> Result<usize, String> {
             let storage = app.state::<Storage>();
             let _write = storage.write_gate.lock().unwrap();
             if storage.runtime.lock().unwrap().pending.is_some() || recovery_required(app) {
-                return Err("数据目录事务进行中".into());
+                return Err(pick("数据目录事务进行中", "Data folder transaction in progress").into());
             }
             let Some(bytes) = read_raw_media_file(&path) else {
                 continue;

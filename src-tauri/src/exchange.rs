@@ -2,6 +2,7 @@
 //! 前端按日缓存（localStorage），本命令只负责取数与解析；失败即 Err，
 //! 前端回退到过期缓存或分币种分列显示。
 
+use crate::i18n::pick;
 use std::collections::HashMap;
 
 #[tauri::command]
@@ -23,27 +24,27 @@ fn fetch_blocking() -> Result<HashMap<String, f64>, String> {
             "https://open.er-api.com/v6/latest/USD",
         ])
         .output()
-        .map_err(|e| format!("curl 启动失败: {e}"))?;
+        .map_err(|e| crate::tr_fmt!("curl 启动失败: {e}", "Failed to start curl: {e}"))?;
     parse_rates(&String::from_utf8_lossy(&out.stdout))
 }
 
 fn parse_rates(body: &str) -> Result<HashMap<String, f64>, String> {
     let value: serde_json::Value =
-        serde_json::from_str(body).map_err(|e| format!("汇率响应解析失败: {e}"))?;
+        serde_json::from_str(body).map_err(|e| crate::tr_fmt!("汇率响应解析失败: {e}", "Failed to parse exchange rate response: {e}"))?;
     if value.get("result").and_then(|v| v.as_str()) != Some("success") {
-        return Err("汇率服务返回失败".into());
+        return Err(pick("汇率服务返回失败", "Exchange rate service returned an error").into());
     }
     let rates = value
         .get("rates")
         .and_then(|v| v.as_object())
-        .ok_or("汇率响应缺少 rates")?;
+        .ok_or(pick("汇率响应缺少 rates", "Exchange rate response is missing rates"))?;
     let map: HashMap<String, f64> = rates
         .iter()
         .filter_map(|(code, rate)| rate.as_f64().map(|r| (code.clone(), r)))
         .filter(|(_, rate)| rate.is_finite() && *rate > 0.0)
         .collect();
     if map.is_empty() {
-        return Err("汇率数据为空".into());
+        return Err(pick("汇率数据为空", "Exchange rate data is empty").into());
     }
     Ok(map)
 }

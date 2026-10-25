@@ -3,6 +3,7 @@
 //! 约定：非 async 命令在 Tauri v2 中于主线程执行（可安全做窗口/AppKit 操作）；
 //! 含 sleep 的流程一律 async + spawn_blocking。
 
+use crate::i18n::pick;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -26,7 +27,7 @@ pub fn hide_panel(app: AppHandle, restore_focus: bool) {
 #[tauri::command]
 pub fn copy_text(app: AppHandle, text: String) -> Result<(), String> {
     let _permit = crate::pasteboard::try_claim(&app)
-        .ok_or_else(|| "剪贴板事务进行中，请稍后重试".to_string())?;
+        .ok_or_else(|| pick("剪贴板事务进行中，请稍后重试", "Clipboard is busy. Try again shortly").to_string())?;
     let exact_count = crate::pasteboard::write_general_text(&text).map_err(|e| e.to_string())?;
     crate::clipwatch::mark_self_write_count(&app, exact_count);
     Ok(())
@@ -51,7 +52,7 @@ pub async fn copy_rich_clipboard(
 ) -> Result<crate::rich_clipboard::RichClipboardWriteResult, String> {
     tauri::async_runtime::spawn_blocking(move || crate::rich_clipboard::write_blocks(&app, &blocks))
         .await
-        .map_err(|_| "创建富剪贴板任务失败".to_string())?
+        .map_err(|_| pick("创建富剪贴板任务失败", "Failed to start rich clipboard task").to_string())?
         .map_err(|error| error.to_string())
 }
 
@@ -75,7 +76,7 @@ pub async fn scan_image_firewall(
         crate::image_firewall::scan(&worker_app, &file, force.unwrap_or(false))
     })
     .await
-    .map_err(|_| "本地图片隐私检查任务失败".to_string())?
+    .map_err(|_| pick("本地图片隐私检查任务失败", "Local image privacy check failed").to_string())?
 }
 
 /// 从原图创建纯色遮挡副本；缺省只写会话临时目录，图片编辑显式要求时
@@ -87,21 +88,21 @@ pub async fn redact_delivery_image(
 ) -> Result<crate::image_firewall::RedactImageResult, String> {
     tauri::async_runtime::spawn_blocking(move || crate::image_firewall::redact(&app, request))
         .await
-        .map_err(|_| "创建遮挡图片任务失败".to_string())?
+        .map_err(|_| pick("创建遮挡图片任务失败", "Failed to start image masking task").to_string())?
 }
 
 #[tauri::command]
 pub async fn cleanup_redacted_images(app: AppHandle, files: Vec<String>) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || crate::image_firewall::cleanup(&app, &files))
         .await
-        .map_err(|_| "清理遮挡图片任务失败".to_string())?
+        .map_err(|_| pick("清理遮挡图片任务失败", "Failed to clean up masked image task").to_string())?
 }
 
 #[tauri::command]
 pub async fn clear_redacted_images(app: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || crate::image_firewall::clear_all(&app))
         .await
-        .map_err(|_| "清理图片隐私会话任务失败".to_string())?
+        .map_err(|_| pick("清理图片隐私会话任务失败", "Failed to clean up image privacy session").to_string())?
 }
 
 #[tauri::command]
@@ -114,7 +115,7 @@ pub async fn delivery_image_data_url(
         crate::image_firewall::delivery_image_data_url(&app, &file, full_size.unwrap_or(false))
     })
     .await
-    .map_err(|_| "读取图片隐私预览任务失败".to_string())
+    .map_err(|_| pick("读取图片隐私预览任务失败", "Failed to load image privacy preview").to_string())
 }
 
 /// 剪贴板历史收集开关（设置项下发）。
@@ -178,7 +179,7 @@ pub async fn locate_message_source(
         crate::window::locate_source_conversation(&app, payload)
     })
     .await
-    .map_err(|error| format!("定位任务异常：{error}"))?
+    .map_err(|error| crate::tr_fmt!("定位任务异常：{error}", "Locate task failed: {error}"))?
 }
 
 /// CDP 免手动监听开关（会话级）。开启需前端传入 transport=cdp 的桥脚本，以及用户
@@ -335,7 +336,7 @@ pub async fn scan_sensitive_text(
         ))
     })
     .await
-    .map_err(|error| format!("本地隐私扫描任务失败：{error}"))??;
+    .map_err(|error| crate::tr_fmt!("本地隐私扫描任务失败：{error}", "Local privacy scan failed: {error}"))??;
     crate::diag::push(
         &app,
         crate::privacy::diagnostic_summary(&result, started.elapsed()),
@@ -506,9 +507,9 @@ pub async fn import_image_files(
 pub async fn copy_image_to_clipboard(app: AppHandle, file: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
         let (w, h, rgba) = crate::storage::read_image_rgba(&app, &file)
-            .ok_or_else(|| "图片读取失败".to_string())?;
+            .ok_or_else(|| pick("图片读取失败", "Failed to read image").to_string())?;
         let _permit = crate::pasteboard::try_claim(&app)
-            .ok_or_else(|| "剪贴板事务进行中，请稍后重试".to_string())?;
+            .ok_or_else(|| pick("剪贴板事务进行中，请稍后重试", "Clipboard is busy. Try again shortly").to_string())?;
         let exact_count =
             crate::pasteboard::write_general_image(w, h, &rgba).map_err(|e| e.to_string())?;
         crate::clipwatch::mark_self_write_count(&app, exact_count);
@@ -603,7 +604,7 @@ fn rebind_global_hotkeys(app: &AppHandle) -> Result<(), String> {
             }
         })
         .map_err(|e| {
-            let msg = format!("快捷键注册失败：{e}");
+            let msg = crate::tr_fmt!("快捷键注册失败：{e}", "Failed to register shortcut: {e}");
             crate::diag::push(app, format!("{msg} ({s})"));
             msg
         })?;
@@ -788,9 +789,9 @@ fn capture_hud_feedback(
             format!(
                 "{} · {warning}",
                 if capture_kind == "duplicate" {
-                    "内容已存在"
+                    pick("内容已存在", "Already exists")
                 } else {
-                    "已捕获"
+                    pick("已捕获", "Captured")
                 }
             ),
             undoable,
@@ -802,12 +803,12 @@ fn capture_hud_feedback(
                 let mut text = preview;
                 if capture_kind == "added" {
                     if let Some(count) = alias_restored_count.filter(|count| *count > 0) {
-                        text = format!("{text}\n已恢复 {count} 处化名");
+                        text = crate::tr_fmt!("{text}\n已恢复 {count} 处化名", "{text}\nRestored {count} alias(es)");
                     }
                     if auto_linked {
-                        text = format!("{text}\n已自动保存为最近发送的回复");
+                        text = crate::tr_fmt!("{text}\n已自动保存为最近发送的回复", "{text}\nSaved as the reply to your last send");
                     } else if association_suggested {
-                        text = format!("{text}\n可关联到最近一次发送，请在卡片右键确认");
+                        text = crate::tr_fmt!("{text}\n可关联到最近一次发送，请在卡片右键确认", "{text}\nMay belong to your last send; right-click the card to confirm");
                     }
                 }
                 text
@@ -967,7 +968,7 @@ pub fn set_sidebar_mode(app: AppHandle, enabled: bool, edge: String) {
 #[tauri::command]
 pub fn preview_event(app: AppHandle, window: tauri::WebviewWindow, event: String, payload: serde_json::Value) -> Result<(), String> {
     validate_preview_event(window.label(), &event, &payload)?;
-    app.emit_to("main", &event, payload).map_err(|_| "预览动作失败".into())
+    app.emit_to("main", &event, payload).map_err(|_| pick("预览动作失败", "Preview action failed").into())
 }
 
 fn validate_preview_event(label: &str, event: &str, payload: &serde_json::Value) -> Result<(), String> {
@@ -1020,7 +1021,7 @@ pub fn hud_action(
     if window.label() != "hud" { return Err("仅 HUD 可调用此动作".into()); }
     let (event, payload) =
         hud_action_event(action, target_id.as_deref(), due.unwrap_or(false), minutes)?;
-    app.emit_to("main", event, payload).map_err(|_| "HUD 动作失败".into())
+    app.emit_to("main", event, payload).map_err(|_| pick("HUD 动作失败", "Notice action failed").into())
 }
 
 fn hud_action_event(
@@ -1034,7 +1035,7 @@ fn hud_action_event(
     let task_target = || match target {
         Some(HUD_TASK_BATCH) => Ok(serde_json::Value::Null),
         Some(id) if !id.is_empty() && !id.contains(':') => Ok(json!(id)),
-        _ => Err("此气泡没有可操作的任务".to_string()),
+        _ => Err(pick("此气泡没有可操作的任务", "This notice has no task to act on").to_string()),
     };
     Ok(match action {
         HudAction::Undo => ("toskr://undo-capture", json!({})),
@@ -1452,7 +1453,7 @@ pub async fn append_delivery_event(
         crate::activity::append(&app, event, retention_days)
     })
     .await
-    .map_err(|error| format!("后台发送活动写入失败：{error}"))?
+    .map_err(|error| crate::tr_fmt!("后台发送活动写入失败：{error}", "Failed to save send activity: {error}"))?
 }
 
 #[tauri::command]
@@ -1465,7 +1466,7 @@ pub async fn get_recent_delivery_events(
         crate::activity::recent(&app, limit, retention_days)
     })
     .await
-    .map_err(|error| format!("后台发送活动读取失败：{error}"))?
+    .map_err(|error| crate::tr_fmt!("后台发送活动读取失败：{error}", "Failed to read send activity: {error}"))?
 }
 
 #[tauri::command]
@@ -1473,7 +1474,7 @@ pub async fn clear_delivery_events(app: AppHandle) -> Result<(), String> {
     let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || crate::activity::clear(&worker_app))
         .await
-        .map_err(|error| format!("后台发送活动清除失败：{error}"))??;
+        .map_err(|error| crate::tr_fmt!("后台发送活动清除失败：{error}", "Failed to clear send activity: {error}"))??;
     let _ = app.emit(crate::events::DELIVERY_ACTIVITY_CLEARED_EVENT, ());
     Ok(())
 }
@@ -1492,14 +1493,14 @@ fn blocking_data_failure(
 ) -> crate::data_integrity::DataOperationFailure {
     crate::data_integrity::DataOperationFailure {
         code: crate::data_integrity::DataOperationFailureCode::ReadFailed,
-        message: format!("后台文件任务失败：{error}"),
+        message: crate::tr_fmt!("后台文件任务失败：{error}", "Background file task failed: {error}"),
     }
 }
 
 fn blocking_backup_failure(error: impl std::fmt::Display) -> crate::backup::BackupFailure {
     crate::backup::BackupFailure {
         code: crate::backup::BackupFailureCode::IoFailed,
-        message: format!("后台备份任务失败：{error}"),
+        message: crate::tr_fmt!("后台备份任务失败：{error}", "Background backup task failed: {error}"),
     }
 }
 
@@ -1743,7 +1744,7 @@ pub async fn export_notes_bundle(
     })
     .await
     .map_err(|error| {
-        crate::note_export::NoteExportFailure::io(format!("后台笔记导出任务失败：{error}"))
+        crate::note_export::NoteExportFailure::io(crate::tr_fmt!("后台笔记导出任务失败：{error}", "Background note export failed: {error}"))
     })?
 }
 
@@ -1757,7 +1758,7 @@ pub async fn export_prompt_templates(
         crate::prompt_export::export_prompt_templates(std::path::Path::new(&path), payload)
     })
     .await
-    .map_err(|error| format!("后台模板导出任务失败：{error}"))?
+    .map_err(|error| crate::tr_fmt!("后台模板导出任务失败：{error}", "Background template export failed: {error}"))?
 }
 
 #[tauri::command]
@@ -1889,16 +1890,16 @@ pub async fn run_auto_backup(
         message: message.into(),
     };
     if !is_auto_backup_name(&file_name) {
-        return Err(invalid("自动备份文件名格式无效"));
+        return Err(invalid(pick("自动备份文件名格式无效", "Invalid auto-backup file name")));
     }
     let dir = match dir.filter(|dir| !dir.trim().is_empty()) {
         Some(dir) => std::path::PathBuf::from(dir),
         None => default_auto_backup_dir(app.clone())
             .map(std::path::PathBuf::from)
-            .ok_or_else(|| invalid("无法确定默认备份目录"))?,
+            .ok_or_else(|| invalid(pick("无法确定默认备份目录", "Can't determine the default backup folder")))?,
     };
     if !dir.is_absolute() {
-        return Err(invalid("备份目录必须是绝对路径"));
+        return Err(invalid(pick("备份目录必须是绝对路径", "Backup folder must be an absolute path")));
     }
     let keep = keep.clamp(1, 60) as usize;
     tauri::async_runtime::spawn_blocking(move || {
@@ -1974,7 +1975,7 @@ pub async fn begin_complete_backup_import(
     .await
     .map_err(|error| crate::storage::BackupImportFailure {
         code: "ioFailed".into(),
-        message: format!("后台导入任务失败：{error}"),
+        message: crate::tr_fmt!("后台导入任务失败：{error}", "Background import failed: {error}"),
     })?;
     crate::diag::push(
         &log_app,

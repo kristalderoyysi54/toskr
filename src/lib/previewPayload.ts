@@ -1,4 +1,5 @@
 import type { NotePreviewPayload } from "@/lib/actions";
+import { t } from "@/lib/i18n";
 import { looksLikeMarkdown } from "@/lib/markdown";
 import { normalizeEditedNoteContent } from "@/lib/noteContent";
 
@@ -47,13 +48,13 @@ export function editorInsertRejectionReason(
     currentNote.sessionId !== payload.targetSessionId ||
     currentNote.dataGeneration !== payload.dataGeneration
   ) {
-    return "卡片编辑目标或数据上下文已变化";
+    return t("卡片编辑目标或数据上下文已变化");
   }
   if (!previewIsEditable(currentNote)) {
-    return "当前内容为只读预览";
+    return t("当前内容为只读预览");
   }
   if (!Number.isFinite(payload.expiresAt) || payload.expiresAt <= now) {
-    return "卡片编辑请求已过期";
+    return t("卡片编辑请求已过期");
   }
   return null;
 }

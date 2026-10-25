@@ -46,6 +46,7 @@ import {
 import { activeAliasOccurrences } from "@/lib/delivery/aliasEntities";
 import { imageCaption, imageListLabel } from "@/lib/format";
 import { tip } from "@/lib/tip";
+import { t, useLocale, useT } from "@/lib/i18n";
 import { IconButton } from "@/components/ui/icon-button";
 import { MenuFlyoutTrigger } from "@/components/MenuFlyoutTrigger";
 import { noteSectionOptions } from "@/lib/noteSections";
@@ -128,6 +129,7 @@ import {
   requestResultUnlink,
 } from "@/lib/resultReturn";
 import { requestResultVerification } from "@/lib/resultVerification";
+import { sectionName } from "@/lib/i18n/builtinNames";
 
 /** 双击发送的第一击会塌掉多选：留档点击前的集合供 onDoubleClick 找回。 */
 let lastMultiSelection: { ids: string[]; at: number } | null = null;
@@ -180,7 +182,7 @@ function noteFirstLine(note: Note): string {
     const link = linkParts(note.url);
     return note.linkTitle ?? link.host + (link.path === "/" ? "" : link.path);
   }
-  return note.text.split("\n")[0] || "（空）";
+  return note.text.split("\n")[0] || t("（空）");
 }
 
 /**
@@ -206,6 +208,8 @@ export const NoteCard = memo(function NoteCard({
   prevId?: string;
   nextId?: string;
 }) {
+  const t = useT();
+  const locale = useLocale();
   const checked = useNotesStore((s) => s.checkedIds.includes(note.id));
   // 紧缩流水行的连续选中段合并成一个选区块（描边/圆角在相接边断开）
   const prevChecked = useNotesStore(
@@ -279,9 +283,9 @@ export const NoteCard = memo(function NoteCard({
   const images = noteImages(note);
   const editLabel = isImage
     ? imageCaption(note)
-      ? "编辑文字备注"
-      : "添加文字备注"
-    : "编辑";
+      ? t("编辑文字备注")
+      : t("添加文字备注")
+    : t("编辑");
   /** 组合卡片：既有正文又带图片附件 */
   const isComposite = !isImage && images.length > 0;
   const link = isLink ? linkParts(note.url!) : null;
@@ -316,9 +320,9 @@ export const NoteCard = memo(function NoteCard({
     const st = useNotesStore.getState();
     if (checked && st.checkedIds.length > 1) {
       const ids = orderedCheckedNotes(st).map((n) => n.id);
-      deleteNotesWithUndo(ids, `已删除 ${ids.length} 条`);
+      deleteNotesWithUndo(ids, t("已删除 {n} 条", { n: ids.length }));
     } else {
-      deleteNotesWithUndo([note.id], "已删除 1 条");
+      deleteNotesWithUndo([note.id], t("已删除 {n} 条", { n: 1 }));
     }
   };
 
@@ -381,10 +385,10 @@ export const NoteCard = memo(function NoteCard({
       const ui = useUIStore.getState();
       ui.setPage("tasks");
       ui.setFocusedId(sourceTask.id);
-      tip("info", "已定位原始任务");
+      tip("info", t("已定位原始任务"));
       return;
     }
-    tip("warn", "原始来源已不存在，结果卡仍可正常使用");
+    tip("warn", t("原始来源已不存在，结果卡仍可正常使用"));
   };
 
   // 文本卡正文可直接拖出到外部应用输入框（WKWebView 原生桥接系统拖拽）；
@@ -393,7 +397,7 @@ export const NoteCard = memo(function NoteCard({
     !isImage && !isLink
       ? {
           draggable: true,
-          title: "拖出原文（不脱敏，目标由拖放位置决定）",
+          title: t("拖出原文（不脱敏，目标由拖放位置决定）"),
           "data-raw-export": true,
           onDragStart: (e: React.DragEvent) => {
             e.dataTransfer.setData("text/plain", note.text);
@@ -436,11 +440,11 @@ export const NoteCard = memo(function NoteCard({
           return (
             <Fragment key={id}>
               <ContextMenuItem onClick={() => void api.openUrl(note.url!)}>
-                <ExternalLink className="size-3.5" /> 打开链接
+                <ExternalLink className="size-3.5" /> {t("打开链接")}
                 <ContextMenuShortcut>Space</ContextMenuShortcut>
               </ContextMenuItem>
               <ContextMenuItem onClick={() => void enrichLinkMeta(note.id, true)}>
-                <Link2 className="size-3.5" /> 确认获取链接预览…
+                <Link2 className="size-3.5" /> {t("确认获取链接预览…")}
               </ContextMenuItem>
             </Fragment>
           );
@@ -450,7 +454,7 @@ export const NoteCard = memo(function NoteCard({
         if (isImage && note.imageFile) return null;
         return (
           <ContextMenuItem key={id} onClick={() => openPreview()}>
-            <Expand className="size-3.5" /> 预览
+            <Expand className="size-3.5" /> {t("预览")}
             <ContextMenuShortcut>Space</ContextMenuShortcut>
           </ContextMenuItem>
         );
@@ -463,7 +467,7 @@ export const NoteCard = memo(function NoteCard({
             onClick={() => sendSelfOrChecked()}
           >
             <Send className="size-3.5" />
-            {note.sectionId === CLIPBOARD_ID ? "发送 / 添加" : "发送到对话"}
+            {note.sectionId === CLIPBOARD_ID ? t("发送 / 添加") : t("发送到对话")}
             <ContextMenuShortcut>⌘⏎</ContextMenuShortcut>
           </TargetSendMenuItem>
         );
@@ -473,13 +477,13 @@ export const NoteCard = memo(function NoteCard({
         return (
           <ContextMenuSub key={id}>
             <ContextMenuSubTrigger>
-              <FileText className="mr-2 size-3.5" /> 用模板发送
+              <FileText className="mr-2 size-3.5" /> {t("用模板发送")}
             </ContextMenuSubTrigger>
             <ContextMenuSubContent className="w-44">
               {snippetMenu.prioritized.map(renderSnippet)}
               {snippetMenu.prioritized.length === 0 && snippetMenu.remaining.length === 0 && (
                 <ContextMenuItem disabled>
-                  去设置里添加模板
+                  {t("去设置里添加模板")}
                 </ContextMenuItem>
               )}
               {snippetMenu.remaining.length > 0 && (
@@ -498,19 +502,19 @@ export const NoteCard = memo(function NoteCard({
             key={id}
             onClick={() => sendSelfOrChecked(undefined, { forcePreflight: true })}
           >
-            <ListChecks className="size-3.5" /> 检查后发送…
+            <ListChecks className="size-3.5" /> {t("检查后发送…")}
           </ContextMenuItem>
         );
       case "copy":
         return (
           <ContextMenuItem key={id} onClick={copyOne}>
-            <Copy className="size-3.5" /> 复制原文（不脱敏）
+            <Copy className="size-3.5" /> {t("复制原文（不脱敏）")}
           </ContextMenuItem>
         );
       case "copy-list":
         return (
           <ContextMenuItem key={id} onClick={() => void copyWithChecked()}>
-            <ListOrdered className="size-3.5" /> 复制原文为列表（不脱敏）
+            <ListOrdered className="size-3.5" /> {t("复制原文为列表（不脱敏）")}
             <ContextMenuShortcut>⌘C</ContextMenuShortcut>
           </ContextMenuItem>
         );
@@ -524,7 +528,7 @@ export const NoteCard = memo(function NoteCard({
         }
         return (
           <ContextMenuItem key={id} onClick={exportSelfOrChecked}>
-            <FileDown className="size-3.5" /> 导出笔记包…
+            <FileDown className="size-3.5" /> {t("导出笔记包…")}
           </ContextMenuItem>
         );
       case "edit":
@@ -541,13 +545,13 @@ export const NoteCard = memo(function NoteCard({
         if (!isImage || !note.imageFile) return null;
         return (
           <ContextMenuItem key={id} onClick={() => void runOcr()}>
-            <ScanText className="size-3.5" /> 识别文字 (OCR)
+            <ScanText className="size-3.5" /> {t("识别文字 (OCR)")}
           </ContextMenuItem>
         );
       case "done":
         return (
           <ContextMenuItem key={id} onClick={() => toggleDone(note.id)}>
-            <Check className="size-3.5" /> {note.done ? "取消完成" : "标记完成"}
+            <Check className="size-3.5" /> {note.done ? t("取消完成") : t("标记完成")}
             <ContextMenuShortcut>D</ContextMenuShortcut>
           </ContextMenuItem>
         );
@@ -557,11 +561,11 @@ export const NoteCard = memo(function NoteCard({
             <KeepGlyph className={cn("size-3.5", note.keep && "fill-current")} />{" "}
             {isClip
               ? note.keep
-                ? "取消固定"
-                : "固定 · 不被清理"
+                ? t("取消固定")
+                : t("固定 · 不被清理")
               : note.keep
-                ? "取消 Pin"
-                : "Pin · 发送后保留"}
+                ? t("取消 Pin")
+                : t("Pin · 发送后保留")}
             <ContextMenuShortcut>P</ContextMenuShortcut>
           </ContextMenuItem>
         );
@@ -574,13 +578,13 @@ export const NoteCard = memo(function NoteCard({
             ) : (
               <EyeOff className="size-3.5" />
             )}{" "}
-            {note.blur ? "取消模糊" : "模糊内容"}
+            {note.blur ? t("取消模糊") : t("模糊内容")}
           </ContextMenuItem>
         );
       case "rename":
         return (
           <ContextMenuItem key={id} onClick={startRename}>
-            <PenLine className="size-3.5" /> 重命名
+            <PenLine className="size-3.5" /> {t("重命名")}
           </ContextMenuItem>
         );
       case "tags": {
@@ -593,7 +597,7 @@ export const NoteCard = memo(function NoteCard({
         return (
           <ContextMenuSub key={id}>
             <ContextMenuSubTrigger>
-              <Tag className="mr-2 size-3.5" /> 标签
+              <Tag className="mr-2 size-3.5" /> {t("标签")}
             </ContextMenuSubTrigger>
             <ContextMenuSubContent className="w-40">
               {(catalog ?? []).map((tag) => (
@@ -632,7 +636,7 @@ export const NoteCard = memo(function NoteCard({
                   setTagDraft("");
                 }}
               >
-                <PenLine className="size-3.5" /> 新标签…
+                <PenLine className="size-3.5" /> {t("新标签…")}
               </ContextMenuItem>
             </ContextMenuSubContent>
           </ContextMenuSub>
@@ -642,14 +646,14 @@ export const NoteCard = memo(function NoteCard({
         if (isImage || isComposite) return null;
         return (
           <ContextMenuItem key={id} onClick={() => void noteToTaskSmart(note.id)}>
-            <Sparkles className="size-3.5" /> AI 转任务
+            <Sparkles className="size-3.5" /> {t("AI 转任务")}
           </ContextMenuItem>
         );
       case "ai-title":
         if (isImage) return null;
         return (
           <ContextMenuItem key={id} onClick={() => void suggestTitle(note.id)}>
-            <Sparkles className="size-3.5" /> AI 起标题
+            <Sparkles className="size-3.5" /> {t("AI 起标题")}
           </ContextMenuItem>
         );
       case "to-task":
@@ -657,7 +661,7 @@ export const NoteCard = memo(function NoteCard({
         if (isImage || isComposite) return null;
         return (
           <ContextMenuItem key={id} onClick={() => convertNoteToTaskWithUndo(note.id)}>
-            <ListTodo className="size-3.5" /> 转为任务
+            <ListTodo className="size-3.5" /> {t("转为任务")}
           </ContextMenuItem>
         );
       case "move":
@@ -667,7 +671,7 @@ export const NoteCard = memo(function NoteCard({
           return (
             <MenuFlyoutTrigger
               key={id}
-              label="移入笔记分组"
+              label={t("移入笔记分组")}
               icon={<FolderInput className="size-3.5" />}
               getSource={clipMoveFlyoutSource}
             />
@@ -677,7 +681,7 @@ export const NoteCard = memo(function NoteCard({
         return (
           <ContextMenuSub key={id}>
             <ContextMenuSubTrigger>
-              <FolderInput className="mr-2 size-3.5" /> 移动到
+              <FolderInput className="mr-2 size-3.5" /> {t("移动到")}
             </ContextMenuSubTrigger>
             <ContextMenuSubContent className="w-36">
               {sections
@@ -685,7 +689,7 @@ export const NoteCard = memo(function NoteCard({
                 .filter((s) => s.id !== note.sectionId && s.id !== CLIPBOARD_ID)
                 .map((s) => (
                   <ContextMenuItem key={s.id} onClick={() => moveNotes([note.id], s.id)}>
-                    {s.name}
+                    {sectionName(s)}
                   </ContextMenuItem>
                 ))}
             </ContextMenuSubContent>
@@ -708,7 +712,7 @@ export const NoteCard = memo(function NoteCard({
   const runOcr = async () => {
     if (!note.imageFile || isDataOperationLocked()) return;
     const lease = beginDataGenerationLease();
-    tip("info", "正在识别文字…");
+    tip("info", t("正在识别文字…"));
     try {
       const text = await api.ocrImage(note.imageFile);
       const current = useNotesStore.getState().notes.find((item) => item.id === note.id);
@@ -725,14 +729,14 @@ export const NoteCard = memo(function NoteCard({
       });
       if (result === "added" && id) {
         useUIStore.getState().setFlashId(id);
-        tip("ok", "已识别为新卡片");
+        tip("ok", t("已识别为新卡片"));
       } else if (result === "duplicate") {
         tip("duplicate", "");
       }
     } catch (e) {
       const msg = String(e);
-      if (msg.includes("未识别到文字")) tip("info", "未识别到文字");
-      else tip("warn", `识别失败：${msg}`);
+      if (msg.includes("未识别到文字")) tip("info", t("未识别到文字"));
+      else tip("warn", t("识别失败：{msg}", { msg }));
     } finally {
       lease.release();
     }
@@ -759,7 +763,9 @@ export const NoteCard = memo(function NoteCard({
   // 剪贴票据卡的智能卡面（颜色/JSON/时间戳/邮箱）：只对挂载卡算一次，不入库
   const smart = useMemo(
     () => (ticket && clipTemplate === "standard" && !isImage && !isLink ? detectClipSmart(note.text) : null),
-    [ticket, clipTemplate, isImage, isLink, note.text]
+    // locale：识别摘要（如「对象 · 2 键」）随语言切换重算
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [ticket, clipTemplate, isImage, isLink, note.text, locale]
   );
   // 卡面代码高亮：只算可见头部（600 字符足够 3-6 行），memo 防重复计算
   const cardCodeHtml = useMemo(
@@ -773,15 +779,15 @@ export const NoteCard = memo(function NoteCard({
   /** 通栏类型标签（无自定义标题时显示）。 */
   const typeLabel = isImage
     ? images.length > 1
-      ? `图片 ×${images.length}`
-      : "图片"
+      ? t("图片 ×{n}", { n: images.length })
+      : t("图片")
     : isComposite
-      ? `图文 ×${images.length + 1}`
+      ? t("图文 ×{n}", { n: images.length + 1 })
       : isLink
-        ? "链接"
+        ? t("链接")
         : note.codeLang
           ? langLabel(note.codeLang)
-          : "文本";
+          : t("文本");
 
   // 重命名（点击通栏类型区 / 右键「重命名」）：行内编辑自定义标题
   const [renaming, setRenaming] = useState(false);
@@ -843,7 +849,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
           {section.id === INBOX_ID
             ? <Inbox className="size-3.5" />
             : <Folder className="size-3.5" />}
-          {section.name}
+          {sectionName(section)}
         </ContextMenuItem>
       )),
       source.register
@@ -854,29 +860,29 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
   const relationMenuItem = note.provenance ? (
     <ContextMenuSub key="relation">
       <ContextMenuSubTrigger>
-        <Link2 className="mr-2 size-3.5" /> 对应回复
+        <Link2 className="mr-2 size-3.5" /> {t("对应回复")}
       </ContextMenuSubTrigger>
       <ContextMenuSubContent className="w-44">
         <ContextMenuItem onClick={openProvenanceSource}>
-          <Expand className="size-3.5" /> 查看发送内容
+          <Expand className="size-3.5" /> {t("查看发送内容")}
         </ContextMenuItem>
         <ContextMenuItem onClick={() => requestResultVerification(
           note.id,
           cardRef.current?.querySelector<HTMLElement>("[data-drag-handle]") ?? cardRef.current
         )}>
-          <ShieldCheck className="size-3.5" /> 检查这条回复
+          <ShieldCheck className="size-3.5" /> {t("检查这条回复")}
         </ContextMenuItem>
         <ContextMenuItem onClick={() => requestResultLinkForNote(note.id, cardRef.current)}>
-          <Link2 className="size-3.5" /> 更换对应发送
+          <Link2 className="size-3.5" /> {t("更换对应发送")}
         </ContextMenuItem>
         <ContextMenuItem onClick={() => requestPlaceholderPreview(note.id, cardRef.current)}>
           <ScanText className="size-3.5" />
           {deliveryRedactionMapAvailable(note.provenance.deliveryId)
-            ? "恢复占位符预览"
-            : "占位符映射已失效"}
+            ? t("恢复占位符预览")
+            : t("占位符映射已失效")}
         </ContextMenuItem>
         <ContextMenuItem onClick={() => requestResultUnlink(note.id, cardRef.current)}>
-          <Unlink className="size-3.5" /> 这不是对应回复
+          <Unlink className="size-3.5" /> {t("这不是对应回复")}
         </ContextMenuItem>
       </ContextMenuSubContent>
     </ContextMenuSub>
@@ -885,7 +891,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
       key="relation"
       onClick={() => requestResultLinkForNote(note.id, cardRef.current)}
     >
-      <Link2 className="size-3.5" /> 保存为某次回复
+      <Link2 className="size-3.5" /> {t("保存为某次回复")}
     </ContextMenuItem>
   );
 
@@ -919,7 +925,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
       moreSections.map((group, index) => (
         <Fragment key={group.id}>
           {index > 0 && <ContextMenuSeparator />}
-          <ContextMenuLabel>{group.label}</ContextMenuLabel>
+          <ContextMenuLabel>{t(group.label)}</ContextMenuLabel>
           {group.items}
         </Fragment>
       )),
@@ -1107,7 +1113,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
             onFocus={() => useUIStore.getState().setFocusedId(note.id)}
             onKeyDown={(e) => listeners?.onKeyDown?.(e)}
             onClick={(e) => e.stopPropagation()}
-            aria-label="拖拽调整位置和分组（Space 拾起，方向键移动）"
+            aria-label={t("拖拽调整位置和分组（Space 拾起，方向键移动）")}
             className={cn(
               "cursor-grab touch-none p-0.5 text-muted-foreground/50 transition-opacity",
               // 舒适卡把手＝键盘专用（鼠标拖拽走整卡）：Tab 聚焦时以卡内浮钮显现。
@@ -1180,7 +1186,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
                   />
                 ) : note.title ? (
                   <p
-                    title="点击重命名"
+                    title={t("点击重命名")}
                     onClick={(e) => {
                       e.stopPropagation();
                       startRename();
@@ -1189,12 +1195,12 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
                   >
                     {note.title}
                   </p>
-                ) : typeLabel !== "文本" ? (
+                ) : typeLabel !== t("文本") ? (
                   // 纯文本剪贴不设类型徽标（时间即身份，重命名走右键菜单）；
                   // 徽标 flex 化定高居中——inline-block 会骑基线在头行里下坠
                   <button
                     type="button"
-                    title="点击重命名"
+                    title={t("点击重命名")}
                     onClick={(e) => {
                       e.stopPropagation();
                       startRename();
@@ -1259,7 +1265,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
                 />
               ) : (
                 <p
-                  title="点击重命名"
+                  title={t("点击重命名")}
                   onClick={(e) => {
                     e.stopPropagation();
                     startRename();
@@ -1354,7 +1360,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
                     }}
                     className="mt-1 flex w-fit items-center gap-1 rounded-md bg-black/[0.06] px-1.5 py-0.5 text-micro text-muted-foreground hover:text-foreground dark:bg-white/10"
                   >
-                    <ExternalLink className="size-2.5" /> 打开链接
+                    <ExternalLink className="size-2.5" /> {t("打开链接")}
                   </button>
                 )}
               </div>
@@ -1381,11 +1387,11 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
                     {imageUrl ? (
                       <img
                         src={imageUrl}
-                        alt="捕获的图片"
+                        alt={t("捕获的图片")}
                         className="max-h-full max-w-full object-contain"
                       />
                     ) : (
-                      <span className="text-micro text-muted-foreground">加载中…</span>
+                      <span className="text-micro text-muted-foreground">{t("加载中…")}</span>
                     )}
                   </div>
                 )}
@@ -1483,10 +1489,10 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
               >
                 <Link2 className="size-3 shrink-0" aria-hidden />
                 {provenanceSourceState === "available"
-                  ? "来自发送结果"
+                  ? t("来自发送结果")
                   : provenanceSourceState === "partial"
-                    ? "发送结果 · 部分来源缺失"
-                    : "发送结果 · 来源缺失"}
+                    ? t("发送结果 · 部分来源缺失")
+                    : t("发送结果 · 来源缺失")}
               </button>
             ) : aliasRestorable.length > 0 ? (
               <button
@@ -1497,12 +1503,12 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
                   restoreCardAliases();
                 }}
                 className="inline-flex min-w-0 items-center gap-1 truncate rounded-sm outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
-                title="把词典占位符还原为原文（本机操作，可撤销）"
+                title={t("把词典占位符还原为原文（本机操作，可撤销）")}
               >
                 <VenetianMask className="size-3 shrink-0" aria-hidden />
-                含 {aliasRestorable.length} 处化名 · 点击恢复
+                {t("含 {n} 处化名 · 点击恢复", { n: aliasRestorable.length })}
               </button>
-            ) : note.sourceApp ? <span className="truncate">来自 {note.sourceApp}</span> : <span />}
+            ) : note.sourceApp ? <span className="truncate">{t("来自 {app}", { app: note.sourceApp })}</span> : <span />}
             {!!note.tags?.length && (
               <span className="flex min-w-0 shrink items-center gap-1 overflow-hidden">
                 {note.tags.slice(0, 3).map((tag) => (
@@ -1527,10 +1533,10 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
                 : isImage && note.imageW
                   ? `${note.imageW} × ${note.imageH}`
                   : isLink
-                    ? "链接"
+                    ? t("链接")
                     : isComposite
-                      ? `${[...note.text].length} 字符 · ${images.length} 图`
-                      : `${[...note.text].length} 字符`}
+                      ? t("{chars} 字符 · {n} 图", { chars: [...note.text].length, n: images.length })
+                      : t("{n} 字符", { n: [...note.text].length })}
             </span>
           </div>
           )}
@@ -1562,7 +1568,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
               <input
                 autoFocus
                 value={tagDraft}
-                placeholder="新标签，回车添加"
+                placeholder={t("新标签，回车添加")}
                 onChange={(e) => setTagDraft(e.target.value)}
                 onBlur={(e) => {
                   // 挂载初期的失焦是菜单关闭/焦点归还的竞态，不是用户意图
@@ -1610,8 +1616,8 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
             <IconButton
               label={
                 isClip
-                  ? "发送 / 添加（双击卡片同效）"
-                  : "发送到对话（双击卡片同效）"
+                  ? t("发送 / 添加（双击卡片同效）")
+                  : t("发送到对话（双击卡片同效）")
               }
               surface
               reveal="hover-focus"
@@ -1621,7 +1627,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
             </IconButton>
             {isClip && !grid && (
               <IconButton
-                label={note.keep ? "取消置顶" : "置顶（固定不清理）"}
+                label={note.keep ? t("取消置顶") : t("置顶（固定不清理）")}
                 surface
                 reveal="hover-focus"
                 pressed={note.keep}
@@ -1632,7 +1638,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
             )}
             {isClip && (
               <IconButton
-                label="复制原文（不脱敏）"
+                label={t("复制原文（不脱敏）")}
                 surface
                 reveal="hover-focus"
                 onClick={copyOne}
@@ -1651,7 +1657,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
             )}
             {!grid && aliasRestorable.length > 0 && (
               <IconButton
-                label="恢复化名"
+                label={t("恢复化名")}
                 surface
                 reveal="hover-focus"
                 onClick={restoreCardAliases}
@@ -1660,7 +1666,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
               </IconButton>
             )}
             <IconButton
-              label={isLink ? "打开页面（Space）" : "预览（Space）"}
+              label={isLink ? t("打开页面（Space）") : t("预览（Space）")}
               surface
               reveal="hover-focus"
               onClick={() => openPreview()}
@@ -1683,7 +1689,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
             )}
             {!grid && (
               <IconButton
-                label={note.blur ? "取消模糊" : "模糊内容"}
+                label={note.blur ? t("取消模糊") : t("模糊内容")}
                 surface
                 reveal="hover-focus"
                 pressed={note.blur === true}
@@ -1697,7 +1703,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
               </IconButton>
             )}
             <IconButton
-              label="删除"
+              label={t("删除")}
               surface
               reveal="hover-focus"
               tone="danger"
@@ -1716,13 +1722,13 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
             >
               <span className="delivery-band__label">
                 {deliveryPhase === "sending"
-                  ? "发送中…"
+                  ? t("发送中…")
                   : deliveryPhase === "failed"
-                    ? "发送未完成"
+                    ? t("发送未完成")
                     : deliveryReceipt
                       ? // O2：回执事实（粘贴/回车）+ 撤销（仅当本次有卡被标记完成）
-                        `✓ ${deliveryReceipt.pasted ? "已粘贴" : "粘贴未确认"} · ${deliveryReceipt.entered ? "已按回车" : "未按回车"}`
-                      : "已发送"}
+                        `✓ ${deliveryReceipt.pasted ? t("已粘贴") : t("粘贴未确认")} · ${deliveryReceipt.entered ? t("已按回车") : t("未按回车")}`
+                      : t("已发送")}
                 {deliveryPhase === "sent" && !!deliveryReceipt?.undoIds.length && (
                   <button
                     type="button"
@@ -1733,7 +1739,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
                     }}
                     className="pointer-events-auto ml-1.5 rounded-sm px-0.5 font-medium underline decoration-current/40 underline-offset-2 outline-none hover:decoration-current focus-visible:ring-2 focus-visible:ring-ring"
                   >
-                    撤销
+                    {t("撤销")}
                   </button>
                 )}
               </span>
@@ -1761,7 +1767,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
         {/* 多选场景优先展示合并与移动；移动仍遵循用户显隐配置。 */}
         {mergeCount >= 2 && (
           <ContextMenuItem onClick={() => mergeNoteWithChecked(note.id)}>
-            <Merge className="size-3.5" /> 合并笔记 ×{mergeCount}
+            <Merge className="size-3.5" /> {t("合并笔记 ×{n}", { n: mergeCount })}
           </ContextMenuItem>
         )}
         {promotedMoveItem}
@@ -1770,14 +1776,14 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
         {(sendOptions.length > 0 || moreSections.length > 0) && <ContextMenuSeparator />}
         {sendOptions.length > 0 && (
           <MenuFlyoutTrigger
-            label="发送选项"
+            label={t("发送选项")}
             icon={<Send className="size-3.5" />}
             getSource={sendFlyoutSource}
           />
         )}
         {moreSections.length > 0 && (
           <MenuFlyoutTrigger
-            label="更多操作"
+            label={t("更多操作")}
             icon={<MoreHorizontal className="size-3.5" />}
             width={224}
             getSource={moreFlyoutSource}
@@ -1785,8 +1791,8 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
         )}
         <ContextMenuSeparator />
         <ContextMenuItem variant="destructive" onClick={deleteSelfOrChecked}>
-          <Trash2 className="size-3.5" /> 删除
-          {checked && checkedCount > 1 ? ` ${checkedCount} 项` : ""}
+          <Trash2 className="size-3.5" /> {t("删除")}
+          {checked && checkedCount > 1 ? ` ${t("{n} 项", { n: checkedCount })}` : ""}
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
@@ -1812,6 +1818,7 @@ function CompactRow({
   thumb: string | null;
   thumbLoading: boolean;
 }) {
+  const t = useT();
   const isImage = note.kind === "image";
   const isLink = note.kind === "link" && !!note.url;
   const images = noteImages(note);
@@ -1819,7 +1826,7 @@ function CompactRow({
   const mono = !isImage && !isLink && isMonoLike(firstLine);
   /** 自定义标题（命名过的资产）：标题优先展示，内容首行降级为淡色摘要 */
   const title = note.title?.trim() || null;
-  const preview = firstLine === "（空）" ? null : firstLine;
+  const preview = firstLine === t("（空）") ? null : firstLine;
   const isClip = note.sectionId === CLIPBOARD_ID;
   const highlightSegs = (text: string) =>
     splitHighlight(text, query).map((seg, i) =>
@@ -1958,12 +1965,12 @@ function CompactRow({
       {note.provenance && (
         <Link2
           className="size-3 shrink-0 text-primary transition-opacity group-hover:opacity-0"
-          aria-label="来自发送结果"
+          aria-label={t("来自发送结果")}
         />
       )}
       {!isImage && images.length > 0 && (
         <span className="shrink-0 text-micro text-muted-foreground transition-opacity group-hover:opacity-0">
-          {images.length}图
+          {t("{n}图", { n: images.length })}
         </span>
       )}
       {/* 剪贴流水行常显相对时间（新鲜度=核心元数据）；置顶行免时间只留图钉 */}
@@ -1978,18 +1985,19 @@ function CompactRow({
 
 /** 智能卡面的转换按钮：复制转换结果（copy_text 已标记自写，不会被再次收集）。 */
 function SmartChip({ label, value }: { label: React.ReactNode; value: string }) {
+  const t = useT();
   return (
     <button
       type="button"
-      title={`复制 ${value}`}
+      title={t("复制 {value}", { value })}
       onPointerDown={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}
       onClick={(e) => {
         e.stopPropagation();
         void api
           .copyText(value)
-          .then(() => tip("ok", "已复制"))
-          .catch(() => tip("warn", "复制失败，请稍后重试"));
+          .then(() => tip("ok", t("已复制")))
+          .catch(() => tip("warn", t("复制失败，请稍后重试")));
       }}
       className="h-5 shrink-0 truncate rounded-md border border-border bg-background px-1.5 font-mono text-micro text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
@@ -1999,6 +2007,7 @@ function SmartChip({ label, value }: { label: React.ReactNode; value: string }) 
 }
 
 function ClipSmartFace({ smart, raw }: { smart: ClipSmart; raw: string }) {
+  const t = useT();
   switch (smart.kind) {
     case "color":
       return (
@@ -2027,8 +2036,8 @@ function ClipSmartFace({ smart, raw }: { smart: ClipSmart; raw: string }) {
           </p>
           <div className="flex items-center gap-1">
             <span className="text-micro text-success">✓ {smart.summary}</span>
-            <SmartChip label="格式化" value={smart.pretty} />
-            <SmartChip label="压缩" value={smart.minified} />
+            <SmartChip label={t("格式化")} value={smart.pretty} />
+            <SmartChip label={t("压缩")} value={smart.minified} />
           </div>
         </div>
       );
@@ -2038,8 +2047,8 @@ function ClipSmartFace({ smart, raw }: { smart: ClipSmart; raw: string }) {
           <p className="truncate font-mono text-body">{raw.trim()}</p>
           <div className="flex items-center gap-1 text-label">
             <span className="truncate">→ {smart.local}</span>
-            <span className="text-micro text-muted-foreground">（{smart.unit}）</span>
-            <SmartChip label="复制时间" value={smart.local} />
+            <span className="text-micro text-muted-foreground">{t("（{unit}）", { unit: t(smart.unit) })}</span>
+            <SmartChip label={t("复制时间")} value={smart.local} />
           </div>
         </div>
       );
@@ -2057,7 +2066,7 @@ function ClipSmartFace({ smart, raw }: { smart: ClipSmart; raw: string }) {
             }}
             className="h-5 shrink-0 rounded-md border border-border bg-background px-1.5 text-micro hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            写邮件
+            {t("写邮件")}
           </button>
         </div>
       );

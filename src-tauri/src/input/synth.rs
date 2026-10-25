@@ -19,8 +19,8 @@ fn with_enigo(f: impl FnOnce(&mut Enigo) -> enigo::InputResult<()>) -> Result<()
     let mut settings = Settings::default();
     settings.event_source_user_data = Some(EVENT_SOURCE_MARKER);
     let mut enigo = Enigo::new(&settings)
-        .map_err(|e| format!("初始化按键合成失败（缺少辅助功能权限？）: {e}"))?;
-    f(&mut enigo).map_err(|e| format!("合成按键失败: {e}"))
+        .map_err(|e| crate::tr_fmt!("初始化按键合成失败（缺少辅助功能权限？）: {e}", "Failed to initialize key synthesis (missing Accessibility permission?): {e}"))?;
+    f(&mut enigo).map_err(|e| crate::tr_fmt!("合成按键失败: {e}", "Failed to synthesize keys: {e}"))
 }
 
 /// 合成 Cmd+C。

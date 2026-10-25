@@ -1,3 +1,5 @@
+import { t } from "@/lib/i18n";
+
 export type NoteContentBlock =
   | { type: "text"; text: string }
   | {
@@ -65,7 +67,7 @@ export function replaceNoteTextBlockAt(
   text: string
 ): NoteContentBlock[] {
   if (!Number.isInteger(index) || blocks[index]?.type !== "text") {
-    throw new Error("只能编辑已有文字块");
+    throw new Error(t("只能编辑已有文字块"));
   }
   return blocks.map((block, blockIndex) =>
     blockIndex === index ? { type: "text", text } : block
@@ -78,7 +80,7 @@ export function removeNoteContentBlockAt(
   index: number
 ): NoteContentBlock[] {
   if (!Number.isInteger(index) || blocks[index]?.type !== "image") {
-    throw new Error("只能删除图片块");
+    throw new Error(t("只能删除图片块"));
   }
   return blocks.filter((_, blockIndex) => blockIndex !== index);
 }
@@ -153,12 +155,12 @@ export function replaceNoteImageFile(
   sourceFile: string,
   edited: { file: string; width: number; height: number }
 ): NoteContentBlock[] {
-  if (!sourceFile || !edited.file) throw new Error("图片文件名不能为空");
+  if (!sourceFile || !edited.file) throw new Error(t("图片文件名不能为空"));
   if (
     !Number.isFinite(edited.width) || edited.width <= 0 ||
     !Number.isFinite(edited.height) || edited.height <= 0
   ) {
-    throw new Error("编辑后图片尺寸无效");
+    throw new Error(t("编辑后图片尺寸无效"));
   }
   return blocks.map((block) =>
     block.type === "image" && block.file === sourceFile

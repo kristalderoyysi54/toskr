@@ -19,6 +19,7 @@ import {
   FIREWALL_SEVERITY_LABEL,
 } from "@/lib/delivery/firewall";
 import { findingReason } from "@/lib/delivery/findingReason";
+import { useT } from "@/lib/i18n";
 import { useNoteThumb } from "@/lib/media";
 import { api } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
@@ -85,6 +86,7 @@ function AttachmentComparison({
   originalFiles: string[];
   sendFiles: string[];
 }) {
+  const t = useT();
   const originalUrl = useNoteThumb(item.originalFile);
   const redacted = item.sendFile !== item.originalFile;
   const [sendUrl, setSendUrl] = useState<string | null>(null);
@@ -107,8 +109,8 @@ function AttachmentComparison({
       <div className="min-w-0 space-y-0.5 text-center">
         <AttachmentPreview
           url={originalUrl}
-          label={`查看图片 ${index + 1} 原图`}
-          title="点击查看原图"
+          label={t("查看图片 {n} 原图", { n: index + 1 })}
+          title={t("点击查看原图")}
           onClick={() => void api.quickLook(originalFiles, index)}
         >
           {item.findings.map((finding) => (
@@ -131,17 +133,17 @@ function AttachmentComparison({
             />
           ))}
         </AttachmentPreview>
-        <p className="text-micro text-muted-foreground">原图</p>
+        <p className="text-micro text-muted-foreground">{t("原图")}</p>
       </div>
       {redacted && (
         <div className="min-w-0 space-y-0.5 text-center">
           <AttachmentPreview
             url={sendUrl}
-            label={`查看图片 ${index + 1} 实际发送图`}
-            title="点击查看实际发送图"
+            label={t("查看图片 {n} 实际发送图", { n: index + 1 })}
+            title={t("点击查看实际发送图")}
             onClick={() => void api.quickLook(sendFiles, index)}
           />
-          <p className="text-micro font-medium text-success">实际发送</p>
+          <p className="text-micro font-medium text-success">{t("实际发送")}</p>
         </div>
       )}
     </div>
@@ -157,6 +159,7 @@ export function ImageFirewallPanel({
   busy: boolean;
   evaluation: ImageFirewallEvaluation;
 }) {
+  const t = useT();
   const hasUnresolved = draft.imageFirewall.some((item) =>
     item.findings.some(
       (finding) => !item.redactedFindingIds.includes(finding.id)
@@ -166,20 +169,20 @@ export function ImageFirewallPanel({
   const sendFiles = draft.imageFirewall.map((item) => item.sendFile);
   return (
     <section
-      aria-label="图片隐私检查"
+      aria-label={t("图片隐私检查")}
       className="space-y-2 rounded-lg border border-border/70 p-2"
     >
       <div className="flex items-center gap-1.5">
         <ImageIcon className="size-3.5 text-warning" aria-hidden />
         <p className="text-label font-medium">
-          图片隐私检查 · {draft.imageFirewall.length} 张
+          {t("图片隐私检查 · {n} 张", { n: draft.imageFirewall.length })}
         </p>
         <span className="ml-auto text-micro text-muted-foreground">
-          {evaluation.canSend ? "可发送" : evaluation.reason ?? "等待检查"}
+          {evaluation.canSend ? t("可发送") : evaluation.reason ?? t("等待检查")}
         </span>
       </div>
       <p className="text-micro text-muted-foreground">
-        OCR 仅在本机运行；自动与手动打码都使用不可逆纯色遮挡，原图不会修改
+        {t("OCR 仅在本机运行；自动与手动打码都使用不可逆纯色遮挡，原图不会修改")}
       </p>
       <div className="space-y-2">
         {draft.imageFirewall.map((item, index) => {
@@ -204,7 +207,7 @@ export function ImageFirewallPanel({
                   sendFiles={sendFiles}
                 />
                 <div className="min-w-0 break-words text-micro">
-                  <p className="font-medium">图片 {index + 1}</p>
+                  <p className="font-medium">{t("图片 {n}", { n: index + 1 })}</p>
                   <p className={cn(
                     item.status === "failed"
                       ? "text-destructive"
@@ -213,22 +216,25 @@ export function ImageFirewallPanel({
                         : "text-warning"
                   )}>
                     {item.status === "idle"
-                      ? "等待 OCR"
+                      ? t("等待 OCR")
                       : item.status === "scanning"
-                        ? "本地 OCR 中…"
+                        ? t("本地 OCR 中…")
                         : item.status === "redacting"
-                          ? "正在生成发送副本…"
+                          ? t("正在生成发送副本…")
                           : item.status === "failed"
                             ? `${item.failureMessage}${
-                                item.manualRegions.length ? " · 已应用手动打码" : ""
+                                item.manualRegions.length ? ` · ${t("已应用手动打码")}` : ""
                               }`
                             : item.status === "disabled"
                               ? item.sendFile === item.originalFile
-                                ? "检查已关闭 · 发送原图"
-                                : `检查已关闭 · ${item.manualRegions.length} 个手工区域已遮挡 · 发送副本`
+                                ? t("检查已关闭 · 发送原图")
+                                : t("检查已关闭 · {n} 个手工区域已遮挡 · 发送副本", { n: item.manualRegions.length })
                               : item.sendFile === item.originalFile
-                                ? `${item.findings.length} 项 · 发送原图`
-                                : `${item.redactedFindingIds.length} 项识别区域、${item.manualRegions.length} 个手工区域已遮挡 · 发送副本`}
+                                ? t("{n} 项 · 发送原图", { n: item.findings.length })
+                                : t("{found} 项识别区域、{manual} 个手工区域已遮挡 · 发送副本", {
+                                    found: item.redactedFindingIds.length,
+                                    manual: item.manualRegions.length,
+                                  })}
                   </p>
                   {item.width && item.height && (
                     <p className="text-muted-foreground">
@@ -238,7 +244,7 @@ export function ImageFirewallPanel({
                 </div>
               </div>
               {item.findings.length > 0 && (
-                <ul className="space-y-1" aria-label={`图片 ${index + 1} 敏感区域`}>
+                <ul className="space-y-1" aria-label={t("图片 {n} 敏感区域", { n: index + 1 })}>
                   {item.findings.map((finding) => (
                     <li
                       key={finding.id}
@@ -249,9 +255,9 @@ export function ImageFirewallPanel({
                       ) : (
                         <ShieldAlert className="size-3 text-warning" aria-hidden />
                       )}
-                      <span>{FIREWALL_CATEGORY_LABEL[finding.category]}</span>
+                      <span>{t(FIREWALL_CATEGORY_LABEL[finding.category])}</span>
                       <span className={finding.severity === "block" ? "text-destructive" : "text-warning"}>
-                        {FIREWALL_SEVERITY_LABEL[finding.severity]}
+                        {t(FIREWALL_SEVERITY_LABEL[finding.severity])}
                       </span>
                       <code className="min-w-0 flex-1 truncate text-muted-foreground">
                         {finding.maskedPreview}
@@ -266,7 +272,7 @@ export function ImageFirewallPanel({
                           finding.id
                         )}
                       >
-                        {redacted.has(finding.id) ? "已遮挡" : "遮挡此文字区域"}
+                        {redacted.has(finding.id) ? t("已遮挡") : t("遮挡此文字区域")}
                       </Button>
                       {!redacted.has(finding.id) && (
                         <Button
@@ -274,18 +280,18 @@ export function ImageFirewallPanel({
                           size="xs"
                           variant="ghost"
                           className="text-muted-foreground"
-                          title="不遮挡这一处，按原样发出（仅本次发送有效）"
+                          title={t("不遮挡这一处，按原样发出（仅本次发送有效）")}
                           disabled={busy || item.status !== "ready" || kept.has(finding.id)}
                           onClick={() => keepOpenDeliveryImageFinding(
                             item.originalFile,
                             finding.id
                           )}
                         >
-                          {kept.has(finding.id) ? "已确认保留原文" : "保留原文发送"}
+                          {kept.has(finding.id) ? t("已确认保留原文") : t("保留原文发送")}
                         </Button>
                       )}
                       <details className="w-full min-w-0 text-muted-foreground">
-                        <summary className="cursor-pointer">命中依据</summary>
+                        <summary className="cursor-pointer">{t("命中依据")}</summary>
                         <p className="mt-1 break-words">{findingReason(finding)}</p>
                       </details>
                     </li>
@@ -313,7 +319,7 @@ export function ImageFirewallPanel({
                     }
                   )}
                 >
-                  手动打码
+                  {t("手动打码")}
                 </Button>
                 {item.findings.length > 0 &&
                   item.redactedFindingIds.length < item.findings.length && (
@@ -324,7 +330,7 @@ export function ImageFirewallPanel({
                       disabled={busy || item.status !== "ready"}
                       onClick={() => void redactOpenDeliveryImage(item.originalFile)}
                     >
-                      遮挡此图全部
+                      {t("遮挡此图全部")}
                     </Button>
                   )}
                 {item.sendFile !== item.originalFile && (
@@ -335,7 +341,7 @@ export function ImageFirewallPanel({
                     disabled={busy || !["ready", "failed", "disabled"].includes(item.status)}
                     onClick={() => restoreOpenDeliveryImage(item.originalFile)}
                   >
-                    恢复发送原图
+                    {t("恢复发送原图")}
                   </Button>
                 )}
                 {item.status === "failed" && (
@@ -346,7 +352,7 @@ export function ImageFirewallPanel({
                     disabled={busy}
                     onClick={() => retryOpenDeliveryImageScan(item.originalFile)}
                   >
-                    重试 OCR
+                    {t("重试 OCR")}
                   </Button>
                 )}
                 {itemPolicy.needsRawConfirmation && (
@@ -361,10 +367,10 @@ export function ImageFirewallPanel({
                     )}
                   >
                     {item.status === "failed"
-                      ? "确认发送未经 OCR 的原图"
+                      ? t("确认发送未经 OCR 的原图")
                       : itemPolicy.needsRawConfirmation === "block"
-                        ? "再次确认保留图中高风险原文"
-                        : "确认保留图中提示级原文"}
+                        ? t("再次确认保留图中高风险原文")
+                        : t("确认保留图中提示级原文")}
                   </Button>
                 )}
               </div>
@@ -382,7 +388,7 @@ export function ImageFirewallPanel({
           )}
           onClick={() => void redactAllOpenDeliveryImages()}
         >
-          遮挡全部图片敏感区域
+          {t("遮挡全部图片敏感区域")}
         </Button>
       )}
     </section>

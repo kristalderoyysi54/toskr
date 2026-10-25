@@ -1,5 +1,6 @@
 import { noteContentBlocks, textBlockRanges, textFromContentBlocks } from "@/lib/noteContentBlocks";
 import { imageCaption } from "@/lib/format";
+import { t } from "@/lib/i18n";
 import type { DeliverySegment } from "@/lib/tauri";
 import type { Note } from "@/store/notesStore";
 import type { DeliveryDraft } from "./types";
@@ -133,8 +134,8 @@ export function deliverySequencePreview(draft: DeliveryDraft): string[] {
     ...draft.imageFiles.map((_, fileIndex) => ({ kind: "image" as const, fileIndex })),
   ];
   return segments.map(segment => {
-    if (segment.kind === "image") return `图片 ${segment.fileIndex + 1}`;
+    if (segment.kind === "image") return t("图片 {n}", { n: segment.fileIndex + 1 });
     const text = decoder.decode(bytes.slice(segment.start, segment.end));
-    return `文字：${text.slice(0, 80)}${text.length > 80 ? "…" : ""}`;
+    return t("文字：{text}", { text: `${text.slice(0, 80)}${text.length > 80 ? "…" : ""}` });
   });
 }

@@ -21,6 +21,7 @@ import {
   getRecentDeliveryEvents,
   type DeliveryEvent,
 } from "@/lib/deliveryActivity";
+import { t, useT, type MessageKey } from "@/lib/i18n";
 import {
   aggregateOutcomeMetrics,
   cancelProblemSession,
@@ -31,6 +32,7 @@ import { tip } from "@/lib/tip";
 import { cn } from "@/lib/utils";
 import { useDataOperationStore } from "@/store/dataOperationStore";
 import type { Settings } from "@/store/notesStore";
+import { profileName } from "@/lib/i18n/builtinNames";
 
 type Props = {
   settings: Settings;
@@ -41,9 +43,9 @@ const RANGE_OPTIONS = [
   { value: "7d", label: "近 7 天" },
   { value: "30d", label: "近 30 天" },
   { value: "all", label: "全部保留期" },
-] satisfies { value: OutcomeRange; label: string }[];
+] satisfies { value: OutcomeRange; label: MessageKey }[];
 
-const REASON_LABEL: Record<string, string> = {
+const REASON_LABEL: Record<string, MessageKey> = {
   "target-not-ready": "目标不可用",
   "draft-target-changed": "目标已变化",
   target_exited: "目标已退出",
@@ -63,9 +65,9 @@ function formatPercent(value: number | null): string {
 
 function formatDuration(value: number | null): string {
   if (value === null) return "—";
-  if (Math.abs(value) < 60_000) return `${Math.round(value / 1_000)} 秒`;
+  if (Math.abs(value) < 60_000) return t("{n} 秒", { n: Math.round(value / 1_000) });
   const minutes = value / 60_000;
-  return `${minutes < 10 ? minutes.toFixed(1) : Math.round(minutes)} 分钟`;
+  return t("{n} 分钟", { n: minutes < 10 ? minutes.toFixed(1) : Math.round(minutes) });
 }
 
 /* 案 4（2026-09-11）：指标数字切换时从旧值缓动到新值；空值仍显示「—」不参与过渡 */
@@ -97,6 +99,7 @@ function Distribution({ title, values }: {
   title: string;
   values: Record<string, number>;
 }) {
+  const t = useT();
   const entries = Object.entries(values).filter(([, count]) => count > 0);
   if (!entries.length) return null;
   return (
@@ -105,7 +108,7 @@ function Distribution({ title, values }: {
       <ul className="mt-1.5 space-y-1 text-label text-muted-foreground">
         {entries.map(([key, count]) => (
           <li key={key} className="flex items-center justify-between gap-2">
-            <span className="min-w-0 truncate" title={key}>{REASON_LABEL[key] ?? key}</span>
+            <span className="min-w-0 truncate" title={key}>{REASON_LABEL[key] ? t(REASON_LABEL[key]) : key}</span>
             <span className="tabular-nums text-foreground">{count}</span>
           </li>
         ))}
@@ -131,7 +134,7 @@ function PrimaryMetric({ label, value, hint }: {
 export function OutcomeMetricsSummary({
   metrics,
   hasActivity = true,
-  rangeLabel = "所选时间",
+  rangeLabel,
   onClearFilters,
 }: {
   metrics: OutcomeMetrics;
@@ -140,10 +143,11 @@ export function OutcomeMetricsSummary({
   /** 有记录但当前筛选为空时的一键复位（筛选器藏在折叠区里，空态必须给出口）。 */
   onClearFilters?: () => void;
 }) {
+  const t = useT();
   if (!metrics.deliveryAttempts) {
     return (
       <section
-        aria-label="使用摘要"
+        aria-label={t("使用摘要")}
         className="rounded-xl border border-border/60 bg-card px-4 py-5"
       >
         <div className="flex items-start gap-3">
@@ -152,16 +156,16 @@ export function OutcomeMetricsSummary({
           </span>
           <div>
             <h3 className="text-title font-medium">
-              {hasActivity ? "当前筛选没有数据" : "还没有可统计的发送"}
+              {hasActivity ? t("当前筛选没有数据") : t("还没有可统计的发送")}
             </h3>
             <p className="mt-1 max-w-xl text-body leading-relaxed text-muted-foreground">
               {hasActivity
-                ? "换一个时间范围或清除详细筛选后再看。"
-                : "完成一次发送后，这里会显示按键执行完成率、用时和敏感内容保护情况。"}
+                ? t("换一个时间范围或清除详细筛选后再看。")
+                : t("完成一次发送后，这里会显示按键执行完成率、用时和敏感内容保护情况。")}
             </p>
             {!hasActivity && (
               <p className="mt-2 text-label text-muted-foreground">
-                发送第一条内容试试：双击 ⇧ Shift 捕获选中文本，勾选后 ⌘⏎ 发送。
+                {t("发送第一条内容试试：双击 ⇧ Shift 捕获选中文本，勾选后 ⌘⏎ 发送。")}
               </p>
             )}
             {hasActivity && onClearFilters && (
@@ -172,7 +176,7 @@ export function OutcomeMetricsSummary({
                 className="mt-2"
                 onClick={onClearFilters}
               >
-                清除筛选
+                {t("清除筛选")}
               </Button>
             )}
           </div>
@@ -183,37 +187,37 @@ export function OutcomeMetricsSummary({
 
   const unresolved = Math.max(0, metrics.deliveryAttempts - metrics.sentCount);
   const summaryNote = metrics.actualWorkflowMedianMs !== null
-    ? `一次完整流程通常用时 ${formatDuration(metrics.actualWorkflowMedianMs)}。`
+    ? t("一次完整流程通常用时 {duration}。", { duration: formatDuration(metrics.actualWorkflowMedianMs) })
     : metrics.insufficientSample
-      ? "继续完成几次发送，累计 5 次后会开始显示趋势。"
+      ? t("继续完成几次发送，累计 5 次后会开始显示趋势。")
       : null;
 
   return (
-    <section aria-label="使用摘要" className="overflow-hidden rounded-xl border border-border/60 bg-card">
+    <section aria-label={t("使用摘要")} className="overflow-hidden rounded-xl border border-border/60 bg-card">
       <div className="flex items-center justify-between gap-2 border-b border-border/50 px-3 py-2.5">
         <div>
-          <h3 className="text-title font-medium">这段时间</h3>
-          <p className="mt-0.5 text-micro text-muted-foreground">{rangeLabel}</p>
+          <h3 className="text-title font-medium">{t("这段时间")}</h3>
+          <p className="mt-0.5 text-micro text-muted-foreground">{rangeLabel ?? t("所选时间")}</p>
         </div>
-        <span className="text-label text-muted-foreground">共 {metrics.deliveryAttempts} 次尝试</span>
+        <span className="text-label text-muted-foreground">{t("共 {n} 次尝试", { n: metrics.deliveryAttempts })}</span>
       </div>
       <div className="grid grid-cols-3 divide-x divide-border/50">
         <PrimaryMetric
-          label="按键执行完成"
+          label={t("按键执行完成")}
           value={tweenCount(metrics.sentCount)}
-          hint={unresolved ? `受阻或失败 ${unresolved} 次` : "接收与提交未确认"}
+          hint={unresolved ? t("受阻或失败 {n} 次", { n: unresolved }) : t("接收与提交未确认")}
         />
         <PrimaryMetric
-          label="按键执行完成率"
+          label={t("按键执行完成率")}
           value={tweenPercent(metrics.successRate)}
-          hint={metrics.insufficientSample ? "样本仍较少" : "不代表目标接收率"}
+          hint={metrics.insufficientSample ? t("样本仍较少") : t("不代表目标接收率")}
         />
         <PrimaryMetric
-          label="已保护敏感内容"
+          label={t("已保护敏感内容")}
           value={tweenCount(metrics.redactionCount)}
           hint={metrics.firewallFindingCount
-            ? `共发现 ${metrics.firewallFindingCount} 项`
-            : "未发现需替换内容"}
+            ? t("共发现 {n} 项", { n: metrics.firewallFindingCount })
+            : t("未发现需替换内容")}
         />
       </div>
       {summaryNote && (
@@ -226,49 +230,50 @@ export function OutcomeMetricsSummary({
 }
 
 export function OutcomeMetricsDetails({ metrics }: { metrics: OutcomeMetrics }) {
+  const t = useT();
   const maxAttempts = Math.max(1, ...metrics.dailyTrend.map((item) => item.attempts));
   const distributions = [
-    { title: "阻止原因", values: metrics.blockedReasons },
-    { title: "失败原因", values: metrics.failedReasons },
-    { title: "剪贴板结果", values: metrics.clipboardOutcomes },
+    { title: t("阻止原因"), values: metrics.blockedReasons },
+    { title: t("失败原因"), values: metrics.failedReasons },
+    { title: t("剪贴板结果"), values: metrics.clipboardOutcomes },
   ].filter((item) => Object.values(item.values).some((count) => count > 0));
 
   return (
-    <div aria-label="详细使用数据" className="space-y-3">
+    <div aria-label={t("详细使用数据")} className="space-y-3">
       <section aria-labelledby="outcome-process-title">
-        <h4 id="outcome-process-title" className="mb-1.5 text-label font-medium text-muted-foreground">发送过程</h4>
+        <h4 id="outcome-process-title" className="mb-1.5 text-label font-medium text-muted-foreground">{t("发送过程")}</h4>
         <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-          <MetricCard label="发送尝试" value={tweenCount(metrics.deliveryAttempts)} />
-          <MetricCard label="重试次数" value={tweenCount(metrics.retryCount)} />
-          <MetricCard label="目标变化阻止" value={tweenCount(metrics.targetInvalidationBlocks)} />
+          <MetricCard label={t("发送尝试")} value={tweenCount(metrics.deliveryAttempts)} />
+          <MetricCard label={t("重试次数")} value={tweenCount(metrics.retryCount)} />
+          <MetricCard label={t("目标变化阻止")} value={tweenCount(metrics.targetInvalidationBlocks)} />
           <MetricCard
-            label="结果核验"
+            label={t("结果核验")}
             value={tweenCount(metrics.verificationStatuses.pass + metrics.verificationStatuses.needsReview + metrics.verificationStatuses.blocked)}
-            hint={`通过 ${metrics.verificationStatuses.pass} · 复核 ${metrics.verificationStatuses.needsReview} · 阻止 ${metrics.verificationStatuses.blocked}`}
+            hint={t("通过 {pass} · 复核 {review} · 阻止 {blocked}", { pass: metrics.verificationStatuses.pass, review: metrics.verificationStatuses.needsReview, blocked: metrics.verificationStatuses.blocked })}
           />
         </div>
       </section>
 
       <section aria-labelledby="outcome-time-title">
-        <h4 id="outcome-time-title" className="mb-1.5 text-label font-medium text-muted-foreground">用时</h4>
+        <h4 id="outcome-time-title" className="mb-1.5 text-label font-medium text-muted-foreground">{t("用时")}</h4>
         <div className="grid grid-cols-2 gap-2 lg:grid-cols-3">
-          <MetricCard label="准备到发送（中位）" value={tweenDuration(metrics.draftToSendMedianMs)} />
-          <MetricCard label="发送到回收（中位）" value={tweenDuration(metrics.sendToResultMedianMs)} />
-          <MetricCard label="完整流程（中位）" value={tweenDuration(metrics.actualWorkflowMedianMs)} />
+          <MetricCard label={t("准备到发送（中位）")} value={tweenDuration(metrics.draftToSendMedianMs)} />
+          <MetricCard label={t("发送到回收（中位）")} value={tweenDuration(metrics.sendToResultMedianMs)} />
+          <MetricCard label={t("完整流程（中位）")} value={tweenDuration(metrics.actualWorkflowMedianMs)} />
         </div>
       </section>
 
       <section aria-labelledby="outcome-safety-title">
-        <h4 id="outcome-safety-title" className="mb-1.5 text-label font-medium text-muted-foreground">隐私与结果</h4>
+        <h4 id="outcome-safety-title" className="mb-1.5 text-label font-medium text-muted-foreground">{t("隐私与结果")}</h4>
         <div className="grid grid-cols-2 gap-2">
-          <MetricCard label="发现敏感内容" value={tweenCount(metrics.firewallFindingCount)} />
-          <MetricCard label="已保护敏感内容" value={tweenCount(metrics.redactionCount)} />
+          <MetricCard label={t("发现敏感内容")} value={tweenCount(metrics.firewallFindingCount)} />
+          <MetricCard label={t("已保护敏感内容")} value={tweenCount(metrics.redactionCount)} />
         </div>
       </section>
 
       {!!distributions.length && (
         <section aria-labelledby="outcome-reasons-title">
-          <h4 id="outcome-reasons-title" className="mb-1.5 text-label font-medium text-muted-foreground">原因与结果</h4>
+          <h4 id="outcome-reasons-title" className="mb-1.5 text-label font-medium text-muted-foreground">{t("原因与结果")}</h4>
           <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-4">
             {distributions.map((item) => (
               <Distribution key={item.title} title={item.title} values={item.values} />
@@ -279,20 +284,20 @@ export function OutcomeMetricsDetails({ metrics }: { metrics: OutcomeMetrics }) 
 
       <section className="rounded-xl border border-border/60 bg-card px-3 py-2.5" aria-labelledby="outcome-daily-title">
         <div className="flex items-center justify-between gap-2">
-          <h4 id="outcome-daily-title" className="text-body font-medium">每日发送</h4>
-          <span className="text-micro text-muted-foreground">样本 {metrics.sampleSize}</span>
+          <h4 id="outcome-daily-title" className="text-body font-medium">{t("每日发送")}</h4>
+          <span className="text-micro text-muted-foreground">{t("样本 {n}", { n: metrics.sampleSize })}</span>
         </div>
         {metrics.dailyTrend.length ? (
           <div
             className="trend-bars mt-2 flex h-20 items-end gap-1"
             role="img"
-            aria-label={`每日发送柱状图，共 ${metrics.dailyTrend.length} 天`}
+            aria-label={t("每日发送柱状图，共 {n} 天", { n: metrics.dailyTrend.length })}
           >
             {metrics.dailyTrend.map((item, index) => (
               <div
                 key={item.day}
                 className="group flex min-w-0 flex-1 flex-col items-center justify-end"
-                title={`${item.day}：尝试 ${item.attempts}，成功 ${item.sent}`}
+                title={t("{day}：尝试 {attempts}，成功 {sent}", { day: item.day, attempts: item.attempts, sent: item.sent })}
               >
                 <div
                   className="trend-bar w-full max-w-5 rounded-t-sm bg-primary/25"
@@ -311,18 +316,18 @@ export function OutcomeMetricsDetails({ metrics }: { metrics: OutcomeMetrics }) 
             ))}
           </div>
         ) : (
-          <p className="py-5 text-center text-label text-muted-foreground">暂无样本</p>
+          <p className="py-5 text-center text-label text-muted-foreground">{t("暂无样本")}</p>
         )}
         <p className="mt-1 text-micro text-muted-foreground" role="status">
           {metrics.insufficientSample
-            ? "样本少于 5 次，不给出趋势结论。"
+            ? t("样本少于 5 次，不给出趋势结论。")
             : metrics.trendConclusion === null
-              ? "至少需要 2 个有发送的日期才给出趋势结论。"
+              ? t("至少需要 2 个有发送的日期才给出趋势结论。")
               : metrics.trendConclusion === "up"
-                ? "后半段成功发送数量上升。"
+                ? t("后半段成功发送数量上升。")
                 : metrics.trendConclusion === "down"
-                  ? "后半段成功发送数量下降。"
-                  : "前后两段成功发送数量持平。"}
+                  ? t("后半段成功发送数量下降。")
+                  : t("前后两段成功发送数量持平。")}
         </p>
       </section>
     </div>
@@ -352,6 +357,7 @@ function ProgressiveSection({ title, description, children }: {
 }
 
 export function OutcomeInsightsSection({ settings, patch }: Props) {
+  const t = useT();
   const dataLocked = useDataOperationStore((state) => state.locked);
   const [events, setEvents] = useState<DeliveryEvent[]>([]);
   const [loading, setLoading] = useState(true);
@@ -369,11 +375,11 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
         settings.outcomeRetentionDays
       ));
     } catch {
-      setError("使用记录读取失败，请稍后重试");
+      setError(t("使用记录读取失败，请稍后重试"));
     } finally {
       setLoading(false);
     }
-  }, [settings.outcomeRetentionDays]);
+  }, [settings.outcomeRetentionDays, t]);
 
   useEffect(() => {
     if (dataLocked) return;
@@ -404,35 +410,36 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
     settings.outcomeProblemSessions,
   ]);
 
+  const rangeOption = RANGE_OPTIONS.find((option) => option.value === range);
   const activeSession = [...settings.outcomeProblemSessions]
     .reverse()
     .find((session) => session.solvedAtMs === null && session.cancelledAtMs === null) ?? null;
 
   const clearMetrics = async () => {
     const confirmed = await ask(
-      "清除使用统计？最近发送记录、卡片、任务和附件不会改变。",
-      { title: "清除使用统计", kind: "warning" }
+      t("清除使用统计？最近发送记录、卡片、任务和附件不会改变。"),
+      { title: t("清除使用统计"), kind: "warning" }
     );
     if (!confirmed) return;
     if (settings.outcomeMetricsEpoch >= Number.MAX_SAFE_INTEGER) {
-      tip("warn", "使用统计已达到安全上限，请先导出诊断后联系支持");
+      tip("warn", t("使用统计已达到安全上限，请先导出诊断后联系支持"));
       return;
     }
     patch({
       outcomeMetricsEpoch: settings.outcomeMetricsEpoch + 1,
       outcomeProblemSessions: [],
     });
-    tip("ok", "使用统计已清除；最近发送记录仍保留");
+    tip("ok", t("使用统计已清除；最近发送记录仍保留"));
   };
 
   return (
     <div>
       {/* 页签已标明「使用概览」，这里只给统计块一个分组标题 */}
       <div className="mb-2 flex items-center justify-between gap-3">
-        <h3 className="px-0.5 text-title font-semibold">发送统计</h3>
+        <h3 className="px-0.5 text-title font-semibold">{t("发送统计")}</h3>
         <Button type="button" size="sm" variant="secondary" onClick={() => void load()} disabled={loading}>
           <RefreshCw className={cn("size-3.5", loading && "animate-spin motion-reduce:animate-none")} />
-          刷新
+          {t("刷新")}
         </Button>
       </div>
       {error && !events.length ? (
@@ -440,13 +447,13 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
           <div className="flex items-start gap-3">
             <CircleAlert aria-hidden className="mt-0.5 size-4 shrink-0 text-destructive" />
             <div className="min-w-0 flex-1">
-              <h3 className="text-title font-medium">暂时读不到使用记录</h3>
+              <h3 className="text-title font-medium">{t("暂时读不到使用记录")}</h3>
               <p className="mt-1 text-body text-muted-foreground">
-                这不会影响发送和最近发送记录。可以稍后再试，或现在重新读取。
+                {t("这不会影响发送和最近发送记录。可以稍后再试，或现在重新读取。")}
               </p>
             </div>
             <Button type="button" size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
-              再试一次
+              {t("再试一次")}
             </Button>
           </div>
           <span className="sr-only">{error}</span>
@@ -455,26 +462,26 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
         <>
           {error && (
             <div role="status" className="mb-3 flex items-center justify-between gap-3 rounded-xl bg-warning/10 px-3 py-2 text-body text-warning">
-              <span>本次刷新失败，下面仍显示上次读取的结果。</span>
-              <Button type="button" size="xs" variant="ghost" onClick={() => void load()} disabled={loading}>再试一次</Button>
+              <span>{t("本次刷新失败，下面仍显示上次读取的结果。")}</span>
+              <Button type="button" size="xs" variant="ghost" onClick={() => void load()} disabled={loading}>{t("再试一次")}</Button>
             </div>
           )}
           {loading && !events.length ? (
             <p role="status" className="rounded-xl border border-border/60 bg-card py-10 text-center text-body text-muted-foreground">
-              正在读取使用记录…
+              {t("正在读取使用记录…")}
             </p>
           ) : (
             <>
               {!!events.length && (
                 <div className="mb-2 flex items-center justify-between gap-3">
-                  <p className="text-label text-muted-foreground">查看范围</p>
-                  <Segmented ariaLabel="使用概览范围" value={range} options={RANGE_OPTIONS} onChange={setRange} />
+                  <p className="text-label text-muted-foreground">{t("查看范围")}</p>
+                  <Segmented ariaLabel={t("使用概览范围")} value={range} options={RANGE_OPTIONS.map(({ value, label }) => ({ value, label: t(label) }))} onChange={setRange} />
                 </div>
               )}
               <OutcomeMetricsSummary
                 metrics={metrics}
                 hasActivity={!!events.length}
-                rangeLabel={RANGE_OPTIONS.find((option) => option.value === range)?.label}
+                rangeLabel={rangeOption && t(rangeOption.label)}
                 onClearFilters={() => {
                   setProfileId("all");
                   setRecipeId("all");
@@ -484,27 +491,27 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
               />
               {!!events.length && (
                 <ProgressiveSection
-                  title="趋势和详细数据"
-                  description="查看发送原因、用时、结果和每日变化"
+                  title={t("趋势和详细数据")}
+                  description={t("查看发送原因、用时、结果和每日变化")}
                 >
                   <div className="mb-3 flex flex-wrap items-center gap-2">
                     <SimpleSelect
-                      ariaLabel="按发送方案筛选"
+                      ariaLabel={t("按发送方案筛选")}
                       className="w-40"
                       value={profileId}
                       options={[
-                        { value: "all", label: "全部发送方案" },
-                        ...settings.targetProfiles.map((profile) => ({ value: profile.id, label: profile.name })),
+                        { value: "all", label: t("全部发送方案") },
+                        ...settings.targetProfiles.map((profile) => ({ value: profile.id, label: profileName(profile) })),
                       ]}
                       onChange={setProfileId}
                     />
                     <SimpleSelect
-                      ariaLabel="按 AI 处理筛选"
+                      ariaLabel={t("按 AI 处理筛选")}
                       className="w-36"
                       value={recipeId}
                       options={[
-                        { value: "all", label: "全部 AI 处理" },
-                        ...TRANSFORM_RECIPES.map((recipe) => ({ value: recipe.id, label: recipe.label })),
+                        { value: "all", label: t("全部 AI 处理") },
+                        ...TRANSFORM_RECIPES.map((recipe) => ({ value: recipe.id, label: t(recipe.label) })),
                       ]}
                       onChange={setRecipeId}
                     />
@@ -518,20 +525,19 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
       )}
 
       <ProgressiveSection
-        title="数据与隐私"
-        description="设置保留时间，查看记录范围或清除统计"
+        title={t("数据与隐私")}
+        description={t("设置保留时间，查看记录范围或清除统计")}
       >
         <div className="divide-y divide-border/50 rounded-xl border border-border/60">
           <div className="flex items-center justify-between gap-4 px-3.5 py-2.5">
             <div className="min-w-0">
-              <p className="text-title">本机使用统计</p>
+              <p className="text-title">{t("本机使用统计")}</p>
               <p className="mt-0.5 text-label text-muted-foreground">
-                {settings.outcomeMetricsEnabled ? "已开启" : "已暂停"} ·
-                只记录次数、时间和状态，不保存卡片正文、Prompt 或密钥
+                {settings.outcomeMetricsEnabled ? t("已开启") : t("已暂停")} · {t("只记录次数、时间和状态，不保存卡片正文、Prompt 或密钥")}
               </p>
             </div>
             <Switch
-              aria-label="本机使用统计"
+              aria-label={t("本机使用统计")}
               checked={settings.outcomeMetricsEnabled}
               onCheckedChange={(checked) => patch({
                 outcomeMetricsEnabled: checked,
@@ -547,34 +553,34 @@ export function OutcomeInsightsSection({ settings, patch }: Props) {
           </div>
           <div className="flex items-center justify-between gap-4 px-3.5 py-2.5">
             <div>
-              <p className="text-title">统计保留时间</p>
-              <p className="mt-0.5 text-label text-muted-foreground">最多保留 500 条，到期后自动清理。</p>
+              <p className="text-title">{t("统计保留时间")}</p>
+              <p className="mt-0.5 text-label text-muted-foreground">{t("最多保留 500 条，到期后自动清理。")}</p>
             </div>
             <SimpleSelect
-              ariaLabel="统计保留时间"
+              ariaLabel={t("统计保留时间")}
               className="w-28"
               value={String(settings.outcomeRetentionDays)}
               options={[
-                { value: "7", label: "7 天" },
-                { value: "30", label: "30 天" },
-                { value: "90", label: "90 天" },
+                { value: "7", label: t("{n} 天", { n: 7 }) },
+                { value: "30", label: t("{n} 天", { n: 30 }) },
+                { value: "90", label: t("{n} 天", { n: 90 }) },
               ]}
               onChange={(value) => patch({ outcomeRetentionDays: Number(value) as 7 | 30 | 90 })}
             />
           </div>
           <div className="px-3.5 py-2.5">
-            <p className="text-title">会记录什么</p>
+            <p className="text-title">{t("会记录什么")}</p>
             <p className="mt-1 text-label leading-relaxed text-muted-foreground">
-              只记录时间、目标应用、发送方案、状态、数量和处理结果。不会保存正文、Prompt、API Key、目标 token 或脱敏对应关系。
+              {t("只记录时间、目标应用、发送方案、状态、数量和处理结果。不会保存正文、Prompt、API Key、目标 token 或脱敏对应关系。")}
             </p>
           </div>
           <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
             <div className="min-w-0">
-              <p className="text-title">清除使用统计</p>
-              <p className="mt-0.5 text-label text-muted-foreground">不会删除卡片、任务、附件或最近发送记录。</p>
+              <p className="text-title">{t("清除使用统计")}</p>
+              <p className="mt-0.5 text-label text-muted-foreground">{t("不会删除卡片、任务、附件或最近发送记录。")}</p>
             </div>
             <Button type="button" size="sm" variant="outline" onClick={() => void clearMetrics()}>
-              <Trash2 className="size-3.5" /> 清除统计
+              <Trash2 className="size-3.5" /> {t("清除统计")}
             </Button>
           </div>
         </div>

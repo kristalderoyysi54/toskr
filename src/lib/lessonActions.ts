@@ -15,6 +15,7 @@ import {
   startLesson,
   type LessonId,
 } from "@/lib/lessons";
+import { t, type MessageKey } from "@/lib/i18n";
 import { api } from "@/lib/tauri";
 import { tip } from "@/lib/tip";
 import { useLessonStore } from "@/store/lessonStore";
@@ -37,14 +38,14 @@ function removeLessonSampleNotes(extraIds: string[] = []) {
   const ids = store.notes
     .filter((note) => note.sourceBundle === LESSON_SAMPLE_BUNDLE || extra.has(note.id))
     .map((note) => note.id);
-  if (ids.length) store.deleteNotes(ids, "清理教程示例");
+  if (ids.length) store.deleteNotes(ids, t("清理教程示例"));
   return ids.length;
 }
 
 export function startAdvancedLesson(id: LessonId) {
   const onboarding = useNotesStore.getState().settings.onboarding;
   if (onboarding.rehearsalStatus === "active") {
-    tip("info", "请先完成或暂停基础课，再开始进阶课");
+    tip("info", t("请先完成或暂停基础课，再开始进阶课"));
     showNotesPanel();
     return;
   }
@@ -63,8 +64,8 @@ export function prepareLessonSamples() {
   const session = useLessonStore.getState().session;
   if (!session || session.progress.step !== 0) return;
   const store = useNotesStore.getState();
-  const addSample = (text: string) =>
-    store.addNote(text, { sourceApp: LESSON_SAMPLE_APP, sourceBundle: LESSON_SAMPLE_BUNDLE }).id;
+  const addSample = (text: MessageKey) =>
+    store.addNote(t(text), { sourceApp: t(LESSON_SAMPLE_APP), sourceBundle: LESSON_SAMPLE_BUNDLE }).id;
 
   if (session.progress.id === "merge") {
     const ids = MERGE_LESSON_SAMPLES.map(addSample).filter((id): id is string => Boolean(id));
@@ -74,7 +75,8 @@ export function prepareLessonSamples() {
   }
 
   const settings = store.settings;
-  let alias = settings.aliasEntities.find((item) => item.originalText === PRIVACY_LESSON_ALIAS);
+  const aliasText = t(PRIVACY_LESSON_ALIAS);
+  let alias = settings.aliasEntities.find((item) => item.originalText === aliasText);
   const created = !alias;
   const patch: Parameters<typeof store.setSettings>[0] = {
     aliasEntitiesEnabled: true,
@@ -87,7 +89,7 @@ export function prepareLessonSamples() {
     alias = {
       id: crypto.randomUUID(),
       category: code,
-      originalText: PRIVACY_LESSON_ALIAS,
+      originalText: aliasText,
       placeholder: allocated.placeholder,
       createdAtMs: now,
       updatedAtMs: now,
@@ -130,12 +132,12 @@ export function lessonAliasPlaceholder(): string | null {
 export function copyLessonReply() {
   const placeholder = lessonAliasPlaceholder();
   if (!placeholder) {
-    tip("warn", "示例化名已被删除，请重新开始这门课");
+    tip("warn", t("示例化名已被删除，请重新开始这门课"));
     return;
   }
   void api.copyText(privacyLessonReply(placeholder)).then(
-    () => tip("ok", "模拟回复已复制：粘贴到文档后选中，再双击快捷键收进来"),
-    (error) => tip("warn", `复制失败：${error}`)
+    () => tip("ok", t("模拟回复已复制：粘贴到文档后选中，再双击快捷键收进来")),
+    (error) => tip("warn", t("复制失败：{error}", { error: String(error) }))
   );
 }
 
@@ -148,7 +150,7 @@ export function finishAdvancedLesson(keepAlias = true) {
   );
   if (!keepAlias) restoreAliasSettings(session);
   useLessonStore.getState().setSession(null);
-  if (removed) tip("info", `已清理 ${removed} 张教程示例卡片`);
+  if (removed) tip("info", t("已清理 {n} 张教程示例卡片", { n: removed }));
 }
 
 /** 中途退出：清理示例并还原课程改动过的设置。notify=false 用于重开前的静默清理。 */
@@ -159,7 +161,7 @@ export function abandonAdvancedLesson(notify = true) {
   );
   if (session) restoreAliasSettings(session);
   useLessonStore.getState().setSession(null);
-  if (notify) tip("info", removed ? "已退出课程，示例卡片已清理" : "已退出课程");
+  if (notify) tip("info", removed ? t("已退出课程，示例卡片已清理") : t("已退出课程"));
 }
 
 function restoreAliasSettings(session: NonNullable<ReturnType<typeof useLessonStore.getState>["session"]>) {

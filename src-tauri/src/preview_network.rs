@@ -1,12 +1,13 @@
 //! 自动预览只访问公网；手动授权仅覆盖本次原始 origin。每跳重新解析并固定连接地址。
+use crate::i18n::pick;
 use std::{net::{IpAddr, SocketAddr}, time::Duration};
 use url::Url;
 
 pub(crate) fn parse_url(input: &str) -> Result<Url, String> {
-    let mut url = Url::parse(input).map_err(|_| "预览地址无效")?;
+    let mut url = Url::parse(input).map_err(|_| pick("预览地址无效", "Invalid preview URL"))?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none()
         || !url.username().is_empty() || url.password().is_some() {
-        return Err("预览仅支持无凭据的 HTTP(S) 地址".into());
+        return Err(pick("预览仅支持无凭据的 HTTP(S) 地址", "Previews only support HTTP(S) URLs without credentials").into());
     }
     url.set_fragment(None);
     Ok(url)
@@ -33,10 +34,10 @@ fn public_ip(ip: IpAddr) -> bool {
 }
 
 fn check_addresses(url: &Url, addresses: &[SocketAddr], private_origin: Option<&str>) -> Result<(), String> {
-    if addresses.is_empty() { return Err("预览域名未解析到地址".into()); }
+    if addresses.is_empty() { return Err(pick("预览域名未解析到地址", "Preview domain didn't resolve to an address").into()); }
     if private_origin != Some(url.origin().ascii_serialization().as_str())
         && addresses.iter().any(|address| !public_ip(address.ip())) {
-        return Err("自动预览已跳过内网或特殊地址；可手动确认获取此链接预览".into());
+        return Err(pick("自动预览已跳过内网或特殊地址；可手动确认获取此链接预览", "Automatic preview skipped a local-network or special address; you can fetch this link preview manually").into());
     }
     Ok(())
 }
@@ -46,38 +47,38 @@ pub(crate) async fn fetch(input: &str, max_bytes: usize, private_origin: Option<
     tokio::time::timeout(Duration::from_secs(8), async {
         let mut url = parse_url(input)?;
         for hop in 0..=4 {
-            let host = url.host_str().ok_or("预览地址缺少主机")?.trim_matches(['[', ']']);
-            let port = url.port_or_known_default().ok_or("预览端口无效")?;
+            let host = url.host_str().ok_or(pick("预览地址缺少主机", "Preview URL has no host"))?.trim_matches(['[', ']']);
+            let port = url.port_or_known_default().ok_or(pick("预览端口无效", "Invalid preview port"))?;
             let addresses: Vec<_> = tokio::net::lookup_host((host, port)).await
-                .map_err(|_| "预览域名解析失败")?.collect();
+                .map_err(|_| pick("预览域名解析失败", "Failed to resolve preview domain"))?.collect();
             check_addresses(&url, &addresses, private_origin)?;
             let client = reqwest::Client::builder().no_proxy()
                 .redirect(reqwest::redirect::Policy::none())
                 .resolve_to_addrs(host, &addresses)
                 .timeout(Duration::from_secs(6)).user_agent(crate::linkmeta::UA)
-                .build().map_err(|_| "预览连接初始化失败")?;
-            let mut response = client.get(url.clone()).send().await.map_err(|_| "预览请求失败")?;
+                .build().map_err(|_| pick("预览连接初始化失败", "Failed to initialize preview connection"))?;
+            let mut response = client.get(url.clone()).send().await.map_err(|_| pick("预览请求失败", "Preview request failed"))?;
             if response.status().is_redirection() {
-                if hop == 4 { return Err("预览重定向次数超限".into()); }
+                if hop == 4 { return Err(pick("预览重定向次数超限", "Too many preview redirects").into()); }
                 let location = response.headers().get(reqwest::header::LOCATION)
-                    .and_then(|v| v.to_str().ok()).ok_or("预览重定向无效")?;
-                let next = url.join(location).map_err(|_| "预览重定向地址无效")?;
+                    .and_then(|v| v.to_str().ok()).ok_or(pick("预览重定向无效", "Invalid preview redirect"))?;
+                let next = url.join(location).map_err(|_| pick("预览重定向地址无效", "Invalid preview redirect URL"))?;
                 url = parse_url(next.as_str())?;
                 continue;
             }
-            if !response.status().is_success() { return Err("预览服务器返回失败状态".into()); }
+            if !response.status().is_success() { return Err(pick("预览服务器返回失败状态", "Preview server returned an error status").into()); }
             if response.content_length().is_some_and(|n| n > max_bytes as u64) {
-                return Err("预览响应过大".into());
+                return Err(pick("预览响应过大", "Preview response is too large").into());
             }
             let mut body = Vec::new();
-            while let Some(chunk) = response.chunk().await.map_err(|_| "预览响应读取失败")? {
-                if chunk.len() > max_bytes.saturating_sub(body.len()) { return Err("预览响应过大".into()); }
+            while let Some(chunk) = response.chunk().await.map_err(|_| pick("预览响应读取失败", "Failed to read preview response"))? {
+                if chunk.len() > max_bytes.saturating_sub(body.len()) { return Err(pick("预览响应过大", "Preview response is too large").into()); }
                 body.extend_from_slice(&chunk);
             }
             return Ok((body, url));
         }
-        Err("预览重定向次数超限".into())
-    }).await.map_err(|_| "预览请求超时".to_string())?
+        Err(pick("预览重定向次数超限", "Too many preview redirects").into())
+    }).await.map_err(|_| pick("预览请求超时", "Preview request timed out").to_string())?
 }
 
 #[cfg(test)]

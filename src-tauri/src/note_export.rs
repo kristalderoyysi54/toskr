@@ -3,6 +3,7 @@
 //! 这里只接收活动媒体目录中的安全文件名，不接受任意来源路径。归档先写入目标
 //! 同目录的 0600 临时文件，完整落盘后再以 no-replace 语义发布。
 
+use crate::i18n::pick;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -141,14 +142,14 @@ fn validate_destination(destination: &Path) -> Result<PathBuf, NoteExportFailure
     {
         return Err(failure(
             NoteExportFailureCode::InvalidDestination,
-            "笔记导出目标必须是绝对 .zip 文件路径",
+            pick("笔记导出目标必须是绝对 .zip 文件路径", "Note export target must be an absolute .zip file path"),
         ));
     }
     match fs::symlink_metadata(destination) {
         Ok(_) => {
             return Err(failure(
                 NoteExportFailureCode::DestinationExists,
-                "目标导出文件已存在；未覆盖原文件",
+                pick("目标导出文件已存在；未覆盖原文件", "Export file already exists; it was not overwritten"),
             ));
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -157,14 +158,14 @@ fn validate_destination(destination: &Path) -> Result<PathBuf, NoteExportFailure
     let parent = destination.parent().ok_or_else(|| {
         failure(
             NoteExportFailureCode::InvalidDestination,
-            "笔记导出目标没有父目录",
+            pick("笔记导出目标没有父目录", "Note export target has no parent folder"),
         )
     })?;
     let metadata = fs::metadata(parent).map_err(io_failure)?;
     if !metadata.is_dir() {
         return Err(failure(
             NoteExportFailureCode::InvalidDestination,
-            "笔记导出目标的父路径不是目录",
+            pick("笔记导出目标的父路径不是目录", "Note export target's parent isn't a folder"),
         ));
     }
     Ok(parent.to_path_buf())
@@ -174,7 +175,7 @@ fn validate_markdown_size(size: usize) -> Result<(), NoteExportFailure> {
     if size as u64 > MAX_MARKDOWN_BYTES {
         return Err(failure(
             NoteExportFailureCode::FileTooLarge,
-            "notes.md 超过 64 MiB 上限",
+            pick("notes.md 超过 64 MiB 上限", "notes.md exceeds the 64 MiB limit"),
         ));
     }
     Ok(())
@@ -188,7 +189,7 @@ fn validate_entry_count(media_count: usize) -> Result<(), NoteExportFailure> {
     {
         return Err(failure(
             NoteExportFailureCode::TooManyEntries,
-            "笔记导出条目数超过 100000",
+            pick("笔记导出条目数超过 100000", "Note export has more than 100000 entries"),
         ));
     }
     Ok(())
@@ -204,7 +205,7 @@ fn prepare_media(
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
             return Err(failure(
                 NoteExportFailureCode::SymlinkRejected,
-                "活动媒体目录不是普通目录",
+                pick("活动媒体目录不是普通目录", "Active media folder isn't a regular folder"),
             ));
         }
     }
@@ -222,19 +223,19 @@ fn prepare_media(
         if metadata.len() > MAX_MEDIA_BYTES {
             return Err(failure(
                 NoteExportFailureCode::FileTooLarge,
-                format!("媒体文件超过 256 MiB：{name}"),
+                crate::tr_fmt!("媒体文件超过 256 MiB：{name}", "Media file exceeds 256 MiB: {name}"),
             ));
         }
         metadata_total = metadata_total.checked_add(metadata.len()).ok_or_else(|| {
             failure(
                 NoteExportFailureCode::FileTooLarge,
-                "笔记导出内容总大小溢出",
+                pick("笔记导出内容总大小溢出", "Note export total size overflow"),
             )
         })?;
         if metadata_total > MAX_TOTAL_BYTES {
             return Err(failure(
                 NoteExportFailureCode::FileTooLarge,
-                "笔记导出内容总大小超过 1 GiB",
+                pick("笔记导出内容总大小超过 1 GiB", "Note export content exceeds 1 GiB"),
             ));
         }
         candidates.push(MediaCandidate {
@@ -253,13 +254,13 @@ fn prepare_media(
         actual_total = actual_total.checked_add(expected_size).ok_or_else(|| {
             failure(
                 NoteExportFailureCode::FileTooLarge,
-                "笔记导出内容总大小溢出",
+                pick("笔记导出内容总大小溢出", "Note export total size overflow"),
             )
         })?;
         if actual_total > MAX_TOTAL_BYTES {
             return Err(failure(
                 NoteExportFailureCode::FileTooLarge,
-                "笔记导出内容总大小超过 1 GiB",
+                pick("笔记导出内容总大小超过 1 GiB", "Note export content exceeds 1 GiB"),
             ));
         }
         prepared.push(PreparedMedia {
@@ -286,7 +287,7 @@ fn validate_media_name(name: &str) -> Result<(), NoteExportFailure> {
     {
         return Err(failure(
             NoteExportFailureCode::InvalidMediaName,
-            format!("媒体文件名不安全：{name}"),
+            crate::tr_fmt!("媒体文件名不安全：{name}", "Unsafe media file name: {name}"),
         ));
     }
     Ok(())
@@ -297,7 +298,7 @@ fn media_metadata(path: &Path, name: &str) -> Result<fs::Metadata, NoteExportFai
         if error.kind() == std::io::ErrorKind::NotFound {
             failure(
                 NoteExportFailureCode::MissingMedia,
-                format!("找不到媒体文件：{name}"),
+                crate::tr_fmt!("找不到媒体文件：{name}", "Media file not found: {name}"),
             )
         } else {
             io_failure(error)
@@ -306,7 +307,7 @@ fn media_metadata(path: &Path, name: &str) -> Result<fs::Metadata, NoteExportFai
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(failure(
             NoteExportFailureCode::SymlinkRejected,
-            format!("媒体来源不是普通文件：{name}"),
+            crate::tr_fmt!("媒体来源不是普通文件：{name}", "Media source isn't a regular file: {name}"),
         ));
     }
     Ok(metadata)
@@ -317,7 +318,7 @@ fn open_media_source(path: &Path, name: &str) -> Result<File, NoteExportFailure>
     if metadata.len() > MAX_MEDIA_BYTES {
         return Err(failure(
             NoteExportFailureCode::FileTooLarge,
-            format!("媒体文件超过 256 MiB：{name}"),
+            crate::tr_fmt!("媒体文件超过 256 MiB：{name}", "Media file exceeds 256 MiB: {name}"),
         ));
     }
     let mut options = OpenOptions::new();
@@ -329,7 +330,7 @@ fn open_media_source(path: &Path, name: &str) -> Result<File, NoteExportFailure>
         if error.raw_os_error() == Some(libc::ELOOP) {
             return failure(
                 NoteExportFailureCode::SymlinkRejected,
-                format!("媒体来源不能是符号链接：{name}"),
+                crate::tr_fmt!("媒体来源不能是符号链接：{name}", "Media source can't be a symbolic link: {name}"),
             );
         }
         io_failure(error)
@@ -338,13 +339,13 @@ fn open_media_source(path: &Path, name: &str) -> Result<File, NoteExportFailure>
     if !opened.is_file() {
         return Err(failure(
             NoteExportFailureCode::SymlinkRejected,
-            format!("媒体来源不是普通文件：{name}"),
+            crate::tr_fmt!("媒体来源不是普通文件：{name}", "Media source isn't a regular file: {name}"),
         ));
     }
     if opened.len() > MAX_MEDIA_BYTES {
         return Err(failure(
             NoteExportFailureCode::FileTooLarge,
-            format!("媒体文件超过 256 MiB：{name}"),
+            crate::tr_fmt!("媒体文件超过 256 MiB：{name}", "Media file exceeds 256 MiB: {name}"),
         ));
     }
     Ok(file)
@@ -362,13 +363,13 @@ fn fingerprint_media(source: &mut File, name: &str) -> Result<(u64, [u8; 32]), N
         size = size.checked_add(count as u64).ok_or_else(|| {
             failure(
                 NoteExportFailureCode::FileTooLarge,
-                format!("媒体文件大小溢出：{name}"),
+                crate::tr_fmt!("媒体文件大小溢出：{name}", "Media file size overflow: {name}"),
             )
         })?;
         if size > MAX_MEDIA_BYTES {
             return Err(failure(
                 NoteExportFailureCode::FileTooLarge,
-                format!("媒体文件超过 256 MiB：{name}"),
+                crate::tr_fmt!("媒体文件超过 256 MiB：{name}", "Media file exceeds 256 MiB: {name}"),
             ));
         }
         sha256.update(&buffer[..count]);
@@ -416,7 +417,7 @@ fn copy_media(
         copied = copied.checked_add(count as u64).ok_or_else(|| {
             failure(
                 NoteExportFailureCode::FileTooLarge,
-                format!("媒体文件大小溢出：{}", item.name),
+                crate::tr_fmt!("媒体文件大小溢出：{}", "Media file size overflow: {}", item.name),
             )
         })?;
         if copied > item.expected_size {
@@ -425,13 +426,13 @@ fn copy_media(
         *total_bytes = total_bytes.checked_add(count as u64).ok_or_else(|| {
             failure(
                 NoteExportFailureCode::FileTooLarge,
-                "笔记导出内容总大小溢出",
+                pick("笔记导出内容总大小溢出", "Note export total size overflow"),
             )
         })?;
         if *total_bytes > MAX_TOTAL_BYTES {
             return Err(failure(
                 NoteExportFailureCode::FileTooLarge,
-                "笔记导出内容总大小超过 1 GiB",
+                pick("笔记导出内容总大小超过 1 GiB", "Note export content exceeds 1 GiB"),
             ));
         }
         sha256.update(&buffer[..count]);
@@ -466,7 +467,7 @@ fn create_temporary_file(parent: &Path) -> Result<(PathBuf, File), NoteExportFai
     }
     Err(failure(
         NoteExportFailureCode::IoFailed,
-        "无法创建唯一的笔记导出临时文件",
+        pick("无法创建唯一的笔记导出临时文件", "Can't create a unique temporary file for note export"),
     ))
 }
 
@@ -478,7 +479,7 @@ fn publish_without_overwrite(
         if error.kind() == std::io::ErrorKind::AlreadyExists {
             failure(
                 NoteExportFailureCode::DestinationExists,
-                "目标导出文件已存在；未覆盖原文件",
+                pick("目标导出文件已存在；未覆盖原文件", "Export file already exists; it was not overwritten"),
             )
         } else {
             io_failure(error)
@@ -496,21 +497,21 @@ fn failure(code: NoteExportFailureCode, message: impl Into<String>) -> NoteExpor
 fn source_changed(name: &str) -> NoteExportFailure {
     failure(
         NoteExportFailureCode::SourceChanged,
-        format!("媒体在导出预检后发生变化：{name}"),
+        crate::tr_fmt!("媒体在导出预检后发生变化：{name}", "Media changed after the export check: {name}"),
     )
 }
 
 fn io_failure(error: std::io::Error) -> NoteExportFailure {
     failure(
         NoteExportFailureCode::IoFailed,
-        format!("文件操作失败：{error}"),
+        crate::tr_fmt!("文件操作失败：{error}", "File operation failed: {error}"),
     )
 }
 
 fn archive_failure(error: zip::result::ZipError) -> NoteExportFailure {
     failure(
         NoteExportFailureCode::ArchiveFailed,
-        format!("生成笔记归档失败：{error}"),
+        crate::tr_fmt!("生成笔记归档失败：{error}", "Failed to create note archive: {error}"),
     )
 }
 

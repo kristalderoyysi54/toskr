@@ -6,6 +6,7 @@ import { AppIcon } from "@/components/settings/AppIdentity";
 import { Button } from "@/components/ui/button";
 import { floatingSurface } from "@/components/ui/floating-surface";
 import { IconButton } from "@/components/ui/icon-button";
+import { useT } from "@/lib/i18n";
 import {
   DELIVERY_FORMAT_OPTIONS,
   PROFILE_PRESETS,
@@ -20,6 +21,7 @@ import {
   type TargetProfile,
 } from "@/lib/targetProfiles";
 import { cn } from "@/lib/utils";
+import { profileName } from "@/lib/i18n/builtinNames";
 
 export function ProfileCreateSheet({
   open,
@@ -38,13 +40,15 @@ export function ProfileCreateSheet({
   onOpenChange: (open: boolean) => void;
   onCreate: (profile: TargetProfile, moveCurrentBundle: boolean) => void;
 }) {
+  const t = useT();
   const [presetId, setPresetId] = useState<ProfilePresetId>("safe");
+  // 预填的方案名会直接存为用户数据，与其他内置默认值一样保持中文
   const [name, setName] = useState("稳妥发送");
   const [includeCurrent, setIncludeCurrent] = useState(false);
   const [presetTouched, setPresetTouched] = useState(false);
   const [confirmedMoveBundleId, setConfirmedMoveBundleId] = useState<string | null>(null);
   const currentBundleId = currentTarget?.ready ? currentTarget.bundleId : null;
-  const currentAppName = currentTarget?.appName || currentBundleId || "当前目标";
+  const currentAppName = currentTarget?.appName || currentBundleId || t("当前目标");
   const owners = useMemo(
     () =>
       currentBundleId
@@ -52,7 +56,7 @@ export function ProfileCreateSheet({
         : [],
     [currentBundleId, profiles]
   );
-  const sourceNames = owners.map((profile) => profile.name).join("、");
+  const sourceNames = owners.map((profile) => profileName(profile)).join(t("、"));
   const needsMoveConfirmation = includeCurrent && owners.length > 0;
   const moveConfirmed = Boolean(
     currentBundleId && confirmedMoveBundleId === currentBundleId
@@ -68,14 +72,16 @@ export function ProfileCreateSheet({
   );
   const selectedPreset =
     PROFILE_PRESETS.find((item) => item.id === presetId) ?? PROFILE_PRESETS[3];
-  const selectedOutputLabel =
+  const selectedOutputLabel = t(
     DELIVERY_FORMAT_OPTIONS.find(
       (option) => option.value === targetProfileOutputMode(selectedPreset)
-    )?.label ?? "原文";
-  const recommendedOutputLabel =
+    )?.label ?? "原文"
+  );
+  const recommendedOutputLabel = t(
     DELIVERY_FORMAT_OPTIONS.find(
       (option) => option.value === outputRecommendation?.outputMode
-    )?.label ?? "原文";
+    )?.label ?? "原文"
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -138,20 +144,20 @@ export function ProfileCreateSheet({
           <div className="flex items-start gap-2">
             <div className="min-w-0 flex-1">
               <DialogPrimitive.Title className="text-heading font-semibold">
-                新建发送方案
+                {t("新建发送方案")}
               </DialogPrimitive.Title>
               <DialogPrimitive.Description className="mt-1 text-body text-muted-foreground">
-                推荐方案只填入初始值，创建后可在完整编辑器中继续调整。
+                {t("推荐方案只填入初始值，创建后可在完整编辑器中继续调整。")}
               </DialogPrimitive.Description>
             </div>
             <DialogPrimitive.Close asChild>
-              <IconButton label="关闭新建发送方案" size="sm"><X /></IconButton>
+              <IconButton label={t("关闭新建发送方案")} size="sm"><X /></IconButton>
             </DialogPrimitive.Close>
           </div>
 
           <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
             <fieldset>
-              <legend className="mb-1.5 text-label font-semibold text-muted-foreground">推荐初始方案</legend>
+              <legend className="mb-1.5 text-label font-semibold text-muted-foreground">{t("推荐初始方案")}</legend>
               <div className="grid grid-cols-2 gap-2">
                 {PROFILE_PRESETS.map((preset) => {
                   const selected = preset.id === presetId;
@@ -173,10 +179,10 @@ export function ProfileCreateSheet({
                       )}>
                         <span className="flex items-center gap-1 text-body font-semibold">
                           <Check aria-hidden className={cn("size-3 text-primary", !selected && "invisible")} />
-                          {preset.name}
+                          {t(preset.name)}
                         </span>
                         <span className="mt-0.5 block text-micro leading-tight text-muted-foreground">
-                          {preset.description}
+                          {t(preset.description)}
                         </span>
                       </span>
                     </label>
@@ -191,19 +197,19 @@ export function ProfileCreateSheet({
                 className="mt-2 rounded-lg border border-primary/20 bg-primary/5 p-2 text-label text-muted-foreground"
               >
                 {presetTouched
-                  ? `已手动选择“${selectedPreset.name}”，将采用其“${selectedOutputLabel}”输出；应用类型推荐不再覆盖。`
+                  ? t("已手动选择“{preset}”，将采用其“{output}”输出；应用类型推荐不再覆盖。", { preset: t(selectedPreset.name), output: selectedOutputLabel })
                   : outputRecommendation.appKind === "unknown"
                     ? includeCurrent
-                      ? "未识别应用类型，新方案安全回退为“原文”；不会修改已有方案。"
-                      : "未识别应用类型；勾选“添加当前目标应用”后，新方案将安全回退为“原文”。"
+                      ? t("未识别应用类型，新方案安全回退为“原文”；不会修改已有方案。")
+                      : t("未识别应用类型；勾选“添加当前目标应用”后，新方案将安全回退为“原文”。")
                     : includeCurrent
-                      ? `已识别为${outputRecommendation.appKindLabel}：新方案推荐“${recommendedOutputLabel}”。仅改变输出初始值，回车与隐私策略仍按“${selectedPreset.name}”。`
-                      : `识别为${outputRecommendation.appKindLabel}；勾选“添加当前目标应用”后，新方案输出将推荐为“${recommendedOutputLabel}”。`}
+                      ? t("已识别为{kind}：新方案推荐“{output}”。仅改变输出初始值，回车与隐私策略仍按“{preset}”。", { kind: t(outputRecommendation.appKindLabel), output: recommendedOutputLabel, preset: t(selectedPreset.name) })
+                      : t("识别为{kind}；勾选“添加当前目标应用”后，新方案输出将推荐为“{output}”。", { kind: t(outputRecommendation.appKindLabel), output: recommendedOutputLabel })}
               </p>
             )}
 
             <label className="mt-4 block text-label font-medium text-muted-foreground">
-              方案名称
+              {t("方案名称")}
               <input
                 value={name}
                 onChange={(event) => setName(event.target.value)}
@@ -228,9 +234,9 @@ export function ProfileCreateSheet({
               />
               <AppIcon bundleId={currentBundleId} appName={currentAppName} size="sm" />
               <span className="min-w-0">
-                <span className="block text-body font-medium">添加当前目标应用</span>
+                <span className="block text-body font-medium">{t("添加当前目标应用")}</span>
                 <span className="block truncate text-label text-muted-foreground" title={currentAppName}>
-                  {currentBundleId ? currentAppName : "尚未识别目标"}
+                  {currentBundleId ? currentAppName : t("尚未识别目标")}
                 </span>
               </span>
             </label>
@@ -238,7 +244,7 @@ export function ProfileCreateSheet({
             {needsMoveConfirmation && (
               <div role="alert" className="mt-2 rounded-lg border border-warning/40 bg-warning/10 p-2">
                 <p className="text-body">
-                  {buildAppMoveQuestion(currentAppName, sourceNames, name.trim() || "新方案")}
+                  {buildAppMoveQuestion(currentAppName, sourceNames, name.trim() || t("新方案"))}
                 </p>
                 <button
                   type="button"
@@ -251,7 +257,7 @@ export function ProfileCreateSheet({
                       : "border-warning/40 text-warning"
                   )}
                 >
-                  {moveConfirmed ? "已确认移动" : "确认移动应用"}
+                  {moveConfirmed ? t("已确认移动") : t("确认移动应用")}
                 </button>
               </div>
             )}
@@ -260,7 +266,7 @@ export function ProfileCreateSheet({
           <div className="mt-3 flex justify-end gap-2 border-t border-border pt-3">
             <DialogPrimitive.Close asChild>
               <button type="button" className="h-8 rounded-lg border border-border px-3 text-body outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background">
-                取消
+                {t("取消")}
               </button>
             </DialogPrimitive.Close>
             <Button
@@ -268,7 +274,7 @@ export function ProfileCreateSheet({
               disabled={!name.trim() || (needsMoveConfirmation && !moveConfirmed)}
               onClick={create}
             >
-              创建
+              {t("创建")}
             </Button>
           </div>
         </DialogPrimitive.Content>

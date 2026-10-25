@@ -25,6 +25,7 @@ import {
 import { currentDataGeneration } from "@/lib/dataGeneration";
 import { buildDeliveryDraft } from "@/lib/delivery/buildDraft";
 import { ENTER_POLICY_STATUS_LABEL } from "@/lib/targetLens";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
   promptSnippetsForGroup,
@@ -45,6 +46,7 @@ import {
   targetProfileIdentity,
   useTargetStore,
 } from "@/store/targetStore";
+import { profileName } from "@/lib/i18n/builtinNames";
 
 /** 勾选 ≥1 条时出现的批量操作条。 */
 export function SelectionBar({
@@ -54,6 +56,7 @@ export function SelectionBar({
   compact?: boolean;
   reserveSpace?: boolean;
 }) {
+  const t = useT();
   const [otherTemplatesOpen, setOtherTemplatesOpen] = useState(false);
   const otherTemplatesId = useId();
   const checkedIds = useNotesStore((s) => s.checkedIds);
@@ -142,8 +145,8 @@ export function SelectionBar({
   const outputModeMarker = resolution.ruleOverriddenKeys.includes(
     "defaultOutputMode"
   )
-    ? "（本次）"
-    : "（方案默认）";
+    ? t("（本次）")
+    : t("（方案默认）");
   const nativeTargetReady = resolution.isTargetReady;
   const internalSendAvailable = page === "clipboard";
   // 主按钮标签跟发送漏斗同口径：预检 always 模式会跳过编辑器插入直接外发，
@@ -243,7 +246,7 @@ export function SelectionBar({
   return (
     <div
       role="toolbar"
-      aria-label="批量操作"
+      aria-label={t("批量操作")}
       data-selection-bar={compact ? "compact" : "docked"}
       className={cn(
         // flex-wrap：按钮均为 shrink-0，面板拖到最窄（320px）放不下时
@@ -259,7 +262,7 @@ export function SelectionBar({
       )}
     >
       <span className="shrink-0 whitespace-nowrap px-1 text-label tabular-nums text-muted-foreground">
-        已选 {count}
+        {t("已选 {n}", { n: count })}
       </span>
 
       <div className="ml-auto flex flex-wrap items-center justify-end gap-0.5">
@@ -268,10 +271,10 @@ export function SelectionBar({
             <IconAction
               label={
                 mixedDomains
-                  ? "剪贴卡与笔记不能混合合并"
+                  ? t("剪贴卡与笔记不能混合合并")
                   : allClips
-                    ? "合并为新卡（原剪贴卡保留）"
-                    : "合并笔记"
+                    ? t("合并为新卡（原剪贴卡保留）")
+                    : t("合并笔记")
               }
               disabled={count < 2 || mixedDomains}
               onClick={mergeCheckedWithUndo}
@@ -281,7 +284,7 @@ export function SelectionBar({
             {/* 「标记完成」不进批量条（2026-08-18 用户指定精简）：
                 单卡右键菜单与快捷键 D 仍可标完成 */}
             <IconAction
-              label="删除"
+              label={t("删除")}
               onClick={() => deleteNotesWithUndo(orderedIds())}
             >
               <Trash2 className="size-3.5" />
@@ -290,13 +293,13 @@ export function SelectionBar({
         )}
         {page === "notes" && !allClips && !mixedDomains && (
           <IconAction
-            label="导出笔记包"
+            label={t("导出笔记包")}
             onClick={() => void exportNotesBundle(orderedIds())}
           >
             <FileDown className="size-3.5" />
           </IconAction>
         )}
-        <IconAction label="清除选择" onClick={() => state.clearChecked()}>
+        <IconAction label={t("清除选择")} onClick={() => state.clearChecked()}>
           <X className="size-3.5" />
         </IconAction>
 
@@ -308,14 +311,17 @@ export function SelectionBar({
                 disabled={!targetReady}
                 aria-label={
                   editorInsertLikely
-                    ? "添加到打开的卡片编辑器"
+                    ? t("添加到打开的卡片编辑器")
                     : internalSendAvailable
-                    ? "发送到当前目标；打开卡片编辑器时将改为添加进该卡"
+                    ? t("发送到当前目标；打开卡片编辑器时将改为添加进该卡")
                     : targetReady
-                    ? `发送到当前目标，发送方案 ${resolution.profile.name}，粘贴后动作 ${ENTER_POLICY_STATUS_LABEL[resolution.profile.enterPolicy]}`
+                    ? t("发送到当前目标，发送方案 {profile}，粘贴后动作 {policy}", {
+                        profile: profileName(resolution.profile),
+                        policy: t(ENTER_POLICY_STATUS_LABEL[resolution.profile.enterPolicy]),
+                      })
                     : profileOverrideNeedsConfirmation
-                      ? "发送不可用：原临时发送方案已暂停"
-                      : "发送不可用：发送目标未就绪"
+                      ? t("发送不可用：原临时发送方案已暂停")
+                      : t("发送不可用：发送目标未就绪")
                 }
                 data-default-action
                 className="rounded-l-lg rounded-r-none"
@@ -324,7 +330,7 @@ export function SelectionBar({
                 <Send className="size-3" />
                 {/* 短文案保单行（2026-08-18 用户指定）；目的地必须如实：
                     编辑器开着时内容进卡片而非外发（2026-08-20 收口） */}
-                {editorInsertLikely ? "添加到卡片" : "发送"}
+                {editorInsertLikely ? t("添加到卡片") : t("发送")}
                 {/* token-exception: 9px 为重塑前原始尺寸，用户指定还原 */}
                 <Kbd inline className="ml-0.5 text-[9px]">⌘⏎</Kbd>
               </Button>
@@ -332,8 +338,8 @@ export function SelectionBar({
             <TooltipContent side="top" className="max-w-72">
               <p className="mb-1 text-micro font-medium opacity-70">
                 {editorInsertLikely
-                  ? "将添加以下内容到打开的卡片："
-                  : "将粘贴以下内容："}
+                  ? t("将添加以下内容到打开的卡片：")
+                  : t("将粘贴以下内容：")}
               </p>
               <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words font-mono text-micro leading-relaxed">
                 {previewDraft.finalText}
@@ -350,7 +356,7 @@ export function SelectionBar({
             trigger={({ open, toggle, controls }) => (
               <Button
                 size="xs"
-                aria-label="选择本次发送方案、输出格式或提示词模板"
+                aria-label={t("选择本次发送方案、输出格式或提示词模板")}
                 aria-haspopup="menu"
                 aria-expanded={open}
                 aria-controls={controls}
@@ -365,7 +371,7 @@ export function SelectionBar({
           >
             {(close) => (
               <>
-                <SimpleMenuLabel>发送前</SimpleMenuLabel>
+                <SimpleMenuLabel>{t("发送前")}</SimpleMenuLabel>
                 <SimpleMenuItem
                   disabled={!nativeTargetReady || profileOverrideNeedsConfirmation}
                   onClick={() => {
@@ -373,9 +379,9 @@ export function SelectionBar({
                     void sendCheckedToChat(undefined, { forcePreflight: true });
                   }}
                 >
-                  预检并发送
+                  {t("预检并发送")}
                 </SimpleMenuItem>
-                <SimpleMenuLabel>预检方式</SimpleMenuLabel>
+                <SimpleMenuLabel>{t("预检方式")}</SimpleMenuLabel>
                 {(
                   [
                     ["smart", "智能（复杂内容时打开）"],
@@ -391,11 +397,11 @@ export function SelectionBar({
                       close();
                     }}
                   >
-                    {preflightMode === mode ? "✓ " : ""}{label}
+                    {preflightMode === mode ? "✓ " : ""}{t(label)}
                   </SimpleMenuItem>
                 ))}
                 <SimpleMenuSeparator />
-                <SimpleMenuLabel>输出格式</SimpleMenuLabel>
+                <SimpleMenuLabel>{t("输出格式")}</SimpleMenuLabel>
                 <SimpleMenuItem
                   disabled={!targetReady}
                   onClick={() => {
@@ -406,12 +412,12 @@ export function SelectionBar({
                     });
                   }}
                 >
-                  原文（保留 Markdown）
+                  {t("原文（保留 Markdown）")}
                   {activeOutputMode === "plain" ? outputModeMarker : ""}
                 </SimpleMenuItem>
                 <SimpleMenuItem
                   disabled={!targetReady}
-                  title="去除标题、粗体、链接括号等；仅影响本次发送，不修改卡片"
+                  title={t("去除标题、粗体、链接括号等；仅影响本次发送，不修改卡片")}
                   onClick={() => {
                     close();
                     void sendCheckedToChat(undefined, {
@@ -420,12 +426,12 @@ export function SelectionBar({
                     });
                   }}
                 >
-                  去 Markdown 后发送
+                  {t("去 Markdown 后发送")}
                   {activeOutputMode === "strip-markdown" ? outputModeMarker : ""}
                 </SimpleMenuItem>
                 <SimpleMenuItem
                   disabled={!targetReady}
-                  title="包裹为 Markdown 代码块，单条会带上检测到的语言"
+                  title={t("包裹为 Markdown 代码块，单条会带上检测到的语言")}
                   onClick={() => {
                     close();
                     void sendCheckedToChat(undefined, {
@@ -434,10 +440,10 @@ export function SelectionBar({
                     });
                   }}
                 >
-                  代码块 ```{activeOutputMode === "code" ? outputModeMarker : ""}
+                  {t("代码块 ```")}{activeOutputMode === "code" ? outputModeMarker : ""}
                 </SimpleMenuItem>
                 <SimpleMenuSeparator />
-                <SimpleMenuLabel>本次发送方案</SimpleMenuLabel>
+                <SimpleMenuLabel>{t("本次发送方案")}</SimpleMenuLabel>
                 {profileOverrideNeedsConfirmation && (
                   <SimpleMenuItem
                     onClick={() => {
@@ -445,7 +451,7 @@ export function SelectionBar({
                       close();
                     }}
                   >
-                    将 {profileOverrideName ?? "原方案"} 用于当前目标
+                    {t("将 {name} 用于当前目标", { name: profileOverrideName ?? t("原方案") })}
                   </SimpleMenuItem>
                 )}
                 <SimpleMenuItem
@@ -454,7 +460,7 @@ export function SelectionBar({
                     close();
                   }}
                 >
-                  {profileOverrideId ? "" : "✓ "}自动匹配：{automaticResolution.profile.name}
+                  {profileOverrideId ? "" : "✓ "}{t("自动匹配：{name}", { name: automaticResolution.profile.name })}
                 </SimpleMenuItem>
                 {settings.targetProfiles.map((profile) => (
                   <SimpleMenuItem
@@ -464,12 +470,12 @@ export function SelectionBar({
                       close();
                     }}
                   >
-                    {profileOverrideId === profile.id ? "✓ " : ""}{profile.name}
+                    {profileOverrideId === profile.id ? "✓ " : ""}{profileName(profile)}
                   </SimpleMenuItem>
                 ))}
                 <SimpleMenuSeparator />
                 <SimpleMenuLabel>
-                  用模板发送 · 常用
+                  {t("用模板发送 · 常用")}
                 </SimpleMenuLabel>
                 {snippetMenu.prioritized.map((sn) => (
                   <SimpleMenuItem
@@ -487,8 +493,8 @@ export function SelectionBar({
                 {snippetMenu.prioritized.length === 0 && (
                   <SimpleMenuItem disabled onClick={() => {}}>
                     {snippetMenu.remaining.length > 0
-                      ? "暂无常用模板"
-                      : "去设置里添加模板"}
+                      ? t("暂无常用模板")
+                      : t("去设置里添加模板")}
                   </SimpleMenuItem>
                 )}
                 {snippetMenu.remaining.length > 0 && (
@@ -498,12 +504,12 @@ export function SelectionBar({
                       controls={otherTemplatesId}
                       onClick={() => setOtherTemplatesOpen((open) => !open)}
                     >
-                      其他模板（{snippetMenu.remaining.length}）
+                      {t("其他模板（{n}）", { n: snippetMenu.remaining.length })}
                       <ChevronDown aria-hidden className={cn("ml-auto size-3.5", otherTemplatesOpen && "rotate-180")} />
                     </SimpleMenuItem>
                     {otherTemplatesOpen && (
                       <div id={otherTemplatesId}>
-                        <SimpleMenuLabel>{resolution.promptGroup.name}组优先</SimpleMenuLabel>
+                        <SimpleMenuLabel>{t("{name}组优先", { name: resolution.promptGroup.name })}</SimpleMenuLabel>
                         {snippetMenu.remaining.map((sn) => (
                           <SimpleMenuItem
                             key={`remaining-${sn.id}`}

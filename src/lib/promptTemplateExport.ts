@@ -1,3 +1,4 @@
+import { t } from "@/lib/i18n";
 import { api } from "@/lib/tauri";
 import type { PromptGroup, PromptSnippet } from "@/lib/targetProfiles";
 
@@ -14,14 +15,14 @@ export function buildPromptTemplatesExport(
   groups: readonly PromptGroup[]
 ): PromptTemplatesExport {
   if (snippets.some((snippet) => snippet.isCommon !== undefined && typeof snippet.isCommon !== "boolean")) {
-    throw new Error("模板的常用标记必须是布尔值");
+    throw new Error(t("模板的常用标记必须是布尔值"));
   }
   const referencedGroupIds = new Set(snippets.map((snippet) => snippet.groupId));
   const exportedGroups = groups
     .filter((group) => referencedGroupIds.has(group.id))
     .map(({ id, name, order }) => ({ id, name, order }));
   if (referencedGroupIds.size !== new Set(exportedGroups.map((group) => group.id)).size) {
-    throw new Error("模板引用的分组不存在，请先检查模板分组");
+    throw new Error(t("模板引用的分组不存在，请先检查模板分组"));
   }
   return {
     format: "toskr-prompt-templates",
@@ -43,7 +44,7 @@ export async function exportPromptTemplates(
   const { save } = await import("@tauri-apps/plugin-dialog");
   const path = await save({
     defaultPath: "toskr-prompt-templates.json",
-    filters: [{ name: "Toskr 提示词模板", extensions: ["json"] }],
+    filters: [{ name: t("Toskr 提示词模板"), extensions: ["json"] }],
   });
   if (!path) return null;
   await api.exportPromptTemplates(path, payload);

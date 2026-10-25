@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
+import { applyLocale } from "@/lib/i18n";
 import {
   SETTINGS_SEARCH_ENTRIES,
   SETTINGS_PRIMARY_SECTIONS,
@@ -147,5 +148,18 @@ describe("设置搜索", () => {
       value: "毛玻璃背景",
     });
     expect(settingsSearchLocation(byId("card-density"), "platinum").id).toBe("card-density");
+  });
+
+  describe("英文界面", () => {
+    afterEach(() => applyLocale("zh"));
+
+    it("按译文标题与分类匹配，中文查询仍可用，结果 id 与中文 key 不变", () => {
+      applyLocale("en");
+      expect(searchSettings("Language", enabled)[0]?.id).toBe("language");
+      expect(searchSettings("launch at login", enabled)[0]?.id).toBe("autostart");
+      expect(searchSettings("translucency", enabled).map((item) => item.id)).toContain("vibrancy");
+      expect(searchSettings("data backup", enabled).map((item) => item.section)).toContain("data");
+      expect(searchSettings("开机", enabled)[0]?.title).toBe("开机启动");
+    });
   });
 });

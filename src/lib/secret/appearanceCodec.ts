@@ -8,6 +8,7 @@
 
 import { decodeToBytes, encodeBytes, looksLikeSecret } from "./chineseCodec";
 import { CRYPTO_CONSTANTS } from "./crypto";
+import type { MessageKey } from "@/lib/i18n";
 
 export const SECRET_CIPHER_STYLES = [
   "classic",
@@ -18,11 +19,11 @@ export const SECRET_CIPHER_STYLES = [
 
 export type SecretCipherStyle = (typeof SECRET_CIPHER_STYLES)[number];
 
-/** 协议权威顺序及短文案，供设置页/撰写页复用，避免各入口各写一套。 */
+/** 协议权威顺序及短文案，供设置页/撰写页复用，避免各入口各写一套。文案是中文 key，显示处 t()。 */
 export const SECRET_CIPHER_STYLE_OPTIONS: readonly Readonly<{
   value: SecretCipherStyle;
-  label: string;
-  shortLabel: string;
+  label: MessageKey;
+  shortLabel: MessageKey;
 }>[] = [
   { value: "classic", label: "中文文本", shortLabel: "中文" },
   { value: "code", label: "代码（随机语言）", shortLabel: "代码" },

@@ -6,6 +6,7 @@ import {
   allocateAliasPlaceholder,
   type AliasCategoryDefinition,
 } from "@/lib/delivery/aliasEntities";
+import { t } from "@/lib/i18n";
 import { applySettingsPatch } from "@/lib/settingsSync";
 import { tip } from "@/lib/tip";
 import { useNotesStore } from "@/store/notesStore";
@@ -44,14 +45,14 @@ export function addAliasEntityFromText(
   const trimmed = originalText.trim();
   const issue = aliasOriginalTextIssue(trimmed, settings.aliasEntities);
   if (issue) {
-    tip("warn", `无法加入词典：${issue}`);
+    tip("warn", t("无法加入词典：{issue}", { issue }));
     return false;
   }
   const known = aliasQuickAddCategories(settings.aliasCustomCategories).some(
     (item) => item.code === category
   );
   if (!known) {
-    tip("warn", "无法加入词典：类别无效");
+    tip("warn", t("无法加入词典：类别无效"));
     return false;
   }
   const allocated = allocateAliasPlaceholder(
@@ -77,8 +78,8 @@ export function addAliasEntityFromText(
   tip(
     "added",
     settings.aliasEntitiesEnabled
-      ? `已加入化名词典：${preview} → ${allocated.placeholder}`
-      : `已加入词典（${allocated.placeholder}）；可逆化名总开关当前关闭`
+      ? t("已加入化名词典：{preview} → {placeholder}", { preview, placeholder: allocated.placeholder })
+      : t("已加入词典（{placeholder}）；可逆化名总开关当前关闭", { placeholder: allocated.placeholder })
   );
   return true;
 }

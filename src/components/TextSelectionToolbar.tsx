@@ -18,6 +18,7 @@ import { IconButton } from "@/components/ui/icon-button";
 import { Kbd } from "@/components/ui/kbd";
 import {
   ALIAS_PRESET_CATEGORIES,
+  aliasCategoryDisplayLabel,
   suggestAliasCategory,
 } from "@/lib/delivery/aliasEntities";
 import { detectLink } from "@/lib/link";
@@ -34,10 +35,11 @@ import {
 } from "@/lib/selectionFormat";
 import { TEXT_OPS, type TextOp } from "@/lib/textops";
 import { cn } from "@/lib/utils";
+import { useT, type MessageKey } from "@/lib/i18n";
 
 const BLOCK_FORMATS: ReadonlyArray<{
   id: BlockSelectionFormat;
-  label: string;
+  label: MessageKey;
   shortcut: string;
 }> = [
   { id: "paragraph", label: "文本", shortcut: "⌥⌘0" },
@@ -50,7 +52,7 @@ const BLOCK_FORMATS: ReadonlyArray<{
   { id: "code-block", label: "代码块", shortcut: "⌥⌘7" },
 ];
 
-const formatLabel = (id: BlockSelectionFormat) =>
+const formatLabel = (id: BlockSelectionFormat): MessageKey =>
   BLOCK_FORMATS.find((item) => item.id === id)?.label ?? "文本";
 
 /** 「文本」菜单展开态跨选区记忆：展开过的，下一次选中仍是展开（用户指定）。
@@ -87,6 +89,7 @@ export function TextSelectionToolbar({
   /** 只读来源（如合并预览）：隐藏改写类控件，仅保留词典等非改写操作。 */
   readOnly?: boolean;
 }) {
+  const t = useT();
   const rootRef = useRef<HTMLDivElement>(null);
   const outerRef = useRef<HTMLDivElement>(null);
   const linkInputRef = useRef<HTMLInputElement>(null);
@@ -252,7 +255,7 @@ export function TextSelectionToolbar({
       <motion.div
         ref={rootRef}
         role="toolbar"
-        aria-label="选区操作"
+        aria-label={t("选区操作")}
         initial={{ opacity: 0, y: 4, scale: 0.98 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ duration: 0.12 }}
@@ -266,7 +269,7 @@ export function TextSelectionToolbar({
       >
         {linkOpen && (
           <form
-            aria-label="添加链接"
+            aria-label={t("添加链接")}
             onSubmit={(event) => {
               event.preventDefault();
               applyLink();
@@ -279,7 +282,7 @@ export function TextSelectionToolbar({
           >
             <input
               ref={linkInputRef}
-              aria-label="链接地址"
+              aria-label={t("链接地址")}
               value={href}
               onChange={(event) => setHref(event.target.value)}
               onKeyDown={(event) => {
@@ -289,18 +292,18 @@ export function TextSelectionToolbar({
                   setLinkOpen(false);
                 }
               }}
-              placeholder="粘贴链接地址"
+              placeholder={t("粘贴链接地址")}
               className="h-7 min-w-0 flex-1 rounded-md border border-foreground/10 bg-background px-2 text-body outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
             />
             <Button type="submit" size="xs" disabled={!href.trim()}>
-              应用
+              {t("应用")}
             </Button>
           </form>
         )}
 
         {aliasOpen && (
           <form
-            aria-label="加入化名词典"
+            aria-label={t("加入化名词典")}
             onSubmit={(event) => {
               event.preventDefault();
               applyAlias();
@@ -313,7 +316,7 @@ export function TextSelectionToolbar({
           >
             <input
               ref={aliasInputRef}
-              aria-label="词条原文"
+              aria-label={t("词条原文")}
               value={aliasText}
               onChange={(event) => setAliasText(event.target.value)}
               onKeyDown={(event) => {
@@ -323,13 +326,13 @@ export function TextSelectionToolbar({
                   setAliasOpen(false);
                 }
               }}
-              placeholder="要化名的原文（可修改）"
+              placeholder={t("要化名的原文（可修改）")}
               className="h-7 min-w-0 rounded-md border border-foreground/10 bg-background px-2 text-body outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
             />
             <div className="flex items-center gap-1">
               <div
                 role="radiogroup"
-                aria-label="化名类别"
+                aria-label={t("化名类别")}
                 className="flex min-w-0 flex-1 flex-wrap gap-1"
               >
                 {ALIAS_PRESET_CATEGORIES.map((category) => (
@@ -346,12 +349,12 @@ export function TextSelectionToolbar({
                         : "bg-black/5 text-muted-foreground hover:text-foreground dark:bg-white/10"
                     )}
                   >
-                    {category.label}
+                    {aliasCategoryDisplayLabel(category)}
                   </button>
                 ))}
               </div>
               <Button type="submit" size="xs" disabled={!aliasText.trim()}>
-                加入
+                {t("加入")}
               </Button>
             </div>
           </form>
@@ -360,7 +363,7 @@ export function TextSelectionToolbar({
         {textOpOpen && onTextOperation && (
           <div
             role="menu"
-            aria-label="处理选中内容"
+            aria-label={t("处理选中内容")}
             className={cn(
               "absolute right-0 w-40 rounded-lg p-1",
               popBelow ? "top-full mt-1" : "bottom-full mb-1",
@@ -381,7 +384,7 @@ export function TextSelectionToolbar({
                   "hover:bg-black/5 focus-visible:bg-black/5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:hover:bg-white/10 dark:focus-visible:bg-white/10"
                 )}
               >
-                {textOp.label}
+                {t(textOp.label)}
               </button>
             ))}
           </div>
@@ -392,7 +395,7 @@ export function TextSelectionToolbar({
             {/* 工具条作用于「选中的那段」而非整卡——首次使用光看图标看不出来，
                 所以左端常显选区字数，发送按钮也带上文字 */}
             <span className="px-1 text-micro tabular-nums text-muted-foreground">
-              已选 {[...selectedText].length} 字
+              {t("已选 {n} 字", { n: [...selectedText].length })}
             </span>
             {onSendSelection && (
               <Button
@@ -401,19 +404,19 @@ export function TextSelectionToolbar({
                 size="xs"
                 title={
                   sendDisabledReason
-                    ? `发送选中不可用：${sendDisabledReason}`
-                    : "只把选中片段发到当前目标"
+                    ? t("发送选中不可用：{reason}", { reason: sendDisabledReason })
+                    : t("只把选中片段发到当前目标")
                 }
                 disabled={!!sendDisabledReason || !selectedText.trim()}
                 onClick={() => onSendSelection(selectedText)}
               >
                 <Send />
-                发送选中
+                {t("发送选中")}
               </Button>
             )}
             {onCopySelection && (
               <IconButton
-                label="复制选中片段"
+                label={t("复制选中片段")}
                 disabled={!selectedText}
                 stopPropagation={false}
                 onClick={() => onCopySelection(selectedText)}
@@ -428,7 +431,7 @@ export function TextSelectionToolbar({
         )}
         {onAddAlias && (
           <IconButton
-            label="加入化名词典：发出自动替换，收回自动恢复"
+            label={t("加入化名词典：发出自动替换，收回自动恢复")}
             pressed={aliasOpen}
             stopPropagation={false}
             onClick={openAlias}
@@ -440,7 +443,7 @@ export function TextSelectionToolbar({
           <>
             {onAddAlias && <div className="mx-0.5 h-4 w-px bg-foreground/10" />}
             <IconButton
-              label={canLink ? "添加链接（⌘K）" : "链接不支持跨行选区"}
+              label={canLink ? t("添加链接（⌘K）") : t("链接不支持跨行选区")}
               pressed={linkOpen || !!markdownHrefAtSelection(text, selection)}
               disabled={!canLink}
               stopPropagation={false}
@@ -449,7 +452,7 @@ export function TextSelectionToolbar({
               <Link2 />
             </IconButton>
             <IconButton
-              label="粗体（⌘B）"
+              label={t("粗体（⌘B）")}
               pressed={hasInlineFormat(text, selection, "bold")}
               stopPropagation={false}
               onClick={() => onApply(toggleInlineFormat(text, selection, "bold"))}
@@ -457,7 +460,7 @@ export function TextSelectionToolbar({
               <Bold />
             </IconButton>
             <IconButton
-              label="斜体（⌘I）"
+              label={t("斜体（⌘I）")}
               pressed={hasInlineFormat(text, selection, "italic")}
               stopPropagation={false}
               onClick={() => onApply(toggleInlineFormat(text, selection, "italic"))}
@@ -478,7 +481,7 @@ export function TextSelectionToolbar({
                 setFormatOpen((open) => !open);
               }}
             >
-              {formatLabel(currentBlock)}
+              {t(formatLabel(currentBlock))}
               <ChevronDown className={cn("transition-transform", formatOpen && "rotate-180")} />
             </Button>
           </>
@@ -488,7 +491,7 @@ export function TextSelectionToolbar({
           <>
             {!readOnly && <div className="mx-0.5 h-4 w-px bg-foreground/10" />}
             <IconButton
-              label="处理选中内容"
+              label={t("处理选中内容")}
               pressed={textOpOpen}
               stopPropagation={false}
               onClick={() => {
@@ -506,7 +509,7 @@ export function TextSelectionToolbar({
         {formatOpen && (
           <div
             role="menu"
-            aria-label="文字样式"
+            aria-label={t("文字样式")}
             className={cn(
               "absolute right-0 w-48 rounded-lg p-1",
               popBelow ? "top-full mt-1" : "bottom-full mb-1",
@@ -531,7 +534,7 @@ export function TextSelectionToolbar({
                     active && "bg-black/5 dark:bg-white/10"
                   )}
                 >
-                  <span className="min-w-0 flex-1 font-medium">{item.label}</span>
+                  <span className="min-w-0 flex-1 font-medium">{t(item.label)}</span>
                   {active && <Check className="size-3 text-primary" />}
                   <Kbd inline>{item.shortcut}</Kbd>
                 </button>

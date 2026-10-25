@@ -1,3 +1,5 @@
+import { t } from "@/lib/i18n";
+
 export const MAX_CUSTOM_SENSITIVE_FIELDS = 32;
 export const MAX_CUSTOM_SENSITIVE_FIELD_LENGTH = 64;
 
@@ -6,11 +8,11 @@ const asciiLower = (text: string) => text.replace(/[A-Z]/g, (letter) => letter.t
 
 export function customSensitiveFieldIssue(value: string, existing: readonly string[] = []): string | null {
   const field = value.trim();
-  if (!field) return "请填写字段名，不需要填写密钥值";
-  if ([...field].length > MAX_CUSTOM_SENSITIVE_FIELD_LENGTH) return "字段名最多 64 个字符";
-  if (!FIELD_NAME.test(field)) return "仅支持汉字、英文字母、数字、下划线、点和短横线，不含空格";
-  if (existing.some((item) => asciiLower(item) === asciiLower(field))) return "这个字段已经添加（英文不区分大小写）";
-  if (existing.length >= MAX_CUSTOM_SENSITIVE_FIELDS) return "最多添加 32 个敏感字段";
+  if (!field) return t("请填写字段名，不需要填写密钥值");
+  if ([...field].length > MAX_CUSTOM_SENSITIVE_FIELD_LENGTH) return t("字段名最多 64 个字符");
+  if (!FIELD_NAME.test(field)) return t("仅支持汉字、英文字母、数字、下划线、点和短横线，不含空格");
+  if (existing.some((item) => asciiLower(item) === asciiLower(field))) return t("这个字段已经添加（英文不区分大小写）");
+  if (existing.length >= MAX_CUSTOM_SENSITIVE_FIELDS) return t("最多添加 32 个敏感字段");
   return null;
 }
 

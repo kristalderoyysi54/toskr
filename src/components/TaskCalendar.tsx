@@ -6,12 +6,15 @@ import { TaskRow } from "@/components/TaskRow";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IconButton } from "@/components/ui/icon-button";
 import { billOccurrencesInRange, startOfBillDay } from "@/lib/bills";
+import { t as translate, useT } from "@/lib/i18n";
+import { monthDayLabel, monthYearLabel, weekdayChar } from "@/lib/taskRecurrence";
 import { tip } from "@/lib/tip";
 import { cn } from "@/lib/utils";
 import { useNotesStore, type Bill, type Task } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
 
-const WEEK_HEADER = ["一", "二", "三", "四", "五", "六", "日"];
+/** 周一起排的表头（星期序号，显示时按语言取单字）。 */
+const WEEK_HEADER = [1, 2, 3, 4, 5, 6, 0];
 
 /** 相邻月占位格斜纹（与订阅月历同款）。 */
 const HATCH_STYLE = {
@@ -26,6 +29,7 @@ const HATCH_STYLE = {
  * 订阅功能开启时同时显示账单扣款日（青色点），两类可分别开关（会话态）。
  */
 export function TaskCalendar({ now }: { now: number }) {
+  const t = useT();
   const tasks = useNotesStore((s) => s.tasks);
   const bills = useNotesStore((s) => s.bills);
   const billsEnabled = useNotesStore((s) => s.settings.subscriptionsEnabled);
@@ -93,7 +97,7 @@ export function TaskCalendar({ now }: { now: number }) {
     if (result === "added" && id) {
       useNotesStore.getState().setTaskDue(id, dueAt);
       setDraft("");
-      tip("added", `已加到 ${d.getMonth() + 1}月${d.getDate()}日`);
+      tip("added", t("已加到 {date}", { date: monthDayLabel(d) }));
     }
   };
 
@@ -102,15 +106,15 @@ export function TaskCalendar({ now }: { now: number }) {
       <div className="surface-inset rounded-xl p-2">
         <div className="mb-1 flex items-center gap-1">
           <p className="flex-1 pl-1 text-label font-semibold tabular-nums">
-            {monthFirst.getFullYear()} 年 {monthFirst.getMonth() + 1} 月
+            {monthYearLabel(monthFirst)}
           </p>
           {billsEnabled && (
             <span className="flex items-center gap-0.5">
               <CalendarToggle on={showTasks} onClick={() => setShowTasks((v) => !v)}>
-                任务
+                {t("任务")}
               </CalendarToggle>
               <CalendarToggle on={showBills} onClick={() => setShowBills((v) => !v)}>
-                账单
+                {t("账单")}
               </CalendarToggle>
             </span>
           )}
@@ -119,20 +123,20 @@ export function TaskCalendar({ now }: { now: number }) {
               onClick={() => setMonthOffset(0)}
               className="rounded-md px-1.5 py-0.5 text-micro text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
             >
-              今天
+              {t("今天")}
             </button>
           )}
-          <IconButton label="上个月" size="2xs" onClick={() => setMonthOffset((v) => v - 1)}>
+          <IconButton label={t("上个月")} size="2xs" onClick={() => setMonthOffset((v) => v - 1)}>
             <ChevronLeft />
           </IconButton>
-          <IconButton label="下个月" size="2xs" onClick={() => setMonthOffset((v) => v + 1)}>
+          <IconButton label={t("下个月")} size="2xs" onClick={() => setMonthOffset((v) => v + 1)}>
             <ChevronRight />
           </IconButton>
         </div>
         <div className="grid grid-cols-7 gap-1">
           {WEEK_HEADER.map((w) => (
             <span key={w} className="py-0.5 text-center text-micro text-muted-foreground">
-              {w}
+              {weekdayChar(w, "short")}
             </span>
           ))}
           {cells.map(({ day, inMonth }) => {
@@ -144,9 +148,9 @@ export function TaskCalendar({ now }: { now: number }) {
               <button
                 key={day}
                 onClick={() => setSelectedDay(day)}
-                aria-label={`${new Date(day).getMonth() + 1}月${new Date(day).getDate()}日${
-                  due.length ? `，${due.length} 个任务` : ""
-                }${billCount ? `，${billCount} 笔账单` : ""}`}
+                aria-label={`${monthDayLabel(new Date(day))}${
+                  due.length ? t("，{n} 个任务", { n: due.length }) : ""
+                }${billCount ? t("，{n} 笔账单", { n: billCount }) : ""}`}
                 className={cn(
                   "relative flex h-9 flex-col items-center justify-center rounded-lg outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
                   selected
@@ -212,11 +216,11 @@ export function TaskCalendar({ now }: { now: number }) {
             onKeyDown={(e) => {
               if (e.key === "Enter") addForDay();
             }}
-            placeholder={`为${dayLabel(selectedDay, today)}添加任务…`}
-            aria-label="为选中日期添加任务"
+            placeholder={t("为{day}添加任务…", { day: dayLabel(selectedDay, today) })}
+            aria-label={t("为选中日期添加任务")}
             className="min-w-0 flex-1 rounded-md border border-border bg-transparent px-1.5 py-1 text-body outline-none focus:border-primary/50"
           />
-          <IconButton label="添加到该日" size="sm" onClick={addForDay} disabled={!draft.trim()}>
+          <IconButton label={t("添加到该日")} size="sm" onClick={addForDay} disabled={!draft.trim()}>
             <Plus />
           </IconButton>
         </div>
@@ -227,7 +231,7 @@ export function TaskCalendar({ now }: { now: number }) {
             ))}
           </div>
         ) : (
-          showTasks && <EmptyState variant="inline" title="当天没有到期任务" />
+          showTasks && <EmptyState variant="inline" title={t("当天没有到期任务")} />
         )}
         {dayBills.length > 0 && (
           <div className="mt-1 flex flex-col gap-0.5">
@@ -275,9 +279,9 @@ function CalendarToggle({
 
 function dayLabel(day: number, today: number): string {
   const d = new Date(day);
-  const date = `${d.getMonth() + 1}月${d.getDate()}日`;
+  const date = monthDayLabel(d);
   const diff = Math.round((day - today) / 86_400_000);
-  if (diff === 0) return `今天 · ${date}`;
-  if (diff === 1) return `明天 · ${date}`;
+  if (diff === 0) return translate("今天 · {date}", { date });
+  if (diff === 1) return translate("明天 · {date}", { date });
   return date;
 }

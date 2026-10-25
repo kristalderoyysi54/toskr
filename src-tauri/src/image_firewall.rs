@@ -1,3 +1,4 @@
+use crate::i18n::pick;
 use std::collections::VecDeque;
 use std::fs::{self, OpenOptions};
 use std::io::{Cursor, Write};
@@ -319,17 +320,17 @@ fn remove_root_entry(path: &Path) -> Result<(), String> {
         return Ok(());
     };
     if metadata.file_type().is_symlink() || metadata.is_file() {
-        fs::remove_file(path).map_err(|error| format!("清理临时图片失败：{error}"))
+        fs::remove_file(path).map_err(|error| crate::tr_fmt!("清理临时图片失败：{error}", "Failed to clean up temporary image: {error}"))
     } else if metadata.is_dir() {
-        fs::remove_dir_all(path).map_err(|error| format!("清理临时图片失败：{error}"))
+        fs::remove_dir_all(path).map_err(|error| crate::tr_fmt!("清理临时图片失败：{error}", "Failed to clean up temporary image: {error}"))
     } else {
-        Err("临时图片目录类型异常".into())
+        Err(pick("临时图片目录类型异常", "Temporary image folder has an unexpected type").into())
     }
 }
 
 pub(crate) fn initialize_transient_root(path: &Path) -> Result<(), String> {
     remove_root_entry(path)?;
-    fs::create_dir_all(path).map_err(|error| format!("创建临时图片目录失败：{error}"))?;
+    fs::create_dir_all(path).map_err(|error| crate::tr_fmt!("创建临时图片目录失败：{error}", "Failed to create temporary image folder: {error}"))?;
     tighten_dir_permissions(path);
     Ok(())
 }
@@ -337,13 +338,13 @@ pub(crate) fn initialize_transient_root(path: &Path) -> Result<(), String> {
 fn ensure_transient_root(path: &Path) -> Result<(), String> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => Ok(()),
-        Ok(_) => Err("临时图片目录类型异常".into()),
+        Ok(_) => Err(pick("临时图片目录类型异常", "Temporary image folder has an unexpected type").into()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir_all(path).map_err(|error| format!("创建临时图片目录失败：{error}"))?;
+            fs::create_dir_all(path).map_err(|error| crate::tr_fmt!("创建临时图片目录失败：{error}", "Failed to create temporary image folder: {error}"))?;
             tighten_dir_permissions(path);
             Ok(())
         }
-        Err(error) => Err(format!("读取临时图片目录失败：{error}")),
+        Err(error) => Err(crate::tr_fmt!("读取临时图片目录失败：{error}", "Failed to read temporary image folder: {error}")),
     }
 }
 
@@ -405,7 +406,7 @@ fn write_png_create_new(path: &Path, image: &RgbaImage) -> Result<(), String> {
     let mut bytes = Cursor::new(Vec::new());
     DynamicImage::ImageRgba8(image.clone())
         .write_to(&mut bytes, image::ImageFormat::Png)
-        .map_err(|error| format!("编码遮挡图片失败：{error}"))?;
+        .map_err(|error| crate::tr_fmt!("编码遮挡图片失败：{error}", "Failed to encode masked image: {error}"))?;
     // 遮挡副本可能在崩溃后残留到下次启动，同样封信封防明文截图落盘
     let sealed = crate::data_crypto::seal(crate::data_crypto::Purpose::Media, bytes.get_ref())
         .map_err(|error| error.message())?;
@@ -418,14 +419,14 @@ fn write_png_create_new(path: &Path, image: &RgbaImage) -> Result<(), String> {
     }
     let mut file = options
         .open(path)
-        .map_err(|error| format!("创建遮挡图片失败：{error}"))?;
+        .map_err(|error| crate::tr_fmt!("创建遮挡图片失败：{error}", "Failed to create masked image: {error}"))?;
     if let Err(error) = file
         .write_all(&sealed)
         .and_then(|_| file.sync_all())
     {
         drop(file);
         let _ = fs::remove_file(path);
-        return Err(format!("写入遮挡图片失败：{error}"));
+        return Err(crate::tr_fmt!("写入遮挡图片失败：{error}", "Failed to write masked image: {error}"));
     }
     Ok(())
 }
@@ -483,15 +484,15 @@ fn image_dimensions_within_budget(width: u32, height: u32) -> bool {
 fn decode_image(bytes: &[u8]) -> Result<RgbaImage, String> {
     let reader = image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
-        .map_err(|_| "图片格式无法识别".to_string())?;
+        .map_err(|_| pick("图片格式无法识别", "Unrecognized image format").to_string())?;
     let (width, height) = reader
         .into_dimensions()
-        .map_err(|_| "图片尺寸无法读取".to_string())?;
+        .map_err(|_| pick("图片尺寸无法读取", "Can't read image dimensions").to_string())?;
     if !image_dimensions_within_budget(width, height) {
-        return Err("图片尺寸超出本地隐私检查上限".into());
+        return Err(pick("图片尺寸超出本地隐私检查上限", "Image exceeds the local privacy check size limit").into());
     }
     image::load_from_memory(bytes)
-        .map_err(|_| "图片解码失败".to_string())
+        .map_err(|_| pick("图片解码失败", "Failed to decode image").to_string())
         .map(|image| image.to_rgba8())
 }
 
@@ -693,7 +694,7 @@ fn scan_uncached(
     let height = original.height();
     let recognized = crate::ocr::recognize_observations(bytes)?;
     if recognized.len() > MAX_OCR_OBSERVATIONS {
-        return Err("图片文字区域过多，无法完整检查".into());
+        return Err(pick("图片文字区域过多，无法完整检查", "Too many text regions in the image to check fully").into());
     }
     let mut observations = Vec::with_capacity(recognized.len());
     let mut findings = Vec::new();
@@ -724,7 +725,7 @@ fn scan_uncached(
             },
         ));
         if findings.len() > MAX_MASK_REGIONS {
-            return Err("图片敏感区域过多，无法完整检查".into());
+            return Err(pick("图片敏感区域过多，无法完整检查", "Too many sensitive regions in the image to check fully").into());
         }
         observations.push(ImageOcrObservation {
             text: recognized.text,
@@ -756,7 +757,7 @@ pub(crate) fn scan_fixture_bytes(
 }
 
 pub fn scan(app: &AppHandle, file: &str, force: bool) -> Result<ScanImageFirewallResult, String> {
-    let bytes = crate::storage::read_image_bytes(app, file).ok_or("图片不存在或不可读取")?;
+    let bytes = crate::storage::read_image_bytes(app, file).ok_or(pick("图片不存在或不可读取", "Image is missing or unreadable"))?;
     let original = decode_image(&bytes)?;
     let pixel_hash = pixel_hash(&original);
     let rules = crate::privacy::load_custom_rules(app)?;
@@ -861,7 +862,7 @@ fn verify_redaction(
     let mut png = Cursor::new(Vec::new());
     DynamicImage::ImageRgba8(redacted.clone())
         .write_to(&mut png, image::ImageFormat::Png)
-        .map_err(|error| format!("编码遮挡副本失败：{error}"))?;
+        .map_err(|error| crate::tr_fmt!("编码遮挡副本失败：{error}", "Failed to encode masked copy: {error}"))?;
     let observations = match crate::ocr::recognize_observations(png.get_ref()) {
         Ok(observations) => observations,
         Err(_) => {
@@ -907,13 +908,13 @@ fn verify_redaction(
 
 pub fn redact(app: &AppHandle, request: RedactImageRequest) -> Result<RedactImageResult, String> {
     if request.regions.is_empty() {
-        return Err("至少选择一个遮挡区域".into());
+        return Err(pick("至少选择一个遮挡区域", "Select at least one region to mask").into());
     }
     if request.regions.len() > MAX_MASK_REGIONS {
-        return Err("遮挡区域数量超出上限".into());
+        return Err(pick("遮挡区域数量超出上限", "Too many mask regions").into());
     }
     let bytes = crate::storage::read_image_bytes(app, &request.original_file)
-        .ok_or("原图不存在或不可读取")?;
+        .ok_or(pick("原图不存在或不可读取", "Original image is missing or unreadable"))?;
     let original = decode_image(&bytes)?;
     let (width, height) = (original.width() as usize, original.height() as usize);
     let original_pixel_hash = pixel_hash(&original);
@@ -938,7 +939,7 @@ pub fn redact(app: &AppHandle, request: RedactImageRequest) -> Result<RedactImag
         .filter(|(_, region, _)| region.width > 0 && region.height > 0)
         .collect();
     if styled.is_empty() {
-        return Err("遮挡区域不在图片范围内".into());
+        return Err(pick("遮挡区域不在图片范围内", "Mask region is outside the image").into());
     }
     let regions: Vec<PixelBox> = styled.iter().map(|(_, bounds, _)| *bounds).collect();
     let region_order: Vec<usize> = styled.iter().map(|(order, _, _)| *order).collect();
@@ -982,9 +983,9 @@ fn cleanup_at(root: &Path, tokens: &[String]) -> Result<(), String> {
             continue;
         };
         if !metadata.is_file() || metadata.file_type().is_symlink() {
-            return Err("拒绝清理异常临时图片".into());
+            return Err(pick("拒绝清理异常临时图片", "Refused to clean up an unexpected temporary image").into());
         }
-        fs::remove_file(path).map_err(|error| format!("清理遮挡图片失败：{error}"))?;
+        fs::remove_file(path).map_err(|error| crate::tr_fmt!("清理遮挡图片失败：{error}", "Failed to clean up masked image: {error}"))?;
     }
     Ok(())
 }

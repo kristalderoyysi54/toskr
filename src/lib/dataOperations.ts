@@ -13,6 +13,7 @@ import {
   buildBackupPayload,
   buildMediaIntegrityPayload,
 } from "@/lib/backup";
+import { t } from "@/lib/i18n";
 import { applyRuntimeSettingsStrict } from "@/lib/runtimeSettings";
 import {
   api,
@@ -103,7 +104,7 @@ function sharedDependencies<Prepared>(
       updateActivity({
         locked,
         phase: locked ? "prepare" : "idle",
-        message: locked ? "正在冻结写入并验证数据…" : "",
+        message: locked ? t("正在冻结写入并验证数据…") : "",
       }),
   };
 }
@@ -142,9 +143,9 @@ function errorMessage(error: unknown): string {
 export async function runDataLocationOperation(
   plan: DataOperationPlan
 ): Promise<DataOperationResult> {
-  return withDataOperationMutex("切换数据目录", async () => {
+  return withDataOperationMutex(t("切换数据目录"), async () => {
     if (hasDataGenerationLeases()) {
-      throw new Error("发送或 AI 操作仍在进行，请完成后再切换数据目录");
+      throw new Error(t("发送或 AI 操作仍在进行，请完成后再切换数据目录"));
     }
     return runDataTransaction(
       sharedDependencies(() => api.beginDataOperation(plan), (prepared) => prepared.operationId)
@@ -155,9 +156,9 @@ export async function runDataLocationOperation(
 export async function runRecoveryDataLocationOperation(
   plan: DataOperationPlan
 ): Promise<DataOperationResult> {
-  return withDataOperationMutex("恢复数据目录", async () => {
+  return withDataOperationMutex(t("恢复数据目录"), async () => {
     if (plan.action !== "loadExistingTarget") {
-      throw new Error("恢复模式只允许加载已有有效数据目录");
+      throw new Error(t("恢复模式只允许加载已有有效数据目录"));
     }
     const dependencies = sharedDependencies(
       () => api.beginRecoveryDataOperation(plan),
@@ -175,7 +176,7 @@ export async function runRecoveryDataLocationOperation(
 export async function resumePendingDataOperation(
   operationId: string
 ): Promise<DataOperationResult> {
-  return withDataOperationMutex("恢复待完成数据事务", () =>
+  return withDataOperationMutex(t("恢复待完成数据事务"), () =>
     resumePendingDataTransaction(operationId, {
       pausePersistence,
       resumePersistence,
@@ -193,7 +194,7 @@ export async function resumePendingDataOperation(
         updateActivity({
           locked,
           phase: locked ? "rehydrate" : "idle",
-          message: locked ? "正在恢复待完成的数据事务…" : "",
+          message: locked ? t("正在恢复待完成的数据事务…") : "",
         }),
     })
   );
@@ -204,9 +205,9 @@ export async function runCompleteBackupImport(
   operationId: string,
   expectedRevision: string
 ): Promise<{ prepared: BackupImportPrepared; result: DataOperationResult }> {
-  return withDataOperationMutex("恢复完整备份", async () => {
+  return withDataOperationMutex(t("恢复完整备份"), async () => {
     if (hasDataGenerationLeases()) {
-      throw new Error("发送或 AI 操作仍在进行，请完成后再恢复备份");
+      throw new Error(t("发送或 AI 操作仍在进行，请完成后再恢复备份"));
     }
     let prepared: BackupImportPrepared | null = null;
     try {
@@ -214,7 +215,7 @@ export async function runCompleteBackupImport(
         sharedDependencies(
           async () => {
             const activeRevision = currentPersistenceRevision();
-            if (!activeRevision) throw new Error("持久化基线尚未建立");
+            if (!activeRevision) throw new Error(t("持久化基线尚未建立"));
             prepared = await api.beginCompleteBackupImport(
               path,
               operationId,
@@ -233,7 +234,7 @@ export async function runCompleteBackupImport(
         updateActivity({
           locked: true,
           phase: "conflict",
-          message: "完整恢复期间检测到活动数据外部变化；持久化保持冻结",
+          message: t("完整恢复期间检测到活动数据外部变化；持久化保持冻结"),
         });
       }
       throw error;
@@ -248,19 +249,19 @@ async function frozenBackupExport<T>(
 ): Promise<T> {
   return withDataOperationMutex(label, async () => {
     if (hasDataGenerationLeases()) {
-      throw new Error("发送或 AI 操作仍在进行，请完成后再导出备份");
+      throw new Error(t("发送或 AI 操作仍在进行，请完成后再导出备份"));
     }
-    updateActivity({ locked: true, phase: "prepare", message: "正在冻结并校验完整备份…" });
+    updateActivity({ locked: true, phase: "prepare", message: t("正在冻结并校验完整备份…") });
     try {
       await pausePersistence();
       const activeRevision = currentPersistenceRevision();
-      if (!activeRevision) throw new Error("持久化基线尚未建立");
+      if (!activeRevision) throw new Error(t("持久化基线尚未建立"));
       const result = await run(
         JSON.stringify(buildBackupPayload(useNotesStore.getState())),
         activeRevision
       );
       resumePersistence();
-      updateActivity({ locked: false, phase: "complete", message: "完整备份已验证" });
+      updateActivity({ locked: false, phase: "complete", message: t("完整备份已验证") });
       return result;
     } catch (error) {
       if (errorCode(error) === "sourceChanged") {
@@ -270,7 +271,7 @@ async function frozenBackupExport<T>(
         updateActivity({
           locked: true,
           phase: "conflict",
-          message: "导出期间检测到活动数据外部变化；持久化保持冻结",
+          message: t("导出期间检测到活动数据外部变化；持久化保持冻结"),
         });
       } else {
         resumePersistence();
@@ -284,7 +285,7 @@ async function frozenBackupExport<T>(
 export async function runCompleteBackupExport(
   path: string
 ): Promise<BackupInspection> {
-  return frozenBackupExport("导出完整备份", (stateJson, revision) =>
+  return frozenBackupExport(t("导出完整备份"), (stateJson, revision) =>
     api.exportCompleteBackup(path, stateJson, revision)
   );
 }
@@ -295,7 +296,7 @@ export async function runAutoBackup(
   fileName: string,
   keep: number
 ): Promise<AutoBackupResult> {
-  return frozenBackupExport("自动备份", (stateJson, revision) =>
+  return frozenBackupExport(t("自动备份"), (stateJson, revision) =>
     api.runAutoBackup(dir, fileName, stateJson, revision, keep)
   );
 }
@@ -308,17 +309,17 @@ export async function runLegacyJsonImport(
   added: { notes: number; tasks: number; bills: number; skippedDuplicates: number };
   recoveryPath: string;
 }> {
-  return withDataOperationMutex("导入旧 JSON", async () => {
+  return withDataOperationMutex(t("导入旧 JSON"), async () => {
   const memory = captureNotesStoreSnapshot();
   updateActivity({
     locked: true,
     phase: "prepare",
-    message: "正在创建当前数据恢复点…",
+    message: t("正在创建当前数据恢复点…"),
   });
   try {
     await pausePersistence();
     const activeRevision = currentPersistenceRevision();
-    if (!activeRevision) throw new Error("持久化基线尚未建立");
+    if (!activeRevision) throw new Error(t("持久化基线尚未建立"));
     const recoveryPath = await api.createDataRecoveryBackup(
       JSON.stringify(buildBackupPayload(useNotesStore.getState())),
       operationId,
@@ -327,7 +328,7 @@ export async function runLegacyJsonImport(
     const raw = await api.readLegacyBackup(path, expectedRevision);
     const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("旧 JSON 顶层必须是对象");
+      throw new Error(t("旧 JSON 顶层必须是对象"));
     }
     const added = useNotesStore.getState().importMerge(parsed);
     await commitPersistedValueWhilePaused(
@@ -346,7 +347,7 @@ export async function runLegacyJsonImport(
       updateActivity({
         locked: true,
         phase: "rollback",
-        message: "检测到外部数据冲突；持久化保持冻结",
+        message: t("检测到外部数据冲突；持久化保持冻结"),
       });
       throw error;
     }
@@ -367,21 +368,21 @@ export async function runPreEncryptSnapshotImport(
   health: MediaIntegrityReport;
   warning: string | null;
 }> {
-  return withDataOperationMutex("恢复迁移保险档", async () => {
+  return withDataOperationMutex(t("恢复迁移保险档"), async () => {
     if (hasDataGenerationLeases()) {
-      throw new Error("发送或 AI 操作仍在进行，请完成后再恢复数据");
+      throw new Error(t("发送或 AI 操作仍在进行，请完成后再恢复数据"));
     }
     const memory = captureNotesStoreSnapshot();
     let committed = false;
     updateActivity({
       locked: true,
       phase: "prepare",
-      message: "正在备份当前索引并验证迁移保险档…",
+      message: t("正在备份当前索引并验证迁移保险档…"),
     });
     try {
       await pausePersistence();
       const activeRevision = currentPersistenceRevision();
-      if (!activeRevision) throw new Error("持久化基线尚未建立");
+      if (!activeRevision) throw new Error(t("持久化基线尚未建立"));
       const recoveryPath = await api.createDataRecoveryBackup(
         JSON.stringify(buildBackupPayload(useNotesStore.getState())),
         operationId,
@@ -398,7 +399,7 @@ export async function runPreEncryptSnapshotImport(
       const preflightHealth = await api.inspectMediaIntegrity(mediaStateJson);
       if (preflightHealth.missing.length) {
         throw new Error(
-          `迁移保险档引用的 ${preflightHealth.missing.length} 个媒体文件不在当前数据目录；已停止恢复。请加载原数据目录或改用包含媒体的完整备份`
+          t("迁移保险档引用的 {n} 个媒体文件不在当前数据目录；已停止恢复。请加载原数据目录或改用包含媒体的完整备份", { n: preflightHealth.missing.length })
         );
       }
       useNotesStore.setState({
@@ -416,24 +417,24 @@ export async function runPreEncryptSnapshotImport(
       try {
         await broadcastRehydratedSettings();
       } catch (error) {
-        warnings.push(`Native 设置刷新失败：${errorMessage(error)}；重启后会重新应用`);
+        warnings.push(t("Native 设置刷新失败：{error}；重启后会重新应用", { error: errorMessage(error) }));
       }
       let health = preflightHealth;
       try {
         health = await api.inspectMediaIntegrity(mediaStateJson);
         if (health.missing.length) {
-          warnings.push(`提交后检测到 ${health.missing.length} 个媒体文件缺失`);
+          warnings.push(t("提交后检测到 {n} 个媒体文件缺失", { n: health.missing.length }));
         }
       } catch (error) {
-        warnings.push(`提交后媒体复检失败：${errorMessage(error)}`);
+        warnings.push(t("提交后媒体复检失败：{error}", { error: errorMessage(error) }));
       }
-      const warning = warnings.length ? warnings.join("；") : null;
+      const warning = warnings.length ? warnings.join(t("；")) : null;
       updateActivity({
         locked: false,
         phase: "complete",
         message: warning
-          ? `迁移保险档已恢复；${warning}`
-          : "迁移保险档已恢复，当前新增记录已按 ID 保留",
+          ? t("迁移保险档已恢复；{warning}", { warning })
+          : t("迁移保险档已恢复，当前新增记录已按 ID 保留"),
       });
       return {
         counts: {
@@ -455,7 +456,7 @@ export async function runPreEncryptSnapshotImport(
         updateActivity({
           locked: true,
           phase: "rollback",
-          message: "恢复期间检测到外部数据变化；持久化保持冻结",
+          message: t("恢复期间检测到外部数据变化；持久化保持冻结"),
         });
       } else {
         resumePersistence();
@@ -467,11 +468,11 @@ export async function runPreEncryptSnapshotImport(
 }
 
 export async function reloadAfterPersistenceConflict(): Promise<void> {
-  return withDataOperationMutex("重新加载冲突版本", async () => {
+  return withDataOperationMutex(t("重新加载冲突版本"), async () => {
   updateActivity({
     locked: true,
     phase: "rehydrate",
-    message: "正在从磁盘重新加载外部新版本…",
+    message: t("正在从磁盘重新加载外部新版本…"),
   });
   try {
     const raw = await resolvePersistenceConflictByReload();
@@ -484,13 +485,13 @@ export async function reloadAfterPersistenceConflict(): Promise<void> {
     await replaceMemoryAndRuntime(adopted);
     await api.clearDataConflict();
     resumePersistence();
-    updateActivity({ locked: false, phase: "complete", message: "已加载磁盘新版本" });
+    updateActivity({ locked: false, phase: "complete", message: t("已加载磁盘新版本") });
   } catch (error) {
     // resolveConflictByReload 会冻结持久化；失败时保持只读，避免再次覆盖。
     updateActivity({
       locked: true,
       phase: "rollback",
-      message: `重新加载失败：${String(error)}`,
+      message: t("重新加载失败：{error}", { error: String(error) }),
     });
     throw error;
   }

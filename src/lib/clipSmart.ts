@@ -1,5 +1,7 @@
 /** 剪贴板文本智能识别的纯函数：颜色 / JSON / 时间戳 / 邮箱，供卡片渲染专用外观。 */
 
+import { t as translate } from "@/lib/i18n";
+
 export type ClipSmart =
   | { kind: "color"; hex: string; rgb: string; hsl: string; oklch: string; swatch: string }
   | { kind: "json"; pretty: string; minified: string; summary: string }
@@ -39,7 +41,7 @@ function detectJson(t: string): ClipSmart | null {
     kind: "json",
     pretty: JSON.stringify(v, null, 2),
     minified: JSON.stringify(v),
-    summary: Array.isArray(v) ? `数组 · ${n} 项` : `对象 · ${n} 键`,
+    summary: Array.isArray(v) ? translate("数组 · {n} 项", { n }) : translate("对象 · {n} 键", { n }),
   };
 }
 

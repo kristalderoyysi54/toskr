@@ -352,7 +352,7 @@ fn on_trigger(app: &AppHandle, input_generation: u64) {
                             crate::window::show_hud(
                                 &handle,
                                 "warn",
-                                "未检测到选中内容".into(),
+                                crate::i18n::pick("未检测到选中内容", "No selection detected").into(),
                                 false,
                                 false,
                                 None,

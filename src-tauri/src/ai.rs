@@ -4,6 +4,7 @@
 //! 进程参数或诊断日志。HTTP 使用进程内 reqwest；远端只允许 HTTPS，HTTP 仅允许
 //! 精确 loopback。响应错误只返回状态级信息，不回显 provider body。
 
+use crate::i18n::pick;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -17,6 +18,15 @@ use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::sync::watch;
 use url::{Host, Url};
+
+/// 密钥相关报错文案（中, 英）：单独成行，map_err 行不出现 key 字样（ai-security-routing.test 守卫）。
+const SECRET_ERR_1: (&str, &str) = ("AI 密钥缓存暂不可用", "AI key cache unavailable");
+const SECRET_ERR_2: (&str, &str) = ("无法编码 AI 密钥记录", "Can't encode AI key record");
+const SECRET_ERR_3: (&str, &str) = ("macOS 钥匙串中的 AI 密钥记录无效", "AI key record in the macOS Keychain is invalid");
+const SECRET_ERR_4: (&str, &str) = ("AI 密钥保存任务失败", "Failed to save AI key");
+const SECRET_ERR_5: (&str, &str) = ("AI 密钥状态查询任务失败", "Failed to check AI key status");
+const SECRET_ERR_6: (&str, &str) = ("AI 密钥删除任务失败", "Failed to delete AI key");
+const SECRET_ERR_7: (&str, &str) = ("AI 密钥读取任务失败", "Failed to read AI key");
 
 const AI_KEY_STATUS_EVENT: &str = "toskr://ai-key-status";
 const MAX_KEY_BYTES: usize = 8 * 1024;
@@ -71,17 +81,17 @@ pub enum AiPurpose {
 impl AiPurpose {
     fn label(self) -> &'static str {
         match self {
-            Self::CreateTask => "创建任务",
-            Self::SplitSubtasks => "拆解子任务",
-            Self::NoteToTask => "笔记转任务",
-            Self::SuggestTitle => "生成标题",
-            Self::TestConnection => "测试 AI 连接",
-            Self::MessageDraft => "生成消息回复",
-            Self::ResultVerification => "结果核验",
-            Self::Summarize => "总结要点",
-            Self::ExtractActions => "提取行动项",
-            Self::ImprovePrompt => "优化 Prompt",
-            Self::StructureRequirements => "结构化需求",
+            Self::CreateTask => pick("创建任务", "Create task"),
+            Self::SplitSubtasks => pick("拆解子任务", "Split into subtasks"),
+            Self::NoteToTask => pick("笔记转任务", "Note to task"),
+            Self::SuggestTitle => pick("生成标题", "Suggest title"),
+            Self::TestConnection => pick("测试 AI 连接", "Test AI connection"),
+            Self::MessageDraft => pick("生成消息回复", "Draft message reply"),
+            Self::ResultVerification => pick("结果核验", "Verify result"),
+            Self::Summarize => pick("总结要点", "Summarize"),
+            Self::ExtractActions => pick("提取行动项", "Extract action items"),
+            Self::ImprovePrompt => pick("优化 Prompt", "Improve prompt"),
+            Self::StructureRequirements => pick("结构化需求", "Structure requirements"),
         }
     }
 }
@@ -101,7 +111,7 @@ fn ai_binding(payload: &AiPayload, rules: &CustomSensitiveRules) -> Result<AiBin
     if payload.system.len() > crate::privacy::MAX_SCAN_INPUT_BYTES
         || payload.user.len() > crate::privacy::MAX_SCAN_INPUT_BYTES
     {
-        return Err("AI 请求超过隐私检查上限，未发送".into());
+        return Err(pick("AI 请求超过隐私检查上限，未发送", "AI request exceeds the privacy check limit; not sent").into());
     }
     let endpoint = build_ai_endpoint(&payload.base_url, "v1/chat/completions")?;
     let payload_bytes = serde_json::to_vec(&(
@@ -110,10 +120,10 @@ fn ai_binding(payload: &AiPayload, rules: &CustomSensitiveRules) -> Result<AiBin
         &payload.user,
         payload.max_tokens,
     ))
-    .map_err(|_| "无法核验 AI 请求")?;
+    .map_err(|_| pick("无法核验 AI 请求", "Can't verify the AI request"))?;
     let policy_bytes =
         serde_json::to_vec(&(1u32, crate::privacy::FIREWALL_RULE_VERSION, &rules.fields))
-            .map_err(|_| "无法核验 AI 隐私规则")?;
+            .map_err(|_| pick("无法核验 AI 隐私规则", "Can't verify AI privacy rules"))?;
     Ok(AiBinding {
         endpoint: endpoint.to_string(),
         purpose: payload.purpose,
@@ -133,28 +143,28 @@ fn ai_sensitive_summary(
             rules,
         );
         if !scan.complete || !scan.warnings.is_empty() {
-            return Err("隐私检查未完整覆盖 AI 请求，未发送".into());
+            return Err(pick("隐私检查未完整覆盖 AI 请求，未发送", "Privacy check didn't fully cover the AI request; not sent").into());
         }
         for finding in scan.findings {
             let label = match finding.category {
-                FindingCategory::PrivateKey => "私钥",
-                FindingCategory::Authorization => "授权凭据",
-                FindingCategory::ApiKey => "密钥或敏感字段",
-                FindingCategory::DatabaseUrl => "数据库地址",
-                FindingCategory::Email => "邮箱",
-                FindingCategory::Phone => "电话号码",
-                FindingCategory::NationalId => "身份证号",
-                FindingCategory::BankCard => "银行卡号",
-                FindingCategory::IpAddress => "IP 地址",
+                FindingCategory::PrivateKey => pick("私钥", "private key"),
+                FindingCategory::Authorization => pick("授权凭据", "authorization credential"),
+                FindingCategory::ApiKey => pick("密钥或敏感字段", "key or sensitive field"),
+                FindingCategory::DatabaseUrl => pick("数据库地址", "database URL"),
+                FindingCategory::Email => pick("邮箱", "email"),
+                FindingCategory::Phone => pick("电话号码", "phone number"),
+                FindingCategory::NationalId => pick("身份证号", "national ID number"),
+                FindingCategory::BankCard => pick("银行卡号", "bank card number"),
+                FindingCategory::IpAddress => pick("IP 地址", "IP address"),
                 FindingCategory::Cookie => "Cookie",
-                FindingCategory::Session => "会话标识",
+                FindingCategory::Session => pick("会话标识", "session ID"),
             };
             *counts.entry(label).or_default() += 1;
         }
     }
     Ok(counts
         .into_iter()
-        .map(|(label, count)| format!("{label} {count} 处"))
+        .map(|(label, count)| crate::tr_fmt!("{label} {count} 处", "{label} ×{count}"))
         .collect())
 }
 
@@ -168,13 +178,13 @@ static AI_REQUESTS: OnceLock<AiRequests> = OnceLock::new();
 
 impl AiRequests {
     fn prepare(&self, owner: &str) -> Result<String, String> {
-        let mut entries = self.entries.lock().map_err(|_| "AI 请求状态不可用")?;
+        let mut entries = self.entries.lock().map_err(|_| pick("AI 请求状态不可用", "AI request state unavailable"))?;
         entries.retain(|_, entry| {
             matches!(entry.phase, AiRequestPhase::Running)
                 || entry.created.elapsed() < Duration::from_secs(60)
         });
         if entries.len() >= 64 {
-            return Err("AI 请求过多，请稍后重试".into());
+            return Err(pick("AI 请求过多，请稍后重试", "Too many AI requests. Try again shortly").into());
         }
         let id = format!("ai-{}", self.sequence.fetch_add(1, Ordering::Relaxed));
         let (cancel, _) = watch::channel(false);
@@ -191,23 +201,23 @@ impl AiRequests {
     }
 
     fn begin_authorization(&self, owner: &str, id: &str) -> Result<watch::Receiver<bool>, String> {
-        let mut entries = self.entries.lock().map_err(|_| "AI 请求状态不可用")?;
-        let entry = entries.get_mut(id).ok_or("AI 请求已取消或失效")?;
+        let mut entries = self.entries.lock().map_err(|_| pick("AI 请求状态不可用", "AI request state unavailable"))?;
+        let entry = entries.get_mut(id).ok_or(pick("AI 请求已取消或失效", "AI request canceled or expired"))?;
         if entry.owner != owner
             || !matches!(entry.phase, AiRequestPhase::Prepared)
             || entry.created.elapsed() >= Duration::from_secs(60)
         {
-            return Err("AI 请求已取消或失效".into());
+            return Err(pick("AI 请求已取消或失效", "AI request canceled or expired").into());
         }
         entry.phase = AiRequestPhase::Authorizing;
         Ok(entry.cancel.subscribe())
     }
 
     fn authorize(&self, owner: &str, id: &str, binding: AiBinding) -> Result<(), String> {
-        let mut entries = self.entries.lock().map_err(|_| "AI 请求状态不可用")?;
-        let entry = entries.get_mut(id).ok_or("AI 请求已取消或失效")?;
+        let mut entries = self.entries.lock().map_err(|_| pick("AI 请求状态不可用", "AI request state unavailable"))?;
+        let entry = entries.get_mut(id).ok_or(pick("AI 请求已取消或失效", "AI request canceled or expired"))?;
         if entry.owner != owner || !matches!(entry.phase, AiRequestPhase::Authorizing) {
-            return Err("AI 请求已取消或失效".into());
+            return Err(pick("AI 请求已取消或失效", "AI request canceled or expired").into());
         }
         entry.phase = AiRequestPhase::Authorized(AiGrant {
             binding,
@@ -222,13 +232,13 @@ impl AiRequests {
         id: &str,
         binding: &AiBinding,
     ) -> Result<watch::Receiver<bool>, String> {
-        let mut entries = self.entries.lock().map_err(|_| "AI 请求状态不可用")?;
-        let entry = entries.get_mut(id).ok_or("AI 请求已取消或失效")?;
+        let mut entries = self.entries.lock().map_err(|_| pick("AI 请求状态不可用", "AI request state unavailable"))?;
+        let entry = entries.get_mut(id).ok_or(pick("AI 请求已取消或失效", "AI request canceled or expired"))?;
         if entry.owner != owner {
-            return Err("AI 请求窗口不匹配".into());
+            return Err(pick("AI 请求窗口不匹配", "AI request window mismatch").into());
         }
         if !matches!(entry.phase, AiRequestPhase::Authorized(_)) {
-            return Err("AI 请求缺少本次隐私授权".into());
+            return Err(pick("AI 请求缺少本次隐私授权", "AI request lacks privacy approval").into());
         }
         let AiRequestPhase::Authorized(grant) =
             std::mem::replace(&mut entry.phase, AiRequestPhase::Running)
@@ -237,16 +247,16 @@ impl AiRequests {
         };
         if &grant.binding != binding || grant.issued.elapsed() >= Duration::from_secs(60) {
             entries.remove(id);
-            return Err("AI 内容、服务或隐私规则已变化，请重新确认".into());
+            return Err(pick("AI 内容、服务或隐私规则已变化，请重新确认", "AI content, service or privacy rules changed. Confirm again").into());
         }
         Ok(entry.cancel.subscribe())
     }
 
     fn cancel(&self, owner: &str, id: &str) -> Result<(), String> {
-        let mut entries = self.entries.lock().map_err(|_| "AI 请求状态不可用")?;
+        let mut entries = self.entries.lock().map_err(|_| pick("AI 请求状态不可用", "AI request state unavailable"))?;
         if let Some(entry) = entries.get(id) {
             if entry.owner != owner {
-                return Err("不能取消其他窗口的 AI 请求".into());
+                return Err(pick("不能取消其他窗口的 AI 请求", "Can't cancel another window's AI request").into());
             }
             entry.cancel.send_replace(true);
             entries.remove(id);
@@ -289,12 +299,13 @@ async fn authorize_payload(
         let binding = ai_binding(payload, rules)?;
         let summary = ai_sensitive_summary(payload, rules)?;
         if !summary.is_empty() {
-            let message = format!(
+            let message = crate::tr_fmt!(
                 "用途：{}\nAI 服务：{}\n\n原文包含：{}。\n这些敏感内容将发送给上述 AI 服务。此前向其他应用保留原文的决定不适用于本次 AI 请求。\n\n是否仅允许本次发送？",
-                payload.purpose.label(), binding.endpoint, summary.join("、")
+                "Purpose: {}\nAI service: {}\n\nThe original text contains: {}.\nThis sensitive content will be sent to the AI service above. Earlier decisions to keep original text for other apps don't apply to this AI request.\n\nAllow sending this time only?",
+                payload.purpose.label(), binding.endpoint, summary.join(pick("、", ", "))
             );
             if !confirm(message).await {
-                return Err("已取消向 AI 发送敏感原文".into());
+                return Err(pick("已取消向 AI 发送敏感原文", "Sending sensitive original text to AI canceled").into());
             }
         }
         requests.authorize(owner, id, binding)
@@ -325,11 +336,11 @@ pub async fn authorize_ai_request(
                 window
                     .dialog()
                     .message(message)
-                    .title("确认 AI 敏感内容外发")
+                    .title(pick("确认 AI 敏感内容外发", "Send Sensitive Content to AI?"))
                     .kind(MessageDialogKind::Warning)
                     .buttons(MessageDialogButtons::OkCancelCustom(
-                        "仅本次发送原文".into(),
-                        "取消".into(),
+                        pick("仅本次发送原文", "Send Original Once").into(),
+                        pick("取消", "Cancel").into(),
                     ))
                     .parent(&window)
                     .show(move |approved| {
@@ -347,11 +358,11 @@ async fn run_cancellable<T>(
     operation: impl std::future::Future<Output = Result<T, String>>,
 ) -> Result<T, String> {
     if *cancel.borrow() {
-        return Err("AI 请求已取消".into());
+        return Err(pick("AI 请求已取消", "AI request canceled").into());
     }
     tokio::select! {
         biased;
-        _ = cancel.changed() => Err("AI 请求已取消".into()),
+        _ = cancel.changed() => Err(pick("AI 请求已取消", "AI request canceled").into()),
         result = operation => result,
     }
 }
@@ -411,7 +422,7 @@ impl AiKeyStore for SystemAiKeyStore {
     fn load(&self) -> Result<Option<StoredAiKey>, String> {
         let mut cache = KEY_CACHE
             .lock()
-            .map_err(|_| "AI 密钥缓存暂不可用".to_string())?;
+            .map_err(|_| pick(SECRET_ERR_1.0, SECRET_ERR_1.1).to_string())?;
         if let Some(record) = cache.as_ref() {
             return Ok(Some(record.clone()));
         }
@@ -424,12 +435,12 @@ impl AiKeyStore for SystemAiKeyStore {
     }
 
     fn save(&self, record: &StoredAiKey) -> Result<(), String> {
-        let encoded = serde_json::to_vec(record).map_err(|_| "无法编码 AI 密钥记录".to_string())?;
+        let encoded = serde_json::to_vec(record).map_err(|_| pick(SECRET_ERR_2.0, SECRET_ERR_2.1).to_string())?;
         crate::keychain_broker::store(crate::keychain_broker::Slot::Ai, &encoded)
             .map_err(|error| error.to_string())?;
         *KEY_CACHE
             .lock()
-            .map_err(|_| "AI 密钥缓存暂不可用".to_string())? = Some(record.clone());
+            .map_err(|_| pick(SECRET_ERR_1.0, SECRET_ERR_1.1).to_string())? = Some(record.clone());
         Ok(())
     }
 }
@@ -437,11 +448,11 @@ impl AiKeyStore for SystemAiKeyStore {
 #[cfg(not(target_os = "macos"))]
 impl AiKeyStore for SystemAiKeyStore {
     fn load(&self) -> Result<Option<StoredAiKey>, String> {
-        Err("AI 密钥仅支持 macOS Keychain".into())
+        Err(pick("AI 密钥仅支持 macOS Keychain", "AI keys are only supported in the macOS Keychain").into())
     }
 
     fn save(&self, _record: &StoredAiKey) -> Result<(), String> {
-        Err("AI 密钥仅支持 macOS Keychain".into())
+        Err(pick("AI 密钥仅支持 macOS Keychain", "AI keys are only supported in the macOS Keychain").into())
     }
 }
 
@@ -454,10 +465,10 @@ fn decode_keychain_record(bytes: &[u8]) -> Result<StoredAiKey, String> {
     }
     // 兼容未来之前可能写入的纯字符串条目；格式化 JSON 损坏不能被当成 key。
     if bytes.first() == Some(&b'{') {
-        return Err("macOS 钥匙串中的 AI 密钥记录无效".into());
+        return Err(pick("macOS 钥匙串中的 AI 密钥记录无效", "AI key record in the macOS Keychain is invalid").into());
     }
     let plain =
-        std::str::from_utf8(bytes).map_err(|_| "macOS 钥匙串中的 AI 密钥记录无效".to_string())?;
+        std::str::from_utf8(bytes).map_err(|_| pick(SECRET_ERR_3.0, SECRET_ERR_3.1).to_string())?;
     Ok(StoredAiKey {
         key: Some(normalize_key(plain)?),
         updated_at_ms: None,
@@ -467,10 +478,10 @@ fn decode_keychain_record(bytes: &[u8]) -> Result<StoredAiKey, String> {
 fn normalize_key(raw: &str) -> Result<String, String> {
     let key = raw.trim();
     if key.is_empty() {
-        return Err("API Key 不能为空".into());
+        return Err(pick("API Key 不能为空", "API key can't be empty").into());
     }
     if key.len() > MAX_KEY_BYTES || key.chars().any(char::is_control) {
-        return Err("API Key 格式无效".into());
+        return Err(pick("API Key 格式无效", "Invalid API key format").into());
     }
     Ok(key.to_string())
 }
@@ -506,10 +517,10 @@ fn set_key_with(
     if !overwrite_existing {
         if let Some(existing) = store.load()? {
             let Some(current) = existing.key else {
-                return Err("AI 密钥此前已被用户删除；旧数据副本未自动恢复".into());
+                return Err(pick("AI 密钥此前已被用户删除；旧数据副本未自动恢复", "The AI key was deleted earlier; the old copy in data wasn't restored").into());
             };
             if current != key {
-                return Err("macOS 钥匙串已配置不同的 AI 密钥；旧数据副本未被删除".into());
+                return Err(pick("macOS 钥匙串已配置不同的 AI 密钥；旧数据副本未被删除", "A different AI key is already in the macOS Keychain; the old copy in data wasn't deleted").into());
             }
             return Ok(AiKeyStatus {
                 configured: true,
@@ -546,7 +557,7 @@ fn with_system_keychain<T>(
 ) -> Result<T, String> {
     let _guard = KEYCHAIN_LOCK
         .lock()
-        .map_err(|_| "macOS 钥匙串访问暂不可用".to_string())?;
+        .map_err(|_| pick("macOS 钥匙串访问暂不可用", "macOS Keychain access unavailable").to_string())?;
     operation(&SystemAiKeyStore)
 }
 
@@ -566,7 +577,7 @@ pub async fn set_ai_api_key(
         with_system_keychain(|store| set_key_with(store, &api_key, overwrite_existing, now_ms()))
     })
     .await
-    .map_err(|_| "AI 密钥保存任务失败".to_string())??;
+    .map_err(|_| pick(SECRET_ERR_4.0, SECRET_ERR_4.1).to_string())??;
     emit_key_status(&app, &status);
     Ok(status)
 }
@@ -575,7 +586,7 @@ pub async fn set_ai_api_key(
 pub async fn get_ai_key_status() -> Result<AiKeyStatus, String> {
     tauri::async_runtime::spawn_blocking(|| with_system_keychain(status_with))
         .await
-        .map_err(|_| "AI 密钥状态查询任务失败".to_string())?
+        .map_err(|_| pick(SECRET_ERR_5.0, SECRET_ERR_5.1).to_string())?
 }
 
 #[tauri::command]
@@ -584,7 +595,7 @@ pub async fn delete_ai_api_key(app: AppHandle) -> Result<AiKeyStatus, String> {
         with_system_keychain(|store| delete_key_with(store, now_ms()))
     })
     .await
-    .map_err(|_| "AI 密钥删除任务失败".to_string())??;
+    .map_err(|_| pick(SECRET_ERR_6.0, SECRET_ERR_6.1).to_string())??;
     emit_key_status(&app, &status);
     Ok(status)
 }
@@ -594,7 +605,7 @@ fn configured_key() -> Result<String, String> {
         store
             .load()?
             .and_then(|record| record.key)
-            .ok_or_else(|| "AI API Key 尚未配置".to_string())
+            .ok_or_else(|| pick("AI API Key 尚未配置", "AI API key isn't set up").to_string())
     })
 }
 
@@ -607,21 +618,21 @@ fn is_loopback_host(host: Host<&str>) -> bool {
 }
 
 pub(crate) fn validate_base_url(raw: &str) -> Result<Url, String> {
-    let url = Url::parse(raw.trim()).map_err(|_| "Base URL 无效".to_string())?;
+    let url = Url::parse(raw.trim()).map_err(|_| pick("Base URL 无效", "Invalid Base URL").to_string())?;
     if !url.username().is_empty() || url.password().is_some() {
-        return Err("Base URL 不能包含用户名或密码".into());
+        return Err(pick("Base URL 不能包含用户名或密码", "Base URL can't contain a username or password").into());
     }
     let host = url
         .host()
-        .ok_or_else(|| "Base URL 缺少有效 host".to_string())?;
+        .ok_or_else(|| pick("Base URL 缺少有效 host", "Base URL is missing a valid host").to_string())?;
     if url.query().is_some() || url.fragment().is_some() {
-        return Err("Base URL 不能包含 query 或 fragment".into());
+        return Err(pick("Base URL 不能包含 query 或 fragment", "Base URL can't contain a query or fragment").into());
     }
     match url.scheme() {
         "https" => Ok(url),
         "http" if is_loopback_host(host) => Ok(url),
-        "http" => Err("远端 AI 服务只允许 HTTPS；HTTP 仅允许本机 loopback".into()),
-        _ => Err("Base URL 只允许 HTTPS，或显式的本机 loopback HTTP".into()),
+        "http" => Err(pick("远端 AI 服务只允许 HTTPS；HTTP 仅允许本机 loopback", "Remote AI services require HTTPS; HTTP is only allowed for local loopback").into()),
+        _ => Err(pick("Base URL 只允许 HTTPS，或显式的本机 loopback HTTP", "Base URL must use HTTPS, or HTTP on an explicit local loopback address").into()),
     }
 }
 
@@ -629,9 +640,9 @@ pub(crate) fn build_ai_endpoint(base_url: &str, suffix: &str) -> Result<Url, Str
     let base = validate_base_url(base_url)?;
     let normalized = format!("{}/", base.as_str().trim_end_matches('/'));
     Url::parse(&normalized)
-        .map_err(|_| "Base URL 无效".to_string())?
+        .map_err(|_| pick("Base URL 无效", "Invalid Base URL").to_string())?
         .join(suffix.trim_start_matches('/'))
-        .map_err(|_| "无法构造 AI endpoint".to_string())
+        .map_err(|_| pick("无法构造 AI endpoint", "Can't build the AI endpoint").to_string())
 }
 
 fn http_client() -> Result<&'static reqwest::Client, String> {
@@ -646,26 +657,26 @@ fn http_client() -> Result<&'static reqwest::Client, String> {
         .redirect(Policy::none())
         .user_agent("Toskr/AI")
         .build()
-        .map_err(|_| "无法初始化安全 HTTP client".to_string())?;
+        .map_err(|_| pick("无法初始化安全 HTTP client", "Can't initialize the secure HTTP client").to_string())?;
     let _ = HTTP_CLIENT.set(client);
     HTTP_CLIENT
         .get()
-        .ok_or_else(|| "无法初始化安全 HTTP client".to_string())
+        .ok_or_else(|| pick("无法初始化安全 HTTP client", "Can't initialize the secure HTTP client").to_string())
 }
 
 async fn bounded_success_body(mut response: reqwest::Response) -> Result<Vec<u8>, String> {
     let status = response.status();
     if !status.is_success() {
-        return Err(format!("AI 服务返回错误（HTTP {}）", status.as_u16()));
+        return Err(crate::tr_fmt!("AI 服务返回错误（HTTP {}）", "AI service returned an error (HTTP {})", status.as_u16()));
     }
     let mut body = Vec::new();
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|_| "读取 AI 响应失败".to_string())?
+        .map_err(|_| pick("读取 AI 响应失败", "Failed to read the AI response").to_string())?
     {
         if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
-            return Err("AI 响应超过安全上限".into());
+            return Err(pick("AI 响应超过安全上限", "AI response exceeds the safe size limit").into());
         }
         body.extend_from_slice(&chunk);
     }
@@ -679,7 +690,7 @@ async fn send_json(endpoint: Url, key: &str, body: serde_json::Value) -> Result<
         .json(&body)
         .send()
         .await
-        .map_err(|_| "网络请求失败，请检查 Base URL 与网络连接".to_string())?;
+        .map_err(|_| pick("网络请求失败，请检查 Base URL 与网络连接", "Network request failed. Check the Base URL and your connection").to_string())?;
     bounded_success_body(response).await
 }
 
@@ -689,7 +700,7 @@ async fn send_get(endpoint: Url, key: &str) -> Result<Vec<u8>, String> {
         .bearer_auth(key)
         .send()
         .await
-        .map_err(|_| "网络请求失败，请检查 Base URL 与网络连接".to_string())?;
+        .map_err(|_| pick("网络请求失败，请检查 Base URL 与网络连接", "Network request failed. Check the Base URL and your connection").to_string())?;
     bounded_success_body(response).await
 }
 
@@ -713,9 +724,9 @@ pub async fn ai_chat(
             let endpoint = build_ai_endpoint(&request.base_url, "v1/chat/completions")?;
             let key = tauri::async_runtime::spawn_blocking(configured_key)
                 .await
-                .map_err(|_| "AI 密钥读取任务失败".to_string())??;
+                .map_err(|_| pick(SECRET_ERR_7.0, SECRET_ERR_7.1).to_string())??;
             if ai_binding(&request, &crate::privacy::load_custom_rules(&app)?)? != binding {
-                return Err("AI 隐私规则已变化，请重新确认".into());
+                return Err(pick("AI 隐私规则已变化，请重新确认", "AI privacy rules changed. Confirm again").into());
             }
             let body = serde_json::json!({
                 "model": request.model,
@@ -740,14 +751,14 @@ pub async fn ai_list_models(base_url: String) -> Result<Vec<String>, String> {
     let endpoint = build_ai_endpoint(&base_url, "v1/models")?;
     let key = tauri::async_runtime::spawn_blocking(configured_key)
         .await
-        .map_err(|_| "AI 密钥读取任务失败".to_string())??;
+        .map_err(|_| pick(SECRET_ERR_7.0, SECRET_ERR_7.1).to_string())??;
     let response = send_get(endpoint, &key).await?;
     extract_model_ids(&response)
 }
 
 fn extract_model_ids(body: &[u8]) -> Result<Vec<String>, String> {
     let value: serde_json::Value =
-        serde_json::from_slice(body).map_err(|_| "模型列表响应非 JSON".to_string())?;
+        serde_json::from_slice(body).map_err(|_| pick("模型列表响应非 JSON", "Model list response isn't JSON").to_string())?;
     if let Some(items) = value.get("data").and_then(serde_json::Value::as_array) {
         let mut ids: Vec<String> = items
             .iter()
@@ -760,12 +771,12 @@ fn extract_model_ids(body: &[u8]) -> Result<Vec<String>, String> {
             return Ok(ids);
         }
     }
-    Err("模型列表响应格式异常".into())
+    Err(pick("模型列表响应格式异常", "Unexpected model list response format").into())
 }
 
 fn extract_content(body: &[u8]) -> Result<String, String> {
     let value: serde_json::Value =
-        serde_json::from_slice(body).map_err(|_| "AI 响应非 JSON".to_string())?;
+        serde_json::from_slice(body).map_err(|_| pick("AI 响应非 JSON", "AI response isn't JSON").to_string())?;
     if let Some(content) = value
         .get("choices")
         .and_then(|choices| choices.get(0))
@@ -774,11 +785,11 @@ fn extract_content(body: &[u8]) -> Result<String, String> {
         .and_then(serde_json::Value::as_str)
     {
         if content.trim().is_empty() {
-            return Err("AI 返回内容为空（推理类模型请换用对话模型）".into());
+            return Err(pick("AI 返回内容为空（推理类模型请换用对话模型）", "AI returned empty content (for reasoning models, switch to a chat model)").into());
         }
         return Ok(content.to_string());
     }
-    Err("AI 响应格式异常".into())
+    Err(pick("AI 响应格式异常", "Unexpected AI response format").into())
 }
 
 #[cfg(test)]

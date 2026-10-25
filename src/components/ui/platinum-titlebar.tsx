@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n";
 
 /** Platinum 标题栏的关闭 / 缩放 / 收起框（仅 Platinum 配色方案渲染）。 */
 export function PlatinumBox({
@@ -34,15 +35,16 @@ export function PlatinumTitlebar({
   onClose: () => void;
   onZoom?: () => void;
 }) {
+  const t = useT();
   return (
     <div data-tauri-drag-region className="platinum-titlebar platinum-window-titlebar">
-      <PlatinumBox kind="close" label="关闭" onClick={onClose} />
+      <PlatinumBox kind="close" label={t("关闭")} onClick={onClose} />
       <span aria-hidden data-tauri-drag-region className="platinum-stripe platinum-stripe--lead" />
       <span data-tauri-drag-region className="platinum-window-titlebar__title">
         {title}
       </span>
       <span aria-hidden data-tauri-drag-region className="platinum-stripe" />
-      {onZoom && <PlatinumBox kind="zoom" label="缩放" onClick={onZoom} />}
+      {onZoom && <PlatinumBox kind="zoom" label={t("缩放")} onClick={onZoom} />}
     </div>
   );
 }

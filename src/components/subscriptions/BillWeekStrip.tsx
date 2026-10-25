@@ -3,10 +3,11 @@ import { useMemo } from "react";
 import { BillAvatar } from "@/components/subscriptions/BillList";
 import { SlidingTabIndicator } from "@/components/ui/sliding-tab-indicator";
 import { billOccurrencesInRange, startOfBillDay } from "@/lib/bills";
+import { useT } from "@/lib/i18n";
+import { weekdayChar } from "@/lib/taskRecurrence";
 import { cn } from "@/lib/utils";
 import type { Bill } from "@/store/notesStore";
 
-const WEEKDAY = "日一二三四五六";
 const DAY_MS = 86_400_000;
 
 /** 未来 7 天各天的到期账单（含今天；仅 active）。 */
@@ -40,11 +41,12 @@ export function BillWeekStrip({
   selectedDay: number;
   onSelectDay: (day: number) => void;
 }) {
+  const t = useT();
   const days = useMemo(() => weekDayBills(bills, now), [bills, now]);
   return (
     <div
       role="tablist"
-      aria-label="未来 7 天到期"
+      aria-label={t("未来 7 天到期")}
       className="surface-inset grid grid-cols-7 gap-1 rounded-xl p-1"
     >
       {days.map(({ day, bills: dueBills }) => {
@@ -73,7 +75,7 @@ export function BillWeekStrip({
                 selected ? "text-primary-foreground/80" : "text-muted-foreground"
               )}
             >
-              {WEEKDAY[d.getDay()]}
+              {weekdayChar(d.getDay(), "short")}
             </span>
             <span className="relative z-10 text-body font-semibold tabular-nums">
               {d.getDate()}

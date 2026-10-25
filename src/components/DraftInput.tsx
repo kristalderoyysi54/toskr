@@ -23,6 +23,7 @@ import { useNoteThumb } from "@/lib/media";
 import { api } from "@/lib/tauri";
 import { TEXT_OPS, type TextOp } from "@/lib/textops";
 import { setPendingUndo, tip } from "@/lib/tip";
+import { useT } from "@/lib/i18n";
 import { useNotesStore } from "@/store/notesStore";
 import { useUIStore, type DraftPendingImage } from "@/store/uiStore";
 import {
@@ -34,6 +35,7 @@ import {
   hasLoadedPersistenceAuthority,
   isPersistencePaused,
 } from "@/store/persistStorage";
+import { sectionName } from "@/lib/i18n/builtinNames";
 
 /** 旧版草稿的 localStorage 键：仅用于一次性收编 + 清除明文残留。
  *  草稿现随主数据文件加密落盘（store.draftText），不再写 WebKit localStorage。 */
@@ -65,6 +67,7 @@ function PendingThumb({
   onOpen: () => void;
   onRemove: () => void;
 }) {
+  const t = useT();
   const url = useNoteThumb(image.file);
   return (
     <span
@@ -75,7 +78,7 @@ function PendingThumb({
     >
       <button
         type="button"
-        aria-label="查看或编辑这张草稿图片"
+        aria-label={t("查看或编辑这张草稿图片")}
         onClick={onOpen}
         className="size-full outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       >
@@ -87,7 +90,7 @@ function PendingThumb({
       </button>
       <button
         type="button"
-        aria-label="移除这张图片"
+        aria-label={t("移除这张图片")}
         onClick={onRemove}
         className={
           "absolute right-0 top-0 rounded-bl-md bg-black/55 p-0.5 text-white opacity-0 outline-none " +
@@ -106,6 +109,7 @@ function PendingThumb({
  * 回车把文字与全部暂存图打成一张组合卡（纯图无文字则成图片卡）。
  */
 export function DraftInput() {
+  const t = useT();
   // 未提交草稿必须扛住组件卸载（切页/收横栏即卸载）：文字持久化在
   // store.draftText（随主数据文件加密落盘，重启也不丢；旧版 localStorage
   // 明文在下方一次性收编）。打字手感优先：本地 state 即时渲染，镜像进
@@ -262,7 +266,7 @@ export function DraftInput() {
     );
     if (result === "duplicate") tip("duplicate", "");
     if (result === "added") {
-      if (first) tip("added", text ? "已添加图文笔记" : "已添加图片");
+      if (first) tip("added", text ? t("已添加图文笔记") : t("已添加图片"));
       if (id && !first) void enrichLinkMeta(id);
     }
     setValue("");
@@ -275,14 +279,14 @@ export function DraftInput() {
     try {
       const after = textOp.apply(before);
       if (after === before) {
-        tip("info", "内容无变化");
+        tip("info", t("内容无变化"));
         return;
       }
       replaceValueImmediately(after);
       setPendingUndo(() => replaceValueImmediately(before));
-      tip("ok", `已处理草稿 · ${textOp.label}`, true);
+      tip("ok", t("已处理草稿 · {op}", { op: t(textOp.label) }), true);
     } catch {
-      tip("warn", `${textOp.label}失败：草稿内容不符合格式`);
+      tip("warn", t("{op}失败：草稿内容不符合格式", { op: t(textOp.label) }));
     }
   };
 
@@ -304,7 +308,7 @@ export function DraftInput() {
           ? validPending.length > 1
             ? `图片 ${validPending.length} 张`
             : `图片 ${first.width}×${first.height}`
-          : "新笔记"),
+          : t("新笔记")),
       first
         ? {
             sectionId,
@@ -330,7 +334,7 @@ export function DraftInput() {
       const images = await api.pasteImagesFromClipboard();
       if (!matchesDataGeneration(lease.generation)) return;
       if (!images.length) {
-        tip("info", "剪贴板里没有可用图片");
+        tip("info", t("剪贴板里没有可用图片"));
         return;
       }
       setPending((p) => {
@@ -343,7 +347,7 @@ export function DraftInput() {
         return next;
       });
     } catch (e) {
-      tip("warn", `粘贴图片失败：${e}`);
+      tip("warn", t("粘贴图片失败：{error}", { error: String(e) }));
     } finally {
       lease.release();
     }
@@ -370,7 +374,7 @@ export function DraftInput() {
             trigger={({ open, toggle }) => (
               <button
                 type="button"
-                aria-label={`添加到分组：${selectedSection?.name ?? "收件箱"}`}
+                aria-label={t("添加到分组：{name}", { name: (selectedSection ? sectionName(selectedSection) : t("收件箱")) })}
                 aria-expanded={open}
                 onClick={toggle}
                 className={
@@ -380,7 +384,7 @@ export function DraftInput() {
                 }
               >
                 <FolderInput className="size-3 shrink-0" />
-                <span className="truncate">{selectedSection?.name ?? "收件箱"}</span>
+                <span className="truncate">{(selectedSection ? sectionName(selectedSection) : t("收件箱"))}</span>
                 <ChevronUp
                   className={`size-2.5 shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
                 />
@@ -404,7 +408,7 @@ export function DraftInput() {
                         section.id === sectionId ? "size-3.5" : "size-3.5 opacity-0"
                       }
                     />
-                    <span className="truncate">{section.name}</span>
+                    <span className="truncate">{sectionName(section)}</span>
                   </SimpleMenuItem>
                 ))}
               </>
@@ -440,11 +444,11 @@ export function DraftInput() {
                 align="end"
                 side="top"
                 className="flex"
-                menuAriaLabel="处理新增草稿"
+                menuAriaLabel={t("处理新增草稿")}
                 menuClassName="w-40"
                 trigger={({ open, toggle, controls }) => (
                   <IconButton
-                    label="处理新增草稿"
+                    label={t("处理新增草稿")}
                     stopPropagation={false}
                     pressed={open}
                     aria-haspopup="menu"
@@ -459,7 +463,7 @@ export function DraftInput() {
               >
                 {(close) => (
                   <>
-                    <SimpleMenuLabel>处理当前草稿</SimpleMenuLabel>
+                    <SimpleMenuLabel>{t("处理当前草稿")}</SimpleMenuLabel>
                     {TEXT_OPS.map((textOp) => (
                       <SimpleMenuItem
                         key={textOp.id}
@@ -468,7 +472,7 @@ export function DraftInput() {
                           applyDraftTextOp(textOp);
                         }}
                       >
-                        {textOp.label}
+                        {t(textOp.label)}
                       </SimpleMenuItem>
                     ))}
                   </>
@@ -476,7 +480,7 @@ export function DraftInput() {
               </SimpleMenu>
             )}
             <IconButton
-              label="转大窗编辑（草稿与暂存图一起带走）"
+              label={t("转大窗编辑（草稿与暂存图一起带走）")}
               stopPropagation={false}
               disabled={dataLocked}
               onClick={expandToDetail}
@@ -486,7 +490,7 @@ export function DraftInput() {
             </IconButton>
           </div>
         }
-        placeholder={pending.length > 0 ? "配点文字，回车一起入卡…" : "添加笔记或提示词…"}
+        placeholder={pending.length > 0 ? t("配点文字，回车一起入卡…") : t("添加笔记或提示词…")}
       />
     </div>
   );

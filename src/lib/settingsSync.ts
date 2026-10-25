@@ -10,6 +10,7 @@ import { emitToDetailWindows } from "@/lib/detailWindows";
 import { isDataOperationLocked } from "@/store/dataOperationStore";
 import { useDataOperationStore } from "@/store/dataOperationStore";
 import { DATA_ACTIVITY_EVENT } from "@/lib/dataOperations";
+import { t } from "@/lib/i18n";
 import { tip } from "@/lib/tip";
 import { withoutLegacyAiApiKey } from "@/lib/aiKeyMigration";
 import { useNotesStore, type Settings } from "@/store/notesStore";
@@ -66,11 +67,11 @@ let privacySaveSequence = 0;
 async function finishPrivacySettingsSave(sequence: number, draftId?: string, scanRevision?: number) {
   try {
     await flushPendingWrites();
-    if (isPersistencePaused() || !hasLoadedPersistenceAuthority()) throw new Error("设置未写入磁盘");
+    if (isPersistencePaused() || !hasLoadedPersistenceAuthority()) throw new Error(t("设置未写入磁盘"));
     if (sequence !== privacySaveSequence) return;
-    tip("ok", draftId ? "敏感字段已保存，请重新检查当前发送内容" : "敏感字段已保存");
+    tip("ok", draftId ? t("敏感字段已保存，请重新检查当前发送内容") : t("敏感字段已保存"));
   } catch (error) {
-    if (sequence === privacySaveSequence) tip("warn", "敏感字段保存失败，尚未生效；请处理存储问题后重新保存");
+    if (sequence === privacySaveSequence) tip("warn", t("敏感字段保存失败，尚未生效；请处理存储问题后重新保存"));
     throw error;
   } finally {
     const current = useDeliveryStore.getState();
@@ -85,7 +86,7 @@ async function finishPrivacySettingsSave(sequence: number, draftId?: string, sca
 /** 应用设置补丁并执行对应的 Rust 侧副作用（主面板调用）。 */
 export function applySettingsPatch(patch: Partial<Settings>) {
   if (isDataOperationLocked()) {
-    tip("warn", "数据操作进行中，设置暂时只读");
+    tip("warn", t("数据操作进行中，设置暂时只读"));
     broadcastSettings();
     return;
   }
@@ -93,17 +94,17 @@ export function applySettingsPatch(patch: Partial<Settings>) {
   if (savesSensitiveFields) {
     const delivery = useDeliveryStore.getState();
     if (!isCustomSensitiveFieldsValid(patch.firewallCustomSensitiveFields)) {
-      tip("warn", "敏感字段格式无效，请检查字段名称");
+      tip("warn", t("敏感字段格式无效，请检查字段名称"));
       broadcastSettings();
       return;
     }
     if (delivery.busy || delivery.draft?.imageFirewall.some((item) => item.status === "redacting")) {
-      tip("warn", "发送或图片打码进行中，请完成后再修改敏感字段");
+      tip("warn", t("发送或图片打码进行中，请完成后再修改敏感字段"));
       broadcastSettings();
       return;
     }
     if (isPersistencePaused() || !hasLoadedPersistenceAuthority()) {
-      tip("warn", "存储尚未就绪，敏感字段未保存");
+      tip("warn", t("存储尚未就绪，敏感字段未保存"));
       broadcastSettings();
       return;
     }
@@ -119,7 +120,7 @@ export function applySettingsPatch(patch: Partial<Settings>) {
     useNotesStore.getState().settings.rightSidebar
   ) {
     patch = { ...patch, rightSidebar: false, panelFreeX: null, panelFreeY: null };
-    tip("info", "边栏已关闭，恢复伴随磁吸");
+    tip("info", t("边栏已关闭，恢复伴随磁吸"));
   }
   // 伴随接管沿用“常显示”默认；默认贴边能力不强制图钉，快捷键呼出由单次
   // 会话保护控制，普通打开仍服从用户的失焦设置。
@@ -147,7 +148,7 @@ export function applySettingsPatch(patch: Partial<Settings>) {
             scanRevision: item.scanRevision + 1,
             keptFindingIds: [],
             rawConfirmation: null,
-            failureMessage: "敏感字段已更新，请重新检查图片",
+            failureMessage: t("敏感字段已更新，请重新检查图片"),
           }),
           privacyDecision: { ...current.draft.privacyDecision, excludedFindingIds: [], rawConfirmation: null },
         },
@@ -166,7 +167,7 @@ export function applySettingsPatch(patch: Partial<Settings>) {
     !s.targetProfiles.some((profile) => profile.id === profileOverrideId)
   ) {
     clearTargetProfileOverride();
-    tip("info", "本次发送方案已被删除，已恢复自动匹配");
+    tip("info", t("本次发送方案已被删除，已恢复自动匹配"));
   }
   if ("detailFontSize" in patch) {
     // 详情窗可能正开着：把新字号实时推过去（详情窗 ⌘+/⌘- 的回声推送幂等）
@@ -281,7 +282,7 @@ export function installSettingsSyncHost(handlers: {
 }) {
   const whileWritable = (action: () => void) => {
     if (isDataOperationLocked()) {
-      tip("warn", "数据操作进行中，当前操作已阻止");
+      tip("warn", t("数据操作进行中，当前操作已阻止"));
       return;
     }
     action();

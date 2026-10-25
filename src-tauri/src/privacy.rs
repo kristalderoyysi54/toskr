@@ -1,3 +1,4 @@
+use crate::i18n::pick;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -41,7 +42,7 @@ pub(crate) fn valid_custom_sensitive_fields(value: &serde_json::Value) -> bool {
 impl CustomSensitiveRules {
     pub(crate) fn new(fields: Vec<String>) -> Result<Self, String> {
         if !valid_custom_sensitive_fields(&serde_json::json!(fields)) {
-            return Err("自定义敏感字段配置无效，请在设置中检查字段名".into());
+            return Err(pick("自定义敏感字段配置无效，请在设置中检查字段名", "Invalid custom sensitive field settings. Check the field names in Settings").into());
         }
         let mut fields: Vec<_> = fields.into_iter().map(|field| field.to_ascii_lowercase()).collect();
         fields.sort();
@@ -52,30 +53,30 @@ impl CustomSensitiveRules {
         }).collect::<String>()).collect::<Vec<_>>().join("|");
         // 字段两侧不可延伸为另一字段；说明括号内不跨行。值支持引号包裹的空格。
         let pattern = format!(r#"(?:^|[^\p{{L}}\p{{N}}_.-])(?:{names})["']?(?:[ \t]*[（(][^\r\n）)]*[）)])?(?:[ \t]*[:：=][ \t]*|[ \t]+)(?P<secret>"[^"\r\n]+"|'[^'\r\n]+'|[^\s"'<>，,;；}}]+)"#);
-        let regex = Regex::new(&pattern).map_err(|_| "无法编译自定义敏感字段规则".to_string())?;
+        let regex = Regex::new(&pattern).map_err(|_| pick("无法编译自定义敏感字段规则", "Can't compile custom sensitive field rules").to_string())?;
         Ok(Self { fields, regex: Some(regex) })
     }
 }
 
 fn custom_rules_from_document(raw: Option<&str>) -> Result<CustomSensitiveRules, String> {
     let Some(raw) = raw else { return Ok(CustomSensitiveRules::default()); };
-    let bag: serde_json::Value = serde_json::from_str(raw).map_err(|_| "无法读取敏感字段配置".to_string())?;
+    let bag: serde_json::Value = serde_json::from_str(raw).map_err(|_| pick("无法读取敏感字段配置", "Can't read sensitive field settings").to_string())?;
     // 首次安装的空 store 尚无持久化状态；已有但损坏的 canonical 项不得回退。
     if bag.as_object().is_some_and(serde_json::Map::is_empty) {
         return Ok(CustomSensitiveRules::default());
     }
     let persisted = bag.get("toskr").or_else(|| bag.get("copper")).and_then(serde_json::Value::as_str)
-        .ok_or("无法读取敏感字段配置")?;
-    let root: serde_json::Value = serde_json::from_str(persisted).map_err(|_| "无法读取敏感字段配置".to_string())?;
+        .ok_or(pick("无法读取敏感字段配置", "Can't read sensitive field settings"))?;
+    let root: serde_json::Value = serde_json::from_str(persisted).map_err(|_| pick("无法读取敏感字段配置", "Can't read sensitive field settings").to_string())?;
     let settings = root.get("state").and_then(|state| state.get("settings")).and_then(serde_json::Value::as_object)
-        .ok_or("无法读取敏感字段配置")?;
+        .ok_or(pick("无法读取敏感字段配置", "Can't read sensitive field settings"))?;
     let Some(value) = settings.get("firewallCustomSensitiveFields") else { return Ok(CustomSensitiveRules::default()); };
-    let fields: Vec<String> = serde_json::from_value(value.clone()).map_err(|_| "自定义敏感字段配置无效".to_string())?;
+    let fields: Vec<String> = serde_json::from_value(value.clone()).map_err(|_| pick("自定义敏感字段配置无效", "Invalid custom sensitive field settings").to_string())?;
     CustomSensitiveRules::new(fields)
 }
 
 pub(crate) fn load_custom_rules(app: &tauri::AppHandle) -> Result<CustomSensitiveRules, String> {
-    let snapshot = crate::storage::read_data_snapshot(app).map_err(|_| "无法读取敏感字段配置，请检查数据存储状态".to_string())?;
+    let snapshot = crate::storage::read_data_snapshot(app).map_err(|_| pick("无法读取敏感字段配置，请检查数据存储状态", "Can't read sensitive field settings. Check data storage status").to_string())?;
     custom_rules_from_document(snapshot.content.as_deref())
 }
 
@@ -973,8 +974,9 @@ pub(crate) fn scan_sensitive_text_with_rules(request: ScanSensitiveRequest, rule
             findings: Vec::new(),
             warnings: vec![ScanWarning {
                 code: ScanWarningCode::InputTooLong,
-                message: format!(
+                message: crate::tr_fmt!(
                     "文本超过本地扫描上限（{} 字节），未执行不完整扫描",
+                    "Text exceeds the local scan limit ({} bytes); no partial scan was run",
                     MAX_SCAN_INPUT_BYTES
                 ),
                 max_bytes: MAX_SCAN_INPUT_BYTES,

@@ -12,6 +12,7 @@
 //! 目标应用不由代码预置：调用方须传入用户「探测并确认」得到的 `ImProfile`
 //! （bundle id / 主可执行路径），原生重查运行态后只操作已确认主进程与本次 Child。
 
+use crate::i18n::pick;
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -73,28 +74,28 @@ fn process_identity(pid: i32) -> Option<ProcessIdentity> {
 
 fn verify_profile(profile: ImProfile) -> Result<VerifiedProfile, String> {
     let bin_path =
-        std::fs::canonicalize(&profile.bin_path).map_err(|_| "目标 IM 可执行路径无效")?;
+        std::fs::canonicalize(&profile.bin_path).map_err(|_| pick("目标 IM 可执行路径无效", "Invalid target IM executable path"))?;
     let candidate = crate::focus::running_regular_apps()
         .into_iter()
         .find(|candidate| {
             candidate.bundle_id == profile.bundle_id
                 && std::fs::canonicalize(&candidate.bin_path).ok().as_ref() == Some(&bin_path)
         })
-        .ok_or("目标应用身份已变化，请重新探测并确认")?;
+        .ok_or(pick("目标应用身份已变化，请重新探测并确认", "Target app identity changed. Detect and confirm again"))?;
     let info = crate::focus::running_app_info_for_bundle(&candidate.bundle_id)
-        .ok_or("目标 IM 已退出，请重新探测")?;
-    let initial = process_identity(info.pid).ok_or("无法确认目标 IM 进程身份")?;
+        .ok_or(pick("目标 IM 已退出，请重新探测", "Target IM quit. Detect again"))?;
+    let initial = process_identity(info.pid).ok_or(pick("无法确认目标 IM 进程身份", "Can't confirm the target IM process identity"))?;
     if initial.bin_path != bin_path || initial.bundle_id != profile.bundle_id {
-        return Err("目标 IM 的 bundle 与可执行路径不匹配".into());
+        return Err(pick("目标 IM 的 bundle 与可执行路径不匹配", "Target IM bundle and executable path don't match").into());
     }
-    let macos = bin_path.parent().ok_or("目标路径无效")?;
-    let contents = macos.parent().ok_or("目标路径无效")?;
-    let bundle_path = contents.parent().ok_or("目标路径无效")?;
+    let macos = bin_path.parent().ok_or(pick("目标路径无效", "Invalid target path"))?;
+    let contents = macos.parent().ok_or(pick("目标路径无效", "Invalid target path"))?;
+    let bundle_path = contents.parent().ok_or(pick("目标路径无效", "Invalid target path"))?;
     if macos.file_name().is_none_or(|name| name != "MacOS")
         || contents.file_name().is_none_or(|name| name != "Contents")
         || bundle_path.extension().is_none_or(|ext| ext != "app")
     {
-        return Err("仅支持应用包内的主可执行文件".into());
+        return Err(pick("仅支持应用包内的主可执行文件", "Only the main executable inside an app bundle is supported").into());
     }
     Ok(VerifiedProfile {
         bundle_path: bundle_path.to_path_buf(),
@@ -127,8 +128,8 @@ pub fn set_enabled(
         return Ok(message_watch::current_status(app));
     }
 
-    let script = script.ok_or("缺少 CDP 桥脚本")?;
-    let profile = profile.ok_or("未指定要监听的 IM（请先在设置里探测并确认）")?;
+    let script = script.ok_or(pick("缺少 CDP 桥脚本", "CDP bridge script missing"))?;
+    let profile = profile.ok_or(pick("未指定要监听的 IM（请先在设置里探测并确认）", "No IM selected to watch (detect and confirm one in Settings first)"))?;
     let profile = verify_profile(profile)?;
     let generation = message_watch::cdp_begin(app);
     let app_task = app.clone();
@@ -184,7 +185,7 @@ async fn run_cdp(app: AppHandle, generation: u64, script: String, profile: Verif
             fail_current_session(
                 &app,
                 generation,
-                "IM 启动任务异常，请手动检查目标应用".into(),
+                pick("IM 启动任务异常，请手动检查目标应用", "IM launch task failed. Check the target app manually").into(),
             );
             return;
         }
@@ -201,7 +202,7 @@ async fn run_cdp(app: AppHandle, generation: u64, script: String, profile: Verif
             .as_mut()
             .is_none_or(|child| child.try_wait().ok().flatten().is_some())
         {
-            message_watch::cdp_set_error(&app, "目标 IM 已退出，自动接入结束".into());
+            message_watch::cdp_set_error(&app, pick("目标 IM 已退出，自动接入结束", "Target IM quit; auto-connect ended").into());
             break;
         }
         match cdp_session(&app, &browser_ws, &script, generation).await {
@@ -226,7 +227,7 @@ async fn run_cdp(app: AppHandle, generation: u64, script: String, profile: Verif
             crate::diag::push(&app, "IM CDP 恢复失败，需要手动检查目标应用");
             message_watch::cdp_set_error(&app, error);
         }
-        Err(_) => message_watch::cdp_set_error(&app, "IM 恢复任务异常，需要手动检查".into()),
+        Err(_) => message_watch::cdp_set_error(&app, pick("IM 恢复任务异常，需要手动检查", "IM recovery task failed. Check manually").into()),
     }
 }
 
@@ -252,7 +253,7 @@ async fn cdp_session(
 ) -> Result<(), String> {
     let (ws, _) = connect_async(browser_ws)
         .await
-        .map_err(|e| format!("连接 CDP 失败：{e}"))?;
+        .map_err(|e| crate::tr_fmt!("连接 CDP 失败：{e}", "Failed to connect to CDP: {e}"))?;
     let (mut write, mut read) = ws.split();
     let mut id: i64 = 0;
 
@@ -271,7 +272,7 @@ async fn cdp_session(
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
-    let page_target = page_target.ok_or("未找到 IM 页面（加载超时）")?;
+    let page_target = page_target.ok_or(pick("未找到 IM 页面（加载超时）", "IM page not found (load timed out)"))?;
 
     // 2. attach（flatten：后续命令/事件带 sessionId）
     id += 1;
@@ -288,7 +289,7 @@ async fn cdp_session(
         .get("sessionId")
         .and_then(|v| v.as_str())
         .map(String::from)
-        .ok_or("attach 未返回 sessionId")?;
+        .ok_or(pick("attach 未返回 sessionId", "attach returned no sessionId"))?;
 
     // 3. 注入：enable → addBinding → 导航后自动重注入的脚本 → 当前页立即执行
     let inject: [(&str, Value); 5] = [
@@ -330,12 +331,12 @@ async fn cdp_session(
         }
         match tokio::time::timeout(Duration::from_secs(1), read.next()).await {
             Err(_) => continue, // 定期醒来检查 generation
-            Ok(None) => return Err("CDP 流结束".into()),
+            Ok(None) => return Err(pick("CDP 流结束", "CDP stream ended").into()),
             Ok(Some(msg)) => {
-                let msg = msg.map_err(|e| format!("CDP 读失败：{e}"))?;
+                let msg = msg.map_err(|e| crate::tr_fmt!("CDP 读失败：{e}", "CDP read failed: {e}"))?;
                 let text = match msg {
                     Message::Text(t) => t.as_str().to_owned(),
-                    Message::Close(_) => return Err("CDP 连接被关闭".into()),
+                    Message::Close(_) => return Err(pick("CDP 连接被关闭", "CDP connection closed").into()),
                     _ => continue,
                 };
                 if let Ok(value) = serde_json::from_str::<Value>(&text) {
@@ -361,7 +362,7 @@ async fn send_cmd(
     write
         .send(Message::text(obj.to_string()))
         .await
-        .map_err(|e| format!("CDP 发送失败：{e}"))
+        .map_err(|e| crate::tr_fmt!("CDP 发送失败：{e}", "CDP send failed: {e}"))
 }
 
 /// 读到匹配 id 的响应返回其 result；期间到达的事件顺手处理（不丢 bindingCalled）。
@@ -375,13 +376,13 @@ async fn await_result(
 ) -> Result<Value, String> {
     loop {
         match tokio::time::timeout(Duration::from_secs(10), read.next()).await {
-            Err(_) => return Err("CDP 命令响应超时".into()),
-            Ok(None) => return Err("CDP 流结束".into()),
+            Err(_) => return Err(pick("CDP 命令响应超时", "CDP command timed out").into()),
+            Ok(None) => return Err(pick("CDP 流结束", "CDP stream ended").into()),
             Ok(Some(msg)) => {
-                let msg = msg.map_err(|e| format!("CDP 读失败：{e}"))?;
+                let msg = msg.map_err(|e| crate::tr_fmt!("CDP 读失败：{e}", "CDP read failed: {e}"))?;
                 let text = match msg {
                     Message::Text(t) => t.as_str().to_owned(),
-                    Message::Close(_) => return Err("CDP 连接被关闭".into()),
+                    Message::Close(_) => return Err(pick("CDP 连接被关闭", "CDP connection closed").into()),
                     _ => continue,
                 };
                 let value: Value = match serde_json::from_str(&text) {
@@ -390,7 +391,7 @@ async fn await_result(
                 };
                 if value.get("id").and_then(|v| v.as_i64()) == Some(want_id) {
                     if let Some(error) = value.get("error") {
-                        return Err(format!("CDP 命令失败：{error}"));
+                        return Err(crate::tr_fmt!("CDP 命令失败：{error}", "CDP command failed: {error}"));
                     }
                     return Ok(value.get("result").cloned().unwrap_or(Value::Null));
                 }
@@ -479,7 +480,7 @@ impl SessionRuntime for NativeSession {
         };
         if child
             .try_wait()
-            .map_err(|_| "读取本次 IM 进程状态失败")?
+            .map_err(|_| pick("读取本次 IM 进程状态失败", "Failed to read IM process state"))?
             .is_some()
         {
             self.child.take();
@@ -487,13 +488,13 @@ impl SessionRuntime for NativeSession {
         }
         // Child 未被 wait 回收时 PID 不会重用。只请求本次主进程正常退出，不强杀 Helper。
         if unsafe { libc::kill(child.id() as i32, libc::SIGTERM) } != 0 {
-            return Err("无法结束本次 IM 调试进程，请手动关闭".into());
+            return Err(pick("无法结束本次 IM 调试进程，请手动关闭", "Can't end the IM debug process. Quit it manually").into());
         }
         if !wait_until(
             || child.try_wait().ok().flatten().is_some(),
             Duration::from_secs(8),
         ) {
-            return Err("本次 IM 调试进程尚未退出，未启动恢复实例；请手动关闭".into());
+            return Err(pick("本次 IM 调试进程尚未退出，未启动恢复实例；请手动关闭", "IM debug process hasn't quit, so it wasn't relaunched normally. Quit it manually").into());
         }
         self.child.take();
         Ok(())
@@ -502,17 +503,17 @@ impl SessionRuntime for NativeSession {
     fn restore_normal(&mut self) -> Result<(), String> {
         let address = std::net::SocketAddr::from(([127, 0, 0, 1], self.port));
         if std::net::TcpStream::connect_timeout(&address, Duration::from_millis(200)).is_ok() {
-            return Err("本次调试端口仍可访问，未确认恢复；请手动关闭目标 IM".into());
+            return Err(pick("本次调试端口仍可访问，未确认恢复；请手动关闭目标 IM", "Debug port is still reachable; recovery not confirmed. Quit the target IM manually").into());
         }
         if crate::focus::running_app_info_for_bundle(&self.profile.profile.bundle_id).is_some() {
-            return Err("检测到会话外启动的 IM，未操作该进程；请手动确认调试模式已关闭".into());
+            return Err(pick("检测到会话外启动的 IM，未操作该进程；请手动确认调试模式已关闭", "An IM launched outside this session was detected and left alone. Make sure debug mode is off").into());
         }
         let status = Command::new("/usr/bin/open")
             .arg(&self.profile.bundle_path)
             .status()
-            .map_err(|_| "无法启动目标 IM 的正常模式")?;
+            .map_err(|_| pick("无法启动目标 IM 的正常模式", "Can't launch the target IM normally"))?;
         if !status.success() {
-            return Err("目标 IM 正常启动命令失败".into());
+            return Err(pick("目标 IM 正常启动命令失败", "Target IM normal launch command failed").into());
         }
         if !wait_until(
             || {
@@ -522,7 +523,7 @@ impl SessionRuntime for NativeSession {
             },
             Duration::from_secs(8),
         ) {
-            return Err("未能核验目标 IM 正常启动，请手动打开应用".into());
+            return Err(pick("未能核验目标 IM 正常启动，请手动打开应用", "Couldn't verify the target IM launched normally. Open it manually").into());
         }
         Ok(())
     }
@@ -539,20 +540,20 @@ fn launch_im_with_cdp(profile: &VerifiedProfile) -> Result<(String, Child, u16),
     let launch: Result<String, String> = (|| {
         runtime.child = Some(spawn_im(&profile.profile, port)?);
         let ws = await_browser_ws(runtime.child.as_mut().unwrap(), Duration::from_secs(15))?;
-        let endpoint = reqwest::Url::parse(&ws).map_err(|_| "IM 调试端点格式无效")?;
+        let endpoint = reqwest::Url::parse(&ws).map_err(|_| pick("IM 调试端点格式无效", "Invalid IM debug endpoint"))?;
         if endpoint.scheme() != "ws"
             || endpoint.host_str() != Some("127.0.0.1")
             || endpoint.port() != Some(port)
         {
-            return Err("IM 调试端点与本次本机端口不匹配".into());
+            return Err(pick("IM 调试端点与本次本机端口不匹配", "IM debug endpoint doesn't match the local port").into());
         }
         Ok(ws)
     })();
     match launch {
         Ok(ws) => Ok((ws, runtime.child.take().unwrap(), port)),
         Err(error) => match finish_session(&mut runtime) {
-            Ok(()) => Err(format!("{error}；已核验恢复正常启动")),
-            Err(recovery) => Err(format!("{error}；{recovery}")),
+            Ok(()) => Err(crate::tr_fmt!("{error}；已核验恢复正常启动", "{error}; verified the normal launch was restored")),
+            Err(recovery) => Err(crate::tr_fmt!("{error}；{recovery}", "{error}; {recovery}")),
         },
     }
 }
@@ -568,13 +569,13 @@ fn terminate_checked(
     wait_for_exit: impl FnOnce() -> bool,
 ) -> Result<(), String> {
     if !identity_matches(identity, current) {
-        return Err("目标 IM 进程身份已变化，未执行重启".into());
+        return Err(pick("目标 IM 进程身份已变化，未执行重启", "Target IM process identity changed; not restarted").into());
     }
     if !terminate() {
-        return Err("目标 IM 拒绝退出，请先保存工作并手动关闭".into());
+        return Err(pick("目标 IM 拒绝退出，请先保存工作并手动关闭", "Target IM refused to quit. Save your work and quit it manually").into());
     }
     if !wait_for_exit() {
-        return Err("目标 IM 尚未退出，未强制结束进程".into());
+        return Err(pick("目标 IM 尚未退出，未强制结束进程", "Target IM hasn't quit; it wasn't force-quit").into());
     }
     Ok(())
 }
@@ -582,7 +583,7 @@ fn terminate_checked(
 fn terminate_confirmed(identity: &ProcessIdentity) -> Result<(), String> {
     let app =
         objc2_app_kit::NSRunningApplication::runningApplicationWithProcessIdentifier(identity.pid)
-            .ok_or("目标 IM 已退出")?;
+            .ok_or(pick("目标 IM 已退出", "Target IM quit"))?;
     terminate_checked(
         identity,
         process_identity(identity.pid).as_ref(),
@@ -598,11 +599,11 @@ fn terminate_confirmed(identity: &ProcessIdentity) -> Result<(), String> {
 
 fn pick_free_port() -> Result<u16, String> {
     let listener =
-        TcpListener::bind(("127.0.0.1", 0)).map_err(|e| format!("选空闲端口失败：{e}"))?;
+        TcpListener::bind(("127.0.0.1", 0)).map_err(|e| crate::tr_fmt!("选空闲端口失败：{e}", "Failed to pick a free port: {e}"))?;
     listener
         .local_addr()
         .map(|addr| addr.port())
-        .map_err(|e| format!("读取端口失败：{e}"))
+        .map_err(|e| crate::tr_fmt!("读取端口失败：{e}", "Failed to read port: {e}"))
 }
 
 fn spawn_im(profile: &ImProfile, port: u16) -> Result<Child, String> {
@@ -612,13 +613,13 @@ fn spawn_im(profile: &ImProfile, port: u16) -> Result<Child, String> {
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("启动目标 IM 失败：{e}"))
+        .map_err(|e| crate::tr_fmt!("启动目标 IM 失败：{e}", "Failed to launch target IM: {e}"))
 }
 
 /// 后台线程读 stderr 抓首个 `ws://…`（DevTools listening），随后继续读丢以排空管道，
 /// 避免目标 IM 因 stderr 管道写满而卡住。
 fn await_browser_ws(child: &mut Child, timeout: Duration) -> Result<String, String> {
-    let stderr = child.stderr.take().ok_or("无法读取目标 IM 的 stderr")?;
+    let stderr = child.stderr.take().ok_or(pick("无法读取目标 IM 的 stderr", "Can't read target IM stderr"))?;
     let (tx, rx) = std::sync::mpsc::channel();
     thread::spawn(move || {
         let reader = BufReader::new(stderr);
@@ -640,7 +641,7 @@ fn await_browser_ws(child: &mut Child, timeout: Duration) -> Result<String, Stri
         }
     });
     rx.recv_timeout(timeout)
-        .map_err(|_| "等待目标 IM 调试端口就绪超时".to_string())
+        .map_err(|_| pick("等待目标 IM 调试端口就绪超时", "Timed out waiting for the target IM debug port").to_string())
 }
 
 fn wait_until(mut cond: impl FnMut() -> bool, timeout: Duration) -> bool {

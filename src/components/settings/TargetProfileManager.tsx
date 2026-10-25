@@ -8,6 +8,7 @@ import { ProfileConflictResolver } from "@/components/settings/ProfileConflictRe
 import { ProfileCreateSheet } from "@/components/settings/ProfileCreateSheet";
 import { ProfileEditor } from "@/components/settings/ProfileEditor";
 import { ProfileList } from "@/components/settings/ProfileList";
+import { useT } from "@/lib/i18n";
 import { api, TARGET_CHANGED_EVENT, type TargetSnapshot } from "@/lib/tauri";
 import {
   reorderProfilesKeepingDefault,
@@ -39,6 +40,7 @@ export function TargetProfileManager({
   searchTarget?: string | null;
   searchSequence?: number;
 }) {
+  const t = useT();
   const [selectedProfileId, setSelectedProfileId] = useState(
     settings.defaultTargetProfileId
   );
@@ -218,7 +220,7 @@ export function TargetProfileManager({
       acceptTarget(await api.refreshTargetSnapshot());
     } catch {
       if (latestTargetRevision.current === revisionAtStart) {
-        setTestMessage("刷新目标失败，请切回目标应用后重试。");
+        setTestMessage(t("刷新目标失败，请切回目标应用后重试。"));
       }
     } finally {
       setRefreshing(false);
@@ -227,12 +229,12 @@ export function TargetProfileManager({
 
   const testCurrentTarget = () => {
     const availability = !currentTarget?.bundleId
-      ? "尚未识别粘贴目标"
+      ? t("尚未识别粘贴目标")
       : currentResolution.isTargetReady
-        ? "已识别目标应用，输入位置未确认"
-        : "请重新选择目标输入框";
+        ? t("已识别目标应用，输入位置未确认")
+        : t("请重新选择目标输入框");
     setTestMessage(
-      `规则已重新计算：${currentResolution.profile.name} · ${availability}。未执行粘贴或回车。`
+      t("规则已重新计算：{name} · {availability}。未执行粘贴或回车。", { name: currentResolution.profile.name, availability })
     );
   };
 
@@ -258,7 +260,7 @@ export function TargetProfileManager({
 
       <div data-settings-search="发送方案" className="scroll-m-5 rounded-md transition-shadow data-[settings-search-active=true]:ring-2 data-[settings-search-active=true]:ring-primary/40 data-[settings-search-active=true]:ring-offset-2 data-[settings-search-active=true]:ring-offset-background">
         <details id="target-profile-management" open={managementOpen} onToggle={event => setManagementOpen(event.currentTarget.open)} className="mb-6">
-          <DetailsSummary className="mb-3 text-title font-semibold">管理应用粘贴规则</DetailsSummary>
+          <DetailsSummary className="mb-3 text-title font-semibold">{t("管理应用粘贴规则")}</DetailsSummary>
           <ApplicationRuleInspector
             settings={settings}
             patch={patch}
@@ -268,8 +270,8 @@ export function TargetProfileManager({
           />
 
           <div className="mt-4">
-            <Disclosure title="共享方案与高级管理" summary="名称、应用绑定、排序与默认方案" id="target-profile-advanced" open={advancedOpen} onOpenChange={setAdvancedOpen}>
-              <p className="mb-3 text-label text-muted-foreground">这里的修改会立即应用到使用该方案的所有应用。</p>
+            <Disclosure title={t("共享方案与高级管理")} summary={t("名称、应用绑定、排序与默认方案")} id="target-profile-advanced" open={advancedOpen} onOpenChange={setAdvancedOpen}>
+              <p className="mb-3 text-label text-muted-foreground">{t("这里的修改会立即应用到使用该方案的所有应用。")}</p>
               <div className="grid min-w-0 gap-3 lg:grid-cols-3">
                 <ProfileList
                   profiles={settings.targetProfiles}
@@ -332,7 +334,7 @@ export function TargetProfileManager({
           </div>
         </details>
       </div>
-      <Disclosure title="当前目标与规则检查" summary="看看现在会粘贴到哪里、用哪套规则" open={targetDetailsOpen} onOpenChange={setTargetDetailsOpen}>
+      <Disclosure title={t("当前目标与规则检查")} summary={t("看看现在会粘贴到哪里、用哪套规则")} open={targetDetailsOpen} onOpenChange={setTargetDetailsOpen}>
         <CurrentTargetPreview
           snapshot={currentTarget}
           resolution={currentResolution}

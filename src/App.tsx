@@ -93,6 +93,7 @@ import {
 import { resolveDraftSectionId } from "@/lib/draftSection";
 import { normalizeMaterialStyle } from "@/lib/materialStyle";
 import { appearanceFromSettings, publishAppearance } from "@/lib/colorScheme";
+import { publishLocale, resolveLocale, t, tNode, useLocale, useT, type MessageKey } from "@/lib/i18n";
 import { PlatinumBox } from "@/components/ui/platinum-titlebar";
 import {
   DETAIL_STATE_EVENT,
@@ -208,7 +209,7 @@ import {
   initialPermissionGuardState,
 } from "@/lib/permissionGuard";
 import { imageCaption, previewOf } from "@/lib/format";
-import { SHORTCUTS } from "@/lib/shortcuts";
+import { shortcutRows } from "@/lib/shortcuts";
 import { clearPendingUndo, runPendingUndo, setPendingUndo, tip } from "@/lib/tip";
 import { silentUpdateFlow } from "@/lib/updater";
 import {
@@ -314,6 +315,7 @@ import {
   targetObservationPending,
   useTargetStore,
 } from "@/store/targetStore";
+import { isNewNotePlaceholder } from "@/lib/i18n/builtinNames";
 
 /** 本会话捕获的卡片 id 栈（HUD 撤销用，无需持久化）。 */
 const captureHistory: { id: string; dataGeneration: number }[] = [];
@@ -351,7 +353,7 @@ function runScheduledMediaGc() {
   void flushPendingWrites()
     .then(() => {
       const revision = currentPersistenceRevision();
-      if (!revision) throw new Error("媒体 GC 缺少持久化基线");
+      if (!revision) throw new Error(t("媒体 GC 缺少持久化基线"));
       return api.runMediaGc(mediaIntegrityStateJson(), Date.now(), revision);
     })
     .catch((error) => {
@@ -369,7 +371,7 @@ function scheduleMediaGc(files: string[], graceMs = MEDIA_GC_GRACE_MS) {
     .then(() => api.scheduleMediaGc(unique, Date.now() + graceMs))
     .then(() => {
       const revision = currentPersistenceRevision();
-      if (!revision) throw new Error("媒体 GC 缺少持久化基线");
+      if (!revision) throw new Error(t("媒体 GC 缺少持久化基线"));
       return api.runMediaGc(mediaIntegrityStateJson(), Date.now(), revision);
     })
     .catch(handleMediaGcFailure)
@@ -429,6 +431,7 @@ function GroupPill({
       id: `pill:${item.id}`,
       disabled: !manage?.reorder,
     });
+  const t = useT();
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(item.name);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -454,7 +457,7 @@ function GroupPill({
           else if (e.key === "Escape") setRenaming(false);
         }}
         onBlur={commit}
-        aria-label="分组名称"
+        aria-label={t("分组名称")}
         className={cn(
           "h-6 w-24 shrink-0 rounded-full border border-border bg-transparent px-2.5 text-label outline-none",
           vertical && "min-w-0 w-full rounded-md px-1"
@@ -525,7 +528,7 @@ function GroupPill({
       >
         {manage.checkAll && (
           <ContextMenuItem onClick={() => manage.checkAll?.(item.id)}>
-            <CheckCheck className="size-3.5" /> 全选此组
+            <CheckCheck className="size-3.5" /> {t("全选此组")}
           </ContextMenuItem>
         )}
         <ContextMenuItem
@@ -534,21 +537,21 @@ function GroupPill({
             setRenaming(true);
           }}
         >
-          <Pencil className="size-3.5" /> 重命名
+          <Pencil className="size-3.5" /> {t("重命名")}
         </ContextMenuItem>
         {manage.setColor && (
           <div className="flex flex-wrap items-center gap-1.5 px-2 py-1.5">
             {SECTION_COLORS.map((c) => (
               <button
                 key={c}
-                aria-label="设置分组色"
+                aria-label={t("设置分组色")}
                 onClick={() => manage.setColor?.(item.id, c)}
                 className="size-3.5 shrink-0 rounded-full ring-offset-1 transition-transform hover:scale-125"
                 style={{ backgroundColor: c }}
               />
             ))}
             <button
-              aria-label="清除颜色"
+              aria-label={t("清除颜色")}
               onClick={() => manage.setColor?.(item.id, undefined)}
               className="size-3.5 shrink-0 rounded-full border border-dashed border-muted-foreground/75 transition-transform hover:scale-125"
             />
@@ -556,23 +559,23 @@ function GroupPill({
         )}
         {manage.toggleKeep && (
           <ContextMenuItem
-            title="组内卡片发送后不标记完成，适合 Prompt 库等长期复用内容"
+            title={t("组内卡片发送后不标记完成，适合 Prompt 库等长期复用内容")}
             onClick={() => manage.toggleKeep?.(item.id)}
           >
             <Star
               className={cn("size-3.5", manage.keepOn?.(item.id) && "fill-current")}
             />{" "}
-            {manage.keepOn?.(item.id) ? "取消发送后保留" : "发送后保留"}
+            {manage.keepOn?.(item.id) ? t("取消发送后保留") : t("发送后保留")}
           </ContextMenuItem>
         )}
         <ContextMenuSeparator />
         <ContextMenuItem onClick={() => manage.move(item.id, -1)}>
           {vertical ? <ArrowUp className="size-3.5" /> : <ArrowLeft className="size-3.5" />}
-          {vertical ? "上移" : "左移"}
+          {vertical ? t("上移") : t("左移")}
         </ContextMenuItem>
         <ContextMenuItem onClick={() => manage.move(item.id, 1)}>
           {vertical ? <ArrowDown className="size-3.5" /> : <ArrowRight className="size-3.5" />}
-          {vertical ? "下移" : "右移"}
+          {vertical ? t("下移") : t("右移")}
         </ContextMenuItem>
         {item.id !== manage.lockedId && (
           <>
@@ -581,7 +584,7 @@ function GroupPill({
               variant="destructive"
               onClick={() => manage.remove(item.id)}
             >
-              <Trash2 className="size-3.5" /> 删除分组
+              <Trash2 className="size-3.5" /> {t("删除分组")}
             </ContextMenuItem>
           </>
         )}
@@ -610,6 +613,7 @@ function GroupPills({
   doneCount?: number;
   vertical?: boolean;
 }) {
+  const t = useT();
   const sensors = useSensors(
     useSensor(PointerSensor, CARD_POINTER_SENSOR_OPTIONS),
     useSensor(KeyboardSensor, KEYBOARD_SENSOR_OPTIONS)
@@ -635,7 +639,7 @@ function GroupPills({
         aria-pressed={active === null}
         className={cn(pillCls(active === null, vertical), vertical && "justify-center text-center")}
       >
-        全部
+        {t("全部")}
       </button>
       {items.map((s) => (
         <GroupPill
@@ -652,23 +656,23 @@ function GroupPills({
           onClick={() => onPick(active === DONE_FILTER ? null : DONE_FILTER)}
           className={cn(pillCls(active === DONE_FILTER), "text-muted-foreground")}
         >
-          ✓ 已完成 {doneCount}
+          {t("✓ 已完成 {n}", { n: doneCount })}
         </button>
       )}
       {manage?.add && (vertical ? (
         <Button
           size="xs"
           variant="ghost"
-          aria-label="新建分组"
+          aria-label={t("新建分组")}
           onClick={manage.add}
           className="mt-1 w-full justify-start gap-1 px-1 font-normal text-muted-foreground/60 hover:text-foreground focus-visible:text-foreground"
         >
-          <Plus className="size-3" /> 新建
+          <Plus className="size-3" /> {t("新建")}
         </Button>
       ) : (
         <button
-          aria-label="新建分组"
-          title="新建分组（双击胶囊可改名）"
+          aria-label={t("新建分组")}
+          title={t("新建分组（双击胶囊可改名）")}
           onClick={manage.add}
           className="flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
         >
@@ -708,6 +712,7 @@ function NoteGroupRail({ items, active, onPick, manage }: {
   onPick: (id: string | null) => void;
   manage: PillManage;
 }) {
+  const t = useT();
   const panelOpen = useUIStore((s) => s.open);
   const page = useUIStore((s) => s.page);
   const [expanded, setExpanded] = useState(false);
@@ -771,8 +776,8 @@ function NoteGroupRail({ items, active, onPick, manage }: {
       <div className="group/group-edge absolute inset-y-0 left-0 z-20 w-2">
         <IconButton
           ref={triggerRef}
-          label={shown ? "收起笔记分组" : "选择笔记分组"}
-          aria-label={`${shown ? "收起" : "选择"}笔记分组，当前：${items.find((item) => item.id === active)?.name ?? "全部"}`}
+          label={shown ? t("收起笔记分组") : t("选择笔记分组")}
+          aria-label={t(shown ? "收起笔记分组，当前：{name}" : "选择笔记分组，当前：{name}", { name: items.find((item) => item.id === active)?.name ?? t("全部") })}
           aria-expanded={shown}
           aria-controls="note-group-navigation"
           onClick={() => changeOpen(!shown)}
@@ -788,7 +793,7 @@ function NoteGroupRail({ items, active, onPick, manage }: {
         <nav
           id="note-group-navigation"
           ref={contentRef}
-          aria-label="笔记分组"
+          aria-label={t("笔记分组")}
           aria-hidden={!shown}
           data-group-navigation
           className={cn("h-full w-16 overflow-x-hidden overflow-y-auto border-r border-border/40 pb-1 pl-2 pr-0 pt-8", !shown && "invisible")}
@@ -833,6 +838,7 @@ const NOTE_GHOST_MODIFIERS: Modifier[] = [
  * 只在笔记拖动时挂载，分组与剪贴卡的拖拽保持原样。
  */
 function NoteDragGhost() {
+  const t = useT();
   const dragId = useUIStore((s) => s.noteDragId);
   const dropSectionId = useUIStore((s) => s.noteDropSection);
   const note = useNotesStore((s) => (dragId ? s.notes.find((n) => n.id === dragId) : undefined));
@@ -852,9 +858,9 @@ function NoteDragGhost() {
           </>
         )}
         <div className="relative rounded-xl border border-border/70 bg-card p-2.5 text-card-foreground elevation-3">
-          <p className="line-clamp-2 text-body">{note.title || note.text || "图片"}</p>
+          <p className="line-clamp-2 text-body">{note.title || note.text || t("图片")}</p>
           <p className={cn("mt-1 text-micro", dropName ? "text-primary" : "text-muted-foreground")}>
-            {dropName ? `松手移到「${dropName}」` : "拖到分组上即可归档"}
+            {dropName ? t("松手移到「{name}」", { name: dropName }) : t("拖到分组上即可归档")}
           </p>
         </div>
         {checkedCount > 1 && (
@@ -872,7 +878,7 @@ function NoteDragGhost() {
 const lockYAxis: Modifier = ({ transform }) => ({ ...transform, y: 0 });
 
 /** 页签中文名（顺序由 settings.pageOrder 决定）。 */
-const PAGE_LABEL: Record<PageId, string> = {
+const PAGE_LABEL: Record<PageId, MessageKey> = {
   clipboard: "剪贴",
   notes: "内容",
   tasks: "提醒",
@@ -890,7 +896,7 @@ type ClipBand = {
   notes: Note[];
   source?: { key: string; bundle?: string; total: number; all: Note[] };
 };
-const CLIP_VIEW_OPTIONS: { value: ClipView; label: string }[] = [
+const CLIP_VIEW_OPTIONS: { value: ClipView; label: MessageKey }[] = [
   { value: "time", label: "按时间" },
   { value: "source", label: "按来源" },
   { value: "images", label: "图片" },
@@ -987,6 +993,8 @@ function PageSlide({
 }
 
 export default function App() {
+  // 订阅语言切换：App 内文案用模块级 t()，缓存的列表 body 以 locale 为依赖
+  const locale = useLocale();
   const dataOperationLocked = useDataOperationStore((state) => state.locked);
   const dataOperationMessage = useDataOperationStore((state) => state.message);
   const dataOperationPhase = useDataOperationStore((state) => state.phase);
@@ -1034,7 +1042,7 @@ export default function App() {
           reportDataActivity({
             locked: true,
             phase: "storageRecovery",
-            message: `存储初始化失败：${status.initializationFailure.message}`,
+            message: t("存储初始化失败：{error}", { error: status.initializationFailure.message }),
           });
           enterPersistenceConflict(status.initializationFailure);
           return;
@@ -1042,7 +1050,7 @@ export default function App() {
         if (status.conflictPending) {
           const conflict = {
             code: "externalConflict",
-            message: "检测到尚未处理的数据冲突",
+            message: t("检测到尚未处理的数据冲突"),
           };
           enterPersistenceConflict(conflict);
           reportDataActivity({
@@ -1063,8 +1071,8 @@ export default function App() {
           locked,
           phase: locked ? "rollback" : "idle",
           message: locked
-            ? `待完成数据事务恢复失败：${userError(error)}`
-            : `待完成数据事务已回滚：${userError(error)}`,
+            ? t("待完成数据事务恢复失败：{error}", { error: userError(error) })
+            : t("待完成数据事务已回滚：{error}", { error: userError(error) }),
         });
       });
     return () => {
@@ -1175,7 +1183,7 @@ export default function App() {
         const healthy = tap.installed && tap.receiving;
         // 就绪气泡只做「从故障恢复」的确认；普通启动后的首次按键不打扰
         if (wasStuck && healthy) {
-          tip("ok", "键盘监听已就绪，双击 ⇧ Shift 试试 ✓");
+          tip("ok", t("键盘监听已就绪，双击 ⇧ Shift 试试 ✓"));
           wasStuck = false;
         } else if (stuck) {
           wasStuck = true;
@@ -1226,8 +1234,8 @@ export default function App() {
         tip(
           "warn",
           clipboardWarning
-            ? `数据操作进行中，捕获暂时停用 · ${clipboardWarning}`
-            : "数据操作进行中，捕获暂时停用"
+            ? t("数据操作进行中，捕获暂时停用 · {warning}", { warning: clipboardWarning })
+            : t("数据操作进行中，捕获暂时停用")
         );
         return;
       }
@@ -1251,7 +1259,7 @@ export default function App() {
         // 钉住 = 常驻：双击快捷键不收起面板（Esc / 取消图钉可收）；
         // 专用面板快捷键（force）意图明确，钉住时也执行收起
         if (isOpen && isPinned && !payload.force) {
-          tip("info", "面板已固定 · 按 Esc 或取消图钉可收起");
+          tip("info", t("面板已固定 · 按 Esc 或取消图钉可收起"));
           return;
         }
         if (isOpen) closePanel(true);
@@ -1291,7 +1299,7 @@ export default function App() {
         const imageCount =
           contentBlocks?.filter((block) => block.type === "image").length ?? 0;
         const capturePreview =
-          captureText || (imageCount > 1 ? `图片 ×${imageCount}` : "图片");
+          captureText || (imageCount > 1 ? t("图片 ×{n}", { n: imageCount }) : t("图片"));
         const showCaptureResult = async () => {
           let associationSuggested = false;
           let autoLinked = false;
@@ -1352,9 +1360,9 @@ export default function App() {
               useNotesStore.getState().notes.some((n) => n.id === undoId);
             if (exists && undoId) {
               useNotesStore.getState().deleteNotes([undoId], "撤销捕获");
-              void api.hudFeedback("undone", "已撤销");
+              void api.hudFeedback("undone", t("已撤销"));
             } else {
-              void api.hudFeedback("undone", "没有可撤销的捕获");
+              void api.hudFeedback("undone", t("没有可撤销的捕获"));
             }
           });
           useNotesStore.getState().markOnboarding({ captured: true });
@@ -1388,7 +1396,7 @@ export default function App() {
             const { result } = useNotesStore
               .getState()
               .addSecretNote(payload.text, { keyId: null, direction: "in" }, secretOpts);
-            if (result !== "empty") tip("warn", "识别到密文，但没有匹配的密钥", false, "page:secret");
+            if (result !== "empty") tip("warn", t("识别到密文，但没有匹配的密钥"), false, "page:secret");
             return;
           }
           if (res.status === "plaintext") {
@@ -1400,14 +1408,14 @@ export default function App() {
                 secretOpts
               );
             if (result === "duplicate") {
-              tip("duplicate", "这条秘文已在秘文页", false, "page:secret");
+              tip("duplicate", t("这条秘文已在秘文页"), false, "page:secret");
             } else if (result === "added" && id) {
               // undoable=true：HUD 悬停出「撤销」，与普通捕获一致
               setPendingUndo(() => {
                 useNotesStore.getState().deleteNotes([id], "撤销解密");
-                void api.hudFeedback("undone", "已撤销");
+                void api.hudFeedback("undone", t("已撤销"));
               });
-              tip("added", `已解密 1 条 · 用【${res.keyLabel}】`, true, "page:secret");
+              tip("added", t("已解密 1 条 · 用【{key}】", { key: res.keyLabel }), true, "page:secret");
             }
           }
         })();
@@ -1454,7 +1462,7 @@ export default function App() {
           const captureWarning = [
             payload.clipboardWarning,
             restored.omittedImageCount > 0
-              ? `${restored.omittedImageCount} 张图片未能保存`
+              ? t("{n} 张图片未能保存", { n: restored.omittedImageCount })
               : null,
           ]
             .filter((warning): warning is string => !!warning)
@@ -1471,7 +1479,7 @@ export default function App() {
             captureWarning
           );
           if (result === "empty" && restored.omittedImageCount > 0) {
-            tip("warn", `${restored.omittedImageCount} 张图片未能保存`);
+            tip("warn", t("{n} 张图片未能保存", { n: restored.omittedImageCount }));
           }
         })
         .catch(() => {
@@ -1484,7 +1492,7 @@ export default function App() {
             : null;
           const fallbackWarning = [
             payload.clipboardWarning,
-            "图片读取失败，已保存文字",
+            t("图片读取失败，已保存文字"),
           ].filter(Boolean).join(" · ");
           const result = commitCapture(
             restored?.text ?? payload.text,
@@ -1493,7 +1501,7 @@ export default function App() {
             fallbackWarning
           );
           if (result === "empty") {
-            tip("warn", "图片读取失败，未保存到可读取内容");
+            tip("warn", t("图片读取失败，未保存到可读取内容"));
           }
         })
         .finally(lease.release);
@@ -1528,7 +1536,7 @@ export default function App() {
       SETTINGS_START_SAFE_REHEARSAL,
       (event) => {
         if (isDataOperationLocked()) {
-          tip("warn", "数据操作进行中，暂不能开始演练");
+          tip("warn", t("数据操作进行中，暂不能开始演练"));
           return;
         }
         const notes = useNotesStore.getState();
@@ -1554,7 +1562,7 @@ export default function App() {
   useEffect(() => {
     const subscription = listen<LessonId>(SETTINGS_START_LESSON, (event) => {
       if (isDataOperationLocked()) {
-        tip("warn", "数据操作进行中，暂不能开始课程");
+        tip("warn", t("数据操作进行中，暂不能开始课程"));
         return;
       }
       if (event.payload === "merge" || event.payload === "privacy") {
@@ -1676,7 +1684,7 @@ export default function App() {
       const text =
         hits.length === 1
           ? reminderHitLabel(hits[0], now, previewOf(hits[0].task.text))
-          : `${hits.length} 个任务提醒`;
+          : t("{n} 个任务提醒", { n: hits.length });
       dueBatchRef.current = hits.map((h) => h.task.id);
       const channel = settings.taskReminderChannel;
       if (channel !== "system") {
@@ -1692,12 +1700,12 @@ export default function App() {
         const body =
           hits.length === 1
             ? text
-            : hits.map((h) => previewOf(h.task.text)).slice(0, 4).join("、");
+            : hits.map((h) => previewOf(h.task.text)).slice(0, 4).join(t("、"));
         void api
           .systemNotify(
             // identifier 带任务 id：点通知由 Rust 侧解析后定位（同点到期气泡）
             hits.length === 1 ? `task:${hits[0].task.id}:${now}` : `${HUD_TASK_BATCH}:${now}`,
-            "Toskr 任务提醒",
+            t("Toskr 任务提醒"),
             body
           )
           .catch(() => {
@@ -1736,19 +1744,21 @@ export default function App() {
         state.tasks.some((t) => t.id === id && t.status !== "done")
       );
       if (!ids.length) {
-        tip("info", "任务已处理或已删除");
+        tip("info", t("任务已处理或已删除"));
         return;
       }
       if (action === "complete") {
         for (const id of ids) state.setTaskStatus(id, "done");
-        tip("ok", ids.length === 1 ? "已完成" : `已完成 ${ids.length} 个任务`);
+        tip("ok", ids.length === 1 ? t("已完成") : t("已完成 {n} 个任务", { n: ids.length }));
         return;
       }
       state.snoozeTasks(ids, minutes ?? 10);
       const at = new Date(Date.now() + (minutes ?? 10) * 60_000);
       tip(
         "ok",
-        `已推迟到 ${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`
+        t("已推迟到 {time}", {
+          time: `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`,
+        })
       );
     });
     return () => {
@@ -1769,7 +1779,7 @@ export default function App() {
       const text =
         due.length === 1
           ? billDueLabel(due[0].bill, now, state.settings.currencySymbol)
-          : `${due.length} 笔账单即将到期`;
+          : t("{n} 笔账单即将到期", { n: due.length });
       void api.hudFeedback(
         "due",
         text,
@@ -1855,9 +1865,9 @@ export default function App() {
         if (!autoKept) return;
         setPendingUndo(() => {
           useNotesStore.getState().toggleNoteKeep(autoKept.id);
-          void api.hudFeedback("undone", "已取消置顶");
+          void api.hudFeedback("undone", t("已取消置顶"));
         });
-        tip("ok", `已置顶「${autoKept.preview}」`, true);
+        tip("ok", t("已置顶「{preview}」", { preview: autoKept.preview }), true);
       };
       if (!p.html) {
         const clipResult = useNotesStore.getState().addClipNote(p.text, {
@@ -1903,7 +1913,7 @@ export default function App() {
           if (rich.omittedImageCount > 0) {
             tip(
               "warn",
-              `已保存可读取内容，${rich.omittedImageCount} 张图片未能保存`
+              t("已保存可读取内容，{n} 张图片未能保存", { n: rich.omittedImageCount })
             );
             if (rich.omittedSchemes.length > 0) {
               void api.diagNote(
@@ -1922,7 +1932,7 @@ export default function App() {
               createdAt: capturedAt,
             });
             announceAutoKept(clipResult.autoKept);
-            tip("warn", "图片读取失败，已保存文字");
+            tip("warn", t("图片读取失败，已保存文字"));
           }
         })
         .finally(lease.release);
@@ -1941,7 +1951,7 @@ export default function App() {
         const store = useNotesStore.getState();
         const result = store.ingestMessageCaptures([event.payload]);
         if (result.added > 0) {
-          void api.hudFeedback("added", "已捕获IM关注消息");
+          void api.hudFeedback("added", t("已捕获IM关注消息"));
         }
       }
     );
@@ -2086,6 +2096,28 @@ export default function App() {
     return useNotesStore.persist.onFinishHydration(publish);
   }, [colorScheme, platinumHighlight, platinumScrollbar]);
 
+  // 界面语言：跟随系统时向 Rust 取首选语言（WKWebView 的 navigator.language 不可靠），
+  // 解析结果广播给各窗口并下发托盘/窗口标题
+  const language = useNotesStore((s) => s.settings.language);
+  useEffect(() => {
+    let cancelled = false;
+    const publish = async () => {
+      const pref = useNotesStore.getState().settings.language;
+      const systemTag =
+        pref === "system" ? await api.systemLocale().catch(() => navigator.language) : null;
+      if (cancelled) return;
+      const locale = resolveLocale(pref, systemTag);
+      publishLocale(locale);
+      void api.setLocale(locale).catch(() => {});
+    };
+    if (useNotesStore.persist.hasHydrated()) void publish();
+    const unsub = useNotesStore.persist.onFinishHydration(() => void publish());
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, [language]);
+
   // 设置窗口同步宿主：响应 state 请求 / 应用 patch / 代理导出导入
   useEffect(() => {
     const cleanup = installSettingsSyncHost({
@@ -2095,8 +2127,8 @@ export default function App() {
       onClearClip: () => {
         const { removed, orphanImages } = useNotesStore.getState().clearClipHistory();
         scheduleMediaGc(orphanImages);
-        if (removed > 0) undoableTip(`已清空剪贴板历史 ${removed} 条`);
-        else tip("info", "剪贴板历史已是空的");
+        if (removed > 0) undoableTip(t("已清空剪贴板历史 {n} 条", { n: removed }));
+        else tip("info", t("剪贴板历史已是空的"));
       },
       onDataOperation: (plan) => {
         void runDataLocationOperation(plan)
@@ -2109,7 +2141,7 @@ export default function App() {
             tip("ok", result.message);
           })
           .catch((error) => {
-            const message = `数据操作失败：${userError(error)}`;
+            const message = t("数据操作失败：{error}", { error: userError(error) });
             reportDataActivity({
               locked: isDataOperationLocked(),
               phase: "rollback",
@@ -2129,7 +2161,7 @@ export default function App() {
             tip("ok", result.message);
           })
           .catch((error) => {
-            const message = `数据恢复失败：${userError(error)}`;
+            const message = t("数据恢复失败：{error}", { error: userError(error) });
             reportDataActivity({
               locked: isDataOperationLocked(),
               phase: isDataOperationLocked() ? "storageRecovery" : "rollback",
@@ -2143,14 +2175,14 @@ export default function App() {
           .inspectMediaIntegrity(mediaIntegrityStateJson())
           .then((report) => emitTo("settings", SETTINGS_DATA_HEALTH_RESULT, report))
           .catch((error) => {
-            tip("warn", `健康检查失败：${userError(error)}`);
+            tip("warn", t("健康检查失败：{error}", { error: userError(error) }));
           });
       },
       onDataConflictAction: (action) => {
         const reload = () =>
           reloadAfterPersistenceConflict()
-            .then(() => tip("ok", "已重新加载磁盘新版本"))
-            .catch((error) => tip("warn", `重新加载失败：${userError(error)}`));
+            .then(() => tip("ok", t("已重新加载磁盘新版本")))
+            .catch((error) => tip("warn", t("重新加载失败：{error}", { error: userError(error) })));
         if (action === "reload") {
           void reload();
           return;
@@ -2166,12 +2198,12 @@ export default function App() {
               tip(
                 "ok",
                 action === "retryStorage"
-                  ? "存储挂载已恢复"
-                  : "已明确加载默认数据目录"
+                  ? t("存储挂载已恢复")
+                  : t("已明确加载默认数据目录")
               );
             })
             .catch((error) =>
-              tip("warn", `存储恢复失败：${userError(error)}`)
+              tip("warn", t("存储恢复失败：{error}", { error: userError(error) }))
             );
           return;
         }
@@ -2180,7 +2212,7 @@ export default function App() {
             save({
               defaultPath: "toskr-conflict-recovery.toskr-backup",
               filters: [
-                { name: "Toskr 恢复副本", extensions: ["toskr-backup"] },
+                { name: t("Toskr 恢复副本"), extensions: ["toskr-backup"] },
               ],
             })
           )
@@ -2190,10 +2222,10 @@ export default function App() {
               path,
               JSON.stringify(buildBackupPayload(useNotesStore.getState()))
             );
-            tip("ok", "当前内存已另存为恢复副本");
+            tip("ok", t("当前内存已另存为恢复副本"));
             await reload();
           })
-          .catch((error) => tip("warn", `另存恢复副本失败：${userError(error)}`));
+          .catch((error) => tip("warn", t("另存恢复副本失败：{error}", { error: userError(error) })));
       },
     });
     return cleanup;
@@ -2213,7 +2245,7 @@ export default function App() {
       // 把真实错误进诊断日志：冲突原因不再靠猜（CAS 拒绝 / 读取失败 / 事务门）
       const detail = (event as CustomEvent).detail;
       void api.diagNote(`数据冲突事件: ${userError(detail)}`);
-      const message = "检测到数据文件被外部修改，已停止自动覆盖";
+      const message = t("检测到数据文件被外部修改，已停止自动覆盖");
       void api
         .markDataConflict()
         .then(() => {
@@ -2222,13 +2254,13 @@ export default function App() {
             phase: "conflict",
             message,
           });
-          tip("warn", `${message}；请在设置 → 数据与备份中选择处理方式`);
+          tip("warn", t("{message}；请在设置 → 数据与备份中选择处理方式", { message }));
         })
         .catch((error) => {
           reportDataActivity({
             locked: true,
             phase: "rollback",
-            message: `冲突状态持久化失败：${userError(error)}`,
+            message: t("冲突状态持久化失败：{error}", { error: userError(error) }),
           });
         });
     };
@@ -2304,7 +2336,7 @@ export default function App() {
             emitTo("imgpreview", IMAGE_EDIT_RESULT_EVENT, {
               requestId: event.payload?.requestId ?? "",
               ok: false,
-              message: `图片打码失败：${userError(error)}`,
+              message: t("图片打码失败：{error}", { error: userError(error) }),
             }).catch(() => {})
           );
       }),
@@ -2322,14 +2354,14 @@ export default function App() {
         ) {
           // 静默丢弃会让用户误信已保存；面板可能贴边隐藏，必须带回可见告知
           warnWithPanel(
-            "编辑未保存：数据上下文已变化，请复制内容后重新打开卡片",
+            t("编辑未保存：数据上下文已变化，请复制内容后重新打开卡片"),
             "note-edit rejected"
           );
           replySync(false);
           return;
         }
         if (!useNotesStore.getState().notes.some((note) => note.id === e.payload.id)) {
-          warnWithPanel("编辑未保存：卡片已不存在，请重新打开", "note-edit missing");
+          warnWithPanel(t("编辑未保存：卡片已不存在，请重新打开"), "note-edit missing");
           replySync(false);
           return;
         }
@@ -2360,7 +2392,7 @@ export default function App() {
         if (e.payload.origin) {
           armNoteEditUndo(e.payload.id, e.payload.origin);
         } else {
-          tip("ok", "已保存");
+          tip("ok", t("已保存"));
         }
       }),
       // 多详情窗（📌 并存）：各窗自报 {pinned, noteId}，主面板据此挑窗路由
@@ -2377,7 +2409,7 @@ export default function App() {
           const note = store.notes.find((n) => n.id === e.payload.id);
           if (
             note &&
-            note.text.trim() === "新笔记" &&
+            isNewNotePlaceholder(note.text) &&
             !note.imageFile &&
             !note.contentBlocks?.length &&
             !note.title &&
@@ -2395,7 +2427,7 @@ export default function App() {
           state.sections,
           state.settings.lastDraftSectionId
         );
-        const { result, id } = state.addNote("新笔记", { sectionId });
+        const { result, id } = state.addNote(t("新笔记"), { sectionId });
         if (id && (result === "added" || result === "duplicate")) {
           openNoteDetail(id, true, true);
         }
@@ -2404,7 +2436,7 @@ export default function App() {
         "toskr://note-send",
         (e) => {
         if (isDataOperationLocked()) {
-          warnWithPanel("数据只读期间不能发送", "note-send locked");
+          warnWithPanel(t("数据只读期间不能发送"), "note-send locked");
           return;
         }
         // 载荷代数过期（📌 长开的详情窗常见）：发送本就按 id 从现行数据取
@@ -2414,7 +2446,7 @@ export default function App() {
           !useNotesStore.getState().notes.some((n) => n.id === e.payload.id)
         ) {
           warnWithPanel(
-            "发送已取消：数据上下文已变化，请重新打开卡片后再发送",
+            t("发送已取消：数据上下文已变化，请重新打开卡片后再发送"),
             "note-send rejected"
           );
           return;
@@ -2452,7 +2484,7 @@ export default function App() {
           !matchesDataGeneration(e.payload.dataGeneration)
         ) {
           warnWithPanel(
-            "移除图片未生效：数据上下文已变化，请重新打开卡片",
+            t("移除图片未生效：数据上下文已变化，请重新打开卡片"),
             "note-image-remove rejected"
           );
           return;
@@ -2461,7 +2493,7 @@ export default function App() {
           .getState()
           .removeNoteImage(e.payload.id, e.payload.file);
         scheduleMediaGc([e.payload.file]);
-        undoableTip(noteDeleted ? "已删除 1 条" : "已移除图片");
+        undoableTip(noteDeleted ? t("已删除 {n} 条", { n: 1 }) : t("已移除图片"));
         }
       ),
       // 详情窗 ⌘Z：执行当前待撤销动作（与点击 HUD「撤销」同路），
@@ -2477,7 +2509,7 @@ export default function App() {
           !matchesDataGeneration(e.payload.dataGeneration)
         ) {
           warnWithPanel(
-            "标签未保存：数据上下文已变化，请重新打开卡片",
+            t("标签未保存：数据上下文已变化，请重新打开卡片"),
             "note-tags rejected"
           );
           return;
@@ -2492,7 +2524,7 @@ export default function App() {
           moveClipsToNotesWithUndo([e.payload.id], e.payload.sectionId) > 0;
         if (moved) return;
         warnWithPanel(
-          "未存入笔记：卡片已不在剪贴板或数据上下文已变化",
+          t("未存入笔记：卡片已不在剪贴板或数据上下文已变化"),
           "note-save-to-notes rejected"
         );
         void refreshOpenNoteDetail();
@@ -2648,7 +2680,7 @@ export default function App() {
       if (!window.localStorage.getItem("toskr-encryption-tip-shown")) {
         window.localStorage.setItem("toskr-encryption-tip-shown", "1");
         if (!appFirstLaunch) {
-          tip("info", "本机数据已启用加密存储；建议在设置 → 数据与备份导出一份完整备份");
+          tip("info", t("本机数据已启用加密存储；建议在设置 → 数据与备份导出一份完整备份"));
         }
       }
     } catch {
@@ -2734,7 +2766,7 @@ export default function App() {
       onboarding.rehearsalCompletedAtMs !== null &&
       onboarding.rehearsalCompletedAtMs !== prevRehearsalCompletedAtMs.current
     ) {
-      tip("ok", "上手完成，Toskr 已就绪 🎉");
+      tip("ok", t("上手完成，Toskr 已就绪 🎉"));
     }
     prevRehearsalCompletedAtMs.current = onboarding.rehearsalCompletedAtMs;
   }, [onboarding.rehearsalCompletedAtMs]);
@@ -2744,16 +2776,16 @@ export default function App() {
       const { save } = await import("@tauri-apps/plugin-dialog");
       const path = await save({
         defaultPath: "toskr-complete-backup.toskr-backup",
-        filters: [{ name: "Toskr 完整备份", extensions: ["toskr-backup"] }],
+        filters: [{ name: t("Toskr 完整备份"), extensions: ["toskr-backup"] }],
       });
       if (!path) return;
       const inspection = await runCompleteBackupExport(path);
       tip(
         "ok",
-        `完整备份已验证：${inspection.counts.notes} 条笔记、${inspection.counts.messages} 条消息、${inspection.counts.tasks} 个任务、${inspection.counts.media} 个媒体`
+        t("完整备份已验证：{notes} 条笔记、{messages} 条消息、{tasks} 个任务、{media} 个媒体", { ...inspection.counts })
       );
     } catch (e) {
-      tip("warn", `导出失败：${userError(e)}`);
+      tip("warn", t("导出失败：{error}", { error: userError(e) }));
     }
   };
 
@@ -2769,7 +2801,7 @@ export default function App() {
           : {}),
         filters: [
           {
-            name: "Toskr 备份与迁移保险档",
+            name: t("Toskr 备份与迁移保险档"),
             extensions: ["toskr-backup", "json", "bak"],
           },
         ],
@@ -2785,12 +2817,12 @@ export default function App() {
           );
           tip(
             "info",
-            "已识别为加密活动数据文件；请在上方目录预检中加载它所在的文件夹"
+            t("已识别为加密活动数据文件；请在上方目录预检中加载它所在的文件夹")
           );
         } else {
           tip(
             "warn",
-            "已识别为加密主数据副本，但文件名不是 toskr-data.json；请先复制到独立文件夹并改为标准文件名，再预检该文件夹"
+            t("已识别为加密主数据副本，但文件名不是 toskr-data.json；请先复制到独立文件夹并改为标准文件名，再预检该文件夹")
           );
         }
         return;
@@ -2799,16 +2831,20 @@ export default function App() {
       const legacyLimitations = [
         ...inspection.warnings,
         ...(inspection.missingMedia.length
-          ? [`引用了 ${inspection.missingMedia.length} 个未随旧 JSON 提供的媒体文件`]
+          ? [t("引用了 {n} 个未随旧 JSON 提供的媒体文件", { n: inspection.missingMedia.length })]
           : []),
       ];
       const confirmed = await ask(
         inspection.format === "complete"
-          ? `完整备份已通过 manifest/hash 预检。将恢复 ${counts.notes} 条笔记、${counts.messages} 条消息、${counts.tasks} 个任务、${counts.media} 个媒体，并先创建当前数据恢复点。原始IM JSONL 账本不在归档内，仍需按设置页路径单独备份；API Key 不在备份中，恢复后需重新配置。继续吗？`
+          ? t("完整备份已通过 manifest/hash 预检。将恢复 {notes} 条笔记、{messages} 条消息、{tasks} 个任务、{media} 个媒体，并先创建当前数据恢复点。原始IM JSONL 账本不在归档内，仍需按设置页路径单独备份；API Key 不在备份中，恢复后需重新配置。继续吗？", { ...counts })
           : inspection.format === "preEncryptSnapshot"
-            ? `迁移保险档已通过本机密钥认证与 schema 预检：${counts.notes} 条笔记、${counts.messages} 条消息、${counts.tasks} 个任务、${counts.bills} 个账单、${counts.media} 个媒体引用。\n\n将先创建当前数据恢复点，再以保险档为基线恢复，并按 ID 保留当前新增/更新记录；媒体文件不会被删除。继续吗？`
-          : `这是旧 JSON，将先创建当前数据恢复点，再按 ID 合并 ${counts.notes} 条笔记、${counts.tasks} 个任务。\n\n完整性限制：\n- ${legacyLimitations.join("\n- ")}\n\n继续吗？`,
-        { title: "导入预检", kind: "warning" }
+            ? t("迁移保险档已通过本机密钥认证与 schema 预检：{notes} 条笔记、{messages} 条消息、{tasks} 个任务、{bills} 个账单、{media} 个媒体引用。\n\n将先创建当前数据恢复点，再以保险档为基线恢复，并按 ID 保留当前新增/更新记录；媒体文件不会被删除。继续吗？", { ...counts })
+          : t("这是旧 JSON，将先创建当前数据恢复点，再按 ID 合并 {notes} 条笔记、{tasks} 个任务。\n\n完整性限制：\n- {limitations}\n\n继续吗？", {
+              notes: counts.notes,
+              tasks: counts.tasks,
+              limitations: legacyLimitations.join("\n- "),
+            }),
+        { title: t("导入预检"), kind: "warning" }
       );
       if (!confirmed) return;
       const operationId = crypto.randomUUID();
@@ -2824,7 +2860,7 @@ export default function App() {
           phase: "complete",
           message: result.message,
         });
-        tip("ok", `完整备份恢复完成：笔记 ${counts.notes} 条，消息 ${counts.messages} 条，媒体 ${counts.media} 个`);
+        tip("ok", t("完整备份恢复完成：笔记 {notes} 条，消息 {messages} 条，媒体 {media} 个", { ...counts }));
       } else if (inspection.format === "preEncryptSnapshot") {
         const restored = await runPreEncryptSnapshotImport(
           path,
@@ -2836,8 +2872,8 @@ export default function App() {
         tip(
           restored.warning ? "warn" : "ok",
           restored.warning
-            ? `历史索引已恢复，但需留意：${restored.warning}`
-            : `历史索引恢复完成：笔记 ${restored.counts.notes} 条、任务 ${restored.counts.tasks} 个、账单 ${restored.counts.bills} 个；当前新增记录已保留`
+            ? t("历史索引已恢复，但需留意：{warning}", { warning: restored.warning })
+            : t("历史索引恢复完成：笔记 {notes} 条、任务 {tasks} 个、账单 {bills} 个；当前新增记录已保留", { ...restored.counts })
         );
       } else {
         const { added } = await runLegacyJsonImport(
@@ -2847,7 +2883,7 @@ export default function App() {
         );
         importCommitted = true;
         const duplicateSuffix = added.skippedDuplicates
-          ? `，跳过重复 ID ${added.skippedDuplicates} 项`
+          ? t("，跳过重复 ID {n} 项", { n: added.skippedDuplicates })
           : "";
         try {
           const health = await api.inspectMediaIntegrity(mediaIntegrityStateJson());
@@ -2858,15 +2894,21 @@ export default function App() {
             locked: false,
             phase: "complete",
             message: partial
-              ? `旧 JSON 已部分导入；健康检查仍有 ${health.missing.length} 个缺失媒体`
-              : "旧 JSON 已兼容导入并完成数据健康检查",
+              ? t("旧 JSON 已部分导入；健康检查仍有 {n} 个缺失媒体", { n: health.missing.length })
+              : t("旧 JSON 已兼容导入并完成数据健康检查"),
           });
           tip(
             partial ? "warn" : "ok",
-            `${partial ? "旧 JSON 部分合并" : "旧 JSON 合并完成"}：笔记 ${added.notes} 条，任务 ${added.tasks} 个${duplicateSuffix}${partial ? `；缺失媒体 ${health.missing.length} 个` : ""}`
+            t("{title}：笔记 {notes} 条，任务 {tasks} 个{duplicates}{missing}", {
+              title: partial ? t("旧 JSON 部分合并") : t("旧 JSON 合并完成"),
+              notes: added.notes,
+              tasks: added.tasks,
+              duplicates: duplicateSuffix,
+              missing: partial ? t("；缺失媒体 {n} 个", { n: health.missing.length }) : "",
+            })
           );
         } catch (postflightError) {
-          const message = `旧 JSON 已导入，但完整性报告生成失败：${userError(postflightError)}`;
+          const message = t("旧 JSON 已导入，但完整性报告生成失败：{error}", { error: userError(postflightError) });
           reportDataActivity({ locked: false, phase: "complete", message });
           tip("warn", message);
         }
@@ -2876,8 +2918,8 @@ export default function App() {
     } catch (e) {
       const locked = isDataOperationLocked();
       const message = importCommitted
-        ? `导入已完成，但后续刷新失败：${userError(e)}`
-        : `导入失败：${userError(e)}`;
+        ? t("导入已完成，但后续刷新失败：{error}", { error: userError(e) })
+        : t("导入失败：{error}", { error: userError(e) });
       reportDataActivity({
         locked,
         phase: importCommitted ? "complete" : locked ? "rollback" : "idle",
@@ -3095,7 +3137,9 @@ export default function App() {
   const [clipSwitchHidden, setClipSwitchHidden] = useState(false);
   const clipSourceGroups = useMemo(
     () => (clipView === "source" ? groupClipsBySource(clipNotes) : []),
-    [clipNotes, clipView]
+    // locale：来源段名（未知来源 / 置顶）随语言重算
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [clipNotes, clipView, locale]
   );
   /** 纵向列表的分段：时间 / 图片视图按时间段（Raycast 剪贴板风格），置顶独立
    *  一组，其余按时间段连续合并；手动拖动重排后同段名可能再现，key 取组首
@@ -3118,12 +3162,14 @@ export default function App() {
     }
     const bands: ClipBand[] = [];
     for (const n of visibleClipNotes) {
-      const band = n.keep ? "置顶" : clipTimeBand(n.createdAt, taskNow);
+      const band = n.keep ? t("置顶") : clipTimeBand(n.createdAt, taskNow);
       const last = bands[bands.length - 1];
       if (last && last.band === band) last.notes.push(n);
       else bands.push({ key: `${band}-${n.id}`, band, notes: [n] });
     }
     return bands;
+    // locale：时间段名随语言重算
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     clipView,
     clipSourceGroups,
@@ -3131,6 +3177,7 @@ export default function App() {
     clipSourceShown,
     visibleClipNotes,
     taskNow,
+    locale,
   ]);
   const clipNavIds = useMemo(
     () => clipBands.flatMap((b) => b.notes.map((n) => n.id)),
@@ -3512,7 +3559,7 @@ export default function App() {
         if (!focused) return;
         st.toggleDone(focused.id);
         // 标完成后卡片可能因分组「隐藏已完成」当场消失，补一句确认
-        tip("ok", focused.done ? "已取消完成" : "已标记完成");
+        tip("ok", focused.done ? t("已取消完成") : t("已标记完成"));
         return;
       }
       // p = 置顶/常用切换（keep 双域语义：剪贴卡=置顶不清理，笔记卡=常用）
@@ -3532,11 +3579,11 @@ export default function App() {
           "ok",
           focused.keep
             ? isClipCard
-              ? "已取消置顶"
-              : "已取消常用"
+              ? t("已取消置顶")
+              : t("已取消常用")
             : isClipCard
-              ? "已置顶"
-              : "已设为常用"
+              ? t("已置顶")
+              : t("已设为常用")
         );
         return;
       }
@@ -3571,9 +3618,9 @@ export default function App() {
         const idx = navIds.indexOf(ui.focusedId);
         const nextFocus = navIds[idx + 1] ?? navIds[idx - 1] ?? null;
         if (ui.page === "tasks") {
-          deleteTasksWithUndo([ui.focusedId], "已删除 1 个任务");
+          deleteTasksWithUndo([ui.focusedId], t("已删除 {n} 个任务", { n: 1 }));
         } else {
-          deleteNotesWithUndo([ui.focusedId], "已删除 1 条");
+          deleteNotesWithUndo([ui.focusedId], t("已删除 {n} 条", { n: 1 }));
         }
         ui.setFocusedId(nextFocus);
       }
@@ -3786,7 +3833,11 @@ export default function App() {
       if (moving.length && section) {
         state.snapshot("移动到分组");
         state.moveNotes(moving, dropSection);
-        undoableTip(`已移到「${section.name}」${moving.length > 1 ? ` · ${moving.length} 张` : ""}`);
+        undoableTip(
+          moving.length > 1
+            ? t("已移到「{name}」 · {n} 张", { name: section.name, n: moving.length })
+            : t("已移到「{name}」", { name: section.name })
+        );
       }
       return;
     }
@@ -3971,10 +4022,10 @@ export default function App() {
             onDoubleClick={() => scrollTabPageToStart(id)}
           >
             {id === "notes" && !contentDomainsOn
-              ? "笔记"
+              ? t("笔记")
               : id === "tasks" && !subscriptionsEnabled
-                ? "任务"
-                : PAGE_LABEL[id]}
+                ? t("任务")
+                : t(PAGE_LABEL[id])}
           </PageTab>
         ))}
       </SortableContext>
@@ -3985,9 +4036,9 @@ export default function App() {
     <div className="ml-auto flex items-center gap-0.5">
       {/* 横栏：输入通栏收起，这里按需唤出（仅上下布局出现） */}
       {horizontalBar && page === "notes" && contentSubview === "notes" && (
-        <Tipped label={barDraftOpen ? "收起输入" : "添加笔记"}>
+        <Tipped label={barDraftOpen ? t("收起输入") : t("添加笔记")}>
           <IconButton
-            label={barDraftOpen ? "收起输入" : "添加笔记"}
+            label={barDraftOpen ? t("收起输入") : t("添加笔记")}
             withTitle={false}
             pressed={barDraftOpen}
             onClick={() =>
@@ -3998,7 +4049,7 @@ export default function App() {
                   window.setTimeout(() => {
                     document
                       .querySelector<HTMLTextAreaElement>(
-                        'textarea[placeholder*="添加笔记"]'
+                        '[data-note-draft-input] textarea'
                       )
                       ?.focus();
                   }, 60);
@@ -4022,9 +4073,9 @@ export default function App() {
       )}
       {/* 页面级工具：搜索 / 清理 / 密度 —— 与右侧全局工具用分隔线区分 */}
       {page !== "tasks" && (
-        <Tipped label="搜索（⌘F）">
+        <Tipped label={t("搜索（⌘F）")}>
           <IconButton
-            label="搜索（⌘F）"
+            label={t("搜索（⌘F）")}
             withTitle={false}
             pressed={searchOpen}
             onClick={() => {
@@ -4042,9 +4093,9 @@ export default function App() {
         onClearNotes={clearDoneWithUndo}
         onClearTasks={clearDoneTasksWithUndo}
       />
-      <Tipped label="设置">
+      <Tipped label={t("设置")}>
         <IconButton
-          label="设置"
+          label={t("设置")}
           withTitle={false}
           onClick={() => api.openSettingsWindow()}
         >
@@ -4070,9 +4121,9 @@ export default function App() {
             className="fixed inset-0 z-50 flex items-center justify-center bg-background/90 px-6 backdrop-blur-sm"
           >
             <div className="rounded-xl border border-border bg-popover px-4 py-3 text-center shadow-lg">
-              <p className="text-title font-medium">数据暂时只读</p>
+              <p className="text-title font-medium">{t("数据暂时只读")}</p>
               <p className="mt-1 text-body text-muted-foreground">
-                {dataOperationMessage || "正在验证并切换数据目录…"}
+                {dataOperationMessage || t("正在验证并切换数据目录…")}
               </p>
               {/* 仅恢复/冲突态给引导：瞬态事务（prepare/rehydrate…）几秒内自行解锁 */}
               {(dataOperationPhase === "storageRecovery" ||
@@ -4085,7 +4136,7 @@ export default function App() {
                     void emitTo("settings", SETTINGS_SECTION, "data");
                   }}
                 >
-                  前往设置处理
+                  {t("前往设置处理")}
                 </Button>
               )}
             </div>
@@ -4149,7 +4200,7 @@ export default function App() {
               {/* 左缘宽度拖拽把手 */}
               <div
                 onPointerDown={startResize}
-                title="拖拽调整宽度"
+                title={t("拖拽调整宽度")}
                 className={cn(
                   "absolute inset-y-0 left-0 z-20 w-1.5 cursor-col-resize",
                   "hover:bg-primary/25",
@@ -4160,7 +4211,7 @@ export default function App() {
               <div
                 onPointerDown={startVResize("top")}
                 onDoubleClick={resetVertical}
-                title="拖拽调整顶部位置 · 双击复位自动高度"
+                title={t("拖拽调整顶部位置 · 双击复位自动高度")}
                 className={cn(
                   "absolute inset-x-0 top-0 z-20 h-1.5 cursor-row-resize",
                   "hover:bg-primary/25",
@@ -4171,7 +4222,7 @@ export default function App() {
               <div
                 onPointerDown={startVResize("bottom")}
                 onDoubleClick={resetVertical}
-                title="拖拽调整高度 · 双击复位自动高度"
+                title={t("拖拽调整高度 · 双击复位自动高度")}
                 className={cn(
                   "absolute inset-x-0 bottom-0 z-20 h-1.5 cursor-row-resize",
                   "hover:bg-primary/25",
@@ -4187,12 +4238,12 @@ export default function App() {
                 )}
               >
                 {platinumLayout && (
-                  <PlatinumBox kind="close" label="收起面板（Esc）" onClick={() => closePanel(true)} />
+                  <PlatinumBox kind="close" label={t("收起面板（Esc）")} onClick={() => closePanel(true)} />
                 )}
                 <span aria-hidden data-tauri-drag-region className="platinum-stripe platinum-stripe--lead" />
                 <h1
                   data-tauri-drag-region
-                  title="拖动此处可移动面板（未吸附时）"
+                  title={t("拖动此处可移动面板（未吸附时）")}
                   className="cursor-grab select-none text-title font-semibold tracking-tight active:cursor-grabbing"
                 >
                   Toskr
@@ -4207,7 +4258,7 @@ export default function App() {
                       "hover:bg-primary/15 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
                     )}
                   >
-                    <ArrowUpCircle className="size-3" /> 更新
+                    <ArrowUpCircle className="size-3" /> {t("更新")}
                   </button>
                 )}
                 {!horizontalBar && (
@@ -4216,7 +4267,7 @@ export default function App() {
                 {/* 横栏：页签固定在标题旁（左），分组胶囊独立居中——
                     切页时页签位置不动，胶囊各自居中，互不牵连 */}
                 {horizontalBar && (
-                  <div role="tablist" aria-label="页面" className="surface-inset flex shrink-0 items-center rounded-lg p-0.5">
+                  <div role="tablist" aria-label={t("页面")} className="surface-inset flex shrink-0 items-center rounded-lg p-0.5">
                     {pageTabs}
                   </div>
                 )}
@@ -4260,10 +4311,10 @@ export default function App() {
                 )}
                 {platinumLayout ? (
                   <>
-                    <PlatinumBox kind="zoom" label="复位自动高度" onClick={resetVertical} />
+                    <PlatinumBox kind="zoom" label={t("复位自动高度")} onClick={resetVertical} />
                     <PlatinumBox
                       kind="shade"
-                      label={settings.cardDensity === "compact" ? "展开为舒适卡片" : "收起为紧凑列表"}
+                      label={settings.cardDensity === "compact" ? t("展开为舒适卡片") : t("收起为紧凑列表")}
                       onClick={() =>
                         applySettingsPatch({
                           cardDensity: settings.cardDensity === "compact" ? "comfortable" : "compact",
@@ -4279,7 +4330,7 @@ export default function App() {
               {/* Platinum：选项卡压在面板框上缘，工具钮移到页签行右端 */}
               {platinumLayout && (
                 <div className="platinum-tabrow">
-                  <div role="tablist" aria-label="页面" className="platinum-tabs">
+                  <div role="tablist" aria-label={t("页面")} className="platinum-tabs">
                     {pageTabs}
                   </div>
                   {headerTools}
@@ -4297,7 +4348,7 @@ export default function App() {
               {!horizontalBar && !platinumLayout && (
                 <div
                   role="tablist"
-                  aria-label="页面"
+                  aria-label={t("页面")}
                   className="surface-inset mx-3 mb-1.5 inline-flex w-fit items-center self-start rounded-lg p-0.5"
                 >
                   {pageTabs}
@@ -4315,10 +4366,10 @@ export default function App() {
                     value={query}
                     placeholder={
                       page === "notes" && contentSubview === "messages"
-                        ? "搜索消息、群或发送者…"
+                        ? t("搜索消息、群或发送者…")
                         : page === "notes" && contentSubview === "secret"
-                          ? "搜索秘文…"
-                          : "搜索卡片…"
+                          ? t("搜索秘文…")
+                          : t("搜索卡片…")
                     }
                     onChange={(e) => useUIStore.getState().setQuery(e.target.value)}
                     onKeyDown={(e) => {
@@ -4334,7 +4385,7 @@ export default function App() {
                     </span>
                   )}
                   <IconButton
-                    label="关闭搜索"
+                    label={t("关闭搜索")}
                     size="2xs"
                     onClick={() => useUIStore.getState().setSearchOpen(false)}
                   >
@@ -4362,7 +4413,7 @@ export default function App() {
                         <StripScroller>
                     {clipNotes.length === 0 ? (
                       <p className="px-4 py-6 text-body text-muted-foreground">
-                        {settings.clipHistory ? "还没有剪贴板记录" : "剪贴板历史未开启"}
+                        {settings.clipHistory ? t("还没有剪贴板记录") : t("剪贴板历史未开启")}
                       </p>
                     ) : (
                       <DndContext
@@ -4413,15 +4464,17 @@ export default function App() {
                       icon={clipView === "images" ? <ImageIcon /> : <ClipboardList />}
                       title={
                         q
-                          ? `没有匹配「${q}」的${clipView === "images" ? "图片" : "记录"}`
+                          ? clipView === "images"
+                            ? t("没有匹配「{query}」的图片", { query: q })
+                            : t("没有匹配「{query}」的记录", { query: q })
                           : clipView === "images"
-                            ? "还没有图片记录"
-                            : "还没有剪贴板记录"
+                            ? t("还没有图片记录")
+                            : t("还没有剪贴板记录")
                       }
                       hint={
                         q ? undefined : clipView === "images"
-                          ? "复制的截图和图片会出现在这里。"
-                          : "复制任意文字、链接或图片试试，会自动出现在这里。"
+                          ? t("复制的截图和图片会出现在这里。")
+                          : t("复制任意文字、链接或图片试试，会自动出现在这里。")
                       }
                     />
                     </>
@@ -4547,7 +4600,7 @@ export default function App() {
                                     }))
                                   }
                                 >
-                                  显示更多（还有 {source.total - bandNotes.length} 条）
+                                  {t("显示更多（还有 {n} 条）", { n: source.total - bandNotes.length })}
                                 </button>
                               )}
                             </div>
@@ -4564,6 +4617,8 @@ export default function App() {
                   )}
                         </ScrollArea>
                       ),
+                    // locale：body 内文案用模块级 t()，切换语言须重建缓存
+                    // eslint-disable-next-line react-hooks/exhaustive-deps
                     [
                       clipBands,
                       clipBaseNotes,
@@ -4587,6 +4642,7 @@ export default function App() {
                       settings.clipIgnoreConcealed,
                       settings.clipRetentionDays,
                       visibleClipNotes,
+                      locale,
                     ]
                   )}
                 </PageSlide>
@@ -4618,7 +4674,7 @@ export default function App() {
                   <StripScroller>
                     {stripNotes.length === 0 ? (
                       <p className="px-4 py-6 text-body text-muted-foreground">
-                        没有未完成的笔记卡片
+                        {t("没有未完成的笔记卡片")}
                       </p>
                     ) : (
                       <DndContext
@@ -4663,19 +4719,20 @@ export default function App() {
                 {notes.length === 0 ? (
                   !rehearsalVisible ? (
                     <EmptyState
-                      title="还没有内容"
+                      title={t("还没有内容")}
                       hint={
                         <>
-                          在任意应用中选中文字后连按两次 <Kbd>⇧ Shift</Kbd>{" "}
-                          即可捕获到这里；
+                          {tNode("在任意应用中选中文字后连按两次 {key} 即可捕获到这里；", {
+                            key: <Kbd>⇧ Shift</Kbd>,
+                          })}
                           <br />
-                          也可以在下方直接记下想法或提示词。
+                          {t("也可以在下方直接记下想法或提示词。")}
                         </>
                       }
                     />
                   ) : null
                 ) : noteMatchCount === 0 && q ? (
-                  <EmptyState icon={<SearchX />} title={`没有匹配「${q}」的卡片`} />
+                  <EmptyState icon={<SearchX />} title={t("没有匹配「{query}」的卡片", { query: q })} />
                 ) : (
                   <DndContext
                     sensors={sensors}
@@ -4712,6 +4769,8 @@ export default function App() {
                         </ContentTabPanels>
                       </>
                     ),
+                    // locale：body 内文案用模块级 t()，切换语言须重建缓存
+                    // eslint-disable-next-line react-hooks/exhaustive-deps
                     [
                       contentDomainsOn,
                       contentSubview,
@@ -4735,6 +4794,7 @@ export default function App() {
                       secretNotes,
                       sensors,
                       stripNoteIds,
+                      locale,
                       stripNotes,
                     ]
                   )}
@@ -4750,7 +4810,7 @@ export default function App() {
                       <StripScroller>
                         {stripTasks.length === 0 ? (
                           <p className="px-4 py-6 text-body text-muted-foreground">
-                            没有进行中的任务
+                            {t("没有进行中的任务")}
                           </p>
                         ) : (
                           <div className="flex h-full items-stretch gap-2.5 px-3 pb-2 pt-1">
@@ -4766,7 +4826,9 @@ export default function App() {
                       ) : (
                         <RemindersPage buckets={taskBuckets} now={taskNow} />
                       ),
-                    [horizontalBar, stripTasks, taskBuckets, taskNow]
+                    // locale：body 内文案用模块级 t()，切换语言须重建缓存
+                    // eslint-disable-next-line react-hooks/exhaustive-deps
+                    [horizontalBar, stripTasks, taskBuckets, taskNow, locale]
                   )}
                 </PageSlide>
               </div>
@@ -4819,6 +4881,7 @@ function ClipViewSwitch({
   value: ClipView;
   onHiddenChange?: (hidden: boolean) => void;
 }) {
+  const t = useT();
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = ref.current;
@@ -4837,9 +4900,9 @@ function ClipViewSwitch({
     <div ref={ref} className="flex shrink-0">
       <Segmented<ClipView>
         size="xs"
-        ariaLabel="剪贴页视图"
+        ariaLabel={t("剪贴页视图")}
         value={value}
-        options={CLIP_VIEW_OPTIONS}
+        options={CLIP_VIEW_OPTIONS.map((o) => ({ ...o, label: t(o.label) }))}
         onChange={(v) => applySettingsPatch({ clipView: v })}
       />
     </div>
@@ -4854,15 +4917,16 @@ function ClipViewMenuButton({
   value: ClipView;
   onPick: (v: ClipView) => void;
 }) {
+  const t = useT();
   return (
     <SimpleMenu
       className="flex animate-in fade-in-0 duration-100 motion-reduce:animate-none"
       menuClassName="w-32"
-      menuAriaLabel="剪贴页视图"
+      menuAriaLabel={t("剪贴页视图")}
       trigger={({ open, toggle, controls }) => (
-        <Tipped label="切换视图">
+        <Tipped label={t("切换视图")}>
           <IconButton
-            label="切换视图"
+            label={t("切换视图")}
             withTitle={false}
             aria-haspopup="menu"
             aria-expanded={open}
@@ -4885,7 +4949,7 @@ function ClipViewMenuButton({
               onPick(o.value);
             }}
           >
-            <span className="[&_svg]:size-3.5">{CLIP_VIEW_ICON[o.value]}</span> {o.label}
+            <span className="[&_svg]:size-3.5">{CLIP_VIEW_ICON[o.value]}</span> {t(o.label)}
           </SimpleMenuItem>
         ))
       }
@@ -4918,6 +4982,7 @@ function ClipSourceBandHeader({
   trailing?: React.ReactNode;
   onToggle: () => void;
 }) {
+  const t = useT();
   const rowRef = useRef<HTMLDivElement>(null);
   // 图标走主线程同步取（NSImage → PNG）：几十个来源同时请求会卡住首次切换，只取视野附近的
   const near = useNearViewport(rowRef, !pinned && !!bundle);
@@ -4939,18 +5004,26 @@ function ClipSourceBandHeader({
     if (doomed > 0) {
       const { ask } = await import("@tauri-apps/plugin-dialog");
       const yes = await ask(
-        `「${label}」有 ${doomed} 条记录超过新的保留时长，会被立即清理。\n已固定（★）的记录不会被删除。`,
+        t("「{label}」有 {n} 条记录超过新的保留时长，会被立即清理。\n已固定（★）的记录不会被删除。", { label, n: doomed }),
         {
-          title: `确定把「${label}」的保留时长调整为「${days === null ? "默认" : formatRetention(days)}」吗？`,
+          title: t("确定把「{label}」的保留时长调整为「{duration}」吗？", {
+            label,
+            duration: days === null ? t("默认") : formatRetention(days),
+          }),
           kind: "warning",
-          okLabel: "调整并清理",
-          cancelLabel: "取消",
+          okLabel: t("调整并清理"),
+          cancelLabel: t("取消"),
         }
       );
       if (!yes) return;
     }
     applySettingsPatch({ clipAppRetentionDays: next });
-    tip("ok", doomed > 0 ? `已调整「${label}」保留时长，清理 ${doomed} 条` : `已调整「${label}」保留时长`);
+    tip(
+      "ok",
+      doomed > 0
+        ? t("已调整「{label}」保留时长，清理 {n} 条", { label, n: doomed })
+        : t("已调整「{label}」保留时长", { label })
+    );
   };
 
   const row = (
@@ -4976,7 +5049,7 @@ function ClipSourceBandHeader({
         <span className="truncate text-micro font-medium text-muted-foreground">{label}</span>
         <span className="text-micro tabular-nums text-muted-foreground">{total}</span>
         {!pinned && appDays !== undefined && (
-          <span className="shrink-0 text-micro text-muted-foreground">· 保留 {formatRetention(appDays)}</span>
+          <span className="shrink-0 text-micro text-muted-foreground">{t("· 保留 {duration}", { duration: formatRetention(appDays) })}</span>
         )}
         <span className="h-px flex-1 bg-border/60" />
       </button>
@@ -4992,23 +5065,23 @@ function ClipSourceBandHeader({
         <ContextMenuItem
           onClick={() => {
             useNotesStore.getState().setChecked(notes.map((n) => n.id));
-            tip("info", `已选中「${label}」的 ${total} 条`);
+            tip("info", t("已选中「{label}」的 {n} 条", { label, n: total }));
           }}
         >
-          <CheckCheck className="size-3.5" /> 全选这 {total} 条
+          <CheckCheck className="size-3.5" /> {t("全选这 {n} 条", { n: total })}
         </ContextMenuItem>
         <ContextMenuItem
           variant="destructive"
-          onClick={() => deleteNotesWithUndo(notes.map((n) => n.id), `已删除「${label}」的 ${total} 条`)}
+          onClick={() => deleteNotesWithUndo(notes.map((n) => n.id), t("已删除「{label}」的 {n} 条", { label, n: total }))}
         >
-          <Trash2 className="size-3.5" /> 删除这 {total} 条
+          <Trash2 className="size-3.5" /> {t("删除这 {n} 条", { n: total })}
         </ContextMenuItem>
         {sourceKey && (
           <>
             <ContextMenuSeparator />
             <ContextMenuSub>
               <ContextMenuSubTrigger>
-                <Clock className="size-3.5" /> 保留时长
+                <Clock className="size-3.5" /> {t("保留时长")}
               </ContextMenuSubTrigger>
               <ContextMenuSubContent className="whitespace-nowrap">
                 <ContextMenuRadioGroup
@@ -5016,7 +5089,7 @@ function ClipSourceBandHeader({
                   onValueChange={(v) => void setRetention(v === "follow" ? null : Number(v))}
                 >
                   <ContextMenuRadioItem value="follow">
-                    默认（{globalDays ? formatRetention(globalDays) : "永久"}）
+                    {t("默认（{duration}）", { duration: globalDays ? formatRetention(globalDays) : t("永久") })}
                   </ContextMenuRadioItem>
                   {CLIP_APP_RETENTION_STEPS.map((d) => (
                     <ContextMenuRadioItem key={d} value={String(d)}>
@@ -5032,11 +5105,11 @@ function ClipSourceBandHeader({
                 onClick={() => {
                   const cur = useNotesStore.getState().settings.clipExcludedApps;
                   applySettingsPatch({ clipExcludedApps: [...cur, bundle] });
-                  tip("ok", `已不再收集来自「${label}」的复制，现有记录保留`);
+                  tip("ok", t("已不再收集来自「{label}」的复制，现有记录保留", { label }));
                 }}
               >
                 <EyeOff className="size-3.5" />
-                {excluded ? `已不收集「${label}」` : `不再收集来自「${label}」`}
+                {excluded ? t("已不收集「{label}」", { label }) : t("不再收集来自「{label}」", { label })}
               </ContextMenuItem>
             )}
           </>
@@ -5047,10 +5120,10 @@ function ClipSourceBandHeader({
 }
 
 function formatRetention(days: number): string {
-  if (days % 365 === 0) return `${days / 365} 年`;
-  if (days % 30 === 0) return `${days / 30} 个月`;
-  if (days % 7 === 0) return `${days / 7} 周`;
-  return `${days} 天`;
+  if (days % 365 === 0) return t("{n} 年", { n: days / 365 });
+  if (days % 30 === 0) return t("{n} 个月", { n: days / 30 });
+  if (days % 7 === 0) return t("{n} 周", { n: days / 7 });
+  return t("{n} 天", { n: days });
 }
 
 /** 剪贴板历史关闭时的空态：说明隐私处理（文案随当前设置生成）+ 就地开启。 */
@@ -5063,20 +5136,21 @@ function ClipHistoryOff({
   ignoreConcealed: boolean;
   excludedApps: string[];
 }) {
+  const t = useT();
   const ignoresPasswordApps = DEFAULT_EXCLUDED_APPS.some((id) => excludedApps.includes(id));
   const ignoreLine =
     ignoresPasswordApps && ignoreConcealed
-      ? "自动忽略密码管理器和标记为隐藏的内容"
+      ? t("自动忽略密码管理器和标记为隐藏的内容")
       : ignoresPasswordApps
-        ? "自动忽略密码管理器里的复制"
+        ? t("自动忽略密码管理器里的复制")
         : ignoreConcealed
-          ? "自动忽略标记为隐藏的内容"
+          ? t("自动忽略标记为隐藏的内容")
           : null;
   const lines = [
-    "只存在本机，加密保存，不上传",
+    t("只存在本机，加密保存，不上传"),
     ...(ignoreLine ? [ignoreLine] : []),
     ...(retentionDays != null
-      ? [`超过 ${formatRetention(retentionDays)} 自动清理，固定 ★ 的保留`]
+      ? [t("超过 {duration} 自动清理，固定 ★ 的保留", { duration: formatRetention(retentionDays) })]
       : []),
   ];
   return (
@@ -5084,9 +5158,9 @@ function ClipHistoryOff({
       <span className="text-muted-foreground/50 [&_svg]:size-6">
         <ClipboardList />
       </span>
-      <p className="text-title font-medium text-muted-foreground">剪贴板历史未开启</p>
+      <p className="text-title font-medium text-muted-foreground">{t("剪贴板历史未开启")}</p>
       <p className="text-label leading-normal text-muted-foreground">
-        开启后，复制过的文字、链接和图片会自动收集到这里
+        {t("开启后，复制过的文字、链接和图片会自动收集到这里")}
       </p>
       <ul className="my-2 flex flex-col gap-1.5 text-left text-label text-muted-foreground">
         {lines.map((line) => (
@@ -5098,7 +5172,7 @@ function ClipHistoryOff({
       </ul>
       <div className="flex items-center gap-2">
         <Button size="sm" onClick={() => applySettingsPatch({ clipHistory: true })}>
-          开启剪贴板历史
+          {t("开启剪贴板历史")}
         </Button>
         <Button
           size="sm"
@@ -5108,7 +5182,7 @@ function ClipHistoryOff({
             void emitTo("settings", SETTINGS_SECTION, "clip");
           }}
         >
-          调整规则
+          {t("调整规则")}
         </Button>
       </div>
     </div>
@@ -5123,6 +5197,7 @@ function ClipLoadMore({
   remaining: number;
   onLoad: () => void;
 }) {
+  const t = useT();
   const ref = useRef<HTMLDivElement>(null);
   const onLoadRef = useRef(onLoad);
   onLoadRef.current = onLoad;
@@ -5145,7 +5220,7 @@ function ClipLoadMore({
       ref={ref}
       className="py-1 text-center text-label text-muted-foreground"
     >
-      还有 {remaining} 条…
+      {t("还有 {n} 条…", { n: remaining })}
     </div>
   );
 }
@@ -5165,11 +5240,12 @@ function Tipped({ label, children }: { label: string; children: React.ReactEleme
 
 /** 长按 ⌥ 弹出的快捷键速查层。 */
 function ShortcutHelp() {
+  const t = useT();
   return (
     <div className={cn("absolute inset-x-3 bottom-3 z-50 rounded-xl p-3", floatingSurface(3))}>
-      <p className="mb-1.5 text-label font-semibold text-muted-foreground">快捷键</p>
+      <p className="mb-1.5 text-label font-semibold text-muted-foreground">{t("快捷键")}</p>
       <div className="grid grid-cols-1 gap-y-0.5">
-        {SHORTCUTS.map(([key, desc]) => (
+        {shortcutRows().map(([key, desc]) => (
           <div key={key} className="flex items-center gap-2 text-label">
             <Kbd className="min-w-10 py-0.5">{key}</Kbd>
             <span className="text-muted-foreground">{desc}</span>
@@ -5196,6 +5272,7 @@ function PageTab({
   onDoubleClick: () => void;
   children: React.ReactNode;
 }) {
+  const t = useT();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id });
   return (
@@ -5215,7 +5292,7 @@ function PageTab({
       aria-selected={active}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
-      title={`切换到${typeof children === "string" ? children : PAGE_LABEL[id]}；双击返回列表起点`}
+      title={t("切换到{page}；双击返回列表起点", { page: typeof children === "string" ? children : t(PAGE_LABEL[id]) })}
       className={cn(
         "relative flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-label outline-none",
         "transition-[color,transform] duration-(--duration-control)",

@@ -11,6 +11,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ApplicationIcon } from "@/components/ApplicationIcon";
 import { SimpleSelect } from "@/components/SimpleSelect";
 import type { AppIconInfo } from "@/lib/icons";
+import { useT, type MessageKey } from "@/lib/i18n";
 import {
   DELIVERY_FORMAT_LABEL,
   ENTER_POLICY_STATUS_LABEL,
@@ -26,6 +27,7 @@ import {
 } from "@/lib/targetProfiles";
 import { cn } from "@/lib/utils";
 import { targetStatusLabel, type TargetStatus } from "@/store/targetStore";
+import { profileName } from "@/lib/i18n/builtinNames";
 
 /** 台账键/值样式（A 版定稿）：键 micro 灰右对齐，值 label 亮字左对齐，行高统一对基线。 */
 const LEDGER_KEY_CLS = "text-right text-micro leading-4 text-muted-foreground";
@@ -42,7 +44,7 @@ export interface RuleLedgerInteractive {
 
 const OUTPUT_MODE_OPTIONS: readonly {
   value: DeliveryOutputMode;
-  label: string;
+  label: MessageKey;
 }[] = [
   { value: "plain", label: DELIVERY_FORMAT_LABEL.plain },
   {
@@ -54,9 +56,10 @@ const OUTPUT_MODE_OPTIONS: readonly {
 
 /** 覆盖行的「本次」徽标：提示该值只对当前目标临时生效。 */
 function OverriddenBadge() {
+  const t = useT();
   return (
     <span className="shrink-0 rounded-full bg-primary/15 px-1.5 py-px text-micro font-semibold text-primary">
-      本次
+      {t("本次")}
     </span>
   );
 }
@@ -79,18 +82,24 @@ export function ProfileRuleLedger({
   interactive?: RuleLedgerInteractive;
   className?: string;
 }) {
+  const t = useT();
   const hasOverrides = (interactive?.overriddenKeys.length ?? 0) > 0;
+  const outputModeOptions = OUTPUT_MODE_OPTIONS.map((option) => ({
+    value: option.value,
+    label: t(option.label),
+  }));
   return (
     <div className={className} data-rule-ledger={interactive ? "" : undefined}>
       <dl
-        aria-label="本次生效规则"
-        className="grid grid-cols-[52px_1fr] items-center gap-x-3 gap-y-1"
+        aria-label={t("本次生效规则")}
+        // 键列中文恒 52px；英文键更长时按最宽键撑开
+        className="grid grid-cols-[minmax(52px,auto)_1fr] items-center gap-x-3 gap-y-1"
       >
-        <dt className={LEDGER_KEY_CLS}>提示词组</dt>
+        <dt className={LEDGER_KEY_CLS}>{t("提示词组")}</dt>
         <dd className={cn(LEDGER_VALUE_CLS, "flex items-center gap-1.5")}>
           {interactive ? (
             <SimpleSelect
-              ariaLabel="本次提示词组"
+              ariaLabel={t("本次提示词组")}
               size="micro"
               disabled={interactive.disabled}
               value={profile.promptGroupId}
@@ -106,27 +115,27 @@ export function ProfileRuleLedger({
             <OverriddenBadge />
           )}
         </dd>
-        <dt className={LEDGER_KEY_CLS}>输出格式</dt>
+        <dt className={LEDGER_KEY_CLS}>{t("输出格式")}</dt>
         <dd className={cn(LEDGER_VALUE_CLS, "flex items-center gap-1.5")}>
           {interactive ? (
             <SimpleSelect
-              ariaLabel="本次输出格式"
+              ariaLabel={t("本次输出格式")}
               size="micro"
               disabled={interactive.disabled}
               value={targetProfileOutputMode(profile)}
-              options={OUTPUT_MODE_OPTIONS}
+              options={outputModeOptions}
               onChange={(defaultOutputMode) =>
                 interactive.onOverride({ defaultOutputMode })
               }
             />
           ) : (
-            DELIVERY_FORMAT_LABEL[targetProfileOutputMode(profile)]
+            t(DELIVERY_FORMAT_LABEL[targetProfileOutputMode(profile)])
           )}
           {interactive?.overriddenKeys.includes("defaultOutputMode") && (
             <OverriddenBadge />
           )}
         </dd>
-        <dt className={LEDGER_KEY_CLS}>粘贴后</dt>
+        <dt className={LEDGER_KEY_CLS}>{t("粘贴后")}</dt>
         <dd
           className={cn(
             LEDGER_VALUE_CLS,
@@ -136,19 +145,19 @@ export function ProfileRuleLedger({
         >
           {interactive ? (
             <SimpleSelect
-              ariaLabel="本次粘贴后动作"
+              ariaLabel={t("本次粘贴后动作")}
               size="micro"
               disabled={interactive.disabled}
               value={profile.enterPolicy}
               options={[
-                { value: "never", label: ENTER_POLICY_STATUS_LABEL.never },
-                { value: "confirm", label: ENTER_POLICY_STATUS_LABEL.confirm },
-                { value: "allow", label: ENTER_POLICY_STATUS_LABEL.allow },
+                { value: "never", label: t(ENTER_POLICY_STATUS_LABEL.never) },
+                { value: "confirm", label: t(ENTER_POLICY_STATUS_LABEL.confirm) },
+                { value: "allow", label: t(ENTER_POLICY_STATUS_LABEL.allow) },
               ]}
               onChange={(enterPolicy) => interactive.onOverride({ enterPolicy })}
             />
           ) : (
-            ENTER_POLICY_STATUS_LABEL[profile.enterPolicy]
+            t(ENTER_POLICY_STATUS_LABEL[profile.enterPolicy])
           )}
           {interactive && profile.enterPolicy === "allow" && (
             <ShieldAlert aria-hidden className="size-3 shrink-0 text-warning" />
@@ -157,32 +166,32 @@ export function ProfileRuleLedger({
             <OverriddenBadge />
           )}
         </dd>
-        <dt className={LEDGER_KEY_CLS}>完成后</dt>
+        <dt className={LEDGER_KEY_CLS}>{t("完成后")}</dt>
         <dd className={cn(LEDGER_VALUE_CLS, "flex items-center gap-1.5")}>
           {interactive ? (
             <SimpleSelect
-              ariaLabel="本次发送完成后"
+              ariaLabel={t("本次发送完成后")}
               size="micro"
               disabled={interactive.disabled}
               value={profile.keepPanel ? "keep" : "close"}
               options={[
-                { value: "close", label: "关闭面板" },
-                { value: "keep", label: "保持打开" },
+                { value: "close", label: t("关闭面板") },
+                { value: "keep", label: t("保持打开") },
               ]}
               onChange={(value) =>
                 interactive.onOverride({ keepPanel: value === "keep" })
               }
             />
           ) : profile.keepPanel ? (
-            "保持打开"
+            t("保持打开")
           ) : (
-            "关闭面板"
+            t("关闭面板")
           )}
           {interactive?.overriddenKeys.includes("keepPanel") && (
             <OverriddenBadge />
           )}
         </dd>
-        <dt className={LEDGER_KEY_CLS}>隐私检查</dt>
+        <dt className={LEDGER_KEY_CLS}>{t("隐私检查")}</dt>
         <dd
           className={cn(
             LEDGER_VALUE_CLS,
@@ -195,7 +204,7 @@ export function ProfileRuleLedger({
           ) : (
             <ShieldAlert aria-hidden className="size-3 shrink-0" />
           )}
-          {privacyCapabilityActive ? "发送时执行" : "尚未启用"}
+          {privacyCapabilityActive ? t("发送时执行") : t("尚未启用")}
         </dd>
       </dl>
       {hasOverrides && interactive && (
@@ -205,7 +214,7 @@ export function ProfileRuleLedger({
           className="mt-1.5 flex items-center gap-1 rounded-sm text-micro text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
         >
           <RotateCcw aria-hidden className="size-3" />
-          恢复方案默认规则
+          {t("恢复方案默认规则")}
         </button>
       )}
     </div>
@@ -256,6 +265,7 @@ export function TargetProfileQuickSwitch({
   onEdit: () => void;
   onClose: () => void;
 }) {
+  const t = useT();
   const visibleCandidates = useMemo(() => candidates.slice(0, 3), [candidates]);
   const [activeProfileId, setActiveProfileId] = useState(currentProfile.id);
   const activeIndex = visibleCandidates.findIndex(
@@ -327,7 +337,7 @@ export function TargetProfileQuickSwitch({
   }, [activeIndex, currentProfile.id, onClose, onSelectTemporary, targetReady, visibleCandidates]);
 
   return (
-    <div className="flex min-w-0 flex-col" aria-label={`发送到 ${appName}`}>
+    <div className="flex min-w-0 flex-col" aria-label={t("发送到 {app}", { app: appName })}>
       <header className="flex min-w-0 items-center gap-2">
         <ApplicationIcon
           src={icon?.url}
@@ -336,7 +346,7 @@ export function TargetProfileQuickSwitch({
         />
         <div className="min-w-0 flex-1">
           <p className="truncate text-title font-semibold" title={appName}>
-            发送到 {appName}
+            {t("发送到 {app}", { app: appName })}
           </p>
           {/* 匹配来源直接给结论（前缀「匹配来源：」是系统视角术语，去掉） */}
           <p className="line-clamp-2 break-words text-micro leading-tight text-muted-foreground">
@@ -346,7 +356,7 @@ export function TargetProfileQuickSwitch({
         <span
           role="status"
           aria-live="off"
-          aria-label={`目标状态：${statusLabel}`}
+          aria-label={t("目标状态：{status}", { status: statusLabel })}
           className={cn(
             "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-micro font-medium ring-1 ring-inset",
             statusTone
@@ -364,16 +374,16 @@ export function TargetProfileQuickSwitch({
           id="quick-profile-options-label"
           className="mb-1.5 text-micro font-semibold tracking-[0.08em] text-muted-foreground"
         >
-          发送方案
+          {t("发送方案")}
           <span className="ml-1.5 font-normal tracking-normal text-muted-foreground">
-            ↑↓ 移动 · Enter 使用
+            {t("↑↓ 移动 · Enter 使用")}
           </span>
         </p>
-        <div role="listbox" aria-label="选择本次临时发送方案" className="space-y-0.5">
+        <div role="listbox" aria-label={t("选择本次临时发送方案")} className="space-y-0.5">
           {visibleCandidates.map((profile, index) => {
             const selected = profile.id === currentProfile.id;
             const diffs = selected ? [] : profileDiffSummary(profile, currentProfile);
-            const diffText = diffs.length ? diffs.join(" · ") : "与当前参数相同";
+            const diffText = diffs.length ? diffs.join(" · ") : t("与当前参数相同");
             // 差异里引入自动回车属于新增风险，副行整体染警示色
             const diffWarning =
               profile.enterPolicy === "allow" &&
@@ -408,13 +418,13 @@ export function TargetProfileQuickSwitch({
                 />
                 <span
                   className="min-w-0 shrink-0 truncate text-label font-semibold"
-                  title={profile.name}
+                  title={profileName(profile)}
                 >
-                  {profile.name}
+                  {profileName(profile)}
                 </span>
                 {selected ? (
                   <span className="ml-auto shrink-0 rounded-full bg-primary/15 px-1.5 py-px text-micro font-semibold text-primary">
-                    当前
+                    {t("当前")}
                   </span>
                 ) : (
                   <span
@@ -432,7 +442,7 @@ export function TargetProfileQuickSwitch({
           })}
           {visibleCandidates.length === 0 && (
             <p className="rounded-md bg-muted/40 px-2 py-1.5 text-body text-muted-foreground">
-              暂无可切换方案
+              {t("暂无可切换方案")}
             </p>
           )}
         </div>
@@ -440,8 +450,8 @@ export function TargetProfileQuickSwitch({
 
       <div aria-hidden className="-mx-2 my-2.5 h-px bg-border/60" />
 
-      <section aria-label="本次生效规则">
-        <SectionCap>本次生效规则</SectionCap>
+      <section aria-label={t("本次生效规则")}>
+        <SectionCap>{t("本次生效规则")}</SectionCap>
         <ProfileRuleLedger
           profile={currentProfile}
           privacyCapabilityActive={privacyCapabilityActive}
@@ -460,7 +470,7 @@ export function TargetProfileQuickSwitch({
         >
           <Link2 aria-hidden className="size-3.5 shrink-0" />
           <span className="line-clamp-2 break-words">
-            以后发给 {appName} 都使用此方案
+            {t("以后发给 {app} 都使用此方案", { app: appName })}
           </span>
         </button>
       )}
@@ -469,7 +479,7 @@ export function TargetProfileQuickSwitch({
         <button
           type="button"
           disabled={!temporaryProfileId}
-          title={`恢复自动匹配：${automaticProfileName}`}
+          title={t("恢复自动匹配：{name}", { name: automaticProfileName })}
           onClick={() => {
             onRestoreAutomatic();
             onClose();
@@ -477,11 +487,11 @@ export function TargetProfileQuickSwitch({
           className="flex items-center gap-1 rounded-sm text-micro text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:opacity-40"
         >
           <RotateCcw aria-hidden className="size-3" />
-          恢复自动匹配
+          {t("恢复自动匹配")}
         </button>
         <button
           type="button"
-          title={`编辑 ${appName} 的发送方案`}
+          title={t("编辑 {app} 的发送方案", { app: appName })}
           onClick={() => {
             onClose();
             onEdit();
@@ -489,7 +499,7 @@ export function TargetProfileQuickSwitch({
           className="ml-auto flex items-center gap-1 rounded-sm text-micro text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
         >
           <Settings2 aria-hidden className="size-3" />
-          编辑方案
+          {t("编辑方案")}
         </button>
       </div>
     </div>

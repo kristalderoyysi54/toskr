@@ -2,6 +2,7 @@ import type {
   MessageWatchBridgeInfo,
   MessageWatchCapture,
 } from "@/lib/tauri";
+import { getLocale, intlLocale, t } from "@/lib/i18n";
 import {
   normalizeMessageWatchRules,
   type MessageWatchRule,
@@ -14,22 +15,23 @@ function cleanLabel(value: string | null | undefined, fallback: string): string 
 
 /** 普通笔记只承载可读摘要；不做截断的 raw 对象以 JSONL 账本为权威。 */
 export function formatMessageWatchNote(message: MessageWatchCapture): string {
-  const group = cleanLabel(message.conversationName, "未知群组");
+  const group = cleanLabel(message.conversationName, t("未知群组"));
   const sender = cleanLabel(
     message.senderName,
-    message.senderUid ? `用户 ${message.senderUid}` : "未知发送者"
+    message.senderUid ? t("用户 {uid}", { uid: message.senderUid }) : t("未知发送者")
   );
   const reason = [
-    message.mentionedSelf ? "@我" : "",
-    message.followedSender ? "特别关注" : "",
-    message.matchedRuleIds.length ? "组合规则" : "",
+    message.mentionedSelf ? t("@我") : "",
+    message.followedSender ? t("特别关注") : "",
+    message.matchedRuleIds.length ? t("组合规则") : "",
   ]
     .filter(Boolean)
     .join(" + ");
-  const body = message.text.trim() || `[${message.messageType || "非文本消息"}]`;
+  const body = message.text.trim() || `[${message.messageType || t("非文本消息")}]`;
   const occurredAt = message.occurredAtMs ?? message.receivedAtMs;
-  const stamp = new Date(occurredAt).toLocaleString("zh-CN", { hour12: false });
-  return `【${group}】\n${sender} · ${reason} · ${stamp}\n${body}\n\n消息标识：${message.messageId}`;
+  const stamp = new Date(occurredAt).toLocaleString(intlLocale(), { hour12: false });
+  const heading = getLocale() === "en" ? `[${group}]` : `【${group}】`;
+  return `${heading}\n${sender} · ${reason} · ${stamp}\n${body}\n\n${t("消息标识：{id}", { id: message.messageId })}`;
 }
 
 /**

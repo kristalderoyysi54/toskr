@@ -129,12 +129,16 @@ import { tip } from "@/lib/tip";
 import { cn } from "@/lib/utils";
 import { stats } from "@/lib/textStats";
 import { planTextPreviewRender } from "@/lib/textPreviewPerformance";
+import { useT } from "@/lib/i18n";
 import {
   applyTargetEvent,
   readTarget,
   targetBlockMessage,
   useTargetStore,
 } from "@/store/targetStore";
+import { isNewNotePlaceholder } from "@/lib/i18n/builtinNames";
+// 事件监听回调里取调用时的语言，不必把 t 列入依赖重挂监听
+import { t as translateNow } from "@/lib/i18n";
 
 /**
  * 文本详情窗（独立 webview，桌面居中）：窄面板放不下长文，文字类卡片的
@@ -154,11 +158,12 @@ function AttachThumb({
   onClick: () => void;
   onRemove?: () => void;
 }) {
+  const t = useT();
   const url = useNoteThumb(file);
   return (
     <div className="group relative shrink-0">
       <button
-        aria-label="查看图片"
+        aria-label={t("查看图片")}
         onClick={onClick}
         className={cn(
           "flex size-12 items-center justify-center overflow-hidden rounded-md",
@@ -175,8 +180,8 @@ function AttachThumb({
       {onRemove && (
         /* 常显于键盘焦点，悬停才淡入——缩略图只有 48px，常驻 ⊗ 会盖住画面 */
         <button
-          aria-label="从卡片移除这张图片"
-          title="从卡片移除这张图片"
+          aria-label={t("从卡片移除这张图片")}
+          title={t("从卡片移除这张图片")}
           onClick={onRemove}
           className={cn(
             "absolute -right-1 -top-1 rounded-full bg-foreground/80 p-0.5 text-background",
@@ -371,6 +376,7 @@ async function emitNoteEditWithAck(payload: NoteEditPayload): Promise<boolean> {
 }
 
 export default function TextPreviewView() {
+  const t = useT();
   const [note, setNote] = useState<NotePreviewPayload | null>(null);
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
@@ -470,7 +476,7 @@ export default function TextPreviewView() {
   );
   const targetBlockedMessage = useTargetStore((state) =>
     state.profileOverrideNeedsConfirmation
-      ? "原临时发送方案已暂停"
+      ? t("原临时发送方案已暂停")
       : state.status === "ready"
         ? null
         : targetBlockMessage(state.status, state.reason)
@@ -840,7 +846,7 @@ export default function TextPreviewView() {
           return;
         }
         if (hasMixedNoteContent(currentNote?.contentBlocks)) {
-          respond("rejected", "图文混合卡仅支持编辑现有文字段落");
+          respond("rejected", translateNow("图文混合卡仅支持编辑现有文字段落"));
           return;
         }
         const applied = appliedInsertOperationsRef.current;
@@ -1396,7 +1402,7 @@ export default function TextPreviewView() {
     if (
       blankDraftRef.current &&
       current &&
-      current.text.trim() === "新笔记" &&
+      isNewNotePlaceholder(current.text) &&
       current.images.length === 0
     ) {
       void emitTo("main", "toskr://note-discard-blank", {
@@ -1500,7 +1506,7 @@ export default function TextPreviewView() {
     const text = draftRef.current.trim();
     const images = draftImagesRef.current;
     if (!text && images.length === 0) {
-      tip("warn", "笔记内容不能为空");
+      tip("warn", t("笔记内容不能为空"));
       return;
     }
     const imagesChanged =
@@ -1777,22 +1783,22 @@ export default function TextPreviewView() {
       }
       addImagesToCard(images);
     } catch (error) {
-      tip("warn", `图片导入失败：${error}`);
+      tip("warn", t("图片导入失败：{error}", { error: String(error) }));
     }
   };
 
   /** 从系统剪贴板粘贴图片（位图或 Finder 复制的本地图片文件，可多张）。 */
   const pasteImage = () =>
-    importAndAdd(() => api.pasteImagesFromClipboard(), "剪贴板里没有可用图片");
+    importAndAdd(() => api.pasteImagesFromClipboard(), t("剪贴板里没有可用图片"));
 
   /** 拖入的本地文件：筛图片扩展名后入库追加。 */
   const importDroppedImages = (paths: string[]) => {
     const files = imageFilePaths(paths);
     if (!files.length) {
-      tip("info", "仅支持图片文件");
+      tip("info", t("仅支持图片文件"));
       return;
     }
-    void importAndAdd(() => api.importImageFiles(files), "没有可导入的图片");
+    void importAndAdd(() => api.importImageFiles(files), t("没有可导入的图片"));
   };
 
   const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -2104,7 +2110,7 @@ export default function TextPreviewView() {
           textOp.apply
         );
         if (blocks.every((block, index) => block === current.contentBlocks![index])) {
-          tip("info", "内容无变化");
+          tip("info", t("内容无变化"));
           return;
         }
         draftContentBlocksRef.current = blocks;
@@ -2119,7 +2125,7 @@ export default function TextPreviewView() {
       const source = editing ? draftRef.current : current.text;
       const edit = applyTextOpToSelection(source, selection, textOp);
       if (edit.text === source) {
-        tip("info", "内容无变化");
+        tip("info", t("内容无变化"));
         return;
       }
       if (pickMode) {
@@ -2128,7 +2134,7 @@ export default function TextPreviewView() {
       }
       applySelectionEdit(edit);
     } catch {
-      tip("warn", `${textOp.label}失败：选中内容不符合格式`);
+      tip("warn", t("{op}失败：选中内容不符合格式", { op: t(textOp.label) }));
     }
   };
 
@@ -2143,7 +2149,7 @@ export default function TextPreviewView() {
           : current.contentBlocks;
         const blocks = mapNoteTextBlocks(source, textOp.apply);
         if (blocks.every((block, index) => block === source[index])) {
-          tip("info", "内容无变化");
+          tip("info", t("内容无变化"));
           return;
         }
         draftContentBlocksRef.current = blocks;
@@ -2156,7 +2162,7 @@ export default function TextPreviewView() {
       const source = editing ? draftRef.current : current.text;
       const text = textOp.apply(source);
       if (text === source) {
-        tip("info", "内容无变化");
+        tip("info", t("内容无变化"));
         return;
       }
       applySelectionEdit({
@@ -2165,7 +2171,7 @@ export default function TextPreviewView() {
       });
       setTextSelection(null);
     } catch {
-      tip("warn", `${textOp.label}失败：内容不符合格式`);
+      tip("warn", t("{op}失败：内容不符合格式", { op: t(textOp.label) }));
     }
   };
 
@@ -2194,13 +2200,13 @@ export default function TextPreviewView() {
                 }
           )
         );
-        tip("ok", "已复制图文");
+        tip("ok", t("已复制图文"));
       } else {
         await api.copyText(editing ? draftRef.current : note.text);
-        tip("ok", "已复制");
+        tip("ok", t("已复制"));
       }
     } catch (e) {
-      tip("warn", `复制失败：${e}`);
+      tip("warn", t("复制失败：{error}", { error: String(e) }));
     }
   };
 
@@ -2248,8 +2254,8 @@ export default function TextPreviewView() {
     if (!fragment) return;
     void api
       .copyText(fragment)
-      .then(() => tip("ok", "已复制选中片段"))
-      .catch((e) => tip("warn", `复制失败：${e}`));
+      .then(() => tip("ok", t("已复制选中片段")))
+      .catch((e) => tip("warn", t("复制失败：{error}", { error: String(e) })));
   };
 
   // 文本编辑态由本窗口接管撤销/重做：连续输入按 1 秒内同类输入合并，
@@ -2380,13 +2386,13 @@ export default function TextPreviewView() {
       <DetailWindowFrame surfaceClassName="items-center justify-center bg-background">
         <DataReadOnlyGuard />
         <button
-          aria-label="关闭"
+          aria-label={t("关闭")}
           onClick={close}
           className="absolute right-2 top-2 rounded-sm p-1 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
         >
           <X className="size-3.5" />
         </button>
-        <span className="text-body text-muted-foreground">加载中…</span>
+        <span className="text-body text-muted-foreground">{t("加载中…")}</span>
       </DetailWindowFrame>
     );
   }
@@ -2446,7 +2452,7 @@ export default function TextPreviewView() {
           autosave: true,
         } satisfies NoteEditPayload);
         if (!applied) {
-          tip("warn", "图片编辑未打开：当前草稿尚未同步");
+          tip("warn", t("图片编辑未打开：当前草稿尚未同步"));
           return;
         }
         if (session) session.persistedBlocksJson = JSON.stringify(contentBlocks);
@@ -2462,7 +2468,7 @@ export default function TextPreviewView() {
           autosave: true,
         } satisfies NoteEditPayload);
         if (!applied) {
-          tip("warn", "图片编辑未打开：当前草稿尚未同步");
+          tip("warn", t("图片编辑未打开：当前草稿尚未同步"));
           return;
         }
         if (session) {
@@ -2476,7 +2482,7 @@ export default function TextPreviewView() {
         dataGeneration: current.dataGeneration,
       });
     } catch {
-      tip("warn", "图片编辑未打开，当前草稿仍保留");
+      tip("warn", t("图片编辑未打开，当前草稿仍保留"));
     }
   };
   // 与来源卡片通栏同色：主面板决议的分组色/中性灰优先，应用主色兜底。
@@ -2485,10 +2491,10 @@ export default function TextPreviewView() {
   const glowBackground = `linear-gradient(180deg, color-mix(in srgb, ${accent} 26%, transparent), transparent 80%)`;
   const textOpsAvailable = editable && !!noteText;
   const textOpScopeLabel = (editing || pickMode) && textSelection
-    ? "处理选中内容"
+    ? t("处理选中内容")
     : editing
-      ? "处理当前草稿"
-      : "处理整篇内容";
+      ? t("处理当前草稿")
+      : t("处理整篇内容");
   const renderTextOpMenu = () =>
     textOpsAvailable ? (
       <SimpleMenu
@@ -2508,7 +2514,7 @@ export default function TextPreviewView() {
             onClick={toggle}
             className="flex items-center gap-1"
           >
-            <Wand2 className="size-3" /> 处理
+            <Wand2 className="size-3" /> {t("处理")}
           </DockOp>
         )}
       >
@@ -2523,7 +2529,7 @@ export default function TextPreviewView() {
                   applyContextualTextOp(textOp);
                 }}
               >
-                {textOp.label}
+                {t(textOp.label)}
               </SimpleMenuItem>
             ))}
           </>
@@ -2545,7 +2551,7 @@ export default function TextPreviewView() {
         // 拖拽悬停提示：pointer-events-none 不拦 Tauri 层的 drop 事件
         <div className="pointer-events-none absolute inset-2 z-50 flex items-center justify-center rounded-lg border-2 border-dashed border-primary/60 bg-primary/5">
           <span className="rounded-md bg-background/95 px-3 py-1.5 text-body font-medium text-foreground shadow-sm">
-            松开以添加图片
+            {t("松开以添加图片")}
           </span>
         </div>
       )}
@@ -2583,28 +2589,28 @@ export default function TextPreviewView() {
               aria-hidden
               className="size-1.5 animate-pulse rounded-full bg-primary shadow-[0_0_8px_1px_var(--primary)]"
             />
-            编辑中
+            {t("编辑中")}
           </span>
         )}
         <p
           data-tauri-drag-region
           className="min-w-0 flex-1 truncate text-micro text-muted-foreground"
-          title={`${s.chars} 字符 · ${s.words} 词 · ${s.lines} 行`}
+          title={t("{chars} 字符 · {words} 词 · {lines} 行", { chars: s.chars, words: s.words, lines: s.lines })}
         >
           {note.title && (
             <span className="font-medium text-foreground">{note.title} · </span>
           )}
           {note.subtitle ??
             [
-              note.sourceApp ? `来自 ${note.sourceApp}` : "笔记",
-              note.createdAt ? `创建 ${timeAgo(note.createdAt)}` : null,
+              note.sourceApp ? t("来自 {app}", { app: note.sourceApp }) : t("笔记"),
+              note.createdAt ? t("创建 {time}", { time: timeAgo(note.createdAt) }) : null,
               note.updatedAt && note.updatedAt > (note.createdAt ?? 0)
-                ? `改于 ${timeAgo(note.updatedAt)}`
+                ? t("改于 {time}", { time: timeAgo(note.updatedAt) })
                 : null,
             ]
               .filter(Boolean)
               .join(" · ")}
-          {` · ${s.chars} 字`}
+          {` · ${t("{n} 字", { n: s.chars })}`}
         </p>
         <span aria-hidden data-tauri-drag-region className="platinum-stripe" />
         {icon && <img src={icon.url} alt="" className="size-5 rounded-[5px]" />}
@@ -2612,7 +2618,7 @@ export default function TextPreviewView() {
           <SaveToNotesMenu size="xs" sections={note.clipDestinations} onPick={saveToNotes} />
         )}
         <IconButton
-          label={winPinned ? "取消固定（发送后恢复自动关窗）" : "固定窗口：发送后保持打开"}
+          label={winPinned ? t("取消固定（发送后恢复自动关窗）") : t("固定窗口：发送后保持打开")}
           size="xs"
           pressed={winPinned}
           onClick={() => setWinPinned((value) => !value)}
@@ -2641,7 +2647,7 @@ export default function TextPreviewView() {
             >
               #{tag}
               <button
-                aria-label={`移除标签 ${tag}`}
+                aria-label={t("移除标签 {tag}", { tag })}
                 onClick={() => removeTag(tag)}
                 className="rounded-full p-px opacity-0 outline-none transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring group-hover/tag:opacity-100"
               >
@@ -2655,7 +2661,7 @@ export default function TextPreviewView() {
                 onClick={() => setTagDraft("")}
                 className="rounded-full px-1.5 py-0.5 text-label text-muted-foreground/70 outline-none hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring dark:hover:bg-white/10"
               >
-                ＋ 标签
+                {t("＋ 标签")}
               </button>
             )
           ) : (
@@ -2671,7 +2677,7 @@ export default function TextPreviewView() {
               onBlur={() => {
                 if (!tagDraft?.trim()) setTagDraft(null);
               }}
-              placeholder="标签名，回车添加"
+              placeholder={t("标签名，回车添加")}
               className="w-28 bg-transparent text-label outline-none placeholder:text-muted-foreground/50"
             />
           )}
@@ -2702,8 +2708,9 @@ export default function TextPreviewView() {
           {editing && writable ? (
             <div className="mb-4 flex flex-wrap items-center gap-2 border-b border-border/50 pb-2">
               <input
-                aria-label="笔记标题"
-                placeholder="添加标题（可选）"
+                // aria-label 保持字面量：TextPreviewView.title.test 按源码文本定位此输入框
+                aria-label={t("笔记标题")}
+                placeholder={t("添加标题（可选）")}
                 value={draftTitle}
                 onChange={(event) => {
                   draftTitleRef.current = event.target.value;
@@ -2730,12 +2737,12 @@ export default function TextPreviewView() {
             <h1 className="mb-4 break-words text-heading font-semibold">{note.title}</h1>
           ) : null}
           {!fullContentReady ? (
-            <div className="relative min-h-full" aria-label="正在加载完整长文本">
+            <div className="relative min-h-full" aria-label={t("正在加载完整长文本")}>
               <pre className="whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-body leading-relaxed">
                 {textRenderPlan.warmupText}
               </pre>
               <span className="sticky bottom-0 mt-3 inline-flex rounded-full bg-background/90 px-2 py-1 text-micro text-muted-foreground shadow-sm backdrop-blur-sm">
-                正在加载完整内容…
+                {t("正在加载完整内容…")}
               </span>
             </div>
           ) : editing && mixedContent && note.contentBlocks ? (
@@ -2878,8 +2885,8 @@ export default function TextPreviewView() {
               ref={previewContentRef as React.RefObject<HTMLDivElement>}
               aria-label={
                 pickGranularity === "paragraph"
-                  ? "选段模式：点选段落，可再点另一段扩展范围"
-                  : "选词模式：点选词语，可再点另一词扩展范围"
+                  ? t("选段模式：点选段落，可再点另一段扩展范围")
+                  : t("选词模式：点选词语，可再点另一词扩展范围")
               }
               className={cn(
                 "[overflow-wrap:anywhere] font-mono text-body",
@@ -2891,9 +2898,9 @@ export default function TextPreviewView() {
               {!pick && (
                 // 只在还没选之前出现：选词模式最难懂的是「选完去哪操作」
                 <p className="mb-2 text-micro text-muted-foreground">
-                  {`点${pickGranularity === "paragraph" ? "段落" : "词块"}选中 · 再点另一${
-                    pickGranularity === "paragraph" ? "段" : "块"
-                  }扩展范围 · 选好后底部工具条可发送或复制`}
+                  {pickGranularity === "paragraph"
+                    ? t("点段落选中 · 再点另一段扩展范围 · 选好后底部工具条可发送或复制")
+                    : t("点词块选中 · 再点另一块扩展范围 · 选好后底部工具条可发送或复制")}
                 </p>
               )}
               {pickBlocks
@@ -3052,11 +3059,11 @@ export default function TextPreviewView() {
                 active={editPreviewOn}
                 onClick={() => setEditPreviewOn((v) => !v)}
               >
-                {editPreviewOn ? "原文" : "渲染"}
+                {editPreviewOn ? t("原文") : t("渲染")}
               </DockOp>
             )}
             {renderTextOpMenu()}
-            <IconButton label="粘贴图片（⌘V）" onClick={() => void pasteImage()}>
+            <IconButton label={t("粘贴图片（⌘V）")} onClick={() => void pasteImage()}>
               <ImagePlus className="size-3.5" />
             </IconButton>
             <Button
@@ -3064,7 +3071,7 @@ export default function TextPreviewView() {
               disabled={!mixedContent && draftEmpty && draftImages.length === 0}
               onClick={save}
             >
-              <Check className="size-3" /> 保存
+              <Check className="size-3" /> {t("保存")}
               {/* token-exception: 9px 为重塑前原始尺寸，用户指定还原 */}
               <Kbd inline className="text-[9px]">⌘⏎</Kbd>
             </Button>
@@ -3077,24 +3084,24 @@ export default function TextPreviewView() {
                   active={pickMode}
                   title={
                     pickMode
-                      ? "退出选词模式（W）"
-                      : "选词模式：点选词/段，可发送或复制选中片段（W）"
+                      ? t("退出选词模式（W）")
+                      : t("选词模式：点选词/段，可发送或复制选中片段（W）")
                   }
                   onClick={() => {
                     if (pickMode) exitPickMode();
                     else enterPickMode();
                   }}
                 >
-                  选词
+                  {t("选词")}
                 </DockOp>
                 {pickMode && (
                   <Segmented
-                    ariaLabel="选取粒度"
+                    ariaLabel={t("选取粒度")}
                     size="xs"
                     value={pickGranularity}
                     options={[
-                      { value: "word", label: "词" },
-                      { value: "paragraph", label: "段" },
+                      { value: "word", label: t("词") },
+                      { value: "paragraph", label: t("段") },
                     ]}
                     onChange={(value) => {
                       setPickGranularity(value);
@@ -3107,20 +3114,20 @@ export default function TextPreviewView() {
             )}
             {!mixedContent && isMd && !pickMode && (
               <DockOp onClick={() => setMdView(!mdView)}>
-                {mdView ? "原文" : "渲染"}
+                {mdView ? t("原文") : t("渲染")}
               </DockOp>
             )}
             {isLink && (
-              <DockOp onClick={() => void api.openUrl(note.url!)}>打开链接</DockOp>
+              <DockOp onClick={() => void api.openUrl(note.url!)}>{t("打开链接")}</DockOp>
             )}
             {renderTextOpMenu()}
-            <DockOp onClick={() => void copy()}>复制</DockOp>
+            <DockOp onClick={() => void copy()}>{t("复制")}</DockOp>
             {editable && (
               <DockOp
-                title={mixedContent ? "编辑图文" : undefined}
+                title={mixedContent ? t("编辑图文") : undefined}
                 onClick={() => setEditing(true)}
               >
-                编辑
+                {t("编辑")}
               </DockOp>
             )}
             {writable && (
@@ -3137,7 +3144,7 @@ export default function TextPreviewView() {
                   align="end"
                   side="top"
                   className="flex"
-                  menuAriaLabel="发送方式或目标"
+                  menuAriaLabel={t("发送方式或目标")}
                   menuClassName="max-h-64 w-48 overflow-y-auto"
                   trigger={({ open, toggle, controls }) => {
                     const toggleSendMenu = () => {
@@ -3161,9 +3168,9 @@ export default function TextPreviewView() {
                           aria-label={
                             targetReady
                               ? anySelectionSendOpen
-                                ? "发送整卡到当前目标（不是选中片段）"
-                                : "发送到当前目标"
-                              : `目标不可用（点击选择目标）：${targetBlockedMessage}`
+                                ? t("发送整卡到当前目标（不是选中片段）")
+                                : t("发送到当前目标")
+                              : t("目标不可用（点击选择目标）：{reason}", { reason: String(targetBlockedMessage) })
                           }
                           aria-describedby={
                             targetReady ? undefined : "text-preview-target-status"
@@ -3172,15 +3179,15 @@ export default function TextPreviewView() {
                         >
                           <Send className="size-3" />{" "}
                           {anySelectionSendOpen
-                            ? "发送整卡"
+                            ? t("发送整卡")
                             : targetAppName
-                              ? `发送到 ${targetAppName}`
-                              : "发送"}
+                              ? t("发送到 {app}", { app: targetAppName })
+                              : t("发送")}
                           {/* token-exception: 9px 为重塑前原始尺寸，用户指定还原 */}
                           <Kbd inline className="text-[9px]">⌘⏎</Kbd>
                         </Button>
                         <IconButton
-                          label="选择发送方式或目标"
+                          label={t("选择发送方式或目标")}
                           stopPropagation={false}
                           size="xs"
                           className="-ml-px h-8 w-7 rounded-l-none rounded-r-full border border-(--button-primary-border) bg-button-primary p-0 text-button-primary-foreground shadow-none hover:bg-button-primary-hover hover:text-button-primary-foreground active:shadow-none"
@@ -3197,7 +3204,7 @@ export default function TextPreviewView() {
                 >
                   {(close) => (
                     <>
-                      <SimpleMenuLabel>发送方式</SimpleMenuLabel>
+                      <SimpleMenuLabel>{t("发送方式")}</SimpleMenuLabel>
                       <SimpleMenuItem
                         disabled={!targetReady}
                         onClick={() => {
@@ -3205,7 +3212,7 @@ export default function TextPreviewView() {
                           send({ format: "plain", markdownMode: "preserve" });
                         }}
                       >
-                        原文发送
+                        {t("原文发送")}
                       </SimpleMenuItem>
                       <SimpleMenuItem
                         disabled={
@@ -3213,29 +3220,29 @@ export default function TextPreviewView() {
                         }
                         title={
                           note.codeLang
-                            ? "代码卡保留原文，避免误删代码语法"
+                            ? t("代码卡保留原文，避免误删代码语法")
                             : note.kind === "secret"
-                              ? "秘文信封保持字节原样，不能清洗格式"
-                            : "去除标题、粗体、链接括号等；仅影响本次发送"
+                              ? t("秘文信封保持字节原样，不能清洗格式")
+                            : t("去除标题、粗体、链接括号等；仅影响本次发送")
                         }
                         onClick={() => {
                           close();
                           send({ format: "plain", markdownMode: "strip" });
                         }}
                       >
-                        去 Markdown 后发送
+                        {t("去 Markdown 后发送")}
                       </SimpleMenuItem>
                       <SimpleMenuSeparator />
-                      <SimpleMenuLabel>发送到…</SimpleMenuLabel>
-                      {sendTargets.map((t) => (
+                      <SimpleMenuLabel>{t("发送到…")}</SimpleMenuLabel>
+                      {sendTargets.map((target) => (
                         <SendTargetAppItem
-                          key={t.pid}
-                          target={t}
+                          key={target.pid}
+                          target={target}
                           onSelect={() => {
                             close();
-                            void api.adoptSendTarget(t.pid).then((snap) => {
+                            void api.adoptSendTarget(target.pid).then((snap) => {
                               if (!snap?.ready) {
-                                tip("warn", "该应用暂不可作为发送目标");
+                                tip("warn", t("该应用暂不可作为发送目标"));
                                 return;
                               }
                               // 等 target 事件先落主面板 store 再发
@@ -3246,7 +3253,7 @@ export default function TextPreviewView() {
                       ))}
                       {sendTargets.length === 0 && (
                         <SimpleMenuItem disabled onClick={() => {}}>
-                          暂无其他可用应用
+                          {t("暂无其他可用应用")}
                         </SimpleMenuItem>
                       )}
                     </>

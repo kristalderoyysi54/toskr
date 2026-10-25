@@ -1,5 +1,6 @@
 //! 独立模板 JSON 导出，不读取应用数据目录或密钥。
 
+use crate::i18n::pick;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
@@ -53,15 +54,15 @@ pub fn export_prompt_templates(
             .and_then(|extension| extension.to_str())
             .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
     {
-        return Err("模板导出目标必须是绝对 .json 文件路径".into());
+        return Err(pick("模板导出目标必须是绝对 .json 文件路径", "Template export target must be an absolute .json file path").into());
     }
     if std::fs::symlink_metadata(destination)
         .is_ok_and(|metadata| !metadata.is_file() || metadata.file_type().is_symlink())
     {
-        return Err("模板导出目标不是普通文件".into());
+        return Err(pick("模板导出目标不是普通文件", "Template export target isn't a regular file").into());
     }
     if payload.format != "toskr-prompt-templates" || payload.version != 1 {
-        return Err("模板导出格式或版本无效".into());
+        return Err(pick("模板导出格式或版本无效", "Invalid template export format or version").into());
     }
     let referenced_groups: HashSet<_> =
         payload.snippets.iter().map(|item| &item.group_id).collect();
@@ -72,7 +73,7 @@ pub fn export_prompt_templates(
         .iter()
         .any(|id| !payload.groups.iter().any(|group| &group.id == *id))
     {
-        return Err("模板引用的分组不存在".into());
+        return Err(pick("模板引用的分组不存在", "A group referenced by the template doesn't exist").into());
     }
     let mut json = serde_json::to_string_pretty(&payload).map_err(|error| error.to_string())?;
     json.push('\n');

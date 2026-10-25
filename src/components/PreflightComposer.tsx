@@ -42,7 +42,7 @@ import {
   addAliasEntityFromText,
   aliasQuickAddCategories,
 } from "@/lib/aliasQuickAdd";
-import { activeAliasOccurrences } from "@/lib/delivery/aliasEntities";
+import { activeAliasOccurrences, aliasCategoryDisplayLabel } from "@/lib/delivery/aliasEntities";
 import { findingReason } from "@/lib/delivery/findingReason";
 import { FindingInlineText } from "@/components/preflight/FindingInlineText";
 import { SendPreviewText } from "@/components/preflight/SendPreviewText";
@@ -68,6 +68,8 @@ import {
   type DeliveryOutputMode,
 } from "@/lib/targetProfiles";
 import { ENTER_POLICY_STATUS_LABEL } from "@/lib/targetLens";
+import { useT, type MessageKey } from "@/lib/i18n";
+import { profileName as profileDisplayName } from "@/lib/i18n/builtinNames";
 import { cn } from "@/lib/utils";
 import { useDeliveryStore } from "@/store/deliveryStore";
 import { noteImages, useNotesStore } from "@/store/notesStore";
@@ -78,9 +80,9 @@ const FORMAT_OPTIONS = [
   { value: "plain", label: "原文" },
   { value: "strip-markdown", label: "无 Markdown" },
   { value: "code", label: "代码块" },
-] as const satisfies readonly SimpleSelectOption<DeliveryOutputMode>[];
+] as const satisfies readonly (SimpleSelectOption<DeliveryOutputMode> & { label: MessageKey })[];
 
-const WARNING_LABEL: Record<string, string> = {
+const WARNING_LABEL: Record<string, MessageKey> = {
   "source-missing": "部分来源已不存在",
   "empty-payload": "正文和附件均为空",
 };
@@ -100,13 +102,14 @@ function PreflightAttachment({
   files: string[];
   index: number;
 }) {
+  const t = useT();
   const url = useNoteThumb(files[index]);
   return (
     <li className="shrink-0">
       <button
         type="button"
-        aria-label={`查看附件原图 ${index + 1}，共 ${files.length} 张`}
-        title="点击查看原图"
+        aria-label={t("查看附件原图 {index}，共 {n} 张", { index: index + 1, n: files.length })}
+        title={t("点击查看原图")}
         onClick={() => void api.quickLook(files, index)}
         className={cn(
           "relative flex size-14 cursor-zoom-in items-center justify-center overflow-hidden rounded-md",
@@ -131,6 +134,7 @@ function PreflightAttachment({
 }
 
 export function PreflightComposer({ horizontal = false }: { horizontal?: boolean }) {
+  const t = useT();
   const open = useDeliveryStore((state) => state.open);
   const draft = useDeliveryStore((state) => state.draft);
   const busy = useDeliveryStore((state) => state.busy);
@@ -257,7 +261,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
       : hiddenStaleReason ?? staleReason;
   const staleMessage = preflightStaleMessage(visibleStaleReason);
   const currentTargetName =
-    targetSnapshot?.appName || targetSnapshot?.bundleId || "新目标";
+    targetSnapshot?.appName || targetSnapshot?.bundleId || t("新目标");
   const sourceItemIds = draft?.sourceItemIds;
   const sourceKind = draft?.sourceKind;
   const sourceLabels = useMemo(() => {
@@ -267,16 +271,16 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
     return sourceItemIds.map((id, index) => {
       if (sourceKind === "task") {
         const task = taskById.get(id);
-        return task?.text.split("\n", 1)[0] || `已删除任务 ${index + 1}`;
+        return task?.text.split("\n", 1)[0] || t("已删除任务 {n}", { n: index + 1 });
       }
       const note = noteById.get(id);
-      if (!note) return `已删除卡片 ${index + 1}`;
+      if (!note) return t("已删除卡片 {n}", { n: index + 1 });
       if (note.kind === "image") {
         return imageListLabel(note, noteImages(note).length);
       }
-      return (note.title || note.text).split("\n", 1)[0] || `空卡片 ${index + 1}`;
+      return (note.title || note.text).split("\n", 1)[0] || t("空卡片 {n}", { n: index + 1 });
     });
-  }, [notes, sourceItemIds, sourceKind, tasks]);
+  }, [notes, sourceItemIds, sourceKind, tasks, t]);
   const promptGroupId = draft?.promptGroupId;
   const promptMenu = useMemo(
     () =>
@@ -290,20 +294,26 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
   const promptValue = draftPromptSnippetId ?? (draftPromptTemplate ? "custom" : "none");
   const targetProfileId = draft?.targetProfileId;
   const profileName = useMemo(
-    () =>
-      targetProfileId
-        ? settings.targetProfiles.find((item) => item.id === targetProfileId)
-            ?.name ?? targetProfileId
-        : "",
-    [settings.targetProfiles, targetProfileId]
+    () => {
+      if (!targetProfileId) return "";
+      const profile = settings.targetProfiles.find((item) => item.id === targetProfileId);
+      return profile ? profileDisplayName(profile) : targetProfileId;
+    },
+    // t：切换语言时内置方案名随之重算（profileDisplayName 读全局语言，lint 看不出这层依赖）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [settings.targetProfiles, targetProfileId, t]
+  );
+  const formatOptions = useMemo(
+    () => FORMAT_OPTIONS.map((option) => ({ ...option, label: t(option.label) })),
+    [t]
   );
   const hasPayload = Boolean(draft && (draft.finalText || draft.imageFiles.length));
   // 粘贴后动作不再要求单独选择（用户 2026-09-11）：confirm 方案在预检里点「发送」即确认
   const enterDecisionLabel = draft?.safeRehearsal
-    ? "本次不按回车"
+    ? t("本次不按回车")
     : draft?.enterPolicy === "confirm" && !draft.enterDecisionConfirmed
-      ? "点击发送即确认，粘贴后按回车"
-      : `本次${draft?.pressEnter ? "会按回车" : "不按回车"}`;
+      ? t("点击发送即确认，粘贴后按回车")
+      : draft?.pressEnter ? t("本次会按回车") : t("本次不按回车");
   // P3：确认按钮文案直接写出动作（confirm 方案点发送即确认回车）
   const willPressEnter =
     !!draft && !draft.safeRehearsal &&
@@ -367,14 +377,14 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
   // ① 已识别到另一个 ready 目标 → 显式确认并重算方案；② 方案待确认 → 指去目标条；
   // ③ 人在别的应用 → 切回即自动恢复（由下方 effect 调 recoverOpenPreflightTarget 兑现）
   const draftTargetName =
-    draft?.targetSnapshot?.appName || draft?.targetSnapshot?.bundleId || "目标应用";
+    draft?.targetSnapshot?.appName || draft?.targetSnapshot?.bundleId || t("目标应用");
   const staleTargetGuidance =
     visibleStaleReason === "target" && !canRecoverTarget
       ? showTargetChangeAction
-        ? `当前为 ${currentTargetName}，确认后将重算发送方案`
+        ? t("当前为 {name}，确认后将重算发送方案", { name: currentTargetName })
         : profileOverrideNeedsConfirmation
-        ? "在面板目标条确认本次发送方案后可继续"
-        : `切回 ${draftTargetName} 后这里会自动恢复`
+        ? t("在面板目标条确认本次发送方案后可继续")
+        : t("切回 {name} 后这里会自动恢复", { name: draftTargetName })
       : null;
   const staleDisplay = staleMessage
     ? staleTargetGuidance
@@ -387,15 +397,15 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
     : staleDisplay && !canRecoverTarget
       ? staleDisplay
       : !hasPayload
-        ? "正文与附件为空，没有可发送的内容"
+        ? t("正文与附件为空，没有可发送的内容")
         : firewall && !firewall.canSend
-          ? firewall.reason ?? "本地隐私检查未通过"
+          ? firewall.reason ?? t("本地隐私检查未通过")
           : imageFirewall && !imageFirewall.canSend
-            ? imageFirewall.reason ?? "图片隐私检查未通过"
+            ? imageFirewall.reason ?? t("图片隐私检查未通过")
             : transformStatus === "running"
-              ? "AI 处理进行中，完成后可发送"
+              ? t("AI 处理进行中，完成后可发送")
               : retryBlocked
-                ? lastError ?? "上次发送未完成处理，暂不能重试"
+                ? lastError ?? t("上次发送未完成处理，暂不能重试")
                 : null;
 
   // 目标失效自动恢复：切回同一目标（仅 token 轮换）时静默重基线，兑现底栏「切回后自动恢复」的承诺
@@ -468,7 +478,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
   };
   const showSummary = horizontal || activeSection === "summary";
   const showContent = horizontal || activeSection === "content";
-  const targetName = draft.targetSnapshot?.appName ?? "未识别目标";
+  const targetName = draft.targetSnapshot?.appName ?? t("未识别目标");
   const targetDisplayName = readyDifferentTarget
     ? `${targetName} → ${currentTargetName}`
     : targetName;
@@ -526,7 +536,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
     if (!draft) return;
     const source = findingSourceText(draft.finalText, finding);
     if (!source) {
-      tip("warn", "该命中位置已变化，请重新检测后再加入词典");
+      tip("warn", t("该命中位置已变化，请重新检测后再加入词典"));
       return;
     }
     if (!addAliasEntityFromText(source, category)) return;
@@ -534,14 +544,14 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
       // 无手工编辑：重建草稿让新词条立即生效（自动替换 + 隐私重扫描）
       updateOpenPreflightDraft({});
     } else {
-      tip("info", "词条已保存；本次正文已手工编辑，可点「重新检测」应用替换");
+      tip("info", t("词条已保存；本次正文已手工编辑，可点「重新检测」应用替换"));
     }
   };
 
   const privacyPolicyLabel = {
-    requireRedaction: "敏感项须替换或明确保留后才能发送",
-    confirmRaw: "高风险须处理；提示级可确认后保留",
-    allowRaw: "允许原文发送；高风险需二次确认",
+    requireRedaction: t("敏感项须替换或明确保留后才能发送"),
+    confirmRaw: t("高风险须处理；提示级可确认后保留"),
+    allowRaw: t("允许原文发送；高风险需二次确认"),
   }[draft.privacyPolicy];
   const privacyScanPending =
     draft.firewallStatus === "idle" || draft.firewallStatus === "scanning" ||
@@ -552,19 +562,19 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
     (item) => item.sendFile !== item.originalFile
   );
   const privacyRescanLabel = draft.imageFirewall.length
-    ? "重新检测当前文本和原始图片"
-    : "重新检测当前文本";
+    ? t("重新检测当前文本和原始图片")
+    : t("重新检测当前文本");
   const rerunPrivacyScan = async () => {
     const expectedDraftId = draft.id;
     if (hasImageRedactions) {
       let confirmed = false;
       try {
         confirmed = await ask(
-          "重新检测会恢复图片为原图，并清除已完成的遮挡；检测后需要重新处理。是否继续？",
-          { title: "重新检测隐私内容", kind: "warning" }
+          t("重新检测会恢复图片为原图，并清除已完成的遮挡；检测后需要重新处理。是否继续？"),
+          { title: t("重新检测隐私内容"), kind: "warning" }
         );
       } catch {
-        tip("warn", "无法确认重新检测，请稍后重试");
+        tip("warn", t("无法确认重新检测，请稍后重试"));
         return;
       }
       if (!confirmed) return;
@@ -575,14 +585,14 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
     const live = current.draft;
     if (!current.open || live?.id !== expectedDraftId) return;
     if (!completed) {
-      tip("warn", "本次重新检测已失效，请在内容稳定后重试");
+      tip("warn", t("本次重新检测已失效，请在内容稳定后重试"));
       return;
     }
     const incomplete = live.firewallStatus === "failed" ||
       live.firewallStatus === "incomplete" ||
       live.imageFirewall.some((item) => item.status === "failed");
     if (incomplete) {
-      tip("warn", "重新检测完成，但有内容未能完整检查");
+      tip("warn", t("重新检测完成，但有内容未能完整检查"));
       return;
     }
     const findingCount = live.findings.length + live.imageFirewall.reduce(
@@ -592,8 +602,8 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
     tip(
       "ok",
       findingCount
-        ? `重新检测完成，发现 ${findingCount} 项可能的敏感内容`
-        : "重新检测完成，未发现敏感内容"
+        ? t("重新检测完成，发现 {n} 项可能的敏感内容", { n: findingCount })
+        : t("重新检测完成，未发现敏感内容")
     );
   };
 
@@ -634,14 +644,14 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
   );
   const textPassSummary =
     draft.firewallStatus === "disabled"
-      ? "检查已关闭"
+      ? t("检查已关闭")
       : draft.findings.length === 0
         ? draft.privacyDecision.replacedCount > 0
-          ? `已替换 ${draft.privacyDecision.replacedCount} 处敏感内容`
-          : "未发现敏感内容"
+          ? t("已替换 {n} 处敏感内容", { n: draft.privacyDecision.replacedCount })
+          : t("未发现敏感内容")
         : unresolvedTextCount === 0
-          ? `已确认保留 ${draft.findings.length} 处原文`
-          : `${unresolvedTextCount} 处命中按方案保留原文`;
+          ? t("已确认保留 {n} 处原文", { n: draft.findings.length })
+          : t("{n} 处命中按方案保留原文", { n: unresolvedTextCount });
   const keptImageFindingCount = draft.imageFirewall.reduce(
     (total, item) => total + item.keptFindingIds.length,
     0
@@ -649,72 +659,72 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
   const imagePassSummary = draft.imageFirewall.every(
     (item) => item.status === "disabled"
   )
-    ? `检查已关闭，${hasImageRedactions ? "发送副本" : "发送原图"}`
+    ? hasImageRedactions ? t("检查已关闭，发送副本") : t("检查已关闭，发送原图")
     : hasImageRedactions
-      ? "已遮挡敏感区域，发送副本"
+      ? t("已遮挡敏感区域，发送副本")
       : keptImageFindingCount > 0
-        ? `已确认保留 ${keptImageFindingCount} 处，发送原图`
-        : "无敏感区域，发送原图";
+        ? t("已确认保留 {n} 处，发送原图", { n: keptImageFindingCount })
+        : t("无敏感区域，发送原图");
   const attentionCount =
     unresolvedTextCount + unresolvedImageCount;
   const bannerTitle = privacyScanPending
-    ? "本地隐私检测中…"
+    ? t("本地隐私检测中…")
     : checksPass
       ? draft.safeRehearsal
-        ? "检查全部通过，可安全粘贴"
-        : "检查全部通过，可发送"
+        ? t("检查全部通过，可安全粘贴")
+        : t("检查全部通过，可发送")
       : attentionCount > 0
-        ? `${attentionCount} 项处理完才能发送`
-        : "检查未通过，暂不能发送";
+        ? t("{n} 项处理完才能发送", { n: attentionCount })
+        : t("检查未通过，暂不能发送");
   const bannerDetail = privacyScanPending
-    ? "文本检测与图片 OCR 均在本机运行，内容不会上传"
+    ? t("文本检测与图片 OCR 均在本机运行，内容不会上传")
     : checksPass
       ? textAttention || imageAttention
-        ? "部分命中按当前方案保留原文，建议复查下方明细"
+        ? t("部分命中按当前方案保留原文，建议复查下方明细")
         : [
             textPassSummary,
             draft.imageFirewall.length
-              ? `${draft.imageFirewall.length} 张图片${
-                  hasImageRedactions ? "已遮挡" : "发送原图"
-                }`
+              ? hasImageRedactions
+                ? t("{n} 张图片已遮挡", { n: draft.imageFirewall.length })
+                : t("{n} 张图片发送原图", { n: draft.imageFirewall.length })
               : null,
           ]
             .filter(Boolean)
             .join(" · ")
       : [
-          unresolvedTextCount > 0 ? `${unresolvedTextCount} 处文本敏感项` : null,
-          unresolvedImageCount > 0 ? `${unresolvedImageCount} 处图片区域` : null,
+          unresolvedTextCount > 0 ? t("{n} 处文本敏感项", { n: unresolvedTextCount }) : null,
+          unresolvedImageCount > 0 ? t("{n} 处图片区域", { n: unresolvedImageCount }) : null,
         ]
           .filter(Boolean)
           .join(" · ") ||
-        (firewall?.reason ?? imageFirewall?.reason ?? "详见下方检查明细");
+        (firewall?.reason ?? imageFirewall?.reason ?? t("详见下方检查明细"));
   const imageCheckPanel =
     draft.imageFirewall.length > 0 && imageFirewall ? (
       <ImageFirewallPanel draft={draft} busy={busy} evaluation={imageFirewall} />
     ) : null;
   const privacyCheckSection = (
     <section
-      aria-label="本地隐私检查"
+      aria-label={t("本地隐私检查")}
       className="space-y-2 rounded-lg border border-border/70 p-2"
     >
       <div className="flex items-center gap-1.5">
         <ShieldAlert className="size-3.5 text-warning" aria-hidden />
-        <p className="text-label font-medium">本地隐私检查</p>
+        <p className="text-label font-medium">{t("本地隐私检查")}</p>
         <div className="ml-auto flex shrink-0 items-center gap-1">
           <span aria-live="polite" className="text-micro text-muted-foreground">
             {draft.firewallStatus === "disabled"
-              ? "已关闭"
+              ? t("已关闭")
               : draft.firewallStatus === "scanning"
-                ? "扫描中…"
+                ? t("扫描中…")
                 : draft.firewallStatus === "ready"
                   ? unresolvedTextCount
-                    ? `${unresolvedTextCount} 项待处理`
-                    : "无待处理项"
+                    ? t("{n} 项待处理", { n: unresolvedTextCount })
+                    : t("无待处理项")
                   : draft.firewallStatus === "incomplete"
-                    ? "检查不完整"
+                    ? t("检查不完整")
                     : draft.firewallStatus === "failed"
-                      ? "检查失败"
-                      : "等待检查"}
+                      ? t("检查失败")
+                      : t("等待检查")}
           </span>
           {draft.firewallEnabled && (
             <Button
@@ -733,28 +743,28 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                   privacyScanPending && "animate-spin motion-reduce:animate-none"
                 )}
               />
-              {privacyScanPending ? "检测中" : "重新检测"}
+              {privacyScanPending ? t("检测中") : t("重新检测")}
             </Button>
           )}
         </div>
       </div>
       <p className="text-micro text-muted-foreground">
-        {privacyPolicyLabel} · 检测可能存在误报或漏报
+        {privacyPolicyLabel} · {t("检测可能存在误报或漏报")}
       </p>
       {draft.firewallStatus === "ready" && draft.findings.length === 0 && (
         <p role="status" className="text-label text-success">
           {draft.privacyDecision.replacedCount > 0
-            ? `已替换 ${draft.privacyDecision.replacedCount} 处敏感内容，本项检查通过`
-            : "未发现敏感内容，本项检查通过"}
+            ? t("已替换 {n} 处敏感内容，本项检查通过", { n: draft.privacyDecision.replacedCount })
+            : t("未发现敏感内容，本项检查通过")}
         </p>
       )}
       {draft.findings.length > 0 && firewall?.canSend && (
         <p role="status" className="text-label text-success">
-          敏感项已全部处理，可以发送
+          {t("敏感项已全部处理，可以发送")}
         </p>
       )}
       {firewallSummary.length > 0 && (
-        <div className="flex flex-wrap gap-1" aria-label="敏感项分类汇总">
+        <div className="flex flex-wrap gap-1" aria-label={t("敏感项分类汇总")}>
           {firewallSummary.map((item) => (
             <span
               key={item.category}
@@ -765,7 +775,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                   : "bg-warning/10 text-warning"
               )}
             >
-              {FIREWALL_CATEGORY_LABEL[item.category]} · {FIREWALL_SEVERITY_LABEL[item.severity]} ×{item.count}
+              {t(FIREWALL_CATEGORY_LABEL[item.category])} · {t(FIREWALL_SEVERITY_LABEL[item.severity])} ×{item.count}
             </span>
           ))}
         </div>
@@ -773,7 +783,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
       {draft.findings.length > 0 && (
         <>
           <p className="text-micro text-muted-foreground">
-            推荐替换为占位符（本机替换、发出的是占位符）；确需按原文发出时选「保留原文发送」
+            {t("推荐替换为占位符（本机替换、发出的是占位符）；确需按原文发出时选「保留原文发送」")}
           </p>
           {/* 命中就地处理：原文高亮可点；详细列表默认展开，也可手动收起。 */}
           <FindingInlineText
@@ -794,35 +804,35 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                   size="xs"
                   variant="secondary"
                   disabled={busy || draft.firewallStatus !== "ready"}
-                  title="把本次全部命中一次性替换为占位符"
+                  title={t("把本次全部命中一次性替换为占位符")}
                   onClick={() => useDeliveryStore.getState().replaceAllFirewallFindings()}
                 >
-                  一键全部替换
+                  {t("一键全部替换")}
                 </Button>
                 <Button
                   type="button"
                   size="xs"
                   disabled={busy || draft.firewallStatus !== "ready" ||
                     draft.findings.every((finding) => excludedFindingIds.has(finding.id))}
-                  title="确认本次检测到的全部文本敏感项按原文保留，不改变默认脱敏策略"
+                  title={t("确认本次检测到的全部文本敏感项按原文保留，不改变默认脱敏策略")}
                   onClick={() => useDeliveryStore.getState().excludeAllFirewallFindings()}
                 >
                   {draft.findings.every((finding) => excludedFindingIds.has(finding.id))
-                    ? "已全部保留原文"
-                    : "一键保留原文"}
+                    ? t("已全部保留原文")
+                    : t("一键保留原文")}
                 </Button>
               </div>
               <p className="text-micro text-muted-foreground">
-                仅本次有效，随后点击「确认发送」；已替换的内容不会恢复。
+                {t("仅本次有效，随后点击「确认发送」；已替换的内容不会恢复。")}
               </p>
             </div>
           )}
           <details open className="group">
             <summary className="flex cursor-pointer list-none items-center gap-1 py-0.5 text-micro text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
               <ChevronRight className="size-3 transition-transform group-open:rotate-90" aria-hidden />
-              详细列表（命中依据 · 同类替换 · 定位）
+              {t("详细列表（命中依据 · 同类替换 · 定位）")}
             </summary>
-          <ul className="mt-1 space-y-1.5" aria-label="敏感项列表">
+          <ul className="mt-1 space-y-1.5" aria-label={t("敏感项列表")}>
             {draft.findings.map((finding) => {
               const excluded = excludedFindingIds.has(finding.id);
               return (
@@ -832,7 +842,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                 >
                   <div className="flex items-center gap-1 text-label">
                     <span className="font-medium">
-                      {FIREWALL_CATEGORY_LABEL[finding.category]}
+                      {t(FIREWALL_CATEGORY_LABEL[finding.category])}
                     </span>
                     <span className={cn(
                       "rounded-sm px-1 py-0.5 text-micro",
@@ -840,13 +850,13 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                         ? "bg-destructive/10 text-destructive"
                         : "bg-warning/10 text-warning"
                     )}>
-                      {FIREWALL_SEVERITY_LABEL[finding.severity]}
+                      {t(FIREWALL_SEVERITY_LABEL[finding.severity])}
                     </span>
                     <code className="min-w-0 flex-1 truncate text-right text-micro text-muted-foreground">
                       {finding.maskedPreview}
                     </code>
                     <IconButton
-                      label="在正文中定位这一项"
+                      label={t("在正文中定位这一项")}
                       size="2xs"
                       disabled={busy}
                       onClick={() => locateFinding(
@@ -858,7 +868,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                     </IconButton>
                   </div>
                   <details className="mt-1 text-micro text-muted-foreground">
-                    <summary className="cursor-pointer">命中依据</summary>
+                    <summary className="cursor-pointer">{t("命中依据")}</summary>
                     <p className="mt-1 break-words">{findingReason(finding)}</p>
                   </details>
                   <div className="mt-1.5 flex flex-wrap items-center gap-1">
@@ -871,7 +881,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                         useDeliveryStore.getState()
                           .replaceFirewallFinding(finding.id)}
                     >
-                      替换为占位符
+                      {t("替换为占位符")}
                     </Button>
                     <Button
                       type="button"
@@ -881,7 +891,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                         useDeliveryStore.getState()
                           .replaceFirewallCategory(finding.category)}
                     >
-                      同类全部替换
+                      {t("同类全部替换")}
                     </Button>
                     {finding.severity === "warn" && (
                       <SimpleMenu
@@ -893,10 +903,10 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                             size="xs"
                             variant="ghost"
                             disabled={busy}
-                            title="把这个值升级为持久词典实体：以后自动替换、捕获回复自动恢复"
+                            title={t("把这个值升级为持久词典实体：以后自动替换、捕获回复自动恢复")}
                             onClick={toggle}
                           >
-                            加入词典
+                            {t("加入词典")}
                           </Button>
                         )}
                       >
@@ -915,7 +925,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                                   );
                                 }}
                               >
-                                {category.label}
+                                {aliasCategoryDisplayLabel(category)}
                               </SimpleMenuItem>
                             ))}
                           </>
@@ -927,13 +937,13 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                       size="xs"
                       variant="ghost"
                       className="ml-auto text-muted-foreground"
-                      title="不替换这一项，按原文发出（仅本次发送有效）"
+                      title={t("不替换这一项，按原文发出（仅本次发送有效）")}
                       disabled={busy || excluded}
                       onClick={() =>
                         useDeliveryStore.getState()
                           .excludeFirewallFinding(finding.id)}
                     >
-                      {excluded ? "已确认保留原文" : "保留原文发送"}
+                      {excluded ? t("已确认保留原文") : t("保留原文发送")}
                     </Button>
                   </div>
                 </li>
@@ -955,8 +965,8 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
             )}
         >
           {firewall.needsRawConfirmation === "block"
-            ? "再次确认保留高风险原文"
-            : "确认本次保留提示级原文"}
+            ? t("再次确认保留高风险原文")
+            : t("确认本次保留提示级原文")}
         </Button>
       )}
       {(firewall?.reason || imageFirewall?.reason) && (
@@ -1008,22 +1018,22 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
         <header className="flex items-center gap-2 border-b border-border px-3 py-2">
           <div className="min-w-0 flex-1">
             <h2 id="preflight-title" className="text-title font-semibold">
-              {draft.safeRehearsal ? "检查并粘贴" : "发送预检"}
+              {draft.safeRehearsal ? t("检查并粘贴") : t("发送预检")}
             </h2>
             <p className={cn("text-micro text-muted-foreground", !draft.safeRehearsal && "truncate")}>
               {draft.safeRehearsal
                 ? horizontal
-                  ? "处理示例邮箱，检查右侧正文，再点「安全粘贴」。"
+                  ? t("处理示例邮箱，检查右侧正文，再点「安全粘贴」。")
                   : activeSection === "content"
-                    ? "确认正文后，点下方「安全粘贴」。教程不会自动按回车。"
+                    ? t("确认正文后，点下方「安全粘贴」。教程不会自动按回车。")
                     : textAttention
-                      ? "点「替换为占位符」处理示例邮箱，再到「内容」检查正文。"
-                      : "到「内容」检查正文，再点「安全粘贴」。"
-                : "确认目标、内容与粘贴后动作"}
+                      ? t("点「替换为占位符」处理示例邮箱，再到「内容」检查正文。")
+                      : t("到「内容」检查正文，再点「安全粘贴」。")
+                : t("确认目标、内容与粘贴后动作")}
             </p>
           </div>
           {!horizontal && (
-            <div className="flex rounded-lg bg-muted/70 p-0.5" role="tablist" aria-label="预检分区">
+            <div className="flex rounded-lg bg-muted/70 p-0.5" role="tablist" aria-label={t("预检分区")}>
               {(["summary", "content"] as const).map((section) => (
                 <Button
                   key={section}
@@ -1042,13 +1052,13 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                     <SlidingTabIndicator layoutId="preflight-section-thumb" />
                   )}
                   <span className="relative z-10">
-                    {section === "summary" ? "概览" : "内容"}
+                    {section === "summary" ? t("概览") : t("内容")}
                   </span>
                 </Button>
               ))}
             </div>
           )}
-          <IconButton label="关闭发送预检" size="xs" disabled={busy} onClick={close}>
+          <IconButton label={t("关闭发送预检")} size="xs" disabled={busy} onClick={close}>
             <X />
           </IconButton>
         </header>
@@ -1062,7 +1072,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
           )}
         >
           <section
-            aria-label="发送概览"
+            aria-label={t("发送概览")}
             className={cn(
               // 案 3（2026-09-11）：分区从 hidden 切回可见时自上而下揭示
               "reveal-in min-h-0 space-y-2 overflow-y-auto rounded-lg bg-muted/30 p-2",
@@ -1110,13 +1120,13 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
             </div>
 
             {draft.warnings.length > 0 && (
-              <div role="status" aria-label="发送警告" className="rounded-lg bg-warning/10 p-2 text-label text-warning">
+              <div role="status" aria-label={t("发送警告")} className="rounded-lg bg-warning/10 p-2 text-label text-warning">
                 <p className="mb-1 flex items-center gap-1 font-medium">
-                  <AlertTriangle className="size-3" /> 当前警告
+                  <AlertTriangle className="size-3" /> {t("当前警告")}
                 </p>
                 <ul className="space-y-0.5">
                   {draft.warnings.map((warning) => (
-                    <li key={warning}>· {WARNING_LABEL[warning] ?? warning}</li>
+                    <li key={warning}>· {WARNING_LABEL[warning] ? t(WARNING_LABEL[warning]) : warning}</li>
                   ))}
                 </ul>
               </div>
@@ -1124,14 +1134,14 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
 
             {(textAttention || imageAttention) && (
               <div className="space-y-2">
-                <p className="px-0.5 text-micro font-semibold text-warning">需要处理</p>
+                <p className="px-0.5 text-micro font-semibold text-warning">{t("需要处理")}</p>
                 {textAttention && privacyCheckSection}
                 {imageAttention && imageCheckPanel}
               </div>
             )}
 
             <section
-              aria-label="本次发送"
+              aria-label={t("本次发送")}
               className="space-y-2 rounded-lg border border-border/70 p-2"
             >
               <div className="flex items-center gap-2">
@@ -1140,20 +1150,20 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                   <p className="truncate text-body font-medium">{targetDisplayName}</p>
                   <p className="text-micro text-muted-foreground">
                     {readyDifferentTarget
-                      ? "待确认新目标"
+                      ? t("待确认新目标")
                       : staleReason === "target"
-                        ? "目标已变化"
-                        : "可发送"}
+                        ? t("目标已变化")
+                        : t("可发送")}
                   </p>
                 </div>
                 <span className="rounded-md bg-secondary px-1.5 py-0.5 text-micro">
-                  {readyDifferentTarget ? "待重算方案" : profileName}
+                  {readyDifferentTarget ? t("待重算方案") : profileName}
                 </span>
               </div>
 
               <details>
                 <summary className="cursor-pointer text-label font-medium">
-                  来源 {draft.sourceItemIds.length} 项
+                  {t("来源 {n} 项", { n: draft.sourceItemIds.length })}
                 </summary>
                 <ol className="mt-1 space-y-1 pl-4 text-label text-muted-foreground">
                   {sourceLabels.map((label, index) => (
@@ -1166,7 +1176,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
 
               <div className="grid grid-cols-2 gap-2">
                 <label className="space-y-1 text-label">
-                  <span className="text-muted-foreground">提示词模板</span>
+                  <span className="text-muted-foreground">{t("提示词模板")}</span>
                   <PromptTemplateSelect
                     value={promptValue}
                     prioritized={promptMenu.prioritized}
@@ -1183,15 +1193,15 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                   />
                 </label>
                 <label className="space-y-1 text-label">
-                  <span className="text-muted-foreground">发送格式</span>
+                  <span className="text-muted-foreground">{t("发送格式")}</span>
                   <SimpleSelect
                     value={
                       draft.markdownMode === "strip"
                         ? "strip-markdown"
                         : draft.format
                     }
-                    options={FORMAT_OPTIONS}
-                    ariaLabel="本次发送格式"
+                    options={formatOptions}
+                    ariaLabel={t("本次发送格式")}
                     size="micro"
                     disabled={busy}
                     onChange={(mode) => updateOpenPreflightDraft(
@@ -1211,14 +1221,14 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
 
               <div className="space-y-1 text-label">
                 <p role="status">
-                  粘贴后动作：{ENTER_POLICY_STATUS_LABEL[draft.enterPolicy]}
+                  {t("粘贴后动作：{policy}", { policy: t(ENTER_POLICY_STATUS_LABEL[draft.enterPolicy]) })}
                   <span className="text-muted-foreground">
                     {` · ${enterDecisionLabel}`}
                   </span>
                 </p>
                 {draft.safeRehearsal && (
                   <p role="status" className="font-medium text-success">
-                    演练安全锁：只粘贴，不按回车
+                    {t("演练安全锁：只粘贴，不按回车")}
                   </p>
                 )}
                 <label className="flex items-center gap-1.5">
@@ -1230,7 +1240,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                       useDeliveryStore.getState().setKeepPanel(event.target.checked)
                     }
                   />
-                  发送后保留面板
+                  {t("发送后保留面板")}
                 </label>
               </div>
             </section>
@@ -1240,7 +1250,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                 <summary className="flex cursor-pointer list-none items-center gap-1.5 py-1 text-label text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
                   <Check className="size-3 shrink-0 text-success" aria-hidden />
                   <span className="min-w-0 flex-1 truncate">
-                    文本隐私 · {textPassSummary}
+                    {t("文本隐私 · {summary}", { summary: textPassSummary })}
                   </span>
                   <ChevronRight
                     className="size-3 shrink-0 transition-transform group-open:rotate-90"
@@ -1255,7 +1265,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                 <summary className="flex cursor-pointer list-none items-center gap-1.5 py-1 text-label text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
                   <Check className="size-3 shrink-0 text-success" aria-hidden />
                   <span className="min-w-0 flex-1 truncate">
-                    图片隐私 {draft.imageFirewall.length} 张 · {imagePassSummary}
+                    {t("图片隐私 {n} 张 · {summary}", { n: draft.imageFirewall.length, summary: imagePassSummary })}
                   </span>
                   <ChevronRight
                     className="size-3 shrink-0 transition-transform group-open:rotate-90"
@@ -1270,7 +1280,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                 <summary className="flex cursor-pointer list-none items-center gap-1.5 py-1 text-label text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
                   <VenetianMask className="size-3 shrink-0" aria-hidden />
                   <span aria-live="polite" className="min-w-0 flex-1 truncate">
-                    可逆化名 · 已自动替换 {aliasOccurrences.length} 处
+                    {t("可逆化名 · 已自动替换 {n} 处", { n: aliasOccurrences.length })}
                   </span>
                   <ChevronRight
                     className="size-3 shrink-0 transition-transform group-open:rotate-90"
@@ -1278,10 +1288,10 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                   />
                 </summary>
               <section
-                aria-label="可逆化名"
+                aria-label={t("可逆化名")}
                 className="mt-1 space-y-2 rounded-lg border border-border/70 p-2"
               >
-                <ul className="space-y-1" aria-label="化名替换列表">
+                <ul className="space-y-1" aria-label={t("化名替换列表")}>
                   {aliasOccurrences.map((occurrence) => (
                     <li
                       key={`${occurrence.entityId}:${occurrence.startUtf16}`}
@@ -1302,13 +1312,13 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                         onClick={() =>
                           useDeliveryStore.getState().revertAliasFinding(occurrence)}
                       >
-                        还原为原文
+                        {t("还原为原文")}
                       </Button>
                     </li>
                   ))}
                 </ul>
                 <p className="text-micro text-muted-foreground">
-                  已按词典自动替换，发送后可在本机恢复；如需保留原文可逐项还原（仅本次发送有效）
+                  {t("已按词典自动替换，发送后可在本机恢复；如需保留原文可逐项还原（仅本次发送有效）")}
                 </p>
               </section>
               </details>
@@ -1316,7 +1326,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
             {!textAttention && draft.firewallEnabled && (
               <div className="flex items-center gap-1.5 px-1 text-micro text-muted-foreground">
                 <span className="min-w-0 flex-1 truncate">
-                  检测均在本机运行 · 结果可能有误报或漏报
+                  {t("检测均在本机运行 · 结果可能有误报或漏报")}
                 </span>
                 <Button
                   type="button"
@@ -1334,20 +1344,20 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                       privacyScanPending && "animate-spin motion-reduce:animate-none"
                     )}
                   />
-                  重新检测
+                  {t("重新检测")}
                 </Button>
               </div>
             )}
             {/* P3（2026-09-12）：常驻预演——确认的是最终会粘贴出去的字 */}
             {!draft.safeRehearsal && (
               <section
-                aria-label="将要粘贴的内容"
+                aria-label={t("将要粘贴的内容")}
                 className="space-y-1 rounded-lg border border-border/70 p-2"
               >
                 <div className="flex items-center gap-2">
-                  <p className="text-label font-medium">将要粘贴的内容</p>
+                  <p className="text-label font-medium">{t("将要粘贴的内容")}</p>
                   <span className="ml-auto text-micro tabular-nums text-muted-foreground">
-                    {draft.finalText.length} 字符
+                    {t("{n} 字符", { n: draft.finalText.length })}
                   </span>
                   {!horizontal && (
                     <Button
@@ -1357,7 +1367,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                       disabled={busy}
                       onClick={() => useDeliveryStore.getState().setActiveSection("content")}
                     >
-                      编辑
+                      {t("编辑")}
                     </Button>
                   )}
                 </div>
@@ -1370,7 +1380,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
           </section>
 
           <section
-            aria-label="最终发送内容"
+            aria-label={t("最终发送内容")}
             className={cn(
               "reveal-in min-h-0 flex-1 flex-col gap-2 overflow-y-auto rounded-lg bg-muted/30 p-2",
               showContent ? "flex" : "hidden"
@@ -1378,10 +1388,10 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
           >
             <div className="flex items-center gap-2">
               <label htmlFor="preflight-final-text" className="text-label font-medium">
-                最终文本
+                {t("最终文本")}
               </label>
               <span className="ml-auto text-micro tabular-nums text-muted-foreground">
-                {draft.finalText.length} 字符
+                {t("{n} 字符", { n: draft.finalText.length })}
               </span>
               <Button
                 type="button"
@@ -1390,7 +1400,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                 disabled={busy || draft.finalText === draft.assembledText}
                 onClick={() => useDeliveryStore.getState().resetFinalText()}
               >
-                <RotateCcw className="size-3" /> 恢复自动组装
+                <RotateCcw className="size-3" /> {t("恢复自动组装")}
               </Button>
             </div>
             <div className="relative min-h-24 flex-1">
@@ -1422,33 +1432,33 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
             {draft.originalImageFiles.length > 0 && (
               <div className="shrink-0 space-y-1">
                 <div className="flex items-center gap-2">
-                  <p className="text-label font-medium">附件</p>
+                  <p className="text-label font-medium">{t("附件")}</p>
                   <span className="ml-auto text-micro text-muted-foreground">
-                    {draft.originalImageFiles.length} 张 · 点击查看原图
+                    {t("{n} 张 · 点击查看原图", { n: draft.originalImageFiles.length })}
                   </span>
                 </div>
                 {/* 发送顺序如实展示：自动去 Markdown 后仍可保持同源交错段；
                     用户手改/AI/隐私替换使正文偏离组装基线时才安全降级。 */}
                 {currentDraftSegments(draft) ? (
                   <p className="text-micro text-muted-foreground">
-                    发送顺序：按卡片原图文交错顺序
+                    {t("发送顺序：按卡片原图文交错顺序")}
                   </p>
                 ) : draft.segments ? (
                   <p role="status" className="text-micro text-warning">
-                    正文已改动，发送顺序改为：全文 → {draft.originalImageFiles.length} 张图
+                    {t("正文已改动，发送顺序改为：全文 → {n} 张图", { n: draft.originalImageFiles.length })}
                   </p>
                 ) : (
                   <p className="text-micro text-muted-foreground">
-                    发送顺序：全文 → {draft.originalImageFiles.length} 张图
+                    {t("发送顺序：全文 → {n} 张图", { n: draft.originalImageFiles.length })}
                   </p>
                 )}
-                <ol aria-label="实际投递顺序" className="space-y-1 text-micro text-muted-foreground">
+                <ol aria-label={t("实际投递顺序")} className="space-y-1 text-micro text-muted-foreground">
                   {deliverySequencePreview(draft).map((label, index) => (
                     <li key={index} className="break-words">{index + 1}. {label}</li>
                   ))}
                 </ol>
                 <ul
-                  aria-label={`图片附件原图，共 ${draft.originalImageFiles.length} 张`}
+                  aria-label={t("图片附件原图，共 {n} 张", { n: draft.originalImageFiles.length })}
                   className="flex gap-1.5 overflow-x-auto pb-0.5"
                 >
                   {draft.originalImageFiles.map((file, index) => (
@@ -1479,17 +1489,17 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
           >
             {submitBlockedReason ?? lastError ??
               (draft.safeRehearsal
-                ? "已就绪：演练只把最终文本粘贴到已确认目标，不会自动回车"
-                : "已就绪 · 本次修改不会改动原始卡片")}
+                ? t("已就绪：演练只把最终文本粘贴到已确认目标，不会自动回车")
+                : t("已就绪 · 本次修改不会改动原始卡片"))}
           </p>
           <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={close}>
-            取消
+            {t("取消")}
           </Button>
           {/* disabled 按钮 pointer-events 为 none，tooltip 挂到外层 span 才能悬停可见 */}
           <span
             title={
               showTargetChangeAction
-                ? `确认将发送目标改为 ${currentTargetName}`
+                ? t("确认将发送目标改为 {name}", { name: currentTargetName })
                 : submitBlockedReason ?? undefined
             }
             className="shrink-0"
@@ -1501,7 +1511,7 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
               aria-describedby="preflight-status"
               aria-label={
                 showTargetChangeAction
-                  ? `确认将发送目标改为 ${currentTargetName}`
+                  ? t("确认将发送目标改为 {name}", { name: currentTargetName })
                   : undefined
               }
               onClick={() => {
@@ -1521,17 +1531,17 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
               )}
               {showTargetChangeAction
                 ? canConfirmTargetChange
-                  ? "确认新目标"
-                  : "暂不可确认"
+                  ? t("确认新目标")
+                  : t("暂不可确认")
                 : busy
-                ? "发送中…"
+                ? t("发送中…")
                 : canRecoverTarget
-                  ? "重新识别并重试"
+                  ? t("重新识别并重试")
                   : draft.safeRehearsal
-                    ? "安全粘贴"
+                    ? t("安全粘贴")
                     : willPressEnter
-                      ? "粘贴并按回车"
-                      : "粘贴，不按回车"}
+                      ? t("粘贴并按回车")
+                      : t("粘贴，不按回车")}
               {!showTargetChangeAction && <Kbd inline>⌘⏎</Kbd>}
             </Button>
           </span>

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 
+import { t } from "@/lib/i18n";
 import type { DataOperationPhase } from "@/lib/tauri";
 
 export type DataActivity = {
@@ -17,7 +18,7 @@ export const useDataOperationStore = create<DataOperationState>()((set) => ({
   // 才开放写入；否则 WebView reload 会短暂穿透 awaitingRehydrate。
   locked: true,
   phase: "prepare",
-  message: "正在核验数据事务状态…",
+  message: t("正在核验数据事务状态…"),
   update: (activity) => set(activity),
 }));
 

@@ -3,6 +3,7 @@
 //! 这里刻意不解析 DOM。调用方负责把 HTML 变成有序 block；本模块只处理
 //! pasteboard generation、媒体字节预算和本地媒体边界。
 
+use crate::i18n::pick;
 use std::fmt;
 use std::io::Cursor;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
@@ -85,13 +86,13 @@ pub(crate) enum RichClipboardReadError {
 impl fmt::Display for RichClipboardReadError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::GenerationChanged => formatter.write_str("剪贴板内容已变化"),
-            Self::TooManyItems => formatter.write_str("剪贴板条目过多"),
+            Self::GenerationChanged => formatter.write_str(pick("剪贴板内容已变化", "Clipboard content changed")),
+            Self::TooManyItems => formatter.write_str(pick("剪贴板条目过多", "Too many clipboard items")),
             Self::RepresentationUnavailable(field) => {
-                write!(formatter, "剪贴板 {} 表示不可读取", field.label())
+                formatter.write_str(&crate::tr_fmt!("剪贴板 {} 表示不可读取", "Clipboard {} representation is unreadable", field.label()))
             }
             Self::RepresentationTooLarge(field) => {
-                write!(formatter, "剪贴板 {} 表示超过安全上限", field.label())
+                formatter.write_str(&crate::tr_fmt!("剪贴板 {} 表示超过安全上限", "Clipboard {} representation exceeds the safe size limit", field.label()))
             }
         }
     }
@@ -937,15 +938,15 @@ pub(crate) enum RichClipboardWriteError {
 impl fmt::Display for RichClipboardWriteError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::Empty => "没有可复制的图文内容",
-            Self::Busy => "剪贴板事务进行中，请稍后重试",
-            Self::TooManyBlocks => "图文块数量超过安全上限",
-            Self::PlainTooLarge => "纯文本回退超过安全上限",
-            Self::HtmlTooLarge => "富文本内容超过安全上限",
-            Self::ImagesTooLarge => "图片总大小超过安全上限",
-            Self::AltTooLarge => "图片替代文字超过安全上限",
-            Self::ImageUnreadable => "图片附件不可读取",
-            Self::ImageNotPng => "图片附件不是 PNG",
+            Self::Empty => pick("没有可复制的图文内容", "No text or images to copy"),
+            Self::Busy => pick("剪贴板事务进行中，请稍后重试", "Clipboard is busy. Try again shortly"),
+            Self::TooManyBlocks => pick("图文块数量超过安全上限", "Too many text/image blocks"),
+            Self::PlainTooLarge => pick("纯文本回退超过安全上限", "Plain-text fallback exceeds the safe size limit"),
+            Self::HtmlTooLarge => pick("富文本内容超过安全上限", "Rich text exceeds the safe size limit"),
+            Self::ImagesTooLarge => pick("图片总大小超过安全上限", "Total image size exceeds the safe limit"),
+            Self::AltTooLarge => pick("图片替代文字超过安全上限", "Image alt text exceeds the safe size limit"),
+            Self::ImageUnreadable => pick("图片附件不可读取", "Image attachment can't be read"),
+            Self::ImageNotPng => pick("图片附件不是 PNG", "Image attachment isn't PNG"),
             Self::Pasteboard(error) => return error.fmt(formatter),
         })
     }

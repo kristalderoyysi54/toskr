@@ -6,6 +6,8 @@ import type {
   TargetProfileResolutionSource,
 } from "@/lib/targetProfiles";
 import { targetProfileOutputMode } from "@/lib/targetProfiles";
+import { t, type MessageKey } from "@/lib/i18n";
+import { promptGroupName } from "@/lib/i18n/builtinNames";
 
 export interface TargetLensDisclosureState {
   expanded: boolean;
@@ -37,7 +39,8 @@ export function targetLensDetailsExpanded(
   return state.expanded;
 }
 
-export const DELIVERY_FORMAT_LABEL: Record<DeliveryOutputMode, string> = {
+/** 标签表存中文 key，显示处 `t(LABEL[x])`（模块加载时不求值）。 */
+export const DELIVERY_FORMAT_LABEL: Record<DeliveryOutputMode, MessageKey> = {
   plain: "原文",
   "strip-markdown": "无 Markdown",
   code: "代码块",
@@ -45,7 +48,7 @@ export const DELIVERY_FORMAT_LABEL: Record<DeliveryOutputMode, string> = {
 
 export const ENTER_POLICY_LABEL: Record<
   EnterPolicy,
-  { action: string; compact: string; summary: string }
+  { action: MessageKey; compact: MessageKey; summary: MessageKey }
 > = {
   never: { action: "仅粘贴", compact: "不自动", summary: "不自动回车" },
   confirm: {
@@ -57,7 +60,7 @@ export const ENTER_POLICY_LABEL: Record<
 };
 
 /** 用户界面统一使用的粘贴后动作；自动按回车必须同时暴露风险。 */
-export const ENTER_POLICY_STATUS_LABEL: Record<EnterPolicy, string> = {
+export const ENTER_POLICY_STATUS_LABEL: Record<EnterPolicy, MessageKey> = {
   never: "从不按回车",
   confirm: "每次发送前确认",
   allow: "自动按回车 · 高风险",
@@ -69,15 +72,15 @@ export function hiddenWarningReasons(input: {
   profileSource: TargetProfileResolutionSource;
 }): string[] {
   const reasons: string[] = [];
-  if (!input.privacyCapabilityActive) reasons.push("隐私检查已关闭");
-  if (input.profileSource === "conflict") reasons.push("方案存在重复绑定冲突");
+  if (!input.privacyCapabilityActive) reasons.push(t("隐私检查已关闭"));
+  if (input.profileSource === "conflict") reasons.push(t("方案存在重复绑定冲突"));
   return reasons;
 }
 
 /** 匹配来源的唯一中文措辞（DeliveryTrack 与当前匹配卡共用，消费方可拼接上下文）。 */
 export const TARGET_PROFILE_SOURCE_LABEL: Record<
   TargetProfileResolutionSource,
-  string
+  MessageKey
 > = {
   temporary: "仅本次手动选择",
   exact: "应用指定",
@@ -107,17 +110,19 @@ export function profileDiffSummary(
 ): string[] {
   const diffs: string[] = [];
   if (profile.promptGroupName !== current.promptGroupName) {
-    diffs.push(`提示词组改为${profile.promptGroupName}`);
+    diffs.push(t("提示词组改为{name}", {
+      name: promptGroupName({ id: profile.promptGroupId, name: profile.promptGroupName }),
+    }));
   }
   const outputMode = targetProfileOutputMode(profile);
   if (outputMode !== targetProfileOutputMode(current)) {
-    diffs.push(`输出改为${DELIVERY_FORMAT_LABEL[outputMode]}`);
+    diffs.push(t("输出改为{format}", { format: t(DELIVERY_FORMAT_LABEL[outputMode]) }));
   }
   if (profile.enterPolicy !== current.enterPolicy) {
-    diffs.push(`粘贴后改为${ENTER_POLICY_STATUS_LABEL[profile.enterPolicy]}`);
+    diffs.push(t("粘贴后改为{policy}", { policy: t(ENTER_POLICY_STATUS_LABEL[profile.enterPolicy]) }));
   }
   if (profile.keepPanel !== current.keepPanel) {
-    diffs.push(profile.keepPanel ? "完成后保持打开" : "完成后关闭面板");
+    diffs.push(profile.keepPanel ? t("完成后保持打开") : t("完成后关闭面板"));
   }
   return diffs;
 }

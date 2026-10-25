@@ -9,6 +9,8 @@ import { dueBadgeLabel, PRIORITY_LABEL } from "@/lib/tasks";
 import { recurrenceLabel } from "@/lib/taskRecurrence";
 import { cn } from "@/lib/utils";
 import { TASK_INBOX_ID, useNotesStore, type TaskPriority } from "@/store/notesStore";
+import { sectionName } from "@/lib/i18n/builtinNames";
+import { useT } from "@/lib/i18n";
 
 const PRIORITY_NEXT: Record<TaskPriority, TaskPriority> = {
   none: "low",
@@ -25,6 +27,7 @@ const PRIORITY_NEXT: Record<TaskPriority, TaskPriority> = {
  * 💡 与 ✨ 互斥。
  */
 export function TaskQuickAdd() {
+  const t = useT();
   const [value, setValue] = useState("");
   const [spark, setSpark] = useState(false);
   const [aiMode, setAiMode] = useState(false);
@@ -91,22 +94,22 @@ export function TaskQuickAdd() {
         tone={spark ? "spark" : "default"}
         placeholder={
           busy
-            ? "AI 解析中…"
+            ? t("AI 解析中…")
             : draft
-              ? "确认下方解析结果，或按 Esc 回到编辑"
+              ? t("确认下方解析结果，或按 Esc 回到编辑")
               : aiMode
-                ? "试试「每周一10点交周报，放工作组」，回车交给 AI…"
+                ? t("试试「每周一10点交周报，放工作组」，回车交给 AI…")
                 : spark
-                  ? "记录闪念灵感，回车保存…"
-                  : "记下待办，回车保存…"
+                  ? t("记录闪念灵感，回车保存…")
+                  : t("记下待办，回车保存…")
         }
         leftSlot={
           <>
             <IconButton
               label={
                 spark
-                  ? "闪念模式：回车存为灵感（点击退出）"
-                  : "点击进入闪念模式：随手记灵感"
+                  ? t("闪念模式：回车存为灵感（点击退出）")
+                  : t("点击进入闪念模式：随手记灵感")
               }
               size="2xs"
               pressed={spark}
@@ -127,8 +130,8 @@ export function TaskQuickAdd() {
             <IconButton
               label={
                 aiMode
-                  ? "AI 模式：回车让 AI 解析时间、重复与分组（点击退出）"
-                  : "点击进入 AI 模式：自然语言建任务"
+                  ? t("AI 模式：回车让 AI 解析时间、重复与分组（点击退出）")
+                  : t("点击进入 AI 模式：自然语言建任务")
               }
               size="2xs"
               pressed={aiMode}
@@ -179,6 +182,7 @@ function DraftPreview({
   onConfirm: () => void;
   onSaveOriginal: () => void;
 }) {
+  const t = useT();
   const sections = useNotesStore((s) => s.taskSections);
   const sectionIndex = Math.max(
     0,
@@ -188,30 +192,30 @@ function DraftPreview({
   const now = Date.now();
   return (
     <div className="surface-inset flex flex-col gap-1.5 rounded-xl p-2">
-      <p className="px-0.5 text-micro text-muted-foreground">AI 解析结果 · 回车确认，Esc 回到编辑</p>
+      <p className="px-0.5 text-micro text-muted-foreground">{t("AI 解析结果 · 回车确认，Esc 回到编辑")}</p>
       <input
         value={draft.title}
         onChange={(e) => onChange({ ...draft, title: e.target.value })}
-        aria-label="任务标题"
+        aria-label={t("任务标题")}
         className="rounded-md bg-transparent px-1 py-0.5 text-body font-medium outline-none focus:ring-1 focus:ring-primary/40"
       />
       <div className="flex flex-wrap gap-1">
         {draft.dueAtMs !== null && (
-          <DraftChip onRemove={() => onChange({ ...draft, dueAtMs: null })} removeLabel="去掉到期时间">
+          <DraftChip onRemove={() => onChange({ ...draft, dueAtMs: null })} removeLabel={t("去掉到期时间")}>
             {dueBadgeLabel(draft.dueAtMs, now)}
           </DraftChip>
         )}
         {draft.recurrence && (
-          <DraftChip onRemove={() => onChange({ ...draft, recurrence: null })} removeLabel="去掉重复">
+          <DraftChip onRemove={() => onChange({ ...draft, recurrence: null })} removeLabel={t("去掉重复")}>
             <Repeat className="size-2.5" />
             {recurrenceLabel(draft.recurrence, draft.dueAtMs)}
           </DraftChip>
         )}
         <DraftChip
           onClick={() => onChange({ ...draft, priority: PRIORITY_NEXT[draft.priority] })}
-          title="点击切换优先级"
+          title={t("点击切换优先级")}
         >
-          优先级 {draft.priority === "none" ? "无" : PRIORITY_LABEL[draft.priority]}
+          {t("优先级 {priority}", { priority: draft.priority === "none" ? t("无") : t(PRIORITY_LABEL[draft.priority]) })}
         </DraftChip>
         {sections.length > 1 && section && (
           <DraftChip
@@ -219,23 +223,23 @@ function DraftPreview({
               const next = sections[(sectionIndex + 1) % sections.length];
               onChange({ ...draft, sectionId: next.id === TASK_INBOX_ID ? null : next.id });
             }}
-            title="点击切换分组"
+            title={t("点击切换分组")}
           >
-            {section.name}
+            {sectionName(section)}
           </DraftChip>
         )}
         {draft.checklist.length > 0 && (
-          <DraftChip onRemove={() => onChange({ ...draft, checklist: [] })} removeLabel="去掉检查项">
-            {draft.checklist.length} 项检查
+          <DraftChip onRemove={() => onChange({ ...draft, checklist: [] })} removeLabel={t("去掉检查项")}>
+            {t("{n} 项检查", { n: draft.checklist.length })}
           </DraftChip>
         )}
       </div>
       <div className="flex justify-end gap-1.5">
         <Button size="xs" onClick={onSaveOriginal}>
-          按原文存为普通任务
+          {t("按原文存为普通任务")}
         </Button>
         <Button size="xs" onClick={onConfirm}>
-          确认 ⏎
+          {t("确认 ⏎")}
         </Button>
       </div>
     </div>

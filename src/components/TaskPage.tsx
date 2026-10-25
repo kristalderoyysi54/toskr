@@ -61,6 +61,9 @@ import {
   type TaskSection,
 } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
+import { sectionName } from "@/lib/i18n/builtinNames";
+import { t as translate, useT, type MessageKey } from "@/lib/i18n";
+import { clockLabel } from "@/lib/taskRecurrence";
 
 /** 任务页「已完成」折叠区在 uiStore.doneOpen 里的固定 key。 */
 export const TASK_DONE_KEY = "tasks:done";
@@ -86,6 +89,7 @@ export function TaskPage({
   filterOpen?: boolean;
   onCloseFilter?: () => void;
 }) {
+  const t = useT();
   const doneOpen = useUIStore((s) => s.doneOpen[TASK_DONE_KEY] ?? false);
   const allTasks = useNotesStore((s) => s.tasks);
   const [filter, setFilter] = useState<TaskFilter>(EMPTY_FILTER);
@@ -201,17 +205,17 @@ export function TaskPage({
               ))}
             </div>
           ) : (
-            <EmptyState icon={<Search />} title="没有符合条件的任务" />
+            <EmptyState icon={<Search />} title={t("没有符合条件的任务")} />
           )
         ) : empty ? (
           <EmptyState
             icon={<ListTodo />}
-            title="还没有任务"
+            title={t("还没有任务")}
             hint={
               <>
-                在上方速记框记下待办，点 💡 切换闪念模式记灵感；
+                {t("在上方速记框记下待办，点 💡 切换闪念模式记灵感；")}
                 <br />
-                也可以在笔记卡片上右键「转为任务」。
+                {t("也可以在笔记卡片上右键「转为任务」。")}
               </>
             }
           />
@@ -226,7 +230,7 @@ export function TaskPage({
             <div className="flex flex-col gap-3 pb-2 pt-1">
               {buckets.overdue.length > 0 && (
                 <SmartSection
-                  title="已到期"
+                  title={t("已到期")}
                   tone="red"
                   tasks={buckets.overdue}
                   now={now}
@@ -237,7 +241,7 @@ export function TaskPage({
               )}
               {buckets.sparks.length > 0 && (
                 <SmartSection
-                  title="灵感"
+                  title={t("灵感")}
                   tone="violet"
                   icon={<Lightbulb className="size-3 fill-violet-400 text-violet-500" />}
                   tasks={buckets.sparks}
@@ -263,7 +267,7 @@ export function TaskPage({
                 onClick={() => useNotesStore.getState().addTaskSection()}
                 className="mb-1 ml-2 flex w-fit items-center gap-1 rounded-md px-1.5 py-1 text-label text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
               >
-                <Plus className="size-3" /> 新建分组
+                <Plus className="size-3" /> {t("新建分组")}
               </button>
               {buckets.done.length > 0 && (
                 <div>
@@ -276,7 +280,7 @@ export function TaskPage({
                     ) : (
                       <ChevronRight className="size-2.5" />
                     )}
-                    已完成 {buckets.done.length}
+                    {t("已完成 {n}", { n: buckets.done.length })}
                   </button>
                   {doneOpen && (
                     <div className="mt-1 flex flex-col gap-1">
@@ -303,7 +307,7 @@ export function TaskPage({
 
 const EMPTY_FILTER: TaskFilter = { query: "", chips: [] };
 
-const FILTER_CHIPS: { value: TaskFilterChip; label: string }[] = [
+const FILTER_CHIPS: { value: TaskFilterChip; label: MessageKey }[] = [
   { value: "week", label: "7 天内到期" },
   { value: "high", label: "高优先级" },
   { value: "checklist", label: "有检查项" },
@@ -324,6 +328,7 @@ function TaskFilterBar({
   count: number | null;
   onClose: () => void;
 }) {
+  const t = useT();
   const toggle = (chip: TaskFilterChip) =>
     onChange({
       ...filter,
@@ -347,12 +352,12 @@ function TaskFilterBar({
               else onClose();
             }
           }}
-          placeholder="搜索标题、备注、检查项…"
-          aria-label="搜索任务"
+          placeholder={t("搜索标题、备注、检查项…")}
+          aria-label={t("搜索任务")}
           className="min-w-0 flex-1 bg-transparent text-body outline-none placeholder:text-muted-foreground"
         />
         {count !== null && (
-          <span className="shrink-0 text-micro tabular-nums text-muted-foreground">{count} 条</span>
+          <span className="shrink-0 text-micro tabular-nums text-muted-foreground">{t("{n} 条", { n: count })}</span>
         )}
       </label>
       <div className="flex flex-wrap gap-1">
@@ -371,7 +376,7 @@ function TaskFilterBar({
                   : "border-border text-muted-foreground hover:text-foreground"
               )}
             >
-              {label}
+              {t(label)}
             </button>
           );
         })}
@@ -401,6 +406,7 @@ function SmartSection({
   /** 区头右端操作（已到期区的「全部顺延」）。 */
   action?: React.ReactNode;
 }) {
+  const t = useT();
   // doneOpen 是通用的布尔切换器；这里语义存「是否折叠」，缺省展开
   const collapsed = useUIStore((s) => (collapseKey ? !!s.doneOpen[collapseKey] : false));
   const { headerRef, bodyRef, scrollToStartIfStuck } = useStickyHeader(collapsed);
@@ -432,8 +438,8 @@ function SmartSection({
           onClick={() => {
             if (!scrollToStartIfStuck()) useUIStore.getState().toggleDoneOpen(collapseKey);
           }}
-          title={collapsed ? "展开" : "折叠"}
-          aria-label={`${collapsed ? "展开" : "折叠"}${title}分组`}
+          title={collapsed ? t("展开") : t("折叠")}
+          aria-label={collapsed ? t("展开{title}分组", { title }) : t("折叠{title}分组", { title })}
           aria-expanded={!collapsed}
           className={cn(
             headingCls,
@@ -479,19 +485,22 @@ function rescheduleOptions(now: number): { label: string; at: number }[] {
     new Date(d.getFullYear(), d.getMonth(), d.getDate() + addDays, hour, 0, 0, 0).getTime();
   const toMonday = ((8 - d.getDay()) % 7) || 7;
   return [
-    { label: "今天 20:00", at: at(0, 20) },
-    { label: "明天 09:00", at: at(1, 9) },
-    { label: "下周一 09:00", at: at(toMonday, 9) },
+    { label: translate("今天 {time}", { time: clockLabel(20, 0) }), at: at(0, 20) },
+    { label: translate("明天 {time}", { time: clockLabel(9, 0) }), at: at(1, 9) },
+    { label: translate("下周一 {time}", { time: clockLabel(9, 0) }), at: at(toMonday, 9) },
   ].filter((o) => o.at > now);
 }
 
 /** 已到期区头「全部顺延」：积压的逾期任务一次挪到同一时间点，可撤销。 */
 export function OverdueRescheduleMenu({ tasks }: { tasks: Task[] }) {
+  const t = useT();
   const run = (dueAt: number | null, label: string) => {
-    const ids = tasks.map((t) => t.id);
+    const ids = tasks.map((task) => task.id);
     useNotesStore.getState().rescheduleTasks(ids, dueAt);
     undoableTip(
-      dueAt === null ? `已清除 ${ids.length} 个任务的到期时间` : `已顺延 ${ids.length} 个任务到${label}`
+      dueAt === null
+        ? t("已清除 {n} 个任务的到期时间", { n: ids.length })
+        : t("已顺延 {n} 个任务到{label}", { n: ids.length, label })
     );
   };
   return (
@@ -508,7 +517,7 @@ export function OverdueRescheduleMenu({ tasks }: { tasks: Task[] }) {
             open && "text-foreground"
           )}
         >
-          全部顺延 <ChevronDown className="size-2.5" />
+          {t("全部顺延")} <ChevronDown className="size-2.5" />
         </button>
       )}
     >
@@ -532,7 +541,7 @@ export function OverdueRescheduleMenu({ tasks }: { tasks: Task[] }) {
               run(null, "");
             }}
           >
-            <CalendarX2 className="size-3.5" /> 清除到期时间
+            <CalendarX2 className="size-3.5" /> {t("清除到期时间")}
           </SimpleMenuItem>
         </>
       )}
@@ -558,8 +567,9 @@ function TaskGroupBlock({
     moveTaskSection,
     toggleTaskSectionCollapsed,
   } = useNotesStore.getState();
+  const t = useT();
   const [renaming, setRenaming] = useState(false);
-  const [name, setName] = useState(section.name);
+  const [name, setName] = useState(sectionName(section));
   const collapsed = !!section.collapsed;
   // 单击组名折叠 / 双击改名：延迟消歧，双击时取消未执行的折叠
   const clickTimer = useRef(0);
@@ -570,7 +580,7 @@ function TaskGroupBlock({
 
   const commitRename = () => {
     setRenaming(false);
-    renameTaskSection(section.id, name);
+    if (name !== sectionName(section)) renameTaskSection(section.id, name);
   };
 
   return (
@@ -586,7 +596,7 @@ function TaskGroupBlock({
         className="group sticky top-0 z-10 mb-1.5 flex h-5 items-center gap-1 pl-0.5 pr-1"
       >
         <button
-          aria-label={collapsed ? "展开分组" : "折叠分组"}
+          aria-label={collapsed ? t("展开分组") : t("折叠分组")}
           aria-expanded={!collapsed}
           onClick={() => toggleTaskSectionCollapsed(section.id)}
           className="rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
@@ -607,7 +617,7 @@ function TaskGroupBlock({
               e.stopPropagation();
               if (e.key === "Enter" && !e.nativeEvent.isComposing) commitRename();
               if (e.key === "Escape") {
-                setName(section.name);
+                setName(sectionName(section));
                 setRenaming(false);
               }
             }}
@@ -615,7 +625,7 @@ function TaskGroupBlock({
           />
         ) : (
           <h3
-            title="点击折叠/展开（吸顶时回到组首） · 双击重命名"
+            title={t("点击折叠/展开（吸顶时回到组首） · 双击重命名")}
             className="cursor-pointer select-none text-label font-semibold uppercase tracking-[0.08em] text-muted-foreground hover:text-foreground"
             onClick={() => {
               window.clearTimeout(clickTimer.current);
@@ -625,11 +635,11 @@ function TaskGroupBlock({
             }}
             onDoubleClick={() => {
               window.clearTimeout(clickTimer.current);
-              setName(section.name);
+              setName(sectionName(section));
               setRenaming(true);
             }}
           >
-            {section.name}
+            {sectionName(section)}
           </h3>
         )}
         <span className="rounded-sm surface-inset px-1 py-px text-micro font-semibold tabular-nums text-muted-foreground">
@@ -640,7 +650,7 @@ function TaskGroupBlock({
             align="end"
             trigger={({ open, toggle }) => (
               <IconButton
-                label="分组操作"
+                label={t("分组操作")}
                 size="2xs"
                 reveal="hover-focus"
                 onClick={toggle}
@@ -655,11 +665,11 @@ function TaskGroupBlock({
                 <SimpleMenuItem
                   onClick={() => {
                     close();
-                    setName(section.name);
+                    setName(sectionName(section));
                     setRenaming(true);
                   }}
                 >
-                  <Pencil className="size-3.5" /> 重命名
+                  <Pencil className="size-3.5" /> {t("重命名")}
                 </SimpleMenuItem>
                 <SimpleMenuItem
                   onClick={() => {
@@ -667,7 +677,7 @@ function TaskGroupBlock({
                     moveTaskSection(section.id, -1);
                   }}
                 >
-                  <ArrowUp className="size-3.5" /> 上移
+                  <ArrowUp className="size-3.5" /> {t("上移")}
                 </SimpleMenuItem>
                 <SimpleMenuItem
                   onClick={() => {
@@ -675,7 +685,7 @@ function TaskGroupBlock({
                     moveTaskSection(section.id, 1);
                   }}
                 >
-                  <ArrowDown className="size-3.5" /> 下移
+                  <ArrowDown className="size-3.5" /> {t("下移")}
                 </SimpleMenuItem>
                 {section.id !== TASK_INBOX_ID && (
                   <>
@@ -687,7 +697,7 @@ function TaskGroupBlock({
                         deleteTaskSection(section.id);
                       }}
                     >
-                      <Trash2 className="size-3.5" /> 删除分组
+                      <Trash2 className="size-3.5" /> {t("删除分组")}
                     </SimpleMenuItem>
                   </>
                 )}
@@ -716,7 +726,7 @@ function TaskGroupBlock({
               ))}
             </div>
           ) : (
-            <EmptyState variant="inline" title="此分组为空" />
+            <EmptyState variant="inline" title={t("此分组为空")} />
           )}
         </SortableContext>
         </div>

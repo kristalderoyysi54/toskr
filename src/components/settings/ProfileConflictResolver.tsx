@@ -3,6 +3,7 @@ import { useMemo } from "react";
 
 import { AppIcon } from "@/components/settings/AppIdentity";
 import { useAppIdentity } from "@/components/settings/useAppIdentity";
+import { useT } from "@/lib/i18n";
 import {
   findDuplicateBundleAssignments,
   keepTargetProfileBundleAssignment,
@@ -49,6 +50,7 @@ function ConflictRow({
   profiles: TargetProfile[];
   onResolve: (profiles: TargetProfile[]) => void;
 }) {
+  const t = useT();
   const info = useAppIdentity(bundleId);
   const name = info?.name || bundleId;
   return (
@@ -57,11 +59,11 @@ function ConflictRow({
         <AppIcon bundleId={bundleId} appName={name} size="xs" />
         <p className="min-w-0 flex-1 text-body">
           <span className="font-medium">{name}</span>
-          <span className="text-muted-foreground"> 同时属于 {profileNames.join("、")}</span>
+          <span className="text-muted-foreground"> {t("同时属于 {names}", { names: profileNames.join(t("、")) })}</span>
         </p>
       </div>
       <p className="mt-1 text-label text-warning">
-        当前保持原有稳定命中结果；请选择唯一保留方案后才会修复。
+        {t("当前保持原有稳定命中结果；请选择唯一保留方案后才会修复。")}
       </p>
       <div className="mt-1.5 flex flex-wrap gap-1">
         {profileIds.map((profileId, index) => (
@@ -77,7 +79,7 @@ function ConflictRow({
              }}
             className="rounded-md border border-warning/40 px-2 py-1 text-label font-medium text-warning outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
           >
-            保留在 {profileNames[index]}
+            {t("保留在 {name}", { name: profileNames[index] })}
           </button>
         ))}
       </div>
@@ -92,6 +94,7 @@ export function ProfileConflictResolver({
   profiles: TargetProfile[];
   onResolve: (profiles: TargetProfile[]) => void;
 }) {
+  const t = useT();
   const duplicates = useMemo(
     () => findDuplicateBundleAssignments(profiles),
     [profiles]
@@ -101,7 +104,7 @@ export function ProfileConflictResolver({
   return (
     <section aria-labelledby="profile-conflicts-title" className="mb-3 space-y-1.5">
       <h3 id="profile-conflicts-title" className="flex items-center gap-1 text-label font-semibold text-warning">
-        <AlertTriangle aria-hidden className="size-3.5" /> 历史绑定冲突
+        <AlertTriangle aria-hidden className="size-3.5" /> {t("历史绑定冲突")}
       </h3>
       {duplicates.map((duplicate) => (
         <ConflictRow

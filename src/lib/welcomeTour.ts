@@ -1,7 +1,9 @@
+import type { MessageKey } from "@/lib/i18n";
 import type { OnboardingEvent } from "@/lib/onboarding";
 
 export type WelcomeTourExitMode = "use-now" | "rehearse";
 
+/** 文案存中文 key，渲染处 t()。 */
 export const WELCOME_TOUR_COPY = {
   title: "把散落各处的文字，一次安全地交给 AI",
   points: [
@@ -9,7 +11,7 @@ export const WELCOME_TOUR_COPY = {
     "勾选多张，⌘⏎ 合成一次粘贴",
     "邮箱、密钥等敏感信息发送前自动替换",
   ],
-} as const;
+} as const satisfies { title: MessageKey; points: readonly MessageKey[] };
 
 /** 触发键在动画键帽里的符号。 */
 export const CAPTURE_KEY_SYMBOL = { shift: "⇧", control: "⌃", option: "⌥" } as const;

@@ -1,6 +1,7 @@
 //! 当前数据目录内的发送活动账本。
 //! 只接受固定元数据结构；正文、Prompt、目标 token 和脱敏映射没有字段可写。
 
+use crate::i18n::pick;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
@@ -174,7 +175,7 @@ fn default_true() -> bool {
 
 fn retention_ms(retention_days: u16) -> Result<u64, String> {
     if !matches!(retention_days, 7 | 30 | 90) {
-        return Err("发送活动保留期无效".into());
+        return Err(pick("发送活动保留期无效", "Invalid send activity retention period").into());
     }
     Ok(u64::from(retention_days) * 24 * 60 * 60 * 1_000)
 }
@@ -330,13 +331,13 @@ fn read_events_file(path: &Path) -> Result<Vec<DeliveryEvent>, String> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(format!("读取发送活动文件失败：{error}")),
+        Err(error) => return Err(crate::tr_fmt!("读取发送活动文件失败：{error}", "Failed to read send activity file: {error}")),
     };
     if metadata.file_type().is_symlink()
         || !metadata.is_file()
         || metadata.len() > MAX_READ_FILE_BYTES
     {
-        return Err("发送活动文件不是大小合规的普通文件".into());
+        return Err(pick("发送活动文件不是大小合规的普通文件", "Send activity file isn't a valid regular file").into());
     }
     let bytes = data_integrity::read_regular_file(path, MAX_READ_FILE_BYTES)
         .map_err(|error| error.message)?;
@@ -380,14 +381,14 @@ fn remove_file_if_present(path: &Path) -> Result<(), String> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!("清除发送活动文件失败：{error}")),
+        Err(error) => Err(crate::tr_fmt!("清除发送活动文件失败：{error}", "Failed to clear send activity file: {error}")),
     }
 }
 
 fn sync_root(root: &Path) -> Result<(), String> {
     fs::File::open(root)
         .and_then(|directory| directory.sync_all())
-        .map_err(|error| format!("同步发送活动目录失败：{error}"))
+        .map_err(|error| crate::tr_fmt!("同步发送活动目录失败：{error}", "Failed to sync send activity folder: {error}"))
 }
 
 fn write_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -411,7 +412,7 @@ fn persist_events(
     now: u64,
     retention_days: u16,
 ) -> Result<(), String> {
-    fs::create_dir_all(root).map_err(|error| format!("创建发送活动目录失败：{error}"))?;
+    fs::create_dir_all(root).map_err(|error| crate::tr_fmt!("创建发送活动目录失败：{error}", "Failed to create send activity folder: {error}"))?;
     let cutoff = now.saturating_sub(retention_ms(retention_days)?);
     let future = now.saturating_add(FUTURE_TOLERANCE_MS);
     let mut by_id = BTreeMap::new();

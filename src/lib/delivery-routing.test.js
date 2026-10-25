@@ -259,7 +259,7 @@ describe("发送入口路由", () => {
     expect(preview).toContain("disabled={!targetReady}");
     expect(preview).toContain("!imageEditing && !editing");
     expect(preview).toContain("noteId && dataGeneration !== null");
-    expect(preview).toContain("发送整张卡片（含 ${files.length} 张图片）");
+    expect(preview).toContain('t("发送整张卡片（含 {n} 张图片）", { n: files.length })');
     expect(textPreview).toContain(
       "const imagePreviewSource = writable && !editing"
     );
@@ -322,7 +322,7 @@ describe("发送入口路由", () => {
   it("详情页发送分体按钮的右侧箭头收窄并与左侧共用边框", () => {
     const preview = readFileSync(path.join(srcRoot, "TextPreviewView.tsx"), "utf8");
     const arrowButton = preview.match(
-      /label="选择发送方式或目标"[\s\S]*?className="([^"]+)"/
+      /label=\{t\("选择发送方式或目标"\)\}[\s\S]*?className="([^"]+)"/
     );
 
     expect(arrowButton).not.toBeNull();

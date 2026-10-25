@@ -1,9 +1,12 @@
+import { t } from "@/lib/i18n";
 import type { Note, Task } from "@/store/notesStore";
 
 /** 命令面板条目（O3，2026-09-12）：动作与搜索结果同列，纯数据便于测试。 */
 export interface CommandItem {
   id: string;
+  /** 分组取值是逻辑 key（中文），显示处用 t(group) 翻译。 */
   group: "动作" | "卡片" | "任务";
+  /** 已按当前语言翻译。 */
   label: string;
   hint?: string;
   shortcut?: string;
@@ -35,7 +38,7 @@ const MAX_RESULTS_PER_GROUP = 6;
 
 function noteLabel(note: Note): string {
   const text = (note.title ?? note.text ?? "").split("\n")[0]?.trim() ?? "";
-  return text || (note.url ? note.url : "（无文字）");
+  return text || (note.url ? note.url : t("（无文字）"));
 }
 
 function matches(haystack: string, query: string): boolean {
@@ -53,14 +56,14 @@ export function buildCommandItems(ctx: CommandContext, rawQuery: string): Comman
       {
         id: "send-checked",
         group: "动作",
-        label: `发送勾选的 ${ctx.checkedCount} 张卡到对话`,
+        label: t("发送勾选的 {n} 张卡到对话", { n: ctx.checkedCount }),
         shortcut: "⌘⏎",
         run: () => ctx.actions.sendChecked(),
       },
       {
         id: "preflight-checked",
         group: "动作",
-        label: "检查后发送勾选的卡…",
+        label: t("检查后发送勾选的卡…"),
         shortcut: "⇧⌘⏎",
         run: () => ctx.actions.sendChecked({ forcePreflight: true }),
       }
@@ -71,26 +74,26 @@ export function buildCommandItems(ctx: CommandContext, rawQuery: string): Comman
       {
         id: "send-focused",
         group: "动作",
-        label: "发送焦点卡片到对话",
+        label: t("发送焦点卡片到对话"),
         shortcut: "⌘⏎",
         run: () => ctx.actions.sendNote(id),
       },
       {
         id: "preflight-focused",
         group: "动作",
-        label: "检查后发送焦点卡片…",
+        label: t("检查后发送焦点卡片…"),
         run: () => ctx.actions.sendNote(id, { forcePreflight: true }),
       }
     );
   }
   actions.push(
-    { id: "search", group: "动作", label: "搜索当前页", shortcut: "⌘F", run: ctx.actions.openSearch },
-    { id: "page-notes", group: "动作", label: "切到内容页", shortcut: "⌘←→", run: () => ctx.actions.setPage("notes") },
-    { id: "page-clipboard", group: "动作", label: "切到剪贴页", run: () => ctx.actions.setPage("clipboard") },
-    { id: "page-tasks", group: "动作", label: "切到提醒页", run: () => ctx.actions.setPage("tasks") },
-    { id: "add-section", group: "动作", label: "新建分组", run: ctx.actions.addSection },
-    { id: "recent", group: "动作", label: "最近发送记录", run: ctx.actions.openRecentDelivery },
-    { id: "settings", group: "动作", label: "打开设置", run: ctx.actions.openSettings }
+    { id: "search", group: "动作", label: t("搜索当前页"), shortcut: "⌘F", run: ctx.actions.openSearch },
+    { id: "page-notes", group: "动作", label: t("切到内容页"), shortcut: "⌘←→", run: () => ctx.actions.setPage("notes") },
+    { id: "page-clipboard", group: "动作", label: t("切到剪贴页"), run: () => ctx.actions.setPage("clipboard") },
+    { id: "page-tasks", group: "动作", label: t("切到提醒页"), run: () => ctx.actions.setPage("tasks") },
+    { id: "add-section", group: "动作", label: t("新建分组"), run: ctx.actions.addSection },
+    { id: "recent", group: "动作", label: t("最近发送记录"), run: ctx.actions.openRecentDelivery },
+    { id: "settings", group: "动作", label: t("打开设置"), run: ctx.actions.openSettings }
   );
   if (!query) return actions;
   const items = actions.filter((item) => matches(item.label, query));
@@ -105,7 +108,7 @@ export function buildCommandItems(ctx: CommandContext, rawQuery: string): Comman
       id: `note:${note.id}`,
       group: "卡片",
       label,
-      hint: page === "clipboard" ? "剪贴" : "笔记",
+      hint: page === "clipboard" ? t("剪贴") : t("笔记"),
       run: () => ctx.actions.focusNote(note.id, page),
     });
   }
@@ -118,7 +121,7 @@ export function buildCommandItems(ctx: CommandContext, rawQuery: string): Comman
       id: `task:${task.id}`,
       group: "任务",
       label: task.text.split("\n")[0]!,
-      hint: task.status === "done" ? "已完成" : "任务",
+      hint: task.status === "done" ? t("已完成") : t("任务"),
       run: () => ctx.actions.focusTask(task.id),
     });
   }
@@ -134,15 +137,15 @@ export function keyHintsFor(input: {
   focusedNote: boolean;
   checkedCount: number;
 }): [string, string][] {
-  if (input.editing) return [["⌘⏎", "保存"], ["Esc", "取消"]];
-  if (input.searchOpen) return [["Esc", "关闭搜索"], ["↑↓", "移动焦点"]];
-  if (input.page === "tasks") return [["⏎", "记下待办"], ["⌘K", "命令"], ["长按 ⌥ Option", "全部快捷键"]];
-  if (input.page === "notes" && input.contentSubview !== "notes") return [["⌘K", "命令"], ["长按 ⌥ Option", "全部快捷键"]];
+  if (input.editing) return [["⌘⏎", t("保存")], ["Esc", t("取消")]];
+  if (input.searchOpen) return [["Esc", t("关闭搜索")], ["↑↓", t("移动焦点")]];
+  if (input.page === "tasks") return [["⏎", t("记下待办")], ["⌘K", t("命令")], [t("长按 ⌥ Option"), t("全部快捷键")]];
+  if (input.page === "notes" && input.contentSubview !== "notes") return [["⌘K", t("命令")], [t("长按 ⌥ Option"), t("全部快捷键")]];
   if (input.checkedCount > 0) {
-    return [["⌘⏎", `发送 ${input.checkedCount} 张`], ["⌘C", "复制为列表"], ["Esc", "取消勾选"], ["⌘K", "命令"]];
+    return [["⌘⏎", t("发送 {n} 张", { n: input.checkedCount })], ["⌘C", t("复制为列表")], ["Esc", t("取消勾选")], ["⌘K", t("命令")]];
   }
   if (input.focusedNote) {
-    return [["⌘⏎", "发送"], ["Space", "预览"], ["⏎", "编辑"], ["x", "勾选"], ["⌘K", "命令"]];
+    return [["⌘⏎", t("发送")], ["Space", t("预览")], ["⏎", t("编辑")], ["x", t("勾选")], ["⌘K", t("命令")]];
   }
-  return [["↑↓", "选卡片"], ["⌘F", "搜索"], ["⌘K", "命令"], ["长按 ⌥ Option", "全部快捷键"]];
+  return [["↑↓", t("选卡片")], ["⌘F", t("搜索")], ["⌘K", t("命令")], [t("长按 ⌥ Option"), t("全部快捷键")]];
 }

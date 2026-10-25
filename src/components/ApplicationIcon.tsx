@@ -1,6 +1,7 @@
 import { AppWindow } from "lucide-react";
 import { useState } from "react";
 
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 /**
@@ -16,6 +17,7 @@ export function ApplicationIcon({
   name: string;
   className?: string;
 }) {
+  const t = useT();
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const showImage = Boolean(src && src !== failedSrc);
 
@@ -24,7 +26,7 @@ export function ApplicationIcon({
       <img
         key={src}
         src={src}
-        alt={`${name} 应用图标`}
+        alt={t("{name} 应用图标", { name })}
         onError={() => setFailedSrc(src)}
         className={cn(
           "shrink-0 animate-in fade-in-0 duration-100 motion-reduce:animate-none",
@@ -37,7 +39,7 @@ export function ApplicationIcon({
   return (
     <span
       role="img"
-      aria-label={`${name} 应用图标`}
+      aria-label={t("{name} 应用图标", { name })}
       className={cn(
         "flex shrink-0 items-center justify-center bg-muted text-muted-foreground",
         className

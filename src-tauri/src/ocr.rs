@@ -2,6 +2,7 @@
 //! 无网络请求；结构化接口保留置信度与 Vision 左下原点框，坐标转换由
 //! image_firewall 统一完成。
 
+use crate::i18n::pick;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::AllocAnyThread;
@@ -79,7 +80,7 @@ pub fn recognize_observations(bytes: &[u8]) -> Result<Vec<RecognizedObservation>
     let requests = NSArray::from_retained_slice(&[as_request]);
     handler
         .performRequests_error(&requests)
-        .map_err(|e| format!("Vision 识别失败: {e}"))?;
+        .map_err(|e| crate::tr_fmt!("Vision 识别失败: {e}", "Vision text recognition failed: {e}"))?;
 
     let mut observations = Vec::new();
     if let Some(results) = request.results() {
@@ -111,7 +112,7 @@ pub fn recognize_observations(bytes: &[u8]) -> Result<Vec<RecognizedObservation>
 
 /// 旧图片卡 OCR 契约：仍返回换行拼接文本，空结果维持原错误语义。
 pub fn recognize(app: &AppHandle, file: &str) -> Result<String, String> {
-    let bytes = crate::storage::read_image_bytes(app, file).ok_or("图片不存在")?;
+    let bytes = crate::storage::read_image_bytes(app, file).ok_or(pick("图片不存在", "Image not found"))?;
     let text = recognize_observations(&bytes)?
         .into_iter()
         .map(|observation| observation.text)

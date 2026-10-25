@@ -1,6 +1,7 @@
 //! 数据密钥与 AI 记录共用固定的内置 helper。发布版没有直接读取钥匙串的回退：
 //! helper 损坏/被替换时拒绝访问，避免升级时重新以主程序身份索取授权。
 
+use crate::i18n::pick;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -28,11 +29,11 @@ pub enum BrokerError {
 impl fmt::Display for BrokerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Unavailable => "内置密钥服务不可用，请重新安装完整的 Toskr 应用",
-            Self::Untrusted => "内置密钥服务身份校验失败，已停止访问钥匙串",
-            Self::InvalidResponse => "内置密钥服务返回无效数据",
-            Self::Keychain(-128) => "已取消钥匙串授权；需要使用时可重试",
-            Self::Keychain(_) => "无法访问 macOS 钥匙串；请解锁或允许 Toskr 密钥服务后重试",
+            Self::Unavailable => pick("内置密钥服务不可用，请重新安装完整的 Toskr 应用", "Built-in key service unavailable. Reinstall the full Toskr app"),
+            Self::Untrusted => pick("内置密钥服务身份校验失败，已停止访问钥匙串", "Built-in key service failed identity check; Keychain access stopped"),
+            Self::InvalidResponse => pick("内置密钥服务返回无效数据", "Built-in key service returned invalid data"),
+            Self::Keychain(-128) => pick("已取消钥匙串授权；需要使用时可重试", "Keychain access canceled. Try again when needed"),
+            Self::Keychain(_) => pick("无法访问 macOS 钥匙串；请解锁或允许 Toskr 密钥服务后重试", "Can't access the macOS Keychain. Unlock it or allow the Toskr key service, then try again"),
         })
     }
 }

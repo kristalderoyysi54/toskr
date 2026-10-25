@@ -25,6 +25,7 @@ import {
   type HudPayload,
 } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
+import { t, useT, type MessageKey } from "@/lib/i18n";
 
 import logoUrl from "../src-tauri/icons/128x128.png";
 
@@ -78,6 +79,8 @@ const logoVariants: Variants = {
  * 此时关闭钮可点、对 undoable 的提示展示「撤销」按钮。
  */
 export default function HudView() {
+  // 独立窗口：订阅语言广播，切换后气泡文案随之刷新
+  const t = useT();
   const [item, setItem] = useState<(HudPayload & { key: number }) | null>(null);
   const [hovered, setHovered] = useState(false);
   // 离场原因在 setItem 之前写入；同一次渲染里 AnimatePresence 读到的 custom 即为本次原因
@@ -136,7 +139,7 @@ export default function HudView() {
                   <motion.div
                     variants={balloonVariants}
                     onClick={dismiss}
-                    title={`${titleOf(item)}（点击关闭）`}
+                    title={t("{title}（点击关闭）", { title: titleOf(item) })}
                     // 窗口宽度固定：长提示折行（最多 3 行）而不是截断；单行时 2xl 圆角仍是药丸形
                     className="hud-pill flex max-w-full cursor-default items-center gap-1.5 rounded-2xl bg-paper py-1 pl-1.5 pr-3 text-paper-foreground elevation-2"
                   >
@@ -162,7 +165,7 @@ export default function HudView() {
                       void api.hudAction("open", item.targetId ?? undefined, item.kind === "due");
                       dismiss();
                     }}
-                    title="点击查看"
+                    title={t("点击查看")}
                     className="cursor-pointer"
                   >
                     <p className={cn("text-body font-medium leading-tight", dueActions && "line-clamp-2")}>
@@ -186,7 +189,7 @@ export default function HudView() {
                             dismiss();
                           }}
                         >
-                          <Check className="size-2.5" strokeWidth={3} /> 完成
+                          <Check className="size-2.5" strokeWidth={3} /> {t("完成")}
                         </HudActionButton>
                       )}
                       {SNOOZE_MINUTES.map(({ minutes, label }) => (
@@ -197,7 +200,7 @@ export default function HudView() {
                             dismiss();
                           }}
                         >
-                          {dueActions.batch ? `全部${label}` : label}
+                          {dueActions.batch ? t("全部{when}", { when: t(label) }) : t(label)}
                         </HudActionButton>
                       ))}
                     </div>
@@ -215,11 +218,11 @@ export default function HudView() {
                         hovered ? "opacity-100" : "pointer-events-none opacity-0"
                       )}
                     >
-                      <Undo2 className="size-2.5" /> 撤销
+                      <Undo2 className="size-2.5" /> {t("撤销")}
                     </button>
                   )}
                   <IconButton
-                    label="关闭"
+                    label={t("关闭")}
                     onClick={dismiss}
                     className="rounded-full bg-paper-foreground/10 text-paper-foreground/60 hover:bg-paper-foreground/15 hover:text-paper-foreground/85 dark:hover:bg-paper-foreground/15 dark:hover:text-paper-foreground/85"
                   >
@@ -266,7 +269,7 @@ export default function HudView() {
   );
 }
 
-const SNOOZE_MINUTES = [
+const SNOOZE_MINUTES: { minutes: number; label: MessageKey }[] = [
   { minutes: 10, label: "10 分钟后" },
   { minutes: 60, label: "1 小时后" },
 ];
@@ -301,21 +304,21 @@ function HudActionButton({
 function titleOf(item: HudPayload): string {
   switch (item.kind) {
     case "added":
-      return item.count > 1 ? `已捕获 ×${item.count}` : "已捕获";
+      return item.count > 1 ? t("已捕获 ×{n}", { n: item.count }) : t("已捕获");
     case "duplicate":
-      return "已存在相同内容";
+      return t("已存在相同内容");
     case "warn":
-      return item.text || "注意";
+      return item.text || t("注意");
     case "undone":
-      return item.text || "已撤销";
+      return item.text || t("已撤销");
     case "sent":
-      return item.text || "已发送";
+      return item.text || t("已发送");
     case "ok":
-      return item.text || "完成";
+      return item.text || t("完成");
     case "info":
-      return item.text || "提示";
+      return item.text || t("提示");
     case "due":
-      return item.text || "任务到期";
+      return item.text || t("任务到期");
   }
 }
 

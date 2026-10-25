@@ -1,3 +1,5 @@
+import { t } from "@/lib/i18n";
+
 /** 将多条文本格式化为编号列表："1. 内容A\n2. 内容B" */
 export function formatAsNumberedList(texts: string[]): string {
   return texts.map((text, index) => `${index + 1}. ${text}`).join("\n");
@@ -49,7 +51,7 @@ export function previewOf(text: string): string {
 export function sendPreview(text: string, maxLines = 10): string {
   const lines = text.split("\n");
   const shown = lines.slice(0, maxLines).join("\n");
-  const suffix = lines.length > maxLines ? `\n…（共 ${lines.length} 行）` : "";
+  const suffix = lines.length > maxLines ? `\n${t("…（共 {n} 行）", { n: lines.length })}` : "";
   return `${shown}${suffix}`;
 }
 
@@ -62,9 +64,9 @@ const IMAGE_PLACEHOLDER = /^图片 (\d+×\d+|\d+ 张)$/;
  * 判定收集文字——占位符混进正文正是原先「图片退化成占位文字」的坑。
  */
 export function imageCaption(note: { kind?: string; text: string }): string {
-  const t = note.text.trim();
-  if (note.kind !== "image") return t;
-  return IMAGE_PLACEHOLDER.test(t) ? "" : t;
+  const text = note.text.trim();
+  if (note.kind !== "image") return text;
+  return IMAGE_PLACEHOLDER.test(text) ? "" : text;
 }
 
 /** 紧凑列表里的图片卡主文案：真实备注优先，无备注才回退图片元数据。 */
@@ -74,8 +76,8 @@ export function imageListLabel(
 ): string {
   const caption = imageCaption(note).split("\n")[0];
   if (caption) return caption;
-  if (imageCount > 1) return `图片 ×${imageCount}`;
+  if (imageCount > 1) return t("图片 ×{n}", { n: imageCount });
   return note.imageW && note.imageH
-    ? `图片 ${note.imageW}×${note.imageH}`
-    : "图片";
+    ? t("图片 {w}×{h}", { w: note.imageW, h: note.imageH })
+    : t("图片");
 }

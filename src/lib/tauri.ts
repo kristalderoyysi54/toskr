@@ -1,4 +1,5 @@
 import type { AiPurpose } from "./aiClient";
+import type { Locale } from "@/lib/i18n";
 import { waitForPrivacySettingsSave } from "@/lib/delivery/privacySettingsBarrier";
 import { invoke } from "@tauri-apps/api/core";
 import type { DeliveryEvent } from "@/lib/deliveryActivityCore";
@@ -783,6 +784,8 @@ export const api = {
   adoptSendTarget: (pid: number) =>
     invoke<TargetSnapshot | null>("adopt_send_target", { pid }),
   setWindowAlpha: (alpha: number) => invoke("set_window_alpha", { alpha }),
+  systemLocale: () => invoke<string | null>("system_locale"),
+  setLocale: (locale: Locale) => invoke("set_locale", { locale }),
   retryTap: () => invoke("retry_tap"),
   openPrivacySettings: (pane: "accessibility" | "input-monitoring") =>
     invoke("open_privacy_settings", { pane }),

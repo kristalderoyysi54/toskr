@@ -7,8 +7,10 @@ import {
   type MessageSourceOverlayPayload,
 } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n";
 
 export default function SourceOverlayView() {
+  const t = useT();
   const [payload, setPayload] = useState<MessageSourceOverlayPayload | null>(null);
 
   useEffect(() => {
@@ -37,7 +39,7 @@ export default function SourceOverlayView() {
       <section className="relative z-10 flex h-full w-full flex-col overflow-hidden rounded-xl border border-foreground/12 bg-popover/95 px-3 py-2.5 shadow-lg backdrop-blur-xl">
         <div className="flex items-center gap-1.5 text-label text-primary">
           <Crosshair className="size-3.5" />
-          <span className="font-semibold">来源 · {payload.sourceApp}</span>
+          <span className="font-semibold">{t("来源 · {app}", { app: payload.sourceApp })}</span>
           <span className="ml-auto rounded-sm bg-primary/8 px-1.5 py-0.5 text-micro">
             {payload.reason}
           </span>
@@ -53,7 +55,7 @@ export default function SourceOverlayView() {
         </p>
         <div className="mt-auto flex items-center gap-1 text-micro text-muted-foreground">
           <EyeOff className="size-3" />
-          未打开会话 · 未改变IM当前选中状态
+          {t("未打开会话 · 未改变IM当前选中状态")}
         </div>
       </section>
     </div>

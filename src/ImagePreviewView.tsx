@@ -80,6 +80,7 @@ import {
   type RedactionStyle,
   type TargetSnapshot,
 } from "@/lib/tauri";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
   applyTargetEvent,
@@ -87,6 +88,8 @@ import {
   targetBlockMessage,
   useTargetStore,
 } from "@/store/targetStore";
+// 事件监听回调里取调用时的语言，不必把 t 列入依赖重挂监听
+import { t as translateNow } from "@/lib/i18n";
 
 type RedactionHistory = {
   past: RedactionRegion[][];
@@ -113,6 +116,7 @@ const freshRedactionHistory = (): RedactionHistory => ({
  * 编辑态每 2s 静默自动保存；Esc/关窗/切换都保留内容，收尾气泡可撤销。
  */
 export default function ImagePreviewView() {
+  const t = useT();
   const [files, setFiles] = useState<string[]>([]);
   const [idx, setIdx] = useState(0);
   const [loadedImage, setLoadedImage] = useState<{
@@ -190,7 +194,7 @@ export default function ImagePreviewView() {
   );
   const targetBlockedMessage = useTargetStore((state) =>
     state.profileOverrideNeedsConfirmation
-      ? "原临时发送方案已暂停"
+      ? t("原临时发送方案已暂停")
       : state.status === "ready"
         ? null
         : targetBlockMessage(state.status, state.reason)
@@ -220,7 +224,7 @@ export default function ImagePreviewView() {
     void emitTo("main", IMAGE_EDIT_CANCEL_EVENT, { requestId }).catch(() => {
       if (pendingImageEditRef.current !== requestId) return;
       pendingImageEditCancelRef.current = null;
-      tip("warn", "图片仍在处理中，请等待主面板结果");
+      tip("warn", translateNow("图片仍在处理中，请等待主面板结果"));
     });
   }, [clearImageEditWatchdog]);
 
@@ -346,7 +350,7 @@ export default function ImagePreviewView() {
           !payload.ok || !payload.editedFile ||
           !payload.width || !payload.height
         ) {
-          tip("warn", payload.message || "图片打码未保存");
+          tip("warn", payload.message || translateNow("图片打码未保存"));
           // 发送副本路径会把自动遮挡框排在前面，序号对不上手动框，只标笔记 / 草稿
           if (editContextRef.current?.kind !== "delivery") {
             setFailedRegions(failedRegionNumbers(payload.message ?? "").map((n) => n - 1));
@@ -411,12 +415,12 @@ export default function ImagePreviewView() {
         ) return;
         pendingImageEditCancelRef.current = null;
         if (payload.status === "settled") {
-          tip("info", "图片已完成处理，正在同步结果");
+          tip("info", translateNow("图片已完成处理，正在同步结果"));
           return;
         }
         pendingImageEditRef.current = null;
         setImageEditBusy(false);
-        tip("warn", "图片处理超时，结果未保存，请重试");
+        tip("warn", translateNow("图片处理超时，结果未保存，请重试"));
       }
     );
     return () => {
@@ -675,12 +679,12 @@ export default function ImagePreviewView() {
       }
       addImagesToCard(images);
     } catch (error) {
-      tip("warn", `图片导入失败：${error}`);
+      tip("warn", t("图片导入失败：{error}", { error: String(error) }));
     }
   };
 
   const pasteImages = () =>
-    importAndAdd(() => api.pasteImagesFromClipboard(), "剪贴板里没有可用图片");
+    importAndAdd(() => api.pasteImagesFromClipboard(), t("剪贴板里没有可用图片"));
 
   // 拖拽本地图片进窗：Tauri 层接管 file drop；回调是首帧闭包，只读 ref
   useEffect(() => {
@@ -703,10 +707,10 @@ export default function ImagePreviewView() {
         const paths = imageFilePaths(payload.paths);
         if (!captionRef.current.noteId) return;
         if (!paths.length) {
-          tip("info", "仅支持图片文件");
+          tip("info", t("仅支持图片文件"));
           return;
         }
-        void importAndAdd(() => api.importImageFiles(paths), "没有可导入的图片");
+        void importAndAdd(() => api.importImageFiles(paths), t("没有可导入的图片"));
       }
     });
     return () => {
@@ -743,7 +747,7 @@ export default function ImagePreviewView() {
       !file || loadedImage?.file !== file || !url ||
       !imageSize.width || !imageSize.height || !imageEditTarget
     ) {
-      tip("info", "图片仍在加载，请稍后再编辑");
+      tip("info", t("图片仍在加载，请稍后再编辑"));
       return;
     }
     setView(FIT_VIEW);
@@ -809,14 +813,14 @@ export default function ImagePreviewView() {
         })
         .map((finding) => ({
           box: finding.pixelBox,
-          label: FIREWALL_CATEGORY_LABEL[finding.category],
+          label: t(FIREWALL_CATEGORY_LABEL[finding.category]),
         }));
       setCandidates(next);
       if (!next.length) {
-        tip("info", result.findings.length ? "识别到的敏感文字都已遮挡" : "没有发现敏感文字，可以手动框选");
+        tip("info", result.findings.length ? t("识别到的敏感文字都已遮挡") : t("没有发现敏感文字，可以手动框选"));
       }
     } catch (error) {
-      tip("warn", `识别失败：${error instanceof Error ? error.message : String(error)}`);
+      tip("warn", t("识别失败：{error}", { error: error instanceof Error ? error.message : String(error) }));
     } finally {
       setDetecting(false);
     }
@@ -886,7 +890,7 @@ export default function ImagePreviewView() {
       pendingImageEditRef.current = null;
       pendingImageEditCancelRef.current = null;
       setImageEditBusy(false);
-      tip("warn", "图片编辑窗口通信失败，请重试");
+      tip("warn", t("图片编辑窗口通信失败，请重试"));
     });
   };
 
@@ -903,8 +907,8 @@ export default function ImagePreviewView() {
   };
   const many = files.length > 1;
   const sendLabel = many
-    ? `发送整张卡片（含 ${files.length} 张图片）`
-    : "发送当前图片卡片";
+    ? t("发送整张卡片（含 {n} 张图片）", { n: files.length })
+    : t("发送当前图片卡片");
 
   const send = () => {
     if (!noteId || dataGeneration === null) return;
@@ -1019,7 +1023,7 @@ export default function ImagePreviewView() {
         // 拖拽悬停提示：pointer-events-none 不拦 Tauri 层的 drop 事件
         <div className="pointer-events-none absolute inset-2 z-50 flex items-center justify-center rounded-lg border-2 border-dashed border-primary/60 bg-primary/5">
           <span className="rounded-md bg-background/95 px-3 py-1.5 text-body font-medium text-foreground shadow-sm">
-            松开以添加图片
+            {t("松开以添加图片")}
           </span>
         </div>
       )}
@@ -1033,24 +1037,24 @@ export default function ImagePreviewView() {
         )}
       >
         <MacTrafficLights
-          closeLabel={imageEditing ? "取消图片编辑" : "关闭预览"}
+          closeLabel={imageEditing ? t("取消图片编辑") : t("关闭预览")}
           closeDisabled={imageEditBusy}
           onClose={close}
         />
         <span aria-hidden data-tauri-drag-region className="platinum-stripe platinum-stripe--lead" />
         <span data-tauri-drag-region className="select-none text-body font-medium text-foreground/80">
           {imageEditing
-            ? "图片打码"
+            ? t("图片打码")
             : many
-              ? `图片 ${idx + 1}/${files.length}`
-              : "图片"}
+              ? t("图片 {index}/{total}", { index: idx + 1, total: files.length })
+              : t("图片")}
         </span>
         <span aria-hidden data-tauri-drag-region className="platinum-stripe" />
         {!imageEditing && !editing && (
           <div className="ml-auto flex items-center gap-1">
             {noteId && dataGeneration !== null && (
               <IconButton
-                label={winPinned ? "取消固定（发送后恢复自动关窗）" : "固定窗口：发送后保持打开"}
+                label={winPinned ? t("取消固定（发送后恢复自动关窗）") : t("固定窗口：发送后保持打开")}
                 size="xs"
                 pressed={winPinned}
                 onClick={() => setWinPinned((value) => !value)}
@@ -1065,7 +1069,7 @@ export default function ImagePreviewView() {
             {imageEditTarget && (
               <IconButton
                 ref={imageEditTriggerRef}
-                label="图片打码"
+                label={t("图片打码")}
                 size="xs"
                 onClick={beginImageEdit}
                 className="text-foreground/60 hover:bg-foreground/10 hover:text-foreground focus-visible:ring-ring focus-visible:ring-offset-0"
@@ -1087,7 +1091,7 @@ export default function ImagePreviewView() {
               label={
                 targetReady
                   ? sendLabel
-                  : `发送不可用：${targetBlockedMessage}`
+                  : t("发送不可用：{reason}", { reason: String(targetBlockedMessage) })
               }
               size="xs"
               disabled={!targetReady}
@@ -1173,7 +1177,7 @@ export default function ImagePreviewView() {
           </div>
         ) : (
           <div className="flex h-24 w-32 animate-pulse items-center justify-center rounded-lg bg-foreground/10">
-            <span className="sr-only">加载中…</span>
+            <span className="sr-only">{t("加载中…")}</span>
           </div>
         )}
         {imageEditing && !transientPeek && candidates.length > 0 && (
@@ -1185,17 +1189,17 @@ export default function ImagePreviewView() {
             )}
           >
             <span className="size-2 rounded-full bg-warning" aria-hidden />
-            识别到 {candidates.length} 处敏感文字，点虚线框逐个打码
+            {t("识别到 {n} 处敏感文字，点虚线框逐个打码", { n: candidates.length })}
             <Button
               type="button"
               size="xs"
               disabled={imageEditBusy}
               onClick={() => acceptCandidates(candidates.map((_, i) => i))}
             >
-              全部打码
+              {t("全部打码")}
             </Button>
             <Button type="button" size="xs" variant="ghost" onClick={() => setCandidates([])}>
-              忽略
+              {t("忽略")}
             </Button>
           </div>
         )}
@@ -1218,7 +1222,7 @@ export default function ImagePreviewView() {
         {many && !transientPeek && !imageEditing && (
           <>
             <button
-              aria-label="上一张"
+              aria-label={t("上一张")}
               disabled={idx === 0}
               onClick={() => setIdx((i) => Math.max(0, i - 1))}
               className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-black/40 p-1.5 text-white/80 outline-none hover:bg-black/60 hover:text-white focus-visible:ring-2 focus-visible:ring-white/60 disabled:opacity-30"
@@ -1226,7 +1230,7 @@ export default function ImagePreviewView() {
               <ChevronLeft className="size-4" />
             </button>
             <button
-              aria-label="下一张"
+              aria-label={t("下一张")}
               disabled={idx === files.length - 1}
               onClick={() => setIdx((i) => Math.min(files.length - 1, i + 1))}
               className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-black/40 p-1.5 text-white/80 outline-none hover:bg-black/60 hover:text-white focus-visible:ring-2 focus-visible:ring-white/60 disabled:opacity-30"
@@ -1246,15 +1250,15 @@ export default function ImagePreviewView() {
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 rows={2}
-                placeholder="给这张图片写点文字…"
+                placeholder={t("给这张图片写点文字…")}
                 className={cn(
                   "min-h-0 flex-1 resize-none rounded-md bg-foreground/5 px-2 py-1 text-body text-foreground/90",
                   "placeholder:text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
                 )}
               />
               <button
-                aria-label="保存备注（⌘⏎）"
-                title="保存（⌘⏎）；Esc 保存并退出"
+                aria-label={t("保存备注（⌘⏎）")}
+                title={t("保存（⌘⏎）；Esc 保存并退出")}
                 onClick={save}
                 className="rounded-md bg-foreground/10 p-1.5 text-foreground/85 outline-none hover:bg-foreground/15 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
               >
@@ -1263,8 +1267,8 @@ export default function ImagePreviewView() {
             </div>
           ) : (
             <button
-              aria-label={noteText ? "编辑文字备注" : "添加文字备注"}
-              title={noteText ? "编辑文字备注" : "添加文字备注"}
+              aria-label={noteText ? t("编辑文字备注") : t("添加文字备注")}
+              title={noteText ? t("编辑文字备注") : t("添加文字备注")}
               onClick={() => {
                 setDraft(noteText);
                 setEditing(true);
@@ -1281,7 +1285,7 @@ export default function ImagePreviewView() {
                   noteText ? "text-foreground/85" : "text-muted-foreground"
                 )}
               >
-                {noteText || "添加文字备注…"}
+                {noteText || t("添加文字备注…")}
               </span>
             </button>
           )}
@@ -1330,6 +1334,7 @@ function RedactionToolbar({
   onCancel: () => void;
   onApply: () => void;
 }) {
+  const t = useT();
   // 两组：马赛克 | 实色（实色下再选 黑 / 白 / 取色）
   const fillMode = drawStyle.kind !== "mosaic";
   const lastFill = useRef<RedactionStyle>(
@@ -1347,7 +1352,7 @@ function RedactionToolbar({
   return (
     <div
       role="toolbar"
-      aria-label="打码工具"
+      aria-label={t("打码工具")}
       className={cn(
         floatingSurface(2),
         "absolute bottom-3 left-1/2 z-20 flex max-w-[calc(100%-16px)] -translate-x-1/2 items-center gap-1 overflow-x-auto whitespace-nowrap rounded-xl p-1 [&::-webkit-scrollbar]:hidden"
@@ -1362,7 +1367,7 @@ function RedactionToolbar({
           className={segment(!fillMode)}
         >
           <RedactionStyleGlyph style={{ kind: "mosaic" }} />
-          马赛克
+          {t("马赛克")}
         </button>
         <button
           type="button"
@@ -1372,17 +1377,17 @@ function RedactionToolbar({
           className={segment(fillMode)}
         >
           <RedactionStyleGlyph style={{ kind: "solid", color: REDACTION_BLACK }} />
-          实色
+          {t("实色")}
         </button>
       </div>
       {fillMode && (
-        <div className="flex items-center" aria-label="填充颜色">
+        <div className="flex items-center" aria-label={t("填充颜色")}>
           {REDACTION_STYLE_OPTIONS.filter((o) => o.style.kind !== "mosaic").map((option) => {
             const active = sameRedactionStyle(drawStyle, option.style);
             return (
               <IconButton
                 key={option.label}
-                label={option.label}
+                label={t(option.label)}
                 pressed={active}
                 disabled={busy}
                 onClick={() => onDrawStyle(option.style)}
@@ -1403,29 +1408,29 @@ function RedactionToolbar({
         className="border-warning/50 text-warning"
       >
         {detecting ? <Loader2 className="animate-spin" /> : <Sparkles />}
-        {detecting ? "识别中…" : "识别敏感文字"}
+        {detecting ? t("识别中…") : t("识别敏感文字")}
       </Button>
       <span aria-hidden className="mx-0.5 h-4 w-px shrink-0 bg-border" />
-      <IconButton label="撤销（⌘Z）" size="xs" disabled={busy || !canUndo} onClick={onUndo}>
+      <IconButton label={t("撤销（⌘Z）")} size="xs" disabled={busy || !canUndo} onClick={onUndo}>
         <Undo2 className="size-3.5" />
       </IconButton>
-      <IconButton label="重做（⌘⇧Z）" size="xs" disabled={busy || !canRedo} onClick={onRedo}>
+      <IconButton label={t("重做（⌘⇧Z）")} size="xs" disabled={busy || !canRedo} onClick={onRedo}>
         <Redo2 className="size-3.5" />
       </IconButton>
       <span className="min-w-8 text-center text-micro tabular-nums text-muted-foreground">
-        {count} 处
+        {t("{n} 处", { n: count })}
       </span>
       <IconButton
-        label="拖动画框 · 点框选中后可移动、拖角缩放、⌫ 删除 · 方向键微移（⇧ 加大步长）· 滚轮缩放 · 按住 Space 平移 · ⌘⏎ 应用 · Esc 逐层退出"
+        label={t("拖动画框 · 点框选中后可移动、拖角缩放、⌫ 删除 · 方向键微移（⇧ 加大步长）· 滚轮缩放 · 按住 Space 平移 · ⌘⏎ 应用 · Esc 逐层退出")}
         size="xs"
       >
         <CircleHelp className="size-3.5" />
       </IconButton>
       <Button type="button" size="xs" variant="ghost" disabled={busy} onClick={onCancel}>
-        取消
+        {t("取消")}
       </Button>
       <Button type="button" size="xs" disabled={busy || count === 0} onClick={onApply}>
-        {busy ? "复检中…" : "应用"}
+        {busy ? t("复检中…") : t("应用")}
       </Button>
     </div>
   );

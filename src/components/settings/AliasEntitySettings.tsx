@@ -21,8 +21,10 @@ import {
   restoreAliases,
   type AliasEntity,
 } from "@/lib/delivery/aliasEntities";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { Settings } from "@/store/notesStore";
+import { aliasCategoryDisplayLabel } from "@/lib/delivery/aliasEntities";
 
 const CUSTOM_CODE = "__custom__";
 
@@ -43,6 +45,7 @@ export function AliasEntitySettings({
   settings: Settings;
   patch: (patch: Partial<Settings>) => void;
 }) {
+  const t = useT();
   const [formOpen, setFormOpen] = useState(false);
   const [draftText, setDraftText] = useState("");
   const [selectedCode, setSelectedCode] = useState(ALIAS_PRESET_CATEGORIES[0].code);
@@ -99,7 +102,7 @@ export function AliasEntitySettings({
       return;
     }
     if (customSelected && !codeValid) {
-      setFormIssue("类别码需为大写字母开头的英文码，且不与既有/保留类别重复");
+      setFormIssue(t("类别码需为大写字母开头的英文码，且不与既有/保留类别重复"));
       return;
     }
     const allocated = allocateAliasPlaceholder(
@@ -157,8 +160,11 @@ export function AliasEntitySettings({
 
   const removeEntity = async (entity: AliasEntity) => {
     const confirmed = await ask(
-      `删除后 ${entity.placeholder} 将无法再恢复为「${entity.originalText}」，编号也不会复用。确定删除？`,
-      { title: "删除词典条目", kind: "warning" }
+      t("删除后 {placeholder} 将无法再恢复为「{original}」，编号也不会复用。确定删除？", {
+        placeholder: entity.placeholder,
+        original: entity.originalText,
+      }),
+      { title: t("删除词典条目"), kind: "warning" }
     );
     if (!confirmed) return;
     patch({
@@ -170,15 +176,16 @@ export function AliasEntitySettings({
     <SettingsGroup
       footer={
         settings.aliasEntitiesEnabled
-          ? "词典加密保存在本机；导出的完整备份中为明文。删除条目后，它的占位符编号不再复用。"
+          ? t("词典加密保存在本机；导出的完整备份中为明文。删除条目后，它的占位符编号不再复用。")
           : undefined
       }
     >
       <FeatureRow
         icon={<VenetianMask />}
-        title="可逆化名"
-        switchLabel="启用可逆化名"
-        description="发送时把词典里的名称换成占位符（张三 → [USER_01]），收到回复后在本机还原"
+        title={t("可逆化名")}
+        searchKey="可逆化名"
+        switchLabel={t("启用可逆化名")}
+        description={t("发送时把词典里的名称换成占位符（张三 → [USER_01]），收到回复后在本机还原")}
         checked={settings.aliasEntitiesEnabled}
         onCheckedChange={(aliasEntitiesEnabled) => patch({ aliasEntitiesEnabled })}
       />
@@ -186,22 +193,23 @@ export function AliasEntitySettings({
       {settings.aliasEntitiesEnabled && (
         <>
           <SettingsRow
-            label="词典"
-            value={`${settings.aliasEntities.length} 条`}
+            label={t("词典")}
+            searchKey="词典"
+            value={t("{n} 条", { n: settings.aliasEntities.length })}
             right={
               formOpen ? undefined : (
                 <Button type="button" size="xs" variant="ghost" onClick={() => setFormOpen(true)}>
-                  <Plus className="size-3" /> 添加
+                  <Plus className="size-3" /> {t("添加")}
                 </Button>
               )
             }
           >
             {settings.aliasEntities.length === 0 ? (
               <p className="mt-1 text-label text-muted-foreground">
-                暂无词典条目。添加后，发送内容里出现的原文会自动换成占位符。
+                {t("暂无词典条目。添加后，发送内容里出现的原文会自动换成占位符。")}
               </p>
             ) : (
-              <ul className="mt-2 space-y-1" aria-label="化名词典条目">
+              <ul className="mt-2 space-y-1" aria-label={t("化名词典条目")}>
                 {settings.aliasEntities.map((entity) => (
                   <li
                     key={entity.id}
@@ -212,7 +220,7 @@ export function AliasEntitySettings({
                     </span>
                     {editingId === entity.id ? (
                       <input
-                        aria-label={`编辑 ${entity.originalText} 的原文`}
+                        aria-label={t("编辑 {text} 的原文", { text: entity.originalText })}
                         value={editingText}
                         maxLength={120}
                         autoFocus
@@ -236,7 +244,7 @@ export function AliasEntitySettings({
                       {entity.placeholder}
                     </code>
                     <IconButton
-                      label="编辑原文"
+                      label={t("编辑原文")}
                       size="xs"
                       onClick={() => {
                         setEditingId(entity.id);
@@ -247,7 +255,7 @@ export function AliasEntitySettings({
                       <Pencil className="size-3" />
                     </IconButton>
                     <IconButton
-                      label="删除条目"
+                      label={t("删除条目")}
                       size="xs"
                       tone="danger"
                       onClick={() => void removeEntity(entity)}
@@ -262,13 +270,13 @@ export function AliasEntitySettings({
             {formOpen && (
               <div className="mt-2 rounded-lg border border-border/60 p-2">
                 <label className="block text-label text-muted-foreground">
-                  原文（精确匹配，区分大小写）
+                  {t("原文（精确匹配，区分大小写）")}
                   <input
-                    aria-label="词典原文"
+                    aria-label={t("词典原文")}
                     value={draftText}
                     maxLength={120}
                     autoFocus
-                    placeholder="如：张三 / 商户 12345 / SO-2026-001"
+                    placeholder={t("如：张三 / 商户 12345 / SO-2026-001")}
                     onChange={(event) => {
                       setDraftText(event.target.value);
                       setFormIssue(null);
@@ -276,11 +284,11 @@ export function AliasEntitySettings({
                     className={inputClass}
                   />
                 </label>
-                <p className="mt-2 text-label text-muted-foreground">类别</p>
+                <p className="mt-2 text-label text-muted-foreground">{t("类别")}</p>
                 <div
                   className="mt-1 flex flex-wrap gap-1"
                   role="radiogroup"
-                  aria-label="化名类别"
+                  aria-label={t("化名类别")}
                 >
                   {categories.map((category) => (
                     <button
@@ -296,7 +304,7 @@ export function AliasEntitySettings({
                           : "bg-muted/40 text-muted-foreground hover:text-foreground"
                       )}
                     >
-                      {category.label}
+                      {aliasCategoryDisplayLabel(category)}
                     </button>
                   ))}
                   <button
@@ -311,18 +319,18 @@ export function AliasEntitySettings({
                         : "bg-muted/40 text-muted-foreground hover:text-foreground"
                     )}
                   >
-                    + 自定义类别
+                    {t("+ 自定义类别")}
                   </button>
                 </div>
                 {customSelected && (
                   <div className="mt-2 grid grid-cols-2 gap-2">
                     <label className="block text-label text-muted-foreground">
-                      类别码（英文大写）
+                      {t("类别码（英文大写）")}
                       <input
-                        aria-label="自定义类别码"
+                        aria-label={t("自定义类别码")}
                         value={customCode}
                         maxLength={16}
-                        placeholder="如 VENDOR"
+                        placeholder={t("如 VENDOR")}
                         onChange={(event) => {
                           setCustomCode(event.target.value.toUpperCase());
                           setFormIssue(null);
@@ -331,12 +339,12 @@ export function AliasEntitySettings({
                       />
                     </label>
                     <label className="block text-label text-muted-foreground">
-                      显示名（可选）
+                      {t("显示名（可选）")}
                       <input
-                        aria-label="自定义类别显示名"
+                        aria-label={t("自定义类别显示名")}
                         value={customLabel}
                         maxLength={16}
-                        placeholder="如 供应商"
+                        placeholder={t("如 供应商")}
                         onChange={(event) => setCustomLabel(event.target.value)}
                         className={inputClass}
                       />
@@ -345,8 +353,8 @@ export function AliasEntitySettings({
                 )}
                 <p className="mt-2 text-label text-muted-foreground" aria-live="polite">
                   {previewPlaceholder
-                    ? `将分配占位符：${previewPlaceholder}`
-                    : "填写合法类别码后显示将分配的占位符"}
+                    ? t("将分配占位符：{placeholder}", { placeholder: previewPlaceholder })
+                    : t("填写合法类别码后显示将分配的占位符")}
                 </p>
                 {formIssue && (
                   <p role="alert" className="mt-1 text-label text-warning">
@@ -355,10 +363,10 @@ export function AliasEntitySettings({
                 )}
                 <div className="mt-2 flex gap-1.5">
                   <Button type="button" size="xs" variant="secondary" onClick={addEntity}>
-                    添加
+                    {t("添加")}
                   </Button>
                   <Button type="button" size="xs" variant="ghost" onClick={resetForm}>
-                    取消
+                    {t("取消")}
                   </Button>
                 </div>
               </div>
@@ -371,12 +379,12 @@ export function AliasEntitySettings({
           </SettingsRow>
 
           <SettingsRow
-            label="捕获回复时自动还原"
+            label={t("捕获回复时自动还原")}
             searchKey="捕获时自动恢复化名"
-            hint="关闭后可在卡片上手动还原"
+            hint={t("关闭后可在卡片上手动还原")}
             right={
               <Switch
-                aria-label="捕获时自动恢复化名"
+                aria-label={t("捕获时自动恢复化名")}
                 checked={settings.aliasAutoRestoreOnCapture}
                 onCheckedChange={(aliasAutoRestoreOnCapture) =>
                   patch({ aliasAutoRestoreOnCapture })}
@@ -386,16 +394,17 @@ export function AliasEntitySettings({
 
           {/* 示例输入与结果收起时保留，重新展开不丢失 */}
           <DisclosureRow
-            label="试一试替换效果"
+            label={t("试一试替换效果")}
+            searchKey="试一试替换效果"
             open={rehearsalOpen}
             onOpenChange={setRehearsalOpen}
             keepMounted
           >
             <input
-              aria-label="化名预演输入"
+              aria-label={t("化名预演输入")}
               value={rehearsalText}
               maxLength={400}
-              placeholder="输入一句包含词典原文的示例，只在本机演示"
+              placeholder={t("输入一句包含词典原文的示例，只在本机演示")}
               onChange={(event) => setRehearsalText(event.target.value)}
               className={inputClass}
             />
@@ -403,7 +412,7 @@ export function AliasEntitySettings({
               <div className="mt-2 space-y-1.5">
                 <div>
                   <p className="text-micro text-muted-foreground">
-                    ① 替换后 · 匹配到的原文变为占位符（{rehearsal.replacedCount} 处）
+                    {t("① 替换后 · 匹配到的原文变为占位符（{n} 处）", { n: rehearsal.replacedCount })}
                   </p>
                   <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-muted/40 p-2 text-micro">
                     {rehearsal.text}
@@ -411,14 +420,14 @@ export function AliasEntitySettings({
                 </div>
                 <div>
                   <p className="text-micro text-muted-foreground">
-                    ② 恢复原文后
+                    {t("② 恢复原文后")}
                   </p>
                   <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-muted/40 p-2 text-micro">
                     {rehearsalRestored?.text ?? rehearsal.text}
                   </pre>
                   {rehearsalRestored?.text === rehearsalText && (
                     <p className="mt-0.5 text-micro text-success">
-                      还原结果与原文一致
+                      {t("还原结果与原文一致")}
                     </p>
                   )}
                 </div>

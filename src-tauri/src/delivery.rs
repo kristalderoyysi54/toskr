@@ -1,5 +1,6 @@
 //! 单一发送状态机与跨前后端结构化契约。
 
+use crate::i18n::pick;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -196,11 +197,11 @@ pub enum PayloadKind {
 
 fn message_with_clipboard(message: impl Into<String>, outcome: ClipboardOutcome) -> String {
     let suffix = match outcome {
-        ClipboardOutcome::Restored => " · 原剪贴板已恢复",
-        ClipboardOutcome::RestoredPartial => " · 原剪贴板可读内容已恢复（不可读取格式未恢复）",
-        ClipboardOutcome::SkippedUserChanged => " · 已保留你刚复制的内容",
-        ClipboardOutcome::RestoreFailed => " · 原剪贴板恢复失败",
-        ClipboardOutcome::NotOwned => " · 剪贴板所有权已变化",
+        ClipboardOutcome::Restored => pick(" · 原剪贴板已恢复", " · Original clipboard restored"),
+        ClipboardOutcome::RestoredPartial => pick(" · 原剪贴板可读内容已恢复（不可读取格式未恢复）", " · Original clipboard partly restored (unreadable formats not restored)"),
+        ClipboardOutcome::SkippedUserChanged => pick(" · 已保留你刚复制的内容", " · Kept what you just copied"),
+        ClipboardOutcome::RestoreFailed => pick(" · 原剪贴板恢复失败", " · Failed to restore original clipboard"),
+        ClipboardOutcome::NotOwned => pick(" · 剪贴板所有权已变化", " · Clipboard was changed by another app"),
         ClipboardOutcome::NothingToRestore => "",
     };
     format!("{}{suffix}", message.into())
@@ -222,24 +223,24 @@ fn reason_code(reason: TargetReason) -> DeliveryReasonCode {
 fn blocked_message(reason: DeliveryReasonCode) -> &'static str {
     match reason {
         DeliveryReasonCode::TargetTokenMissing | DeliveryReasonCode::TargetMissing => {
-            "发送中止：没有可验证的目标应用"
+            pick("发送中止：没有可验证的目标应用", "Send stopped: no verifiable target app")
         }
-        DeliveryReasonCode::TargetExited => "发送中止：目标应用已退出",
+        DeliveryReasonCode::TargetExited => pick("发送中止：目标应用已退出", "Send stopped: target app quit"),
         DeliveryReasonCode::TargetBundleMismatch
         | DeliveryReasonCode::TargetProcessMismatch
-        | DeliveryReasonCode::TargetTokenStale => "发送中止：目标应用身份已变化，请重试",
-        DeliveryReasonCode::TargetIdentityUnavailable => "发送中止：无法确认目标应用身份",
+        | DeliveryReasonCode::TargetTokenStale => pick("发送中止：目标应用身份已变化，请重试", "Send stopped: target app identity changed. Try again"),
+        DeliveryReasonCode::TargetIdentityUnavailable => pick("发送中止：无法确认目标应用身份", "Send stopped: can't confirm target app identity"),
         DeliveryReasonCode::TargetNotFrontmost | DeliveryReasonCode::TargetFocusDrift => {
-            "发送中止：目标应用未处于前台"
+            pick("发送中止：目标应用未处于前台", "Send stopped: target app isn't in front")
         }
-        DeliveryReasonCode::DeliveryInProgress => "发送中止：已有发送正在进行",
+        DeliveryReasonCode::DeliveryInProgress => pick("发送中止：已有发送正在进行", "Send stopped: another send is in progress"),
         DeliveryReasonCode::PrivacyIncomplete => {
-            "发送中止：文本超出本地隐私扫描上限，无法在发送前复核"
+            pick("发送中止：文本超出本地隐私扫描上限，无法在发送前复核", "Send stopped: text exceeds the local privacy scan limit and can't be checked before sending")
         }
         DeliveryReasonCode::PrivacyNativeBlocked => {
-            "发送中止：内容含未经预检确认的高风险敏感信息，请重新预检"
+            pick("发送中止：内容含未经预检确认的高风险敏感信息，请重新预检", "Send stopped: content has high-risk sensitive info that wasn't confirmed. Run the check again")
         }
-        _ => "发送中止",
+        _ => pick("发送中止", "Send stopped"),
     }
 }
 
@@ -276,7 +277,7 @@ fn sent_result(
     started_at_ms: i64,
     enter_pressed: bool,
 ) -> SendDeliveryResult {
-    let app_name = target.app_name.as_deref().unwrap_or("目标应用").to_string();
+    let app_name = target.app_name.as_deref().unwrap_or(pick("目标应用", "target app")).to_string();
     let clipboard_outcome = runtime.finish_clipboard(true);
     SendDeliveryResult {
         delivery_id: delivery_id.into(),
@@ -284,9 +285,9 @@ fn sent_result(
         reason_code: DeliveryReasonCode::Ok,
         message: message_with_clipboard(
             if enter_pressed {
-                format!("已向 {app_name} 执行粘贴与回车按键；接收未确认")
+                crate::tr_fmt!("已向 {app_name} 执行粘贴与回车按键；接收未确认", "Pasted and pressed Return in {app_name}; receipt not confirmed")
             } else {
-                format!("已向 {app_name} 执行粘贴按键；接收未确认，请手动提交")
+                crate::tr_fmt!("已向 {app_name} 执行粘贴按键；接收未确认，请手动提交", "Pasted into {app_name}; receipt not confirmed. Submit manually")
             },
             clipboard_outcome,
         ),
@@ -359,7 +360,7 @@ fn payload_steps(request: &SendDeliveryRequest) -> Result<Vec<PayloadStep<'_>>, 
     let invalid = || {
         DeliveryFailure::new(
             DeliveryReasonCode::InternalError,
-            "发送失败：图文顺序信息无效",
+            pick("发送失败：图文顺序信息无效", "Send failed: invalid text/image order"),
         )
     };
     let mut used = vec![false; request.image_files.len()];
@@ -417,8 +418,9 @@ pub fn execute_delivery(
         DeliveryReceiptLevel::NotAttempted
     };
     if result.status != DeliveryStatus::Sent && progress.attempted > 0 {
-        result.message.push_str(&format!(
+        result.message.push_str(&crate::tr_fmt!(
             " · 已执行 {}/{} 段粘贴按键，接收未确认；请核对目标后再重试",
+            " · Pasted {}/{} parts; receipt not confirmed. Check the target before retrying",
             progress.completed, progress.total
         ));
     }
@@ -460,7 +462,7 @@ fn execute_delivery_inner(
         return failed_result(
             runtime,
             &request.delivery_id,
-            DeliveryFailure::new(DeliveryReasonCode::PayloadEmpty, "发送失败：内容为空"),
+            DeliveryFailure::new(DeliveryReasonCode::PayloadEmpty, pick("发送失败：内容为空", "Send failed: content is empty")),
             Some(snapshot),
             started_at_ms,
             false,
@@ -528,7 +530,7 @@ fn execute_delivery_inner(
             return failed_result(
                 runtime,
                 &request.delivery_id,
-                DeliveryFailure::new(DeliveryReasonCode::PayloadEmpty, "发送失败：内容为空"),
+                DeliveryFailure::new(DeliveryReasonCode::PayloadEmpty, pick("发送失败：内容为空", "Send failed: content is empty")),
                 Some(snapshot),
                 started_at_ms,
                 false,
@@ -774,7 +776,7 @@ fn verify_image_integrity(
         if file.starts_with("toskr-redacted:") {
             return Err(DeliveryFailure::new(
                 DeliveryReasonCode::ImageChanged,
-                "发送失败：遮挡图片缺少完整性证明，请重新预检",
+                pick("发送失败：遮挡图片缺少完整性证明，请重新预检", "Send failed: masked image lacks an integrity proof. Run the check again"),
             ));
         }
         return Ok(());
@@ -782,14 +784,14 @@ fn verify_image_integrity(
     if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(DeliveryFailure::new(
             DeliveryReasonCode::ImageChanged,
-            "发送失败：图片完整性证明无效，请重新预检",
+            pick("发送失败：图片完整性证明无效，请重新预检", "Send failed: invalid image integrity proof. Run the check again"),
         ));
     }
     let actual = crate::storage::content_hash(width, height, rgba);
     if actual != expected {
         return Err(DeliveryFailure::new(
             DeliveryReasonCode::ImageChanged,
-            "发送失败：图片内容已变化，请重新扫描",
+            pick("发送失败：图片内容已变化，请重新扫描", "Send failed: image changed. Scan again"),
         ));
     }
     Ok(())
@@ -832,7 +834,7 @@ impl DeliveryRuntime for NativeDeliveryRuntime {
         if request.image_files.len() != request.expected_image_pixel_hashes.len() {
             return Err(DeliveryFailure::new(
                 DeliveryReasonCode::ImageChanged,
-                "发送失败：图片完整性信息不完整，请重新预检",
+                pick("发送失败：图片完整性信息不完整，请重新预检", "Send failed: image integrity info incomplete. Run the check again"),
             ));
         }
         let mut images = Vec::with_capacity(request.image_files.len());
@@ -845,7 +847,7 @@ impl DeliveryRuntime for NativeDeliveryRuntime {
             else {
                 return Err(DeliveryFailure::new(
                     DeliveryReasonCode::ImageUnreadable,
-                    "发送失败：图片附件不可读取",
+                    pick("发送失败：图片附件不可读取", "Send failed: image attachment can't be read"),
                 ));
             };
             verify_image_integrity(file, expected_hash.as_deref(), image.0, image.1, &image.2)?;
@@ -854,7 +856,7 @@ impl DeliveryRuntime for NativeDeliveryRuntime {
         self.transaction = Some(PasteboardTransaction::capture_original().map_err(|error| {
             DeliveryFailure::new(
                 DeliveryReasonCode::PasteFailed,
-                format!("发送失败：无法完整备份剪贴板（{error}）"),
+                crate::tr_fmt!("发送失败：无法完整备份剪贴板（{error}）", "Send failed: can't fully back up the clipboard ({error})"),
             )
         })?);
         self.images = images;
@@ -891,13 +893,13 @@ impl DeliveryRuntime for NativeDeliveryRuntime {
         let transaction = self.transaction.as_mut().ok_or_else(|| {
             DeliveryFailure::new(
                 DeliveryReasonCode::InternalError,
-                "发送失败：剪贴板事务未初始化",
+                pick("发送失败：剪贴板事务未初始化", "Send failed: clipboard transaction not initialized"),
             )
         })?;
         transaction.write_text(text).map_err(|error| {
             DeliveryFailure::new(
                 DeliveryReasonCode::PasteFailed,
-                format!("发送失败：无法写入文本（{error}）"),
+                crate::tr_fmt!("发送失败：无法写入文本（{error}）", "Send failed: can't write text ({error})"),
             )
         })?;
         Ok(())
@@ -907,13 +909,13 @@ impl DeliveryRuntime for NativeDeliveryRuntime {
         let Some((width, height, rgba)) = self.images.get(index) else {
             return Err(DeliveryFailure::new(
                 DeliveryReasonCode::InternalError,
-                "发送失败：图片发送状态异常",
+                pick("发送失败：图片发送状态异常", "Send failed: unexpected image send state"),
             ));
         };
         let transaction = self.transaction.as_mut().ok_or_else(|| {
             DeliveryFailure::new(
                 DeliveryReasonCode::InternalError,
-                "发送失败：剪贴板事务未初始化",
+                pick("发送失败：剪贴板事务未初始化", "Send failed: clipboard transaction not initialized"),
             )
         })?;
         transaction
@@ -921,7 +923,7 @@ impl DeliveryRuntime for NativeDeliveryRuntime {
             .map_err(|error| {
                 DeliveryFailure::new(
                     DeliveryReasonCode::PasteFailed,
-                    format!("发送失败：无法写入图片（{error}）"),
+                    crate::tr_fmt!("发送失败：无法写入图片（{error}）", "Send failed: can't write image ({error})"),
                 )
             })?;
         Ok(())
@@ -931,23 +933,24 @@ impl DeliveryRuntime for NativeDeliveryRuntime {
         let transaction = self.transaction.as_ref().ok_or_else(|| {
             DeliveryFailure::new(
                 DeliveryReasonCode::InternalError,
-                "发送失败：剪贴板事务未初始化",
+                pick("发送失败：剪贴板事务未初始化", "Send failed: clipboard transaction not initialized"),
             )
         })?;
         if !transaction.still_owns_current() {
             return Err(DeliveryFailure::new(
                 DeliveryReasonCode::PasteFailed,
-                "发送失败：剪贴板已被其他应用更新",
+                pick("发送失败：剪贴板已被其他应用更新", "Send failed: clipboard was changed by another app"),
             ));
         }
         crate::input::synth::press_paste().map_err(|error| {
             DeliveryFailure::new(
                 DeliveryReasonCode::PasteFailed,
-                format!(
+                crate::tr_fmt!(
                     "发送失败：{}粘贴失败（{error}）",
+                    "Send failed: {} paste failed ({error})",
                     match kind {
-                        PayloadKind::Text => "文本",
-                        PayloadKind::Image => "图片",
+                        PayloadKind::Text => pick("文本", "text"),
+                        PayloadKind::Image => pick("图片", "image"),
                     }
                 ),
             )
@@ -955,7 +958,7 @@ impl DeliveryRuntime for NativeDeliveryRuntime {
         if !transaction.still_owns_current() {
             return Err(DeliveryFailure::new(
                 DeliveryReasonCode::PasteFailed,
-                "发送失败：粘贴期间剪贴板已被其他应用更新",
+                pick("发送失败：粘贴期间剪贴板已被其他应用更新", "Send failed: clipboard was changed by another app while pasting"),
             ));
         }
         Ok(())
@@ -965,7 +968,7 @@ impl DeliveryRuntime for NativeDeliveryRuntime {
         crate::input::synth::press_return().map_err(|error| {
             DeliveryFailure::new(
                 DeliveryReasonCode::EnterFailed,
-                format!("发送失败：回车失败（{error}）"),
+                crate::tr_fmt!("发送失败：回车失败（{error}）", "Send failed: Return key failed ({error})"),
             )
         })
     }

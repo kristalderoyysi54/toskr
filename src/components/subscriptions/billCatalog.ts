@@ -1,4 +1,5 @@
 import { BILL_CATALOG_GENERATED } from "@/components/subscriptions/billCatalog.generated";
+import type { MessageKey } from "@/lib/i18n";
 import type { BillCycle } from "@/store/notesStore";
 
 // ===== 预置服务目录（数据由 grok brand-icons 项目经脚本生成；本文件只放类型与标签）=====
@@ -26,7 +27,8 @@ export interface CatalogService {
   defaultCycle?: BillCycle;
 }
 
-export const CATALOG_CATEGORY_LABEL: Record<CatalogCategory, string> = {
+/** 类别展示名（中文 key，显示处 t()；"AI" 原样）。 */
+export const CATALOG_CATEGORY_LABEL: Record<CatalogCategory, MessageKey> = {
   entertainment: "娱乐",
   music: "音乐",
   productivity: "生产力",

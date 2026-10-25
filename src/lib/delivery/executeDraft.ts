@@ -13,6 +13,7 @@ import {
   type SendDeliveryResult,
   type TargetSnapshot,
 } from "@/lib/tauri";
+import { t, type MessageKey } from "@/lib/i18n";
 import { tip } from "@/lib/tip";
 import { isDataOperationLocked } from "@/store/dataOperationStore";
 import { doneIdsAfterSend, useNotesStore } from "@/store/notesStore";
@@ -90,7 +91,7 @@ async function restorePanelAfterDelivery(keepPanel: boolean) {
     try {
       await api.showPanel();
     } catch (error) {
-      tip("warn", `发送已中止，但面板恢复失败：${error}`);
+      tip("warn", t("发送已中止，但面板恢复失败：{error}", { error: String(error) }));
     }
   }
 }
@@ -311,7 +312,7 @@ function rejectStaleDraft(draft: DeliveryDraft): boolean {
   const issue = inspectDeliveryDraftFreshness(draft);
   if (!issue) return false;
   if (issue === "source" || issue === "selection") invalidateDeliveryDrafts();
-  const messages: Record<DeliveryDraftFreshnessIssue, [string, string]> = {
+  const messages: Record<DeliveryDraftFreshnessIssue, [MessageKey, string]> = {
     generation: [
       "发送已取消：数据上下文已变化，请重新选择内容",
       "send-generation-changed",
@@ -326,7 +327,7 @@ function rejectStaleDraft(draft: DeliveryDraft): boolean {
       reasonCode: messages[issue][1],
     })
   );
-  warnWithPanel(...messages[issue]);
+  warnWithPanel(t(messages[issue][0]), messages[issue][1]);
   return true;
 }
 
@@ -356,13 +357,13 @@ async function discardStaleResult(
     await restorePanelAfterDelivery(draft.keepPanel);
     return true;
   }
-  const messages: Record<DeliveryDraftFreshnessIssue, string> = {
+  const messages: Record<DeliveryDraftFreshnessIssue, MessageKey> = {
     generation: "粘贴按键已执行，但数据上下文已变化，未修改卡片状态",
     source: "粘贴按键已执行，但来源内容已变化，未修改卡片状态",
     selection: "粘贴按键已执行，但选择已变化，未修改卡片状态",
     revision: "粘贴按键已执行，但发送内容版本已变化，未修改卡片状态",
   };
-  tip("warn", messages[issue]);
+  tip("warn", t(messages[issue]));
   return true;
 }
 
@@ -372,7 +373,7 @@ function applySuccessfulDelivery(draft: DeliveryDraft): string[] {
   const state = useNotesStore.getState();
   const liveIds = new Set(state.notes.map((note) => note.id));
   if (draft.sourceItemIds.some((id) => !liveIds.has(id))) {
-    tip("warn", "粘贴按键已执行，但来源卡片已变化，未修改卡片状态");
+    tip("warn", t("粘贴按键已执行，但来源卡片已变化，未修改卡片状态"));
     return [];
   }
   const doneIds = doneIdsAfterSend(state, draft.sourceItemIds);
@@ -392,7 +393,7 @@ function applySuccessfulDelivery(draft: DeliveryDraft): string[] {
     ) {
       state.transitionOnboarding({ type: "deliverySent" });
     } else {
-      tip("warn", "演练粘贴按键已执行，但演练会话已变化，未改写上手进度");
+      tip("warn", t("演练粘贴按键已执行，但演练会话已变化，未改写上手进度"));
     }
     return doneIds;
   }
@@ -464,7 +465,7 @@ export function undoDeliveryBandCompletion() {
   if (deliveryBandTimer) clearTimeout(deliveryBandTimer);
   deliveryBandTimer = null;
   useUIStore.getState().setDeliveryBand(null);
-  tip("undone", `已恢复 ${ids.length} 张卡为未完成`);
+  tip("undone", t("已恢复 {n} 张卡为未完成", { n: ids.length }));
 }
 
 /** 所有外部发送唯一执行器；只消费不可变 Draft，不再自行拼装正文。 */
@@ -472,24 +473,24 @@ export async function executeDeliveryDraft(
   draft: DeliveryDraft
 ): Promise<SendDeliveryResult | null> {
   if (deliveryPending) {
-    return blockDelivery(draft, "已有发送正在进行，请稍候", "delivery-pending");
+    return blockDelivery(draft, t("已有发送正在进行，请稍候"), "delivery-pending");
   }
   if (draft.revision !== latestAllocatedRevision) {
-    return blockDelivery(draft, "发送已取消：发送内容已更新，请重试", "draft-stale");
+    return blockDelivery(draft, t("发送已取消：发送内容已更新，请重试"), "draft-stale");
   }
   if (isDataOperationLocked()) {
-    return blockDelivery(draft, "数据只读期间不能发送", "data-locked");
+    return blockDelivery(draft, t("数据只读期间不能发送"), "data-locked");
   }
   if (draft.warnings.includes("source-missing")) {
-    return blockDelivery(draft, "发送已取消：所选内容已变化", "draft-source-missing");
+    return blockDelivery(draft, t("发送已取消：所选内容已变化"), "draft-source-missing");
   }
   if (draft.warnings.includes("empty-payload")) {
-    return blockDelivery(draft, "发送已取消：没有可发送的内容", "draft-empty");
+    return blockDelivery(draft, t("发送已取消：没有可发送的内容"), "draft-empty");
   }
   if (useTargetStore.getState().profileOverrideNeedsConfirmation) {
     return blockDelivery(
       draft,
-      "原临时发送方案已暂停，请确认或恢复自动匹配",
+      t("原临时发送方案已暂停，请确认或恢复自动匹配"),
       "override-needs-confirmation"
     );
   }
@@ -503,17 +504,17 @@ export async function executeDeliveryDraft(
   // 场景另有 token 严格校验，真正下发也用刷新后的 refreshedTarget.token
   const currentTarget = useTargetStore.getState().snapshot;
   if (!currentTarget || !sameTargetIdentity(draft.targetSnapshot, currentTarget)) {
-    return blockDelivery(draft, "发送目标已变化，请确认后重试发送", "draft-target-changed");
+    return blockDelivery(draft, t("发送目标已变化，请确认后重试发送"), "draft-target-changed");
   }
   if (!sameDraftProfile(draft)) {
-    return blockDelivery(draft, "发送方案设置已变化，请确认后重试发送", "profile-policy-changed");
+    return blockDelivery(draft, t("发送方案设置已变化，请确认后重试发送"), "profile-policy-changed");
   }
   if (rejectStaleDraft(draft)) return null;
   const firewall = evaluateDeliveryDraftFirewall(draft);
   const imageFirewall = evaluateDeliveryDraftImages(draft);
   if (!firewall.canSend || !imageFirewall.canSend) {
     warnWithPanel(
-      `发送已取消：${firewall.reason ?? imageFirewall.reason ?? "隐私检查未完成"}`,
+      t("发送已取消：{reason}", { reason: firewall.reason ?? imageFirewall.reason ?? t("隐私检查未完成") }),
       "privacy_gate_blocked"
     );
     void recordDeliveryEvent(
@@ -543,12 +544,12 @@ export async function executeDeliveryDraft(
       !draft.enterDecisionConfirmed
     ) {
       const confirmed = await ask(
-        "当前发送方案的“粘贴后动作”需要确认：粘贴后立即按回车吗？",
-        { title: "确认粘贴后动作", kind: "warning" }
+        t("当前发送方案的“粘贴后动作”需要确认：粘贴后立即按回车吗？"),
+        { title: t("确认粘贴后动作"), kind: "warning" }
       );
       if (rejectStaleDraft(draft)) return null;
       if (!confirmed) {
-        tip("info", "已取消发送，内容和选择保持不变");
+        tip("info", t("已取消发送，内容和选择保持不变"));
         return null;
       }
       pressEnter = !enterClamped;
@@ -562,12 +563,12 @@ export async function executeDeliveryDraft(
       const message = refreshedTarget
         ? currentTargetBlockMessage()
         : useTargetStore.getState().status === "ready"
-          ? "发送目标刚刚发生变化，请重试发送"
+          ? t("发送目标刚刚发生变化，请重试发送")
           : currentTargetBlockMessage();
       return blockDelivery(draft, message, "target-refresh-blocked");
     }
     if (!sameTargetIdentity(draft.targetSnapshot, refreshedTarget)) {
-      return blockDelivery(draft, "发送目标已变化，请确认后重试发送", "target-identity-changed");
+      return blockDelivery(draft, t("发送目标已变化，请确认后重试发送"), "target-identity-changed");
     }
     if (
       preserveConfirmedToken &&
@@ -575,19 +576,19 @@ export async function executeDeliveryDraft(
     ) {
       return blockDelivery(
         draft,
-        "发送目标凭据已变化，请重新确认原文发送",
+        t("发送目标凭据已变化，请重新确认原文发送"),
         "privacy-confirmation-stale"
       );
     }
     if (useTargetStore.getState().profileOverrideNeedsConfirmation) {
       return blockDelivery(
         draft,
-        "原临时发送方案已暂停，请确认或恢复自动匹配",
+        t("原临时发送方案已暂停，请确认或恢复自动匹配"),
         "override-needs-confirmation"
       );
     }
     if (!sameDraftProfile(draft)) {
-      return blockDelivery(draft, "发送方案设置已变化，请确认后重试发送", "profile-policy-changed");
+      return blockDelivery(draft, t("发送方案设置已变化，请确认后重试发送"), "profile-policy-changed");
     }
     if (rejectStaleDraft(draft)) return null;
 
@@ -622,7 +623,7 @@ export async function executeDeliveryDraft(
       deliveryId: draft.id,
     });
     if (!isSendDeliveryResult(result) || result.deliveryId !== draft.id) {
-      throw new Error("原生发送回执无效");
+      throw new Error(t("原生发送回执无效"));
     }
     recordDeliveryResult(draft, result);
     if (result.status !== "sent") settleDeliveryBand("failed");
@@ -668,7 +669,7 @@ export async function executeDeliveryDraft(
   } catch (error) {
     settleDeliveryBand("failed");
     await restorePanelAfterDelivery(draft.keepPanel);
-    tip("warn", `发送失败：${error}`);
+    tip("warn", t("发送失败：{error}", { error: String(error) }));
     // 只有进入 Native IPC 后的异常才属于“结果不确定”。调用前的失败没有
     // 粘贴副作用，仍返回 null，让预检保留可编辑、可重试状态。
     if (!nativeDispatchTarget) {
@@ -685,7 +686,7 @@ export async function executeDeliveryDraft(
       deliveryId: draft.id,
       status: "failed",
       reasonCode: "internal_error",
-      message: "发送结果不确定，请先核对目标内容",
+      message: t("发送结果不确定，请先核对目标内容"),
       receiptLevel: "unknown",
       target: nativeDispatchTarget,
       pasteCompleted: false,

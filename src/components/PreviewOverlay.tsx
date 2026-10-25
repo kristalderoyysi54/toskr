@@ -35,6 +35,7 @@ import {
   normalizeNoteContentBlocks,
   type NoteContentBlock,
 } from "@/lib/noteContentBlocks";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { stats } from "@/lib/textStats";
 import { headerGradient } from "@/components/NoteCard";
@@ -66,6 +67,7 @@ const MODAL_MARGIN = 12;
  * 完整内容 + 字符统计 + 编辑/复制/发送/删除；↑↓ 切换卡片、Esc/Space 关闭。
  */
 export function PreviewOverlay() {
+  const t = useT();
   const previewId = useUIStore((s) => s.previewId);
   const editing = useUIStore((s) => s.previewEditing);
   const profileChanged = useTargetStore((s) => s.profileOverrideNeedsConfirmation);
@@ -228,7 +230,7 @@ export function PreviewOverlay() {
   const remove = () => {
     if (!note) return;
     useUIStore.getState().closePreview();
-    deleteNotesWithUndo([note.id], "已删除 1 条");
+    deleteNotesWithUndo([note.id], t("已删除 {n} 条", { n: 1 }));
   };
 
   /** 从组合卡里移除一张图（可撤销）；移到最后一张连卡片一起没了就关预览层。 */
@@ -236,7 +238,7 @@ export function PreviewOverlay() {
     if (!note) return;
     const { noteDeleted } = useNotesStore.getState().removeNoteImage(note.id, file);
     if (noteDeleted) useUIStore.getState().closePreview();
-    undoableTip(noteDeleted ? "已删除 1 条" : "已移除图片");
+    undoableTip(noteDeleted ? t("已删除 {n} 条", { n: 1 }) : t("已移除图片"));
   };
 
   const s = note ? stats(note.text) : null;
@@ -334,21 +336,21 @@ export function PreviewOverlay() {
                 <p id="preview-title" className="truncate text-body font-semibold text-white">
                   {isImage
                     ? images.length > 1
-                      ? `图片 ×${images.length}`
-                      : "图片"
+                      ? t("图片 ×{n}", { n: images.length })
+                      : t("图片")
                     : isLink
-                      ? "链接"
+                      ? t("链接")
                       : note.codeLang
                         ? langLabel(note.codeLang)
-                        : "文本"}
+                        : t("文本")}
                 </p>
                 <p className="truncate text-micro text-white/70">
-                  {note.sourceApp ? `来自 ${note.sourceApp}` : "笔记"}
+                  {note.sourceApp ? t("来自 {app}", { app: note.sourceApp }) : t("笔记")}
                 </p>
               </div>
               {icon && <img src={icon.url} alt="" className="size-6 rounded-[5px]" />}
               <button
-                aria-label="关闭"
+                aria-label={t("关闭")}
                 onClick={() => useUIStore.getState().closePreview()}
                 className="rounded-sm p-1 text-white/70 hover:text-white"
               >
@@ -376,8 +378,8 @@ export function PreviewOverlay() {
                       animate={{ opacity: 1, scale: 1 }}
                       transition={springModal}
                       src={imageUrl}
-                      alt="捕获的图片"
-                      title="点击原尺寸预览"
+                      alt={t("捕获的图片")}
+                      title={t("点击原尺寸预览")}
                       onClick={() =>
                         note.imageFile &&
                         void api.quickLook(images, 0, {
@@ -389,7 +391,7 @@ export function PreviewOverlay() {
                       className="max-h-full max-w-full cursor-zoom-in object-contain"
                     />
                   ) : (
-                    <span className="text-body text-muted-foreground">加载中…</span>
+                    <span className="text-body text-muted-foreground">{t("加载中…")}</span>
                   )}
                 </div>
               ) : activeEditing && mixedContent && note.contentBlocks ? (
@@ -470,15 +472,15 @@ export function PreviewOverlay() {
             <footer className="flex items-center gap-1 border-t border-black/5 px-3 py-2 dark:border-white/5">
               <span className="text-micro tabular-nums text-muted-foreground">
                 {isImage
-                  ? `图片 ${note.imageW ?? "?"} × ${note.imageH ?? "?"}`
+                  ? t("图片 {w} × {h}", { w: note.imageW ?? "?", h: note.imageH ?? "?" })
                   : s
-                    ? `${s.chars} 字符 · ${s.words} 词 · ${s.lines} 行`
+                    ? t("{chars} 字符 · {words} 词 · {lines} 行", { chars: s.chars, words: s.words, lines: s.lines })
                     : ""}
               </span>
               <div className="ml-auto flex items-center gap-1">
                 {activeEditing ? (
                   <Button size="xs" onClick={save}>
-                    <Check className="size-3" /> 保存
+                    <Check className="size-3" /> {t("保存")}
                     {/* token-exception: 9px 为重塑前原始尺寸，用户指定还原 */}
                     <Kbd inline className="text-[9px]">⌘⏎</Kbd>
                   </Button>
@@ -489,17 +491,17 @@ export function PreviewOverlay() {
                         onClick={() => setMdView(!mdView)}
                         className="rounded-md px-1.5 py-0.5 text-micro text-muted-foreground outline-none hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background dark:hover:bg-white/10"
                       >
-                        {mdView ? "原文" : "渲染"}
+                        {mdView ? t("原文") : t("渲染")}
                       </button>
                     )}
                     {isLink && (
-                      <IconButton label="打开链接" onClick={() => void api.openUrl(note.url!)}>
+                      <IconButton label={t("打开链接")} onClick={() => void api.openUrl(note.url!)}>
                         <ExternalLink className="size-3.5" />
                       </IconButton>
                     )}
                     {!isImage && (
                       <IconButton
-                        label={mixedContent ? "编辑图文" : "编辑"}
+                        label={mixedContent ? t("编辑图文") : t("编辑")}
                         onClick={() => useUIStore.getState().setPreviewEditing(true)}
                       >
                         <Pencil className="size-3.5" />
@@ -511,10 +513,10 @@ export function PreviewOverlay() {
                         onPick={(sectionId) => moveClipsToNotesWithUndo([note.id], sectionId)}
                       />
                     )}
-                    <IconButton label="复制" onClick={copy}>
+                    <IconButton label={t("复制")} onClick={copy}>
                       <Copy className="size-3.5" />
                     </IconButton>
-                    <IconButton label="删除" onClick={remove}>
+                    <IconButton label={t("删除")} onClick={remove}>
                       <Trash2 className="size-3.5" />
                     </IconButton>
                     <Button
@@ -522,12 +524,12 @@ export function PreviewOverlay() {
                       disabled={!canSend}
                       aria-label={
                         targetReady
-                          ? "发送到当前目标"
+                          ? t("发送到当前目标")
                           : internalSendAvailable
-                            ? "优先添加到当前卡片编辑器"
+                            ? t("优先添加到当前卡片编辑器")
                           : profileChanged
-                            ? "发送不可用：原临时发送方案已暂停"
-                            : "发送不可用：发送目标未就绪"
+                            ? t("发送不可用：原临时发送方案已暂停")
+                            : t("发送不可用：发送目标未就绪")
                       }
                       onClick={() => {
                         useUIStore.getState().closePreview();
@@ -535,7 +537,7 @@ export function PreviewOverlay() {
                       }}
                     >
                       <Send className="size-3" />
-                      {internalSendAvailable ? "发送 / 添加" : "发送"}
+                      {internalSendAvailable ? t("发送 / 添加") : t("发送")}
                     </Button>
                   </>
                 )}
@@ -561,13 +563,14 @@ function PreviewThumb({
   previewSource?: ImagePreviewSource;
   onRemove: () => void;
 }) {
+  const t = useT();
   const url = useNoteThumb(files[index]);
   return (
     <div className="group relative">
       <button
         type="button"
-        aria-label={`原尺寸预览第 ${index + 1} 张图片`}
-        title="点击原尺寸预览"
+        aria-label={t("原尺寸预览第 {n} 张图片", { n: index + 1 })}
+        title={t("点击原尺寸预览")}
         onClick={() =>
           void api.quickLook(files, Math.max(0, index), previewSource)
         }
@@ -576,11 +579,11 @@ function PreviewThumb({
         {url ? (
           <img src={url} alt="" className="max-h-40 max-w-full object-contain" />
         ) : (
-          <span className="p-4 text-label text-muted-foreground">加载中…</span>
+          <span className="p-4 text-label text-muted-foreground">{t("加载中…")}</span>
         )}
       </button>
       <IconButton
-        label="从卡片移除这张图片"
+        label={t("从卡片移除这张图片")}
         withTitle
         onClick={(e) => {
           e.stopPropagation();

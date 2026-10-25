@@ -17,7 +17,7 @@ function editorCode() {
       declarations.set(node.name.getText(source), `const ${node.getText(source)};`);
     }
     if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(source) === "input" &&
-      node.attributes.properties.some((attr) => ts.isJsxAttribute(attr) && attr.name.getText(source) === "aria-label" && attr.initializer?.getText(source) === '"笔记标题"')) {
+      node.attributes.properties.some((attr) => ts.isJsxAttribute(attr) && attr.name.getText(source) === "aria-label" && attr.initializer?.getText(source) === '{t("笔记标题")}')) {
       for (const attr of node.attributes.properties) {
         if (ts.isJsxAttribute(attr) && attr.initializer && ts.isJsxExpression(attr.initializer) && attr.initializer.expression) {
           handlers.set(attr.name.getText(source), attr.initializer.expression.getText(source));

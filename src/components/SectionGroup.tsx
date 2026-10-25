@@ -31,6 +31,7 @@ import { openNoteDetail } from "@/lib/actions";
 import { focusNoteDraftInput } from "@/lib/noteDraftFocus";
 import { useStickyHeader } from "@/lib/stickyHeader";
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n";
 import {
   INBOX_ID,
   SECTION_COLORS,
@@ -39,6 +40,7 @@ import {
   type Section,
 } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
+import { sectionName } from "@/lib/i18n/builtinNames";
 
 export function SectionGroup({
   section,
@@ -54,6 +56,7 @@ export function SectionGroup({
   /** 当前页首个分组首帧直出少量卡片，其余由共享视窗观察器挂载。 */
   eager?: boolean;
 }) {
+  const t = useT();
   const {
     setChecked,
     renameSection,
@@ -68,7 +71,7 @@ export function SectionGroup({
   const doneOpen = useUIStore((s) => s.doneOpen[section.id] ?? false);
 
   const [renaming, setRenaming] = useState(false);
-  const [name, setName] = useState(section.name);
+  const [name, setName] = useState(sectionName(section));
   // 单击组名折叠 / 双击改名：延迟消歧，双击时取消未执行的折叠
   const clickTimer = useRef(0);
 
@@ -111,7 +114,7 @@ export function SectionGroup({
     // 不适合写长内容。失败（数据只读等）时退回聚焦底部输入条的旧行为
     const { result, id } = useNotesStore
       .getState()
-      .addNote("新笔记", { sectionId: section.id });
+      .addNote(t("新笔记"), { sectionId: section.id });
     if (id && (result === "added" || result === "duplicate")) {
       openNoteDetail(id, true, true);
     } else {
@@ -121,7 +124,7 @@ export function SectionGroup({
 
   const commitRename = () => {
     setRenaming(false);
-    renameSection(section.id, name);
+    if (name !== sectionName(section)) renameSection(section.id, name);
   };
 
   return (
@@ -142,7 +145,7 @@ export function SectionGroup({
         className="group sticky top-0 z-10 mb-1.5 flex h-5 items-center gap-1 pl-0.5 pr-1"
       >
         <IconButton
-          label={collapsed ? "展开分组" : "折叠分组"}
+          label={collapsed ? t("展开分组") : t("折叠分组")}
           aria-expanded={!collapsed}
           size="2xs"
           onClick={() => toggleSectionCollapsed(section.id)}
@@ -166,7 +169,7 @@ export function SectionGroup({
               e.stopPropagation();
               if (e.key === "Enter" && !e.nativeEvent.isComposing) commitRename();
               if (e.key === "Escape") {
-                setName(section.name);
+                setName(sectionName(section));
                 setRenaming(false);
               }
             }}
@@ -176,7 +179,7 @@ export function SectionGroup({
           <h3
             {...attributes}
             {...listeners}
-            title={`${section.name} · 拖动调整分组顺序 · 点击折叠/展开（吸顶时回到组首） · 双击重命名`}
+            title={t("{name} · 拖动调整分组顺序 · 点击折叠/展开（吸顶时回到组首） · 双击重命名", { name: sectionName(section) })}
             className="min-w-0 cursor-grab select-none touch-none truncate text-label font-semibold uppercase tracking-[0.08em] text-muted-foreground hover:text-foreground active:cursor-grabbing"
             onClick={() => {
               window.clearTimeout(clickTimer.current);
@@ -186,24 +189,24 @@ export function SectionGroup({
             }}
             onDoubleClick={() => {
               window.clearTimeout(clickTimer.current);
-              setName(section.name);
+              setName(sectionName(section));
               setRenaming(true);
             }}
           >
-            {section.name}
+            {sectionName(section)}
           </h3>
         )}
         {section.keepAfterSend && (
           <Star
             className="size-2.5 shrink-0 fill-current text-muted-foreground"
-            aria-label="发送后保留"
+            aria-label={t("发送后保留")}
           />
         )}
         <span className="shrink-0 text-micro tabular-nums text-muted-foreground">{total}</span>
 
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
           <IconButton
-            label={`在「${section.name}」中添加内容`}
+            label={t("在「{name}」中添加内容", { name: sectionName(section) })}
             size="2xs"
             reveal="hover-focus"
             onClick={addContent}
@@ -215,7 +218,7 @@ export function SectionGroup({
             align="end"
             trigger={({ open, toggle }) => (
               <IconButton
-                label="分组操作"
+                label={t("分组操作")}
                 size="2xs"
                 reveal="hover-focus"
                 onClick={toggle}
@@ -234,22 +237,22 @@ export function SectionGroup({
                     checkAll();
                   }}
                 >
-                  <CheckSquare className="size-3.5" /> 全选此组
+                  <CheckSquare className="size-3.5" /> {t("全选此组")}
                 </SimpleMenuItem>
                 <SimpleMenuItem
                   onClick={() => {
                     close();
-                    setName(section.name);
+                    setName(sectionName(section));
                     setRenaming(true);
                   }}
                 >
-                  <Pencil className="size-3.5" /> 重命名
+                  <Pencil className="size-3.5" /> {t("重命名")}
                 </SimpleMenuItem>
                 <div className="flex flex-wrap items-center gap-1.5 px-2 py-1.5">
                   {SECTION_COLORS.map((c) => (
                     <button
                       key={c}
-                      aria-label="设置分组色"
+                      aria-label={t("设置分组色")}
                       onClick={() => {
                         setSectionColor(section.id, c);
                         close();
@@ -259,7 +262,7 @@ export function SectionGroup({
                     />
                   ))}
                   <button
-                    aria-label="清除颜色"
+                    aria-label={t("清除颜色")}
                     onClick={() => {
                       setSectionColor(section.id, undefined);
                       close();
@@ -269,7 +272,7 @@ export function SectionGroup({
                 </div>
                 <SimpleMenuSeparator />
                 <SimpleMenuItem
-                  title="组内卡片发送后不标记完成，适合 Prompt 库等长期复用内容"
+                  title={t("组内卡片发送后不标记完成，适合 Prompt 库等长期复用内容")}
                   onClick={() => {
                     close();
                     toggleSectionKeep(section.id);
@@ -281,7 +284,7 @@ export function SectionGroup({
                       section.keepAfterSend && "fill-current"
                     )}
                   />{" "}
-                  {section.keepAfterSend ? "取消发送后保留" : "发送后保留"}
+                  {section.keepAfterSend ? t("取消发送后保留") : t("发送后保留")}
                 </SimpleMenuItem>
                 <SimpleMenuSeparator />
                 <SimpleMenuItem
@@ -290,7 +293,7 @@ export function SectionGroup({
                     moveSection(section.id, -1);
                   }}
                 >
-                  <ArrowUp className="size-3.5" /> 上移
+                  <ArrowUp className="size-3.5" /> {t("上移")}
                 </SimpleMenuItem>
                 <SimpleMenuItem
                   onClick={() => {
@@ -298,7 +301,7 @@ export function SectionGroup({
                     moveSection(section.id, 1);
                   }}
                 >
-                  <ArrowDown className="size-3.5" /> 下移
+                  <ArrowDown className="size-3.5" /> {t("下移")}
                 </SimpleMenuItem>
                 {section.id !== INBOX_ID && (
                   <>
@@ -310,7 +313,7 @@ export function SectionGroup({
                         deleteSection(section.id);
                       }}
                     >
-                      <Trash2 className="size-3.5" /> 删除分组
+                      <Trash2 className="size-3.5" /> {t("删除分组")}
                     </SimpleMenuItem>
                   </>
                 )}
@@ -327,7 +330,7 @@ export function SectionGroup({
           strategy={verticalListSortingStrategy}
         >
           {activeNotes.length === 0 && doneNotes.length === 0 ? (
-            <EmptyState variant="inline" title="此分组为空" />
+            <EmptyState variant="inline" title={t("此分组为空")} />
           ) : (
             <div className="flex flex-col gap-1">
               {activeNotes.map((note, index) => (
@@ -352,7 +355,7 @@ export function SectionGroup({
                     ) : (
                       <ChevronRight className="size-2.5" />
                     )}
-                    已完成 {doneNotes.length}
+                    {t("已完成 {n}", { n: doneNotes.length })}
                   </button>
                   {doneOpen &&
                     doneNotes.map((note) => (

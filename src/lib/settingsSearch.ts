@@ -1,3 +1,5 @@
+import { t, type MessageKey } from "@/lib/i18n";
+
 export type SettingsSectionId =
   | "general"
   | "hotkey"
@@ -25,15 +27,16 @@ type SettingsSearchGate = keyof SettingsSearchGates;
 export type SettingsSearchEntry = {
   id: string;
   section: SettingsSectionId;
-  title: string;
+  /** 中文原文即 key；显示与英文检索时经 t() 翻译。 */
+  title: MessageKey;
   keywords?: readonly string[];
   /** 点击结果后优先滚动到的 Row / Group / SectionTitle 文案。 */
-  target?: string;
+  target?: MessageKey;
   requires?: SettingsSearchGate;
 };
 
 /** 子页签名称；与一级分类同名的子页改用更短的名字，避免页标题与页签重复。 */
-export const SETTINGS_SECTION_LABELS: Record<SettingsSectionId, string> = {
+export const SETTINGS_SECTION_LABELS: Record<SettingsSectionId, MessageKey> = {
   general: "通用",
   hotkey: "快捷键",
   clip: "剪贴板",
@@ -55,7 +58,7 @@ export const SETTINGS_PRIMARY_SECTIONS = [
 ] as const satisfies readonly SettingsSectionId[];
 export type SettingsPrimarySection = (typeof SETTINGS_PRIMARY_SECTIONS)[number];
 
-export const SETTINGS_PRIMARY_LABELS: Record<SettingsPrimarySection, string> = {
+export const SETTINGS_PRIMARY_LABELS: Record<SettingsPrimarySection, MessageKey> = {
   general: "窗口与外观",
   hotkey: "快捷键",
   clip: "剪贴板",
@@ -111,7 +114,7 @@ const PLATINUM_HIDDEN_ENTRIES: readonly string[] = ["theme", "vibrancy", "vibran
 export function settingsSearchLocation(
   entry: Pick<SettingsSearchEntry, "id" | "title" | "target">,
   colorScheme: string
-): { id: string; value: string } {
+): { id: string; value: MessageKey } {
   if (colorScheme === "platinum" && PLATINUM_HIDDEN_ENTRIES.includes(entry.id)) {
     return { id: "color-scheme", value: "配色方案" };
   }
@@ -136,7 +139,7 @@ const SETTINGS_SECTION_ALIASES: Partial<Record<SettingsSectionId, readonly strin
 const entry = (
   section: SettingsSectionId,
   id: string,
-  title: string,
+  title: MessageKey,
   keywords: readonly string[] = [],
   options: Pick<SettingsSearchEntry, "target" | "requires"> = {}
 ): SettingsSearchEntry => ({ section, id, title, keywords, ...options });
@@ -149,6 +152,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   entry("general", "general", "窗口与外观", ["通用", "偏好", "设置"]),
   entry("outcome", "tour", "新手导览", ["教程", "首次启动", "重看", "welcome", "tour"]),
   entry("general", "general-details", "更多外观与行为", ["外观细节", "菜单自定义", "透明度"]),
+  entry("general", "language", "语言", ["Language", "English", "中文", "简体中文", "界面语言", "多语言"]),
   entry("general", "theme", "主题", ["外观", "浅色", "深色", "跟随系统", "theme"]),
   entry("general", "color-scheme", "配色方案", ["皮肤", "Platinum", "Mac OS 9", "复古", "经典", "theme"]),
   entry("general", "platinum-highlight", "高亮颜色", ["Platinum", "薰衣草", "选中色", "强调色"], { target: "配色方案" }),
@@ -313,26 +317,28 @@ export function searchSettings(
   return SETTINGS_SEARCH_ENTRIES
     .map((item, index) => {
       if (item.requires && !gates[item.requires]) return null;
-      const title = normalizeSettingsSearchText(item.title);
-      const section = normalizeSettingsSearchText(SETTINGS_SECTION_LABELS[item.section]);
+      // 中文原文与当前界面译文都参与匹配（中文界面下两者相同）
+      const both = (key: MessageKey) => [key, t(key)].map(normalizeSettingsSearchText);
+      const titles = both(item.title);
+      const sections = both(SETTINGS_SECTION_LABELS[item.section]);
       const keywords = [
         ...(item.keywords ?? []),
         ...(SETTINGS_SECTION_ALIASES[item.section] ?? []),
       ].map(normalizeSettingsSearchText);
-      const primary = normalizeSettingsSearchText(SETTINGS_PRIMARY_LABELS[settingsPrimarySection(item.section)]);
-      const fields = [title, section, primary, ...keywords];
+      const primaries = both(SETTINGS_PRIMARY_LABELS[settingsPrimarySection(item.section)]);
+      const fields = [...titles, ...sections, ...primaries, ...keywords];
       if (!tokens.every((token) => fields.some((field) => field.includes(token)))) {
         return null;
       }
-      const score = title === normalizedQuery
+      const score = titles.some((title) => title === normalizedQuery)
         ? 0
-        : title.startsWith(normalizedQuery)
+        : titles.some((title) => title.startsWith(normalizedQuery))
           ? 1
-          : title.includes(normalizedQuery)
+          : titles.some((title) => title.includes(normalizedQuery))
             ? 2
-            : section === normalizedQuery
+            : sections.some((section) => section === normalizedQuery)
               ? 3
-              : section.includes(normalizedQuery)
+              : sections.some((section) => section.includes(normalizedQuery))
                 ? 4
                 : keywords.some((keyword) => keyword === normalizedQuery)
                   ? 5

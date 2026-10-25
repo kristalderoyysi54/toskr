@@ -9,6 +9,7 @@ import {
   scanOpenDeliveryDraft,
   type ScanSensitiveText,
 } from "@/lib/delivery/firewallController";
+import { getLocale, t, type MessageKey } from "@/lib/i18n";
 import { useDeliveryStore } from "@/store/deliveryStore";
 import { cleanupDeliveryDraftImages } from "@/lib/delivery/imageFirewall";
 
@@ -20,9 +21,12 @@ export type TransformRecipeId =
 
 export interface TransformRecipe {
   id: TransformRecipeId;
-  label: string;
-  description: string;
+  /** 中文 key，显示处 t(recipe.label)。 */
+  label: MessageKey;
+  description: MessageKey;
   systemPrompt: string;
+  /** 英文界面下使用；输出结构与中文版一致。 */
+  systemPromptEn: string;
   outputMode: "text" | "json";
   maxTokens: number;
 }
@@ -34,6 +38,8 @@ export const TRANSFORM_RECIPES: readonly TransformRecipe[] = [
     description: "压缩为清晰、忠于原文的要点，不补造事实。",
     systemPrompt:
       "请把用户文本总结为简洁 Markdown 要点。忠于原文，不补造事实，不输出解释或代码围栏。",
+    systemPromptEn:
+      "Summarize the user's text as concise Markdown bullet points. Stay faithful to the original, do not invent facts, and output no explanations or code fences.",
     outputMode: "text",
     maxTokens: 900,
   },
@@ -43,6 +49,8 @@ export const TRANSFORM_RECIPES: readonly TransformRecipe[] = [
     description: "提取可执行事项、负责人和期限；缺失信息明确标注。",
     systemPrompt:
       "从用户文本中提取可执行行动项，用 Markdown 清单输出。不得猜测负责人或期限；缺失时写“未指定”。不要输出额外解释。",
+    systemPromptEn:
+      "Extract actionable items from the user's text as a Markdown checklist. Do not guess owners or deadlines; write \"Unspecified\" when missing. Output no extra explanation.",
     outputMode: "text",
     maxTokens: 1_000,
   },
@@ -52,6 +60,8 @@ export const TRANSFORM_RECIPES: readonly TransformRecipe[] = [
     description: "在不改变意图的前提下补齐目标、约束和输出要求。",
     systemPrompt:
       "把用户文本优化成可直接交给 AI 的高质量 Prompt，保留全部原始约束，不虚构背景。只输出优化后的 Prompt。",
+    systemPromptEn:
+      "Rewrite the user's text into a high-quality prompt ready to give to an AI. Keep every original constraint and do not invent background. Output only the improved prompt.",
     outputMode: "text",
     maxTokens: 1_200,
   },
@@ -61,6 +71,8 @@ export const TRANSFORM_RECIPES: readonly TransformRecipe[] = [
     description: "整理目标、范围、约束、验收与待确认问题。",
     systemPrompt:
       '把用户需求整理为 JSON 对象，只输出合法 JSON：{"goal":string,"scope":string[],"constraints":string[],"acceptance":string[],"openQuestions":string[]}。不得增加其他字段；字符串必须非空且不超过 4000 字符，数组最多 50 项，无内容时用空数组。不得补造事实。',
+    systemPromptEn:
+      'Organize the user\'s requirements into a JSON object and output only valid JSON: {"goal":string,"scope":string[],"constraints":string[],"acceptance":string[],"openQuestions":string[]}. Add no other fields; strings must be non-empty and at most 4000 characters, arrays at most 50 items, and use an empty array when there is nothing. Do not invent facts.',
     outputMode: "json",
     maxTokens: 1_200,
   },
@@ -146,12 +158,17 @@ export function summarizeTransformChange(before: string, after: string): string 
   const added = afterChars.length - prefix - suffix;
   const beforeLines = before ? before.split("\n").length : 0;
   const afterLines = after ? after.split("\n").length : 0;
-  return `替换 ${removed} 字符，新增 ${added} 字符 · ${beforeLines}→${afterLines} 行`;
+  return t("替换 {removed} 字符，新增 {added} 字符 · {before}→{after} 行", {
+    removed,
+    added,
+    before: beforeLines,
+    after: afterLines,
+  });
 }
 
 function normalizeResult(recipe: TransformRecipe, raw: string): string {
   let text = raw.trim();
-  if (!text) throw new AiError("parse", "AI 返回内容为空");
+  if (!text) throw new AiError("parse", t("AI 返回内容为空"));
   if (recipe.outputMode === "text") return text;
   const fence = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
   if (fence) text = fence[1].trim();
@@ -159,10 +176,10 @@ function normalizeResult(recipe: TransformRecipe, raw: string): string {
   try {
     parsed = JSON.parse(text);
   } catch {
-    throw new AiError("parse", "AI 返回内容不是合法 JSON");
+    throw new AiError("parse", t("AI 返回内容不是合法 JSON"));
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new AiError("parse", "AI 返回结构不符合要求");
+    throw new AiError("parse", t("AI 返回结构不符合要求"));
   }
   const fields = parsed as Record<string, unknown>;
   // 固定配方的业务约束；拒绝错误内容，不能静默截断用户的约束或验收条件。
@@ -175,7 +192,7 @@ function normalizeResult(recipe: TransformRecipe, raw: string): string {
   }) || Object.keys(fields).some((field) =>
     field !== "goal" && !arrayFields.some((expected) => field === expected)
   )) {
-    throw new AiError("parse", "AI 返回结构不符合要求");
+    throw new AiError("parse", t("AI 返回结构不符合要求"));
   }
   return JSON.stringify(parsed, null, 2);
 }
@@ -220,7 +237,7 @@ export async function runOpenDraftTransform(
 
   const firewall = evaluateDeliveryDraftFirewall(draft);
   if (!draft.firewallEnabled || draft.firewallStatus !== "ready" || !firewall.canSend) {
-    state.setTransformError("请先完成并处理本地隐私检查，再发送文本给 AI");
+    state.setTransformError(t("请先完成并处理本地隐私检查，再发送文本给 AI"));
     return null;
   }
 
@@ -229,7 +246,7 @@ export async function runOpenDraftTransform(
   const startRequest = options.startRequest ?? startAiRequest;
   const handle = startRequest({
     purpose: recipe.id,
-    system: recipe.systemPrompt,
+    system: getLocale() === "en" ? recipe.systemPromptEn : recipe.systemPrompt,
     user: draft.finalText,
     maxTokens: recipe.maxTokens,
   });

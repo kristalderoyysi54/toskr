@@ -5,6 +5,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { FrontendReady } from "./components/FrontendReady";
 import { WindowErrorBoundary } from "./components/WindowErrorBoundary";
 import { installColorScheme } from "./lib/colorScheme";
+import { applyLocale, installLocale, localeFromLanguageTag, readCachedLocale } from "./lib/i18n";
 import { installExternalLinkInterceptor } from "./lib/externalLinks";
 import "./index.css";
 
@@ -65,6 +66,18 @@ if (import.meta.env.DEV) {
 }
 
 installColorScheme();
+installLocale();
+
+/** 首次启动尚无语言缓存：先向 Rust 取系统语言再渲染，免得英文系统闪一帧中文。 */
+async function primeLocale() {
+  if (readCachedLocale()) return;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    applyLocale(localeFromLanguageTag(await invoke<string | null>("system_locale")));
+  } catch {
+    /* 浏览器诊断环境：保持默认中文 */
+  }
+}
 
 // 同一前端按窗口 label 分流：main → 面板；hud → 提示气泡；settings → 设置窗口
 // （临时诊断：纯浏览器环境无 Tauri 上下文时回退 main，便于 DOM 排查）
@@ -135,7 +148,7 @@ if (import.meta.env.DEV && new URLSearchParams(location.search).has("styletile")
     );
   });
 } else {
-  ReactDOM.createRoot(document.getElementById("root")!).render(
+  void primeLocale().then(() => ReactDOM.createRoot(document.getElementById("root")!).render(
     <React.StrictMode>
       <WindowErrorBoundary onFailure={reportFrontendReady}>
         <React.Suspense fallback={null}>
@@ -144,5 +157,5 @@ if (import.meta.env.DEV && new URLSearchParams(location.search).has("styletile")
         </React.Suspense>
       </WindowErrorBoundary>
     </React.StrictMode>
-  );
+  ));
 }

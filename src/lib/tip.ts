@@ -1,3 +1,4 @@
+import { t } from "@/lib/i18n";
 import { api, type HudKind } from "@/lib/tauri";
 import { useUIStore } from "@/store/uiStore";
 
@@ -44,5 +45,5 @@ export function runPendingUndo() {
   const fn = pendingUndo;
   pendingUndo = null;
   if (fn) fn();
-  else tip("undone", "没有可撤销的操作");
+  else tip("undone", t("没有可撤销的操作"));
 }

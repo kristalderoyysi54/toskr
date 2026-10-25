@@ -29,6 +29,7 @@ import {
   SETTINGS_SECTION,
 } from "@/lib/settingsSync";
 import { tip } from "@/lib/tip";
+import { t, useT } from "@/lib/i18n";
 import {
   canPermanentlyAssignTargetProfileOverride,
   DELIVERY_FORMAT_LABEL,
@@ -70,6 +71,7 @@ import {
   type TargetStatus,
 } from "@/store/targetStore";
 import type { AppIconInfo } from "@/lib/icons";
+import { profileName, promptGroupName } from "@/lib/i18n/builtinNames";
 
 export interface TargetLensViewProps {
   snapshot: TargetSnapshot | null;
@@ -113,7 +115,7 @@ function toQuickProfile(
     name: profile.name,
     promptGroupId: profile.promptGroupId,
     promptGroupName:
-      groups.find((group) => group.id === profile.promptGroupId)?.name ?? "通用",
+      groups.find((group) => group.id === profile.promptGroupId)?.name ?? t("通用"),
     defaultFormat: profile.defaultFormat,
     defaultMarkdownMode: profile.defaultMarkdownMode,
     enterPolicy: profile.enterPolicy,
@@ -129,24 +131,26 @@ function targetMatchReason(input: {
   profileName: string;
   overrideNeedsConfirmation: boolean;
 }): string {
-  if (input.status === "unknown") return "尚未识别发送目标，发送已锁定";
-  if (input.status === "refreshing") return "正在重新确认目标与发送方案";
+  if (input.status === "unknown") return t("尚未识别发送目标，发送已锁定");
+  if (input.status === "refreshing") return t("正在重新确认目标与发送方案");
   if (input.status === "blocked") {
     const reason = targetReasonLabel(input.reason);
-    return `目标应用已失效：${isRecoverableTargetReason(input.reason) ? reason.split("，")[0] : reason}`;
+    return t("目标应用已失效：{reason}", {
+      reason: isRecoverableTargetReason(input.reason) ? reason.split(/[，,]/)[0] : reason,
+    });
   }
   if (input.overrideNeedsConfirmation) {
-    return "原临时发送方案已暂停，当前已按目标重新选择";
+    return t("原临时发送方案已暂停，当前已按目标重新选择");
   }
   switch (input.source) {
     case "temporary":
-      return "仅本次手动选择";
+      return t("仅本次手动选择");
     case "conflict":
-      return `存在重复应用绑定，当前稳定使用 ${input.profileName}`;
+      return t("存在重复应用绑定，当前稳定使用 {profile}", { profile: input.profileName });
     case "exact":
-      return `已为 ${input.appName} 指定`;
+      return t("已为 {app} 指定", { app: input.appName });
     default:
-      return "未匹配具体应用，使用默认方案";
+      return t("未匹配具体应用，使用默认方案");
   }
 }
 
@@ -182,22 +186,23 @@ export function TargetLensView({
   onOpenActivity,
   activityButtonRef,
 }: TargetLensViewProps) {
+  const t = useT();
   const detailsId = useId();
   const [disclosureState, dispatchDisclosure] = useReducer(
     targetLensDisclosureStateAfter,
     INITIAL_TARGET_LENS_DISCLOSURE_STATE
   );
   const detailsExpanded = targetLensDetailsExpanded(disclosureState);
-  const appName = snapshot?.appName ?? "未识别目标";
+  const appName = snapshot?.appName ?? t("未识别目标");
   const profileConfirmationRequired =
     status === "ready" && profileOverrideNeedsConfirmation;
   const statusLabel = profileConfirmationRequired
-    ? "需确认"
+    ? t("需确认")
     : targetStatusLabel(status);
-  const enterLabel = ENTER_POLICY_STATUS_LABEL[enterPolicy];
+  const enterLabel = t(ENTER_POLICY_STATUS_LABEL[enterPolicy]);
   const privacyLabel = privacyCapabilityActive
-    ? "隐私检查：已启用"
-    : "隐私检查：尚未启用";
+    ? t("隐私检查：已启用")
+    : t("隐私检查：尚未启用");
   const matchReason = targetMatchReason({
     status,
     reason,
@@ -207,11 +212,18 @@ export function TargetLensView({
     overrideNeedsConfirmation: profileOverrideNeedsConfirmation,
   });
   const accessibleLabel = [
-    `目标 ${appName}，状态 ${statusLabel}，发送方案 ${profileName}`,
-    `匹配来源 ${matchReason}`,
-    `提示词组 ${promptGroupName}，输出格式 ${DELIVERY_FORMAT_LABEL[targetProfileOutputMode({ defaultFormat, defaultMarkdownMode })]}`,
-    `粘贴后动作 ${enterLabel}，发送完成后 ${keepPanel ? "保持打开" : "关闭面板"}，${privacyLabel}`,
-  ].join("，");
+    t("目标 {app}，状态 {status}，发送方案 {profile}", { app: appName, status: statusLabel, profile: profileName }),
+    t("匹配来源 {reason}", { reason: matchReason }),
+    t("提示词组 {group}，输出格式 {format}", {
+      group: promptGroupName,
+      format: t(DELIVERY_FORMAT_LABEL[targetProfileOutputMode({ defaultFormat, defaultMarkdownMode })]),
+    }),
+    t("粘贴后动作 {enter}，发送完成后 {after}，{privacy}", {
+      enter: enterLabel,
+      after: keepPanel ? t("保持打开") : t("关闭面板"),
+      privacy: privacyLabel,
+    }),
+  ].join(t("，"));
   // O1（2026-09-12）：可恢复的失效（不在前台/确认失败/身份不可验）按「等待」用 warning，
   // 不可恢复（退出/身份变化）与未识别仍用 destructive
   const recoverableBlock = status === "blocked" && isRecoverableTargetReason(reason);
@@ -244,13 +256,13 @@ export function TargetLensView({
     ? hiddenWarningReasons({
         privacyCapabilityActive,
         profileSource,
-      }).join("；")
+      }).join(t("；"))
     : "";
   const disclosureLabel = detailsExpanded
-    ? "收起发送详情"
+    ? t("收起发送详情")
     : hiddenWarningDetail
-      ? `展开发送详情 · ${hiddenWarningDetail}`
-      : "展开发送详情";
+      ? t("展开发送详情 · {detail}", { detail: hiddenWarningDetail })
+      : t("展开发送详情");
   const currentQuickProfile = useMemo<QuickProfileOption>(
     () => ({
       id: profileId,
@@ -275,7 +287,7 @@ export function TargetLensView({
   );
   const refreshControl = (
     <IconButton
-      label="重新识别发送目标"
+      label={t("重新识别发送目标")}
       withTitle={false}
       size="2xs"
       disabled={status === "refreshing"}
@@ -302,7 +314,7 @@ export function TargetLensView({
       className="mx-3 mb-1.5 min-w-0 px-1 py-1"
     >
       <span className="sr-only" aria-live="polite" aria-atomic="true">
-        发送目标 {appName}，{statusLabel}，当前发送方案 {profileName}
+        {t("发送目标 {app}，{status}，当前发送方案 {profile}", { app: appName, status: statusLabel, profile: profileName })}
       </span>
       <div className="flex min-h-7 min-w-0 items-center gap-1.5 overflow-hidden">
         <div
@@ -323,7 +335,7 @@ export function TargetLensView({
           <span
             role="status"
             aria-live="off"
-            aria-label={`目标状态：${statusLabel}`}
+            aria-label={t("目标状态：{status}", { status: statusLabel })}
             className={cn(
               "inline-flex shrink-0 items-center gap-1 text-micro font-medium",
               statusTone
@@ -345,7 +357,7 @@ export function TargetLensView({
           {showRecoveryAction && refreshControl}
           <IconButton
             ref={activityButtonRef}
-            label="打开最近发送"
+            label={t("打开最近发送")}
             size="xs"
             onClick={onOpenActivity}
           >
@@ -420,7 +432,7 @@ export function TargetLensView({
             onClick={onConfirmProfile}
             className="shrink-0 rounded-sm px-1 text-micro font-medium text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
           >
-            将 {profileOverrideName ?? "原方案"} 用于当前目标
+            {t("将 {name} 用于当前目标", { name: profileOverrideName ?? t("原方案") })}
           </button>
         </div>
       )}
@@ -428,17 +440,17 @@ export function TargetLensView({
         <div
           id={detailsId}
           role="group"
-          aria-label="完整发送详情"
+          aria-label={t("完整发送详情")}
           className="reveal-in mt-1 rounded-lg bg-muted/30 px-2 py-1.5"
         >
           {status === "ready" && (
             <p className="mb-1 text-micro leading-tight text-muted-foreground">
-              仅确认目标应用，未确认输入位置
+              {t("仅确认目标应用，未确认输入位置")}
             </p>
           )}
           <div className="flex min-w-0 items-center gap-1.5">
             <span className="shrink-0 text-micro text-muted-foreground">
-              方案
+              {t("方案")}
             </span>
             <Popover open={quickSwitchOpen} onOpenChange={onQuickSwitchOpenChange}>
               <PopoverTrigger asChild>
@@ -446,7 +458,7 @@ export function TargetLensView({
                   type="button"
                   tabIndex={0}
                   title={profileName}
-                  aria-label={`本次发送方案：${profileName}，点击查看与切换`}
+                  aria-label={t("本次发送方案：{profile}，点击查看与切换", { profile: profileName })}
                   className={cn(
                     "flex min-w-0 max-w-40 items-center gap-1 rounded-md border px-1.5 py-0.5 text-label outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
                     profileOverrideId
@@ -465,7 +477,7 @@ export function TargetLensView({
               <PopoverContent
                 align="end"
                 sideOffset={4}
-                aria-label={`发送到 ${appName}，快速切换发送方案`}
+                aria-label={t("发送到 {app}，快速切换发送方案", { app: appName })}
                 className="w-80 max-w-[calc(100vw-1rem)] gap-0 p-2"
               >
                 <TargetProfileQuickSwitch
@@ -490,7 +502,7 @@ export function TargetLensView({
             </Popover>
             {/* 来源缩注取代整句「匹配来源」：临时指定/自动匹配一词即达 */}
             <span className="shrink-0 text-micro text-muted-foreground">
-              {profileOverrideId ? "临时指定" : "自动匹配"}
+              {profileOverrideId ? t("临时指定") : t("自动匹配")}
             </span>
             {!showRecoveryAction && <span className="ml-auto">{refreshControl}</span>}
           </div>
@@ -715,7 +727,10 @@ export function TargetLensBar() {
     clearTargetProfileOverride();
     tip(
       "ok",
-      `以后发给 ${targetState.snapshot?.appName ?? "当前应用"} 将使用 ${selectedProfile.name}`
+      t("以后发给 {app} 将使用 {profile}", {
+        app: targetState.snapshot?.appName ?? t("当前应用"),
+        profile: profileName(selectedProfile),
+      })
     );
   }, []);
   const editCurrentProfile = useCallback(() => {
@@ -730,7 +745,7 @@ export function TargetLensBar() {
     () => ({
       promptGroupOptions: promptGroups.map((group) => ({
         value: group.id,
-        label: group.name,
+        label: promptGroupName(group),
       })),
       overriddenKeys: resolution.ruleOverriddenKeys,
       disabled: !targetIdentity,
@@ -747,7 +762,7 @@ export function TargetLensBar() {
         status={status}
         reason={reason}
         icon={icon}
-        profileName={resolution.profile.name}
+        profileName={profileName(resolution.profile)}
         promptGroupId={resolution.profile.promptGroupId}
         promptGroupName={resolution.promptGroup.name}
         profileSource={resolution.source}
@@ -761,7 +776,7 @@ export function TargetLensBar() {
         profileOverrideNeedsConfirmation={profileOverrideNeedsConfirmation}
         profileOverrideId={profileOverrideId}
         profileOverrideName={profileOverrideName}
-        automaticProfileName={automaticResolution.profile.name}
+        automaticProfileName={profileName(automaticResolution.profile)}
         quickProfiles={quickProfiles}
         quickSwitchOpen={quickSwitchOpen}
         canMakePermanent={canPermanentlyAssignTargetProfileOverride({

@@ -6,6 +6,8 @@ import {
   type TaskReminderOffset,
   type TaskSection,
 } from "@/store/notesStore";
+import { t, type MessageKey } from "@/lib/i18n";
+import { clockLabel, monthDayLabel, weekdayLabel } from "@/lib/taskRecurrence";
 
 /**
  * 任务页展示分桶：
@@ -137,12 +139,13 @@ export function taskRemindersDue(tasks: Task[], now: number): TaskReminderHit[] 
 export function reminderHitLabel(hit: TaskReminderHit, now: number, preview: string): string {
   if (hit.offsets.includes(0) || hit.task.dueAt === null) return preview;
   const mins = Math.max(1, Math.round((hit.task.dueAt - now) / 60_000));
-  const left =
-    mins < 60 ? `${mins} 分钟` : mins < 1440 ? `${Math.round(mins / 60)} 小时` : `${Math.round(mins / 1440)} 天`;
-  return `${preview} · ${left}后到期`;
+  if (mins < 60) return t("{preview} · {n} 分钟后到期", { preview, n: mins });
+  if (mins < 1440) return t("{preview} · {n} 小时后到期", { preview, n: Math.round(mins / 60) });
+  return t("{preview} · {n} 天后到期", { preview, n: Math.round(mins / 1440) });
 }
 
-export const REMINDER_OFFSET_LABEL: Record<TaskReminderOffset, string> = {
+/** 提醒档展示名（中文 key，显示处 t()）。 */
+export const REMINDER_OFFSET_LABEL: Record<TaskReminderOffset, MessageKey> = {
   0: "到期时",
   15: "提前 15 分钟",
   60: "提前 1 小时",
@@ -231,8 +234,6 @@ export function filterTasks(tasks: Task[], filter: TaskFilter, now: number): Tas
   );
 }
 
-const WEEKDAY_NAMES = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
-
 /** 档位 → 具体时间。语义固定（"今天 20:00"即使已过也不隐式跳明天；
  *  周几档「下个」语义排除当天）。 */
 export function presetCfgDue(cfg: DuePresetCfg, now: number): number {
@@ -261,20 +262,24 @@ export function presetCfgDue(cfg: DuePresetCfg, now: number): number {
   }
 }
 
-/** 档位展示名（弹层与设置页共用）。 */
+/** 档位展示名（弹层与设置页共用；调用时按当前语言求值）。 */
 export function presetCfgLabel(cfg: DuePresetCfg): string {
-  const hm = (h: number, m: number) => `${h}:${String(m).padStart(2, "0")}`;
   switch (cfg.kind) {
     case "relative":
       return cfg.minutes % 60 === 0 && cfg.minutes >= 60
-        ? `${cfg.minutes / 60} 小时后`
-        : `${cfg.minutes} 分钟后`;
+        ? t("{n} 小时后", { n: cfg.minutes / 60 })
+        : t("{n} 分钟后", { n: cfg.minutes });
     case "today":
-      return `今天 ${hm(cfg.hour, cfg.minute)}`;
+      return t("今天 {time}", { time: clockLabel(cfg.hour, cfg.minute, false) });
     case "tomorrow":
-      return `明天 ${hm(cfg.hour, cfg.minute)}`;
-    case "weekday":
-      return `下个${WEEKDAY_NAMES[cfg.weekday] ?? "周一"} ${hm(cfg.hour, cfg.minute)}`;
+      return t("明天 {time}", { time: clockLabel(cfg.hour, cfg.minute, false) });
+    case "weekday": {
+      const weekday = Number.isInteger(cfg.weekday) && cfg.weekday >= 0 && cfg.weekday <= 6 ? cfg.weekday : 1;
+      return t("下个{weekday} {time}", {
+        weekday: weekdayLabel(weekday),
+        time: clockLabel(cfg.hour, cfg.minute, false),
+      });
+    }
   }
 }
 
@@ -288,34 +293,38 @@ export function dueTone(dueAt: number, now: number): "overdue" | "today" | "late
 
 /** 到期徽标文案。 */
 export function dueBadgeLabel(dueAt: number, now: number): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
+  return dueBadge(dueAt, now, false);
+}
+
+/** short：逾期文案去掉「到期」后缀（中文与旧版 replace(/到期$/) 逐字一致）。 */
+function dueBadge(dueAt: number, now: number, short: boolean): string {
   const d = new Date(dueAt);
-  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const hm = clockLabel(d.getHours(), d.getMinutes());
   if (dueAt <= now) {
     const mins = Math.floor((now - dueAt) / 60_000);
-    if (mins < 60) return `${Math.max(1, mins)} 分钟前到期`;
+    if (mins < 60) return t(short ? "{n} 分钟前" : "{n} 分钟前到期", { n: Math.max(1, mins) });
     const hours = Math.floor(mins / 60);
-    if (hours < 24) return `${hours} 小时前到期`;
-    return `${Math.floor(hours / 24)} 天前到期`;
+    if (hours < 24) return t(short ? "{n} 小时前" : "{n} 小时前到期", { n: hours });
+    return t(short ? "{n} 天前" : "{n} 天前到期", { n: Math.floor(hours / 24) });
   }
   const startOfDay = (t: number) => {
     const x = new Date(t);
     return new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
   };
   const dayDiff = Math.round((startOfDay(dueAt) - startOfDay(now)) / 86_400_000);
-  if (dayDiff === 0) return `今天 ${hm}`;
-  if (dayDiff === 1) return `明天 ${hm}`;
-  if (dayDiff < 7) return `周${"日一二三四五六"[d.getDay()]} ${hm}`;
-  return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+  if (dayDiff === 0) return t("今天 {time}", { time: hm });
+  if (dayDiff === 1) return t("明天 {time}", { time: hm });
+  if (dayDiff < 7) return `${weekdayLabel(d.getDay())} ${hm}`;
+  return `${monthDayLabel(d)} ${hm}`;
 }
 
 /** 到期徽标短文案（竖栏行内用）：已到期区头已声明「到期」，去掉行内重复后缀。 */
 export function dueBadgeShortLabel(dueAt: number, now: number): string {
-  return dueBadgeLabel(dueAt, now).replace(/到期$/, "");
+  return dueBadge(dueAt, now, true);
 }
 
-/** 优先级展示表。 */
-export const PRIORITY_LABEL: Record<TaskPriority, string> = {
+/** 优先级展示表（中文 key，显示处 t()）。 */
+export const PRIORITY_LABEL: Record<TaskPriority, MessageKey> = {
   none: "无优先级",
   low: "低",
   mid: "中",

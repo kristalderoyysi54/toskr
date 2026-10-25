@@ -1,5 +1,6 @@
 import { create } from "zustand";
 
+import { t } from "@/lib/i18n";
 import { api, type TargetReason, type TargetSnapshot } from "@/lib/tauri";
 import type { AppIconInfo } from "@/lib/icons";
 import type { TargetRuleOverrides } from "@/lib/targetProfiles";
@@ -292,13 +293,13 @@ export function sameTargetIdentity(
 export function targetStatusLabel(status: TargetStatus): string {
   switch (status) {
     case "refreshing":
-      return "正在确认";
+      return t("正在确认");
     case "ready":
-      return "可发送";
+      return t("可发送");
     case "blocked":
-      return "目标已失效";
+      return t("目标已失效");
     default:
-      return "尚未识别";
+      return t("尚未识别");
   }
 }
 
@@ -306,21 +307,21 @@ export function targetReasonLabel(reason: TargetStateReason): string {
   switch (reason) {
     case "target_token_missing":
     case "target_token_stale":
-      return "目标凭据已过期，请重新识别";
+      return t("目标凭据已过期，请重新识别");
     case "target_exited":
-      return "目标应用已退出，请重新识别";
+      return t("目标应用已退出，请重新识别");
     case "target_bundle_mismatch":
     case "target_process_mismatch":
-      return "目标应用身份已变化，请重新识别";
+      return t("目标应用身份已变化，请重新识别");
     case "target_identity_unavailable":
-      return "无法验证目标身份，请切回目标后重试";
+      return t("无法验证目标身份，请切回目标后重试");
     case "target_not_frontmost":
-      return "目标应用已不在前台，请重新识别";
+      return t("目标应用已不在前台，请重新识别");
     case "refresh_failed":
-      return "目标确认失败，请重新识别";
+      return t("目标确认失败，请重新识别");
     case "target_missing":
     default:
-      return "尚未识别发送目标，请先重新识别";
+      return t("尚未识别发送目标，请先重新识别");
   }
 }
 
@@ -337,7 +338,7 @@ export function targetBlockMessage(
   status: TargetStatus,
   reason: TargetStateReason
 ): string {
-  if (status === "refreshing") return "正在确认发送目标，请稍候";
+  if (status === "refreshing") return t("正在确认发送目标，请稍候");
   return targetReasonLabel(reason);
 }
 

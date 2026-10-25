@@ -1,3 +1,4 @@
+import { t, type MessageKey } from "@/lib/i18n";
 import {
   TERMINAL_BUNDLE_IDS,
   resolveTargetProfile,
@@ -41,8 +42,9 @@ export type ProfilePresetId = "safe" | "ai" | "terminal" | "custom";
 
 export interface ProfilePreset {
   id: ProfilePresetId;
-  name: string;
-  description: string;
+  /** 显示时过 t()；作为新建方案名的回落值时保持中文（用户数据）。 */
+  name: MessageKey;
+  description: MessageKey;
   defaultFormat: DeliveryFormat;
   defaultMarkdownMode: MarkdownSendMode;
   enterPolicy: EnterPolicy;
@@ -97,7 +99,7 @@ export type TargetAppKind = "terminal" | "chat" | "document" | "unknown";
 
 export interface TargetProfileOutputRecommendation {
   readonly appKind: TargetAppKind;
-  readonly appKindLabel: string;
+  readonly appKindLabel: MessageKey;
   readonly outputMode: DeliveryOutputMode;
 }
 
@@ -227,9 +229,9 @@ export function recommendNewTargetProfileOutput(input: {
 
 export const DELIVERY_FORMAT_OPTIONS: readonly {
   value: DeliveryOutputMode;
-  label: string;
-  description: string;
-  example: string;
+  label: MessageKey;
+  description: MessageKey;
+  example: MessageKey;
 }[] = [
   {
     value: "plain",
@@ -253,8 +255,8 @@ export const DELIVERY_FORMAT_OPTIONS: readonly {
 
 export const ENTER_POLICY_OPTIONS: readonly {
   value: EnterPolicy;
-  label: string;
-  risk: string;
+  label: MessageKey;
+  risk: MessageKey;
 }[] = [
   {
     value: "never",
@@ -275,7 +277,7 @@ export const ENTER_POLICY_OPTIONS: readonly {
 
 export const PRIVACY_POLICY_OPTIONS: readonly {
   value: PrivacyPolicy;
-  label: string;
+  label: MessageKey;
 }[] = [
   { value: "requireRedaction", label: "要求逐项处理" },
   { value: "confirmRaw", label: "提示项原文需确认" },
@@ -472,10 +474,10 @@ export function formatPromptGroupOption(
     .slice(0, 2)
     .map((snippet) => snippet.label.trim() || snippet.text.trim())
     .filter(Boolean)
-    .join("、") || "暂无提示词";
+    .join(t("、")) || t("暂无提示词");
   return {
     value: group.id,
-    label: `${group.name} · ${matching.length} 条 · ${summary}`,
+    label: t("{name} · {n} 条 · {summary}", { name: group.name, n: matching.length, summary }),
     count: matching.length,
     summary,
   };
@@ -510,5 +512,9 @@ export function buildAppMoveQuestion(
   sourceProfileName: string,
   targetProfileName: string
 ): string {
-  return `${appName} 当前属于“${sourceProfileName}”，是否移动到“${targetProfileName}”？`;
+  return t("{app} 当前属于“{source}”，是否移动到“{target}”？", {
+    app: appName,
+    source: sourceProfileName,
+    target: targetProfileName,
+  });
 }

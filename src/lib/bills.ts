@@ -3,6 +3,7 @@ import type {
   BillCycle,
   ReminderOffsetDays,
 } from "@/store/notesStore";
+import { getLocale, intlLocale, t, type MessageKey } from "@/lib/i18n";
 
 // ===== 账单（订阅/信用卡）纯函数域：周期滚动 / 提醒判定 / 消费聚合 =====
 // 只做 type-import，保持与 store 无运行时环依赖（store 反向 value-import 本文件）。
@@ -195,7 +196,10 @@ export function monthlySpendTrend(
     buckets.push({
       year: m.getFullYear(),
       month: m.getMonth(),
-      label: `${m.getMonth() + 1}月`,
+      label:
+        getLocale() === "zh"
+          ? `${m.getMonth() + 1}月`
+          : m.toLocaleDateString(intlLocale(), { month: "short" }),
       total: 0,
     });
   }
@@ -484,13 +488,19 @@ export function billDueLabel(bill: Bill, now: number, currency: string): string 
   const days = Math.round(
     (startOfBillDay(bill.nextDueAt) - startOfBillDay(now)) / DAY_MS
   );
-  const verb = bill.kind === "creditCard" ? "还款" : "续费";
+  const card = bill.kind === "creditCard";
   const symbol = bill.currency ?? currency;
-  const amountTxt =
+  const amount =
     bill.amount != null ? ` ${symbol}${formatBillAmount(bill.amount)}` : "";
-  if (days < 0) return `${bill.name} ${verb}已逾期 ${-days} 天${amountTxt}`;
-  const when = days === 0 ? "今天" : days === 1 ? "明天" : `${days} 天后`;
-  return `${bill.name} ${when}${verb}${amountTxt}`;
+  const vars = { name: bill.name, amount };
+  if (days < 0) {
+    const overdue = { ...vars, n: -days };
+    return card ? t("{name} 还款已逾期 {n} 天{amount}", overdue) : t("{name} 续费已逾期 {n} 天{amount}", overdue);
+  }
+  if (days === 0) return card ? t("{name} 今天还款{amount}", vars) : t("{name} 今天续费{amount}", vars);
+  if (days === 1) return card ? t("{name} 明天还款{amount}", vars) : t("{name} 明天续费{amount}", vars);
+  const later = { ...vars, n: days };
+  return card ? t("{name} {n} 天后还款{amount}", later) : t("{name} {n} 天后续费{amount}", later);
 }
 
 /** 列表排序：active 在前（组内到期早在前），暂停/取消垫底（按名称）。 */
@@ -501,7 +511,8 @@ export function compareBills(a: Bill, b: Bill): number {
   return a.name.localeCompare(b.name, "zh-Hans-CN");
 }
 
-export const CYCLE_LABEL: Record<BillCycle, string> = {
+/** 周期展示名（中文 key，显示处 t()）。 */
+export const CYCLE_LABEL: Record<BillCycle, MessageKey> = {
   weekly: "每周",
   monthly: "每月",
   quarterly: "每季",

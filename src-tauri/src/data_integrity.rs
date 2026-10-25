@@ -3,6 +3,7 @@
 //! Tauri command 只负责把 AppHandle 解析成真实路径；所有危险判断和文件
 //! 操作集中在本模块，单测始终使用临时目录，不接触用户数据。
 
+use crate::i18n::pick;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1075,7 +1076,7 @@ fn begin_data_operation_inner(
     if plan.action == DataOperationAction::Cancel {
         return Err(failure(
             DataOperationFailureCode::InvalidPlan,
-            "取消动作不会启动数据事务",
+            pick("取消动作不会启动数据事务", "Cancel doesn't start a data transaction"),
         ));
     }
     let journal_path = pointer_path
@@ -1109,20 +1110,20 @@ fn begin_data_operation_inner(
                 DataLocationKind::Corrupt => DataOperationFailureCode::CorruptData,
                 _ => DataOperationFailureCode::TargetHasNoData,
             },
-            "当前数据目录不是可迁移的 Toskr 数据集",
+            pick("当前数据目录不是可迁移的 Toskr 数据集", "Current data folder isn't a Toskr data set that can be moved"),
         ));
     }
     let target_inspection = inspect_location(&target, Some(&source));
     let expected_target_revision = plan.expected_target_revision.as_deref().ok_or_else(|| {
         failure(
             DataOperationFailureCode::InvalidPlan,
-            "目录操作缺少预检版本，请重新预检目标目录",
+            pick("目录操作缺少预检版本，请重新预检目标目录", "Folder operation has no check result. Check the target folder again"),
         )
     })?;
     if target_inspection.revision.as_deref() != Some(expected_target_revision) {
         return Err(failure(
             DataOperationFailureCode::ExternalConflict,
-            "目标目录自预检后已变化；请重新预检并确认操作",
+            pick("目标目录自预检后已变化；请重新预检并确认操作", "Target folder changed after it was checked. Check again and confirm"),
         ));
     }
     validate_target_for_action(plan, &target_inspection)?;
@@ -1143,7 +1144,7 @@ fn begin_data_operation_inner(
     if target_created {
         fs::create_dir_all(&target).map_err(|error| DataOperationFailure {
             code: DataOperationFailureCode::PermissionDenied,
-            message: format!("创建目标目录失败：{error}"),
+            message: crate::tr_fmt!("创建目标目录失败：{error}", "Failed to create target folder: {error}"),
         })?;
     }
     let old_pointer = fs::read(pointer_path).ok();
@@ -1173,7 +1174,7 @@ fn begin_data_operation_inner(
         if current_target_revision != pending.target_revision {
             return Err(failure(
                 DataOperationFailureCode::ExternalConflict,
-                "提交目录指针前目标数据已变化；请重新预检",
+                pick("提交目录指针前目标数据已变化；请重新预检", "Target data changed before switching. Check again"),
             ));
         }
         pending.expected_committed_revision = Some(pending.target_revision.clone());
@@ -1191,7 +1192,7 @@ fn begin_data_operation_inner(
     if staging.exists() {
         return Err(failure(
             DataOperationFailureCode::OperationInProgress,
-            "目标目录存在同名未完成事务",
+            pick("目标目录存在同名未完成事务", "Target folder has an unfinished transaction with the same name"),
         ));
     }
     if plan.action == DataOperationAction::ReplaceTargetWithCurrent {
@@ -1202,14 +1203,14 @@ fn begin_data_operation_inner(
             cleanup_precommit(&pending);
             return Err(failure(
                 DataOperationFailureCode::OperationInProgress,
-                "目标目录存在同名未完成 recovery；未触碰其内容",
+                pick("目标目录存在同名未完成 recovery；未触碰其内容", "Target folder has an unfinished recovery with the same name; it was left untouched"),
             ));
         }
         if let Err(error) = copy_managed(&pending.target, &recovery) {
             let _ = fs::remove_dir_all(&recovery);
             return Err(DataOperationFailure {
                 code: DataOperationFailureCode::RecoveryPointFailed,
-                message: format!("创建目标恢复点失败：{}", error.message),
+                message: crate::tr_fmt!("创建目标恢复点失败：{}", "Failed to create target recovery point: {}", error.message),
             });
         }
         pending.recovery_dir = Some(recovery);
@@ -1223,7 +1224,7 @@ fn begin_data_operation_inner(
         cleanup_precommit(&pending);
         return Err(DataOperationFailure {
             code: DataOperationFailureCode::CopyFailed,
-            message: format!("复制当前数据失败：{}", error.message),
+            message: crate::tr_fmt!("复制当前数据失败：{}", "Failed to copy current data: {}", error.message),
         });
     }
     if let Err(error) = inject_failure(fail_at, DataOperationPhase::Copy) {
@@ -1236,14 +1237,14 @@ fn begin_data_operation_inner(
         cleanup_precommit(&pending);
         return Err(failure(
             DataOperationFailureCode::VerificationFailed,
-            "无法完成复制后的数据 hash 验证",
+            pick("无法完成复制后的数据 hash 验证", "Can't verify data hashes after copying"),
         ));
     };
     if source_revision != pending.source_revision || staging_revision != pending.source_revision {
         cleanup_precommit(&pending);
         return Err(failure(
             DataOperationFailureCode::ExternalConflict,
-            "复制期间源数据发生外部变化；目标未修改",
+            pick("复制期间源数据发生外部变化；目标未修改", "Source data changed during copy; target not modified"),
         ));
     }
     if let Err(error) = inject_failure(fail_at, DataOperationPhase::Verify) {
@@ -1261,7 +1262,7 @@ fn begin_data_operation_inner(
         cleanup_precommit(&pending);
         return Err(failure(
             DataOperationFailureCode::ExternalConflict,
-            "创建恢复点后目标数据发生外部变化；已停止替换",
+            pick("创建恢复点后目标数据发生外部变化；已停止替换", "Target data changed after the recovery point was created; replace stopped"),
         ));
     }
     pending.expected_committed_revision = Some(pending.source_revision.clone());
@@ -1324,7 +1325,7 @@ fn begin_data_operation_inner(
             default_dir,
             failure(
                 DataOperationFailureCode::ExternalConflict,
-                "提交校验时源或目标数据发生外部变化；已回滚",
+                pick("提交校验时源或目标数据发生外部变化；已回滚", "Source or target data changed during final check; rolled back"),
             ),
         ));
     }
@@ -1360,8 +1361,9 @@ fn rollback_after_begin_failure(
         Ok(_) => original,
         Err(rollback) => failure(
             DataOperationFailureCode::RollbackFailed,
-            format!(
+            crate::tr_fmt!(
                 "{}；自动回滚失败并已保留 journal：{}",
+                "{}; automatic rollback failed and the journal was kept: {}",
                 original.message, rollback.message
             ),
         ),
@@ -1657,13 +1659,13 @@ fn validate_target_for_action(
     if inspection.same_as_active {
         return Err(failure(
             DataOperationFailureCode::SamePath,
-            "目标与当前目录相同",
+            pick("目标与当前目录相同", "Target is the current folder"),
         ));
     }
     if !inspection.writable {
         return Err(failure(
             DataOperationFailureCode::PermissionDenied,
-            "目标目录不可写",
+            pick("目标目录不可写", "Target folder isn't writable"),
         ));
     }
     match plan.action {
@@ -1671,66 +1673,66 @@ fn validate_target_for_action(
             DataLocationKind::Missing | DataLocationKind::Empty => Ok(()),
             DataLocationKind::Valid => Err(failure(
                 DataOperationFailureCode::TargetHasData,
-                "目标已有 Toskr 数据，禁止直接迁移覆盖",
+                pick("目标已有 Toskr 数据，禁止直接迁移覆盖", "Target already has Toskr data; moving over it isn't allowed"),
             )),
             DataLocationKind::Corrupt => Err(failure(
                 DataOperationFailureCode::CorruptData,
-                "目标数据损坏，禁止覆盖",
+                pick("目标数据损坏，禁止覆盖", "Target data is corrupted; overwriting isn't allowed"),
             )),
             DataLocationKind::Unsupported => Err(failure(
                 DataOperationFailureCode::UnsupportedSchema,
-                "目标数据 schema 高于当前版本",
+                pick("目标数据 schema 高于当前版本", "Target data schema is newer than this version of Toskr"),
             )),
             DataLocationKind::NonToskr => Err(failure(
                 DataOperationFailureCode::TargetNotEmpty,
-                "目标含普通文件，必须选择空目录",
+                pick("目标含普通文件，必须选择空目录", "Target contains files. Choose an empty folder"),
             )),
             DataLocationKind::Encrypted => Err(failure(
                 DataOperationFailureCode::EncryptionKeyUnavailable,
-                "目标已有加密的 Toskr 数据（本机钥匙串无法解开），禁止覆盖",
+                pick("目标已有加密的 Toskr 数据（本机钥匙串无法解开），禁止覆盖", "Target has encrypted Toskr data this Mac's Keychain can't unlock; overwriting isn't allowed"),
             )),
         },
         DataOperationAction::LoadExistingTarget => match inspection.kind {
             DataLocationKind::Valid => Ok(()),
             DataLocationKind::Missing => Err(failure(
                 DataOperationFailureCode::TargetMissing,
-                "目标目录不存在",
+                pick("目标目录不存在", "Target folder doesn't exist"),
             )),
             DataLocationKind::Unsupported => Err(failure(
                 DataOperationFailureCode::UnsupportedSchema,
-                "目标数据 schema 高于当前版本",
+                pick("目标数据 schema 高于当前版本", "Target data schema is newer than this version of Toskr"),
             )),
             DataLocationKind::Corrupt => Err(failure(
                 DataOperationFailureCode::CorruptData,
-                "目标数据损坏",
+                pick("目标数据损坏", "Target data is corrupted"),
             )),
             DataLocationKind::Encrypted => Err(failure(
                 DataOperationFailureCode::EncryptionKeyUnavailable,
-                "目标数据已加密且本机钥匙串无法解开；请改用「导入完整备份」",
+                pick("目标数据已加密且本机钥匙串无法解开；请改用「导入完整备份」", "Target data is encrypted and this Mac's Keychain can't unlock it. Use \"Import full backup\" instead"),
             )),
             _ => Err(failure(
                 DataOperationFailureCode::TargetHasNoData,
-                "目标没有可加载的 Toskr 数据",
+                pick("目标没有可加载的 Toskr 数据", "Target has no Toskr data to load"),
             )),
         },
         DataOperationAction::ReplaceTargetWithCurrent => {
             if inspection.kind != DataLocationKind::Valid {
                 return Err(failure(
                     DataOperationFailureCode::TargetHasNoData,
-                    "显式替换只适用于已有有效 Toskr 数据的目标",
+                    pick("显式替换只适用于已有有效 Toskr 数据的目标", "Replace only applies to a target with valid Toskr data"),
                 ));
             }
             if !plan.replace_confirmed {
                 return Err(failure(
                     DataOperationFailureCode::ReplaceConfirmationRequired,
-                    "替换目标需要二次明确确认",
+                    pick("替换目标需要二次明确确认", "Replacing the target needs a second confirmation"),
                 ));
             }
             Ok(())
         }
         DataOperationAction::Cancel => Err(failure(
             DataOperationFailureCode::InvalidPlan,
-            "取消动作不会启动数据事务",
+            pick("取消动作不会启动数据事务", "Cancel doesn't start a data transaction"),
         )),
     }
 }
@@ -1739,7 +1741,7 @@ fn copy_managed(source: &Path, destination: &Path) -> Result<(), DataOperationFa
     if destination.exists() {
         return Err(failure(
             DataOperationFailureCode::CopyFailed,
-            "事务 staging/recovery 已存在",
+            pick("事务 staging/recovery 已存在", "Transaction staging/recovery already exists"),
         ));
     }
     fs::create_dir(destination).map_err(copy_error)?;
@@ -1815,7 +1817,7 @@ fn copy_directory(source: &Path, destination: &Path) -> Result<(), DataOperation
         if kind.is_symlink() {
             return Err(failure(
                 DataOperationFailureCode::CopyFailed,
-                "数据目录包含符号链接，已拒绝复制",
+                pick("数据目录包含符号链接，已拒绝复制", "Data folder contains symbolic links; copy refused"),
             ));
         }
         let target = destination.join(entry.file_name());
@@ -1869,7 +1871,7 @@ fn managed_manifest(root: &Path) -> Result<BTreeMap<String, String>, DataOperati
     if !root.join(DATA_FILE).exists() {
         return Err(failure(
             DataOperationFailureCode::VerificationFailed,
-            "数据集缺少主数据文件",
+            pick("数据集缺少主数据文件", "Data set is missing its main data file"),
         ));
     }
     managed_manifest_partial(root)
@@ -1913,7 +1915,7 @@ fn collect_manifest_tree(
         if kind.is_symlink() {
             return Err(failure(
                 DataOperationFailureCode::VerificationFailed,
-                "数据目录包含符号链接",
+                pick("数据目录包含符号链接", "Data folder contains symbolic links"),
             ));
         }
         if kind.is_dir() {
@@ -2675,7 +2677,7 @@ pub fn write_if_current(
         if read_data_snapshot(path)?.revision != expected_revision {
             return Err(DataOperationFailure {
                 code: DataOperationFailureCode::ExternalConflict,
-                message: "数据文件在提交前发生外部变化；已停止覆盖".into(),
+                message: pick("数据文件在提交前发生外部变化；已停止覆盖", "Data file changed before saving; overwrite stopped").into(),
             });
         }
         commit_if_revision(path, &tmp, expected_revision, &new_revision)?;
@@ -3243,6 +3245,7 @@ pub(crate) fn validate_settings_value_for_version(
         return false;
     }
     for (key, allowed) in [
+        ("language", &["system", "zh", "en"][..]),
         ("theme", &["system", "light", "dark"][..]),
         ("colorScheme", &["default", "platinum"][..]),
         ("platinumHighlight", &["lavender", "blue", "teal", "graphite"][..]),

@@ -1,6 +1,7 @@
 //! 链接元数据抓取：统一受限网络通道，轻量解析标题与图标。
 //! 索引技巧：to_ascii_lowercase 不改变字节布局，lower 串上定位、原串上取值。
 
+use crate::i18n::pick;
 use serde::Serialize;
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -20,11 +21,11 @@ pub async fn fetch_link_meta(window: tauri::WebviewWindow, url: String, manual: 
     let origin = parsed.origin().ascii_serialization();
     let private_origin = if manual == Some(true) {
         let (send, receive) = tokio::sync::oneshot::channel();
-        window.dialog().message(format!("本次将访问 {origin} 获取标题和图标，允许此地址访问内网。不会发送应用中的其他内容；授权不覆盖其他内网地址的重定向。"))
-            .title("确认获取链接预览")
-            .buttons(MessageDialogButtons::OkCancelCustom("仅本次允许".into(), "取消".into()))
+        window.dialog().message(crate::tr_fmt!("本次将访问 {origin} 获取标题和图标，允许此地址访问内网。不会发送应用中的其他内容；授权不覆盖其他内网地址的重定向。", "Toskr will visit {origin} once to fetch its title and icon, allowing this local-network address. Nothing else from the app is sent, and redirects to other local-network addresses are not covered."))
+            .title(pick("确认获取链接预览", "Fetch Link Preview?"))
+            .buttons(MessageDialogButtons::OkCancelCustom(pick("仅本次允许", "Allow Once").into(), pick("取消", "Cancel").into()))
             .parent(&window).show(move |approved| { let _ = send.send(approved); });
-        if !receive.await.unwrap_or(false) { return Err("已取消获取预览".into()); }
+        if !receive.await.unwrap_or(false) { return Err(pick("已取消获取预览", "Link preview canceled").into()); }
         Some(origin.as_str())
     } else { None };
     let (bytes, effective) = crate::preview_network::fetch(&url, 3 * 1024 * 1024, private_origin).await?;

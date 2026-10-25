@@ -63,6 +63,7 @@ objc2-foundation = { version = "0.3", features = [
   "NSError",
   "NSDate",
   "NSBundle",
+  "NSLocale",
   "block2",
 ] }
 # 任务到期的系统通知（设置 → 到期提醒 → 提醒方式）

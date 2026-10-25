@@ -29,6 +29,7 @@ import {
   openSecret,
   sealSecret,
 } from "@/lib/secret/secret";
+import { useT } from "@/lib/i18n";
 import { tip } from "@/lib/tip";
 import { api } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
@@ -41,10 +42,6 @@ import { IconButton } from "@/components/ui/icon-button";
 import { StripScroller } from "@/components/ui/strip-scroller";
 import { SimpleSelect } from "@/components/SimpleSelect";
 
-const SECRET_STYLE_OPTIONS = SECRET_CIPHER_STYLE_OPTIONS.map((option) => ({
-  value: option.value,
-  label: option.shortLabel,
-}));
 
 /** 收发条：选密钥 → 输明文 → 加密发送 / 加密复制。
  *  竖栏＝顶部通栏；横栏（上/下停靠）＝左侧定宽列，右边让给横排卡片串。 */
@@ -52,6 +49,7 @@ function SecretComposer({ horizontal = false }: { horizontal?: boolean }) {
   const keys = useNotesStore((s) => s.settings.secretKeys);
   const defaultKeyId = useNotesStore((s) => s.settings.secretDefaultKeyId);
   const cipherStyle = useNotesStore((s) => s.settings.secretCipherStyle);
+  const t = useT();
   const [draft, setDraft] = useState("");
   const [keyId, setKeyId] = useState<string>(defaultKeyId ?? keys[0]?.id ?? "");
   const [busy, setBusy] = useState(false);
@@ -73,7 +71,7 @@ function SecretComposer({ horizontal = false }: { horizontal?: boolean }) {
             : "border-b border-border/60 px-3 py-2.5"
         )}
       >
-        还没有共享密钥。去 设置 → 秘文 添加一组、与对方约定相同的暗号即可开始收发。
+        {t("还没有共享密钥。去 设置 → 秘文 添加一组、与对方约定相同的暗号即可开始收发。")}
       </div>
     );
   }
@@ -83,7 +81,7 @@ function SecretComposer({ horizontal = false }: { horizontal?: boolean }) {
     const text = draft.trim();
     if (!key || !text || busy) return;
     if (!isCipherLengthSupported(text, cipherStyle)) {
-      tip("warn", "内容过长，无法生成可接收的秘文");
+      tip("warn", t("内容过长，无法生成可接收的秘文"));
       return;
     }
     setBusy(true);
@@ -100,10 +98,10 @@ function SecretComposer({ horizontal = false }: { horizontal?: boolean }) {
         void sendNotesToChat([id]);
       } else {
         await api.copyText(cipher);
-        tip("ok", "已加密并复制，去 IM 粘贴即可");
+        tip("ok", t("已加密并复制，去 IM 粘贴即可"));
       }
     } catch {
-      tip("warn", "加密失败，请重试");
+      tip("warn", t("加密失败，请重试"));
     } finally {
       setBusy(false);
     }
@@ -111,11 +109,16 @@ function SecretComposer({ horizontal = false }: { horizontal?: boolean }) {
 
   const keyOptions = keys.map((k) => ({
     value: k.id,
-    label: k.label || "未命名密钥",
+    label: k.label || t("未命名密钥"),
+  }));
+  const styleOptions = SECRET_CIPHER_STYLE_OPTIONS.map((option) => ({
+    value: option.value,
+    label: t(option.shortLabel),
   }));
   const selectedStyle = SECRET_CIPHER_STYLE_OPTIONS.find(
     (option) => option.value === cipherStyle
   );
+  const selectedStyleLabel = selectedStyle ? t(selectedStyle.label) : "";
   const trimmedDraft = draft.trim();
   const cipherTooLong = Boolean(
     trimmedDraft && !isCipherLengthSupported(trimmedDraft, cipherStyle)
@@ -136,19 +139,19 @@ function SecretComposer({ horizontal = false }: { horizontal?: boolean }) {
           value={keyId}
           options={keyOptions}
           onChange={setKeyId}
-          ariaLabel="选择加密密钥"
-          menuLabel="用哪把密钥"
+          ariaLabel={t("选择加密密钥")}
+          menuLabel={t("用哪把密钥")}
           icon={<KeyRound />}
           className="min-w-0 flex-1"
         />
         <SimpleSelect
           value={cipherStyle}
-          options={SECRET_STYLE_OPTIONS}
+          options={styleOptions}
           onChange={(value) =>
             useNotesStore.getState().setSettings({ secretCipherStyle: value })
           }
-          ariaLabel="选择密文格式"
-          menuLabel="密文格式 · 支持该格式的接收端自动识别"
+          ariaLabel={t("选择密文格式")}
+          menuLabel={t("密文格式 · 支持该格式的接收端自动识别")}
           icon={<Braces />}
           align="end"
           className="w-24 shrink-0"
@@ -171,7 +174,7 @@ function SecretComposer({ horizontal = false }: { horizontal?: boolean }) {
             }
           }}
           rows={2}
-          placeholder="写下要加密的话，⌘⏎ 加密并发送"
+          placeholder={t("写下要加密的话，⌘⏎ 加密并发送")}
           className={cn(
             "w-full resize-none bg-transparent text-body text-foreground outline-none placeholder:text-muted-foreground",
             horizontal && "min-h-0 flex-1"
@@ -181,11 +184,14 @@ function SecretComposer({ horizontal = false }: { horizontal?: boolean }) {
           {trimmedDraft && (
             <span
               className="mr-auto min-w-0 truncate text-micro text-muted-foreground"
-              title={selectedStyle?.label}
+              title={selectedStyleLabel || undefined}
             >
               {cipherTooLong
-                ? "内容过长，无法生成可接收的秘文"
-                : `输出约 ${estimateCipherLength(trimmedDraft, cipherStyle)} 字 · ${selectedStyle?.label ?? ""}`}
+                ? t("内容过长，无法生成可接收的秘文")
+                : t("输出约 {n} 字 · {style}", {
+                    n: estimateCipherLength(trimmedDraft, cipherStyle),
+                    style: selectedStyleLabel,
+                  })}
             </span>
           )}
           <Button
@@ -194,14 +200,14 @@ function SecretComposer({ horizontal = false }: { horizontal?: boolean }) {
             onClick={() => void seal(false)}
             disabled={busy || !trimmedDraft || cipherTooLong}
           >
-            <Copy /> 加密复制
+            <Copy /> {t("加密复制")}
           </Button>
           <Button
             size="sm"
             onClick={() => void seal(true)}
             disabled={busy || !trimmedDraft || cipherTooLong}
           >
-            <SendHorizontal /> 加密发送
+            <SendHorizontal /> {t("加密发送")}
           </Button>
         </div>
       </div>
@@ -215,6 +221,7 @@ function SecretCard({ note, strip = false }: { note: Note; strip?: boolean }) {
   const secretKeys = useNotesStore((s) => s.settings.secretKeys);
   const revealTimeout = useNotesStore((s) => s.settings.secretRevealTimeoutMs);
   const open = useUIStore((s) => s.open);
+  const t = useT();
   const [plain, setPlain] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const timerRef = useRef<number | null>(null);
@@ -244,7 +251,7 @@ function SecretCard({ note, strip = false }: { note: Note; strip?: boolean }) {
       // 对当前全部密钥逐把试解（不依赖存储 keyId）：补配/重建密钥后锁定卡自愈
       const res = await openSecret(note.text, secretKeys);
       if (res.status !== "plaintext") {
-        tip("warn", "无匹配密钥，去 设置 → 秘文 添加后可解密");
+        tip("warn", t("无匹配密钥，去 设置 → 秘文 添加后可解密"));
         return;
       }
       setPlain(res.plaintext);
@@ -258,7 +265,7 @@ function SecretCard({ note, strip = false }: { note: Note; strip?: boolean }) {
         timerRef.current = window.setTimeout(() => setPlain(null), revealTimeout);
       }
     } catch {
-      tip("warn", "解密失败");
+      tip("warn", t("解密失败"));
     } finally {
       setBusy(false);
     }
@@ -298,16 +305,16 @@ function SecretCard({ note, strip = false }: { note: Note; strip?: boolean }) {
           <ShieldCheck className="size-3" />
         )}
         <span className="font-medium">
-          {meta.keyLabel ?? (meta.keyId ? "已解密" : "未匹配密钥")}
+          {meta.keyLabel ?? (meta.keyId ? t("已解密") : t("未匹配密钥"))}
         </span>
         <span aria-hidden>·</span>
-        <span>{outgoing ? "我发出" : "收到"}</span>
+        <span>{outgoing ? t("我发出") : t("收到")}</span>
         <span className="ml-auto tabular-nums">{timeAgo(note.createdAt)}</span>
       </div>
 
       <button
         onClick={() => void toggle()}
-        aria-label={revealed ? "重新遮罩" : "点击解密查看"}
+        aria-label={revealed ? t("重新遮罩") : t("点击解密查看")}
         // 瓷砖内长明文自己滚动；能滚时拦下滚轮，别被横栏「纵滚转横滑」劫走
         onWheel={
           strip
@@ -366,14 +373,14 @@ function SecretCard({ note, strip = false }: { note: Note; strip?: boolean }) {
                 )}
               >
                 {busy ? (
-                  <span className="animate-pulse">解密中…</span>
+                  <span className="animate-pulse">{t("解密中…")}</span>
                 ) : meta.keyId === null ? (
                   <>
-                    <KeyRound className="size-3" /> 无匹配密钥 · 点击重试
+                    <KeyRound className="size-3" /> {t("无匹配密钥 · 点击重试")}
                   </>
                 ) : (
                   <>
-                    <Lock className="size-3" /> 点击解密查看
+                    <Lock className="size-3" /> {t("点击解密查看")}
                   </>
                 )}
               </span>
@@ -399,19 +406,19 @@ function SecretCard({ note, strip = false }: { note: Note; strip?: boolean }) {
         {revealed && (
           <>
             <IconButton
-              label="重新遮罩"
+              label={t("重新遮罩")}
               size="xs"
               onClick={() => remask()}
             >
               <EyeOff />
             </IconButton>
             <IconButton
-              label="复制明文"
+              label={t("复制明文")}
               size="xs"
               onClick={() => {
                 if (plain !== null) {
                   void api.copyText(plain);
-                  tip("ok", "已复制明文");
+                  tip("ok", t("已复制明文"));
                 }
               }}
             >
@@ -420,10 +427,10 @@ function SecretCard({ note, strip = false }: { note: Note; strip?: boolean }) {
           </>
         )}
         <IconButton
-          label="删除"
+          label={t("删除")}
           size="xs"
           tone="danger"
-          onClick={() => deleteNotesWithUndo([note.id], "已删除 1 条秘文")}
+          onClick={() => deleteNotesWithUndo([note.id], t("已删除 1 条秘文"))}
         >
           <Trash2 />
         </IconButton>
@@ -442,6 +449,7 @@ export function SecretPage({
   /** 上/下横栏形态：Composer 收作左列，卡片改横排瓷砖串。 */
   horizontal?: boolean;
 }) {
+  const t = useT();
   if (horizontal) {
     return (
       <div className="flex min-h-0 flex-1 items-stretch">
@@ -450,8 +458,8 @@ export function SecretPage({
           {notes.length === 0 ? (
             <p className="px-4 py-6 text-body text-muted-foreground">
               {query
-                ? "没有匹配的秘文"
-                : "还没有秘文——选中对方发来的密文内容，连按两次 ⇧ Shift 即可解密到这里"}
+                ? t("没有匹配的秘文")
+                : t("还没有秘文——选中对方发来的密文内容，连按两次 ⇧ Shift 即可解密到这里")}
             </p>
           ) : (
             <div className="flex h-full items-stretch gap-2.5 px-3 pb-2 pt-1">
@@ -471,11 +479,11 @@ export function SecretPage({
         {notes.length === 0 ? (
           <EmptyState
             icon={<Lock />}
-            title={query ? "没有匹配的秘文" : "还没有秘文"}
+            title={query ? t("没有匹配的秘文") : t("还没有秘文")}
             hint={
               query
-                ? "换个关键词试试（只按密钥名/标题/标签搜索）"
-                : "选中对方发来的密文内容，连按两次 ⇧ Shift 即可解密到这里"
+                ? t("换个关键词试试（只按密钥名/标题/标签搜索）")
+                : t("选中对方发来的密文内容，连按两次 ⇧ Shift 即可解密到这里")
             }
           />
         ) : (

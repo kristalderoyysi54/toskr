@@ -3,6 +3,7 @@
 //! 容器是单文件 ZIP，但只使用 Stored 模式，避免大媒体在导出时产生额外内存峰值。
 //! 所有路径、大小、hash、重复项与 symlink 属性都在导入前 fail-closed 校验。
 
+use crate::i18n::pick;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -181,13 +182,13 @@ fn export_backup_inner(
     if destination.exists() {
         return Err(failure(
             BackupFailureCode::DestinationExists,
-            "目标备份文件已存在；为防止误覆盖，请选择新文件名",
+            pick("目标备份文件已存在；为防止误覆盖，请选择新文件名", "Target backup file already exists. Choose a new file name to avoid overwriting it"),
         ));
     }
     let state_value: Value = serde_json::from_str(state_json).map_err(|error| {
         failure(
             BackupFailureCode::InvalidState,
-            format!("业务状态 JSON 无效：{error}"),
+            crate::tr_fmt!("业务状态 JSON 无效：{error}", "Invalid data state JSON: {error}"),
         )
     })?;
     reject_forbidden_fields(&state_value)?;
@@ -195,14 +196,14 @@ fn export_backup_inner(
     if summary.media.len().saturating_add(2) > MAX_ARCHIVE_ENTRIES {
         return Err(failure(
             BackupFailureCode::FileTooLarge,
-            "备份条目数量超过 100000",
+            pick("备份条目数量超过 100000", "Backup has more than 100000 entries"),
         ));
     }
     let state_bytes = serde_json::to_vec_pretty(&state_value).map_err(json_failure)?;
     if state_bytes.len() as u64 > MAX_ARCHIVE_FILE_BYTES {
         return Err(failure(
             BackupFailureCode::FileTooLarge,
-            "业务状态超过 256 MiB",
+            pick("业务状态超过 256 MiB", "Data state exceeds 256 MiB"),
         ));
     }
     let mut total_bytes = state_bytes.len() as u64;
@@ -219,7 +220,7 @@ fn export_backup_inner(
         let path = data_dir.join(MEDIA_DIR).join(name);
         let metadata = fs::symlink_metadata(&path).map_err(|_| {
             missing.push(name.clone());
-            failure(BackupFailureCode::MissingMedia, "备份存在缺失媒体")
+            failure(BackupFailureCode::MissingMedia, pick("备份存在缺失媒体", "Backup is missing media"))
         });
         let Ok(metadata) = metadata else {
             continue;
@@ -227,7 +228,7 @@ fn export_backup_inner(
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             return Err(failure(
                 BackupFailureCode::SymlinkRejected,
-                format!("媒体不是普通文件：{name}"),
+                crate::tr_fmt!("媒体不是普通文件：{name}", "Media isn't a regular file: {name}"),
             ));
         }
         // 磁盘上是加密信封（+33B 开销），预检上限按信封长度放宽；明文尺寸
@@ -235,14 +236,14 @@ fn export_backup_inner(
         if metadata.len() > MAX_ARCHIVE_FILE_BYTES + crate::data_crypto::ENVELOPE_OVERHEAD as u64 {
             return Err(failure(
                 BackupFailureCode::FileTooLarge,
-                format!("媒体文件超过 256 MiB：{name}"),
+                crate::tr_fmt!("媒体文件超过 256 MiB：{name}", "Media file exceeds 256 MiB: {name}"),
             ));
         }
         let (sha256, size) = sha256_file(&path)?;
         if size > MAX_ARCHIVE_FILE_BYTES {
             return Err(failure(
                 BackupFailureCode::FileTooLarge,
-                format!("媒体文件超过 256 MiB：{name}"),
+                crate::tr_fmt!("媒体文件超过 256 MiB：{name}", "Media file exceeds 256 MiB: {name}"),
             ));
         }
         if require_content_identity {
@@ -254,7 +255,7 @@ fn export_backup_inner(
         if total_bytes > MAX_ARCHIVE_TOTAL_BYTES {
             return Err(failure(
                 BackupFailureCode::FileTooLarge,
-                "完整备份内容总大小超过 1 GiB",
+                pick("完整备份内容总大小超过 1 GiB", "Full backup content exceeds 1 GiB"),
             ));
         }
         let relative = format!("media/{name}");
@@ -269,7 +270,7 @@ fn export_backup_inner(
     if !missing.is_empty() {
         return Err(BackupFailure {
             code: BackupFailureCode::MissingMedia,
-            message: format!("缺少 {} 个被引用媒体，未生成伪完整备份", missing.len()),
+            message: crate::tr_fmt!("缺少 {} 个被引用媒体，未生成伪完整备份", "{} referenced media file(s) missing; no incomplete backup was created", missing.len()),
         });
     }
     let manifest = BackupManifest {
@@ -329,7 +330,7 @@ fn export_backup_inner(
                 .map_err(|error| {
                     failure(
                         BackupFailureCode::IoFailed,
-                        format!("封装恢复备份失败：{}", error.message()),
+                        crate::tr_fmt!("封装恢复备份失败：{}", "Failed to seal recovery backup: {}", error.message()),
                     )
                 })?;
             drop(zip_bytes);
@@ -348,7 +349,7 @@ fn export_backup_inner(
         if archive_revision(destination).ok().as_deref() != Some(owned_revision.as_str()) {
             return Err(failure(
                 BackupFailureCode::DestinationChanged,
-                "备份目标在发布后被外部替换；未把外部版本认作成功备份",
+                pick("备份目标在发布后被外部替换；未把外部版本认作成功备份", "Backup target was replaced externally after writing; the external version wasn't treated as a successful backup"),
             ));
         }
         fs::remove_file(&publish).map_err(io_failure)?;
@@ -398,7 +399,7 @@ fn verify_content_addressed_media(path: &Path, name: &str) -> Result<(), BackupF
     if actual != expected {
         return Err(failure(
             BackupFailureCode::SourceChanged,
-            format!("媒体内容已被外部替换：{name}"),
+            crate::tr_fmt!("媒体内容已被外部替换：{name}", "Media content was replaced externally: {name}"),
         ));
     }
     Ok(())
@@ -463,7 +464,7 @@ pub(crate) fn finalize_export_destination(
                 } else {
                     BackupFailureCode::SourceChanged
                 },
-                format!("导出末端无法捕获备份目标：{}", error.message),
+                crate::tr_fmt!("导出末端无法捕获备份目标：{}", "Can't capture the backup target at the end of export: {}", error.message),
             ));
         }
     };
@@ -480,16 +481,16 @@ pub(crate) fn finalize_export_destination(
             }
             return Err(failure(
                 BackupFailureCode::SourceChanged,
-                "导出期间活动数据发生外部变化；仅移除了本事务拥有的不一致备份",
+                pick("导出期间活动数据发生外部变化；仅移除了本事务拥有的不一致备份", "Active data changed during export; only the inconsistent backup from this export was removed"),
             ));
         }
         let restored = restore_captured_destination(&capture, destination);
         return Err(failure(
             BackupFailureCode::SourceChanged,
             if restored {
-                "导出期间活动数据和目标文件均发生外部变化；外部目标已原样保留"
+                pick("导出期间活动数据和目标文件均发生外部变化；外部目标已原样保留", "Active data and the target file both changed during export; the external target was kept as is")
             } else {
-                "导出期间活动数据和目标文件均发生外部变化；外部目标已保留在隔离路径"
+                pick("导出期间活动数据和目标文件均发生外部变化；外部目标已保留在隔离路径", "Active data and the target file both changed during export; the external target was moved to a quarantine path")
             },
         ));
     }
@@ -499,9 +500,9 @@ pub(crate) fn finalize_export_destination(
         return Err(failure(
             BackupFailureCode::DestinationChanged,
             if restored {
-                "备份目标在导出后被外部替换；外部版本已原样保留"
+                pick("备份目标在导出后被外部替换；外部版本已原样保留", "Backup target was replaced externally after export; the external version was kept as is")
             } else {
-                "备份目标在导出后被外部替换；外部版本已保留在隔离路径"
+                pick("备份目标在导出后被外部替换；外部版本已保留在隔离路径", "Backup target was replaced externally after export; the external version was moved to a quarantine path")
             },
         ));
     }
@@ -510,7 +511,7 @@ pub(crate) fn finalize_export_destination(
     {
         return Err(failure(
             BackupFailureCode::DestinationChanged,
-            "备份目标在最终所有权校验期间发生外部变化；未报告成功",
+            pick("备份目标在最终所有权校验期间发生外部变化；未报告成功", "Backup target changed during the final ownership check; not reported as successful"),
         ));
     }
     Ok(())
@@ -541,7 +542,7 @@ pub fn inspect_backup(path: &Path) -> Result<BackupInspection, BackupFailure> {
                 } else {
                     recovery_error
                 };
-                encrypted_source_failure("加密导入来源", error)
+                encrypted_source_failure(pick("加密导入来源", "Encrypted import source"), error)
             })?;
         if let Ok((_, inspection)) = inspect_native_store(
             path,
@@ -581,7 +582,7 @@ pub fn inspect_backup(path: &Path) -> Result<BackupInspection, BackupFailure> {
         }),
         Err(error) => Err(failure(
             BackupFailureCode::CorruptArchive,
-            format!("完整备份容器损坏：{error}"),
+            crate::tr_fmt!("完整备份容器损坏：{error}", "Full backup archive is corrupted: {error}"),
         )),
     }
 }
@@ -596,7 +597,7 @@ fn read_source_bytes(path: &Path, max: u64) -> Result<Vec<u8>, BackupFailure> {
     if bytes.len() as u64 > max {
         return Err(failure(
             BackupFailureCode::FileTooLarge,
-            "导入来源超过允许大小",
+            pick("导入来源超过允许大小", "Import source exceeds the allowed size"),
         ));
     }
     Ok(bytes)
@@ -605,7 +606,7 @@ fn read_source_bytes(path: &Path, max: u64) -> Result<Vec<u8>, BackupFailure> {
 fn encrypted_source_failure(label: &str, error: crate::data_crypto::CryptoError) -> BackupFailure {
     failure(
         BackupFailureCode::CorruptArchive,
-        format!("{label}无法解锁：{}", error.message()),
+        crate::tr_fmt!("{label}无法解锁：{}", "{label} can't be unlocked: {}", error.message()),
     )
 }
 
@@ -668,15 +669,15 @@ fn inspect_native_store(
     }))?;
     let mut warnings = match format {
         BackupFormat::NativeData => {
-            vec!["这是加密活动数据文件，不是旧 JSON；将转为预检它所在的数据文件夹".into()]
+            vec![pick("这是加密活动数据文件，不是旧 JSON；将转为预检它所在的数据文件夹", "This is an encrypted active data file, not legacy JSON; its data folder will be checked instead").into()]
         }
         BackupFormat::PreEncryptSnapshot => vec![
-            "这是加密迁移前自动保留的索引保险档；恢复前会先备份当前数据并按 ID 保留新增记录".into(),
+            pick("这是加密迁移前自动保留的索引保险档；恢复前会先备份当前数据并按 ID 保留新增记录", "This is the safety copy saved before encryption migration. Restoring first backs up current data and keeps newer records by ID").into(),
         ],
         _ => Vec::new(),
     };
     if store_key == "copper" {
-        warnings.push("检测到旧版 copper 状态别名，恢复时会迁为 toskr".into());
+        warnings.push(pick("检测到旧版 copper 状态别名，恢复时会迁为 toskr", "Legacy copper state alias detected; it will be migrated to toskr on restore").into());
     }
     let counts = BackupCounts {
         media: summary.media.len(),
@@ -686,7 +687,7 @@ fn inspect_native_store(
         && path.file_name().is_some_and(|name| name == DATA_FILE);
     if format == BackupFormat::NativeData && !canonical_native_path {
         warnings.push(
-            "文件名不是 toskr-data.json；请复制到独立文件夹并改为标准文件名后再预检"
+            pick("文件名不是 toskr-data.json；请复制到独立文件夹并改为标准文件名后再预检", "File name isn't toskr-data.json. Copy it into its own folder, rename it, then check again")
                 .into(),
         );
     }
@@ -722,11 +723,11 @@ pub fn read_pre_encrypt_snapshot(
     if !crate::data_crypto::looks_sealed(&bytes) {
         return Err(failure(
             BackupFailureCode::InvalidState,
-            "迁移保险档不是 TSK1 加密信封",
+            pick("迁移保险档不是 TSK1 加密信封", "Migration safety copy isn't a TSK1 encrypted envelope"),
         ));
     }
     let plain = crate::data_crypto::open(crate::data_crypto::Purpose::Recovery, &bytes)
-        .map_err(|error| encrypted_source_failure("迁移保险档", error))?;
+        .map_err(|error| encrypted_source_failure(pick("迁移保险档", "Migration safety copy"), error))?;
     inspect_native_store(path, &plain, revision, BackupFormat::PreEncryptSnapshot)
         .map(|(persisted, _)| persisted)
 }
@@ -1011,7 +1012,7 @@ fn read_complete_archive<R: Read + Seek>(
     {
         return Err(failure(
             BackupFailureCode::UnsupportedSchema,
-            "备份 schema 高于当前版本",
+            pick("备份 schema 高于当前版本", "Backup schema is newer than this version of Toskr"),
         ));
     }
     let mut declared = BTreeSet::new();
@@ -1094,7 +1095,7 @@ fn read_complete_archive<R: Read + Seek>(
     if !missing_media.is_empty() {
         return Err(failure(
             BackupFailureCode::MissingMedia,
-            format!("完整备份缺少 {} 个被引用媒体", missing_media.len()),
+            crate::tr_fmt!("完整备份缺少 {} 个被引用媒体", "Full backup is missing {} referenced media file(s)", missing_media.len()),
         ));
     }
     let expected_payloads = std::iter::once(STATE_PATH.to_string())
@@ -1128,9 +1129,9 @@ fn inspect_legacy_json(path: &Path) -> Result<BackupInspection, BackupFailure> {
     let (bytes, state) = read_legacy_value(path)?;
     let object = validate_legacy_state(&state)?;
     let media = collect_media_references(&state)?;
-    let mut warnings = vec!["旧 JSON 不含 manifest、hash 与媒体实体".into()];
+    let mut warnings = vec![pick("旧 JSON 不含 manifest、hash 与媒体实体", "Legacy JSON has no manifest, hashes or media files").into()];
     if !object.get("taskSections").is_some_and(Value::is_array) {
-        warnings.push("旧 JSON 可能不含 taskSections，将回落到默认任务分组".into());
+        warnings.push(pick("旧 JSON 可能不含 taskSections，将回落到默认任务分组", "Legacy JSON may lack taskSections; the default task group will be used").into());
     }
     Ok(BackupInspection {
         format: BackupFormat::LegacyJson,
@@ -1161,7 +1162,7 @@ pub fn read_legacy_backup(path: &Path, expected_revision: &str) -> Result<String
     String::from_utf8(bytes).map_err(|error| {
         failure(
             BackupFailureCode::CorruptArchive,
-            format!("旧 JSON 不是 UTF-8：{error}"),
+            crate::tr_fmt!("旧 JSON 不是 UTF-8：{error}", "Legacy JSON isn't UTF-8: {error}"),
         )
     })
 }
@@ -1174,12 +1175,12 @@ fn read_legacy_value(path: &Path) -> Result<(Vec<u8>, Value), BackupFailure> {
         .read_to_end(&mut bytes)
         .map_err(io_failure)?;
     if bytes.len() as u64 > MAX_ARCHIVE_FILE_BYTES {
-        return Err(failure(BackupFailureCode::FileTooLarge, "旧 JSON 备份过大"));
+        return Err(failure(BackupFailureCode::FileTooLarge, pick("旧 JSON 备份过大", "Legacy JSON backup is too large")));
     }
     let state = serde_json::from_slice(&bytes).map_err(|error| {
         failure(
             BackupFailureCode::CorruptArchive,
-            format!("文件不是有效旧 JSON：{error}"),
+            crate::tr_fmt!("文件不是有效旧 JSON：{error}", "File isn't valid legacy JSON: {error}"),
         )
     })?;
     Ok((bytes, state))
@@ -1241,7 +1242,7 @@ fn summarize_state(value: &Value) -> Result<StateSummary, BackupFailure> {
     if store_version > MAX_STORE_VERSION {
         return Err(failure(
             BackupFailureCode::UnsupportedSchema,
-            "store schema 高于当前版本",
+            pick("store schema 高于当前版本", "Store schema is newer than this version of Toskr"),
         ));
     }
     let state = root
@@ -1823,7 +1824,7 @@ fn ensure_archive_revision(
     if expected.is_empty() || actual != expected {
         return Err(failure(
             BackupFailureCode::ExternalConflict,
-            "备份文件自预检后已变化；请重新预检并确认导入内容",
+            pick("备份文件自预检后已变化；请重新预检并确认导入内容", "Backup file changed after it was checked. Check it again and confirm what to import"),
         ));
     }
     Ok(())
@@ -1866,7 +1867,7 @@ fn open_archive_with_revision(path: &Path) -> Result<(Box<dyn ReadSeek>, String)
             .map_err(|error| {
                 failure(
                     BackupFailureCode::CorruptArchive,
-                    format!("恢复备份由本机密钥封装，无法在此打开：{}", error.message()),
+                    crate::tr_fmt!("恢复备份由本机密钥封装，无法在此打开：{}", "This recovery backup is sealed with a device-specific key and can't be opened here: {}", error.message()),
                 )
             })?;
         return Ok((Box::new(Cursor::new(plain)), revision));
@@ -1895,13 +1896,13 @@ fn read_media_plaintext(path: &Path) -> Result<Vec<u8>, BackupFailure> {
             .map_err(|error| {
                 failure(
                     BackupFailureCode::IoFailed,
-                    format!("媒体解密失败：{}", error.message()),
+                    crate::tr_fmt!("媒体解密失败：{}", "Failed to decrypt media: {}", error.message()),
                 )
             })?;
     if plain.len() as u64 > MAX_ARCHIVE_FILE_BYTES {
         return Err(failure(
             BackupFailureCode::FileTooLarge,
-            "媒体文件超过 256 MiB",
+            pick("媒体文件超过 256 MiB", "Media file exceeds 256 MiB"),
         ));
     }
     Ok(plain)
@@ -1924,7 +1925,7 @@ fn copy_file_and_verify(
     if plain.len() as u64 != expected_size || sha256_hex(&plain) != expected_hash {
         return Err(failure(
             BackupFailureCode::HashMismatch,
-            "媒体在导出期间发生变化，已取消备份",
+            pick("媒体在导出期间发生变化，已取消备份", "Media changed during export; backup canceled"),
         ));
     }
     writer.write_all(&plain).map_err(io_failure)
@@ -1955,7 +1956,7 @@ fn open_regular_nofollow(path: &Path, max_bytes: u64) -> Result<File, BackupFail
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(failure(
             BackupFailureCode::SymlinkRejected,
-            "备份来源必须是普通文件，不能是符号链接",
+            pick("备份来源必须是普通文件，不能是符号链接", "Backup source must be a regular file, not a symbolic link"),
         ));
     }
     let mut options = OpenOptions::new();
@@ -1967,13 +1968,13 @@ fn open_regular_nofollow(path: &Path, max_bytes: u64) -> Result<File, BackupFail
     if !opened.is_file() {
         return Err(failure(
             BackupFailureCode::SymlinkRejected,
-            "备份来源不是普通文件",
+            pick("备份来源不是普通文件", "Backup source isn't a regular file"),
         ));
     }
     if opened.len() > max_bytes {
         return Err(failure(
             BackupFailureCode::FileTooLarge,
-            "备份文件超过读取安全上限",
+            pick("备份文件超过读取安全上限", "Backup file exceeds the safe read limit"),
         ));
     }
     Ok(file)
@@ -1984,7 +1985,7 @@ fn commit_without_overwrite(source: &Path, destination: &Path) -> Result<(), Bac
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(failure(
             BackupFailureCode::DestinationExists,
-            "目标备份文件已存在；未覆盖原文件",
+            pick("目标备份文件已存在；未覆盖原文件", "Target backup file already exists; it was not overwritten"),
         )),
         Err(error) => Err(io_failure(error)),
     }
@@ -1993,7 +1994,7 @@ fn commit_without_overwrite(source: &Path, destination: &Path) -> Result<(), Bac
 fn crypto_backup_failure(error: crate::data_crypto::CryptoError) -> BackupFailure {
     failure(
         BackupFailureCode::IoFailed,
-        format!("加密失败：{}", error.message()),
+        crate::tr_fmt!("加密失败：{}", "Encryption failed: {}", error.message()),
     )
 }
 
@@ -2007,21 +2008,21 @@ fn failure(code: BackupFailureCode, message: impl Into<String>) -> BackupFailure
 fn io_failure(error: std::io::Error) -> BackupFailure {
     failure(
         BackupFailureCode::IoFailed,
-        format!("文件操作失败：{error}"),
+        crate::tr_fmt!("文件操作失败：{error}", "File operation failed: {error}"),
     )
 }
 
 fn zip_failure(error: zip::result::ZipError) -> BackupFailure {
     failure(
         BackupFailureCode::CorruptArchive,
-        format!("归档处理失败：{error}"),
+        crate::tr_fmt!("归档处理失败：{error}", "Archive processing failed: {error}"),
     )
 }
 
 fn json_failure(error: serde_json::Error) -> BackupFailure {
     failure(
         BackupFailureCode::InvalidState,
-        format!("JSON 处理失败：{error}"),
+        crate::tr_fmt!("JSON 处理失败：{error}", "JSON processing failed: {error}"),
     )
 }
 

@@ -16,6 +16,7 @@ import {
 } from "@/lib/tauri";
 import type { ImagePreviewEditContext } from "@/lib/imageEditor";
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n";
 
 export function RichImageBlock({
   block,
@@ -36,8 +37,9 @@ export function RichImageBlock({
   selected?: boolean;
   onSelect?: () => void;
 }) {
+  const t = useT();
   const url = useNoteImage(block.file);
-  const label = block.alt?.trim() || `图片 ${index + 1}`;
+  const label = block.alt?.trim() || t("图片 {n}", { n: index + 1 });
   const open = () =>
     onOpen
       ? onOpen(files, index)
@@ -46,8 +48,8 @@ export function RichImageBlock({
     <figure className="my-3 flex justify-center">
       <button
         type="button"
-        aria-label={`${onSelect ? "选择" : "查看"}${label}`}
-        title={onSelect ? "单击选中，双击查看" : "查看原图"}
+        aria-label={onSelect ? t("选择{label}", { label }) : t("查看{label}", { label })}
+        title={onSelect ? t("单击选中，双击查看") : t("查看原图")}
         aria-pressed={onSelect ? selected : undefined}
         onClick={onSelect ?? open}
         onDoubleClick={onSelect ? open : undefined}
@@ -102,8 +104,9 @@ export function EditableRichImageBlock({
   onSend?: () => void;
   sendDisabledReason?: string | null;
 }) {
+  const t = useT();
   const number = imageIndex + 1;
-  const label = block.alt?.trim() || `图片 ${number}`;
+  const label = block.alt?.trim() || t("图片 {n}", { n: number });
   return (
     <section
       data-rich-image-edit-block={blockIndex}
@@ -114,13 +117,13 @@ export function EditableRichImageBlock({
       )}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="text-label text-muted-foreground">图片 {number}</span>
-        <div role="toolbar" aria-label={`图片 ${number} 操作`} className="flex gap-1">
-          <IconButton label={`查看${label}`} size="xs" onClick={onOpen}>
+        <span className="text-label text-muted-foreground">{t("图片 {n}", { n: number })}</span>
+        <div role="toolbar" aria-label={t("图片 {n} 操作", { n: number })} className="flex gap-1">
+          <IconButton label={t("查看{label}", { label })} size="xs" onClick={onOpen}>
             <Maximize2 />
           </IconButton>
           <IconButton
-            label={`删除${label}`}
+            label={t("删除{label}", { label })}
             size="xs"
             tone="danger"
             onClick={onRemove}
@@ -148,13 +151,13 @@ export function EditableRichImageBlock({
             disabled={!!sendDisabledReason}
             title={
               sendDisabledReason
-                ? `发送选中不可用：${sendDisabledReason}`
-                : `只发送图片 ${number}`
+                ? t("发送选中不可用：{reason}", { reason: sendDisabledReason })
+                : t("只发送图片 {n}", { n: number })
             }
             onClick={onSend}
           >
             <Send />
-            发送选中
+            {t("发送选中")}
           </Button>
         </div>
       )}
@@ -242,6 +245,7 @@ export function RichNoteTextEditor({
   onSelectionActiveChange,
   onTextSelectionChange,
 }: RichNoteTextEditorProps) {
+  const t = useT();
   const firstTextRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
   const imeSelectionBlockedRef = useRef(false);
@@ -286,11 +290,11 @@ export function RichNoteTextEditor({
   let textIndex = 0;
   return (
     <div
-      aria-label="图文文字编辑器"
+      aria-label={t("图文文字编辑器")}
       className="space-y-2 font-mono text-body leading-relaxed"
     >
       <p className="text-label text-muted-foreground">
-        图片位置已锁定；点图片选中，双击或点右上角查看；选中文字或图片后可发送选中
+        {t("图片位置已锁定；点图片选中，双击或点右上角查看；选中文字或图片后可发送选中")}
       </p>
       {blocks.map((block, index) => {
         if (block.type === "image") {
@@ -326,7 +330,7 @@ export function RichNoteTextEditor({
           <textarea
             key={`text-${index}`}
             ref={currentText === 0 ? firstTextRef : undefined}
-            aria-label={`文字段落 ${currentText + 1}`}
+            aria-label={t("文字段落 {n}", { n: currentText + 1 })}
             defaultValue={block.text}
             rows={Math.min(12, Math.max(3, block.text.split("\n").length + 1))}
             onChange={(event) =>

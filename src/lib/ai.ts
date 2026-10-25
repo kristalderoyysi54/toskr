@@ -4,6 +4,7 @@ import {
   matchesDataGeneration,
   type DataGenerationLease,
 } from "@/lib/dataGeneration";
+import { getLocale, t } from "@/lib/i18n";
 import { tip } from "@/lib/tip";
 import {
   useNotesStore,
@@ -24,6 +25,7 @@ export {
   AI_PRESETS,
   AiError,
   aiErrorTip,
+  aiPresetLabel,
   aiReady,
   matchPreset,
 } from "@/lib/aiClient";
@@ -241,14 +243,14 @@ export function parseAiRaw(raw: string): unknown {
     try {
       return JSON.parse(repairJson(body));
     } catch {
-      throw new AiError("parse", "AI 返回内容不是合法 JSON");
+      throw new AiError("parse", t("AI 返回内容不是合法 JSON"));
     }
   }
 }
 
 export function parseAiJson<T>(raw: string, guard: (v: unknown) => v is T): T {
   const parsed = parseAiRaw(raw);
-  if (!guard(parsed)) throw new AiError("parse", "AI 返回内容缺少必要字段");
+  if (!guard(parsed)) throw new AiError("parse", t("AI 返回内容缺少必要字段"));
   return parsed;
 }
 
@@ -276,6 +278,12 @@ function withLock(key: string): boolean {
 // ===== 提示词 =====
 
 const ONLY_JSON = "只输出 JSON，不要任何解释文字，不要使用 markdown 代码块。";
+const ONLY_JSON_EN = "Output JSON only. No explanations, no markdown code fences.";
+
+/** 提示词跟随界面语言；中文提示词保持原样，英文版输出结构与取值完全一致。 */
+function isEn(): boolean {
+  return getLocale() === "en";
+}
 
 function nowContext(now: number): string {
   const d = new Date(now);
@@ -285,7 +293,16 @@ function nowContext(now: number): string {
   return `当前本地时间：${iso}（${week}）`;
 }
 
+function nowContextEn(now: number): string {
+  const d = new Date(now);
+  const week = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()];
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const iso = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `Current local time: ${iso} (${week})`;
+}
+
 function parseTaskSystem(now: number, sectionNames: string[]): string {
+  if (isEn()) return parseTaskSystemEn(now, sectionNames);
   return `你是任务解析助手。将用户输入的一句话解析为结构化任务 JSON。
 
 ${nowContext(now)}
@@ -325,6 +342,46 @@ ${nowContext(now)}
 ${ONLY_JSON}`;
 }
 
+function parseTaskSystemEn(now: number, sectionNames: string[]): string {
+  return `You are a task parser. Turn the user's one-line input into a structured task JSON.
+
+${nowContextEn(now)}
+
+Rules:
+1. title: the core of the task. Drop conversational wrappers such as "remind me to" or "help me" and the time phrase; keep the action itself, at most 30 characters.
+2. due: only when a time is mentioned. Pick one of three forms; never compute a timestamp yourself:
+   - Relative duration ("in 20 minutes", "in 2 hours") → {"minutesFromNow": minutes} (convert hours to minutes)
+   - Specific time ("3pm", "9am tomorrow") → {"date": "YYYY-MM-DD", "time": "HH:MM"} (24-hour clock;
+     derive it from the current date above; if that time has already passed today, use tomorrow's date; "tomorrow" must use tomorrow's date)
+   - No time mentioned → null
+3. priority: must be exactly one of "none"|"low"|"mid"|"high". Words like "important", "urgent", "must", "deadline" → high;
+   "when free", "no rush", "whenever" → low; cannot tell → none.
+4. checklist: give items only in these two cases; otherwise an empty array []:
+   a. The user asks for steps or a list ("break it down", "in steps", "make a checklist") → you break it into 3-8 items, each starting with a verb, at most 20 characters;
+   b. The user lists several parallel items and asks to group them ("make these two/these into to-dos/subtasks/checklist items",
+      or one sentence clearly contains several parallel tasks) → one checklist item per thing, keeping the user's wording (light trimming is fine).
+5. When checklist is not empty, title must be a short summary of the whole group (at most 30 characters);
+   never put the entire original text into title.
+6. recurrence: only when the user states a repeat ("every day", "every weekday", "every Monday", "every Tue and Thu", "every month", "every year"); otherwise null:
+   {"freq": "daily"|"weekdays"|"weekly"|"monthly"|"yearly", "weekdays": number[]}
+   weekdays only for weekly, 0=Sunday 1=Monday … 6=Saturday. With a recurrence, due is the date and time of the next occurrence.
+7. section: when the user names a group to put it in ("put it in Work", "file under Chores") and it matches one of the group names below, output that group name exactly as listed (do not translate it); otherwise null.
+   Existing groups: ${sectionNames.join(", ") || "(none)"}
+
+Output shape (every key must be present):
+{"title": string, "due": {"minutesFromNow": number} | {"date": string, "time": string} | null, "priority": string, "checklist": string[], "recurrence": {"freq": string, "weekdays"?: number[]} | null, "section": string | null}
+
+Examples (assume it is now 2026-08-05 Wed 10:00):
+Input "remind me about the meeting at 3pm" → {"title":"Meeting","due":{"date":"2026-08-05","time":"15:00"},"priority":"none","checklist":[]}
+Input "remind me to turn off the stove in 20 minutes" → {"title":"Turn off the stove","due":{"minutesFromNow":20},"priority":"high","checklist":[]}
+Input "remind me to review at 8pm" (it is already 21:00) → {"title":"Review","due":{"date":"2026-08-06","time":"20:00"},"priority":"none","checklist":[]}
+Input "submit the weekly report by 9am tomorrow, break it down" → {"title":"Submit weekly report","due":{"date":"2026-08-06","time":"09:00"},"priority":"mid","checklist":["List this week's done items","Draft next week's plan","Check data and attachments","Send the report"]}
+Input "add JSAPI support for back-orders, add jsAPI type to the settlement sheet, make these two to-dos" → {"title":"JSAPI support","due":null,"priority":"none","checklist":["Add JSAPI support for back-orders","Add jsAPI type to the settlement sheet"],"recurrence":null,"section":null}
+Input "submit the weekly report every Monday at 10am, put it in Work" (existing groups include "Work") → {"title":"Submit weekly report","due":{"date":"2026-08-10","time":"10:00"},"priority":"none","checklist":[],"recurrence":{"freq":"weekly","weekdays":[1]},"section":"Work"}
+
+${ONLY_JSON_EN}`;
+}
+
 const SPLIT_SYSTEM = `你是任务拆解助手。把给出的任务（可能带备注/已有检查项）拆解为 3-8 条具体可执行的检查项。
 要求：动词开头、可勾选完成、每条不超过20字、按执行顺序排列、不要重复任务标题本身；
 若提供了"已有检查项"，不要生成与其重复的内容。
@@ -342,11 +399,28 @@ const TITLE_SYSTEM = `你是标题生成助手。为给出的笔记内容生成�
 输出结构：{"title": string}
 ${ONLY_JSON}`;
 
+const SPLIT_SYSTEM_EN = `You break tasks down. Split the given task (it may include a note or existing checklist items) into 3-8 concrete, actionable checklist items.
+Each item: starts with a verb, can be checked off, at most 20 characters, in execution order, and does not repeat the task title itself;
+if "Existing checklist" is provided, do not generate items that duplicate it.
+Output shape: {"items": string[]}
+${ONLY_JSON_EN}`;
+
+const NOTE_TO_TASK_SYSTEM_EN = `You turn notes into tasks. Read the note and extract one task title and a few checklist items.
+title: at most 30 characters, summarizing the core thing to do.
+checklist: 3-8 actionable steps, each starting with a verb, at most 20 characters; if the content clearly has no multiple steps, give 1-2 items or an empty array.
+Output shape: {"title": string, "checklist": string[]}
+${ONLY_JSON_EN}`;
+
+const TITLE_SYSTEM_EN = `You write titles. Write a concise title of at most 12 characters for the given note,
+accurately summarizing its main topic, with no punctuation and no quotes.
+Output shape: {"title": string}
+${ONLY_JSON_EN}`;
+
 // ===== 业务功能 =====
 
 function beginAiLease(): DataGenerationLease | null {
   if (isDataOperationLocked()) {
-    tip("warn", "数据只读期间不能启动 AI 操作");
+    tip("warn", t("数据只读期间不能启动 AI 操作"));
     return null;
   }
   return beginDataGenerationLease();
@@ -383,7 +457,7 @@ export async function parseTaskDraft(rawText: string): Promise<TaskDraft | null>
       maxTokens: 600,
     });
     const r = normalizeParsedTask(parseAiRaw(raw), text, referenceNow);
-    if (!r) throw new AiError("parse", "AI 返回内容缺少必要字段");
+    if (!r) throw new AiError("parse", t("AI 返回内容缺少必要字段"));
     if (!matchesDataGeneration(lease.generation)) return null;
     const section = r.sectionName
       ? useNotesStore.getState().taskSections.find((s) => s.name === r.sectionName)
@@ -401,7 +475,7 @@ export async function parseTaskDraft(rawText: string): Promise<TaskDraft | null>
   } catch (e) {
     if (!matchesDataGeneration(lease.generation)) return null;
     useNotesStore.getState().addTask(text);
-    tip("warn", `${aiErrorTip(e)} · 已按原文创建任务`);
+    tip("warn", t("{error} · 已按原文创建任务", { error: aiErrorTip(e) }));
     return null;
   } finally {
     lease.release();
@@ -421,7 +495,7 @@ export function commitTaskDraft(draft: TaskDraft): boolean {
   // 规则在到期之后设：无到期时 setTaskRecurrence 会自己补首期
   if (draft.recurrence) store.setTaskRecurrence(id, draft.recurrence);
   for (const item of draft.checklist) store.addChecklistItem(id, item);
-  tip("ok", `已创建任务「${truncateChars(draft.title, 12)}」`);
+  tip("ok", t("已创建任务「{title}」", { title: truncateChars(draft.title, 12) }));
   return true;
 }
 
@@ -444,15 +518,24 @@ export async function splitSubtasks(taskId: string): Promise<void> {
     const task = useNotesStore.getState().tasks.find((t) => t.id === taskId);
     if (!task) return;
     if (!aiReady(useNotesStore.getState().settings)) {
-      tip("info", "请先在 设置 → 更多功能 → AI 智能 中配置并启用");
+      tip("info", t("请先在 设置 → 更多功能 → AI 智能 中配置并启用"));
       return;
     }
-    tip("info", "AI 正在拆解子任务…");
+    tip("info", t("AI 正在拆解子任务…"));
+    const en = isEn();
     let user = task.text;
-    if (task.note) user += `\n备注：${task.note}`;
+    if (task.note) user += en ? `\nNote: ${task.note}` : `\n备注：${task.note}`;
     const existing = (task.checklist ?? []).map((c) => c.text);
-    if (existing.length) user += `\n已有检查项：${existing.join("、")}`;
-    const r = await callAiJson("split-subtasks", SPLIT_SYSTEM, user, isSplitResult, 600);
+    if (existing.length) {
+      user += en ? `\nExisting checklist: ${existing.join("; ")}` : `\n已有检查项：${existing.join("、")}`;
+    }
+    const r = await callAiJson(
+      "split-subtasks",
+      en ? SPLIT_SYSTEM_EN : SPLIT_SYSTEM,
+      user,
+      isSplitResult,
+      600
+    );
     const items = r.items.map((t) => t.trim()).filter(Boolean).slice(0, 8);
     const store = useNotesStore.getState();
     const current = store.tasks.find((candidate) => candidate.id === taskId);
@@ -461,12 +544,12 @@ export async function splitSubtasks(taskId: string): Promise<void> {
       !items.length ||
       current !== task
     ) {
-      tip("warn", "AI 未返回可用的检查项");
+      tip("warn", t("AI 未返回可用的检查项"));
       return;
     }
     store.snapshot("AI 拆解子任务");
     for (const item of items) store.addChecklistItem(taskId, item);
-    undoableTip(`已拆解 ${items.length} 条子任务`);
+    undoableTip(t("已拆解 {n} 条子任务", { n: items.length }));
   } catch (e) {
     tip("warn", aiErrorTip(e));
   } finally {
@@ -488,13 +571,13 @@ export async function noteToTaskSmart(noteId: string): Promise<void> {
     const note = useNotesStore.getState().notes.find((n) => n.id === noteId);
     if (!note || note.kind === "image") return;
     if (!aiReady(useNotesStore.getState().settings)) {
-      tip("info", "请先在 设置 → 更多功能 → AI 智能 中配置并启用");
+      tip("info", t("请先在 设置 → 更多功能 → AI 智能 中配置并启用"));
       return;
     }
-    tip("info", "AI 正在提炼任务…");
+    tip("info", t("AI 正在提炼任务…"));
     const r = await callAiJson(
       "note-to-task",
-      NOTE_TO_TASK_SYSTEM,
+      isEn() ? NOTE_TO_TASK_SYSTEM_EN : NOTE_TO_TASK_SYSTEM,
       note.text,
       isNoteToTaskResult,
       600
@@ -504,14 +587,14 @@ export async function noteToTaskSmart(noteId: string): Promise<void> {
       !matchesDataGeneration(lease.generation) ||
       useNotesStore.getState().notes.find((candidate) => candidate.id === noteId) !== note
     ) {
-      tip("warn", "笔记已不存在，转换取消");
+      tip("warn", t("笔记已不存在，转换取消"));
       return;
     }
     const ok = useNotesStore
       .getState()
       .convertNoteToTaskSmart(noteId, truncateChars(r.title, 30), r.checklist.slice(0, 8));
-    if (ok) undoableTip("已转为任务（AI）");
-    else tip("warn", "该卡片不支持转为任务");
+    if (ok) undoableTip(t("已转为任务（AI）"));
+    else tip("warn", t("该卡片不支持转为任务"));
   } catch (e) {
     tip("warn", aiErrorTip(e));
   } finally {
@@ -533,11 +616,17 @@ export async function suggestTitle(noteId: string): Promise<void> {
     const note = useNotesStore.getState().notes.find((n) => n.id === noteId);
     if (!note || note.kind === "image") return;
     if (!aiReady(useNotesStore.getState().settings)) {
-      tip("info", "请先在 设置 → 更多功能 → AI 智能 中配置并启用");
+      tip("info", t("请先在 设置 → 更多功能 → AI 智能 中配置并启用"));
       return;
     }
-    tip("info", "AI 正在起标题…");
-    const r = await callAiJson("suggest-title", TITLE_SYSTEM, note.text, isTitleResult, 100);
+    tip("info", t("AI 正在起标题…"));
+    const r = await callAiJson(
+      "suggest-title",
+      isEn() ? TITLE_SYSTEM_EN : TITLE_SYSTEM,
+      note.text,
+      isTitleResult,
+      100
+    );
     if (
       !matchesDataGeneration(lease.generation) ||
       useNotesStore.getState().notes.find((candidate) => candidate.id === noteId) !== note
@@ -545,7 +634,7 @@ export async function suggestTitle(noteId: string): Promise<void> {
       return;
     const title = truncateChars(r.title, 12);
     useNotesStore.getState().updateNoteTitle(noteId, title);
-    tip("ok", `已命名：${title}`);
+    tip("ok", t("已命名：{title}", { title }));
   } catch (e) {
     tip("warn", aiErrorTip(e));
   } finally {
@@ -564,10 +653,10 @@ export async function testAiConnection(
 ): Promise<void> {
   const reply = await requestAi({
     purpose: "test-connection",
-    system: "你是连通性测试助手。",
-    user: "收到请只回复：OK",
+    system: isEn() ? "You are a connectivity test assistant." : "你是连通性测试助手。",
+    user: isEn() ? "If you receive this, reply only: OK" : "收到请只回复：OK",
     maxTokens: 50,
     connection: { baseUrl, model },
   });
-  if (!reply.trim()) throw new Error("响应为空");
+  if (!reply.trim()) throw new Error(t("响应为空"));
 }

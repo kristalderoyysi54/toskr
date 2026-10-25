@@ -5,6 +5,7 @@ import {
   replaceFirewallFindings,
   type PlaceholderMatch,
 } from "./firewall";
+import { t, type MessageKey } from "@/lib/i18n";
 
 /** 类别码用作占位符 [CODE_NN] 的 CODE 段。 */
 export interface AliasCategoryDefinition {
@@ -13,7 +14,7 @@ export interface AliasCategoryDefinition {
 }
 
 /** 预置类别（硬编码，不入 Settings，不可删改）。 */
-export const ALIAS_PRESET_CATEGORIES: readonly AliasCategoryDefinition[] = [
+export const ALIAS_PRESET_CATEGORIES: readonly (AliasCategoryDefinition & { label: MessageKey })[] = [
   { code: "USER", label: "用户" },
   { code: "MERCHANT", label: "商户" },
   { code: "ORDER", label: "订单" },
@@ -65,15 +66,19 @@ export interface AliasOccurrence {
   categoryLabel: string;
 }
 
+/** 类别显示名：预置类别按当前语言翻译，自定义类别是用户数据原样显示。 */
+export function aliasCategoryDisplayLabel(category: AliasCategoryDefinition): string {
+  const preset = ALIAS_PRESET_CATEGORIES.find((item) => item.code === category.code);
+  return preset && preset.label === category.label ? t(preset.label) : category.label;
+}
+
 export function categoryLabelOf(
   code: string,
   custom: readonly AliasCategoryDefinition[]
 ): string {
-  return (
-    ALIAS_PRESET_CATEGORIES.find((item) => item.code === code)?.label ??
-    custom.find((item) => item.code === code)?.label ??
-    code
-  );
+  const preset = ALIAS_PRESET_CATEGORIES.find((item) => item.code === code);
+  if (preset) return t(preset.label);
+  return custom.find((item) => item.code === code)?.label ?? code;
 }
 
 export function isValidAliasCategoryCode(code: string): boolean {
@@ -234,18 +239,18 @@ export function aliasOriginalTextIssue(
   editingId: string | null = null
 ): string | null {
   const trimmed = originalText.trim();
-  if (!trimmed) return "原文不能为空";
-  if (trimmed !== originalText) return "原文首尾不能是空白字符";
+  if (!trimmed) return t("原文不能为空");
+  if (trimmed !== originalText) return t("原文首尾不能是空白字符");
   // PLACEHOLDER_PATTERN 带 /g，用 matchAll（内部克隆正则）避免 lastIndex 污染
   if (!originalText.matchAll(PLACEHOLDER_PATTERN).next().done) {
-    return "原文不能包含占位符形态的文字";
+    return t("原文不能包含占位符形态的文字");
   }
   if (
     dictionary.some(
       (entity) => entity.id !== editingId && entity.originalText === originalText
     )
   ) {
-    return "该原文已存在于词典";
+    return t("该原文已存在于词典");
   }
   return null;
 }

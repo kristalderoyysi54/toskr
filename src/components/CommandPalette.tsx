@@ -7,6 +7,7 @@ import { sendCheckedToChat, sendNotesToChat } from "@/lib/actions";
 import { buildCommandItems, type CommandItem } from "@/lib/commandItems";
 import { api } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n";
 import { CLIPBOARD_ID, useNotesStore } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
 
@@ -15,6 +16,7 @@ import { useUIStore } from "@/store/uiStore";
  * 键盘接管走 window capture（WKWebView 点击不给焦点的既有约定）；Esc 只关自己。
  */
 export function CommandPalette() {
+  const t = useT();
   const open = useUIStore((s) => s.commandPaletteOpen);
   const page = useUIStore((s) => s.page);
   const contentSubview = useUIStore((s) => s.contentSubview);
@@ -118,7 +120,7 @@ export function CommandPalette() {
       <div aria-hidden className="absolute inset-0 z-40 bg-black/15 dark:bg-black/35" onClick={close} />
       <div
         role="dialog"
-        aria-label="命令面板"
+        aria-label={t("命令面板")}
         className={cn("absolute inset-x-3 top-14 z-50 flex max-h-[70%] flex-col rounded-xl p-1.5", floatingSurface(3))}
       >
         <div className="flex items-center gap-2 border-b border-border px-2 py-1.5">
@@ -126,16 +128,16 @@ export function CommandPalette() {
           <input
             ref={inputRef}
             value={query}
-            placeholder="输入命令，或搜索卡片、任务…"
-            aria-label="命令或搜索词"
+            placeholder={t("输入命令，或搜索卡片、任务…")}
+            aria-label={t("命令或搜索词")}
             onChange={(event) => setQuery(event.target.value)}
             className="h-5 min-w-0 flex-1 bg-transparent text-body outline-none placeholder:text-muted-foreground"
           />
           <Kbd inline>Esc</Kbd>
         </div>
-        <div ref={listRef} role="listbox" aria-label="命令列表" className="min-h-0 flex-1 overflow-y-auto py-1">
+        <div ref={listRef} role="listbox" aria-label={t("命令列表")} className="min-h-0 flex-1 overflow-y-auto py-1">
           {items.length === 0 && (
-            <p className="px-2 py-3 text-center text-label text-muted-foreground">没有匹配的命令或卡片</p>
+            <p className="px-2 py-3 text-center text-label text-muted-foreground">{t("没有匹配的命令或卡片")}</p>
           )}
           {items.map((item, index) => {
             const showGroup = item.group !== lastGroup;
@@ -143,7 +145,7 @@ export function CommandPalette() {
             return (
               <div key={item.id}>
                 {showGroup && (
-                  <p className="px-2 pb-0.5 pt-1.5 text-micro font-medium text-muted-foreground">{item.group}</p>
+                  <p className="px-2 pb-0.5 pt-1.5 text-micro font-medium text-muted-foreground">{t(item.group)}</p>
                 )}
                 <div
                   role="option"

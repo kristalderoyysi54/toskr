@@ -21,6 +21,7 @@ import {
   pickDetailWindowLabel,
   queueDetailPayload,
 } from "@/lib/detailWindows";
+import { t } from "@/lib/i18n";
 import { setPendingUndo, tip } from "@/lib/tip";
 import { currentTargetProfileResolution } from "@/lib/currentTargetProfile";
 import {
@@ -80,7 +81,7 @@ export { warnWithPanel } from "@/lib/delivery/executeDraft";
 export function undoableTip(message: string) {
   setPendingUndo(() => {
     const label = useNotesStore.getState().undo();
-    tip("undone", label ? "已撤销" : "没有可撤销的操作");
+    tip("undone", label ? t("已撤销") : t("没有可撤销的操作"));
   });
   tip("ok", message, true);
 }
@@ -212,9 +213,9 @@ export function armNoteEditUndo(id: string, origin: NoteEditOrigin) {
     if (origin.title !== undefined) {
       useNotesStore.getState().updateNoteTitle(id, origin.title);
     }
-    tip("undone", "已撤销");
+    tip("undone", t("已撤销"));
   });
-  tip("ok", "已保存", true);
+  tip("ok", t("已保存"), true);
 }
 
 /** 详情窗最近展示的卡 id（Space 开合判定用；窗口被 Esc/点 X 关掉也无碍——
@@ -275,7 +276,7 @@ async function emitEditorInsert(
     stop = await withTimeout(
       registration,
       1500,
-      "卡片编辑器回执监听未就绪"
+      t("卡片编辑器回执监听未就绪")
     );
     // listener 就绪后无 await：重读来源、组装 payload、dispatch 连成同一同步段。
     payload = createPayload();
@@ -290,7 +291,7 @@ async function emitEditorInsert(
     const result = await withTimeout(
       Promise.race([ack, dispatchFailure]),
       1500,
-      "卡片编辑器未确认接收"
+      t("卡片编辑器未确认接收")
     );
     return { payload, result };
   } finally {
@@ -324,7 +325,7 @@ function preflightBlocksNewIntent(): boolean {
   const preflight = useDeliveryStore.getState();
   if (!preflight.open) return false;
   warnWithPanel(
-    preflight.busy ? "已有发送正在进行，请稍候" : "请先完成或关闭当前发送预检",
+    preflight.busy ? t("已有发送正在进行，请稍候") : t("请先完成或关闭当前发送预检"),
     preflight.busy ? "delivery-pending" : "preflight-open"
   );
   return true;
@@ -483,7 +484,7 @@ export function openNoteDetail(id: string, edit = false, selectAll = false) {
   // 秘文卡绝不进详情窗：通用文本编辑器一旦保存会以明文改写 text，直接损毁密文信封
   // （GCM 认证从此失败、永久不可解）。解密只走秘文页卡片自身的按需揭示。
   if (note.kind === "secret") {
-    tip("info", "秘文请在秘文页点击查看，不支持详情窗");
+    tip("info", t("秘文请在秘文页点击查看，不支持详情窗"));
     return;
   }
   // 与卡片通栏同款取色：分组色优先（剪贴卡恒不取）；着色关闭时定死中性灰，
@@ -589,8 +590,8 @@ export function openNoteBatchDetail(
   const content = buildNoteSourceContent(notes);
   const expected = Math.max(notes.length, expectedSourceCount);
   const sourceCount = notes.length === expected
-    ? `${notes.length} 张当前来源卡片`
-    : `${notes.length}/${expected} 张当前可用来源卡片`;
+    ? t("{n} 张当前来源卡片", { n: notes.length })
+    : t("{n}/{expected} 张当前可用来源卡片", { n: notes.length, expected });
   openTextPreview({
     dataGeneration: currentDataGeneration(),
     id: `delivery-source-${crypto.randomUUID()}`,
@@ -598,8 +599,8 @@ export function openNoteBatchDetail(
     kind: content.rawText ? "text" : "image",
     codeLang: content.singleCodeLanguage ?? null,
     url: null,
-    title: "合并发送内容",
-    subtitle: `${sourceCount} · 发送记录不保存正文`,
+    title: t("合并发送内容"),
+    subtitle: t("{sources} · 发送记录不保存正文", { sources: sourceCount }),
     sourceApp: null,
     sourceBundle: null,
     images: content.imageFiles,
@@ -625,14 +626,14 @@ export async function enrichLinkMeta(id: string, manual = false) {
       icon: meta.icon ?? undefined,
     });
   } catch {
-    if (manual) tip("info", "未获取预览（取消、网络失败或地址受限）");
+    if (manual) tip("info", t("未获取预览（取消、网络失败或地址受限）"));
   }
 }
 
 /** 删除并给撤销机会。 */
 export function deleteNotesWithUndo(ids: string[], label?: string) {
   if (!ids.length) return;
-  const text = label ?? `已删除 ${ids.length} 条`;
+  const text = label ?? t("已删除 {n} 条", { n: ids.length });
   useNotesStore.getState().deleteNotes(ids, text);
   undoableTip(text);
 }
@@ -640,14 +641,14 @@ export function deleteNotesWithUndo(ids: string[], label?: string) {
 /** 清理全部已完成卡片（带撤销）；0 条时给反馈（快捷键 ⇧⌘⌫ 无按钮可看）。 */
 export function clearDoneWithUndo() {
   const n = useNotesStore.getState().clearDone();
-  if (n > 0) undoableTip(`已清理 ${n} 条已完成`);
-  else tip("info", "没有已完成的卡片");
+  if (n > 0) undoableTip(t("已清理 {n} 条已完成", { n }));
+  else tip("info", t("没有已完成的卡片"));
 }
 
 /** 删除任务并给撤销机会。 */
 export function deleteTasksWithUndo(ids: string[], label?: string) {
   if (!ids.length) return;
-  const text = label ?? `已删除 ${ids.length} 个任务`;
+  const text = label ?? t("已删除 {n} 个任务", { n: ids.length });
   useNotesStore.getState().deleteTasks(ids, text);
   undoableTip(text);
 }
@@ -655,16 +656,16 @@ export function deleteTasksWithUndo(ids: string[], label?: string) {
 /** 清理全部已完成任务（带撤销）；0 个时给反馈（快捷键 ⇧⌘⌫ 无按钮可看）。 */
 export function clearDoneTasksWithUndo() {
   const n = useNotesStore.getState().clearDoneTasks();
-  if (n > 0) undoableTip(`已清理 ${n} 个已完成任务`);
-  else tip("info", "没有已完成的任务");
+  if (n > 0) undoableTip(t("已清理 {n} 个已完成任务", { n }));
+  else tip("info", t("没有已完成的任务"));
 }
 
 /** 笔记转任务（带撤销；图片/组合卡不可转）。 */
 export function convertNoteToTaskWithUndo(noteId: string) {
   if (useNotesStore.getState().convertNoteToTask(noteId)) {
-    undoableTip("已转为任务");
+    undoableTip(t("已转为任务"));
   } else {
-    tip("warn", "图片卡片暂不支持转为任务");
+    tip("warn", t("图片卡片暂不支持转为任务"));
   }
 }
 
@@ -685,7 +686,7 @@ export async function sendTaskToChat(
     editorInsertPending
   ) {
     if (useDeliveryStore.getState().open) return null;
-    warnWithPanel("已有发送正在进行，请稍候", "delivery-pending");
+    warnWithPanel(t("已有发送正在进行，请稍候"), "delivery-pending");
     return null;
   }
   const draft = buildDeliveryDraft(
@@ -703,7 +704,7 @@ export async function sendMessageToChat(
   const message = useNotesStore.getState().messages.find((m) => m.id === messageId);
   if (!message) return;
   if (!message.text.trim()) {
-    tip("warn", "这条消息没有可发送的文字");
+    tip("warn", t("这条消息没有可发送的文字"));
     return null;
   }
   if (
@@ -713,7 +714,7 @@ export async function sendMessageToChat(
     editorInsertPending
   ) {
     if (useDeliveryStore.getState().open) return null;
-    warnWithPanel("已有发送正在进行，请稍候", "delivery-pending");
+    warnWithPanel(t("已有发送正在进行，请稍候"), "delivery-pending");
     return null;
   }
   const draft = buildDeliveryDraft(
@@ -734,11 +735,11 @@ export function mergeCheckedWithUndo() {
   const picked = orderedCheckedNotes(useNotesStore.getState());
   if (picked.length < 2) return;
   if (mergeDomainsMixed(picked)) {
-    tip("warn", "剪贴卡与笔记不能混合合并");
+    tip("warn", t("剪贴卡与笔记不能混合合并"));
     return;
   }
   useNotesStore.getState().mergeNotes(picked.map((n) => n.id));
-  undoableTip(`已合并 ${picked.length} 条`);
+  undoableTip(t("已合并 {n} 条", { n: picked.length }));
 }
 
 /** 把指定卡片与勾选项合并为一张卡（右键菜单入口；顺序按队列排列）。 */
@@ -748,11 +749,11 @@ export function mergeNoteWithChecked(noteId: string) {
   const valid = state.notes.filter((n) => pick.has(n.id));
   if (valid.length < 2) return;
   if (mergeDomainsMixed(valid)) {
-    tip("warn", "剪贴卡与笔记不能混合合并");
+    tip("warn", t("剪贴卡与笔记不能混合合并"));
     return;
   }
   state.mergeNotes(valid.map((n) => n.id));
-  undoableTip(`已合并 ${valid.length} 条`);
+  undoableTip(t("已合并 {n} 条", { n: valid.length }));
 }
 
 /**
@@ -764,8 +765,15 @@ export function moveClipsToNotesWithUndo(ids: string[], sectionId?: string): num
   const moved = state.moveClipsToNotes(ids, sectionId);
   if (!moved) return 0;
   const section = sectionId && state.sections.find((item) => item.id === sectionId);
-  const destination = section ? `「${section.name}」` : "笔记";
-  undoableTip(moved === 1 ? `已移入${destination}` : `已移入${destination} ${moved} 条`);
+  undoableTip(
+    section
+      ? moved === 1
+        ? t("已移入「{name}」", { name: section.name })
+        : t("已移入「{name}」 {n} 条", { name: section.name, n: moved })
+      : moved === 1
+        ? t("已移入笔记")
+        : t("已移入笔记 {n} 条", { n: moved })
+  );
   return moved;
 }
 
@@ -789,14 +797,14 @@ export function restoreNoteAliasesWithUndo(id: string) {
     if (restoredCount === 0) return;
     st.snapshot("恢复化名");
     st.updateNoteContent(id, next);
-    undoableTip(`已恢复 ${restoredCount} 处化名`);
+    undoableTip(t("已恢复 {n} 处化名", { n: restoredCount }));
     return;
   }
   const restored = restoreAliases(note.text, dictionary);
   if (restored.text === note.text) return;
   st.snapshot("恢复化名");
   st.updateNoteText(id, restored.text);
-  undoableTip(`已恢复 ${restored.restoredCount} 处化名`);
+  undoableTip(t("已恢复 {n} 处化名", { n: restored.restoredCount }));
 }
 
 /** 复制单条笔记内容：有序图文写 plain+HTML；单图仍写原生 PNG。 */
@@ -816,19 +824,19 @@ export async function copyNoteContent(note: Note) {
               }
         )
       );
-      tip("ok", `已复制原始图文（${images.length} 张图，未脱敏）`);
+      tip("ok", t("已复制原始图文（{n} 张图，未脱敏）", { n: images.length }));
     } else if (note.kind === "image" && images.length > 0) {
       await api.copyImage(images[0]);
       tip(
         "ok",
-        images.length > 1 ? `已复制第 1 张图（共 ${images.length} 张）` : "已复制图片"
+        images.length > 1 ? t("已复制第 1 张图（共 {n} 张）", { n: images.length }) : t("已复制图片")
       );
     } else {
       await api.copyText(note.text);
-      tip("ok", "已复制原文（未脱敏）");
+      tip("ok", t("已复制原文（未脱敏）"));
     }
   } catch (e) {
-    tip("warn", `复制失败：${e}`);
+    tip("warn", t("复制失败：{error}", { error: String(e) }));
   }
 }
 
@@ -846,9 +854,9 @@ export async function copyNotesAsList(ids: string[]) {
     await api.copyText(
       texts.length === 1 ? texts[0] : formatAsNumberedList(texts)
     );
-    tip("ok", texts.length === 1 ? "已复制原文（未脱敏）" : `已复制 ${texts.length} 条原文为列表（未脱敏）`);
+    tip("ok", texts.length === 1 ? t("已复制原文（未脱敏）") : t("已复制 {n} 条原文为列表（未脱敏）", { n: texts.length }));
   } catch (e) {
-    tip("warn", `复制失败：${e}`);
+    tip("warn", t("复制失败：{error}", { error: String(e) }));
   }
 }
 
@@ -858,20 +866,20 @@ function exportErrorMessage(error: unknown): string {
   if (error && typeof error === "object" && "message" in error) {
     return String(error.message);
   }
-  return "未知错误";
+  return t("未知错误");
 }
 
 /** 导出普通笔记为单文件 Markdown 媒体包；取消静默，且不改变当前选择。 */
 export async function exportNotesBundle(ids: string[]) {
   if (isDataOperationLocked()) {
-    tip("warn", "数据操作进行中，请稍后再导出");
+    tip("warn", t("数据操作进行中，请稍后再导出"));
     return;
   }
   const state = useNotesStore.getState();
   const picked = new Set(ids);
   const openEditorId = useUIStore.getState().detailEditorNoteId;
   if (openEditorId && picked.has(openEditorId)) {
-    tip("warn", "请先关闭已打开的笔记详情，确认最新编辑已同步后再导出");
+    tip("warn", t("请先关闭已打开的笔记详情，确认最新编辑已同步后再导出"));
     return;
   }
   const notes = state.notes.filter((note) => picked.has(note.id));
@@ -880,22 +888,21 @@ export async function exportNotesBundle(ids: string[]) {
     const { save } = await import("@tauri-apps/plugin-dialog");
     const path = await save({
       defaultPath: notesExportFilename(plan.noteCount),
-      filters: [{ name: "Toskr Markdown 笔记包", extensions: ["zip"] }],
+      filters: [{ name: t("Toskr Markdown 笔记包"), extensions: ["zip"] }],
     });
     if (!path) return;
-    tip("info", "正在导出笔记包…");
+    tip("info", t("正在导出笔记包…"));
     await api.exportNotesBundle(path, plan.markdown, plan.mediaFiles);
     const mediaCount = plan.mediaFiles.length;
     tip(
       "ok",
       plan.noteCount === 1
-        ? `笔记包已导出${mediaCount ? `（含 ${mediaCount} 张图）` : ""}`
-        : `已导出 ${plan.noteCount} 条笔记${
-            mediaCount ? `、${mediaCount} 张图` : ""
-          }`
+        ? t("笔记包已导出") + (mediaCount ? t("（含 {n} 张图）", { n: mediaCount }) : "")
+        : t("已导出 {n} 条笔记", { n: plan.noteCount }) +
+            (mediaCount ? t("、{n} 张图", { n: mediaCount }) : "")
     );
   } catch (error) {
-    tip("warn", `导出失败：${exportErrorMessage(error)}`);
+    tip("warn", t("导出失败：{error}", { error: exportErrorMessage(error) }));
   }
 }
 
@@ -922,11 +929,11 @@ async function insertClipboardNotesIntoOpenEditor(
     win = await withTimeout(
       WebviewWindow.getByLabel("textpreview"),
       1500,
-      "卡片编辑器窗口探测超时"
+      t("卡片编辑器窗口探测超时")
     );
   } catch (error) {
     warnWithPanel(
-      `无法确认卡片编辑器状态：${error}`,
+      t("无法确认卡片编辑器状态：{error}", { error: String(error) }),
       "note-editor-visibility-unknown"
     );
     return "handled";
@@ -937,14 +944,14 @@ async function insertClipboardNotesIntoOpenEditor(
       !(await withTimeout(
         win.isVisible(),
         1500,
-        "卡片编辑器可见性探测超时"
+        t("卡片编辑器可见性探测超时")
       ))
     ) {
       return "not-target";
     }
   } catch (error) {
     warnWithPanel(
-      `无法确认卡片编辑器状态：${error}`,
+      t("无法确认卡片编辑器状态：{error}", { error: String(error) }),
       "note-editor-visibility-unknown"
     );
     return "handled";
@@ -956,11 +963,11 @@ async function insertClipboardNotesIntoOpenEditor(
     .getState()
     .notes.some((note) => note.id === targetId);
   if (!destinationExists) {
-    tip("warn", "卡片编辑器内容已失效，请重新打开目标卡片");
+    tip("warn", t("卡片编辑器内容已失效，请重新打开目标卡片"));
     return "handled";
   }
   if (isDataOperationLocked()) {
-    warnWithPanel("数据只读期间不能修改卡片", "note-editor-insert-locked");
+    warnWithPanel(t("数据只读期间不能修改卡片"), "note-editor-insert-locked");
     return "handled";
   }
 
@@ -970,7 +977,7 @@ async function insertClipboardNotesIntoOpenEditor(
     deliveryDraftPreparationPending() ||
     editorInsertPending
   ) {
-    warnWithPanel("已有发送正在进行，请稍候", "delivery-pending");
+    warnWithPanel(t("已有发送正在进行，请稍候"), "delivery-pending");
     return "handled";
   }
   editorInsertPending = true;
@@ -980,7 +987,7 @@ async function insertClipboardNotesIntoOpenEditor(
       targets.filter((note) => note.id !== targetId).map((note) => note.id)
     );
     if (!sourceIds.size) {
-      tip("warn", "不能把卡片内容添加到自身");
+      tip("warn", t("不能把卡片内容添加到自身"));
       return "handled";
     }
     const format = opts?.format ?? (opts?.asCode ? "code" : "plain");
@@ -990,7 +997,7 @@ async function insertClipboardNotesIntoOpenEditor(
         lastDetailSessionId !== targetSessionId ||
         !matchesDataGeneration(dataGeneration)
       ) {
-        throw new Error("卡片编辑目标或数据上下文已变化");
+        throw new Error(t("卡片编辑目标或数据上下文已变化"));
       }
       const currentNotes = useNotesStore.getState().notes;
       const sources = currentNotes.filter((note) => sourceIds.has(note.id));
@@ -999,7 +1006,7 @@ async function insertClipboardNotesIntoOpenEditor(
         sources.some((note) => note.sectionId !== CLIPBOARD_ID) ||
         !currentNotes.some((note) => note.id === targetId)
       ) {
-        throw new Error("卡片内容已变化，请重新选择后再添加");
+        throw new Error(t("卡片内容已变化，请重新选择后再添加"));
       }
       const draft = buildNoteDraft(
         sources.map((note) => note.id),
@@ -1047,7 +1054,7 @@ async function insertClipboardNotesIntoOpenEditor(
       if (result.status === "rejected") {
         releaseEditorOperationMedia(targetSessionId, payload.operationKey);
       }
-      throw new Error(result.reason ?? "卡片编辑器拒绝了内容");
+      throw new Error(result.reason ?? t("卡片编辑器拒绝了内容"));
     }
     if (
       lastDetailId !== targetId ||
@@ -1057,10 +1064,10 @@ async function insertClipboardNotesIntoOpenEditor(
       !(await withTimeout(
         win.isVisible(),
         1500,
-        "卡片编辑器可见性复核超时"
+        t("卡片编辑器可见性复核超时")
       ))
     ) {
-      tip("warn", "卡片编辑目标已变化，内容未确认添加");
+      tip("warn", t("卡片编辑目标已变化，内容未确认添加"));
       return "handled";
     }
     if (editorInsertRetry?.operationKey === payload.operationKey) {
@@ -1071,15 +1078,15 @@ async function insertClipboardNotesIntoOpenEditor(
       await withTimeout(
         api.showTextPreview(),
         1500,
-        "卡片编辑窗口唤起超时"
+        t("卡片编辑窗口唤起超时")
       );
     } catch {
-      tip("warn", "内容已添加，但卡片编辑窗口唤起失败");
+      tip("warn", t("内容已添加，但卡片编辑窗口唤起失败"));
       return "handled";
     }
-    tip("ok", "已添加到卡片编辑器");
+    tip("ok", t("已添加到卡片编辑器"));
   } catch (error) {
-    warnWithPanel(`添加到卡片编辑器失败：${error}`, "note-editor-insert-failed");
+    warnWithPanel(t("添加到卡片编辑器失败：{error}", { error: String(error) }), "note-editor-insert-failed");
   } finally {
     editorInsertPending = false;
   }
@@ -1115,11 +1122,11 @@ export async function sendNotesToChat(
     editorInsertPending
   ) {
     if (useDeliveryStore.getState().open) return null;
-    warnWithPanel("已有发送正在进行，请稍候", "delivery-pending");
+    warnWithPanel(t("已有发送正在进行，请稍候"), "delivery-pending");
     return null;
   }
   if (isDataOperationLocked()) {
-    warnWithPanel("数据只读期间不能发送", "data-locked");
+    warnWithPanel(t("数据只读期间不能发送"), "data-locked");
     return null;
   }
   const lease = beginDataGenerationLease();
@@ -1154,7 +1161,7 @@ export async function sendNotesToChat(
       editorInsertPending
     ) {
       if (useDeliveryStore.getState().open) return null;
-      warnWithPanel("已有发送正在进行，请稍候", "delivery-pending");
+      warnWithPanel(t("已有发送正在进行，请稍候"), "delivery-pending");
       return null;
     }
     if (
@@ -1162,7 +1169,7 @@ export async function sendNotesToChat(
       isDataOperationLocked()
     ) {
       warnWithPanel(
-        "发送已取消：数据上下文已变化，请重新选择内容",
+        t("发送已取消：数据上下文已变化，请重新选择内容"),
         "send-generation-changed"
       );
       return null;
@@ -1171,7 +1178,7 @@ export async function sendNotesToChat(
       .getState()
       .notes.filter((note) => picked.has(note.id));
     if (latestTargets.length !== targets.length) {
-      warnWithPanel("发送已取消：所选卡片已变化", "send-notes-changed");
+      warnWithPanel(t("发送已取消：所选卡片已变化"), "send-notes-changed");
       return null;
     }
     targets = latestTargets;
@@ -1202,11 +1209,11 @@ export async function openSafeRehearsalPreflight(noteId: string) {
     !note ||
     !isSafeRehearsalText(note.text)
   ) {
-    warnWithPanel("演练示例已变化，请从捕获步骤重新开始", "rehearsal-source-stale");
+    warnWithPanel(t("演练示例已变化，请从捕获步骤重新开始"), "rehearsal-source-stale");
     return null;
   }
   if (useTargetStore.getState().status !== "ready") {
-    warnWithPanel("请先重新识别并确认安全目标", "rehearsal-target-not-ready");
+    warnWithPanel(t("请先重新识别并确认安全目标"), "rehearsal-target-not-ready");
     return null;
   }
   const result = await sendNotesToChat([noteId], undefined, {

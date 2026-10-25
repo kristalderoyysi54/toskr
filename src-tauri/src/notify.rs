@@ -97,7 +97,7 @@ mod imp {
 
     pub fn post(app: &AppHandle, id: &str, title: &str, body: &str) -> Result<(), String> {
         if !bundled() {
-            return Err("未打包的开发版不支持系统通知".into());
+            return Err(crate::i18n::pick("未打包的开发版不支持系统通知", "System notifications aren't available in unbundled dev builds").into());
         }
         let center = UNUserNotificationCenter::currentNotificationCenter();
         SETUP.call_once(|| {
@@ -131,7 +131,7 @@ pub use imp::post;
 
 #[cfg(not(target_os = "macos"))]
 pub fn post(_app: &tauri::AppHandle, _id: &str, _title: &str, _body: &str) -> Result<(), String> {
-    Err("当前平台不支持系统通知".into())
+    Err(crate::i18n::pick("当前平台不支持系统通知", "System notifications aren't supported on this platform").into())
 }
 
 #[cfg(test)]

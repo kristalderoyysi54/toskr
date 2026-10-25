@@ -10,6 +10,7 @@
 //! 明文直通（迁移前旧文件）永久保留，因为 RENAME_SWAP 提交会回读被换下的旧文件。
 //! AAD 是用途标签，防止把 A 文件的密文调包到 B 文件仍能解开。
 
+use crate::i18n::pick;
 use std::fs::File;
 use std::io::Read;
 #[cfg(not(test))]
@@ -68,16 +69,16 @@ impl CryptoError {
     pub fn message(&self) -> String {
         match self {
             CryptoError::KeychainDenied => {
-                "无法访问 macOS 钥匙串以解锁本机数据；解锁钥匙串后重试".into()
+                pick("无法访问 macOS 钥匙串以解锁本机数据；解锁钥匙串后重试", "Can't access the macOS Keychain to unlock local data. Unlock the Keychain and try again").into()
             }
             CryptoError::KeyMissing => {
-                "本机钥匙串中没有解开这份数据的密钥；请用「导入完整备份」恢复".into()
+                pick("本机钥匙串中没有解开这份数据的密钥；请用「导入完整备份」恢复", "The key for this data isn't in this Mac's Keychain. Restore with \"Import full backup\"").into()
             }
             CryptoError::AuthFailed => {
-                "数据校验失败（可能被外部修改、损坏，或来自其他机器）".into()
+                pick("数据校验失败（可能被外部修改、损坏，或来自其他机器）", "Data verification failed (it may have been modified, corrupted, or copied from another Mac)").into()
             }
-            CryptoError::Malformed => "加密信封格式无效".into(),
-            CryptoError::Internal(detail) => format!("加密内部错误：{detail}"),
+            CryptoError::Malformed => pick("加密信封格式无效", "Invalid encryption envelope").into(),
+            CryptoError::Internal(detail) => crate::tr_fmt!("加密内部错误：{detail}", "Internal encryption error: {detail}"),
         }
     }
 

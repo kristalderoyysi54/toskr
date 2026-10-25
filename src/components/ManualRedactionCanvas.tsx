@@ -24,6 +24,7 @@ import {
   type ZoomView,
 } from "@/lib/imageZoom";
 import type { ImagePixelBox, RedactionRegion, RedactionStyle } from "@/lib/tauri";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 /** 自动识别出的候选位置：未打码，点一下转为正式框。 */
@@ -155,6 +156,7 @@ export function ManualRedactionCanvas({
   onRemove: (index: number) => void;
   onAcceptCandidate: (index: number) => void;
 }) {
+  const t = useT();
   const containerRef = useRef<HTMLDivElement>(null);
   const [gesture, setGesture] = useState<Gesture | null>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -410,8 +412,8 @@ export function ManualRedactionCanvas({
       role="group"
       tabIndex={0}
       autoFocus
-      aria-label="手动打码画布，拖动框选要遮挡的区域，点击已有框可移动或调整大小"
-      aria-description="键盘可用方向键移动选区或选中的框，按住 Shift 加大步长，Enter 添加遮挡"
+      aria-label={t("手动打码画布，拖动框选要遮挡的区域，点击已有框可移动或调整大小")}
+      aria-description={t("键盘可用方向键移动选区或选中的框，按住 Shift 加大步长，Enter 添加遮挡")}
       aria-busy={disabled}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -491,7 +493,7 @@ export function ManualRedactionCanvas({
         <>
           <img
             src={url}
-            alt="待编辑图片"
+            alt={t("待编辑图片")}
             draggable={false}
             className="pointer-events-none absolute max-w-none"
             style={imageRect}
@@ -540,7 +542,7 @@ export function ManualRedactionCanvas({
             <span
               key={`candidate-${candidate.box.x}-${candidate.box.y}-${index}`}
               data-candidate={index}
-              title={`点击打码：${candidate.label}`}
+              title={t("点击打码：{label}", { label: candidate.label })}
               className={cn(
                 "absolute rounded-[1px] border-[1.5px] border-dashed border-warning bg-warning/10",
                 disabled ? "pointer-events-none" : "cursor-pointer hover:bg-warning/20"
@@ -563,7 +565,7 @@ export function ManualRedactionCanvas({
             <div
               data-redaction-toolbar
               role="toolbar"
-              aria-label="选中遮挡框"
+              aria-label={t("选中遮挡框")}
               className={cn(floatingSurface(2), "absolute z-10 flex items-center gap-0.5 rounded-lg p-0.5")}
               style={toolbarPos}
             >
@@ -575,7 +577,7 @@ export function ManualRedactionCanvas({
                 return (
                   <IconButton
                     key={option.label}
-                    label={`改为${option.label}`}
+                    label={t("改为{label}", { label: t(option.label) })}
                     pressed={active}
                     onClick={() => onChange(selected, { ...regions[selected]!, style: option.style })}
                   >
@@ -584,7 +586,7 @@ export function ManualRedactionCanvas({
                 );
               })}
               <span aria-hidden className="mx-0.5 h-4 w-px bg-border" />
-              <IconButton label="删除这个框（⌫）" tone="danger" onClick={() => onRemove(selected)}>
+              <IconButton label={t("删除这个框（⌫）")} tone="danger" onClick={() => onRemove(selected)}>
                 <Trash2 className="size-3.5" />
               </IconButton>
             </div>
@@ -592,10 +594,10 @@ export function ManualRedactionCanvas({
         </>
       )}
       <span className="sr-only" aria-live="polite">
-        已选择 {regions.length} 个打码区域
-        {selected !== null ? `，选中第 ${selected + 1} 个` : ""}
-        {candidates.length ? `，识别到 ${candidates.length} 处候选` : ""}
-        ，当前缩放 {Math.round(view.zoom * 100)}%
+        {t("已选择 {n} 个打码区域", { n: regions.length })}
+        {selected !== null ? t("，选中第 {n} 个", { n: selected + 1 }) : ""}
+        {candidates.length ? t("，识别到 {n} 处候选", { n: candidates.length }) : ""}
+        {t("，当前缩放 {zoom}%", { zoom: Math.round(view.zoom * 100) })}
       </span>
     </div>
   );

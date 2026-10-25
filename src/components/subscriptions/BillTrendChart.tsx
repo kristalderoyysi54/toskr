@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { distinctCurrencies, formatBillAmount, sixMonthTrend } from "@/lib/bills";
 import { cachedFx, ensureFx, makeConverter, type FxCache } from "@/lib/currency";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { Bill } from "@/store/notesStore";
 
@@ -20,6 +21,7 @@ export function BillTrendChart({
   now: number;
   currency: string;
 }) {
+  const t = useT();
   const [fx, setFx] = useState<FxCache | null>(() => cachedFx());
   useEffect(() => {
     void ensureFx().then((next) => {
@@ -36,14 +38,16 @@ export function BillTrendChart({
       symbol: useConversion ? currency : (distinct[0] ?? currency),
       approx: useConversion,
     };
-  }, [bills, now, currency, fx]);
+    // t 随语言换引用：切换语言时重算月份标签
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bills, now, currency, fx, t]);
   const max = Math.max(...trend.map((m) => m.total));
   if (max <= 0) return null;
   const amountText = (total: number) =>
     `${approx ? "≈ " : ""}${symbol}${formatBillAmount(Math.round(total * 100) / 100)}`;
   return (
     <div className="surface-inset rounded-xl p-2">
-      <p className="pl-1 text-micro text-muted-foreground">近 6 个月消费</p>
+      <p className="pl-1 text-micro text-muted-foreground">{t("近 6 个月消费")}</p>
       <div className="mt-1 flex items-end gap-1.5 px-1">
         {trend.map((m, i) => {
           const current = i === trend.length - 1;
@@ -51,7 +55,7 @@ export function BillTrendChart({
             <div
               key={`${m.year}-${m.month}`}
               className="group/bar flex min-w-0 flex-1 flex-col items-center gap-0.5"
-              title={`${m.year} 年 ${m.label} ${amountText(m.total)}`}
+              title={t("{year} 年 {month} {amount}", { year: m.year, month: m.label, amount: amountText(m.total) })}
             >
               {/* 悬停亮出金额（title 原生提示慢，柱顶直给） */}
               <span className="h-3 whitespace-nowrap text-micro tabular-nums text-muted-foreground opacity-0 transition-opacity group-hover/bar:opacity-100">

@@ -4,6 +4,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { PlatinumBox } from "@/components/ui/platinum-titlebar";
 import { useColorScheme } from "@/lib/colorScheme";
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n";
 
 /**
  * macOS 交通灯（红=关 黄=最小化 绿=缩放）：无边框详情窗专用，对齐系统窗口
@@ -27,7 +28,7 @@ const GLYPH_BASE = cn(
 );
 
 export function MacTrafficLights({
-  closeLabel = "关闭",
+  closeLabel: closeLabelProp,
   closeDisabled,
   onClose,
   className,
@@ -37,6 +38,8 @@ export function MacTrafficLights({
   onClose: () => void;
   className?: string;
 }) {
+  const t = useT();
+  const closeLabel = closeLabelProp ?? t("关闭");
   const win = getCurrentWebviewWindow();
   const scheme = useColorScheme();
   if (scheme === "platinum") {
@@ -60,8 +63,8 @@ export function MacTrafficLights({
         <X className={cn(GLYPH_BASE, "text-[#7d0d06]")} strokeWidth={3} />
       </button>
       <button
-        aria-label="最小化"
-        title="最小化（重开卡片即复原）"
+        aria-label={t("最小化")}
+        title={t("最小化（重开卡片即复原）")}
         onClick={() => void win.minimize()}
         // token-exception: macOS 交通灯系统黄/深黄字形
         className={cn(DOT_BASE, "bg-[#febc2e]")}
@@ -69,8 +72,8 @@ export function MacTrafficLights({
         <Minus className={cn(GLYPH_BASE, "text-[#8a5a09]")} strokeWidth={3} />
       </button>
       <button
-        aria-label="缩放"
-        title="缩放：占满/还原"
+        aria-label={t("缩放")}
+        title={t("缩放：占满/还原")}
         onClick={() => void win.toggleMaximize()}
         // token-exception: macOS 交通灯系统绿/深绿字形
         className={cn(DOT_BASE, "bg-[#28c840]")}
@@ -83,13 +86,14 @@ export function MacTrafficLights({
 
 /** Platinum 标题栏右端的缩放框 + 收起框（收起＝最小化）；默认方案不渲染任何节点。 */
 export function PlatinumTrailingBoxes() {
+  const t = useT();
   const scheme = useColorScheme();
   if (scheme !== "platinum") return null;
   const win = getCurrentWebviewWindow();
   return (
     <div className="flex shrink-0 items-center gap-1">
-      <PlatinumBox kind="zoom" label="缩放：占满/还原" onClick={() => void win.toggleMaximize()} />
-      <PlatinumBox kind="shade" label="最小化（重开卡片即复原）" onClick={() => void win.minimize()} />
+      <PlatinumBox kind="zoom" label={t("缩放：占满/还原")} onClick={() => void win.toggleMaximize()} />
+      <PlatinumBox kind="shade" label={t("最小化（重开卡片即复原）")} onClick={() => void win.minimize()} />
     </div>
   );
 }

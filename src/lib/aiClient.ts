@@ -1,9 +1,11 @@
 import { api } from "@/lib/tauri";
+import { t, type MessageKey } from "@/lib/i18n";
 import { getAiKeyStatusForUse, requestAiKeyStatusForSettings } from "@/lib/aiKeyAccess";
 import { useNotesStore, type Settings } from "@/store/notesStore";
 
 export interface AiPreset {
   id: "deepseek" | "openai" | "kimi" | "qwen" | "custom";
+  /** 显示时用 aiPresetLabel：「通义」「自定义」是中文 key，其余为品牌名原样。 */
   label: string;
   baseUrl: string;
   modelHint: string;
@@ -36,6 +38,17 @@ export const AI_PRESETS: readonly AiPreset[] = [
   },
   { id: "custom", label: "自定义", baseUrl: "", modelHint: "" },
 ];
+
+const PRESET_LABEL_KEYS: Partial<Record<AiPreset["id"], MessageKey>> = {
+  qwen: "通义",
+  custom: "自定义",
+};
+
+/** 预设的显示名（随界面语言）；比较与持久化仍用 id / 原始 label。 */
+export function aiPresetLabel(preset: AiPreset): string {
+  const key = PRESET_LABEL_KEYS[preset.id];
+  return key ? t(key) : preset.label;
+}
 
 export function matchPreset(baseUrl: string): AiPreset["id"] {
   return (
@@ -72,16 +85,16 @@ export class AiError extends Error {
 export function aiErrorTip(error: unknown): string {
   if (error instanceof AiError) {
     if (error.kind === "not-configured") {
-      return "请先在 设置 → 更多功能 → AI 智能 中配置并启用";
+      return t("请先在 设置 → 更多功能 → AI 智能 中配置并启用");
     }
-    if (error.kind === "parse") return "AI 返回内容无法解析";
-    if (error.kind === "cancelled") return "AI 转换已取消";
+    if (error.kind === "parse") return t("AI 返回内容无法解析");
+    if (error.kind === "cancelled") return t("AI 转换已取消");
     // network 携带的具体原因（HTTP 状态/超时等）直接给用户，可定位
     if (error.kind === "network" && error.message && error.message !== "AI 请求失败") {
       return error.message;
     }
   }
-  return "AI 请求失败，请检查网络与服务配置";
+  return t("AI 请求失败，请检查网络与服务配置");
 }
 
 export interface AiClientDescriptor {
@@ -110,8 +123,8 @@ export function describeAiClient(
     ? override.requireEnabled !== true || settings.aiEnabled
     : settings.aiEnabled;
   const presetId = matchPreset(baseUrl);
-  const provider = AI_PRESETS.find((preset) => preset.id === presetId)?.label ??
-    "自定义";
+  const preset = AI_PRESETS.find((item) => item.id === presetId);
+  const provider = preset ? aiPresetLabel(preset) : t("自定义");
   return {
     provider,
     model,
@@ -150,7 +163,7 @@ export interface AiRequestHandle {
 }
 
 function cancelledError(): AiError {
-  return new AiError("cancelled", "AI 请求已取消");
+  return new AiError("cancelled", t("AI 请求已取消"));
 }
 
 /**
@@ -185,7 +198,7 @@ export function startAiRequest(input: AiRequestInput): AiRequestHandle {
   const transport = Promise.resolve().then(async () => {
     if (controller.signal.aborted) throw cancelledError();
     if (!descriptor.ready) {
-      throw new AiError("not-configured", "AI 未配置或未启用");
+      throw new AiError("not-configured", t("AI 未配置或未启用"));
     }
     try {
       const keyStatus = await (input.keyAccess === "settings"
@@ -193,7 +206,7 @@ export function startAiRequest(input: AiRequestInput): AiRequestHandle {
         : getAiKeyStatusForUse());
       if (controller.signal.aborted) throw cancelledError();
       if (!keyStatus.configured) {
-        throw new AiError("not-configured", "AI API Key 尚未配置");
+        throw new AiError("not-configured", t("AI API Key 尚未配置"));
       }
       nativeRequestId = await api.beginAiRequest();
       if (controller.signal.aborted) {
@@ -241,7 +254,7 @@ export function startAiRequest(input: AiRequestInput): AiRequestHandle {
     };
     const onAbort = () => finish(() => reject(cancelledError()));
     const timer = globalThis.setTimeout(() => {
-      finish(() => reject(new AiError("network", "AI 请求超时")));
+      finish(() => reject(new AiError("network", t("AI 请求超时"))));
       controller.abort();
     }, input.timeoutMs ?? 32_000);
     controller.signal.addEventListener("abort", onAbort, { once: true });

@@ -1,5 +1,6 @@
 //! macOS pasteboard 完整快照与 changeCount 所有权事务。
 
+use crate::i18n::pick;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -92,8 +93,8 @@ impl ClipboardOutcome {
     /// 部分恢复或恢复失败都可能造成用户剪贴板信息损失，不能被隐身模式吞掉。
     pub fn warning_message(self) -> Option<&'static str> {
         match self {
-            Self::RestoredPartial => Some("原剪贴板仅恢复了可读内容（不可读取格式未恢复）"),
-            Self::RestoreFailed => Some("原剪贴板恢复失败"),
+            Self::RestoredPartial => Some(pick("原剪贴板仅恢复了可读内容（不可读取格式未恢复）", "Original clipboard only partly restored (unreadable formats were not restored)")),
+            Self::RestoreFailed => Some(pick("原剪贴板恢复失败", "Failed to restore original clipboard")),
             _ => None,
         }
     }
@@ -146,11 +147,11 @@ pub enum PasteboardError {
 impl fmt::Display for PasteboardError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::SnapshotChanged => "剪贴板在快照期间发生变化",
-            Self::RepresentationUnavailable => "剪贴板包含无法读取的表示",
-            Self::WriteFailed => "剪贴板写入失败",
-            Self::OwnershipLost => "剪贴板已被其他应用更新",
-            Self::ImageEncodingFailed => "图片编码失败",
+            Self::SnapshotChanged => pick("剪贴板在快照期间发生变化", "Clipboard changed while it was being saved"),
+            Self::RepresentationUnavailable => pick("剪贴板包含无法读取的表示", "Clipboard contains an unreadable format"),
+            Self::WriteFailed => pick("剪贴板写入失败", "Failed to write to the clipboard"),
+            Self::OwnershipLost => pick("剪贴板已被其他应用更新", "Clipboard was changed by another app"),
+            Self::ImageEncodingFailed => pick("图片编码失败", "Failed to encode image"),
         })
     }
 }

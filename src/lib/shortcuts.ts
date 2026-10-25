@@ -1,9 +1,11 @@
+import { t, type MessageKey } from "@/lib/i18n";
+
 /**
  * 快捷键清单——单一来源。
  * 消费方：App.tsx 的长按 ⌥ 速查层（ShortcutHelp）与 SettingsView 快捷键页的静态表。
  * 修复历史漂移：设置页曾缺 ⌘1-9 / ⌘←→ 两条；今后新增快捷键只改这里。
  */
-export const SHORTCUTS: [string, string][] = [
+const ROWS: [keys: string | [MessageKey], desc: MessageKey][] = [
   ["⇧⇧ Shift", "捕获选中文本 / 呼出面板"],
   ["⌘← →", "切换顶部页签（⌃Tab 循环）"],
   ["↑ ↓", "移动焦点卡片"],
@@ -12,7 +14,7 @@ export const SHORTCUTS: [string, string][] = [
   ["x", "勾选 / 取消勾选"],
   ["p", "置顶剪贴卡 / 设笔记为常用"],
   ["d", "标记完成 / 取消完成"],
-  ["双击卡片", "直发该卡（剪贴页优先添加进打开的编辑器）"],
+  [["双击卡片"], "直发该卡（剪贴页优先添加进打开的编辑器）"],
   ["W", "详情窗切换选词模式（词/段点选，可发送选中片段）"],
   ["⌘A", "全选可见卡片"],
   ["⌘⏎", "发送勾选到对话"],
@@ -25,3 +27,14 @@ export const SHORTCUTS: [string, string][] = [
   ["⌘K", "命令面板（动作 / 搜索卡片与任务）"],
   ["Esc", "逐层退出（预览→搜索→选择→面板）"],
 ];
+
+/** 中文原文（逻辑与计数用）；显示请用 shortcutRows()。 */
+export const SHORTCUTS: [string, string][] = ROWS.map(([keys, desc]) => [
+  typeof keys === "string" ? keys : keys[0],
+  desc,
+]);
+
+/** 按当前语言翻译的快捷键清单（渲染时调用）。 */
+export function shortcutRows(): [string, string][] {
+  return ROWS.map(([keys, desc]) => [typeof keys === "string" ? keys : t(keys[0]), t(desc)]);
+}

@@ -10,10 +10,13 @@ import {
   CYCLE_LABEL,
   startOfBillDay,
 } from "@/lib/bills";
+import { useT } from "@/lib/i18n";
+import { monthDayLabel, monthYearLabel, weekdayChar } from "@/lib/taskRecurrence";
 import { cn } from "@/lib/utils";
 import type { Bill, BillCycle } from "@/store/notesStore";
 
-const WEEK_HEADER = ["一", "二", "三", "四", "五", "六", "日"];
+/** 周一起排的表头（星期序号，显示时按语言取单字）。 */
+const WEEK_HEADER = [1, 2, 3, 4, 5, 6, 0];
 
 /** 相邻月占位格的斜纹底（参考稿样式；明暗双色由 currentColor 透明度承担）。 */
 const HATCH_STYLE = {
@@ -43,6 +46,7 @@ export function BillMonthGrid({
   selectedDay: number;
   onSelectDay: (day: number) => void;
 }) {
+  const t = useT();
   const [monthOffset, setMonthOffset] = useState(0);
   const today = startOfBillDay(now);
   const base = new Date(now);
@@ -114,27 +118,27 @@ export function BillMonthGrid({
     <div className="surface-inset rounded-xl p-2">
       <div className="mb-1 flex items-center gap-1">
         <p className="flex-1 pl-1 text-label font-semibold tabular-nums">
-          {monthFirst.getFullYear()} 年 {monthFirst.getMonth() + 1} 月
+          {monthYearLabel(monthFirst)}
         </p>
         {monthOffset !== 0 && (
           <button
             onClick={() => setMonthOffset(0)}
             className="rounded-md px-1.5 py-0.5 text-micro text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
           >
-            今天
+            {t("今天")}
           </button>
         )}
-        <IconButton label="上个月" size="2xs" onClick={() => setMonthOffset((v) => v - 1)}>
+        <IconButton label={t("上个月")} size="2xs" onClick={() => setMonthOffset((v) => v - 1)}>
           <ChevronLeft />
         </IconButton>
-        <IconButton label="下个月" size="2xs" onClick={() => setMonthOffset((v) => v + 1)}>
+        <IconButton label={t("下个月")} size="2xs" onClick={() => setMonthOffset((v) => v + 1)}>
           <ChevronRight />
         </IconButton>
       </div>
       <div className="grid grid-cols-7 gap-1">
         {WEEK_HEADER.map((w) => (
           <span key={w} className="py-0.5 text-center text-micro text-muted-foreground">
-            {w}
+            {weekdayChar(w, "short")}
           </span>
         ))}
         {cells.map(({ day, inMonth, bills: dueBills }) => {
@@ -145,8 +149,8 @@ export function BillMonthGrid({
             <button
               key={day}
               onClick={() => onSelectDay(day)}
-              aria-label={`${new Date(day).getMonth() + 1}月${new Date(day).getDate()}日${
-                dueBills.length ? `，${dueBills.length} 笔到期` : ""
+              aria-label={`${monthDayLabel(new Date(day))}${
+                dueBills.length ? t("，{n} 笔到期", { n: dueBills.length }) : ""
               }`}
               className={cn(
                 "relative flex h-11 flex-col items-center justify-start rounded-lg pt-1 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
@@ -218,25 +222,25 @@ export function BillMonthGrid({
               style={{ backgroundColor: CYCLE_COLORS[cycle] }}
               aria-hidden
             />
-            {CYCLE_LABEL[cycle]}
+            {t(CYCLE_LABEL[cycle])}
           </span>
         ))}
       </div>
       <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 px-1 text-micro text-muted-foreground">
         <span>
-          <b className="font-semibold text-primary tabular-nums">{statusCount.active}</b> 活跃
+          <b className="font-semibold text-primary tabular-nums">{statusCount.active}</b> {t("活跃")}
         </span>
         <span>
-          <b className="font-semibold text-amber-500 tabular-nums">{statusCount.paused}</b> 已暂停
+          <b className="font-semibold text-amber-500 tabular-nums">{statusCount.paused}</b> {t("已暂停")}
         </span>
         <span>
-          <b className="font-semibold text-destructive tabular-nums">{statusCount.canceled}</b> 已取消
+          <b className="font-semibold text-destructive tabular-nums">{statusCount.canceled}</b> {t("已取消")}
         </span>
         <span>
-          <b className="font-semibold text-success tabular-nums">{renewed}</b> 已续订
+          <b className="font-semibold text-success tabular-nums">{renewed}</b> {t("已续订")}
         </span>
         <span>
-          <b className="font-semibold text-amber-500 tabular-nums">{upcoming}</b> 即将续订
+          <b className="font-semibold text-amber-500 tabular-nums">{upcoming}</b> {t("即将续订")}
         </span>
       </div>
     </div>

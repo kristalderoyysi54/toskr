@@ -1,4 +1,5 @@
 import type { DeliveryDraft } from "@/lib/delivery/types";
+import { en } from "@/lib/i18n/en";
 
 export const ONBOARDING_VERSION = 3;
 export const SAFE_REHEARSAL_ACTIVATION_MS = 60_000;
@@ -355,8 +356,10 @@ export function permissionRehearsalStatus(
   return stuck ? "inputMonitoringBlocked" : "waitingForEvents";
 }
 
+/** 中英两版演练文本都认：切换语言前已复制的旧版本仍受安全锁保护。 */
 export function isSafeRehearsalText(value: string): boolean {
-  return value.trim() === SAFE_REHEARSAL_TEXT;
+  const text = value.trim();
+  return text === SAFE_REHEARSAL_TEXT || text === en[SAFE_REHEARSAL_TEXT];
 }
 
 /** 安全锁由 Draft、store 与执行器重复执行，UI 不能把回车重新打开。 */

@@ -4,6 +4,7 @@
 //! 已被客户端判定为「@我 / 特别关注」的新消息送到这里。原始对象先落 JSONL，
 //! 再向主 WebView 发摘要事件。模块不操作 IM 窗口，也不调用任何已读/发送 API。
 
+use crate::i18n::pick;
 use std::collections::{HashSet, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
@@ -180,7 +181,7 @@ fn random_token() -> Result<String, String> {
     let mut bytes = [0u8; 32];
     File::open("/dev/urandom")
         .and_then(|mut file| file.read_exact(&mut bytes))
-        .map_err(|error| format!("无法生成本地消息桥令牌：{error}"))?;
+        .map_err(|error| crate::tr_fmt!("无法生成本地消息桥令牌：{error}", "Can't create local message bridge token: {error}"))?;
     Ok(hex(&bytes))
 }
 
@@ -225,13 +226,13 @@ pub fn bridge_info(app: &AppHandle) -> Result<MessageWatchBridgeInfo, String> {
     let state = app.state::<MessageWatchState>();
     let runtime = state.runtime.lock().unwrap();
     if !runtime.enabled {
-        return Err("请先开启实验消息监听".into());
+        return Err(pick("请先开启实验消息监听", "Turn on experimental message watching first").into());
     }
     Ok(MessageWatchBridgeInfo {
         endpoint: runtime
             .endpoint
             .clone()
-            .ok_or_else(|| "本地消息桥尚未就绪".to_string())?,
+            .ok_or_else(|| pick("本地消息桥尚未就绪", "Local message bridge isn't ready").to_string())?,
         session_started_at_ms: runtime.session_started_at_ms.unwrap_or_else(now_ms),
     })
 }
@@ -256,13 +257,13 @@ pub fn set_enabled(app: &AppHandle, enabled: bool) -> Result<MessageWatchStatus,
     }
 
     let listener = TcpListener::bind(("127.0.0.1", 0))
-        .map_err(|error| format!("无法启动本地消息桥：{error}"))?;
+        .map_err(|error| crate::tr_fmt!("无法启动本地消息桥：{error}", "Can't start local message bridge: {error}"))?;
     listener
         .set_nonblocking(true)
-        .map_err(|error| format!("无法配置本地消息桥：{error}"))?;
+        .map_err(|error| crate::tr_fmt!("无法配置本地消息桥：{error}", "Can't configure local message bridge: {error}"))?;
     let port = listener
         .local_addr()
-        .map_err(|error| format!("无法读取本地消息桥地址：{error}"))?
+        .map_err(|error| crate::tr_fmt!("无法读取本地消息桥地址：{error}", "Can't read local message bridge address: {error}"))?
         .port();
     let token = random_token()?;
     let endpoint = format!("http://127.0.0.1:{port}/v1/im/{token}");
@@ -347,7 +348,7 @@ fn run_listener(app: AppHandle, listener: TcpListener, token: String, generation
             }
             Err(error) => {
                 let mut runtime = state.runtime.lock().unwrap();
-                runtime.last_error = Some(format!("本地接收器异常：{error}"));
+                runtime.last_error = Some(crate::tr_fmt!("本地接收器异常：{error}", "Local receiver error: {error}"));
                 runtime.enabled = false;
                 runtime.endpoint = None;
                 crate::diag::push(&app, "实验消息监听接收器已停止");
@@ -513,16 +514,16 @@ pub fn recent_captures(app: &AppHandle, limit: usize) -> Result<Vec<MessageWatch
         let path = root.join(LEDGER_FILE);
         match std::fs::symlink_metadata(&path) {
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(format!("无法读取消息账本：{error}")),
+            Err(error) => return Err(crate::tr_fmt!("无法读取消息账本：{error}", "Can't read message log: {error}")),
             Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-                return Err("消息账本路径不是普通文件".into())
+                return Err(pick("消息账本路径不是普通文件", "Message log path isn't a regular file").into())
             }
             Ok(_) => {}
         }
-        let file = File::open(&path).map_err(|error| format!("无法读取消息账本：{error}"))?;
+        let file = File::open(&path).map_err(|error| crate::tr_fmt!("无法读取消息账本：{error}", "Can't read message log: {error}"))?;
         let mut recent = VecDeque::with_capacity(limit);
         for line in BufReader::new(file).lines() {
-            let line = line.map_err(|error| format!("读取消息账本失败：{error}"))?;
+            let line = line.map_err(|error| crate::tr_fmt!("读取消息账本失败：{error}", "Failed to read message log: {error}"))?;
             let Some(record) = decode_ledger_line(&line)? else {
                 continue;
             };
@@ -552,7 +553,7 @@ pub(crate) fn seal_legacy_ledger_lines(root: &Path) -> Result<bool, String> {
         return Ok(false);
     }
     let content =
-        std::fs::read_to_string(&path).map_err(|error| format!("读取消息账本失败：{error}"))?;
+        std::fs::read_to_string(&path).map_err(|error| crate::tr_fmt!("读取消息账本失败：{error}", "Failed to read message log: {error}"))?;
     let mut changed = false;
     let mut output = String::with_capacity(content.len() * 2);
     for line in content.lines() {
@@ -596,7 +597,7 @@ fn decode_ledger_line(line: &str) -> Result<Option<StoredLedgerRecord>, String> 
     match crate::data_crypto::open(crate::data_crypto::Purpose::ImWatch, &sealed) {
         Ok(plain) => Ok(serde_json::from_slice::<StoredLedgerRecord>(&plain).ok()),
         Err(error) if error.key_unavailable() => {
-            Err(format!("消息账本密钥不可用：{}", error.message()))
+            Err(crate::tr_fmt!("消息账本密钥不可用：{}", "Message log key unavailable: {}", error.message()))
         }
         Err(_) => Ok(None),
     }
@@ -615,7 +616,7 @@ fn append_to_dir(
     let path = root.join(LEDGER_FILE);
     if let Ok(metadata) = std::fs::symlink_metadata(&path) {
         if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err("消息账本路径不是普通文件".into());
+            return Err(pick("消息账本路径不是普通文件", "Message log path isn't a regular file").into());
         }
     }
     let record = LedgerRecord {
@@ -623,15 +624,15 @@ fn append_to_dir(
         received_at_ms,
         message,
     };
-    let bytes = serde_json::to_vec(&record).map_err(|error| format!("消息编码失败：{error}"))?;
+    let bytes = serde_json::to_vec(&record).map_err(|error| crate::tr_fmt!("消息编码失败：{error}", "Failed to encode message: {error}"))?;
     if bytes.len() > MAX_BODY_BYTES + 256 * 1024 {
-        return Err("消息账本记录超过安全上限".into());
+        return Err(pick("消息账本记录超过安全上限", "Message log record exceeds the safe size limit").into());
     }
     // 消息正文敏感：逐行封 ImWatch 信封再 base64——GCM 密文可能含换行字节，
     // 必须 base64 保住行框架。追加型文件不做整档重写迁移，读侧永久兼容
     // 旧版明文行与新版密文行混排。
     let sealed = crate::data_crypto::seal(crate::data_crypto::Purpose::ImWatch, &bytes)
-        .map_err(|error| format!("消息账本加密失败：{}", error.message()))?;
+        .map_err(|error| crate::tr_fmt!("消息账本加密失败：{}", "Failed to encrypt message log: {}", error.message()))?;
     let line = {
         use base64::Engine;
         base64::engine::general_purpose::STANDARD.encode(sealed)
@@ -644,14 +645,14 @@ fn append_to_dir(
     }
     let mut file = options
         .open(&path)
-        .map_err(|error| format!("无法写入消息账本：{error}"))?;
+        .map_err(|error| crate::tr_fmt!("无法写入消息账本：{error}", "Can't write message log: {error}"))?;
     #[cfg(unix)]
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-        .map_err(|error| format!("无法收紧消息账本权限：{error}"))?;
+        .map_err(|error| crate::tr_fmt!("无法收紧消息账本权限：{error}", "Can't restrict message log permissions: {error}"))?;
     file.write_all(line.as_bytes())
         .and_then(|_| file.write_all(b"\n"))
         .and_then(|_| file.sync_data())
-        .map_err(|error| format!("消息账本落盘失败：{error}"))
+        .map_err(|error| crate::tr_fmt!("消息账本落盘失败：{error}", "Failed to save message log to disk: {error}"))
 }
 
 fn remember(runtime: &mut Runtime, key: String) {
@@ -771,7 +772,7 @@ fn handle_connection(app: &AppHandle, mut stream: TcpStream, token: &str, genera
         Err(error) if error == "实验监听已关闭" => {
             write_response(&mut stream, "410 Gone", "{\"error\":\"disabled\"}")
         }
-        Err(error) if error.starts_with("数据目录事务") => write_response(
+        Err(error) if error.starts_with("数据目录事务") || error.starts_with("Data folder transaction") => write_response(
             &mut stream,
             "503 Service Unavailable",
             "{\"error\":\"data busy\"}",

@@ -1,4 +1,5 @@
 import { buildDeliveryDraft } from "./buildDraft";
+import { t, type MessageKey } from "@/lib/i18n";
 import {
   executeDeliveryDraft,
   inspectDeliveryDraft,
@@ -88,7 +89,7 @@ export type PreflightDraftChanges = {
 
 const staleMessages: Record<
   Exclude<ReturnType<typeof inspectDeliveryDraft>, null>,
-  string
+  MessageKey
 > = {
   generation: "数据上下文已变化，请重新选择内容",
   source: "来源内容已变化，请重新打开预检",
@@ -177,7 +178,7 @@ export function updateOpenPreflightDraft(
   const draft = delivery.draft;
   if (!delivery.open || !draft || delivery.busy) return;
   if (delivery.retryBlocked) {
-    delivery.setLastError("目标可能已收到部分内容，请核对后关闭并重新预检");
+    delivery.setLastError(t("目标可能已收到部分内容，请核对后关闭并重新预检"));
     return;
   }
   const stale = inspect(draft);
@@ -188,7 +189,7 @@ export function updateOpenPreflightDraft(
     delivery.safeRetryPending &&
     !hiddenStale;
   if (stale && !recoverableTarget) {
-    delivery.setLastError(staleMessages[hiddenStale ?? stale]);
+    delivery.setLastError(t(staleMessages[hiddenStale ?? stale]));
     return;
   }
   const notes = useNotesStore.getState();
@@ -336,11 +337,11 @@ export function confirmOpenPreflightTargetChange(
   const draft = delivery.draft;
   if (!delivery.open || !draft || delivery.busy) return false;
   if (delivery.retryBlocked) {
-    delivery.setLastError("目标可能已收到部分内容，请核对后关闭并重新预检");
+    delivery.setLastError(t("目标可能已收到部分内容，请核对后关闭并重新预检"));
     return false;
   }
   if (delivery.transform.status === "running") {
-    delivery.setLastError("AI 转换正在生成，请等待完成后再确认新目标");
+    delivery.setLastError(t("AI 转换正在生成，请等待完成后再确认新目标"));
     return false;
   }
 
@@ -352,8 +353,8 @@ export function confirmOpenPreflightTargetChange(
   ) {
     delivery.setLastError(
       target.profileOverrideNeedsConfirmation
-        ? "请先确认当前目标使用的发送方案"
-        : "当前新目标尚未就绪，请重新识别后再确认"
+        ? t("请先确认当前目标使用的发送方案")
+        : t("当前新目标尚未就绪，请重新识别后再确认")
     );
     return false;
   }
@@ -362,7 +363,7 @@ export function confirmOpenPreflightTargetChange(
     (!options.expectedTarget ||
       !sameTargetIdentity(options.expectedTarget, target.snapshot))
   ) {
-    delivery.setLastError("目标已再次变化，请确认当前新目标");
+    delivery.setLastError(t("目标已再次变化，请确认当前新目标"));
     return false;
   }
   if (sameTargetIdentity(draft.targetSnapshot, target.snapshot)) {
@@ -371,7 +372,7 @@ export function confirmOpenPreflightTargetChange(
 
   const freshness = (options.inspectFreshness ?? inspectDeliveryDraftFreshness)(draft);
   if (freshness) {
-    delivery.setLastError(staleMessages[freshness]);
+    delivery.setLastError(t(staleMessages[freshness]));
     return false;
   }
   const resolution = (options.resolveProfile ?? currentTargetProfileResolution)();
@@ -379,7 +380,7 @@ export function confirmOpenPreflightTargetChange(
     !resolution.isTargetReady ||
     resolution.targetBundleId !== target.snapshot.bundleId
   ) {
-    delivery.setLastError("新目标的发送方案尚未就绪，请重新识别后再确认");
+    delivery.setLastError(t("新目标的发送方案尚未就绪，请重新识别后再确认"));
     return false;
   }
 
@@ -437,7 +438,7 @@ export async function dispatchDeliveryDraft(
   } = {}
 ): Promise<SendDeliveryResult | null> {
   if (draftPreparationPending) {
-    warnWithPanel("已有发送正在准备，请稍候", "delivery-preparing");
+    warnWithPanel(t("已有发送正在准备，请稍候"), "delivery-preparing");
     return null;
   }
   draftPreparationPending = true;
@@ -452,7 +453,7 @@ export async function dispatchDeliveryDraft(
     const scannedDraft = await scanDeliveryDraftImages(textScanned, options.scanImage);
     const state = useDeliveryStore.getState();
     if (state.open) {
-      warnWithPanel("请先完成或关闭当前发送预检", "preflight-open");
+      warnWithPanel(t("请先完成或关闭当前发送预检"), "preflight-open");
       return null;
     }
     if (shouldOpenPreflight(scannedDraft, state.preflightMode, options.force)) {
@@ -474,7 +475,7 @@ export async function dispatchDeliveryDraft(
 export function preflightStaleMessage(
   reason: ReturnType<typeof inspectDeliveryDraft>
 ): string | null {
-  return reason ? staleMessages[reason] : null;
+  return reason ? t(staleMessages[reason]) : null;
 }
 
 export async function submitPreflightDraft(options: {
@@ -489,11 +490,11 @@ export async function submitPreflightDraft(options: {
   const state = useDeliveryStore.getState();
   if (!state.open || !state.draft || state.busy) return null;
   if (state.retryBlocked) {
-    state.setLastError("目标可能已收到部分内容，请核对后关闭并重新预检");
+    state.setLastError(t("目标可能已收到部分内容，请核对后关闭并重新预检"));
     return null;
   }
   if (state.transform.status === "running") {
-    state.setLastError("AI 转换正在生成，请先取消或等待完成");
+    state.setLastError(t("AI 转换正在生成，请先取消或等待完成"));
     return null;
   }
   let draft = state.draft;
@@ -539,7 +540,7 @@ export async function submitPreflightDraft(options: {
     const recovered = rebase(draft, refreshedTarget);
     if (!recovered) {
       current.setBusy(false);
-      current.setLastError("原目标、来源或发送方案已变化，请重新打开预检");
+      current.setLastError(t("原目标、来源或发送方案已变化，请重新打开预检"));
       return null;
     }
     current.replaceDraft(recovered);
@@ -549,7 +550,7 @@ export async function submitPreflightDraft(options: {
   if (reason) {
     const current = useDeliveryStore.getState();
     if (busyClaimed) current.setBusy(false);
-    current.setLastError(staleMessages[reason]);
+    current.setLastError(t(staleMessages[reason]));
     return null;
   }
   const firewall = evaluateDeliveryDraftFirewall(draft);
@@ -562,7 +563,7 @@ export async function submitPreflightDraft(options: {
       })
     );
     state.setLastError(
-      firewall.reason ?? imageFirewall.reason ?? "请先完成隐私检查"
+      firewall.reason ?? imageFirewall.reason ?? t("请先完成隐私检查")
     );
     return null;
   }
@@ -580,14 +581,14 @@ export async function submitPreflightDraft(options: {
     if (!result) {
       delivery.setSafeRetryPending(true);
       delivery.setBusy(false);
-      delivery.setLastError("发送尚未开始，可以修改后重试");
+      delivery.setLastError(t("发送尚未开始，可以修改后重试"));
       return null;
     }
     if (result.reasonCode === "image_changed" && !result.pasteCompleted) {
       delivery.setSafeRetryPending(false);
       delivery.setRetryBlocked(true);
       delivery.setBusy(false);
-      delivery.setLastError("图片内容已变化，请关闭后重新预检并重新扫描");
+      delivery.setLastError(t("图片内容已变化，请关闭后重新预检并重新扫描"));
       return result;
     }
     const retrySafe = (options.retrySafe ?? deliveryRetryIsSafe)(result);
@@ -606,8 +607,8 @@ export async function submitPreflightDraft(options: {
     delivery.setBusy(false);
     delivery.setLastError(
       retrySafe
-        ? "发送未完成，可以修改后重试"
-        : "目标可能已收到全部或部分内容，请先核对；关闭后可重新预检"
+        ? t("发送未完成，可以修改后重试")
+        : t("目标可能已收到全部或部分内容，请先核对；关闭后可重新预检")
     );
     return result;
   } catch {
@@ -616,7 +617,7 @@ export async function submitPreflightDraft(options: {
     delivery.setRetryBlocked(true);
     delivery.setBusy(false);
     delivery.setLastError(
-      "发送结果不确定，请先核对目标；关闭后可重新预检"
+      t("发送结果不确定，请先核对目标；关闭后可重新预检")
     );
     return null;
   }

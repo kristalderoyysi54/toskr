@@ -1,4 +1,5 @@
 import { imageCaption } from "@/lib/format";
+import { t } from "@/lib/i18n";
 import {
   CLIPBOARD_ID,
   SECRET_ID,
@@ -6,6 +7,7 @@ import {
   type Note,
   type Section,
 } from "@/store/notesStore";
+import { sectionName } from "@/lib/i18n/builtinNames";
 
 export interface NotesExportPlan {
   markdown: string;
@@ -19,7 +21,7 @@ function pad(value: number): string {
 
 function formatLocalTime(timestamp: number): string {
   const date = new Date(timestamp);
-  if (!Number.isFinite(date.getTime())) return "未知";
+  if (!Number.isFinite(date.getTime())) return t("未知");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(
     date.getHours()
   )}:${pad(date.getMinutes())}`;
@@ -34,11 +36,11 @@ function inlineText(value: string): string {
 }
 
 function imageAlt(value: string | undefined, index: number): string {
-  return inlineText(value ?? "") || `图片 ${index}`;
+  return inlineText(value ?? "") || t("图片 {index}", { index });
 }
 
 function noteTitle(note: Note, index: number): string {
-  return inlineText(note.title?.trim() || note.linkTitle?.trim() || `笔记 ${index}`);
+  return inlineText(note.title?.trim() || note.linkTitle?.trim() || t("笔记 {index}", { index }));
 }
 
 /** 笔记正文在产品内是纯文本；用自适应围栏保持原文并阻断远程图片/HTML 激活。 */
@@ -55,11 +57,11 @@ function literalTextBlock(text: string, codeLang?: string): string {
 }
 
 function noteMetadata(note: Note, sectionName: string | undefined): string[] {
-  const parts = [`创建：${formatLocalTime(note.createdAt)}`];
-  if (note.updatedAt) parts.push(`更新：${formatLocalTime(note.updatedAt)}`);
-  if (sectionName) parts.push(`分组：${inlineText(sectionName)}`);
+  const parts = [t("创建：{time}", { time: formatLocalTime(note.createdAt) })];
+  if (note.updatedAt) parts.push(t("更新：{time}", { time: formatLocalTime(note.updatedAt) }));
+  if (sectionName) parts.push(t("分组：{name}", { name: inlineText(sectionName) }));
   if (note.tags?.length) {
-    parts.push(`标签：${note.tags.map((tag) => `#${inlineText(tag)}`).join(" ")}`);
+    parts.push(t("标签：{tags}", { tags: note.tags.map((tag) => `#${inlineText(tag)}`).join(" ") }));
   }
   return parts;
 }
@@ -74,7 +76,7 @@ export function buildNotesExportPlan(input: {
   exportedAtMs?: number;
 }): NotesExportPlan {
   const { notes, sections, exportedAtMs = Date.now() } = input;
-  if (!notes.length) throw new Error("没有可导出的笔记");
+  if (!notes.length) throw new Error(t("没有可导出的笔记"));
   if (
     notes.some(
       (note) =>
@@ -83,16 +85,16 @@ export function buildNotesExportPlan(input: {
         note.sectionId === CLIPBOARD_ID
     )
   ) {
-    throw new Error("秘文与剪贴历史不能作为普通笔记导出");
+    throw new Error(t("秘文与剪贴历史不能作为普通笔记导出"));
   }
 
-  const sectionNames = new Map(sections.map((section) => [section.id, section.name]));
+  const sectionNames = new Map(sections.map((section) => [section.id, sectionName(section)]));
   const mediaFiles: string[] = [];
   const seenMedia = new Set<string>();
   const chunks = [
-    "# Toskr 笔记导出",
+    `# ${t("Toskr 笔记导出")}`,
     "",
-    `> 导出：${formatLocalTime(exportedAtMs)} · 共 ${notes.length} 条`,
+    `> ${t("导出：{time} · 共 {n} 条", { time: formatLocalTime(exportedAtMs), n: notes.length })}`,
   ];
 
   notes.forEach((note, noteIndex) => {
@@ -130,5 +132,5 @@ export function buildNotesExportPlan(input: {
 export function notesExportFilename(noteCount: number, timestamp = Date.now()): string {
   const date = new Date(timestamp);
   const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-  return `Toskr-笔记-${day}${noteCount > 1 ? `-${noteCount}条` : ""}.zip`;
+  return `${t("Toskr-笔记-{day}", { day })}${noteCount > 1 ? t("-{n}条", { n: noteCount }) : ""}.zip`;
 }

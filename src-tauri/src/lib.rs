@@ -13,6 +13,7 @@ mod events;
 mod exchange;
 mod favicon;
 mod focus;
+mod i18n;
 mod image_firewall;
 mod input;
 #[cfg(target_os = "macos")]
@@ -211,6 +212,7 @@ pub fn run() {
             window::spawn_edge_hide_supervisor(app.handle());
 
             // 托盘在 tap 安装之后创建，初始菜单即可反映权限状态。
+            i18n::init_from_system();
             tray::create(app.handle())?;
             Ok(())
         })
@@ -296,6 +298,8 @@ pub fn run() {
             commands::adjust_panel_edge,
             commands::set_panel_vertical,
             commands::set_stealth,
+            i18n::system_locale,
+            i18n::set_locale,
             commands::set_sound,
             commands::set_hud_duration,
             commands::set_sidebar_mode,

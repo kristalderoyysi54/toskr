@@ -19,7 +19,7 @@ Collect text and images from different apps, organize and review privacy, then p
 
 > **Text and images from source apps** → **Collect, organize, and review privacy in Toskr** → **Your current AI input**
 
-> The app UI is currently Chinese-only.
+> The app UI is available in English and Simplified Chinese. It follows your macOS language by default; switch it in Settings → Appearance → Language.
 
 Customize auto-submit per target app — `⌘ Enter` pastes and delivers in one step.
 

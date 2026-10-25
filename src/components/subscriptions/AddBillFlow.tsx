@@ -23,6 +23,7 @@ import {
   nextMonthlyDueAt,
   startOfBillDay,
 } from "@/lib/bills";
+import { useT, type MessageKey } from "@/lib/i18n";
 import { api } from "@/lib/tauri";
 import { tip } from "@/lib/tip";
 import { cn } from "@/lib/utils";
@@ -46,7 +47,7 @@ const CURRENCY_OPTIONS = [
 ];
 
 /** 订阅可选类别（信用卡走 kind，不在此列）；catalog 类别之外给「其他」。 */
-const BILL_CATEGORY_OPTIONS: { value: string; label: string }[] = [
+const BILL_CATEGORY_OPTIONS: { value: string; label: MessageKey }[] = [
   ...CATALOG_CATEGORIES.filter((c) => c !== "creditCard").map((c) => ({
     value: c,
     label: CATALOG_CATEGORY_LABEL[c],
@@ -54,7 +55,7 @@ const BILL_CATEGORY_OPTIONS: { value: string; label: string }[] = [
   { value: "other", label: "其他" },
 ];
 
-const OFFSET_LABEL: Record<ReminderOffsetDays, string> = {
+const OFFSET_LABEL: Record<ReminderOffsetDays, MessageKey> = {
   7: "提前 7 天",
   3: "提前 3 天",
   1: "提前 1 天",
@@ -111,6 +112,7 @@ export function AddBillFlow({
   edit?: Bill;
   onOpenChange: (open: boolean) => void;
 }) {
+  const t = useT();
   const defaultOffsets = useNotesStore((s) => s.settings.billDefaultReminderOffsets);
   const defaultCurrency = useNotesStore((s) => s.settings.currencySymbol);
   // 订阅稳定引用，派生放 useMemo（选择器直接返回新数组会触发无限重渲染）
@@ -204,30 +206,30 @@ export function AddBillFlow({
     if (!form) return;
     const name = form.name.trim();
     if (!name) {
-      tip("warn", "请填写名称");
+      tip("warn", t("请填写名称"));
       return;
     }
     const amount = form.amount.trim() === "" ? null : Number(form.amount);
     if (amount !== null && (!Number.isFinite(amount) || amount < 0)) {
-      tip("warn", "金额无效");
+      tip("warn", t("金额无效"));
       return;
     }
     if (form.kind === "subscription" && amount === null) {
-      tip("warn", "订阅需要填写每期金额");
+      tip("warn", t("订阅需要填写每期金额"));
       return;
     }
     let nextDueAt: number;
     if (form.kind === "creditCard") {
       const day = Number(form.repayDay);
       if (!Number.isInteger(day) || day < 1 || day > 31) {
-        tip("warn", "还款日需为 1-31");
+        tip("warn", t("还款日需为 1-31"));
         return;
       }
       nextDueAt = nextMonthlyDueAt(day, Date.now());
     } else {
       const parsed = fromDateInput(form.dueDate);
       if (parsed === null) {
-        tip("warn", "请选择下次续费日期");
+        tip("warn", t("请选择下次续费日期"));
         return;
       }
       nextDueAt = parsed;
@@ -251,7 +253,7 @@ export function AddBillFlow({
     };
     if (edit) {
       store.updateBill(edit.id, shared);
-      tip("ok", `已更新「${name}」`);
+      tip("ok", t("已更新「{name}」", { name }));
     } else {
       const id = store.addBill({
         ...shared,
@@ -267,7 +269,7 @@ export function AddBillFlow({
           .then((file) => useNotesStore.getState().updateBill(id, { iconFile: file }))
           .catch(() => {});
       }
-      tip("added", `已添加「${name}」`);
+      tip("added", t("已添加「{name}」", { name }));
     }
     onOpenChange(false);
   };
@@ -284,18 +286,18 @@ export function AddBillFlow({
         >
           <header className="flex items-center gap-1 border-b border-border/70 pb-2">
             {step === "confirm" && !edit && (
-              <IconButton label="返回服务目录" size="sm" onClick={() => setStep("pick")}>
+              <IconButton label={t("返回服务目录")} size="sm" onClick={() => setStep("pick")}>
                 <ChevronLeft />
               </IconButton>
             )}
             <DialogPrimitive.Title className="min-w-0 flex-1 truncate text-title font-semibold">
-              {edit ? "编辑订阅" : step === "pick" ? "添加订阅" : "确认信息"}
+              {edit ? t("编辑订阅") : step === "pick" ? t("添加订阅") : t("确认信息")}
             </DialogPrimitive.Title>
             <DialogPrimitive.Description className="sr-only">
-              记录订阅服务或信用卡还款日，到期前自动提醒。
+              {t("记录订阅服务或信用卡还款日，到期前自动提醒。")}
             </DialogPrimitive.Description>
             <DialogPrimitive.Close asChild>
-              <IconButton label="关闭" size="sm">
+              <IconButton label={t("关闭")} size="sm">
                 <X />
               </IconButton>
             </DialogPrimitive.Close>
@@ -316,7 +318,7 @@ export function AddBillFlow({
                         : "bg-black/5 text-muted-foreground hover:text-foreground dark:bg-white/10"
                     )}
                   >
-                    {c === "all" ? "全部" : CATALOG_CATEGORY_LABEL[c]}
+                    {c === "all" ? t("全部") : t(CATALOG_CATEGORY_LABEL[c])}
                   </button>
                 ))}
               </div>
@@ -325,9 +327,9 @@ export function AddBillFlow({
                 <input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="搜索服务…"
+                  placeholder={t("搜索服务…")}
                   className="w-full rounded-lg border border-border bg-transparent py-1.5 pl-7 pr-2 text-body outline-none focus:border-primary/50"
-                  aria-label="搜索预置服务"
+                  aria-label={t("搜索预置服务")}
                 />
               </div>
               <div className="mt-2 min-h-0 flex-1 overflow-y-auto pr-0.5">
@@ -366,16 +368,16 @@ export function AddBillFlow({
                   </div>
                 ) : (
                   <p className="py-8 text-center text-label text-muted-foreground">
-                    没有匹配的服务，用下方自定义添加
+                    {t("没有匹配的服务，用下方自定义添加")}
                   </p>
                 )}
               </div>
               <div className="flex gap-1.5 border-t border-border/50 px-0.5 pb-0.5 pt-2">
                 <Button size="sm" className="flex-1" onClick={() => startConfirm(undefined, "subscription")}>
-                  <Plus /> 自定义订阅
+                  <Plus /> {t("自定义订阅")}
                 </Button>
                 <Button size="sm" className="flex-1" onClick={() => startConfirm(undefined, "creditCard")}>
-                  <Plus /> 自定义信用卡
+                  <Plus /> {t("自定义信用卡")}
                 </Button>
               </div>
             </>
@@ -385,30 +387,30 @@ export function AddBillFlow({
               <div className="mt-2 flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-0.5 pb-0.5">
                 {!edit && (
                   <Segmented
-                    ariaLabel="账单类型"
+                    ariaLabel={t("账单类型")}
                     value={form.kind}
                     options={[
-                      { value: "subscription", label: "订阅" },
-                      { value: "creditCard", label: "信用卡" },
+                      { value: "subscription", label: t("订阅") },
+                      { value: "creditCard", label: t("信用卡") },
                     ]}
                     onChange={(kind) => setForm({ ...form, kind })}
                     className="self-start"
                   />
                 )}
-                <Field label="名称">
+                <Field label={t("名称")}>
                   <input
                     autoFocus={!form.name}
                     value={form.name}
                     onChange={(e) => setForm({ ...form, name: e.target.value })}
-                    placeholder={form.kind === "creditCard" ? "如 招商银行信用卡" : "如 Netflix"}
+                    placeholder={form.kind === "creditCard" ? t("如 招商银行信用卡") : t("如 Netflix")}
                     className="w-full rounded-md border border-border bg-transparent px-1.5 py-1 text-body outline-none focus:border-primary/50"
                   />
                 </Field>
-                <Field label={form.kind === "creditCard" ? "金额（可留空，每期可改）" : "每期金额"}>
+                <Field label={form.kind === "creditCard" ? t("金额（可留空，每期可改）") : t("每期金额")}>
                   <div className="flex gap-1.5">
                     {/* 货币下拉与金额同排（面板窄，省一行；符号即存储值） */}
                     <FormSelect
-                      ariaLabel="货币"
+                      ariaLabel={t("货币")}
                       className="w-26 shrink-0"
                       value={form.currency}
                       options={(CURRENCY_OPTIONS.some((o) => o.symbol === form.currency)
@@ -423,33 +425,33 @@ export function AddBillFlow({
                       step="0.01"
                       value={form.amount}
                       onChange={(e) => setForm({ ...form, amount: e.target.value })}
-                      placeholder={form.kind === "creditCard" ? "留空 = 只提醒还款日" : "68"}
+                      placeholder={form.kind === "creditCard" ? t("留空 = 只提醒还款日") : "68"}
                       className="min-w-0 flex-1 rounded-md border border-border bg-transparent px-1.5 py-1 text-body tabular-nums outline-none focus:border-primary/50"
                     />
                   </div>
                 </Field>
                 {form.kind === "subscription" && (
-                  <Field label="类别">
+                  <Field label={t("类别")}>
                     <FormSelect
-                      ariaLabel="类别"
+                      ariaLabel={t("类别")}
                       value={form.category}
-                      options={BILL_CATEGORY_OPTIONS}
+                      options={BILL_CATEGORY_OPTIONS.map((o) => ({ value: o.value, label: t(o.label) }))}
                       onChange={(category) => setForm({ ...form, category })}
                     />
                   </Field>
                 )}
                 {form.kind === "subscription" ? (
                   <>
-                    <Field label="周期">
+                    <Field label={t("周期")}>
                       <Segmented
                         size="xs"
-                        ariaLabel="续费周期"
+                        ariaLabel={t("续费周期")}
                         value={form.cycle}
-                        options={CYCLE_OPTIONS}
+                        options={CYCLE_OPTIONS.map((o) => ({ value: o.value, label: t(o.label) }))}
                         onChange={(cycle) => setForm({ ...form, cycle })}
                       />
                     </Field>
-                    <Field label="下次续费日">
+                    <Field label={t("下次续费日")}>
                       <input
                         type="date"
                         value={form.dueDate}
@@ -457,7 +459,7 @@ export function AddBillFlow({
                         className="rounded-md border border-border bg-transparent px-1.5 py-1 text-body outline-none focus:border-primary/50"
                       />
                     </Field>
-                    <Field label="开始日期（可选，自动补记开始以来的往期消费）">
+                    <Field label={t("开始日期（可选，自动补记开始以来的往期消费）")}>
                       <input
                         type="date"
                         value={form.startDate}
@@ -467,7 +469,7 @@ export function AddBillFlow({
                     </Field>
                   </>
                 ) : (
-                  <Field label="每月还款日">
+                  <Field label={t("每月还款日")}>
                     <div className="flex items-center gap-1.5">
                       <input
                         type="number"
@@ -476,15 +478,15 @@ export function AddBillFlow({
                         value={form.repayDay}
                         onChange={(e) => setForm({ ...form, repayDay: e.target.value })}
                         className="w-14 rounded-md border border-border bg-transparent px-1.5 py-1 text-body tabular-nums outline-none focus:border-primary/50"
-                        aria-label="每月还款日（1-31）"
+                        aria-label={t("每月还款日（1-31）")}
                       />
                       <span className="text-label text-muted-foreground">
-                        日（短月自动顺延到月末）
+                        {t("日（短月自动顺延到月末）")}
                       </span>
                     </div>
                   </Field>
                 )}
-                <Field label="到期提醒">
+                <Field label={t("到期提醒")}>
                   <div className="flex flex-wrap gap-1">
                     {BILL_REMINDER_OFFSET_OPTIONS.map((offset) => {
                       const on = form.offsets.includes(offset);
@@ -508,17 +510,17 @@ export function AddBillFlow({
                               : "bg-black/5 text-muted-foreground hover:text-foreground dark:bg-white/10"
                           )}
                         >
-                          {OFFSET_LABEL[offset]}
+                          {t(OFFSET_LABEL[offset])}
                         </button>
                       );
                     })}
                   </div>
                 </Field>
-                <Field label="支付方式（可选）">
+                <Field label={t("支付方式（可选）")}>
                   <input
                     value={form.payMethod}
                     onChange={(e) => setForm({ ...form, payMethod: e.target.value })}
-                    placeholder="如 支付宝 / 微信 / 招行卡尾号 1234"
+                    placeholder={t("如 支付宝 / 微信 / 招行卡尾号 1234")}
                     className="w-full rounded-md border border-border bg-transparent px-1.5 py-1 text-body outline-none focus:border-primary/50"
                   />
                   {/* 用过的支付方式快选：点一下即填，再点取消（同款药丸＝同款交互） */}
@@ -548,7 +550,7 @@ export function AddBillFlow({
                     </div>
                   )}
                 </Field>
-                <Field label="备注（可选）">
+                <Field label={t("备注（可选）")}>
                   <input
                     value={form.note}
                     onChange={(e) => setForm({ ...form, note: e.target.value })}
@@ -557,7 +559,7 @@ export function AddBillFlow({
                 </Field>
                 <div className="mt-auto border-t border-border/50 pt-2">
                   <Button size="sm" className="w-full" onClick={submit}>
-                    {edit ? "保存修改" : "添加"}
+                    {edit ? t("保存修改") : t("添加")}
                   </Button>
                 </div>
               </div>

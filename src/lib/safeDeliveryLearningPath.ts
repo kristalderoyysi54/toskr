@@ -1,3 +1,4 @@
+import { t, type MessageKey } from "@/lib/i18n";
 import type { OnboardingState } from "@/lib/onboarding";
 
 export type SafeDeliveryLearningTaskId =
@@ -12,7 +13,11 @@ export interface SafeDeliveryLearningTask {
   status: "done" | "current" | "locked";
 }
 
-const TASKS = [
+const TASKS: readonly {
+  id: SafeDeliveryLearningTaskId;
+  title: MessageKey;
+  description: MessageKey;
+}[] = [
   {
     id: "capture",
     title: "收进第一条内容",
@@ -28,7 +33,7 @@ const TASKS = [
     title: "检查并粘贴",
     description: "把示例邮箱替换后粘贴到空白文档，不会自动回车",
   },
-] as const;
+];
 
 /** 基础教程与主面板共用收集、确认位置和粘贴三步；权限是收集前的准备。 */
 export function safeDeliveryLearningTasks(
@@ -45,6 +50,8 @@ export function safeDeliveryLearningTasks(
 
   return TASKS.map((task, index) => ({
     ...task,
+    title: t(task.title),
+    description: t(task.description),
     status: completed[index]
       ? "done"
       : index === currentIndex

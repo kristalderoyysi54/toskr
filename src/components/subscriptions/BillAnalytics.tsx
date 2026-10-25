@@ -25,6 +25,7 @@ import {
   yearSpendTotalsByCurrency,
 } from "@/lib/bills";
 import { cachedFx, ensureFx, makeConverter, type FxCache } from "@/lib/currency";
+import { intlLocale, t as translate, useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { useNotesStore, type Bill } from "@/store/notesStore";
 
@@ -41,8 +42,9 @@ const CATEGORY_COLORS: Record<string, string> = {
 };
 
 function categoryLabel(category: string): string {
-  if (category === "other") return "其他";
-  return CATALOG_CATEGORY_LABEL[category as CatalogCategory] ?? "其他";
+  if (category === "other") return translate("其他");
+  const key = CATALOG_CATEGORY_LABEL[category as CatalogCategory];
+  return key ? translate(key) : translate("其他");
 }
 
 /**
@@ -63,6 +65,7 @@ export function BillAnalytics({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const t = useT();
   const currency = useNotesStore((s) => s.settings.currencySymbol);
   const [range, setRange] = useState<"month" | "year">("month");
   // 打开时确保当日汇率（24h 缓存；失败回退过期缓存 → 再退分列显示）
@@ -135,7 +138,9 @@ export function BillAnalytics({
             ...y,
             key: String(y.year),
           })),
-    [bills, now, range, conv]
+    // t 随语言换引用：切换语言时重算月份标签
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [bills, now, range, conv, t]
   );
   const trendMax = Math.max(...trend.map((t) => t.total), 0);
 
@@ -168,13 +173,13 @@ export function BillAnalytics({
         >
           <header className="flex items-center gap-1 border-b border-border/70 pb-2">
             <DialogPrimitive.Title className="min-w-0 flex-1 truncate text-title font-semibold">
-              消费分析
+              {t("消费分析")}
             </DialogPrimitive.Title>
             <DialogPrimitive.Description className="sr-only">
-              基于订阅记账数据的消费统计：指标、趋势与类别构成。
+              {t("基于订阅记账数据的消费统计：指标、趋势与类别构成。")}
             </DialogPrimitive.Description>
             <DialogPrimitive.Close asChild>
-              <IconButton label="关闭消费分析" size="sm">
+              <IconButton label={t("关闭消费分析")} size="sm">
                 <X />
               </IconButton>
             </DialogPrimitive.Close>
@@ -185,43 +190,43 @@ export function BillAnalytics({
               {/* 指标卡 2×2 */}
               <div className="grid grid-cols-2 gap-1.5">
                 <StatCard
-                  label="本月消费"
+                  label={t("本月消费")}
                   value={stats.monthText}
                   sub={
                     stats.momPct !== null
-                      ? `${stats.momPct >= 0 ? "↑" : "↓"} 较上月 ${Math.abs(stats.momPct).toFixed(0)}%`
+                      ? t("{arrow} 较上月 {pct}%", { arrow: stats.momPct >= 0 ? "↑" : "↓", pct: Math.abs(stats.momPct).toFixed(0) })
                       : stats.multiCurrency && stats.converted
                         ? stats.monthParts
                         : stats.multiCurrency
-                          ? "汇率未就绪，按币种分列"
-                          : "上月无记账"
+                          ? t("汇率未就绪，按币种分列")
+                          : t("上月无记账")
                   }
                   subTone={
                     stats.momPct === null ? "muted" : stats.momPct > 0 ? "up" : "down"
                   }
                 />
                 <StatCard
-                  label="月固定支出"
+                  label={t("月固定支出")}
                   value={stats.fixedText}
                   sub={
                     stats.multiCurrency && stats.converted
                       ? stats.fixedParts
-                      : "活跃订阅按周期折算"
+                      : t("活跃订阅按周期折算")
                   }
                 />
                 <StatCard
-                  label="年度累计"
+                  label={t("年度累计")}
                   value={stats.yearText}
                   sub={
                     stats.multiCurrency && stats.converted
                       ? stats.yearParts
-                      : `${new Date(now).getFullYear()} 年已记账`
+                      : t("{year} 年已记账", { year: new Date(now).getFullYear() })
                   }
                 />
                 <StatCard
-                  label="活跃订阅"
+                  label={t("活跃订阅")}
                   value={String(stats.active)}
-                  sub={`共 ${stats.subscriptionCount} 笔订阅`}
+                  sub={t("共 {n} 笔订阅", { n: stats.subscriptionCount })}
                 />
               </div>
 
@@ -229,27 +234,27 @@ export function BillAnalytics({
               <section className="surface-inset rounded-xl p-2">
                 <div className="mb-1 flex items-center justify-between pl-1">
                   <p className="text-label font-semibold">
-                    消费趋势
+                    {t("消费趋势")}
                     {stats.multiCurrency && (
                       <span className="ml-1 font-normal text-micro text-muted-foreground">
-                        {stats.converted ? `已折算 ${currency}` : "多币种混计"}
+                        {stats.converted ? t("已折算 {currency}", { currency }) : t("多币种混计")}
                       </span>
                     )}
                   </p>
                   <Segmented
                     size="xs"
-                    ariaLabel="趋势范围"
+                    ariaLabel={t("趋势范围")}
                     value={range}
                     options={[
-                      { value: "month", label: "月度" },
-                      { value: "year", label: "年度" },
+                      { value: "month", label: t("月度") },
+                      { value: "year", label: t("年度") },
                     ]}
                     onChange={setRange}
                   />
                 </div>
                 {trendMax <= 0 ? (
                   <p className="py-6 text-center text-label text-muted-foreground">
-                    还没有记账数据；订阅到期滚动或信用卡标记已还后自动积累
+                    {t("还没有记账数据；订阅到期滚动或信用卡标记已还后自动积累")}
                   </p>
                 ) : (
                   <div className="flex items-end gap-1 px-1">
@@ -300,16 +305,16 @@ export function BillAnalytics({
               {/* 类别构成：活跃订阅月折算（环形 conic-gradient + 图例） */}
               <section className="surface-inset rounded-xl p-2">
                 <p className="mb-1.5 pl-1 text-label font-semibold">
-                  按类别{" "}
+                  {t("按类别")}{" "}
                   <span className="font-normal text-muted-foreground">
-                    · 月固定支出构成
+                    {t("· 月固定支出构成")}
                     {stats.multiCurrency &&
-                      (stats.converted ? `（已折算 ${currency}）` : "（多币种混计）")}
+                      (stats.converted ? t("（已折算 {currency}）", { currency }) : t("（多币种混计）"))}
                   </span>
                 </p>
                 {categoryTotal <= 0 ? (
                   <p className="py-6 text-center text-label text-muted-foreground">
-                    还没有活跃订阅
+                    {t("还没有活跃订阅")}
                   </p>
                 ) : (
                   <div className="flex items-center gap-3 px-1 pb-1">
@@ -317,7 +322,7 @@ export function BillAnalytics({
                       className="relative size-24 shrink-0 rounded-full"
                       style={{ background: donutGradient }}
                       role="img"
-                      aria-label="类别构成环形图"
+                      aria-label={t("类别构成环形图")}
                     >
                       {/* 中孔：挖洞成环 + 中心合计 */}
                       <div className="absolute inset-3 flex flex-col items-center justify-center rounded-full bg-popover">
@@ -325,7 +330,7 @@ export function BillAnalytics({
                           {displaySymbol}
                           {formatBillAmount(Math.round(categoryTotal))}
                         </span>
-                        <span className="text-micro text-muted-foreground">/月</span>
+                        <span className="text-micro text-muted-foreground">{t("/月")}</span>
                       </div>
                     </div>
                     <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -357,14 +362,14 @@ export function BillAnalytics({
               </section>
               {stats.converted && stats.multiCurrency && fx && (
                 <p className="px-1 text-micro text-muted-foreground">
-                  汇率更新于{" "}
-                  {new Date(fx.fetchedAt).toLocaleString("zh-CN", {
+                  {t("汇率更新于")}{" "}
+                  {new Date(fx.fetchedAt).toLocaleString(intlLocale(), {
                     month: "numeric",
                     day: "numeric",
                     hour: "2-digit",
                     minute: "2-digit",
                   })}{" "}
-                  · open.er-api.com · 每日缓存，折算仅供参考
+                  {t("· open.er-api.com · 每日缓存，折算仅供参考")}
                 </p>
               )}
             </div>

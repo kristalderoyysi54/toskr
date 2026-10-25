@@ -18,6 +18,7 @@ import {
 import { buildTaskMarkdown } from "@/lib/delivery/buildDraft";
 import type { ScanSensitiveText } from "@/lib/delivery/firewallController";
 import { imageCaption, buildSendText } from "@/lib/format";
+import { getLocale, intlLocale, t, type MessageKey } from "@/lib/i18n";
 import { api } from "@/lib/tauri";
 import {
   useNotesStore,
@@ -260,9 +261,9 @@ export function verifyResultDeterministically(
     checks,
     "result.present",
     result ? "pass" : "blocked",
-    result ? "结果正文存在" : "结果为空"
+    result ? t("结果正文存在") : t("结果为空")
   );
-  if (!result) missing.push("结果正文");
+  if (!result) missing.push(t("结果正文"));
 
   const unusuallyShort = !!result && (
     [...result].length < 24 ||
@@ -272,18 +273,18 @@ export function verifyResultDeterministically(
     checks,
     "result.length",
     unusuallyShort ? "needsReview" : "pass",
-    unusuallyShort ? "结果相对过短，可能不完整" : "结果长度未见明显异常"
+    unusuallyShort ? t("结果相对过短，可能不完整") : t("结果长度未见明显异常")
   );
-  if (unusuallyShort) risks.push("结果过短，可能遗漏来源内容");
+  if (unusuallyShort) risks.push(t("结果过短，可能遗漏来源内容"));
 
   const truncated = !!result && looksTruncated(result);
   addCheck(
     checks,
     "result.truncation",
     truncated ? "needsReview" : "pass",
-    truncated ? "结果结尾或代码围栏疑似异常截断" : "未发现常见截断标记"
+    truncated ? t("结果结尾或代码围栏疑似异常截断") : t("未发现常见截断标记")
   );
-  if (truncated) risks.push("结果疑似截断");
+  if (truncated) risks.push(t("结果疑似截断"));
 
   const expectsJson = expectation.format === "json" ||
     (expectation.format === "auto" && /^[{[]/.test(result));
@@ -302,10 +303,10 @@ export function verifyResultDeterministically(
     "format.json",
     jsonValid ? "pass" : "blocked",
     expectsJson
-      ? jsonValid ? "JSON 语法有效" : "结果不是合法 JSON"
-      : "本次未要求 JSON"
+      ? jsonValid ? t("JSON 语法有效") : t("结果不是合法 JSON")
+      : t("本次未要求 JSON")
   );
-  if (expectsJson && !jsonValid) missing.push("合法 JSON");
+  if (expectsJson && !jsonValid) missing.push(t("合法 JSON"));
 
   const requiredJsonFields = uniqueStrings(expectation.requiredJsonFields);
   const missingJsonFields = jsonValid && expectsJson
@@ -316,10 +317,10 @@ export function verifyResultDeterministically(
     "format.json-fields",
     missingJsonFields.length ? "blocked" : "pass",
     missingJsonFields.length
-      ? `缺少 JSON 必填字段：${missingJsonFields.join("、")}`
-      : requiredJsonFields.length ? "JSON 必填字段齐全" : "未指定 JSON 必填字段"
+      ? t("缺少 JSON 必填字段：{fields}", { fields: missingJsonFields.join(t("、")) })
+      : requiredJsonFields.length ? t("JSON 必填字段齐全") : t("未指定 JSON 必填字段")
   );
-  missing.push(...missingJsonFields.map((field) => `JSON 字段 ${field}`));
+  missing.push(...missingJsonFields.map((field) => t("JSON 字段 {field}", { field })));
 
   const requiredSections = uniqueStrings(expectation.requiredSections);
   const normalizedResult = result.toLocaleLowerCase();
@@ -331,10 +332,10 @@ export function verifyResultDeterministically(
     "structure.sections",
     missingSections.length ? "blocked" : "pass",
     missingSections.length
-      ? `缺少必要标题或段落：${missingSections.join("、")}`
-      : requiredSections.length ? "必要标题或段落齐全" : "未指定必要标题或段落"
+      ? t("缺少必要标题或段落：{sections}", { sections: missingSections.join(t("、")) })
+      : requiredSections.length ? t("必要标题或段落齐全") : t("未指定必要标题或段落")
   );
-  missing.push(...missingSections.map((section) => `章节 ${section}`));
+  missing.push(...missingSections.map((section) => t("章节 {section}", { section })));
 
   const sourcePlaceholders = placeholderCounts(context.sourceText);
   const resultPlaceholders = placeholderCounts(result);
@@ -366,10 +367,10 @@ export function verifyResultDeterministically(
     ? [...resultPlaceholders.keys()].filter((item) => !dictionary.has(item))
     : [];
   const expiredMessage = resultPlaceholders.size === 0
-    ? "应用重启过或该次发送较久，临时占位符清单已清理；无法确认是否有占位符丢失"
+    ? t("应用重启过或该次发送较久，临时占位符清单已清理；无法确认是否有占位符丢失")
     : temporaryUnknown.length
-      ? `词典化名 ${dictionaryKnown.length} 处可识别；${temporaryUnknown.length} 处临时占位符无法核对（应用重启过或该次发送较久）`
-      : `词典化名 ${dictionaryKnown.length} 处均可识别、可恢复；数量核对不可用（应用重启过或该次发送较久）`;
+      ? t("词典化名 {known} 处可识别；{unknown} 处临时占位符无法核对（应用重启过或该次发送较久）", { known: dictionaryKnown.length, unknown: temporaryUnknown.length })
+      : t("词典化名 {n} 处均可识别、可恢复；数量核对不可用（应用重启过或该次发送较久）", { n: dictionaryKnown.length });
   const placeholderProblem = mappingExpired || missingPlaceholders.length ||
     duplicatePlaceholders.length || unknownPlaceholders.length;
   addCheck(
@@ -379,23 +380,23 @@ export function verifyResultDeterministically(
     mappingExpired
       ? expiredMessage
       : placeholderProblem
-        ? "占位符存在丢失、重复或未知项"
-        : "占位符数量与已知发送会话一致"
+        ? t("占位符存在丢失、重复或未知项")
+        : t("占位符数量与已知发送会话一致")
   );
-  missing.push(...missingPlaceholders.map((placeholder) => `占位符 ${placeholder}`));
+  missing.push(...missingPlaceholders.map((placeholder) => t("占位符 {placeholder}", { placeholder })));
   if (duplicatePlaceholders.length) {
-    risks.push(`占位符重复：${duplicatePlaceholders.join("、")}`);
+    risks.push(t("占位符重复：{items}", { items: duplicatePlaceholders.join(t("、")) }));
   }
   if (mappingExpired) {
     risks.push(
-      "应用重启过或该次发送较久，临时占位符清单已清理，数量核对不可用；如需严格核对请人工比对"
+      t("应用重启过或该次发送较久，临时占位符清单已清理，数量核对不可用；如需严格核对请人工比对")
     );
     if (temporaryUnknown.length) {
-      risks.push(`临时占位符 ${temporaryUnknown.join("、")} 无法判断是否来自本次发送`);
+      risks.push(t("临时占位符 {items} 无法判断是否来自本次发送", { items: temporaryUnknown.join(t("、")) }));
     }
   } else {
     newAssumptions.push(
-      ...unknownPlaceholders.map((placeholder) => `未知占位符 ${placeholder}`)
+      ...unknownPlaceholders.map((placeholder) => t("未知占位符 {placeholder}", { placeholder }))
     );
   }
 
@@ -403,29 +404,29 @@ export function verifyResultDeterministically(
     context.resultNote.provenance?.deliveryId ?? "", context.executionVersion, now
   );
   addCheck(checks, "source.execution-baseline", exactBaseline ? "pass" : "needsReview",
-    exactBaseline ? "参照本次交给原生执行的正文（不代表目标已接收）"
-      : "原投递正文基线不可用；当前来源仅供参考，不能证明与历史投递一致");
-  if (!exactBaseline) risks.push("未保留原投递正文或会话已过期，不能完成历史投递一致性核验");
+    exactBaseline ? t("参照本次交给原生执行的正文（不代表目标已接收）")
+      : t("原投递正文基线不可用；当前来源仅供参考，不能证明与历史投递一致"));
+  if (!exactBaseline) risks.push(t("未保留原投递正文或会话已过期，不能完成历史投递一致性核验"));
   const sourceMissing = !exactBaseline && (context.missingSourceIds.length > 0 || !context.sources.length);
   addCheck(
     checks,
     "source.references",
     sourceMissing ? "blocked" : "pass",
     sourceMissing
-      ? `来源引用缺失 ${context.missingSourceIds.length || 1} 项`
-      : exactBaseline ? "本次执行正文可用；不依赖当前来源重建" : `当前来源 ${context.sources.length} 项均存在`
+      ? t("来源引用缺失 {n} 项", { n: context.missingSourceIds.length || 1 })
+      : exactBaseline ? t("本次执行正文可用；不依赖当前来源重建") : t("当前来源 {n} 项均存在", { n: context.sources.length })
   );
-  if (!exactBaseline) missing.push(...context.missingSourceIds.map((id) => `来源 ${id}`));
-  if (!exactBaseline && !context.sources.length && !context.missingSourceIds.length) missing.push("来源关联");
+  if (!exactBaseline) missing.push(...context.missingSourceIds.map((id) => t("来源 {id}", { id })));
+  if (!exactBaseline && !context.sources.length && !context.missingSourceIds.length) missing.push(t("来源关联"));
 
   const sourceTextMissing = context.sources.length > 0 && !context.sourceText.trim();
   addCheck(
     checks,
     "source.content",
     sourceTextMissing ? "blocked" : "pass",
-    sourceTextMissing ? "参照正文没有可核验文本" : "参照正文包含可核验文本"
+    sourceTextMissing ? t("参照正文没有可核验文本") : t("参照正文包含可核验文本")
   );
-  if (sourceTextMissing) missing.push("来源文本");
+  if (sourceTextMissing) missing.push(t("来源文本"));
 
   const sourceChanged = !!baselineSourceRevision &&
     baselineSourceRevision !== sourceRevisionOf(context);
@@ -433,9 +434,9 @@ export function verifyResultDeterministically(
     checks,
     "source.stability",
     sourceChanged ? "blocked" : "pass",
-    sourceChanged ? "来源在本次核验期间发生变化" : "来源自本次核验开始未变化"
+    sourceChanged ? t("来源在本次核验期间发生变化") : t("来源自本次核验开始未变化")
   );
-  if (sourceChanged) risks.push("来源版本已变化，请重新打开核验");
+  if (sourceChanged) risks.push(t("来源版本已变化，请重新打开核验"));
 
   const sourceImageCount = context.baselineImageCount ?? context.sources.reduce((count, source) =>
     count + (source.kind === "note" ? noteImages(source.entity).length : 0), 0);
@@ -446,12 +447,12 @@ export function verifyResultDeterministically(
     "scope.images",
     hasImagesOutsideScope ? "needsReview" : "pass",
     hasImagesOutsideScope
-      ? `图片附件不在本阶段文本核验范围（来源 ${sourceImageCount}，结果 ${resultImageCount}）`
-      : "本次没有超出文本核验范围的图片附件"
+      ? t("图片附件不在本阶段文本核验范围（来源 {source}，结果 {result}）", { source: sourceImageCount, result: resultImageCount })
+      : t("本次没有超出文本核验范围的图片附件")
   );
-  if (hasImagesOutsideScope) risks.push("图片附件内容需人工核对");
+  if (hasImagesOutsideScope) risks.push(t("图片附件内容需人工核对"));
 
-  if (missing.length) questions.push("是否补齐所有明确缺失项后重新核验？");
+  if (missing.length) questions.push(t("是否补齐所有明确缺失项后重新核验？"));
   const status = highestStatus(checks.map((check) => check.status));
   return {
     status,
@@ -493,9 +494,9 @@ export async function prepareVerificationAiInput(
 ): Promise<PreparedVerificationAiInput> {
   if (context.baselineKind === "execution" && !executionBaseline(
     context.resultNote.provenance?.deliveryId ?? "", context.executionVersion
-  )) return { status: "blocked", reason: "本次执行正文已过期，请重新打开核验" };
+  )) return { status: "blocked", reason: t("本次执行正文已过期，请重新打开核验") };
   if (!context.sourceText.trim() || !context.resultText.trim() || (context.baselineKind !== "execution" && context.missingSourceIds.length)) {
-    return { status: "blocked", reason: "来源或结果不完整，不能调用 AI 核验" };
+    return { status: "blocked", reason: t("来源或结果不完整，不能调用 AI 核验") };
   }
   try {
     const [sourceScan, resultScan] = await Promise.all([
@@ -506,7 +507,7 @@ export async function prepareVerificationAiInput(
       !scanIsComplete(context.sourceText, sourceScan) ||
       !scanIsComplete(context.resultText, resultScan)
     ) {
-      return { status: "blocked", reason: "本地隐私检查未完整执行" };
+      return { status: "blocked", reason: t("本地隐私检查未完整执行") };
     }
     const source = replaceFirewallFindings(context.sourceText, sourceScan.findings, {});
     const result = replaceFirewallFindings(
@@ -527,7 +528,7 @@ export async function prepareVerificationAiInput(
       resultRevision: resultRevisionOf(context),
     };
   } catch {
-    return { status: "blocked", reason: "本地隐私检查失败" };
+    return { status: "blocked", reason: t("本地隐私检查失败") };
   }
 }
 
@@ -639,6 +640,10 @@ const VERIFICATION_SYSTEM = `你是结果核验助手。只比较提供的“参
 只输出 JSON，不要 Markdown 或解释。严格 schema：
 {"status":"pass|needsReview|blocked","checks":[{"id":string,"status":"pass|needsReview|blocked","message":string}],"missing":string[],"newAssumptions":string[],"risks":string[],"questions":string[]}`;
 
+const VERIFICATION_SYSTEM_EN = `You are a result verification assistant. Compare only the provided "reference text" and "current result"; the reference scope is defined by source.execution-baseline in localChecks. Do not invent facts, do not claim you found every error, and do not replace human approval.
+Output JSON only, no Markdown or explanation. Strict schema:
+{"status":"pass|needsReview|blocked","checks":[{"id":string,"status":"pass|needsReview|blocked","message":string}],"missing":string[],"newAssumptions":string[],"risks":string[],"questions":string[]}`;
+
 export async function runAiResultVerification(
   input: VerificationAiRequest,
   options: {
@@ -651,7 +656,7 @@ export async function runAiResultVerification(
   const requestId = (options.requestId ?? nextVerificationRequestId)();
   const handle = (options.startRequest ?? startAiRequest)({
     purpose: "result-verification",
-    system: VERIFICATION_SYSTEM,
+    system: getLocale() === "en" ? VERIFICATION_SYSTEM_EN : VERIFICATION_SYSTEM,
     user: JSON.stringify({
       schemaVersion: 1,
       expectation: {
@@ -762,7 +767,7 @@ export function resultVerifiedEvent(
   };
 }
 
-const REPORT_STATUS_LABEL: Record<VerificationStatus, string> = {
+const REPORT_STATUS_LABEL: Record<VerificationStatus, MessageKey> = {
   pass: "规则内未发现问题",
   needsReview: "需要人工复核",
   blocked: "存在明确缺失或阻断",
@@ -774,19 +779,19 @@ function reportLines(title: string, values: readonly string[]): string[] {
 
 export function formatVerificationReport(report: VerificationReport): string {
   return [
-    "# 结果核验报告",
+    `# ${t("结果核验报告")}`,
     "",
-    `状态：${REPORT_STATUS_LABEL[report.status]}`,
-    `生成时间：${new Date(report.createdAtMs).toLocaleString("zh-CN", { hour12: false })}`,
-    "说明：核验只呈现规则内证据与问题，不代表结果完全正确，也不替代人工审批。",
+    t("状态：{status}", { status: t(REPORT_STATUS_LABEL[report.status]) }),
+    t("生成时间：{time}", { time: new Date(report.createdAtMs).toLocaleString(intlLocale(), { hour12: false }) }),
+    t("说明：核验只呈现规则内证据与问题，不代表结果完全正确，也不替代人工审批。"),
     "",
-    "## 检查",
+    `## ${t("检查")}`,
     ...report.checks.map((check) => `- [${check.status}] ${check.message}`),
     "",
-    ...reportLines("明确缺失", report.missing),
-    ...reportLines("新增假设", report.newAssumptions),
-    ...reportLines("风险", report.risks),
-    ...reportLines("待确认问题", report.questions),
+    ...reportLines(t("明确缺失"), report.missing),
+    ...reportLines(t("新增假设"), report.newAssumptions),
+    ...reportLines(t("风险"), report.risks),
+    ...reportLines(t("待确认问题"), report.questions),
   ].join("\n").trim();
 }
 
@@ -841,7 +846,7 @@ export function saveVerificationReportAsNote(
   if (isVerificationReportStale(report, live)) return { ok: false, reason: "stale" };
   return createAssociatedNote(
     formatVerificationReport(report),
-    "结果核验报告",
+    t("结果核验报告"),
     live.resultNote.provenance,
     useNotesStore.getState()
   );
@@ -850,14 +855,14 @@ export function saveVerificationReportAsNote(
 function verificationQuestionsText(report: VerificationReport): string {
   const items = uniqueStrings([
     ...report.questions,
-    ...report.missing.map((item) => `请补齐：${item}`),
-    ...report.risks.map((item) => `请核对风险：${item}`),
+    ...report.missing.map((item) => t("请补齐：{item}", { item })),
+    ...report.risks.map((item) => t("请核对风险：{item}", { item })),
   ]);
   if (!items.length) return "";
   return [
-    "# 结果核验待确认问题",
+    `# ${t("结果核验待确认问题")}`,
     "",
-    "请基于下列问题给出证据充分、逐项对应的答复；不知道时明确说明，不要猜测：",
+    t("请基于下列问题给出证据充分、逐项对应的答复；不知道时明确说明，不要猜测："),
     "",
     ...items.map((item, index) => `${index + 1}. ${item}`),
   ].join("\n");
@@ -874,7 +879,7 @@ export function createVerificationQuestionsNote(
   if (!text) return { ok: false, reason: "empty" };
   return createAssociatedNote(
     text,
-    "结果核验待确认问题",
+    t("结果核验待确认问题"),
     live.resultNote.provenance,
     useNotesStore.getState()
   );

@@ -5,6 +5,7 @@
 //! 与 linkmeta 拆开：那边是「抓标题+猜图标 URL」的纯 HTTP 解析，这边多了
 //! 图片 IO 与媒体库写入，职责不同。
 
+use crate::i18n::pick;
 use tauri::AppHandle;
 
 use crate::linkmeta::extract_meta;
@@ -29,7 +30,7 @@ pub async fn fetch_favicon(app: AppHandle, domain: String) -> Result<String, Str
             return save_image_rgba(&app, image.width() as usize, image.height() as usize, image.as_raw());
         }
     }
-    Err("未找到可用图标".into())
+    Err(pick("未找到可用图标", "No usable icon found").into())
 }
 
 /// 域名白名单校验：仅主机名字符，杜绝把任意 URL/本地路径塞进 curl。
@@ -44,21 +45,21 @@ fn sanitize_domain(input: &str) -> Result<String, String> {
     if valid {
         Ok(d)
     } else {
-        Err("域名格式无效".into())
+        Err(pick("域名格式无效", "Invalid domain").into())
     }
 }
 
 async fn download_icon(url: &str, private_origin: Option<&str>) -> Result<image::RgbaImage, String> {
     let (bytes, _) = crate::preview_network::fetch(url, MAX_ICON_BYTES, private_origin).await?;
-    if looks_like_svg(&bytes) { return Err("SVG 图标暂不支持".into()); }
+    if looks_like_svg(&bytes) { return Err(pick("SVG 图标暂不支持", "SVG icons aren't supported yet").into()); }
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
-        .with_guessed_format().map_err(|_| "图标格式无效")?;
+        .with_guessed_format().map_err(|_| pick("图标格式无效", "Invalid icon format"))?;
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(1024);
     limits.max_image_height = Some(1024);
     limits.max_alloc = Some(8 * 1024 * 1024);
     reader.limits(limits);
-    let decoded = reader.decode().map_err(|_| "图标解码失败或尺寸超限")?;
+    let decoded = reader.decode().map_err(|_| pick("图标解码失败或尺寸超限", "Icon failed to decode or is too large"))?;
     Ok(decoded.thumbnail(64, 64).to_rgba8())
 }
 
@@ -66,7 +67,7 @@ pub(crate) async fn icon_data_url(url: &str, private_origin: Option<&str>) -> Re
     use base64::Engine;
     let image = download_icon(url, private_origin).await?;
     let mut bytes = std::io::Cursor::new(Vec::new());
-    image.write_to(&mut bytes, image::ImageFormat::Png).map_err(|_| "图标编码失败")?;
+    image.write_to(&mut bytes, image::ImageFormat::Png).map_err(|_| pick("图标编码失败", "Failed to encode icon"))?;
     Ok(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes.into_inner())))
 }
 

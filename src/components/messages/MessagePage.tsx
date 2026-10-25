@@ -27,6 +27,7 @@ import { StripScroller } from "@/components/ui/strip-scroller";
 import { WindowedListItem } from "@/components/WindowedListItem";
 import { sendMessageToChat } from "@/lib/actions";
 import { aiErrorTip, requestAi } from "@/lib/aiClient";
+import { getLocale, intlLocale, t as translate, useT, type MessageKey } from "@/lib/i18n";
 import { messageSelectAllIds } from "@/lib/messageSelection";
 import { presetCfgDue, presetCfgLabel } from "@/lib/tasks";
 import { api, type MessageSourceOverlayPayload } from "@/lib/tauri";
@@ -47,7 +48,7 @@ type Filter = "new" | "waiting" | "done";
 const MESSAGE_RENDER_MARGIN_PX = 1440;
 const MESSAGE_SCROLL_IDLE_UNMOUNT_MS = 180;
 
-const FILTERS: Array<{ value: Filter; label: string }> = [
+const FILTERS: Array<{ value: Filter; label: MessageKey }> = [
   { value: "new", label: "待处理" },
   { value: "waiting", label: "等待回复" },
   { value: "done", label: "已处理" },
@@ -57,7 +58,7 @@ function displayTime(value: number): string {
   const date = new Date(value);
   const today = new Date();
   const sameDay = date.toDateString() === today.toDateString();
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(intlLocale(), {
     ...(sameDay ? {} : { month: "numeric", day: "numeric" }),
     hour: "2-digit",
     minute: "2-digit",
@@ -83,13 +84,20 @@ function messageMatches(message: MessageItem, query: string): boolean {
 
 function reasonLabels(message: MessageItem, ruleNames: Map<string, string>): string[] {
   return [
-    ...(message.mentionedSelf ? ["@我"] : []),
-    ...(message.followedSender ? ["特别关注"] : []),
-    ...message.matchedRuleIds.map((id) => ruleNames.get(id) || "组合规则"),
+    ...(message.mentionedSelf ? [translate("@我")] : []),
+    ...(message.followedSender ? [translate("特别关注")] : []),
+    ...message.matchedRuleIds.map((id) => ruleNames.get(id) || translate("组合规则")),
   ];
 }
 
+const DRAFT_SYSTEM =
+  "你是工作沟通回复助手。基于用户给出的有限上下文，写一条简洁、可编辑的中文回复草稿。不得编造事实；信息不足时用澄清问题。只输出草稿，不要解释。";
+const DRAFT_SYSTEM_EN =
+  "You help reply to work messages. Based on the limited context the user gives, write one concise, editable reply draft in English. Do not invent facts; when information is missing, ask a clarifying question. Output only the draft, no explanation.";
+
+/** 回复草稿提示词跟随界面语言；中文版逐字保持原样。 */
 function aiInput(message: MessageItem): string {
+  if (getLocale() === "en") return aiInputEn(message);
   const context = message.context.length
     ? message.context
         .map(
@@ -101,6 +109,18 @@ function aiInput(message: MessageItem): string {
   return `群：${message.conversationName || message.conversationId}\n发送者：${message.senderName || message.senderUid || "未知"}\n\n捕获时已加载的前文：\n${context}\n\n需要回复的消息：\n${message.text || `[${message.messageType || "非文本消息"}]`}`;
 }
 
+function aiInputEn(message: MessageItem): string {
+  const context = message.context.length
+    ? message.context
+        .map(
+          (item) =>
+            `${item.senderName || item.senderUid || "Unknown sender"}: ${item.text || `[${item.messageType || "non-text message"}]`}`
+        )
+        .join("\n")
+    : "(No earlier messages available; do not make up background.)";
+  return `Group: ${message.conversationName || message.conversationId}\nSender: ${message.senderName || message.senderUid || "Unknown"}\n\nEarlier messages loaded at capture:\n${context}\n\nMessage to reply to:\n${message.text || `[${message.messageType || "non-text message"}]`}`;
+}
+
 export function MessagePage({
   query = "",
   horizontal = false,
@@ -109,6 +129,7 @@ export function MessagePage({
   /** 上/下横栏形态：卡片改横排瓷砖串（与剪贴/秘文横栏同款），正文卡内滚动。 */
   horizontal?: boolean;
 }) {
+  const t = useT();
   const messages = useNotesStore((state) => state.messages);
   const rules = useNotesStore((state) => state.settings.messageWatchRules);
   const duePresets = useNotesStore((state) => state.settings.duePresets);
@@ -184,13 +205,12 @@ export function MessagePage({
       const input = aiInput(message);
       const draft = await requestAi({
         purpose: "message-draft",
-        system:
-          "你是工作沟通回复助手。基于用户给出的有限上下文，写一条简洁、可编辑的中文回复草稿。不得编造事实；信息不足时用澄清问题。只输出草稿，不要解释。",
+        system: getLocale() === "en" ? DRAFT_SYSTEM_EN : DRAFT_SYSTEM,
         user: input,
         maxTokens: 500,
       });
       useNotesStore.getState().saveMessageAiDraft(message.id, draft);
-      tip("ok", "回复草稿已生成；不会自动发送到IM");
+      tip("ok", translate("回复草稿已生成；不会自动发送到IM"));
     } catch (error) {
       tip("warn", aiErrorTip(error));
     } finally {
@@ -206,7 +226,7 @@ export function MessagePage({
     if (!removed.length) return;
     store.removeMessages(removed.map((message) => message.id));
     setPendingUndo(() => useNotesStore.getState().restoreMessages(removed));
-    tip("ok", `已清空 ${removed.length} 条已处理消息`, true);
+    tip("ok", translate("已清空 {n} 条已处理消息", { n: removed.length }), true);
   };
 
   // 整卡多选（与剪贴/笔记卡同款 Finder 语义）：单击替换、⌘ 累加/移出、
@@ -251,7 +271,7 @@ export function MessagePage({
     useNotesStore.getState().setMessagesStatus(ids, "done");
     clearSelection();
     setPendingUndo(() => useNotesStore.getState().setMessagesStatus(ids, prev));
-    tip("ok", `已处理 ${ids.length} 条消息`, true);
+    tip("ok", translate("已处理 {n} 条消息", { n: ids.length }), true);
   };
   const bulkRestore = () => {
     const ids = checkedInView.map((message) => message.id);
@@ -259,7 +279,7 @@ export function MessagePage({
     useNotesStore.getState().setMessagesStatus(ids, "new");
     clearSelection();
     setPendingUndo(() => useNotesStore.getState().setMessagesStatus(ids, "done"));
-    tip("ok", `已恢复 ${ids.length} 条为待处理`, true);
+    tip("ok", translate("已恢复 {n} 条为待处理", { n: ids.length }), true);
   };
   const bulkRemove = () => {
     const removed = checkedInView;
@@ -267,7 +287,7 @@ export function MessagePage({
     useNotesStore.getState().removeMessages(removed.map((message) => message.id));
     clearSelection();
     setPendingUndo(() => useNotesStore.getState().restoreMessages(removed));
-    tip("ok", `已删除 ${removed.length} 条消息`, true);
+    tip("ok", translate("已删除 {n} 条消息", { n: removed.length }), true);
   };
 
   return (
@@ -277,29 +297,29 @@ export function MessagePage({
       {checkedInView.length > 0 ? (
         <div className="flex min-h-7 items-center px-4 pb-2 pt-1">
           <span className="tabular-nums text-label font-medium">
-            已选 {checkedInView.length}
+            {t("已选 {n}", { n: checkedInView.length })}
           </span>
           <div className="ml-auto flex items-center gap-1">
             {filter === "done" ? (
               <Button size="xs" onClick={bulkRestore}>
-                <RotateCcw data-icon="inline-start" />恢复
+                <RotateCcw data-icon="inline-start" />{t("恢复")}
               </Button>
             ) : (
               <Button size="xs" onClick={bulkDone}>
-                <Check data-icon="inline-start" />已处理
+                <Check data-icon="inline-start" />{t("已处理")}
               </Button>
             )}
-            <IconButton label="删除所选消息" size="xs" tone="danger" onClick={bulkRemove}>
+            <IconButton label={t("删除所选消息")} size="xs" tone="danger" onClick={bulkRemove}>
               <Trash2 />
             </IconButton>
-            <IconButton label="取消选择" size="xs" onClick={clearSelection}>
+            <IconButton label={t("取消选择")} size="xs" onClick={clearSelection}>
               <X />
             </IconButton>
           </div>
         </div>
       ) : (
         <div className="flex min-h-7 items-center px-4 pb-2 pt-1">
-          <div role="tablist" aria-label="消息状态" className="flex items-center gap-0.5">
+          <div role="tablist" aria-label={t("消息状态")} className="flex items-center gap-0.5">
             {FILTERS.map(({ value, label }) => (
               <button
                 key={value}
@@ -317,7 +337,7 @@ export function MessagePage({
                   <SlidingTabIndicator layoutId="message-filter-thumb" variant="quiet" />
                 )}
                 <span className="relative z-10">
-                  {label}
+                  {t(label)}
                   {counts[value] > 0 && (
                     <span className="ml-1 tabular-nums text-micro text-muted-foreground">
                       {counts[value]}
@@ -329,7 +349,7 @@ export function MessagePage({
           </div>
           {filter === "done" && counts.done > 0 && (
             <Button variant="ghost" size="xs" className="ml-auto" onClick={clearDone}>
-              <Trash2 data-icon="inline-start" />清空
+              <Trash2 data-icon="inline-start" />{t("清空")}
             </Button>
           )}
         </div>
@@ -354,7 +374,7 @@ export function MessagePage({
             </div>
           ) : (
             <p className="px-4 py-6 text-body text-muted-foreground">
-              {query ? `没有匹配「${query}」的消息` : emptyTitle(filter)}
+              {query ? t("没有匹配「{query}」的消息", { query }) : emptyTitle(filter)}
             </p>
           )}
         </StripScroller>
@@ -385,10 +405,10 @@ export function MessagePage({
             </div>
           ) : (
             <EmptyState
-              title={query ? `没有匹配「${query}」的消息` : emptyTitle(filter)}
+              title={query ? t("没有匹配「{query}」的消息", { query }) : emptyTitle(filter)}
               hint={
                 messages.length === 0
-                  ? "开启只读监听后，@你、关注的人或组合规则命中的群消息会出现在这里。"
+                  ? t("开启只读监听后，@你、关注的人或组合规则命中的群消息会出现在这里。")
                   : undefined
               }
             />
@@ -401,14 +421,16 @@ export function MessagePage({
 
 function emptyTitle(filter: Filter): string {
   return filter === "new"
-    ? "没有待处理消息"
+    ? translate("没有待处理消息")
     : filter === "waiting"
-      ? "没有等待回复的消息"
-      : "还没有已处理消息";
+      ? translate("没有等待回复的消息")
+      : translate("还没有已处理消息");
 }
 
-/** 个人触达信号（@我/特别关注）比规则命中更值得一眼看到。 */
-const STRONG_REASONS = new Set(["@我", "特别关注"]);
+/** 个人触达信号（@我/特别关注）比规则命中更值得一眼看到；reasons 已是当前语言文案。 */
+function isStrongReason(reason: string): boolean {
+  return reason === translate("@我") || reason === translate("特别关注");
+}
 
 export function MessageCard({
   message,
@@ -431,6 +453,7 @@ export function MessageCard({
   /** 横栏瓷砖形态：定宽、随栏高伸展，正文区内滚（不再折叠/展开）。 */
   strip?: boolean;
 }) {
+  const t = useT();
   const [expanded, setExpanded] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const [remindOpen, setRemindOpen] = useState(false);
@@ -446,8 +469,8 @@ export function MessageCard({
       void unlisten.then((stop) => stop()).catch(() => {});
     };
   }, [moreOpen]);
-  const body = message.text || `[${message.messageType || "非文本消息"}]`;
-  const sender = message.senderName || message.senderUid || "未知发送者";
+  const body = message.text || `[${message.messageType || t("非文本消息")}]`;
+  const sender = message.senderName || message.senderUid || t("未知发送者");
   const conversation = message.conversationName || message.conversationId;
   // 私聊会话名与发送者同名时不重复展示
   const showConversation = Boolean(conversation) && conversation !== sender;
@@ -458,30 +481,33 @@ export function MessageCard({
     conversationName: conversation,
     senderName: sender,
     text: body,
-    reason: reasons.join(" · ") || "组合关注",
+    reason: reasons.join(" · ") || t("组合关注"),
   };
   const convert = (
     mode: "task" | "reminder" | "waiting",
     dueAt?: number | null
   ) => {
     const result = useNotesStore.getState().messageToTask(message.id, mode, dueAt);
-    if (result.result === "existing") tip("warn", "这条消息已经关联任务");
+    if (result.result === "existing") tip("warn", t("这条消息已经关联任务"));
     else if (result.result === "added") {
-      tip("ok", mode === "waiting" ? "已加入等待回复" : mode === "reminder" ? "已创建提醒" : "已转为任务");
+      tip(
+        "ok",
+        mode === "waiting" ? t("已加入等待回复") : mode === "reminder" ? t("已创建提醒") : t("已转为任务")
+      );
     }
   };
   const markDone = () => {
     const prev = message.status;
     useNotesStore.getState().setMessageStatus(message.id, "done");
     setPendingUndo(() => useNotesStore.getState().setMessageStatus(message.id, prev));
-    tip("ok", "已标记处理", true);
+    tip("ok", t("已标记处理"), true);
   };
   const remove = () => {
     const snapshot = useNotesStore.getState().messages.find((item) => item.id === message.id);
     if (!snapshot) return;
     useNotesStore.getState().removeMessages([message.id]);
     setPendingUndo(() => useNotesStore.getState().restoreMessages([snapshot]));
-    tip("ok", "已删除这条消息", true);
+    tip("ok", t("已删除这条消息"), true);
   };
   return (
     <article
@@ -516,7 +542,7 @@ export function MessageCard({
             title={reason}
             className={cn(
               "surface-inset max-w-28 shrink-0 truncate rounded-sm px-1 py-px text-micro",
-              STRONG_REASONS.has(reason)
+              isStrongReason(reason)
                 ? "font-medium text-foreground"
                 : "text-muted-foreground"
             )}
@@ -534,7 +560,7 @@ export function MessageCard({
             {showConversation ? conversation : null}
           </span>
           {message.linkedTaskId && (
-            <span className="shrink-0 text-micro text-muted-foreground">已转任务</span>
+            <span className="shrink-0 text-micro text-muted-foreground">{t("已转任务")}</span>
           )}
         </div>
       )}
@@ -554,7 +580,7 @@ export function MessageCard({
           className="mt-1 text-label text-muted-foreground transition-colors hover:text-foreground"
           onClick={() => setExpanded((value) => !value)}
         >
-          {expanded ? "收起全文" : `展开全文 · ${[...body].length} 字`}
+          {expanded ? t("收起全文") : t("展开全文 · {n} 字", { n: [...body].length })}
         </button>
       )}
 
@@ -571,20 +597,20 @@ export function MessageCard({
                 contextOpen && "rotate-90"
               )}
             />
-            前文 · {message.context.length}
+            {t("前文 · {n}", { n: message.context.length })}
           </button>
           {contextOpen && (
             <div className="surface-inset mt-1.5 space-y-1.5 rounded-lg p-2">
               {message.context.map((item) => (
                 <div key={item.messageId} className="text-label leading-relaxed">
                   <span className="font-medium">
-                    {item.senderName || item.senderUid || "未知发送者"}
+                    {item.senderName || item.senderUid || t("未知发送者")}
                   </span>
-                  <span className="text-muted-foreground">：{item.text || `[${item.messageType || "非文本消息"}]`}</span>
+                  <span className="text-muted-foreground">{t("：{text}", { text: item.text || `[${item.messageType || t("非文本消息")}]` })}</span>
                 </div>
               ))}
               <p className="text-micro text-muted-foreground">
-                仅来自捕获时客户端内存，不会补拉历史或改变已读。
+                {t("仅来自捕获时客户端内存，不会补拉历史或改变已读。")}
               </p>
             </div>
           )}
@@ -594,16 +620,16 @@ export function MessageCard({
       {message.aiDraft && (
         <div className="surface-inset mt-2 rounded-lg p-2">
           <div className="mb-1 flex items-center gap-1 text-micro font-medium text-muted-foreground">
-            <Sparkles className="size-3" /> AI 草稿
+            <Sparkles className="size-3" /> {t("AI 草稿")}
           </div>
           <p className="whitespace-pre-wrap break-words text-body leading-relaxed">{message.aiDraft}</p>
           <div className="mt-1 flex gap-1">
             <Button
               variant="ghost"
               size="xs"
-              onClick={() => void api.copyText(message.aiDraft!).then(() => tip("ok", "草稿已复制"))}
+              onClick={() => void api.copyText(message.aiDraft!).then(() => tip("ok", t("草稿已复制")))}
             >
-              <Copy data-icon="inline-start" />复制
+              <Copy data-icon="inline-start" />{t("复制")}
             </Button>
             <Button
               variant="ghost"
@@ -614,10 +640,10 @@ export function MessageCard({
                   sourceApp: message.sourceApp,
                   sourceBundle: message.sourceBundle,
                 });
-                tip("ok", "草稿已保存为笔记");
+                tip("ok", t("草稿已保存为笔记"));
               }}
             >
-              <NotebookPen data-icon="inline-start" />存为笔记
+              <NotebookPen data-icon="inline-start" />{t("存为笔记")}
             </Button>
           </div>
         </div>
@@ -637,7 +663,7 @@ export function MessageCard({
       >
         {/* 发送到当前对话目标（用户 2026-09-11 需求）：正文走与笔记相同的预检/发送管线 */}
         <IconButton
-          label="发送到对话"
+          label={t("发送到对话")}
           size="xs"
           surface
           disabled={!message.text.trim()}
@@ -647,18 +673,18 @@ export function MessageCard({
         </IconButton>
         {done ? (
           <IconButton
-            label="恢复为待处理"
+            label={t("恢复为待处理")}
             size="xs"
             surface
             onClick={() => {
               useNotesStore.getState().setMessageStatus(message.id, "new");
-              tip("ok", "已恢复为待处理");
+              tip("ok", t("已恢复为待处理"));
             }}
           >
             <RotateCcw />
           </IconButton>
         ) : (
-          <IconButton label="标记已处理" size="xs" surface onClick={markDone}>
+          <IconButton label={t("标记已处理")} size="xs" surface onClick={markDone}>
             <Check />
           </IconButton>
         )}
@@ -666,7 +692,7 @@ export function MessageCard({
             inline 弹层会被 ScrollArea 视口裁剪，portal 弹层不受任何祖先 overflow 影响 */}
         <Popover open={remindOpen} onOpenChange={setRemindOpen}>
           <PopoverTrigger asChild>
-            <IconButton label="提醒我" size="xs" surface>
+            <IconButton label={t("提醒我")} size="xs" surface>
               <AlarmClock />
             </IconButton>
           </PopoverTrigger>
@@ -676,7 +702,7 @@ export function MessageCard({
             onClick={(event) => event.stopPropagation()}
             onKeyDown={(event) => event.stopPropagation()}
           >
-            <p className="px-2 py-1 text-micro font-medium text-muted-foreground">提醒时间</p>
+            <p className="px-2 py-1 text-micro font-medium text-muted-foreground">{t("提醒时间")}</p>
             {duePresets.map((preset) => (
               <button
                 key={preset.id}
@@ -692,13 +718,13 @@ export function MessageCard({
           </PopoverContent>
         </Popover>
         <IconButton
-          label="定位原会话"
+          label={t("定位原会话")}
           size="xs"
           surface
-          title="滚动并高亮 IM 会话列表中的来源，不打开会话"
+          title={t("滚动并高亮 IM 会话列表中的来源，不打开会话")}
           onClick={() => {
             void api.locateMessageSource(overlay)
-              .catch((error) => tip("warn", String(error).slice(0, 60) || "定位失败"));
+              .catch((error) => tip("warn", String(error).slice(0, 60) || t("定位失败")));
           }}
         >
           <Crosshair />
@@ -706,7 +732,7 @@ export function MessageCard({
         <Popover open={moreOpen} onOpenChange={setMoreOpen}>
           <PopoverTrigger asChild>
             <IconButton
-              label="更多消息操作"
+              label={t("更多消息操作")}
               size="xs"
               surface
             >
@@ -716,12 +742,12 @@ export function MessageCard({
           <PopoverContent
             align="end"
             side="top"
-            aria-label="更多消息操作"
+            aria-label={t("更多消息操作")}
             className="slim-scroll max-h-[var(--radix-popover-content-available-height)] w-52 gap-0 overflow-y-auto p-1.5"
             onClick={(event) => event.stopPropagation()}
             onKeyDown={(event) => event.stopPropagation()}
           >
-            <p className="px-2 py-1 text-micro font-medium text-muted-foreground">更多消息操作</p>
+            <p className="px-2 py-1 text-micro font-medium text-muted-foreground">{t("更多消息操作")}</p>
             {message.status !== "waiting" && (
               <Button
                 variant="ghost"
@@ -729,7 +755,7 @@ export function MessageCard({
                 className="w-full justify-start"
                 onClick={() => { setMoreOpen(false); convert("waiting"); }}
               >
-                <Hourglass data-icon="inline-start" />等待回复
+                <Hourglass data-icon="inline-start" />{t("等待回复")}
               </Button>
             )}
             <Button
@@ -738,18 +764,18 @@ export function MessageCard({
               className="w-full justify-start"
               onClick={() => { setMoreOpen(false); convert("task"); }}
             >
-              <ListTodo data-icon="inline-start" />转为任务
+              <ListTodo data-icon="inline-start" />{t("转为任务")}
             </Button>
             <Button
               variant="ghost"
               size="sm"
               className="w-full justify-start"
-              title="仅保存回复草稿，不自动发送"
+              title={t("仅保存回复草稿，不自动发送")}
               disabled={busy}
               onClick={() => { setMoreOpen(false); onDraft(); }}
             >
               <Sparkles data-icon="inline-start" className={cn(busy && "animate-pulse")} />
-              {busy ? "AI 草稿生成中…" : "生成 AI 回复草稿"}
+              {busy ? t("AI 草稿生成中…") : t("生成 AI 回复草稿")}
             </Button>
             {done && (
               <>
@@ -758,10 +784,10 @@ export function MessageCard({
                   variant="destructive"
                   size="sm"
                   className="w-full justify-start"
-                  title="原始账本不受影响"
+                  title={t("原始账本不受影响")}
                   onClick={() => { setMoreOpen(false); remove(); }}
                 >
-                  <Trash2 data-icon="inline-start" />删除消息
+                  <Trash2 data-icon="inline-start" />{t("删除消息")}
                 </Button>
               </>
             )}

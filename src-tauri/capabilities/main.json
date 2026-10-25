@@ -68,6 +68,8 @@
     "allow-adjust-panel-edge",
     "allow-set-panel-vertical",
     "allow-set-stealth",
+    "allow-system-locale",
+    "allow-set-locale",
     "allow-set-sound",
     "allow-set-hud-duration",
     "allow-set-sidebar-mode",

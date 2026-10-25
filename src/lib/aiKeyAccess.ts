@@ -7,6 +7,7 @@ import {
   withoutLegacyAiApiKey,
 } from "@/lib/aiKeyMigration";
 import { currentDataGeneration, matchesDataGeneration } from "@/lib/dataGeneration";
+import { t } from "@/lib/i18n";
 import { isDataOperationLocked } from "@/store/dataOperationStore";
 import { useNotesStore } from "@/store/notesStore";
 
@@ -19,7 +20,7 @@ export function getAiKeyStatusForUse(): Promise<AiKeyStatus> {
   const generation = currentDataGeneration();
   const assertCurrent = () => {
     if (isDataOperationLocked() || !matchesDataGeneration(generation)) {
-      throw new Error("数据操作进行中，请稍后再使用 AI");
+      throw new Error(t("数据操作进行中，请稍后再使用 AI"));
     }
   };
   try {
@@ -55,7 +56,7 @@ export function getAiKeyStatusForUse(): Promise<AiKeyStatus> {
     assertCurrent();
     // 钥匙串已有不同密钥时继续使用现有配置；旧副本只在确认迁移成功后清理。
     if (result === "failed" && !status.configured) {
-      throw new Error("AI 密钥迁移失败；旧副本仍保留，请在 AI 智能设置中重试");
+      throw new Error(t("AI 密钥迁移失败；旧副本仍保留，请在 AI 智能设置中重试"));
     }
     return status;
   }).finally(() => pendingAccess.delete(generation));
@@ -84,7 +85,7 @@ export async function requestAiKeyStatusForSettings(): Promise<AiKeyStatus> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
   const result = new Promise<AiKeyStatus>((resolve, reject) => {
-    const fail = () => reject(new Error("无法读取 AI 密钥状态，请稍后重试"));
+    const fail = () => reject(new Error(t("无法读取 AI 密钥状态，请稍后重试")));
     timer = setTimeout(fail, 60_000);
     void listen<KeyAccessResult>(AI_KEY_ACCESS_RESULT, (event) => {
       if (event.payload?.requestId !== requestId) return;

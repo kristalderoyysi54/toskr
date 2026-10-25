@@ -4,6 +4,7 @@ import {
   lessonAfterDelivery,
   type LessonProgress,
 } from "@/lib/lessons";
+import { t } from "@/lib/i18n";
 import { tip } from "@/lib/tip";
 import { useLessonStore } from "@/store/lessonStore";
 import { useNotesStore } from "@/store/notesStore";
@@ -22,7 +23,7 @@ function advance(update: (progress: LessonProgress) => LessonProgress) {
   useNotesStore.getState().transitionOnboarding({
     type: next.id === "merge" ? "mergeTutorialCompleted" : "recoveryTutorialCompleted",
   });
-  tip("ok", next.id === "merge" ? "合并发送课完成" : "脱敏与还原课完成");
+  tip("ok", next.id === "merge" ? t("合并发送课完成") : t("脱敏与还原课完成"));
 }
 
 export function advanceLessonAfterChecked(checkedIds: readonly string[]) {

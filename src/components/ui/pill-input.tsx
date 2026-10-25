@@ -5,6 +5,7 @@ import { focusRingWithin } from "@/components/ui/focus-ring";
 import { IconButton } from "@/components/ui/icon-button";
 import { autoResizeTextarea } from "@/lib/textarea";
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n";
 
 type PillInputProps = {
   value: string;
@@ -43,7 +44,7 @@ export function PillInput({
   multiline = false,
   tone = "default",
   leftSlot,
-  submitLabel = "添加",
+  submitLabel,
   className,
   disabled = false,
   onPasteImage,
@@ -51,6 +52,7 @@ export function PillInput({
   rightSlot,
   canSubmitEmpty = false,
 }: PillInputProps) {
+  const t = useT();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const submittable = !!value.trim() || canSubmitEmpty;
@@ -141,7 +143,7 @@ export function PillInput({
       {rightSlot}
       {submittable && (
         <IconButton
-          label={submitLabel}
+          label={submitLabel ?? t("添加")}
           stopPropagation={false}
           disabled={disabled}
           onClick={submit}

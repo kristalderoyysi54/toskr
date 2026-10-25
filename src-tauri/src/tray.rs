@@ -9,6 +9,7 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, Wry};
 use tauri_plugin_autostart::ManagerExt;
 
+use crate::i18n::tr;
 use crate::events::{TriggerPayload, TriggerSource, TRIGGER_EVENT};
 use crate::state::AppState;
 
@@ -51,7 +52,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let stealth = state.stealth.load(Ordering::SeqCst);
     let autostart_enabled = app.autolaunch().is_enabled().unwrap_or(false);
 
-    let toggle = MenuItem::with_id(app, "toggle", "显示 / 隐藏面板", true, None::<&str>)?;
+    let toggle = MenuItem::with_id(app, "toggle", tr("显示 / 隐藏面板"), true, None::<&str>)?;
     // 剪贴板暂停：开启收集时展示（Paste 同款子菜单；暂停中变为恢复项）
     let clip_on = state.clip_watch.load(Ordering::SeqCst);
     let pause_until = state.clip_pause_until.load(Ordering::Relaxed);
@@ -64,14 +65,14 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         Some(Submenu::with_id_and_items(
             app,
             "clip-pause",
-            "暂停剪贴板收集",
+            tr("暂停剪贴板收集"),
             true,
             &[
-                &MenuItem::with_id(app, "clip-pause-15", "暂停 15 分钟", true, None::<&str>)?,
-                &MenuItem::with_id(app, "clip-pause-30", "暂停 30 分钟", true, None::<&str>)?,
-                &MenuItem::with_id(app, "clip-pause-60", "暂停 1 小时", true, None::<&str>)?,
-                &MenuItem::with_id(app, "clip-pause-180", "暂停 3 小时", true, None::<&str>)?,
-                &MenuItem::with_id(app, "clip-pause-480", "暂停 8 小时", true, None::<&str>)?,
+                &MenuItem::with_id(app, "clip-pause-15", tr("暂停 15 分钟"), true, None::<&str>)?,
+                &MenuItem::with_id(app, "clip-pause-30", tr("暂停 30 分钟"), true, None::<&str>)?,
+                &MenuItem::with_id(app, "clip-pause-60", tr("暂停 1 小时"), true, None::<&str>)?,
+                &MenuItem::with_id(app, "clip-pause-180", tr("暂停 3 小时"), true, None::<&str>)?,
+                &MenuItem::with_id(app, "clip-pause-480", tr("暂停 8 小时"), true, None::<&str>)?,
             ],
         )?)
     } else {
@@ -82,7 +83,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         Some(MenuItem::with_id(
             app,
             "clip-resume",
-            format!("恢复剪贴板收集（约 {mins} 分钟后自动恢复）"),
+            tr("恢复剪贴板收集（约 {mins} 分钟后自动恢复）").replace("{mins}", &mins.to_string()),
             true,
             None::<&str>,
         )?)
@@ -90,11 +91,11 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         None
     };
     let stealth_item =
-        CheckMenuItem::with_id(app, "stealth", "隐身模式（不弹捕获提示）", true, stealth, None::<&str>)?;
+        CheckMenuItem::with_id(app, "stealth", tr("隐身模式（不弹捕获提示）"), true, stealth, None::<&str>)?;
     let autostart_item =
-        CheckMenuItem::with_id(app, "autostart", "开机启动", true, autostart_enabled, None::<&str>)?;
-    let settings_item = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出 Toskr", true, None::<&str>)?;
+        CheckMenuItem::with_id(app, "autostart", tr("开机启动"), true, autostart_enabled, None::<&str>)?;
+    let settings_item = MenuItem::with_id(app, "settings", tr("设置…"), true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", tr("退出 Toskr"), true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
 
@@ -116,9 +117,9 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         Menu::with_items(app, &items)
     } else {
         let label = if tap_installed {
-            "⚠️ 需要输入监控权限（点击设置）"
+            tr("⚠️ 需要输入监控权限（点击设置）")
         } else {
-            "⚠️ 需要辅助功能权限（点击设置）"
+            tr("⚠️ 需要辅助功能权限（点击设置）")
         };
         let warn = MenuItem::with_id(
             app,

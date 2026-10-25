@@ -1,6 +1,7 @@
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 
+import { t } from "@/lib/i18n";
 import { tip } from "@/lib/tip";
 import { useNotesStore } from "@/store/notesStore";
 import { useUIStore } from "@/store/uiStore";
@@ -62,10 +63,10 @@ export async function downloadAndInstall(
     if (msg.includes("Read-only file system") || msg.includes("os error 30")) {
       tip(
         "warn",
-        "更新失败：应用被系统隔离为只读——请退出后把 Toskr 拖入「应用程序」文件夹再重新打开，即可正常更新"
+        t("更新失败：应用被系统隔离为只读——请退出后把 Toskr 拖入「应用程序」文件夹再重新打开，即可正常更新")
       );
     } else {
-      tip("warn", `更新失败：${msg}`);
+      tip("warn", t("更新失败：{msg}", { msg }));
     }
     return false;
   }
@@ -91,7 +92,7 @@ export async function silentUpdateFlow() {
   lastHandledVersion = update.version;
   if (autoInstallUpdate) {
     const ok = await downloadAndInstall(update, undefined, false);
-    if (ok) tip("ok", `已更新到 v${update.version} · 重启应用后生效`);
+    if (ok) tip("ok", t("已更新到 v{version} · 重启应用后生效", { version: update.version }));
   } else {
     // 头部「更新」按钮亮起 + 气泡点击唤起面板内更新对话框
     pendingUpdate = update;
@@ -100,6 +101,6 @@ export async function silentUpdateFlow() {
       current: update.currentVersion,
       notes: update.body ?? "",
     });
-    tip("info", `发现新版本 v${update.version} · 点击查看`, false, "update");
+    tip("info", t("发现新版本 v{version} · 点击查看", { version: update.version }), false, "update");
   }
 }

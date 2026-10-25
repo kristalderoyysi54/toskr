@@ -1,26 +1,29 @@
 /**
  * 进阶上手课（合并发送 / 智能脱敏与还原）的纯状态机。
  * 进度只在内存里：课程随时可重来；示例卡片带固定来源标记，任何时候都能按标记清理。
+ * 示例文案存中文 key，写入卡片/词典时按当前语言 t()。
  */
+
+import { t, type MessageKey } from "@/lib/i18n";
 
 export type LessonId = "merge" | "privacy";
 
 /** 示例卡片的来源标记：清理只认这个 bundle，绝不按正文匹配用户内容。 */
 export const LESSON_SAMPLE_BUNDLE = "com.toskr.tutorial";
-export const LESSON_SAMPLE_APP = "Toskr 教程";
+export const LESSON_SAMPLE_APP: MessageKey = "Toskr 教程";
 
 export const MERGE_LESSON_SAMPLES = [
   "报错：点击保存后控制台出现 TypeError: cannot read 'id'",
   "复现：修改标题 → 点保存 → 刷新页面，改动消失",
-] as const;
+] as const satisfies readonly MessageKey[];
 
-export const PRIVACY_LESSON_ALIAS = "张三";
-export const PRIVACY_LESSON_SAMPLE =
+export const PRIVACY_LESSON_ALIAS: MessageKey = "张三";
+export const PRIVACY_LESSON_SAMPLE: MessageKey =
   "请把会议纪要发给张三，抄送 demo.user@example.com。";
 
 /** 模拟 AI 回复：带占位符，收进 Toskr 时由本机词典还原。 */
 export function privacyLessonReply(placeholder: string): string {
-  return `好的，已把会议纪要发给 ${placeholder}。`;
+  return t("好的，已把会议纪要发给 {placeholder}。", { placeholder });
 }
 
 export interface LessonProgress {
@@ -33,7 +36,7 @@ export interface LessonProgress {
   replyNoteId: string | null;
 }
 
-export const LESSON_STEPS: Record<LessonId, readonly [string, string, string]> = {
+export const LESSON_STEPS: Record<LessonId, readonly [MessageKey, MessageKey, MessageKey]> = {
   merge: ["放入示例卡片", "勾选两张", "一起发送"],
   privacy: ["准备示例", "发送并替换", "收回并还原"],
 };

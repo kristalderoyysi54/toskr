@@ -1,3 +1,4 @@
+import { t, type MessageKey } from "@/lib/i18n";
 import { findingSourceText, findingUtf16RangeIsValid } from "@/lib/privacy";
 import type {
   FindingCategory,
@@ -42,7 +43,7 @@ export const FIREWALL_WARN_CATEGORIES = [
 
 export type FirewallWarnCategory = (typeof FIREWALL_WARN_CATEGORIES)[number];
 
-export const FIREWALL_CATEGORY_LABEL: Record<FindingCategory, string> = {
+export const FIREWALL_CATEGORY_LABEL: Record<FindingCategory, MessageKey> = {
   privateKey: "私钥",
   authorization: "授权凭据",
   apiKey: "密钥/凭据",
@@ -56,7 +57,7 @@ export const FIREWALL_CATEGORY_LABEL: Record<FindingCategory, string> = {
   session: "会话标识",
 };
 
-export const FIREWALL_SEVERITY_LABEL: Record<FindingSeverity, string> = {
+export const FIREWALL_SEVERITY_LABEL: Record<FindingSeverity, MessageKey> = {
   info: "提示",
   warn: "注意",
   block: "高风险",
@@ -280,7 +281,7 @@ export function evaluateFirewallPolicy(input: {
     };
   }
   if (input.status !== "ready") {
-    const labels: Partial<Record<FirewallStatus, string>> = {
+    const labels: Partial<Record<FirewallStatus, MessageKey>> = {
       idle: "隐私检查尚未开始",
       scanning: "正在执行本地隐私检查",
       incomplete: "内容过长，隐私检查未完整执行",
@@ -291,7 +292,7 @@ export function evaluateFirewallPolicy(input: {
       forcePressEnterOff: true,
       needsRawConfirmation: null,
       unresolvedCount: input.findings.length,
-      reason: labels[input.status] ?? "隐私检查未完成",
+      reason: t(labels[input.status] ?? "隐私检查未完成"),
     };
   }
 
@@ -307,7 +308,7 @@ export function evaluateFirewallPolicy(input: {
       forcePressEnterOff: rawBlocks,
       needsRawConfirmation: null,
       unresolvedCount: unresolved.length,
-      reason: unresolved.length ? "请替换或明确保留全部敏感项" : null,
+      reason: unresolved.length ? t("请替换或明确保留全部敏感项") : null,
     };
   }
 
@@ -319,7 +320,7 @@ export function evaluateFirewallPolicy(input: {
         forcePressEnterOff: true,
         needsRawConfirmation: null,
         unresolvedCount: unresolved.length,
-        reason: "高风险项必须替换或明确保留",
+        reason: t("高风险项必须替换或明确保留"),
       };
     }
     const unresolvedWarns = unresolved.filter((finding) => finding.severity === "warn");
@@ -334,7 +335,7 @@ export function evaluateFirewallPolicy(input: {
       forcePressEnterOff: rawBlocks,
       needsRawConfirmation: confirmed ? null : "warn",
       unresolvedCount: unresolved.length,
-      reason: confirmed ? null : "请确认本次保留提示级原文",
+      reason: confirmed ? null : t("请确认本次保留提示级原文"),
     };
   }
 
@@ -349,6 +350,6 @@ export function evaluateFirewallPolicy(input: {
     forcePressEnterOff: rawBlocks,
     needsRawConfirmation: confirmed ? null : "block",
     unresolvedCount: unresolved.length,
-    reason: confirmed ? null : "高风险原文需要再次确认",
+    reason: confirmed ? null : t("高风险原文需要再次确认"),
   };
 }

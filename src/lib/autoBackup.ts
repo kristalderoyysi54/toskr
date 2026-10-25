@@ -1,4 +1,5 @@
 import { runAutoBackup } from "@/lib/dataOperations";
+import { t } from "@/lib/i18n";
 import { applySettingsPatch } from "@/lib/settingsSync";
 import { tip } from "@/lib/tip";
 import { isDataOperationLocked } from "@/store/dataOperationStore";
@@ -55,7 +56,8 @@ export async function performAutoBackup(manual = false): Promise<void> {
     if (manual) {
       tip(
         "ok",
-        `已备份 ${result.notes} 条笔记、${result.media} 个媒体${result.pruned ? `，清理旧备份 ${result.pruned} 份` : ""}`
+        t("已备份 {notes} 条笔记、{media} 个媒体", { notes: result.notes, media: result.media }) +
+          (result.pruned ? t("，清理旧备份 {pruned} 份", { pruned: result.pruned }) : "")
       );
     }
   } catch (error) {
@@ -64,7 +66,7 @@ export async function performAutoBackup(manual = false): Promise<void> {
       error && typeof error === "object" && "message" in error
         ? String((error as { message: unknown }).message)
         : String(error);
-    tip("warn", `自动备份失败：${message}`);
+    tip("warn", t("自动备份失败：{message}", { message }));
   } finally {
     running = false;
   }

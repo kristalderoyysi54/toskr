@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { intlLocale, t } from "@/lib/i18n";
 import { api } from "@/lib/tauri";
 
 /** 全尺寸图片 data URL 很大，只保留最近少量预览，避免连续放大后内存只增不减。 */
@@ -107,7 +108,7 @@ export function noteTimeLabel(note: {
   updatedAt?: number;
 }): string {
   return note.updatedAt && note.updatedAt > note.createdAt
-    ? `改于 ${timeAgo(note.updatedAt)}`
+    ? t("改于 {time}", { time: timeAgo(note.updatedAt) })
     : timeAgo(note.createdAt);
 }
 
@@ -115,11 +116,11 @@ export function noteTimeLabel(note: {
 export function timeAgo(ts: number): string {
   const diff = Date.now() - ts;
   const min = Math.floor(diff / 60000);
-  if (min < 1) return "刚刚";
-  if (min < 60) return `${min} 分钟前`;
+  if (min < 1) return t("刚刚");
+  if (min < 60) return t("{n} 分钟前", { n: min });
   const hour = Math.floor(min / 60);
-  if (hour < 24) return `${hour} 小时前`;
+  if (hour < 24) return t("{n} 小时前", { n: hour });
   const day = Math.floor(hour / 24);
-  if (day < 30) return `${day} 天前`;
-  return new Date(ts).toLocaleDateString("zh-CN");
+  if (day < 30) return t("{n} 天前", { n: day });
+  return new Date(ts).toLocaleDateString(intlLocale());
 }

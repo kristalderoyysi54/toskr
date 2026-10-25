@@ -1,3 +1,4 @@
+import { getLocale, intlLocale, t } from "@/lib/i18n";
 import type { TaskRecurrence } from "@/store/notesStore";
 
 /** 重复任务的期次计算（纯函数；只依赖类型，供 store 直接引用而不成环）。 */
@@ -93,31 +94,74 @@ export function nextRecurrence(
 
 const WEEKDAY_SHORT = "日一二三四五六";
 
+const zh = () => getLocale() === "zh";
+const pad2 = (n: number) => String(n).padStart(2, "0");
+/** 英文星期名（0 = 周日；2023-01-01 恰为周日）。 */
+const enWeekday = (d: number, weekday: "short" | "narrow") =>
+  new Date(2023, 0, 1 + d).toLocaleDateString(intlLocale(), { weekday });
+
+/** 星期短名：中文「周一」，英文「Mon」。 */
+export function weekdayLabel(d: number): string {
+  return zh() ? `周${WEEKDAY_SHORT[d]}` : enWeekday(d, "short");
+}
+
+/** 星期单字（七格表头/选择器用）：中文「一」，英文默认「M」，宽格可传 "short" 得「Mon」。 */
+export function weekdayChar(d: number, en: "narrow" | "short" = "narrow"): string {
+  return zh() ? WEEKDAY_SHORT[d] : enWeekday(d, en);
+}
+
+/** 时刻：中文 24 小时制（padHour 决定小时补零），英文「8:00 PM」。 */
+export function clockLabel(hour: number, minute: number, padHour = true): string {
+  if (zh()) return `${padHour ? pad2(hour) : hour}:${pad2(minute)}`;
+  return new Date(2023, 0, 1, hour, minute).toLocaleTimeString(intlLocale(), {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+/** 月日：中文「10月3日」，英文「Oct 3」。 */
+export function monthDayLabel(date: Date): string {
+  if (zh()) return `${date.getMonth() + 1}月${date.getDate()}日`;
+  return date.toLocaleDateString(intlLocale(), { month: "short", day: "numeric" });
+}
+
+/** 月份标题：中文「2026 年 10 月」，英文「October 2026」。 */
+export function monthYearLabel(date: Date): string {
+  if (zh()) return `${date.getFullYear()} 年 ${date.getMonth() + 1} 月`;
+  return date.toLocaleDateString(intlLocale(), { year: "numeric", month: "long" });
+}
+
 /** 重复规则短标签（行内 chip 用）。 */
 export function recurrenceLabel(rec: TaskRecurrence, dueAt: number | null): string {
   const anchor = dueAt !== null ? new Date(dueAt) : new Date();
   const until = rec.until !== undefined ? new Date(rec.until) : null;
   const end = until
-    ? `，到 ${until.getFullYear()}/${until.getMonth() + 1}/${until.getDate()}`
+    ? t("，到 {date}", {
+        date: zh()
+          ? `${until.getFullYear()}/${until.getMonth() + 1}/${until.getDate()}`
+          : until.toLocaleDateString(intlLocale(), { year: "numeric", month: "short", day: "numeric" }),
+      })
     : rec.count !== undefined
-      ? `，剩 ${rec.count} 次`
+      ? t("，剩 {n} 次", { n: rec.count })
       : "";
-  const suffix = (rec.basis === "completion" ? "（完成后起算）" : "") + end;
+  const suffix = (rec.basis === "completion" ? t("（完成后起算）") : "") + end;
   switch (rec.freq) {
     case "daily":
-      return `每天${suffix}`;
+      return t("每天") + suffix;
     case "weekdays":
-      return `工作日${suffix}`;
+      return t("工作日") + suffix;
     case "weekly": {
       const days = rec.weekdays?.length ? rec.weekdays : [anchor.getDay()];
-      return `每周${days.map((d) => WEEKDAY_SHORT[d]).join("")}${suffix}`;
+      const names = zh() ? days.map((d) => WEEKDAY_SHORT[d]).join("") : days.map(weekdayLabel).join(", ");
+      return t("每周{days}", { days: names }) + suffix;
     }
     case "monthly":
-      return `每月 ${rec.monthDay ?? anchor.getDate()} 日${suffix}`;
+      return t("每月 {day} 日", { day: rec.monthDay ?? anchor.getDate() }) + suffix;
     case "yearly": {
-      if (rec.basis === "completion") return `每年${suffix}`;
+      if (rec.basis === "completion") return t("每年") + suffix;
       const { month, day } = rec.yearlyAnchor ?? { month: anchor.getMonth(), day: anchor.getDate() };
-      return `每年 ${month + 1}/${day}${suffix}`;
+      const date = zh() ? `${month + 1}/${day}` : monthDayLabel(new Date(2024, month, day));
+      return t("每年 {date}", { date }) + suffix;
     }
   }
 }

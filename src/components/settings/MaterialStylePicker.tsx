@@ -1,13 +1,18 @@
 import { useId, type CSSProperties } from "react";
 
+import { useT, type MessageKey } from "@/lib/i18n";
 import { normalizeMaterialStyle } from "@/lib/materialStyle";
 import type { VibrancyMaterial } from "@/store/notesStore";
 
-const MATERIAL_STYLES = [
+const MATERIAL_STYLES: readonly {
+  value: ReturnType<typeof normalizeMaterialStyle>;
+  label: MessageKey;
+  description: MessageKey;
+}[] = [
   { value: "hud", label: "通透", description: "轻薄透色" },
   { value: "sidebar", label: "柔和", description: "细腻磨砂" },
   { value: "under-window", label: "厚重", description: "哑光陶瓷" },
-] as const;
+];
 
 export function MaterialStylePicker({
   value,
@@ -20,6 +25,7 @@ export function MaterialStylePicker({
   cardOpacity: number;
   onChange: (value: ReturnType<typeof normalizeMaterialStyle>) => void;
 }) {
+  const t = useT();
   const id = useId();
   const selected = normalizeMaterialStyle(value);
 
@@ -29,9 +35,9 @@ export function MaterialStylePicker({
       className="scroll-m-5 rounded-lg px-3.5 py-3 transition-shadow data-[settings-search-active=true]:ring-2 data-[settings-search-active=true]:ring-inset data-[settings-search-active=true]:ring-primary/40"
     >
       <fieldset className="min-w-0" aria-describedby={`${id}-hint`}>
-        <legend className="text-title">毛玻璃风格</legend>
+        <legend className="text-title">{t("毛玻璃风格")}</legend>
         <p id={`${id}-hint`} className="mt-0.5 text-label text-muted-foreground">
-          卡片与面板一起变化；降低卡片不透明度，更容易透出背景。
+          {t("卡片与面板一起变化；降低卡片不透明度，更容易透出背景。")}
         </p>
         <div className="mt-3 grid min-w-0 grid-cols-3 gap-2">
           {MATERIAL_STYLES.map((style) => (
@@ -58,7 +64,7 @@ export function MaterialStylePicker({
                 >
                   <span className="panel-surface absolute inset-0 block p-2">
                     <span className="material-card block h-full overflow-hidden rounded-md px-2 py-2">
-                      <span className="block truncate text-micro font-medium text-foreground">灵感片段</span>
+                      <span className="block truncate text-micro font-medium text-foreground">{t("灵感片段")}</span>
                       <span className="mt-2 block h-1 w-full rounded-full bg-foreground/20" />
                       <span className="mt-1.5 block h-1 w-3/4 rounded-full bg-foreground/15" />
                       <span className="mt-1.5 block h-1 w-1/2 rounded-full bg-foreground/10" />
@@ -66,10 +72,10 @@ export function MaterialStylePicker({
                   </span>
                 </span>
                 <span id={`${id}-${style.value}-label`} className="mt-2 block text-center text-body font-medium">
-                  {style.label}
+                  {t(style.label)}
                 </span>
                 <span id={`${id}-${style.value}-description`} className="mt-0.5 block text-center text-micro text-muted-foreground">
-                  {style.description}
+                  {t(style.description)}
                 </span>
               </span>
             </label>

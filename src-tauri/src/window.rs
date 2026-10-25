@@ -1981,7 +1981,7 @@ fn create_text_preview_window(
         label,
         tauri::WebviewUrl::App("index.html".into()),
     )
-    .title("内容详情")
+    .title(crate::i18n::tr("内容详情"))
     .inner_size(560.0, 540.0)
     .min_inner_size(380.0, 300.0)
     .visible(false)
@@ -2548,7 +2548,7 @@ pub fn locate_source_conversation(
     payload: SourceOverlayPayload,
 ) -> Result<(), String> {
     let target = focus::running_app_info_for_bundle(&payload.source_bundle)
-        .ok_or_else(|| format!("{} 当前未运行", payload.source_app))?;
+        .ok_or_else(|| crate::tr_fmt!("{} 当前未运行", "{} isn't running", payload.source_app))?;
     let started = std::time::Instant::now();
     let outcome = ax::locate_conversation(target.pid, &payload.conversation_name);
     let kind = match outcome {
@@ -2565,12 +2565,14 @@ pub fn locate_source_conversation(
             show_locate_highlight(app, row);
             Ok(())
         }
-        ax::LocateOutcome::NotInList => Err(format!(
+        ax::LocateOutcome::NotInList => Err(crate::tr_fmt!(
             "{}会话列表里没找到该群（列表可能处于搜索或过滤状态）",
+            "Couldn't find this group in {}'s chat list (the list may be searched or filtered)",
             payload.source_app
         )),
-        ax::LocateOutcome::NoList => Err(format!(
+        ax::LocateOutcome::NoList => Err(crate::tr_fmt!(
             "未能识别{}的会话列表（请确认主窗口已打开）",
+            "Couldn't read {}'s chat list (make sure its main window is open)",
             payload.source_app
         )),
     }
