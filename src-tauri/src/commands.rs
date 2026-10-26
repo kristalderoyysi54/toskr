@@ -931,6 +931,15 @@ pub fn set_panel_drag_active(app: AppHandle, active: bool) {
         .store(active, Ordering::Relaxed);
 }
 
+/// 面板有后续界面待操作（前端汇总右键菜单/预检/对话框/行内输入后下发）；
+/// 期间贴边隐藏的光标计时暂停（失焦路径由前端按同一份登记判定）。
+#[tauri::command]
+pub fn set_panel_hold(app: AppHandle, active: bool) {
+    app.state::<AppState>()
+        .panel_hold
+        .store(active, Ordering::SeqCst);
+}
+
 /// 前台应用是否是本应用（面板失焦判定：焦点移到自家预览/设置窗不算离开）。
 #[tauri::command]
 pub fn is_self_frontmost() -> bool {

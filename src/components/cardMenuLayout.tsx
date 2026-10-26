@@ -11,27 +11,47 @@ import {
   ContextMenuSubTrigger,
 } from "@/components/ui/context-menu";
 import type { MenuFlyoutEntry } from "@/lib/menuFlyout";
-import type { ContextMenuItemId } from "@/store/notesStore";
+import {
+  CONTEXT_MENU_GROUP_BY_ITEM,
+  type ContextMenuGroupId,
+  type ContextMenuItemId,
+} from "@/store/notesStore";
 import { useTargetStore } from "@/store/targetStore";
 
-/** 只划分层级，不补回隐藏项，也不改变用户在组内安排的顺序。 */
+/**
+ * 按固定骨架划分（方案 A）：发送区、常用区直接列在一级菜单，整理、转换与导出各进一个
+ * 二级小窗。不补回隐藏项，也不改变用户在区内安排的顺序。
+ * 剪贴卡：「移入笔记分组」是收编主路径提到一级（用户 2026-09-25 指定），编辑与完成落到整理。
+ */
 export function partitionCardMenuIds(ids: readonly ContextMenuItemId[], clipboard: boolean) {
-  const primary: ContextMenuItemId[] = [];
-  const sendOptions: ContextMenuItemId[] = [];
-  const more: ContextMenuItemId[] = [];
+  const out: Record<ContextMenuGroupId, ContextMenuItemId[]> = {
+    send: [],
+    main: [],
+    organize: [],
+    convert: [],
+  };
   for (const id of ids) {
-    // 剪贴卡「移入笔记分组」是收编主路径，提到一级（用户 2026-09-25 指定）
-    if (["send", "copy", "keep"].includes(id) ||
-      (!clipboard && ["edit", "done"].includes(id)) ||
-      (clipboard && id === "move")) {
-      primary.push(id);
-    } else if (id === "send-template" || id === "send-preflight") {
-      sendOptions.push(id);
-    } else {
-      more.push(id);
-    }
+    let group = CONTEXT_MENU_GROUP_BY_ITEM[id];
+    if (clipboard && id === "move") group = "main";
+    else if (clipboard && (id === "edit" || id === "done")) group = "organize";
+    out[group].push(id);
   }
-  return { primary, sendOptions, more };
+  return out;
+}
+
+/** 只对当前这一张卡生效的项：多选时隐藏，避免误以为会批量执行。 */
+export const SINGLE_CARD_MENU_IDS: ReadonlySet<ContextMenuItemId> = new Set([
+  "preview",
+  "edit",
+  "rename",
+  "ocr",
+  "ai-title",
+]);
+
+/** 模板正文压成一行作为小窗副标题。 */
+export function menuHintText(text: string, max = 48): string {
+  const line = text.replace(/\s+/g, " ").trim();
+  return line.length > max ? `${line.slice(0, max)}…` : line;
 }
 
 /** lucide 图标是 forwardRef 组件且带 displayName；菜单行里无子节点的这类元素视为图标。 */
@@ -118,6 +138,7 @@ export function collectMenuFlyoutEntries(
     if (element.type === ContextMenuItem || element.type === TargetSendMenuItem) {
       const props = element.props as {
         children?: ReactNode;
+        title?: string;
         disabled?: boolean;
         variant?: string;
         allowInternal?: boolean;
@@ -136,6 +157,8 @@ export function collectMenuFlyoutEntries(
         kind: "item",
         id,
         label: menuNodeText(props.children),
+        // 菜单行的 title（悬停提示）在小窗里改成第二行副标题：小窗不可聚焦，原生 tooltip 不出
+        hint: props.title ? menuHintText(props.title) : undefined,
         icon: firstChild(props.children, iconNameOf),
         shortcut: firstChild(props.children, (child) =>
           isValidElement<{ children?: ReactNode }>(child) && child.type === ContextMenuShortcut

@@ -55,6 +55,7 @@ const COMMANDS: &[&str] = &[
     "edge_hide_now",
     "set_panel_pinned",
     "set_panel_drag_active",
+    "set_panel_hold",
     "evaluate_drag_dock",
     "set_double_tap_mode",
     "set_clip_watch",

@@ -51,6 +51,7 @@ interface DeliveryState {
   replaceAllFirewallFindings: () => void;
   excludeFirewallFinding: (findingId: string) => void;
   excludeAllFirewallFindings: () => void;
+  excludeFirewallCategory: (category: FindingCategory) => void;
   /** 词典化名单次豁免：把 finalText 中一处占位符还原为原文并触发隐私重扫描。 */
   revertAliasFinding: (occurrence: {
     startUtf16: number;
@@ -79,6 +80,34 @@ function emptyTransform(): TransformSession {
     restoreText: null,
     appliedText: null,
     transportPending: false,
+  };
+}
+
+/**
+ * 写入「保留原文」名单。allowRaw 下高风险项即使逐项保留也要全局 block 确认；
+ * 当全部高风险项都已被用户逐项/按类明确保留时，这次保留本身就是确认，
+ * 自动补上（确认只覆盖已保留项，不会放行其它未处理的高风险原文）。
+ */
+function withExcludedFindings(draft: DeliveryDraft, excludedFindingIds: string[]): DeliveryDraft {
+  const excluded = new Set(excludedFindingIds);
+  const blocks = draft.findings.filter((finding) => finding.severity === "block");
+  const settled =
+    draft.privacyPolicy === "allowRaw" &&
+    blocks.length > 0 &&
+    blocks.every((finding) => excluded.has(finding.id));
+  return {
+    ...draft,
+    privacyDecision: {
+      ...draft.privacyDecision,
+      excludedFindingIds,
+      rawConfirmation: settled
+        ? {
+            revision: draft.scanRevision,
+            targetToken: draft.targetSnapshot?.token ?? null,
+            level: "block",
+          }
+        : null,
+    },
   };
 }
 
@@ -375,17 +404,10 @@ export const useDeliveryStore = create<DeliveryState>()((set, get) => ({
       draft.privacyDecision.excludedFindingIds.includes(findingId)
     ) return;
     set({
-      draft: {
-        ...draft,
-        privacyDecision: {
-          ...draft.privacyDecision,
-          excludedFindingIds: [
-            ...draft.privacyDecision.excludedFindingIds,
-            findingId,
-          ],
-          rawConfirmation: null,
-        },
-      },
+      draft: withExcludedFindings(draft, [
+        ...draft.privacyDecision.excludedFindingIds,
+        findingId,
+      ]),
       lastError: null,
     });
   },
@@ -393,14 +415,21 @@ export const useDeliveryStore = create<DeliveryState>()((set, get) => ({
     const { draft, busy } = get();
     if (!draft || busy || draft.firewallStatus !== "ready" || !draft.findings.length) return;
     set({
-      draft: {
-        ...draft,
-        privacyDecision: {
-          ...draft.privacyDecision,
-          excludedFindingIds: draft.findings.map((finding) => finding.id),
-          rawConfirmation: null,
-        },
-      },
+      draft: withExcludedFindings(draft, draft.findings.map((finding) => finding.id)),
+      lastError: null,
+    });
+  },
+  excludeFirewallCategory: (category) => {
+    const { draft, busy } = get();
+    if (!draft || busy || draft.firewallStatus !== "ready") return;
+    const ids = draft.findings
+      .filter((finding) => finding.category === category)
+      .map((finding) => finding.id);
+    if (!ids.length) return;
+    set({
+      draft: withExcludedFindings(draft, [
+        ...new Set([...draft.privacyDecision.excludedFindingIds, ...ids]),
+      ]),
       lastError: null,
     });
   },

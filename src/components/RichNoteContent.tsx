@@ -186,6 +186,7 @@ export function RichNoteContent({
           return (
             <p
               key={`text-${index}`}
+              data-rich-text-block={index}
               className="whitespace-pre-wrap [overflow-wrap:anywhere]"
             >
               {block.text}
@@ -208,8 +209,14 @@ export function RichNoteContent({
   );
 }
 
+/** 图文卡内的光标位置：blocks 下标 + 该文字块内选区（查看态 ⇄ 编辑态定位用）。 */
+export type RichTextCaret = { block: number; selection: TextSelection };
+
 type RichNoteTextEditorProps = {
   blocks: NoteContentBlock[];
+  /** 挂载时聚焦该文字块并设选区（缺省聚焦首个文字块）；设好后经 onCaretPlaced 回报 */
+  initialCaret?: RichTextCaret | null;
+  onCaretPlaced?: (textarea: HTMLTextAreaElement, selection: TextSelection) => void;
   previewSource?: ImagePreviewSource;
   editContext?: ImagePreviewEditContext;
   onOpenImage?: (files: string[], index: number) => void;
@@ -234,6 +241,8 @@ type RichNoteTextEditorProps = {
  */
 export function RichNoteTextEditor({
   blocks,
+  initialCaret,
+  onCaretPlaced,
   previewSource,
   editContext,
   onOpenImage,
@@ -254,8 +263,31 @@ export function RichNoteTextEditor({
   const textSelectionChangeRef = useRef(onTextSelectionChange);
   textSelectionChangeRef.current = onTextSelectionChange;
   const [selectedImageBlock, setSelectedImageBlock] = useState<number | null>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
+  const initialCaretRef = useRef(initialCaret);
+  const caretPlacedRef = useRef(onCaretPlaced);
+  caretPlacedRef.current = onCaretPlaced;
   useEffect(() => {
-    const timer = window.setTimeout(() => firstTextRef.current?.focus(), 30);
+    const timer = window.setTimeout(() => {
+      const caret = initialCaretRef.current;
+      const target = caret
+        ? editorRef.current?.querySelector<HTMLTextAreaElement>(
+            `textarea[data-rich-text-block="${caret.block}"]`
+          )
+        : null;
+      if (!caret || !target) {
+        firstTextRef.current?.focus();
+        return;
+      }
+      target.focus();
+      const max = target.value.length;
+      const selection = {
+        start: Math.min(caret.selection.start, max),
+        end: Math.min(caret.selection.end, max),
+      };
+      target.setSelectionRange(selection.start, selection.end);
+      caretPlacedRef.current?.(target, selection);
+    }, 30);
     selectionActiveChangeRef.current?.(false);
     textSelectionChangeRef.current?.(null);
     return () => {
@@ -290,6 +322,7 @@ export function RichNoteTextEditor({
   let textIndex = 0;
   return (
     <div
+      ref={editorRef}
       aria-label={t("图文文字编辑器")}
       className="space-y-2 font-mono text-body leading-relaxed"
     >
@@ -330,6 +363,7 @@ export function RichNoteTextEditor({
           <textarea
             key={`text-${index}`}
             ref={currentText === 0 ? firstTextRef : undefined}
+            data-rich-text-block={index}
             aria-label={t("文字段落 {n}", { n: currentText + 1 })}
             defaultValue={block.text}
             rows={Math.min(12, Math.max(3, block.text.split("\n").length + 1))}

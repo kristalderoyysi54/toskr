@@ -79,6 +79,7 @@
     "allow-edge-hide-now",
     "allow-set-panel-pinned",
     "allow-set-panel-drag-active",
+    "allow-set-panel-hold",
     "allow-evaluate-drag-dock",
     "allow-set-double-tap-mode",
     "allow-set-clip-watch",

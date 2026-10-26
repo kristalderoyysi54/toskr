@@ -11,6 +11,7 @@ import {
   AlertCircle,
   Archive,
   ArrowDown,
+  ChevronRight,
   ArrowUp,
   Blocks,
   ClipboardList,
@@ -54,6 +55,7 @@ import {
   SettingsRow as Row,
 } from "@/components/settings/SettingsLayout";
 import { Button } from "@/components/ui/button";
+import { partitionCardMenuIds } from "@/components/cardMenuLayout";
 import { Disclosure } from "@/components/ui/disclosure";
 import { IconButton } from "@/components/ui/icon-button";
 import { ProgressBar } from "@/components/ui/progress-bar";
@@ -140,6 +142,7 @@ import {
   groupContextMenuIds,
   defaultSettings,
   normalizeContextMenu,
+  defaultContextMenu,
   useNotesStore,
   type ContextMenuItemId,
   type DuePresetCfg,
@@ -886,7 +889,50 @@ function PercentSlider({
   );
 }
 
-/** 卡片右键菜单自定义：按用途分组，显隐与组内顺序可调。 */
+/** 右键菜单实时预览：按当前开关与区内顺序画出笔记卡的一级菜单。 */
+export function ContextMenuPreview({ ids }: { ids: readonly ContextMenuItemId[] }) {
+  const t = useT();
+  const layout = partitionCardMenuIds(ids, false);
+  const labelOf = (id: ContextMenuItemId) =>
+    t(CONTEXT_MENU_REGISTRY.find((item) => item.id === id)!.label);
+  const sections: { key: string; rows: { key: string; label: string; sub?: boolean; danger?: boolean }[] }[] = [
+    { key: "send", rows: layout.send.map((id) => ({ key: id, label: labelOf(id), sub: id === "send-template" })) },
+    { key: "main", rows: layout.main.map((id) => ({ key: id, label: labelOf(id) })) },
+    {
+      key: "sub",
+      rows: [
+        ...(layout.organize.length ? [{ key: "organize", label: t("整理"), sub: true }] : []),
+        ...(layout.convert.length ? [{ key: "convert", label: t("转换与导出"), sub: true }] : []),
+      ],
+    },
+    { key: "delete", rows: [{ key: "delete", label: t("删除"), danger: true }] },
+  ].filter((section) => section.rows.length > 0);
+  return (
+    <div className="bg-muted/25 px-3.5 py-3">
+      <div
+        aria-label={t("菜单预览")}
+        className="mx-auto w-52 rounded-lg bg-popover p-1 text-label text-popover-foreground shadow-md ring-1 ring-foreground/10"
+      >
+        {sections.map((section, index) => (
+          <div key={section.key}>
+            {index > 0 && <div className="-mx-1 my-1 h-px bg-border" />}
+            {section.rows.map((row) => (
+              <div
+                key={row.key}
+                className={cn("flex items-center rounded-sm px-1.5 py-1", row.danger && "text-destructive")}
+              >
+                <span className="min-w-0 flex-1 truncate">{row.label}</span>
+                {row.sub && <ChevronRight className="size-3.5 text-muted-foreground" />}
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** 卡片右键菜单自定义：骨架固定（方案 A），各区内显隐与顺序可调。 */
 function ContextMenuGroup({ settings, patch }: SP) {
   const t = useT();
   const cfg = normalizeContextMenu(settings.contextMenu);
@@ -904,15 +950,14 @@ function ContextMenuGroup({ settings, patch }: SP) {
     patch({ contextMenu: next });
   };
   return (
-    <Group title={t("卡片右键菜单")} footer={t("勾选要显示的项，组内可调整顺序；合并、回复关系与删除始终显示。")}>
-      {groups.map((group, groupIndex) => (
+    <Group
+      title={t("卡片右键菜单")}
+      footer={t("「一级菜单」两区直接显示在右键菜单里，「整理」「转换与导出」各是一个二级小窗；各项只能在本区内开关和排序。剪贴卡的「移入笔记分组」显示在一级。合并、回复关联与删除始终显示。")}
+    >
+      <ContextMenuPreview ids={cfg.filter((item) => item.on).map((item) => item.id)} />
+      {groups.map((group) => (
         <div key={group.id}>
-          <div
-            className={cn(
-              "border-t border-border/60 bg-muted/25 px-3.5 py-1 text-micro font-medium text-muted-foreground",
-              groupIndex === 0 && "border-t-0"
-            )}
-          >
+          <div className="border-t border-border/60 bg-muted/25 px-3.5 py-1 text-micro font-medium text-muted-foreground">
             {group.label}
           </div>
           {group.ids.map((id, idx) => {
@@ -940,7 +985,7 @@ function ContextMenuGroup({ settings, patch }: SP) {
                 </span>
                 <div className="flex gap-0.5">
                   <IconButton
-                    label={t("组内上移")}
+                    label={t("区内上移")}
                     size="2xs"
                     reveal="hover-focus"
                     disabled={idx === 0}
@@ -949,7 +994,7 @@ function ContextMenuGroup({ settings, patch }: SP) {
                     <ArrowUp />
                   </IconButton>
                   <IconButton
-                    label={t("组内下移")}
+                    label={t("区内下移")}
                     size="2xs"
                     reveal="hover-focus"
                     disabled={idx === group.ids.length - 1}
@@ -963,6 +1008,11 @@ function ContextMenuGroup({ settings, patch }: SP) {
           })}
         </div>
       ))}
+      <div className="flex justify-end px-3.5 py-2">
+        <Button size="sm" onClick={() => patch({ contextMenu: defaultContextMenu() })}>
+          {t("恢复默认菜单")}
+        </Button>
+      </div>
     </Group>
   );
 }

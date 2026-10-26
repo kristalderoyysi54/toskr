@@ -71,7 +71,7 @@ function editor(rich: boolean) {
     textareaRef: { current: { focus: vi.fn() } },
     setDraftTitle: vi.fn(), setDraftEmpty: vi.fn(), setNote: vi.fn(), setMdView: vi.fn(),
     setDraftContentBlocks: vi.fn(), setDraftImages: vi.fn(), setTextSelection: vi.fn(), setEditing: vi.fn(),
-    releaseEditorSession: vi.fn(), discardDraftImages: vi.fn(), exitEditing: vi.fn(),
+    releaseEditorSession: vi.fn(), discardDraftImages: vi.fn(), exitEditing: vi.fn(), rememberViewCaret: vi.fn(),
     emitTo: vi.fn().mockResolvedValue(undefined), tip: vi.fn(),
     previewIsEditable, hasMixedNoteContent, normalizeNoteContentBlocks, textFromContentBlocks,
     refreshPreviewPayload, looksLikeMarkdown,

@@ -20,28 +20,30 @@ import { useTargetStore } from "@/store/targetStore";
 import { collectMenuFlyoutEntries, menuNodeText, partitionCardMenuIds } from "./cardMenuLayout";
 
 describe("卡片菜单层级", () => {
-  it("默认笔记只保留五个主要动作，每个原有能力仍恰好出现一次", () => {
+  it("笔记卡按方案 A 骨架分区，每个原有能力恰好出现一次", () => {
     const ids = CONTEXT_MENU_REGISTRY.map((item) => item.id);
     const layout = partitionCardMenuIds(ids, false);
-    expect(layout.primary).toEqual(["send", "copy", "edit", "done", "keep"]);
-    expect(layout.sendOptions).toEqual(["send-template", "send-preflight"]);
-    const all = [...layout.primary, ...layout.sendOptions, ...layout.more];
+    expect(layout.send).toEqual(["send", "send-preflight", "send-template"]);
+    expect(layout.main).toEqual(["preview", "copy", "edit", "done", "keep"]);
+    expect(layout.organize).toEqual(["blur", "rename", "tags", "move"]);
+    expect(layout.convert).toEqual(["copy-list", "export", "ocr", "to-task", "ai-to-task", "ai-title"]);
+    const all = Object.values(layout).flat();
     expect(all).toHaveLength(ids.length);
     expect(new Set(all)).toEqual(new Set(ids));
   });
 
-  it("剪贴卡首层为发送、复制、保留与移入笔记分组，编辑与完成仍能在更多中找到", () => {
+  it("剪贴卡把移入笔记分组提到一级，编辑与完成落到整理", () => {
     const layout = partitionCardMenuIds(CONTEXT_MENU_REGISTRY.map((item) => item.id), true);
-    expect(layout.primary).toEqual(["send", "copy", "keep", "move"]);
-    expect(layout.more).toContain("edit");
-    expect(layout.more).toContain("done");
-    expect(layout.more).not.toContain("move");
+    expect(layout.main).toEqual(["preview", "copy", "keep", "move"]);
+    expect(layout.organize).toEqual(expect.arrayContaining(["edit", "done"]));
+    expect(layout.organize).not.toContain("move");
   });
 
-  it("普通笔记的移动到仍留在更多操作", () => {
+  it("每个二级小窗只放一类操作：发送区不混入整理或转换项", () => {
     const layout = partitionCardMenuIds(CONTEXT_MENU_REGISTRY.map((item) => item.id), false);
-    expect(layout.primary).not.toContain("move");
-    expect(layout.more).toContain("move");
+    expect(layout.send.every((id) => id.startsWith("send"))).toBe(true);
+    expect(layout.organize).not.toContain("send-template");
+    expect(layout.convert).not.toContain("move");
   });
 
   it("文本处理已移出卡片右键菜单（详情窗工具栏提供），旧配置里的该项被剔除", () => {
@@ -65,10 +67,10 @@ describe("卡片菜单层级", () => {
     ]);
     const enabled = config.filter((item) => item.on).map((item) => item.id);
     const layout = partitionCardMenuIds(enabled, false);
-    expect(layout.primary).toEqual(["keep", "edit", "send", "done"]);
-    expect(layout.sendOptions).toEqual(["send-preflight", "send-template"]);
-    expect([...layout.primary, ...layout.more]).not.toContain("copy");
-    expect(layout.more).not.toContain("ai-title");
+    expect(layout.main).toEqual(["keep", "edit", "preview", "done"]);
+    expect(layout.send).toEqual(["send-preflight", "send-template", "send"]);
+    expect(Object.values(layout).flat()).not.toContain("copy");
+    expect(layout.convert).not.toContain("ai-title");
   });
 
 });

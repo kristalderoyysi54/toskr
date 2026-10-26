@@ -29,9 +29,11 @@ import {
   HUD_DURATION_DEFAULT_MS,
   INBOX_ID,
   mergePersistedNotesState,
+  migratePersistedState,
   mergePreEncryptSnapshotWithCurrent,
   NOTE_TAG_MAX_COUNT,
   noteContentBlocks,
+  normalizeContextMenu,
   normalizeSecretCipherStyle,
   orderedCheckedNotes,
   replaceNotesStoreFromPersisted,
@@ -219,17 +221,36 @@ describe("notesStore 基础", () => {
       "copy-list",
     ]);
     expect(custom.map((group) => [group.id, group.ids])).toEqual([
-      ["view", ["preview", "edit"]],
-      ["content", ["copy", "copy-list"]],
       ["send", ["send"]],
-      ["organize", ["move", "keep"]],
+      ["main", ["preview", "copy", "edit", "keep"]],
+      ["organize", ["move"]],
+      ["convert", ["copy-list"]],
     ]);
     expect(groupContextMenuIds(["move"]).map((group) => group.id)).toEqual([
-      "view",
-      "content",
       "send",
+      "main",
       "organize",
+      "convert",
     ]);
+  });
+
+  it("低频项默认关闭；v26 老配置升级时也关闭，其余开关原样保留", () => {
+    const fresh = normalizeContextMenu(undefined);
+    expect(fresh.filter((item) => !item.on).map((item) => item.id)).toEqual(["export", "ai-title"]);
+    const migrated = migratePersistedState(
+      {
+        settings: {
+          ...defaultSettings(),
+          contextMenu: CONTEXT_MENU_REGISTRY.map((item) => ({
+            id: item.id,
+            on: item.id !== "blur",
+          })),
+        },
+      },
+      26
+    );
+    const off = migrated.settings!.contextMenu.filter((item) => !item.on).map((item) => item.id);
+    expect(new Set(off)).toEqual(new Set(["blur", "export", "ai-title"]));
   });
 
   it("已下线的右键菜单项（textops）不让整份数据判无效，解码后被剔除（2026-09-25 丢数据回归）", () => {
@@ -253,7 +274,7 @@ describe("notesStore 基础", () => {
   });
 
   it("v12 迁移到最新版时正文不变、生成权威块，并补齐本地成效设置", () => {
-    expect(STORE_VERSION).toBe(26);
+    expect(STORE_VERSION).toBe(27);
     const decoded = decodePersistedState(JSON.stringify({
       version: 12,
       state: {
@@ -1787,7 +1808,7 @@ describe("store v25-v26 prompt templates migration", () => {
     expect(decodePersistedState(raw).settings.promptSnippets).toEqual(expected);
     replaceNotesStoreFromPersisted(raw);
     const saved = serializePersistentState(useNotesStore.getState());
-    expect(JSON.parse(saved).version).toBe(26);
+    expect(JSON.parse(saved).version).toBe(27);
     const decoded = decodePersistedState(saved);
     expect(decoded.settings.promptSnippets).toEqual(expected);
     expect(mergePersistedNotesState(decoded, useNotesStore.getState()).settings.promptSnippets)

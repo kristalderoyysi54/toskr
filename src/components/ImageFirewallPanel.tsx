@@ -7,6 +7,7 @@ import {
   containedImageRegionStyle,
   evaluateImageFirewallPolicy,
   keepOpenDeliveryImageFinding,
+  keepOpenDeliveryImageFindings,
   redactAllOpenDeliveryImages,
   redactOpenDeliveryImage,
   restoreOpenDeliveryImage,
@@ -21,7 +22,7 @@ import {
 import { findingReason } from "@/lib/delivery/findingReason";
 import { useT } from "@/lib/i18n";
 import { useNoteThumb } from "@/lib/media";
-import { api } from "@/lib/tauri";
+import { api, type FindingCategory } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 
 function AttachmentImage({
@@ -165,6 +166,15 @@ export function ImageFirewallPanel({
       (finding) => !item.redactedFindingIds.includes(finding.id)
     )
   );
+  // 各类别尚未遮挡/保留的区域数（跨图片），决定是否提供「同类全部保留」
+  const pendingByCategory = new Map<FindingCategory, number>();
+  for (const item of draft.imageFirewall) {
+    if (item.status !== "ready") continue;
+    for (const finding of item.findings) {
+      if (item.redactedFindingIds.includes(finding.id) || item.keptFindingIds.includes(finding.id)) continue;
+      pendingByCategory.set(finding.category, (pendingByCategory.get(finding.category) ?? 0) + 1);
+    }
+  }
   const originalFiles = draft.imageFirewall.map((item) => item.originalFile);
   const sendFiles = draft.imageFirewall.map((item) => item.sendFile);
   return (
@@ -290,6 +300,20 @@ export function ImageFirewallPanel({
                           {kept.has(finding.id) ? t("已确认保留原文") : t("保留原文发送")}
                         </Button>
                       )}
+                      {!redacted.has(finding.id) && !kept.has(finding.id) &&
+                        (pendingByCategory.get(finding.category) ?? 0) > 1 && (
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="ghost"
+                            className="text-muted-foreground"
+                            title={t("所有图片里这一类都不遮挡，按原样发出（仅本次发送有效）")}
+                            disabled={busy || item.status !== "ready"}
+                            onClick={() => keepOpenDeliveryImageFindings(finding.category)}
+                          >
+                            {t("同类全部保留")}
+                          </Button>
+                        )}
                       <details className="w-full min-w-0 text-muted-foreground">
                         <summary className="cursor-pointer">{t("命中依据")}</summary>
                         <p className="mt-1 break-words">{findingReason(finding)}</p>
@@ -379,17 +403,32 @@ export function ImageFirewallPanel({
         })}
       </div>
       {hasUnresolved && (
-        <Button
-          type="button"
-          size="xs"
-          variant="secondary"
-          disabled={busy || draft.imageFirewall.some(
-            (item) => item.status === "scanning" || item.status === "redacting"
+        <div className="flex flex-wrap gap-1.5">
+          <Button
+            type="button"
+            size="xs"
+            variant="secondary"
+            disabled={busy || draft.imageFirewall.some(
+              (item) => item.status === "scanning" || item.status === "redacting"
+            )}
+            onClick={() => void redactAllOpenDeliveryImages()}
+          >
+            {t("遮挡全部图片敏感区域")}
+          </Button>
+          {pendingByCategory.size > 0 && (
+            <Button
+              type="button"
+              size="xs"
+              title={t("本次图片全部不遮挡，按原图发出；文字脱敏不受影响")}
+              disabled={busy || draft.imageFirewall.some(
+                (item) => item.status === "scanning" || item.status === "redacting"
+              )}
+              onClick={() => keepOpenDeliveryImageFindings()}
+            >
+              {t("图片全部不遮挡")}
+            </Button>
           )}
-          onClick={() => void redactAllOpenDeliveryImages()}
-        >
-          {t("遮挡全部图片敏感区域")}
-        </Button>
+        </div>
       )}
     </section>
   );

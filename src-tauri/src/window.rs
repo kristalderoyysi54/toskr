@@ -867,6 +867,10 @@ fn animate_edge_slide(app: &AppHandle, anchor: EdgeHideAnchor, to_hidden: bool) 
         }
     }
     state.edge_hidden.store(to_hidden, Ordering::SeqCst);
+    // 面板滑走时子菜单小窗不能孤零零留在屏幕上
+    if to_hidden {
+        hide_menu_flyout(app);
+    }
     // 原生动画每一帧都会触发 WindowEvent::Moved；开一个「机器驱动移动」
     // 时间窗（动画时长 + 派发/收尾缓冲），期间 lib.rs 忽略「记为用户拖拽」
     state.machine_move_until_ms.store(
@@ -1118,10 +1122,15 @@ pub fn spawn_edge_hide_supervisor(app: &AppHandle) {
                 // 光标就停在这段空隙里——若边界卡在面板自身范围，唤回后下一
                 // tick 立刻判定「已离开」，600ms 宽限期重新计时，紧接着又
                 // 滑出（round 3 复现的「滑回后 ~1.3s 内再次滑出」正是这个坑）。
+                // 右键子菜单小窗落在面板外侧：光标在小窗里同样算「在面板内」，
+                // 否则移进「发送选项 / 更多操作」600ms 后面板就滑走
                 let inside = cursor_point_pt()
-                    .map(|(cx, cy)| anchor.inside(cx, cy))
+                    .map(|(cx, cy)| anchor.inside(cx, cy) || menu_flyout_contains(&state, cx, cy))
                     .unwrap_or(true); // 拿不到光标时保守当作在内部，不误触发滑出
-                if inside || state.panel_dragging.load(Ordering::Relaxed) {
+                if inside
+                    || state.panel_dragging.load(Ordering::Relaxed)
+                    || state.panel_hold.load(Ordering::SeqCst)
+                {
                     away_ms = 0;
                 } else {
                     away_ms += EDGE_HIDE_TICK_MS;
@@ -2402,6 +2411,16 @@ pub fn move_menu_flyout(app: &AppHandle, anchor: MenuFlyoutAnchorPt) {
     });
 }
 
+/// 光标（全局逻辑 pt）是否落在可见的子菜单小窗菜单盒内。
+fn menu_flyout_contains(state: &AppState, cx: f64, cy: f64) -> bool {
+    let fly = state.menu_flyout.lock().unwrap();
+    fly.visible && rect_contains(fly.rect_pt, cx, cy)
+}
+
+fn rect_contains(rect: (f64, f64, f64, f64), cx: f64, cy: f64) -> bool {
+    cx >= rect.0 && cx <= rect.0 + rect.2 && cy >= rect.1 && cy <= rect.1 + rect.3
+}
+
 /// 隐藏子菜单小窗；任意线程可调。
 pub fn hide_menu_flyout(app: &AppHandle) {
     let Some(state) = app.try_state::<AppState>() else {
@@ -2453,9 +2472,7 @@ fn menu_flyout_lifecycle(app: AppHandle, generation: u64) {
         };
         let cursor = cursor_point_pt();
         let inside = cursor
-            .map(|(cx, cy)| {
-                cx >= rect.0 && cx <= rect.0 + rect.2 && cy >= rect.1 && cy <= rect.1 + rect.3
-            })
+            .map(|(cx, cy)| rect_contains(rect, cx, cy))
             .unwrap_or(false);
         let changed = {
             let mut fly = state.menu_flyout.lock().unwrap();
@@ -3249,6 +3266,17 @@ mod tests {
                 "edge={edge} 越线超容差（邻屏深处）不应算触边"
             );
         }
+    }
+
+    #[test]
+    fn menu_flyout_rect_counts_cursor_inside_box() {
+        // 小窗在面板左侧（贴右缘面板的典型落点）：盒内含边界算命中，盒外不算
+        let rect = (2118.0, -1045.0, 208.0, 143.0);
+        assert!(rect_contains(rect, 2118.0, -1045.0));
+        assert!(rect_contains(rect, 2200.0, -1000.0));
+        assert!(rect_contains(rect, 2326.0, -902.0));
+        assert!(!rect_contains(rect, 2117.0, -1000.0));
+        assert!(!rect_contains(rect, 2200.0, -901.0));
     }
 
     #[test]

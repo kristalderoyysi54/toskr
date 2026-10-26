@@ -892,6 +892,34 @@ export function keepOpenDeliveryImageFinding(
   });
 }
 
+/** 批量「不遮挡」：全部图片（或仅某一类）未遮挡的 finding 一次性明确保留，语义同逐项保留。 */
+export function keepOpenDeliveryImageFindings(category?: FindingCategory): void {
+  const state = useDeliveryStore.getState();
+  const draft = state.draft;
+  if (!state.open || !draft) return;
+  let changed = false;
+  const imageFirewall = draft.imageFirewall.map((item) => {
+    if (item.status !== "ready") return item;
+    const settled = new Set([...item.redactedFindingIds, ...item.keptFindingIds]);
+    const fresh = item.findings
+      .filter((finding) => !settled.has(finding.id))
+      .filter((finding) => !category || finding.category === category)
+      .map((finding) => finding.id);
+    if (!fresh.length) return item;
+    changed = true;
+    return {
+      ...item,
+      keptFindingIds: [...item.keptFindingIds, ...fresh],
+      rawConfirmation: null,
+    };
+  });
+  if (!changed) return;
+  useDeliveryStore.setState({
+    draft: { ...draft, imageFirewall },
+    lastError: null,
+  });
+}
+
 export function retryOpenDeliveryImageScan(originalFile: string): void {
   const state = useDeliveryStore.getState();
   const draft = state.draft;

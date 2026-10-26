@@ -28,11 +28,12 @@ export const settings = {
   "没有匹配设置": "No matching settings",
   "试试“快捷键”“隐私”或“备份”": "Try “shortcut”, “privacy” or “backup”",
   "卡片右键菜单": "Card context menu",
-  "勾选要显示的项，组内可调整顺序；合并、回复关系与删除始终显示。":
-    "Select items to show and reorder within groups. Merge, reply links and Delete always show.",
   "{item}：显示": "{item}: show",
-  "组内上移": "Move up in group",
-  "组内下移": "Move down in group",
+  "区内上移": "Move up in section",
+  "区内下移": "Move down in section",
+  "菜单预览": "Menu preview",
+  "恢复默认菜单": "Restore Default Menu",
+  "「一级菜单」两区直接显示在右键菜单里，「整理」「转换与导出」各是一个二级小窗；各项只能在本区内开关和排序。剪贴卡的「移入笔记分组」显示在一级。合并、回复关联与删除始终显示。": "The two “Top Level” sections appear directly in the context menu; “Organize” and “Convert & Export” each open a submenu. Items can only be toggled and reordered within their section. On clipboard cards, “Move to Notes Group” appears at the top level. Merge, Reply Link and Delete are always shown.",
   // —— 分类 / 子页签 / 页面标题 ——
   "窗口与外观": "Appearance",
   "快捷键": "Shortcuts",

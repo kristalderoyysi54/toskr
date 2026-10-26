@@ -57,9 +57,10 @@ export const store = {
   "AI 转任务": "AI to Task",
   "AI 起标题": "AI Title",
   "移动到分组": "Move to Group",
-  "查看与编辑": "View & Edit",
-  "复制与处理": "Copy & Process",
-  "发送与转换": "Send & Convert",
+  "一级菜单 · 发送": "Top Level · Send",
+  "一级菜单 · 常用": "Top Level · Common",
+  "转换与导出": "Convert & Export",
+  "检查后发送": "Review & Send",
   "整理": "Organize",
   // 连续复制自动置顶的预览（纯图片卡）
   "图片": "Image",

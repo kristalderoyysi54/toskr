@@ -309,6 +309,7 @@ pub fn run() {
             commands::edge_hide_now,
             commands::set_panel_pinned,
             commands::set_panel_drag_active,
+            commands::set_panel_hold,
             commands::evaluate_drag_dock,
             commands::set_double_tap_mode,
             commands::set_clip_watch,

@@ -379,7 +379,7 @@ export function SelectionBar({
                     void sendCheckedToChat(undefined, { forcePreflight: true });
                   }}
                 >
-                  {t("预检并发送")}
+                  {t("检查后发送…")}
                 </SimpleMenuItem>
                 <SimpleMenuLabel>{t("预检方式")}</SimpleMenuLabel>
                 {(

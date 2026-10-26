@@ -20,9 +20,12 @@ import {
   Plus,
   ScanText,
   Send,
+  Settings2,
+  ShieldCheck,
   Sparkles,
   Tag,
   Trash2,
+  Unlink,
   Wand2,
   type LucideIcon,
 } from "lucide-react";
@@ -41,7 +44,8 @@ import { useT } from "@/lib/i18n";
 /** 小窗里允许的图标白名单（按 lucide displayName 映射；主窗口序列化时只传名字）。 */
 const ICONS: Record<string, LucideIcon> = {
   Check, Copy, Expand, Eye, EyeOff, FileDown, FileText, Folder, FolderInput, Inbox, Link2,
-  ListChecks, ListOrdered, Merge, Pencil, PenLine, Plus, ScanText, Send, Sparkles, Tag, Trash2, Wand2,
+  ListChecks, ListOrdered, Merge, Pencil, PenLine, Plus, ScanText, Send, Settings2, ShieldCheck,
+  Sparkles, Tag, Trash2, Unlink, Wand2,
 };
 
 /** 原生 click 与 Rust 轮询点击可能同时到达，同一条目 150ms 内只提交一次。 */
@@ -181,7 +185,14 @@ export default function MenuFlyoutView() {
               )}
             >
               {Icon ? <Icon /> : null}
-              <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+              {entry.hint ? (
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate">{entry.label}</span>
+                  <span className="truncate text-micro text-muted-foreground">{entry.hint}</span>
+                </span>
+              ) : (
+                <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+              )}
               {entry.shortcut && (
                 <span className="ml-auto text-micro tracking-widest text-muted-foreground">
                   {entry.shortcut}

@@ -118,6 +118,33 @@ describe("deliveryStore", () => {
     expect(useDeliveryStore.getState().draft!.privacyDecision.excludedFindingIds).toEqual([]);
   });
 
+  it("同类全部保留只豁免该类别", () => {
+    useDeliveryStore.getState().openDraft(draftWithFindings());
+    useDeliveryStore.getState().excludeFirewallCategory("email");
+    const current = useDeliveryStore.getState().draft!;
+    expect(current.privacyDecision.excludedFindingIds).toEqual(["email"]);
+    expect(current.privacyDecision.rawConfirmation).toBeNull();
+  });
+
+  it("allowRaw：高风险项全部被明确保留时自动补 block 确认，仍有未处理高风险则不补", () => {
+    const allowRaw = { ...draftWithFindings(), privacyPolicy: "allowRaw" as const };
+    useDeliveryStore.getState().openDraft(allowRaw);
+    useDeliveryStore.getState().excludeFirewallCategory("email");
+    expect(useDeliveryStore.getState().draft!.privacyDecision.rawConfirmation).toBeNull();
+    useDeliveryStore.getState().excludeFirewallFinding("credential");
+    const current = useDeliveryStore.getState().draft!;
+    expect(current.privacyDecision.rawConfirmation).toMatchObject({ level: "block" });
+    expect(evaluateFirewallPolicy({
+      status: current.firewallStatus,
+      findings: current.findings,
+      excludedFindingIds: current.privacyDecision.excludedFindingIds,
+      policy: current.privacyPolicy,
+      rawConfirmation: current.privacyDecision.rawConfirmation,
+      revision: current.scanRevision,
+      targetToken: null,
+    }).canSend).toBe(true);
+  });
+
   it.each(["idle", "scanning", "incomplete", "failed"] as const)(
     "%s 时不能批量豁免旧命中", (firewallStatus) => {
       useDeliveryStore.getState().openDraft({ ...draftWithFindings(), firewallStatus });

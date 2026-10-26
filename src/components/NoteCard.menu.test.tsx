@@ -93,27 +93,69 @@ beforeEach(() => {
   useNotesStore.setState({ notes: [note], checkedIds: [] });
 });
 
-describe("发送选项子菜单小窗", () => {
-  it("主层只留触发行，子菜单条目按顺序投影：模板列表、检查后发送、保存为某次回复", () => {
+const labelsOf = (entries: unknown[]) =>
+  entries.map((entry) => (entry as { label?: string; kind: string }).label ?? (entry as { kind: string }).kind);
+
+describe("右键菜单骨架（方案 A）", () => {
+  it("一级：发送区三项、常用区、整理与转换两个小窗；无溯源时没有回复关联", () => {
     const html = renderMenu();
-    expect(html).toContain('data-flyout-trigger="发送选项"');
-    expect(html).not.toContain("其他模板（2）");
-    expect(html).not.toContain("整理需求");
-    const source = menu.flyouts.get("发送选项")!();
-    const labels = source.entries.map((entry) => (entry as { label?: string; kind: string }).label ?? entry);
-    expect(labels).toEqual([
-      "用模板发送",
-      "整理需求", "分析问题", "审查方案",
-      { kind: "separator", id: expect.any(String) },
-      "最小修改提示词", "翻译成中文",
-      "检查后发送…",
-      "保存为某次回复",
+    expect(html).toContain('data-flyout-trigger="用模板发送"');
+    expect(html).toContain('data-flyout-trigger="整理"');
+    expect(html).toContain('data-flyout-trigger="转换与导出"');
+    expect(html).not.toContain('data-flyout-trigger="回复关联"');
+    expect(html).not.toContain("发送选项");
+    expect(html.indexOf("检查后发送…")).toBeLessThan(html.indexOf("用模板发送"));
+    // 「保存为某次回复…」归入整理，不再混在发送选项里
+    expect(labelsOf(menu.flyouts.get("整理")!().entries)).toContain("保存为某次回复…");
+  });
+
+  it("有溯源时回复关联单独成小窗，五个操作都在里面", () => {
+    const linked: Note = {
+      ...note,
+      provenance: {
+        kind: "deliveryResult",
+        deliveryId: "d1",
+        capturedAtMs: 1,
+        sourceBundle: "com.example.chat",
+        sourceItemIds: [],
+      },
+    };
+    menu.items.clear();
+    renderToStaticMarkup(createElement(NoteCard, { note: linked }));
+    expect(labelsOf(menu.flyouts.get("回复关联")!().entries)).toEqual([
+      "查看发送内容", "检查这条回复…", "更换对应发送…", "占位符映射已失效", "这不是对应回复…",
     ]);
   });
 
-  it("小窗回传条目 id 后按原模板正文与原 id 发送", () => {
+});
+
+describe("用模板发送小窗", () => {
+  beforeEach(() => {
+    const store = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+    });
+  });
+
+  it("分组：当前目标推荐 → 其他模板，模板正文作为副标题，末尾管理入口与 ⌥ 提示", () => {
     renderMenu();
-    const source = menu.flyouts.get("发送选项")!();
+    const entries = menu.flyouts.get("用模板发送")!().entries;
+    expect(labelsOf(entries)).toEqual([
+      "当前目标推荐", "整理需求", "分析问题", "审查方案",
+      "separator",
+      "其他模板", "最小修改提示词", "翻译成中文",
+      "separator",
+      "管理模板…",
+      "按住 ⌥ 点击：先检查再发送",
+    ]);
+    const first = entries.find((entry) => (entry as { label?: string }).label === "最小修改提示词") as { hint?: string };
+    expect(first.hint).toBe("保留我的原指令： {内容} 不要改写此模板");
+  });
+
+  it("点选后按原模板正文与原 id 发送，并记为最近使用置顶", () => {
+    renderMenu();
+    const source = menu.flyouts.get("用模板发送")!();
     const entry = source.entries.find(
       (item) => (item as { label?: string }).label === "最小修改提示词"
     ) as { id: string };
@@ -121,5 +163,19 @@ describe("发送选项子菜单小窗", () => {
     expect(sendNotesToChat).toHaveBeenCalledExactlyOnceWith(
       [note.id], menu.snippets.remaining[0]!.text, { promptSnippetId: "custom-minimal" }
     );
+    renderMenu();
+    const labels = labelsOf(menu.flyouts.get("用模板发送")!().entries);
+    expect(labels.slice(0, 2)).toEqual(["最近使用", "最小修改提示词"]);
+    expect(labels.filter((label) => label === "最小修改提示词")).toHaveLength(1);
+  });
+
+  it("没有模板时只有可点击的「添加模板…」", () => {
+    const saved = menu.snippets;
+    menu.snippets = { prioritized: [], remaining: [] };
+    renderMenu();
+    const entries = menu.flyouts.get("用模板发送")!().entries as { label?: string; disabled?: boolean }[];
+    expect(entries.map((entry) => entry.label)).toEqual(["添加模板…"]);
+    expect(entries[0]!.disabled).toBe(false);
+    menu.snippets = saved;
   });
 });

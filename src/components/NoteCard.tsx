@@ -27,7 +27,8 @@ import {
   ListTodo,
   Link2,
   Merge,
-  MoreHorizontal,
+  Plus,
+  Settings2,
   Pencil,
   PenLine,
   Pin,
@@ -45,6 +46,8 @@ import {
 
 import { activeAliasOccurrences } from "@/lib/delivery/aliasEntities";
 import { imageCaption, imageListLabel } from "@/lib/format";
+import { usePanelHold } from "@/lib/panelHold";
+import { recentSnippetIds, recordSnippetUse } from "@/lib/recentSnippets";
 import { tip } from "@/lib/tip";
 import { t, useLocale, useT } from "@/lib/i18n";
 import { IconButton } from "@/components/ui/icon-button";
@@ -54,6 +57,7 @@ import { MoveToNotesButton } from "@/components/MoveToNotesButton";
 import {
   collectMenuFlyoutEntries,
   partitionCardMenuIds,
+  SINGLE_CARD_MENU_IDS,
 } from "@/components/cardMenuLayout";
 import { TargetSendMenuItem } from "@/components/TargetSendMenuItem";
 import {
@@ -98,18 +102,20 @@ import {
   currentDataGeneration,
   matchesDataGeneration,
 } from "@/lib/dataGeneration";
+import { emitTo } from "@tauri-apps/api/event";
 import { api } from "@/lib/tauri";
+import { SETTINGS_SECTION } from "@/lib/settingsSync";
 import { undoDeliveryBandCompletion } from "@/lib/delivery/executeDraft";
 import {
   closeMenuFlyout,
   createMenuFlyoutRegistry,
+  isMenuAltHeld,
   handleMenuFlyoutKeyDown,
 } from "@/lib/menuFlyout";
 import { cn } from "@/lib/utils";
 import {
   CLIPBOARD_ID,
   INBOX_ID,
-  groupContextMenuIds,
   NOTE_TAG_MAX_COUNT,
   noteImages,
   normalizeContextMenu,
@@ -426,14 +432,72 @@ export const NoteCard = memo(function NoteCard({
     <ContextMenuItem
       key={sn.id}
       title={sn.text}
-      onClick={() => sendSelfOrChecked(sn.text, { promptSnippetId: sn.id })}
+      onClick={() => {
+        recordSnippetUse(sn.id);
+        sendSelfOrChecked(
+          sn.text,
+          isMenuAltHeld()
+            ? { promptSnippetId: sn.id, forcePreflight: true }
+            : { promptSnippetId: sn.id }
+        );
+      }}
     >
       {sn.label}
     </ContextMenuItem>
   );
+  const openTemplateSettings = () => {
+    void api.openSettingsWindow();
+    void emitTo("settings", SETTINGS_SECTION, "snippets");
+  };
+  /** 「用模板发送」小窗：最近使用 → 当前目标推荐 → 其他模板，末尾管理入口。 */
+  const templateFlyoutSource = () => {
+    const recentIds = recentSnippetIds();
+    const all = [...snippetMenu.prioritized, ...snippetMenu.remaining];
+    const recent = recentIds
+      .map((id) => all.find((sn) => sn.id === id))
+      .filter((sn): sn is (typeof all)[number] => !!sn);
+    const recentSet = new Set(recent.map((sn) => sn.id));
+    const prioritized = snippetMenu.prioritized.filter((sn) => !recentSet.has(sn.id));
+    const remaining = snippetMenu.remaining.filter((sn) => !recentSet.has(sn.id));
+    const sections = [
+      { id: "recent", label: t("最近使用"), items: recent },
+      { id: "target", label: t("当前目标推荐"), items: prioritized },
+      { id: "other", label: t("其他模板"), items: remaining },
+    ].filter((section) => section.items.length > 0);
+    const source = createMenuFlyoutRegistry();
+    source.entries = collectMenuFlyoutEntries(
+      sections.length === 0 ? (
+        <ContextMenuItem onClick={openTemplateSettings}>
+          <Plus className="size-3.5" /> {t("添加模板…")}
+        </ContextMenuItem>
+      ) : (
+        <>
+          {sections.map((section, index) => (
+            <Fragment key={section.id}>
+              {index > 0 && <ContextMenuSeparator />}
+              {/* 只有一组时不出标题，免得一行字只为说明唯一的一组 */}
+              {sections.length > 1 && <ContextMenuLabel>{section.label}</ContextMenuLabel>}
+              {section.items.map(renderSnippet)}
+            </Fragment>
+          ))}
+          <ContextMenuSeparator />
+          <ContextMenuItem onClick={openTemplateSettings}>
+            <Settings2 className="size-3.5" /> {t("管理模板…")}
+          </ContextMenuItem>
+          <ContextMenuLabel>{t("按住 ⌥ 点击：先检查再发送")}</ContextMenuLabel>
+        </>
+      ),
+      source.register
+    );
+    return source;
+  };
+  // 多选：当前卡在多选集合内（与发送/删除/导出的整组语义同口径）
+  const multi = checked && checkedCount > 1;
+  const countSuffix = multi ? ` ${t("{n} 项", { n: checkedCount })}` : "";
 
   /** 右键菜单中段：按配置顺序渲染，卡片类型不适用返回 null。 */
   const renderMenuItem = (id: ContextMenuItemId): React.ReactNode => {
+    if (multi && SINGLE_CARD_MENU_IDS.has(id)) return null;
     switch (id) {
       case "preview":
         if (isLink) {
@@ -468,34 +532,20 @@ export const NoteCard = memo(function NoteCard({
           >
             <Send className="size-3.5" />
             {note.sectionId === CLIPBOARD_ID ? t("发送 / 添加") : t("发送到对话")}
+            {countSuffix}
             <ContextMenuShortcut>⌘⏎</ContextMenuShortcut>
           </TargetSendMenuItem>
         );
-      case "send-template": {
-        // 与底栏 ⌄ 的模板列表并存（底栏单选也显示）：右键路径服务未勾选直接
-        // 右键的场景。其他模板直接列在常用模板之后（用户 2026-09-11：不再折叠成子页）。
+      case "send-template":
         return (
-          <ContextMenuSub key={id}>
-            <ContextMenuSubTrigger>
-              <FileText className="mr-2 size-3.5" /> {t("用模板发送")}
-            </ContextMenuSubTrigger>
-            <ContextMenuSubContent className="w-44">
-              {snippetMenu.prioritized.map(renderSnippet)}
-              {snippetMenu.prioritized.length === 0 && snippetMenu.remaining.length === 0 && (
-                <ContextMenuItem disabled>
-                  {t("去设置里添加模板")}
-                </ContextMenuItem>
-              )}
-              {snippetMenu.remaining.length > 0 && (
-                <>
-                  <ContextMenuSeparator />
-                  {snippetMenu.remaining.map(renderSnippet)}
-                </>
-              )}
-            </ContextMenuSubContent>
-          </ContextMenuSub>
+          <MenuFlyoutTrigger
+            key={id}
+            label={t("用模板发送")}
+            icon={<FileText className="size-3.5" />}
+            width={240}
+            getSource={templateFlyoutSource}
+          />
         );
-      }
       case "send-preflight":
         return (
           <ContextMenuItem
@@ -503,6 +553,7 @@ export const NoteCard = memo(function NoteCard({
             onClick={() => sendSelfOrChecked(undefined, { forcePreflight: true })}
           >
             <ListChecks className="size-3.5" /> {t("检查后发送…")}
+            {countSuffix}
           </ContextMenuItem>
         );
       case "copy":
@@ -515,6 +566,7 @@ export const NoteCard = memo(function NoteCard({
         return (
           <ContextMenuItem key={id} onClick={() => void copyWithChecked()}>
             <ListOrdered className="size-3.5" /> {t("复制原文为列表（不脱敏）")}
+            {countSuffix}
             <ContextMenuShortcut>⌘C</ContextMenuShortcut>
           </ContextMenuItem>
         );
@@ -529,6 +581,7 @@ export const NoteCard = memo(function NoteCard({
         return (
           <ContextMenuItem key={id} onClick={exportSelfOrChecked}>
             <FileDown className="size-3.5" /> {t("导出笔记包…")}
+            {countSuffix}
           </ContextMenuItem>
         );
       case "edit":
@@ -564,8 +617,8 @@ export const NoteCard = memo(function NoteCard({
                 ? t("取消固定")
                 : t("固定 · 不被清理")
               : note.keep
-                ? t("取消 Pin")
-                : t("Pin · 发送后保留")}
+                ? t("取消常用")
+                : t("设为常用 · 发送后保留")}
             <ContextMenuShortcut>P</ContextMenuShortcut>
           </ContextMenuItem>
         );
@@ -584,7 +637,7 @@ export const NoteCard = memo(function NoteCard({
       case "rename":
         return (
           <ContextMenuItem key={id} onClick={startRename}>
-            <PenLine className="size-3.5" /> {t("重命名")}
+            <PenLine className="size-3.5" /> {t("重命名…")}
           </ContextMenuItem>
         );
       case "tags": {
@@ -595,51 +648,46 @@ export const NoteCard = memo(function NoteCard({
         );
         const current = new Set(note.tags ?? []);
         return (
-          <ContextMenuSub key={id}>
-            <ContextMenuSubTrigger>
-              <Tag className="mr-2 size-3.5" /> {t("标签")}
-            </ContextMenuSubTrigger>
-            <ContextMenuSubContent className="w-40">
-              {(catalog ?? []).map((tag) => (
-                <ContextMenuItem
-                  key={tag}
-                  disabled={
-                    !current.has(tag) && current.size >= NOTE_TAG_MAX_COUNT
-                  }
-                  onClick={() =>
-                    useNotesStore
-                      .getState()
-                      .setNoteTags(
-                        note.id,
-                        current.has(tag)
-                          ? [...current].filter((item) => item !== tag)
-                          : [...current, tag]
-                      )
-                  }
-                >
-                  <Check
-                    className={cn(
-                      "size-3.5",
-                      current.has(tag) ? "opacity-100" : "opacity-0"
-                    )}
-                  />
-                  <span className="truncate">{tag}</span>
-                </ContextMenuItem>
-              ))}
-              {!!catalog?.length && <ContextMenuSeparator />}
+          <Fragment key={id}>
+            <ContextMenuLabel>{t("标签")}</ContextMenuLabel>
+            {(catalog ?? []).map((tag) => (
               <ContextMenuItem
-                disabled={current.size >= NOTE_TAG_MAX_COUNT}
-                onClick={() => {
-                  useUIStore.getState().setFocusedId(note.id);
-                  tagInputPendingRef.current = true;
-                  tagInputOpenedAtRef.current = Date.now();
-                  setTagDraft("");
-                }}
+                key={tag}
+                disabled={
+                  !current.has(tag) && current.size >= NOTE_TAG_MAX_COUNT
+                }
+                onClick={() =>
+                  useNotesStore
+                    .getState()
+                    .setNoteTags(
+                      note.id,
+                      current.has(tag)
+                        ? [...current].filter((item) => item !== tag)
+                        : [...current, tag]
+                    )
+                }
               >
-                <PenLine className="size-3.5" /> {t("新标签…")}
+                <Check
+                  className={cn(
+                    "size-3.5",
+                    current.has(tag) ? "opacity-100" : "opacity-0"
+                  )}
+                />
+                <span className="truncate">{tag}</span>
               </ContextMenuItem>
-            </ContextMenuSubContent>
-          </ContextMenuSub>
+            ))}
+            <ContextMenuItem
+              disabled={current.size >= NOTE_TAG_MAX_COUNT}
+              onClick={() => {
+                useUIStore.getState().setFocusedId(note.id);
+                tagInputPendingRef.current = true;
+                tagInputOpenedAtRef.current = Date.now();
+                setTagDraft("");
+              }}
+            >
+              <Tag className="size-3.5" /> {t("新标签…")}
+            </ContextMenuItem>
+          </Fragment>
         );
       }
             case "ai-to-task":
@@ -794,6 +842,7 @@ export const NoteCard = memo(function NoteCard({
   const [titleDraft, setTitleDraft] = useState("");
   // 新标签内联输入（右键 标签 → 新标签…）；null = 未在输入
   const [tagDraft, setTagDraft] = useState<string | null>(null);
+  usePanelHold(renaming || tagDraft !== null, "inline-input");
   // 标记「本次菜单关闭是为了打开标签输入」——见 ContextMenuContent 的
   // onCloseAutoFocus：阻止焦点归还卡片，避免输入框挂载瞬间被 blur 关闭
   const tagInputPendingRef = useRef(false);
@@ -857,82 +906,62 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
     return source;
   };
 
-  const relationMenuItem = note.provenance ? (
-    <ContextMenuSub key="relation">
-      <ContextMenuSubTrigger>
-        <Link2 className="mr-2 size-3.5" /> {t("对应回复")}
-      </ContextMenuSubTrigger>
-      <ContextMenuSubContent className="w-44">
-        <ContextMenuItem onClick={openProvenanceSource}>
-          <Expand className="size-3.5" /> {t("查看发送内容")}
-        </ContextMenuItem>
-        <ContextMenuItem onClick={() => requestResultVerification(
-          note.id,
-          cardRef.current?.querySelector<HTMLElement>("[data-drag-handle]") ?? cardRef.current
-        )}>
-          <ShieldCheck className="size-3.5" /> {t("检查这条回复")}
-        </ContextMenuItem>
-        <ContextMenuItem onClick={() => requestResultLinkForNote(note.id, cardRef.current)}>
-          <Link2 className="size-3.5" /> {t("更换对应发送")}
-        </ContextMenuItem>
-        <ContextMenuItem onClick={() => requestPlaceholderPreview(note.id, cardRef.current)}>
-          <ScanText className="size-3.5" />
-          {deliveryRedactionMapAvailable(note.provenance.deliveryId)
-            ? t("恢复占位符预览")
-            : t("占位符映射已失效")}
-        </ContextMenuItem>
-        <ContextMenuItem onClick={() => requestResultUnlink(note.id, cardRef.current)}>
-          <Unlink className="size-3.5" /> {t("这不是对应回复")}
-        </ContextMenuItem>
-      </ContextMenuSubContent>
-    </ContextMenuSub>
-  ) : (
+  // 回复关联：有溯源时单独一个小窗；没有时「保存为某次回复…」放进整理
+  const relationItems = note.provenance ? (
+    <>
+      <ContextMenuItem onClick={openProvenanceSource}>
+        <Expand className="size-3.5" /> {t("查看发送内容")}
+      </ContextMenuItem>
+      <ContextMenuItem onClick={() => requestResultVerification(
+        note.id,
+        cardRef.current?.querySelector<HTMLElement>("[data-drag-handle]") ?? cardRef.current
+      )}>
+        <ShieldCheck className="size-3.5" /> {t("检查这条回复…")}
+      </ContextMenuItem>
+      <ContextMenuItem onClick={() => requestResultLinkForNote(note.id, cardRef.current)}>
+        <Link2 className="size-3.5" /> {t("更换对应发送…")}
+      </ContextMenuItem>
+      <ContextMenuItem onClick={() => requestPlaceholderPreview(note.id, cardRef.current)}>
+        <ScanText className="size-3.5" />
+        {deliveryRedactionMapAvailable(note.provenance.deliveryId)
+          ? t("恢复占位符预览…")
+          : t("占位符映射已失效")}
+      </ContextMenuItem>
+      <ContextMenuItem onClick={() => requestResultUnlink(note.id, cardRef.current)}>
+        <Unlink className="size-3.5" /> {t("这不是对应回复…")}
+      </ContextMenuItem>
+    </>
+  ) : null;
+  const saveAsReplyItem = note.provenance ? null : (
     <ContextMenuItem
       key="relation"
       onClick={() => requestResultLinkForNote(note.id, cardRef.current)}
     >
-      <Link2 className="size-3.5" /> {t("保存为某次回复")}
+      <Link2 className="size-3.5" /> {t("保存为某次回复…")}
     </ContextMenuItem>
   );
 
-  // 多选时将「移动到」提升到合并之后；单选仍保留用户配置的组内顺序。
+  // 多选时将「移动到」提升到合并之后；单选仍保留用户配置的区内顺序。
   const promotedMoveItem =
     mergeCount >= 2 && menuIds.includes("move") ? renderMenuItem("move") : null;
   const menuLayout = partitionCardMenuIds(
     promotedMoveItem ? menuIds.filter((id) => id !== "move") : menuIds,
     isClip
   );
-  const primaryMenuItems = menuLayout.primary.map(renderMenuItem).filter(Boolean);
-  const sendOptions = [
-    ...menuLayout.sendOptions.map(renderMenuItem).filter(Boolean),
-    relationMenuItem,
+  const sendMenuItems = menuLayout.send.map(renderMenuItem).filter(Boolean);
+  const mainMenuItems = menuLayout.main.map(renderMenuItem).filter(Boolean);
+  const organizeItems = [
+    ...menuLayout.organize.map(renderMenuItem).filter(Boolean),
+    ...(saveAsReplyItem ? [saveAsReplyItem] : []),
   ];
-  const moreSections = groupContextMenuIds(menuLayout.more)
-    .map((group) => ({
-      ...group,
-      items: group.ids.map(renderMenuItem).filter(Boolean),
-    }))
-    .filter((group) => group.items.length > 0);
-  // 子菜单改为独立原生小窗（用户 2026-09-11 选定）：展开时才把 JSX 投影成条目
-  const sendFlyoutSource = () => {
+  const convertItems = menuLayout.convert.map(renderMenuItem).filter(Boolean);
+  // 子菜单是独立原生小窗（用户 2026-09-11 选定）：展开时才把 JSX 投影成条目
+  const flyoutSourceOf = (node: React.ReactNode) => () => {
     const source = createMenuFlyoutRegistry();
-    source.entries = collectMenuFlyoutEntries(sendOptions, source.register);
+    source.entries = collectMenuFlyoutEntries(node, source.register);
     return source;
   };
-  const moreFlyoutSource = () => {
-    const source = createMenuFlyoutRegistry();
-    source.entries = collectMenuFlyoutEntries(
-      moreSections.map((group, index) => (
-        <Fragment key={group.id}>
-          {index > 0 && <ContextMenuSeparator />}
-          <ContextMenuLabel>{t(group.label)}</ContextMenuLabel>
-          {group.items}
-        </Fragment>
-      )),
-      source.register
-    );
-    return source;
-  };
+  const hasSubmenus = organizeItems.length > 0 || convertItems.length > 0 || !!relationItems;
 
   return (
     <ContextMenu onOpenChange={(open) => {
@@ -1764,6 +1793,7 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
           }
         }}
       >
+        {multi && <ContextMenuLabel>{t("已选 {n} 项", { n: checkedCount })}</ContextMenuLabel>}
         {/* 多选场景优先展示合并与移动；移动仍遵循用户显隐配置。 */}
         {mergeCount >= 2 && (
           <ContextMenuItem onClick={() => mergeNoteWithChecked(note.id)}>
@@ -1772,27 +1802,37 @@ const NEUTRAL_HEADER_GRAY = "#7c8494";
         )}
         {promotedMoveItem}
         {mergeCount >= 2 && <ContextMenuSeparator />}
-        {primaryMenuItems}
-        {(sendOptions.length > 0 || moreSections.length > 0) && <ContextMenuSeparator />}
-        {sendOptions.length > 0 && (
+        {sendMenuItems}
+        {sendMenuItems.length > 0 && mainMenuItems.length > 0 && <ContextMenuSeparator />}
+        {mainMenuItems}
+        {hasSubmenus && <ContextMenuSeparator />}
+        {organizeItems.length > 0 && (
           <MenuFlyoutTrigger
-            label={t("发送选项")}
-            icon={<Send className="size-3.5" />}
-            getSource={sendFlyoutSource}
+            label={t("整理")}
+            icon={<FolderInput className="size-3.5" />}
+            getSource={flyoutSourceOf(organizeItems)}
           />
         )}
-        {moreSections.length > 0 && (
+        {convertItems.length > 0 && (
           <MenuFlyoutTrigger
-            label={t("更多操作")}
-            icon={<MoreHorizontal className="size-3.5" />}
+            label={t("转换与导出")}
+            icon={<Sparkles className="size-3.5" />}
             width={224}
-            getSource={moreFlyoutSource}
+            getSource={flyoutSourceOf(convertItems)}
+          />
+        )}
+        {relationItems && (
+          <MenuFlyoutTrigger
+            label={t("回复关联")}
+            icon={<Link2 className="size-3.5" />}
+            width={224}
+            getSource={flyoutSourceOf(relationItems)}
           />
         )}
         <ContextMenuSeparator />
         <ContextMenuItem variant="destructive" onClick={deleteSelfOrChecked}>
           <Trash2 className="size-3.5" /> {t("删除")}
-          {checked && checkedCount > 1 ? ` ${t("{n} 项", { n: checkedCount })}` : ""}
+          {countSuffix}
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>

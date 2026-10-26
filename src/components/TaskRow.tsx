@@ -12,7 +12,6 @@ import {
   ListChecks,
   Plus,
   Pencil,
-  MoreHorizontal,
   Repeat,
   Send,
   Sparkles,
@@ -21,7 +20,6 @@ import {
   Lightbulb,
 } from "lucide-react";
 
-import { collectMenuFlyoutEntries } from "@/components/cardMenuLayout";
 import { MenuFlyoutTrigger } from "@/components/MenuFlyoutTrigger";
 import {
   ContextMenu,
@@ -488,26 +486,6 @@ function TaskMenu({ task, onEdit, onReminder }: {
 }) {
   const t = useT();
   const pendingAction = useRef<(() => void) | null>(null);
-  // 子菜单改为独立原生小窗（与卡片菜单一致）：展开时才把 JSX 投影成条目
-  const moreFlyoutSource = () => {
-    const source = createMenuFlyoutRegistry();
-    source.entries = collectMenuFlyoutEntries(
-      <>
-        <TargetSendMenuItem onClick={() => void sendTaskToChat(task.id)}>
-          <Send className="size-3.5" /> {t("发送到对话")}
-        </TargetSendMenuItem>
-        <TargetSendMenuItem onClick={() => void sendTaskToChat(task.id, { forcePreflight: true })}>
-          <ListChecks className="size-3.5" /> {t("检查后发送…")}
-        </TargetSendMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem onClick={() => void splitSubtasks(task.id)}>
-          <Sparkles className="size-3.5" /> {t("AI 拆解子任务")}
-        </ContextMenuItem>
-      </>,
-      source.register
-    );
-    return source;
-  };
   return (
     <ContextMenuContent
       className="w-44"
@@ -523,6 +501,14 @@ function TaskMenu({ task, onEdit, onReminder }: {
         run();
       }}
     >
+      {/* 与笔记卡同一骨架：发送区 → 常用区 → 二级 → 删除（拆解子任务不是发送操作，放常用区） */}
+      <TargetSendMenuItem onClick={() => void sendTaskToChat(task.id)}>
+        <Send className="size-3.5" /> {t("发送到对话")}
+      </TargetSendMenuItem>
+      <TargetSendMenuItem onClick={() => void sendTaskToChat(task.id, { forcePreflight: true })}>
+        <ListChecks className="size-3.5" /> {t("检查后发送…")}
+      </TargetSendMenuItem>
+      <ContextMenuSeparator />
       <ContextMenuItem onClick={() => useNotesStore.getState().setTaskStatus(
         task.id, task.status === "done" ? "todo" : "done"
       )}>
@@ -534,10 +520,13 @@ function TaskMenu({ task, onEdit, onReminder }: {
         <CircleDot className="size-3.5" /> {task.status === "doing" ? t("恢复为待办") : t("标记进行中")}
       </ContextMenuItem>
       <ContextMenuItem onSelect={() => { pendingAction.current = onEdit; }}>
-        <Pencil className="size-3.5" /> {t("编辑任务")}
+        <Pencil className="size-3.5" /> {t("编辑任务…")}
       </ContextMenuItem>
       <ContextMenuItem onSelect={() => { pendingAction.current = onReminder; }}>
-        <AlarmClock className="size-3.5" /> {task.dueAt === null ? t("设置提醒时间") : t("修改提醒时间")}
+        <AlarmClock className="size-3.5" /> {task.dueAt === null ? t("设置提醒时间…") : t("修改提醒时间…")}
+      </ContextMenuItem>
+      <ContextMenuItem onClick={() => void splitSubtasks(task.id)}>
+        <Sparkles className="size-3.5" /> {t("AI 拆解子任务")}
       </ContextMenuItem>
       {task.kind === "spark" && (
         <ContextMenuItem onClick={() => useNotesStore.getState().sparkToTask(task.id)}>
@@ -570,13 +559,6 @@ function TaskMenu({ task, onEdit, onReminder }: {
         </div>
       </div>
       <MoveToSectionFlyout task={task} />
-      <ContextMenuSeparator />
-      <MenuFlyoutTrigger
-        label={t("更多操作")}
-        icon={<MoreHorizontal className="size-3.5" />}
-        width={176}
-        getSource={moreFlyoutSource}
-      />
       <ContextMenuSeparator />
       <ContextMenuItem
         variant="destructive"

@@ -5,6 +5,7 @@ import { ContextMenu as ContextMenuPrimitive } from "radix-ui"
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow"
 
 import { clampedContextMenuX } from "@/lib/contextMenuAnchor"
+import { usePanelHold } from "@/lib/panelHold"
 import { cn } from "@/lib/utils"
 import { ChevronRightIcon, CheckIcon } from "lucide-react"
 
@@ -128,6 +129,8 @@ function ContextMenuContent({
 }: React.ComponentProps<typeof ContextMenuPrimitive.Content> & {
   side?: "top" | "right" | "bottom" | "left"
 }) {
+  // 菜单开着时贴边隐藏不计时（子菜单小窗在面板外）；只挡光标计时，不挡失焦
+  usePanelHold(true, "context-menu", { focus: false, lingerMs: 800 })
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Content

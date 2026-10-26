@@ -12,6 +12,8 @@ export type MenuFlyoutEntry =
       kind: "item";
       id: string;
       label: string;
+      /** 第二行副标题（如模板正文预览）。 */
+      hint?: string;
       /** lucide 图标名（小窗按白名单映射；缺省无图标）。 */
       icon?: string;
       shortcut?: string;
@@ -52,7 +54,9 @@ export function createMenuFlyoutRegistry(): MenuFlyoutSource & {
 /** 条目估算高度（pt）：与小窗样式一致，只用于首帧摆放，真实高度由小窗回报。 */
 export function estimateMenuFlyoutHeight(entries: MenuFlyoutEntry[]): number {
   return entries.reduce(
-    (sum, entry) => sum + (entry.kind === "item" ? 26 : entry.kind === "label" ? 22 : 9),
+    (sum, entry) =>
+      sum +
+      (entry.kind === "item" ? (entry.hint ? 40 : 26) : entry.kind === "label" ? 22 : 9),
     8
   );
 }
@@ -72,6 +76,22 @@ let pointerInside = false;
 let triggerHovered = false;
 let closeTimer: number | null = null;
 let listenersArmed = false;
+/** ⌥ 是否按着：小窗不可聚焦，键盘事件仍送达主窗口，点选条目时据此改走「先检查再发送」。 */
+let altHeld = false;
+if (typeof window !== "undefined") {
+  const track = (event: KeyboardEvent) => {
+    altHeld = event.altKey;
+  };
+  window.addEventListener("keydown", track, true);
+  window.addEventListener("keyup", track, true);
+  window.addEventListener("blur", () => {
+    altHeld = false;
+  });
+}
+
+export function isMenuAltHeld(): boolean {
+  return altHeld;
+}
 
 const ESCAPE_KEYS = new Set(["Escape", "ArrowLeft"]);
 const FORWARD_KEYS = new Set(["ArrowUp", "ArrowDown", "Home", "End", "Enter", " "]);

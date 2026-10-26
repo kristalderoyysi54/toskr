@@ -54,6 +54,7 @@ import {
 } from "@/lib/resultVerification";
 import { intlLocale, useT, type MessageKey } from "@/lib/i18n";
 import { tip } from "@/lib/tip";
+import { usePanelHold } from "@/lib/panelHold";
 import { cn } from "@/lib/utils";
 import { isDataOperationLocked } from "@/store/dataOperationStore";
 import { useNotesStore } from "@/store/notesStore";
@@ -212,6 +213,7 @@ export function ResultVerificationDialog() {
   const aiBaseUrl = useNotesStore((state) => state.settings.aiBaseUrl);
   const aiModel = useNotesStore((state) => state.settings.aiModel);
   const [session, setSession] = useState<VerificationSession | null>(null);
+  usePanelHold(session !== null, "result-verify");
   const [expectation, setExpectation] = useState<ResultVerificationExpectation>({
     format: "auto",
     requiredJsonFields: [],

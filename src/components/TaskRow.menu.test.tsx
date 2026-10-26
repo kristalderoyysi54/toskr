@@ -94,35 +94,28 @@ beforeEach(() => {
 });
 
 describe("任务菜单", () => {
-  it.each([TaskRow, TaskTile])("行与横栏菜单都优先完成、编辑和提醒，发送留在更多操作", (Component) => {
+  it.each([TaskRow, TaskTile])("行与横栏菜单与笔记卡同骨架：发送区在顶部，拆解子任务在常用区，不再有更多操作", (Component) => {
     const html = renderToStaticMarkup(createElement(Component, { task, now: 10 }));
-    const firstLevel = html.split('data-task-menu=""')[1]!.split('data-submenu="更多操作"')[0]!;
-    expect(firstLevel).toContain("标记完成");
-    expect(firstLevel).toContain("编辑任务");
-    expect(firstLevel).toContain("设置提醒时间");
-    expect(firstLevel).toContain("优先级");
-    expect(firstLevel).not.toMatch(/发送到对话|检查后发送|AI 拆解子任务/);
-    expect(html).toContain("更多操作");
-    expect(html).toContain("AI 拆解子任务");
+    const menuHtml = html.split('data-task-menu=""')[1]!;
+    const order = ["发送到对话", "检查后发送…", "标记完成", "编辑任务…", "设置提醒时间…", "AI 拆解子任务", "优先级"];
+    const positions = order.map((label) => menuHtml.indexOf(label));
+    expect(positions.every((pos) => pos >= 0)).toBe(true);
+    expect([...positions].sort((x, y) => x - y)).toEqual(positions);
+    expect(html).not.toContain("更多操作");
     expect(html).toContain('data-variant="destructive"');
   });
 
-  it("更多操作小窗的条目与动作投影自同一份菜单 JSX", () => {
+  it("一级菜单的发送与拆解直接触发原动作", () => {
     renderToStaticMarkup(createElement(TaskRow, { task, now: 10 }));
-    const source = menu.flyouts.get("更多操作")!();
-    expect(source.entries.map((entry) => entry.label ?? entry.kind)).toEqual([
-      "发送到对话", "检查后发送…", "separator", "AI 拆解子任务",
-    ]);
-    const byLabel = (label: string) => source.handlers.get(source.entries.find((e) => e.label === label)!.id)!;
-    byLabel("AI 拆解子任务")();
+    menu.items.get("AI 拆解子任务")!.onClick!();
     expect(splitSubtasks).toHaveBeenCalledWith(task.id);
-    byLabel("检查后发送…")();
+    menu.items.get("检查后发送…")!.onClick!();
     expect(sendTaskToChat).toHaveBeenCalledWith(task.id, { forcePreflight: true });
   });
 
   it("编辑在菜单关闭后才打开真实任务编辑态，避免焦点被菜单抢回", () => {
     renderToStaticMarkup(createElement(TaskRow, { task, now: 10 }));
-    menu.items.get("编辑任务")!.onSelect!();
+    menu.items.get("编辑任务…")!.onSelect!();
     expect(useUIStore.getState().editingId).toBeNull();
     const preventDefault = vi.fn();
     menu.close!({ preventDefault });

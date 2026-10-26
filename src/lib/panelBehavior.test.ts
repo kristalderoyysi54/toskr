@@ -31,4 +31,10 @@ describe("panel shortcut hold behavior", () => {
       })
     ).toBe(false);
   });
+
+  it("后续界面登记存在时失焦不收起", () => {
+    const base = { open: true, pinned: false, hideOnBlur: true, shortcutHoldOpen: false };
+    expect(shouldHidePanelOnBlur({ ...base, held: true })).toBe(false);
+    expect(shouldHidePanelOnBlur({ ...base, held: false })).toBe(true);
+  });
 });

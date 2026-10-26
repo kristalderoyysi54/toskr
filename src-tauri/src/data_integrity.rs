@@ -24,7 +24,7 @@ use crate::activity::{
 use crate::data_crypto;
 use crate::storage::{DATA_FILE, MEDIA_DIR};
 
-pub const MAX_STORE_VERSION: u64 = 26;
+pub const MAX_STORE_VERSION: u64 = 27;
 const MISSING_REVISION: &str = "missing";
 const MEDIA_GC_FILE: &str = "toskr-media-gc.json";
 const DATA_JOURNAL_FILE: &str = "toskr-data-transaction.json";
@@ -4384,7 +4384,7 @@ mod tests {
                 "activationWithin60s": null
             }
         });
-        assert_eq!(MAX_STORE_VERSION, 26);
+        assert_eq!(MAX_STORE_VERSION, 27);
         assert!(validate_settings_value_for_version(
             Some(&current),
             MAX_STORE_VERSION

@@ -12,6 +12,10 @@ export function shouldHidePanelOnBlur(input: {
   pinned: boolean;
   hideOnBlur: boolean;
   shortcutHoldOpen: boolean;
+  /** 预检、对话框、行内输入等后续界面存在（panelHold 的失焦豁免登记）。 */
+  held?: boolean;
 }): boolean {
-  return input.open && !input.pinned && input.hideOnBlur && !input.shortcutHoldOpen;
+  return (
+    input.open && !input.pinned && input.hideOnBlur && !input.shortcutHoldOpen && !input.held
+  );
 }

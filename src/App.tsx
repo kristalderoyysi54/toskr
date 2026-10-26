@@ -224,6 +224,7 @@ import {
   shouldHidePanelOnBlur,
   triggerKeepsPanelOpen,
 } from "@/lib/panelBehavior";
+import { panelHeldAgainstBlur } from "@/lib/panelHold";
 import { applyRuntimeSettings } from "@/lib/runtimeSettings";
 import {
   broadcastSettings,
@@ -2034,6 +2035,7 @@ export default function App() {
             pinned: isPinned,
             hideOnBlur,
             shortcutHoldOpen,
+            held: panelHeldAgainstBlur(),
           })
         ) {
           return;

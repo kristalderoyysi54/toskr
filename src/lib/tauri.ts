@@ -909,6 +909,8 @@ export const api = {
   /** 面板宽度/上下缘拖拽期间下发，贴边隐藏暂停计时。 */
   setPanelDragActive: (active: boolean) =>
     invoke("set_panel_drag_active", { active }),
+  /** 面板有后续界面待操作（panelHold 汇总）：贴边隐藏暂停光标计时。 */
+  setPanelHold: (active: boolean) => invoke("set_panel_hold", { active }),
   /** 立即贴边滑出；explicit=true 用于 Esc，可越过快捷键保护与图钉。 */
   edgeHideNow: (explicit = false) =>
     invoke<boolean>("edge_hide_now", { explicit }),

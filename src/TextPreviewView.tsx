@@ -19,6 +19,7 @@ import {
   RichImageBlock,
   RichNoteContent,
   RichNoteTextEditor,
+  type RichTextCaret,
 } from "@/components/RichNoteContent";
 import {
   SendTargetAppItem,
@@ -65,6 +66,12 @@ import {
   toggleTaskListItem,
 } from "@/lib/markdown";
 import { textareaSelectionAnchor } from "@/lib/selectionAnchor";
+import {
+  domTextOffset,
+  mapCaretBetweenTexts,
+  rangeAtTextOffset,
+  revealTextareaSelection,
+} from "@/lib/caretLocate";
 import { springSnappy } from "@/lib/motion";
 import {
   hasMixedNoteContent,
@@ -453,6 +460,17 @@ export default function TextPreviewView() {
     bottom: number;
   } | null>(null);
   const pendingSelectionRef = useRef<TextSelection | null>(null);
+  // 双击进编辑：光标定位后闪一下高亮行；图文卡的落点按「文字块 + 块内选区」传给编辑器
+  const locateOnEnterRef = useRef(false);
+  const pendingRichCaretRef = useRef<RichTextCaret | null>(null);
+  const [caretHighlight, setCaretHighlight] = useState<React.CSSProperties | null>(null);
+  const caretHighlightGuardRef = useRef(0);
+  // 退出编辑：记下光标所在位置，回到查看态后滚到同一处
+  const restoreViewCaretRef = useRef<
+    | { kind: "flat"; text: string; offset: number }
+    | { kind: "rich"; caret: RichTextCaret }
+    | null
+  >(null);
   const pendingTextEditRef = useRef<SelectionEdit | null>(null);
   const pendingTextEditImagesRef = useRef<string[] | null>(null);
   const pendingTextEditBeforeRef = useRef<TextEditSnapshot | null>(null);
@@ -1311,6 +1329,76 @@ export default function TextPreviewView() {
     }
   }, [tagInputOpen]);
 
+  /** 光标滚到可见中央；双击进入时再在该行叠 2s 呼吸框，长文本里一眼找到光标。 */
+  const locateCaret = (textarea: HTMLTextAreaElement, selection: TextSelection) => {
+    const line = revealTextareaSelection(textarea, selection, bodyRef.current);
+    const frame = contentFrameRef.current;
+    if (!locateOnEnterRef.current || !line || !frame) return;
+    locateOnEnterRef.current = false;
+    const frameRect = frame.getBoundingClientRect();
+    const textareaRect = textarea.getBoundingClientRect();
+    caretHighlightGuardRef.current = performance.now() + 200;
+    setCaretHighlight({
+      left: textareaRect.left - frameRect.left - 4,
+      top: line.top - frameRect.top - 2,
+      width: textarea.clientWidth + 8,
+      height: line.bottom - line.top + 4,
+    });
+  };
+
+  // 定位高亮：2s 自动消失；键入/点按/手动滚动即撤（定位自身触发的 scroll 除外）
+  useEffect(() => {
+    if (!caretHighlight) return;
+    const dismiss = () => setCaretHighlight(null);
+    const onScroll = () => {
+      if (performance.now() >= caretHighlightGuardRef.current) dismiss();
+    };
+    const timer = window.setTimeout(dismiss, 2000);
+    const body = bodyRef.current;
+    window.addEventListener("keydown", dismiss, { capture: true });
+    window.addEventListener("pointerdown", dismiss, { capture: true });
+    body?.addEventListener("scroll", onScroll, { capture: true });
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("keydown", dismiss, { capture: true });
+      window.removeEventListener("pointerdown", dismiss, { capture: true });
+      body?.removeEventListener("scroll", onScroll, { capture: true });
+    };
+  }, [caretHighlight]);
+  useEffect(() => {
+    if (!editing) setCaretHighlight(null);
+  }, [editing]);
+
+  // 退出编辑回到查看态：滚到编辑时光标所在处（否则长文本总是回到顶部）
+  useEffect(() => {
+    if (editing) return;
+    const target = restoreViewCaretRef.current;
+    restoreViewCaretRef.current = null;
+    if (!target) return;
+    const frame = window.requestAnimationFrame(() => {
+      const body = bodyRef.current;
+      if (!body) return;
+      let range: Range | null = null;
+      if (target.kind === "rich") {
+        const block = body.querySelector<HTMLElement>(
+          `[data-rich-text-block="${target.caret.block}"]`
+        );
+        if (block) range = rangeAtTextOffset(block, target.caret.selection.start);
+      } else {
+        const root = previewContentRef.current;
+        const offset = root
+          ? mapCaretBetweenTexts(target.text, root.textContent ?? "", target.offset)
+          : null;
+        if (root && offset !== null) range = rangeAtTextOffset(root, offset);
+      }
+      const rect = range?.getClientRects()[0] ?? range?.getBoundingClientRect();
+      if (!rect || (!rect.height && !rect.top)) return;
+      const box = body.getBoundingClientRect();
+      body.scrollTop += rect.top - box.top - body.clientHeight / 2;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [editing]);
+
   // 编辑态聚焦（WKWebView 焦点惰性 → 延时）
   useEffect(() => {
     if (editing) {
@@ -1341,7 +1429,11 @@ export default function TextPreviewView() {
         }
         textarea.focus();
         const selection = pendingSelectionRef.current;
-        if (selection) textarea.setSelectionRange(selection.start, selection.end);
+        if (selection) {
+          textarea.setSelectionRange(selection.start, selection.end);
+          locateCaret(textarea, selection);
+        }
+        locateOnEnterRef.current = false;
         pendingSelectionRef.current = null;
       }, 30);
     }
@@ -1449,6 +1541,25 @@ export default function TextPreviewView() {
     );
   };
 
+  /** 退出编辑前记下光标位置（图文卡看焦点所在文字块），查看态据此滚回原处。 */
+  const rememberViewCaret = () => {
+    const active = document.activeElement;
+    if (active instanceof HTMLTextAreaElement && active.dataset.richTextBlock !== undefined) {
+      restoreViewCaretRef.current = {
+        kind: "rich",
+        caret: {
+          block: Number(active.dataset.richTextBlock),
+          selection: { start: active.selectionStart, end: active.selectionEnd },
+        },
+      };
+      return;
+    }
+    const textarea = textareaRef.current;
+    restoreViewCaretRef.current = textarea
+      ? { kind: "flat", text: textarea.value, offset: textarea.selectionStart }
+      : null;
+  };
+
   const save = () => {
     const current = noteRef.current;
     if (!previewIsEditable(current)) return;
@@ -1499,6 +1610,7 @@ export default function TextPreviewView() {
             looksLikeMarkdown(current.text)
         );
       }
+      rememberViewCaret();
       setTextSelection(null);
       setEditing(false);
       return;
@@ -1552,6 +1664,7 @@ export default function TextPreviewView() {
       );
     }
     sessionPastedImagesRef.current.clear();
+    rememberViewCaret();
     setTextSelection(null);
     textEditHistoryRef.current = freshTextEditHistory();
     setEditing(false);
@@ -2072,6 +2185,49 @@ export default function TextPreviewView() {
     pendingSelectionRef.current = mapped;
   };
   syncPreviewSelectionRef.current = syncPreviewSelection;
+
+  /** 查看态屏幕坐标 → 源文本光标（渲染文本与源文本不同，按片段回源定位）。 */
+  const caretSelectionFromPoint = (x: number, y: number): TextSelection | null => {
+    const root = previewContentRef.current;
+    if (!root || !note || hasMixedNoteContent(note.contentBlocks)) return null;
+    const caret = document.caretRangeFromPoint?.(x, y);
+    if (!caret || !root.contains(caret.startContainer)) return null;
+    const offset = mapCaretBetweenTexts(
+      root.textContent ?? "",
+      note.text,
+      domTextOffset(root, caret.startContainer, caret.startOffset)
+    );
+    return offset === null ? null : { start: offset, end: offset };
+  };
+
+  /** 图文卡查看态双击 → 文字块内位置：块内已选中词沿用选区，否则按落点取光标。 */
+  const richCaretFromPoint = (x: number, y: number): RichTextCaret | null => {
+    const caret = document.caretRangeFromPoint?.(x, y);
+    if (!caret) return null;
+    const node = caret.startContainer;
+    const element = node instanceof Element ? node : node.parentElement;
+    const block = element?.closest<HTMLElement>("[data-rich-text-block]");
+    if (!block || !bodyRef.current?.contains(block)) return null;
+    const index = Number(block.dataset.richTextBlock);
+    const domSelection = window.getSelection();
+    const range = domSelection?.rangeCount ? domSelection.getRangeAt(0) : null;
+    if (
+      range &&
+      !range.collapsed &&
+      block.contains(range.startContainer) &&
+      block.contains(range.endContainer)
+    ) {
+      return {
+        block: index,
+        selection: {
+          start: domTextOffset(block, range.startContainer, range.startOffset),
+          end: domTextOffset(block, range.endContainer, range.endOffset),
+        },
+      };
+    }
+    const offset = domTextOffset(block, node, caret.startOffset);
+    return { block: index, selection: { start: offset, end: offset } };
+  };
 
   const applySelectionEdit = (edit: SelectionEdit) => {
     if (!previewIsEditable(note) || hasMixedNoteContent(note.contentBlocks)) {
@@ -2686,6 +2842,13 @@ export default function TextPreviewView() {
 
       {/* 正文：预览（Markdown 渲染 / 代码高亮 / 原文）或编辑；双击进入编辑 */}
       <div ref={contentFrameRef} className="relative min-h-0 flex-1">
+        {caretHighlight && (
+          <div
+            aria-hidden
+            className="locate-highlight pointer-events-none absolute z-10"
+            style={caretHighlight}
+          />
+        )}
         <motion.div
           key={gen}
           initial={{ opacity: 0, y: 6 }}
@@ -2701,8 +2864,25 @@ export default function TextPreviewView() {
             writable ? "pt-16" : "pt-12",
             editing && "bg-primary/[0.04] ring-1 ring-inset ring-primary/25"
           )}
-          onDoubleClick={() => {
-            if (editable && !editing) setEditing(true);
+          onDoubleClick={(event) => {
+            if (!editable || editing) return;
+            // 双击词语时 pointerup 已把选中词记入 pendingSelectionRef；落在空白/
+            // 标点等选不出词的位置时按落点取光标，避免进编辑后光标停在开头
+            if (mixedContent) {
+              pendingRichCaretRef.current = richCaretFromPoint(
+                event.clientX,
+                event.clientY
+              );
+            } else if (!pendingSelectionRef.current) {
+              pendingSelectionRef.current = caretSelectionFromPoint(
+                event.clientX,
+                event.clientY
+              );
+            }
+            locateOnEnterRef.current = !!(mixedContent
+              ? pendingRichCaretRef.current
+              : pendingSelectionRef.current);
+            setEditing(true);
           }}
         >
           {editing && writable ? (
@@ -2749,6 +2929,11 @@ export default function TextPreviewView() {
             <RichNoteTextEditor
               key={note.id}
               blocks={draftContentBlocks}
+              initialCaret={pendingRichCaretRef.current}
+              onCaretPlaced={(textarea, selection) => {
+                pendingRichCaretRef.current = null;
+                locateCaret(textarea, selection);
+              }}
               previewSource={imagePreviewSource}
               editContext={imageEditContext}
               onOpenImage={(files, index) => {

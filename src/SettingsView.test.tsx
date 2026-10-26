@@ -4,12 +4,13 @@ import ts from "typescript";
 import settingsSource from "./SettingsView.tsx?raw";
 
 import {
+  ContextMenuPreview,
   FeaturesSection,
   GeneralSection,
   SettingsChildNavigation,
   SettingsNavigation,
 } from "./SettingsView";
-import { defaultSettings } from "@/store/notesStore";
+import { defaultSettings, normalizeContextMenu } from "@/store/notesStore";
 import { normalizeSettingsSearchText } from "@/lib/settingsSearch";
 
 describe("设置导航与层级", () => {
@@ -160,5 +161,25 @@ describe("设置导航与层级", () => {
     expect(open).toContain("设置消息监听");
     expect(open).toContain("设置秘文");
     expect(open).toContain("设置订阅");
+  });
+});
+
+describe("右键菜单设置预览", () => {
+  const rowsOf = (html: string) =>
+    [...html.matchAll(/<span class="min-w-0 flex-1 truncate">([^<]*)<\/span>/g)].map((m) => m[1]);
+
+  it("默认配置：低频项关闭后，预览与方案 A 一级菜单一致", () => {
+    const ids = normalizeContextMenu(undefined).filter((item) => item.on).map((item) => item.id);
+    expect(rowsOf(renderToStaticMarkup(<ContextMenuPreview ids={ids} />))).toEqual([
+      "发送到对话", "检查后发送", "用模板发送",
+      "预览 / 打开链接", "复制内容", "编辑", "标记完成", "设为常用 / 固定",
+      "整理", "转换与导出",
+      "删除",
+    ]);
+  });
+
+  it("某区全部关闭时预览里不出现该二级入口", () => {
+    const html = renderToStaticMarkup(<ContextMenuPreview ids={["send", "copy"]} />);
+    expect(rowsOf(html)).toEqual(["发送到对话", "复制内容", "删除"]);
   });
 });

@@ -1,3 +1,4 @@
+import { canSendKeepingRaw, submitPreflightDraftRaw } from "@/lib/delivery/quickRaw";
 import { currentDraftSegments, deliverySequencePreview } from "@/lib/delivery/orderedSegments";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
@@ -10,6 +11,7 @@ import {
   RotateCcw,
   Send,
   ShieldAlert,
+  ShieldOff,
   ShieldCheck,
   VenetianMask,
   X,
@@ -62,6 +64,7 @@ import { imageListLabel } from "@/lib/format";
 import { textareaSelectionAnchor } from "@/lib/selectionAnchor";
 import { useNoteThumb } from "@/lib/media";
 import { tip } from "@/lib/tip";
+import { usePanelHold } from "@/lib/panelHold";
 import { api, type FirewallFinding } from "@/lib/tauri";
 import {
   promptSnippetsForGroup,
@@ -138,6 +141,8 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
   const open = useDeliveryStore((state) => state.open);
   const draft = useDeliveryStore((state) => state.draft);
   const busy = useDeliveryStore((state) => state.busy);
+  // 预检期间面板不收起；发送中（busy）焦点要交给目标应用，不挡
+  usePanelHold(open && !busy, "preflight");
   const activeSection = useDeliveryStore((state) => state.activeSection);
   const lastError = useDeliveryStore((state) => state.lastError);
   const retryBlocked = useDeliveryStore((state) => state.retryBlocked);
@@ -558,6 +563,20 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
     draft.imageFirewall.some((item) =>
       item.status === "idle" || item.status === "scanning" || item.status === "redacting"
     );
+  // 「不脱敏直接发送」：仅在隐私检查是唯一拦路项时提供，一次性保留全部命中并发送
+  const privacyBlocksSubmit = Boolean(
+    (firewall && !firewall.canSend) || (imageFirewall && !imageFirewall.canSend)
+  );
+  const showQuickRaw = privacyBlocksSubmit && !privacyScanPending && !showTargetChangeAction;
+  const quickRawAllowed = showQuickRaw && canSendKeepingRaw(draft);
+  const canQuickRaw = Boolean(
+    quickRawAllowed &&
+    !busy &&
+    !retryBlocked &&
+    (!staleMessage || canRecoverTarget) &&
+    hasPayload &&
+    transformStatus !== "running"
+  );
   const hasImageRedactions = draft.imageFirewall.some(
     (item) => item.sendFile !== item.originalFile
   );
@@ -612,6 +631,10 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
   const unresolvedTextCount = draft.findings.filter(
     (finding) => !excludedFindingIds.has(finding.id)
   ).length;
+  const sameCategoryPending = (finding: FirewallFinding) =>
+    draft.findings.filter(
+      (item) => item.category === finding.category && !excludedFindingIds.has(item.id)
+    ).length;
   const unresolvedImageCount = draft.imageFirewall.reduce(
     (total, item) =>
       total +
@@ -932,6 +955,21 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                         )}
                       </SimpleMenu>
                     )}
+                    {sameCategoryPending(finding) > 1 && (
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="ghost"
+                        className="text-muted-foreground"
+                        title={t("这一类全部不替换，按原文发出（仅本次发送有效）")}
+                        disabled={busy || draft.firewallStatus !== "ready"}
+                        onClick={() =>
+                          useDeliveryStore.getState()
+                            .excludeFirewallCategory(finding.category)}
+                      >
+                        {t("同类全部保留")}
+                      </Button>
+                    )}
                     <Button
                       type="button"
                       size="xs"
@@ -1117,6 +1155,29 @@ export function PreflightComposer({ horizontal = false }: { horizontal?: boolean
                   <p className="text-micro text-muted-foreground">{bannerDetail}</p>
                 )}
               </div>
+              {/* 底栏放不下第三颗按钮（窄面板会把主按钮挤出右缘），挂在拦路横幅上 */}
+              {showQuickRaw && (
+                <span
+                  title={
+                    quickRawAllowed
+                      ? t("本次全部敏感项按原文保留并立即发送，不改变默认脱敏策略")
+                      : t("当前方案不允许原文发送：{reason}", {
+                          reason: submitBlockedReason ?? "",
+                        })
+                  }
+                  className="shrink-0"
+                >
+                  <Button
+                    type="button"
+                    size="xs"
+                    disabled={!canQuickRaw}
+                    onClick={() => void submitPreflightDraftRaw()}
+                  >
+                    <ShieldOff className="size-3" />
+                    {t("不脱敏直接发送")}
+                  </Button>
+                </span>
+              )}
             </div>
 
             {draft.warnings.length > 0 && (

@@ -35,6 +35,7 @@ import { imageListLabel, previewOf } from "@/lib/format";
 import { useNoteThumb } from "@/lib/media";
 import { intlLocale, t, useT } from "@/lib/i18n";
 import { tip } from "@/lib/tip";
+import { usePanelHold } from "@/lib/panelHold";
 import { cn } from "@/lib/utils";
 import { isDataOperationLocked } from "@/store/dataOperationStore";
 import {
@@ -227,6 +228,7 @@ export function ResultLinkDialog() {
   const notes = useNotesStore((state) => state.notes);
   const tasks = useNotesStore((state) => state.tasks);
   const [request, setRequest] = useState<LinkRequest | null>(null);
+  usePanelHold(request !== null, "result-link");
   const [deliveries, setDeliveries] = useState<DeliveryEvent[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);

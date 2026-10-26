@@ -17,6 +17,7 @@ import {
   applyImageScanResult,
   cleanupDeliveryDraftImages,
   evaluateImageFirewallPolicy,
+  keepOpenDeliveryImageFindings,
   manuallyRedactOpenDeliveryImage,
   redactOpenDeliveryImage,
   rescanOpenDeliveryDraftPrivacy,
@@ -729,5 +730,23 @@ describe("image Firewall", () => {
         status: "idle",
       }],
     });
+  });
+
+  it("批量不遮挡：按类别或全部保留未遮挡区域，已遮挡/非 ready 图片不动", () => {
+    const email = { ...blockFinding, id: "image-0-email", category: "email" as const, severity: "warn" as const };
+    const covered = { ...blockFinding, id: "image-0-covered" };
+    useDeliveryStore.getState().openDraft({
+      ...draft([
+        item({ findings: [blockFinding, email, covered], redactedFindingIds: [covered.id] }),
+        item({ originalFile: "img-failed.png", sendFile: "img-failed.png", status: "failed" }),
+      ]),
+      privacyPolicy: "confirmRaw",
+    });
+    keepOpenDeliveryImageFindings("email");
+    expect(useDeliveryStore.getState().draft!.imageFirewall[0].keptFindingIds).toEqual([email.id]);
+    keepOpenDeliveryImageFindings();
+    const [ready, failed] = useDeliveryStore.getState().draft!.imageFirewall;
+    expect(ready.keptFindingIds).toEqual([email.id, blockFinding.id]);
+    expect(failed.keptFindingIds).toEqual([]);
   });
 });

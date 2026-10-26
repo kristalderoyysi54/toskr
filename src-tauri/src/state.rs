@@ -216,6 +216,9 @@ pub struct AppState {
     pub panel_pinned: AtomicBool,
     /// 用户正在拖拽面板宽度/上下缘：拖拽期间暂停贴边滑出计时。
     pub panel_dragging: AtomicBool,
+    /// 面板正有后续界面（右键菜单、预检、对话框、行内输入）：前端同步。
+    /// 期间贴边隐藏的光标计时暂停，与拖拽豁免同口径；失焦路径由前端自行判定。
+    pub panel_hold: AtomicBool,
     /// 面板当前是否处于贴边隐藏（滑出仅露出边缘细条）态。
     pub edge_hidden: AtomicBool,
     /// 贴边隐藏动画代数：bump 即抢占/取消正在进行的滑出滑回动画
@@ -314,6 +317,7 @@ impl Default for AppState {
             panel_auto_hide_armed: AtomicBool::new(true),
             panel_pinned: AtomicBool::new(false),
             panel_dragging: AtomicBool::new(false),
+            panel_hold: AtomicBool::new(false),
             edge_hidden: AtomicBool::new(false),
             edge_hide_gen: AtomicU64::new(0),
             edge_hide_anchor: Mutex::new(None),

@@ -109,7 +109,7 @@ export type PageId = "notes" | "clipboard" | "tasks" | "secret";
 
 /** 页签默认顺序（剪贴最高频，居首；秘文默认关闭故垫底）。 */
 export const DEFAULT_PAGE_ORDER: PageId[] = ["clipboard", "notes", "tasks", "secret"];
-export const STORE_VERSION = 26;
+export const STORE_VERSION = 27;
 
 /**
  * 归一化页签顺序：去重、剔除未知项、补齐缺失页（按默认序追加）。
@@ -615,8 +615,8 @@ export type ContextMenuItemId =
 export const CONTEXT_MENU_REGISTRY: { id: ContextMenuItemId; label: MessageKey }[] = [
   { id: "preview", label: "预览 / 打开链接" },
   { id: "send", label: "发送到对话" },
+  { id: "send-preflight", label: "检查后发送" },
   { id: "send-template", label: "用模板发送" },
-  { id: "send-preflight", label: "预检并发送" },
   { id: "copy", label: "复制内容" },
   { id: "copy-list", label: "复制为列表" },
   { id: "export", label: "导出笔记包" },
@@ -634,38 +634,49 @@ export const CONTEXT_MENU_REGISTRY: { id: ContextMenuItemId; label: MessageKey }
 ];
 
 /**
- * 右键菜单固定按用途分区，用户自定义顺序只在同一分区内生效。
- * 保持一级菜单，避免窄面板里多层子菜单越过 WebView 边界。
+ * 右键菜单固定骨架（用户 2026-10-25 选定方案 A）：前两区直接列在一级菜单，
+ * 后两区各是一个二级小窗。用户自定义只在区内排序与开关，设置页按同一分区展示。
+ * 剪贴卡例外：「移入笔记分组」提到一级、编辑与完成落到「整理」（见 cardMenuLayout）。
  */
 export const CONTEXT_MENU_GROUPS = [
-  { id: "view", label: "查看与编辑" },
-  { id: "content", label: "复制与处理" },
-  { id: "send", label: "发送与转换" },
+  { id: "send", label: "一级菜单 · 发送" },
+  { id: "main", label: "一级菜单 · 常用" },
   { id: "organize", label: "整理" },
+  { id: "convert", label: "转换与导出" },
 ] as const;
 
 export type ContextMenuGroupId = (typeof CONTEXT_MENU_GROUPS)[number]["id"];
 
-const CONTEXT_MENU_GROUP_BY_ITEM: Record<ContextMenuItemId, ContextMenuGroupId> = {
-  preview: "view",
-  edit: "view",
-  rename: "view",
-  copy: "content",
-  "copy-list": "content",
-  export: "content",
-  ocr: "content",
-  "ai-title": "content",
+export const CONTEXT_MENU_GROUP_BY_ITEM: Record<ContextMenuItemId, ContextMenuGroupId> = {
   send: "send",
-  "send-template": "send",
   "send-preflight": "send",
-  "to-task": "send",
-  "ai-to-task": "send",
-  done: "organize",
-  keep: "organize",
-  blur: "organize",
+  "send-template": "send",
+  preview: "main",
+  copy: "main",
+  edit: "main",
+  done: "main",
+  keep: "main",
+  rename: "organize",
   tags: "organize",
   move: "organize",
+  blur: "organize",
+  "to-task": "convert",
+  "ai-to-task": "convert",
+  "ai-title": "convert",
+  ocr: "convert",
+  "copy-list": "convert",
+  export: "convert",
 };
+
+/** 低频项：默认关闭（v27 起老用户也迁移关闭，用户 2026-10-25 决定），设置里可再打开。 */
+export const CONTEXT_MENU_LOW_FREQUENCY: readonly ContextMenuItemId[] = ["export", "ai-title"];
+
+export function defaultContextMenu(): { id: ContextMenuItemId; on: boolean }[] {
+  return CONTEXT_MENU_REGISTRY.map((i) => ({
+    id: i.id,
+    on: !CONTEXT_MENU_LOW_FREQUENCY.includes(i.id),
+  }));
+}
 
 export const NOTE_TAG_MAX_COUNT = 8;
 export const NOTE_TAG_MAX_LENGTH = 24;
@@ -712,8 +723,8 @@ export function normalizeContextMenu(
       seen.add(item.id);
     }
   }
-  for (const { id } of CONTEXT_MENU_REGISTRY) {
-    if (!seen.has(id)) out.push({ id, on: true });
+  for (const item of defaultContextMenu()) {
+    if (!seen.has(item.id)) out.push(item);
   }
   return out;
 }
@@ -775,7 +786,7 @@ export const defaultSettings = (): Settings => ({
   clipCardTemplate: "standard",
   clipView: "time",
   clipAppRetentionDays: {},
-  contextMenu: CONTEXT_MENU_REGISTRY.map((i) => ({ id: i.id, on: true })),
+  contextMenu: defaultContextMenu(),
   autoCheckUpdate: true,
   autoInstallUpdate: false,
   // 首装默认（2026-08 用户指定）：剪贴板历史开，保留 1 个月
@@ -2236,6 +2247,15 @@ export function migratePersistedState(
       // 只清理完整匹配的旧预设；用户新增、改名、改文或改组的模板均保留。
       promptSnippets: p.settings.promptSnippets.filter(
         (snippet) => !isUnmodifiedLegacyPromptSnippet(snippet)
+      ),
+    };
+  }
+  if (version < 27 && Array.isArray(p.settings?.contextMenu)) {
+    p.settings = {
+      ...p.settings,
+      // 右键菜单重排：低频项老用户也一并关闭（设置里可再打开）
+      contextMenu: p.settings.contextMenu.map((item) =>
+        CONTEXT_MENU_LOW_FREQUENCY.includes(item.id) ? { ...item, on: false } : item
       ),
     };
   }
