@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSCalendarsFullAccessUsageDescription</key>
+  <string>Toskr 在「提醒 → 今天」和月历里只读显示你的日历日程，方便安排任务。Toskr shows your calendar events read-only in Today and the month view.</string>
+  <key>NSCalendarsUsageDescription</key>
+  <string>Toskr 在「提醒 → 今天」和月历里只读显示你的日历日程，方便安排任务。Toskr shows your calendar events read-only in Today and the month view.</string>
+</dict>
+</plist>

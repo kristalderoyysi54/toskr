@@ -160,6 +160,7 @@
     "macOS": {
       "minimumSystemVersion": "13.0",
       "signingIdentity": "Toskr Dev Signing",
+      "entitlements": "./Entitlements.plist",
       "files": {
         "Helpers/toskr-keychain-helper": "keychain-helper/artifacts/toskr-keychain-helper"
       },

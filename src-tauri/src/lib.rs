@@ -1,4 +1,5 @@
 mod activity;
+mod apple_calendar;
 mod ai;
 mod ax;
 mod backup;
@@ -254,6 +255,11 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::show_panel,
+            commands::apple_calendar_status,
+            commands::apple_calendar_request_access,
+            commands::apple_calendar_list,
+            commands::apple_calendar_events,
+            commands::apple_calendar_open_event,
             commands::hide_panel,
             commands::copy_text,
             commands::copy_rich_clipboard,

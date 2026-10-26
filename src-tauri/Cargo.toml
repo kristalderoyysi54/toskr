@@ -78,8 +78,23 @@ objc2-user-notifications = { version = "0.3", default-features = false, features
   "UNNotificationTrigger",
   "UNUserNotificationCenter",
 ] }
+# 苹果日历只读叠加（设置 → 提醒 → 苹果日历）
+objc2-event-kit = { version = "0.3", default-features = false, features = [
+  "std",
+  "block2",
+  "objc2-app-kit",
+  "EKCalendar",
+  "EKCalendarItem",
+  "EKEvent",
+  "EKEventStore",
+  "EKObject",
+  "EKSource",
+  "EKTypes",
+] }
 objc2-app-kit = { version = "0.3", features = [
   "NSWorkspace",
+  "NSColor",
+  "NSColorSpace",
   "NSRunningApplication",
   "NSWindow",
   "NSResponder",

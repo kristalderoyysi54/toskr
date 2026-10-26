@@ -621,4 +621,19 @@ export const settings = {
   "项目主页": "Homepage",
   "报告 Bug": "Report a bug",
   "提 Issue": "Open an Issue",
+  "苹果日历": "Apple Calendar",
+  "只读：Toskr 不会新建、修改或删除日历里的日程。日程显示在「今天」时间轴和任务月历里，点击可在「日历」App 中打开。":
+    "Read-only: Toskr never creates, edits or deletes calendar events. Events appear in the Today timeline and the task month view; click one to open it in Calendar.",
+  "显示苹果日历日程": "Show Apple Calendar Events",
+  "在「今天」和月历里叠加系统日历": "Overlay system calendars in Today and the month view",
+  "日历权限": "Calendar Access",
+  "已拒绝访问日历，请在系统设置 → 隐私与安全性 → 日历里允许 Toskr":
+    "Calendar access was denied. Allow Toskr in System Settings → Privacy & Security → Calendars",
+  "当前只有「仅添加事件」权限，读不到日程；请在系统设置里改为「完全访问」":
+    "Toskr only has “Add Events Only” access and can’t read events. Change it to “Full Access” in System Settings",
+  "日历访问受系统限制（如家长控制或描述文件）": "Calendar access is restricted by the system (e.g. Screen Time or a profile)",
+  "尚未授权，开启后由 macOS 询问": "Not authorized yet; macOS will ask when you turn this on",
+  "授权": "Authorize",
+  "打开系统设置": "Open System Settings",
+  "显示日历：{name}": "Show calendar: {name}",
 } satisfies Record<string, EnValue>;

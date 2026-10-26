@@ -105,6 +105,8 @@ import {
   type DataOperationPlan,
   type MediaIntegrityReport,
   type MessageWatchStatus,
+  type AppleCalendarInfo,
+  type AppleCalendarStatus,
 } from "@/lib/tauri";
 import { buildMessageWatchBridgeScript } from "@/lib/messageWatch";
 import { getImProfile, setImProfile, type ImProfile } from "@/lib/imProfile";
@@ -825,6 +827,7 @@ export default function SettingsView() {
         {section === "due" && (
           <>
             <TaskReminderChannelSection settings={settings} patch={patch} />
+            <AppleCalendarSection settings={settings} patch={patch} />
             <DuePresetsSection settings={settings} patch={patch} />
             <BillReminderDefaultsSection settings={settings} patch={patch} />
           </>
@@ -3445,6 +3448,131 @@ function TaskReminderChannelSection({ settings, patch }: SP) {
           />
         }
       />
+    </Group>
+  );
+}
+
+/**
+ * 苹果日历只读叠加：总开关（首次开启时弹系统授权）+ 权限状态 + 逐个日历显示开关。
+ * 在系统设置里改完权限回到本窗口时重查状态；新授权要让 Rust 侧 store 重置才读得到。
+ */
+function AppleCalendarSection({ settings, patch }: SP) {
+  const t = useT();
+  const enabled = settings.appleCalendarEnabled;
+  const hiddenIds = settings.appleCalendarHiddenIds;
+  const [status, setStatus] = useState<AppleCalendarStatus | null>(null);
+  const [calendars, setCalendars] = useState<AppleCalendarInfo[]>([]);
+
+  useEffect(() => {
+    let previous: AppleCalendarStatus | null = null;
+    const check = () => {
+      api
+        .appleCalendarStatus()
+        .then(async (next) => {
+          if (next === "granted" && previous !== null && previous !== "granted") {
+            next = await api.appleCalendarRequestAccess();
+          }
+          previous = next;
+          setStatus(next);
+        })
+        .catch(() => {});
+    };
+    check();
+    window.addEventListener("focus", check);
+    return () => window.removeEventListener("focus", check);
+  }, []);
+
+  useEffect(() => {
+    if (!enabled || status !== "granted") return;
+    api.appleCalendarList().then(setCalendars).catch(() => {});
+  }, [enabled, status]);
+
+  const toggle = async (on: boolean) => {
+    patch({ appleCalendarEnabled: on });
+    if (on && status === "notDetermined") {
+      setStatus(await api.appleCalendarRequestAccess().catch(() => status));
+    }
+  };
+
+  const statusHint =
+    status === "denied"
+      ? t("已拒绝访问日历，请在系统设置 → 隐私与安全性 → 日历里允许 Toskr")
+      : status === "writeOnly"
+        ? t("当前只有「仅添加事件」权限，读不到日程；请在系统设置里改为「完全访问」")
+        : status === "restricted"
+          ? t("日历访问受系统限制（如家长控制或描述文件）")
+          : t("尚未授权，开启后由 macOS 询问");
+
+  return (
+    <Group
+      title={t("苹果日历")}
+      footer={t("只读：Toskr 不会新建、修改或删除日历里的日程。日程显示在「今天」时间轴和任务月历里，点击可在「日历」App 中打开。")}
+    >
+      <Row
+        label={t("显示苹果日历日程")}
+        hint={t("在「今天」和月历里叠加系统日历")}
+        right={
+          <Switch
+            aria-label={t("显示苹果日历日程")}
+            checked={enabled}
+            onCheckedChange={(on) => void toggle(on)}
+          />
+        }
+      />
+      {enabled && status !== null && status !== "granted" && (
+        <Row
+          label={t("日历权限")}
+          hint={statusHint}
+          right={
+            status === "notDetermined" ? (
+              <Button
+                size="xs"
+                onClick={() =>
+                  void api.appleCalendarRequestAccess().then(setStatus).catch(() => {})
+                }
+              >
+                {t("授权")}
+              </Button>
+            ) : (
+              <Button size="xs" onClick={() => void api.openPrivacySettings("calendars")}>
+                {t("打开系统设置")}
+              </Button>
+            )
+          }
+        />
+      )}
+      {enabled &&
+        status === "granted" &&
+        calendars.map((calendar) => (
+          <Row
+            key={calendar.id}
+            label={calendar.title}
+            hint={
+              <span className="inline-flex items-center gap-1">
+                <span
+                  aria-hidden
+                  className="size-2 rounded-full bg-muted-foreground/60"
+                  // token-exception: 用户日历的系统颜色（运行时数据），无对应 token
+                  style={calendar.color ? { backgroundColor: calendar.color } : undefined}
+                />
+                {calendar.source}
+              </span>
+            }
+            right={
+              <Switch
+                aria-label={t("显示日历：{name}", { name: calendar.title })}
+                checked={!hiddenIds.includes(calendar.id)}
+                onCheckedChange={(on) =>
+                  patch({
+                    appleCalendarHiddenIds: on
+                      ? hiddenIds.filter((id) => id !== calendar.id)
+                      : [...hiddenIds, calendar.id],
+                  })
+                }
+              />
+            }
+          />
+        ))}
     </Group>
   );
 }

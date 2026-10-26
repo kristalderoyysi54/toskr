@@ -561,6 +561,10 @@ export interface Settings {
   messagesEnabled: boolean;
   /** 订阅（账单）功能总开关；默认关闭，关闭时「提醒」页退为纯「任务」页。 */
   subscriptionsEnabled: boolean;
+  /** 在「今天」与月历里只读叠加苹果日历日程；默认关闭，开启时请求系统日历权限。 */
+  appleCalendarEnabled: boolean;
+  /** 不叠加的苹果日历 id（排除名单：新建的日历默认显示）。 */
+  appleCalendarHiddenIds: string[];
   /** 秘文（中文加密通信）总开关；默认关闭，关闭时秘文页与捕获识别都不启用。 */
   secretEnabled: boolean;
   /** 共享密钥列表（明文随本地数据保存；威胁模型见设置页说明）。 */
@@ -856,6 +860,8 @@ export const defaultSettings = (): Settings => ({
   messagesEnabled: false,
   // 订阅功能默认关闭（用户指定）：「提醒」页退为「任务」，开启后恢复二级导航
   subscriptionsEnabled: false,
+  appleCalendarEnabled: false,
+  appleCalendarHiddenIds: [],
   // 秘文默认关闭（用户指定）：不显示秘文页、不做捕获识别
   secretEnabled: false,
   secretKeys: [],

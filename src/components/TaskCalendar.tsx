@@ -1,13 +1,16 @@
 import { useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
 
+import { CalendarEventRow } from "@/components/CalendarEventRow";
 import { BillRow } from "@/components/subscriptions/BillList";
 import { TaskRow } from "@/components/TaskRow";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IconButton } from "@/components/ui/icon-button";
+import { groupEventsByDay, nextDayStart, useAppleCalendarEvents } from "@/lib/appleCalendar";
 import { billOccurrencesInRange, startOfBillDay } from "@/lib/bills";
 import { t as translate, useT } from "@/lib/i18n";
 import { monthDayLabel, monthYearLabel, weekdayChar } from "@/lib/taskRecurrence";
+import type { AppleCalendarEvent } from "@/lib/tauri";
 import { tip } from "@/lib/tip";
 import { cn } from "@/lib/utils";
 import { useNotesStore, type Bill, type Task } from "@/store/notesStore";
@@ -26,7 +29,8 @@ const HATCH_STYLE = {
  * 任务月历（默认隐藏，由「提醒」页头部日历开关唤出）：
  * 有到期任务的天显示计数点；点选某天列出当天任务，并可直接为该天添加任务
  * （今天默认 20:00 到期、未来天 9:00——避免「刚加就逾期」）。
- * 订阅功能开启时同时显示账单扣款日（青色点），两类可分别开关（会话态）。
+ * 订阅功能开启时同时显示账单扣款日（青色点），开启苹果日历叠加时显示日程（日历色点），
+ * 各类可分别开关（会话态）。
  */
 export function TaskCalendar({ now }: { now: number }) {
   const t = useT();
@@ -35,7 +39,9 @@ export function TaskCalendar({ now }: { now: number }) {
   const billsEnabled = useNotesStore((s) => s.settings.subscriptionsEnabled);
   const [showTasks, setShowTasks] = useState(true);
   const [showBills, setShowBills] = useState(true);
+  const [showEvents, setShowEvents] = useState(true);
   const withBills = billsEnabled && showBills;
+  const calendarEnabled = useNotesStore((s) => s.settings.appleCalendarEnabled);
   const [monthOffset, setMonthOffset] = useState(0);
   const [selectedDay, setSelectedDay] = useState(() => startOfBillDay(now));
   const [draft, setDraft] = useState("");
@@ -83,7 +89,16 @@ export function TaskCalendar({ now }: { now: number }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tasks, bills, withBills, monthOffset, now]);
 
+  const gridStart = cells[0].day;
+  const gridEnd = nextDayStart(cells[cells.length - 1].day);
+  const events = useAppleCalendarEvents(gridStart, gridEnd);
+  const eventsByDay = useMemo(
+    () => (showEvents ? groupEventsByDay(events, cells.map((c) => c.day)) : new Map<number, AppleCalendarEvent[]>()),
+    [events, cells, showEvents]
+  );
+
   const dayTasks = showTasks ? (byDay.get(selectedDay) ?? []) : [];
+  const dayEvents = eventsByDay.get(selectedDay) ?? [];
   const dayBills = billsByDay.get(selectedDay) ?? [];
 
   const addForDay = () => {
@@ -108,14 +123,21 @@ export function TaskCalendar({ now }: { now: number }) {
           <p className="flex-1 pl-1 text-label font-semibold tabular-nums">
             {monthYearLabel(monthFirst)}
           </p>
-          {billsEnabled && (
+          {(billsEnabled || calendarEnabled) && (
             <span className="flex items-center gap-0.5">
               <CalendarToggle on={showTasks} onClick={() => setShowTasks((v) => !v)}>
                 {t("任务")}
               </CalendarToggle>
-              <CalendarToggle on={showBills} onClick={() => setShowBills((v) => !v)}>
-                {t("账单")}
-              </CalendarToggle>
+              {billsEnabled && (
+                <CalendarToggle on={showBills} onClick={() => setShowBills((v) => !v)}>
+                  {t("账单")}
+                </CalendarToggle>
+              )}
+              {calendarEnabled && (
+                <CalendarToggle on={showEvents} onClick={() => setShowEvents((v) => !v)}>
+                  {t("日程")}
+                </CalendarToggle>
+              )}
             </span>
           )}
           {monthOffset !== 0 && (
@@ -144,13 +166,19 @@ export function TaskCalendar({ now }: { now: number }) {
             const due = showTasks ? (byDay.get(day) ?? []) : [];
             const pending = due.filter((t) => t.status !== "done").length;
             const billCount = billsByDay.get(day)?.length ?? 0;
+            const dayEventList = eventsByDay.get(day);
+            const eventCount = dayEventList?.length ?? 0;
+            // 点取当天首条日程所属日历的颜色（排序后全天在前）
+            const eventColor = dayEventList?.[0]?.calendarColor ?? null;
             return (
               <button
                 key={day}
                 onClick={() => setSelectedDay(day)}
                 aria-label={`${monthDayLabel(new Date(day))}${
                   due.length ? t("，{n} 个任务", { n: due.length }) : ""
-                }${billCount ? t("，{n} 笔账单", { n: billCount }) : ""}`}
+                }${billCount ? t("，{n} 笔账单", { n: billCount }) : ""}${
+                  eventCount ? t("，{n} 个日程", { n: eventCount }) : ""
+                }`}
                 className={cn(
                   "relative flex h-9 flex-col items-center justify-center rounded-lg outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
                   selected
@@ -198,13 +226,26 @@ export function TaskCalendar({ now }: { now: number }) {
                       )}
                     />
                   )}
+                  {eventCount > 0 && (
+                    <span
+                      aria-hidden
+                      className={cn(
+                        "size-1.5 rounded-full",
+                        selected
+                          ? "bg-primary-foreground/60"
+                          : !eventColor && "bg-muted-foreground/60"
+                      )}
+                      // token-exception: 用户日历的系统颜色（运行时数据），无对应 token
+                      style={!selected && eventColor ? { backgroundColor: eventColor } : undefined}
+                    />
+                  )}
                 </span>
               </button>
             );
           })}
         </div>
       </div>
-      {/* 选中日：当天任务 + 就地添加 */}
+      {/* 选中日：当天日程（只读）+ 任务 + 就地添加 */}
       <div>
         <p className="px-1 pb-0.5 text-micro text-muted-foreground">
           {dayLabel(selectedDay, today)}
@@ -224,6 +265,13 @@ export function TaskCalendar({ now }: { now: number }) {
             <Plus />
           </IconButton>
         </div>
+        {dayEvents.length > 0 && (
+          <div className="mb-1 flex flex-col gap-1">
+            {dayEvents.map((event) => (
+              <CalendarEventRow key={event.id} event={event} />
+            ))}
+          </div>
+        )}
         {dayTasks.length ? (
           <div className="flex flex-col gap-1">
             {dayTasks.map((t) => (

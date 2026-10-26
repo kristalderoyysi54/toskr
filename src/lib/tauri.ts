@@ -238,6 +238,40 @@ export interface HudHoverPayload {
   hovered: boolean;
 }
 
+/** 系统日历库变化（本机编辑或 iCloud 同步），前端重新拉取。 */
+export const APPLE_CALENDAR_CHANGED_EVENT = "toskr://apple-calendar-changed";
+
+export type AppleCalendarStatus =
+  | "notDetermined"
+  | "restricted"
+  | "denied"
+  | "granted"
+  | "writeOnly";
+
+export interface AppleCalendarInfo {
+  id: string;
+  title: string;
+  /** 账户名（iCloud / 本地…）。 */
+  source: string;
+  /** 系统里的日历颜色 `#rrggbb`。 */
+  color: string | null;
+}
+
+export interface AppleCalendarEvent {
+  id: string;
+  title: string;
+  startMs: number;
+  endMs: number;
+  allDay: boolean;
+  calendarId: string;
+  calendarTitle: string;
+  calendarColor: string | null;
+  location: string | null;
+  /** calendarItemIdentifier：在「日历」App 里定位用。 */
+  itemId: string;
+  recurring: boolean;
+}
+
 export interface PrevAppInfo {
   bundleId: string;
   name: string | null;
@@ -787,8 +821,23 @@ export const api = {
   systemLocale: () => invoke<string | null>("system_locale"),
   setLocale: (locale: Locale) => invoke("set_locale", { locale }),
   retryTap: () => invoke("retry_tap"),
-  openPrivacySettings: (pane: "accessibility" | "input-monitoring") =>
+  openPrivacySettings: (pane: "accessibility" | "input-monitoring" | "calendars") =>
     invoke("open_privacy_settings", { pane }),
+  appleCalendarStatus: () => invoke<AppleCalendarStatus>("apple_calendar_status"),
+  /** 弹系统日历授权框（已决定过则立即返回），resolve 授权后的状态。 */
+  appleCalendarRequestAccess: () =>
+    invoke<AppleCalendarStatus>("apple_calendar_request_access"),
+  appleCalendarList: () => invoke<AppleCalendarInfo[]>("apple_calendar_list"),
+  /** [startMs, endMs) 内与之相交的日程；未授权返回空数组。 */
+  appleCalendarEvents: (startMs: number, endMs: number) =>
+    invoke<AppleCalendarEvent[]>("apple_calendar_events", { startMs, endMs }),
+  /** 在「日历」App 里打开这条日程（重复日程定位到这一期）。 */
+  appleCalendarOpenEvent: (event: Pick<AppleCalendarEvent, "itemId" | "startMs" | "recurring">) =>
+    invoke("apple_calendar_open_event", {
+      itemId: event.itemId,
+      startMs: event.startMs,
+      recurring: event.recurring,
+    }),
   /** 一键重置输入监控授权（tccutil 删除条目，等价系统设置里的 −）；失败 reject。 */
   resetInputMonitoring: () => invoke("reset_input_monitoring"),
   /** 把图片附件写入系统剪贴板（图片卡复制）。 */

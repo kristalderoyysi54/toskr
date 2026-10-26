@@ -539,13 +539,14 @@ pub fn reset_input_monitoring(app: AppHandle) -> Result<(), String> {
     }
 }
 
-/// 打开系统设置对应隐私面板："accessibility" | "input-monitoring"。
+/// 打开系统设置对应隐私面板："accessibility" | "input-monitoring" | "calendars"。
 #[tauri::command]
 pub fn open_privacy_settings(pane: String) {
     let url = match pane.as_str() {
         "input-monitoring" => {
             "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
         }
+        "calendars" => "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars",
         _ => "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
     };
     let _ = std::process::Command::new("open").arg(url).spawn();
@@ -2233,4 +2234,39 @@ mod auto_backup_tests {
         );
         assert!(auto_backups_to_prune(names, 3).is_empty());
     }
+}
+
+// ===== 苹果日历只读叠加 =====
+
+#[tauri::command]
+pub fn apple_calendar_status() -> String {
+    crate::apple_calendar::status()
+}
+
+#[tauri::command]
+pub async fn apple_calendar_request_access(app: AppHandle) -> Result<String, String> {
+    crate::apple_calendar::request_access(&app).await
+}
+
+#[tauri::command]
+pub async fn apple_calendar_list(
+    app: AppHandle,
+) -> Result<Vec<crate::apple_calendar::CalendarInfo>, String> {
+    crate::apple_calendar::calendars(&app).await
+}
+
+#[tauri::command]
+pub async fn apple_calendar_events(
+    app: AppHandle,
+    start_ms: i64,
+    end_ms: i64,
+) -> Result<Vec<crate::apple_calendar::CalendarEvent>, String> {
+    crate::apple_calendar::events(&app, start_ms, end_ms).await
+}
+
+/// 在「日历」App 里打开这条日程（重复日程定位到对应那一期）。
+#[tauri::command]
+pub fn apple_calendar_open_event(item_id: String, start_ms: i64, recurring: bool) {
+    let url = crate::apple_calendar::event_url(&item_id, start_ms, recurring);
+    let _ = std::process::Command::new("open").arg(url).spawn();
 }

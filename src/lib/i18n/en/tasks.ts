@@ -265,4 +265,10 @@ export const tasks = {
   "开发": "Development",
   "AI": "AI",
   "云存储": "Cloud Storage",
+  "全天": "All day",
+  "日程：{title}，{meta}": "Event: {title}, {meta}",
+  "（无标题）": "(No title)",
+  "在「日历」中打开": "Open in Calendar",
+  "日程": "Events",
+  "，{n} 个日程": { one: ", {n} event", other: ", {n} events" },
 } satisfies Record<string, EnValue>;

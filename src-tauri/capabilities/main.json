@@ -54,6 +54,8 @@
     "allow-set-window-alpha",
     "allow-set-panel-free-pos",
     "allow-open-privacy-settings",
+    "allow-apple-calendar-events",
+    "allow-apple-calendar-open-event",
     "allow-reset-input-monitoring",
     "allow-copy-image-to-clipboard",
     "allow-paste-images-from-clipboard",
