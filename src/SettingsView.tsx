@@ -4184,7 +4184,7 @@ function DataSection({ settings, patch }: SP) {
         setHealth(event.payload)
       ),
       listen<string>(SETTINGS_DATA_INSPECT_PATH, (event) => {
-        void inspectPath(event.payload);
+        void inspectPathRef.current(event.payload);
       }),
     ];
     return () => subscriptions.forEach((subscription) => subscription.then((stop) => stop()));
@@ -4197,6 +4197,9 @@ function DataSection({ settings, patch }: SP) {
       tip("warn", t("预检失败：{error}", { error: String(error) }));
     }
   };
+  // 事件只订阅一次：经 ref 调最新版本，切换语言后提示文案不停留在旧语言
+  const inspectPathRef = useRef(inspectPath);
+  inspectPathRef.current = inspectPath;
 
   const pick = async () => {
     const { open } = await import("@tauri-apps/plugin-dialog");

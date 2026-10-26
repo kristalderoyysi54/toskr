@@ -324,6 +324,8 @@ const captureHistory: { id: string; dataGeneration: number }[] = [];
 /** 横栏「已完成」过滤哨兵值（与真实分组 id 隔离）。 */
 const DONE_FILTER = "__done__";
 const MEDIA_GC_GRACE_MS = 30_000;
+/** 消息子视图无卡片导航；共用稳定空数组，避免依赖 navIds 的 effect 每次渲染都重跑。 */
+const NO_NAV_IDS: string[] = [];
 
 function mediaIntegrityStateJson(): string {
   return JSON.stringify(
@@ -3207,7 +3209,7 @@ export default function App() {
         : page === "notes" && contentSubview === "secret"
           ? secretNavIds
           : page === "notes" && contentSubview === "messages"
-            ? []
+            ? NO_NAV_IDS
             : horizontalBar
               ? stripNoteIds
               : noteNavIds;

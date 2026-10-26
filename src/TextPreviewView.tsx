@@ -824,6 +824,8 @@ export default function TextPreviewView() {
     return () => {
       un.then((fn) => fn());
     };
+    // exitEditing / save / cancelEditing 只读 ref，订阅一次即可，闭包旧值无影响
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(
