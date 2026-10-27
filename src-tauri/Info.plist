@@ -6,5 +6,9 @@
   <string>Toskr 在「提醒 → 今天」和月历里只读显示你的日历日程，方便安排任务。Toskr shows your calendar events read-only in Today and the month view.</string>
   <key>NSCalendarsUsageDescription</key>
   <string>Toskr 在「提醒 → 今天」和月历里只读显示你的日历日程，方便安排任务。Toskr shows your calendar events read-only in Today and the month view.</string>
+  <key>NSRemindersFullAccessUsageDescription</key>
+  <string>Toskr 把任务同步到提醒事项的「Toskr」列表，并在你勾选完成后同步回来。Toskr syncs tasks to a “Toskr” list in Reminders and brings completions back.</string>
+  <key>NSRemindersUsageDescription</key>
+  <string>Toskr 把任务同步到提醒事项的「Toskr」列表，并在你勾选完成后同步回来。Toskr syncs tasks to a “Toskr” list in Reminders and brings completions back.</string>
 </dict>
 </plist>

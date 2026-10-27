@@ -269,6 +269,30 @@ export const tasks = {
   "日程：{title}，{meta}": "Event: {title}, {meta}",
   "（无标题）": "(No title)",
   "在「日历」中打开": "Open in Calendar",
+  "未命名任务": "Untitled task",
+  "提醒事项已同步": "Reminders synced",
+  "提醒事项同步失败：{error}（点击查看）": "Reminders sync failed: {error} (click for details)",
+  "提醒事项里改的标题已被 Toskr 覆盖：「{text}」（撤销可改用）":
+    "Title changed in Reminders was overwritten by Toskr: “{text}” (Undo to use it)",
+  "提醒事项里改的备注已被 Toskr 覆盖：「{text}」（撤销可改用）":
+    "Notes changed in Reminders were overwritten by Toskr: “{text}” (Undo to use them)",
+  "提醒事项里改的到期已被 Toskr 覆盖：{text}（撤销可改用）":
+    "Due date changed in Reminders was overwritten by Toskr: {text} (Undo to use it)",
+  "提醒事项里有 {n} 处修改与 Toskr 冲突，已以 Toskr 为准（撤销可改用提醒事项版本）": {
+    one: "{n} change in Reminders conflicted with Toskr; kept Toskr's version (Undo to use Reminders')",
+    other: "{n} changes in Reminders conflicted with Toskr; kept Toskr's version (Undo to use Reminders')",
+  },
+  "已改用提醒事项里的版本": "Switched to the Reminders version",
+  "无到期": "No due date",
+  "提醒事项同步失败：{error}": "Reminders sync failed: {error}",
+  "从提醒事项导入了 {n} 个任务": {
+    one: "Imported {n} task from Reminders",
+    other: "Imported {n} tasks from Reminders",
+  },
+  "在提醒事项中完成了 {n} 个任务": {
+    one: "Completed {n} task in Reminders",
+    other: "Completed {n} tasks in Reminders",
+  },
   "日程": "Events",
   "，{n} 个日程": { one: ", {n} event", other: ", {n} events" },
 } satisfies Record<string, EnValue>;

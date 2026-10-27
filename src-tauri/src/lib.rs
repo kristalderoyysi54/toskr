@@ -1,5 +1,6 @@
 mod activity;
 mod apple_calendar;
+mod apple_reminders;
 mod ai;
 mod ax;
 mod backup;
@@ -260,6 +261,10 @@ pub fn run() {
             commands::apple_calendar_list,
             commands::apple_calendar_events,
             commands::apple_calendar_open_event,
+            commands::apple_reminders_status,
+            commands::apple_reminders_request_access,
+            commands::apple_reminders_sync,
+            commands::apple_reminders_stats,
             commands::hide_panel,
             commands::copy_text,
             commands::copy_rich_clipboard,

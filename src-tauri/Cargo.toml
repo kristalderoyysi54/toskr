@@ -83,11 +83,13 @@ objc2-event-kit = { version = "0.3", default-features = false, features = [
   "std",
   "block2",
   "objc2-app-kit",
+  "EKAlarm",
   "EKCalendar",
   "EKCalendarItem",
   "EKEvent",
   "EKEventStore",
   "EKObject",
+  "EKReminder",
   "EKSource",
   "EKTypes",
 ] }

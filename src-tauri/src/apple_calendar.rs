@@ -7,7 +7,8 @@
 
 use serde::Serialize;
 
-/// 日历库变化事件（前端收到后重新拉取当前区间）。
+/// 日历库变化事件（前端收到后重新拉取当前区间）。日历与提醒事项共用一个 store，
+/// 提醒事项变化同样经此事件通知（提醒同步据此对账）。
 pub const CHANGED_EVENT: &str = "toskr://apple-calendar-changed";
 
 #[derive(Clone, Serialize)]
@@ -80,7 +81,7 @@ fn chrono_utc_stamp(ms: i64) -> String {
 }
 
 /// EKAuthorizationStatus → 前端状态名。13 的 Authorized 与 14 的 FullAccess 同值。
-fn status_name(raw: isize) -> &'static str {
+pub(crate) fn status_name(raw: isize) -> &'static str {
     match raw {
         0 => "notDetermined",
         1 => "restricted",
@@ -113,7 +114,7 @@ mod imp {
     }
 
     /// 主线程上的唯一 store；首次创建时挂上变化通知。
-    fn store(app: &AppHandle) -> Retained<EKEventStore> {
+    pub(crate) fn store(app: &AppHandle) -> Retained<EKEventStore> {
         STORE.with(|cell| {
             cell.get_or_init(|| {
                 let store = unsafe { EKEventStore::new() };
@@ -137,7 +138,7 @@ mod imp {
         })
     }
 
-    async fn on_main<T: Send + 'static>(
+    pub(crate) async fn on_main<T: Send + 'static>(
         app: &AppHandle,
         job: impl FnOnce(&AppHandle) -> T + Send + 'static,
     ) -> Result<T, String> {
@@ -282,6 +283,8 @@ mod imp {
 
 #[cfg(target_os = "macos")]
 pub use imp::{calendars, events, request_access, status};
+#[cfg(target_os = "macos")]
+pub(crate) use imp::{on_main, store};
 
 #[cfg(not(target_os = "macos"))]
 pub fn status() -> String {

@@ -257,6 +257,93 @@ export interface AppleCalendarInfo {
   color: string | null;
 }
 
+/** 提醒事项的本地年月日时分；h / mi 为 -1 表示只有日期。 */
+export interface AppleReminderDue {
+  y: number;
+  m: number;
+  d: number;
+  h: number;
+  mi: number;
+}
+
+export interface AppleReminderDesired {
+  taskId: string;
+  title: string;
+  notes: string | null;
+  /** 本机时区的年月日时分。 */
+  due: AppleReminderDue | null;
+  /** EKReminder 优先级：0 无 / 1 高 / 5 中 / 9 低。 */
+  priority: number;
+  completed: boolean;
+  synced: boolean;
+  /** 对端已完成、Toskr 改回未完成：推「未完成」而非回传完成。 */
+  reopened: boolean;
+  /** 响铃：相对到期的秒数（负数 = 提前），升序；空 = 不响。 */
+  alarms: number[];
+  /** 由对端导入、尚未补写 URL 的提醒 id。 */
+  adoptItemId: string | null;
+  /** 上次同步时两边一致的标题（三方比较基准）。 */
+  baseTitle: string | null;
+  /** 上次同步时两边一致的备注（"" = 当时为空）。 */
+  baseNotes: string | null;
+  /** 上次同步时两边一致的到期键（"" = 无到期）。 */
+  baseDue: string | null;
+}
+
+/** 两边都改了同一字段：以 Toskr 为准，theirs 是被覆盖的对端内容。 */
+export interface AppleReminderConflict {
+  taskId: string;
+  /** due 的 theirs 是到期键（appleDueKey 格式）。 */
+  field: "title" | "notes" | "due";
+  theirs: string;
+}
+
+/** 提醒事项「Toskr」列表里手建的提醒（待导入为任务）。h / mi 为 -1 表示只有日期。 */
+export interface AppleReminderImport {
+  itemId: string;
+  title: string;
+  notes: string | null;
+  due: AppleReminderDesired["due"];
+  priority: number;
+}
+
+export interface AppleReminderSyncResult {
+  listId: string;
+  created: string[];
+  completedRemote: string[];
+  missing: string[];
+  deletedTasks: string[];
+  updated: number;
+  imported: AppleReminderImport[];
+  adopted: string[];
+  /** [任务 id, 对端标题]：只有提醒事项那边改了标题。 */
+  titleRemote: [string, string][];
+  /** [任务 id, 对端备注（可为空）]：只有提醒事项那边改了备注。 */
+  notesRemote: [string, string][];
+  /** [任务 id, 对端到期（null = 清掉）]：只有提醒事项那边改了到期。 */
+  dueRemote: [string, AppleReminderDue | null][];
+  conflicts: AppleReminderConflict[];
+}
+
+/** 本次启动以来的提醒事项同步统计。 */
+export interface AppleReminderStats {
+  rounds: number;
+  created: number;
+  updated: number;
+  deleted: number;
+  imported: number;
+  completedRemote: number;
+  missing: number;
+  titleBack: number;
+  notesBack: number;
+  dueBack: number;
+  conflicts: number;
+  failures: number;
+  lastSyncAt: number | null;
+  lastError: string | null;
+  lastErrorAt: number | null;
+}
+
 export interface AppleCalendarEvent {
   id: string;
   title: string;
@@ -821,7 +908,9 @@ export const api = {
   systemLocale: () => invoke<string | null>("system_locale"),
   setLocale: (locale: Locale) => invoke("set_locale", { locale }),
   retryTap: () => invoke("retry_tap"),
-  openPrivacySettings: (pane: "accessibility" | "input-monitoring" | "calendars") =>
+  openPrivacySettings: (
+    pane: "accessibility" | "input-monitoring" | "calendars" | "reminders"
+  ) =>
     invoke("open_privacy_settings", { pane }),
   appleCalendarStatus: () => invoke<AppleCalendarStatus>("apple_calendar_status"),
   /** 弹系统日历授权框（已决定过则立即返回），resolve 授权后的状态。 */
@@ -831,6 +920,14 @@ export const api = {
   /** [startMs, endMs) 内与之相交的日程；未授权返回空数组。 */
   appleCalendarEvents: (startMs: number, endMs: number) =>
     invoke<AppleCalendarEvent[]>("apple_calendar_events", { startMs, endMs }),
+  appleRemindersStatus: () => invoke<AppleCalendarStatus>("apple_reminders_status"),
+  /** 弹系统提醒事项授权框（已决定过则立即返回），resolve 授权后的状态。 */
+  appleRemindersRequestAccess: () =>
+    invoke<AppleCalendarStatus>("apple_reminders_request_access"),
+  appleRemindersStats: () => invoke<AppleReminderStats>("apple_reminders_stats"),
+  /** 一轮对账：推送任务到「Toskr」列表并回收对端完成 / 删除。 */
+  appleRemindersSync: (listId: string | null, tasks: AppleReminderDesired[]) =>
+    invoke<AppleReminderSyncResult>("apple_reminders_sync", { listId, tasks }),
   /** 在「日历」App 里打开这条日程（重复日程定位到这一期）。 */
   appleCalendarOpenEvent: (event: Pick<AppleCalendarEvent, "itemId" | "startMs" | "recurring">) =>
     invoke("apple_calendar_open_event", {

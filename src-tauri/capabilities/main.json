@@ -54,6 +54,8 @@
     "allow-set-window-alpha",
     "allow-set-panel-free-pos",
     "allow-open-privacy-settings",
+    "allow-apple-reminders-status",
+    "allow-apple-reminders-sync",
     "allow-apple-calendar-events",
     "allow-apple-calendar-open-event",
     "allow-reset-input-monitoring",

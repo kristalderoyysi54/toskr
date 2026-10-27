@@ -211,6 +211,7 @@ import {
 import { imageCaption, previewOf } from "@/lib/format";
 import { shortcutRows } from "@/lib/shortcuts";
 import { clearPendingUndo, runPendingUndo, setPendingUndo, tip } from "@/lib/tip";
+import { useAppleRemindersSync } from "@/lib/appleReminders";
 import { silentUpdateFlow } from "@/lib/updater";
 import {
   legacyAiApiKey,
@@ -998,6 +999,7 @@ function PageSlide({
 export default function App() {
   // 订阅语言切换：App 内文案用模块级 t()，缓存的列表 body 以 locale 为依赖
   const locale = useLocale();
+  useAppleRemindersSync();
   const dataOperationLocked = useDataOperationStore((state) => state.locked);
   const dataOperationMessage = useDataOperationStore((state) => state.message);
   const dataOperationPhase = useDataOperationStore((state) => state.phase);

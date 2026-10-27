@@ -539,7 +539,7 @@ pub fn reset_input_monitoring(app: AppHandle) -> Result<(), String> {
     }
 }
 
-/// 打开系统设置对应隐私面板："accessibility" | "input-monitoring" | "calendars"。
+/// 打开系统设置对应隐私面板："accessibility" | "input-monitoring" | "calendars" | "reminders"。
 #[tauri::command]
 pub fn open_privacy_settings(pane: String) {
     let url = match pane.as_str() {
@@ -547,6 +547,7 @@ pub fn open_privacy_settings(pane: String) {
             "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
         }
         "calendars" => "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars",
+        "reminders" => "x-apple.systempreferences:com.apple.preference.security?Privacy_Reminders",
         _ => "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
     };
     let _ = std::process::Command::new("open").arg(url).spawn();
@@ -2269,4 +2270,36 @@ pub async fn apple_calendar_events(
 pub fn apple_calendar_open_event(item_id: String, start_ms: i64, recurring: bool) {
     let url = crate::apple_calendar::event_url(&item_id, start_ms, recurring);
     let _ = std::process::Command::new("open").arg(url).spawn();
+}
+
+// ===== 任务 → 苹果提醒事项同步 =====
+
+#[tauri::command]
+pub fn apple_reminders_status() -> String {
+    crate::apple_reminders::status()
+}
+
+#[tauri::command]
+pub async fn apple_reminders_request_access(app: AppHandle) -> Result<String, String> {
+    crate::apple_reminders::request_access(&app).await
+}
+
+#[tauri::command]
+pub async fn apple_reminders_sync(
+    app: AppHandle,
+    list_id: Option<String>,
+    tasks: Vec<crate::apple_reminders::DesiredTask>,
+) -> Result<crate::apple_reminders::SyncResult, String> {
+    crate::apple_reminders::sync(&app, list_id, tasks)
+        .await
+        .inspect_err(|error| {
+            crate::apple_reminders::record_failure(error);
+            crate::diag::push(&app, format!("提醒事项同步失败: {error}"));
+        })
+}
+
+/// 本次启动以来的提醒事项同步统计（设置 → 诊断）。
+#[tauri::command]
+pub fn apple_reminders_stats() -> crate::apple_reminders::SyncStats {
+    crate::apple_reminders::stats()
 }

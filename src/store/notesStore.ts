@@ -26,7 +26,12 @@ import {
   type AliasCategoryDefinition,
   type AliasEntity,
 } from "@/lib/delivery/aliasEntities";
-import type { FindingCategory } from "@/lib/tauri";
+import type {
+  AppleReminderConflict,
+  AppleReminderDue,
+  AppleReminderImport,
+  FindingCategory,
+} from "@/lib/tauri";
 import {
   normalizeOutcomeBaselines,
   normalizeProblemSessions,
@@ -244,6 +249,20 @@ export interface Task {
   reminderOffsets?: TaskReminderOffset[];
   /** 当前 dueAt 已提醒过的提前档（>0）；到期档仍由 remindedAt 记录。改 dueAt 时清空。 */
   earlyRemindedOffsets?: TaskReminderOffset[];
+  /** 已推到苹果提醒事项时记下的任务 id；复制出的任务 id 对不上即视为未同步。 */
+  appleSyncedId?: string;
+  /** 在提醒事项里删掉了：此后不再同步这条任务。 */
+  appleSyncOff?: true;
+  /** 对端已是完成态（推过或回传过）；据此区分「Toskr 重新打开」与「对端刚完成」。 */
+  appleDone?: true;
+  /** 从提醒事项导入、尚未补写 Toskr URL 的那条提醒 id；认领成功后清除。 */
+  appleImportItemId?: string;
+  /** 上次同步成功时两边一致的标题：据此判断「只有提醒事项那边改了标题」并回流。 */
+  appleTitle?: string;
+  /** 上次同步成功时两边一致的备注（"" = 当时为空），用法同 appleTitle。 */
+  appleNotes?: string;
+  /** 上次同步成功时两边一致的到期（appleDueKey 格式，"" = 无到期），用法同 appleTitle。 */
+  appleDue?: string;
 }
 
 export type TaskReminderChannel = "hud" | "system" | "both";
@@ -565,6 +584,18 @@ export interface Settings {
   appleCalendarEnabled: boolean;
   /** 不叠加的苹果日历 id（排除名单：新建的日历默认显示）。 */
   appleCalendarHiddenIds: string[];
+  /** 任务推到苹果提醒事项「Toskr」列表，对端勾完成回传；默认关闭。 */
+  appleRemindersEnabled: boolean;
+  /** 「Toskr」提醒列表 id（改名后仍能找到）；null = 按标题找或新建。 */
+  appleRemindersListId: string | null;
+  /** 最近一次同步失败原因；null = 正常。只在变化时写入。 */
+  appleRemindersLastError: string | null;
+  /** 推过去的提醒按任务提醒档带上 EKAlarm，iPhone 上准时响；默认关闭。 */
+  appleRemindersAlarm: boolean;
+  /** 从提醒事项导入的任务放进哪个分组；null / 不存在 = 收集箱。 */
+  appleRemindersImportSectionId: string | null;
+  /** 最近一次同步成功的时刻（epoch ms；约 30s 节流写入，手动同步立即写）。 */
+  appleRemindersLastSyncAt: number | null;
   /** 秘文（中文加密通信）总开关；默认关闭，关闭时秘文页与捕获识别都不启用。 */
   secretEnabled: boolean;
   /** 共享密钥列表（明文随本地数据保存；威胁模型见设置页说明）。 */
@@ -862,6 +893,12 @@ export const defaultSettings = (): Settings => ({
   subscriptionsEnabled: false,
   appleCalendarEnabled: false,
   appleCalendarHiddenIds: [],
+  appleRemindersEnabled: false,
+  appleRemindersListId: null,
+  appleRemindersLastError: null,
+  appleRemindersAlarm: false,
+  appleRemindersImportSectionId: null,
+  appleRemindersLastSyncAt: null,
   // 秘文默认关闭（用户指定）：不显示秘文页、不做捕获识别
   secretEnabled: false,
   secretKeys: [],
@@ -1087,6 +1124,31 @@ export interface NotesState {
   toggleTaskDone: (id: string) => void;
   /** 右键菜单直达设置状态。 */
   setTaskStatus: (id: string, status: TaskStatus) => void;
+  /** 提醒事项同步回执：新建成功的记下同步 id，对端已删的标记不再同步，
+   *  并按本轮下发的完成态更新 appleDone（不进撤销栈；无变化不写）。 */
+  markAppleReminderSync: (receipt: {
+    created: string[];
+    missing: string[];
+    done: string[];
+    open: string[];
+    adopted?: string[];
+    /** [任务 id, 对端现在的标题]：记作下一轮的标题基准。 */
+    titles?: [string, string][];
+    /** [任务 id, 对端改成的标题]：只有提醒事项那边改了，回写任务文字。 */
+    renamed?: [string, string][];
+    /** [任务 id, 对端现在的备注]：记作下一轮的备注基准。 */
+    notes?: [string, string][];
+    /** [任务 id, 对端改成的备注（可为空）]：只有提醒事项那边改了，回写任务备注。 */
+    renoted?: [string, string][];
+    /** [任务 id, 对端现在的到期键]：记作下一轮的到期基准。 */
+    dues?: [string, string][];
+    /** [任务 id, 对端改成的到期（null = 清掉）]：只有提醒事项那边改了，回写任务到期。 */
+    redued?: [string, AppleReminderDue | null][];
+  }) => void;
+  /** 冲突气泡里「撤销」：把被 Toskr 覆盖的提醒事项版本写回任务（下一轮随之推回对端）。 */
+  applyAppleReminderTheirs: (conflicts: AppleReminderConflict[]) => void;
+  /** 把提醒事项「Toskr」列表里新建的提醒导入为任务（已导入过的跳过），返回新建数。 */
+  importAppleReminders: (items: AppleReminderImport[]) => number;
   setTaskPriority: (id: string, priority: TaskPriority) => void;
   /** 优先级色条点击：none → low → mid → high → none 循环。 */
   cycleTaskPriority: (id: string) => void;
@@ -1286,6 +1348,10 @@ function validateSettingsShape(value: unknown, version: number): void {
     secretDefaultKeyId: "string",
     autoBackupDir: "string",
     autoBackupLastAtMs: "number",
+    appleRemindersListId: "string",
+    appleRemindersLastError: "string",
+    appleRemindersImportSectionId: "string",
+    appleRemindersLastSyncAt: "number",
   };
   for (const [key, fallback] of Object.entries(defaults)) {
     const current = settings[key];
@@ -1747,6 +1813,23 @@ function normalizeNoteRecord(
 }
 
 /** 改到期时间：清空两类提醒记录，让新时间重新走一遍全部提醒档。 */
+/** 提醒事项的本地年月日时分 → epoch ms；只有日期（h / mi 为 -1）按 9:00（与月历「未来天 9:00」同口径）。 */
+export function dueAtFromAppleParts(due: AppleReminderDue | null): number | null {
+  return due
+    ? new Date(due.y, due.m - 1, due.d, due.h < 0 ? 9 : due.h, due.mi < 0 ? 0 : due.mi).getTime()
+    : null;
+}
+
+/** 到期比较键（与 Rust `due_key` 逐字一致）：`y-m-d h:mi`，无到期为 ""。 */
+export function appleDueKey(due: AppleReminderDue | null): string {
+  return due ? `${due.y}-${due.m}-${due.d} ${due.h}:${due.mi}` : "";
+}
+
+export function appleDueFromKey(key: string): AppleReminderDue | null {
+  const m = /^(-?\d+)-(-?\d+)-(-?\d+) (-?\d+):(-?\d+)$/.exec(key);
+  return m ? { y: +m[1], m: +m[2], d: +m[3], h: +m[4], mi: +m[5] } : null;
+}
+
 function withTaskDue(t: Task, dueAt: number | null): Task {
   return { ...t, dueAt, remindedAt: null, earlyRemindedOffsets: undefined };
 }
@@ -1860,6 +1943,14 @@ function normalizeTaskRecord(task: Task, sectionIds: Set<string>): Task {
     earlyRemindedOffsets: normalizeTaskReminderOffsets(task.earlyRemindedOffsets)?.filter(
       (offset) => offset > 0
     ),
+    appleSyncedId: typeof task.appleSyncedId === "string" ? task.appleSyncedId : undefined,
+    appleSyncOff: task.appleSyncOff === true ? true : undefined,
+    appleDone: task.appleDone === true ? true : undefined,
+    appleImportItemId:
+      typeof task.appleImportItemId === "string" ? task.appleImportItemId : undefined,
+    appleTitle: typeof task.appleTitle === "string" ? task.appleTitle : undefined,
+    appleNotes: typeof task.appleNotes === "string" ? task.appleNotes : undefined,
+    appleDue: typeof task.appleDue === "string" ? task.appleDue : undefined,
   };
 }
 
@@ -3388,6 +3479,69 @@ export const useNotesStore = create<NotesState>()(
         return { result: "added", id: task.id };
       },
 
+      applyAppleReminderTheirs: (conflicts) => {
+        if (!conflicts.length) return;
+        const byTask = new Map<string, AppleReminderConflict[]>();
+        for (const c of conflicts) byTask.set(c.taskId, [...(byTask.get(c.taskId) ?? []), c]);
+        set({
+          tasks: get().tasks.map((t) => {
+            let next = t;
+            for (const c of byTask.get(t.id) ?? []) {
+              if (c.field === "title" && c.theirs.trim()) next = { ...next, text: c.theirs.trim() };
+              if (c.field === "notes") next = { ...next, note: c.theirs.trim() || undefined };
+              if (c.field === "due") next = withTaskDue(next, dueAtFromAppleParts(appleDueFromKey(c.theirs)));
+            }
+            return next;
+          }),
+        });
+      },
+
+      importAppleReminders: (items) => {
+        const known = new Set(
+          get().tasks.flatMap((t) => (t.appleImportItemId ? [t.appleImportItemId] : []))
+        );
+        const now = Date.now();
+        const sectionId = get().settings.appleRemindersImportSectionId;
+        const targetSection =
+          sectionId &&
+          sectionId !== TASK_INBOX_ID &&
+          get().taskSections.some((s) => s.id === sectionId)
+            ? sectionId
+            : undefined;
+        const fresh: Task[] = items
+          .filter((item) => !known.has(item.itemId) && item.title.trim())
+          .map((item) => {
+            const id = crypto.randomUUID();
+            const due = item.due;
+            return {
+              id,
+              text: item.title.trim(),
+              status: "todo",
+              priority:
+                item.priority === 0
+                  ? "none"
+                  : item.priority < 5
+                    ? "high"
+                    : item.priority === 5
+                      ? "mid"
+                      : "low",
+              // 只有日期的提醒按 9:00（与月历「未来天 9:00」同口径）
+              dueAt: dueAtFromAppleParts(due),
+              createdAt: now,
+              remindedAt: null,
+              note: item.notes?.trim() || undefined,
+              sectionId: targetSection,
+              appleSyncedId: id,
+              appleImportItemId: item.itemId,
+              appleTitle: item.title.trim(),
+              appleNotes: item.notes?.trim() ?? "",
+              appleDue: appleDueKey(due),
+            };
+          });
+        if (fresh.length) set({ tasks: [...fresh, ...get().tasks] });
+        return fresh.length;
+      },
+
       sparkToTask: (id) => {
         set({
           tasks: get().tasks.map((t) =>
@@ -3502,6 +3656,77 @@ export const useNotesStore = create<NotesState>()(
 
       setTaskStatus: (id, status) => {
         set({ tasks: withTaskStatus(get().tasks, id, status, Date.now()) });
+      },
+
+      markAppleReminderSync: ({
+        created,
+        missing,
+        done,
+        open,
+        adopted = [],
+        titles = [],
+        renamed = [],
+        notes = [],
+        renoted = [],
+        dues = [],
+        redued = [],
+      }) => {
+        const baseDues = new Map(dues);
+        const remoteDues = new Map(redued);
+        const baseNotes = new Map(notes);
+        const remoteNotes = new Map(renoted);
+        const claimed = new Set(adopted);
+        const baseTitles = new Map(titles);
+        const remoteTitles = new Map(renamed);
+        const made = new Set(created);
+        const gone = new Set(missing);
+        const closed = new Set(done);
+        const opened = new Set(open);
+        let changed = false;
+        const tasks = get().tasks.map((t) => {
+          let next = t;
+          if (made.has(t.id) && t.appleSyncedId !== t.id) {
+            next = { ...next, appleSyncedId: t.id, appleSyncOff: undefined };
+          }
+          if (gone.has(t.id) && !t.appleSyncOff) {
+            next = { ...next, appleSyncedId: undefined, appleSyncOff: true, appleDone: undefined };
+          } else if (closed.has(t.id) && !t.appleDone) {
+            next = { ...next, appleDone: true };
+          } else if (opened.has(t.id) && t.appleDone) {
+            next = { ...next, appleDone: undefined };
+          }
+          if (claimed.has(t.id) && next.appleImportItemId) {
+            next = { ...next, appleImportItemId: undefined };
+          }
+          const remoteTitle = remoteTitles.get(t.id);
+          if (remoteTitle !== undefined && next.text !== remoteTitle) {
+            next = { ...next, text: remoteTitle };
+          }
+          const base = baseTitles.get(t.id);
+          if (base !== undefined && !next.appleSyncOff && next.appleTitle !== base) {
+            next = { ...next, appleTitle: base };
+          }
+          const remoteNote = remoteNotes.get(t.id);
+          if (remoteNote !== undefined && (next.note ?? "") !== remoteNote) {
+            next = { ...next, note: remoteNote || undefined };
+          }
+          const noteBase = baseNotes.get(t.id);
+          if (noteBase !== undefined && !next.appleSyncOff && next.appleNotes !== noteBase) {
+            next = { ...next, appleNotes: noteBase };
+          }
+          if (remoteDues.has(t.id)) {
+            const dueAt = dueAtFromAppleParts(remoteDues.get(t.id) ?? null);
+            if (next.dueAt !== dueAt) next = withTaskDue(next, dueAt);
+          }
+          const dueBase = baseDues.get(t.id);
+          if (dueBase !== undefined && !next.appleSyncOff && next.appleDue !== dueBase) {
+            next = { ...next, appleDue: dueBase };
+          }
+          if (next !== t) changed = true;
+          return next;
+        });
+        // 稳态下每轮都是无变化：不写，免得任务数组换引用又触发下一轮同步
+        if (changed) set({ tasks });
       },
 
       setTaskPriority: (id, priority) => {
