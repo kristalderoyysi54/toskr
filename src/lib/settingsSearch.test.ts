@@ -64,6 +64,7 @@ describe("设置搜索", () => {
     expect(settingsPrimarySection("companion")).toBe("general");
     expect(settingsPrimarySection("ai")).toBe("features");
     expect(settingsPrimarySection("due")).toBe("features");
+    expect(settingsPrimarySection("apple")).toBe("features");
     expect(settingsPrimarySection("message-watch")).toBe("features");
     expect(settingsPrimarySection("secret")).toBe("features");
     expect(settingsPrimarySection("diagnostics")).toBe("outcome");
@@ -75,7 +76,7 @@ describe("设置搜索", () => {
 
   it("禁用功能移除内部子导航，深链回到开启入口", () => {
     const disabled = { messagesEnabled: false, secretEnabled: false, subscriptionsEnabled: false };
-    expect(settingsChildSections("features", disabled)).toEqual(["features", "ai", "due"]);
+    expect(settingsChildSections("features", disabled)).toEqual(["features", "ai", "due", "apple"]);
     expect(settingsSectionFromLink("message-watch", disabled)).toBe("features");
     expect(settingsSectionFromLink("secret", disabled)).toBe("features");
     expect(settingsChildSections("features", enabled)).toContain("message-watch");

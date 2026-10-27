@@ -10,6 +10,7 @@ export type SettingsSectionId =
   | "target"
   | "outcome"
   | "due"
+  | "apple"
   | "ai"
   | "companion"
   | "data"
@@ -46,6 +47,7 @@ export const SETTINGS_SECTION_LABELS: Record<SettingsSectionId, MessageKey> = {
   target: "粘贴与隐私",
   outcome: "使用概览",
   due: "到期提醒",
+  apple: "日历与提醒事项",
   ai: "AI 智能",
   companion: "伴随停靠",
   data: "数据与备份",
@@ -71,7 +73,7 @@ export const SETTINGS_PRIMARY_LABELS: Record<SettingsPrimarySection, MessageKey>
 /** 保留现有分区 ID 与外部深链，只改变它们在设置中的归属。 */
 export function settingsPrimarySection(section: SettingsSectionId): SettingsPrimarySection {
   if (section === "companion") return "general";
-  if (["ai", "due", "message-watch", "secret"].includes(section)) return "features";
+  if (["ai", "due", "apple", "message-watch", "secret"].includes(section)) return "features";
   if (section === "about" || section === "diagnostics") return "outcome";
   return section as SettingsPrimarySection;
 }
@@ -84,7 +86,7 @@ export function settingsChildSections(
   if (primary === "outcome") return ["outcome", "about", "diagnostics"];
   if (primary !== "features") return [];
   return [
-    "features", "ai", "due",
+    "features", "ai", "due", "apple",
     ...(gates.messagesEnabled ? ["message-watch" as const] : []),
     ...(gates.secretEnabled ? ["secret" as const] : []),
   ];
@@ -263,7 +265,10 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
 
   entry("due", "due", "到期提醒", ["任务提醒", "deadline", "日期"]),
   entry("due", "task-reminder-channel", "任务提醒方式", ["系统通知", "通知中心", "气泡", "锁屏"]),
-  entry("due", "apple-calendar", "苹果日历", ["日历", "日程", "calendar", "icloud", "会议"]),
+  entry("apple", "apple-calendar", "苹果日历", ["日历", "日程", "calendar", "icloud", "会议"]),
+  entry("apple", "apple-integration-status", "状态", ["权限", "授权", "立即同步", "上次同步", "统计", "冲突"], { target: "状态" }),
+  entry("apple", "apple-reminders-rules", "同步规则", ["双向", "覆盖", "重复任务", "删除"], { target: "同步规则" }),
+  entry("apple", "apple-reminders", "苹果提醒事项", ["提醒事项", "iphone", "reminders", "同步", "icloud", "响铃", "导入"]),
   entry("due", "due-presets", "到期提醒快捷档", ["多久后", "今天", "明天", "下个周几"]),
   entry("due", "relative-due", "相对提醒时间", ["分钟", "小时", "多久后"], { target: "到期提醒快捷档" }),
   entry("due", "bill-reminders", "账单到期提醒", ["订阅", "信用卡", "提前提醒"], { requires: "subscriptionsEnabled" }),

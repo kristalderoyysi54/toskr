@@ -22,6 +22,7 @@ import {
   Info,
   Keyboard,
   KeyRound,
+  CalendarDays,
   Crosshair,
   Magnet,
   MessagesSquare,
@@ -55,6 +56,7 @@ import {
   SettingsRow as Row,
 } from "@/components/settings/SettingsLayout";
 import { Button } from "@/components/ui/button";
+import { focusRing } from "@/components/ui/focus-ring";
 import { partitionCardMenuIds } from "@/components/cardMenuLayout";
 import { Disclosure } from "@/components/ui/disclosure";
 import { IconButton } from "@/components/ui/icon-button";
@@ -107,6 +109,7 @@ import {
   type MessageWatchStatus,
   type AppleCalendarInfo,
   type AppleCalendarStatus,
+  type AppleReminderStats,
 } from "@/lib/tauri";
 import { buildMessageWatchBridgeScript } from "@/lib/messageWatch";
 import { getImProfile, setImProfile, type ImProfile } from "@/lib/imProfile";
@@ -158,7 +161,15 @@ import {
   type ColorScheme,
   type PlatinumHighlight,
   type PlatinumScrollbar,
+  TASK_INBOX_ID,
 } from "@/store/notesStore";
+import {
+  APPLE_REMINDERS_SECTIONS,
+  APPLE_REMINDERS_SECTIONS_REQUEST,
+  APPLE_REMINDERS_SYNC_NOW,
+  type AppleRemindersSectionOption,
+} from "@/lib/appleReminders";
+import { clockLabel, monthDayLabel } from "@/lib/taskRecurrence";
 import {
   GENERAL_PROMPT_GROUP_ID,
   deletePromptGroup,
@@ -827,14 +838,23 @@ export default function SettingsView() {
         {section === "due" && (
           <>
             <TaskReminderChannelSection settings={settings} patch={patch} />
-            <AppleCalendarSection settings={settings} patch={patch} />
+            <Group>
+              <NavigateRow
+                label={t("苹果日历与提醒事项")}
+                value={appleIntegrationSummary(settings, t)}
+                onClick={() => setSection("apple")}
+              />
+            </Group>
             <DuePresetsSection settings={settings} patch={patch} />
             <BillReminderDefaultsSection settings={settings} patch={patch} />
           </>
         )}
+        {section === "apple" && <AppleIntegrationPage settings={settings} patch={patch} />}
         {section === "ai" && <AiSection settings={settings} patch={patch} />}
         {section === "data" && <DataSection settings={settings} patch={patch} />}
-        {section === "diagnostics" && <DiagnosticsSection />}
+        {section === "diagnostics" && (
+          <DiagnosticsSection />
+        )}
         {section === "about" && <AboutSection settings={settings} patch={patch} />}
         </div>
         </div>
@@ -2039,6 +2059,37 @@ export function FeaturesSection({ settings, patch, onConfigure }: SP & {
             }
           />
         ))}
+        <FeatureRow
+          icon={<CalendarDays />}
+          title={t("苹果日历与提醒事项")}
+          description={
+            settings.appleCalendarEnabled || settings.appleRemindersEnabled
+              ? appleIntegrationSummary(settings, t)
+              : t("在「提醒」页显示日历日程，把任务同步到 iPhone 的提醒事项")
+          }
+          switchLabel={t("启用{feature}", { feature: t("苹果日历与提醒事项") })}
+          checked={settings.appleCalendarEnabled || settings.appleRemindersEnabled}
+          onCheckedChange={(on) => {
+            // 一个开关管两项：打开时两项都开、跳详情页，并依次弹系统授权框（已决定过的立即返回）；
+            // 授权框关掉后设置窗重新获得焦点，详情页的状态检查会随之刷新
+            patch({ appleCalendarEnabled: on, appleRemindersEnabled: on });
+            if (!on) return;
+            onConfigure("apple");
+            void (async () => {
+              await api.appleCalendarRequestAccess().catch(() => null);
+              await api.appleRemindersRequestAccess().catch(() => null);
+            })();
+          }}
+          actions={
+            <Button
+              size="xs"
+              aria-label={t("设置{feature}", { feature: t("苹果日历与提醒事项") })}
+              onClick={() => onConfigure("apple")}
+            >
+              {t("设置")}
+            </Button>
+          }
+        />
       </Group>
     </div>
   );
@@ -3452,26 +3503,29 @@ function TaskReminderChannelSection({ settings, patch }: SP) {
   );
 }
 
-/**
- * 苹果日历只读叠加：总开关（首次开启时弹系统授权）+ 权限状态 + 逐个日历显示开关。
- * 在系统设置里改完权限回到本窗口时重查状态；新授权要让 Rust 侧 store 重置才读得到。
- */
-function AppleCalendarSection({ settings, patch }: SP) {
-  const t = useT();
-  const enabled = settings.appleCalendarEnabled;
-  const hiddenIds = settings.appleCalendarHiddenIds;
-  const [status, setStatus] = useState<AppleCalendarStatus | null>(null);
-  const [calendars, setCalendars] = useState<AppleCalendarInfo[]>([]);
+/** 「到期提醒」页跳转行右侧的一句话状态。 */
+function appleIntegrationSummary(settings: Settings, t: ReturnType<typeof useT>): string {
+  const on = [
+    settings.appleCalendarEnabled && t("日历"),
+    settings.appleRemindersEnabled && t("提醒事项"),
+  ].filter(Boolean);
+  return on.length ? t("已开启：{items}", { items: on.join(" · ") }) : t("未开启");
+}
 
+/**
+ * EventKit 授权状态（日历 / 提醒事项各一份）。回到设置窗时重查；从系统设置里
+ * 新授权的要再调一次 request，让 Rust 侧 store 重置后才读得到数据。
+ */
+function useEventKitStatus(kind: "calendar" | "reminders") {
+  const [status, setStatus] = useState<AppleCalendarStatus | null>(null);
+  const read = kind === "calendar" ? api.appleCalendarStatus : api.appleRemindersStatus;
+  const request = kind === "calendar" ? api.appleCalendarRequestAccess : api.appleRemindersRequestAccess;
   useEffect(() => {
     let previous: AppleCalendarStatus | null = null;
     const check = () => {
-      api
-        .appleCalendarStatus()
+      read()
         .then(async (next) => {
-          if (next === "granted" && previous !== null && previous !== "granted") {
-            next = await api.appleCalendarRequestAccess();
-          }
+          if (next === "granted" && previous !== null && previous !== "granted") next = await request();
           previous = next;
           setStatus(next);
         })
@@ -3480,101 +3534,359 @@ function AppleCalendarSection({ settings, patch }: SP) {
     check();
     window.addEventListener("focus", check);
     return () => window.removeEventListener("focus", check);
-  }, []);
+    // read / request 随 kind 固定
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind]);
+  const ask = async () => {
+    const next = await request().catch(() => null);
+    if (next) setStatus(next);
+    return next;
+  };
+  return { status, ask };
+}
+
+/** 本次启动以来的同步统计（Rust 内存计数）；页面打开期间每 5 秒刷新。 */
+function useAppleReminderStats(enabled: boolean) {
+  const [stats, setStats] = useState<AppleReminderStats | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    const load = () => void api.appleRemindersStats().then(setStats).catch(() => {});
+    load();
+    const timer = window.setInterval(load, 5000);
+    window.addEventListener("focus", load);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", load);
+    };
+  }, [enabled]);
+  return stats;
+}
+
+/**
+ * 「更多功能 → 日历与提醒事项」：顶部状态卡（权限 / 上次同步 / 立即同步 / 统计），
+ * 下面日历、提醒事项各一组设置，同步规则折叠收起。
+ */
+function AppleIntegrationPage({ settings, patch }: SP) {
+  const t = useT();
+  const calendar = useEventKitStatus("calendar");
+  const reminders = useEventKitStatus("reminders");
+  const calendarOn = settings.appleCalendarEnabled;
+  const remindersOn = settings.appleRemindersEnabled;
+  const stats = useAppleReminderStats(remindersOn && reminders.status === "granted");
+  const [statsOpen, setStatsOpen] = useState(false);
+  const [rulesOpen, setRulesOpen] = useState(false);
+  const [calendars, setCalendars] = useState<AppleCalendarInfo[]>([]);
+  const [sections, setSections] = useState<AppleRemindersSectionOption[]>([]);
+  const hiddenIds = settings.appleCalendarHiddenIds;
 
   useEffect(() => {
-    if (!enabled || status !== "granted") return;
+    if (!calendarOn || calendar.status !== "granted") return;
     api.appleCalendarList().then(setCalendars).catch(() => {});
-  }, [enabled, status]);
+  }, [calendarOn, calendar.status]);
 
-  const toggle = async (on: boolean) => {
+  // 任务分组在主窗口：打开 / 回到设置窗时要一份最新列表
+  useEffect(() => {
+    if (!remindersOn) return;
+    const unlisten = listen<AppleRemindersSectionOption[]>(APPLE_REMINDERS_SECTIONS, (event) =>
+      setSections(event.payload)
+    );
+    const request = () => void emitTo("main", APPLE_REMINDERS_SECTIONS_REQUEST, {}).catch(() => {});
+    void unlisten.then(request);
+    window.addEventListener("focus", request);
+    return () => {
+      window.removeEventListener("focus", request);
+      void unlisten.then((stop) => stop());
+    };
+  }, [remindersOn]);
+
+  const toggleCalendar = async (on: boolean) => {
     patch({ appleCalendarEnabled: on });
-    if (on && status === "notDetermined") {
-      setStatus(await api.appleCalendarRequestAccess().catch(() => status));
-    }
+    if (on && calendar.status === "notDetermined") await calendar.ask();
+  };
+  const toggleReminders = async (on: boolean) => {
+    patch({ appleRemindersEnabled: on });
+    if (on && reminders.status === "notDetermined") await reminders.ask();
   };
 
-  const statusHint =
-    status === "denied"
-      ? t("已拒绝访问日历，请在系统设置 → 隐私与安全性 → 日历里允许 Toskr")
-      : status === "writeOnly"
-        ? t("当前只有「仅添加事件」权限，读不到日程；请在系统设置里改为「完全访问」")
-        : status === "restricted"
-          ? t("日历访问受系统限制（如家长控制或描述文件）")
-          : t("尚未授权，开启后由 macOS 询问");
+  const lastSyncAt = stats?.lastSyncAt ?? settings.appleRemindersLastSyncAt;
+  const syncHint = settings.appleRemindersLastError
+    ? settings.appleRemindersLastError
+    : lastSyncAt !== null
+      ? t("上次同步 {time}", { time: syncTimeLabel(lastSyncAt) })
+      : t("任务变化后几秒内推送");
+  const count = (items: [MessageKey, number][]) =>
+    items.map(([label, n]) => `${t(label)} ${n}`).join(" · ");
+  const pushed = stats ? stats.created + stats.updated + stats.deleted : 0;
+  const pulled = stats
+    ? stats.completedRemote + stats.imported + stats.titleBack + stats.notesBack + stats.dueBack
+    : 0;
 
   return (
-    <Group
-      title={t("苹果日历")}
-      footer={t("只读：Toskr 不会新建、修改或删除日历里的日程。日程显示在「今天」时间轴和任务月历里，点击可在「日历」App 中打开。")}
-    >
-      <Row
-        label={t("显示苹果日历日程")}
-        hint={t("在「今天」和月历里叠加系统日历")}
-        right={
-          <Switch
-            aria-label={t("显示苹果日历日程")}
-            checked={enabled}
-            onCheckedChange={(on) => void toggle(on)}
+    <div>
+      <SettingsIntro>
+        {t("在「提醒」页叠加苹果日历日程，并把任务同步到 iPhone 的提醒事项。两项各自开关。")}
+      </SettingsIntro>
+
+      <Group title={t("状态")}>
+        <PermissionRow
+          label={t("日历")}
+          enabled={calendarOn}
+          status={calendar.status}
+          detail={
+            calendars.length
+              ? t("显示 {shown} / {total} 个日历", {
+                  shown: calendars.filter((c) => !hiddenIds.includes(c.id)).length,
+                  total: calendars.length,
+                })
+              : undefined
+          }
+          pane="calendars"
+          onAsk={() => void calendar.ask()}
+        />
+        <PermissionRow
+          label={t("提醒事项")}
+          enabled={remindersOn}
+          status={reminders.status}
+          pane="reminders"
+          onAsk={() => void reminders.ask()}
+        />
+        {remindersOn && reminders.status === "granted" && (
+          <Row
+            label={t("同步")}
+            hint={syncHint}
+            hintTone={settings.appleRemindersLastError ? "warning" : undefined}
+            right={
+              <Button size="xs" onClick={() => void emitTo("main", APPLE_REMINDERS_SYNC_NOW, {}).catch(() => {})}>
+                {t("立即同步")}
+              </Button>
+            }
           />
-        }
-      />
-      {enabled && status !== null && status !== "granted" && (
+        )}
+        {stats && (
+          <DisclosureRow
+            label={t("本次启动以来")}
+            value={t("推送 {a} · 回来 {b} · 冲突 {c}", { a: pushed, b: pulled, c: stats.conflicts })}
+            open={statsOpen}
+            onOpenChange={setStatsOpen}
+          >
+            <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-label">
+              <dt className="text-muted-foreground">{t("同步轮数")}</dt>
+              <dd>{stats.rounds}</dd>
+              <dt className="text-muted-foreground">{t("推到提醒事项")}</dt>
+              <dd>{count([["新建", stats.created], ["更新", stats.updated], ["删除", stats.deleted]])}</dd>
+              <dt className="text-muted-foreground">{t("从提醒事项回来")}</dt>
+              <dd>
+                {count([
+                  ["完成", stats.completedRemote],
+                  ["导入", stats.imported],
+                  ["标题", stats.titleBack],
+                  ["备注", stats.notesBack],
+                  ["到期", stats.dueBack],
+                ])}
+              </dd>
+              <dt className="text-muted-foreground">{t("冲突与失败")}</dt>
+              <dd>{count([["冲突", stats.conflicts], ["失败", stats.failures]])}</dd>
+              {stats.lastError && stats.lastErrorAt !== null && (
+                <>
+                  <dt className="text-muted-foreground">{t("最近失败")}</dt>
+                  <dd className="text-warning">
+                    {syncTimeLabel(stats.lastErrorAt)} · {stats.lastError}
+                  </dd>
+                </>
+              )}
+            </dl>
+            <p className="mt-2 text-micro text-muted-foreground">{t("重启 Toskr 后清零。")}</p>
+          </DisclosureRow>
+        )}
+      </Group>
+
+      <Group title={t("苹果日历")} footer={t("只读，不会改动日历里的日程。点日程可在「日历」App 中打开。")}>
         <Row
-          label={t("日历权限")}
-          hint={statusHint}
+          label={t("显示苹果日历日程")}
+          hint={t("在「今天」时间轴和任务月历里显示")}
           right={
-            status === "notDetermined" ? (
-              <Button
-                size="xs"
-                onClick={() =>
-                  void api.appleCalendarRequestAccess().then(setStatus).catch(() => {})
-                }
-              >
-                {t("授权")}
-              </Button>
-            ) : (
-              <Button size="xs" onClick={() => void api.openPrivacySettings("calendars")}>
-                {t("打开系统设置")}
-              </Button>
-            )
+            <Switch
+              aria-label={t("显示苹果日历日程")}
+              checked={calendarOn}
+              onCheckedChange={(on) => void toggleCalendar(on)}
+            />
           }
         />
-      )}
-      {enabled &&
-        status === "granted" &&
-        calendars.map((calendar) => (
+        {calendarOn && calendar.status === "granted" && calendars.length > 0 && (
+          <Row label={t("显示的日历")} hint={t("点一下切换显示")}>
+            <div role="group" aria-label={t("显示的日历")} className="mt-2 flex flex-wrap gap-1.5">
+              {calendars.map((item) => {
+                const shown = !hiddenIds.includes(item.id);
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    aria-pressed={shown}
+                    title={item.source}
+                    onClick={() =>
+                      patch({
+                        appleCalendarHiddenIds: shown
+                          ? [...hiddenIds, item.id]
+                          : hiddenIds.filter((id) => id !== item.id),
+                      })
+                    }
+                    className={cn(
+                      "inline-flex max-w-full items-center gap-1.5 rounded-full border px-2 py-0.5 text-label outline-none transition-colors",
+                      focusRing,
+                      shown
+                        ? "border-border bg-card text-foreground"
+                        : "border-dashed border-border text-muted-foreground line-through"
+                    )}
+                  >
+                    <span
+                      aria-hidden
+                      className={cn("size-2 shrink-0 rounded-full bg-muted-foreground/60", !shown && "opacity-40")}
+                      // token-exception: 用户日历的系统颜色（运行时数据），无对应 token
+                      style={item.color ? { backgroundColor: item.color } : undefined}
+                    />
+                    <span className="truncate">{item.title}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </Row>
+        )}
+      </Group>
+
+      <Group title={t("苹果提醒事项")}>
+        <Row
+          label={t("同步任务到提醒事项")}
+          hint={t("推到提醒事项的「Toskr」列表，iPhone 上可查看和勾选")}
+          right={
+            <Switch
+              aria-label={t("同步任务到提醒事项")}
+              checked={remindersOn}
+              onCheckedChange={(on) => void toggleReminders(on)}
+            />
+          }
+        />
+        {remindersOn && (
           <Row
-            key={calendar.id}
-            label={calendar.title}
-            hint={
-              <span className="inline-flex items-center gap-1">
-                <span
-                  aria-hidden
-                  className="size-2 rounded-full bg-muted-foreground/60"
-                  // token-exception: 用户日历的系统颜色（运行时数据），无对应 token
-                  style={calendar.color ? { backgroundColor: calendar.color } : undefined}
-                />
-                {calendar.source}
-              </span>
-            }
+            label={t("导入到分组")}
+            hint={t("在「Toskr」列表里新建的提醒导入到这里")}
             right={
-              <Switch
-                aria-label={t("显示日历：{name}", { name: calendar.title })}
-                checked={!hiddenIds.includes(calendar.id)}
-                onCheckedChange={(on) =>
-                  patch({
-                    appleCalendarHiddenIds: on
-                      ? hiddenIds.filter((id) => id !== calendar.id)
-                      : [...hiddenIds, calendar.id],
-                  })
+              <SimpleSelect
+                ariaLabel={t("导入到分组")}
+                className="w-36"
+                align="end"
+                value={
+                  sections.some((s) => s.id === settings.appleRemindersImportSectionId)
+                    ? settings.appleRemindersImportSectionId!
+                    : TASK_INBOX_ID
+                }
+                options={(sections.length ? sections : [{ id: TASK_INBOX_ID, name: "" }]).map((s) => ({
+                  value: s.id,
+                  label: s.id === TASK_INBOX_ID ? t("收集箱") : s.name || t("未命名分组"),
+                }))}
+                onChange={(id) =>
+                  patch({ appleRemindersImportSectionId: id === TASK_INBOX_ID ? null : id })
                 }
               />
             }
           />
-        ))}
-    </Group>
+        )}
+        {remindersOn && (
+          <Row
+            label={t("在提醒事项里响铃")}
+            hint={t("按任务的提醒档响铃，iPhone 锁屏也能收到；Mac 上会和 Toskr 各响一次")}
+            right={
+              <Switch
+                aria-label={t("在提醒事项里响铃")}
+                checked={settings.appleRemindersAlarm}
+                onCheckedChange={(on) => patch({ appleRemindersAlarm: on })}
+              />
+            }
+          />
+        )}
+        <DisclosureRow label={t("同步规则")} open={rulesOpen} onOpenChange={setRulesOpen}>
+          <ul className="list-disc space-y-1 pl-4 text-label text-muted-foreground">
+            <li>{t("在 iPhone 勾完成，Toskr 跟着完成；在「Toskr」列表新建的提醒导入为任务")}</li>
+            <li>{t("只在提醒事项里改的标题、备注、到期会同步回来；两边都改以 Toskr 为准，提示里点「撤销」可改用提醒事项版本")}</li>
+            <li>{t("优先级以 Toskr 为准；闪念、开启前已完成的任务不推送")}</li>
+            <li>{t("在提醒事项里删掉的任务不再同步，Toskr 里的任务保留")}</li>
+            <li>{t("重复规则不推送，完成后由 Toskr 生成下一期")}</li>
+          </ul>
+        </DisclosureRow>
+      </Group>
+    </div>
   );
+}
+
+/** 状态卡里的一行权限：未开启 / 已授权 / 需授权（带授权或去系统设置按钮）。 */
+function PermissionRow({
+  label,
+  enabled,
+  status,
+  pane,
+  onAsk,
+  detail,
+}: {
+  label: string;
+  enabled: boolean;
+  status: AppleCalendarStatus | null;
+  /** 已授权时附在状态后的补充（如「显示 4 / 5 个日历」）。 */
+  detail?: string;
+  pane: "calendars" | "reminders";
+  onAsk: () => void;
+}) {
+  const t = useT();
+  const granted = status === "granted";
+  const text = !enabled
+    ? t("未开启")
+    : status === null
+      ? t("检查中…")
+      : granted
+      ? t("已授权")
+      : status === "notDetermined"
+        ? t("待授权")
+        : status === "writeOnly"
+          ? t("只有「仅添加」权限，需改为「完全访问」")
+          : status === "restricted"
+            ? t("受系统限制（家长控制或描述文件）")
+            : t("已拒绝，需在系统设置里允许 Toskr");
+  const tone = !enabled || status === null ? "off" : granted ? "ok" : "warn";
+  return (
+    <Row
+      label={label}
+      hint={
+        <span className={cn("inline-flex items-center gap-1.5", tone === "warn" && "text-warning")}>
+          <span
+            aria-hidden
+            className={cn(
+              "size-1.5 shrink-0 rounded-full",
+              tone === "ok" ? "bg-success" : tone === "warn" ? "bg-warning" : "bg-muted-foreground/40"
+            )}
+          />
+          {granted && enabled && detail ? `${text} · ${detail}` : text}
+        </span>
+      }
+      right={
+        enabled && status !== null && !granted ? (
+          status === "notDetermined" ? (
+            <Button size="xs" onClick={onAsk}>
+              {t("授权")}
+            </Button>
+          ) : (
+            <Button size="xs" onClick={() => void api.openPrivacySettings(pane)}>
+              {t("打开系统设置")}
+            </Button>
+          )
+        ) : undefined
+      }
+    />
+  );
+}
+
+/** 「上次同步」时刻：今天只写时分，其余带上日期。 */
+function syncTimeLabel(ms: number): string {
+  const d = new Date(ms);
+  const time = clockLabel(d.getHours(), d.getMinutes());
+  return d.toDateString() === new Date().toDateString() ? time : `${monthDayLabel(d)} ${time}`;
 }
 
 /** 到期快捷档编辑：任务「到期」弹层里的快捷选项，可增删改。 */

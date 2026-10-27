@@ -1,5 +1,6 @@
 import { Fragment, useState } from "react";
-import { CalendarDays, ListFilter } from "lucide-react";
+import { emitTo } from "@tauri-apps/api/event";
+import { AlertTriangle, CalendarDays, ListFilter } from "lucide-react";
 
 import { SubscriptionsPage } from "@/components/subscriptions/SubscriptionsPage";
 import { TaskPage } from "@/components/TaskPage";
@@ -8,6 +9,8 @@ import { focusRing } from "@/components/ui/focus-ring";
 import { IconButton } from "@/components/ui/icon-button";
 import { SlidingTabIndicator } from "@/components/ui/sliding-tab-indicator";
 import { useT } from "@/lib/i18n";
+import { SETTINGS_SECTION } from "@/lib/settingsSync";
+import { api } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import type { TaskBuckets } from "@/lib/tasks";
 import { useNotesStore } from "@/store/notesStore";
@@ -42,6 +45,10 @@ export function RemindersPage({ buckets, now }: { buckets: TaskBuckets; now: num
   const [taskCalendar, setTaskCalendar] = useState(false);
   // 筛选栏同为会话态：关闭即清空条件，回到分组视图
   const [taskFilter, setTaskFilter] = useState(false);
+  // 提醒事项同步失败：头部给一个黄色提示钮，点开设置的「日历与提醒事项」页
+  const syncError = useNotesStore((s) =>
+    s.settings.appleRemindersEnabled ? s.settings.appleRemindersLastError : null
+  );
   return (
     <>
       {/* min-h 锁行高：今天/订阅子视图无筛选/日历钮，避免切换时行高跳 2px。
@@ -86,28 +93,43 @@ export function RemindersPage({ buckets, now }: { buckets: TaskBuckets; now: num
             );
           })}
         </div>
-        {subview === "tasks" && (
-          <>
+        <div className="ml-auto flex items-center">
+          {syncError && (
             <IconButton
-              label={taskFilter ? t("关闭搜索与筛选") : t("搜索与筛选任务")}
+              label={t("提醒事项同步失败：{error}（点击查看）", { error: syncError })}
               size="sm"
-              aria-pressed={taskFilter}
-              onClick={() => setTaskFilter((v) => !v)}
-              className={cn("ml-auto", taskFilter && "text-primary")}
+              onClick={() => {
+                void api.openSettingsWindow();
+                void emitTo("settings", SETTINGS_SECTION, "apple");
+              }}
+              className="text-warning"
             >
-              <ListFilter />
+              <AlertTriangle />
             </IconButton>
-            <IconButton
-              label={taskCalendar ? t("隐藏任务日历") : t("显示任务日历")}
-              size="sm"
-              aria-pressed={taskCalendar}
-              onClick={() => setTaskCalendar((v) => !v)}
-              className={cn(taskCalendar && "text-primary")}
-            >
-              <CalendarDays />
-            </IconButton>
-          </>
-        )}
+          )}
+          {subview === "tasks" && (
+            <>
+              <IconButton
+                label={taskFilter ? t("关闭搜索与筛选") : t("搜索与筛选任务")}
+                size="sm"
+                aria-pressed={taskFilter}
+                onClick={() => setTaskFilter((v) => !v)}
+                className={cn(taskFilter && "text-primary")}
+              >
+                <ListFilter />
+              </IconButton>
+              <IconButton
+                label={taskCalendar ? t("隐藏任务日历") : t("显示任务日历")}
+                size="sm"
+                aria-pressed={taskCalendar}
+                onClick={() => setTaskCalendar((v) => !v)}
+                className={cn(taskCalendar && "text-primary")}
+              >
+                <CalendarDays />
+              </IconButton>
+            </>
+          )}
+        </div>
       </div>
       {subview === "today" ? (
         <TodayPage now={now} />
