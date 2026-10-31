@@ -677,4 +677,7 @@ export const settings = {
   "显示 {shown} / {total} 个日历": "showing {shown} of {total} calendars",
   "捕获存入": "Save Captures To",
   "双击捕获的内容进入此分组；也可在笔记页分组菜单里「设为捕获目标」": "Double-tap captures go into this group; you can also use “Set as Capture Target” in a group’s menu on the Notes page",
+  "区域截图": "Screenshot",
+  "需要「屏幕录制」权限，授权后重启 Toskr": "Needs Screen Recording permission; restart Toskr after allowing",
+  "截图复制到剪贴板，并存入「剪贴」": "Copies the screenshot and saves it to Clipboard",
 } satisfies Record<string, EnValue>;

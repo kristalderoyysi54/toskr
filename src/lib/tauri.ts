@@ -13,6 +13,27 @@ export const TRIGGER_EVENT = "toskr://trigger";
 /** Rust 前台观察器确认下一次发送目标发生语义变化。 */
 export const TARGET_CHANGED_EVENT = "toskr://target-changed";
 /** Rust → HUD 窗口展示事件。 */
+export const SCREENSHOT_SESSION_EVENT = "toskr://screenshot-session";
+export const SCREENSHOT_END_EVENT = "toskr://screenshot-end";
+/** 截完「发送 / 在编辑器中打开」：主窗口先落进剪贴再执行。 */
+export const SCREENSHOT_AFTER_EVENT = "toskr://screenshot-after";
+
+/** 截完动作：save 复制并存入剪贴；pin 钉图；ocr 识别文字；send 发送；edit 打码编辑。 */
+export type ScreenshotAction = "save" | "pin" | "ocr" | "send" | "edit";
+
+/** 截图遮罩本屏会话；坐标为本屏左上角原点的 pt。 */
+export interface ScreenshotSession {
+  id: number;
+  width: number;
+  height: number;
+  pxW: number;
+  pxH: number;
+  /** 冻结帧格式：image/bmp（SCK）或 image/png（screencapture 回退）。 */
+  mime: string;
+  windows: { x: number; y: number; w: number; h: number }[];
+  cursor: [number, number] | null;
+}
+
 export const HUD_EVENT = "toskr://hud";
 /** Rust → HUD 窗口 hover 状态事件。 */
 export const HUD_HOVER_EVENT = "toskr://hud-hover";
@@ -909,7 +930,7 @@ export const api = {
   setLocale: (locale: Locale) => invoke("set_locale", { locale }),
   retryTap: () => invoke("retry_tap"),
   openPrivacySettings: (
-    pane: "accessibility" | "input-monitoring" | "calendars" | "reminders"
+    pane: "accessibility" | "input-monitoring" | "calendars" | "reminders" | "screen-capture"
   ) =>
     invoke("open_privacy_settings", { pane }),
   appleCalendarStatus: () => invoke<AppleCalendarStatus>("apple_calendar_status"),
@@ -955,6 +976,42 @@ export const api = {
   /** 注册/清除全局「新建笔记」快捷键（任意前台开详情大窗）。 */
   setNewNoteHotkey: (shortcut: string | null) =>
     invoke("set_new_note_hotkey", { shortcut }),
+  /** 注册/清除全局区域截图快捷键。 */
+  setScreenshotHotkey: (shortcut: string | null) =>
+    invoke("set_screenshot_hotkey", { shortcut }),
+  /** 屏幕录制授权状态；prompt 时未授权会弹系统授权框。 */
+  screenCaptureAccess: (prompt: boolean) => invoke<boolean>("screen_capture_access", { prompt }),
+  /** 截图遮罩：本屏会话信息（无会话为 null）。 */
+  screenshotSession: () => invoke<ScreenshotSession | null>("screenshot_session"),
+  /** 截图遮罩：本屏冻结帧图片字节（格式见 session.mime）。 */
+  screenshotFrame: (sessionId: number) => invoke<ArrayBuffer>("screenshot_frame", { sessionId }),
+  /** 截图出图：原始 RGBA 走二进制请求体。 */
+  screenshotCommit: (
+    rgba: Uint8Array,
+    width: number,
+    height: number,
+    action: ScreenshotAction,
+    at: { x: number; y: number }
+  ) =>
+    invoke("screenshot_commit", rgba, {
+      headers: {
+        "x-shot-w": String(width),
+        "x-shot-h": String(height),
+        "x-shot-action": action,
+        "x-shot-x": String(at.x),
+        "x-shot-y": String(at.y),
+      },
+    }),
+  /** 钉图窗：原始 pt 尺寸。 */
+  pinInfo: () => invoke<{ width: number; height: number } | null>("pin_info"),
+  pinImage: () => invoke<ArrayBuffer>("pin_image"),
+  pinCopy: () => invoke("pin_copy"),
+  pinZoom: (factor: number) => invoke("pin_zoom", { factor }),
+  pinClose: () => invoke("pin_close"),
+  screenshotCancel: () => invoke("screenshot_cancel"),
+  /** 截图遮罩阶段追踪（只记白名单阶段名与数字，排查用）。 */
+  screenshotTrace: (stage: string, a = 0, b = 0) =>
+    invoke("screenshot_trace", { stage, a, b }).catch(() => {}),
   /** 抓取链接的网页标题/图标（curl，6s 超时）。 */
   fetchLinkMeta: (url: string, manual = false) => invoke<LinkMeta>("fetch_link_meta", { url, manual }),
   /** 按域名抓 favicon 缓存进媒体库，返回文件名；失败 reject（前端回退首字色块）。 */

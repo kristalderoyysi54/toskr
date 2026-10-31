@@ -2534,7 +2534,7 @@ pub fn hide_hud_now(app: &AppHandle) {
 }
 
 /// 全局光标位置（顶左原点逻辑 pt）。CGEvent 快照，线程安全、无需权限。
-fn cursor_point_pt() -> Option<(f64, f64)> {
+pub(crate) fn cursor_point_pt() -> Option<(f64, f64)> {
     use core_graphics::event::CGEvent;
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState).ok()?;

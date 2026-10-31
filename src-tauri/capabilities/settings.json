@@ -41,6 +41,8 @@
     "allow-apple-calendar-list",
     "allow-reset-input-monitoring",
     "allow-set-new-note-hotkey",
+    "allow-set-screenshot-hotkey",
+    "allow-screen-capture-access",
     "allow-set-panel-hotkey",
     "allow-set-ai-api-key",
     "allow-get-ai-key-status",

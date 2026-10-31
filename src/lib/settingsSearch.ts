@@ -190,6 +190,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   entry("hotkey", "double-interval", "双击间隔", ["速度", "毫秒", "触发间隔"]),
   entry("hotkey", "double-action", "双击行为", ["划词", "显示面板", "捕获行为"]),
   entry("hotkey", "capture-section", "捕获存入", ["分组", "收件箱", "捕获目标", "默认分组"]),
+  entry("hotkey", "screenshot", "区域截图", ["截图", "截屏", "screenshot", "屏幕录制"]),
   entry("hotkey", "panel-toggle", "面板显示 / 隐藏", ["打开面板", "关闭面板", "快捷键"]),
   entry("hotkey", "panel-shortcuts", "面板内快捷键", ["alt", "option", "速查", "键盘操作"]),
   entry("hotkey", "exclude-apps", "忽略应用", ["排除应用", "捕获排除", "不捕获", "exclude"], { target: "捕获排除" }),

@@ -539,7 +539,7 @@ pub fn reset_input_monitoring(app: AppHandle) -> Result<(), String> {
     }
 }
 
-/// 打开系统设置对应隐私面板："accessibility" | "input-monitoring" | "calendars" | "reminders"。
+/// 打开系统设置对应隐私面板："accessibility" | "input-monitoring" | "calendars" | "reminders" | "screen-capture"。
 #[tauri::command]
 pub fn open_privacy_settings(pane: String) {
     let url = match pane.as_str() {
@@ -548,6 +548,9 @@ pub fn open_privacy_settings(pane: String) {
         }
         "calendars" => "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars",
         "reminders" => "x-apple.systempreferences:com.apple.preference.security?Privacy_Reminders",
+        "screen-capture" => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+        }
         _ => "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
     };
     let _ = std::process::Command::new("open").arg(url).spawn();
@@ -590,7 +593,110 @@ pub fn set_new_note_hotkey(app: AppHandle, shortcut: Option<String>) -> Result<(
     rebind_global_hotkeys(&app)
 }
 
-/// 插件按「整体清空再全量注册」管理：两个快捷键共用注册器，改任一必须重放另一。
+/// 注册/清除全局截图快捷键（默认不绑定）。注册失败不连坐面板键。
+#[tauri::command]
+pub fn set_screenshot_hotkey(app: AppHandle, shortcut: Option<String>) -> Result<(), String> {
+    *app.state::<AppState>()
+        .screenshot_hotkey_binding
+        .lock()
+        .unwrap() = shortcut.filter(|s| !s.trim().is_empty());
+    rebind_global_hotkeys(&app)
+}
+
+/// 屏幕录制授权状态；`prompt` 时未授权会弹系统授权框。
+#[tauri::command]
+pub fn screen_capture_access(prompt: bool) -> bool {
+    crate::screenshot::access(prompt)
+}
+
+/// 截图遮罩窗拉取本屏会话（尺寸、窗口矩形、光标）；无会话时为 null。
+#[tauri::command]
+pub fn screenshot_session(window: tauri::WebviewWindow) -> Option<crate::screenshot::SessionInfo> {
+    crate::screenshot::session_info(window.label())
+}
+
+/// 本屏冻结帧图片字节（二进制 IPC，不走 JSON）。
+#[tauri::command]
+pub fn screenshot_frame(
+    window: tauri::WebviewWindow,
+    session_id: u64,
+) -> Result<tauri::ipc::Response, String> {
+    crate::screenshot::frame_bytes(window.label(), session_id)
+        .map(tauri::ipc::Response::new)
+        .ok_or_else(|| "no screenshot session".to_string())
+}
+
+/// 截图出图：请求体为原始 RGBA；尺寸 x-shot-w/h、动作 x-shot-action、
+/// 选区本屏位置 x-shot-x/y（钉图定位）放在请求头里。
+#[tauri::command]
+pub fn screenshot_commit(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    request: tauri::ipc::Request<'_>,
+) -> Result<(), String> {
+    let header = |name: &str| -> Option<&str> { request.headers().get(name)?.to_str().ok() };
+    let num = |name: &str| -> Option<f64> { header(name)?.parse().ok() };
+    let (Some(w), Some(h)) = (num("x-shot-w"), num("x-shot-h")) else {
+        return Err("missing size".into());
+    };
+    let tauri::ipc::InvokeBody::Raw(rgba) = request.body() else {
+        return Err("expected raw body".into());
+    };
+    let placement = crate::screenshot::Placement {
+        label: window.label().to_string(),
+        x: num("x-shot-x").unwrap_or(0.0),
+        y: num("x-shot-y").unwrap_or(0.0),
+    };
+    let action = crate::screenshot::Action::parse(header("x-shot-action").unwrap_or("save"));
+    crate::screenshot::commit(&app, action, placement, w as usize, h as usize, rgba.clone())
+}
+
+/// 钉图窗：原始 pt 尺寸。
+#[tauri::command]
+pub fn pin_info(window: tauri::WebviewWindow) -> Option<crate::screenshot::PinInfo> {
+    crate::screenshot::pin_info(window.label())
+}
+
+/// 钉图窗：图片字节（BMP）。
+#[tauri::command]
+pub fn pin_image(window: tauri::WebviewWindow) -> Result<tauri::ipc::Response, String> {
+    crate::screenshot::pin_bytes(window.label())
+        .map(tauri::ipc::Response::new)
+        .ok_or_else(|| "no pin".to_string())
+}
+
+#[tauri::command]
+pub fn pin_copy(app: AppHandle, window: tauri::WebviewWindow) {
+    crate::screenshot::pin_copy(&app, window.label());
+}
+
+#[tauri::command]
+pub fn pin_zoom(window: tauri::WebviewWindow, factor: f64) {
+    crate::screenshot::pin_zoom(&window, factor);
+}
+
+#[tauri::command]
+pub fn pin_close(window: tauri::WebviewWindow) {
+    crate::screenshot::pin_close(&window);
+}
+
+/// 截图遮罩阶段追踪：只接受白名单阶段名与数字，不落任何内容。
+#[tauri::command]
+pub fn screenshot_trace(app: AppHandle, stage: String, a: f64, b: f64) {
+    const STAGES: &[&str] = &[
+        "mounted", "loaded", "size", "tool", "draft-start", "pushed", "error",
+    ];
+    if STAGES.contains(&stage.as_str()) {
+        crate::diag::push(&app, format!("截图追踪 {stage} {a:.0} {b:.0}"));
+    }
+}
+
+#[tauri::command]
+pub fn screenshot_cancel(app: AppHandle) {
+    crate::screenshot::cancel(&app);
+}
+
+/// 插件按「整体清空再全量注册」管理：各快捷键共用注册器，改任一必须重放其余。
 fn rebind_global_hotkeys(app: &AppHandle) -> Result<(), String> {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -599,6 +705,7 @@ fn rebind_global_hotkeys(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
     let panel = state.panel_hotkey_binding.lock().unwrap().clone();
     let new_note = state.new_note_hotkey_binding.lock().unwrap().clone();
+    let screenshot = state.screenshot_hotkey_binding.lock().unwrap().clone();
     if let Some(s) = &panel {
         gs.on_shortcut(s.as_str(), move |app, _sc, event| {
             if event.state() == ShortcutState::Pressed {
@@ -611,6 +718,19 @@ fn rebind_global_hotkeys(app: &AppHandle) -> Result<(), String> {
             msg
         })?;
         crate::diag::push(app, format!("面板快捷键已绑定: {s}"));
+    }
+    if let Some(s) = &screenshot {
+        if panel.as_deref() == Some(s.as_str()) || new_note.as_deref() == Some(s.as_str()) {
+            crate::diag::push(app, "截图快捷键与其他快捷键相同，已跳过绑定");
+        } else if let Err(e) = gs.on_shortcut(s.as_str(), move |app, _sc, event| {
+            if event.state() == ShortcutState::Pressed {
+                crate::screenshot::on_hotkey(app);
+            }
+        }) {
+            crate::diag::push(app, format!("截图快捷键注册失败：{e} ({s})"));
+        } else {
+            crate::diag::push(app, format!("截图快捷键已绑定: {s}"));
+        }
     }
     if let Some(s) = new_note {
         if panel.as_deref() == Some(s.as_str()) {

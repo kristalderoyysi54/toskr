@@ -489,6 +489,8 @@ export interface Settings {
   panelToggleHotkey: string | null;
   /** 全局新建笔记快捷键：任意前台下直接开详情大窗写新笔记（null=关闭）。 */
   newNoteHotkey: string | null;
+  /** 全局区域截图快捷键（默认不绑定，null=关闭）。 */
+  screenshotHotkey: string | null;
   /** 隐身模式：捕获照常入库但不弹 HUD（会议投屏用）。 */
   stealth: boolean;
   /** 捕获成功音效（隐身模式下强制静音）。 */
@@ -843,6 +845,7 @@ export const defaultSettings = (): Settings => ({
   doubleTapCaptureOnly: false,
   panelToggleHotkey: null,
   newNoteHotkey: "Cmd+Shift+KeyN",
+  screenshotHotkey: null,
   stealth: false,
   soundEnabled: true,
   hudDurationMs: HUD_DURATION_DEFAULT_MS,
@@ -1344,6 +1347,7 @@ function validateSettingsShape(value: unknown, version: number): void {
     clipPauseUntil: "number",
     panelToggleHotkey: "string",
     newNoteHotkey: "string",
+    screenshotHotkey: "string",
     panelFreeX: "number",
     panelFreeY: "number",
     panelHeight: "number",

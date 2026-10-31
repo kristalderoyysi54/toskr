@@ -185,6 +185,9 @@ export function applySettingsPatch(patch: Partial<Settings>) {
   if ("newNoteHotkey" in patch) {
     void api.setNewNoteHotkey(s.newNoteHotkey).catch(() => {});
   }
+  if ("screenshotHotkey" in patch) {
+    void api.setScreenshotHotkey(s.screenshotHotkey).catch(() => {});
+  }
   if (
     "companionEnabled" in patch ||
     "companionApps" in patch ||

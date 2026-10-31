@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "screenshot",
+  "description": "按窗口职责授予插件与原生命令能力",
+  "windows": [
+    "shot-*"
+  ],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-screenshot-session",
+    "allow-screenshot-frame",
+    "allow-screenshot-commit",
+    "allow-screenshot-cancel",
+    "allow-screenshot-trace",
+    "allow-copy-text"
+  ]
+}

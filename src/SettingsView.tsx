@@ -2720,6 +2720,7 @@ function HotkeySection({
             />
           }
         />
+        <ScreenshotHotkeyRow settings={settings} patch={patch} />
       </Group>
       <ExcludeSection settings={settings} patch={patch} />
       <div
@@ -3864,6 +3865,47 @@ function AppleIntegrationPage({ settings, patch }: SP) {
 }
 
 /** 状态卡里的一行权限：未开启 / 已授权 / 需授权（带授权或去系统设置按钮）。 */
+/** 区域截图快捷键；未获屏幕录制授权时提示并给授权入口。 */
+function ScreenshotHotkeyRow({ settings, patch }: SP) {
+  const t = useT();
+  const [granted, setGranted] = useState<boolean | null>(null);
+  useEffect(() => {
+    const check = () => void api.screenCaptureAccess(false).then(setGranted).catch(() => {});
+    check();
+    window.addEventListener("focus", check);
+    return () => window.removeEventListener("focus", check);
+  }, []);
+  const ask = async () => {
+    const ok = await api.screenCaptureAccess(true).catch(() => false);
+    setGranted(ok);
+    if (!ok) void api.openPrivacySettings("screen-capture");
+  };
+  return (
+    <Row
+      label={t("区域截图")}
+      hint={
+        granted === false ? (
+          <span className="inline-flex items-center gap-1.5 text-warning">
+            {t("需要「屏幕录制」权限，授权后重启 Toskr")}
+            <Button size="xs" onClick={() => void ask()}>
+              {t("授权")}
+            </Button>
+          </span>
+        ) : (
+          t("截图复制到剪贴板，并存入「剪贴」")
+        )
+      }
+      right={
+        <HotkeyRecorder
+          value={settings.screenshotHotkey}
+          onChange={(v) => patch({ screenshotHotkey: v })}
+          tryRegister={(shortcut) => api.setScreenshotHotkey(shortcut)}
+        />
+      }
+    />
+  );
+}
+
 function PermissionRow({
   label,
   enabled,

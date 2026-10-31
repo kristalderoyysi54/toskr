@@ -262,6 +262,7 @@ import {
   MESSAGE_WATCH_EVENT,
   PANEL_MOVED_EVENT,
   CLIP_EVENT,
+  SCREENSHOT_AFTER_EVENT,
   CLIP_PAUSE_EVENT,
   STEALTH_EVENT,
   TARGET_CHANGED_EVENT,
@@ -1878,6 +1879,46 @@ export default function App() {
       if (isDataOperationLocked()) return;
       useNotesStore.getState().setSettings({ stealth: event.payload });
     });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  // 截图「发送 / 在编辑器中打开」：先落进「剪贴」，再对这张卡执行动作
+  useEffect(() => {
+    const unlisten = listen<{ clip: ClipPayload; action: "send" | "edit" }>(
+      SCREENSHOT_AFTER_EVENT,
+      (event) => {
+        if (isDataOperationLocked()) return;
+        const { clip: p, action } = event.payload;
+        const result = useNotesStore.getState().addClipNote(p.text, {
+          sourceApp: p.appName ?? undefined,
+          sourceBundle: p.bundleId ?? undefined,
+          kind: "image",
+          imageFile: p.imageFile ?? undefined,
+          imageW: p.imageW ?? undefined,
+          imageH: p.imageH ?? undefined,
+          createdAt: p.capturedAtMs,
+        });
+        scheduleMediaGc(result.orphanImages);
+        // 同像素截图会去重成已有卡，按图片文件找回落点
+        const note = useNotesStore
+          .getState()
+          .notes.find((n) => n.kind === "image" && n.imageFile === p.imageFile);
+        if (!note) return;
+        if (action === "send") {
+          void sendNotesToChat([note.id]);
+        } else {
+          const dataGeneration = currentDataGeneration();
+          void api.quickLook(noteImages(note), 0, { id: note.id, text: imageCaption(note), dataGeneration }, {
+            kind: "note",
+            noteId: note.id,
+            dataGeneration,
+            startEditing: true,
+          });
+        }
+      }
+    );
     return () => {
       unlisten.then((fn) => fn());
     };

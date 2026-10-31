@@ -17,6 +17,8 @@ const SettingsView = React.lazy(() => import("./SettingsView"));
 const SourceOverlayView = React.lazy(() => import("./SourceOverlayView"));
 const MenuFlyoutView = React.lazy(() => import("./MenuFlyoutView"));
 const TextPreviewView = React.lazy(() => import("./TextPreviewView"));
+const ScreenshotView = React.lazy(() => import("./ScreenshotView"));
+const PinView = React.lazy(() => import("./PinView"));
 
 // 所有窗口共用入口：链接点击一律不许 WebView 就地导航（详情窗曾被外部网页替换）
 installExternalLinkInterceptor();
@@ -103,6 +105,10 @@ const view =
     <LocateHighlightView />
   ) : label === "menuflyout" ? (
     <MenuFlyoutView />
+  ) : label.startsWith("shot-") ? (
+    <ScreenshotView />
+  ) : label.startsWith("pin-") ? (
+    <PinView />
   ) : (
     <App />
   );

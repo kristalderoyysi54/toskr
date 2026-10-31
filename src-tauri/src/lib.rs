@@ -31,6 +31,8 @@ mod pasteboard;
 mod privacy;
 mod prompt_export;
 mod rich_clipboard;
+mod screenshot;
+mod screenshot_sck;
 mod state;
 mod storage;
 mod target;
@@ -289,6 +291,18 @@ pub fn run() {
             commands::set_vibrancy,
             commands::get_vibrancy_enabled,
             commands::set_new_note_hotkey,
+            commands::set_screenshot_hotkey,
+            commands::screen_capture_access,
+            commands::screenshot_session,
+            commands::screenshot_frame,
+            commands::screenshot_commit,
+            commands::screenshot_cancel,
+            commands::screenshot_trace,
+            commands::pin_info,
+            commands::pin_image,
+            commands::pin_copy,
+            commands::pin_zoom,
+            commands::pin_close,
             commands::revive_text_preview,
             commands::list_send_targets,
             commands::adopt_send_target,

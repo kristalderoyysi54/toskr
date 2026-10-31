@@ -204,6 +204,7 @@ pub struct AppState {
     /// 全局快捷键绑定串（插件是整体清空再注册的语义，改任一都要整组重放）。
     pub panel_hotkey_binding: Mutex<Option<String>>,
     pub new_note_hotkey_binding: Mutex<Option<String>>,
+    pub screenshot_hotkey_binding: Mutex<Option<String>>,
     /// 双击触发仅捕获（面板开关完全交给专用快捷键）。
     pub double_tap_capture_only: AtomicBool,
     /// 贴边隐藏兼容开关；当前运行态固定开启，是否介入由用户拖动建立的锚点决定。
@@ -311,6 +312,7 @@ impl Default for AppState {
             vibrancy_material: Mutex::new("hud".into()),
             panel_hotkey_binding: Mutex::new(None),
             new_note_hotkey_binding: Mutex::new(None),
+            screenshot_hotkey_binding: Mutex::new(None),
             double_tap_capture_only: AtomicBool::new(false),
             // 与前端 defaultSettings.autoEdgeHide 一致（首装默认开）
             auto_edge_hide: AtomicBool::new(true),

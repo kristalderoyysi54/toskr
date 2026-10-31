@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "pin",
+  "description": "按窗口职责授予插件与原生命令能力",
+  "windows": [
+    "pin-*"
+  ],
+  "permissions": [
+    "core:window:allow-start-dragging",
+    "allow-pin-info",
+    "allow-pin-image",
+    "allow-pin-copy",
+    "allow-pin-zoom",
+    "allow-pin-close"
+  ]
+}
