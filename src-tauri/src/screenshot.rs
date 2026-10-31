@@ -85,7 +85,8 @@ struct Frame {
 
 struct Session {
     id: u64,
-    frames: Vec<Frame>,
+    /// 按屏序号；光标所在屏先到，其余屏后台补齐前为 None。
+    frames: Vec<Option<Frame>>,
     windows: Vec<ScreenWindow>,
     cursor: Option<(f64, f64)>,
     front: Option<FrontApp>,
@@ -211,8 +212,8 @@ fn capture_display(index: usize, bounds: RectPt) -> Result<Frame, String> {
     })
 }
 
-/// SCK 冻结各屏（截图自动排除本应用窗口，无需先藏面板）。
-fn capture_all_sck(displays: &[(u32, RectPt)]) -> Result<Vec<Frame>, String> {
+/// SCK 冻结指定各屏（截图自动排除本应用窗口，无需先藏面板）。
+fn capture_sck(displays: &[(u32, RectPt)]) -> Result<Vec<Frame>, String> {
     let ids: Vec<u32> = displays.iter().map(|d| d.0).collect();
     let shots = crate::screenshot_sck::capture(&ids)?;
     Ok(shots
@@ -390,38 +391,50 @@ fn create_overlay(app: &AppHandle, label: &str) -> tauri::Result<tauri::WebviewW
         .build()
 }
 
-/// 按屏摆放遮罩窗并显示，光标所在屏取得键盘焦点。仅限主线程。
-fn show_overlays(app: &AppHandle, displays: &[RectPt], session_id: u64, focus_index: usize) {
-    for (i, b) in displays.iter().enumerate() {
-        let label = format!("{LABEL_PREFIX}{i}");
-        let window = match app.get_webview_window(&label) {
-            Some(w) => w,
-            None => match create_overlay(app, &label) {
-                Ok(w) => w,
-                Err(e) => {
-                    crate::diag::push(app, format!("截图: 遮罩窗创建失败 {e}"));
-                    continue;
-                }
-            },
-        };
-        let _ = window.set_position(tauri::LogicalPosition::new(b.x, b.y));
-        let _ = window.set_size(tauri::LogicalSize::new(b.w, b.h));
-        crate::window::ensure_fullscreen_auxiliary(&window);
-        if let Some(ns) = ns_window(&window) {
-            ns.setLevel(OVERLAY_LEVEL);
-        }
-        let _ = window.show();
-        if i == focus_index {
-            let _ = window.set_focus();
-        }
-        let _ = window.emit_to(&label, SESSION_EVENT, session_id);
+/// 摆放并显示第 `i` 屏遮罩窗；`focus` 时取得键盘焦点。仅限主线程。
+fn show_overlay(app: &AppHandle, i: usize, b: RectPt, session_id: u64, focus: bool) {
+    let label = format!("{LABEL_PREFIX}{i}");
+    let window = match app.get_webview_window(&label) {
+        Some(w) => w,
+        None => match create_overlay(app, &label) {
+            Ok(w) => w,
+            Err(e) => {
+                crate::diag::push(app, format!("截图: 遮罩窗创建失败 {e}"));
+                return;
+            }
+        },
+    };
+    let _ = window.set_position(tauri::LogicalPosition::new(b.x, b.y));
+    let _ = window.set_size(tauri::LogicalSize::new(b.w, b.h));
+    crate::window::ensure_fullscreen_auxiliary(&window);
+    if let Some(ns) = ns_window(&window) {
+        ns.setLevel(OVERLAY_LEVEL);
     }
-    // 屏数变少时把多余的旧遮罩藏起来
-    for i in displays.len()..8 {
+    let _ = window.show();
+    if focus {
+        let _ = window.set_focus();
+    }
+    let _ = window.emit_to(&label, SESSION_EVENT, session_id);
+}
+
+/// 屏数变少时把多余的旧遮罩藏起来。仅限主线程。
+fn hide_extra_overlays(app: &AppHandle, count: usize) {
+    for i in count..8 {
         if let Some(w) = app.get_webview_window(&format!("{LABEL_PREFIX}{i}")) {
             let _ = w.hide();
         }
     }
+}
+
+fn capture_failed(app: &AppHandle, e: String) {
+    crate::diag::push(app, format!("截图失败：{e}"));
+    warn(
+        app,
+        pick(
+            "截图失败，详情见诊断日志",
+            "Screenshot failed; see the diagnostics log",
+        ),
+    );
 }
 
 /// 截图快捷键入口：冻结各屏 → 显示遮罩窗。会话进行中重复按键忽略。
@@ -457,17 +470,79 @@ pub fn on_hotkey(app: &AppHandle) {
         let displays: Vec<RectPt> = with_ids.iter().map(|d| d.1).collect();
         let windows = list_windows();
         let cursor = crate::window::cursor_point_pt();
-        let mut via = "sck";
-        let sck = if crate::screenshot_sck::supported() {
-            capture_all_sck(&with_ids)
+        let focus_index = cursor
+            .and_then(|(x, y)| displays.iter().position(|d| d.contains(x, y)))
+            .unwrap_or(0);
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let start_session = |frames: Vec<Option<Frame>>| {
+            *SESSION.lock().unwrap() = Some(Session {
+                id,
+                frames,
+                windows: windows.clone(),
+                cursor,
+                front: front.clone(),
+            });
+        };
+
+        // 逐屏出遮罩：SCK 先冻结光标所在屏并立即显示，其余屏后台补齐
+        let first = if crate::screenshot_sck::supported() {
+            capture_sck(&with_ids[focus_index..=focus_index])
         } else {
             Err("macOS < 14".into())
         };
-        let frames = match sck {
-            Ok(f) => Ok(f),
+        match first {
+            Ok(mut f) => {
+                let mut frames: Vec<Option<Frame>> = (0..displays.len()).map(|_| None).collect();
+                frames[focus_index] = f.pop();
+                start_session(frames);
+                crate::diag::push(
+                    &app,
+                    format!(
+                        "截图冻结 光标屏 sck 耗时 {}ms",
+                        started.elapsed().as_millis()
+                    ),
+                );
+                let (handle, b, n) = (app.clone(), displays[focus_index], displays.len());
+                let _ = app.run_on_main_thread(move || {
+                    show_overlay(&handle, focus_index, b, id, true);
+                    hide_extra_overlays(&handle, n);
+                });
+                let rest: Vec<_> = (0..with_ids.len()).filter(|&i| i != focus_index).collect();
+                if rest.is_empty() {
+                    return;
+                }
+                let subset: Vec<_> = rest.iter().map(|&i| with_ids[i]).collect();
+                match capture_sck(&subset) {
+                    Ok(more) => {
+                        let mut guard = SESSION.lock().unwrap();
+                        // 会话已结束或换了一轮：丢弃迟到的帧
+                        let Some(s) = guard.as_mut().filter(|s| s.id == id) else {
+                            return;
+                        };
+                        for (&i, frame) in rest.iter().zip(more) {
+                            s.frames[i] = Some(frame);
+                        }
+                        drop(guard);
+                        crate::diag::push(
+                            &app,
+                            format!(
+                                "截图冻结 全部 {} 屏 耗时 {}ms",
+                                displays.len(),
+                                started.elapsed().as_millis()
+                            ),
+                        );
+                        let handle = app.clone();
+                        let _ = app.run_on_main_thread(move || {
+                            for &i in &rest {
+                                show_overlay(&handle, i, displays[i], id, false);
+                            }
+                        });
+                    }
+                    Err(e) => crate::diag::push(&app, format!("截图: 其余屏冻结失败 {e}")),
+                }
+            }
             Err(e) => {
                 crate::diag::push(&app, format!("截图: SCK 不可用，回退 screencapture（{e}）"));
-                via = "screencapture";
                 let saved = hide_own_windows(&app);
                 if !saved.is_empty() {
                     // 等透明度落到合成器，避免面板残影进入冻结帧
@@ -475,49 +550,28 @@ pub fn on_hotkey(app: &AppHandle) {
                 }
                 let frames = capture_all(&displays);
                 restore_own_windows(&app, saved);
-                frames
-            }
-        };
-        let frames = match frames {
-            Ok(f) => f,
-            Err(e) => {
-                crate::diag::push(&app, format!("截图失败：{e}"));
-                crate::window::show_hud(
+                let frames = match frames {
+                    Ok(f) => f,
+                    Err(e) => return capture_failed(&app, e),
+                };
+                start_session(frames.into_iter().map(Some).collect());
+                crate::diag::push(
                     &app,
-                    "warn",
-                    pick(
-                        "截图失败，详情见诊断日志",
-                        "Screenshot failed; see the diagnostics log",
-                    )
-                    .into(),
-                    false,
-                    false,
-                    None,
+                    format!(
+                        "截图冻结 {} 屏 screencapture 耗时 {}ms",
+                        displays.len(),
+                        started.elapsed().as_millis()
+                    ),
                 );
-                return;
+                let handle = app.clone();
+                let _ = app.run_on_main_thread(move || {
+                    for (i, &b) in displays.iter().enumerate() {
+                        show_overlay(&handle, i, b, id, i == focus_index);
+                    }
+                    hide_extra_overlays(&handle, displays.len());
+                });
             }
-        };
-        let focus_index = cursor
-            .and_then(|(x, y)| displays.iter().position(|d| d.contains(x, y)))
-            .unwrap_or(0);
-        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-        *SESSION.lock().unwrap() = Some(Session {
-            id,
-            frames,
-            windows,
-            cursor,
-            front,
-        });
-        crate::diag::push(
-            &app,
-            format!(
-                "截图冻结 {} 屏 {via} 耗时 {}ms",
-                displays.len(),
-                started.elapsed().as_millis()
-            ),
-        );
-        let handle = app.clone();
-        let _ = app.run_on_main_thread(move || show_overlays(&handle, &displays, id, focus_index));
+        }
     });
 }
 
@@ -526,7 +580,7 @@ pub fn session_info(label: &str) -> Option<SessionInfo> {
     let index = shot_index(label)?;
     let guard = SESSION.lock().unwrap();
     let s = guard.as_ref()?;
-    let f = s.frames.get(index)?;
+    let f = s.frames.get(index)?.as_ref()?;
     let cursor = s
         .cursor
         .filter(|&(x, y)| f.bounds.contains(x, y))
@@ -548,7 +602,7 @@ pub fn frame_bytes(label: &str, session_id: u64) -> Option<Vec<u8>> {
     let index = shot_index(label)?;
     let guard = SESSION.lock().unwrap();
     let s = guard.as_ref().filter(|s| s.id == session_id)?;
-    Some(s.frames.get(index)?.bytes.clone())
+    Some(s.frames.get(index)?.as_ref()?.bytes.clone())
 }
 
 /// 结束会话：通知各遮罩窗清空画面，稍后藏窗并把焦点还给截图前的前台应用。
@@ -618,8 +672,14 @@ pub fn commit(
     // 结束会话前先取本屏几何（钉图要换算 pt 尺寸与全局位置）
     let geometry = {
         let guard = SESSION.lock().unwrap();
-        shot_index(&placement.label)
-            .and_then(|i| guard.as_ref()?.frames.get(i).map(|f| (f.bounds, f.px_w)))
+        shot_index(&placement.label).and_then(|i| {
+            guard
+                .as_ref()?
+                .frames
+                .get(i)?
+                .as_ref()
+                .map(|f| (f.bounds, f.px_w))
+        })
     };
     let session = end_session(app).ok_or("no screenshot session")?;
     let app = app.clone();
