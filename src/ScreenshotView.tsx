@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   Check,
@@ -7,6 +7,8 @@ import {
   Focus,
   Grid3x3,
   Hash,
+  Languages,
+  Loader2,
   MoveUpRight,
   Pencil,
   Pin,
@@ -25,10 +27,14 @@ import { ShotShapesSvg } from "@/components/ShotShapesSvg";
 import { Button } from "@/components/ui/button";
 import { floatingSurface } from "@/components/ui/floating-surface";
 import { IconButton } from "@/components/ui/icon-button";
+import { NOTE_SECTIONS, type NoteSectionOption } from "@/lib/draftSection";
 import { useT, type MessageKey } from "@/lib/i18n";
+import { createLongPress } from "@/lib/longPress";
 import {
   COLORS,
+  contrastText,
   drawShapes,
+  fitFontSize,
   emptyHistory,
   FONT_SIZE,
   nextNumber,
@@ -39,7 +45,9 @@ import {
   type History,
   type Shape,
   type SizeLevel,
+  TRANSLATE_PAD,
   type Tool,
+  type TranslatedLine,
 } from "@/lib/screenshot/annotate";
 import {
   clipToScreen,
@@ -61,6 +69,7 @@ import {
   SCREENSHOT_END_EVENT,
   SCREENSHOT_SESSION_EVENT,
   SCREENSHOT_TRANSLATE_RESULT_EVENT,
+  type OcrLine,
   type ScreenshotAction,
   type ScreenshotSession,
 } from "@/lib/tauri";
@@ -128,10 +137,119 @@ function loadStyle(): { ink: string; size: SizeLevel } {
 interface OcrPanel {
   text: string;
   busy: boolean;
-  translated: string | null;
-  translating: boolean;
   error: string | null;
   copied: boolean;
+}
+
+/** 进行中的图内翻译：识别出的行（出图像素坐标）与发起时的选区。 */
+interface PendingTranslate {
+  id: string;
+  lines: OcrLine[];
+  pr: Rect;
+  sel: Rect;
+}
+
+/** 与背景色的最大通道差超过此值视为文字笔画。 */
+const STROKE_DIFF = 40;
+
+/**
+ * 只抹掉文字笔画：识别框外扩 `pad` 像素，取外圈亮度中位数的像素色当背景，
+ * 把与背景差异明显的像素（再外扩 1px 吃掉抗锯齿边）换成背景色，其余像素原样保留。
+ * 返回补丁画布（冻结帧像素尺寸）与背景色。
+ */
+function erasePatch(
+  img: HTMLImageElement,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  pad: number
+): { patch: HTMLCanvasElement; bg: [number, number, number] } | null {
+  const cw = Math.max(1, Math.round(w + pad * 2));
+  const ch = Math.max(1, Math.round(h + pad * 2));
+  const c = document.createElement("canvas");
+  c.width = cw;
+  c.height = ch;
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+  ctx.drawImage(img, x - pad, y - pad, cw, ch, 0, 0, cw, ch);
+  const data = ctx.getImageData(0, 0, cw, ch);
+  const d = data.data;
+  const ring: [number, number, number, number][] = [];
+  for (let yy = 0; yy < ch; yy++) {
+    for (let xx = 0; xx < cw; xx++) {
+      if (yy >= 1 && yy < ch - 1 && xx >= 1 && xx < cw - 1) continue;
+      const i = (yy * cw + xx) * 4;
+      ring.push([0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2], d[i], d[i + 1], d[i + 2]]);
+    }
+  }
+  ring.sort((p, q) => p[0] - q[0]);
+  const [, br, bgc, bb] = ring[Math.floor(ring.length / 2)] ?? [0, 255, 255, 255];
+  const stroke = new Uint8Array(cw * ch);
+  for (let i = 0; i < cw * ch; i++) {
+    const k = i * 4;
+    const diff = Math.max(Math.abs(d[k] - br), Math.abs(d[k + 1] - bgc), Math.abs(d[k + 2] - bb));
+    if (diff > STROKE_DIFF) stroke[i] = 1;
+  }
+  for (let yy = 0; yy < ch; yy++) {
+    for (let xx = 0; xx < cw; xx++) {
+      let hit = false;
+      for (let dy = -1; dy <= 1 && !hit; dy++) {
+        for (let dx = -1; dx <= 1 && !hit; dx++) {
+          const ny = yy + dy;
+          const nx = xx + dx;
+          if (ny >= 0 && ny < ch && nx >= 0 && nx < cw && stroke[ny * cw + nx]) hit = true;
+        }
+      }
+      const k = (yy * cw + xx) * 4;
+      if (hit) {
+        d[k] = br;
+        d[k + 1] = bgc;
+        d[k + 2] = bb;
+      }
+    }
+  }
+  ctx.putImageData(data, 0, 0);
+  return { patch: c, bg: [br, bgc, bb] };
+}
+
+/** 把逐行译文换成屏上 pt 坐标的覆盖：只抹文字笔画的补丁 + 译文，字号按框宽缩放。 */
+function buildTranslatedLines(
+  lines: OcrLine[],
+  translated: string[],
+  pr: Rect,
+  sel: Rect,
+  img: HTMLImageElement,
+  sx: number,
+  sy: number
+): TranslatedLine[] {
+  const measure = document.createElement("canvas").getContext("2d");
+  const pad = Math.round(TRANSLATE_PAD * sx);
+  return lines.flatMap((l, i) => {
+    const erased = erasePatch(img, pr.x + l.x, pr.y + l.y, l.w, l.h, pad);
+    if (!erased) return [];
+    const [r, g, b] = erased.bg;
+    const w = l.w / sx;
+    const h = l.h / sy;
+    const text = translated[i] ?? "";
+    return [
+      {
+        x: sel.x + l.x / sx,
+        y: sel.y + l.y / sy,
+        w,
+        h,
+        text,
+        patch: erased.patch,
+        patchUrl: erased.patch.toDataURL(),
+        fg: contrastText(r, g, b),
+        fontSize: fitFontSize(w, h, (font) => {
+          if (!measure) return 0;
+          measure.font = font;
+          return measure.measureText(text).width;
+        }),
+      },
+    ];
+  });
 }
 
 const OCR_PANEL_W = 320;
@@ -156,7 +274,9 @@ export default function ScreenshotView() {
   const [draft, setDraft] = useState<Shape | null>(null);
   const [editing, setEditing] = useState<{ x: number; y: number; text: string } | null>(null);
   const [ocr, setOcr] = useState<OcrPanel | null>(null);
-  const translateReq = useRef<string | null>(null);
+  const translateReq = useRef<PendingTranslate | null>(null);
+  const [translating, setTranslating] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const drag = useRef<Drag | null>(null);
   useEffect(() => {
     localStorage.setItem(STYLE_KEY, JSON.stringify({ ink, size }));
@@ -181,6 +301,8 @@ export default function ScreenshotView() {
     setEditing(null);
     setOcr(null);
     translateReq.current = null;
+    setTranslating(false);
+    setNotice(null);
     if (urlRef.current) URL.revokeObjectURL(urlRef.current);
     urlRef.current = null;
   }, []);
@@ -276,68 +398,126 @@ export default function ScreenshotView() {
     setEditing(null);
   }, [editing, ink, size]);
 
-  /** 选区按冻结帧像素裁剪并合成标注，得到原始 RGBA。 */
-  const exportImage = useCallback((): { data: Uint8Array; w: number; h: number } | null => {
-    if (!sel || !info || !img) return null;
-    const pr = toPixelRect(sel, sx, sy, info.pxW, info.pxH);
-    if (pr.w < 1 || pr.h < 1) return null;
-    const canvas = document.createElement("canvas");
-    canvas.width = pr.w;
-    canvas.height = pr.h;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return null;
-    ctx.drawImage(img, pr.x, pr.y, pr.w, pr.h, 0, 0, pr.w, pr.h);
-    ctx.save();
-    ctx.scale(sx, sy);
-    ctx.translate(-pr.x / sx, -pr.y / sy);
-    drawShapes(ctx, shapesWithEditing(), img, sx, sy);
-    ctx.restore();
-    return { data: new Uint8Array(ctx.getImageData(0, 0, pr.w, pr.h).data.buffer), w: pr.w, h: pr.h };
-  }, [sel, info, img, sx, sy, shapesWithEditing]);
+  /** 选区按冻结帧像素裁剪（`withShapes` 时合成标注），得到原始 RGBA。 */
+  const exportImage = useCallback(
+    (withShapes = true): { data: Uint8Array; w: number; h: number; pr: Rect } | null => {
+      if (!sel || !info || !img) return null;
+      const pr = toPixelRect(sel, sx, sy, info.pxW, info.pxH);
+      if (pr.w < 1 || pr.h < 1) return null;
+      const canvas = document.createElement("canvas");
+      canvas.width = pr.w;
+      canvas.height = pr.h;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return null;
+      ctx.drawImage(img, pr.x, pr.y, pr.w, pr.h, 0, 0, pr.w, pr.h);
+      if (withShapes) {
+        ctx.save();
+        ctx.scale(sx, sy);
+        ctx.translate(-pr.x / sx, -pr.y / sy);
+        drawShapes(ctx, shapesWithEditing(), img, sx, sy);
+        ctx.restore();
+      }
+      return { data: new Uint8Array(ctx.getImageData(0, 0, pr.w, pr.h).data.buffer), w: pr.w, h: pr.h, pr };
+    },
+    [sel, info, img, sx, sy, shapesWithEditing]
+  );
 
-  const confirm = useCallback((action: ScreenshotAction = "save") => {
+  const confirm = useCallback((action: ScreenshotAction = "save", sectionId?: string) => {
     const out = exportImage();
     if (!out || !sel) return;
     reset();
-    void api.screenshotCommit(out.data, out.w, out.h, action, { x: sel.x, y: sel.y }).catch(() => {
+    void api.screenshotCommit(out.data, out.w, out.h, action, { x: sel.x, y: sel.y }, sectionId).catch(() => {
       void api.screenshotCancel();
     });
   }, [exportImage, sel, reset]);
 
+  // 长按 ✓（或右键 ✓）：选一个笔记分组存入；分组列表向主窗口要
+  const [sections, setSections] = useState<NoteSectionOption[]>([]);
+  const [sectionMenu, setSectionMenu] = useState(false);
+  const longPress = useMemo(() => createLongPress(() => setSectionMenu(true)), []);
+  useEffect(() => {
+    const off = listen<NoteSectionOption[]>(NOTE_SECTIONS, (event) => setSections(event.payload));
+    return () => void off.then((f) => f());
+  }, []);
+  useEffect(() => {
+    if (info) void api.screenshotRequestSections().catch(() => {});
+    else setSectionMenu(false);
+  }, [info]);
+
+  const flash = useCallback((text: string) => {
+    setNotice(text);
+    window.setTimeout(() => setNotice((n) => (n === text ? null : n)), 2500);
+  }, []);
+
   const runOcr = useCallback(() => {
-    const out = exportImage();
+    const out = exportImage(false);
     if (!out) return;
     commitEditing();
     setTool(null);
-    translateReq.current = null;
-    setOcr({ text: "", busy: true, translated: null, translating: false, error: null, copied: false });
+    setOcr({ text: "", busy: true, error: null, copied: false });
     void api
       .screenshotOcr(out.data, out.w, out.h)
-      .then((text) =>
-        setOcr((o) => o && { ...o, busy: false, text, error: text.trim() ? null : t("未识别到文字") })
-      )
+      .then((lines) => {
+        const text = lines.map((l) => l.text).join("\n");
+        setOcr((o) => o && { ...o, busy: false, text, error: text.trim() ? null : t("未识别到文字") });
+      })
       .catch(() => setOcr((o) => o && { ...o, busy: false, error: t("识别失败") }));
   }, [exportImage, commitEditing, t]);
 
-  const translateOcr = useCallback(() => {
-    if (!ocr?.text.trim() || ocr.translating) return;
-    const id = crypto.randomUUID();
-    translateReq.current = id;
-    setOcr({ ...ocr, translating: true, error: null });
-    void api.screenshotTranslate(id, ocr.text).catch(() => {
-      setOcr((o) => o && { ...o, translating: false, error: t("翻译失败") });
-    });
-  }, [ocr, t]);
+  const hasTranslation = history.shapes.some((s) => s.kind === "translate");
 
-  // 主窗口代办的翻译结果：只认最近一次请求
+  /** 图内翻译：识别各行文字 → 主窗口 AI 逐行翻译 → 译文盖回原文位置。再点一次去掉。 */
+  const translateInImage = useCallback(() => {
+    if (hasTranslation) {
+      setHistory((h) => ({ shapes: h.shapes.filter((s) => s.kind !== "translate"), redo: [] }));
+      return;
+    }
+    const out = exportImage(false);
+    if (!out || !sel || translating) return;
+    commitEditing();
+    setTool(null);
+    setTranslating(true);
+    void api
+      .screenshotOcr(out.data, out.w, out.h)
+      .then((all) => {
+        const lines = all.filter((l) => l.text.trim());
+        if (!lines.length) {
+          setTranslating(false);
+          flash(t("未识别到文字"));
+          return;
+        }
+        const id = crypto.randomUUID();
+        translateReq.current = { id, lines, pr: out.pr, sel };
+        return api.screenshotTranslate(id, JSON.stringify(lines.map((l) => l.text)));
+      })
+      .catch(() => {
+        translateReq.current = null;
+        setTranslating(false);
+        flash(t("翻译失败"));
+      });
+  }, [hasTranslation, exportImage, sel, translating, commitEditing, flash, t]);
+
+  // 监听只注册一次，回调读最新的冻结帧与比例（重复注册会让迟到的旧回调抢先作废请求）
+  const frameRef = useRef({ img, sx, sy, flash, t });
+  frameRef.current = { img, sx, sy, flash, t };
+
+  // 主窗口代办的逐行译文：只认最近一次请求
   useEffect(() => {
-    const off = listen<{ requestId: string; text?: string; error?: string }>(
+    const off = listen<{ requestId: string; lines?: string[]; error?: string }>(
       SCREENSHOT_TRANSLATE_RESULT_EVENT,
       (event) => {
-        if (event.payload.requestId !== translateReq.current) return;
+        const pending = translateReq.current;
+        if (!pending || event.payload.requestId !== pending.id) return;
         translateReq.current = null;
-        const { text, error } = event.payload;
-        setOcr((o) => o && { ...o, translating: false, translated: text ?? o.translated, error: error ?? null });
+        setTranslating(false);
+        const { img, sx, sy, flash, t } = frameRef.current;
+        const { lines, error } = event.payload;
+        if (!lines || lines.length !== pending.lines.length || !img) {
+          flash(error ?? t("翻译失败"));
+          return;
+        }
+        const items = buildTranslatedLines(pending.lines, lines, pending.pr, pending.sel, img, sx, sy);
+        setHistory((h) => pushShape(h, { kind: "translate", items }));
       }
     );
     return () => void off.then((f) => f());
@@ -345,7 +525,7 @@ export default function ScreenshotView() {
 
   const copyOcr = useCallback(() => {
     if (!ocr) return;
-    void api.copyText(ocr.translated ?? ocr.text).then(() => {
+    void api.copyText(ocr.text).then(() => {
       setOcr((o) => o && { ...o, copied: true });
       window.setTimeout(() => setOcr((o) => o && { ...o, copied: false }), 900);
     });
@@ -353,9 +533,8 @@ export default function ScreenshotView() {
 
   const saveOcr = useCallback(() => {
     if (!ocr?.text.trim()) return;
-    const text = ocr.translated ? `${ocr.text}\n\n${ocr.translated}` : ocr.text;
+    const text = ocr.text;
     reset();
-    setOcr(null);
     void api.screenshotSaveText(text).catch(() => void api.screenshotCancel());
   }, [ocr, reset]);
 
@@ -371,6 +550,14 @@ export default function ScreenshotView() {
   useEffect(() => {
     if (!info) return;
     const onKey = (e: KeyboardEvent) => {
+      if (sectionMenu) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          setSectionMenu(false);
+        }
+        return;
+      }
       // 文字面板打开时只接管 Esc（关面板），其余交给面板里的输入框
       if (ocr) {
         if (e.key === "Escape") {
@@ -412,7 +599,7 @@ export default function ScreenshotView() {
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, [info, sel, W, H, cancel, confirm, copyColor, editing, tool, history.shapes.length, ocr]);
+  }, [info, sel, W, H, cancel, confirm, copyColor, editing, tool, history.shapes.length, ocr, sectionMenu]);
 
   // 遮罩刚出现时应用可能还没激活，WKWebView 收不到 mousemove：轮询系统光标跟随；
   // 拖拽中以指针事件为准
@@ -517,7 +704,7 @@ export default function ScreenshotView() {
       setDraft(
         draft.kind === "pen"
           ? { ...draft, points: [...draft.points, [p.x, p.y]] }
-          : draft.kind === "text" || draft.kind === "number"
+          : draft.kind === "text" || draft.kind === "number" || draft.kind === "translate"
             ? draft
             : { ...draft, x2: p.x, y2: p.y }
       );
@@ -655,6 +842,15 @@ export default function ScreenshotView() {
           );
         })}
 
+      {sel && !dragging && notice && (
+        <div
+          className="pointer-events-none absolute rounded-md bg-black/75 px-2 py-1 text-label text-white"
+          style={{ left: sel.x, top: Math.max(4, toolbarTop - 30) }}
+        >
+          {notice}
+        </div>
+      )}
+
       {sel && !dragging && (
         <div
           className={cn(floatingSurface(), "absolute flex flex-col justify-center gap-1 rounded-md px-1.5")}
@@ -689,6 +885,14 @@ export default function ScreenshotView() {
             <IconButton label={t("识别文字")} pressed={!!ocr} onClick={runOcr}>
               <ScanText />
             </IconButton>
+            <IconButton
+              label={hasTranslation ? t("去掉图内翻译") : t("图内翻译")}
+              pressed={hasTranslation}
+              disabled={translating}
+              onClick={translateInImage}
+            >
+              {translating ? <Loader2 className="animate-spin" /> : <Languages />}
+            </IconButton>
             {ACTIONS.map(({ action, icon: Icon, label }) => (
               <IconButton key={action} label={t(label)} onClick={() => confirm(action)}>
                 <Icon />
@@ -698,9 +902,52 @@ export default function ScreenshotView() {
             <IconButton label={t("取消（Esc）")} onClick={cancel}>
               <X />
             </IconButton>
-            <IconButton label={t("完成：复制并存入「剪贴」（Enter）")} onClick={() => confirm()}>
-              <Check className="text-primary" />
-            </IconButton>
+            <span className="relative inline-flex">
+              <IconButton
+                label={t("完成：复制并存入「剪贴」（Enter）；长按选择存入的分组")}
+                onPointerDown={(e) => longPress.start(e.clientX, e.clientY)}
+                onPointerMove={(e) => longPress.move(e.clientX, e.clientY)}
+                onPointerUp={() => longPress.release()}
+                onPointerLeave={() => longPress.cancel()}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setSectionMenu(true);
+                }}
+                onClick={() => {
+                  if (longPress.consumeClick()) return;
+                  confirm();
+                }}
+              >
+                <Check className="text-primary" />
+              </IconButton>
+              {sectionMenu && (
+                <div
+                  className={cn(
+                    floatingSurface(),
+                    "absolute right-0 flex max-h-72 w-48 flex-col overflow-y-auto rounded-md p-1 text-body"
+                  )}
+                  style={toolbarTop > sel.y ? { top: toolbarH + 4 } : { bottom: toolbarH + 4 }}
+                >
+                  <span className="px-2 py-1 text-label text-muted-foreground">{t("存入分组")}</span>
+                  {sections.length === 0 && (
+                    <span className="px-2 py-1 text-label text-muted-foreground">{t("没有可存入的分组")}</span>
+                  )}
+                  {sections.map((sec) => (
+                    <button
+                      key={sec.id}
+                      type="button"
+                      className="truncate rounded-sm px-2 py-1 text-left hover:bg-accent"
+                      onClick={() => {
+                        setSectionMenu(false);
+                        confirm("section", sec.id);
+                      }}
+                    >
+                      {sec.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </span>
           </div>
           {showStyle && (
             <div className="flex items-center gap-2 px-1">
@@ -769,26 +1016,13 @@ export default function ScreenshotView() {
           <textarea
             value={ocr.text}
             disabled={ocr.busy}
-            onChange={(e) => setOcr({ ...ocr, text: e.target.value, translated: null })}
+            onChange={(e) => setOcr({ ...ocr, text: e.target.value })}
             className="min-h-24 flex-1 resize-none rounded-sm border border-border bg-background p-1.5 outline-none select-text"
           />
-          {(ocr.translated || ocr.translating) && (
-            <>
-              <span className="text-label text-muted-foreground">{ocr.translating ? t("翻译中…") : t("译文")}</span>
-              <textarea
-                value={ocr.translated ?? ""}
-                readOnly
-                className="min-h-24 flex-1 resize-none rounded-sm border border-border bg-background p-1.5 outline-none select-text"
-              />
-            </>
-          )}
           {ocr.error && <span className="text-label text-warning">{ocr.error}</span>}
           <div className="flex justify-end gap-1.5">
             <Button size="xs" disabled={!ocr.text.trim()} onClick={copyOcr}>
-              {ocr.copied ? t("已复制") : ocr.translated ? t("复制译文") : t("复制")}
-            </Button>
-            <Button size="xs" disabled={!ocr.text.trim() || ocr.translating} onClick={translateOcr}>
-              {t("翻译")}
+              {ocr.copied ? t("已复制") : t("复制")}
             </Button>
             <Button size="xs" disabled={!ocr.text.trim()} onClick={saveOcr}>
               {t("存入「剪贴」")}

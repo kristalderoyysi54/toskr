@@ -652,6 +652,7 @@ pub fn screenshot_commit(
         label: window.label().to_string(),
         x: num("x-shot-x").unwrap_or(0.0),
         y: num("x-shot-y").unwrap_or(0.0),
+        section: header("x-shot-section").map(str::to_string),
     };
     let action = crate::screenshot::Action::parse(header("x-shot-action").unwrap_or("save"));
     crate::screenshot::commit(&app, action, placement, w as usize, h as usize, rgba.clone())
@@ -659,7 +660,9 @@ pub fn screenshot_commit(
 
 /// 遮罩文字面板：识别选区文字（请求体为原始 RGBA，尺寸在 x-shot-w/h 头里）。
 #[tauri::command]
-pub async fn screenshot_ocr(request: tauri::ipc::Request<'_>) -> Result<String, String> {
+pub async fn screenshot_ocr(
+    request: tauri::ipc::Request<'_>,
+) -> Result<Vec<crate::screenshot::OcrLine>, String> {
     let num = |name: &str| -> Option<usize> { request.headers().get(name)?.to_str().ok()?.parse().ok() };
     let (Some(w), Some(h)) = (num("x-shot-w"), num("x-shot-h")) else {
         return Err("missing size".into());
@@ -671,6 +674,21 @@ pub async fn screenshot_ocr(request: tauri::ipc::Request<'_>) -> Result<String, 
     tauri::async_runtime::spawn_blocking(move || crate::screenshot::recognize(w, h, &rgba))
         .await
         .map_err(|e| e.to_string())?
+}
+
+#[derive(Clone, serde::Serialize)]
+struct NoteSectionsRequest {
+    reply: String,
+}
+
+/// 遮罩窗要笔记分组列表（长按 ✓ 选分组）：请主窗口回发给本窗口。
+#[tauri::command]
+pub fn screenshot_request_sections(app: AppHandle, window: tauri::WebviewWindow) {
+    let _ = app.emit_to(
+        "main",
+        "toskr://note-sections-request",
+        NoteSectionsRequest { reply: window.label().to_string() },
+    );
 }
 
 /// 遮罩文字面板：文字复制并存入「剪贴」，结束截图。

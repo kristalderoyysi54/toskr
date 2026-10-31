@@ -15,6 +15,7 @@
     "allow-screenshot-cancel",
     "allow-screenshot-trace",
     "allow-screenshot-ocr",
+    "allow-screenshot-request-sections",
     "allow-screenshot-save-text",
     "allow-screenshot-translate",
     "allow-copy-text"

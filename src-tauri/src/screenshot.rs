@@ -122,6 +122,8 @@ pub enum Action {
     Edit,
     /// 另存为 PNG 文件（系统保存对话框）
     SaveAs,
+    /// 复制并存入指定笔记分组（长按 ✓ 选分组）
+    Section,
 }
 
 impl Action {
@@ -131,15 +133,19 @@ impl Action {
             "send" => Self::Send,
             "edit" => Self::Edit,
             "saveas" => Self::SaveAs,
+            "section" => Self::Section,
             _ => Self::Save,
         }
     }
 }
 
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct AfterPayload {
     clip: ClipPayload,
     action: &'static str,
+    /// action = "section" 时的目标笔记分组。
+    section_id: Option<String>,
 }
 
 /// 遮罩窗拉取的本屏会话信息；坐标均已换成本屏左上角为原点的 pt。
@@ -665,6 +671,8 @@ pub struct Placement {
     pub label: String,
     pub x: f64,
     pub y: f64,
+    /// 存入分组（Action::Section）的目标分组 id。
+    pub section: Option<String>,
 }
 
 fn rgba_to_bmp(w: usize, h: usize, rgba: &[u8]) -> Vec<u8> {
@@ -727,7 +735,15 @@ pub fn commit(
             );
         }
         Action::SaveAs => save_as(&app, width, height, rgba, &session),
-        _ => save(&app, action, width, height, &rgba, session),
+        _ => save(
+            &app,
+            action,
+            placement.section,
+            width,
+            height,
+            &rgba,
+            session,
+        ),
     });
     Ok(())
 }
@@ -814,17 +830,45 @@ fn source_of(session: &Session) -> (Option<String>, Option<String>) {
         .unwrap_or((None, None))
 }
 
-/// 识别选区文字（不结束会话，供遮罩文字面板）。空结果返回空串。
-pub fn recognize(width: usize, height: usize, rgba: &[u8]) -> Result<String, String> {
+/// 识别出的一行文字与它在图中的像素框（左上原点）。
+#[derive(Debug, PartialEq, Serialize)]
+pub struct OcrLine {
+    pub text: String,
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+/// Vision 归一化框（左下原点）→ 图像像素框（左上原点）。
+fn vision_to_pixels(
+    (vx, vy, vw, vh): (f64, f64, f64, f64),
+    width: usize,
+    height: usize,
+) -> (f64, f64, f64, f64) {
+    let (w, h) = (width as f64, height as f64);
+    (vx * w, (1.0 - vy - vh) * h, vw * w, vh * h)
+}
+
+/// 识别选区文字（不结束会话，供遮罩文字面板与图内翻译）。
+pub fn recognize(width: usize, height: usize, rgba: &[u8]) -> Result<Vec<OcrLine>, String> {
     if width == 0 || height == 0 || rgba.len() != width * height * 4 {
         return Err("invalid image".into());
     }
     let obs = crate::ocr::recognize_observations(&rgba_to_bmp(width, height, rgba))?;
     Ok(obs
         .into_iter()
-        .map(|o| o.text)
-        .collect::<Vec<_>>()
-        .join("\n"))
+        .map(|o| {
+            let (x, y, w, h) = vision_to_pixels(o.vision_box, width, height);
+            OcrLine {
+                text: o.text,
+                x,
+                y,
+                w,
+                h,
+            }
+        })
+        .collect())
 }
 
 /// 文字面板「存入剪贴」：结束会话，复制并存入「剪贴」。
@@ -874,6 +918,7 @@ pub fn save_text(app: &AppHandle, text: String) -> Result<(), String> {
 fn save(
     app: &AppHandle,
     action: Action,
+    section_id: Option<String>,
     width: usize,
     height: usize,
     rgba: &[u8],
@@ -904,13 +949,24 @@ fn save(
             app_name,
             bundle_id,
         };
+        if action == Action::Section {
+            copy_to_clipboard(&app, width, height, rgba);
+        }
         if action != Action::Save {
-            let name = if action == Action::Send {
-                "send"
-            } else {
-                "edit"
+            let name = match action {
+                Action::Send => "send",
+                Action::Section => "section",
+                _ => "edit",
             };
-            let _ = app.emit_to("main", AFTER_EVENT, AfterPayload { clip, action: name });
+            let _ = app.emit_to(
+                "main",
+                AFTER_EVENT,
+                AfterPayload {
+                    clip,
+                    action: name,
+                    section_id,
+                },
+            );
             return;
         }
         copy_to_clipboard(&app, width, height, rgba);
@@ -1078,6 +1134,14 @@ mod tests {
         let name = default_file_name((2026, 10, 31, 9, 5, 3));
         assert!(name.ends_with(" 2026-10-31 09.05.03.png"), "{name}");
         assert!(!name.contains(':'));
+    }
+
+    #[test]
+    fn vision_box_flips_to_top_left_pixels() {
+        // 左下原点 (0.1, 0.7, 0.5, 0.2) 在 200×100 图里 = 顶部往下 10px 的那一行
+        let (x, y, w, h) = vision_to_pixels((0.1, 0.7, 0.5, 0.2), 200, 100);
+        assert!((x - 20.0).abs() < 1e-9 && (y - 10.0).abs() < 1e-9);
+        assert!((w - 100.0).abs() < 1e-9 && (h - 20.0).abs() < 1e-9);
     }
 
     #[test]

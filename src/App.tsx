@@ -103,6 +103,7 @@ import { normalizeMaterialStyle } from "@/lib/materialStyle";
 import { appearanceFromSettings, publishAppearance } from "@/lib/colorScheme";
 import { getLocale, publishLocale, resolveLocale, t, tNode, useLocale, useT, type MessageKey } from "@/lib/i18n";
 import { aiErrorTip, startAiRequest } from "@/lib/aiClient";
+import { parseAiJson } from "@/lib/ai";
 import { PlatinumBox } from "@/components/ui/platinum-titlebar";
 import {
   DETAIL_STATE_EVENT,
@@ -1241,13 +1242,14 @@ export default function App() {
     []
   );
 
-  // 设置窗选「捕获存入」要笔记分组列表（只给可写目标，排除剪贴板/秘文）
+  // 设置窗选「捕获存入」、截图遮罩长按 ✓ 要笔记分组列表（只给可写目标，排除剪贴板/秘文）；
+  // reply 指定回发窗口，缺省回设置窗
   useEffect(() => {
-    const unlisten = listen(NOTE_SECTIONS_REQUEST, () => {
+    const unlisten = listen<{ reply?: string } | null>(NOTE_SECTIONS_REQUEST, (event) => {
       const sections: NoteSectionOption[] = draftTargetSections(
         useNotesStore.getState().sections
       ).map((section) => ({ id: section.id, name: sectionName(section) }));
-      void emitTo("settings", NOTE_SECTIONS, sections).catch(() => {});
+      void emitTo(event.payload?.reply ?? "settings", NOTE_SECTIONS, sections).catch(() => {});
     });
     return () => void unlisten.then((stop) => stop());
   }, []);
@@ -1887,20 +1889,22 @@ export default function App() {
     };
   }, []);
 
-  // 截图文字面板翻译：遮罩窗不持有 AI 能力，由主窗口用已配置的 AI 代办并回发
+  // 截图图内翻译：遮罩窗不持有 AI 能力，由主窗口用已配置的 AI 逐行代办并回发
   useEffect(() => {
     const unlisten = listen<{ label: string; requestId: string; text: string }>(
       SCREENSHOT_TRANSLATE_EVENT,
       (event) => {
         const { label, requestId, text } = event.payload;
-        const reply = (payload: { text?: string; error?: string }) =>
+        const reply = (payload: { lines?: string[]; error?: string }) =>
           void emitTo(label, SCREENSHOT_TRANSLATE_RESULT_EVENT, { requestId, ...payload }).catch(() => {});
-        const system =
-          getLocale() === "en"
-            ? "Translate the user's text into English. If it is already mainly English, translate it into Simplified Chinese. Keep line breaks and list structure. Output only the translation."
-            : "把用户文本翻译成简体中文；如果原文主要是中文，就翻译成英文。保留换行与列表结构，只输出译文。";
+        const target = getLocale() === "en" ? "English" : "Simplified Chinese";
+        const fallback = getLocale() === "en" ? "Simplified Chinese" : "English";
+        const system = `The user message is a JSON array of text lines recognized from a screenshot. Translate each line into ${target}; a line already in ${target} goes into ${fallback}. Keep numbers, code, URLs and product names unchanged. Output only a JSON array of strings with exactly the same length and order.`;
         startAiRequest({ purpose: "translate-screenshot", system, user: text, maxTokens: 2_000 })
-          .result.then((out) => reply({ text: out.trim() }))
+          .result.then((out) => {
+            const lines = parseAiJson(out, (v): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string"));
+            reply({ lines });
+          })
           .catch((error: unknown) => reply({ error: aiErrorTip(error) }));
       }
     );
@@ -1909,13 +1913,39 @@ export default function App() {
     };
   }, []);
 
-  // 截图「发送 / 在编辑器中打开」：先落进「剪贴」，再对这张卡执行动作
+  // 截图「发送 / 在编辑器中打开」：先落进「剪贴」，再对这张卡执行动作；
+  // 「存入分组」（长按 ✓）直接落进所选笔记分组
   useEffect(() => {
-    const unlisten = listen<{ clip: ClipPayload; action: "send" | "edit" }>(
+    const unlisten = listen<{ clip: ClipPayload; action: "send" | "edit" | "section"; sectionId: string | null }>(
       SCREENSHOT_AFTER_EVENT,
       (event) => {
         if (isDataOperationLocked()) return;
-        const { clip: p, action } = event.payload;
+        const { clip: p, action, sectionId: wanted } = event.payload;
+        if (action === "section") {
+          const { sections } = useNotesStore.getState();
+          const sectionId = resolveCaptureSectionId(sections, wanted);
+          const { result } = useNotesStore.getState().addNote(p.text, {
+            sectionId,
+            sourceApp: p.appName ?? undefined,
+            sourceBundle: p.bundleId ?? undefined,
+            kind: "image",
+            imageFile: p.imageFile ?? undefined,
+            imageW: p.imageW ?? undefined,
+            imageH: p.imageH ?? undefined,
+            createdAt: p.capturedAtMs,
+          });
+          if (result === "empty") return;
+          const section = sections.find((s) => s.id === sectionId);
+          void api.showCaptureHud(
+            result === "duplicate" ? "duplicate" : "added",
+            section ? `${previewOf(p.text)}\n${t("已存入「{name}」", { name: sectionName(section) })}` : previewOf(p.text),
+            null,
+            false,
+            null,
+            false
+          );
+          return;
+        }
         const result = useNotesStore.getState().addClipNote(p.text, {
           sourceApp: p.appName ?? undefined,
           sourceBundle: p.bundleId ?? undefined,

@@ -300,6 +300,7 @@ pub fn run() {
             commands::screenshot_cancel,
             commands::screenshot_trace,
             commands::screenshot_ocr,
+            commands::screenshot_request_sections,
             commands::screenshot_save_text,
             commands::screenshot_translate,
             commands::pin_info,

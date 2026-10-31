@@ -19,11 +19,20 @@ export const SCREENSHOT_END_EVENT = "toskr://screenshot-end";
 export const SCREENSHOT_AFTER_EVENT = "toskr://screenshot-after";
 /** 遮罩文字面板 → 主窗口：用已配置的 AI 翻译。 */
 export const SCREENSHOT_TRANSLATE_EVENT = "toskr://screenshot-translate";
-/** 主窗口 → 遮罩：翻译结果（text 或 error 二选一）。 */
+/** 主窗口 → 遮罩：逐行译文（lines 或 error 二选一）。 */
 export const SCREENSHOT_TRANSLATE_RESULT_EVENT = "toskr://screenshot-translate-result";
 
-/** 截完动作：save 复制并存入剪贴；pin 钉图；send 发送；edit 打码编辑；saveas 另存为 PNG。 */
-export type ScreenshotAction = "save" | "pin" | "send" | "edit" | "saveas";
+/** 截完动作：save 复制并存入剪贴；pin 钉图；send 发送；edit 打码编辑；saveas 另存为 PNG；section 存入所选笔记分组。 */
+export type ScreenshotAction = "save" | "pin" | "send" | "edit" | "saveas" | "section";
+
+/** 识别出的一行文字与其在出图中的像素框（左上原点）。 */
+export interface OcrLine {
+  text: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 
 /** 截图遮罩本屏会话；坐标为本屏左上角原点的 pt。 */
 export interface ScreenshotSession {
@@ -995,7 +1004,8 @@ export const api = {
     width: number,
     height: number,
     action: ScreenshotAction,
-    at: { x: number; y: number }
+    at: { x: number; y: number },
+    sectionId?: string
   ) =>
     invoke("screenshot_commit", rgba, {
       headers: {
@@ -1004,16 +1014,19 @@ export const api = {
         "x-shot-action": action,
         "x-shot-x": String(at.x),
         "x-shot-y": String(at.y),
+        ...(sectionId ? { "x-shot-section": sectionId } : {}),
       },
     }),
+  /** 截图遮罩要笔记分组列表：主窗口经 NOTE_SECTIONS 回发给本窗口。 */
+  screenshotRequestSections: () => invoke("screenshot_request_sections"),
   /** 遮罩文字面板：识别选区文字（不结束截图）。 */
   screenshotOcr: (rgba: Uint8Array, width: number, height: number) =>
-    invoke<string>("screenshot_ocr", rgba, {
+    invoke<OcrLine[]>("screenshot_ocr", rgba, {
       headers: { "x-shot-w": String(width), "x-shot-h": String(height) },
     }),
   /** 遮罩文字面板：复制并存入「剪贴」，结束截图。 */
   screenshotSaveText: (text: string) => invoke("screenshot_save_text", { text }),
-  /** 遮罩文字面板：请主窗口用已配置的 AI 翻译，结果经 SCREENSHOT_TRANSLATE_RESULT_EVENT 回来。 */
+  /** 图内翻译：把各行文字（JSON 字符串数组）交主窗口用已配置的 AI 逐行翻译，结果经 SCREENSHOT_TRANSLATE_RESULT_EVENT 回来。 */
   screenshotTranslate: (requestId: string, text: string) =>
     invoke("screenshot_translate", { requestId, text }),
   /** 钉图窗：原始 pt 尺寸。 */

@@ -6,7 +6,41 @@ export type Shape =
   | { kind: "rect" | "ellipse" | "arrow" | "mosaic" | "spotlight"; x1: number; y1: number; x2: number; y2: number; color: string; size: number }
   | { kind: "pen"; points: [number, number][]; color: string; size: number }
   | { kind: "text"; x: number; y: number; text: string; color: string; size: number }
-  | { kind: "number"; x: number; y: number; n: number; color: string; size: number };
+  | { kind: "number"; x: number; y: number; n: number; color: string; size: number }
+  | { kind: "translate"; items: TranslatedLine[] };
+
+/** 图内翻译的一行（坐标 pt）：只抹掉原文笔画的补丁 + 译文。 */
+export interface TranslatedLine {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  text: string;
+  /** 识别框外扩 TRANSLATE_PAD 的补丁（冻结帧像素尺寸），非文字像素保持原样。 */
+  patch: HTMLCanvasElement;
+  /** 同一补丁的 data URL，供屏上 SVG 显示。 */
+  patchUrl: string;
+  fg: string;
+  fontSize: number;
+}
+
+/** 补丁比识别框外扩（pt）：Vision 框紧贴字形，下伸笔画会露出。 */
+export const TRANSLATE_PAD = 2;
+
+export const TRANSLATE_FONT = '500 {size}px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif';
+
+/** 译文字号：从框高的 0.72 起，按实测宽度缩到放得下，最小 8。 */
+export function fitFontSize(w: number, h: number, measure: (font: string) => number): number {
+  let size = Math.max(8, h * 0.72);
+  const width = measure(TRANSLATE_FONT.replace("{size}", String(size)));
+  if (width > w && width > 0) size = Math.max(8, (size * w) / width);
+  return Math.round(size * 10) / 10;
+}
+
+/** 背景亮度高用黑字，否则白字。 */
+export function contrastText(r: number, g: number, b: number): string {
+  return 0.299 * r + 0.587 * g + 0.114 * b > 150 ? "#111111" : "#FFFFFF";
+}
 
 /** 三档粗细：线宽 / 字号 / 序号半径共用同一档位。 */
 export const SIZES = [0, 1, 2] as const;
@@ -27,6 +61,7 @@ export function isMeaningful(s: Shape): boolean {
   if (s.kind === "pen") return s.points.length >= 2;
   if (s.kind === "text") return s.text.trim().length > 0;
   if (s.kind === "number") return true;
+  if (s.kind === "translate") return s.items.length > 0;
   return Math.hypot(s.x2 - s.x1, s.y2 - s.y1) >= 3;
 }
 
@@ -106,8 +141,21 @@ export function drawShapes(
     ctx.restore();
   }
   for (const s of shapes) if (s.kind === "mosaic") drawMosaic(ctx, s, img, sx, sy);
+  // 图内翻译盖在原文上，标注仍在最上层
   for (const s of shapes) {
-    if (s.kind === "mosaic" || s.kind === "spotlight") continue;
+    if (s.kind !== "translate") continue;
+    for (const it of s.items) {
+      ctx.save();
+      ctx.drawImage(it.patch, it.x - TRANSLATE_PAD, it.y - TRANSLATE_PAD, it.w + TRANSLATE_PAD * 2, it.h + TRANSLATE_PAD * 2);
+      ctx.fillStyle = it.fg;
+      ctx.font = TRANSLATE_FONT.replace("{size}", String(it.fontSize));
+      ctx.textBaseline = "middle";
+      ctx.fillText(it.text, it.x, it.y + it.h / 2);
+      ctx.restore();
+    }
+  }
+  for (const s of shapes) {
+    if (s.kind === "mosaic" || s.kind === "spotlight" || s.kind === "translate") continue;
     ctx.save();
     ctx.strokeStyle = s.color;
     ctx.fillStyle = s.color;

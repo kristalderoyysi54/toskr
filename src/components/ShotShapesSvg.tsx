@@ -9,6 +9,7 @@ import {
   NUMBER_RADIUS,
   numberTextColor,
   SPOTLIGHT_DIM,
+  TRANSLATE_PAD,
   type Shape,
 } from "@/lib/screenshot/annotate";
 import type { Rect } from "@/lib/screenshot/geometry";
@@ -32,7 +33,8 @@ export const ShotShapesSvg = memo(function ShotShapesSvg({
 }) {
   const spots = shapes.filter((s) => s.kind === "spotlight");
   const mosaics = shapes.filter((s) => s.kind === "mosaic");
-  const others = shapes.filter((s) => s.kind !== "mosaic" && s.kind !== "spotlight");
+  const translations = shapes.flatMap((s) => (s.kind === "translate" ? s.items : []));
+  const others = shapes.filter((s) => s.kind !== "mosaic" && s.kind !== "spotlight" && s.kind !== "translate");
   return (
     <svg className="pointer-events-none absolute inset-0 size-full">
       <defs>
@@ -55,6 +57,29 @@ export const ShotShapesSvg = memo(function ShotShapesSvg({
         )}
         {mosaics.map((s, i) => (
           <MosaicImage key={`m${i}`} shape={s} img={img} sx={sx} sy={sy} />
+        ))}
+        {translations.map((it, i) => (
+          <g key={`t${i}`}>
+            <image
+              href={it.patchUrl}
+              x={it.x - TRANSLATE_PAD}
+              y={it.y - TRANSLATE_PAD}
+              width={it.w + TRANSLATE_PAD * 2}
+              height={it.h + TRANSLATE_PAD * 2}
+              preserveAspectRatio="none"
+            />
+            <text
+              x={it.x}
+              y={it.y + it.h / 2}
+              fill={it.fg}
+              fontSize={it.fontSize}
+              fontWeight={500}
+              fontFamily='-apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif'
+              dominantBaseline="central"
+            >
+              {it.text}
+            </text>
+          </g>
         ))}
         {others.map((s, i) => (
           <ShapeEl key={i} s={s} />
@@ -87,6 +112,7 @@ function MosaicImage({ shape, img, sx, sy }: { shape: Shape; img: HTMLImageEleme
 }
 
 function ShapeEl({ s }: { s: Shape }) {
+  if (s.kind === "translate") return null;
   const stroke = { stroke: s.color, strokeWidth: LINE_WIDTH[s.size], fill: "none", strokeLinecap: "round", strokeLinejoin: "round" } as const;
   switch (s.kind) {
     case "rect": {
