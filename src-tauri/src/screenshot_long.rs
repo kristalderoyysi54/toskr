@@ -1,7 +1,16 @@
 //! 长截屏：光标移到选区中央，合成滚轮事件逐段下滚，每段截取选区，
 //! 按相邻两帧重叠的像素行拼接。到底（画面不再变化）、超长、或用户动了鼠标即停。
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+
 use core_graphics::geometry::CGPoint;
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, Manager};
+
+use crate::focus::FrontApp;
+use crate::screenshot::RectPt;
 
 /// 每段滚动选区高度的一半，保证相邻帧有足够重叠。
 const SCROLL_FRACTION: f64 = 0.5;
@@ -99,10 +108,12 @@ pub enum Stop {
     NoOverlap,
 }
 
-/// 自动滚动拼接。`capture` 截取选区返回 (RGBA, 宽, 高)；`region` 为全局 pt 选区。
+/// 自动滚动拼接。`capture` 截取选区返回 (RGBA, 宽, 高)；`region` 为全局 pt 选区；
+/// 每拼上一段调用 `progress(已拼 RGBA, 宽, 总高)`。
 pub fn run(
     region: (f64, f64, f64, f64),
     mut capture: impl FnMut() -> Result<(Vec<u8>, usize, usize), String>,
+    mut progress: impl FnMut(&[u8], usize, usize),
 ) -> Result<(Vec<u8>, usize, usize, Stop), String> {
     let (rx, ry, rw, rh) = region;
     let center = CGPoint::new(rx + rw / 2.0, ry + rh / 2.0);
@@ -113,6 +124,7 @@ pub fn run(
     let mut prev = row_signatures(&first, w, h);
     let mut out = first;
     let mut total_h = h;
+    progress(&out, w, total_h);
     let step = (rh * SCROLL_FRACTION).round().max(1.0) as i32;
     let mut stop = Stop::Limit;
     for _ in 0..MAX_STEPS {
@@ -140,6 +152,7 @@ pub fn run(
         // 新内容 = 新帧末尾 dy 行
         out.extend_from_slice(&frame[(h - dy) * w * 4..]);
         total_h += dy;
+        progress(&out, w, total_h);
         prev = sig;
         if w * total_h >= MAX_PIXELS {
             stop = Stop::Limit;
@@ -147,6 +160,265 @@ pub fn run(
         }
     }
     Ok((out, w, total_h, stop))
+}
+
+// ===== 拼接预览（屏幕边缘的竖条小窗，随拼接变长） =====
+
+const PREVIEW_LABEL: &str = "longpreview";
+pub const PROGRESS_EVENT: &str = "toskr://long-progress";
+/// 预览图宽度（像素）；按此宽度最近邻缩小，只追加新行。
+const PREVIEW_W: usize = 160;
+const PREVIEW_WINDOW_W: f64 = 180.0;
+
+struct Preview {
+    rgba: Vec<u8>,
+    rows: usize,
+}
+
+static PREVIEW: Mutex<Option<Preview>> = Mutex::new(None);
+
+/// 最近邻缩小：把源图中尚未采样的行追加到预览（预览第 k 行取源第 ⌊k·f⌋ 行）。
+fn extend_preview(p: &mut Preview, src: &[u8], src_w: usize, src_h: usize) {
+    let f = src_w as f64 / PREVIEW_W as f64;
+    loop {
+        let sy = (p.rows as f64 * f) as usize;
+        if sy >= src_h {
+            break;
+        }
+        let row = &src[sy * src_w * 4..(sy + 1) * src_w * 4];
+        for k in 0..PREVIEW_W {
+            let sx = ((k as f64 * f) as usize).min(src_w - 1) * 4;
+            p.rgba.extend_from_slice(&row[sx..sx + 4]);
+        }
+        p.rows += 1;
+    }
+}
+
+#[derive(Clone, Serialize)]
+struct Progress {
+    /// 已拼接高度（像素）
+    height: usize,
+}
+
+/// 在选区所在屏的右缘（选区挡住时改左缘）放一条预览小窗；鼠标穿透、不抢焦点。
+pub fn open_preview(app: &AppHandle, display: RectPt, region: RectPt) {
+    *PREVIEW.lock().unwrap() = Some(Preview {
+        rgba: Vec::new(),
+        rows: 0,
+    });
+    let right_x = display.x + display.w - PREVIEW_WINDOW_W - 12.0;
+    let x = if region.x + region.w > right_x {
+        display.x + 12.0
+    } else {
+        right_x
+    };
+    let (y, h) = (display.y + 60.0, (display.h * 0.6).max(240.0));
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let built = tauri::WebviewWindowBuilder::new(
+            &handle,
+            PREVIEW_LABEL,
+            tauri::WebviewUrl::App("index.html".into()),
+        )
+        .title("Toskr Scrolling Capture")
+        .inner_size(PREVIEW_WINDOW_W, h)
+        .position(x, y)
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .shadow(true)
+        .focused(false)
+        .visible_on_all_workspaces(true)
+        .build();
+        if let Ok(w) = built {
+            let _ = w.set_ignore_cursor_events(true);
+            crate::window::ensure_fullscreen_auxiliary(&w);
+        }
+    });
+}
+
+pub fn preview_progress(app: &AppHandle, src: &[u8], src_w: usize, src_h: usize) {
+    {
+        let mut guard = PREVIEW.lock().unwrap();
+        let Some(p) = guard.as_mut() else { return };
+        extend_preview(p, src, src_w, src_h);
+    }
+    let _ = app.emit_to(PREVIEW_LABEL, PROGRESS_EVENT, Progress { height: src_h });
+}
+
+/// 预览图（BMP）与已拼高度。
+pub fn preview_bytes() -> Option<Vec<u8>> {
+    let guard = PREVIEW.lock().unwrap();
+    let p = guard.as_ref().filter(|p| p.rows > 0)?;
+    Some(rgba_bmp(PREVIEW_W, p.rows, &p.rgba))
+}
+
+pub fn close_preview(app: &AppHandle) {
+    *PREVIEW.lock().unwrap() = None;
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(w) = handle.get_webview_window(PREVIEW_LABEL) {
+            let _ = w.destroy();
+        }
+    });
+}
+
+fn rgba_bmp(w: usize, h: usize, rgba: &[u8]) -> Vec<u8> {
+    let mut bgra = rgba.to_vec();
+    for px in bgra.chunks_exact_mut(4) {
+        px.swap(0, 2);
+    }
+    crate::screenshot_sck::bmp_from_bgra(&bgra, w, h, w * 4)
+}
+
+// ===== 长图标注窗 =====
+
+const EDITOR_PREFIX: &str = "longshot-";
+static NEXT_EDITOR: AtomicU64 = AtomicU64::new(1);
+
+struct LongShot {
+    bmp: Vec<u8>,
+    px_w: usize,
+    px_h: usize,
+    /// 像素 / pt
+    scale: f64,
+    front: Option<FrontApp>,
+}
+
+static LONGS: Mutex<Option<HashMap<String, LongShot>>> = Mutex::new(None);
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LongInfo {
+    pub px_w: usize,
+    pub px_h: usize,
+    pub scale: f64,
+}
+
+/// 拼好的长图交给可滚动的标注窗（带系统标题栏，居中于选区所在屏）。
+pub fn open_editor(
+    app: &AppHandle,
+    rgba: Vec<u8>,
+    px_w: usize,
+    px_h: usize,
+    scale: f64,
+    front: Option<FrontApp>,
+    display: RectPt,
+) {
+    let label = format!(
+        "{EDITOR_PREFIX}{}",
+        NEXT_EDITOR.fetch_add(1, Ordering::Relaxed)
+    );
+    let bmp = rgba_bmp(px_w, px_h, &rgba);
+    drop(rgba);
+    LONGS
+        .lock()
+        .unwrap()
+        .get_or_insert_with(HashMap::new)
+        .insert(
+            label.clone(),
+            LongShot {
+                bmp,
+                px_w,
+                px_h,
+                scale,
+                front,
+            },
+        );
+    let pt_w = px_w as f64 / scale;
+    let win_w = (pt_w + 48.0).clamp(680.0, display.w * 0.9);
+    let win_h = display.h * 0.85;
+    let (x, y) = (
+        display.x + (display.w - win_w) / 2.0,
+        display.y + (display.h - win_h) / 2.0,
+    );
+    let title = crate::tr_fmt!("长截屏 {px_w}×{px_h}", "Scrolling capture {px_w}×{px_h}");
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let built = tauri::WebviewWindowBuilder::new(
+            &handle,
+            &label,
+            tauri::WebviewUrl::App("index.html".into()),
+        )
+        .title(title)
+        .inner_size(win_w, win_h)
+        .position(x, y)
+        .min_inner_size(640.0, 400.0)
+        .always_on_top(true)
+        .visible_on_all_workspaces(true)
+        .build();
+        match built {
+            Ok(w) => {
+                crate::window::ensure_fullscreen_auxiliary(&w);
+                // 用标题栏关闭按钮关窗时也释放长图内存
+                let closing = label.clone();
+                w.on_window_event(move |event| {
+                    if matches!(event, tauri::WindowEvent::Destroyed) {
+                        LONGS.lock().unwrap().as_mut().map(|m| m.remove(&closing));
+                    }
+                });
+                let _ = w.set_focus();
+            }
+            Err(e) => {
+                LONGS.lock().unwrap().as_mut().map(|m| m.remove(&label));
+                crate::diag::push(&handle, format!("长图标注窗创建失败 {e}"));
+            }
+        }
+    });
+}
+
+pub fn info(label: &str) -> Option<LongInfo> {
+    let guard = LONGS.lock().unwrap();
+    let l = guard.as_ref()?.get(label)?;
+    Some(LongInfo {
+        px_w: l.px_w,
+        px_h: l.px_h,
+        scale: l.scale,
+    })
+}
+
+pub fn image_bytes(label: &str) -> Option<Vec<u8>> {
+    Some(LONGS.lock().unwrap().as_ref()?.get(label)?.bmp.clone())
+}
+
+/// 标注窗出图：按动作存入「剪贴」/ 指定分组 / 另存为，随后关窗。
+pub fn commit(
+    window: &tauri::WebviewWindow,
+    action: crate::screenshot::Action,
+    section: Option<String>,
+    w: usize,
+    h: usize,
+    rgba: Vec<u8>,
+) -> Result<(), String> {
+    if w == 0 || h == 0 || rgba.len() != w * h * 4 {
+        return Err("invalid image".into());
+    }
+    let entry = LONGS
+        .lock()
+        .unwrap()
+        .as_mut()
+        .and_then(|m| m.remove(window.label()));
+    let front = entry.and_then(|e| e.front);
+    let app = window.app_handle().clone();
+    let _ = window.destroy();
+    std::thread::spawn(move || match action {
+        crate::screenshot::Action::SaveAs => {
+            crate::screenshot::save_as(&app, w, h, rgba, front.as_ref())
+        }
+        _ => crate::screenshot::save(&app, action, section, w, h, &rgba, front.as_ref()),
+    });
+    Ok(())
+}
+
+pub fn close(window: &tauri::WebviewWindow) {
+    LONGS
+        .lock()
+        .unwrap()
+        .as_mut()
+        .map(|m| m.remove(window.label()));
+    let _ = window.destroy();
 }
 
 #[cfg(test)]
@@ -185,5 +457,23 @@ mod tests {
         let blank = vec![[9u8, 9, 9, 255]; 2].concat();
         let rows = |n: usize| -> Vec<(u64, bool)> { row_signatures(&blank.repeat(n), 2, n) };
         assert_eq!(scroll_offset(&rows(50), &rows(50)), None);
+    }
+
+    #[test]
+    fn preview_downsamples_appended_rows_only() {
+        let mut p = Preview {
+            rgba: Vec::new(),
+            rows: 0,
+        };
+        // 源宽 320 = 预览宽 2 倍 → 预览每行取源第 2k 行
+        let src: Vec<u8> = (0..320 * 10)
+            .flat_map(|i| [(i / 320) as u8, 0, 0, 255])
+            .collect();
+        extend_preview(&mut p, &src[..320 * 4 * 4], 320, 4);
+        assert_eq!(p.rows, 2);
+        extend_preview(&mut p, &src, 320, 10);
+        assert_eq!(p.rows, 5);
+        assert_eq!(p.rgba.len(), 5 * PREVIEW_W * 4);
+        assert_eq!(p.rgba[4 * PREVIEW_W * 4], 8, "第 4 行取源第 8 行");
     }
 }

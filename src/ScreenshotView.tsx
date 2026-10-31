@@ -2,29 +2,22 @@ import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as
 import { listen } from "@tauri-apps/api/event";
 import {
   Check,
-  Circle,
   Download,
-  Focus,
-  Grid3x3,
-  Hash,
   Languages,
   Loader2,
-  MoveUpRight,
-  Pencil,
   Pin,
   Redo2,
   ScrollText,
   ScanText,
   Send,
   Shield,
-  Square,
-  Type,
   Undo2,
   X,
   type LucideIcon,
 } from "lucide-react";
 
 import { ShotShapesSvg } from "@/components/ShotShapesSvg";
+import { SHOT_TOOLS, ShotStyleRow, toolHasStyle, useShotStyle } from "@/components/ShotToolParts";
 import { Button } from "@/components/ui/button";
 import { floatingSurface } from "@/components/ui/floating-surface";
 import { IconButton } from "@/components/ui/icon-button";
@@ -32,7 +25,6 @@ import { NOTE_SECTIONS, type NoteSectionOption } from "@/lib/draftSection";
 import { useT, type MessageKey } from "@/lib/i18n";
 import { createLongPress } from "@/lib/longPress";
 import {
-  COLORS,
   contrastText,
   drawShapes,
   fitFontSize,
@@ -41,11 +33,9 @@ import {
   nextNumber,
   pushShape,
   redo,
-  SIZES,
   undo,
   type History,
   type Shape,
-  type SizeLevel,
   TRANSLATE_PAD,
   type Tool,
   type TranslatedLine,
@@ -101,38 +91,12 @@ const HANDLE_CURSOR: Record<Handle, string> = {
   w: "ew-resize",
 };
 
-const TOOLS: { tool: Tool; icon: LucideIcon; label: MessageKey }[] = [
-  { tool: "rect", icon: Square, label: "矩形" },
-  { tool: "ellipse", icon: Circle, label: "椭圆" },
-  { tool: "arrow", icon: MoveUpRight, label: "箭头" },
-  { tool: "pen", icon: Pencil, label: "画笔" },
-  { tool: "text", icon: Type, label: "文字" },
-  { tool: "mosaic", icon: Grid3x3, label: "马赛克" },
-  { tool: "spotlight", icon: Focus, label: "聚光灯" },
-  { tool: "number", icon: Hash, label: "序号" },
-];
-
 const ACTIONS: { action: ScreenshotAction; icon: LucideIcon; label: MessageKey }[] = [
   { action: "pin", icon: Pin, label: "钉在屏幕上" },
   { action: "edit", icon: Shield, label: "在编辑器中打开（打码）" },
   { action: "send", icon: Send, label: "发送到当前目标" },
   { action: "saveas", icon: Download, label: "另存为图片…" },
 ];
-
-/** 上次用的标注颜色与粗细（每台机器的使用习惯，存 localStorage）。 */
-const STYLE_KEY = "toskr.screenshotStyle";
-
-function loadStyle(): { ink: string; size: SizeLevel } {
-  try {
-    const v = JSON.parse(localStorage.getItem(STYLE_KEY) ?? "{}") as { ink?: unknown; size?: unknown };
-    return {
-      ink: typeof v.ink === "string" && COLORS.includes(v.ink) ? v.ink : COLORS[0],
-      size: SIZES.includes(v.size as SizeLevel) ? (v.size as SizeLevel) : 1,
-    };
-  } catch {
-    return { ink: COLORS[0], size: 1 };
-  }
-}
 
 /** 文字面板：识别结果（可编辑）与可选译文。 */
 interface OcrPanel {
@@ -269,8 +233,8 @@ export default function ScreenshotView() {
   const [dragging, setDragging] = useState(false);
   const [copied, setCopied] = useState(false);
   const [tool, setTool] = useState<Tool | null>(null);
-  const [ink, setInk] = useState(() => loadStyle().ink);
-  const [size, setSize] = useState<SizeLevel>(() => loadStyle().size);
+  const style = useShotStyle();
+  const { ink, size } = style;
   const [history, setHistory] = useState<History>(emptyHistory);
   const [draft, setDraft] = useState<Shape | null>(null);
   const [editing, setEditing] = useState<{ x: number; y: number; text: string } | null>(null);
@@ -279,9 +243,6 @@ export default function ScreenshotView() {
   const [translating, setTranslating] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const drag = useRef<Drag | null>(null);
-  useEffect(() => {
-    localStorage.setItem(STYLE_KEY, JSON.stringify({ ink, size }));
-  }, [ink, size]);
   const textRef = useRef<HTMLTextAreaElement | null>(null);
   const sessionRef = useRef<number | null>(null);
   const urlRef = useRef<string | null>(null);
@@ -777,7 +738,7 @@ export default function ScreenshotView() {
   const pr = active ? toPixelRect(active, sx, sy, info.pxW, info.pxH) : null;
   const labelAbove = active && active.y >= 26;
   const loupePos = cursor ? placeNear(cursor.x, cursor.y, LOUPE_SIZE, LOUPE_PANEL_H, W, H) : null;
-  const showStyle = !!tool && tool !== "mosaic" && tool !== "spotlight";
+  const showStyle = toolHasStyle(tool);
   const toolbarH = showStyle ? 70 : 36;
   const toolbarTop = sel
     ? sel.y + sel.h + 8 + toolbarH <= H
@@ -873,14 +834,14 @@ export default function ScreenshotView() {
           onContextMenu={(e) => e.stopPropagation()}
         >
           <div className="flex items-center gap-1">
-            {TOOLS.map(({ tool: id, icon: Icon, label }) => (
+            {SHOT_TOOLS.map(({ tool: id, icon: Icon, label }) => (
               <IconButton
                 key={id}
                 label={t(label)}
                 pressed={tool === id}
                 onClick={() => {
                   commitEditing();
-                  void api.screenshotTrace("tool", TOOLS.findIndex((x) => x.tool === id), 0);
+                  void api.screenshotTrace("tool", SHOT_TOOLS.findIndex((x) => x.tool === id), 0);
                   setTool(tool === id ? null : id);
                 }}
               >
@@ -965,40 +926,7 @@ export default function ScreenshotView() {
               )}
             </span>
           </div>
-          {showStyle && (
-            <div className="flex items-center gap-2 px-1">
-              {SIZES.map((lv) => (
-                <button
-                  key={lv}
-                  type="button"
-                  aria-label={t("粗细 {n}", { n: lv + 1 })}
-                  aria-pressed={size === lv}
-                  onClick={() => setSize(lv)}
-                  className={cn(
-                    "flex size-5 items-center justify-center rounded-sm",
-                    size === lv && "bg-accent"
-                  )}
-                >
-                  <span className="rounded-full bg-foreground" style={{ width: 4 + lv * 3, height: 4 + lv * 3 }} />
-                </button>
-              ))}
-              <span className="h-4 w-px bg-border" />
-              {COLORS.map((c) => (
-                <button
-                  key={c}
-                  type="button"
-                  aria-label={c}
-                  aria-pressed={ink === c}
-                  onClick={() => setInk(c)}
-                  className={cn(
-                    "size-4 rounded-sm border border-border",
-                    ink === c && "ring-2 ring-primary ring-offset-1 ring-offset-popover"
-                  )}
-                  style={{ background: c }}
-                />
-              ))}
-            </div>
-          )}
+          {showStyle && <ShotStyleRow {...style} />}
         </div>
       )}
 

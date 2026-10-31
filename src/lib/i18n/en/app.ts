@@ -342,4 +342,7 @@ export const app = {
   "没有可存入的分组": "No groups to save to",
   "长截屏：自动向下滚动拼接，动一下鼠标停止": "Scrolling capture: scrolls down and stitches; move the mouse to stop",
   "长截屏不保留标注，请先撤销标注": "Scrolling capture can’t keep annotations; undo them first",
+  "已拼接 {n} px": "Stitched {n} px",
+  "动一下鼠标停止": "Move the mouse to stop",
+  "放弃长截屏": "Discard scrolling capture",
 } satisfies Record<string, EnValue>;

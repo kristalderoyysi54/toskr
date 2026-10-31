@@ -703,8 +703,19 @@ pub fn long(app: &AppHandle, label: &str, x: f64, y: f64, w: f64, h: f64) -> Res
         // 等遮罩藏好、焦点回到原应用，滚轮事件才落到目标窗口
         std::thread::sleep(std::time::Duration::from_millis(300));
         let sck = crate::screenshot_sck::supported() && display_id.is_some();
+        let global = (bounds.x + x, bounds.y + y, w, h);
         if sck {
-            // SCK 截图排除本应用窗口，提示气泡不会入画
+            // SCK 截图排除本应用窗口，提示气泡与预览条不会入画
+            crate::screenshot_long::open_preview(
+                &app,
+                bounds,
+                RectPt {
+                    x: global.0,
+                    y: global.1,
+                    w,
+                    h,
+                },
+            );
             crate::window::show_hud(
                 &app,
                 "info",
@@ -718,12 +729,20 @@ pub fn long(app: &AppHandle, label: &str, x: f64, y: f64, w: f64, h: f64) -> Res
                 None,
             );
         }
-        let global = (bounds.x + x, bounds.y + y, w, h);
         let started = std::time::Instant::now();
-        let result = crate::screenshot_long::run(global, || match (sck, display_id) {
-            (true, Some(id)) => crate::screenshot_sck::capture_region(id, (x, y, w, h)),
-            _ => capture_region_fallback(global),
-        });
+        let result = crate::screenshot_long::run(
+            global,
+            || match (sck, display_id) {
+                (true, Some(id)) => crate::screenshot_sck::capture_region(id, (x, y, w, h)),
+                _ => capture_region_fallback(global),
+            },
+            |out, pw, ph| {
+                if sck {
+                    crate::screenshot_long::preview_progress(&app, out, pw, ph);
+                }
+            },
+        );
+        crate::screenshot_long::close_preview(&app);
         match result {
             Ok((rgba, pw, ph, stop)) => {
                 crate::diag::push(
@@ -733,7 +752,16 @@ pub fn long(app: &AppHandle, label: &str, x: f64, y: f64, w: f64, h: f64) -> Res
                         started.elapsed().as_millis()
                     ),
                 );
-                save(&app, Action::Save, None, pw, ph, &rgba, session);
+                // 拼好后进可滚动的标注窗，在那里完成 / 存入分组 / 另存为
+                crate::screenshot_long::open_editor(
+                    &app,
+                    rgba,
+                    pw,
+                    ph,
+                    pw as f64 / w,
+                    session.front,
+                    bounds,
+                );
             }
             Err(e) => {
                 crate::diag::push(&app, format!("长截屏失败：{e}"));
@@ -824,7 +852,7 @@ pub fn commit(
                 bounds.y + placement.y,
             );
         }
-        Action::SaveAs => save_as(&app, width, height, rgba, &session),
+        Action::SaveAs => save_as(&app, width, height, rgba, session.front.as_ref()),
         _ => save(
             &app,
             action,
@@ -832,7 +860,7 @@ pub fn commit(
             width,
             height,
             &rgba,
-            session,
+            session.front.as_ref(),
         ),
     });
     Ok(())
@@ -861,7 +889,13 @@ fn default_file_name((y, mo, d, h, mi, s): (i32, u32, u32, u32, u32, u32)) -> St
     )
 }
 
-fn save_as(app: &AppHandle, width: usize, height: usize, rgba: Vec<u8>, session: &Session) {
+pub(crate) fn save_as(
+    app: &AppHandle,
+    width: usize,
+    height: usize,
+    rgba: Vec<u8>,
+    front: Option<&FrontApp>,
+) {
     use tauri_plugin_dialog::DialogExt;
     crate::focus::activate_pid(std::process::id() as i32);
     let mut dialog = app
@@ -873,7 +907,7 @@ fn save_as(app: &AppHandle, width: usize, height: usize, rgba: Vec<u8>, session:
         dialog = dialog.set_directory(std::path::Path::new(&home).join("Desktop"));
     }
     let picked = dialog.blocking_save_file().and_then(|p| p.into_path().ok());
-    if let Some(pid) = session.front.as_ref().map(|f| f.pid) {
+    if let Some(pid) = front.map(|f| f.pid) {
         crate::focus::activate_pid(pid);
     }
     let Some(path) = picked else { return };
@@ -912,10 +946,8 @@ fn save_as(app: &AppHandle, width: usize, height: usize, rgba: Vec<u8>, session:
     }
 }
 
-fn source_of(session: &Session) -> (Option<String>, Option<String>) {
-    session
-        .front
-        .as_ref()
+fn source_of(front: Option<&FrontApp>) -> (Option<String>, Option<String>) {
+    front
         .map(|f| (f.name.clone(), f.bundle_id.clone()))
         .unwrap_or((None, None))
 }
@@ -974,7 +1006,7 @@ pub fn save_text(app: &AppHandle, text: String) -> Result<(), String> {
     }
     let n = text.chars().filter(|c| !c.is_whitespace()).count();
     crate::diag::push(app, format!("截图文字存入剪贴 {n} 字"));
-    let (app_name, bundle_id) = source_of(&session);
+    let (app_name, bundle_id) = source_of(session.front.as_ref());
     let _ = app.emit_to(
         "main",
         CLIP_EVENT,
@@ -1005,14 +1037,14 @@ pub fn save_text(app: &AppHandle, text: String) -> Result<(), String> {
     Ok(())
 }
 
-fn save(
+pub(crate) fn save(
     app: &AppHandle,
     action: Action,
     section_id: Option<String>,
     width: usize,
     height: usize,
     rgba: &[u8],
-    session: Session,
+    front: Option<&FrontApp>,
 ) {
     let app = app.clone();
     {
@@ -1026,7 +1058,7 @@ fn save(
         };
         crate::diag::push(&app, format!("截图入库 {width}×{height} {action:?}"));
         let (w, h) = (width as u32, height as u32);
-        let (app_name, bundle_id) = source_of(&session);
+        let (app_name, bundle_id) = source_of(front);
         let clip = ClipPayload {
             content_kind: "image".into(),
             text: crate::tr_fmt!("截图 {w}×{h}", "Screenshot {w}×{h}"),

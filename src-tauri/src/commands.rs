@@ -721,6 +721,49 @@ pub fn screenshot_translate(
     .map_err(|e| e.to_string())
 }
 
+/// 长截屏预览条：当前拼接预览（BMP）。
+#[tauri::command]
+pub fn long_preview_image() -> Result<tauri::ipc::Response, String> {
+    crate::screenshot_long::preview_bytes()
+        .map(tauri::ipc::Response::new)
+        .ok_or_else(|| "no preview".to_string())
+}
+
+/// 长图标注窗：像素尺寸与像素/pt 比。
+#[tauri::command]
+pub fn long_info(window: tauri::WebviewWindow) -> Option<crate::screenshot_long::LongInfo> {
+    crate::screenshot_long::info(window.label())
+}
+
+/// 长图标注窗：长图字节（BMP）。
+#[tauri::command]
+pub fn long_image(window: tauri::WebviewWindow) -> Result<tauri::ipc::Response, String> {
+    crate::screenshot_long::image_bytes(window.label())
+        .map(tauri::ipc::Response::new)
+        .ok_or_else(|| "no long screenshot".to_string())
+}
+
+/// 长图标注窗出图：请求体原始 RGBA；x-shot-w/h、x-shot-action、x-shot-section 在请求头。
+#[tauri::command]
+pub fn long_commit(window: tauri::WebviewWindow, request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let header = |name: &str| -> Option<&str> { request.headers().get(name)?.to_str().ok() };
+    let num = |name: &str| -> Option<usize> { header(name)?.parse().ok() };
+    let (Some(w), Some(h)) = (num("x-shot-w"), num("x-shot-h")) else {
+        return Err("missing size".into());
+    };
+    let tauri::ipc::InvokeBody::Raw(rgba) = request.body() else {
+        return Err("expected raw body".into());
+    };
+    let action = crate::screenshot::Action::parse(header("x-shot-action").unwrap_or("save"));
+    let section = header("x-shot-section").map(str::to_string);
+    crate::screenshot_long::commit(&window, action, section, w, h, rgba.clone())
+}
+
+#[tauri::command]
+pub fn long_close(window: tauri::WebviewWindow) {
+    crate::screenshot_long::close(&window);
+}
+
 /// 钉图窗：原始 pt 尺寸。
 #[tauri::command]
 pub fn pin_info(window: tauri::WebviewWindow) -> Option<crate::screenshot::PinInfo> {

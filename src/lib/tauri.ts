@@ -17,6 +17,8 @@ export const SCREENSHOT_SESSION_EVENT = "toskr://screenshot-session";
 export const SCREENSHOT_END_EVENT = "toskr://screenshot-end";
 /** 截完「发送 / 在编辑器中打开」：主窗口先落进剪贴再执行。 */
 export const SCREENSHOT_AFTER_EVENT = "toskr://screenshot-after";
+/** 长截屏拼接进度（Rust → 预览条），payload { height }。 */
+export const LONG_PROGRESS_EVENT = "toskr://long-progress";
 /** 遮罩文字面板 → 主窗口：用已配置的 AI 翻译。 */
 export const SCREENSHOT_TRANSLATE_EVENT = "toskr://screenshot-translate";
 /** 主窗口 → 遮罩：逐行译文（lines 或 error 二选一）。 */
@@ -1029,6 +1031,22 @@ export const api = {
   /** 图内翻译：把各行文字（JSON 字符串数组）交主窗口用已配置的 AI 逐行翻译，结果经 SCREENSHOT_TRANSLATE_RESULT_EVENT 回来。 */
   screenshotTranslate: (requestId: string, text: string) =>
     invoke("screenshot_translate", { requestId, text }),
+  /** 长截屏预览条：当前拼接预览（BMP）。 */
+  longPreviewImage: () => invoke<ArrayBuffer>("long_preview_image"),
+  /** 长图标注窗：像素尺寸与像素/pt 比。 */
+  longInfo: () => invoke<{ pxW: number; pxH: number; scale: number } | null>("long_info"),
+  longImage: () => invoke<ArrayBuffer>("long_image"),
+  /** 长图标注窗出图（save / section / saveas），成功后窗口由 Rust 关闭。 */
+  longCommit: (rgba: Uint8Array, width: number, height: number, action: "save" | "section" | "saveas", sectionId?: string) =>
+    invoke("long_commit", rgba, {
+      headers: {
+        "x-shot-w": String(width),
+        "x-shot-h": String(height),
+        "x-shot-action": action,
+        ...(sectionId ? { "x-shot-section": sectionId } : {}),
+      },
+    }),
+  longClose: () => invoke("long_close"),
   /** 钉图窗：原始 pt 尺寸。 */
   pinInfo: () => invoke<{ width: number; height: number } | null>("pin_info"),
   pinImage: () => invoke<ArrayBuffer>("pin_image"),

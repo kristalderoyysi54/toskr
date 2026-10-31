@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "longshot",
+  "description": "按窗口职责授予插件与原生命令能力",
+  "windows": [
+    "longshot-*"
+  ],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-long-info",
+    "allow-long-image",
+    "allow-long-commit",
+    "allow-long-close",
+    "allow-screenshot-request-sections"
+  ]
+}

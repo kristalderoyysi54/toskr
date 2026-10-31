@@ -24,19 +24,22 @@ export const ShotShapesSvg = memo(function ShotShapesSvg({
   img,
   sx,
   sy,
+  viewBox,
 }: {
   shapes: Shape[];
   clip: Rect;
   img: HTMLImageElement;
   sx: number;
   sy: number;
+  /** 长图标注窗：图形坐标为图片 pt，SVG 按显示尺寸缩放。 */
+  viewBox?: string;
 }) {
   const spots = shapes.filter((s) => s.kind === "spotlight");
   const mosaics = shapes.filter((s) => s.kind === "mosaic");
   const translations = shapes.flatMap((s) => (s.kind === "translate" ? s.items : []));
   const others = shapes.filter((s) => s.kind !== "mosaic" && s.kind !== "spotlight" && s.kind !== "translate");
   return (
-    <svg className="pointer-events-none absolute inset-0 size-full">
+    <svg className="pointer-events-none absolute inset-0 size-full" viewBox={viewBox} preserveAspectRatio="none">
       <defs>
         <clipPath id="shot-sel">
           <rect x={clip.x} y={clip.y} width={clip.w} height={clip.h} />
