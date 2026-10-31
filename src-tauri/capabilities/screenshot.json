@@ -13,6 +13,7 @@
     "allow-screenshot-cursor",
     "allow-screenshot-commit",
     "allow-screenshot-cancel",
+    "allow-screenshot-long",
     "allow-screenshot-trace",
     "allow-screenshot-ocr",
     "allow-screenshot-request-sections",

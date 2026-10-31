@@ -340,4 +340,6 @@ export const app = {
   "完成：复制并存入「剪贴」（Enter）；长按选择存入的分组": "Done: copy and save to Clipboard (Enter); long-press to choose a group",
   "存入分组": "Save to group",
   "没有可存入的分组": "No groups to save to",
+  "长截屏：自动向下滚动拼接，动一下鼠标停止": "Scrolling capture: scrolls down and stitches; move the mouse to stop",
+  "长截屏不保留标注，请先撤销标注": "Scrolling capture can’t keep annotations; undo them first",
 } satisfies Record<string, EnValue>;

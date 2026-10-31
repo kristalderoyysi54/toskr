@@ -761,6 +761,12 @@ pub fn screenshot_trace(app: AppHandle, stage: String, a: f64, b: f64) {
     }
 }
 
+/// 长截屏：选区为发起遮罩窗所在屏的本屏 pt。
+#[tauri::command]
+pub fn screenshot_long(app: AppHandle, window: tauri::WebviewWindow, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
+    crate::screenshot::long(&app, window.label(), x, y, w, h)
+}
+
 #[tauri::command]
 pub fn screenshot_cancel(app: AppHandle) {
     crate::screenshot::cancel(&app);

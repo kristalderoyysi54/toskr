@@ -13,6 +13,7 @@ import {
   Pencil,
   Pin,
   Redo2,
+  ScrollText,
   ScanText,
   Send,
   Shield,
@@ -87,7 +88,7 @@ const LOUPE_SAMPLE = 15;
 const LOUPE_SIZE = 120;
 const LOUPE_PANEL_H = LOUPE_SIZE + 44;
 /** 工具条宽度估值：选区右缘离屏幕左边不足此宽时改为贴左，避免工具条被裁掉。 */
-const TOOLBAR_W_EST = 540;
+const TOOLBAR_W_EST = 620;
 
 const HANDLE_CURSOR: Record<Handle, string> = {
   nw: "nwse-resize",
@@ -448,6 +449,18 @@ export default function ScreenshotView() {
     setNotice(text);
     window.setTimeout(() => setNotice((n) => (n === text ? null : n)), 2500);
   }, []);
+
+  /** 长截屏：Rust 结束遮罩后在选区内自动滚动拼接；长图不支持标注。 */
+  const startLong = useCallback(() => {
+    if (!sel) return;
+    if (history.shapes.length) {
+      flash(t("长截屏不保留标注，请先撤销标注"));
+      return;
+    }
+    const r = { x: sel.x, y: sel.y, w: sel.w, h: sel.h };
+    reset();
+    void api.screenshotLong(r).catch(() => void api.screenshotCancel());
+  }, [sel, history.shapes.length, flash, reset, t]);
 
   const runOcr = useCallback(() => {
     const out = exportImage(false);
@@ -882,6 +895,9 @@ export default function ScreenshotView() {
               <Redo2 />
             </IconButton>
             <span className="mx-0.5 h-4 w-px bg-border" />
+            <IconButton label={t("长截屏：自动向下滚动拼接，动一下鼠标停止")} onClick={startLong}>
+              <ScrollText />
+            </IconButton>
             <IconButton label={t("识别文字")} pressed={!!ocr} onClick={runOcr}>
               <ScanText />
             </IconButton>

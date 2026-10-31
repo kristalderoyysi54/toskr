@@ -44,9 +44,11 @@ fn shareable_content() -> Result<Retained<SCShareableContent>, String> {
         .ok_or_else(|| "shareable content unavailable".to_string())
 }
 
-/// 按 `ids` 顺序截各屏；任一屏失败整体报错（调用方回退）。
-pub fn capture(ids: &[u32]) -> Result<Vec<Shot>, String> {
-    let content = shareable_content()?;
+/// 指定屏的内容过滤器（排除本应用窗口）与 pt→像素比、屏 pt 尺寸。
+fn display_filter(
+    content: &SCShareableContent,
+    id: u32,
+) -> Result<(Retained<SCContentFilter>, f64, f64, f64), String> {
     let me = std::process::id() as i32;
     let apps = unsafe { content.applications() };
     let own: Vec<_> = apps
@@ -55,31 +57,73 @@ pub fn capture(ids: &[u32]) -> Result<Vec<Shot>, String> {
         .collect();
     let excluded = NSArray::from_retained_slice(&own);
     let displays = unsafe { content.displays() };
+    let display = displays
+        .iter()
+        .find(|d| unsafe { d.displayID() } == id)
+        .ok_or_else(|| format!("display {id} not shareable"))?;
+    let filter = unsafe {
+        SCContentFilter::initWithDisplay_excludingApplications_exceptingWindows(
+            SCContentFilter::alloc(),
+            &display,
+            &excluded,
+            &NSArray::new(),
+        )
+    };
+    let scale = unsafe { filter.pointPixelScale() } as f64;
+    let (w, h) = unsafe { (display.width() as f64, display.height() as f64) };
+    Ok((filter, scale, w, h))
+}
 
+fn base_config(px_w: usize, px_h: usize) -> Retained<SCStreamConfiguration> {
+    let config = unsafe { SCStreamConfiguration::new() };
+    unsafe {
+        config.setWidth(px_w);
+        config.setHeight(px_h);
+        config.setShowsCursor(false);
+        config.setPixelFormat(PIXEL_FORMAT_BGRA);
+        // 转到 sRGB：BMP 不带色彩配置，浏览器按 sRGB 解读
+        config.setColorSpaceName(objc2_core_graphics::kCGColorSpaceSRGB);
+    }
+    config
+}
+
+/// 截某屏一块区域（本屏 pt），返回 RGBA 与像素尺寸。长截屏逐帧调用。
+pub fn capture_region(
+    id: u32,
+    (x, y, w, h): (f64, f64, f64, f64),
+) -> Result<(Vec<u8>, usize, usize), String> {
+    let content = shareable_content()?;
+    let (filter, scale, _, _) = display_filter(&content, id)?;
+    let config = base_config((w * scale).round() as usize, (h * scale).round() as usize);
+    unsafe {
+        config.setSourceRect(objc2_core_foundation::CGRect::new(
+            objc2_core_foundation::CGPoint::new(x, y),
+            objc2_core_foundation::CGSize::new(w, h),
+        ));
+    }
+    let (tx, rx) = mpsc::channel();
+    let block = RcBlock::new(move |image: *mut CGImage, _err: *mut NSError| {
+        let _ = tx.send(unsafe { image.as_ref() }.and_then(to_rgba));
+    });
+    unsafe {
+        SCScreenshotManager::captureImageWithFilter_configuration_completionHandler(
+            &filter,
+            &config,
+            Some(&block),
+        );
+    }
+    rx.recv_timeout(TIMEOUT)
+        .map_err(|_| "region capture timeout".to_string())?
+        .ok_or_else(|| "region capture failed".to_string())
+}
+
+/// 按 `ids` 顺序截各屏；任一屏失败整体报错（调用方回退）。
+pub fn capture(ids: &[u32]) -> Result<Vec<Shot>, String> {
+    let content = shareable_content()?;
     let mut pending = Vec::with_capacity(ids.len());
     for &id in ids {
-        let display = displays
-            .iter()
-            .find(|d| unsafe { d.displayID() } == id)
-            .ok_or_else(|| format!("display {id} not shareable"))?;
-        let filter = unsafe {
-            SCContentFilter::initWithDisplay_excludingApplications_exceptingWindows(
-                SCContentFilter::alloc(),
-                &display,
-                &excluded,
-                &NSArray::new(),
-            )
-        };
-        let scale = unsafe { filter.pointPixelScale() } as f64;
-        let config = unsafe { SCStreamConfiguration::new() };
-        unsafe {
-            config.setWidth((display.width() as f64 * scale).round() as usize);
-            config.setHeight((display.height() as f64 * scale).round() as usize);
-            config.setShowsCursor(false);
-            config.setPixelFormat(PIXEL_FORMAT_BGRA);
-            // 转到 sRGB：BMP 不带色彩配置，浏览器按 sRGB 解读
-            config.setColorSpaceName(objc2_core_graphics::kCGColorSpaceSRGB);
-        }
+        let (filter, scale, w, h) = display_filter(&content, id)?;
+        let config = base_config((w * scale).round() as usize, (h * scale).round() as usize);
         let (tx, rx) = mpsc::channel();
         let block = RcBlock::new(move |image: *mut CGImage, _err: *mut NSError| {
             let _ = tx.send(unsafe { image.as_ref() }.and_then(to_bmp));
@@ -103,8 +147,8 @@ pub fn capture(ids: &[u32]) -> Result<Vec<Shot>, String> {
         .collect()
 }
 
-/// CGImage（32 位 BGRA）→ 自顶向下 32 位 BMP；格式不符返回 None。
-fn to_bmp(image: &CGImage) -> Option<Shot> {
+/// CGImage（32 位 BGRA）的原始像素、宽、高、行跨度；格式不符返回 None。
+fn bgra_pixels(image: &CGImage) -> Option<(Vec<u8>, usize, usize, usize)> {
     let img = Some(image);
     let (w, h) = (CGImage::width(img), CGImage::height(img));
     if CGImage::bits_per_pixel(img) != 32 || w == 0 || h == 0 {
@@ -113,14 +157,29 @@ fn to_bmp(image: &CGImage) -> Option<Shot> {
     let stride = CGImage::bytes_per_row(img);
     let data = CGDataProvider::data(CGImage::data_provider(img).as_deref())?;
     let src = data.to_vec();
-    if src.len() < stride * (h - 1) + w * 4 {
-        return None;
-    }
+    (src.len() >= stride * (h - 1) + w * 4).then_some((src, w, h, stride))
+}
+
+/// CGImage → 自顶向下 32 位 BMP。
+fn to_bmp(image: &CGImage) -> Option<Shot> {
+    let (src, w, h, stride) = bgra_pixels(image)?;
     Some(Shot {
         bmp: bmp_from_bgra(&src, w, h, stride),
         px_w: w as u32,
         px_h: h as u32,
     })
+}
+
+/// CGImage → 紧排 RGBA（去掉行填充、交换 B/R）。
+fn to_rgba(image: &CGImage) -> Option<(Vec<u8>, usize, usize)> {
+    let (src, w, h, stride) = bgra_pixels(image)?;
+    let mut out = Vec::with_capacity(w * h * 4);
+    for y in 0..h {
+        for px in src[y * stride..y * stride + w * 4].chunks_exact(4) {
+            out.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
+        }
+    }
+    Some((out, w, h))
 }
 
 /// 32 位 BI_RGB BMP（负高度 = 自顶向下），逐行去掉 stride 填充。
@@ -165,6 +224,17 @@ mod tests {
                 t.elapsed().as_millis()
             );
         }
+    }
+
+    /// 手动：`cargo test sck_region_smoke -- --ignored --nocapture`（需屏幕录制授权）。
+    #[test]
+    #[ignore]
+    fn sck_region_smoke() {
+        let id = core_graphics::display::CGDisplay::active_displays().unwrap()[0];
+        let t = std::time::Instant::now();
+        let (rgba, w, h) = capture_region(id, (100.0, 100.0, 300.0, 200.0)).unwrap();
+        println!("region {w}x{h} {}ms rgba={}", t.elapsed().as_millis(), rgba.len());
+        assert_eq!(rgba.len(), w * h * 4);
     }
 
     #[test]

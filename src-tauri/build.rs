@@ -31,6 +31,7 @@ const COMMANDS: &[&str] = &[
     "screenshot_cursor",
     "screenshot_commit",
     "screenshot_cancel",
+    "screenshot_long",
     "screenshot_trace",
     "screenshot_ocr",
     "screenshot_request_sections",

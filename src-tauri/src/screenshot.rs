@@ -660,6 +660,96 @@ fn end_session(app: &AppHandle, restore_focus: bool) -> Option<Session> {
     Some(session)
 }
 
+/// screencapture 截全局 pt 区域（13 或 SCK 失败时的长截屏回退）。
+fn capture_region_fallback(
+    (x, y, w, h): (f64, f64, f64, f64),
+) -> Result<(Vec<u8>, usize, usize), String> {
+    let dir = std::env::temp_dir().join(format!("toskr-shot-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join("long.png");
+    let status = std::process::Command::new("/usr/sbin/screencapture")
+        .args(["-x", "-t", "png", &format!("-R{x},{y},{w},{h}")])
+        .arg(&path)
+        .status()
+        .map_err(|e| e.to_string());
+    let decoded = status.and_then(|s| {
+        if !s.success() {
+            return Err(format!("screencapture exit {s}"));
+        }
+        image::open(&path).map_err(|e| e.to_string())
+    });
+    let _ = std::fs::remove_file(&path);
+    let img = decoded?.to_rgba8();
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    Ok((img.into_raw(), w, h))
+}
+
+/// 长截屏：结束遮罩会话，在选区内自动滚动拼接，结果复制并存入「剪贴」。
+/// `x/y/w/h` 为发起遮罩窗所在屏的本屏 pt 选区。
+pub fn long(app: &AppHandle, label: &str, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
+    let bounds = {
+        let guard = SESSION.lock().unwrap();
+        shot_index(label)
+            .and_then(|i| guard.as_ref()?.frames.get(i)?.as_ref().map(|f| f.bounds))
+            .ok_or("no screenshot session")?
+    };
+    let display_id = active_displays()
+        .into_iter()
+        .find(|(_, b)| *b == bounds)
+        .map(|(id, _)| id);
+    let session = end_session(app, true).ok_or("no screenshot session")?;
+    let app = app.clone();
+    std::thread::spawn(move || {
+        // 等遮罩藏好、焦点回到原应用，滚轮事件才落到目标窗口
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let sck = crate::screenshot_sck::supported() && display_id.is_some();
+        if sck {
+            // SCK 截图排除本应用窗口，提示气泡不会入画
+            crate::window::show_hud(
+                &app,
+                "info",
+                pick(
+                    "长截屏中…动一下鼠标即可停止",
+                    "Scrolling capture… move the mouse to stop",
+                )
+                .into(),
+                false,
+                false,
+                None,
+            );
+        }
+        let global = (bounds.x + x, bounds.y + y, w, h);
+        let started = std::time::Instant::now();
+        let result = crate::screenshot_long::run(global, || match (sck, display_id) {
+            (true, Some(id)) => crate::screenshot_sck::capture_region(id, (x, y, w, h)),
+            _ => capture_region_fallback(global),
+        });
+        match result {
+            Ok((rgba, pw, ph, stop)) => {
+                crate::diag::push(
+                    &app,
+                    format!(
+                        "长截屏 {pw}×{ph} 结束={stop:?} 耗时 {}ms",
+                        started.elapsed().as_millis()
+                    ),
+                );
+                save(&app, Action::Save, None, pw, ph, &rgba, session);
+            }
+            Err(e) => {
+                crate::diag::push(&app, format!("长截屏失败：{e}"));
+                warn(
+                    &app,
+                    pick(
+                        "长截屏失败，详情见诊断日志",
+                        "Scrolling capture failed; see the diagnostics log",
+                    ),
+                );
+            }
+        }
+    });
+    Ok(())
+}
+
 pub fn cancel(app: &AppHandle) {
     if end_session(app, true).is_some() {
         crate::diag::push(app, "截图已取消");

@@ -1036,6 +1036,8 @@ export const api = {
   pinZoom: (factor: number) => invoke("pin_zoom", { factor }),
   pinClose: () => invoke("pin_close"),
   screenshotCancel: () => invoke("screenshot_cancel"),
+  /** 长截屏：选区（本屏 pt）内自动滚动拼接，结束后复制并存入「剪贴」。 */
+  screenshotLong: (r: { x: number; y: number; w: number; h: number }) => invoke("screenshot_long", r),
   /** 光标在本屏的位置（本屏 pt），不在本屏为 null。 */
   screenshotCursor: () => invoke<[number, number] | null>("screenshot_cursor"),
   /** 截图遮罩阶段追踪（只记白名单阶段名与数字，排查用）。 */

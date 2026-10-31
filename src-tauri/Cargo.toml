@@ -104,6 +104,7 @@ objc2-screen-capture-kit = { version = "0.3", default-features = false, features
   "SCShareableContent",
   "SCStream",
 ] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFCGTypes"] }
 objc2-core-graphics = { version = "0.3", default-features = false, features = [
   "std",
   "CGImage",

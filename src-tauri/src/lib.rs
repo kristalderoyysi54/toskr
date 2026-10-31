@@ -32,6 +32,7 @@ mod privacy;
 mod prompt_export;
 mod rich_clipboard;
 mod screenshot;
+mod screenshot_long;
 mod screenshot_sck;
 mod state;
 mod storage;
@@ -298,6 +299,7 @@ pub fn run() {
             commands::screenshot_cursor,
             commands::screenshot_commit,
             commands::screenshot_cancel,
+            commands::screenshot_long,
             commands::screenshot_trace,
             commands::screenshot_ocr,
             commands::screenshot_request_sections,
