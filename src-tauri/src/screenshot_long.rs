@@ -136,6 +136,7 @@ pub enum Event<'a> {
 /// 自动滚动拼接。`capture` 截取选区返回 (RGBA, 宽, 高)；`region` 为全局 pt 选区。
 pub fn run(
     region: (f64, f64, f64, f64),
+    manual_only: bool,
     mut capture: impl FnMut() -> Result<(Vec<u8>, usize, usize), String>,
     mut progress: impl FnMut(Event),
 ) -> Result<(Vec<u8>, usize, usize, Stop), String> {
@@ -147,6 +148,11 @@ pub fn run(
     let (first, w, h) = capture()?;
     let mut st = Stitcher::new(first, w, h);
     progress(Event::Stitched(&st.out, w, st.total_h));
+    if manual_only {
+        progress(Event::Manual);
+        let stop = manual(&mut st, &mut capture, &mut progress)?;
+        return Ok((st.out, w, st.total_h, stop));
+    }
     let step = (rh * SCROLL_FRACTION).round().max(1.0) as i32;
     let mut stop = Stop::Limit;
     for i in 0..MAX_STEPS {
@@ -177,6 +183,7 @@ pub fn run(
                 break;
             }
             Push::Appended => progress(Event::Stitched(&st.out, w, st.total_h)),
+            Push::Moved => {}
         }
         if w * st.total_h >= MAX_PIXELS {
             stop = Stop::Limit;
@@ -193,6 +200,7 @@ fn manual(
     progress: &mut impl FnMut(Event),
 ) -> Result<Stop, String> {
     MANUAL_STOP.store(false, Ordering::Relaxed);
+    st.back = true;
     let mut last_change = std::time::Instant::now();
     let mut stalled = false;
     loop {
@@ -239,6 +247,8 @@ pub enum Push {
     /// 与上一帧完全相同（到底了）
     Same,
     NoOverlap,
+    /// 手动模式往回滚，或往下滚但还没越过已拼部分：只更新位置，不追加
+    Moved,
 }
 
 /// 逐帧拼接。固定页头只参与对位排除；固定页尾每步先从长图末尾摘掉、
@@ -251,6 +261,10 @@ pub struct Stitcher {
     prev: Vec<(u64, bool)>,
     /// 长图末尾有多少行是上一帧底部的原样像素（摘页尾不能超过它）
     tail: usize,
+    /// 当前帧内容底边比已拼长图底边高出的行数（手动往回滚产生）
+    behind: usize,
+    /// 允许识别往回滚（仅手动模式）
+    back: bool,
 }
 
 impl Stitcher {
@@ -260,6 +274,8 @@ impl Stitcher {
             out: first,
             total_h: h,
             tail: h,
+            behind: 0,
+            back: false,
             w,
             h,
         }
@@ -277,17 +293,41 @@ impl Stitcher {
         }
         bottom = bottom.min(self.tail);
         let body = top..h - bottom;
-        let Some(dy) = scroll_offset(&self.prev[body.clone()], &sig[body]) else {
-            return Push::NoOverlap;
+        let forward = scroll_offset(&self.prev[body.clone()], &sig[body.clone()]);
+        let Some(dy) = forward else {
+            // 往回滚：新帧在上一帧之上 dy 行
+            let back = self
+                .back
+                .then(|| scroll_offset(&sig[body.clone()], &self.prev[body]))
+                .flatten();
+            let Some(dy) = back else {
+                return Push::NoOverlap;
+            };
+            self.behind += dy;
+            self.moved(sig, bottom);
+            return Push::Moved;
         };
-        // 摘掉旧页尾 → 接上新帧页尾之上的 dy 行新内容 + 新页尾
+        if dy <= self.behind {
+            self.behind -= dy;
+            self.moved(sig, bottom);
+            return Push::Moved;
+        }
+        let new = dy - self.behind;
+        self.behind = 0;
+        // 摘掉旧页尾 → 接上新帧页尾之上的 new 行新内容 + 新页尾
         self.out.truncate(self.out.len() - bottom * w * 4);
         self.out
-            .extend_from_slice(&frame[(h - bottom - dy) * w * 4..]);
-        self.total_h += dy;
-        self.tail = dy + bottom;
+            .extend_from_slice(&frame[(h - bottom - new) * w * 4..]);
+        self.total_h += new;
+        self.tail = new + bottom;
         self.prev = sig;
         Push::Appended
+    }
+
+    /// 只换位置不追加：长图末尾与新帧底部仍一致的只剩两者共同的页尾行。
+    fn moved(&mut self, sig: Vec<(u64, bool)>, bottom: usize) {
+        self.tail = self.tail.min(bottom);
+        self.prev = sig;
     }
 }
 
@@ -681,6 +721,22 @@ mod tests {
         assert_eq!(stop, Stop::Finished);
         assert_eq!(stalls, vec![true, false]);
         assert!(st.out == page(&content[..100]));
+    }
+
+    /// 手动模式往回滚再往下：回滚与回到原位都不追加，越过已拼部分才接新内容。
+    #[test]
+    fn manual_scroll_back_does_not_duplicate() {
+        let content: Vec<u8> = (0..200).map(|i| (i * 13 % 251) as u8).collect();
+        let frame = |top: usize| page(&content[top..top + 60]);
+        let mut st = Stitcher::new(frame(0), 2, 60);
+        st.back = true;
+        assert_eq!(st.push(&frame(30)), Push::Appended);
+        assert_eq!(st.push(&frame(10)), Push::Moved);
+        assert_eq!(st.push(&frame(25)), Push::Moved);
+        assert_eq!(st.push(&frame(50)), Push::Appended);
+        assert!(st.out == page(&content[..110]));
+        let mut auto = Stitcher::new(frame(30), 2, 60);
+        assert_eq!(auto.push(&frame(10)), Push::NoOverlap, "自动模式不认回滚");
     }
 
     #[test]

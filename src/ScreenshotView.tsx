@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 
 import { ShotShapesSvg } from "@/components/ShotShapesSvg";
-import { SHOT_TOOLS, ShotStyleRow, toolHasStyle, useShotStyle } from "@/components/ShotToolParts";
+import { HoverTip, SHOT_TOOLS, ShotStyleRow, TipButton, toolHasStyle, useShotStyle } from "@/components/ShotToolParts";
 import { Button } from "@/components/ui/button";
 import { floatingSurface } from "@/components/ui/floating-surface";
 import { IconButton } from "@/components/ui/icon-button";
@@ -91,11 +91,11 @@ const HANDLE_CURSOR: Record<Handle, string> = {
   w: "ew-resize",
 };
 
-const ACTIONS: { action: ScreenshotAction; icon: LucideIcon; label: MessageKey }[] = [
-  { action: "pin", icon: Pin, label: "钉在屏幕上" },
-  { action: "edit", icon: Shield, label: "在编辑器中打开（打码）" },
-  { action: "send", icon: Send, label: "发送到当前目标" },
-  { action: "saveas", icon: Download, label: "另存为图片…" },
+const ACTIONS: { action: ScreenshotAction; icon: LucideIcon; label: MessageKey; tip: MessageKey }[] = [
+  { action: "pin", icon: Pin, label: "钉在屏幕上", tip: "钉在屏幕上：截图置顶悬浮，可拖动、滚轮缩放，右键更多" },
+  { action: "edit", icon: Shield, label: "在编辑器中打开（打码）", tip: "在编辑器中打开（打码）：存入「剪贴」后打开图片编辑器打码" },
+  { action: "send", icon: Send, label: "发送到当前目标", tip: "发送到当前目标：存入「剪贴」并粘贴到目标应用" },
+  { action: "saveas", icon: Download, label: "另存为图片…", tip: "另存为图片…：选位置保存为 PNG 文件" },
 ];
 
 /** 文字面板：识别结果（可编辑）与可选译文。 */
@@ -397,13 +397,19 @@ export default function ScreenshotView() {
   const [sections, setSections] = useState<NoteSectionOption[]>([]);
   const [sectionMenu, setSectionMenu] = useState(false);
   const longPress = useMemo(() => createLongPress(() => setSectionMenu(true)), []);
+  // 长按 / 右键长截屏按钮选自动或手动滚动
+  const [longMenu, setLongMenu] = useState(false);
+  const longModePress = useMemo(() => createLongPress(() => setLongMenu(true)), []);
   useEffect(() => {
     const off = listen<NoteSectionOption[]>(NOTE_SECTIONS, (event) => setSections(event.payload));
     return () => void off.then((f) => f());
   }, []);
   useEffect(() => {
     if (info) void api.screenshotRequestSections().catch(() => {});
-    else setSectionMenu(false);
+    else {
+      setSectionMenu(false);
+      setLongMenu(false);
+    }
   }, [info]);
 
   const flash = useCallback((text: string) => {
@@ -412,7 +418,7 @@ export default function ScreenshotView() {
   }, []);
 
   /** 长截屏：Rust 结束遮罩后在选区内自动滚动拼接；长图不支持标注。 */
-  const startLong = useCallback(() => {
+  const startLong = useCallback((manual = false) => {
     if (!sel) return;
     if (history.shapes.length) {
       flash(t("长截屏不保留标注，请先撤销标注"));
@@ -420,7 +426,7 @@ export default function ScreenshotView() {
     }
     const r = { x: sel.x, y: sel.y, w: sel.w, h: sel.h };
     reset();
-    void api.screenshotLong(r).catch(() => void api.screenshotCancel());
+    void api.screenshotLong(r, manual).catch(() => void api.screenshotCancel());
   }, [sel, history.shapes.length, flash, reset, t]);
 
   const runOcr = useCallback(() => {
@@ -524,11 +530,12 @@ export default function ScreenshotView() {
   useEffect(() => {
     if (!info) return;
     const onKey = (e: KeyboardEvent) => {
-      if (sectionMenu) {
+      if (sectionMenu || longMenu) {
         if (e.key === "Escape") {
           e.preventDefault();
           e.stopPropagation();
           setSectionMenu(false);
+          setLongMenu(false);
         }
         return;
       }
@@ -573,7 +580,7 @@ export default function ScreenshotView() {
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, [info, sel, W, H, cancel, confirm, copyColor, editing, tool, history.shapes.length, ocr, sectionMenu]);
+  }, [info, sel, W, H, cancel, confirm, copyColor, editing, tool, history.shapes.length, ocr, sectionMenu, longMenu]);
 
   // 遮罩刚出现时应用可能还没激活，WKWebView 收不到 mousemove：轮询系统光标跟随；
   // 拖拽中以指针事件为准
@@ -834,10 +841,11 @@ export default function ScreenshotView() {
           onContextMenu={(e) => e.stopPropagation()}
         >
           <div className="flex items-center gap-1">
-            {SHOT_TOOLS.map(({ tool: id, icon: Icon, label }) => (
-              <IconButton
+            {SHOT_TOOLS.map(({ tool: id, icon: Icon, label, tip }) => (
+              <TipButton
                 key={id}
                 label={t(label)}
+                tip={t(tip)}
                 pressed={tool === id}
                 onClick={() => {
                   commitEditing();
@@ -846,41 +854,87 @@ export default function ScreenshotView() {
                 }}
               >
                 <Icon />
-              </IconButton>
+              </TipButton>
             ))}
             <span className="mx-0.5 h-4 w-px bg-border" />
-            <IconButton label={t("撤销（⌘Z）")} disabled={!history.shapes.length} onClick={() => setHistory(undo)}>
+            <TipButton label={t("撤销（⌘Z）")} disabled={!history.shapes.length} onClick={() => setHistory(undo)}>
               <Undo2 />
-            </IconButton>
-            <IconButton label={t("重做（⇧⌘Z）")} disabled={!history.redo.length} onClick={() => setHistory(redo)}>
+            </TipButton>
+            <TipButton label={t("重做（⇧⌘Z）")} disabled={!history.redo.length} onClick={() => setHistory(redo)}>
               <Redo2 />
-            </IconButton>
+            </TipButton>
             <span className="mx-0.5 h-4 w-px bg-border" />
-            <IconButton label={t("长截屏：自动向下滚动拼接，动一下鼠标停止")} onClick={startLong}>
-              <ScrollText />
-            </IconButton>
-            <IconButton label={t("识别文字")} pressed={!!ocr} onClick={runOcr}>
+            <span className="relative inline-flex">
+              <TipButton
+                label={t("长截屏：自动向下滚动拼接，动一下鼠标停止")}
+                tip={t("长截屏：自动向下滚动拼接，动一下鼠标停止；长按选择自动 / 手动滚动")}
+                onPointerDown={(e) => longModePress.start(e.clientX, e.clientY)}
+                onPointerMove={(e) => longModePress.move(e.clientX, e.clientY)}
+                onPointerUp={() => longModePress.release()}
+                onPointerLeave={() => longModePress.cancel()}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setLongMenu(true);
+                }}
+                onClick={() => {
+                  if (longModePress.consumeClick()) return;
+                  startLong();
+                }}
+              >
+                <ScrollText />
+              </TipButton>
+              {longMenu && (
+                <div
+                  className={cn(floatingSurface(), "absolute left-0 flex w-52 flex-col rounded-md p-1 text-body")}
+                  style={toolbarTop > sel.y ? { top: toolbarH + 4 } : { bottom: toolbarH + 4 }}
+                >
+                  {([false, true] as const).map((manual) => (
+                    <button
+                      key={String(manual)}
+                      type="button"
+                      className="flex flex-col rounded-sm px-2 py-1 text-left hover:bg-accent"
+                      onClick={() => {
+                        setLongMenu(false);
+                        startLong(manual);
+                      }}
+                    >
+                      <span>{manual ? t("手动滚动") : t("自动滚动")}</span>
+                      <span className="text-label text-muted-foreground">
+                        {manual ? t("自己滚动页面，滚完点「完成」") : t("程序自动往下滚，动一下鼠标停止")}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </span>
+            <TipButton
+              label={t("识别文字")}
+              tip={t("识别文字：提取选区里的文字，可复制或存入「剪贴」")}
+              pressed={!!ocr}
+              onClick={runOcr}
+            >
               <ScanText />
-            </IconButton>
-            <IconButton
+            </TipButton>
+            <TipButton
               label={hasTranslation ? t("去掉图内翻译") : t("图内翻译")}
+              tip={hasTranslation ? t("去掉图内翻译") : t("图内翻译：把图里的外文原位替换成中文")}
               pressed={hasTranslation}
               disabled={translating}
               onClick={translateInImage}
             >
               {translating ? <Loader2 className="animate-spin" /> : <Languages />}
-            </IconButton>
-            {ACTIONS.map(({ action, icon: Icon, label }) => (
-              <IconButton key={action} label={t(label)} onClick={() => confirm(action)}>
+            </TipButton>
+            {ACTIONS.map(({ action, icon: Icon, label, tip }) => (
+              <TipButton key={action} label={t(label)} tip={t(tip)} onClick={() => confirm(action)}>
                 <Icon />
-              </IconButton>
+              </TipButton>
             ))}
             <span className="mx-0.5 h-4 w-px bg-border" />
-            <IconButton label={t("取消（Esc）")} onClick={cancel}>
+            <TipButton label={t("取消（Esc）")} onClick={cancel}>
               <X />
-            </IconButton>
+            </TipButton>
             <span className="relative inline-flex">
-              <IconButton
+              <TipButton
                 label={t("完成：复制并存入「剪贴」（Enter）；长按选择存入的分组")}
                 onPointerDown={(e) => longPress.start(e.clientX, e.clientY)}
                 onPointerMove={(e) => longPress.move(e.clientX, e.clientY)}
@@ -896,7 +950,7 @@ export default function ScreenshotView() {
                 }}
               >
                 <Check className="text-primary" />
-              </IconButton>
+              </TipButton>
               {sectionMenu && (
                 <div
                   className={cn(
@@ -1001,6 +1055,8 @@ export default function ScreenshotView() {
           }}
         />
       )}
+
+      {sel && !dragging && !longMenu && !sectionMenu && <HoverTip point={cursor} />}
 
       {showLoupe && loupePos && cursor && (
         <div

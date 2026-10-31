@@ -688,7 +688,12 @@ fn capture_region_fallback(
 
 /// 长截屏：结束遮罩会话，在选区内自动滚动拼接，结果复制并存入「剪贴」。
 /// `x/y/w/h` 为发起遮罩窗所在屏的本屏 pt 选区。
-pub fn long(app: &AppHandle, label: &str, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
+pub fn long(
+    app: &AppHandle,
+    label: &str,
+    (x, y, w, h): (f64, f64, f64, f64),
+    manual: bool,
+) -> Result<(), String> {
     let bounds = {
         let guard = SESSION.lock().unwrap();
         shot_index(label)
@@ -721,10 +726,17 @@ pub fn long(app: &AppHandle, label: &str, x: f64, y: f64, w: f64, h: f64) -> Res
             crate::window::show_hud(
                 &app,
                 "info",
-                pick(
-                    "长截屏中…动一下鼠标即可停止",
-                    "Scrolling capture… move the mouse to stop",
-                )
+                if manual {
+                    pick(
+                        "手动长截屏：往下滚动，滚完点预览条上的「完成」",
+                        "Manual scrolling capture: scroll down, then click Done on the preview strip",
+                    )
+                } else {
+                    pick(
+                        "长截屏中…动一下鼠标即可停止",
+                        "Scrolling capture… move the mouse to stop",
+                    )
+                }
                 .into(),
                 false,
                 false,
@@ -734,12 +746,13 @@ pub fn long(app: &AppHandle, label: &str, x: f64, y: f64, w: f64, h: f64) -> Res
         let started = std::time::Instant::now();
         let result = crate::screenshot_long::run(
             global,
+            manual,
             || match (sck, display_id) {
                 (true, Some(id)) => crate::screenshot_sck::capture_region(id, (x, y, w, h)),
                 _ => capture_region_fallback(global),
             },
             |event| {
-                if matches!(event, crate::screenshot_long::Event::Manual) {
+                if !manual && matches!(event, crate::screenshot_long::Event::Manual) {
                     crate::window::show_hud(
                         &app,
                         "info",
@@ -1361,19 +1374,9 @@ fn pin_menu_action(app: &AppHandle, window: &tauri::WebviewWindow, id: &str) {
     }
 }
 
-/// 钉图编辑标注：用长图标注窗打开钉图原图，完成后写回这张钉图。
-fn pin_edit(app: &AppHandle, window: &tauri::WebviewWindow) {
-    let label = window.label().to_string();
-    let Some((w, h, rgba, pt_w)) = ({
-        let guard = PINS.lock().unwrap();
-        guard
-            .as_ref()
-            .and_then(|m| m.get(&label))
-            .map(|p| (p.px_w, p.px_h, p.rgba.clone(), p.pt_w))
-    }) else {
-        return;
-    };
-    let display = window
+/// 窗口所在屏（全局 pt），取不到时给个常见尺寸。
+fn window_display(window: &tauri::WebviewWindow) -> RectPt {
+    window
         .current_monitor()
         .ok()
         .flatten()
@@ -1394,7 +1397,35 @@ fn pin_edit(app: &AppHandle, window: &tauri::WebviewWindow) {
             y: 0.0,
             w: 1440.0,
             h: 900.0,
-        });
+        })
+}
+
+/// 图片卡「标注 / 裁剪」：把附件图交给标注窗，完成后作为新图存入「剪贴」（原卡不动）。
+pub fn annotate_image(
+    app: &AppHandle,
+    window: &tauri::WebviewWindow,
+    file: &str,
+) -> Result<(), String> {
+    let (w, h, rgba) = crate::storage::read_image_rgba(app, file)
+        .ok_or_else(|| pick("图片读取失败", "Failed to read the image").to_string())?;
+    let scale = window.scale_factor().unwrap_or(2.0).max(1.0);
+    crate::screenshot_long::open_editor(app, rgba, w, h, scale, None, window_display(window), None);
+    Ok(())
+}
+
+/// 钉图编辑标注：用长图标注窗打开钉图原图，完成后写回这张钉图。
+fn pin_edit(app: &AppHandle, window: &tauri::WebviewWindow) {
+    let label = window.label().to_string();
+    let Some((w, h, rgba, pt_w)) = ({
+        let guard = PINS.lock().unwrap();
+        guard
+            .as_ref()
+            .and_then(|m| m.get(&label))
+            .map(|p| (p.px_w, p.px_h, p.rgba.clone(), p.pt_w))
+    }) else {
+        return;
+    };
+    let display = window_display(window);
     crate::screenshot_long::open_editor(
         app,
         rgba,

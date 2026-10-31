@@ -3,9 +3,8 @@ import { listen } from "@tauri-apps/api/event";
 import { Check, Crop, Download, Redo2, Undo2, X } from "lucide-react";
 
 import { ShotShapesSvg } from "@/components/ShotShapesSvg";
-import { SHOT_TOOLS, ShotStyleRow, toolHasStyle, useShotStyle } from "@/components/ShotToolParts";
+import { HoverTip, SHOT_TOOLS, ShotStyleRow, TipButton, toolHasStyle, useShotStyle } from "@/components/ShotToolParts";
 import { floatingSurface } from "@/components/ui/floating-surface";
-import { IconButton } from "@/components/ui/icon-button";
 import { NOTE_SECTIONS, type NoteSectionOption } from "@/lib/draftSection";
 import { useT } from "@/lib/i18n";
 import { createLongPress } from "@/lib/longPress";
@@ -205,10 +204,11 @@ export default function LongShotView() {
     <div className="fixed inset-0 flex flex-col bg-background text-body text-foreground">
       <div className="flex shrink-0 flex-col gap-1 border-b border-border px-2 py-1.5">
         <div className="flex items-center gap-1">
-          {SHOT_TOOLS.map(({ tool: id, icon: Icon, label }) => (
-            <IconButton
+          {SHOT_TOOLS.map(({ tool: id, icon: Icon, label, tip }) => (
+            <TipButton
               key={id}
               label={t(label)}
+              tip={t(tip)}
               pressed={tool === id}
               onClick={() => {
                 commitEditing();
@@ -217,9 +217,9 @@ export default function LongShotView() {
               }}
             >
               <Icon />
-            </IconButton>
+            </TipButton>
           ))}
-          <IconButton
+          <TipButton
             label={t("裁剪：拖动边角调整，Esc 结束")}
             pressed={cropping}
             onClick={() => {
@@ -229,26 +229,31 @@ export default function LongShotView() {
             }}
           >
             <Crop />
-          </IconButton>
+          </TipButton>
           <span className="mx-0.5 h-4 w-px bg-border" />
-          <IconButton label={t("撤销（⌘Z）")} disabled={!history.shapes.length} onClick={() => setHistory(undo)}>
+          <TipButton label={t("撤销（⌘Z）")} disabled={!history.shapes.length} onClick={() => setHistory(undo)}>
             <Undo2 />
-          </IconButton>
-          <IconButton label={t("重做（⇧⌘Z）")} disabled={!history.redo.length} onClick={() => setHistory(redo)}>
+          </TipButton>
+          <TipButton label={t("重做（⇧⌘Z）")} disabled={!history.redo.length} onClick={() => setHistory(redo)}>
             <Redo2 />
-          </IconButton>
+          </TipButton>
           <span className="flex-1" />
           <span className="mr-1 font-mono text-label text-muted-foreground tabular-nums">
             {outPx.w} × {outPx.h}
           </span>
-          <IconButton label={t("另存为图片…")} disabled={busy} onClick={() => finish("saveas")}>
+          <TipButton
+            label={t("另存为图片…")}
+            tip={t("另存为图片…：保存为 PNG 文件")}
+            disabled={busy}
+            onClick={() => finish("saveas")}
+          >
             <Download />
-          </IconButton>
-          <IconButton label={info.pin ? t("放弃标注") : t("放弃长截屏")} onClick={() => void api.longClose()}>
+          </TipButton>
+          <TipButton label={info.pin ? t("放弃标注") : t("放弃长截屏")} onClick={() => void api.longClose()}>
             <X />
-          </IconButton>
+          </TipButton>
           <span className="relative inline-flex">
-            <IconButton
+            <TipButton
               label={info.pin ? t("完成：更新钉图（Enter）；长按选择存入的分组") : t("完成：复制并存入「剪贴」（Enter）；长按选择存入的分组")}
               disabled={busy}
               onPointerDown={(e) => longPress.start(e.clientX, e.clientY)}
@@ -265,7 +270,7 @@ export default function LongShotView() {
               }}
             >
               <Check className="text-primary" />
-            </IconButton>
+            </TipButton>
             {sectionMenu && (
               <div
                 className={cn(
@@ -296,6 +301,7 @@ export default function LongShotView() {
         </div>
         {toolHasStyle(tool) && <ShotStyleRow {...style} />}
       </div>
+      {!sectionMenu && <HoverTip />}
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto bg-muted/40 p-4">
         <div

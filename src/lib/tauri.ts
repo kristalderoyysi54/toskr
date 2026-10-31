@@ -1059,7 +1059,10 @@ export const api = {
   pinMenu: (sections: { id: string; name: string }[]) => invoke("pin_menu", { sections }),
   screenshotCancel: () => invoke("screenshot_cancel"),
   /** 长截屏：选区（本屏 pt）内自动滚动拼接，结束后复制并存入「剪贴」。 */
-  screenshotLong: (r: { x: number; y: number; w: number; h: number }) => invoke("screenshot_long", r),
+  screenshotLong: (r: { x: number; y: number; w: number; h: number }, manual = false) =>
+    invoke("screenshot_long", { ...r, manual }),
+  /** 图片预览窗：用标注窗打开附件图（标注 / 裁剪后另存为新图）。 */
+  annotateImage: (file: string) => invoke("annotate_image", { file }),
   /** 光标在本屏的位置（本屏 pt），不在本屏为 null。 */
   screenshotCursor: () => invoke<[number, number] | null>("screenshot_cursor"),
   /** 截图遮罩阶段追踪（只记白名单阶段名与数字，排查用）。 */

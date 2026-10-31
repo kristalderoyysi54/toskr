@@ -33,6 +33,7 @@
     "allow-read-data-snapshot",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
-    "allow-preview-event"
+    "allow-preview-event",
+    "allow-annotate-image"
   ]
 }

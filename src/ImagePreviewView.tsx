@@ -11,6 +11,7 @@ import {
   Pin,
   CircleHelp,
   Loader2,
+  PenLine,
   Redo2,
   Send,
   Shield,
@@ -1090,6 +1091,16 @@ export default function ImagePreviewView() {
                 className="text-foreground/60 hover:bg-foreground/10 hover:text-foreground focus-visible:ring-ring focus-visible:ring-offset-0"
               >
                 <Shield className="size-3.5" />
+              </IconButton>
+            )}
+            {file && !imageEditing && (
+              <IconButton
+                label={t("标注 / 裁剪：在标注窗里加标注或裁剪，完成后存为新图（原图不变）")}
+                size="xs"
+                onClick={() => void api.annotateImage(file).catch((e) => tip("warn", String(e)))}
+                className="text-foreground/60 hover:bg-foreground/10 hover:text-foreground focus-visible:ring-ring focus-visible:ring-offset-0"
+              >
+                <PenLine className="size-3.5" />
               </IconButton>
             )}
             {noteId && dataGeneration !== null && (

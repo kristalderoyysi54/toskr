@@ -822,8 +822,22 @@ pub fn screenshot_trace(app: AppHandle, stage: String, a: f64, b: f64) {
 
 /// 长截屏：选区为发起遮罩窗所在屏的本屏 pt。
 #[tauri::command]
-pub fn screenshot_long(app: AppHandle, window: tauri::WebviewWindow, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
-    crate::screenshot::long(&app, window.label(), x, y, w, h)
+pub fn screenshot_long(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    manual: Option<bool>,
+) -> Result<(), String> {
+    crate::screenshot::long(&app, window.label(), (x, y, w, h), manual.unwrap_or(false))
+}
+
+/// 图片预览窗「标注 / 裁剪」：用长图标注窗打开附件图。
+#[tauri::command]
+pub fn annotate_image(app: AppHandle, window: tauri::WebviewWindow, file: String) -> Result<(), String> {
+    crate::screenshot::annotate_image(&app, &window, &file)
 }
 
 #[tauri::command]
