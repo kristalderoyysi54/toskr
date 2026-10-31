@@ -232,7 +232,7 @@ export default function LongShotView() {
             <Crop />
           </TipButton>
           <span className="mx-0.5 h-4 w-px bg-border" />
-          <TipButton label={t("撤销（⌘Z）")} disabled={!history.shapes.length} onClick={() => setHistory(undo)}>
+          <TipButton label={t("撤销（⌘Z）")} disabled={!history.undo.length} onClick={() => setHistory(undo)}>
             <Undo2 />
           </TipButton>
           <TipButton label={t("重做（⇧⌘Z）")} disabled={!history.redo.length} onClick={() => setHistory(redo)}>

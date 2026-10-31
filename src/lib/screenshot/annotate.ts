@@ -69,25 +69,60 @@ export function nextNumber(shapes: Shape[]): number {
   return shapes.reduce((n, s) => (s.kind === "number" ? Math.max(n, s.n) : n), 0) + 1;
 }
 
-export interface History {
-  shapes: Shape[];
-  redo: Shape[];
+type BoxShape = Extract<Shape, { x1: number }>;
+
+/** 马赛克框（规范化，左上原点）。 */
+export function mosaicRect(s: BoxShape): { x: number; y: number; w: number; h: number } {
+  return {
+    x: Math.min(s.x1, s.x2),
+    y: Math.min(s.y1, s.y2),
+    w: Math.abs(s.x2 - s.x1),
+    h: Math.abs(s.y2 - s.y1),
+  };
 }
 
-export const emptyHistory: History = { shapes: [], redo: [] };
+/** 换成新框（拖动 / 缩放后）。 */
+export function withMosaicRect(s: BoxShape, r: { x: number; y: number; w: number; h: number }): BoxShape {
+  return { ...s, x1: r.x, y1: r.y, x2: r.x + r.w, y2: r.y + r.h };
+}
+
+/** 点中的最上层马赛克下标，没有为 null。 */
+export function mosaicAt(shapes: Shape[], x: number, y: number): number | null {
+  for (let i = shapes.length - 1; i >= 0; i--) {
+    const s = shapes[i];
+    if (s.kind !== "mosaic") continue;
+    const r = mosaicRect(s);
+    if (x >= r.x && y >= r.y && x <= r.x + r.w && y <= r.y + r.h) return i;
+  }
+  return null;
+}
+
+/** 快照式历史：每步记下整份图形列表，移动 / 缩放已画的图形也能撤销。 */
+export interface History {
+  shapes: Shape[];
+  undo: Shape[][];
+  redo: Shape[][];
+}
+
+export const emptyHistory: History = { shapes: [], undo: [], redo: [] };
+
+/** 以新的图形列表作为一步。 */
+export function commitShapes(h: History, shapes: Shape[]): History {
+  return { shapes, undo: [...h.undo, h.shapes], redo: [] };
+}
 
 export function pushShape(h: History, s: Shape): History {
-  return isMeaningful(s) ? { shapes: [...h.shapes, s], redo: [] } : h;
+  return isMeaningful(s) ? commitShapes(h, [...h.shapes, s]) : h;
 }
 
 export function undo(h: History): History {
-  const last = h.shapes.at(-1);
-  return last ? { shapes: h.shapes.slice(0, -1), redo: [...h.redo, last] } : h;
+  const prev = h.undo.at(-1);
+  return prev ? { shapes: prev, undo: h.undo.slice(0, -1), redo: [...h.redo, h.shapes] } : h;
 }
 
 export function redo(h: History): History {
-  const last = h.redo.at(-1);
-  return last ? { shapes: [...h.shapes, last], redo: h.redo.slice(0, -1) } : h;
+  const next = h.redo.at(-1);
+  return next ? { shapes: next, undo: [...h.undo, h.shapes], redo: h.redo.slice(0, -1) } : h;
 }
 
 /** 序号底色上的数字颜色：浅色底配黑字。 */

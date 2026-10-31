@@ -25,11 +25,14 @@ import { NOTE_SECTIONS, type NoteSectionOption } from "@/lib/draftSection";
 import { useT, type MessageKey } from "@/lib/i18n";
 import { createLongPress } from "@/lib/longPress";
 import {
+  commitShapes,
   contrastText,
   drawShapes,
   fitFontSize,
   emptyHistory,
   FONT_SIZE,
+  mosaicAt,
+  mosaicRect,
   nextNumber,
   pushShape,
   redo,
@@ -39,6 +42,7 @@ import {
   TRANSLATE_PAD,
   type Tool,
   type TranslatedLine,
+  withMosaicRect,
 } from "@/lib/screenshot/annotate";
 import {
   clipToScreen,
@@ -69,8 +73,12 @@ import { cn } from "@/lib/utils";
 type Drag =
   | { kind: "create"; x: number; y: number; moved: boolean }
   | { kind: "move"; x: number; y: number; orig: Rect }
-  | { kind: "resize"; x: number; y: number; orig: Rect; handle: Handle };
+  | { kind: "resize"; x: number; y: number; orig: Rect; handle: Handle }
+  /** 拖动 / 缩放已画的马赛克（handle 为 null 是整体移动） */
+  | { kind: "mosaic"; x: number; y: number; orig: Rect; handle: Handle | null; index: number };
 
+/** 马赛克框最小边长（pt）。 */
+const MIN_MOSAIC = 8;
 /** 起拖阈值：小于此距离的按放视为单击（选中悬停窗口）。 */
 const DRAG_SLOP = 3;
 /** 放大镜：取样边长（冻结帧像素）× 放大倍数 = 画布边长（pt）。 */
@@ -78,7 +86,7 @@ const LOUPE_SAMPLE = 15;
 const LOUPE_SIZE = 120;
 const LOUPE_PANEL_H = LOUPE_SIZE + 44;
 /** 工具条宽度估值：选区右缘离屏幕左边不足此宽时改为贴左，避免工具条被裁掉。 */
-const TOOLBAR_W_EST = 620;
+const TOOLBAR_W_EST = 760;
 
 const HANDLE_CURSOR: Record<Handle, string> = {
   nw: "nwse-resize",
@@ -243,6 +251,9 @@ export default function ScreenshotView() {
   const [translating, setTranslating] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const drag = useRef<Drag | null>(null);
+  // 选中的马赛克（下标）与拖动中的新框
+  const [picked, setPicked] = useState<number | null>(null);
+  const [pickedRect, setPickedRect] = useState<Rect | null>(null);
   const textRef = useRef<HTMLTextAreaElement | null>(null);
   const sessionRef = useRef<number | null>(null);
   const urlRef = useRef<string | null>(null);
@@ -443,7 +454,8 @@ export default function ScreenshotView() {
   /** 图内翻译：识别各行文字 → 主窗口 AI 逐行翻译 → 译文盖回原文位置。再点一次去掉。 */
   const translateInImage = useCallback(() => {
     if (hasTranslation) {
-      setHistory((h) => ({ shapes: h.shapes.filter((s) => s.kind !== "translate"), redo: [] }));
+      setHistory((h) => commitShapes(h, h.shapes.filter((s) => s.kind !== "translate")));
+      setPicked(null);
       return;
     }
     const out = exportImage(false);
@@ -549,10 +561,16 @@ export default function ScreenshotView() {
       };
       if (e.metaKey && e.key.toLowerCase() === "z") {
         stop();
+        setPicked(null);
         setHistory((h) => (e.shiftKey ? redo(h) : undo(h)));
+      } else if (picked !== null && (e.key === "Backspace" || e.key === "Delete")) {
+        stop();
+        setHistory((h) => commitShapes(h, h.shapes.filter((_, i) => i !== picked)));
+        setPicked(null);
       } else if (e.key === "Escape") {
         stop();
-        if (tool) setTool(null);
+        if (picked !== null) setPicked(null);
+        else if (tool) setTool(null);
         else if (sel) {
           setSel(null);
           setHistory(emptyHistory);
@@ -573,7 +591,7 @@ export default function ScreenshotView() {
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, [info, sel, W, H, cancel, confirm, copyColor, editing, tool, history.shapes.length, ocr, sectionMenu]);
+  }, [info, sel, W, H, cancel, confirm, copyColor, editing, tool, history.shapes.length, ocr, sectionMenu, picked]);
 
   // 遮罩刚出现时应用可能还没激活，WKWebView 收不到 mousemove：轮询系统光标跟随；
   // 拖拽中以指针事件为准
@@ -642,6 +660,21 @@ export default function ScreenshotView() {
     if (e.button !== 0 || !info) return;
     const p = point(e);
     if (editing) commitEditing();
+    // 无工具或马赛克工具时，点已画的马赛克：选中，拖框移动、拖手柄缩放
+    if (sel && (!tool || tool === "mosaic")) {
+      const current = picked !== null ? history.shapes[picked] : undefined;
+      const pickedBox = current?.kind === "mosaic" ? mosaicRect(current) : null;
+      const handle = pickedBox ? hitHandle(pickedBox, p.x, p.y) : null;
+      const index = handle ? picked : mosaicAt(history.shapes, p.x, p.y);
+      const target = index !== null ? history.shapes[index] : undefined;
+      if (index !== null && target?.kind === "mosaic") {
+        e.currentTarget.setPointerCapture(e.pointerId);
+        setPicked(index);
+        drag.current = { kind: "mosaic", ...p, orig: mosaicRect(target), handle, index };
+        return;
+      }
+      setPicked(null);
+    }
     if (sel && tool) {
       if (!inside(sel, p.x, p.y)) return;
       if (tool === "text") {
@@ -688,6 +721,11 @@ export default function ScreenshotView() {
     if (!d) return;
     const dx = p.x - d.x;
     const dy = p.y - d.y;
+    if (d.kind === "mosaic") {
+      const next = d.handle ? resizeRect(d.orig, d.handle, dx, dy, W, H) : moveRect(d.orig, dx, dy, W, H);
+      if (next.w >= MIN_MOSAIC && next.h >= MIN_MOSAIC) setPickedRect(next);
+      return;
+    }
     if (d.kind === "create") {
       if (!d.moved && Math.hypot(dx, dy) < DRAG_SLOP) return;
       d.moved = true;
@@ -702,16 +740,40 @@ export default function ScreenshotView() {
     }
   };
 
-  const onPointerUp = () => {
+  const onPointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const p = point(e);
     if (draft) {
-      void api.screenshotTrace("pushed", draft.kind === "pen" ? draft.points.length : 0, 0);
-      setHistory((h) => pushShape(h, draft));
+      // 按松手处收尾：最后一次 pointermove 的状态可能还没渲染进 draft
+      const done: Shape =
+        draft.kind === "pen"
+          ? { ...draft, points: [...draft.points, [p.x, p.y]] }
+          : "x2" in draft
+            ? { ...draft, x2: p.x, y2: p.y }
+            : draft;
+      void api.screenshotTrace("pushed", done.kind === "pen" ? done.points.length : 0, 0);
+      setHistory((h) => pushShape(h, done));
       setDraft(null);
       return;
     }
     const d = drag.current;
     drag.current = null;
     setDragging(false);
+    if (d?.kind === "mosaic") {
+      const dx = p.x - d.x;
+      const dy = p.y - d.y;
+      const moved = d.handle ? resizeRect(d.orig, d.handle, dx, dy, W, H) : moveRect(d.orig, dx, dy, W, H);
+      const r = moved.w >= MIN_MOSAIC && moved.h >= MIN_MOSAIC && (dx || dy) ? moved : null;
+      setPickedRect(null);
+      if (r) {
+        setHistory((h) =>
+          commitShapes(
+            h,
+            h.shapes.map((s, i) => (i === d.index && s.kind === "mosaic" ? withMosaicRect(s, r) : s))
+          )
+        );
+      }
+      return;
+    }
     if (d?.kind === "create" && !d.moved && !sel && hover) setSel(hover);
     // 拖出零宽高的选区视为无效
     if (sel && (sel.w < 2 || sel.h < 2)) setSel(null);
@@ -721,8 +783,24 @@ export default function ScreenshotView() {
 
   const active = sel ?? hover;
   const handle = sel && cursor && !dragging && !locked ? hitHandle(sel, cursor.x, cursor.y) : null;
+  // 选中的马赛克框（拖动中用新框预览）
+  const pickedShape = picked !== null ? history.shapes[picked] : undefined;
+  const pickedBox =
+    pickedShape?.kind === "mosaic" ? (pickedRect ?? mosaicRect(pickedShape)) : null;
+  const shownShapes =
+    pickedShape?.kind === "mosaic" && pickedRect
+      ? history.shapes.map((s, i) => (i === picked ? withMosaicRect(pickedShape, pickedRect) : s))
+      : history.shapes;
+  const mosaicEditable = !!sel && (!tool || tool === "mosaic") && !!cursor;
+  const mosaicHandle =
+    mosaicEditable && pickedBox && cursor ? hitHandle(pickedBox, cursor.x, cursor.y) : null;
+  const overMosaic = mosaicEditable && cursor ? mosaicAt(history.shapes, cursor.x, cursor.y) !== null : false;
   const inSel = !!(sel && cursor && inside(sel, cursor.x, cursor.y));
-  const cursorStyle = tool
+  const cursorStyle = mosaicHandle
+    ? HANDLE_CURSOR[mosaicHandle]
+    : overMosaic
+      ? "move"
+      : tool
     ? inSel
       ? tool === "text"
         ? "text"
@@ -739,7 +817,7 @@ export default function ScreenshotView() {
   const labelAbove = active && active.y >= 26;
   const loupePos = cursor ? placeNear(cursor.x, cursor.y, LOUPE_SIZE, LOUPE_PANEL_H, W, H) : null;
   const showStyle = toolHasStyle(tool);
-  const toolbarH = showStyle ? 70 : 36;
+  const toolbarH = showStyle ? 84 : 44;
   const toolbarTop = sel
     ? sel.y + sel.h + 8 + toolbarH <= H
       ? sel.y + sel.h + 8
@@ -785,12 +863,32 @@ export default function ScreenshotView() {
 
       {sel && (history.shapes.length > 0 || draft) && (
         <ShotShapesSvg
-          shapes={draft ? [...history.shapes, draft] : history.shapes}
+          shapes={draft ? [...shownShapes, draft] : shownShapes}
           clip={sel}
           img={img}
           sx={sx}
           sy={sy}
         />
+      )}
+
+      {/* 选中的马赛克：虚线框 + 8 个手柄，拖框移动、拖手柄缩放、⌫ 删除 */}
+      {pickedBox && (
+        <>
+          <div
+            className="pointer-events-none absolute border border-dashed border-white outline outline-1 outline-black/40"
+            style={{ left: pickedBox.x, top: pickedBox.y, width: pickedBox.w, height: pickedBox.h }}
+          />
+          {HANDLES.map((h) => {
+            const hp = handlePoint(pickedBox, h);
+            return (
+              <div
+                key={h}
+                className="pointer-events-none absolute size-2 rounded-full border border-primary bg-white"
+                style={{ left: hp.x - 4, top: hp.y - 4 }}
+              />
+            );
+          })}
+        </>
       )}
 
       {active && pr && (
@@ -827,7 +925,11 @@ export default function ScreenshotView() {
 
       {sel && !dragging && (
         <div
-          className={cn(floatingSurface(), "absolute flex flex-col justify-center gap-1 rounded-md px-1.5")}
+          className={cn(
+            floatingSurface(),
+            // 工具条整体放大：按钮 30pt、图标 18pt
+            "absolute flex flex-col justify-center gap-1.5 rounded-lg px-2 [&_[data-icon-button]]:p-1.5 [&_[data-icon-button]_svg]:size-4.5!"
+          )}
           style={{ height: toolbarH, top: toolbarTop, ...(sel.x + sel.w < TOOLBAR_W_EST ? { left: 4 } : { right: Math.max(W - (sel.x + sel.w), 0) }) }}
           onPointerDown={(e) => e.stopPropagation()}
           onDoubleClick={(e) => e.stopPropagation()}
@@ -850,10 +952,24 @@ export default function ScreenshotView() {
               </TipButton>
             ))}
             <span className="mx-0.5 h-4 w-px bg-border" />
-            <TipButton label={t("撤销（⌘Z）")} disabled={!history.shapes.length} onClick={() => setHistory(undo)}>
+            <TipButton
+              label={t("撤销（⌘Z）")}
+              disabled={!history.undo.length}
+              onClick={() => {
+                setPicked(null);
+                setHistory(undo);
+              }}
+            >
               <Undo2 />
             </TipButton>
-            <TipButton label={t("重做（⇧⌘Z）")} disabled={!history.redo.length} onClick={() => setHistory(redo)}>
+            <TipButton
+              label={t("重做（⇧⌘Z）")}
+              disabled={!history.redo.length}
+              onClick={() => {
+                setPicked(null);
+                setHistory(redo);
+              }}
+            >
               <Redo2 />
             </TipButton>
             <span className="mx-0.5 h-4 w-px bg-border" />
@@ -1018,8 +1134,14 @@ export default function ScreenshotView() {
       {/* 光标十字延长线：贯穿全屏，便于对齐边缘（未选区与拖出选区时显示） */}
       {showLoupe && cursor && (
         <>
-          <div className="pointer-events-none absolute inset-x-0 h-px bg-primary/70" style={{ top: Math.round(cursor.y) }} />
-          <div className="pointer-events-none absolute inset-y-0 w-px bg-primary/70" style={{ left: Math.round(cursor.x) }} />
+          <div
+            className="pointer-events-none absolute inset-x-0 h-0.5 bg-primary ring-1 ring-white/60"
+            style={{ top: Math.round(cursor.y) - 1 }}
+          />
+          <div
+            className="pointer-events-none absolute inset-y-0 w-0.5 bg-primary ring-1 ring-white/60"
+            style={{ left: Math.round(cursor.x) - 1 }}
+          />
         </>
       )}
 
