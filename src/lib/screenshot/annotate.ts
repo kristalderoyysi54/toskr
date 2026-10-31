@@ -1,9 +1,9 @@
 /** 截图标注：图形模型、历史栈与绘制。坐标为本屏左上角原点的 pt。 */
 
-export type Tool = "rect" | "ellipse" | "arrow" | "pen" | "text" | "mosaic" | "number";
+export type Tool = "rect" | "ellipse" | "arrow" | "pen" | "text" | "mosaic" | "spotlight" | "number";
 
 export type Shape =
-  | { kind: "rect" | "ellipse" | "arrow" | "mosaic"; x1: number; y1: number; x2: number; y2: number; color: string; size: number }
+  | { kind: "rect" | "ellipse" | "arrow" | "mosaic" | "spotlight"; x1: number; y1: number; x2: number; y2: number; color: string; size: number }
   | { kind: "pen"; points: [number, number][]; color: string; size: number }
   | { kind: "text"; x: number; y: number; text: string; color: string; size: number }
   | { kind: "number"; x: number; y: number; n: number; color: string; size: number };
@@ -14,6 +14,8 @@ export type SizeLevel = (typeof SIZES)[number];
 export const LINE_WIDTH = [2, 4, 6];
 export const FONT_SIZE = [14, 18, 24];
 export const NUMBER_RADIUS = [10, 13, 16];
+/** 聚光灯区域外的压暗程度。 */
+export const SPOTLIGHT_DIM = "rgba(0,0,0,0.55)";
 /** 马赛克块边长（pt）。 */
 const MOSAIC_BLOCK = 8;
 
@@ -79,7 +81,8 @@ export function box(s: { x1: number; y1: number; x2: number; y2: number }) {
 
 /**
  * 在 pt 坐标系下绘制（调用方先把 ctx 变换到 pt：屏上乘 dpr，导出乘像素比并平移选区）。
- * 马赛克从冻结帧原图取样，并始终先画，保证其他标注留在马赛克之上。
+ * 先画聚光灯（整体压暗后把各聚光区原图贴回，多个区域重叠也只亮一次），
+ * 再画马赛克（从冻结帧原图取样），最后画其他标注，保证标注不被压暗或遮住。
  * `sx/sy` 为冻结帧像素/pt 比。
  */
 export function drawShapes(
@@ -89,9 +92,22 @@ export function drawShapes(
   sx: number,
   sy: number
 ): void {
+  const spots = shapes.filter((s) => s.kind === "spotlight");
+  if (spots.length) {
+    ctx.save();
+    ctx.fillStyle = SPOTLIGHT_DIM;
+    // 画布外的部分会被裁掉：导出时画布即选区，屏上由调用方裁到选区
+    ctx.fillRect(-1e5, -1e5, 2e5, 2e5);
+    for (const s of spots) {
+      if (s.kind !== "spotlight") continue;
+      const b = box(s);
+      ctx.drawImage(img, b.x * sx, b.y * sy, b.w * sx, b.h * sy, b.x, b.y, b.w, b.h);
+    }
+    ctx.restore();
+  }
   for (const s of shapes) if (s.kind === "mosaic") drawMosaic(ctx, s, img, sx, sy);
   for (const s of shapes) {
-    if (s.kind === "mosaic") continue;
+    if (s.kind === "mosaic" || s.kind === "spotlight") continue;
     ctx.save();
     ctx.strokeStyle = s.color;
     ctx.fillStyle = s.color;

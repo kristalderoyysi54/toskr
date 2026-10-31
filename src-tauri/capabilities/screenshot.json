@@ -14,6 +14,9 @@
     "allow-screenshot-commit",
     "allow-screenshot-cancel",
     "allow-screenshot-trace",
+    "allow-screenshot-ocr",
+    "allow-screenshot-save-text",
+    "allow-screenshot-translate",
     "allow-copy-text"
   ]
 }

@@ -137,7 +137,8 @@ export function describeAiClient(
 export type AiPurpose =
   | "create-task" | "split-subtasks" | "note-to-task" | "suggest-title"
   | "test-connection" | "message-draft" | "result-verification"
-  | "summarize" | "extract-actions" | "improve-prompt" | "structure-requirements";
+  | "summarize" | "extract-actions" | "improve-prompt" | "structure-requirements"
+  | "translate-screenshot";
 
 export interface AiRequestInput {
   purpose: AiPurpose;

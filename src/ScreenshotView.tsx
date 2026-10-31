@@ -3,6 +3,8 @@ import { listen } from "@tauri-apps/api/event";
 import {
   Check,
   Circle,
+  Download,
+  Focus,
   Grid3x3,
   Hash,
   MoveUpRight,
@@ -20,6 +22,7 @@ import {
 } from "lucide-react";
 
 import { ShotShapesSvg } from "@/components/ShotShapesSvg";
+import { Button } from "@/components/ui/button";
 import { floatingSurface } from "@/components/ui/floating-surface";
 import { IconButton } from "@/components/ui/icon-button";
 import { useT, type MessageKey } from "@/lib/i18n";
@@ -57,6 +60,7 @@ import {
   api,
   SCREENSHOT_END_EVENT,
   SCREENSHOT_SESSION_EVENT,
+  SCREENSHOT_TRANSLATE_RESULT_EVENT,
   type ScreenshotAction,
   type ScreenshotSession,
 } from "@/lib/tauri";
@@ -74,7 +78,7 @@ const LOUPE_SAMPLE = 15;
 const LOUPE_SIZE = 120;
 const LOUPE_PANEL_H = LOUPE_SIZE + 44;
 /** 工具条宽度估值：选区右缘离屏幕左边不足此宽时改为贴左，避免工具条被裁掉。 */
-const TOOLBAR_W_EST = 480;
+const TOOLBAR_W_EST = 540;
 
 const HANDLE_CURSOR: Record<Handle, string> = {
   nw: "nwse-resize",
@@ -94,14 +98,15 @@ const TOOLS: { tool: Tool; icon: LucideIcon; label: MessageKey }[] = [
   { tool: "pen", icon: Pencil, label: "画笔" },
   { tool: "text", icon: Type, label: "文字" },
   { tool: "mosaic", icon: Grid3x3, label: "马赛克" },
+  { tool: "spotlight", icon: Focus, label: "聚光灯" },
   { tool: "number", icon: Hash, label: "序号" },
 ];
 
 const ACTIONS: { action: ScreenshotAction; icon: LucideIcon; label: MessageKey }[] = [
   { action: "pin", icon: Pin, label: "钉在屏幕上" },
-  { action: "ocr", icon: ScanText, label: "识别文字" },
   { action: "edit", icon: Shield, label: "在编辑器中打开（打码）" },
   { action: "send", icon: Send, label: "发送到当前目标" },
+  { action: "saveas", icon: Download, label: "另存为图片…" },
 ];
 
 /** 上次用的标注颜色与粗细（每台机器的使用习惯，存 localStorage）。 */
@@ -118,6 +123,19 @@ function loadStyle(): { ink: string; size: SizeLevel } {
     return { ink: COLORS[0], size: 1 };
   }
 }
+
+/** 文字面板：识别结果（可编辑）与可选译文。 */
+interface OcrPanel {
+  text: string;
+  busy: boolean;
+  translated: string | null;
+  translating: boolean;
+  error: string | null;
+  copied: boolean;
+}
+
+const OCR_PANEL_W = 320;
+const OCR_PANEL_MAX_H = 420;
 
 function hex(r: number, g: number, b: number): string {
   return `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("").toUpperCase()}`;
@@ -137,6 +155,8 @@ export default function ScreenshotView() {
   const [history, setHistory] = useState<History>(emptyHistory);
   const [draft, setDraft] = useState<Shape | null>(null);
   const [editing, setEditing] = useState<{ x: number; y: number; text: string } | null>(null);
+  const [ocr, setOcr] = useState<OcrPanel | null>(null);
+  const translateReq = useRef<string | null>(null);
   const drag = useRef<Drag | null>(null);
   useEffect(() => {
     localStorage.setItem(STYLE_KEY, JSON.stringify({ ink, size }));
@@ -159,6 +179,8 @@ export default function ScreenshotView() {
     setHistory(emptyHistory);
     setDraft(null);
     setEditing(null);
+    setOcr(null);
+    translateReq.current = null;
     if (urlRef.current) URL.revokeObjectURL(urlRef.current);
     urlRef.current = null;
   }, []);
@@ -254,28 +276,88 @@ export default function ScreenshotView() {
     setEditing(null);
   }, [editing, ink, size]);
 
-  const confirm = useCallback((action: ScreenshotAction = "save") => {
-    if (!sel || !info || !img) return;
+  /** 选区按冻结帧像素裁剪并合成标注，得到原始 RGBA。 */
+  const exportImage = useCallback((): { data: Uint8Array; w: number; h: number } | null => {
+    if (!sel || !info || !img) return null;
     const pr = toPixelRect(sel, sx, sy, info.pxW, info.pxH);
-    if (pr.w < 1 || pr.h < 1) return;
+    if (pr.w < 1 || pr.h < 1) return null;
     const canvas = document.createElement("canvas");
     canvas.width = pr.w;
     canvas.height = pr.h;
     const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!ctx) return null;
     ctx.drawImage(img, pr.x, pr.y, pr.w, pr.h, 0, 0, pr.w, pr.h);
     ctx.save();
     ctx.scale(sx, sy);
     ctx.translate(-pr.x / sx, -pr.y / sy);
     drawShapes(ctx, shapesWithEditing(), img, sx, sy);
     ctx.restore();
-    const data = ctx.getImageData(0, 0, pr.w, pr.h).data;
+    return { data: new Uint8Array(ctx.getImageData(0, 0, pr.w, pr.h).data.buffer), w: pr.w, h: pr.h };
+  }, [sel, info, img, sx, sy, shapesWithEditing]);
+
+  const confirm = useCallback((action: ScreenshotAction = "save") => {
+    const out = exportImage();
+    if (!out || !sel) return;
     reset();
-    const at = { x: sel.x, y: sel.y };
-    void api.screenshotCommit(new Uint8Array(data.buffer), pr.w, pr.h, action, at).catch(() => {
+    void api.screenshotCommit(out.data, out.w, out.h, action, { x: sel.x, y: sel.y }).catch(() => {
       void api.screenshotCancel();
     });
-  }, [sel, info, img, sx, sy, reset, shapesWithEditing]);
+  }, [exportImage, sel, reset]);
+
+  const runOcr = useCallback(() => {
+    const out = exportImage();
+    if (!out) return;
+    commitEditing();
+    setTool(null);
+    translateReq.current = null;
+    setOcr({ text: "", busy: true, translated: null, translating: false, error: null, copied: false });
+    void api
+      .screenshotOcr(out.data, out.w, out.h)
+      .then((text) =>
+        setOcr((o) => o && { ...o, busy: false, text, error: text.trim() ? null : t("未识别到文字") })
+      )
+      .catch(() => setOcr((o) => o && { ...o, busy: false, error: t("识别失败") }));
+  }, [exportImage, commitEditing, t]);
+
+  const translateOcr = useCallback(() => {
+    if (!ocr?.text.trim() || ocr.translating) return;
+    const id = crypto.randomUUID();
+    translateReq.current = id;
+    setOcr({ ...ocr, translating: true, error: null });
+    void api.screenshotTranslate(id, ocr.text).catch(() => {
+      setOcr((o) => o && { ...o, translating: false, error: t("翻译失败") });
+    });
+  }, [ocr, t]);
+
+  // 主窗口代办的翻译结果：只认最近一次请求
+  useEffect(() => {
+    const off = listen<{ requestId: string; text?: string; error?: string }>(
+      SCREENSHOT_TRANSLATE_RESULT_EVENT,
+      (event) => {
+        if (event.payload.requestId !== translateReq.current) return;
+        translateReq.current = null;
+        const { text, error } = event.payload;
+        setOcr((o) => o && { ...o, translating: false, translated: text ?? o.translated, error: error ?? null });
+      }
+    );
+    return () => void off.then((f) => f());
+  }, []);
+
+  const copyOcr = useCallback(() => {
+    if (!ocr) return;
+    void api.copyText(ocr.translated ?? ocr.text).then(() => {
+      setOcr((o) => o && { ...o, copied: true });
+      window.setTimeout(() => setOcr((o) => o && { ...o, copied: false }), 900);
+    });
+  }, [ocr]);
+
+  const saveOcr = useCallback(() => {
+    if (!ocr?.text.trim()) return;
+    const text = ocr.translated ? `${ocr.text}\n\n${ocr.translated}` : ocr.text;
+    reset();
+    setOcr(null);
+    void api.screenshotSaveText(text).catch(() => void api.screenshotCancel());
+  }, [ocr, reset]);
 
   const copyColor = useCallback(() => {
     if (!sampled) return;
@@ -289,6 +371,15 @@ export default function ScreenshotView() {
   useEffect(() => {
     if (!info) return;
     const onKey = (e: KeyboardEvent) => {
+      // 文字面板打开时只接管 Esc（关面板），其余交给面板里的输入框
+      if (ocr) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          setOcr(null);
+        }
+        return;
+      }
       // 文字输入框自己处理按键
       if (editing) return;
       const stop = () => {
@@ -321,7 +412,7 @@ export default function ScreenshotView() {
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, [info, sel, W, H, cancel, confirm, copyColor, editing, tool, history.shapes.length]);
+  }, [info, sel, W, H, cancel, confirm, copyColor, editing, tool, history.shapes.length, ocr]);
 
   // 遮罩刚出现时应用可能还没激活，WKWebView 收不到 mousemove：轮询系统光标跟随；
   // 拖拽中以指针事件为准
@@ -486,7 +577,7 @@ export default function ScreenshotView() {
   const pr = active ? toPixelRect(active, sx, sy, info.pxW, info.pxH) : null;
   const labelAbove = active && active.y >= 26;
   const loupePos = cursor ? placeNear(cursor.x, cursor.y, LOUPE_SIZE, LOUPE_PANEL_H, W, H) : null;
-  const showStyle = !!tool && tool !== "mosaic";
+  const showStyle = !!tool && tool !== "mosaic" && tool !== "spotlight";
   const toolbarH = showStyle ? 70 : 36;
   const toolbarTop = sel
     ? sel.y + sel.h + 8 + toolbarH <= H
@@ -595,6 +686,9 @@ export default function ScreenshotView() {
               <Redo2 />
             </IconButton>
             <span className="mx-0.5 h-4 w-px bg-border" />
+            <IconButton label={t("识别文字")} pressed={!!ocr} onClick={runOcr}>
+              <ScanText />
+            </IconButton>
             {ACTIONS.map(({ action, icon: Icon, label }) => (
               <IconButton key={action} label={t(label)} onClick={() => confirm(action)}>
                 <Icon />
@@ -642,6 +736,64 @@ export default function ScreenshotView() {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {sel && ocr && (
+        <div
+          className={cn(floatingSurface(), "absolute flex flex-col gap-2 rounded-md p-2 text-body")}
+          style={{
+            width: OCR_PANEL_W,
+            maxHeight: OCR_PANEL_MAX_H,
+            top: Math.min(Math.max(sel.y, 8), Math.max(8, H - OCR_PANEL_MAX_H - 8)),
+            left:
+              sel.x + sel.w + 12 + OCR_PANEL_W <= W
+                ? sel.x + sel.w + 12
+                : sel.x - 12 - OCR_PANEL_W >= 0
+                  ? sel.x - 12 - OCR_PANEL_W
+                  : Math.max(8, sel.x + sel.w - OCR_PANEL_W - 8),
+            cursor: "default",
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-label text-muted-foreground">
+              {ocr.busy ? t("识别中…") : t("识别结果")}
+            </span>
+            <IconButton label={t("关闭（Esc）")} size="xs" onClick={() => setOcr(null)}>
+              <X />
+            </IconButton>
+          </div>
+          <textarea
+            value={ocr.text}
+            disabled={ocr.busy}
+            onChange={(e) => setOcr({ ...ocr, text: e.target.value, translated: null })}
+            className="min-h-24 flex-1 resize-none rounded-sm border border-border bg-background p-1.5 outline-none select-text"
+          />
+          {(ocr.translated || ocr.translating) && (
+            <>
+              <span className="text-label text-muted-foreground">{ocr.translating ? t("翻译中…") : t("译文")}</span>
+              <textarea
+                value={ocr.translated ?? ""}
+                readOnly
+                className="min-h-24 flex-1 resize-none rounded-sm border border-border bg-background p-1.5 outline-none select-text"
+              />
+            </>
+          )}
+          {ocr.error && <span className="text-label text-warning">{ocr.error}</span>}
+          <div className="flex justify-end gap-1.5">
+            <Button size="xs" disabled={!ocr.text.trim()} onClick={copyOcr}>
+              {ocr.copied ? t("已复制") : ocr.translated ? t("复制译文") : t("复制")}
+            </Button>
+            <Button size="xs" disabled={!ocr.text.trim() || ocr.translating} onClick={translateOcr}>
+              {t("翻译")}
+            </Button>
+            <Button size="xs" disabled={!ocr.text.trim()} onClick={saveOcr}>
+              {t("存入「剪贴」")}
+            </Button>
+          </div>
         </div>
       )}
 

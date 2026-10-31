@@ -8,6 +8,7 @@ import {
   mosaicTile,
   NUMBER_RADIUS,
   numberTextColor,
+  SPOTLIGHT_DIM,
   type Shape,
 } from "@/lib/screenshot/annotate";
 import type { Rect } from "@/lib/screenshot/geometry";
@@ -29,16 +30,29 @@ export const ShotShapesSvg = memo(function ShotShapesSvg({
   sx: number;
   sy: number;
 }) {
+  const spots = shapes.filter((s) => s.kind === "spotlight");
   const mosaics = shapes.filter((s) => s.kind === "mosaic");
-  const others = shapes.filter((s) => s.kind !== "mosaic");
+  const others = shapes.filter((s) => s.kind !== "mosaic" && s.kind !== "spotlight");
   return (
     <svg className="pointer-events-none absolute inset-0 size-full">
       <defs>
         <clipPath id="shot-sel">
           <rect x={clip.x} y={clip.y} width={clip.w} height={clip.h} />
         </clipPath>
+        {/* 聚光灯：白=压暗，黑=挖空；多个区域重叠自然取并集 */}
+        <mask id="shot-spot">
+          <rect x={clip.x} y={clip.y} width={clip.w} height={clip.h} fill="white" />
+          {spots.map((s, i) => {
+            if (s.kind !== "spotlight") return null;
+            const b = box(s);
+            return <rect key={i} x={b.x} y={b.y} width={b.w} height={b.h} fill="black" />;
+          })}
+        </mask>
       </defs>
       <g clipPath="url(#shot-sel)">
+        {spots.length > 0 && (
+          <rect x={clip.x} y={clip.y} width={clip.w} height={clip.h} fill={SPOTLIGHT_DIM} mask="url(#shot-spot)" />
+        )}
         {mosaics.map((s, i) => (
           <MosaicImage key={`m${i}`} shape={s} img={img} sx={sx} sy={sy} />
         ))}

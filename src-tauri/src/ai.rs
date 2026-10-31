@@ -76,6 +76,7 @@ pub enum AiPurpose {
     ExtractActions,
     ImprovePrompt,
     StructureRequirements,
+    TranslateScreenshot,
 }
 
 impl AiPurpose {
@@ -92,6 +93,7 @@ impl AiPurpose {
             Self::ExtractActions => pick("提取行动项", "Extract action items"),
             Self::ImprovePrompt => pick("优化 Prompt", "Improve prompt"),
             Self::StructureRequirements => pick("结构化需求", "Structure requirements"),
+            Self::TranslateScreenshot => pick("翻译截图文字", "Translate screenshot text"),
         }
     }
 }

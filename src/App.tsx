@@ -101,7 +101,8 @@ import {
 import { sectionName } from "@/lib/i18n/builtinNames";
 import { normalizeMaterialStyle } from "@/lib/materialStyle";
 import { appearanceFromSettings, publishAppearance } from "@/lib/colorScheme";
-import { publishLocale, resolveLocale, t, tNode, useLocale, useT, type MessageKey } from "@/lib/i18n";
+import { getLocale, publishLocale, resolveLocale, t, tNode, useLocale, useT, type MessageKey } from "@/lib/i18n";
+import { aiErrorTip, startAiRequest } from "@/lib/aiClient";
 import { PlatinumBox } from "@/components/ui/platinum-titlebar";
 import {
   DETAIL_STATE_EVENT,
@@ -263,6 +264,8 @@ import {
   PANEL_MOVED_EVENT,
   CLIP_EVENT,
   SCREENSHOT_AFTER_EVENT,
+  SCREENSHOT_TRANSLATE_EVENT,
+  SCREENSHOT_TRANSLATE_RESULT_EVENT,
   CLIP_PAUSE_EVENT,
   STEALTH_EVENT,
   TARGET_CHANGED_EVENT,
@@ -1879,6 +1882,28 @@ export default function App() {
       if (isDataOperationLocked()) return;
       useNotesStore.getState().setSettings({ stealth: event.payload });
     });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  // 截图文字面板翻译：遮罩窗不持有 AI 能力，由主窗口用已配置的 AI 代办并回发
+  useEffect(() => {
+    const unlisten = listen<{ label: string; requestId: string; text: string }>(
+      SCREENSHOT_TRANSLATE_EVENT,
+      (event) => {
+        const { label, requestId, text } = event.payload;
+        const reply = (payload: { text?: string; error?: string }) =>
+          void emitTo(label, SCREENSHOT_TRANSLATE_RESULT_EVENT, { requestId, ...payload }).catch(() => {});
+        const system =
+          getLocale() === "en"
+            ? "Translate the user's text into English. If it is already mainly English, translate it into Simplified Chinese. Keep line breaks and list structure. Output only the translation."
+            : "把用户文本翻译成简体中文；如果原文主要是中文，就翻译成英文。保留换行与列表结构，只输出译文。";
+        startAiRequest({ purpose: "translate-screenshot", system, user: text, maxTokens: 2_000 })
+          .result.then((out) => reply({ text: out.trim() }))
+          .catch((error: unknown) => reply({ error: aiErrorTip(error) }));
+      }
+    );
     return () => {
       unlisten.then((fn) => fn());
     };

@@ -34,6 +34,8 @@ pub const SESSION_EVENT: &str = "toskr://screenshot-session";
 pub const END_EVENT: &str = "toskr://screenshot-end";
 /// 截完「发送 / 在编辑器中打开」：主窗口先落进剪贴再执行动作。
 pub const AFTER_EVENT: &str = "toskr://screenshot-after";
+/// 遮罩文字面板请求翻译：转给主窗口用已配置的 AI 处理，结果由主窗口直接回发给遮罩。
+pub const TRANSLATE_EVENT: &str = "toskr://screenshot-translate";
 const PIN_PREFIX: &str = "pin-";
 
 /// 是否已获屏幕录制授权；`prompt` 时首次会弹系统授权框（授权后需重启应用才生效）。
@@ -114,21 +116,21 @@ pub enum Action {
     Save,
     /// 钉在屏幕上（不入库）
     Pin,
-    /// 识别文字：文字存入「剪贴」并复制
-    Ocr,
     /// 存入「剪贴」后发送到当前目标
     Send,
     /// 存入「剪贴」后打开图片编辑器
     Edit,
+    /// 另存为 PNG 文件（系统保存对话框）
+    SaveAs,
 }
 
 impl Action {
     pub fn parse(s: &str) -> Self {
         match s {
             "pin" => Self::Pin,
-            "ocr" => Self::Ocr,
             "send" => Self::Send,
             "edit" => Self::Edit,
+            "saveas" => Self::SaveAs,
             _ => Self::Save,
         }
     }
@@ -601,7 +603,14 @@ pub fn session_info(label: &str) -> Option<SessionInfo> {
 /// 遮罩刚出现时应用未必已激活，WKWebView 收不到 mousemove，前端靠它轮询跟随。
 pub fn cursor_local(label: &str) -> Option<(f64, f64)> {
     let index = shot_index(label)?;
-    let bounds = SESSION.lock().unwrap().as_ref()?.frames.get(index)?.as_ref()?.bounds;
+    let bounds = SESSION
+        .lock()
+        .unwrap()
+        .as_ref()?
+        .frames
+        .get(index)?
+        .as_ref()?
+        .bounds;
     let (x, y) = crate::window::cursor_point_pt()?;
     bounds.contains(x, y).then(|| (x - bounds.x, y - bounds.y))
 }
@@ -615,13 +624,17 @@ pub fn frame_bytes(label: &str, session_id: u64) -> Option<Vec<u8>> {
 }
 
 /// 结束会话：通知各遮罩窗清空画面，稍后藏窗并把焦点还给截图前的前台应用。
-fn end_session(app: &AppHandle) -> Option<Session> {
+fn end_session(app: &AppHandle, restore_focus: bool) -> Option<Session> {
     let session = SESSION.lock().unwrap().take()?;
     let count = session.frames.len();
     for i in 0..count {
         let _ = app.emit_to(format!("{LABEL_PREFIX}{i}"), END_EVENT, session.id);
     }
-    let pid = session.front.as_ref().map(|f| f.pid);
+    let pid = session
+        .front
+        .as_ref()
+        .map(|f| f.pid)
+        .filter(|_| restore_focus);
     let app = app.clone();
     std::thread::spawn(move || {
         // 先让遮罩清空成透明再藏窗：复用窗口下次显示时不会闪出上一次的冻结帧
@@ -642,7 +655,7 @@ fn end_session(app: &AppHandle) -> Option<Session> {
 }
 
 pub fn cancel(app: &AppHandle) {
-    if end_session(app).is_some() {
+    if end_session(app, true).is_some() {
         crate::diag::push(app, "截图已取消");
     }
 }
@@ -690,7 +703,8 @@ pub fn commit(
                 .map(|f| (f.bounds, f.px_w))
         })
     };
-    let session = end_session(app).ok_or("no screenshot session")?;
+    // 另存为要弹保存对话框：先不还焦点，对话框关闭后再还
+    let session = end_session(app, action != Action::SaveAs).ok_or("no screenshot session")?;
     let app = app.clone();
     std::thread::spawn(move || match action {
         Action::Pin => {
@@ -712,10 +726,84 @@ pub fn commit(
                 bounds.y + placement.y,
             );
         }
-        Action::Ocr => ocr(&app, width, height, &rgba, &session),
+        Action::SaveAs => save_as(&app, width, height, rgba, &session),
         _ => save(&app, action, width, height, &rgba, session),
     });
     Ok(())
+}
+
+/// 本地时间 (年, 月, 日, 时, 分, 秒)。
+fn local_now() -> (i32, u32, u32, u32, u32, u32) {
+    let t = unsafe { libc::time(std::ptr::null_mut()) };
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    unsafe { libc::localtime_r(&t, &mut tm) };
+    (
+        tm.tm_year + 1900,
+        tm.tm_mon as u32 + 1,
+        tm.tm_mday as u32,
+        tm.tm_hour as u32,
+        tm.tm_min as u32,
+        tm.tm_sec as u32,
+    )
+}
+
+/// 默认文件名：「Toskr 截图 2026-10-31 14.05.03.png」（与系统截图同样避开冒号）。
+fn default_file_name((y, mo, d, h, mi, s): (i32, u32, u32, u32, u32, u32)) -> String {
+    format!(
+        "{} {y}-{mo:02}-{d:02} {h:02}.{mi:02}.{s:02}.png",
+        pick("Toskr 截图", "Toskr Screenshot")
+    )
+}
+
+fn save_as(app: &AppHandle, width: usize, height: usize, rgba: Vec<u8>, session: &Session) {
+    use tauri_plugin_dialog::DialogExt;
+    crate::focus::activate_pid(std::process::id() as i32);
+    let mut dialog = app
+        .dialog()
+        .file()
+        .set_file_name(default_file_name(local_now()))
+        .add_filter("PNG", &["png"]);
+    if let Some(home) = std::env::var_os("HOME") {
+        dialog = dialog.set_directory(std::path::Path::new(&home).join("Desktop"));
+    }
+    let picked = dialog.blocking_save_file().and_then(|p| p.into_path().ok());
+    if let Some(pid) = session.front.as_ref().map(|f| f.pid) {
+        crate::focus::activate_pid(pid);
+    }
+    let Some(path) = picked else { return };
+    let saved = image::RgbaImage::from_raw(width as u32, height as u32, rgba)
+        .ok_or_else(|| "invalid image".to_string())
+        .and_then(|img| {
+            img.save_with_format(&path, image::ImageFormat::Png)
+                .map_err(|e| e.to_string())
+        });
+    match saved {
+        Ok(()) => {
+            crate::diag::push(app, format!("截图另存为 {width}×{height}"));
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            crate::window::show_hud(
+                app,
+                "ok",
+                crate::tr_fmt!("已保存「{name}」", "Saved “{name}”"),
+                false,
+                false,
+                None,
+            );
+        }
+        Err(e) => {
+            crate::diag::push(app, format!("截图另存为失败：{e}"));
+            warn(
+                app,
+                pick(
+                    "保存失败，详情见诊断日志",
+                    "Save failed; see the diagnostics log",
+                ),
+            );
+        }
+    }
 }
 
 fn source_of(session: &Session) -> (Option<String>, Option<String>) {
@@ -726,27 +814,33 @@ fn source_of(session: &Session) -> (Option<String>, Option<String>) {
         .unwrap_or((None, None))
 }
 
-fn ocr(app: &AppHandle, width: usize, height: usize, rgba: &[u8], session: &Session) {
-    let text = crate::ocr::recognize_observations(&rgba_to_bmp(width, height, rgba))
-        .map(|obs| {
-            obs.into_iter()
-                .map(|o| o.text)
-                .collect::<Vec<_>>()
-                .join("\n")
-        })
-        .unwrap_or_default();
-    if text.trim().is_empty() {
-        warn(app, pick("未识别到文字", "No text recognized"));
-        return;
+/// 识别选区文字（不结束会话，供遮罩文字面板）。空结果返回空串。
+pub fn recognize(width: usize, height: usize, rgba: &[u8]) -> Result<String, String> {
+    if width == 0 || height == 0 || rgba.len() != width * height * 4 {
+        return Err("invalid image".into());
     }
+    let obs = crate::ocr::recognize_observations(&rgba_to_bmp(width, height, rgba))?;
+    Ok(obs
+        .into_iter()
+        .map(|o| o.text)
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
+/// 文字面板「存入剪贴」：结束会话，复制并存入「剪贴」。
+pub fn save_text(app: &AppHandle, text: String) -> Result<(), String> {
+    if text.trim().is_empty() {
+        return Err("empty text".into());
+    }
+    let session = end_session(app, true).ok_or("no screenshot session")?;
     if let Some(_permit) = crate::pasteboard::try_claim(app) {
         if let Ok(count) = crate::pasteboard::write_general_text(&text) {
             crate::clipwatch::mark_self_write_count(app, count);
         }
     }
     let n = text.chars().filter(|c| !c.is_whitespace()).count();
-    crate::diag::push(app, format!("截图识别文字 {n} 字"));
-    let (app_name, bundle_id) = source_of(session);
+    crate::diag::push(app, format!("截图文字存入剪贴 {n} 字"));
+    let (app_name, bundle_id) = source_of(&session);
     let _ = app.emit_to(
         "main",
         CLIP_EVENT,
@@ -767,13 +861,14 @@ fn ocr(app: &AppHandle, width: usize, height: usize, rgba: &[u8], session: &Sess
         app,
         "ok",
         crate::tr_fmt!(
-            "已识别 {n} 字并复制，存入「剪贴」",
-            "Recognized {n} characters, copied and saved to Clipboard"
+            "{n} 字已复制，存入「剪贴」",
+            "{n} characters copied and saved to Clipboard"
         ),
         false,
         false,
         None,
     );
+    Ok(())
 }
 
 fn save(
@@ -976,6 +1071,13 @@ mod tests {
             },
         ];
         assert_eq!(local_windows(d, &ws), vec![r(60.0, 100.0, 300.0, 200.0)]);
+    }
+
+    #[test]
+    fn default_file_name_avoids_colons() {
+        let name = default_file_name((2026, 10, 31, 9, 5, 3));
+        assert!(name.ends_with(" 2026-10-31 09.05.03.png"), "{name}");
+        assert!(!name.contains(':'));
     }
 
     #[test]

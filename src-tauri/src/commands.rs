@@ -657,6 +657,52 @@ pub fn screenshot_commit(
     crate::screenshot::commit(&app, action, placement, w as usize, h as usize, rgba.clone())
 }
 
+/// 遮罩文字面板：识别选区文字（请求体为原始 RGBA，尺寸在 x-shot-w/h 头里）。
+#[tauri::command]
+pub async fn screenshot_ocr(request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let num = |name: &str| -> Option<usize> { request.headers().get(name)?.to_str().ok()?.parse().ok() };
+    let (Some(w), Some(h)) = (num("x-shot-w"), num("x-shot-h")) else {
+        return Err("missing size".into());
+    };
+    let tauri::ipc::InvokeBody::Raw(rgba) = request.body() else {
+        return Err("expected raw body".into());
+    };
+    let rgba = rgba.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::screenshot::recognize(w, h, &rgba))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// 遮罩文字面板：文字复制并存入「剪贴」，结束截图。
+#[tauri::command]
+pub fn screenshot_save_text(app: AppHandle, text: String) -> Result<(), String> {
+    crate::screenshot::save_text(&app, text)
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScreenshotTranslateRequest {
+    label: String,
+    request_id: String,
+    text: String,
+}
+
+/// 遮罩文字面板：请主窗口用已配置的 AI 翻译（遮罩窗不持有 AI 能力）。
+#[tauri::command]
+pub fn screenshot_translate(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    request_id: String,
+    text: String,
+) -> Result<(), String> {
+    app.emit_to(
+        "main",
+        crate::screenshot::TRANSLATE_EVENT,
+        ScreenshotTranslateRequest { label: window.label().to_string(), request_id, text },
+    )
+    .map_err(|e| e.to_string())
+}
+
 /// 钉图窗：原始 pt 尺寸。
 #[tauri::command]
 pub fn pin_info(window: tauri::WebviewWindow) -> Option<crate::screenshot::PinInfo> {
