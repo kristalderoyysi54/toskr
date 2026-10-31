@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Check, Download, Redo2, Undo2, X } from "lucide-react";
+import { Check, Crop, Download, Redo2, Undo2, X } from "lucide-react";
 
 import { ShotShapesSvg } from "@/components/ShotShapesSvg";
 import { SHOT_TOOLS, ShotStyleRow, toolHasStyle, useShotStyle } from "@/components/ShotToolParts";
@@ -21,10 +21,14 @@ import {
   type Shape,
   type Tool,
 } from "@/lib/screenshot/annotate";
+import { handlePoint, HANDLES, resizeRect, toPixelRect, type Handle, type Rect } from "@/lib/screenshot/geometry";
 import { api } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 
-/** 长图标注窗：可滚动查看拼好的长截屏，用与截图遮罩相同的工具标注，完成后存入「剪贴」/ 分组 / 另存为。
+/** 裁剪框最小边长（pt）。 */
+const MIN_CROP = 16;
+
+/** 长图标注窗：可滚动查看拼好的长截屏，用与截图遮罩相同的工具标注，可裁剪，完成后存入「剪贴」/ 分组 / 另存为。
  * 从钉图右键「编辑标注」打开时，✓ 改为写回钉图。 */
 export default function LongShotView() {
   const t = useT();
@@ -41,6 +45,10 @@ export default function LongShotView() {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const pageRef = useRef<HTMLDivElement | null>(null);
   const textRef = useRef<HTMLTextAreaElement | null>(null);
+  // 裁剪框（图片 pt），null = 整张；cropping 时显示手柄
+  const [crop, setCrop] = useState<Rect | null>(null);
+  const [cropping, setCropping] = useState(false);
+  const cropDrag = useRef<{ handle: Handle; x: number; y: number; orig: Rect } | null>(null);
 
   useEffect(() => {
     let url: string | null = null;
@@ -101,11 +109,12 @@ export default function LongShotView() {
       ctx.scale(scale, scale);
       drawShapes(ctx, shapes, img, scale, scale);
       ctx.restore();
-      const data = new Uint8Array(ctx.getImageData(0, 0, info.pxW, info.pxH).data.buffer);
+      const out = crop ? toPixelRect(crop, scale, scale, info.pxW, info.pxH) : { x: 0, y: 0, w: info.pxW, h: info.pxH };
+      const data = new Uint8Array(ctx.getImageData(out.x, out.y, out.w, out.h).data.buffer);
       setBusy(true);
-      void api.longCommit(data, info.pxW, info.pxH, action, sectionId).catch(() => setBusy(false));
+      void api.longCommit(data, out.w, out.h, action, sectionId).catch(() => setBusy(false));
     },
-    [info, img, busy, editing, history.shapes, ink, size, scale]
+    [info, img, busy, editing, history.shapes, ink, size, scale, crop]
   );
 
   const primary = info?.pin ? "pin" : "save";
@@ -130,6 +139,7 @@ export default function LongShotView() {
       if (e.key === "Escape") {
         stop();
         if (sectionMenu) setSectionMenu(false);
+        else if (cropping) setCropping(false);
         else setTool(null);
       } else if (e.metaKey && e.key.toLowerCase() === "z") {
         stop();
@@ -141,7 +151,7 @@ export default function LongShotView() {
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, [editing, sectionMenu, finish, primary]);
+  }, [editing, sectionMenu, cropping, finish, primary]);
 
   const point = (e: ReactPointerEvent) => {
     const r = pageRef.current!.getBoundingClientRect();
@@ -188,6 +198,8 @@ export default function LongShotView() {
 
   if (!info || !img) return null;
   const shapes = draft ? [...history.shapes, draft] : history.shapes;
+  const cropRect = crop ?? { x: 0, y: 0, w: ptW, h: ptH };
+  const outPx = crop ? toPixelRect(crop, scale, scale, info.pxW, info.pxH) : { w: info.pxW, h: info.pxH };
 
   return (
     <div className="fixed inset-0 flex flex-col bg-background text-body text-foreground">
@@ -200,12 +212,24 @@ export default function LongShotView() {
               pressed={tool === id}
               onClick={() => {
                 commitEditing();
+                setCropping(false);
                 setTool(tool === id ? null : id);
               }}
             >
               <Icon />
             </IconButton>
           ))}
+          <IconButton
+            label={t("裁剪：拖动边角调整，Esc 结束")}
+            pressed={cropping}
+            onClick={() => {
+              commitEditing();
+              setTool(null);
+              setCropping(!cropping);
+            }}
+          >
+            <Crop />
+          </IconButton>
           <span className="mx-0.5 h-4 w-px bg-border" />
           <IconButton label={t("撤销（⌘Z）")} disabled={!history.shapes.length} onClick={() => setHistory(undo)}>
             <Undo2 />
@@ -215,7 +239,7 @@ export default function LongShotView() {
           </IconButton>
           <span className="flex-1" />
           <span className="mr-1 font-mono text-label text-muted-foreground tabular-nums">
-            {info.pxW} × {info.pxH}
+            {outPx.w} × {outPx.h}
           </span>
           <IconButton label={t("另存为图片…")} disabled={busy} onClick={() => finish("saveas")}>
             <Download />
@@ -295,6 +319,44 @@ export default function LongShotView() {
               viewBox={`0 0 ${ptW} ${ptH}`}
             />
           )}
+          {crop && (
+            <div
+              className="pointer-events-none absolute outline outline-1 outline-primary"
+              style={{
+                left: cropRect.x * z,
+                top: cropRect.y * z,
+                width: cropRect.w * z,
+                height: cropRect.h * z,
+                // token-exception: 裁掉区域的压暗层（同截图遮罩 45% 黑）
+                boxShadow: "0 0 0 99999px rgba(0,0,0,0.45)",
+              }}
+            />
+          )}
+          {cropping &&
+            HANDLES.map((h) => {
+              const p = handlePoint(cropRect, h);
+              return (
+                <div
+                  key={h}
+                  className="absolute size-3 rounded-full border border-primary bg-white"
+                  style={{ left: p.x * z - 6, top: p.y * z - 6, cursor: `${h}-resize` }}
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                    const q = point(e);
+                    cropDrag.current = { handle: h, x: q.x, y: q.y, orig: cropRect };
+                  }}
+                  onPointerMove={(e) => {
+                    const d = cropDrag.current;
+                    if (!d || d.handle !== h) return;
+                    const q = point(e);
+                    const next = resizeRect(d.orig, h, q.x - d.x, q.y - d.y, ptW, ptH);
+                    if (next.w >= MIN_CROP && next.h >= MIN_CROP) setCrop(next);
+                  }}
+                  onPointerUp={() => (cropDrag.current = null)}
+                />
+              );
+            })}
           {editing && (
             <textarea
               ref={textRef}

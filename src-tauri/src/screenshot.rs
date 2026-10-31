@@ -107,6 +107,8 @@ struct Pin {
     px_h: usize,
     pt_w: f64,
     pt_h: f64,
+    /// 编辑标注前的原图（多次编辑只留最初那张），右键「还原原图」用
+    original: Option<Box<Pin>>,
 }
 
 /// 截完后的动作（遮罩工具条按钮）。
@@ -848,6 +850,7 @@ pub fn commit(
                     px_h: height,
                     pt_w: width as f64 / scale,
                     pt_h: height as f64 / scale,
+                    original: None,
                 },
                 bounds.x + placement.x,
                 bounds.y + placement.y,
@@ -1250,8 +1253,19 @@ pub fn pin_menu(
     for pct in [100, 80, 60, 40] {
         alpha = alpha.text(format!("pin:alpha:{pct}"), format!("{pct}%"));
     }
+    let edited = PINS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(window.label()))
+        .is_some_and(|p| p.original.is_some());
     let menu = MenuBuilder::new(app)
         .text("pin:edit", pick("编辑标注…", "Annotate…"))
+        .item(
+            &MenuItemBuilder::with_id("pin:restore", pick("还原原图", "Restore original"))
+                .enabled(edited)
+                .build(app)?,
+        )
         .separator()
         .text("pin:copy", pick("复制", "Copy"))
         .text("pin:clip", pick("存入「剪贴」", "Save to Clipboard"))
@@ -1294,6 +1308,7 @@ fn pin_menu_action(app: &AppHandle, window: &tauri::WebviewWindow, id: &str) {
             }
         }
         "pin:edit" => pin_edit(app, window),
+        "pin:restore" => pin_restore(app, &label),
         "pin:reset" => {
             pin_zoom(window, 1.0);
             let _ = window.emit_to(&label, PIN_ZOOM_RESET_EVENT, ());
@@ -1380,14 +1395,10 @@ fn pin_edit(app: &AppHandle, window: &tauri::WebviewWindow) {
 
 const PIN_RELOAD_EVENT: &str = "toskr://pin-reload";
 
-/// 标注后的图写回钉图（尺寸不变），钉图窗重新拉图。
+/// 标注 / 裁剪后的图写回钉图，首次写回时留下原图。
 pub fn pin_replace(app: &AppHandle, label: &str, w: usize, h: usize, rgba: Vec<u8>) {
-    let mut bgra = rgba.clone();
-    for px in bgra.chunks_exact_mut(4) {
-        px.swap(0, 2);
-    }
-    let bmp = crate::screenshot_sck::bmp_from_bgra(&bgra, w, h, w * 4);
-    {
+    let bmp = rgba_to_bmp(w, h, &rgba);
+    let resized = {
         let mut guard = PINS.lock().unwrap();
         let Some(p) = guard.as_mut().and_then(|m| m.get_mut(label)) else {
             warn(
@@ -1399,7 +1410,50 @@ pub fn pin_replace(app: &AppHandle, label: &str, w: usize, h: usize, rgba: Vec<u
             );
             return;
         };
-        (p.bmp, p.rgba, p.px_w, p.px_h) = (bmp, rgba, w, h);
+        let scale = p.px_w as f64 / p.pt_w;
+        let edited = Pin {
+            bmp,
+            rgba,
+            px_w: w,
+            px_h: h,
+            pt_w: w as f64 / scale,
+            pt_h: h as f64 / scale,
+            original: None,
+        };
+        let mut old = std::mem::replace(p, edited);
+        p.original = Some(match old.original.take() {
+            Some(first) => first,
+            None => Box::new(old),
+        });
+        let o = p.original.as_ref().unwrap();
+        (o.px_w, o.px_h) != (w, h)
+    };
+    pin_refresh(app, label, resized);
+}
+
+fn pin_restore(app: &AppHandle, label: &str) {
+    let resized = {
+        let mut guard = PINS.lock().unwrap();
+        let Some(p) = guard.as_mut().and_then(|m| m.get_mut(label)) else {
+            return;
+        };
+        let Some(original) = p.original.take() else {
+            return;
+        };
+        let resized = (original.px_w, original.px_h) != (p.px_w, p.px_h);
+        *p = *original;
+        resized
+    };
+    pin_refresh(app, label, resized);
+}
+
+/// 换图后钉图窗重新拉图；尺寸变了（裁剪过）则按新尺寸复位到 100%。
+fn pin_refresh(app: &AppHandle, label: &str, resized: bool) {
+    if resized {
+        if let Some(w) = app.get_webview_window(label) {
+            pin_zoom(&w, 1.0);
+            let _ = app.emit_to(label, PIN_ZOOM_RESET_EVENT, ());
+        }
     }
     let _ = app.emit_to(label, PIN_RELOAD_EVENT, ());
 }

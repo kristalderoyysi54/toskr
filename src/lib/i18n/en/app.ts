@@ -346,5 +346,6 @@ export const app = {
   "动一下鼠标停止": "Move the mouse to stop",
   "放弃长截屏": "Discard scrolling capture",
   "放弃标注": "Discard annotations",
+  "裁剪：拖动边角调整，Esc 结束": "Crop: drag the corners or edges; Esc to finish",
   "完成：更新钉图（Enter）；长按选择存入的分组": "Done: update the pin (Enter); long-press to pick a group",
 } satisfies Record<string, EnValue>;
