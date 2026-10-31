@@ -8,6 +8,7 @@
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
-    "allow-long-preview-image"
+    "allow-long-preview-image",
+    "allow-long-finish"
   ]
 }

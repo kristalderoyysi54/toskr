@@ -306,6 +306,7 @@ pub fn run() {
             commands::screenshot_save_text,
             commands::screenshot_translate,
             commands::long_preview_image,
+            commands::long_finish,
             commands::long_info,
             commands::long_image,
             commands::long_commit,

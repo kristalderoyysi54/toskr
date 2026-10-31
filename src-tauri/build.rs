@@ -38,6 +38,7 @@ const COMMANDS: &[&str] = &[
     "screenshot_save_text",
     "screenshot_translate",
     "long_preview_image",
+    "long_finish",
     "long_info",
     "long_image",
     "long_commit",

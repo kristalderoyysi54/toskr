@@ -1033,6 +1033,8 @@ export const api = {
     invoke("screenshot_translate", { requestId, text }),
   /** 长截屏预览条：当前拼接预览（BMP）。 */
   longPreviewImage: () => invoke<ArrayBuffer>("long_preview_image"),
+  /** 预览条「完成」：结束手动滚动拼接。 */
+  longFinish: () => invoke("long_finish"),
   /** 长图标注窗：像素尺寸与像素/pt 比。 */
   longInfo: () => invoke<{ pxW: number; pxH: number; scale: number; pin: boolean } | null>("long_info"),
   longImage: () => invoke<ArrayBuffer>("long_image"),

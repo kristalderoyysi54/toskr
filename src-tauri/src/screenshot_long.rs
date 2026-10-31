@@ -1,8 +1,10 @@
 //! 长截屏：光标移到选区中央，合成滚轮事件逐段下滚，每段截取选区，
 //! 按相邻两帧重叠的像素行拼接。到底（画面不再变化）、超长、或用户动了鼠标即停。
+//! 第一次合成滚动画面就没变（页面不响应合成滚轮）时转为手动：用户自己滚，
+//! 定时截帧拼接，点预览条「完成」或停滚一段时间结束。
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use core_graphics::geometry::CGPoint;
@@ -24,6 +26,15 @@ const ABORT_DISTANCE: f64 = 24.0;
 /// 有效重叠：非空白行里至少这么多比例对得上。
 const MIN_MATCH_RATIO: f64 = 0.6;
 const MIN_OVERLAP_ROWS: usize = 12;
+/// 手动模式截帧间隔与停滚自动结束时长。
+const MANUAL_POLL_MS: u64 = 120;
+const MANUAL_IDLE: std::time::Duration = std::time::Duration::from_secs(15);
+/// 预览条「完成」按钮置位。
+static MANUAL_STOP: AtomicBool = AtomicBool::new(false);
+
+pub fn finish_manual() {
+    MANUAL_STOP.store(true, Ordering::Relaxed);
+}
 
 /// 每行的哈希与是否纯色（纯色行在任何偏移下都能对上，不参与判定）。
 pub fn row_signatures(rgba: &[u8], w: usize, h: usize) -> Vec<(u64, bool)> {
@@ -106,14 +117,27 @@ pub enum Stop {
     UserMoved,
     Limit,
     NoOverlap,
+    /// 手动模式：点了「完成」
+    Finished,
+    /// 手动模式：停滚超时
+    Idle,
 }
 
-/// 自动滚动拼接。`capture` 截取选区返回 (RGBA, 宽, 高)；`region` 为全局 pt 选区；
-/// 每拼上一段调用 `progress(已拼 RGBA, 宽, 总高)`。
+/// 拼接过程通知（预览条与提示用）。
+pub enum Event<'a> {
+    /// 已拼 RGBA、宽、总高
+    Stitched(&'a [u8], usize, usize),
+    /// 转入手动滚动
+    Manual,
+    /// 手动模式下新帧对不上（滚太快）/ 恢复
+    Stalled(bool),
+}
+
+/// 自动滚动拼接。`capture` 截取选区返回 (RGBA, 宽, 高)；`region` 为全局 pt 选区。
 pub fn run(
     region: (f64, f64, f64, f64),
     mut capture: impl FnMut() -> Result<(Vec<u8>, usize, usize), String>,
-    mut progress: impl FnMut(&[u8], usize, usize),
+    mut progress: impl FnMut(Event),
 ) -> Result<(Vec<u8>, usize, usize, Stop), String> {
     let (rx, ry, rw, rh) = region;
     let center = CGPoint::new(rx + rw / 2.0, ry + rh / 2.0);
@@ -122,10 +146,10 @@ pub fn run(
 
     let (first, w, h) = capture()?;
     let mut st = Stitcher::new(first, w, h);
-    progress(&st.out, w, st.total_h);
+    progress(Event::Stitched(&st.out, w, st.total_h));
     let step = (rh * SCROLL_FRACTION).round().max(1.0) as i32;
     let mut stop = Stop::Limit;
-    for _ in 0..MAX_STEPS {
+    for i in 0..MAX_STEPS {
         if let Some((cx, cy)) = crate::window::cursor_point_pt() {
             if (cx - center.x).hypot(cy - center.y) > ABORT_DISTANCE {
                 stop = Stop::UserMoved;
@@ -139,6 +163,11 @@ pub fn run(
             return Err("frame size changed".into());
         }
         match st.push(&frame) {
+            Push::Same if i == 0 => {
+                progress(Event::Manual);
+                stop = manual(&mut st, &mut capture, &mut progress)?;
+                break;
+            }
             Push::Same => {
                 stop = Stop::Bottom;
                 break;
@@ -147,7 +176,7 @@ pub fn run(
                 stop = Stop::NoOverlap;
                 break;
             }
-            Push::Appended => progress(&st.out, w, st.total_h),
+            Push::Appended => progress(Event::Stitched(&st.out, w, st.total_h)),
         }
         if w * st.total_h >= MAX_PIXELS {
             stop = Stop::Limit;
@@ -155,6 +184,44 @@ pub fn run(
         }
     }
     Ok((st.out, w, st.total_h, stop))
+}
+
+/// 手动模式：定时截帧，画面变了就拼；对不上的帧丢弃（等用户往回滚到能接上）。
+fn manual(
+    st: &mut Stitcher,
+    capture: &mut impl FnMut() -> Result<(Vec<u8>, usize, usize), String>,
+    progress: &mut impl FnMut(Event),
+) -> Result<Stop, String> {
+    MANUAL_STOP.store(false, Ordering::Relaxed);
+    let mut last_change = std::time::Instant::now();
+    let mut stalled = false;
+    loop {
+        if MANUAL_STOP.swap(false, Ordering::Relaxed) {
+            return Ok(Stop::Finished);
+        }
+        if last_change.elapsed() > MANUAL_IDLE {
+            return Ok(Stop::Idle);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(MANUAL_POLL_MS));
+        let (frame, fw, fh) = capture()?;
+        if fw != st.w || fh != st.h {
+            return Err("frame size changed".into());
+        }
+        let result = st.push(&frame);
+        if result != Push::Same {
+            last_change = std::time::Instant::now();
+        }
+        if (result == Push::NoOverlap) != stalled {
+            stalled = !stalled;
+            progress(Event::Stalled(stalled));
+        }
+        if result == Push::Appended {
+            progress(Event::Stitched(&st.out, st.w, st.total_h));
+            if st.w * st.total_h >= MAX_PIXELS {
+                return Ok(Stop::Limit);
+            }
+        }
+    }
 }
 
 /// 相邻两帧在原位不变的顶部 / 底部行数（固定页头、固定页尾）。
@@ -235,6 +302,9 @@ const PREVIEW_WINDOW_W: f64 = 180.0;
 struct Preview {
     rgba: Vec<u8>,
     rows: usize,
+    height: usize,
+    manual: bool,
+    stalled: bool,
 }
 
 static PREVIEW: Mutex<Option<Preview>> = Mutex::new(None);
@@ -260,13 +330,21 @@ fn extend_preview(p: &mut Preview, src: &[u8], src_w: usize, src_h: usize) {
 struct Progress {
     /// 已拼接高度（像素）
     height: usize,
+    /// 手动滚动模式（预览条可点，显示「完成」）
+    manual: bool,
+    /// 手动模式下滚太快、新画面接不上
+    stalled: bool,
 }
 
 /// 在选区所在屏的右缘（选区挡住时改左缘）放一条预览小窗；鼠标穿透、不抢焦点。
 pub fn open_preview(app: &AppHandle, display: RectPt, region: RectPt) {
+    MANUAL_STOP.store(false, Ordering::Relaxed);
     *PREVIEW.lock().unwrap() = Some(Preview {
         rgba: Vec::new(),
         rows: 0,
+        height: 0,
+        manual: false,
+        stalled: false,
     });
     let right_x = display.x + display.w - PREVIEW_WINDOW_W - 12.0;
     let x = if region.x + region.w > right_x {
@@ -301,13 +379,34 @@ pub fn open_preview(app: &AppHandle, display: RectPt, region: RectPt) {
     });
 }
 
-pub fn preview_progress(app: &AppHandle, src: &[u8], src_w: usize, src_h: usize) {
-    {
+/// 拼接事件 → 更新预览条。转手动时预览条改为可点（「完成」按钮）。
+pub fn preview_event(app: &AppHandle, event: Event) {
+    let payload = {
         let mut guard = PREVIEW.lock().unwrap();
         let Some(p) = guard.as_mut() else { return };
-        extend_preview(p, src, src_w, src_h);
+        match event {
+            Event::Stitched(src, src_w, src_h) => {
+                extend_preview(p, src, src_w, src_h);
+                p.height = src_h;
+            }
+            Event::Manual => p.manual = true,
+            Event::Stalled(v) => p.stalled = v,
+        }
+        Progress {
+            height: p.height,
+            manual: p.manual,
+            stalled: p.stalled,
+        }
+    };
+    if payload.manual {
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if let Some(w) = handle.get_webview_window(PREVIEW_LABEL) {
+                let _ = w.set_ignore_cursor_events(false);
+            }
+        });
     }
-    let _ = app.emit_to(PREVIEW_LABEL, PROGRESS_EVENT, Progress { height: src_h });
+    let _ = app.emit_to(PREVIEW_LABEL, PROGRESS_EVENT, payload);
 }
 
 /// 预览图（BMP）与已拼高度。
@@ -557,6 +656,33 @@ mod tests {
         assert_eq!(rows(&st.out), rows(&expected), "页头页尾不重复、内容连续");
     }
 
+    /// 手动模式：静止帧不拼、跳太远的帧丢弃并报 stalled、接回后继续，点「完成」结束。
+    #[test]
+    fn manual_mode_skips_unaligned_frames_until_finished() {
+        let content: Vec<u8> = (0..200).map(|i| (i * 13 % 251) as u8).collect();
+        let mut st = Stitcher::new(page(&content[..60]), 2, 60);
+        let tops = [0, 20, 120, 40];
+        let mut n = 0;
+        let mut capture = || {
+            let top = tops[n.min(tops.len() - 1)];
+            n += 1;
+            if n == tops.len() {
+                finish_manual();
+            }
+            Ok((page(&content[top..top + 60]), 2, 60))
+        };
+        let mut stalls = Vec::new();
+        let mut progress = |e: Event| {
+            if let Event::Stalled(v) = e {
+                stalls.push(v);
+            }
+        };
+        let stop = manual(&mut st, &mut capture, &mut progress).unwrap();
+        assert_eq!(stop, Stop::Finished);
+        assert_eq!(stalls, vec![true, false]);
+        assert!(st.out == page(&content[..100]));
+    }
+
     #[test]
     fn plain_page_stitches_contiguously() {
         let content: Vec<u8> = (0..200).map(|i| (i * 13 % 251) as u8).collect();
@@ -571,6 +697,9 @@ mod tests {
         let mut p = Preview {
             rgba: Vec::new(),
             rows: 0,
+            height: 0,
+            manual: false,
+            stalled: false,
         };
         // 源宽 320 = 预览宽 2 倍 → 预览每行取源第 2k 行
         let src: Vec<u8> = (0..320 * 10)

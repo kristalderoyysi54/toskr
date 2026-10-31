@@ -729,6 +729,12 @@ pub fn long_preview_image() -> Result<tauri::ipc::Response, String> {
         .ok_or_else(|| "no preview".to_string())
 }
 
+/// 长截屏预览条「完成」：结束手动滚动拼接。
+#[tauri::command]
+pub fn long_finish() {
+    crate::screenshot_long::finish_manual();
+}
+
 /// 长图标注窗：像素尺寸与像素/pt 比。
 #[tauri::command]
 pub fn long_info(window: tauri::WebviewWindow) -> Option<crate::screenshot_long::LongInfo> {

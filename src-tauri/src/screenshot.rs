@@ -738,9 +738,23 @@ pub fn long(app: &AppHandle, label: &str, x: f64, y: f64, w: f64, h: f64) -> Res
                 (true, Some(id)) => crate::screenshot_sck::capture_region(id, (x, y, w, h)),
                 _ => capture_region_fallback(global),
             },
-            |out, pw, ph| {
+            |event| {
+                if matches!(event, crate::screenshot_long::Event::Manual) {
+                    crate::window::show_hud(
+                        &app,
+                        "info",
+                        pick(
+                            "页面没有跟着自动滚动：请手动往下滚，滚完点预览条上的「完成」（停 15 秒自动结束）",
+                            "The page didn't scroll by itself: scroll down manually, then click Done on the preview strip (stops after 15 s idle)",
+                        )
+                        .into(),
+                        false,
+                        false,
+                        None,
+                    );
+                }
                 if sck {
-                    crate::screenshot_long::preview_progress(&app, out, pw, ph);
+                    crate::screenshot_long::preview_event(&app, event);
                 }
             },
         );
