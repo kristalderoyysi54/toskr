@@ -7,6 +7,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import {
   ArrowDown,
+  ArrowDownToLine,
   ArrowUp,
   CheckSquare,
   ChevronDown,
@@ -33,7 +34,9 @@ import { useStickyHeader } from "@/lib/stickyHeader";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n";
 import {
+  CLIPBOARD_ID,
   INBOX_ID,
+  SECRET_ID,
   SECTION_COLORS,
   useNotesStore,
   type Note,
@@ -68,6 +71,13 @@ export function SectionGroup({
     setSettings,
   } = useNotesStore.getState();
   const compact = useNotesStore((s) => s.settings.cardDensity === "compact");
+  // 双击捕获落点：未设置时收件箱即目标
+  const isCaptureTarget = useNotesStore((s) =>
+    s.settings.captureSectionId === null
+      ? section.id === INBOX_ID
+      : s.settings.captureSectionId === section.id
+  );
+  const canBeCaptureTarget = section.id !== CLIPBOARD_ID && section.id !== SECRET_ID;
   const doneOpen = useUIStore((s) => s.doneOpen[section.id] ?? false);
 
   const [renaming, setRenaming] = useState(false);
@@ -202,6 +212,12 @@ export function SectionGroup({
             aria-label={t("发送后保留")}
           />
         )}
+        {isCaptureTarget && section.id !== INBOX_ID && (
+          <ArrowDownToLine
+            className="size-2.5 shrink-0 text-muted-foreground"
+            aria-label={t("捕获目标")}
+          />
+        )}
         <span className="shrink-0 text-micro tabular-nums text-muted-foreground">{total}</span>
 
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
@@ -286,6 +302,21 @@ export function SectionGroup({
                   />{" "}
                   {section.keepAfterSend ? t("取消发送后保留") : t("发送后保留")}
                 </SimpleMenuItem>
+                {canBeCaptureTarget && !(isCaptureTarget && section.id === INBOX_ID) && (
+                  <SimpleMenuItem
+                    title={t("双击触发键捕获的内容存入此组")}
+                    onClick={() => {
+                      close();
+                      setSettings({
+                        captureSectionId:
+                          isCaptureTarget || section.id === INBOX_ID ? null : section.id,
+                      });
+                    }}
+                  >
+                    <ArrowDownToLine className="size-3.5" />{" "}
+                    {isCaptureTarget ? t("捕获改回存入收件箱") : t("设为捕获目标")}
+                  </SimpleMenuItem>
+                )}
                 <SimpleMenuSeparator />
                 <SimpleMenuItem
                   onClick={() => {

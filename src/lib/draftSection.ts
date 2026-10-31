@@ -26,3 +26,21 @@ export function resolveDraftSectionId(
     ? lastSectionId!
     : (targets[0]?.id ?? INBOX_ID);
 }
+
+/** 双击捕获的落点：设置的分组仍是可写目标则用它，否则（未设/已删/专用域）回收件箱。 */
+export function resolveCaptureSectionId(
+  sections: Section[],
+  captureSectionId: string | null
+): string {
+  return draftTargetSections(sections).some((section) => section.id === captureSectionId)
+    ? captureSectionId!
+    : INBOX_ID;
+}
+
+/** 设置窗请求笔记分组列表（设置窗不持有笔记数据），主窗口回 NOTE_SECTIONS。 */
+export const NOTE_SECTIONS_REQUEST = "toskr://note-sections-request";
+export const NOTE_SECTIONS = "toskr://note-sections";
+export interface NoteSectionOption {
+  id: string;
+  name: string;
+}

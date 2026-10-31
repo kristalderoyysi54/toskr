@@ -90,7 +90,15 @@ import {
   currentDataGeneration,
   matchesDataGeneration,
 } from "@/lib/dataGeneration";
-import { resolveDraftSectionId } from "@/lib/draftSection";
+import {
+  draftTargetSections,
+  NOTE_SECTIONS,
+  NOTE_SECTIONS_REQUEST,
+  resolveCaptureSectionId,
+  resolveDraftSectionId,
+  type NoteSectionOption,
+} from "@/lib/draftSection";
+import { sectionName } from "@/lib/i18n/builtinNames";
 import { normalizeMaterialStyle } from "@/lib/materialStyle";
 import { appearanceFromSettings, publishAppearance } from "@/lib/colorScheme";
 import { publishLocale, resolveLocale, t, tNode, useLocale, useT, type MessageKey } from "@/lib/i18n";
@@ -1229,6 +1237,17 @@ export default function App() {
     []
   );
 
+  // 设置窗选「捕获存入」要笔记分组列表（只给可写目标，排除剪贴板/秘文）
+  useEffect(() => {
+    const unlisten = listen(NOTE_SECTIONS_REQUEST, () => {
+      const sections: NoteSectionOption[] = draftTargetSections(
+        useNotesStore.getState().sections
+      ).map((section) => ({ id: section.id, name: sectionName(section) }));
+      void emitTo("settings", NOTE_SECTIONS, sections).catch(() => {});
+    });
+    return () => void unlisten.then((stop) => stop());
+  }, []);
+
   // 触发事件：开关面板 / 捕获入库（去重裁决后回调 HUD）
   useEffect(() => {
     const unlisten = listen<TriggerPayload>(TRIGGER_EVENT, (event) => {
@@ -1282,7 +1301,13 @@ export default function App() {
         contentBlocks?: NoteContentBlock[],
         captureWarning: string | null = payload.clipboardWarning
       ) => {
+        const { sections, settings } = useNotesStore.getState();
+        const captureSectionId = resolveCaptureSectionId(
+          sections,
+          settings.captureSectionId
+        );
         const { result, id } = useNotesStore.getState().addNote(captureText, {
+          sectionId: captureSectionId,
           sourceApp: payload.appName ?? undefined,
           sourceBundle: payload.bundleId ?? undefined,
           // contentBlocks 一旦存在就是唯一真源；旧图片字段只服务单图兼容路径。
@@ -1305,6 +1330,11 @@ export default function App() {
           contentBlocks?.filter((block) => block.type === "image").length ?? 0;
         const capturePreview =
           captureText || (imageCount > 1 ? t("图片 ×{n}", { n: imageCount }) : t("图片"));
+        // 非默认分组时在气泡里报落点，免得用户以为进了收件箱
+        const captureSection =
+          result === "added" && captureSectionId !== INBOX_ID
+            ? sections.find((section) => section.id === captureSectionId)
+            : undefined;
         const showCaptureResult = async () => {
           let associationSuggested = false;
           let autoLinked = false;
@@ -1332,7 +1362,9 @@ export default function App() {
           }
           void api.showCaptureHud(
             result === "duplicate" ? "duplicate" : "added",
-            previewOf(capturePreview),
+            captureSection
+              ? `${previewOf(capturePreview)}\n${t("已存入「{name}」", { name: sectionName(captureSection) })}`
+              : previewOf(capturePreview),
             captureWarning,
             associationSuggested,
             aliasRestoredCount,

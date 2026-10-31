@@ -162,6 +162,7 @@ import {
   type PlatinumHighlight,
   type PlatinumScrollbar,
   TASK_INBOX_ID,
+  INBOX_ID,
 } from "@/store/notesStore";
 import {
   APPLE_REMINDERS_SECTIONS,
@@ -203,6 +204,11 @@ import {
   type DataActivity,
 } from "@/store/dataOperationStore";
 import { promptGroupName } from "@/lib/i18n/builtinNames";
+import {
+  NOTE_SECTIONS,
+  NOTE_SECTIONS_REQUEST,
+  type NoteSectionOption,
+} from "@/lib/draftSection";
 
 type SectionId = SettingsSectionId;
 
@@ -866,6 +872,45 @@ export default function SettingsView() {
 /* ============ 通用控件 ============ */
 
 type SP = { settings: Settings; patch: (p: Partial<Settings>) => void };
+
+/** 双击捕获存入哪个笔记分组；分组列表在主窗口，打开 / 回到设置窗时请求一份。 */
+function CaptureSectionRow({ settings, patch }: SP) {
+  const t = useT();
+  const [sections, setSections] = useState<NoteSectionOption[]>([]);
+  useEffect(() => {
+    const unlisten = listen<NoteSectionOption[]>(NOTE_SECTIONS, (event) =>
+      setSections(event.payload)
+    );
+    const request = () => void emitTo("main", NOTE_SECTIONS_REQUEST, {}).catch(() => {});
+    void unlisten.then(request);
+    window.addEventListener("focus", request);
+    return () => {
+      window.removeEventListener("focus", request);
+      void unlisten.then((stop) => stop());
+    };
+  }, []);
+  const options = sections.length ? sections : [{ id: INBOX_ID, name: t("收件箱") }];
+  return (
+    <Row
+      label={t("捕获存入")}
+      hint={t("双击捕获的内容进入此分组；也可在笔记页分组菜单里「设为捕获目标」")}
+      right={
+        <SimpleSelect
+          ariaLabel={t("捕获存入")}
+          className="w-36"
+          align="end"
+          value={
+            options.some((s) => s.id === settings.captureSectionId)
+              ? settings.captureSectionId!
+              : INBOX_ID
+          }
+          options={options.map((s) => ({ value: s.id, label: s.name || t("未命名分组") }))}
+          onChange={(id) => patch({ captureSectionId: id === INBOX_ID ? null : id })}
+        />
+      }
+    />
+  );
+}
 
 /** 滑杆 + 数值 label；onCommit 仅在松手/键盘调整落定后触发。 */
 function PercentSlider({
@@ -2653,6 +2698,7 @@ function HotkeySection({
             />
           }
         />
+        <CaptureSectionRow settings={settings} patch={patch} />
         <Row
           label={t("面板显示 / 隐藏")}
           hint={t("只开关面板，不捕获内容；钉住时也能收起")}

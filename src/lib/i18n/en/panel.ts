@@ -525,4 +525,8 @@ export const panel = {
   "编辑任务…": "Edit Task…",
   "设置提醒时间…": "Set Reminder…",
   "修改提醒时间…": "Change Reminder…",
+  "捕获目标": "Capture target",
+  "双击触发键捕获的内容存入此组": "Double-tap captures go into this group",
+  "捕获改回存入收件箱": "Send Captures Back to Inbox",
+  "设为捕获目标": "Set as Capture Target",
 } satisfies Record<string, EnValue>;

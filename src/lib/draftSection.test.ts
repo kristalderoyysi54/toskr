@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { draftTargetSections, resolveDraftSectionId } from "./draftSection";
-import { CLIPBOARD_ID, INBOX_ID, type Section } from "@/store/notesStore";
+import {
+  draftTargetSections,
+  resolveCaptureSectionId,
+  resolveDraftSectionId,
+} from "./draftSection";
+import { CLIPBOARD_ID, INBOX_ID, SECRET_ID, type Section } from "@/store/notesStore";
 
 const sections: Section[] = [
   { id: CLIPBOARD_ID, name: "剪贴板" },
@@ -24,5 +28,21 @@ describe("新增卡片目标分组", () => {
       INBOX_ID,
     ]);
     expect(resolveDraftSectionId(sections, "deleted")).toBe("project");
+  });
+});
+
+describe("双击捕获目标分组", () => {
+  it("未设置时固定收件箱，不跟随排序第一组", () => {
+    expect(resolveCaptureSectionId(sections, null)).toBe(INBOX_ID);
+  });
+
+  it("设置的分组有效时存入该组", () => {
+    expect(resolveCaptureSectionId(sections, "project")).toBe("project");
+  });
+
+  it("分组已删除或指向剪贴板/秘文专用域时回收件箱", () => {
+    expect(resolveCaptureSectionId(sections, "deleted")).toBe(INBOX_ID);
+    expect(resolveCaptureSectionId(sections, CLIPBOARD_ID)).toBe(INBOX_ID);
+    expect(resolveCaptureSectionId([...sections, { id: SECRET_ID, name: "秘文" }], SECRET_ID)).toBe(INBOX_ID);
   });
 });

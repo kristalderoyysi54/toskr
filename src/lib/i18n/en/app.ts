@@ -309,4 +309,5 @@ export const app = {
   "导入旧 JSON": "Import legacy JSON",
   "恢复迁移保险档": "Restore migration snapshot",
   "重新加载冲突版本": "Reload conflicting version",
+  "已存入「{name}」": "Saved to “{name}”",
 } satisfies Record<string, EnValue>;

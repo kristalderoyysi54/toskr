@@ -514,6 +514,8 @@ export interface Settings {
   pageOrder: PageId[];
   /** 底部新增框上次选择的笔记分组；null = 按当前排序取第一组。 */
   lastDraftSectionId: string | null;
+  /** 双击捕获存入的笔记分组；null 或分组已失效 = 收件箱。 */
+  captureSectionId: string | null;
   /** 面板置顶（屏幕最上层）；关闭后可被其他窗口盖住。 */
   panelTopmost: boolean;
   /** 到期快捷档（可增删改）：相对分钟 / 今天 / 明天 / 下个周几。 */
@@ -854,6 +856,7 @@ export const defaultSettings = (): Settings => ({
   rightSidebar: false,
   pageOrder: [...DEFAULT_PAGE_ORDER],
   lastDraftSectionId: null,
+  captureSectionId: null,
   sidebarEdge: "right",
   panelTopmost: true,
   duePresets: DEFAULT_DUE_PRESETS.map((p) => ({ ...p })),
@@ -1345,6 +1348,7 @@ function validateSettingsShape(value: unknown, version: number): void {
     panelFreeY: "number",
     panelHeight: "number",
     lastDraftSectionId: "string",
+    captureSectionId: "string",
     secretDefaultKeyId: "string",
     autoBackupDir: "string",
     autoBackupLastAtMs: "number",

@@ -675,4 +675,6 @@ export const settings = {
   "已拒绝，需在系统设置里允许 Toskr": "Denied; allow Toskr in System Settings",
   "在「提醒」页显示日历日程，把任务同步到 iPhone 的提醒事项": "Show calendar events on the Reminders page and sync tasks to Reminders on iPhone",
   "显示 {shown} / {total} 个日历": "showing {shown} of {total} calendars",
+  "捕获存入": "Save Captures To",
+  "双击捕获的内容进入此分组；也可在笔记页分组菜单里「设为捕获目标」": "Double-tap captures go into this group; you can also use “Set as Capture Target” in a group’s menu on the Notes page",
 } satisfies Record<string, EnValue>;
