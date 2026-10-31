@@ -166,6 +166,8 @@ export default function ImagePreviewView() {
   const imageEditTimeoutRef = useRef<number | null>(null);
   const imageEditTriggerRef = useRef<HTMLButtonElement>(null);
   const restoreImageEditFocusRef = useRef(false);
+  /** 本次以打码直接打开：取消打码即关窗。 */
+  const editOnlyRef = useRef(false);
   const supersededImageEditRequestsRef = useRef(new Set<string>());
   const noteImageEditSequencesRef = useRef(new Map<string, number>());
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -266,6 +268,7 @@ export default function ImagePreviewView() {
         : e.payload.editContext ?? null;
       setEditContext(nextEditContext);
       setImageEditing(Boolean(nextEditContext?.startEditing));
+      editOnlyRef.current = Boolean(nextEditContext?.startEditing);
       setRedactionHistory(freshRedactionHistory());
       setImageEditBusy(false);
       clearImageEditWatchdog();
@@ -397,6 +400,12 @@ export default function ImagePreviewView() {
         restoreImageEditFocusRef.current = true;
         setImageEditing(false);
         setRedactionHistory(freshRedactionHistory());
+        // 直接以打码打开的窗口：保存完成即关窗（结果已写回卡片）
+        if (editOnlyRef.current) {
+          editOnlyRef.current = false;
+          setWinPinned(false);
+          void getCurrentWebviewWindow().hide();
+        }
       }
     );
     return () => {
@@ -832,6 +841,12 @@ export default function ImagePreviewView() {
     setImageEditing(false);
     setRedactionHistory(freshRedactionHistory());
     resetRedactionUi();
+    // 直接以打码打开的窗口（截图「在编辑器中打开」、预检「手动打码」）：取消即关窗，不退回看图
+    if (editOnlyRef.current) {
+      editOnlyRef.current = false;
+      setWinPinned(false);
+      void getCurrentWebviewWindow().hide();
+    }
   };
 
   const undoImageRegion = () => {

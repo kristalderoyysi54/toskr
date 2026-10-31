@@ -10,6 +10,7 @@
     "core:event:allow-unlisten",
     "allow-screenshot-session",
     "allow-screenshot-frame",
+    "allow-screenshot-cursor",
     "allow-screenshot-commit",
     "allow-screenshot-cancel",
     "allow-screenshot-trace",

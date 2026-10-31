@@ -295,6 +295,7 @@ pub fn run() {
             commands::screen_capture_access,
             commands::screenshot_session,
             commands::screenshot_frame,
+            commands::screenshot_cursor,
             commands::screenshot_commit,
             commands::screenshot_cancel,
             commands::screenshot_trace,

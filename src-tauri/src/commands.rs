@@ -615,6 +615,12 @@ pub fn screenshot_session(window: tauri::WebviewWindow) -> Option<crate::screens
     crate::screenshot::session_info(window.label())
 }
 
+/// 光标在本屏的位置（未激活时遮罩收不到 mousemove，前端轮询）。
+#[tauri::command]
+pub fn screenshot_cursor(window: tauri::WebviewWindow) -> Option<(f64, f64)> {
+    crate::screenshot::cursor_local(window.label())
+}
+
 /// 本屏冻结帧图片字节（二进制 IPC，不走 JSON）。
 #[tauri::command]
 pub fn screenshot_frame(

@@ -597,6 +597,15 @@ pub fn session_info(label: &str) -> Option<SessionInfo> {
     })
 }
 
+/// 光标在本屏的位置（本屏 pt）；不在本屏或无会话为 None。
+/// 遮罩刚出现时应用未必已激活，WKWebView 收不到 mousemove，前端靠它轮询跟随。
+pub fn cursor_local(label: &str) -> Option<(f64, f64)> {
+    let index = shot_index(label)?;
+    let bounds = SESSION.lock().unwrap().as_ref()?.frames.get(index)?.as_ref()?.bounds;
+    let (x, y) = crate::window::cursor_point_pt()?;
+    bounds.contains(x, y).then(|| (x - bounds.x, y - bounds.y))
+}
+
 /// 本屏冻结帧原始字节（PNG 或 BMP）。
 pub fn frame_bytes(label: &str, session_id: u64) -> Option<Vec<u8>> {
     let index = shot_index(label)?;

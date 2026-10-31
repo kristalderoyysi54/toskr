@@ -28,6 +28,7 @@ const COMMANDS: &[&str] = &[
     "screen_capture_access",
     "screenshot_session",
     "screenshot_frame",
+    "screenshot_cursor",
     "screenshot_commit",
     "screenshot_cancel",
     "screenshot_trace",

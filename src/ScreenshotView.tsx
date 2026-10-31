@@ -323,6 +323,39 @@ export default function ScreenshotView() {
     return () => window.removeEventListener("keydown", onKey, { capture: true });
   }, [info, sel, W, H, cancel, confirm, copyColor, editing, tool, history.shapes.length]);
 
+  // 遮罩刚出现时应用可能还没激活，WKWebView 收不到 mousemove：轮询系统光标跟随；
+  // 拖拽中以指针事件为准
+  useEffect(() => {
+    if (!info) return;
+    let raf = 0;
+    let pending = false;
+    let alive = true;
+    const tick = () => {
+      if (!alive) return;
+      if (!pending && !drag.current) {
+        pending = true;
+        void api
+          .screenshotCursor()
+          .then((p) => {
+            if (!alive || drag.current) return;
+            setCursor((prev) =>
+              p ? (prev && prev.x === p[0] && prev.y === p[1] ? prev : { x: p[0], y: p[1] }) : null
+            );
+          })
+          .catch(() => {})
+          .finally(() => {
+            pending = false;
+          });
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      alive = false;
+      cancelAnimationFrame(raf);
+    };
+  }, [info]);
+
   const showLoupe = !!(img && cursor && (!sel || dragging));
 
   // 放大镜：从冻结帧取样放大，同时记下光标处色值
