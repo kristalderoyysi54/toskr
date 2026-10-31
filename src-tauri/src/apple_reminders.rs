@@ -252,7 +252,10 @@ pub fn plan(desired: &[DesiredTask], remote: &[RemoteItem]) -> SyncPlan {
         };
         if by_task.contains_key(task_id) {
             // 同一任务多条（并发建重了）：保留第一条，其余删掉
-            out.delete.push(item.item_id.clone());
+            // 空下发同样不删重复项，避免数据未就绪时误删对端
+            if !desired.is_empty() {
+                out.delete.push(item.item_id.clone());
+            }
         } else {
             by_task.insert(task_id, item);
         }
@@ -835,6 +838,23 @@ mod tests {
     fn empty_desired_never_deletes() {
         let a = want("a");
         assert_eq!(plan(&[], &[remote("r1", "a", &a)]), SyncPlan::default());
+    }
+
+    #[test]
+    fn empty_desired_keeps_duplicate_reminders() {
+        let a = want("a");
+        let p = plan(&[], &[remote("r1", "a", &a), remote("r2", "a", &a)]);
+        assert_eq!(p, SyncPlan::default());
+    }
+
+    #[test]
+    fn empty_desired_keeps_duplicates_and_imports_user_items() {
+        let a = want("a");
+        let user = untagged("u", "买牛奶");
+        let expected = plan(&[], &[user.clone()]);
+        assert_eq!(expected.import.len(), 1);
+        let p = plan(&[], &[remote("r1", "a", &a), remote("r2", "a", &a), user]);
+        assert_eq!(p, expected);
     }
 
     #[test]
