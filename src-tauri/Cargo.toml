@@ -127,6 +127,9 @@ objc2-app-kit = { version = "0.3", features = [
   "NSAnimation",
   "NSAnimationContext",
   "NSScreen",
+  "NSSavePanel",
+  "NSPanel",
+  "NSApplication",
 ] }
 
 [dev-dependencies]

@@ -329,7 +329,7 @@ pub fn open_preview(app: &AppHandle, display: RectPt, region: RectPt) {
     let panel = panel_rect(display, region);
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
-        let window = |label: &str, r: RectPt, shadow: bool| {
+        let window = |label: &str, r: RectPt| {
             tauri::WebviewWindowBuilder::new(
                 &handle,
                 label,
@@ -343,7 +343,7 @@ pub fn open_preview(app: &AppHandle, display: RectPt, region: RectPt) {
             .always_on_top(true)
             .skip_taskbar(true)
             .resizable(false)
-            .shadow(shadow)
+            .shadow(false)
             .focused(false)
             .accept_first_mouse(true)
             .visible_on_all_workspaces(true)
@@ -356,11 +356,12 @@ pub fn open_preview(app: &AppHandle, display: RectPt, region: RectPt) {
             h: region.h + 2.0 * FRAME_PAD,
         };
         // 边框窗鼠标穿透：滚轮要落到选区下面的页面
-        if let Ok(w) = window(FRAME_LABEL, frame, false) {
+        if let Ok(w) = window(FRAME_LABEL, frame) {
             let _ = w.set_ignore_cursor_events(true);
             crate::window::ensure_fullscreen_auxiliary(&w);
         }
-        if let Ok(w) = window(PREVIEW_LABEL, panel, true) {
+        // 面板窗透明，图与工具条各自带阴影，窗口本身不加阴影（否则空白处也有框）
+        if let Ok(w) = window(PREVIEW_LABEL, panel) {
             crate::window::ensure_fullscreen_auxiliary(&w);
         }
     });

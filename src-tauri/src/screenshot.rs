@@ -925,6 +925,47 @@ fn default_file_name((y, mo, d, h, mi, s): (i32, u32, u32, u32, u32, u32)) -> St
     )
 }
 
+/// 系统保存面板（主线程模态，阻塞到用户选完）。不用 dialog 插件：Toskr 是菜单栏应用，
+/// 遮罩隐藏 / 标注窗关闭后本应用随即失去前台，NSSavePanel 默认失去前台即隐藏，
+/// 会一闪而过、调用方永远等不到结果。这里关掉该行为并提高层级。
+fn pick_save_path(app: &AppHandle, file_name: String) -> Option<std::path::PathBuf> {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSApplication, NSModalPanelWindowLevel, NSModalResponseOK, NSSavePanel};
+    use objc2_foundation::{NSArray, NSString, NSURL};
+    // 遮罩 60ms 后才在主线程隐藏；面板进入模态后排队的隐藏可能要等模态结束，先等遮罩藏好
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let _ = app.run_on_main_thread(move || {
+        let Some(mtm) = MainThreadMarker::new() else {
+            let _ = tx.send(None);
+            return;
+        };
+        let panel = NSSavePanel::savePanel(mtm);
+        panel.setHidesOnDeactivate(false);
+        panel.setLevel(NSModalPanelWindowLevel);
+        panel.setCanCreateDirectories(true);
+        panel.setNameFieldStringValue(&NSString::from_str(&file_name));
+        #[allow(deprecated)]
+        panel.setAllowedFileTypes(Some(&NSArray::from_retained_slice(&[NSString::from_str(
+            "png",
+        )])));
+        if let Some(home) = std::env::var_os("HOME") {
+            let desktop = std::path::Path::new(&home).join("Desktop");
+            let url = NSURL::fileURLWithPath(&NSString::from_str(&desktop.to_string_lossy()));
+            panel.setDirectoryURL(Some(&url));
+        }
+        #[allow(deprecated)]
+        NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
+        let path = (panel.runModal() == NSModalResponseOK)
+            .then(|| panel.URL())
+            .flatten()
+            .and_then(|url| url.path())
+            .map(|p| std::path::PathBuf::from(p.to_string()));
+        let _ = tx.send(path);
+    });
+    rx.recv().ok().flatten()
+}
+
 pub(crate) fn save_as(
     app: &AppHandle,
     width: usize,
@@ -932,17 +973,7 @@ pub(crate) fn save_as(
     rgba: Vec<u8>,
     front: Option<&FrontApp>,
 ) {
-    use tauri_plugin_dialog::DialogExt;
-    crate::focus::activate_pid(std::process::id() as i32);
-    let mut dialog = app
-        .dialog()
-        .file()
-        .set_file_name(default_file_name(local_now()))
-        .add_filter("PNG", &["png"]);
-    if let Some(home) = std::env::var_os("HOME") {
-        dialog = dialog.set_directory(std::path::Path::new(&home).join("Desktop"));
-    }
-    let picked = dialog.blocking_save_file().and_then(|p| p.into_path().ok());
+    let picked = pick_save_path(app, default_file_name(local_now()));
     if let Some(pid) = front.map(|f| f.pid) {
         crate::focus::activate_pid(pid);
     }

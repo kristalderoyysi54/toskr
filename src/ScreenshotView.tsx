@@ -1015,6 +1015,14 @@ export default function ScreenshotView() {
 
       {sel && !dragging && !sectionMenu && <HoverTip point={cursor} />}
 
+      {/* 光标十字延长线：贯穿全屏，便于对齐边缘（未选区与拖出选区时显示） */}
+      {showLoupe && cursor && (
+        <>
+          <div className="pointer-events-none absolute inset-x-0 h-px bg-primary/70" style={{ top: Math.round(cursor.y) }} />
+          <div className="pointer-events-none absolute inset-y-0 w-px bg-primary/70" style={{ left: Math.round(cursor.x) }} />
+        </>
+      )}
+
       {showLoupe && loupePos && cursor && (
         <div
           className="pointer-events-none absolute overflow-hidden rounded-md border border-white/60 bg-black/80 text-micro text-white shadow-lg"

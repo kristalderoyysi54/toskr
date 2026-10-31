@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { Check, X } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { floatingSurface } from "@/components/ui/floating-surface";
+import { IconButton } from "@/components/ui/icon-button";
 import { useT } from "@/lib/i18n";
 import { api, LONG_PROGRESS_EVENT } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 
-/** 长截屏预览面板（选区旁）：缩略长图随拼接变长并停在最新一段，下方提示与「取消 / 完成」。 */
+/** 长截屏实时预览（选区旁，参照 iShot）：整张长图等比缩放完整显示，下方工具条显示尺寸、提示与 ✕ / ✓。 */
 export default function LongPreviewView() {
   const t = useT();
   const [src, setSrc] = useState<string | null>(null);
@@ -51,33 +52,32 @@ export default function LongPreviewView() {
   };
 
   return (
-    <div className={cn(floatingSurface(), "fixed inset-0 flex flex-col overflow-hidden rounded-lg text-body")}>
-      <div className="flex items-baseline justify-between gap-2 px-3 pt-2.5 pb-1.5">
-        <span className="font-medium">{t("长截屏")}</span>
-        <span className="font-mono text-label text-muted-foreground tabular-nums">
-          {size.width > 0 && `${size.width} × ${size.height}`}
-        </span>
+    <div className="fixed inset-0 flex flex-col gap-2 text-body">
+      {/* 整张长图等比缩放、完整显示，越拼越长就越细 */}
+      <div className="flex min-h-0 flex-1 items-start justify-center">
+        {src && (
+          <img
+            src={src}
+            alt=""
+            className="block max-h-full max-w-full rounded-sm border border-white/70 object-contain shadow-lg"
+          />
+        )}
       </div>
-      <div
-        className="mx-3 min-h-0 flex-1 overflow-hidden rounded-md border border-border bg-muted/40 [&::-webkit-scrollbar]:hidden"
-      >
-        {/* 底部对齐：始终看到最新拼上的一段 */}
-        <div className="flex min-h-full flex-col justify-end">
-          {src && <img src={src} alt="" className="block w-full" />}
+      <div className={cn(floatingSurface(), "flex flex-col gap-1 rounded-md px-2 py-1.5")}>
+        <div className="flex items-center gap-1">
+          <span className="flex-1 font-mono text-label text-muted-foreground tabular-nums">
+            {size.width > 0 && `${size.width} × ${size.height}`}
+          </span>
+          <IconButton label={t("取消")} disabled={done} onClick={() => stop(true)}>
+            <X />
+          </IconButton>
+          <IconButton label={t("完成")} disabled={done} onClick={() => stop(false)}>
+            <Check className="text-primary" />
+          </IconButton>
         </div>
-      </div>
-      <div className="px-3 py-2">
-        <p className={cn("min-h-8 text-label leading-snug", stalled ? "text-warning" : "text-muted-foreground")}>
+        <p className={cn("text-micro leading-snug", stalled ? "text-warning" : "text-muted-foreground")}>
           {stalled ? t("滚太快接不上，往回滚一点") : t("滚动鼠标滚轮或拖动滚动条截取长图")}
         </p>
-        <div className="mt-2 flex gap-2">
-          <Button size="sm" className="flex-1" disabled={done} onClick={() => stop(true)}>
-            {t("取消")}
-          </Button>
-          <Button size="sm" className="flex-1" disabled={done} onClick={() => stop(false)}>
-            {t("完成")}
-          </Button>
-        </div>
       </div>
     </div>
   );
