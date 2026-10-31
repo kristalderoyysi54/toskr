@@ -28,10 +28,10 @@ import { cn } from "@/lib/utils";
 const MIN_CROP = 16;
 
 /** 长图标注窗：可滚动查看拼好的长截屏，用与截图遮罩相同的工具标注，可裁剪，完成后存入「剪贴」/ 分组 / 另存为。
- * 从钉图右键「编辑标注」打开时，✓ 改为写回钉图。 */
+ * 从钉图或图片卡打开时，✓ 改为写回来源（更新钉图 / 替换卡片里的原图）。 */
 export default function LongShotView() {
   const t = useT();
-  const [info, setInfo] = useState<{ pxW: number; pxH: number; scale: number; pin: boolean } | null>(null);
+  const [info, setInfo] = useState<{ pxW: number; pxH: number; scale: number; origin: "capture" | "pin" | "note" } | null>(null);
   const [img, setImg] = useState<HTMLImageElement | null>(null);
   const [tool, setTool] = useState<Tool | null>(null);
   const style = useShotStyle();
@@ -93,7 +93,7 @@ export default function LongShotView() {
   }, [editingAt]);
 
   const finish = useCallback(
-    (action: "save" | "section" | "saveas" | "pin", sectionId?: string) => {
+    (action: "save" | "section" | "saveas" | "replace", sectionId?: string) => {
       if (!info || !img || busy) return;
       const shapes = editing?.text.trim()
         ? [...history.shapes, { kind: "text" as const, x: editing.x, y: editing.y, text: editing.text, color: ink, size }]
@@ -116,7 +116,8 @@ export default function LongShotView() {
     [info, img, busy, editing, history.shapes, ink, size, scale, crop]
   );
 
-  const primary = info?.pin ? "pin" : "save";
+  // 钉图 / 图片卡：✓ 写回来源；新截的长图：✓ 存入「剪贴」
+  const primary = info && info.origin !== "capture" ? "replace" : "save";
 
   // 长按 ✓（或右键）选笔记分组
   const [sections, setSections] = useState<NoteSectionOption[]>([]);
@@ -249,12 +250,18 @@ export default function LongShotView() {
           >
             <Download />
           </TipButton>
-          <TipButton label={info.pin ? t("放弃标注") : t("放弃长截屏")} onClick={() => void api.longClose()}>
+          <TipButton label={info.origin === "capture" ? t("放弃长截屏") : t("放弃标注")} onClick={() => void api.longClose()}>
             <X />
           </TipButton>
           <span className="relative inline-flex">
             <TipButton
-              label={info.pin ? t("完成：更新钉图（Enter）；长按选择存入的分组") : t("完成：复制并存入「剪贴」（Enter）；长按选择存入的分组")}
+              label={
+                info.origin === "pin"
+                  ? t("完成：更新钉图（Enter）；长按选择存入的分组")
+                  : info.origin === "note"
+                    ? t("完成：替换卡片里的原图（Enter，可撤销）；长按选择存入的分组")
+                    : t("完成：复制并存入「剪贴」（Enter）；长按选择存入的分组")
+              }
               disabled={busy}
               onPointerDown={(e) => longPress.start(e.clientX, e.clientY)}
               onPointerMove={(e) => longPress.move(e.clientX, e.clientY)}

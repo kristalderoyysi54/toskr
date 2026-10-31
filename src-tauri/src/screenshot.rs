@@ -36,6 +36,49 @@ pub const END_EVENT: &str = "toskr://screenshot-end";
 pub const AFTER_EVENT: &str = "toskr://screenshot-after";
 /// 遮罩文字面板请求翻译：转给主窗口用已配置的 AI 处理，结果由主窗口直接回发给遮罩。
 pub const TRANSLATE_EVENT: &str = "toskr://screenshot-translate";
+pub const TRANSLATE_RESULT_EVENT: &str = "toskr://screenshot-translate-result";
+
+/// 本机中英互译（系统翻译框架，经包内 Swift 辅助程序）：比 AI 快一个量级。
+/// 辅助程序缺失、macOS 低于 15、语言包未装或超时都返回 Err，由调用方退回 AI。
+pub fn translate_local(lines: &[String]) -> Result<Vec<String>, String> {
+    use std::io::Write;
+    let helper = std::env::current_exe()
+        .map_err(|e| e.to_string())?
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|contents| contents.join("Helpers/toskr-translate-helper"))
+        .filter(|p| p.is_file())
+        .ok_or("translate helper missing")?;
+    let target = if crate::i18n::is_en() {
+        "en"
+    } else {
+        "zh-Hans"
+    };
+    let input = serde_json::json!({ "target": target, "lines": lines }).to_string();
+    let mut child = std::process::Command::new(helper)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    child
+        .stdin
+        .take()
+        .ok_or("no stdin")?
+        .write_all(input.as_bytes())
+        .map_err(|e| e.to_string())?;
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    #[derive(serde::Deserialize)]
+    struct Reply {
+        lines: Option<Vec<String>>,
+        error: Option<String>,
+    }
+    let reply: Reply = serde_json::from_slice(&out.stdout).map_err(|e| e.to_string())?;
+    match reply.lines {
+        Some(l) if l.len() == lines.len() => Ok(l),
+        _ => Err(reply.error.unwrap_or_else(|| "bad reply".into())),
+    }
+}
 const PIN_PREFIX: &str = "pin-";
 
 /// 是否已获屏幕录制授权；`prompt` 时首次会弹系统授权框（授权后需重启应用才生效）。
@@ -692,7 +735,6 @@ pub fn long(
     app: &AppHandle,
     label: &str,
     (x, y, w, h): (f64, f64, f64, f64),
-    manual: bool,
 ) -> Result<(), String> {
     let bounds = {
         let guard = SESSION.lock().unwrap();
@@ -711,65 +753,25 @@ pub fn long(
         std::thread::sleep(std::time::Duration::from_millis(300));
         let sck = crate::screenshot_sck::supported() && display_id.is_some();
         let global = (bounds.x + x, bounds.y + y, w, h);
-        if sck {
-            // SCK 截图排除本应用窗口，提示气泡与预览条不会入画
-            crate::screenshot_long::open_preview(
-                &app,
-                bounds,
-                RectPt {
-                    x: global.0,
-                    y: global.1,
-                    w,
-                    h,
-                },
-            );
-            crate::window::show_hud(
-                &app,
-                "info",
-                if manual {
-                    pick(
-                        "手动长截屏：往下滚动，滚完点预览条上的「完成」",
-                        "Manual scrolling capture: scroll down, then click Done on the preview strip",
-                    )
-                } else {
-                    pick(
-                        "长截屏中…动一下鼠标即可停止",
-                        "Scrolling capture… move the mouse to stop",
-                    )
-                }
-                .into(),
-                false,
-                false,
-                None,
-            );
-        }
+        // 边框与预览面板都在选区外，不会被截进去（SCK 还会整体排除本应用窗口）
+        crate::screenshot_long::open_preview(
+            &app,
+            bounds,
+            RectPt {
+                x: global.0,
+                y: global.1,
+                w,
+                h,
+            },
+        );
         let started = std::time::Instant::now();
         let result = crate::screenshot_long::run(
             global,
-            manual,
             || match (sck, display_id) {
                 (true, Some(id)) => crate::screenshot_sck::capture_region(id, (x, y, w, h)),
                 _ => capture_region_fallback(global),
             },
-            |event| {
-                if !manual && matches!(event, crate::screenshot_long::Event::Manual) {
-                    crate::window::show_hud(
-                        &app,
-                        "info",
-                        pick(
-                            "页面没有跟着自动滚动：请手动往下滚，滚完点预览条上的「完成」（停 15 秒自动结束）",
-                            "The page didn't scroll by itself: scroll down manually, then click Done on the preview strip (stops after 15 s idle)",
-                        )
-                        .into(),
-                        false,
-                        false,
-                        None,
-                    );
-                }
-                if sck {
-                    crate::screenshot_long::preview_event(&app, event);
-                }
-            },
+            |event| crate::screenshot_long::preview_event(&app, event),
         );
         crate::screenshot_long::close_preview(&app);
         match result {
@@ -781,6 +783,9 @@ pub fn long(
                         started.elapsed().as_millis()
                     ),
                 );
+                if stop == crate::screenshot_long::Stop::Cancelled {
+                    return;
+                }
                 // 拼好后进可滚动的标注窗，在那里完成 / 存入分组 / 另存为
                 crate::screenshot_long::open_editor(
                     &app,
@@ -790,7 +795,7 @@ pub fn long(
                     pw as f64 / w,
                     session.front,
                     bounds,
-                    None,
+                    crate::screenshot_long::Origin::Capture,
                 );
             }
             Err(e) => {
@@ -1400,16 +1405,37 @@ fn window_display(window: &tauri::WebviewWindow) -> RectPt {
         })
 }
 
-/// 图片卡「标注 / 裁剪」：把附件图交给标注窗，完成后作为新图存入「剪贴」（原卡不动）。
+/// 图片卡「标注 / 裁剪」：把附件图交给标注窗。带图片卡目标时 ✓ 替换卡里的原图（可撤销），
+/// 否则（草稿、发送副本）作为新图存入「剪贴」。
 pub fn annotate_image(
     app: &AppHandle,
     window: &tauri::WebviewWindow,
     file: &str,
+    note: Option<(String, u64)>,
 ) -> Result<(), String> {
     let (w, h, rgba) = crate::storage::read_image_rgba(app, file)
         .ok_or_else(|| pick("图片读取失败", "Failed to read the image").to_string())?;
     let scale = window.scale_factor().unwrap_or(2.0).max(1.0);
-    crate::screenshot_long::open_editor(app, rgba, w, h, scale, None, window_display(window), None);
+    let origin = match note {
+        Some((note_id, data_generation)) => {
+            crate::screenshot_long::Origin::Note(crate::screenshot_long::NoteImage {
+                note_id,
+                data_generation,
+                file: file.to_string(),
+            })
+        }
+        None => crate::screenshot_long::Origin::Capture,
+    };
+    crate::screenshot_long::open_editor(
+        app,
+        rgba,
+        w,
+        h,
+        scale,
+        None,
+        window_display(window),
+        origin,
+    );
     Ok(())
 }
 
@@ -1434,7 +1460,7 @@ fn pin_edit(app: &AppHandle, window: &tauri::WebviewWindow) {
         w as f64 / pt_w,
         None,
         display,
-        Some(label),
+        crate::screenshot_long::Origin::Pin(label),
     );
 }
 

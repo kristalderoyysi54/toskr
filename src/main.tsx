@@ -21,6 +21,7 @@ const ScreenshotView = React.lazy(() => import("./ScreenshotView"));
 const PinView = React.lazy(() => import("./PinView"));
 const LongShotView = React.lazy(() => import("./LongShotView"));
 const LongPreviewView = React.lazy(() => import("./LongPreviewView"));
+const LongFrameView = React.lazy(() => import("./LongFrameView"));
 
 // 所有窗口共用入口：链接点击一律不许 WebView 就地导航（详情窗曾被外部网页替换）
 installExternalLinkInterceptor();
@@ -115,6 +116,8 @@ const view =
     <LongShotView />
   ) : label === "longpreview" ? (
     <LongPreviewView />
+  ) : label === "longframe" ? (
+    <LongFrameView />
   ) : (
     <App />
   );

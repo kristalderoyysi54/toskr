@@ -397,19 +397,13 @@ export default function ScreenshotView() {
   const [sections, setSections] = useState<NoteSectionOption[]>([]);
   const [sectionMenu, setSectionMenu] = useState(false);
   const longPress = useMemo(() => createLongPress(() => setSectionMenu(true)), []);
-  // 长按 / 右键长截屏按钮选自动或手动滚动
-  const [longMenu, setLongMenu] = useState(false);
-  const longModePress = useMemo(() => createLongPress(() => setLongMenu(true)), []);
   useEffect(() => {
     const off = listen<NoteSectionOption[]>(NOTE_SECTIONS, (event) => setSections(event.payload));
     return () => void off.then((f) => f());
   }, []);
   useEffect(() => {
     if (info) void api.screenshotRequestSections().catch(() => {});
-    else {
-      setSectionMenu(false);
-      setLongMenu(false);
-    }
+    else setSectionMenu(false);
   }, [info]);
 
   const flash = useCallback((text: string) => {
@@ -417,8 +411,8 @@ export default function ScreenshotView() {
     window.setTimeout(() => setNotice((n) => (n === text ? null : n)), 2500);
   }, []);
 
-  /** 长截屏：Rust 结束遮罩后在选区内自动滚动拼接；长图不支持标注。 */
-  const startLong = useCallback((manual = false) => {
+  /** 长截屏：Rust 结束遮罩后给选区加框、旁边放预览面板，用户滚动页面时逐帧拼接；长图不支持标注。 */
+  const startLong = useCallback(() => {
     if (!sel) return;
     if (history.shapes.length) {
       flash(t("长截屏不保留标注，请先撤销标注"));
@@ -426,7 +420,7 @@ export default function ScreenshotView() {
     }
     const r = { x: sel.x, y: sel.y, w: sel.w, h: sel.h };
     reset();
-    void api.screenshotLong(r, manual).catch(() => void api.screenshotCancel());
+    void api.screenshotLong(r).catch(() => void api.screenshotCancel());
   }, [sel, history.shapes.length, flash, reset, t]);
 
   const runOcr = useCallback(() => {
@@ -530,12 +524,11 @@ export default function ScreenshotView() {
   useEffect(() => {
     if (!info) return;
     const onKey = (e: KeyboardEvent) => {
-      if (sectionMenu || longMenu) {
+      if (sectionMenu) {
         if (e.key === "Escape") {
           e.preventDefault();
           e.stopPropagation();
           setSectionMenu(false);
-          setLongMenu(false);
         }
         return;
       }
@@ -580,7 +573,7 @@ export default function ScreenshotView() {
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, [info, sel, W, H, cancel, confirm, copyColor, editing, tool, history.shapes.length, ocr, sectionMenu, longMenu]);
+  }, [info, sel, W, H, cancel, confirm, copyColor, editing, tool, history.shapes.length, ocr, sectionMenu]);
 
   // 遮罩刚出现时应用可能还没激活，WKWebView 收不到 mousemove：轮询系统光标跟随；
   // 拖拽中以指针事件为准
@@ -864,49 +857,13 @@ export default function ScreenshotView() {
               <Redo2 />
             </TipButton>
             <span className="mx-0.5 h-4 w-px bg-border" />
-            <span className="relative inline-flex">
-              <TipButton
-                label={t("长截屏：自动向下滚动拼接，动一下鼠标停止")}
-                tip={t("长截屏：自动向下滚动拼接，动一下鼠标停止；长按选择自动 / 手动滚动")}
-                onPointerDown={(e) => longModePress.start(e.clientX, e.clientY)}
-                onPointerMove={(e) => longModePress.move(e.clientX, e.clientY)}
-                onPointerUp={() => longModePress.release()}
-                onPointerLeave={() => longModePress.cancel()}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  setLongMenu(true);
-                }}
-                onClick={() => {
-                  if (longModePress.consumeClick()) return;
-                  startLong();
-                }}
-              >
-                <ScrollText />
-              </TipButton>
-              {longMenu && (
-                <div
-                  className={cn(floatingSurface(), "absolute left-0 flex w-52 flex-col rounded-md p-1 text-body")}
-                  style={toolbarTop > sel.y ? { top: toolbarH + 4 } : { bottom: toolbarH + 4 }}
-                >
-                  {([false, true] as const).map((manual) => (
-                    <button
-                      key={String(manual)}
-                      type="button"
-                      className="flex flex-col rounded-sm px-2 py-1 text-left hover:bg-accent"
-                      onClick={() => {
-                        setLongMenu(false);
-                        startLong(manual);
-                      }}
-                    >
-                      <span>{manual ? t("手动滚动") : t("自动滚动")}</span>
-                      <span className="text-label text-muted-foreground">
-                        {manual ? t("自己滚动页面，滚完点「完成」") : t("程序自动往下滚，动一下鼠标停止")}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </span>
+            <TipButton
+              label={t("长截屏")}
+              tip={t("长截屏：点击后滚动页面，自动拼接成长图")}
+              onClick={startLong}
+            >
+              <ScrollText />
+            </TipButton>
             <TipButton
               label={t("识别文字")}
               tip={t("识别文字：提取选区里的文字，可复制或存入「剪贴」")}
@@ -1056,7 +1013,7 @@ export default function ScreenshotView() {
         />
       )}
 
-      {sel && !dragging && !longMenu && !sectionMenu && <HoverTip point={cursor} />}
+      {sel && !dragging && !sectionMenu && <HoverTip point={cursor} />}
 
       {showLoupe && loupePos && cursor && (
         <div

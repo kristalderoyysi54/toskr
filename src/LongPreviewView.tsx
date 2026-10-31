@@ -2,16 +2,16 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
 import { Button } from "@/components/ui/button";
+import { floatingSurface } from "@/components/ui/floating-surface";
 import { useT } from "@/lib/i18n";
 import { api, LONG_PROGRESS_EVENT } from "@/lib/tauri";
+import { cn } from "@/lib/utils";
 
-/** 长截屏预览条：随拼接变长的缩略图，始终显示最新拼上的一段（底部对齐）。
- * 页面不响应自动滚动时转手动：显示「完成」按钮，滚太快接不上时提示往回滚。 */
+/** 长截屏预览面板（选区旁）：缩略长图随拼接变长并停在最新一段，下方提示与「取消 / 完成」。 */
 export default function LongPreviewView() {
   const t = useT();
   const [src, setSrc] = useState<string | null>(null);
-  const [height, setHeight] = useState(0);
-  const [manual, setManual] = useState(false);
+  const [size, setSize] = useState({ width: 0, height: 0 });
   const [stalled, setStalled] = useState(false);
   const [done, setDone] = useState(false);
   const lastHeight = useRef(0);
@@ -19,12 +19,12 @@ export default function LongPreviewView() {
   const urlRef = useRef<string | null>(null);
 
   useEffect(() => {
-    const off = listen<{ height: number; manual: boolean; stalled: boolean }>(LONG_PROGRESS_EVENT, (event) => {
-      setHeight(event.payload.height);
-      setManual(event.payload.manual);
-      setStalled(event.payload.stalled);
-      if (event.payload.height === lastHeight.current || busy.current) return;
-      lastHeight.current = event.payload.height;
+    const off = listen<{ width: number; height: number; stalled: boolean }>(LONG_PROGRESS_EVENT, (event) => {
+      const { width, height, stalled } = event.payload;
+      setSize({ width, height });
+      setStalled(stalled);
+      if (height === lastHeight.current || busy.current) return;
+      lastHeight.current = height;
       busy.current = true;
       void api
         .longPreviewImage()
@@ -45,29 +45,39 @@ export default function LongPreviewView() {
     };
   }, []);
 
+  const stop = (cancel: boolean) => {
+    setDone(true);
+    void api.longFinish(cancel);
+  };
+
   return (
-    <div className="fixed inset-0 flex flex-col overflow-hidden rounded-md border border-white/40 bg-black/75 text-micro text-white">
-      <div className="flex min-h-0 flex-1 flex-col justify-end overflow-hidden">
-        {src && <img src={src} alt="" className="block w-full" />}
+    <div className={cn(floatingSurface(), "fixed inset-0 flex flex-col overflow-hidden rounded-lg text-body")}>
+      <div className="flex items-baseline justify-between gap-2 px-3 pt-2.5 pb-1.5">
+        <span className="font-medium">{t("长截屏")}</span>
+        <span className="font-mono text-label text-muted-foreground tabular-nums">
+          {size.width > 0 && `${size.width} × ${size.height}`}
+        </span>
       </div>
-      <div className="px-2 py-1.5 leading-snug">
-        <div className="font-mono tabular-nums">{t("已拼接 {n} px", { n: height })}</div>
-        <div className={stalled ? "text-warning" : "text-white/70"}>
-          {!manual ? t("动一下鼠标停止") : stalled ? t("滚太快接不上，往回滚一点") : t("手动往下滚，滚完点完成")}
+      <div
+        className="mx-3 min-h-0 flex-1 overflow-hidden rounded-md border border-border bg-muted/40 [&::-webkit-scrollbar]:hidden"
+      >
+        {/* 底部对齐：始终看到最新拼上的一段 */}
+        <div className="flex min-h-full flex-col justify-end">
+          {src && <img src={src} alt="" className="block w-full" />}
         </div>
-        {manual && (
-          <Button
-            size="xs"
-            className="mt-1 w-full"
-            disabled={done}
-            onClick={() => {
-              setDone(true);
-              void api.longFinish();
-            }}
-          >
+      </div>
+      <div className="px-3 py-2">
+        <p className={cn("min-h-8 text-label leading-snug", stalled ? "text-warning" : "text-muted-foreground")}>
+          {stalled ? t("滚太快接不上，往回滚一点") : t("滚动鼠标滚轮或拖动滚动条截取长图")}
+        </p>
+        <div className="mt-2 flex gap-2">
+          <Button size="sm" className="flex-1" disabled={done} onClick={() => stop(true)}>
+            {t("取消")}
+          </Button>
+          <Button size="sm" className="flex-1" disabled={done} onClick={() => stop(false)}>
             {t("完成")}
           </Button>
-        )}
+        </div>
       </div>
     </div>
   );

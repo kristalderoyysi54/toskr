@@ -705,7 +705,7 @@ struct ScreenshotTranslateRequest {
     text: String,
 }
 
-/// 遮罩文字面板：请主窗口用已配置的 AI 翻译（遮罩窗不持有 AI 能力）。
+/// 图内翻译：先用本机系统翻译（中英互译），不可用时请主窗口用已配置的 AI（遮罩窗不持有 AI 能力）。
 #[tauri::command]
 pub fn screenshot_translate(
     app: AppHandle,
@@ -713,12 +713,33 @@ pub fn screenshot_translate(
     request_id: String,
     text: String,
 ) -> Result<(), String> {
-    app.emit_to(
-        "main",
-        crate::screenshot::TRANSLATE_EVENT,
-        ScreenshotTranslateRequest { label: window.label().to_string(), request_id, text },
-    )
-    .map_err(|e| e.to_string())
+    let label = window.label().to_string();
+    // 先本机翻译，失败再请主窗口用已配置的 AI
+    std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        let local = serde_json::from_str::<Vec<String>>(&text)
+            .map_err(|e| e.to_string())
+            .and_then(|lines| crate::screenshot::translate_local(&lines));
+        match local {
+            Ok(lines) => {
+                crate::diag::push(&app, format!("图内翻译走本机 {} 行 {}ms", lines.len(), started.elapsed().as_millis()));
+                let _ = app.emit_to(
+                    &label,
+                    crate::screenshot::TRANSLATE_RESULT_EVENT,
+                    serde_json::json!({ "requestId": request_id, "lines": lines }),
+                );
+            }
+            Err(e) => {
+                crate::diag::push(&app, format!("本机翻译不可用（{e}），改用 AI"));
+                let _ = app.emit_to(
+                    "main",
+                    crate::screenshot::TRANSLATE_EVENT,
+                    ScreenshotTranslateRequest { label, request_id, text },
+                );
+            }
+        }
+    });
+    Ok(())
 }
 
 /// 长截屏预览条：当前拼接预览（BMP）。
@@ -729,10 +750,10 @@ pub fn long_preview_image() -> Result<tauri::ipc::Response, String> {
         .ok_or_else(|| "no preview".to_string())
 }
 
-/// 长截屏预览条「完成」：结束手动滚动拼接。
+/// 长截屏预览面板「完成」/「取消」：结束拼接（取消则不进标注窗）。
 #[tauri::command]
-pub fn long_finish() {
-    crate::screenshot_long::finish_manual();
+pub fn long_finish(cancel: Option<bool>) {
+    crate::screenshot_long::request_stop(cancel.unwrap_or(false));
 }
 
 /// 长图标注窗：像素尺寸与像素/pt 比。
@@ -760,9 +781,12 @@ pub fn long_commit(window: tauri::WebviewWindow, request: tauri::ipc::Request<'_
     let tauri::ipc::InvokeBody::Raw(rgba) = request.body() else {
         return Err("expected raw body".into());
     };
-    let action = crate::screenshot::Action::parse(header("x-shot-action").unwrap_or("save"));
+    let raw_action = header("x-shot-action").unwrap_or("save");
+    // replace = 写回来源（钉图 / 图片卡）
+    let writeback = raw_action == "replace";
+    let action = crate::screenshot::Action::parse(raw_action);
     let section = header("x-shot-section").map(str::to_string);
-    crate::screenshot_long::commit(&window, action, section, w, h, rgba.clone())
+    crate::screenshot_long::commit(&window, writeback, action, section, w, h, rgba.clone())
 }
 
 #[tauri::command]
@@ -829,15 +853,20 @@ pub fn screenshot_long(
     y: f64,
     w: f64,
     h: f64,
-    manual: Option<bool>,
 ) -> Result<(), String> {
-    crate::screenshot::long(&app, window.label(), (x, y, w, h), manual.unwrap_or(false))
+    crate::screenshot::long(&app, window.label(), (x, y, w, h))
 }
 
 /// 图片预览窗「标注 / 裁剪」：用长图标注窗打开附件图。
 #[tauri::command]
-pub fn annotate_image(app: AppHandle, window: tauri::WebviewWindow, file: String) -> Result<(), String> {
-    crate::screenshot::annotate_image(&app, &window, &file)
+pub fn annotate_image(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    file: String,
+    note_id: Option<String>,
+    data_generation: Option<u64>,
+) -> Result<(), String> {
+    crate::screenshot::annotate_image(&app, &window, &file, note_id.zip(data_generation))
 }
 
 #[tauri::command]

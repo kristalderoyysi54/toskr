@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "python3 script/keychain-helper.py check && pnpm build",
+    "beforeBuildCommand": "python3 script/keychain-helper.py check && sh script/translate-helper.sh && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -162,7 +162,8 @@
       "signingIdentity": "Toskr Dev Signing",
       "entitlements": "./Entitlements.plist",
       "files": {
-        "Helpers/toskr-keychain-helper": "keychain-helper/artifacts/toskr-keychain-helper"
+        "Helpers/toskr-keychain-helper": "keychain-helper/artifacts/toskr-keychain-helper",
+        "Helpers/toskr-translate-helper": "translate-helper/artifacts/toskr-translate-helper"
       },
       "dmg": {
         "background": "dmg/background.png",

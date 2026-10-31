@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ComponentProps } from "react";
+import { forwardRef, useEffect, useMemo, useState, type ComponentProps } from "react";
 import { Circle, Focus, Grid3x3, Hash, MoveUpRight, Pencil, Square, Type, type LucideIcon } from "lucide-react";
 
 import { IconButton } from "@/components/ui/icon-button";
@@ -19,9 +19,11 @@ export const SHOT_TOOLS: { tool: Tool; icon: LucideIcon; label: MessageKey; tip:
 ];
 
 /** 带悬停说明的工具条按钮：说明由 <HoverTip> 显示（不用原生 title，遮罩窗未激活时原生提示不出现）。 */
-export function TipButton({ tip, ...props }: ComponentProps<typeof IconButton> & { tip?: string }) {
-  return <IconButton withTitle={false} data-tip={tip ?? props.label} {...props} />;
-}
+export const TipButton = forwardRef<HTMLButtonElement, ComponentProps<typeof IconButton> & { tip?: string }>(
+  function TipButton({ tip, ...props }, ref) {
+    return <IconButton ref={ref} withTitle={false} data-tip={tip ?? props.label} {...props} />;
+  }
+);
 
 const TIP_DELAY_MS = 400;
 const TIP_HALF_W = 120;

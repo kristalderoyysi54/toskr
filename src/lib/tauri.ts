@@ -23,6 +23,8 @@ export const LONG_PROGRESS_EVENT = "toskr://long-progress";
 export const SCREENSHOT_TRANSLATE_EVENT = "toskr://screenshot-translate";
 /** 主窗口 → 遮罩：逐行译文（lines 或 error 二选一）。 */
 export const SCREENSHOT_TRANSLATE_RESULT_EVENT = "toskr://screenshot-translate-result";
+/** 标注窗写回图片卡：Rust 已存好标注后的图，主窗口校验并替换原图（可撤销）。 */
+export const ANNOTATE_NOTE_IMAGE_EVENT = "toskr://annotate-note-image";
 
 /** 截完动作：save 复制并存入剪贴；pin 钉图；send 发送；edit 打码编辑；saveas 另存为 PNG；section 存入所选笔记分组。 */
 export type ScreenshotAction = "save" | "pin" | "send" | "edit" | "saveas" | "section";
@@ -1033,13 +1035,13 @@ export const api = {
     invoke("screenshot_translate", { requestId, text }),
   /** 长截屏预览条：当前拼接预览（BMP）。 */
   longPreviewImage: () => invoke<ArrayBuffer>("long_preview_image"),
-  /** 预览条「完成」：结束手动滚动拼接。 */
-  longFinish: () => invoke("long_finish"),
+  /** 长截屏预览面板「完成」/「取消」：结束拼接（取消不进标注窗）。 */
+  longFinish: (cancel = false) => invoke("long_finish", { cancel }),
   /** 长图标注窗：像素尺寸与像素/pt 比。 */
-  longInfo: () => invoke<{ pxW: number; pxH: number; scale: number; pin: boolean } | null>("long_info"),
+  longInfo: () => invoke<{ pxW: number; pxH: number; scale: number; origin: "capture" | "pin" | "note" } | null>("long_info"),
   longImage: () => invoke<ArrayBuffer>("long_image"),
-  /** 长图标注窗出图（save / section / saveas；钉图编辑时 pin = 写回钉图），成功后窗口由 Rust 关闭。 */
-  longCommit: (rgba: Uint8Array, width: number, height: number, action: "save" | "section" | "saveas" | "pin", sectionId?: string) =>
+  /** 长图标注窗出图（save / section / saveas；replace = 写回钉图或图片卡），成功后窗口由 Rust 关闭。 */
+  longCommit: (rgba: Uint8Array, width: number, height: number, action: "save" | "section" | "saveas" | "replace", sectionId?: string) =>
     invoke("long_commit", rgba, {
       headers: {
         "x-shot-w": String(width),
@@ -1058,11 +1060,11 @@ export const api = {
   /** 钉图右键原生菜单；sections 为可存入的笔记分组。 */
   pinMenu: (sections: { id: string; name: string }[]) => invoke("pin_menu", { sections }),
   screenshotCancel: () => invoke("screenshot_cancel"),
-  /** 长截屏：选区（本屏 pt）内自动滚动拼接，结束后复制并存入「剪贴」。 */
-  screenshotLong: (r: { x: number; y: number; w: number; h: number }, manual = false) =>
-    invoke("screenshot_long", { ...r, manual }),
-  /** 图片预览窗：用标注窗打开附件图（标注 / 裁剪后另存为新图）。 */
-  annotateImage: (file: string) => invoke("annotate_image", { file }),
+  /** 长截屏：选区（本屏 pt）加框，用户滚动页面时拼接，完成后进长图标注窗。 */
+  screenshotLong: (r: { x: number; y: number; w: number; h: number }) => invoke("screenshot_long", r),
+  /** 图片预览窗：用标注窗打开附件图；带图片卡目标时 ✓ 替换原图，否则存为新图。 */
+  annotateImage: (file: string, note?: { noteId: string; dataGeneration: number }) =>
+    invoke("annotate_image", { file, ...note }),
   /** 光标在本屏的位置（本屏 pt），不在本屏为 null。 */
   screenshotCursor: () => invoke<[number, number] | null>("screenshot_cursor"),
   /** 截图遮罩阶段追踪（只记白名单阶段名与数字，排查用）。 */

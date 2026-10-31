@@ -130,6 +130,158 @@ function broadcastDraftImageReplacement(payload: DraftImageReplacedPayload) {
   void emitTo("imgpreview", DRAFT_IMAGE_REPLACED_EVENT, payload).catch(() => {});
 }
 
+type NoteImageReplacement = {
+  operationId: string;
+  noteId: string;
+  dataGeneration: number;
+  sourceFile: string;
+  editedFile: string;
+  width: number;
+  height: number;
+};
+
+type NoteImageReplacementText = {
+  stale: string;
+  unchanged: string;
+  duplicate: string;
+  undoStale: string;
+  done: string;
+};
+
+/**
+ * 把图片卡里的 sourceFile 原子替换为 editedFile，广播给详情窗并挂上撤销。
+ * 打码与标注共用；调用方已校验数据代际。失败时新文件交 GC，原图不动。
+ */
+function commitNoteImageReplacement(
+  op: NoteImageReplacement,
+  scheduleMediaGc: ScheduleEditedMediaGc,
+  text: NoteImageReplacementText,
+  includeImagePreview = false
+): { sequence: number } | { error: string } {
+  const liveNote = useNotesStore.getState().notes.find(
+    (entry) => entry.id === op.noteId
+  );
+  if (!liveNote || !noteImages(liveNote).includes(op.sourceFile)) {
+    scheduleMediaGc([op.editedFile], 0);
+    return { error: text.stale };
+  }
+  if (
+    op.editedFile === op.sourceFile ||
+    noteImages(liveNote).includes(op.editedFile)
+  ) {
+    return {
+      error: op.editedFile === op.sourceFile ? text.unchanged : text.duplicate,
+    };
+  }
+  const beforeBlocks = noteContentBlocks(liveNote);
+  const replaced = useNotesStore.getState().replaceNoteImage(
+    op.noteId,
+    op.sourceFile,
+    { file: op.editedFile, width: op.width, height: op.height },
+    { snapshot: false }
+  );
+  if (!replaced) {
+    scheduleMediaGc([op.editedFile], 0);
+    return { error: text.stale };
+  }
+  scheduleMediaGc([op.sourceFile]);
+  const sequence = nextNoteImageEditSequence();
+  broadcastNoteImageReplacement(
+    {
+      operationId: op.operationId,
+      direction: "forward",
+      sequence,
+      noteId: op.noteId,
+      dataGeneration: op.dataGeneration,
+      sourceFile: op.sourceFile,
+      editedFile: op.editedFile,
+      width: op.width,
+      height: op.height,
+    },
+    includeImagePreview
+  );
+  const originalImage = beforeBlocks.find(
+    (block): block is Extract<NoteContentBlock, { type: "image" }> =>
+      block.type === "image" && block.file === op.sourceFile
+  );
+  const expectedImageFiles = beforeBlocks.flatMap((block) =>
+    block.type === "image"
+      ? [block.file === op.sourceFile ? op.editedFile : block.file]
+      : []
+  );
+  setPendingUndo(() => {
+    const store = useNotesStore.getState();
+    const current = store.notes.find((entry) => entry.id === op.noteId);
+    const currentBlocks = current ? noteContentBlocks(current) : [];
+    const currentImageFiles = currentBlocks.flatMap((block) =>
+      block.type === "image" ? [block.file] : []
+    );
+    const imagesUnchanged =
+      currentImageFiles.length === expectedImageFiles.length &&
+      currentImageFiles.every((file, index) => file === expectedImageFiles[index]);
+    if (matchesDataGeneration(op.dataGeneration) && current && imagesUnchanged) {
+      store.updateNoteContent(
+        op.noteId,
+        currentBlocks.map((block) =>
+          block.type === "image" && block.file === op.editedFile
+            ? {
+                ...block,
+                file: op.sourceFile,
+                width: originalImage?.width ?? op.width,
+                height: originalImage?.height ?? op.height,
+              }
+            : block
+        )
+      );
+      scheduleMediaGc([op.editedFile]);
+      broadcastNoteImageReplacement(
+        {
+          operationId: op.operationId,
+          direction: "undo",
+          sequence: nextNoteImageEditSequence(),
+          noteId: op.noteId,
+          dataGeneration: op.dataGeneration,
+          sourceFile: op.editedFile,
+          editedFile: op.sourceFile,
+          width: originalImage?.width ?? op.width,
+          height: originalImage?.height ?? op.height,
+        },
+        true
+      );
+      tip("undone", t("已撤销编辑图片"));
+      return;
+    }
+    tip("info", text.undoStale);
+  });
+  tip("ok", text.done, true);
+  return { sequence };
+}
+
+/** 标注窗写回图片卡（Rust 已把标注后的图存进媒体库）：校验数据代际后替换原图，可撤销。 */
+export function applyAnnotatedNoteImage(
+  op: NoteImageReplacement,
+  scheduleMediaGc: ScheduleEditedMediaGc
+) {
+  if (isDataOperationLocked() || !matchesDataGeneration(op.dataGeneration)) {
+    scheduleMediaGc([op.editedFile], 0);
+    tip("warn", t("数据上下文已变化，标注结果未保存"));
+    return;
+  }
+  const committed = commitNoteImageReplacement(
+    op,
+    scheduleMediaGc,
+    {
+      stale: t("卡片中的图片已变化，标注结果未保存"),
+      unchanged: t("标注未改变图片"),
+      duplicate: t("标注结果与卡片现有图片重复，未应用"),
+      undoStale: t("图片或数据已变化，未撤销标注"),
+      done: t("图片已标注"),
+    },
+    true
+  );
+  if ("error" in committed) tip("warn", committed.error);
+}
+
 /**
  * 图片编辑 owner：校验跨窗 CAS、调用 Native 单次渲染，再原子替换目标引用。
  * UI 只提交像素框；发送副本、持久卡片和会话草稿的保存语义集中在这里。
@@ -223,110 +375,27 @@ export async function applyImageEditRequest(
     }
 
     if (target.kind === "note") {
-      const liveNote = useNotesStore.getState().notes.find(
-        (entry) => entry.id === target.noteId
-      );
-      if (!liveNote || !noteImages(liveNote).includes(payload.sourceFile)) {
-        scheduleMediaGc([result.redactedFile], 0);
-        return rejected(t("卡片中的图片已变化，打码结果未保存"));
-      }
-      if (
-        result.redactedFile === payload.sourceFile ||
-        noteImages(liveNote).includes(result.redactedFile)
-      ) {
-        return rejected(
-          result.redactedFile === payload.sourceFile
-            ? t("所选区域未改变图片")
-            : t("打码结果与卡片现有图片重复，未应用")
-        );
-      }
-      const beforeBlocks = noteContentBlocks(liveNote);
-      const replaced = useNotesStore.getState().replaceNoteImage(
-        target.noteId,
-        payload.sourceFile,
+      const committed = commitNoteImageReplacement(
         {
-          file: result.redactedFile,
+          operationId: payload.requestId,
+          noteId: target.noteId,
+          dataGeneration: generation,
+          sourceFile: payload.sourceFile,
+          editedFile: result.redactedFile,
           width: result.imageWidth,
           height: result.imageHeight,
         },
-        { snapshot: false }
-      );
-      if (!replaced) {
-        scheduleMediaGc([result.redactedFile], 0);
-        return rejected(t("卡片中的图片已变化，打码结果未保存"));
-      }
-      if (result.redactedFile !== payload.sourceFile) {
-        scheduleMediaGc([payload.sourceFile]);
-      }
-      noteForwardSequence = nextNoteImageEditSequence();
-      const replacedPayload: NoteImageReplacedPayload = {
-        operationId: payload.requestId,
-        direction: "forward",
-        sequence: noteForwardSequence,
-        noteId: target.noteId,
-        dataGeneration: generation,
-        sourceFile: payload.sourceFile,
-        editedFile: result.redactedFile,
-        width: result.imageWidth,
-        height: result.imageHeight,
-      };
-      broadcastNoteImageReplacement(replacedPayload);
-      const originalImage = beforeBlocks.find(
-        (block): block is Extract<NoteContentBlock, { type: "image" }> =>
-          block.type === "image" && block.file === payload.sourceFile
-      );
-      const expectedImageFiles = beforeBlocks.flatMap((block) =>
-        block.type === "image"
-          ? [block.file === payload.sourceFile ? result.redactedFile : block.file]
-          : []
-      );
-      setPendingUndo(() => {
-        const store = useNotesStore.getState();
-        const current = store.notes.find(
-          (entry) => entry.id === target.noteId
-        );
-        const currentBlocks = current ? noteContentBlocks(current) : [];
-        const currentImageFiles = currentBlocks.flatMap((block) =>
-          block.type === "image" ? [block.file] : []
-        );
-        const imagesUnchanged =
-          currentImageFiles.length === expectedImageFiles.length &&
-          currentImageFiles.every((file, index) => file === expectedImageFiles[index]);
-        if (matchesDataGeneration(generation) && current && imagesUnchanged) {
-          store.updateNoteContent(
-            target.noteId,
-            currentBlocks.map((block) =>
-              block.type === "image" && block.file === result.redactedFile
-                ? {
-                    ...block,
-                    file: payload.sourceFile,
-                    width: originalImage?.width ?? result.imageWidth,
-                    height: originalImage?.height ?? result.imageHeight,
-                  }
-                : block
-            )
-          );
-          scheduleMediaGc([result.redactedFile]);
-          broadcastNoteImageReplacement(
-            {
-              operationId: payload.requestId,
-              direction: "undo",
-              sequence: nextNoteImageEditSequence(),
-              noteId: target.noteId,
-              dataGeneration: generation,
-              sourceFile: result.redactedFile,
-              editedFile: payload.sourceFile,
-              width: originalImage?.width ?? result.imageWidth,
-              height: originalImage?.height ?? result.imageHeight,
-            },
-            true
-          );
-          tip("undone", t("已撤销编辑图片"));
-          return;
+        scheduleMediaGc,
+        {
+          stale: t("卡片中的图片已变化，打码结果未保存"),
+          unchanged: t("所选区域未改变图片"),
+          duplicate: t("打码结果与卡片现有图片重复，未应用"),
+          undoStale: t("图片或数据已变化，未撤销打码"),
+          done: t("图片已打码"),
         }
-        tip("info", t("图片或数据已变化，未撤销打码"));
-      });
-      tip("ok", t("图片已打码"), true);
+      );
+      if ("error" in committed) return rejected(committed.error);
+      noteForwardSequence = committed.sequence;
     } else {
       const current = useUIStore.getState().draftImages;
       if (!current.some((image) =>

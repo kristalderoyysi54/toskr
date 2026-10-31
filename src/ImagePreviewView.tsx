@@ -45,7 +45,7 @@ import { FIREWALL_CATEGORY_LABEL } from "@/lib/delivery/firewall";
 import { Button } from "@/components/ui/button";
 import { MacTrafficLights, PlatinumTrailingBoxes } from "@/components/ui/mac-close-button";
 import { useColorScheme } from "@/lib/colorScheme";
-import { IconButton } from "@/components/ui/icon-button";
+import { HoverTip, TipButton } from "@/components/ShotToolParts";
 import {
   DATA_ACTIVITY_EVENT,
   DATA_LOCATION_CHANGED_EVENT,
@@ -1069,7 +1069,7 @@ export default function ImagePreviewView() {
         {!imageEditing && !editing && (
           <div className="ml-auto flex items-center gap-1">
             {noteId && dataGeneration !== null && (
-              <IconButton
+              <TipButton
                 label={winPinned ? t("取消固定（发送后恢复自动关窗）") : t("固定窗口：发送后保持打开")}
                 size="xs"
                 pressed={winPinned}
@@ -1080,10 +1080,10 @@ export default function ImagePreviewView() {
                 )}
               >
                 <Pin className="size-3.5" fill={winPinned ? "currentColor" : "none"} />
-              </IconButton>
+              </TipButton>
             )}
             {imageEditTarget && (
-              <IconButton
+              <TipButton
                 ref={imageEditTriggerRef}
                 label={t("图片打码")}
                 size="xs"
@@ -1091,17 +1091,30 @@ export default function ImagePreviewView() {
                 className="text-foreground/60 hover:bg-foreground/10 hover:text-foreground focus-visible:ring-ring focus-visible:ring-offset-0"
               >
                 <Shield className="size-3.5" />
-              </IconButton>
+              </TipButton>
             )}
             {file && !imageEditing && (
-              <IconButton
-                label={t("标注 / 裁剪：在标注窗里加标注或裁剪，完成后存为新图（原图不变）")}
+              <TipButton
+                label={
+                  imageEditTarget?.kind === "note"
+                    ? t("标注 / 裁剪：加标注或裁剪，完成后替换卡片里的原图（可撤销）")
+                    : t("标注 / 裁剪：在标注窗里加标注或裁剪，完成后存为新图（原图不变）")
+                }
                 size="xs"
-                onClick={() => void api.annotateImage(file).catch((e) => tip("warn", String(e)))}
+                onClick={() =>
+                  void api
+                    .annotateImage(
+                      file,
+                      imageEditTarget?.kind === "note"
+                        ? { noteId: imageEditTarget.noteId, dataGeneration: imageEditTarget.dataGeneration }
+                        : undefined
+                    )
+                    .catch((e) => tip("warn", String(e)))
+                }
                 className="text-foreground/60 hover:bg-foreground/10 hover:text-foreground focus-visible:ring-ring focus-visible:ring-offset-0"
               >
                 <PenLine className="size-3.5" />
-              </IconButton>
+              </TipButton>
             )}
             {noteId && dataGeneration !== null && (
             <>
@@ -1113,7 +1126,7 @@ export default function ImagePreviewView() {
             >
               {targetBlockedMessage ?? ""}
             </p>
-            <IconButton
+            <TipButton
               label={
                 targetReady
                   ? sendLabel
@@ -1128,7 +1141,7 @@ export default function ImagePreviewView() {
               className="text-foreground/60 hover:bg-foreground/10 hover:text-foreground focus-visible:ring-ring focus-visible:ring-offset-0"
             >
               <Send className="size-3.5" />
-            </IconButton>
+            </TipButton>
             </>
             )}
           </div>
@@ -1328,6 +1341,7 @@ export default function ImagePreviewView() {
             .join(" · ")}
         </div>
       )}
+      <HoverTip />
     </DetailWindowFrame>
   );
 }
@@ -1411,7 +1425,7 @@ function RedactionToolbar({
           {REDACTION_STYLE_OPTIONS.filter((o) => o.style.kind !== "mosaic").map((option) => {
             const active = sameRedactionStyle(drawStyle, option.style);
             return (
-              <IconButton
+              <TipButton
                 key={option.label}
                 label={t(option.label)}
                 pressed={active}
@@ -1419,7 +1433,7 @@ function RedactionToolbar({
                 onClick={() => onDrawStyle(option.style)}
               >
                 <RedactionStyleGlyph style={option.style} />
-              </IconButton>
+              </TipButton>
             );
           })}
         </div>
@@ -1437,21 +1451,21 @@ function RedactionToolbar({
         {detecting ? t("识别中…") : t("识别敏感文字")}
       </Button>
       <span aria-hidden className="mx-0.5 h-4 w-px shrink-0 bg-border" />
-      <IconButton label={t("撤销（⌘Z）")} size="xs" disabled={busy || !canUndo} onClick={onUndo}>
+      <TipButton label={t("撤销（⌘Z）")} size="xs" disabled={busy || !canUndo} onClick={onUndo}>
         <Undo2 className="size-3.5" />
-      </IconButton>
-      <IconButton label={t("重做（⌘⇧Z）")} size="xs" disabled={busy || !canRedo} onClick={onRedo}>
+      </TipButton>
+      <TipButton label={t("重做（⌘⇧Z）")} size="xs" disabled={busy || !canRedo} onClick={onRedo}>
         <Redo2 className="size-3.5" />
-      </IconButton>
+      </TipButton>
       <span className="min-w-8 text-center text-micro tabular-nums text-muted-foreground">
         {t("{n} 处", { n: count })}
       </span>
-      <IconButton
+      <TipButton
         label={t("拖动画框 · 点框选中后可移动、拖角缩放、⌫ 删除 · 方向键微移（⇧ 加大步长）· 滚轮缩放 · 按住 Space 平移 · ⌘⏎ 应用 · Esc 逐层退出")}
         size="xs"
       >
         <CircleHelp className="size-3.5" />
-      </IconButton>
+      </TipButton>
       <Button type="button" size="xs" variant="ghost" disabled={busy} onClick={onCancel}>
         {t("取消")}
       </Button>

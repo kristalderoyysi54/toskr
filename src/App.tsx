@@ -267,6 +267,7 @@ import {
   SCREENSHOT_AFTER_EVENT,
   SCREENSHOT_TRANSLATE_EVENT,
   SCREENSHOT_TRANSLATE_RESULT_EVENT,
+  ANNOTATE_NOTE_IMAGE_EVENT,
   CLIP_PAUSE_EVENT,
   STEALTH_EVENT,
   TARGET_CHANGED_EVENT,
@@ -284,6 +285,7 @@ import { registerAliasQuickAddListener } from "@/lib/aliasQuickAdd";
 import { restoreAliases } from "@/lib/delivery/aliasEntities";
 import { clearDeliveryDraftImages } from "@/lib/delivery/imageFirewall";
 import {
+  applyAnnotatedNoteImage,
   applyImageEditRequest,
   cancelImageEditRequest,
 } from "@/lib/imageEditController";
@@ -2453,6 +2455,9 @@ export default function App() {
       }
     });
     const subs = [
+      listen<Parameters<typeof applyAnnotatedNoteImage>[0]>(ANNOTATE_NOTE_IMAGE_EVENT, (event) =>
+        applyAnnotatedNoteImage(event.payload, scheduleMediaGc)
+      ),
       listen<{ requestId: string }>(IMAGE_EDIT_CANCEL_EVENT, (event) => {
         const requestId = event.payload?.requestId ?? "";
         const status = cancelImageEditRequest(requestId);

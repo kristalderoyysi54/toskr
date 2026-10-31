@@ -58,3 +58,5 @@ ds-bundle/
 # 本地临时产物（设计稿/生成图等个人内容不入库）
 /tmp/
 .alma-snapshots
+# 本机翻译辅助程序产物由 script/translate-helper.sh 构建
+src-tauri/translate-helper/artifacts/
