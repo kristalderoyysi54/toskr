@@ -345,4 +345,6 @@ export const app = {
   "已拼接 {n} px": "Stitched {n} px",
   "动一下鼠标停止": "Move the mouse to stop",
   "放弃长截屏": "Discard scrolling capture",
+  "放弃标注": "Discard annotations",
+  "完成：更新钉图（Enter）；长按选择存入的分组": "Done: update the pin (Enter); long-press to pick a group",
 } satisfies Record<string, EnValue>;

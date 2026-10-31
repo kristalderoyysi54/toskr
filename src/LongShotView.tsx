@@ -24,10 +24,11 @@ import {
 import { api } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 
-/** 长图标注窗：可滚动查看拼好的长截屏，用与截图遮罩相同的工具标注，完成后存入「剪贴」/ 分组 / 另存为。 */
+/** 长图标注窗：可滚动查看拼好的长截屏，用与截图遮罩相同的工具标注，完成后存入「剪贴」/ 分组 / 另存为。
+ * 从钉图右键「编辑标注」打开时，✓ 改为写回钉图。 */
 export default function LongShotView() {
   const t = useT();
-  const [info, setInfo] = useState<{ pxW: number; pxH: number; scale: number } | null>(null);
+  const [info, setInfo] = useState<{ pxW: number; pxH: number; scale: number; pin: boolean } | null>(null);
   const [img, setImg] = useState<HTMLImageElement | null>(null);
   const [tool, setTool] = useState<Tool | null>(null);
   const style = useShotStyle();
@@ -85,7 +86,7 @@ export default function LongShotView() {
   }, [editingAt]);
 
   const finish = useCallback(
-    (action: "save" | "section" | "saveas", sectionId?: string) => {
+    (action: "save" | "section" | "saveas" | "pin", sectionId?: string) => {
       if (!info || !img || busy) return;
       const shapes = editing?.text.trim()
         ? [...history.shapes, { kind: "text" as const, x: editing.x, y: editing.y, text: editing.text, color: ink, size }]
@@ -106,6 +107,8 @@ export default function LongShotView() {
     },
     [info, img, busy, editing, history.shapes, ink, size, scale]
   );
+
+  const primary = info?.pin ? "pin" : "save";
 
   // 长按 ✓（或右键）选笔记分组
   const [sections, setSections] = useState<NoteSectionOption[]>([]);
@@ -133,12 +136,12 @@ export default function LongShotView() {
         setHistory((h) => (e.shiftKey ? redo(h) : undo(h)));
       } else if (e.key === "Enter" && !sectionMenu) {
         stop();
-        finish("save");
+        finish(primary);
       }
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, [editing, sectionMenu, finish]);
+  }, [editing, sectionMenu, finish, primary]);
 
   const point = (e: ReactPointerEvent) => {
     const r = pageRef.current!.getBoundingClientRect();
@@ -217,12 +220,12 @@ export default function LongShotView() {
           <IconButton label={t("另存为图片…")} disabled={busy} onClick={() => finish("saveas")}>
             <Download />
           </IconButton>
-          <IconButton label={t("放弃长截屏")} onClick={() => void api.longClose()}>
+          <IconButton label={info.pin ? t("放弃标注") : t("放弃长截屏")} onClick={() => void api.longClose()}>
             <X />
           </IconButton>
           <span className="relative inline-flex">
             <IconButton
-              label={t("完成：复制并存入「剪贴」（Enter）；长按选择存入的分组")}
+              label={info.pin ? t("完成：更新钉图（Enter）；长按选择存入的分组") : t("完成：复制并存入「剪贴」（Enter）；长按选择存入的分组")}
               disabled={busy}
               onPointerDown={(e) => longPress.start(e.clientX, e.clientY)}
               onPointerMove={(e) => longPress.move(e.clientX, e.clientY)}
@@ -234,7 +237,7 @@ export default function LongShotView() {
               }}
               onClick={() => {
                 if (longPress.consumeClick()) return;
-                finish("save");
+                finish(primary);
               }}
             >
               <Check className="text-primary" />

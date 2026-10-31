@@ -9,6 +9,7 @@ import { api } from "@/lib/tauri";
 
 /** 钉图窗：置顶显示一张截图。拖动移动、滚轮缩放、⌘C 复制、双击或 Esc 关闭、右键菜单。 */
 const PIN_ZOOM_RESET_EVENT = "toskr://pin-zoom-reset";
+const PIN_RELOAD_EVENT = "toskr://pin-reload";
 
 export default function PinView() {
   const t = useT();
@@ -40,6 +41,13 @@ export default function PinView() {
     };
   }, []);
 
+  // 「编辑标注」完成后 Rust 换了图，收到通知重新拉取
+  const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    const off = listen(PIN_RELOAD_EVENT, () => setRevision((r) => r + 1));
+    return () => void off.then((f) => f());
+  }, []);
+
   useEffect(() => {
     let url: string | null = null;
     void api
@@ -52,7 +60,7 @@ export default function PinView() {
     return () => {
       if (url) URL.revokeObjectURL(url);
     };
-  }, []);
+  }, [revision]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

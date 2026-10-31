@@ -1034,10 +1034,10 @@ export const api = {
   /** 长截屏预览条：当前拼接预览（BMP）。 */
   longPreviewImage: () => invoke<ArrayBuffer>("long_preview_image"),
   /** 长图标注窗：像素尺寸与像素/pt 比。 */
-  longInfo: () => invoke<{ pxW: number; pxH: number; scale: number } | null>("long_info"),
+  longInfo: () => invoke<{ pxW: number; pxH: number; scale: number; pin: boolean } | null>("long_info"),
   longImage: () => invoke<ArrayBuffer>("long_image"),
-  /** 长图标注窗出图（save / section / saveas），成功后窗口由 Rust 关闭。 */
-  longCommit: (rgba: Uint8Array, width: number, height: number, action: "save" | "section" | "saveas", sectionId?: string) =>
+  /** 长图标注窗出图（save / section / saveas；钉图编辑时 pin = 写回钉图），成功后窗口由 Rust 关闭。 */
+  longCommit: (rgba: Uint8Array, width: number, height: number, action: "save" | "section" | "saveas" | "pin", sectionId?: string) =>
     invoke("long_commit", rgba, {
       headers: {
         "x-shot-w": String(width),

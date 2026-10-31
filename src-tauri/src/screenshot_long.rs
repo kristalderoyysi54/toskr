@@ -121,10 +121,8 @@ pub fn run(
     std::thread::sleep(std::time::Duration::from_millis(120));
 
     let (first, w, h) = capture()?;
-    let mut prev = row_signatures(&first, w, h);
-    let mut out = first;
-    let mut total_h = h;
-    progress(&out, w, total_h);
+    let mut st = Stitcher::new(first, w, h);
+    progress(&st.out, w, st.total_h);
     let step = (rh * SCROLL_FRACTION).round().max(1.0) as i32;
     let mut stop = Stop::Limit;
     for _ in 0..MAX_STEPS {
@@ -140,26 +138,90 @@ pub fn run(
         if fw != w || fh != h {
             return Err("frame size changed".into());
         }
-        let sig = row_signatures(&frame, w, h);
-        if sig == prev {
-            stop = Stop::Bottom;
-            break;
+        match st.push(&frame) {
+            Push::Same => {
+                stop = Stop::Bottom;
+                break;
+            }
+            Push::NoOverlap => {
+                stop = Stop::NoOverlap;
+                break;
+            }
+            Push::Appended => progress(&st.out, w, st.total_h),
         }
-        let Some(dy) = scroll_offset(&prev, &sig) else {
-            stop = Stop::NoOverlap;
-            break;
-        };
-        // 新内容 = 新帧末尾 dy 行
-        out.extend_from_slice(&frame[(h - dy) * w * 4..]);
-        total_h += dy;
-        progress(&out, w, total_h);
-        prev = sig;
-        if w * total_h >= MAX_PIXELS {
+        if w * st.total_h >= MAX_PIXELS {
             stop = Stop::Limit;
             break;
         }
     }
-    Ok((out, w, total_h, stop))
+    Ok((st.out, w, st.total_h, stop))
+}
+
+/// 相邻两帧在原位不变的顶部 / 底部行数（固定页头、固定页尾）。
+fn fixed_rows(prev: &[(u64, bool)], next: &[(u64, bool)]) -> (usize, usize) {
+    let same = |r: usize| prev[r].0 == next[r].0;
+    let h = prev.len().min(next.len());
+    let top = (0..h).take_while(|&r| same(r)).count();
+    let bottom = (top..h).rev().take_while(|&r| same(r)).count();
+    (top, bottom)
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Push {
+    Appended,
+    /// 与上一帧完全相同（到底了）
+    Same,
+    NoOverlap,
+}
+
+/// 逐帧拼接。固定页头只参与对位排除；固定页尾每步先从长图末尾摘掉、
+/// 追加新内容后再接回，始终只留一份在最底部。
+pub struct Stitcher {
+    w: usize,
+    h: usize,
+    pub out: Vec<u8>,
+    pub total_h: usize,
+    prev: Vec<(u64, bool)>,
+    /// 长图末尾有多少行是上一帧底部的原样像素（摘页尾不能超过它）
+    tail: usize,
+}
+
+impl Stitcher {
+    pub fn new(first: Vec<u8>, w: usize, h: usize) -> Self {
+        Self {
+            prev: row_signatures(&first, w, h),
+            out: first,
+            total_h: h,
+            tail: h,
+            w,
+            h,
+        }
+    }
+
+    pub fn push(&mut self, frame: &[u8]) -> Push {
+        let (w, h) = (self.w, self.h);
+        let sig = row_signatures(frame, w, h);
+        if sig == self.prev {
+            return Push::Same;
+        }
+        let (mut top, mut bottom) = fixed_rows(&self.prev, &sig);
+        if top + bottom + 2 * MIN_OVERLAP_ROWS >= h {
+            (top, bottom) = (0, 0);
+        }
+        bottom = bottom.min(self.tail);
+        let body = top..h - bottom;
+        let Some(dy) = scroll_offset(&self.prev[body.clone()], &sig[body]) else {
+            return Push::NoOverlap;
+        };
+        // 摘掉旧页尾 → 接上新帧页尾之上的 dy 行新内容 + 新页尾
+        self.out.truncate(self.out.len() - bottom * w * 4);
+        self.out
+            .extend_from_slice(&frame[(h - bottom - dy) * w * 4..]);
+        self.total_h += dy;
+        self.tail = dy + bottom;
+        self.prev = sig;
+        Push::Appended
+    }
 }
 
 // ===== 拼接预览（屏幕边缘的竖条小窗，随拼接变长） =====
@@ -285,6 +347,8 @@ struct LongShot {
     /// 像素 / pt
     scale: f64,
     front: Option<FrontApp>,
+    /// 从钉图打开时为钉图窗 label：完成即更新那张钉图
+    pin: Option<String>,
 }
 
 static LONGS: Mutex<Option<HashMap<String, LongShot>>> = Mutex::new(None);
@@ -295,9 +359,11 @@ pub struct LongInfo {
     pub px_w: usize,
     pub px_h: usize,
     pub scale: f64,
+    /// 编辑的是钉图（✓ = 更新钉图）
+    pub pin: bool,
 }
 
-/// 拼好的长图交给可滚动的标注窗（带系统标题栏，居中于选区所在屏）。
+/// 拼好的长图（或钉图）交给可滚动的标注窗（带系统标题栏，居中于所在屏）。
 pub fn open_editor(
     app: &AppHandle,
     rgba: Vec<u8>,
@@ -306,6 +372,7 @@ pub fn open_editor(
     scale: f64,
     front: Option<FrontApp>,
     display: RectPt,
+    pin: Option<String>,
 ) {
     let label = format!(
         "{EDITOR_PREFIX}{}",
@@ -325,16 +392,21 @@ pub fn open_editor(
                 px_h,
                 scale,
                 front,
+                pin: pin.clone(),
             },
         );
     let pt_w = px_w as f64 / scale;
     let win_w = (pt_w + 48.0).clamp(680.0, display.w * 0.9);
-    let win_h = display.h * 0.85;
+    let win_h = (px_h as f64 / scale + 120.0).clamp(400.0, display.h * 0.85);
     let (x, y) = (
         display.x + (display.w - win_w) / 2.0,
         display.y + (display.h - win_h) / 2.0,
     );
-    let title = crate::tr_fmt!("长截屏 {px_w}×{px_h}", "Scrolling capture {px_w}×{px_h}");
+    let title = if pin.is_some() {
+        crate::tr_fmt!("编辑钉图 {px_w}×{px_h}", "Edit pin {px_w}×{px_h}")
+    } else {
+        crate::tr_fmt!("长截屏 {px_w}×{px_h}", "Scrolling capture {px_w}×{px_h}")
+    };
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
         let built = tauri::WebviewWindowBuilder::new(
@@ -376,6 +448,7 @@ pub fn info(label: &str) -> Option<LongInfo> {
         px_w: l.px_w,
         px_h: l.px_h,
         scale: l.scale,
+        pin: l.pin.is_some(),
     })
 }
 
@@ -400,9 +473,13 @@ pub fn commit(
         .unwrap()
         .as_mut()
         .and_then(|m| m.remove(window.label()));
-    let front = entry.and_then(|e| e.front);
+    let (front, pin) = entry.map_or((None, None), |e| (e.front, e.pin));
     let app = window.app_handle().clone();
     let _ = window.destroy();
+    if let (crate::screenshot::Action::Pin, Some(pin)) = (action, pin) {
+        crate::screenshot::pin_replace(&app, &pin, w, h, rgba);
+        return Ok(());
+    }
     std::thread::spawn(move || match action {
         crate::screenshot::Action::SaveAs => {
             crate::screenshot::save_as(&app, w, h, rgba, front.as_ref())
@@ -457,6 +534,36 @@ mod tests {
         let blank = vec![[9u8, 9, 9, 255]; 2].concat();
         let rows = |n: usize| -> Vec<(u64, bool)> { row_signatures(&blank.repeat(n), 2, n) };
         assert_eq!(scroll_offset(&rows(50), &rows(50)), None);
+    }
+
+    /// 视口 = 固定页头 + 内容[top..] + 固定页尾，逐段下滚后长图里页头页尾各只一份。
+    #[test]
+    fn sticky_header_and_footer_kept_once() {
+        let content: Vec<u8> = (0..120).map(|i| 100 + i as u8).collect();
+        let header: Vec<u8> = (1..9).collect();
+        let footer: Vec<u8> = (30..40).collect();
+        let body_h = 60 - header.len() - footer.len();
+        let frame = |top: usize| -> Vec<u8> {
+            page(&[&header[..], &content[top..top + body_h], &footer[..]].concat())
+        };
+        let mut st = Stitcher::new(frame(0), 2, 60);
+        for top in [20, 40, 60] {
+            assert_eq!(st.push(&frame(top)), Push::Appended);
+        }
+        assert_eq!(st.push(&frame(60)), Push::Same);
+        let expected = page(&[&header[..], &content[..60 + body_h], &footer[..]].concat());
+        assert_eq!(st.total_h, 60 + 60);
+        let rows = |v: &[u8]| v.chunks(8).map(|c| c[0]).collect::<Vec<_>>();
+        assert_eq!(rows(&st.out), rows(&expected), "页头页尾不重复、内容连续");
+    }
+
+    #[test]
+    fn plain_page_stitches_contiguously() {
+        let content: Vec<u8> = (0..200).map(|i| (i * 13 % 251) as u8).collect();
+        let mut st = Stitcher::new(page(&content[..60]), 2, 60);
+        assert_eq!(st.push(&page(&content[30..90])), Push::Appended);
+        assert_eq!(st.push(&page(&content[55..115])), Push::Appended);
+        assert!(st.out == page(&content[..115]));
     }
 
     #[test]

@@ -761,6 +761,7 @@ pub fn long(app: &AppHandle, label: &str, x: f64, y: f64, w: f64, h: f64) -> Res
                     pw as f64 / w,
                     session.front,
                     bounds,
+                    None,
                 );
             }
             Err(e) => {
@@ -1250,6 +1251,8 @@ pub fn pin_menu(
         alpha = alpha.text(format!("pin:alpha:{pct}"), format!("{pct}%"));
     }
     let menu = MenuBuilder::new(app)
+        .text("pin:edit", pick("编辑标注…", "Annotate…"))
+        .separator()
         .text("pin:copy", pick("复制", "Copy"))
         .text("pin:clip", pick("存入「剪贴」", "Save to Clipboard"))
         .item(&sec.build()?)
@@ -1290,6 +1293,7 @@ fn pin_menu_action(app: &AppHandle, window: &tauri::WebviewWindow, id: &str) {
                 }
             }
         }
+        "pin:edit" => pin_edit(app, window),
         "pin:reset" => {
             pin_zoom(window, 1.0);
             let _ = window.emit_to(&label, PIN_ZOOM_RESET_EVENT, ());
@@ -1326,6 +1330,78 @@ fn pin_menu_action(app: &AppHandle, window: &tauri::WebviewWindow, id: &str) {
             });
         }
     }
+}
+
+/// 钉图编辑标注：用长图标注窗打开钉图原图，完成后写回这张钉图。
+fn pin_edit(app: &AppHandle, window: &tauri::WebviewWindow) {
+    let label = window.label().to_string();
+    let Some((w, h, rgba, pt_w)) = ({
+        let guard = PINS.lock().unwrap();
+        guard
+            .as_ref()
+            .and_then(|m| m.get(&label))
+            .map(|p| (p.px_w, p.px_h, p.rgba.clone(), p.pt_w))
+    }) else {
+        return;
+    };
+    let display = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .map(|m| {
+            let (pos, size) = (
+                m.position().to_logical::<f64>(m.scale_factor()),
+                m.size().to_logical::<f64>(m.scale_factor()),
+            );
+            RectPt {
+                x: pos.x,
+                y: pos.y,
+                w: size.width,
+                h: size.height,
+            }
+        })
+        .unwrap_or(RectPt {
+            x: 0.0,
+            y: 0.0,
+            w: 1440.0,
+            h: 900.0,
+        });
+    crate::screenshot_long::open_editor(
+        app,
+        rgba,
+        w,
+        h,
+        w as f64 / pt_w,
+        None,
+        display,
+        Some(label),
+    );
+}
+
+const PIN_RELOAD_EVENT: &str = "toskr://pin-reload";
+
+/// 标注后的图写回钉图（尺寸不变），钉图窗重新拉图。
+pub fn pin_replace(app: &AppHandle, label: &str, w: usize, h: usize, rgba: Vec<u8>) {
+    let mut bgra = rgba.clone();
+    for px in bgra.chunks_exact_mut(4) {
+        px.swap(0, 2);
+    }
+    let bmp = crate::screenshot_sck::bmp_from_bgra(&bgra, w, h, w * 4);
+    {
+        let mut guard = PINS.lock().unwrap();
+        let Some(p) = guard.as_mut().and_then(|m| m.get_mut(label)) else {
+            warn(
+                app,
+                pick(
+                    "钉图已关闭，标注未保存",
+                    "The pin was closed; annotations not saved",
+                ),
+            );
+            return;
+        };
+        (p.bmp, p.rgba, p.px_w, p.px_h) = (bmp, rgba, w, h);
+    }
+    let _ = app.emit_to(label, PIN_RELOAD_EVENT, ());
 }
 
 /// 钉图识别文字：复制到剪贴板（不入库）。
