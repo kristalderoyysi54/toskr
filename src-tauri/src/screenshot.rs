@@ -1140,6 +1140,20 @@ fn open_pin(app: &AppHandle, pin: Pin, x: f64, y: f64) {
         match built {
             Ok(window) => {
                 crate::window::ensure_fullscreen_auxiliary(&window);
+                let menu_app = handle.clone();
+                let menu_label = label.clone();
+                window.on_menu_event(move |_, event| {
+                    if let Some(w) = menu_app.get_webview_window(&menu_label) {
+                        pin_menu_action(&menu_app, &w, event.id().as_ref());
+                    }
+                });
+                // 关窗（含关闭全部）都释放钉图内存
+                let closing = label.clone();
+                window.on_window_event(move |event| {
+                    if matches!(event, tauri::WindowEvent::Destroyed) {
+                        PINS.lock().unwrap().as_mut().map(|m| m.remove(&closing));
+                    }
+                });
                 let _ = window.set_focus();
                 crate::diag::push(&handle, "截图已钉在屏幕上");
             }
@@ -1202,6 +1216,147 @@ pub fn pin_close(window: &tauri::WebviewWindow) {
         .as_mut()
         .map(|m| m.remove(window.label()));
     let _ = window.destroy();
+}
+
+/// 钉图右键菜单里可选的笔记分组（由前端向主窗口要来后传入）。
+#[derive(serde::Deserialize)]
+pub struct PinSection {
+    pub id: String,
+    pub name: String,
+}
+
+const PIN_ZOOM_RESET_EVENT: &str = "toskr://pin-zoom-reset";
+
+/// 钉图右键：原生弹出菜单（钉图窗常常很小，网页内菜单会被裁掉）。
+pub fn pin_menu(
+    app: &AppHandle,
+    window: &tauri::WebviewWindow,
+    sections: Vec<PinSection>,
+) -> tauri::Result<()> {
+    use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+    let mut sec = SubmenuBuilder::new(app, pick("存入分组", "Save to group"));
+    if sections.is_empty() {
+        sec = sec.item(
+            &MenuItemBuilder::with_id("pin:none", pick("没有可存入的分组", "No groups to save to"))
+                .enabled(false)
+                .build(app)?,
+        );
+    }
+    for s in sections {
+        sec = sec.text(format!("pin:section:{}", s.id), s.name);
+    }
+    let mut alpha = SubmenuBuilder::new(app, pick("透明度", "Opacity"));
+    for pct in [100, 80, 60, 40] {
+        alpha = alpha.text(format!("pin:alpha:{pct}"), format!("{pct}%"));
+    }
+    let menu = MenuBuilder::new(app)
+        .text("pin:copy", pick("复制", "Copy"))
+        .text("pin:clip", pick("存入「剪贴」", "Save to Clipboard"))
+        .item(&sec.build()?)
+        .text("pin:saveas", pick("另存为图片…", "Save image as…"))
+        .text("pin:ocr", pick("识别文字并复制", "Recognize text and copy"))
+        .separator()
+        .item(&alpha.build()?)
+        .text("pin:reset", pick("恢复原大小", "Actual size"))
+        .separator()
+        .text("pin:close", pick("关闭", "Close"))
+        .text("pin:closeall", pick("关闭全部钉图", "Close all pins"))
+        .build()?;
+    window.popup_menu(&menu)
+}
+
+/// 钉图图片的副本（像素尺寸 + RGBA）。
+fn pin_pixels(label: &str) -> Option<(usize, usize, Vec<u8>)> {
+    let guard = PINS.lock().unwrap();
+    let p = guard.as_ref()?.get(label)?;
+    Some((p.px_w, p.px_h, p.rgba.clone()))
+}
+
+fn pin_menu_action(app: &AppHandle, window: &tauri::WebviewWindow, id: &str) {
+    let label = window.label().to_string();
+    match id {
+        "pin:copy" => pin_copy(app, &label),
+        "pin:close" => pin_close(window),
+        "pin:closeall" => {
+            let labels: Vec<String> = PINS
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|m| m.keys().cloned().collect())
+                .unwrap_or_default();
+            for l in labels {
+                if let Some(w) = app.get_webview_window(&l) {
+                    pin_close(&w);
+                }
+            }
+        }
+        "pin:reset" => {
+            pin_zoom(window, 1.0);
+            let _ = window.emit_to(&label, PIN_ZOOM_RESET_EVENT, ());
+        }
+        _ if id.starts_with("pin:alpha:") => {
+            let pct: f64 = id["pin:alpha:".len()..].parse().unwrap_or(100.0);
+            if let Some(ns) = ns_window(window) {
+                ns.setAlphaValue((pct / 100.0).clamp(0.2, 1.0));
+            }
+        }
+        _ => {
+            let Some((w, h, rgba)) = pin_pixels(&label) else {
+                return;
+            };
+            let app = app.clone();
+            let id = id.to_string();
+            std::thread::spawn(move || match id.as_str() {
+                "pin:clip" => save(&app, Action::Save, None, w, h, &rgba, None),
+                "pin:saveas" => save_as(&app, w, h, rgba, None),
+                "pin:ocr" => pin_ocr(&app, w, h, &rgba),
+                _ => {
+                    if let Some(section) = id.strip_prefix("pin:section:") {
+                        save(
+                            &app,
+                            Action::Section,
+                            Some(section.to_string()),
+                            w,
+                            h,
+                            &rgba,
+                            None,
+                        );
+                    }
+                }
+            });
+        }
+    }
+}
+
+/// 钉图识别文字：复制到剪贴板（不入库）。
+fn pin_ocr(app: &AppHandle, w: usize, h: usize, rgba: &[u8]) {
+    let text = recognize(w, h, rgba)
+        .map(|lines| {
+            lines
+                .into_iter()
+                .map(|l| l.text)
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+    if text.trim().is_empty() {
+        warn(app, pick("未识别到文字", "No text recognized"));
+        return;
+    }
+    if let Some(_permit) = crate::pasteboard::try_claim(app) {
+        if let Ok(count) = crate::pasteboard::write_general_text(&text) {
+            crate::clipwatch::mark_self_write_count(app, count);
+        }
+    }
+    let n = text.chars().filter(|c| !c.is_whitespace()).count();
+    crate::window::show_hud(
+        app,
+        "ok",
+        crate::tr_fmt!("已复制识别出的 {n} 字", "Copied {n} recognized characters"),
+        false,
+        false,
+        None,
+    );
 }
 
 /// 同步写剪贴板并标记自写，避免进剪贴历史；剪贴板忙时只记诊断，不影响入库。

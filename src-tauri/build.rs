@@ -47,6 +47,7 @@ const COMMANDS: &[&str] = &[
     "pin_copy",
     "pin_zoom",
     "pin_close",
+    "pin_menu",
     "revive_text_preview",
     "list_send_targets",
     "adopt_send_target",

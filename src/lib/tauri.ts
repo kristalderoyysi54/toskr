@@ -1053,6 +1053,8 @@ export const api = {
   pinCopy: () => invoke("pin_copy"),
   pinZoom: (factor: number) => invoke("pin_zoom", { factor }),
   pinClose: () => invoke("pin_close"),
+  /** 钉图右键原生菜单；sections 为可存入的笔记分组。 */
+  pinMenu: (sections: { id: string; name: string }[]) => invoke("pin_menu", { sections }),
   screenshotCancel: () => invoke("screenshot_cancel"),
   /** 长截屏：选区（本屏 pt）内自动滚动拼接，结束后复制并存入「剪贴」。 */
   screenshotLong: (r: { x: number; y: number; w: number; h: number }) => invoke("screenshot_long", r),

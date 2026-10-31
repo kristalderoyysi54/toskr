@@ -788,6 +788,16 @@ pub fn pin_zoom(window: tauri::WebviewWindow, factor: f64) {
     crate::screenshot::pin_zoom(&window, factor);
 }
 
+/// 钉图右键菜单（原生弹出）；sections 为前端向主窗口要来的笔记分组。
+#[tauri::command]
+pub fn pin_menu(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    sections: Vec<crate::screenshot::PinSection>,
+) -> Result<(), String> {
+    crate::screenshot::pin_menu(&app, &window, sections).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn pin_close(window: tauri::WebviewWindow) {
     crate::screenshot::pin_close(&window);

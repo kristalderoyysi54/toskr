@@ -325,7 +325,7 @@ export const app = {
   "识别文字": "Recognize text",
   "在编辑器中打开（打码）": "Open in editor (redact)",
   "发送到当前目标": "Send to current target",
-  "钉图：拖动移动 · 滚轮缩放 · ⌘C 复制 · 双击或 Esc 关闭": "Pin: drag to move · scroll to zoom · ⌘C to copy · double-click or Esc to close",
+  "钉图：拖动移动 · 滚轮缩放 · ⌘C 复制 · 双击或 Esc 关闭 · 右键更多": "Pin: drag to move · scroll to zoom · ⌘C to copy · double-click or Esc to close · right-click for more",
   "聚光灯": "Spotlight",
   "另存为图片…": "Save image as…",
   "识别中…": "Detecting…",

@@ -1,16 +1,44 @@
 import { useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+
+import { NOTE_SECTIONS, type NoteSectionOption } from "@/lib/draftSection";
 
 import { useT } from "@/lib/i18n";
 import { api } from "@/lib/tauri";
 
-/** 钉图窗：置顶显示一张截图。拖动移动、滚轮缩放、⌘C 复制、双击或 Esc 关闭。 */
+/** 钉图窗：置顶显示一张截图。拖动移动、滚轮缩放、⌘C 复制、双击或 Esc 关闭、右键菜单。 */
+const PIN_ZOOM_RESET_EVENT = "toskr://pin-zoom-reset";
+
 export default function PinView() {
   const t = useT();
   const [src, setSrc] = useState<string | null>(null);
   const factor = useRef(1);
   const [zoom, setZoom] = useState<number | null>(null);
   const zoomTimer = useRef<number | null>(null);
+  const sections = useRef<NoteSectionOption[]>([]);
+
+  const showZoom = (pct: number) => {
+    setZoom(pct);
+    if (zoomTimer.current) window.clearTimeout(zoomTimer.current);
+    zoomTimer.current = window.setTimeout(() => setZoom(null), 900);
+  };
+
+  // 右键菜单「存入分组」要的分组列表；「恢复原大小」由 Rust 改窗口后通知这里复位倍率
+  useEffect(() => {
+    const offSections = listen<NoteSectionOption[]>(NOTE_SECTIONS, (event) => {
+      sections.current = event.payload;
+    });
+    const offReset = listen(PIN_ZOOM_RESET_EVENT, () => {
+      factor.current = 1;
+      showZoom(100);
+    });
+    void api.screenshotRequestSections().catch(() => {});
+    return () => {
+      void offSections.then((f) => f());
+      void offReset.then((f) => f());
+    };
+  }, []);
 
   useEffect(() => {
     let url: string | null = null;
@@ -44,7 +72,7 @@ export default function PinView() {
   return (
     <div
       className="fixed inset-0 cursor-grab select-none overflow-hidden border border-primary/40"
-      title={t("钉图：拖动移动 · 滚轮缩放 · ⌘C 复制 · 双击或 Esc 关闭")}
+      title={t("钉图：拖动移动 · 滚轮缩放 · ⌘C 复制 · 双击或 Esc 关闭 · 右键更多")}
       onMouseDown={(e) => {
         if (e.button !== 0) return;
         if (e.detail >= 2) void api.pinClose();
@@ -54,9 +82,11 @@ export default function PinView() {
         factor.current = Math.min(4, Math.max(0.2, factor.current * (1 - e.deltaY * 0.002)));
         void api.pinZoom(factor.current);
         // 缩放时在图上短暂显示当前比例
-        setZoom(Math.round(factor.current * 100));
-        if (zoomTimer.current) window.clearTimeout(zoomTimer.current);
-        zoomTimer.current = window.setTimeout(() => setZoom(null), 900);
+        showZoom(Math.round(factor.current * 100));
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        void api.pinMenu(sections.current);
       }}
     >
       <img src={src} alt="" draggable={false} className="pointer-events-none size-full object-fill" />

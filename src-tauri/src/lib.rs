@@ -315,6 +315,7 @@ pub fn run() {
             commands::pin_copy,
             commands::pin_zoom,
             commands::pin_close,
+            commands::pin_menu,
             commands::revive_text_preview,
             commands::list_send_targets,
             commands::adopt_send_target,

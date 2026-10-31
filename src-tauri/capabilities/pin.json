@@ -11,6 +11,10 @@
     "allow-pin-image",
     "allow-pin-copy",
     "allow-pin-zoom",
-    "allow-pin-close"
+    "allow-pin-close",
+    "allow-pin-menu",
+    "allow-screenshot-request-sections",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
   ]
 }
