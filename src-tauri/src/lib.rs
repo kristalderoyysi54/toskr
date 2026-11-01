@@ -293,6 +293,7 @@ pub fn run() {
             commands::get_vibrancy_enabled,
             commands::set_new_note_hotkey,
             commands::set_screenshot_hotkey,
+            commands::set_screenshot_hide_self,
             commands::screen_capture_access,
             commands::screenshot_session,
             commands::screenshot_frame,

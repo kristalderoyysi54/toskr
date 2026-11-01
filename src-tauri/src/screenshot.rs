@@ -138,6 +138,16 @@ struct Session {
 }
 
 static SESSION: Mutex<Option<Session>> = Mutex::new(None);
+/// 截图时是否把 Toskr 自己的窗口（面板、钉图等）排除出画面；默认不排除（设置可改）。
+static HIDE_SELF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_hide_self(hide: bool) {
+    HIDE_SELF.store(hide, Ordering::Relaxed);
+}
+
+pub fn hides_self() -> bool {
+    HIDE_SELF.load(Ordering::Relaxed)
+}
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 /// 钉图窗 label → (BMP, 原始 pt 尺寸)；窗口关闭即移除。
 static PINS: Mutex<Option<HashMap<String, Pin>>> = Mutex::new(None);

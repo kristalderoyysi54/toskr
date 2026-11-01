@@ -49,6 +49,7 @@
     "allow-get-vibrancy-enabled",
     "allow-set-new-note-hotkey",
     "allow-set-screenshot-hotkey",
+    "allow-set-screenshot-hide-self",
     "allow-screen-capture-access",
     "allow-revive-text-preview",
     "allow-list-send-targets",

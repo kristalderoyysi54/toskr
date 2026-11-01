@@ -44,16 +44,17 @@ fn shareable_content() -> Result<Retained<SCShareableContent>, String> {
         .ok_or_else(|| "shareable content unavailable".to_string())
 }
 
-/// 指定屏的内容过滤器（排除本应用窗口）与 pt→像素比、屏 pt 尺寸。
+/// 指定屏的内容过滤器与 pt→像素比、屏 pt 尺寸。`exclude_self` 时排除本应用窗口。
 fn display_filter(
     content: &SCShareableContent,
     id: u32,
+    exclude_self: bool,
 ) -> Result<(Retained<SCContentFilter>, f64, f64, f64), String> {
     let me = std::process::id() as i32;
     let apps = unsafe { content.applications() };
     let own: Vec<_> = apps
         .iter()
-        .filter(|a| unsafe { a.processID() } == me)
+        .filter(|a| exclude_self && unsafe { a.processID() } == me)
         .collect();
     let excluded = NSArray::from_retained_slice(&own);
     let displays = unsafe { content.displays() };
@@ -93,7 +94,8 @@ pub fn capture_region(
     (x, y, w, h): (f64, f64, f64, f64),
 ) -> Result<(Vec<u8>, usize, usize), String> {
     let content = shareable_content()?;
-    let (filter, scale, _, _) = display_filter(&content, id)?;
+    // 长截屏：选区边框与预览面板是本应用窗口，始终排除
+    let (filter, scale, _, _) = display_filter(&content, id, true)?;
     let config = base_config((w * scale).round() as usize, (h * scale).round() as usize);
     unsafe {
         config.setSourceRect(objc2_core_foundation::CGRect::new(
@@ -122,7 +124,7 @@ pub fn capture(ids: &[u32]) -> Result<Vec<Shot>, String> {
     let content = shareable_content()?;
     let mut pending = Vec::with_capacity(ids.len());
     for &id in ids {
-        let (filter, scale, w, h) = display_filter(&content, id)?;
+        let (filter, scale, w, h) = display_filter(&content, id, crate::screenshot::hides_self())?;
         let config = base_config((w * scale).round() as usize, (h * scale).round() as usize);
         let (tx, rx) = mpsc::channel();
         let block = RcBlock::new(move |image: *mut CGImage, _err: *mut NSError| {

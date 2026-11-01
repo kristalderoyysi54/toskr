@@ -680,4 +680,6 @@ export const settings = {
   "区域截图": "Screenshot",
   "需要「屏幕录制」权限，授权后重启 Toskr": "Needs Screen Recording permission; restart Toskr after allowing",
   "截图复制到剪贴板，并存入「剪贴」": "Copies the screenshot and saves it to Clipboard",
+  "截图时隐藏 Toskr": "Hide Toskr in screenshots",
+  "开启后截图画面里不出现 Toskr 的面板、钉图等窗口；默认关闭，截到的就是屏幕上看到的样子": "When on, Toskr's panel, pins and other windows are left out of screenshots. Off by default: you capture exactly what's on screen",
 } satisfies Record<string, EnValue>;

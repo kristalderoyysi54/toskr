@@ -1182,8 +1182,9 @@ export default function ScreenshotView() {
       {/* 光标十字延长线：贯穿全屏，便于对齐边缘（未选区与拖出选区时显示） */}
       {showLoupe && cursor && (
         <>
-          <div className="pointer-events-none absolute inset-x-0 h-px bg-primary/70" style={{ top: Math.round(cursor.y) }} />
-          <div className="pointer-events-none absolute inset-y-0 w-px bg-primary/70" style={{ left: Math.round(cursor.x) }} />
+          {/* 2px 半透明天蓝，压在光标中心 */}
+          <div className="pointer-events-none absolute inset-x-0 h-0.5 bg-primary/50" style={{ top: Math.round(cursor.y) - 1 }} />
+          <div className="pointer-events-none absolute inset-y-0 w-0.5 bg-primary/50" style={{ left: Math.round(cursor.x) - 1 }} />
         </>
       )}
 

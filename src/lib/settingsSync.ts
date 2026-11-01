@@ -188,6 +188,9 @@ export function applySettingsPatch(patch: Partial<Settings>) {
   if ("screenshotHotkey" in patch) {
     void api.setScreenshotHotkey(s.screenshotHotkey).catch(() => {});
   }
+  if ("screenshotHideSelf" in patch) {
+    void api.setScreenshotHideSelf(s.screenshotHideSelf).catch(() => {});
+  }
   if (
     "companionEnabled" in patch ||
     "companionApps" in patch ||

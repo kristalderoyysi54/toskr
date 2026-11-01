@@ -12,6 +12,7 @@ function runtimeEffects(settings: Settings): Promise<unknown>[] {
     api.setPanelHotkey(settings.panelToggleHotkey),
     api.setNewNoteHotkey(settings.newNoteHotkey),
     api.setScreenshotHotkey(settings.screenshotHotkey),
+    api.setScreenshotHideSelf(settings.screenshotHideSelf),
     api.setCompanionConfig(
       settings.companionEnabled,
       settings.companionApps,

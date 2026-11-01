@@ -2721,6 +2721,17 @@ function HotkeySection({
           }
         />
         <ScreenshotHotkeyRow settings={settings} patch={patch} />
+        <Row
+          label={t("截图时隐藏 Toskr")}
+          hint={t("开启后截图画面里不出现 Toskr 的面板、钉图等窗口；默认关闭，截到的就是屏幕上看到的样子")}
+          right={
+            <Switch
+              aria-label={t("截图时隐藏 Toskr")}
+              checked={settings.screenshotHideSelf}
+              onCheckedChange={(v) => patch({ screenshotHideSelf: v })}
+            />
+          }
+        />
       </Group>
       <ExcludeSection settings={settings} patch={patch} />
       <div

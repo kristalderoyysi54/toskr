@@ -603,6 +603,12 @@ pub fn set_screenshot_hotkey(app: AppHandle, shortcut: Option<String>) -> Result
     rebind_global_hotkeys(&app)
 }
 
+/// 截图时是否排除 Toskr 自己的窗口（设置项，默认不排除）。
+#[tauri::command]
+pub fn set_screenshot_hide_self(hide: bool) {
+    crate::screenshot::set_hide_self(hide);
+}
+
 /// 屏幕录制授权状态；`prompt` 时未授权会弹系统授权框。
 #[tauri::command]
 pub fn screen_capture_access(prompt: bool) -> bool {
