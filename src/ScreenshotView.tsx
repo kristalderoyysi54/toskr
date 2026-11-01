@@ -282,6 +282,9 @@ export default function ScreenshotView() {
   const [translating, setTranslating] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const drag = useRef<Drag | null>(null);
+  // 网页还没收到过真实指针事件（应用未激活）时，轮询顺带让原生侧把光标设成十字
+  const gotPointer = useRef(false);
+  const forceCross = useRef(false);
   const copyLatest = useRef<{ copyColor: (rgb?: boolean) => void; live: boolean }>({ copyColor: () => {}, live: false });
   const textRef = useRef<HTMLTextAreaElement | null>(null);
   const sessionRef = useRef<number | null>(null);
@@ -292,6 +295,7 @@ export default function ScreenshotView() {
   const reset = useCallback(() => {
     sessionRef.current = null;
     drag.current = null;
+    gotPointer.current = false;
     setInfo(null);
     setImg(null);
     setSel(null);
@@ -643,7 +647,7 @@ export default function ScreenshotView() {
       if (!pending && !drag.current) {
         pending = true;
         void api
-          .screenshotCursor()
+          .screenshotCursor(forceCross.current)
           .then((p) => {
             if (!alive || drag.current) return;
             setCursor((prev) =>
@@ -698,6 +702,7 @@ export default function ScreenshotView() {
   }, [showLoupe, img, cursor, sx, sy]);
 
   const locked = !!tool || history.shapes.length > 0;
+  forceCross.current = !gotPointer.current && !sel;
 
   // 已画图形的选中与调整：无工具时可选任意图形，有工具时只选同类
   const edit = useShapeEdit({ history, setHistory, W, H, tol: 6, canPick: (s) => !tool || s.kind === tool });
@@ -755,6 +760,7 @@ export default function ScreenshotView() {
   };
 
   const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    gotPointer.current = true;
     const p = point(e);
     setCursor(p);
     if (edit.move(p.x, p.y)) return;

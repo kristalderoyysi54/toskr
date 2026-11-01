@@ -1068,7 +1068,8 @@ export const api = {
   annotateImage: (file: string, note?: { noteId: string; dataGeneration: number }) =>
     invoke("annotate_image", { file, ...note }),
   /** 光标在本屏的位置（本屏 pt），不在本屏为 null。 */
-  screenshotCursor: () => invoke<[number, number] | null>("screenshot_cursor"),
+  /** forceCross：网页尚未收到指针事件时，原生侧顺带把光标设成十字。 */
+  screenshotCursor: (forceCross = false) => invoke<[number, number] | null>("screenshot_cursor", { forceCross }),
   /** 截图遮罩阶段追踪（只记白名单阶段名与数字，排查用）。 */
   screenshotTrace: (stage: string, a = 0, b = 0) =>
     invoke("screenshot_trace", { stage, a, b }).catch(() => {}),

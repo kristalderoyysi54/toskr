@@ -466,12 +466,40 @@ fn show_overlay(app: &AppHandle, i: usize, b: RectPt, session_id: u64, focus: bo
     let _ = window.show();
     if focus {
         let _ = window.set_focus();
-        // 激活本应用：遮罩一出现就收得到指针事件，十字光标立即生效（不用先点一下）；
-        // 在指针移动、网页接管光标前先设系统十字光标
-        crate::focus::activate_pid(std::process::id() as i32);
-        objc2_app_kit::NSCursor::crosshairCursor().set();
+        // 激活本应用：遮罩一出现就收得到指针事件，网页的十字光标才生效（不用先点一下）。
+        // 激活可能被系统拒绝（macOS 14+ 协作式激活），前端轮询期间还会反复设系统十字光标兜底
+        if let Some(mtm) = objc2::MainThreadMarker::new() {
+            #[allow(deprecated)]
+            objc2_app_kit::NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
+            objc2_app_kit::NSCursor::crosshairCursor().set();
+        }
+        let handle = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            let probe = handle.clone();
+            let _ = handle.run_on_main_thread(move || {
+                if let Some(mtm) = objc2::MainThreadMarker::new() {
+                    let active = objc2_app_kit::NSApplication::sharedApplication(mtm).isActive();
+                    crate::diag::push(&probe, format!("截图遮罩 应用激活={active}"));
+                }
+            });
+        });
     }
     let _ = window.emit_to(&label, SESSION_EVENT, session_id);
+}
+
+/// 系统十字光标（网页收到指针事件前的兜底；须在主线程设置）。
+pub fn set_cross_cursor(window: &tauri::WebviewWindow) {
+    let apply = || {
+        if objc2::MainThreadMarker::new().is_some() {
+            objc2_app_kit::NSCursor::crosshairCursor().set();
+        }
+    };
+    if objc2::MainThreadMarker::new().is_some() {
+        apply();
+    } else {
+        let _ = window.run_on_main_thread(apply);
+    }
 }
 
 /// 屏数变少时把多余的旧遮罩藏起来。仅限主线程。
