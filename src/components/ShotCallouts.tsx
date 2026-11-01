@@ -54,13 +54,14 @@ export function ShotCallouts({
           const n = numbers.get(shapes.find((s) => s.kind === "callout" && s.x1 === draft.shape.x1 && s.y1 === draft.shape.y1) ?? draft.shape) ?? numbers.size;
           return (
             <div
-              className={cn(floatingSurface(), "absolute flex w-64 items-center gap-2 overflow-hidden rounded-md pr-2")}
+              className={cn(floatingSurface(), "absolute flex w-64 items-center gap-2 rounded-md p-1 pr-2")}
               style={{ left: b.x * z, top: (b.y + b.h) * z + 6 }}
               onPointerDown={(e) => e.stopPropagation()}
               onDoubleClick={(e) => e.stopPropagation()}
             >
               <span
-                className="flex h-7 min-w-7 shrink-0 items-center justify-center rounded-br-md px-1 text-label font-bold"
+                // 编号块与卡片同一圆角
+                className="flex h-6 min-w-6 shrink-0 items-center justify-center rounded-md px-1 text-label font-bold"
                 style={{ background: draft.shape.color, color: numberTextColor(draft.shape.color) }}
               >
                 {n}

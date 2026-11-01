@@ -187,11 +187,16 @@ function ShapeEl({ s, n }: { s: Shape; n?: number }) {
       const b = box(s);
       const tag = calloutTag(s, n ?? 1);
       const { x, y, w, h, r } = tag;
+      // 框四角与贴片左上、右下同一圆角
+      const c = Math.min(r, b.w / 2, b.h / 2);
       return (
         <g>
-          <rect x={b.x} y={b.y} width={b.w} height={b.h} fill={s.color} fillOpacity={CALLOUT_TINT} />
-          <rect x={b.x} y={b.y} width={b.w} height={b.h} {...stroke} />
-          <path d={`M${x} ${y}H${x + w}V${y + h - r}Q${x + w} ${y + h} ${x + w - r} ${y + h}H${x}Z`} fill={s.color} />
+          <rect x={b.x} y={b.y} width={b.w} height={b.h} rx={c} fill={s.color} fillOpacity={CALLOUT_TINT} />
+          <rect x={b.x} y={b.y} width={b.w} height={b.h} rx={c} {...stroke} />
+          <path
+            d={`M${x} ${y + c}Q${x} ${y} ${x + c} ${y}H${x + w}V${y + h - r}Q${x + w} ${y + h} ${x + w - r} ${y + h}H${x}Z`}
+            fill={s.color}
+          />
           <text
             x={x + w / 2}
             y={y + h / 2 + 0.5}

@@ -71,14 +71,16 @@ export type CalloutShape = Extract<Shape, { kind: "callout" }>;
 
 /** 批注编号贴片高度（pt），按粗细档位。 */
 export const CALLOUT_TAG_H = [18, 22, 26];
+/** 批注框与编号贴片共用的圆角（pt），按粗细档位。 */
+export const CALLOUT_RADIUS = [4, 5, 6];
 /** 批注框内的浅色底（与描边同色）。 */
 export const CALLOUT_TINT = 0.08;
 
-/** 批注编号贴片：嵌在框内左上角，只有右下角圆角；两位数加宽。 */
+/** 批注编号贴片：嵌在框内左上角，左上随框圆角、右下同半径圆角；两位数加宽。 */
 export function calloutTag(s: { x1: number; y1: number; x2: number; y2: number; size: number }, n: number) {
   const b = box(s);
   const h = CALLOUT_TAG_H[s.size] ?? CALLOUT_TAG_H[1];
-  return { x: b.x, y: b.y, w: n >= 10 ? Math.round(h * 1.4) : h, h, r: Math.round(h * 0.35) };
+  return { x: b.x, y: b.y, w: n >= 10 ? Math.round(h * 1.4) : h, h, r: CALLOUT_RADIUS[s.size] ?? CALLOUT_RADIUS[1] };
 }
 
 /** 批注编号：按在图形列表里的先后，从 1 起；删掉一条后后面的自动补齐。 */
@@ -284,14 +286,17 @@ export function drawShapes(
       drawBadge(ctx, s.x, s.y, NUMBER_RADIUS[s.size], s.color, s.n);
     } else if (s.kind === "callout") {
       const b = box(s);
-      ctx.globalAlpha = CALLOUT_TINT;
-      ctx.fillRect(b.x, b.y, b.w, b.h);
-      ctx.globalAlpha = 1;
-      ctx.strokeRect(b.x, b.y, b.w, b.h);
       const n = callouts.get(s) ?? 1;
       const tag = calloutTag(s, n);
+      const corner = Math.min(tag.r, b.w / 2, b.h / 2);
       ctx.beginPath();
-      ctx.roundRect(tag.x, tag.y, tag.w, tag.h, [0, 0, tag.r, 0]);
+      ctx.roundRect(b.x, b.y, b.w, b.h, corner);
+      ctx.globalAlpha = CALLOUT_TINT;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.roundRect(tag.x, tag.y, tag.w, tag.h, [corner, 0, tag.r, 0]);
       ctx.fill();
       ctx.fillStyle = numberTextColor(s.color);
       ctx.font = `700 ${Math.round(tag.h * 0.62)}px -apple-system, BlinkMacSystemFont, sans-serif`;
