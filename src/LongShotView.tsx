@@ -132,7 +132,7 @@ export default function LongShotView() {
       const out = crop ? toPixelRect(crop, scale, scale, info.pxW, info.pxH) : { x: 0, y: 0, w: info.pxW, h: info.pxH };
       const raw = { data: new Uint8Array(ctx.getImageData(out.x, out.y, out.w, out.h).data.buffer), w: out.w, h: out.h };
       const pad = Math.round(frame.shadow * scale);
-      const img2 = frame.radius > 0 || pad > 0 ? frameImage(raw, frame.radius * scale, pad) : raw;
+      const img2 = frame.radius > 0 || pad > 0 ? frameImage(raw, frame.radius * scale, pad, frame.shadowAlpha) : raw;
       setBusy(true);
       void api.longCommit(img2.data, img2.w, img2.h, action, sectionId).catch(() => setBusy(false));
     },
@@ -393,7 +393,7 @@ export default function LongShotView() {
           ref={pageRef}
           className={cn("relative mx-auto select-none", !frame.shadow && "shadow-md")}
           style={{
-            boxShadow: frame.shadow ? shadowCss(frame.shadow * z) : undefined,
+            boxShadow: frame.shadow ? shadowCss(frame.shadow * z, frame.shadowAlpha) : undefined,
             borderRadius: clampRadius(frame.radius, ptW, ptH) * z,
             width: ptW * z, height: ptH * z, cursor: hoverCursor ?? (tool ? (tool === "text" ? "text" : "crosshair") : "default") }}
           onPointerDown={onPointerDown}

@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useMemo, useState, type ComponentProps } from "react";
 import {
+  Blend,
   Circle,
   Focus,
   Grid3x3,
@@ -16,7 +17,13 @@ import {
 import { IconButton } from "@/components/ui/icon-button";
 import { useT, type MessageKey } from "@/lib/i18n";
 import { COLORS, SIZES, type SizeLevel, type Tool } from "@/lib/screenshot/annotate";
-import { MAX_RADIUS, MAX_SHADOW } from "@/lib/screenshot/frame";
+import {
+  MAX_RADIUS,
+  MAX_SHADOW,
+  SHADOW_ALPHA_DEFAULT,
+  SHADOW_ALPHA_MAX,
+  SHADOW_ALPHA_MIN,
+} from "@/lib/screenshot/frame";
 import { cn } from "@/lib/utils";
 
 /** 截图遮罩与长图标注窗共用的标注工具；tip 为悬停说明。 */
@@ -132,16 +139,26 @@ export interface ShotFrame {
   radius: number;
   /** 阴影大小（pt），0 = 无 */
   shadow: number;
+  /** 阴影浓淡（不透明度 %） */
+  shadowAlpha: number;
 }
 
 function loadFrame(): ShotFrame {
   try {
-    const v = JSON.parse(localStorage.getItem(FRAME_KEY) ?? "{}") as { radius?: unknown; shadow?: unknown };
+    const v = JSON.parse(localStorage.getItem(FRAME_KEY) ?? "{}") as {
+      radius?: unknown;
+      shadow?: unknown;
+      shadowAlpha?: unknown;
+    };
     const num = (x: unknown, max: number) => (typeof x === "number" && x >= 0 ? Math.min(x, max) : 0);
+    const alpha =
+      typeof v.shadowAlpha === "number"
+        ? Math.min(SHADOW_ALPHA_MAX, Math.max(SHADOW_ALPHA_MIN, v.shadowAlpha))
+        : SHADOW_ALPHA_DEFAULT;
     // 旧版阴影是开关：true 折算为 24
-    return { radius: num(v.radius, MAX_RADIUS), shadow: v.shadow === true ? 24 : num(v.shadow, MAX_SHADOW) };
+    return { radius: num(v.radius, MAX_RADIUS), shadow: v.shadow === true ? 24 : num(v.shadow, MAX_SHADOW), shadowAlpha: alpha };
   } catch {
-    return { radius: 0, shadow: 0 };
+    return { radius: 0, shadow: 0, shadowAlpha: SHADOW_ALPHA_DEFAULT };
   }
 }
 
@@ -155,7 +172,9 @@ export function useShotFrame() {
     const onStorage = (e: StorageEvent) => {
       if (e.key !== FRAME_KEY) return;
       const next = loadFrame();
-      setFrame((f) => (f.radius === next.radius && f.shadow === next.shadow ? f : next));
+      setFrame((f) =>
+        f.radius === next.radius && f.shadow === next.shadow && f.shadowAlpha === next.shadowAlpha ? f : next
+      );
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
@@ -177,7 +196,9 @@ export function ShotFrameControls({
     icon: LucideIcon,
     label: MessageKey,
     tip: MessageKey,
-    max: number
+    max: number,
+    min = 0,
+    step = 2
   ) => {
     const Icon = icon;
     return (
@@ -185,9 +206,9 @@ export function ShotFrameControls({
         <Icon className="size-3.5 text-muted-foreground" />
         <input
           type="range"
-          min={0}
+          min={min}
           max={max}
-          step={2}
+          step={step}
           value={frame[key]}
           aria-label={t(label)}
           onChange={(e) => {
@@ -204,6 +225,8 @@ export function ShotFrameControls({
     <>
       {slider("radius", SquareRoundCorner, "圆角", "圆角：出图四角裁成圆角（外侧透明）", MAX_RADIUS)}
       {slider("shadow", Layers2, "阴影", "阴影：出图四周加投影，数值为阴影大小（0 = 无）", MAX_SHADOW)}
+      {frame.shadow > 0 &&
+        slider("shadowAlpha", Blend, "阴影浓淡", "阴影浓淡：投影的深浅（%）", SHADOW_ALPHA_MAX, SHADOW_ALPHA_MIN, 5)}
     </>
   );
 }

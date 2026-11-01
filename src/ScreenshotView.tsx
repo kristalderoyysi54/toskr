@@ -90,7 +90,13 @@ type Drag =
   | { kind: "resize"; x: number; y: number; orig: Rect; handle: Handle };
 
 /** 选区上方圆角 / 阴影条的估计宽度（贴右边时左移）。 */
-const FRAME_BAR_W = 360;
+const FRAME_BAR_W = 480;
+/** #RRGGBB → rgb(r, g, b)。 */
+function hexToRgb(hex: string): string {
+  const n = Number.parseInt(hex.slice(1), 16);
+  return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
+}
+
 /** C 键：按物理键位认（中文输入法下 e.key 是 Process）。 */
 function isKeyC(e: KeyboardEvent): boolean {
   return e.code === "KeyC" || e.key.toLowerCase() === "c";
@@ -276,7 +282,7 @@ export default function ScreenshotView() {
   const [translating, setTranslating] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const drag = useRef<Drag | null>(null);
-  const copyLatest = useRef<{ copyColor: () => void; live: boolean }>({ copyColor: () => {}, live: false });
+  const copyLatest = useRef<{ copyColor: (rgb?: boolean) => void; live: boolean }>({ copyColor: () => {}, live: false });
   const textRef = useRef<HTMLTextAreaElement | null>(null);
   const sessionRef = useRef<number | null>(null);
   const urlRef = useRef<string | null>(null);
@@ -429,7 +435,7 @@ export default function ScreenshotView() {
     if (!raw || !sel) return;
     const padPt = frame.shadow;
     const out =
-      frame.radius > 0 || padPt > 0 ? frameImage(raw, frame.radius * sx, Math.round(padPt * sx)) : raw;
+      frame.radius > 0 || padPt > 0 ? frameImage(raw, frame.radius * sx, Math.round(padPt * sx), frame.shadowAlpha) : raw;
     reset();
     // 带阴影时图四周多出透明边距，钉图位置相应左上移，图本身仍对齐原处
     const placement = { x: sel.x - padPt, y: sel.y - padPt };
@@ -557,10 +563,10 @@ export default function ScreenshotView() {
     void api.screenshotSaveText(text).catch(() => void api.screenshotCancel());
   }, [ocr, reset]);
 
-  const copyColor = useCallback(() => {
+  /** C 复制 HEX，⇧C 复制 RGB；写剪贴板并存入「剪贴」，遮罩不关。 */
+  const copyColor = useCallback((rgb = false) => {
     if (!sampled) return;
-    // 写剪贴板并存入「剪贴」，遮罩不关
-    void api.screenshotCopyColor(sampled).then(() => {
+    void api.screenshotCopyColor(rgb ? hexToRgb(sampled) : sampled).then(() => {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 900);
     });
@@ -611,8 +617,8 @@ export default function ScreenshotView() {
       } else if (!e.metaKey && isKeyC(e)) {
         stop();
         // 中文输入法下 e.key 是 Process，按物理键位认；键盘焦点可能在别的屏，交给光标所在屏
-        if (copyLatest.current.live) copyColor();
-        else void emit(COPY_COLOR_EVENT);
+        if (copyLatest.current.live) copyColor(e.shiftKey);
+        else void emit(COPY_COLOR_EVENT, e.shiftKey);
       } else if (sel && !tool && history.shapes.length === 0 && e.key.startsWith("Arrow")) {
         stop();
         const step = e.shiftKey ? 10 : 1;
@@ -661,8 +667,8 @@ export default function ScreenshotView() {
   const showLoupe = !!(img && cursor && (!sel || dragging));
   copyLatest.current = { copyColor, live: showLoupe };
   useEffect(() => {
-    const off = listen(COPY_COLOR_EVENT, () => {
-      if (copyLatest.current.live) copyLatest.current.copyColor();
+    const off = listen<boolean>(COPY_COLOR_EVENT, (event) => {
+      if (copyLatest.current.live) copyLatest.current.copyColor(event.payload === true);
     });
     return () => void off.then((f) => f());
   }, []);
@@ -893,7 +899,7 @@ export default function ScreenshotView() {
             // 选区预览出图圆角
             borderRadius: sel ? clampRadius(frame.radius, active.w, active.h) : 0,
             // token-exception: 阴影预览、选区外 45% 黑压暗层
-            boxShadow: [...(sel && frame.shadow ? [shadowCss(frame.shadow)] : []), "0 0 0 99999px rgba(0,0,0,0.45)"].join(
+            boxShadow: [...(sel && frame.shadow ? [shadowCss(frame.shadow, frame.shadowAlpha)] : []), "0 0 0 99999px rgba(0,0,0,0.45)"].join(
               ", "
             ),
           }}
@@ -1187,7 +1193,7 @@ export default function ScreenshotView() {
             </div>
             <div className="flex items-center gap-1">
               <span className="inline-block size-2 rounded-sm border border-white/50" style={{ background: sampled }} />
-              {copied ? t("已复制") : `${sampled}  C`}
+              {copied ? t("已复制") : `${sampled}  C · ⇧C RGB`}
             </div>
           </div>
         </div>

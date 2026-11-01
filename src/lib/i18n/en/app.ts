@@ -343,6 +343,8 @@ export const app = {
   "长截屏不保留标注，请先撤销标注": "Scrolling capture can’t keep annotations; undo them first",
   "已拼接 {n} px": "Stitched {n} px",
   "放弃长截屏": "Discard scrolling capture",
+  "阴影浓淡": "Shadow opacity",
+  "阴影浓淡：投影的深浅（%）": "Shadow opacity: how dark the shadow is (%)",
   "阴影：出图四周加投影，数值为阴影大小（0 = 无）": "Shadow: drop shadow around the image; the value is its size (0 = none)",
   "圆角": "Corner radius",
   "阴影": "Shadow",

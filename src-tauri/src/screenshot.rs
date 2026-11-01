@@ -1065,11 +1065,24 @@ pub fn recognize(width: usize, height: usize, rgba: &[u8]) -> Result<Vec<OcrLine
 }
 
 /// 文字面板「存入剪贴」：结束会话，复制并存入「剪贴」。
+/// 取色结果只接受 `#RRGGBB` 或 `rgb(r, g, b)`（0–255）。
+fn valid_color(s: &str) -> bool {
+    if let Some(h) = s.strip_prefix('#') {
+        return h.len() == 6 && h.chars().all(|c| c.is_ascii_hexdigit());
+    }
+    let Some(inner) = s.strip_prefix("rgb(").and_then(|r| r.strip_suffix(')')) else {
+        return false;
+    };
+    let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.len() <= 3 && p.parse::<u8>().is_ok())
+}
+
 /// 取色：色值写剪贴板并存入「剪贴」（来源记截图前的前台应用），遮罩不关。
 pub fn copy_color(app: &AppHandle, hex: String) -> Result<(), String> {
-    let valid =
-        hex.len() == 7 && hex.starts_with('#') && hex[1..].chars().all(|c| c.is_ascii_hexdigit());
-    if !valid {
+    if !valid_color(&hex) {
         return Err("invalid color".into());
     }
     let front = SESSION
@@ -1699,6 +1712,15 @@ mod tests {
         let (x, y, w, h) = vision_to_pixels((0.1, 0.7, 0.5, 0.2), 200, 100);
         assert!((x - 20.0).abs() < 1e-9 && (y - 10.0).abs() < 1e-9);
         assert!((w - 100.0).abs() < 1e-9 && (h - 20.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn accepts_hex_and_rgb_colors_only() {
+        assert!(valid_color("#3C4F76"));
+        assert!(valid_color("rgb(60, 79, 118)"));
+        assert!(!valid_color("rgb(256, 0, 0)"));
+        assert!(!valid_color("#3C4F7"));
+        assert!(!valid_color("hello"));
     }
 
     #[test]
