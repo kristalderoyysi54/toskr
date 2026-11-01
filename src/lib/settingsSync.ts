@@ -185,8 +185,12 @@ export function applySettingsPatch(patch: Partial<Settings>) {
   if ("newNoteHotkey" in patch) {
     void api.setNewNoteHotkey(s.newNoteHotkey).catch(() => {});
   }
-  if ("screenshotHotkey" in patch) {
-    void api.setScreenshotHotkey(s.screenshotHotkey).catch(() => {});
+  if ("screenshotHotkey" in patch || "screenshotEnabled" in patch) {
+    // 功能关闭时注销快捷键
+    void api.setScreenshotHotkey(s.screenshotEnabled ? s.screenshotHotkey : null).catch(() => {});
+  }
+  if ("screenshotEnabled" in patch) {
+    void api.setScreenshotEnabled(s.screenshotEnabled).catch(() => {});
   }
   if ("screenshotHideSelf" in patch) {
     void api.setScreenshotHideSelf(s.screenshotHideSelf).catch(() => {});

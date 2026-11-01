@@ -55,8 +55,8 @@ describe("设置搜索", () => {
     expect(searchSettings("新手导览", enabled)[0]?.section).toBe("outcome");
   });
 
-  it("所有旧分区深链归入七个一级目的，旧别名仍可打开", () => {
-    expect(SETTINGS_PRIMARY_SECTIONS).toHaveLength(7);
+  it("所有旧分区深链归入八个一级目的，旧别名仍可打开", () => {
+    expect(SETTINGS_PRIMARY_SECTIONS).toHaveLength(8);
     for (const section of Object.keys(SETTINGS_SECTION_LABELS) as SettingsSectionId[]) {
       expect(settingsSectionFromLink(section, enabled)).toBe(section);
       expect(SETTINGS_PRIMARY_SECTIONS).toContain(settingsPrimarySection(section));

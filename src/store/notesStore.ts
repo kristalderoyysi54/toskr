@@ -493,6 +493,8 @@ export interface Settings {
   screenshotHotkey: string | null;
   /** 截图时排除 Toskr 自己的窗口（面板、钉图等）；默认不排除。 */
   screenshotHideSelf: boolean;
+  /** 区域截图功能总开关（「更多功能」），默认开。 */
+  screenshotEnabled: boolean;
   /** 隐身模式：捕获照常入库但不弹 HUD（会议投屏用）。 */
   stealth: boolean;
   /** 捕获成功音效（隐身模式下强制静音）。 */
@@ -849,6 +851,7 @@ export const defaultSettings = (): Settings => ({
   newNoteHotkey: "Cmd+Shift+KeyN",
   screenshotHotkey: null,
   screenshotHideSelf: false,
+  screenshotEnabled: true,
   stealth: false,
   soundEnabled: true,
   hudDurationMs: HUD_DURATION_DEFAULT_MS,

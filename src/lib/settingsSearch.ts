@@ -2,6 +2,7 @@ import { t, type MessageKey } from "@/lib/i18n";
 
 export type SettingsSectionId =
   | "general"
+  | "permissions"
   | "hotkey"
   | "clip"
   | "features"
@@ -39,6 +40,7 @@ export type SettingsSearchEntry = {
 /** 子页签名称；与一级分类同名的子页改用更短的名字，避免页标题与页签重复。 */
 export const SETTINGS_SECTION_LABELS: Record<SettingsSectionId, MessageKey> = {
   general: "通用",
+  permissions: "权限",
   hotkey: "快捷键",
   clip: "剪贴板",
   features: "功能开关",
@@ -56,12 +58,13 @@ export const SETTINGS_SECTION_LABELS: Record<SettingsSectionId, MessageKey> = {
 };
 
 export const SETTINGS_PRIMARY_SECTIONS = [
-  "general", "hotkey", "clip", "target", "features", "data", "outcome",
+  "general", "hotkey", "clip", "target", "features", "data", "permissions", "outcome",
 ] as const satisfies readonly SettingsSectionId[];
 export type SettingsPrimarySection = (typeof SETTINGS_PRIMARY_SECTIONS)[number];
 
 export const SETTINGS_PRIMARY_LABELS: Record<SettingsPrimarySection, MessageKey> = {
   general: "窗口与外观",
+  permissions: "权限",
   hotkey: "快捷键",
   clip: "剪贴板",
   target: "粘贴与隐私",
@@ -180,10 +183,12 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   entry("companion", "companion-enabled", "启用伴随停靠", ["打开停靠", "磁吸"]),
   entry("companion", "companion-gap", "与窗口的间隙", ["距离", "边距", "gap"]),
 
+  entry("permissions", "permissions", "系统权限", ["权限", "授权", "辅助功能", "输入监控", "屏幕录制", "隐私"]),
   entry("features", "features", "更多功能", ["功能开关", "启用功能", "实验功能", "默认关闭"]),
   entry("features", "feature-message", "消息监听（实验）", ["开启消息", "im", "只读监听"], { target: "消息监听（实验）" }),
   entry("features", "feature-secret", "秘文", ["开启秘文", "加密", "密钥"]),
   entry("features", "feature-subscriptions", "订阅", ["开启订阅", "账单", "信用卡"]),
+  entry("features", "feature-screenshot", "区域截图", ["开启截图", "截屏", "screenshot"], { target: "区域截图" }),
 
   entry("hotkey", "hotkey", "快捷键", ["捕获与快捷键", "键盘", "热键", "hotkey", "shortcut", "shift"]),
   entry("hotkey", "trigger-key", "触发键（双击）", ["双击 shift", "捕获键", "全局触发"]),

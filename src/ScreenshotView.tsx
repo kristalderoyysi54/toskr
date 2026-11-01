@@ -91,6 +91,9 @@ type Drag =
 
 /** 选区上方圆角 / 阴影条的估计宽度（贴右边时左移）。 */
 const FRAME_BAR_W = 480;
+// token-exception: 截图十字线浅天蓝（用户指定）
+const CROSSHAIR_COLOR = "rgba(125, 211, 252, 0.7)";
+
 /** #RRGGBB → rgb(r, g, b)。 */
 function hexToRgb(hex: string): string {
   const n = Number.parseInt(hex.slice(1), 16);
@@ -1182,9 +1185,15 @@ export default function ScreenshotView() {
       {/* 光标十字延长线：贯穿全屏，便于对齐边缘（未选区与拖出选区时显示） */}
       {showLoupe && cursor && (
         <>
-          {/* 2px 半透明天蓝，压在光标中心 */}
-          <div className="pointer-events-none absolute inset-x-0 h-0.5 bg-primary/50" style={{ top: Math.round(cursor.y) - 1 }} />
-          <div className="pointer-events-none absolute inset-y-0 w-0.5 bg-primary/50" style={{ left: Math.round(cursor.x) - 1 }} />
+          {/* 2px 半透明浅天蓝，压在光标中心 */}
+          <div
+            className="pointer-events-none absolute inset-x-0 h-0.5"
+            style={{ top: Math.round(cursor.y) - 1, background: CROSSHAIR_COLOR }}
+          />
+          <div
+            className="pointer-events-none absolute inset-y-0 w-0.5"
+            style={{ left: Math.round(cursor.x) - 1, background: CROSSHAIR_COLOR }}
+          />
         </>
       )}
 

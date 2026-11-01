@@ -996,6 +996,10 @@ export const api = {
   /** 注册/清除全局区域截图快捷键。 */
   setScreenshotHotkey: (shortcut: string | null) =>
     invoke("set_screenshot_hotkey", { shortcut }),
+  /** 截图功能总开关（同步托盘入口）。 */
+  setScreenshotEnabled: (enabled: boolean) => invoke("set_screenshot_enabled", { enabled }),
+  /** 请求「输入监控」授权：首次弹系统框，resolve 当前是否已授权。 */
+  inputMonitoringRequest: () => invoke<boolean>("input_monitoring_request"),
   /** 截图时是否排除 Toskr 自己的窗口。 */
   setScreenshotHideSelf: (hide: boolean) => invoke("set_screenshot_hide_self", { hide }),
   /** 屏幕录制授权状态；prompt 时未授权会弹系统授权框。 */

@@ -32,12 +32,18 @@ static TAP_PORT: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut
 extern "C" {
     fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
     fn CGPreflightListenEventAccess() -> bool;
+    fn CGRequestListenEventAccess() -> bool;
 }
 
 /// 当前签名是否已获「输入监控」授权。与 tap 是否创建成功分开判断：
 /// Sequoia 上 tap 可创建但事件仍会被 TCC 静默拦截。
 pub fn listen_authorized() -> bool {
     unsafe { CGPreflightListenEventAccess() }
+}
+
+/// 请求「输入监控」授权：首次弹系统授权框，之后只返回当前状态。
+pub fn request_listen() -> bool {
+    unsafe { CGRequestListenEventAccess() }
 }
 
 /// 安装事件 tap。必须在主线程调用（setup 阶段或 run_on_main_thread 内）。

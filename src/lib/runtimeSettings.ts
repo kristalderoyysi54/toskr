@@ -11,7 +11,8 @@ function runtimeEffects(settings: Settings): Promise<unknown>[] {
     api.setHotkeyConfig(settings.hotkeyModifier, settings.hotkeyGapMs),
     api.setPanelHotkey(settings.panelToggleHotkey),
     api.setNewNoteHotkey(settings.newNoteHotkey),
-    api.setScreenshotHotkey(settings.screenshotHotkey),
+    api.setScreenshotHotkey(settings.screenshotEnabled ? settings.screenshotHotkey : null),
+    api.setScreenshotEnabled(settings.screenshotEnabled),
     api.setScreenshotHideSelf(settings.screenshotHideSelf),
     api.setCompanionConfig(
       settings.companionEnabled,

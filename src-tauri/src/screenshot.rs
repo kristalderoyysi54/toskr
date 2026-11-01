@@ -148,6 +148,17 @@ pub fn set_hide_self(hide: bool) {
 pub fn hides_self() -> bool {
     HIDE_SELF.load(Ordering::Relaxed)
 }
+
+/// 截图功能总开关（「更多功能」里可关，默认开）；关闭时快捷键已注销、托盘不显示入口。
+static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+pub fn set_enabled(on: bool) {
+    ENABLED.store(on, Ordering::Relaxed);
+}
+
+pub fn enabled() -> bool {
+    ENABLED.load(Ordering::Relaxed)
+}
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 /// 钉图窗 label → (BMP, 原始 pt 尺寸)；窗口关闭即移除。
 static PINS: Mutex<Option<HashMap<String, Pin>>> = Mutex::new(None);
@@ -332,13 +343,15 @@ pub fn list_windows() -> Vec<ScreenWindow> {
     for item in arr.iter() {
         let dict: CFDictionary<CFString, CFType> =
             unsafe { CFDictionary::wrap_under_get_rule(*item as CFDictionaryRef) };
-        if dict_number(&dict, "kCGWindowLayer") != Some(0.0)
-            || dict_number(&dict, "kCGWindowAlpha").is_some_and(|a| a <= 0.0)
-        {
-            continue;
-        }
         let pid = dict_number(&dict, "kCGWindowOwnerPID").unwrap_or(0.0) as i32;
-        if pid == me {
+        let layer = dict_number(&dict, "kCGWindowLayer");
+        // 自身窗口（面板、钉图常在浮动层）只在截图不隐藏 Toskr 时作为吸附目标
+        let layer_ok = if pid == me {
+            !hides_self() && layer.is_some_and(|l| (0.0..20.0).contains(&l))
+        } else {
+            layer == Some(0.0)
+        };
+        if !layer_ok || dict_number(&dict, "kCGWindowAlpha").is_some_and(|a| a <= 0.0) {
             continue;
         }
         let Some(b) = dict
@@ -535,17 +548,19 @@ fn capture_failed(app: &AppHandle, e: String) {
 /// 截图快捷键入口：冻结各屏 → 显示遮罩窗。会话进行中重复按键忽略。
 pub fn on_hotkey(app: &AppHandle) {
     crate::diag::push(app, "截图快捷键触发");
-    if SESSION.lock().unwrap().is_some() {
+    if !enabled() || SESSION.lock().unwrap().is_some() {
         return;
     }
-    if !access(true) {
-        crate::diag::push(app, "截图: 未获屏幕录制授权");
+    if !access(false) {
+        // 不直接弹系统框：带到设置 → 权限，由用户在那里统一授权
+        crate::diag::push(app, "截图: 未获屏幕录制授权，打开权限页");
+        crate::commands::open_settings_section(app, "permissions");
         crate::window::show_hud(
             app,
             "warn",
             pick(
-                "截图需要「屏幕录制」权限：在系统设置里允许 Toskr 后重启应用",
-                "Screenshots need Screen Recording permission: allow Toskr in System Settings, then restart the app",
+                "截图需要「屏幕录制」权限：已打开设置 → 权限，授权后重启 Toskr",
+                "Screenshots need Screen Recording permission: Settings → Permissions is open; allow it, then restart Toskr",
             )
             .into(),
             false,

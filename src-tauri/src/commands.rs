@@ -603,6 +603,23 @@ pub fn set_screenshot_hotkey(app: AppHandle, shortcut: Option<String>) -> Result
     rebind_global_hotkeys(&app)
 }
 
+/// 截图功能总开关（「更多功能」）：同步托盘入口。
+#[tauri::command]
+pub fn set_screenshot_enabled(app: AppHandle, enabled: bool) {
+    crate::screenshot::set_enabled(enabled);
+    crate::tray::refresh(&app);
+}
+
+/// 请求「输入监控」授权（设置 → 权限）；已授权时顺带重装监听。
+#[tauri::command]
+pub fn input_monitoring_request(app: AppHandle) -> bool {
+    let ok = crate::input::tap::request_listen();
+    if ok {
+        crate::input::tap::retry_install(&app);
+    }
+    ok
+}
+
 /// 截图时是否排除 Toskr 自己的窗口（设置项，默认不排除）。
 #[tauri::command]
 pub fn set_screenshot_hide_self(hide: bool) {
@@ -1754,6 +1771,12 @@ pub fn open_settings_window(app: AppHandle) {
             let _ = window.set_focus();
         }
     });
+}
+
+/// 打开设置窗并切到指定分区（前端 SETTINGS_SECTION 事件同名）。
+pub fn open_settings_section(app: &AppHandle, section: &'static str) {
+    open_settings_window(app.clone());
+    let _ = app.emit_to("settings", "toskr://settings-section", section);
 }
 
 /// 重启应用（输入监控授权变更后需要重启进程才能生效）。

@@ -26,6 +26,8 @@ const COMMANDS: &[&str] = &[
     "set_new_note_hotkey",
     "set_screenshot_hotkey",
     "set_screenshot_hide_self",
+    "set_screenshot_enabled",
+    "input_monitoring_request",
     "screen_capture_access",
     "screenshot_session",
     "screenshot_frame",

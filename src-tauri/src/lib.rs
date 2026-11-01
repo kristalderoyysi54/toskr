@@ -294,6 +294,8 @@ pub fn run() {
             commands::set_new_note_hotkey,
             commands::set_screenshot_hotkey,
             commands::set_screenshot_hide_self,
+            commands::set_screenshot_enabled,
+            commands::input_monitoring_request,
             commands::screen_capture_access,
             commands::screenshot_session,
             commands::screenshot_frame,

@@ -15,8 +15,10 @@ import {
   ArrowUp,
   Blocks,
   ClipboardList,
+  Check,
   Copy,
   CreditCard,
+  Crop,
   Database,
   Eye,
   Info,
@@ -221,6 +223,7 @@ const SECRET_STYLE_HINT: Record<SecretCipherStyle, MessageKey> = {
 
 const PRIMARY_ICONS: Record<SettingsPrimarySection, React.ReactNode> = {
   general: <Settings2 className="size-4" />,
+  permissions: <ShieldCheck className="size-4" />,
   hotkey: <Keyboard className="size-4" />,
   clip: <ClipboardList className="size-4" />,
   target: <Crosshair className="size-4" />,
@@ -815,6 +818,7 @@ export default function SettingsView() {
             searchSequence={searchTarget?.sequence ?? 0}
           />
         )}
+        {section === "permissions" && <PermissionsSection settings={settings} />}
         {section === "features" && <FeaturesSection settings={settings} patch={patch} onConfigure={setSection} />}
         {section === "message-watch" && (
           <MessageWatchSection settings={settings} patch={patch} />
@@ -2080,6 +2084,40 @@ export function FeaturesSection({ settings, patch, onConfigure }: SP & {
     <div>
       <SettingsIntro>{t("开启后，主面板会出现对应入口。")}</SettingsIntro>
       <Group>
+        <FeatureRow
+          icon={<Crop />}
+          title={t("区域截图")}
+          searchKey="区域截图"
+          description={t(
+            settings.screenshotEnabled
+              ? "菜单栏图标或快捷键截图；需要「屏幕录制」权限"
+              : "截取屏幕任意区域，可标注、钉在屏幕上、长截屏、识别文字"
+          )}
+          switchLabel={t("启用{feature}", { feature: t("区域截图") })}
+          checked={settings.screenshotEnabled}
+          onCheckedChange={(on) => {
+            patch({ screenshotEnabled: on });
+            if (!on) return;
+            // 开启后先查屏幕录制授权，未授权直接带到权限页
+            void api
+              .screenCaptureAccess(false)
+              .then((ok) => {
+                if (!ok) onConfigure("permissions");
+              })
+              .catch(() => {});
+          }}
+          actions={
+            settings.screenshotEnabled ? (
+              <Button
+                size="xs"
+                aria-label={t("设置{feature}", { feature: t("区域截图") })}
+                onClick={() => onConfigure("hotkey")}
+              >
+                {t("设置")}
+              </Button>
+            ) : undefined
+          }
+        />
         {FEATURES.map((feature) => (
           <FeatureRow
             key={feature.key}
@@ -2720,18 +2758,22 @@ function HotkeySection({
             />
           }
         />
-        <ScreenshotHotkeyRow settings={settings} patch={patch} />
-        <Row
-          label={t("截图时隐藏 Toskr")}
-          hint={t("开启后截图画面里不出现 Toskr 的面板、钉图等窗口；默认关闭，截到的就是屏幕上看到的样子")}
-          right={
-            <Switch
-              aria-label={t("截图时隐藏 Toskr")}
-              checked={settings.screenshotHideSelf}
-              onCheckedChange={(v) => patch({ screenshotHideSelf: v })}
+        {settings.screenshotEnabled && (
+          <>
+            <ScreenshotHotkeyRow settings={settings} patch={patch} />
+            <Row
+              label={t("截图时隐藏 Toskr")}
+              hint={t("开启后截图画面里不出现 Toskr 的面板、钉图等窗口；默认关闭，截到的就是屏幕上看到的样子")}
+              right={
+                <Switch
+                  aria-label={t("截图时隐藏 Toskr")}
+                  checked={settings.screenshotHideSelf}
+                  onCheckedChange={(v) => patch({ screenshotHideSelf: v })}
+                />
+              }
             />
-          }
-        />
+          </>
+        )}
       </Group>
       <ExcludeSection settings={settings} patch={patch} />
       <div
@@ -3870,6 +3912,149 @@ function AppleIntegrationPage({ settings, patch }: SP) {
             <li>{t("重复规则不推送，完成后由 Toskr 生成下一期")}</li>
           </ul>
         </DisclosureRow>
+      </Group>
+    </div>
+  );
+}
+
+type SystemPermission = "accessibility" | "input-monitoring" | "screen-capture" | "calendars" | "reminders";
+
+const PERMISSION_INFO: Record<SystemPermission, { label: MessageKey; why: MessageKey; restart?: boolean }> = {
+  accessibility: { label: "辅助功能", why: "读取你选中的文字（双击触发键捕获），并把内容粘贴回目标应用。" },
+  "input-monitoring": {
+    label: "输入监控",
+    why: "识别双击触发键等全局快捷操作；只判断按键时机，不记录输入内容。",
+    restart: true,
+  },
+  "screen-capture": {
+    label: "屏幕录制",
+    why: "区域截图、长截屏和取色需要读取屏幕画面；画面只在本机处理。",
+    restart: true,
+  },
+  calendars: { label: "日历", why: "在「提醒」页显示日历日程，只读。" },
+  reminders: { label: "提醒事项", why: "把任务同步到「提醒事项」，在 iPhone 上也能看到。" },
+};
+
+/** 设置 → 权限：把需要去系统设置授权的项集中展示；点「授权」先弹系统授权框，未通过再打开对应隐私面板。 */
+function PermissionsSection({ settings }: { settings: Settings }) {
+  const t = useT();
+  const [granted, setGranted] = useState<Partial<Record<SystemPermission, boolean>>>({});
+  // 点过授权、需重启才生效的项（输入监控 / 屏幕录制）
+  const [asked, setAsked] = useState<Partial<Record<SystemPermission, boolean>>>({});
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    void Promise.all([
+      api.axTrusted(false).catch(() => false),
+      api.tapStatus().catch(() => null),
+      api.screenCaptureAccess(false).catch(() => false),
+      api.appleCalendarStatus().catch(() => null),
+      api.appleRemindersStatus().catch(() => null),
+    ]).then(([ax, tap, screen, cal, rem]) => {
+      if (!alive) return;
+      setGranted({
+        accessibility: ax,
+        "input-monitoring": tap?.listening ?? false,
+        "screen-capture": screen,
+        calendars: cal === "granted",
+        reminders: rem === "granted",
+      });
+    });
+    return () => {
+      alive = false;
+    };
+  }, [tick]);
+  useEffect(() => {
+    // 从系统设置切回来、或停留在本页时都刷新状态
+    const refresh = () => setTick((n) => n + 1);
+    window.addEventListener("focus", refresh);
+    const timer = window.setInterval(refresh, 2000);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      window.clearInterval(timer);
+    };
+  }, []);
+  const items: SystemPermission[] = [
+    "accessibility",
+    "input-monitoring",
+    ...(settings.screenshotEnabled ? (["screen-capture"] as const) : []),
+    ...(settings.appleCalendarEnabled ? (["calendars"] as const) : []),
+    ...(settings.appleRemindersEnabled ? (["reminders"] as const) : []),
+  ];
+  const ask = async (key: SystemPermission) => {
+    const request: Record<SystemPermission, () => Promise<boolean>> = {
+      accessibility: () => api.axTrusted(true),
+      "input-monitoring": () => api.inputMonitoringRequest(),
+      "screen-capture": () => api.screenCaptureAccess(true),
+      calendars: async () => (await api.appleCalendarRequestAccess()) === "granted",
+      reminders: async () => (await api.appleRemindersRequestAccess()) === "granted",
+    };
+    const ok = await request[key]().catch(() => false);
+    setAsked((a) => ({ ...a, [key]: true }));
+    if (!ok) void api.openPrivacySettings(key);
+    setTick((n) => n + 1);
+  };
+  const pending = items.filter((key) => granted[key] === false);
+  const loading = items.some((key) => granted[key] === undefined);
+  return (
+    <div>
+      <SettingsIntro>
+        {t("Toskr 在这台 Mac 上需要的系统权限。点「授权」会弹出系统授权框或打开对应的系统设置页，在那里允许 Toskr 即可；每一项都可以随时在系统设置里更改，内容只留在你的电脑上。")}
+      </SettingsIntro>
+      <Group
+        title={t("系统权限")}
+        footer={
+          loading
+            ? t("检查中…")
+            : pending.length
+              ? t("还有 {n} 项需要授权", { n: pending.length })
+              : t("✓ 都已就绪")
+        }
+        footerTone={!loading && pending.length ? "warning" : undefined}
+      >
+        {items.map((key) => {
+          const info = PERMISSION_INFO[key];
+          const ok = granted[key];
+          const needRestart = !ok && info.restart && asked[key];
+          return (
+            <Row
+              key={key}
+              label={t(info.label)}
+              hint={
+                <span className="flex items-start gap-2">
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border",
+                      ok ? "border-success bg-success text-white" : "border-muted-foreground/40"
+                    )}
+                  >
+                    {ok && <Check className="size-3" />}
+                  </span>
+                  <span>
+                    {t(info.why)}
+                    {needRestart && (
+                      <span className="block text-warning">{t("已在系统设置里允许？重启 Toskr 后生效")}</span>
+                    )}
+                  </span>
+                </span>
+              }
+              right={
+                ok === undefined ? undefined : ok ? (
+                  <span className="text-label text-success">{t("已授权")}</span>
+                ) : needRestart ? (
+                  <Button size="xs" onClick={() => void api.restartApp()}>
+                    {t("重启 Toskr")}
+                  </Button>
+                ) : (
+                  <Button size="xs" onClick={() => void ask(key)}>
+                    {t("授权")}
+                  </Button>
+                )
+              }
+            />
+          );
+        })}
       </Group>
     </div>
   );

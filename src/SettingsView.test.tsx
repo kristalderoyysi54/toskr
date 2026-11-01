@@ -14,13 +14,13 @@ import { defaultSettings, normalizeContextMenu } from "@/store/notesStore";
 import { normalizeSettingsSearchText } from "@/lib/settingsSearch";
 
 describe("设置导航与层级", () => {
-  it("侧栏只有七个目的，诊断深链仍选中帮助与更新", () => {
+  it("侧栏只有八个目的，诊断深链仍选中帮助与更新", () => {
     const html = renderToStaticMarkup(
       <SettingsNavigation section="diagnostics" onSelect={vi.fn()} />
     );
     const active = html.match(/<button[^>]*aria-current="page"[\s\S]*?<\/button>/)?.[0];
 
-    expect(html.match(/<button/g)).toHaveLength(7);
+    expect(html.match(/<button/g)).toHaveLength(8);
     expect(active).toContain("帮助与更新");
     expect(html).not.toContain("伴随停靠");
     expect(html).not.toContain("AI 智能");

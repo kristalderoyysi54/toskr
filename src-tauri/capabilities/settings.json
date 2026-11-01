@@ -43,6 +43,8 @@
     "allow-set-new-note-hotkey",
     "allow-set-screenshot-hotkey",
     "allow-set-screenshot-hide-self",
+    "allow-set-screenshot-enabled",
+    "allow-input-monitoring-request",
     "allow-screen-capture-access",
     "allow-set-panel-hotkey",
     "allow-set-ai-api-key",

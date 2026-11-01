@@ -53,6 +53,17 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let autostart_enabled = app.autolaunch().is_enabled().unwrap_or(false);
 
     let toggle = MenuItem::with_id(app, "toggle", tr("显示 / 隐藏面板"), true, None::<&str>)?;
+    let screenshot_item: Option<MenuItem<Wry>> = if crate::screenshot::enabled() {
+        Some(MenuItem::with_id(
+            app,
+            "screenshot",
+            crate::i18n::pick("区域截图", "Screenshot"),
+            true,
+            None::<&str>,
+        )?)
+    } else {
+        None
+    };
     // 剪贴板暂停：开启收集时展示（Paste 同款子菜单；暂停中变为恢复项）
     let clip_on = state.clip_watch.load(Ordering::SeqCst);
     let pause_until = state.clip_pause_until.load(Ordering::Relaxed);
@@ -100,7 +111,11 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let sep2 = PredefinedMenuItem::separator(app)?;
 
     if tap_ok {
-        let mut items: Vec<&dyn tauri::menu::IsMenuItem<Wry>> = vec![&toggle, &sep1];
+        let mut items: Vec<&dyn tauri::menu::IsMenuItem<Wry>> = vec![&toggle];
+        if let Some(m) = &screenshot_item {
+            items.push(m);
+        }
+        items.push(&sep1);
         if let Some(m) = &clip_pause_menu {
             items.push(m);
         }
@@ -129,7 +144,11 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             None::<&str>,
         )?;
         let sep0 = PredefinedMenuItem::separator(app)?;
-        let mut items: Vec<&dyn tauri::menu::IsMenuItem<Wry>> = vec![&warn, &sep0, &toggle, &sep1];
+        let mut items: Vec<&dyn tauri::menu::IsMenuItem<Wry>> = vec![&warn, &sep0, &toggle];
+        if let Some(m) = &screenshot_item {
+            items.push(m);
+        }
+        items.push(&sep1);
         if let Some(m) = &clip_pause_menu {
             items.push(m);
         }
@@ -224,6 +243,7 @@ fn handle_menu(app: &AppHandle, id: &str) {
             };
             refresh(app);
         }
+        "screenshot" => crate::screenshot::on_hotkey(app),
         "settings" => crate::commands::open_settings_window(app.clone()),
         "quit" => app.exit(0),
         _ => {}
