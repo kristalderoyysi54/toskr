@@ -188,20 +188,8 @@ fn handle_menu(app: &AppHandle, id: &str) {
             }
         }
         "fix-permission" => {
-            let pane = if app
-                .state::<AppState>()
-                .tap_installed
-                .load(Ordering::SeqCst)
-            {
-                "Privacy_ListenEvent"
-            } else {
-                "Privacy_Accessibility"
-            };
-            let _ = std::process::Command::new("open")
-                .arg(format!(
-                    "x-apple.systempreferences:com.apple.preference.security?{pane}"
-                ))
-                .spawn();
+            // 统一到设置 → 权限，由那里逐项授权
+            crate::commands::open_settings_section(app, "permissions");
             crate::input::tap::retry_install(app);
         }
         id if id.starts_with("clip-pause-") => {

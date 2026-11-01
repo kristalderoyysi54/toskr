@@ -218,6 +218,7 @@ pub fn run() {
 
             // 托盘在 tap 安装之后创建，初始菜单即可反映权限状态。
             i18n::init_from_system();
+            commands::record_launch_access();
             tray::create(app.handle())?;
             Ok(())
         })
@@ -296,6 +297,7 @@ pub fn run() {
             commands::set_screenshot_hide_self,
             commands::set_screenshot_enabled,
             commands::input_monitoring_request,
+            commands::permission_restart_needed,
             commands::screen_capture_access,
             commands::screenshot_session,
             commands::screenshot_frame,

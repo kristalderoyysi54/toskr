@@ -565,7 +565,7 @@ pub fn on_hotkey(app: &AppHandle) {
             .into(),
             false,
             false,
-            None,
+            Some("settings:permissions".into()),
         );
         return;
     }

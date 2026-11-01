@@ -1178,6 +1178,27 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 启动 8s 后核对系统权限：有缺失就出可点击的 warn 气泡，直达设置 → 权限
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void Promise.all([
+        api.axTrusted(false),
+        api.tapStatus(),
+        useNotesStore.getState().settings.screenshotEnabled ? api.screenCaptureAccess(false) : Promise.resolve(true),
+      ])
+        .then(([ax, tap, screen]) => {
+          const missing = [!ax, !tap.listening, !screen].filter(Boolean).length;
+          if (missing) {
+            tip("warn", t("还有 {n} 项系统权限未授权，点此前往设置 → 权限", { n: missing }), false, "settings:permissions");
+          }
+        })
+        .catch(() => {
+          /* Tauri 环境外忽略 */
+        });
+    }, 8000);
+    return () => window.clearTimeout(timer);
+  }, []);
+
   // 应用级权限守护（常驻，与面板显隐无关）：
   // - 辅助功能授权后 3s 内自动重装监听（无需重启）
   // - 判「输入监控被扣」只认铁证，不再把「启动后没人打字」当故障

@@ -67,6 +67,13 @@ import { PlatinumTitlebar } from "@/components/ui/platinum-titlebar";
 import { Segmented } from "@/components/ui/segmented";
 import { Switch } from "@/components/ui/switch";
 import {
+  CROSSHAIR_ALPHA_MAX,
+  CROSSHAIR_ALPHA_MIN,
+  crosshairCss,
+  type CrosshairPreset,
+  useCrosshair,
+} from "@/lib/screenshot/crosshair";
+import {
   SETTINGS_CLEAR_CLIP,
   SETTINGS_DATA_HEALTH,
   SETTINGS_DATA_HEALTH_RESULT,
@@ -2772,6 +2779,7 @@ function HotkeySection({
                 />
               }
             />
+            <CrosshairColorRow />
           </>
         )}
       </Group>
@@ -3942,6 +3950,8 @@ function PermissionsSection({ settings }: { settings: Settings }) {
   // 点过授权、需重启才生效的项（输入监控 / 屏幕录制）
   const [asked, setAsked] = useState<Partial<Record<SystemPermission, boolean>>>({});
   const [tick, setTick] = useState(0);
+  // 已授权但本进程启动时还没授权：要重启才生效
+  const [restart, setRestart] = useState<Partial<Record<SystemPermission, boolean>>>({});
   useEffect(() => {
     let alive = true;
     void Promise.all([
@@ -3950,8 +3960,10 @@ function PermissionsSection({ settings }: { settings: Settings }) {
       api.screenCaptureAccess(false).catch(() => false),
       api.appleCalendarStatus().catch(() => null),
       api.appleRemindersStatus().catch(() => null),
-    ]).then(([ax, tap, screen, cal, rem]) => {
+      api.permissionRestartNeeded().catch(() => null),
+    ]).then(([ax, tap, screen, cal, rem, rs]) => {
       if (!alive) return;
+      setRestart({ "screen-capture": rs?.screenCapture ?? false, "input-monitoring": rs?.inputMonitoring ?? false });
       setGranted({
         accessibility: ax,
         "input-monitoring": tap?.listening ?? false,
@@ -3995,6 +4007,7 @@ function PermissionsSection({ settings }: { settings: Settings }) {
     setTick((n) => n + 1);
   };
   const pending = items.filter((key) => granted[key] === false);
+  const restartPending = items.filter((key) => granted[key] && restart[key]);
   const loading = items.some((key) => granted[key] === undefined);
   return (
     <div>
@@ -4008,14 +4021,18 @@ function PermissionsSection({ settings }: { settings: Settings }) {
             ? t("检查中…")
             : pending.length
               ? t("还有 {n} 项需要授权", { n: pending.length })
-              : t("✓ 都已就绪")
+              : restartPending.length
+                ? t("授权已完成，重启 Toskr 后生效")
+                : t("✓ 都已就绪")
         }
-        footerTone={!loading && pending.length ? "warning" : undefined}
+        footerTone={!loading && (pending.length || restartPending.length) ? "warning" : undefined}
       >
         {items.map((key) => {
           const info = PERMISSION_INFO[key];
           const ok = granted[key];
-          const needRestart = !ok && info.restart && asked[key];
+          // 已授权待重启（检测到）或点过授权仍未通过（可能是系统要求重启才刷新状态）
+          const restartNow = !!ok && !!restart[key];
+          const needRestart = restartNow || (!ok && info.restart && asked[key]);
           return (
             <Row
               key={key}
@@ -4034,18 +4051,20 @@ function PermissionsSection({ settings }: { settings: Settings }) {
                   <span>
                     {t(info.why)}
                     {needRestart && (
-                      <span className="block text-warning">{t("已在系统设置里允许？重启 Toskr 后生效")}</span>
+                      <span className="block text-warning">
+                        {restartNow ? t("已授权，重启 Toskr 后生效") : t("已在系统设置里允许？重启 Toskr 后生效")}
+                      </span>
                     )}
                   </span>
                 </span>
               }
               right={
-                ok === undefined ? undefined : ok ? (
-                  <span className="text-label text-success">{t("已授权")}</span>
-                ) : needRestart ? (
+                ok === undefined ? undefined : needRestart ? (
                   <Button size="xs" onClick={() => void api.restartApp()}>
-                    {t("重启 Toskr")}
+                    {restartNow ? t("立即重启") : t("重启 Toskr")}
                   </Button>
+                ) : ok ? (
+                  <span className="text-label text-success">{t("已授权")}</span>
                 ) : (
                   <Button size="xs" onClick={() => void ask(key)}>
                     {t("授权")}
@@ -4057,6 +4076,50 @@ function PermissionsSection({ settings }: { settings: Settings }) {
         })}
       </Group>
     </div>
+  );
+}
+
+const CROSSHAIR_LABELS: Record<CrosshairPreset, MessageKey> = {
+  sky: "浅天蓝",
+  white: "白",
+  lime: "黄绿",
+  magenta: "品红",
+};
+
+/** 截图十字线、选框与手柄的颜色与不透明度（存本机，下次截图生效）。 */
+function CrosshairColorRow() {
+  const t = useT();
+  const [style, setStyle] = useCrosshair();
+  return (
+    <Row
+      label={t("截图线条颜色")}
+      hint={t("十字线、选框和手柄的颜色")}
+      right={
+        <span className="flex items-center gap-2">
+          <span aria-hidden className="h-4 w-0.5 rounded-full" style={{ background: crosshairCss(style) }} />
+          <Segmented
+            value={style.preset}
+            options={(Object.keys(CROSSHAIR_LABELS) as CrosshairPreset[]).map((value) => ({
+              value,
+              label: t(CROSSHAIR_LABELS[value]),
+            }))}
+            onChange={(preset) => setStyle({ ...style, preset })}
+            ariaLabel={t("截图线条颜色")}
+          />
+          <input
+            type="range"
+            min={CROSSHAIR_ALPHA_MIN}
+            max={CROSSHAIR_ALPHA_MAX}
+            step={5}
+            value={style.alpha}
+            aria-label={t("线条不透明度")}
+            onChange={(e) => setStyle({ ...style, alpha: Number(e.target.value) })}
+            className="w-20 accent-primary"
+          />
+          <span className="w-8 font-mono text-label tabular-nums">{style.alpha}%</span>
+        </span>
+      }
+    />
   );
 }
 

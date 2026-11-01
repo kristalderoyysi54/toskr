@@ -45,6 +45,7 @@
     "allow-set-screenshot-hide-self",
     "allow-set-screenshot-enabled",
     "allow-input-monitoring-request",
+    "allow-permission-restart-needed",
     "allow-screen-capture-access",
     "allow-set-panel-hotkey",
     "allow-set-ai-api-key",

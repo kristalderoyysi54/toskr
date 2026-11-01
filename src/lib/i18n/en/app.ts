@@ -381,4 +381,5 @@ export const app = {
   "放弃标注": "Discard annotations",
   "裁剪：拖动边角调整，Esc 结束": "Crop: drag the corners or edges; Esc to finish",
   "完成：更新钉图（Enter）；长按选择存入的分组": "Done: update the pin (Enter); long-press to pick a group",
+  "还有 {n} 项系统权限未授权，点此前往设置 → 权限": "{n} system permissions are missing. Click to open Settings → Permissions",
 } satisfies Record<string, EnValue>;

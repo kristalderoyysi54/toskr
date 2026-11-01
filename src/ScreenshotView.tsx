@@ -28,6 +28,7 @@ import {
   useShotStyle,
 } from "@/components/ShotToolParts";
 import { clampRadius, frameImage, shadowCss } from "@/lib/screenshot/frame";
+import { crosshairCss, useCrosshair } from "@/lib/screenshot/crosshair";
 import { shapeAt } from "@/lib/screenshot/shapeEdit";
 import { Button } from "@/components/ui/button";
 import { floatingSurface } from "@/components/ui/floating-surface";
@@ -91,9 +92,6 @@ type Drag =
 
 /** 选区上方圆角 / 阴影条的估计宽度（贴右边时左移）。 */
 const FRAME_BAR_W = 480;
-// token-exception: 截图十字线、选框与手柄的浅天蓝（用户指定）
-const CROSSHAIR_COLOR = "rgba(125, 211, 252, 0.7)";
-
 /** #RRGGBB → rgb(r, g, b)。 */
 function hexToRgb(hex: string): string {
   const n = Number.parseInt(hex.slice(1), 16);
@@ -436,6 +434,9 @@ export default function ScreenshotView() {
 
   // 出图圆角 / 阴影（选区上方的小条调整）
   const [frame, setFrame] = useShotFrame();
+  // 十字线 / 选框 / 手柄颜色（设置 → 快捷键 → 截图线条颜色）
+  const [crossStyle] = useCrosshair();
+  const crossColor = crosshairCss(crossStyle);
 
   const confirm = useCallback((action: ScreenshotAction = "save", sectionId?: string) => {
     const raw = exportImage();
@@ -901,7 +902,7 @@ export default function ScreenshotView() {
         <div
           className="pointer-events-none absolute outline outline-2"
           style={{
-            outlineColor: CROSSHAIR_COLOR,
+            outlineColor: crossColor,
             left: active.x,
             top: active.y,
             width: active.w,
@@ -950,7 +951,7 @@ export default function ScreenshotView() {
             <div
               key={h}
               className="pointer-events-none absolute size-2 rounded-full border-2 bg-white"
-              style={{ left: p.x - 4, top: p.y - 4, borderColor: CROSSHAIR_COLOR }}
+              style={{ left: p.x - 4, top: p.y - 4, borderColor: crossColor }}
             />
           );
         })}
@@ -1186,14 +1187,14 @@ export default function ScreenshotView() {
       {/* 光标十字延长线：贯穿全屏，便于对齐边缘（未选区与拖出选区时显示） */}
       {showLoupe && cursor && (
         <>
-          {/* 2px 半透明浅天蓝，压在光标中心 */}
+          {/* 2px，颜色见设置，压在光标中心 */}
           <div
             className="pointer-events-none absolute inset-x-0 h-0.5"
-            style={{ top: Math.round(cursor.y) - 1, background: CROSSHAIR_COLOR }}
+            style={{ top: Math.round(cursor.y) - 1, background: crossColor }}
           />
           <div
             className="pointer-events-none absolute inset-y-0 w-0.5"
-            style={{ left: Math.round(cursor.x) - 1, background: CROSSHAIR_COLOR }}
+            style={{ left: Math.round(cursor.x) - 1, background: crossColor }}
           />
         </>
       )}

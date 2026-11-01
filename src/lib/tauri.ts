@@ -1000,6 +1000,9 @@ export const api = {
   setScreenshotEnabled: (enabled: boolean) => invoke("set_screenshot_enabled", { enabled }),
   /** 请求「输入监控」授权：首次弹系统框，resolve 当前是否已授权。 */
   inputMonitoringRequest: () => invoke<boolean>("input_monitoring_request"),
+  /** 已授权但要重启 Toskr 才生效的权限（启动时未授权、现在已授权）。 */
+  permissionRestartNeeded: () =>
+    invoke<{ screenCapture: boolean; inputMonitoring: boolean }>("permission_restart_needed"),
   /** 截图时是否排除 Toskr 自己的窗口。 */
   setScreenshotHideSelf: (hide: boolean) => invoke("set_screenshot_hide_self", { hide }),
   /** 屏幕录制授权状态；prompt 时未授权会弹系统授权框。 */

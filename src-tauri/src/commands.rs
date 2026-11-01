@@ -620,6 +620,30 @@ pub fn input_monitoring_request(app: AppHandle) -> bool {
     ok
 }
 
+/// 启动时的屏幕录制 / 输入监控授权基线：运行中新授权的项要重启进程才生效。
+static LAUNCH_ACCESS: std::sync::OnceLock<(bool, bool)> = std::sync::OnceLock::new();
+
+pub fn record_launch_access() {
+    let _ = LAUNCH_ACCESS.set((crate::screenshot::access(false), crate::input::tap::listen_authorized()));
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestartNeeded {
+    pub screen_capture: bool,
+    pub input_monitoring: bool,
+}
+
+/// 已授权但需重启才生效的项（启动时未授权、现在已授权）。
+#[tauri::command]
+pub fn permission_restart_needed() -> RestartNeeded {
+    let (screen0, listen0) = LAUNCH_ACCESS.get().copied().unwrap_or((true, true));
+    RestartNeeded {
+        screen_capture: !screen0 && crate::screenshot::access(false),
+        input_monitoring: !listen0 && crate::input::tap::listen_authorized(),
+    }
+}
+
 /// 截图时是否排除 Toskr 自己的窗口（设置项，默认不排除）。
 #[tauri::command]
 pub fn set_screenshot_hide_self(hide: bool) {

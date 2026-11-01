@@ -28,6 +28,7 @@ const COMMANDS: &[&str] = &[
     "set_screenshot_hide_self",
     "set_screenshot_enabled",
     "input_monitoring_request",
+    "permission_restart_needed",
     "screen_capture_access",
     "screenshot_session",
     "screenshot_frame",
