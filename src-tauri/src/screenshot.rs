@@ -38,10 +38,36 @@ pub const AFTER_EVENT: &str = "toskr://screenshot-after";
 pub const TRANSLATE_EVENT: &str = "toskr://screenshot-translate";
 pub const TRANSLATE_RESULT_EVENT: &str = "toskr://screenshot-translate-result";
 
-/// 本机中英互译（系统翻译框架，经包内 Swift 辅助程序）：比 AI 快一个量级。
-/// 辅助程序缺失、macOS 低于 15、语言包未装或超时都返回 Err，由调用方退回 AI。
-pub fn translate_local(lines: &[String]) -> Result<Vec<String>, String> {
+/// 本机翻译可用性（设置页状态行与图内翻译退回 AI 时的原因）。
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LocalTranslate {
+    Ready,
+    /// 系统支持，但离线语言包没下载
+    Download,
+    /// macOS 低于 15，或系统不支持这对语言
+    Unsupported,
+    /// 辅助程序缺失（开发构建）、超时等
+    Unknown,
+}
+
+impl LocalTranslate {
+    /// 本机翻译失败的错误文本 → 原因。
+    pub fn from_error(e: &str) -> Self {
+        match e {
+            "language pack not installed" => Self::Download,
+            "language pair unsupported" | "macOS 15 required" => Self::Unsupported,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// 调包内 Swift 辅助程序：`input` 补上目标语言后经 stdin 交给它（见 translate-helper/main.swift）。
+fn translate_helper(mut input: serde_json::Value) -> Result<serde_json::Value, String> {
     use std::io::Write;
+    if !objc2::available!(macos = 15.0) {
+        return Err("macOS 15 required".into());
+    }
     let helper = std::env::current_exe()
         .map_err(|e| e.to_string())?
         .parent()
@@ -54,7 +80,7 @@ pub fn translate_local(lines: &[String]) -> Result<Vec<String>, String> {
     } else {
         "zh-Hans"
     };
-    let input = serde_json::json!({ "target": target, "lines": lines }).to_string();
+    input["target"] = serde_json::json!(target);
     let mut child = std::process::Command::new(helper)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -65,20 +91,48 @@ pub fn translate_local(lines: &[String]) -> Result<Vec<String>, String> {
         .stdin
         .take()
         .ok_or("no stdin")?
-        .write_all(input.as_bytes())
+        .write_all(input.to_string().as_bytes())
         .map_err(|e| e.to_string())?;
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
-    #[derive(serde::Deserialize)]
-    struct Reply {
-        lines: Option<Vec<String>>,
-        error: Option<String>,
-    }
-    let reply: Reply = serde_json::from_slice(&out.stdout).map_err(|e| e.to_string())?;
-    match reply.lines {
-        Some(l) if l.len() == lines.len() => Ok(l),
-        _ => Err(reply.error.unwrap_or_else(|| "bad reply".into())),
+    serde_json::from_slice(&out.stdout).map_err(|e| e.to_string())
+}
+
+/// 本机中英互译（系统翻译框架，经包内 Swift 辅助程序）：比 AI 快一个量级。
+/// 辅助程序缺失、macOS 低于 15、语言包未装或超时都返回 Err（可用 `LocalTranslate::from_error` 归类），由调用方退回 AI。
+pub fn translate_local(lines: &[String]) -> Result<Vec<String>, String> {
+    let reply = translate_helper(serde_json::json!({ "lines": lines }))?;
+    match serde_json::from_value::<Vec<String>>(reply["lines"].clone()) {
+        Ok(l) if l.len() == lines.len() => Ok(l),
+        _ => Err(reply["error"].as_str().unwrap_or("bad reply").to_string()),
     }
 }
+
+/// 本机翻译当前是否可用（只查语言包，不翻译）；`prepare` 时缺包就弹系统下载确认框，
+/// 等用户处理完（最长 10 分钟）再返回。
+pub fn local_translate_status(prepare: bool) -> LocalTranslate {
+    match translate_helper(serde_json::json!({ "prepare": prepare })) {
+        Ok(reply) => match reply["status"].as_str() {
+            Some("installed") => LocalTranslate::Ready,
+            Some("supported") => LocalTranslate::Download,
+            Some("unsupported") => LocalTranslate::Unsupported,
+            _ => LocalTranslate::Unknown,
+        },
+        Err(e) => LocalTranslate::from_error(&e),
+    }
+}
+
+/// 截图期间排队、遮罩关掉后才弹的气泡（遮罩层级高于气泡，期间弹了也看不见）。
+static HINT_AFTER_END: Mutex<Option<String>> = Mutex::new(None);
+
+/// 遮罩开着就等它关掉再弹，否则立即弹。
+pub fn hint_after_end(app: &AppHandle, text: String) {
+    if SESSION.lock().unwrap().is_some() {
+        *HINT_AFTER_END.lock().unwrap() = Some(text);
+    } else {
+        crate::window::show_hud(app, "info", text, false, false, None);
+    }
+}
+
 const PIN_PREFIX: &str = "pin-";
 
 /// 是否已获屏幕录制授权；`prompt` 时首次会弹系统授权框（授权后需重启应用才生效）。
@@ -804,6 +858,9 @@ fn end_session(app: &AppHandle, restore_focus: bool) -> Option<Session> {
                 crate::focus::activate_pid(pid);
             }
         });
+        if let Some(text) = HINT_AFTER_END.lock().unwrap().take() {
+            crate::window::show_hud(&app, "info", text, false, false, None);
+        }
     });
     Some(session)
 }
@@ -867,23 +924,36 @@ pub fn long(
                 h,
             },
         );
+        let region = match (sck, display_id) {
+            (true, Some(id)) => Some(crate::screenshot_sck::RegionCapture::new(id, (x, y, w, h))),
+            _ => None,
+        };
         let started = std::time::Instant::now();
         let result = crate::screenshot_long::run(
             global,
-            || match (sck, display_id) {
-                (true, Some(id)) => crate::screenshot_sck::capture_region(id, (x, y, w, h)),
-                _ => capture_region_fallback(global),
+            || match &region {
+                Some(Ok(cap)) => cap.capture(),
+                Some(Err(e)) => Err(e.clone()),
+                None => capture_region_fallback(global),
             },
             |event| crate::screenshot_long::preview_event(&app, event),
         );
         crate::screenshot_long::close_preview(&app);
         match result {
-            Ok((rgba, pw, ph, stop)) => {
+            Ok(crate::screenshot_long::Outcome {
+                rgba,
+                w: pw,
+                h: ph,
+                stop,
+                frames,
+                misses,
+            }) => {
+                let ms = started.elapsed().as_millis();
                 crate::diag::push(
                     &app,
                     format!(
-                        "长截屏 {pw}×{ph} 结束={stop:?} 耗时 {}ms",
-                        started.elapsed().as_millis()
+                        "长截屏 {pw}×{ph} 结束={stop:?} 耗时 {ms}ms 帧 {frames}（平均 {}ms）接不上 {misses}",
+                        ms / frames.max(1) as u128
                     ),
                 );
                 if stop == crate::screenshot_long::Stop::Cancelled {
@@ -1771,6 +1841,15 @@ fn copy_to_clipboard(app: &AppHandle, w: usize, h: usize, rgba: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_translate_errors_map_to_guidance() {
+        assert_eq!(LocalTranslate::from_error("language pack not installed"), LocalTranslate::Download);
+        assert_eq!(LocalTranslate::from_error("language pair unsupported"), LocalTranslate::Unsupported);
+        assert_eq!(LocalTranslate::from_error("macOS 15 required"), LocalTranslate::Unsupported);
+        assert_eq!(LocalTranslate::from_error("timeout"), LocalTranslate::Unknown);
+        assert_eq!(serde_json::to_value(LocalTranslate::Download).unwrap(), "download");
+    }
 
     fn r(x: f64, y: f64, w: f64, h: f64) -> RectPt {
         RectPt { x, y, w, h }

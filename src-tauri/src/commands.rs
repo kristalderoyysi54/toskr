@@ -551,6 +551,10 @@ pub fn open_privacy_settings(pane: String) {
         "screen-capture" => {
             "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
         }
+        // 语言与地区（底部「翻译语言…」管理离线翻译语言包）
+        "translation-languages" => {
+            "x-apple.systempreferences:com.apple.Localization-Settings.extension?translation"
+        }
         _ => "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
     };
     let _ = std::process::Command::new("open").arg(url).spawn();
@@ -767,6 +771,8 @@ struct ScreenshotTranslateRequest {
     label: String,
     request_id: String,
     text: String,
+    /// 本机翻译为什么用不了（主窗口据此给引导）
+    reason: crate::screenshot::LocalTranslate,
 }
 
 /// 图内翻译：先用本机系统翻译（中英互译），不可用时请主窗口用已配置的 AI（遮罩窗不持有 AI 能力）。
@@ -795,15 +801,41 @@ pub fn screenshot_translate(
             }
             Err(e) => {
                 crate::diag::push(&app, format!("本机翻译不可用（{e}），改用 AI"));
+                let reason = crate::screenshot::LocalTranslate::from_error(&e);
                 let _ = app.emit_to(
                     "main",
                     crate::screenshot::TRANSLATE_EVENT,
-                    ScreenshotTranslateRequest { label, request_id, text },
+                    ScreenshotTranslateRequest { label, request_id, text, reason },
                 );
             }
         }
     });
     Ok(())
+}
+
+/// 本机翻译可用性（设置页）：ready / download / unsupported / unknown。
+/// `prepare` 时缺语言包就弹系统下载确认框，用户处理完才返回。
+#[tauri::command]
+pub async fn local_translate_status(
+    app: AppHandle,
+    prepare: Option<bool>,
+) -> crate::screenshot::LocalTranslate {
+    let prepare = prepare.unwrap_or(false);
+    let status = tauri::async_runtime::spawn_blocking(move || {
+        crate::screenshot::local_translate_status(prepare)
+    })
+    .await
+    .unwrap_or(crate::screenshot::LocalTranslate::Unknown);
+    if prepare {
+        crate::diag::push(&app, format!("本机翻译下载语言包 结果={status:?}"));
+    }
+    status
+}
+
+/// 遮罩关掉后再弹的提示气泡（遮罩开着时气泡被压在下面）。
+#[tauri::command]
+pub fn screenshot_hint_after_end(app: AppHandle, text: String) {
+    crate::screenshot::hint_after_end(&app, text);
 }
 
 /// 长截屏预览条：当前拼接预览（BMP）。

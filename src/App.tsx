@@ -102,7 +102,7 @@ import { sectionName } from "@/lib/i18n/builtinNames";
 import { normalizeMaterialStyle } from "@/lib/materialStyle";
 import { appearanceFromSettings, publishAppearance } from "@/lib/colorScheme";
 import { getLocale, publishLocale, resolveLocale, t, tNode, useLocale, useT, type MessageKey } from "@/lib/i18n";
-import { aiErrorTip, startAiRequest } from "@/lib/aiClient";
+import { AiError, aiErrorTip, startAiRequest } from "@/lib/aiClient";
 import { parseAiJson } from "@/lib/ai";
 import { PlatinumBox } from "@/components/ui/platinum-titlebar";
 import {
@@ -261,6 +261,7 @@ import {
   HUD_OPEN_PANEL_EVENT,
   HUD_TASK_BATCH,
   type HudDueActionPayload,
+  type LocalTranslateStatus,
   MESSAGE_WATCH_EVENT,
   PANEL_MOVED_EVENT,
   CLIP_EVENT,
@@ -340,6 +341,8 @@ const captureHistory: { id: string; dataGeneration: number }[] = [];
 /** 横栏「已完成」过滤哨兵值（与真实分组 id 隔离）。 */
 const DONE_FILTER = "__done__";
 const MEDIA_GC_GRACE_MS = 30_000;
+/** 图内翻译因缺离线语言包改用 AI 时，「可下载语言包」只提醒一次（webview localStorage）。 */
+const LANG_PACK_HINT_KEY = "toskr-lang-pack-hint-shown";
 /** 消息子视图无卡片导航；共用稳定空数组，避免依赖 navIds 的 effect 每次渲染都重跑。 */
 const NO_NAV_IDS: string[] = [];
 
@@ -1913,12 +1916,14 @@ export default function App() {
     };
   }, []);
 
-  // 截图图内翻译：遮罩窗不持有 AI 能力，由主窗口用已配置的 AI 逐行代办并回发
+  // 截图图内翻译：本机翻译不可用时遮罩转来，主窗口用已配置的 AI 逐行代办并回发。
+  // 缺离线语言包时引导下载：AI 也没配 → 遮罩短提示 + 关遮罩后气泡；AI 顶上了 → 只提醒一次可改走本机
   useEffect(() => {
-    const unlisten = listen<{ label: string; requestId: string; text: string }>(
+    const unlisten = listen<{ label: string; requestId: string; text: string; reason: LocalTranslateStatus }>(
       SCREENSHOT_TRANSLATE_EVENT,
       (event) => {
-        const { label, requestId, text } = event.payload;
+        const { label, requestId, text, reason } = event.payload;
+        const needsPack = reason === "download";
         const reply = (payload: { lines?: string[]; error?: string }) =>
           void emitTo(label, SCREENSHOT_TRANSLATE_RESULT_EVENT, { requestId, ...payload }).catch(() => {});
         const target = getLocale() === "en" ? "English" : "Simplified Chinese";
@@ -1928,8 +1933,27 @@ export default function App() {
           .result.then((out) => {
             const lines = parseAiJson(out, (v): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string"));
             reply({ lines });
+            if (!needsPack) return;
+            try {
+              if (window.localStorage.getItem(LANG_PACK_HINT_KEY)) return;
+              window.localStorage.setItem(LANG_PACK_HINT_KEY, "1");
+            } catch {
+              return;
+            }
+            void api
+              .screenshotHintAfterEnd(t("图内翻译这次用了 AI；下载系统离线语言包后更快且不联网：设置 → 快捷键 → 本机翻译"))
+              .catch(() => {});
           })
-          .catch((error: unknown) => reply({ error: aiErrorTip(error) }));
+          .catch((error: unknown) => {
+            if (needsPack && error instanceof AiError && error.kind === "not-configured") {
+              reply({ error: t("未安装离线翻译语言包，关闭截图后按提示下载") });
+              void api
+                .screenshotHintAfterEnd(t("图内翻译需要系统离线语言包：设置 → 快捷键 → 本机翻译 → 去下载"))
+                .catch(() => {});
+              return;
+            }
+            reply({ error: aiErrorTip(error) });
+          });
       }
     );
     return () => {
@@ -2809,6 +2833,32 @@ export default function App() {
       window.clearTimeout(timer);
       window.clearInterval(periodic);
     };
+  }, []);
+
+  // 用区域截图却没下离线翻译语言包：启动 4 秒后提醒一次（与上面 8 秒的更新气泡错开），
+  // 免得第一次图内翻译才失败或被悄悄转给 AI。与「这次用了 AI」共用一次性标记
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (!useNotesStore.getState().settings.screenshotEnabled) return;
+      try {
+        if (window.localStorage.getItem(LANG_PACK_HINT_KEY)) return;
+      } catch {
+        return;
+      }
+      void api
+        .localTranslateStatus()
+        .then((status) => {
+          if (status !== "download") return;
+          try {
+            window.localStorage.setItem(LANG_PACK_HINT_KEY, "1");
+          } catch {
+            return;
+          }
+          tip("info", t("可下载系统离线语言包，图内翻译更快且不联网：设置 → 快捷键 → 本机翻译"));
+        })
+        .catch(() => {});
+    }, 4000);
+    return () => window.clearTimeout(timer);
   }, []);
 
   // 首个数据档案只消费一次默认态：先固定，再启用伴随磁吸，最后显示面板。

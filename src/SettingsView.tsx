@@ -118,6 +118,7 @@ import {
   type MessageWatchStatus,
   type AppleCalendarInfo,
   type AppleCalendarStatus,
+  type LocalTranslateStatus,
   type AppleReminderStats,
 } from "@/lib/tauri";
 import { buildMessageWatchBridgeScript } from "@/lib/messageWatch";
@@ -2105,11 +2106,17 @@ export function FeaturesSection({ settings, patch, onConfigure }: SP & {
           onCheckedChange={(on) => {
             patch({ screenshotEnabled: on });
             if (!on) return;
-            // 开启后先查屏幕录制授权，未授权直接带到权限页
+            // 开启后先查屏幕录制授权，未授权直接带到权限页；已授权再看图内翻译的离线语言包
             void api
               .screenCaptureAccess(false)
-              .then((ok) => {
-                if (!ok) onConfigure("permissions");
+              .then(async (ok) => {
+                if (!ok) {
+                  onConfigure("permissions");
+                  return;
+                }
+                if ((await api.localTranslateStatus()) === "download") {
+                  tip("info", t("可下载系统离线语言包，图内翻译更快且不联网：设置 → 快捷键 → 本机翻译"));
+                }
               })
               .catch(() => {});
           }}
@@ -2780,6 +2787,7 @@ function HotkeySection({
               }
             />
             <CrosshairColorRow />
+            <LocalTranslateRow />
           </>
         )}
       </Group>
@@ -4157,6 +4165,82 @@ function CrosshairColorRow() {
           />
           <span className="w-8 font-mono text-label tabular-nums">{style.alpha}%</span>
         </span>
+      }
+    />
+  );
+}
+
+/** 图内翻译的本机（系统离线）翻译状态。缺语言包时「去下载」弹系统下载确认框；
+ * 用户取消或没下完，再给去系统设置手动下载的入口。回到窗口时重查。 */
+function LocalTranslateRow() {
+  const t = useT();
+  const [status, setStatus] = useState<LocalTranslateStatus | null>(null);
+  const [preparing, setPreparing] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [opened, setOpened] = useState(false);
+  const prepare = () => {
+    setPreparing(true);
+    void api
+      .localTranslateStatus(true)
+      .then((s) => {
+        setStatus(s);
+        setFailed(s === "download");
+      })
+      .catch(() => setFailed(true))
+      .finally(() => setPreparing(false));
+  };
+  useEffect(() => {
+    const check = () => void api.localTranslateStatus().then(setStatus).catch(() => setStatus("unknown"));
+    check();
+    window.addEventListener("focus", check);
+    return () => window.removeEventListener("focus", check);
+  }, []);
+  const text =
+    status === null
+      ? t("检查中…")
+      : status === "ready"
+        ? t("图内翻译用系统离线语言包中英互译，不联网")
+        : status === "download"
+          ? opened
+            ? t("在打开的「语言与地区」底部点「翻译语言…」，下载「中文（简体）」和「英语」")
+            : failed
+              ? t("没有完成下载，可到系统设置里手动下载")
+              : t("未下载离线语言包，图内翻译会改用 AI（需已配置）")
+          : status === "unsupported"
+            ? t("需要 macOS 15 或更高；图内翻译会改用 AI（需已配置）")
+            : t("无法检测本机翻译；不可用时图内翻译改用 AI");
+  const tone = status === null || status === "unknown" ? "off" : status === "ready" ? "ok" : "warn";
+  return (
+    <Row
+      label={t("本机翻译")}
+      hint={
+        <span className={cn("inline-flex items-center gap-1.5", tone === "warn" && "text-warning")}>
+          <span
+            aria-hidden
+            className={cn(
+              "size-1.5 shrink-0 rounded-full",
+              tone === "ok" ? "bg-success" : tone === "warn" ? "bg-warning" : "bg-muted-foreground/40"
+            )}
+          />
+          {text}
+        </span>
+      }
+      right={
+        status !== "download" ? undefined : failed ? (
+          <Button
+            size="xs"
+            onClick={() => {
+              setOpened(true);
+              void api.openPrivacySettings("translation-languages");
+            }}
+          >
+            {t("打开系统设置")}
+          </Button>
+        ) : (
+          <Button size="xs" disabled={preparing} onClick={prepare}>
+            {preparing ? t("等待系统确认…") : t("去下载")}
+          </Button>
+        )
       }
     />
   );

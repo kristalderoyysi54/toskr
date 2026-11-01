@@ -88,35 +88,45 @@ fn base_config(px_w: usize, px_h: usize) -> Retained<SCStreamConfiguration> {
     config
 }
 
-/// 截某屏一块区域（本屏 pt），返回 RGBA 与像素尺寸。长截屏逐帧调用。
-pub fn capture_region(
-    id: u32,
-    (x, y, w, h): (f64, f64, f64, f64),
-) -> Result<(Vec<u8>, usize, usize), String> {
-    let content = shareable_content()?;
-    // 长截屏：选区边框与预览面板是本应用窗口，始终排除
-    let (filter, scale, _, _) = display_filter(&content, id, true)?;
-    let config = base_config((w * scale).round() as usize, (h * scale).round() as usize);
-    unsafe {
-        config.setSourceRect(objc2_core_foundation::CGRect::new(
-            objc2_core_foundation::CGPoint::new(x, y),
-            objc2_core_foundation::CGSize::new(w, h),
-        ));
+/// 长截屏逐帧截同一块区域（本屏 pt）：过滤器与配置只建一次——每帧重取
+/// SCShareableContent 要几十毫秒，帧率一低，稍快的滚动就超出两帧重叠、只剩首屏。
+pub struct RegionCapture {
+    filter: Retained<SCContentFilter>,
+    config: Retained<SCStreamConfiguration>,
+}
+
+impl RegionCapture {
+    pub fn new(id: u32, (x, y, w, h): (f64, f64, f64, f64)) -> Result<Self, String> {
+        let content = shareable_content()?;
+        // 选区边框与预览面板是本应用窗口，始终排除
+        let (filter, scale, _, _) = display_filter(&content, id, true)?;
+        let config = base_config((w * scale).round() as usize, (h * scale).round() as usize);
+        unsafe {
+            config.setSourceRect(objc2_core_foundation::CGRect::new(
+                objc2_core_foundation::CGPoint::new(x, y),
+                objc2_core_foundation::CGSize::new(w, h),
+            ));
+        }
+        Ok(Self { filter, config })
     }
-    let (tx, rx) = mpsc::channel();
-    let block = RcBlock::new(move |image: *mut CGImage, _err: *mut NSError| {
-        let _ = tx.send(unsafe { image.as_ref() }.and_then(to_rgba));
-    });
-    unsafe {
-        SCScreenshotManager::captureImageWithFilter_configuration_completionHandler(
-            &filter,
-            &config,
-            Some(&block),
-        );
+
+    /// 返回 RGBA 与像素尺寸。
+    pub fn capture(&self) -> Result<(Vec<u8>, usize, usize), String> {
+        let (tx, rx) = mpsc::channel();
+        let block = RcBlock::new(move |image: *mut CGImage, _err: *mut NSError| {
+            let _ = tx.send(unsafe { image.as_ref() }.and_then(to_rgba));
+        });
+        unsafe {
+            SCScreenshotManager::captureImageWithFilter_configuration_completionHandler(
+                &self.filter,
+                &self.config,
+                Some(&block),
+            );
+        }
+        rx.recv_timeout(TIMEOUT)
+            .map_err(|_| "region capture timeout".to_string())?
+            .ok_or_else(|| "region capture failed".to_string())
     }
-    rx.recv_timeout(TIMEOUT)
-        .map_err(|_| "region capture timeout".to_string())?
-        .ok_or_else(|| "region capture failed".to_string())
 }
 
 /// 按 `ids` 顺序截各屏；任一屏失败整体报错（调用方回退）。
@@ -234,9 +244,14 @@ mod tests {
     fn sck_region_smoke() {
         let id = core_graphics::display::CGDisplay::active_displays().unwrap()[0];
         let t = std::time::Instant::now();
-        let (rgba, w, h) = capture_region(id, (100.0, 100.0, 300.0, 200.0)).unwrap();
-        println!("region {w}x{h} {}ms rgba={}", t.elapsed().as_millis(), rgba.len());
-        assert_eq!(rgba.len(), w * h * 4);
+        let cap = RegionCapture::new(id, (100.0, 100.0, 300.0, 200.0)).unwrap();
+        println!("setup {}ms", t.elapsed().as_millis());
+        for _ in 0..5 {
+            let t = std::time::Instant::now();
+            let (rgba, w, h) = cap.capture().unwrap();
+            println!("region {w}x{h} {}ms", t.elapsed().as_millis());
+            assert_eq!(rgba.len(), w * h * 4);
+        }
     }
 
     #[test]

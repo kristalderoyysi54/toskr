@@ -60,6 +60,8 @@
     "allow-set-window-alpha",
     "allow-set-panel-free-pos",
     "allow-open-privacy-settings",
+    "allow-local-translate-status",
+    "allow-screenshot-hint-after-end",
     "allow-apple-reminders-status",
     "allow-apple-reminders-sync",
     "allow-apple-calendar-events",

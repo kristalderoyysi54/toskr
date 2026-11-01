@@ -43,6 +43,8 @@ const COMMANDS: &[&str] = &[
     "screenshot_save_text",
     "screenshot_copy_color",
     "screenshot_translate",
+    "local_translate_status",
+    "screenshot_hint_after_end",
     "long_preview_image",
     "long_finish",
     "annotate_image",

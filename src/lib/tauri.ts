@@ -286,6 +286,9 @@ export interface HudHoverPayload {
 /** 系统日历库变化（本机编辑或 iCloud 同步），前端重新拉取。 */
 export const APPLE_CALENDAR_CHANGED_EVENT = "toskr://apple-calendar-changed";
 
+/** 本机（系统离线）翻译可用性：download = 系统支持但离线语言包未下载；unknown = 开发构建无辅助程序等。 */
+export type LocalTranslateStatus = "ready" | "download" | "unsupported" | "unknown";
+
 export type AppleCalendarStatus =
   | "notDetermined"
   | "restricted"
@@ -954,7 +957,7 @@ export const api = {
   setLocale: (locale: Locale) => invoke("set_locale", { locale }),
   retryTap: () => invoke("retry_tap"),
   openPrivacySettings: (
-    pane: "accessibility" | "input-monitoring" | "calendars" | "reminders" | "screen-capture"
+    pane: "accessibility" | "input-monitoring" | "calendars" | "reminders" | "screen-capture" | "translation-languages"
   ) =>
     invoke("open_privacy_settings", { pane }),
   appleCalendarStatus: () => invoke<AppleCalendarStatus>("apple_calendar_status"),
@@ -1053,6 +1056,10 @@ export const api = {
   /** 图内翻译：把各行文字（JSON 字符串数组）交主窗口用已配置的 AI 逐行翻译，结果经 SCREENSHOT_TRANSLATE_RESULT_EVENT 回来。 */
   screenshotTranslate: (requestId: string, text: string) =>
     invoke("screenshot_translate", { requestId, text }),
+  /** 本机翻译可用性（只查离线语言包，不翻译）；`prepare` 时缺包弹系统下载确认框，用户处理完才返回。 */
+  localTranslateStatus: (prepare = false) => invoke<LocalTranslateStatus>("local_translate_status", { prepare }),
+  /** 遮罩关掉后再弹的提示气泡（遮罩开着时气泡被压在下面；没开遮罩则立即弹）。 */
+  screenshotHintAfterEnd: (text: string) => invoke("screenshot_hint_after_end", { text }),
   /** 长截屏预览条：当前拼接预览（BMP）。 */
   longPreviewImage: () => invoke<ArrayBuffer>("long_preview_image"),
   /** 长截屏预览面板「完成」/「取消」：结束拼接（取消不进标注窗）。 */

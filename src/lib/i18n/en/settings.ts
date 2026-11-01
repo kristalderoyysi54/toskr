@@ -713,4 +713,13 @@ export const settings = {
   "按顺序逐项请求；需要在系统设置里手动打开的项会停下，打开后回到这里再点一次继续": "Requests each one in turn; it stops at any that must be turned on in System Settings. Turn it on, come back and click again to continue",
   "启动时提醒缺失的权限": "Remind about missing permissions at launch",
   "关闭后启动时不再弹「系统权限未授权」气泡；只用部分功能、不打算授权某些权限时可关闭": "When off, no \"missing permissions\" bubble at launch. Turn off if you only use some features and won't grant every permission",
+  "本机翻译": "On-device translation",
+  "图内翻译用系统离线语言包中英互译，不联网": "In-image translation uses the system's offline language packs (Chinese ⇄ English), without the network",
+  "未下载离线语言包，图内翻译会改用 AI（需已配置）": "Offline language packs aren't downloaded; in-image translation falls back to AI (if configured)",
+  "在打开的「语言与地区」底部点「翻译语言…」，下载「中文（简体）」和「英语」": "In Language & Region, click \"Translation Languages…\" at the bottom and download Chinese (Simplified) and English",
+  "需要 macOS 15 或更高；图内翻译会改用 AI（需已配置）": "Requires macOS 15 or later; in-image translation falls back to AI (if configured)",
+  "无法检测本机翻译；不可用时图内翻译改用 AI": "Can't check on-device translation; in-image translation falls back to AI when it's unavailable",
+  "去下载": "Download",
+  "没有完成下载，可到系统设置里手动下载": "The download didn't finish; you can download them manually in System Settings",
+  "等待系统确认…": "Waiting for the system…",
 } satisfies Record<string, EnValue>;

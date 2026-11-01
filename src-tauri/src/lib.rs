@@ -312,6 +312,8 @@ pub fn run() {
             commands::screenshot_save_text,
             commands::screenshot_copy_color,
             commands::screenshot_translate,
+            commands::local_translate_status,
+            commands::screenshot_hint_after_end,
             commands::long_preview_image,
             commands::long_finish,
             commands::annotate_image,

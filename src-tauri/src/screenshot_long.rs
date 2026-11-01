@@ -18,8 +18,10 @@ const MAX_PIXELS: usize = 50_000_000;
 /// 有效重叠：非空白行里至少这么多比例对得上。
 const MIN_MATCH_RATIO: f64 = 0.6;
 const MIN_OVERLAP_ROWS: usize = 12;
+/// 至少这么多「帧内唯一」的行对上，才算找到重叠。
+const MIN_VOTES: usize = 3;
 /// 截帧间隔；长时间不滚视为忘了点完成，按完成处理。
-const POLL_MS: u64 = 120;
+const POLL_MS: u64 = 40;
 const IDLE_LIMIT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// 面板按钮：0 = 继续，1 = 完成，2 = 取消。
@@ -45,32 +47,53 @@ pub fn row_signatures(rgba: &[u8], w: usize, h: usize) -> Vec<(u64, bool)> {
         .collect()
 }
 
-/// 新帧相对上一帧下移的行数：上一帧第 r+dy 行 == 新帧第 r 行。
-/// 取非空白行匹配率最高的 dy；没有可信重叠返回 None。
-pub fn scroll_offset(prev: &[(u64, bool)], next: &[(u64, bool)]) -> Option<usize> {
-    let h = prev.len().min(next.len());
-    let mut best: Option<(usize, f64)> = None;
-    for dy in 1..h.saturating_sub(MIN_OVERLAP_ROWS) {
-        let (mut considered, mut matched) = (0usize, 0usize);
-        for r in 0..h - dy {
-            let (a, blank) = prev[r + dy];
-            if blank && next[r].1 {
-                continue;
-            }
-            considered += 1;
-            if a == next[r].0 {
-                matched += 1;
-            }
-        }
-        if considered < MIN_OVERLAP_ROWS {
-            continue;
-        }
-        let ratio = matched as f64 / considered as f64;
-        if ratio >= MIN_MATCH_RATIO && best.is_none_or(|(_, b)| ratio > b) {
-            best = Some((dy, ratio));
+/// 各帧内独一无二的非空白行：哈希 → 行号（重复出现的记 None）。
+fn unique_rows(rows: &[(u64, bool)]) -> HashMap<u64, Option<usize>> {
+    let mut seen = HashMap::with_capacity(rows.len());
+    for (i, &(hash, blank)) in rows.iter().enumerate() {
+        if !blank {
+            seen.entry(hash)
+                .and_modify(|v| *v = None)
+                .or_insert(Some(i));
         }
     }
-    best.map(|(dy, _)| dy)
+    seen
+}
+
+/// 新帧相对上一帧的位移：上一帧第 r+dy 行 == 新帧第 r 行。正 = 往下滚，负 = 往回滚，
+/// 0 = 没滚（画面原地变化）。只让两帧内都独一无二的行投票：分隔线、双色底这类重复行
+/// 在任何偏移下都对得上，让它们参与会把快滚时的小重叠判成别的偏移（重复 / 漏拼）。
+/// 得票最多的偏移再按整段重叠复核；没有可信重叠返回 None。
+pub fn scroll_offset(prev: &[(u64, bool)], next: &[(u64, bool)]) -> Option<isize> {
+    let h = prev.len().min(next.len());
+    let (prev, next) = (&prev[..h], &next[..h]);
+    let at = unique_rows(prev);
+    let mut votes: HashMap<isize, usize> = HashMap::new();
+    for (hash, r) in unique_rows(next) {
+        if let (Some(r), Some(&Some(p))) = (r, at.get(&hash)) {
+            *votes.entry(p as isize - r as isize).or_default() += 1;
+        }
+    }
+    let (dy, n) = votes
+        .into_iter()
+        .max_by_key(|&(dy, n)| (n, std::cmp::Reverse(dy.unsigned_abs())))?;
+    if n < MIN_VOTES {
+        return None;
+    }
+    let (mut considered, mut matched) = (0usize, 0usize);
+    for r in 0..h {
+        let Some(p) = r.checked_add_signed(dy).filter(|&p| p < h) else {
+            continue;
+        };
+        if prev[p].1 && next[r].1 {
+            continue;
+        }
+        considered += 1;
+        if prev[p].0 == next[r].0 {
+            matched += 1;
+        }
+    }
+    (matched as f64 >= MIN_MATCH_RATIO * considered as f64).then_some(dy)
 }
 
 /// 结束原因（诊断与提示用）。
@@ -94,13 +117,24 @@ pub enum Event<'a> {
     Stalled(bool),
 }
 
+/// 拼接结果。
+pub struct Outcome {
+    pub rgba: Vec<u8>,
+    pub w: usize,
+    pub h: usize,
+    pub stop: Stop,
+    /// 截了多少帧、其中多少帧与上一帧接不上（诊断用）
+    pub frames: usize,
+    pub misses: usize,
+}
+
 /// 拼接主循环。`capture` 截取选区返回 (RGBA, 宽, 高)；`region` 为全局 pt 选区。
 /// 光标先移到选区中央，用户的滚轮才落在要截的区域上。
 pub fn run(
     region: (f64, f64, f64, f64),
     mut capture: impl FnMut() -> Result<(Vec<u8>, usize, usize), String>,
     mut progress: impl FnMut(Event),
-) -> Result<(Vec<u8>, usize, usize, Stop), String> {
+) -> Result<Outcome, String> {
     let (rx, ry, rw, rh) = region;
     let center = CGPoint::new(rx + rw / 2.0, ry + rh / 2.0);
     let _ = core_graphics::display::CGDisplay::warp_mouse_cursor_position(center);
@@ -109,27 +143,37 @@ pub fn run(
     let (first, w, h) = capture()?;
     let mut st = Stitcher::new(first, w, h);
     progress(Event::Stitched(&st.out, w, st.total_h));
-    let stop = follow(&mut st, &mut capture, &mut progress)?;
-    Ok((st.out, w, st.total_h, stop))
+    let (stop, frames, misses) = follow(&mut st, &mut capture, &mut progress)?;
+    Ok(Outcome {
+        rgba: st.out,
+        w,
+        h: st.total_h,
+        stop,
+        frames,
+        misses,
+    })
 }
 
 /// 定时截帧，画面变了就拼；对不上的帧丢弃（等用户往回滚到能接上）。
+/// 返回结束原因与（帧数, 接不上的帧数）。
 fn follow(
     st: &mut Stitcher,
     capture: &mut impl FnMut() -> Result<(Vec<u8>, usize, usize), String>,
     progress: &mut impl FnMut(Event),
-) -> Result<Stop, String> {
+) -> Result<(Stop, usize, usize), String> {
     STOP_REQUEST.store(0, Ordering::Relaxed);
     let mut last_change = std::time::Instant::now();
     let mut stalled = false;
+    let (mut frames, mut misses) = (0, 0);
     loop {
-        match STOP_REQUEST.swap(0, Ordering::Relaxed) {
-            1 => return Ok(Stop::Finished),
-            2 => return Ok(Stop::Cancelled),
-            _ => {}
-        }
-        if last_change.elapsed() > IDLE_LIMIT {
-            return Ok(Stop::Idle);
+        let stop = match STOP_REQUEST.swap(0, Ordering::Relaxed) {
+            1 => Some(Stop::Finished),
+            2 => Some(Stop::Cancelled),
+            _ if last_change.elapsed() > IDLE_LIMIT => Some(Stop::Idle),
+            _ => None,
+        };
+        if let Some(stop) = stop {
+            return Ok((stop, frames, misses));
         }
         std::thread::sleep(std::time::Duration::from_millis(POLL_MS));
         let (frame, fw, fh) = capture()?;
@@ -137,6 +181,10 @@ fn follow(
             return Err("frame size changed".into());
         }
         let result = st.push(&frame);
+        frames += 1;
+        if result == Push::NoOverlap {
+            misses += 1;
+        }
         if result != Push::Same {
             last_change = std::time::Instant::now();
         }
@@ -147,7 +195,7 @@ fn follow(
         if result == Push::Appended {
             progress(Event::Stitched(&st.out, st.w, st.total_h));
             if st.w * st.total_h >= MAX_PIXELS {
-                return Ok(Stop::Limit);
+                return Ok((Stop::Limit, frames, misses));
             }
         }
     }
@@ -211,16 +259,16 @@ impl Stitcher {
         }
         bottom = bottom.min(self.tail);
         let body = top..h - bottom;
-        let forward = scroll_offset(&self.prev[body.clone()], &sig[body.clone()]);
-        let Some(dy) = forward else {
-            // 往回滚：新帧在上一帧之上 dy 行
-            let Some(dy) = scroll_offset(&sig[body.clone()], &self.prev[body]) else {
-                return Push::NoOverlap;
-            };
-            self.behind += dy;
+        let Some(dy) = scroll_offset(&self.prev[body.clone()], &sig[body]) else {
+            return Push::NoOverlap;
+        };
+        if dy <= 0 {
+            // 往回滚（新帧在上一帧之上 -dy 行）或原地变化
+            self.behind += dy.unsigned_abs();
             self.moved(sig, bottom);
             return Push::Moved;
-        };
+        }
+        let dy = dy as usize;
         if dy <= self.behind {
             self.behind -= dy;
             self.moved(sig, bottom);
@@ -748,8 +796,9 @@ mod tests {
                 stalls.push(v);
             }
         };
-        let stop = follow(&mut st, &mut capture, &mut progress).unwrap();
+        let (stop, frames, misses) = follow(&mut st, &mut capture, &mut progress).unwrap();
         assert_eq!(stop, Stop::Finished);
+        assert_eq!((frames, misses), (4, 1));
         assert_eq!(stalls, vec![true, false]);
         assert!(st.out == page(&content[..100]));
     }
@@ -767,6 +816,52 @@ mod tests {
         assert!(st.out == page(&content[..110]));
     }
 
+    /// 文字稀疏、行间是双色底（非纯色却处处相同）的页面，带随滚动移动的滚动条滑块；
+    /// 快滚（重叠很少）时不能把小重叠里的巧合对齐当真：长图须与页面逐行一致（不重复、不漏拼）。
+    #[test]
+    fn fast_scroll_on_sparse_page_neither_duplicates_nor_skips() {
+        const H: usize = 60;
+        let content: Vec<u8> = (0..600)
+            .map(|i| {
+                if i % 10 < 4 {
+                    (1 + i * 7 % 250) as u8
+                } else {
+                    0
+                }
+            })
+            .collect();
+        let frame = |top: usize| {
+            let mut px = page(&content[top..top + H]);
+            // 滑块：第二个像素换色，位置随滚动比例走
+            let thumb = top * (H - 6) / (content.len() - H);
+            for r in thumb..thumb + 6 {
+                px[r * 8 + 4] ^= 0x80;
+            }
+            px
+        };
+        for (min, span) in [(1, 10), (5, 20), (10, 30), (20, 28), (30, 18)] {
+            let mut seed = 7u32;
+            let mut top = 0;
+            let mut st = Stitcher::new(frame(0), 2, H);
+            while top + min + span + H <= content.len() {
+                seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+                top += min + (seed >> 16) as usize % span;
+                st.push(&frame(top));
+            }
+            let rows: Vec<u8> = st.out.chunks(8).map(|c| c[0]).collect();
+            assert_eq!(
+                Some(&rows[..]),
+                content.get(..st.total_h),
+                "步长 {min}+{span}"
+            );
+            assert!(
+                st.total_h > content.len() / 2,
+                "步长 {min}+{span} 只拼到 {}",
+                st.total_h
+            );
+        }
+    }
+
     #[test]
     fn cancel_request_stops_with_cancelled() {
         let content: Vec<u8> = (0..200).map(|i| (i * 13 % 251) as u8).collect();
@@ -775,7 +870,7 @@ mod tests {
             request_stop(true);
             Ok((page(&content[..60]), 2, 60))
         };
-        let stop = follow(&mut st, &mut capture, &mut |_| {}).unwrap();
+        let (stop, ..) = follow(&mut st, &mut capture, &mut |_| {}).unwrap();
         assert_eq!(stop, Stop::Cancelled);
     }
 

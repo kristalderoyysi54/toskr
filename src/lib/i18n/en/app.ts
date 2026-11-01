@@ -389,4 +389,8 @@ export const app = {
   "批注：框出要改的地方并写下说明，自动编号；存入或发送时编号说明随图附上，方便交给 AI": "Callout: box the area to change and describe it; numbered automatically. The numbered notes go with the image when you save or send it, ready for AI",
   "直线": "Line",
   "直线：拖动画直线，按住 ⇧ 吸附水平 / 垂直 / 45°": "Line: drag to draw a straight line; hold ⇧ to snap horizontal, vertical or 45°",
+  "图内翻译这次用了 AI；下载系统离线语言包后更快且不联网：设置 → 快捷键 → 本机翻译": "In-image translation used AI this time. Download the system's offline language packs for faster translation without the network: Settings → Shortcuts → On-device translation",
+  "可下载系统离线语言包，图内翻译更快且不联网：设置 → 快捷键 → 本机翻译": "Download the system's offline language packs for faster in-image translation without the network: Settings → Shortcuts → On-device translation",
+  "未安装离线翻译语言包，关闭截图后按提示下载": "Offline translation language packs aren't installed; close the screenshot to see how to get them",
+  "图内翻译需要系统离线语言包：设置 → 快捷键 → 本机翻译 → 去下载": "In-image translation needs the system's offline language packs: Settings → Shortcuts → On-device translation → Download",
 } satisfies Record<string, EnValue>;
