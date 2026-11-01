@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as
 import { listen } from "@tauri-apps/api/event";
 import { Check, Crop, Download, Redo2, Undo2, X } from "lucide-react";
 
+import { ShapeEditFrame } from "@/components/ShapeEditFrame";
 import { ShotShapesSvg } from "@/components/ShotShapesSvg";
 import { HoverTip, SHOT_TOOLS, ShotStyleRow, TipButton, toolHasStyle, useShotStyle } from "@/components/ShotToolParts";
 import { floatingSurface } from "@/components/ui/floating-surface";
@@ -18,9 +19,11 @@ import {
   undo,
   type History,
   type Shape,
+  type SizeLevel,
   type Tool,
 } from "@/lib/screenshot/annotate";
 import { handlePoint, HANDLES, resizeRect, toPixelRect, type Handle, type Rect } from "@/lib/screenshot/geometry";
+import { useShapeEdit } from "@/lib/screenshot/useShapeEdit";
 import { api } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 
@@ -129,6 +132,19 @@ export default function LongShotView() {
     return () => void off.then((f) => f());
   }, []);
 
+  // 已画图形的选中与调整（钉图编辑也走这里）：无工具时可选任意图形，有工具时只选同类
+  const edit = useShapeEdit({
+    history,
+    setHistory,
+    W: ptW,
+    H: ptH,
+    tol: 6 / z,
+    canPick: (s) => !tool || s.kind === tool,
+  });
+  const editRef = useRef(edit);
+  editRef.current = edit;
+  const [hoverCursor, setHoverCursor] = useState<string | null>(null);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (editing) return;
@@ -136,7 +152,9 @@ export default function LongShotView() {
         e.preventDefault();
         e.stopPropagation();
       };
-      if (e.key === "Escape") {
+      if (!sectionMenu && editRef.current.key(e)) {
+        stop();
+      } else if (e.key === "Escape") {
         stop();
         if (sectionMenu) setSectionMenu(false);
         else if (cropping) setCropping(false);
@@ -159,9 +177,14 @@ export default function LongShotView() {
   };
 
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0 || !tool) return;
+    if (e.button !== 0 || cropping) return;
     const p = point(e);
     if (editing) commitEditing();
+    if (edit.down(p.x, p.y)) {
+      e.currentTarget.setPointerCapture(e.pointerId);
+      return;
+    }
+    if (!tool) return;
     if (tool === "text") {
       if (!editing) setEditing({ x: p.x, y: p.y - FONT_SIZE[size] / 2, text: "" });
       return;
@@ -179,8 +202,12 @@ export default function LongShotView() {
   };
 
   const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (!draft) return;
     const p = point(e);
+    if (edit.move(p.x, p.y)) return;
+    if (!draft) {
+      setHoverCursor(cropping ? null : edit.cursor(p.x, p.y));
+      return;
+    }
     setDraft(
       draft.kind === "pen"
         ? { ...draft, points: [...draft.points, [p.x, p.y]] }
@@ -190,14 +217,39 @@ export default function LongShotView() {
     );
   };
 
-  const onPointerUp = () => {
+  const onPointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const p = point(e);
+    if (edit.up(p.x, p.y)) return;
     if (!draft) return;
-    setHistory((h) => pushShape(h, draft));
+    // 按松手处收尾：最后一次 pointermove 的状态可能还没渲染进 draft
+    const done: Shape =
+      draft.kind === "pen"
+        ? { ...draft, points: [...draft.points, [p.x, p.y]] }
+        : "x2" in draft
+          ? { ...draft, x2: p.x, y2: p.y }
+          : draft;
+    setHistory((h) => pushShape(h, done));
     setDraft(null);
   };
 
   if (!info || !img) return null;
-  const shapes = draft ? [...history.shapes, draft] : history.shapes;
+  const shapes = draft ? [...edit.shapes, draft] : edit.shapes;
+  // 选中图形时样式行显示并修改该图形的颜色 / 粗细
+  const pickedStyled = edit.picked && "size" in edit.picked ? edit.picked : null;
+  const styleKind = pickedStyled?.kind ?? tool;
+  const styleRow = {
+    ink: pickedStyled?.color ?? ink,
+    size: (pickedStyled?.size ?? size) as SizeLevel,
+    setInk: (c: string) => {
+      style.setInk(c);
+      edit.restyle({ color: c });
+    },
+    setSize: (lv: SizeLevel) => {
+      style.setSize(lv);
+      edit.restyle({ size: lv });
+    },
+    colors: styleKind !== "mosaic",
+  };
   const cropRect = crop ?? { x: 0, y: 0, w: ptW, h: ptH };
   const outPx = crop ? toPixelRect(crop, scale, scale, info.pxW, info.pxH) : { w: info.pxW, h: info.pxH };
 
@@ -306,7 +358,7 @@ export default function LongShotView() {
             )}
           </span>
         </div>
-        {toolHasStyle(tool) && <ShotStyleRow {...style} />}
+        {toolHasStyle(styleKind) && <ShotStyleRow {...styleRow} />}
       </div>
       {!sectionMenu && <HoverTip />}
 
@@ -314,7 +366,7 @@ export default function LongShotView() {
         <div
           ref={pageRef}
           className="relative mx-auto select-none shadow-md"
-          style={{ width: ptW * z, height: ptH * z, cursor: tool ? (tool === "text" ? "text" : "crosshair") : "default" }}
+          style={{ width: ptW * z, height: ptH * z, cursor: hoverCursor ?? (tool ? (tool === "text" ? "text" : "crosshair") : "default") }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
@@ -332,6 +384,7 @@ export default function LongShotView() {
               viewBox={`0 0 ${ptW} ${ptH}`}
             />
           )}
+          {edit.picked && <ShapeEditFrame shape={edit.picked} z={z} />}
           {crop && (
             <div
               className="pointer-events-none absolute outline outline-1 outline-primary"

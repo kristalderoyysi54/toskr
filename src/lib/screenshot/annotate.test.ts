@@ -1,18 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  commitShapes,
   contrastText,
   emptyHistory,
   fitFontSize,
   isMeaningful,
-  mosaicAt,
-  mosaicRect,
   nextNumber,
   pushShape,
   redo,
   undo,
-  withMosaicRect,
   type Shape,
 } from "./annotate";
 
@@ -41,19 +37,6 @@ describe("截图标注模型", () => {
     expect(nextNumber([num(1), rect(10), num(2)])).toBe(3);
     const h = undo(pushShape(pushShape(emptyHistory, num(1)), num(2)));
     expect(nextNumber(h.shapes)).toBe(2);
-  });
-
-  it("马赛克可点中、改框，改框可撤销", () => {
-    const m: Shape = { kind: "mosaic", x1: 50, y1: 40, x2: 10, y2: 10, color: "#000000", size: 1 };
-    const h = pushShape(pushShape(emptyHistory, rect(100)), m);
-    expect(mosaicAt(h.shapes, 20, 20)).toBe(1);
-    expect(mosaicAt(h.shapes, 80, 5)).toBeNull();
-    expect(mosaicRect(m as Extract<Shape, { x1: number }>)).toEqual({ x: 10, y: 10, w: 40, h: 30 });
-    const moved = withMosaicRect(m as Extract<Shape, { x1: number }>, { x: 60, y: 60, w: 20, h: 20 });
-    const edited = commitShapes(h, [h.shapes[0], moved]);
-    expect(mosaicAt(edited.shapes, 20, 20)).toBeNull();
-    expect(undo(edited).shapes[1]).toBe(m);
-    expect(redo(undo(edited)).shapes[1]).toBe(moved);
   });
 
   it("图内翻译：字号按宽度缩放、底色决定黑白字", () => {

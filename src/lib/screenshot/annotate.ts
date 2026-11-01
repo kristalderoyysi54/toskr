@@ -50,8 +50,8 @@ export const FONT_SIZE = [14, 18, 24];
 export const NUMBER_RADIUS = [10, 13, 16];
 /** 聚光灯区域外的压暗程度。 */
 export const SPOTLIGHT_DIM = "rgba(0,0,0,0.55)";
-/** 马赛克块边长（pt）。 */
-const MOSAIC_BLOCK = 8;
+/** 马赛克块边长（pt），按粗细档位：细 / 中 / 粗。 */
+export const MOSAIC_BLOCK = [5, 9, 15];
 
 // token-exception: 标注颜色画进截图像素，不随主题变化
 export const COLORS = ["#FF3B30", "#FFCC00", "#34C759", "#007AFF", "#FFFFFF", "#000000"];
@@ -67,34 +67,6 @@ export function isMeaningful(s: Shape): boolean {
 
 export function nextNumber(shapes: Shape[]): number {
   return shapes.reduce((n, s) => (s.kind === "number" ? Math.max(n, s.n) : n), 0) + 1;
-}
-
-type BoxShape = Extract<Shape, { x1: number }>;
-
-/** 马赛克框（规范化，左上原点）。 */
-export function mosaicRect(s: BoxShape): { x: number; y: number; w: number; h: number } {
-  return {
-    x: Math.min(s.x1, s.x2),
-    y: Math.min(s.y1, s.y2),
-    w: Math.abs(s.x2 - s.x1),
-    h: Math.abs(s.y2 - s.y1),
-  };
-}
-
-/** 换成新框（拖动 / 缩放后）。 */
-export function withMosaicRect(s: BoxShape, r: { x: number; y: number; w: number; h: number }): BoxShape {
-  return { ...s, x1: r.x, y1: r.y, x2: r.x + r.w, y2: r.y + r.h };
-}
-
-/** 点中的最上层马赛克下标，没有为 null。 */
-export function mosaicAt(shapes: Shape[], x: number, y: number): number | null {
-  for (let i = shapes.length - 1; i >= 0; i--) {
-    const s = shapes[i];
-    if (s.kind !== "mosaic") continue;
-    const r = mosaicRect(s);
-    if (x >= r.x && y >= r.y && x <= r.x + r.w && y <= r.y + r.h) return i;
-  }
-  return null;
 }
 
 /** 快照式历史：每步记下整份图形列表，移动 / 缩放已画的图形也能撤销。 */
@@ -246,14 +218,15 @@ function drawArrow(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: nu
 
 /** 马赛克低分辨率取样：每块一个像素，放大时关掉平滑即成色块。 */
 export function mosaicTile(
-  s: { x1: number; y1: number; x2: number; y2: number },
+  s: { x1: number; y1: number; x2: number; y2: number; size: number },
   img: CanvasImageSource,
   sx: number,
   sy: number
 ): HTMLCanvasElement | null {
   const b = box(s);
-  const cols = Math.max(1, Math.ceil(b.w / MOSAIC_BLOCK));
-  const rows = Math.max(1, Math.ceil(b.h / MOSAIC_BLOCK));
+  const block = MOSAIC_BLOCK[s.size] ?? MOSAIC_BLOCK[1];
+  const cols = Math.max(1, Math.ceil(b.w / block));
+  const rows = Math.max(1, Math.ceil(b.h / block));
   const tmp = document.createElement("canvas");
   tmp.width = cols;
   tmp.height = rows;
@@ -265,7 +238,7 @@ export function mosaicTile(
 
 function drawMosaic(
   ctx: CanvasRenderingContext2D,
-  s: { x1: number; y1: number; x2: number; y2: number },
+  s: { x1: number; y1: number; x2: number; y2: number; size: number },
   img: CanvasImageSource,
   sx: number,
   sy: number

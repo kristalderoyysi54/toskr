@@ -82,9 +82,9 @@ export function HoverTip({ point }: { point?: { x: number; y: number } | null })
   );
 }
 
-/** 马赛克、聚光灯不需要颜色与粗细。 */
+/** 聚光灯没有样式；马赛克只有粗细（颗粒大小），没有颜色。 */
 export function toolHasStyle(tool: Tool | null): boolean {
-  return !!tool && tool !== "mosaic" && tool !== "spotlight";
+  return !!tool && tool !== "spotlight";
 }
 
 /** 上次用的标注颜色与粗细（每台机器的使用习惯，存 localStorage）。 */
@@ -111,13 +111,41 @@ export function useShotStyle() {
   return { ink, setInk, size, setSize };
 }
 
-/** 粗细三档 + 6 色。 */
+/** 出图圆角（pt）与阴影开关（每台机器的使用习惯，存 localStorage）。 */
+const FRAME_KEY = "toskr.screenshotFrame";
+
+export function useShotFrame() {
+  const [frame, setFrame] = useState<{ radius: number; shadow: boolean }>(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem(FRAME_KEY) ?? "{}") as { radius?: unknown; shadow?: unknown };
+      return {
+        radius: typeof v.radius === "number" && v.radius >= 0 && v.radius <= 64 ? v.radius : 0,
+        shadow: v.shadow === true,
+      };
+    } catch {
+      return { radius: 0, shadow: false };
+    }
+  });
+  useEffect(() => {
+    localStorage.setItem(FRAME_KEY, JSON.stringify(frame));
+  }, [frame]);
+  return [frame, setFrame] as const;
+}
+
+/** 粗细三档 + 6 色（马赛克只显示粗细，即颗粒大小）。 */
 export function ShotStyleRow({
   ink,
   setInk,
   size,
   setSize,
-}: ReturnType<typeof useShotStyle>) {
+  colors = true,
+}: {
+  ink: string;
+  setInk: (c: string) => void;
+  size: SizeLevel;
+  setSize: (lv: SizeLevel) => void;
+  colors?: boolean;
+}) {
   const t = useT();
   return (
     <div className="flex items-center gap-2 px-1">
@@ -133,8 +161,9 @@ export function ShotStyleRow({
           <span className="rounded-full bg-foreground" style={{ width: 4 + lv * 3, height: 4 + lv * 3 }} />
         </button>
       ))}
-      <span className="h-4 w-px bg-border" />
-      {COLORS.map((c) => (
+      {colors && <span className="h-4 w-px bg-border" />}
+      {colors &&
+        COLORS.map((c) => (
         <button
           key={c}
           type="button"
@@ -147,7 +176,7 @@ export function ShotStyleRow({
           )}
           style={{ background: c }}
         />
-      ))}
+        ))}
     </div>
   );
 }
