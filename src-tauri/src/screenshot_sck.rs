@@ -1,16 +1,26 @@
 //! ScreenCaptureKit 冻结帧（macOS 14+）：进程内截屏、排除本应用窗口，
 //! 像素按 BGRA 原样包成 32 位 BMP 交给遮罩窗（免 PNG 编码）。失败由调用方回退 screencapture。
+//! 长截屏改走 SCStream 连续取帧。
 
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use block2::RcBlock;
+use dispatch2::DispatchQueue;
 use objc2::rc::Retained;
-use objc2::AllocAnyThread;
+use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
+use objc2::{define_class, msg_send, AllocAnyThread, DefinedClass};
 use objc2_core_graphics::{CGDataProvider, CGImage};
+use objc2_core_media::{CMSampleBuffer, CMTime};
+use objc2_core_video::{
+    CVPixelBuffer, CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow,
+    CVPixelBufferGetHeight, CVPixelBufferGetWidth, CVPixelBufferLockBaseAddress,
+    CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
+};
 use objc2_foundation::{NSArray, NSError};
 use objc2_screen_capture_kit::{
-    SCContentFilter, SCScreenshotManager, SCShareableContent, SCStreamConfiguration,
+    SCContentFilter, SCScreenshotManager, SCShareableContent, SCStream, SCStreamConfiguration,
+    SCStreamOutput, SCStreamOutputType,
 };
 
 /// kCVPixelFormatType_32BGRA（'BGRA'）。
@@ -88,15 +98,89 @@ fn base_config(px_w: usize, px_h: usize) -> Retained<SCStreamConfiguration> {
     config
 }
 
-/// 长截屏逐帧截同一块区域（本屏 pt）：过滤器与配置只建一次——每帧重取
-/// SCShareableContent 要几十毫秒，帧率一低，稍快的滚动就超出两帧重叠、只剩首屏。
-pub struct RegionCapture {
-    filter: Retained<SCContentFilter>,
-    config: Retained<SCStreamConfiguration>,
+/// SCStream 回调线程写入、拼接线程取走的最新一帧（RGBA 紧排）。
+#[derive(Default)]
+struct Latest {
+    frame: Option<(Vec<u8>, usize, usize)>,
+    seq: u64,
 }
 
-impl RegionCapture {
-    pub fn new(id: u32, (x, y, w, h): (f64, f64, f64, f64)) -> Result<Self, String> {
+struct Shared {
+    latest: Mutex<Latest>,
+    ready: Condvar,
+}
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[name = "ToskrLongShotFrameSink"]
+    #[ivars = Arc<Shared>]
+    struct FrameSink;
+
+    unsafe impl NSObjectProtocol for FrameSink {}
+
+    unsafe impl SCStreamOutput for FrameSink {
+        #[unsafe(method(stream:didOutputSampleBuffer:ofType:))]
+        fn did_output(&self, _stream: &SCStream, sample: &CMSampleBuffer, kind: SCStreamOutputType) {
+            if kind != SCStreamOutputType::Screen {
+                return;
+            }
+            // 画面没变时系统发的「空闲」样本不带像素
+            let Some(frame) = unsafe { sample.image_buffer() }.and_then(|b| copy_rgba(&b)) else {
+                return;
+            };
+            let shared = self.ivars();
+            let mut latest = shared.latest.lock().unwrap();
+            latest.frame = Some(frame);
+            latest.seq += 1;
+            shared.ready.notify_all();
+        }
+    }
+);
+
+impl FrameSink {
+    fn new(shared: Arc<Shared>) -> Retained<Self> {
+        let this = Self::alloc().set_ivars(shared);
+        unsafe { msg_send![super(this), init] }
+    }
+}
+
+/// 像素缓冲（BGRA）→ RGBA 紧排。
+fn copy_rgba(buffer: &CVPixelBuffer) -> Option<(Vec<u8>, usize, usize)> {
+    if unsafe { CVPixelBufferLockBaseAddress(buffer, CVPixelBufferLockFlags::ReadOnly) } != 0 {
+        return None;
+    }
+    let (w, h, stride) = (
+        CVPixelBufferGetWidth(buffer),
+        CVPixelBufferGetHeight(buffer),
+        CVPixelBufferGetBytesPerRow(buffer),
+    );
+    let base = CVPixelBufferGetBaseAddress(buffer) as *const u8;
+    let out = (!base.is_null() && stride >= w * 4).then(|| {
+        let src = unsafe { std::slice::from_raw_parts(base, stride * h) };
+        let mut out = Vec::with_capacity(w * h * 4);
+        for row in src.chunks_exact(stride) {
+            for px in row[..w * 4].chunks_exact(4) {
+                out.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
+            }
+        }
+        out
+    });
+    unsafe { CVPixelBufferUnlockBaseAddress(buffer, CVPixelBufferLockFlags::ReadOnly) };
+    out.map(|o| (o, w, h))
+}
+
+/// 长截屏连续取帧（本屏 pt 区域）：SCStream 最高 60 帧/秒推送，拼接线程只取最新一帧。
+/// 逐帧调 SCScreenshotManager 每帧要 40ms 以上，稍快的滚动就超出两帧重叠。
+pub struct RegionStream {
+    stream: Retained<SCStream>,
+    _sink: Retained<FrameSink>,
+    shared: Arc<Shared>,
+    seen: u64,
+    last: Option<(Vec<u8>, usize, usize)>,
+}
+
+impl RegionStream {
+    pub fn start(id: u32, (x, y, w, h): (f64, f64, f64, f64)) -> Result<Self, String> {
         let content = shareable_content()?;
         // 选区边框与预览面板是本应用窗口，始终排除
         let (filter, scale, _, _) = display_filter(&content, id, true)?;
@@ -106,26 +190,73 @@ impl RegionCapture {
                 objc2_core_foundation::CGPoint::new(x, y),
                 objc2_core_foundation::CGSize::new(w, h),
             ));
+            config.setMinimumFrameInterval(CMTime::new(1, 60));
         }
-        Ok(Self { filter, config })
+        let shared = Arc::new(Shared {
+            latest: Mutex::new(Latest::default()),
+            ready: Condvar::new(),
+        });
+        let sink = FrameSink::new(shared.clone());
+        let stream = unsafe {
+            SCStream::initWithFilter_configuration_delegate(
+                SCStream::alloc(),
+                &filter,
+                &config,
+                None,
+            )
+        };
+        let queue = DispatchQueue::new("com.toskr.longshot", None);
+        unsafe {
+            stream.addStreamOutput_type_sampleHandlerQueue_error(
+                ProtocolObject::from_ref(&*sink),
+                SCStreamOutputType::Screen,
+                Some(&queue),
+            )
+        }
+        .map_err(|e| e.to_string())?;
+        let (tx, rx) = mpsc::channel();
+        let block = RcBlock::new(move |err: *mut NSError| {
+            let _ = tx.send(err.is_null());
+        });
+        unsafe { stream.startCaptureWithCompletionHandler(Some(&block)) };
+        if rx.recv_timeout(TIMEOUT) != Ok(true) {
+            return Err("region stream start failed".into());
+        }
+        Ok(Self {
+            stream,
+            _sink: sink,
+            shared,
+            seen: 0,
+            last: None,
+        })
     }
 
-    /// 返回 RGBA 与像素尺寸。
-    pub fn capture(&self) -> Result<(Vec<u8>, usize, usize), String> {
-        let (tx, rx) = mpsc::channel();
-        let block = RcBlock::new(move |image: *mut CGImage, _err: *mut NSError| {
-            let _ = tx.send(unsafe { image.as_ref() }.and_then(to_rgba));
-        });
-        unsafe {
-            SCScreenshotManager::captureImageWithFilter_configuration_completionHandler(
-                &self.filter,
-                &self.config,
-                Some(&block),
-            );
+    /// 等下一帧（最多 `wait`，首帧最多 3 秒），返回 RGBA 与像素尺寸；画面静止没有新帧时返回上一帧。
+    pub fn next_frame(&mut self, wait: Duration) -> Result<(Vec<u8>, usize, usize), String> {
+        let seen = self.seen;
+        let wait = if self.last.is_some() { wait } else { TIMEOUT };
+        let guard = self.shared.latest.lock().unwrap();
+        let (mut latest, _) = self
+            .shared
+            .ready
+            .wait_timeout_while(guard, wait, |l| l.seq == seen)
+            .unwrap();
+        if let Some(frame) = latest.frame.take().filter(|_| latest.seq != seen) {
+            self.seen = latest.seq;
+            drop(latest);
+            self.last = Some(frame.clone());
+            return Ok(frame);
         }
-        rx.recv_timeout(TIMEOUT)
-            .map_err(|_| "region capture timeout".to_string())?
-            .ok_or_else(|| "region capture failed".to_string())
+        drop(latest);
+        self.last
+            .clone()
+            .ok_or_else(|| "region stream: no frame".to_string())
+    }
+}
+
+impl Drop for RegionStream {
+    fn drop(&mut self) {
+        unsafe { self.stream.stopCaptureWithCompletionHandler(None) };
     }
 }
 
@@ -182,18 +313,6 @@ fn to_bmp(image: &CGImage) -> Option<Shot> {
     })
 }
 
-/// CGImage → 紧排 RGBA（去掉行填充、交换 B/R）。
-fn to_rgba(image: &CGImage) -> Option<(Vec<u8>, usize, usize)> {
-    let (src, w, h, stride) = bgra_pixels(image)?;
-    let mut out = Vec::with_capacity(w * h * 4);
-    for y in 0..h {
-        for px in src[y * stride..y * stride + w * 4].chunks_exact(4) {
-            out.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
-        }
-    }
-    Some((out, w, h))
-}
-
 /// 32 位 BI_RGB BMP（负高度 = 自顶向下），逐行去掉 stride 填充。
 pub(crate) fn bmp_from_bgra(src: &[u8], w: usize, h: usize, stride: usize) -> Vec<u8> {
     const HEADER: usize = 14 + 40;
@@ -244,11 +363,11 @@ mod tests {
     fn sck_region_smoke() {
         let id = core_graphics::display::CGDisplay::active_displays().unwrap()[0];
         let t = std::time::Instant::now();
-        let cap = RegionCapture::new(id, (100.0, 100.0, 300.0, 200.0)).unwrap();
+        let mut cap = RegionStream::start(id, (100.0, 100.0, 300.0, 200.0)).unwrap();
         println!("setup {}ms", t.elapsed().as_millis());
         for _ in 0..5 {
             let t = std::time::Instant::now();
-            let (rgba, w, h) = cap.capture().unwrap();
+            let (rgba, w, h) = cap.next_frame(Duration::from_millis(100)).unwrap();
             println!("region {w}x{h} {}ms", t.elapsed().as_millis());
             assert_eq!(rgba.len(), w * h * 4);
         }

@@ -103,7 +103,24 @@ objc2-screen-capture-kit = { version = "0.3", default-features = false, features
   "SCScreenshotManager",
   "SCShareableContent",
   "SCStream",
+  "dispatch2",
+  "objc2-core-media",
 ] }
+# 长截屏连续取帧（SCStream 样本缓冲 → 像素）
+objc2-core-media = { version = "0.3", default-features = false, features = [
+  "std",
+  "CMSampleBuffer",
+  "CMTime",
+  "objc2-core-video",
+] }
+objc2-core-video = { version = "0.3", default-features = false, features = [
+  "std",
+  "CVBuffer",
+  "CVImageBuffer",
+  "CVPixelBuffer",
+  "CVReturn",
+] }
+dispatch2 = { version = "0.3", default-features = false, features = ["std", "objc2"] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFCGTypes"] }
 objc2-core-graphics = { version = "0.3", default-features = false, features = [
   "std",

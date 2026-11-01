@@ -924,20 +924,22 @@ pub fn long(
                 h,
             },
         );
-        let region = match (sck, display_id) {
-            (true, Some(id)) => Some(crate::screenshot_sck::RegionCapture::new(id, (x, y, w, h))),
+        let mut region = match (sck, display_id) {
+            (true, Some(id)) => Some(crate::screenshot_sck::RegionStream::start(id, (x, y, w, h))),
             _ => None,
         };
         let started = std::time::Instant::now();
         let result = crate::screenshot_long::run(
             global,
-            || match &region {
-                Some(Ok(cap)) => cap.capture(),
+            || match &mut region {
+                // 画面静止时最多等 100ms 就交回上一帧，循环照常检查完成 / 取消
+                Some(Ok(stream)) => stream.next_frame(std::time::Duration::from_millis(100)),
                 Some(Err(e)) => Err(e.clone()),
                 None => capture_region_fallback(global),
             },
             |event| crate::screenshot_long::preview_event(&app, event),
         );
+        drop(region);
         crate::screenshot_long::close_preview(&app);
         match result {
             Ok(crate::screenshot_long::Outcome {
@@ -945,15 +947,22 @@ pub fn long(
                 w: pw,
                 h: ph,
                 stop,
-                frames,
-                misses,
+                stats,
+                max_step_pct,
+                lost_pairs,
+                lost_aligned,
             }) => {
                 let ms = started.elapsed().as_millis();
+                let n = stats.frames.max(1) as u128;
                 crate::diag::push(
                     &app,
                     format!(
-                        "长截屏 {pw}×{ph} 结束={stop:?} 耗时 {ms}ms 帧 {frames}（平均 {}ms）接不上 {misses}",
-                        ms / frames.max(1) as u128
+                        "长截屏 {pw}×{ph} 结束={stop:?} 耗时 {ms}ms 帧 {}（平均 {}ms，取帧 {}ms）接不上 {}（最长连续 {}，其间相邻帧可对齐 {lost_aligned}/{lost_pairs}）最大位移 {max_step_pct}%",
+                        stats.frames,
+                        ms / n,
+                        stats.capture_ms / n,
+                        stats.misses,
+                        stats.longest_miss_run,
                     ),
                 );
                 if stop == crate::screenshot_long::Stop::Cancelled {

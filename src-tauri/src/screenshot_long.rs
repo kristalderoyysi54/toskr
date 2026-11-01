@@ -20,8 +20,7 @@ const MIN_MATCH_RATIO: f64 = 0.6;
 const MIN_OVERLAP_ROWS: usize = 12;
 /// 至少这么多「帧内唯一」的行对上，才算找到重叠。
 const MIN_VOTES: usize = 3;
-/// 截帧间隔；长时间不滚视为忘了点完成，按完成处理。
-const POLL_MS: u64 = 40;
+/// 长时间不滚视为忘了点完成，按完成处理。（帧率由 `capture` 决定：连续取帧时它会等到下一帧）
 const IDLE_LIMIT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// 面板按钮：0 = 继续，1 = 完成，2 = 取消。
@@ -117,15 +116,30 @@ pub enum Event<'a> {
     Stalled(bool),
 }
 
+/// 逐帧统计（诊断用：区分「滚太快」与「内容对不上」）。
+#[derive(Debug, Default, PartialEq)]
+pub struct Stats {
+    pub frames: usize,
+    /// 与上一帧接不上的帧数、其中最长的连续段
+    pub misses: usize,
+    pub longest_miss_run: usize,
+    /// 截图本身累计耗时
+    pub capture_ms: u128,
+}
+
 /// 拼接结果。
 pub struct Outcome {
     pub rgba: Vec<u8>,
     pub w: usize,
     pub h: usize,
     pub stop: Stop,
-    /// 截了多少帧、其中多少帧与上一帧接不上（诊断用）
-    pub frames: usize,
-    pub misses: usize,
+    pub stats: Stats,
+    /// 相邻两帧间最大位移占帧高的百分比（接近 100 说明已在帧率极限上滚动）
+    pub max_step_pct: usize,
+    /// 相邻两张接不上的帧之间：比对次数、其中能对齐的次数。
+    /// 多数能对齐 = 页面在正常滚动、只是滚过了头；对不齐 = 页面内容本身没法拼
+    pub lost_pairs: usize,
+    pub lost_aligned: usize,
 }
 
 /// 拼接主循环。`capture` 截取选区返回 (RGBA, 宽, 高)；`region` 为全局 pt 选区。
@@ -143,28 +157,30 @@ pub fn run(
     let (first, w, h) = capture()?;
     let mut st = Stitcher::new(first, w, h);
     progress(Event::Stitched(&st.out, w, st.total_h));
-    let (stop, frames, misses) = follow(&mut st, &mut capture, &mut progress)?;
+    let (stop, stats) = follow(&mut st, &mut capture, &mut progress)?;
     Ok(Outcome {
+        max_step_pct: st.max_step * 100 / h.max(1),
+        lost_pairs: st.lost_pairs,
+        lost_aligned: st.lost_aligned,
         rgba: st.out,
         w,
         h: st.total_h,
         stop,
-        frames,
-        misses,
+        stats,
     })
 }
 
 /// 定时截帧，画面变了就拼；对不上的帧丢弃（等用户往回滚到能接上）。
-/// 返回结束原因与（帧数, 接不上的帧数）。
 fn follow(
     st: &mut Stitcher,
     capture: &mut impl FnMut() -> Result<(Vec<u8>, usize, usize), String>,
     progress: &mut impl FnMut(Event),
-) -> Result<(Stop, usize, usize), String> {
+) -> Result<(Stop, Stats), String> {
     STOP_REQUEST.store(0, Ordering::Relaxed);
     let mut last_change = std::time::Instant::now();
     let mut stalled = false;
-    let (mut frames, mut misses) = (0, 0);
+    let mut stats = Stats::default();
+    let mut miss_run = 0;
     loop {
         let stop = match STOP_REQUEST.swap(0, Ordering::Relaxed) {
             1 => Some(Stop::Finished),
@@ -173,17 +189,22 @@ fn follow(
             _ => None,
         };
         if let Some(stop) = stop {
-            return Ok((stop, frames, misses));
+            return Ok((stop, stats));
         }
-        std::thread::sleep(std::time::Duration::from_millis(POLL_MS));
+        let started = std::time::Instant::now();
         let (frame, fw, fh) = capture()?;
+        stats.capture_ms += started.elapsed().as_millis();
         if fw != st.w || fh != st.h {
             return Err("frame size changed".into());
         }
         let result = st.push(&frame);
-        frames += 1;
+        stats.frames += 1;
         if result == Push::NoOverlap {
-            misses += 1;
+            stats.misses += 1;
+            miss_run += 1;
+            stats.longest_miss_run = stats.longest_miss_run.max(miss_run);
+        } else {
+            miss_run = 0;
         }
         if result != Push::Same {
             last_change = std::time::Instant::now();
@@ -195,7 +216,7 @@ fn follow(
         if result == Push::Appended {
             progress(Event::Stitched(&st.out, st.w, st.total_h));
             if st.w * st.total_h >= MAX_PIXELS {
-                return Ok((Stop::Limit, frames, misses));
+                return Ok((Stop::Limit, stats));
             }
         }
     }
@@ -232,6 +253,12 @@ pub struct Stitcher {
     tail: usize,
     /// 当前帧内容底边比已拼长图底边高出的行数（往回滚产生）
     behind: usize,
+    /// 相邻两帧间最大位移（行，诊断用）
+    pub max_step: usize,
+    /// 上一张接不上的帧（与下一张接不上的帧互相比对，诊断用）
+    lost: Option<Vec<(u64, bool)>>,
+    pub lost_pairs: usize,
+    pub lost_aligned: usize,
 }
 
 impl Stitcher {
@@ -242,6 +269,10 @@ impl Stitcher {
             total_h: h,
             tail: h,
             behind: 0,
+            max_step: 0,
+            lost: None,
+            lost_pairs: 0,
+            lost_aligned: 0,
             w,
             h,
         }
@@ -260,8 +291,17 @@ impl Stitcher {
         bottom = bottom.min(self.tail);
         let body = top..h - bottom;
         let Some(dy) = scroll_offset(&self.prev[body.clone()], &sig[body]) else {
+            if let Some(lost) = &self.lost {
+                self.lost_pairs += 1;
+                if scroll_offset(lost, &sig).is_some_and(|d| d != 0) {
+                    self.lost_aligned += 1;
+                }
+            }
+            self.lost = Some(sig);
             return Push::NoOverlap;
         };
+        self.lost = None;
+        self.max_step = self.max_step.max(dy.unsigned_abs());
         if dy <= 0 {
             // 往回滚（新帧在上一帧之上 -dy 行）或原地变化
             self.behind += dy.unsigned_abs();
@@ -433,6 +473,8 @@ pub fn preview_event(app: &AppHandle, event: Event) {
             stalled: p.stalled,
         }
     };
+    // 边框窗也收：接不上时边框变警示色，提示就在用户盯着的地方
+    let _ = app.emit_to(FRAME_LABEL, PROGRESS_EVENT, payload.clone());
     let _ = app.emit_to(PREVIEW_LABEL, PROGRESS_EVENT, payload);
 }
 
@@ -720,6 +762,9 @@ pub fn close(window: &tauri::WebviewWindow) {
 mod tests {
     use super::*;
 
+    /// follow 读写全局 STOP_REQUEST，并行跑的用例要串行，否则互相收到对方的完成 / 取消。
+    static FOLLOW: Mutex<()> = Mutex::new(());
+
     /// 宽 2 的"页面"：第 i 行像素值由 i 决定，纯色行模拟空白。
     fn page(rows: &[u8]) -> Vec<u8> {
         rows.iter()
@@ -778,6 +823,7 @@ mod tests {
     /// 静止帧不拼、跳太远的帧丢弃并报 stalled、接回后继续，点「完成」结束。
     #[test]
     fn manual_mode_skips_unaligned_frames_until_finished() {
+        let _serial = FOLLOW.lock().unwrap_or_else(|e| e.into_inner());
         let content: Vec<u8> = (0..200).map(|i| (i * 13 % 251) as u8).collect();
         let mut st = Stitcher::new(page(&content[..60]), 2, 60);
         let tops = [0, 20, 120, 40];
@@ -796,9 +842,16 @@ mod tests {
                 stalls.push(v);
             }
         };
-        let (stop, frames, misses) = follow(&mut st, &mut capture, &mut progress).unwrap();
+        let (stop, stats) = follow(&mut st, &mut capture, &mut progress).unwrap();
         assert_eq!(stop, Stop::Finished);
-        assert_eq!((frames, misses), (4, 1));
+        assert_eq!(
+            (stats.frames, stats.misses, stats.longest_miss_run),
+            (4, 1, 1)
+        );
+        assert_eq!(
+            st.max_step, 20,
+            "0→20、20→40 各 20 行；跳到 120 的那帧被丢弃，不计入"
+        );
         assert_eq!(stalls, vec![true, false]);
         assert!(st.out == page(&content[..100]));
     }
@@ -862,8 +915,25 @@ mod tests {
         }
     }
 
+    /// 滚过了头之后继续往下滚：接不上的帧彼此仍能对齐，诊断据此判断「滚太快」而非内容问题。
+    #[test]
+    fn lost_frames_that_still_align_with_each_other_are_counted() {
+        let content: Vec<u8> = (0..200).map(|i| (i * 13 % 251) as u8).collect();
+        let frame = |top: usize| page(&content[top..top + 60]);
+        let mut st = Stitcher::new(frame(0), 2, 60);
+        for top in [100, 110, 125] {
+            assert_eq!(st.push(&frame(top)), Push::NoOverlap);
+        }
+        assert_eq!((st.lost_pairs, st.lost_aligned), (2, 2));
+        // 往回滚接上后清空，再丢失重新计
+        assert_eq!(st.push(&frame(30)), Push::Appended);
+        assert_eq!(st.push(&frame(140)), Push::NoOverlap);
+        assert_eq!((st.lost_pairs, st.lost_aligned), (2, 2));
+    }
+
     #[test]
     fn cancel_request_stops_with_cancelled() {
+        let _serial = FOLLOW.lock().unwrap_or_else(|e| e.into_inner());
         let content: Vec<u8> = (0..200).map(|i| (i * 13 % 251) as u8).collect();
         let mut st = Stitcher::new(page(&content[..60]), 2, 60);
         let mut capture = || {
