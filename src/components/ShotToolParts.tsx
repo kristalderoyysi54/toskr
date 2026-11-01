@@ -1,9 +1,22 @@
 import { forwardRef, useEffect, useMemo, useState, type ComponentProps } from "react";
-import { Circle, Focus, Grid3x3, Hash, MoveUpRight, Pencil, Square, Type, type LucideIcon } from "lucide-react";
+import {
+  Circle,
+  Focus,
+  Grid3x3,
+  Hash,
+  Layers2,
+  MoveUpRight,
+  Pencil,
+  Square,
+  SquareRoundCorner,
+  Type,
+  type LucideIcon,
+} from "lucide-react";
 
 import { IconButton } from "@/components/ui/icon-button";
 import { useT, type MessageKey } from "@/lib/i18n";
 import { COLORS, SIZES, type SizeLevel, type Tool } from "@/lib/screenshot/annotate";
+import { FRAME_BGS, FRAME_GRADIENT, MAX_RADIUS, type FrameBg } from "@/lib/screenshot/frame";
 import { cn } from "@/lib/utils";
 
 /** 截图遮罩与长图标注窗共用的标注工具；tip 为悬停说明。 */
@@ -114,22 +127,97 @@ export function useShotStyle() {
 /** 出图圆角（pt）与阴影开关（每台机器的使用习惯，存 localStorage）。 */
 const FRAME_KEY = "toskr.screenshotFrame";
 
+export interface ShotFrame {
+  radius: number;
+  shadow: boolean;
+  bg: FrameBg;
+}
+
 export function useShotFrame() {
-  const [frame, setFrame] = useState<{ radius: number; shadow: boolean }>(() => {
+  const [frame, setFrame] = useState<ShotFrame>(() => {
     try {
-      const v = JSON.parse(localStorage.getItem(FRAME_KEY) ?? "{}") as { radius?: unknown; shadow?: unknown };
+      const v = JSON.parse(localStorage.getItem(FRAME_KEY) ?? "{}") as { radius?: unknown; shadow?: unknown; bg?: unknown };
       return {
         radius: typeof v.radius === "number" && v.radius >= 0 && v.radius <= 64 ? v.radius : 0,
         shadow: v.shadow === true,
+        bg: FRAME_BGS.includes(v.bg as FrameBg) ? (v.bg as FrameBg) : "none",
       };
     } catch {
-      return { radius: 0, shadow: false };
+      return { radius: 0, shadow: false, bg: "none" };
     }
   });
   useEffect(() => {
     localStorage.setItem(FRAME_KEY, JSON.stringify(frame));
   }, [frame]);
   return [frame, setFrame] as const;
+}
+
+const BG_LABEL: Record<FrameBg, MessageKey> = {
+  none: "透明背景",
+  white: "白色背景",
+  gradient: "渐变背景",
+};
+
+/** 背景色块的显示样式。 */
+function bgSwatch(bg: FrameBg) {
+  // token-exception: 背景色块预览（透明用棋盘格），与出图像素一致
+  if (bg === "white") return { background: "#FFFFFF" };
+  if (bg === "gradient") return { background: `linear-gradient(135deg, ${FRAME_GRADIENT[0]}, ${FRAME_GRADIENT[1]})` };
+  return { background: "repeating-conic-gradient(#d4d4d4 0 25%, #ffffff 0 50%) 0 0 / 6px 6px" };
+}
+
+/** 出图圆角滑块、阴影开关、背景（截图遮罩与长图 / 钉图标注窗共用）。 */
+export function ShotFrameControls({
+  frame,
+  setFrame,
+}: {
+  frame: ShotFrame;
+  setFrame: (update: (f: ShotFrame) => ShotFrame) => void;
+}) {
+  const t = useT();
+  return (
+    <>
+      <span className="flex items-center gap-1" data-tip={t("圆角：出图四角裁成圆角")}>
+        <SquareRoundCorner className="size-3.5 text-muted-foreground" />
+        <input
+          type="range"
+          min={0}
+          max={MAX_RADIUS}
+          step={2}
+          value={frame.radius}
+          aria-label={t("圆角")}
+          onChange={(e) => setFrame((f) => ({ ...f, radius: Number(e.target.value) }))}
+          className="w-20 accent-primary"
+        />
+        <span className="w-5 font-mono text-label tabular-nums">{frame.radius}</span>
+      </span>
+      <TipButton
+        label={t("阴影")}
+        tip={t("阴影：出图四周加投影（带边距）")}
+        size="xs"
+        pressed={frame.shadow}
+        onClick={() => setFrame((f) => ({ ...f, shadow: !f.shadow }))}
+      >
+        <Layers2 />
+      </TipButton>
+      {(frame.shadow || frame.radius > 0) &&
+        FRAME_BGS.map((bg) => (
+          <button
+            key={bg}
+            type="button"
+            aria-label={t(BG_LABEL[bg])}
+            aria-pressed={frame.bg === bg}
+            data-tip={t("{bg}：圆角外与阴影边距的底色", { bg: t(BG_LABEL[bg]) })}
+            onClick={() => setFrame((f) => ({ ...f, bg }))}
+            className={cn(
+              "size-4 shrink-0 rounded-sm border border-border",
+              frame.bg === bg && "ring-2 ring-primary ring-offset-1 ring-offset-popover"
+            )}
+            style={bgSwatch(bg)}
+          />
+        ))}
+    </>
+  );
 }
 
 /** 粗细三档 + 6 色（马赛克只显示粗细，即颗粒大小）。 */

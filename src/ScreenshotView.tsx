@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import {
   Check,
   Download,
   Languages,
-  Layers2,
   Loader2,
   type LucideIcon,
   Pin,
@@ -13,7 +12,6 @@ import {
   ScrollText,
   Send,
   Shield,
-  SquareRoundCorner,
   Undo2,
   X,
 } from "lucide-react";
@@ -25,10 +23,12 @@ import {
   ShotStyleRow,
   TipButton,
   toolHasStyle,
+  ShotFrameControls,
   useShotFrame,
   useShotStyle,
 } from "@/components/ShotToolParts";
-import { clampRadius, frameImage, MAX_RADIUS, SHADOW_PAD } from "@/lib/screenshot/frame";
+import { clampRadius, frameImage, SHADOW_PAD } from "@/lib/screenshot/frame";
+import { shapeAt } from "@/lib/screenshot/shapeEdit";
 import { Button } from "@/components/ui/button";
 import { floatingSurface } from "@/components/ui/floating-surface";
 import { IconButton } from "@/components/ui/icon-button";
@@ -37,6 +37,7 @@ import { useT, type MessageKey } from "@/lib/i18n";
 import { createLongPress } from "@/lib/longPress";
 import {
   commitShapes,
+  commitText,
   contrastText,
   drawShapes,
   fitFontSize,
@@ -51,7 +52,9 @@ import {
   type SizeLevel,
   TRANSLATE_PAD,
   type Tool,
+  type TextDraft,
   type TranslatedLine,
+  withTextDraft,
 } from "@/lib/screenshot/annotate";
 import { useShapeEdit } from "@/lib/screenshot/useShapeEdit";
 import { ShapeEditFrame } from "@/components/ShapeEditFrame";
@@ -87,7 +90,22 @@ type Drag =
   | { kind: "resize"; x: number; y: number; orig: Rect; handle: Handle };
 
 /** 选区上方圆角 / 阴影条的估计宽度（贴右边时左移）。 */
-const FRAME_BAR_W = 280;
+const FRAME_BAR_W = 360;
+// token-exception: 截图十字延长线颜色（用户指定）
+const CROSSHAIR_COLOR = "#B3D934";
+/** C 键：按物理键位认（中文输入法下 e.key 是 Process）。 */
+function isKeyC(e: KeyboardEvent): boolean {
+  return e.code === "KeyC" || e.key.toLowerCase() === "c";
+}
+/** 取色快捷键 C：按键可能落在别的屏的遮罩窗，广播给光标所在屏去复制。 */
+const COPY_COLOR_EVENT = "toskr://screenshot-copy-color";
+/** 截图光标（参照 iShot）：中心留空的细十字，黑线白边，深浅背景都看得清。 */
+const CROSS_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="25" height="25" viewBox="0 0 25 25">' +
+    '<g stroke-linecap="square"><path d="M12.5 1v8M12.5 16v8M1 12.5h8M16 12.5h8" stroke="#fff" stroke-width="3"/>' +
+    '<path d="M12.5 1v8M12.5 16v8M1 12.5h8M16 12.5h8" stroke="#000" stroke-width="1"/></g>' +
+    '<circle cx="12.5" cy="12.5" r="1" fill="#000" stroke="#fff" stroke-width="0.8"/></svg>'
+)}") 12 12, crosshair`;
 /** 起拖阈值：小于此距离的按放视为单击（选中悬停窗口）。 */
 const DRAG_SLOP = 3;
 /** 放大镜：取样边长（冻结帧像素）× 放大倍数 = 画布边长（pt）。 */
@@ -254,12 +272,13 @@ export default function ScreenshotView() {
   const { ink, size } = style;
   const [history, setHistory] = useState<History>(emptyHistory);
   const [draft, setDraft] = useState<Shape | null>(null);
-  const [editing, setEditing] = useState<{ x: number; y: number; text: string } | null>(null);
+  const [editing, setEditing] = useState<TextDraft | null>(null);
   const [ocr, setOcr] = useState<OcrPanel | null>(null);
   const translateReq = useRef<PendingTranslate | null>(null);
   const [translating, setTranslating] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const drag = useRef<Drag | null>(null);
+  const copyLatest = useRef<{ copyColor: () => void; live: boolean }>({ copyColor: () => {}, live: false });
   const textRef = useRef<HTMLTextAreaElement | null>(null);
   const sessionRef = useRef<number | null>(null);
   const urlRef = useRef<string | null>(null);
@@ -362,20 +381,23 @@ export default function ScreenshotView() {
   // WKWebView 下 autoFocus 不可靠：新文字框出现后显式聚焦
   const editingAt = editing ? `${editing.x},${editing.y}` : null;
   useEffect(() => {
-    if (editingAt) textRef.current?.focus();
+    const el = textRef.current;
+    if (!editingAt || !el) return;
+    el.focus();
+    // 双击改已有文字时光标放到末尾
+    el.setSelectionRange(el.value.length, el.value.length);
   }, [editingAt]);
 
   /** 正在输入的文字也算进出图与撤销历史。 */
   const shapesWithEditing = useCallback((): Shape[] => {
-    if (!editing?.text.trim()) return history.shapes;
-    return [...history.shapes, { kind: "text", x: editing.x, y: editing.y, text: editing.text, color: ink, size }];
-  }, [editing, history.shapes, ink, size]);
+    return withTextDraft(history.shapes, editing);
+  }, [editing, history.shapes]);
 
   const commitEditing = useCallback(() => {
     if (!editing) return;
-    setHistory((h) => pushShape(h, { kind: "text", x: editing.x, y: editing.y, text: editing.text, color: ink, size }));
+    setHistory((h) => commitText(h, editing));
     setEditing(null);
-  }, [editing, ink, size]);
+  }, [editing]);
 
   /** 选区按冻结帧像素裁剪（`withShapes` 时合成标注），得到原始 RGBA。 */
   const exportImage = useCallback(
@@ -408,7 +430,8 @@ export default function ScreenshotView() {
     const raw = exportImage();
     if (!raw || !sel) return;
     const padPt = frame.shadow ? SHADOW_PAD : 0;
-    const out = frame.radius > 0 || padPt > 0 ? frameImage(raw, frame.radius * sx, Math.round(padPt * sx)) : raw;
+    const out =
+      frame.radius > 0 || padPt > 0 ? frameImage(raw, frame.radius * sx, Math.round(padPt * sx), frame.bg) : raw;
     reset();
     // 带阴影时图四周多出透明边距，钉图位置相应左上移，图本身仍对齐原处
     const placement = { x: sel.x - padPt, y: sel.y - padPt };
@@ -583,12 +606,14 @@ export default function ScreenshotView() {
           setSel(null);
           setHistory(emptyHistory);
         } else cancel();
-      } else if (e.key === "Enter" || (e.metaKey && e.key.toLowerCase() === "c")) {
+      } else if (e.key === "Enter" || (e.metaKey && isKeyC(e))) {
         stop();
         confirm();
-      } else if (!e.metaKey && e.key.toLowerCase() === "c") {
+      } else if (!e.metaKey && isKeyC(e)) {
         stop();
-        copyColor();
+        // 中文输入法下 e.key 是 Process，按物理键位认；键盘焦点可能在别的屏，交给光标所在屏
+        if (copyLatest.current.live) copyColor();
+        else void emit(COPY_COLOR_EVENT);
       } else if (sel && !tool && history.shapes.length === 0 && e.key.startsWith("Arrow")) {
         stop();
         const step = e.shiftKey ? 10 : 1;
@@ -635,6 +660,13 @@ export default function ScreenshotView() {
   }, [info]);
 
   const showLoupe = !!(img && cursor && (!sel || dragging));
+  copyLatest.current = { copyColor, live: showLoupe };
+  useEffect(() => {
+    const off = listen(COPY_COLOR_EVENT, () => {
+      if (copyLatest.current.live) copyLatest.current.copyColor();
+    });
+    return () => void off.then((f) => f());
+  }, []);
 
   // 放大镜：从冻结帧取样放大，同时记下光标处色值
   useEffect(() => {
@@ -667,6 +699,16 @@ export default function ScreenshotView() {
   const editRef = useRef(edit);
   editRef.current = edit;
 
+  const beginTextEdit = (x: number, y: number): boolean => {
+    if (tool && tool !== "text") return false;
+    const i = shapeAt(history.shapes, x, y, 4, (s) => s.kind === "text");
+    const s = i === null ? undefined : history.shapes[i];
+    if (s?.kind !== "text") return false;
+    edit.clear();
+    setEditing({ x: s.x, y: s.y, text: s.text, color: s.color, size: s.size, orig: s });
+    return true;
+  };
+
   const point = (e: ReactPointerEvent) => ({ x: e.clientX, y: e.clientY });
 
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -682,7 +724,7 @@ export default function ScreenshotView() {
       if (!inside(sel, p.x, p.y)) return;
       if (tool === "text") {
         // 文字框以光标为左上角，字号的一半上提让首行落在点击处
-        if (!editing) setEditing({ x: p.x, y: p.y - FONT_SIZE[size] / 2, text: "" });
+        if (!editing) setEditing({ x: p.x, y: p.y - FONT_SIZE[size] / 2, text: "", color: ink, size });
         return;
       }
       if (tool === "number") {
@@ -768,6 +810,8 @@ export default function ScreenshotView() {
   const active = sel ?? hover;
   const handle = sel && cursor && !dragging && !locked ? hitHandle(sel, cursor.x, cursor.y) : null;
   const editCursor = sel && cursor && !draft ? edit.cursor(cursor.x, cursor.y) : null;
+  // 改已有文字时原文字先藏起来，由输入框显示
+  const shownShapes = editing?.orig ? edit.shapes.filter((s) => s !== editing.orig) : edit.shapes;
   const inSel = !!(sel && cursor && inside(sel, cursor.x, cursor.y));
   const cursorStyle = editCursor
     ? editCursor
@@ -775,7 +819,7 @@ export default function ScreenshotView() {
     ? inSel
       ? tool === "text"
         ? "text"
-        : "crosshair"
+        : CROSS_CURSOR
       : "default"
     : handle
       ? HANDLE_CURSOR[handle]
@@ -783,24 +827,27 @@ export default function ScreenshotView() {
         ? "move"
         : sel && locked
           ? "default"
-          : "crosshair";
+          : CROSS_CURSOR;
   const pr = active ? toPixelRect(active, sx, sy, info.pxW, info.pxH) : null;
   const labelAbove = active && active.y >= 26;
   const loupePos = cursor ? placeNear(cursor.x, cursor.y, LOUPE_SIZE, LOUPE_PANEL_H, W, H) : null;
   // 选中图形时样式行显示并修改该图形的颜色 / 粗细
-  const pickedStyled = edit.picked && "size" in edit.picked ? edit.picked : null;
-  const styleKind = pickedStyled?.kind ?? tool;
+  // 输入文字时样式行改的是正在输入的文字
+  const pickedStyled = editing ?? (edit.picked && "size" in edit.picked ? edit.picked : null);
+  const styleKind = editing ? "text" : (pickedStyled && "kind" in pickedStyled ? pickedStyled.kind : tool);
   const showStyle = toolHasStyle(styleKind);
   const styleRow = {
     ink: pickedStyled?.color ?? ink,
     size: (pickedStyled?.size ?? size) as SizeLevel,
     setInk: (c: string) => {
       style.setInk(c);
-      edit.restyle({ color: c });
+      if (editing) setEditing({ ...editing, color: c });
+      else edit.restyle({ color: c });
     },
     setSize: (lv: SizeLevel) => {
       style.setSize(lv);
-      edit.restyle({ size: lv });
+      if (editing) setEditing({ ...editing, size: lv });
+      else edit.restyle({ size: lv });
     },
     colors: styleKind !== "mosaic",
   };
@@ -820,7 +867,12 @@ export default function ScreenshotView() {
       onMouseDown={(e) => e.target === e.currentTarget && e.preventDefault()}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onDoubleClick={(e) => !tool && sel && inside(sel, e.clientX, e.clientY) && confirm()}
+      onDoubleClick={(e) => {
+        if (!sel || !inside(sel, e.clientX, e.clientY)) return;
+        // 双击已有文字：改内容；否则无工具时双击完成截图
+        if (beginTextEdit(e.clientX, e.clientY)) return;
+        if (!tool) confirm();
+      }}
       onContextMenu={(e) => {
         e.preventDefault();
         if (tool) setTool(null);
@@ -857,7 +909,7 @@ export default function ScreenshotView() {
 
       {sel && (history.shapes.length > 0 || draft) && (
         <ShotShapesSvg
-          shapes={draft ? [...edit.shapes, draft] : edit.shapes}
+          shapes={draft ? [...shownShapes, draft] : shownShapes}
           clip={sel}
           img={img}
           sx={sx}
@@ -904,29 +956,7 @@ export default function ScreenshotView() {
             {pr.w} × {pr.h}
           </span>
           <span className="h-4 w-px bg-border" />
-          <span className="flex items-center gap-1" data-tip={t("圆角：出图四角裁成圆角（外侧透明）")}>
-            <SquareRoundCorner className="size-3.5 text-muted-foreground" />
-            <input
-              type="range"
-              min={0}
-              max={MAX_RADIUS}
-              step={2}
-              value={frame.radius}
-              aria-label={t("圆角")}
-              onChange={(e) => setFrame((f) => ({ ...f, radius: Number(e.target.value) }))}
-              className="w-20 accent-primary"
-            />
-            <span className="w-5 font-mono tabular-nums">{frame.radius}</span>
-          </span>
-          <TipButton
-            label={t("阴影")}
-            tip={t("阴影：出图四周加投影（带透明边距）")}
-            size="xs"
-            pressed={frame.shadow}
-            onClick={() => setFrame((f) => ({ ...f, shadow: !f.shadow }))}
-          >
-            <Layers2 />
-          </TipButton>
+          <ShotFrameControls frame={frame} setFrame={setFrame} />
         </div>
       )}
 
@@ -1130,11 +1160,11 @@ export default function ScreenshotView() {
           style={{
             left: editing.x,
             top: editing.y,
-            color: ink,
-            fontSize: FONT_SIZE[size],
+            color: editing.color,
+            fontSize: FONT_SIZE[editing.size],
             lineHeight: 1.25,
             minWidth: 40,
-            width: Math.max(40, ...editing.text.split("\n").map((l) => l.length * FONT_SIZE[size] * 0.9 + 12)),
+            width: Math.max(40, ...editing.text.split("\n").map((l) => l.length * FONT_SIZE[editing.size] * 0.9 + 12)),
           }}
         />
       )}
@@ -1144,16 +1174,16 @@ export default function ScreenshotView() {
       {/* 光标十字延长线：贯穿全屏，便于对齐边缘（未选区与拖出选区时显示） */}
       {showLoupe && cursor && (
         <>
-          {/* 1px 半透明白线 + 极淡暗边，浅色背景上也看得见 */}
+          {/* 1px 黄绿线 + 极淡暗边 */}
           <div
-            className="pointer-events-none absolute inset-x-0 h-px bg-white/60"
+            className="pointer-events-none absolute inset-x-0 h-px"
             // token-exception: 十字线暗边
-            style={{ top: Math.round(cursor.y), boxShadow: "0 0 0 0.5px rgba(0,0,0,0.25)" }}
+            style={{ top: Math.round(cursor.y), background: CROSSHAIR_COLOR, boxShadow: "0 0 0 0.5px rgba(0,0,0,0.25)" }}
           />
           <div
-            className="pointer-events-none absolute inset-y-0 w-px bg-white/60"
+            className="pointer-events-none absolute inset-y-0 w-px"
             // token-exception: 十字线暗边
-            style={{ left: Math.round(cursor.x), boxShadow: "0 0 0 0.5px rgba(0,0,0,0.25)" }}
+            style={{ left: Math.round(cursor.x), background: CROSSHAIR_COLOR, boxShadow: "0 0 0 0.5px rgba(0,0,0,0.25)" }}
           />
         </>
       )}

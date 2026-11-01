@@ -5,6 +5,12 @@ export const SHADOW_PAD = 24;
 /** 圆角上限（pt）。 */
 export const MAX_RADIUS = 32;
 
+/** 圆角 / 阴影边距外的背景：透明、白色、渐变。 */
+export type FrameBg = "none" | "white" | "gradient";
+export const FRAME_BGS: FrameBg[] = ["none", "white", "gradient"];
+// token-exception: 背景画进出图像素，不随主题变化
+export const FRAME_GRADIENT = ["#8EC5FC", "#E0C3FC"] as const;
+
 /** 圆角不超过短边一半。 */
 export function clampRadius(r: number, w: number, h: number): number {
   return Math.max(0, Math.min(r, w / 2, h / 2));
@@ -14,7 +20,8 @@ export function clampRadius(r: number, w: number, h: number): number {
 export function frameImage(
   img: { data: Uint8Array; w: number; h: number },
   radius: number,
-  pad: number
+  pad: number,
+  bg: FrameBg = "none"
 ): { data: Uint8Array; w: number; h: number } {
   const src = document.createElement("canvas");
   src.width = img.w;
@@ -32,6 +39,18 @@ export function frameImage(
     ctx.beginPath();
     ctx.roundRect(pad, pad, img.w, img.h, r);
   };
+  if (bg !== "none") {
+    if (bg === "white") {
+      // token-exception: 背景画进出图像素
+      ctx.fillStyle = "#FFFFFF";
+    } else {
+      const g = ctx.createLinearGradient(0, 0, w, h);
+      g.addColorStop(0, FRAME_GRADIENT[0]);
+      g.addColorStop(1, FRAME_GRADIENT[1]);
+      ctx.fillStyle = g;
+    }
+    ctx.fillRect(0, 0, w, h);
+  }
   if (pad > 0) {
     ctx.save();
     // token-exception: 阴影画进出图像素，不随主题变化

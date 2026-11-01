@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  commitText,
   contrastText,
   emptyHistory,
   fitFontSize,
@@ -9,6 +10,7 @@ import {
   pushShape,
   redo,
   undo,
+  withTextDraft,
   type Shape,
 } from "./annotate";
 
@@ -37,6 +39,18 @@ describe("截图标注模型", () => {
     expect(nextNumber([num(1), rect(10), num(2)])).toBe(3);
     const h = undo(pushShape(pushShape(emptyHistory, num(1)), num(2)));
     expect(nextNumber(h.shapes)).toBe(2);
+  });
+
+  it("双击改文字：原地替换、清空即删除、未改动不记历史", () => {
+    const txt: Shape = { kind: "text", x: 5, y: 5, text: "旧", color: "#FF3B30", size: 1 };
+    const h = pushShape(pushShape(emptyHistory, rect(10)), txt);
+    const changed = commitText(h, { x: 5, y: 5, text: "新", color: "#FF3B30", size: 1, orig: txt });
+    expect(changed.shapes).toHaveLength(2);
+    expect(changed.shapes[1]).toMatchObject({ kind: "text", text: "新" });
+    expect(undo(changed).shapes[1]).toBe(txt);
+    expect(commitText(h, { x: 5, y: 5, text: " ", color: "#FF3B30", size: 1, orig: txt }).shapes).toHaveLength(1);
+    expect(commitText(h, { x: 5, y: 5, text: "旧", color: "#FF3B30", size: 1, orig: txt })).toBe(h);
+    expect(withTextDraft(h.shapes, { x: 5, y: 5, text: "新", color: "#000000", size: 1, orig: txt }).map((s) => s.kind)).toEqual(["rect", "text"]);
   });
 
   it("图内翻译：字号按宽度缩放、底色决定黑白字", () => {

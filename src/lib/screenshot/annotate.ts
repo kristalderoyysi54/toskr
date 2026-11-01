@@ -69,6 +69,37 @@ export function nextNumber(shapes: Shape[]): number {
   return shapes.reduce((n, s) => (s.kind === "number" ? Math.max(n, s.n) : n), 0) + 1;
 }
 
+/** 正在输入的文字：新建，或双击已有文字改内容（orig 为原图形）。 */
+export interface TextDraft {
+  x: number;
+  y: number;
+  text: string;
+  color: string;
+  size: number;
+  orig?: Shape;
+}
+
+function draftShape(d: TextDraft): Shape {
+  return { kind: "text", x: d.x, y: d.y, text: d.text, color: d.color, size: d.size };
+}
+
+/** 收尾文字编辑：改已有文字时原地替换（清空即删除），新建时追加；都是一步历史。 */
+export function commitText(h: History, d: TextDraft): History {
+  if (!d.orig) return pushShape(h, draftShape(d));
+  const orig = d.orig;
+  if (!h.shapes.includes(orig)) return pushShape(h, draftShape(d));
+  const next = d.text.trim() ? draftShape(d) : null;
+  if (next && orig.kind === "text" && orig.text === d.text && orig.color === d.color && orig.size === d.size) return h;
+  return commitShapes(h, next ? h.shapes.map((s) => (s === orig ? next : s)) : h.shapes.filter((s) => s !== orig));
+}
+
+/** 出图用：编辑中的文字替代原图形（空文字不画）。 */
+export function withTextDraft(shapes: Shape[], d: TextDraft | null): Shape[] {
+  if (!d) return shapes;
+  const rest = d.orig ? shapes.filter((s) => s !== d.orig) : shapes;
+  return d.text.trim() ? [...rest, draftShape(d)] : rest;
+}
+
 /** 快照式历史：每步记下整份图形列表，移动 / 缩放已画的图形也能撤销。 */
 export interface History {
   shapes: Shape[];

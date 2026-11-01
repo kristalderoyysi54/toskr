@@ -4,7 +4,18 @@ import { Check, Crop, Download, Redo2, Undo2, X } from "lucide-react";
 
 import { ShapeEditFrame } from "@/components/ShapeEditFrame";
 import { ShotShapesSvg } from "@/components/ShotShapesSvg";
-import { HoverTip, SHOT_TOOLS, ShotStyleRow, TipButton, toolHasStyle, useShotStyle } from "@/components/ShotToolParts";
+import {
+  HoverTip,
+  SHOT_TOOLS,
+  ShotFrameControls,
+  ShotStyleRow,
+  TipButton,
+  toolHasStyle,
+  useShotFrame,
+  useShotStyle,
+} from "@/components/ShotToolParts";
+import { clampRadius, frameImage, SHADOW_PAD } from "@/lib/screenshot/frame";
+import { shapeAt } from "@/lib/screenshot/shapeEdit";
 import { floatingSurface } from "@/components/ui/floating-surface";
 import { NOTE_SECTIONS, type NoteSectionOption } from "@/lib/draftSection";
 import { useT } from "@/lib/i18n";
@@ -18,8 +29,11 @@ import {
   redo,
   undo,
   type History,
+  commitText,
   type Shape,
   type SizeLevel,
+  type TextDraft,
+  withTextDraft,
   type Tool,
 } from "@/lib/screenshot/annotate";
 import { handlePoint, HANDLES, resizeRect, toPixelRect, type Handle, type Rect } from "@/lib/screenshot/geometry";
@@ -41,7 +55,9 @@ export default function LongShotView() {
   const { ink, size } = style;
   const [history, setHistory] = useState<History>(emptyHistory);
   const [draft, setDraft] = useState<Shape | null>(null);
-  const [editing, setEditing] = useState<{ x: number; y: number; text: string } | null>(null);
+  const [editing, setEditing] = useState<TextDraft | null>(null);
+  // 出图圆角 / 阴影 / 背景（与截图遮罩共用设置）
+  const [frame, setFrame] = useShotFrame();
   const [busy, setBusy] = useState(false);
   const [viewW, setViewW] = useState(0);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -86,21 +102,23 @@ export default function LongShotView() {
 
   const commitEditing = useCallback(() => {
     if (!editing) return;
-    setHistory((h) => pushShape(h, { kind: "text", x: editing.x, y: editing.y, text: editing.text, color: ink, size }));
+    setHistory((h) => commitText(h, editing));
     setEditing(null);
-  }, [editing, ink, size]);
+  }, [editing]);
 
   const editingAt = editing ? `${editing.x},${editing.y}` : null;
   useEffect(() => {
-    if (editingAt) textRef.current?.focus();
+    const el = textRef.current;
+    if (!editingAt || !el) return;
+    el.focus();
+    // 双击改已有文字时光标放到末尾
+    el.setSelectionRange(el.value.length, el.value.length);
   }, [editingAt]);
 
   const finish = useCallback(
     (action: "save" | "section" | "saveas" | "replace", sectionId?: string) => {
       if (!info || !img || busy) return;
-      const shapes = editing?.text.trim()
-        ? [...history.shapes, { kind: "text" as const, x: editing.x, y: editing.y, text: editing.text, color: ink, size }]
-        : history.shapes;
+      const shapes = withTextDraft(history.shapes, editing);
       const canvas = document.createElement("canvas");
       canvas.width = info.pxW;
       canvas.height = info.pxH;
@@ -112,11 +130,13 @@ export default function LongShotView() {
       drawShapes(ctx, shapes, img, scale, scale);
       ctx.restore();
       const out = crop ? toPixelRect(crop, scale, scale, info.pxW, info.pxH) : { x: 0, y: 0, w: info.pxW, h: info.pxH };
-      const data = new Uint8Array(ctx.getImageData(out.x, out.y, out.w, out.h).data.buffer);
+      const raw = { data: new Uint8Array(ctx.getImageData(out.x, out.y, out.w, out.h).data.buffer), w: out.w, h: out.h };
+      const pad = frame.shadow ? Math.round(SHADOW_PAD * scale) : 0;
+      const img2 = frame.radius > 0 || pad > 0 ? frameImage(raw, frame.radius * scale, pad, frame.bg) : raw;
       setBusy(true);
-      void api.longCommit(data, out.w, out.h, action, sectionId).catch(() => setBusy(false));
+      void api.longCommit(img2.data, img2.w, img2.h, action, sectionId).catch(() => setBusy(false));
     },
-    [info, img, busy, editing, history.shapes, ink, size, scale, crop]
+    [info, img, busy, editing, history.shapes, scale, crop, frame]
   );
 
   // 钉图 / 图片卡：✓ 写回来源；新截的长图：✓ 存入「剪贴」
@@ -186,7 +206,7 @@ export default function LongShotView() {
     }
     if (!tool) return;
     if (tool === "text") {
-      if (!editing) setEditing({ x: p.x, y: p.y - FONT_SIZE[size] / 2, text: "" });
+      if (!editing) setEditing({ x: p.x, y: p.y - FONT_SIZE[size] / 2, text: "", color: ink, size });
       return;
     }
     if (tool === "number") {
@@ -233,20 +253,24 @@ export default function LongShotView() {
   };
 
   if (!info || !img) return null;
-  const shapes = draft ? [...edit.shapes, draft] : edit.shapes;
-  // 选中图形时样式行显示并修改该图形的颜色 / 粗细
-  const pickedStyled = edit.picked && "size" in edit.picked ? edit.picked : null;
-  const styleKind = pickedStyled?.kind ?? tool;
+  // 改已有文字时原文字先藏起来，由输入框显示
+  const shown = editing?.orig ? edit.shapes.filter((s) => s !== editing.orig) : edit.shapes;
+  const shapes = draft ? [...shown, draft] : shown;
+  // 选中图形时样式行显示并修改该图形的颜色 / 粗细；输入文字时改正在输入的文字
+  const pickedStyled = editing ?? (edit.picked && "size" in edit.picked ? edit.picked : null);
+  const styleKind = editing ? "text" : (pickedStyled && "kind" in pickedStyled ? pickedStyled.kind : tool);
   const styleRow = {
     ink: pickedStyled?.color ?? ink,
     size: (pickedStyled?.size ?? size) as SizeLevel,
     setInk: (c: string) => {
       style.setInk(c);
-      edit.restyle({ color: c });
+      if (editing) setEditing({ ...editing, color: c });
+      else edit.restyle({ color: c });
     },
     setSize: (lv: SizeLevel) => {
       style.setSize(lv);
-      edit.restyle({ size: lv });
+      if (editing) setEditing({ ...editing, size: lv });
+      else edit.restyle({ size: lv });
     },
     colors: styleKind !== "mosaic",
   };
@@ -290,6 +314,8 @@ export default function LongShotView() {
           <TipButton label={t("重做（⇧⌘Z）")} disabled={!history.redo.length} onClick={() => setHistory(redo)}>
             <Redo2 />
           </TipButton>
+          <span className="mx-0.5 h-4 w-px bg-border" />
+          <ShotFrameControls frame={frame} setFrame={setFrame} />
           <span className="flex-1" />
           <span className="mr-1 font-mono text-label text-muted-foreground tabular-nums">
             {outPx.w} × {outPx.h}
@@ -365,15 +391,33 @@ export default function LongShotView() {
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto bg-muted/40 p-4">
         <div
           ref={pageRef}
-          className="relative mx-auto select-none shadow-md"
+          className={cn("relative mx-auto select-none", frame.shadow ? "shadow-2xl" : "shadow-md")}
           style={{ width: ptW * z, height: ptH * z, cursor: hoverCursor ?? (tool ? (tool === "text" ? "text" : "crosshair") : "default") }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           // 阻止按下时浏览器把焦点挪回 body（会抢走刚聚焦的文字框）
           onMouseDown={(e) => tool && e.target === e.currentTarget && e.preventDefault()}
+          onDoubleClick={(e) => {
+            // 双击已有文字改内容
+            if (tool && tool !== "text") return;
+            const r = pageRef.current!.getBoundingClientRect();
+            const x = (e.clientX - r.left) / z;
+            const y = (e.clientY - r.top) / z;
+            const i = shapeAt(history.shapes, x, y, 4 / z, (s) => s.kind === "text");
+            const s = i === null ? undefined : history.shapes[i];
+            if (s?.kind !== "text") return;
+            edit.clear();
+            setEditing({ x: s.x, y: s.y, text: s.text, color: s.color, size: s.size, orig: s });
+          }}
         >
-          <img src={img.src} alt="" draggable={false} className="pointer-events-none absolute inset-0 size-full" />
+          <img
+            src={img.src}
+            alt=""
+            draggable={false}
+            className="pointer-events-none absolute inset-0 size-full"
+            style={{ borderRadius: clampRadius(frame.radius, ptW, ptH) * z }}
+          />
           {shapes.length > 0 && (
             <ShotShapesSvg
               shapes={shapes}
@@ -441,11 +485,11 @@ export default function LongShotView() {
               style={{
                 left: editing.x * z,
                 top: editing.y * z,
-                color: ink,
-                fontSize: FONT_SIZE[size] * z,
+                color: editing.color,
+                fontSize: FONT_SIZE[editing.size] * z,
                 lineHeight: 1.25,
                 minWidth: 40,
-                width: Math.max(40, ...editing.text.split("\n").map((l) => l.length * FONT_SIZE[size] * z * 0.9 + 12)),
+                width: Math.max(40, ...editing.text.split("\n").map((l) => l.length * FONT_SIZE[editing.size] * z * 0.9 + 12)),
               }}
             />
           )}
