@@ -1,9 +1,11 @@
 import { useEffect, useRef } from "react";
 
-import { floatingSurface } from "@/components/ui/floating-surface";
 import { useT } from "@/lib/i18n";
 import { box, calloutNumbers, calloutTag, numberTextColor, type NoteDraft, type Shape } from "@/lib/screenshot/annotate";
 import { cn } from "@/lib/utils";
+
+// token-exception: 批注标签与填写卡固定白色半透明底 + 深色字（画在任意截图内容上，不随主题）
+const CARD = "border border-black/10 bg-white/70 text-black/85 backdrop-blur-md elevation-2";
 
 /**
  * 批注说明层：已填写的说明以浅色标签贴在编号贴片右侧（只在编辑时显示，不画进出图），
@@ -41,7 +43,7 @@ export function ShotCallouts({
         return (
           <div
             key={n}
-            className={cn(floatingSurface(), "pointer-events-none absolute flex max-w-60 items-center rounded-r-md px-1.5 text-label")}
+            className={cn(CARD, "pointer-events-none absolute flex max-w-60 items-center rounded-r-md px-1.5 text-label")}
             style={{ left: (tag.x + tag.w) * z, top: tag.y * z, height: tag.h * z }}
           >
             <span className="truncate">{s.note}</span>
@@ -54,7 +56,7 @@ export function ShotCallouts({
           const n = numbers.get(shapes.find((s) => s.kind === "callout" && s.x1 === draft.shape.x1 && s.y1 === draft.shape.y1) ?? draft.shape) ?? numbers.size;
           return (
             <div
-              className={cn(floatingSurface(), "absolute flex w-64 items-center gap-2 rounded-md p-1 pr-2")}
+              className={cn(CARD, "absolute flex w-64 items-center gap-2 rounded-md p-1 pr-2")}
               style={{ left: b.x * z, top: (b.y + b.h) * z + 6 }}
               onPointerDown={(e) => e.stopPropagation()}
               onDoubleClick={(e) => e.stopPropagation()}
@@ -79,7 +81,7 @@ export function ShotCallouts({
                     onCommit();
                   }
                 }}
-                className="min-w-0 flex-1 bg-transparent text-body text-foreground outline-none placeholder:text-muted-foreground"
+                className="min-w-0 flex-1 bg-transparent text-body text-black/85 outline-none placeholder:text-black/40"
               />
             </div>
           );
