@@ -30,9 +30,6 @@ extern "C" {
 const LABEL_PREFIX: &str = "shot-";
 /// 遮罩窗层级：高于菜单栏（24）与弹出菜单（101），等同屏保层。
 const OVERLAY_LEVEL: isize = 1000;
-/// 遮罩内输入文字时的层级：仍压住菜单栏（24）与状态栏图标（25），但低于输入法候选窗，
-/// 否则候选窗被 1000 级遮罩挡住看不见。
-const OVERLAY_TYPING_LEVEL: isize = 26;
 pub const SESSION_EVENT: &str = "toskr://screenshot-session";
 pub const END_EVENT: &str = "toskr://screenshot-end";
 /// 截完「发送 / 在编辑器中打开」：主窗口先落进剪贴再执行动作。
@@ -420,69 +417,49 @@ fn on_main_sync<T: Send + 'static>(
     rx.recv_timeout(std::time::Duration::from_secs(2)).ok()
 }
 
-/// 遮罩内文字 / 批注 / 识别结果输入框获得焦点时降层级，让输入法候选窗显示在遮罩之上；结束后恢复。
+/// 遮罩内文字 / 批注 / 识别结果输入框聚焦期间，持续把输入法候选窗提到遮罩之上。
 pub fn set_typing(window: &tauri::WebviewWindow, typing: bool) {
-    TYPING.store(typing, Ordering::Relaxed);
-    let w = window.clone();
-    let app = window.app_handle().clone();
-    let _ = window.run_on_main_thread(move || {
-        if let Some(ns) = ns_window(&w) {
-            ns.setLevel(if typing { OVERLAY_TYPING_LEVEL } else { OVERLAY_LEVEL });
-            crate::diag::push(&app, format!("截图输入 typing={typing} 遮罩层级={}", ns.level()));
-        }
-    });
-    if typing {
+    let was = TYPING.swap(typing, Ordering::Relaxed);
+    if typing && !was {
         let app = window.app_handle().clone();
-        std::thread::spawn(move || trace_typing_windows(&app));
+        std::thread::spawn(move || {
+            while TYPING.load(Ordering::Relaxed) && SESSION.lock().unwrap().is_some() {
+                let handle = app.clone();
+                let _ = app.run_on_main_thread(move || raise_ime_windows(&handle));
+                std::thread::sleep(std::time::Duration::from_millis(80));
+            }
+        });
     }
 }
 
 static TYPING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// 诊断：遮罩输入期间新出现在屏上的窗口（候选窗归属、层级、尺寸），最多记 15 秒。
-/// 只记窗口元数据，不读内容。
-fn trace_typing_windows(app: &AppHandle) {
-    use core_graphics::window::{copy_window_info, kCGNullWindowID, kCGWindowListOptionOnScreenOnly};
-    let snapshot = || -> Vec<(i64, String, f64, f64, f64)> {
-        let Some(arr) = copy_window_info(kCGWindowListOptionOnScreenOnly, kCGNullWindowID) else {
-            return Vec::new();
-        };
-        arr.iter()
-            .map(|item| {
-                let dict: CFDictionary<CFString, CFType> =
-                    unsafe { CFDictionary::wrap_under_get_rule(*item as CFDictionaryRef) };
-                let num = dict_number(&dict, "kCGWindowNumber").unwrap_or(0.0) as i64;
-                let owner = dict
-                    .find(CFString::new("kCGWindowOwnerName"))
-                    .and_then(|v| v.downcast::<CFString>())
-                    .map(|s| s.to_string())
-                    .unwrap_or_default();
-                let layer = dict_number(&dict, "kCGWindowLayer").unwrap_or(0.0);
-                let (w, h) = dict
-                    .find(CFString::new("kCGWindowBounds"))
-                    .and_then(|v| v.downcast::<CFDictionary>())
-                    .map(|b| {
-                        let b: CFDictionary<CFString, CFType> =
-                            unsafe { CFDictionary::wrap_under_get_rule(b.as_concrete_TypeRef()) };
-                        (dict_number(&b, "Width").unwrap_or(0.0), dict_number(&b, "Height").unwrap_or(0.0))
-                    })
-                    .unwrap_or((0.0, 0.0));
-                (num, owner, layer, w, h)
-            })
-            .collect()
+/// 输入法候选窗由系统画在本进程里（实测层级 20），会被 1000 级遮罩挡住：
+/// 把本进程中可见、且不是 Tauri 页面窗口的窗口提到遮罩之上。仅限主线程。
+fn raise_ime_windows(app: &AppHandle) {
+    let Some(mtm) = objc2::MainThreadMarker::new() else {
+        return;
     };
-    let base: std::collections::HashSet<i64> = snapshot().into_iter().map(|w| w.0).collect();
-    let mut seen = std::collections::HashSet::new();
-    for _ in 0..50 {
-        if !TYPING.load(Ordering::Relaxed) {
-            return;
+    let ours: std::collections::HashSet<usize> = app
+        .webview_windows()
+        .values()
+        .filter_map(|w| w.ns_window().ok().map(|p| p as usize))
+        .collect();
+    for w in objc2_app_kit::NSApplication::sharedApplication(mtm).windows().iter() {
+        let ptr = &*w as *const objc2_app_kit::NSWindow as usize;
+        if ours.contains(&ptr) || !w.isVisible() || w.level() > OVERLAY_LEVEL {
+            continue;
         }
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        for (num, owner, layer, w, h) in snapshot() {
-            if !base.contains(&num) && seen.insert(num) {
-                crate::diag::push(app, format!("截图输入 新窗口 {owner} 层级={layer} {w}×{h}"));
-            }
+        // 菜单栏托盘图标也是本进程窗口，不能提上来
+        let class = objc2::runtime::AnyObject::class(&*w).name().to_string_lossy().into_owned();
+        if class.contains("StatusBar") {
+            continue;
         }
+        w.setLevel(OVERLAY_LEVEL + 1);
+        crate::diag::push(
+            app,
+            format!("截图输入 提升候选窗 {class} {}×{}", w.frame().size.width, w.frame().size.height),
+        );
     }
 }
 

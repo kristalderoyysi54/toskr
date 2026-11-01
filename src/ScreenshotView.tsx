@@ -405,7 +405,7 @@ export default function ScreenshotView() {
     el.setSelectionRange(el.value.length, el.value.length);
   }, [editingAt]);
 
-  // 输入文字 / 批注说明 / 改识别结果时遮罩降层级，否则输入法候选窗被挡住
+  // 输入文字 / 批注说明 / 改识别结果期间，原生侧把输入法候选窗（本进程内）提到遮罩之上
   const typing = !!(editing || noteDraft || ocr);
   useEffect(() => {
     if (!info) return;
