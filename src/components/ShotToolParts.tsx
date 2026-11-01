@@ -118,26 +118,44 @@ export function toolHasStyle(tool: Tool | null): boolean {
 
 /** 上次用的标注颜色与粗细（每台机器的使用习惯，存 localStorage）。 */
 const STYLE_KEY = "toskr.screenshotStyle";
+/** 批注单独记住颜色与粗细，不和其他工具共用（默认蓝色，与默认红色的框线区分）。 */
+const CALLOUT_STYLE_KEY = "toskr.screenshotCalloutStyle";
 
-function loadStyle(): { ink: string; size: SizeLevel } {
+interface ShotStyle {
+  ink: string;
+  size: SizeLevel;
+}
+
+function loadStyle(key: string, fallbackInk: string): ShotStyle {
   try {
-    const v = JSON.parse(localStorage.getItem(STYLE_KEY) ?? "{}") as { ink?: unknown; size?: unknown };
+    const v = JSON.parse(localStorage.getItem(key) ?? "{}") as { ink?: unknown; size?: unknown };
     return {
-      ink: typeof v.ink === "string" && COLORS.includes(v.ink) ? v.ink : COLORS[0],
+      ink: typeof v.ink === "string" && COLORS.includes(v.ink) ? v.ink : fallbackInk,
       size: SIZES.includes(v.size as SizeLevel) ? (v.size as SizeLevel) : 1,
     };
   } catch {
-    return { ink: COLORS[0], size: 1 };
+    return { ink: fallbackInk, size: 1 };
   }
 }
 
-export function useShotStyle() {
-  const [ink, setInk] = useState(() => loadStyle().ink);
-  const [size, setSize] = useState<SizeLevel>(() => loadStyle().size);
+/** 当前工具的颜色 / 粗细：批注一套，其他工具共用一套；set 时可指明改哪类（选中已画的批注时）。 */
+export function useShotStyle(tool: Tool | null) {
+  const [common, setCommon] = useState(() => loadStyle(STYLE_KEY, COLORS[0]));
+  const [callout, setCallout] = useState(() => loadStyle(CALLOUT_STYLE_KEY, COLORS[3]));
   useEffect(() => {
-    localStorage.setItem(STYLE_KEY, JSON.stringify({ ink, size }));
-  }, [ink, size]);
-  return { ink, setInk, size, setSize };
+    localStorage.setItem(STYLE_KEY, JSON.stringify(common));
+  }, [common]);
+  useEffect(() => {
+    localStorage.setItem(CALLOUT_STYLE_KEY, JSON.stringify(callout));
+  }, [callout]);
+  const cur = tool === "callout" ? callout : common;
+  const slot = (kind?: string | null) => ((kind ?? tool) === "callout" ? setCallout : setCommon);
+  return {
+    ink: cur.ink,
+    size: cur.size,
+    setInk: (ink: string, kind?: string | null) => slot(kind)((s) => ({ ...s, ink })),
+    setSize: (size: SizeLevel, kind?: string | null) => slot(kind)((s) => ({ ...s, size })),
+  };
 }
 
 /** 出图圆角（pt）与阴影开关（每台机器的使用习惯，存 localStorage）。 */

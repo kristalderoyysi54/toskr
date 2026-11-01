@@ -58,7 +58,7 @@ export default function LongShotView() {
   const [info, setInfo] = useState<{ pxW: number; pxH: number; scale: number; origin: "capture" | "pin" | "note" } | null>(null);
   const [img, setImg] = useState<HTMLImageElement | null>(null);
   const [tool, setTool] = useState<Tool | null>(null);
-  const style = useShotStyle();
+  const style = useShotStyle(tool);
   const { ink, size } = style;
   const [history, setHistory] = useState<History>(emptyHistory);
   const [draft, setDraft] = useState<Shape | null>(null);
@@ -282,12 +282,12 @@ export default function LongShotView() {
     ink: pickedStyled?.color ?? ink,
     size: (pickedStyled?.size ?? size) as SizeLevel,
     setInk: (c: string) => {
-      style.setInk(c);
+      style.setInk(c, styleKind);
       if (editing) setEditing({ ...editing, color: c });
       else edit.restyle({ color: c });
     },
     setSize: (lv: SizeLevel) => {
-      style.setSize(lv);
+      style.setSize(lv, styleKind);
       if (editing) setEditing({ ...editing, size: lv });
       else edit.restyle({ size: lv });
     },
