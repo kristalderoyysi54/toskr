@@ -62,9 +62,50 @@ impl LocalTranslate {
     }
 }
 
+/// 跑辅助程序：stdin 写入 `input`，最多等 `timeout`，超时杀掉返回 Err。
+/// 系统翻译服务偶尔不应答（如从没用过翻译的机器首次查询），不能让设置页 / 图内翻译一直挂着。
+fn run_helper(
+    mut cmd: std::process::Command,
+    input: &str,
+    timeout: std::time::Duration,
+) -> Result<Vec<u8>, String> {
+    use std::io::{Read, Write};
+    let mut child = cmd
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    // 写完即关 stdin（辅助程序读到 EOF 才开始）
+    child
+        .stdin
+        .take()
+        .ok_or("no stdin")?
+        .write_all(input.as_bytes())
+        .map_err(|e| e.to_string())?;
+    let mut stdout = child.stdout.take().ok_or("no stdout")?;
+    let reader = std::thread::spawn(move || {
+        let mut out = Vec::new();
+        let _ = stdout.read_to_end(&mut out);
+        out
+    });
+    let deadline = std::time::Instant::now() + timeout;
+    while child.try_wait().map_err(|e| e.to_string())?.is_none() {
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("helper timeout".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    reader.join().map_err(|_| "helper output lost".to_string())
+}
+
 /// 调包内 Swift 辅助程序：`input` 补上目标语言后经 stdin 交给它（见 translate-helper/main.swift）。
-fn translate_helper(mut input: serde_json::Value) -> Result<serde_json::Value, String> {
-    use std::io::Write;
+fn translate_helper(
+    mut input: serde_json::Value,
+    timeout: std::time::Duration,
+) -> Result<serde_json::Value, String> {
     if !objc2::available!(macos = 15.0) {
         return Err("macOS 15 required".into());
     }
@@ -81,26 +122,22 @@ fn translate_helper(mut input: serde_json::Value) -> Result<serde_json::Value, S
         "zh-Hans"
     };
     input["target"] = serde_json::json!(target);
-    let mut child = std::process::Command::new(helper)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    child
-        .stdin
-        .take()
-        .ok_or("no stdin")?
-        .write_all(input.to_string().as_bytes())
-        .map_err(|e| e.to_string())?;
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
-    serde_json::from_slice(&out.stdout).map_err(|e| e.to_string())
+    let out = run_helper(
+        std::process::Command::new(helper),
+        &input.to_string(),
+        timeout,
+    )?;
+    serde_json::from_slice(&out).map_err(|e| e.to_string())
 }
 
 /// 本机中英互译（系统翻译框架，经包内 Swift 辅助程序）：比 AI 快一个量级。
 /// 辅助程序缺失、macOS 低于 15、语言包未装或超时都返回 Err（可用 `LocalTranslate::from_error` 归类），由调用方退回 AI。
 pub fn translate_local(lines: &[String]) -> Result<Vec<String>, String> {
-    let reply = translate_helper(serde_json::json!({ "lines": lines }))?;
+    // 辅助程序自身 8 秒超时，这里多留余量
+    let reply = translate_helper(
+        serde_json::json!({ "lines": lines }),
+        std::time::Duration::from_secs(12),
+    )?;
     match serde_json::from_value::<Vec<String>>(reply["lines"].clone()) {
         Ok(l) if l.len() == lines.len() => Ok(l),
         _ => Err(reply["error"].as_str().unwrap_or("bad reply").to_string()),
@@ -108,16 +145,17 @@ pub fn translate_local(lines: &[String]) -> Result<Vec<String>, String> {
 }
 
 /// 本机翻译当前是否可用（只查语言包，不翻译）；`prepare` 时缺包就弹系统下载确认框，
-/// 等用户处理完（最长 10 分钟）再返回。
-pub fn local_translate_status(prepare: bool) -> LocalTranslate {
-    match translate_helper(serde_json::json!({ "prepare": prepare })) {
+/// 等用户处理完（最长 10 分钟）再返回。查不出时附带原因（诊断用）。
+pub fn local_translate_status(prepare: bool) -> (LocalTranslate, Option<String>) {
+    let timeout = std::time::Duration::from_secs(if prepare { 610 } else { 8 });
+    match translate_helper(serde_json::json!({ "prepare": prepare }), timeout) {
         Ok(reply) => match reply["status"].as_str() {
-            Some("installed") => LocalTranslate::Ready,
-            Some("supported") => LocalTranslate::Download,
-            Some("unsupported") => LocalTranslate::Unsupported,
-            _ => LocalTranslate::Unknown,
+            Some("installed") => (LocalTranslate::Ready, None),
+            Some("supported") => (LocalTranslate::Download, None),
+            Some("unsupported") => (LocalTranslate::Unsupported, None),
+            _ => (LocalTranslate::Unknown, Some(reply.to_string())),
         },
-        Err(e) => LocalTranslate::from_error(&e),
+        Err(e) => (LocalTranslate::from_error(&e), Some(e)),
     }
 }
 
@@ -1850,6 +1888,21 @@ fn copy_to_clipboard(app: &AppHandle, w: usize, h: usize, rgba: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 辅助程序不应答：到时杀掉返回 Err，不无限等待（设置页曾卡在「检查中…」）。
+    #[test]
+    fn helper_that_hangs_times_out() {
+        let mut cmd = std::process::Command::new("/bin/sleep");
+        cmd.arg("5");
+        let started = std::time::Instant::now();
+        let r = run_helper(cmd, "{}", std::time::Duration::from_millis(300));
+        assert_eq!(r, Err("helper timeout".to_string()));
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        let mut cat = std::process::Command::new("/bin/cat");
+        cat.arg("-");
+        let echoed = run_helper(cat, "{\"ok\":1}", std::time::Duration::from_secs(2));
+        assert_eq!(echoed, Ok(b"{\"ok\":1}".to_vec()));
+    }
 
     #[test]
     fn local_translate_errors_map_to_guidance() {

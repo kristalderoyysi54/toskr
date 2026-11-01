@@ -821,13 +821,15 @@ pub async fn local_translate_status(
     prepare: Option<bool>,
 ) -> crate::screenshot::LocalTranslate {
     let prepare = prepare.unwrap_or(false);
-    let status = tauri::async_runtime::spawn_blocking(move || {
+    let (status, why) = tauri::async_runtime::spawn_blocking(move || {
         crate::screenshot::local_translate_status(prepare)
     })
     .await
-    .unwrap_or(crate::screenshot::LocalTranslate::Unknown);
-    if prepare {
-        crate::diag::push(&app, format!("本机翻译下载语言包 结果={status:?}"));
+    .unwrap_or((crate::screenshot::LocalTranslate::Unknown, None));
+    if prepare || status == crate::screenshot::LocalTranslate::Unknown {
+        let mode = if prepare { "下载语言包" } else { "查语言包" };
+        let why = why.map(|w| format!("（{w}）")).unwrap_or_default();
+        crate::diag::push(&app, format!("本机翻译{mode} 结果={status:?}{why}"));
     }
     status
 }
