@@ -422,12 +422,68 @@ fn on_main_sync<T: Send + 'static>(
 
 /// 遮罩内文字 / 批注 / 识别结果输入框获得焦点时降层级，让输入法候选窗显示在遮罩之上；结束后恢复。
 pub fn set_typing(window: &tauri::WebviewWindow, typing: bool) {
+    TYPING.store(typing, Ordering::Relaxed);
     let w = window.clone();
+    let app = window.app_handle().clone();
     let _ = window.run_on_main_thread(move || {
         if let Some(ns) = ns_window(&w) {
             ns.setLevel(if typing { OVERLAY_TYPING_LEVEL } else { OVERLAY_LEVEL });
+            crate::diag::push(&app, format!("截图输入 typing={typing} 遮罩层级={}", ns.level()));
         }
     });
+    if typing {
+        let app = window.app_handle().clone();
+        std::thread::spawn(move || trace_typing_windows(&app));
+    }
+}
+
+static TYPING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 诊断：遮罩输入期间新出现在屏上的窗口（候选窗归属、层级、尺寸），最多记 15 秒。
+/// 只记窗口元数据，不读内容。
+fn trace_typing_windows(app: &AppHandle) {
+    use core_graphics::window::{copy_window_info, kCGNullWindowID, kCGWindowListOptionOnScreenOnly};
+    let snapshot = || -> Vec<(i64, String, f64, f64, f64)> {
+        let Some(arr) = copy_window_info(kCGWindowListOptionOnScreenOnly, kCGNullWindowID) else {
+            return Vec::new();
+        };
+        arr.iter()
+            .map(|item| {
+                let dict: CFDictionary<CFString, CFType> =
+                    unsafe { CFDictionary::wrap_under_get_rule(*item as CFDictionaryRef) };
+                let num = dict_number(&dict, "kCGWindowNumber").unwrap_or(0.0) as i64;
+                let owner = dict
+                    .find(CFString::new("kCGWindowOwnerName"))
+                    .and_then(|v| v.downcast::<CFString>())
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
+                let layer = dict_number(&dict, "kCGWindowLayer").unwrap_or(0.0);
+                let (w, h) = dict
+                    .find(CFString::new("kCGWindowBounds"))
+                    .and_then(|v| v.downcast::<CFDictionary>())
+                    .map(|b| {
+                        let b: CFDictionary<CFString, CFType> =
+                            unsafe { CFDictionary::wrap_under_get_rule(b.as_concrete_TypeRef()) };
+                        (dict_number(&b, "Width").unwrap_or(0.0), dict_number(&b, "Height").unwrap_or(0.0))
+                    })
+                    .unwrap_or((0.0, 0.0));
+                (num, owner, layer, w, h)
+            })
+            .collect()
+    };
+    let base: std::collections::HashSet<i64> = snapshot().into_iter().map(|w| w.0).collect();
+    let mut seen = std::collections::HashSet::new();
+    for _ in 0..50 {
+        if !TYPING.load(Ordering::Relaxed) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        for (num, owner, layer, w, h) in snapshot() {
+            if !base.contains(&num) && seen.insert(num) {
+                crate::diag::push(app, format!("截图输入 新窗口 {owner} 层级={layer} {w}×{h}"));
+            }
+        }
+    }
 }
 
 fn ns_window(window: &tauri::WebviewWindow) -> Option<&objc2_app_kit::NSWindow> {
