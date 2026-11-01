@@ -83,6 +83,7 @@ function hits(s: Editable, x: number, y: number, tol: number): boolean {
       const d = Math.hypot((x - b.x - rx) / rx, (y - b.y - ry) / ry);
       return Math.abs(d - 1) * Math.min(rx, ry) <= tol + lw;
     }
+    case "line":
     case "arrow":
       return distToSegment(x, y, s.x1, s.y1, s.x2, s.y2) <= tol + lw;
     case "pen":
@@ -117,7 +118,7 @@ export function shapeAt(
 }
 
 export function editHandles(s: Editable): { id: EditHandle; x: number; y: number }[] {
-  if (s.kind === "arrow") {
+  if (s.kind === "arrow" || s.kind === "line") {
     return [
       { id: "start", x: s.x1, y: s.y1 },
       { id: "end", x: s.x2, y: s.y2 },
@@ -160,7 +161,7 @@ export function editShape(orig: Editable, handle: EditHandle | null, dx: number,
     }
     return moveShape(orig, dx, dy);
   }
-  if (orig.kind === "arrow" && (handle === "start" || handle === "end")) {
+  if ((orig.kind === "arrow" || orig.kind === "line") && (handle === "start" || handle === "end")) {
     return handle === "start"
       ? { ...orig, x1: clamp(orig.x1 + dx, 0, W), y1: clamp(orig.y1 + dy, 0, H) }
       : { ...orig, x2: clamp(orig.x2 + dx, 0, W), y2: clamp(orig.y2 + dy, 0, H) };

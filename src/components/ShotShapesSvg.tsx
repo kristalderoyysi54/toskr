@@ -150,6 +150,8 @@ function ShapeEl({ s, n }: { s: Shape; n?: number }) {
       const b = box(s);
       return <ellipse cx={b.x + b.w / 2} cy={b.y + b.h / 2} rx={b.w / 2} ry={b.h / 2} {...stroke} />;
     }
+    case "line":
+      return <line x1={s.x1} y1={s.y1} x2={s.x2} y2={s.y2} {...stroke} />;
     case "arrow": {
       const { bx, by, head } = arrowGeometry(s.x1, s.y1, s.x2, s.y2, LINE_WIDTH[s.size]);
       return (

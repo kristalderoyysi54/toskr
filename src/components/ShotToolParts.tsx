@@ -10,6 +10,7 @@ import {
   MoveUpRight,
   Pencil,
   Square,
+  Slash,
   SquareRoundCorner,
   Type,
   type LucideIcon,
@@ -29,6 +30,7 @@ import { cn } from "@/lib/utils";
 
 /** 截图遮罩与长图标注窗共用的标注工具；tip 为悬停说明。 */
 export const SHOT_TOOLS: { tool: Tool; icon: LucideIcon; label: MessageKey; tip: MessageKey }[] = [
+  { tool: "line", icon: Slash, label: "直线", tip: "直线：拖动画直线，按住 ⇧ 吸附水平 / 垂直 / 45°" },
   { tool: "rect", icon: Square, label: "矩形", tip: "矩形：拖动框出重点区域" },
   { tool: "ellipse", icon: Circle, label: "椭圆", tip: "椭圆：拖动圈出重点" },
   { tool: "arrow", icon: MoveUpRight, label: "箭头", tip: "箭头：从起点拖到要指向的位置" },

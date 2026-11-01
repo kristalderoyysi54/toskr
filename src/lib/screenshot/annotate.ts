@@ -1,9 +1,9 @@
 /** 截图标注：图形模型、历史栈与绘制。坐标为本屏左上角原点的 pt。 */
 
-export type Tool = "rect" | "ellipse" | "arrow" | "pen" | "text" | "mosaic" | "spotlight" | "number" | "callout";
+export type Tool = "line" | "rect" | "ellipse" | "arrow" | "pen" | "text" | "mosaic" | "spotlight" | "number" | "callout";
 
 export type Shape =
-  | { kind: "rect" | "ellipse" | "arrow" | "mosaic" | "spotlight"; x1: number; y1: number; x2: number; y2: number; color: string; size: number }
+  | { kind: "line" | "rect" | "ellipse" | "arrow" | "mosaic" | "spotlight"; x1: number; y1: number; x2: number; y2: number; color: string; size: number }
   | { kind: "pen"; points: [number, number][]; color: string; size: number }
   | { kind: "text"; x: number; y: number; text: string; color: string; size: number }
   | { kind: "number"; x: number; y: number; n: number; color: string; size: number }
@@ -65,6 +65,14 @@ export function isMeaningful(s: Shape): boolean {
   if (s.kind === "number") return true;
   if (s.kind === "translate") return s.items.length > 0;
   return Math.hypot(s.x2 - s.x1, s.y2 - s.y1) >= 3;
+}
+
+/** 拖动中的终点：直线按住 ⇧ 吸附到 45° 的整数倍（水平 / 垂直 / 斜线），长度不变。 */
+export function dragEnd(d: { kind: string; x1: number; y1: number }, x: number, y: number, shift: boolean) {
+  if (d.kind !== "line" || !shift) return { x2: x, y2: y };
+  const len = Math.hypot(x - d.x1, y - d.y1);
+  const angle = Math.round(Math.atan2(y - d.y1, x - d.x1) / (Math.PI / 4)) * (Math.PI / 4);
+  return { x2: d.x1 + Math.round(Math.cos(angle) * len), y2: d.y1 + Math.round(Math.sin(angle) * len) };
 }
 
 export type CalloutShape = Extract<Shape, { kind: "callout" }>;
@@ -270,6 +278,11 @@ export function drawShapes(
       const b = box(s);
       ctx.beginPath();
       ctx.ellipse(b.x + b.w / 2, b.y + b.h / 2, b.w / 2, b.h / 2, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (s.kind === "line") {
+      ctx.beginPath();
+      ctx.moveTo(s.x1, s.y1);
+      ctx.lineTo(s.x2, s.y2);
       ctx.stroke();
     } else if (s.kind === "arrow") {
       drawArrow(ctx, s.x1, s.y1, s.x2, s.y2, LINE_WIDTH[s.size]);

@@ -46,6 +46,7 @@ import {
   FONT_SIZE,
   nextNumber,
   isMeaningful,
+  dragEnd,
   pushShape,
   redo,
   undo,
@@ -807,7 +808,7 @@ export default function ScreenshotView() {
           ? { ...draft, points: [...draft.points, [p.x, p.y]] }
           : draft.kind === "text" || draft.kind === "number" || draft.kind === "translate"
             ? draft
-            : { ...draft, x2: p.x, y2: p.y }
+            : { ...draft, ...dragEnd(draft, p.x, p.y, e.shiftKey) }
       );
       return;
     }
@@ -838,7 +839,7 @@ export default function ScreenshotView() {
         draft.kind === "pen"
           ? { ...draft, points: [...draft.points, [p.x, p.y]] }
           : "x2" in draft
-            ? { ...draft, x2: p.x, y2: p.y }
+            ? { ...draft, ...dragEnd(draft, p.x, p.y, e.shiftKey) }
             : draft;
       void api.screenshotTrace("pushed", done.kind === "pen" ? done.points.length : 0, 0);
       // 批注框画完先填说明，说明连同框一起入历史

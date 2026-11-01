@@ -387,4 +387,6 @@ export const app = {
   "这里要怎么改？": "What should change here?",
   "图上的标注（序号对应图中区域）：": "Notes on the image (numbers match the marked areas):",
   "批注：框出要改的地方并写下说明，自动编号；存入或发送时编号说明随图附上，方便交给 AI": "Callout: box the area to change and describe it; numbered automatically. The numbered notes go with the image when you save or send it, ready for AI",
+  "直线": "Line",
+  "直线：拖动画直线，按住 ⇧ 吸附水平 / 垂直 / 45°": "Line: drag to draw a straight line; hold ⇧ to snap horizontal, vertical or 45°",
 } satisfies Record<string, EnValue>;
