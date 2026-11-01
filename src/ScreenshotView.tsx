@@ -461,7 +461,7 @@ export default function ScreenshotView() {
     // 带阴影时图四周多出透明边距，钉图位置相应左上移，图本身仍对齐原处
     const placement = { x: sel.x - padPt, y: sel.y - padPt };
     // 批注说明作为图片卡备注随图入库，发送时一起发出
-    const caption = calloutPrompt(shapesWithEditing(), t("图中编号说明："));
+    const caption = calloutPrompt(shapesWithEditing(), t("图上的标注（序号对应图中区域）："));
     void api.screenshotCommit(out.data, out.w, out.h, action, placement, sectionId, caption).catch(() => {
       void api.screenshotCancel();
     });
@@ -948,7 +948,8 @@ export default function ScreenshotView() {
         <div className="pointer-events-none absolute inset-0" style={{ background: "rgba(0,0,0,0.45)" }} />
       )}
 
-      {sel && (history.shapes.length > 0 || draft) && (
+      {/* 按显示列表判断：首个批注填写说明时还未入历史 */}
+      {sel && (shownShapes.length > 0 || draft) && (
         <ShotShapesSvg
           shapes={draft ? [...shownShapes, draft] : shownShapes}
           clip={sel}

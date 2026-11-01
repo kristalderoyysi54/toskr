@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
     _blocks: Array<Record<string, unknown>>
   ) => undefined),
   setDraftImages: vi.fn(),
+  updateNoteText: vi.fn(),
   tip: vi.fn(),
   pendingUndo: null as (() => void) | null,
   notesState: {
@@ -54,6 +55,7 @@ vi.mock("@/store/notesStore", () => ({
       notes: mocks.notesState.notes,
       replaceNoteImage: mocks.replaceNoteImage,
       updateNoteContent: mocks.updateNoteContent,
+      updateNoteText: mocks.updateNoteText,
     }),
   },
 }));
@@ -67,6 +69,7 @@ vi.mock("@/store/uiStore", () => ({
 }));
 
 import {
+  applyAnnotatedNoteImage,
   applyImageEditRequest,
   cancelImageEditRequest,
 } from "./imageEditController";
@@ -298,5 +301,43 @@ describe("图片编辑 owner", () => {
     expect(result).toMatchObject({ ok: false, message: "图片编辑请求无效，请重试" });
     expect(mocks.release).not.toHaveBeenCalled();
     expect(mocks.redact).not.toHaveBeenCalled();
+  });
+});
+
+describe("图片卡批注写回", () => {
+  it("编号说明追加到备注，撤销时连同图片一起还原", () => {
+    const note: Record<string, unknown> = {
+      id: "n1",
+      kind: "image",
+      text: "旧备注",
+      images: ["source.png"],
+      blocks: [{ type: "image", file: "source.png", width: 10, height: 10 }],
+    };
+    mocks.notesState.notes = [note];
+    mocks.replaceNoteImage.mockImplementationOnce((_id, _src, edited) => {
+      note.images = [edited.file];
+      note.blocks = [{ type: "image", file: edited.file, width: 10, height: 10 }];
+      return true;
+    });
+    mocks.updateNoteText.mockImplementation((_id: string, text: string) => {
+      note.text = text;
+    });
+    applyAnnotatedNoteImage(
+      {
+        operationId: "op",
+        noteId: "n1",
+        dataGeneration: 7,
+        sourceFile: "source.png",
+        editedFile: "edited.png",
+        width: 10,
+        height: 10,
+        caption: "图上的标注（序号对应图中区域）：\n① 改标题",
+      },
+      vi.fn()
+    );
+    expect(note.text).toBe("旧备注\n\n图上的标注（序号对应图中区域）：\n① 改标题");
+    mocks.pendingUndo?.();
+    expect(mocks.updateNoteContent).toHaveBeenCalled();
+    expect(note.text).toBe("旧备注");
   });
 });

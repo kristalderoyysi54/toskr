@@ -159,7 +159,9 @@ function commitNoteImageReplacement(
   op: NoteImageReplacement,
   scheduleMediaGc: ScheduleEditedMediaGc,
   text: NoteImageReplacementText,
-  includeImagePreview = false
+  includeImagePreview = false,
+  /** 替换成功后的附带改动（如追加批注说明）；返回撤销时的还原函数。 */
+  applyExtra?: () => (() => void) | null
 ): { sequence: number } | { error: string } {
   const liveNote = useNotesStore.getState().notes.find(
     (entry) => entry.id === op.noteId
@@ -212,6 +214,7 @@ function commitNoteImageReplacement(
       ? [block.file === op.sourceFile ? op.editedFile : block.file]
       : []
   );
+  const restoreExtra = applyExtra?.() ?? null;
   setPendingUndo(() => {
     const store = useNotesStore.getState();
     const current = store.notes.find((entry) => entry.id === op.noteId);
@@ -236,6 +239,7 @@ function commitNoteImageReplacement(
             : block
         )
       );
+      restoreExtra?.();
       scheduleMediaGc([op.editedFile]);
       broadcastNoteImageReplacement(
         {
@@ -280,22 +284,28 @@ export function applyAnnotatedNoteImage(
       undoStale: t("图片或数据已变化，未撤销标注"),
       done: t("图片已标注"),
     },
-    true
+    true,
+    () => appendCalloutCaption(op.noteId, op.caption)
   );
-  if ("error" in committed) {
-    tip("warn", committed.error);
-    return;
-  }
-  appendCalloutCaption(op.noteId, op.caption);
+  if ("error" in committed) tip("warn", committed.error);
 }
 
-/** 只给单图的普通图片卡追加说明；图文交错卡不经文本投影改写，避免压平块顺序。 */
-function appendCalloutCaption(noteId: string, caption: string | null | undefined) {
-  if (!caption?.trim()) return;
+/**
+ * 只给单图的普通图片卡追加说明；图文交错卡不经文本投影改写，避免压平块顺序。
+ * 返回撤销用的还原函数：备注仍是追加后的样子才还原，用户之后改过就不动。
+ */
+function appendCalloutCaption(noteId: string, caption: string | null | undefined): (() => void) | null {
+  if (!caption?.trim()) return null;
   const note = useNotesStore.getState().notes.find((n) => n.id === noteId);
-  if (!note || note.kind !== "image" || noteImages(note).length !== 1) return;
+  if (!note || note.kind !== "image" || noteImages(note).length !== 1) return null;
+  const before = note.text;
   const current = imageCaption(note);
   useNotesStore.getState().updateNoteText(noteId, current ? `${current}\n\n${caption}` : caption);
+  const after = useNotesStore.getState().notes.find((n) => n.id === noteId)?.text;
+  return () => {
+    const live = useNotesStore.getState().notes.find((n) => n.id === noteId);
+    if (live && live.text === after) useNotesStore.getState().updateNoteText(noteId, before);
+  };
 }
 
 /**

@@ -76,14 +76,19 @@ export function calloutNumbers(shapes: Shape[]): Map<Shape, number> {
   return out;
 }
 
-/** 发给 AI 的编号说明：「1. …」逐行；没有填写说明的批注不列出，都没填返回空串。 */
+/** 发给 AI 的编号说明：「① …」逐行（与图上编号一致）；没有填写说明的批注不列出，都没填返回空串。 */
 export function calloutPrompt(shapes: Shape[], header: string): string {
   const lines: string[] = [];
   calloutNumbers(shapes).forEach((n, s) => {
     const note = s.kind === "callout" ? s.note.trim() : "";
-    if (note) lines.push(`${n}. ${note}`);
+    if (note) lines.push(`${circledNumber(n)} ${note}`);
   });
   return lines.length ? `${header}\n${lines.join("\n")}` : "";
+}
+
+/** ①–⑳ 用带圈数字，更多用 (21)。 */
+export function circledNumber(n: number): string {
+  return n >= 1 && n <= 20 ? String.fromCharCode(0x2460 + n - 1) : `(${n})`;
 }
 
 /** 正在填写的批注说明：新画的框（shape 尚未入历史），或双击已有批注（orig）。 */

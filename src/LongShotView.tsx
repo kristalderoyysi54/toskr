@@ -147,7 +147,7 @@ export default function LongShotView() {
       const img2 = frame.radius > 0 || pad > 0 ? frameImage(raw, frame.radius * scale, pad, frame.shadowAlpha) : raw;
       setBusy(true);
       // 批注说明：新图随图入库；图片卡写回时追加到卡片备注
-      const caption = calloutPrompt(shapes, t("图中编号说明："));
+      const caption = calloutPrompt(shapes, t("图上的标注（序号对应图中区域）："));
       void api.longCommit(img2.data, img2.w, img2.h, action, sectionId, caption).catch(() => setBusy(false));
     },
     [info, img, busy, editing, noteDraft, history.shapes, scale, crop, frame, t]
