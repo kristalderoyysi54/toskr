@@ -460,6 +460,8 @@ struct NoteReplace {
     edited_file: String,
     width: usize,
     height: usize,
+    /// 批注编号说明：主窗口追加到图片卡备注。
+    caption: Option<String>,
 }
 
 static LONGS: Mutex<Option<HashMap<String, LongShot>>> = Mutex::new(None);
@@ -579,6 +581,7 @@ pub fn commit(
     writeback: bool,
     action: crate::screenshot::Action,
     section: Option<String>,
+    caption: Option<String>,
     w: usize,
     h: usize,
     rgba: Vec<u8>,
@@ -601,7 +604,7 @@ pub fn commit(
             return Ok(());
         }
         (true, Origin::Note(target)) => {
-            std::thread::spawn(move || note_replace(&app, label, target, w, h, &rgba));
+            std::thread::spawn(move || note_replace(&app, label, target, caption, w, h, &rgba));
             return Ok(());
         }
         _ => {}
@@ -610,7 +613,7 @@ pub fn commit(
         crate::screenshot::Action::SaveAs => {
             crate::screenshot::save_as(&app, w, h, rgba, front.as_ref())
         }
-        _ => crate::screenshot::save(&app, action, section, w, h, &rgba, front.as_ref()),
+        _ => crate::screenshot::save(&app, action, section, caption, w, h, &rgba, front.as_ref()),
     });
     Ok(())
 }
@@ -620,6 +623,7 @@ fn note_replace(
     app: &AppHandle,
     label: String,
     target: NoteImage,
+    caption: Option<String>,
     w: usize,
     h: usize,
     rgba: &[u8],
@@ -637,6 +641,7 @@ fn note_replace(
                     edited_file,
                     width: w,
                     height: h,
+                    caption,
                 },
             );
         }

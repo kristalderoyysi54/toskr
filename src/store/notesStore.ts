@@ -495,6 +495,8 @@ export interface Settings {
   screenshotHideSelf: boolean;
   /** 区域截图功能总开关（「更多功能」），默认开。 */
   screenshotEnabled: boolean;
+  /** 启动时缺少系统权限就弹提醒（设置 → 权限可关）。 */
+  permissionReminder: boolean;
   /** 隐身模式：捕获照常入库但不弹 HUD（会议投屏用）。 */
   stealth: boolean;
   /** 捕获成功音效（隐身模式下强制静音）。 */
@@ -852,6 +854,7 @@ export const defaultSettings = (): Settings => ({
   screenshotHotkey: null,
   screenshotHideSelf: false,
   screenshotEnabled: true,
+  permissionReminder: true,
   stealth: false,
   soundEnabled: true,
   hudDurationMs: HUD_DURATION_DEFAULT_MS,

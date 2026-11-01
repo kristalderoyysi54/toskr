@@ -825,7 +825,7 @@ export default function SettingsView() {
             searchSequence={searchTarget?.sequence ?? 0}
           />
         )}
-        {section === "permissions" && <PermissionsSection settings={settings} />}
+        {section === "permissions" && <PermissionsSection settings={settings} patch={patch} />}
         {section === "features" && <FeaturesSection settings={settings} patch={patch} onConfigure={setSection} />}
         {section === "message-watch" && (
           <MessageWatchSection settings={settings} patch={patch} />
@@ -3944,7 +3944,7 @@ const PERMISSION_INFO: Record<SystemPermission, { label: MessageKey; why: Messag
 };
 
 /** 设置 → 权限：把需要去系统设置授权的项集中展示；点「授权」先弹系统授权框，未通过再打开对应隐私面板。 */
-function PermissionsSection({ settings }: { settings: Settings }) {
+function PermissionsSection({ settings, patch }: SP) {
   const t = useT();
   const [granted, setGranted] = useState<Partial<Record<SystemPermission, boolean>>>({});
   // 点过授权、需重启才生效的项（输入监控 / 屏幕录制）
@@ -3993,17 +3993,32 @@ function PermissionsSection({ settings }: { settings: Settings }) {
     ...(settings.appleCalendarEnabled ? (["calendars"] as const) : []),
     ...(settings.appleRemindersEnabled ? (["reminders"] as const) : []),
   ];
-  const ask = async (key: SystemPermission) => {
-    const request: Record<SystemPermission, () => Promise<boolean>> = {
+  /** 弹系统授权框；未通过时打开对应隐私面板，返回是否已授权。 */
+  const request = async (key: SystemPermission): Promise<boolean> => {
+    const run: Record<SystemPermission, () => Promise<boolean>> = {
       accessibility: () => api.axTrusted(true),
       "input-monitoring": () => api.inputMonitoringRequest(),
       "screen-capture": () => api.screenCaptureAccess(true),
       calendars: async () => (await api.appleCalendarRequestAccess()) === "granted",
       reminders: async () => (await api.appleRemindersRequestAccess()) === "granted",
     };
-    const ok = await request[key]().catch(() => false);
+    const ok = await run[key]().catch(() => false);
     setAsked((a) => ({ ...a, [key]: true }));
     if (!ok) void api.openPrivacySettings(key);
+    return ok;
+  };
+  const ask = async (key: SystemPermission) => {
+    await request(key);
+    setTick((n) => n + 1);
+  };
+  // 全部授权：按顺序逐项请求；遇到要去系统设置手动打开的项就停在那里，切回来再点继续
+  const [askingAll, setAskingAll] = useState(false);
+  const askAll = async () => {
+    setAskingAll(true);
+    for (const key of items.filter((k) => granted[k] === false)) {
+      if (!(await request(key))) break;
+    }
+    setAskingAll(false);
     setTick((n) => n + 1);
   };
   const pending = items.filter((key) => granted[key] === false);
@@ -4027,6 +4042,17 @@ function PermissionsSection({ settings }: { settings: Settings }) {
         }
         footerTone={!loading && (pending.length || restartPending.length) ? "warning" : undefined}
       >
+        {pending.length > 1 && (
+          <Row
+            label={t("全部授权")}
+            hint={t("按顺序逐项请求；需要在系统设置里手动打开的项会停下，打开后回到这里再点一次继续")}
+            right={
+              <Button size="xs" disabled={askingAll} onClick={() => void askAll()}>
+                {t("全部授权（{n} 项）", { n: pending.length })}
+              </Button>
+            }
+          />
+        )}
         {items.map((key) => {
           const info = PERMISSION_INFO[key];
           const ok = granted[key];
@@ -4074,6 +4100,19 @@ function PermissionsSection({ settings }: { settings: Settings }) {
             />
           );
         })}
+      </Group>
+      <Group>
+        <Row
+          label={t("启动时提醒缺失的权限")}
+          hint={t("关闭后启动时不再弹「系统权限未授权」气泡；只用部分功能、不打算授权某些权限时可关闭")}
+          right={
+            <Switch
+              aria-label={t("启动时提醒缺失的权限")}
+              checked={settings.permissionReminder}
+              onCheckedChange={(v) => patch({ permissionReminder: v })}
+            />
+          }
+        />
       </Group>
     </div>
   );

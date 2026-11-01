@@ -3,6 +3,7 @@ import { memo, useMemo } from "react";
 import {
   arrowGeometry,
   box,
+  calloutNumbers,
   FONT_SIZE,
   LINE_WIDTH,
   mosaicTile,
@@ -38,6 +39,7 @@ export const ShotShapesSvg = memo(function ShotShapesSvg({
   const mosaics = shapes.filter((s) => s.kind === "mosaic");
   const translations = shapes.flatMap((s) => (s.kind === "translate" ? s.items : []));
   const others = shapes.filter((s) => s.kind !== "mosaic" && s.kind !== "spotlight" && s.kind !== "translate");
+  const callouts = calloutNumbers(shapes);
   return (
     <svg className="pointer-events-none absolute inset-0 size-full" viewBox={viewBox} preserveAspectRatio="none">
       <defs>
@@ -85,7 +87,7 @@ export const ShotShapesSvg = memo(function ShotShapesSvg({
           </g>
         ))}
         {others.map((s, i) => (
-          <ShapeEl key={i} s={s} />
+          <ShapeEl key={i} s={s} n={callouts.get(s)} />
         ))}
       </g>
     </svg>
@@ -114,7 +116,27 @@ function MosaicImage({ shape, img, sx, sy }: { shape: Shape; img: HTMLImageEleme
   );
 }
 
-function ShapeEl({ s }: { s: Shape }) {
+function Badge({ x, y, r, color, n }: { x: number; y: number; r: number; color: string; n: number }) {
+  return (
+    <g>
+      <circle cx={x} cy={y} r={r} fill={color} />
+      <text
+        x={x}
+        y={y + 0.5}
+        fill={numberTextColor(color)}
+        fontSize={Math.round(r * 1.2)}
+        fontWeight={700}
+        fontFamily="-apple-system, BlinkMacSystemFont, sans-serif"
+        textAnchor="middle"
+        dominantBaseline="central"
+      >
+        {n}
+      </text>
+    </g>
+  );
+}
+
+function ShapeEl({ s, n }: { s: Shape; n?: number }) {
   if (s.kind === "translate") return null;
   const stroke = { stroke: s.color, strokeWidth: LINE_WIDTH[s.size], fill: "none", strokeLinecap: "round", strokeLinejoin: "round" } as const;
   switch (s.kind) {
@@ -157,23 +179,14 @@ function ShapeEl({ s }: { s: Shape }) {
         </text>
       );
     }
-    case "number": {
-      const r = NUMBER_RADIUS[s.size];
+    case "number":
+      return <Badge x={s.x} y={s.y} r={NUMBER_RADIUS[s.size]} color={s.color} n={s.n} />;
+    case "callout": {
+      const b = box(s);
       return (
         <g>
-          <circle cx={s.x} cy={s.y} r={r} fill={s.color} />
-          <text
-            x={s.x}
-            y={s.y + 0.5}
-            fill={numberTextColor(s.color)}
-            fontSize={Math.round(r * 1.2)}
-            fontWeight={700}
-            fontFamily="-apple-system, BlinkMacSystemFont, sans-serif"
-            textAnchor="middle"
-            dominantBaseline="central"
-          >
-            {s.n}
-          </text>
+          <rect x={b.x} y={b.y} width={b.w} height={b.h} {...stroke} />
+          <Badge x={b.x} y={b.y} r={NUMBER_RADIUS[s.size]} color={s.color} n={n ?? 1} />
         </g>
       );
     }

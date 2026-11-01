@@ -883,6 +883,8 @@ pub struct Placement {
     pub y: f64,
     /// 存入分组（Action::Section）的目标分组 id。
     pub section: Option<String>,
+    /// 批注编号说明：作为图片卡备注入库（发送时随图发出）。
+    pub caption: Option<String>,
 }
 
 fn rgba_to_bmp(w: usize, h: usize, rgba: &[u8]) -> Vec<u8> {
@@ -950,6 +952,7 @@ pub fn commit(
             &app,
             action,
             placement.section,
+            placement.caption,
             width,
             height,
             &rgba,
@@ -1222,6 +1225,7 @@ pub(crate) fn save(
     app: &AppHandle,
     action: Action,
     section_id: Option<String>,
+    caption: Option<String>,
     width: usize,
     height: usize,
     rgba: &[u8],
@@ -1242,7 +1246,7 @@ pub(crate) fn save(
         let (app_name, bundle_id) = source_of(front);
         let clip = ClipPayload {
             content_kind: "image".into(),
-            text: crate::tr_fmt!("截图 {w}×{h}", "Screenshot {w}×{h}"),
+            text: caption.unwrap_or_else(|| crate::tr_fmt!("截图 {w}×{h}", "Screenshot {w}×{h}")),
             html: None,
             source_url: None,
             captured_at_ms: crate::target::now_ms(),
@@ -1503,7 +1507,7 @@ fn pin_menu_action(app: &AppHandle, window: &tauri::WebviewWindow, id: &str) {
             let app = app.clone();
             let id = id.to_string();
             std::thread::spawn(move || match id.as_str() {
-                "pin:clip" => save(&app, Action::Save, None, w, h, &rgba, None),
+                "pin:clip" => save(&app, Action::Save, None, None, w, h, &rgba, None),
                 "pin:saveas" => save_as(&app, w, h, rgba, None),
                 "pin:ocr" => pin_ocr(&app, w, h, &rgba),
                 _ => {
@@ -1512,6 +1516,7 @@ fn pin_menu_action(app: &AppHandle, window: &tauri::WebviewWindow, id: &str) {
                             &app,
                             Action::Section,
                             Some(section.to_string()),
+                            None,
                             w,
                             h,
                             &rgba,

@@ -1,12 +1,14 @@
 /** 截图标注：图形模型、历史栈与绘制。坐标为本屏左上角原点的 pt。 */
 
-export type Tool = "rect" | "ellipse" | "arrow" | "pen" | "text" | "mosaic" | "spotlight" | "number";
+export type Tool = "rect" | "ellipse" | "arrow" | "pen" | "text" | "mosaic" | "spotlight" | "number" | "callout";
 
 export type Shape =
   | { kind: "rect" | "ellipse" | "arrow" | "mosaic" | "spotlight"; x1: number; y1: number; x2: number; y2: number; color: string; size: number }
   | { kind: "pen"; points: [number, number][]; color: string; size: number }
   | { kind: "text"; x: number; y: number; text: string; color: string; size: number }
   | { kind: "number"; x: number; y: number; n: number; color: string; size: number }
+  /** 批注：框 + 左上角编号（按批注出现顺序自动编号），note 为要 AI 怎么改的说明，不画进图里。 */
+  | { kind: "callout"; x1: number; y1: number; x2: number; y2: number; note: string; color: string; size: number }
   | { kind: "translate"; items: TranslatedLine[] };
 
 /** 图内翻译的一行（坐标 pt）：只抹掉原文笔画的补丁 + 译文。 */
@@ -63,6 +65,47 @@ export function isMeaningful(s: Shape): boolean {
   if (s.kind === "number") return true;
   if (s.kind === "translate") return s.items.length > 0;
   return Math.hypot(s.x2 - s.x1, s.y2 - s.y1) >= 3;
+}
+
+export type CalloutShape = Extract<Shape, { kind: "callout" }>;
+
+/** 批注编号：按在图形列表里的先后，从 1 起；删掉一条后后面的自动补齐。 */
+export function calloutNumbers(shapes: Shape[]): Map<Shape, number> {
+  const out = new Map<Shape, number>();
+  for (const s of shapes) if (s.kind === "callout") out.set(s, out.size + 1);
+  return out;
+}
+
+/** 发给 AI 的编号说明：「1. …」逐行；没有填写说明的批注不列出，都没填返回空串。 */
+export function calloutPrompt(shapes: Shape[], header: string): string {
+  const lines: string[] = [];
+  calloutNumbers(shapes).forEach((n, s) => {
+    const note = s.kind === "callout" ? s.note.trim() : "";
+    if (note) lines.push(`${n}. ${note}`);
+  });
+  return lines.length ? `${header}\n${lines.join("\n")}` : "";
+}
+
+/** 正在填写的批注说明：新画的框（shape 尚未入历史），或双击已有批注（orig）。 */
+export interface NoteDraft {
+  shape: CalloutShape;
+  text: string;
+  orig?: CalloutShape;
+}
+
+/** 收尾批注说明：新框连同说明一步入历史；改已有批注原地替换。 */
+export function commitNote(h: History, d: NoteDraft): History {
+  const next: CalloutShape = { ...d.shape, note: d.text.trim() };
+  if (!d.orig || !h.shapes.includes(d.orig)) return pushShape(h, next);
+  if (d.orig.note === next.note) return h;
+  return commitShapes(h, h.shapes.map((s) => (s === d.orig ? next : s)));
+}
+
+/** 显示与出图用：填写中的批注替代原图形（新框追加在最后）。 */
+export function withNoteDraft(shapes: Shape[], d: NoteDraft | null): Shape[] {
+  if (!d) return shapes;
+  const next: CalloutShape = { ...d.shape, note: d.text };
+  return d.orig ? shapes.map((s) => (s === d.orig ? next : s)) : [...shapes, next];
 }
 
 export function nextNumber(shapes: Shape[]): number {
@@ -192,6 +235,7 @@ export function drawShapes(
       ctx.restore();
     }
   }
+  const callouts = calloutNumbers(shapes);
   for (const s of shapes) {
     if (s.kind === "mosaic" || s.kind === "spotlight" || s.kind === "translate") continue;
     ctx.save();
@@ -220,18 +264,27 @@ export function drawShapes(
       ctx.textBaseline = "top";
       s.text.split("\n").forEach((line, i) => ctx.fillText(line, s.x, s.y + i * fs * 1.25));
     } else if (s.kind === "number") {
-      const r = NUMBER_RADIUS[s.size];
-      ctx.beginPath();
-      ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = numberTextColor(s.color);
-      ctx.font = `700 ${Math.round(r * 1.2)}px -apple-system, BlinkMacSystemFont, sans-serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(String(s.n), s.x, s.y + 0.5);
+      drawBadge(ctx, s.x, s.y, NUMBER_RADIUS[s.size], s.color, s.n);
+    } else if (s.kind === "callout") {
+      const b = box(s);
+      ctx.strokeRect(b.x, b.y, b.w, b.h);
+      drawBadge(ctx, b.x, b.y, NUMBER_RADIUS[s.size], s.color, callouts.get(s) ?? 1);
     }
     ctx.restore();
   }
+}
+
+/** 实心圆编号（序号与批注共用）。 */
+function drawBadge(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, color: string, n: number) {
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.fillStyle = numberTextColor(color);
+  ctx.font = `700 ${Math.round(r * 1.2)}px -apple-system, BlinkMacSystemFont, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(String(n), x, y + 0.5);
 }
 
 function drawArrow(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number, w: number) {

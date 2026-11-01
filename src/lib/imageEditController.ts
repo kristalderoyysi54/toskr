@@ -16,6 +16,7 @@ import {
 } from "@/lib/imageEditor";
 import { api } from "@/lib/tauri";
 import { emitToDetailWindows } from "@/lib/detailWindows";
+import { imageCaption } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { setPendingUndo, tip } from "@/lib/tip";
 import {
@@ -138,6 +139,8 @@ type NoteImageReplacement = {
   editedFile: string;
   width: number;
   height: number;
+  /** 批注编号说明（仅标注写回带）：追加到图片卡备注。 */
+  caption?: string | null;
 };
 
 type NoteImageReplacementText = {
@@ -279,7 +282,20 @@ export function applyAnnotatedNoteImage(
     },
     true
   );
-  if ("error" in committed) tip("warn", committed.error);
+  if ("error" in committed) {
+    tip("warn", committed.error);
+    return;
+  }
+  appendCalloutCaption(op.noteId, op.caption);
+}
+
+/** 只给单图的普通图片卡追加说明；图文交错卡不经文本投影改写，避免压平块顺序。 */
+function appendCalloutCaption(noteId: string, caption: string | null | undefined) {
+  if (!caption?.trim()) return;
+  const note = useNotesStore.getState().notes.find((n) => n.id === noteId);
+  if (!note || note.kind !== "image" || noteImages(note).length !== 1) return;
+  const current = imageCaption(note);
+  useNotesStore.getState().updateNoteText(noteId, current ? `${current}\n\n${caption}` : caption);
 }
 
 /**

@@ -704,6 +704,7 @@ pub fn screenshot_commit(
         x: num("x-shot-x").unwrap_or(0.0),
         y: num("x-shot-y").unwrap_or(0.0),
         section: header("x-shot-section").map(str::to_string),
+        caption: shot_caption(header("x-shot-caption")),
     };
     let action = crate::screenshot::Action::parse(header("x-shot-action").unwrap_or("save"));
     crate::screenshot::commit(&app, action, placement, w as usize, h as usize, rgba.clone())
@@ -843,7 +844,16 @@ pub fn long_commit(window: tauri::WebviewWindow, request: tauri::ipc::Request<'_
     let writeback = raw_action == "replace";
     let action = crate::screenshot::Action::parse(raw_action);
     let section = header("x-shot-section").map(str::to_string);
-    crate::screenshot_long::commit(&window, writeback, action, section, w, h, rgba.clone())
+    let caption = shot_caption(header("x-shot-caption"));
+    crate::screenshot_long::commit(&window, writeback, action, section, caption, w, h, rgba.clone())
+}
+
+/// 批注说明头（UTF-8 的 base64）；解不开或为空时忽略。
+fn shot_caption(raw: Option<&str>) -> Option<String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(raw?).ok()?;
+    let text = String::from_utf8(bytes).ok()?;
+    (!text.trim().is_empty()).then_some(text)
 }
 
 #[tauri::command]

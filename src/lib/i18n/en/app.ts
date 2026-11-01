@@ -382,4 +382,9 @@ export const app = {
   "裁剪：拖动边角调整，Esc 结束": "Crop: drag the corners or edges; Esc to finish",
   "完成：更新钉图（Enter）；长按选择存入的分组": "Done: update the pin (Enter); long-press to pick a group",
   "还有 {n} 项系统权限未授权，点此前往设置 → 权限": "{n} system permissions are missing. Click to open Settings → Permissions",
+  "批注": "Callout",
+  "批注说明": "Callout note",
+  "这里要怎么改？": "What should change here?",
+  "图中编号说明：": "Notes for the numbered marks in the image:",
+  "批注：框出要改的地方并写下说明，自动编号；存入或发送时编号说明随图附上，方便交给 AI": "Callout: box the area to change and describe it; numbered automatically. The numbered notes go with the image when you save or send it, ready for AI",
 } satisfies Record<string, EnValue>;

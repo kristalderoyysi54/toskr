@@ -17,6 +17,13 @@ export const SCREENSHOT_SESSION_EVENT = "toskr://screenshot-session";
 export const SCREENSHOT_END_EVENT = "toskr://screenshot-end";
 /** 截完「发送 / 在编辑器中打开」：主窗口先落进剪贴再执行。 */
 export const SCREENSHOT_AFTER_EVENT = "toskr://screenshot-after";
+
+/** 请求头只能放 ASCII：中文说明按 UTF-8 转 base64。 */
+function base64Utf8(text: string): string {
+  let bin = "";
+  for (const b of new TextEncoder().encode(text)) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
 /** 长截屏拼接进度（Rust → 预览条），payload { height }。 */
 export const LONG_PROGRESS_EVENT = "toskr://long-progress";
 /** 遮罩文字面板 → 主窗口：用已配置的 AI 翻译。 */
@@ -1018,7 +1025,8 @@ export const api = {
     height: number,
     action: ScreenshotAction,
     at: { x: number; y: number },
-    sectionId?: string
+    sectionId?: string,
+    caption?: string
   ) =>
     invoke("screenshot_commit", rgba, {
       headers: {
@@ -1028,6 +1036,7 @@ export const api = {
         "x-shot-x": String(at.x),
         "x-shot-y": String(at.y),
         ...(sectionId ? { "x-shot-section": sectionId } : {}),
+        ...(caption ? { "x-shot-caption": base64Utf8(caption) } : {}),
       },
     }),
   /** 截图遮罩要笔记分组列表：主窗口经 NOTE_SECTIONS 回发给本窗口。 */
@@ -1052,13 +1061,21 @@ export const api = {
   longInfo: () => invoke<{ pxW: number; pxH: number; scale: number; origin: "capture" | "pin" | "note" } | null>("long_info"),
   longImage: () => invoke<ArrayBuffer>("long_image"),
   /** 长图标注窗出图（save / section / saveas；replace = 写回钉图或图片卡），成功后窗口由 Rust 关闭。 */
-  longCommit: (rgba: Uint8Array, width: number, height: number, action: "save" | "section" | "saveas" | "replace", sectionId?: string) =>
+  longCommit: (
+    rgba: Uint8Array,
+    width: number,
+    height: number,
+    action: "save" | "section" | "saveas" | "replace",
+    sectionId?: string,
+    caption?: string
+  ) =>
     invoke("long_commit", rgba, {
       headers: {
         "x-shot-w": String(width),
         "x-shot-h": String(height),
         "x-shot-action": action,
         ...(sectionId ? { "x-shot-section": sectionId } : {}),
+        ...(caption ? { "x-shot-caption": base64Utf8(caption) } : {}),
       },
     }),
   longClose: () => invoke("long_close"),

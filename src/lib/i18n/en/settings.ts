@@ -708,4 +708,9 @@ export const settings = {
   "授权已完成，重启 Toskr 后生效": "Permissions granted; restart Toskr for them to take effect",
   "已授权，重启 Toskr 后生效": "Allowed; restart Toskr for it to take effect",
   "立即重启": "Restart now",
+  "全部授权": "Authorize all",
+  "全部授权（{n} 项）": "Authorize all ({n})",
+  "按顺序逐项请求；需要在系统设置里手动打开的项会停下，打开后回到这里再点一次继续": "Requests each one in turn; it stops at any that must be turned on in System Settings. Turn it on, come back and click again to continue",
+  "启动时提醒缺失的权限": "Remind about missing permissions at launch",
+  "关闭后启动时不再弹「系统权限未授权」气泡；只用部分功能、不打算授权某些权限时可关闭": "When off, no \"missing permissions\" bubble at launch. Turn off if you only use some features and won't grant every permission",
 } satisfies Record<string, EnValue>;

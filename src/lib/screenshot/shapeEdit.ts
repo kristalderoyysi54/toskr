@@ -10,7 +10,7 @@ export type EditHandle = Handle | "start" | "end";
 
 /** 可拖手柄改框的图形（箭头改端点，其余只能整体移动）。 */
 export function isBox(s: Shape): s is BoxShape {
-  return s.kind === "rect" || s.kind === "ellipse" || s.kind === "mosaic" || s.kind === "spotlight";
+  return s.kind === "rect" || s.kind === "ellipse" || s.kind === "mosaic" || s.kind === "spotlight" || s.kind === "callout";
 }
 
 /** 粗估文字宽度：CJK 记 1 个字号宽，其余 0.6。 */
@@ -63,6 +63,13 @@ function distToSegment(px: number, py: number, x1: number, y1: number, x2: numbe
 function hits(s: Editable, x: number, y: number, tol: number): boolean {
   const lw = "size" in s ? LINE_WIDTH[s.size] / 2 : 0;
   switch (s.kind) {
+    case "callout": {
+      // 描边或左上角编号
+      const b = box(s);
+      const pad = tol + lw;
+      if (Math.hypot(x - b.x, y - b.y) <= NUMBER_RADIUS[s.size] + tol) return true;
+      return within(b, x, y, pad) && !(x > b.x + pad && y > b.y + pad && x < b.x + b.w - pad && y < b.y + b.h - pad);
+    }
     case "rect": {
       const b = box(s);
       const pad = tol + lw;
@@ -104,7 +111,7 @@ export function shapeAt(
   }
   for (let i = shapes.length - 1; i >= 0; i--) {
     const s = shapes[i];
-    if ((s.kind === "rect" || s.kind === "ellipse") && accept(s) && within(box(s), x, y, 0)) return i;
+    if ((s.kind === "rect" || s.kind === "ellipse" || s.kind === "callout") && accept(s) && within(box(s), x, y, 0)) return i;
   }
   return null;
 }

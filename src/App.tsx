@@ -1181,6 +1181,7 @@ export default function App() {
   // 启动 8s 后核对系统权限：有缺失就出可点击的 warn 气泡，直达设置 → 权限
   useEffect(() => {
     const timer = window.setTimeout(() => {
+      if (!useNotesStore.getState().settings.permissionReminder) return;
       void Promise.all([
         api.axTrusted(false),
         api.tapStatus(),

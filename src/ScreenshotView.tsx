@@ -45,6 +45,7 @@ import {
   emptyHistory,
   FONT_SIZE,
   nextNumber,
+  isMeaningful,
   pushShape,
   redo,
   undo,
@@ -56,7 +57,12 @@ import {
   type TextDraft,
   type TranslatedLine,
   withTextDraft,
+  calloutPrompt,
+  commitNote,
+  type NoteDraft,
+  withNoteDraft,
 } from "@/lib/screenshot/annotate";
+import { ShotCallouts } from "@/components/ShotCallouts";
 import { useShapeEdit } from "@/lib/screenshot/useShapeEdit";
 import { ShapeEditFrame } from "@/components/ShapeEditFrame";
 import {
@@ -278,6 +284,7 @@ export default function ScreenshotView() {
   const [history, setHistory] = useState<History>(emptyHistory);
   const [draft, setDraft] = useState<Shape | null>(null);
   const [editing, setEditing] = useState<TextDraft | null>(null);
+  const [noteDraft, setNoteDraft] = useState<NoteDraft | null>(null);
   const [ocr, setOcr] = useState<OcrPanel | null>(null);
   const translateReq = useRef<PendingTranslate | null>(null);
   const [translating, setTranslating] = useState(false);
@@ -306,6 +313,7 @@ export default function ScreenshotView() {
     setHistory(emptyHistory);
     setDraft(null);
     setEditing(null);
+    setNoteDraft(null);
     setOcr(null);
     translateReq.current = null;
     setTranslating(false);
@@ -399,14 +407,19 @@ export default function ScreenshotView() {
 
   /** 正在输入的文字也算进出图与撤销历史。 */
   const shapesWithEditing = useCallback((): Shape[] => {
-    return withTextDraft(history.shapes, editing);
-  }, [editing, history.shapes]);
+    return withNoteDraft(withTextDraft(history.shapes, editing), noteDraft);
+  }, [editing, noteDraft, history.shapes]);
 
   const commitEditing = useCallback(() => {
-    if (!editing) return;
-    setHistory((h) => commitText(h, editing));
-    setEditing(null);
-  }, [editing]);
+    if (editing) {
+      setHistory((h) => commitText(h, editing));
+      setEditing(null);
+    }
+    if (noteDraft) {
+      setHistory((h) => commitNote(h, noteDraft));
+      setNoteDraft(null);
+    }
+  }, [editing, noteDraft]);
 
   /** 选区按冻结帧像素裁剪（`withShapes` 时合成标注），得到原始 RGBA。 */
   const exportImage = useCallback(
@@ -447,10 +460,12 @@ export default function ScreenshotView() {
     reset();
     // 带阴影时图四周多出透明边距，钉图位置相应左上移，图本身仍对齐原处
     const placement = { x: sel.x - padPt, y: sel.y - padPt };
-    void api.screenshotCommit(out.data, out.w, out.h, action, placement, sectionId).catch(() => {
+    // 批注说明作为图片卡备注随图入库，发送时一起发出
+    const caption = calloutPrompt(shapesWithEditing(), t("图中编号说明："));
+    void api.screenshotCommit(out.data, out.w, out.h, action, placement, sectionId, caption).catch(() => {
       void api.screenshotCancel();
     });
-  }, [exportImage, sel, reset, frame, sx]);
+  }, [exportImage, sel, reset, frame, sx, shapesWithEditing, t]);
 
   // 长按 ✓（或右键 ✓）：选一个笔记分组存入；分组列表向主窗口要
   const [sections, setSections] = useState<NoteSectionOption[]>([]);
@@ -601,8 +616,8 @@ export default function ScreenshotView() {
         }
         return;
       }
-      // 文字输入框自己处理按键
-      if (editing) return;
+      // 文字 / 批注输入框自己处理按键
+      if (editing || noteDraft) return;
       const stop = () => {
         e.preventDefault();
         e.stopPropagation();
@@ -637,7 +652,7 @@ export default function ScreenshotView() {
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, [info, sel, W, H, cancel, confirm, copyColor, editing, tool, history.shapes.length, ocr, sectionMenu]);
+  }, [info, sel, W, H, cancel, confirm, copyColor, editing, noteDraft, tool, history.shapes.length, ocr, sectionMenu]);
 
   // 遮罩刚出现时应用可能还没激活，WKWebView 收不到 mousemove：轮询系统光标跟随；
   // 拖拽中以指针事件为准
@@ -714,6 +729,15 @@ export default function ScreenshotView() {
   editRef.current = edit;
 
   const beginTextEdit = (x: number, y: number): boolean => {
+    if (!tool || tool === "callout") {
+      const ci = shapeAt(history.shapes, x, y, 4, (s) => s.kind === "callout");
+      const c = ci === null ? undefined : history.shapes[ci];
+      if (c?.kind === "callout") {
+        edit.clear();
+        setNoteDraft({ shape: c, text: c.note, orig: c });
+        return true;
+      }
+    }
     if (tool && tool !== "text") return false;
     const i = shapeAt(history.shapes, x, y, 4, (s) => s.kind === "text");
     const s = i === null ? undefined : history.shapes[i];
@@ -728,7 +752,7 @@ export default function ScreenshotView() {
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 || !info) return;
     const p = point(e);
-    if (editing) commitEditing();
+    if (editing || noteDraft) commitEditing();
     // 点已画的图形：选中，拖动移动、拖手柄缩放
     if (sel && edit.down(p.x, p.y)) {
       e.currentTarget.setPointerCapture(e.pointerId);
@@ -750,7 +774,9 @@ export default function ScreenshotView() {
       setDraft(
         tool === "pen"
           ? { kind: "pen", points: [[p.x, p.y]], color: ink, size }
-          : { kind: tool, x1: p.x, y1: p.y, x2: p.x, y2: p.y, color: ink, size }
+          : tool === "callout"
+            ? { kind: "callout", x1: p.x, y1: p.y, x2: p.x, y2: p.y, note: "", color: ink, size }
+            : { kind: tool, x1: p.x, y1: p.y, x2: p.x, y2: p.y, color: ink, size }
       );
       return;
     }
@@ -808,7 +834,9 @@ export default function ScreenshotView() {
             ? { ...draft, x2: p.x, y2: p.y }
             : draft;
       void api.screenshotTrace("pushed", done.kind === "pen" ? done.points.length : 0, 0);
-      setHistory((h) => pushShape(h, done));
+      // 批注框画完先填说明，说明连同框一起入历史
+      if (done.kind === "callout" && isMeaningful(done)) setNoteDraft({ shape: done, text: "" });
+      else setHistory((h) => pushShape(h, done));
       setDraft(null);
       return;
     }
@@ -826,7 +854,7 @@ export default function ScreenshotView() {
   const handle = sel && cursor && !dragging && !locked ? hitHandle(sel, cursor.x, cursor.y) : null;
   const editCursor = sel && cursor && !draft ? edit.cursor(cursor.x, cursor.y) : null;
   // 改已有文字时原文字先藏起来，由输入框显示
-  const shownShapes = editing?.orig ? edit.shapes.filter((s) => s !== editing.orig) : edit.shapes;
+  const shownShapes = withNoteDraft(editing?.orig ? edit.shapes.filter((s) => s !== editing.orig) : edit.shapes, noteDraft);
   const inSel = !!(sel && cursor && inside(sel, cursor.x, cursor.y));
   const cursorStyle = editCursor
     ? editCursor
@@ -932,6 +960,14 @@ export default function ScreenshotView() {
 
       {/* 选中的图形：虚线框 + 手柄，拖动移动、拖手柄缩放、⌫ 删除 */}
       {sel && edit.picked && <ShapeEditFrame shape={edit.picked} />}
+      {sel && (
+        <ShotCallouts
+          shapes={shownShapes}
+          draft={noteDraft}
+          onChange={(text) => setNoteDraft((d) => d && { ...d, text })}
+          onCommit={commitEditing}
+        />
+      )}
 
       {active && pr && (!sel || dragging) && (
         <div

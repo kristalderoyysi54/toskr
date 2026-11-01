@@ -6,6 +6,7 @@ import {
   Grid3x3,
   Hash,
   Layers2,
+  MessageSquareText,
   MoveUpRight,
   Pencil,
   Square,
@@ -36,6 +37,12 @@ export const SHOT_TOOLS: { tool: Tool; icon: LucideIcon; label: MessageKey; tip:
   { tool: "mosaic", icon: Grid3x3, label: "马赛克", tip: "马赛克：拖动框住要遮挡的隐私内容" },
   { tool: "spotlight", icon: Focus, label: "聚光灯", tip: "聚光灯：框出的区域保持原样，其余压暗" },
   { tool: "number", icon: Hash, label: "序号", tip: "序号：点击依次放置 1、2、3… 编号" },
+  {
+    tool: "callout",
+    icon: MessageSquareText,
+    label: "批注",
+    tip: "批注：框出要改的地方并写下说明，自动编号；存入或发送时编号说明随图附上，方便交给 AI",
+  },
 ];
 
 /** 带悬停说明的工具条按钮：说明由 <HoverTip> 显示（不用原生 title，遮罩窗未激活时原生提示不出现）。 */

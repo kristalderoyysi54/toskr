@@ -35,7 +35,13 @@ import {
   type TextDraft,
   withTextDraft,
   type Tool,
+  calloutPrompt,
+  commitNote,
+  isMeaningful,
+  type NoteDraft,
+  withNoteDraft,
 } from "@/lib/screenshot/annotate";
+import { ShotCallouts } from "@/components/ShotCallouts";
 import { handlePoint, HANDLES, resizeRect, toPixelRect, type Handle, type Rect } from "@/lib/screenshot/geometry";
 import { useShapeEdit } from "@/lib/screenshot/useShapeEdit";
 import { api } from "@/lib/tauri";
@@ -56,6 +62,7 @@ export default function LongShotView() {
   const [history, setHistory] = useState<History>(emptyHistory);
   const [draft, setDraft] = useState<Shape | null>(null);
   const [editing, setEditing] = useState<TextDraft | null>(null);
+  const [noteDraft, setNoteDraft] = useState<NoteDraft | null>(null);
   // 出图圆角 / 阴影 / 背景（与截图遮罩共用设置）
   const [frame, setFrame] = useShotFrame();
   const [busy, setBusy] = useState(false);
@@ -101,10 +108,15 @@ export default function LongShotView() {
   const scale = info?.scale ?? 1;
 
   const commitEditing = useCallback(() => {
-    if (!editing) return;
-    setHistory((h) => commitText(h, editing));
-    setEditing(null);
-  }, [editing]);
+    if (editing) {
+      setHistory((h) => commitText(h, editing));
+      setEditing(null);
+    }
+    if (noteDraft) {
+      setHistory((h) => commitNote(h, noteDraft));
+      setNoteDraft(null);
+    }
+  }, [editing, noteDraft]);
 
   const editingAt = editing ? `${editing.x},${editing.y}` : null;
   useEffect(() => {
@@ -118,7 +130,7 @@ export default function LongShotView() {
   const finish = useCallback(
     (action: "save" | "section" | "saveas" | "replace", sectionId?: string) => {
       if (!info || !img || busy) return;
-      const shapes = withTextDraft(history.shapes, editing);
+      const shapes = withNoteDraft(withTextDraft(history.shapes, editing), noteDraft);
       const canvas = document.createElement("canvas");
       canvas.width = info.pxW;
       canvas.height = info.pxH;
@@ -134,9 +146,11 @@ export default function LongShotView() {
       const pad = Math.round(frame.shadow * scale);
       const img2 = frame.radius > 0 || pad > 0 ? frameImage(raw, frame.radius * scale, pad, frame.shadowAlpha) : raw;
       setBusy(true);
-      void api.longCommit(img2.data, img2.w, img2.h, action, sectionId).catch(() => setBusy(false));
+      // 批注说明：新图随图入库；图片卡写回时追加到卡片备注
+      const caption = calloutPrompt(shapes, t("图中编号说明："));
+      void api.longCommit(img2.data, img2.w, img2.h, action, sectionId, caption).catch(() => setBusy(false));
     },
-    [info, img, busy, editing, history.shapes, scale, crop, frame]
+    [info, img, busy, editing, noteDraft, history.shapes, scale, crop, frame, t]
   );
 
   // 钉图 / 图片卡：✓ 写回来源；新截的长图：✓ 存入「剪贴」
@@ -167,7 +181,7 @@ export default function LongShotView() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (editing) return;
+      if (editing || noteDraft) return;
       const stop = () => {
         e.preventDefault();
         e.stopPropagation();
@@ -189,7 +203,7 @@ export default function LongShotView() {
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, [editing, sectionMenu, cropping, finish, primary]);
+  }, [editing, noteDraft, sectionMenu, cropping, finish, primary]);
 
   const point = (e: ReactPointerEvent) => {
     const r = pageRef.current!.getBoundingClientRect();
@@ -199,7 +213,7 @@ export default function LongShotView() {
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 || cropping) return;
     const p = point(e);
-    if (editing) commitEditing();
+    if (editing || noteDraft) commitEditing();
     if (edit.down(p.x, p.y)) {
       e.currentTarget.setPointerCapture(e.pointerId);
       return;
@@ -217,7 +231,9 @@ export default function LongShotView() {
     setDraft(
       tool === "pen"
         ? { kind: "pen", points: [[p.x, p.y]], color: ink, size }
-        : { kind: tool, x1: p.x, y1: p.y, x2: p.x, y2: p.y, color: ink, size }
+        : tool === "callout"
+          ? { kind: "callout", x1: p.x, y1: p.y, x2: p.x, y2: p.y, note: "", color: ink, size }
+          : { kind: tool, x1: p.x, y1: p.y, x2: p.x, y2: p.y, color: ink, size }
     );
   };
 
@@ -248,13 +264,15 @@ export default function LongShotView() {
         : "x2" in draft
           ? { ...draft, x2: p.x, y2: p.y }
           : draft;
-    setHistory((h) => pushShape(h, done));
+    // 批注框画完先填说明
+    if (done.kind === "callout" && isMeaningful(done)) setNoteDraft({ shape: done, text: "" });
+    else setHistory((h) => pushShape(h, done));
     setDraft(null);
   };
 
   if (!info || !img) return null;
   // 改已有文字时原文字先藏起来，由输入框显示
-  const shown = editing?.orig ? edit.shapes.filter((s) => s !== editing.orig) : edit.shapes;
+  const shown = withNoteDraft(editing?.orig ? edit.shapes.filter((s) => s !== editing.orig) : edit.shapes, noteDraft);
   const shapes = draft ? [...shown, draft] : shown;
   // 选中图形时样式行显示并修改该图形的颜色 / 粗细；输入文字时改正在输入的文字
   const pickedStyled = editing ?? (edit.picked && "size" in edit.picked ? edit.picked : null);
@@ -402,11 +420,20 @@ export default function LongShotView() {
           // 阻止按下时浏览器把焦点挪回 body（会抢走刚聚焦的文字框）
           onMouseDown={(e) => tool && e.target === e.currentTarget && e.preventDefault()}
           onDoubleClick={(e) => {
-            // 双击已有文字改内容
-            if (tool && tool !== "text") return;
+            // 双击已有文字改内容；双击批注改说明
             const r = pageRef.current!.getBoundingClientRect();
             const x = (e.clientX - r.left) / z;
             const y = (e.clientY - r.top) / z;
+            if (!tool || tool === "callout") {
+              const ci = shapeAt(history.shapes, x, y, 4 / z, (s) => s.kind === "callout");
+              const c = ci === null ? undefined : history.shapes[ci];
+              if (c?.kind === "callout") {
+                edit.clear();
+                setNoteDraft({ shape: c, text: c.note, orig: c });
+                return;
+              }
+            }
+            if (tool && tool !== "text") return;
             const i = shapeAt(history.shapes, x, y, 4 / z, (s) => s.kind === "text");
             const s = i === null ? undefined : history.shapes[i];
             if (s?.kind !== "text") return;
@@ -432,6 +459,13 @@ export default function LongShotView() {
             />
           )}
           {edit.picked && <ShapeEditFrame shape={edit.picked} z={z} />}
+          <ShotCallouts
+            shapes={shown}
+            draft={noteDraft}
+            z={z}
+            onChange={(text) => setNoteDraft((d) => d && { ...d, text })}
+            onCommit={commitEditing}
+          />
           {crop && (
             <div
               className="pointer-events-none absolute outline outline-1 outline-primary"
