@@ -91,7 +91,7 @@ type Drag =
 
 /** 选区上方圆角 / 阴影条的估计宽度（贴右边时左移）。 */
 const FRAME_BAR_W = 480;
-// token-exception: 截图十字线浅天蓝（用户指定）
+// token-exception: 截图十字线、选框与手柄的浅天蓝（用户指定）
 const CROSSHAIR_COLOR = "rgba(125, 211, 252, 0.7)";
 
 /** #RRGGBB → rgb(r, g, b)。 */
@@ -899,8 +899,9 @@ export default function ScreenshotView() {
       <img src={img.src} alt="" draggable={false} className="pointer-events-none absolute inset-0 size-full" />
       {active ? (
         <div
-          className="pointer-events-none absolute outline outline-1 outline-primary"
+          className="pointer-events-none absolute outline outline-2"
           style={{
+            outlineColor: CROSSHAIR_COLOR,
             left: active.x,
             top: active.y,
             width: active.w,
@@ -948,8 +949,8 @@ export default function ScreenshotView() {
           return (
             <div
               key={h}
-              className="pointer-events-none absolute size-2 rounded-full border border-primary bg-white"
-              style={{ left: p.x - 4, top: p.y - 4 }}
+              className="pointer-events-none absolute size-2 rounded-full border-2 bg-white"
+              style={{ left: p.x - 4, top: p.y - 4, borderColor: CROSSHAIR_COLOR }}
             />
           );
         })}
