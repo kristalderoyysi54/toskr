@@ -33,6 +33,7 @@ const COMMANDS: &[&str] = &[
     "screenshot_session",
     "screenshot_frame",
     "screenshot_cursor",
+    "screenshot_typing",
     "screenshot_commit",
     "screenshot_cancel",
     "screenshot_long",

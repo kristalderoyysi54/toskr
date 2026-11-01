@@ -12,6 +12,7 @@
     "allow-screenshot-session",
     "allow-screenshot-frame",
     "allow-screenshot-cursor",
+    "allow-screenshot-typing",
     "allow-screenshot-commit",
     "allow-screenshot-cancel",
     "allow-screenshot-long",

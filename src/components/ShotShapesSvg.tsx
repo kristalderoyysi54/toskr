@@ -3,7 +3,9 @@ import { memo, useMemo } from "react";
 import {
   arrowGeometry,
   box,
+  CALLOUT_TINT,
   calloutNumbers,
+  calloutTag,
   FONT_SIZE,
   LINE_WIDTH,
   mosaicTile,
@@ -183,10 +185,25 @@ function ShapeEl({ s, n }: { s: Shape; n?: number }) {
       return <Badge x={s.x} y={s.y} r={NUMBER_RADIUS[s.size]} color={s.color} n={s.n} />;
     case "callout": {
       const b = box(s);
+      const tag = calloutTag(s, n ?? 1);
+      const { x, y, w, h, r } = tag;
       return (
         <g>
+          <rect x={b.x} y={b.y} width={b.w} height={b.h} fill={s.color} fillOpacity={CALLOUT_TINT} />
           <rect x={b.x} y={b.y} width={b.w} height={b.h} {...stroke} />
-          <Badge x={b.x} y={b.y} r={NUMBER_RADIUS[s.size]} color={s.color} n={n ?? 1} />
+          <path d={`M${x} ${y}H${x + w}V${y + h - r}Q${x + w} ${y + h} ${x + w - r} ${y + h}H${x}Z`} fill={s.color} />
+          <text
+            x={x + w / 2}
+            y={y + h / 2 + 0.5}
+            fill={numberTextColor(s.color)}
+            fontSize={Math.round(h * 0.62)}
+            fontWeight={700}
+            fontFamily="-apple-system, BlinkMacSystemFont, sans-serif"
+            textAnchor="middle"
+            dominantBaseline="central"
+          >
+            {n ?? 1}
+          </text>
         </g>
       );
     }

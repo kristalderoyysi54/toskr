@@ -405,6 +405,13 @@ export default function ScreenshotView() {
     el.setSelectionRange(el.value.length, el.value.length);
   }, [editingAt]);
 
+  // 输入文字 / 批注说明 / 改识别结果时遮罩降层级，否则输入法候选窗被挡住
+  const typing = !!(editing || noteDraft || ocr);
+  useEffect(() => {
+    if (!info) return;
+    void api.screenshotTyping(typing).catch(() => {});
+  }, [typing, info]);
+
   /** 正在输入的文字也算进出图与撤销历史。 */
   const shapesWithEditing = useCallback((): Shape[] => {
     return withNoteDraft(withTextDraft(history.shapes, editing), noteDraft);

@@ -30,6 +30,9 @@ extern "C" {
 const LABEL_PREFIX: &str = "shot-";
 /// 遮罩窗层级：高于菜单栏（24）与弹出菜单（101），等同屏保层。
 const OVERLAY_LEVEL: isize = 1000;
+/// 遮罩内输入文字时的层级：仍压住菜单栏（24）与状态栏图标（25），但低于输入法候选窗，
+/// 否则候选窗被 1000 级遮罩挡住看不见。
+const OVERLAY_TYPING_LEVEL: isize = 26;
 pub const SESSION_EVENT: &str = "toskr://screenshot-session";
 pub const END_EVENT: &str = "toskr://screenshot-end";
 /// 截完「发送 / 在编辑器中打开」：主窗口先落进剪贴再执行动作。
@@ -415,6 +418,16 @@ fn on_main_sync<T: Send + 'static>(
     })
     .ok()?;
     rx.recv_timeout(std::time::Duration::from_secs(2)).ok()
+}
+
+/// 遮罩内文字 / 批注 / 识别结果输入框获得焦点时降层级，让输入法候选窗显示在遮罩之上；结束后恢复。
+pub fn set_typing(window: &tauri::WebviewWindow, typing: bool) {
+    let w = window.clone();
+    let _ = window.run_on_main_thread(move || {
+        if let Some(ns) = ns_window(&w) {
+            ns.setLevel(if typing { OVERLAY_TYPING_LEVEL } else { OVERLAY_LEVEL });
+        }
+    });
 }
 
 fn ns_window(window: &tauri::WebviewWindow) -> Option<&objc2_app_kit::NSWindow> {

@@ -1,6 +1,6 @@
 /** 已画标注的选中与调整：命中、手柄、移动 / 缩放。坐标与图形同系（pt）。 */
 
-import { box, FONT_SIZE, LINE_WIDTH, NUMBER_RADIUS, type Shape } from "./annotate";
+import { box, calloutTag, FONT_SIZE, LINE_WIDTH, NUMBER_RADIUS, type Shape } from "./annotate";
 import { handlePoint, HANDLES, resizeRect, type Handle, type Rect } from "./geometry";
 
 export type Editable = Exclude<Shape, { kind: "translate" }>;
@@ -64,10 +64,10 @@ function hits(s: Editable, x: number, y: number, tol: number): boolean {
   const lw = "size" in s ? LINE_WIDTH[s.size] / 2 : 0;
   switch (s.kind) {
     case "callout": {
-      // 描边或左上角编号
+      // 描边或左上角编号贴片（按两位数宽度估）
       const b = box(s);
       const pad = tol + lw;
-      if (Math.hypot(x - b.x, y - b.y) <= NUMBER_RADIUS[s.size] + tol) return true;
+      if (within(calloutTag(s, 10), x, y, tol)) return true;
       return within(b, x, y, pad) && !(x > b.x + pad && y > b.y + pad && x < b.x + b.w - pad && y < b.y + b.h - pad);
     }
     case "rect": {

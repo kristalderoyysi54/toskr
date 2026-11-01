@@ -1095,6 +1095,8 @@ export const api = {
     invoke("annotate_image", { file, ...note }),
   /** 光标在本屏的位置（本屏 pt），不在本屏为 null。 */
   /** forceCross：网页尚未收到指针事件时，原生侧顺带把光标设成十字。 */
+  /** 遮罩里输入文字时降层级，让输入法候选窗显示在遮罩之上。 */
+  screenshotTyping: (typing: boolean) => invoke("screenshot_typing", { typing }),
   screenshotCursor: (forceCross = false) => invoke<[number, number] | null>("screenshot_cursor", { forceCross }),
   /** 截图遮罩阶段追踪（只记白名单阶段名与数字，排查用）。 */
   screenshotTrace: (stage: string, a = 0, b = 0) =>

@@ -69,6 +69,18 @@ export function isMeaningful(s: Shape): boolean {
 
 export type CalloutShape = Extract<Shape, { kind: "callout" }>;
 
+/** 批注编号贴片高度（pt），按粗细档位。 */
+export const CALLOUT_TAG_H = [18, 22, 26];
+/** 批注框内的浅色底（与描边同色）。 */
+export const CALLOUT_TINT = 0.08;
+
+/** 批注编号贴片：嵌在框内左上角，只有右下角圆角；两位数加宽。 */
+export function calloutTag(s: { x1: number; y1: number; x2: number; y2: number; size: number }, n: number) {
+  const b = box(s);
+  const h = CALLOUT_TAG_H[s.size] ?? CALLOUT_TAG_H[1];
+  return { x: b.x, y: b.y, w: n >= 10 ? Math.round(h * 1.4) : h, h, r: Math.round(h * 0.35) };
+}
+
 /** 批注编号：按在图形列表里的先后，从 1 起；删掉一条后后面的自动补齐。 */
 export function calloutNumbers(shapes: Shape[]): Map<Shape, number> {
   const out = new Map<Shape, number>();
@@ -272,8 +284,20 @@ export function drawShapes(
       drawBadge(ctx, s.x, s.y, NUMBER_RADIUS[s.size], s.color, s.n);
     } else if (s.kind === "callout") {
       const b = box(s);
+      ctx.globalAlpha = CALLOUT_TINT;
+      ctx.fillRect(b.x, b.y, b.w, b.h);
+      ctx.globalAlpha = 1;
       ctx.strokeRect(b.x, b.y, b.w, b.h);
-      drawBadge(ctx, b.x, b.y, NUMBER_RADIUS[s.size], s.color, callouts.get(s) ?? 1);
+      const n = callouts.get(s) ?? 1;
+      const tag = calloutTag(s, n);
+      ctx.beginPath();
+      ctx.roundRect(tag.x, tag.y, tag.w, tag.h, [0, 0, tag.r, 0]);
+      ctx.fill();
+      ctx.fillStyle = numberTextColor(s.color);
+      ctx.font = `700 ${Math.round(tag.h * 0.62)}px -apple-system, BlinkMacSystemFont, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(String(n), tag.x + tag.w / 2, tag.y + tag.h / 2 + 0.5);
     }
     ctx.restore();
   }

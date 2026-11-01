@@ -1,10 +1,12 @@
 import { useEffect, useRef } from "react";
 
+import { floatingSurface } from "@/components/ui/floating-surface";
 import { useT } from "@/lib/i18n";
-import { box, calloutNumbers, NUMBER_RADIUS, type NoteDraft, type Shape } from "@/lib/screenshot/annotate";
+import { box, calloutNumbers, calloutTag, numberTextColor, type NoteDraft, type Shape } from "@/lib/screenshot/annotate";
+import { cn } from "@/lib/utils";
 
 /**
- * 批注说明层：已填写的说明以小标签显示在编号旁（只在编辑时显示，不画进出图），
+ * 批注说明层：已填写的说明以浅色标签贴在编号贴片右侧（只在编辑时显示，不画进出图），
  * 正在填写时在框下方显示输入框（Enter / Esc 完成）。z 为 pt → 屏上像素比。
  */
 export function ShotCallouts({
@@ -35,15 +37,14 @@ export function ShotCallouts({
         if (s.kind !== "callout" || !s.note.trim() || s === editingShape || (draft && !draft.orig && s === shapes.at(-1))) {
           return null;
         }
-        const b = box(s);
-        const r = NUMBER_RADIUS[s.size];
+        const tag = calloutTag(s, n);
         return (
           <div
             key={n}
-            className="pointer-events-none absolute max-w-60 truncate rounded-md bg-black/70 px-1.5 py-0.5 text-label text-white"
-            style={{ left: (b.x + r + 4) * z, top: (b.y - r) * z }}
+            className={cn(floatingSurface(), "pointer-events-none absolute flex max-w-60 items-center rounded-r-md px-1.5 text-label")}
+            style={{ left: (tag.x + tag.w) * z, top: tag.y * z, height: tag.h * z }}
           >
-            {s.note}
+            <span className="truncate">{s.note}</span>
           </div>
         );
       })}
@@ -53,14 +54,14 @@ export function ShotCallouts({
           const n = numbers.get(shapes.find((s) => s.kind === "callout" && s.x1 === draft.shape.x1 && s.y1 === draft.shape.y1) ?? draft.shape) ?? numbers.size;
           return (
             <div
-              className="absolute flex w-64 items-center gap-1.5 rounded-full bg-black/75 py-1 pl-1 pr-3 shadow-md"
+              className={cn(floatingSurface(), "absolute flex w-64 items-center gap-2 overflow-hidden rounded-md pr-2")}
               style={{ left: b.x * z, top: (b.y + b.h) * z + 6 }}
               onPointerDown={(e) => e.stopPropagation()}
               onDoubleClick={(e) => e.stopPropagation()}
             >
               <span
-                className="flex size-5 shrink-0 items-center justify-center rounded-full text-label font-bold"
-                style={{ background: draft.shape.color }}
+                className="flex h-7 min-w-7 shrink-0 items-center justify-center rounded-br-md px-1 text-label font-bold"
+                style={{ background: draft.shape.color, color: numberTextColor(draft.shape.color) }}
               >
                 {n}
               </span>
@@ -77,7 +78,7 @@ export function ShotCallouts({
                     onCommit();
                   }
                 }}
-                className="min-w-0 flex-1 bg-transparent text-body text-white outline-none placeholder:text-white/50"
+                className="min-w-0 flex-1 bg-transparent text-body text-foreground outline-none placeholder:text-muted-foreground"
               />
             </div>
           );

@@ -302,6 +302,7 @@ pub fn run() {
             commands::screenshot_session,
             commands::screenshot_frame,
             commands::screenshot_cursor,
+            commands::screenshot_typing,
             commands::screenshot_commit,
             commands::screenshot_cancel,
             commands::screenshot_long,

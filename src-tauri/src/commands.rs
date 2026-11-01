@@ -603,6 +603,12 @@ pub fn set_screenshot_hotkey(app: AppHandle, shortcut: Option<String>) -> Result
     rebind_global_hotkeys(&app)
 }
 
+/// 截图遮罩里输入文字时降层级，避免挡住输入法候选窗。
+#[tauri::command]
+pub fn screenshot_typing(window: tauri::WebviewWindow, typing: bool) {
+    crate::screenshot::set_typing(&window, typing);
+}
+
 /// 截图功能总开关（「更多功能」）：同步托盘入口。
 #[tauri::command]
 pub fn set_screenshot_enabled(app: AppHandle, enabled: bool) {
