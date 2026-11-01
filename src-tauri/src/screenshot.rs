@@ -466,6 +466,10 @@ fn show_overlay(app: &AppHandle, i: usize, b: RectPt, session_id: u64, focus: bo
     let _ = window.show();
     if focus {
         let _ = window.set_focus();
+        // 激活本应用：遮罩一出现就收得到指针事件，十字光标立即生效（不用先点一下）；
+        // 在指针移动、网页接管光标前先设系统十字光标
+        crate::focus::activate_pid(std::process::id() as i32);
+        objc2_app_kit::NSCursor::crosshairCursor().set();
     }
     let _ = window.emit_to(&label, SESSION_EVENT, session_id);
 }
@@ -1061,6 +1065,50 @@ pub fn recognize(width: usize, height: usize, rgba: &[u8]) -> Result<Vec<OcrLine
 }
 
 /// 文字面板「存入剪贴」：结束会话，复制并存入「剪贴」。
+/// 取色：色值写剪贴板并存入「剪贴」（来源记截图前的前台应用），遮罩不关。
+pub fn copy_color(app: &AppHandle, hex: String) -> Result<(), String> {
+    let valid =
+        hex.len() == 7 && hex.starts_with('#') && hex[1..].chars().all(|c| c.is_ascii_hexdigit());
+    if !valid {
+        return Err("invalid color".into());
+    }
+    let front = SESSION
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|s| s.front.clone());
+    {
+        let _permit = crate::pasteboard::try_claim(app).ok_or_else(|| {
+            pick(
+                "剪贴板事务进行中，请稍后重试",
+                "Clipboard is busy. Try again shortly",
+            )
+            .to_string()
+        })?;
+        let count = crate::pasteboard::write_general_text(&hex).map_err(|e| e.to_string())?;
+        crate::clipwatch::mark_self_write_count(app, count);
+    }
+    crate::diag::push(app, format!("截图取色存入剪贴 {hex}"));
+    let (app_name, bundle_id) = source_of(front.as_ref());
+    app.emit_to(
+        "main",
+        CLIP_EVENT,
+        ClipPayload {
+            content_kind: "text".into(),
+            text: hex,
+            html: None,
+            source_url: None,
+            captured_at_ms: crate::target::now_ms(),
+            image_file: None,
+            image_w: None,
+            image_h: None,
+            app_name,
+            bundle_id,
+        },
+    )
+    .map_err(|e| e.to_string())
+}
+
 pub fn save_text(app: &AppHandle, text: String) -> Result<(), String> {
     if text.trim().is_empty() {
         return Err("empty text".into());

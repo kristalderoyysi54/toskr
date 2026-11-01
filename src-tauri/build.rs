@@ -36,6 +36,7 @@ const COMMANDS: &[&str] = &[
     "screenshot_ocr",
     "screenshot_request_sections",
     "screenshot_save_text",
+    "screenshot_copy_color",
     "screenshot_translate",
     "long_preview_image",
     "long_finish",

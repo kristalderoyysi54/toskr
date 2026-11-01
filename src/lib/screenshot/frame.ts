@@ -1,27 +1,32 @@
 /** 截图出图的圆角与阴影（参照 iShot）：圆角外透明，阴影向四周留出透明边距。 */
 
-/** 阴影边距（pt）。 */
-export const SHADOW_PAD = 24;
 /** 圆角上限（pt）。 */
-export const MAX_RADIUS = 32;
-
-/** 圆角 / 阴影边距外的背景：透明、白色、渐变。 */
-export type FrameBg = "none" | "white" | "gradient";
-export const FRAME_BGS: FrameBg[] = ["none", "white", "gradient"];
-// token-exception: 背景画进出图像素，不随主题变化
-export const FRAME_GRADIENT = ["#8EC5FC", "#E0C3FC"] as const;
+export const MAX_RADIUS = 100;
+/** 阴影大小上限（pt）：即四周透明边距，0 = 无阴影。 */
+export const MAX_SHADOW = 60;
 
 /** 圆角不超过短边一半。 */
 export function clampRadius(r: number, w: number, h: number): number {
   return Math.max(0, Math.min(r, w / 2, h / 2));
 }
 
+/** 阴影几何（与屏上预览同源）：模糊半径与下移量随大小变化。 */
+export function shadowGeometry(size: number): { blur: number; offsetY: number } {
+  return { blur: size * 0.6, offsetY: size * 0.2 };
+}
+
+/** 屏上预览用的 CSS box-shadow。 */
+export function shadowCss(size: number): string {
+  const { blur, offsetY } = shadowGeometry(size);
+  // token-exception: 出图阴影预览，与像素一致
+  return `0 ${offsetY}px ${blur}px rgba(0,0,0,0.45)`;
+}
+
 /** 给 RGBA 图加圆角（像素）与阴影边距（像素，0 = 无阴影）。 */
 export function frameImage(
   img: { data: Uint8Array; w: number; h: number },
   radius: number,
-  pad: number,
-  bg: FrameBg = "none"
+  pad: number
 ): { data: Uint8Array; w: number; h: number } {
   const src = document.createElement("canvas");
   src.width = img.w;
@@ -39,24 +44,13 @@ export function frameImage(
     ctx.beginPath();
     ctx.roundRect(pad, pad, img.w, img.h, r);
   };
-  if (bg !== "none") {
-    if (bg === "white") {
-      // token-exception: 背景画进出图像素
-      ctx.fillStyle = "#FFFFFF";
-    } else {
-      const g = ctx.createLinearGradient(0, 0, w, h);
-      g.addColorStop(0, FRAME_GRADIENT[0]);
-      g.addColorStop(1, FRAME_GRADIENT[1]);
-      ctx.fillStyle = g;
-    }
-    ctx.fillRect(0, 0, w, h);
-  }
   if (pad > 0) {
+    const { blur, offsetY } = shadowGeometry(pad);
     ctx.save();
     // token-exception: 阴影画进出图像素，不随主题变化
-    ctx.shadowColor = "rgba(0,0,0,0.35)";
-    ctx.shadowBlur = pad * 0.6;
-    ctx.shadowOffsetY = pad * 0.2;
+    ctx.shadowColor = "rgba(0,0,0,0.45)";
+    ctx.shadowBlur = blur;
+    ctx.shadowOffsetY = offsetY;
     ctx.fillStyle = "#000";
     shape();
     ctx.fill();

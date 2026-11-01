@@ -14,7 +14,7 @@ import {
   useShotFrame,
   useShotStyle,
 } from "@/components/ShotToolParts";
-import { clampRadius, frameImage, SHADOW_PAD } from "@/lib/screenshot/frame";
+import { clampRadius, frameImage, shadowCss } from "@/lib/screenshot/frame";
 import { shapeAt } from "@/lib/screenshot/shapeEdit";
 import { floatingSurface } from "@/components/ui/floating-surface";
 import { NOTE_SECTIONS, type NoteSectionOption } from "@/lib/draftSection";
@@ -131,8 +131,8 @@ export default function LongShotView() {
       ctx.restore();
       const out = crop ? toPixelRect(crop, scale, scale, info.pxW, info.pxH) : { x: 0, y: 0, w: info.pxW, h: info.pxH };
       const raw = { data: new Uint8Array(ctx.getImageData(out.x, out.y, out.w, out.h).data.buffer), w: out.w, h: out.h };
-      const pad = frame.shadow ? Math.round(SHADOW_PAD * scale) : 0;
-      const img2 = frame.radius > 0 || pad > 0 ? frameImage(raw, frame.radius * scale, pad, frame.bg) : raw;
+      const pad = Math.round(frame.shadow * scale);
+      const img2 = frame.radius > 0 || pad > 0 ? frameImage(raw, frame.radius * scale, pad) : raw;
       setBusy(true);
       void api.longCommit(img2.data, img2.w, img2.h, action, sectionId).catch(() => setBusy(false));
     },
@@ -391,8 +391,11 @@ export default function LongShotView() {
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto bg-muted/40 p-4">
         <div
           ref={pageRef}
-          className={cn("relative mx-auto select-none", frame.shadow ? "shadow-2xl" : "shadow-md")}
-          style={{ width: ptW * z, height: ptH * z, cursor: hoverCursor ?? (tool ? (tool === "text" ? "text" : "crosshair") : "default") }}
+          className={cn("relative mx-auto select-none", !frame.shadow && "shadow-md")}
+          style={{
+            boxShadow: frame.shadow ? shadowCss(frame.shadow * z) : undefined,
+            borderRadius: clampRadius(frame.radius, ptW, ptH) * z,
+            width: ptW * z, height: ptH * z, cursor: hoverCursor ?? (tool ? (tool === "text" ? "text" : "crosshair") : "default") }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}

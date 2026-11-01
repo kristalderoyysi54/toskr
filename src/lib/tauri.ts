@@ -1029,6 +1029,8 @@ export const api = {
       headers: { "x-shot-w": String(width), "x-shot-h": String(height) },
     }),
   /** 遮罩文字面板：复制并存入「剪贴」，结束截图。 */
+  /** 截图取色：色值写剪贴板并存入「剪贴」（遮罩不关）。 */
+  screenshotCopyColor: (hex: string) => invoke("screenshot_copy_color", { hex }),
   screenshotSaveText: (text: string) => invoke("screenshot_save_text", { text }),
   /** 图内翻译：把各行文字（JSON 字符串数组）交主窗口用已配置的 AI 逐行翻译，结果经 SCREENSHOT_TRANSLATE_RESULT_EVENT 回来。 */
   screenshotTranslate: (requestId: string, text: string) =>

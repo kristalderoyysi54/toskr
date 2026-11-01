@@ -691,6 +691,12 @@ pub fn screenshot_request_sections(app: AppHandle, window: tauri::WebviewWindow)
     );
 }
 
+/// 遮罩取色（C 键）：色值复制并存入「剪贴」，不结束截图。
+#[tauri::command]
+pub fn screenshot_copy_color(app: AppHandle, hex: String) -> Result<(), String> {
+    crate::screenshot::copy_color(&app, hex)
+}
+
 /// 遮罩文字面板：文字复制并存入「剪贴」，结束截图。
 #[tauri::command]
 pub fn screenshot_save_text(app: AppHandle, text: String) -> Result<(), String> {

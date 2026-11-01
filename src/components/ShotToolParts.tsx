@@ -16,7 +16,7 @@ import {
 import { IconButton } from "@/components/ui/icon-button";
 import { useT, type MessageKey } from "@/lib/i18n";
 import { COLORS, SIZES, type SizeLevel, type Tool } from "@/lib/screenshot/annotate";
-import { FRAME_BGS, FRAME_GRADIENT, MAX_RADIUS, type FrameBg } from "@/lib/screenshot/frame";
+import { MAX_RADIUS, MAX_SHADOW } from "@/lib/screenshot/frame";
 import { cn } from "@/lib/utils";
 
 /** 截图遮罩与长图标注窗共用的标注工具；tip 为悬停说明。 */
@@ -128,45 +128,42 @@ export function useShotStyle() {
 const FRAME_KEY = "toskr.screenshotFrame";
 
 export interface ShotFrame {
+  /** 圆角（pt） */
   radius: number;
-  shadow: boolean;
-  bg: FrameBg;
+  /** 阴影大小（pt），0 = 无 */
+  shadow: number;
 }
 
+function loadFrame(): ShotFrame {
+  try {
+    const v = JSON.parse(localStorage.getItem(FRAME_KEY) ?? "{}") as { radius?: unknown; shadow?: unknown };
+    const num = (x: unknown, max: number) => (typeof x === "number" && x >= 0 ? Math.min(x, max) : 0);
+    // 旧版阴影是开关：true 折算为 24
+    return { radius: num(v.radius, MAX_RADIUS), shadow: v.shadow === true ? 24 : num(v.shadow, MAX_SHADOW) };
+  } catch {
+    return { radius: 0, shadow: 0 };
+  }
+}
+
+/** 出图圆角 / 阴影：记在本机，下次截图沿用；截图遮罩与标注窗之间实时同步。 */
 export function useShotFrame() {
-  const [frame, setFrame] = useState<ShotFrame>(() => {
-    try {
-      const v = JSON.parse(localStorage.getItem(FRAME_KEY) ?? "{}") as { radius?: unknown; shadow?: unknown; bg?: unknown };
-      return {
-        radius: typeof v.radius === "number" && v.radius >= 0 && v.radius <= 64 ? v.radius : 0,
-        shadow: v.shadow === true,
-        bg: FRAME_BGS.includes(v.bg as FrameBg) ? (v.bg as FrameBg) : "none",
-      };
-    } catch {
-      return { radius: 0, shadow: false, bg: "none" };
-    }
-  });
+  const [frame, setFrame] = useState<ShotFrame>(loadFrame);
   useEffect(() => {
     localStorage.setItem(FRAME_KEY, JSON.stringify(frame));
   }, [frame]);
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== FRAME_KEY) return;
+      const next = loadFrame();
+      setFrame((f) => (f.radius === next.radius && f.shadow === next.shadow ? f : next));
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
   return [frame, setFrame] as const;
 }
 
-const BG_LABEL: Record<FrameBg, MessageKey> = {
-  none: "透明背景",
-  white: "白色背景",
-  gradient: "渐变背景",
-};
-
-/** 背景色块的显示样式。 */
-function bgSwatch(bg: FrameBg) {
-  // token-exception: 背景色块预览（透明用棋盘格），与出图像素一致
-  if (bg === "white") return { background: "#FFFFFF" };
-  if (bg === "gradient") return { background: `linear-gradient(135deg, ${FRAME_GRADIENT[0]}, ${FRAME_GRADIENT[1]})` };
-  return { background: "repeating-conic-gradient(#d4d4d4 0 25%, #ffffff 0 50%) 0 0 / 6px 6px" };
-}
-
-/** 出图圆角滑块、阴影开关、背景（截图遮罩与长图 / 钉图标注窗共用）。 */
+/** 出图圆角与阴影滑块（截图遮罩与长图 / 钉图标注窗共用）。 */
 export function ShotFrameControls({
   frame,
   setFrame,
@@ -175,47 +172,38 @@ export function ShotFrameControls({
   setFrame: (update: (f: ShotFrame) => ShotFrame) => void;
 }) {
   const t = useT();
-  return (
-    <>
-      <span className="flex items-center gap-1" data-tip={t("圆角：出图四角裁成圆角")}>
-        <SquareRoundCorner className="size-3.5 text-muted-foreground" />
+  const slider = (
+    key: keyof ShotFrame,
+    icon: LucideIcon,
+    label: MessageKey,
+    tip: MessageKey,
+    max: number
+  ) => {
+    const Icon = icon;
+    return (
+      <span className="flex items-center gap-1" data-tip={t(tip)}>
+        <Icon className="size-3.5 text-muted-foreground" />
         <input
           type="range"
           min={0}
-          max={MAX_RADIUS}
+          max={max}
           step={2}
-          value={frame.radius}
-          aria-label={t("圆角")}
-          onChange={(e) => setFrame((f) => ({ ...f, radius: Number(e.target.value) }))}
+          value={frame[key]}
+          aria-label={t(label)}
+          onChange={(e) => {
+            const v = Number(e.target.value);
+            setFrame((f) => ({ ...f, [key]: v }));
+          }}
           className="w-20 accent-primary"
         />
-        <span className="w-5 font-mono text-label tabular-nums">{frame.radius}</span>
+        <span className="w-6 font-mono text-label tabular-nums">{frame[key]}</span>
       </span>
-      <TipButton
-        label={t("阴影")}
-        tip={t("阴影：出图四周加投影（带边距）")}
-        size="xs"
-        pressed={frame.shadow}
-        onClick={() => setFrame((f) => ({ ...f, shadow: !f.shadow }))}
-      >
-        <Layers2 />
-      </TipButton>
-      {(frame.shadow || frame.radius > 0) &&
-        FRAME_BGS.map((bg) => (
-          <button
-            key={bg}
-            type="button"
-            aria-label={t(BG_LABEL[bg])}
-            aria-pressed={frame.bg === bg}
-            data-tip={t("{bg}：圆角外与阴影边距的底色", { bg: t(BG_LABEL[bg]) })}
-            onClick={() => setFrame((f) => ({ ...f, bg }))}
-            className={cn(
-              "size-4 shrink-0 rounded-sm border border-border",
-              frame.bg === bg && "ring-2 ring-primary ring-offset-1 ring-offset-popover"
-            )}
-            style={bgSwatch(bg)}
-          />
-        ))}
+    );
+  };
+  return (
+    <>
+      {slider("radius", SquareRoundCorner, "圆角", "圆角：出图四角裁成圆角（外侧透明）", MAX_RADIUS)}
+      {slider("shadow", Layers2, "阴影", "阴影：出图四周加投影，数值为阴影大小（0 = 无）", MAX_SHADOW)}
     </>
   );
 }

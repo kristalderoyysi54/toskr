@@ -27,7 +27,7 @@ import {
   useShotFrame,
   useShotStyle,
 } from "@/components/ShotToolParts";
-import { clampRadius, frameImage, SHADOW_PAD } from "@/lib/screenshot/frame";
+import { clampRadius, frameImage, shadowCss } from "@/lib/screenshot/frame";
 import { shapeAt } from "@/lib/screenshot/shapeEdit";
 import { Button } from "@/components/ui/button";
 import { floatingSurface } from "@/components/ui/floating-surface";
@@ -91,8 +91,6 @@ type Drag =
 
 /** 选区上方圆角 / 阴影条的估计宽度（贴右边时左移）。 */
 const FRAME_BAR_W = 360;
-// token-exception: 截图十字延长线颜色（用户指定）
-const CROSSHAIR_COLOR = "#B3D934";
 /** C 键：按物理键位认（中文输入法下 e.key 是 Process）。 */
 function isKeyC(e: KeyboardEvent): boolean {
   return e.code === "KeyC" || e.key.toLowerCase() === "c";
@@ -429,9 +427,9 @@ export default function ScreenshotView() {
   const confirm = useCallback((action: ScreenshotAction = "save", sectionId?: string) => {
     const raw = exportImage();
     if (!raw || !sel) return;
-    const padPt = frame.shadow ? SHADOW_PAD : 0;
+    const padPt = frame.shadow;
     const out =
-      frame.radius > 0 || padPt > 0 ? frameImage(raw, frame.radius * sx, Math.round(padPt * sx), frame.bg) : raw;
+      frame.radius > 0 || padPt > 0 ? frameImage(raw, frame.radius * sx, Math.round(padPt * sx)) : raw;
     reset();
     // 带阴影时图四周多出透明边距，钉图位置相应左上移，图本身仍对齐原处
     const placement = { x: sel.x - padPt, y: sel.y - padPt };
@@ -561,7 +559,8 @@ export default function ScreenshotView() {
 
   const copyColor = useCallback(() => {
     if (!sampled) return;
-    void api.copyText(sampled).then(() => {
+    // 写剪贴板并存入「剪贴」，遮罩不关
+    void api.screenshotCopyColor(sampled).then(() => {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 900);
     });
@@ -885,7 +884,7 @@ export default function ScreenshotView() {
       <img src={img.src} alt="" draggable={false} className="pointer-events-none absolute inset-0 size-full" />
       {active ? (
         <div
-          className="pointer-events-none absolute"
+          className="pointer-events-none absolute outline outline-1 outline-primary"
           style={{
             left: active.x,
             top: active.y,
@@ -893,13 +892,10 @@ export default function ScreenshotView() {
             height: active.h,
             // 选区预览出图圆角
             borderRadius: sel ? clampRadius(frame.radius, active.w, active.h) : 0,
-            // token-exception: 选区白色细边 + 暗描边（iShot 式）、阴影预览、选区外 45% 黑压暗层
-            boxShadow: [
-              "0 0 0 1px rgba(255,255,255,0.95)",
-              "0 0 0 2px rgba(0,0,0,0.25)",
-              ...(sel && frame.shadow ? ["0 8px 24px 4px rgba(0,0,0,0.5)"] : []),
-              "0 0 0 99999px rgba(0,0,0,0.45)",
-            ].join(", "),
+            // token-exception: 阴影预览、选区外 45% 黑压暗层
+            boxShadow: [...(sel && frame.shadow ? [shadowCss(frame.shadow)] : []), "0 0 0 99999px rgba(0,0,0,0.45)"].join(
+              ", "
+            ),
           }}
         />
       ) : (
@@ -937,7 +933,7 @@ export default function ScreenshotView() {
           return (
             <div
               key={h}
-              className="pointer-events-none absolute size-2 rounded-full bg-white shadow-sm ring-1 ring-black/30"
+              className="pointer-events-none absolute size-2 rounded-full border border-primary bg-white"
               style={{ left: p.x - 4, top: p.y - 4 }}
             />
           );
@@ -1174,17 +1170,8 @@ export default function ScreenshotView() {
       {/* 光标十字延长线：贯穿全屏，便于对齐边缘（未选区与拖出选区时显示） */}
       {showLoupe && cursor && (
         <>
-          {/* 1px 黄绿线 + 极淡暗边 */}
-          <div
-            className="pointer-events-none absolute inset-x-0 h-px"
-            // token-exception: 十字线暗边
-            style={{ top: Math.round(cursor.y), background: CROSSHAIR_COLOR, boxShadow: "0 0 0 0.5px rgba(0,0,0,0.25)" }}
-          />
-          <div
-            className="pointer-events-none absolute inset-y-0 w-px"
-            // token-exception: 十字线暗边
-            style={{ left: Math.round(cursor.x), background: CROSSHAIR_COLOR, boxShadow: "0 0 0 0.5px rgba(0,0,0,0.25)" }}
-          />
+          <div className="pointer-events-none absolute inset-x-0 h-px bg-primary/70" style={{ top: Math.round(cursor.y) }} />
+          <div className="pointer-events-none absolute inset-y-0 w-px bg-primary/70" style={{ left: Math.round(cursor.x) }} />
         </>
       )}
 

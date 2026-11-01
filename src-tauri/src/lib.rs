@@ -304,6 +304,7 @@ pub fn run() {
             commands::screenshot_ocr,
             commands::screenshot_request_sections,
             commands::screenshot_save_text,
+            commands::screenshot_copy_color,
             commands::screenshot_translate,
             commands::long_preview_image,
             commands::long_finish,

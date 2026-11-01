@@ -19,6 +19,7 @@
     "allow-screenshot-ocr",
     "allow-screenshot-request-sections",
     "allow-screenshot-save-text",
+    "allow-screenshot-copy-color",
     "allow-screenshot-translate",
     "allow-copy-text"
   ]
