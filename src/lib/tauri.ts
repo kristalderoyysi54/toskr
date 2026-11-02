@@ -277,6 +277,8 @@ export interface HudOpenPanelPayload {
   settings?: string;
   /** 打开面板并唤起更新对话框（更新提醒气泡）。 */
   update?: boolean;
+  /** 捕获气泡：切到该笔记所在页并滚动定位、高亮。 */
+  noteId?: string;
 }
 
 export interface HudHoverPayload {
@@ -1280,7 +1282,8 @@ export const api = {
     warning?: string | null,
     associationSuggested = false,
     aliasRestoredCount: number | null = null,
-    autoLinked = false
+    autoLinked = false,
+    noteId: string | null = null
   ) => invoke("show_capture_hud", {
     kind,
     preview,
@@ -1288,6 +1291,7 @@ export const api = {
     associationSuggested,
     aliasRestoredCount,
     autoLinked,
+    noteId,
   }),
   hudFeedback: (
     kind: HudKind,

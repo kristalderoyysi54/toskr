@@ -1234,6 +1234,7 @@ pub fn show_capture_hud(
     association_suggested: bool,
     alias_restored_count: Option<u64>,
     auto_linked: bool,
+    note_id: Option<String>,
 ) {
     let (hud_kind, text, undoable) = capture_hud_feedback(
         &kind,
@@ -1258,7 +1259,11 @@ pub fn show_capture_hud(
             .arg("/System/Library/Sounds/Pop.aiff")
             .spawn();
     }
-    crate::window::show_hud(&app, hud_kind, text, undoable, false, None);
+    // 点击气泡定位到这条笔记（只带 id，不带正文；warn 气泡同样可带）
+    let target = note_id
+        .filter(|id| !id.is_empty())
+        .map(|id| format!("note:{id}"));
+    crate::window::show_hud(&app, hud_kind, text, undoable, false, target);
 }
 
 /// 双击触发行为下发：仅捕获 / 智能（无选中时开关面板）。
@@ -1478,6 +1483,12 @@ fn hud_action_event(
             else if let Some(section) = target.and_then(|id| id.strip_prefix("settings:")) {
                 json!({ "settings": section })
             } else if target == Some("page:secret") { json!({ "page": "secret" }) }
+            else if let Some(id) = target
+                .and_then(|id| id.strip_prefix("note:"))
+                .filter(|id| !id.is_empty())
+            {
+                json!({ "noteId": id })
+            }
             else { json!({}) };
             ("toskr://hud-open-panel", payload)
         }
@@ -2515,6 +2526,12 @@ mod tests {
         let (_, payload) =
             hud_action_event(HudAction::Open, Some("task-batch"), true, None).unwrap();
         assert_eq!(payload, serde_json::json!({ "page": "tasks", "taskId": null }));
+        let (_, payload) =
+            hud_action_event(HudAction::Open, Some("note:n-42"), false, None).unwrap();
+        assert_eq!(payload, serde_json::json!({ "noteId": "n-42" }));
+        let (_, payload) =
+            hud_action_event(HudAction::Open, Some("note:"), false, None).unwrap();
+        assert_eq!(payload, serde_json::json!({}));
     }
 
     #[test]

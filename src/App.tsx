@@ -1401,7 +1401,8 @@ export default function App() {
             captureWarning,
             associationSuggested,
             aliasRestoredCount,
-            autoLinked
+            autoLinked,
+            id ?? null
           );
         };
         void showCaptureResult();
@@ -1731,7 +1732,36 @@ export default function App() {
           lastEntry && matchesDataGeneration(lastEntry.dataGeneration)
             ? lastEntry.id
             : undefined;
-        if (lastId) flash(lastId);
+        const targetId = p.noteId ?? lastId;
+        const note = targetId
+          ? useNotesStore.getState().notes.find((n) => n.id === targetId)
+          : undefined;
+        if (note) {
+          // 捕获气泡：切到该笔记所在页（剪贴 / 秘文 / 笔记），清搜索、展开所在分组，
+          // 再聚焦高亮；面板可能刚唤起，等布局稳定后按 DOM 再滚动居中一次
+          const ui = useUIStore.getState();
+          if (note.sectionId === CLIPBOARD_ID) {
+            ui.setPage("clipboard");
+          } else if (note.sectionId === SECRET_ID || note.kind === "secret") {
+            ui.setPage("secret");
+          } else {
+            ui.setContentSubview("notes");
+            ui.setPage("notes");
+            const section = useNotesStore
+              .getState()
+              .sections.find((s) => s.id === note.sectionId);
+            if (section?.collapsed) {
+              useNotesStore.getState().toggleSectionCollapsed(section.id);
+            }
+          }
+          ui.setSearchOpen(false);
+          flash(note.id);
+          window.setTimeout(() => {
+            document
+              .querySelector(`[data-note-id="${window.CSS.escape(note.id)}"]`)
+              ?.scrollIntoView({ block: "center" });
+          }, 160);
+        }
       }
       if (!useUIStore.getState().open) void openPanel();
     });
@@ -1972,7 +2002,7 @@ export default function App() {
         if (action === "section") {
           const { sections } = useNotesStore.getState();
           const sectionId = resolveCaptureSectionId(sections, wanted);
-          const { result } = useNotesStore.getState().addNote(p.text, {
+          const { result, id } = useNotesStore.getState().addNote(p.text, {
             sectionId,
             sourceApp: p.appName ?? undefined,
             sourceBundle: p.bundleId ?? undefined,
@@ -1990,7 +2020,8 @@ export default function App() {
             null,
             false,
             null,
-            false
+            false,
+            id ?? null
           );
           return;
         }
