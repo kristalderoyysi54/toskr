@@ -397,6 +397,9 @@ fn restore_snapshot_if_count(
     write_objects(&pasteboard, &objects, expected_change_count)
 }
 
+/// 一次外部 ⌘C 允许产生的 changeCount 增量上限（Outlook 实测一次复制 +2）。
+pub(crate) const MAX_EXTERNAL_COPY_REVISIONS: isize = 3;
+
 pub struct PasteboardTransaction {
     target: PasteboardTarget,
     original: PasteboardSnapshot,
@@ -472,7 +475,9 @@ impl PasteboardTransaction {
         if self.restore_finished
             || self.wrote
             || self.ownership_lost
-            || observed_change_count != self.original.change_count.wrapping_add(1)
+            || !(1..=MAX_EXTERNAL_COPY_REVISIONS).contains(
+                &observed_change_count.wrapping_sub(self.original.change_count),
+            )
             || self.current_change_count() != observed_change_count
         {
             self.ownership_lost = true;

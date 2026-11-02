@@ -24,7 +24,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(20);
 #[derive(Default)]
 struct RevisionObservation {
     candidate: Option<isize>,
-    first_seen_attempt: Option<usize>,
+    last_change_attempt: Option<usize>,
     invalid: bool,
 }
 
@@ -39,17 +39,22 @@ enum CopyObservation {
 
 impl RevisionObservation {
     fn observe(&mut self, before: isize, current: isize, attempt: usize) {
-        if current == before || self.invalid {
+        if self.invalid
+            || (current == before && self.candidate.is_none())
+            || self.candidate == Some(current)
+        {
             return;
         }
-        // 一次复制只接受紧邻 before 的唯一 revision；跳号或再次变化均 fail-closed。
-        if current != before.wrapping_add(1)
-            || self.candidate.is_some_and(|candidate| candidate != current)
-        {
+        // 部分应用一次 ⌘C 会连写多次（实测 Microsoft Outlook revision_delta=2）。
+        // 只接受 before 之后单调前进、且不超过上限的 revision，取最终稳定值；
+        // 回退或超限均 fail-closed。来源可信度仍由前台身份 + 真实输入代数门兜底。
+        let delta = current.wrapping_sub(before);
+        let previous = self.candidate.map_or(0, |c| c.wrapping_sub(before));
+        if delta <= previous || delta > crate::pasteboard::MAX_EXTERNAL_COPY_REVISIONS {
             self.invalid = true;
             return;
         }
-        self.first_seen_attempt.get_or_insert(attempt);
+        self.last_change_attempt = Some(attempt);
         self.candidate = Some(current);
     }
 
@@ -57,7 +62,8 @@ impl RevisionObservation {
         if self.invalid {
             return CopyObservation::Invalid;
         }
-        match (self.candidate, self.first_seen_attempt) {
+        // 最后一次变化落在采纳窗之外 → 内容可能未写完，只恢复不采用。
+        match (self.candidate, self.last_change_attempt) {
             (Some(change_count), Some(attempt)) if attempt < acceptance_attempts => {
                 CopyObservation::Accepted(change_count)
             }
@@ -826,9 +832,33 @@ mod tests {
     }
 
     #[test]
-    fn unrelated_then_target_revisions_are_rejected() {
+    fn multi_write_copy_accepts_final_stable_revision() {
+        // Outlook：一次 ⌘C 连写两次 pasteboard。
+        for sequence in [vec![11, 12, 12], vec![12, 12], vec![10, 11, 11, 12]] {
+            let mut observation = RevisionObservation::default();
+            for (attempt, current) in sequence.into_iter().enumerate() {
+                observation.observe(10, current, attempt);
+            }
+            assert_eq!(
+                observation.finish(POLL_ATTEMPTS),
+                CopyObservation::Accepted(12)
+            );
+        }
+    }
+
+    #[test]
+    fn revisions_beyond_copy_limit_are_rejected() {
+        let limit = crate::pasteboard::MAX_EXTERNAL_COPY_REVISIONS;
         let mut observation = RevisionObservation::default();
-        for (attempt, current) in [11, 12, 12].into_iter().enumerate() {
+        observation.observe(10, 10 + limit + 1, 0);
+
+        assert_eq!(observation.finish(POLL_ATTEMPTS), CopyObservation::Invalid);
+    }
+
+    #[test]
+    fn revision_going_backwards_is_rejected() {
+        let mut observation = RevisionObservation::default();
+        for (attempt, current) in [12, 11].into_iter().enumerate() {
             observation.observe(10, current, attempt);
         }
 
@@ -836,13 +866,14 @@ mod tests {
     }
 
     #[test]
-    fn target_then_user_revisions_are_rejected() {
+    fn second_write_in_recovery_grace_is_late() {
         let mut observation = RevisionObservation::default();
-        for (attempt, current) in [11, 11, 12].into_iter().enumerate() {
+        for attempt in 0..(POLL_ATTEMPTS + RECOVERY_GRACE_ATTEMPTS) {
+            let current = if attempt < POLL_ATTEMPTS { 11 } else { 12 };
             observation.observe(10, current, attempt);
         }
 
-        assert_eq!(observation.finish(POLL_ATTEMPTS), CopyObservation::Invalid);
+        assert_eq!(observation.finish(POLL_ATTEMPTS), CopyObservation::Late(12));
     }
 
     #[test]
