@@ -91,6 +91,12 @@ export const settings = {
   "固定浅色、整窗不透明；切回 Toskr 恢复原主题与毛玻璃":
     "Always light and opaque. Switch back to Toskr to restore your theme and translucency",
   "Platinum 为 Mac OS 9 经典外观": "Platinum is the classic Mac OS 9 look",
+  "固定浅色；切回 Toskr 恢复深浅色设置": "Always light. Switch back to Toskr to restore your light/dark setting",
+  "纸墨": "Paper",
+  "抹茶": "Matcha",
+  "樱粉": "Sakura",
+  "雾蓝": "Fog",
+  "跟随下方主题设置切换浅色 / 深色": "Follows the theme setting below for light or dark",
   "高亮颜色": "Highlight color",
   "选中卡片与菜单高亮的颜色": "Color for selected cards and menu highlights",
   "薰衣草（默认）": "Lavender (Default)",

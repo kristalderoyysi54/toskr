@@ -3247,7 +3247,10 @@ pub(crate) fn validate_settings_value_for_version(
     for (key, allowed) in [
         ("language", &["system", "zh", "en"][..]),
         ("theme", &["system", "light", "dark"][..]),
-        ("colorScheme", &["default", "platinum"][..]),
+        (
+            "colorScheme",
+            &["default", "platinum", "paper", "matcha", "sakura", "fog"][..],
+        ),
         ("platinumHighlight", &["lavender", "blue", "teal", "graphite"][..]),
         ("platinumScrollbar", &["classic", "thin"][..]),
         (

@@ -1862,3 +1862,206 @@ html[data-theme="platinum"][data-pt-scrollbar="classic"] [data-slot="scroll-area
     linear-gradient(90deg, var(--pt-lav-hi), var(--pt-lav) 45%, var(--pt-lav-deep));
   box-shadow: inset 1px 1px 0 rgb(255 255 255 / 70%), inset -1px -1px 0 rgb(0 0 0 / 25%);
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   配色方案 · 纸墨 / 抹茶 / 樱粉（2026-11-02 用户从主题样张选定 04/12/13）
+   仅浅色（colorScheme 不挂 .dark）、保留毛玻璃，只换 token 不改组件结构。
+   主色 hue/chroma 一并改写，使依赖 --accent-hue 的派生色（选择柔光等）跟随。
+   ═══════════════════════════════════════════════════════════════ */
+:root:is([data-theme="paper"], [data-theme="matcha"], [data-theme="sakura"]) {
+  color-scheme: light;
+  --card-foreground: var(--foreground);
+  --popover-foreground: var(--foreground);
+  --secondary-foreground: var(--foreground);
+  --accent-foreground: var(--foreground);
+  --ring: var(--primary);
+  --primary-foreground: #ffffff;
+  --button-primary-foreground: var(--foreground);
+  --paper-foreground: var(--foreground);
+}
+:root[data-theme="paper"] {
+  --accent-hue: 60;
+  --accent-chroma: 0.08;
+  --background: #f7f2e8;
+  --foreground: #2a2620;
+  --card: #fffcf5;
+  --popover: #fffcf5;
+  --primary: #8a5a2b;
+  --secondary: #ece4d4;
+  --muted: #ece4d4;
+  --muted-foreground: #6e6353;
+  --accent: #ece4d4;
+  --border: #e3d9c7;
+  --input: #ddd2bf;
+  --button-primary: #fffcf5;
+  --button-primary-hover: #f3ecdd;
+  --button-primary-border: #d6cab4;
+  --segmented-thumb: #fffcf5;
+  --switch-track-off: #e2d8c6;
+  --switch-track-off-border: #d6cab4;
+  --paper: #f3dd9a;
+  --success: #4f7a3a;
+  --destructive: #b4442c;
+}
+:root[data-theme="matcha"] {
+  --accent-hue: 135;
+  --accent-chroma: 0.1;
+  --background: #f2f4ee;
+  --foreground: #232a20;
+  --card: #fbfcf8;
+  --popover: #fbfcf8;
+  --primary: #4f7a3a;
+  --secondary: #e4e9dc;
+  --muted: #e4e9dc;
+  --muted-foreground: #556050;
+  --accent: #e4e9dc;
+  --border: #dde3d4;
+  --input: #d3dbc8;
+  --button-primary: #fbfcf8;
+  --button-primary-hover: #eef1e8;
+  --button-primary-border: #cfd8c3;
+  --segmented-thumb: #fbfcf8;
+  --switch-track-off: #d7dfcc;
+  --switch-track-off-border: #cfd8c3;
+  --paper: #e7efb0;
+}
+:root[data-theme="sakura"] {
+  --accent-hue: 0;
+  --accent-chroma: 0.15;
+  --background: #fdf6f7;
+  --foreground: #2b1f23;
+  --card: #ffffff;
+  --popover: #ffffff;
+  --primary: #c2547a;
+  --secondary: #f6e6ea;
+  --muted: #f6e6ea;
+  --muted-foreground: #6e575d;
+  --accent: #f6e6ea;
+  --border: #f0dfe3;
+  --input: #ecd3da;
+  --button-primary: #ffffff;
+  --button-primary-hover: #fbf0f2;
+  --button-primary-border: #ead0d7;
+  --segmented-thumb: #ffffff;
+  --switch-track-off: #efdbe0;
+  --switch-track-off-border: #ead0d7;
+  --paper: #ffe0ea;
+}
+/* 材质变量挂在 data-material 元素上，需同层覆盖（三档材质统一为方案底色） */
+:root[data-theme="paper"] [data-material] {
+  --material-panel: 247 242 232;
+  --material-card-top: 255 252 245;
+  --material-card-middle: 255 252 245;
+  --material-card-bottom: 248 241 227;
+}
+:root[data-theme="matcha"] [data-material] {
+  --material-panel: 238 241 232;
+  --material-card-top: 251 252 248;
+  --material-card-middle: 251 252 248;
+  --material-card-bottom: 244 247 239;
+}
+:root[data-theme="sakura"] [data-material] {
+  --material-panel: 251 240 242;
+  --material-card-top: 255 255 255;
+  --material-card-middle: 255 255 255;
+  --material-card-bottom: 252 244 246;
+}
+/* 资产牌通栏：去掉高饱和渐变，改为方案内的低饱和实色 */
+:root[data-theme="paper"] .asset-band {
+  background-image: none;
+  background-color: color-mix(in srgb, var(--band-tint) 18%, #e9dcc3);
+  color: #4a3a28;
+}
+:root[data-theme="matcha"] .asset-band {
+  background-image: none;
+  background-color: color-mix(in srgb, var(--band-tint) 30%, #8aa57a);
+}
+:root[data-theme="sakura"] .asset-band {
+  background-image: none;
+  background-color: color-mix(in srgb, var(--band-tint) 30%, #d898ad);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   配色方案 · 雾蓝（2026-11-02 用户追加选定样张 11）
+   仅深色：colorScheme 恒挂 .dark，下列 token 覆盖 .dark 默认值；保留毛玻璃。
+   ═══════════════════════════════════════════════════════════════ */
+:root.dark[data-theme="fog"] {
+  color-scheme: dark;
+  --accent-hue: 215;
+  --accent-chroma: 0.07;
+  --background: #2b303b;
+  --foreground: #e5e9f0;
+  --card: #353b48;
+  --card-foreground: #e5e9f0;
+  --popover: #353b48;
+  --popover-foreground: #e5e9f0;
+  --primary: #88c0d0;
+  --primary-foreground: #1f242d;
+  --secondary: #3b4252;
+  --secondary-foreground: #e5e9f0;
+  --muted: #3b4252;
+  --muted-foreground: #a3abba;
+  --accent: #3b4252;
+  --accent-foreground: #e5e9f0;
+  --destructive: #d08770;
+  --border: rgb(229 233 240 / 10%);
+  --input: rgb(229 233 240 / 14%);
+  --ring: #88c0d0;
+  --success: #a3be8c;
+  --warning: #ebcb8b;
+  --info: #81a1c1;
+  --paper: #d8dee9;
+  --paper-foreground: #2b303b;
+  --button-primary: #d8dee9;
+  --button-primary-hover: #c8d0dc;
+  --button-primary-foreground: #2b303b;
+  --segmented-thumb: #4c566a;
+  --switch-track-off: #4c566a;
+  --switch-track-off-border: rgb(229 233 240 / 12%);
+}
+:root.dark[data-theme="fog"] [data-material] {
+  --material-panel: 43 48 59;
+  --material-card-top: 53 59 72;
+  --material-card-middle: 53 59 72;
+  --material-card-bottom: 48 54 66;
+}
+/* 雾蓝 · 浅色版（2026-11-02）：跟随「主题」设置；不挂 .dark 时生效 */
+:root[data-theme="fog"]:not(.dark) {
+  color-scheme: light;
+  --accent-hue: 245;
+  --accent-chroma: 0.08;
+  --background: #eceff4;
+  --foreground: #2e3440;
+  --card: #f8f9fb;
+  --card-foreground: #2e3440;
+  --popover: #f8f9fb;
+  --popover-foreground: #2e3440;
+  --primary: #5e81ac;
+  --primary-foreground: #ffffff;
+  --secondary: #e2e6ee;
+  --secondary-foreground: #2e3440;
+  --muted: #e2e6ee;
+  --muted-foreground: #4c566a;
+  --accent: #e2e6ee;
+  --accent-foreground: #2e3440;
+  --destructive: #bf616a;
+  --border: #d8dee9;
+  --input: #cdd4e0;
+  --ring: #5e81ac;
+  --success: #6a8a52;
+  --paper: #e5e9f0;
+  --paper-foreground: #2e3440;
+  --button-primary: #f8f9fb;
+  --button-primary-hover: #e5e9f0;
+  --button-primary-foreground: #2e3440;
+  --button-primary-border: #cdd4e0;
+  --segmented-thumb: #f8f9fb;
+  --switch-track-off: #d8dee9;
+  --switch-track-off-border: #cdd4e0;
+}
+:root[data-theme="fog"]:not(.dark) [data-material] {
+  --material-panel: 229 233 240;
+  --material-card-top: 248 249 251;
+  --material-card-middle: 248 249 251;
+  --material-card-bottom: 240 243 247;
+}

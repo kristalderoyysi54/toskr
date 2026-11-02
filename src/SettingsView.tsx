@@ -140,7 +140,7 @@ async function requestStorageRecoveryAction(
 import { tip } from "@/lib/tip";
 import { checkForUpdate, downloadAndInstall } from "@/lib/updater";
 import { cn } from "@/lib/utils";
-import { getColorScheme, useColorScheme } from "@/lib/colorScheme";
+import { followsThemePref, getColorScheme, useColorScheme } from "@/lib/colorScheme";
 import { intlLocale, t, tNode, useLocale, useT, type LanguagePref, type MessageKey } from "@/lib/i18n";
 import { timeAgo } from "@/lib/media";
 import {
@@ -1126,6 +1126,8 @@ export function GeneralSection({ settings, patch, searchId = null, searchSequenc
 
   // 方案在前决定下方可选项：Platinum 固定浅色且停用毛玻璃，主题与毛玻璃行换成 Platinum 细项
   const platinum = settings.colorScheme === "platinum";
+  // 仅浅色方案（Platinum/纸墨/抹茶/樱粉）：深浅色行无效果故隐藏；Toskr 与雾蓝保留
+  const fixedTone = !followsThemePref(settings.colorScheme);
 
   return (
     <div>
@@ -1151,17 +1153,27 @@ export function GeneralSection({ settings, patch, searchId = null, searchSequenc
           hint={
             platinum
               ? t("固定浅色、整窗不透明；切回 Toskr 恢复原主题与毛玻璃")
-              : t("Platinum 为 Mac OS 9 经典外观")
+              : fixedTone
+                  ? t("固定浅色；切回 Toskr 恢复深浅色设置")
+                : settings.colorScheme === "fog"
+                  ? t("跟随下方主题设置切换浅色 / 深色")
+                  : t("Platinum 为 Mac OS 9 经典外观")
           }
           right={
-            <Segmented<ColorScheme>
+            <SimpleSelect<ColorScheme>
+              ariaLabel={t("配色方案")}
+              className="w-36"
+              align="end"
               value={settings.colorScheme}
               options={[
                 { value: "default", label: "Toskr" },
                 { value: "platinum", label: "Platinum" },
+                { value: "paper", label: t("纸墨") },
+                { value: "matcha", label: t("抹茶") },
+                { value: "sakura", label: t("樱粉") },
+                { value: "fog", label: t("雾蓝") },
               ]}
               onChange={(v) => patch({ colorScheme: v })}
-              ariaLabel={t("配色方案")}
             />
           }
         />
@@ -1200,7 +1212,7 @@ export function GeneralSection({ settings, patch, searchId = null, searchSequenc
               }
             />
           </>
-        ) : (
+        ) : fixedTone ? null : (
           <Row
             label={t("主题")}
             right={

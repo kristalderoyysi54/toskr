@@ -60,6 +60,34 @@ describe("colorScheme", () => {
     expect(nativeVibrancy({ vibrancy: false, colorScheme: "default" })).toBe(false);
   });
 
+  it("雾蓝：浅深两版跟随主题设置，保留毛玻璃", () => {
+    expect(nativeWindowTheme({ theme: "light", colorScheme: "fog" })).toBe("light");
+    expect(nativeWindowTheme({ theme: "dark", colorScheme: "fog" })).toBe("dark");
+    expect(nativeWindowTheme({ theme: "system", colorScheme: "fog" })).toBe("system");
+    expect(nativeVibrancy({ vibrancy: true, colorScheme: "fog" })).toBe(true);
+    for (const systemDark of [false, true]) {
+      const { root, classes } = stubDom(systemDark, JSON.stringify({ ...DEFAULT_APPEARANCE, scheme: "fog" }));
+      installColorScheme();
+      expect(root.dataset.theme).toBe("fog");
+      expect(classes.has("dark")).toBe(systemDark);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("纸墨/抹茶/樱粉：强制原生浅色、保留毛玻璃，挂 data-theme 不挂 .dark 与 Platinum 细项", () => {
+    for (const scheme of ["paper", "matcha", "sakura"] as const) {
+      expect(nativeWindowTheme({ theme: "dark", colorScheme: scheme })).toBe("light");
+      expect(nativeVibrancy({ vibrancy: true, colorScheme: scheme })).toBe(true);
+      expect(normalizeColorScheme(scheme)).toBe(scheme);
+      const { root, classes } = stubDom(true, JSON.stringify({ ...DEFAULT_APPEARANCE, scheme }));
+      installColorScheme();
+      expect(root.dataset.theme).toBe(scheme);
+      expect(root.dataset.ptHighlight).toBeUndefined();
+      expect(classes.has("dark")).toBe(false);
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("外观归一：兼容旧的方案字符串缓存，未知值与损坏缓存回落默认", () => {
     expect(normalizeColorScheme("aqua")).toBe("default");
     expect(normalizeAppearance("platinum")).toEqual({ ...DEFAULT_APPEARANCE, scheme: "platinum" });

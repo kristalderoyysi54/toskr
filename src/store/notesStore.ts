@@ -388,8 +388,12 @@ export const SECTION_COLORS = [
 ];
 
 export type ThemePref = "system" | "light" | "dark";
-/** 配色方案：default = Toskr 毛玻璃；platinum = Mac OS 9 Platinum（仅浅色、整窗不透明）。 */
-export type ColorScheme = "default" | "platinum";
+/**
+ * 配色方案：default = Toskr 毛玻璃；platinum = Mac OS 9 Platinum（仅浅色、整窗不透明）；
+ * paper / matcha / sakura = 纸墨 / 抹茶 / 樱粉（仅浅色、保留毛玻璃，只换 token）；
+ * fog = 雾蓝（仅深色、保留毛玻璃，只换 token）。
+ */
+export type ColorScheme = "default" | "platinum" | "paper" | "matcha" | "sakura" | "fog";
 /** Platinum 高亮色（Mac OS 9 外观控制面板的 Highlight Color）。 */
 export type PlatinumHighlight = "lavender" | "blue" | "teal" | "graphite";
 /** Platinum 滚动条：经典 16px 带箭头 / 沿用细条。 */
@@ -1401,7 +1405,7 @@ function validateSettingsShape(value: unknown, version: number): void {
   };
   enumField("language", ["system", "zh", "en"]);
   enumField("theme", ["system", "light", "dark"]);
-  enumField("colorScheme", ["default", "platinum"]);
+  enumField("colorScheme", ["default", "platinum", "paper", "matcha", "sakura", "fog"]);
   enumField("platinumHighlight", ["lavender", "blue", "teal", "graphite"]);
   enumField("platinumScrollbar", ["classic", "thin"]);
   enumField("vibrancyMaterial", ["hud", "popover", "sidebar", "under-window", "fullscreen", "liquid"]);

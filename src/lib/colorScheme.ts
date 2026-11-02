@@ -30,7 +30,7 @@ export const DEFAULT_APPEARANCE: Appearance = {
   scrollbar: "classic",
 };
 
-const SCHEMES: readonly ColorScheme[] = ["default", "platinum"];
+const SCHEMES: readonly ColorScheme[] = ["default", "platinum", "paper", "matcha", "sakura", "fog"];
 const HIGHLIGHTS: readonly PlatinumHighlight[] = ["lavender", "blue", "teal", "graphite"];
 const SCROLLBARS: readonly PlatinumScrollbar[] = ["classic", "thin"];
 
@@ -72,9 +72,12 @@ export function appearanceFromSettings(
   });
 }
 
-/** Platinum 只有浅色外观：原生窗口主题强制浅色，否则系统控件与 WebView 配色会分裂。 */
+/** 有浅深两版、跟随「主题」设置的方案；其余（Platinum/纸墨/抹茶/樱粉）仅浅色。 */
+export const followsThemePref = (scheme: ColorScheme) => scheme === "default" || scheme === "fog";
+
+/** 仅浅色的方案强制原生浅色，否则系统控件与 WebView 配色会分裂。 */
 export function nativeWindowTheme(settings: Pick<Settings, "theme" | "colorScheme">): ThemePref {
-  return settings.colorScheme === "platinum" ? "light" : settings.theme;
+  return followsThemePref(settings.colorScheme) ? settings.theme : "light";
 }
 
 /** Platinum 整窗不透明：毛玻璃被完全遮住，停用可免掉 14pt 圆角的模糊底板。 */
@@ -88,17 +91,18 @@ const subscribers = new Set<() => void>();
 
 function render() {
   const root = document.documentElement;
-  const platinum = current.scheme === "platinum";
-  if (platinum) {
-    root.dataset.theme = current.scheme;
+  const isDefault = current.scheme === "default";
+  if (isDefault) delete root.dataset.theme;
+  else root.dataset.theme = current.scheme;
+  if (current.scheme === "platinum") {
     root.dataset.ptHighlight = current.highlight;
     root.dataset.ptScrollbar = current.scrollbar;
   } else {
-    delete root.dataset.theme;
     delete root.dataset.ptHighlight;
     delete root.dataset.ptScrollbar;
   }
-  root.classList.toggle("dark", !platinum && Boolean(media?.matches));
+  // 仅浅色方案下系统深色也不挂 .dark
+  root.classList.toggle("dark", followsThemePref(current.scheme) && Boolean(media?.matches));
 }
 
 export function applyAppearance(next: Appearance) {
