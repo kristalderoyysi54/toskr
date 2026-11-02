@@ -12,6 +12,8 @@ import {
   NUMBER_RADIUS,
   numberTextColor,
   SPOTLIGHT_DIM,
+  TEXT_FONT_FAMILY,
+  TEXT_LINE_HEIGHT,
   TRANSLATE_PAD,
   type Shape,
 } from "@/lib/screenshot/annotate";
@@ -166,17 +168,16 @@ function ShapeEl({ s, n }: { s: Shape; n?: number }) {
     case "text": {
       const fs = FONT_SIZE[s.size];
       return (
-        <text
-          x={s.x}
-          y={s.y}
-          fill={s.color}
-          fontSize={fs}
-          fontWeight={600}
-          fontFamily='-apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif'
-          dominantBaseline="text-before-edge"
-        >
+        <text fill={s.color} fontSize={fs} fontWeight={600} fontFamily={TEXT_FONT_FAMILY}>
+          {/* WKWebView 实测：<text> 上的 dominant-baseline 不下传给 <tspan>，
+              写在父级会让文字整行上移（字号 24 时约 23pt），必须逐行设置 */}
           {s.text.split("\n").map((line, i) => (
-            <tspan key={i} x={s.x} dy={i ? fs * 1.25 : 0}>
+            <tspan
+              key={i}
+              x={s.x}
+              y={s.y + i * fs * TEXT_LINE_HEIGHT}
+              dominantBaseline="text-before-edge"
+            >
               {line}
             </tspan>
           ))}

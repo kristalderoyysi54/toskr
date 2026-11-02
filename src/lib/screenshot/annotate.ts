@@ -49,6 +49,25 @@ export const SIZES = [0, 1, 2] as const;
 export type SizeLevel = (typeof SIZES)[number];
 export const LINE_WIDTH = [2, 4, 6];
 export const FONT_SIZE = [14, 18, 24];
+/** 文字标注字体：出图 canvas、屏上 SVG 与输入框共用。 */
+export const TEXT_FONT_FAMILY = '-apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif';
+/** 文字标注行高倍数。 */
+export const TEXT_LINE_HEIGHT = 1.25;
+
+let measureCtx: CanvasRenderingContext2D | null | undefined;
+/** 文字行宽（pt）：按出图同款字体实测；无 canvas 环境（单测）按 CJK 1 / 其他 0.6 个字号粗估。 */
+export function textLineWidth(line: string, fs: number): number {
+  if (measureCtx === undefined) {
+    measureCtx = typeof document === "undefined" ? null : document.createElement("canvas").getContext("2d");
+  }
+  if (measureCtx) {
+    measureCtx.font = `600 ${fs}px ${TEXT_FONT_FAMILY}`;
+    return measureCtx.measureText(line).width;
+  }
+  let w = 0;
+  for (const ch of line) w += ch.charCodeAt(0) >= 0x2e80 ? 1 : 0.6;
+  return w * fs;
+}
 export const NUMBER_RADIUS = [10, 13, 16];
 /** 聚光灯区域外的压暗程度。 */
 export const SPOTLIGHT_DIM = "rgba(0,0,0,0.55)";
@@ -292,9 +311,9 @@ export function drawShapes(
       ctx.stroke();
     } else if (s.kind === "text") {
       const fs = FONT_SIZE[s.size];
-      ctx.font = `600 ${fs}px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif`;
+      ctx.font = `600 ${fs}px ${TEXT_FONT_FAMILY}`;
       ctx.textBaseline = "top";
-      s.text.split("\n").forEach((line, i) => ctx.fillText(line, s.x, s.y + i * fs * 1.25));
+      s.text.split("\n").forEach((line, i) => ctx.fillText(line, s.x, s.y + i * fs * TEXT_LINE_HEIGHT));
     } else if (s.kind === "number") {
       drawBadge(ctx, s.x, s.y, NUMBER_RADIUS[s.size], s.color, s.n);
     } else if (s.kind === "callout") {

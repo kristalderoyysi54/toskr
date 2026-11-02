@@ -24,6 +24,9 @@ import {
   drawShapes,
   emptyHistory,
   FONT_SIZE,
+  TEXT_FONT_FAMILY,
+  TEXT_LINE_HEIGHT,
+  textLineWidth,
   nextNumber,
   dragEnd,
   pushShape,
@@ -526,9 +529,11 @@ export default function LongShotView() {
                 top: editing.y * z,
                 color: editing.color,
                 fontSize: FONT_SIZE[editing.size] * z,
-                lineHeight: 1.25,
+                fontFamily: TEXT_FONT_FAMILY,
+                lineHeight: TEXT_LINE_HEIGHT,
+                whiteSpace: "pre",
                 minWidth: 40,
-                width: Math.max(40, ...editing.text.split("\n").map((l) => l.length * FONT_SIZE[editing.size] * z * 0.9 + 12)),
+                width: Math.max(40, ...editing.text.split("\n").map((l) => textLineWidth(l, FONT_SIZE[editing.size]) * z + 12)),
               }}
             />
           )}

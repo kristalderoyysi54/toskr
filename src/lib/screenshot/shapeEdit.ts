@@ -1,6 +1,6 @@
 /** 已画标注的选中与调整：命中、手柄、移动 / 缩放。坐标与图形同系（pt）。 */
 
-import { box, calloutTag, FONT_SIZE, LINE_WIDTH, NUMBER_RADIUS, type Shape } from "./annotate";
+import { box, calloutTag, FONT_SIZE, LINE_WIDTH, NUMBER_RADIUS, TEXT_LINE_HEIGHT, textLineWidth, type Shape } from "./annotate";
 import { handlePoint, HANDLES, resizeRect, type Handle, type Rect } from "./geometry";
 
 export type Editable = Exclude<Shape, { kind: "translate" }>;
@@ -11,13 +11,6 @@ export type EditHandle = Handle | "start" | "end";
 /** 可拖手柄改框的图形（箭头改端点，其余只能整体移动）。 */
 export function isBox(s: Shape): s is BoxShape {
   return s.kind === "rect" || s.kind === "ellipse" || s.kind === "mosaic" || s.kind === "spotlight" || s.kind === "callout";
-}
-
-/** 粗估文字宽度：CJK 记 1 个字号宽，其余 0.6。 */
-function textWidth(line: string, fs: number): number {
-  let w = 0;
-  for (const ch of line) w += ch.charCodeAt(0) >= 0x2e80 ? 1 : 0.6;
-  return w * fs;
 }
 
 /** 图形外接框；图内翻译不可编辑，返回 null。 */
@@ -36,7 +29,7 @@ export function shapeBounds(s: Shape): Rect | null {
     case "text": {
       const fs = FONT_SIZE[s.size];
       const lines = s.text.split("\n");
-      return { x: s.x, y: s.y, w: Math.max(fs, ...lines.map((l) => textWidth(l, fs))), h: lines.length * fs * 1.25 };
+      return { x: s.x, y: s.y, w: Math.max(fs, ...lines.map((l) => textLineWidth(l, fs))), h: lines.length * fs * TEXT_LINE_HEIGHT };
     }
     case "number": {
       const r = NUMBER_RADIUS[s.size];
