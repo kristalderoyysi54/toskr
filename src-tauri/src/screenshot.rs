@@ -1409,7 +1409,8 @@ pub(crate) fn save(
         let (app_name, bundle_id) = source_of(front);
         let clip = ClipPayload {
             content_kind: "image".into(),
-            text: caption.unwrap_or_else(|| crate::tr_fmt!("截图 {w}×{h}", "Screenshot {w}×{h}")),
+            // 无批注说明时写与划词/剪贴板图片相同的占位，前端 imageCaption 识别后不当备注显示
+            text: caption.unwrap_or_else(|| format!("图片 {w}×{h}")),
             html: None,
             source_url: None,
             captured_at_ms: crate::target::now_ms(),

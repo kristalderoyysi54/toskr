@@ -71,6 +71,8 @@ describe("imageCaption", () => {
   it("捕获占位「图片 W×H」与合并占位「图片 N 张」不算备注", () => {
     expect(imageCaption({ kind: "image", text: "图片 1867×391" })).toBe("");
     expect(imageCaption({ kind: "image", text: "图片 3 张" })).toBe("");
+    expect(imageCaption({ kind: "image", text: "截图 447×317" })).toBe("");
+    expect(imageCaption({ kind: "image", text: "Screenshot 447×317" })).toBe("");
     expect(imageCaption({ kind: "image", text: "  " })).toBe("");
   });
 

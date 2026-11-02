@@ -55,8 +55,9 @@ export function sendPreview(text: string, maxLines = 10): string {
   return `${shown}${suffix}`;
 }
 
-/** 捕获/合并自动写入的图片占位文字（「图片 100×50」「图片 3 张」）。 */
-const IMAGE_PLACEHOLDER = /^图片 (\d+×\d+|\d+ 张)$/;
+/** 捕获/合并自动写入的图片占位文字（「图片 100×50」「图片 3 张」）。
+ *  「截图 W×H」「Screenshot W×H」是旧版截图入库写入的占位，存量数据同样不算备注。 */
+const IMAGE_PLACEHOLDER = /^(?:图片 (?:\d+×\d+|\d+ 张)|截图 \d+×\d+|Screenshot \d+×\d+)$/;
 
 /**
  * 图片卡的「真实文字备注」：用户在详情窗写的说明才算，捕获时自动写入的
