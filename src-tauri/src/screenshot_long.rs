@@ -3,7 +3,7 @@
 //! 点面板「完成」进标注窗，「取消」放弃。
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Mutex;
 
 use core_graphics::geometry::CGPoint;
@@ -355,6 +355,17 @@ struct Preview {
 }
 
 static PREVIEW: Mutex<Option<Preview>> = Mutex::new(None);
+/// 预览面板是否开着（全局键盘 tap 判断 Esc 是否用于取消长截屏；不锁 PREVIEW，免得阻塞 tap 回调）。
+static PREVIEW_OPEN: AtomicBool = AtomicBool::new(false);
+
+/// 滚动截取中按 Esc：焦点在被截的应用上，预览窗收不到按键，由全局 tap 转到这里。
+pub fn escape_pressed() -> bool {
+    if !PREVIEW_OPEN.load(Ordering::Relaxed) {
+        return false;
+    }
+    request_stop(true);
+    true
+}
 
 /// 最近邻缩小：把源图中尚未采样的行追加到预览（预览第 k 行取源第 ⌊k·f⌋ 行）。
 fn extend_preview(p: &mut Preview, src: &[u8], src_w: usize, src_h: usize) {
@@ -407,6 +418,7 @@ fn panel_rect(display: RectPt, region: RectPt) -> RectPt {
 
 pub fn open_preview(app: &AppHandle, display: RectPt, region: RectPt) {
     STOP_REQUEST.store(0, Ordering::Relaxed);
+    PREVIEW_OPEN.store(true, Ordering::Relaxed);
     *PREVIEW.lock().unwrap() = Some(Preview {
         rgba: Vec::new(),
         rows: 0,
@@ -486,6 +498,7 @@ pub fn preview_bytes() -> Option<Vec<u8>> {
 }
 
 pub fn close_preview(app: &AppHandle) {
+    PREVIEW_OPEN.store(false, Ordering::Relaxed);
     *PREVIEW.lock().unwrap() = None;
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {

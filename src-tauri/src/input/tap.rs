@@ -210,6 +210,12 @@ fn handle_event(
         }
         CGEventType::KeyDown => {
             let _ = shared.borrow_mut().0.feed(InputEvent::Other);
+            // Esc（keycode 53）：长截屏滚动中取消
+            if event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) == 53
+                && crate::screenshot_long::escape_pressed()
+            {
+                crate::diag::push(app, "长截屏：Esc 取消");
+            }
         }
         _ => {}
     }

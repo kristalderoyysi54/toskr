@@ -193,7 +193,8 @@ export default function LongShotView() {
         stop();
         if (sectionMenu) setSectionMenu(false);
         else if (cropping) setCropping(false);
-        else setTool(null);
+        else if (tool) setTool(null);
+        else void api.longClose();
       } else if (e.metaKey && e.key.toLowerCase() === "z") {
         stop();
         setHistory((h) => (e.shiftKey ? redo(h) : undo(h)));
@@ -204,7 +205,7 @@ export default function LongShotView() {
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, [editing, noteDraft, sectionMenu, cropping, finish, primary]);
+  }, [editing, noteDraft, sectionMenu, cropping, tool, finish, primary]);
 
   const point = (e: ReactPointerEvent) => {
     const r = pageRef.current!.getBoundingClientRect();
