@@ -1677,6 +1677,27 @@ pub fn diag_note(app: AppHandle, webview: tauri::Webview, msg: String) {
     }
 }
 
+/// 主窗渲染活动诊断（前端每 60s 一次，仅在面板不可见/已滑出却仍在渲染时上报）：
+/// rAF 回调次数、运行中动画数与动画来源标签（CSS 动画名 / 目标元素首个 class，
+/// 均为代码标识符，这里再按字符集与长度清洗一次，正文不可能混入）。
+#[tauri::command]
+pub fn report_render_activity(app: AppHandle, raf: u32, animations: u32, panel_open: bool, edge_hidden: bool, kinds: Vec<String>) {
+    let kinds: Vec<String> = kinds
+        .into_iter()
+        .take(4)
+        .map(|k| k.chars().filter(|c| c.is_ascii_alphanumeric() || "-_:.=".contains(*c)).take(60).collect::<String>())
+        .filter(|k| !k.is_empty())
+        .collect();
+    crate::diag::push(
+        &app,
+        format!(
+            "渲染活动(60s): rAF={raf} 动画={animations} 面板={} 贴边隐藏={edge_hidden} 来源=[{}]",
+            if panel_open { "开" } else { "关" },
+            kinds.join(",")
+        ),
+    );
+}
+
 /// 主窗口水合结果指纹：只收条数（不含任何内容），install-app.sh 部署后据此比对
 /// 前后笔记数、发现水合失败（2026-09-25 默认态覆盖数据事故的兜底告警）。
 #[tauri::command]

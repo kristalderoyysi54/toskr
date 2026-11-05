@@ -1328,6 +1328,8 @@ export const api = {
   diagNote: (msg: string) => invoke("diag_note", { msg }),
   reportHydration: (ok: boolean, notes = 0, tasks = 0, sections = 0) =>
     invoke("report_hydration", { ok, notes, tasks, sections }),
+  reportRenderActivity: (raf: number, animations: number, panelOpen: boolean, edgeHidden: boolean, kinds: string[]) =>
+    invoke("report_render_activity", { raf, animations, panelOpen, edgeHidden, kinds }),
   appIcon: (bundleId: string) =>
     invoke<{ url: string; color: string } | null>("app_icon", { bundleId }),
   /** 设置里应用列表展示信息（不要求应用在运行）。 */

@@ -8,7 +8,7 @@ const capabilities = readdirSync(new URL("capabilities/", native))
 const permissions = (window) => capabilities.filter((cap) => cap.windows.some((pattern) => pattern.endsWith("*") ? window.startsWith(pattern.slice(0, -1)) : window === pattern)).flatMap((cap) => cap.permissions);
 describe("原生权限边界", () => {
     it("所有注册命令必须有显式 manifest 权限", () => {
-        const handlers = read("src/lib.rs").split(".invoke_handler(tauri::generate_handler![")[1].split("])")[0];
+        const handlers = read("src/lib.rs").split("tauri::generate_handler![")[1].split("];")[0];
         const manifest = read("build.rs");
         for (const [, command] of handlers.matchAll(/\w+::(\w+),/g)) {
             expect(manifest).toContain(`"${command}"`);

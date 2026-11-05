@@ -124,6 +124,7 @@
     "allow-bundle-id-of-app",
     "allow-diag-note",
     "allow-report-hydration",
+    "allow-report-render-activity",
     "allow-get-diagnostics",
     "allow-append-delivery-event",
     "allow-get-recent-delivery-events",

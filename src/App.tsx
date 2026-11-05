@@ -1,3 +1,4 @@
+import { startRenderActivityProbe } from "@/lib/renderActivity";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -2289,6 +2290,8 @@ export default function App() {
   const platinumScrollbar = useNotesStore((s) => s.settings.platinumScrollbar);
   // 水合前的默认值不广播：否则启动瞬间会把各窗口缓存改回 default 再切回来
   useEffect(() => installAutoBackupScheduler(), []);
+  // 面板不可见却仍在渲染时落诊断（rAF 次数 / 运行中动画来源）
+  useEffect(() => startRenderActivityProbe(), []);
 
   // 水合成功写条数指纹：install-app.sh 部署后比对前后笔记数，骤降即报警
   useEffect(

@@ -3,6 +3,7 @@
 //   drive key cmd+shift+c | ctrl+shift+q | cmd+w | esc
 //   drive bounds <pid>                → 输出该进程最大在屏窗口 "x y w h"（全局坐标，左上原点）
 //   drive scroll <x> <y> <次数> <每次行数>   （负数向下）
+//   drive move <x0> <y0> <x1> <y1> <步数>   drive where
 import CoreGraphics
 import Foundation
 
@@ -39,6 +40,18 @@ case "bounds":
     }
     guard let r = best else { fail("无在屏窗口") }
     print("\(Int(r.minX)) \(Int(r.minY)) \(Int(r.width)) \(Int(r.height))")
+case "move":
+    // 沿直线发 mouseMoved（真实指针事件，WebView 能收到 pointerenter/leave）；结束不复位
+    guard a.count == 7, let x0 = Double(a[2]), let y0 = Double(a[3]), let x1 = Double(a[4]), let y1 = Double(a[5]), let n = Int(a[6]) else { fail("move x0 y0 x1 y1 步数") }
+    for i in 0...max(n, 1) {
+        let t = Double(i) / Double(max(n, 1))
+        let pt = CGPoint(x: x0 + (x1 - x0) * t, y: y0 + (y1 - y0) * t)
+        CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: pt, mouseButton: .left)!.post(tap: .cghidEventTap)
+        usleep(16_000)
+    }
+case "where":
+    let p = CGEvent(source: nil)!.location
+    print("\(Int(p.x)) \(Int(p.y))")
 case "scroll":
     guard a.count == 6, let x = Double(a[2]), let y = Double(a[3]), let n = Int(a[4]), let lines = Int32(a[5]) else { fail("scroll x y 次数 行数") }
     let saved = CGEvent(source: nil)!.location

@@ -136,6 +136,7 @@ const COMMANDS: &[&str] = &[
     "bundle_id_of_app",
     "diag_note",
     "report_hydration",
+    "report_render_activity",
     "get_diagnostics",
     "append_delivery_event",
     "get_recent_delivery_events",
