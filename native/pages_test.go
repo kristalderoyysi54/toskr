@@ -230,7 +230,11 @@ func TestSecretSealCardRevealAndCaptureRoute(t *testing.T) {
 		t.Fatalf("卡片 %v", tt.Texts())
 	}
 	a.openSecretCard(sec, a.store.Settings())
-	waitFor(t, func() bool { tt.Advance(20 * time.Millisecond); tt.Frame(); return tt.HasText("周五上线窗口改到 22:00") }) // 遮罩先淡出 120ms 再显明文
+	waitFor(t, func() bool {
+		tt.Advance(20 * time.Millisecond)
+		tt.Frame()
+		return tt.HasText("周五上线窗口改到 22:00")
+	}) // 遮罩先淡出 120ms 再显明文
 	a.hidePanel()
 	tt.Frame()
 	if tt.HasText("周五上线窗口改到 22:00") {
@@ -551,4 +555,38 @@ func abs32(v float32) float32 {
 		return -v
 	}
 	return v
+}
+
+// 多选：提示行换成 Tauri 的多选提示、底部出批量条；x 勾选、⌘C 复制为编号列表、Esc 取消勾选；多条发送为编号列表。
+func TestSelectionBarHintsAndKeys(t *testing.T) {
+	a, tt := testApp(t, "甲", "乙", "丙")
+	sys := &recSys{}
+	a.sys = sys
+	_ = tt.Click("甲")
+	tt.Frame()
+	if !tt.HasText("勾选") || !tt.HasText("预览") {
+		t.Fatalf("焦点态提示 %v", tt.Texts())
+	}
+	tt.Key(0, ui.KeyX)
+	tt.Frame()
+	a.chosen.Add(a.notes[1].ID)
+	tt.Frame()
+	for _, s := range []string{"已选 2", "发送 2 张", "复制为列表", "取消勾选"} {
+		if !tt.HasText(s) {
+			t.Fatalf("缺 %q：%v", s, tt.Texts())
+		}
+	}
+	tt.Key(ui.Cmd, ui.KeyC)
+	tt.Frame()
+	if len(sys.writes) == 0 || sys.writes[len(sys.writes)-1] != "1. 甲\n2. 乙" {
+		t.Fatalf("复制为列表 %q", sys.writes)
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if a.chosen.Len() != 0 || tt.HasText("已选 2") {
+		t.Fatal("Esc 应取消勾选并收起批量条")
+	}
+	if got := sendText([]string{"a", "b"}); got != "1. a\n2. b" {
+		t.Fatalf("多条发送应为编号列表：%q", got)
+	}
 }

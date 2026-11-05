@@ -350,3 +350,67 @@ func TestCompareSchemes(t *testing.T) {
 		compareOne(t, dir, "settings-"+v.scheme, a.settingsView, 1040, 720, v.mode)
 	}
 }
+
+// TestCompareStates 对照交互态：悬停（指针在第一张卡上）、多选两张、键盘焦点、☰ 面板菜单。
+// 参照由 /tmp/toskr-cap/run2.sh 抓取（setup-main-base / setup-state-checked / setup-state-focused / setup-menu）。
+func TestCompareStates(t *testing.T) {
+	dir := os.Getenv("TOSKR_COMPARE_DIR")
+	if dir == "" {
+		t.Skip("set TOSKR_COMPARE_DIR")
+	}
+	mk := func() *app {
+		st, err := store.OpenDir(t.TempDir(), bytes.Repeat([]byte{1}, 32))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ago := time.Now().Add(-61 * time.Second)
+		st.AddSection("提示词库")
+		for _, n := range []struct {
+			text string
+			done bool
+		}{
+			{"记得复核截图遮罩回收后的 Networking 进程占用", true},
+			{"SELECT id, title FROM notes WHERE section = 'inbox' ORDER BY created_at DESC LIMIT 50;", false},
+			{"会议纪要：周五前完成 mygo 原生版对比报告，附内存与启动耗时。", false},
+			{"把这段接口说明发给 Claude：分页参数 page_size 默认 20，最大 200；超过返回 400。", false},
+		} {
+			x, _, _ := st.Add(store.Note{Section: store.SectionInbox, Text: n.text, SourceApp: "Safari"})
+			_ = st.SetCreatedAt(x.ID, ago)
+			if n.done {
+				_ = st.SetDone(x.ID, true)
+			}
+		}
+		a := newApp(nopSys{}, st)
+		a.target = macos.FrontApp{PID: 42, Name: "Cursor"}
+		a.reload()
+		return a
+	}
+	for _, c := range []struct {
+		name   string
+		mx, my float32
+		prep   func(a *app)
+	}{
+		{"state-hover", 190, 210, func(a *app) {}},
+		{"state-checked", 379, 2, func(a *app) { a.chosen.Add(a.notes[0].ID); a.chosen.Add(a.notes[1].ID) }},
+		{"state-focused", 379, 2, func(a *app) { a.selected, a.focusList = 0, true }},
+		{"menu", 379, 2, func(a *app) { a.menuOpen = true }},
+	} {
+		for _, scheme := range []string{"light", "dark"} {
+			a := mk()
+			c.prep(a)
+			tt := ui.NewTester(a.panelView, 380, 760)
+			tt.SetDark(scheme == "dark")
+			tt.SetVibrancy(false)
+			tt.Move(c.mx, c.my)
+			tt.Frame()
+			tt.Advance(time.Second)
+			tt.Frame()
+			got := onWhite(tt.Image())
+			save(t, filepath.Join(dir, "mygo-"+c.name+"-"+scheme+".png"), got)
+			ref := load(t, filepath.Join(dir, "ref-"+c.name+"-"+scheme+".png"))
+			ratio, heat := diff(ref, got)
+			save(t, filepath.Join(dir, "side-"+c.name+"-"+scheme+".png"), sideBySide(ref, got, heat))
+			fmt.Printf("%s %s: 差异像素 %.2f%%\n", c.name, scheme, ratio*100)
+		}
+	}
+}

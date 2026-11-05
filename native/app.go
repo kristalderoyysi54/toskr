@@ -512,7 +512,7 @@ func (a *app) deliver(notes []store.Note, confirmed bool) {
 		a.hidePanelNow()
 	}
 	go func() {
-		check, err := core.DeliverWith(a.sys, target, core.Payload{Text: strings.Join(texts, "\n\n"), PNG: png}, core.Options{Enter: enter, StartedMs: a.targetStarted})
+		check, err := core.DeliverWith(a.sys, target, core.Payload{Text: sendText(texts), PNG: png}, core.Options{Enter: enter, StartedMs: a.targetStarted})
 		diag.Push("发送: %d 条 → %s enter=%v confirmed=%v check=%s err=%v", len(notes), target.BundleID, enter, confirmed, check, err)
 		a.panel.Update(func() {
 			rec := delivery{At: time.Now(), Target: target.Name, Count: len(notes)}

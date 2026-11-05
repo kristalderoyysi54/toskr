@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -568,17 +569,10 @@ func (a *app) hintsRow(c *ui.Context, k tokens) {
 
 func (a *app) hintItems(c *ui.Context, k tokens) {
 	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-		hints := [][2]string{{"↑↓", "选卡片"}, {"⌘F", "搜索"}, {"⌘K", "命令"}, {"长按 ⌥ Option", "全部快捷键"}}
-		switch {
-		case a.page == pageTasks:
-			hints = [][2]string{{"⏎", "记下待办"}, {"⌘K", "命令"}, {"长按 ⌥ Option", "全部快捷键"}}
-		case a.page == pageNotes && a.noteSub == 1:
-			hints = [][2]string{{"⌘K", "命令"}, {"长按 ⌥ Option", "全部快捷键"}}
-		}
-		for _, h := range hints {
+		for _, h := range a.keyHints() {
 			ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
-				text(c, tr(h[0]), 10, 14, 400, k.muted).Opacity(0.7)
-				text(c, tr(h[1]), 10, 14, 400, k.muted)
+				text(c, h[0], 10, 14, 400, k.muted).Opacity(0.7)
+				text(c, h[1], 10, 14, 400, k.muted)
 			})
 		}
 	})
@@ -632,4 +626,132 @@ func (a *app) composerSection() store.Section {
 		}
 	}
 	return store.Section{ID: store.SectionInbox}
+}
+
+// keyHints 按 Tauri keyHintsFor（src/lib/commandItems.ts）的优先级挑提示：编辑 → 搜索 → 任务页 → 秘文 → 多选 → 键盘焦点 → 默认。
+func (a *app) keyHints() [][2]string {
+	_, focused := a.current()
+	switch {
+	case a.editing != "":
+		return [][2]string{{"⌘⏎", tr("保存")}, {"Esc", tr("取消")}}
+	case a.searchOpen:
+		return [][2]string{{"Esc", tr("关闭搜索")}, {"↑↓", tr("移动焦点")}}
+	case a.page == pageTasks:
+		return [][2]string{{"⏎", tr("记下待办")}, {"⌘K", tr("命令")}, {tr("长按 ⌥ Option"), tr("全部快捷键")}}
+	case a.page == pageNotes && a.noteSub == 1:
+		return [][2]string{{"⌘K", tr("命令")}, {tr("长按 ⌥ Option"), tr("全部快捷键")}}
+	case a.chosen.Len() > 0:
+		return [][2]string{{"⌘⏎", fmt.Sprintf(tr("发送 %d 张"), a.chosen.Len())}, {"⌘C", tr("复制为列表")}, {"Esc", tr("取消勾选")}, {"⌘K", tr("命令")}}
+	case focused && a.focusList:
+		return [][2]string{{"⌘⏎", tr("发送")}, {"Space", tr("预览")}, {"⏎", tr("编辑")}, {"x", tr("勾选")}, {"⌘K", tr("命令")}}
+	}
+	return [][2]string{{"↑↓", tr("选卡片")}, {"⌘F", tr("搜索")}, {"⌘K", tr("命令")}, {tr("长按 ⌥ Option"), tr("全部快捷键")}}
+}
+
+// selectionBar 是勾选 ≥1 条时出现在面板最下方的批量操作条（Tauri SelectionBar，停靠形态）：
+// 已选 N · 合并 · 删除 · 清除选择 · 发送 ⌘⏎ 分体钮。
+func (a *app) selectionBar(c *ui.Context, k tokens) {
+	n := a.chosen.Len()
+	if n == 0 || a.page == pageTasks || (a.page == pageNotes && a.noteSub == 1) {
+		return
+	}
+	s := stok(c)
+	bar := ui.Row(c).Margin(0, 8, 8, 8).Padding(6, 8).Gap(2).Radius(12).Background(k.floatBtn.Alpha(0.95)).Border(1, k.fg.Alpha(0.1)).
+		Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB).InsetShadow(0, 1, 0, 0, k.floatInset).AlignItems(ui.Center).
+		Key("selection-bar").Transition(ui.ElementTransition{Duration: 160 * time.Millisecond, Ease: easeStandard, Enter: &ui.Motion{Y: 8}})
+	bar.Children(func() {
+		text(c, fmt.Sprintf(tr("已选 %d"), n), 11, 16, 400, k.muted).Padding(0, 4).SingleLine()
+		ui.Spacer(c)
+		act := func(icon, tip string, enabled bool) bool {
+			b := ui.Box(c).Size(22, 22).Radius(8).Center().Tooltip(tip).Key("sel-" + icon)
+			col := k.muted
+			bg := ui.Transparent
+			if enabled && b.Hovered() {
+				bg, col = k.hoverBg, k.fg
+			}
+			fadeColor(b, "bg", bg, tweenControl)
+			if !enabled {
+				b.Opacity(0.45)
+			}
+			b.AnimatePose(ui.Pose{Scale: pressScale(enabled && b.Pressed(), 0.94)}, tweenControl)
+			b.Children(func() { licon(c, icon, 14, b.AnimateColor("fg", col, tweenControl)) })
+			return enabled && b.Clicked()
+		}
+		if act("merge", tr("合并笔记"), n >= 2) {
+			a.mergeChosen(c)
+		}
+		if act("trash-2", tr("删除"), true) {
+			a.deleteSelected(c)
+		}
+		if act("x", tr("清除选择"), true) {
+			a.chosen.Clear()
+		}
+		ui.Row(c).Margin(0, 0, 0, 4).Height(24).Children(func() {
+			send := ui.Row(c).Height(24).Padding(0, 8).Gap(4).Radius(10, 0, 0, 10).Border(1, s.btnBorder).AlignItems(ui.Center).Key("sel-send")
+			bg, sh := s.btn, s.btnShadow
+			if send.Hovered() {
+				bg = s.btnHover
+			}
+			if send.Pressed() {
+				sh = ui.Transparent
+			}
+			ctl := tw(100, easeStandard)
+			fadeColor(send, "bg", bg, ctl).Shadow(0, 1, 2, 0, send.AnimateColor("sh", sh, ctl))
+			send.AnimatePose(ui.Pose{Y: pressY(send.Pressed())}, ctl)
+			send.Children(func() {
+				licon(c, "send", 12, s.btnFg)
+				text(c, tr("发送"), 11, 16, 500, s.btnFg)
+				text(c, "⌘⏎", 9, 12, 400, s.btnFg).Opacity(0.7)
+			})
+			if send.Clicked() {
+				a.sendSelected()
+			}
+			more := ui.Box(c).Height(24).Padding(0, 4).Radius(0, 10, 10, 0).Background(s.btn).BorderWidth(1, 1, 1, 0).BorderColor(s.btnBorder).Center()
+			more.Children(func() {
+				ui.Box(c).Absolute().Left(0).Top(0).Bottom(0).Width(1).Background(s.inputBorder)
+				licon(c, "chevron-down", 12, s.btnFg)
+			})
+			more.Menu(func(m *ui.Menu) {
+				if m.Item(tr("发送")).Chosen() {
+					a.sendSelected()
+				}
+				if m.Item(tr("复制为列表")).Chosen() {
+					a.copyChosenAsList()
+				}
+			})
+		})
+	})
+}
+
+// copyChosenAsList：勾选项按列表顺序复制为编号列表（Tauri copyNotesAsList；单条复制原文）。
+func (a *app) copyChosenAsList() {
+	notes := a.chosenNotes()
+	if len(notes) == 0 {
+		return
+	}
+	texts := make([]string, len(notes))
+	for i, n := range notes {
+		texts[i] = n.Text
+	}
+	a.copyPrivate(sendText(texts))
+	if len(texts) == 1 {
+		a.showHUD("ok", tr("已复制原文（未脱敏）"))
+	} else {
+		a.showHUD("ok", fmt.Sprintf(tr("已复制 %d 条原文为列表（未脱敏）"), len(texts)))
+	}
+}
+
+// sendText 同 Tauri buildSendText：单条保持原文，多条转编号列表。
+func sendText(texts []string) string {
+	if len(texts) == 1 {
+		return texts[0]
+	}
+	var b strings.Builder
+	for i, t := range texts {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		fmt.Fprintf(&b, "%d. %s", i+1, t)
+	}
+	return b.String()
 }

@@ -30,6 +30,12 @@ func (a *app) queueKeys(c *ui.Context) {
 	if c.Shortcut(ui.Cmd, ui.KeyM) {
 		a.mergeChosen(c)
 	}
+	if a.chosen.Len() > 0 && c.Shortcut(ui.Cmd, ui.KeyC) { // 复制为列表
+		a.copyChosenAsList()
+	}
+	if a.chosen.Len() > 0 && c.Shortcut(0, ui.KeyEscape) { // 取消勾选
+		a.chosen.Clear()
+	}
 	if c.Shortcut(ui.Cmd, ui.KeyD) {
 		a.toggleDone()
 	}
@@ -38,6 +44,18 @@ func (a *app) queueKeys(c *ui.Context) {
 	}
 	if c.Shortcut(ui.Cmd|ui.Alt, ui.KeyLeft) {
 		a.stepSection(-1)
+	}
+	if cur, ok := a.current(); ok && a.focusList {
+		if c.Shortcut(0, ui.KeySpace) { // 预览：原生版用详情窗
+			a.openDetail(cur)
+		}
+		if c.Shortcut(0, ui.KeyX) { // 勾选 / 取消勾选
+			if a.chosen.Has(cur.ID) {
+				a.chosen.Remove(cur.ID)
+			} else {
+				a.chosen.Add(cur.ID)
+			}
+		}
 	}
 	if c.Shortcut(0, ui.KeyEnter) { // 输入框聚焦时由它先处理回车
 		a.startEdit()

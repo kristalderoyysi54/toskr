@@ -59,6 +59,7 @@ func (a *app) panelView(c *ui.Context) {
 		if a.page == pageNotes && a.noteSub == 0 { // 发送输入区只在笔记视图，与 Tauri 一致
 			a.composerBar(c, k)
 		}
+		a.selectionBar(c, k) // 勾选时的批量条留在面板最下方
 	})
 	if a.menuOpen {
 		a.panelMenu(c, k)
@@ -282,12 +283,28 @@ func (a *app) panelMenu(c *ui.Context, k tokens) {
 				}
 			}
 		}
-		if done > 0 {
+		density := a.page == pageClip || (a.page == pageNotes && a.noteSub == 0)
+		if density || done > 0 {
 			label(tr("当前列表"))
+		}
+		if density { // 卡片密度开关（Tauri：Rows3「紧凑列表」，勾选 = 紧凑）
+			compact := st.CardDensity == "compact"
+			item("rows-3", tr("紧凑列表"), compact, false, "", func() {
+				st.CardDensity = "comfortable"
+				if !compact {
+					st.CardDensity = "compact"
+				}
+				_ = a.store.SetSettings(st)
+				closeMenu()
+			})
+		}
+		if done > 0 {
 			item("eraser", fmt.Sprintf(tr("清理已完成（%d）"), done), false, false, "⇧⌘⌫", func() {
 				closeMenu()
 				a.clearAllDone(c)
 			})
+		}
+		if density || done > 0 {
 			sep()
 		}
 		label(tr("面板"))
