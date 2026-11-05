@@ -89,3 +89,52 @@ func TestShotSnapshots(t *testing.T) {
 	_ = png.Encode(o, out)
 	o.Close()
 }
+
+// 长图标注窗与长截屏预览面板快照（同 SHOT_SNAP）。
+func TestLongSnapshots(t *testing.T) {
+	dir := os.Getenv("SHOT_SNAP")
+	if dir == "" {
+		t.Skip("SHOT_SNAP 未设置")
+	}
+	f, err := os.Open(filepath.Join(dir, "frame.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, _ := png.Decode(f)
+	f.Close()
+	img := image.NewRGBA(image.Rect(0, 0, 1600, 4000))
+	for y := 0; y < 4000; y += 1000 {
+		draw.Draw(img, image.Rect(0, y, 1600, y+1000), src, image.Point{X: 600, Y: 400 + y/10}, draw.Src)
+	}
+	a, _ := testApp(t)
+	d := &shotDisplay{W: 800, H: 2000, pxW: 1600, pxH: 4000, sx: 2, sy: 2, img: img, bm: ui.NewBitmap(img)}
+	le := &longEditor{d: d, z: 1}
+	tt := ui.NewTester(func(c *ui.Context) { a.longEditorView(c, le) }, 1000, 700)
+	tt.SetScale(2)
+	if os.Getenv("SHOT_DARK") != "" {
+		tt.SetDark(true)
+	}
+	tt.Frame()
+	_ = tt.Click("箭头")
+	tt.Frame()
+	a.longInput(le, ui.InputEvent{Kind: ui.InputPointerDown, X: 100, Y: 100})
+	a.longInput(le, ui.InputEvent{Kind: ui.InputPointerMove, X: 300, Y: 220})
+	a.longInput(le, ui.InputEvent{Kind: ui.InputPointerUp, X: 300, Y: 220})
+	le.crop = &shot.Rect{X: 40, Y: 40, W: 700, H: 1800}
+	le.cropping = true
+	tt.Frame()
+	out, _ := os.Create(filepath.Join(dir, "7-long-editor.png"))
+	_ = png.Encode(out, tt.Image())
+	out.Close()
+
+	lc := &longCapture{}
+	st := shot.NewStitcher(img.Pix[:1600*1000*4], 1600, 1000)
+	st.Out, st.TotalH = img.Pix, 4000
+	lc.stitched(a, st)
+	pt := ui.NewTester(func(c *ui.Context) { a.longPreviewView(c, lc) }, 220, 500)
+	pt.SetScale(2)
+	pt.Frame()
+	o2, _ := os.Create(filepath.Join(dir, "8-long-preview.png"))
+	_ = png.Encode(o2, pt.Image())
+	o2.Close()
+}

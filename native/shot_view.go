@@ -677,7 +677,7 @@ func (a *app) shotView(c *ui.Context, d *shotDisplay) {
 		pr = shot.ToPixelRect(*active, d.sx, d.sy, float64(d.pxW), float64(d.pxH))
 	}
 	if e.sel != nil {
-		a.shotCallouts(c, d, shapes)
+		a.shotCallouts(c, d, shapes, 1)
 	}
 	if active != nil && (e.sel == nil || e.dragging) {
 		top := active.Y + 4
@@ -718,10 +718,10 @@ func (a *app) shotView(c *ui.Context, d *shotDisplay) {
 		a.shotOCRPanel(c, d, pal)
 	}
 	if e.editing != nil {
-		a.shotTextEditor(c, d)
+		a.shotTextEditor(c, d, 1, gray(1, 0.7))
 	}
 	if e.sel != nil && !e.dragging && !e.sectionMenu {
-		a.shotHoverTip(c, d)
+		a.shotHoverTip(c, d, d.W, d.H)
 	}
 	if e.showLoupe() {
 		a.shotLoupe(c, d)
@@ -819,7 +819,7 @@ func (a *app) paintShotBase(p *ui.Painter, d *shotDisplay, active *shot.Rect, sh
 			if e.preview != nil {
 				pk = e.preview
 			}
-			paintEditFrame(p, pk, primary)
+			paintEditFrame(p, pk, primary, 1)
 		}
 	}
 	if e.sel != nil && !e.dragging && !e.locked() {
@@ -841,14 +841,14 @@ func (a *app) paintShotBase(p *ui.Painter, d *shotDisplay, active *shot.Rect, sh
 }
 
 // paintEditFrame：选中图形的虚线外框与手柄（箭头 / 直线只显示两端手柄）。
-func paintEditFrame(p *ui.Painter, s *shot.Shape, primary ui.Color) {
+func paintEditFrame(p *ui.Painter, s *shot.Shape, primary ui.Color, z float64) {
 	if b, ok := shot.ShapeBounds(s); ok && s.Kind != shot.Arrow && s.Kind != shot.Line {
-		r := ui.Rect{X: f32(b.X - 2), Y: f32(b.Y - 2), W: f32(b.W + 4), H: f32(b.H + 4)}
+		r := ui.Rect{X: f32(b.X*z - 2), Y: f32(b.Y*z - 2), W: f32(b.W*z + 4), H: f32(b.H*z + 4)}
 		p.Stroke(ui.Rect{X: r.X - 1, Y: r.Y - 1, W: r.W + 2, H: r.H + 2}, gray(0, 0.4), 0, 1)
 		p.StrokeDashed(r, colWhite, 0, 1)
 	}
 	for _, h := range shot.EditHandles(s) {
-		r := ui.Rect{X: f32(h.X - 5), Y: f32(h.Y - 5), W: 10, H: 10}
+		r := ui.Rect{X: f32(h.X*z - 5), Y: f32(h.Y*z - 5), W: 10, H: 10}
 		p.Shadow(r, 5, 0, 1, 2, 0, gray(0, 0.05))
 		p.Fill(r, colWhite, 5)
 		p.Stroke(r, primary, 5, 1)
@@ -913,23 +913,29 @@ func (a *app) shotFrameBar(c *ui.Context, d *shotDisplay, pal shotPalette, pr sh
 	pal.float(bar).Children(func() {
 		text(c, fmt.Sprintf("%d × %d", int(pr.W), int(pr.H)), 11, 16, 400, pal.muted).Font(fontMono).FontFeatures("tnum")
 		ui.Box(c).Size(1, 16).Background(pal.border)
-		slider := func(v *float64, icon, tip string, lo, hi, step float64) {
-			row := ui.Row(c).Gap(4).AlignItems(ui.Center).Key("fs-" + icon)
-			row.Children(func() {
-				licon(c, icon, 14, pal.muted)
-				if ui.Slider(c, v, lo, hi).Step(step).Width(80).Changed() {
-					a.setShotFrame(fr)
-				}
-				text(c, fmt.Sprintf("%d", int(*v)), 11, 16, 400, pal.fg).Font(fontMono).FontFeatures("tnum").Width(24)
-			})
-			a.shotTipTarget(c, d, row, tip)
-		}
-		slider(&fr.Radius, "square-round-corner", tr("圆角：出图四角裁成圆角（外侧透明）"), 0, shot.MaxRadius, 2)
-		slider(&fr.Shadow, "layers-2", tr("阴影：出图四周加投影，数值为阴影大小（0 = 无）"), 0, shot.MaxShadow, 2)
-		if fr.Shadow > 0 {
-			slider(&fr.ShadowAlpha, "blend", tr("阴影浓淡：投影的深浅（%）"), shot.ShadowAlphaMin, shot.ShadowAlphaMax, 5)
-		}
+		a.shotFrameSliders(c, d, pal, fr)
 	})
+}
+
+// shotFrameSliders：出图圆角与阴影滑块（遮罩与长图标注窗共用）。
+func (a *app) shotFrameSliders(c *ui.Context, d *shotDisplay, pal shotPalette, fr shotFrame) {
+	slider := func(v *float64, icon, tip string, lo, hi, step float64) {
+		row := ui.Row(c).Gap(4).AlignItems(ui.Center).Key("fs-" + icon)
+		row.Children(func() {
+			licon(c, icon, 14, pal.muted)
+			if ui.Slider(c, v, lo, hi).Step(step).Width(80).Changed() {
+				a.setShotFrame(fr)
+			}
+			text(c, fmt.Sprintf("%d", int(*v)), 11, 16, 400, pal.fg).Font(fontMono).FontFeatures("tnum").Width(24)
+		})
+		a.shotTipTarget(c, d, row, tip)
+	}
+	slider(&fr.Radius, "square-round-corner", tr("圆角：出图四角裁成圆角（外侧透明）"), 0, shot.MaxRadius, 2)
+	slider(&fr.Shadow, "layers-2", tr("阴影：出图四周加投影，数值为阴影大小（0 = 无）"), 0, shot.MaxShadow, 2)
+	if fr.Shadow > 0 {
+		slider(&fr.ShadowAlpha, "blend", tr("阴影浓淡：投影的深浅（%）"), shot.ShadowAlphaMin, shot.ShadowAlphaMax, 5)
+	}
+
 }
 
 type shotToolDef struct {
@@ -1067,22 +1073,37 @@ func (a *app) shotToolbar(c *ui.Context, d *shotDisplay, pal shotPalette, top, h
 				a.endShot(true)
 				return
 			}
-			a.shotCheckButton(c, d, pal)
+			a.shotCheckButton(c, d, pal, tr("完成：复制并存入「剪贴」（Enter）；长按选择存入的分组"), false, func() { a.shotConfirm(d, shotSave, "") })
 		})
 		if showStyle {
 			a.shotStyleRow(c, d, pal, styleKind, styleInk, styleLv)
 		}
 	})
 	if e.sectionMenu {
-		a.shotSectionMenu(c, d, pal, top, h)
+		s := e.sel
+		a.shotSectionMenu(c, d, pal, d.W, d.H, func(m ui.Element) {
+			// 贴 ✓ 按钮右缘（工具条右内边距 8）
+			right := 8.0
+			if s.X+s.W < shotToolbarWEst {
+				right = d.W - (4 + shotToolbarWEst) + 8 // 工具条贴左时估算右缘
+			} else {
+				right += math.Max(d.W-(s.X+s.W), 0)
+			}
+			m.Right(f32(math.Max(right, 0)))
+			if top > s.Y {
+				m.Top(f32(top + h + 4))
+			} else {
+				m.Bottom(f32(d.H - top + 4))
+			}
+		}, func(id string) { a.shotConfirm(d, shotSection, id) })
 	}
 }
 
 // shotCheckButton：✓ 完成；长按或右键选择存入的分组。
-func (a *app) shotCheckButton(c *ui.Context, d *shotDisplay, pal shotPalette) {
+func (a *app) shotCheckButton(c *ui.Context, d *shotDisplay, pal shotPalette, tip string, disabled bool, done func()) {
 	e := &d.ed
 	primary := pal.primary
-	b := a.shotButton(c, d, pal, "done", "check", tr("完成：复制并存入「剪贴」（Enter）；长按选择存入的分组"), false, false, &primary)
+	b := a.shotButton(c, d, pal, "done", "check", tip, false, disabled, &primary)
 	now := c.Now()
 	switch {
 	case b.Pressed():
@@ -1103,31 +1124,21 @@ func (a *app) shotCheckButton(c *ui.Context, d *shotDisplay, pal shotPalette) {
 			e.checkLong = false
 			return
 		}
-		a.shotConfirm(d, shotSave, "")
+		if !disabled {
+			done()
+		}
 	}
 }
 
-func (a *app) shotSectionMenu(c *ui.Context, d *shotDisplay, pal shotPalette, top, h float64) {
+// shotSectionMenu：「存入分组」列表（长按 / 右键 ✓），点外面关闭。place 摆位置，choose 存入。
+func (a *app) shotSectionMenu(c *ui.Context, d *shotDisplay, pal shotPalette, W, H float64, place func(ui.Element), choose func(string)) {
 	e := &d.ed
-	if ui.Box(c).Absolute().Top(0).Left(0).Size(f32(d.W), f32(d.H)).Clicked() {
+	if ui.Box(c).Absolute().Top(0).Left(0).Size(f32(W), f32(H)).Clicked() {
 		e.sectionMenu = false
 		return
 	}
-	s := e.sel
 	m := ui.Column(c).Absolute().Width(192).MaxHeight(288).Padding(4).Radius(8).Key("shot-sections")
-	// 贴 ✓ 按钮右缘（工具条右内边距 8）
-	right := 8.0
-	if s.X+s.W < shotToolbarWEst {
-		right = d.W - (4 + shotToolbarWEst) + 8 // 工具条贴左时估算右缘
-	} else {
-		right += math.Max(d.W-(s.X+s.W), 0)
-	}
-	m.Right(f32(math.Max(right, 0)))
-	if top > s.Y {
-		m.Top(f32(top + h + 4))
-	} else {
-		m.Bottom(f32(d.H - top + 4))
-	}
+	place(m)
 	var secs []store.Section
 	for _, sec := range a.store.Sections() {
 		if sec.ID != store.SectionClipboard {
@@ -1148,7 +1159,7 @@ func (a *app) shotSectionMenu(c *ui.Context, d *shotDisplay, pal shotPalette, to
 				row.Children(func() { text(c, sectionName(sec), 12, 17, 400, pal.fg).SingleLine() })
 				if row.Clicked() {
 					e.sectionMenu = false
-					a.shotConfirm(d, shotSection, sec.ID)
+					choose(sec.ID)
 					return
 				}
 			}
@@ -1201,18 +1212,18 @@ func (a *app) shotStyleRow(c *ui.Context, d *shotDisplay, pal shotPalette, kind 
 }
 
 // shotTextEditor：文字输入框（600 字重、1.25 行高、虚线框）；Enter 完成、⇧Enter 换行、Esc 完成。
-func (a *app) shotTextEditor(c *ui.Context, d *shotDisplay) {
+func (a *app) shotTextEditor(c *ui.Context, d *shotDisplay, z float64, border ui.Color) {
 	e := &d.ed
 	t := e.editing
 	fs := shot.FontSize[clampLv(t.Size)]
 	lines := strings.Split(t.Text, "\n")
 	w := 40.0
 	for _, l := range lines {
-		w = math.Max(w, shot.TextWidth(l, fs)+12)
+		w = math.Max(w, shot.TextWidth(l, fs)*z+12)
 	}
-	ui.TextAreaBase(c, &t.Text).Absolute().Left(f32(t.X)).Top(f32(t.Y)).Width(f32(w)).Lines(len(lines), len(lines)).
-		Font(shotFont).FontSize(f32(fs)).FontWeight(600).FixedLineHeight(f32(fs*shot.TextLineHeight)).TextColor(shotColor(t.Color)).
-		Border(1, gray(1, 0.7)).BorderStyle(ui.BorderDashed).Scrollbars(false).Focus().
+	ui.TextAreaBase(c, &t.Text).Absolute().Left(f32(t.X*z)).Top(f32(t.Y*z)).Width(f32(w)).Lines(len(lines), len(lines)).
+		Font(shotFont).FontSize(f32(fs*z)).FontWeight(600).FixedLineHeight(f32(fs*z*shot.TextLineHeight)).TextColor(shotColor(t.Color)).
+		Border(1, border).BorderStyle(ui.BorderDashed).Scrollbars(false).Focus().
 		OnTextKey(func(k ui.TextKey) bool {
 			if k.Key == ui.KeyEscape || (k.Key == ui.KeyEnter && k.Mods&ui.Shift == 0) {
 				e.commitEditing()
@@ -1223,7 +1234,7 @@ func (a *app) shotTextEditor(c *ui.Context, d *shotDisplay) {
 }
 
 // shotCallouts：已填说明以浅色标签贴在编号贴片右侧（只在编辑时显示，不进出图）；正在填写时在框下方出输入卡。
-func (a *app) shotCallouts(c *ui.Context, d *shotDisplay, shapes []*shot.Shape) {
+func (a *app) shotCallouts(c *ui.Context, d *shotDisplay, shapes []*shot.Shape, z float64) {
 	e := &d.ed
 	numbers := shot.CalloutNumbers(shapes)
 	var drafted *shot.Shape
@@ -1242,7 +1253,7 @@ func (a *app) shotCallouts(c *ui.Context, d *shotDisplay, shapes []*shot.Shape) 
 			continue
 		}
 		t := shot.CalloutTag(s, n)
-		ui.Row(c).Absolute().Left(f32(t.X+t.W)).Top(f32(t.Y)).Height(f32(t.H)).MaxWidth(240).Padding(0, 6).AlignItems(ui.Center).
+		ui.Row(c).Absolute().Left(f32((t.X+t.W)*z)).Top(f32(t.Y*z)).Height(f32(t.H*z)).MaxWidth(240).Padding(0, 6).AlignItems(ui.Center).
 			Radius(0, 8, 8, 0).Background(cardBg).Border(1, cardBorder).Shadow(0, 6, 16, -4, gray(0, 0.12)).PassThrough().Key(fmt.Sprintf("cl-%d", n)).
 			Children(func() { text(c, s.Note, 11, 16, 400, cardText).SingleLine() })
 	}
@@ -1255,7 +1266,7 @@ func (a *app) shotCallouts(c *ui.Context, d *shotDisplay, shapes []*shot.Shape) 
 		n = len(numbers)
 	}
 	color := e.note.Shape.Color
-	ui.Row(c).Absolute().Left(f32(b.X)).Top(f32(b.Y+b.H+6)).Width(256).Padding(4, 8, 4, 4).Gap(8).Radius(8).AlignItems(ui.Center).
+	ui.Row(c).Absolute().Left(f32(b.X*z)).Top(f32((b.Y+b.H)*z+6)).Width(256).Padding(4, 8, 4, 4).Gap(8).Radius(8).AlignItems(ui.Center).
 		Background(cardBg).Border(1, cardBorder).Shadow(0, 1, 2, 0, gray(0, 0.08)).Shadow(0, 6, 16, -4, gray(0, 0.12)).Cursor(ui.CursorDefault).
 		Children(func() {
 			ui.Box(c).Height(24).MinWidth(24).Padding(0, 4).Radius(8).Center().Background(shotColor(color)).
@@ -1273,7 +1284,7 @@ func (a *app) shotCallouts(c *ui.Context, d *shotDisplay, shapes []*shot.Shape) 
 }
 
 // shotHoverTip：停留 400ms 后在按钮下方（贴底时上方）显示说明。
-func (a *app) shotHoverTip(c *ui.Context, d *shotDisplay) {
+func (a *app) shotHoverTip(c *ui.Context, d *shotDisplay, W, H float64) {
 	e := &d.ed
 	if !e.tipSeen {
 		e.tip = ""
@@ -1286,10 +1297,10 @@ func (a *app) shotHoverTip(c *ui.Context, d *shotDisplay) {
 	sp := ui.Span{Text: e.tip, Font: fontSans, Size: 11}
 	w, h := c.MeasureText(224, sp)
 	w, h = w+16, h+8
-	cx := math.Min(math.Max(float64(r.X+r.W/2), 124), d.W-124)
+	cx := math.Min(math.Max(float64(r.X+r.W/2), 124), W-124)
 	tip := ui.Box(c).Absolute().Left(f32(cx)-w/2).Width(w).Padding(4, 8).Radius(8).Background(gray(0, 0.75)).
 		Shadow(0, 4, 6, -1, gray(0, 0.1)).PassThrough()
-	if float64(r.Y+r.H)+48 < d.H {
+	if float64(r.Y+r.H)+48 < H {
 		tip.Top(r.Y + r.H + 6)
 	} else {
 		tip.Top(r.Y - 6 - h)

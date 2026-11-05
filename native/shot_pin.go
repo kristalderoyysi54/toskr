@@ -22,14 +22,15 @@ import (
 // ⌘C 复制、双击或 Esc 关闭、右键菜单（复制 / 存入 / 另存为 / 识别文字 / 透明度 / 原大小 / 关闭）。
 
 type pinWin struct {
-	img     *image.RGBA
-	bm      *ui.Bitmap
-	w, h    float64 // 原大小（pt）
-	factor  float64
-	alpha   int // 透明度 %
-	zoomAt  time.Time
-	win     *mygo.Window
-	closing bool
+	img      *image.RGBA
+	bm       *ui.Bitmap
+	w, h     float64 // 原大小（pt）
+	factor   float64
+	alpha    int // 透明度 %
+	zoomAt   time.Time
+	original *image.RGBA // 编辑标注前的原图（「还原原图」）
+	win      *mygo.Window
+	closing  bool
 }
 
 func (a *app) pinShot(img *image.RGBA, x, y, w, h float64) {
@@ -116,6 +117,13 @@ func (a *app) pinCopy(p *pinWin) {
 
 func (a *app) pinMenu(c *ui.Context, m *ui.Menu, p *pinWin) {
 	w, h := p.img.Rect.Dx(), p.img.Rect.Dy()
+	if m.Item(tr("编辑标注…")).Chosen() {
+		a.pinEdit(p)
+	}
+	if m.Item(tr("还原原图")).Disabled(p.original == nil).Chosen() {
+		a.pinRestore(p)
+	}
+	m.Separator()
 	if m.Item(tr("复制")).Chosen() {
 		a.pinCopy(p)
 	}

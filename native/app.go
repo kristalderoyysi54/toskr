@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -41,8 +42,9 @@ type app struct {
 
 	panel, hud, settingsWin, detailWin *mygo.Window
 	tray                               *mygo.Tray
-	shot                               *shotSession // 进行中的截图
-	pins                               []*pinWin    // 钉图小窗
+	shot                               *shotSession                // 进行中的截图
+	pins                               []*pinWin                   // 钉图小窗
+	longCap                            atomic.Pointer[longCapture] // 进行中的长截屏（键盘 tap 读：Esc 取消）
 
 	// 面板状态
 	page          int
@@ -632,6 +634,9 @@ func (a *app) startTap() {
 		var in detector.Event
 		switch ev.Type {
 		case macos.EventKeyDown:
+			if ev.Keycode == 53 && a.longEsc() { // 长截屏中按 Esc：焦点在被截的应用上，由这里转为取消
+				diag.Push("长截屏: Esc 取消")
+			}
 			in = detector.Event{Kind: detector.Other}
 		case macos.EventFlagsChanged:
 			now, was := ev.Flags&target != 0, prev&target != 0

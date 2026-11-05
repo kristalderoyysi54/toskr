@@ -24,7 +24,19 @@ var (
 	cfDictionaryGetValue                   func(d, key uintptr) uintptr
 	cfNumberGetValue                       func(n uintptr, typ int, out unsafe.Pointer) bool
 	kWinLayer, kWinBounds, kWinOwnerPID    uintptr
+	cgWindowListCreateImage                func(rect cgRect, option, relative, imageOption uint32) uintptr
+	cgImageGetWidth, cgImageGetHeight      func(img uintptr) uintptr
+	cgImageGetBytesPerRow                  func(img uintptr) uintptr
+	cgImageGetBitsPerPixel                 func(img uintptr) uintptr
+	cgImageGetBitmapInfo                   func(img uintptr) uint32
+	cgImageGetDataProvider                 func(img uintptr) uintptr
+	cgDataProviderCopyData                 func(p uintptr) uintptr
+	cfDataGetBytePtr                       func(d uintptr) unsafe.Pointer
+	cfDataGetLength                        func(d uintptr) int
+	cgWarpMouseCursorPosition              func(p cgPoint) int32
 )
+
+type cgPoint struct{ X, Y float64 }
 
 type cgRect struct{ X, Y, W, H float64 }
 
@@ -39,6 +51,17 @@ func loadScreen() {
 		purego.RegisterLibFunc(&cfArrayGetValueAtIndex, cf, "CFArrayGetValueAtIndex")
 		purego.RegisterLibFunc(&cfDictionaryGetValue, cf, "CFDictionaryGetValue")
 		purego.RegisterLibFunc(&cfNumberGetValue, cf, "CFNumberGetValue")
+		purego.RegisterLibFunc(&cgWindowListCreateImage, cg, "CGWindowListCreateImage")
+		purego.RegisterLibFunc(&cgImageGetWidth, cg, "CGImageGetWidth")
+		purego.RegisterLibFunc(&cgImageGetHeight, cg, "CGImageGetHeight")
+		purego.RegisterLibFunc(&cgImageGetBytesPerRow, cg, "CGImageGetBytesPerRow")
+		purego.RegisterLibFunc(&cgImageGetBitsPerPixel, cg, "CGImageGetBitsPerPixel")
+		purego.RegisterLibFunc(&cgImageGetBitmapInfo, cg, "CGImageGetBitmapInfo")
+		purego.RegisterLibFunc(&cgImageGetDataProvider, cg, "CGImageGetDataProvider")
+		purego.RegisterLibFunc(&cgDataProviderCopyData, cg, "CGDataProviderCopyData")
+		purego.RegisterLibFunc(&cfDataGetBytePtr, cf, "CFDataGetBytePtr")
+		purego.RegisterLibFunc(&cfDataGetLength, cf, "CFDataGetLength")
+		purego.RegisterLibFunc(&cgWarpMouseCursorPosition, cg, "CGWarpMouseCursorPosition")
 		kWinLayer = deref(cg, "kCGWindowLayer")
 		kWinBounds = deref(cg, "kCGWindowBounds")
 		kWinOwnerPID = deref(cg, "kCGWindowOwnerPID")
@@ -103,4 +126,69 @@ func ActivateSelf() {
 		app := class("NSApplication").Send(sel("sharedApplication"))
 		app.Send(sel("activateIgnoringOtherApps:"), true)
 	})
+}
+
+// CaptureRect 截取全局 pt 矩形内的屏幕（原生像素，RGBA，不透明）。长截屏逐帧取用，
+// 进程内调用比起 screencapture 子进程快一个数量级。失败返回 nil。
+// below 非 0 时只截该窗口（CGWindowID）之下的内容：长截屏的边框与提示不会被截进去。
+func CaptureRect(x, y, w, h float64, below uint32) (pix []byte, pw, ph int) {
+	loadScreen()
+	const onScreenOnly, onScreenBelow, bestResolution = 1 << 0, 1 << 2, 1 << 3
+	opt := uint32(onScreenOnly)
+	if below != 0 {
+		opt = onScreenBelow
+	}
+	img := cgWindowListCreateImage(cgRect{x, y, w, h}, opt, below, bestResolution)
+	if img == 0 {
+		return nil, 0, 0
+	}
+	defer CFRelease(img)
+	pw, ph = int(cgImageGetWidth(img)), int(cgImageGetHeight(img))
+	stride := int(cgImageGetBytesPerRow(img))
+	if cgImageGetBitsPerPixel(img) != 32 || pw == 0 || ph == 0 {
+		return nil, 0, 0
+	}
+	data := cgDataProviderCopyData(cgImageGetDataProvider(img))
+	if data == 0 {
+		return nil, 0, 0
+	}
+	defer CFRelease(data)
+	n := cfDataGetLength(data)
+	src := unsafe.Slice((*byte)(cfDataGetBytePtr(data)), n)
+	// 32 位小端（kCGBitmapByteOrder32Little）为 BGRA，否则按 RGBA / ARGB 处理
+	info := cgImageGetBitmapInfo(img)
+	little := info&0x7000 == 0x2000
+	alphaFirst := info&0x1f == 2 || info&0x1f == 4 || info&0x1f == 6
+	pix = make([]byte, pw*ph*4)
+	for row := range ph {
+		s := src[row*stride : row*stride+pw*4]
+		d := pix[row*pw*4 : (row+1)*pw*4]
+		for i := 0; i < pw*4; i += 4 {
+			switch {
+			case little: // BGRA
+				d[i], d[i+1], d[i+2] = s[i+2], s[i+1], s[i]
+			case alphaFirst: // ARGB
+				d[i], d[i+1], d[i+2] = s[i+1], s[i+2], s[i+3]
+			default: // RGBA
+				d[i], d[i+1], d[i+2] = s[i], s[i+1], s[i+2]
+			}
+			d[i+3] = 255
+		}
+	}
+	return pix, pw, ph
+}
+
+// WarpCursor 把光标移到全局 pt 位置（长截屏开始时移到选区中央，滚轮才落在要截的区域上）。
+func WarpCursor(x, y float64) {
+	loadScreen()
+	cgWarpMouseCursorPosition(cgPoint{x, y})
+}
+
+// WindowNumber：NSWindow 的 windowNumber（即 CGWindowID）。
+func WindowNumber(nsWindow uintptr) uint32 {
+	if nsWindow == 0 {
+		return 0
+	}
+	load()
+	return uint32(objc.Send[int](objc.ID(nsWindow), sel("windowNumber")))
 }

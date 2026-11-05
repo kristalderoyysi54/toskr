@@ -386,11 +386,3 @@ func (e *shotEditor) patchBitmap(img *image.RGBA) *ui.Bitmap {
 	e.patches[img] = bm
 	return bm
 }
-
-func (a *app) shotStartLong(c *ui.Context, d *shotDisplay) {
-	if len(d.ed.hist.Shapes) > 0 {
-		d.ed.flash(c, tr("长截屏不保留标注，请先撤销标注"))
-		return
-	}
-	d.ed.flash(c, tr("长截屏开发中"))
-}
