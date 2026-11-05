@@ -30,6 +30,9 @@ func tr(s string) string {
 }
 
 var en = map[string]string{
+	"剪贴": "Clip", "笔记": "Notes", "未识别目标": "No target", "可发送": "Ready", "此分组为空": "Empty section",
+	"选卡片": "Select", "长按 ⌥ Option": "Hold ⌥ Option", "搜索": "Search", "命令": "Commands", "全部快捷键": "All shortcuts", "添加笔记或提示词…": "Add a note or prompt…",
+	"来自 ": "From ", "文本": "Text", "图片": "Image", "清理已完成": "Clear done", "订阅账单": "Subscriptions", "设置": "Settings",
 	"队列": "Queue", "任务": "Tasks", "账单": "Bills", "秘文": "Vault",
 	"收件箱": "Inbox", "剪贴板": "Clipboard", "截图": "Screenshot",
 	"钉住：发送后不收起（⌘P）": "Pin: keep open after sending (⌘P)", "设置（⌘,）": "Settings (⌘,)",

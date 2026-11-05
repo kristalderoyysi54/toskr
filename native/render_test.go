@@ -61,8 +61,8 @@ func TestRenderPanelSnapshots(t *testing.T) {
 		dark, vibrancy bool
 		glass          string
 	}{
-		{"panel-light-glass", pageQueue, false, true, "glass"},
-		{"panel-dark-glass", pageQueue, true, true, "glass"},
+		{"panel-light-glass", pageNotes, false, true, "glass"},
+		{"panel-dark-glass", pageNotes, true, true, "glass"},
 		{"tasks-light", pageTasks, false, true, "glass"},
 		{"bills-dark", pageBills, true, true, "glass"},
 		{"secrets-light", pageSecrets, false, true, "glass"},

@@ -17,8 +17,10 @@ import (
 )
 
 // 面板页
+// 页签与 Tauri 版一致：剪贴 / 笔记 / 任务；账单与秘文从「更多」菜单进入。
 const (
-	pageQueue = iota
+	pageClip = iota
+	pageNotes
 	pageTasks
 	pageBills
 	pageSecrets
@@ -67,6 +69,13 @@ type app struct {
 	history       []delivery
 	thumbs        map[string]ui.ImageSource
 	aiBusy        string // 正在 AI 处理的笔记 ID
+
+	// 1:1 主面板
+	noteGroups []noteGroup
+	doneOpen   map[string]bool
+	searchOpen bool
+	menuOpen   bool
+	focusList  bool
 
 	// 任务页
 	tasks     []store.Task
@@ -119,7 +128,7 @@ type app struct {
 }
 
 func newApp(sys core.System, st *store.Store) *app {
-	a := &app{sys: sys, store: st, section: store.SectionInbox, thumbs: map[string]ui.ImageSource{}, revealed: map[string]time.Time{}}
+	a := &app{sys: sys, store: st, page: pageNotes, section: store.SectionInbox, doneOpen: map[string]bool{}, thumbs: map[string]ui.ImageSource{}, revealed: map[string]time.Time{}}
 	a.reload()
 	return a
 }
@@ -136,13 +145,19 @@ func (a *app) reload() {
 	if !slices.ContainsFunc(a.store.Sections(), func(s store.Section) bool { return s.ID == a.section }) {
 		a.section = store.SectionInbox
 	}
-	src := a.store.Section(a.section)
 	a.notes, a.done = a.notes[:0], a.done[:0]
-	for _, n := range store.Search(src, a.query) {
-		if n.Done {
-			a.done = append(a.done, n)
-		} else {
+	if a.page == pageClip {
+		for _, n := range store.Search(a.store.Section(store.SectionClipboard), a.query) {
 			a.notes = append(a.notes, n)
+		}
+	} else {
+		// 笔记页：所有非剪贴板分组按顺序展开，键盘选择在扁平列表上移动
+		a.noteGroups = a.groups()
+		for _, g := range a.noteGroups {
+			if !g.sec.Collapsed {
+				a.notes = append(a.notes, g.open...)
+			}
+			a.done = append(a.done, g.done...)
 		}
 	}
 	a.selected = max(0, min(a.selected, len(a.notes)-1))

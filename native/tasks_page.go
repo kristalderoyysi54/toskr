@@ -133,7 +133,7 @@ func (a *app) taskRow(c *ui.Context, task store.Task) {
 		}
 		if m.Item(tr("转为笔记发送")).Chosen() {
 			_, _, _ = a.store.Add(store.Note{Section: store.SectionInbox, Text: task.Text})
-			a.switchPage(pageQueue)
+			a.switchPage(pageNotes)
 		}
 		m.Separator()
 		if m.Item(tr("删除")).Chosen() {

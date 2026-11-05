@@ -40,15 +40,18 @@ func TestDoneFoldAndClearWithUndo(t *testing.T) {
 	a, tt := testApp(t, "要完成的", "留着的")
 	tt.Key(ui.Cmd, ui.KeyD)
 	tt.Frame()
-	if !tt.HasText("▸ 已完成 1") || !tt.HasText("收件箱 1") {
+	if !tt.HasText("已完成 1") || tt.HasText("要完成的") {
 		t.Fatalf("%v", tt.Texts())
 	}
-	_ = tt.Click("▸ 已完成 1")
+	_ = tt.Click("已完成 1")
 	tt.Frame()
 	if !tt.HasText("要完成的") {
 		t.Fatal("展开后应显示已完成项")
 	}
-	_ = tt.Click("清理")
+	_ = tt.RightClick("收件箱")
+	if err := tt.ChooseMenuItem("清理已完成"); err != nil {
+		t.Fatalf("%v %v", err, tt.Menu())
+	}
 	tt.Frame()
 	if len(a.store.Notes()) != 1 {
 		t.Fatal("清理已完成")
@@ -67,18 +70,16 @@ func TestNewSectionChipAndMoveVia(t *testing.T) {
 	tt.Type("提示词")
 	tt.Key(0, ui.KeyEnter)
 	tt.Frame()
-	if !tt.HasText("提示词 0") || a.section == store.SectionInbox {
-		t.Fatalf("新分组应出现并切过去 %v", tt.Texts())
+	if !tt.HasText("提示词") || !tt.HasText("此分组为空") || a.section == store.SectionInbox {
+		t.Fatalf("新分组应出现并成为输入区默认分组 %v", tt.Texts())
 	}
-	_ = tt.Click("收件箱 1")
-	tt.Frame()
 	_ = tt.RightClick("一条")
 	if err := tt.ChooseMenuItem("移动到", "提示词"); err != nil {
 		t.Fatalf("%v %v", err, tt.Menu())
 	}
 	tt.Frame()
-	if !tt.HasText("提示词 1") || !tt.HasText("收件箱 0") {
-		t.Fatalf("%v", tt.Texts())
+	if n := a.store.Notes()[0]; n.Section == store.SectionInbox {
+		t.Fatalf("应移到新分组 %+v", n)
 	}
 }
 
@@ -102,7 +103,7 @@ func TestPreflightBlocksUntilConfirmedAndRedacts(t *testing.T) {
 
 func TestTasksQuickAddCompleteAndRecurring(t *testing.T) {
 	a, tt := testApp(t)
-	tt.Key(ui.Cmd, ui.Key2)
+	tt.Key(ui.Cmd, ui.Key3)
 	tt.Frame()
 	a.taskIn.Focus()
 	tt.Frame()
@@ -128,7 +129,7 @@ func TestTasksQuickAddCompleteAndRecurring(t *testing.T) {
 
 func TestBillsFormAndSummary(t *testing.T) {
 	a, tt := testApp(t)
-	tt.Key(ui.Cmd, ui.Key3)
+	a.switchPage(pageBills)
 	tt.Frame()
 	a.billForm = billForm{open: true, cycle: 3, name: "域名", amount: 120, due: time.Now().AddDate(0, 0, 10).Format("2006-01-02")}
 	tt.Frame()
@@ -149,7 +150,7 @@ func TestBillsFormAndSummary(t *testing.T) {
 func TestSecretsMaskedUntilRevealed(t *testing.T) {
 	a, tt := testApp(t)
 	a.store.AddSecret("服务器", "root-pass-123")
-	tt.Key(ui.Cmd, ui.Key4)
+	a.switchPage(pageSecrets)
 	tt.Frame()
 	if tt.HasText("root-pass-123") || !tt.HasText("服务器") {
 		t.Fatalf("默认必须遮罩 %v", tt.Texts())
@@ -168,7 +169,7 @@ func TestSecretsMaskedUntilRevealed(t *testing.T) {
 
 func TestSealToolRoundTripInPanel(t *testing.T) {
 	a, tt := testApp(t)
-	tt.Key(ui.Cmd, ui.Key4)
+	a.switchPage(pageSecrets)
 	a.sealIn, a.sealPass = "卡号在这", "pw"
 	tt.Frame()
 	_ = tt.Click("生成密文")
@@ -189,13 +190,13 @@ func TestEnglishUI(t *testing.T) {
 	setLanguage("en", nil)
 	defer setLanguage("zh", nil)
 	_, tt := testApp(t)
-	for _, s := range []string{"Queue", "Tasks", "Inbox 0", "Clipboard 0"} {
+	for _, s := range []string{"Clip", "Notes", "Tasks", "Inbox", "Empty section", "Hold ⌥ Option"} {
 		if !tt.HasText(s) {
 			t.Fatalf("缺 %q：%v", s, tt.Texts())
 		}
 	}
 	setLanguage("system", []string{"zh-Hans-CN"})
-	if tr("队列") != "队列" {
+	if tr("笔记") != "笔记" {
 		t.Fatal("系统中文应显示中文")
 	}
 }

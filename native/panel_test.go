@@ -47,7 +47,7 @@ func testApp(t *testing.T, texts ...string) (*app, *ui.Tester) {
 
 func TestPanelShowsQueueAndCounts(t *testing.T) {
 	_, tt := testApp(t, "第一条笔记", "第二条笔记")
-	for _, s := range []string{"第一条笔记", "第二条笔记", "收件箱 2", "剪贴板 0", "队列", "任务", "账单", "秘文"} {
+	for _, s := range []string{"第一条笔记", "第二条笔记", "收件箱", "2", "剪贴", "笔记", "任务", "提示词库"[:0] + "来自 Safari"} {
 		if !tt.HasText(s) {
 			t.Fatalf("缺少 %q，现有 %v", s, tt.Texts())
 		}
@@ -56,7 +56,7 @@ func TestPanelShowsQueueAndCounts(t *testing.T) {
 
 func TestEmptyStateHint(t *testing.T) {
 	_, tt := testApp(t)
-	if !tt.HasText("队列为空\n在任意应用选中文字，双击 ⇧ 收进来") {
+	if !tt.HasText("此分组为空") {
 		t.Fatalf("%v", tt.Texts())
 	}
 }
@@ -109,6 +109,8 @@ func TestDeleteWithUndo(t *testing.T) {
 
 func TestSearchFilters(t *testing.T) {
 	a, tt := testApp(t, "apple pie", "banana")
+	a.searchOpen = true
+	tt.Frame()
 	a.search.Focus()
 	tt.Frame()
 	tt.Type("ban")
@@ -140,7 +142,7 @@ func TestClipboardTabAndMoveToNotes(t *testing.T) {
 	a, tt := testApp(t)
 	a.store.Add(store.Note{Section: store.SectionClipboard, Text: "复制来的"})
 	tt.Frame()
-	if err := tt.Click("剪贴板 1"); err != nil {
+	if err := tt.Click("剪贴"); err != nil {
 		t.Fatalf("%v %v", err, tt.Texts())
 	}
 	tt.Frame()

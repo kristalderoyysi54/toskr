@@ -3,6 +3,7 @@ package store
 import (
 	"slices"
 	"strings"
+	"time"
 )
 
 // Section 是笔记分组。inbox / clipboard 为系统分组（ID 稳定，不可删）。
@@ -247,4 +248,16 @@ func (s *Store) PruneClipboard(days int, now func() int64) int {
 		return removed > 0
 	})
 	return removed
+}
+
+// SetCreatedAt 改写创建时间（数据导入与视觉对照测试用）。
+func (s *Store) SetCreatedAt(id string, at time.Time) error {
+	return s.mutate(func() bool {
+		i := s.index(id)
+		if i < 0 {
+			return false
+		}
+		s.notes[i].CreatedAt = at
+		return true
+	})
 }
