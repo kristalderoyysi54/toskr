@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -60,6 +61,7 @@ func (a *app) openSettingsState() {
 	a.setCompan = strings.Join(st.Companion, "\n")
 	a.axTrusted = macos.AXTrusted(false)
 	a.recovery = a.store.RecoveryPoints()
+	a.openAtLogin = a.panel != nil && mygo.App.OpenAtLogin() // 无 App 运行（视图测试）时查询会阻塞
 }
 
 func lines(s string) []string {
@@ -151,12 +153,48 @@ func (a *app) settingsView(c *ui.Context) {
 					{title: tr("语言"), hint: tr("跟随系统时，中文系统显示中文，其余显示英文"), control: func() {
 						changed = segmented(c, k, &a.setLang, "跟随系统", "简体中文", "English") || changed
 					}},
+					{title: tr("主题"), control: func() {
+						i := max(0, slices.Index(themeNames, st.Theme))
+						if segmented(c, k, &i, "跟随系统", "浅色", "深色") {
+							cur := a.store.Settings()
+							cur.Theme = themeNames[i]
+							_ = a.store.SetSettings(cur)
+							applyTheme(cur.Theme)
+						}
+					}},
+					{title: tr("详情窗字号"), hint: tr("详情窗内也可用 ⌘+ / ⌘− 调整，⌘0 复位"), control: func() {
+						v := float64(st.DetailFontSize)
+						if sliderValue(c, k, &v, 10, 24, 1, itoa(st.DetailFontSize)+"px") {
+							cur := a.store.Settings()
+							cur.DetailFontSize = int(v)
+							_ = a.store.SetSettings(cur)
+							if a.detailWin != nil {
+								a.detailWin.Invalidate()
+							}
+						}
+					}},
 					{title: tr("面板材质"), hint: tr("macOS 26 起为系统液态玻璃，更早系统回退为模糊材质"), control: func() {
 						changed = segmented(c, k, &a.setGlass, glassLabels...) || changed
 					}},
 				}},
 				{tr("窗口与提示"), []setRow{
+					{title: tr("开机启动"), hint: tr("登录后在后台待命"), control: func() {
+						if toggle(c, s, &a.openAtLogin) && a.panel != nil {
+							if err := mygo.App.SetOpenAtLogin(a.openAtLogin); err != nil {
+								a.openAtLogin = !a.openAtLogin
+								c.Toast(tr("设置失败：") + err.Error())
+							}
+						}
+					}},
+					{title: tr("面板置顶"), hint: tr("面板保持在其他窗口之上"), control: setToggle(!st.PanelNotOnTop, func(s *store.Settings, v bool) {
+						s.PanelNotOnTop = !v
+						if a.panel != nil {
+							a.panel.SetAlwaysOnTop(v)
+						}
+					})},
+					{title: tr("失焦自动隐藏"), hint: tr("切到其他应用时收起面板，钉住时除外"), control: setToggle(!st.KeepOnBlur, func(s *store.Settings, v bool) { s.KeepOnBlur = !v })},
 					{title: tr("隐身模式"), hint: tr("不弹「已捕获」气泡，适合投屏；失败提醒仍会显示"), control: setToggle(st.Stealth, func(s *store.Settings, v bool) { s.Stealth = v })},
+					{title: tr("音效"), hint: tr("捕获成功时轻响一声，隐身模式下静音"), control: setToggle(!st.SoundOff, func(s *store.Settings, v bool) { s.SoundOff = !v })},
 				}},
 			},
 			{
@@ -508,4 +546,26 @@ func (a *app) secretSections(c *ui.Context, k tokens, s settingsTokens, st store
 			{title: tr("安全边界"), hint: tr("防 IM / 网络 / 肩窥：密文用 AES-GCM，密钥经 PBKDF2 派生；不防本机取证（密钥随本地加密数据保存）")},
 		}},
 	}
+}
+
+var themeNames = []string{"system", "light", "dark"}
+
+// applyTheme 切换全应用外观（跟随系统 / 浅色 / 深色），所有窗口随 Theme 模块重绘。
+func applyTheme(theme string) {
+	switch theme {
+	case "light":
+		mygo.Theme.SetSource(mygo.ThemeLight)
+	case "dark":
+		mygo.Theme.SetSource(mygo.ThemeDark)
+	default:
+		mygo.Theme.SetSource(mygo.ThemeSystem)
+	}
+}
+
+// playCaptureSound 捕获成功的提示音（系统 Tink；音效关闭或隐身时不响）。
+func (a *app) playCaptureSound() {
+	if st := a.store.Settings(); st.SoundOff || st.Stealth || a.panel == nil {
+		return
+	}
+	_ = exec.Command("/usr/bin/afplay", "-v", "0.4", "/System/Library/Sounds/Tink.aiff").Start()
 }

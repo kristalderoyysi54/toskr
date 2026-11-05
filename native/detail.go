@@ -101,6 +101,21 @@ func (a *app) detailKeys(c *ui.Context, n store.Note) {
 	if c.Shortcut(ui.Cmd, ui.KeyEnter) {
 		a.sendDetail(n)
 	}
+	// ⌘+ / ⌘− 调字号（10–24），⌘0 复位 12，写回设置
+	st := a.store.Settings()
+	fs := st.DetailFontSize
+	switch {
+	case c.Shortcut(ui.Cmd, ui.KeyEqual):
+		fs = min(24, fs+1)
+	case c.Shortcut(ui.Cmd, ui.KeyMinus):
+		fs = max(10, fs-1)
+	case c.Shortcut(ui.Cmd, ui.Key0):
+		fs = 12
+	}
+	if fs != st.DetailFontSize {
+		st.DetailFontSize = fs
+		_ = a.store.SetSettings(st)
+	}
 	if c.Shortcut(0, ui.KeyEscape) {
 		switch {
 		case a.detail.edit:
@@ -208,7 +223,7 @@ func (a *app) detailBody(c *ui.Context, k tokens, s settingsTokens, n store.Note
 			case a.detail.raw || n.Kind == "code":
 				text(c, n.Text, 13, 21.125, 400, k.fg).Font(fontMono).Wrap().Selectable().Margin(5.85, 0, 0, 0)
 			default:
-				ui.Column(c).Padding(5.85, 0, 0, 0).Gap(5.85).Children(func() { renderMarkdown(c, k, n.Text) })
+				ui.Column(c).Padding(5.85, 0, 0, 0).Gap(5.85).Children(func() { renderMarkdown(c, k, n.Text, float32(a.store.Settings().DetailFontSize)+1) })
 			}
 		})
 	})
@@ -222,7 +237,8 @@ var (
 	hRe  = regexp.MustCompile(`^(#{1,6})\s+(.*)$`)
 )
 
-func renderMarkdown(c *ui.Context, k tokens, src string) {
+func renderMarkdown(c *ui.Context, k tokens, src string, fs float32) {
+	lh := fs * 1.625
 	lines := strings.Split(strings.ReplaceAll(src, "\r\n", "\n"), "\n")
 	for i := 0; i < len(lines); {
 		line := lines[i]
@@ -241,7 +257,7 @@ func renderMarkdown(c *ui.Context, k tokens, src string) {
 			i = j + 1
 		case hRe.MatchString(line):
 			m := hRe.FindStringSubmatch(line)
-			size := []float32{20, 17, 15, 14, 13, 13}[len(m[1])-1]
+			size := fs * []float32{1.54, 1.31, 1.15, 1.08, 1, 1}[len(m[1])-1]
 			text(c, m[2], size, size*1.4, 600, k.fg).Wrap().Selectable()
 			i++
 		case olRe.MatchString(line) || ulRe.MatchString(line):
@@ -257,8 +273,8 @@ func renderMarkdown(c *ui.Context, k tokens, src string) {
 						break
 					}
 					ui.Row(c).AlignItems(ui.Start).Children(func() {
-						text(c, marker, 13, 21.125, 400, k.fg).Width(18.2).Padding(0, 3.6, 0, 0).TextAlign(ui.End)
-						text(c, body, 13, 21.125, 400, k.fg).Wrap().Selectable().Grow(1).Basis(0)
+						text(c, marker, fs, lh, 400, k.fg).Width(18.2).Padding(0, 3.6, 0, 0).TextAlign(ui.End)
+						text(c, body, fs, lh, 400, k.fg).Wrap().Selectable().Grow(1).Basis(0)
 					})
 					i++
 				}
@@ -269,7 +285,7 @@ func renderMarkdown(c *ui.Context, k tokens, src string) {
 				!hRe.MatchString(lines[j]) && !strings.HasPrefix(strings.TrimSpace(lines[j]), "```") {
 				j++
 			}
-			text(c, strings.Join(lines[i:j], "\n"), 13, 21.125, 400, k.fg).Wrap().Selectable()
+			text(c, strings.Join(lines[i:j], "\n"), fs, lh, 400, k.fg).Wrap().Selectable()
 			i = j
 		}
 	}

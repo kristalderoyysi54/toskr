@@ -59,6 +59,7 @@ func start() (*app, error) {
 	}
 	seedIfRequested(st)
 	setLanguage(st.Settings().Language, mygo.App.PreferredLanguages())
+	applyTheme(st.Settings().Theme)
 	a := newApp(core.Mac{}, st)
 	diag.Push("数据水合完成 笔记=%d 剪贴板=%d", a.counts[store.SectionInbox], a.counts[store.SectionClipboard])
 
@@ -69,11 +70,12 @@ func start() (*app, error) {
 		Content: ui.View(a.panelView),
 	})
 	a.panel.SetActiveAppearance(true)
+	a.panel.SetAlwaysOnTop(!st.Settings().PanelNotOnTop)
 	a.panel.OnClose(func(e *mygo.CloseEvent) { e.PreventDefault(); a.hidePanel() })
 	a.panel.OnBlur(func() {
 		diag.Push("面板失焦 pinned=%v", a.pinned)
 		a.remaskAll() // 秘文失焦即回遮罩（钉住时也一样，与 Tauri 一致）
-		if !a.pinned {
+		if !a.pinned && !a.store.Settings().KeepOnBlur {
 			a.hidePanel()
 		}
 	})

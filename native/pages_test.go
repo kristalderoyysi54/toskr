@@ -385,6 +385,49 @@ func TestSettingsNavSearchAndToggle(t *testing.T) {
 	}
 }
 
+func TestSettingsGeneralRowsWriteBack(t *testing.T) {
+	a, _ := testApp(t)
+	a.openSettingsState()
+	tt := ui.NewTester(a.settingsView, 1040, 720)
+	tt.Frame()
+	for _, label := range []string{"主题", "详情窗字号", "开机启动", "面板置顶", "失焦自动隐藏", "音效"} {
+		if !tt.HasText(label) {
+			t.Fatalf("通用页缺少「%s」 %v", label, tt.Texts())
+		}
+	}
+	for _, c := range []struct {
+		label string
+		get   func() bool
+	}{
+		{"失焦自动隐藏", func() bool { return a.store.Settings().KeepOnBlur }},
+		{"音效", func() bool { return a.store.Settings().SoundOff }},
+		{"面板置顶", func() bool { return a.store.Settings().PanelNotOnTop }},
+	} {
+		if r, ok := tt.Find(c.label); ok {
+			tt.ClickAt(935, r.Y+18)
+		}
+		tt.Frame()
+		if !c.get() {
+			t.Fatalf("关闭「%s」应写回设置", c.label)
+		}
+	}
+	// 详情窗 ⌘− / ⌘0
+	n, _, _ := a.store.Add(store.Note{Section: store.SectionInbox, Text: "字号"})
+	a.detail = detailState{id: n.ID, pickAnchor: -1, pickEnd: -1}
+	dt := ui.NewTester(a.detailView, 560, 540)
+	dt.Frame()
+	dt.Key(ui.Cmd, ui.KeyMinus)
+	dt.Frame()
+	if got := a.store.Settings().DetailFontSize; got != 11 {
+		t.Fatalf("⌘− 后字号应为 11，实际 %d", got)
+	}
+	dt.Key(ui.Cmd, ui.Key0)
+	dt.Frame()
+	if got := a.store.Settings().DetailFontSize; got != 12 {
+		t.Fatalf("⌘0 后字号应复位 12，实际 %d", got)
+	}
+}
+
 func enableSecret(a *app) {
 	st := a.store.Settings()
 	st.SecretEnabled = true

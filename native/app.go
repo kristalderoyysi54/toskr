@@ -75,6 +75,7 @@ type app struct {
 	searchOpen    bool
 	menuOpen      bool
 	placementOpen bool // 面板菜单「位置与停靠」二级页
+	openAtLogin   bool // 设置页「开机启动」（打开设置时读一次）
 	focusList     bool
 
 	clock func() time.Time // 可注入时钟（视觉对照测试固定在参照截图时刻）
@@ -283,6 +284,7 @@ func (a *app) onTrigger() {
 				a.showHUD("duplicate", preview(note.Text, 40))
 				return
 			}
+			a.playCaptureSound()
 			a.showHUDUndo("added", preview(note.Text, 40), func() { // 撤销捕获：删掉刚收进的笔记
 				a.store.Delete(note.ID)
 				a.reload()

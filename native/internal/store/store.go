@@ -68,8 +68,14 @@ type Settings struct {
 	SecretDefaultKeyID string      `json:"secretDefaultKeyId,omitempty"`
 	SecretCipherStyle  string      `json:"secretCipherStyle,omitempty"` // classic | code | log | quote
 	SecretRevealMs     int         `json:"secretRevealTimeoutMs"`       // 显现后自动回遮罩（0 = 不自动）
-	CompanionOff       bool        `json:"companionOff,omitempty"`
-	FreeMove           bool        `json:"freeMove,omitempty"`
+	// 窗口与外观（与 Tauri 同名设置；布尔用「关闭」语义，旧数据缺字段即默认开启）
+	Theme          string `json:"theme,omitempty"`          // system | light | dark
+	PanelNotOnTop  bool   `json:"panelNotOnTop,omitempty"`  // 面板置顶（默认开）
+	KeepOnBlur     bool   `json:"keepOnBlur,omitempty"`     // 失焦自动隐藏（默认开）
+	SoundOff       bool   `json:"soundOff,omitempty"`       // 捕获音效（默认开）
+	DetailFontSize int    `json:"detailFontSize,omitempty"` // 详情窗字号 10–24，0 = 12
+	CompanionOff   bool   `json:"companionOff,omitempty"`
+	FreeMove       bool   `json:"freeMove,omitempty"`
 }
 
 func DefaultSettings() Settings {
@@ -80,7 +86,7 @@ func DefaultSettings() Settings {
 		PanelHotkey: "Ctrl+Alt+Space", Language: "system", ClipRetainDays: 7,
 		ScreenshotKey: "Ctrl+Alt+A", AIEndpoint: "https://api.openai.com/v1", AIModel: "gpt-4o-mini",
 		Companion: []string{"com.googlecode.iterm2", "com.apple.Terminal", "com.todesktop.230313mzl4w4u92", "com.microsoft.VSCode"},
-		EdgeHide:  true, Currency: "¥", DueReminders: true, SecretRevealMs: 8000,
+		EdgeHide:  true, Currency: "¥", DueReminders: true, SecretRevealMs: 8000, DetailFontSize: 12,
 		ExcludedApps: []string{"com.1password.1password", "com.apple.keychainaccess", "com.bitwarden.desktop"},
 	}
 }
@@ -486,6 +492,9 @@ func mergeSettings(st Settings) Settings {
 	d := DefaultSettings()
 	if st.TriggerModifier == "" {
 		return d
+	}
+	if st.DetailFontSize == 0 {
+		st.DetailFontSize = 12
 	}
 	if st.Language == "" {
 		st.Language = d.Language
