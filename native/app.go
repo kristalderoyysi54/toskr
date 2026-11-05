@@ -119,8 +119,8 @@ type app struct {
 	revealed map[string]time.Time
 
 	// 详情窗
-	detailID   string
 	detailText string
+	detail     detailState
 
 	// HUD
 	hudText, hudKind string

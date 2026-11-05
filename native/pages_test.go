@@ -391,3 +391,50 @@ func enableSecret(a *app) {
 	_ = a.store.SetSettings(st)
 	a.noteSub = 1
 }
+
+func TestDetailEditTagsPickAndRaw(t *testing.T) {
+	a, _ := testApp(t, "第一行\n\n1. 甲项\n2. 乙项 mygo")
+	n := a.store.Notes()[0]
+	a.detail = detailState{id: n.ID, pickAnchor: -1, pickEnd: -1}
+	tt := ui.NewTester(a.detailView, 560, 540)
+	tt.Frame()
+	if !tt.HasText("甲项") || !tt.HasText("1.") || tt.HasText("1. 甲项") {
+		t.Fatalf("应按有序列表渲染 %v", tt.Texts())
+	}
+	_ = tt.Click("原文")
+	tt.Frame()
+	if !tt.HasText(n.Text) || !tt.HasText("渲染") {
+		t.Fatalf("原文模式应显示原始文本 %v", tt.Texts())
+	}
+	_ = tt.Click("＋ 标签")
+	tt.Frame()
+	tt.Type("周会")
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	if got, _ := a.store.Note(n.ID); !slices.Equal(got.Tags, []string{"周会"}) || !tt.HasText("#周会") {
+		t.Fatalf("标签 %+v %v", got.Tags, tt.Texts())
+	}
+	_ = tt.Click("选词")
+	tt.Frame()
+	_ = tt.Click("乙")
+	_ = tt.Click("mygo")
+	tt.Frame()
+	if got := a.pickedText(n.Text); got != "乙项 mygo" {
+		t.Fatalf("选词区间 %q", got)
+	}
+	if !tt.HasText("发送所选") {
+		t.Fatalf("选中后发送钮应只发所选 %v", tt.Texts())
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	_ = tt.Click("编辑")
+	tt.Frame()
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Type("改过的正文")
+	tt.Frame()
+	tt.Key(ui.Cmd, ui.KeyS)
+	tt.Frame()
+	if got, _ := a.store.Note(n.ID); got.Text != "改过的正文" || a.detail.edit {
+		t.Fatalf("⌘S 应保存并退出编辑 %q edit=%v draft=%q", got.Text, a.detail.edit, a.detailText)
+	}
+}

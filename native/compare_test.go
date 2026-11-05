@@ -156,6 +156,13 @@ func TestCompareWithTauri(t *testing.T) {
 	_ = st.SetSettings(cfg)
 	a.noteSub = 0
 
+	// 详情窗（560×540）：与 setup-detail.js 同一条笔记（Safari，61 秒前）
+	dn, _, _ := st.Add(store.Note{Section: store.SectionInbox, SourceApp: "Safari",
+		Text: "会议纪要：周五前完成 mygo 原生版对比报告，附内存与启动耗时。\n\n1. 主面板、任务、剪贴、订阅、秘文逐屏 1:1 对照\n2. 设置窗外壳与控件\n3. HUD 气泡与详情窗"})
+	_ = st.SetCreatedAt(dn.ID, now.Add(-61*time.Second))
+	a.detail = detailState{id: dn.ID, pickAnchor: -1, pickEnd: -1}
+	compareSized(t, dir, "detail", a.detailView, 560, 540)
+
 	// HUD（264×100）：可撤销的捕获气泡，未悬停
 	a.hudKind, a.hudText, a.hudUndo, a.hudHover = "added", "会议纪要：周五前完成 mygo 原生版对比报告", func() {}, false
 	compareSized(t, dir, "hud", a.hudView, 264, 100)

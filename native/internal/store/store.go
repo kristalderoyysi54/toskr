@@ -34,8 +34,9 @@ type Note struct {
 	SentAt    time.Time `json:"sentAt,omitzero"`
 	Kept      bool      `json:"kept,omitempty"`
 	Done      bool      `json:"done,omitempty"`
-	Kind      string    `json:"kind,omitempty"`      // text | link | code | image
-	LinkTitle string    `json:"linkTitle,omitempty"` // 链接卡的网页标题（与 Tauri 数据同名字段；缺省展示 URL）
+	Kind      string    `json:"kind,omitempty"` // text | link | code | image
+	LinkTitle string    `json:"linkTitle,omitempty"`
+	Tags      []string  `json:"tags,omitempty"` // 标签（详情窗编辑；同 Tauri note.tags） // 链接卡的网页标题（与 Tauri 数据同名字段；缺省展示 URL）
 	ImageFile string    `json:"imageFile,omitempty"`
 	ImageW    int       `json:"imageW,omitempty"`
 	ImageH    int       `json:"imageH,omitempty"`
@@ -307,6 +308,34 @@ func (s *Store) Update(id, text string) error {
 		s.notes[i].Text, s.notes[i].HTML = text, ""
 		return true
 	})
+}
+
+// SetTags 覆盖笔记标签（去空白、去重、保序）。
+func (s *Store) SetTags(id string, tags []string) error {
+	var clean []string
+	for _, t := range tags {
+		if t = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(t), "#")); t != "" && !slices.Contains(clean, t) {
+			clean = append(clean, t)
+		}
+	}
+	return s.mutate(func() bool {
+		i := s.index(id)
+		if i < 0 || slices.Equal(s.notes[i].Tags, clean) {
+			return false
+		}
+		s.notes[i].Tags = clean
+		return true
+	})
+}
+
+// Note 按 id 取一条（详情窗刷新用）。
+func (s *Store) Note(id string) (Note, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if i := s.index(id); i >= 0 {
+		return s.notes[i], true
+	}
+	return Note{}, false
 }
 
 // MarkSent 发送成功：记录发送时间；所在分组未设 KeepAfterSend 时同时标记完成。
