@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
@@ -43,34 +44,75 @@ func (a *app) panelView(c *ui.Context) {
 			a.searchRow(c, k)
 		}
 		a.targetBar(c, k)
-		if a.page <= pageTasks {
-			a.tabs(c, k)
-		} else {
-			a.subpageBar(c, k)
-		}
+		a.tabs(c, k)
 		if len(a.pending) > 0 {
 			ui.Column(c).Margin(0, 12, 6, 12).Children(func() { a.preflightBar(c) })
 		}
+		st := a.store.Settings()
 		switch a.page {
 		case pageClip:
 			a.clipPage(c, k)
 		case pageTasks:
 			ui.Column(c).Grow(1).Children(func() { a.tasksPage(c) })
-		case pageBills:
-			ui.Column(c).Grow(1).Padding(0, 10).Gap(8).Children(func() { a.billsPage(c) })
-		case pageSecrets:
-			ui.Column(c).Grow(1).Padding(0, 10).Gap(8).Children(func() { a.secretsPage(c) })
 		default:
-			a.notesPage(c, k)
+			if st.SecretEnabled {
+				if i, ok := a.textTabs(c, k, []string{"笔记", "秘文"}, a.noteSub, nil); ok {
+					a.noteSub = i
+					a.chosen.Clear()
+				}
+			} else {
+				a.noteSub = 0
+			}
+			if a.noteSub == 1 {
+				ui.Column(c).Grow(1).Children(func() { a.secretsPage(c, k) })
+			} else {
+				a.notesPage(c, k)
+			}
 		}
 		a.hintsRow(c, k)
-		if a.page == pageNotes { // 发送输入区只在笔记页，与 Tauri 一致（剪贴 / 任务页没有）
+		if a.page == pageNotes && a.noteSub == 0 { // 发送输入区只在笔记视图，与 Tauri 一致
 			a.composerBar(c, k)
 		}
 	})
 	if a.menuOpen {
-		a.moreMenu(c, k)
+		a.panelMenu(c, k)
 	}
+}
+
+// textTabs 是 Tauri 的二级文字页签（今天 · 任务 · 订阅 / 笔记 · 秘文）：选中加粗 + 22×2 短下划线。
+func (a *app) textTabs(c *ui.Context, k tokens, labels []string, sel int, right func()) (int, bool) {
+	picked, changed := sel, false
+	ui.Row(c).Height(34).Padding(4, 14, 8, 16).AlignItems(ui.Start).Children(func() {
+		ui.Row(c).Gap(2).Grow(1).AlignItems(ui.Center).Children(func() {
+			for i, label := range labels {
+				if i > 0 {
+					text(c, "·", 10, 14, 400, k.muted.Alpha(0.45)).Padding(0, 2)
+				}
+				on := sel == i
+				b := ui.Column(c).Height(22).Padding(2, 8, 4, 8).Radius(8).AlignItems(ui.Center).Key("sub-" + label)
+				if !on && b.Hovered() {
+					b.Background(k.track)
+				}
+				b.Children(func() {
+					w, col := 400, k.muted
+					if on {
+						w, col = 600, k.fg
+					}
+					text(c, tr(label), 11, 16, w, col)
+					if on {
+						ui.Box(c).Absolute().Bottom(0).Left(8).Right(8).Height(2).Radius(1).Background(k.fg.Alpha(0.85))
+					}
+				})
+				if b.Clicked() && !on {
+					picked, changed = i, true
+				}
+			}
+		})
+		if right != nil {
+			ui.Row(c).Children(right)
+		}
+	})
+	return picked, changed
 }
 
 func (a *app) searchRow(c *ui.Context, k tokens) {
@@ -83,50 +125,101 @@ func (a *app) searchRow(c *ui.Context, k tokens) {
 	})
 }
 
-// subpageBar 是账单 / 秘文页顶部的返回条。
-func (a *app) subpageBar(c *ui.Context, k tokens) {
-	title := tr("账单")
-	if a.page == pageSecrets {
-		title = tr("秘文")
+// panelMenu 是标题栏 ☰「面板选项」（Tauri PanelOptionsMenu）：当前列表 / 面板 两组，位置与停靠为二级页。
+func (a *app) panelMenu(c *ui.Context, k tokens) {
+	st := a.store.Settings()
+	if ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Clicked() { // 点菜单外关闭
+		a.menuOpen, a.placementOpen = false, false
+		return
 	}
-	ui.Row(c).Height(30).Margin(6, 12, 6, 12).Gap(6).AlignItems(ui.Center).Children(func() {
-		if a.iconButton(c, k, "arrow-left", 22, 14, tr("返回笔记")) {
-			a.switchPage(pageNotes)
+	menu := ui.Column(c).Absolute().Top(40).Right(40).Width(224).Padding(4).Radius(10).Background(k.floatBtn.Alpha(0.95)).Border(1, k.floatBorder).
+		Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB).InsetShadow(0, 1, 0, 0, k.floatInset)
+	label := func(s string) { text(c, s, 10, 14, 500, k.muted).Padding(4, 8) }
+	sep := func() { ui.Box(c).Height(1).Margin(4, 0).Background(stok(c).inputBorder) }
+	item := func(icon, s string, checked, radio bool, trail string, fn func()) {
+		row := ui.Row(c).Height(29).Padding(6, 8).Gap(8).Radius(6).AlignItems(ui.Center).Key("pm-" + s)
+		if row.Hovered() {
+			row.Background(k.track)
 		}
-		text(c, title, 13, 18, 600, k.fg)
-	})
-}
-
-// moreMenu 是标题栏「更多」按钮的下拉（窗内自绘，与 Tauri 的 HTML 菜单同为窗内浮层）。
-func (a *app) moreMenu(c *ui.Context, k tokens) {
-	ui.Column(c).Absolute().Top(40).Right(16).Width(168).Padding(4).Radius(10).Background(k.floatBtn).Border(1, k.floatBorder).
-		Shadow(0, 6, 16, -4, k.floatShadowB).Children(func() {
-		for _, it := range []struct {
-			icon, label string
-			fn          func()
-		}{
-			{"wallet", "订阅账单", func() { a.switchPage(pageBills) }},
-			{"lock", "秘文", func() { a.switchPage(pageSecrets) }},
-			{"folder-plus", "新建分组", func() { a.switchPage(pageNotes); a.newSecOn = true }},
-			{"camera", "截图", a.screenshot},
-			{"settings-2", "设置", a.openSettings},
-		} {
-			row := ui.Row(c).Height(28).Padding(0, 8).Gap(8).Radius(6).AlignItems(ui.Center)
-			if row.Hovered() {
-				row.Background(k.track)
+		row.Children(func() {
+			if icon != "" {
+				licon(c, icon, 14, k.fg)
 			}
-			row.Children(func() {
-				licon(c, it.icon, 14, k.muted)
-				text(c, tr(it.label), 12, 17, 400, k.fg)
+			text(c, s, 12, 17, 400, k.fg).Grow(1).SingleLine()
+			switch {
+			case trail != "":
+				if trail == ">" {
+					licon(c, "chevron-right", 14, k.fg)
+				} else {
+					text(c, trail, 10, 14, 400, k.muted)
+				}
+			case checked && radio:
+				ui.Box(c).Size(14, 14).Center().Children(func() { ui.Box(c).Size(6, 6).Radius(3).Background(k.fg) })
+			case checked:
+				licon(c, "check", 14, k.fg)
+			default:
+				ui.Box(c).Size(14, 14)
+			}
+		})
+		if row.Clicked() {
+			fn()
+		}
+	}
+	closeMenu := func() { a.menuOpen, a.placementOpen = false, false }
+	menu.Children(func() {
+		if a.placementOpen {
+			item("arrow-left", tr("返回面板选项"), false, false, "", func() { a.placementOpen = false })
+			sep()
+			place := tr("屏幕右侧")
+			if !st.CompanionOff && len(st.Companion) > 0 {
+				place = tr("跟随应用 · 右侧")
+			} else if st.FreeMove {
+				place = tr("自由移动")
+			}
+			label(fmt.Sprintf(tr("当前位置：%s"), place))
+			item("magnet", tr("跟随应用"), !st.CompanionOff, false, "", func() {
+				st.CompanionOff = !st.CompanionOff
+				_ = a.store.SetSettings(st)
 			})
-			if row.Clicked() {
-				a.menuOpen = false
-				it.fn()
+			label(tr("屏幕位置"))
+			item("move", tr("自由移动"), st.FreeMove, true, "", func() {
+				st.FreeMove = true
+				_ = a.store.SetSettings(st)
+				closeMenu()
+			})
+			item("", tr("屏幕右侧"), !st.FreeMove, true, "", func() {
+				st.FreeMove = false
+				_ = a.store.SetSettings(st)
+				closeMenu()
+				a.repositionPanel()
+			})
+			return
+		}
+		done := 0
+		switch {
+		case a.page == pageNotes && a.noteSub == 0:
+			done = len(a.done)
+		case a.page == pageTasks:
+			for _, t := range a.tasks {
+				if t.Status == "done" {
+					done++
+				}
 			}
 		}
+		if done > 0 {
+			label(tr("当前列表"))
+			item("eraser", fmt.Sprintf(tr("清理已完成（%d）"), done), false, false, "⇧⌘⌫", func() {
+				closeMenu()
+				a.clearAllDone(c)
+			})
+			sep()
+		}
+		label(tr("面板"))
+		item("pin", tr("保持面板展开"), a.pinned, false, "", func() { a.pinned = !a.pinned; closeMenu() })
+		item("move", tr("位置与停靠"), false, false, ">", func() { a.placementOpen = true })
 	})
 	if c.Shortcut(0, ui.KeyEscape) {
-		a.menuOpen = false
+		closeMenu()
 	}
 }
 

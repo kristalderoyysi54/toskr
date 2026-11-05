@@ -17,7 +17,7 @@ func (a *app) panelBounds() mygo.Rectangle {
 	d := mygo.Screen.DisplayNearestPoint(mygo.Screen.CursorScreenPoint())
 	wa := d.WorkArea
 	def := mygo.Rectangle{X: wa.X + wa.Width - panelW - panelMargin, Y: wa.Y + panelMargin, Width: panelW, Height: wa.Height - panelMargin*2}
-	if a.target.PID == 0 || !slices.Contains(a.store.Settings().Companion, a.target.BundleID) {
+	if st := a.store.Settings(); a.target.PID == 0 || st.CompanionOff || !slices.Contains(st.Companion, a.target.BundleID) {
 		return def
 	}
 	f, ok := macos.FocusedWindowFrame(a.target.PID)

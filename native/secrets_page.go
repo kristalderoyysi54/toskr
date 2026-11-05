@@ -26,7 +26,7 @@ func (a *app) revealSecret(id string) {
 	})
 }
 
-func (a *app) secretsPage(c *ui.Context) {
+func (a *app) secretsPage(c *ui.Context, _ tokens) {
 	t := c.Theme()
 	now := time.Now()
 	a.surface(c, ui.Column(c).Padding(10, 12).Gap(8).Radius(12), 0).Children(func() {

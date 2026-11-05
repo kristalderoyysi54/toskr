@@ -189,6 +189,10 @@ func (a *app) tasksPage(c *ui.Context) {
 	k := tok(c)
 	now := a.now()
 	a.taskSubtabs(c, k)
+	if a.taskSub == 2 {
+		a.billsPage(c, k)
+		return
+	}
 	a.taskQuickAdd(c, k)
 	ui.Box(c).Grow(1).Margin(6, 0, 0, 0).Children(func() {
 		ui.Scroll(c).Fill().Scrollbars(false).Children(func() {
@@ -204,36 +208,22 @@ func (a *app) tasksPage(c *ui.Context) {
 }
 
 func (a *app) taskSubtabs(c *ui.Context, k tokens) {
-	ui.Row(c).Height(34).Padding(4, 14, 8, 16).AlignItems(ui.Start).Children(func() {
-		ui.Row(c).Gap(2).Grow(1).AlignItems(ui.Center).Children(func() {
-			for i, label := range []string{"今天", "任务"} {
-				if i == 1 {
-					text(c, "·", 10, 14, 400, k.muted.Alpha(0.45)).Padding(0, 2)
-				}
-				sel := a.taskSub == i
-				b := ui.Column(c).Height(22).Padding(2, 8, 4, 8).Radius(8).AlignItems(ui.Center).Key("sub-" + label)
-				b.Children(func() {
-					w, col := 400, k.muted
-					if sel {
-						w, col = 600, k.fg
-					}
-					text(c, tr(label), 11, 16, w, col)
-					if sel {
-						ui.Box(c).Absolute().Bottom(0).Left(8).Right(8).Height(2).Radius(1).Background(k.fg.Alpha(0.85))
-					}
-				})
-				if b.Clicked() {
-					a.taskSub = i
-				}
-			}
-		})
-		if a.taskSub == 1 {
-			ui.Row(c).Children(func() {
-				a.iconButton(c, k, "list-filter", 22, 14, tr("筛选"))
-				a.iconButton(c, k, "calendar-days", 22, 14, tr("日历"))
-			})
+	labels := []string{"今天", "任务"}
+	if a.store.Settings().SubscriptionsEnabled {
+		labels = append(labels, "订阅")
+	} else if a.taskSub == 2 {
+		a.taskSub = 0 // 订阅功能关闭时残留的订阅子视图落回「今天」
+	}
+	var right func()
+	if a.taskSub == 1 {
+		right = func() {
+			a.iconButton(c, k, "list-filter", 22, 14, tr("搜索与筛选任务"))
+			a.iconButton(c, k, "calendar-days", 22, 14, tr("显示任务日历"))
 		}
-	})
+	}
+	if i, ok := a.textTabs(c, k, labels, a.taskSub, right); ok {
+		a.taskSub = i
+	}
 }
 
 func (a *app) taskQuickAdd(c *ui.Context, k tokens) {

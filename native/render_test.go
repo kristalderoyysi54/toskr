@@ -64,8 +64,6 @@ func TestRenderPanelSnapshots(t *testing.T) {
 		{"panel-light-glass", pageNotes, false, true, "glass"},
 		{"panel-dark-glass", pageNotes, true, true, "glass"},
 		{"tasks-light", pageTasks, false, true, "glass"},
-		{"bills-dark", pageBills, true, true, "glass"},
-		{"secrets-light", pageSecrets, false, true, "glass"},
 	} {
 		st := a.store.Settings()
 		st.Glass = tc.glass

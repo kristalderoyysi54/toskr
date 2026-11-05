@@ -95,6 +95,39 @@ func TestCompareWithTauri(t *testing.T) {
 	a.reload()
 	compareView(t, dir, "clip", a)
 
+	// 订阅子视图：与 setup-bills.js 同一组 4 笔账单（视频会员月付、云盘年付、信用卡今天还款、健身房周付）
+	for _, n := range st.Section(store.SectionClipboard) {
+		st.Delete(n.ID)
+	}
+	day := func(y int, m time.Month, d int) time.Time { return time.Date(y, m, d, 0, 0, 0, 0, time.Local) }
+	pays := func(amount float64, at ...time.Time) (out []store.Payment) {
+		for _, t := range at {
+			out = append(out, store.Payment{At: t, Amount: amount, Period: t})
+		}
+		return
+	}
+	for _, b := range []store.Bill{
+		{Kind: "subscription", Name: "视频会员", Amount: 68, Cycle: "monthly", NextDueAt: day(2026, 11, 7), Status: "active",
+			History: pays(68, day(2026, 6, 7), day(2026, 7, 7), day(2026, 8, 7), day(2026, 9, 7), day(2026, 10, 7))},
+		{Kind: "subscription", Name: "云盘 2TB", Amount: 298, Cycle: "yearly", NextDueAt: day(2027, 3, 1), Status: "active", History: pays(298, day(2026, 3, 1))},
+		{Kind: "creditCard", Name: "招行信用卡", Cycle: "monthly", NextDueAt: today, Status: "active", PayMethod: "尾号 1234"},
+		{Kind: "subscription", Name: "健身房", Amount: 45, Cycle: "weekly", NextDueAt: day(2026, 11, 9), Status: "active",
+			History: pays(45, day(2026, 10, 12), day(2026, 10, 19), day(2026, 10, 26))},
+	} {
+		created := st.AddBill(b)
+		created.History = b.History
+		_ = st.UpdateBill(created)
+	}
+	cfg := st.Settings()
+	cfg.SubscriptionsEnabled = true
+	_ = st.SetSettings(cfg)
+	a.switchPage(pageTasks)
+	a.taskSub = 2
+	a.reload()
+	compareView(t, dir, "bills", a)
+	cfg.SubscriptionsEnabled = false
+	_ = st.SetSettings(cfg)
+
 	// 设置窗（1040×720，首屏「窗口与外观 · 通用」）
 	a.openSettingsState()
 	compareSized(t, dir, "settings", a.settingsView, 1040, 720)

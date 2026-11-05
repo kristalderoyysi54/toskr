@@ -59,6 +59,12 @@ type Settings struct {
 	EdgeHide        bool     `json:"edgeHide"`
 	Currency        string   `json:"currency"`
 	DueReminders    bool     `json:"dueReminders"`
+	// 与 Tauri 一致的可选功能域（默认关闭）：订阅进「提醒」页第三个子视图，秘文进「内容」页
+	SubscriptionsEnabled bool `json:"subscriptionsEnabled"`
+	SecretEnabled        bool `json:"secretEnabled"`
+	// 面板菜单「位置与停靠」：CompanionOff 关闭跟随应用；FreeMove 不再自动贴屏幕右缘
+	CompanionOff bool `json:"companionOff,omitempty"`
+	FreeMove     bool `json:"freeMove,omitempty"`
 }
 
 func DefaultSettings() Settings {

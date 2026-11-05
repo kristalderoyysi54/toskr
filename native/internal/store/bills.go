@@ -25,6 +25,21 @@ type Bill struct {
 type Payment struct {
 	At     time.Time `json:"at"`
 	Amount float64   `json:"amount"`
+	Period time.Time `json:"periodDueAt,omitzero"` // 记的是哪一期（推进前的到期日）
+	Manual bool      `json:"manual,omitempty"`     // 手工「标记已还」；自动续期为 false
+}
+
+// CardPaidForCurrentCycle：信用卡本期已还（有一笔手工记账，其账期推进一个周期恰为当前到期日）。
+func CardPaidForCurrentCycle(b Bill, now time.Time) bool {
+	if b.Kind != "creditCard" || !b.NextDueAt.After(now) {
+		return false
+	}
+	for _, p := range b.History {
+		if p.Manual && !p.Period.IsZero() && AdvanceCycle(p.Period, b.Cycle).Equal(b.NextDueAt) {
+			return true
+		}
+	}
+	return false
 }
 
 const billHistoryMax = 60
@@ -90,7 +105,7 @@ func (s *Store) MarkPaid(id string, amount float64, at time.Time) error {
 		if amount <= 0 {
 			amount = b.Amount
 		}
-		b.History = append(b.History, Payment{At: at, Amount: amount})
+		b.History = append(b.History, Payment{At: at, Amount: amount, Period: b.NextDueAt, Manual: true})
 		if len(b.History) > billHistoryMax {
 			b.History = b.History[len(b.History)-billHistoryMax:]
 		}
@@ -111,7 +126,7 @@ func (s *Store) RollForward(now time.Time) int {
 				continue
 			}
 			for b.NextDueAt.Before(today) {
-				b.History = append(b.History, Payment{At: b.NextDueAt, Amount: b.Amount})
+				b.History = append(b.History, Payment{At: b.NextDueAt, Amount: b.Amount, Period: b.NextDueAt})
 				b.NextDueAt, b.Reminded = AdvanceCycle(b.NextDueAt, b.Cycle), nil
 				rolled++
 			}
@@ -200,4 +215,15 @@ func SpentInMonth(bills []Bill, y int, m time.Month) float64 {
 		}
 	}
 	return total
+}
+
+// RestoreBill 撤销删除：放回列表末尾（列表按到期排序展示，位置无关）。
+func (s *Store) RestoreBill(b Bill) error {
+	return s.mutate(func() bool {
+		if s.billIndex(b.ID) >= 0 {
+			return false
+		}
+		s.bills = append(s.bills, b)
+		return true
+	})
 }

@@ -76,7 +76,14 @@ var tabLabels = []string{"剪贴", "笔记", "任务"}
 func (a *app) tabs(c *ui.Context, k tokens) {
 	ui.Row(c).Height(30).Margin(6, 12, 6, 12).AlignItems(ui.Start).Children(func() {
 		ui.Row(c).Padding(2).Radius(10).Background(k.track).Children(func() {
+			st := a.store.Settings()
 			for i, label := range tabLabels {
+				if i == pageNotes && st.SecretEnabled {
+					label = "内容" // 秘文开启后笔记页升格为「内容」域（笔记 · 秘文），与 Tauri 一致
+				}
+				if i == pageTasks && st.SubscriptionsEnabled {
+					label = "提醒"
+				}
 				sel := a.page == i
 				badge := 0
 				if i == pageTasks {

@@ -210,6 +210,10 @@ func (a *app) settingsView(c *ui.Context) {
 			{tr("最近发送"), recent},
 		}}},
 		{label: "更多功能", icon: "blocks", sections: [][]setSection{{
+			{tr("功能"), []setRow{
+				{title: tr("秘文"), hint: tr("在本机把文字加密成中文、代码、日志等格式，对方自动识别解密"), control: setToggle(st.SecretEnabled, func(s *store.Settings, v bool) { s.SecretEnabled = v })},
+				{title: tr("订阅"), hint: tr("管理账单与信用卡到期，在「提醒」页按时提醒"), control: setToggle(st.SubscriptionsEnabled, func(s *store.Settings, v bool) { s.SubscriptionsEnabled = v })},
+			}},
 			{tr("提醒"), []setRow{
 				{title: tr("任务到期与账单提醒"), hint: tr("通过系统通知提醒"), control: setToggle(st.DueReminders, func(s *store.Settings, v bool) { s.DueReminders = v })},
 				{title: tr("货币符号"), hint: tr("账单金额前缀"), control: func() {

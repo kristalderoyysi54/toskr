@@ -22,8 +22,6 @@ const (
 	pageClip = iota
 	pageNotes
 	pageTasks
-	pageBills
-	pageSecrets
 )
 
 // delivery 是一条发送记录（内存中保留最近 50 条，设置 → 发送记录可查）。
@@ -71,11 +69,12 @@ type app struct {
 	aiBusy        string // 正在 AI 处理的笔记 ID
 
 	// 1:1 主面板
-	noteGroups []noteGroup
-	doneOpen   map[string]bool
-	searchOpen bool
-	menuOpen   bool
-	focusList  bool
+	noteGroups    []noteGroup
+	doneOpen      map[string]bool
+	searchOpen    bool
+	menuOpen      bool
+	placementOpen bool // 面板菜单「位置与停靠」二级页
+	focusList     bool
 
 	clock func() time.Time // 可注入时钟（视觉对照测试固定在参照截图时刻）
 
@@ -84,12 +83,22 @@ type app struct {
 	taskDraft string
 	taskSub   int // 0 今天 1 任务
 	sparkMode bool
-	clipView  string          // 剪贴页视图：time | source | image
-	bandOpen  map[string]bool // 智能区 / 分组折叠（已到期、灵感、已完成）
-	taskIn    ui.Handle
-	taskSel   int
-	taskList  ui.ListState
-	showDoneT bool
+	clipView  string // 剪贴页视图：time | source | image
+	noteSub   int    // 内容页子视图：0 笔记 1 秘文（秘文功能开启时）
+
+	// 订阅子视图
+	billDay       time.Time
+	billView      string // week | month
+	billFilter    string // upcoming | all
+	billMonth     int    // 月历相对本月的偏移
+	billAnalytics bool
+	paying        string // 正在「标记已还」的账单
+	payAmount     string
+	bandOpen      map[string]bool // 智能区 / 分组折叠（已到期、灵感、已完成）
+	taskIn        ui.Handle
+	taskSel       int
+	taskList      ui.ListState
+	showDoneT     bool
 
 	// 账单页
 	bills    []store.Bill
@@ -138,7 +147,7 @@ type app struct {
 }
 
 func newApp(sys core.System, st *store.Store) *app {
-	a := &app{sys: sys, store: st, page: pageNotes, section: store.SectionInbox, doneOpen: map[string]bool{}, bandOpen: map[string]bool{"overdue": true, "spark": true}, clipView: "time", clock: time.Now, thumbs: map[string]ui.ImageSource{}, revealed: map[string]time.Time{}}
+	a := &app{sys: sys, store: st, page: pageNotes, section: store.SectionInbox, doneOpen: map[string]bool{}, bandOpen: map[string]bool{"overdue": true, "spark": true}, clipView: "time", billView: "week", billFilter: "upcoming", clock: time.Now, thumbs: map[string]ui.ImageSource{}, revealed: map[string]time.Time{}}
 	a.reload()
 	return a
 }
@@ -213,7 +222,9 @@ func (a *app) showPanel() {
 		a.target = f
 		a.targetStarted = macos.ProcessStartMs(f.PID)
 	}
-	a.panel.SetBounds(a.panelBounds())
+	if !a.store.Settings().FreeMove { // 自由移动：保留用户拖到的位置
+		a.panel.SetBounds(a.panelBounds())
+	}
 	a.reload()
 	a.panel.Show()
 	diag.Push("面板显示 target=%s", a.target.BundleID)
@@ -331,6 +342,46 @@ func (a *app) mergeChosen(c *ui.Context) {
 	}
 	a.chosen.Clear()
 	c.ToastAction(fmt.Sprintf("已合并 %d 条", len(originals)), "撤销", func() { _ = a.store.Unmerge(merged, originals) })
+}
+
+func (a *app) repositionPanel() {
+	if a.panel != nil {
+		a.panel.SetBounds(a.panelBounds())
+	}
+}
+
+// clearAllDone 是面板菜单「清理已完成」：笔记视图清全部分组的已完成笔记，任务页清已完成任务；均可撤销。
+func (a *app) clearAllDone(c *ui.Context) {
+	if a.page == pageTasks {
+		var removed []store.Task
+		var pos []int
+		for _, t := range a.store.Tasks() {
+			if t.Status == "done" {
+				if r, p, ok := a.store.DeleteTask(t.ID); ok {
+					removed, pos = append(removed, r), append(pos, p)
+				}
+			}
+		}
+		if len(removed) > 0 {
+			c.ToastAction(fmt.Sprintf(tr("已清理 %d 个已完成任务"), len(removed)), tr("撤销"), func() {
+				for i := len(removed) - 1; i >= 0; i-- {
+					_ = a.store.RestoreTask(removed[i], pos[i])
+				}
+			})
+		}
+		a.reload()
+		return
+	}
+	var removed []store.Note
+	for _, sec := range a.store.Sections() {
+		if sec.ID != store.SectionClipboard {
+			removed = append(removed, a.store.ClearDone(sec.ID)...)
+		}
+	}
+	if len(removed) > 0 {
+		c.ToastAction(fmt.Sprintf("已清理 %d 条已完成", len(removed)), "撤销", func() { _ = a.store.RestoreMany(removed) })
+	}
+	a.reload()
 }
 
 func (a *app) clearDone(c *ui.Context) {

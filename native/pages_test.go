@@ -144,30 +144,72 @@ func TestTasksQuickAddCompleteAndRecurring(t *testing.T) {
 	}
 }
 
-func TestBillsFormAndSummary(t *testing.T) {
+func TestBillsSubviewFormPayAndUndo(t *testing.T) {
 	a, tt := testApp(t)
-	a.switchPage(pageBills)
+	now := time.Date(2026, 11, 5, 19, 36, 0, 0, time.Local)
+	a.clock = func() time.Time { return now }
+	st := a.store.Settings()
+	st.SubscriptionsEnabled = true
+	_ = a.store.SetSettings(st)
+	a.switchPage(pageTasks)
 	tt.Frame()
-	a.billForm = billForm{open: true, cycle: 3, name: "域名", amount: 120, due: time.Now().AddDate(0, 0, 10).Format("2006-01-02")}
-	tt.Frame()
-	_ = tt.Click("保存")
-	tt.Frame()
-	if !tt.HasText("域名") || !tt.HasText("¥10") || !tt.HasText("10 天后") {
-		t.Fatalf("年付 120 月均应为 10：%v", tt.Texts())
+	if !tt.HasText("提醒") || !tt.HasText("订阅") {
+		t.Fatalf("订阅开启后页签应为「提醒」并多出订阅子视图 %v", tt.Texts())
 	}
-	a.billForm = billForm{open: true, due: "明天"}
+	_ = tt.Click("订阅")
+	tt.Frame()
+	if !tt.HasText("还没有订阅账单") {
+		t.Fatalf("空态 %v", tt.Texts())
+	}
+	_ = tt.Click("添加订阅")
+	tt.Frame()
+	a.billForm.name, a.billForm.amount, a.billForm.cycle, a.billForm.due = "域名", "120", 4, now.AddDate(0, 0, 3).Format("2006-01-02")
 	tt.Frame()
 	_ = tt.Click("保存")
 	tt.Frame()
-	if !tt.HasText("日期格式应为 YYYY-MM-DD") {
-		t.Fatal("非法日期应提示")
+	if !tt.HasText("域名") || !tt.HasText("每年 · ¥120") || !tt.HasText("3 天后") || !tt.HasText("未来 7 天有 1 笔到期") {
+		t.Fatalf("新增年付订阅 %v", tt.Texts())
+	}
+	a.openBillForm(nil)
+	a.billForm.kind, a.billForm.name, a.billForm.due = 1, "招行信用卡", "5"
+	tt.Frame()
+	_ = tt.Click("保存")
+	tt.Frame()
+	if !tt.HasText("每月 5 日还款") || !tt.HasText("还款") {
+		t.Fatalf("信用卡今天还款 %v", tt.Texts())
+	}
+	card := a.bills[slices.IndexFunc(a.bills, func(b store.Bill) bool { return b.Kind == "creditCard" })]
+	a.paying, a.payAmount = card.ID, "3200"
+	tt.Frame()
+	tt.Frame()
+	tt.Key(0, ui.KeyEnter) // 实付输入框自动聚焦，回车确认
+	tt.Frame()
+	if !tt.HasText("已还 · 下期 12/5") {
+		t.Fatalf("标记已还后应显示已还 %v", tt.Texts())
+	}
+	a.billFilter = "all"
+	tt.Frame()
+	_ = tt.RightClick("域名") // 行菜单走「更多」按钮；这里直接删除验证撤销
+	a.store.DeleteBill(a.bills[slices.IndexFunc(a.bills, func(b store.Bill) bool { return b.Name == "域名" })].ID)
+	a.reload()
+	tt.Frame()
+	if tt.HasText("域名") {
+		t.Fatal("删除后不应显示")
+	}
+	if got, want := billDueBadgeText(store.Bill{NextDueAt: now.AddDate(0, 0, -2)}, now), "逾期 2 天"; got != want {
+		t.Fatalf("%q", got)
+	}
+	if money("¥", 12.5) != "¥12.5" || money("$", 3) != "$3" || fmtAmount(68.456) != "68.46" {
+		t.Fatal("金额格式与 Tauri formatBillAmount 不一致")
 	}
 }
+
+func billDueBadgeText(b store.Bill, now time.Time) string { s, _ := billDueBadge(b, now); return s }
 
 func TestSecretsMaskedUntilRevealed(t *testing.T) {
 	a, tt := testApp(t)
 	a.store.AddSecret("服务器", "root-pass-123")
-	a.switchPage(pageSecrets)
+	enableSecret(a)
 	tt.Frame()
 	if tt.HasText("root-pass-123") || !tt.HasText("服务器") {
 		t.Fatalf("默认必须遮罩 %v", tt.Texts())
@@ -186,7 +228,7 @@ func TestSecretsMaskedUntilRevealed(t *testing.T) {
 
 func TestSealToolRoundTripInPanel(t *testing.T) {
 	a, tt := testApp(t)
-	a.switchPage(pageSecrets)
+	enableSecret(a)
 	a.sealIn, a.sealPass = "卡号在这", "pw"
 	tt.Frame()
 	_ = tt.Click("生成密文")
@@ -274,9 +316,6 @@ func TestTaskBucketsAndDueBadge(t *testing.T) {
 	if todayDefaultDue(now).Format("15:04") != "20:00" || todayDefaultDue(now.Add(time.Hour)).Format("15:04") != "21:00" {
 		t.Fatal("今天默认到期")
 	}
-	if money("¥", 12.5) != "¥12.50" || money("$", 3) != "$3" {
-		t.Fatal("格式化")
-	}
 }
 
 // recSys 记录写入剪贴板的文本；激活即到前台。
@@ -334,4 +373,11 @@ func TestSettingsNavSearchAndToggle(t *testing.T) {
 	if !tt.HasText("搜索结果") || !tt.HasText("加密") {
 		t.Fatalf("搜索应命中数据页加密行 %v", tt.Texts())
 	}
+}
+
+func enableSecret(a *app) {
+	st := a.store.Settings()
+	st.SecretEnabled = true
+	_ = a.store.SetSettings(st)
+	a.noteSub = 1
 }
