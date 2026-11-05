@@ -87,7 +87,9 @@ def one_run(app, settle):
             offset = 0
         with open(LOG, "rb") as f:
             f.seek(offset)
-            text = f.read().decode("utf-8", "replace")
+            raw = f.read()
+        # 只解析完整行：半行的「pid=113」会被正则截成错误 pid
+        text = raw[: raw.rfind(b"\n") + 1].decode("utf-8", "replace")
         for line in text.splitlines():
             for key, rx in MILESTONES.items():
                 m = rx.match(line)
