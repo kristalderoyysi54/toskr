@@ -103,27 +103,44 @@ func TestPreflightBlocksUntilConfirmedAndRedacts(t *testing.T) {
 
 func TestTasksQuickAddCompleteAndRecurring(t *testing.T) {
 	a, tt := testApp(t)
+	now := time.Date(2026, 11, 5, 10, 0, 0, 0, time.Local)
+	a.clock = func() time.Time { return now }
 	tt.Key(ui.Cmd, ui.Key3)
+	tt.Frame()
+	if !tt.HasText("添加今天的任务，回车保存（20:00 到期）…") && !tt.HasText("今天没有安排") {
+		t.Fatalf("今天视图 %v", tt.Texts())
+	}
+	// 今天视图：不写时间默认 20:00 到期，进时间线
+	a.taskIn.Focus()
+	tt.Frame()
+	tt.Type("写周报")
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	if !tt.HasText("写周报") || !tt.HasText("今天 20:00") || !tt.HasText("20:00") {
+		t.Fatalf("%v", tt.Texts())
+	}
+	// 任务视图：解析自然语言时间与优先级
+	a.taskSub = 1
 	tt.Frame()
 	a.taskIn.Focus()
 	tt.Frame()
 	tt.Type("明天下午3点 交周报 !!")
 	tt.Key(0, ui.KeyEnter)
 	tt.Frame()
-	if !tt.HasText("交周报") || !tt.HasText("明天 15:00") || !tt.HasText("!!") || !tt.HasText("待办 1") {
+	if !tt.HasText("交周报") || !tt.HasText("明天 15:00") || !tt.HasText("收集箱") {
 		t.Fatalf("%v", tt.Texts())
 	}
-	task := a.store.Tasks()[0]
+	i := slices.IndexFunc(a.store.Tasks(), func(x store.Task) bool { return x.Text == "交周报" })
+	task := a.store.Tasks()[i]
+	if task.Priority != "mid" {
+		t.Fatalf("!! 应为中优先级 %+v", task)
+	}
 	task.Recurrence = "weekly"
 	_ = a.store.UpdateTask(task)
+	a.store.CompleteTask(task.ID, true, now)
 	tt.Frame()
-	if !tt.HasText("明天 15:00 · 每周") {
-		t.Fatalf("%v", tt.Texts())
-	}
-	a.store.CompleteTask(task.ID, true, time.Now())
-	tt.Frame()
-	if got := a.store.Tasks(); len(got) != 2 || !tt.HasText("待办 1") {
-		t.Fatalf("重复任务完成后应生成下一期 %+v", got)
+	if got := a.store.Tasks(); len(got) != 3 || !tt.HasText("已完成 1") {
+		t.Fatalf("重复任务完成后应生成下一期 %+v %v", got, tt.Texts())
 	}
 }
 
@@ -228,17 +245,36 @@ func TestDockBesideCompanionWindow(t *testing.T) {
 	}
 }
 
-func TestVisibleTasksOrdering(t *testing.T) {
-	now := time.Now()
-	got := visibleTasks([]store.Task{{ID: "a"}, {ID: "b", DueAt: now.Add(2 * time.Hour)}, {ID: "c", DueAt: now.Add(time.Hour)}, {ID: "d", Status: "done"}}, false)
-	ids := []string{}
-	for _, x := range got {
-		ids = append(ids, x.ID)
+func TestTaskBucketsAndDueBadge(t *testing.T) {
+	now := time.Date(2026, 11, 5, 19, 36, 0, 0, time.Local) // 周四
+	secs := []store.Section{{ID: store.TaskInbox}}
+	b := bucketTasks([]store.Task{
+		{ID: "late2", DueAt: now.Add(-time.Hour)}, {ID: "late1", DueAt: now.Add(-2 * time.Hour)},
+		{ID: "spark", Spark: true}, {ID: "orphan", Section: "gone"}, {ID: "d", Status: "done"},
+	}, secs, now)
+	ids := func(ts []store.Task) (s []string) {
+		for _, x := range ts {
+			s = append(s, x.ID)
+		}
+		return
 	}
-	if !slices.Equal(ids, []string{"c", "b", "a"}) {
-		t.Fatalf("%v", ids)
+	if !slices.Equal(ids(b.overdue), []string{"late1", "late2"}) || !slices.Equal(ids(b.sparks), []string{"spark"}) ||
+		!slices.Equal(ids(b.groups[0].tasks), []string{"orphan"}) || len(b.done) != 1 {
+		t.Fatalf("%+v", b)
 	}
-	if dueLabel(now.AddDate(0, 0, -2), now) != "已过期 2 天" || money("¥", 12.5) != "¥12.50" || money("$", 3) != "$3" {
+	for due, want := range map[time.Time]string{
+		now.Add(-30 * time.Minute): "30 分钟前", now.Add(-5 * time.Hour): "5 小时前", now.AddDate(0, 0, -2): "2 天前",
+		now.Add(time.Hour): "今天 20:36", now.AddDate(0, 0, 1): "明天 19:36", now.AddDate(0, 0, 3): "周日 19:36",
+		now.AddDate(0, 0, 10): "11月15日 19:36",
+	} {
+		if got := dueBadge(due, now); got != want {
+			t.Errorf("dueBadge(%v) = %q，应为 %q", due, got, want)
+		}
+	}
+	if todayDefaultDue(now).Format("15:04") != "20:00" || todayDefaultDue(now.Add(time.Hour)).Format("15:04") != "21:00" {
+		t.Fatal("今天默认到期")
+	}
+	if money("¥", 12.5) != "¥12.50" || money("$", 3) != "$3" {
 		t.Fatal("格式化")
 	}
 }

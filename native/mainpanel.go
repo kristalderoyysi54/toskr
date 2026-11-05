@@ -24,7 +24,7 @@ func (a *app) mainHeader(c *ui.Context, k tokens) {
 	ui.Row(c).Height(44).Padding(14, 16, 8, 16).Gap(8).AlignItems(ui.Start).Children(func() {
 		text(c, "Toskr", 13, 18, 600, k.fg).LetterSpacing(-0.325).Grow(1).Margin(2, 0, 0, 0)
 		ui.Row(c).Gap(2).Children(func() {
-			if a.iconButton(c, k, "search", 22, 14, "搜索（⌘F）") {
+			if a.page != pageTasks && a.iconButton(c, k, "search", 22, 14, "搜索（⌘F）") {
 				a.searchOpen = !a.searchOpen
 			}
 			if a.iconButton(c, k, "menu", 22, 14, "更多") {
@@ -78,7 +78,15 @@ func (a *app) tabs(c *ui.Context, k tokens) {
 		ui.Row(c).Padding(2).Radius(10).Background(k.track).Children(func() {
 			for i, label := range tabLabels {
 				sel := a.page == i
-				b := ui.Box(c).Size(44, 26).Padding(1).Key("tab-" + label)
+				badge := 0
+				if i == pageTasks {
+					badge = a.overdueCount()
+				}
+				w := float32(44)
+				if badge > 0 {
+					w = 66 // 文字 22 + 间距 6 + 徽标 16 + 内边距 20 + 边框 2
+				}
+				b := ui.Box(c).Size(w, 26).Padding(1).Key("tab-" + label)
 				b.Children(func() {
 					pill := ui.Box(c).Fill().Radius(8).Center()
 					if sel {
@@ -92,7 +100,14 @@ func (a *app) tabs(c *ui.Context, k tokens) {
 						if sel {
 							w, col = 500, k.fg
 						}
-						text(c, tr(label), 11, 16, w, col)
+						ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+							text(c, tr(label), 11, 16, w, col)
+							if badge > 0 {
+								ui.Box(c).Size(16, 16).Radius(8).Background(k.danger.Alpha(0.9)).Center().Children(func() {
+									text(c, itoa(badge), 10, 14, 600, ui.RGB(255, 255, 255))
+								})
+							}
+						})
 					})
 				})
 				if b.Clicked() {
@@ -409,7 +424,11 @@ func isWord(b byte) bool {
 
 func (a *app) hintsRow(c *ui.Context, k tokens) {
 	ui.Row(c).Height(20).Margin(0, 12).Gap(10).AlignItems(ui.Center).Children(func() {
-		for _, h := range [][2]string{{"↑↓", "选卡片"}, {"⌘F", "搜索"}, {"⌘K", "命令"}, {"长按 ⌥ Option", "全部快捷键"}} {
+		hints := [][2]string{{"↑↓", "选卡片"}, {"⌘F", "搜索"}, {"⌘K", "命令"}, {"长按 ⌥ Option", "全部快捷键"}}
+		if a.page == pageTasks {
+			hints = [][2]string{{"⏎", "记下待办"}, {"⌘K", "命令"}, {"长按 ⌥ Option", "全部快捷键"}}
+		}
+		for _, h := range hints {
 			ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
 				text(c, tr(h[0]), 10, 14, 400, k.muted).Opacity(0.7)
 				text(c, tr(h[1]), 10, 14, 400, k.muted)

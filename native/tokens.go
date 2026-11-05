@@ -71,6 +71,24 @@ type tokens struct {
 	inputBorder                            ui.Color
 	insetShadow                            ui.Color
 	codeKeyword, codeString, codeNumber    ui.Color
+	// 任务页语义色（--destructive 与 tailwind amber/teal/violet 色阶）
+	danger, amberBar, amberText, tealBar ui.Color
+	repeatIcon, violetText, violetIcon   ui.Color
+	sparkRow, laterChip                  ui.Color
+}
+
+func init() {
+	amber, teal, violet := oklch(0.769, 0.188, 70.08, 1), oklch(0.704, 0.14, 182.503, 1), oklch(0.606, 0.25, 292.717, 1)
+	l, d := &lightTokens, &darkTokens
+	l.danger, d.danger = oklch(0.577, 0.245, 27.325, 1), oklch(0.704, 0.191, 22.216, 1)
+	l.amberBar, d.amberBar = amber, amber
+	l.tealBar, d.tealBar = teal, teal
+	l.violetIcon, d.violetIcon = violet, violet
+	l.amberText, d.amberText = oklch(0.666, 0.179, 58.318, 1), oklch(0.828, 0.189, 84.429, 1)
+	l.repeatIcon, d.repeatIcon = oklch(0.6, 0.118, 184.704, 1), oklch(0.777, 0.152, 181.912, 1)
+	l.violetText, d.violetText = oklch(0.541, 0.281, 293.009, 1), oklch(0.702, 0.183, 293.541, 1)
+	l.sparkRow, d.sparkRow = ui.RGB(245, 243, 255), ui.RGBA(167, 139, 250, 0.1)
+	l.laterChip, d.laterChip = gray(0, 0.06), gray(1, 0.1)
 }
 
 var (

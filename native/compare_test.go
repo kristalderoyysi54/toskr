@@ -47,6 +47,33 @@ func TestCompareWithTauri(t *testing.T) {
 	a := newApp(nopSys{}, st)
 	a.target = macos.FrontApp{PID: 42, Name: "Cursor"}
 	a.reload()
+	compareView(t, dir, "main", a)
+
+	// 任务页：与 setup-tasks.js 同一组 6 条任务，时钟冻结在参照截图时刻（stub 里 Date 固定为 2026-11-05 19:36）
+	now := time.Date(2026, 11, 5, 19, 36, 0, 0, time.Local)
+	today := time.Date(2026, 11, 5, 0, 0, 0, 0, time.Local)
+	a.clock = func() time.Time { return now }
+	for _, t0 := range []store.Task{ // AddTask 插到顶部，倒序加以保持 t1..t6 的数组顺序
+		{Text: "更新 lessons", Status: "done", CompletedAt: now.Add(-time.Hour)},
+		{Text: "给面板加液态玻璃", Spark: true},
+		{Text: "整理截图标注需求", Checklist: []store.ChecklistItem{{ID: "c1", Text: "箭头", Done: true}, {ID: "c2", Text: "马赛克"}}},
+		{Text: "周会", DueAt: today.Add(21*time.Hour + 30*time.Minute), Recurrence: "weekly"},
+		{Text: "复核账单提醒逻辑", DueAt: today.Add(-9 * time.Hour), Priority: "high"},
+		{Text: "交 mygo 对比报告", DueAt: today.Add(15 * time.Hour), Priority: "mid"},
+	} {
+		created := st.AddTask(t0)
+		created.CreatedAt, created.CompletedAt = now.Add(-time.Hour), t0.CompletedAt
+		_ = st.UpdateTask(created)
+	}
+	a.switchPage(pageTasks)
+	a.reload()
+	a.taskSub = 0
+	compareView(t, dir, "tasks", a)
+	a.taskSub = 1
+	compareView(t, dir, "tasklist", a)
+}
+
+func compareView(t *testing.T, dir, name string, a *app) {
 	for _, scheme := range []string{"light", "dark"} {
 		tt := ui.NewTester(a.panelView, 380, 760)
 		tt.SetDark(scheme == "dark")
@@ -54,12 +81,12 @@ func TestCompareWithTauri(t *testing.T) {
 		tt.Move(379, 2)
 		tt.Frame()
 		got := onWhite(tt.Image())
-		save(t, filepath.Join(dir, "mygo-main-"+scheme+".png"), got)
-		ref := load(t, filepath.Join(dir, "ref-main-"+scheme+".png"))
+		save(t, filepath.Join(dir, "mygo-"+name+"-"+scheme+".png"), got)
+		ref := load(t, filepath.Join(dir, "ref-"+name+"-"+scheme+".png"))
 		ratio, heat := diff(ref, got)
-		save(t, filepath.Join(dir, "diff-main-"+scheme+".png"), heat)
-		save(t, filepath.Join(dir, "side-main-"+scheme+".png"), sideBySide(ref, got, heat))
-		fmt.Printf("%s: 差异像素 %.2f%%（通道差 > 24，1px 容差）\n", scheme, ratio*100)
+		save(t, filepath.Join(dir, "diff-"+name+"-"+scheme+".png"), heat)
+		save(t, filepath.Join(dir, "side-"+name+"-"+scheme+".png"), sideBySide(ref, got, heat))
+		fmt.Printf("%s %s: 差异像素 %.2f%%（通道差 > 24，1px 容差）\n", name, scheme, ratio*100)
 	}
 }
 

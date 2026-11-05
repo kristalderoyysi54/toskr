@@ -10,188 +10,670 @@ import (
 	"github.com/toskr/native/internal/store"
 )
 
+// 任务页按 Tauri 版 TaskPage / TodayPage / TaskRow 逐项复刻（规格取自浏览器实测导出）。
+// 结构：子页签（今天 · 任务）34 → 速记框 36 → 6 → 滚动区（左右 14）。
+
 var (
 	priorityNames  = []string{"none", "low", "mid", "high"}
-	priorityLabels = []string{"无", "低", "中", "高"}
+	priorityLabels = []string{"无优先级", "低", "中", "高"}
 	recurNames     = []string{"", "daily", "weekdays", "weekly", "monthly", "yearly"}
 	recurLabels    = []string{"不重复", "每天", "工作日", "每周", "每月", "每年"}
 )
 
-// visibleTasks：未完成在前（有到期的按到期时间，其余保持插入顺序），已完成按完成时间倒序。
-func visibleTasks(all []store.Task, showDone bool) []store.Task {
-	var open, done []store.Task
-	for _, t := range all {
-		if t.Status == "done" {
-			done = append(done, t)
-		} else {
-			open = append(open, t)
-		}
-	}
-	slices.SortStableFunc(open, func(x, y store.Task) int {
+// ---- 纯逻辑（与 Tauri lib/tasks.ts 同口径） ----
+
+type taskBuckets struct {
+	overdue, sparks, done []store.Task
+	groups                []taskGroup
+}
+
+type taskGroup struct {
+	sec   store.Section
+	tasks []store.Task
+}
+
+// bucketTasks：逾期未完成一律进「已到期」，闪念进「灵感」，其余按分组（孤儿归收集箱）。
+func bucketTasks(tasks []store.Task, secs []store.Section, now time.Time) taskBuckets {
+	var b taskBuckets
+	by := map[string][]store.Task{}
+	for _, t := range tasks {
 		switch {
-		case x.DueAt.IsZero() && y.DueAt.IsZero():
-			return 0
-		case x.DueAt.IsZero():
-			return 1
-		case y.DueAt.IsZero():
-			return -1
+		case t.Status == "done":
+			b.done = append(b.done, t)
+		case !t.DueAt.IsZero() && !t.DueAt.After(now):
+			b.overdue = append(b.overdue, t)
+		case t.Spark:
+			b.sparks = append(b.sparks, t)
+		default:
+			key := t.Section
+			if !slices.ContainsFunc(secs, func(s store.Section) bool { return s.ID == key }) {
+				key = store.TaskInbox
+			}
+			by[key] = append(by[key], t)
 		}
-		return x.DueAt.Compare(y.DueAt)
-	})
-	if !showDone {
-		return open
 	}
-	slices.SortStableFunc(done, func(x, y store.Task) int { return y.CompletedAt.Compare(x.CompletedAt) })
-	return append(open, done...)
+	slices.SortStableFunc(b.overdue, func(x, y store.Task) int { return x.DueAt.Compare(y.DueAt) })
+	slices.SortStableFunc(b.sparks, func(x, y store.Task) int { return y.CreatedAt.Compare(x.CreatedAt) })
+	slices.SortStableFunc(b.done, func(x, y store.Task) int { return doneAt(y).Compare(doneAt(x)) })
+	for _, s := range secs {
+		b.groups = append(b.groups, taskGroup{sec: s, tasks: by[s.ID]})
+	}
+	return b
+}
+
+func doneAt(t store.Task) time.Time {
+	if t.CompletedAt.IsZero() {
+		return t.CreatedAt
+	}
+	return t.CompletedAt
+}
+
+type todayAgenda struct {
+	earlier, timeline           []store.Task
+	pending, doneToday, overdue int
+}
+
+func agendaFor(tasks []store.Task, now time.Time) todayAgenda {
+	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	end := start.AddDate(0, 0, 1)
+	var a todayAgenda
+	for _, t := range tasks {
+		if !t.CompletedAt.IsZero() && !t.CompletedAt.Before(start) && t.CompletedAt.Before(end) {
+			a.doneToday++
+		}
+		switch {
+		case t.DueAt.IsZero():
+		case !t.DueAt.Before(start) && t.DueAt.Before(end):
+			a.timeline = append(a.timeline, t)
+		case t.DueAt.Before(start) && t.Status != "done":
+			a.earlier = append(a.earlier, t)
+		}
+	}
+	slices.SortStableFunc(a.earlier, func(x, y store.Task) int { return x.DueAt.Compare(y.DueAt) })
+	slices.SortStableFunc(a.timeline, func(x, y store.Task) int {
+		if c := x.DueAt.Compare(y.DueAt); c != 0 {
+			return c
+		}
+		return x.CreatedAt.Compare(y.CreatedAt)
+	})
+	a.overdue = len(a.earlier)
+	for _, t := range a.timeline {
+		if t.Status != "done" {
+			a.pending++
+			if !t.DueAt.After(now) {
+				a.overdue++
+			}
+		}
+	}
+	return a
+}
+
+// todayDefaultDue：20:00 前取 20:00，之后取下一个整点（不跨过今天）。
+func todayDefaultDue(now time.Time) time.Time {
+	eight := time.Date(now.Year(), now.Month(), now.Day(), 20, 0, 0, 0, now.Location())
+	if now.Before(eight) {
+		return eight
+	}
+	next := time.Date(now.Year(), now.Month(), now.Day(), now.Hour()+1, 0, 0, 0, now.Location())
+	last := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 0, 0, now.Location())
+	if next.After(last) {
+		return last
+	}
+	return next
+}
+
+func sameDay(a, b time.Time) bool {
+	y1, m1, d1 := a.Date()
+	y2, m2, d2 := b.Date()
+	return y1 == y2 && m1 == m2 && d1 == d2
+}
+
+// dueTone：overdue / today / later。
+func dueTone(due, now time.Time) string {
+	switch {
+	case !due.After(now):
+		return "overdue"
+	case sameDay(due, now):
+		return "today"
+	}
+	return "later"
+}
+
+// dueBadge：逾期「N 分钟/小时/天前」，未来「今天 / 明天 / 周X / M月D日 HH:MM」。
+func dueBadge(due, now time.Time) string {
+	hm := due.Format("15:04")
+	if !due.After(now) {
+		mins := int(now.Sub(due).Minutes())
+		switch {
+		case mins < 60:
+			return fmt.Sprintf(tr("%d 分钟前"), max(1, mins))
+		case mins < 60*24:
+			return fmt.Sprintf(tr("%d 小时前"), mins/60)
+		}
+		return fmt.Sprintf(tr("%d 天前"), mins/60/24)
+	}
+	day := func(t time.Time) time.Time { return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location()) }
+	diff := int(day(due).Sub(day(now)).Hours()/24 + 0.5)
+	switch {
+	case diff == 0:
+		return tr("今天 ") + hm
+	case diff == 1:
+		return tr("明天 ") + hm
+	case diff < 7:
+		return tr([]string{"周日", "周一", "周二", "周三", "周四", "周五", "周六"}[due.Weekday()]) + " " + hm
+	}
+	return fmt.Sprintf(tr("%d月%d日"), due.Month(), due.Day()) + " " + hm
 }
 
 func (a *app) addTaskDraft() {
 	if a.taskDraft == "" {
 		return
 	}
-	t := store.ParseQuickTask(a.taskDraft, time.Now())
+	t := store.ParseQuickTask(a.taskDraft, a.now())
 	if t.Text == "" {
 		return
+	}
+	if a.taskSub == 0 && t.DueAt.IsZero() {
+		t.DueAt = todayDefaultDue(a.now())
+	}
+	if a.taskSub == 1 && a.sparkMode {
+		t.Spark = true
 	}
 	a.store.AddTask(t)
 	a.taskDraft = ""
 }
 
+// ---- 视图 ----
+
 func (a *app) tasksPage(c *ui.Context) {
-	t := c.Theme()
-	shown := visibleTasks(a.tasks, a.showDoneT)
-	openCount := 0
-	for _, x := range a.tasks {
-		if x.Status != "done" {
-			openCount++
+	k := tok(c)
+	now := a.now()
+	a.taskSubtabs(c, k)
+	a.taskQuickAdd(c, k)
+	ui.Box(c).Grow(1).Margin(6, 0, 0, 0).Children(func() {
+		ui.Scroll(c).Fill().Scrollbars(false).Children(func() {
+			ui.Column(c).Padding(4, 14, 8, 14).Gap(12).Children(func() {
+				if a.taskSub == 0 {
+					a.todayView(c, k, now)
+				} else {
+					a.taskListView(c, k, now)
+				}
+			})
+		})
+	})
+}
+
+func (a *app) taskSubtabs(c *ui.Context, k tokens) {
+	ui.Row(c).Height(34).Padding(4, 14, 8, 16).AlignItems(ui.Start).Children(func() {
+		ui.Row(c).Gap(2).Grow(1).AlignItems(ui.Center).Children(func() {
+			for i, label := range []string{"今天", "任务"} {
+				if i == 1 {
+					text(c, "·", 10, 14, 400, k.muted.Alpha(0.45)).Padding(0, 2)
+				}
+				sel := a.taskSub == i
+				b := ui.Column(c).Height(22).Padding(2, 8, 4, 8).Radius(8).AlignItems(ui.Center).Key("sub-" + label)
+				b.Children(func() {
+					w, col := 400, k.muted
+					if sel {
+						w, col = 600, k.fg
+					}
+					text(c, tr(label), 11, 16, w, col)
+					if sel {
+						ui.Box(c).Absolute().Bottom(0).Left(8).Right(8).Height(2).Radius(1).Background(k.fg.Alpha(0.85))
+					}
+				})
+				if b.Clicked() {
+					a.taskSub = i
+				}
+			}
+		})
+		if a.taskSub == 1 {
+			ui.Row(c).Children(func() {
+				a.iconButton(c, k, "list-filter", 22, 14, tr("筛选"))
+				a.iconButton(c, k, "calendar-days", 22, 14, tr("日历"))
+			})
 		}
-	}
-	box := a.surface(c, ui.Column(c).Padding(8, 10).Radius(12), 0)
+	})
+}
+
+func (a *app) taskQuickAdd(c *ui.Context, k tokens) {
+	box := ui.Row(c).Height(36).Margin(0, 12).Padding(8, 10).Gap(6).Radius(14).Background(k.track).Border(1, k.inputBorder).
+		InsetShadow(0, 1, 2, 0, k.insetShadow).AlignItems(ui.Center)
 	box.Children(func() {
-		ui.TextInput(c, &a.taskDraft).Bind(&a.taskIn).Placeholder(tr("明天下午3点 交周报 !!  ↵ 添加")).OnTextKey(func(k ui.TextKey) bool {
-			if k.Key == ui.KeyEnter && k.Mods == 0 {
-				a.taskDraft = k.Text()
+		ph := tr("添加今天的任务，回车保存（") + todayDefaultDue(a.now()).Format("15:04") + tr(" 到期）…")
+		if a.taskSub == 1 {
+			ph = tr("记下待办，回车保存…")
+			for _, ic := range []string{"lightbulb", "sparkles"} {
+				b := ui.Box(c).Size(18, 18).Radius(6).Center()
+				col := k.muted
+				if ic == "lightbulb" && a.sparkMode {
+					col = k.violetIcon
+				}
+				b.Children(func() { licon(c, ic, 14, col) })
+				if ic == "lightbulb" && b.Clicked() {
+					a.sparkMode = !a.sparkMode
+				}
+			}
+			if a.sparkMode {
+				ph = tr("记下灵感，回车保存…")
+			}
+		}
+		ui.TextInputBase(c, &a.taskDraft).Bind(&a.taskIn).Grow(1).Font(fontSans).FontSize(13).FixedLineHeight(18).
+			TextColor(k.fg).PlaceholderColor(k.muted).Placeholder(ph).OnTextKey(func(key ui.TextKey) bool {
+			if key.Key == ui.KeyEnter && key.Mods == 0 {
+				a.taskDraft = key.Text()
 				a.addTaskDraft()
-				k.SetText(a.taskDraft)
+				key.SetText(a.taskDraft)
 				return true
 			}
 			return false
 		})
 	})
-	ui.Row(c).Padding(0, 4).Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, fmt.Sprintf(tr("待办 %d"), openCount)).FontSize(12).TextColor(t.TextMuted).Grow(1)
-		ui.Text(c, tr("显示已完成")).FontSize(12).TextColor(t.TextMuted)
-		ui.Switch(c, &a.showDoneT)
+}
+
+func (a *app) todayView(c *ui.Context, k tokens, now time.Time) {
+	ag := agendaFor(a.tasks, now)
+	ui.Row(c).Gap(6).Children(func() {
+		for i, s := range []struct {
+			n     int
+			label string
+		}{{ag.pending, "待办"}, {ag.doneToday, "已完成"}, {ag.overdue, "已逾期"}} {
+			ui.Column(c).Grow(1).Basis(0).Height(40).Padding(4, 8).Radius(10).Background(k.track).Children(func() {
+				col := k.fg
+				if i == 2 && s.n > 0 {
+					col = k.danger
+				}
+				text(c, itoa(s.n), 13, 18, 600, col)
+				text(c, tr(s.label), 10, 14, 400, k.muted)
+			})
+		}
 	})
-	a.taskList.Selected = &a.taskSel
-	a.taskList.Key = func(i int) any { return shown[i].ID }
-	a.taskList.Label = func(i int) string { return shown[i].Text }
-	ui.List(c, &a.taskList, len(shown), func(i int) { a.taskRow(c, shown[i]) }).Grow(1).Children(func() {
-		if len(shown) == 0 {
-			ui.Text(c, tr("没有待办\n支持「今天/明天/后天」「上午/下午 N点」与 ! / !! / !!! 优先级")).TextColor(t.TextMuted).Padding(24).Center()
+	if len(ag.earlier) == 0 && len(ag.timeline) == 0 {
+		a.emptyState(c, k, "calendar-check", tr("今天没有安排"), tr("在上方记下今天要做的事，或在任务的到期弹层里把它排到今天。"))
+		return
+	}
+	if len(ag.earlier) > 0 {
+		ui.Column(c).Gap(4).Children(func() {
+			ui.Row(c).Height(16).Padding(0, 4, 0, 2).Gap(4).AlignItems(ui.Center).Children(func() {
+				text(c, tr("往日未完成"), 11, 16, 600, k.danger).LetterSpacing(0.88)
+				countBadge(c, len(ag.earlier), k.danger, k.danger.Alpha(0.1))
+				ui.Spacer(c)
+				a.postponeAll(c, k, ag.earlier)
+			})
+			for _, t := range ag.earlier {
+				a.taskRow(c, k, t, now)
+			}
+		})
+	}
+	if len(ag.timeline) == 0 {
+		return
+	}
+	nowIdx := slices.IndexFunc(ag.timeline, func(t store.Task) bool { return t.DueAt.After(now) })
+	if nowIdx < 0 {
+		nowIdx = len(ag.timeline)
+	}
+	ui.Column(c).Gap(4).Children(func() {
+		for i := 0; i <= len(ag.timeline); i++ {
+			if i == nowIdx {
+				ui.Row(c).Height(14).Gap(6).Key("now-line").Children(func() {
+					text(c, now.Format("15:04"), 10, 14, 600, k.danger).Width(44).TextAlign(ui.End)
+					ui.Box(c).Grow(1).Height(14).Children(func() {
+						ui.Box(c).Absolute().Left(0).Right(0).Top(6.5).Height(1).Background(k.danger)
+						ui.Box(c).Absolute().Left(-2).Top(3.5).Size(7, 7).Radius(3.5).Background(k.danger)
+					})
+				})
+			}
+			if i == len(ag.timeline) {
+				break
+			}
+			t := ag.timeline[i]
+			ui.Row(c).Gap(6).AlignItems(ui.Start).Key("tl-" + t.ID).Children(func() {
+				col := k.muted
+				if t.Status != "done" && !t.DueAt.After(now) {
+					col = k.danger
+				}
+				text(c, t.DueAt.Format("15:04"), 10, 14, 400, col).Width(44).Padding(8, 0, 0, 0).TextAlign(ui.End)
+				ui.Column(c).Grow(1).Children(func() { a.taskRow(c, k, t, now) })
+			})
 		}
 	})
 }
 
-func (a *app) taskRow(c *ui.Context, task store.Task) {
-	t := c.Theme()
-	done := task.Status == "done"
-	row := a.surface(c, ui.Row(c).Padding(8, 10).Gap(10).Radius(10).AlignItems(ui.Center).Key(task.ID), 0.5)
-	row.ContextMenu(func(m *ui.Menu) {
-		m.Submenu(tr("优先级"), func(sm *ui.Menu) {
-			for i, p := range priorityNames {
-				if sm.Item(tr(priorityLabels[i])).Radio(task.Priority == p).Chosen() {
-					task.Priority = p
-					_ = a.store.UpdateTask(task)
+func (a *app) emptyState(c *ui.Context, k tokens, icon, title, body string) {
+	ui.Column(c).Padding(64, 24, 40, 24).Gap(8).AlignItems(ui.Center).Children(func() {
+		licon(c, icon, 24, k.muted.Alpha(0.5))
+		text(c, title, 13, 18, 500, k.muted)
+		text(c, body, 11, 16.5, 400, k.muted).TextAlign(ui.Center).Wrap()
+	})
+}
+
+func countBadge(c *ui.Context, n int, fg, bg ui.Color) {
+	text(c, itoa(n), 10, 14, 600, fg).Padding(1, 4).Radius(6).Background(bg)
+}
+
+// postponeAll 是「全部顺延」：把积压的逾期任务挪到同一时间点（可撤销）。
+func (a *app) postponeAll(c *ui.Context, k tokens, tasks []store.Task) {
+	b := ui.Row(c).Height(14).Padding(0, 4).Gap(2).Radius(6).AlignItems(ui.Center)
+	b.Children(func() {
+		text(c, tr("全部顺延"), 10, 14, 400, k.muted)
+		licon(c, "chevron-down", 10, k.muted)
+	})
+	b.Menu(func(m *ui.Menu) {
+		now := a.now()
+		base := time.Date(now.Year(), now.Month(), now.Day(), 9, 0, 0, 0, now.Location())
+		for _, o := range []struct {
+			label string
+			at    time.Time
+		}{{"今天 20:00", todayDefaultDue(now)}, {"明天 9:00", base.AddDate(0, 0, 1)}, {"下周一 9:00", nextMonday(base)}} {
+			if m.Item(tr(o.label)).Chosen() {
+				before := slices.Clone(tasks)
+				for _, t := range tasks {
+					t.DueAt = o.at
+					_ = a.store.UpdateTask(t)
 				}
-			}
-		})
-		m.Submenu(tr("重复"), func(sm *ui.Menu) {
-			for i, r := range recurNames {
-				if sm.Item(tr(recurLabels[i])).Radio(task.Recurrence == r).Chosen() {
-					task.Recurrence = r
-					_ = a.store.UpdateTask(task)
-				}
-			}
-		})
-		m.Submenu(tr("到期"), func(sm *ui.Menu) {
-			now := time.Now()
-			base := time.Date(now.Year(), now.Month(), now.Day(), 9, 0, 0, 0, now.Location())
-			for _, o := range []struct {
-				label string
-				at    time.Time
-			}{{"一小时后", now.Add(time.Hour).Truncate(time.Minute)}, {"今晚 20:00", base.Add(11 * time.Hour)}, {"明天 9:00", base.AddDate(0, 0, 1)}, {"下周一 9:00", nextMonday(base)}, {"清除", time.Time{}}} {
-				if sm.Item(tr(o.label)).Chosen() {
-					task.DueAt = o.at
-					_ = a.store.UpdateTask(task)
-				}
-			}
-		})
-		if m.Item(tr("闪念（Spark）")).Checked(task.Spark).Chosen() {
-			task.Spark = !task.Spark
-			_ = a.store.UpdateTask(task)
-		}
-		if m.Item(tr("转为笔记发送")).Chosen() {
-			_, _, _ = a.store.Add(store.Note{Section: store.SectionInbox, Text: task.Text})
-			a.switchPage(pageNotes)
-		}
-		m.Separator()
-		if m.Item(tr("删除")).Chosen() {
-			if removed, pos, ok := a.store.DeleteTask(task.ID); ok {
-				c.ToastAction(tr("已删除任务"), tr("撤销"), func() { _ = a.store.RestoreTask(removed, pos) })
+				c.ToastAction(fmt.Sprintf(tr("已顺延 %d 个任务"), len(before)), tr("撤销"), func() {
+					for _, t := range before {
+						_ = a.store.UpdateTask(t)
+					}
+				})
 			}
 		}
 	})
-	row.Children(func() {
-		icon, color := iconCircle, t.TextMuted
-		if done {
-			icon, color = iconDone, t.Success
+}
+
+func (a *app) taskListView(c *ui.Context, k tokens, now time.Time) {
+	if len(a.tasks) == 0 {
+		a.emptyState(c, k, "list-todo", tr("还没有任务"), tr("在上方速记框记下待办，点 💡 切换闪念模式记灵感。"))
+		return
+	}
+	b := bucketTasks(a.tasks, a.store.TaskSections(), now)
+	if len(b.overdue) > 0 {
+		a.smartBand(c, k, "overdue", tr("已到期"), "", k.danger, k.danger.Alpha(0.1), b.overdue, now, true)
+	}
+	if len(b.sparks) > 0 {
+		a.smartBand(c, k, "spark", tr("灵感"), "lightbulb", k.violetText, k.violetIcon.Alpha(0.1), b.sparks, now, false)
+	}
+	for _, g := range b.groups {
+		a.taskSection(c, k, g, now)
+	}
+	nb := ui.Row(c).Height(24).Margin(0, 0, 0, 8).Padding(4, 6).Gap(4).Radius(8).AlignItems(ui.Center).AlignSelf(ui.Start)
+	nb.Children(func() {
+		licon(c, "plus", 12, k.muted)
+		text(c, tr("新建分组"), 11, 16, 400, k.muted)
+	})
+	if nb.Clicked() {
+		a.store.AddTaskSection(tr("新分组"))
+	}
+	if len(b.done) > 0 {
+		open := a.bandOpen["done"]
+		r := ui.Row(c).Height(18).Margin(4, 0, 0, 0).Padding(2, 4).Gap(4).AlignItems(ui.Center).AlignSelf(ui.Start)
+		r.Children(func() {
+			chev := "chevron-right"
+			if open {
+				chev = "chevron-down"
+			}
+			licon(c, chev, 10, k.muted)
+			text(c, tr("已完成 ")+itoa(len(b.done)), 10, 14, 400, k.muted)
+		})
+		if r.Clicked() {
+			a.bandOpen["done"] = !open
 		}
-		if ui.Icon(c, icon).FontSize(16).TextColor(color).Clicked() {
-			if next, spawned := a.store.CompleteTask(task.ID, !done, time.Now()); spawned {
-				c.Toast(tr("已生成下一期：") + dueLabel(next.DueAt, time.Now()))
-			}
+		if open {
+			ui.Column(c).Gap(4).Children(func() {
+				for _, t := range b.done {
+					a.taskRow(c, k, t, now)
+				}
+			})
 		}
-		ui.Column(c).Gap(2).Grow(1).Children(func() {
-			title := ui.Text(c, task.Text).Wrap().MaxLines(3)
-			if done {
-				title.TextColor(t.TextMuted).Strikethrough()
+	}
+}
+
+// smartBand 是跨分组横切的智能区（已到期红 / 灵感紫），区头可点击折叠。
+func (a *app) smartBand(c *ui.Context, k tokens, key, title, icon string, fg, badgeBg ui.Color, tasks []store.Task, now time.Time, postpone bool) {
+	open := a.bandOpen[key]
+	ui.Column(c).Gap(6).Key("band-" + key).Children(func() {
+		ui.Row(c).Height(16).Padding(0, 4, 0, 0).Gap(4).AlignItems(ui.Center).Children(func() {
+			h := ui.Row(c).Grow(1).Padding(0, 0, 0, 2).Gap(4).Radius(6).AlignItems(ui.Center)
+			h.Children(func() {
+				chev := "chevron-down"
+				if !open {
+					chev = "chevron-right"
+				}
+				licon(c, chev, 12, fg)
+				if icon != "" {
+					licon(c, icon, 12, k.violetIcon)
+				}
+				text(c, title, 11, 16, 600, fg).LetterSpacing(0.88)
+				countBadge(c, len(tasks), fg, badgeBg)
+			})
+			if h.Clicked() {
+				a.bandOpen[key] = !open
 			}
-			var meta []string
-			if !task.DueAt.IsZero() {
-				meta = append(meta, dueLabel(task.DueAt, time.Now()))
+			if postpone {
+				a.postponeAll(c, k, tasks)
 			}
-			if task.Recurrence != "" {
-				meta = append(meta, tr(recurLabels[slices.Index(recurNames, task.Recurrence)]))
+		})
+		if open {
+			ui.Column(c).Gap(4).Children(func() {
+				for _, t := range tasks {
+					a.taskRow(c, k, t, now)
+				}
+			})
+		}
+	})
+}
+
+func (a *app) taskSection(c *ui.Context, k tokens, g taskGroup, now time.Time) {
+	collapsed := g.sec.Collapsed
+	ui.Column(c).Gap(6).Key("tsec-" + g.sec.ID).Children(func() {
+		head := ui.Row(c).Height(20).Padding(0, 4, 0, 2).Gap(4).AlignItems(ui.Center)
+		hovered := head.Hovered()
+		head.Children(func() {
+			chev := "chevron-down"
+			if collapsed {
+				chev = "chevron-right"
 			}
-			if len(task.Checklist) > 0 {
-				n := 0
-				for _, it := range task.Checklist {
-					if it.Done {
-						n++
+			b := ui.Box(c).Size(16, 16).Radius(6).Center()
+			b.Children(func() { licon(c, chev, 12, k.muted) })
+			if b.Clicked() {
+				g.sec.Collapsed = !collapsed
+				_ = a.store.UpdateTaskSection(g.sec)
+			}
+			name := g.sec.Name
+			if g.sec.ID == store.TaskInbox {
+				name = tr("收集箱")
+			}
+			text(c, name, 11, 16, 600, k.muted).LetterSpacing(0.88)
+			countBadge(c, len(g.tasks), k.muted, k.track)
+			ui.Spacer(c)
+			more := ui.Box(c).Size(16, 16).Radius(6).Center().Tooltip(tr("分组操作"))
+			if !hovered {
+				more.Opacity(0) // 与 Tauri 一致：悬停区头才显出「···」
+			}
+			more.Children(func() { licon(c, "ellipsis", 12, k.muted) })
+			more.Menu(func(m *ui.Menu) {
+				label := tr("折叠")
+				if collapsed {
+					label = tr("展开")
+				}
+				if m.Item(label).Chosen() {
+					g.sec.Collapsed = !collapsed
+					_ = a.store.UpdateTaskSection(g.sec)
+				}
+			})
+		})
+		if collapsed {
+			return
+		}
+		ui.Column(c).Gap(4).Children(func() {
+			if len(g.tasks) == 0 {
+				text(c, tr("此分组为空"), 11, 16, 400, k.muted).Padding(8, 0).TextAlign(ui.Center).FillWidth()
+			}
+			for _, t := range g.tasks {
+				a.taskRow(c, k, t, now)
+			}
+		})
+	})
+}
+
+// taskRow：卡片 38 高（边框 1 + 内边距 6/8），行内依次是优先级色条、状态圈、标题、重复 / 清单 / 到期、删除。
+func (a *app) taskRow(c *ui.Context, k tokens, t store.Task, now time.Time) {
+	done := t.Status == "done"
+	card := ui.Row(c).Height(38).Padding(6, 8).Radius(10).Border(1, ui.Transparent).Key("task-" + t.ID)
+	if t.Spark && !done {
+		card.Background(k.sparkRow)
+	} else {
+		card.Background(k.card)
+	}
+	hovered := card.Hovered()
+	card.ContextMenu(func(m *ui.Menu) { a.taskMenu(c, m, t) })
+	card.Children(func() {
+		ui.Row(c).Grow(1).Height(24).Gap(8).AlignItems(ui.Center).Children(func() {
+			bar := ui.Box(c).Size(8, 24).Center()
+			bar.Children(func() {
+				col := ui.Transparent
+				switch t.Priority {
+				case "high":
+					col = k.danger
+				case "mid":
+					col = k.amberBar
+				case "low":
+					col = k.tealBar
+				default:
+					if hovered {
+						col = k.fg.Alpha(0.1)
 					}
 				}
-				meta = append(meta, fmt.Sprintf("☑ %d/%d", n, len(task.Checklist)))
+				ui.Box(c).Size(3, 20).Radius(1.5).Background(col)
+			})
+			bar.Menu(func(m *ui.Menu) {
+				for i, p := range priorityNames {
+					if m.Item(tr(priorityLabels[i])).Radio(t.Priority == p).Chosen() {
+						t.Priority = p
+						_ = a.store.UpdateTask(t)
+					}
+				}
+			})
+			icon, col := "circle", k.muted.Alpha(0.5)
+			switch {
+			case done:
+				icon, col = "circle-check", k.muted
+			case t.Spark:
+				icon, col = "lightbulb", k.violetIcon
 			}
-			if len(meta) > 0 {
-				mt := ui.Text(c, joinMeta(meta)).FontSize(10).TextColor(t.TextMuted)
-				if !done && !task.DueAt.IsZero() && task.DueAt.Before(time.Now()) {
-					mt.TextColor(t.Danger)
+			st := ui.Box(c).Size(16, 16).Children(func() { licon(c, icon, 16, col) })
+			if st.Clicked() {
+				if t.Spark && !done {
+					t.Spark = false // 闪念点 💡 转为正式待办
+					_ = a.store.UpdateTask(t)
+				} else if next, spawned := a.store.CompleteTask(t.ID, !done, a.now()); spawned {
+					c.Toast(tr("已生成下一期：") + dueBadge(next.DueAt, a.now()))
+				}
+			}
+			title := text(c, t.Text, 13, 18, 400, k.fg).SingleLine().Grow(1).Basis(0)
+			if done {
+				title.TextColor(k.muted).Strikethrough()
+			}
+			if t.Recurrence != "" {
+				licon(c, "repeat", 12, k.repeatIcon)
+			}
+			if n := len(t.Checklist); n > 0 {
+				d := 0
+				for _, it := range t.Checklist {
+					if it.Done {
+						d++
+					}
+				}
+				ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
+					ui.Box(c).Size(20, 3).Radius(1.5).Background(k.track).Children(func() {
+						ui.Box(c).Absolute().Left(0).Top(0).Size(20*float32(d)/float32(n), 3).Radius(1.5).Background(k.muted.Alpha(0.6))
+					})
+					text(c, fmt.Sprintf("%d/%d", d, n), 10, 14, 400, k.muted)
+				})
+			}
+			if !t.DueAt.IsZero() && !done {
+				fg, bg := k.muted, k.laterChip
+				switch dueTone(t.DueAt, now) {
+				case "overdue":
+					fg, bg = k.danger, k.danger.Alpha(0.15)
+				case "today":
+					fg, bg = k.amberText, k.amberBar.Alpha(0.15)
+				}
+				chip := text(c, dueBadge(t.DueAt, now), 10, 14, 400, fg).Height(18).Padding(2, 6).Radius(8).Background(bg)
+				chip.Menu(func(m *ui.Menu) { a.dueMenu(m, t) })
+			}
+			trash := ui.Box(c).Size(16, 16).Radius(6).Center().Tooltip(tr("删除"))
+			if !hovered {
+				trash.Opacity(0)
+			}
+			trash.Children(func() { licon(c, "trash-2", 12, k.muted) })
+			if trash.Clicked() {
+				if removed, pos, ok := a.store.DeleteTask(t.ID); ok {
+					c.ToastAction(tr("已删除任务"), tr("撤销"), func() { _ = a.store.RestoreTask(removed, pos) })
 				}
 			}
 		})
-		if task.Spark {
-			ui.Text(c, "✦").TextColor(t.Warning).Tooltip(tr("闪念"))
+	})
+}
+
+func (a *app) dueMenu(m *ui.Menu, t store.Task) {
+	now := a.now()
+	base := time.Date(now.Year(), now.Month(), now.Day(), 9, 0, 0, 0, now.Location())
+	for _, o := range []struct {
+		label string
+		at    time.Time
+	}{{"一小时后", now.Add(time.Hour).Truncate(time.Minute)}, {"今晚 20:00", base.Add(11 * time.Hour)}, {"明天 9:00", base.AddDate(0, 0, 1)}, {"下周一 9:00", nextMonday(base)}, {"清除", time.Time{}}} {
+		if m.Item(tr(o.label)).Chosen() {
+			t.DueAt = o.at
+			_ = a.store.UpdateTask(t)
 		}
-		switch task.Priority {
-		case "high":
-			ui.Text(c, "!!!").Bold().TextColor(t.Danger)
-		case "mid":
-			ui.Text(c, "!!").Bold().TextColor(t.Warning)
-		case "low":
-			ui.Text(c, "!").Bold().TextColor(t.Accent)
+	}
+}
+
+func (a *app) taskMenu(c *ui.Context, m *ui.Menu, t store.Task) {
+	m.Submenu(tr("优先级"), func(sm *ui.Menu) {
+		for i, p := range priorityNames {
+			if sm.Item(tr(priorityLabels[i])).Radio(t.Priority == p).Chosen() {
+				t.Priority = p
+				_ = a.store.UpdateTask(t)
+			}
 		}
 	})
+	m.Submenu(tr("重复"), func(sm *ui.Menu) {
+		for i, r := range recurNames {
+			if sm.Item(tr(recurLabels[i])).Radio(t.Recurrence == r).Chosen() {
+				t.Recurrence = r
+				_ = a.store.UpdateTask(t)
+			}
+		}
+	})
+	m.Submenu(tr("到期"), func(sm *ui.Menu) { a.dueMenu(sm, t) })
+	m.Submenu(tr("移动到"), func(sm *ui.Menu) {
+		for _, s := range a.store.TaskSections() {
+			name := s.Name
+			if s.ID == store.TaskInbox {
+				name = tr("收集箱")
+			}
+			if sm.Item(name).Radio(t.Section == s.ID).Chosen() {
+				t.Section = s.ID
+				_ = a.store.UpdateTask(t)
+			}
+		}
+	})
+	if m.Item(tr("灵感")).Checked(t.Spark).Chosen() {
+		t.Spark = !t.Spark
+		_ = a.store.UpdateTask(t)
+	}
+	if m.Item(tr("转为笔记发送")).Chosen() {
+		_, _, _ = a.store.Add(store.Note{Section: store.SectionInbox, Text: t.Text})
+		a.switchPage(pageNotes)
+	}
+	m.Separator()
+	if m.Item(tr("删除")).Chosen() {
+		if removed, pos, ok := a.store.DeleteTask(t.ID); ok {
+			c.ToastAction(tr("已删除任务"), tr("撤销"), func() { _ = a.store.RestoreTask(removed, pos) })
+		}
+	}
 }
 
 func nextMonday(base time.Time) time.Time {
@@ -202,29 +684,13 @@ func nextMonday(base time.Time) time.Time {
 	return base.AddDate(0, 0, d)
 }
 
-func joinMeta(parts []string) string {
-	out := ""
-	for i, p := range parts {
-		if i > 0 {
-			out += " · "
+// overdueCount 用于「任务」页签的红色计数徽标。
+func (a *app) overdueCount() int {
+	now, n := a.now(), 0
+	for _, t := range a.tasks {
+		if t.Status != "done" && !t.DueAt.IsZero() && !t.DueAt.After(now) {
+			n++
 		}
-		out += p
 	}
-	return out
-}
-
-// dueLabel：今天 15:00 / 明天 9:00 / 11月8日 9:00 / 已过期 2 天。
-func dueLabel(due, now time.Time) string {
-	day := func(t time.Time) time.Time { return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location()) }
-	diff := int(day(due).Sub(day(now)).Hours() / 24)
-	hm := due.Format("15:04")
-	switch {
-	case diff < 0:
-		return fmt.Sprintf(tr("已过期 %d 天"), -diff)
-	case diff == 0:
-		return tr("今天 ") + hm
-	case diff == 1:
-		return tr("明天 ") + hm
-	}
-	return fmt.Sprintf("%d/%d %s", due.Month(), due.Day(), hm)
+	return n
 }

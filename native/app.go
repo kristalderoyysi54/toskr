@@ -77,9 +77,14 @@ type app struct {
 	menuOpen   bool
 	focusList  bool
 
+	clock func() time.Time // 可注入时钟（视觉对照测试固定在参照截图时刻）
+
 	// 任务页
 	tasks     []store.Task
 	taskDraft string
+	taskSub   int // 0 今天 1 任务
+	sparkMode bool
+	bandOpen  map[string]bool // 智能区 / 分组折叠（已到期、灵感、已完成）
 	taskIn    ui.Handle
 	taskSel   int
 	taskList  ui.ListState
@@ -128,7 +133,7 @@ type app struct {
 }
 
 func newApp(sys core.System, st *store.Store) *app {
-	a := &app{sys: sys, store: st, page: pageNotes, section: store.SectionInbox, doneOpen: map[string]bool{}, thumbs: map[string]ui.ImageSource{}, revealed: map[string]time.Time{}}
+	a := &app{sys: sys, store: st, page: pageNotes, section: store.SectionInbox, doneOpen: map[string]bool{}, bandOpen: map[string]bool{"overdue": true, "spark": true}, clock: time.Now, thumbs: map[string]ui.ImageSource{}, revealed: map[string]time.Time{}}
 	a.reload()
 	return a
 }
@@ -562,3 +567,5 @@ func modifierFlags(name string) (target, others uint64) {
 	}
 	return target, all &^ target
 }
+
+func (a *app) now() time.Time { return a.clock() }

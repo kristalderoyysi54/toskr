@@ -55,7 +55,7 @@ func (a *app) panelView(c *ui.Context) {
 		case pageClip:
 			a.clipPage(c, k)
 		case pageTasks:
-			ui.Column(c).Grow(1).Padding(0, 10).Gap(8).Children(func() { a.tasksPage(c) })
+			ui.Column(c).Grow(1).Children(func() { a.tasksPage(c) })
 		case pageBills:
 			ui.Column(c).Grow(1).Padding(0, 10).Gap(8).Children(func() { a.billsPage(c) })
 		case pageSecrets:
@@ -64,7 +64,9 @@ func (a *app) panelView(c *ui.Context) {
 			a.notesPage(c, k)
 		}
 		a.hintsRow(c, k)
-		a.composerBar(c, k)
+		if a.page != pageTasks { // 任务页没有发送输入区，与 Tauri 一致
+			a.composerBar(c, k)
+		}
 	})
 	if a.menuOpen {
 		a.moreMenu(c, k)

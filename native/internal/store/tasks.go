@@ -248,3 +248,15 @@ func atoiSmall(s string) (int, bool) {
 	}
 	return n, n <= 23
 }
+
+// UpdateTaskSection 改任务分组（名称 / 折叠）。
+func (s *Store) UpdateTaskSection(sec Section) error {
+	return s.mutate(func() bool {
+		i := slices.IndexFunc(s.taskSections, func(x Section) bool { return x.ID == sec.ID })
+		if i < 0 || strings.TrimSpace(sec.Name) == "" {
+			return false
+		}
+		s.taskSections[i] = sec
+		return true
+	})
+}
