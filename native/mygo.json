@@ -1,0 +1,14 @@
+{
+  "name": "Toskr Native",
+  "identifier": "com.toskr.native",
+  "version": "0.1.0",
+  "out": "build",
+  "macos": {
+    "signingIdentity": "Toskr Dev Signing",
+    "minimumSystemVersion": "13.0",
+    "infoPlist": {
+      "LSUIElement": true,
+      "NSAppleEventsUsageDescription": "Toskr 需要向目标应用粘贴内容"
+    }
+  }
+}

@@ -11,7 +11,7 @@ let a = CommandLine.arguments
 func fail(_ m: String) -> Never { FileHandle.standardError.write((m + "\n").data(using: .utf8)!); exit(2) }
 guard a.count >= 2 else { fail("用法见源码头部") }
 
-let keyCodes: [String: CGKeyCode] = ["c": 8, "q": 12, "w": 13, "n": 45, "esc": 53]
+let keyCodes: [String: CGKeyCode] = ["c": 8, "q": 12, "w": 13, "n": 45, "esc": 53, "space": 49]
 let modFlags: [String: CGEventFlags] = ["cmd": .maskCommand, "shift": .maskShift, "ctrl": .maskControl, "alt": .maskAlternate]
 
 switch a[1] {

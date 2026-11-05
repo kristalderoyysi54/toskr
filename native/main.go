@@ -1,0 +1,104 @@
+// Toskr Native：用 mygo 原生 UI 重写的 Toskr（菜单栏划词队列）。
+package main
+
+import (
+	"errors"
+	"log"
+	"os"
+	"path/filepath"
+
+	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
+
+	"github.com/toskr/native/internal/core"
+	"github.com/toskr/native/internal/diag"
+	"github.com/toskr/native/internal/macos"
+	"github.com/toskr/native/internal/store"
+)
+
+func main() {
+	if !mygo.App.RequestSingleInstanceLock() {
+		return
+	}
+	mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
+	mygo.App.OnWindowAllClosed(func() {})
+	var a *app
+	mygo.App.OnSecondInstance(func([]string, string) {
+		if a != nil {
+			a.showPanel()
+		}
+	})
+	mygo.App.WhenReady(func() {
+		var err error
+		if a, err = start(); err != nil {
+			log.Print(err)
+			_, _ = mygo.Dialog.Message(mygo.MessageOptions{Title: "Toskr Native 无法启动", Message: err.Error()})
+			mygo.App.Quit()
+		}
+	})
+	if err := mygo.App.Run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func start() (*app, error) {
+	dir := dataDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	diag.Init(dir)
+	diag.Push("启动 v%s pid=%d", mygo.App.Version(), os.Getpid())
+	_, statErr := os.Stat(filepath.Join(dir, store.DataFile))
+	key, err := dataKey(errors.Is(statErr, os.ErrNotExist))
+	if err != nil {
+		return nil, err
+	}
+	st, err := store.OpenDir(dir, key)
+	if err != nil {
+		return nil, err
+	}
+	seedIfRequested(st)
+	a := newApp(core.Mac{}, st)
+	diag.Push("数据水合完成 笔记=%d 剪贴板=%d", a.counts[0], a.counts[1])
+
+	a.panel = mygo.NewWindow(mygo.WindowOptions{
+		Title: "Toskr", Panel: true, Hidden: true, Frameless: true, Transparent: true,
+		Vibrancy: vibrancyFor(st.Settings().Glass), CornerRadius: 18,
+		Width: 360, Height: 720, DisableResize: true,
+		Content: ui.View(a.panelView),
+	})
+	a.panel.SetActiveAppearance(true)
+	a.panel.OnClose(func(e *mygo.CloseEvent) { e.PreventDefault(); a.hidePanel() })
+	a.panel.OnBlur(func() {
+		diag.Push("面板失焦 pinned=%v", a.pinned)
+		if !a.pinned {
+			a.hidePanel()
+		}
+	})
+	a.createHUD()
+	st.OnChange(func() { a.panel.Update(a.reload) })
+	st.OnError = func(err error) {
+		diag.Push("落盘失败: %v", err)
+		a.panel.Update(func() { a.showHUD("warn", "保存失败："+err.Error()) })
+	}
+	mygo.App.OnQuit(func() {
+		if err := st.Flush(); err != nil {
+			diag.Push("退出前落盘失败: %v", err)
+		}
+	})
+
+	a.shortcut = st.Settings().PanelHotkey
+	if err := mygo.GlobalShortcut.Register(a.shortcut, a.togglePanel); err != nil {
+		diag.Push("面板快捷键 %s 注册失败: %v", a.shortcut, err)
+		a.shortcut = ""
+	}
+	a.setUpTray()
+	diag.Push("辅助功能授权=%v", macos.AXTrusted(false))
+	a.startTap()
+	a.watchClipboard()
+	a.pinned = os.Getenv("TOSKR_PIN") == "1" // 测量用：面板常驻不随失焦收起
+	if !mygo.App.WasOpenedAtLogin() {
+		a.showPanel()
+	}
+	return a, nil
+}
