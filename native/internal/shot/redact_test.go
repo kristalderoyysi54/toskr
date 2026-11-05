@@ -129,3 +129,32 @@ func TestZoomAround(t *testing.T) {
 		t.Fatal("滚轮因子")
 	}
 }
+
+// 移植 Rust redaction_verification_flags_text_majorly_inside_masks_only + regions_still_showing_text 归属。
+func TestStillShowsText(t *testing.T) {
+	mask := PxBox{100, 100, 200, 50}
+	cases := []struct {
+		obs  PxBox
+		want bool
+	}{
+		{PxBox{120, 110, 100, 30}, true},
+		{PxBox{60, 96, 50, 10}, false},
+		{PxBox{400, 300, 80, 20}, false},
+	}
+	for _, c := range cases {
+		if got := StillShowsText(c.obs, []PxBox{mask}); got != c.want {
+			t.Errorf("%v: got %v", c.obs, got)
+		}
+	}
+	left, right := PxBox{0, 0, 60, 20}, PxBox{60, 0, 60, 20}
+	if !StillShowsText(PxBox{20, 0, 100, 20}, []PxBox{left, right}) {
+		t.Error("跨两框过半应失败")
+	}
+	if !StillShowsText(PxBox{70, 0, 100, 20}, []PxBox{left, right}) {
+		t.Error("恰好一半应按失败处理")
+	}
+	got := FailingRegions([]PxBox{{70, 0, 100, 20}, {120, 110, 100, 30}, {400, 300, 80, 20}, {75, 2, 40, 10}}, []PxBox{left, right, mask})
+	if len(got) != 2 || got[0] != 1 || got[1] != 2 {
+		t.Errorf("FailingRegions = %v，want [1 2]", got)
+	}
+}

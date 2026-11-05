@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"image"
 	"image/png"
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -15,6 +16,8 @@ import (
 
 func redactTest(t *testing.T) (*app, *redactEditor, *ui.Tester) {
 	t.Helper()
+	recheckOCR = func(*image.RGBA) ([]macos.OCRLine, error) { return nil, nil }
+	t.Cleanup(func() { recheckOCR = ocrImage })
 	a, _ := testApp(t)
 	img := image.NewRGBA(image.Rect(0, 0, 400, 200))
 	for i := range img.Pix {
@@ -106,5 +109,34 @@ func TestRedactCandidatesFromOCR(t *testing.T) {
 	a.redactInput(re, ui.InputEvent{Kind: ui.InputKeyDown, Key: ui.KeyEscape})
 	if !re.closed {
 		t.Fatal("Esc 逐层退出到关窗")
+	}
+}
+
+// 复检：识别框过半落在第 2 个框里 → 不保存、标红第 2 个框、提示「第 2 处」；改动后红框清除，再应用通过。
+func TestRedactRecheckFailsAndMarksRegion(t *testing.T) {
+	a, re, tt := redactTest(t)
+	re.commit([]shot.Region{{PxBox: shot.PxBox{X: 0, Y: 0, W: 40, H: 40}}, {PxBox: shot.PxBox{X: 100, Y: 100, W: 60, H: 30}}})
+	recheckOCR = func(*image.RGBA) ([]macos.OCRLine, error) {
+		return []macos.OCRLine{{Text: "4111", X: 105, Y: 105, W: 40, H: 20}, {Text: "ok", X: 300, Y: 10, W: 50, H: 20}}, nil
+	}
+	before := re.note.ImageFile
+	a.applyRedaction(re)
+	tt.Frame()
+	n, _ := a.store.Note(re.note.ID)
+	if re.closed || re.busy || n.ImageFile != before || len(re.failed) != 1 || re.failed[0] != 1 {
+		t.Fatalf("复检未通过应不保存并标第 2 框：closed=%v busy=%v failed=%v", re.closed, re.busy, re.failed)
+	}
+	if !strings.Contains(a.hudText, "第 2 处") {
+		t.Fatalf("提示 %q", a.hudText)
+	}
+	re.remove(1)
+	if re.failed != nil {
+		t.Fatal("改动后应清除红框")
+	}
+	recheckOCR = func(*image.RGBA) ([]macos.OCRLine, error) { return nil, nil }
+	a.applyRedaction(re)
+	n, _ = a.store.Note(re.note.ID)
+	if !re.closed || n.ImageFile == before {
+		t.Fatal("复检通过应写回")
 	}
 }

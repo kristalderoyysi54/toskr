@@ -30,6 +30,7 @@ type shotSession struct {
 	front      string        // 截图时前台应用名（入库来源）
 	frontID    string        // 前台应用 bundle id
 	done       chan struct{} // 结束时关闭：停掉光标轮询
+	hint       string        // 遮罩关掉后才弹的气泡（遮罩层级高于气泡，期间弹了也看不见）
 }
 
 type shotDisplay struct {
@@ -161,6 +162,7 @@ func (a *app) openShot(s *shotSession, displays []mygo.Display, frames []*image.
 	if first == nil {
 		first = s.displays[0]
 	}
+	setShotCursor(true)
 	for _, sd := range s.displays {
 		sd.win = mygo.NewWindow(mygo.WindowOptions{
 			Title: "Toskr 截图", Panel: true, Hidden: true, Frameless: true, DisableResize: true, DisableShadow: true,
@@ -185,7 +187,7 @@ func (a *app) openShot(s *shotSession, displays []mygo.Display, frames []*image.
 func (a *app) pollShotCursor(s *shotSession) {
 	t := time.NewTicker(16 * time.Millisecond)
 	defer t.Stop()
-	for {
+	for tick := 0; ; tick++ {
 		select {
 		case <-s.done:
 			return
@@ -195,6 +197,9 @@ func (a *app) pollShotCursor(s *shotSession) {
 		a.panel.Update(func() {
 			if a.shot != s {
 				return
+			}
+			if tick%5 == 0 && s.typing() { // 约 80ms 一次（同 Tauri set_typing 轮询）
+				a.raiseIMEWindows()
 			}
 			for _, d := range s.displays {
 				in := float64(p.X) >= d.X && float64(p.X) < d.X+d.W && float64(p.Y) >= d.Y && float64(p.Y) < d.Y+d.H
@@ -226,6 +231,27 @@ func (a *app) pollShotCursor(s *shotSession) {
 	}
 }
 
+// typing：遮罩里有文字 / 批注说明输入框（输入法候选窗要提到遮罩之上）。
+func (s *shotSession) typing() bool {
+	for _, d := range s.displays {
+		if d.ed.editing != nil || d.ed.note != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// raiseIMEWindows：把本进程里不属于 mygo 的可见窗口（输入法候选窗）提到遮罩之上。
+func (a *app) raiseIMEWindows() {
+	ours := map[uintptr]bool{}
+	for _, w := range mygo.Windows() {
+		ours[w.NativeHandle()] = true
+	}
+	for _, r := range macos.RaiseIMEWindows(ours) {
+		diag.Push("截图输入 提升候选窗 %s", r)
+	}
+}
+
 func (a *app) shotHasSelection() bool {
 	if a.shot == nil {
 		return false
@@ -245,6 +271,7 @@ func (a *app) endShot(reopen bool) {
 		return
 	}
 	a.shot = nil
+	setShotCursor(false)
 	close(s.done)
 	for _, d := range s.displays {
 		if d.win != nil {
@@ -254,6 +281,9 @@ func (a *app) endShot(reopen bool) {
 	}
 	if reopen && s.wasVisible && a.panel != nil {
 		a.panel.Show()
+	}
+	if s.hint != "" {
+		a.showHUD("info", s.hint)
 	}
 }
 

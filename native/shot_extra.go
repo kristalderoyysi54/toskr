@@ -37,6 +37,7 @@ type shotTranslateJob struct {
 	pr    shot.Rect
 	sel   shot.Rect
 	err   string
+	hint  string // 遮罩关掉后弹的引导（缺离线语言包）
 }
 
 const (
@@ -191,7 +192,7 @@ func shotTextButton(c *ui.Context, s settingsTokens, label string, disabled bool
 	return b.Clicked() && !disabled
 }
 
-// shotTranslate：图内翻译：识别各行 → AI 逐行翻译 → 只抹原文笔画、译文盖回原处。再点一次去掉。
+// shotTranslate：图内翻译：识别各行 → 本机系统翻译（不可用时退回 AI）逐行翻译 → 只抹原文笔画、译文盖回原处。再点一次去掉。
 func (a *app) shotTranslate(c *ui.Context, d *shotDisplay) {
 	e := &d.ed
 	if slices.ContainsFunc(e.hist.Shapes, func(s *shot.Shape) bool { return s.Kind == shot.Translate }) {
@@ -228,14 +229,11 @@ func (a *app) shotTranslate(c *ui.Context, d *shotDisplay) {
 		case len(job.lines) == 0:
 			job.err = tr("未识别到文字")
 		default:
-			job.out, err = translateLines(cfg, job.lines)
-			if err != nil {
-				diag.Push("图内翻译失败：%v", err)
-				job.err = tr("翻译失败")
-				if errors.Is(err, ai.ErrNoKey) {
-					job.err = err.Error()
-				}
+			texts := make([]string, len(job.lines))
+			for i, l := range job.lines {
+				texts[i] = l.Text
 			}
+			job.out, job.err, job.hint = translateTexts(cfg, texts)
 		}
 		d.update(func() {
 			if e.translateGen != gen {
@@ -248,14 +246,10 @@ func (a *app) shotTranslate(c *ui.Context, d *shotDisplay) {
 }
 
 // translateLines：JSON 数组进、同长 JSON 数组出（与 Tauri 主窗口代办的提示词一致）。
-func translateLines(cfg ai.Config, lines []macos.OCRLine) ([]string, error) {
+func translateLines(cfg ai.Config, texts []string) ([]string, error) {
 	target, fallback := "Simplified Chinese", "English"
 	if langEN.Load() {
 		target, fallback = "English", "Simplified Chinese"
-	}
-	texts := make([]string, len(lines))
-	for i, l := range lines {
-		texts[i] = l.Text
 	}
 	in, _ := json.Marshal(texts)
 	system := "The user message is a JSON array of text lines recognized from a screenshot. Translate each line into " + target +
@@ -265,7 +259,7 @@ func translateLines(cfg ai.Config, lines []macos.OCRLine) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return parseLines(out, len(lines))
+	return parseLines(out, len(texts))
 }
 
 // parseLines：取回复里的 JSON 字符串数组（容忍代码块包裹），行数须与原文一致。
@@ -286,6 +280,9 @@ func (a *app) applyTranslation(c *ui.Context, d *shotDisplay) {
 	e := &d.ed
 	job := e.translated
 	e.translated = nil
+	if job.hint != "" && a.shot != nil {
+		a.shot.hint = job.hint
+	}
 	if job.err != "" {
 		e.flash(c, job.err)
 		return

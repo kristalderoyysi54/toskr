@@ -9,6 +9,8 @@ import (
 	"image/png"
 	"math"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -58,6 +60,8 @@ type redactEditor struct {
 	hovered    int
 	candidates []redactCandidate
 	detecting  bool
+	busy       bool  // 应用中（打码后 OCR 复检）
+	failed     []int // 复检未通过的框（0 起），任何改动后清除
 	view       shot.ZoomView
 	gesture    *redactGesture
 	space      bool
@@ -132,6 +136,7 @@ func (a *app) setRedactDrawStyle(i int) {
 
 // commit：记一步撤销历史并更新框列表。
 func (re *redactEditor) commit(next []shot.Region) {
+	re.failed = nil
 	re.past = append(re.past, re.present)
 	re.present, re.future = next, nil
 }
@@ -140,7 +145,7 @@ func (re *redactEditor) undo() {
 	if len(re.past) == 0 {
 		return
 	}
-	re.selected = -1
+	re.selected, re.failed = -1, nil
 	re.future = append([][]shot.Region{re.present}, re.future...)
 	re.present, re.past = re.past[len(re.past)-1], re.past[:len(re.past)-1]
 }
@@ -149,7 +154,7 @@ func (re *redactEditor) redo() {
 	if len(re.future) == 0 {
 		return
 	}
-	re.selected = -1
+	re.selected, re.failed = -1, nil
 	re.past = append(re.past, re.present)
 	re.present, re.future = re.future[0], re.future[1:]
 }
@@ -238,6 +243,9 @@ func (re *redactEditor) candidateAt(x, y float64) int {
 }
 
 func (a *app) redactInput(re *redactEditor, ev ui.InputEvent) bool {
+	if re.busy && (ev.Kind != ui.InputKeyDown || ev.Key != ui.KeyEscape) {
+		return true // 复检期间画布只读（同 Tauri disabled），Esc 仍可关窗
+	}
 	x, y := float64(ev.X), float64(ev.Y)
 	sh := re.shown()
 	style := shot.RedactStyles[a.redactDrawStyle()].Style
@@ -372,21 +380,73 @@ func (a *app) redactKey(re *redactEditor, ev ui.InputEvent) bool {
 	return true
 }
 
-// applyRedaction：把各框写进图片，存成新图换进图片卡（原图保留，气泡可撤销）。
+// recheckOCR：复检用的识别（测试替换）。
+var recheckOCR = ocrImage
+
+// applyRedaction：把各框写进图片副本，对副本重新 OCR 复检（同 Rust verify_redaction）：
+// 任何识别框过半落在打码框内即不保存、标红对应框；复检 OCR 本身不可用时不阻断。
+// 通过后存成新图换进图片卡（原图保留，气泡可撤销）。
 func (a *app) applyRedaction(re *redactEditor) {
-	if len(re.present) == 0 {
+	if len(re.present) == 0 || re.busy {
 		return
 	}
-	out := shot.ApplyRedactions(re.img, re.present)
-	var buf bytes.Buffer
-	if err := (&png.Encoder{CompressionLevel: png.BestSpeed}).Encode(&buf, out); err != nil {
-		a.showHUD("warn", tr("图片打码未保存"))
+	re.busy, re.selected, re.failed = true, -1, nil
+	regions, img, W, H := slices.Clone(re.present), re.img, re.W, re.H
+	work := func() {
+		out := shot.ApplyRedactions(img, regions)
+		var failing []int
+		if lines, err := recheckOCR(out); err != nil {
+			diag.Push("图片打码复检跳过：复检 OCR 不可用（%v）", err)
+		} else {
+			boxes := make([]shot.PxBox, len(lines))
+			for i, l := range lines {
+				boxes[i], _ = shot.BoxFromDrag(l.X, l.Y, l.X+l.W, l.Y+l.H, W, H)
+			}
+			masks := make([]shot.PxBox, len(regions))
+			for i, r := range regions {
+				masks[i] = r.PxBox
+			}
+			if failing = shot.FailingRegions(boxes, masks); len(failing) == 0 {
+				diag.Push("图片打码复检通过 regions=%d residual_observations=%d", len(regions), len(boxes))
+			}
+		}
+		var buf bytes.Buffer
+		encErr := (&png.Encoder{CompressionLevel: png.BestSpeed}).Encode(&buf, out)
+		re.update(func() {
+			re.busy = false
+			switch {
+			case re.closed:
+			case len(failing) > 0:
+				re.failed = failing
+				nums := make([]string, len(failing))
+				for i, f := range failing {
+					nums[i] = strconv.Itoa(f + 1)
+				}
+				diag.Push("图片打码复检未通过：第 %s 处", strings.Join(nums, "、"))
+				a.showHUD("warn", fmt.Sprintf(tr("遮挡校验未通过：第 %s 处遮挡区域内仍能识别出文字，请扩大后重试"), strings.Join(nums, "、")))
+			case encErr != nil:
+				a.showHUD("warn", tr("图片打码未保存"))
+			default:
+				diag.Push("图片打码: %d 处", len(regions))
+				re.close()
+				a.replaceNoteImage(re.note, buf.Bytes(), W, H, fmt.Sprintf(tr("已打码 %d 处"), len(regions)))
+			}
+		})
+	}
+	if re.win == nil {
+		work() // 无窗口（测试）同步跑
 		return
 	}
-	n := len(re.present)
-	diag.Push("图片打码: %d 处", n)
-	re.close()
-	a.replaceNoteImage(re.note, buf.Bytes(), re.W, re.H, fmt.Sprintf(tr("已打码 %d 处"), n))
+	go work()
+}
+
+// update：回主线程改状态（无窗口时直接执行）。
+func (re *redactEditor) update(fn func()) {
+	if re.win != nil {
+		re.win.Update(fn)
+	} else {
+		fn()
+	}
 }
 
 // detectSensitive：OCR 逐行 + 敏感内容预检，命中的字段按字符比例截出候选框（外扩 2px）。
@@ -398,14 +458,7 @@ func (a *app) redactDetect(re *redactEditor) {
 	img := re.img
 	go func() {
 		lines, err := ocrImage(img)
-		update := func(fn func()) {
-			if re.win != nil {
-				re.win.Update(fn)
-			} else {
-				fn()
-			}
-		}
-		update(func() {
+		re.update(func() {
 			re.detecting = false
 			if err != nil {
 				a.showHUD("warn", fmt.Sprintf(tr("识别失败：%v"), err))
@@ -474,7 +527,7 @@ func (a *app) redactView(c *ui.Context, re *redactEditor) {
 		cursor = ui.CursorGrabbing
 	case re.space && re.view.Zoom > 1:
 		cursor = ui.CursorGrab
-	case re.detecting:
+	case re.detecting || re.busy:
 		cursor = ui.CursorDefault
 	}
 	var canvas ui.Element
@@ -515,6 +568,8 @@ func (a *app) redactView(c *ui.Context, re *redactEditor) {
 					p.Fill(hr, bg, 2)
 					p.Stroke(hr, pal.primary, 2, 1.5)
 				}
+			case slices.Contains(re.failed, i):
+				p.Stroke(ui.Rect{X: v.X - 3, Y: v.Y - 3, W: v.W + 6, H: v.H + 6}, pal.k.danger, 2, 2)
 			case i == re.hovered && re.gesture == nil:
 				p.Stroke(o, gray(1, 0.8), 2, 1.5)
 			}
@@ -712,7 +767,11 @@ func (a *app) redactToolbar(c *ui.Context, re *redactEditor, pal shotPalette, wa
 				re.close()
 				return
 			}
-			if primaryButton(c, st, tr("应用"), len(re.present) == 0) {
+			apply := tr("应用")
+			if re.busy {
+				apply = tr("复检中…")
+			}
+			if primaryButton(c, st, apply, len(re.present) == 0 || re.busy) {
 				a.applyRedaction(re)
 			}
 		})

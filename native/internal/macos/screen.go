@@ -3,6 +3,8 @@
 package macos
 
 import (
+	"fmt"
+	"strings"
 	"sync"
 	"unsafe"
 
@@ -107,13 +109,16 @@ func WindowRects(skipPID int32) []WinRect {
 }
 
 // MakeOverlay 把窗口设成截图遮罩：层级 1000（盖过菜单栏与 Dock）、所有桌面、全屏 Space 上也显示、不进窗口循环。
+// OverlayLevel：截图遮罩的窗口层级（高于菜单栏与全屏应用）。
+const OverlayLevel = 1000
+
 func MakeOverlay(nsWindow uintptr) {
 	if nsWindow == 0 {
 		return
 	}
 	load()
 	w := objc.ID(nsWindow)
-	w.Send(sel("setLevel:"), 1000)
+	w.Send(sel("setLevel:"), OverlayLevel)
 	const joinAll, stationary, ignoresCycle, fullScreenAux = 1 << 0, 1 << 4, 1 << 6, 1 << 8
 	w.Send(sel("setCollectionBehavior:"), uint(joinAll|stationary|ignoresCycle|fullScreenAux))
 	w.Send(sel("setAcceptsMouseMovedEvents:"), true)
@@ -191,4 +196,28 @@ func WindowNumber(nsWindow uintptr) uint32 {
 	}
 	load()
 	return uint32(objc.Send[int](objc.ID(nsWindow), sel("windowNumber")))
+}
+
+// RaiseIMEWindows：输入法候选窗由系统画在本进程里（实测层级 20），会被遮罩挡住（同 Tauri raise_ime_windows）：
+// 把本进程中可见、不属于 ours（mygo 窗口）、层级不高于遮罩的窗口提到遮罩之上，返回被提升的窗口类名与尺寸。仅限主线程。
+func RaiseIMEWindows(ours map[uintptr]bool) []string {
+	load()
+	var raised []string
+	withPool(func() {
+		wins := class("NSApplication").Send(sel("sharedApplication")).Send(sel("windows"))
+		for i, n := 0, objc.Send[int](wins, sel("count")); i < n; i++ {
+			w := wins.Send(sel("objectAtIndex:"), i)
+			if ours[uintptr(w)] || !objc.Send[bool](w, sel("isVisible")) || objc.Send[int](w, sel("level")) > OverlayLevel {
+				continue
+			}
+			cls := goString(uintptr(w.Send(sel("className"))))
+			if strings.Contains(cls, "StatusBar") { // 菜单栏托盘图标也是本进程窗口，不能提上来
+				continue
+			}
+			w.Send(sel("setLevel:"), OverlayLevel+1)
+			f := objc.Send[cgRect](w, sel("frame"))
+			raised = append(raised, fmt.Sprintf("%s %.0f×%.0f", cls, f.W, f.H))
+		}
+	})
+	return raised
 }

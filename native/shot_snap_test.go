@@ -10,6 +10,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"github.com/toskr/native/internal/macos"
 	"github.com/toskr/native/internal/shot"
 	"github.com/toskr/native/internal/store"
 )
@@ -172,6 +173,9 @@ func TestRedactSnapshot(t *testing.T) {
 	in(ui.InputPointerMove, 600, 360)
 	in(ui.InputPointerUp, 600, 360)
 	re.present[1].Style = shot.RedactStyles[1].Style
+	re.failed = []int{0} // 复检未通过：红框
+	recheckOCR = func(*image.RGBA) ([]macos.OCRLine, error) { return nil, nil }
+	defer func() { recheckOCR = ocrImage }()
 	re.candidates = []redactCandidate{{shot.PxBox{X: 1500, Y: 600, W: 600, H: 80}, "银行卡号"}}
 	tt.Frame()
 	out, _ := os.Create(filepath.Join(dir, "9-redact.png"))

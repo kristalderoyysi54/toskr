@@ -3,6 +3,7 @@ package shot
 import (
 	"image"
 	"math"
+	"slices"
 )
 
 // 图片打码（移植自 lib/imageEditor.ts 与 lib/imageZoom.ts；像素算法与 Rust image_firewall 同构）：
@@ -231,4 +232,48 @@ func PointToImage(x, y float64, shown Rect, iw, ih int) (float64, float64) {
 func BoxToView(b PxBox, shown Rect, iw, ih int) Rect {
 	sx, sy := shown.W/float64(iw), shown.H/float64(ih)
 	return Rect{shown.X + float64(b.X)*sx, shown.Y + float64(b.Y)*sy, float64(b.W) * sx, float64(b.H) * sy}
+}
+
+func intersectArea(a, b PxBox) int {
+	l, r := max(a.X, b.X), min(a.X+a.W, b.X+b.W)
+	t, btm := max(a.Y, b.Y), min(a.Y+a.H, b.Y+b.H)
+	if r <= l || btm <= t {
+		return 0
+	}
+	return (r - l) * (btm - t)
+}
+
+// StillShowsText：复检契约（同 Rust redacted_regions_still_show_text）：识别框有一半及以上落在打码框内即未通过。
+// 实色 / 马赛克框内不该再有字形，过半重叠只可能来自坐标映射缺陷；边缘相触是 Vision 框松弛，不算。
+func StillShowsText(obs PxBox, regions []PxBox) bool {
+	area := obs.W * obs.H
+	if area <= 0 {
+		return false
+	}
+	covered := 0
+	for _, r := range regions {
+		covered += intersectArea(obs, r) // 框互相重叠会高估，只会更严格
+	}
+	return covered*2 >= area
+}
+
+// FailingRegions：未通过的识别框各归到与它交集最大的打码框，返回去重升序的框下标（0 起）。
+func FailingRegions(observations, regions []PxBox) []int {
+	var out []int
+	for _, o := range observations {
+		if !StillShowsText(o, regions) {
+			continue
+		}
+		best, bestArea := -1, -1
+		for i, r := range regions {
+			if a := intersectArea(o, r); a > bestArea {
+				best, bestArea = i, a
+			}
+		}
+		if best >= 0 && !slices.Contains(out, best) {
+			out = append(out, best)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
