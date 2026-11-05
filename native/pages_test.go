@@ -305,3 +305,33 @@ func waitFor(t *testing.T, ok func() bool) {
 	}
 	t.Fatal("等待超时")
 }
+
+func TestSettingsNavSearchAndToggle(t *testing.T) {
+	a, _ := testApp(t)
+	a.openSettingsState()
+	tt := ui.NewTester(a.settingsView, 1040, 720)
+	tt.Frame()
+	if !tt.HasText("常用外观") || !tt.HasText("伴随停靠") {
+		t.Fatalf("首屏应为窗口与外观 %v", tt.Texts())
+	}
+	_ = tt.Click("快捷键")
+	tt.Frame()
+	if !tt.HasText("双击修饰键") || tt.HasText("常用外观") {
+		t.Fatalf("应切到快捷键 %v", tt.Texts())
+	}
+	_ = tt.Click("粘贴与隐私")
+	tt.Frame()
+	before := a.store.Settings().PasteThenEnter
+	if r, ok := tt.Find("粘贴后回车"); ok {
+		tt.ClickAt(935, r.Y+18) // 行右侧开关中心（标题 18 + 说明 16 + 间距 2，开关垂直居中）
+	}
+	tt.Frame()
+	if a.store.Settings().PasteThenEnter == before {
+		t.Fatal("开关应写回设置")
+	}
+	a.setQuery = "钥匙串"
+	tt.Frame()
+	if !tt.HasText("搜索结果") || !tt.HasText("加密") {
+		t.Fatalf("搜索应命中数据页加密行 %v", tt.Texts())
+	}
+}

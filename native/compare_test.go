@@ -94,14 +94,22 @@ func TestCompareWithTauri(t *testing.T) {
 	a.switchPage(pageClip)
 	a.reload()
 	compareView(t, dir, "clip", a)
+
+	// 设置窗（1040×720，首屏「窗口与外观 · 通用」）
+	a.openSettingsState()
+	compareSized(t, dir, "settings", a.settingsView, 1040, 720)
 }
 
 func compareView(t *testing.T, dir, name string, a *app) {
+	compareSized(t, dir, name, a.panelView, 380, 760)
+}
+
+func compareSized(t *testing.T, dir, name string, view func(*ui.Context), w, h int) {
 	for _, scheme := range []string{"light", "dark"} {
-		tt := ui.NewTester(a.panelView, 380, 760)
+		tt := ui.NewTester(view, w, h)
 		tt.SetDark(scheme == "dark")
 		tt.SetVibrancy(false)
-		tt.Move(379, 2)
+		tt.Move(float32(w-1), 2)
 		tt.Frame()
 		got := onWhite(tt.Image())
 		save(t, filepath.Join(dir, "mygo-"+name+"-"+scheme+".png"), got)

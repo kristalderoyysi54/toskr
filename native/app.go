@@ -131,6 +131,10 @@ type app struct {
 	recovery    []string
 	health      string
 	updateMsg   string
+	setPage     int    // 设置窗左侧分类
+	setSub      int    // 分类内子页签
+	setQuery    string // 设置搜索
+	setSearch   ui.Handle
 }
 
 func newApp(sys core.System, st *store.Store) *app {

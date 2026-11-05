@@ -34,7 +34,7 @@ type Note struct {
 	SentAt    time.Time `json:"sentAt,omitzero"`
 	Kept      bool      `json:"kept,omitempty"`
 	Done      bool      `json:"done,omitempty"`
-	Kind      string    `json:"kind,omitempty"` // text | link | code | image
+	Kind      string    `json:"kind,omitempty"`      // text | link | code | image
 	LinkTitle string    `json:"linkTitle,omitempty"` // 链接卡的网页标题（与 Tauri 数据同名字段；缺省展示 URL）
 	ImageFile string    `json:"imageFile,omitempty"`
 	ImageW    int       `json:"imageW,omitempty"`
