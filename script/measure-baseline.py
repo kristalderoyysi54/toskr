@@ -20,6 +20,7 @@ import argparse
 import ctypes
 import json
 import os
+import plistlib
 import re
 import statistics
 import subprocess
@@ -202,6 +203,22 @@ def by_label(snap):
 
 # ---------- --full 场景 ----------
 
+def screen_locked():
+    raw = subprocess.run(["ioreg", "-n", "Root", "-d1", "-a"], capture_output=True).stdout
+    try:
+        root = plistlib.loads(raw)
+    except Exception:
+        return False
+    sessions = root.get("IOConsoleUsers", []) if isinstance(root, dict) else []
+    return any(u.get("CGSSessionScreenIsLocked") for u in sessions if u.get("kCGSSessionOnConsoleKey"))
+
+
+def require_unlocked(stage):
+    """锁屏时 loginwindow 持 Secure Input，合成快捷键全被吞，交互阶段数据无效。"""
+    if screen_locked():
+        raise SystemExit(f"屏幕已锁定（{stage}）：合成输入无法送达，测量中止")
+
+
 def drive(*args):
     if not os.path.exists(DRIVE):
         src = os.path.join(ROOT, "script", "perf", "drive.swift")
@@ -234,6 +251,7 @@ def full_scenario(run):
     stages = []
 
     def record(name):
+        require_unlocked(name)
         labels = window_map(read_log_from(offset))
         stages.append({"stage": name, **snapshot(pid, labels)})
         return labels
@@ -294,6 +312,7 @@ def leak_scenario(run):
     stages = []
 
     def record(name):
+        require_unlocked(name)
         labels = window_map(read_log_from(offset))
         stages.append({"stage": name, **snapshot(pid, labels)})
 
@@ -376,6 +395,8 @@ def main():
     ap.add_argument("--json", help="把逐轮原始数据写到该文件")
     a = ap.parse_args()
 
+    if a.full or a.leak:
+        require_unlocked("开始前")
     runs = []
     for i in range(a.runs):
         r = one_run(a.app, a.settle)
