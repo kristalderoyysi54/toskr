@@ -52,8 +52,7 @@ func ptWell(e ui.Element) ui.Element {
 
 // platinumPanel 是 Platinum 方案下的主面板（380 宽，坐标取自参照）。
 func (a *app) platinumPanel(c *ui.Context, k tokens) {
-	c.Root().Background(ptG300)
-	ui.Box(c).Fill().Children(func() {
+	ui.Box(c).Fill().Background(ptG300).Children(func() { // 不透明底画在内容层，随进出场一起淡入淡出
 		// 窗框：1px 黑环 + 内侧左上白、右下 #999
 		ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Border(1, ptBlack).
 			InsetShadow(1, 1, 0, 0, ptWhite).InsetShadow(-1, -1, 0, 0, ptG600)
@@ -198,7 +197,11 @@ func (a *app) ptTargetBar(c *ui.Context, k tokens) {
 
 // ptPage 是白井里的当前页；笔记页带经典滚动条。
 func (a *app) ptPage(c *ui.Context, k tokens) {
-	switch a.page {
+	a.pageSlide(c, func(p int) { a.ptPageBody(c, k, p) })
+}
+
+func (a *app) ptPageBody(c *ui.Context, k tokens, p int) {
+	switch p {
 	case pageClip:
 		a.clipPage(c, k)
 	case pageTasks:

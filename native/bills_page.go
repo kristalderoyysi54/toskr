@@ -220,11 +220,13 @@ func (a *app) billsPage(c *ui.Context, k tokens) {
 	})
 	ui.Scroll(c).Grow(1).Scrollbars(false).Children(func() {
 		ui.Column(c).Padding(4, 14, 8, 14).Gap(8).Children(func() {
+			// AddBillFlow / BillAnalytics 弹层：fade-in + 自下 8px 滑入，100ms ease；无离场动画
+			sheet := ui.ElementTransition{Duration: 100 * time.Millisecond, Ease: easeCSS, Enter: &ui.Motion{Y: 8}}
 			if a.billForm.open {
-				a.billEditor(c, k)
+				ui.Column(c).Key("bill-editor").Transition(sheet).Children(func() { a.billEditor(c, k) })
 			}
 			if a.billAnalytics {
-				a.billAnalyticsCard(c, k, cur, now)
+				ui.Column(c).Key("bill-analytics").Transition(sheet).Children(func() { a.billAnalyticsCard(c, k, cur, now) })
 			}
 			if a.billView == "month" {
 				a.billMonthGrid(c, k, now)
@@ -336,9 +338,11 @@ func (a *app) billRow(c *ui.Context, k tokens, b store.Bill, cur string, now tim
 	paid := store.CardPaidForCurrentCycle(b, now)
 	row := ui.Column(c).Padding(6).Radius(10).Key(scope + "-" + b.ID)
 	hovered := row.Hovered()
+	rowBg := ui.Transparent
 	if hovered {
-		row.Background(k.track)
+		rowBg = k.track
 	}
+	fadeColor(row, "bg", rowBg, tweenTw) // BillList 行：colors 150ms
 	row.Children(func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			billAvatar(c, b, 24)
@@ -488,30 +492,39 @@ func (a *app) billWeekStrip(c *ui.Context, k tokens, now time.Time) {
 				}
 			}
 			sel := day.Equal(a.billDay)
-			cell := ui.Column(c).Grow(1).Basis(0).Height(65).Padding(6, 2).Gap(4).Radius(10).AlignItems(ui.Center).Key(day.Format("0102"))
+			cell := ui.Box(c).Grow(1).Basis(0).Height(65).Radius(10).Key(day.Format("0102"))
 			wcol, dcol := k.muted, k.fg
+			hoverBg := ui.Transparent
 			if sel {
-				cell.Background(s.primary)
 				wcol, dcol = gray(0.985, 0.8), gray(0.985, 1)
 			} else if cell.Hovered() {
-				cell.Background(k.track)
+				hoverBg = k.track
 			}
+			fadeColor(cell, "bg", hoverBg, tweenTw) // 日格 colors 150ms
+			wcol, dcol = cell.AnimateColor("w", wcol, tweenTw), cell.AnimateColor("d", dcol, tweenTw)
 			cell.Children(func() {
-				text(c, tr(weekdayChars[day.Weekday()]), 10, 14, 400, wcol)
-				text(c, itoa(day.Day()), 12, 17, 600, dcol)
-				ui.Row(c).Height(14).Gap(2).AlignItems(ui.Center).Children(func() {
-					if len(due) == 0 {
-						bc := s.inputBorder
-						if sel {
-							bc = gray(0.985, 0.4)
+				if sel { // 选中块是共享布局指示器（layoutId bill-week-thumb，springControl）
+					ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Radius(10).Background(s.primary).PassThrough().
+						Transition(ui.ElementTransition{Match: layoutID{"bill-week-thumb"}, Animation: &springControl, Position: true, Size: true})
+				}
+				// 日格内容绝对定位、排在滑块之后（mygo 绝对定位元素压在流内兄弟之上）
+				ui.Column(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Padding(6, 2).Gap(4).AlignItems(ui.Center).Children(func() {
+					text(c, tr(weekdayChars[day.Weekday()]), 10, 14, 400, wcol)
+					text(c, itoa(day.Day()), 12, 17, 600, dcol)
+					ui.Row(c).Height(14).Gap(2).AlignItems(ui.Center).Children(func() {
+						if len(due) == 0 {
+							bc := s.inputBorder
+							if sel {
+								bc = gray(0.985, 0.4)
+							}
+							ui.Box(c).Size(8, 8).Radius(4).Border(1, bc).BorderStyle(ui.BorderDashed)
+							return
 						}
-						ui.Box(c).Size(8, 8).Radius(4).Border(1, bc).BorderStyle(ui.BorderDashed)
-						return
-					}
-					billAvatar(c, due[0], 14)
-					if len(due) > 1 {
-						text(c, "+"+itoa(len(due)-1), 10, 14, 400, wcol)
-					}
+						billAvatar(c, due[0], 14)
+						if len(due) > 1 {
+							text(c, "+"+itoa(len(due)-1), 10, 14, 400, wcol)
+						}
+					})
 				})
 			})
 			if cell.Clicked() {
@@ -675,9 +688,11 @@ func (a *app) billTrend(c *ui.Context, k tokens, cur string, now time.Time) {
 				hov := col.Hovered()
 				col.Children(func() {
 					amt := text(c, money(cur, m.total), 10, 12, 400, k.muted).SingleLine()
-					if !hov || m.total == 0 {
-						amt.Opacity(0)
+					show := float32(0)
+					if hov && m.total > 0 {
+						show = 1
 					}
+					amt.Opacity(amt.AnimateTo("show", show, tweenTw)) // 柱顶数值 opacity 150ms
 					ui.Column(c).FillWidth().Height(40).Justify(ui.End).Children(func() {
 						h := max(m.total/peak*100, 2)
 						if m.total > 0 {

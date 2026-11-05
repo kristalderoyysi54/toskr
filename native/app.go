@@ -70,15 +70,24 @@ type app struct {
 	aiBusy        string // 正在 AI 处理的笔记 ID
 
 	// 1:1 主面板
-	noteGroups    []noteGroup
-	doneOpen      map[string]bool
-	searchOpen    bool
-	menuOpen      bool
-	placementOpen bool // 面板菜单「位置与停靠」二级页
-	openAtLogin   bool // 设置页「开机启动」（打开设置时读一次）
-	noteScroll    ui.ScrollState
-	setScroll     ui.ScrollState
-	focusList     bool
+	noteGroups                               []noteGroup
+	doneOpen                                 map[string]bool
+	searchOpen                               bool
+	menuOpen                                 bool
+	placementOpen                            bool // 面板菜单「位置与停靠」二级页
+	openAtLogin                              bool // 设置页「开机启动」（打开设置时读一次）
+	noteScroll                               ui.ScrollState
+	prevPage                                 int       // 换页动画中的旧页（-1 = 无）
+	flashID                                  string    // 刚捕获、正在闪烁的笔记
+	hudAt, hudLogoAt, hudLeaveAt, hudGhostAt time.Time // HUD 进场 / logo / 离场 / 残影的起点（帧时刻；零值 = 下一帧记下）
+	hudLeaving                               bool
+	panelHiding                              bool       // 面板离场动画中（播完藏窗）
+	presenceArm                              bool       // 本次显示需从 0 起播进场
+	hudGhost                                 *hudBubble // 被新气泡顶替、正在下沉淡出的上一条
+	flashAt                                  time.Time  // 闪烁起点（帧时刻；零值 = 下一帧记下）
+	pageAt                                   time.Time  // 旧页开始离场的帧时刻（零值 = 下一帧记下）
+	setScroll                                ui.ScrollState
+	focusList                                bool
 
 	clock func() time.Time // 可注入时钟（视觉对照测试固定在参照截图时刻）
 
@@ -94,8 +103,9 @@ type app struct {
 	secretKeyID   string
 	secretDraft   string
 	secretBusy    bool
-	secretOpening map[string]bool   // 正在后台试解的卡
-	secretPlain   map[string]string // 已显现的明文（只在内存）
+	secretOpening map[string]bool      // 正在后台试解的卡
+	secretPlain   map[string]string    // 已显现的明文（只在内存）
+	secretFx      map[string]time.Time // 秘文卡过场起点（r: 解密 / m: 回遮罩）
 	updMu         sync.Mutex
 	updQueue      []func() // 无窗口时的主线程回调队列（视图测试）
 
@@ -157,7 +167,7 @@ type app struct {
 }
 
 func newApp(sys core.System, st *store.Store) *app {
-	a := &app{sys: sys, store: st, page: pageNotes, section: store.SectionInbox, doneOpen: map[string]bool{}, bandOpen: map[string]bool{"overdue": true, "spark": true}, clipView: "time", billView: "week", billFilter: "upcoming", clock: time.Now, thumbs: map[string]ui.ImageSource{}, revealed: map[string]time.Time{}, secretOpening: map[string]bool{}, secretPlain: map[string]string{}}
+	a := &app{sys: sys, store: st, page: pageNotes, prevPage: -1, section: store.SectionInbox, doneOpen: map[string]bool{}, bandOpen: map[string]bool{"overdue": true, "spark": true}, clipView: "time", billView: "week", billFilter: "upcoming", clock: time.Now, thumbs: map[string]ui.ImageSource{}, revealed: map[string]time.Time{}, secretOpening: map[string]bool{}, secretPlain: map[string]string{}, secretFx: map[string]time.Time{}}
 	a.reload()
 	return a
 }
@@ -220,7 +230,7 @@ func (a *app) chosenNotes() []store.Note {
 // ---- 面板 ----
 
 func (a *app) togglePanel() {
-	if a.panel.IsVisible() {
+	if a.panel.IsVisible() && !a.panelHiding {
 		a.hidePanel()
 		return
 	}
@@ -236,13 +246,38 @@ func (a *app) showPanel() {
 		a.panel.SetBounds(a.panelBounds())
 	}
 	a.reload()
+	a.presenceArm = !a.panelHiding // 离场中途被叫回则从当前位置折返，否则从 0 起播
+	a.panelHiding = false
 	a.panel.Show()
+	a.panel.Invalidate()
 	diag.Push("面板显示 target=%s", a.target.BundleID)
 }
 
+// hidePanel 收起面板：先播离场（向停靠边退 16px 并淡出，140ms easeIn），播完再藏窗，同 Tauri onAnimationComplete → hidePanel。
 func (a *app) hidePanel() {
 	a.editing = ""
 	a.remaskAll() // 秘文：面板收起即回遮罩，明文丢弃
+	if a.panel == nil || !a.panel.IsVisible() || a.panelHiding {
+		return
+	}
+	a.panelHiding = true
+	a.panel.Invalidate()
+	go func() {
+		time.Sleep(tweenExit.Duration + 10*time.Millisecond)
+		a.panel.Update(func() {
+			if a.panelHiding {
+				a.panel.Hide()
+				a.panelHiding = false
+			}
+		})
+	}()
+}
+
+// hidePanelNow 立即藏窗（发送、截图：焦点必须马上还给目标应用，不能等离场动画）。
+func (a *app) hidePanelNow() {
+	a.editing = ""
+	a.remaskAll()
+	a.panelHiding = false
 	if a.panel != nil {
 		a.panel.Hide()
 	}
@@ -287,6 +322,7 @@ func (a *app) onTrigger() {
 				return
 			}
 			a.playCaptureSound()
+			a.flashID, a.flashAt = note.ID, time.Time{}             // 卡片琥珀闪烁 1.8s
 			a.showHUDUndo("added", preview(note.Text, 40), func() { // 撤销捕获：删掉刚收进的笔记
 				a.store.Delete(note.ID)
 				a.reload()
@@ -473,7 +509,7 @@ func (a *app) deliver(notes []store.Note, confirmed bool) {
 	}
 	enter := a.store.Settings().PasteThenEnter && !isTerminal(target.BundleID)
 	if !a.pinned {
-		a.hidePanel()
+		a.hidePanelNow()
 	}
 	go func() {
 		check, err := core.DeliverWith(a.sys, target, core.Payload{Text: strings.Join(texts, "\n\n"), PNG: png}, core.Options{Enter: enter, StartedMs: a.targetStarted})

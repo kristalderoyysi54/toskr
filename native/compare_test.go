@@ -189,6 +189,8 @@ func compareOne(t *testing.T, dir, name string, view func(*ui.Context), w, h int
 		tt.SetVibrancy(false)
 		tt.Move(float32(w-1), 2)
 		tt.Frame()
+		tt.Advance(time.Second) // 让颜色过渡 / 弹簧走完（切暗色后颜色从浅色值过渡过来）
+		tt.Frame()
 		got := onWhite(tt.Image())
 		save(t, filepath.Join(dir, "mygo-"+name+"-"+scheme+".png"), got)
 		ref := load(t, filepath.Join(dir, "ref-"+name+"-"+scheme+".png"))

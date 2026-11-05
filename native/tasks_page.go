@@ -516,6 +516,7 @@ func (a *app) taskRow(c *ui.Context, k tokens, t store.Task, now time.Time) {
 		card.Background(k.card)
 	}
 	hovered := card.Hovered()
+	elevated(card, k, hovered) // TaskRow：悬停 elevation-2，box-shadow 150ms
 	card.ContextMenu(func(m *ui.Menu) { a.taskMenu(c, m, t) })
 	card.Children(func() {
 		ui.Row(c).Grow(1).Height(24).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -534,7 +535,7 @@ func (a *app) taskRow(c *ui.Context, k tokens, t store.Task, now time.Time) {
 						col = k.fg.Alpha(0.1)
 					}
 				}
-				ui.Box(c).Size(3, 20).Radius(1.5).Background(col)
+				ui.Box(c).Size(3, 20).Radius(1.5).Background(bar.AnimateColor("pri", col, tweenTw)) // 优先级条 colors 150ms
 			})
 			bar.Menu(func(m *ui.Menu) {
 				for i, p := range priorityNames {

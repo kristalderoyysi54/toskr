@@ -230,7 +230,7 @@ func TestSecretSealCardRevealAndCaptureRoute(t *testing.T) {
 		t.Fatalf("卡片 %v", tt.Texts())
 	}
 	a.openSecretCard(sec, a.store.Settings())
-	waitFor(t, func() bool { tt.Frame(); return tt.HasText("周五上线窗口改到 22:00") })
+	waitFor(t, func() bool { tt.Advance(20 * time.Millisecond); tt.Frame(); return tt.HasText("周五上线窗口改到 22:00") }) // 遮罩先淡出 120ms 再显明文
 	a.hidePanel()
 	tt.Frame()
 	if tt.HasText("周五上线窗口改到 22:00") {
@@ -243,6 +243,8 @@ func TestSecretSealCardRevealAndCaptureRoute(t *testing.T) {
 	}
 	locked, _ := secretcodec.Seal("本机没这把钥匙", "别的暗号", secretcodec.StyleLog)
 	a.captureSecret(locked, "微信")
+	tt.Frame()
+	tt.Advance(500 * time.Millisecond)
 	tt.Frame()
 	if len(a.secrets) != 3 || !tt.HasText("服务器密码改了") || !tt.HasText("无匹配密钥 · 点击重试") || !tt.HasText("收到") {
 		t.Fatalf("捕获后 %d 张卡 %v", len(a.secrets), tt.Texts())
@@ -513,4 +515,40 @@ func TestSchemeAndDensity(t *testing.T) {
 	if a.store.Settings().PtScrollbar != "thin" {
 		t.Fatal("滚动条应写回 thin")
 	}
+}
+
+// 动效：换页时旧页向反方向滑出并淡出、约 0.4s 后释放；被顶替 HUD 的关键帧与 Tauri 一致。
+func TestPageSlideAndHUDGhostKeyframes(t *testing.T) {
+	a, tt := testApp(t, "一条")
+	before, ok := tt.Find("收件箱")
+	if !ok {
+		t.Fatal("笔记页应有收件箱")
+	}
+	tt.Key(ui.Cmd, ui.Key1) // 笔记 → 剪贴：剪贴页从左侧 -24 滑入，笔记页向右 +24 滑出
+	tt.Frame()
+	tt.Advance(40 * time.Millisecond)
+	tt.Frame()
+	mid, ok := tt.Find("收件箱")
+	if !ok || mid.X <= before.X || mid.X > before.X+24 {
+		t.Fatalf("旧页应在离场途中右移 0~24：前 %v 中 %v ok=%v", before.X, mid.X, ok)
+	}
+	tt.Advance(time.Second)
+	tt.Frame()
+	tt.Frame()
+	if _, ok := tt.Find("收件箱"); ok || a.prevPage != -1 {
+		t.Fatalf("离场结束后旧页应释放 prev=%d", a.prevPage)
+	}
+	for _, c := range []struct{ t, y, s, o float32 }{{0, 0, 1, 1}, {0.14, 8, 0.95, 0.85}, {0.5, 8, 0.95, 0.85}, {1, 10, 0.93, 0}} {
+		y, s, o := hudGhostPose(c.t)
+		if abs32(y-c.y) > 1e-3 || abs32(s-c.s) > 1e-3 || abs32(o-c.o) > 1e-3 {
+			t.Errorf("t=%v 得 y=%v s=%v o=%v", c.t, y, s, o)
+		}
+	}
+}
+
+func abs32(v float32) float32 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }

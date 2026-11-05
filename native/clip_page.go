@@ -122,12 +122,20 @@ func (a *app) clipHeader(c *ui.Context, k tokens, label string, first bool) {
 				w, col := 400, k.muted
 				if sel {
 					w, col = 500, k.fg
-					b.Background(k.pill).Shadow(0, 1, 2, 0, k.pillShadow)
-					if !k.dark {
-						b.InsetShadow(0, 1, 0, 0, k.pillHighlight)
-					}
+				} else if b.Hovered() {
+					col = k.fg
 				}
-				b.Children(func() { text(c, tr(v.label), 10, 14, w, col) })
+				b.Children(func() {
+					if sel { // Segmented xs：共享布局滑块，springControl
+						thumb := ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Radius(8).Background(k.pill).Shadow(0, 1, 2, 0, k.pillShadow).PassThrough().
+							Transition(ui.ElementTransition{Match: layoutID{"clip-view-thumb"}, Animation: &springControl, Position: true, Size: true})
+						if !k.dark {
+							thumb.InsetShadow(0, 1, 0, 0, k.pillHighlight)
+						}
+					}
+					fg := b.AnimateColor("fg", col, tweenControl)
+					overThumb(c, func() { text(c, tr(v.label), 10, 14, w, fg) })
+				})
 				if b.Clicked() && !sel {
 					a.clipView = v.id
 					a.selected = 0
@@ -149,12 +157,16 @@ func linkHost(raw string) string {
 // clipCard 是剪贴板「票据」卡：时间头 + 正文（3 行截断 / 链接标题）+ 虚线底栏（来源 · 字数）。
 func (a *app) clipCard(c *ui.Context, k tokens, n store.Note) {
 	idx := slices.IndexFunc(a.notes, func(x store.Note) bool { return x.ID == n.ID })
-	selected := (idx >= 0 && idx == a.selected && a.focusList) || a.chosen.Has(n.ID)
+	focused := idx >= 0 && idx == a.selected && a.focusList
+	checked := a.chosen.Has(n.ID)
 	box := ui.Column(c).Height(116).Padding(6, 8, 4, 8).Radius(10).Background(k.card).Key(n.ID)
-	if selected {
-		box.Border(1, k.fg.Alpha(0.35))
-	}
 	hovered := box.Hovered()
+	elevated(box, k, hovered || checked || (focused && !checked)) // 同笔记卡：悬停上移 1px + elevation-2，多选内发光
+	lift := float32(0)
+	if hovered {
+		lift = -1
+	}
+	box.AnimatePose(ui.Pose{Y: lift}, tweenTw)
 	box.ContextMenu(func(m *ui.Menu) {
 		if idx >= 0 {
 			a.selected = idx
@@ -171,8 +183,13 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note) {
 				})
 			}
 			ui.Spacer(c)
-			if n.Kept {
-				liconFilled(c, "pin", 12, amber400)
+			if n.Kept { // 票据模板：悬停时淡出给操作钮让位（opacity 150ms）
+				pinOp := float32(1)
+				if hovered {
+					pinOp = 0
+				}
+				pin := ui.Box(c).Size(12, 12)
+				pin.Opacity(pin.AnimateTo("op", pinOp, tweenTw)).Children(func() { liconFilled(c, "pin", 12, amber400) })
 			}
 		})
 		ui.Column(c).Grow(1).Margin(4, 0, 0, 0).Clip().Children(func() {
@@ -230,6 +247,7 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note) {
 		if hovered {
 			a.clipActions(c, k, n, isLink)
 		}
+		a.cardOverlays(c, k, n, checked, false)
 	})
 	if box.Clicked() {
 		if box.ClickModifiers()&ui.Cmd != 0 {
@@ -256,7 +274,8 @@ func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool) {
 	if isLink {
 		open = "external-link"
 	}
-	ui.Row(c).Absolute().Right(6).Bottom(4).Gap(2).Children(func() {
+	fade := ui.ElementTransition{Duration: 100 * time.Millisecond, Ease: easeTw, Enter: &ui.Motion{}, Exit: &ui.Motion{}} // 悬停浮钮 opacity 100ms
+	ui.Row(c).Absolute().Right(6).Bottom(4).Gap(2).Key("acts").Transition(fade).Children(func() {
 		for _, act := range []struct{ icon, tip string }{
 			{"send", "发送（⌘↵）"}, {"pin", "置顶"}, {"copy", "复制"}, {"inbox", "收进笔记"},
 			{open, "打开"}, {"pencil", "编辑"}, {"eye-off", "模糊内容"}, {"trash-2", "删除"},

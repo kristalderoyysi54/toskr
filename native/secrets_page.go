@@ -217,15 +217,29 @@ func (a *app) secretCard(c *ui.Context, k tokens, st store.Settings, sec store.S
 			text(c, ago(sec.CreatedAt, a.now()), 10, 14, 400, k.muted)
 		})
 		body := ui.Column(c).Padding(8, 12).Tooltip(tr("点击解密查看"))
+		// AnimatePresence mode="wait"：解密时遮罩先淡出（120ms ease-standard），明文再淡入并去模糊（opacity 0 → 1、blur 6 → 0，300ms ease-standard）；
+		// 回遮罩时遮罩淡入（120ms easeInOut）。明文在回遮罩那一刻即从内存丢弃，不再播它的淡出。
+		maskOp, plainOp, plainBlur := float32(1), float32(1), float32(0)
+		if revealed {
+			ms := a.secretFxMs(c, "r:"+sec.ID)
+			if ms < 120 {
+				revealed, maskOp = false, 1-easeStandard(ms/120)
+			} else {
+				e := easeStandard(min((ms-120)/300, 1))
+				plainOp, plainBlur = e, 6*(1-e)
+			}
+		} else if _, ok := a.secretFx["m:"+sec.ID]; ok {
+			maskOp = easeMInOut(min(a.secretFxMs(c, "m:"+sec.ID)/120, 1))
+		}
 		body.Children(func() {
 			if revealed {
-				ui.Row(c).Gap(8).AlignItems(ui.Start).Children(func() {
+				ui.Row(c).Gap(8).AlignItems(ui.Start).Opacity(plainOp).Blur(plainBlur).Children(func() {
 					licon(c, "lock-open", 14, k.muted).Margin(2, 0, 0, 0)
 					text(c, plain, 12, 17, 400, k.fg).Wrap().Selectable().Grow(1).Basis(0)
 				})
 				return
 			}
-			ui.Column(c).Padding(2, 0).Children(func() {
+			ui.Column(c).Padding(2, 0).Opacity(maskOp).Children(func() {
 				r := []rune(sec.Text)
 				preview := strings.Join(strings.Fields(string(r[:min(72, len(r))])), " ") // 同 CSS 空白折叠：换行显示为空格
 				text(c, preview, 12, 19.5, 400, k.muted.Alpha(0.8)).Wrap().MaxLines(2).Blur(4)
@@ -234,8 +248,11 @@ func (a *app) secretCard(c *ui.Context, k tokens, st store.Settings, sec store.S
 						Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB).InsetShadow(0, 1, 0, 0, k.floatInset).
 						AlignItems(ui.Center).Children(func() {
 						switch {
-						case a.secretOpening[sec.ID]:
-							text(c, tr("解密中…"), 11, 16, 400, k.muted)
+						case a.secretOpening[sec.ID]: // animate-pulse：opacity 1 → 0.5 → 1，2s cubic-bezier(0.4,0,0.6,1)
+							busy := text(c, tr("解密中…"), 11, 16, 400, k.muted)
+							if !c.Preferences().ReduceMotion {
+								busy.Opacity(1 - 0.5*busy.Loop("pulse", 2*time.Second, ui.Bounce(easePulse)))
+							}
 						case sec.KeyID == "":
 							licon(c, "key-round", 12, k.muted)
 							text(c, tr("无匹配密钥 · 点击重试"), 11, 16, 400, k.muted)
@@ -307,14 +324,35 @@ func (a *app) openSecretCard(sec store.Secret, st store.Settings) {
 }
 
 func (a *app) remask(id string) {
+	if _, ok := a.secretPlain[id]; ok {
+		a.secretFx["m:"+id] = time.Time{} // 下一帧起播遮罩淡入
+	}
+	delete(a.secretFx, "r:"+id)
 	delete(a.secretPlain, id)
 	delete(a.revealed, id)
+}
+
+// secretFxMs 返回秘文卡某段过场（r: 解密显现 / m: 回遮罩）开始至今的毫秒数；首次调用记为本帧。过场 420ms 内持续要帧，之后清掉回遮罩的记录。
+func (a *app) secretFxMs(c *ui.Context, key string) float32 {
+	at, ok := a.secretFx[key]
+	if !ok || at.IsZero() {
+		at = c.Now()
+		a.secretFx[key] = at
+	}
+	ms := float32(c.Now().Sub(at)) / float32(time.Millisecond)
+	if ms < 420 {
+		c.AnimationFrame()
+	} else if key[0] == 'm' {
+		delete(a.secretFx, key)
+	}
+	return ms
 }
 
 // remaskAll：面板隐藏 / 失焦时全部回遮罩，明文从内存丢弃。
 func (a *app) remaskAll() {
 	clear(a.secretPlain)
 	clear(a.revealed)
+	clear(a.secretFx)
 }
 
 // captureSecret 是双击捕获的秘文分支：识别到密文信封就逐密钥试解并收进秘文页，绝不进普通笔记。

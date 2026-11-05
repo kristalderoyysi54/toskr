@@ -52,7 +52,7 @@ func scaledBitmap(src image.Image, maxW int) *ui.Bitmap {
 func (a *app) screenshot() {
 	wasVisible := a.panel != nil && a.panel.IsVisible()
 	if wasVisible && !a.pinned {
-		a.hidePanel()
+		a.hidePanelNow()
 	}
 	go func() {
 		tmp, err := os.CreateTemp("", "toskr-shot-*.png")

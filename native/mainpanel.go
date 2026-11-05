@@ -40,9 +40,12 @@ func (a *app) mainHeader(c *ui.Context, k tokens) {
 // iconButton 是 Tauri 的 IconButton：透明底、圆角 8、悬停浅底。
 func (a *app) iconButton(c *ui.Context, k tokens, icon string, box, size float32, tip string) bool {
 	b := ui.Box(c).Size(box, box).Radius(8).Center().Tooltip(tip)
+	bg := ui.Transparent
 	if b.Hovered() {
-		b.Background(k.track)
+		bg = k.track
 	}
+	fadeColor(b, "bg", bg, tweenControl) // IconButton：color / bg / transform 100ms，按下 scale 0.94
+	b.AnimatePose(ui.Pose{Scale: pressScale(b.Pressed(), 0.94)}, tweenControl)
 	b.Children(func() { licon(c, icon, size, k.muted) })
 	return b.Clicked()
 }
@@ -93,20 +96,29 @@ func (a *app) tabs(c *ui.Context, k tokens) {
 				if badge > 0 {
 					w = 66 // 文字 22 + 间距 6 + 徽标 16 + 内边距 20 + 边框 2
 				}
-				b := ui.Box(c).Size(w, 26).Padding(1).Key("tab-" + label)
+				b := ui.Box(c).Size(w, 26).Padding(1).Radius(8).Key("tab-" + label)
+				hover := !sel && b.Hovered()
+				if hover { // 悬停底色不在 Tauri 的过渡列表里：即时
+					b.Background(k.hoverBg)
+				}
+				b.AnimatePose(ui.Pose{Scale: pressScale(b.Pressed(), 0.97)}, tweenControl)
 				b.Children(func() {
-					pill := ui.Box(c).Fill().Radius(8).Center()
-					if sel {
-						pill.Background(k.pill).Shadow(0, 1, 2, 0, k.pillShadow)
+					if sel { // 选中胶囊是共享布局指示器（layoutId page-tab-thumb）：换页时从旧页签滑过来
+						thumb := ui.Box(c).Absolute().Top(1).Left(1).Right(1).Bottom(1).Radius(8).Background(k.pill).Shadow(0, 1, 2, 0, k.pillShadow).
+							PassThrough().Transition(ui.ElementTransition{Match: layoutID{"page-tab-thumb"}, Animation: &springControl, Position: true, Size: true})
 						if !k.dark {
-							pill.InsetShadow(0, 1, 0, 0, k.pillHighlight)
+							thumb.InsetShadow(0, 1, 0, 0, k.pillHighlight)
 						}
 					}
-					pill.Children(func() {
+					ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Center().Children(func() { // 绝对定位且排在胶囊之后才画在胶囊上
 						w, col := 400, k.muted
-						if sel {
-							w, col = 500, k.fg
+						if sel || hover {
+							col = k.fg
 						}
+						if sel {
+							w = 500
+						}
+						col = b.AnimateColor("fg", col, tweenControl)
 						ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 							text(c, tr(label), 11, 16, w, col)
 							if badge > 0 {
@@ -275,7 +287,8 @@ func looksLikeSQL(s string) bool {
 
 func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 	idx := slices.IndexFunc(a.notes, func(x store.Note) bool { return x.ID == n.ID })
-	selected := (idx >= 0 && idx == a.selected && a.focusList) || a.chosen.Has(n.ID)
+	focused := idx >= 0 && idx == a.selected && a.focusList
+	checked := a.chosen.Has(n.ID)
 	compact := a.store.Settings().CardDensity == "compact"
 	var box ui.Element
 	if compact {
@@ -287,10 +300,15 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 	if k.pt {
 		box.Radius(0)
 	}
-	if selected {
-		box.Border(1, k.fg.Alpha(0.35))
-	}
 	hovered := box.Hovered()
+	// Tauri：舒适卡悬停上移 1px + elevation-2（transform / box-shadow 150ms）；紧凑卡悬停只给影子；
+	// 多选（checked）为内发光，舒适卡同时保持抬升；键盘焦点只抬升不描边。
+	elevated(box, k, hovered || (checked && !compact) || (focused && !checked))
+	lift := float32(0)
+	if hovered && !compact {
+		lift = -1
+	}
+	box.AnimatePose(ui.Pose{Y: lift}, tweenTw)
 	box.ContextMenu(func(m *ui.Menu) {
 		if idx >= 0 {
 			a.selected = idx
@@ -300,6 +318,7 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 	box.Children(func() {
 		if compact {
 			a.compactCard(c, k, n, hovered)
+			a.cardOverlays(c, k, n, checked, true)
 			return
 		}
 		head := ui.Row(c).Height(28).Padding(0, 8).Gap(6).AlignItems(ui.Center).Radius(10, 10, 0, 0)
@@ -348,6 +367,7 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 		if hovered {
 			a.cardActions(c, k, n)
 		}
+		a.cardOverlays(c, k, n, checked, false)
 		if k.pt { // Platinum 卡片 1px #999 描边（压在通栏之上）
 			ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Border(1, ptG600).PassThrough()
 		}
@@ -377,6 +397,53 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 		a.openDetail(n)
 	}
 }
+
+// elevated 按 on 在 150ms 内淡入 / 淡出 elevation-2（贴身影 + 环境影 + 顶缘高光）。
+func elevated(e ui.Element, k tokens, on bool) {
+	pick := func(key string, col ui.Color) ui.Color {
+		if !on {
+			col = col.Alpha(0)
+		}
+		return e.AnimateColor(key, col, tweenTw)
+	}
+	e.Shadow(0, 1, 2, 0, pick("e2a", k.floatShadowA)).Shadow(0, 6, 16, -4, pick("e2b", k.floatShadowB)).InsetShadow(0, 1, 0, 0, pick("e2i", k.floatInset))
+}
+
+// cardOverlays 画卡面之上的选中柔光（.list-selection-glow）与捕获闪烁（flash-highlight：琥珀 30% → 透明，1800ms ease-out）。
+func (a *app) cardOverlays(c *ui.Context, k tokens, n store.Note, checked, compact bool) {
+	r := float32(10)
+	if k.pt {
+		r = 0
+	}
+	if checked {
+		glow := float32(24)
+		if compact {
+			glow = 8
+		}
+		ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Radius(r).PassThrough().
+			InsetShadow(0, 0, 8, 1, k.selRim).InsetShadow(0, 0, glow, 2, k.selHalo)
+	}
+	if n.ID != a.flashID {
+		return
+	}
+	if a.flashAt.IsZero() {
+		a.flashAt = c.Now()
+	}
+	t := float32(c.Now().Sub(a.flashAt)) / float32(flashDur)
+	if t >= 1 {
+		a.flashID = ""
+		return
+	}
+	amber := oklch(0.72, 0.15, 60, 0.3)
+	op := 1 - easeMOut(t)
+	if c.Preferences().ReduceMotion { // 减弱动效：静态 22% 琥珀底，同样 1.8s 后撤掉
+		amber, op = oklch(0.72, 0.15, 60, 0.22), 1
+	}
+	c.AnimationFrame()
+	ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Radius(r).Background(amber).Opacity(op).PassThrough()
+}
+
+const flashDur = 1800 * time.Millisecond
 
 // compactCard 是紧凑密度的单行卡（Tauri cardDensity=compact：40 高，左侧拖拽把手，单行省略，悬停操作钮垂直居中）。
 func (a *app) compactCard(c *ui.Context, k tokens, n store.Note, hovered bool) {
@@ -421,7 +488,8 @@ func (a *app) cardActionsAt(c *ui.Context, k tokens, n store.Note, bottom float3
 	if bottom != 4 {
 		right = 4
 	}
-	ui.Row(c).Absolute().Right(right).Bottom(bottom).Gap(2).Children(func() {
+	fade := ui.ElementTransition{Duration: 100 * time.Millisecond, Ease: easeTw, Enter: &ui.Motion{}, Exit: &ui.Motion{}} // reveal="hover-focus"：opacity 100ms
+	ui.Row(c).Absolute().Right(right).Bottom(bottom).Gap(2).Key("acts").Transition(fade).Children(func() {
 		for _, act := range []struct{ icon, tip string }{
 			{"send", "发送（⌘↵）"}, {"expand", "在详情窗打开"}, {"pencil", "编辑"}, {"eye-off", "模糊内容"}, {"trash-2", "删除"},
 		} {

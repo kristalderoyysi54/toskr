@@ -119,17 +119,18 @@ func cardFill(e ui.Element, k tokens) ui.Element {
 type setPalette struct {
 	bg, card, muted, border, primary, toggleOff, toggleOffBorder, btn, btnBorder, knobOff, knobOn ui.Color
 	btnFg                                                                                         ui.Color // 零值保留
+	btnHover                                                                                      ui.Color
 }
 
 func hex(v uint32) ui.Color { return ui.RGB(uint8(v>>16), uint8(v>>8), uint8(v)) }
 
 var setSchemes = map[string]setPalette{
-	"paper":  {bg: hex(0xf7f2e8), card: hex(0xfffcf5), muted: hex(0xece4d4), border: hex(0xe3d9c7), primary: hex(0x8a5a2b), toggleOff: hex(0xe2d8c6), toggleOffBorder: hex(0xd6cab4), btn: hex(0xfffcf5), btnBorder: hex(0xd6cab4), knobOff: hex(0xf7f2e8), knobOn: hex(0xf7f2e8)},
-	"matcha": {bg: hex(0xf2f4ee), card: hex(0xfbfcf8), muted: hex(0xe4e9dc), border: hex(0xdde3d4), primary: hex(0x4f7a3a), toggleOff: hex(0xd7dfcc), toggleOffBorder: hex(0xcfd8c3), btn: hex(0xfbfcf8), btnBorder: hex(0xcfd8c3), knobOff: hex(0xf2f4ee), knobOn: hex(0xf2f4ee)},
-	"sakura": {bg: hex(0xfdf6f7), card: hex(0xffffff), muted: hex(0xf6e6ea), border: hex(0xf0dfe3), primary: hex(0xc2547a), toggleOff: hex(0xefdbe0), toggleOffBorder: hex(0xead0d7), btn: hex(0xffffff), btnBorder: hex(0xead0d7), knobOff: hex(0xfdf6f7), knobOn: hex(0xfdf6f7)},
-	"fog":    {bg: hex(0xeceff4), card: hex(0xf8f9fb), muted: hex(0xe2e6ee), border: hex(0xd8dee9), primary: hex(0x5e81ac), toggleOff: hex(0xd8dee9), toggleOffBorder: hex(0xcdd4e0), btn: hex(0xf8f9fb), btnBorder: hex(0xcdd4e0), knobOff: hex(0xeceff4), knobOn: hex(0xeceff4)},
+	"paper":  {bg: hex(0xf7f2e8), card: hex(0xfffcf5), muted: hex(0xece4d4), border: hex(0xe3d9c7), primary: hex(0x8a5a2b), toggleOff: hex(0xe2d8c6), toggleOffBorder: hex(0xd6cab4), btn: hex(0xfffcf5), btnBorder: hex(0xd6cab4), knobOff: hex(0xf7f2e8), knobOn: hex(0xf7f2e8), btnHover: hex(0xf3ecdd)},
+	"matcha": {bg: hex(0xf2f4ee), card: hex(0xfbfcf8), muted: hex(0xe4e9dc), border: hex(0xdde3d4), primary: hex(0x4f7a3a), toggleOff: hex(0xd7dfcc), toggleOffBorder: hex(0xcfd8c3), btn: hex(0xfbfcf8), btnBorder: hex(0xcfd8c3), knobOff: hex(0xf2f4ee), knobOn: hex(0xf2f4ee), btnHover: hex(0xeef1e8)},
+	"sakura": {bg: hex(0xfdf6f7), card: hex(0xffffff), muted: hex(0xf6e6ea), border: hex(0xf0dfe3), primary: hex(0xc2547a), toggleOff: hex(0xefdbe0), toggleOffBorder: hex(0xead0d7), btn: hex(0xffffff), btnBorder: hex(0xead0d7), knobOff: hex(0xfdf6f7), knobOn: hex(0xfdf6f7), btnHover: hex(0xfbf0f2)},
+	"fog":    {bg: hex(0xeceff4), card: hex(0xf8f9fb), muted: hex(0xe2e6ee), border: hex(0xd8dee9), primary: hex(0x5e81ac), toggleOff: hex(0xd8dee9), toggleOffBorder: hex(0xcdd4e0), btn: hex(0xf8f9fb), btnBorder: hex(0xcdd4e0), knobOff: hex(0xeceff4), knobOn: hex(0xeceff4), btnHover: hex(0xe5e9f0)},
 	"fog-dark": {bg: hex(0x2b303b), card: hex(0x353b48), muted: hex(0x3b4252), border: ui.RGBA(229, 233, 240, 0.1), primary: hex(0x88c0d0), toggleOff: hex(0x4c566a), toggleOffBorder: ui.RGBA(229, 233, 240, 0.12),
-		btn: hex(0xd8dee9), btnFg: hex(0x2b303b), btnBorder: ui.RGBA(229, 233, 240, 0.08), knobOff: hex(0xe5e9f0), knobOn: hex(0x1f242d)},
+		btn: hex(0xd8dee9), btnFg: hex(0x2b303b), btnBorder: ui.RGBA(229, 233, 240, 0.08), knobOff: hex(0xe5e9f0), knobOn: hex(0x1f242d), btnHover: hex(0xc8d0dc)},
 }
 
 func setSchemed(s settingsTokens, dark bool) settingsTokens {
@@ -153,6 +154,6 @@ func setSchemed(s settingsTokens, dark bool) settingsTokens {
 	if p.btnFg != (ui.Color{}) {
 		s.btnFg = p.btnFg
 	}
-	s.knob, s.knobOn = p.knobOff, p.knobOn
+	s.knob, s.knobOn, s.btnHover = p.knobOff, p.knobOn, p.btnHover
 	return s
 }

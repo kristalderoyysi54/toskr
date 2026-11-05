@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"time"
+
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
@@ -32,18 +34,17 @@ func (a *app) panelView(c *ui.Context) {
 	registerFonts()
 	a.drainUpdates()
 	k := tok(c)
-	if c.Vibrancy() {
-		c.Root().Background(k.window)
-	} else {
-		c.Root().Background(k.window) // 无系统材质时（无头渲染）同色叠在白底上，与浏览器参照一致
-	}
 	a.panelKeys(c)
+	shell := ui.Column(c).Fill()
+	p := a.panelPresence(c, shell)
+	// 底色是内容自绘的半透明膜（Tauri 同样画在 webview 里），随内容一起淡入淡出；系统材质本身不动
+	c.Root().Background(k.window.Alpha(min(p, 1))) // Alpha 是相乘
 	if k.pt {
-		a.platinumPanel(c, k)
+		shell.Children(func() { a.platinumPanel(c, k) })
 		return
 	}
 
-	ui.Column(c).Fill().Radius(14).Children(func() {
+	shell.Radius(14).Children(func() {
 		a.mainHeader(c, k)
 		if a.searchOpen {
 			a.searchRow(c, k)
@@ -53,27 +54,7 @@ func (a *app) panelView(c *ui.Context) {
 		if len(a.pending) > 0 {
 			ui.Column(c).Margin(0, 12, 6, 12).Children(func() { a.preflightBar(c) })
 		}
-		st := a.store.Settings()
-		switch a.page {
-		case pageClip:
-			a.clipPage(c, k)
-		case pageTasks:
-			ui.Column(c).Grow(1).Children(func() { a.tasksPage(c) })
-		default:
-			if st.SecretEnabled {
-				if i, ok := a.textTabs(c, k, []string{"笔记", "秘文"}, a.noteSub, nil); ok {
-					a.noteSub = i
-					a.chosen.Clear()
-				}
-			} else {
-				a.noteSub = 0
-			}
-			if a.noteSub == 1 {
-				ui.Column(c).Grow(1).Children(func() { a.secretsPage(c, k) })
-			} else {
-				a.notesPage(c, k)
-			}
-		}
+		a.pageSlide(c, func(p int) { a.pageBody(c, k, p) })
 		a.hintsRow(c, k)
 		if a.page == pageNotes && a.noteSub == 0 { // 发送输入区只在笔记视图，与 Tauri 一致
 			a.composerBar(c, k)
@@ -82,6 +63,90 @@ func (a *app) panelView(c *ui.Context) {
 	if a.menuOpen {
 		a.panelMenu(c, k)
 	}
+}
+
+// panelPresence 复刻 Tauri 面板进出场：显示时从停靠边（右侧）外 16px 滑入并淡入（springSnappy），
+// 收起时退回 16px 并淡出（tweenExit 140ms easeIn）。返回当前不透明度进度。
+func (a *app) panelPresence(c *ui.Context, shell ui.Element) float32 {
+	target, anim := float32(1), springSnappy
+	if a.panelHiding {
+		target, anim = 0, tweenExit
+	}
+	if a.presenceArm { // 本次显示从 0 起播（含首次显示、以及 hidePanelNow 直接藏窗后再显示）
+		shell.Jump("presence", 0)
+		a.presenceArm = false
+	}
+	p := shell.AnimateTo("presence", target, anim)
+	dx := 16 * (1 - p)
+	if c.Preferences().ReduceMotion {
+		dx = 0
+	}
+	shell.Opacity(min(max(p, 0), 1)).Translate(dx, 0)
+	return max(p, 0)
+}
+
+// pageBody 是一页的内容（剪贴 / 笔记·秘文 / 任务）。
+func (a *app) pageBody(c *ui.Context, k tokens, p int) {
+	st := a.store.Settings()
+	switch p {
+	case pageClip:
+		a.clipPage(c, k)
+	case pageTasks:
+		ui.Column(c).Grow(1).Children(func() { a.tasksPage(c) })
+	default:
+		if st.SecretEnabled {
+			if i, ok := a.textTabs(c, k, []string{"笔记", "秘文"}, a.noteSub, nil); ok {
+				a.noteSub = i
+				a.chosen.Clear()
+			}
+		} else {
+			a.noteSub = 0
+		}
+		if a.noteSub == 1 {
+			ui.Column(c).Grow(1).Children(func() { a.secretsPage(c, k) })
+		} else {
+			a.notesPage(c, k)
+		}
+	}
+}
+
+// pageSlide 复刻 Tauri PageSlide：新页从换页方向 ±24 滑入并淡入，旧页向反方向滑出并淡出（springSnappy）；
+// 旧页在动画期间继续构建、不接收指针，约 0.4s 后释放。
+func (a *app) pageSlide(c *ui.Context, build func(p int)) {
+	if a.prevPage >= 0 && a.pageAt.IsZero() {
+		a.pageAt = c.Now()
+	}
+	if a.prevPage >= 0 && c.Now().Sub(a.pageAt) > 400*time.Millisecond {
+		a.prevPage = -1
+	}
+	ui.Box(c).Grow(1).Clip().Children(func() {
+		for _, p := range []int{a.prevPage, a.page} {
+			if p < 0 || (p == a.page && p == a.prevPage) {
+				continue
+			}
+			pg := ui.Column(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Key(pageKey(p))
+			pose := ui.Pose{}
+			if p != a.page {
+				pose = ui.Pose{X: 24 * sign(p-a.page), Fade: 1}
+				pg.PassThrough()
+			} else {
+				pg.Transition(ui.ElementTransition{Animation: &springSnappy, Position: true, Enter: &ui.Motion{X: 24 * sign(a.page-max(a.prevPage, 0))}})
+			}
+			pg.AnimatePose(pose, springSnappy).Children(func() { build(p) })
+		}
+	})
+}
+
+func pageKey(p int) string { return "page-" + itoa(p) }
+
+func sign(n int) float32 {
+	switch {
+	case n > 0:
+		return 1
+	case n < 0:
+		return -1
+	}
+	return 0
 }
 
 // textTabs 是 Tauri 的二级文字页签（今天 · 任务 · 订阅 / 笔记 · 秘文）：选中加粗 + 22×2 短下划线。
@@ -95,17 +160,20 @@ func (a *app) textTabs(c *ui.Context, k tokens, labels []string, sel int, right 
 				}
 				on := sel == i
 				b := ui.Column(c).Height(22).Padding(2, 8, 4, 8).Radius(8).AlignItems(ui.Center).Key("sub-" + label)
+				bg := ui.Transparent
 				if !on && b.Hovered() {
-					b.Background(k.track)
+					bg = k.track
 				}
+				fadeColor(b, "bg", bg, tweenControl)
 				b.Children(func() {
 					w, col := 400, k.muted
 					if on {
 						w, col = 600, k.fg
 					}
-					text(c, tr(label), 11, 16, w, col)
-					if on {
-						ui.Box(c).Absolute().Bottom(0).Left(8).Right(8).Height(2).Radius(1).Background(k.fg.Alpha(0.85))
+					text(c, tr(label), 11, 16, w, b.AnimateColor("fg", col, tweenControl))
+					if on { // 共享布局下划线（layoutId content-subtab-line / reminders-subtab-line）
+						ui.Box(c).Absolute().Bottom(0).Left(8).Right(8).Height(2).Radius(1).Background(k.fg.Alpha(0.85)).PassThrough().
+							Transition(ui.ElementTransition{Match: layoutID{"subtab-line-" + labels[0]}, Animation: &springControl, Position: true, Size: true})
 					}
 				})
 				if b.Clicked() && !on {
@@ -138,7 +206,10 @@ func (a *app) panelMenu(c *ui.Context, k tokens) {
 		return
 	}
 	menu := ui.Column(c).Absolute().Top(40).Right(40).Width(224).Padding(4).Radius(10).Background(k.floatBtn.Alpha(0.95)).Border(1, k.floatBorder).
-		Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB).InsetShadow(0, 1, 0, 0, k.floatInset)
+		Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB).InsetShadow(0, 1, 0, 0, k.floatInset).
+		// SimpleMenu：fade + zoom 0.95 → 1（自上缘展开），160ms ease-standard；关闭反向。菜单项悬停底色即时
+		Key("panel-menu").TransformOrigin(0.5, 0).Transition(ui.ElementTransition{Duration: 160 * time.Millisecond, Ease: easeStandard,
+		Enter: &ui.Motion{Scale: 0.95}, Exit: &ui.Motion{Scale: 0.95}})
 	label := func(s string) { text(c, s, 10, 14, 500, k.muted).Padding(4, 8) }
 	sep := func() { ui.Box(c).Height(1).Margin(4, 0).Background(stok(c).inputBorder) }
 	item := func(icon, s string, checked, radio bool, trail string, fn func()) {
@@ -248,6 +319,7 @@ func (a *app) panelKeys(c *ui.Context) {
 
 func (a *app) switchPage(p int) {
 	if a.page != p {
+		a.prevPage, a.pageAt = a.page, time.Time{}
 		a.page, a.editing, a.selected = p, "", 0
 		a.chosen.Clear()
 		a.reload()

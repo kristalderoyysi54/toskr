@@ -28,12 +28,13 @@ type detailState struct {
 	tagDraft            string
 	tagOn               bool
 	full                ui.ImageSource
+	enter               bool // 正文待播进场（每次打开一条内容）
 }
 
 func (a *app) openDetail(n store.Note) {
 	a.saveDetail()
 	a.detailText = n.Text
-	a.detail = detailState{id: n.ID, pickAnchor: -1, pickEnd: -1}
+	a.detail = detailState{id: n.ID, pickAnchor: -1, pickEnd: -1, enter: true}
 	if n.Kind == "image" {
 		if raw, err := a.store.LoadImage(n.ImageFile); err == nil {
 			if src, err := png.Decode(bytes.NewReader(raw)); err == nil {
@@ -208,7 +209,14 @@ func (a *app) detailTags(c *ui.Context, k tokens, s settingsTokens, n store.Note
 
 func (a *app) detailBody(c *ui.Context, k tokens, s settingsTokens, n store.Note) {
 	ui.Scroll(c).Fill().Scrollbars(false).Children(func() {
-		ui.Column(c).Padding(64, 20, 84, 20).Children(func() {
+		body := ui.Column(c).Padding(64, 20, 84, 20)
+		if a.detail.enter { // 正文进场：opacity 0 → 1、y 6 → 0，springSnappy（Tauri motion.div key=gen）
+			body.Jump("in", 0)
+			a.detail.enter = false
+		}
+		in := body.AnimateTo("in", 1, springSnappy)
+		body.Opacity(min(in, 1)).Translate(0, 6*(1-in))
+		body.Children(func() {
 			if a.detail.full != nil {
 				w, h := ui.ImageSize(a.detail.full)
 				dw := min(w, 520)

@@ -17,7 +17,8 @@ type settingsTokens struct {
 	toggleOff, toggleOffBorder, toggleInset    ui.Color
 	knob, knobOn                               ui.Color // 开关滑块（关 / 开；shadcn：浅色均为 background，深色关为 foreground、开为 primary-foreground）
 	btn, btnFg, btnBorder, btnShadow           ui.Color
-	pt                                         bool // Platinum：控件换成 Mac OS 9 形态
+	btnHover                                   ui.Color // --button-primary-hover
+	pt                                         bool     // Platinum：控件换成 Mac OS 9 形态
 }
 
 var (
@@ -28,7 +29,7 @@ var (
 			primary: p, navSel: p.Alpha(0.1), navSelBorder: p.Alpha(0.5),
 			card: gray(1, 1), cardBorder: gray(0.922, 0.6), rowBorder: gray(0.922, 0.5),
 			toggleOff: gray(0.86, 1), toggleOffBorder: gray(0, 0.14), toggleInset: gray(0, 0.18), knob: gray(1, 1), knobOn: gray(1, 1),
-			btn: gray(1, 1), btnFg: gray(0.145, 1), btnBorder: gray(0, 0.1), btnShadow: gray(0, 0.12),
+			btn: gray(1, 1), btnFg: gray(0.145, 1), btnBorder: gray(0, 0.1), btnShadow: gray(0, 0.12), btnHover: gray(0.955, 1),
 		}
 	}()
 	darkSet = func() settingsTokens {
@@ -38,7 +39,7 @@ var (
 			primary: p, navSel: p.Alpha(0.1), navSelBorder: p.Alpha(0.5),
 			card: gray(0.205, 1), cardBorder: gray(1, 0.06), rowBorder: gray(1, 0.05),
 			toggleOff: gray(1, 0.14), toggleOffBorder: gray(1, 0.12), toggleInset: gray(0, 0.45), knob: gray(0.985, 1), knobOn: gray(0.985, 1),
-			btn: gray(0.92, 1), btnFg: gray(0.205, 1), btnBorder: gray(1, 0.08), btnShadow: gray(0, 0.3),
+			btn: gray(0.92, 1), btnFg: gray(0.205, 1), btnBorder: gray(1, 0.08), btnShadow: gray(0, 0.3), btnHover: gray(0.87, 1),
 		}
 	}()
 )
@@ -131,14 +132,15 @@ func (a *app) settingsShell(c *ui.Context, pages []setPage) {
 								for i, sub := range p.subs {
 									sel := a.setSub == i
 									b := ui.Row(c).Height(28).Padding(0, 10).Radius(10).AlignItems(ui.Center).Key("sub-" + sub)
+									bg, bd := ui.Transparent, ui.Transparent
 									if sel {
-										b.Background(s.navSel).Border(1, s.navSelBorder)
-									} else {
-										b.Border(1, ui.Transparent)
-										if b.Hovered() {
-											b.Background(k.track)
-										}
+										bg, bd = s.navSel, s.navSelBorder
+									} else if b.Hovered() {
+										bg = k.track
 									}
+									ctl := tw(100, easeStandard) // Button：color / bg / border / shadow / transform 100ms ease-standard
+									fadeColor(b, "bg", bg, ctl).Border(1, b.AnimateColor("bd", bd, ctl))
+									b.AnimatePose(ui.Pose{Y: pressY(b.Pressed())}, ctl)
 									b.Children(func() { text(c, tr(sub), 12, 17, 500, k.fg) })
 									if b.Clicked() {
 										a.setSub = i
@@ -240,12 +242,20 @@ func segmented(c *ui.Context, k tokens, sel *int, labels ...string) bool {
 			w, col := 400, k.muted
 			if on {
 				w, col = 500, k.fg
-				b.Background(k.pill).Shadow(0, 1, 2, 0, k.pillShadow)
-				if !k.dark {
-					b.InsetShadow(0, 1, 0, 0, k.pillHighlight)
-				}
+			} else if b.Hovered() {
+				col = k.fg
 			}
-			b.Children(func() { text(c, tr(l), 11, 16, w, col) })
+			b.Children(func() {
+				if on { // 共享布局滑块（layoutId ${groupName}-thumb，springControl）
+					thumb := ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Radius(8).Background(k.pill).Shadow(0, 1, 2, 0, k.pillShadow).PassThrough().
+						Transition(ui.ElementTransition{Match: layoutID{"seg-" + strings.Join(labels, "|")}, Animation: &springControl, Position: true, Size: true})
+					if !k.dark {
+						thumb.InsetShadow(0, 1, 0, 0, k.pillHighlight)
+					}
+				}
+				fg := b.AnimateColor("fg", col, tweenControl)
+				overThumb(c, func() { text(c, tr(l), 11, 16, w, fg) })
+			})
 			if b.Clicked() && !on {
 				*sel, changed = i, true
 			}
@@ -261,22 +271,19 @@ func toggle(c *ui.Context, s settingsTokens, on *bool) bool {
 	changed := false
 	ui.Box(c).Size(32, 24).Children(func() {
 		sw := ui.Box(c).Size(32, 18).Radius(9).InsetShadow(0, 1, 2, 0, s.toggleInset)
+		bg, bd, left := s.toggleOff, s.toggleOffBorder, float32(0)
 		if *on {
-			sw.Background(s.primary).Border(1, ui.Transparent)
-		} else {
-			sw.Background(s.toggleOff).Border(1, s.toggleOffBorder)
+			bg, bd, left = s.primary, ui.Transparent, 14
 		}
-		left := float32(0)
-		if *on {
-			left = 14
-		}
+		fadeColor(sw, "bg", bg, tweenTw).Border(1, sw.AnimateColor("bd", bd, tweenTw)) // 轨道 150ms
 		sw.Children(func() {
 			knob := s.knob
 			if *on {
 				knob = s.knobOn
 			}
-			ui.Box(c).Absolute().Top(0).Left(left).Size(16, 16).Radius(8).Background(knob).
-				Shadow(0, 1, 2, 0, gray(0, 0.3)).Shadow(0, 1, 1, 0, gray(0, 0.1))
+			// 滑块 translate-x 180ms ease-pop（带一点过冲）
+			ui.Box(c).Absolute().Top(0).Left(0).Size(16, 16).Radius(8).Background(knob).
+				Shadow(0, 1, 2, 0, gray(0, 0.3)).Shadow(0, 1, 1, 0, gray(0, 0.1)).AnimatePose(ui.Pose{X: left}, tweenKnob)
 		})
 		if sw.Clicked() {
 			*on, changed = !*on, true
@@ -289,7 +296,17 @@ func button(c *ui.Context, s settingsTokens, label string) bool {
 	if s.pt {
 		return ptButton(c, label)
 	}
-	b := ui.Row(c).Height(28).Padding(0, 10).Radius(10).Background(s.btn).Border(1, s.btnBorder).Shadow(0, 1, 2, 0, s.btnShadow).AlignItems(ui.Center)
+	b := ui.Row(c).Height(28).Padding(0, 10).Radius(10).Border(1, s.btnBorder).AlignItems(ui.Center)
+	bg, sh := s.btn, s.btnShadow
+	if b.Hovered() {
+		bg = s.btnHover
+	}
+	ctl := tw(100, easeStandard)
+	if b.Pressed() { // active:shadow-none + translate-y 0.5px
+		sh = ui.Transparent
+	}
+	fadeColor(b, "bg", bg, ctl).Shadow(0, 1, 2, 0, b.AnimateColor("sh", sh, ctl))
+	b.AnimatePose(ui.Pose{Y: pressY(b.Pressed())}, ctl)
 	b.Children(func() { text(c, tr(label), 12, 17, 500, s.btnFg) })
 	return b.Clicked()
 }

@@ -78,6 +78,8 @@ type tokens struct {
 	sparkRow, laterChip                  ui.Color
 	bandLine                             ui.Color // 剪贴页分段头细线
 	pressed                              ui.Color // 浮钮按下态（如已置顶）
+	hoverBg                              ui.Color // hover:bg-black/5（深色 white/5）
+	selRim, selHalo                      ui.Color // 选中柔光（--selection-rim / --selection-halo）
 	pt                                   bool     // Platinum 配色方案（直角斜面，结构另绘）
 }
 
@@ -95,6 +97,9 @@ func init() {
 	l.laterChip, d.laterChip = gray(0, 0.06), gray(1, 0.1)
 	l.bandLine, d.bandLine = gray(0.922, 0.6), gray(1, 0.06)
 	l.pressed, d.pressed = gray(0, 0.05), gray(1, 0.1)
+	l.hoverBg, d.hoverBg = gray(0, 0.05), gray(1, 0.05)
+	lp, dp := lightSet.primary, darkSet.primary
+	l.selRim, l.selHalo, d.selRim, d.selHalo = lp.Alpha(0.58), lp.Alpha(0.22), dp.Alpha(0.78), dp.Alpha(0.38)
 }
 
 var (
