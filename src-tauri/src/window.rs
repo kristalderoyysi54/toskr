@@ -70,6 +70,18 @@ const MIN_TARGET_H: f64 = 300.0;
 const EDGE_HIDE_TICK_MS: u64 = 30;
 /// 贴边监督线程空闲（面板不可见/功能关/无锚点）时的轮询间隔。
 const EDGE_HIDE_IDLE_TICK_MS: u64 = 250;
+/// 有锚点但光标不在触边区附近（展开态、或隐藏态光标远离屏缘）时的轮询间隔：
+/// 离开面板的判定多 ≤100ms 延迟，相对 600ms 宽限期可忽略。
+const EDGE_HIDE_ACTIVE_TICK_MS: u64 = 100;
+
+/// 下一拍间隔：只有「已滑出 + 光标在触边判定区附近」需要 30ms 快拍保证唤回跟手。
+fn edge_hide_next_tick(anchored: bool, hidden: bool, near_edge: bool) -> u64 {
+    match (anchored, hidden && near_edge) {
+        (false, _) => EDGE_HIDE_IDLE_TICK_MS,
+        (true, true) => EDGE_HIDE_TICK_MS,
+        (true, false) => EDGE_HIDE_ACTIVE_TICK_MS,
+    }
+}
 /// 光标离开面板到触发滑出的宽限期（ms）。
 const EDGE_HIDE_GRACE_MS: u64 = 600;
 /// 滑出/滑回动画时长（ms，自驱逐帧动画；Dock 的手感约 0.2-0.25s）。
@@ -1011,16 +1023,14 @@ pub fn spawn_edge_hide_supervisor(app: &AppHandle) {
         let mut away_ms: u64 = 0;
         // round 4 探针限频（epoch ms，0 = 从未打过点）
         let mut last_probe_ms: i64 = 0;
-        // 面板不可见 / 功能关闭 / 无锚点时无事可做：退到慢拍，避免常驻每秒 33 次唤醒
-        // （2026-11-05 实测）。面板一可见就回到快拍，起步延迟 ≤ 一个慢拍，远小于收起宽限期。
-        let mut idle = false;
+        // 拍频按状态自适应（edge_hide_next_tick）：面板不可见/无锚点 250ms，展开态或
+        // 隐藏态光标远离屏缘 100ms，隐藏态光标靠近触边区 30ms（2026-11-05：固定 30ms
+        // 时面板打开期间主进程每秒唤醒 40+ 次）。away_ms 按实际睡眠时长累加。
+        let mut tick = EDGE_HIDE_TICK_MS;
         loop {
-            std::thread::sleep(Duration::from_millis(if idle {
-                EDGE_HIDE_IDLE_TICK_MS
-            } else {
-                EDGE_HIDE_TICK_MS
-            }));
-            idle = true;
+            std::thread::sleep(Duration::from_millis(tick));
+            let slept = tick;
+            tick = edge_hide_next_tick(false, false, false);
             let state = handle.state::<AppState>();
             if !state.auto_edge_hide.load(Ordering::Relaxed) {
                 away_ms = 0;
@@ -1040,7 +1050,7 @@ pub fn spawn_edge_hide_supervisor(app: &AppHandle) {
                 report_edge_hide_state(&handle, &mut last_reported, false, false);
                 continue;
             };
-            idle = false;
+            tick = edge_hide_next_tick(true, false, false);
             // 伴随磁吸接管：目标应用接管定位，前置条件不再满足，若正贴边隐藏立即滑回。
             // 钉住不在此列（图钉 + 已入坞 = Dock 行为）：
             // 钉住的语义是「失焦不隐藏」，管的是焦点驱动的收起（前端 blur 分支与
@@ -1096,6 +1106,7 @@ pub fn spawn_edge_hide_supervisor(app: &AppHandle) {
                         (primary - line).abs() <= 60.0 && cross >= a - 60.0 && cross <= b + 60.0
                     })
                     .unwrap_or(false);
+                tick = edge_hide_next_tick(true, true, near || touching_zone);
                 if near && !touching_zone {
                     let now = now_ms();
                     if now - last_probe_ms >= 1000 {
@@ -1144,7 +1155,7 @@ pub fn spawn_edge_hide_supervisor(app: &AppHandle) {
                 {
                     away_ms = 0;
                 } else {
-                    away_ms += EDGE_HIDE_TICK_MS;
+                    away_ms += slept;
                     if away_ms >= EDGE_HIDE_GRACE_MS {
                         animate_edge_slide(&handle, anchor, true);
                         away_ms = 0;
@@ -2839,6 +2850,15 @@ mod tests {
         let anchor = MenuFlyoutAnchorPt { menu_left: 900.0, menu_right: 1124.0, top: 300.0 };
         let (x, y) = place_menu_flyout(&[flyout_monitor()], anchor, 208.0, 240.0);
         assert_eq!((x, y), (1126.0, 296.0));
+    }
+
+    #[test]
+    fn edge_hide_fast_tick_only_near_edge_while_hidden() {
+        assert_eq!(edge_hide_next_tick(false, true, true), EDGE_HIDE_IDLE_TICK_MS);
+        assert_eq!(edge_hide_next_tick(true, false, true), EDGE_HIDE_ACTIVE_TICK_MS, "展开态不需要快拍");
+        assert_eq!(edge_hide_next_tick(true, true, false), EDGE_HIDE_ACTIVE_TICK_MS);
+        assert_eq!(edge_hide_next_tick(true, true, true), EDGE_HIDE_TICK_MS);
+        assert!(EDGE_HIDE_ACTIVE_TICK_MS * 3 < EDGE_HIDE_GRACE_MS, "慢拍不能吃掉收起宽限期");
     }
 
     #[test]
