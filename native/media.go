@@ -99,27 +99,15 @@ func (a *app) pinImage(n store.Note) {
 	if err != nil {
 		return
 	}
-	bm := scaledBitmap(src, 1600)
-	w, h := ui.ImageSize(bm)
-	scale := min(1, 640/w, 480/h)
-	dw, dh := int(w*scale), int(h*scale)
-	var win *mygo.Window
-	win = mygo.NewWindow(mygo.WindowOptions{
-		Title: "Toskr Pin", Frameless: true, AlwaysOnTop: true, Width: dw, Height: dh, CornerRadius: 8,
-		Content: ui.View(func(c *ui.Context) {
-			c.Root().Background(ui.Transparent)
-			if c.Shortcut(0, ui.KeyEscape) {
-				win.Destroy()
-			}
-			img := ui.Image(c, bm).Fill().DragWindow()
-			if img.DoubleClicked() {
-				win.Destroy()
-			}
-		}),
-	})
-	win.SetVisibleOnAllWorkspaces(true)
-	win.Center()
-	win.Show()
+	img := image.NewRGBA(image.Rect(0, 0, src.Bounds().Dx(), src.Bounds().Dy()))
+	draw.Draw(img, img.Rect, src, src.Bounds().Min, draw.Src)
+	// 按屏幕像素密度换算原大小，太大时缩到 640×480 以内；放在光标所在屏中央
+	d := mygo.Screen.DisplayNearestPoint(mygo.Screen.CursorScreenPoint())
+	w, h := float64(img.Rect.Dx())/max(d.ScaleFactor, 1), float64(img.Rect.Dy())/max(d.ScaleFactor, 1)
+	s := min(1, 640/w, 480/h)
+	w, h = w*s, h*s
+	b := d.WorkArea
+	a.pinShot(img, float64(b.X)+(float64(b.Width)-w)/2, float64(b.Y)+(float64(b.Height)-h)/2, w, h)
 }
 
 // copyPrivate 写临时类型剪贴板：本应用与其他剪贴板管理器都不记录（秘文、口令封装结果）。

@@ -405,6 +405,12 @@ func (a *app) cardMenu(c *ui.Context, m *ui.Menu, i int, n store.Note) {
 		if m.Item(tr("钉到屏幕")).Chosen() {
 			a.pinImage(n)
 		}
+		if m.Item(tr("标注…")).Chosen() {
+			a.annotateNote(n)
+		}
+		if m.Item(tr("图片打码…")).Chosen() {
+			a.openRedactor(n)
+		}
 	}
 	if n.Kind != "image" && !multi {
 		m.Submenu("AI", func(sm *ui.Menu) {

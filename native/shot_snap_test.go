@@ -11,6 +11,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/toskr/native/internal/shot"
+	"github.com/toskr/native/internal/store"
 )
 
 // 截图遮罩各状态的离屏快照（目检用）：SHOT_SNAP=<目录>，冻结帧取 <目录>/frame.png（1512×982pt @2x）。
@@ -137,4 +138,43 @@ func TestLongSnapshots(t *testing.T) {
 	o2, _ := os.Create(filepath.Join(dir, "8-long-preview.png"))
 	_ = png.Encode(o2, pt.Image())
 	o2.Close()
+}
+
+// 图片打码窗快照（同 SHOT_SNAP）。
+func TestRedactSnapshot(t *testing.T) {
+	dir := os.Getenv("SHOT_SNAP")
+	if dir == "" {
+		t.Skip("SHOT_SNAP 未设置")
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "frame.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := testApp(t)
+	file, _ := a.store.SaveImage(raw)
+	n, _, _ := a.store.Add(store.Note{Section: store.SectionInbox, Kind: "image", ImageFile: file, ImageW: 3024, ImageH: 1964, Text: "x"})
+	re, err := a.newRedactor(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tt := ui.NewTester(func(c *ui.Context) { a.redactView(c, re) }, 900, 620)
+	tt.SetScale(2)
+	if os.Getenv("SHOT_DARK") != "" {
+		tt.SetDark(true)
+	}
+	tt.Frame()
+	tt.Frame()
+	in := func(k ui.InputKind, x, y float32) { a.redactInput(re, ui.InputEvent{Kind: k, X: x, Y: y}) }
+	in(ui.InputPointerDown, 100, 120)
+	in(ui.InputPointerMove, 300, 200)
+	in(ui.InputPointerUp, 300, 200)
+	in(ui.InputPointerDown, 420, 300)
+	in(ui.InputPointerMove, 600, 360)
+	in(ui.InputPointerUp, 600, 360)
+	re.present[1].Style = shot.RedactStyles[1].Style
+	re.candidates = []redactCandidate{{shot.PxBox{X: 1500, Y: 600, W: 600, H: 80}, "银行卡号"}}
+	tt.Frame()
+	out, _ := os.Create(filepath.Join(dir, "9-redact.png"))
+	_ = png.Encode(out, tt.Image())
+	out.Close()
 }

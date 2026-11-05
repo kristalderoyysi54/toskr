@@ -95,6 +95,7 @@ type ShotPrefs struct {
 	ShadowAlpha    float64 `json:"shadowAlpha,omitempty"` // 阴影浓淡 %，0 = 默认 45
 	Crosshair      string  `json:"crosshair,omitempty"`   // sky | white | lime | magenta
 	CrosshairAlpha float64 `json:"crosshairAlpha,omitempty"`
+	RedactStyle    int     `json:"redactStyle,omitempty"` // 打码新框样式：0 马赛克 / 1 黑 / 2 白 / 3 取色
 }
 
 func DefaultSettings() Settings {
@@ -333,6 +334,24 @@ func (s *Store) Update(id, text string) error {
 		s.notes[i].Text, s.notes[i].HTML = text, ""
 		return true
 	})
+}
+
+// ReplaceImage 换掉图片卡里的图（打码 / 标注写回），返回原图信息供撤销。
+func (s *Store) ReplaceImage(id, file string, w, h int) (prevFile string, prevW, prevH int, err error) {
+	err = s.mutate(func() bool {
+		i := s.index(id)
+		if i < 0 || s.notes[i].Kind != "image" {
+			return false
+		}
+		n := &s.notes[i]
+		prevFile, prevW, prevH = n.ImageFile, n.ImageW, n.ImageH
+		n.ImageFile, n.ImageW, n.ImageH = file, w, h
+		return true
+	})
+	if err == nil && prevFile == "" {
+		err = errors.New("图片卡不存在")
+	}
+	return
 }
 
 // SetTags 覆盖笔记标签（去空白、去重、保序）。

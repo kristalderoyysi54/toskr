@@ -319,7 +319,7 @@ func (a *app) storeShot(raw []byte, w, h int, act shotAction, section, caption, 
 	case shotSend:
 		a.send([]store.Note{n})
 	case shotEdit:
-		a.openDetail(n)
+		a.openRedactor(n)
 	case shotSection:
 		a.sys.Write([]macos.Item{{macos.TypePNG: raw}}, false)
 		a.showHUD("ok", fmt.Sprintf(tr("截图已复制，存入「%s」"), a.sectionName(sec)))

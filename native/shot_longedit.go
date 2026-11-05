@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"image"
+	"image/draw"
 	"image/png"
 	"math"
 	"slices"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/toskr/native/internal/macos"
 	"github.com/toskr/native/internal/shot"
+	"github.com/toskr/native/internal/store"
 )
 
 // 长图标注窗（LongShotView）：可滚动查看拼好的长截屏，用与遮罩相同的工具标注，可裁剪；
@@ -20,7 +22,8 @@ import (
 
 type longOrigin struct {
 	front, frontID string
-	pin            *pinWin // 非空：✓ 写回这张钉图
+	pin            *pinWin     // 非空：✓ 写回这张钉图
+	note           *store.Note // 非空：✓ 替换图片卡里的原图（可撤销）
 }
 
 type longCropDrag struct {
@@ -50,6 +53,8 @@ func (a *app) openLongEditor(img *image.RGBA, scale float64, display shot.Rect, 
 	title := fmt.Sprintf(tr("长截屏 %d×%d"), pxW, pxH)
 	if origin.pin != nil {
 		title = fmt.Sprintf(tr("编辑钉图 %d×%d"), pxW, pxH)
+	} else if origin.note != nil {
+		title = fmt.Sprintf(tr("标注图片 %d×%d"), pxW, pxH)
 	}
 	le.win = mygo.NewWindow(mygo.WindowOptions{
 		Title: title, Width: int(winW), Height: int(winH), UseContentSize: true, MinWidth: 640, MinHeight: 400, AlwaysOnTop: true, Hidden: true,
@@ -94,6 +99,10 @@ func (a *app) longFinish(le *longEditor, act shotAction, section string) {
 	}
 	var buf bytes.Buffer
 	_ = (&png.Encoder{CompressionLevel: png.BestSpeed}).Encode(&buf, out)
+	if n := le.origin.note; act == shotSave && n != nil {
+		a.replaceNoteImage(*n, buf.Bytes(), out.Rect.Dx(), out.Rect.Dy(), tr("已替换卡片里的图片"))
+		return
+	}
 	if act == shotSaveAs {
 		go a.saveShotAs(buf.Bytes())
 		return
@@ -304,6 +313,8 @@ func (a *app) longEditorView(c *ui.Context, le *longEditor) {
 				doneTip := tr("完成：复制并存入「剪贴」（Enter）；长按选择存入的分组")
 				if le.origin.pin != nil {
 					cancelTip, doneTip = tr("放弃标注"), tr("完成：更新钉图（Enter）；长按选择存入的分组")
+				} else if le.origin.note != nil {
+					cancelTip, doneTip = tr("放弃标注"), tr("完成：替换卡片里的原图（Enter，可撤销）；长按选择存入的分组")
 				}
 				if a.shotButton(c, d, pal, "cancel", "x", cancelTip, false, false, nil).Clicked() {
 					le.close()
@@ -444,4 +455,38 @@ func (a *app) pinSetImage(p *pinWin, img *image.RGBA) {
 		p.win.SetSize(max(1, int(math.Round(p.w))), max(1, int(math.Round(p.h))))
 		p.win.Invalidate()
 	}
+}
+
+// annotateNote：图片卡交给长图标注窗，✓ 替换卡片里的原图。
+func (a *app) annotateNote(n store.Note) {
+	raw, err := a.store.LoadImage(n.ImageFile)
+	if err != nil {
+		a.showHUD("warn", err.Error())
+		return
+	}
+	src, err := png.Decode(bytes.NewReader(raw))
+	if err != nil {
+		a.showHUD("warn", tr("图片读取失败"))
+		return
+	}
+	img := image.NewRGBA(image.Rect(0, 0, src.Bounds().Dx(), src.Bounds().Dy()))
+	draw.Draw(img, img.Rect, src, src.Bounds().Min, draw.Src)
+	d := mygo.Screen.DisplayNearestPoint(mygo.Screen.CursorScreenPoint())
+	disp := shot.Rect{X: float64(d.Bounds.X), Y: float64(d.Bounds.Y), W: float64(d.Bounds.Width), H: float64(d.Bounds.Height)}
+	a.openLongEditor(img, math.Max(d.ScaleFactor, 1), disp, longOrigin{note: &n, front: n.SourceApp, frontID: n.BundleID})
+}
+
+// replaceNoteImage：新图入媒体库、换进图片卡，气泡可撤销（换回原图）。
+func (a *app) replaceNoteImage(n store.Note, raw []byte, w, h int, done string) {
+	file, err := a.store.SaveImage(raw)
+	if err != nil {
+		a.showHUD("warn", err.Error())
+		return
+	}
+	prev, pw, ph, err := a.store.ReplaceImage(n.ID, file, w, h)
+	if err != nil {
+		a.showHUD("warn", err.Error())
+		return
+	}
+	a.showHUDUndo("ok", done, func() { _, _, _, _ = a.store.ReplaceImage(n.ID, prev, pw, ph) })
 }
