@@ -62,3 +62,57 @@ func OCR(path string, languages []string) (string, error) {
 	})
 	return strings.Join(lines, "\n"), err
 }
+
+// OCRLine 是一行识别结果，框为图片像素坐标（原点左上）。
+type OCRLine struct {
+	Text       string
+	X, Y, W, H float64
+}
+
+// OCRLines 同 OCR，但逐行带位置（图内翻译要把译文盖回原处）；w/h 为图片像素尺寸。
+// 语言固定简体中文 + 英文（与 Rust ocr.rs 一致）。
+func OCRLines(path string, w, h int) ([]OCRLine, error) {
+	load()
+	var loadErr error
+	visionOnce.Do(func() {
+		_, loadErr = purego.Dlopen("/System/Library/Frameworks/Vision.framework/Vision", purego.RTLD_NOW|purego.RTLD_GLOBAL)
+	})
+	if loadErr != nil {
+		return nil, loadErr
+	}
+	var out []OCRLine
+	var err error
+	withPool(func() {
+		url := class("NSURL").Send(sel("fileURLWithPath:"), nsString(path))
+		opts := class("NSDictionary").Send(sel("dictionary"))
+		handler := class("VNImageRequestHandler").Send(sel("alloc")).Send(sel("initWithURL:options:"), url, opts)
+		defer handler.Send(sel("release"))
+		req := class("VNRecognizeTextRequest").Send(sel("alloc")).Send(sel("init"))
+		defer req.Send(sel("release"))
+		req.Send(sel("setRecognitionLevel:"), 0)
+		ids := []objc.ID{nsString("zh-Hans"), nsString("en-US")}
+		req.Send(sel("setRecognitionLanguages:"), class("NSArray").Send(sel("arrayWithObjects:count:"), unsafe.Pointer(&ids[0]), len(ids)))
+		reqs := class("NSArray").Send(sel("arrayWithObject:"), req)
+		var nserr objc.ID
+		if !objc.Send[bool](handler, sel("performRequests:error:"), reqs, unsafe.Pointer(&nserr)) {
+			err = errors.New("文字识别失败：" + goString(uintptr(nserr.Send(sel("localizedDescription")))))
+			return
+		}
+		results := req.Send(sel("results"))
+		for i := range objc.Send[uint](results, sel("count")) {
+			obs := results.Send(sel("objectAtIndex:"), i)
+			cands := obs.Send(sel("topCandidates:"), 1)
+			if objc.Send[uint](cands, sel("count")) == 0 {
+				continue
+			}
+			s := goString(uintptr(cands.Send(sel("firstObject")).Send(sel("string"))))
+			if strings.TrimSpace(s) == "" {
+				continue
+			}
+			b := objc.Send[cgRect](obs, sel("boundingBox")) // 归一化、原点左下
+			fw, fh := float64(w), float64(h)
+			out = append(out, OCRLine{Text: s, X: b.X * fw, Y: (1 - b.Y - b.H) * fh, W: b.W * fw, H: b.H * fh})
+		}
+	})
+	return out, err
+}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"image"
 	"math"
 	"slices"
 	"strings"
@@ -43,32 +44,37 @@ type shotEditDrag struct {
 }
 
 type shotEditor struct {
-	sel         *shot.Rect
-	cursor      *shot.Point
-	dragging    bool
-	drag        *shotDrag
-	tool        shot.Kind
-	hist        shot.History
-	draft       *shot.Shape
-	editing     *shot.TextDraft
-	note        *shot.NoteDraft
-	picked      *shot.Shape // 选中的已画图形（按指针认，撤销后自然失效）
-	preview     *shot.Shape // 拖动中的预览
-	edrag       *shotEditDrag
-	gotPointer  bool // 收到过真实指针事件（之后光标以事件为准）
-	sampled     string
-	copiedAt    time.Time
-	sectionMenu bool
-	notice      string
-	noticeAt    time.Time
-	tip         string // 悬停中的工具条按钮说明
-	tipRect     ui.Rect
-	tipAt       time.Time
-	tipHidden   string // 点过的按钮：收起说明直到移到别的按钮
-	tipSeen     bool   // 本帧有按钮在悬停
-	checkDownAt time.Time
-	checkLong   bool
-	mosaics     map[*shot.Shape]mosaicEntry
+	sel          *shot.Rect
+	cursor       *shot.Point
+	dragging     bool
+	drag         *shotDrag
+	tool         shot.Kind
+	hist         shot.History
+	draft        *shot.Shape
+	editing      *shot.TextDraft
+	note         *shot.NoteDraft
+	picked       *shot.Shape // 选中的已画图形（按指针认，撤销后自然失效）
+	preview      *shot.Shape // 拖动中的预览
+	edrag        *shotEditDrag
+	gotPointer   bool // 收到过真实指针事件（之后光标以事件为准）
+	sampled      string
+	copiedAt     time.Time
+	sectionMenu  bool
+	notice       string
+	noticeAt     time.Time
+	tip          string // 悬停中的工具条按钮说明
+	tipRect      ui.Rect
+	tipAt        time.Time
+	tipHidden    string // 点过的按钮：收起说明直到移到别的按钮
+	tipSeen      bool   // 本帧有按钮在悬停
+	checkDownAt  time.Time
+	checkLong    bool
+	mosaics      map[*shot.Shape]mosaicEntry
+	patches      map[*image.RGBA]*ui.Bitmap
+	ocr          *shotOCR
+	translating  bool
+	translateGen int
+	translated   *shotTranslateJob
 }
 
 func (e *shotEditor) reset() { *e = shotEditor{} }
@@ -171,7 +177,7 @@ func (e *shotEditor) commitEditing() {
 }
 
 func (e *shotEditor) clearSel() {
-	e.sel = nil
+	e.sel, e.ocr = nil, nil
 	e.hist = shot.History{}
 	e.picked, e.preview, e.edrag = nil, nil, nil
 }
@@ -553,6 +559,12 @@ func (a *app) shotCopyColor(c *ui.Context, d *shotDisplay, rgb bool) {
 
 func (a *app) shotKeys(c *ui.Context, d *shotDisplay) {
 	e := &d.ed
+	if e.ocr != nil && !e.sectionMenu { // 文字面板打开时只接管 Esc（关面板），其余交给面板里的输入框
+		if c.Shortcut(0, ui.KeyEscape) {
+			e.ocr = nil
+		}
+		return
+	}
 	if e.editing != nil || e.note != nil {
 		return
 	}
@@ -633,6 +645,9 @@ func (a *app) shotView(c *ui.Context, d *shotDisplay) {
 	if a.shot == nil || d.bm == nil {
 		return
 	}
+	if e.translated != nil {
+		a.applyTranslation(c, d)
+	}
 	pal := shotColors(c)
 	cross := a.shotCross()
 	fr := a.shotFrame()
@@ -698,6 +713,9 @@ func (a *app) shotView(c *ui.Context, d *shotDisplay) {
 		if a.shot == nil || d.bm == nil { // 工具条动作结束了截图
 			return
 		}
+	}
+	if e.sel != nil && e.ocr != nil {
+		a.shotOCRPanel(c, d, pal)
 	}
 	if e.editing != nil {
 		a.shotTextEditor(c, d)
@@ -969,7 +987,12 @@ func (a *app) shotButton(c *ui.Context, d *shotDisplay, pal shotPalette, key, ic
 		fg = *iconColor
 	}
 	fadeColor(b, "bg", bg, tweenControl)
-	b.Children(func() { licon(c, icon, 18, fg) })
+	b.Children(func() {
+		ic := licon(c, icon, 18, fg)
+		if icon == "loader-circle" { // animate-spin
+			ic.Rotate(b.Loop("spin", time.Second, ui.Linear) * 360)
+		}
+	})
 	a.shotTipTarget(c, d, b, tip)
 	return b
 }
@@ -1011,14 +1034,18 @@ func (a *app) shotToolbar(c *ui.Context, d *shotDisplay, pal shotPalette, top, h
 			if a.shotButton(c, d, pal, "long", "scroll-text", tr("长截屏：点击后滚动页面，自动拼接成长图"), false, false, nil).Clicked() {
 				a.shotStartLong(c, d)
 			}
-			if a.shotButton(c, d, pal, "ocr", "scan-text", tr("识别文字：提取选区里的文字，可复制或存入「剪贴」"), false, false, nil).Clicked() {
+			if a.shotButton(c, d, pal, "ocr", "scan-text", tr("识别文字：提取选区里的文字，可复制或存入「剪贴」"), e.ocr != nil, false, nil).Clicked() {
 				a.shotRunOCR(c, d)
 			}
 			trTip := tr("图内翻译：把图里的外文原位替换成中文")
 			if hasTranslation {
 				trTip = tr("去掉图内翻译")
 			}
-			if a.shotButton(c, d, pal, "translate", "languages", trTip, hasTranslation, false, nil).Clicked() {
+			trIcon := "languages"
+			if e.translating {
+				trIcon = "loader-circle"
+			}
+			if a.shotButton(c, d, pal, "translate", trIcon, trTip, hasTranslation, e.translating, nil).Clicked() && !e.translating {
 				a.shotTranslate(c, d)
 			}
 			for _, act := range []struct {

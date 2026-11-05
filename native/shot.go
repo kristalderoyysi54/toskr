@@ -292,6 +292,11 @@ func (a *app) commitShot(d *shotDisplay, act shotAction, out *image.RGBA, place 
 		go a.saveShotAs(raw)
 		return
 	}
+	a.storeShot(raw, w, h, act, section, caption, front, frontID)
+}
+
+// storeShot：图片入库（剪贴或指定分组）后按动作复制 / 发送 / 打开。
+func (a *app) storeShot(raw []byte, w, h int, act shotAction, section, caption, front, frontID string) {
 	name, err := a.store.SaveImage(raw)
 	if err != nil {
 		a.showHUD("warn", tr("截图保存失败：")+err.Error())
@@ -368,27 +373,4 @@ func (a *app) saveShotText(text string) {
 	a.sys.Write([]macos.Item{{macos.TypeString: []byte(text)}}, false)
 	_, _, _ = a.store.Add(store.Note{Section: store.SectionClipboard, Text: text, SourceApp: s.front, BundleID: s.frontID})
 	a.showHUD("ok", tr("文字已复制，存入「剪贴」"))
-}
-
-// pinShot：钉图小窗（置顶、可拖动、双击 / Esc 关闭）。位置与大小为全局 pt。
-func (a *app) pinShot(img *image.RGBA, x, y, w, h float64) {
-	bm := ui.NewBitmap(img)
-	var win *mygo.Window
-	win = mygo.NewWindow(mygo.WindowOptions{
-		Title: "Toskr Pin", Frameless: true, AlwaysOnTop: true, Transparent: true, DisableResize: true,
-		X: int(x), Y: int(y), Width: max(1, int(w+0.5)), Height: max(1, int(h+0.5)),
-		Content: ui.View(func(c *ui.Context) {
-			c.Root().Background(ui.Transparent)
-			if c.Shortcut(0, ui.KeyEscape) {
-				win.Destroy()
-			}
-			img := ui.Image(c, bm).Fill().DragWindow()
-			if img.DoubleClicked() {
-				win.Destroy()
-			}
-		}),
-	})
-	win.SetBounds(mygo.Rectangle{X: int(x), Y: int(y), Width: max(1, int(w+0.5)), Height: max(1, int(h+0.5))})
-	win.SetVisibleOnAllWorkspaces(true)
-	win.Show()
 }

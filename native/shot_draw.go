@@ -150,7 +150,7 @@ func drawShapes(p *ui.Painter, d *shotDisplay, shapes []*shot.Shape, clip shot.R
 		for _, it := range s.Items {
 			pad := shot.TranslatePad
 			if it.Patch != nil {
-				p.ImageRegion(ui.NewBitmap(it.Patch), ui.Rect{}, ui.Rect{X: f32(it.X - pad), Y: f32(it.Y - pad), W: f32(it.W + pad*2), H: f32(it.H + pad*2)}, ui.ImageOptions{})
+				p.ImageRegion(d.ed.patchBitmap(it.Patch), ui.Rect{}, ui.Rect{X: f32(it.X - pad), Y: f32(it.Y - pad), W: f32(it.W + pad*2), H: f32(it.H + pad*2)}, ui.ImageOptions{})
 			}
 			sp := ui.Span{Text: it.Text, Font: shotFont, Size: f32(it.FontSize), Weight: 500, Color: shotColor(it.FG)}
 			_, h := p.MeasureText(0, sp)
