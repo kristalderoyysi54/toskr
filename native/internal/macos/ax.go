@@ -67,3 +67,24 @@ func SelectedText() (Selection, string) {
 	}
 	return SelEmpty, ""
 }
+
+// FocusedValue 读系统焦点元素的 AXValue（字符串型输入框）；用于粘贴结果核验。
+func FocusedValue() (string, bool) {
+	load()
+	sys := AXUIElementCreateSystemWide()
+	defer CFRelease(sys)
+	focused := copyAttr(sys, "AXFocusedUIElement")
+	if focused == 0 {
+		return "", false
+	}
+	defer CFRelease(focused)
+	value := copyAttr(focused, "AXValue")
+	if value == 0 {
+		return "", false
+	}
+	defer CFRelease(value)
+	if CFGetTypeID(value) != CFStringGetTypeID() {
+		return "", false
+	}
+	return goString(value), true
+}

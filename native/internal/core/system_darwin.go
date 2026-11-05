@@ -23,3 +23,6 @@ func (Mac) PostKey(k uint16, f uint64)                   { macos.PostKey(k, f) }
 func (Mac) Activate(pid int32) bool                      { return macos.Activate(pid) }
 func (Mac) Sleep(d time.Duration)                        { time.Sleep(d) }
 func (Mac) SelfPID() int32                               { return int32(os.Getpid()) }
+
+func (Mac) ProcessStartMs(pid int32) int64 { return macos.ProcessStartMs(pid) }
+func (Mac) FocusedValue() (string, bool)   { return macos.FocusedValue() }

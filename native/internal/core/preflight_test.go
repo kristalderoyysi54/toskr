@@ -36,7 +36,7 @@ func TestDeliverWithEnterAndImage(t *testing.T) {
 	f := &fake{items: original(), activateOK: true, front: macos.FrontApp{PID: 1}}
 	var keys []uint16
 	sys := &keyRecorder{fake: f, keys: &keys}
-	if err := DeliverWith(sys, macos.FrontApp{PID: 42}, Payload{Text: "图注", PNG: []byte("png")}, true); err != nil {
+	if _, err := DeliverWith(sys, macos.FrontApp{PID: 42}, Payload{Text: "图注", PNG: []byte("png")}, Options{Enter: true}); err != nil {
 		t.Fatal(err)
 	}
 	WaitIdle()
@@ -46,7 +46,7 @@ func TestDeliverWithEnterAndImage(t *testing.T) {
 	if text, _ := f.ReadString(); text != "用户原剪贴板" {
 		t.Fatal("应还原原剪贴板")
 	}
-	if DeliverWith(f, macos.FrontApp{PID: 42}, Payload{PNG: []byte("png")}, false) != nil {
+	if _, err := DeliverWith(f, macos.FrontApp{PID: 42}, Payload{PNG: []byte("png")}, Options{}); err != nil {
 		t.Fatal("纯图片也应可发")
 	}
 	WaitIdle()
@@ -60,4 +60,41 @@ type keyRecorder struct {
 func (k *keyRecorder) PostKey(code uint16, flags uint64) {
 	*k.keys = append(*k.keys, code)
 	k.fake.PostKey(code, flags)
+}
+
+// verifySys 模拟有 AXValue 的输入框与进程身份。
+type verifySys struct {
+	*fake
+	value   string
+	started int64
+	paste   bool // ⌘V 是否真的改了输入框
+}
+
+func (v *verifySys) ProcessStartMs(int32) int64   { return v.started }
+func (v *verifySys) FocusedValue() (string, bool) { return v.value, true }
+func (v *verifySys) PostKey(code uint16, flags uint64) {
+	if code == macos.KeyV && v.paste {
+		v.value += "粘贴"
+	}
+	v.fake.PostKey(code, flags)
+}
+
+func TestDeliverVerifiesPasteAndLocksIdentity(t *testing.T) {
+	v := &verifySys{fake: &fake{items: original(), activateOK: true, front: macos.FrontApp{PID: 1}}, started: 100, paste: true}
+	if c, err := DeliverWith(v, macos.FrontApp{PID: 42}, Payload{Text: "x"}, Options{StartedMs: 100}); err != nil || c != CheckVerified {
+		t.Fatalf("%v %v", c, err)
+	}
+	WaitIdle()
+	v.paste = false
+	if c, _ := DeliverWith(v, macos.FrontApp{PID: 42}, Payload{Text: "x"}, Options{}); c != CheckUnchanged {
+		t.Fatalf("输入框没变应报 unchanged，实为 %v", c)
+	}
+	WaitIdle()
+	n := len(v.fake.pasted)
+	if _, err := DeliverWith(v, macos.FrontApp{PID: 42}, Payload{Text: "x"}, Options{StartedMs: 99}); err != ErrTargetChanged {
+		t.Fatalf("进程身份变化必须中止：%v", err)
+	}
+	if len(v.fake.pasted) != n {
+		t.Fatal("身份不符不得粘贴")
+	}
 }

@@ -42,30 +42,31 @@ type app struct {
 	tray                               *mygo.Tray
 
 	// 面板状态
-	page     int
-	section  string // 当前笔记分组
-	query    string
-	notes    []store.Note // 当前分组 + 搜索后的未完成项
-	done     []store.Note // 当前分组已完成项
-	counts   map[string]int
-	selected int
-	chosen   ui.Selection[string]
-	list     ui.ListState
-	search   ui.Handle
-	draft    string
-	draftIn  ui.Handle
-	editing  string // 正在编辑的笔记 ID
-	editText string
-	pinned   bool
-	showDone bool
-	newSecOn bool
-	newSec   string
-	target   macos.FrontApp // 发送目标：面板唤出前的前台应用
-	pending  []store.Note   // 预检命中、等待确认的发送
-	findings []core.Finding
-	history  []delivery
-	thumbs   map[string]ui.ImageSource
-	aiBusy   string // 正在 AI 处理的笔记 ID
+	page          int
+	section       string // 当前笔记分组
+	query         string
+	notes         []store.Note // 当前分组 + 搜索后的未完成项
+	done          []store.Note // 当前分组已完成项
+	counts        map[string]int
+	selected      int
+	chosen        ui.Selection[string]
+	list          ui.ListState
+	search        ui.Handle
+	draft         string
+	draftIn       ui.Handle
+	editing       string // 正在编辑的笔记 ID
+	editText      string
+	pinned        bool
+	showDone      bool
+	newSecOn      bool
+	newSec        string
+	target        macos.FrontApp // 发送目标：面板唤出前的前台应用
+	targetStarted int64          // 目标进程启动时刻（身份锁定）
+	pending       []store.Note   // 预检命中、等待确认的发送
+	findings      []core.Finding
+	history       []delivery
+	thumbs        map[string]ui.ImageSource
+	aiBusy        string // 正在 AI 处理的笔记 ID
 
 	// 任务页
 	tasks     []store.Task
@@ -187,6 +188,7 @@ func (a *app) togglePanel() {
 func (a *app) showPanel() {
 	if f, ok := a.sys.Frontmost(); ok && f.PID != a.sys.SelfPID() {
 		a.target = f
+		a.targetStarted = macos.ProcessStartMs(f.PID)
 	}
 	a.panel.SetBounds(a.panelBounds())
 	a.reload()
@@ -382,8 +384,8 @@ func (a *app) deliver(notes []store.Note, confirmed bool) {
 		a.hidePanel()
 	}
 	go func() {
-		err := core.DeliverWith(a.sys, target, core.Payload{Text: strings.Join(texts, "\n\n"), PNG: png}, enter)
-		diag.Push("发送: %d 条 → %s enter=%v confirmed=%v err=%v", len(notes), target.BundleID, enter, confirmed, err)
+		check, err := core.DeliverWith(a.sys, target, core.Payload{Text: strings.Join(texts, "\n\n"), PNG: png}, core.Options{Enter: enter, StartedMs: a.targetStarted})
+		diag.Push("发送: %d 条 → %s enter=%v confirmed=%v check=%s err=%v", len(notes), target.BundleID, enter, confirmed, check, err)
 		a.panel.Update(func() {
 			rec := delivery{At: time.Now(), Target: target.Name, Count: len(notes)}
 			if err != nil {
@@ -395,6 +397,10 @@ func (a *app) deliver(notes []store.Note, confirmed bool) {
 				return
 			}
 			_ = a.store.MarkSent(ids, time.Now())
+			if check == core.CheckUnchanged {
+				a.showHUD("warn", tr("已粘贴，但目标输入框内容没有变化，请确认是否发送成功"))
+				return
+			}
 			a.showHUD("sent", fmt.Sprintf(tr("已发送 %d 条到 %s"), len(notes), target.Name))
 		})
 	}()

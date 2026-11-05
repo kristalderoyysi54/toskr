@@ -44,3 +44,61 @@ func Activate(pid int32) bool {
 	})
 	return ok
 }
+
+// AppInfo 是运行中应用的身份：pid + bundle + 主可执行路径 + 进程启动时刻（内核记录）。
+type AppInfo struct {
+	PID       int32
+	BundleID  string
+	Name      string
+	BinPath   string
+	StartedMs int64
+}
+
+// RunningApp 读取 pid 对应应用的身份；启动时刻取 proc_pidinfo，spawn 起的进程也有。
+func RunningApp(pid int32) (AppInfo, bool) {
+	load()
+	var out AppInfo
+	ok := false
+	withPool(func() {
+		app := class("NSRunningApplication").Send(sel("runningApplicationWithProcessIdentifier:"), pid)
+		if app == 0 {
+			return
+		}
+		out.PID = pid
+		out.BundleID = goString(uintptr(app.Send(sel("bundleIdentifier"))))
+		out.Name = goString(uintptr(app.Send(sel("localizedName"))))
+		if u := app.Send(sel("executableURL")); u != 0 {
+			out.BinPath = goString(uintptr(u.Send(sel("path"))))
+		}
+		ok = true
+	})
+	out.StartedMs = ProcessStartMs(pid)
+	return out, ok
+}
+
+// RunningPIDs 返回 bundle id 对应的运行中进程。
+func RunningPIDs(bundle string) []int32 {
+	load()
+	var out []int32
+	withPool(func() {
+		arr := class("NSRunningApplication").Send(sel("runningApplicationsWithBundleIdentifier:"), nsString(bundle))
+		n := objc.Send[uint](arr, sel("count"))
+		for i := range n {
+			out = append(out, objc.Send[int32](arr.Send(sel("objectAtIndex:"), i), sel("processIdentifier")))
+		}
+	})
+	return out
+}
+
+// Terminate 请求应用优雅退出（等同菜单「退出」）。
+func Terminate(pid int32) bool {
+	load()
+	ok := false
+	withPool(func() {
+		app := class("NSRunningApplication").Send(sel("runningApplicationWithProcessIdentifier:"), pid)
+		if app != 0 {
+			ok = objc.Send[bool](app, sel("terminate"))
+		}
+	})
+	return ok
+}
