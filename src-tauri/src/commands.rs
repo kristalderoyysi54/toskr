@@ -1644,8 +1644,37 @@ pub fn hud_feedback(
 
 /// 前端链路诊断回执（Toggle 处理结果等落盘，报障时诊断页可见）。
 #[tauri::command]
-pub fn diag_note(app: AppHandle, msg: String) {
-    crate::diag::push(&app, crate::diag::frontend_event(&msg));
+pub fn diag_note(app: AppHandle, webview: tauri::Webview, msg: String) {
+    let event = crate::diag::frontend_event(&msg);
+    if event != "frontend.mounted" {
+        crate::diag::push(&app, event);
+        return;
+    }
+    // 挂载指纹附带窗口 label（Rust 侧身份，非 WebView 文本）与 WebContent pid，
+    // 内存基线据此把 WebKit 子进程按窗口归属。主窗挂载时顺带列出所有已建窗口
+    // （辅助窗不发挂载回执）。
+    let mut targets = vec![(webview.label().to_string(), webview)];
+    if targets[0].0 == "main" {
+        for (label, window) in app.webview_windows() {
+            if label != "main" {
+                targets.push((label, window.as_ref().clone()));
+            }
+        }
+    }
+    for (index, (label, view)) in targets.into_iter().enumerate() {
+        let app_for_log = app.clone();
+        let tag = if index == 0 { event } else { "webview.pid" };
+        if view
+            .with_webview(move |platform| {
+                let pid = crate::diag::webcontent_pid(platform.inner());
+                crate::diag::push(&app_for_log, format!("{tag} label={label} webcontent_pid={pid}"));
+            })
+            .is_err()
+            && tag == event
+        {
+            crate::diag::push(&app, event);
+        }
+    }
 }
 
 /// 主窗口水合结果指纹：只收条数（不含任何内容），install-app.sh 部署后据此比对

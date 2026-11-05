@@ -44,6 +44,29 @@ pub(crate) fn frontend_event(message: &str) -> &'static str {
         .map(|(_, event)| *event).unwrap_or("frontend.unclassified")
 }
 
+/// WKWebView 当前 WebContent 进程 pid（私有 `_webProcessIdentifier`，有
+/// respondsToSelector 守卫；取不到返回 -1）。只用于诊断日志。
+#[cfg(target_os = "macos")]
+pub(crate) fn webcontent_pid(wk_webview: *mut std::ffi::c_void) -> i32 {
+    use objc2::runtime::AnyObject;
+    use objc2::{msg_send, sel};
+    let Some(view) = (unsafe { (wk_webview as *const AnyObject).as_ref() }) else {
+        return -1;
+    };
+    unsafe {
+        let ok: bool = msg_send![view, respondsToSelector: sel!(_webProcessIdentifier)];
+        if !ok {
+            return -1;
+        }
+        msg_send![view, _webProcessIdentifier]
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn webcontent_pid(_wk_webview: *mut std::ffi::c_void) -> i32 {
+    -1
+}
+
 #[cfg(test)]
 mod frontend_tests {
     use super::frontend_event;
