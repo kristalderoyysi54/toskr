@@ -41,6 +41,7 @@ type app struct {
 
 	panel, hud, settingsWin, detailWin *mygo.Window
 	tray                               *mygo.Tray
+	shot                               *shotSession // 进行中的截图
 
 	// 面板状态
 	page          int

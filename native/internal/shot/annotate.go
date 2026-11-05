@@ -322,14 +322,14 @@ func Undo(h History) History {
 	if len(h.Undo) == 0 {
 		return h
 	}
-	return History{Shapes: h.Undo[len(h.Undo)-1], Undo: h.Undo[:len(h.Undo)-1:len(h.Undo)-1], Redo: append(append([][]*Shape{}, h.Redo...), h.Shapes)}
+	return History{Shapes: h.Undo[len(h.Undo)-1], Undo: h.Undo[: len(h.Undo)-1 : len(h.Undo)-1], Redo: append(append([][]*Shape{}, h.Redo...), h.Shapes)}
 }
 
 func Redo(h History) History {
 	if len(h.Redo) == 0 {
 		return h
 	}
-	return History{Shapes: h.Redo[len(h.Redo)-1], Undo: append(append([][]*Shape{}, h.Undo...), h.Shapes), Redo: h.Redo[:len(h.Redo)-1 : len(h.Redo)-1]}
+	return History{Shapes: h.Redo[len(h.Redo)-1], Undo: append(append([][]*Shape{}, h.Undo...), h.Shapes), Redo: h.Redo[: len(h.Redo)-1 : len(h.Redo)-1]}
 }
 
 // NumberTextColor：序号底色上的数字颜色：浅色底配黑字。

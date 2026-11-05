@@ -5,7 +5,6 @@ import (
 	"image"
 	"image/png"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -13,7 +12,6 @@ import (
 	"github.com/egoist/mygo/ui"
 	"golang.org/x/image/draw"
 
-	"github.com/toskr/native/internal/diag"
 	"github.com/toskr/native/internal/macos"
 	"github.com/toskr/native/internal/store"
 )
@@ -45,49 +43,6 @@ func scaledBitmap(src image.Image, maxW int) *ui.Bitmap {
 	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, b, draw.Src, nil)
 	bm := ui.NewBitmap(dst)
 	return bm
-}
-
-// screenshot 调系统 screencapture 交互框选，结果加密入库为图片笔记。
-// 对应 Tauri 版 screenshot.rs 的「框选 → 入库」主路径；标注编辑与长截图未移植。
-func (a *app) screenshot() {
-	wasVisible := a.panel != nil && a.panel.IsVisible()
-	if wasVisible && !a.pinned {
-		a.hidePanelNow()
-	}
-	go func() {
-		tmp, err := os.CreateTemp("", "toskr-shot-*.png")
-		if err != nil {
-			return
-		}
-		path := tmp.Name()
-		tmp.Close()
-		defer os.Remove(path)
-		if err := exec.Command("/usr/sbin/screencapture", "-i", "-x", "-o", path).Run(); err != nil {
-			diag.Push("截图: screencapture 失败 %v", err)
-		}
-		raw, _ := os.ReadFile(path)
-		if len(raw) == 0 {
-			diag.Push("截图: 用户取消")
-			return
-		}
-		cfg, err := png.DecodeConfig(bytes.NewReader(raw))
-		if err != nil {
-			return
-		}
-		name, err := a.store.SaveImage(raw)
-		if err != nil {
-			a.panel.Update(func() { a.showHUD("warn", tr("截图保存失败：")+err.Error()) })
-			return
-		}
-		_, dup, _ := a.store.Add(store.Note{Section: store.SectionInbox, Kind: "image", ImageFile: name, ImageW: cfg.Width, ImageH: cfg.Height, Text: ""})
-		diag.Push("截图: %dx%d dup=%v", cfg.Width, cfg.Height, dup)
-		a.panel.Update(func() {
-			a.showHUD("added", tr("截图已加入队列"))
-			if wasVisible {
-				a.panel.Show()
-			}
-		})
-	}()
 }
 
 // withTempImage 把加密图片解到 0600 临时文件交给系统 API，用完立即删除。

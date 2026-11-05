@@ -8,7 +8,7 @@ import (
 // 对应 annotate.test.ts / callout.test.ts / line.test.ts / shapeEdit.test.ts / crosshair.test.ts。
 
 func rectS(x2 float64) *Shape { return &Shape{Kind: RectK, X2: x2, Y2: 10, Color: "#FF3B30", Size: 1} }
-func numS(n int) *Shape        { return &Shape{Kind: Number, N: n, Color: "#FF3B30", Size: 1} }
+func numS(n int) *Shape       { return &Shape{Kind: Number, N: n, Color: "#FF3B30", Size: 1} }
 
 var empty History
 

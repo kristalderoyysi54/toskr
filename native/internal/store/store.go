@@ -80,6 +80,21 @@ type Settings struct {
 	DetailFontSize int    `json:"detailFontSize,omitempty"`    // 详情窗字号 10–24，0 = 12
 	CompanionOff   bool   `json:"companionOff,omitempty"`
 	FreeMove       bool   `json:"freeMove,omitempty"`
+	// 截图编辑器（Tauri 存 localStorage：toskr.screenshotStyle / CalloutStyle / Frame / Crosshair）
+	Shot ShotPrefs `json:"shot,omitempty"`
+}
+
+// ShotPrefs 是截图编辑器记住的使用习惯；零值都表示默认（粗细存档位 +1，0 = 默认中档）。
+type ShotPrefs struct {
+	Ink            string  `json:"ink,omitempty"`        // 标注色，默认 #FF3B30
+	SizeLv         int     `json:"sizeLv,omitempty"`     // 粗细档位 +1
+	CalloutInk     string  `json:"calloutInk,omitempty"` // 批注单独一套，默认 #007AFF
+	CalloutSizeLv  int     `json:"calloutSizeLv,omitempty"`
+	Radius         float64 `json:"radius,omitempty"`      // 出图圆角 pt
+	Shadow         float64 `json:"shadow,omitempty"`      // 出图阴影 pt，0 = 无
+	ShadowAlpha    float64 `json:"shadowAlpha,omitempty"` // 阴影浓淡 %，0 = 默认 45
+	Crosshair      string  `json:"crosshair,omitempty"`   // sky | white | lime | magenta
+	CrosshairAlpha float64 `json:"crosshairAlpha,omitempty"`
 }
 
 func DefaultSettings() Settings {
