@@ -481,3 +481,36 @@ func TestDetailEditTagsPickAndRaw(t *testing.T) {
 		t.Fatalf("⌘S 应保存并退出编辑 %q edit=%v draft=%q", got.Text, a.detail.edit, a.detailText)
 	}
 }
+
+func TestSchemeAndDensity(t *testing.T) {
+	a, _ := testApp(t, "第一条笔记")
+	defer func() { curScheme = "default"; setPlatinumDetail("", "") }()
+	a.openSettingsState()
+	tt := ui.NewTester(a.settingsView, 1040, 720)
+	tt.Frame()
+	_ = tt.Click("紧凑")
+	tt.Frame()
+	if a.store.Settings().CardDensity != "compact" {
+		t.Fatal("卡片密度应写回 compact")
+	}
+	pt := ui.NewTester(a.panelView, 380, 760)
+	pt.Frame()
+	if !pt.HasText("第一条笔记") || pt.HasText("文本") {
+		t.Fatalf("紧凑卡应为单行、无通栏 %v", pt.Texts())
+	}
+	st := a.store.Settings()
+	st.ColorScheme = "platinum"
+	_ = a.store.SetSettings(st)
+	curScheme = "platinum"
+	tt.Frame()
+	if !tt.HasText("高亮颜色") || !tt.HasText("滚动条") || slices.Contains(tt.Texts(), "主题") || slices.Contains(tt.Texts(), "毛玻璃背景") {
+		t.Fatalf("Platinum 下应显示高亮颜色 / 滚动条，隐藏主题与毛玻璃 %v", tt.Texts())
+	}
+	if err := tt.Click("细条"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.store.Settings().PtScrollbar != "thin" {
+		t.Fatal("滚动条应写回 thin")
+	}
+}

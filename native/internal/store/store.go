@@ -69,11 +69,15 @@ type Settings struct {
 	SecretCipherStyle  string      `json:"secretCipherStyle,omitempty"` // classic | code | log | quote
 	SecretRevealMs     int         `json:"secretRevealTimeoutMs"`       // 显现后自动回遮罩（0 = 不自动）
 	// 窗口与外观（与 Tauri 同名设置；布尔用「关闭」语义，旧数据缺字段即默认开启）
-	Theme          string `json:"theme,omitempty"`          // system | light | dark
-	PanelNotOnTop  bool   `json:"panelNotOnTop,omitempty"`  // 面板置顶（默认开）
-	KeepOnBlur     bool   `json:"keepOnBlur,omitempty"`     // 失焦自动隐藏（默认开）
-	SoundOff       bool   `json:"soundOff,omitempty"`       // 捕获音效（默认开）
-	DetailFontSize int    `json:"detailFontSize,omitempty"` // 详情窗字号 10–24，0 = 12
+	Theme          string `json:"theme,omitempty"`             // system | light | dark
+	ColorScheme    string `json:"colorScheme,omitempty"`       // default | platinum | paper | matcha | sakura | fog
+	CardDensity    string `json:"cardDensity,omitempty"`       // comfortable | compact
+	PtHighlight    string `json:"platinumHighlight,omitempty"` // lavender | blue | teal | graphite
+	PtScrollbar    string `json:"platinumScrollbar,omitempty"` // classic | thin
+	PanelNotOnTop  bool   `json:"panelNotOnTop,omitempty"`     // 面板置顶（默认开）
+	KeepOnBlur     bool   `json:"keepOnBlur,omitempty"`        // 失焦自动隐藏（默认开）
+	SoundOff       bool   `json:"soundOff,omitempty"`          // 捕获音效（默认开）
+	DetailFontSize int    `json:"detailFontSize,omitempty"`    // 详情窗字号 10–24，0 = 12
 	CompanionOff   bool   `json:"companionOff,omitempty"`
 	FreeMove       bool   `json:"freeMove,omitempty"`
 }

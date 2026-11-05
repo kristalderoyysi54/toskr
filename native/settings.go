@@ -153,13 +153,62 @@ func (a *app) settingsView(c *ui.Context) {
 					{title: tr("语言"), hint: tr("跟随系统时，中文系统显示中文，其余显示英文"), control: func() {
 						changed = segmented(c, k, &a.setLang, "跟随系统", "简体中文", "English") || changed
 					}},
-					{title: tr("主题"), control: func() {
+					{title: tr("配色方案"), hint: schemeHint(st.ColorScheme), control: func() {
+						cur := max(0, slices.Index(schemeNames, st.ColorScheme))
+						settingsSelect(c, k, s, schemeLabels[cur], func(m *ui.Menu) {
+							for i, name := range schemeNames {
+								if m.Item(tr(schemeLabels[i])).Radio(i == cur).Chosen() {
+									v := a.store.Settings()
+									v.ColorScheme = name
+									_ = a.store.SetSettings(v)
+									applyAppearance(v)
+									a.invalidateAll()
+								}
+							}
+						})
+					}},
+					{title: tr("高亮颜色"), hint: tr("选中卡片与菜单高亮的颜色"), hidden: st.ColorScheme != "platinum", control: func() {
+						i := max(0, slices.Index(ptHighlightNames, st.PtHighlight))
+						if segmented(c, k, &i, ptHighlightLabels...) {
+							cur := a.store.Settings()
+							cur.PtHighlight = ptHighlightNames[i]
+							_ = a.store.SetSettings(cur)
+							applyAppearance(cur)
+							a.invalidateAll()
+						}
+					}},
+					{title: tr("滚动条"), hint: tr("经典款带箭头和条纹滑块"), hidden: st.ColorScheme != "platinum", control: func() {
+						i := 0
+						if st.PtScrollbar == "thin" {
+							i = 1
+						}
+						if segmented(c, k, &i, "经典 Platinum", "细条") {
+							cur := a.store.Settings()
+							cur.PtScrollbar = []string{"classic", "thin"}[i]
+							_ = a.store.SetSettings(cur)
+							applyAppearance(cur)
+							a.invalidateAll()
+						}
+					}},
+					{title: tr("主题"), hidden: fixedLight(st.ColorScheme), control: func() {
 						i := max(0, slices.Index(themeNames, st.Theme))
 						if segmented(c, k, &i, "跟随系统", "浅色", "深色") {
 							cur := a.store.Settings()
 							cur.Theme = themeNames[i]
 							_ = a.store.SetSettings(cur)
-							applyTheme(cur.Theme)
+							applyAppearance(cur)
+						}
+					}},
+					{title: tr("卡片密度"), hint: tr("紧凑模式单行显示，一屏看到更多"), control: func() {
+						i := 0
+						if st.CardDensity == "compact" {
+							i = 1
+						}
+						if segmented(c, k, &i, "舒适", "紧凑") {
+							cur := a.store.Settings()
+							cur.CardDensity = []string{"comfortable", "compact"}[i]
+							_ = a.store.SetSettings(cur)
+							a.invalidateAll()
 						}
 					}},
 					{title: tr("详情窗字号"), hint: tr("详情窗内也可用 ⌘+ / ⌘− 调整，⌘0 复位"), control: func() {
@@ -172,9 +221,6 @@ func (a *app) settingsView(c *ui.Context) {
 								a.detailWin.Invalidate()
 							}
 						}
-					}},
-					{title: tr("面板材质"), hint: tr("macOS 26 起为系统液态玻璃，更早系统回退为模糊材质"), control: func() {
-						changed = segmented(c, k, &a.setGlass, glassLabels...) || changed
 					}},
 				}},
 				{tr("窗口与提示"), []setRow{
@@ -195,6 +241,12 @@ func (a *app) settingsView(c *ui.Context) {
 					{title: tr("失焦自动隐藏"), hint: tr("切到其他应用时收起面板，钉住时除外"), control: setToggle(!st.KeepOnBlur, func(s *store.Settings, v bool) { s.KeepOnBlur = !v })},
 					{title: tr("隐身模式"), hint: tr("不弹「已捕获」气泡，适合投屏；失败提醒仍会显示"), control: setToggle(st.Stealth, func(s *store.Settings, v bool) { s.Stealth = v })},
 					{title: tr("音效"), hint: tr("捕获成功时轻响一声，隐身模式下静音"), control: setToggle(!st.SoundOff, func(s *store.Settings, v bool) { s.SoundOff = !v })},
+				}},
+				// Tauri 放在折叠的「更多外观与行为」里；Platinum 整窗不透明、原生模糊停用，不展示
+				{tr("外观细节"), []setRow{
+					{title: tr("毛玻璃背景"), hint: tr("macOS 26 起为系统液态玻璃，更早系统回退为模糊材质"), hidden: st.ColorScheme == "platinum", control: func() {
+						changed = segmented(c, k, &a.setGlass, glassLabels...) || changed
+					}},
 				}},
 			},
 			{
@@ -550,22 +602,31 @@ func (a *app) secretSections(c *ui.Context, k tokens, s settingsTokens, st store
 
 var themeNames = []string{"system", "light", "dark"}
 
-// applyTheme 切换全应用外观（跟随系统 / 浅色 / 深色），所有窗口随 Theme 模块重绘。
-func applyTheme(theme string) {
-	switch theme {
-	case "light":
-		mygo.Theme.SetSource(mygo.ThemeLight)
-	case "dark":
-		mygo.Theme.SetSource(mygo.ThemeDark)
-	default:
-		mygo.Theme.SetSource(mygo.ThemeSystem)
-	}
-}
-
 // playCaptureSound 捕获成功的提示音（系统 Tink；音效关闭或隐身时不响）。
 func (a *app) playCaptureSound() {
 	if st := a.store.Settings(); st.SoundOff || st.Stealth || a.panel == nil {
 		return
 	}
 	_ = exec.Command("/usr/bin/afplay", "-v", "0.4", "/System/Library/Sounds/Tink.aiff").Start()
+}
+
+func schemeHint(scheme string) string {
+	switch scheme {
+	case "platinum":
+		return tr("固定浅色、整窗不透明；切回 Toskr 恢复原主题与毛玻璃")
+	case "paper", "matcha", "sakura":
+		return tr("固定浅色；切回 Toskr 恢复深浅色设置")
+	case "fog":
+		return tr("跟随下方主题设置切换浅色 / 深色")
+	}
+	return tr("Platinum 为 Mac OS 9 经典外观")
+}
+
+// invalidateAll 让所有已开窗口按新外观重绘（配色方案 / 卡片密度）。
+func (a *app) invalidateAll() {
+	for _, w := range []*mygo.Window{a.panel, a.hud, a.detailWin, a.settingsWin} {
+		if w != nil {
+			w.Invalidate()
+		}
+	}
 }

@@ -76,6 +76,8 @@ type app struct {
 	menuOpen      bool
 	placementOpen bool // 面板菜单「位置与停靠」二级页
 	openAtLogin   bool // 设置页「开机启动」（打开设置时读一次）
+	noteScroll    ui.ScrollState
+	setScroll     ui.ScrollState
 	focusList     bool
 
 	clock func() time.Time // 可注入时钟（视觉对照测试固定在参照截图时刻）

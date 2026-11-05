@@ -38,6 +38,10 @@ func (a *app) panelView(c *ui.Context) {
 		c.Root().Background(k.window) // 无系统材质时（无头渲染）同色叠在白底上，与浏览器参照一致
 	}
 	a.panelKeys(c)
+	if k.pt {
+		a.platinumPanel(c, k)
+		return
+	}
 
 	ui.Column(c).Fill().Radius(14).Children(func() {
 		a.mainHeader(c, k)

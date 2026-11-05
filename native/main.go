@@ -59,7 +59,8 @@ func start() (*app, error) {
 	}
 	seedIfRequested(st)
 	setLanguage(st.Settings().Language, mygo.App.PreferredLanguages())
-	applyTheme(st.Settings().Theme)
+	appLive = true
+	applyAppearance(st.Settings())
 	a := newApp(core.Mac{}, st)
 	diag.Push("数据水合完成 笔记=%d 剪贴板=%d", a.counts[store.SectionInbox], a.counts[store.SectionClipboard])
 

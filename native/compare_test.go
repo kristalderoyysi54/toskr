@@ -199,9 +199,13 @@ func compareOne(t *testing.T, dir, name string, view func(*ui.Context), w, h int
 	}
 }
 
+// compareBackdrop 是参照截图里面板背后的页面底色：通常为白；方案自带 color-scheme: dark 时（雾蓝深色）
+// 浏览器画布变为 #121212。实机里背后是系统模糊材质，与此无关，只为对照口径一致。
+var compareBackdrop = image.Image(image.White)
+
 func onWhite(src *image.RGBA) *image.RGBA {
 	out := image.NewRGBA(src.Bounds())
-	draw.Draw(out, out.Bounds(), image.White, image.Point{}, draw.Src)
+	draw.Draw(out, out.Bounds(), compareBackdrop, image.Point{}, draw.Src)
 	draw.Draw(out, out.Bounds(), src, src.Bounds().Min, draw.Over)
 	return out
 }
@@ -278,4 +282,69 @@ func load(t *testing.T, path string) image.Image {
 		t.Fatal(err)
 	}
 	return img
+}
+
+// TestCompareSchemes 对照配色方案与卡片密度：与 setup-main-*.js 同一组笔记，参照 ref-main-<变体>-<明暗>.png。
+func TestCompareSchemes(t *testing.T) {
+	dir := os.Getenv("TOSKR_COMPARE_DIR")
+	if dir == "" {
+		t.Skip("set TOSKR_COMPARE_DIR")
+	}
+	st, err := store.OpenDir(t.TempDir(), bytes.Repeat([]byte{1}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ago := time.Now().Add(-61 * time.Second)
+	st.AddSection("提示词库")
+	for _, x := range []struct {
+		text string
+		done bool
+	}{
+		{"记得复核截图遮罩回收后的 Networking 进程占用", true},
+		{"SELECT id, title FROM notes WHERE section = 'inbox' ORDER BY created_at DESC LIMIT 50;", false},
+		{"会议纪要：周五前完成 mygo 原生版对比报告，附内存与启动耗时。", false},
+		{"把这段接口说明发给 Claude：分页参数 page_size 默认 20，最大 200；超过返回 400。", false},
+	} {
+		n, _, _ := st.Add(store.Note{Section: store.SectionInbox, Text: x.text, SourceApp: "Safari"})
+		_ = st.SetCreatedAt(n.ID, ago)
+		if x.done {
+			_ = st.SetDone(n.ID, true)
+		}
+	}
+	a := newApp(nopSys{}, st)
+	a.target = macos.FrontApp{PID: 42, Name: "Cursor"}
+	a.reload()
+	defer func() { curScheme = "default" }()
+	for _, v := range []struct {
+		name, scheme, density string
+		modes                 []string
+	}{
+		{"paper", "paper", "", []string{"light"}},
+		{"matcha", "matcha", "", []string{"light"}},
+		{"sakura", "sakura", "", []string{"light"}},
+		{"fog", "fog", "", []string{"light", "dark"}},
+		{"platinum", "platinum", "", []string{"light"}},
+		{"compact", "default", "compact", []string{"light", "dark"}},
+	} {
+		s := a.store.Settings()
+		s.ColorScheme, s.CardDensity = v.scheme, v.density
+		_ = a.store.SetSettings(s)
+		curScheme = v.scheme
+		for _, m := range v.modes {
+			if v.scheme == "fog" && m == "dark" {
+				compareBackdrop = image.NewUniform(color.RGBA{18, 18, 18, 255})
+			}
+			compareOne(t, dir, "main-"+v.name, a.panelView, 380, 760, m)
+			compareBackdrop = image.White
+		}
+	}
+	// 设置窗（首屏「窗口与外观 · 通用」）在三种方案下
+	for _, v := range []struct{ scheme, mode string }{{"paper", "light"}, {"platinum", "light"}, {"fog", "dark"}} {
+		s := a.store.Settings()
+		s.ColorScheme, s.CardDensity = v.scheme, ""
+		_ = a.store.SetSettings(s)
+		curScheme = v.scheme
+		a.openSettingsState()
+		compareOne(t, dir, "settings-"+v.scheme, a.settingsView, 1040, 720, v.mode)
+	}
 }

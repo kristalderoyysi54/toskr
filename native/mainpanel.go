@@ -151,8 +151,12 @@ func (a *app) groups() []noteGroup {
 
 func (a *app) notesPage(c *ui.Context, k tokens) {
 	ui.Box(c).Grow(1).Children(func() {
-		ui.Scroll(c).Fill().Scrollbars(false).Children(func() {
-			ui.Column(c).Padding(4, 10, 8, 10).Gap(8).Children(func() {
+		pad := float32(10)
+		if k.pt && ptClassicScroll {
+			pad = 4 // 右侧让给经典滚动条（井内左 10 / 右 4）
+		}
+		ui.Scroll(c).Fill().Scrollbars(false).TrackScroll(&a.noteScroll).Children(func() {
+			ui.Column(c).Padding(4, pad, 8, 10).Gap(8).Children(func() {
 				if a.newSecOn {
 					ui.TextInputBase(c, &a.newSec).Height(28).Padding(0, 10).Radius(10).Background(k.track).Font(fontSans).FontSize(12).
 						Focus().Placeholder(tr("分组名，↵ 创建")).OnTextKey(func(key ui.TextKey) bool {
@@ -272,7 +276,17 @@ func looksLikeSQL(s string) bool {
 func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 	idx := slices.IndexFunc(a.notes, func(x store.Note) bool { return x.ID == n.ID })
 	selected := (idx >= 0 && idx == a.selected && a.focusList) || a.chosen.Has(n.ID)
-	box := ui.Column(c).Height(116).Radius(10).Background(k.card).Key(n.ID)
+	compact := a.store.Settings().CardDensity == "compact"
+	var box ui.Element
+	if compact {
+		box = ui.Row(c).Height(40).Radius(10).AlignItems(ui.Center).Key(n.ID)
+	} else {
+		box = ui.Column(c).Height(116).Radius(10).Key(n.ID)
+	}
+	cardFill(box, k)
+	if k.pt {
+		box.Radius(0)
+	}
 	if selected {
 		box.Border(1, k.fg.Alpha(0.35))
 	}
@@ -284,8 +298,15 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 		a.cardMenu(c, m, max(idx, 0), n)
 	})
 	box.Children(func() {
+		if compact {
+			a.compactCard(c, k, n, hovered)
+			return
+		}
 		head := ui.Row(c).Height(28).Padding(0, 8).Gap(6).AlignItems(ui.Center).Radius(10, 10, 0, 0)
 		head.LinearGradient(ui.LinearGradient{From: k.cardHeadFrom, To: k.cardHeadTo, Angle: 135})
+		if k.pt {
+			head.Radius(0).InsetShadow(0, -1, 0, 0, ptBlack).InsetShadow(1, 1, 0, 0, ui.RGBA(255, 255, 255, 0.6))
+		}
 		head.Children(func() { text(c, cardTitle(n), 11, 16, 600, k.cardHeadText).SingleLine() })
 		ui.Column(c).Height(62).Margin(4, 8, 0, 8).Clip().Children(func() {
 			if a.editing == n.ID {
@@ -327,6 +348,9 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 		if hovered {
 			a.cardActions(c, k, n)
 		}
+		if k.pt { // Platinum 卡片 1px #999 描边（压在通栏之上）
+			ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Border(1, ptG600).PassThrough()
+		}
 	})
 	if box.Clicked() {
 		mods := box.ClickModifiers()
@@ -354,9 +378,50 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 	}
 }
 
+// compactCard 是紧凑密度的单行卡（Tauri cardDensity=compact：40 高，左侧拖拽把手，单行省略，悬停操作钮垂直居中）。
+func (a *app) compactCard(c *ui.Context, k tokens, n store.Note, hovered bool) {
+	ui.Box(c).Size(18, 18).Margin(0, 0, 0, 4).Padding(2).Opacity(0.6).Children(func() { licon(c, "grip-vertical", 14, k.muted.Alpha(0.5)) })
+	ui.Row(c).Grow(1).Basis(0).Padding(0, 8).Children(func() {
+		if a.editing == n.ID {
+			ui.TextInputBase(c, &a.editText).Grow(1).Font(fontSans).FontSize(12).FixedLineHeight(17).TextColor(k.fg).Focus().
+				OnTextKey(func(key ui.TextKey) bool {
+					switch key.Key {
+					case ui.KeyEnter:
+						a.editText = key.Text()
+						a.commitEdit()
+						return true
+					case ui.KeyEscape:
+						a.editing = ""
+						return true
+					}
+					return false
+				})
+			return
+		}
+		line := strings.Join(strings.Fields(n.Text), " ")
+		if n.Kind == "image" {
+			line = tr("图片")
+		}
+		if cardTitle(n) == "sql" {
+			text(c, line, 11, 16, 400, k.fg).Font(fontMono).SingleLine().Grow(1).Basis(0)
+		} else {
+			text(c, line, 12, 17, 400, k.fg).SingleLine().Grow(1).Basis(0)
+		}
+	})
+	if hovered {
+		a.cardActionsAt(c, k, n, 9)
+	}
+}
+
 // cardActions 是悬停时出现在卡片右下角的浮动操作钮组（22×22，间距 2）。
-func (a *app) cardActions(c *ui.Context, k tokens, n store.Note) {
-	ui.Row(c).Absolute().Right(8).Bottom(4).Gap(2).Children(func() {
+func (a *app) cardActions(c *ui.Context, k tokens, n store.Note) { a.cardActionsAt(c, k, n, 4) }
+
+func (a *app) cardActionsAt(c *ui.Context, k tokens, n store.Note, bottom float32) {
+	right := float32(8)
+	if bottom != 4 {
+		right = 4
+	}
+	ui.Row(c).Absolute().Right(right).Bottom(bottom).Gap(2).Children(func() {
 		for _, act := range []struct{ icon, tip string }{
 			{"send", "发送（⌘↵）"}, {"expand", "在详情窗打开"}, {"pencil", "编辑"}, {"eye-off", "模糊内容"}, {"trash-2", "删除"},
 		} {
@@ -430,7 +495,11 @@ func isWord(b byte) bool {
 }
 
 func (a *app) hintsRow(c *ui.Context, k tokens) {
-	ui.Row(c).Height(20).Margin(0, 12).Gap(10).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).Height(20).Margin(0, 12).Gap(10).AlignItems(ui.Center).Children(func() { a.hintItems(c, k) })
+}
+
+func (a *app) hintItems(c *ui.Context, k tokens) {
+	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 		hints := [][2]string{{"↑↓", "选卡片"}, {"⌘F", "搜索"}, {"⌘K", "命令"}, {"长按 ⌥ Option", "全部快捷键"}}
 		switch {
 		case a.page == pageTasks:
@@ -451,35 +520,40 @@ func (a *app) composerBar(c *ui.Context, k tokens) {
 	ui.Column(c).Height(60).Padding(6, 12, 12, 12).Children(func() {
 		box := ui.Row(c).Height(42).Padding(8, 10).Gap(6).Radius(14).Background(k.track).Border(1, k.inputBorder).
 			InsetShadow(0, 1, 2, 0, k.insetShadow).AlignItems(ui.Center)
-		box.Children(func() {
-			pick := ui.Row(c).Height(24).Padding(0, 6).Gap(4).Radius(8).AlignItems(ui.Center)
-			pick.Children(func() {
-				licon(c, "folder-input", 12, k.muted)
-				text(c, sectionName(a.composerSection()), 11, 16, 400, k.muted)
-				licon(c, "chevron-up", 10, k.muted)
-			})
-			pick.Menu(func(m *ui.Menu) {
-				for _, s := range a.store.Sections() {
-					if s.ID != store.SectionClipboard && m.Item(sectionName(s)).Radio(s.ID == a.section).Chosen() {
-						a.section = s.ID
-					}
+		box.Children(func() { a.composerRow(c, k) })
+	})
+}
+
+// composerRow 是输入区内容：分组选择 · 多行输入 · 加入队列钮。
+func (a *app) composerRow(c *ui.Context, k tokens) {
+	ui.Row(c).Grow(1).Gap(6).AlignItems(ui.Center).Children(func() {
+		pick := ui.Row(c).Height(24).Padding(0, 6).Gap(4).Radius(8).AlignItems(ui.Center)
+		pick.Children(func() {
+			licon(c, "folder-input", 12, k.muted)
+			text(c, sectionName(a.composerSection()), 11, 16, 400, k.muted)
+			licon(c, "chevron-up", 10, k.muted)
+		})
+		pick.Menu(func(m *ui.Menu) {
+			for _, s := range a.store.Sections() {
+				if s.ID != store.SectionClipboard && m.Item(sectionName(s)).Radio(s.ID == a.section).Chosen() {
+					a.section = s.ID
 				}
-			})
-			ui.TextAreaBase(c, &a.draft).Bind(&a.draftIn).Grow(1).Lines(1, 6).Font(fontSans).FontSize(13).FixedLineHeight(19.5).
-				TextColor(k.fg).PlaceholderColor(k.muted).Placeholder(tr("添加笔记或提示词…")).
-				OnTextKey(func(key ui.TextKey) bool {
-					if key.Key == ui.KeyEnter && key.Mods == 0 {
-						a.draft = key.Text()
-						a.addDraft()
-						key.SetText(a.draft)
-						return true
-					}
-					return false
-				})
-			if a.iconButton(c, k, "arrow-up-right", 22, 14, tr("加入队列（↵）")) {
-				a.addDraft()
 			}
 		})
+		ui.TextAreaBase(c, &a.draft).Bind(&a.draftIn).Grow(1).Lines(1, 6).Font(fontSans).FontSize(13).FixedLineHeight(19.5).
+			TextColor(k.fg).PlaceholderColor(k.muted).Placeholder(tr("添加笔记或提示词…")).
+			OnTextKey(func(key ui.TextKey) bool {
+				if key.Key == ui.KeyEnter && key.Mods == 0 {
+					a.draft = key.Text()
+					a.addDraft()
+					key.SetText(a.draft)
+					return true
+				}
+				return false
+			})
+		if a.iconButton(c, k, "arrow-up-right", 22, 14, tr("加入队列（↵）")) {
+			a.addDraft()
+		}
 	})
 }
 

@@ -63,6 +63,7 @@ type tokens struct {
 	chip                                   ui.Color // 目标应用图标底
 	ok                                     ui.Color // 「可发送」绿点
 	card                                   ui.Color
+	cardBottom                             ui.Color // 配色方案的卡片底部渐变终点（零值 = 纯色）
 	cardHeadFrom, cardHeadTo               ui.Color // 卡片标题条（浅色为 135° 渐变，深色为纯色）
 	cardHeadText                           ui.Color
 	floatBtn                               ui.Color // 卡片悬浮操作钮
@@ -77,6 +78,7 @@ type tokens struct {
 	sparkRow, laterChip                  ui.Color
 	bandLine                             ui.Color // 剪贴页分段头细线
 	pressed                              ui.Color // 浮钮按下态（如已置顶）
+	pt                                   bool     // Platinum 配色方案（直角斜面，结构另绘）
 }
 
 func init() {
@@ -121,9 +123,9 @@ var (
 
 func tok(c *ui.Context) tokens {
 	if c.Theme().Dark {
-		return darkTokens
+		return schemed(darkTokens)
 	}
-	return lightTokens
+	return schemed(lightTokens)
 }
 
 var iconCache = map[string]*ui.SVG{}
