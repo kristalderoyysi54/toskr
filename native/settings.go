@@ -89,7 +89,6 @@ func (a *app) saveSettings() {
 	if oldGlass != st.Glass {
 		v := vibrancyFor(st.Glass)
 		a.panel.SetVibrancy(v)
-		a.hud.SetVibrancy(v)
 	}
 	a.panel.Invalidate()
 }

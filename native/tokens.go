@@ -162,6 +162,17 @@ func liconFilled(c *ui.Context, name string, size float32, color ui.Color) ui.El
 // amber400 是置顶图钉色（tailwind amber-400，两种配色同值）。
 var amber400 = oklch(0.828, 0.189, 84.429, 1)
 
+// tightText 用于行高小于字体自然行高（约 1.4×字号）的场合（CSS leading-tight 等）：
+// mygo 不会把行高压到自然行高以下，这里用定高盒裁出 CSS 的行盒，字形按半行距居中。
+func tightText(c *ui.Context, s string, size, lineHeight float32, weight int, color ui.Color) ui.Element {
+	natural := size * 1.4
+	box := ui.Box(c).Height(lineHeight)
+	box.Children(func() {
+		text(c, s, size, natural, weight, color).SingleLine().FillWidth().Margin((lineHeight-natural)/2, 0, 0, 0)
+	})
+	return box
+}
+
 // text 按 Tauri 的字阶设置字号、字重与固定行高。
 func text(c *ui.Context, s string, size, lineHeight float32, weight int, color ui.Color) ui.Element {
 	return ui.Text(c, s).Font(fontSans).FontSize(size).FixedLineHeight(lineHeight).FontWeight(weight).TextColor(color)

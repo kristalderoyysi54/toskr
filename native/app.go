@@ -125,6 +125,8 @@ type app struct {
 	// HUD
 	hudText, hudKind string
 	hudGen           int
+	hudUndo          func() // 可撤销气泡的撤销动作
+	hudHover         bool   // 光标在气泡上（关闭穿透、显出撤销）
 
 	// 设置窗编辑态
 	setModifier                         int
@@ -277,11 +279,14 @@ func (a *app) onTrigger() {
 				a.showHUD("warn", "保存失败："+err.Error())
 				return
 			}
-			kind, msg := "added", tr("已加入队列 · ")+preview(note.Text, 18)
 			if dup {
-				kind, msg = "duplicate", tr("已存在，移到顶部")
+				a.showHUD("duplicate", preview(note.Text, 40))
+				return
 			}
-			a.showHUD(kind, msg)
+			a.showHUDUndo("added", preview(note.Text, 40), func() { // 撤销捕获：删掉刚收进的笔记
+				a.store.Delete(note.ID)
+				a.reload()
+			})
 		})
 	}()
 }

@@ -341,7 +341,12 @@ func (a *app) captureSecret(text, sourceApp string) bool {
 		default:
 			a.secretPlain[sec.ID] = res.Plaintext // 捕获即解密：直接显现，开始倒计时
 			a.revealed[sec.ID] = time.Now().Add(time.Duration(st.SecretRevealMs) * time.Millisecond)
-			a.showHUD("added", fmt.Sprintf(tr("已解密 1 条 · 用【%s】"), res.KeyLabel))
+			id := sec.ID
+			a.showHUDUndo("added", fmt.Sprintf(tr("已解密 1 条 · 用【%s】"), res.KeyLabel), func() {
+				a.store.DeleteSecret(id)
+				a.remask(id)
+				a.reload()
+			})
 		}
 	})
 	return true

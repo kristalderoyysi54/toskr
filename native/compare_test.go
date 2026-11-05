@@ -156,6 +156,10 @@ func TestCompareWithTauri(t *testing.T) {
 	_ = st.SetSettings(cfg)
 	a.noteSub = 0
 
+	// HUD（264×100）：可撤销的捕获气泡，未悬停
+	a.hudKind, a.hudText, a.hudUndo, a.hudHover = "added", "会议纪要：周五前完成 mygo 原生版对比报告", func() {}, false
+	compareSized(t, dir, "hud", a.hudView, 264, 100)
+
 	// 设置窗（1040×720，首屏「窗口与外观 · 通用」）
 	a.openSettingsState()
 	compareSized(t, dir, "settings", a.settingsView, 1040, 720)
