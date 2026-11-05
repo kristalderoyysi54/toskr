@@ -30,6 +30,7 @@ func (a *app) surface(c *ui.Context, e ui.Element, clarity float32) ui.Element {
 // 面板底色是 Tauri 叠在模糊材质上的半透明色；材质本身换成原生模糊 / 液态玻璃。
 func (a *app) panelView(c *ui.Context) {
 	registerFonts()
+	a.drainUpdates()
 	k := tok(c)
 	if c.Vibrancy() {
 		c.Root().Background(k.window)

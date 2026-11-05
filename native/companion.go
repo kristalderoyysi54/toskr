@@ -8,7 +8,7 @@ import (
 	"github.com/toskr/native/internal/macos"
 )
 
-const panelW, panelMargin = 360, 10
+const panelW, panelMargin = 380, 10 // 与 Tauri 主窗口默认宽 380 一致
 
 // panelBounds：目标是伴随应用（终端 / 编辑器）且能读到其焦点窗口时，面板磁吸到
 // 该窗口右缘外侧（放不下则贴在窗口内侧右缘），高度跟随窗口；否则贴光标所在屏右缘全高。

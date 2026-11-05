@@ -65,13 +65,14 @@ func start() (*app, error) {
 	a.panel = mygo.NewWindow(mygo.WindowOptions{
 		Title: "Toskr", Panel: true, Hidden: true, Frameless: true, Transparent: true,
 		Vibrancy: vibrancyFor(st.Settings().Glass), CornerRadius: 18,
-		Width: 360, Height: 720, DisableResize: true,
+		Width: 380, Height: 720, DisableResize: true,
 		Content: ui.View(a.panelView),
 	})
 	a.panel.SetActiveAppearance(true)
 	a.panel.OnClose(func(e *mygo.CloseEvent) { e.PreventDefault(); a.hidePanel() })
 	a.panel.OnBlur(func() {
 		diag.Push("面板失焦 pinned=%v", a.pinned)
+		a.remaskAll() // 秘文失焦即回遮罩（钉住时也一样，与 Tauri 一致）
 		if !a.pinned {
 			a.hidePanel()
 		}

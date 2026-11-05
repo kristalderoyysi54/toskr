@@ -13,6 +13,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/toskr/native/internal/macos"
+	"github.com/toskr/native/internal/secretcodec"
 	"github.com/toskr/native/internal/store"
 )
 
@@ -265,6 +266,9 @@ func (a *app) settingsView(c *ui.Context) {
 			}},
 		}}},
 	}
+	if st.SecretEnabled { // 与 Tauri 一致：秘文功能开启后侧栏才出现「秘文」分类
+		pages = slices.Insert(pages, 5, setPage{label: "秘文", icon: "key-round", sections: [][]setSection{a.secretSections(c, k, s, st)}})
+	}
 	a.settingsShell(c, pages)
 	if changed {
 		a.saveSettings()
@@ -418,4 +422,91 @@ func (a *app) checkUpdate() {
 
 func keyLabel(s string) string {
 	return strings.NewReplacer("Cmd+", "⌘", "CmdOrCtrl+", "⌘", "Shift+", "⇧", "Alt+", "⌥", "Ctrl+", "⌃").Replace(s)
+}
+
+// secretSections 是设置「秘文」：共享密钥增删、默认密钥、密文格式、显现时长。
+func (a *app) secretSections(c *ui.Context, k tokens, s settingsTokens, st store.Settings) []setSection {
+	save := func(fn func(*store.Settings)) {
+		cur := a.store.Settings()
+		fn(&cur)
+		_ = a.store.SetSettings(cur)
+	}
+	var keys []setRow
+	for _, key := range st.SecretKeys {
+		hint := tr("创建于 ") + key.CreatedAt.Format("2006-01-02")
+		if key.Note != "" {
+			hint = key.Note + " · " + hint
+		}
+		if key.ID == st.SecretDefaultKeyID {
+			hint = tr("默认 · ") + hint
+		}
+		keys = append(keys, setRow{title: cmpOr(key.Label, tr("未命名密钥")), hint: hint, control: func() {
+			ui.Row(c).Gap(6).Children(func() {
+				if key.ID != st.SecretDefaultKeyID && button(c, s, "设为默认") {
+					save(func(x *store.Settings) { x.SecretDefaultKeyID = key.ID })
+				}
+				if button(c, s, "删除") {
+					save(func(x *store.Settings) {
+						x.SecretKeys = slices.DeleteFunc(x.SecretKeys, func(y store.SecretKey) bool { return y.ID == key.ID })
+						if x.SecretDefaultKeyID == key.ID {
+							x.SecretDefaultKeyID = ""
+						}
+					})
+				}
+			})
+		}})
+	}
+	keys = append(keys, setRow{title: tr("添加共享密钥"), hint: tr("与对方约定相同的暗号（中文、字符皆可），备注写清给谁、何时设置"), below: func() {
+		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+			textField(c, k, s, &a.newKeyLabel, 120, tr("给谁 / 场景"), false)
+			textField(c, k, s, &a.newKeyPass, 200, tr("共享密钥"), true)
+			textField(c, k, s, &a.newKeyNote, 160, tr("备注（可选）"), false)
+			if button(c, s, "添加") {
+				if strings.TrimSpace(a.newKeyPass) == "" {
+					c.Toast(tr("密钥不能为空"))
+					return
+				}
+				key := store.SecretKey{ID: fmt.Sprintf("k%d", time.Now().UnixNano()), Label: strings.TrimSpace(a.newKeyLabel),
+					Passphrase: a.newKeyPass, Note: strings.TrimSpace(a.newKeyNote), CreatedAt: time.Now()}
+				save(func(x *store.Settings) {
+					x.SecretKeys = append(x.SecretKeys, key)
+					if x.SecretDefaultKeyID == "" {
+						x.SecretDefaultKeyID = key.ID
+					}
+				})
+				a.newKeyLabel, a.newKeyPass, a.newKeyNote = "", "", ""
+			}
+		})
+	}})
+	style := 0
+	for i, o := range secretcodec.StyleOptions {
+		if string(o.Value) == st.SecretCipherStyle {
+			style = i
+		}
+	}
+	var styleLabels []string
+	for _, o := range secretcodec.StyleOptions {
+		styleLabels = append(styleLabels, o.ShortLabel)
+	}
+	reveal := float64(st.SecretRevealMs) / 1000
+	revealLabel := tr("不自动")
+	if reveal > 0 {
+		revealLabel = fmt.Sprintf("%ds", int(reveal))
+	}
+	return []setSection{
+		{tr("共享密钥"), keys},
+		{tr("收发"), []setRow{
+			{title: tr("默认密文格式"), hint: tr("中文文本 / 代码（随机语言）/ 日志记录 / 英文引用；接收端自动识别"), control: func() {
+				if segmented(c, k, &style, styleLabels...) {
+					save(func(x *store.Settings) { x.SecretCipherStyle = string(secretcodec.StyleOptions[style].Value) })
+				}
+			}},
+			{title: tr("显现时长"), hint: tr("点击解密后自动回遮罩；面板隐藏或失焦时立即回遮罩"), control: func() {
+				if sliderValue(c, k, &reveal, 0, 60, 1, revealLabel) {
+					save(func(x *store.Settings) { x.SecretRevealMs = int(reveal) * 1000 })
+				}
+			}},
+			{title: tr("安全边界"), hint: tr("防 IM / 网络 / 肩窥：密文用 AES-GCM，密钥经 PBKDF2 派生；不防本机取证（密钥随本地加密数据保存）")},
+		}},
+	}
 }

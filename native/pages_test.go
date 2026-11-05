@@ -10,6 +10,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/toskr/native/internal/macos"
+	"github.com/toskr/native/internal/secretcodec"
 	"github.com/toskr/native/internal/store"
 )
 
@@ -206,42 +207,51 @@ func TestBillsSubviewFormPayAndUndo(t *testing.T) {
 
 func billDueBadgeText(b store.Bill, now time.Time) string { s, _ := billDueBadge(b, now); return s }
 
-func TestSecretsMaskedUntilRevealed(t *testing.T) {
-	a, tt := testApp(t)
-	a.store.AddSecret("服务器", "root-pass-123")
-	enableSecret(a)
-	tt.Frame()
-	if tt.HasText("root-pass-123") || !tt.HasText("服务器") {
-		t.Fatalf("默认必须遮罩 %v", tt.Texts())
-	}
-	a.revealed[a.secrets[0].ID] = time.Now().Add(time.Minute)
-	tt.Frame()
-	if !tt.HasText("root-pass-123") {
-		t.Fatal("显现后应可见")
-	}
-	a.revealed[a.secrets[0].ID] = time.Now().Add(-time.Second)
-	tt.Frame()
-	if tt.HasText("root-pass-123") {
-		t.Fatal("过期后应自动回遮罩")
-	}
-}
-
-func TestSealToolRoundTripInPanel(t *testing.T) {
+func TestSecretSealCardRevealAndCaptureRoute(t *testing.T) {
 	a, tt := testApp(t)
 	enableSecret(a)
-	a.sealIn, a.sealPass = "卡号在这", "pw"
+	st := a.store.Settings()
+	st.SecretKeys = []store.SecretKey{{ID: "k1", Label: "小王", Passphrase: "月亮湾"}}
+	st.SecretCipherStyle = "code"
+	_ = a.store.SetSettings(st)
 	tt.Frame()
-	_ = tt.Click("生成密文")
-	tt.Frame()
-	if !strings.HasPrefix(a.sealOut, "const cacheSnapshot") {
-		t.Fatalf("%q", a.sealOut)
+	if !tt.HasText("小王") || !tt.HasText("代码") || !tt.HasText("还没有秘文") {
+		t.Fatalf("收发条应显示默认密钥与格式 %v", tt.Texts())
 	}
-	a.sealOpenOn, a.sealIn = true, a.sealOut
+	a.secretDraft = "周五上线窗口改到 22:00"
+	a.sealSecret(nil, false)
 	tt.Frame()
-	_ = tt.Click("解开密文")
+	waitFor(t, func() bool { tt.Frame(); return len(a.secrets) == 1 })
+	sec := a.secrets[0]
+	if sec.Direction != "out" || sec.KeyID != "k1" || strings.Contains(sec.Text, "22:00") || tt.HasText("周五上线窗口改到 22:00") {
+		t.Fatalf("应只存密文、默认遮罩 %+v %v", sec, tt.Texts())
+	}
+	if !tt.HasText("我发出") || !tt.HasText("点击解密查看") {
+		t.Fatalf("卡片 %v", tt.Texts())
+	}
+	a.openSecretCard(sec, a.store.Settings())
+	waitFor(t, func() bool { tt.Frame(); return tt.HasText("周五上线窗口改到 22:00") })
+	a.hidePanel()
 	tt.Frame()
-	if a.sealOut != "卡号在这" {
-		t.Fatalf("%q", a.sealOut)
+	if tt.HasText("周五上线窗口改到 22:00") {
+		t.Fatal("面板隐藏后应回遮罩")
+	}
+	// 捕获路由：别人用同一暗号发来的密文 → 进秘文页并解密；无匹配密钥 → 锁定卡
+	in, _ := secretcodec.Seal("服务器密码改了", "月亮湾", secretcodec.StyleClassic)
+	if !a.captureSecret(in, "微信") {
+		t.Fatal("密文信封应走秘文分支")
+	}
+	locked, _ := secretcodec.Seal("本机没这把钥匙", "别的暗号", secretcodec.StyleLog)
+	a.captureSecret(locked, "微信")
+	tt.Frame()
+	if len(a.secrets) != 3 || !tt.HasText("服务器密码改了") || !tt.HasText("无匹配密钥 · 点击重试") || !tt.HasText("收到") {
+		t.Fatalf("捕获后 %d 张卡 %v", len(a.secrets), tt.Texts())
+	}
+	if _, r := a.store.AddSecret(store.Secret{Text: in}); r != "duplicate" {
+		t.Fatalf("同一信封应去重，得 %q", r)
+	}
+	if a.captureSecret("普通的一句话", "微信") {
+		t.Fatal("普通文本不应被当作秘文")
 	}
 }
 
@@ -282,7 +292,7 @@ func TestDockBesideCompanionWindow(t *testing.T) {
 		t.Fatalf("应贴在窗口右侧 %+v", got)
 	}
 	full := dockBeside(macos.Rect{X: 0, Y: 25, W: 1440, H: 875}, wa)
-	if full.X != 1440-360-6 || full.Y+full.Height > 900-10 {
+	if full.X != 1440-panelW-6 || full.Y+full.Height > 900-10 {
 		t.Fatalf("满屏窗口应放到内侧且不越出工作区 %+v", full)
 	}
 }
@@ -336,7 +346,7 @@ func (r *recSys) Write(items []macos.Item, _ bool) int {
 
 func waitFor(t *testing.T, ok func() bool) {
 	t.Helper()
-	for range 200 {
+	for range 800 { // 秘文试解是 PBKDF2 15 万轮，-race 下单次可达数百毫秒
 		if ok() {
 			return
 		}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -86,6 +87,15 @@ type app struct {
 	clipView  string // 剪贴页视图：time | source | image
 	noteSub   int    // 内容页子视图：0 笔记 1 秘文（秘文功能开启时）
 
+	// 秘文
+	secretKeyID   string
+	secretDraft   string
+	secretBusy    bool
+	secretOpening map[string]bool   // 正在后台试解的卡
+	secretPlain   map[string]string // 已显现的明文（只在内存）
+	updMu         sync.Mutex
+	updQueue      []func() // 无窗口时的主线程回调队列（视图测试）
+
 	// 订阅子视图
 	billDay       time.Time
 	billView      string // week | month
@@ -105,14 +115,8 @@ type app struct {
 	billForm billForm
 
 	// 秘文页
-	secrets    []store.Secret
-	revealed   map[string]time.Time
-	secTitle   string
-	secBody    string
-	sealPass   string
-	sealIn     string
-	sealOut    string
-	sealOpenOn bool
+	secrets  []store.Secret
+	revealed map[string]time.Time
 
 	// 详情窗
 	detailID   string
@@ -123,31 +127,32 @@ type app struct {
 	hudGen           int
 
 	// 设置窗编辑态
-	setModifier int
-	setGap      float64
-	setClip     bool
-	setGlass    int
-	setExcluded string
-	setRetain   float64
-	setLang     int
-	setAIKey    string
-	setAIEnd    string
-	setAIModel  string
-	setCompan   string
-	axTrusted   bool
-	tapErr      string
-	shortcut    string
-	recovery    []string
-	health      string
-	updateMsg   string
-	setPage     int    // 设置窗左侧分类
-	setSub      int    // 分类内子页签
-	setQuery    string // 设置搜索
-	setSearch   ui.Handle
+	setModifier                         int
+	setGap                              float64
+	setClip                             bool
+	setGlass                            int
+	setExcluded                         string
+	setRetain                           float64
+	setLang                             int
+	setAIKey                            string
+	setAIEnd                            string
+	setAIModel                          string
+	setCompan                           string
+	axTrusted                           bool
+	tapErr                              string
+	shortcut                            string
+	recovery                            []string
+	health                              string
+	updateMsg                           string
+	setPage                             int    // 设置窗左侧分类
+	setSub                              int    // 分类内子页签
+	setQuery                            string // 设置搜索
+	setSearch                           ui.Handle
+	newKeyLabel, newKeyPass, newKeyNote string // 设置「秘文」添加密钥的草稿
 }
 
 func newApp(sys core.System, st *store.Store) *app {
-	a := &app{sys: sys, store: st, page: pageNotes, section: store.SectionInbox, doneOpen: map[string]bool{}, bandOpen: map[string]bool{"overdue": true, "spark": true}, clipView: "time", billView: "week", billFilter: "upcoming", clock: time.Now, thumbs: map[string]ui.ImageSource{}, revealed: map[string]time.Time{}}
+	a := &app{sys: sys, store: st, page: pageNotes, section: store.SectionInbox, doneOpen: map[string]bool{}, bandOpen: map[string]bool{"overdue": true, "spark": true}, clipView: "time", billView: "week", billFilter: "upcoming", clock: time.Now, thumbs: map[string]ui.ImageSource{}, revealed: map[string]time.Time{}, secretOpening: map[string]bool{}, secretPlain: map[string]string{}}
 	a.reload()
 	return a
 }
@@ -232,6 +237,7 @@ func (a *app) showPanel() {
 
 func (a *app) hidePanel() {
 	a.editing = ""
+	a.remaskAll() // 秘文：面板收起即回遮罩，明文丢弃
 	if a.panel != nil {
 		a.panel.Hide()
 	}
@@ -258,6 +264,9 @@ func (a *app) onTrigger() {
 			diag.Push("捕获: 无选中内容 → 开关面板 (%dms)", time.Since(started).Milliseconds())
 			a.panel.Update(a.togglePanel)
 			return
+		}
+		if a.captureSecret(got.Text, front.Name) {
+			return // 秘文信封：解密进秘文页，绝不进普通笔记
 		}
 		note, dup, err := a.store.Add(store.Note{Section: store.SectionInbox, Text: got.Text, HTML: got.HTML,
 			SourceApp: front.Name, BundleID: front.BundleID})

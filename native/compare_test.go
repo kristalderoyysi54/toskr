@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/color"
@@ -128,6 +129,33 @@ func TestCompareWithTauri(t *testing.T) {
 	cfg.SubscriptionsEnabled = false
 	_ = st.SetSettings(cfg)
 
+	// 内容 → 秘文：与 setup-secret.js 同两把密钥、三张卡；密文随机，逐配色读参照当次生成的密文
+	cfg.SecretEnabled = true
+	cfg.SecretKeys = []store.SecretKey{{ID: "k1", Label: "小王", Passphrase: "月亮湾"}, {ID: "k2", Label: "项目组", Passphrase: "蓝鲸-2026"}}
+	cfg.SecretDefaultKeyID, cfg.SecretCipherStyle = "k1", "classic"
+	_ = st.SetSettings(cfg)
+	a.switchPage(pageNotes)
+	a.noteSub = 1
+	for _, scheme := range []string{"light", "dark"} {
+		raw, err := os.ReadFile(filepath.Join(dir, "ref-secret-ciphers-"+scheme+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ciphers []string
+		_ = json.Unmarshal(raw, &ciphers)
+		for _, x := range st.Secrets() {
+			st.DeleteSecret(x.ID)
+		}
+		st.AddSecret(store.Secret{Text: ciphers[2], Direction: "in", CreatedAt: now.Add(-3 * time.Hour)})
+		st.AddSecret(store.Secret{Text: ciphers[1], KeyID: "k2", KeyLabel: "项目组", Direction: "in", CreatedAt: now.Add(-42 * time.Minute)})
+		st.AddSecret(store.Secret{Text: ciphers[0], KeyID: "k1", KeyLabel: "小王", Direction: "out", CreatedAt: now.Add(-3 * time.Minute)})
+		a.reload()
+		compareOne(t, dir, "secret", a.panelView, 380, 760, scheme)
+	}
+	cfg.SecretEnabled = false
+	_ = st.SetSettings(cfg)
+	a.noteSub = 0
+
 	// 设置窗（1040×720，首屏「窗口与外观 · 通用」）
 	a.openSettingsState()
 	compareSized(t, dir, "settings", a.settingsView, 1040, 720)
@@ -139,6 +167,12 @@ func compareView(t *testing.T, dir, name string, a *app) {
 
 func compareSized(t *testing.T, dir, name string, view func(*ui.Context), w, h int) {
 	for _, scheme := range []string{"light", "dark"} {
+		compareOne(t, dir, name, view, w, h, scheme)
+	}
+}
+
+func compareOne(t *testing.T, dir, name string, view func(*ui.Context), w, h int, scheme string) {
+	{
 		tt := ui.NewTester(view, w, h)
 		tt.SetDark(scheme == "dark")
 		tt.SetVibrancy(false)

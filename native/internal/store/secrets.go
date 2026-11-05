@@ -1,106 +1,102 @@
 package store
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/pbkdf2"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
-	"errors"
-	"fmt"
-	"regexp"
 	"slices"
-	"strings"
 	"time"
+
+	"github.com/toskr/native/internal/secretcodec"
 )
 
-// Secret 是秘文页的一条：明文只在存储加密信封里，界面默认遮罩，显现后自动回遮罩。
+// Secret 是「内容 → 秘文」的一张卡（对应 Tauri kind="secret" 的 Note）：
+// Text 存密文信封原文，明文永不落盘，解密只在内存。KeyID 为空 = 收到但本机没有匹配密钥。
 type Secret struct {
 	ID        string    `json:"id"`
-	Title     string    `json:"title"`
-	Body      string    `json:"body"`
+	Text      string    `json:"text"`
+	KeyID     string    `json:"keyId,omitempty"`
+	KeyLabel  string    `json:"keyLabel,omitempty"`
+	Direction string    `json:"direction"` // in | out
+	SourceApp string    `json:"sourceApp,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
+}
+
+// SecretKey 是与对方约定的共享密钥（同 Tauri settings.secretKeys；随加密数据文件保存）。
+type SecretKey struct {
+	ID         string    `json:"id"`
+	Label      string    `json:"label"`
+	Passphrase string    `json:"passphrase"`
+	Note       string    `json:"note,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
 }
 
 func (s *Store) Secrets() []Secret { s.mu.Lock(); defer s.mu.Unlock(); return slices.Clone(s.secrets) }
 
-func (s *Store) AddSecret(title, body string) Secret {
-	sec := Secret{ID: newID(), Title: strings.TrimSpace(title), Body: body, CreatedAt: time.Now()}
-	if sec.Title == "" && strings.TrimSpace(body) == "" {
-		return Secret{}
+// AddSecret 收进一张秘文卡；同一信封（跨格式指纹相同）已在则返回 "duplicate"，空文本 "empty"。
+func (s *Store) AddSecret(sec Secret) (Secret, string) {
+	fp, ok := secretcodec.Fingerprint(sec.Text)
+	if !ok {
+		return Secret{}, "empty"
 	}
-	_ = s.mutate(func() bool { s.secrets = slices.Insert(s.secrets, 0, sec); return true })
-	return sec
-}
-
-func (s *Store) DeleteSecret(id string) bool {
-	ok := false
+	result := "added"
 	_ = s.mutate(func() bool {
-		i := slices.IndexFunc(s.secrets, func(x Secret) bool { return x.ID == id })
-		if i < 0 {
-			return false
+		for _, x := range s.secrets {
+			if f, _ := secretcodec.Fingerprint(x.Text); f == fp {
+				sec, result = x, "duplicate"
+				return false
+			}
 		}
-		s.secrets, ok = slices.Delete(s.secrets, i, i+1), true
+		sec.ID = newID()
+		if sec.CreatedAt.IsZero() {
+			sec.CreatedAt = time.Now()
+		}
+		if sec.Direction == "" {
+			sec.Direction = "in"
+		}
+		s.secrets = slices.Insert(s.secrets, 0, sec)
 		return true
 	})
-	return ok
+	return sec, result
 }
 
-// ---- 口令封装（发给别人的密文，伪装成一段代码） ----
-// 格式：0x86 0x17 0x01 | salt(16) | nonce(12) | ciphertext+tag，PBKDF2-SHA256 20 万轮。
-// 外观 = `const cacheSnapshot = "<hex>";`，贴进聊天时看起来像代码片段。
-
-var (
-	ErrPassphrase = errors.New("口令错误或密文已损坏")
-	ErrNotSealed  = errors.New("没有找到可解密的密文")
-	sealMagic     = []byte{0x86, 0x17, 0x01}
-	appearanceRe  = regexp.MustCompile(`"([0-9a-f]{90,})"`)
-)
-
-const pbkdfIter = 200_000
-
-func passKey(pass string, salt []byte) ([]byte, error) {
-	return pbkdf2.Key(sha256.New, pass, salt, pbkdfIter, 32)
+func (s *Store) DeleteSecret(id string) (removed Secret, pos int, ok bool) {
+	_ = s.mutate(func() bool {
+		pos = slices.IndexFunc(s.secrets, func(x Secret) bool { return x.ID == id })
+		if pos < 0 {
+			return false
+		}
+		removed, ok = s.secrets[pos], true
+		s.secrets = slices.Delete(s.secrets, pos, pos+1)
+		return true
+	})
+	return
 }
 
-func SealWithPassphrase(plain, pass string) (string, error) {
-	if pass == "" {
-		return "", errors.New("口令不能为空")
-	}
-	salt := make([]byte, 16)
-	nonce := make([]byte, 12)
-	_, _ = rand.Read(salt)
-	_, _ = rand.Read(nonce)
-	key, err := passKey(pass, salt)
-	if err != nil {
-		return "", err
-	}
-	block, _ := aes.NewCipher(key)
-	gcm, _ := cipher.NewGCM(block)
-	out := slices.Concat(sealMagic, salt, nonce, gcm.Seal(nil, nonce, []byte(plain), sealMagic))
-	return fmt.Sprintf("const cacheSnapshot = %q;\nexport default cacheSnapshot;", hex.EncodeToString(out)), nil
+func (s *Store) RestoreSecret(sec Secret, pos int) error {
+	return s.mutate(func() bool {
+		if slices.ContainsFunc(s.secrets, func(x Secret) bool { return x.ID == sec.ID }) {
+			return false
+		}
+		s.secrets = slices.Insert(s.secrets, min(max(pos, 0), len(s.secrets)), sec)
+		return true
+	})
 }
 
-func OpenWithPassphrase(appearance, pass string) (string, error) {
-	m := appearanceRe.FindStringSubmatch(appearance)
-	if m == nil {
-		return "", ErrNotSealed
+// SetSecretKey 解密命中后回写命中密钥（锁定卡在补了密钥后变为可读）。
+func (s *Store) SetSecretKey(id, keyID, keyLabel string) error {
+	return s.mutate(func() bool {
+		i := slices.IndexFunc(s.secrets, func(x Secret) bool { return x.ID == id })
+		if i < 0 || (s.secrets[i].KeyID == keyID && s.secrets[i].KeyLabel == keyLabel) {
+			return false
+		}
+		s.secrets[i].KeyID, s.secrets[i].KeyLabel = keyID, keyLabel
+		return true
+	})
+}
+
+// CodecKeys 把设置里的共享密钥转成解码器入参。
+func CodecKeys(keys []SecretKey) []secretcodec.Key {
+	out := make([]secretcodec.Key, len(keys))
+	for i, k := range keys {
+		out[i] = secretcodec.Key{ID: k.ID, Label: k.Label, Passphrase: k.Passphrase}
 	}
-	raw, err := hex.DecodeString(m[1])
-	if err != nil || len(raw) < 3+16+12+16 || string(raw[:3]) != string(sealMagic) {
-		return "", ErrNotSealed
-	}
-	salt, nonce, ct := raw[3:19], raw[19:31], raw[31:]
-	key, err := passKey(pass, salt)
-	if err != nil {
-		return "", err
-	}
-	block, _ := aes.NewCipher(key)
-	gcm, _ := cipher.NewGCM(block)
-	plain, err := gcm.Open(nil, nonce, ct, sealMagic)
-	if err != nil {
-		return "", ErrPassphrase
-	}
-	return string(plain), nil
+	return out
 }

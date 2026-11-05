@@ -432,8 +432,11 @@ func isWord(b byte) bool {
 func (a *app) hintsRow(c *ui.Context, k tokens) {
 	ui.Row(c).Height(20).Margin(0, 12).Gap(10).AlignItems(ui.Center).Children(func() {
 		hints := [][2]string{{"↑↓", "选卡片"}, {"⌘F", "搜索"}, {"⌘K", "命令"}, {"长按 ⌥ Option", "全部快捷键"}}
-		if a.page == pageTasks {
+		switch {
+		case a.page == pageTasks:
 			hints = [][2]string{{"⏎", "记下待办"}, {"⌘K", "命令"}, {"长按 ⌥ Option", "全部快捷键"}}
+		case a.page == pageNotes && a.noteSub == 1:
+			hints = [][2]string{{"⌘K", "命令"}, {"长按 ⌥ Option", "全部快捷键"}}
 		}
 		for _, h := range hints {
 			ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {

@@ -185,22 +185,6 @@ func TestBillsRollForwardAndRemind(t *testing.T) {
 	}
 }
 
-func TestPassphraseSealLooksLikeCodeAndRejectsWrongPass(t *testing.T) {
-	out, err := SealWithPassphrase("银行卡 6222…", "口令")
-	if err != nil || !strings.HasPrefix(out, "const cacheSnapshot = \"") {
-		t.Fatalf("%q %v", out, err)
-	}
-	if got, err := OpenWithPassphrase("聊天里的前后文 "+out+" 尾巴", "口令"); err != nil || got != "银行卡 6222…" {
-		t.Fatalf("%q %v", got, err)
-	}
-	if _, err := OpenWithPassphrase(out, "错的"); err != ErrPassphrase {
-		t.Fatal("错误口令必须报错")
-	}
-	if _, err := OpenWithPassphrase("hello", "口令"); err != ErrNotSealed {
-		t.Fatal("无密文应报未找到")
-	}
-}
-
 func TestMediaDedupEncryptedAndGC(t *testing.T) {
 	s, dir := open(t)
 	png := []byte("\x89PNG fake image bytes")

@@ -50,8 +50,6 @@ func TestRenderPanelSnapshots(t *testing.T) {
 	a.store.AddBill(store.Bill{Kind: "subscription", Name: "iCloud+ 200GB", Amount: 21, Cycle: "monthly", NextDueAt: now.AddDate(0, 0, 2)})
 	a.store.AddBill(store.Bill{Kind: "subscription", Name: "域名续费", Amount: 89, Cycle: "yearly", NextDueAt: now.AddDate(0, 3, 0)})
 	a.store.AddBill(store.Bill{Kind: "creditCard", Name: "招行信用卡", Amount: 3260, NextDueAt: now.AddDate(0, 0, 9)})
-	a.store.AddSecret("测试服务器 root", "Wq9-demo-passphrase")
-	a.store.AddSecret("家里 Wi-Fi", "demo-wifi-2026")
 	a.target.Name = "Cursor"
 	a.target.PID = 42
 	a.reload()
