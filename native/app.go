@@ -84,6 +84,7 @@ type app struct {
 	taskDraft string
 	taskSub   int // 0 今天 1 任务
 	sparkMode bool
+	clipView  string          // 剪贴页视图：time | source | image
 	bandOpen  map[string]bool // 智能区 / 分组折叠（已到期、灵感、已完成）
 	taskIn    ui.Handle
 	taskSel   int
@@ -133,7 +134,7 @@ type app struct {
 }
 
 func newApp(sys core.System, st *store.Store) *app {
-	a := &app{sys: sys, store: st, page: pageNotes, section: store.SectionInbox, doneOpen: map[string]bool{}, bandOpen: map[string]bool{"overdue": true, "spark": true}, clock: time.Now, thumbs: map[string]ui.ImageSource{}, revealed: map[string]time.Time{}}
+	a := &app{sys: sys, store: st, page: pageNotes, section: store.SectionInbox, doneOpen: map[string]bool{}, bandOpen: map[string]bool{"overdue": true, "spark": true}, clipView: "time", clock: time.Now, thumbs: map[string]ui.ImageSource{}, revealed: map[string]time.Time{}}
 	a.reload()
 	return a
 }
@@ -152,9 +153,7 @@ func (a *app) reload() {
 	}
 	a.notes, a.done = a.notes[:0], a.done[:0]
 	if a.page == pageClip {
-		for _, n := range store.Search(a.store.Section(store.SectionClipboard), a.query) {
-			a.notes = append(a.notes, n)
-		}
+		a.notes = arrangeClips(append(a.notes, store.Search(a.store.Section(store.SectionClipboard), a.query)...), a.clipView)
 	} else {
 		// 笔记页：所有非剪贴板分组按顺序展开，键盘选择在扁平列表上移动
 		a.noteGroups = a.groups()

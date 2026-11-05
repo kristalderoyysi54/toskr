@@ -71,6 +71,29 @@ func TestCompareWithTauri(t *testing.T) {
 	compareView(t, dir, "tasks", a)
 	a.taskSub = 1
 	compareView(t, dir, "tasklist", a)
+
+	// 剪贴页：与 setup-clip.js 同一组 4 条记录（倒序加，Add 插到顶部）；参照截图时没有任务，先清掉免得页签多出逾期徽标
+	for _, t0 := range st.Tasks() {
+		st.DeleteTask(t0.ID)
+	}
+	for _, c0 := range []struct {
+		n   store.Note
+		at  time.Time
+		pin bool
+	}{
+		{store.Note{Text: "brew install --cask toskr", SourceApp: "Terminal"}, today.Add(-5 * time.Hour), false},
+		{store.Note{Text: "周五前把 mygo 原生版对比报告发给团队，附内存与启动耗时。", SourceApp: "Safari"}, now.Add(-3 * time.Hour), true},
+		{store.Note{Text: "SELECT id, title FROM notes WHERE section = 'clipboard' ORDER BY created_at DESC;", SourceApp: "Cursor"}, now.Add(-25 * time.Minute), false},
+		{store.Note{Text: "https://github.com/egoist/mygo", Kind: "link", LinkTitle: "egoist/mygo: Native UI for Go", SourceApp: "Arc"}, now.Add(-2 * time.Minute), false},
+	} {
+		c0.n.Section = store.SectionClipboard
+		n, _, _ := st.Add(c0.n)
+		_ = st.SetCreatedAt(n.ID, c0.at)
+		_ = st.SetKept(n.ID, c0.pin)
+	}
+	a.switchPage(pageClip)
+	a.reload()
+	compareView(t, dir, "clip", a)
 }
 
 func compareView(t *testing.T, dir, name string, a *app) {

@@ -75,6 +75,8 @@ type tokens struct {
 	danger, amberBar, amberText, tealBar ui.Color
 	repeatIcon, violetText, violetIcon   ui.Color
 	sparkRow, laterChip                  ui.Color
+	bandLine                             ui.Color // 剪贴页分段头细线
+	pressed                              ui.Color // 浮钮按下态（如已置顶）
 }
 
 func init() {
@@ -89,6 +91,8 @@ func init() {
 	l.violetText, d.violetText = oklch(0.541, 0.281, 293.009, 1), oklch(0.702, 0.183, 293.541, 1)
 	l.sparkRow, d.sparkRow = ui.RGB(245, 243, 255), ui.RGBA(167, 139, 250, 0.1)
 	l.laterChip, d.laterChip = gray(0, 0.06), gray(1, 0.1)
+	l.bandLine, d.bandLine = gray(0.922, 0.6), gray(1, 0.06)
+	l.pressed, d.pressed = gray(0, 0.05), gray(1, 0.1)
 }
 
 var (
@@ -142,6 +146,21 @@ func lucideIcon(name string) *ui.SVG {
 func licon(c *ui.Context, name string, size float32, color ui.Color) ui.Element {
 	return ui.Icon(c, lucideIcon(name)).Size(size, size).TextColor(color)
 }
+
+// liconFilled 画实心版 lucide 图标（对应 Tauri 的 fill-current 类，如置顶图钉）。
+func liconFilled(c *ui.Context, name string, size float32, color ui.Color) ui.Element {
+	key := name + "#fill"
+	s, ok := iconCache[key]
+	if !ok {
+		lucideIcon(name) // 名称校验
+		s = svg(`<g fill="currentColor">` + lucide[name] + `</g>`)
+		iconCache[key] = s
+	}
+	return ui.Icon(c, s).Size(size, size).TextColor(color)
+}
+
+// amber400 是置顶图钉色（tailwind amber-400，两种配色同值）。
+var amber400 = oklch(0.828, 0.189, 84.429, 1)
 
 // text 按 Tauri 的字阶设置字号、字重与固定行高。
 func text(c *ui.Context, s string, size, lineHeight float32, weight int, color ui.Color) ui.Element {

@@ -64,7 +64,7 @@ func (a *app) panelView(c *ui.Context) {
 			a.notesPage(c, k)
 		}
 		a.hintsRow(c, k)
-		if a.page != pageTasks { // 任务页没有发送输入区，与 Tauri 一致
+		if a.page == pageNotes { // 发送输入区只在笔记页，与 Tauri 一致（剪贴 / 任务页没有）
 			a.composerBar(c, k)
 		}
 	})
@@ -128,24 +128,6 @@ func (a *app) moreMenu(c *ui.Context, k tokens) {
 	if c.Shortcut(0, ui.KeyEscape) {
 		a.menuOpen = false
 	}
-}
-
-func (a *app) clipPage(c *ui.Context, k tokens) {
-	ui.Scroll(c).Grow(1).Scrollbars(false).Children(func() {
-		ui.Column(c).Padding(4, 10, 8, 10).Gap(4).Children(func() {
-			if len(a.notes) == 0 {
-				ui.Column(c).Padding(64, 24, 40, 24).Gap(8).AlignItems(ui.Center).Children(func() {
-					licon(c, "clipboard-list", 24, k.muted.Alpha(0.5))
-					text(c, tr("还没有剪贴板记录"), 13, 18, 500, k.muted)
-					text(c, tr("复制任意文字、链接或图片试试，会自动出现在这里。"), 11, 16.5, 400, k.muted).TextAlign(ui.Center).Wrap()
-				})
-				return
-			}
-			for _, n := range a.notes {
-				a.noteCard(c, k, n)
-			}
-		})
-	})
 }
 
 func (a *app) panelKeys(c *ui.Context) {
