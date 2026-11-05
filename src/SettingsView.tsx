@@ -500,9 +500,19 @@ export default function SettingsView() {
   }, [section, searchTarget]);
 
   useEffect(() => {
+    // 按需创建的设置窗：拿到首份设置快照后（分区门禁依赖设置）再领取挂起的分区深链；
+    // 主窗迟迟不回快照时 1.5s 兜底领取。
+    let readyReported = false;
+    const reportReady = () => {
+      if (readyReported) return;
+      readyReported = true;
+      void api.settingsWindowReady().catch(() => {});
+    };
+    const readyFallback = window.setTimeout(reportReady, 1500);
     const un = listen<Settings>(SETTINGS_STATE, (e) => {
       currentSettingsRef.current = e.payload;
       setSettings(e.payload);
+      reportReady();
     });
     // 外部指路（更新提醒气泡点击等）→ 切到指定分区
     const unSection = listen<SettingsSectionPayload>(SETTINGS_SECTION, (e) => {
@@ -541,6 +551,7 @@ export default function SettingsView() {
       .then(() => emitTo("main", SETTINGS_REQUEST, {}))
       .catch(() => {});
     return () => {
+      window.clearTimeout(readyFallback);
       un.then((fn) => fn());
       unSection.then((fn) => fn());
       unDataActivity.then((fn) => fn());

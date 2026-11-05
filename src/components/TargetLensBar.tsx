@@ -1,4 +1,3 @@
-import { emitTo } from "@tauri-apps/api/event";
 import { ChevronDown, History, RefreshCw } from "lucide-react";
 import {
   useCallback,
@@ -26,7 +25,6 @@ import {
 import { api, type TargetSnapshot } from "@/lib/tauri";
 import {
   applySettingsPatch,
-  SETTINGS_SECTION,
 } from "@/lib/settingsSync";
 import { tip } from "@/lib/tip";
 import { t, useT } from "@/lib/i18n";
@@ -734,8 +732,7 @@ export function TargetLensBar() {
     );
   }, []);
   const editCurrentProfile = useCallback(() => {
-    void api.openSettingsWindow();
-    void emitTo("settings", SETTINGS_SECTION, {
+    void api.openSettingsWindow({
       section: "target",
       targetProfileId: resolution.profileId,
     });

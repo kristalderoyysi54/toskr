@@ -68,6 +68,8 @@ const MIN_TARGET_H: f64 = 300.0;
 /// 「顶到边就出来」的即时感来自这里；轮询体只是一次光标快照 + 几次原子读，
 /// 30ms 仍然极轻。
 const EDGE_HIDE_TICK_MS: u64 = 30;
+/// 贴边监督线程空闲（面板不可见/功能关/无锚点）时的轮询间隔。
+const EDGE_HIDE_IDLE_TICK_MS: u64 = 250;
 /// 光标离开面板到触发滑出的宽限期（ms）。
 const EDGE_HIDE_GRACE_MS: u64 = 600;
 /// 滑出/滑回动画时长（ms，自驱逐帧动画；Dock 的手感约 0.2-0.25s）。
@@ -1009,8 +1011,16 @@ pub fn spawn_edge_hide_supervisor(app: &AppHandle) {
         let mut away_ms: u64 = 0;
         // round 4 探针限频（epoch ms，0 = 从未打过点）
         let mut last_probe_ms: i64 = 0;
+        // 面板不可见 / 功能关闭 / 无锚点时无事可做：退到慢拍，避免常驻每秒 33 次唤醒
+        // （2026-11-05 实测）。面板一可见就回到快拍，起步延迟 ≤ 一个慢拍，远小于收起宽限期。
+        let mut idle = false;
         loop {
-            std::thread::sleep(Duration::from_millis(EDGE_HIDE_TICK_MS));
+            std::thread::sleep(Duration::from_millis(if idle {
+                EDGE_HIDE_IDLE_TICK_MS
+            } else {
+                EDGE_HIDE_TICK_MS
+            }));
+            idle = true;
             let state = handle.state::<AppState>();
             if !state.auto_edge_hide.load(Ordering::Relaxed) {
                 away_ms = 0;
@@ -1030,6 +1040,7 @@ pub fn spawn_edge_hide_supervisor(app: &AppHandle) {
                 report_edge_hide_state(&handle, &mut last_reported, false, false);
                 continue;
             };
+            idle = false;
             // 伴随磁吸接管：目标应用接管定位，前置条件不再满足，若正贴边隐藏立即滑回。
             // 钉住不在此列（图钉 + 已入坞 = Dock 行为）：
             // 钉住的语义是「失焦不隐藏」，管的是焦点驱动的收起（前端 blur 分支与
@@ -2599,15 +2610,8 @@ pub fn locate_source_conversation(
 fn show_locate_highlight(app: &AppHandle, row: ax::AxWindowFrame) {
     let generation = SOURCE_OVERLAY_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let handle = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        const PAD: f64 = 3.0;
-        if let Some(window) = handle.get_webview_window("locatehl") {
-            let _ = window.set_size(LogicalSize::new(row.w + PAD * 2.0, row.h + PAD * 2.0));
-            let _ = window.set_position(LogicalPosition::new(row.x - PAD, row.y - PAD));
-            let _ = window.set_ignore_cursor_events(true);
-            ensure_fullscreen_auxiliary(&window);
-            order_front_without_focus(&window);
-        }
+    let _ = handle.clone().run_on_main_thread(move || {
+        crate::locate_highlight::show(row.x, row.y, row.w, row.h);
     });
 
     let hide_handle = app.clone();
@@ -2616,12 +2620,9 @@ fn show_locate_highlight(app: &AppHandle, row: ax::AxWindowFrame) {
         if SOURCE_OVERLAY_GENERATION.load(Ordering::SeqCst) != generation {
             return;
         }
-        let main_handle = hide_handle.clone();
         let _ = hide_handle.run_on_main_thread(move || {
             if SOURCE_OVERLAY_GENERATION.load(Ordering::SeqCst) == generation {
-                if let Some(window) = main_handle.get_webview_window("locatehl") {
-                    let _ = window.hide();
-                }
+                crate::locate_highlight::hide();
             }
         });
     });

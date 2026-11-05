@@ -243,7 +243,6 @@ import {
   SETTINGS_AI_KEY_CHANGED,
   SETTINGS_DATA_HEALTH_RESULT,
   SETTINGS_DATA_INSPECT_PATH,
-  SETTINGS_SECTION,
   SETTINGS_START_SAFE_REHEARSAL,
   SETTINGS_START_LESSON,
   applySettingsPatch,
@@ -1698,8 +1697,7 @@ export default function App() {
       }
       // 直达设置窗指定分区，不动面板
       if (p.settings) {
-        void api.openSettingsWindow();
-        void emitTo("settings", SETTINGS_SECTION, p.settings);
+        void api.openSettingsWindow(p.settings);
         return;
       }
       const flash = (id: string) => {
@@ -4374,8 +4372,7 @@ export default function App() {
                   size="sm"
                   className="mt-2.5"
                   onClick={() => {
-                    void api.openSettingsWindow();
-                    void emitTo("settings", SETTINGS_SECTION, "data");
+                    void api.openSettingsWindow("data");
                   }}
                 >
                   {t("前往设置处理")}
@@ -5420,8 +5417,7 @@ function ClipHistoryOff({
           size="sm"
           variant="ghost"
           onClick={() => {
-            void api.openSettingsWindow();
-            void emitTo("settings", SETTINGS_SECTION, "clip");
+            void api.openSettingsWindow("clip");
           }}
         >
           {t("调整规则")}

@@ -102,9 +102,7 @@ import {
   currentDataGeneration,
   matchesDataGeneration,
 } from "@/lib/dataGeneration";
-import { emitTo } from "@tauri-apps/api/event";
 import { api } from "@/lib/tauri";
-import { SETTINGS_SECTION } from "@/lib/settingsSync";
 import { undoDeliveryBandCompletion } from "@/lib/delivery/executeDraft";
 import {
   closeMenuFlyout,
@@ -446,8 +444,7 @@ export const NoteCard = memo(function NoteCard({
     </ContextMenuItem>
   );
   const openTemplateSettings = () => {
-    void api.openSettingsWindow();
-    void emitTo("settings", SETTINGS_SECTION, "snippets");
+    void api.openSettingsWindow("snippets");
   };
   /** 「用模板发送」小窗：最近使用 → 当前目标推荐 → 其他模板，末尾管理入口。 */
   const templateFlyoutSource = () => {

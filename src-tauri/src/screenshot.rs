@@ -252,6 +252,12 @@ pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
 }
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+/// 遮罩窗空闲回收代号：每次截图快捷键 +1，会话结束后的延迟销毁只在代号未变时执行。
+static OVERLAY_IDLE_GEN: AtomicU64 = AtomicU64::new(0);
+/// 会话结束后遮罩窗保温时长：连拍不付冷启动；空闲后销毁，释放每屏 WebContent 里
+/// 解码的冻结帧与 Networking 进程里的 Blob（2026-11-05 实测：只 hide 时一次截图
+/// 常驻 +300MB 且不回落）。
+const OVERLAY_IDLE_DESTROY: std::time::Duration = std::time::Duration::from_secs(30);
 /// 钉图窗 label → (BMP, 原始 pt 尺寸)；窗口关闭即移除。
 static PINS: Mutex<Option<HashMap<String, Pin>>> = Mutex::new(None);
 static NEXT_PIN: AtomicU64 = AtomicU64::new(1);
@@ -708,6 +714,7 @@ pub fn on_hotkey(app: &AppHandle) {
         return;
     }
     let front = crate::focus::frontmost_info().filter(|f| f.pid != std::process::id() as i32);
+    OVERLAY_IDLE_GEN.fetch_add(1, Ordering::SeqCst);
     let app = app.clone();
     std::thread::spawn(move || {
         let started = std::time::Instant::now();
@@ -899,8 +906,35 @@ fn end_session(app: &AppHandle, restore_focus: bool) -> Option<Session> {
         if let Some(text) = HINT_AFTER_END.lock().unwrap().take() {
             crate::window::show_hud(&app, "info", text, false, false, None);
         }
+        schedule_overlay_destroy(&app);
     });
     Some(session)
+}
+
+/// 空闲 `OVERLAY_IDLE_DESTROY` 后销毁全部遮罩窗；期间有新截图（代号变化或会话存在）则作废。
+/// 判定放在主线程闭包里：show_overlay 也只在主线程跑，两者不会交错。
+fn schedule_overlay_destroy(app: &AppHandle) {
+    let generation = OVERLAY_IDLE_GEN.load(Ordering::SeqCst);
+    std::thread::sleep(OVERLAY_IDLE_DESTROY);
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if !overlay_destroy_allowed(generation, OVERLAY_IDLE_GEN.load(Ordering::SeqCst), SESSION.lock().unwrap().is_some()) {
+            return;
+        }
+        let mut destroyed = 0;
+        for (label, window) in handle.webview_windows() {
+            if label.starts_with(LABEL_PREFIX) && window.destroy().is_ok() {
+                destroyed += 1;
+            }
+        }
+        if destroyed > 0 {
+            crate::diag::push(&handle, format!("截图遮罩空闲回收 {destroyed} 个窗口"));
+        }
+    });
+}
+
+fn overlay_destroy_allowed(scheduled: u64, current: u64, session_active: bool) -> bool {
+    scheduled == current && !session_active
 }
 
 /// screencapture 截全局 pt 区域（13 或 SCK 失败时的长截屏回退）。
@@ -1889,6 +1923,13 @@ fn copy_to_clipboard(app: &AppHandle, w: usize, h: usize, rgba: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlay_destroy_only_when_idle_since_schedule() {
+        assert!(overlay_destroy_allowed(3, 3, false));
+        assert!(!overlay_destroy_allowed(3, 4, false), "期间又截过图：交给新会话结束后的回收");
+        assert!(!overlay_destroy_allowed(3, 3, true), "会话进行中不得销毁遮罩");
+    }
 
     /// 辅助程序不应答：到时杀掉返回 Err，不无限等待（设置页曾卡在「检查中…」）。
     #[test]

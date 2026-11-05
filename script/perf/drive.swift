@@ -1,6 +1,6 @@
 // measure-baseline.py 的输入驱动：只发 Toskr 自己的快捷键 / Esc / 滚轮，用完把光标放回原处。
 // 用法：
-//   drive key cmd+shift+c | ctrl+shift+q | esc
+//   drive key cmd+shift+c | ctrl+shift+q | cmd+w | esc
 //   drive bounds <pid>                → 输出该进程最大在屏窗口 "x y w h"（全局坐标，左上原点）
 //   drive scroll <x> <y> <次数> <每次行数>   （负数向下）
 import CoreGraphics
@@ -10,7 +10,7 @@ let a = CommandLine.arguments
 func fail(_ m: String) -> Never { FileHandle.standardError.write((m + "\n").data(using: .utf8)!); exit(2) }
 guard a.count >= 2 else { fail("用法见源码头部") }
 
-let keyCodes: [String: CGKeyCode] = ["c": 8, "q": 12, "n": 45, "esc": 53]
+let keyCodes: [String: CGKeyCode] = ["c": 8, "q": 12, "w": 13, "n": 45, "esc": 53]
 let modFlags: [String: CGEventFlags] = ["cmd": .maskCommand, "shift": .maskShift, "ctrl": .maskControl, "alt": .maskAlternate]
 
 switch a[1] {

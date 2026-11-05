@@ -21,6 +21,7 @@ const COMMANDS: &[&str] = &[
     "restart_app",
     "set_window_theme",
     "open_settings_window",
+    "settings_window_ready",
     "set_vibrancy",
     "get_vibrancy_enabled",
     "set_new_note_hotkey",

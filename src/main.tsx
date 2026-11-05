@@ -12,9 +12,7 @@ import "./index.css";
 const App = React.lazy(() => import("./App"));
 const HudView = React.lazy(() => import("./HudView"));
 const ImagePreviewView = React.lazy(() => import("./ImagePreviewView"));
-const LocateHighlightView = React.lazy(() => import("./LocateHighlightView").then((m) => ({ default: m.LocateHighlightView })));
 const SettingsView = React.lazy(() => import("./SettingsView"));
-const SourceOverlayView = React.lazy(() => import("./SourceOverlayView"));
 const MenuFlyoutView = React.lazy(() => import("./MenuFlyoutView"));
 const TextPreviewView = React.lazy(() => import("./TextPreviewView"));
 const ScreenshotView = React.lazy(() => import("./ScreenshotView"));
@@ -35,8 +33,6 @@ if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
     "settings",
     "imgpreview",
     "textpreview",
-    "sourceoverlay",
-    "locatehl",
   ].includes(requestedLabel ?? "")
     ? requestedLabel!
     : "main";
@@ -102,10 +98,6 @@ const view =
   ) : label.startsWith("textpreview") ? (
     // 多详情窗（📌 并存）：textpreview 与动态创建的 textpreview-N 同一视图
     <TextPreviewView />
-  ) : label === "sourceoverlay" ? (
-    <SourceOverlayView />
-  ) : label === "locatehl" ? (
-    <LocateHighlightView />
   ) : label === "menuflyout" ? (
     <MenuFlyoutView />
   ) : label.startsWith("shot-") ? (

@@ -11,6 +11,8 @@
 
 --full：在最后一轮的进程上继续跑场景（会接管键鼠约 2 分钟，只发 Toskr 自己的快捷键）：
   空闲 60s 的 CPU% 与唤醒 → ⌘⇧C 开面板 → 面板内滚动 → 关面板 → ⌃⇧Q 截图 + Esc ×10 → 静置 30s
+--leak：重复交互看斜率（面板开关×30、滚动往返×5、截图×20、设置开关×5），最后静置 75s
+  验证截图遮罩（30s）与设置窗（60s）空闲回收；接管键鼠约 6 分钟。
 输入驱动 script/perf/drive.swift 首次运行时编译到 /tmp/toskr-drive。
 注意：会重启正在运行的 Toskr；文件缓存是热的，测的是「重启」而非开机冷启动。
 """
@@ -272,17 +274,86 @@ def full_scenario(run):
     return {"stages": stages, "categories": cats, "idle_panel_closed": idle_closed, "idle_panel_open": idle_open}
 
 
-def print_full(full):
-    stages = [s for s in full["stages"] if "helpers" in s]
+def open_settings_via_tray():
+    """菜单栏图标 →「设置…」（System Events；终端需辅助功能权限）。"""
+    script = (
+        'tell application "System Events" to tell process "toskr" to '
+        'click (first menu item of menu 1 of menu bar item 1 of menu bar 2 whose name starts with "设置" or name starts with "Settings")'
+    )
+    # 先点开状态栏菜单，再点菜单项
+    pre = 'tell application "System Events" to tell process "toskr" to click menu bar item 1 of menu bar 2'
+    a = subprocess.run(["osascript", "-e", pre], capture_output=True, text=True)
+    time.sleep(0.4)
+    b = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+    return a.returncode == 0 and b.returncode == 0, (a.stderr + b.stderr).strip()
+
+
+def leak_scenario(run):
+    """重复交互看各进程 footprint 斜率；最后等过两类空闲回收期看能否回落。"""
+    pid, offset = run["pid"], run["log_offset"]
+    stages = []
+
+    def record(name):
+        labels = window_map(read_log_from(offset))
+        stages.append({"stage": name, **snapshot(pid, labels)})
+
+    record("基线")
+    for batch in range(3):
+        for _ in range(10):
+            drive("key", "cmd+shift+c")
+            time.sleep(1.2)
+            drive("key", "cmd+shift+c")
+            time.sleep(1.0)
+        record(f"面板开关×{(batch + 1) * 10}")
+    drive("key", "cmd+shift+c")
+    time.sleep(2)
+    b = drive("bounds", str(pid)).stdout.split()
+    if len(b) == 4 and int(b[2]) >= 200:
+        x, y = int(b[0]) + int(b[2]) // 2, int(b[1]) + int(b[3]) // 2
+        for _ in range(5):
+            drive("scroll", str(x), str(y), "60", "-8")
+            drive("scroll", str(x), str(y), "60", "8")
+        time.sleep(3)
+        record("滚动×5往返")
+    drive("key", "cmd+shift+c")
+    time.sleep(3)
+    for batch in range(2):
+        for _ in range(10):
+            drive("key", "ctrl+shift+q")
+            time.sleep(1.8)
+            drive("key", "esc")
+            time.sleep(1.2)
+        record(f"截图×{(batch + 1) * 10}")
+    settings_note = None
+    for i in range(5):
+        ok, err = open_settings_via_tray()
+        if not ok:
+            settings_note = f"设置窗打开失败：{err[:120]}"
+            break
+        time.sleep(2.5)
+        drive("key", "cmd+w")
+        time.sleep(1.5)
+    if settings_note is None:
+        record("设置开关×5")
+    time.sleep(75)  # > 截图遮罩 30s 与设置窗 60s 两个回收期
+    record("静置75s(回收后)")
+    return {"stages": stages, "settings_note": settings_note}
+
+
+def print_stages(title, stages):
     rows = [by_label(s) for s in stages]
     keys = []
     for r in rows:
         keys += [k for k in r if k not in keys]
     keys = [k for k in keys if k != "合计"] + ["合计"]
-    print("\n内存（MB）按窗口 × 阶段")
+    print(f"\n{title}")
     print("  " + "窗口".ljust(16) + "".join(s["stage"][:10].rjust(12) for s in stages))
     for k in keys:
         print("  " + k.ljust(16) + "".join(str(r.get(k, "-")).rjust(12) for r in rows))
+
+
+def print_full(full):
+    print_stages("内存（MB）按窗口 × 阶段", [s for s in full["stages"] if "helpers" in s])
     for s in full["stages"]:
         if "skipped" in s:
             print(f"  ⚠ {s['stage']}：{s['skipped']}")
@@ -301,6 +372,7 @@ def main():
     ap.add_argument("--settle", type=float, default=15)
     ap.add_argument("--app", default="/Applications/Toskr.app")
     ap.add_argument("--full", action="store_true", help="最后一轮后继续跑交互场景（接管键鼠约 2 分钟）")
+    ap.add_argument("--leak", action="store_true", help="最后一轮后跑重复交互的泄漏检测（接管键鼠约 6 分钟）")
     ap.add_argument("--json", help="把逐轮原始数据写到该文件")
     a = ap.parse_args()
 
@@ -335,9 +407,15 @@ def main():
     if a.full:
         full = full_scenario(runs[-1])
         print_full(full)
+    leak = None
+    if a.leak:
+        leak = leak_scenario(runs[-1])
+        print_stages("泄漏检测：内存（MB）按窗口 × 阶段", leak["stages"])
+        if leak["settings_note"]:
+            print(f"  ⚠ {leak['settings_note']}")
     if a.json:
         with open(a.json, "w") as f:
-            json.dump({"runs": runs, "full": full}, f, ensure_ascii=False, indent=2)
+            json.dump({"runs": runs, "full": full, "leak": leak}, f, ensure_ascii=False, indent=2)
 
 
 if __name__ == "__main__":

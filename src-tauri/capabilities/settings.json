@@ -28,6 +28,7 @@
     "allow-hide-panel",
     "allow-open-url",
     "allow-open-settings-window",
+    "allow-settings-window-ready",
     "allow-ax-trusted",
     "allow-tap-status",
     "allow-retry-tap",

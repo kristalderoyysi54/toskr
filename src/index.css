@@ -900,10 +900,9 @@ input {
   background: transparent;
 }
 
-/* ============ IM定位高亮框（locatehl 窗） ============ */
-/* 整窗即一个描边框，Rust 摆到目标会话行上；amber 高亮（蓝留状态、红留危险）。
-   刻意用无终态的呼吸循环：窗口可见就一定有高亮，不存在「播完停在透明」；
-   出现/消失时机完全由 Rust show/hide 控制（约 2s）。 */
+/* ============ 定位高亮框（详情窗 / 发送预检内的行高亮） ============ */
+/* amber 高亮（蓝留状态、红留危险），无终态的呼吸循环。IM 会话行上的高亮框已改为
+   原生层（src-tauri/src/locate_highlight.rs），外观参数与此处保持一致。 */
 .locate-highlight {
   border-radius: 10px;
   border: 2px solid var(--warning);

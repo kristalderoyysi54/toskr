@@ -21,6 +21,8 @@ mod input;
 #[cfg(target_os = "macos")]
 mod keychain_broker;
 mod linkmeta;
+#[cfg(target_os = "macos")]
+mod locate_highlight;
 mod preview_network;
 mod message_watch;
 mod message_watch_cdp;
@@ -185,14 +187,6 @@ pub fn run() {
                     let _ = win.set_ignore_cursor_events(true);
                     window::ensure_fullscreen_auxiliary(&win);
                 }
-                if let Some(win) = app.get_webview_window("sourceoverlay") {
-                    let _ = win.set_ignore_cursor_events(true);
-                    window::ensure_fullscreen_auxiliary(&win);
-                }
-                if let Some(win) = app.get_webview_window("locatehl") {
-                    let _ = win.set_ignore_cursor_events(true);
-                    window::ensure_fullscreen_auxiliary(&win);
-                }
 
                 let installed = match input::tap::install(app.handle().clone()) {
                     Ok(()) => true,
@@ -228,6 +222,10 @@ pub fn run() {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     let _ = window.hide();
                     api.prevent_close();
+                    // 设置窗按需创建：先隐藏（失焦触发前端 blur 提交），空闲后再销毁
+                    if window.label() == "settings" {
+                        commands::schedule_settings_destroy(window.app_handle());
+                    }
                 }
                 // 独立模式下用户拖动面板 → 记住位置并通知前端持久化
                 tauri::WindowEvent::Moved(pos) => {
@@ -290,6 +288,7 @@ pub fn run() {
             commands::restart_app,
             commands::set_window_theme,
             commands::open_settings_window,
+            commands::settings_window_ready,
             commands::set_vibrancy,
             commands::get_vibrancy_enabled,
             commands::set_new_note_hotkey,

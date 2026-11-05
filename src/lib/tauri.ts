@@ -7,6 +7,7 @@ import type { ImagePreviewEditContext } from "@/lib/imageEditor";
 import type { MessageContextItem } from "@/lib/messages";
 import type { ImProfile } from "@/lib/imProfile";
 import type { PromptTemplatesExport } from "@/lib/promptTemplateExport";
+import type { SettingsSectionPayload } from "@/lib/settingsSync";
 
 /** Rust 侧双击触发键事件。 */
 export const TRIGGER_EVENT = "toskr://trigger";
@@ -99,8 +100,6 @@ export const CLIP_PAUSE_EVENT = "toskr://clip-pause-changed";
 export const CLIP_EVENT = "toskr://clip";
 /** 目标 IM DevTools 只读桥 → 主窗口摘要入库；完整原始对象已先写本地账本。 */
 export const MESSAGE_WATCH_EVENT = "toskr://message-watch";
-/** Rust → 只读来源浮层：贴在 IM 窗口旁，不激活、不接收点击。 */
-export const SOURCE_OVERLAY_EVENT = "toskr://source-overlay";
 /** Rust → 主窗口：贴边隐藏运行态变化（进入/退出可介入布局、滑出/滑回）。 */
 export const EDGE_HIDE_STATE_EVENT = "toskr://edge-hide-state";
 /** Rust Keychain 状态变化；payload 永远不含 key。 */
@@ -935,7 +934,11 @@ export const api = {
   restartApp: () => invoke("restart_app"),
   setWindowTheme: (theme: "system" | "light" | "dark") =>
     invoke("set_window_theme", { theme }),
-  openSettingsWindow: () => invoke("open_settings_window"),
+  /** 打开设置窗；section 为分区深链。设置窗按需创建，分区由 Rust 在窗口就绪后投递。 */
+  openSettingsWindow: (section?: SettingsSectionPayload) =>
+    invoke("open_settings_window", { section: section ?? null }),
+  /** 设置窗已注册监听并拿到设置快照：领取创建前挂起的分区请求。 */
+  settingsWindowReady: () => invoke("settings_window_ready"),
   openUrl: (url: string) => invoke("open_url", { url }),
   setPanelFreePos: (x: number | null, y: number | null) =>
     invoke("set_panel_free_pos", { x, y }),

@@ -1,5 +1,4 @@
 import { Fragment, useState } from "react";
-import { emitTo } from "@tauri-apps/api/event";
 import { AlertTriangle, CalendarDays, ListFilter } from "lucide-react";
 
 import { SubscriptionsPage } from "@/components/subscriptions/SubscriptionsPage";
@@ -9,7 +8,6 @@ import { focusRing } from "@/components/ui/focus-ring";
 import { IconButton } from "@/components/ui/icon-button";
 import { SlidingTabIndicator } from "@/components/ui/sliding-tab-indicator";
 import { useT } from "@/lib/i18n";
-import { SETTINGS_SECTION } from "@/lib/settingsSync";
 import { api } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import type { TaskBuckets } from "@/lib/tasks";
@@ -99,8 +97,7 @@ export function RemindersPage({ buckets, now }: { buckets: TaskBuckets; now: num
               label={t("提醒事项同步失败：{error}（点击查看）", { error: syncError })}
               size="sm"
               onClick={() => {
-                void api.openSettingsWindow();
-                void emitTo("settings", SETTINGS_SECTION, "apple");
+                void api.openSettingsWindow("apple");
               }}
               className="text-warning"
             >
