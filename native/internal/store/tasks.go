@@ -1,0 +1,250 @@
+package store
+
+import (
+	"slices"
+	"strings"
+	"time"
+)
+
+// Task 是待办 / 闪念。语义参照 Tauri 版 notesStore.Task。
+type Task struct {
+	ID          string          `json:"id"`
+	Text        string          `json:"text"`
+	Status      string          `json:"status"`   // todo | doing | done
+	Priority    string          `json:"priority"` // none | low | mid | high
+	DueAt       time.Time       `json:"dueAt,omitzero"`
+	CreatedAt   time.Time       `json:"createdAt"`
+	CompletedAt time.Time       `json:"completedAt,omitzero"`
+	RemindedAt  time.Time       `json:"remindedAt,omitzero"`
+	Note        string          `json:"note,omitempty"`
+	Checklist   []ChecklistItem `json:"checklist,omitempty"`
+	Spark       bool            `json:"spark,omitempty"`
+	Section     string          `json:"section,omitempty"`
+	Recurrence  string          `json:"recurrence,omitempty"` // daily | weekdays | weekly | monthly | yearly
+}
+
+type ChecklistItem struct {
+	ID   string `json:"id"`
+	Text string `json:"text"`
+	Done bool   `json:"done"`
+}
+
+func (s *Store) Tasks() []Task { s.mu.Lock(); defer s.mu.Unlock(); return slices.Clone(s.tasks) }
+func (s *Store) TaskSections() []Section {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.taskSections)
+}
+func (s *Store) taskIndex(id string) int {
+	return slices.IndexFunc(s.tasks, func(t Task) bool { return t.ID == id })
+}
+
+func (s *Store) AddTask(t Task) Task {
+	t.Text = strings.TrimSpace(t.Text)
+	if t.Text == "" {
+		return Task{}
+	}
+	t.ID, t.CreatedAt = newID(), time.Now()
+	if t.Status == "" {
+		t.Status = "todo"
+	}
+	if t.Priority == "" {
+		t.Priority = "none"
+	}
+	if t.Section == "" {
+		t.Section = TaskInbox
+	}
+	_ = s.mutate(func() bool { s.tasks = slices.Insert(s.tasks, 0, t); return true })
+	return t
+}
+
+func (s *Store) UpdateTask(t Task) error {
+	return s.mutate(func() bool {
+		i := s.taskIndex(t.ID)
+		if i < 0 {
+			return false
+		}
+		if !s.tasks[i].DueAt.Equal(t.DueAt) {
+			t.RemindedAt = time.Time{} // 改了到期时间，允许对新时间重新提醒
+		}
+		s.tasks[i] = t
+		return true
+	})
+}
+
+// CompleteTask 完成 / 取消完成。带重复规则的任务完成时生成下一期（本期去掉规则）。
+func (s *Store) CompleteTask(id string, done bool, now time.Time) (next Task, spawned bool) {
+	_ = s.mutate(func() bool {
+		i := s.taskIndex(id)
+		if i < 0 {
+			return false
+		}
+		t := &s.tasks[i]
+		if done {
+			t.Status, t.CompletedAt = "done", now
+			if t.Recurrence != "" && !t.DueAt.IsZero() {
+				next = *t
+				next.ID, next.Status, next.CompletedAt, next.RemindedAt, next.CreatedAt = newID(), "todo", time.Time{}, time.Time{}, now
+				next.DueAt = NextOccurrence(t.DueAt, t.Recurrence)
+				next.Checklist = slices.Clone(t.Checklist) // 不能与本期共享底层数组
+				for k := range next.Checklist {
+					next.Checklist[k].Done = false
+				}
+				t.Recurrence = ""
+				s.tasks = slices.Insert(s.tasks, 0, next)
+				spawned = true
+			}
+		} else {
+			t.Status, t.CompletedAt = "todo", time.Time{}
+		}
+		return true
+	})
+	return
+}
+
+func (s *Store) DeleteTask(id string) (Task, int, bool) {
+	var removed Task
+	pos, ok := -1, false
+	_ = s.mutate(func() bool {
+		if pos = s.taskIndex(id); pos < 0 {
+			return false
+		}
+		removed, ok = s.tasks[pos], true
+		s.tasks = slices.Delete(s.tasks, pos, pos+1)
+		return true
+	})
+	return removed, pos, ok
+}
+
+func (s *Store) RestoreTask(t Task, pos int) error {
+	return s.mutate(func() bool {
+		if s.taskIndex(t.ID) >= 0 {
+			return false
+		}
+		s.tasks = slices.Insert(s.tasks, min(max(pos, 0), len(s.tasks)), t)
+		return true
+	})
+}
+
+func (s *Store) AddTaskSection(name string) string {
+	if name = strings.TrimSpace(name); name == "" {
+		return ""
+	}
+	id := "tsec-" + newID()
+	_ = s.mutate(func() bool { s.taskSections = append(s.taskSections, Section{ID: id, Name: name}); return true })
+	return id
+}
+
+// DueForReminder 返回已到期、未完成、尚未提醒过的任务，并标记已提醒。
+func (s *Store) DueForReminder(now time.Time) []Task {
+	var due []Task
+	_ = s.mutate(func() bool {
+		for i := range s.tasks {
+			t := &s.tasks[i]
+			if t.Status != "done" && !t.DueAt.IsZero() && !t.DueAt.After(now) && t.RemindedAt.IsZero() {
+				t.RemindedAt = now
+				due = append(due, *t)
+			}
+		}
+		return len(due) > 0
+	})
+	return due
+}
+
+// NextOccurrence 按重复规则推进一期；月/年按月末钳制（1/31 → 2/28）。
+func NextOccurrence(t time.Time, rule string) time.Time {
+	switch rule {
+	case "daily":
+		return t.AddDate(0, 0, 1)
+	case "weekdays":
+		n := t.AddDate(0, 0, 1)
+		for n.Weekday() == time.Saturday || n.Weekday() == time.Sunday {
+			n = n.AddDate(0, 0, 1)
+		}
+		return n
+	case "weekly":
+		return t.AddDate(0, 0, 7)
+	case "monthly":
+		return AddMonthsClamped(t, 1)
+	case "yearly":
+		return AddMonthsClamped(t, 12)
+	}
+	return t
+}
+
+// AddMonthsClamped 加月并把日钳制到目标月最后一天。
+func AddMonthsClamped(t time.Time, months int) time.Time {
+	y, m, d := t.Date()
+	first := time.Date(y, m+time.Month(months), 1, t.Hour(), t.Minute(), t.Second(), 0, t.Location())
+	last := first.AddDate(0, 1, -1).Day()
+	return first.AddDate(0, 0, min(d, last)-1)
+}
+
+// ParseQuickTask 解析快速输入里的中文时间与优先级：「明天下午3点 交周报 !!」。
+func ParseQuickTask(input string, now time.Time) Task {
+	t := Task{Priority: "none"}
+	text := strings.TrimSpace(input)
+	for _, p := range []struct{ mark, level string }{{"!!!", "high"}, {"!!", "mid"}, {"!", "low"}} {
+		if strings.HasSuffix(text, " "+p.mark) || strings.HasSuffix(text, p.mark) && len(text) > len(p.mark) {
+			t.Priority = p.level
+			text = strings.TrimSpace(strings.TrimSuffix(text, p.mark))
+			break
+		}
+	}
+	day := time.Time{}
+	base := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	for _, w := range []struct {
+		word string
+		add  int
+	}{{"今天", 0}, {"明天", 1}, {"后天", 2}} {
+		if strings.HasPrefix(text, w.word) {
+			day = base.AddDate(0, 0, w.add)
+			text = strings.TrimSpace(strings.TrimPrefix(text, w.word))
+			break
+		}
+	}
+	hour := -1
+	for _, part := range []struct {
+		word string
+		off  int
+	}{{"上午", 0}, {"早上", 0}, {"中午", 12}, {"下午", 12}, {"晚上", 12}} {
+		if strings.HasPrefix(text, part.word) {
+			text = strings.TrimPrefix(text, part.word)
+			if i := strings.Index(text, "点"); i > 0 && i <= 2 {
+				if h, ok := atoiSmall(text[:i]); ok {
+					hour = h
+					if part.off == 12 && h < 12 {
+						hour = h + 12
+					}
+					text = strings.TrimSpace(text[i+len("点"):])
+				}
+			}
+			break
+		}
+	}
+	if !day.IsZero() || hour >= 0 {
+		if day.IsZero() {
+			day = base
+		}
+		if hour < 0 {
+			hour = 9
+		}
+		t.DueAt = day.Add(time.Duration(hour) * time.Hour)
+	}
+	t.Text = text
+	return t
+}
+
+func atoiSmall(s string) (int, bool) {
+	n := 0
+	if s == "" {
+		return 0, false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return 0, false
+		}
+		n = n*10 + int(r-'0')
+	}
+	return n, n <= 23
+}

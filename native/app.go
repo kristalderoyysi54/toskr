@@ -16,21 +16,40 @@ import (
 	"github.com/toskr/native/internal/store"
 )
 
+// 面板页
+const (
+	pageQueue = iota
+	pageTasks
+	pageBills
+	pageSecrets
+)
+
+// delivery 是一条发送记录（内存中保留最近 50 条，设置 → 发送记录可查）。
+type delivery struct {
+	At     time.Time
+	Target string
+	Count  int
+	Err    string
+}
+
 // app 的字段只在主线程读写（view、窗口回调、托盘、快捷键都在主线程）；
 // 其他 goroutine 一律经 panel.Update 回到主线程。
 type app struct {
 	sys   core.System
 	store *store.Store
 
-	panel, hud, settingsWin *mygo.Window
-	tray                    *mygo.Tray
+	panel, hud, settingsWin, detailWin *mygo.Window
+	tray                               *mygo.Tray
 
 	// 面板状态
-	tab      int // 0 笔记 1 剪贴板
+	page     int
+	section  string // 当前笔记分组
 	query    string
-	notes    []store.Note // 当前分组 + 搜索后的视图
-	counts   [2]int
+	notes    []store.Note // 当前分组 + 搜索后的未完成项
+	done     []store.Note // 当前分组已完成项
+	counts   map[string]int
 	selected int
+	chosen   ui.Selection[string]
 	list     ui.ListState
 	search   ui.Handle
 	draft    string
@@ -38,7 +57,41 @@ type app struct {
 	editing  string // 正在编辑的笔记 ID
 	editText string
 	pinned   bool
+	showDone bool
+	newSecOn bool
+	newSec   string
 	target   macos.FrontApp // 发送目标：面板唤出前的前台应用
+	pending  []store.Note   // 预检命中、等待确认的发送
+	findings []core.Finding
+	history  []delivery
+	thumbs   map[string]ui.ImageSource
+	aiBusy   string // 正在 AI 处理的笔记 ID
+
+	// 任务页
+	tasks     []store.Task
+	taskDraft string
+	taskIn    ui.Handle
+	taskSel   int
+	taskList  ui.ListState
+	showDoneT bool
+
+	// 账单页
+	bills    []store.Bill
+	billForm billForm
+
+	// 秘文页
+	secrets    []store.Secret
+	revealed   map[string]time.Time
+	secTitle   string
+	secBody    string
+	sealPass   string
+	sealIn     string
+	sealOut    string
+	sealOpenOn bool
+
+	// 详情窗
+	detailID   string
+	detailText string
 
 	// HUD
 	hudText, hudKind string
@@ -50,34 +103,51 @@ type app struct {
 	setClip     bool
 	setGlass    int
 	setExcluded string
+	setRetain   float64
+	setLang     int
+	setAIKey    string
+	setAIEnd    string
+	setAIModel  string
+	setCompan   string
 	axTrusted   bool
 	tapErr      string
 	shortcut    string
+	recovery    []string
+	health      string
+	updateMsg   string
 }
 
 func newApp(sys core.System, st *store.Store) *app {
-	a := &app{sys: sys, store: st, selected: 0}
+	a := &app{sys: sys, store: st, section: store.SectionInbox, thumbs: map[string]ui.ImageSource{}, revealed: map[string]time.Time{}}
 	a.reload()
 	return a
 }
 
-func sectionOf(tab int) string {
-	if tab == 1 {
-		return store.SectionClipboard
-	}
-	return store.SectionInbox
-}
-
 // reload 从 store 重建当前视图（主线程）。
 func (a *app) reload() {
-	inbox, clip := a.store.Section(store.SectionInbox), a.store.Section(store.SectionClipboard)
-	a.counts = [2]int{len(inbox), len(clip)}
-	src := inbox
-	if a.tab == 1 {
-		src = clip
+	all := a.store.Notes()
+	a.counts = map[string]int{}
+	for _, n := range all {
+		if !n.Done {
+			a.counts[n.Section]++
+		}
 	}
-	a.notes = store.Search(src, a.query)
+	if !slices.ContainsFunc(a.store.Sections(), func(s store.Section) bool { return s.ID == a.section }) {
+		a.section = store.SectionInbox
+	}
+	src := a.store.Section(a.section)
+	a.notes, a.done = a.notes[:0], a.done[:0]
+	for _, n := range store.Search(src, a.query) {
+		if n.Done {
+			a.done = append(a.done, n)
+		} else {
+			a.notes = append(a.notes, n)
+		}
+	}
 	a.selected = max(0, min(a.selected, len(a.notes)-1))
+	a.tasks = a.store.Tasks()
+	a.bills = a.store.Bills()
+	a.secrets = a.store.Secrets()
 }
 
 func (a *app) current() (store.Note, bool) {
@@ -85,6 +155,23 @@ func (a *app) current() (store.Note, bool) {
 		return store.Note{}, false
 	}
 	return a.notes[a.selected], true
+}
+
+// chosenNotes 返回多选中的笔记（按列表顺序）；未多选时返回当前项。
+func (a *app) chosenNotes() []store.Note {
+	if a.chosen.Len() > 1 {
+		var out []store.Note
+		for _, n := range a.notes {
+			if a.chosen.Has(n.ID) {
+				out = append(out, n)
+			}
+		}
+		return out
+	}
+	if n, ok := a.current(); ok {
+		return []store.Note{n}
+	}
+	return nil
 }
 
 // ---- 面板 ----
@@ -101,10 +188,7 @@ func (a *app) showPanel() {
 	if f, ok := a.sys.Frontmost(); ok && f.PID != a.sys.SelfPID() {
 		a.target = f
 	}
-	d := mygo.Screen.DisplayNearestPoint(mygo.Screen.CursorScreenPoint())
-	const w, margin = 360, 10
-	h := d.WorkArea.Height - margin*2
-	a.panel.SetBounds(mygo.Rectangle{X: d.WorkArea.X + d.WorkArea.Width - w - margin, Y: d.WorkArea.Y + margin, Width: w, Height: h})
+	a.panel.SetBounds(a.panelBounds())
 	a.reload()
 	a.panel.Show()
 	diag.Push("面板显示 target=%s", a.target.BundleID)
@@ -148,9 +232,9 @@ func (a *app) onTrigger() {
 				a.showHUD("warn", "保存失败："+err.Error())
 				return
 			}
-			kind, msg := "added", "已加入队列 · "+preview(note.Text, 18)
+			kind, msg := "added", tr("已加入队列 · ")+preview(note.Text, 18)
 			if dup {
-				kind, msg = "duplicate", "已存在，移到顶部"
+				kind, msg = "duplicate", tr("已存在，移到顶部")
 			}
 			a.showHUD(kind, msg)
 		})
@@ -164,29 +248,75 @@ func (a *app) addDraft() {
 	if text == "" {
 		return
 	}
-	if _, dup, err := a.store.Add(store.Note{Section: store.SectionInbox, Text: a.draft}); err == nil {
+	sec := a.section
+	if sec == store.SectionClipboard {
+		sec = store.SectionInbox
+	}
+	if _, dup, err := a.store.Add(store.Note{Section: sec, Text: a.draft}); err == nil {
 		a.draft = ""
-		a.tab, a.query, a.selected = 0, "", 0
+		a.section, a.query, a.selected = sec, "", 0
 		if dup {
-			a.showHUD("duplicate", "已存在，移到顶部")
+			a.showHUD("duplicate", tr("已存在，移到顶部"))
 		}
 	}
 }
 
 func (a *app) deleteSelected(c *ui.Context) {
-	n, ok := a.current()
+	notes := a.chosenNotes()
+	if len(notes) == 0 {
+		return
+	}
+	type gone struct {
+		n   store.Note
+		pos int
+	}
+	var removed []gone
+	for _, n := range notes {
+		if r, pos, ok := a.store.Delete(n.ID); ok {
+			removed = append(removed, gone{r, pos})
+		}
+	}
+	a.chosen.Clear()
+	if len(removed) == 0 {
+		return
+	}
+	msg := "已删除 · " + preview(removed[0].n.Text, 14)
+	if len(removed) > 1 {
+		msg = fmt.Sprintf("已删除 %d 条", len(removed))
+	}
+	c.ToastAction(msg, "撤销", func() {
+		for i := len(removed) - 1; i >= 0; i-- {
+			_ = a.store.Restore(removed[i].n, removed[i].pos)
+		}
+	})
+}
+
+func (a *app) mergeChosen(c *ui.Context) {
+	notes := a.chosenNotes()
+	if len(notes) < 2 {
+		return
+	}
+	ids := make([]string, len(notes))
+	for i, n := range notes {
+		ids[i] = n.ID
+	}
+	merged, originals, ok := a.store.Merge(ids, "\n\n")
 	if !ok {
 		return
 	}
-	removed, pos, ok := a.store.Delete(n.ID)
-	if !ok {
-		return
+	a.chosen.Clear()
+	c.ToastAction(fmt.Sprintf("已合并 %d 条", len(originals)), "撤销", func() { _ = a.store.Unmerge(merged, originals) })
+}
+
+func (a *app) clearDone(c *ui.Context) {
+	removed := a.store.ClearDone(a.section)
+	if len(removed) > 0 {
+		c.ToastAction(fmt.Sprintf("已清理 %d 条已完成", len(removed)), "撤销", func() { _ = a.store.RestoreMany(removed) })
 	}
-	c.ToastAction("已删除 · "+preview(removed.Text, 14), "撤销", func() { _ = a.store.Restore(removed, pos) })
 }
 
 func (a *app) startEdit() {
-	if n, ok := a.current(); ok {
+	if n, ok := a.current(); ok && n.Kind != "image" {
 		a.editing, a.editText = n.ID, n.Text
 	}
 }
@@ -198,49 +328,90 @@ func (a *app) commitEdit() {
 	a.editing = ""
 }
 
-// send 把 notes 依次拼接（空行分隔）发回目标应用；成功才标记完成。
+// send 先做敏感内容预检，命中则挂起等确认；否则直接投递。
 func (a *app) send(notes []store.Note) {
 	if len(notes) == 0 {
 		return
 	}
-	target := a.target
-	if target.PID == 0 {
-		a.showHUD("warn", "没有发送目标：先切到要粘贴的应用再唤出面板")
+	if a.target.PID == 0 {
+		a.showHUD("warn", tr("没有发送目标：先切到要粘贴的应用再唤出面板"))
 		return
 	}
-	texts := make([]string, len(notes))
+	var fs []core.Finding
+	for _, n := range notes {
+		fs = append(fs, core.Preflight(n.Text)...)
+	}
+	if len(fs) > 0 {
+		a.pending, a.findings = notes, fs
+		if a.panel != nil {
+			a.panel.Show() // 确认条在面板里
+		}
+		return
+	}
+	a.deliver(notes, false)
+}
+
+// confirmPending 处理预检确认条：redact 为 true 时遮罩命中处再发。
+func (a *app) confirmPending(redact bool) {
+	notes := a.pending
+	a.pending, a.findings = nil, nil
+	if redact {
+		notes = slices.Clone(notes)
+		for i := range notes {
+			notes[i].Text = core.Redact(notes[i].Text, core.Preflight(notes[i].Text))
+		}
+	}
+	a.deliver(notes, true)
+}
+
+func (a *app) deliver(notes []store.Note, confirmed bool) {
+	target := a.target
+	var texts []string
+	var png []byte
 	ids := make([]string, len(notes))
 	for i, n := range notes {
-		texts[i], ids[i] = n.Text, n.ID
+		ids[i] = n.ID
+		if n.Kind == "image" && png == nil && len(notes) == 1 {
+			png, _ = a.store.LoadImage(n.ImageFile)
+			continue
+		}
+		texts = append(texts, n.Text)
 	}
+	enter := a.store.Settings().PasteThenEnter && !isTerminal(target.BundleID)
 	if !a.pinned {
 		a.hidePanel()
 	}
 	go func() {
-		err := core.Deliver(a.sys, target, strings.Join(texts, "\n\n"))
-		diag.Push("发送: %d 条 → %s err=%v", len(notes), target.BundleID, err)
+		err := core.DeliverWith(a.sys, target, core.Payload{Text: strings.Join(texts, "\n\n"), PNG: png}, enter)
+		diag.Push("发送: %d 条 → %s enter=%v confirmed=%v err=%v", len(notes), target.BundleID, enter, confirmed, err)
 		a.panel.Update(func() {
+			rec := delivery{At: time.Now(), Target: target.Name, Count: len(notes)}
+			if err != nil {
+				rec.Err = err.Error()
+			}
+			a.history = append([]delivery{rec}, a.history[:min(len(a.history), 49)]...)
 			if err != nil {
 				a.showHUD("warn", err.Error())
 				return
 			}
 			_ = a.store.MarkSent(ids, time.Now())
-			a.showHUD("sent", fmt.Sprintf("已发送 %d 条到 %s", len(notes), target.Name))
+			a.showHUD("sent", fmt.Sprintf(tr("已发送 %d 条到 %s"), len(notes), target.Name))
 		})
 	}()
 }
 
-func (a *app) sendSelected() {
-	if n, ok := a.current(); ok {
-		a.send([]store.Note{n})
-	}
+// isTerminal：终端里「粘贴后回车」等于直接执行命令，默认不补回车。
+func isTerminal(bundle string) bool {
+	return slices.Contains([]string{"com.apple.Terminal", "com.googlecode.iterm2", "dev.warp.Warp-Stable", "com.mitchellh.ghostty", "net.kovidgoyal.kitty"}, bundle)
 }
 
-// sendQueue 发送当前分组全部未发送项（按队列从下到上，即最早的在前）。
+func (a *app) sendSelected() { a.send(a.chosenNotes()) }
+
+// sendQueue 发送当前分组全部未完成项（按队列从下到上，即最早的在前）。
 func (a *app) sendQueue() {
 	var pending []store.Note
 	for i := len(a.notes) - 1; i >= 0; i-- {
-		if a.notes[i].SentAt.IsZero() {
+		if a.notes[i].Kind != "image" {
 			pending = append(pending, a.notes[i])
 		}
 	}
@@ -275,12 +446,12 @@ func (a *app) reorder(rows []int, to int) {
 		}
 		rest = append(rest, n)
 	}
-	order := slices.Concat(rest[:insert], picked, rest[insert:])
+	order := slices.Concat(rest[:insert], picked, rest[insert:], a.done)
 	ids := make([]string, len(order))
 	for i, n := range order {
 		ids[i] = n.ID
 	}
-	_ = a.store.Reorder(sectionOf(a.tab), ids)
+	_ = a.store.Reorder(a.section, ids)
 	a.selected = insert
 }
 

@@ -5,13 +5,24 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+
+	"github.com/toskr/native/internal/diag"
 )
 
 const hudW, hudH = 280, 56
 
 // showHUD 在光标所在屏右上角弹出提示气泡（不抢焦点、点击穿透），约 1.8s 收起；
 // 新提示顶掉旧的。kind: added / duplicate / sent / warn / info。主线程调用。
+// 隐身模式下只显示 warn（发送失败等必须知道的事）。
 func (a *app) showHUD(kind, text string) {
+	if kind != "warn" && a.store.Settings().Stealth {
+		diag.Push("隐身: 静默气泡 kind=%s", kind)
+		return
+	}
+	a.showHUDForce(kind, text)
+}
+
+func (a *app) showHUDForce(kind, text string) {
 	a.hudKind, a.hudText = kind, text
 	a.hudGen++
 	gen := a.hudGen

@@ -34,8 +34,8 @@ func loadCG() {
 
 // 事件类型与修饰键位（CGEventTypes.h）。
 const (
-	EventKeyDown      = 10
-	EventFlagsChanged = 12
+	EventKeyDown           = 10
+	EventFlagsChanged      = 12
 	tapDisabledByTimeout   = 0xFFFFFFFE
 	tapDisabledByUserInput = 0xFFFFFFFF
 

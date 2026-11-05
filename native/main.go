@@ -58,8 +58,9 @@ func start() (*app, error) {
 		return nil, err
 	}
 	seedIfRequested(st)
+	setLanguage(st.Settings().Language, mygo.App.PreferredLanguages())
 	a := newApp(core.Mac{}, st)
-	diag.Push("数据水合完成 笔记=%d 剪贴板=%d", a.counts[0], a.counts[1])
+	diag.Push("数据水合完成 笔记=%d 剪贴板=%d", a.counts[store.SectionInbox], a.counts[store.SectionClipboard])
 
 	a.panel = mygo.NewWindow(mygo.WindowOptions{
 		Title: "Toskr", Panel: true, Hidden: true, Frameless: true, Transparent: true,
@@ -92,7 +93,13 @@ func start() (*app, error) {
 		diag.Push("面板快捷键 %s 注册失败: %v", a.shortcut, err)
 		a.shortcut = ""
 	}
+	if key := st.Settings().ScreenshotKey; key != "" {
+		if err := mygo.GlobalShortcut.Register(key, a.screenshot); err != nil {
+			diag.Push("截图快捷键 %s 注册失败: %v", key, err)
+		}
+	}
 	a.setUpTray()
+	a.startBackground()
 	diag.Push("辅助功能授权=%v", macos.AXTrusted(false))
 	a.startTap()
 	a.watchClipboard()

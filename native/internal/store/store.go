@@ -33,15 +33,31 @@ type Note struct {
 	CreatedAt time.Time `json:"createdAt"`
 	SentAt    time.Time `json:"sentAt,omitzero"`
 	Kept      bool      `json:"kept,omitempty"`
+	Done      bool      `json:"done,omitempty"`
+	Kind      string    `json:"kind,omitempty"` // text | link | code | image
+	ImageFile string    `json:"imageFile,omitempty"`
+	ImageW    int       `json:"imageW,omitempty"`
+	ImageH    int       `json:"imageH,omitempty"`
 }
 
 type Settings struct {
-	TriggerModifier string `json:"triggerModifier"` // shift | control | option
-	TriggerGapMs    int    `json:"triggerGapMs"`
-	ClipboardWatch  bool   `json:"clipboardWatch"`
+	TriggerModifier string   `json:"triggerModifier"` // shift | control | option
+	TriggerGapMs    int      `json:"triggerGapMs"`
+	ClipboardWatch  bool     `json:"clipboardWatch"`
 	ExcludedApps    []string `json:"excludedApps"`
-	Glass           string `json:"glass"` // glass | clear | none
-	PanelHotkey     string `json:"panelHotkey"`
+	Glass           string   `json:"glass"` // glass | clear | none
+	PanelHotkey     string   `json:"panelHotkey"`
+	Language        string   `json:"language"`       // system | zh | en
+	Stealth         bool     `json:"stealth"`        // 隐身：只保留 warn 气泡
+	ClipRetainDays  int      `json:"clipRetainDays"` // 剪贴板保留天数（0 = 不按时间清理）
+	PasteThenEnter  bool     `json:"pasteThenEnter"` // 粘贴后回车（终端类目标默认关闭）
+	ScreenshotKey   string   `json:"screenshotKey"`
+	AIEndpoint      string   `json:"aiEndpoint"`
+	AIModel         string   `json:"aiModel"`
+	Companion       []string `json:"companion"` // 伴随停靠的应用 bundle id
+	EdgeHide        bool     `json:"edgeHide"`
+	Currency        string   `json:"currency"`
+	DueReminders    bool     `json:"dueReminders"`
 }
 
 func DefaultSettings() Settings {
@@ -49,15 +65,23 @@ func DefaultSettings() Settings {
 	// 不会同时触发两边；替换 Tauri 版后可在设置里改回 ⇧ 与 ⌘⇧C。
 	return Settings{
 		TriggerModifier: "option", TriggerGapMs: 400, ClipboardWatch: true, Glass: "glass",
-		PanelHotkey:  "Ctrl+Alt+Space",
+		PanelHotkey: "Ctrl+Alt+Space", Language: "system", ClipRetainDays: 7,
+		ScreenshotKey: "Ctrl+Alt+A", AIEndpoint: "https://api.openai.com/v1", AIModel: "gpt-4o-mini",
+		Companion: []string{"com.googlecode.iterm2", "com.apple.Terminal", "com.todesktop.230313mzl4w4u92", "com.microsoft.VSCode"},
+		EdgeHide:  true, Currency: "¥", DueReminders: true,
 		ExcludedApps: []string{"com.1password.1password", "com.apple.keychainaccess", "com.bitwarden.desktop"},
 	}
 }
 
 type snapshot struct {
-	Version  int      `json:"version"`
-	Notes    []Note   `json:"notes"`
-	Settings Settings `json:"settings"`
+	Version      int       `json:"version"`
+	Notes        []Note    `json:"notes"`
+	Settings     Settings  `json:"settings"`
+	Sections     []Section `json:"sections,omitempty"`
+	Tasks        []Task    `json:"tasks,omitempty"`
+	TaskSections []Section `json:"taskSections,omitempty"`
+	Bills        []Bill    `json:"bills,omitempty"`
+	Secrets      []Secret  `json:"secrets,omitempty"`
 }
 
 // PersistDelay 合并连续修改的落盘延迟：内存与界面即时生效，磁盘写入在后台线程合并执行
@@ -66,16 +90,21 @@ var PersistDelay = 300 * time.Millisecond
 
 // Store 线程安全；修改即时生效并通知，落盘延迟合并（Flush 立即写出）。
 type Store struct {
-	mu       sync.Mutex
-	writeMu  sync.Mutex // 串行化磁盘写入
-	dir      string
-	key      []byte
-	notes    []Note
-	settings Settings
-	onChange []func()
-	dirty    bool
-	timer    *time.Timer
-	OnError  func(error) // 后台落盘失败回调
+	mu           sync.Mutex
+	writeMu      sync.Mutex // 串行化磁盘写入
+	dir          string
+	key          []byte
+	notes        []Note
+	settings     Settings
+	sections     []Section
+	tasks        []Task
+	taskSections []Section
+	bills        []Bill
+	secrets      []Secret
+	onChange     []func()
+	dirty        bool
+	timer        *time.Timer
+	OnError      func(error) // 后台落盘失败回调
 }
 
 // Open 读取 dir 下的数据文件；文件不存在视为全新安装。密钥错误显式报错，不返回空集合。
@@ -84,6 +113,7 @@ func OpenDir(dir string, key []byte) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{dir: dir, key: key, settings: DefaultSettings()}
+	defer s.ensureDefaults()
 	raw, err := os.ReadFile(filepath.Join(dir, DataFile))
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
@@ -101,17 +131,15 @@ func OpenDir(dir string, key []byte) (*Store, error) {
 	if err := json.Unmarshal(plain, &snap); err != nil {
 		return nil, ErrCorrupt
 	}
-	s.notes, s.settings = snap.Notes, snap.Settings
-	if s.settings.TriggerModifier == "" {
-		s.settings = DefaultSettings()
-	}
+	s.notes, s.settings = snap.Notes, mergeSettings(snap.Settings)
+	s.sections, s.tasks, s.taskSections, s.bills, s.secrets = snap.Sections, snap.Tasks, snap.TaskSections, snap.Bills, snap.Secrets
 	return s, nil
 }
 
 func (s *Store) OnChange(fn func()) { s.mu.Lock(); s.onChange = append(s.onChange, fn); s.mu.Unlock() }
 
-func (s *Store) Notes() []Note       { s.mu.Lock(); defer s.mu.Unlock(); return slices.Clone(s.notes) }
-func (s *Store) Settings() Settings  { s.mu.Lock(); defer s.mu.Unlock(); return s.settings }
+func (s *Store) Notes() []Note      { s.mu.Lock(); defer s.mu.Unlock(); return slices.Clone(s.notes) }
+func (s *Store) Settings() Settings { s.mu.Lock(); defer s.mu.Unlock(); return s.settings }
 
 // Section 返回某分组的笔记（保持队列顺序）。
 func (s *Store) Section(section string) []Note {
@@ -209,7 +237,7 @@ func (s *Store) Flush() error {
 		s.mu.Unlock()
 		return nil
 	}
-	plain, err := json.Marshal(snapshot{Version: 1, Notes: s.notes, Settings: s.settings})
+	plain, err := json.Marshal(s.snapshotLocked())
 	s.dirty = false
 	s.mu.Unlock()
 	if err != nil {
@@ -228,7 +256,9 @@ func (s *Store) Flush() error {
 	return nil
 }
 
-func (s *Store) index(id string) int { return slices.IndexFunc(s.notes, func(n Note) bool { return n.ID == id }) }
+func (s *Store) index(id string) int {
+	return slices.IndexFunc(s.notes, func(n Note) bool { return n.ID == id })
+}
 
 // Delete 删除并返回被删项（供撤销）。
 func (s *Store) Delete(id string) (Note, int, bool) {
@@ -268,12 +298,16 @@ func (s *Store) Update(id, text string) error {
 	})
 }
 
+// MarkSent 发送成功：记录发送时间；所在分组未设 KeepAfterSend 时同时标记完成。
 func (s *Store) MarkSent(ids []string, at time.Time) error {
 	return s.mutate(func() bool {
 		changed := false
 		for _, id := range ids {
 			if i := s.index(id); i >= 0 {
 				s.notes[i].SentAt, changed = at, true
+				if sec, ok := s.section(s.notes[i].Section); !ok || !sec.KeepAfterSend {
+					s.notes[i].Done = true
+				}
 			}
 		}
 		return changed
@@ -400,4 +434,33 @@ func Fingerprint(notes []Note) string {
 		h.Write([]byte(n.ID))
 	}
 	return hex.EncodeToString(h.Sum(nil))[:12]
+}
+
+func (s *Store) snapshotLocked() snapshot {
+	return snapshot{Version: 2, Notes: s.notes, Settings: s.settings, Sections: s.sections,
+		Tasks: s.tasks, TaskSections: s.taskSections, Bills: s.bills, Secrets: s.secrets}
+}
+
+// mergeSettings 用默认值补齐旧版本数据里缺的字段（只补零值）。
+func mergeSettings(st Settings) Settings {
+	d := DefaultSettings()
+	if st.TriggerModifier == "" {
+		return d
+	}
+	if st.Language == "" {
+		st.Language = d.Language
+	}
+	if st.ScreenshotKey == "" {
+		st.ScreenshotKey = d.ScreenshotKey
+	}
+	if st.AIEndpoint == "" {
+		st.AIEndpoint, st.AIModel = d.AIEndpoint, d.AIModel
+	}
+	if st.Currency == "" {
+		st.Currency = d.Currency
+	}
+	if st.Companion == nil {
+		st.Companion = d.Companion
+	}
+	return st
 }

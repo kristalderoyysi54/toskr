@@ -11,6 +11,7 @@ import (
 const (
 	TypeString = "public.utf8-plain-text"
 	TypeHTML   = "public.html"
+	TypePNG    = "public.png"
 	// TypeTransient 标记临时内容，剪贴板管理器（含本应用）会忽略。
 	TypeTransient = "org.nspasteboard.TransientType"
 )

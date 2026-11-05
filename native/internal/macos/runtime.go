@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	loadOnce sync.Once
+	loadOnce   sync.Once
 	cf, cg, ax uintptr
 
 	CFRelease                     func(p uintptr)
@@ -110,8 +110,8 @@ func goString(s uintptr) string {
 
 // ---- Objective-C 小工具 ----
 
-func sel(name string) objc.SEL   { return objc.RegisterName(name) }
-func class(name string) objc.ID  { return objc.ID(objc.GetClass(name)) }
+func sel(name string) objc.SEL  { return objc.RegisterName(name) }
+func class(name string) objc.ID { return objc.ID(objc.GetClass(name)) }
 func nsString(s string) objc.ID {
 	// CFString 与 NSString toll-free bridged；交给 autorelease 管理
 	ref := cfString(s)

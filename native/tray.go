@@ -20,6 +20,7 @@ func (a *app) setUpTray() {
 	}
 	a.tray.SetMenu(mygo.NewMenu([]*mygo.MenuItem{
 		{Label: "显示 / 隐藏面板", Accelerator: a.shortcut, Click: func(*mygo.MenuItem, *mygo.Window) { a.togglePanel() }},
+		{Label: "截图", Click: func(*mygo.MenuItem, *mygo.Window) { a.screenshot() }},
 		{Label: "设置…", Click: func(*mygo.MenuItem, *mygo.Window) { a.openSettings() }},
 		mygo.Separator(),
 		{Label: "开机启动", Type: mygo.MenuItemCheckbox, Checked: mygo.App.OpenAtLogin(),

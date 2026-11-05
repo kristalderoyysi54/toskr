@@ -9,21 +9,21 @@ import (
 
 // fake 模拟剪贴板、前台应用与按键效果。
 type fake struct {
-	count       int
-	items       []macos.Item
-	front       macos.FrontApp
-	sel         string
-	selKind     macos.Selection
-	copyResult  string // ⌘C 后剪贴板变成的内容；空表示 ⌘C 无效
-	activateOK  bool
-	pasted      []string
-	activated   []int32
-	userCopies  func() // 在还原等待期间模拟用户复制
+	count      int
+	items      []macos.Item
+	front      macos.FrontApp
+	sel        string
+	selKind    macos.Selection
+	copyResult string // ⌘C 后剪贴板变成的内容；空表示 ⌘C 无效
+	activateOK bool
+	pasted     []string
+	activated  []int32
+	userCopies func() // 在还原等待期间模拟用户复制
 }
 
-func (f *fake) Frontmost() (macos.FrontApp, bool)        { return f.front, f.front.PID != 0 }
-func (f *fake) SelectedText() (macos.Selection, string)  { return f.selKind, f.sel }
-func (f *fake) ChangeCount() int                         { return f.count }
+func (f *fake) Frontmost() (macos.FrontApp, bool)       { return f.front, f.front.PID != 0 }
+func (f *fake) SelectedText() (macos.Selection, string) { return f.selKind, f.sel }
+func (f *fake) ChangeCount() int                        { return f.count }
 func (f *fake) Types() []string {
 	var out []string
 	for _, it := range f.items {

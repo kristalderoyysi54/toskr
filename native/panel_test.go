@@ -15,17 +15,19 @@ import (
 
 type nopSys struct{}
 
-func (nopSys) Frontmost() (macos.FrontApp, bool)            { return macos.FrontApp{PID: 42, Name: "Cursor"}, true }
-func (nopSys) SelectedText() (macos.Selection, string)      { return macos.SelEmpty, "" }
-func (nopSys) ChangeCount() int                             { return 0 }
-func (nopSys) Types() []string                              { return nil }
-func (nopSys) ReadString() (string, string)                 { return "", "" }
-func (nopSys) Snapshot() []macos.Item                       { return nil }
-func (nopSys) Write([]macos.Item, bool) int                 { return 0 }
-func (nopSys) PostKey(uint16, uint64)                       {}
-func (nopSys) Activate(int32) bool                          { return true }
-func (nopSys) Sleep(time.Duration)                          {}
-func (nopSys) SelfPID() int32                               { return 1 }
+func (nopSys) Frontmost() (macos.FrontApp, bool) {
+	return macos.FrontApp{PID: 42, Name: "Cursor"}, true
+}
+func (nopSys) SelectedText() (macos.Selection, string) { return macos.SelEmpty, "" }
+func (nopSys) ChangeCount() int                        { return 0 }
+func (nopSys) Types() []string                         { return nil }
+func (nopSys) ReadString() (string, string)            { return "", "" }
+func (nopSys) Snapshot() []macos.Item                  { return nil }
+func (nopSys) Write([]macos.Item, bool) int            { return 0 }
+func (nopSys) PostKey(uint16, uint64)                  {}
+func (nopSys) Activate(int32) bool                     { return true }
+func (nopSys) Sleep(time.Duration)                     {}
+func (nopSys) SelfPID() int32                          { return 1 }
 
 func testApp(t *testing.T, texts ...string) (*app, *ui.Tester) {
 	t.Helper()
@@ -45,7 +47,7 @@ func testApp(t *testing.T, texts ...string) (*app, *ui.Tester) {
 
 func TestPanelShowsQueueAndCounts(t *testing.T) {
 	_, tt := testApp(t, "第一条笔记", "第二条笔记")
-	for _, s := range []string{"第一条笔记", "第二条笔记", "笔记 2", "剪贴板 0"} {
+	for _, s := range []string{"第一条笔记", "第二条笔记", "收件箱 2", "剪贴板 0", "队列", "任务", "账单", "秘文"} {
 		if !tt.HasText(s) {
 			t.Fatalf("缺少 %q，现有 %v", s, tt.Texts())
 		}
@@ -137,20 +139,23 @@ func TestEditCommitWithCmdEnter(t *testing.T) {
 func TestClipboardTabAndMoveToNotes(t *testing.T) {
 	a, tt := testApp(t)
 	a.store.Add(store.Note{Section: store.SectionClipboard, Text: "复制来的"})
-	tt.Key(ui.Cmd, ui.Key2)
 	tt.Frame()
-	if !tt.HasText("复制来的") || !tt.HasText("剪贴板 1") {
+	if err := tt.Click("剪贴板 1"); err != nil {
+		t.Fatalf("%v %v", err, tt.Texts())
+	}
+	tt.Frame()
+	if !tt.HasText("复制来的") {
 		t.Fatalf("%v", tt.Texts())
 	}
 	if err := tt.RightClick("复制来的"); err != nil {
 		t.Fatal(err)
 	}
-	if err := tt.ChooseMenuItem("转为笔记"); err != nil {
+	if err := tt.ChooseMenuItem("移动到", "收件箱"); err != nil {
 		t.Fatalf("%v menu=%v", err, tt.Menu())
 	}
 	tt.Frame()
 	if len(a.store.Section(store.SectionInbox)) != 1 {
-		t.Fatal("应转入笔记分组")
+		t.Fatal("应移入收件箱")
 	}
 }
 
