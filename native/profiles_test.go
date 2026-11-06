@@ -122,13 +122,13 @@ func TestSendProfilesQuickSwitchAndPolicies(t *testing.T) {
 	sec, _, _ := a.store.Add(store.Note{Section: store.SectionInbox, Text: "用 " + key})
 	a.send([]store.Note{sec})
 	tt.Frame()
-	if !tt.HasText("保留原文…") || tt.HasText("仍然发送") {
+	if !tt.HasText("1 项处理完才能发送") {
 		t.Fatalf("要求逐项处理不应一键发原文 %v", tt.Texts())
 	}
-	_ = tt.Click("保留原文…")
+	_ = tt.Click("一键保留原文")
 	tt.Frame()
 	before = len(sys.sent())
-	if err := tt.Click("确认保留 1 项原文"); err != nil {
+	if err := tt.Click("发送"); err != nil {
 		t.Fatalf("%v %v", err, tt.Texts())
 	}
 	waitFor(t, func() bool { return len(sys.sent()) > before })

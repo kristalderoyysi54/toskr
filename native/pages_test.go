@@ -95,10 +95,21 @@ func TestPreflightBlocksUntilConfirmedAndRedacts(t *testing.T) {
 	if !tt.HasText("发送内容含敏感信息：密钥/凭据 ×1") || len(sys.sent()) != 0 {
 		t.Fatalf("预检命中应拦截 %v", tt.Texts())
 	}
-	_ = tt.Click("遮罩后发送")
+	if tt.HasText("发送") && !tt.HasText("1 项处理完才能发送") {
+		t.Fatalf("未处理前不能发送 %v", tt.Texts())
+	}
+	_ = tt.Click("一键全部替换")
+	tt.Frame()
+	if !tt.HasText("已替换 1 处敏感内容，发往 Cursor · 默认") && !strings.Contains(strings.Join(tt.Texts(), "|"), "已替换 1 处敏感内容") {
+		t.Fatalf("替换后应可发送 %v", tt.Texts())
+	}
+	_ = tt.Click("发送")
 	waitFor(t, func() bool { return len(sys.sent()) > 0 })
-	if got := sys.sent()[0]; strings.Contains(got, key) || !strings.HasPrefix(got, "部署用 sk") {
-		t.Fatalf("应遮罩后发送，实为 %q", got)
+	if got := sys.sent()[0]; got != "部署用 [API_KEY_01]" {
+		t.Fatalf("应替换为占位符后发送，实为 %q", got)
+	}
+	if n, _ := a.store.Note(a.store.Notes()[0].ID); !strings.Contains(n.Text, key) {
+		t.Fatal("原卡不应被改写")
 	}
 }
 

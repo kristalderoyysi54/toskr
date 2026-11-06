@@ -78,7 +78,7 @@ type app struct {
 	target                              macos.FrontApp // 发送目标：面板唤出前的前台应用
 	targetStarted                       int64          // 目标进程启动时刻（身份锁定）
 	pending                             []store.Note   // 预检命中、等待确认的发送
-	findings                            []core.Finding
+	pf                                  preflightState // 发送预检：逐项处理状态
 	history                             []delivery
 	thumbs                              map[string]ui.ImageSource
 	aiBusy                              string // 正在 AI 处理的笔记 ID
@@ -131,7 +131,6 @@ type app struct {
 	editProfileID                              string // 设置里正在编辑的方案
 	profName                                   string
 	enterAsk                                   []store.Note // 方案为「每次发送前确认」时挂起，等用户选回车与否
-	rawArm                                     bool         // 「要求逐项处理」下保留原文需再点一次确认
 	pendingTmpl, enterTmpl                     string       // 挂起中的发送所带的提示词模板
 	snipAdd                                    bool         // 设置里正在新增模板
 	snipEditID, snipLabel, snipText, snipGroup string
@@ -622,7 +621,7 @@ func (a *app) sendT(notes []store.Note, tmpl string) {
 	}
 	if len(fs) > 0 || a.forceCheck {
 		a.forceCheck = false
-		a.pending, a.findings, a.rawArm, a.pendingTmpl = notes, fs, false, tmpl
+		a.pending, a.pendingTmpl, a.pf = notes, tmpl, preflightState{}
 		if a.panel != nil {
 			a.panel.Show() // 确认条在面板里
 		}
@@ -635,22 +634,6 @@ func (a *app) sendT(notes []store.Note, tmpl string) {
 func (a *app) scanRules() core.Rules {
 	st := a.store.Settings()
 	return core.Rules{Off: st.FirewallOff, DisabledWarn: st.FirewallDisabledWarn, CustomFields: st.FirewallCustomFields}
-}
-
-// confirmPending 处理预检确认条：redact 为 true 时遮罩命中处再发；保留原文时强制不回车（同 Tauri forcePressEnterOff）。
-func (a *app) confirmPending(redact bool) {
-	notes, tmpl, hadFindings := a.pending, a.pendingTmpl, len(a.findings) > 0
-	a.pending, a.findings, a.rawArm, a.pendingTmpl = nil, nil, false, ""
-	if redact {
-		notes = slices.Clone(notes)
-		rules := a.scanRules()
-		for i := range notes {
-			fs := core.Scan(notes[i].Text, rules)
-			a.lastRedactions += len(fs)
-			notes[i].Text = core.Redact(notes[i].Text, fs)
-		}
-	}
-	a.askEnter(notes, hadFindings && !redact, tmpl) // 只有真的保留了敏感原文才强制不回车
 }
 
 // askEnter：方案为「每次发送前确认」时先在面板里问是否回车；保留了原文则一律不回车。

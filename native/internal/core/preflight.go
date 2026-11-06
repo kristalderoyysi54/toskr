@@ -1,8 +1,10 @@
 package core
 
 import (
+	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode/utf16"
@@ -145,4 +147,77 @@ func Redact(text string, fs []Finding) string {
 		last = f.End
 	}
 	return string(append(out, b[last:]...))
+}
+
+// PlaceholderBase 同 Tauri placeholder(category)：[EMAIL]、[API_KEY]…；自定义字段按 apiKey。
+func PlaceholderBase(cat string) string {
+	switch cat {
+	case "custom", "apiKey":
+		return "API_KEY"
+	case "privateKey":
+		return "PRIVATE_KEY"
+	case "databaseUrl":
+		return "DATABASE_URL"
+	case "nationalId":
+		return "NATIONAL_ID"
+	case "bankCard":
+		return "BANK_CARD"
+	case "ipAddress":
+		return "IP_ADDRESS"
+	}
+	return strings.ToUpper(cat)
+}
+
+// MaskedPreview 同 Tauri masked_preview：首字•••末字，4 个字符以内全遮。
+func MaskedPreview(v string) string {
+	r := []rune(v)
+	if len(r) <= 4 {
+		return "••••"
+	}
+	return string(r[0]) + "•••" + string(r[len(r)-1])
+}
+
+// ReplaceWithPlaceholders 同 Tauri assignStablePlaceholders + 替换：同一原值永远映射到同一个 [BASE_NN]（m 跨卡共用、
+// 旧映射不重编号），编号从映射与正文里已有的同类占位符之后接着排；从后往前替换不打乱区间。
+func ReplaceWithPlaceholders(text string, fs []Finding, m map[string]string) string {
+	ordered := slices.Clone(fs)
+	slices.SortFunc(ordered, func(x, y Finding) int { return x.Start - y.Start })
+	next := map[string]int{}
+	for _, f := range ordered {
+		src := text[f.Start:f.End]
+		if _, ok := m[src]; ok || src == "" {
+			continue
+		}
+		base := PlaceholderBase(f.Category)
+		n, ok := next[base]
+		if !ok {
+			n = nextPlaceholderNumber(m, base, text)
+		}
+		m[src] = fmt.Sprintf("[%s_%02d]", base, n)
+		next[base] = n + 1
+	}
+	for i := len(ordered) - 1; i >= 0; i-- {
+		f := ordered[i]
+		if i < len(ordered)-1 && f.End > ordered[i+1].Start {
+			continue // 不应出现的重叠：保守跳过
+		}
+		text = text[:f.Start] + m[text[f.Start:f.End]] + text[f.End:]
+	}
+	return text
+}
+
+func nextPlaceholderNumber(m map[string]string, base, text string) int {
+	re := regexp.MustCompile(`\[` + regexp.QuoteMeta(base) + `_([0-9]+)\]`)
+	hi := 0
+	for _, v := range m {
+		if s := re.FindStringSubmatch(v); s != nil && s[0] == v {
+			n, _ := strconv.Atoi(s[1])
+			hi = max(hi, n)
+		}
+	}
+	for _, s := range re.FindAllStringSubmatch(text, -1) {
+		n, _ := strconv.Atoi(s[1])
+		hi = max(hi, n)
+	}
+	return hi + 1
 }
