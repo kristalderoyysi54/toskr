@@ -32,16 +32,17 @@ type detailState struct {
 	tagDraft            string
 	tagOn               bool
 	full                ui.ImageSource
-	enter               bool              // 正文待播进场（每次打开一条内容）
-	readSel             []ui.SelectedText // 阅读态的划词选区（上一帧）
-	editSel             [2]int            // 进编辑时要落的选区（rune 偏移，-1 = 无）
-	dblFrames           int               // 双击正文后再等几帧进编辑（等选词结果落进 readSel）
-	editRange           [2]int            // 编辑器当前选区（上一帧，rune 偏移）
-	title               string            // 编辑态标题草稿（同 Tauri draftTitle）
-	img                 int               // 多图时当前第几张（主图 + 附件 + 内容块里的图）
-	imgW, imgH          int               // 当前图原始尺寸
-	imgNote             bool              // 图片文字备注编辑中
-	pickPara            bool              // 选词粒度：段（同 Tauri pickGranularity）
+	enter               bool                 // 正文待播进场（每次打开一条内容）
+	readSel             []ui.SelectedText    // 阅读态的划词选区（上一帧）
+	editSel             [2]int               // 进编辑时要落的选区（rune 偏移，-1 = 无）
+	dblFrames           int                  // 双击正文后再等几帧进编辑（等选词结果落进 readSel）
+	editRange           [2]int               // 编辑器当前选区（上一帧，rune 偏移）
+	title               string               // 编辑态标题草稿（同 Tauri draftTitle）
+	img                 int                  // 多图时当前第几张（主图 + 附件 + 内容块里的图）
+	imgW, imgH          int                  // 当前图原始尺寸
+	imgNote             bool                 // 图片文字备注编辑中
+	pickPara            bool                 // 选词粒度：段（同 Tauri pickGranularity）
+	blocks              []store.ContentBlock // 图文混排卡编辑态的内容块草稿（nil = 按纯文本编辑）
 }
 
 // 多详情窗（同 Tauri detailWindows.ts，📌 固定并存）：每扇窗一份 detailPane。渲染 / 获得焦点时把该窗的状态换进
@@ -136,7 +137,12 @@ func (a *app) openDetail(n store.Note) {
 }
 
 func (a *app) saveDetail() {
-	if a.detail.id != "" && a.detail.edit && strings.TrimSpace(a.detailText) != "" {
+	if a.detail.id != "" && a.detail.edit && a.detail.blocks != nil {
+		_, _ = a.store.SetBlocks(a.detail.id, a.detail.blocks)
+		if n, ok := a.store.Note(a.detail.id); ok && n.Title != strings.TrimSpace(a.detail.title) {
+			_ = a.store.SetTitle(n.ID, a.detail.title)
+		}
+	} else if a.detail.id != "" && a.detail.edit && strings.TrimSpace(a.detailText) != "" {
 		_ = a.store.Update(a.detail.id, a.detailText)
 		if n, ok := a.store.Note(a.detail.id); ok && n.Title != strings.TrimSpace(a.detail.title) {
 			_ = a.store.SetTitle(n.ID, a.detail.title)
@@ -238,6 +244,9 @@ func (a *app) detailKeys(c *ui.Context, n store.Note) {
 				a.detailImageAt(n, a.detail.img+1)
 			}
 		}
+	}
+	if c.Shortcut(ui.Cmd, ui.KeyV) && !a.detail.edit && !a.detail.imgNote { // 阅读态 ⌘V：把剪贴板图片加进当前卡
+		a.pasteIntoDetail(n, "")
 	}
 	if c.Shortcut(0, ui.KeyW) && !a.detail.edit && n.Kind != "image" { // W 切换选词模式（同 Tauri）
 		a.detail.pick, a.detail.pickAnchor, a.detail.pickEnd = !a.detail.pick, -1, -1
@@ -365,6 +374,12 @@ func (a *app) detailBody(c *ui.Context, k tokens, s settingsTokens, n store.Note
 	if a.detail.edit { // 编辑态一圈内嵌描边 + 浅蓝底（同 Tauri editing && bg-primary/[0.04] ring-inset ring-primary/25）
 		sc.Background(s.primary.Alpha(0.04)).InsetShadow(0, 0, 0, 1, s.primary.Alpha(0.25))
 	}
+	if files := sc.DroppedFiles(); len(files) > 0 { // 拖入图片文件：追加进当前卡（同 Tauri 详情窗拖入）
+		a.dropIntoDetail(n, files)
+	}
+	if sc.FileDragOver() {
+		sc.InsetShadow(0, 0, 0, 2, s.primary.Alpha(0.5))
+	}
 	sc.Children(func() {
 		body := ui.Column(c).Padding(64, 20, 84, 20)
 		if a.detail.enter { // 正文进场：opacity 0 → 1、y 6 → 0，springSnappy（Tauri motion.div key=gen）
@@ -385,13 +400,18 @@ func (a *app) detailBody(c *ui.Context, k tokens, s settingsTokens, n store.Note
 					ui.TextInputBase(c, &a.detail.title).Grow(1).Font(fontSans).FontSize(16).FixedLineHeight(22).FontWeight(600).TextColor(k.fg).
 						PlaceholderColor(k.muted.Alpha(0.5)).Placeholder(tr("添加标题（可选）")).Label(tr("笔记标题"))
 				})
+				if a.detail.blocks != nil {
+					a.detailBlocksEdit(c, k, n)
+					break
+				}
 				ta := ui.TextAreaBase(c, &a.detailText).FillWidth().Margin(5.85, 0, 0, 0).Lines(12, 1000).Font(fontSans).FontSize(13).
-					FixedLineHeight(21.125).TextColor(k.fg).Focus()
+					FixedLineHeight(21.125).TextColor(k.fg).Focus().OnPaste(func(t string) bool { return a.pasteIntoDetail(n, t) })
 				if sel := a.detail.editSel; sel[0] >= 0 { // 双击 / 划词进编辑：落在同一处（同 Tauri pendingSelectionRef）
 					ta.SetTextSelection(sel[0], sel[1])
 					a.detail.editSel = [2]int{-1, -1}
 				}
 				a.detail.editRange[0], a.detail.editRange[1] = ta.TextSelection()
+				a.detailMediaStrip(c, k, n)
 			case a.detail.pick:
 				a.pickView(c, k, s, n.Text)
 			default:
@@ -400,6 +420,9 @@ func (a *app) detailBody(c *ui.Context, k tokens, s settingsTokens, n store.Note
 				read.Children(func() {
 					if a.detail.raw || n.Kind == "code" {
 						text(c, n.Text, 13, 21.125, 400, k.fg).Font(fontMono).Wrap()
+						a.detailMediaStrip(c, k, n)
+					} else if len(n.MediaFiles()) > 0 {
+						a.detailRichRead(c, k, n, float32(a.store.Settings().DetailFontSize)+1)
 					} else {
 						renderMarkdown(c, k, n.Text, float32(a.store.Settings().DetailFontSize)+1)
 					}
@@ -800,6 +823,10 @@ func (a *app) sendDetail(n store.Note) {
 func (a *app) enterDetailEdit(n store.Note) {
 	a.saveDetail()
 	a.detail.edit, a.detail.pick, a.detailText = true, false, n.Text
+	a.detail.blocks = nil
+	if store.HasMixedContent(n.Blocks) {
+		a.detail.blocks = slices.Clone(n.Blocks)
+	}
 	a.detail.editSel = mapReadSelection(n.Text, a.detail.readSel)
 	a.detail.editRange = [2]int{}
 }

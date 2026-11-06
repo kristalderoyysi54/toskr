@@ -88,9 +88,10 @@ type app struct {
 	clipPickAt                          ui.Rect           // 弹出浮层挂靠的浮钮位置
 	history                             []delivery
 	thumbs                              map[string]ui.ImageSource
-	aiBusy                              string             // 正在 AI 处理的笔记 ID
-	aiCancel                            context.CancelFunc // 进行中的 AI 改写（可取消）
-	draftImgs                           []pastedImage      // 输入区暂存的粘贴 / 拖入图片（提交时与草稿合成一张卡）
+	aiBusy                              string                    // 正在 AI 处理的笔记 ID
+	aiCancel                            context.CancelFunc        // 进行中的 AI 改写（可取消）
+	draftImgs                           []pastedImage             // 输入区暂存的粘贴 / 拖入图片（提交时与草稿合成一张卡）
+	bigImgs                             map[string]ui.ImageSource // 详情窗内嵌大图缓存
 
 	// 1:1 主面板
 	noteGroups                               []noteGroup
