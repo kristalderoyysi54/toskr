@@ -564,7 +564,7 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 				if n.Title != "" {
 					title = n.Title
 				}
-				tb := ui.Row(c).Grow(1).Basis(0).Key("title-hit").Role(ui.RoleButton).Label(tr("点击重命名"))
+				tb := ui.Row(c).Grow(1).Basis(0).Key("title-hit").Role(ui.RoleButton).Label(title).Tooltip(tr("点击重命名"))
 				tb.Children(func() { text(c, title, 11, 16, 600, k.cardHeadText).SingleLine() })
 				if tb.Clicked() { // 同 Tauri：点通栏标题就地改名
 					a.titleEditID, a.titleText = n.ID, n.Title
