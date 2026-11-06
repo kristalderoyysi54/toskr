@@ -75,7 +75,7 @@ func (a *app) shortcutHelp(c *ui.Context, k tokens) {
 
 // quickBadge：按住 ⌘ 时前 9 张卡左上角显示 ⌘N 快发角标（同 Tauri quickSlot）；top 为距顶偏移（紧凑行取垂直居中）。
 func (a *app) quickBadge(c *ui.Context, k tokens, idx int, top float32) {
-	if idx < 0 || idx >= 9 || c.Modifiers()&ui.Cmd == 0 || !held(macos.FlagCommand) || a.editing != "" {
+	if idx < 0 || idx >= 9 || c.Modifiers()&ui.Cmd == 0 || !held(macos.FlagCommand) {
 		return
 	}
 	bg, fg := ui.RGBA(0, 0, 0, 0.7), ui.RGB(255, 255, 255)

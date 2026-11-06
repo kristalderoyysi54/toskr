@@ -16,7 +16,7 @@ import (
 // queueKeys：笔记 / 剪贴页的卡片快捷键（同 Tauri）：⌘⏎ 发送勾选、⌘1-9 快发第 N 张、⌘C 复制为列表、⌘A 全选、
 // ↑↓ 移动焦点、←→ 移动并单选、Space 预览（链接卡开网页）、x 勾选、d 完成、p 置顶 / 常用、Enter 编辑、⌘⌫ 删除焦点卡。
 func (a *app) queueKeys(c *ui.Context) {
-	if a.editing != "" || a.titleEditID != "" || a.tagEditID != "" || a.quickOpen {
+	if a.titleEditID != "" || a.tagEditID != "" || a.quickOpen {
 		return // 输入框 / 方案快速切换浮层自己处理按键
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyEnter) {
@@ -144,7 +144,7 @@ func (a *app) choose(i int) {
 
 func (a *app) switchSection(id string) {
 	if a.section != id {
-		a.section, a.selected, a.editing = id, 0, ""
+		a.section, a.selected = id, 0
 		a.chosen.Clear()
 		a.reload()
 	}
@@ -346,21 +346,6 @@ func (a *app) card(c *ui.Context, i int) {
 	}
 	box.ContextMenu(func(m *ui.Menu) { a.cardMenu(c, m, i, n) })
 	box.Children(func() {
-		if a.editing == n.ID {
-			ui.TextArea(c, &a.editText).Lines(2, 12).Focus().OnTextKey(func(k ui.TextKey) bool {
-				switch {
-				case k.Key == ui.KeyEnter && k.Mods == ui.Cmd:
-					a.commitEdit()
-					return true
-				case k.Key == ui.KeyEscape:
-					a.editing = ""
-					return true
-				}
-				return false
-			})
-			ui.Text(c, tr("⌘↵ 保存   esc 取消")).FontSize(10).TextColor(t.TextMuted)
-			return
-		}
 		if n.Kind == "image" {
 			if img := a.thumb(n.ImageFile); img != nil {
 				w, h := ui.ImageSize(img)
@@ -537,7 +522,7 @@ func (a *app) menuEntry(c *ui.Context, m *ui.Menu, id string, n store.Note, mult
 			a.exportNotes(a.chosenNotes())
 		}
 	case "edit":
-		if single && !isImage && m.Item(tr("编辑")).Chosen() {
+		if single && m.Item(tr("编辑")).Chosen() {
 			a.startEdit()
 		}
 	case "ocr":

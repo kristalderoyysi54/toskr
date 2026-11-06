@@ -123,22 +123,33 @@ func TestSearchFilters(t *testing.T) {
 	}
 }
 
-func TestEditCommitWithCmdEnter(t *testing.T) {
+// 同 Tauri：卡片上回车 / 菜单「编辑」开详情窗进编辑态，不在列表里就地改；⌘S 保存。
+func TestEditOpensDetailWindow(t *testing.T) {
 	a, tt := testApp(t, "原文")
+	var opened string
+	old := openDetailFn
+	openDetailFn = func(a *app, n store.Note) {
+		opened = n.ID
+		a.detail = detailState{id: n.ID, pickAnchor: -1, pickEnd: -1, editSel: [2]int{-1, -1}}
+	}
+	t.Cleanup(func() { openDetailFn = old })
 	tt.Key(0, ui.KeyDown)
-	tt.Key(0, ui.KeyEnter) // 有焦点卡、未聚焦输入框时回车进入编辑
+	tt.Key(0, ui.KeyEnter) // 有焦点卡、未聚焦输入框时回车
 	tt.Frame()
-	if a.editing == "" {
-		t.Fatal("回车应进入编辑")
+	n := a.store.Notes()[0]
+	if opened != n.ID || !a.detail.edit || a.detailText != "原文" {
+		t.Fatalf("应开详情窗编辑 opened=%q edit=%v", opened, a.detail.edit)
 	}
-	tt.Type("，补充")
-	tt.Key(ui.Cmd, ui.KeyEnter)
-	tt.Frame()
-	if got := a.store.Notes()[0].Text; !strings.HasPrefix(got, "原文") || !strings.Contains(got, "补充") {
-		t.Fatalf("编辑未保存：%q", got)
+	if tt.HasText("⌘↵ 保存   esc 取消") {
+		t.Fatal("列表里不应再出现就地编辑框")
 	}
-	if a.editing != "" {
-		t.Fatal("保存后退出编辑")
+	dt := ui.NewTester(a.detailView, 560, 540)
+	dt.Frame()
+	dt.Type("，补充")
+	dt.Key(ui.Cmd, ui.KeyS)
+	dt.Frame()
+	if got := a.store.Notes()[0].Text; !strings.Contains(got, "补充") || a.detail.edit {
+		t.Fatalf("⌘S 应保存并退出编辑：%q edit=%v", got, a.detail.edit)
 	}
 }
 

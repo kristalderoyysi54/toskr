@@ -67,8 +67,6 @@ type app struct {
 	search     ui.Handle
 	draft      string
 	draftIn    ui.Handle
-	editing    string // 正在编辑的笔记 ID
-	editText   string
 	pinned     bool
 	showDone   bool
 	newSecOn   bool
@@ -395,7 +393,6 @@ func (a *app) showPanel() {
 
 // hidePanel 收起面板：先播离场（向停靠边退 16px 并淡出，140ms easeIn），播完再藏窗，同 Tauri onAnimationComplete → hidePanel。
 func (a *app) hidePanel() {
-	a.editing = ""
 	a.remaskAll() // 秘文：面板收起即回遮罩，明文丢弃
 	if a.panel == nil || !a.panel.IsVisible() || a.panelHiding {
 		return
@@ -415,7 +412,6 @@ func (a *app) hidePanel() {
 
 // hidePanelNow 立即藏窗（发送、截图：焦点必须马上还给目标应用，不能等离场动画）。
 func (a *app) hidePanelNow() {
-	a.editing = ""
 	a.remaskAll()
 	a.panelHiding = false
 	if a.panel != nil {
@@ -658,16 +654,9 @@ func (a *app) clearDone(c *ui.Context) {
 }
 
 func (a *app) startEdit() {
-	if n, ok := a.current(); ok && n.Kind != "image" {
-		a.editing, a.editText = n.ID, n.Text
+	if n, ok := a.current(); ok {
+		a.editInDetail(n)
 	}
-}
-
-func (a *app) commitEdit() {
-	if a.editing != "" && strings.TrimSpace(a.editText) != "" {
-		_ = a.store.Update(a.editing, a.editText)
-	}
-	a.editing = ""
 }
 
 // send 先做敏感内容预检（按方案隐私策略），命中则挂起等确认；再按方案的粘贴后动作投递。

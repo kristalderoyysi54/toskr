@@ -958,3 +958,18 @@ func noteURL(n store.Note) string {
 	}
 	return u
 }
+
+// editInDetail：卡片「编辑」（悬停铅笔、右键菜单、↩）一律开详情窗进编辑态（同 Tauri openNoteDetail(id, true)）——
+// 面板太窄不适合改长文。图片卡进文字备注编辑；秘文不进详情窗（通用编辑器保存会以明文改写密文信封）。
+func (a *app) editInDetail(n store.Note) {
+	if n.Kind == "secret" {
+		a.showHUD("info", tr("秘文请在秘文页点击查看，不支持详情窗"))
+		return
+	}
+	openDetailFn(a, n)
+	if n.Kind == "image" {
+		a.detailText, a.detail.imgNote = imageNoteText(n), true
+		return
+	}
+	a.enterDetailEdit(n)
+}

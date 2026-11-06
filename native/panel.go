@@ -374,7 +374,7 @@ func (a *app) panelMenu(c *ui.Context, k tokens) {
 
 // panelKeys：面板级快捷键（同 Tauri App.tsx 键盘处理）：⌃Tab / ⌘←→ 切页、Esc 逐层退出、⌘F 搜索、⌘Z 撤销、⇧⌘⌫ 清理已完成。
 func (a *app) panelKeys(c *ui.Context) {
-	typing := a.editing != "" || a.titleEditID != "" || a.tagEditID != "" || a.renamingSec != "" || a.taskOpen != "" || a.taskSecRename != ""
+	typing := a.titleEditID != "" || a.tagEditID != "" || a.renamingSec != "" || a.taskOpen != "" || a.taskSecRename != ""
 	if c.Shortcut(ui.Ctrl, ui.KeyTab) { // 按页签顺序循环（页签可拖动重排，剪贴历史关闭时跳过剪贴页）
 		a.pageStep(1, true)
 	}
@@ -405,8 +405,6 @@ func (a *app) panelKeys(c *ui.Context) {
 			a.billAnalytics = false
 		case a.titleEditID != "" || a.tagEditID != "" || a.renamingSec != "":
 			a.titleEditID, a.tagEditID, a.renamingSec = "", "", ""
-		case a.editing != "":
-			a.editing = ""
 		case a.taskSecRename != "":
 			a.taskSecRename = ""
 		case a.taskOpen != "":
@@ -471,7 +469,7 @@ func (a *app) panelKeys(c *ui.Context) {
 func (a *app) switchPage(p int) {
 	if a.page != p {
 		a.prevPage, a.pageAt = a.page, time.Time{}
-		a.page, a.editing, a.selected = p, "", 0
+		a.page, a.selected = p, 0
 		a.chosen.Clear()
 		a.clearMsgChosen()
 		a.reload()

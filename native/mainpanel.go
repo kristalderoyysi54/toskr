@@ -395,7 +395,7 @@ func (a *app) sectionBlock(c *ui.Context, k tokens, g noteGroup, top float32) fl
 				}
 			}
 			for _, n := range g.open {
-				if height >= 0 && (y+cardH < a.vis.top || y > a.vis.bottom) && !a.chosen.Has(n.ID) && a.editing != n.ID {
+				if height >= 0 && (y+cardH < a.vis.top || y > a.vis.bottom) && !a.chosen.Has(n.ID) {
 					skip += cardH + 4
 				} else {
 					flush()
@@ -490,7 +490,7 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 		a.cardMenu(c, m, max(idx, 0), n)
 	})
 	// 拖拽排序（同 Tauri dnd-kit）：拖起卡片，放到另一张卡上 = 插到它前面（可跨分组）；放到分组头 / 侧栏分组 = 移入该组
-	if a.editing != n.ID && a.titleEditID != n.ID && a.tagEditID != n.ID {
+	if a.titleEditID != n.ID && a.tagEditID != n.ID {
 		box.Drag(noteDrag{n.ID})
 	}
 	dropOver := false
@@ -532,21 +532,6 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 			}
 		})
 		ui.Column(c).Height(62).Margin(4, 8, 0, 8).Clip().Children(func() {
-			if a.editing == n.ID {
-				ui.TextAreaBase(c, &a.editText).Fill().Font(fontSans).FontSize(12).FixedLineHeight(18).TextColor(k.fg).Focus().
-					OnTextKey(func(key ui.TextKey) bool {
-						switch {
-						case key.Key == ui.KeyEnter && key.Mods == ui.Cmd:
-							a.commitEdit()
-							return true
-						case key.Key == ui.KeyEscape:
-							a.editing = ""
-							return true
-						}
-						return false
-					})
-				return
-			}
 			if n.Blur {
 				return // 模糊卡不构建正文（旁白与截图都读不到）
 			}
@@ -707,24 +692,8 @@ const flashDur = 1800 * time.Millisecond
 func (a *app) compactCard(c *ui.Context, k tokens, n store.Note, hovered bool) {
 	ui.Box(c).Size(18, 18).Margin(0, 0, 0, 4).Padding(2).Opacity(0.6).Children(func() { licon(c, "grip-vertical", 14, k.muted.Alpha(0.5)) })
 	ui.Row(c).Grow(1).Basis(0).Padding(0, 8).Gap(6).AlignItems(ui.Center).Children(func() {
-		if a.editing != n.ID && !(n.Kind == "link" && a.favicon(n.LinkIcon) != nil) {
+		if !(n.Kind == "link" && a.favicon(n.LinkIcon) != nil) {
 			a.sourceIcon(c, n, 20)
-		}
-		if a.editing == n.ID {
-			ui.TextInputBase(c, &a.editText).Grow(1).Font(fontSans).FontSize(12).FixedLineHeight(17).TextColor(k.fg).Focus().
-				OnTextKey(func(key ui.TextKey) bool {
-					switch key.Key {
-					case ui.KeyEnter:
-						a.editText = key.Text()
-						a.commitEdit()
-						return true
-					case ui.KeyEscape:
-						a.editing = ""
-						return true
-					}
-					return false
-				})
-			return
 		}
 		line := strings.Join(strings.Fields(n.Text), " ")
 		if n.Blur {
@@ -782,7 +751,7 @@ func (a *app) cardActionsAt(c *ui.Context, k tokens, n store.Note, bottom float3
 				case "expand":
 					a.openDetail(n)
 				case "pencil":
-					a.editing, a.editText = n.ID, n.Text
+					a.editInDetail(n)
 				case "eye-off", "eye":
 					_ = a.store.SetBlur(n.ID, !n.Blur)
 				case "trash-2":
@@ -924,8 +893,6 @@ func (a *app) composerSection() store.Section {
 func (a *app) keyHints() [][2]string {
 	_, focused := a.current()
 	switch {
-	case a.editing != "":
-		return [][2]string{{"⌘⏎", tr("保存")}, {"Esc", tr("取消")}}
 	case a.searchOpen:
 		return [][2]string{{"Esc", tr("关闭搜索")}, {"↑↓", tr("移动焦点")}}
 	case a.page == pageTasks:
@@ -1134,8 +1101,8 @@ func (a *app) newNoteIn(sec store.Section) {
 		return
 	}
 	a.reload()
-	openDetailFn(a, n)
-	a.detail.edit = true
+	a.editInDetail(n)
+	a.detail.editSel = [2]int{0, len([]rune(n.Text))} // 同 Tauri openNoteDetail(id, true, true)：全选占位文字，直接打字替换
 }
 
 var openDetailFn = (*app).openDetail // 测试替换（真窗口需要运行中的应用）

@@ -128,9 +128,6 @@ func (a *app) clipPage(c *ui.Context, k tokens) {
 						}
 						for _, n := range list[i:j] {
 							lay := layout
-							if a.editing == n.ID { // 编辑时临时回到标准高度放下输入框
-								lay = clipStandard
-							}
 							h := clipCardH(lay)
 							if (y+h < vis.top || y > vis.bottom) && !a.chosen.Has(n.ID) {
 								skip += h + gap
@@ -364,19 +361,6 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 		}
 		ui.Column(c).Grow(1).Margin(4, 0, 0, 0).Clip().Children(func() {
 			switch {
-			case a.editing == n.ID:
-				ui.TextAreaBase(c, &a.editText).Fill().Font(fontSans).FontSize(12).FixedLineHeight(18).TextColor(k.fg).Focus().
-					OnTextKey(func(key ui.TextKey) bool {
-						switch {
-						case key.Key == ui.KeyEnter && key.Mods == ui.Cmd:
-							a.commitEdit()
-							return true
-						case key.Key == ui.KeyEscape:
-							a.editing = ""
-							return true
-						}
-						return false
-					})
 			case n.Blur: // 模糊卡不构建正文
 			case n.Kind == "image":
 				if img := a.thumb(n.ImageFile); img != nil {
@@ -484,7 +468,7 @@ func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool, to
 					_ = exec.Command("/usr/bin/open", u.String()).Start()
 				}
 			case "pencil":
-				a.editing, a.editText = n.ID, n.Text
+				a.editInDetail(n)
 			case "eye-off", "eye":
 				_ = a.store.SetBlur(n.ID, !n.Blur)
 			case "trash-2":
