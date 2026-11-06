@@ -222,13 +222,17 @@ func (a *app) deliveryRow(c *ui.Context, k tokens, d store.Delivery, notes []sto
 			ui.Spacer(c)
 			more := ui.Row(c).Gap(2).AlignItems(ui.Center).Key("more-" + d.ID).Tooltip(tr("更多信息")).Role(ui.RoleButton).Label(tr("更多信息"))
 			open := a.drawerMore[d.ID]
+			mc := k.muted
+			if more.Hovered() {
+				mc = k.fg
+			}
 			more.Children(func() {
-				text(c, tr("更多"), 10, 14, 400, k.muted)
+				text(c, tr("更多"), 10, 14, 400, mc)
 				chev := "chevron-down"
 				if open {
 					chev = "chevron-up"
 				}
-				licon(c, chev, 12, k.muted)
+				licon(c, chev, 12, mc)
 			})
 			if more.Clicked() {
 				a.drawerMore[d.ID] = !open

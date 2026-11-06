@@ -147,7 +147,12 @@ func (a *app) taskEditor(c *ui.Context, k tokens, t store.Task) {
 				if it.Done {
 					icon, col, label = "circle-check", k.ok, tr("取消勾选")
 				}
-				b := ui.Box(c).Size(14, 14).Role(ui.RoleButton).Label(label).Children(func() { licon(c, icon, 14, col) })
+				b := ui.Box(c).Size(14, 14).Role(ui.RoleButton).Label(label)
+				if b.Hovered() && !it.Done {
+					col = k.muted
+				}
+				b.AnimatePose(ui.Pose{Scale: pressScale(b.Pressed(), 0.9)}, tweenControl)
+				b.Children(func() { licon(c, icon, 14, col) })
 				if b.Clicked() {
 					a.updateChecklist(t.ID, func(ck []store.ChecklistItem) []store.ChecklistItem {
 						for i := range ck {
@@ -169,12 +174,7 @@ func (a *app) taskEditor(c *ui.Context, k tokens, t store.Task) {
 				if it.Done {
 					in.TextColor(k.muted).Opacity(0.6)
 				}
-				del := ui.Box(c).Size(16, 16).Radius(6).Center().Role(ui.RoleButton).Label(tr("删除检查项"))
-				if !hovered {
-					del.Opacity(0)
-				}
-				del.Children(func() { licon(c, "x", 10, k.danger) })
-				if del.Clicked() {
+				if ghostIconButton(c, k, "ckdel-"+it.ID, "x", tr("删除检查项"), 16, 10, true, hovered).Clicked() {
 					delete(a.taskCk, it.ID)
 					a.updateChecklist(t.ID, func(ck []store.ChecklistItem) []store.ChecklistItem {
 						return slices.DeleteFunc(ck, func(x store.ChecklistItem) bool { return x.ID == it.ID })

@@ -174,12 +174,7 @@ func (a *app) detailTags(c *ui.Context, k tokens, s settingsTokens, n store.Note
 			chip := ui.Row(c).Height(20).Padding(2, 6).Gap(2).Radius(10).Background(k.track).AlignItems(ui.Center).Key("tag-" + tag)
 			chip.Children(func() {
 				text(c, "#"+tag, 11, 16, 400, k.muted)
-				x := ui.Box(c).Size(12, 12).Center().Tooltip(tr("移除标签"))
-				if !chip.Hovered() {
-					x.Opacity(0)
-				}
-				x.Children(func() { licon(c, "x", 10, k.muted) })
-				if x.Clicked() {
+				if ghostIconButton(c, k, "tagx-"+tag, "x", tr("移除标签"), 14, 10, true, chip.Hovered()).Clicked() {
 					_ = a.store.SetTags(n.ID, slices.DeleteFunc(slices.Clone(n.Tags), func(t string) bool { return t == tag }))
 				}
 			})

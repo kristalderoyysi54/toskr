@@ -334,14 +334,18 @@ func (a *app) hudBubbleView(c *ui.Context, b hudBubble, ghostMs float32) {
 			a.hudOpen()
 		}
 		if len(b.due) > 0 { // 到期气泡没有撤销，只留关闭
-			x := ui.Box(c).Size(22, 22).Radius(11).Background(ink.Alpha(0.1)).Center().Tooltip(tr("关闭"))
-			x.Children(func() { licon(c, "x", 14, ink.Alpha(0.6)) })
+			x := hudClose(c, ink)
 			if !ghost && x.Clicked() {
 				a.dismissHUD()
 			}
 			return
 		}
-		undo := ui.Row(c).Height(20).Padding(2, 6).Gap(4).Radius(6).Border(1, ink.Alpha(0.25)).AlignItems(ui.Center)
+		undo := ui.Row(c).Height(20).Padding(2, 6).Gap(4).Radius(6).AlignItems(ui.Center)
+		if undo.Hovered() {
+			undo.Border(1, ink.Alpha(0.45)).Background(ink.Alpha(0.08))
+		} else {
+			undo.Border(1, ink.Alpha(0.25))
+		}
 		reveal := float32(0)
 		if hover {
 			reveal = 1
@@ -356,8 +360,7 @@ func (a *app) hudBubbleView(c *ui.Context, b hudBubble, ghostMs float32) {
 			a.showHUDForce("undone", tr("已撤销"))
 			fn()
 		}
-		x := ui.Box(c).Size(22, 22).Radius(11).Background(ink.Alpha(0.1)).Center().Tooltip(tr("关闭"))
-		x.Children(func() { licon(c, "x", 14, ink.Alpha(0.6)) })
+		x := hudClose(c, ink)
 		if !ghost && x.Clicked() {
 			a.dismissHUD()
 		}
@@ -493,4 +496,17 @@ func (a *app) showDueHUD(text string, ids []string) {
 	if a.hud != nil {
 		a.hud.SetSize(hudW, hudH+28)
 	}
+}
+
+// hudClose：气泡关闭钮，悬停底色加深、图标转实（同 Tauri HUD close hover）。
+func hudClose(c *ui.Context, ink ui.Color) ui.Element {
+	x := ui.Box(c).Size(22, 22).Radius(11).Center().Tooltip(tr("关闭"))
+	bg, fg := ink.Alpha(0.1), ink.Alpha(0.6)
+	if x.Hovered() {
+		bg, fg = ink.Alpha(0.18), ink.Alpha(0.9)
+	}
+	fadeColor(x, "bg", bg, tweenControl)
+	x.AnimatePose(ui.Pose{Scale: pressScale(x.Pressed(), 0.94)}, tweenControl)
+	x.Children(func() { licon(c, "x", 14, fg) })
+	return x
 }

@@ -363,23 +363,14 @@ func (a *app) billRow(c *ui.Context, k tokens, b store.Bill, cur string, now tim
 				text(c, sub, 10, 14, 400, k.muted).SingleLine()
 			})
 			if b.Kind == "creditCard" && !inactive && !paid && a.paying != b.ID {
-				chk := ui.Box(c).Size(20, 20).Radius(8).Center().Tooltip(tr("标记已还"))
-				if !hovered {
-					chk.Opacity(0)
-				}
-				chk.Children(func() { licon(c, "check", 12, k.muted) })
-				if chk.Clicked() {
+				if ghostIconButton(c, k, "bpay-"+b.ID, "check", tr("标记已还"), 20, 12, false, hovered).Clicked() {
 					a.paying, a.payAmount = b.ID, ""
 					if b.Amount != 0 {
 						a.payAmount = fmtAmount(b.Amount)
 					}
 				}
 			}
-			more := ui.Box(c).Size(20, 20).Radius(8).Center().Tooltip(fmt.Sprintf(tr("「%s」更多操作"), b.Name))
-			if !hovered {
-				more.Opacity(0)
-			}
-			more.Children(func() { licon(c, "ellipsis", 12, k.muted) })
+			more := ghostIconButton(c, k, "bmore-"+b.ID, "ellipsis", fmt.Sprintf(tr("「%s」更多操作"), b.Name), 20, 12, false, hovered)
 			more.Menu(func(m *ui.Menu) { a.billMenu(c, m, b) })
 			if inactive {
 				return

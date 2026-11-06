@@ -745,9 +745,7 @@ func (a *app) cardActionsAt(c *ui.Context, k tokens, n store.Note, bottom float3
 			if act.icon == "eye-off" && n.Blur {
 				act.icon, act.tip = "eye", "取消模糊"
 			}
-			b := ui.Box(c).Size(22, 22).Radius(8).Center().Background(k.floatBtn).Border(1, k.floatBorder).
-				Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB).InsetShadow(0, 1, 0, 0, k.floatInset).Tooltip(tr(act.tip))
-			b.Children(func() { licon(c, act.icon, 12, k.muted) })
+			b := floatIconButton(c, k, "na-"+act.icon, act.icon, tr(act.tip), act.icon == "trash-2", false)
 			if b.Clicked() {
 				switch act.icon {
 				case "send":
@@ -843,10 +841,11 @@ func (a *app) composerBar(c *ui.Context, k tokens) {
 func (a *app) composerRow(c *ui.Context, k tokens) {
 	ui.Row(c).Grow(1).Gap(6).AlignItems(ui.Center).Children(func() {
 		pick := ui.Row(c).Height(24).Padding(0, 6).Gap(4).Radius(8).AlignItems(ui.Center)
+		pc := hoverLink(pick, k)
 		pick.Children(func() {
-			licon(c, "folder-input", 12, k.muted)
-			text(c, sectionName(a.composerSection()), 11, 16, 400, k.muted)
-			licon(c, "chevron-up", 10, k.muted)
+			licon(c, "folder-input", 12, pc)
+			text(c, sectionName(a.composerSection()), 11, 16, 400, pc)
+			licon(c, "chevron-up", 10, pc)
 		})
 		pick.Menu(func(m *ui.Menu) {
 			for _, s := range a.store.Sections() {
@@ -974,7 +973,12 @@ func (a *app) selectionBar(c *ui.Context, k tokens) {
 			if send.Clicked() {
 				a.sendSelected()
 			}
-			more := ui.Box(c).Height(24).Padding(0, 4).Radius(0, 10, 10, 0).Background(s.btn).BorderWidth(1, 1, 1, 0).BorderColor(s.btnBorder).Center()
+			more := ui.Box(c).Height(24).Padding(0, 4).Radius(0, 10, 10, 0).BorderWidth(1, 1, 1, 0).BorderColor(s.btnBorder).Center()
+			if more.Hovered() {
+				more.Background(s.btnHover)
+			} else {
+				more.Background(s.btn)
+			}
 			more.Children(func() {
 				ui.Box(c).Absolute().Left(0).Top(0).Bottom(0).Width(1).Background(s.inputBorder)
 				licon(c, "chevron-down", 12, s.btnFg)

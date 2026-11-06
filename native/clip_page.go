@@ -447,17 +447,7 @@ func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool, to
 			if act.icon == "eye-off" && n.Blur {
 				act.icon, act.tip = "eye", "取消模糊"
 			}
-			on := act.icon == "pin" && n.Kept
-			b := ui.Box(c).Size(22, 22).Radius(8).Center().Border(1, k.floatBorder).
-				Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB).InsetShadow(0, 1, 0, 0, k.floatInset).Tooltip(tr(act.tip))
-			col := k.muted
-			if on {
-				b.Background(k.pressed)
-				col = k.fg
-			} else {
-				b.Background(k.floatBtn)
-			}
-			b.Children(func() { licon(c, act.icon, 12, col) })
+			b := floatIconButton(c, k, "ca-"+act.icon, act.icon, tr(act.tip), act.icon == "trash-2", act.icon == "pin" && n.Kept)
 			if !b.Clicked() {
 				continue
 			}

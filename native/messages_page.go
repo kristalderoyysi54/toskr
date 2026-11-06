@@ -337,9 +337,13 @@ func (a *app) messageCard(c *ui.Context, k tokens, m store.Message, view []store
 				arrow = "chevron-down"
 			}
 			row := ui.Row(c).Margin(6, 0, 0, 0).Gap(4).AlignItems(ui.Center).Key("mc-" + m.ID).Role(ui.RoleButton).Label(tr("前文"))
+			rc := k.muted
+			if row.Hovered() {
+				rc = k.fg
+			}
 			row.Children(func() {
-				licon(c, arrow, 12, k.muted)
-				text(c, fmt.Sprintf(tr("前文 · %d"), len(m.Context)), 11, 16, 400, k.muted)
+				licon(c, arrow, 12, rc)
+				text(c, fmt.Sprintf(tr("前文 · %d"), len(m.Context)), 11, 16, 400, rc)
 			})
 			if row.Clicked() {
 				a.msgOpen["c:"+m.ID] = !ctxOpen
@@ -412,11 +416,7 @@ func (a *app) messageActions(c *ui.Context, k tokens, m store.Message) {
 	fade := ui.ElementTransition{Duration: 100 * time.Millisecond, Ease: easeTw, Enter: &ui.Motion{}, Exit: &ui.Motion{}}
 	ui.Row(c).Absolute().Right(6).Bottom(6).Gap(2).Key("macts").Transition(fade).Children(func() {
 		btn := func(icon, tip string) ui.Element {
-			b := ui.Box(c).Size(22, 22).Radius(8).Center().Background(k.floatBtn).Border(1, k.floatBorder).
-				Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB).InsetShadow(0, 1, 0, 0, k.floatInset).
-				Tooltip(tip).Role(ui.RoleButton).Label(tip).Key("ma-" + icon)
-			b.Children(func() { licon(c, icon, 12, k.muted) })
-			return b
+			return floatIconButton(c, k, "ma-"+icon, icon, tip, icon == "trash-2", false)
 		}
 		if strings.TrimSpace(m.Text) != "" && btn("send", tr("发送到对话")).Clicked() {
 			a.send([]store.Note{{ID: m.ID, Text: m.Text}})

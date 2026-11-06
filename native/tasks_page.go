@@ -490,9 +490,10 @@ func countBadge(c *ui.Context, n int, fg, bg ui.Color) {
 // postponeAll 是「全部顺延」：把积压的逾期任务挪到同一时间点（可撤销）。
 func (a *app) postponeAll(c *ui.Context, k tokens, tasks []store.Task) {
 	b := ui.Row(c).Height(14).Padding(0, 4).Gap(2).Radius(6).AlignItems(ui.Center)
+	bc := hoverLink(b, k)
 	b.Children(func() {
-		text(c, tr("全部顺延"), 10, 14, 400, k.muted)
-		licon(c, "chevron-down", 10, k.muted)
+		text(c, tr("全部顺延"), 10, 14, 400, bc)
+		licon(c, "chevron-down", 10, bc)
 	})
 	b.Menu(func(m *ui.Menu) {
 		now := a.now()
@@ -546,9 +547,10 @@ func (a *app) taskListView(c *ui.Context, k tokens, now time.Time) {
 		a.taskSection(c, k, g, now)
 	}
 	nb := ui.Row(c).Height(24).Margin(0, 0, 0, 8).Padding(4, 6).Gap(4).Radius(8).AlignItems(ui.Center).AlignSelf(ui.Start)
+	nc := hoverLink(nb, k)
 	nb.Children(func() {
-		licon(c, "plus", 12, k.muted)
-		text(c, tr("新建分组"), 11, 16, 400, k.muted)
+		licon(c, "plus", 12, nc)
+		text(c, tr("新建分组"), 11, 16, 400, nc)
 	})
 	if nb.Clicked() {
 		a.store.AddTaskSection(tr("新分组"))
@@ -579,6 +581,9 @@ func (a *app) smartBand(c *ui.Context, k tokens, key, title, icon string, fg, ba
 	ui.Column(c).Gap(6).Key("band-" + key).Children(func() {
 		ui.Row(c).Height(16).Padding(0, 4, 0, 0).Gap(4).AlignItems(ui.Center).Children(func() {
 			h := ui.Row(c).Grow(1).Padding(0, 0, 0, 2).Gap(4).Radius(6).AlignItems(ui.Center)
+			if h.Hovered() {
+				h.Background(k.track)
+			}
 			h.Children(func() {
 				foldChevronSized(c, !open, 12, fg)
 				if icon != "" {
@@ -652,11 +657,7 @@ func (a *app) taskSection(c *ui.Context, k tokens, g taskGroup, now time.Time) {
 			}
 			countBadge(c, len(g.tasks), k.muted, k.track)
 			ui.Spacer(c)
-			more := ui.Box(c).Size(16, 16).Radius(6).Center().Tooltip(tr("分组操作")).Role(ui.RoleButton).Label(sectionTitle(g.sec) + " " + tr("分组操作"))
-			if !hovered {
-				more.Opacity(0) // 与 Tauri 一致：悬停区头才显出「···」
-			}
-			more.Children(func() { licon(c, "ellipsis", 12, k.muted) })
+			more := ghostIconButton(c, k, "tsec-more-"+g.sec.ID, "ellipsis", sectionTitle(g.sec)+" "+tr("分组操作"), 16, 12, false, hovered) // 悬停区头才显出「···」（同 Tauri）
 			more.Menu(func(m *ui.Menu) {
 				label := tr("折叠")
 				if collapsed {
@@ -772,7 +773,12 @@ func (a *app) taskRow(c *ui.Context, k tokens, t store.Task, now time.Time) {
 			if t.Spark && !done {
 				stLabel = tr("灵感转为待办")
 			}
-			st := ui.Box(c).Size(16, 16).Role(ui.RoleButton).Label(stLabel).Tooltip(stLabel).Children(func() { licon(c, icon, 16, col) })
+			st := ui.Box(c).Size(16, 16).Role(ui.RoleButton).Label(stLabel).Tooltip(stLabel)
+			if st.Hovered() && t.Status == "todo" && !t.Spark {
+				col = k.muted // 悬停时空心圈加深，提示可点
+			}
+			st.AnimatePose(ui.Pose{Scale: pressScale(st.Pressed(), 0.9)}, tweenControl)
+			st.Children(func() { licon(c, icon, 16, col) })
 			if st.Clicked() {
 				if t.Spark && !done {
 					t.Spark = false // 闪念点 💡 转为正式待办
@@ -820,12 +826,7 @@ func (a *app) taskRow(c *ui.Context, k tokens, t store.Task, now time.Time) {
 			if !done && !open { // 同 Tauri：有到期是紧迫色 chip，没有时悬停露出「⏰ 到期」；展开态挪到编辑区常显
 				a.dueTrigger(c, k, t, now, hovered)
 			}
-			trash := ui.Box(c).Size(16, 16).Radius(6).Center().Tooltip(tr("删除"))
-			if !hovered {
-				trash.Opacity(0)
-			}
-			trash.Children(func() { licon(c, "trash-2", 12, k.muted) })
-			if trash.Clicked() {
+			if ghostIconButton(c, k, "tdel-"+t.ID, "trash-2", tr("删除任务"), 16, 12, true, hovered).Clicked() {
 				if removed, pos, ok := a.store.DeleteTask(t.ID); ok {
 					a.showHUDUndo("ok", tr("已删除任务"), func() { _ = a.store.RestoreTask(removed, pos) })
 				}
