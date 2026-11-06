@@ -399,7 +399,8 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 		a.cardOverlays(c, k, n, checked, false)
 		a.quickBadge(c, k, idx, 4)
 	})
-	if box.Clicked() {
+	if box.Clicked() && !(box.ClickModifiers()&ui.Shift != 0 && a.rangeSelect(n.ID)) {
+		a.anchorID = n.ID
 		if box.ClickModifiers()&ui.Cmd != 0 {
 			if a.chosen.Has(n.ID) {
 				a.chosen.Remove(n.ID)

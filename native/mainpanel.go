@@ -358,6 +358,9 @@ func (a *app) sectionBlock(c *ui.Context, k tokens, g noteGroup, top float32) fl
 			}
 			text(c, sectionName(g.sec), 11, 16, 600, k.muted).LetterSpacing(0.88)
 			text(c, itoa(len(g.open)+len(g.done)), 10, 14, 400, k.muted).Grow(1)
+			if head.Hovered() && a.iconButton(c, k, "plus", 18, 12, fmt.Sprintf(tr("在「%s」中添加内容"), sectionName(g.sec))) {
+				a.newNoteIn(g.sec)
+			}
 		})
 		if collapsed {
 			return
@@ -567,7 +570,8 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 			ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Border(1, ptG600).PassThrough()
 		}
 	})
-	if box.Clicked() {
+	if box.Clicked() && !(box.ClickModifiers()&ui.Shift != 0 && a.rangeSelect(n.ID)) {
+		a.anchorID = n.ID
 		mods := box.ClickModifiers()
 		if mods&ui.Cmd != 0 {
 			if a.chosen.Len() == 0 { // 第一次 ⌘点击：把当前选中项也纳入多选
@@ -800,7 +804,7 @@ func (a *app) composerBar(c *ui.Context, k tokens) {
 	})
 }
 
-// composerRow 是输入区内容：分组选择 · 多行输入 · 加入队列钮。
+// composerRow 是输入区内容：分组选择 · 多行输入 · 处理草稿 · 转大窗编辑。
 func (a *app) composerRow(c *ui.Context, k tokens) {
 	ui.Row(c).Grow(1).Gap(6).AlignItems(ui.Center).Children(func() {
 		pick := ui.Row(c).Height(24).Padding(0, 6).Gap(4).Radius(8).AlignItems(ui.Center)
@@ -827,8 +831,23 @@ func (a *app) composerRow(c *ui.Context, k tokens) {
 				}
 				return false
 			})
-		if a.iconButton(c, k, "arrow-up-right", 22, 14, tr("加入队列（↵）")) {
-			a.addDraft()
+		if strings.TrimSpace(a.draft) != "" { // 处理当前草稿（同 Tauri DraftInput 魔棒菜单）
+			w := ui.Box(c).Size(22, 22).Radius(8).Center().Tooltip(tr("处理新增草稿")).Role(ui.RoleButton).Label(tr("处理新增草稿"))
+			if w.Hovered() {
+				w.Background(k.track)
+			}
+			w.Children(func() { licon(c, "wand-sparkles", 14, k.muted) })
+			w.Menu(func(m *ui.Menu) {
+				m.Item(tr("处理当前草稿")).Disabled(true)
+				for i, op := range textOps {
+					if m.Item(tr(op.label)).Chosen() {
+						a.applyDraftOp(i)
+					}
+				}
+			})
+		}
+		if a.iconButton(c, k, "arrow-up-right", 22, 14, tr("转大窗编辑")) { // 同 Tauri：↵ 入队，↗ 把草稿带去详情窗写
+			a.expandDraft()
 		}
 	})
 }
@@ -1024,3 +1043,20 @@ func (a *app) cardInlineInput(c *ui.Context, k tokens, n store.Note) bool {
 	}
 	return false
 }
+
+// newNoteIn：组内「新笔记」（同 Tauri SectionGroup addContent）——折叠则展开，落一张「新笔记」草稿卡并直接在详情窗编辑。
+func (a *app) newNoteIn(sec store.Section) {
+	if sec.Collapsed {
+		sec.Collapsed = false
+		_ = a.store.UpdateSection(sec)
+	}
+	n, _, err := a.store.Add(store.Note{Section: sec.ID, Text: tr("新笔记")})
+	if err != nil {
+		return
+	}
+	a.reload()
+	openDetailFn(a, n)
+	a.detail.edit = true
+}
+
+var openDetailFn = (*app).openDetail // 测试替换（真窗口需要运行中的应用）

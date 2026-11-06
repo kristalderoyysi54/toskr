@@ -147,6 +147,7 @@ type app struct {
 	cmdQuery                               string
 	cmdCursor                              int
 	taskScroll                             ui.ScrollState // 任务页滚动（双击页签回到开头）
+	anchorID                               string         // ⇧点击范围选的锚点（上一次普通 / ⌘ 点击的卡）
 	setShortcutsOpen                       bool           // 设置「面板内快捷键」表展开
 	setJump                                string         // 设置窗下一帧要跳到的页名
 	lastClipID                             string         // 上一次外部复制入库的卡（连续复制两次置顶用）
@@ -926,4 +927,18 @@ func clipRunes(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + "…"
+}
+
+// rangeSelect：⇧点击把锚点到这张卡之间全部勾选（并入已有勾选，同 Tauri / Finder）；没有锚点返回 false 按普通点击处理。
+func (a *app) rangeSelect(id string) bool {
+	from, ok1 := a.noteIdx[a.anchorID]
+	to, ok2 := a.noteIdx[id]
+	if a.anchorID == "" || a.anchorID == id || !ok1 || !ok2 {
+		return false
+	}
+	for i := min(from, to); i <= max(from, to); i++ {
+		a.chosen.Add(a.notes[i].ID)
+	}
+	a.selected, a.focusList = to, true
+	return true
 }

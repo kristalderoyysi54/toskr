@@ -87,6 +87,8 @@ var en = map[string]string{
 	"发送焦点卡片到对话": "Send focused card to chat", "检查后发送焦点卡片…": "Check, then send focused card…", "搜索当前页": "Search this page",
 	"切到内容页": "Go to Content", "切到剪贴页": "Go to Clipboard", "切到提醒页": "Go to Reminders", "最近发送记录": "Recent sends", "（无文字）": "(No text)",
 	"切换到%s；双击返回列表起点；拖动可调整顺序": "Switch to %s; double-click to return to the top; drag to reorder",
+	"在「%s」中添加内容":             "Add to \"%s\"", "新笔记": "New note",
+	"处理新增草稿": "Process draft", "处理当前草稿": "Process current draft", "去首尾空白": "Trim whitespace", "去空行": "Remove blank lines", "转大写": "Uppercase", "转小写": "Lowercase", "JSON 格式化": "Format JSON", "URL 解码": "URL-decode", "去 Markdown 标记": "Strip Markdown", "转大窗编辑": "Edit in a larger window", "处理失败：": "Failed: ",
 	"苹果日历": "Apple Calendar", "显示苹果日历日程": "Show Apple Calendar events", "日程": "Events", "扣款": "Charges", "全天": "All day", "（无标题）": "(No title)",
 	"在「今天」时间轴里显示；只读，不会改动日历里的日程。点日程可在「日历」App 中打开。": "Shown on the Today timeline. Read-only: events are never changed. Click an event to open it in Calendar.",
 	"未获得日历访问权限": "No calendar access", "在「系统设置 → 隐私与安全性 → 日历」里允许 Toskr Native 完整访问": "Allow full access for Toskr Native in System Settings → Privacy & Security → Calendars",

@@ -68,10 +68,10 @@ func TestLinkPreviewSweep(t *testing.T) {
 	}
 
 	_ = a.store.Update(n.ID, "https://other.com/x")
-	a.reload()
 	if cur, _ := a.store.Note(n.ID); cur.LinkTitle != "" || cur.URL != "https://other.com/x" {
 		t.Fatalf("改 URL 应清旧标题 %+v", cur)
 	}
+	a.reload() // reload 才触发重抓；先断言再 reload，免得后台写回抢在断言前
 	wait()
 
 	_, _, _ = a.store.Add(store.Note{Section: store.SectionInbox, Text: "https://imported.com", CreatedAt: time.Now().Add(-48 * time.Hour)})
