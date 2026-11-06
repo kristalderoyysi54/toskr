@@ -108,10 +108,20 @@ func start() (*app, error) {
 		}
 	})
 	a.panel.OnResize(a.rememberPanelFrame)
-	a.panel.OnMove(a.rememberPanelFrame)
+	a.panel.OnMove(func() {
+		if a.edgeHidden || time.Now().Before(a.edgeMachineUntil) {
+			return // 贴边滑动 / 吸平是机器移动：不记位置、不清锚点
+		}
+		a.rememberPanelFrame()
+		a.panelMovedByUser()
+	})
+	a.startEdgeSupervisor()
 	a.panel.OnBlur(func() {
 		diag.Push("面板失焦 pinned=%v", a.pinned)
 		a.remaskAll() // 秘文失焦即回遮罩（钉住时也一样，与 Tauri 一致）
+		if a.edgeHideNow(false) { // 已入坞：失焦改为贴边滑出（同 Tauri edge_hide_now）
+			return
+		}
 		if !a.pinned && !a.store.Settings().KeepOnBlur {
 			a.hidePanel()
 		}

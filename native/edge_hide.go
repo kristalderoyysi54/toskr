@@ -1,0 +1,222 @@
+package main
+
+import (
+	"time"
+
+	"github.com/egoist/mygo"
+
+	"github.com/toskr/native/internal/diag"
+)
+
+// 拖拽入坞 + 贴边自动收起（同 Tauri window.rs evaluate_drag_dock / spawn_edge_hide_supervisor / edge_hide_now）：
+// 手动把面板拖到所在屏物理右边界 24pt 内（且右侧没有别的屏）→ 吸平右缘并记下锚点；
+// 之后光标离开面板 600ms 就向右滑出、只留 3pt 细条，光标顶到该屏右缘即滑回并取得焦点；
+// 失焦 / Esc 收起时也改为滑出。伴随停靠接管定位时不生效；默认出现位置不算入坞。
+// 旧设置 EdgeHide 不再门控（同 Tauri runtimeSettings：运行态恒开，是否收起由入坞锚点裁决）。
+
+const (
+	edgeGrace     = 600 * time.Millisecond
+	edgeTick      = 100 * time.Millisecond
+	edgeSlide     = 240 * time.Millisecond
+	edgePeek      = 3
+	edgeSnap      = 24
+	edgeTouchSlop = 24
+	dockDebounce  = 400 * time.Millisecond
+)
+
+type edgeAnchor struct {
+	x, y, w, h int // 展开位（已吸平右缘）
+	line       int // 该屏物理右边界
+	monY, monH int
+}
+
+// dockLine：面板 r 的右缘在所在屏物理右边界 edgeSnap 内（含拖出屏外），且越过这条线没有别的屏 → 返回该线。
+func dockLine(displays []mygo.Display, r mygo.Rectangle) (line, monY, monH int, ok bool) {
+	cy := r.Y + r.Height/2
+	at := func(x, y int) *mygo.Display {
+		for i := range displays {
+			b := displays[i].Bounds
+			if x >= b.X && x < b.X+b.Width && y >= b.Y && y < b.Y+b.Height {
+				return &displays[i]
+			}
+		}
+		return nil
+	}
+	d := at(r.X+r.Width/2, cy)
+	if d == nil {
+		if d = at(r.X+2, cy); d == nil {
+			if d = at(r.X+r.Width-2, cy); d == nil {
+				return 0, 0, 0, false
+			}
+		}
+	}
+	b := d.Bounds
+	line = b.X + b.Width
+	if r.X+r.Width >= line-edgeSnap && at(line+2, cy) == nil {
+		return line, b.Y, b.Height, true
+	}
+	return 0, 0, 0, false
+}
+
+func (e edgeAnchor) inside(cx, cy int) bool { // 主轴外侧延伸到屏缘（含面板与屏缘之间的空隙）
+	return cx >= e.x && cx <= e.line && cy >= e.y && cy <= e.y+e.h
+}
+
+func (e edgeAnchor) touching(cx, cy int) bool { // 顶到该屏右缘任意高度都唤回（同 Tauri Dock 对齐）
+	return cx >= e.line-edgeTouchSlop && cx <= e.line+edgeTouchSlop && cy >= e.monY && cy < e.monY+e.monH
+}
+
+// panelMovedByUser：OnMove 回调里调用。机器移动（吸平 / 滑动）不算；用户拖动清掉锚点并在停稳 400ms 后评估入坞。
+func (a *app) panelMovedByUser() {
+	if time.Now().Before(a.edgeMachineUntil) || a.edgeHidden {
+		return
+	}
+	if a.edge != nil {
+		a.edge = nil
+		diag.Push("贴边隐藏: 拖动清除锚点")
+	}
+	a.dockSeq++
+	seq := a.dockSeq
+	time.AfterFunc(dockDebounce, func() {
+		a.onMain(func() {
+			if a.dockSeq == seq {
+				a.evaluateDragDock()
+			}
+		})
+	})
+}
+
+func (a *app) evaluateDragDock() {
+	if a.panel == nil || !a.panel.IsVisible() || a.docked || a.edgeHidden {
+		return
+	}
+	b := a.panel.Bounds()
+	line, monY, monH, ok := dockLine(mygo.Screen.Displays(), b)
+	if !ok {
+		diag.Push("贴边隐藏: 拖动落定未贴边 x=%d w=%d", b.X, b.Width)
+		return
+	}
+	x := line - b.Width
+	a.edge = &edgeAnchor{x: x, y: b.Y, w: b.Width, h: b.Height, line: line, monY: monY, monH: monH}
+	a.edgeArmed, a.edgeAway = true, 0
+	if x != b.X {
+		a.machineMove(x, b.Y, 0)
+		a.rememberPanelFrame()
+	}
+	diag.Push("贴边隐藏: 拖拽入坞 右缘=%d", line)
+}
+
+func (a *app) machineMove(x, y int, extra time.Duration) {
+	a.edgeMachineUntil = time.Now().Add(250*time.Millisecond + extra)
+	a.panel.SetPosition(x, y)
+}
+
+// edgeTickOnce：监督循环一拍（主线程）。
+func (a *app) edgeTickOnce() {
+	e := a.edge
+	if e == nil || a.panel == nil || !a.panel.IsVisible() || a.panelHiding {
+		a.edgeAway = 0
+		return
+	}
+	if a.docked {
+		if a.edgeHidden {
+			a.edgeSlideTo(false)
+		}
+		a.edgeAway = 0
+		return
+	}
+	cur := mygo.Screen.CursorScreenPoint()
+	if a.edgeHidden {
+		if e.touching(cur.X, cur.Y) {
+			a.edgeSlideTo(false)
+			a.panel.Show()
+			a.panel.Focus() // 触边唤回是主动动作：前置并取焦点（同 Tauri set_focus）
+		}
+		a.edgeAway = 0
+		return
+	}
+	if !a.edgeArmed || e.inside(cur.X, cur.Y) || a.menuOpen { // 原生右键菜单是模态跟踪，期间主线程不跑这一拍
+		a.edgeAway = 0
+		return
+	}
+	a.edgeAway += edgeTick
+	if a.edgeAway >= edgeGrace {
+		a.edgeAway = 0
+		a.edgeSlideTo(true)
+	}
+}
+
+// edgeSlideTo 滑出（hidden=true，只留 3pt 细条）或滑回展开位，240ms easeOut。
+func (a *app) edgeSlideTo(hidden bool) {
+	e := a.edge
+	if e == nil || a.edgeHidden == hidden {
+		return
+	}
+	a.edgeHidden = hidden
+	from, to := a.panel.Bounds().X, e.x
+	if hidden {
+		to = e.line - edgePeek
+		a.saveDraftState()
+		a.remaskAll()
+	}
+	diag.Push("贴边隐藏: %s", map[bool]string{true: "滑出", false: "滑回"}[hidden])
+	a.edgeMachineUntil = time.Now().Add(edgeSlide + 150*time.Millisecond)
+	a.edgeAnimSeq++
+	seq, start := a.edgeAnimSeq, time.Now()
+	var step func()
+	step = func() {
+		if a.edgeAnimSeq != seq {
+			return
+		}
+		t := min(float64(time.Since(start))/float64(edgeSlide), 1)
+		ease := 1 - (1-t)*(1-t)*(1-t)
+		a.panel.SetPosition(from+int(float64(to-from)*ease), e.y)
+		if t < 1 {
+			time.AfterFunc(8*time.Millisecond, func() { mygo.RunOnMain(step) })
+		}
+	}
+	step()
+}
+
+// edgeHideNow：失焦 / Esc 的收起入口。有入坞锚点就滑出代替真正隐藏（explicit=Esc 越过图钉），返回是否已接管。
+func (a *app) edgeHideNow(explicit bool) bool {
+	if a.edge == nil || a.docked || a.edgeHidden {
+		return false
+	}
+	if !explicit && a.pinned {
+		return false
+	}
+	a.edgeArmed = true
+	a.edgeSlideTo(true)
+	if explicit && a.target.PID != 0 {
+		a.sys.Activate(a.target.PID)
+	}
+	return true
+}
+
+// edgeOnShow：面板被重新唤出时——隐藏态直接回到展开位；按记住的位置摆放时若正好贴着屏缘就恢复锚点（用户拖过才算）。
+func (a *app) edgeOnShow() {
+	a.edgeArmed, a.edgeAway = true, 0
+	if a.edgeHidden && a.edge != nil {
+		a.edgeAnimSeq++
+		a.edgeHidden = false
+		a.machineMove(a.edge.x, a.edge.y, 0)
+		return
+	}
+	st := a.store.Settings()
+	if a.edge == nil && st.FreeMove && (st.PanelX != 0 || st.PanelY != 0) && !a.docked {
+		b := a.panel.Bounds()
+		if line, monY, monH, ok := dockLine(mygo.Screen.Displays(), b); ok {
+			a.edge = &edgeAnchor{x: line - b.Width, y: b.Y, w: b.Width, h: b.Height, line: line, monY: monY, monH: monH}
+		}
+	}
+}
+
+// startEdgeSupervisor：常驻轮询（100ms），在主线程走一拍（RunOnMain 不触发重绘）。
+func (a *app) startEdgeSupervisor() {
+	go func() {
+		for range time.Tick(edgeTick) {
+			mygo.RunOnMain(a.edgeTickOnce)
+		}
+	}()
+}

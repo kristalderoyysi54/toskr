@@ -429,7 +429,9 @@ func (a *app) panelKeys(c *ui.Context) {
 		case a.page == pageNotes && a.noteSub == subMessages && len(a.msgChosen) > 0:
 			a.clearMsgChosen()
 		default:
-			a.hidePanel()
+			if !a.edgeHideNow(true) { // 已入坞：Esc 沿屏缘滑出并把焦点还给目标（同 Tauri）
+				a.hidePanel()
+			}
 		}
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyF) && a.page != pageTasks {

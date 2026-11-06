@@ -71,8 +71,13 @@ type app struct {
 	menuTarget                 *store.Note // 右键单卡菜单期间的作用对象（chosenNotes 收窄到它）
 	headRename, headRenameText string      // 笔记分组头就地改名（同 Tauri SectionGroup renaming）
 	headRenameFocused          bool
-	secClickSeq                int    // 分组名单击 / 双击消歧
-	secMenuOpen                string // 「…」分组菜单展开中的分组 // 剪贴页按来源分组时各组的折叠态（仅本次运行，同 Tauri useState）
+	secClickSeq                int         // 分组名单击 / 双击消歧
+	secMenuOpen                string      // 「…」分组菜单展开中的分组
+	edge                       *edgeAnchor // 拖拽入坞后的贴边锚点（edge_hide.go）
+	edgeHidden, edgeArmed      bool
+	edgeAway                   time.Duration
+	edgeMachineUntil           time.Time
+	dockSeq, edgeAnimSeq       int // 剪贴页按来源分组时各组的折叠态（仅本次运行，同 Tauri useState）
 	pinned                     bool
 	showDone                   bool
 	newSecOn                   bool
@@ -413,6 +418,7 @@ func (a *app) showPanel() {
 	a.reload()
 	a.presenceArm = !a.panelHiding // 离场中途被叫回则从当前位置折返，否则从 0 起播
 	a.panelHiding = false
+	a.edgeOnShow()
 	a.panel.Show()
 	a.panel.Invalidate()
 	diag.Push("面板显示 target=%s", a.target.BundleID)
