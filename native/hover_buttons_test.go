@@ -45,7 +45,7 @@ func hoverChanges(t *testing.T, tt *ui.Tester, rowText, label string) {
 func TestListIconButtonsHover(t *testing.T) {
 	_, tt := testApp(t, "悬停测试笔记")
 	hoverChanges(t, tt, "悬停测试笔记", "删除")
-	hoverChanges(t, tt, "悬停测试笔记", "发送（⌘↵）")
+	hoverChanges(t, tt, "悬停测试笔记", "发送到对话（双击卡片同效）")
 
 	a, tt := testApp(t)
 	a.store.AddTask(store.Task{Text: "悬停任务"})

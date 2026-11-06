@@ -67,7 +67,8 @@ type app struct {
 	search           ui.Handle
 	draft            string
 	draftIn          ui.Handle
-	clipSrcCollapsed map[string]bool // 剪贴页按来源分组时各组的折叠态（仅本次运行，同 Tauri useState）
+	clipSrcCollapsed map[string]bool
+	menuTarget       *store.Note // 右键单卡菜单期间的作用对象（chosenNotes 收窄到它） // 剪贴页按来源分组时各组的折叠态（仅本次运行，同 Tauri useState）
 	pinned           bool
 	showDone         bool
 	newSecOn         bool
@@ -349,21 +350,19 @@ func (a *app) current() (store.Note, bool) {
 	return a.notes[a.selected], true
 }
 
-// chosenNotes 返回多选中的笔记（按列表顺序）；未多选时返回当前项。
+// chosenNotes 返回勾选的笔记（按列表顺序，同 Tauri orderedCheckedNotes）：没勾选就是空，
+// 不退回键盘焦点卡（⌘⏎ / ⌘C 无勾选时什么也不做）。右键菜单期间 menuTarget 把作用对象收窄到被右键的那张卡。
 func (a *app) chosenNotes() []store.Note {
-	if a.chosen.Len() > 1 {
-		var out []store.Note
-		for _, n := range a.notes {
-			if a.chosen.Has(n.ID) {
-				out = append(out, n)
-			}
+	if a.menuTarget != nil {
+		return []store.Note{*a.menuTarget}
+	}
+	var out []store.Note
+	for _, n := range a.notes {
+		if a.chosen.Has(n.ID) {
+			out = append(out, n)
 		}
-		return out
 	}
-	if n, ok := a.current(); ok {
-		return []store.Note{n}
-	}
-	return nil
+	return out
 }
 
 // ---- 面板 ----
@@ -502,7 +501,7 @@ func (a *app) addDraft() {
 	if _, dup, err := a.store.Add(draftNote(sec, a.draft, a.draftImgs)); err == nil {
 		imgs := len(a.draftImgs)
 		a.draft, a.draftImgs = "", nil
-		a.section, a.query, a.selected = sec, "", 0
+		a.section, a.selected = sec, 0 // 同 Tauri DraftInput submit：不清搜索词
 		switch {
 		case dup:
 			a.showHUD("duplicate", tr("已存在，移到顶部"))

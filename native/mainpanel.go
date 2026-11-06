@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os/exec"
 	"slices"
 	"strings"
 	"time"
@@ -252,6 +253,9 @@ func (a *app) groups() []noteGroup {
 				g.open = append(g.open, n)
 			}
 		}
+		if a.query != "" && len(g.open)+len(g.done) == 0 {
+			continue // 同 Tauri：搜索时隐藏没有命中的分组
+		}
 		out = append(out, g)
 	}
 	return out
@@ -300,6 +304,21 @@ func (a *app) notesList(c *ui.Context, k tokens) {
 				_, vh := c.Size()
 				a.vis = visWindow{top: a.noteScroll.Y - 600, bottom: a.noteScroll.Y + vh + 600}
 				y := float32(4)
+				total := 0
+				for _, g := range a.noteGroups {
+					total += len(g.open) + len(g.done)
+				}
+				switch { // 同 Tauri 笔记页空态 / 搜索无结果
+				case total == 0 && a.query != "":
+					text(c, fmt.Sprintf(tr("没有匹配「%s」的卡片"), a.query), 12, 18, 400, k.muted).Padding(32, 0).TextAlign(ui.Center).FillWidth()
+					return
+				case total == 0 && a.noteFilter == "":
+					ui.Column(c).Padding(40, 0).Gap(6).AlignItems(ui.Center).FillWidth().Children(func() {
+						text(c, tr("还没有内容"), 13, 18, 500, k.fg)
+						text(c, tr("连按两次 ⇧ 捕获选中文本，也可以在下方直接记下"), 11, 16, 400, k.muted).TextAlign(ui.Center)
+					})
+					return
+				}
 				for _, g := range a.noteGroups {
 					y += a.sectionBlock(c, k, g, y) + 8
 				}
@@ -490,7 +509,7 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 		a.cardMenu(c, m, max(idx, 0), n)
 	})
 	// 拖拽排序（同 Tauri dnd-kit）：拖起卡片，放到另一张卡上 = 插到它前面（可跨分组）；放到分组头 / 侧栏分组 = 移入该组
-	if a.titleEditID != n.ID && a.tagEditID != n.ID {
+	if a.titleEditID != n.ID && a.tagEditID != n.ID && !n.Done { // 同 Tauri useSortable({disabled: note.done})
 		box.Drag(noteDrag{n.ID})
 	}
 	dropOver := false
@@ -505,7 +524,7 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 			ui.Box(c).Absolute().Top(-4).Left(6).Right(6).Height(2).Radius(1).Background(stok(c).primary).PassThrough()
 		}
 		if compact {
-			a.compactCard(c, k, n, hovered)
+			a.compactCard(c, k, n, hovered || focused)
 			a.cardOverlays(c, k, n, checked, true)
 			a.quickBadge(c, k, idx, 12)
 			a.cardGrip(c, k, n, 9)
@@ -523,7 +542,14 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 				if n.Title != "" {
 					title = n.Title
 				}
-				text(c, title, 11, 16, 600, k.cardHeadText).SingleLine().Grow(1).Basis(0)
+				tb := ui.Row(c).Grow(1).Basis(0).Key("title-hit").Role(ui.RoleButton).Label(tr("点击重命名"))
+				tb.Children(func() { text(c, title, 11, 16, 600, k.cardHeadText).SingleLine() })
+				if tb.Clicked() { // 同 Tauri：点通栏标题就地改名
+					a.titleEditID, a.titleText = n.ID, n.Title
+				}
+			}
+			if n.Kept { // 同 Tauri：常用卡通栏右端星标
+				liconFilled(c, "star", 12, k.cardHeadText)
 			}
 			if img := a.appIcon(n.BundleID); img != nil { // 应用图标嵌入通栏右端（同 Tauri Paste 风格）：左缘完整，上/右/下被通栏裁去少许
 				ui.Box(c).Width(36).Height(28).Margin(0, -8, 0, 0).Clip().AlignItems(ui.Center).Children(func() {
@@ -571,7 +597,7 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 		if n.Blur {
 			blurOverlay(c, k, 20)
 		}
-		if hovered {
+		if hovered || focused { // 同 Tauri reveal="hover-focus"
 			a.cardActions(c, k, n)
 		}
 		a.cardOverlays(c, k, n, checked, false)
@@ -737,27 +763,37 @@ func (a *app) cardActionsAt(c *ui.Context, k tokens, n store.Note, bottom float3
 				a.restoreCardAliases(n)
 			}
 		}
+		link := noteLink(n)
 		for _, act := range []struct{ icon, tip string }{
-			{"send", "发送（⌘↵）"}, {"expand", "在详情窗打开"}, {"pencil", "编辑"}, {"eye-off", "模糊内容"}, {"trash-2", "删除"},
+			{"send", "发送到对话（双击卡片同效）"}, {"expand", "在详情窗打开"}, {"pencil", "编辑"}, {"eye-off", "模糊内容"}, {"trash-2", "删除"},
 		} {
+			if act.icon == "expand" && link != "" { // 同 Tauri openPreview：链接卡打开网页
+				act.icon, act.tip = "external-link", "打开页面（Space）"
+			}
+			if act.icon == "pencil" && n.Kind == "image" {
+				act.tip = "添加文字备注"
+				if imageNoteText(n) != "" {
+					act.tip = "编辑文字备注"
+				}
+			}
 			if act.icon == "eye-off" && n.Blur {
 				act.icon, act.tip = "eye", "取消模糊"
 			}
 			b := floatIconButton(c, k, "na-"+act.icon, act.icon, tr(act.tip), act.icon == "trash-2", false)
 			if b.Clicked() {
 				switch act.icon {
-				case "send":
-					a.send([]store.Note{n})
+				case "send": // 同 Tauri sendSelfOrChecked：在多选里就发整组
+					a.send(a.clipMoveTargets(n))
 				case "expand":
 					a.openDetail(n)
+				case "external-link":
+					_ = exec.Command("/usr/bin/open", link).Start()
 				case "pencil":
 					a.editInDetail(n)
 				case "eye-off", "eye":
 					_ = a.store.SetBlur(n.ID, !n.Blur)
 				case "trash-2":
-					if r, pos, ok := a.store.Delete(n.ID); ok {
-						a.showHUDUndo("ok", tr("已删除 · ")+preview(r.Text, 14), func() { _ = a.store.Restore(r, pos) })
-					}
+					a.deleteSelfOrChosen(n)
 				}
 			}
 		}

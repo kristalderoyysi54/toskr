@@ -30,7 +30,7 @@ func tr(s string) string {
 }
 
 var en = map[string]string{
-	"剪贴": "Clip", "笔记": "Notes", "未识别目标": "No target", "可发送": "Ready", "此分组为空": "Empty section",
+	"剪贴": "Clip", "笔记": "Notes", "未识别目标": "No target", "可发送": "Ready", "此分组为空": "Empty section", "还没有内容": "Nothing here yet", "连按两次 ⇧ 捕获选中文本，也可以在下方直接记下": "Double-tap ⇧ to capture selected text, or jot something down below", "没有匹配「%s」的卡片": "No cards match “%s”", "已选 %d 项": "%d selected", " %d 项": " (%d)", "合并笔记 ×%d": "Merge %d notes", "点击重命名": "Click to rename", "发送到对话（双击卡片同效）": "Send to chat (or double-click the card)", "打开页面（Space）": "Open page (Space)", "添加文字备注": "Add caption", "编辑文字备注": "Edit caption", "内容无变化": "No change", "已处理草稿 · ": "Draft processed · ",
 	"选卡片": "Select", "长按 ⌥ Option": "Hold ⌥ Option", "搜索": "Search", "命令": "Commands", "全部快捷键": "All shortcuts", "添加笔记或提示词…": "Add a note or prompt…",
 	"来自 ": "From ", "文本": "Text", "图片": "Image", "清理已完成": "Clear done", "订阅账单": "Subscriptions", "设置": "Settings",
 	"队列": "Queue", "任务": "Tasks", "账单": "Bills", "秘文": "Vault",

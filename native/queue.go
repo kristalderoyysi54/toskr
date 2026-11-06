@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"github.com/toskr/native/internal/store"
@@ -402,19 +403,32 @@ func (a *app) card(c *ui.Context, i int) {
 }
 
 func (a *app) cardMenu(c *ui.Context, m *ui.Menu, i int, n store.Note) {
-	if a.chosen.Len() <= 1 {
+	// 同 Tauri NoteCard：被右键的卡本身在勾选集合里（≥2）才走批量；否则只作用于这一张，勾选集合保持不动
+	multi := a.chosen.Len() > 1 && a.chosen.Has(n.ID)
+	if !multi {
 		a.selected = i
+		a.menuTarget = &n
+		defer func() { a.menuTarget = nil }()
 	}
-	multi := a.chosen.Len() > 1
 	isClip := n.Section == store.SectionClipboard
 	isImage := n.Kind == "image" || len(n.MediaFiles()) > 0
 	// 骨架同 Tauri（方案 A）：多选先给合并与移动 → 发送区 → 常用区 → 整理 / 转换与导出二级菜单 → 回复关联 → 删除；
 	// 发送、常用、整理、转换各区的显隐与顺序来自设置「卡片右键菜单」。
 	parts := store.PartitionMenu(a.store.Settings().ContextMenu, isClip)
-	if multi {
-		if m.Item(fmt.Sprintf(tr("合并所选 %d 条（⌘M）"), a.chosen.Len())).Chosen() {
-			a.mergeChosen(c)
+	if multi { // 同 Tauri：多选菜单顶部标「已选 N 项」
+		m.Item(fmt.Sprintf(tr("已选 %d 项"), a.chosen.Len())).Disabled(true)
+	}
+	mergeN := a.chosen.Len()
+	if !a.chosen.Has(n.ID) {
+		mergeN++
+	}
+	if mergeN >= 2 {
+		// 合并用「勾选 ∪ 当前卡」（同 Tauri NoteCard mergeIds）
+		if m.Item(fmt.Sprintf(tr("合并笔记 ×%d"), mergeN)).Chosen() {
+			a.withChosenPlus(n, func() { a.mergeChosen(c) })
 		}
+	}
+	if multi {
 		if slices.Contains(parts["main"], "move") || slices.Contains(parts["organize"], "move") {
 			a.menuEntry(c, m, "move", n, multi, isClip, isImage)
 		}
@@ -465,16 +479,35 @@ func (a *app) cardMenu(c *ui.Context, m *ui.Menu, i int, n store.Note) {
 		a.replyMenu(m, n)
 	}
 	m.Separator()
-	if m.Item(tr("删除")).Chosen() {
+	del := tr("删除")
+	if multi {
+		del += fmt.Sprintf(tr(" %d 项"), a.chosen.Len())
+	}
+	if m.Item(del).Chosen() {
 		a.deleteSelected(c)
 	}
+}
+
+// withChosenPlus：临时把 n 并进勾选集合执行 fn（合并、复制列表用「勾选 ∪ 当前卡」）。
+func (a *app) withChosenPlus(n store.Note, fn func()) {
+	saved := a.menuTarget
+	a.menuTarget = nil
+	added := !a.chosen.Has(n.ID)
+	if added {
+		a.chosen.Add(n.ID)
+	}
+	fn()
+	if added {
+		a.chosen.Remove(n.ID)
+	}
+	a.menuTarget = saved
 }
 
 // menuEntry 渲染一项可配置的右键菜单（同 Tauri NoteCard renderMenuItem）；卡片类型不适用时不出。
 func (a *app) menuEntry(c *ui.Context, m *ui.Menu, id string, n store.Note, multi, isClip, isImage bool) {
 	count := ""
 	if multi {
-		count = fmt.Sprintf(" ×%d", a.chosen.Len())
+		count = fmt.Sprintf(tr(" %d 项"), a.chosen.Len())
 	}
 	single := !multi
 	switch id {
@@ -511,13 +544,24 @@ func (a *app) menuEntry(c *ui.Context, m *ui.Menu, id string, n store.Note, mult
 		}
 	case "send-template":
 		a.templateMenu(m, tr("用模板发送"), a.chosenNotes)
-	case "copy":
-		if single && m.Item(tr("复制原文（不脱敏）")).Chosen() {
-			a.copySelected(c)
+	case "copy": // 同 Tauri：多选时仍在，作用于被右键的这张
+		if m.Item(tr("复制原文（不脱敏）")).Chosen() {
+			if !a.copyNoteMedia(n) {
+				mygo.Clipboard.WriteText(n.Text)
+				a.showHUD("ok", tr("已复制"))
+			}
 		}
 	case "copy-list":
-		if m.Item(tr("复制原文为列表（不脱敏）") + count).Chosen() {
-			a.copyChosenAsList()
+		plus := a.chosen.Len()
+		if !a.chosen.Has(n.ID) {
+			plus++
+		}
+		lc := ""
+		if plus > 1 {
+			lc = fmt.Sprintf(tr(" %d 项"), plus)
+		}
+		if m.Item(tr("复制原文为列表（不脱敏）") + lc).Chosen() {
+			a.withChosenPlus(n, a.copyChosenAsList)
 		}
 	case "export":
 		if !isClip && n.Kind != "secret" && m.Item(tr("导出笔记包…")+count).Chosen() {
@@ -536,13 +580,10 @@ func (a *app) menuEntry(c *ui.Context, m *ui.Menu, id string, n store.Note, mult
 		if n.Done {
 			label = tr("取消完成")
 		}
-		if m.Item(label + count).Chosen() {
-			a.toggleDone()
+		if m.Item(label).Chosen() { // 同 Tauri toggleDone(note.id)：只切这一张
+			_ = a.store.SetDone(n.ID, !n.Done)
 		}
 	case "keep":
-		if !single {
-			return
-		}
 		label := tr("设为常用 · 发送后保留")
 		switch {
 		case isClip && n.Kept:
@@ -556,9 +597,6 @@ func (a *app) menuEntry(c *ui.Context, m *ui.Menu, id string, n store.Note, mult
 			_ = a.store.SetKept(n.ID, !n.Kept)
 		}
 	case "blur":
-		if !single {
-			return
-		}
 		label := tr("模糊内容")
 		if n.Blur {
 			label = tr("取消模糊")
@@ -571,12 +609,11 @@ func (a *app) menuEntry(c *ui.Context, m *ui.Menu, id string, n store.Note, mult
 			a.titleEditID, a.titleText = n.ID, n.Title
 		}
 	case "tags":
-		if !single {
-			return
-		}
+		full := len(n.Tags) >= 8 // 同 Tauri：满 8 个后未选的标签与「新标签…」置灰
 		m.Submenu(tr("标签"), func(sm *ui.Menu) {
 			for _, t := range a.store.AllTags() {
-				if sm.Item(t).Checked(slices.Contains(n.Tags, t)).Chosen() {
+				on := slices.Contains(n.Tags, t)
+				if sm.Item(t).Checked(on).Disabled(full && !on).Chosen() {
 					tags := slices.Clone(n.Tags)
 					if slices.Contains(tags, t) {
 						tags = slices.DeleteFunc(tags, func(x string) bool { return x == t })
@@ -587,16 +624,16 @@ func (a *app) menuEntry(c *ui.Context, m *ui.Menu, id string, n store.Note, mult
 				}
 			}
 			sm.Separator()
-			if sm.Item(tr("新标签…")).Chosen() {
+			if sm.Item(tr("新标签…")).Disabled(full).Chosen() {
 				a.tagEditID, a.tagText = n.ID, ""
 			}
 		})
 	case "to-task":
-		if single && !isImage && m.Item(tr("转为任务")).Chosen() {
+		if !isImage && m.Item(tr("转为任务")).Chosen() {
 			a.convertToTask(n, "", nil, tr("已转为任务"))
 		}
 	case "ai-to-task":
-		if single && !isImage && m.Item(tr("AI 转任务")).Chosen() {
+		if !isImage && m.Item(tr("AI 转任务")).Chosen() {
 			a.noteToTaskAI(n)
 		}
 	case "ai-title":

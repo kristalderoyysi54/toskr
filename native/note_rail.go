@@ -178,11 +178,10 @@ func (a *app) commitRename() {
 
 // sectionMenu：分组管理菜单（侧栏与分组区头共用，同 Tauri GroupPill 右键）。
 func (a *app) sectionMenu(m *ui.Menu, s store.Section, i, n int) {
-	if m.Item(tr("全选此组")).Chosen() {
-		for _, x := range a.store.Section(s.ID) {
-			if !x.Done {
-				a.chosen.Add(x.ID)
-			}
+	members := a.store.Section(s.ID)
+	if m.Item(tr("全选此组")).Disabled(len(members) == 0).Chosen() { // 同 Tauri：含已完成，空组置灰
+		for _, x := range members {
+			a.chosen.Add(x.ID)
 		}
 	}
 	if m.Item(tr("重命名")).Chosen() {

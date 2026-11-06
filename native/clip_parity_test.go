@@ -3,6 +3,9 @@ package main
 import (
 	"testing"
 
+	"github.com/egoist/mygo/ui"
+	"github.com/toskr/native/internal/macos"
+
 	"github.com/toskr/native/internal/store"
 )
 
@@ -41,5 +44,31 @@ func TestClipDeleteFollowsSelection(t *testing.T) {
 	a.deleteSelfOrChosen(x)
 	if len(a.store.Notes()) != 0 || a.hudText != "已删除 2 条" || a.chosen.Len() != 0 {
 		t.Fatalf("n=%d hud=%q", len(a.store.Notes()), a.hudText)
+	}
+}
+
+// 同 Tauri：没有勾选时 ⌘⏎ 什么都不做；右键勾选集合外的卡只作用于这一张。
+func TestNoteSelectionParity(t *testing.T) {
+	a, tt := testApp(t, "甲", "乙", "丙")
+	sys := &recSys{}
+	a.sys = sys
+	a.target = macos.FrontApp{PID: 42, Name: "Cursor"}
+	tt.Key(0, ui.KeyDown)
+	tt.Key(ui.Cmd, ui.KeyEnter)
+	tt.Frame()
+	if len(sys.sent()) != 0 {
+		t.Fatal("无勾选不应发送")
+	}
+	ns := a.store.Notes()
+	a.chosen.Add(ns[0].ID)
+	a.chosen.Add(ns[1].ID)
+	if err := tt.RightClick("丙"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.ChooseMenuItem("删除"); err != nil {
+		t.Fatal(err, tt.Menu())
+	}
+	if got := a.store.Notes(); len(got) != 2 || got[0].Text != "甲" || got[1].Text != "乙" {
+		t.Fatalf("只应删右键的「丙」：%v", got)
 	}
 }

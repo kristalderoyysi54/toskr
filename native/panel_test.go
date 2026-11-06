@@ -57,7 +57,7 @@ func TestPanelShowsQueueAndCounts(t *testing.T) {
 
 func TestEmptyStateHint(t *testing.T) {
 	_, tt := testApp(t)
-	if !tt.HasText("此分组为空") {
+	if !tt.HasText("还没有内容") || !tt.HasText("连按两次 ⇧ 捕获选中文本，也可以在下方直接记下") {
 		t.Fatalf("%v", tt.Texts())
 	}
 }
@@ -178,6 +178,7 @@ func TestClipboardTabAndMoveToNotes(t *testing.T) {
 
 func TestSendWithoutTargetWarns(t *testing.T) {
 	a, tt := testApp(t, "x")
+	tt.Key(0, ui.KeyRight)
 	tt.Key(ui.Cmd, ui.KeyEnter)
 	tt.Frame()
 	if a.hudKind != "warn" || !strings.Contains(a.hudText, "没有发送目标") {

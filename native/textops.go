@@ -44,7 +44,13 @@ func (a *app) applyDraftOp(i int) {
 		a.showHUD("warn", tr("处理失败：")+err.Error())
 		return
 	}
+	if out == a.draft { // 同 Tauri applyDraftTextOp
+		a.showHUD("info", tr("内容无变化"))
+		return
+	}
+	prev := a.draft
 	a.draft = out
+	a.showHUDUndo("ok", tr("已处理草稿 · ")+tr(textOps[i].label), func() { a.draft = prev })
 }
 
 // expandDraft：转大窗编辑（同 Tauri DraftInput expandToDetail）——草稿落成当前分组的一张卡并在详情窗编辑，空草稿落「新笔记」。

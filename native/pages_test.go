@@ -90,6 +90,7 @@ func TestPreflightBlocksUntilConfirmedAndRedacts(t *testing.T) {
 	sys := &recSys{}
 	a.sys = sys
 	a.target = macos.FrontApp{PID: 42, Name: "Cursor"}
+	tt.Key(0, ui.KeyRight) // ⌘⏎ 只发勾选（同 Tauri）：←→ 单选当前卡
 	tt.Key(ui.Cmd, ui.KeyEnter)
 	tt.Frame()
 	if !tt.HasText("发送内容含敏感信息：密钥/凭据 ×1") || len(sys.sent()) != 0 {
@@ -296,7 +297,7 @@ func TestEnglishUI(t *testing.T) {
 	setLanguage("en", nil)
 	defer setLanguage("zh", nil)
 	_, tt := testApp(t)
-	for _, s := range []string{"Clip", "Notes", "Tasks", "Inbox", "Empty section", "Hold ⌥ Option"} {
+	for _, s := range []string{"Clip", "Notes", "Tasks", "Nothing here yet", "Hold ⌥ Option"} {
 		if !tt.HasText(s) {
 			t.Fatalf("缺 %q：%v", s, tt.Texts())
 		}
