@@ -101,7 +101,10 @@ type tauriTask struct {
 	SectionID   string          `json:"sectionId"`
 	CompletedAt int64           `json:"completedAt"`
 	Recurrence  *struct {
-		Freq string `json:"freq"`
+		Freq  string `json:"freq"`
+		Basis string `json:"basis"`
+		Until int64  `json:"until"`
+		Count int    `json:"count"`
 	} `json:"recurrence"`
 }
 
@@ -345,7 +348,10 @@ func (s *Store) ImportTauri(dir string, key []byte) (TauriReport, error) {
 			x.RemindedAt = ms(*t.RemindedAt)
 		}
 		if t.Recurrence != nil {
-			x.Recurrence = t.Recurrence.Freq
+			x.Recurrence, x.RecurBasis, x.RecurCount = t.Recurrence.Freq, t.Recurrence.Basis, t.Recurrence.Count
+			if t.Recurrence.Until > 0 {
+				x.RecurUntil = time.UnixMilli(t.Recurrence.Until)
+			}
 		}
 		if x.Status == "" {
 			x.Status = "todo"

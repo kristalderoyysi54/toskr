@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"testing"
+	"time"
 )
 
 func TestTaskSectionMoveDeleteUndo(t *testing.T) {
@@ -70,5 +71,34 @@ func TestMoveNoteBeforeAndMoveTask(t *testing.T) {
 	_ = s.MoveTask(t2.ID, work, "")
 	if ts := s.Tasks(); ts[len(ts)-1].ID != t2.ID || ts[len(ts)-1].Section != work {
 		t.Fatalf("移到分组末尾 %+v", ts)
+	}
+}
+
+func TestRecurrenceBasisUntilCount(t *testing.T) {
+	loc := time.Local
+	due := time.Date(2026, 11, 2, 9, 0, 0, 0, loc) // 周一 9:00
+	done := time.Date(2026, 11, 6, 18, 30, 0, 0, loc)
+	cases := []struct {
+		name string
+		t    Task
+		want time.Time
+		ok   bool
+	}{
+		{"按计划", Task{Recurrence: "weekly", DueAt: due}, due.AddDate(0, 0, 7), true},
+		{"从完成时算起保留时刻", Task{Recurrence: "daily", RecurBasis: "completion", DueAt: due}, time.Date(2026, 11, 7, 9, 0, 0, 0, loc), true},
+		{"结束日当天仍生成", Task{Recurrence: "weekly", DueAt: due, RecurUntil: time.Date(2026, 11, 9, 0, 0, 0, 0, loc)}, due.AddDate(0, 0, 7), true},
+		{"超过结束日不再生成", Task{Recurrence: "weekly", DueAt: due, RecurUntil: time.Date(2026, 11, 8, 0, 0, 0, 0, loc)}, time.Time{}, false},
+		{"剩 1 期不再生成", Task{Recurrence: "daily", DueAt: due, RecurCount: 1}, time.Time{}, false},
+	}
+	for _, c := range cases {
+		if got, ok := nextDue(c.t, done); ok != c.ok || !got.Equal(c.want) {
+			t.Errorf("%s：得 %v %v，应为 %v %v", c.name, got, ok, c.want, c.ok)
+		}
+	}
+	s, _ := OpenDir(t.TempDir(), bytes.Repeat([]byte{5}, 32))
+	x := s.AddTask(Task{Text: "浇花", Recurrence: "daily", DueAt: due, RecurCount: 3})
+	next, spawned := s.CompleteTask(x.ID, true, done)
+	if !spawned || next.RecurCount != 2 || next.Recurrence != "daily" {
+		t.Fatalf("下一期剩余期数减 1 %+v", next)
 	}
 }

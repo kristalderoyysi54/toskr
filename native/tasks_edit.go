@@ -2,7 +2,9 @@ package main
 
 import (
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -83,7 +85,7 @@ func (a *app) openTaskEdit(t store.Task) {
 	if a.taskOpen != "" && a.taskOpen != t.ID {
 		a.commitTaskEdit()
 	}
-	a.taskOpen, a.taskTitle, a.taskNote, a.ckDraft = t.ID, t.Text, t.Note, ""
+	a.taskOpen, a.taskTitle, a.taskNote, a.ckDraft, a.taskDue, a.taskEnd = t.ID, t.Text, t.Note, "", "", ""
 	a.taskCk = map[string]*string{}
 	for _, it := range t.Checklist {
 		txt := it.Text
@@ -199,5 +201,147 @@ func (a *app) taskEditor(c *ui.Context, k tokens, t store.Task) {
 					return false
 				})
 		})
+		a.taskSchedule(c, k, t)
+	})
+}
+
+// parseDue：自然语言（「明天下午3点」「下周一 9:00」）或 2006-01-02 15:04 / 01-02 15:04。
+func parseDue(input string, now time.Time) (time.Time, bool) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return time.Time{}, false
+	}
+	if d := store.ParseQuickTask(input+" x", now).DueAt; !d.IsZero() {
+		return d, true
+	}
+	for _, layout := range []string{"2006-01-02 15:04", "2006-01-02", "01-02 15:04", "1/2 15:04"} {
+		if d, err := time.ParseInLocation(layout, input, now.Location()); err == nil {
+			if d.Year() == 0 {
+				d = d.AddDate(now.Year(), 0, 0)
+			}
+			if layout == "2006-01-02" {
+				d = d.Add(9 * time.Hour)
+			}
+			return d, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// taskSchedule：展开态的「到期」自定义输入与重复的起算 / 结束（同 Tauri TaskRow 到期与重复面板）。
+func (a *app) taskSchedule(c *ui.Context, k tokens, t store.Task) {
+	now := a.now()
+	field := func(label string, body func()) {
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			text(c, label, 11, 16, 400, k.muted).Width(36)
+			body()
+		})
+	}
+	field(tr("到期"), func() {
+		cur := tr("未设置")
+		if !t.DueAt.IsZero() {
+			cur = dueBadge(t.DueAt, now)
+		}
+		text(c, cur, 11, 16, 500, k.fg)
+		ui.TextInputBase(c, &a.taskDue).Grow(1).Basis(0).Font(fontSans).FontSize(11).TextColor(k.fg).
+			Placeholder(tr("如：明天下午3点、2026-11-20 15:00，回车设定")).Label(tr("修改到期时间")).
+			OnTextKey(func(key ui.TextKey) bool {
+				if key.Key != ui.KeyEnter {
+					return false
+				}
+				if d, ok := parseDue(key.Text(), now); ok {
+					if cur, ok := a.taskByID(t.ID); ok {
+						cur.DueAt, cur.RemindedAt = d, time.Time{}
+						_ = a.store.UpdateTask(cur)
+					}
+					a.taskDue = ""
+				} else {
+					a.showHUD("warn", tr("没看懂这个时间"))
+				}
+				return true
+			})
+		if !t.DueAt.IsZero() && footLink(c, k, tr("清除到期"), "due-clear-"+t.ID) {
+			t.DueAt = time.Time{}
+			_ = a.store.UpdateTask(t)
+		}
+	})
+	if t.Recurrence == "" {
+		return
+	}
+	field(tr("重复"), func() {
+		text(c, tr(recurLabels[max(0, slices.Index(recurNames, t.Recurrence))]), 11, 16, 500, k.fg)
+		basis := tr("按计划日期")
+		if t.RecurBasis == "completion" {
+			basis = tr("从完成时算起")
+		}
+		ui.PopoverMenuButton(c, basis, func(m *ui.Menu) {
+			for _, o := range []opt{{"", "按计划日期"}, {"completion", "从完成时算起"}} {
+				if m.Item(tr(o.label)).Checked(t.RecurBasis == o.v).Chosen() {
+					t.RecurBasis = o.v
+					_ = a.store.UpdateTask(t)
+				}
+			}
+		})
+	})
+	field(tr("结束"), func() {
+		end := tr("永不")
+		switch {
+		case !t.RecurUntil.IsZero():
+			end = tr("到某天")
+		case t.RecurCount > 0:
+			end = tr("共几次")
+		}
+		ui.PopoverMenuButton(c, end, func(m *ui.Menu) {
+			if m.Item(tr("永不")).Checked(t.RecurUntil.IsZero() && t.RecurCount == 0).Chosen() {
+				t.RecurUntil, t.RecurCount = time.Time{}, 0
+				_ = a.store.UpdateTask(t)
+			}
+			if m.Item(tr("到某天")).Checked(!t.RecurUntil.IsZero()).Chosen() {
+				t.RecurUntil, t.RecurCount = t.DueAt.AddDate(0, 1, 0), 0
+				_ = a.store.UpdateTask(t)
+				a.taskEnd = t.RecurUntil.Format("2006-01-02")
+			}
+			if m.Item(tr("共几次")).Checked(t.RecurCount > 0).Chosen() {
+				t.RecurUntil, t.RecurCount = time.Time{}, 5
+				_ = a.store.UpdateTask(t)
+				a.taskEnd = "5"
+			}
+		})
+		switch {
+		case !t.RecurUntil.IsZero():
+			if a.taskEnd == "" {
+				a.taskEnd = t.RecurUntil.Format("2006-01-02")
+			}
+			ui.TextInputBase(c, &a.taskEnd).Width(96).Font(fontSans).FontSize(11).TextColor(k.fg).Label(tr("重复结束日期")).
+				OnTextKey(func(key ui.TextKey) bool {
+					if key.Key != ui.KeyEnter {
+						return false
+					}
+					if d, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(key.Text()), now.Location()); err == nil {
+						t.RecurUntil = d
+						_ = a.store.UpdateTask(t)
+					} else {
+						a.showHUD("warn", tr("日期格式：2026-12-31"))
+					}
+					return true
+				})
+		case t.RecurCount > 0:
+			text(c, tr("还剩"), 11, 16, 400, k.muted)
+			if a.taskEnd == "" {
+				a.taskEnd = itoa(t.RecurCount)
+			}
+			ui.TextInputBase(c, &a.taskEnd).Width(36).Font(fontSans).FontSize(11).TextColor(k.fg).Label(tr("剩余重复次数（含本期）")).
+				OnTextKey(func(key ui.TextKey) bool {
+					if key.Key != ui.KeyEnter {
+						return false
+					}
+					if n, err := strconv.Atoi(strings.TrimSpace(key.Text())); err == nil && n > 0 && n < 1000 {
+						t.RecurCount = n
+						_ = a.store.UpdateTask(t)
+					}
+					return true
+				})
+			text(c, tr("次（含本期）"), 11, 16, 400, k.muted)
+		}
 	})
 }

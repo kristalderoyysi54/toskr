@@ -129,6 +129,7 @@ type app struct {
 	snipEditID, snipLabel, snipText, snipGroup string
 	// 任务行内编辑与任务分组改名
 	taskOpen, taskTitle, taskNote, ckDraft string
+	taskDue, taskEnd                       string // 展开态的到期 / 重复结束输入
 	taskCk                                 map[string]*string
 	taskSecRename, taskSecName             string
 	tauriImporting                         bool // 正在从 Tauri 版导入

@@ -540,7 +540,7 @@ func (a *app) taskSection(c *ui.Context, k tokens, g taskGroup, now time.Time) {
 			}
 			countBadge(c, len(g.tasks), k.muted, k.track)
 			ui.Spacer(c)
-			more := ui.Box(c).Size(16, 16).Radius(6).Center().Tooltip(tr("分组操作"))
+			more := ui.Box(c).Size(16, 16).Radius(6).Center().Tooltip(tr("分组操作")).Role(ui.RoleButton).Label(sectionTitle(g.sec) + " " + tr("分组操作"))
 			if !hovered {
 				more.Opacity(0) // 与 Tauri 一致：悬停区头才显出「···」
 			}
@@ -827,4 +827,11 @@ func (a *app) overdueCount() int {
 		}
 	}
 	return n
+}
+
+func sectionTitle(sec store.Section) string {
+	if sec.ID == store.TaskInbox {
+		return tr("收集箱")
+	}
+	return sec.Name
 }

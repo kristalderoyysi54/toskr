@@ -21,6 +21,10 @@ type Task struct {
 	Spark       bool            `json:"spark,omitempty"`
 	Section     string          `json:"section,omitempty"`
 	Recurrence  string          `json:"recurrence,omitempty"` // daily | weekdays | weekly | monthly | yearly
+	// 重复的起算与结束（同 Tauri TaskRecurrence.basis / until / count）
+	RecurBasis string    `json:"recurBasis,omitempty"` // "" = 按计划日期；completion = 从完成时算起
+	RecurUntil time.Time `json:"recurUntil,omitzero"`  // 结束日（含当天）：下一期落在此日之后不再生成
+	RecurCount int       `json:"recurCount,omitempty"` // 剩余期数（含本期）；0 = 不限
 }
 
 type ChecklistItem struct {
@@ -82,15 +86,18 @@ func (s *Store) CompleteTask(id string, done bool, now time.Time) (next Task, sp
 		t := &s.tasks[i]
 		if done {
 			t.Status, t.CompletedAt = "done", now
-			if t.Recurrence != "" && !t.DueAt.IsZero() {
+			if due, ok := nextDue(*t, now); ok {
 				next = *t
 				next.ID, next.Status, next.CompletedAt, next.RemindedAt, next.CreatedAt = newID(), "todo", time.Time{}, time.Time{}, now
-				next.DueAt = NextOccurrence(t.DueAt, t.Recurrence)
+				next.DueAt = due
+				if t.RecurCount > 0 {
+					next.RecurCount = t.RecurCount - 1
+				}
 				next.Checklist = slices.Clone(t.Checklist) // 不能与本期共享底层数组
 				for k := range next.Checklist {
 					next.Checklist[k].Done = false
 				}
-				t.Recurrence = ""
+				t.Recurrence, t.RecurBasis, t.RecurUntil, t.RecurCount = "", "", time.Time{}, 0
 				s.tasks = slices.Insert(s.tasks, 0, next)
 				spawned = true
 			}
@@ -340,4 +347,23 @@ func (s *Store) MoveTask(id, section, beforeID string) error {
 		s.tasks = slices.Insert(s.tasks, at, t)
 		return true
 	})
+}
+
+// nextDue：完成本期后下一期的到期时间。从完成时算起的保留原到期的时刻；超过结束日或剩余 1 期时不再生成。
+func nextDue(t Task, completed time.Time) (time.Time, bool) {
+	if t.Recurrence == "" || t.DueAt.IsZero() || t.RecurCount == 1 {
+		return time.Time{}, false
+	}
+	base := t.DueAt
+	if t.RecurBasis == "completion" {
+		base = time.Date(completed.Year(), completed.Month(), completed.Day(), t.DueAt.Hour(), t.DueAt.Minute(), 0, 0, t.DueAt.Location())
+	}
+	due := NextOccurrence(base, t.Recurrence)
+	if !t.RecurUntil.IsZero() {
+		y, m, d := t.RecurUntil.Date()
+		if due.After(time.Date(y, m, d, 23, 59, 59, 0, due.Location())) {
+			return time.Time{}, false
+		}
+	}
+	return due, true
 }

@@ -87,11 +87,16 @@ func TestTaskRowEditStatusAndGroups(t *testing.T) {
 
 	// 分组：双击改名、下移、删除可撤销
 	tt.Frame()
-	_ = tt.Click("工作") // 连点两次 = 双击
-	_ = tt.Click("工作")
+	// 改名走「···」菜单的「重命名」（双击同效，但连点两次在 -race 高负载下可能超出双击间隔，测试里不依赖它）
+	if err := tt.Click("工作 分组操作"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.ChooseMenuItem("重命名"); err != nil {
+		t.Fatalf("%v %v", err, tt.Menu())
+	}
 	tt.Frame()
 	if a.taskSecRename != work {
-		t.Fatal("双击分组名进入改名")
+		t.Fatal("右键重命名进入改名")
 	}
 	tt.Key(ui.Cmd, ui.KeyA)
 	tt.Type("项目")
@@ -114,5 +119,62 @@ func TestTaskRowEditStatusAndGroups(t *testing.T) {
 	undo()
 	if get().Section != work || !strings.Contains(strings.Join(tt.Texts(), " "), "写周报") {
 		t.Fatal("撤销删除分组")
+	}
+}
+
+// 到期自定义：自然语言或日期格式，回车设定；重复：从完成时算起、结束于共几次。
+func TestTaskDueAndRecurrenceEditor(t *testing.T) {
+	now := time.Date(2026, 11, 6, 10, 0, 0, 0, time.Local) // 周五
+	for in, want := range map[string]string{
+		"明天下午3点":           "2026-11-07 15:00",
+		"2026-11-20 15:30": "2026-11-20 15:30",
+		"2026-12-01":       "2026-12-01 09:00",
+		"11-08 08:15":      "2026-11-08 08:15",
+	} {
+		d, ok := parseDue(in, now)
+		if !ok || d.Format("2006-01-02 15:04") != want {
+			t.Errorf("parseDue(%q) = %v %v，应为 %s", in, d, ok, want)
+		}
+	}
+	if _, ok := parseDue("随便写写", now); ok {
+		t.Error("看不懂的不应设定")
+	}
+
+	a, tt := testApp(t)
+	a.clock = func() time.Time { return now }
+	task := a.store.AddTask(store.Task{Text: "浇花", Recurrence: "daily", DueAt: now.Add(time.Hour)})
+	a.switchPage(pageTasks)
+	a.taskSub = 1
+	tt.Frame()
+	_ = tt.Click("浇花")
+	tt.Frame()
+	for _, s := range []string{"到期", "重复", "每天", "按计划日期", "结束", "永不"} {
+		if !tt.HasText(s) {
+			t.Fatalf("展开态缺 %q：%v", s, tt.Texts())
+		}
+	}
+	_ = tt.Click("修改到期时间")
+	tt.Type("明天下午3点")
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	if got, _ := a.taskByID(task.ID); got.DueAt.Format("01-02 15:04") != "11-07 15:00" {
+		t.Fatalf("到期应改为明天 15:00 %v", got.DueAt)
+	}
+	if err := tt.Click("按计划日期"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("从完成时算起"); err != nil { // PopoverMenuButton 的菜单画在窗口里
+		t.Fatalf("%v %v", err, tt.Texts())
+	}
+	tt.Frame()
+	_ = tt.Click("永不")
+	tt.Frame()
+	if err := tt.Click("共几次"); err != nil {
+		t.Fatalf("%v %v", err, tt.Texts())
+	}
+	tt.Frame()
+	if got, _ := a.taskByID(task.ID); got.RecurBasis != "completion" || got.RecurCount != 5 || !tt.HasText("次（含本期）") {
+		t.Fatalf("重复设置 %+v %v", got, tt.Texts())
 	}
 }
