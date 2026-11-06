@@ -66,6 +66,17 @@ func start() (*app, error) {
 	diag.Push("数据水合完成 笔记=%d 剪贴板=%d（全部 %d 条 · 分组 %d · 任务 %d · 收件箱未完成 %d）",
 		total-a.counts[store.SectionClipboard], a.counts[store.SectionClipboard], total, len(st.Sections()), len(st.Tasks()), a.counts[store.SectionInbox])
 
+	withBundle, nameOnly := 0, 0
+	for _, n := range st.Notes() {
+		switch {
+		case n.BundleID != "":
+			withBundle++
+		case n.SourceApp != "":
+			nameOnly++
+		}
+	}
+	diag.Push("来源: 有 bundle %d · 只有应用名 %d", withBundle, nameOnly)
+
 	a.panel = mygo.NewWindow(mygo.WindowOptions{
 		Title: "Toskr", Panel: true, Hidden: true, Frameless: true, Transparent: true,
 		Vibrancy: vibrancyFor(st.Settings().Glass), CornerRadius: 18,

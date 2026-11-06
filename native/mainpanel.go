@@ -248,7 +248,7 @@ func (a *app) groups() []noteGroup {
 }
 
 func (a *app) notesPage(c *ui.Context, k tokens) {
-	ui.Row(c).Grow(1).Children(func() {
+	ui.Row(c).Grow(1).AlignItems(ui.Stretch).Children(func() { // Row 默认垂直居中：不拉伸的话列表短于视口时会整块浮到中间
 		if a.noteRailOpen {
 			a.noteRail(c, k)
 		}

@@ -42,6 +42,9 @@ func arrangeClips(notes []store.Note, view string) []store.Note {
 	if view == "image" {
 		notes = slices.DeleteFunc(notes, func(n store.Note) bool { return n.Kind != "image" })
 	}
+	slices.SortStableFunc(notes, func(x, y store.Note) int { // 剪贴历史按时间新→旧（同 Tauri insertNoteByTimeWithin）
+		return y.CreatedAt.Compare(x.CreatedAt)
+	})
 	first := map[string]int{}
 	for i, n := range notes {
 		if _, ok := first[n.SourceApp]; !ok {

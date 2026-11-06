@@ -5,7 +5,11 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+
+	"github.com/toskr/native/internal/macos"
 )
+
+func init() { heldMods = nil } // 视图测试按 Tester 的修饰键状态
 
 // 长按 ⌥：只按 ⌥ 满 650ms 才浮出全部快捷键，松开即收；⌘⌥ 组合不触发。按住 ⌘ 前 9 张卡显示 ⌘N 角标。
 func TestShortcutHelpAndQuickBadges(t *testing.T) {
@@ -77,4 +81,22 @@ func TestDetailWTogglesPick(t *testing.T) {
 	if a.detail.pick {
 		t.Fatal("再按 W 退出")
 	}
+}
+
+// 界面上下文残留 ⌘（失焦期间松开没收到）但键盘上实际没按：不显示快发角标。
+func TestQuickBadgeIgnoresStaleCmd(t *testing.T) {
+	a, tt := testApp(t, "一", "二")
+	defer func() { heldMods = nil }()
+	heldMods = func() uint64 { return 0 }
+	tt.HoldModifiers(ui.Cmd)
+	tt.Frame()
+	if tt.HasText("⌘1") {
+		t.Fatal("实际没按 ⌘ 不应显示角标")
+	}
+	heldMods = func() uint64 { return macos.FlagCommand }
+	tt.Frame()
+	if !tt.HasText("⌘1") {
+		t.Fatal("真按着 ⌘ 应显示角标")
+	}
+	_ = a
 }

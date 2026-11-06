@@ -18,3 +18,9 @@ func TestAppIconPNG(t *testing.T) {
 		t.Fatal("未安装 / 空 bundle 应返回 nil")
 	}
 }
+
+func TestHeldModifiers(t *testing.T) {
+	if HeldModifiers()&FlagCommand != 0 {
+		t.Log("测试时恰好按着 ⌘")
+	}
+}

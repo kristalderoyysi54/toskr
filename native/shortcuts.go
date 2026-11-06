@@ -4,6 +4,8 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+
+	"github.com/toskr/native/internal/macos"
 )
 
 // 面板内快捷键清单（同 Tauri src/lib/shortcuts.ts，单一来源）：面板里长按 ⌥ 的速查层与设置「快捷键」页的静态表共用。
@@ -30,6 +32,12 @@ var panelShortcuts = [][2]string{
 	{"Esc", "逐层退出（预览→搜索→选择→面板）"},
 }
 
+// heldMods：真实按住的修饰键（测试替换为 nil，即信任界面上下文的修饰键状态）。
+var heldMods = macos.HeldModifiers
+
+// held 判断修饰键是否真的按着：界面上下文在窗口失焦期间收不到松键，会残留 ⌘ / ⌥，再核对一次键盘实况。
+func held(flag uint64) bool { return heldMods == nil || heldMods()&flag != 0 }
+
 const altHoldDelay = 650 * time.Millisecond // 同 Tauri：按住 ⌥ 650ms 才弹，避免 ⌥ 组合键误触
 
 // keycap 是键帽（11px、浅底细描边）。
@@ -40,7 +48,7 @@ func keycap(c *ui.Context, k tokens, label string, minW float32) {
 
 // shortcutHelp：只按住 ⌥ 达 650ms 时，在面板底部浮出全部快捷键；松开即收。
 func (a *app) shortcutHelp(c *ui.Context, k tokens) {
-	if c.Modifiers() != ui.Alt {
+	if c.Modifiers() != ui.Alt || !held(macos.FlagOption) {
 		a.altSince = time.Time{}
 		return
 	}
@@ -67,7 +75,7 @@ func (a *app) shortcutHelp(c *ui.Context, k tokens) {
 
 // quickBadge：按住 ⌘ 时前 9 张卡左上角显示 ⌘N 快发角标（同 Tauri quickSlot）；top 为距顶偏移（紧凑行取垂直居中）。
 func (a *app) quickBadge(c *ui.Context, k tokens, idx int, top float32) {
-	if idx < 0 || idx >= 9 || c.Modifiers()&ui.Cmd == 0 || a.editing != "" {
+	if idx < 0 || idx >= 9 || c.Modifiers()&ui.Cmd == 0 || !held(macos.FlagCommand) || a.editing != "" {
 		return
 	}
 	bg, fg := ui.RGBA(0, 0, 0, 0.7), ui.RGB(255, 255, 255)

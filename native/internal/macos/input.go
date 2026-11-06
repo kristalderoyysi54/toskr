@@ -19,6 +19,7 @@ var (
 	CGEventSetIntegerValueField func(ev uintptr, field uint32, v int64)
 	CGEventCreateKeyboardEvent  func(src uintptr, key uint16, down bool) uintptr
 	CGEventPost                 func(tap uint32, ev uintptr)
+	CGEventSourceFlagsState     func(state int32) uint64
 )
 
 func loadCG() {
@@ -27,6 +28,7 @@ func loadCG() {
 		"CGEventGetFlags": &CGEventGetFlags, "CGEventSetFlags": &CGEventSetFlags,
 		"CGEventGetIntegerValueField": &CGEventGetIntegerValueField, "CGEventSetIntegerValueField": &CGEventSetIntegerValueField,
 		"CGEventCreateKeyboardEvent": &CGEventCreateKeyboardEvent, "CGEventPost": &CGEventPost,
+		"CGEventSourceFlagsState": &CGEventSourceFlagsState,
 	} {
 		purego.RegisterLibFunc(fn, cg, name)
 	}
@@ -123,3 +125,10 @@ const (
 	KeyC uint16 = 8
 	KeyV uint16 = 9
 )
+
+// HeldModifiers 返回此刻键盘上真实按住的修饰键（kCGEventSourceStateCombinedSessionState）。
+// 窗口失焦期间松开的修饰键不会送到窗口，界面里缓存的修饰键状态会卡住；按住类交互以它为准。
+func HeldModifiers() uint64 {
+	load()
+	return CGEventSourceFlagsState(0)
+}

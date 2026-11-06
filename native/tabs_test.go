@@ -109,3 +109,21 @@ func TestNewNoteInSection(t *testing.T) {
 		t.Fatalf("应在收件箱落新笔记并打开编辑 %+v", a.detail)
 	}
 }
+
+// 笔记列表短于视口（如全部分组折叠）时从顶部排起，不能整块浮到面板中间（Row 默认垂直居中的回归）。
+func TestShortNotesListStartsAtTop(t *testing.T) {
+	a, _ := testApp(t, "甲")
+	for _, s := range a.store.Sections() {
+		s.Collapsed = true
+		_ = a.store.UpdateSection(s)
+	}
+	a.switchPage(pageNotes)
+	a.reload()
+	tt := ui.NewTester(a.panelView, 340, 1000)
+	tt.Frame()
+	head, _ := tt.Find("收件箱")
+	tab, _ := tt.Find("笔记")
+	if head.Y-tab.Y > 60 {
+		t.Fatalf("分组头应紧跟子页签：页签 y=%v 分组 y=%v", tab.Y, head.Y)
+	}
+}

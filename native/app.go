@@ -781,8 +781,11 @@ func (a *app) addClip(ev core.ClipEvent) (store.Note, error) {
 		diag.Push("剪贴板: 收文本 %d 字符 来自 %s", len([]rune(ev.Text)), ev.Source.Name)
 	}
 	added, dup, err := a.store.Add(n)
-	// 连续复制两次自动置顶（同 Tauri clipDoubleCopyKeep：10 秒内复制两次同一内容 → 固定 ★）
 	now := a.now()
+	if err == nil && dup { // 重复复制：刷新时间与来源，排到历史最新（同 Tauri）
+		_ = a.store.BumpClip(added.ID, now, ev.Source.Name, ev.Source.BundleID)
+	}
+	// 连续复制两次自动置顶（同 Tauri clipDoubleCopyKeep：10 秒内复制两次同一内容 → 固定 ★）
 	if err == nil && dup && !a.store.Settings().ClipDoubleCopyOff && a.lastClipID == added.ID && now.Sub(a.lastClipAt) <= 10*time.Second && !added.Kept {
 		_ = a.store.SetKept(added.ID, true)
 		added.Kept = true

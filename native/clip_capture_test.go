@@ -11,6 +11,7 @@ import (
 
 	"github.com/toskr/native/internal/core"
 	"github.com/toskr/native/internal/macos"
+	"github.com/toskr/native/internal/store"
 )
 
 // 剪贴板收链接与图片：整段链接成 link 卡（剪贴页显示「链接」），图片存进媒体库成图片卡；同一张图再复制只算已存在。
@@ -88,5 +89,29 @@ func TestClipDoubleCopyKeepAndPause(t *testing.T) {
 	set.Frame()
 	if !a.store.Settings().ClipPauseUntil.IsZero() {
 		t.Fatal("立即恢复")
+	}
+}
+
+// 剪贴历史按时间新→旧；重复复制刷新时间与来源（同 Tauri），不会出现「昨天」排在「今天」上面。
+func TestClipOrderAndDuplicateBump(t *testing.T) {
+	a, _ := testApp(t)
+	now := time.Date(2026, 11, 6, 13, 0, 0, 0, time.Local)
+	a.clock = func() time.Time { return now }
+	old, _, _ := a.store.Add(store.Note{Section: store.SectionClipboard, Text: "旧的", CreatedAt: now.Add(-20 * time.Hour)})
+	_, _, _ = a.store.Add(store.Note{Section: store.SectionClipboard, Text: "新的", CreatedAt: now.Add(-time.Minute)})
+	_ = a.store.MoveToAt(old.ID, store.SectionClipboard, 0) // 模拟导入打乱的顺序：旧的排在最前
+	got := arrangeClips(a.store.Section(store.SectionClipboard), "time")
+	if got[0].Text != "新的" {
+		t.Fatalf("应按时间新→旧 %v", got[0].Text)
+	}
+	if _, err := a.addClip(core.ClipEvent{Text: "旧的", Source: macos.FrontApp{Name: "Safari", BundleID: "com.apple.Safari"}}); err != nil {
+		t.Fatal(err)
+	}
+	n, _ := a.store.Note(old.ID)
+	if !n.CreatedAt.Equal(now) || n.SourceApp != "Safari" || n.BundleID != "com.apple.Safari" {
+		t.Fatalf("重复复制应刷新时间与来源 %+v", n)
+	}
+	if got := arrangeClips(a.store.Section(store.SectionClipboard), "time"); got[0].ID != old.ID {
+		t.Fatal("刷新后排到最前")
 	}
 }

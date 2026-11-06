@@ -262,6 +262,22 @@ func (s *Store) SetCreatedAt(id string, at time.Time) error {
 	})
 }
 
+// BumpClip：重复复制 = 再次使用（同 Tauri addClipNote duplicate）——刷新时间与来源，卡片已由 Add 提到最前。
+func (s *Store) BumpClip(id string, at time.Time, app, bundle string) error {
+	return s.mutate(func() bool {
+		i := s.index(id)
+		if i < 0 {
+			return false
+		}
+		n := &s.notes[i]
+		n.CreatedAt = at
+		if app != "" {
+			n.SourceApp, n.BundleID = app, bundle
+		}
+		return true
+	})
+}
+
 // MoveNoteBefore 把笔记移到 beforeID 之前（可跨分组，归入目标所在分组）。
 func (s *Store) MoveNoteBefore(id, beforeID string) error {
 	if id == beforeID {
