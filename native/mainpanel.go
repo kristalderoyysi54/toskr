@@ -74,7 +74,11 @@ func (a *app) targetBar(c *ui.Context, k tokens) {
 	ui.Column(c).Margin(0, 12).Padding(4).Children(func() {
 		ui.Row(c).Height(28).Gap(6).Grow(1).AlignItems(ui.Center).Children(func() {
 			ui.Row(c).Gap(6).Grow(1).AlignItems(ui.Center).Children(func() {
-				ui.Box(c).Size(16, 16).Radius(6).Background(k.chip).Center().Children(func() { licon(c, "app-window", 8, k.muted) })
+				if img := a.appIcon(a.target.BundleID); img != nil { // 目标应用真实图标（同 Tauri TargetLensBar appIcon），没取到用通用图标
+					ui.Image(c, img).Size(16, 16).Radius(4)
+				} else {
+					ui.Box(c).Size(16, 16).Radius(6).Background(k.chip).Center().Children(func() { licon(c, "app-window", 8, k.muted) })
+				}
 				if a.target.PID == 0 {
 					text(c, tr("未识别目标"), 11, 16, 600, k.fg)
 					return
