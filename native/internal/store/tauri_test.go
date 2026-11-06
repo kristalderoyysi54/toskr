@@ -170,3 +170,11 @@ func TestImportTauri(t *testing.T) {
 		t.Fatalf("重复导入 %d %v", len(s.Notes()), err)
 	}
 }
+
+func TestTauriClipCardTemplate(t *testing.T) {
+	for in, want := range map[string]string{"standard": "standard", "condensed": "condensed", "banner": "condensed", "": "", "x": ""} {
+		if got := applyTauriSettings(Settings{}, tauriSettings{ClipCardTemplate: in}).ClipTemplate; got != want {
+			t.Errorf("%q → %q，应为 %q", in, got, want)
+		}
+	}
+}

@@ -101,12 +101,13 @@ type Settings struct {
 	ClipKeepConcealed bool      `json:"clipKeepConcealed,omitempty"` // true = 不忽略密码管理器 / 隐藏内容
 	ClipKeepTransient bool      `json:"clipKeepTransient,omitempty"` // true = 不忽略瞬时内容
 	// 外观细项（同 Tauri windowOpacity / panelOpacity / cardOpacity / hudDurationMs / companionGap；0 / nil = 默认）
-	WindowOpacity float64  `json:"windowOpacity,omitempty"` // 0.3–1，默认 1
-	PanelOpacity  float64  `json:"panelOpacity,omitempty"`  // 内容底色浓度 0.25–1，默认 0.62
-	CardOpacity   float64  `json:"cardOpacity,omitempty"`   // 0.3–1，默认 1
-	HUDDurationMs int      `json:"hudDurationMs,omitempty"` // 2000–10000，默认 3000
-	CompanionGap  *int     `json:"companionGap,omitempty"`  // 0–40，默认 8
-	CardTintOff   bool     `json:"cardTintOff,omitempty"`   // 卡片彩色通栏（Tauri cardTint，默认开）
+	WindowOpacity float64  `json:"windowOpacity,omitempty"`    // 0.3–1，默认 1
+	PanelOpacity  float64  `json:"panelOpacity,omitempty"`     // 内容底色浓度 0.25–1，默认 0.62
+	CardOpacity   float64  `json:"cardOpacity,omitempty"`      // 0.3–1，默认 1
+	HUDDurationMs int      `json:"hudDurationMs,omitempty"`    // 2000–10000，默认 3000
+	CompanionGap  *int     `json:"companionGap,omitempty"`     // 0–40，默认 8
+	CardTintOff   bool     `json:"cardTintOff,omitempty"`      // 卡片彩色通栏（Tauri cardTint，默认开）
+	ClipTemplate  string   `json:"clipCardTemplate,omitempty"` // 剪贴卡模板：standard | condensed（仅舒适密度）
 	ScreenshotKey string   `json:"screenshotKey"`
 	AIEndpoint    string   `json:"aiEndpoint"`
 	AIModel       string   `json:"aiModel"`

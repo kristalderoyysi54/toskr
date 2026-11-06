@@ -250,6 +250,18 @@ func (a *app) settingsView(c *ui.Context) {
 						control: a.pctSlider(c, k, st.PanelAlpha(), 25, 100, 1, func(s *store.Settings, v float64) { s.PanelOpacity = v })},
 					{title: tr("卡片彩色通栏"), hint: tr("卡片顶部按分组颜色着色；关闭则统一中性灰"), hidden: st.ColorScheme == "platinum",
 						control: setToggle(!st.CardTintOff, func(s *store.Settings, v bool) { s.CardTintOff = !v })},
+					{title: tr("剪贴卡模板"), hint: tr("只影响剪贴页：标准显示完整内容，浓缩只留摘要"), hidden: st.CardDensity == "compact", control: func() {
+						i := 0
+						if st.ClipTemplate == "condensed" {
+							i = 1
+						}
+						if segmented(c, k, &i, "标准", "浓缩") {
+							cur := a.store.Settings()
+							cur.ClipTemplate = []string{"standard", "condensed"}[i]
+							_ = a.store.SetSettings(cur)
+							a.invalidateAll()
+						}
+					}},
 					{title: tr("卡片底色不透明度"), hint: tr("调低可透出毛玻璃背景"), hidden: st.ColorScheme == "platinum",
 						control: a.pctSlider(c, k, st.CardAlpha(), 30, 100, 5, func(s *store.Settings, v float64) { s.CardOpacity = v })},
 					{title: tr("提示显示时长"), hint: tr("右上角气泡停留多久；失败提醒至少 4 秒"), control: func() {

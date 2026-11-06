@@ -86,7 +86,8 @@ func (a *app) clipPage(c *ui.Context, k tokens) {
 				a.emptyState(c, k, "clipboard-list", tr("还没有剪贴板记录"), tr("复制任意文字、链接或图片试试，会自动出现在这里。"))
 				return
 			}
-			// 卡片固定 116 高：只构建视口附近的卡，其余等高占位（同笔记页）
+			// 卡片定高（标准 116 / 浓缩 52）：只构建视口附近的卡，其余等高占位（同笔记页）
+			condensed := a.clipCondensed()
 			y := float32(4)
 			for i := 0; i < len(list); {
 				band := a.clipBand(list[i])
@@ -105,13 +106,15 @@ func (a *app) clipPage(c *ui.Context, k tokens) {
 						}
 					}
 					for _, n := range list[i:j] {
-						if (y+116 < vis.top || y > vis.bottom) && !a.chosen.Has(n.ID) {
-							skip += 120
+						short := condensed && a.editing != n.ID // 编辑时临时回到标准高度放下输入框
+						h := clipCardH(short)
+						if (y+h < vis.top || y > vis.bottom) && !a.chosen.Has(n.ID) {
+							skip += h + 4
 						} else {
 							flush()
-							a.clipCard(c, k, n)
+							a.clipCard(c, k, n, short)
 						}
-						y += 120
+						y += h + 4
 					}
 					flush()
 				})
@@ -175,15 +178,39 @@ func linkHost(raw string) string {
 	return strings.TrimPrefix(u.Host, "www.") + strings.TrimSuffix(u.EscapedPath(), "/")
 }
 
+// clipCondensed：剪贴卡「浓缩」模板（同 Tauri clipCardTemplate=condensed，只在舒适密度生效）。
+func (a *app) clipCondensed() bool {
+	st := a.store.Settings()
+	return st.CardDensity != "compact" && st.ClipTemplate == "condensed"
+}
+
+func clipCardH(condensed bool) float32 {
+	if condensed {
+		return 52
+	}
+	return 116
+}
+
+// firstLine：首个非空行（浓缩卡摘要）。
+func firstLine(s string) string {
+	for _, l := range strings.Split(s, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			return l
+		}
+	}
+	return ""
+}
+
 // clipCard 是剪贴板「票据」卡：时间头 + 正文（3 行截断 / 链接标题）+ 虚线底栏（来源 · 字数）。
-func (a *app) clipCard(c *ui.Context, k tokens, n store.Note) {
+// 浓缩模板：票据头 + 单行摘要（图片=缩略图，链接=标题），无底栏，操作钮挂头行右端。
+func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, condensed bool) {
 	idx, ok := a.noteIdx[n.ID]
 	if !ok || a.page != pageClip {
 		idx = -1
 	}
 	focused := idx >= 0 && idx == a.selected && a.focusList
 	checked := a.chosen.Has(n.ID)
-	box := ui.Column(c).Height(116).Padding(6, 8, 4, 8).Radius(10).Background(k.card).Key(n.ID)
+	box := ui.Column(c).Height(clipCardH(condensed)).Padding(6, 8, 4, 8).Radius(10).Background(k.card).Key(n.ID)
 	hovered := box.Hovered()
 	elevated(box, k, hovered || checked || (focused && !checked)) // 同笔记卡：悬停上移 1px + elevation-2，多选内发光
 	lift := float32(0)
@@ -216,6 +243,36 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note) {
 				pin.Opacity(pin.AnimateTo("op", pinOp, tweenTw)).Children(func() { liconFilled(c, "pin", 12, amber400) })
 			}
 		})
+		if condensed {
+			ui.Row(c).Grow(1).Gap(6).AlignItems(ui.Center).Clip().Children(func() {
+				if n.Blur {
+					return
+				}
+				line := firstLine(n.Text)
+				switch {
+				case n.Kind == "image":
+					if img := a.thumb(n.ImageFile); img != nil {
+						w, h := ui.ImageSize(img)
+						ui.Image(c, img).Size(min(24*w/max(h, 1), 48), 24).Radius(4)
+					}
+					line = itoa(n.ImageW) + " × " + itoa(n.ImageH)
+				case isLink && n.LinkTitle != "":
+					line = n.LinkTitle
+				}
+				t := text(c, line, 13, 18, 400, k.fg).SingleLine().Grow(1)
+				if n.Kind == "code" {
+					t.Font(fontMono).FontSize(12)
+				}
+			})
+			if n.Blur {
+				blurOverlay(c, k, 20)
+			}
+			if hovered {
+				a.clipActions(c, k, n, isLink, true)
+			}
+			a.cardOverlays(c, k, n, checked, false)
+			return
+		}
 		ui.Column(c).Grow(1).Margin(4, 0, 0, 0).Clip().Children(func() {
 			switch {
 			case a.editing == n.ID:
@@ -273,7 +330,7 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note) {
 			blurOverlay(c, k, 20)
 		}
 		if hovered {
-			a.clipActions(c, k, n, isLink)
+			a.clipActions(c, k, n, isLink, false)
 		}
 		a.cardOverlays(c, k, n, checked, false)
 	})
@@ -297,13 +354,18 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note) {
 }
 
 // clipActions 是悬停浮钮组：发送 / 置顶 / 复制 / 收进笔记 / 详情（链接为打开页面）/ 编辑 / 模糊 / 删除。
-func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool) {
+// top：浓缩卡挂头行右端（头行元数据悬停让位），标准卡挂底栏右端。
+func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink, top bool) {
 	open := "expand"
 	if isLink {
 		open = "external-link"
 	}
 	fade := ui.ElementTransition{Duration: 100 * time.Millisecond, Ease: easeTw, Enter: &ui.Motion{}, Exit: &ui.Motion{}} // 悬停浮钮 opacity 100ms
-	ui.Row(c).Absolute().Right(6).Bottom(4).Gap(2).Key("acts").Transition(fade).Children(func() {
+	row := ui.Row(c).Absolute().Right(6).Bottom(4)
+	if top {
+		row = ui.Row(c).Absolute().Right(4).Top(4)
+	}
+	row.Gap(2).Key("acts").Transition(fade).Children(func() {
 		for _, act := range []struct{ icon, tip string }{
 			{"send", "发送（⌘↵）"}, {"pin", "置顶"}, {"copy", "复制"}, {"inbox", "收进笔记"},
 			{open, "打开"}, {"pencil", "编辑"}, {"eye-off", "模糊内容"}, {"trash-2", "删除"},

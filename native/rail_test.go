@@ -263,3 +263,39 @@ func TestCardBandTint(t *testing.T) {
 		t.Fatal("关闭后中性灰")
 	}
 }
+
+// 剪贴卡模板：浓缩只留票据头 + 首行摘要（无底栏字数），设置项仅舒适密度可见；Tauri 旧值 banner 并入浓缩。
+func TestClipCondensedTemplate(t *testing.T) {
+	a, tt := testApp(t)
+	a.store.Add(store.Note{Section: store.SectionClipboard, Text: "第一行\n第二行"})
+	a.switchPage(pageClip)
+	tt.Frame()
+	if !tt.HasText("第一行\n第二行") || !tt.HasText("7 字符") {
+		t.Fatalf("标准卡 %v", tt.Texts())
+	}
+	st := a.store.Settings()
+	st.ClipTemplate = "condensed"
+	_ = a.store.SetSettings(st)
+	tt.Frame()
+	if !tt.HasText("第一行") || tt.HasText("第一行\n第二行") || tt.HasText("7 字符") {
+		t.Fatalf("浓缩卡 %v", tt.Texts())
+	}
+	st.CardDensity = "compact"
+	_ = a.store.SetSettings(st)
+	if a.clipCondensed() {
+		t.Fatal("紧凑密度下模板不生效")
+	}
+	a.openSettingsState()
+	a.setPage = 0
+	sv := ui.NewTester(a.settingsView, 1040, 720)
+	sv.Frame()
+	if sv.HasText("剪贴卡模板") {
+		t.Fatal("紧凑密度应隐藏模板设置")
+	}
+	st.CardDensity = "comfortable"
+	_ = a.store.SetSettings(st)
+	sv.Frame()
+	if !sv.HasText("剪贴卡模板") {
+		t.Fatalf("舒适密度应显示 %v", sv.Texts())
+	}
+}

@@ -175,6 +175,7 @@ type tauriSettings struct {
 	HUDDurationMs      int             `json:"hudDurationMs"`
 	CompanionGap       *int            `json:"companionGap"`
 	CardTint           *bool           `json:"cardTint"`
+	ClipCardTemplate   string          `json:"clipCardTemplate"`
 }
 
 // TauriReport 是导入结果。
@@ -493,6 +494,12 @@ func applyTauriSettings(st Settings, t tauriSettings) Settings {
 	}
 	if t.CardTint != nil {
 		st.CardTintOff = !*t.CardTint
+	}
+	switch t.ClipCardTemplate { // Tauri 旧值 banner 已并入浓缩
+	case "standard", "condensed":
+		st.ClipTemplate = t.ClipCardTemplate
+	case "banner":
+		st.ClipTemplate = "condensed"
 	}
 	if t.DoubleTapCapture != nil {
 		st.DoubleTapCaptureOnly = *t.DoubleTapCapture
