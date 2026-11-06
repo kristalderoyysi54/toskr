@@ -572,7 +572,7 @@ func (a *app) menuEntry(c *ui.Context, m *ui.Menu, id string, n store.Note, mult
 			a.exportNotes(a.chosenNotes())
 		}
 	case "edit":
-		if single && !isImage && m.Item(tr("编辑")).Chosen() { // 同 Tauri：图片卡右键不给「编辑」（2026-08-27）
+		if single && n.Kind != "image" && m.Item(tr("编辑")).Chosen() { // 同 Tauri：纯图片卡右键不给「编辑」（2026-08-27）；图文组合卡照常可编辑
 			a.startEdit()
 		}
 	case "ocr":

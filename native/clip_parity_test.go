@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -116,5 +117,22 @@ func TestDraftPersistsAcrossRestart(t *testing.T) {
 	b := newApp(nopSys{}, a.store)
 	if b.draft != "没写完的草稿" || b.section != id {
 		t.Fatalf("draft=%q section=%q", b.draft, b.section)
+	}
+}
+
+// 同 Tauri NoteCard：「编辑」只对纯图片卡隐藏，图文组合卡照常给；「转为任务」两者都不给。
+func TestCompositeCardMenuHasEdit(t *testing.T) {
+	a, tt := testApp(t)
+	if _, _, err := a.store.Add(store.Note{Section: store.SectionInbox, Text: "图文演示", Attachments: []string{"x.png"}}); err != nil {
+		t.Fatal(err)
+	}
+	a.reload()
+	tt.Frame()
+	if err := tt.RightClick("图文演示"); err != nil {
+		t.Fatal(err)
+	}
+	m := tt.Menu()
+	if !slices.Contains(m, "编辑") || slices.Contains(m, "转为任务") {
+		t.Fatalf("组合卡菜单 %v", m)
 	}
 }
