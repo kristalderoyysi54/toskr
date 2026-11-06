@@ -139,9 +139,13 @@ type app struct {
 	linkSeen                               map[string]string         // 链接卡 ID → 已处理的 URL（新卡 / 新 URL 才抓预览）
 	linkSem                                chan struct{}             // 链接预览并发上限
 	appIcons                               map[string]ui.ImageSource // 来源应用图标（bundle → 图，nil = 加载中或无图标）
-	setShortcutsOpen                       bool                      // 设置「面板内快捷键」表展开
-	setJump                                string                    // 设置窗下一帧要跳到的页名
-	lastClipID                             string                    // 上一次外部复制入库的卡（连续复制两次置顶用）
+	calEvents                              []macos.CalendarEvent     // 今天的苹果日历日程（后台刷新）
+	calStatus                              string                    // 日历授权状态（空 = 未查）
+	calendars                              []macos.CalendarInfo      // 设置页「显示的日历」
+	calListing                             bool
+	setShortcutsOpen                       bool   // 设置「面板内快捷键」表展开
+	setJump                                string // 设置窗下一帧要跳到的页名
+	lastClipID                             string // 上一次外部复制入库的卡（连续复制两次置顶用）
 	lastClipAt                             time.Time
 	trayBuilt                              string      // 托盘菜单上次重建时的状态键
 	forceCheck                             bool        // 本次发送强制先过检查条（检查后发送…）

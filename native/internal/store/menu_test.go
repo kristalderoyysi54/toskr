@@ -33,4 +33,8 @@ func TestMenuConfig(t *testing.T) {
 	if got := applyTauriSettings(Settings{}, tauriSettings{ContextMenu: []MenuItem{{"blur", false}}}); len(got.ContextMenu) != 18 || got.ContextMenu[0] != (MenuItem{"blur", false}) {
 		t.Fatalf("Tauri 导入应带上右键菜单配置 %+v", got.ContextMenu)
 	}
+	on := true
+	if got := applyTauriSettings(Settings{}, tauriSettings{CalendarEnabled: &on, CalendarHiddenIDs: []string{"x"}}); !got.CalendarOn || got.CalendarHidden[0] != "x" {
+		t.Fatalf("Tauri 导入应带上日历设置 %+v", got)
+	}
 }

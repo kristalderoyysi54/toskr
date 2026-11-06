@@ -20,9 +20,11 @@ func (a *app) startBackground() {
 			diag.Push("启动恢复点已写入")
 		}
 		a.housekeeping()
+		a.refreshCalendar()
 		lastHouse := time.Now()
 		for now := range time.Tick(reminderTick) {
 			a.remind(now)
+			a.refreshCalendar() // 日程每 30 秒重拉一次（含跨零点换天）
 			if a.panel != nil {
 				a.panel.Update(a.refreshTray) // 暂停到点后托盘回到「暂停」子菜单、剩余分钟更新
 			}

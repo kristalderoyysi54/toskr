@@ -8,6 +8,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"github.com/toskr/native/internal/macos"
 	"github.com/toskr/native/internal/store"
 )
 
@@ -298,11 +299,26 @@ func (a *app) taskQuickAdd(c *ui.Context, k tokens) {
 
 func (a *app) todayView(c *ui.Context, k tokens, now time.Time) {
 	ag := agendaFor(a.tasks, now)
-	ui.Row(c).Gap(6).Children(func() {
-		for i, s := range []struct {
+	events := a.todayEvents(now)
+	st := a.store.Settings()
+	stats := []struct {
+		n     int
+		label string
+	}{{ag.pending, "待办"}, {ag.doneToday, "已完成"}, {ag.overdue, "已逾期"}}
+	if st.SubscriptionsEnabled {
+		stats = append(stats, struct {
 			n     int
 			label string
-		}{{ag.pending, "待办"}, {ag.doneToday, "已完成"}, {ag.overdue, "已逾期"}} {
+		}{billsDueToday(a.store.Bills(), now), "扣款"})
+	}
+	if st.CalendarOn {
+		stats = append(stats, struct {
+			n     int
+			label string
+		}{len(events), "日程"})
+	}
+	ui.Row(c).Gap(6).Children(func() {
+		for i, s := range stats {
 			ui.Column(c).Grow(1).Basis(0).Height(40).Padding(4, 8).Radius(10).Background(k.track).Children(func() {
 				col := k.fg
 				if i == 2 && s.n > 0 {
@@ -313,7 +329,7 @@ func (a *app) todayView(c *ui.Context, k tokens, now time.Time) {
 			})
 		}
 	})
-	if len(ag.earlier) == 0 && len(ag.timeline) == 0 {
+	if len(ag.earlier) == 0 && len(ag.timeline) == 0 && len(events) == 0 {
 		a.emptyState(c, k, "calendar-check", tr("今天没有安排"), tr("在上方记下今天要做的事，或在任务的到期弹层里把它排到今天。"))
 		return
 	}
@@ -330,15 +346,52 @@ func (a *app) todayView(c *ui.Context, k tokens, now time.Time) {
 			}
 		})
 	}
-	if len(ag.timeline) == 0 {
+	// 任务按到期、日程按开始时刻（昨天开始的按今天 0 点）排进同一条轴；同刻日程在前；全天日程在轴顶
+	type entry struct {
+		at   time.Time
+		task *store.Task
+		ev   *macos.CalendarEvent
+	}
+	var allDay []macos.CalendarEvent
+	var line []entry
+	day := dayStart(now)
+	for i := range events {
+		if events[i].AllDay {
+			allDay = append(allDay, events[i])
+		} else {
+			line = append(line, entry{at: time.UnixMilli(max(events[i].StartMs, day.UnixMilli())), ev: &events[i]})
+		}
+	}
+	for i := range ag.timeline {
+		line = append(line, entry{at: ag.timeline[i].DueAt, task: &ag.timeline[i]})
+	}
+	slices.SortStableFunc(line, func(x, y entry) int {
+		if c := x.at.Compare(y.at); c != 0 {
+			return c
+		}
+		if (x.ev != nil) != (y.ev != nil) {
+			if x.ev != nil {
+				return -1
+			}
+			return 1
+		}
+		return 0
+	})
+	if len(line) == 0 && len(allDay) == 0 {
 		return
 	}
-	nowIdx := slices.IndexFunc(ag.timeline, func(t store.Task) bool { return t.DueAt.After(now) })
+	nowIdx := slices.IndexFunc(line, func(e entry) bool { return e.at.After(now) })
 	if nowIdx < 0 {
-		nowIdx = len(ag.timeline)
+		nowIdx = len(line)
 	}
 	ui.Column(c).Gap(4).Children(func() {
-		for i := 0; i <= len(ag.timeline); i++ {
+		for _, e := range allDay {
+			ui.Row(c).Gap(6).AlignItems(ui.Start).Key("ad-" + e.ID).Children(func() {
+				text(c, tr("全天"), 10, 14, 400, k.muted).Width(44).Padding(8, 0, 0, 0).TextAlign(ui.End)
+				a.eventRow(c, k, e)
+			})
+		}
+		for i := 0; i <= len(line); i++ {
 			if i == nowIdx {
 				ui.Row(c).Height(14).Gap(6).Key("now-line").Children(func() {
 					text(c, now.Format("15:04"), 10, 14, 600, k.danger).Width(44).TextAlign(ui.End)
@@ -348,10 +401,17 @@ func (a *app) todayView(c *ui.Context, k tokens, now time.Time) {
 					})
 				})
 			}
-			if i == len(ag.timeline) {
+			if i == len(line) {
 				break
 			}
-			t := ag.timeline[i]
+			if ev := line[i].ev; ev != nil {
+				ui.Row(c).Gap(6).AlignItems(ui.Start).Key("tle-" + ev.ID).Children(func() {
+					text(c, line[i].at.Format("15:04"), 10, 14, 400, k.muted).Width(44).Padding(8, 0, 0, 0).TextAlign(ui.End)
+					a.eventRow(c, k, *ev)
+				})
+				continue
+			}
+			t := *line[i].task
 			ui.Row(c).Gap(6).AlignItems(ui.Start).Key("tl-" + t.ID).Children(func() {
 				col := k.muted
 				if t.Status != "done" && !t.DueAt.After(now) {

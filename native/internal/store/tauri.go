@@ -181,6 +181,8 @@ type tauriSettings struct {
 	ScreenshotEnabled  *bool           `json:"screenshotEnabled"`
 	ScreenshotHideSelf *bool           `json:"screenshotHideSelf"`
 	ContextMenu        []MenuItem      `json:"contextMenu"`
+	CalendarEnabled    *bool           `json:"appleCalendarEnabled"`
+	CalendarHiddenIDs  []string        `json:"appleCalendarHiddenIds"`
 }
 
 // TauriReport 是导入结果。
@@ -687,6 +689,12 @@ func applyTauriSettings(st Settings, t tauriSettings) Settings {
 	}
 	if len(t.ContextMenu) > 0 {
 		st.ContextMenu = NormalizeMenu(t.ContextMenu)
+	}
+	if t.CalendarEnabled != nil {
+		st.CalendarOn = *t.CalendarEnabled
+	}
+	if t.CalendarHiddenIDs != nil {
+		st.CalendarHidden = t.CalendarHiddenIDs
 	}
 	return st
 }

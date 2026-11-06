@@ -446,6 +446,7 @@ func (a *app) settingsView(c *ui.Context) {
 					}
 				}},
 			}},
+			{tr("苹果日历"), a.calendarSettings(c, k, s, st)},
 			{tr("AI（OpenAI 兼容接口）"), []setRow{
 				{title: tr("接口地址"), control: func() { changed = textField(c, k, s, &a.setAIEnd, 280, "https://api.openai.com/v1", false) || changed }},
 				{title: tr("模型"), control: func() { changed = textField(c, k, s, &a.setAIModel, 280, "gpt-4o-mini", false) || changed }},
