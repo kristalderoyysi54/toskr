@@ -491,8 +491,14 @@ func (a *app) smartBand(c *ui.Context, k tokens, key, title, icon string, fg, ba
 func (a *app) taskSection(c *ui.Context, k tokens, g taskGroup, now time.Time) {
 	collapsed := g.sec.Collapsed
 	ui.Column(c).Gap(6).Key("tsec-" + g.sec.ID).Children(func() {
-		head := ui.Row(c).Height(20).Padding(0, 4, 0, 2).Gap(4).AlignItems(ui.Center)
+		head := ui.Row(c).Height(20).Padding(0, 4, 0, 2).Gap(4).Radius(6).AlignItems(ui.Center)
 		hovered := head.Hovered()
+		if _, ok := ui.DragOver[taskDrag](head); ok {
+			head.Background(stok(c).primary.Alpha(0.12))
+		}
+		if d, ok := ui.Drop[taskDrag](head); ok {
+			_ = a.store.MoveTask(d.id, g.sec.ID, "")
+		}
 		head.Children(func() {
 			chev := "chevron-down"
 			if collapsed {
@@ -601,7 +607,20 @@ func (a *app) taskRow(c *ui.Context, k tokens, t store.Task, now time.Time) {
 	hovered := card.Hovered()
 	elevated(card, k, hovered) // TaskRow：悬停 elevation-2，box-shadow 150ms
 	card.ContextMenu(func(m *ui.Menu) { a.taskMenu(c, m, t) })
+	if !open { // 拖拽排序：放到另一行 = 插到它前面（可跨分组）；放到分组头 = 移到该组末尾
+		card.Drag(taskDrag{t.ID})
+	}
+	dropOver := false
+	if d, ok := ui.DragOver[taskDrag](card); ok && d.id != t.ID {
+		dropOver = true
+	}
+	if d, ok := ui.Drop[taskDrag](card); ok && d.id != t.ID {
+		_ = a.store.MoveTask(d.id, "", t.ID)
+	}
 	card.Children(func() {
+		if dropOver {
+			ui.Box(c).Absolute().Top(-4).Left(6).Right(6).Height(2).Radius(1).Background(stok(c).primary).PassThrough()
+		}
 		ui.Row(c).Grow(1).Height(24).Gap(8).AlignItems(ui.Center).Children(func() {
 			bar := ui.Box(c).Size(8, 24).Center()
 			bar.Children(func() {

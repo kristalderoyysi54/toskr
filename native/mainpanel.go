@@ -267,7 +267,13 @@ func (a *app) sectionBlock(c *ui.Context, k tokens, g noteGroup, top float32) fl
 		}
 	}
 	ui.Column(c).Gap(6).Padding(0, 0, 4, 0).Key("sec-" + g.sec.ID).Children(func() {
-		head := ui.Row(c).Height(20).Padding(0, 4, 0, 2).Gap(4).AlignItems(ui.Center)
+		head := ui.Row(c).Height(20).Padding(0, 4, 0, 2).Gap(4).Radius(6).AlignItems(ui.Center)
+		if _, ok := ui.DragOver[noteDrag](head); ok {
+			head.Background(stok(c).primary.Alpha(0.12))
+		}
+		if d, ok := ui.Drop[noteDrag](head); ok {
+			_ = a.store.MoveToAt(d.id, g.sec.ID, 0)
+		}
 		head.ContextMenu(func(m *ui.Menu) {
 			if len(g.done) > 0 && m.Item(tr("清理已完成")).Chosen() {
 				a.section = g.sec.ID
@@ -403,7 +409,21 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 		}
 		a.cardMenu(c, m, max(idx, 0), n)
 	})
+	// 拖拽排序（同 Tauri dnd-kit）：拖起卡片，放到另一张卡上 = 插到它前面（可跨分组）；放到分组头 / 侧栏分组 = 移入该组
+	if a.editing != n.ID && a.titleEditID != n.ID && a.tagEditID != n.ID {
+		box.Drag(noteDrag{n.ID})
+	}
+	dropOver := false
+	if d, ok := ui.DragOver[noteDrag](box); ok && d.id != n.ID {
+		dropOver = true
+	}
+	if d, ok := ui.Drop[noteDrag](box); ok && d.id != n.ID {
+		_ = a.store.MoveNoteBefore(d.id, n.ID)
+	}
 	box.Children(func() {
+		if dropOver {
+			ui.Box(c).Absolute().Top(-4).Left(6).Right(6).Height(2).Radius(1).Background(stok(c).primary).PassThrough()
+		}
 		if compact {
 			a.compactCard(c, k, n, hovered)
 			a.cardOverlays(c, k, n, checked, true)

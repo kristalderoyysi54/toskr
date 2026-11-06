@@ -114,6 +114,14 @@ func (a *app) railPill(c *ui.Context, k tokens, id, label, color string, on bool
 	if id == "" {
 		b.Justify(ui.Center)
 	}
+	if id != "" { // 侧栏分组也是放置目标：拖卡片到这里 = 移入该组
+		if _, ok := ui.DragOver[noteDrag](b); ok {
+			b.Background(s.primary.Alpha(0.15))
+		}
+		if d, ok := ui.Drop[noteDrag](b); ok {
+			_ = a.store.MoveToAt(d.id, id, 0)
+		}
+	}
 	b.Children(func() {
 		if id != "" {
 			dot := ui.RGB(0x98, 0x98, 0x9d)

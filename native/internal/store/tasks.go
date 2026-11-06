@@ -315,3 +315,29 @@ func (s *Store) DeleteTaskSection(id string) (undo func(), ok bool) {
 func NewChecklistItem(text string) ChecklistItem {
 	return ChecklistItem{ID: "ck-" + newID(), Text: strings.TrimSpace(text)}
 }
+
+// MoveTask 把任务移到 beforeID 之前（beforeID 为空则放到 section 末尾），并归入对应分组。
+func (s *Store) MoveTask(id, section, beforeID string) error {
+	return s.mutate(func() bool {
+		i := s.taskIndex(id)
+		if i < 0 || id == beforeID {
+			return false
+		}
+		t := s.tasks[i]
+		s.tasks = slices.Delete(s.tasks, i, i+1)
+		at := len(s.tasks)
+		if j := s.taskIndex(beforeID); beforeID != "" && j >= 0 {
+			at, section = j, s.tasks[j].Section
+		} else {
+			for k := len(s.tasks) - 1; k >= 0; k-- {
+				if s.tasks[k].Section == section {
+					at = k + 1
+					break
+				}
+			}
+		}
+		t.Section = section
+		s.tasks = slices.Insert(s.tasks, at, t)
+		return true
+	})
+}

@@ -347,3 +347,9 @@ func (a *app) replyMenu(m *ui.Menu, n store.Note) {
 		}
 	})
 }
+
+// 面板内拖拽的值类型（ui.Drag / ui.Drop）。
+type (
+	noteDrag struct{ id string }
+	taskDrag struct{ id string }
+)

@@ -261,3 +261,25 @@ func (s *Store) SetCreatedAt(id string, at time.Time) error {
 		return true
 	})
 }
+
+// MoveNoteBefore 把笔记移到 beforeID 之前（可跨分组，归入目标所在分组）。
+func (s *Store) MoveNoteBefore(id, beforeID string) error {
+	if id == beforeID {
+		return nil
+	}
+	s.mu.Lock()
+	bi := s.index(beforeID)
+	if bi < 0 {
+		s.mu.Unlock()
+		return nil
+	}
+	sec := s.notes[bi].Section
+	pos := 0
+	for _, o := range s.notes[:bi] {
+		if o.Section == sec && o.ID != id {
+			pos++
+		}
+	}
+	s.mu.Unlock()
+	return s.MoveToAt(id, sec, pos)
+}
