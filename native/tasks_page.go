@@ -824,6 +824,9 @@ func (a *app) taskMenu(c *ui.Context, m *ui.Menu, t store.Task) {
 	if m.Item(tr("发送到对话")).Chosen() {
 		a.send([]store.Note{taskAsNote(t)})
 	}
+	if m.Item(tr("检查后发送…")).Chosen() {
+		a.checkSend([]store.Note{taskAsNote(t)})
+	}
 	m.Separator()
 	if t.Status != "done" && m.Item(tr("标记完成")).Chosen() {
 		a.setTaskStatus(t, "done")
@@ -836,6 +839,9 @@ func (a *app) taskMenu(c *ui.Context, m *ui.Menu, t store.Task) {
 	}
 	if m.Item(tr("编辑任务…")).Chosen() {
 		a.openTaskEdit(t)
+	}
+	if m.Item(tr("AI 拆解子任务")).Chosen() {
+		a.splitSubtasks(t)
 	}
 	m.Separator()
 	m.Submenu(tr("优先级"), func(sm *ui.Menu) {

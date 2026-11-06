@@ -182,6 +182,7 @@ type app struct {
 	msgOpen      map[string]bool // x:<id> 展开全文、c:<id> 展开前文
 	msgDraftBusy string          // 正在生成 AI 回复草稿的消息
 	im           imCtl
+	aiUI         aiUI // 设置 → AI 的会话态（模型列表、请求中）
 
 	// 秘文
 	secretKeyID   string

@@ -32,3 +32,6 @@ func MovePage(order []string, from, to string) []string {
 	order = slices.Delete(order, i, i+1)
 	return slices.Insert(order, j, p)
 }
+
+// AIOn：「AI 智能」是否开启（旧数据没有这个字段时按开启，保持原生版此前的行为）。
+func (s Settings) AIOn() bool { return s.AIEnabled == nil || *s.AIEnabled }

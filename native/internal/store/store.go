@@ -117,7 +117,8 @@ type Settings struct {
 	ShotHideSelf   bool       `json:"screenshotHideSelf,omitempty"` // 截图时隐藏 Toskr 自己的窗口（默认不隐藏）
 	AIEndpoint     string     `json:"aiEndpoint"`
 	AIModel        string     `json:"aiModel"`
-	Companion      []string   `json:"companion"` // 伴随停靠的应用 bundle id
+	AIEnabled      *bool      `json:"aiEnabled,omitempty"` // 「AI 智能」总开关（同 Tauri aiEnabled）；nil = 旧数据，按开启
+	Companion      []string   `json:"companion"`           // 伴随停靠的应用 bundle id
 	EdgeHide       bool       `json:"edgeHide"`
 	Currency       string     `json:"currency"`
 	DueReminders   bool       `json:"dueReminders"`
@@ -181,7 +182,7 @@ func DefaultSettings() Settings {
 	return Settings{
 		TriggerModifier: "option", TriggerGapMs: 400, ClipboardWatch: true, Glass: "glass",
 		PanelHotkey: "Ctrl+Alt+Space", Language: "system", ClipRetainDays: 7,
-		ScreenshotKey: "Ctrl+Alt+A", AIEndpoint: "https://api.openai.com/v1", AIModel: "gpt-4o-mini",
+		ScreenshotKey: "Ctrl+Alt+A", AIEndpoint: "https://api.openai.com/v1", AIModel: "gpt-4o-mini", AIEnabled: new(bool),
 		Companion: []string{"com.googlecode.iterm2", "com.apple.Terminal", "com.todesktop.230313mzl4w4u92", "com.microsoft.VSCode"},
 		EdgeHide:  true, Currency: "¥", DueReminders: true, SecretRevealMs: 8000, DetailFontSize: 12,
 		ExcludedApps: []string{"com.1password.1password", "com.apple.keychainaccess", "com.bitwarden.desktop"},

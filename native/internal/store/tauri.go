@@ -151,6 +151,7 @@ type tauriSettings struct {
 	Stealth              *bool    `json:"stealth"`
 	AIBaseURL            string   `json:"aiBaseUrl"`
 	AIModel              string   `json:"aiModel"`
+	AIEnabled            *bool    `json:"aiEnabled"`
 	ExcludedApps         []string `json:"excludedApps"`
 	CurrencySymbol       string   `json:"currencySymbol"`
 	SubscriptionsEnabled *bool    `json:"subscriptionsEnabled"`
@@ -612,6 +613,10 @@ func applyTauriSettings(st Settings, t tauriSettings) Settings {
 	set(&st.TriggerModifier, t.HotkeyModifier)
 	set(&st.AIEndpoint, t.AIBaseURL)
 	set(&st.AIModel, t.AIModel)
+	if t.AIEnabled != nil {
+		on := *t.AIEnabled
+		st.AIEnabled = &on
+	}
 	set(&st.Currency, t.CurrencySymbol)
 	set(&st.SecretCipherStyle, t.SecretCipherStyle)
 	if t.HotkeyGapMs > 0 {

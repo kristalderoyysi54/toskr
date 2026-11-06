@@ -23,7 +23,7 @@ var aiActions = []aiAction{
 	{"写成提示词", "把下面的需求改写成给 AI 编码助手的清晰指令：目标、约束、验收标准。"},
 }
 
-func aiKey() string {
+var aiKey = func() string { // 测试替换
 	k, err := mygo.Secrets.Get(aiKeyName)
 	if err != nil {
 		return ""
@@ -37,7 +37,7 @@ func (a *app) runAI(n store.Note, act aiAction) {
 		return
 	}
 	st := a.store.Settings()
-	cfg := ai.Config{Endpoint: st.AIEndpoint, Key: aiKey(), Model: st.AIModel}
+	cfg := ai.Config{Endpoint: st.AIEndpoint, Key: aiKey(), Model: st.AIModel, Off: !st.AIOn()}
 	a.aiBusy = n.ID
 	go func() {
 		out, err := ai.Rewrite(context.Background(), cfg, act.instruction, n.Text)

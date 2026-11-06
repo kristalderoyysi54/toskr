@@ -47,3 +47,37 @@ func TestRewriteRejectsMissingKeyAndPlainHTTP(t *testing.T) {
 		t.Fatal("非本机 http 必须拒绝（密钥会明文传输）")
 	}
 }
+
+func TestEndpointWithOrWithoutV1(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://api.deepseek.com":                       "https://api.deepseek.com/v1/chat/completions",
+		"https://api.openai.com/v1/":                     "https://api.openai.com/v1/chat/completions",
+		"https://dashscope.aliyuncs.com/compatible-mode": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+		"http://127.0.0.1:3425":                          "http://127.0.0.1:3425/v1/chat/completions",
+	} {
+		if got, err := (Config{Endpoint: in}).url("chat/completions"); err != nil || got != want {
+			t.Fatalf("%s → %s %v", in, got, err)
+		}
+	}
+	if _, err := (Config{Endpoint: "https://u:p@api.example.com"}).url("models"); err != ErrBadEndpoint {
+		t.Fatal("带用户名密码的地址应拒绝")
+	}
+}
+
+func TestListModels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" || r.Header.Get("Authorization") != "Bearer k" {
+			http.Error(w, "bad", 400)
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"b"},{"id":"a"},{"id":"b"}]}`))
+	}))
+	defer srv.Close()
+	ids, err := ListModels(context.Background(), Config{Endpoint: srv.URL, Key: "k"})
+	if err != nil || strings.Join(ids, ",") != "a,b" {
+		t.Fatal(ids, err)
+	}
+	if _, err := ListModels(context.Background(), Config{Endpoint: srv.URL}); err != ErrNoKey {
+		t.Fatal(err)
+	}
+}

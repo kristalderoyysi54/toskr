@@ -212,7 +212,7 @@ func (a *app) shotTranslate(c *ui.Context, d *shotDisplay) {
 	e.translateGen++
 	gen, sel := e.translateGen, *e.sel
 	st := a.store.Settings()
-	cfg := ai.Config{Endpoint: st.AIEndpoint, Model: st.AIModel}
+	cfg := ai.Config{Endpoint: st.AIEndpoint, Model: st.AIModel, Off: !st.AIOn()}
 	go func() {
 		job := &shotTranslateJob{pr: pr, sel: sel}
 		cfg.Key = aiKey()

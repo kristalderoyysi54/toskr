@@ -92,6 +92,9 @@ func (a *app) saveSettings() {
 	st.AIEndpoint, st.AIModel = strings.TrimSpace(a.setAIEnd), strings.TrimSpace(a.setAIModel)
 	st.Companion = lines(a.setCompan)
 	_ = a.store.SetSettings(st)
+	if a.panel == nil { // 无 App 运行（视图测试）时查询系统语言会阻塞，面板也不存在
+		return
+	}
 	setLanguage(st.Language, mygo.App.PreferredLanguages())
 	if oldGlass != st.Glass {
 		v := vibrancyFor(st.Glass)
@@ -132,10 +135,6 @@ func (a *app) settingsView(c *ui.Context) {
 		recent = []setRow{{title: tr("暂无发送记录")}}
 	}
 
-	aiStatus := tr("未配置")
-	if aiKey() != "" {
-		aiStatus = tr("已存入钥匙串")
-	}
 	axStatus, tapStatus := tr("未授权"), tr("正常")
 	if a.axTrusted {
 		axStatus = tr("已授权")
@@ -453,24 +452,7 @@ func (a *app) settingsView(c *ui.Context) {
 				}},
 			}},
 			{tr("苹果日历"), a.calendarSettings(c, k, s, st)},
-			{tr("AI（OpenAI 兼容接口）"), []setRow{
-				{title: tr("接口地址"), control: func() { changed = textField(c, k, s, &a.setAIEnd, 280, "https://api.openai.com/v1", false) || changed }},
-				{title: tr("模型"), control: func() { changed = textField(c, k, s, &a.setAIModel, 280, "gpt-4o-mini", false) || changed }},
-				{title: tr("密钥"), hint: aiStatus, control: func() {
-					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-						textField(c, k, s, &a.setAIKey, 180, "sk-…", true)
-						if button(c, s, "保存") && strings.TrimSpace(a.setAIKey) != "" {
-							if err := mygo.Secrets.Set(aiKeyName, []byte(strings.TrimSpace(a.setAIKey))); err != nil {
-								a.showHUD("warn", tr("保存失败：")+err.Error())
-							} else {
-								a.setAIKey = ""
-								a.showHUD("ok", tr("已存入钥匙串"))
-							}
-						}
-					})
-				}},
-				{title: tr("右键笔记 → AI"), hint: tr("润色 / 精简 / 翻译 / 写成提示词，结果作为新笔记插在原文上方")},
-			}},
+			{tr("AI"), a.aiSettingsRows(c, k, s, st, &changed)},
 		}}},
 		{label: "数据与备份", icon: "database", sections: [][]setSection{a.dataSections(c, k, s)}},
 		{label: "权限", icon: "shield-check", sections: [][]setSection{{

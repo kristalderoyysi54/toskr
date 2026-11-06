@@ -10,19 +10,22 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
 
 type Config struct {
-	Endpoint string // 如 https://api.openai.com/v1
+	Endpoint string // Base URL，如 https://api.deepseek.com（带不带 /v1 都行）
 	Key      string
 	Model    string
+	Off      bool // 设置里关了「AI 智能」：所有 AI 入口都不发请求（连接测试除外）
 }
 
 var (
 	ErrNoKey       = errors.New("未配置 AI 密钥（设置 → AI）")
 	ErrBadEndpoint = errors.New("AI 地址必须是 https（本机 http://localhost 除外）")
+	ErrDisabled    = errors.New("AI 智能未启用（设置 → AI）")
 )
 
 // MaxInput 是单次请求的正文上限（字符）；超出截断，避免误把整段日志发出去。
@@ -34,18 +37,81 @@ type message struct {
 }
 
 func (c Config) validate() (string, error) {
+	if c.Off {
+		return "", ErrDisabled
+	}
 	if strings.TrimSpace(c.Key) == "" {
 		return "", ErrNoKey
 	}
-	u, err := url.Parse(strings.TrimRight(c.Endpoint, "/"))
-	if err != nil || u.Host == "" {
+	return c.url("chat/completions")
+}
+
+// url 拼接口地址：与 Tauri 一致，Base URL 不带 /v1 时补上（https://api.deepseek.com → …/v1/chat/completions）；
+// 原生版早期默认值带 /v1（https://api.openai.com/v1），两种写法都认。
+func (c Config) url(suffix string) (string, error) {
+	u, err := url.Parse(strings.TrimRight(strings.TrimSpace(c.Endpoint), "/"))
+	if err != nil || u.Host == "" || u.User != nil {
 		return "", ErrBadEndpoint
 	}
-	local := u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1"
+	local := u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1"
 	if u.Scheme != "https" && !(u.Scheme == "http" && local) {
 		return "", ErrBadEndpoint
 	}
-	return u.String() + "/chat/completions", nil
+	u.RawQuery, u.Fragment = "", ""
+	if !strings.HasSuffix(u.Path, "/v1") {
+		u.Path += "/v1"
+	}
+	return u.String() + "/" + suffix, nil
+}
+
+// ListModels 取服务端模型列表（GET /v1/models，同 Tauri ai_list_models），去重排序。
+func ListModels(ctx context.Context, cfg Config) ([]string, error) {
+	if strings.TrimSpace(cfg.Key) == "" {
+		return nil, ErrNoKey
+	}
+	endpoint, err := cfg.url("models")
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	req.Header.Set("Authorization", "Bearer "+cfg.Key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("AI 返回 %d", resp.StatusCode)
+	}
+	var out struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(raw, &out) != nil {
+		return nil, errors.New("模型列表响应非 JSON")
+	}
+	var ids []string
+	for _, d := range out.Data {
+		if d.ID != "" && !slices.Contains(ids, d.ID) {
+			ids = append(ids, d.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, errors.New("模型列表响应格式异常")
+	}
+	slices.Sort(ids)
+	return ids, nil
+}
+
+// Test 发一次最小请求（同 Tauri testAiConnection）。
+func Test(ctx context.Context, cfg Config) error {
+	cfg.Off = false
+	_, err := Rewrite(ctx, cfg, "你是连通性测试助手。", "收到请只回复：OK")
+	return err
 }
 
 // Rewrite 按 instruction 改写 text，返回模型输出。
