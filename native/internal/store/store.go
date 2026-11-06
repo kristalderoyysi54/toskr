@@ -122,6 +122,7 @@ type Settings struct {
 	EdgeHide       bool       `json:"edgeHide"`
 	Currency       string     `json:"currency"`
 	DueReminders   bool       `json:"dueReminders"`
+	ReminderVia    string     `json:"taskReminderChannel,omitempty"` // 任务提醒方式 hud | system | both（同 Tauri taskReminderChannel，空 = hud）
 	// 与 Tauri 一致的可选功能域（默认关闭）：订阅进「提醒」页第三个子视图，秘文进「内容」页
 	SubscriptionsEnabled bool `json:"subscriptionsEnabled"`
 	SecretEnabled        bool `json:"secretEnabled"`

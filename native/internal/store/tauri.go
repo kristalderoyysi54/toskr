@@ -152,6 +152,7 @@ type tauriSettings struct {
 	AIBaseURL            string   `json:"aiBaseUrl"`
 	AIModel              string   `json:"aiModel"`
 	AIEnabled            *bool    `json:"aiEnabled"`
+	TaskReminderChannel  string   `json:"taskReminderChannel"`
 	ExcludedApps         []string `json:"excludedApps"`
 	CurrencySymbol       string   `json:"currencySymbol"`
 	SubscriptionsEnabled *bool    `json:"subscriptionsEnabled"`
@@ -613,6 +614,7 @@ func applyTauriSettings(st Settings, t tauriSettings) Settings {
 	set(&st.TriggerModifier, t.HotkeyModifier)
 	set(&st.AIEndpoint, t.AIBaseURL)
 	set(&st.AIModel, t.AIModel)
+	set(&st.ReminderVia, t.TaskReminderChannel)
 	if t.AIEnabled != nil {
 		on := *t.AIEnabled
 		st.AIEnabled = &on

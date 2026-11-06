@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	_ "embed"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
+	"slices"
 	"sync"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/toskr/native/internal/diag"
+	"github.com/toskr/native/internal/store"
 )
 
 // HUD 按 Tauri HudView 复刻（窗口 264×100，透明、置顶、默认点击穿透）：
@@ -98,18 +101,19 @@ func (a *app) showHUDUndo(kind, text string, undo func()) {
 func (a *app) showHUDForce(kind, text string) {
 	// 连发：上一条仍在场时作「被顶替」的残影下沉淡出；窗口原本收着时 logo 一并重新入场
 	if a.hud != nil && a.hud.IsVisible() && !a.hudLeaving && a.hudKind != "" {
-		a.hudGhost, a.hudGhostAt = &hudBubble{a.hudKind, a.hudText, a.hudUndo != nil}, time.Time{}
+		a.hudGhost, a.hudGhostAt = &hudBubble{a.hudKind, a.hudText, a.hudUndo != nil || len(a.hudDue) > 0, a.hudDue}, time.Time{}
 	} else {
 		a.hudGhost, a.hudLogoAt = nil, time.Time{}
 	}
 	a.hudAt, a.hudLeaving = time.Time{}, false
-	a.hudKind, a.hudText, a.hudUndo, a.hudHover = kind, text, nil, false
+	a.hudKind, a.hudText, a.hudUndo, a.hudHover, a.hudTarget, a.hudDue = kind, text, nil, false, "", nil
 	a.hudGen++
 	gen := a.hudGen
 	if a.hud == nil {
 		return // 无窗口（视图测试）
 	}
 	d := mygo.Screen.DisplayNearestPoint(mygo.Screen.CursorScreenPoint())
+	a.hud.SetSize(hudW, hudH) // 到期气泡会再加高一行（showDueHUD）
 	a.hud.SetPosition(d.WorkArea.X+d.WorkArea.Width-hudW-8, d.WorkArea.Y+8)
 	a.hud.SetIgnoreMouseEvents(true)
 	a.hud.Invalidate()
@@ -117,6 +121,9 @@ func (a *app) showHUDForce(kind, text string) {
 	hold := a.store.Settings().HUDDuration() // 提示显示时长（Tauri hudDurationMs，默认 3 秒）
 	if kind == "warn" {
 		hold = max(hold, 4*time.Second)
+	}
+	if kind == "due" { // 到期气泡带操作钮，多留一会
+		hold = max(hold, 8*time.Second)
 	}
 	go a.watchHUDHover(gen, time.Now().Add(hold))
 }
@@ -134,7 +141,7 @@ func (a *app) watchHUDHover(gen int, deadline time.Time) {
 				return
 			}
 			b := a.hud.Bounds()
-			in := p.X >= b.X && p.X < b.X+b.Width && p.Y >= b.Y && p.Y < b.Y+60 // 气泡区（不含下方 logo）
+			in := p.X >= b.X && p.X < b.X+b.Width && p.Y >= b.Y && p.Y < b.Y+a.hudBubbleH() // 气泡区（不含下方 logo）
 			if in != a.hudHover {
 				a.hudHover = in
 				a.hud.SetIgnoreMouseEvents(!in)
@@ -177,6 +184,7 @@ func (a *app) dismissHUD() {
 type hudBubble struct {
 	kind, text string
 	actionable bool
+	due        []string // 任务到期气泡的任务（>1 为批量）：气泡里直接完成或稍后
 }
 
 // hudProgress 返回从 *at 起经过 d 的进度（0…1），*at 为零时记为本帧；动画中持续要帧。无窗口（视图测试）时恒为 1。
@@ -212,7 +220,7 @@ func (a *app) hudView(c *ui.Context) {
 	registerFonts()
 	c.Root().Background(ui.Transparent)
 	reduce := c.Preferences().ReduceMotion
-	cur := hudBubble{a.hudKind, a.hudText, a.hudUndo != nil}
+	cur := hudBubble{a.hudKind, a.hudText, a.hudUndo != nil || len(a.hudDue) > 0, a.hudDue}
 	// 进场：opacity 0 → 1、y 10 → 0、scale 0.982 → 1（160ms ease-standard）；离场叠乘 opacity → 0、scale → 0.96
 	e := easeStandard(a.hudProgress(c, &a.hudAt, 160*time.Millisecond))
 	op, dy, sc := e, 10*(1-e), 0.982+0.018*e
@@ -312,12 +320,27 @@ func (a *app) hudBubbleView(c *ui.Context, b hudBubble, ghostMs float32) {
 	hover := a.hudHover && !ghost
 	balloon.Children(func() {
 		icon()
-		ui.Column(c).Grow(1).Basis(0).Children(func() {
+		body := ui.Column(c).Grow(1).Basis(0).Tooltip(tr("点击查看")).Role(ui.RoleButton).Label(title)
+		body.Children(func() {
 			tightText(c, title, 12, 15, 500, ink).FillWidth()
 			if (b.kind == "added" || b.kind == "duplicate") && b.text != "" {
 				tightText(c, b.text, 10, 12.5, 400, ink.Alpha(0.55)).FillWidth()
 			}
+			if len(b.due) > 0 {
+				a.hudDueActions(c, ink, b.due, ghost)
+			}
 		})
+		if !ghost && body.Clicked() {
+			a.hudOpen()
+		}
+		if len(b.due) > 0 { // 到期气泡没有撤销，只留关闭
+			x := ui.Box(c).Size(22, 22).Radius(11).Background(ink.Alpha(0.1)).Center().Tooltip(tr("关闭"))
+			x.Children(func() { licon(c, "x", 14, ink.Alpha(0.6)) })
+			if !ghost && x.Clicked() {
+				a.dismissHUD()
+			}
+			return
+		}
 		undo := ui.Row(c).Height(20).Padding(2, 6).Gap(4).Radius(6).Border(1, ink.Alpha(0.25)).AlignItems(ui.Center)
 		reveal := float32(0)
 		if hover {
@@ -368,4 +391,106 @@ func vibrancyFor(glassSetting string) mygo.Vibrancy {
 		return mygo.VibrancyNone
 	}
 	return mygo.VibrancyGlass
+}
+
+// hudBubbleH：气泡区高度（光标在其中时关闭鼠标穿透）；到期气泡多一行操作钮。
+func (a *app) hudBubbleH() int {
+	if len(a.hudDue) > 0 {
+		return 88
+	}
+	return 60
+}
+
+// hudDueActions：任务到期气泡里的「完成 · 10 分钟后 · 1 小时后」（批量时为「全部…」，没有完成）。
+func (a *app) hudDueActions(c *ui.Context, ink ui.Color, ids []string, ghost bool) {
+	ui.Row(c).Margin(5, 0, 0, 0).Gap(4).Children(func() {
+		btn := func(key, label string) bool {
+			b := ui.Row(c).Height(20).Padding(0, 7).Radius(6).Border(1, ink.Alpha(0.25)).AlignItems(ui.Center).Key("hd-" + key).Role(ui.RoleButton).Label(label)
+			if b.Hovered() {
+				b.Background(ink.Alpha(0.06))
+			}
+			b.Children(func() { text(c, label, 10, 14, 500, ink.Alpha(0.8)) })
+			return !ghost && b.Clicked()
+		}
+		if len(ids) == 1 && btn("done", tr("完成")) {
+			a.hudDueAction(ids, "complete", 0)
+		}
+		for _, o := range []struct {
+			min   int
+			label string
+		}{{10, "10 分钟后"}, {60, "1 小时后"}} {
+			label := tr(o.label)
+			if len(ids) > 1 {
+				label = fmt.Sprintf(tr("全部%s"), label)
+			}
+			if btn(itoa(o.min), label) {
+				a.hudDueAction(ids, "snooze", o.min)
+			}
+		}
+	})
+}
+
+// hudDueAction 同 Tauri HUD_DUE_ACTION：只处理仍未完成的任务；完成走 setTaskStatus（重复任务会生成下一期）。
+func (a *app) hudDueAction(ids []string, action string, minutes int) {
+	a.dismissHUD()
+	var live []store.Task
+	for _, t := range a.store.Tasks() {
+		if t.Status != "done" && slices.Contains(ids, t.ID) {
+			live = append(live, t)
+		}
+	}
+	if len(live) == 0 {
+		a.showHUD("info", tr("任务已处理或已删除"))
+		return
+	}
+	if action == "complete" {
+		for _, t := range live {
+			a.setTaskStatus(t, "done")
+		}
+		if len(live) == 1 {
+			a.showHUD("ok", tr("已完成"))
+		} else {
+			a.showHUD("ok", fmt.Sprintf(tr("已完成 %d 个任务"), len(live)))
+		}
+		return
+	}
+	var liveIDs []string
+	for _, t := range live {
+		liveIDs = append(liveIDs, t.ID)
+	}
+	at := a.store.SnoozeTasks(liveIDs, minutes, a.now())
+	a.showHUD("ok", fmt.Sprintf(tr("已推迟到 %s"), at.Format("15:04")))
+}
+
+// hudOpen：点气泡本体查看——到期提醒去提醒页（单条打开该任务），捕获类定位到那张卡，其余唤出面板。
+func (a *app) hudOpen() {
+	due, target := a.hudDue, a.hudTarget
+	a.dismissHUD()
+	if a.panel != nil {
+		a.showPanel()
+	}
+	switch {
+	case len(due) > 0:
+		a.switchPage(pageTasks)
+		if len(due) == 1 {
+			for _, t := range a.store.Tasks() {
+				if t.ID == due[0] {
+					a.openTaskEdit(t)
+				}
+			}
+		}
+	case target != "":
+		if n, ok := a.store.Note(target); ok {
+			a.focusNote(n)
+		}
+	}
+}
+
+// showDueHUD：任务到期气泡（隐身模式下也显示：这是用户自己设的提醒）。
+func (a *app) showDueHUD(text string, ids []string) {
+	a.showHUDForce("due", text)
+	a.hudDue = ids
+	if a.hud != nil {
+		a.hud.SetSize(hudW, hudH+28)
+	}
 }

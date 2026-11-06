@@ -441,7 +441,15 @@ func (a *app) settingsView(c *ui.Context) {
 				{title: tr("订阅"), hint: tr("管理账单与信用卡到期，在「提醒」页按时提醒"), control: setToggle(st.SubscriptionsEnabled, func(s *store.Settings, v bool) { s.SubscriptionsEnabled = v })},
 			}},
 			{tr("提醒"), []setRow{
-				{title: tr("任务到期与账单提醒"), hint: tr("通过系统通知提醒"), control: setToggle(st.DueReminders, func(s *store.Settings, v bool) { s.DueReminders = v })},
+				{title: tr("任务到期与账单提醒"), hint: tr("到点提醒；账单走系统通知"), control: setToggle(st.DueReminders, func(s *store.Settings, v bool) { s.DueReminders = v })},
+				{title: tr("任务提醒方式"), hint: tr("系统通知在锁屏、面板关闭时也能看到，首次使用时 macOS 会请求通知权限。气泡里可直接完成或稍后提醒。"), control: func() {
+					sel := max(0, slices.Index([]string{"hud", "system", "both"}, cmpOr(st.ReminderVia, "hud")))
+					if segmented(c, k, &sel, tr("气泡"), tr("系统通知"), tr("两者")) {
+						cur := a.store.Settings()
+						cur.ReminderVia = []string{"hud", "system", "both"}[sel]
+						_ = a.store.SetSettings(cur)
+					}
+				}},
 				{title: tr("货币符号"), hint: tr("账单金额前缀"), control: func() {
 					cur := st.Currency
 					if textField(c, k, s, &cur, 64, "¥", false) {

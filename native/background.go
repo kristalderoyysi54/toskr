@@ -2,11 +2,13 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
 
 	"github.com/toskr/native/internal/diag"
+	"github.com/toskr/native/internal/store"
 )
 
 const reminderTick = 30 * time.Second
@@ -53,8 +55,8 @@ func (a *app) remind(now time.Time) {
 	if !a.store.Settings().DueReminders {
 		return
 	}
-	for _, t := range a.store.DueForReminder(now) {
-		a.notify("task-"+t.ID, tr("任务到期"), t.Text)
+	if due := a.store.DueForReminder(now); len(due) > 0 {
+		a.remindTasks(due, now)
 	}
 	for _, r := range a.store.BillsToRemind(now) {
 		body := fmt.Sprintf(tr("%s %s · %d 天后到期"), r.Bill.Name, money(a.store.Settings().Currency, r.Bill.Amount), r.Days)
@@ -67,10 +69,49 @@ func (a *app) remind(now time.Time) {
 
 // notify 发系统通知；通知被拒绝时退回 HUD 气泡（隐身模式下也会显示，因为是用户设的提醒）。
 func (a *app) notify(id, title, body string) {
-	n := mygo.NewNotification(mygo.NotificationOptions{ID: id, Title: title, Body: body, Group: "toskr-reminders"})
-	n.OnClick(func() { a.panel.Update(a.showPanel) })
-	if err := n.Show(); err != nil {
+	if err := sysNotify(a, id, title, body); err != nil {
 		diag.Push("通知失败(%v)，改用气泡", err)
 		a.panel.Update(func() { a.showHUDForce("warn", title+"："+body) })
+	}
+}
+
+var sysNotify = func(a *app, id, title, body string) error { // 测试替换
+	n := mygo.NewNotification(mygo.NotificationOptions{ID: id, Title: title, Body: body, Group: "toskr-reminders"})
+	n.OnClick(func() { a.panel.Update(a.showPanel) })
+	return n.Show()
+}
+
+// remindTasks：任务到期（同 Tauri App.tsx 到期检查）。按「提醒方式」出气泡（可直接完成 / 稍后）、系统通知或两者；
+// 只选系统通知而通知被拒时退回气泡。
+func (a *app) remindTasks(due []store.Task, now time.Time) {
+	ids := make([]string, len(due))
+	var names []string
+	for i, t := range due {
+		ids[i] = t.ID
+		if i < 4 {
+			names = append(names, preview(t.Text, 24))
+		}
+	}
+	text := preview(due[0].Text, 40)
+	body := text
+	if len(due) > 1 {
+		text = fmt.Sprintf(tr("%d 个任务提醒"), len(due))
+		body = strings.Join(names, tr("、"))
+	}
+	via := a.store.Settings().ReminderVia
+	if via != "system" {
+		a.panelUpdate(func() { a.showDueHUD(text, ids) })
+	}
+	if via == "system" || via == "both" {
+		id := fmt.Sprintf("task:%s:%d", ids[0], now.UnixMilli())
+		if len(due) > 1 {
+			id = fmt.Sprintf("task-batch:%d", now.UnixMilli())
+		}
+		if err := sysNotify(a, id, tr("Toskr 任务提醒"), body); err != nil {
+			diag.Push("通知失败(%v)", err)
+			if via == "system" {
+				a.panelUpdate(func() { a.showDueHUD(text, ids) })
+			}
+		}
 	}
 }

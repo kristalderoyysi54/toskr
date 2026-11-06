@@ -223,8 +223,10 @@ type app struct {
 	// HUD
 	hudText, hudKind string
 	hudGen           int
-	hudUndo          func() // 可撤销气泡的撤销动作
-	hudHover         bool   // 光标在气泡上（关闭穿透、显出撤销）
+	hudUndo          func()   // 可撤销气泡的撤销动作
+	hudHover         bool     // 光标在气泡上（关闭穿透、显出撤销）
+	hudTarget        string   // 点气泡查看时定位的卡片（捕获类）
+	hudDue           []string // 任务到期气泡的任务
 
 	// 设置窗编辑态
 	setModifier                         int
@@ -415,6 +417,7 @@ func (a *app) onTrigger() {
 			}
 			if dup {
 				a.showHUD("duplicate", preview(note.Text, 40))
+				a.hudTarget = note.ID
 				return
 			}
 			a.playCaptureSound()
@@ -427,6 +430,7 @@ func (a *app) onTrigger() {
 				a.store.Delete(note.ID)
 				a.reload()
 			})
+			a.hudTarget = note.ID
 		})
 	}()
 }

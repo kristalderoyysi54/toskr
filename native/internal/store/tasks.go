@@ -367,3 +367,18 @@ func nextDue(t Task, completed time.Time) (time.Time, bool) {
 	}
 	return due, true
 }
+
+// SnoozeTasks 稍后提醒（同 Tauri snoozeTasks）：到期改到 now+minutes，清掉已提醒标记，返回新的到期时刻。
+func (s *Store) SnoozeTasks(ids []string, minutes int, now time.Time) time.Time {
+	at := now.Add(time.Duration(max(1, minutes)) * time.Minute)
+	_ = s.mutate(func() bool {
+		changed := false
+		for i := range s.tasks {
+			if slices.Contains(ids, s.tasks[i].ID) {
+				s.tasks[i].DueAt, s.tasks[i].RemindedAt, changed = at, time.Time{}, true
+			}
+		}
+		return changed
+	})
+	return at
+}
