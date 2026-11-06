@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -154,6 +155,11 @@ func (a *app) cancelPending() {
 	a.sendMode = ""
 }
 
+// cancelEnterAsk：取消「粘贴后按回车？」——预检留下的遮挡图副本与占位符映射一并作废，不能带进下一次发送。
+func (a *app) cancelEnterAsk() {
+	a.enterAsk, a.sendMode, a.sendPNG, a.sendPH = nil, "", nil, nil
+}
+
 // pfCombined：文字与图片两路检查都放行才能发；任一路要求不回车即不回车。
 func (a *app) pfCombined(policy string) (pfEval, pfEval) {
 	return a.pfEvaluate(policy), a.pfImageEval(policy)
@@ -163,6 +169,7 @@ func (a *app) pfCombined(policy string) (pfEval, pfEval) {
 func (a *app) pfSend(e pfEval) {
 	notes, tmpl := a.pending, a.pendingTmpl
 	a.lastRedactions += a.pf.replaced
+	a.sendPH = maps.Clone(a.pf.ph) // 发送成功后按这次发送记住，回复里可恢复占位符
 	a.sendPNG = nil
 	for _, im := range a.pf.images {
 		if b := im.maskedPNG(); b != nil && len(notes) == 1 {

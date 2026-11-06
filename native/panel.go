@@ -413,7 +413,7 @@ func (a *app) panelKeys(c *ui.Context) {
 		case a.quickOpen:
 			a.quickOpen = false
 		case len(a.enterAsk) > 0:
-			a.enterAsk, a.sendMode = nil, ""
+			a.cancelEnterAsk()
 		case a.drawerOpen:
 			a.drawerOpen = false
 		case a.noteRailOpen:

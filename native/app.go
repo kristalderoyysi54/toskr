@@ -97,6 +97,8 @@ type app struct {
 	dragExp                             dragExpand                // 拖拽悬停在折叠分组头上（500ms 后自动展开）
 	kbd                                 kbDrag                    // 键盘拖拽排序中拾起的卡
 	gripFocus                           string                    // 键盘焦点所在的拖拽把手（卡片 id）
+	redactions                          []redactionSession        // 各次发送的占位符映射（只在内存，同 Tauri redactionSessions）
+	sendPH                              map[string]string         // 本次发送的「原文 → 占位符」（预检替换时设置）
 
 	// 1:1 主面板
 	noteGroups                               []noteGroup
@@ -730,6 +732,8 @@ func (a *app) deliver(notes []store.Note, enter bool, tmpl string) {
 	a.sendMode = ""
 	override := a.sendPNG
 	a.sendPNG = nil
+	ph := a.sendPH
+	a.sendPH = nil
 	var texts []string
 	var png []byte
 	ids := make([]string, len(notes))
@@ -755,12 +759,12 @@ func (a *app) deliver(notes []store.Note, enter bool, tmpl string) {
 	go func() {
 		check, err := core.DeliverWith(a.sys, target, core.Payload{Text: payload, PNG: png}, core.Options{Enter: enter, StartedMs: a.targetStarted})
 		diag.Push("发送: %d 条 → %s 方案=%s 格式=%s enter=%v check=%s err=%v", len(notes), target.BundleID, r.Profile.ID, mode, enter, check, err)
-		a.panel.Update(func() { a.finishDeliver(target, ids, texts, png, redactions, profile, check, err) })
+		a.panel.Update(func() { a.finishDeliver(target, ids, texts, png, redactions, ph, profile, check, err) })
 	}()
 }
 
 // finishDeliver：投递结束后（主线程）记历史与「最近发送」、标记已发送、出 HUD。
-func (a *app) finishDeliver(target macos.FrontApp, ids, texts []string, png []byte, redactions int, profile string, check core.Check, err error) {
+func (a *app) finishDeliver(target macos.FrontApp, ids, texts []string, png []byte, redactions int, ph map[string]string, profile string, check core.Check, err error) {
 	rec := delivery{At: time.Now(), Target: target.Name, Count: len(ids)}
 	if err != nil {
 		rec.Err = err.Error()
@@ -775,7 +779,10 @@ func (a *app) finishDeliver(target macos.FrontApp, ids, texts []string, png []by
 	if err != nil {
 		d.Status, d.Err = "failed", err.Error()
 	}
-	a.store.AddDelivery(d)
+	saved := a.store.AddDelivery(d)
+	if err == nil {
+		a.rememberRedactionMap(saved.ID, ph)
+	}
 	if err != nil {
 		a.showHUD("warn", err.Error())
 		return

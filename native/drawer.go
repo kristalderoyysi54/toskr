@@ -344,6 +344,13 @@ func (a *app) replyMenu(m *ui.Menu, n store.Note) {
 		if sm.Item(tr("查看发送内容")).Chosen() {
 			a.drawerOpen = true
 		}
+		restore := sm.Item(tr("恢复占位符"))
+		if a.redactionMap(n.Provenance.DeliveryID) == nil {
+			restore.Disabled(true)
+		}
+		if restore.Chosen() {
+			a.restoreReplyPlaceholders(n)
+		}
 		sm.Submenu(tr("更换对应发送…"), picks)
 		if sm.Item(tr("这不是对应回复…")).Chosen() {
 			id := a.store.UnlinkNote(n.ID)

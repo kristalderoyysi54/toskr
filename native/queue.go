@@ -267,7 +267,7 @@ func (a *app) enterAskBar(c *ui.Context) {
 				a.deliver(notes, false, tmpl)
 			}
 			if ui.Button(c, tr("取消")).Clicked() {
-				a.enterAsk, a.sendMode = nil, ""
+				a.cancelEnterAsk()
 			}
 		})
 	})
