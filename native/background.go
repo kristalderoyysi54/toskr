@@ -50,7 +50,7 @@ func (a *app) startBackground() {
 
 func (a *app) housekeeping() {
 	st := a.store.Settings()
-	pruned := a.store.PruneClipboard(st.ClipRetainDays, func() int64 { return time.Now().Unix() })
+	pruned := a.store.PruneClipboard(st.ClipRetainDays, st.ClipAppRetention, func() int64 { return time.Now().Unix() })
 	rolled := a.store.RollForward(time.Now())
 	gc := a.store.GCMedia()
 	if pruned+rolled+gc > 0 {

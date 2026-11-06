@@ -87,11 +87,13 @@ type Settings struct {
 	ExcludedApps    []string `json:"excludedApps"`
 	Glass           string   `json:"glass"` // glass | clear | none
 	PanelHotkey     string   `json:"panelHotkey"`
-	Language        string   `json:"language"`                // system | zh | en
-	Stealth         bool     `json:"stealth"`                 // 隐身：只保留 warn 气泡
-	ClipRetainDays  int      `json:"clipRetainDays"`          // 剪贴板保留天数（0 = 不按时间清理）
-	PasteThenEnter  bool     `json:"pasteThenEnter"`          // 粘贴后回车（终端类目标默认关闭）
-	NewNoteKey      string   `json:"newNoteHotkey,omitempty"` // 全局新建笔记（空 = 不注册）
+	Language        string   `json:"language"`       // system | zh | en
+	Stealth         bool     `json:"stealth"`        // 隐身：只保留 warn 气泡
+	ClipRetainDays  int      `json:"clipRetainDays"` // 剪贴板保留天数（0 = 不按时间清理）
+	// 按来源单独设定的保留天数（同 Tauri clipAppRetentionDays，键 = bundle id，没有则应用名），优先于全局
+	ClipAppRetention map[string]int `json:"clipAppRetentionDays,omitempty"`
+	PasteThenEnter   bool           `json:"pasteThenEnter"`          // 粘贴后回车（终端类目标默认关闭）
+	NewNoteKey       string         `json:"newNoteHotkey,omitempty"` // 全局新建笔记（空 = 不注册）
 	// 双击行为（同 Tauri doubleTapCaptureOnly：true = 只划词捕获，无选中时不开关面板）与捕获存入的分组（空 = 收件箱）
 	DoubleTapCaptureOnly bool   `json:"doubleTapCaptureOnly,omitempty"`
 	CaptureSection       string `json:"captureSectionId,omitempty"`

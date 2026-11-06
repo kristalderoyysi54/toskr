@@ -188,6 +188,7 @@ type tauriSettings struct {
 	CompanionGap       *int            `json:"companionGap"`
 	CardTint           *bool           `json:"cardTint"`
 	ClipCardTemplate   string          `json:"clipCardTemplate"`
+	ClipAppRetention   map[string]int  `json:"clipAppRetentionDays"`
 	ScreenshotEnabled  *bool           `json:"screenshotEnabled"`
 	ScreenshotHideSelf *bool           `json:"screenshotHideSelf"`
 	ContextMenu        []MenuItem      `json:"contextMenu"`
@@ -742,6 +743,14 @@ func applyTauriSettings(st Settings, t tauriSettings) Settings {
 	}
 	if t.MessageRules != nil {
 		st.MessageRules = NormalizeMessageRules(t.MessageRules)
+	}
+	if len(t.ClipAppRetention) > 0 {
+		st.ClipAppRetention = map[string]int{}
+		for k, v := range t.ClipAppRetention {
+			if k != "" && v > 0 {
+				st.ClipAppRetention[k] = v
+			}
+		}
 	}
 	if t.FirewallEnabled != nil {
 		st.FirewallOff = !*t.FirewallEnabled

@@ -102,7 +102,7 @@ func TestPruneClipboardKeepsPinned(t *testing.T) {
 	kept, _, _ := s.Add(Note{Section: SectionClipboard, Text: "kept"})
 	_ = s.SetKept(kept.ID, true)
 	now := func() int64 { return old.CreatedAt.Unix() + 8*86400 }
-	if got := s.PruneClipboard(7, now); got != 1 {
+	if got := s.PruneClipboard(7, nil, now); got != 1 {
 		t.Fatalf("应清掉 1 条，实为 %d", got)
 	}
 	if len(s.Notes()) != 1 || s.Notes()[0].ID != kept.ID {

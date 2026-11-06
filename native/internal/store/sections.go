@@ -281,15 +281,18 @@ func (s *Store) MoveToAt(id, section string, pos int) error {
 }
 
 // PruneClipboard 清理超过 days 天的未保留剪贴板项，返回清掉的数量。
-func (s *Store) PruneClipboard(days int, now func() int64) int {
-	if days <= 0 {
+func (s *Store) PruneClipboard(days int, perApp map[string]int, now func() int64) int {
+	if days <= 0 && len(perApp) == 0 {
 		return 0
 	}
-	cut := now() - int64(days)*86400
 	removed := 0
 	_ = s.mutate(func() bool {
 		s.notes = slices.DeleteFunc(s.notes, func(n Note) bool {
-			if n.Section == SectionClipboard && !n.Kept && n.CreatedAt.Unix() < cut {
+			limit, ok := perApp[ClipSourceKey(n)] // 来源单独设定优先，其余跟随全局（全局永久时只清有单独设定的来源）
+			if !ok {
+				limit = days
+			}
+			if limit > 0 && n.Section == SectionClipboard && !n.Kept && n.CreatedAt.Unix() < now()-int64(limit)*86400 {
 				removed++
 				return true
 			}
@@ -298,6 +301,14 @@ func (s *Store) PruneClipboard(days int, now func() int64) int {
 		return removed > 0
 	})
 	return removed
+}
+
+// ClipSourceKey 同 Tauri clipSourceKey：bundle id 优先，其次应用名。
+func ClipSourceKey(n Note) string {
+	if n.BundleID != "" {
+		return n.BundleID
+	}
+	return n.SourceApp
 }
 
 // SetCreatedAt 改写创建时间（数据导入与视觉对照测试用）。

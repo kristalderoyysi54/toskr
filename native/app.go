@@ -496,23 +496,34 @@ func (a *app) deleteSelected(c *ui.Context) {
 	if len(notes) == 0 {
 		return
 	}
+	ids := make([]string, len(notes))
+	for i, n := range notes {
+		ids[i] = n.ID
+	}
+	a.chosen.Clear()
+	a.deleteNotesUndo(ids, "")
+}
+
+// deleteNotesUndo 删除一批笔记并挂撤销；msg 为空时按条数生成提示。
+func (a *app) deleteNotesUndo(ids []string, msg string) {
 	type gone struct {
 		n   store.Note
 		pos int
 	}
 	var removed []gone
-	for _, n := range notes {
-		if r, pos, ok := a.store.Delete(n.ID); ok {
+	for _, id := range ids {
+		if r, pos, ok := a.store.Delete(id); ok {
 			removed = append(removed, gone{r, pos})
 		}
 	}
-	a.chosen.Clear()
 	if len(removed) == 0 {
 		return
 	}
-	msg := "已删除 · " + preview(removed[0].n.Text, 14)
-	if len(removed) > 1 {
-		msg = fmt.Sprintf("已删除 %d 条", len(removed))
+	if msg == "" {
+		msg = "已删除 · " + preview(removed[0].n.Text, 14)
+		if len(removed) > 1 {
+			msg = fmt.Sprintf("已删除 %d 条", len(removed))
+		}
 	}
 	a.showHUDUndo("ok", msg, func() {
 		for i := len(removed) - 1; i >= 0; i-- {

@@ -111,7 +111,7 @@ func (a *app) clipPage(c *ui.Context, k tokens) {
 					for j < len(list) && a.clipBand(list[j]) == band {
 						j++
 					}
-					a.clipHeader(c, k, band, i == 0)
+					a.clipHeader(c, k, band, i == 0, list[i:j]...)
 					y += 28
 					if a.clipView == "image" {
 						y += a.clipGrid(c, k, list[i:j], band, y, vis)
@@ -151,14 +151,24 @@ func (a *app) clipPage(c *ui.Context, k tokens) {
 }
 
 // clipHeader 是分段头：10/14 标签 + 1px 细线；第一段右侧挂视图切换（按时间 / 按来源 / 图片）。
-func (a *app) clipHeader(c *ui.Context, k tokens, label string, first bool) {
+func (a *app) clipHeader(c *ui.Context, k tokens, label string, first bool, band ...store.Note) {
 	top := float32(10)
 	if first {
 		top = 2
 	}
-	ui.Row(c).Height(28).Padding(top, 0, 4, 0).Gap(8).AlignItems(ui.Center).Children(func() {
+	row := ui.Row(c).Height(28).Padding(top, 0, 4, 0).Gap(8).AlignItems(ui.Center)
+	source := a.clipView == "source" && len(band) > 0 && !band[0].Kept
+	if source {
+		a.clipSourceMenu(row, label, band)
+	}
+	row.Children(func() {
 		if label != "" {
 			text(c, label, 10, 14, 500, k.muted)
+		}
+		if source {
+			if d, ok := a.store.Settings().ClipAppRetention[store.ClipSourceKey(band[0])]; ok {
+				text(c, fmt.Sprintf(tr("· 保留 %s"), formatRetention(d)), 10, 14, 400, k.muted).SingleLine()
+			}
 		}
 		ui.Box(c).Grow(1).Height(1).Background(k.bandLine)
 		if !first {
