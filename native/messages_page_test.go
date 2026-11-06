@@ -285,3 +285,25 @@ func TestIMAutoToggle(t *testing.T) {
 		t.Fatalf("%q %q", a.im.mode, stopped)
 	}
 }
+
+// 卡片右键：与悬停浮钮同一组操作，「提醒我」是子菜单（快捷档）。
+func TestMessageContextMenu(t *testing.T) {
+	a, tt := msgApp(t)
+	if err := tt.RightClick("小张"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.ChooseMenuItem("提醒我", "1 小时后"); err != nil {
+		t.Fatalf("%v %v", err, tt.Menu())
+	}
+	tt.Frame()
+	if ts := a.store.Tasks(); len(ts) != 1 || ts[0].DueAt.IsZero() {
+		t.Fatalf("%+v", ts)
+	}
+	tt.RightClick("小王")
+	if err := tt.ChooseMenuItem("删除消息"); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.store.Messages()) != 1 {
+		t.Fatal("删除")
+	}
+}

@@ -289,6 +289,7 @@ func (a *app) messageCard(c *ui.Context, k tokens, m store.Message, view []store
 	if box.Clicked() {
 		a.msgClick(m.ID, box.ClickModifiers(), view)
 	}
+	box.ContextMenu(func(menu *ui.Menu) { a.messageMenu(menu, m) })
 	box.Children(func() {
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 			text(c, sender, 13, 18, 600, k.fg).SingleLine().Shrink(1)
@@ -553,5 +554,53 @@ func init() {
 		if _, ok := en[zh]; !ok {
 			en[zh] = e
 		}
+	}
+}
+
+// messageMenu：卡片右键菜单，与悬停浮钮同一组操作（悬停浮钮只露常用的，右键全列）。
+func (a *app) messageMenu(menu *ui.Menu, m store.Message) {
+	if strings.TrimSpace(m.Text) != "" {
+		if menu.Item(tr("发送到对话")).Chosen() {
+			a.send([]store.Note{{ID: m.ID, Text: m.Text}})
+		}
+		if menu.Item(tr("复制正文")).Chosen() {
+			a.copyPrivate(m.Text)
+			a.showHUD("ok", tr("已复制"))
+		}
+		menu.Separator()
+	}
+	if m.Done() {
+		if menu.Item(tr("恢复为待处理")).Chosen() {
+			a.store.SetMessagesStatus([]string{m.ID}, "new")
+			a.showHUD("ok", tr("已恢复为待处理"))
+		}
+	} else if menu.Item(tr("标记已处理")).Chosen() {
+		prev := m.Status
+		a.store.SetMessagesStatus([]string{m.ID}, "done")
+		a.showHUDUndo("ok", tr("已标记处理"), func() { a.store.SetMessagesStatus([]string{m.ID}, prev) })
+	}
+	menu.Submenu(tr("提醒我"), func(sm *ui.Menu) {
+		a.presetMenu(sm, func(at time.Time) { a.messageToTask(m, "reminder", at) })
+	})
+	if m.Status != "waiting" && menu.Item(tr("等待回复")).Chosen() {
+		a.messageToTask(m, "waiting", time.Time{})
+	}
+	if menu.Item(tr("转为任务")).Chosen() {
+		a.messageToTask(m, "task", time.Time{})
+	}
+	if menu.Item(tr("定位原会话")).Chosen() {
+		a.locateMessage(m)
+	}
+	label := tr("生成 AI 回复草稿")
+	if a.msgDraftBusy == m.ID {
+		label = tr("AI 草稿生成中…")
+	}
+	if menu.Item(label).Disabled(a.msgDraftBusy != "").Chosen() {
+		a.draftReply(m)
+	}
+	menu.Separator()
+	if menu.Item(tr("删除消息")).Chosen() {
+		removed := a.store.RemoveMessages([]string{m.ID})
+		a.showHUDUndo("ok", tr("已删除这条消息"), func() { a.store.RestoreMessages(removed) })
 	}
 }
