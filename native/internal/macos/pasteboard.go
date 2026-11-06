@@ -37,6 +37,21 @@ func ReadString() (text, html string) {
 	return
 }
 
+// ReadSourceURL 读复制来源网页地址（Chromium 系的 org.chromium.source-url，其次 public.url），同 Tauri SOURCE_URL_TYPES。
+func ReadSourceURL() (u string) {
+	load()
+	withPool(func() {
+		pb := general()
+		for _, t := range []string{"org.chromium.source-url", "public.url"} {
+			if u = goString(uintptr(pb.Send(sel("stringForType:"), nsString(t)))); u != "" && len(u) <= 16*1024 {
+				return
+			}
+		}
+		u = ""
+	})
+	return
+}
+
 // Types 返回剪贴板第一项的类型列表。
 func Types() []string {
 	load()

@@ -16,6 +16,7 @@ func (Mac) Frontmost() (macos.FrontApp, bool)            { return macos.Frontmos
 func (Mac) SelectedText() (macos.Selection, string)      { return macos.SelectedText() }
 func (Mac) ChangeCount() int                             { return macos.ChangeCount() }
 func (Mac) Types() []string                              { return macos.Types() }
+func (Mac) ReadSourceURL() string                        { return macos.ReadSourceURL() }
 func (Mac) ReadString() (string, string)                 { return macos.ReadString() }
 func (Mac) Snapshot() []macos.Item                       { return macos.Snapshot() }
 func (Mac) Write(items []macos.Item, transient bool) int { return macos.Write(items, transient) }

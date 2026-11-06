@@ -500,8 +500,37 @@ func (a *app) onTrigger() {
 		if a.captureSecret(got.Text, front.Name) {
 			return // 秘文信封：解密进秘文页，绝不进普通笔记
 		}
-		got.Text = a.captureRestoreAliases(got.Text)
-		note, dup, err := a.store.Add(store.Note{Section: a.captureSection(), Text: got.Text, HTML: got.HTML,
+		var blocks []store.ContentBlock
+		lostImgs := 0
+		if got.HTML != "" { // 富文本带图（同 Tauri materializeRichCapture）：图片本地化成内容块，失败的省略并提示
+			if r := core.ParseRichHTML(got.Text, got.HTML, got.SourceURL); len(r.Sources) > 0 {
+				blocks, lostImgs = core.LocalizeRich(r, got.SourceURL, a.store.SaveImage)
+				lostImgs += r.Omitted
+				if r.Omitted > 0 {
+					diag.Push("富图片: 解析丢弃 %s", strings.Join(r.OmittedSchemes, ","))
+				}
+				if len(store.ImageBlocks(blocks)) == 0 {
+					blocks = nil // 图全失败：按纯文本存
+				}
+			}
+		}
+		if blocks != nil {
+			for i := range blocks { // 逐个还原文字块里的化名，图片块与顺序不动
+				if blocks[i].Type == "text" {
+					blocks[i].Text = a.captureRestoreAliases(blocks[i].Text)
+				}
+			}
+			got.Text = store.TextFromBlocks(blocks)
+		} else {
+			got.Text = a.captureRestoreAliases(got.Text)
+		}
+		if strings.TrimSpace(got.Text) == "" && blocks == nil {
+			if lostImgs > 0 {
+				a.panel.Update(func() { a.showHUD("warn", fmt.Sprintf(tr("%d 张图片未能保存"), lostImgs)) })
+			}
+			return
+		}
+		note, dup, err := a.store.Add(store.Note{Section: a.captureSection(), Text: got.Text, HTML: got.HTML, Blocks: blocks,
 			SourceApp: front.Name, BundleID: front.BundleID})
 		diag.Push("捕获: %d 字符 来自 %s dup=%v %dms", len([]rune(got.Text)), front.BundleID, dup, time.Since(started).Milliseconds())
 		a.panel.Update(func() {
@@ -518,6 +547,9 @@ func (a *app) onTrigger() {
 			a.playCaptureSound()
 			a.flashID, a.flashAt = note.ID, time.Time{} // 卡片琥珀闪烁 1.8s
 			msg := preview(note.Text, 40)
+			if lostImgs > 0 {
+				msg += " · " + fmt.Sprintf(tr("%d 张图片未能保存"), lostImgs)
+			}
 			if ds := store.DeliveryCandidates(note, a.store.Deliveries()); len(ds) == 1 { // 唯一候选只提示，不自动关联（同 Tauri）
 				msg += " · " + fmt.Sprintf(tr("可能是发往 %s 的回复，右键可关联"), ds[0].TargetName)
 			}

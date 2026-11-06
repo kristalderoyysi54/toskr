@@ -35,6 +35,7 @@ func isOwn(n int) bool {
 
 type Captured struct {
 	Text, HTML string
+	SourceURL  string // 复制来源网页（富文本图片的 Referer / 拒绝 file:// 判据）
 	Source     macos.FrontApp
 	Warning    string // 剪贴板未能还原等，提示用户
 }
@@ -73,6 +74,9 @@ func Capture(sys System, front macos.FrontApp) (Captured, bool) {
 	if changed {
 		text, html := sys.ReadString()
 		out.Text, out.HTML = normalize(text), html
+		if r, ok := sys.(interface{ ReadSourceURL() string }); ok && html != "" {
+			out.SourceURL = r.ReadSourceURL()
+		}
 		// 还原用户原剪贴板（带临时标记，监听不会把还原当成新复制）
 		markOwn(sys.Write(original, true))
 	}
