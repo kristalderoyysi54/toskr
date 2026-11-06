@@ -80,6 +80,9 @@ type app struct {
 	pending                             []store.Note   // 预检命中、等待确认的发送
 	pf                                  preflightState // 发送预检：逐项处理状态
 	sendPNG                             []byte         // 本次发送用的图片副本（图片隐私检查遮挡后）
+	lp                                  longPress      // 浮钮长按（收进笔记选分类）
+	clipPick                            string         // 长按弹出分组选择的剪贴卡
+	clipPickAt                          ui.Rect        // 弹出浮层挂靠的浮钮位置
 	history                             []delivery
 	thumbs                              map[string]ui.ImageSource
 	aiBusy                              string // 正在 AI 处理的笔记 ID

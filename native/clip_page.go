@@ -80,6 +80,7 @@ func (a *app) clipBand(n store.Note) string {
 }
 
 func (a *app) clipPage(c *ui.Context, k tokens) {
+	defer a.clipPickPopover(c, k)
 	list := a.clipList
 	_, vh := c.Size()
 	vis := visWindow{top: a.clipScroll.Y - 600, bottom: a.clipScroll.Y + vh + 600}
@@ -438,7 +439,7 @@ func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool, to
 	}
 	row.Gap(2).Key("acts").Transition(fade).Children(func() {
 		for _, act := range []struct{ icon, tip string }{
-			{"send", "发送（⌘↵）"}, {"pin", "置顶"}, {"copy", "复制"}, {"inbox", "收进笔记"},
+			{"send", "发送（⌘↵）"}, {"pin", "置顶"}, {"copy", "复制"}, {"inbox", "移入笔记（长按选择分类）"},
 			{open, "打开"}, {"pencil", "编辑"}, {"eye-off", "模糊内容"}, {"trash-2", "删除"},
 		} {
 			if len(grid) > 0 && grid[0] && !slices.Contains([]string{"send", "copy", open, "trash-2"}, act.icon) {
@@ -448,6 +449,10 @@ func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool, to
 				act.icon, act.tip = "eye", "取消模糊"
 			}
 			b := floatIconButton(c, k, "ca-"+act.icon, act.icon, tr(act.tip), act.icon == "trash-2", act.icon == "pin" && n.Kept)
+			if act.icon == "inbox" {
+				a.clipInboxButton(b, n)
+				continue
+			}
 			if !b.Clicked() {
 				continue
 			}
@@ -459,9 +464,6 @@ func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool, to
 			case "copy":
 				mygo.Clipboard.WriteText(n.Text)
 				a.showHUD("ok", tr("已复制"))
-			case "inbox":
-				_ = a.store.MoveTo(n.ID, store.SectionInbox)
-				a.showHUD("ok", tr("已收进笔记"))
 			case "expand":
 				a.openDetail(n)
 			case "external-link":
