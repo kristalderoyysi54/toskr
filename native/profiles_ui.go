@@ -355,7 +355,7 @@ func (a *app) quickSwitch(c *ui.Context, k tokens) {
 		if edit.Clicked() {
 			a.quickOpen = false
 			a.editProfileID = r.Profile.ID
-			a.openSettingsAt(setPagePaste)
+			a.openSettingsAt(setPagePaste, 0)
 		}
 	})
 }

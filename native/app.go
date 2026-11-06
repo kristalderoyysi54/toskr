@@ -115,16 +115,19 @@ type app struct {
 	drawerOpen                                 bool            // 「最近发送」抽屉
 	drawerMore                                 map[string]bool // 抽屉行「更多」展开态
 	// 发送方案：临时指定 / 规则覆盖只对 tempFor / ruleFor 记下的目标身份有效
-	tempProfile, tempFor string
-	ruleOv               store.RuleOverrides
-	ruleFor              string
-	lensOpen, quickOpen  bool
-	quickIdx             int
-	editProfileID        string // 设置里正在编辑的方案
-	profName             string
-	enterAsk             []store.Note // 方案为「每次发送前确认」时挂起，等用户选回车与否
-	rawArm               bool         // 「要求逐项处理」下保留原文需再点一次确认
-	tauriImporting       bool         // 正在从 Tauri 版导入
+	tempProfile, tempFor                       string
+	ruleOv                                     store.RuleOverrides
+	ruleFor                                    string
+	lensOpen, quickOpen                        bool
+	quickIdx                                   int
+	editProfileID                              string // 设置里正在编辑的方案
+	profName                                   string
+	enterAsk                                   []store.Note // 方案为「每次发送前确认」时挂起，等用户选回车与否
+	rawArm                                     bool         // 「要求逐项处理」下保留原文需再点一次确认
+	pendingTmpl, enterTmpl                     string       // 挂起中的发送所带的提示词模板
+	snipAdd                                    bool         // 设置里正在新增模板
+	snipEditID, snipLabel, snipText, snipGroup string
+	tauriImporting                             bool // 正在从 Tauri 版导入
 	// 设置页「本机翻译」状态
 	ltStatus                        string
 	ltPreparing, ltFailed, ltOpened bool
@@ -507,7 +510,18 @@ func (a *app) commitEdit() {
 }
 
 // send 先做敏感内容预检（按方案隐私策略），命中则挂起等确认；再按方案的粘贴后动作投递。
-func (a *app) send(notes []store.Note) {
+func (a *app) send(notes []store.Note) { a.sendT(notes, "") }
+
+// sendWithTemplate：用提示词模板发送（记最近使用）。
+func (a *app) sendWithTemplate(notes []store.Note, sn store.PromptSnippet) {
+	st := a.store.Settings()
+	st.UseSnippet(sn.ID)
+	_ = a.store.SetSettings(st)
+	a.sendT(notes, sn.Text)
+}
+
+// sendT：tmpl 为本次提示词模板（空 = 不套模板），随挂起状态一起保存，取消即丢弃。
+func (a *app) sendT(notes []store.Note, tmpl string) {
 	if len(notes) == 0 {
 		return
 	}
@@ -520,19 +534,19 @@ func (a *app) send(notes []store.Note) {
 		fs = append(fs, core.Preflight(n.Text)...)
 	}
 	if len(fs) > 0 {
-		a.pending, a.findings, a.rawArm = notes, fs, false
+		a.pending, a.findings, a.rawArm, a.pendingTmpl = notes, fs, false, tmpl
 		if a.panel != nil {
 			a.panel.Show() // 确认条在面板里
 		}
 		return
 	}
-	a.askEnter(notes, false)
+	a.askEnter(notes, false, tmpl)
 }
 
 // confirmPending 处理预检确认条：redact 为 true 时遮罩命中处再发；保留原文时强制不回车（同 Tauri forcePressEnterOff）。
 func (a *app) confirmPending(redact bool) {
-	notes := a.pending
-	a.pending, a.findings, a.rawArm = nil, nil, false
+	notes, tmpl := a.pending, a.pendingTmpl
+	a.pending, a.findings, a.rawArm, a.pendingTmpl = nil, nil, false, ""
 	if redact {
 		notes = slices.Clone(notes)
 		for i := range notes {
@@ -541,26 +555,26 @@ func (a *app) confirmPending(redact bool) {
 			notes[i].Text = core.Redact(notes[i].Text, fs)
 		}
 	}
-	a.askEnter(notes, !redact)
+	a.askEnter(notes, !redact, tmpl)
 }
 
 // askEnter：方案为「每次发送前确认」时先在面板里问是否回车；保留了原文则一律不回车。
-func (a *app) askEnter(notes []store.Note, rawKept bool) {
+func (a *app) askEnter(notes []store.Note, rawKept bool, tmpl string) {
 	r, _ := a.resolution()
 	switch {
 	case rawKept || r.Profile.EnterPolicy == "never":
-		a.deliver(notes, false)
+		a.deliver(notes, false, tmpl)
 	case r.Profile.EnterPolicy == "confirm":
-		a.enterAsk = notes
+		a.enterAsk, a.enterTmpl = notes, tmpl
 		if a.panel != nil {
 			a.panel.Show()
 		}
 	default:
-		a.deliver(notes, true)
+		a.deliver(notes, true, tmpl)
 	}
 }
 
-func (a *app) deliver(notes []store.Note, enter bool) {
+func (a *app) deliver(notes []store.Note, enter bool, tmpl string) {
 	target := a.target
 	r, _ := a.resolution()
 	redactions := a.lastRedactions
@@ -578,7 +592,11 @@ func (a *app) deliver(notes []store.Note, enter bool) {
 	}
 	payload := ""
 	if len(texts) > 0 {
-		payload = store.FormatForDelivery(sendText(texts), r.Profile.OutputMode())
+		content := sendText(texts)
+		if tmpl != "" {
+			content = store.ApplyPromptTemplate(tmpl, content)
+		}
+		payload = store.FormatForDelivery(content, r.Profile.OutputMode())
 	}
 	if !a.pinned && !r.Profile.KeepPanel {
 		a.hidePanelNow()

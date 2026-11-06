@@ -162,6 +162,7 @@ type tauriSettings struct {
 	PromptGroups       []PromptGroup   `json:"promptGroups"`
 	TargetProfiles     []TargetProfile `json:"targetProfiles"`
 	DefaultProfileID   string          `json:"defaultTargetProfileId"`
+	PromptSnippets     []PromptSnippet `json:"promptSnippets"`
 }
 
 // TauriReport 是导入结果。
@@ -460,6 +461,13 @@ func applyTauriSettings(st Settings, t tauriSettings) Settings {
 	}
 	if len(t.TargetProfiles) > 0 { // 发送方案整组以 Tauri 为准
 		st.PromptGroups, st.TargetProfiles, st.DefaultProfileID = t.PromptGroups, t.TargetProfiles, t.DefaultProfileID
+	}
+	for _, sn := range t.PromptSnippets { // 模板按 ID 合并，同 ID 以 Tauri 为准
+		if i := slices.IndexFunc(st.PromptSnippets, func(x PromptSnippet) bool { return x.ID == sn.ID }); i >= 0 {
+			st.PromptSnippets[i] = sn
+		} else if sn.ID != "" {
+			st.PromptSnippets = append(st.PromptSnippets, sn)
+		}
 	}
 	if t.Stealth != nil {
 		st.Stealth = *t.Stealth

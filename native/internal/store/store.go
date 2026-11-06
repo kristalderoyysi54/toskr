@@ -128,6 +128,8 @@ type Settings struct {
 	PromptGroups     []PromptGroup   `json:"promptGroups,omitempty"`
 	TargetProfiles   []TargetProfile `json:"targetProfiles,omitempty"`
 	DefaultProfileID string          `json:"defaultTargetProfileId,omitempty"`
+	PromptSnippets   []PromptSnippet `json:"promptSnippets,omitempty"`
+	RecentSnippets   []string        `json:"recentSnippetIds,omitempty"` // Tauri 存 localStorage
 	// 截图编辑器（Tauri 存 localStorage：toskr.screenshotStyle / CalloutStyle / Frame / Crosshair）
 	Shot ShotPrefs `json:"shot,omitempty"`
 }

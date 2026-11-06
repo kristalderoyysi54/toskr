@@ -291,7 +291,7 @@ func (a *app) preflightBar(c *ui.Context) {
 				}
 			}
 			if ui.Button(c, tr("取消")).Clicked() {
-				a.pending, a.findings, a.rawArm = nil, nil, false
+				a.pending, a.findings, a.rawArm, a.pendingTmpl = nil, nil, false, ""
 			}
 		})
 	})
@@ -303,14 +303,14 @@ func (a *app) enterAskBar(c *ui.Context) {
 	ui.Column(c).Padding(10, 12).Gap(8).Radius(12).Background(t.Accent.Alpha(0.08)).Border(1, t.Accent.Alpha(0.3)).Key("enter-ask").Children(func() {
 		ui.Text(c, fmt.Sprintf(tr("粘贴到 %s 后按回车发送？"), a.target.Name)).FontSize(12).Wrap()
 		ui.Row(c).Gap(6).Children(func() {
-			notes := a.enterAsk
+			notes, tmpl := a.enterAsk, a.enterTmpl
 			if ui.Button(c, tr("粘贴并回车")).Clicked() {
 				a.enterAsk = nil
-				a.deliver(notes, true)
+				a.deliver(notes, true, tmpl)
 			}
 			if ui.Button(c, tr("仅粘贴")).Clicked() {
 				a.enterAsk = nil
-				a.deliver(notes, false)
+				a.deliver(notes, false, tmpl)
 			}
 			if ui.Button(c, tr("取消")).Clicked() {
 				a.enterAsk = nil
@@ -485,6 +485,9 @@ func (a *app) cardMenu(c *ui.Context, m *ui.Menu, i int, n store.Note) {
 		}
 		if m.Item(send).Chosen() {
 			a.sendSelected()
+		}
+		if !isImage {
+			a.templateMenu(m, tr("用模板发送"), a.chosenNotes)
 		}
 		if !isImage && m.Item(tr("编辑")).Chosen() {
 			a.startEdit()

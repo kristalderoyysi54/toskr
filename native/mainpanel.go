@@ -830,6 +830,8 @@ func (a *app) selectionBar(c *ui.Context, k tokens) {
 				if m.Item(tr("复制为列表")).Chosen() {
 					a.copyChosenAsList()
 				}
+				m.Separator()
+				a.templateMenu(m, tr("用模板发送 · 常用"), a.chosenNotes)
 			})
 		})
 	})

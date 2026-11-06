@@ -67,7 +67,8 @@ func TestImportTauri(t *testing.T) {
 			"promptGroups": []any{map[string]any{"id": "general", "name": "通用", "order": 0}, map[string]any{"id": "g2", "name": "写作", "order": 1}},
 			"targetProfiles": []any{map[string]any{"id": "default-safe", "name": "稳妥发送", "bundleIds": []string{}, "promptGroupId": "general", "defaultFormat": "plain", "defaultMarkdownMode": "preserve", "enterPolicy": "never", "privacyPolicy": "requireRedaction", "keepPanel": false},
 				map[string]any{"id": "p-ai", "name": "AI 对话", "bundleIds": []string{"com.openai.chat"}, "promptGroupId": "g2", "defaultFormat": "plain", "defaultMarkdownMode": "strip", "enterPolicy": "confirm", "privacyPolicy": "confirmRaw", "keepPanel": true}},
-			"defaultTargetProfileId": "p-ai"},
+			"defaultTargetProfileId": "p-ai",
+			"promptSnippets":         []any{map[string]any{"id": "s1", "label": "翻译", "text": "翻译：{内容}", "groupId": "g2", "isCommon": true}}},
 	}
 	raw, _ := json.Marshal(map[string]any{"state": state, "version": 27})
 	_ = os.WriteFile(filepath.Join(tdir, "toskr-data.json"), seal(PurposeData, raw), 0o600)
@@ -132,6 +133,9 @@ func TestImportTauri(t *testing.T) {
 	}
 	if g, ps, def := st.ProfileConfig(); len(g) != 2 || len(ps) != 2 || def != "p-ai" || ps[1].OutputMode() != "strip-markdown" || !ps[1].KeepPanel {
 		t.Fatalf("发送方案应整组导入 %+v %+v %q", g, ps, def)
+	}
+	if len(st.PromptSnippets) != 1 || st.PromptSnippets[0].Label != "翻译" || !st.PromptSnippets[0].IsCommon {
+		t.Fatalf("模板应导入 %+v", st.PromptSnippets)
 	}
 	if _, ok := s.Note(func() string {
 		for _, n := range s.Notes() {

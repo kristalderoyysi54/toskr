@@ -289,3 +289,50 @@ func checkbox(mark string) string {
 	}
 	return "☒ "
 }
+
+// PromptSnippet：提示词模板（同 Tauri PromptSnippet）；IsCommon = 常用，优先显示在发送菜单。
+type PromptSnippet struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Text     string `json:"text"`
+	GroupID  string `json:"groupId"`
+	IsCommon bool   `json:"isCommon,omitempty"`
+}
+
+var templateSlot = regexp.MustCompile(`(?i)\{(?:内容|占位|content)\}`)
+
+// ApplyPromptTemplate 同 Tauri applyPromptTemplate：模板含 {内容} / {占位} / {content} 时把内容注入各处，否则「模板 + 空行 + 内容」。
+func ApplyPromptTemplate(template, content string) string {
+	if templateSlot.MatchString(template) {
+		return templateSlot.ReplaceAllLiteralString(template, content)
+	}
+	if content == "" {
+		return template
+	}
+	return template + "\n\n" + content
+}
+
+// SnippetsForGroup 同 Tauri promptSnippetsForGroup：常用在前；其余按「当前方案提示词组」优先。
+func SnippetsForGroup(snips []PromptSnippet, groupID string) (common, rest []PromptSnippet) {
+	for _, s := range snips {
+		if s.IsCommon {
+			common = append(common, s)
+		}
+	}
+	for _, mine := range []bool{true, false} {
+		for _, s := range snips {
+			if !s.IsCommon && (s.GroupID == groupID) == mine {
+				rest = append(rest, s)
+			}
+		}
+	}
+	return
+}
+
+const recentSnippetKeep = 5
+
+// UseSnippet 记一次模板使用（最近使用在前，保留 5 个）。
+func (st *Settings) UseSnippet(id string) {
+	st.RecentSnippets = append([]string{id}, slices.DeleteFunc(slices.Clone(st.RecentSnippets), func(x string) bool { return x == id })...)
+	st.RecentSnippets = st.RecentSnippets[:min(len(st.RecentSnippets), recentSnippetKeep)]
+}

@@ -16,9 +16,13 @@ import (
 
 const setPagePaste = 3 // 设置窗「粘贴与隐私」页序号
 
-func (a *app) openSettingsAt(page int) {
-	a.openSettings()
-	a.setPage, a.setSub, a.setQuery = page, 0, ""
+func (a *app) openSettingsAt(page, sub int) {
+	if a.panel != nil {
+		a.openSettings()
+	} else {
+		a.openSettingsState() // 无 App 运行（视图测试）时不建窗口，建窗会阻塞
+	}
+	a.setPage, a.setSub, a.setQuery = page, sub, ""
 }
 
 var profilePresets = []store.TargetProfile{

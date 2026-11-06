@@ -301,7 +301,7 @@ func (a *app) settingsView(c *ui.Context) {
 			}},
 			{tr("发送方案"), a.profileSection(c, k, s)},
 			{tr("最近发送"), recent},
-		}}},
+		}, a.templateSections(c, k, s)}, subs: []string{"发送", "提示词模板"}},
 		{label: "更多功能", icon: "blocks", sections: [][]setSection{{
 			{tr("功能"), []setRow{
 				{title: tr("秘文"), hint: tr("在本机把文字加密成中文、代码、日志等格式，对方自动识别解密"), control: setToggle(st.SecretEnabled, func(s *store.Settings, v bool) { s.SecretEnabled = v })},

@@ -65,3 +65,27 @@ func TestFormatForDelivery(t *testing.T) {
 		t.Fatal("原文不动")
 	}
 }
+
+func TestPromptSnippets(t *testing.T) {
+	if got := ApplyPromptTemplate("翻译成英文：{内容}\n只输出译文", "你好"); got != "翻译成英文：你好\n只输出译文" {
+		t.Fatalf("占位 %q", got)
+	}
+	if got := ApplyPromptTemplate("请总结", "正文 $& 不展开"); got != "请总结\n\n正文 $& 不展开" {
+		t.Fatalf("前缀 %q", got)
+	}
+	if got := ApplyPromptTemplate("{CONTENT} / {占位}", "x"); got != "x / x" {
+		t.Fatalf("多处、大小写 %q", got)
+	}
+	snips := []PromptSnippet{{ID: "a", GroupID: "g2"}, {ID: "b", GroupID: GeneralPromptGroup, IsCommon: true}, {ID: "c", GroupID: GeneralPromptGroup}}
+	common, rest := SnippetsForGroup(snips, GeneralPromptGroup)
+	if len(common) != 1 || common[0].ID != "b" || len(rest) != 2 || rest[0].ID != "c" || rest[1].ID != "a" {
+		t.Fatalf("分组排序 %v %v", common, rest)
+	}
+	var st Settings
+	for _, id := range []string{"1", "2", "3", "4", "5", "6", "3"} {
+		st.UseSnippet(id)
+	}
+	if !slices.Equal(st.RecentSnippets, []string{"3", "6", "5", "4", "2"}) {
+		t.Fatalf("最近使用 %v", st.RecentSnippets)
+	}
+}
