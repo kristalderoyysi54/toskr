@@ -119,7 +119,11 @@ func nsString(s string) objc.ID {
 }
 
 // withPool 在 autorelease pool 里执行（非主线程调用 AppKit 时必须）。
+// pool 必须在创建它的线程上 drain：goroutine 会在 cgo / purego 调用之间换 OS 线程，
+// 不锁线程时偶发在别的线程 drain → SIGSEGV（Vision OCR 压测 30 次必现）。LockOSThread 可嵌套。
 func withPool(fn func()) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	pool := class("NSAutoreleasePool").Send(sel("alloc")).Send(sel("init"))
 	defer pool.Send(sel("drain"))
 	fn()
