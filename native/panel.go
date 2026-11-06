@@ -432,6 +432,9 @@ func (a *app) panelKeys(c *ui.Context) {
 	if a.page == pageClip || (a.page == pageNotes && a.noteSub == 0) {
 		a.queueKeys(c)
 	}
+	if !typing && a.page == pageTasks {
+		a.taskKeys(c)
+	}
 	if !typing && a.page == pageNotes && a.noteSub == subMessages && c.Shortcut(ui.Cmd, ui.KeyA) { // ⌘A 全选当前栏（同 Tauri messageSelectAllIds）
 		a.clearMsgChosen()
 		for _, m := range a.visibleMessages() {

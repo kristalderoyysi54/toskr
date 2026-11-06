@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"image/png"
+	"os/exec"
 	"regexp"
 	"slices"
 	"strconv"
@@ -39,6 +40,7 @@ type detailState struct {
 	img                 int               // 多图时当前第几张（主图 + 附件 + 内容块里的图）
 	imgW, imgH          int               // 当前图原始尺寸
 	imgNote             bool              // 图片文字备注编辑中
+	pickPara            bool              // 选词粒度：段（同 Tauri pickGranularity）
 }
 
 func (a *app) openDetail(n store.Note) {
@@ -421,6 +423,27 @@ type pickSeg struct {
 }
 
 // pickSegments：ASCII 字母数字连写为一词，汉字逐字，空白与标点为分隔（Tauri 用 Intl.Segmenter，Go 无同等分词器）。
+// paraSegments：按段选取——非空行各成一段，换行为分隔。
+func paraSegments(s string) []pickSeg {
+	var out []pickSeg
+	for i, line := range strings.Split(s, "\n") {
+		if i > 0 {
+			out = append(out, pickSeg{"\n", false})
+		}
+		if strings.TrimSpace(line) != "" {
+			out = append(out, pickSeg{line, true})
+		}
+	}
+	return out
+}
+
+func (a *app) segments(s string) []pickSeg {
+	if a.detail.pickPara {
+		return paraSegments(s)
+	}
+	return pickSegments(s)
+}
+
 func pickSegments(s string) []pickSeg {
 	var out []pickSeg
 	var cur []rune
@@ -452,7 +475,7 @@ func (a *app) pickedText(src string) string {
 		return ""
 	}
 	lo, hi := min(d.pickAnchor, d.pickEnd), max(d.pickAnchor, d.pickEnd)
-	segs := pickSegments(src)
+	segs := a.segments(src)
 	var b strings.Builder
 	for i := lo; i <= hi && i < len(segs); i++ {
 		b.WriteString(segs[i].text)
@@ -464,7 +487,7 @@ func (a *app) pickView(c *ui.Context, k tokens, s settingsTokens, src string) {
 	d := &a.detail
 	lo, hi := min(d.pickAnchor, d.pickEnd), max(d.pickAnchor, d.pickEnd)
 	ui.Row(c).Margin(5.85, 0, 0, 0).Gap(3).Wrap().Children(func() {
-		for i, seg := range pickSegments(src) {
+		for i, seg := range a.segments(src) {
 			if !seg.word {
 				if seg.text == "\n" {
 					ui.Box(c).FillWidth().Height(0)
@@ -527,8 +550,17 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 		return
 	}
 	if n.Kind != "image" {
-		if dockButton(c, k, "", tr("选词"), d.pick).Clicked() {
+		if dockButton(c, k, "", tr("选词"), d.pick).Tooltip(tr("选词模式：点选词/段，可发送或复制选中片段（W）")).Clicked() {
 			d.pick, d.pickAnchor, d.pickEnd = !d.pick, -1, -1
+		}
+		if d.pick {
+			g := "word"
+			if d.pickPara {
+				g = "para"
+			}
+			if v, ok := miniSegmented(c, k, g, [][2]string{{"word", "词"}, {"para", "段"}}); ok {
+				d.pickPara, d.pickAnchor, d.pickEnd = v == "para", -1, -1
+			}
 		}
 		rawLabel := tr("原文")
 		if d.raw {
@@ -537,8 +569,24 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 		if dockButton(c, k, "", rawLabel, false).Clicked() {
 			d.raw = !d.raw
 		}
+		if u := noteURL(n); u != "" && dockButton(c, k, "", tr("打开链接"), false).Clicked() {
+			_ = exec.Command("/usr/bin/open", u).Start()
+		}
 		proc := dockButton(c, k, "wand-sparkles", tr("处理"), false)
-		proc.Menu(func(m *ui.Menu) {
+		proc.PopoverMenuButton(func(m *ui.Menu) {
+			for _, op := range textOps { // 本地文本处理（同 Tauri TEXT_OPS）：作用于全文，可撤销
+				if m.Item(tr(op.label)).Chosen() {
+					out, err := op.apply(n.Text)
+					if err != nil {
+						a.showHUD("warn", tr("处理失败：")+err.Error())
+						continue
+					}
+					prev := n.Text
+					_ = a.store.Update(n.ID, out)
+					a.showHUDUndo("ok", tr("已处理 · ")+tr(op.label), func() { _ = a.store.Update(n.ID, prev) })
+				}
+			}
+			m.Separator()
 			for _, act := range aiActions {
 				if m.Item(tr(act.label)).Chosen() {
 					a.runAI(n, act)
@@ -736,4 +784,13 @@ func (a *app) detailImage(c *ui.Context, k tokens, s settingsTokens, n store.Not
 			a.detailText, a.detail.imgNote = note, true
 		}
 	})
+}
+
+// noteURL：链接卡的网址（只放行 http / https）。
+func noteURL(n store.Note) string {
+	u := strings.TrimSpace(cmpOr(n.URL, n.Text))
+	if n.Kind != "link" || !(strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")) {
+		return ""
+	}
+	return u
 }

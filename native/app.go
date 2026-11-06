@@ -172,6 +172,8 @@ type app struct {
 	rem                                    remSync     // 提醒事项同步调度（含锁，app 只按指针传）
 	fx                                     *fxCache    // 当日汇率（数据目录 toskr-fx-rates.json 缓存）
 	fxLoaded, fxFetching                   bool
+	taskFocus                              string // 任务页键盘焦点（↑↓）
+	taskQuickFocused                       bool   // 速记框有焦点（上一帧）
 	billRange                              string // 消费分析趋势：month | year
 	remStatusAsked                         bool   // 设置页已查过提醒事项授权状态
 	// 设置页「本机翻译」状态

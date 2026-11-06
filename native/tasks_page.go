@@ -327,7 +327,7 @@ func (a *app) taskQuickAdd(c *ui.Context, k tokens) {
 				ph = tr("记录闪念灵感，回车保存…")
 			}
 		}
-		ui.TextInputBase(c, &a.taskDraft).Bind(&a.taskIn).Grow(1).Font(fontSans).FontSize(13).FixedLineHeight(18).
+		qin := ui.TextInputBase(c, &a.taskDraft).Bind(&a.taskIn).Grow(1).Font(fontSans).FontSize(13).FixedLineHeight(18).
 			TextColor(k.fg).PlaceholderColor(k.muted).Placeholder(ph).OnTextKey(func(key ui.TextKey) bool {
 			if key.Key == ui.KeyEnter && key.Mods == 0 {
 				if a.taskSub == 1 && a.taskAI {
@@ -345,6 +345,7 @@ func (a *app) taskQuickAdd(c *ui.Context, k tokens) {
 			}
 			return false
 		})
+		a.taskQuickFocused = qin.Focused() // 速记框有焦点时 Space / x / ↑↓ 归输入框
 	})
 }
 
@@ -716,6 +717,9 @@ func (a *app) taskRow(c *ui.Context, k tokens, t store.Task, now time.Time) {
 		card.Background(k.sparkRow)
 	} else {
 		card.Background(k.card)
+	}
+	if a.taskFocus == t.ID && a.page == pageTasks { // 键盘焦点环（同 Tauri focus ring）
+		card.Border(2, stok(c).primary.Alpha(0.6))
 	}
 	hovered := card.Hovered()
 	elevated(card, k, hovered) // TaskRow：悬停 elevation-2，box-shadow 150ms

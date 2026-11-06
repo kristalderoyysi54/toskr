@@ -210,6 +210,23 @@ func (a *app) sectionMenu(m *ui.Menu, s store.Section, i, n int) {
 		s.KeepAfterSend = !s.KeepAfterSend
 		_ = a.store.UpdateSection(s)
 	}
+	// 设为捕获目标（同 Tauri SectionGroup）：双击触发键捕获的内容存入此组；再点改回收件箱
+	capID := a.store.Settings().CaptureSection
+	isCap := capID == s.ID || (capID == "" && s.ID == store.SectionInbox)
+	if s.ID != store.SectionClipboard && !(isCap && s.ID == store.SectionInbox) {
+		label := tr("设为捕获目标")
+		if isCap {
+			label = tr("捕获改回存入收件箱")
+		}
+		if m.Item(label).Chosen() {
+			cur := a.store.Settings()
+			cur.CaptureSection = s.ID
+			if isCap {
+				cur.CaptureSection = ""
+			}
+			_ = a.store.SetSettings(cur)
+		}
+	}
 	m.Separator()
 	if m.Item(tr("上移")).Disabled(i == 0).Chosen() {
 		_ = a.store.MoveSection(s.ID, -1)

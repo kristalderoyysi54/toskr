@@ -218,3 +218,43 @@ func TestDetailTitleEdit(t *testing.T) {
 		t.Fatal(tt.Texts())
 	}
 }
+
+// 选词粒度「段」、链接卡「打开链接」、处理 ▾ 的本地文本处理（可撤销）。
+func TestDetailPickParaAndTextOps(t *testing.T) {
+	a, _ := testApp(t, "第一段 hello\n\n第二段 world")
+	n := a.store.Notes()[0]
+	a.detail = detailState{id: n.ID, pickAnchor: -1, pickEnd: -1, editSel: [2]int{-1, -1}, pick: true}
+	tt := ui.NewTester(a.detailView, 560, 540)
+	tt.Frame()
+	if !tt.HasText("词") || !tt.HasText("段") {
+		t.Fatal("选词时出现 词 / 段 粒度切换", tt.Texts())
+	}
+	a.detail.pickPara = true // 正文里也有「段」字，按文字点击会点到正文
+	tt.Frame()
+	if err := tt.Click("第二段 world"); err != nil {
+		t.Fatalf("段粒度应整段可点：%v %v", err, tt.Texts())
+	}
+	tt.Frame()
+	if got := a.pickedText(n.Text); got != "第二段 world" {
+		t.Fatal(got)
+	}
+	a.detail.pick = false
+	tt.Frame()
+	if err := tt.Click("处理"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("转大写"); err != nil {
+		t.Fatalf("%v %v", err, tt.Texts())
+	}
+	if got, _ := a.store.Note(n.ID); !strings.Contains(got.Text, "HELLO") || a.hudUndo == nil {
+		t.Fatal(got.Text)
+	}
+	a.hudUndo()
+	if got, _ := a.store.Note(n.ID); got.Text != n.Text {
+		t.Fatal("撤销恢复原文")
+	}
+	if noteURL(store.Note{Kind: "link", URL: "https://x.com"}) == "" || noteURL(store.Note{Kind: "link", Text: "javascript:alert(1)"}) != "" {
+		t.Fatal("打开链接只放行 http/https")
+	}
+}
