@@ -7,6 +7,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -133,5 +134,87 @@ func TestDetailSelectionToolbar(t *testing.T) {
 	tt.Frame()
 	if a.detailText != "hello **WORLD** 你好" {
 		t.Fatalf("%q", a.detailText)
+	}
+}
+
+func pngBytes(t *testing.T, w, h int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	for i := range img.Pix {
+		img.Pix[i] = byte(i * 7)
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// 图片详情：多图上一张 / 下一张（按钮与 ←→）、i / N · 尺寸、文字备注（截图默认标题视为无备注，⌘⏎ 保存）。
+func TestDetailImageNavAndNote(t *testing.T) {
+	a, _ := testApp(t)
+	f1, _ := a.store.SaveImage(pngBytes(t, 400, 300))
+	f2, _ := a.store.SaveImage(pngBytes(t, 500, 200))
+	n, _, _ := a.store.Add(store.Note{Section: store.SectionInbox, Kind: "image", ImageFile: f1, ImageW: 400, ImageH: 300, Text: "图片 400×300", Attachments: []string{f2}})
+	a.detail = detailState{id: n.ID, pickAnchor: -1, pickEnd: -1, editSel: [2]int{-1, -1}}
+	a.detailImageAt(n, 0)
+	tt := ui.NewTester(a.detailView, 560, 540)
+	tt.Frame()
+	for _, s := range []string{"1 / 2 · 400 × 300", "添加文字备注…"} {
+		if !tt.HasText(s) {
+			t.Fatalf("缺 %q %v", s, tt.Texts())
+		}
+	}
+	if err := tt.Click("下一张"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !tt.HasText("2 / 2 · 500 × 200") {
+		t.Fatal(tt.Texts())
+	}
+	tt.Key(0, ui.KeyLeft)
+	tt.Frame()
+	if a.detail.img != 0 {
+		t.Fatal("← 回上一张")
+	}
+	tt.Click("添加文字备注")
+	tt.Frame()
+	tt.Type("会议白板")
+	tt.Key(ui.Cmd, ui.KeyEnter)
+	tt.Frame()
+	if got, _ := a.store.Note(n.ID); got.Text != "会议白板" || a.detail.imgNote {
+		t.Fatalf("⌘⏎ 保存备注：%q", got.Text)
+	}
+	if !tt.HasText("会议白板") {
+		t.Fatal(tt.Texts())
+	}
+}
+
+// 文本详情：编辑态可改标题，元信息带标题与「改于」。
+func TestDetailTitleEdit(t *testing.T) {
+	a, _ := testApp(t, "正文内容")
+	n := a.store.Notes()[0]
+	a.detail = detailState{id: n.ID, pickAnchor: -1, pickEnd: -1, editSel: [2]int{-1, -1}}
+	a.enterDetailEdit(n)
+	tt := ui.NewTester(a.detailView, 560, 540)
+	tt.Frame()
+	if !tt.HasText("笔记标题") {
+		t.Fatal(tt.Texts())
+	}
+	a.detail.title = "周报草稿"
+	a.saveDetail()
+	if got, _ := a.store.Note(n.ID); got.Title != "周报草稿" {
+		t.Fatal(got.Title)
+	}
+	a.detail.edit = false
+	tt.Frame()
+	found := false
+	for _, s := range tt.Texts() {
+		if strings.HasPrefix(s, "周报草稿 · ") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal(tt.Texts())
 	}
 }

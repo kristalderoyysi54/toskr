@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"image/png"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -33,18 +35,18 @@ type detailState struct {
 	editSel             [2]int            // 进编辑时要落的选区（rune 偏移，-1 = 无）
 	dblFrames           int               // 双击正文后再等几帧进编辑（等选词结果落进 readSel）
 	editRange           [2]int            // 编辑器当前选区（上一帧，rune 偏移）
+	title               string            // 编辑态标题草稿（同 Tauri draftTitle）
+	img                 int               // 多图时当前第几张（主图 + 附件 + 内容块里的图）
+	imgW, imgH          int               // 当前图原始尺寸
+	imgNote             bool              // 图片文字备注编辑中
 }
 
 func (a *app) openDetail(n store.Note) {
 	a.saveDetail()
 	a.detailText = n.Text
-	a.detail = detailState{id: n.ID, pickAnchor: -1, pickEnd: -1, enter: true, editSel: [2]int{-1, -1}}
+	a.detail = detailState{id: n.ID, pickAnchor: -1, pickEnd: -1, enter: true, editSel: [2]int{-1, -1}, title: n.Title}
 	if n.Kind == "image" {
-		if raw, err := a.store.LoadImage(n.ImageFile); err == nil {
-			if src, err := png.Decode(bytes.NewReader(raw)); err == nil {
-				a.detail.full = scaledBitmap(src, 1600)
-			}
-		}
+		a.detailImageAt(n, 0)
 	}
 	if a.detailWin != nil {
 		a.detailWin.Destroy() // 每次重建：位图随窗口释放
@@ -66,7 +68,53 @@ func (a *app) openDetail(n store.Note) {
 func (a *app) saveDetail() {
 	if a.detail.id != "" && a.detail.edit && strings.TrimSpace(a.detailText) != "" {
 		_ = a.store.Update(a.detail.id, a.detailText)
+		if n, ok := a.store.Note(a.detail.id); ok && n.Title != strings.TrimSpace(a.detail.title) {
+			_ = a.store.SetTitle(n.ID, a.detail.title)
+		}
 	}
+	if a.detail.id != "" && a.detail.imgNote {
+		a.saveImageNote()
+	}
+}
+
+// detailImageAt 载入第 i 张图（同 Tauri ImagePreviewView 多图：主图 + 附件 + 内容块里的图）。
+func (a *app) detailImageAt(n store.Note, i int) {
+	files := n.MediaFiles()
+	if len(files) == 0 {
+		return
+	}
+	i = max(0, min(i, len(files)-1))
+	a.detail.img, a.detail.full, a.detail.imgW, a.detail.imgH = i, nil, 0, 0
+	if raw, err := a.store.LoadImage(files[i]); err == nil {
+		if src, err := png.Decode(bytes.NewReader(raw)); err == nil {
+			a.detail.full = scaledBitmap(src, 1600)
+			a.detail.imgW, a.detail.imgH = src.Bounds().Dx(), src.Bounds().Dy()
+		}
+	}
+}
+
+var shotCaption = regexp.MustCompile(`^(图片|Image) \d+×\d+$`)
+
+// imageNoteText：图片卡的文字备注；截图默认标题「图片 W×H」视为没有备注。
+func imageNoteText(n store.Note) string {
+	if shotCaption.MatchString(strings.TrimSpace(n.Text)) {
+		return ""
+	}
+	return n.Text
+}
+
+// saveImageNote：保存图片文字备注；清空时回到默认标题，卡面不至于空白。
+func (a *app) saveImageNote() {
+	n, ok := a.store.Note(a.detail.id)
+	a.detail.imgNote = false
+	if !ok {
+		return
+	}
+	t := strings.TrimSpace(a.detailText)
+	if t == "" {
+		t = fmt.Sprintf(tr("图片 %d×%d"), n.ImageW, n.ImageH)
+	}
+	_ = a.store.Update(n.ID, t)
 }
 
 func (a *app) detailView(c *ui.Context) {
@@ -105,7 +153,21 @@ func (a *app) detailKeys(c *ui.Context, n store.Note) {
 		a.showHUD("ok", tr("已保存"))
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyEnter) {
-		a.sendDetail(n)
+		if a.detail.imgNote { // 备注编辑中 ⌘⏎ 是保存（同 Tauri）
+			a.saveImageNote()
+		} else {
+			a.sendDetail(n)
+		}
+	}
+	if n.Kind == "image" && !a.detail.imgNote {
+		if files := n.MediaFiles(); len(files) > 1 {
+			if c.Shortcut(0, ui.KeyLeft) && a.detail.img > 0 {
+				a.detailImageAt(n, a.detail.img-1)
+			}
+			if c.Shortcut(0, ui.KeyRight) && a.detail.img < len(files)-1 {
+				a.detailImageAt(n, a.detail.img+1)
+			}
+		}
 	}
 	if c.Shortcut(0, ui.KeyW) && !a.detail.edit && n.Kind != "image" { // W 切换选词模式（同 Tauri）
 		a.detail.pick, a.detail.pickAnchor, a.detail.pickEnd = !a.detail.pick, -1, -1
@@ -127,6 +189,8 @@ func (a *app) detailKeys(c *ui.Context, n store.Note) {
 	}
 	if c.Shortcut(0, ui.KeyEscape) {
 		switch {
+		case a.detail.imgNote: // Esc 保存并退出（同 Tauri）
+			a.saveImageNote()
 		case a.detail.edit:
 			a.detail.edit, a.detailText = false, n.Text
 		case a.detail.pick:
@@ -141,9 +205,21 @@ func (a *app) detailHeader(c *ui.Context, k tokens, n store.Note) {
 		parts := []string{}
 		if n.SourceApp != "" {
 			parts = append(parts, tr("来自 ")+n.SourceApp)
+		} else {
+			parts = append(parts, tr("笔记"))
 		}
-		parts = append(parts, tr("创建 ")+ago(n.CreatedAt, a.now()), itoa(utf8.RuneCountInString(n.Text))+tr(" 字"))
-		text(c, strings.Join(parts, " · "), 10, 14, 400, k.muted).SingleLine().Grow(1).Basis(0)
+		parts = append(parts, tr("创建 ")+ago(n.CreatedAt, a.now()))
+		if n.UpdatedAt.After(n.CreatedAt) {
+			parts = append(parts, tr("改于 ")+ago(n.UpdatedAt, a.now()))
+		}
+		chars := utf8.RuneCountInString(n.Text)
+		parts = append(parts, strconv.Itoa(chars)+tr(" 字"))
+		spans := []ui.Span{{Text: strings.Join(parts, " · "), Color: k.muted}}
+		if t := strings.TrimSpace(n.Title); t != "" {
+			spans = append([]ui.Span{{Text: t + " · ", Color: k.fg, Weight: 500}}, spans...)
+		}
+		ui.RichText(c, spans...).Font(fontSans).FontSize(10).FixedLineHeight(14).SingleLine().Grow(1).Basis(0).
+			Tooltip(fmt.Sprintf(tr("%d 字符 · %d 词 · %d 行"), chars, len(strings.Fields(n.Text)), strings.Count(n.Text, "\n")+1))
 		pin := ui.Box(c).Size(22, 22).Radius(8).Center().Tooltip(tr("钉在最前"))
 		col := k.muted
 		if a.detail.pinned {
@@ -224,13 +300,17 @@ func (a *app) detailBody(c *ui.Context, k tokens, s settingsTokens, n store.Note
 		in := body.AnimateTo("in", 1, springSnappy)
 		body.Opacity(min(in, 1)).Translate(0, 6*(1-in))
 		body.Children(func() {
-			if a.detail.full != nil {
-				w, h := ui.ImageSize(a.detail.full)
-				dw := min(w, 520)
-				ui.Image(c, a.detail.full).Size(dw, h*dw/max(w, 1)).Radius(8).Margin(5.85, 0, 0, 0)
+			if n.Kind == "image" {
+				a.detailImage(c, k, s, n)
 			}
 			switch {
+			case n.Kind == "image":
+				// 图片卡的文字在备注条里编辑
 			case a.detail.edit:
+				ui.Row(c).Margin(0, 0, 8, 0).Padding(0, 0, 8, 0).BorderWidth(0, 0, 1, 0).BorderColor(k.inputBorder.Alpha(0.5)).Children(func() {
+					ui.TextInputBase(c, &a.detail.title).Grow(1).Font(fontSans).FontSize(16).FixedLineHeight(22).FontWeight(600).TextColor(k.fg).
+						PlaceholderColor(k.muted.Alpha(0.5)).Placeholder(tr("添加标题（可选）")).Label(tr("笔记标题"))
+				})
 				ta := ui.TextAreaBase(c, &a.detailText).FillWidth().Margin(5.85, 0, 0, 0).Lines(12, 1000).Font(fontSans).FontSize(13).
 					FixedLineHeight(21.125).TextColor(k.fg).Focus()
 				if sel := a.detail.editSel; sel[0] >= 0 { // 双击 / 划词进编辑：落在同一处（同 Tauri pendingSelectionRef）
@@ -566,4 +646,94 @@ func mapReadSelection(src string, parts []ui.SelectedText) [2]int {
 		return [2]int{-1, -1}
 	}
 	return [2]int{start, end}
+}
+
+// detailImage：图片 + 多图上一张 / 下一张（圆形半透明钮）+ 底部「i / N · W × H」+ 文字备注条（同 Tauri ImagePreviewView）。
+func (a *app) detailImage(c *ui.Context, k tokens, s settingsTokens, n store.Note) {
+	files := n.MediaFiles()
+	many := len(files) > 1
+	if a.detail.full != nil {
+		w, h := ui.ImageSize(a.detail.full)
+		dw := min(w, 520)
+		ui.Row(c).FillWidth().Margin(5.85, 0, 0, 0).Justify(ui.Center).Children(func() { // 翻页钮贴容器两侧（同 Tauri），小图也不重叠
+			ui.Image(c, a.detail.full).Size(dw, h*dw/max(w, 1)).Radius(8)
+			if !many {
+				return
+			}
+			nav := func(icon, label string, left bool, disabled bool) {
+				b := ui.Box(c).Absolute().Top(h*dw/max(w, 1)/2-14).Size(28, 28).Radius(14).Center().Key("img-" + icon).
+					Role(ui.RoleButton).Label(label).Tooltip(label)
+				if left {
+					b.Left(8)
+				} else {
+					b.Right(8)
+				}
+				bg, fg := ui.RGBA(0, 0, 0, 0.4), ui.RGBA(255, 255, 255, 0.8)
+				if b.Hovered() && !disabled {
+					bg, fg = ui.RGBA(0, 0, 0, 0.6), ui.RGB(255, 255, 255)
+				}
+				if disabled {
+					b.Opacity(0.3)
+				}
+				fadeColor(b, "bg", bg, tweenControl) // token-exception: 叠在图片上的固定暗钮（同 Tauri bg-black/40）
+				b.Children(func() { licon(c, icon, 16, fg) })
+				if b.Clicked() && !disabled {
+					if left {
+						a.detailImageAt(n, a.detail.img-1)
+					} else {
+						a.detailImageAt(n, a.detail.img+1)
+					}
+				}
+			}
+			nav("chevron-left", tr("上一张"), true, a.detail.img == 0)
+			nav("chevron-right", tr("下一张"), false, a.detail.img == len(files)-1)
+		})
+	}
+	var meta []string
+	if many {
+		meta = append(meta, fmt.Sprintf("%d / %d", a.detail.img+1, len(files)))
+	}
+	if a.detail.imgW > 0 {
+		meta = append(meta, fmt.Sprintf("%d × %d", a.detail.imgW, a.detail.imgH))
+	}
+	if len(meta) > 0 {
+		text(c, strings.Join(meta, " · "), 10, 14, 400, k.muted).TextAlign(ui.Center).FillWidth().Margin(6, 0, 0, 0)
+	}
+	// 文字备注条
+	ui.Column(c).Margin(10, 0, 0, 0).Padding(6, 0, 0, 0).BorderWidth(1, 0, 0, 0).BorderColor(k.inputBorder).Children(func() {
+		if a.detail.imgNote {
+			ui.Row(c).Gap(6).AlignItems(ui.End).Children(func() {
+				ui.Box(c).Grow(1).Basis(0).Padding(4, 8).Radius(6).Background(k.fg.Alpha(0.05)).Children(func() {
+					ui.TextAreaBase(c, &a.detailText).FillWidth().Lines(2, 8).Font(fontSans).FontSize(12).FixedLineHeight(18).TextColor(k.fg).
+						PlaceholderColor(k.muted).Placeholder(tr("给这张图片写点文字…")).Label(tr("图片文字备注")).Focus()
+				})
+				if ghostIconButton(c, k, "imgnote-save", "check", tr("保存（⌘⏎）；Esc 保存并退出"), 26, 14, false, true).Clicked() {
+					a.saveImageNote()
+				}
+			})
+			return
+		}
+		note := imageNoteText(n)
+		label := tr("添加文字备注")
+		if note != "" {
+			label = tr("编辑文字备注")
+		}
+		b := ui.Row(c).Padding(4, 6).Gap(6).Radius(6).AlignItems(ui.Center).Key("imgnote").Role(ui.RoleButton).Label(label).Tooltip(label)
+		pc := k.fg.Alpha(0.4)
+		if b.Hovered() {
+			b.Background(k.fg.Alpha(0.1))
+			pc = k.fg.Alpha(0.8)
+		}
+		b.Children(func() {
+			licon(c, "pencil", 12, pc)
+			if note != "" {
+				text(c, note, 12, 18, 400, k.fg.Alpha(0.85)).SingleLine().Grow(1).Basis(0)
+			} else {
+				text(c, tr("添加文字备注…"), 12, 18, 400, k.muted).Grow(1).Basis(0)
+			}
+		})
+		if b.Clicked() {
+			a.detailText, a.detail.imgNote = note, true
+		}
+	})
 }
