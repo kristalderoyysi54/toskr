@@ -103,10 +103,11 @@ type app struct {
 	clock func() time.Time // 可注入时钟（视觉对照测试固定在参照截图时刻）
 
 	// 任务页
-	tasks     []store.Task
-	taskDraft string
-	taskSub   int // 0 今天 1 任务
-	sparkMode bool
+	tasks          []store.Task
+	taskDraft      string
+	taskSub        int // 0 今天 1 任务
+	sparkMode      bool
+	tauriImporting bool // 正在从 Tauri 版导入
 	// 设置页「本机翻译」状态
 	ltStatus                        string
 	ltPreparing, ltFailed, ltOpened bool

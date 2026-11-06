@@ -376,6 +376,15 @@ func (a *app) dataSections(c *ui.Context, k tokens, s settingsTokens) []setSecti
 				a.exportBackup(c)
 			}
 		}},
+		{title: tr("从 Tauri 版导入"), hint: fmt.Sprintf(tr("读取 %s 的笔记、分组、任务、账单与秘文（同 ID 以 Tauri 为准）；会请求一次钥匙串授权，导入前自动写恢复点"), store.TauriDataDir()), control: func() {
+			label := "导入"
+			if a.tauriImporting {
+				label = "导入中…"
+			}
+			if button(c, s, label) && !a.tauriImporting {
+				a.importTauri(nil)
+			}
+		}},
 		{title: tr("从备份合并导入"), hint: tr("本机同 ID 记录优先，导入前自动写恢复点"), control: func() {
 			if button(c, s, "选择文件…") {
 				a.inspectBackup(c)

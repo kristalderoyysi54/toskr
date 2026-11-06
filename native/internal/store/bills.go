@@ -20,6 +20,14 @@ type Bill struct {
 	Reminded   []int     `json:"reminded,omitempty"` // 当前账期已提醒的档位
 	PayMethod  string    `json:"payMethod,omitempty"`
 	History    []Payment `json:"history,omitempty"`
+	// 与 Tauri Bill 同名字段
+	IconFile      string    `json:"iconFile,omitempty"`      // 媒体库里的站点图标
+	FallbackColor string    `json:"fallbackColor,omitempty"` // 首字色块兜底色
+	Category      string    `json:"category,omitempty"`
+	Note          string    `json:"note,omitempty"`
+	StartedAt     time.Time `json:"startedAt,omitzero"`
+	CreatedAt     time.Time `json:"createdAt,omitzero"`
+	CatalogID     string    `json:"catalogId,omitempty"`
 }
 
 type Payment struct {

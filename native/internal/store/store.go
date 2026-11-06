@@ -40,6 +40,43 @@ type Note struct {
 	ImageFile string    `json:"imageFile,omitempty"`
 	ImageW    int       `json:"imageW,omitempty"`
 	ImageH    int       `json:"imageH,omitempty"`
+	// 与 Tauri Note 同名同义的字段（Tauri 数据导入与后续功能对齐用）
+	Title       string         `json:"title,omitempty"`       // 自定义标题（右键「重命名」）
+	Blur        bool           `json:"blur,omitempty"`        // 模糊内容（卡面打码防肩窥）
+	Attachments []string       `json:"attachments,omitempty"` // 附加图片（合并后的组合卡）
+	Blocks      []ContentBlock `json:"contentBlocks,omitempty"`
+	URL         string         `json:"url,omitempty"` // 链接卡
+	LinkIcon    string         `json:"linkIcon,omitempty"`
+	CodeLang    string         `json:"codeLang,omitempty"`
+	UpdatedAt   time.Time      `json:"updatedAt,omitzero"`
+}
+
+// ContentBlock 是富卡的权威内容块（同 Tauri NoteContentBlock）：文字或图片。
+type ContentBlock struct {
+	Type   string `json:"type"` // text | image
+	Text   string `json:"text,omitempty"`
+	File   string `json:"file,omitempty"`
+	Alt    string `json:"alt,omitempty"`
+	Width  int    `json:"width,omitempty"`
+	Height int    `json:"height,omitempty"`
+}
+
+// MediaFiles：笔记引用的全部媒体文件（主图、附件、内容块里的图）。
+func (n Note) MediaFiles() []string {
+	var out []string
+	add := func(f string) {
+		if f != "" && !slices.Contains(out, f) {
+			out = append(out, f)
+		}
+	}
+	add(n.ImageFile)
+	for _, f := range n.Attachments {
+		add(f)
+	}
+	for _, b := range n.Blocks {
+		add(b.File)
+	}
+	return out
 }
 
 type Settings struct {

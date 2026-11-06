@@ -47,8 +47,13 @@ func (s *Store) GCMedia() int {
 	s.mu.Lock()
 	used := map[string]bool{}
 	for _, n := range s.notes {
-		if n.ImageFile != "" {
-			used[n.ImageFile] = true
+		for _, f := range n.MediaFiles() {
+			used[f] = true
+		}
+	}
+	for _, b := range s.bills {
+		if b.IconFile != "" {
+			used[b.IconFile] = true
 		}
 	}
 	s.mu.Unlock()
