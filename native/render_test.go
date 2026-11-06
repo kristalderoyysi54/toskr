@@ -82,3 +82,22 @@ func TestRenderPanelSnapshots(t *testing.T) {
 		f.Close()
 	}
 }
+
+// 阅读态划词 → 编辑器选区：段落 / 列表项按原文定位，跨段取首段起点到末段终点。
+func TestMapReadSelection(t *testing.T) {
+	src := "标题行\n\n- 第一项内容\n- 第二项\n\n最后一段 hello"
+	cases := []struct {
+		parts []ui.SelectedText
+		want  [2]int
+	}{
+		{nil, [2]int{-1, -1}},
+		{[]ui.SelectedText{{Text: "第一项内容", Start: 1, End: 3}}, [2]int{8, 10}},
+		{[]ui.SelectedText{{Text: "第二项", Start: 1, End: 3}, {Text: "最后一段 hello", Start: 0, End: 4}}, [2]int{16, 24}},
+		{[]ui.SelectedText{{Text: "不存在", Start: 0, End: 1}}, [2]int{-1, -1}},
+	}
+	for _, c := range cases {
+		if got := mapReadSelection(src, c.parts); got != c.want {
+			t.Fatalf("%+v → %v，应为 %v", c.parts, got, c.want)
+		}
+	}
+}

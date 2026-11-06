@@ -28,13 +28,16 @@ type detailState struct {
 	tagDraft            string
 	tagOn               bool
 	full                ui.ImageSource
-	enter               bool // 正文待播进场（每次打开一条内容）
+	enter               bool              // 正文待播进场（每次打开一条内容）
+	readSel             []ui.SelectedText // 阅读态的划词选区（上一帧）
+	editSel             [2]int            // 进编辑时要落的选区（rune 偏移，-1 = 无）
+	dblFrames           int               // 双击正文后再等几帧进编辑（等选词结果落进 readSel）
 }
 
 func (a *app) openDetail(n store.Note) {
 	a.saveDetail()
 	a.detailText = n.Text
-	a.detail = detailState{id: n.ID, pickAnchor: -1, pickEnd: -1, enter: true}
+	a.detail = detailState{id: n.ID, pickAnchor: -1, pickEnd: -1, enter: true, editSel: [2]int{-1, -1}}
 	if n.Kind == "image" {
 		if raw, err := a.store.LoadImage(n.ImageFile); err == nil {
 			if src, err := png.Decode(bytes.NewReader(raw)); err == nil {
@@ -211,7 +214,11 @@ func (a *app) detailTags(c *ui.Context, k tokens, s settingsTokens, n store.Note
 }
 
 func (a *app) detailBody(c *ui.Context, k tokens, s settingsTokens, n store.Note) {
-	ui.Scroll(c).Fill().Scrollbars(false).Children(func() {
+	sc := ui.Scroll(c).Fill().Scrollbars(false)
+	if a.detail.edit { // 编辑态一圈内嵌描边 + 浅蓝底（同 Tauri editing && bg-primary/[0.04] ring-inset ring-primary/25）
+		sc.Background(s.primary.Alpha(0.04)).InsetShadow(0, 0, 0, 1, s.primary.Alpha(0.25))
+	}
+	sc.Children(func() {
 		body := ui.Column(c).Padding(64, 20, 84, 20)
 		if a.detail.enter { // 正文进场：opacity 0 → 1、y 6 → 0，springSnappy（Tauri motion.div key=gen）
 			body.Jump("in", 0)
@@ -227,14 +234,40 @@ func (a *app) detailBody(c *ui.Context, k tokens, s settingsTokens, n store.Note
 			}
 			switch {
 			case a.detail.edit:
-				ui.TextAreaBase(c, &a.detailText).FillWidth().Margin(5.85, 0, 0, 0).Lines(12, 1000).Font(fontSans).FontSize(13).
+				ta := ui.TextAreaBase(c, &a.detailText).FillWidth().Margin(5.85, 0, 0, 0).Lines(12, 1000).Font(fontSans).FontSize(13).
 					FixedLineHeight(21.125).TextColor(k.fg).Focus()
+				if sel := a.detail.editSel; sel[0] >= 0 { // 双击 / 划词进编辑：落在同一处（同 Tauri pendingSelectionRef）
+					ta.SetTextSelection(sel[0], sel[1])
+					a.detail.editSel = [2]int{-1, -1}
+				}
 			case a.detail.pick:
 				a.pickView(c, k, s, n.Text)
-			case a.detail.raw || n.Kind == "code":
-				text(c, n.Text, 13, 21.125, 400, k.fg).Font(fontMono).Wrap().Selectable().Margin(5.85, 0, 0, 0)
 			default:
-				ui.Column(c).Padding(5.85, 0, 0, 0).Gap(5.85).Children(func() { renderMarkdown(c, k, n.Text, float32(a.store.Settings().DetailFontSize)+1) })
+				// 阅读态整块共用一个选区：划词后点「编辑」或双击正文，进编辑时选区落在原文同一处
+				read := ui.Column(c).Padding(5.85, 0, 0, 0).Gap(5.85).Selectable().Key("detail-read")
+				read.Children(func() {
+					if a.detail.raw || n.Kind == "code" {
+						text(c, n.Text, 13, 21.125, 400, k.fg).Font(fontMono).Wrap()
+					} else {
+						renderMarkdown(c, k, n.Text, float32(a.store.Settings().DetailFontSize)+1)
+					}
+				})
+				// 可选文字在按下时就把双击拿去选词，DoubleClicked 收不到；在输入钩子里看点击数、不拦截，
+				// 等选词落定（下下帧）再进编辑，编辑器里选中同一个词（同 Tauri 双击正文进编辑）
+				read.HandleInput(func(ev ui.InputEvent) bool {
+					if ev.Kind == ui.InputPointerDown && ev.Button == 0 && ev.Clicks == 2 && n.Kind != "image" {
+						a.detail.dblFrames = 2
+					}
+					return false
+				})
+				a.detail.readSel = read.SelectedTexts()
+				if a.detail.dblFrames > 0 {
+					if a.detail.dblFrames--; a.detail.dblFrames == 0 {
+						a.enterDetailEdit(n)
+					} else {
+						c.Invalidate()
+					}
+				}
 			}
 		})
 	})
@@ -263,13 +296,13 @@ func renderMarkdown(c *ui.Context, k tokens, src string, fs float32) {
 			}
 			code := strings.Join(lines[i+1:min(j, len(lines))], "\n")
 			ui.Column(c).Padding(8, 10).Radius(8).Background(k.track).Key("code" + itoa(i)).Children(func() {
-				text(c, code, 12, 18, 400, k.fg).Font(fontMono).Wrap().Selectable()
+				text(c, code, 12, 18, 400, k.fg).Font(fontMono).Wrap()
 			})
 			i = j + 1
 		case hRe.MatchString(line):
 			m := hRe.FindStringSubmatch(line)
 			size := fs * []float32{1.54, 1.31, 1.15, 1.08, 1, 1}[len(m[1])-1]
-			text(c, m[2], size, size*1.4, 600, k.fg).Wrap().Selectable()
+			text(c, m[2], size, size*1.4, 600, k.fg).Wrap()
 			i++
 		case olRe.MatchString(line) || ulRe.MatchString(line):
 			ordered := olRe.MatchString(line)
@@ -285,7 +318,7 @@ func renderMarkdown(c *ui.Context, k tokens, src string, fs float32) {
 					}
 					ui.Row(c).AlignItems(ui.Start).Children(func() {
 						text(c, marker, fs, lh, 400, k.fg).Width(18.2).Padding(0, 3.6, 0, 0).TextAlign(ui.End)
-						text(c, body, fs, lh, 400, k.fg).Wrap().Selectable().Grow(1).Basis(0)
+						text(c, body, fs, lh, 400, k.fg).Wrap().Grow(1).Basis(0)
 					})
 					i++
 				}
@@ -296,7 +329,7 @@ func renderMarkdown(c *ui.Context, k tokens, src string, fs float32) {
 				!hRe.MatchString(lines[j]) && !strings.HasPrefix(strings.TrimSpace(lines[j]), "```") {
 				j++
 			}
-			text(c, strings.Join(lines[i:j], "\n"), fs, lh, 400, k.fg).Wrap().Selectable()
+			text(c, strings.Join(lines[i:j], "\n"), fs, lh, 400, k.fg).Wrap()
 			i = j
 		}
 	}
@@ -444,7 +477,7 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 		a.showHUD("ok", tr("已复制"))
 	}
 	if n.Kind != "image" && dockButton(c, k, "", tr("编辑"), false).Clicked() {
-		d.edit, d.pick, a.detailText = true, false, n.Text
+		a.enterDetailEdit(n)
 	}
 	// 分体发送钮：左「发送到 目标 ⌘⏎」，右下拉
 	dark := k.dark
@@ -501,4 +534,37 @@ func (a *app) sendDetail(n store.Note) {
 		n.Text = a.detailText
 	}
 	a.send([]store.Note{n})
+}
+
+// enterDetailEdit：进编辑态；阅读态有划词选区时换算成原文偏移，编辑器里选中同一段。
+func (a *app) enterDetailEdit(n store.Note) {
+	a.saveDetail()
+	a.detail.edit, a.detail.pick, a.detailText = true, false, n.Text
+	a.detail.editSel = mapReadSelection(n.Text, a.detail.readSel)
+}
+
+// mapReadSelection：阅读态各段的选区 → 原文 rune 区间。渲染出的段落 / 列表项 / 标题 / 代码块都是原文的子串，
+// 按构建顺序依次在原文里定位；对不上时返回 {-1,-1}（编辑器光标照常在开头）。
+func mapReadSelection(src string, parts []ui.SelectedText) [2]int {
+	if len(parts) == 0 {
+		return [2]int{-1, -1}
+	}
+	from, start, end := 0, -1, -1
+	for i, p := range parts {
+		idx := strings.Index(src[from:], p.Text)
+		if idx < 0 {
+			return [2]int{-1, -1}
+		}
+		idx += from
+		base := utf8.RuneCountInString(src[:idx])
+		if i == 0 {
+			start = base + p.Start
+		}
+		end = base + p.End
+		from = idx + len(p.Text)
+	}
+	if start < 0 || end < start {
+		return [2]int{-1, -1}
+	}
+	return [2]int{start, end}
 }
