@@ -325,7 +325,7 @@ func formSelect(c *ui.Context, k tokens, key, label string, w float32, menu func
 		text(c, label, 12, 17, 400, k.fg).SingleLine().Grow(1).Basis(0)
 		licon(c, "chevron-down", 12, k.muted)
 	})
-	b.PopoverMenu(menu)
+	b.PopoverMenuButton(menu)
 }
 
 func (a *app) billConfirm(c *ui.Context, k tokens, s settingsTokens) {

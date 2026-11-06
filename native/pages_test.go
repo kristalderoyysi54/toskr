@@ -662,3 +662,35 @@ func TestDoubleClickSends(t *testing.T) {
 		t.Fatalf("多选整组发送 %q", got)
 	}
 }
+
+// 订阅确认表单：货币 / 类别下拉左键点开（应用内浮层菜单），选中即写回草稿。
+func TestBillFormSelects(t *testing.T) {
+	a, tt := testApp(t)
+	st := a.store.Settings()
+	st.SubscriptionsEnabled = true
+	_ = a.store.SetSettings(st)
+	a.switchPage(pageTasks)
+	a.taskSub = 2
+	a.openBillForm(nil)
+	a.startConfirm(&billCatalog[0], false)
+	tt.Frame()
+	if err := tt.Click("¥ CNY"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("US$ USD"); err != nil {
+		t.Fatalf("%v %v", err, tt.Texts())
+	}
+	tt.Frame()
+	if a.billForm.currency != "US$" {
+		t.Fatal(a.billForm.currency)
+	}
+	tt.Click("娱乐")
+	tt.Frame()
+	if err := tt.Click("开发"); err != nil {
+		t.Fatalf("%v %v", err, tt.Texts())
+	}
+	if a.billForm.category != "dev" {
+		t.Fatal(a.billForm.category)
+	}
+}

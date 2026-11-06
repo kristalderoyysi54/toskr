@@ -101,3 +101,37 @@ func TestMapReadSelection(t *testing.T) {
 		}
 	}
 }
+
+// 详情窗划词工具条：编辑态选中 → 已选 N 字 · 发送选中 · 复制 · 粗体 / 斜体 · 处理（转大写替换选区并保持选中）。
+func TestDetailSelectionToolbar(t *testing.T) {
+	a, _ := testApp(t, "hello world 你好")
+	n := a.store.Notes()[0]
+	a.detail = detailState{id: n.ID, pickAnchor: -1, pickEnd: -1, editSel: [2]int{-1, -1}}
+	a.enterDetailEdit(n)
+	a.detail.editSel = [2]int{6, 11} // world
+	tt := ui.NewTester(a.detailView, 560, 540)
+	tt.Frame()
+	tt.Frame()
+	for _, s := range []string{"已选 5 字", "发送选中"} {
+		if !tt.HasText(s) {
+			t.Fatalf("缺 %q %v", s, tt.Texts())
+		}
+	}
+	if err := tt.Click("处理选中内容"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("转大写"); err != nil {
+		t.Fatalf("%v %v", err, tt.Texts())
+	}
+	tt.Frame()
+	tt.Frame()
+	if a.detailText != "hello WORLD 你好" || a.detail.editRange != [2]int{6, 11} {
+		t.Fatalf("%q %v", a.detailText, a.detail.editRange)
+	}
+	tt.Click("粗体（⌘B）")
+	tt.Frame()
+	if a.detailText != "hello **WORLD** 你好" {
+		t.Fatalf("%q", a.detailText)
+	}
+}

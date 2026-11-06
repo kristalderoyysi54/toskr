@@ -32,6 +32,7 @@ type detailState struct {
 	readSel             []ui.SelectedText // 阅读态的划词选区（上一帧）
 	editSel             [2]int            // 进编辑时要落的选区（rune 偏移，-1 = 无）
 	dblFrames           int               // 双击正文后再等几帧进编辑（等选词结果落进 readSel）
+	editRange           [2]int            // 编辑器当前选区（上一帧，rune 偏移）
 }
 
 func (a *app) openDetail(n store.Note) {
@@ -93,6 +94,7 @@ func (a *app) detailView(c *ui.Context) {
 		})
 		ui.Row(c).Absolute().Left(0).Right(0).Bottom(0).Padding(40, 16, 12, 16).Gap(4).Justify(ui.Center).AlignItems(ui.Center).
 			Children(func() { a.detailDock(c, k, s, n) })
+		a.detailSelectionBar(c, k, n)
 	})
 }
 
@@ -240,6 +242,7 @@ func (a *app) detailBody(c *ui.Context, k tokens, s settingsTokens, n store.Note
 					ta.SetTextSelection(sel[0], sel[1])
 					a.detail.editSel = [2]int{-1, -1}
 				}
+				a.detail.editRange[0], a.detail.editRange[1] = ta.TextSelection()
 			case a.detail.pick:
 				a.pickView(c, k, s, n.Text)
 			default:
@@ -541,6 +544,7 @@ func (a *app) enterDetailEdit(n store.Note) {
 	a.saveDetail()
 	a.detail.edit, a.detail.pick, a.detailText = true, false, n.Text
 	a.detail.editSel = mapReadSelection(n.Text, a.detail.readSel)
+	a.detail.editRange = [2]int{}
 }
 
 // mapReadSelection：阅读态各段的选区 → 原文 rune 区间。渲染出的段落 / 列表项 / 标题 / 代码块都是原文的子串，
