@@ -389,6 +389,11 @@ func (a *app) card(c *ui.Context, i int) {
 			ui.Text(c, meta).FontSize(10).TextColor(t.TextMuted).SingleLine().Grow(1)
 			if a.aiBusy == n.ID {
 				ui.Spinner(c).Size(12, 12)
+				if a.aiCancel != nil {
+					if ghostIconButton(c, tok(c), "ai-cancel-"+n.ID, "x", tr("取消 AI 请求"), 18, 11, false, true).Clicked() {
+						a.cancelAI()
+					}
+				}
 			}
 			if n.Kept {
 				ui.Badge(c, tr("保留"))

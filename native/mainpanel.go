@@ -562,6 +562,7 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 				src = tr("来自 ") + n.SourceApp
 			}
 			text(c, src, 10, 14, 400, k.muted).SingleLine().Grow(1)
+			a.aiBusyMark(c, k, n.ID)
 			text(c, ago(n.CreatedAt, time.Now()), 10, 14, 400, k.muted)
 		})
 		if n.Blur {

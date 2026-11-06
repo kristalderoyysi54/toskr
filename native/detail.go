@@ -644,6 +644,11 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 		if u := noteURL(n); u != "" && dockButton(c, k, "", tr("打开链接"), false).Clicked() {
 			_ = exec.Command("/usr/bin/open", u).Start()
 		}
+		if a.aiBusy == n.ID && a.aiCancel != nil { // AI 改写进行中：可取消（同 Tauri 结果核对的「取消」）
+			if dockButton(c, k, "x", tr("取消 AI 请求"), false).Clicked() {
+				a.cancelAI()
+			}
+		}
 		proc := dockButton(c, k, "wand-sparkles", tr("处理"), false)
 		proc.PopoverMenuButton(func(m *ui.Menu) {
 			for _, op := range textOps { // 本地文本处理（同 Tauri TEXT_OPS）：作用于全文，可撤销

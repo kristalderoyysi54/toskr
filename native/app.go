@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -87,7 +88,8 @@ type app struct {
 	clipPickAt                          ui.Rect           // 弹出浮层挂靠的浮钮位置
 	history                             []delivery
 	thumbs                              map[string]ui.ImageSource
-	aiBusy                              string // 正在 AI 处理的笔记 ID
+	aiBusy                              string             // 正在 AI 处理的笔记 ID
+	aiCancel                            context.CancelFunc // 进行中的 AI 改写（可取消）
 
 	// 1:1 主面板
 	noteGroups                               []noteGroup
