@@ -8,6 +8,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"github.com/toskr/native/internal/macos"
 	"github.com/toskr/native/internal/store"
 )
 
@@ -57,7 +58,11 @@ func (a *app) templateMenu(m *ui.Menu, label string, notes func() []store.Note) 
 			}
 			for _, sn := range sec.items {
 				if sm.Item(sn.Label).Chosen() {
+					if heldMods != nil && heldMods()&macos.FlagOption != 0 { // 按住 ⌥ 点：先检查再发送（同 Tauri isMenuAltHeld → forcePreflight）
+						a.forceCheck = true
+					}
 					a.sendWithTemplate(notes(), sn)
+					a.forceCheck = false
 				}
 			}
 		}
@@ -65,6 +70,7 @@ func (a *app) templateMenu(m *ui.Menu, label string, notes func() []store.Note) 
 		if sm.Item(tr("管理模板…")).Chosen() {
 			a.openSettingsAt(setPagePaste, 1)
 		}
+		sm.Item(tr("按住 ⌥ 点击：先检查再发送")).Disabled(true)
 	})
 }
 

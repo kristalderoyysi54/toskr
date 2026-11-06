@@ -948,7 +948,15 @@ func (a *app) selectionBar(c *ui.Context, k tokens) {
 			b.Children(func() { licon(c, icon, 14, b.AnimateColor("fg", col, tweenControl)) })
 			return enabled && b.Clicked()
 		}
-		if act("merge", tr("合并笔记"), n >= 2) {
+		chosen := a.chosenNotes()
+		mergeTip, mixed := tr("合并笔记"), store.MergeDomainsMixed(chosen)
+		switch {
+		case mixed:
+			mergeTip = tr("剪贴卡与笔记不能混合合并")
+		case len(chosen) > 0 && chosen[0].Section == store.SectionClipboard:
+			mergeTip = tr("合并为新卡（原剪贴卡保留）")
+		}
+		if act("merge", mergeTip, n >= 2 && !mixed) {
 			a.mergeChosen(c)
 		}
 		if act("trash-2", tr("删除"), true) {

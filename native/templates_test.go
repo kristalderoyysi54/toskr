@@ -113,3 +113,29 @@ func TestCheckSendShowsPayloadFirst(t *testing.T) {
 		t.Fatalf("剪贴卡不应有导出 %s", m)
 	}
 }
+
+// 按住 ⌥ 选模板：先过检查条（展示将发送的内容），不直接发。
+func TestTemplateOptionClickChecksFirst(t *testing.T) {
+	a, tt := testApp(t, "早上好")
+	sys := &recSys{}
+	a.sys = sys
+	a.target = macos.FrontApp{PID: 42, Name: "ChatGPT", BundleID: "com.openai.chat"}
+	st := a.store.Settings()
+	st.PromptSnippets = []store.PromptSnippet{{ID: "t1", Label: "翻译", Text: "翻译成英文：{内容}", GroupID: store.GeneralPromptGroup}}
+	_ = a.store.SetSettings(st)
+	orig := heldMods
+	t.Cleanup(func() { heldMods = orig })
+	heldMods = func() uint64 { return macos.FlagOption }
+	tt.Frame()
+	_ = tt.RightClick("早上好")
+	if err := tt.ChooseMenuItem("用模板发送", "翻译"); err != nil {
+		t.Fatalf("%v %v", err, tt.Menu())
+	}
+	tt.Frame()
+	if len(sys.sent()) != 0 || len(a.pending) != 1 || !tt.HasText("翻译成英文：早上好") {
+		t.Fatalf("应先显示检查条 sent=%v %v", sys.sent(), tt.Texts())
+	}
+	if a.forceCheck {
+		t.Fatal("forceCheck 应只作用于这一次")
+	}
+}

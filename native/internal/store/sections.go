@@ -190,6 +190,56 @@ func (s *Store) Merge(ids []string, sep string) (Note, []Note, bool) {
 	return merged, originals, ok
 }
 
+// MergeDomainsMixed：剪贴卡与笔记混选（同 Tauri mergeDomainsMixed，两种合并语义不能混用）。
+func MergeDomainsMixed(notes []Note) bool {
+	clips := 0
+	for _, n := range notes {
+		if n.Section == SectionClipboard {
+			clips++
+		}
+	}
+	return clips > 0 && clips < len(notes)
+}
+
+// MergeClipsAsNew：剪贴板域是历史记录，合并不消费原卡——按捕获先后（列表底→顶）拼成一张新组合卡置顶（同 Tauri mergeNotes 剪贴分支）。
+func (s *Store) MergeClipsAsNew(ids []string, sep string) (Note, bool) {
+	var combo Note
+	ok := false
+	_ = s.mutate(func() bool {
+		pick := map[string]bool{}
+		for _, id := range ids {
+			pick[id] = true
+		}
+		var src []Note
+		for _, n := range s.notes {
+			if pick[n.ID] {
+				if n.Section != SectionClipboard {
+					return false
+				}
+				src = append(src, n)
+			}
+		}
+		if len(src) < 2 {
+			return false
+		}
+		slices.Reverse(src)
+		var texts []string
+		for _, n := range src {
+			if n.Kind != "image" {
+				texts = append(texts, n.Text)
+			}
+		}
+		combo = Note{ID: newID(), Section: SectionClipboard, Text: strings.Join(texts, sep), CreatedAt: time.Now()}
+		if len(texts) == 0 {
+			return false // 纯图片合并原生版暂不支持组合图卡
+		}
+		s.notes = slices.Concat([]Note{combo}, s.notes)
+		ok = true
+		return true
+	})
+	return combo, ok
+}
+
 // Unmerge 撤销合并：删掉合并项并放回原项。
 func (s *Store) Unmerge(merged Note, originals []Note) error {
 	return s.mutate(func() bool {

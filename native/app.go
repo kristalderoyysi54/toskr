@@ -527,6 +527,19 @@ func (a *app) mergeChosen(c *ui.Context) {
 	for i, n := range notes {
 		ids[i] = n.ID
 	}
+	if store.MergeDomainsMixed(notes) {
+		a.showHUD("warn", tr("剪贴卡与笔记不能混合合并"))
+		return
+	}
+	if notes[0].Section == store.SectionClipboard { // 剪贴域：组合成新卡置顶，原卡保留
+		combo, ok := a.store.MergeClipsAsNew(ids, "\n\n")
+		if !ok {
+			return
+		}
+		a.chosen.Clear()
+		a.showHUDUndo("ok", fmt.Sprintf(tr("已合并 %d 条"), len(ids)), func() { a.store.Delete(combo.ID) })
+		return
+	}
 	merged, originals, ok := a.store.Merge(ids, "\n\n")
 	if !ok {
 		return
