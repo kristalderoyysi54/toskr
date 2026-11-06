@@ -97,7 +97,7 @@ func (a *app) detailKeys(c *ui.Context, n store.Note) {
 	if c.Shortcut(ui.Cmd, ui.KeyS) && a.detail.edit {
 		a.saveDetail()
 		a.detail.edit = false
-		c.Toast(tr("已保存"))
+		a.showHUD("ok", tr("已保存"))
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyEnter) {
 		a.sendDetail(n)
@@ -438,7 +438,7 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 			txt = p
 		}
 		a.copyPrivate(txt)
-		c.Toast(tr("已复制"))
+		a.showHUD("ok", tr("已复制"))
 	}
 	if n.Kind != "image" && dockButton(c, k, "", tr("编辑"), false).Clicked() {
 		d.edit, d.pick, a.detailText = true, false, n.Text
@@ -481,7 +481,7 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 			}
 			if m.Item(tr("仅复制，不发送")).Chosen() {
 				a.copyPrivate(n.Text)
-				c.Toast(tr("已复制"))
+				a.showHUD("ok", tr("已复制"))
 			}
 		})
 	})

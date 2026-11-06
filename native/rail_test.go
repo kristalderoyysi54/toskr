@@ -6,6 +6,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"github.com/toskr/native/internal/macos"
 	"github.com/toskr/native/internal/store"
 )
 
@@ -128,5 +129,67 @@ func TestTaskFilterAndCalendar(t *testing.T) {
 	tt.Frame()
 	if !tt.HasText("2026 年 12 月") {
 		t.Fatal("翻月")
+	}
+}
+
+// 卡片右键补齐：重命名（标题栏就地输入）、模糊、新标签、转为任务（可撤销）；键盘 ⌘1 快发、←→ 单选、p 常用、⌘A 全选。
+func TestCardMenuAndKeys(t *testing.T) {
+	a, tt := testApp(t, "第一条", "第二条")
+	_ = tt.RightClick("第一条")
+	if err := tt.ChooseMenuItem("重命名…"); err != nil {
+		t.Fatalf("%v %v", err, tt.Menu())
+	}
+	tt.Frame()
+	tt.Type("周报")
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	if !tt.HasText("周报") {
+		t.Fatalf("标题 %v", tt.Texts())
+	}
+	_ = tt.RightClick("第二条")
+	_ = tt.ChooseMenuItem("模糊内容")
+	tt.Frame()
+	if tt.HasText("第二条") {
+		t.Fatal("模糊后卡面不应露出原文")
+	}
+	_ = tt.RightClick("周报")
+	_ = tt.ChooseMenuItem("标签", "新标签…")
+	tt.Frame()
+	tt.Type("工作")
+	tt.Key(0, ui.KeyEnter)
+	n0 := a.store.Section(store.SectionInbox)[0]
+	if n0.Title != "周报" || len(n0.Tags) != 1 || n0.Tags[0] != "工作" {
+		t.Fatalf("%+v", n0)
+	}
+	_ = tt.RightClick("周报")
+	if err := tt.ChooseMenuItem("转为任务"); err != nil {
+		t.Fatalf("%v %v", err, tt.Menu())
+	}
+	if len(a.store.Notes()) != 1 || len(a.store.Tasks()) != 1 || a.store.Tasks()[0].Text != "第一条" {
+		t.Fatalf("转为任务 %d %+v", len(a.store.Notes()), a.store.Tasks())
+	}
+	tt.Key(ui.Cmd, ui.KeyZ)
+	if len(a.store.Notes()) != 2 || len(a.store.Tasks()) != 0 {
+		t.Fatal("撤销转为任务")
+	}
+	tt.Frame()
+	tt.Key(0, ui.KeyRight)
+	if a.chosen.Len() != 1 {
+		t.Fatal("→ 单选")
+	}
+	tt.Key(0, ui.KeyP)
+	if n, _ := a.store.Note(a.notes[a.selected].ID); !n.Kept {
+		t.Fatal("p 设为常用")
+	}
+	tt.Key(ui.Cmd, ui.KeyA)
+	if a.chosen.Len() != 2 {
+		t.Fatal("⌘A 全选")
+	}
+	sys := &recSys{}
+	a.sys = sys
+	a.target = macos.FrontApp{PID: 42, Name: "Cursor"}
+	tt.Key(ui.Cmd, ui.Key1)
+	if len(sys.writes) == 0 {
+		t.Fatal("⌘1 快发第一张")
 	}
 }

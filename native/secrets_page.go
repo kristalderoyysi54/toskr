@@ -138,7 +138,7 @@ func (a *app) sealSecret(c *ui.Context, send bool) {
 	}
 	style := secretcodec.NormalizeStyle(st.SecretCipherStyle)
 	if !secretcodec.LengthSupported(text, style) {
-		c.Toast(tr("内容过长，无法生成可接收的秘文"))
+		a.showHUD("warn", tr("内容过长，无法生成可接收的秘文"))
 		return
 	}
 	key := st.SecretKeys[i]
@@ -284,14 +284,14 @@ func (a *app) secretCard(c *ui.Context, k tokens, st store.Settings, sec store.S
 				}
 				if a.iconButton(c, k, "copy", 20, 12, tr("复制明文")) {
 					a.copyPrivate(plain)
-					c.Toast(tr("已复制明文"))
+					a.showHUD("ok", tr("已复制明文"))
 				}
 			}
 			if a.iconButton(c, k, "trash-2", 20, 12, tr("删除")) {
 				if removed, pos, ok := a.store.DeleteSecret(sec.ID); ok {
 					a.remask(sec.ID)
 					a.reload()
-					c.ToastAction(tr("已删除 1 条秘文"), tr("撤销"), func() { _ = a.store.RestoreSecret(removed, pos); a.reload() })
+					a.showHUDUndo("ok", tr("已删除 1 条秘文"), func() { _ = a.store.RestoreSecret(removed, pos); a.reload() })
 				}
 			}
 		})

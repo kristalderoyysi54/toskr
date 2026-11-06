@@ -436,12 +436,12 @@ func (a *app) billRow(c *ui.Context, k tokens, b store.Bill, cur string, now tim
 func (a *app) confirmPaid(c *ui.Context, b store.Bill, cur string) {
 	v, err := strconv.ParseFloat(strings.TrimSpace(a.payAmount), 64)
 	if err != nil || v < 0 {
-		c.Toast(tr("金额无效"))
+		a.showHUD("ok", tr("金额无效"))
 		return
 	}
 	_ = a.store.MarkPaid(b.ID, v, a.now())
 	a.paying = ""
-	c.Toast(fmt.Sprintf(tr("「%s」本期已还 %s"), b.Name, money(cur, v)))
+	a.showHUD("ok", fmt.Sprintf(tr("「%s」本期已还 %s"), b.Name, money(cur, v)))
 	a.reload()
 }
 
@@ -452,7 +452,7 @@ func (a *app) billMenu(c *ui.Context, m *ui.Menu, b store.Bill) {
 	set := func(status, msg string) {
 		b.Status = status
 		_ = a.store.UpdateBill(b)
-		c.Toast(fmt.Sprintf(msg, b.Name))
+		a.showHUD("ok", fmt.Sprintf(msg, b.Name))
 		a.reload()
 	}
 	if b.Status == "active" {
@@ -469,7 +469,7 @@ func (a *app) billMenu(c *ui.Context, m *ui.Menu, b store.Bill) {
 	if m.Item(tr("删除")).Chosen() {
 		removed := b
 		if a.store.DeleteBill(b.ID) {
-			c.ToastAction(fmt.Sprintf(tr("已删除「%s」"), b.Name), tr("撤销"), func() {
+			a.showHUDUndo("ok", fmt.Sprintf(tr("已删除「%s」"), b.Name), func() {
 				_ = a.store.RestoreBill(removed)
 				a.reload()
 			})

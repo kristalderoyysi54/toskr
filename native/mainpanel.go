@@ -409,7 +409,15 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 		if k.pt {
 			head.Radius(0).InsetShadow(0, -1, 0, 0, ptBlack).InsetShadow(1, 1, 0, 0, ui.RGBA(255, 255, 255, 0.6))
 		}
-		head.Children(func() { text(c, cardTitle(n), 11, 16, 600, k.cardHeadText).SingleLine() })
+		head.Children(func() {
+			if !a.cardInlineInput(c, k, n) {
+				title := cardTitle(n)
+				if n.Title != "" {
+					title = n.Title
+				}
+				text(c, title, 11, 16, 600, k.cardHeadText).SingleLine()
+			}
+		})
 		ui.Column(c).Height(62).Margin(4, 8, 0, 8).Clip().Children(func() {
 			if a.editing == n.ID {
 				ui.TextAreaBase(c, &a.editText).Fill().Font(fontSans).FontSize(12).FixedLineHeight(18).TextColor(k.fg).Focus().
@@ -425,6 +433,9 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 						return false
 					})
 				return
+			}
+			if n.Blur {
+				return // 模糊卡不构建正文（旁白与截图都读不到）
 			}
 			if n.Kind == "image" {
 				if img := a.thumb(n.ImageFile); img != nil {
@@ -447,6 +458,9 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 			text(c, src, 10, 14, 400, k.muted).SingleLine().Grow(1)
 			text(c, ago(n.CreatedAt, time.Now()), 10, 14, 400, k.muted)
 		})
+		if n.Blur {
+			blurOverlay(c, k, 20)
+		}
 		if hovered {
 			a.cardActions(c, k, n)
 		}
@@ -549,6 +563,9 @@ func (a *app) compactCard(c *ui.Context, k tokens, n store.Note, hovered bool) {
 			return
 		}
 		line := strings.Join(strings.Fields(n.Text), " ")
+		if n.Blur {
+			line = ""
+		}
 		if n.Kind == "image" {
 			line = tr("图片")
 		}
@@ -558,6 +575,9 @@ func (a *app) compactCard(c *ui.Context, k tokens, n store.Note, hovered bool) {
 			text(c, line, 12, 17, 400, k.fg).SingleLine().Grow(1).Basis(0)
 		}
 	})
+	if n.Blur {
+		blurOverlay(c, k, 16)
+	}
 	if hovered {
 		a.cardActionsAt(c, k, n, 9)
 	}
@@ -576,6 +596,9 @@ func (a *app) cardActionsAt(c *ui.Context, k tokens, n store.Note, bottom float3
 		for _, act := range []struct{ icon, tip string }{
 			{"send", "发送（⌘↵）"}, {"expand", "在详情窗打开"}, {"pencil", "编辑"}, {"eye-off", "模糊内容"}, {"trash-2", "删除"},
 		} {
+			if act.icon == "eye-off" && n.Blur {
+				act.icon, act.tip = "eye", "取消模糊"
+			}
 			b := ui.Box(c).Size(22, 22).Radius(8).Center().Background(k.floatBtn).Border(1, k.floatBorder).
 				Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB).InsetShadow(0, 1, 0, 0, k.floatInset).Tooltip(tr(act.tip))
 			b.Children(func() { licon(c, act.icon, 12, k.muted) })
@@ -587,9 +610,11 @@ func (a *app) cardActionsAt(c *ui.Context, k tokens, n store.Note, bottom float3
 					a.openDetail(n)
 				case "pencil":
 					a.editing, a.editText = n.ID, n.Text
+				case "eye-off", "eye":
+					_ = a.store.SetBlur(n.ID, !n.Blur)
 				case "trash-2":
 					if r, pos, ok := a.store.Delete(n.ID); ok {
-						c.ToastAction(tr("已删除 · ")+preview(r.Text, 14), tr("撤销"), func() { _ = a.store.Restore(r, pos) })
+						a.showHUDUndo("ok", tr("已删除 · ")+preview(r.Text, 14), func() { _ = a.store.Restore(r, pos) })
 					}
 				}
 			}
@@ -836,4 +861,51 @@ func sendText(texts []string) string {
 		fmt.Fprintf(&b, "%d. %s", i+1, t)
 	}
 	return b.String()
+}
+
+// blurOverlay：卡面模糊（同 Tauri data-card-privacy）：不透明底遮住原文，中间闭眼图标；详情窗不受影响。
+func blurOverlay(c *ui.Context, k tokens, icon float32) {
+	ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Radius(10).Background(k.card).Center().PassThrough().Key("privacy").Children(func() {
+		ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Radius(10).LinearGradient(ui.LinearGradient{From: k.track.Alpha(0.7), To: k.track.Alpha(0.4), Angle: 135})
+		licon(c, "eye-closed", icon, k.muted.Alpha(0.6))
+	})
+}
+
+// cardInlineInput：卡片标题栏里的就地输入（右键「重命名…」/「新标签…」），返回是否占用了标题栏。
+func (a *app) cardInlineInput(c *ui.Context, k tokens, n store.Note) bool {
+	switch {
+	case a.titleEditID == n.ID:
+		ui.TextInputBase(c, &a.titleText).Grow(1).Font(fontSans).FontSize(11).TextColor(k.cardHeadText).Placeholder(tr("卡片标题，↵ 保存，留空清除")).
+			Label(tr("卡片标题")).Focus().OnTextKey(func(key ui.TextKey) bool {
+			switch key.Key {
+			case ui.KeyEnter:
+				_ = a.store.SetTitle(n.ID, key.Text())
+				a.titleEditID = ""
+				return true
+			case ui.KeyEscape:
+				a.titleEditID = ""
+				return true
+			}
+			return false
+		})
+		return true
+	case a.tagEditID == n.ID:
+		ui.TextInputBase(c, &a.tagText).Grow(1).Font(fontSans).FontSize(11).TextColor(k.cardHeadText).Placeholder(tr("新标签，↵ 添加")).
+			Label(tr("新标签")).Focus().OnTextKey(func(key ui.TextKey) bool {
+			switch key.Key {
+			case ui.KeyEnter:
+				if t := strings.TrimSpace(key.Text()); t != "" && !slices.Contains(n.Tags, t) && len(n.Tags) < 8 {
+					_ = a.store.SetTags(n.ID, append(slices.Clone(n.Tags), t))
+				}
+				a.tagEditID = ""
+				return true
+			case ui.KeyEscape:
+				a.tagEditID = ""
+				return true
+			}
+			return false
+		})
+		return true
+	}
+	return false
 }

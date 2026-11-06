@@ -316,11 +316,50 @@ func (a *app) panelMenu(c *ui.Context, k tokens) {
 	}
 }
 
+// panelKeys：面板级快捷键（同 Tauri App.tsx 键盘处理）：⌃Tab / ⌘←→ 切页、Esc 逐层退出、⌘F 搜索、⌘Z 撤销、⇧⌘⌫ 清理已完成。
 func (a *app) panelKeys(c *ui.Context) {
-	for i, key := range []ui.Key{ui.Key1, ui.Key2, ui.Key3} {
-		if c.Shortcut(ui.Cmd, key) {
-			a.switchPage(i)
+	typing := a.editing != "" || a.titleEditID != "" || a.tagEditID != "" || a.renamingSec != ""
+	if c.Shortcut(ui.Ctrl, ui.KeyTab) {
+		a.switchPage((a.page + 1) % 3)
+	}
+	if !typing && c.Shortcut(ui.Cmd, ui.KeyLeft) && a.page > 0 {
+		a.switchPage(a.page - 1)
+	}
+	if !typing && c.Shortcut(ui.Cmd, ui.KeyRight) && a.page < 2 {
+		a.switchPage(a.page + 1)
+	}
+	if c.Shortcut(0, ui.KeyEscape) {
+		switch {
+		case a.titleEditID != "" || a.tagEditID != "" || a.renamingSec != "":
+			a.titleEditID, a.tagEditID, a.renamingSec = "", "", ""
+		case a.editing != "":
+			a.editing = ""
+		case a.menuOpen:
+			a.menuOpen = false
+		case a.noteRailOpen:
+			a.noteRailOpen = false
+		case a.searchOpen:
+			a.searchOpen = false
+			a.query = ""
+			a.reload()
+		case a.chosen.Len() > 0:
+			a.chosen.Clear()
+		default:
+			a.hidePanel()
 		}
+	}
+	if c.Shortcut(ui.Cmd, ui.KeyF) && a.page != pageTasks {
+		a.searchOpen = true
+		a.search.Focus()
+	}
+	if !typing && c.Shortcut(ui.Cmd, ui.KeyZ) && a.hudUndo != nil { // HUD「撤销」的键盘入口
+		fn := a.hudUndo
+		a.hudUndo = nil
+		fn()
+		a.showHUD("undone", tr("已撤销"))
+	}
+	if c.Shortcut(ui.Cmd|ui.Shift, ui.KeyBackspace) && (a.page == pageTasks || (a.page == pageNotes && a.noteSub == 0)) {
+		a.clearAllDone(c)
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyP) {
 		a.pinned = !a.pinned
@@ -329,7 +368,7 @@ func (a *app) panelKeys(c *ui.Context) {
 		a.openSettings()
 	}
 	c.OnShortcut(ui.Cmd, ui.KeyQ, mygo.App.Quit)
-	if a.page == pageNotes || a.page == pageClip {
+	if a.page == pageClip || (a.page == pageNotes && a.noteSub == 0) {
 		a.queueKeys(c)
 	}
 }

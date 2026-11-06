@@ -93,14 +93,16 @@ func TestComposerIMECompositionDoesNotSubmit(t *testing.T) {
 
 func TestDeleteWithUndo(t *testing.T) {
 	a, tt := testApp(t, "要删的", "留下的")
+	tt.Key(0, ui.KeyDown)
 	tt.Key(ui.Cmd, ui.KeyBackspace)
 	tt.Frame()
 	if slices.Contains(tt.Texts(), "要删的") || len(a.store.Notes()) != 1 {
 		t.Fatalf("删除失败 %v", tt.Texts())
 	}
-	if err := tt.Click("撤销"); err != nil {
-		t.Fatalf("应出现撤销：%v %v", err, tt.Texts())
+	if a.hudUndo == nil {
+		t.Fatal("应出现可撤销气泡")
 	}
+	tt.Key(ui.Cmd, ui.KeyZ)
 	tt.Frame()
 	if got := a.store.Notes(); len(got) != 2 || got[0].Text != "要删的" {
 		t.Fatalf("撤销应恢复原位 %+v", got)
@@ -122,7 +124,8 @@ func TestSearchFilters(t *testing.T) {
 
 func TestEditCommitWithCmdEnter(t *testing.T) {
 	a, tt := testApp(t, "原文")
-	tt.Key(0, ui.KeyEnter) // 未聚焦输入框时回车进入编辑
+	tt.Key(0, ui.KeyDown)
+	tt.Key(0, ui.KeyEnter) // 有焦点卡、未聚焦输入框时回车进入编辑
 	tt.Frame()
 	if a.editing == "" {
 		t.Fatal("回车应进入编辑")

@@ -28,9 +28,7 @@ func TestCmdClickMultiSelectThenMergeWithUndo(t *testing.T) {
 	if len(notes) != 2 || notes[0].Text != "甲\n\n丙" {
 		t.Fatalf("合并结果 %+v", notes)
 	}
-	if err := tt.Click("撤销"); err != nil {
-		t.Fatal(err)
-	}
+	tt.Key(ui.Cmd, ui.KeyZ) // HUD「撤销」的键盘入口
 	tt.Frame()
 	if len(a.store.Section(store.SectionInbox)) != 3 {
 		t.Fatal("撤销合并应恢复 3 条")
@@ -39,7 +37,8 @@ func TestCmdClickMultiSelectThenMergeWithUndo(t *testing.T) {
 
 func TestDoneFoldAndClearWithUndo(t *testing.T) {
 	a, tt := testApp(t, "要完成的", "留着的")
-	tt.Key(ui.Cmd, ui.KeyD)
+	tt.Key(0, ui.KeyDown) // 焦点落到第一张
+	tt.Key(0, ui.KeyD)    // d = 完成态切换（同 Tauri）
 	tt.Frame()
 	if !tt.HasText("已完成 1") || tt.HasText("要完成的") {
 		t.Fatalf("%v", tt.Texts())
@@ -57,7 +56,7 @@ func TestDoneFoldAndClearWithUndo(t *testing.T) {
 	if len(a.store.Notes()) != 1 {
 		t.Fatal("清理已完成")
 	}
-	_ = tt.Click("撤销")
+	tt.Key(ui.Cmd, ui.KeyZ)
 	tt.Frame()
 	if len(a.store.Notes()) != 2 {
 		t.Fatal("撤销清理")
@@ -106,7 +105,7 @@ func TestTasksQuickAddCompleteAndRecurring(t *testing.T) {
 	a, tt := testApp(t)
 	now := time.Date(2026, 11, 5, 10, 0, 0, 0, time.Local)
 	a.clock = func() time.Time { return now }
-	tt.Key(ui.Cmd, ui.Key3)
+	a.switchPage(pageTasks)
 	tt.Frame()
 	if !tt.HasText("添加今天的任务，回车保存（20:00 到期）…") && !tt.HasText("今天没有安排") {
 		t.Fatalf("今天视图 %v", tt.Texts())
@@ -528,7 +527,7 @@ func TestPageSlideAndHUDGhostKeyframes(t *testing.T) {
 	if !ok {
 		t.Fatal("笔记页应有收件箱")
 	}
-	tt.Key(ui.Cmd, ui.Key1) // 笔记 → 剪贴：剪贴页从左侧 -24 滑入，笔记页向右 +24 滑出
+	tt.Key(ui.Cmd, ui.KeyLeft) // ⌘← 笔记 → 剪贴：剪贴页从左侧 -24 滑入，笔记页向右 +24 滑出
 	tt.Frame()
 	tt.Advance(40 * time.Millisecond)
 	tt.Frame()

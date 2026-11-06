@@ -103,11 +103,13 @@ type app struct {
 	clock func() time.Time // 可注入时钟（视觉对照测试固定在参照截图时刻）
 
 	// 任务页
-	tasks          []store.Task
-	taskDraft      string
-	taskSub        int // 0 今天 1 任务
-	sparkMode      bool
-	tauriImporting bool // 正在从 Tauri 版导入
+	tasks     []store.Task
+	taskDraft string
+	taskSub   int // 0 今天 1 任务
+	sparkMode bool
+	// 卡片右键「重命名…」「新标签…」的就地输入
+	titleEditID, titleText, tagEditID, tagText string
+	tauriImporting                             bool // 正在从 Tauri 版导入
 	// 设置页「本机翻译」状态
 	ltStatus                        string
 	ltPreparing, ltFailed, ltOpened bool
@@ -401,7 +403,7 @@ func (a *app) deleteSelected(c *ui.Context) {
 	if len(removed) > 1 {
 		msg = fmt.Sprintf("已删除 %d 条", len(removed))
 	}
-	c.ToastAction(msg, "撤销", func() {
+	a.showHUDUndo("ok", msg, func() {
 		for i := len(removed) - 1; i >= 0; i-- {
 			_ = a.store.Restore(removed[i].n, removed[i].pos)
 		}
@@ -422,7 +424,7 @@ func (a *app) mergeChosen(c *ui.Context) {
 		return
 	}
 	a.chosen.Clear()
-	c.ToastAction(fmt.Sprintf("已合并 %d 条", len(originals)), "撤销", func() { _ = a.store.Unmerge(merged, originals) })
+	a.showHUDUndo("ok", fmt.Sprintf("已合并 %d 条", len(originals)), func() { _ = a.store.Unmerge(merged, originals) })
 }
 
 func (a *app) repositionPanel() {
@@ -444,7 +446,7 @@ func (a *app) clearAllDone(c *ui.Context) {
 			}
 		}
 		if len(removed) > 0 {
-			c.ToastAction(fmt.Sprintf(tr("已清理 %d 个已完成任务"), len(removed)), tr("撤销"), func() {
+			a.showHUDUndo("ok", fmt.Sprintf(tr("已清理 %d 个已完成任务"), len(removed)), func() {
 				for i := len(removed) - 1; i >= 0; i-- {
 					_ = a.store.RestoreTask(removed[i], pos[i])
 				}
@@ -460,7 +462,7 @@ func (a *app) clearAllDone(c *ui.Context) {
 		}
 	}
 	if len(removed) > 0 {
-		c.ToastAction(fmt.Sprintf("已清理 %d 条已完成", len(removed)), "撤销", func() { _ = a.store.RestoreMany(removed) })
+		a.showHUDUndo("ok", fmt.Sprintf("已清理 %d 条已完成", len(removed)), func() { _ = a.store.RestoreMany(removed) })
 	}
 	a.reload()
 }
@@ -468,7 +470,7 @@ func (a *app) clearAllDone(c *ui.Context) {
 func (a *app) clearDone(c *ui.Context) {
 	removed := a.store.ClearDone(a.section)
 	if len(removed) > 0 {
-		c.ToastAction(fmt.Sprintf("已清理 %d 条已完成", len(removed)), "撤销", func() { _ = a.store.RestoreMany(removed) })
+		a.showHUDUndo("ok", fmt.Sprintf("已清理 %d 条已完成", len(removed)), func() { _ = a.store.RestoreMany(removed) })
 	}
 }
 
@@ -582,7 +584,7 @@ func (a *app) sendQueue() {
 func (a *app) copySelected(c *ui.Context) {
 	if n, ok := a.current(); ok {
 		mygo.Clipboard.WriteText(n.Text)
-		c.Toast("已复制")
+		a.showHUD("ok", "已复制")
 	}
 }
 

@@ -231,6 +231,7 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note) {
 						}
 						return false
 					})
+			case n.Blur: // 模糊卡不构建正文
 			case n.Kind == "image":
 				if img := a.thumb(n.ImageFile); img != nil {
 					w, h := ui.ImageSize(img)
@@ -268,6 +269,9 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note) {
 			}
 			text(c, right, 10, 14, 400, k.muted)
 		})
+		if n.Blur {
+			blurOverlay(c, k, 20)
+		}
 		if hovered {
 			a.clipActions(c, k, n, isLink)
 		}
@@ -304,6 +308,9 @@ func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool) {
 			{"send", "发送（⌘↵）"}, {"pin", "置顶"}, {"copy", "复制"}, {"inbox", "收进笔记"},
 			{open, "打开"}, {"pencil", "编辑"}, {"eye-off", "模糊内容"}, {"trash-2", "删除"},
 		} {
+			if act.icon == "eye-off" && n.Blur {
+				act.icon, act.tip = "eye", "取消模糊"
+			}
 			on := act.icon == "pin" && n.Kept
 			b := ui.Box(c).Size(22, 22).Radius(8).Center().Border(1, k.floatBorder).
 				Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB).InsetShadow(0, 1, 0, 0, k.floatInset).Tooltip(tr(act.tip))
@@ -325,10 +332,10 @@ func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool) {
 				_ = a.store.SetKept(n.ID, !n.Kept)
 			case "copy":
 				mygo.Clipboard.WriteText(n.Text)
-				c.Toast(tr("已复制"))
+				a.showHUD("ok", tr("已复制"))
 			case "inbox":
 				_ = a.store.MoveTo(n.ID, store.SectionInbox)
-				c.Toast(tr("已收进笔记"))
+				a.showHUD("ok", tr("已收进笔记"))
 			case "expand":
 				a.openDetail(n)
 			case "external-link":
@@ -337,9 +344,11 @@ func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool) {
 				}
 			case "pencil":
 				a.editing, a.editText = n.ID, n.Text
+			case "eye-off", "eye":
+				_ = a.store.SetBlur(n.ID, !n.Blur)
 			case "trash-2":
 				if r, pos, ok := a.store.Delete(n.ID); ok {
-					c.ToastAction(tr("已删除 · ")+preview(r.Text, 14), tr("撤销"), func() { _ = a.store.Restore(r, pos) })
+					a.showHUDUndo("ok", tr("已删除 · ")+preview(r.Text, 14), func() { _ = a.store.Restore(r, pos) })
 				}
 			}
 			a.reload()

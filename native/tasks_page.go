@@ -395,7 +395,7 @@ func (a *app) postponeAll(c *ui.Context, k tokens, tasks []store.Task) {
 					t.DueAt = o.at
 					_ = a.store.UpdateTask(t)
 				}
-				c.ToastAction(fmt.Sprintf(tr("已顺延 %d 个任务"), len(before)), tr("撤销"), func() {
+				a.showHUDUndo("ok", fmt.Sprintf(tr("已顺延 %d 个任务"), len(before)), func() {
 					for _, t := range before {
 						_ = a.store.UpdateTask(t)
 					}
@@ -592,7 +592,7 @@ func (a *app) taskRow(c *ui.Context, k tokens, t store.Task, now time.Time) {
 					t.Spark = false // 闪念点 💡 转为正式待办
 					_ = a.store.UpdateTask(t)
 				} else if next, spawned := a.store.CompleteTask(t.ID, !done, a.now()); spawned {
-					c.Toast(tr("已生成下一期：") + dueBadge(next.DueAt, a.now()))
+					a.showHUD("ok", tr("已生成下一期：")+dueBadge(next.DueAt, a.now()))
 				}
 			}
 			title := text(c, t.Text, 13, 18, 400, k.fg).SingleLine().Grow(1).Basis(0)
@@ -634,7 +634,7 @@ func (a *app) taskRow(c *ui.Context, k tokens, t store.Task, now time.Time) {
 			trash.Children(func() { licon(c, "trash-2", 12, k.muted) })
 			if trash.Clicked() {
 				if removed, pos, ok := a.store.DeleteTask(t.ID); ok {
-					c.ToastAction(tr("已删除任务"), tr("撤销"), func() { _ = a.store.RestoreTask(removed, pos) })
+					a.showHUDUndo("ok", tr("已删除任务"), func() { _ = a.store.RestoreTask(removed, pos) })
 				}
 			}
 		})
@@ -696,7 +696,7 @@ func (a *app) taskMenu(c *ui.Context, m *ui.Menu, t store.Task) {
 	m.Separator()
 	if m.Item(tr("删除")).Chosen() {
 		if removed, pos, ok := a.store.DeleteTask(t.ID); ok {
-			c.ToastAction(tr("已删除任务"), tr("撤销"), func() { _ = a.store.RestoreTask(removed, pos) })
+			a.showHUDUndo("ok", tr("已删除任务"), func() { _ = a.store.RestoreTask(removed, pos) })
 		}
 	}
 }

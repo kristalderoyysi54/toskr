@@ -230,7 +230,7 @@ func (a *app) settingsView(c *ui.Context) {
 						if toggle(c, s, &a.openAtLogin) && a.panel != nil {
 							if err := mygo.App.SetOpenAtLogin(a.openAtLogin); err != nil {
 								a.openAtLogin = !a.openAtLogin
-								c.Toast(tr("设置失败：") + err.Error())
+								a.showHUD("warn", tr("设置失败：")+err.Error())
 							}
 						}
 					}},
@@ -285,7 +285,7 @@ func (a *app) settingsView(c *ui.Context) {
 				{title: tr("清空剪贴板分组"), hint: tr("置顶项保留"), control: func() {
 					if button(c, s, "清空") {
 						n := a.store.ClearSection(store.SectionClipboard)
-						c.Toast(tr("已清空 ") + itoa(n) + tr(" 条"))
+						a.showHUD("ok", tr("已清空 ")+itoa(n)+tr(" 条"))
 					}
 				}},
 			}},
@@ -326,10 +326,10 @@ func (a *app) settingsView(c *ui.Context) {
 						textField(c, k, s, &a.setAIKey, 180, "sk-…", true)
 						if button(c, s, "保存") && strings.TrimSpace(a.setAIKey) != "" {
 							if err := mygo.Secrets.Set(aiKeyName, []byte(strings.TrimSpace(a.setAIKey))); err != nil {
-								c.Toast(tr("保存失败：") + err.Error())
+								a.showHUD("warn", tr("保存失败：")+err.Error())
 							} else {
 								a.setAIKey = ""
-								c.Toast(tr("已存入钥匙串"))
+								a.showHUD("ok", tr("已存入钥匙串"))
 							}
 						}
 					})
@@ -404,9 +404,9 @@ func (a *app) dataSections(c *ui.Context, k tokens, s settingsTokens) []setSecti
 					n, err := a.store.ImportBackup(p)
 					importPreview = nil
 					if err != nil {
-						c.Toast(tr("导入失败：") + err.Error())
+						a.showHUD("warn", tr("导入失败：")+err.Error())
 					} else {
-						c.Toast(fmt.Sprintf(tr("已导入 %d 条笔记（导入前已写恢复点）"), n))
+						a.showHUD("ok", fmt.Sprintf(tr("已导入 %d 条笔记（导入前已写恢复点）"), n))
 						a.recovery = a.store.RecoveryPoints()
 					}
 				}
@@ -422,9 +422,9 @@ func (a *app) dataSections(c *ui.Context, k tokens, s settingsTokens) []setSecti
 		points = append(points, setRow{title: recoveryLabel(p), control: func() {
 			if button(c, s, "恢复到此") {
 				if err := a.store.RestoreRecoveryPoint(p); err != nil {
-					c.Toast(tr("恢复失败：") + err.Error())
+					a.showHUD("warn", tr("恢复失败：")+err.Error())
 				} else {
-					c.Toast(tr("已恢复（恢复前的数据也存了一个恢复点）"))
+					a.showHUD("ok", tr("已恢复（恢复前的数据也存了一个恢复点）"))
 					a.recovery = a.store.RecoveryPoints()
 				}
 			}
@@ -475,10 +475,10 @@ func (a *app) exportBackup(c *ui.Context) {
 	}
 	man, err := a.store.ExportBackup(path)
 	if err != nil {
-		c.Toast("导出失败：" + err.Error())
+		a.showHUD("warn", "导出失败："+err.Error())
 		return
 	}
-	c.Toast(fmt.Sprintf("已导出：笔记 %d · 图片 %d", man.Counts["notes"], len(man.Media)))
+	a.showHUD("ok", fmt.Sprintf("已导出：笔记 %d · 图片 %d", man.Counts["notes"], len(man.Media)))
 }
 
 func (a *app) inspectBackup(c *ui.Context) {
@@ -489,7 +489,7 @@ func (a *app) inspectBackup(c *ui.Context) {
 	}
 	p, err := a.store.InspectBackup(paths[0])
 	if err != nil {
-		c.Toast("备份无法使用：" + err.Error())
+		a.showHUD("warn", "备份无法使用："+err.Error())
 		return
 	}
 	importPreview = p
@@ -564,7 +564,7 @@ func (a *app) secretSections(c *ui.Context, k tokens, s settingsTokens, st store
 			textField(c, k, s, &a.newKeyNote, 160, tr("备注（可选）"), false)
 			if button(c, s, "添加") {
 				if strings.TrimSpace(a.newKeyPass) == "" {
-					c.Toast(tr("密钥不能为空"))
+					a.showHUD("ok", tr("密钥不能为空"))
 					return
 				}
 				key := store.SecretKey{ID: fmt.Sprintf("k%d", time.Now().UnixNano()), Label: strings.TrimSpace(a.newKeyLabel),

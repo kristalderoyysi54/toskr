@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"net/url"
+	"os/exec"
 	"slices"
 	"strings"
 	"time"
@@ -11,9 +13,11 @@ import (
 	"github.com/toskr/native/internal/store"
 )
 
+// queueKeys：笔记 / 剪贴页的卡片快捷键（同 Tauri）：⌘⏎ 发送勾选、⌘1-9 快发第 N 张、⌘C 复制为列表、⌘A 全选、
+// ↑↓ 移动焦点、←→ 移动并单选、Space 预览（链接卡开网页）、x 勾选、d 完成、p 置顶 / 常用、Enter 编辑、⌘⌫ 删除焦点卡。
 func (a *app) queueKeys(c *ui.Context) {
-	if a.editing != "" {
-		return // 编辑框自己处理按键
+	if a.editing != "" || a.titleEditID != "" || a.tagEditID != "" {
+		return // 输入框自己处理按键
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyEnter) {
 		a.sendSelected()
@@ -21,23 +25,21 @@ func (a *app) queueKeys(c *ui.Context) {
 	if c.Shortcut(ui.Cmd|ui.Alt, ui.KeyEnter) {
 		a.sendQueue()
 	}
-	if c.Shortcut(ui.Cmd, ui.KeyBackspace) {
-		a.deleteSelected(c)
-	}
-	if c.Shortcut(ui.Cmd, ui.KeyF) {
-		a.search.Focus()
+	for i, key := range []ui.Key{ui.Key1, ui.Key2, ui.Key3, ui.Key4, ui.Key5, ui.Key6, ui.Key7, ui.Key8, ui.Key9} {
+		if c.Shortcut(ui.Cmd, key) && i < len(a.notes) { // Paste 式快发
+			a.send([]store.Note{a.notes[i]})
+		}
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyM) {
 		a.mergeChosen(c)
 	}
-	if a.chosen.Len() > 0 && c.Shortcut(ui.Cmd, ui.KeyC) { // 复制为列表
+	if c.Shortcut(ui.Cmd, ui.KeyC) {
 		a.copyChosenAsList()
 	}
-	if a.chosen.Len() > 0 && c.Shortcut(0, ui.KeyEscape) { // 取消勾选
-		a.chosen.Clear()
-	}
-	if c.Shortcut(ui.Cmd, ui.KeyD) {
-		a.toggleDone()
+	if c.Shortcut(ui.Cmd, ui.KeyA) {
+		for _, n := range a.notes {
+			a.chosen.Add(n.ID)
+		}
 	}
 	if c.Shortcut(ui.Cmd|ui.Alt, ui.KeyRight) {
 		a.stepSection(1)
@@ -45,27 +47,92 @@ func (a *app) queueKeys(c *ui.Context) {
 	if c.Shortcut(ui.Cmd|ui.Alt, ui.KeyLeft) {
 		a.stepSection(-1)
 	}
-	if cur, ok := a.current(); ok && a.focusList {
-		if c.Shortcut(0, ui.KeySpace) { // 预览：原生版用详情窗
+	if c.Shortcut(0, ui.KeyDown) {
+		if a.focusList {
+			a.focusAt(a.selected + 1)
+		} else {
+			a.focusAt(0) // 尚无焦点：落到第一张（同 Tauri idx=-1 → navIds[0]）
+		}
+	}
+	if c.Shortcut(0, ui.KeyUp) {
+		if a.focusList {
+			a.focusAt(a.selected - 1)
+		} else {
+			a.focusAt(0)
+		}
+	}
+	for _, step := range []struct {
+		key ui.Key
+		d   int
+	}{{ui.KeyLeft, -1}, {ui.KeyRight, 1}} {
+		if c.Shortcut(0, step.key) && len(a.notes) > 0 {
+			next := a.selected + step.d
+			if !a.focusList {
+				next = 0
+			}
+			a.focusAt(next)
+			a.chosen.Clear() // 左右导航即单选（⌘⏎ 可直发）
+			a.chosen.Add(a.notes[a.selected].ID)
+		}
+	}
+	cur, ok := a.current()
+	if !ok || !a.focusList {
+		return
+	}
+	if c.Shortcut(0, ui.KeySpace) {
+		if link := noteLink(cur); cur.Kind == "link" && link != "" {
+			_ = exec.Command("/usr/bin/open", link).Start()
+		} else {
 			a.openDetail(cur)
 		}
-		if c.Shortcut(0, ui.KeyX) { // 勾选 / 取消勾选
-			if a.chosen.Has(cur.ID) {
-				a.chosen.Remove(cur.ID)
-			} else {
-				a.chosen.Add(cur.ID)
-			}
+	}
+	if c.Shortcut(0, ui.KeyX) {
+		if a.chosen.Has(cur.ID) {
+			a.chosen.Remove(cur.ID)
+		} else {
+			a.chosen.Add(cur.ID)
+		}
+	}
+	if c.Shortcut(0, ui.KeyD) {
+		_ = a.store.SetDone(cur.ID, !cur.Done)
+		if cur.Done {
+			a.showHUD("ok", tr("已取消完成"))
+		} else {
+			a.showHUD("ok", tr("已标记完成"))
+		}
+	}
+	if c.Shortcut(0, ui.KeyP) {
+		_ = a.store.SetKept(cur.ID, !cur.Kept)
+		clip := cur.Section == store.SectionClipboard
+		switch {
+		case cur.Kept && clip:
+			a.showHUD("ok", tr("已取消置顶"))
+		case cur.Kept:
+			a.showHUD("ok", tr("已取消常用"))
+		case clip:
+			a.showHUD("ok", tr("已置顶"))
+		default:
+			a.showHUD("ok", tr("已设为常用"))
 		}
 	}
 	if c.Shortcut(0, ui.KeyEnter) { // 输入框聚焦时由它先处理回车
 		a.startEdit()
 	}
-	if c.Shortcut(0, ui.KeyDown) {
-		a.choose(a.selected + 1)
+	if c.Shortcut(ui.Cmd, ui.KeyBackspace) {
+		if r, pos, ok := a.store.Delete(cur.ID); ok {
+			a.chosen.Remove(cur.ID)
+			a.showHUDUndo("ok", fmt.Sprintf(tr("已删除 %d 条"), 1), func() { _ = a.store.Restore(r, pos) })
+		}
 	}
-	if c.Shortcut(0, ui.KeyUp) {
-		a.choose(a.selected - 1)
+}
+
+// focusAt：键盘焦点移到第 i 张（夹在范围内）。
+func (a *app) focusAt(i int) {
+	if len(a.notes) == 0 {
+		return
 	}
+	a.focusList = true
+	a.choose(i)
 }
 
 func (a *app) choose(i int) {
@@ -358,6 +425,8 @@ func (a *app) cardMenu(c *ui.Context, m *ui.Menu, i int, n store.Note) {
 		a.selected = i
 	}
 	multi := a.chosen.Len() > 1
+	isClip := n.Section == store.SectionClipboard
+	isImage := n.Kind == "image" || len(n.MediaFiles()) > 0
 	if multi {
 		if m.Item(fmt.Sprintf(tr("发送所选 %d 条"), a.chosen.Len())).Chosen() {
 			a.sendSelected()
@@ -365,41 +434,33 @@ func (a *app) cardMenu(c *ui.Context, m *ui.Menu, i int, n store.Note) {
 		if m.Item(fmt.Sprintf(tr("合并所选 %d 条（⌘M）"), a.chosen.Len())).Chosen() {
 			a.mergeChosen(c)
 		}
+		if m.Item(fmt.Sprintf(tr("复制原文为列表（不脱敏） %d 项"), a.chosen.Len())).Chosen() {
+			a.copyChosenAsList()
+		}
 	} else {
-		if m.Item(tr("发送到 ") + targetName(a.target.Name)).Chosen() {
-			a.sendSelected()
+		if link := noteLink(n); link != "" && m.Item(tr("打开链接")).Chosen() {
+			_ = exec.Command("/usr/bin/open", link).Start()
 		}
-		if n.Kind != "image" && m.Item(tr("编辑")).Chosen() {
-			a.startEdit()
-		}
-		if m.Item(tr("在详情窗打开")).Chosen() {
+		if m.Item(tr("预览")).Chosen() {
 			a.openDetail(n)
 		}
-		if m.Item(tr("复制")).Chosen() {
+		send := tr("发送到对话")
+		if isClip {
+			send = tr("发送 / 添加")
+		}
+		if m.Item(send).Chosen() {
+			a.sendSelected()
+		}
+		if !isImage && m.Item(tr("编辑")).Chosen() {
+			a.startEdit()
+		}
+		if m.Item(tr("复制原文（不脱敏）")).Chosen() {
 			a.copySelected(c)
-		}
-	}
-	m.Submenu(tr("移动到"), func(sm *ui.Menu) {
-		for _, s := range a.store.Sections() {
-			if s.ID != n.Section && sm.Item(sectionName(s)).Chosen() {
-				for _, x := range a.chosenNotes() {
-					_ = a.store.MoveToAt(x.ID, s.ID, 0)
-				}
-				a.chosen.Clear()
-			}
-		}
-	})
-	if m.Item(tr("标记完成（⌘D）")).Chosen() {
-		a.toggleDone()
-	}
-	if n.Section == store.SectionClipboard && !multi {
-		if m.Item(tr("保留")).Checked(n.Kept).Chosen() {
-			_ = a.store.SetKept(n.ID, !n.Kept)
 		}
 	}
 	if n.Kind == "image" && !multi {
 		m.Separator()
-		if m.Item(tr("识别文字")).Chosen() {
+		if m.Item(tr("识别文字 (OCR)")).Chosen() {
 			a.ocrNote(n)
 		}
 		if m.Item(tr("钉到屏幕")).Chosen() {
@@ -412,6 +473,76 @@ func (a *app) cardMenu(c *ui.Context, m *ui.Menu, i int, n store.Note) {
 			a.openRedactor(n)
 		}
 	}
+	m.Separator()
+	done := tr("标记完成")
+	if n.Done {
+		done = tr("取消完成")
+	}
+	if m.Item(done).Chosen() {
+		a.toggleDone()
+	}
+	if !multi {
+		keep := tr("设为常用 · 发送后保留")
+		switch {
+		case isClip && n.Kept:
+			keep = tr("取消固定")
+		case isClip:
+			keep = tr("固定 · 不被清理")
+		case n.Kept:
+			keep = tr("取消常用")
+		}
+		if m.Item(keep).Chosen() {
+			_ = a.store.SetKept(n.ID, !n.Kept)
+		}
+		blur := tr("模糊内容")
+		if n.Blur {
+			blur = tr("取消模糊")
+		}
+		if m.Item(blur).Chosen() {
+			_ = a.store.SetBlur(n.ID, !n.Blur)
+		}
+		if m.Item(tr("重命名…")).Chosen() {
+			a.titleEditID, a.titleText = n.ID, n.Title
+		}
+		m.Submenu(tr("标签"), func(sm *ui.Menu) {
+			for _, t := range a.store.AllTags() {
+				if sm.Item(t).Checked(slices.Contains(n.Tags, t)).Chosen() {
+					tags := slices.Clone(n.Tags)
+					if slices.Contains(tags, t) {
+						tags = slices.DeleteFunc(tags, func(x string) bool { return x == t })
+					} else if len(tags) < 8 {
+						tags = append(tags, t)
+					}
+					_ = a.store.SetTags(n.ID, tags)
+				}
+			}
+			sm.Separator()
+			if sm.Item(tr("新标签…")).Chosen() {
+				a.tagEditID, a.tagText = n.ID, ""
+			}
+		})
+		if !isImage {
+			if m.Item(tr("AI 转任务")).Chosen() {
+				a.noteToTaskAI(n)
+			}
+		}
+		if n.Kind != "image" && m.Item(tr("AI 起标题")).Chosen() {
+			a.suggestTitle(n)
+		}
+		if !isImage && m.Item(tr("转为任务")).Chosen() {
+			a.convertToTask(n, "", nil, tr("已转为任务"))
+		}
+	}
+	m.Submenu(tr("移动到"), func(sm *ui.Menu) {
+		for _, s := range a.store.Sections() {
+			if s.ID != n.Section && sm.Item(sectionName(s)).Chosen() {
+				for _, x := range a.chosenNotes() {
+					_ = a.store.MoveToAt(x.ID, s.ID, 0)
+				}
+				a.chosen.Clear()
+			}
+		}
+	})
 	if n.Kind != "image" && !multi {
 		m.Submenu("AI", func(sm *ui.Menu) {
 			for _, act := range aiActions {
@@ -425,6 +556,21 @@ func (a *app) cardMenu(c *ui.Context, m *ui.Menu, i int, n store.Note) {
 	if m.Item(tr("删除")).Chosen() {
 		a.deleteSelected(c)
 	}
+}
+
+// noteLink：链接卡的 URL，或正文本身就是一个 http(s) 链接。
+func noteLink(n store.Note) string {
+	raw := n.URL
+	if raw == "" {
+		raw = strings.TrimSpace(n.Text)
+	}
+	if strings.ContainsAny(raw, " \n") {
+		return ""
+	}
+	if u, err := url.Parse(raw); err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
+		return u.String()
+	}
+	return ""
 }
 
 func (a *app) composer(c *ui.Context) {
