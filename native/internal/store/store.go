@@ -167,6 +167,13 @@ type Settings struct {
 	AutoBackupDir  string    `json:"autoBackupDir,omitempty"`  // 空 = 文稿/Toskr Native 自动备份
 	AutoBackupKeep int       `json:"autoBackupKeep,omitempty"` // 3 | 7 | 14 | 30，0 = 7
 	AutoBackupAt   time.Time `json:"autoBackupLastAt,omitempty"`
+	// 苹果提醒事项同步（同 Tauri appleReminders*；默认关）
+	RemindersOn      bool      `json:"appleRemindersEnabled,omitempty"`
+	RemindersListID  string    `json:"appleRemindersListId,omitempty"`
+	RemindersAlarm   bool      `json:"appleRemindersAlarm,omitempty"`
+	RemindersSection string    `json:"appleRemindersImportSectionId,omitempty"`
+	RemindersError   string    `json:"appleRemindersLastError,omitempty"`
+	RemindersSyncAt  time.Time `json:"appleRemindersLastSyncAt,omitempty"`
 }
 
 // ShotPrefs 是截图编辑器记住的使用习惯；零值都表示默认（粗细存档位 +1，0 = 默认中档）。

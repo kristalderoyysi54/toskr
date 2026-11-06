@@ -30,6 +30,14 @@ type Task struct {
 	// 提醒档（分钟，0 = 到期时；nil = 只在到期时，空切片 = 不提醒，同 Tauri reminderOffsets）与已发过的提前档
 	ReminderOffsets *[]int `json:"reminderOffsets,omitempty"`
 	EarlyReminded   []int  `json:"earlyReminded,omitempty"`
+	// 苹果提醒事项同步（同 Tauri appleSyncedId / appleSyncOff / appleDone / appleImportItemId / appleTitle / appleNotes / appleDue）
+	AppleSyncedID     string  `json:"appleSyncedId,omitempty"`     // 曾成功同步（= 任务 id）
+	AppleSyncOff      bool    `json:"appleSyncOff,omitempty"`      // 对端删了：不再同步
+	AppleDone         bool    `json:"appleDone,omitempty"`         // 上轮写下的对端完成态
+	AppleImportItemID string  `json:"appleImportItemId,omitempty"` // 从对端导入、待补写 URL 的提醒 id
+	AppleTitle        *string `json:"appleTitle,omitempty"`        // 三方比较基准（nil = 还没有）
+	AppleNotes        *string `json:"appleNotes,omitempty"`
+	AppleDue          *string `json:"appleDue,omitempty"`
 }
 
 // TaskReminderOffsetOptions 同 Tauri TASK_REMINDER_OFFSET_OPTIONS（分钟）。
@@ -106,6 +114,8 @@ func (s *Store) CompleteTask(id string, done bool, now time.Time) (next Task, sp
 				next = *t
 				next.ID, next.Status, next.CompletedAt, next.RemindedAt, next.CreatedAt = newID(), "todo", time.Time{}, time.Time{}, now
 				next.EarlyReminded = nil
+				next.AppleSyncedID, next.AppleSyncOff, next.AppleDone, next.AppleImportItemID = "", false, false, "" // 新一期是新提醒
+				next.AppleTitle, next.AppleNotes, next.AppleDue = nil, nil, nil
 				next.DueAt = due
 				if t.RecurCount > 0 {
 					next.RecurCount = t.RecurCount - 1

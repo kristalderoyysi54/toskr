@@ -10,7 +10,9 @@
       "LSUIElement": true,
       "NSAppleEventsUsageDescription": "Toskr 需要向目标应用粘贴内容",
       "NSCalendarsFullAccessUsageDescription": "Toskr 在「今天」时间轴里只读显示你的日历日程",
-      "NSCalendarsUsageDescription": "Toskr 在「今天」时间轴里只读显示你的日历日程"
+      "NSCalendarsUsageDescription": "Toskr 在「今天」时间轴里只读显示你的日历日程",
+      "NSRemindersFullAccessUsageDescription": "Toskr 把任务同步到提醒事项的「Toskr Native」列表，并读回你在提醒事项里的完成与修改",
+      "NSRemindersUsageDescription": "Toskr 把任务同步到提醒事项的「Toskr Native」列表，并读回你在提醒事项里的完成与修改"
     }
   }
 }

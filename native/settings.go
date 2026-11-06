@@ -461,6 +461,7 @@ func (a *app) settingsView(c *ui.Context) {
 			}},
 			{tr("到期快捷档"), a.duePresetRows(c, k, s, st)},
 			{tr("苹果日历"), a.calendarSettings(c, k, s, st)},
+			{tr("苹果提醒事项"), a.remindersSettings(c, k, s, st)},
 			{tr("AI"), a.aiSettingsRows(c, k, s, st, &changed)},
 		}}},
 		{label: "数据与备份", icon: "database", sections: [][]setSection{a.dataSections(c, k, s)}},
