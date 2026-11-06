@@ -74,8 +74,23 @@ func (a *app) runLong(lc *longCapture) {
 	r := lc.region
 	macos.WarpCursor(r.X+r.W/2, r.Y+r.H/2)
 	time.Sleep(120 * time.Millisecond)
+	// ScreenCaptureKit 连续取帧（macOS 14+，排除本应用窗口）；不可用时退回逐帧截屏
+	stream, serr := macos.StartRegionStream(r.X, r.Y, r.W, r.H)
+	if serr != nil {
+		diag.Push("长截屏 ScreenCaptureKit 不可用，退回逐帧截屏：%v", serr)
+	}
 	var last time.Time
 	capture := func() ([]byte, int, int, error) {
+		if stream != nil {
+			// 有新帧立即返回；画面静止时最多等 100ms 交回上一帧，循环照常检查完成 / 取消
+			pix, w, h, err := stream.Next(100 * time.Millisecond)
+			if err == nil {
+				return pix, w, h, nil
+			}
+			diag.Push("长截屏 ScreenCaptureKit 取帧失败，退回逐帧截屏：%v", err)
+			stream.Close()
+			stream = nil
+		}
 		if wait := longMinInterval - time.Since(last); wait > 0 {
 			time.Sleep(wait)
 		}
@@ -99,6 +114,7 @@ func (a *app) runLong(lc *longCapture) {
 		stop, stats, err = shot.Follow(st, capture, func() shot.Stop { return shot.Stop(lc.stop.Swap(0)) },
 			func() { lc.stitched(a, st) }, func(v bool) { lc.setStalled(a, v) }, nil)
 	}
+	stream.Close()
 	a.longCap.CompareAndSwap(lc, nil)
 	a.panel.Update(func() {
 		lc.frameWin.Destroy()
