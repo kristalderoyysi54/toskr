@@ -338,6 +338,29 @@ func (a *app) settingsView(c *ui.Context) {
 				{title: tr("新建笔记"), hint: tr("在任意应用里唤出面板并聚焦输入区"), control: func() { a.hotkeyField(c, k, hotkeySlots[2]) }},
 				{title: tr("本机翻译"), hint: a.localTranslateHint(), control: func() { a.localTranslateButton(c, s) }},
 			}},
+			{tr("面板内快捷键"), []setRow{
+				{title: tr("面板内快捷键"), hint: fmt.Sprintf(tr("%d 项 · 面板里长按 ⌥ 也能速查"), len(panelShortcuts)), control: func() {
+					label := "展开"
+					if a.setShortcutsOpen {
+						label = "收起"
+					}
+					if button(c, s, label) {
+						a.setShortcutsOpen = !a.setShortcutsOpen
+					}
+				}, below: func() {
+					if !a.setShortcutsOpen {
+						return
+					}
+					ui.Column(c).Gap(6).Margin(6, 0, 0, 0).Children(func() {
+						for _, r := range panelShortcuts {
+							ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+								text(c, tr(r[1]), 12, 17, 400, k.fg).SingleLine().Grow(1).Basis(0)
+								keycap(c, k, r[0], 0)
+							})
+						}
+					})
+				}},
+			}},
 		}}},
 		{label: "剪贴板", icon: "clipboard-list", sections: [][]setSection{{
 			{tr("剪贴板历史"), []setRow{

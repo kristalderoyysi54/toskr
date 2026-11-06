@@ -102,6 +102,9 @@ func (a *app) detailKeys(c *ui.Context, n store.Note) {
 	if c.Shortcut(ui.Cmd, ui.KeyEnter) {
 		a.sendDetail(n)
 	}
+	if c.Shortcut(0, ui.KeyW) && !a.detail.edit && n.Kind != "image" { // W 切换选词模式（同 Tauri）
+		a.detail.pick, a.detail.pickAnchor, a.detail.pickEnd = !a.detail.pick, -1, -1
+	}
 	// ⌘+ / ⌘− 调字号（10–24），⌘0 复位 12，写回设置
 	st := a.store.Settings()
 	fs := st.DetailFontSize

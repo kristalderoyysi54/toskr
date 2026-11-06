@@ -272,6 +272,7 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 				a.clipActions(c, k, n, isLink, 5)
 			}
 			a.cardOverlays(c, k, n, checked, true)
+			a.quickBadge(c, k, idx, 8)
 			return
 		}
 		ui.Row(c).Height(20).Gap(6).AlignItems(ui.Center).Children(func() {
@@ -319,6 +320,7 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 				a.clipActions(c, k, n, isLink, 4)
 			}
 			a.cardOverlays(c, k, n, checked, false)
+			a.quickBadge(c, k, idx, 4)
 			return
 		}
 		ui.Column(c).Grow(1).Margin(4, 0, 0, 0).Clip().Children(func() {
@@ -381,6 +383,7 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 			a.clipActions(c, k, n, isLink, -1)
 		}
 		a.cardOverlays(c, k, n, checked, false)
+		a.quickBadge(c, k, idx, 4)
 	})
 	if box.Clicked() {
 		if box.ClickModifiers()&ui.Cmd != 0 {

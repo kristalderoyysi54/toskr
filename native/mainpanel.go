@@ -427,6 +427,7 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 		if compact {
 			a.compactCard(c, k, n, hovered)
 			a.cardOverlays(c, k, n, checked, true)
+			a.quickBadge(c, k, idx, 12)
 			return
 		}
 		head := ui.Row(c).Height(28).Padding(0, 8).Gap(6).AlignItems(ui.Center).Radius(10, 10, 0, 0)
@@ -491,6 +492,7 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 			a.cardActions(c, k, n)
 		}
 		a.cardOverlays(c, k, n, checked, false)
+		a.quickBadge(c, k, idx, 4)
 		if k.pt { // Platinum 卡片 1px #999 描边（压在通栏之上）
 			ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Border(1, ptG600).PassThrough()
 		}

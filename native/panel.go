@@ -44,7 +44,7 @@ func (a *app) panelView(c *ui.Context) {
 	}
 	c.Root().Background(k.window.Alpha(min(p, 1) * tint)) // Alpha 是相乘
 	if k.pt {
-		shell.Children(func() { a.platinumPanel(c, k); a.recentDrawer(c, k) })
+		shell.Children(func() { a.platinumPanel(c, k); a.recentDrawer(c, k); a.shortcutHelp(c, k) })
 		return
 	}
 
@@ -69,6 +69,7 @@ func (a *app) panelView(c *ui.Context) {
 		}
 		a.selectionBar(c, k) // 勾选时的批量条留在面板最下方
 		a.recentDrawer(c, k)
+		a.shortcutHelp(c, k) // 长按 ⌥ 的快捷键速查层压在最上
 	})
 	if a.menuOpen {
 		a.panelMenu(c, k)
