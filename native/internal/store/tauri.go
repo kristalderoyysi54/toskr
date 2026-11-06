@@ -49,6 +49,7 @@ type tauriState struct {
 	Bills        []tauriBill    `json:"bills"`
 	Messages     []Message      `json:"messages"`
 	Settings     tauriSettings  `json:"settings"`
+	DraftText    string         `json:"draftText"`
 }
 
 type tauriSection struct {
@@ -189,6 +190,7 @@ type tauriSettings struct {
 	NewNoteHotkey      *string         `json:"newNoteHotkey"`
 	DoubleTapCapture   *bool           `json:"doubleTapCaptureOnly"`
 	CaptureSectionID   *string         `json:"captureSectionId"`
+	LastDraftSection   string          `json:"lastDraftSectionId"`
 	WindowOpacity      float64         `json:"windowOpacity"`
 	PanelOpacity       float64         `json:"panelOpacity"`
 	CardOpacity        float64         `json:"cardOpacity"`
@@ -525,6 +527,9 @@ func (s *Store) ImportTauri(dir string, key []byte) (TauriReport, error) {
 		s.notes = slices.DeleteFunc(s.notes, func(n Note) bool { return secIDs[n.ID] }) // 旧版导入留下的同 ID 普通笔记
 		rep.Messages = importTauriMessages(&s.messages, st.Messages)
 		s.settings = applyTauriSettings(s.settings, st.Settings)
+		if s.settings.DraftText == "" {
+			s.settings.DraftText = st.DraftText
+		}
 		mergeOutcomes(&s.outcomes, outs)
 		s.pruneOutcomesLocked(time.Now())
 		return true
@@ -713,6 +718,9 @@ func applyTauriSettings(st Settings, t tauriSettings) Settings {
 	}
 	if t.DoubleTapCapture != nil {
 		st.DoubleTapCaptureOnly = *t.DoubleTapCapture
+	}
+	if t.LastDraftSection != "" {
+		st.LastDraftSection = t.LastDraftSection
 	}
 	if t.CaptureSectionID != nil {
 		st.CaptureSection = *t.CaptureSectionID

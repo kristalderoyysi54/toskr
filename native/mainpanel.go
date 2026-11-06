@@ -391,10 +391,32 @@ func (a *app) sectionBlock(c *ui.Context, k tokens, g noteGroup, top float32) fl
 				g.sec.Collapsed = !collapsed
 				_ = a.store.UpdateSection(g.sec)
 			}
-			text(c, sectionName(g.sec), 11, 16, 600, k.muted).LetterSpacing(0.88)
-			text(c, itoa(len(g.open)+len(g.done)), 10, 14, 400, k.muted).Grow(1)
+			if g.sec.Color != "" { // 同 Tauri SectionGroup：分组色点
+				ui.Box(c).Size(8, 8).Radius(4).Background(hexColor(g.sec.Color))
+			}
+			a.sectionHeadName(c, k, g.sec)
+			if g.sec.KeepAfterSend {
+				liconFilled(c, "star", 10, k.muted).Tooltip(tr("发送后保留"))
+			}
+			if g.sec.ID != store.SectionInbox && a.store.Settings().CaptureSection == g.sec.ID {
+				licon(c, "arrow-down-to-line", 10, k.muted).Tooltip(tr("捕获目标"))
+			}
+			total := len(g.open) + len(g.done)
+			text(c, itoa(total), 10, 14, 400, k.muted).Grow(1)
 			if head.Hovered() && a.iconButton(c, k, "plus", 18, 12, fmt.Sprintf(tr("在「%s」中添加内容"), sectionName(g.sec))) {
 				a.newNoteIn(g.sec)
+			}
+			if head.Hovered() || a.secMenuOpen == g.sec.ID { // 同 Tauri：悬停出「…」分组操作
+				mb := ghostIconButton(c, k, "secmore-"+g.sec.ID, "ellipsis", tr("分组操作"), 18, 12, false, true)
+				mb.Menu(func(m *ui.Menu) {
+					a.secMenuOpen = g.sec.ID
+					secs := a.noteSections()
+					i := slices.IndexFunc(secs, func(x store.Section) bool { return x.ID == g.sec.ID })
+					a.sectionMenu(m, g.sec, i, len(secs))
+				})
+				if !mb.Hovered() && a.secMenuOpen == g.sec.ID {
+					a.secMenuOpen = ""
+				}
 			}
 		})
 		if collapsed {
@@ -879,6 +901,7 @@ func (a *app) composerRow(c *ui.Context, k tokens) {
 			for _, s := range a.store.Sections() {
 				if s.ID != store.SectionClipboard && m.Item(sectionName(s)).Radio(s.ID == a.section).Chosen() {
 					a.section = s.ID
+					a.saveDraftState()
 				}
 			}
 		})
@@ -1142,3 +1165,65 @@ func (a *app) newNoteIn(sec store.Section) {
 }
 
 var openDetailFn = (*app).openDetail // 测试替换（真窗口需要运行中的应用）
+
+// sectionHeadName：分组头组名（同 Tauri SectionGroup h3）——单击 220ms 后折叠 / 展开（与双击区分），双击就地改名；
+// 改名框 ↵ 提交、Esc 放弃、失焦提交。
+func (a *app) sectionHeadName(c *ui.Context, k tokens, s store.Section) {
+	if a.headRename == s.ID {
+		in := ui.TextInputBase(c, &a.headRenameText).Height(20).Width(128).Font(fontSans).FontSize(11).TextColor(k.fg).
+			Label(tr("分组名称")).Focus().OnTextKey(func(key ui.TextKey) bool {
+			switch key.Key {
+			case ui.KeyEnter:
+				a.headRenameText = key.Text()
+				a.commitHeadRename()
+				return true
+			case ui.KeyEscape:
+				a.headRename, a.headRenameFocused = "", false
+				return true
+			}
+			return false
+		})
+		switch f := in.Focused(); {
+		case f:
+			a.headRenameFocused = true
+		case a.headRenameFocused: // 上一帧还聚焦、这一帧失焦 = 点到别处
+			a.commitHeadRename()
+		}
+		return
+	}
+	name := ui.Row(c).Key("secname-" + s.ID).Role(ui.RoleButton).Label(sectionName(s)).
+		Tooltip(fmt.Sprintf(tr("%s · 点击折叠/展开 · 双击重命名"), sectionName(s)))
+	name.Children(func() { text(c, sectionName(s), 11, 16, 600, k.muted).LetterSpacing(0.88).SingleLine() })
+	switch {
+	case name.DoubleClicked():
+		a.secClickSeq++
+		a.headRename, a.headRenameText, a.headRenameFocused = s.ID, sectionName(s), false
+	case name.Clicked():
+		a.secClickSeq++
+		seq, id := a.secClickSeq, s.ID
+		lpAfter(220*time.Millisecond, func() {
+			a.onMain(func() {
+				if a.secClickSeq != seq {
+					return
+				}
+				for _, x := range a.store.Sections() {
+					if x.ID == id {
+						x.Collapsed = !x.Collapsed
+						_ = a.store.UpdateSection(x)
+					}
+				}
+			})
+		})
+	}
+}
+
+func (a *app) commitHeadRename() {
+	id, name := a.headRename, strings.TrimSpace(a.headRenameText)
+	a.headRename, a.headRenameFocused = "", false
+	for _, s := range a.store.Sections() {
+		if s.ID == id && name != "" && name != s.Name && name != sectionName(s) {
+			s.Name = name
+			_ = a.store.UpdateSection(s)
+		}
+	}
+}

@@ -136,6 +136,7 @@ func start() (*app, error) {
 	}
 	st.OnConflict, st.OnError = a.storeConflict, a.storeError
 	mygo.App.OnQuit(func() {
+		a.saveDraftState()
 		a.shutdownIM()()
 		if err := st.Flush(); err != nil {
 			diag.Push("退出前落盘失败: %v", err)

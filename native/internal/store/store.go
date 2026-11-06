@@ -99,6 +99,8 @@ type Settings struct {
 	// 双击行为（同 Tauri doubleTapCaptureOnly：true = 只划词捕获，无选中时不开关面板）与捕获存入的分组（空 = 收件箱）
 	DoubleTapCaptureOnly bool   `json:"doubleTapCaptureOnly,omitempty"`
 	CaptureSection       string `json:"captureSectionId,omitempty"`
+	LastDraftSection     string `json:"lastDraftSectionId,omitempty"` // 底部输入框所选分组（同 Tauri settings.lastDraftSectionId）
+	DraftText            string `json:"draftText,omitempty"`          // 输入框未提交的草稿（同 Tauri store.draftText，随数据加密落盘）
 	// 剪贴板（同 Tauri clipPauseUntil / clipDoubleCopyKeep / clipIgnoreConcealed / clipIgnoreTransient；布尔用「关闭」语义，缺字段即默认开）
 	ClipPauseUntil    time.Time `json:"clipPauseUntil,omitzero"`
 	ClipDoubleCopyOff bool      `json:"clipDoubleCopyKeepOff,omitempty"`

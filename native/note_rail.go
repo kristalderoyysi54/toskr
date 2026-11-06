@@ -185,8 +185,11 @@ func (a *app) sectionMenu(m *ui.Menu, s store.Section, i, n int) {
 		}
 	}
 	if m.Item(tr("重命名")).Chosen() {
-		a.noteRailOpen = true
-		a.renamingSec, a.renameText = s.ID, s.Name
+		if a.noteRailOpen { // 从侧栏右键：在侧栏里改
+			a.renamingSec, a.renameText = s.ID, s.Name
+		} else { // 从分组头「…」/ 右键：就地改（同 Tauri）
+			a.headRename, a.headRenameText, a.headRenameFocused = s.ID, sectionName(s), false
+		}
 	}
 	m.Submenu(tr("分组颜色"), func(sm *ui.Menu) {
 		for _, col := range sectionColors {

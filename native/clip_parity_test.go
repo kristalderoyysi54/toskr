@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/toskr/native/internal/macos"
@@ -70,5 +71,50 @@ func TestNoteSelectionParity(t *testing.T) {
 	}
 	if got := a.store.Notes(); len(got) != 2 || got[0].Text != "甲" || got[1].Text != "乙" {
 		t.Fatalf("只应删右键的「丙」：%v", got)
+	}
+}
+
+// 同 Tauri SectionGroup：单击组名（220ms 后）折叠，双击就地改名、↵ 提交。
+func TestSectionHeadClickAndRename(t *testing.T) {
+	a, tt := testApp(t, "甲")
+	var fire func()
+	orig := lpAfter
+	lpAfter = func(_ time.Duration, f func()) { fire = f }
+	t.Cleanup(func() { lpAfter = orig })
+	if err := tt.Click("收件箱"); err != nil {
+		t.Fatal(err)
+	}
+	if fire == nil {
+		t.Fatal("单击应排一次折叠")
+	}
+	fire()
+	tt.Frame()
+	if s := a.store.Sections()[0]; !s.Collapsed {
+		t.Fatal("单击组名应折叠")
+	}
+	_ = tt.Click("收件箱")
+	_ = tt.Click("收件箱") // 连点两下 = 双击
+	tt.Frame()
+	if a.headRename != store.SectionInbox {
+		t.Fatal("双击应进入改名")
+	}
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Type("待看")
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	if s := a.store.Sections()[0]; s.Name != "待看" || a.headRename != "" {
+		t.Fatalf("改名应提交：%+v", s)
+	}
+}
+
+// 同 Tauri：输入框草稿与所选分组跨重启保留。
+func TestDraftPersistsAcrossRestart(t *testing.T) {
+	a, _ := testApp(t)
+	id := a.store.AddSection("工作")
+	a.section, a.draft = id, "没写完的草稿"
+	a.hidePanel()
+	b := newApp(nopSys{}, a.store)
+	if b.draft != "没写完的草稿" || b.section != id {
+		t.Fatalf("draft=%q section=%q", b.draft, b.section)
 	}
 }

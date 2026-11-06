@@ -51,27 +51,31 @@ type app struct {
 	longCap                            atomic.Pointer[longCapture] // 进行中的长截屏（键盘 tap 读：Esc 取消）
 
 	// 面板状态
-	page             int
-	section          string // 当前笔记分组
-	query            string
-	notes            []store.Note // 当前分组 + 搜索后的未完成项
-	done             []store.Note // 当前分组已完成项
-	counts           map[string]int
-	noteIdx          map[string]int // 笔记 ID → a.notes 下标（卡片构建时 O(1) 取键盘选中位置）
-	vis              visWindow
-	clipList         []store.Note // 剪贴页列表快照：换页动画里旧页不会读到另一页的 a.notes
-	clipScroll       ui.ScrollState
-	selected         int
-	chosen           ui.Selection[string]
-	list             ui.ListState
-	search           ui.Handle
-	draft            string
-	draftIn          ui.Handle
-	clipSrcCollapsed map[string]bool
-	menuTarget       *store.Note // 右键单卡菜单期间的作用对象（chosenNotes 收窄到它） // 剪贴页按来源分组时各组的折叠态（仅本次运行，同 Tauri useState）
-	pinned           bool
-	showDone         bool
-	newSecOn         bool
+	page                       int
+	section                    string // 当前笔记分组
+	query                      string
+	notes                      []store.Note // 当前分组 + 搜索后的未完成项
+	done                       []store.Note // 当前分组已完成项
+	counts                     map[string]int
+	noteIdx                    map[string]int // 笔记 ID → a.notes 下标（卡片构建时 O(1) 取键盘选中位置）
+	vis                        visWindow
+	clipList                   []store.Note // 剪贴页列表快照：换页动画里旧页不会读到另一页的 a.notes
+	clipScroll                 ui.ScrollState
+	selected                   int
+	chosen                     ui.Selection[string]
+	list                       ui.ListState
+	search                     ui.Handle
+	draft                      string
+	draftIn                    ui.Handle
+	clipSrcCollapsed           map[string]bool
+	menuTarget                 *store.Note // 右键单卡菜单期间的作用对象（chosenNotes 收窄到它）
+	headRename, headRenameText string      // 笔记分组头就地改名（同 Tauri SectionGroup renaming）
+	headRenameFocused          bool
+	secClickSeq                int    // 分组名单击 / 双击消歧
+	secMenuOpen                string // 「…」分组菜单展开中的分组 // 剪贴页按来源分组时各组的折叠态（仅本次运行，同 Tauri useState）
+	pinned                     bool
+	showDone                   bool
+	newSecOn                   bool
 	// 笔记分组侧栏：过滤（"" = 全部）、展开、就地改名
 	noteFilter, renamingSec, renameText string
 	noteRailOpen                        bool
@@ -301,8 +305,23 @@ type app struct {
 
 func newApp(sys core.System, st *store.Store) *app {
 	a := &app{sys: sys, store: st, page: pageNotes, prevPage: -1, section: store.SectionInbox, doneOpen: map[string]bool{}, bandOpen: map[string]bool{"overdue": true, "spark": true}, clipView: "time", billView: "week", billFilter: "upcoming", clock: time.Now, thumbs: map[string]ui.ImageSource{}, revealed: map[string]time.Time{}, secretOpening: map[string]bool{}, secretPlain: map[string]string{}, secretFx: map[string]time.Time{}, msgOpen: map[string]bool{}, msgChosen: map[string]bool{}, drawerMore: map[string]bool{}, linkSem: make(chan struct{}, 2), appIcons: map[string]ui.ImageSource{}}
+	st0 := st.Settings() // 同 Tauri：输入框草稿与所选分组跨重启保留
+	a.draft = st0.DraftText
+	if st0.LastDraftSection != "" {
+		a.section = st0.LastDraftSection
+	}
 	a.reload()
 	return a
+}
+
+// saveDraftState：把输入框草稿与所选分组写进设置（面板收起 / 退出 / 改选分组时）。
+func (a *app) saveDraftState() {
+	cur := a.store.Settings()
+	if cur.DraftText == a.draft && cur.LastDraftSection == a.section {
+		return
+	}
+	cur.DraftText, cur.LastDraftSection = a.draft, a.section
+	_ = a.store.SetSettings(cur)
 }
 
 // reload 从 store 重建当前视图（主线程）。
@@ -393,6 +412,7 @@ func (a *app) showPanel() {
 
 // hidePanel 收起面板：先播离场（向停靠边退 16px 并淡出，140ms easeIn），播完再藏窗，同 Tauri onAnimationComplete → hidePanel。
 func (a *app) hidePanel() {
+	a.saveDraftState()
 	a.remaskAll() // 秘文：面板收起即回遮罩，明文丢弃
 	if a.panel == nil || !a.panel.IsVisible() || a.panelHiding {
 		return
@@ -502,6 +522,7 @@ func (a *app) addDraft() {
 		imgs := len(a.draftImgs)
 		a.draft, a.draftImgs = "", nil
 		a.section, a.selected = sec, 0 // 同 Tauri DraftInput submit：不清搜索词
+		a.saveDraftState()
 		switch {
 		case dup:
 			a.showHUD("duplicate", tr("已存在，移到顶部"))
