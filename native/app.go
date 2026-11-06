@@ -75,6 +75,7 @@ type app struct {
 	secMenuOpen                string      // 「…」分组菜单展开中的分组
 	edge                       *edgeAnchor // 拖拽入坞后的贴边锚点（edge_hide.go）
 	edgeHidden, edgeArmed      bool
+	holdOpen, holdNext         bool // 快捷键 / 双击唤出：拖动或 Esc 前不随失焦收起、不贴边滑出（同 Tauri shortcutHoldOpen + panel_auto_hide_armed）
 	edgeAway                   time.Duration
 	edgeMachineUntil           time.Time
 	dockSeq, edgeAnimSeq       int // 剪贴页按来源分组时各组的折叠态（仅本次运行，同 Tauri useState）
@@ -399,15 +400,22 @@ func (a *app) chosenNotes() []store.Note {
 
 // ---- 面板 ----
 
-func (a *app) togglePanel() {
-	if a.panel.IsVisible() && !a.panelHiding {
+func (a *app) togglePanel() { a.toggleWith(false) }
+
+// toggleFromShortcut：快捷键 / 双击修饰键开关面板（同 Tauri triggerKeepsPanelOpen：hotkey、doubleTap 唤出时保持展开）。
+func (a *app) toggleFromShortcut() { a.toggleWith(true) }
+
+func (a *app) toggleWith(hold bool) {
+	if a.panel.IsVisible() && !a.panelHiding && !a.edgeHidden { // 贴边滑出时意图必然是唤出（同 Tauri edgeHidden 分支）
 		a.hidePanel()
 		return
 	}
+	a.holdNext = hold
 	a.showPanel()
 }
 
 func (a *app) showPanel() {
+	a.holdOpen, a.holdNext = a.holdNext, false
 	if f, ok := a.sys.Frontmost(); ok && f.PID != a.sys.SelfPID() {
 		a.target = f
 		a.targetStarted = macos.ProcessStartMs(f.PID)
@@ -426,6 +434,7 @@ func (a *app) showPanel() {
 
 // hidePanel 收起面板：先播离场（向停靠边退 16px 并淡出，140ms easeIn），播完再藏窗，同 Tauri onAnimationComplete → hidePanel。
 func (a *app) hidePanel() {
+	a.holdOpen = false
 	a.saveDraftState()
 	a.remaskAll() // 秘文：面板收起即回遮罩，明文丢弃
 	if a.panel == nil || !a.panel.IsVisible() || a.panelHiding {
@@ -446,6 +455,7 @@ func (a *app) hidePanel() {
 
 // hidePanelNow 立即藏窗（发送、截图：焦点必须马上还给目标应用，不能等离场动画）。
 func (a *app) hidePanelNow() {
+	a.holdOpen = false
 	a.remaskAll()
 	a.panelHiding = false
 	if a.panel != nil {
@@ -459,12 +469,12 @@ func (a *app) hidePanelNow() {
 func (a *app) onTrigger() {
 	front, ok := a.sys.Frontmost()
 	if !ok || front.PID == a.sys.SelfPID() {
-		a.panel.Update(a.togglePanel)
+		a.panel.Update(a.toggleFromShortcut)
 		return
 	}
 	if slices.Contains(a.store.Settings().ExcludedApps, front.BundleID) {
 		diag.Push("捕获: %s 在排除名单，跳过", front.BundleID)
-		a.panel.Update(a.togglePanel)
+		a.panel.Update(a.toggleFromShortcut)
 		return
 	}
 	go func() {
@@ -476,7 +486,7 @@ func (a *app) onTrigger() {
 				return
 			}
 			diag.Push("捕获: 无选中内容 → 开关面板 (%dms)", time.Since(started).Milliseconds())
-			a.panel.Update(a.togglePanel)
+			a.panel.Update(a.toggleFromShortcut)
 			return
 		}
 		if a.captureSecret(got.Text, front.Name) {

@@ -24,7 +24,7 @@ type hotkeySlot struct {
 }
 
 var hotkeySlots = []hotkeySlot{
-	{"panel", func(s store.Settings) string { return s.PanelHotkey }, func(s *store.Settings, v string) { s.PanelHotkey = v }, (*app).togglePanel, "开关面板"},
+	{"panel", func(s store.Settings) string { return s.PanelHotkey }, func(s *store.Settings, v string) { s.PanelHotkey = v }, (*app).toggleFromShortcut, "开关面板"},
 	{"shot", func(s store.Settings) string { return s.ScreenshotKey }, func(s *store.Settings, v string) { s.ScreenshotKey = v }, (*app).screenshot, "截图"},
 	{"newnote", func(s store.Settings) string { return s.NewNoteKey }, func(s *store.Settings, v string) { s.NewNoteKey = v }, (*app).newNoteHotkey, "新建笔记"},
 }

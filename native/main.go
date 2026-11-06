@@ -122,7 +122,7 @@ func start() (*app, error) {
 		if a.edgeHideNow(false) { // 已入坞：失焦改为贴边滑出（同 Tauri edge_hide_now）
 			return
 		}
-		if !a.pinned && !a.store.Settings().KeepOnBlur {
+		if !a.pinned && !a.store.Settings().KeepOnBlur && !a.holdOpen { // 快捷键唤出保持展开（同 Tauri shouldHidePanelOnBlur）
 			a.hidePanel()
 		}
 	})

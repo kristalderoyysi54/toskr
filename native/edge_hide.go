@@ -28,6 +28,7 @@ type edgeAnchor struct {
 	x, y, w, h int // 展开位（已吸平右缘）
 	line       int // 该屏物理右边界
 	monY, monH int
+	sidebar    bool // 「屏幕右侧」边栏模式的锚点（同 Tauri 四缘边栏都是贴边隐藏候选）：切到自由移动 / 伴随停靠即作废
 }
 
 // dockLine：面板 r 的右缘在所在屏物理右边界 edgeSnap 内（含拖出屏外），且越过这条线没有别的屏 → 返回该线。
@@ -71,6 +72,7 @@ func (a *app) panelMovedByUser() {
 	if time.Now().Before(a.edgeMachineUntil) || a.edgeHidden {
 		return
 	}
+	a.holdOpen, a.edgeArmed = false, true // 真实拖动解除快捷键保护（同 Tauri on_user_panel_move）
 	if a.edge != nil {
 		a.edge = nil
 		diag.Push("贴边隐藏: 拖动清除锚点")
@@ -118,9 +120,12 @@ func (a *app) edgeTickOnce() {
 		a.edgeAway = 0
 		return
 	}
-	if a.docked {
+	if a.docked || e.sidebar && a.store.Settings().FreeMove { // 伴随接管 / 边栏改成自由移动：滑回并作废边栏锚点
 		if a.edgeHidden {
 			a.edgeSlideTo(false)
+		}
+		if !a.docked {
+			a.edge = nil
 		}
 		a.edgeAway = 0
 		return
@@ -180,13 +185,15 @@ func (a *app) edgeSlideTo(hidden bool) {
 
 // edgeHideNow：失焦 / Esc 的收起入口。有入坞锚点就滑出代替真正隐藏（explicit=Esc 越过图钉），返回是否已接管。
 func (a *app) edgeHideNow(explicit bool) bool {
-	if a.edge == nil || a.docked || a.edgeHidden {
+	if explicit { // Esc 解除快捷键保护（同 Tauri set_panel_auto_hide_armed "Esc"）
+		a.edgeArmed, a.holdOpen = true, false
+	}
+	if a.edge == nil || a.docked || a.edgeHidden || !a.edgeArmed {
 		return false
 	}
 	if !explicit && a.pinned {
 		return false
 	}
-	a.edgeArmed = true
 	a.edgeSlideTo(true)
 	if explicit && a.target.PID != 0 {
 		a.sys.Activate(a.target.PID)
@@ -196,7 +203,7 @@ func (a *app) edgeHideNow(explicit bool) bool {
 
 // edgeOnShow：面板被重新唤出时——隐藏态直接回到展开位；按记住的位置摆放时若正好贴着屏缘就恢复锚点（用户拖过才算）。
 func (a *app) edgeOnShow() {
-	a.edgeArmed, a.edgeAway = true, 0
+	a.edgeArmed, a.edgeAway = !a.holdOpen, 0
 	if a.edgeHidden && a.edge != nil {
 		a.edgeAnimSeq++
 		a.edgeHidden = false
@@ -204,6 +211,16 @@ func (a *app) edgeOnShow() {
 		return
 	}
 	st := a.store.Settings()
+	if !st.FreeMove && !a.docked { // 屏幕右侧边栏：每次唤出按当前所在屏重新锚定（同 Tauri show_panel right_sidebar 分支）
+		b := a.panel.Bounds()
+		if d, ok := displayAt(mygo.Screen.Displays(), b.X+b.Width/2, b.Y+b.Height/2); ok {
+			a.edge = &edgeAnchor{x: b.X, y: b.Y, w: b.Width, h: b.Height, line: d.Bounds.X + d.Bounds.Width, monY: d.Bounds.Y, monH: d.Bounds.Height, sidebar: true}
+		}
+		return
+	}
+	if a.edge != nil && a.edge.sidebar {
+		a.edge = nil
+	}
 	if a.edge == nil && st.FreeMove && (st.PanelX != 0 || st.PanelY != 0) && !a.docked {
 		b := a.panel.Bounds()
 		if line, monY, monH, ok := dockLine(mygo.Screen.Displays(), b); ok {
@@ -219,4 +236,14 @@ func (a *app) startEdgeSupervisor() {
 			mygo.RunOnMain(a.edgeTickOnce)
 		}
 	}()
+}
+
+func displayAt(displays []mygo.Display, x, y int) (mygo.Display, bool) {
+	for _, d := range displays {
+		b := d.Bounds
+		if x >= b.X && x < b.X+b.Width && y >= b.Y && y < b.Y+b.Height {
+			return d, true
+		}
+	}
+	return mygo.Display{}, false
 }
