@@ -176,6 +176,8 @@ type tauriSettings struct {
 	CompanionGap       *int            `json:"companionGap"`
 	CardTint           *bool           `json:"cardTint"`
 	ClipCardTemplate   string          `json:"clipCardTemplate"`
+	ScreenshotEnabled  *bool           `json:"screenshotEnabled"`
+	ScreenshotHideSelf *bool           `json:"screenshotHideSelf"`
 }
 
 // TauriReport 是导入结果。
@@ -524,6 +526,12 @@ func applyTauriSettings(st Settings, t tauriSettings) Settings {
 	}
 	if t.CardTint != nil {
 		st.CardTintOff = !*t.CardTint
+	}
+	if t.ScreenshotEnabled != nil {
+		st.ScreenshotOff = !*t.ScreenshotEnabled
+	}
+	if t.ScreenshotHideSelf != nil {
+		st.ShotHideSelf = *t.ScreenshotHideSelf
 	}
 	switch t.ClipCardTemplate { // Tauri 旧值 banner 已并入浓缩
 	case "standard", "condensed":

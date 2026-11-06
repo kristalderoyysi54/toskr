@@ -73,7 +73,7 @@ func (a *app) registerHotkeys() {
 	st := a.store.Settings()
 	for _, s := range hotkeySlots {
 		acc := s.get(st)
-		if acc == "" {
+		if acc == "" || (s.id == "shot" && st.ScreenshotOff) {
 			continue
 		}
 		run := s.run
@@ -189,5 +189,28 @@ func (a *app) hotkeyField(c *ui.Context, k tokens, slot hotkeySlot) {
 		} else {
 			a.recordingKey = slot.id
 		}
+	}
+}
+
+// setScreenshotEnabled：区域截图总开关（同 Tauri）。关闭时注销截图快捷键，把组合键让给其他应用；开启时重新注册。
+func (a *app) setScreenshotEnabled(on bool) {
+	st := a.store.Settings()
+	if st.ScreenshotOff == !on {
+		return
+	}
+	st.ScreenshotOff = !on
+	if err := a.store.SetSettings(st); err != nil {
+		a.showHUD("warn", err.Error())
+		return
+	}
+	if a.panel == nil || st.ScreenshotKey == "" {
+		return
+	}
+	if on {
+		if err := mygo.GlobalShortcut.Register(st.ScreenshotKey, func() { a.screenshot() }); err != nil {
+			diag.Push("截图快捷键 %s 注册失败: %v", st.ScreenshotKey, err)
+		}
+	} else {
+		mygo.GlobalShortcut.Unregister(st.ScreenshotKey)
 	}
 }

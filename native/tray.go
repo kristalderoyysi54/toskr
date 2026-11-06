@@ -51,7 +51,7 @@ func (a *app) trayKey() string {
 	if a.now().Before(st.ClipPauseUntil) {
 		paused = st.ClipPauseUntil.Format("15:04")
 	}
-	return fmt.Sprint(a.shortcut, st.ClipboardWatch, paused, st.Stealth)
+	return fmt.Sprint(a.shortcut, st.ClipboardWatch, paused, st.Stealth, st.ScreenshotOff)
 }
 
 // refreshTray 按当前状态重建托盘菜单（同 Tauri tray.rs：显示面板、截图、暂停 / 恢复剪贴板收集、隐身模式、设置、开机启动、退出）。
@@ -67,9 +67,11 @@ func (a *app) refreshTray() {
 	st := a.store.Settings()
 	items := []*mygo.MenuItem{
 		{Label: tr("显示 / 隐藏面板"), Accelerator: a.shortcut, Click: func(*mygo.MenuItem, *mygo.Window) { a.togglePanel() }},
-		{Label: tr("截图"), Click: func(*mygo.MenuItem, *mygo.Window) { a.screenshot() }},
-		mygo.Separator(),
 	}
+	if !st.ScreenshotOff { // 区域截图关闭时托盘不显示入口（同 Tauri tray.rs）
+		items = append(items, &mygo.MenuItem{Label: tr("截图"), Click: func(*mygo.MenuItem, *mygo.Window) { a.screenshot() }})
+	}
+	items = append(items, mygo.Separator())
 	if st.ClipboardWatch {
 		if now := a.now(); now.Before(st.ClipPauseUntil) {
 			mins := int((st.ClipPauseUntil.Sub(now) + time.Minute - 1) / time.Minute)

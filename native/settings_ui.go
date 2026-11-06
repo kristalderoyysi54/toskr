@@ -82,6 +82,12 @@ func (a *app) settingsShell(c *ui.Context, pages []setPage) {
 	} else {
 		c.Root().Background(s.bg)
 	}
+	if a.setJump != "" { // 按页名跳转（页序号随「秘文」开关变化）
+		if i := slices.IndexFunc(pages, func(p setPage) bool { return p.label == a.setJump }); i >= 0 {
+			a.setPage, a.setSub, a.setQuery = i, 0, ""
+		}
+		a.setJump = ""
+	}
 	if s.pt {
 		a.ptSettingsShell(c, k, s, pages)
 		return

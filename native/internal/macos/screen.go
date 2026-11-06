@@ -80,7 +80,8 @@ func RequestScreenCapture() bool { loadScreen(); return cgRequestScreenCaptureAc
 type WinRect struct{ X, Y, W, H float64 }
 
 // WindowRects：屏上 layer 0 的普通窗口，自顶向下；排除宽或高小于 8pt 的与 skipPID 自己的窗口。
-func WindowRects(skipPID int32) []WinRect {
+// self 为本进程：includeSelf 时本进程的窗口（面板、钉图常在浮动层 0–19）也作为吸附目标，否则跳过；其他应用只取普通层。
+func WindowRects(self int32, includeSelf bool) []WinRect {
 	loadScreen()
 	const onScreenOnly, excludeDesktop = 1 << 0, 1 << 4
 	arr := cgWindowListCopyWindowInfo(onScreenOnly|excludeDesktop, 0)
@@ -93,10 +94,17 @@ func WindowRects(skipPID int32) []WinRect {
 	for i := range cfArrayGetCount(arr) {
 		d := cfArrayGetValueAtIndex(arr, i)
 		var layer, pid int32
-		if n := cfDictionaryGetValue(d, kWinLayer); n == 0 || !cfNumberGetValue(n, sint32, unsafe.Pointer(&layer)) || layer != 0 {
+		if n := cfDictionaryGetValue(d, kWinLayer); n == 0 || !cfNumberGetValue(n, sint32, unsafe.Pointer(&layer)) {
 			continue
 		}
-		if n := cfDictionaryGetValue(d, kWinOwnerPID); n != 0 && cfNumberGetValue(n, kind, unsafe.Pointer(&pid)) && pid == skipPID {
+		if n := cfDictionaryGetValue(d, kWinOwnerPID); n != 0 {
+			cfNumberGetValue(n, kind, unsafe.Pointer(&pid))
+		}
+		if pid == self {
+			if !includeSelf || layer < 0 || layer >= 20 {
+				continue
+			}
+		} else if layer != 0 {
 			continue
 		}
 		var r cgRect

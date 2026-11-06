@@ -244,3 +244,11 @@ func TestImportTauriBlocksOnlyAndClipVolume(t *testing.T) {
 		t.Fatalf("剪贴历史应全部保留，实为 %d", got)
 	}
 }
+
+func TestTauriScreenshotSettings(t *testing.T) {
+	f, tr := false, true
+	got := applyTauriSettings(Settings{}, tauriSettings{ScreenshotEnabled: &f, ScreenshotHideSelf: &tr})
+	if !got.ScreenshotOff || !got.ShotHideSelf {
+		t.Fatalf("%+v", got)
+	}
+}

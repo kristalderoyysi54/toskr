@@ -334,7 +334,9 @@ func (a *app) settingsView(c *ui.Context) {
 			}},
 			{tr("全局快捷键"), []setRow{
 				{title: tr("开关面板"), hint: tr("点击后按下新组合即可录制；Esc 取消，⌫ 清除"), control: func() { a.hotkeyField(c, k, hotkeySlots[0]) }},
-				{title: tr("截图"), control: func() { a.hotkeyField(c, k, hotkeySlots[1]) }},
+				{title: tr("截图"), hidden: st.ScreenshotOff, control: func() { a.hotkeyField(c, k, hotkeySlots[1]) }},
+				{title: tr("截图时隐藏 Toskr"), hint: tr("开启后截图画面里不出现 Toskr 的面板、钉图等窗口；默认关闭，截到的就是屏幕上看到的样子"), hidden: st.ScreenshotOff,
+					control: setToggle(st.ShotHideSelf, func(s *store.Settings, v bool) { s.ShotHideSelf = v })},
 				{title: tr("新建笔记"), hint: tr("在任意应用里唤出面板并聚焦输入区"), control: func() { a.hotkeyField(c, k, hotkeySlots[2]) }},
 				{title: tr("本机翻译"), hint: a.localTranslateHint(), control: func() { a.localTranslateButton(c, s) }},
 			}},
@@ -417,6 +419,15 @@ func (a *app) settingsView(c *ui.Context) {
 		}, a.templateSections(c, k, s)}, subs: []string{"发送", "提示词模板"}},
 		{label: "更多功能", icon: "blocks", sections: [][]setSection{{
 			{tr("功能"), []setRow{
+				{title: tr("区域截图"), hint: shotHint(st), control: func() {
+					on := !st.ScreenshotOff
+					if toggle(c, s, &on) {
+						a.setScreenshotEnabled(on)
+						if on && !macos.ScreenCaptureAllowed() {
+							a.setJump = "权限" // 未授权屏幕录制：直接带到权限页（同 Tauri）
+						}
+					}
+				}},
 				{title: tr("秘文"), hint: tr("在本机把文字加密成中文、代码、日志等格式，对方自动识别解密"), control: setToggle(st.SecretEnabled, func(s *store.Settings, v bool) { s.SecretEnabled = v })},
 				{title: tr("订阅"), hint: tr("管理账单与信用卡到期，在「提醒」页按时提醒"), control: setToggle(st.SubscriptionsEnabled, func(s *store.Settings, v bool) { s.SubscriptionsEnabled = v })},
 			}},
@@ -775,4 +786,11 @@ func (a *app) pctSlider(c *ui.Context, k tokens, cur float64, lo, hi, step float
 			a.invalidateAll()
 		}
 	}
+}
+
+func shotHint(st store.Settings) string {
+	if st.ScreenshotOff {
+		return tr("截取屏幕任意区域，可标注、钉在屏幕上、长截屏、识别文字")
+	}
+	return tr("菜单栏图标或快捷键截图；需要「屏幕录制」权限")
 }

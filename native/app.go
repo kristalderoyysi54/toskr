@@ -137,6 +137,7 @@ type app struct {
 	recordingKey                           string    // 设置里正在录制的全局快捷键（panel / shot / newnote）
 	altSince                               time.Time // 只按住 ⌥ 的起点（长按 650ms 弹快捷键速查）
 	setShortcutsOpen                       bool      // 设置「面板内快捷键」表展开
+	setJump                                string    // 设置窗下一帧要跳到的页名
 	lastClipID                             string    // 上一次外部复制入库的卡（连续复制两次置顶用）
 	lastClipAt                             time.Time
 	trayBuilt                              string      // 托盘菜单上次重建时的状态键

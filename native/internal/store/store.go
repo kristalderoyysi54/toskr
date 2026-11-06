@@ -107,6 +107,8 @@ type Settings struct {
 	CardTintOff   bool     `json:"cardTintOff,omitempty"`      // 卡片彩色通栏（Tauri cardTint，默认开）
 	ClipTemplate  string   `json:"clipCardTemplate,omitempty"` // 剪贴卡模板：standard | condensed（仅舒适密度）
 	ScreenshotKey string   `json:"screenshotKey"`
+	ScreenshotOff bool     `json:"screenshotOff,omitempty"`      // 区域截图总开关（Tauri screenshotEnabled，默认开）
+	ShotHideSelf  bool     `json:"screenshotHideSelf,omitempty"` // 截图时隐藏 Toskr 自己的窗口（默认不隐藏）
 	AIEndpoint    string   `json:"aiEndpoint"`
 	AIModel       string   `json:"aiModel"`
 	Companion     []string `json:"companion"` // 伴随停靠的应用 bundle id

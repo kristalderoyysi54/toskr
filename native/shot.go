@@ -27,6 +27,7 @@ import (
 type shotSession struct {
 	displays   []*shotDisplay
 	wasVisible bool          // 截图前面板开着：取消 / 存入后再打开
+	hiddenPins []*pinWin     // 「截图时隐藏 Toskr」时暂时藏起的钉图，结束后放回
 	front      string        // 截图时前台应用名（入库来源）
 	frontID    string        // 前台应用 bundle id
 	done       chan struct{} // 结束时关闭：停掉光标轮询
@@ -47,7 +48,7 @@ type shotDisplay struct {
 
 // screenshot：托盘「截图」与全局快捷键入口。
 func (a *app) screenshot() {
-	if a.shot != nil {
+	if a.shot != nil || a.store.Settings().ScreenshotOff {
 		return
 	}
 	if !macos.ScreenCaptureAllowed() {
@@ -60,9 +61,19 @@ func (a *app) screenshot() {
 	if f, ok := a.sys.Frontmost(); ok && f.PID != a.sys.SelfPID() {
 		s.front, s.frontID = f.Name, f.BundleID
 	}
+	// 默认截到的就是屏幕上看到的样子（同 Tauri screenshotHideSelf=false）；开了「截图时隐藏 Toskr」才先藏面板与钉图
+	hideSelf := a.store.Settings().ShotHideSelf
 	s.wasVisible = a.panel != nil && a.panel.IsVisible()
-	if s.wasVisible {
+	if s.wasVisible && hideSelf {
 		a.hidePanelNow()
+	}
+	if hideSelf {
+		for _, p := range a.pins {
+			if p.win != nil && p.win.IsVisible() {
+				p.win.Hide()
+				s.hiddenPins = append(s.hiddenPins, p)
+			}
+		}
 	}
 	if a.hud != nil {
 		a.hud.Hide()
@@ -70,8 +81,8 @@ func (a *app) screenshot() {
 	a.shot = s
 	displays := mygo.Screen.Displays()
 	go func() {
-		if s.wasVisible {
-			time.Sleep(80 * time.Millisecond) // 等面板真正离屏，免得拍进冻结帧
+		if hideSelf && (s.wasVisible || len(s.hiddenPins) > 0) {
+			time.Sleep(80 * time.Millisecond) // 等面板 / 钉图真正离屏，免得拍进冻结帧
 		}
 		start := time.Now()
 		frames := make([]*image.RGBA, len(displays))
@@ -88,7 +99,7 @@ func (a *app) screenshot() {
 			}()
 		}
 		wg.Wait()
-		wins := macos.WindowRects(a.sys.SelfPID())
+		wins := macos.WindowRects(a.sys.SelfPID(), !hideSelf)
 		diag.Push("截图: 取帧 %d 屏 %dms 窗口 %d", len(displays), time.Since(start).Milliseconds(), len(wins))
 		a.panel.Update(func() { a.openShot(s, displays, frames, wins) })
 	}()
@@ -281,6 +292,11 @@ func (a *app) endShot(reopen bool) {
 	}
 	if reopen && s.wasVisible && a.panel != nil {
 		a.panel.Show()
+	}
+	for _, p := range s.hiddenPins {
+		if p.win != nil {
+			p.win.ShowInactive()
+		}
 	}
 	if s.hint != "" {
 		a.showHUD("info", s.hint)
