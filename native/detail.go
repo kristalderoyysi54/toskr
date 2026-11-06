@@ -791,12 +791,7 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 			text(c, label, 13, 18, 500, fg).SingleLine()
 			text(c, "⌘⏎", 9, 18, 500, fg).Opacity(0.7)
 		})
-		if left.Clicked() {
-			a.sendDetail(n)
-		}
-		right := ui.Box(c).Size(28, 32).Radius(0, 16, 16, 0).Background(fill).Border(1, border).Center().Label(tr("更多发送选项"))
-		right.Children(func() { licon(c, "chevron-down", 12, fg) })
-		right.Menu(func(m *ui.Menu) {
+		sendMenu := func(m *ui.Menu) {
 			r, _ := a.resolution()
 			// 发送方式（同 Tauri TextPreviewView）：仅本次换格式；代码卡与秘文保持原样，不提供去 Markdown
 			m.Item(tr("发送方式")).Disabled(true)
@@ -830,7 +825,15 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 				a.copyPrivate(n.Text)
 				a.showHUD("ok", tr("已复制"))
 			}
-		})
+		}
+		if a.target.PID == 0 { // 同 Tauri：没有可用目标时点发送钮改为展开目标菜单（窗不关）
+			left.Menu(sendMenu).Label(tr("发送：选择目标应用"))
+		} else if left.Clicked() {
+			a.sendDetail(n)
+		}
+		right := ui.Box(c).Size(28, 32).Radius(0, 16, 16, 0).Background(fill).Border(1, border).Center().Label(tr("更多发送选项"))
+		right.Children(func() { licon(c, "chevron-down", 12, fg) })
+		right.Menu(sendMenu)
 	})
 }
 

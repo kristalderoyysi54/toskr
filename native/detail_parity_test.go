@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -73,6 +74,18 @@ func TestDetailSendWithoutTargetKeepsWindow(t *testing.T) {
 	a.sendDetail(n)
 	if a.hudKind != "warn" || len(a.pending) != 0 {
 		t.Fatalf("%s %q", a.hudKind, a.hudText)
+	}
+	// 点发送钮改为展开目标菜单（同 Tauri TextPreviewView：目标不可用时打开「发送到…」）
+	runningTargets = func() []macos.AppInfo { return []macos.AppInfo{{PID: 7, Name: "Notes"}} }
+	defer func() { runningTargets = macos.RegularApps }()
+	dt := detailTester(t, a, n)
+	a.hudText = ""
+	if err := dt.Click("发送：选择目标应用"); err != nil {
+		t.Fatal(err)
+	}
+	dt.Frame()
+	if m := dt.Menu(); !slices.Contains(m, "发送到…") || !slices.Contains(m, "Notes") || a.hudText != "" {
+		t.Fatalf("应弹出目标菜单而非警告 menu=%v hud=%q", m, a.hudText)
 	}
 }
 
