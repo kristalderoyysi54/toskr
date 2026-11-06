@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/toskr/native/internal/secretcodec"
 )
 
 func encImg(t *testing.T, jpg bool, c color.RGBA) []byte {
@@ -250,5 +252,62 @@ func TestTauriScreenshotSettings(t *testing.T) {
 	got := applyTauriSettings(Settings{}, tauriSettings{ScreenshotEnabled: &f, ScreenshotHideSelf: &tr})
 	if !got.ScreenshotOff || !got.ShotHideSelf {
 		t.Fatalf("%+v", got)
+	}
+}
+
+// 导入后核对：逐条回读无不一致；空卡计入「空卡未导」，原生版自己的笔记计入「仅本机」，按分组名统计条数。
+func TestImportTauriCheck(t *testing.T) {
+	notes := []any{
+		map[string]any{"id": "n1", "text": "甲", "sectionId": "s1", "keep": true, "tags": []string{"a"}, "title": "T", "createdAt": 1790000000000},
+		map[string]any{"id": "n2", "text": "乙", "sectionId": "clipboard", "done": true, "blur": true, "createdAt": 1790000000000},
+		map[string]any{"id": "n3", "text": "  ", "sectionId": "inbox", "createdAt": 1790000000000},
+	}
+	inner, _ := json.Marshal(map[string]any{"state": map[string]any{"notes": notes,
+		"sections": []any{map[string]any{"id": "s1", "name": "Bug"}}}, "version": 27})
+	raw, _ := json.Marshal(map[string]string{"toskr": string(inner)})
+	tdir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(tdir, "toskr-data.json"), raw, 0o600)
+	s, _ := OpenDir(t.TempDir(), bytes.Repeat([]byte{1}, 32))
+	_, _, _ = s.Add(Note{Section: SectionInbox, Text: "原生自己捕获的"})
+	rep, err := s.ImportTauri(tdir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := rep.Check
+	if len(c.Mismatch) != 0 || c.Skipped != 1 || c.NativeOnly != 1 || c.PerSection["Bug"] != 1 || len(c.PerSection) != 2 {
+		t.Fatalf("%+v", c)
+	}
+	if got := c.Summary(); !strings.Contains(got, "不一致 0") || !strings.Contains(got, "Bug 1") {
+		t.Fatal(got)
+	}
+}
+
+// 早期秘文（无 kind、落在 secret 分组）：是信封按秘文导入，不是信封放进收件箱，导入后没有失联笔记。
+func TestImportTauriLegacySecretSection(t *testing.T) {
+	env, err := secretcodec.Seal("机密", "pass-phrase-1", secretcodec.NormalizeStyle(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes := []any{
+		map[string]any{"id": "old-secret", "text": env, "sectionId": "secret", "createdAt": 1790000000000},
+		map[string]any{"id": "old-plain", "text": "不是信封", "sectionId": "secret", "createdAt": 1790000000000},
+	}
+	inner, _ := json.Marshal(map[string]any{"state": map[string]any{"notes": notes}, "version": 27})
+	raw, _ := json.Marshal(map[string]string{"toskr": string(inner)})
+	tdir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(tdir, "toskr-data.json"), raw, 0o600)
+	s, _ := OpenDir(t.TempDir(), bytes.Repeat([]byte{1}, 32))
+	rep, err := s.ImportTauri(tdir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Secrets != 1 || len(rep.Check.Lost) != 0 {
+		t.Fatalf("secrets=%d lost=%v", rep.Secrets, rep.Check.Lost)
+	}
+	if n, ok := s.Note("old-plain"); !ok || n.Section != SectionInbox {
+		t.Fatalf("非信封应进收件箱 %+v", n)
+	}
+	if _, ok := s.Note("old-secret"); ok {
+		t.Fatal("信封不应留作普通笔记")
 	}
 }

@@ -14,6 +14,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/toskr/native/internal/secretcodec"
 )
 
 // 从 Tauri 版导入（toskr-data.json + media/）：两版信封格式与 AAD 相同（data_crypto.rs），只是密钥不同。
@@ -184,6 +186,16 @@ type tauriSettings struct {
 type TauriReport struct {
 	Notes, Sections, Tasks, Bills, Secrets, Media, MediaMissing, SeedRemoved, Deliveries int
 	Recovery                                                                             string
+	Check                                                                                TauriCheck
+}
+
+// TauriCheck 是导入后核对：Tauri 每条记录回读本机逐项比对（分组 / 正文 / 置顶 / 完成 / 模糊 / 标题 / 标签 / 图片）。
+type TauriCheck struct {
+	Skipped    int            // Tauri 里的空卡（无字无图），按规则不导入
+	Mismatch   []string       // 回读不一致的「ID: 字段」
+	NativeOnly int            // 本机有、Tauri 没有的笔记（原生版自己捕获的）
+	PerSection map[string]int // 分组名 → Tauri 来源条数（含剪贴板）
+	Lost       []string       // 分组不存在的笔记「ID kind 字数」（面板里看不到）
 }
 
 func ms(v int64) time.Time {
@@ -314,6 +326,15 @@ func (s *Store) ImportTauri(dir string, key []byte) (TauriReport, error) {
 		if t.ID == "" {
 			continue
 		}
+		// 早期秘文没有 kind，只落在 secret 分组：Tauri 秘文页按 kind 筛、笔记页又排除 secret 分组，两边都看不到。
+		// 是秘文信封就按秘文导入；不是就放进收件箱，至少能看见。
+		if t.Kind != "secret" && t.SectionID == "secret" {
+			if secretcodec.IsEnvelope(t.Text) {
+				t.Kind = "secret"
+			} else {
+				t.SectionID = SectionInbox
+			}
+		}
 		if t.Kind == "secret" {
 			sec := Secret{ID: t.ID, Text: t.Text, SourceApp: t.SourceApp, CreatedAt: ms(t.CreatedAt), Direction: "in"}
 			if t.SecretMeta != nil {
@@ -363,6 +384,7 @@ func (s *Store) ImportTauri(dir string, key []byte) (TauriReport, error) {
 		}
 		notes = append(notes, n)
 	}
+	rep.Check.Skipped = len(st.Notes) - len(notes) - len(secrets)
 	var sections []Section
 	for _, x := range st.Sections {
 		if x.ID == "" || x.ID == "secret" {
@@ -436,6 +458,11 @@ func (s *Store) ImportTauri(dir string, key []byte) (TauriReport, error) {
 		rep.Tasks = upsert(&s.tasks, tasks, func(t Task) string { return t.ID })
 		rep.Bills = upsert(&s.bills, bills, func(b Bill) string { return b.ID })
 		rep.Secrets = upsert(&s.secrets, secrets, func(x Secret) string { return x.ID })
+		secIDs := map[string]bool{}
+		for _, x := range secrets {
+			secIDs[x.ID] = true
+		}
+		s.notes = slices.DeleteFunc(s.notes, func(n Note) bool { return secIDs[n.ID] }) // 旧版导入留下的同 ID 普通笔记
 		s.settings = applyTauriSettings(s.settings, st.Settings)
 		return true
 	})
@@ -445,7 +472,80 @@ func (s *Store) ImportTauri(dir string, key []byte) (TauriReport, error) {
 	s.ensureDefaults()
 	rep.Media = len(m.mapped) - m.missing
 	rep.MediaMissing = m.missing
+	s.checkTauri(&rep.Check, notes)
 	return rep, s.Flush()
+}
+
+// checkTauri 回读本机数据，与本次导入的 Tauri 记录逐条比对。
+func (s *Store) checkTauri(c *TauriCheck, want []Note) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got := make(map[string]Note, len(s.notes))
+	for _, n := range s.notes {
+		got[n.ID] = n
+	}
+	names := map[string]string{}
+	for _, x := range s.sections {
+		names[x.ID] = x.Name
+	}
+	c.PerSection = map[string]int{}
+	ids := make(map[string]bool, len(want))
+	for _, w := range want {
+		ids[w.ID] = true
+		name, ok := names[w.Section]
+		if !ok {
+			name = w.Section
+			c.Lost = append(c.Lost, fmt.Sprintf("%s %s %d字", w.ID, w.Kind, len([]rune(w.Text))))
+		}
+		c.PerSection[name]++
+		g, ok := got[w.ID]
+		var bad []string
+		switch {
+		case !ok:
+			bad = append(bad, "缺失")
+		default:
+			for _, f := range []struct {
+				name string
+				eq   bool
+			}{
+				{"分组", g.Section == w.Section}, {"正文", g.Text == w.Text}, {"置顶", g.Kept == w.Kept},
+				{"完成", g.Done == w.Done}, {"模糊", g.Blur == w.Blur}, {"标题", g.Title == w.Title},
+				{"标签", slices.Equal(g.Tags, w.Tags)}, {"图片", g.ImageFile == w.ImageFile},
+				{"附件", slices.Equal(g.Attachments, w.Attachments)},
+			} {
+				if !f.eq {
+					bad = append(bad, f.name)
+				}
+			}
+		}
+		if len(bad) > 0 {
+			c.Mismatch = append(c.Mismatch, w.ID+": "+strings.Join(bad, "/"))
+		}
+	}
+	for id := range got {
+		if !ids[id] {
+			c.NativeOnly++
+		}
+	}
+}
+
+// Summary 是核对结果的一行摘要（按条数降序列分组）。
+func (c TauriCheck) Summary() string {
+	keys := make([]string, 0, len(c.PerSection))
+	for k := range c.PerSection {
+		keys = append(keys, k)
+	}
+	slices.SortFunc(keys, func(x, y string) int {
+		if d := c.PerSection[y] - c.PerSection[x]; d != 0 {
+			return d
+		}
+		return strings.Compare(x, y)
+	})
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = fmt.Sprintf("%s %d", k, c.PerSection[k])
+	}
+	return fmt.Sprintf("核对：不一致 %d · 空卡未导 %d · 仅本机 %d · 分组失联 %d · %s", len(c.Mismatch), c.Skipped, c.NativeOnly, len(c.Lost), strings.Join(parts, " / "))
 }
 
 // upsert：按 ID 覆盖已有项，新项按 Tauri 顺序追加；返回导入条数。
