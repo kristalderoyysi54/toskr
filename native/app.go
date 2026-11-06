@@ -143,6 +143,9 @@ type app struct {
 	calStatus                              string                    // 日历授权状态（空 = 未查）
 	calendars                              []macos.CalendarInfo      // 设置页「显示的日历」
 	calListing                             bool
+	cmdOpen                                bool // ⌘K 命令面板
+	cmdQuery                               string
+	cmdCursor                              int
 	setShortcutsOpen                       bool   // 设置「面板内快捷键」表展开
 	setJump                                string // 设置窗下一帧要跳到的页名
 	lastClipID                             string // 上一次外部复制入库的卡（连续复制两次置顶用）

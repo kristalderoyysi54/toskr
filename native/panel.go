@@ -45,7 +45,7 @@ func (a *app) panelView(c *ui.Context) {
 	}
 	c.Root().Background(k.window.Alpha(min(p, 1) * tint)) // Alpha 是相乘
 	if k.pt {
-		shell.Children(func() { a.platinumPanel(c, k); a.recentDrawer(c, k); a.shortcutHelp(c, k) })
+		shell.Children(func() { a.platinumPanel(c, k); a.recentDrawer(c, k); a.shortcutHelp(c, k); a.commandPalette(c, k) })
 		return
 	}
 
@@ -71,6 +71,7 @@ func (a *app) panelView(c *ui.Context) {
 		a.selectionBar(c, k) // 勾选时的批量条留在面板最下方
 		a.recentDrawer(c, k)
 		a.shortcutHelp(c, k) // 长按 ⌥ 的快捷键速查层压在最上
+		a.commandPalette(c, k)
 	})
 	if a.menuOpen {
 		a.panelMenu(c, k)
@@ -354,6 +355,12 @@ func (a *app) panelKeys(c *ui.Context) {
 	}
 	if !typing && c.Shortcut(ui.Cmd, ui.KeyRight) && a.page < 2 {
 		a.switchPage(a.page + 1)
+	}
+	if !typing && c.Shortcut(ui.Cmd, ui.KeyK) {
+		a.cmdOpen, a.cmdQuery, a.cmdCursor = !a.cmdOpen, "", 0
+	}
+	if a.cmdOpen { // 命令面板打开时独占键盘（输入框处理 ↑↓↵ Esc）
+		return
 	}
 	if c.Shortcut(0, ui.KeyEscape) {
 		switch {
