@@ -50,16 +50,16 @@ func TestFirewallSettings(t *testing.T) {
 	if !set.HasText("仅支持汉字、英文字母、数字、下划线、点和短横线，不含空格") {
 		t.Fatalf("应显示校验错误：%v", set.Texts())
 	}
-	a.fw.input = "内部口令"
+	a.fw.input = "内部编号"
 	_ = set.Click("添加")
 	set.Frame()
-	if got := a.store.Settings().FirewallCustomFields; !slices.Equal(got, []string{"内部口令"}) || !set.HasText("1 个") {
+	if got := a.store.Settings().FirewallCustomFields; !slices.Equal(got, []string{"内部编号"}) || !set.HasText("1 个") {
 		t.Fatalf("自定义字段：%v %v", got, set.Texts())
 	}
-	if fs := core.Scan("内部口令：abc123", a.scanRules()); len(fs) != 1 || fs[0].Category != "custom" {
+	if fs := core.Scan("内部编号：abc123", a.scanRules()); len(fs) != 1 || fs[0].Category != "custom" {
 		t.Fatalf("%v", fs)
 	}
-	_ = set.Click("删除敏感字段 内部口令")
+	_ = set.Click("删除敏感字段 内部编号")
 	set.Frame()
 	if len(a.store.Settings().FirewallCustomFields) != 0 {
 		t.Fatal("删除失败")

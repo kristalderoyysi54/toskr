@@ -64,7 +64,7 @@ func TestScanIPv4AndEmail(t *testing.T) {
 
 func TestScanRulesSwitches(t *testing.T) {
 	mail := joined("bob", "@corp.io")
-	key := joined("-----BEGIN RSA ", "PRIVATE KEY-----")
+	key := joined("-----BEGIN RSA ", "PRIVATE KEY-----\nMIIB\n-----END RSA ", "PRIVATE KEY-----")
 	text := "邮件 " + mail + "\n" + key
 	if fs := Scan(text, Rules{Off: true}); fs != nil {
 		t.Fatalf("关闭后不应检测：%v", kinds(fs))
@@ -79,16 +79,16 @@ func TestScanRulesSwitches(t *testing.T) {
 }
 
 func TestScanCustomFields(t *testing.T) {
-	r := Rules{CustomFields: []string{"内部口令", "partner_secret"}}
-	text := "内部口令：" + joined("hunter", "-42") + "\npartner_secret（生产） = 'abc def'\nmy_partner_secret: nope\n内部口令说明很长"
+	r := Rules{CustomFields: []string{"内部编号", "partner_secret"}}
+	text := "内部编号：" + joined("hunter", "-42") + "\npartner_secret（生产） = 'abc def'\nmy_partner_secret: nope\n内部编号说明很长"
 	fs := Scan(text, r)
 	if len(fs) != 2 {
 		t.Fatalf("应命中两处自定义字段：%v", kinds(fs))
 	}
-	if got := text[fs[0].Start:fs[0].End]; got != "hunter-42" || fs[0].Kind != "自定义敏感字段：内部口令" {
+	if got := text[fs[0].Start:fs[0].End]; got != "hunter-42" || fs[0].Kind != "自定义敏感字段：内部编号" {
 		t.Fatalf("第一处：%q %s", got, fs[0].Kind)
 	}
-	if got := text[fs[1].Start:fs[1].End]; got != "'abc def'" || fs[1].Category != "custom" {
+	if got := text[fs[1].Start:fs[1].End]; got != "abc def" || fs[1].Category != "custom" { // 同 Tauri：引号不进命中区间
 		t.Fatalf("第二处：%q", got)
 	}
 	// 自定义字段按高风险处理：关掉所有提示级类别仍然检测

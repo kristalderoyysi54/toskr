@@ -20,7 +20,7 @@ func TestPreflightFindsSecretsCardsAndIDs(t *testing.T) {
 	for _, f := range got {
 		kinds = append(kinds, f.Kind)
 	}
-	if strings.Join(kinds, ",") != "GitHub 令牌,银行卡号,身份证号" {
+	if strings.Join(kinds, ",") != "密钥/凭据,银行卡号,身份证号" {
 		t.Fatalf("命中 %v", kinds)
 	}
 	red := Redact(text, got)

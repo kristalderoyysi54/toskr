@@ -92,7 +92,7 @@ func TestPreflightBlocksUntilConfirmedAndRedacts(t *testing.T) {
 	a.target = macos.FrontApp{PID: 42, Name: "Cursor"}
 	tt.Key(ui.Cmd, ui.KeyEnter)
 	tt.Frame()
-	if !tt.HasText("发送内容含敏感信息：API 密钥 ×1") || len(sys.sent()) != 0 {
+	if !tt.HasText("发送内容含敏感信息：密钥/凭据 ×1") || len(sys.sent()) != 0 {
 		t.Fatalf("预检命中应拦截 %v", tt.Texts())
 	}
 	_ = tt.Click("遮罩后发送")
