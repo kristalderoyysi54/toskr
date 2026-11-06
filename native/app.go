@@ -170,7 +170,10 @@ type app struct {
 	dataDirMissing                         string      // 指针指向的自定义数据目录启动时不可用（本次用默认目录）
 	dirPlan                                *dirPlan    // 待确认的数据目录切换
 	rem                                    remSync     // 提醒事项同步调度（含锁，app 只按指针传）
-	remStatusAsked                         bool        // 设置页已查过提醒事项授权状态
+	fx                                     *fxCache    // 当日汇率（数据目录 toskr-fx-rates.json 缓存）
+	fxLoaded, fxFetching                   bool
+	billRange                              string // 消费分析趋势：month | year
+	remStatusAsked                         bool   // 设置页已查过提醒事项授权状态
 	// 设置页「本机翻译」状态
 	ltStatus                        string
 	ltPreparing, ltFailed, ltOpened bool

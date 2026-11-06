@@ -85,61 +85,6 @@ func billsDueWithin(bills []store.Bill, now time.Time, days int) []store.Bill {
 	return out
 }
 
-// monthSpend：本月已记账 + active 订阅本月剩余到期投影（只算订阅，信用卡不进消费汇总）。
-func monthSpend(bills []store.Bill, now time.Time) float64 {
-	start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-	end := start.AddDate(0, 1, 0)
-	total := 0.0
-	for _, b := range bills {
-		if b.Kind != "subscription" {
-			continue
-		}
-		for _, p := range b.History {
-			if !p.At.Before(start) && p.At.Before(end) {
-				total += p.Amount
-			}
-		}
-		if b.Status != "active" {
-			continue
-		}
-		due := b.NextDueAt
-		for g := 0; due.Before(end) && g < 8; g++ {
-			if !due.Before(start) {
-				total += b.Amount
-			}
-			due = store.AdvanceCycle(due, b.Cycle)
-		}
-	}
-	return total
-}
-
-type monthBucket struct {
-	year  int
-	month time.Month
-	total float64
-}
-
-func spendTrend(bills []store.Bill, now time.Time, months int) []monthBucket {
-	out := make([]monthBucket, months)
-	for i := range out {
-		m := time.Date(now.Year(), now.Month()-time.Month(months-1-i), 1, 0, 0, 0, 0, now.Location())
-		out[i] = monthBucket{year: m.Year(), month: m.Month()}
-	}
-	for _, b := range bills {
-		if b.Kind != "subscription" {
-			continue
-		}
-		for _, p := range b.History {
-			for i := range out {
-				if p.At.Year() == out[i].year && p.At.Month() == out[i].month {
-					out[i].total += p.Amount
-				}
-			}
-		}
-	}
-	return out
-}
-
 // compareBills：active 在前（到期早在前），暂停/取消垫底按名称。
 func compareBills(x, y store.Bill) int {
 	rx, ry := x.Status != "active", y.Status != "active"
@@ -188,6 +133,7 @@ func (a *app) billsPage(c *ui.Context, k tokens) {
 		a.billDay = dayStart(now)
 	}
 	defer a.billFlow(c, k) // 添加 / 编辑流程是盖住整个面板的浮层（同 Tauri AddBillFlow 对话框）
+	defer a.billAnalyticsSheet(c, k, cur, now)
 	if len(a.bills) == 0 {
 		ui.Column(c).Grow(1).Children(func() {
 			a.emptyState(c, k, "credit-card", tr("还没有订阅账单"), tr("记下订阅服务与信用卡还款日，\n到期前自动弹提醒，不再错过续费与还款。"))
@@ -202,7 +148,13 @@ func (a *app) billsPage(c *ui.Context, k tokens) {
 	upcoming := billsDueWithin(a.bills, now, 7)
 	ui.Row(c).Height(36).Padding(0, 14, 4, 14).Gap(8).AlignItems(ui.Center).Children(func() {
 		ui.Column(c).Grow(1).Basis(0).Children(func() {
-			text(c, fmt.Sprintf(tr("本月 %s"), money(cur, monthSpend(a.bills, now))), 13, 18, 600, k.fg).SingleLine()
+			// 有当日汇率且多币种：折算主货币带 ≈，悬停给分列；否则分币种并列（同 Tauri 摘要条）
+			parts := fmtCurTotals(monthSpendByCur(a.bills, now, cur), cur)
+			label := parts
+			if cv, ok := a.billConv(cur); ok {
+				label = approx(cur, monthSpend(a.bills, now, cv))
+			}
+			text(c, fmt.Sprintf(tr("本月 %s"), label), 13, 18, 600, k.fg).SingleLine().Tooltip(parts)
 			sub := tr("未来 7 天没有到期账单")
 			if len(upcoming) > 0 {
 				sub = fmt.Sprintf(tr("未来 7 天有 %d 笔到期"), len(upcoming))
@@ -222,10 +174,6 @@ func (a *app) billsPage(c *ui.Context, k tokens) {
 	ui.Scroll(c).Grow(1).Scrollbars(false).Children(func() {
 		ui.Column(c).Padding(4, 14, 8, 14).Gap(8).Children(func() {
 			// AddBillFlow / BillAnalytics 弹层：fade-in + 自下 8px 滑入，100ms ease；无离场动画
-			sheet := ui.ElementTransition{Duration: 100 * time.Millisecond, Ease: easeCSS, Enter: &ui.Motion{Y: 8}}
-			if a.billAnalytics {
-				ui.Column(c).Key("bill-analytics").Transition(sheet).Children(func() { a.billAnalyticsCard(c, k, cur, now) })
-			}
 			bv := 0
 			if a.billView == "month" {
 				bv = 1
@@ -654,7 +602,15 @@ func (a *app) billMonthGrid(c *ui.Context, k tokens, now time.Time) {
 
 // billTrend：近 6 个月消费迷你柱（柱容器高 40，当月深色；悬停显金额）。
 func (a *app) billTrend(c *ui.Context, k tokens, cur string, now time.Time) {
-	trend := spendTrend(a.bills, now, 6)
+	cv, converted := a.billConv(cur)
+	sym := cur
+	if !converted {
+		cv = nil
+		if d := distinctCurrencies(a.bills, cur); len(d) > 0 {
+			sym = d[0] // 单一币种用原币符号；汇率未就绪的多币种按主符号混计（同 Tauri BillTrendChart）
+		}
+	}
+	trend := spendTrend(a.bills, now, 6, cv)
 	peak := 0.0
 	for _, m := range trend {
 		peak = max(peak, m.total)
@@ -671,7 +627,11 @@ func (a *app) billTrend(c *ui.Context, k tokens, cur string, now time.Time) {
 				col := ui.Column(c).Grow(1).Basis(0).Gap(2).AlignItems(ui.Center).Key(fmt.Sprint(m.year, m.month))
 				hov := col.Hovered()
 				col.Children(func() {
-					amt := text(c, money(cur, m.total), 10, 12, 400, k.muted).SingleLine()
+					amtText := money(sym, math.Round(m.total*100)/100)
+					if converted {
+						amtText = "≈" + amtText
+					}
+					amt := text(c, amtText, 10, 12, 400, k.muted).SingleLine()
 					show := float32(0)
 					if hov && m.total > 0 {
 						show = 1
@@ -692,63 +652,13 @@ func (a *app) billTrend(c *ui.Context, k tokens, cur string, now time.Time) {
 					if current {
 						lcol = k.fg
 					}
-					text(c, fmt.Sprintf(tr("%d月"), m.month), 10, 14, 400, lcol)
+					text(c, m.label, 10, 14, 400, lcol)
 				})
 				if col.Clicked() {
 					a.billAnalytics = true
 				}
 			}
 		})
-	})
-}
-
-// billAnalyticsCard：消费分析（近 12 个月合计、月均、按订阅拆分的年化支出）。
-func (a *app) billAnalyticsCard(c *ui.Context, k tokens, cur string, now time.Time) {
-	trend := spendTrend(a.bills, now, 12)
-	total := 0.0
-	for _, m := range trend {
-		total += m.total
-	}
-	type share struct {
-		name   string
-		yearly float64
-	}
-	var shares []share
-	for _, b := range a.bills {
-		if b.Kind == "subscription" && b.Status == "active" {
-			shares = append(shares, share{b.Name, store.MonthlyCost([]store.Bill{b}) * 12})
-		}
-	}
-	slices.SortFunc(shares, func(x, y share) int {
-		if x.yearly > y.yearly {
-			return -1
-		}
-		if x.yearly < y.yearly {
-			return 1
-		}
-		return 0
-	})
-	ui.Column(c).Padding(10).Gap(6).Radius(14).Background(k.card).Border(1, k.inputBorder).Children(func() {
-		ui.Row(c).AlignItems(ui.Center).Children(func() {
-			text(c, tr("消费分析"), 12, 17, 600, k.fg).Grow(1)
-			if a.iconButton(c, k, "x", 20, 12, tr("关闭")) {
-				a.billAnalytics = false
-			}
-		})
-		text(c, fmt.Sprintf(tr("近 12 个月 %s · 月均 %s · 订阅年化 %s"), money(cur, total), money(cur, total/12), money(cur, store.MonthlyCost(a.bills)*12)), 10, 14, 400, k.muted).Wrap()
-		for _, s := range shares {
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Key("an-" + s.name).Children(func() {
-				text(c, s.name, 11, 16, 400, k.fg).SingleLine().Width(110)
-				ui.Box(c).Grow(1).Height(6).Radius(3).Background(k.track).Children(func() {
-					w := float32(0)
-					if len(shares) > 0 && shares[0].yearly > 0 {
-						w = float32(s.yearly / shares[0].yearly)
-					}
-					ui.Box(c).Absolute().Left(0).Top(0).Bottom(0).WidthPercent(w * 100).Radius(3).Background(k.muted.Alpha(0.6))
-				})
-				text(c, money(cur, s.yearly)+tr(" / 年"), 10, 14, 400, k.muted).Width(80).TextAlign(ui.End)
-			})
-		}
 	})
 }
 

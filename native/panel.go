@@ -374,6 +374,10 @@ func (a *app) panelKeys(c *ui.Context) {
 	}
 	if c.Shortcut(0, ui.KeyEscape) {
 		switch {
+		case a.billForm.open: // 盖住面板的对话框先退（同 Tauri Dialog Esc）
+			a.billForm = billForm{}
+		case a.billAnalytics:
+			a.billAnalytics = false
 		case a.titleEditID != "" || a.tagEditID != "" || a.renamingSec != "":
 			a.titleEditID, a.tagEditID, a.renamingSec = "", "", ""
 		case a.editing != "":
