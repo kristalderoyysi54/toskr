@@ -253,76 +253,101 @@ func (a *app) preflightBar(c *ui.Context) {
 		tone = t.Accent
 	}
 	ui.Column(c).Padding(10, 12).Gap(8).Radius(12).Background(tone.Alpha(0.12)).Border(1, tone.Alpha(0.45)).Key("preflight").Children(func() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			switch {
-			case len(p.items) == 0 && p.replaced > 0:
-				ui.Icon(c, iconCheck).FontSize(14).TextColor(t.Success)
-				ui.Text(c, fmt.Sprintf(tr("已替换 %d 处敏感内容，发往 %s · %s"), p.replaced, a.target.Name, profileName(r.Profile))).FontSize(12).Wrap().Grow(1)
-			case len(p.items) == 0:
-				ui.Text(c, fmt.Sprintf(tr("发送前检查：发往 %s · %s"), a.target.Name, profileName(r.Profile))).FontSize(12).Wrap().Grow(1)
-			default:
-				ui.Icon(c, iconWarn).FontSize(14).TextColor(t.Warning)
-				ui.Text(c, tr("发送内容含敏感信息：")+pfSummary(p.items)).FontSize(12).Wrap().Grow(1)
-			}
-			if ghostIconButton(c, k, "pf-rescan", "refresh-cw", tr("重新检测当前文本和原始图片"), 22, 13, false, true).Clicked() {
-				a.pfScan()
-				a.pfScanImages()
-				switch n := len(a.pf.items); {
-				case n > 0:
-					a.showHUD("info", fmt.Sprintf(tr("重新检测完成，发现 %d 项可能的敏感内容"), n))
-				default:
-					a.showHUD("ok", tr("重新检测完成，未发现敏感内容"))
-				}
-			}
-		})
-		if len(texts) > 0 { // 将要发送的内容（已套模板与输出格式，已替换的显示占位符）
-			ui.Text(c, clipRunes(composePayload(texts, a.pendingTmpl, a.outputMode(r.Profile)), 400)).FontSize(11).Font(fontMono).Wrap().MaxLines(8).
-				Padding(6, 8).Radius(8).Background(t.Background.Alpha(0.6))
-		}
-		if len(p.items) > 0 {
-			a.pfDetails(c, k, e)
-		}
-		if len(p.images) > 0 && len(p.items) == 0 {
-			a.pfImageToggle(c, k)
-		}
-		a.pfImagesSection(c, k, policy)
-		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-			switch {
-			case both.needRaw != "":
-				label := tr("确认本次保留提示级原文")
+		head := func() {
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				switch {
-				case imgRaw && both.needRaw == "block":
-					label = tr("再次确认保留图中高风险原文")
-				case imgRaw:
-					label = tr("确认保留图中提示级原文")
-				case both.needRaw == "block":
-					label = tr("再次确认保留高风险原文")
+				case len(p.items) == 0 && p.replaced > 0:
+					ui.Icon(c, iconCheck).FontSize(14).TextColor(t.Success)
+					ui.Text(c, fmt.Sprintf(tr("已替换 %d 处敏感内容，发往 %s · %s"), p.replaced, a.target.Name, profileName(r.Profile))).FontSize(12).Wrap().Grow(1)
+				case len(p.items) == 0:
+					ui.Text(c, fmt.Sprintf(tr("发送前检查：发往 %s · %s"), a.target.Name, profileName(r.Profile))).FontSize(12).Wrap().Grow(1)
+				default:
+					ui.Icon(c, iconWarn).FontSize(14).TextColor(t.Warning)
+					ui.Text(c, tr("发送内容含敏感信息：")+pfSummary(p.items)).FontSize(12).Wrap().Grow(1)
 				}
-				if ui.Button(c, label).Clicked() {
-					if imgRaw {
-						p.imgRaw = both.needRaw
-						for _, im := range p.images {
-							if im.status == "failed" {
-								im.rawOK = true
-							}
-						}
-					} else {
-						p.raw = both.needRaw
+				if ghostIconButton(c, k, "pf-rescan", "refresh-cw", tr("重新检测当前文本和原始图片"), 22, 13, false, true).Clicked() {
+					a.pfScan()
+					a.pfScanImages()
+					switch n := len(a.pf.items); {
+					case n > 0:
+						a.showHUD("info", fmt.Sprintf(tr("重新检测完成，发现 %d 项可能的敏感内容"), n))
+					default:
+						a.showHUD("ok", tr("重新检测完成，未发现敏感内容"))
 					}
 				}
-			case both.canSend:
-				if ui.Button(c, tr("发送")).Clicked() {
-					a.pfSend(both)
+			})
+		}
+		payload := func() {
+			if len(texts) > 0 { // 将要发送的内容（已套模板与输出格式，已替换的显示占位符）
+				ui.Text(c, clipRunes(composePayload(texts, a.pendingTmpl, a.outputMode(r.Profile)), 400)).FontSize(11).Font(fontMono).Wrap().MaxLines(8).
+					Padding(6, 8).Radius(8).Background(t.Background.Alpha(0.6))
+			}
+		}
+		body := func() {
+			if len(p.items) > 0 {
+				a.pfDetails(c, k, e)
+			}
+			if len(p.images) > 0 && len(p.items) == 0 {
+				a.pfImageToggle(c, k)
+			}
+			a.pfImagesSection(c, k, policy)
+		}
+		actions := func() {
+			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+				switch {
+				case both.needRaw != "":
+					label := tr("确认本次保留提示级原文")
+					switch {
+					case imgRaw && both.needRaw == "block":
+						label = tr("再次确认保留图中高风险原文")
+					case imgRaw:
+						label = tr("确认保留图中提示级原文")
+					case both.needRaw == "block":
+						label = tr("再次确认保留高风险原文")
+					}
+					if ui.Button(c, label).Clicked() {
+						if imgRaw {
+							p.imgRaw = both.needRaw
+							for _, im := range p.images {
+								if im.status == "failed" {
+									im.rawOK = true
+								}
+							}
+						} else {
+							p.raw = both.needRaw
+						}
+					}
+				case both.canSend:
+					if ui.Button(c, tr("发送")).Clicked() {
+						a.pfSend(both)
+					}
+				case slices.ContainsFunc(p.images, func(im *pfImage) bool { return im.status == "scanning" }):
+					ui.Text(c, tr("本地隐私检测中…")).FontSize(11).TextColor(t.TextMuted)
+				default:
+					ui.Text(c, fmt.Sprintf(tr("%d 项处理完才能发送"), both.unresolved)).FontSize(11).TextColor(t.TextMuted)
 				}
-			case slices.ContainsFunc(p.images, func(im *pfImage) bool { return im.status == "scanning" }):
-				ui.Text(c, tr("本地隐私检测中…")).FontSize(11).TextColor(t.TextMuted)
-			default:
-				ui.Text(c, fmt.Sprintf(tr("%d 项处理完才能发送"), both.unresolved)).FontSize(11).TextColor(t.TextMuted)
-			}
-			if ui.Button(c, tr("取消")).Clicked() {
-				a.cancelPending()
-			}
-		})
+				if ui.Button(c, tr("取消")).Clicked() {
+					a.cancelPending()
+				}
+			})
+		}
+		if a.hbar() { // 横栏（同 Tauri PreflightComposer horizontal）：左 0.9 概览 / 右 1.1 正文并排
+			ui.Row(c).Gap(8).AlignItems(ui.Stretch).Children(func() {
+				ui.Column(c).Grow(0.9).Basis(0).Gap(8).Children(func() {
+					head()
+					body()
+					actions()
+				})
+				ui.Scroll(c).Grow(1.1).Basis(0).MaxHeight(180).Scrollbars(false).Children(func() {
+					ui.Column(c).Children(payload)
+				})
+			})
+			return
+		}
+		head()
+		payload()
+		body()
+		actions()
 	})
 }
 

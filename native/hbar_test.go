@@ -5,6 +5,8 @@ import (
 
 	"github.com/egoist/mygo"
 
+	"github.com/toskr/native/internal/macos"
+
 	"github.com/toskr/native/internal/store"
 )
 
@@ -151,5 +153,28 @@ func TestBarSecretAndMessages(t *testing.T) {
 	tt.Frame()
 	if !tt.HasText("没有待处理消息") {
 		t.Fatalf("消息横栏空态 %v", tt.Texts())
+	}
+}
+
+// 横栏预检：概览与正文并排，仍可发送 / 取消。
+func TestBarPreflightTwoColumns(t *testing.T) {
+	a, tt := testApp(t, "联系 demo.user@example.com")
+	a.sys = &recSys{}
+	a.target = macos.FrontApp{PID: 42, Name: "Cursor"}
+	st := a.store.Settings()
+	st.SidebarEdge = "bottom"
+	_ = a.store.SetSettings(st)
+	tt.SetSize(1400, 320)
+	a.send([]store.Note{a.store.Notes()[0]})
+	tt.Frame()
+	tt.Frame()
+	if len(a.pending) == 0 || !tt.HasText("取消") || !tt.HasText("发送内容含敏感信息") {
+		t.Fatalf("横栏预检 %v", tt.Texts())
+	}
+	if err := tt.Click("取消"); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.pending) != 0 {
+		t.Fatal("取消应清掉预检")
 	}
 }
