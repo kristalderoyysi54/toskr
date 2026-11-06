@@ -65,6 +65,7 @@ func (a *app) panelView(c *ui.Context) {
 		}
 		a.targetBar(c, k)
 		a.permissionBanner(c, k)
+		a.conflictBanner(c, k)
 		a.tabs(c, k)
 		if len(a.pending) > 0 {
 			ui.Column(c).Margin(0, 12, 6, 12).Children(func() { a.preflightBar(c) })

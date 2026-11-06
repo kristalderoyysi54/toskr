@@ -134,10 +134,7 @@ func start() (*app, error) {
 	if st.Settings().RemindersOn {
 		a.scheduleReminderSync(3 * time.Second) // 启动先对账一轮（含导入列表里新建的提醒）
 	}
-	st.OnError = func(err error) {
-		diag.Push("落盘失败: %v", err)
-		a.panel.Update(func() { a.showHUD("warn", "保存失败："+err.Error()) })
-	}
+	st.OnConflict, st.OnError = a.storeConflict, a.storeError
 	mygo.App.OnQuit(func() {
 		a.shutdownIM()()
 		if err := st.Flush(); err != nil {

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -255,7 +256,32 @@ type Store struct {
 	dirty        bool
 	timer        *time.Timer
 	OnError      func(error) // 后台落盘失败回调
+	disk         fileStamp   // 上次读到 / 写出的数据文件状态（外部修改检测）
+	conflict     bool        // 数据文件被外部修改：停止自动覆盖，进入只读
+	OnConflict   func()      // 检测到外部修改时回调（后台线程）
 }
+
+// fileStamp：数据文件的修改时间与大小；外部进程（另一个实例、同步工具）改了文件，二者至少一个会变。
+type fileStamp struct {
+	mod  time.Time
+	size int64
+	ok   bool
+}
+
+func stampOf(path string) fileStamp {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return fileStamp{}
+	}
+	return fileStamp{fi.ModTime(), fi.Size(), true}
+}
+
+var (
+	// ErrConflict：数据文件被外部修改，本次没有覆盖（同 Tauri 持久化 CAS 拒绝）。
+	ErrConflict = errors.New("数据文件被外部修改，已停止自动覆盖")
+	// ErrReadOnly：冲突待处理期间拒绝修改。
+	ErrReadOnly = errors.New("数据只读：请先处理外部修改冲突")
+)
 
 // Open 读取 dir 下的数据文件；文件不存在视为全新安装。密钥错误显式报错，不返回空集合。
 func OpenDir(dir string, key []byte) (*Store, error) {
@@ -285,7 +311,66 @@ func OpenDir(dir string, key []byte) (*Store, error) {
 	s.sections, s.tasks, s.taskSections, s.bills, s.secrets = snap.Sections, snap.Tasks, snap.TaskSections, snap.Bills, snap.Secrets
 	s.deliveries = snap.Deliveries
 	s.messages, s.messagesGone = snap.Messages, snap.MessagesGone
+	s.disk = stampOf(filepath.Join(dir, DataFile))
 	return s, nil
+}
+
+// Conflict 报告是否处于「外部修改冲突」只读状态。
+func (s *Store) Conflict() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.conflict }
+
+// ReloadFromDisk 丢弃内存里未落盘的修改，重新读入磁盘上的数据文件并解除只读（同 Tauri reloadAfterPersistenceConflict）。
+func (s *Store) ReloadFromDisk() error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	path := filepath.Join(s.dir, DataFile)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	plain := raw
+	if Sealed(raw) {
+		if plain, err = Open(s.key, PurposeData, raw); err != nil {
+			return err
+		}
+	}
+	var snap snapshot
+	if err := json.Unmarshal(plain, &snap); err != nil {
+		return ErrCorrupt
+	}
+	s.mu.Lock()
+	if s.timer != nil {
+		s.timer.Stop()
+		s.timer = nil
+	}
+	s.notes, s.settings = snap.Notes, mergeSettings(snap.Settings)
+	s.sections, s.tasks, s.taskSections, s.bills, s.secrets = snap.Sections, snap.Tasks, snap.TaskSections, snap.Bills, snap.Secrets
+	s.deliveries = snap.Deliveries
+	s.messages, s.messagesGone = snap.Messages, snap.MessagesGone
+	s.disk, s.conflict, s.dirty = stampOf(path), false, false
+	s.mu.Unlock()
+	s.ensureDefaults()
+	s.notify()
+	return nil
+}
+
+// SaveMemoryAsRecovery 把内存里的当前数据另存为一个恢复点（冲突时保底，同 Tauri 另存恢复副本），返回路径。
+func (s *Store) SaveMemoryAsRecovery(now time.Time) (string, error) {
+	s.mu.Lock()
+	plain, err := json.Marshal(s.snapshotLocked())
+	s.mu.Unlock()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(s.dir, "recovery")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	sealed, err := Seal(s.key, PurposeRecovery, plain)
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, fmt.Sprintf("%s%013d-conflict.bak", recoveryPrefix, now.UnixMilli()))
+	return path, atomicWrite(path, sealed)
 }
 
 func (s *Store) OnChange(fn func()) { s.mu.Lock(); s.onChange = append(s.onChange, fn); s.mu.Unlock() }
@@ -326,6 +411,11 @@ func (s *Store) Add(n Note) (Note, bool, error) {
 		}
 	}
 	s.mu.Lock()
+	if s.conflict {
+		s.mu.Unlock()
+		s.readOnlyHit()
+		return Note{}, false, ErrReadOnly
+	}
 	dup := false
 	if i := slices.IndexFunc(s.notes, func(o Note) bool {
 		return o.Section == n.Section && o.Text == n.Text && o.ImageFile == n.ImageFile && slices.Equal(o.Attachments, n.Attachments)
@@ -348,8 +438,20 @@ func (s *Store) Add(n Note) (Note, bool, error) {
 	return n, dup, nil
 }
 
+// readOnlyHit：只读期间有修改被拒，交给 OnError 提示（调用方多数忽略返回值，否则用户只会看到「点了没反应」）。
+func (s *Store) readOnlyHit() {
+	if s.OnError != nil {
+		s.OnError(ErrReadOnly)
+	}
+}
+
 func (s *Store) mutate(fn func() bool) error {
 	s.mu.Lock()
+	if s.conflict {
+		s.mu.Unlock()
+		s.readOnlyHit()
+		return ErrReadOnly
+	}
 	if !fn() {
 		s.mu.Unlock()
 		return nil
@@ -384,6 +486,19 @@ func (s *Store) Flush() error {
 		s.mu.Unlock()
 		return nil
 	}
+	path := filepath.Join(s.dir, DataFile)
+	if s.conflict || stampOf(path) != s.disk { // 别人改过磁盘文件：不覆盖（同 Tauri CAS 拒绝）
+		first := !s.conflict
+		s.conflict = true
+		s.mu.Unlock()
+		if first {
+			if s.OnConflict != nil {
+				s.OnConflict()
+			}
+			s.notify()
+		}
+		return ErrConflict
+	}
 	plain, err := json.Marshal(s.snapshotLocked())
 	s.dirty = false
 	s.mu.Unlock()
@@ -394,12 +509,15 @@ func (s *Store) Flush() error {
 	if err != nil {
 		return err
 	}
-	if err := atomicWrite(filepath.Join(s.dir, DataFile), sealed); err != nil {
+	if err := atomicWrite(path, sealed); err != nil {
 		s.mu.Lock()
 		s.dirty = true
 		s.mu.Unlock()
 		return err
 	}
+	s.mu.Lock()
+	s.disk = stampOf(path)
+	s.mu.Unlock()
 	return nil
 }
 

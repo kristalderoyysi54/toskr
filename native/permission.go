@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/toskr/native/internal/diag"
 	"github.com/toskr/native/internal/macos"
+	"github.com/toskr/native/internal/store"
 )
 
 // 权限引导横幅（同 Tauri PermissionBanner + permissionGuard.ts）：
@@ -166,4 +168,73 @@ func bannerButton(c *ui.Context, s settingsTokens, label string) bool {
 	}
 	b.Background(bg).Shadow(0, 1, 2, 0, s.btnShadow).Children(func() { text(c, tr(label), 11, 16, 500, s.btnFg).SingleLine() })
 	return b.Clicked()
+}
+
+// conflictBanner：数据文件被外部修改后的只读横幅（同 Tauri persistence conflict 提示）——
+// 内存里的修改不再落盘，用户选「重新加载磁盘版本」或「另存恢复副本后重新加载」解除只读。
+func (a *app) conflictBanner(c *ui.Context, k tokens) {
+	if !a.store.Conflict() {
+		return
+	}
+	s := stok(c)
+	tone := k.danger
+	title := tr("数据只读：检测到数据文件被外部修改")
+	ui.Column(c).Margin(0, 12, 8, 12).Padding(12).Gap(6).Radius(12).Background(tone.Alpha(0.1)).Border(1, tone.Alpha(0.3)).
+		Label(title).Key("conflict-banner").Children(func() {
+		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+			licon(c, "triangle-alert", 14, tone)
+			text(c, title, 12, 17, 500, tone)
+		})
+		text(c, tr("为避免覆盖别处的改动，已停止自动保存，此后的修改不会生效。"), 11, 16, 400, k.muted).Wrap().MaxLines(2)
+		ui.Row(c).Gap(6).Children(func() {
+			if bannerButton(c, s, "重新加载磁盘版本") {
+				a.reloadAfterConflict(false)
+			}
+			if bannerButton(c, s, "另存恢复副本后重新加载") {
+				a.reloadAfterConflict(true)
+			}
+		})
+	})
+}
+
+func (a *app) reloadAfterConflict(saveCopy bool) {
+	if saveCopy {
+		p, err := a.store.SaveMemoryAsRecovery(time.Now())
+		if err != nil {
+			a.showHUD("warn", tr("另存恢复副本失败：")+err.Error())
+			return
+		}
+		diag.Push("冲突：内存数据已另存 %s", filepath.Base(p))
+	}
+	if err := a.store.ReloadFromDisk(); err != nil {
+		a.showHUD("warn", tr("重新加载失败：")+err.Error())
+		return
+	}
+	diag.Push("冲突：已重新加载磁盘版本")
+	if saveCopy {
+		a.showHUD("ok", tr("当前内存已另存为恢复副本，并已重新加载磁盘版本"))
+	} else {
+		a.showHUD("ok", tr("已重新加载磁盘版本"))
+	}
+}
+
+// storeConflict：外部修改 → 只读（横幅由面板按 store.Conflict() 画），记日志 + 提醒一次。
+func (a *app) storeConflict() {
+	diag.Push("数据文件被外部修改，停止自动覆盖，进入只读")
+	a.onMain(func() { a.showHUD("warn", tr("检测到数据文件被外部修改，已停止自动覆盖")) })
+}
+
+// storeError：后台落盘失败 / 只读期间修改被拒。
+func (a *app) storeError(err error) {
+	switch {
+	case errors.Is(err, store.ErrConflict): // storeConflict 已提醒
+	case errors.Is(err, store.ErrReadOnly):
+		diag.Push("只读期间修改被拒")
+		a.onMain(func() {
+			a.showHUD("warn", tr("数据只读，修改未保存：请先在面板顶部重新加载磁盘版本"))
+		})
+	default:
+		diag.Push("落盘失败: %v", err)
+		a.onMain(func() { a.showHUD("warn", tr("保存失败：")+err.Error()) })
+	}
 }
