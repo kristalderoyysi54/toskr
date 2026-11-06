@@ -187,7 +187,8 @@ func (a *app) billsPage(c *ui.Context, k tokens) {
 	if a.billDay.IsZero() {
 		a.billDay = dayStart(now)
 	}
-	if len(a.bills) == 0 && !a.billForm.open {
+	defer a.billFlow(c, k) // 添加 / 编辑流程是盖住整个面板的浮层（同 Tauri AddBillFlow 对话框）
+	if len(a.bills) == 0 {
 		ui.Column(c).Grow(1).Children(func() {
 			a.emptyState(c, k, "credit-card", tr("还没有订阅账单"), tr("记下订阅服务与信用卡还款日，\n到期前自动弹提醒，不再错过续费与还款。"))
 			ui.Row(c).Padding(0, 0, 16, 0).Justify(ui.Center).Children(func() {
@@ -222,9 +223,6 @@ func (a *app) billsPage(c *ui.Context, k tokens) {
 		ui.Column(c).Padding(4, 14, 8, 14).Gap(8).Children(func() {
 			// AddBillFlow / BillAnalytics 弹层：fade-in + 自下 8px 滑入，100ms ease；无离场动画
 			sheet := ui.ElementTransition{Duration: 100 * time.Millisecond, Ease: easeCSS, Enter: &ui.Motion{Y: 8}}
-			if a.billForm.open {
-				ui.Column(c).Key("bill-editor").Transition(sheet).Children(func() { a.billEditor(c, k) })
-			}
 			if a.billAnalytics {
 				ui.Column(c).Key("bill-analytics").Transition(sheet).Children(func() { a.billAnalyticsCard(c, k, cur, now) })
 			}
@@ -321,19 +319,8 @@ func (a *app) billList(c *ui.Context, k tokens, cur string, now time.Time) {
 	})
 }
 
-func billAvatar(c *ui.Context, b store.Bill, size float32) {
-	fs, lh := float32(11), float32(16)
-	if size < 20 {
-		fs, lh = 10, 14
-	}
-	initial := "?"
-	if r := []rune(strings.TrimSpace(b.Name)); len(r) > 0 {
-		initial = strings.ToUpper(string(r[0]))
-	}
-	ui.Box(c).Size(size, size).Radius(size * 0.2).Background(billFallbackColor(b.Name)).Center().Children(func() {
-		text(c, initial, fs, lh, 600, ui.RGB(255, 255, 255))
-	})
-}
+// billAvatar 同 Tauri BillAvatar：目录品牌图 → 首字色块。
+func billAvatar(c *ui.Context, b store.Bill, size float32) { billLogo(c, b.CatalogID, b.Name, size) }
 
 // billRow：头像 24 + 名称/周期金额 + 悬停操作（信用卡「标记已还」、更多）+ 行尾到期徽标。
 func (a *app) billRow(c *ui.Context, k tokens, b store.Bill, cur string, now time.Time, scope string) {
@@ -775,156 +762,6 @@ func (a *app) billAnalyticsCard(c *ui.Context, k tokens, cur string, now time.Ti
 }
 
 // ---- 添加 / 编辑 ----
-
-type billForm struct {
-	open    bool
-	id      string
-	kind    int // 0 订阅 1 信用卡
-	name    string
-	amount  string
-	cycle   int
-	due     string // YYYY-MM-DD；信用卡为每月几号
-	method  string
-	remind  []int
-	err     string
-	created store.Bill
-}
-
-func (a *app) openBillForm(b *store.Bill) {
-	now := a.now()
-	f := billForm{open: true, cycle: 1, due: now.AddDate(0, 1, 0).Format("2006-01-02"), remind: []int{1}}
-	if b != nil {
-		f.id, f.name, f.method, f.remind, f.created = b.ID, b.Name, b.PayMethod, slices.Clone(b.RemindDays), *b
-		f.cycle = max(0, slices.Index(cycleNames, b.Cycle))
-		f.due = b.NextDueAt.Format("2006-01-02")
-		if b.Amount != 0 {
-			f.amount = fmtAmount(b.Amount)
-		}
-		if b.Kind == "creditCard" {
-			f.kind, f.due = 1, itoa(b.NextDueAt.Day())
-		}
-	}
-	a.billForm = f
-}
-
-func (a *app) billEditor(c *ui.Context, k tokens) {
-	s := stok(c)
-	f := &a.billForm
-	title := tr("添加订阅")
-	if f.id != "" {
-		title = tr("编辑账单")
-	}
-	field := func(label string, v *string, w float32, ph string) {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			text(c, label, 11, 16, 400, k.muted).Width(56)
-			textField(c, k, s, v, w, ph, false)
-		})
-	}
-	ui.Column(c).Padding(10).Gap(8).Radius(14).Background(k.card).Border(1, k.inputBorder).Children(func() {
-		ui.Row(c).AlignItems(ui.Center).Children(func() {
-			text(c, title, 12, 17, 600, k.fg).Grow(1)
-			if a.iconButton(c, k, "x", 20, 12, tr("关闭")) {
-				*f = billForm{}
-			}
-		})
-		segmented(c, k, &f.kind, "订阅", "信用卡还款")
-		field(tr("名称"), &f.name, 240, tr("如 iCloud / 招行信用卡"))
-		field(tr("金额"), &f.amount, 120, tr("信用卡可留空"))
-		if f.kind == 0 {
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				text(c, tr("周期"), 11, 16, 400, k.muted).Width(56)
-				segmented(c, k, &f.cycle, cycleLabels...)
-			})
-			field(tr("下次到期"), &f.due, 120, "2026-12-01")
-		} else {
-			field(tr("还款日"), &f.due, 64, tr("每月几号"))
-		}
-		field(tr("支付方式"), &f.method, 180, tr("如 支付宝 / 尾号 1234"))
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			text(c, tr("提前提醒"), 11, 16, 400, k.muted).Width(56)
-			for _, d := range []int{7, 3, 1, 0} {
-				on := slices.Contains(f.remind, d)
-				label := fmt.Sprintf(tr("%d 天"), d)
-				if d == 0 {
-					label = tr("当天")
-				}
-				chip := ui.Box(c).Height(22).Padding(2, 8).Radius(8).Center().Key("rd" + itoa(d))
-				col := k.muted
-				if on {
-					chip.Background(s.navSel).Border(1, s.navSelBorder)
-					col = k.fg
-				} else {
-					chip.Background(k.track).Border(1, ui.Transparent)
-				}
-				chip.Children(func() { text(c, label, 10, 14, 500, col) })
-				if chip.Clicked() {
-					if on {
-						f.remind = slices.DeleteFunc(f.remind, func(x int) bool { return x == d })
-					} else {
-						f.remind = append(f.remind, d)
-					}
-				}
-			}
-		})
-		if f.err != "" {
-			text(c, f.err, 11, 16, 400, k.danger)
-		}
-		ui.Row(c).Gap(6).Justify(ui.End).Children(func() {
-			if button(c, s, "取消") {
-				*f = billForm{}
-			}
-			if button(c, s, "保存") {
-				a.saveBillForm()
-			}
-		})
-	})
-}
-
-func (a *app) saveBillForm() {
-	f := &a.billForm
-	now := a.now()
-	b := f.created
-	b.Name, b.PayMethod, b.RemindDays = strings.TrimSpace(f.name), strings.TrimSpace(f.method), slices.Clone(f.remind)
-	if b.Name == "" {
-		f.err = tr("名称不能为空")
-		return
-	}
-	b.Amount = 0
-	if v := strings.TrimSpace(f.amount); v != "" {
-		amt, err := strconv.ParseFloat(v, 64)
-		if err != nil || amt < 0 {
-			f.err = tr("金额无效")
-			return
-		}
-		b.Amount = amt
-	}
-	if f.kind == 1 {
-		day, err := strconv.Atoi(strings.TrimSpace(f.due))
-		if err != nil || day < 1 || day > 31 {
-			f.err = tr("还款日应为 1–31")
-			return
-		}
-		b.Kind, b.Cycle, b.NextDueAt = "creditCard", "monthly", nextMonthlyDue(day, now)
-	} else {
-		due, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(f.due), time.Local)
-		if err != nil {
-			f.err = tr("日期格式应为 YYYY-MM-DD")
-			return
-		}
-		if b.Amount == 0 {
-			f.err = tr("订阅需要填写金额")
-			return
-		}
-		b.Kind, b.Cycle, b.NextDueAt = "subscription", cycleNames[f.cycle], due
-	}
-	if f.id == "" {
-		a.store.AddBill(b)
-	} else {
-		_ = a.store.UpdateBill(b)
-	}
-	*f = billForm{}
-	a.reload()
-}
 
 // nextMonthlyDue：「每月 N 日还款」的下一个还款日（今天即今天；短月钳到月末）。
 func nextMonthlyDue(day int, now time.Time) time.Time {

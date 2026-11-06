@@ -71,6 +71,15 @@ func (s *Store) AddBill(b Bill) Bill {
 	if b.RemindDays == nil {
 		b.RemindDays = []int{3, 0}
 	}
+	if b.Kind == "subscription" && !b.StartedAt.IsZero() && len(b.History) == 0 { // 同 Tauri backfillHistoryEvents：补记开始以来的往期
+		var periods []time.Time
+		for due, guard := b.StartedAt, 0; due.Before(b.NextDueAt) && guard < 400; due, guard = AdvanceCycle(due, b.Cycle), guard+1 {
+			periods = append(periods, due)
+		}
+		for _, p := range periods[max(0, len(periods)-billHistoryMax):] {
+			b.History = append(b.History, Payment{At: p, Amount: b.Amount, Period: p})
+		}
+	}
 	_ = s.mutate(func() bool { s.bills = append(s.bills, b); return true })
 	return b
 }

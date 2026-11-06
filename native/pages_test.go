@@ -164,17 +164,37 @@ func TestBillsSubviewFormPayAndUndo(t *testing.T) {
 	}
 	_ = tt.Click("添加订阅")
 	tt.Frame()
-	a.billForm.name, a.billForm.amount, a.billForm.cycle, a.billForm.due = "域名", "120", 4, now.AddDate(0, 0, 3).Format("2006-01-02")
+	for _, s := range []string{"全部", "娱乐", "Netflix", "自定义订阅", "自定义信用卡"} { // 先选预置服务（同 Tauri AddBillFlow）
+		if !tt.HasText(s) {
+			t.Fatalf("服务目录缺 %q %v", s, tt.Texts())
+		}
+	}
+	a.billForm.query = "netf"
 	tt.Frame()
-	_ = tt.Click("保存")
+	if err := tt.Click("Netflix"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.billForm.step != "confirm" || a.billForm.catalog != "netflix" || a.billForm.name != "Netflix" || !tt.HasText("确认信息") {
+		t.Fatalf("点目录进确认 %+v", a.billForm)
+	}
+	tt.Click("返回服务目录")
+	tt.Frame()
+	tt.Click("自定义订阅")
+	tt.Frame()
+	a.billForm.name, a.billForm.amount, a.billForm.cycle, a.billForm.due = "域名", "120", 4, now.AddDate(0, 0, 3)
+	a.billForm.start = time.Time{}
+	tt.Frame()
+	_ = tt.Click("添加")
 	tt.Frame()
 	if !tt.HasText("域名") || !tt.HasText("每年 · ¥120") || !tt.HasText("3 天后") || !tt.HasText("未来 7 天有 1 笔到期") {
 		t.Fatalf("新增年付订阅 %v", tt.Texts())
 	}
 	a.openBillForm(nil)
-	a.billForm.kind, a.billForm.name, a.billForm.due = 1, "招行信用卡", "5"
+	a.startConfirm(nil, true)
+	a.billForm.name, a.billForm.repayDay = "招行信用卡", "5"
 	tt.Frame()
-	_ = tt.Click("保存")
+	_ = tt.Click("添加")
 	tt.Frame()
 	if !tt.HasText("每月 5 日还款") || !tt.HasText("还款") {
 		t.Fatalf("信用卡今天还款 %v", tt.Texts())

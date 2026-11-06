@@ -115,3 +115,28 @@ func TestClipOrderAndDuplicateBump(t *testing.T) {
 		t.Fatal("刷新后排到最前")
 	}
 }
+
+// 剪贴「图片」视图：方格墙（同 Tauri images 视图），瓷砖底行来源 + 尺寸。
+func TestClipImageGrid(t *testing.T) {
+	a, tt := testApp(t)
+	for i := 0; i < 5; i++ {
+		var b bytes.Buffer
+		_ = png.Encode(&b, image.NewRGBA(image.Rect(0, 0, 40+i, 20)))
+		if _, err := a.addClip(core.ClipEvent{PNG: b.Bytes(), W: 40 + i, H: 20, Source: macos.FrontApp{Name: "Safari"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a.switchPage(pageClip)
+	a.clipView = "image"
+	a.reload()
+	tt.Frame()
+	tt.Frame()
+	if !tt.HasText("44 × 20") {
+		t.Fatalf("瓷砖底行显示尺寸 %v", tt.Texts())
+	}
+	r0, _ := tt.Find("40 × 20")
+	r1, _ := tt.Find("41 × 20")
+	if r0.Y != r1.Y {
+		t.Fatalf("同一行并排 %v %v", r0, r1)
+	}
+}

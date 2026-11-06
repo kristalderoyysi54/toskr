@@ -112,6 +112,11 @@ func (a *app) clipPage(c *ui.Context, k tokens) {
 					}
 					a.clipHeader(c, k, band, i == 0)
 					y += 28
+					if a.clipView == "image" {
+						y += a.clipGrid(c, k, list[i:j], band, y, vis)
+						i = j
+						continue
+					}
 					ui.Column(c).Gap(gap).Key("band-" + band).Children(func() {
 						skip := float32(0)
 						flush := func() {
@@ -421,7 +426,7 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 
 // clipActions 是悬停浮钮组：发送 / 置顶 / 复制 / 收进笔记 / 详情（链接为打开页面）/ 编辑 / 模糊 / 删除。
 // top ≥ 0：距顶偏移（浓缩卡挂头行右端、紧凑行垂直居中，元数据悬停让位）；< 0：标准卡挂底栏右端。
-func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool, top float32) {
+func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool, top float32, grid ...bool) {
 	open := "expand"
 	if isLink {
 		open = "external-link"
@@ -436,6 +441,9 @@ func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool, to
 			{"send", "发送（⌘↵）"}, {"pin", "置顶"}, {"copy", "复制"}, {"inbox", "收进笔记"},
 			{open, "打开"}, {"pencil", "编辑"}, {"eye-off", "模糊内容"}, {"trash-2", "删除"},
 		} {
+			if len(grid) > 0 && grid[0] && !slices.Contains([]string{"send", "copy", open, "trash-2"}, act.icon) {
+				continue // 图片网格瓷砖只留 4 个（同 Tauri NoteCard grid：发送 / 复制 / 预览 / 删除）
+			}
 			if act.icon == "eye-off" && n.Blur {
 				act.icon, act.tip = "eye", "取消模糊"
 			}
@@ -566,4 +574,91 @@ func (a *app) clipOffState(c *ui.Context, k tokens) {
 			}
 		})
 	})
+}
+
+// clipGrid：「图片」视图的方格墙（同 Tauri App.tsx images 视图 grid-cols-[repeat(auto-fill,minmax(104px,1fr))] gap-1.5）：
+// 列数随面板宽度（常见 2～4 列），正方形瓷砖；视口外的行用等高占位。返回这段的高度。
+func (a *app) clipGrid(c *ui.Context, k tokens, notes []store.Note, band string, top float32, vis visWindow) float32 {
+	const gap, minW = float32(6), float32(104)
+	w, _ := c.Size()
+	inner := w - 28
+	allCols := max(1, int((inner+gap)/(minW+gap))) // auto-fill：列宽按容器算，张数少也不拉宽
+	tile := (inner - gap*float32(allCols-1)) / float32(allCols)
+	rows := (len(notes) + allCols - 1) / allCols
+	ui.Column(c).Gap(gap).Key("grid-" + band).Children(func() {
+		for r := 0; r < rows; r++ {
+			y := top + float32(r)*(tile+gap)
+			row := notes[r*allCols : min(len(notes), (r+1)*allCols)]
+			visible := y+tile >= vis.top && y <= vis.bottom
+			if !visible && !slices.ContainsFunc(row, func(n store.Note) bool { return a.chosen.Has(n.ID) }) {
+				ui.Box(c).Height(tile).Key("grow-" + itoa(r))
+				continue
+			}
+			ui.Row(c).Gap(gap).Key("grow-" + itoa(r)).Children(func() {
+				for _, n := range row {
+					a.clipTile(c, k, n, tile)
+				}
+			})
+		}
+	})
+	return float32(rows)*(tile+gap) - gap
+}
+
+// clipTile：图片网格瓷砖（同 Tauri NoteCard strip grid）——无通栏、正方形、p-1.5，图片区居中等比；
+// 底行来源图标 + 尺寸，悬停淡出让位给 4 个操作钮。
+func (a *app) clipTile(c *ui.Context, k tokens, n store.Note, size float32) {
+	idx, ok := a.noteIdx[n.ID]
+	if !ok || a.page != pageClip {
+		idx = -1
+	}
+	checked := a.chosen.Has(n.ID)
+	focused := idx >= 0 && idx == a.selected && a.focusList
+	box := ui.Column(c).Size(size, size).Padding(6).Gap(4).Radius(10).Background(k.card).Key(n.ID)
+	hovered := box.Hovered()
+	elevated(box, k, hovered || checked || (focused && !checked))
+	lift := float32(0)
+	if hovered {
+		lift = -1
+	}
+	box.AnimatePose(ui.Pose{Y: lift}, tweenTw)
+	box.ContextMenu(func(m *ui.Menu) {
+		if idx >= 0 {
+			a.selected = idx
+		}
+		a.cardMenu(c, m, max(idx, 0), n)
+	})
+	box.Children(func() {
+		ui.Box(c).Grow(1).Basis(0).FillWidth().Radius(4).Background(k.fg.Alpha(0.04)).Center().Clip().Children(func() {
+			if img := a.thumb(n.ImageFile); img != nil {
+				iw, ih := ui.ImageSize(img)
+				aw, ah := size-12, size-12-20
+				sc := min(aw/max(iw, 1), ah/max(ih, 1))
+				ui.Image(c, img).Size(iw*sc, ih*sc)
+			} else {
+				text(c, tr("加载中…"), 10, 14, 400, k.muted)
+			}
+		})
+		meta := ui.Row(c).Height(16).Gap(4).AlignItems(ui.Center)
+		meta.Opacity(meta.AnimateTo("meta", map[bool]float32{true: 0, false: 1}[hovered], tweenTw)).Children(func() {
+			a.sourceIcon(c, n, 14)
+			ui.Spacer(c)
+			if n.ImageW > 0 {
+				text(c, fmt.Sprintf("%d × %d", n.ImageW, n.ImageH), 10, 14, 400, k.muted).FontFeatures("tnum")
+			}
+		})
+		if n.Blur {
+			blurOverlay(c, k, 20)
+		}
+		if hovered {
+			a.clipActions(c, k, n, false, -1, true)
+		}
+		a.cardOverlays(c, k, n, checked, false)
+		a.quickBadge(c, k, idx, 4)
+	})
+	if box.Clicked() && !(box.ClickModifiers()&ui.Shift != 0 && a.rangeSelect(n.ID)) {
+		a.cardClick(n.ID, idx, box.ClickModifiers())
+	}
+	if box.DoubleClicked() && idx >= 0 {
+		a.cardDoubleClick(n, idx, true)
+	}
 }

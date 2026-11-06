@@ -140,8 +140,8 @@ func (a *app) duePopoverBody(c *ui.Context, k tokens, t store.Task, now time.Tim
 	}
 	sep()
 	ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
-		ui.DateInput(c, &a.dueDraft).Grow(1).Label(tr("到期日期"))
-		ui.TimeInput(c, &a.dueDraft).Label(tr("到期时间"))
+		ui.DateInput(c, &a.dueDraft).Grow(1).FontSize(12).Label(tr("到期日期"))
+		ui.TimeInput(c, &a.dueDraft).FontSize(12).Label(tr("到期时间"))
 	})
 	set := ui.Row(c).Height(26).Radius(6).Justify(ui.Center).AlignItems(ui.Center).Background(s.primary).Key("due-set").Role(ui.RoleButton).Label(tr("设定该时间"))
 	set.Children(func() { text(c, tr("设定该时间"), 12, 17, 500, gray(1, 1)) })
@@ -268,7 +268,7 @@ func (a *app) recurrenceEditor(c *ui.Context, k tokens, t store.Task, now time.T
 	switch mode {
 	case "until":
 		until := t.RecurUntil
-		if ui.DateInput(c, &until).Label(tr("重复结束日期")).Changed() {
+		if ui.DateInput(c, &until).FontSize(12).Label(tr("重复结束日期")).Changed() {
 			a.mutateTask(t.ID, func(x *store.Task) { x.RecurUntil = until })
 		}
 	case "count":

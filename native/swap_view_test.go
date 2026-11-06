@@ -12,7 +12,7 @@ func TestSwapViewTransition(t *testing.T) {
 	tt.Frame()
 	base, _ := tt.Find("小张")
 	a.store.SetMessagesStatus([]string{a.store.Messages()[0].ID}, "waiting") // 小张 → 等待回复
-	a.msgFilter = "waiting" // Tester.Click 自带时钟推进，量中间帧要直接切状态
+	a.msgFilter = "waiting"                                                  // Tester.Click 自带时钟推进，量中间帧要直接切状态
 	tt.Frame()
 	start, _ := tt.Find("小张")
 	tt.Advance(60 * time.Millisecond)
