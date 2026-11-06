@@ -43,7 +43,54 @@ type detailState struct {
 	pickPara            bool              // 选词粒度：段（同 Tauri pickGranularity）
 }
 
+// 多详情窗（同 Tauri detailWindows.ts，📌 固定并存）：每扇窗一份 detailPane。渲染 / 获得焦点时把该窗的状态换进
+// a.detail / a.detailText / a.detailWin（其余代码照旧读写这三个字段），换出时写回——全在主线程，不会串台。
+type detailPane struct {
+	st   detailState
+	text string
+	win  *mygo.Window
+}
+
+// usePane：把 p 换成当前详情窗（先把当前窗的状态写回它自己的 pane）。
+func (a *app) usePane(p *detailPane) {
+	if a.curPane == p {
+		return
+	}
+	if a.curPane != nil {
+		a.curPane.st, a.curPane.text, a.curPane.win = a.detail, a.detailText, a.detailWin
+	}
+	a.curPane = p
+	a.detail, a.detailText, a.detailWin = p.st, p.text, p.win
+}
+
+// pickPane 同 Tauri pickDetailWindowLabel：同卡复用 > 未固定的窗 > 新窗。
+func (a *app) pickPane(id string) (p *detailPane, same bool) {
+	if a.curPane != nil {
+		a.curPane.st, a.curPane.text, a.curPane.win = a.detail, a.detailText, a.detailWin
+	}
+	for _, x := range a.panes {
+		if x.st.id == id {
+			return x, true
+		}
+	}
+	for _, x := range a.panes {
+		if !x.st.pinned {
+			return x, false
+		}
+	}
+	p = &detailPane{}
+	a.panes = append(a.panes, p)
+	return p, false
+}
+
 func (a *app) openDetail(n store.Note) {
+	p, same := a.pickPane(n.ID)
+	a.usePane(p)
+	if same && a.detailWin != nil {
+		a.detailWin.Show()
+		a.detailWin.Focus()
+		return
+	}
 	a.saveDetail()
 	a.detailText = n.Text
 	a.detail = detailState{id: n.ID, pickAnchor: -1, pickEnd: -1, enter: true, editSel: [2]int{-1, -1}, title: n.Title}
@@ -53,18 +100,38 @@ func (a *app) openDetail(n store.Note) {
 	if a.detailWin != nil {
 		a.detailWin.Destroy() // 每次重建：位图随窗口释放
 	}
-	a.detailWin = mygo.NewWindow(mygo.WindowOptions{
+	opts := mygo.WindowOptions{
 		Title: preview(n.Text, 24), Width: 560, Height: 540, MinWidth: 380, Hidden: true,
 		TitleBarStyle: mygo.TitleBarHidden, TrafficLightPosition: &mygo.Point{X: 12, Y: 13},
 		Vibrancy: vibrancyFor(a.store.Settings().Glass), Transparent: true,
-		Content: ui.View(a.detailView),
-	})
-	a.detailWin.OnClose(func(*mygo.CloseEvent) {
+		Content: ui.View(func(c *ui.Context) { a.usePane(p); a.detailView(c) }),
+	}
+	if len(a.panes) > 1 { // 并存的新窗错开 28pt，不整块压住已固定的窗
+		for _, x := range a.panes {
+			if x != p && x.win != nil {
+				wx, wy := x.win.Position()
+				opts.X, opts.Y = wx+28, wy+28
+			}
+		}
+	}
+	win := mygo.NewWindow(opts)
+	a.detailWin = win
+	win.OnFocus(func() { a.usePane(p) }) // 双击剪贴卡追加等外部操作落到最近获得焦点的窗
+	win.OnClose(func(*mygo.CloseEvent) {
+		if p.win != win && a.detailWin != win {
+			return // 已被换成新窗（Destroy 旧窗）
+		}
+		a.usePane(p)
 		a.saveDetail()
 		a.detailWin, a.detail.id = nil, ""
+		a.panes = slices.DeleteFunc(a.panes, func(x *detailPane) bool { return x == p })
+		a.curPane = nil
+		if len(a.panes) > 0 {
+			a.usePane(a.panes[len(a.panes)-1])
+		}
 	})
-	a.detailWin.Show()
-	a.detailWin.Focus()
+	win.Show()
+	win.Focus()
 }
 
 func (a *app) saveDetail() {
@@ -222,7 +289,11 @@ func (a *app) detailHeader(c *ui.Context, k tokens, n store.Note) {
 		}
 		ui.RichText(c, spans...).Font(fontSans).FontSize(10).FixedLineHeight(14).SingleLine().Grow(1).Basis(0).
 			Tooltip(fmt.Sprintf(tr("%d 字符 · %d 词 · %d 行"), chars, len(strings.Fields(n.Text)), strings.Count(n.Text, "\n")+1))
-		pin := ui.Box(c).Size(22, 22).Radius(8).Center().Tooltip(tr("钉在最前"))
+		pinTip := tr("固定窗口：发送后保持打开，新开的卡另开一扇窗")
+		if a.detail.pinned {
+			pinTip = tr("取消固定（发送后恢复自动关窗）")
+		}
+		pin := ui.Box(c).Size(22, 22).Radius(8).Center().Tooltip(pinTip).Role(ui.RoleButton).Label(pinTip)
 		col := k.muted
 		if a.detail.pinned {
 			pin.Background(k.track)
@@ -660,6 +731,10 @@ func (a *app) sendDetail(n store.Note) {
 		n.Text = a.detailText
 	}
 	a.send([]store.Note{n})
+	if !a.detail.pinned && a.detailWin != nil { // 未固定的窗发送后关闭（同 Tauri：📌 固定才保持打开）
+		win := a.detailWin
+		a.onMain(win.Close)
+	}
 }
 
 // enterDetailEdit：进编辑态；阅读态有划词选区时换算成原文偏移，编辑器里选中同一段。

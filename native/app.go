@@ -239,6 +239,8 @@ type app struct {
 	// 详情窗
 	detailText string
 	detail     detailState
+	panes      []*detailPane // 打开着的详情窗（📌 固定的并存）
+	curPane    *detailPane   // a.detail / detailText / detailWin 当前对应的窗
 
 	// HUD
 	hudText, hudKind string
