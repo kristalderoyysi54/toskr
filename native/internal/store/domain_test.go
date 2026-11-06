@@ -141,21 +141,6 @@ func TestNextOccurrenceWeekdaysSkipsWeekend(t *testing.T) {
 	}
 }
 
-func TestParseQuickTask(t *testing.T) {
-	now := time.Date(2026, 11, 5, 10, 0, 0, 0, time.Local)
-	got := ParseQuickTask("明天下午3点 交周报 !!", now)
-	want := time.Date(2026, 11, 6, 15, 0, 0, 0, time.Local)
-	if got.Text != "交周报" || got.Priority != "mid" || !got.DueAt.Equal(want) {
-		t.Fatalf("%+v", got)
-	}
-	if got := ParseQuickTask("买牛奶", now); !got.DueAt.IsZero() || got.Priority != "none" {
-		t.Fatalf("无时间词不应设到期: %+v", got)
-	}
-	if got := ParseQuickTask("今天", now); got.Text != "" || got.DueAt.Hour() != 9 {
-		t.Fatalf("只有日期默认 9 点: %+v", got)
-	}
-}
-
 func TestBillsRollForwardAndRemind(t *testing.T) {
 	s, _ := open(t)
 	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.Local)

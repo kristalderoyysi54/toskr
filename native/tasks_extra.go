@@ -171,10 +171,12 @@ func (a *app) taskCalendar(c *ui.Context, k tokens, now time.Time) {
 		ui.Column(c).Padding(8).Radius(12).Background(k.track).Children(func() {
 			ui.Row(c).Margin(0, 0, 4, 0).Gap(4).AlignItems(ui.Center).Children(func() {
 				text(c, fmt.Sprintf(tr("%d 年 %d 月"), first.Year(), first.Month()), 11, 16, 600, k.fg).FontFeatures("tnum").Padding(0, 0, 0, 4).Grow(1)
-				if billsOn {
+				if billsOn || a.store.Settings().CalendarOn { // 同 Tauri：订阅或苹果日历任一开着就给「任务」开关
 					if toggleChip(c, k, tr("任务"), !a.taskCalHideTasks) {
 						a.taskCalHideTasks = !a.taskCalHideTasks
 					}
+				}
+				if billsOn {
 					if toggleChip(c, k, tr("账单"), !a.taskCalHideBills) {
 						a.taskCalHideBills = !a.taskCalHideBills
 					}
@@ -314,7 +316,7 @@ func (a *app) taskCalendar(c *ui.Context, k tokens, now time.Time) {
 }
 
 func (a *app) addTaskForDay(today time.Time) bool {
-	t := store.ParseQuickTask(strings.TrimSpace(a.taskCalDraft), a.now())
+	t := store.Task{Text: strings.TrimSpace(a.taskCalDraft)} // 同 Tauri addForDay：原文入库
 	if t.Text == "" {
 		return false
 	}

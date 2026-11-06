@@ -132,7 +132,7 @@ func TestTasksQuickAddCompleteAndRecurring(t *testing.T) {
 	if !tt.HasText("写周报") || !tt.HasText("今天 20:00") || !tt.HasText("20:00") {
 		t.Fatalf("%v", tt.Texts())
 	}
-	// 任务视图：解析自然语言时间与优先级
+	// 任务视图：同 Tauri addTask(text) 原文入库，不解析时间与优先级（自然语言只在 AI 速记里）
 	a.taskSub = 1
 	tt.Frame()
 	a.taskIn.Focus()
@@ -140,14 +140,15 @@ func TestTasksQuickAddCompleteAndRecurring(t *testing.T) {
 	tt.Type("明天下午3点 交周报 !!")
 	tt.Key(0, ui.KeyEnter)
 	tt.Frame()
-	if !tt.HasText("交周报") || !tt.HasText("明天 15:00") || !tt.HasText("收集箱") {
+	if !tt.HasText("明天下午3点 交周报 !!") || !tt.HasText("收集箱") {
 		t.Fatalf("%v", tt.Texts())
 	}
-	i := slices.IndexFunc(a.store.Tasks(), func(x store.Task) bool { return x.Text == "交周报" })
+	i := slices.IndexFunc(a.store.Tasks(), func(x store.Task) bool { return x.Text == "明天下午3点 交周报 !!" })
 	task := a.store.Tasks()[i]
-	if task.Priority != "mid" {
-		t.Fatalf("!! 应为中优先级 %+v", task)
+	if task.Priority != "none" || !task.DueAt.IsZero() {
+		t.Fatalf("原文入库，不应改优先级 / 到期 %+v", task)
 	}
+	task.DueAt = now.Add(time.Hour)
 	task.Recurrence = "weekly"
 	_ = a.store.UpdateTask(task)
 	a.store.CompleteTask(task.ID, true, now)

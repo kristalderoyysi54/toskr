@@ -163,6 +163,9 @@ func (a *app) billsPage(c *ui.Context, k tokens) {
 		})
 		if v, ok := miniSegmented(c, k, a.billView, [][2]string{{"week", "周"}, {"month", "月"}}); ok {
 			a.billView = v
+			cur := a.store.Settings()
+			cur.BillView = v
+			_ = a.store.SetSettings(cur)
 		}
 		if a.iconButton(c, k, "chart-column", 22, 14, tr("消费分析")) {
 			a.billAnalytics = !a.billAnalytics
@@ -319,7 +322,7 @@ func (a *app) billRow(c *ui.Context, k tokens, b store.Bill, cur string, now tim
 				}
 			}
 			more := ghostIconButton(c, k, "bmore-"+b.ID, "ellipsis", fmt.Sprintf(tr("「%s」更多操作"), b.Name), 20, 12, false, hovered)
-			more.Menu(func(m *ui.Menu) { a.billMenu(c, m, b) })
+			more.Menu(func(m *ui.Menu) { a.billMenu(c, m, b, scope) })
 			if inactive {
 				return
 			}
@@ -368,7 +371,7 @@ func (a *app) billRow(c *ui.Context, k tokens, b store.Bill, cur string, now tim
 func (a *app) confirmPaid(c *ui.Context, b store.Bill, cur string) {
 	v, err := strconv.ParseFloat(strings.TrimSpace(a.payAmount), 64)
 	if err != nil || v < 0 {
-		a.showHUD("ok", tr("金额无效"))
+		a.showHUD("warn", tr("金额无效"))
 		return
 	}
 	_ = a.store.MarkPaid(b.ID, v, a.now())
@@ -377,9 +380,13 @@ func (a *app) confirmPaid(c *ui.Context, b store.Bill, cur string) {
 	a.reload()
 }
 
-func (a *app) billMenu(c *ui.Context, m *ui.Menu, b store.Bill) {
+func (a *app) billMenu(c *ui.Context, m *ui.Menu, b store.Bill, scope string) {
 	if m.Item(tr("编辑")).Chosen() {
-		a.openBillForm(&b)
+		if scope == "today" || scope == "cal" { // 同 Tauri TodayPage / TaskCalendar onEdit：切到订阅子页（编辑框只在那里渲染）
+			a.taskSub = 2
+		} else {
+			a.openBillForm(&b)
+		}
 	}
 	set := func(status, msg string) {
 		b.Status = status

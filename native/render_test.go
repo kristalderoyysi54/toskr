@@ -45,7 +45,7 @@ func TestRenderPanelSnapshots(t *testing.T) {
 	a.store.Add(store.Note{Section: store.SectionInbox, Kind: "image", ImageFile: name, ImageW: 640, ImageH: 280, Text: "识别结果：分页参数 page_size", SourceApp: "截图"})
 
 	now := time.Now()
-	a.store.AddTask(store.ParseQuickTask("明天下午3点 交 mygo 对比报告 !!", now))
+	a.store.AddTask(store.Task{Text: "交 mygo 对比报告", DueAt: time.Date(now.Year(), now.Month(), now.Day()+1, 15, 0, 0, 0, now.Location()), Priority: "mid"})
 	a.store.AddTask(store.Task{Text: "复核账单提醒逻辑", DueAt: now.Add(-26 * time.Hour), Priority: "high"})
 	a.store.AddTask(store.Task{Text: "周会", DueAt: now.Add(4 * time.Hour), Recurrence: "weekly"})
 	a.store.AddBill(store.Bill{Kind: "subscription", Name: "iCloud+ 200GB", Amount: 21, Cycle: "monthly", NextDueAt: now.AddDate(0, 0, 2)})

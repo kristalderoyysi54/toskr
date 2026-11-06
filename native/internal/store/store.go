@@ -131,8 +131,9 @@ type Settings struct {
 	ReminderVia    string       `json:"taskReminderChannel,omitempty"` // 任务提醒方式 hud | system | both（同 Tauri taskReminderChannel，空 = hud）
 	DuePresets     *[]DuePreset `json:"duePresets,omitempty"`          // 到期快捷档（同 Tauri duePresets）；nil = 默认七档，空 = 全删了
 	// 与 Tauri 一致的可选功能域（默认关闭）：订阅进「提醒」页第三个子视图，秘文进「内容」页
-	SubscriptionsEnabled bool `json:"subscriptionsEnabled"`
-	SecretEnabled        bool `json:"secretEnabled"`
+	SubscriptionsEnabled bool   `json:"subscriptionsEnabled"`
+	BillView             string `json:"billView,omitempty"` // 订阅页「周 / 月」视图记忆（同 Tauri localStorage）
+	SecretEnabled        bool   `json:"secretEnabled"`
 	// 面板菜单「位置与停靠」：CompanionOff 关闭跟随应用；FreeMove 不再自动贴屏幕右缘
 	SecretKeys         []SecretKey `json:"secretKeys,omitempty"`
 	SecretDefaultKeyID string      `json:"secretDefaultKeyId,omitempty"`

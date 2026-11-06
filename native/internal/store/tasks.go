@@ -125,7 +125,7 @@ func (s *Store) CompleteTask(id string, done bool, now time.Time) (next Task, sp
 					next.Checklist[k].Done = false
 				}
 				t.Recurrence, t.RecurBasis, t.RecurUntil, t.RecurCount = "", "", time.Time{}, 0
-				s.tasks = slices.Insert(s.tasks, 0, next)
+				s.tasks = slices.Insert(s.tasks, i, next) // 同 Tauri withTaskStatus splice(index)：下一期占原位置，本期顺到其后
 				spawned = true
 			}
 		} else {
@@ -240,75 +240,6 @@ func AddMonthsClamped(t time.Time, months int) time.Time {
 	first := time.Date(y, m+time.Month(months), 1, t.Hour(), t.Minute(), t.Second(), 0, t.Location())
 	last := first.AddDate(0, 1, -1).Day()
 	return first.AddDate(0, 0, min(d, last)-1)
-}
-
-// ParseQuickTask 解析快速输入里的中文时间与优先级：「明天下午3点 交周报 !!」。
-func ParseQuickTask(input string, now time.Time) Task {
-	t := Task{Priority: "none"}
-	text := strings.TrimSpace(input)
-	for _, p := range []struct{ mark, level string }{{"!!!", "high"}, {"!!", "mid"}, {"!", "low"}} {
-		if strings.HasSuffix(text, " "+p.mark) || strings.HasSuffix(text, p.mark) && len(text) > len(p.mark) {
-			t.Priority = p.level
-			text = strings.TrimSpace(strings.TrimSuffix(text, p.mark))
-			break
-		}
-	}
-	day := time.Time{}
-	base := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	for _, w := range []struct {
-		word string
-		add  int
-	}{{"今天", 0}, {"明天", 1}, {"后天", 2}} {
-		if strings.HasPrefix(text, w.word) {
-			day = base.AddDate(0, 0, w.add)
-			text = strings.TrimSpace(strings.TrimPrefix(text, w.word))
-			break
-		}
-	}
-	hour := -1
-	for _, part := range []struct {
-		word string
-		off  int
-	}{{"上午", 0}, {"早上", 0}, {"中午", 12}, {"下午", 12}, {"晚上", 12}} {
-		if strings.HasPrefix(text, part.word) {
-			text = strings.TrimPrefix(text, part.word)
-			if i := strings.Index(text, "点"); i > 0 && i <= 2 {
-				if h, ok := atoiSmall(text[:i]); ok {
-					hour = h
-					if part.off == 12 && h < 12 {
-						hour = h + 12
-					}
-					text = strings.TrimSpace(text[i+len("点"):])
-				}
-			}
-			break
-		}
-	}
-	if !day.IsZero() || hour >= 0 {
-		if day.IsZero() {
-			day = base
-		}
-		if hour < 0 {
-			hour = 9
-		}
-		t.DueAt = day.Add(time.Duration(hour) * time.Hour)
-	}
-	t.Text = text
-	return t
-}
-
-func atoiSmall(s string) (int, bool) {
-	n := 0
-	if s == "" {
-		return 0, false
-	}
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return 0, false
-		}
-		n = n*10 + int(r-'0')
-	}
-	return n, n <= 23
 }
 
 // UpdateTaskSection 改任务分组（名称 / 折叠）。

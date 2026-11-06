@@ -141,14 +141,17 @@ func (a *app) eventRow(c *ui.Context, k tokens, e macos.CalendarEvent) {
 }
 
 // billsDueToday：今天扣款的在用账单数（「今天」统计格）。
-func billsDueToday(bills []store.Bill, now time.Time) int {
-	n := 0
+func billsDueToday(bills []store.Bill, now time.Time) int { return len(todayBills(bills, now)) }
+
+// todayBills：今天扣款的在用账单（同 Tauri TodayPage todayBills）。
+func todayBills(bills []store.Bill, now time.Time) []store.Bill {
+	var out []store.Bill
 	for _, b := range bills {
 		if b.Status == "active" && sameDay(b.NextDueAt, now) {
-			n++
+			out = append(out, b)
 		}
 	}
-	return n
+	return out
 }
 
 // calendarSettings：更多功能 → 苹果日历（只读）：开关、授权状态、显示的日历。

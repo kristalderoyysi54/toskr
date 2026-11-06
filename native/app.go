@@ -160,8 +160,11 @@ type app struct {
 	snipEditID, snipLabel, snipText, snipGroup string
 	// 任务行内编辑与任务分组改名
 	taskOpen, taskTitle, taskNote, ckDraft string
+	taskTitleFocus                         bool // 展开任务后首帧聚焦标题
 	taskCk                                 map[string]*string
 	taskSecRename, taskSecName             string
+	taskSecFocus                           bool                      // 进入分组改名的首帧聚焦
+	taskSecClickSeq                        int                       // 分组名单击延迟折叠的序号（双击作废前一次单击）
 	recordingKey                           string                    // 设置里正在录制的全局快捷键（panel / shot / newnote）
 	altSince                               time.Time                 // 只按住 ⌥ 的起点（长按 650ms 弹快捷键速查）
 	linkSeen                               map[string]string         // 链接卡 ID → 已处理的 URL（新卡 / 新 URL 才抓预览）
@@ -311,6 +314,9 @@ func newApp(sys core.System, st *store.Store) *app {
 	a.draft = st0.DraftText
 	if st0.LastDraftSection != "" {
 		a.section = st0.LastDraftSection
+	}
+	if v := st0.BillView; v == "week" || v == "month" {
+		a.billView = v
 	}
 	a.reload()
 	return a

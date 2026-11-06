@@ -51,25 +51,26 @@ func brandIcon(id string) ui.ImageSource {
 }
 
 type billForm struct {
-	open     bool
-	step     string // pick | confirm
-	cat      string // 目录分类筛选，"" = 全部
-	query    string
-	id       string // 编辑中的账单
-	kind     int    // 0 订阅 1 信用卡
-	name     string
-	amount   string
-	currency string
-	category string
-	cycle    int
-	due      time.Time
-	start    time.Time
-	repayDay string
-	method   string
-	remind   []int
-	note     string
-	catalog  string
-	created  store.Bill
+	focusName bool // 进确认页首帧聚焦名称（同 Tauri 名称为空时 autoFocus）
+	open      bool
+	step      string // pick | confirm
+	cat       string // 目录分类筛选，"" = 全部
+	query     string
+	id        string // 编辑中的账单
+	kind      int    // 0 订阅 1 信用卡
+	name      string
+	amount    string
+	currency  string
+	category  string
+	cycle     int
+	due       time.Time
+	start     time.Time
+	repayDay  string
+	method    string
+	remind    []int
+	note      string
+	catalog   string
+	created   store.Bill
 }
 
 func (a *app) openBillForm(b *store.Bill) {
@@ -80,7 +81,7 @@ func (a *app) openBillForm(b *store.Bill) {
 		f.currency, f.category = cmpOr(b.Currency, f.currency), cmpOr(b.Category, "other")
 		f.cycle = max(0, slices.Index(cycleNames, b.Cycle))
 		f.due, f.start, f.repayDay = b.NextDueAt, b.StartedAt, itoa(b.NextDueAt.Day())
-		if b.Amount != 0 {
+		if b.Amount != 0 || b.Kind != "creditCard" { // 同 Tauri：订阅金额 0 显示 "0"（信用卡 0 = 留空只提醒）
 			f.amount = fmtAmount(b.Amount)
 		}
 		if b.Kind == "creditCard" {
@@ -124,7 +125,8 @@ func (a *app) startConfirm(s *catalogService, credit bool) {
 	now := dayStart(a.now())
 	f.step, f.kind, f.name, f.amount, f.note, f.catalog = "confirm", 0, "", "", "", ""
 	f.category, f.cycle, f.due, f.start, f.repayDay = "other", 1, now, now, "10"
-	f.remind = []int{1}
+	f.remind = []int{3, 1} // 同 Tauri billDefaultReminderOffsets 默认：提前 3 天 + 提前 1 天
+	f.focusName = true
 	if pms := a.usedPayMethods(); len(pms) > 0 {
 		f.method = pms[0]
 	} else {
@@ -341,7 +343,12 @@ func (a *app) billConfirm(c *ui.Context, k tokens, s settingsTokens) {
 				if credit {
 					ph = tr("如 招商银行信用卡")
 				}
-				formInput(c, k, &f.name, ph)
+				if in := formInput(c, k, &f.name, ph); f.focusName {
+					if f.name == "" {
+						in.Focus()
+					}
+					f.focusName = false
+				}
 			})
 			amtLabel, amtPh := tr("每期金额"), "68"
 			if credit {

@@ -25,9 +25,7 @@ func taskStatusLabel(s string) string {
 func (a *app) setTaskStatus(t store.Task, status string) {
 	switch {
 	case status == "done" && t.Status != "done":
-		if next, spawned := a.store.CompleteTask(t.ID, true, a.now()); spawned {
-			a.showHUD("ok", tr("已生成下一期：")+dueBadge(next.DueAt, a.now()))
-		}
+		a.store.CompleteTask(t.ID, true, a.now()) // 同 Tauri：生成下一期不弹气泡
 	case t.Status == "done" && status != "done":
 		a.store.CompleteTask(t.ID, false, a.now())
 		if status == "doing" {
@@ -83,7 +81,7 @@ func (a *app) openTaskEdit(t store.Task) {
 	if a.taskOpen != "" && a.taskOpen != t.ID {
 		a.commitTaskEdit()
 	}
-	a.taskOpen, a.taskTitle, a.taskNote, a.ckDraft = t.ID, t.Text, t.Note, ""
+	a.taskOpen, a.taskTitle, a.taskNote, a.ckDraft, a.taskTitleFocus = t.ID, t.Text, t.Note, "", true
 	a.taskCk = map[string]*string{}
 	for _, it := range t.Checklist {
 		txt := it.Text
