@@ -9,6 +9,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"github.com/toskr/native/internal/core"
 	"github.com/toskr/native/internal/macos"
 	"github.com/toskr/native/internal/shot"
 	"github.com/toskr/native/internal/store"
@@ -91,7 +92,7 @@ func TestRedactDrawSelectStyleApplyUndo(t *testing.T) {
 func TestRedactCandidatesFromOCR(t *testing.T) {
 	a, re, tt := redactTest(t)
 	lines := []macos.OCRLine{{Text: "卡号 6222021234567890128 余额", X: 10, Y: 100, W: 270, H: 20}}
-	found := sensitiveBoxes(lines, re.W, re.H)
+	found := sensitiveBoxes(lines, re.W, re.H, core.Rules{})
 	if len(found) != 1 || found[0].label != "银行卡号" || found[0].box.X < 30 || found[0].box.X+found[0].box.W > 260 {
 		t.Fatalf("候选框 %+v", found)
 	}

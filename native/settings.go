@@ -419,9 +419,7 @@ func (a *app) settingsView(c *ui.Context) {
 			}},
 		}}},
 		{label: "粘贴与隐私", icon: "crosshair", sections: [][]setSection{{
-			{tr("发送"), []setRow{
-				{title: tr("发送前预检"), hint: tr("自动检查密钥、令牌、银行卡号、身份证号，命中时在面板里确认或遮罩后发送")},
-			}},
+			{tr("隐私检查"), a.firewallRows(c, k, s, st)},
 			{tr("发送方案"), a.profileSection(c, k, s)},
 			{tr("最近发送"), recent},
 		}, a.templateSections(c, k, s)}, subs: []string{"发送", "提示词模板"}},

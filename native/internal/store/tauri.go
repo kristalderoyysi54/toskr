@@ -152,6 +152,9 @@ type tauriSettings struct {
 	HotkeyModifier       string       `json:"hotkeyModifier"`
 	HotkeyGapMs          int          `json:"hotkeyGapMs"`
 	Stealth              *bool        `json:"stealth"`
+	FirewallEnabled      *bool        `json:"firewallEnabled"`
+	FirewallDisabledWarn []string     `json:"firewallDisabledWarnCategories"`
+	FirewallCustom       []string     `json:"firewallCustomSensitiveFields"`
 	AIBaseURL            string       `json:"aiBaseUrl"`
 	AIModel              string       `json:"aiModel"`
 	AIEnabled            *bool        `json:"aiEnabled"`
@@ -739,6 +742,15 @@ func applyTauriSettings(st Settings, t tauriSettings) Settings {
 	}
 	if t.MessageRules != nil {
 		st.MessageRules = NormalizeMessageRules(t.MessageRules)
+	}
+	if t.FirewallEnabled != nil {
+		st.FirewallOff = !*t.FirewallEnabled
+	}
+	if t.FirewallDisabledWarn != nil {
+		st.FirewallDisabledWarn = t.FirewallDisabledWarn
+	}
+	if t.FirewallCustom != nil {
+		st.FirewallCustomFields = t.FirewallCustom
 	}
 	return st
 }

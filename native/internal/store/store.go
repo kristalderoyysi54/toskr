@@ -174,6 +174,10 @@ type Settings struct {
 	RemindersSection string    `json:"appleRemindersImportSectionId,omitempty"`
 	RemindersError   string    `json:"appleRemindersLastError,omitempty"`
 	RemindersSyncAt  time.Time `json:"appleRemindersLastSyncAt,omitempty"`
+	// 发送前隐私检查（同 Tauri firewallEnabled / firewallDisabledWarnCategories / firewallCustomSensitiveFields；默认开）
+	FirewallOff          bool     `json:"firewallOff,omitempty"`
+	FirewallDisabledWarn []string `json:"firewallDisabledWarnCategories,omitempty"`
+	FirewallCustomFields []string `json:"firewallCustomSensitiveFields,omitempty"`
 }
 
 // ShotPrefs 是截图编辑器记住的使用习惯；零值都表示默认（粗细存档位 +1，0 = 默认中档）。

@@ -153,6 +153,7 @@ type app struct {
 	cmdCursor                              int
 	taskScroll                             ui.ScrollState // 任务页滚动（双击页签回到开头）
 	anchorID                               string         // ⇧点击范围选的锚点（上一次普通 / ⌘ 点击的卡）
+	fw                                     firewallUI     // 设置「发送前隐私检查」展开态与字段输入
 	setShortcutsOpen                       bool           // 设置「面板内快捷键」表展开
 	setJump                                string         // 设置窗下一帧要跳到的页名
 	lastClipID                             string         // 上一次外部复制入库的卡（连续复制两次置顶用）
@@ -615,8 +616,9 @@ func (a *app) sendT(notes []store.Note, tmpl string) {
 		return
 	}
 	var fs []core.Finding
+	rules := a.scanRules()
 	for _, n := range notes {
-		fs = append(fs, core.Preflight(n.Text)...)
+		fs = append(fs, core.Scan(n.Text, rules)...)
 	}
 	if len(fs) > 0 || a.forceCheck {
 		a.forceCheck = false
@@ -629,14 +631,21 @@ func (a *app) sendT(notes []store.Note, tmpl string) {
 	a.askEnter(notes, false, tmpl)
 }
 
+// scanRules：设置里的隐私检查开关、关掉的提示类别与自定义敏感字段。
+func (a *app) scanRules() core.Rules {
+	st := a.store.Settings()
+	return core.Rules{Off: st.FirewallOff, DisabledWarn: st.FirewallDisabledWarn, CustomFields: st.FirewallCustomFields}
+}
+
 // confirmPending 处理预检确认条：redact 为 true 时遮罩命中处再发；保留原文时强制不回车（同 Tauri forcePressEnterOff）。
 func (a *app) confirmPending(redact bool) {
 	notes, tmpl, hadFindings := a.pending, a.pendingTmpl, len(a.findings) > 0
 	a.pending, a.findings, a.rawArm, a.pendingTmpl = nil, nil, false, ""
 	if redact {
 		notes = slices.Clone(notes)
+		rules := a.scanRules()
 		for i := range notes {
-			fs := core.Preflight(notes[i].Text)
+			fs := core.Scan(notes[i].Text, rules)
 			a.lastRedactions += len(fs)
 			notes[i].Text = core.Redact(notes[i].Text, fs)
 		}

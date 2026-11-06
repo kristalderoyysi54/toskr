@@ -456,6 +456,8 @@ func (a *app) redactDetect(re *redactEditor) {
 	}
 	re.detecting = true
 	img := re.img
+	rules := a.scanRules()
+	rules.Off = false // 打码里主动点「识别」不受发送前检查总开关影响；类别与自定义字段照用
 	go func() {
 		lines, err := ocrImage(img)
 		re.update(func() {
@@ -464,7 +466,7 @@ func (a *app) redactDetect(re *redactEditor) {
 				a.showHUD("warn", fmt.Sprintf(tr("识别失败：%v"), err))
 				return
 			}
-			found := sensitiveBoxes(lines, re.W, re.H)
+			found := sensitiveBoxes(lines, re.W, re.H, rules)
 			var next []redactCandidate
 			seen := map[shot.PxBox]bool{}
 			for _, c := range found {
@@ -488,14 +490,14 @@ func (a *app) redactDetect(re *redactEditor) {
 	}()
 }
 
-func sensitiveBoxes(lines []macos.OCRLine, W, H int) []redactCandidate {
+func sensitiveBoxes(lines []macos.OCRLine, W, H int, rules core.Rules) []redactCandidate {
 	var out []redactCandidate
 	for _, l := range lines {
 		total := utf8.RuneCountInString(l.Text)
 		if total == 0 {
 			continue
 		}
-		for _, f := range core.Preflight(l.Text) {
+		for _, f := range core.Scan(l.Text, rules) {
 			s, e := utf8.RuneCountInString(l.Text[:f.Start]), utf8.RuneCountInString(l.Text[:f.End])
 			x0 := l.X + l.W*float64(s)/float64(total) - 2
 			x1 := l.X + l.W*float64(e)/float64(total) + 2
