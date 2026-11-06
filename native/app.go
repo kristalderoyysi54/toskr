@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -136,6 +138,7 @@ type app struct {
 	lastClipID                             string // 上一次外部复制入库的卡（连续复制两次置顶用）
 	lastClipAt                             time.Time
 	trayBuilt                              string // 托盘菜单上次重建时的状态键
+	forceCheck                             bool   // 本次发送强制先过检查条（检查后发送…）
 	tauriImporting                         bool   // 正在从 Tauri 版导入
 	// 设置页「本机翻译」状态
 	ltStatus                        string
@@ -555,7 +558,8 @@ func (a *app) sendT(notes []store.Note, tmpl string) {
 	for _, n := range notes {
 		fs = append(fs, core.Preflight(n.Text)...)
 	}
-	if len(fs) > 0 {
+	if len(fs) > 0 || a.forceCheck {
+		a.forceCheck = false
 		a.pending, a.findings, a.rawArm, a.pendingTmpl = notes, fs, false, tmpl
 		if a.panel != nil {
 			a.panel.Show() // 确认条在面板里
@@ -567,7 +571,7 @@ func (a *app) sendT(notes []store.Note, tmpl string) {
 
 // confirmPending 处理预检确认条：redact 为 true 时遮罩命中处再发；保留原文时强制不回车（同 Tauri forcePressEnterOff）。
 func (a *app) confirmPending(redact bool) {
-	notes, tmpl := a.pending, a.pendingTmpl
+	notes, tmpl, hadFindings := a.pending, a.pendingTmpl, len(a.findings) > 0
 	a.pending, a.findings, a.rawArm, a.pendingTmpl = nil, nil, false, ""
 	if redact {
 		notes = slices.Clone(notes)
@@ -577,7 +581,7 @@ func (a *app) confirmPending(redact bool) {
 			notes[i].Text = core.Redact(notes[i].Text, fs)
 		}
 	}
-	a.askEnter(notes, !redact, tmpl)
+	a.askEnter(notes, hadFindings && !redact, tmpl) // 只有真的保留了敏感原文才强制不回车
 }
 
 // askEnter：方案为「每次发送前确认」时先在面板里问是否回车；保留了原文则一律不回车。
@@ -614,11 +618,7 @@ func (a *app) deliver(notes []store.Note, enter bool, tmpl string) {
 	}
 	payload := ""
 	if len(texts) > 0 {
-		content := sendText(texts)
-		if tmpl != "" {
-			content = store.ApplyPromptTemplate(tmpl, content)
-		}
-		payload = store.FormatForDelivery(content, r.Profile.OutputMode())
+		payload = composePayload(texts, tmpl, r.Profile.OutputMode())
 	}
 	if !a.pinned && !r.Profile.KeepPanel {
 		a.hidePanelNow()
@@ -839,3 +839,68 @@ func modifierFlags(name string) (target, others uint64) {
 }
 
 func (a *app) now() time.Time { return a.clock() }
+
+// composePayload：发送正文 = 多条编号列表 → 套提示词模板 → 按方案输出格式加工。
+func composePayload(texts []string, tmpl, mode string) string {
+	content := sendText(texts)
+	if tmpl != "" {
+		content = store.ApplyPromptTemplate(tmpl, content)
+	}
+	return store.FormatForDelivery(content, mode)
+}
+
+// checkSend：「检查后发送…」——无论有无敏感项都先在面板里展示将要发送的内容，确认后再发。
+func (a *app) checkSend(notes []store.Note) {
+	a.forceCheck = true
+	a.send(notes)
+	a.forceCheck = false
+}
+
+// exportNotes：「导出笔记包…」——系统保存面板选位置，写 zip（notes.md + media/）。
+func (a *app) exportNotes(notes []store.Note) {
+	md, media, err := store.BuildNotesExport(notes, a.store.Sections(), a.now())
+	if err != nil {
+		a.showHUD("warn", tr(err.Error()))
+		return
+	}
+	name := a.now().Format("Toskr-笔记-2006-01-02")
+	if len(notes) > 1 {
+		name += fmt.Sprintf("-%d条", len(notes))
+	}
+	go func() {
+		home, _ := os.UserHomeDir()
+		path, err := mygo.Dialog.Save(mygo.SaveDialogOptions{Title: tr("导出笔记包"), DefaultPath: filepath.Join(home, "Desktop", name+".zip"),
+			CreateDirectories: true, Filters: []mygo.FileFilter{{Name: tr("Toskr Markdown 笔记包"), Extensions: []string{"zip"}}}})
+		if err != nil || path == "" {
+			return
+		}
+		err = a.store.WriteNotesBundle(path, md, media)
+		a.panel.Update(func() {
+			switch {
+			case err != nil:
+				a.showHUD("warn", fmt.Sprintf(tr("导出失败：%s"), err.Error()))
+			case len(notes) == 1:
+				msg := tr("笔记包已导出")
+				if len(media) > 0 {
+					msg += fmt.Sprintf(tr("（含 %d 张图）"), len(media))
+				}
+				a.showHUD("ok", msg)
+			default:
+				msg := fmt.Sprintf(tr("已导出 %d 条笔记"), len(notes))
+				if len(media) > 0 {
+					msg += fmt.Sprintf(tr("、%d 张图"), len(media))
+				}
+				a.showHUD("ok", msg)
+			}
+		})
+	}()
+}
+
+// clipRunes 截到 n 个字符（保留换行），超出加省略号。
+func clipRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}

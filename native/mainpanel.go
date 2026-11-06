@@ -850,6 +850,12 @@ func (a *app) selectionBar(c *ui.Context, k tokens) {
 				if m.Item(tr("复制为列表")).Chosen() {
 					a.copyChosenAsList()
 				}
+				if m.Item(tr("检查后发送…")).Chosen() {
+					a.checkSend(a.chosenNotes())
+				}
+				if a.page == pageNotes && m.Item(tr("导出笔记包…")).Chosen() {
+					a.exportNotes(a.chosenNotes())
+				}
 				m.Separator()
 				a.templateMenu(m, tr("用模板发送 · 常用"), a.chosenNotes)
 			})

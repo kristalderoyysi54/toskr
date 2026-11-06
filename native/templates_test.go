@@ -2,6 +2,7 @@ package main
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -79,5 +80,36 @@ func TestPromptTemplatesAddSendAndDelete(t *testing.T) {
 	tt.Frame()
 	if a.pendingTmpl != "" {
 		t.Fatal("取消后应丢弃模板")
+	}
+}
+
+// 检查后发送：无敏感项也先在面板里展示将发送的原样内容（已套模板），确认后才发；剪贴卡没有「导出笔记包…」。
+func TestCheckSendShowsPayloadFirst(t *testing.T) {
+	a, tt := testApp(t, "第一行\n第二行")
+	sys := &recSys{}
+	a.sys = sys
+	a.target = macos.FrontApp{PID: 42, Name: "ChatGPT"}
+	_ = tt.RightClick("第一行\n第二行")
+	if m := strings.Join(tt.Menu(), "|"); !strings.Contains(m, "导出笔记包…") {
+		t.Fatalf("笔记卡应有导出 %s", m)
+	}
+	if err := tt.ChooseMenuItem("检查后发送…"); err != nil {
+		t.Fatalf("%v %v", err, tt.Menu())
+	}
+	tt.Frame()
+	if !tt.HasText("发送前检查：发往 ChatGPT · 稳妥发送") || !tt.HasText("第一行\n第二行") || len(sys.sent()) != 0 {
+		t.Fatalf("应先展示内容不发送 %v", tt.Texts())
+	}
+	_ = tt.Click("发送")
+	waitFor(t, func() bool { return len(sys.sent()) == 1 })
+	if sys.sent()[0] != "第一行\n第二行" {
+		t.Fatalf("%q", sys.sent()[0])
+	}
+	a.store.Add(store.Note{Section: store.SectionClipboard, Text: "剪贴的"})
+	a.switchPage(pageClip)
+	tt.Frame()
+	_ = tt.RightClick("剪贴的")
+	if m := strings.Join(tt.Menu(), "|"); strings.Contains(m, "导出笔记包…") {
+		t.Fatalf("剪贴卡不应有导出 %s", m)
 	}
 }

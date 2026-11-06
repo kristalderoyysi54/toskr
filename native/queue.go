@@ -265,12 +265,41 @@ func (a *app) preflightBar(c *ui.Context) {
 	for _, k := range order {
 		parts = append(parts, fmt.Sprintf("%s ×%d", k, kinds[k]))
 	}
-	ui.Column(c).Padding(10, 12).Gap(8).Radius(12).Background(t.Warning.Alpha(0.16)).Border(1, t.Warning.Alpha(0.5)).Children(func() {
+	r, _ := a.resolution()
+	var texts []string
+	for _, n := range a.pending {
+		if n.Kind != "image" {
+			texts = append(texts, n.Text)
+		}
+	}
+	tone := t.Warning
+	if len(a.findings) == 0 { // 检查后发送：没有敏感项，只确认内容
+		tone = t.Accent
+	}
+	ui.Column(c).Padding(10, 12).Gap(8).Radius(12).Background(tone.Alpha(0.12)).Border(1, tone.Alpha(0.45)).Key("preflight").Children(func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			if len(a.findings) == 0 {
+				ui.Text(c, fmt.Sprintf(tr("发送前检查：发往 %s · %s"), a.target.Name, profileName(r.Profile))).FontSize(12).Wrap().Grow(1)
+				return
+			}
 			ui.Icon(c, iconWarn).FontSize(14).TextColor(t.Warning)
 			ui.Text(c, tr("发送内容含敏感信息：")+strings.Join(parts, "、")).FontSize(12).Wrap().Grow(1)
 		})
-		r, _ := a.resolution()
+		if len(texts) > 0 { // 将要发送的原样内容（已套模板与输出格式）
+			ui.Text(c, clipRunes(composePayload(texts, a.pendingTmpl, r.Profile.OutputMode()), 400)).FontSize(11).Font(fontMono).Wrap().MaxLines(8).
+				Padding(6, 8).Radius(8).Background(t.Background.Alpha(0.6))
+		}
+		if len(a.findings) == 0 {
+			ui.Row(c).Gap(6).Children(func() {
+				if ui.Button(c, tr("发送")).Clicked() {
+					a.confirmPending(false)
+				}
+				if ui.Button(c, tr("取消")).Clicked() {
+					a.pending, a.findings, a.rawArm, a.pendingTmpl = nil, nil, false, ""
+				}
+			})
+			return
+		}
 		ui.Row(c).Gap(6).Children(func() {
 			if ui.Button(c, tr("遮罩后发送")).Clicked() {
 				a.confirmPending(true)
@@ -486,6 +515,9 @@ func (a *app) cardMenu(c *ui.Context, m *ui.Menu, i int, n store.Note) {
 		if m.Item(send).Chosen() {
 			a.sendSelected()
 		}
+		if m.Item(tr("检查后发送…")).Chosen() {
+			a.checkSend(a.chosenNotes())
+		}
 		if !isImage {
 			a.templateMenu(m, tr("用模板发送"), a.chosenNotes)
 		}
@@ -571,6 +603,9 @@ func (a *app) cardMenu(c *ui.Context, m *ui.Menu, i int, n store.Note) {
 			a.convertToTask(n, "", nil, tr("已转为任务"))
 		}
 		a.replyMenu(m, n)
+	}
+	if !isClip && n.Kind != "secret" && m.Item(tr("导出笔记包…")).Chosen() {
+		a.exportNotes(a.chosenNotes())
 	}
 	m.Submenu(tr("移动到"), func(sm *ui.Menu) {
 		for _, s := range a.store.Sections() {
