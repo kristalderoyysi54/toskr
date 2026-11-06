@@ -74,6 +74,13 @@ func start() (*app, error) {
 	a.panel.SetAlwaysOnTop(!st.Settings().PanelNotOnTop)
 	// 退出时 mygo 先逐个关窗，任何一个 PreventDefault 都会取消退出；只在非退出时把「关闭」改成隐藏
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { a.quitting = true })
+	// 二次启动（再次 open / 从启动台点开）且没有可见窗口时唤出面板，同 Tauri single_instance → request_show_panel
+	mygo.App.OnActivate(func(visible bool) {
+		if !visible && !a.quitting {
+			diag.Push("二次启动：唤出面板")
+			a.showPanel()
+		}
+	})
 	a.panel.OnClose(func(e *mygo.CloseEvent) {
 		if !a.quitting {
 			e.PreventDefault()

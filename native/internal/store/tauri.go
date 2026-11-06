@@ -206,11 +206,41 @@ func ReadTauri(dir string, key []byte) (*tauriState, error) {
 			return nil, fmt.Errorf("Tauri 数据解密失败（密钥不对或文件损坏）：%w", err)
 		}
 	}
-	var f tauriFile
-	if err := json.Unmarshal(plain, &f); err != nil {
+	return parseTauriDoc(plain)
+}
+
+// ErrTauriEmpty：解开后没有任何笔记 / 分组 / 任务 / 账单——多半是格式没认出来，宁可报错也不动本机数据。
+var ErrTauriEmpty = errors.New("Tauri 数据里没有可导入的内容（格式未识别或数据为空），未做任何改动")
+
+// parseTauriDoc：toskr-data.json 是 Tauri 持久化层的「袋子」{"toskr": "<zustand 的 {state, version} JSON 字符串>"}
+// （旧名 copper，同 persistStorage.ts valueFromBag）；也兼容直接是 {state, version} 的文档。
+func parseTauriDoc(plain []byte) (*tauriState, error) {
+	var bag map[string]json.RawMessage
+	if err := json.Unmarshal(plain, &bag); err != nil {
 		return nil, fmt.Errorf("Tauri 数据格式无法识别：%w", err)
 	}
-	return &f.State, nil
+	doc := plain
+	for _, name := range []string{"toskr", "copper"} {
+		v, ok := bag[name]
+		if !ok {
+			continue
+		}
+		var s string
+		if err := json.Unmarshal(v, &s); err != nil {
+			return nil, fmt.Errorf("Tauri 持久化状态 %s 类型无效", name)
+		}
+		doc = []byte(s)
+		break
+	}
+	var f tauriFile
+	if err := json.Unmarshal(doc, &f); err != nil {
+		return nil, fmt.Errorf("Tauri 数据格式无法识别：%w", err)
+	}
+	st := f.State
+	if len(st.Notes) == 0 && len(st.Sections) == 0 && len(st.Tasks) == 0 && len(st.Bills) == 0 {
+		return nil, ErrTauriEmpty
+	}
+	return &st, nil
 }
 
 // tauriMedia：读 Tauri 媒体文件、解密、统一成 PNG 存进原生媒体库，返回原生文件名（同名缓存）。

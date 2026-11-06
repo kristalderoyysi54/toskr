@@ -71,7 +71,9 @@ func TestImportTauri(t *testing.T) {
 			"defaultTargetProfileId": "p-ai",
 			"promptSnippets":         []any{map[string]any{"id": "s1", "label": "翻译", "text": "翻译：{内容}", "groupId": "g2", "isCommon": true}}},
 	}
-	raw, _ := json.Marshal(map[string]any{"state": state, "version": 27})
+	// 与真实文件同形：持久化「袋子」，zustand 的 {state, version} 以 JSON 字符串存在 toskr 键下
+	inner, _ := json.Marshal(map[string]any{"state": state, "version": 27})
+	raw, _ := json.Marshal(map[string]string{"toskr": string(inner)})
 	_ = os.WriteFile(filepath.Join(tdir, "toskr-data.json"), seal(PurposeData, raw), 0o600)
 	// 最近发送：明文 JSONL 事件流；d1 发出并有回复，d2 失败，d3 只开过预检（不导入），坏行跳过
 	activity := strings.Join([]string{
@@ -178,3 +180,40 @@ func TestTauriClipCardTemplate(t *testing.T) {
 		}
 	}
 }
+
+// 格式：袋子 toskr 优先、旧名 copper 兜底、直接 {state} 兼容；认不出 / 全空时报错，且导入不动本机数据（合成数据不清）。
+func TestParseTauriDocAndEmptyGuard(t *testing.T) {
+	inner := `{"state":{"notes":[{"id":"n1","text":"甲","sectionId":"inbox"}]},"version":27}`
+	for name, doc := range map[string]string{
+		"toskr":  `{"toskr":` + strconvQuote(inner) + `}`,
+		"copper": `{"copper":` + strconvQuote(inner) + `}`,
+		"direct": inner,
+	} {
+		st, err := parseTauriDoc([]byte(doc))
+		if err != nil || len(st.Notes) != 1 || st.Notes[0].Text != "甲" {
+			t.Errorf("%s：%v %+v", name, err, st)
+		}
+	}
+	if _, err := parseTauriDoc([]byte(`{"other":"x"}`)); err != ErrTauriEmpty {
+		t.Fatalf("认不出应报空 %v", err)
+	}
+	if _, err := parseTauriDoc([]byte(`{"toskr":{"state":{}}}`)); err == nil {
+		t.Fatal("toskr 值不是字符串应报错")
+	}
+
+	tdir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(tdir, "toskr-data.json"), []byte(`{"unknown":"{}"}`), 0o600)
+	s, err := OpenDir(t.TempDir(), bytes.Repeat([]byte{1}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _ = s.Add(Note{Section: SectionInbox, Text: "合成", SourceApp: "Seed"})
+	if _, err := s.ImportTauri(tdir, nil); err != ErrTauriEmpty {
+		t.Fatalf("应拒绝空导入 %v", err)
+	}
+	if len(s.Notes()) != 1 {
+		t.Fatal("空导入不得清掉本机数据")
+	}
+}
+
+func strconvQuote(s string) string { b, _ := json.Marshal(s); return string(b) }
