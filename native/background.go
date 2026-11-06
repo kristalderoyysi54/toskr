@@ -23,6 +23,9 @@ func (a *app) startBackground() {
 		lastHouse := time.Now()
 		for now := range time.Tick(reminderTick) {
 			a.remind(now)
+			if a.panel != nil {
+				a.panel.Update(a.refreshTray) // 暂停到点后托盘回到「暂停」子菜单、剩余分钟更新
+			}
 			if now.Sub(lastHouse) > time.Hour {
 				a.housekeeping()
 				lastHouse = now

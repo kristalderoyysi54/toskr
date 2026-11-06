@@ -209,3 +209,24 @@ func TestClipWatcherLinksAndImages(t *testing.T) {
 		t.Fatal("解不开的图片跳过")
 	}
 }
+
+func TestClipWatcherIgnoreSwitches(t *testing.T) {
+	// 计数从 1000 起：别和其他测试 markOwn 过的计数撞上（own 标记是全局的）
+	f := &fake{items: original(), count: 1000, front: macos.FrontApp{PID: 9, BundleID: "com.app"}}
+	keepConcealed := false
+	w := &ClipWatcher{Sys: f, Ignore: func() (bool, bool) { return !keepConcealed, true }}
+	w.Tick()
+	f.Write([]macos.Item{{macos.TypeString: []byte("pw"), "org.nspasteboard.ConcealedType": nil}}, false)
+	if _, ok := w.Tick(); ok {
+		t.Fatal("默认忽略隐藏内容")
+	}
+	keepConcealed = true
+	f.Write([]macos.Item{{macos.TypeString: []byte("pw2"), "org.nspasteboard.ConcealedType": nil}}, false)
+	if ev, ok := w.Tick(); !ok || ev.Text != "pw2" {
+		t.Fatal("关闭「忽略隐藏内容」后应收")
+	}
+	f.Write([]macos.Item{{macos.TypeString: []byte("tmp"), macos.TypeTransient: nil}}, false)
+	if _, ok := w.Tick(); ok {
+		t.Fatal("瞬时内容仍忽略")
+	}
+}

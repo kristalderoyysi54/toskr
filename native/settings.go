@@ -305,6 +305,31 @@ func (a *app) settingsView(c *ui.Context) {
 				{title: tr("记录剪贴板历史"), hint: tr("复制的文字、链接与图片自动进入「剪贴」页"), control: func() {
 					changed = toggle(c, s, &a.setClip) || changed
 				}},
+				{title: tr("暂停收集"), hint: a.clipPauseHint(st), hidden: !st.ClipboardWatch, control: func() {
+					if a.now().Before(st.ClipPauseUntil) {
+						if button(c, s, "立即恢复") {
+							a.pauseClipboard(0)
+						}
+						return
+					}
+					ui.Row(c).Gap(4).Children(func() {
+						for _, m := range clipPauseMinutes {
+							label := fmt.Sprintf(tr("%d 分"), m)
+							if m >= 60 {
+								label = fmt.Sprintf(tr("%d 小时"), m/60)
+							}
+							if button(c, s, label) {
+								a.pauseClipboard(m)
+							}
+						}
+					})
+				}},
+				{title: tr("连续复制两次自动置顶"), hint: tr("10 秒内复制两次同一内容，自动固定 ★"), hidden: !st.ClipboardWatch,
+					control: setToggle(!st.ClipDoubleCopyOff, func(s *store.Settings, v bool) { s.ClipDoubleCopyOff = !v })},
+				{title: tr("忽略密码管理器与隐藏内容"), hint: tr("1Password 等标记为隐藏的复制不进入历史"), hidden: !st.ClipboardWatch,
+					control: setToggle(!st.ClipKeepConcealed, func(s *store.Settings, v bool) { s.ClipKeepConcealed = !v })},
+				{title: tr("忽略瞬时内容"), hint: tr("应用标记为临时、自动生成的复制不进入历史"), hidden: !st.ClipboardWatch,
+					control: setToggle(!st.ClipKeepTransient, func(s *store.Settings, v bool) { s.ClipKeepTransient = !v })},
 				{title: tr("保留时长"), hint: tr("超期记录自动清理，置顶项除外"), control: func() {
 					changed = sliderValue(c, k, &a.setRetain, 0, 90, 1, retain) || changed
 				}},
@@ -667,4 +692,11 @@ func (a *app) invalidateAll() {
 			w.Invalidate()
 		}
 	}
+}
+
+func (a *app) clipPauseHint(st store.Settings) string {
+	if a.now().Before(st.ClipPauseUntil) {
+		return fmt.Sprintf(tr("已暂停，%s 恢复"), st.ClipPauseUntil.Format("15:04"))
+	}
+	return tr("临时停止，到点自动恢复")
 }

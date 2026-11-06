@@ -133,6 +133,9 @@ type app struct {
 	taskCk                                 map[string]*string
 	taskSecRename, taskSecName             string
 	recordingKey                           string // 设置里正在录制的全局快捷键（panel / shot / newnote）
+	lastClipID                             string // 上一次外部复制入库的卡（连续复制两次置顶用）
+	lastClipAt                             time.Time
+	trayBuilt                              string // 托盘菜单上次重建时的状态键
 	tauriImporting                         bool   // 正在从 Tauri 版导入
 	// 设置页「本机翻译」状态
 	ltStatus                        string
@@ -713,7 +716,14 @@ func (a *app) watchClipboard() {
 	w := &core.ClipWatcher{
 		Sys:      a.sys,
 		Excluded: func() []string { return a.store.Settings().ExcludedApps },
-		Enabled:  func() bool { return a.store.Settings().ClipboardWatch },
+		Enabled: func() bool {
+			st := a.store.Settings()
+			return st.ClipboardWatch && !a.now().Before(st.ClipPauseUntil) // 暂停到点自动恢复
+		},
+		Ignore: func() (bool, bool) {
+			st := a.store.Settings()
+			return !st.ClipKeepConcealed, !st.ClipKeepTransient
+		},
 	}
 	go func() {
 		for range time.Tick(core.ClipPoll) {
@@ -747,7 +757,15 @@ func (a *app) addClip(ev core.ClipEvent) (store.Note, error) {
 	default:
 		diag.Push("剪贴板: 收文本 %d 字符 来自 %s", len([]rune(ev.Text)), ev.Source.Name)
 	}
-	added, _, err := a.store.Add(n)
+	added, dup, err := a.store.Add(n)
+	// 连续复制两次自动置顶（同 Tauri clipDoubleCopyKeep：10 秒内复制两次同一内容 → 固定 ★）
+	now := a.now()
+	if err == nil && dup && !a.store.Settings().ClipDoubleCopyOff && a.lastClipID == added.ID && now.Sub(a.lastClipAt) <= 10*time.Second && !added.Kept {
+		_ = a.store.SetKept(added.ID, true)
+		added.Kept = true
+		diag.Push("剪贴板: 连续复制两次，已固定")
+	}
+	a.lastClipID, a.lastClipAt = added.ID, now
 	return added, err
 }
 

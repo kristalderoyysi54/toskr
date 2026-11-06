@@ -5,6 +5,9 @@ import (
 	"image"
 	"image/png"
 	"testing"
+	"time"
+
+	"github.com/egoist/mygo/ui"
 
 	"github.com/toskr/native/internal/core"
 	"github.com/toskr/native/internal/macos"
@@ -38,5 +41,52 @@ func TestClipCaptureLinksAndImages(t *testing.T) {
 	_, _ = a.addClip(core.ClipEvent{PNG: buf.Bytes(), W: 3, H: 2, Source: src})
 	if len(a.store.Notes()) != before {
 		t.Fatal("同一张图重复复制不应新增")
+	}
+}
+
+// 连续复制两次自动置顶（10 秒内）、可关闭；暂停收集 / 立即恢复写回并改托盘状态键。
+func TestClipDoubleCopyKeepAndPause(t *testing.T) {
+	a, _ := testApp(t)
+	now := time.Date(2026, 11, 6, 10, 0, 0, 0, time.Local)
+	a.clock = func() time.Time { return now }
+	src := macos.FrontApp{Name: "Notes"}
+	n, _ := a.addClip(core.ClipEvent{Text: "常用地址", Source: src})
+	now = now.Add(5 * time.Second)
+	again, _ := a.addClip(core.ClipEvent{Text: "常用地址", Source: src})
+	if again.ID != n.ID || !again.Kept {
+		t.Fatalf("10 秒内复制两次应固定 %+v", again)
+	}
+	other, _ := a.addClip(core.ClipEvent{Text: "另一段", Source: src})
+	now = now.Add(11 * time.Second)
+	if x, _ := a.addClip(core.ClipEvent{Text: "另一段", Source: src}); x.ID != other.ID || x.Kept {
+		t.Fatal("超过 10 秒不固定")
+	}
+	st := a.store.Settings()
+	st.ClipDoubleCopyOff = true
+	_ = a.store.SetSettings(st)
+	third, _ := a.addClip(core.ClipEvent{Text: "第三段", Source: src})
+	if x, _ := a.addClip(core.ClipEvent{Text: "第三段", Source: src}); x.ID != third.ID || x.Kept {
+		t.Fatal("关闭后不固定")
+	}
+
+	a.openSettingsState()
+	a.setPage = 2 // 剪贴板
+	cur := a.store.Settings()
+	cur.ClipboardWatch = true
+	_ = a.store.SetSettings(cur)
+	set := ui.NewTester(a.settingsView, 1040, 720)
+	set.Frame()
+	before := a.trayKey()
+	if err := set.Click("15 分"); err != nil {
+		t.Fatalf("%v %v", err, set.Texts())
+	}
+	set.Frame()
+	if got := a.store.Settings().ClipPauseUntil; !got.Equal(now.Add(15*time.Minute)) || !set.HasText("已暂停，10:15 恢复") || a.trayKey() == before {
+		t.Fatalf("暂停 15 分钟 %v %v", got, set.Texts())
+	}
+	_ = set.Click("立即恢复")
+	set.Frame()
+	if !a.store.Settings().ClipPauseUntil.IsZero() {
+		t.Fatal("立即恢复")
 	}
 }

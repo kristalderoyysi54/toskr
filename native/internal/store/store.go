@@ -93,15 +93,20 @@ type Settings struct {
 	PasteThenEnter  bool     `json:"pasteThenEnter"`          // 粘贴后回车（终端类目标默认关闭）
 	NewNoteKey      string   `json:"newNoteHotkey,omitempty"` // 全局新建笔记（空 = 不注册）
 	// 双击行为（同 Tauri doubleTapCaptureOnly：true = 只划词捕获，无选中时不开关面板）与捕获存入的分组（空 = 收件箱）
-	DoubleTapCaptureOnly bool     `json:"doubleTapCaptureOnly,omitempty"`
-	CaptureSection       string   `json:"captureSectionId,omitempty"`
-	ScreenshotKey        string   `json:"screenshotKey"`
-	AIEndpoint           string   `json:"aiEndpoint"`
-	AIModel              string   `json:"aiModel"`
-	Companion            []string `json:"companion"` // 伴随停靠的应用 bundle id
-	EdgeHide             bool     `json:"edgeHide"`
-	Currency             string   `json:"currency"`
-	DueReminders         bool     `json:"dueReminders"`
+	DoubleTapCaptureOnly bool   `json:"doubleTapCaptureOnly,omitempty"`
+	CaptureSection       string `json:"captureSectionId,omitempty"`
+	// 剪贴板（同 Tauri clipPauseUntil / clipDoubleCopyKeep / clipIgnoreConcealed / clipIgnoreTransient；布尔用「关闭」语义，缺字段即默认开）
+	ClipPauseUntil    time.Time `json:"clipPauseUntil,omitzero"`
+	ClipDoubleCopyOff bool      `json:"clipDoubleCopyKeepOff,omitempty"`
+	ClipKeepConcealed bool      `json:"clipKeepConcealed,omitempty"` // true = 不忽略密码管理器 / 隐藏内容
+	ClipKeepTransient bool      `json:"clipKeepTransient,omitempty"` // true = 不忽略瞬时内容
+	ScreenshotKey     string    `json:"screenshotKey"`
+	AIEndpoint        string    `json:"aiEndpoint"`
+	AIModel           string    `json:"aiModel"`
+	Companion         []string  `json:"companion"` // 伴随停靠的应用 bundle id
+	EdgeHide          bool      `json:"edgeHide"`
+	Currency          string    `json:"currency"`
+	DueReminders      bool      `json:"dueReminders"`
 	// 与 Tauri 一致的可选功能域（默认关闭）：订阅进「提醒」页第三个子视图，秘文进「内容」页
 	SubscriptionsEnabled bool `json:"subscriptionsEnabled"`
 	SecretEnabled        bool `json:"secretEnabled"`

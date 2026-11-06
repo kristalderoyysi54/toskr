@@ -83,7 +83,7 @@ func start() (*app, error) {
 		}
 	})
 	a.createHUD()
-	st.OnChange(func() { a.panel.Update(a.reload) })
+	st.OnChange(func() { a.panel.Update(func() { a.reload(); a.refreshTray() }) })
 	st.OnError = func(err error) {
 		diag.Push("落盘失败: %v", err)
 		a.panel.Update(func() { a.showHUD("warn", "保存失败："+err.Error()) })
