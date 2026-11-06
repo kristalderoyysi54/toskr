@@ -174,10 +174,7 @@ func (a *app) deliveryRow(c *ui.Context, k tokens, d store.Delivery, notes []sto
 		}
 		sb.Children(func() { text(c, summary, 12, 17, 400, k.fg.Alpha(0.9)).SingleLine() })
 		if sb.Clicked() && len(src) > 0 {
-			a.openDetail(src[0])
-			if len(src) > 1 { // Tauri 打开合并预览；原生没有批量详情窗，先开第一张并说明
-				a.showHUD("info", fmt.Sprintf(tr("这次发送含 %d 张卡，已打开第一张"), len(src)))
-			}
+			a.openBatchDetail(src, len(d.SourceIDs)) // 多张来源：只读合并预览（同 Tauri openNoteBatchDetail）
 		}
 		if hasReply {
 			ui.Row(c).Margin(6, 0, 0, 0).Padding(2, 0, 2, 8).Gap(8).BorderWidth(0, 0, 0, 2).BorderColor(k.ok.Alpha(0.4)).AlignItems(ui.Center).Children(func() {

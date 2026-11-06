@@ -3,6 +3,8 @@ package main
 import (
 	"testing"
 
+	"github.com/egoist/mygo/ui"
+
 	"github.com/toskr/native/internal/store"
 )
 
@@ -78,5 +80,34 @@ func TestImageNoteClear(t *testing.T) {
 	a.hudUndo()
 	if got, _ := a.store.Note(n.ID); got.Text != "备注" {
 		t.Fatalf("撤销 %q", got.Text)
+	}
+}
+
+// 发送记录多来源：只读合并预览，拼法同多卡发送，不可编辑 / 发送；单卡照旧开原卡。
+func TestBatchDetailReadOnly(t *testing.T) {
+	a, _ := testApp(t, "甲", "乙")
+	ns := a.store.Notes()
+	old := openDetailFn
+	openDetailFn = func(a *app, n store.Note) {
+		a.detail = detailState{id: n.ID, pickAnchor: -1, pickEnd: -1, editSel: [2]int{-1, -1}}
+	}
+	t.Cleanup(func() { openDetailFn = old })
+	a.openBatchDetail(ns, 3)
+	n, ok := a.detailNote()
+	if !ok || a.detail.virt == nil || n.Text != sendText([]string{ns[0].Text, ns[1].Text}) {
+		t.Fatalf("合并预览 %q", n.Text)
+	}
+	if a.detail.subtitle != "2/3 张当前可用来源卡片 · 发送记录不保存正文" {
+		t.Fatalf("副标题 %q", a.detail.subtitle)
+	}
+	dt := ui.NewTester(a.detailView, 560, 540)
+	dt.Frame()
+	if dt.HasText("编辑") || dt.HasText("处理") || dt.HasText("⌘⏎") || !dt.HasText("复制") || !dt.HasText("合并发送内容 · ") {
+		t.Fatalf("只读坞 %v", dt.Texts())
+	}
+	dt.Key(ui.Cmd, ui.KeyEnter)
+	dt.Frame()
+	if len(a.pending) != 0 || a.detail.edit {
+		t.Fatal("只读预览不响应 ⌘⏎")
 	}
 }

@@ -45,6 +45,16 @@ type detailState struct {
 	blocks              []store.ContentBlock // 图文混排卡编辑态的内容块草稿（nil = 按纯文本编辑）
 	blank               bool                 // 本次是新建的「新笔记」占位卡：关窗时一字未改就删掉（同 Tauri note-discard-blank）
 	editPreview         bool                 // 编辑态「渲染」预览草稿（同 Tauri editPreviewOn）
+	virt                *store.Note          // 只读合并预览（同 Tauri openNoteBatchDetail readOnly）：不在库里，只读、不可编辑 / 发送
+	subtitle            string               // 只读预览的副标题（来源张数 · 发送记录不保存正文）
+}
+
+// detailNote：当前详情窗显示的内容；只读合并预览取 virt，其余按 id 从库里取。
+func (a *app) detailNote() (store.Note, bool) {
+	if v := a.detail.virt; v != nil {
+		return *v, true
+	}
+	return a.store.Note(a.detail.id)
 }
 
 // 多详情窗（同 Tauri detailWindows.ts，📌 固定并存）：每扇窗一份 detailPane。渲染 / 获得焦点时把该窗的状态换进
@@ -204,7 +214,7 @@ func (a *app) saveImageNote() {
 func (a *app) detailView(c *ui.Context) {
 	registerFonts()
 	k, s := tok(c), stok(c)
-	n, ok := a.store.Note(a.detail.id)
+	n, ok := a.detailNote()
 	if !ok {
 		c.Root().Background(s.bg)
 		ui.Column(c).Fill().Center().Children(func() { text(c, tr("这条内容已被删除"), 12, 17, 400, k.muted) })
@@ -222,7 +232,9 @@ func (a *app) detailView(c *ui.Context) {
 		a.detailBody(c, k, s, n)
 		ui.Column(c).Absolute().Top(0).Left(0).Right(0).Children(func() {
 			a.detailHeader(c, k, n)
-			a.detailTags(c, k, s, n)
+			if a.detail.virt == nil {
+				a.detailTags(c, k, s, n)
+			}
 		})
 		ui.Row(c).Absolute().Left(0).Right(0).Bottom(0).Padding(40, 16, 12, 16).Gap(4).Justify(ui.Center).AlignItems(ui.Center).
 			Children(func() { a.detailDock(c, k, s, n) })
@@ -231,10 +243,11 @@ func (a *app) detailView(c *ui.Context) {
 }
 
 func (a *app) detailKeys(c *ui.Context, n store.Note) {
+	ro := a.detail.virt != nil
 	if c.Shortcut(ui.Cmd, ui.KeyS) && a.detail.edit { // ⌘S 保留为保存的别名
 		a.commitDetailEdit(n)
 	}
-	if c.Shortcut(ui.Cmd, ui.KeyEnter) {
+	if c.Shortcut(ui.Cmd, ui.KeyEnter) && !ro {
 		switch {
 		case a.detail.imgNote: // 备注编辑中 ⌘⏎ 是保存（同 Tauri）
 			a.saveImageNote()
@@ -267,10 +280,10 @@ func (a *app) detailKeys(c *ui.Context, n store.Note) {
 			}
 		}
 	}
-	if c.Shortcut(ui.Cmd, ui.KeyV) && !a.detail.edit && !a.detail.imgNote { // 阅读态 ⌘V：把剪贴板图片加进当前卡
+	if c.Shortcut(ui.Cmd, ui.KeyV) && !a.detail.edit && !a.detail.imgNote && !ro { // 阅读态 ⌘V：把剪贴板图片加进当前卡
 		a.pasteIntoDetail(n, "")
 	}
-	if c.Shortcut(0, ui.KeyW) && !a.detail.edit && n.Kind != "image" { // W 切换选词模式（同 Tauri）
+	if c.Shortcut(0, ui.KeyW) && !a.detail.edit && n.Kind != "image" && !ro { // W 切换选词模式（同 Tauri）
 		a.detail.pick, a.detail.pickAnchor, a.detail.pickEnd = !a.detail.pick, -1, -1
 	}
 	// ⌘+ / ⌘− 调字号（10–24），⌘0 复位 12，写回设置
@@ -314,12 +327,16 @@ func (a *app) detailHeader(c *ui.Context, k tokens, n store.Note) {
 	ui.Row(c).Height(38).Padding(8, 12).Gap(8).AlignItems(ui.Center).DragWindow().Children(func() {
 		ui.Box(c).Width(52) // 系统红绿灯占位
 		parts := []string{}
-		if n.SourceApp != "" {
+		if a.detail.virt != nil {
+			parts = append(parts, a.detail.subtitle)
+		} else if n.SourceApp != "" {
 			parts = append(parts, tr("来自 ")+n.SourceApp)
 		} else {
 			parts = append(parts, tr("笔记"))
 		}
-		parts = append(parts, tr("创建 ")+ago(n.CreatedAt, a.now()))
+		if a.detail.virt == nil {
+			parts = append(parts, tr("创建 ")+ago(n.CreatedAt, a.now()))
+		}
 		if n.UpdatedAt.After(n.CreatedAt) {
 			parts = append(parts, tr("改于 ")+ago(n.UpdatedAt, a.now()))
 		}
@@ -469,7 +486,7 @@ func (a *app) detailBody(c *ui.Context, k tokens, s settingsTokens, n store.Note
 				// 可选文字在按下时就把双击拿去选词，DoubleClicked 收不到；在输入钩子里看点击数、不拦截，
 				// 等选词落定（下下帧）再进编辑，编辑器里选中同一个词（同 Tauri 双击正文进编辑）
 				read.HandleInput(func(ev ui.InputEvent) bool {
-					if ev.Kind == ui.InputPointerDown && ev.Button == 0 && ev.Clicks == 2 && n.Kind != "image" {
+					if ev.Kind == ui.InputPointerDown && ev.Button == 0 && ev.Clicks == 2 && n.Kind != "image" && a.detail.virt == nil {
 						a.detail.dblFrames = 2
 					}
 					return false
@@ -697,6 +714,22 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 		}
 		if b.Clicked() {
 			a.commitDetailEdit(n)
+		}
+		return
+	}
+	if d.virt != nil { // 只读合并预览：只看不改不发（同 Tauri readOnly：writable=false 隐藏编辑 / 处理 / 发送）
+		if n.Kind != "image" {
+			rawLabel := tr("原文")
+			if d.raw {
+				rawLabel = tr("渲染")
+			}
+			if dockButton(c, k, "", rawLabel, false).Clicked() {
+				d.raw = !d.raw
+			}
+		}
+		if dockButton(c, k, "", tr("复制"), false).Clicked() && n.Text != "" {
+			a.copyPrivate(n.Text)
+			a.showHUD("ok", tr("已复制"))
 		}
 		return
 	}
@@ -1142,4 +1175,40 @@ func (a *app) applyEditTextOp(n store.Note, apply func(string) (string, error)) 
 	}
 	a.detailText = out
 	a.detail.editSel = [2]int{len([]rune(out)), len([]rune(out))}
+}
+
+// openBatchDetail：发送记录「查看发送内容」含多张来源卡时，按当前仍存在的来源重建只读合并预览
+// （同 Tauri openNoteBatchDetail：正文与多卡发送同一拼法，图片去重附后；单卡照旧开原详情）。
+func (a *app) openBatchDetail(src []store.Note, expected int) {
+	if len(src) == 0 {
+		return
+	}
+	if len(src) == 1 && expected <= 1 {
+		openDetailFn(a, src[0])
+		return
+	}
+	var texts, files []string
+	for _, n := range src {
+		if t := imageNoteText(n); strings.TrimSpace(t) != "" {
+			texts = append(texts, t)
+		}
+		for _, f := range n.MediaFiles() {
+			if !slices.Contains(files, f) {
+				files = append(files, f)
+			}
+		}
+	}
+	v := store.Note{ID: "delivery-source-" + strconv.FormatInt(a.now().UnixNano(), 36), Title: tr("合并发送内容"), CreatedAt: a.now()}
+	if len(texts) > 0 {
+		v.Text, v.Attachments = sendText(texts), files
+	} else if len(files) > 0 {
+		v.Kind, v.ImageFile, v.Attachments = "image", files[0], files[1:]
+	}
+	exp := max(len(src), expected)
+	count := fmt.Sprintf(tr("%d 张当前来源卡片"), len(src))
+	if len(src) != exp {
+		count = fmt.Sprintf(tr("%d/%d 张当前可用来源卡片"), len(src), exp)
+	}
+	openDetailFn(a, v)
+	a.detail.virt, a.detail.subtitle = &v, count+tr(" · 发送记录不保存正文")
 }
