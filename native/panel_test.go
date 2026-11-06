@@ -39,6 +39,7 @@ func testApp(t *testing.T, texts ...string) (*app, *ui.Tester) {
 		st.Add(store.Note{Section: store.SectionInbox, Text: texts[i], SourceApp: "Safari"})
 	}
 	a := newApp(nopSys{}, st)
+	a.permAX = true // 视图测试默认已授权；权限横幅单独测
 	st.OnChange(a.reload)
 	tt := ui.NewTester(a.panelView, 360, 720)
 	tt.Frame()

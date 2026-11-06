@@ -105,6 +105,7 @@ func start() (*app, error) {
 	a.setUpTray()
 	a.startBackground()
 	diag.Push("辅助功能授权=%v", macos.AXTrusted(false))
+	a.watchPermission()
 	a.startTap()
 	a.watchClipboard()
 	a.pinned = os.Getenv("TOSKR_PIN") == "1" // 测量用：面板常驻不随失焦收起

@@ -137,10 +137,13 @@ type app struct {
 	recordingKey                           string // 设置里正在录制的全局快捷键（panel / shot / newnote）
 	lastClipID                             string // 上一次外部复制入库的卡（连续复制两次置顶用）
 	lastClipAt                             time.Time
-	trayBuilt                              string // 托盘菜单上次重建时的状态键
-	forceCheck                             bool   // 本次发送强制先过检查条（检查后发送…）
-	quitting                               bool   // 正在退出：窗口关闭不再改成隐藏
-	tauriImporting                         bool   // 正在从 Tauri 版导入
+	trayBuilt                              string      // 托盘菜单上次重建时的状态键
+	forceCheck                             bool        // 本次发送强制先过检查条（检查后发送…）
+	quitting                               bool        // 正在退出：窗口关闭不再改成隐藏
+	permAX                                 bool        // 辅助功能已授权（每 3 秒复查）
+	tapReceiving                           atomic.Bool // 键盘监听收到过真实按键
+	tapStarted                             time.Time   // 键盘监听建立时刻（判断「建了却收不到」）
+	tauriImporting                         bool        // 正在从 Tauri 版导入
 	// 设置页「本机翻译」状态
 	ltStatus                        string
 	ltPreparing, ltFailed, ltOpened bool
@@ -782,6 +785,7 @@ func (a *app) startTap() {
 		}
 		if !seen { // 事件心跳：缺「输入监控」时 tap 能建但事件被静默扣留
 			seen = true
+			a.tapReceiving.Store(true)
 			diag.Push("键盘事件流已到达（输入监控正常）")
 		}
 		st := a.store.Settings()
@@ -822,7 +826,7 @@ func (a *app) startTap() {
 		diag.Push("键盘监听失败: %v", err)
 		return
 	}
-	a.tapErr = ""
+	a.tapErr, a.tapStarted = "", time.Now()
 	diag.Push("键盘监听已建立")
 }
 

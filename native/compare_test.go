@@ -46,6 +46,7 @@ func TestCompareWithTauri(t *testing.T) {
 	add("会议纪要：周五前完成 mygo 原生版对比报告，附内存与启动耗时。", false)
 	add("把这段接口说明发给 Claude：分页参数 page_size 默认 20，最大 200；超过返回 400。", false)
 	a := newApp(nopSys{}, st)
+	a.permAX = true // 对照截图不含权限横幅
 	a.target = macos.FrontApp{PID: 42, Name: "Cursor"}
 	a.reload()
 	compareView(t, dir, "main", a)
@@ -314,6 +315,7 @@ func TestCompareSchemes(t *testing.T) {
 		}
 	}
 	a := newApp(nopSys{}, st)
+	a.permAX = true // 对照截图不含权限横幅
 	a.target = macos.FrontApp{PID: 42, Name: "Cursor"}
 	a.reload()
 	defer func() { curScheme = "default" }()
@@ -381,6 +383,7 @@ func TestCompareStates(t *testing.T) {
 			}
 		}
 		a := newApp(nopSys{}, st)
+		a.permAX = true // 对照截图不含权限横幅
 		a.target = macos.FrontApp{PID: 42, Name: "Cursor"}
 		a.reload()
 		return a
