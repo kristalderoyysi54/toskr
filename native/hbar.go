@@ -58,8 +58,7 @@ type barState struct {
 	taskFilter             string
 	clip, notes, tasks     ui.ScrollState
 	secret, msgs           ui.ScrollState
-	stripH                 map[string]float32 // 各卡串上次用的栏高：变了（输入区开合 / 预检出现）就再排一帧
-	followClip, followNote string             // 上次已滚进视口的焦点卡
+	followClip, followNote string // 上次已滚进视口的焦点卡
 }
 
 // barHeader：横栏单行头部——左「Toskr + 页签」，中分组胶囊，右工具钮（同 Tauri horizontalBar 头部）。
@@ -191,13 +190,6 @@ func (a *app) strip(c *ui.Context, k tokens, key string, st *ui.ScrollState, n i
 	h := b.H - 12
 	if h < 80 {
 		h = 200
-	}
-	if a.bar.stripH == nil {
-		a.bar.stripH = map[string]float32{}
-	}
-	if a.bar.stripH[key] != b.H { // 卡高取自上一帧栏高：栏高变了要再排一帧，否则卡底被裁
-		a.bar.stripH[key] = b.H
-		c.Invalidate()
 	}
 	w := h * 16 / 17
 	sc.HandleInput(func(ev ui.InputEvent) bool {
@@ -376,7 +368,7 @@ func (a *app) stripNoteTile(c *ui.Context, k tokens, n store.Note, h float32, cl
 	}
 	focused := idx >= 0 && idx == a.selected && a.focusList
 	checked := a.chosen.Has(n.ID)
-	box := ui.Column(c).Size(h*16/17, h).Radius(10).Clip().Key(n.ID)
+	box := ui.Column(c).Width(h * 16 / 17).FillHeight().Radius(10).Clip().Key(n.ID)
 	cardFill(box, k)
 	hovered := box.Hovered()
 	elevated(box, k, hovered || checked || focused)
@@ -478,7 +470,7 @@ func (a *app) taskTile(c *ui.Context, k tokens, t store.Task, h float32) {
 	if open {
 		w = 384
 	}
-	card := ui.Column(c).Size(w, h).Padding(6, 8).Gap(6).Radius(10).Clip().Key("ttile-" + t.ID)
+	card := ui.Column(c).Width(w).FillHeight().Padding(6, 8).Gap(6).Radius(10).Clip().Key("ttile-" + t.ID)
 	if t.Spark && !done {
 		card.Background(k.sparkRow)
 	} else {

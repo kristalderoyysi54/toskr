@@ -27,7 +27,7 @@ func (a *app) secretsPage(c *ui.Context, k tokens) {
 				empty = tr("没有匹配的秘文")
 			}
 			a.strip(c, k, "strip-secret", &a.bar.secret, len(a.secrets), -1, nil, "", empty, func(i int, h float32) {
-				ui.Scroll(c).Size(h*16/17, h).Scrollbars(false).Key("sectile-" + a.secrets[i].ID).Children(func() {
+				ui.Scroll(c).Width(h*16/17).FillHeight().Scrollbars(false).Key("sectile-" + a.secrets[i].ID).Children(func() {
 					a.secretCard(c, k, st, a.secrets[i])
 				})
 			})

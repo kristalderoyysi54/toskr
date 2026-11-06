@@ -172,7 +172,7 @@ func (a *app) messagesPage(c *ui.Context, k tokens) {
 			empty = fmt.Sprintf(tr("没有匹配「%s」的消息"), q)
 		}
 		a.strip(c, k, swapKey, &a.bar.msgs, len(view), -1, nil, "", empty, func(i int, h float32) {
-			ui.Scroll(c).Size(h*16/17*1.25, h).Scrollbars(false).Key("msgtile-" + view[i].ID).Children(func() {
+			ui.Scroll(c).Width(h*16/17*1.25).FillHeight().Scrollbars(false).Key("msgtile-" + view[i].ID).Children(func() {
 				a.messageCard(c, k, view[i], view, reasonLabels(view[i], rules))
 			})
 		})
