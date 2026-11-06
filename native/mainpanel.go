@@ -550,7 +550,7 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 				a.codeText(c, k, n.Text)
 				return
 			}
-			text(c, n.Text, 12, 18, 400, k.fg).Wrap().MaxLines(3)
+			highlightText(c, k, n.Text, a.query, 12, 18, k.fg).Wrap().MaxLines(3)
 		})
 		ui.Row(c).Height(16).Margin(0, 8, 6, 8).AlignItems(ui.Center).Children(func() {
 			src := ""

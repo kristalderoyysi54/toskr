@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -216,6 +218,13 @@ func (a *app) searchRow(c *ui.Context, k tokens) {
 		licon(c, "search", 12, k.muted)
 		if ui.TextInputBase(c, &a.query).Bind(&a.search).Grow(1).Font(fontSans).FontSize(12).Placeholder(tr("搜索（⌘F）")).Focus().Changed() {
 			a.selected = 0
+			a.reload()
+		}
+		if strings.TrimSpace(a.query) != "" { // 命中计数（同 Tauri matchCount）
+			text(c, strconv.Itoa(a.searchMatchCount()), 10, 14, 400, k.muted).Key("search-count")
+		}
+		if ghostIconButton(c, k, "search-close", "x", tr("关闭搜索"), 18, 12, false, true).Clicked() {
+			a.searchOpen, a.query = false, ""
 			a.reload()
 		}
 	})

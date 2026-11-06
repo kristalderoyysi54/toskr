@@ -387,7 +387,7 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 			case n.Kind == "code":
 				a.codeText(c, k, n.Text)
 			default:
-				text(c, n.Text, 12, 18, 400, k.fg).Wrap().MaxLines(3)
+				highlightText(c, k, n.Text, a.query, 12, 18, k.fg).Wrap().MaxLines(3)
 			}
 		})
 		foot := ui.Row(c).Height(20).Padding(4, 0, 0, 0).Gap(4).AlignItems(ui.Center).
