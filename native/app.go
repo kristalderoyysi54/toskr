@@ -79,6 +79,7 @@ type app struct {
 	targetStarted                       int64          // 目标进程启动时刻（身份锁定）
 	pending                             []store.Note   // 预检命中、等待确认的发送
 	pf                                  preflightState // 发送预检：逐项处理状态
+	sendPNG                             []byte         // 本次发送用的图片副本（图片隐私检查遮挡后）
 	history                             []delivery
 	thumbs                              map[string]ui.ImageSource
 	aiBusy                              string // 正在 AI 处理的笔记 ID
@@ -619,9 +620,11 @@ func (a *app) sendT(notes []store.Note, tmpl string) {
 	for _, n := range notes {
 		fs = append(fs, core.Scan(n.Text, rules)...)
 	}
-	if len(fs) > 0 || a.forceCheck {
+	hasImage := !rules.Off && slices.ContainsFunc(notes, func(n store.Note) bool { return n.Kind == "image" && n.ImageFile != "" })
+	if len(fs) > 0 || a.forceCheck || hasImage {
+		auto := len(fs) == 0 && !a.forceCheck // 只为图片 OCR 打开：检查干净就自动继续
 		a.forceCheck = false
-		a.pending, a.pendingTmpl, a.pf = notes, tmpl, preflightState{}
+		a.pending, a.pendingTmpl, a.pf = notes, tmpl, preflightState{auto: auto}
 		if a.panel != nil {
 			a.panel.Show() // 确认条在面板里
 		}
@@ -657,6 +660,8 @@ func (a *app) deliver(notes []store.Note, enter bool, tmpl string) {
 	r, _ := a.resolution()
 	redactions := a.lastRedactions
 	a.lastRedactions = 0
+	override := a.sendPNG
+	a.sendPNG = nil
 	var texts []string
 	var png []byte
 	ids := make([]string, len(notes))
@@ -664,6 +669,9 @@ func (a *app) deliver(notes []store.Note, enter bool, tmpl string) {
 		ids[i] = n.ID
 		if n.Kind == "image" && png == nil && len(notes) == 1 {
 			png, _ = a.store.LoadImage(n.ImageFile)
+			if override != nil { // 图片隐私检查遮挡后的发送副本
+				png = override
+			}
 			continue
 		}
 		texts = append(texts, n.Text)

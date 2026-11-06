@@ -31,6 +31,9 @@ type preflightState struct {
 	raw      string // 已确认的整体保留级别：warn | block
 	open     bool   // 展开逐项列表
 	scanned  bool
+	images   []*pfImage
+	imgRaw   string // 图片整体确认级别
+	auto     bool   // 只为图片检查打开：OCR 干净且无文字命中时自动继续发送
 }
 
 func pfID(note int, f core.Finding) string {
@@ -145,10 +148,26 @@ func (a *app) clearPending() {
 	a.pending, a.pendingTmpl, a.pf = nil, "", preflightState{}
 }
 
-// pfSend 按当前副本发出；保留了任何原文（替换掉的不算）时强制不回车。
+// pfCombined：文字与图片两路检查都放行才能发；任一路要求不回车即不回车。
+func (a *app) pfCombined(policy string) (pfEval, pfEval) {
+	return a.pfEvaluate(policy), a.pfImageEval(policy)
+}
+
+// pfSend 按当前副本发出；保留了高风险原文时强制不回车。图片有遮挡时发遮挡副本。
 func (a *app) pfSend(e pfEval) {
 	notes, tmpl := a.pending, a.pendingTmpl
 	a.lastRedactions += a.pf.replaced
+	a.sendPNG = nil
+	for _, im := range a.pf.images {
+		if b := im.maskedPNG(); b != nil && len(notes) == 1 {
+			a.sendPNG = b
+			for _, v := range im.masked {
+				if v {
+					a.lastRedactions++
+				}
+			}
+		}
+	}
 	a.clearPending()
 	a.askEnter(notes, e.noEnter, tmpl)
 }
@@ -170,10 +189,20 @@ func (a *app) preflightBar(c *ui.Context) {
 	p := &a.pf
 	if !p.scanned {
 		a.pfScan()
+		a.pfScanImages()
 	}
 	r, _ := a.resolution()
 	policy := r.Profile.PrivacyPolicy
-	e := a.pfEvaluate(policy)
+	e, ie := a.pfCombined(policy)
+	if p.auto && len(p.items) == 0 && ie.canSend && !slices.ContainsFunc(p.images, func(im *pfImage) bool { return len(im.regions) > 0 }) {
+		a.pfSend(pfEval{canSend: true, noEnter: ie.noEnter}) // 图片检查干净：直接继续发送，不打扰
+		return
+	}
+	both := pfEval{canSend: e.canSend && ie.canSend, noEnter: e.noEnter || ie.noEnter, needRaw: e.needRaw, unresolved: e.unresolved + ie.unresolved, reason: cmpOr(e.reason, ie.reason)}
+	imgRaw := false
+	if both.needRaw == "" && ie.needRaw != "" && e.canSend {
+		both.needRaw, imgRaw = ie.needRaw, true
+	}
 	var texts []string
 	for _, n := range a.pending {
 		if n.Kind != "image" {
@@ -196,8 +225,9 @@ func (a *app) preflightBar(c *ui.Context) {
 				ui.Icon(c, iconWarn).FontSize(14).TextColor(t.Warning)
 				ui.Text(c, tr("发送内容含敏感信息：")+pfSummary(p.items)).FontSize(12).Wrap().Grow(1)
 			}
-			if ghostIconButton(c, k, "pf-rescan", "refresh-cw", tr("重新检测当前文本"), 22, 13, false, true).Clicked() {
+			if ghostIconButton(c, k, "pf-rescan", "refresh-cw", tr("重新检测当前文本和原始图片"), 22, 13, false, true).Clicked() {
 				a.pfScan()
+				a.pfScanImages()
 				switch n := len(a.pf.items); {
 				case n > 0:
 					a.showHUD("info", fmt.Sprintf(tr("重新检测完成，发现 %d 项可能的敏感内容"), n))
@@ -213,22 +243,42 @@ func (a *app) preflightBar(c *ui.Context) {
 		if len(p.items) > 0 {
 			a.pfDetails(c, k, e)
 		}
+		if len(p.images) > 0 && len(p.items) == 0 {
+			a.pfImageToggle(c, k)
+		}
+		a.pfImagesSection(c, k, policy)
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 			switch {
-			case e.needRaw != "":
+			case both.needRaw != "":
 				label := tr("确认本次保留提示级原文")
-				if e.needRaw == "block" {
+				switch {
+				case imgRaw && both.needRaw == "block":
+					label = tr("再次确认保留图中高风险原文")
+				case imgRaw:
+					label = tr("确认保留图中提示级原文")
+				case both.needRaw == "block":
 					label = tr("再次确认保留高风险原文")
 				}
 				if ui.Button(c, label).Clicked() {
-					p.raw = e.needRaw
+					if imgRaw {
+						p.imgRaw = both.needRaw
+						for _, im := range p.images {
+							if im.status == "failed" {
+								im.rawOK = true
+							}
+						}
+					} else {
+						p.raw = both.needRaw
+					}
 				}
-			case e.canSend:
+			case both.canSend:
 				if ui.Button(c, tr("发送")).Clicked() {
-					a.pfSend(e)
+					a.pfSend(both)
 				}
+			case slices.ContainsFunc(p.images, func(im *pfImage) bool { return im.status == "scanning" }):
+				ui.Text(c, tr("本地隐私检测中…")).FontSize(11).TextColor(t.TextMuted)
 			default:
-				ui.Text(c, fmt.Sprintf(tr("%d 项处理完才能发送"), e.unresolved)).FontSize(11).TextColor(t.TextMuted)
+				ui.Text(c, fmt.Sprintf(tr("%d 项处理完才能发送"), both.unresolved)).FontSize(11).TextColor(t.TextMuted)
 			}
 			if ui.Button(c, tr("取消")).Clicked() {
 				a.clearPending()
@@ -337,4 +387,22 @@ func (a *app) confirmPending(redact bool) {
 	}
 	blocks := slices.ContainsFunc(a.pf.items, pfItem.block)
 	a.pfSend(pfEval{canSend: true, noEnter: blocks})
+}
+
+// pfImageToggle：只有图片命中时的「逐项处理」开关（文字命中时与文字列表共用开关）。
+func (a *app) pfImageToggle(c *ui.Context, k tokens) {
+	p := &a.pf
+	if !slices.ContainsFunc(p.images, func(im *pfImage) bool { return len(im.regions) > 0 }) {
+		return
+	}
+	label := tr("逐项处理")
+	if p.open {
+		label = tr("收起列表")
+	}
+	b := ui.Row(c).Padding(1, 6).Radius(6).Key("pf-itoggle").Role(ui.RoleButton).Label(label)
+	col := hoverLink(b, k)
+	b.Children(func() { text(c, label, 11, 16, 500, col).SingleLine() })
+	if b.Clicked() {
+		p.open = !p.open
+	}
 }
