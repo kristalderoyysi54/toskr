@@ -296,7 +296,7 @@ func (m *tauriMedia) get(name string) string {
 		return v
 	}
 	m.mapped[name] = ""
-	if strings.ContainsAny(name, "/\\") || strings.HasPrefix(name, ".") {
+	if m.dir == "" || strings.ContainsAny(name, "/\\") || strings.HasPrefix(name, ".") { // 无媒体目录（旧 JSON）：图片计缺失
 		m.missing++
 		return ""
 	}
@@ -330,18 +330,18 @@ func (m *tauriMedia) get(name string) string {
 	return out
 }
 
-// ImportTauri 导入 Tauri 版数据：先写恢复点；清掉合成测试数据；同 ID 以 Tauri 为准，其余并入。
-func (s *Store) ImportTauri(dir string, key []byte) (TauriReport, error) {
-	var rep TauriReport
-	st, err := ReadTauri(dir, key)
-	if err != nil {
-		return rep, err
-	}
-	if rep.Recovery, err = s.WriteRecoveryPoint("pre-tauri-import", time.Now()); err != nil {
-		return rep, fmt.Errorf("恢复点写入失败，已中止导入：%w", err)
-	}
-	m := &tauriMedia{s: s, dir: dir, key: key, mapped: map[string]string{}}
+// tauriConv：Tauri 记录转成原生结构（Tauri 导入与旧 JSON 导入共用）。
+type tauriConv struct {
+	notes    []Note
+	secrets  []Secret
+	sections []Section
+	taskSecs []Section
+	tasks    []Task
+	bills    []Bill
+	skipped  int
+}
 
+func convertTauri(st *tauriState, m *tauriMedia) tauriConv {
 	var notes []Note
 	var secrets []Secret
 	for _, t := range st.Notes {
@@ -406,7 +406,7 @@ func (s *Store) ImportTauri(dir string, key []byte) (TauriReport, error) {
 		}
 		notes = append(notes, n)
 	}
-	rep.Check.Skipped = len(st.Notes) - len(notes) - len(secrets)
+	skipped := len(st.Notes) - len(notes) - len(secrets)
 	var sections []Section
 	for _, x := range st.Sections {
 		if x.ID == "" || x.ID == "secret" {
@@ -482,6 +482,25 @@ func (s *Store) ImportTauri(dir string, key []byte) (TauriReport, error) {
 		}
 		bills = append(bills, x)
 	}
+
+	return tauriConv{notes, secrets, sections, taskSecs, tasks, bills, skipped}
+}
+
+// ImportTauri 导入 Tauri 版数据：先写恢复点；清掉合成测试数据；同 ID 以 Tauri 为准，其余并入。
+func (s *Store) ImportTauri(dir string, key []byte) (TauriReport, error) {
+	var rep TauriReport
+	st, err := ReadTauri(dir, key)
+	if err != nil {
+		return rep, err
+	}
+	if rep.Recovery, err = s.WriteRecoveryPoint("pre-tauri-import", time.Now()); err != nil {
+		return rep, fmt.Errorf("恢复点写入失败，已中止导入：%w", err)
+	}
+	m := &tauriMedia{s: s, dir: dir, key: key, mapped: map[string]string{}}
+
+	cv := convertTauri(st, m)
+	notes, secrets, sections, taskSecs, tasks, bills := cv.notes, cv.secrets, cv.sections, cv.taskSecs, cv.tasks, cv.bills
+	rep.Check.Skipped = cv.skipped
 
 	acts := readTauriActivity(dir, st.Settings.TargetProfiles)
 	err = s.mutate(func() bool {

@@ -105,12 +105,15 @@ type Preview struct {
 
 // InspectBackup 校验备份（认证解密 + 明文哈希 + 媒体哈希）并给出合并预览，不改任何数据。
 func (s *Store) InspectBackup(path string) (*Preview, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := readFileCapped(path)
 	if err != nil {
 		return nil, err
 	}
 	zr, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
 	if err != nil {
+		if b := bytes.TrimSpace(raw); len(b) > 0 && b[0] == '{' { // 不是 zip：按 Tauri 旧 JSON 备份认
+			return s.inspectLegacyJSON(b)
+		}
 		return nil, errors.New("不是有效的备份文件")
 	}
 	files := map[string][]byte{}
@@ -175,9 +178,14 @@ func (s *Store) ImportBackup(p *Preview) (added int, err error) {
 		}
 	}
 	err = s.mutate(func() bool {
-		mergeByID(&s.notes, p.snap.Notes, func(n Note) string { return n.ID }, &added)
 		var dummy int
-		mergeByID(&s.sections, p.snap.Sections, func(x Section) string { return x.ID }, &dummy)
+		if p.Manifest.Format == TauriSnapshotFormat { // 保险档：分组名称 / 颜色以历史为准，笔记取较新一侧
+			mergeSnapshotNotes(&s.notes, p.snap.Notes, &added)
+			upsertSections(&s.sections, p.snap.Sections)
+		} else {
+			mergeByID(&s.notes, p.snap.Notes, func(n Note) string { return n.ID }, &added)
+			mergeByID(&s.sections, p.snap.Sections, func(x Section) string { return x.ID }, &dummy)
+		}
 		mergeByID(&s.tasks, p.snap.Tasks, func(x Task) string { return x.ID }, &dummy)
 		mergeByID(&s.taskSections, p.snap.TaskSections, func(x Section) string { return x.ID }, &dummy)
 		mergeByID(&s.bills, p.snap.Bills, func(x Bill) string { return x.ID }, &dummy)

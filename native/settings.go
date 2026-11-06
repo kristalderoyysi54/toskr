@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -534,22 +536,34 @@ func (a *app) dataSections(c *ui.Context, k tokens, s settingsTokens) []setSecti
 				a.importTauri(nil)
 			}
 		}},
-		{title: tr("从备份导入"), hint: tr("预检后选「合并」（本机同 ID 记录优先）或「整份恢复」（用备份替换全部数据，设置保留）；都会先写恢复点"), control: func() {
+		{title: tr("从备份导入"), hint: tr("预检后选「合并」（本机同 ID 记录优先）或「整份恢复」（用备份替换全部数据，设置保留）；都会先写恢复点。也可选 Tauri 旧 JSON 备份或迁移保险档（pre-encrypt-*.bak），只能合并"), control: func() {
 			if button(c, s, "选择文件…") {
 				a.inspectBackup(c)
 			}
 		}},
 	}...)
 	if p := importPreview; p != nil {
-		hint := fmt.Sprintf(tr("备份时间 %s · 笔记 %d（新增 %d / 已有 %d）· 任务 %d · 账单 %d · 秘文 %d"),
-			p.Manifest.CreatedAt.Format("2006-01-02 15:04"), p.Manifest.Counts["notes"], p.New, p.Overlap,
+		legacy := p.Manifest.Format == store.LegacyJSONFormat
+		when := p.Manifest.CreatedAt.Format("2006-01-02 15:04")
+		snap := p.Manifest.Format == store.TauriSnapshotFormat
+		switch {
+		case snap:
+			legacy = true // 同样只能合并
+			when = tr("Tauri 迁移保险档（合并：同一笔记取较新一侧，分组名称以保险档为准）")
+		case legacy:
+			when = tr("旧 JSON 备份（只能合并，本机已有的条目跳过）")
+		default:
+			when = tr("备份时间 ") + when
+		}
+		hint := fmt.Sprintf(tr("%s · 笔记 %d（新增 %d / 已有 %d）· 任务 %d · 账单 %d · 秘文 %d"),
+			when, p.Manifest.Counts["notes"], p.New, p.Overlap,
 			p.Manifest.Counts["tasks"], p.Manifest.Counts["bills"], p.Manifest.Counts["secrets"])
 		if p.MissingMedia > 0 {
 			hint += fmt.Sprintf(tr(" · %d 张图片校验失败，将跳过"), p.MissingMedia)
 		}
 		backup = append(backup, setRow{title: tr("待导入的备份"), hint: hint, control: func() {
 			ui.Row(c).Gap(6).Children(func() {
-				if button(c, s, "整份恢复") {
+				if !legacy && button(c, s, "整份恢复") {
 					err := a.store.ReplaceFromBackup(p)
 					importPreview = nil
 					if err != nil {
@@ -644,8 +658,12 @@ func (a *app) exportBackup(c *ui.Context) {
 
 func (a *app) inspectBackup(c *ui.Context) {
 	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.settingsWin, Title: "选择备份",
-		Filters: []mygo.FileFilter{{Name: "Toskr 备份", Extensions: []string{"toskr-backup"}}}})
+		Filters: []mygo.FileFilter{{Name: "Toskr 备份 / 旧 JSON", Extensions: []string{"toskr-backup", "json", "bak"}}}})
 	if err != nil || len(paths) == 0 {
+		return
+	}
+	if head, _ := readHead(paths[0], 8); store.Sealed(head) { // TSK1 信封：Tauri 迁移保险档，要用 Tauri 的数据密钥解
+		a.inspectTauriSnapshot(paths[0])
 		return
 	}
 	p, err := a.store.InspectBackup(paths[0])
@@ -654,6 +672,40 @@ func (a *app) inspectBackup(c *ui.Context) {
 		return
 	}
 	importPreview = p
+}
+
+// inspectTauriSnapshot：解 Tauri 迁移保险档（recovery/pre-encrypt-*.bak）。取钥匙串可能弹授权，放后台。
+func (a *app) inspectTauriSnapshot(path string) {
+	mediaDir := store.TauriDataDir()
+	if d := filepath.Dir(path); filepath.Base(d) == "recovery" {
+		mediaDir = filepath.Dir(d)
+	}
+	go func() {
+		key, err := tauriKey()
+		var p *store.Preview
+		if err == nil {
+			p, err = a.store.InspectTauriSnapshot(path, mediaDir, key)
+			clear(key)
+		}
+		a.onMain(func() {
+			if err != nil {
+				a.showHUD("warn", tr("保险档无法使用：")+err.Error())
+				return
+			}
+			importPreview = p
+		})
+	}()
+}
+
+func readHead(path string, n int) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	b := make([]byte, n)
+	k, _ := io.ReadFull(f, b)
+	return b[:k], nil
 }
 
 func (a *app) checkUpdate() {
