@@ -123,3 +123,27 @@ func nsDataBytes(d objc.ID) []byte {
 	p := objc.Send[unsafe.Pointer](d, sel("bytes"))
 	return append([]byte(nil), unsafe.Slice((*byte)(p), n)...)
 }
+
+// TypeFileURL：Finder 复制文件时每项一个 file:// URL。
+const TypeFileURL = "public.file-url"
+
+// ImageToPNG 用 ImageIO（NSBitmapImageRep）把任意系统可读的位图（JPEG/HEIC/GIF/TIFF/PNG…）转成 PNG；不认识返回 nil。
+func ImageToPNG(data []byte) []byte {
+	if len(data) == 0 {
+		return nil
+	}
+	load()
+	var out []byte
+	withPool(func() {
+		rep := class("NSBitmapImageRep").Send(sel("imageRepWithData:"), nsData(data))
+		if rep == 0 {
+			return
+		}
+		const pngFileType = 4 // NSBitmapImageFileTypePNG
+		png := rep.Send(sel("representationUsingType:properties:"), uint(pngFileType), class("NSDictionary").Send(sel("dictionary")))
+		if png != 0 {
+			out = nsDataBytes(png)
+		}
+	})
+	return out
+}

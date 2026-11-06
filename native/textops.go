@@ -50,14 +50,14 @@ func (a *app) applyDraftOp(i int) {
 // expandDraft：转大窗编辑（同 Tauri DraftInput expandToDetail）——草稿落成当前分组的一张卡并在详情窗编辑，空草稿落「新笔记」。
 func (a *app) expandDraft() {
 	text := strings.TrimSpace(a.draft)
-	if text == "" {
+	if text == "" && len(a.draftImgs) == 0 {
 		text = tr("新笔记")
 	}
-	n, _, err := a.store.Add(store.Note{Section: a.composerSection().ID, Text: text})
+	n, _, err := a.store.Add(draftNote(a.composerSection().ID, text, a.draftImgs))
 	if err != nil {
 		return
 	}
-	a.draft = ""
+	a.draft, a.draftImgs = "", nil
 	a.reload()
 	openDetailFn(a, n)
 	a.detail.edit = true

@@ -472,6 +472,9 @@ func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool, to
 			case "pin":
 				_ = a.store.SetKept(n.ID, !n.Kept)
 			case "copy":
+				if a.copyNoteMedia(n) {
+					break
+				}
 				mygo.Clipboard.WriteText(n.Text)
 				a.showHUD("ok", tr("已复制"))
 			case "expand":

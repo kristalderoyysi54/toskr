@@ -77,15 +77,15 @@ func (w *ClipWatcher) Tick() (ClipEvent, bool) {
 		t := strings.TrimSpace(text)
 		return ClipEvent{Text: text, Link: singleURL.MatchString(t), Source: front}, true
 	}
-	if ev, ok := clipImage(w.Sys.Snapshot()); ok {
+	if ev, ok := ClipImage(w.Sys.Snapshot()); ok {
 		ev.Source = front
 		return ev, true
 	}
 	return ClipEvent{}, false
 }
 
-// clipImage 取剪贴板第一项里的图片（PNG 优先，TIFF 转 PNG）。
-func clipImage(items []macos.Item) (ClipEvent, bool) {
+// ClipImage 取剪贴板第一项里的图片（PNG 优先，TIFF 转 PNG）。
+func ClipImage(items []macos.Item) (ClipEvent, bool) {
 	if len(items) == 0 {
 		return ClipEvent{}, false
 	}

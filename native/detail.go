@@ -673,11 +673,16 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 	}
 	if dockButton(c, k, "", tr("复制"), false).Clicked() {
 		txt := n.Text
-		if p := a.pickedText(n.Text); d.pick && p != "" {
+		p := a.pickedText(n.Text)
+		if d.pick && p != "" {
 			txt = p
+		} else if a.copyNoteMedia(n) {
+			txt = ""
 		}
-		a.copyPrivate(txt)
-		a.showHUD("ok", tr("已复制"))
+		if txt != "" {
+			a.copyPrivate(txt)
+			a.showHUD("ok", tr("已复制"))
+		}
 	}
 	if n.Kind != "image" && dockButton(c, k, "", tr("编辑"), false).Clicked() {
 		a.enterDetailEdit(n)

@@ -317,7 +317,7 @@ func (s *Store) Add(n Note) (Note, bool, error) {
 	}
 	s.mu.Lock()
 	dup := false
-	if i := slices.IndexFunc(s.notes, func(o Note) bool { return o.Section == n.Section && o.Text == n.Text }); i >= 0 {
+	if i := slices.IndexFunc(s.notes, func(o Note) bool { return o.Section == n.Section && o.Text == n.Text && o.ImageFile == n.ImageFile && slices.Equal(o.Attachments, n.Attachments) }); i >= 0 {
 		n = s.notes[i]
 		s.notes = slices.Delete(s.notes, i, i+1)
 		dup = true

@@ -90,6 +90,7 @@ type app struct {
 	thumbs                              map[string]ui.ImageSource
 	aiBusy                              string             // 正在 AI 处理的笔记 ID
 	aiCancel                            context.CancelFunc // 进行中的 AI 改写（可取消）
+	draftImgs                           []pastedImage      // 输入区暂存的粘贴 / 拖入图片（提交时与草稿合成一张卡）
 
 	// 1:1 主面板
 	noteGroups                               []noteGroup
@@ -479,20 +480,48 @@ func (a *app) captureSection() string {
 
 func (a *app) addDraft() {
 	text := strings.TrimSpace(a.draft)
-	if text == "" {
+	if text == "" && len(a.draftImgs) == 0 {
 		return
 	}
 	sec := a.section
 	if sec == store.SectionClipboard {
 		sec = store.SectionInbox
 	}
-	if _, dup, err := a.store.Add(store.Note{Section: sec, Text: a.draft}); err == nil {
-		a.draft = ""
+	if _, dup, err := a.store.Add(draftNote(sec, a.draft, a.draftImgs)); err == nil {
+		imgs := len(a.draftImgs)
+		a.draft, a.draftImgs = "", nil
 		a.section, a.query, a.selected = sec, "", 0
-		if dup {
+		switch {
+		case dup:
 			a.showHUD("duplicate", tr("已存在，移到顶部"))
+		case imgs > 0 && text != "":
+			a.showHUD("added", tr("已添加图文笔记"))
+		case imgs > 0:
+			a.showHUD("added", tr("已添加图片"))
 		}
 	}
+}
+
+// draftNote 同 Tauri DraftInput submit：有暂存图时第一张为主图、其余为附件；有文字是组合卡（kind 文本），否则是图片卡。
+func draftNote(sec, draft string, imgs []pastedImage) store.Note {
+	n := store.Note{Section: sec, Text: strings.TrimSpace(draft)}
+	if len(imgs) == 0 {
+		n.Text = draft
+		return n
+	}
+	first := imgs[0]
+	n.ImageFile, n.ImageW, n.ImageH = first.file, first.w, first.h
+	for _, im := range imgs[1:] {
+		n.Attachments = append(n.Attachments, im.file)
+	}
+	if n.Text == "" {
+		n.Kind = "image"
+		n.Text = fmt.Sprintf("图片 %d×%d", first.w, first.h)
+		if len(imgs) > 1 {
+			n.Text = fmt.Sprintf("图片 %d 张", len(imgs))
+		}
+	}
+	return n
 }
 
 func (a *app) deleteSelected(c *ui.Context) {
@@ -805,6 +834,9 @@ func (a *app) sendQueue() {
 
 func (a *app) copySelected(c *ui.Context) {
 	if n, ok := a.current(); ok {
+		if a.copyNoteMedia(n) {
+			return
+		}
 		mygo.Clipboard.WriteText(n.Text)
 		a.showHUD("ok", "已复制")
 	}

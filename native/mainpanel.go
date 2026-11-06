@@ -554,6 +554,13 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 				a.codeText(c, k, n.Text)
 				return
 			}
+			if files := n.MediaFiles(); len(files) > 0 { // 图文组合卡：文字 + 右侧首图缩略（同 Tauri 组合卡）
+				ui.Row(c).Gap(8).Children(func() {
+					highlightText(c, k, n.Text, a.query, 12, 18, k.fg).Wrap().MaxLines(3).Grow(1).Basis(0)
+					a.cardThumb(c, k, files)
+				})
+				return
+			}
 			highlightText(c, k, n.Text, a.query, 12, 18, k.fg).Wrap().MaxLines(3)
 		})
 		ui.Row(c).Height(16).Margin(0, 8, 6, 8).AlignItems(ui.Center).Children(func() {
@@ -839,6 +846,12 @@ func (a *app) composerBar(c *ui.Context, k tokens) {
 		box := ui.Row(c).Height(42).Padding(8, 10).Gap(6).Radius(14).Background(k.track).Border(1, k.inputBorder).
 			InsetShadow(0, 1, 2, 0, k.insetShadow).AlignItems(ui.Center)
 		box.Children(func() { a.composerRow(c, k) })
+		if files := box.DroppedFiles(); len(files) > 0 { // 拖入图片文件：暂存为草稿图（同 Tauri 输入框拖入）
+			a.addDraftImages(a.importImagePaths(files), tr("没有可导入的图片"))
+		}
+		if box.FileDragOver() {
+			box.Border(1, c.Theme().Accent)
+		}
 	})
 }
 
@@ -859,8 +872,10 @@ func (a *app) composerRow(c *ui.Context, k tokens) {
 				}
 			}
 		})
+		a.draftImageChips(c, k)
 		ui.TextAreaBase(c, &a.draft).Bind(&a.draftIn).Grow(1).Lines(1, 6).Font(fontSans).FontSize(13).FixedLineHeight(19.5).
 			TextColor(k.fg).PlaceholderColor(k.muted).Placeholder(tr("添加笔记或提示词…")).
+			OnPaste(a.pasteIntoDraft).
 			OnTextKey(func(key ui.TextKey) bool {
 				if key.Key == ui.KeyEnter && key.Mods == 0 {
 					a.draft = key.Text()
