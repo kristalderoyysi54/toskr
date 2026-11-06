@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 
+	"github.com/toskr/native/internal/macos"
 	"github.com/toskr/native/internal/store"
 )
 
@@ -13,6 +14,12 @@ type draftTarget struct {
 	pid     int32
 	started int64
 	name    string
+}
+
+// targetAlive：目标进程还在且没重启（启动时刻对得上）。测试替换。
+var targetAlive = func(pid int32, started int64) bool {
+	now := macos.ProcessStartMs(pid)
+	return now != 0 && (started == 0 || now == started)
 }
 
 func (a *app) freezeDraftTarget() {

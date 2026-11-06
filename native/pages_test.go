@@ -669,6 +669,7 @@ func TestDoubleClickSends(t *testing.T) {
 	_ = tt.Click("丙")
 	_ = tt.Click("丙")
 	tt.Frame()
+	submitPending(a) // 多张卡同 Tauri smart：先进预检
 	waitFor(t, func() bool { return len(sys.sent()) == 2 })
 	if got := sys.sent()[1]; !strings.Contains(got, "甲") || !strings.Contains(got, "丙") || strings.Contains(got, "乙") {
 		t.Fatalf("多选整组发送 %q", got)

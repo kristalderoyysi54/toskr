@@ -414,6 +414,8 @@ func (a *app) panelKeys(c *ui.Context) {
 			a.menuOpen = false
 		case a.quickOpen:
 			a.quickOpen = false
+		case len(a.pending) > 0: // 同 Tauri PreflightComposer：预检开着时 Esc 取消预检
+			a.cancelPending()
 		case len(a.enterAsk) > 0:
 			a.cancelEnterAsk()
 		case a.drawerOpen:

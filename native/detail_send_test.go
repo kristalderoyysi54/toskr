@@ -29,6 +29,7 @@ func TestDetailSendToAppAndMode(t *testing.T) {
 	if err := tt.ChooseMenuItem("备忘录"); err != nil {
 		t.Fatalf("%v %v", err, tt.Menu())
 	}
+	submitPending(a)
 	waitFor(t, func() bool { return len(sys.sent()) > 0 })
 	if a.target.PID != 77 || a.target.Name != "备忘录" || a.targetStarted != 123 {
 		t.Fatalf("应改为手动指定的目标 %+v", a.target)
@@ -38,6 +39,7 @@ func TestDetailSendToAppAndMode(t *testing.T) {
 	if err := tt.ChooseMenuItem("去 Markdown 后发送"); err != nil {
 		t.Fatalf("%v %v", err, tt.Menu())
 	}
+	submitPending(a) // 去 Markdown 同 Tauri smart：先进预检
 	waitFor(t, func() bool { return len(sys.sent()) > 1 })
 	if got := sys.sent()[1]; got != "加粗 正文" {
 		t.Fatalf("去 Markdown %q", got)

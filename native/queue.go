@@ -21,7 +21,11 @@ func (a *app) queueKeys(c *ui.Context) {
 		return // 输入框 / 方案快速切换浮层自己处理按键
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyEnter) {
-		a.sendSelected()
+		if len(a.pending) > 0 { // 预检开着：⌘⏎ 提交预检（同 Tauri PreflightComposer），不重新发起
+			a.pfSubmit()
+		} else {
+			a.sendSelected()
+		}
 	}
 	if c.Shortcut(ui.Cmd|ui.Alt, ui.KeyEnter) {
 		a.sendQueue()

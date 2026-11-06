@@ -43,6 +43,7 @@ type detailState struct {
 	imgNote             bool                 // 图片文字备注编辑中
 	pickPara            bool                 // 选词粒度：段（同 Tauri pickGranularity）
 	blocks              []store.ContentBlock // 图文混排卡编辑态的内容块草稿（nil = 按纯文本编辑）
+	blank               bool                 // 本次是新建的「新笔记」占位卡：关窗时一字未改就删掉（同 Tauri note-discard-blank）
 }
 
 // 多详情窗（同 Tauri detailWindows.ts，📌 固定并存）：每扇窗一份 detailPane。渲染 / 获得焦点时把该窗的状态换进
@@ -125,6 +126,7 @@ func (a *app) openDetail(n store.Note) {
 		}
 		a.usePane(p)
 		a.saveDetail()
+		a.discardBlankDraft()
 		a.detailWin, a.detail.id = nil, ""
 		a.panes = slices.DeleteFunc(a.panes, func(x *detailPane) bool { return x == p })
 		a.curPane = nil
@@ -187,10 +189,15 @@ func (a *app) saveImageNote() {
 		return
 	}
 	t := strings.TrimSpace(a.detailText)
-	if t == "" {
+	if t == "" { // 清空 = 清除备注；卡面回到默认标题（imageNoteText 视为无备注）
 		t = fmt.Sprintf(tr("图片 %d×%d"), n.ImageW, n.ImageH)
 	}
+	if t == n.Text {
+		return
+	}
 	_ = a.store.Update(n.ID, t)
+	prev := n.Text
+	a.showHUDUndo("ok", tr("已保存"), func() { _ = a.store.Update(n.ID, prev) }) // 同 Tauri 经主面板保存的可撤销「已保存」
 }
 
 func (a *app) detailView(c *ui.Context) {
@@ -223,17 +230,31 @@ func (a *app) detailView(c *ui.Context) {
 }
 
 func (a *app) detailKeys(c *ui.Context, n store.Note) {
-	if c.Shortcut(ui.Cmd, ui.KeyS) && a.detail.edit {
-		a.saveDetail()
-		a.detail.edit = false
-		a.showHUD("ok", tr("已保存"))
+	if c.Shortcut(ui.Cmd, ui.KeyS) && a.detail.edit { // ⌘S 保留为保存的别名
+		a.commitDetailEdit(n)
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyEnter) {
-		if a.detail.imgNote { // 备注编辑中 ⌘⏎ 是保存（同 Tauri）
+		switch {
+		case a.detail.imgNote: // 备注编辑中 ⌘⏎ 是保存（同 Tauri）
 			a.saveImageNote()
-		} else {
+		case a.detail.edit: // 编辑态 ⌘⏎ 只保存不发送（同 Tauri TextPreviewView save）
+			a.commitDetailEdit(n)
+		default:
 			a.sendDetail(n)
 		}
+	}
+	reading := !a.detail.edit && !a.detail.imgNote && !a.detail.tagOn
+	if reading && c.Shortcut(ui.Cmd, ui.KeyZ) && a.hudUndo != nil { // 同 Tauri 查看态 ⌘Z：执行 HUD 的撤销
+		fn := a.hudUndo
+		a.hudUndo = nil
+		fn()
+		a.showHUD("undone", tr("已撤销"))
+	}
+	if c.Shortcut(ui.Cmd, ui.KeyW) { // ⌘W 关窗（关窗时保存）
+		a.closeDetailWin()
+	}
+	if reading && !a.detail.pick && c.Shortcut(0, ui.KeySpace) { // 同 Tauri Quick Look 习惯：查看态空格关窗
+		a.closeDetailWin()
 	}
 	if n.Kind == "image" && !a.detail.imgNote {
 		if files := n.MediaFiles(); len(files) > 1 {
@@ -270,10 +291,20 @@ func (a *app) detailKeys(c *ui.Context, n store.Note) {
 		switch {
 		case a.detail.imgNote: // Esc 保存并退出（同 Tauri）
 			a.saveImageNote()
-		case a.detail.edit:
-			a.detail.edit, a.detailText = false, n.Text
+		case a.detail.edit: // 同 Tauri exitEditing：保存并退出；草稿清空了才算放弃
+			if a.detail.blocks == nil && strings.TrimSpace(a.detailText) == "" {
+				a.detail.edit, a.detailText, a.detail.title = false, n.Text, n.Title
+			} else {
+				a.commitDetailEdit(n)
+			}
+		case a.detail.tagOn:
+			a.detail.tagOn, a.detail.tagDraft = false, ""
+		case a.detail.pick && a.detail.pickAnchor >= 0: // 逐层退：先清选中的词，再退选词模式，再关窗
+			a.detail.pickAnchor, a.detail.pickEnd = -1, -1
 		case a.detail.pick:
 			a.detail.pick = false
+		default:
+			a.closeDetailWin()
 		}
 	}
 }
@@ -319,10 +350,7 @@ func (a *app) detailHeader(c *ui.Context, k tokens, n store.Note) {
 			}
 		})
 		if pin.Clicked() {
-			a.detail.pinned = !a.detail.pinned
-			if a.detailWin != nil {
-				a.detailWin.SetAlwaysOnTop(a.detail.pinned)
-			}
+			a.detail.pinned = !a.detail.pinned // 同 Tauri：固定只表示发送后不关窗、新卡另开一扇窗，不置顶
 		}
 	})
 }
@@ -347,7 +375,7 @@ func (a *app) detailTags(c *ui.Context, k tokens, s settingsTokens, n store.Note
 						if t := strings.TrimSpace(key.Text()); t != "" {
 							_ = a.store.SetTags(n.ID, append(slices.Clone(n.Tags), t))
 						}
-						a.detail.tagDraft, a.detail.tagOn = "", false
+						a.detail.tagDraft = "" // 同 Tauri：回车后保持输入框，方便连续添加
 						return true
 					case ui.KeyEscape:
 						a.detail.tagDraft, a.detail.tagOn = "", false
@@ -637,13 +665,13 @@ func dockButton(c *ui.Context, k tokens, icon, label string, active bool) ui.Ele
 
 func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note) {
 	d := &a.detail
-	if d.edit {
-		if dockButton(c, k, "", tr("取消"), false).Clicked() {
-			d.edit, a.detailText = false, n.Text
+	if d.edit { // 同 Tauri 编辑态坞：自动保存语义，没有「取消」；正文为空时保存置灰
+		b := dockButton(c, k, "", tr("保存 ⌘⏎"), true)
+		if d.blocks == nil && strings.TrimSpace(a.detailText) == "" {
+			b.Opacity(0.5).Tooltip(tr("笔记内容不能为空"))
 		}
-		if dockButton(c, k, "", tr("保存（⌘S）"), true).Clicked() {
-			a.saveDetail()
-			d.edit = false
+		if b.Clicked() {
+			a.commitDetailEdit(n)
 		}
 		return
 	}
@@ -806,19 +834,68 @@ func (a *app) sendDetailMode(n store.Note, mode string) {
 }
 
 func (a *app) sendDetail(n store.Note) {
-	if p := a.pickedText(n.Text); a.detail.pick && p != "" {
-		a.send([]store.Note{{Text: p}}) // 只发所选片段，不改卡片状态
+	if a.target.PID == 0 { // 同 Tauri：目标不可用时不关窗，改去选目标
+		a.showHUD("warn", tr("没有发送目标：从发送钮右侧下拉「发送到…」选一个应用"))
 		return
 	}
-	if a.detail.edit {
-		a.saveDetail()
-		a.detail.edit = false
-		n.Text = a.detailText
+	if p := a.pickedText(n.Text); a.detail.pick && p != "" {
+		a.send([]store.Note{{Text: p}}) // 只发所选片段，不改卡片状态
+	} else {
+		if a.detail.edit {
+			if !a.commitDetailEdit(n) {
+				return
+			}
+			n.Text = a.detailText
+		}
+		a.send([]store.Note{n})
 	}
-	a.send([]store.Note{n})
-	if !a.detail.pinned && a.detailWin != nil { // 未固定的窗发送后关闭（同 Tauri：📌 固定才保持打开）
-		win := a.detailWin
+	if !a.detail.pinned { // 未固定的窗发送后关闭（同 Tauri：📌 固定才保持打开；片段发送同样）
+		a.closeDetailWin()
+	}
+}
+
+// closeDetailWin 关当前详情窗（OnClose 里保存、回收空白新笔记）；放到帧外执行。
+func (a *app) closeDetailWin() {
+	if win := a.detailWin; win != nil {
 		a.onMain(win.Close)
+	}
+}
+
+// commitDetailEdit 保存编辑并退出编辑态（⌘⏎ / ⌘S / Esc / 保存钮）。正文为空时 warn 且留在编辑态（同 Tauri save）；
+// 有改动时出可撤销的「已保存」（同 Tauri armNoteEditUndo）。
+func (a *app) commitDetailEdit(n store.Note) bool {
+	if a.detail.blocks == nil && strings.TrimSpace(a.detailText) == "" {
+		a.showHUD("warn", tr("笔记内容不能为空"))
+		return false
+	}
+	before, _ := a.store.Note(n.ID)
+	a.saveDetail()
+	a.detail.edit = false
+	after, ok := a.store.Note(n.ID)
+	if !ok || (after.Text == before.Text && after.Title == before.Title && slices.Equal(after.Blocks, before.Blocks)) {
+		return true
+	}
+	a.showHUDUndo("ok", tr("已保存"), func() {
+		if len(before.Blocks) > 0 {
+			_, _ = a.store.SetBlocks(before.ID, before.Blocks)
+		} else {
+			_ = a.store.Update(before.ID, before.Text)
+		}
+		_ = a.store.SetTitle(before.ID, before.Title)
+	})
+	return true
+}
+
+// discardBlankDraft：新建流程打开的「新笔记」占位卡，关窗时仍是占位文字、无标题无标签无图就删掉（同 Tauri note-discard-blank）。
+func (a *app) discardBlankDraft() {
+	if !a.detail.blank {
+		return
+	}
+	a.detail.blank = false
+	n, ok := a.store.Note(a.detail.id)
+	if ok && strings.TrimSpace(n.Text) == tr("新笔记") && strings.TrimSpace(n.Title) == "" && len(n.Tags) == 0 && len(n.MediaFiles()) == 0 {
+		a.store.Delete(n.ID)
+		a.reload()
 	}
 }
 

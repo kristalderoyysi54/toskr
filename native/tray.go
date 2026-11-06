@@ -68,13 +68,13 @@ func (a *app) refreshTray() {
 	var items []*mygo.MenuItem
 	switch a.permState() { // 权限没到位时托盘顶部给警告项（同 Tauri tray.rs fix-permission）
 	case "ax":
-		items = append(items, &mygo.MenuItem{Label: tr("⚠️ 需要辅助功能权限（点击设置）"), Click: func(*mygo.MenuItem, *mygo.Window) { openPrivacy("Privacy_Accessibility") }}, mygo.Separator())
+		items = append(items, &mygo.MenuItem{Label: tr("⚠️ 需要辅助功能权限（点击设置）"), Click: func(*mygo.MenuItem, *mygo.Window) { a.fixPermission() }}, mygo.Separator())
 	case "stuck":
-		items = append(items, &mygo.MenuItem{Label: tr("⚠️ 需要输入监控权限（点击设置）"), Click: func(*mygo.MenuItem, *mygo.Window) { openPrivacy("Privacy_ListenEvent") }}, mygo.Separator())
+		items = append(items, &mygo.MenuItem{Label: tr("⚠️ 需要输入监控权限（点击设置）"), Click: func(*mygo.MenuItem, *mygo.Window) { a.fixPermission() }}, mygo.Separator())
 	}
 	items = append(items, &mygo.MenuItem{Label: tr("显示 / 隐藏面板"), Accelerator: a.shortcut, Click: func(*mygo.MenuItem, *mygo.Window) { a.togglePanel() }})
 	if !st.ScreenshotOff { // 区域截图关闭时托盘不显示入口（同 Tauri tray.rs）
-		items = append(items, &mygo.MenuItem{Label: tr("截图"), Click: func(*mygo.MenuItem, *mygo.Window) { a.screenshot() }})
+		items = append(items, &mygo.MenuItem{Label: tr("区域截图"), Click: func(*mygo.MenuItem, *mygo.Window) { a.screenshot() }})
 	}
 	items = append(items, mygo.Separator())
 	if st.ClipboardWatch {
@@ -92,7 +92,7 @@ func (a *app) refreshTray() {
 		}
 	}
 	items = append(items,
-		&mygo.MenuItem{Label: tr("隐身模式"), Type: mygo.MenuItemCheckbox, Checked: st.Stealth, Click: func(it *mygo.MenuItem, _ *mygo.Window) {
+		&mygo.MenuItem{Label: tr("隐身模式（不弹捕获提示）"), Type: mygo.MenuItemCheckbox, Checked: st.Stealth, Click: func(it *mygo.MenuItem, _ *mygo.Window) {
 			cur := a.store.Settings()
 			cur.Stealth = it.Checked
 			_ = a.store.SetSettings(cur)

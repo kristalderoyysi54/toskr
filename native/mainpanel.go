@@ -89,9 +89,13 @@ func (a *app) targetBar(c *ui.Context, k tokens) {
 				}
 				text(c, a.target.Name, 11, 16, 600, k.fg).SingleLine()
 				text(c, "·", 10, 14, 400, k.muted)
+				dot, state := k.ok, tr("可发送")
+				if !targetAlive(a.target.PID, a.targetStarted) { // 同 Tauri TargetLensBar：进程已退出 / 重启 → 失效
+					dot, state = k.danger, tr("目标应用已失效")
+				}
 				ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
-					ui.Box(c).Size(6, 6).Radius(3).Background(k.ok)
-					text(c, tr("可发送"), 10, 14, 500, k.muted)
+					ui.Box(c).Size(6, 6).Radius(3).Background(dot)
+					text(c, state, 10, 14, 500, k.muted)
 				})
 			})
 			ui.Row(c).Gap(2).Children(func() {
@@ -1155,13 +1159,14 @@ func (a *app) newNoteIn(sec store.Section) {
 		sec.Collapsed = false
 		_ = a.store.UpdateSection(sec)
 	}
-	n, _, err := a.store.Add(store.Note{Section: sec.ID, Text: tr("新笔记")})
+	n, dup, err := a.store.Add(store.Note{Section: sec.ID, Text: tr("新笔记")})
 	if err != nil {
 		return
 	}
 	a.reload()
 	a.editInDetail(n)
 	a.detail.editSel = [2]int{0, len([]rune(n.Text))} // 同 Tauri openNoteDetail(id, true, true)：全选占位文字，直接打字替换
+	a.detail.blank = !dup                             // 关窗时一字未改就回收（已有的同名卡不动）
 }
 
 var openDetailFn = (*app).openDetail // 测试替换（真窗口需要运行中的应用）

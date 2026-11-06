@@ -238,3 +238,12 @@ func (a *app) storeError(err error) {
 		a.onMain(func() { a.showHUD("warn", tr("保存失败：")+err.Error()) })
 	}
 }
+
+// fixPermission 同 Tauri tray.rs fix-permission：打开 Toskr 设置 → 权限页，并重试安装键盘监听。
+func (a *app) fixPermission() {
+	a.setJump = "权限"
+	a.openSettings()
+	if a.tapErr != "" && macos.AXTrusted(false) {
+		a.startTap()
+	}
+}

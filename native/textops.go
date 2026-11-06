@@ -59,12 +59,16 @@ func (a *app) expandDraft() {
 	if text == "" && len(a.draftImgs) == 0 {
 		text = tr("新笔记")
 	}
-	n, _, err := a.store.Add(draftNote(a.composerSection().ID, text, a.draftImgs))
+	placeholder := text == tr("新笔记")
+	n, dup, err := a.store.Add(draftNote(a.composerSection().ID, text, a.draftImgs))
 	if err != nil {
 		return
 	}
 	a.draft, a.draftImgs = "", nil
 	a.reload()
-	openDetailFn(a, n)
-	a.detail.edit = true
+	a.editInDetail(n)
+	if placeholder { // 同 Tauri openNoteDetail(id, true, !text)：空草稿全选占位文字，关窗时一字未改就回收
+		a.detail.editSel = [2]int{0, len([]rune(n.Text))}
+		a.detail.blank = !dup
+	}
 }

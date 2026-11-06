@@ -22,6 +22,7 @@ func TestSendProfilesQuickSwitchAndPolicies(t *testing.T) {
 		before := len(sys.sent())
 		a.send([]store.Note{n})
 		tt.Frame()
+		submitPending(a) // 代码格式 / 确认回车等同 Tauri smart：先进预检
 		waitFor(t, func() bool { return len(sys.sent()) > before })
 		w := sys.sent()
 		return w[len(w)-1]
@@ -101,20 +102,22 @@ func TestSendProfilesQuickSwitchAndPolicies(t *testing.T) {
 		t.Fatalf("无 Markdown %q", got)
 	}
 
-	// 每次发送前确认回车
+	// 每次发送前确认回车：同 Tauri 并入预检——预检条点「发送」即确认，不再二次询问
 	a.setRule(func(o *store.RuleOverrides) { o.EnterPolicy = "confirm" })
 	a.quickOpen = false
 	a.send([]store.Note{note})
 	tt.Frame()
-	if !tt.HasText("粘贴到 Terminal 后按回车发送？") {
-		t.Fatalf("应先问是否回车 %v", tt.Texts())
+	if len(a.pending) == 0 || !tt.HasText("发送前检查：发往 Terminal · 稳妥发送") {
+		t.Fatalf("确认回车的方案应先进预检 %v", tt.Texts())
 	}
 	before := len(sys.sent())
-	_ = tt.Click("仅粘贴")
+	if err := tt.Click("发送"); err != nil {
+		t.Fatalf("%v %v", err, tt.Texts())
+	}
 	waitFor(t, func() bool { return len(sys.sent()) > before })
 	tt.Frame()
 	if len(a.enterAsk) != 0 {
-		t.Fatal("选择后收起确认条")
+		t.Fatal("预检里确认后不应再弹回车确认条")
 	}
 
 	// 要求逐项处理：保留原文需二次确认

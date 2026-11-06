@@ -19,6 +19,7 @@ func TestSelectionOutputModeOnce(t *testing.T) {
 	a.chosen.Add(n.ID)
 	tt.Frame()
 	a.sendWithMode([]store.Note{n}, "strip-markdown")
+	submitPending(a)
 	waitFor(t, func() bool { return len(sys.sent()) > 0 })
 	if got := sys.sent()[0]; got != "标题\n加粗 与 链接（https://x.dev）" {
 		t.Fatalf("去 Markdown %q", got)

@@ -405,3 +405,19 @@ func (s *Store) MoveClipsToNotes(ids []string, section string) (undo func(), mov
 		})
 	}, len(before)
 }
+
+// ClearSectionNotes 同 ClearSection，返回被清掉的卡（撤销时交给 RestoreMany 放回）。
+func (s *Store) ClearSectionNotes(section string) []Note {
+	var removed []Note
+	_ = s.mutate(func() bool {
+		s.notes = slices.DeleteFunc(s.notes, func(n Note) bool {
+			if n.Section == section && !n.Kept {
+				removed = append(removed, n)
+				return true
+			}
+			return false
+		})
+		return len(removed) > 0
+	})
+	return removed
+}

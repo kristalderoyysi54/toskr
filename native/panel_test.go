@@ -123,7 +123,7 @@ func TestSearchFilters(t *testing.T) {
 	}
 }
 
-// 同 Tauri：卡片上回车 / 菜单「编辑」开详情窗进编辑态，不在列表里就地改；⌘S 保存。
+// 同 Tauri：卡片上回车 / 菜单「编辑」开详情窗进编辑态，不在列表里就地改；⌘⏎ 保存。
 func TestEditOpensDetailWindow(t *testing.T) {
 	a, tt := testApp(t, "原文")
 	var opened string
@@ -146,10 +146,10 @@ func TestEditOpensDetailWindow(t *testing.T) {
 	dt := ui.NewTester(a.detailView, 560, 540)
 	dt.Frame()
 	dt.Type("，补充")
-	dt.Key(ui.Cmd, ui.KeyS)
+	dt.Key(ui.Cmd, ui.KeyEnter) // 同 Tauri：编辑态 ⌘⏎ 保存（⌘S 仍是别名）
 	dt.Frame()
 	if got := a.store.Notes()[0].Text; !strings.Contains(got, "补充") || a.detail.edit {
-		t.Fatalf("⌘S 应保存并退出编辑：%q edit=%v", got, a.detail.edit)
+		t.Fatalf("⌘⏎ 应保存并退出编辑：%q edit=%v", got, a.detail.edit)
 	}
 }
 

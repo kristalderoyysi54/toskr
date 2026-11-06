@@ -272,6 +272,8 @@ type app struct {
 
 	// HUD
 	hudText, hudKind string
+	retainAskGen     int // 全局保留时长缩短的待确认代次（settings_confirm.go）
+	hudStreak        int // 连续捕获计数：气泡仍在场时再捕获累加（同 Tauri hud.streak）
 	hudGen           int
 	hudUndo          func()   // 可撤销气泡的撤销动作
 	hudHover         bool     // 光标在气泡上（关闭穿透、显出撤销）
@@ -709,8 +711,13 @@ func (a *app) sendT(notes []store.Note, tmpl string) {
 	}
 	a.outcomeDraftCreated(len(fs))
 	hasImage := !rules.Off && slices.ContainsFunc(notes, func(n store.Note) bool { return n.Kind == "image" && n.ImageFile != "" })
-	if len(fs) > 0 || a.forceCheck || hasImage {
-		auto := len(fs) == 0 && !a.forceCheck // 只为图片 OCR 打开：检查干净就自动继续
+	r, _ := a.resolution()
+	mode := a.outputMode(r.Profile)
+	// 同 Tauri shouldOpenPreflight（smart）：多张卡、套模板、代码格式、去 Markdown、确认 / 允许回车的方案都先进预检
+	smart := len(notes) > 1 || tmpl != "" || mode == "code" || mode == "strip-markdown" ||
+		r.Profile.EnterPolicy == "confirm" || r.Profile.EnterPolicy == "allow"
+	if len(fs) > 0 || a.forceCheck || hasImage || smart {
+		auto := len(fs) == 0 && !a.forceCheck && !smart // 只为图片 OCR 打开：检查干净就自动继续
 		a.forceCheck = false
 		a.pending, a.pendingTmpl, a.pf = notes, tmpl, preflightState{auto: auto}
 		a.freezeDraftTarget()

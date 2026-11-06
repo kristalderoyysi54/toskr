@@ -175,6 +175,9 @@ func (a *app) deliveryRow(c *ui.Context, k tokens, d store.Delivery, notes []sto
 		sb.Children(func() { text(c, summary, 12, 17, 400, k.fg.Alpha(0.9)).SingleLine() })
 		if sb.Clicked() && len(src) > 0 {
 			a.openDetail(src[0])
+			if len(src) > 1 { // Tauri 打开合并预览；原生没有批量详情窗，先开第一张并说明
+				a.showHUD("info", fmt.Sprintf(tr("这次发送含 %d 张卡，已打开第一张"), len(src)))
+			}
 		}
 		if hasReply {
 			ui.Row(c).Margin(6, 0, 0, 0).Padding(2, 0, 2, 8).Gap(8).BorderWidth(0, 0, 0, 2).BorderColor(k.ok.Alpha(0.4)).AlignItems(ui.Center).Children(func() {
@@ -217,6 +220,8 @@ func (a *app) deliveryRow(c *ui.Context, k tokens, d store.Delivery, notes []sto
 				if footLink(c, k, tr("重新准备"), "re-"+d.ID) {
 					a.drawerOpen = false
 					a.outRetry = true // 统计里的「重试次数」（同 Tauri retry-prepared）
+					a.showHUD("info", tr("已按当前来源重新准备，请在预检中确认后发送"))
+					a.forceCheck = true // 同 Tauri：重新准备一律进预检确认，不直接粘贴
 					a.send(src)
 					a.outRetry = false
 				}

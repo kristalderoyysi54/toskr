@@ -53,6 +53,7 @@ func TestPromptTemplatesAddSendAndDelete(t *testing.T) {
 	if err := tt.ChooseMenuItem("用模板发送", "翻译"); err != nil {
 		t.Fatalf("%v %v", err, tt.Menu())
 	}
+	submitPending(a)
 	waitFor(t, func() bool { return len(sys.sent()) > 0 })
 	if got := sys.sent()[0]; got != "翻译成英文：早上好" {
 		t.Fatalf("模板应注入内容 %q", got)

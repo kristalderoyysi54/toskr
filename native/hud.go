@@ -92,6 +92,7 @@ func (a *app) showHUD(kind, text string) { a.showHUDUndo(kind, text, nil) }
 func (a *app) showHUDUndo(kind, text string, undo func()) {
 	if kind != "warn" && a.store.Settings().Stealth {
 		diag.Push("隐身: 静默气泡 kind=%s", kind)
+		a.hudUndo = undo // 同 Tauri：隐身只压气泡，⌘Z 仍可撤销
 		return
 	}
 	a.showHUDForce(kind, text)
@@ -100,8 +101,14 @@ func (a *app) showHUDUndo(kind, text string, undo func()) {
 
 func (a *app) showHUDForce(kind, text string) {
 	// 连发：上一条仍在场时作「被顶替」的残影下沉淡出；窗口原本收着时 logo 一并重新入场
-	if a.hud != nil && a.hud.IsVisible() && !a.hudLeaving && a.hudKind != "" {
-		a.hudGhost, a.hudGhostAt = &hudBubble{a.hudKind, a.hudText, a.hudUndo != nil || len(a.hudDue) > 0, a.hudDue}, time.Time{}
+	onScreen := a.hud != nil && a.hud.IsVisible() && !a.hudLeaving
+	if kind == "added" && onScreen && a.hudKind == "added" { // 连续捕获 ×N（同 Tauri hud.streak）
+		a.hudStreak++
+	} else {
+		a.hudStreak = 1
+	}
+	if onScreen && a.hudKind != "" {
+		a.hudGhost, a.hudGhostAt = &hudBubble{kind: a.hudKind, text: a.hudText, actionable: a.hudActionable(), undo: a.hudUndo != nil, due: a.hudDue, count: a.hudStreakOf(a.hudKind)}, time.Time{}
 	} else {
 		a.hudGhost, a.hudLogoAt = nil, time.Time{}
 	}
@@ -122,14 +129,27 @@ func (a *app) showHUDForce(kind, text string) {
 	if kind == "warn" {
 		hold = max(hold, 4*time.Second)
 	}
-	if kind == "due" { // 到期气泡带操作钮，多留一会
-		hold = max(hold, 8*time.Second)
+	sticky := kind == "due" // 同 Tauri：到期气泡 sticky，只能手动点掉
+	if sticky {
+		hold = 100 * 365 * 24 * time.Hour
 	}
-	go a.watchHUDHover(gen, time.Now().Add(hold))
+	go a.watchHUDHover(gen, time.Now().Add(hold), sticky)
+}
+
+// hudActionable：说话气泡形态（可撤销 / 到期 / 可定位到卡，同 Tauri hudActionable 看 targetId）。
+func (a *app) hudActionable() bool {
+	return a.hudUndo != nil || len(a.hudDue) > 0 || a.hudTarget != ""
+}
+
+func (a *app) hudStreakOf(kind string) int {
+	if kind == "added" {
+		return max(a.hudStreak, 1)
+	}
+	return 1
 }
 
 // watchHUDHover 轮询光标：在气泡上时关闭穿透并暂停计时，离开后重新计时，到时收起。
-func (a *app) watchHUDHover(gen int, deadline time.Time) {
+func (a *app) watchHUDHover(gen int, deadline time.Time, sticky bool) {
 	t := time.NewTicker(100 * time.Millisecond)
 	defer t.Stop()
 	for range t.C {
@@ -147,7 +167,7 @@ func (a *app) watchHUDHover(gen int, deadline time.Time) {
 				a.hud.SetIgnoreMouseEvents(!in)
 				a.hud.Invalidate()
 			}
-			if in {
+			if in && !sticky {
 				deadline = time.Now().Add(1200 * time.Millisecond)
 			} else if time.Now().After(deadline) {
 				a.dismissHUD()
@@ -184,6 +204,8 @@ func (a *app) dismissHUD() {
 type hudBubble struct {
 	kind, text string
 	actionable bool
+	undo       bool     // 有可撤销操作（悬停出「撤销」）
+	count      int      // 连续捕获计数
 	due        []string // 任务到期气泡的任务（>1 为批量）：气泡里直接完成或稍后
 }
 
@@ -220,7 +242,7 @@ func (a *app) hudView(c *ui.Context) {
 	registerFonts()
 	c.Root().Background(ui.Transparent)
 	reduce := c.Preferences().ReduceMotion
-	cur := hudBubble{a.hudKind, a.hudText, a.hudUndo != nil || len(a.hudDue) > 0, a.hudDue}
+	cur := hudBubble{kind: a.hudKind, text: a.hudText, actionable: a.hudActionable(), undo: a.hudUndo != nil, due: a.hudDue, count: a.hudStreakOf(a.hudKind)}
 	// 进场：opacity 0 → 1、y 10 → 0、scale 0.982 → 1（160ms ease-standard）；离场叠乘 opacity → 0、scale → 0.96
 	e := easeStandard(a.hudProgress(c, &a.hudAt, 160*time.Millisecond))
 	op, dy, sc := e, 10*(1-e), 0.982+0.018*e
@@ -290,7 +312,7 @@ func (a *app) hudBubbleView(c *ui.Context, b hudBubble, ghostMs float32) {
 	icon := func() {
 		ui.Box(c).Size(20, 20).Radius(10).Background(ic.color).Center().Children(func() { licon(c, ic.icon, 12, ui.RGB(255, 255, 255)) })
 	}
-	title := hudTitle(b.kind, b.text, 1)
+	title := hudTitle(b.kind, b.text, b.count)
 	if !b.actionable {
 		ui.Row(c).FillWidth().Justify(ui.End).Children(func() {
 			pill := ui.Row(c).Padding(4, 12, 4, 6).Gap(6).Radius(16).Background(paper).AlignItems(ui.Center).
@@ -334,6 +356,13 @@ func (a *app) hudBubbleView(c *ui.Context, b hudBubble, ghostMs float32) {
 			a.hudOpen()
 		}
 		if len(b.due) > 0 { // 到期气泡没有撤销，只留关闭
+			x := hudClose(c, ink)
+			if !ghost && x.Clicked() {
+				a.dismissHUD()
+			}
+			return
+		}
+		if !b.undo { // 只可定位（如「已存在相同内容」）：不给撤销钮
 			x := hudClose(c, ink)
 			if !ghost && x.Clicked() {
 				a.dismissHUD()

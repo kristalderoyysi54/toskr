@@ -189,7 +189,26 @@ func (a *app) pfSend(e pfEval) {
 		}
 	}
 	a.clearPending()
+	if r, _ := a.resolution(); r.Profile.EnterPolicy == "confirm" && !e.noEnter {
+		a.deliver(notes, true, tmpl) // 同 Tauri：confirm 方案并入预检，点「发送」即确认回车，不再二次询问
+		return
+	}
 	a.askEnter(notes, e.noEnter, tmpl)
+}
+
+// pfSubmit：⌘⏎ 提交预检——文字与图片两路都放行时发送；还差确认 / 处理时提示原因。
+func (a *app) pfSubmit() {
+	if !a.pf.scanned {
+		a.pfScan()
+		a.pfScanImages()
+	}
+	r, _ := a.resolution()
+	e, ie := a.pfCombined(r.Profile.PrivacyPolicy)
+	if e.canSend && ie.canSend {
+		a.pfSend(pfEval{canSend: true, noEnter: e.noEnter || ie.noEnter})
+		return
+	}
+	a.showHUD("info", cmpOr(cmpOr(e.reason, ie.reason), tr("请先处理预检里的项目")))
 }
 
 func policyHint(policy string) string {

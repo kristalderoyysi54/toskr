@@ -90,7 +90,14 @@ func (a *app) saveSettings() {
 	oldGlass := st.Glass
 	st.Glass = glassNames[a.setGlass]
 	st.ExcludedApps = lines(a.setExcluded)
-	st.ClipRetainDays = int(a.setRetain)
+	if next := int(a.setRetain); next != st.ClipRetainDays {
+		if next > 0 && (st.ClipRetainDays == 0 || next < st.ClipRetainDays) {
+			a.askRetention(st.ClipRetainDays, next) // 调短会清理更旧记录：先确认（同 Tauri RetentionSlider commit）
+		} else {
+			a.retainAskGen++ // 放宽：直接生效，作废待确认的缩短
+			st.ClipRetainDays = next
+		}
+	}
 	st.Language = langNames[a.setLang]
 	st.AIEndpoint, st.AIModel = strings.TrimSpace(a.setAIEnd), strings.TrimSpace(a.setAIModel)
 	st.Companion = lines(a.setCompan)
@@ -407,10 +414,9 @@ func (a *app) settingsView(c *ui.Context) {
 				{title: tr("保留时长"), hint: tr("超期记录自动清理，置顶项除外"), control: func() {
 					changed = sliderValue(c, k, &a.setRetain, 0, 90, 1, retain) || changed
 				}},
-				{title: tr("清空剪贴板分组"), hint: tr("置顶项保留"), control: func() {
-					if button(c, s, "清空") {
-						n := a.store.ClearSection(store.SectionClipboard)
-						a.showHUD("ok", tr("已清空 ")+itoa(n)+tr(" 条"))
+				{title: tr("删除历史"), hint: tr("清空未固定的记录，可在主面板撤销"), control: func() {
+					if button(c, s, "清除…") {
+						a.confirmClearClipboard()
 					}
 				}},
 			}},
