@@ -127,7 +127,11 @@ type app struct {
 	pendingTmpl, enterTmpl                     string       // 挂起中的发送所带的提示词模板
 	snipAdd                                    bool         // 设置里正在新增模板
 	snipEditID, snipLabel, snipText, snipGroup string
-	tauriImporting                             bool // 正在从 Tauri 版导入
+	// 任务行内编辑与任务分组改名
+	taskOpen, taskTitle, taskNote, ckDraft string
+	taskCk                                 map[string]*string
+	taskSecRename, taskSecName             string
+	tauriImporting                         bool // 正在从 Tauri 版导入
 	// 设置页「本机翻译」状态
 	ltStatus                        string
 	ltPreparing, ltFailed, ltOpened bool

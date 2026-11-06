@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -507,7 +508,30 @@ func (a *app) taskSection(c *ui.Context, k tokens, g taskGroup, now time.Time) {
 			if g.sec.ID == store.TaskInbox {
 				name = tr("收集箱")
 			}
-			text(c, name, 11, 16, 600, k.muted).LetterSpacing(0.88)
+			if a.taskSecRename == g.sec.ID {
+				ui.TextInputBase(c, &a.taskSecName).Width(140).Font(fontSans).FontSize(11).TextColor(k.fg).Label(tr("分组名称")).Focus().
+					OnTextKey(func(key ui.TextKey) bool {
+						switch key.Key {
+						case ui.KeyEnter:
+							if v := strings.TrimSpace(key.Text()); v != "" {
+								sec := g.sec
+								sec.Name = v
+								_ = a.store.UpdateTaskSection(sec)
+							}
+							a.taskSecRename = ""
+							return true
+						case ui.KeyEscape:
+							a.taskSecRename = ""
+							return true
+						}
+						return false
+					})
+			} else {
+				label := text(c, name, 11, 16, 600, k.muted).LetterSpacing(0.88)
+				if g.sec.ID != store.TaskInbox && label.DoubleClicked() {
+					a.taskSecRename, a.taskSecName = g.sec.ID, g.sec.Name
+				}
+			}
 			countBadge(c, len(g.tasks), k.muted, k.track)
 			ui.Spacer(c)
 			more := ui.Box(c).Size(16, 16).Radius(6).Center().Tooltip(tr("分组操作"))
@@ -523,6 +547,27 @@ func (a *app) taskSection(c *ui.Context, k tokens, g taskGroup, now time.Time) {
 				if m.Item(label).Chosen() {
 					g.sec.Collapsed = !collapsed
 					_ = a.store.UpdateTaskSection(g.sec)
+				}
+				if g.sec.ID == store.TaskInbox {
+					return
+				}
+				secs := a.store.TaskSections()
+				i := slices.IndexFunc(secs, func(x store.Section) bool { return x.ID == g.sec.ID })
+				m.Separator()
+				if m.Item(tr("重命名")).Chosen() {
+					a.taskSecRename, a.taskSecName = g.sec.ID, g.sec.Name
+				}
+				if m.Item(tr("上移")).Disabled(i <= 0).Chosen() {
+					_ = a.store.MoveTaskSection(g.sec.ID, -1)
+				}
+				if m.Item(tr("下移")).Disabled(i < 0 || i >= len(secs)-1).Chosen() {
+					_ = a.store.MoveTaskSection(g.sec.ID, 1)
+				}
+				m.Separator()
+				if m.Item(tr("删除分组")).Chosen() {
+					if undo, ok := a.store.DeleteTaskSection(g.sec.ID); ok {
+						a.showHUDUndo("ok", fmt.Sprintf(tr("已删除分组「%s」，任务移回收集箱"), g.sec.Name), undo)
+					}
 				}
 			})
 		})
@@ -543,7 +588,11 @@ func (a *app) taskSection(c *ui.Context, k tokens, g taskGroup, now time.Time) {
 // taskRow：卡片 38 高（边框 1 + 内边距 6/8），行内依次是优先级色条、状态圈、标题、重复 / 清单 / 到期、删除。
 func (a *app) taskRow(c *ui.Context, k tokens, t store.Task, now time.Time) {
 	done := t.Status == "done"
-	card := ui.Row(c).Height(38).Padding(6, 8).Radius(10).Border(1, ui.Transparent).Key("task-" + t.ID)
+	open := a.taskOpen == t.ID
+	card := ui.Column(c).Padding(6, 8).Radius(10).Border(1, ui.Transparent).Key("task-" + t.ID)
+	if !open {
+		card.Height(38)
+	}
 	if t.Spark && !done {
 		card.Background(k.sparkRow)
 	} else {
@@ -585,19 +634,40 @@ func (a *app) taskRow(c *ui.Context, k tokens, t store.Task, now time.Time) {
 				icon, col = "circle-check", k.muted
 			case t.Spark:
 				icon, col = "lightbulb", k.violetIcon
+			case t.Status == "doing":
+				icon, col = "circle-dot", stok(c).primary
 			}
-			st := ui.Box(c).Size(16, 16).Children(func() { licon(c, icon, 16, col) })
+			stLabel := fmt.Sprintf(tr("状态：%s（点击切换）"), taskStatusLabel(t.Status))
+			if t.Spark && !done {
+				stLabel = tr("灵感转为待办")
+			}
+			st := ui.Box(c).Size(16, 16).Role(ui.RoleButton).Label(stLabel).Tooltip(stLabel).Children(func() { licon(c, icon, 16, col) })
 			if st.Clicked() {
 				if t.Spark && !done {
 					t.Spark = false // 闪念点 💡 转为正式待办
 					_ = a.store.UpdateTask(t)
-				} else if next, spawned := a.store.CompleteTask(t.ID, !done, a.now()); spawned {
-					a.showHUD("ok", tr("已生成下一期：")+dueBadge(next.DueAt, a.now()))
+				} else {
+					a.cycleTaskStatus(t) // 待办 → 进行中 → 完成 → 待办（同 Tauri cycleTaskStatus）
 				}
 			}
-			title := text(c, t.Text, 13, 18, 400, k.fg).SingleLine().Grow(1).Basis(0)
-			if done {
-				title.TextColor(k.muted).Strikethrough()
+			if a.taskOpen == t.ID {
+				ui.TextInputBase(c, &a.taskTitle).Grow(1).Basis(0).Font(fontSans).FontSize(13).TextColor(k.fg).Label(tr("任务标题")).
+					OnTextKey(func(key ui.TextKey) bool {
+						if key.Key == ui.KeyEnter || key.Key == ui.KeyEscape {
+							a.commitTaskEdit()
+							a.taskOpen = ""
+							return true
+						}
+						return false
+					})
+			} else {
+				title := text(c, t.Text, 13, 18, 400, k.fg).SingleLine().Grow(1).Basis(0).Role(ui.RoleButton).Label(t.Text)
+				if done {
+					title.TextColor(k.muted).Strikethrough()
+				}
+				if title.Clicked() {
+					a.openTaskEdit(t)
+				}
 			}
 			if t.Recurrence != "" {
 				licon(c, "repeat", 12, k.repeatIcon)
@@ -638,6 +708,9 @@ func (a *app) taskRow(c *ui.Context, k tokens, t store.Task, now time.Time) {
 				}
 			}
 		})
+		if open {
+			a.taskEditor(c, k, t)
+		}
 	})
 }
 
@@ -656,6 +729,23 @@ func (a *app) dueMenu(m *ui.Menu, t store.Task) {
 }
 
 func (a *app) taskMenu(c *ui.Context, m *ui.Menu, t store.Task) {
+	if m.Item(tr("发送到对话")).Chosen() {
+		a.send([]store.Note{taskAsNote(t)})
+	}
+	m.Separator()
+	if t.Status != "done" && m.Item(tr("标记完成")).Chosen() {
+		a.setTaskStatus(t, "done")
+	}
+	if t.Status != "doing" && m.Item(tr("标记进行中")).Chosen() {
+		a.setTaskStatus(t, "doing")
+	}
+	if t.Status != "todo" && m.Item(tr("转为待办")).Chosen() {
+		a.setTaskStatus(t, "todo")
+	}
+	if m.Item(tr("编辑任务…")).Chosen() {
+		a.openTaskEdit(t)
+	}
+	m.Separator()
 	m.Submenu(tr("优先级"), func(sm *ui.Menu) {
 		for i, p := range priorityNames {
 			if sm.Item(tr(priorityLabels[i])).Radio(t.Priority == p).Chosen() {

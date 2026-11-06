@@ -260,3 +260,58 @@ func (s *Store) UpdateTaskSection(sec Section) error {
 		return true
 	})
 }
+
+// MoveTaskSection 上移 / 下移任务分组。
+func (s *Store) MoveTaskSection(id string, delta int) error {
+	return s.mutate(func() bool {
+		i := slices.IndexFunc(s.taskSections, func(x Section) bool { return x.ID == id })
+		j := i + delta
+		if i < 0 || j < 0 || j >= len(s.taskSections) {
+			return false
+		}
+		s.taskSections[i], s.taskSections[j] = s.taskSections[j], s.taskSections[i]
+		return true
+	})
+}
+
+// DeleteTaskSection 删除任务分组（收集箱不可删），其中任务移回收集箱。返回撤销用的函数。
+func (s *Store) DeleteTaskSection(id string) (undo func(), ok bool) {
+	var sec Section
+	var pos int
+	var moved []string
+	_ = s.mutate(func() bool {
+		pos = slices.IndexFunc(s.taskSections, func(x Section) bool { return x.ID == id })
+		if pos < 0 || id == TaskInbox {
+			return false
+		}
+		sec = s.taskSections[pos]
+		s.taskSections = slices.Delete(s.taskSections, pos, pos+1)
+		for i := range s.tasks {
+			if s.tasks[i].Section == id {
+				s.tasks[i].Section = TaskInbox
+				moved = append(moved, s.tasks[i].ID)
+			}
+		}
+		ok = true
+		return true
+	})
+	if !ok {
+		return nil, false
+	}
+	return func() {
+		_ = s.mutate(func() bool {
+			s.taskSections = slices.Insert(s.taskSections, min(pos, len(s.taskSections)), sec)
+			for i := range s.tasks {
+				if slices.Contains(moved, s.tasks[i].ID) {
+					s.tasks[i].Section = id
+				}
+			}
+			return true
+		})
+	}, true
+}
+
+// NewChecklistItem 生成检查项。
+func NewChecklistItem(text string) ChecklistItem {
+	return ChecklistItem{ID: "ck-" + newID(), Text: strings.TrimSpace(text)}
+}

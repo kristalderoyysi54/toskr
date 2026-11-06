@@ -338,7 +338,7 @@ func (a *app) panelMenu(c *ui.Context, k tokens) {
 
 // panelKeys：面板级快捷键（同 Tauri App.tsx 键盘处理）：⌃Tab / ⌘←→ 切页、Esc 逐层退出、⌘F 搜索、⌘Z 撤销、⇧⌘⌫ 清理已完成。
 func (a *app) panelKeys(c *ui.Context) {
-	typing := a.editing != "" || a.titleEditID != "" || a.tagEditID != "" || a.renamingSec != ""
+	typing := a.editing != "" || a.titleEditID != "" || a.tagEditID != "" || a.renamingSec != "" || a.taskOpen != "" || a.taskSecRename != ""
 	if c.Shortcut(ui.Ctrl, ui.KeyTab) {
 		a.switchPage((a.page + 1) % 3)
 	}
@@ -354,6 +354,11 @@ func (a *app) panelKeys(c *ui.Context) {
 			a.titleEditID, a.tagEditID, a.renamingSec = "", "", ""
 		case a.editing != "":
 			a.editing = ""
+		case a.taskSecRename != "":
+			a.taskSecRename = ""
+		case a.taskOpen != "":
+			a.commitTaskEdit()
+			a.taskOpen = ""
 		case a.menuOpen:
 			a.menuOpen = false
 		case a.quickOpen:
