@@ -149,6 +149,7 @@ type Settings struct {
 	// 面板尺寸与位置（同 Tauri set_panel_width / 高度拖拽 / 自由移动位置；0 = 默认：宽 380、高度自动铺满）
 	PanelWidth  int    `json:"panelWidth,omitempty"`
 	PanelHeight int    `json:"panelHeight,omitempty"`
+	PanelTop    int    `json:"panelTopOffset,omitempty"` // 顶部下移量（同 Tauri panelTopOffset；0 = 贴顶）
 	PanelX      int    `json:"panelX,omitempty"`
 	PanelY      int    `json:"panelY,omitempty"`
 	SidebarEdge string `json:"sidebarEdge,omitempty"` // 跟随应用时停在 left | right（默认右侧）

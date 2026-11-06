@@ -92,8 +92,12 @@ func (a *app) ptTitleBar(c *ui.Context) {
 		ptStripes(c)
 		text(c, "Toskr", 12, 13, 700, ptBlack).Padding(0, 3)
 		ptStripes(c)
-		ptWidget(c, "zoom")
-		ptWidget(c, "collapse")
+		if ptWidget(c, "zoom") { // 同 Tauri PlatinumBox zoom：复位自动高度
+			a.resetPanelVertical()
+		}
+		if ptWidget(c, "collapse") { // 同 Tauri PlatinumBox shade：舒适 ⇄ 紧凑
+			a.toggleDensity()
+		}
 	})
 }
 
@@ -105,7 +109,9 @@ func ptStripes(c *ui.Context) {
 
 // ptWidget：标题栏 13×13 窗口控件（关闭 / 缩放 / 收起），外圈凹、内圈凸，135° 灰渐变；关闭框收起面板。
 func ptWidget(c *ui.Context, kind string) bool {
-	b := ui.Box(c).Size(13, 13).LinearGradient(ui.LinearGradient{From: ui.RGB(154, 154, 154), To: ui.RGB(241, 241, 241), Angle: 135}).
+	label := map[string]string{"close": tr("收起面板"), "zoom": tr("复位自动高度"), "collapse": tr("舒适 / 紧凑切换")}[kind]
+	b := ui.Box(c).Size(13, 13).Role(ui.RoleButton).Label(label).Tooltip(label)
+	b.LinearGradient(ui.LinearGradient{From: ui.RGB(154, 154, 154), To: ui.RGB(241, 241, 241), Angle: 135}).
 		InsetShadow(1, 1, 0, 0, ptG700).InsetShadow(-1, -1, 0, 0, ptWhite).InsetShadow(0, 0, 0, 2, ptBlack).
 		InsetShadow(3, 3, 0, 0, ptWhite).InsetShadow(-3, -3, 0, 0, ptG700)
 	b.Children(func() {

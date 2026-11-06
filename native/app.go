@@ -92,6 +92,8 @@ type app struct {
 	aiCancel                            context.CancelFunc        // 进行中的 AI 改写（可取消）
 	draftImgs                           []pastedImage             // 输入区暂存的粘贴 / 拖入图片（提交时与草稿合成一张卡）
 	bigImgs                             map[string]ui.ImageSource // 详情窗内嵌大图缓存
+	docked                              bool                      // 面板当前停靠在伴随应用窗口旁（位置不由自己记）
+	vdrag                               vDrag                     // 上 / 下缘把手拖动中
 
 	// 1:1 主面板
 	noteGroups                               []noteGroup
