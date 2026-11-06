@@ -1,6 +1,10 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/toskr/native/internal/store"
+)
 
 // 冻结发送目标（同 Tauri validate_target_snapshot / ensure_token_current 的 draft-target-changed）：
 // 预检条或「粘贴后按回车？」出现时记下当时的目标；真正投递前目标换了（在目标条改选、目标重启）就中止，
@@ -23,6 +27,12 @@ func (a *app) draftTargetChanged() bool {
 		return false
 	}
 	a.sendMode, a.sendPNG, a.sendPH, a.lastRedactions = "", nil, sendRedaction{}, 0
+	if a.out.id != "" { // 使用概览：记为这次准备的受阻（同 Tauri draft-target-changed）
+		a.store.RecordOutcome(store.OutcomeEvent{DeliveryID: a.out.id, Type: store.OutBlocked, Reason: "draft-target-changed"})
+		a.out = outcomeDraft{}
+	} else {
+		a.outcomeBlocked("draft-target-changed")
+	}
 	a.showHUD("warn", fmt.Sprintf(tr("目标已变化：这次内容是为 %s 准备的，未发送，请重新发送"), d.name))
 	return true
 }
