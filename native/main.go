@@ -62,7 +62,9 @@ func start() (*app, error) {
 	appLive = true
 	applyAppearance(st.Settings())
 	a := newApp(core.Mac{}, st)
-	diag.Push("数据水合完成 笔记=%d 剪贴板=%d", a.counts[store.SectionInbox], a.counts[store.SectionClipboard])
+	total := len(st.Notes())
+	diag.Push("数据水合完成 笔记=%d 剪贴板=%d（全部 %d 条 · 分组 %d · 任务 %d · 收件箱未完成 %d）",
+		total-a.counts[store.SectionClipboard], a.counts[store.SectionClipboard], total, len(st.Sections()), len(st.Tasks()), a.counts[store.SectionInbox])
 
 	a.panel = mygo.NewWindow(mygo.WindowOptions{
 		Title: "Toskr", Panel: true, Hidden: true, Frameless: true, Transparent: true,

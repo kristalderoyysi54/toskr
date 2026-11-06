@@ -19,8 +19,6 @@ const (
 	SectionInbox     = "inbox"
 	SectionClipboard = "clipboard"
 	DataFile         = "toskr-native.json"
-	// ClipboardLimit 剪贴板分组最多保留条数（超出丢最旧的未置顶项）。
-	ClipboardLimit = 200
 )
 
 type Note struct {
@@ -288,25 +286,11 @@ func (s *Store) Add(n Note) (Note, bool, error) {
 			n.CreatedAt = time.Now()
 		}
 	}
-	s.notes = slices.Insert(s.notes, 0, n)
-	if n.Section == SectionClipboard {
-		s.trimClipboard()
-	}
+	s.notes = slices.Insert(s.notes, 0, n) // 剪贴板不设条数上限，只按保留天数清理（同 Tauri pruneClipHistory）
 	s.schedulePersistLocked()
 	s.mu.Unlock()
 	s.notify()
 	return n, dup, nil
-}
-
-func (s *Store) trimClipboard() {
-	count := 0
-	s.notes = slices.DeleteFunc(s.notes, func(n Note) bool {
-		if n.Section != SectionClipboard || n.Kept {
-			return false
-		}
-		count++
-		return count > ClipboardLimit
-	})
 }
 
 func (s *Store) mutate(fn func() bool) error {

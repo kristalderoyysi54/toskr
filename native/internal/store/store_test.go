@@ -112,18 +112,18 @@ func TestReorderOnlyTouchesSection(t *testing.T) {
 	}
 }
 
-func TestClipboardTrimKeepsKept(t *testing.T) {
+// 剪贴板不设条数上限（同 Tauri：只按保留天数清理）——导入的大量历史不会被下一次复制截掉；清空保留置顶项。
+func TestClipboardNoCountCapAndClearKeepsKept(t *testing.T) {
 	s, _ := OpenDir(t.TempDir(), key)
 	kept, _, _ := s.Add(Note{Section: SectionClipboard, Text: "keep"})
 	s.SetKept(kept.ID, true)
-	for i := 0; i < ClipboardLimit+5; i++ {
+	for i := 0; i < 305; i++ {
 		s.Add(Note{Section: SectionClipboard, Text: time.Duration(i).String()})
 	}
-	clip := s.Section(SectionClipboard)
-	if len(clip) != ClipboardLimit+1 {
-		t.Fatalf("应保留上限 %d + 置顶 1，实为 %d", ClipboardLimit, len(clip))
+	if got := len(s.Section(SectionClipboard)); got != 306 {
+		t.Fatalf("不应按条数截断，实为 %d", got)
 	}
-	if s.ClearSection(SectionClipboard) != ClipboardLimit || len(s.Section(SectionClipboard)) != 1 {
+	if s.ClearSection(SectionClipboard) != 305 || len(s.Section(SectionClipboard)) != 1 {
 		t.Fatal("清空应保留置顶项")
 	}
 }
@@ -155,5 +155,17 @@ func TestDebouncedPersistCoalescesWrites(t *testing.T) {
 	again, err := OpenDir(dir, key)
 	if err != nil || len(again.Notes()) != 100 {
 		t.Fatalf("后台合并落盘后应可完整重载，实为 %d %v", len(again.Notes()), err)
+	}
+}
+
+func TestMediaStats(t *testing.T) {
+	s, err := OpenDir(t.TempDir(), bytes.Repeat([]byte{1}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, _ := s.SaveImage([]byte("\x89PNG fake"))
+	_, _, _ = s.Add(Note{Section: SectionInbox, Text: "图", ImageFile: name, Attachments: []string{"0123456789abcdef0123456789abcdef.png"}})
+	if refs, notes, missing := s.MediaStats(); refs != 2 || notes != 1 || missing != 1 {
+		t.Fatalf("refs=%d notes=%d missing=%d", refs, notes, missing)
 	}
 }

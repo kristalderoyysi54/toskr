@@ -43,6 +43,33 @@ func (s *Store) LoadImage(name string) ([]byte, error) {
 }
 
 // GCMedia 删除不再被任何笔记引用的媒体文件，返回删除数量。
+// MediaStats：笔记与账单引用的媒体数、带图笔记数，以及其中文件已不在磁盘上的引用数（诊断用）。
+func (s *Store) MediaStats() (refs, notes, missing int) {
+	s.mu.Lock()
+	used := map[string]bool{}
+	for _, n := range s.notes {
+		fs := n.MediaFiles()
+		if len(fs) > 0 {
+			notes++
+		}
+		for _, f := range fs {
+			used[f] = true
+		}
+	}
+	for _, b := range s.bills {
+		if b.IconFile != "" {
+			used[b.IconFile] = true
+		}
+	}
+	s.mu.Unlock()
+	for f := range used {
+		if _, err := os.Stat(filepath.Join(s.mediaDir(), f)); err != nil {
+			missing++
+		}
+	}
+	return len(used), notes, missing
+}
+
 func (s *Store) GCMedia() int {
 	s.mu.Lock()
 	used := map[string]bool{}

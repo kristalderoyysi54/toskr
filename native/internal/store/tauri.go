@@ -356,8 +356,8 @@ func (s *Store) ImportTauri(dir string, key []byte) (TauriReport, error) {
 			}
 			n.Kind = ""
 		}
-		if strings.TrimSpace(n.Text) == "" && n.ImageFile == "" {
-			continue
+		if strings.TrimSpace(n.Text) == "" && n.ImageFile == "" && len(n.Attachments) == 0 && len(n.Blocks) == 0 {
+			continue // 没字也没图才算空卡；只有附件 / 内容块里有图的照样导入
 		}
 		notes = append(notes, n)
 	}

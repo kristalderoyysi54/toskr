@@ -217,3 +217,30 @@ func TestParseTauriDocAndEmptyGuard(t *testing.T) {
 }
 
 func strconvQuote(s string) string { b, _ := json.Marshal(s); return string(b) }
+
+// 正文为空、内容只在内容块里的笔记也要导入；导入后的大量剪贴历史不会被下一次复制截断。
+func TestImportTauriBlocksOnlyAndClipVolume(t *testing.T) {
+	notes := []any{map[string]any{"id": "b1", "text": "", "sectionId": "inbox", "createdAt": 1790000000000,
+		"contentBlocks": []any{map[string]any{"type": "text", "text": "块里的字"}}}}
+	for i := 0; i < 260; i++ {
+		notes = append(notes, map[string]any{"id": "c" + strconvQuote(string(rune('a' + i%26)))[1:2] + string(rune('0'+i/26)), "text": "剪", "sectionId": "clipboard", "createdAt": 1790000000000 + i})
+	}
+	inner, _ := json.Marshal(map[string]any{"state": map[string]any{"notes": notes}, "version": 27})
+	raw, _ := json.Marshal(map[string]string{"toskr": string(inner)})
+	tdir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(tdir, "toskr-data.json"), raw, 0o600)
+	s, err := OpenDir(t.TempDir(), bytes.Repeat([]byte{1}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ImportTauri(tdir, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.Note("b1"); !ok {
+		t.Fatal("只有内容块的笔记应导入")
+	}
+	_, _, _ = s.Add(Note{Section: SectionClipboard, Text: "新复制"})
+	if got := len(s.Section(SectionClipboard)); got != 261 {
+		t.Fatalf("剪贴历史应全部保留，实为 %d", got)
+	}
+}
