@@ -532,6 +532,7 @@ func (a *app) cardMenu(c *ui.Context, m *ui.Menu, i int, n store.Note) {
 		if !isImage && m.Item(tr("转为任务")).Chosen() {
 			a.convertToTask(n, "", nil, tr("已转为任务"))
 		}
+		a.replyMenu(m, n)
 	}
 	m.Submenu(tr("移动到"), func(sm *ui.Menu) {
 		for _, s := range a.store.Sections() {

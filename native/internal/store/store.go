@@ -49,6 +49,7 @@ type Note struct {
 	LinkIcon    string         `json:"linkIcon,omitempty"`
 	CodeLang    string         `json:"codeLang,omitempty"`
 	UpdatedAt   time.Time      `json:"updatedAt,omitzero"`
+	Provenance  *Provenance    `json:"provenance,omitempty"` // 回复笔记：来自哪次发送
 }
 
 // ContentBlock 是富卡的权威内容块（同 Tauri NoteContentBlock）：文字或图片。
@@ -155,14 +156,15 @@ func DefaultSettings() Settings {
 }
 
 type snapshot struct {
-	Version      int       `json:"version"`
-	Notes        []Note    `json:"notes"`
-	Settings     Settings  `json:"settings"`
-	Sections     []Section `json:"sections,omitempty"`
-	Tasks        []Task    `json:"tasks,omitempty"`
-	TaskSections []Section `json:"taskSections,omitempty"`
-	Bills        []Bill    `json:"bills,omitempty"`
-	Secrets      []Secret  `json:"secrets,omitempty"`
+	Version      int        `json:"version"`
+	Notes        []Note     `json:"notes"`
+	Settings     Settings   `json:"settings"`
+	Sections     []Section  `json:"sections,omitempty"`
+	Tasks        []Task     `json:"tasks,omitempty"`
+	TaskSections []Section  `json:"taskSections,omitempty"`
+	Bills        []Bill     `json:"bills,omitempty"`
+	Secrets      []Secret   `json:"secrets,omitempty"`
+	Deliveries   []Delivery `json:"deliveries,omitempty"`
 }
 
 // PersistDelay 合并连续修改的落盘延迟：内存与界面即时生效，磁盘写入在后台线程合并执行
@@ -182,6 +184,7 @@ type Store struct {
 	taskSections []Section
 	bills        []Bill
 	secrets      []Secret
+	deliveries   []Delivery
 	onChange     []func()
 	dirty        bool
 	timer        *time.Timer
@@ -214,6 +217,7 @@ func OpenDir(dir string, key []byte) (*Store, error) {
 	}
 	s.notes, s.settings = snap.Notes, mergeSettings(snap.Settings)
 	s.sections, s.tasks, s.taskSections, s.bills, s.secrets = snap.Sections, snap.Tasks, snap.TaskSections, snap.Bills, snap.Secrets
+	s.deliveries = snap.Deliveries
 	return s, nil
 }
 
@@ -565,7 +569,7 @@ func Fingerprint(notes []Note) string {
 
 func (s *Store) snapshotLocked() snapshot {
 	return snapshot{Version: 2, Notes: s.notes, Settings: s.settings, Sections: s.sections,
-		Tasks: s.tasks, TaskSections: s.taskSections, Bills: s.bills, Secrets: s.secrets}
+		Tasks: s.tasks, TaskSections: s.taskSections, Bills: s.bills, Secrets: s.secrets, Deliveries: s.deliveries}
 }
 
 // mergeSettings 用默认值补齐旧版本数据里缺的字段（只补零值）。

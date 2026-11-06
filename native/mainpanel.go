@@ -87,7 +87,9 @@ func (a *app) targetBar(c *ui.Context, k tokens) {
 				})
 			})
 			ui.Row(c).Gap(2).Children(func() {
-				a.iconButton(c, k, "rotate-ccw-clock", 20, 12, tr("最近发送"))
+				if a.iconButton(c, k, "rotate-ccw-clock", 20, 12, tr("最近发送")) {
+					a.drawerOpen = !a.drawerOpen
+				}
 				a.iconButton(c, k, "chevron-down", 20, 12, tr("发送方案"))
 			})
 		})

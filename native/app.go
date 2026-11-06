@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -109,8 +110,11 @@ type app struct {
 	sparkMode bool
 	// 卡片右键「重命名…」「新标签…」的就地输入
 	titleEditID, titleText, tagEditID, tagText string
-	placed                                     mygo.Rectangle // 程序上次摆放面板的位置（与之相同的移动 / 缩放不当作用户操作记忆）
-	tauriImporting                             bool           // 正在从 Tauri 版导入
+	placed                                     mygo.Rectangle  // 程序上次摆放面板的位置（与之相同的移动 / 缩放不当作用户操作记忆）
+	lastRedactions                             int             // 下一次投递前遮罩的敏感项数（记进发送记录）
+	drawerOpen                                 bool            // 「最近发送」抽屉
+	drawerMore                                 map[string]bool // 抽屉行「更多」展开态
+	tauriImporting                             bool            // 正在从 Tauri 版导入
 	// 设置页「本机翻译」状态
 	ltStatus                        string
 	ltPreparing, ltFailed, ltOpened bool
@@ -192,7 +196,7 @@ type app struct {
 }
 
 func newApp(sys core.System, st *store.Store) *app {
-	a := &app{sys: sys, store: st, page: pageNotes, prevPage: -1, section: store.SectionInbox, doneOpen: map[string]bool{}, bandOpen: map[string]bool{"overdue": true, "spark": true}, clipView: "time", billView: "week", billFilter: "upcoming", clock: time.Now, thumbs: map[string]ui.ImageSource{}, revealed: map[string]time.Time{}, secretOpening: map[string]bool{}, secretPlain: map[string]string{}, secretFx: map[string]time.Time{}}
+	a := &app{sys: sys, store: st, page: pageNotes, prevPage: -1, section: store.SectionInbox, doneOpen: map[string]bool{}, bandOpen: map[string]bool{"overdue": true, "spark": true}, clipView: "time", billView: "week", billFilter: "upcoming", clock: time.Now, thumbs: map[string]ui.ImageSource{}, revealed: map[string]time.Time{}, secretOpening: map[string]bool{}, secretPlain: map[string]string{}, secretFx: map[string]time.Time{}, drawerMore: map[string]bool{}}
 	a.reload()
 	return a
 }
@@ -352,8 +356,12 @@ func (a *app) onTrigger() {
 				return
 			}
 			a.playCaptureSound()
-			a.flashID, a.flashAt = note.ID, time.Time{}             // 卡片琥珀闪烁 1.8s
-			a.showHUDUndo("added", preview(note.Text, 40), func() { // 撤销捕获：删掉刚收进的笔记
+			a.flashID, a.flashAt = note.ID, time.Time{} // 卡片琥珀闪烁 1.8s
+			msg := preview(note.Text, 40)
+			if ds := store.DeliveryCandidates(note, a.store.Deliveries()); len(ds) == 1 { // 唯一候选只提示，不自动关联（同 Tauri）
+				msg += " · " + fmt.Sprintf(tr("可能是发往 %s 的回复，右键可关联"), ds[0].TargetName)
+			}
+			a.showHUDUndo("added", msg, func() { // 撤销捕获：删掉刚收进的笔记
 				a.store.Delete(note.ID)
 				a.reload()
 			})
@@ -518,7 +526,9 @@ func (a *app) confirmPending(redact bool) {
 	if redact {
 		notes = slices.Clone(notes)
 		for i := range notes {
-			notes[i].Text = core.Redact(notes[i].Text, core.Preflight(notes[i].Text))
+			fs := core.Preflight(notes[i].Text)
+			a.lastRedactions += len(fs)
+			notes[i].Text = core.Redact(notes[i].Text, fs)
 		}
 	}
 	a.deliver(notes, true)
@@ -526,6 +536,8 @@ func (a *app) confirmPending(redact bool) {
 
 func (a *app) deliver(notes []store.Note, confirmed bool) {
 	target := a.target
+	redactions := a.lastRedactions
+	a.lastRedactions = 0
 	var texts []string
 	var png []byte
 	ids := make([]string, len(notes))
@@ -544,24 +556,37 @@ func (a *app) deliver(notes []store.Note, confirmed bool) {
 	go func() {
 		check, err := core.DeliverWith(a.sys, target, core.Payload{Text: sendText(texts), PNG: png}, core.Options{Enter: enter, StartedMs: a.targetStarted})
 		diag.Push("发送: %d 条 → %s enter=%v confirmed=%v check=%s err=%v", len(notes), target.BundleID, enter, confirmed, check, err)
-		a.panel.Update(func() {
-			rec := delivery{At: time.Now(), Target: target.Name, Count: len(notes)}
-			if err != nil {
-				rec.Err = err.Error()
-			}
-			a.history = append([]delivery{rec}, a.history[:min(len(a.history), 49)]...)
-			if err != nil {
-				a.showHUD("warn", err.Error())
-				return
-			}
-			_ = a.store.MarkSent(ids, time.Now())
-			if check == core.CheckUnchanged {
-				a.showHUD("warn", tr("已粘贴，但目标输入框内容没有变化，请确认是否发送成功"))
-				return
-			}
-			a.showHUD("sent", fmt.Sprintf(tr("已发送 %d 条到 %s"), len(notes), target.Name))
-		})
+		a.panel.Update(func() { a.finishDeliver(target, ids, texts, png, redactions, check, err) })
 	}()
+}
+
+// finishDeliver：投递结束后（主线程）记历史与「最近发送」、标记已发送、出 HUD。
+func (a *app) finishDeliver(target macos.FrontApp, ids, texts []string, png []byte, redactions int, check core.Check, err error) {
+	rec := delivery{At: time.Now(), Target: target.Name, Count: len(ids)}
+	if err != nil {
+		rec.Err = err.Error()
+	}
+	a.history = append([]delivery{rec}, a.history[:min(len(a.history), 49)]...)
+	d := store.Delivery{TargetName: target.Name, TargetBundle: target.BundleID, Status: "sent", SourceIDs: ids,
+		TextChars: utf8.RuneCountInString(sendText(texts)), Unconfirmed: check == core.CheckUnchanged}
+	if png != nil {
+		d.ImageCount = 1
+	}
+	d.Redactions = redactions
+	if err != nil {
+		d.Status, d.Err = "failed", err.Error()
+	}
+	a.store.AddDelivery(d)
+	if err != nil {
+		a.showHUD("warn", err.Error())
+		return
+	}
+	_ = a.store.MarkSent(ids, time.Now())
+	if check == core.CheckUnchanged {
+		a.showHUD("warn", tr("已粘贴，但目标输入框内容没有变化，请确认是否发送成功"))
+		return
+	}
+	a.showHUD("sent", fmt.Sprintf(tr("已发送 %d 条到 %s"), len(ids), target.Name))
 }
 
 // isTerminal：终端里「粘贴后回车」等于直接执行命令，默认不补回车。

@@ -182,6 +182,7 @@ func (s *Store) ImportBackup(p *Preview) (added int, err error) {
 		mergeByID(&s.taskSections, p.snap.TaskSections, func(x Section) string { return x.ID }, &dummy)
 		mergeByID(&s.bills, p.snap.Bills, func(x Bill) string { return x.ID }, &dummy)
 		mergeByID(&s.secrets, p.snap.Secrets, func(x Secret) string { return x.ID }, &dummy)
+		mergeByID(&s.deliveries, p.snap.Deliveries, func(x Delivery) string { return x.ID }, &dummy)
 		return true
 	})
 	if err == nil {

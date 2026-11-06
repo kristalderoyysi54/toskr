@@ -40,7 +40,7 @@ func (a *app) panelView(c *ui.Context) {
 	// 底色是内容自绘的半透明膜（Tauri 同样画在 webview 里），随内容一起淡入淡出；系统材质本身不动
 	c.Root().Background(k.window.Alpha(min(p, 1))) // Alpha 是相乘
 	if k.pt {
-		shell.Children(func() { a.platinumPanel(c, k) })
+		shell.Children(func() { a.platinumPanel(c, k); a.recentDrawer(c, k) })
 		return
 	}
 
@@ -60,6 +60,7 @@ func (a *app) panelView(c *ui.Context) {
 			a.composerBar(c, k)
 		}
 		a.selectionBar(c, k) // 勾选时的批量条留在面板最下方
+		a.recentDrawer(c, k)
 	})
 	if a.menuOpen {
 		a.panelMenu(c, k)
@@ -352,6 +353,8 @@ func (a *app) panelKeys(c *ui.Context) {
 			a.editing = ""
 		case a.menuOpen:
 			a.menuOpen = false
+		case a.drawerOpen:
+			a.drawerOpen = false
 		case a.noteRailOpen:
 			a.noteRailOpen = false
 		case a.searchOpen:

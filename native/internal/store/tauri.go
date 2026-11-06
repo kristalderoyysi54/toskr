@@ -79,6 +79,7 @@ type tauriNote struct {
 	UpdatedAt    int64          `json:"updatedAt"`
 	SourceApp    string         `json:"sourceApp"`
 	SourceBundle string         `json:"sourceBundle"`
+	Provenance   *Provenance    `json:"provenance"`
 	SecretMeta   *struct {
 		KeyID     *string `json:"keyId"`
 		KeyLabel  string  `json:"keyLabel"`
@@ -281,7 +282,7 @@ func (s *Store) ImportTauri(dir string, key []byte) (TauriReport, error) {
 		n := Note{ID: t.ID, Section: t.SectionID, Text: t.Text, SourceApp: t.SourceApp, BundleID: t.SourceBundle,
 			CreatedAt: ms(t.CreatedAt), UpdatedAt: ms(t.UpdatedAt), Kept: t.Keep, Done: t.Done, Kind: t.Kind,
 			LinkTitle: t.LinkTitle, Tags: t.Tags, ImageW: int(t.ImageW), ImageH: int(t.ImageH),
-			Title: t.Title, Blur: t.Blur, URL: t.URL, LinkIcon: t.LinkIcon, CodeLang: t.CodeLang}
+			Title: t.Title, Blur: t.Blur, URL: t.URL, LinkIcon: t.LinkIcon, CodeLang: t.CodeLang, Provenance: t.Provenance}
 		if n.Kind == "text" {
 			n.Kind = ""
 		}
