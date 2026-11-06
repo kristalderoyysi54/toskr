@@ -182,6 +182,12 @@ type Settings struct {
 	FirewallOff          bool     `json:"firewallOff,omitempty"`
 	FirewallDisabledWarn []string `json:"firewallDisabledWarnCategories,omitempty"`
 	FirewallCustomFields []string `json:"firewallCustomSensitiveFields,omitempty"`
+	// 可逆化名（同 Tauri aliasEntitiesEnabled / aliasEntities / aliasCustomCategories / aliasNextNumberByCategory / aliasAutoRestoreOnCapture；开关用「关闭」语义）
+	AliasOff           bool            `json:"aliasOff,omitempty"`
+	AliasEntities      []AliasEntity   `json:"aliasEntities,omitempty"`
+	AliasCategories    []AliasCategory `json:"aliasCustomCategories,omitempty"`
+	AliasNext          map[string]int  `json:"aliasNextNumberByCategory,omitempty"`
+	AliasNoAutoRestore bool            `json:"aliasNoAutoRestore,omitempty"`
 }
 
 // ShotPrefs 是截图编辑器记住的使用习惯；零值都表示默认（粗细存档位 +1，0 = 默认中档）。
@@ -321,7 +327,9 @@ func (s *Store) Add(n Note) (Note, bool, error) {
 	}
 	s.mu.Lock()
 	dup := false
-	if i := slices.IndexFunc(s.notes, func(o Note) bool { return o.Section == n.Section && o.Text == n.Text && o.ImageFile == n.ImageFile && slices.Equal(o.Attachments, n.Attachments) }); i >= 0 {
+	if i := slices.IndexFunc(s.notes, func(o Note) bool {
+		return o.Section == n.Section && o.Text == n.Text && o.ImageFile == n.ImageFile && slices.Equal(o.Attachments, n.Attachments)
+	}); i >= 0 {
 		n = s.notes[i]
 		s.notes = slices.Delete(s.notes, i, i+1)
 		dup = true

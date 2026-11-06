@@ -145,25 +145,30 @@ type tauriBill struct {
 }
 
 type tauriSettings struct {
-	Language             string       `json:"language"`
-	Theme                string       `json:"theme"`
-	ColorScheme          string       `json:"colorScheme"`
-	CardDensity          string       `json:"cardDensity"`
-	HotkeyModifier       string       `json:"hotkeyModifier"`
-	HotkeyGapMs          int          `json:"hotkeyGapMs"`
-	Stealth              *bool        `json:"stealth"`
-	FirewallEnabled      *bool        `json:"firewallEnabled"`
-	FirewallDisabledWarn []string     `json:"firewallDisabledWarnCategories"`
-	FirewallCustom       []string     `json:"firewallCustomSensitiveFields"`
-	AIBaseURL            string       `json:"aiBaseUrl"`
-	AIModel              string       `json:"aiModel"`
-	AIEnabled            *bool        `json:"aiEnabled"`
-	TaskReminderChannel  string       `json:"taskReminderChannel"`
-	DuePresets           *[]DuePreset `json:"duePresets"`
-	ExcludedApps         []string     `json:"excludedApps"`
-	CurrencySymbol       string       `json:"currencySymbol"`
-	SubscriptionsEnabled *bool        `json:"subscriptionsEnabled"`
-	SecretEnabled        *bool        `json:"secretEnabled"`
+	Language             string          `json:"language"`
+	Theme                string          `json:"theme"`
+	ColorScheme          string          `json:"colorScheme"`
+	CardDensity          string          `json:"cardDensity"`
+	HotkeyModifier       string          `json:"hotkeyModifier"`
+	HotkeyGapMs          int             `json:"hotkeyGapMs"`
+	Stealth              *bool           `json:"stealth"`
+	FirewallEnabled      *bool           `json:"firewallEnabled"`
+	FirewallDisabledWarn []string        `json:"firewallDisabledWarnCategories"`
+	FirewallCustom       []string        `json:"firewallCustomSensitiveFields"`
+	AliasEnabled         *bool           `json:"aliasEntitiesEnabled"`
+	AliasEntities        []AliasEntity   `json:"aliasEntities"`
+	AliasCategories      []AliasCategory `json:"aliasCustomCategories"`
+	AliasNext            map[string]int  `json:"aliasNextNumberByCategory"`
+	AliasAutoRestore     *bool           `json:"aliasAutoRestoreOnCapture"`
+	AIBaseURL            string          `json:"aiBaseUrl"`
+	AIModel              string          `json:"aiModel"`
+	AIEnabled            *bool           `json:"aiEnabled"`
+	TaskReminderChannel  string          `json:"taskReminderChannel"`
+	DuePresets           *[]DuePreset    `json:"duePresets"`
+	ExcludedApps         []string        `json:"excludedApps"`
+	CurrencySymbol       string          `json:"currencySymbol"`
+	SubscriptionsEnabled *bool           `json:"subscriptionsEnabled"`
+	SecretEnabled        *bool           `json:"secretEnabled"`
 	SecretKeys           []struct {
 		ID          string `json:"id"`
 		Label       string `json:"label"`
@@ -760,6 +765,21 @@ func applyTauriSettings(st Settings, t tauriSettings) Settings {
 	}
 	if t.FirewallCustom != nil {
 		st.FirewallCustomFields = t.FirewallCustom
+	}
+	if t.AliasEnabled != nil {
+		st.AliasOff = !*t.AliasEnabled
+	}
+	if len(t.AliasEntities) > 0 {
+		st.AliasEntities = t.AliasEntities
+	}
+	if len(t.AliasCategories) > 0 {
+		st.AliasCategories = t.AliasCategories
+	}
+	if len(t.AliasNext) > 0 {
+		st.AliasNext = t.AliasNext
+	}
+	if t.AliasAutoRestore != nil {
+		st.AliasNoAutoRestore = !*t.AliasAutoRestore
 	}
 	return st
 }

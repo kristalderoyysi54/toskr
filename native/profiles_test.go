@@ -142,7 +142,7 @@ func TestSendProfilesQuickSwitchAndPolicies(t *testing.T) {
 func TestSettingsProfilePopoverMenus(t *testing.T) {
 	a, _ := testApp(t)
 	a.openSettingsAt(setPagePaste, 0)
-	st := ui.NewTester(a.settingsView, 1040, 720)
+	st := ui.NewTester(a.settingsView, 1040, 1200) // 粘贴与隐私页加了可逆化名，发送方案下移
 	st.Frame()
 	if err := st.Click("新建"); err != nil {
 		t.Fatal(err)

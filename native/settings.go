@@ -420,6 +420,7 @@ func (a *app) settingsView(c *ui.Context) {
 		}}},
 		{label: "粘贴与隐私", icon: "crosshair", sections: [][]setSection{{
 			{tr("隐私检查"), a.firewallRows(c, k, s, st)},
+			{tr("可逆化名"), a.aliasRows(c, k, s, st)},
 			{tr("发送方案"), a.profileSection(c, k, s)},
 			{tr("最近发送"), recent},
 		}, a.templateSections(c, k, s)}, subs: []string{"发送", "提示词模板"}},

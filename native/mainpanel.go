@@ -10,6 +10,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/toskr/native/internal/codehl"
+	"github.com/toskr/native/internal/core"
 	"github.com/toskr/native/internal/store"
 )
 
@@ -762,6 +763,11 @@ func (a *app) cardActionsAt(c *ui.Context, k tokens, n store.Note, bottom float3
 	}
 	fade := ui.ElementTransition{Duration: 100 * time.Millisecond, Ease: easeTw, Enter: &ui.Motion{}, Exit: &ui.Motion{}} // reveal="hover-focus"：opacity 100ms
 	ui.Row(c).Absolute().Right(right).Bottom(bottom).Gap(2).Key("acts").Transition(fade).Children(func() {
+		if core.AliasOccurrences(n.Text, a.store.Settings().AliasEntities) > 0 { // 卡上还有可还原的词典占位符（同 Tauri 恢复化名）
+			if floatIconButton(c, k, "na-alias", "venetian-mask", tr("恢复化名"), false, false).Clicked() {
+				a.restoreCardAliases(n)
+			}
+		}
 		for _, act := range []struct{ icon, tip string }{
 			{"send", "发送（⌘↵）"}, {"expand", "在详情窗打开"}, {"pencil", "编辑"}, {"eye-off", "模糊内容"}, {"trash-2", "删除"},
 		} {

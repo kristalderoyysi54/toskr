@@ -171,6 +171,7 @@ type app struct {
 	taskScroll                             ui.ScrollState // 任务页滚动（双击页签回到开头）
 	anchorID                               string         // ⇧点击范围选的锚点（上一次普通 / ⌘ 点击的卡）
 	fw                                     firewallUI     // 设置「发送前隐私检查」展开态与字段输入
+	aliasUI                                aliasUI        // 设置「可逆化名」词典编辑态
 	setShortcutsOpen                       bool           // 设置「面板内快捷键」表展开
 	setJump                                string         // 设置窗下一帧要跳到的页名
 	lastClipID                             string         // 上一次外部复制入库的卡（连续复制两次置顶用）
@@ -447,6 +448,7 @@ func (a *app) onTrigger() {
 		if a.captureSecret(got.Text, front.Name) {
 			return // 秘文信封：解密进秘文页，绝不进普通笔记
 		}
+		got.Text = a.captureRestoreAliases(got.Text)
 		note, dup, err := a.store.Add(store.Note{Section: a.captureSection(), Text: got.Text, HTML: got.HTML,
 			SourceApp: front.Name, BundleID: front.BundleID})
 		diag.Push("捕获: %d 字符 来自 %s dup=%v %dms", len([]rune(got.Text)), front.BundleID, dup, time.Since(started).Milliseconds())
@@ -684,6 +686,7 @@ func (a *app) sendT(notes []store.Note, tmpl string) {
 		a.showHUD("warn", tr("没有发送目标：先切到要粘贴的应用再唤出面板"))
 		return
 	}
+	notes = a.aliasNotes(notes) // 词典化名先于隐私检查：被化名的实体不会再触发正则命中
 	var fs []core.Finding
 	rules := a.scanRules()
 	for _, n := range notes {

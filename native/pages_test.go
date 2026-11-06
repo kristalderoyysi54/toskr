@@ -405,7 +405,7 @@ func waitFor(t *testing.T, ok func() bool) {
 func TestSettingsNavSearchAndToggle(t *testing.T) {
 	a, _ := testApp(t)
 	a.openSettingsState()
-	tt := ui.NewTester(a.settingsView, 1040, 720)
+	tt := ui.NewTester(a.settingsView, 1040, 1200) // 粘贴与隐私页加了可逆化名，发送方案下移
 	tt.Frame()
 	if !tt.HasText("常用外观") || !tt.HasText("伴随停靠") {
 		t.Fatalf("首屏应为窗口与外观 %v", tt.Texts())
