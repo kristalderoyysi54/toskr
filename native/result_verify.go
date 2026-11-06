@@ -88,6 +88,7 @@ func (a *app) runVerify() {
 	exp := core.VerifyExpectation{Format: a.verify.format, Sections: lines(a.verify.sections), JSONFields: lines(a.verify.fields), Placeholders: counts}
 	r := core.VerifyResult(ctx, exp, a.now())
 	a.verify.report, a.verify.aiText = &r, ""
+	a.store.RecordOutcome(store.OutcomeEvent{DeliveryID: n.Provenance.DeliveryID, Type: store.OutVerified, Verify: string(r.Status)})
 	diag.Push("回复检查: 状态=%s 检查 %d 项 缺失 %d", r.Status, len(r.Checks), len(r.Missing))
 }
 

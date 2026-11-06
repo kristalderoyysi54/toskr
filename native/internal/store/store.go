@@ -189,6 +189,10 @@ type Settings struct {
 	AliasCategories    []AliasCategory `json:"aliasCustomCategories,omitempty"`
 	AliasNext          map[string]int  `json:"aliasNextNumberByCategory,omitempty"`
 	AliasNoAutoRestore bool            `json:"aliasNoAutoRestore,omitempty"`
+	// 使用概览（同 Tauri outcomeMetricsEnabled / outcomeRetentionDays / outcomeMetricsEpoch；开关用「关闭」语义）
+	OutcomeOff       bool `json:"outcomeMetricsOff,omitempty"`
+	OutcomeRetention int  `json:"outcomeRetentionDays,omitempty"` // 7 / 30 / 90，0 = 30
+	OutcomeEpoch     int  `json:"outcomeMetricsEpoch,omitempty"`
 }
 
 // ShotPrefs 是截图编辑器记住的使用习惯；零值都表示默认（粗细存档位 +1，0 = 默认中档）。
@@ -219,17 +223,18 @@ func DefaultSettings() Settings {
 }
 
 type snapshot struct {
-	Version      int        `json:"version"`
-	Notes        []Note     `json:"notes"`
-	Settings     Settings   `json:"settings"`
-	Sections     []Section  `json:"sections,omitempty"`
-	Tasks        []Task     `json:"tasks,omitempty"`
-	TaskSections []Section  `json:"taskSections,omitempty"`
-	Bills        []Bill     `json:"bills,omitempty"`
-	Secrets      []Secret   `json:"secrets,omitempty"`
-	Deliveries   []Delivery `json:"deliveries,omitempty"`
-	Messages     []Message  `json:"messages,omitempty"`
-	MessagesGone []string   `json:"messagesGone,omitempty"` // 删过的消息标识：重放账本时不再收回
+	Version      int            `json:"version"`
+	Notes        []Note         `json:"notes"`
+	Settings     Settings       `json:"settings"`
+	Sections     []Section      `json:"sections,omitempty"`
+	Tasks        []Task         `json:"tasks,omitempty"`
+	TaskSections []Section      `json:"taskSections,omitempty"`
+	Bills        []Bill         `json:"bills,omitempty"`
+	Secrets      []Secret       `json:"secrets,omitempty"`
+	Deliveries   []Delivery     `json:"deliveries,omitempty"`
+	Outcomes     []OutcomeEvent `json:"outcomes,omitempty"`
+	Messages     []Message      `json:"messages,omitempty"`
+	MessagesGone []string       `json:"messagesGone,omitempty"` // 删过的消息标识：重放账本时不再收回
 }
 
 // PersistDelay 合并连续修改的落盘延迟：内存与界面即时生效，磁盘写入在后台线程合并执行
@@ -250,6 +255,7 @@ type Store struct {
 	bills        []Bill
 	secrets      []Secret
 	deliveries   []Delivery
+	outcomes     []OutcomeEvent
 	messages     []Message
 	messagesGone []string
 	onChange     []func()
@@ -309,7 +315,7 @@ func OpenDir(dir string, key []byte) (*Store, error) {
 	}
 	s.notes, s.settings = snap.Notes, mergeSettings(snap.Settings)
 	s.sections, s.tasks, s.taskSections, s.bills, s.secrets = snap.Sections, snap.Tasks, snap.TaskSections, snap.Bills, snap.Secrets
-	s.deliveries = snap.Deliveries
+	s.deliveries, s.outcomes = snap.Deliveries, snap.Outcomes
 	s.messages, s.messagesGone = snap.Messages, snap.MessagesGone
 	s.disk = stampOf(filepath.Join(dir, DataFile))
 	return s, nil
@@ -344,7 +350,7 @@ func (s *Store) ReloadFromDisk() error {
 	}
 	s.notes, s.settings = snap.Notes, mergeSettings(snap.Settings)
 	s.sections, s.tasks, s.taskSections, s.bills, s.secrets = snap.Sections, snap.Tasks, snap.TaskSections, snap.Bills, snap.Secrets
-	s.deliveries = snap.Deliveries
+	s.deliveries, s.outcomes = snap.Deliveries, snap.Outcomes
 	s.messages, s.messagesGone = snap.Messages, snap.MessagesGone
 	s.disk, s.conflict, s.dirty = stampOf(path), false, false
 	s.mu.Unlock()
@@ -792,7 +798,7 @@ func Fingerprint(notes []Note) string {
 
 func (s *Store) snapshotLocked() snapshot {
 	return snapshot{Version: 2, Notes: s.notes, Settings: s.settings, Sections: s.sections,
-		Tasks: s.tasks, TaskSections: s.taskSections, Bills: s.bills, Secrets: s.secrets, Deliveries: s.deliveries,
+		Tasks: s.tasks, TaskSections: s.taskSections, Bills: s.bills, Secrets: s.secrets, Deliveries: s.deliveries, Outcomes: s.outcomes,
 		Messages: s.messages, MessagesGone: s.messagesGone}
 }
 

@@ -216,7 +216,9 @@ func (a *app) deliveryRow(c *ui.Context, k tokens, d store.Delivery, notes []sto
 			if (d.Status == "failed" || d.Status == "blocked") && len(src) > 0 {
 				if footLink(c, k, tr("重新准备"), "re-"+d.ID) {
 					a.drawerOpen = false
+					a.outRetry = true // 统计里的「重试次数」（同 Tauri retry-prepared）
 					a.send(src)
+					a.outRetry = false
 				}
 			}
 			ui.Spacer(c)
@@ -293,6 +295,7 @@ func (a *app) linkReply(d store.Delivery, n store.Note) {
 	if !ok {
 		return
 	}
+	a.store.RecordOutcome(store.OutcomeEvent{DeliveryID: d.ID, Type: store.OutResult, AtMs: n.CreatedAt.UnixMilli()})
 	a.showHUDUndo("ok", fmt.Sprintf(tr("已设为发往 %s 的回复"), d.TargetName), func() {
 		if prev != "" {
 			a.store.LinkResult(d.ID, prev)

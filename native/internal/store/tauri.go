@@ -160,6 +160,9 @@ type tauriSettings struct {
 	AliasCategories      []AliasCategory `json:"aliasCustomCategories"`
 	AliasNext            map[string]int  `json:"aliasNextNumberByCategory"`
 	AliasAutoRestore     *bool           `json:"aliasAutoRestoreOnCapture"`
+	OutcomeEnabled       *bool           `json:"outcomeMetricsEnabled"`
+	OutcomeRetention     int             `json:"outcomeRetentionDays"`
+	OutcomeEpoch         int             `json:"outcomeMetricsEpoch"`
 	AIBaseURL            string          `json:"aiBaseUrl"`
 	AIModel              string          `json:"aiModel"`
 	AIEnabled            *bool           `json:"aiEnabled"`
@@ -503,6 +506,7 @@ func (s *Store) ImportTauri(dir string, key []byte) (TauriReport, error) {
 	rep.Check.Skipped = cv.skipped
 
 	acts := readTauriActivity(dir, st.Settings.TargetProfiles)
+	outs := readTauriOutcomes(dir)
 	err = s.mutate(func() bool {
 		rep.Deliveries = mergeDeliveries(&s.deliveries, acts)
 		before := len(s.notes)
@@ -521,6 +525,8 @@ func (s *Store) ImportTauri(dir string, key []byte) (TauriReport, error) {
 		s.notes = slices.DeleteFunc(s.notes, func(n Note) bool { return secIDs[n.ID] }) // 旧版导入留下的同 ID 普通笔记
 		rep.Messages = importTauriMessages(&s.messages, st.Messages)
 		s.settings = applyTauriSettings(s.settings, st.Settings)
+		mergeOutcomes(&s.outcomes, outs)
+		s.pruneOutcomesLocked(time.Now())
 		return true
 	})
 	if err != nil {
@@ -800,6 +806,13 @@ func applyTauriSettings(st Settings, t tauriSettings) Settings {
 	if t.AliasAutoRestore != nil {
 		st.AliasNoAutoRestore = !*t.AliasAutoRestore
 	}
+	if t.OutcomeEnabled != nil {
+		st.OutcomeOff = !*t.OutcomeEnabled
+	}
+	if t.OutcomeRetention != 0 {
+		st.OutcomeRetention = t.OutcomeRetention
+	}
+	st.OutcomeEpoch = max(st.OutcomeEpoch, t.OutcomeEpoch)
 	return st
 }
 

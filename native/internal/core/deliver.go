@@ -32,6 +32,15 @@ type Payload struct {
 type Options struct {
 	Enter     bool  // 粘贴后补回车
 	StartedMs int64 // 目标进程启动时刻（面板唤出时锁定）；非 0 时发送前核对，防 pid 复用 / 目标重启
+	// OnClipboard 报告剪贴板还原结果（同 Tauri ClipboardOutcome）：restored | skippedUserChanged | nothingToRestore。
+	// 粘贴成功时在后台还原后才回调（另一个 goroutine）。
+	OnClipboard func(string)
+}
+
+func (o Options) clip(result string) {
+	if o.OnClipboard != nil {
+		o.OnClipboard(result)
+	}
 }
 
 // Check 是粘贴结果核验结论。
@@ -60,12 +69,15 @@ func Deliver(sys System, target macos.FrontApp, text string) error {
 // DeliverWith 同 Deliver，可发图片，带发送方案；返回粘贴结果核验结论。
 func DeliverWith(sys System, target macos.FrontApp, p Payload, opt Options) (Check, error) {
 	if target.PID == 0 || target.PID == sys.SelfPID() {
+		opt.clip("nothingToRestore")
 		return CheckUnknown, ErrNoTarget
 	}
 	if normalize(p.Text) == "" && len(p.PNG) == 0 {
+		opt.clip("nothingToRestore")
 		return CheckUnknown, ErrEmpty
 	}
 	if id, ok := sys.(identity); ok && opt.StartedMs != 0 && id.ProcessStartMs(target.PID) != opt.StartedMs {
+		opt.clip("nothingToRestore")
 		return CheckUnknown, ErrTargetChanged
 	}
 	item := macos.Item{}
@@ -91,6 +103,7 @@ func DeliverWith(sys System, target macos.FrontApp, p Payload, opt Options) (Che
 	if !ready {
 		markOwn(sys.Write(original, true))
 		pbMu.Unlock()
+		opt.clip("restored")
 		return CheckUnknown, ErrTargetFocus
 	}
 	vr, canVerify := sys.(valueReader)
@@ -119,6 +132,9 @@ func DeliverWith(sys System, target macos.FrontApp, p Payload, opt Options) (Che
 		sys.Sleep(restoreDelay)
 		if sys.ChangeCount() == written { // 期间用户没复制别的，才还原
 			markOwn(sys.Write(original, true))
+			opt.clip("restored")
+		} else {
+			opt.clip("skippedUserChanged")
 		}
 	}()
 	return check, nil

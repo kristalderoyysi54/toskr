@@ -497,15 +497,15 @@ func (a *app) settingsView(c *ui.Context) {
 			}},
 		}}},
 		{label: "诊断", icon: "scroll-text", sections: [][]setSection{a.diagSections(c, k, s)}},
-		{label: "帮助与更新", icon: "info", sections: [][]setSection{{
-			{tr("关于"), []setRow{
+		{label: "帮助与更新", icon: "info", sections: [][]setSection{append(a.outcomeSections(c, k, s, st), setSection{
+			tr("关于"), []setRow{
 				{title: "Toskr Native " + mygo.App.Version(), hint: cmpOr(a.updateMsg, "mygo · "+tr("原生界面")), control: func() {
 					if button(c, s, "检查更新") {
 						a.checkUpdate()
 					}
 				}},
 			}},
-		}}},
+		)}},
 	}
 	if st.SecretEnabled { // 与 Tauri 一致：秘文功能开启后侧栏才出现「秘文」分类
 		pages = slices.Insert(pages, 5, setPage{label: "秘文", icon: "key-round", sections: [][]setSection{a.secretSections(c, k, s, st)}})

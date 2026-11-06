@@ -176,6 +176,9 @@ func (a *app) pfSend(e pfEval) {
 	a.sendPH = sendRedaction{maps.Clone(a.pf.ph), core.PlaceholderCounts(strings.Join(sent, "\n"))} // 发送成功后按这次发送记住：回复里可恢复占位符、核验次数
 	a.sendPNG = nil
 	for _, im := range a.pf.images {
+		a.out.findings += len(im.regions) // 图片里的隐私命中也计入「发现敏感内容」
+	}
+	for _, im := range a.pf.images {
 		if b := im.maskedPNG(); b != nil && len(notes) == 1 {
 			a.sendPNG = b
 			for _, v := range im.masked {

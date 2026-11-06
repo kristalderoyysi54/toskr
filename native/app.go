@@ -139,6 +139,7 @@ type app struct {
 	titleEditID, titleText, tagEditID, tagText string
 	placed                                     mygo.Rectangle  // 程序上次摆放面板的位置（与之相同的移动 / 缩放不当作用户操作记忆）
 	lastRedactions                             int             // 下一次投递前遮罩的敏感项数（记进发送记录）
+	out                                        outcomeDraft    // 使用概览：当前这次发送（发送前生成 ID，直到结果落定）
 	drawerOpen                                 bool            // 「最近发送」抽屉
 	drawerMore                                 map[string]bool // 抽屉行「更多」展开态
 	// 发送方案：临时指定 / 规则覆盖只对 tempFor / ruleFor 记下的目标身份有效
@@ -179,6 +180,8 @@ type app struct {
 	lastClipAt                             time.Time
 	trayBuilt                              string      // 托盘菜单上次重建时的状态键
 	forceCheck                             bool        // 本次发送强制先过检查条（检查后发送…）
+	outRetry                               bool        // 本次发送来自「最近发送 → 重新准备」
+	outUI                                  outcomeUI   // 设置 → 使用概览的范围 / 筛选 / 展开
 	quitting                               bool        // 正在退出：窗口关闭不再改成隐藏
 	permAX                                 bool        // 辅助功能已授权（每 3 秒复查）
 	tapReceiving                           atomic.Bool // 键盘监听收到过真实按键
@@ -684,6 +687,7 @@ func (a *app) sendT(notes []store.Note, tmpl string) {
 		return
 	}
 	if a.target.PID == 0 {
+		a.outcomeBlocked("target-not-ready")
 		a.showHUD("warn", tr("没有发送目标：先切到要粘贴的应用再唤出面板"))
 		return
 	}
@@ -693,6 +697,7 @@ func (a *app) sendT(notes []store.Note, tmpl string) {
 	for _, n := range notes {
 		fs = append(fs, core.Scan(n.Text, rules)...)
 	}
+	a.outcomeDraftCreated(len(fs))
 	hasImage := !rules.Off && slices.ContainsFunc(notes, func(n store.Note) bool { return n.Kind == "image" && n.ImageFile != "" })
 	if len(fs) > 0 || a.forceCheck || hasImage {
 		auto := len(fs) == 0 && !a.forceCheck // 只为图片 OCR 打开：检查干净就自动继续
@@ -768,10 +773,17 @@ func (a *app) deliver(notes []store.Note, enter bool, tmpl string) {
 		a.hidePanelNow()
 	}
 	profile := profileName(r.Profile)
+	out := a.outcomeStarted()
+	onClip := func(result string) { a.onMain(func() { a.outcomeClipboard(out, result) }) }
 	go func() {
-		check, err := core.DeliverWith(a.sys, target, core.Payload{Text: payload, PNG: png}, core.Options{Enter: enter, StartedMs: a.targetStarted})
+		check, err := core.DeliverWith(a.sys, target, core.Payload{Text: payload, PNG: png}, core.Options{Enter: enter, StartedMs: a.targetStarted, OnClipboard: onClip})
 		diag.Push("发送: %d 条 → %s 方案=%s 格式=%s enter=%v check=%s err=%v", len(notes), target.BundleID, r.Profile.ID, mode, enter, check, err)
-		a.panel.Update(func() { a.finishDeliver(target, ids, texts, png, redactions, ph, profile, check, err) })
+		a.panel.Update(func() {
+			prev := a.out // 期间可能已开始准备下一次发送
+			a.out = out
+			a.finishDeliver(target, ids, texts, png, redactions, ph, profile, check, err)
+			a.out = prev
+		})
 	}()
 }
 
@@ -791,7 +803,9 @@ func (a *app) finishDeliver(target macos.FrontApp, ids, texts []string, png []by
 	if err != nil {
 		d.Status, d.Err = "failed", err.Error()
 	}
+	d.ID = a.out.id
 	saved := a.store.AddDelivery(d)
+	a.outcomeFinal(saved.ID, redactions, err)
 	if err == nil {
 		a.rememberRedactionMap(saved.ID, ph)
 	}
