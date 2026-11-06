@@ -291,6 +291,14 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 				pin := ui.Box(c).Size(12, 12)
 				pin.Opacity(pin.AnimateTo("op", pinOp, tweenTw)).Children(func() { liconFilled(c, "pin", 12, amber400) })
 			}
+			if img := a.appIcon(n.BundleID); img != nil { // 来源应用图标（同 Tauri 票据头右端）；浓缩模板悬停让位给操作钮
+				op := float32(1)
+				if hovered && condensed {
+					op = 0
+				}
+				ic := ui.Box(c).Size(16, 16)
+				ic.Opacity(ic.AnimateTo("icon-op", op, tweenTw)).Children(func() { ui.Image(c, img).Size(16, 16) })
+			}
 		})
 		if condensed {
 			ui.Row(c).Grow(1).Gap(6).AlignItems(ui.Center).Clip().Children(func() {
@@ -478,6 +486,9 @@ func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool, to
 // clipRow 是紧凑密度的剪贴流水行（同 Tauri CompactRow 剪贴形态）：缩略图 + 首行（命名过的先标题、摘要淡色跟随，
 // 代码等宽）+ 尾部置顶图钉或相对时间；尾部元数据悬停时让位给操作钮。
 func (a *app) clipRow(c *ui.Context, k tokens, n store.Note, hovered, isLink bool) {
+	if !(isLink && a.favicon(n.LinkIcon) != nil) {
+		a.sourceIcon(c, n, 20)
+	}
 	if n.Kind == "image" {
 		if img := a.thumb(n.ImageFile); img != nil {
 			w, h := ui.ImageSize(img)

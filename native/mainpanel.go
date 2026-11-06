@@ -442,7 +442,12 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 				if n.Title != "" {
 					title = n.Title
 				}
-				text(c, title, 11, 16, 600, k.cardHeadText).SingleLine()
+				text(c, title, 11, 16, 600, k.cardHeadText).SingleLine().Grow(1).Basis(0)
+			}
+			if img := a.appIcon(n.BundleID); img != nil { // 应用图标嵌入通栏右端（同 Tauri Paste 风格）：左缘完整，上/右/下被通栏裁去少许
+				ui.Box(c).Width(36).Height(28).Margin(0, -8, 0, 0).Clip().AlignItems(ui.Center).Children(func() {
+					ui.Image(c, img).Size(40, 40)
+				})
 			}
 		})
 		ui.Column(c).Height(62).Margin(4, 8, 0, 8).Clip().Children(func() {
@@ -577,7 +582,10 @@ const flashDur = 1800 * time.Millisecond
 // compactCard 是紧凑密度的单行卡（Tauri cardDensity=compact：40 高，左侧拖拽把手，单行省略，悬停操作钮垂直居中）。
 func (a *app) compactCard(c *ui.Context, k tokens, n store.Note, hovered bool) {
 	ui.Box(c).Size(18, 18).Margin(0, 0, 0, 4).Padding(2).Opacity(0.6).Children(func() { licon(c, "grip-vertical", 14, k.muted.Alpha(0.5)) })
-	ui.Row(c).Grow(1).Basis(0).Padding(0, 8).Children(func() {
+	ui.Row(c).Grow(1).Basis(0).Padding(0, 8).Gap(6).AlignItems(ui.Center).Children(func() {
+		if a.editing != n.ID && !(n.Kind == "link" && a.favicon(n.LinkIcon) != nil) {
+			a.sourceIcon(c, n, 20)
+		}
 		if a.editing == n.ID {
 			ui.TextInputBase(c, &a.editText).Grow(1).Font(fontSans).FontSize(12).FixedLineHeight(17).TextColor(k.fg).Focus().
 				OnTextKey(func(key ui.TextKey) bool {
