@@ -1155,6 +1155,8 @@ func (a *app) cardInlineInput(c *ui.Context, k tokens, n store.Note) bool {
 
 // newNoteIn：组内「新笔记」（同 Tauri SectionGroup addContent）——折叠则展开，落一张「新笔记」草稿卡并直接在详情窗编辑。
 func (a *app) newNoteIn(sec store.Section) {
+	a.section = sec.ID // 同 Tauri addContent：底部输入框的分组跟着切过去
+	a.saveDraftState()
 	if sec.Collapsed {
 		sec.Collapsed = false
 		_ = a.store.UpdateSection(sec)

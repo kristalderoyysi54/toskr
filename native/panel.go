@@ -420,8 +420,6 @@ func (a *app) panelKeys(c *ui.Context) {
 			a.cancelEnterAsk()
 		case a.drawerOpen:
 			a.drawerOpen = false
-		case a.noteRailOpen:
-			a.noteRailOpen = false
 		case a.searchOpen:
 			a.searchOpen = false
 			a.query = ""
