@@ -10,6 +10,7 @@ import (
 var (
 	ErrNoTarget      = errors.New("没有可发送的目标应用")
 	ErrTargetFocus   = errors.New("目标应用未能回到前台，已中止发送（未粘贴、未标记完成）")
+	ErrTargetExited  = errors.New("发送中止：目标应用已退出（未粘贴、未标记完成）")
 	ErrTargetChanged = errors.New("目标应用已重启（进程身份变化），已中止发送：请切回目标后重新唤出面板")
 	ErrEmpty         = errors.New("没有可发送的内容")
 )
@@ -76,9 +77,14 @@ func DeliverWith(sys System, target macos.FrontApp, p Payload, opt Options) (Che
 		opt.clip("nothingToRestore")
 		return CheckUnknown, ErrEmpty
 	}
-	if id, ok := sys.(identity); ok && opt.StartedMs != 0 && id.ProcessStartMs(target.PID) != opt.StartedMs {
-		opt.clip("nothingToRestore")
-		return CheckUnknown, ErrTargetChanged
+	if id, ok := sys.(identity); ok && opt.StartedMs != 0 {
+		if started := id.ProcessStartMs(target.PID); started == 0 { // 进程已不在（同 Tauri TargetReason::TargetExited）
+			opt.clip("nothingToRestore")
+			return CheckUnknown, ErrTargetExited
+		} else if started != opt.StartedMs {
+			opt.clip("nothingToRestore")
+			return CheckUnknown, ErrTargetChanged
+		}
 	}
 	item := macos.Item{}
 	if p.Text != "" {

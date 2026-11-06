@@ -13,12 +13,17 @@ import (
 )
 
 // 设置 → 帮助与更新：「发送统计」与「数据与隐私」（同 Tauri OutcomeInsightsSection）。
-// AI 处理筛选未做：原生发送没有「AI 改写配方」这一层（AI 动作生成新卡片，不随发送记录）。
+// AI 处理筛选：同 Tauri TRANSFORM_RECIPES 四项，按事件 transformRecipeId 过滤（原生发送不产生配方，主要筛导入的 Tauri 统计）。
 
 type outcomeUI struct {
 	rng     string // 7d | 30d | all；空 = 30d
 	profile string // 空 = 全部发送方案
+	recipe  string // 空 = 全部 AI 处理
 	detail  bool   // 「趋势和详细数据」展开
+}
+
+var outcomeRecipes = []struct{ id, label string }{
+	{"summarize", "总结要点"}, {"extract-actions", "提取行动项"}, {"improve-prompt", "优化 Prompt"}, {"structure-requirements", "结构化需求"},
 }
 
 var outcomeRanges = []struct{ id, label string }{{"7d", "近 7 天"}, {"30d", "近 30 天"}, {"all", "全部保留期"}}
@@ -59,7 +64,7 @@ func fmtOutcomeDuration(d time.Duration) string {
 func (a *app) outcomeRange() string { return cmpOr(a.outUI.rng, "30d") }
 
 func (a *app) outcomeMetrics(st store.Settings, events []store.OutcomeEvent) store.OutcomeMetrics {
-	return store.AggregateOutcomes(events, store.OutcomeFilter{Range: a.outcomeRange(), Now: a.now(), Profile: a.outUI.profile,
+	return store.AggregateOutcomes(events, store.OutcomeFilter{Range: a.outcomeRange(), Now: a.now(), Profile: a.outUI.profile, Recipe: a.outUI.recipe,
 		Epoch: st.OutcomeEpoch, Loc: time.Local})
 }
 
@@ -141,7 +146,7 @@ func (a *app) outcomeSummaryRow(c *ui.Context, k tokens, s settingsTokens, m sto
 		}
 		return setRow{title: tr("当前筛选没有数据"), hint: tr("换一个时间范围或清除详细筛选后再看。"), control: func() {
 			if button(c, s, "清除筛选") {
-				a.outUI.profile, a.outUI.rng = "", "all" // 「清除」放宽到最大范围（回 30 天可能仍为空）
+				a.outUI.profile, a.outUI.recipe, a.outUI.rng = "", "", "all" // 「清除」放宽到最大范围（回 30 天可能仍为空）
 			}
 		}}
 	}
@@ -199,21 +204,39 @@ func outcomeGroup(c *ui.Context, k tokens, title string, body func()) {
 // outcomeDetails：筛选 + 发送过程 / 用时 / 隐私与结果 / 原因与结果 / 每日发送（同 Tauri OutcomeMetricsDetails）。
 func (a *app) outcomeDetails(c *ui.Context, k tokens, s settingsTokens, st store.Settings, m store.OutcomeMetrics) {
 	ui.Column(c).Gap(12).Children(func() {
-		label := tr("全部发送方案")
-		for _, p := range st.TargetProfiles {
-			if p.ID == a.outUI.profile {
-				label = profileName(p)
-			}
-		}
-		settingsSelect(c, k, s, label, func(mm *ui.Menu) {
-			if mm.Item(tr("全部发送方案")).Radio(a.outUI.profile == "").Chosen() {
-				a.outUI.profile = ""
-			}
+		ui.Row(c).Gap(8).Wrap().Children(func() { // 同 Tauri flex-wrap：发送方案 + AI 处理两个筛选并排
+			label := tr("全部发送方案")
 			for _, p := range st.TargetProfiles {
-				if mm.Item(profileName(p)).Radio(a.outUI.profile == p.ID).Chosen() {
-					a.outUI.profile = p.ID
+				if p.ID == a.outUI.profile {
+					label = profileName(p)
 				}
 			}
+			settingsSelect(c, k, s, label, func(mm *ui.Menu) {
+				if mm.Item(tr("全部发送方案")).Radio(a.outUI.profile == "").Chosen() {
+					a.outUI.profile = ""
+				}
+				for _, p := range st.TargetProfiles {
+					if mm.Item(profileName(p)).Radio(a.outUI.profile == p.ID).Chosen() {
+						a.outUI.profile = p.ID
+					}
+				}
+			})
+			recipe := tr("全部 AI 处理")
+			for _, r := range outcomeRecipes {
+				if r.id == a.outUI.recipe {
+					recipe = tr(r.label)
+				}
+			}
+			settingsSelect(c, k, s, recipe, func(mm *ui.Menu) {
+				if mm.Item(tr("全部 AI 处理")).Radio(a.outUI.recipe == "").Chosen() {
+					a.outUI.recipe = ""
+				}
+				for _, r := range outcomeRecipes {
+					if mm.Item(tr(r.label)).Radio(a.outUI.recipe == r.id).Chosen() {
+						a.outUI.recipe = r.id
+					}
+				}
+			})
 		})
 		outcomeGroup(c, k, tr("发送过程"), func() {
 			outcomeMetric(c, k, s, tr("发送尝试"), itoa(m.Attempts), "")

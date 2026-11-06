@@ -64,7 +64,7 @@ func TestOutcomeEventsAlongSendPath(t *testing.T) {
 }
 
 func TestOutcomeReasonMapping(t *testing.T) {
-	for err, want := range map[error]string{core.ErrTargetFocus: "target-not-ready", core.ErrTargetChanged: "draft-target-changed", core.ErrEmpty: "paste_failed"} {
+	for err, want := range map[error]string{core.ErrTargetFocus: "target-not-ready", core.ErrTargetChanged: "draft-target-changed", core.ErrTargetExited: "target_exited", core.ErrEmpty: "paste_failed"} {
 		if _, r := outcomeReason(err); r != want {
 			t.Fatalf("%v → %s，应为 %s", err, r, want)
 		}
@@ -99,11 +99,16 @@ func TestOutcomeSettingsSection(t *testing.T) {
 	}
 	a.outUI.detail = true // 标题文字与展开钮同名，Tester 点到的是标题文字
 	set.Frame()
-	for _, s := range []string{"发送过程", "用时", "隐私与结果", "每日发送", "样本少于 5 次，不给出趋势结论。", "全部发送方案"} {
+	for _, s := range []string{"发送过程", "用时", "隐私与结果", "每日发送", "样本少于 5 次，不给出趋势结论。", "全部发送方案", "全部 AI 处理"} {
 		if !set.HasText(s) {
 			t.Fatalf("展开后缺少 %q：%v", s, set.Texts())
 		}
 	}
+	a.outUI.recipe = "summarize" // 原生发送不带 AI 配方：按配方筛选后这段时间没有尝试（同 Tauri recipeId 过滤）
+	if m := a.outcomeMetrics(a.store.Settings(), a.store.Outcomes()); m.Attempts != 0 {
+		t.Fatalf("按配方筛选应为 0 次 %d", m.Attempts)
+	}
+	a.outUI.recipe = ""
 	a.clearOutcomes()
 	set.Frame()
 	if !set.HasText("还没有可统计的发送") || a.hudText != "使用统计已清除；最近发送记录仍保留" || len(a.store.Deliveries()) != 2 {

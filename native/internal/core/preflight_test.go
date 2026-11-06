@@ -97,4 +97,10 @@ func TestDeliverVerifiesPasteAndLocksIdentity(t *testing.T) {
 	if len(v.fake.pasted) != n {
 		t.Fatal("身份不符不得粘贴")
 	}
+	old := v.started
+	v.started = 0 // 进程已退出：取不到启动时刻
+	if _, err := DeliverWith(v, macos.FrontApp{PID: 42}, Payload{Text: "x"}, Options{StartedMs: 99}); err != ErrTargetExited || len(v.fake.pasted) != n {
+		t.Fatalf("目标已退出必须中止且报 ErrTargetExited：%v", err)
+	}
+	v.started = old
 }

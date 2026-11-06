@@ -52,6 +52,8 @@ func outcomeReason(err error) (typ, reason string) {
 		return store.OutSent, ""
 	case errors.Is(err, core.ErrNoTarget), errors.Is(err, core.ErrTargetFocus):
 		return store.OutBlocked, "target-not-ready"
+	case errors.Is(err, core.ErrTargetExited):
+		return store.OutBlocked, "target_exited"
 	case errors.Is(err, core.ErrTargetChanged):
 		return store.OutBlocked, "draft-target-changed"
 	}
