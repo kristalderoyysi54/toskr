@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ebitengine/purego"
+	"github.com/ebitengine/purego/objc"
 )
 
 var (
@@ -131,4 +132,10 @@ const (
 func HeldModifiers() uint64 {
 	load()
 	return CGEventSourceFlagsState(0)
+}
+
+// MouseButtonsDown：此刻是否按着任意鼠标键（[NSEvent pressedMouseButtons]，系统级，与指针在哪个窗口无关）。
+func MouseButtonsDown() bool {
+	load()
+	return objc.Send[uint](class("NSEvent"), sel("pressedMouseButtons")) != 0
 }

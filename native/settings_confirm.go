@@ -6,6 +6,7 @@ import (
 
 	"github.com/egoist/mygo"
 
+	"github.com/toskr/native/internal/macos"
 	"github.com/toskr/native/internal/store"
 )
 
@@ -35,16 +36,25 @@ func (a *app) confirmClearClipboard() {
 	})
 }
 
-var retainDebounce = 700 * time.Millisecond
+var (
+	retainDebounce = 300 * time.Millisecond
+	mouseHeld      = macos.MouseButtonsDown // 测试替换
+)
 
-// askRetention：全局保留时长调短时不立即生效——滑块停下 700ms 后弹确认（Tauri 在松手时 ask），取消则滑块弹回原值。
+// askRetention：全局保留时长调短时不立即生效——松开鼠标后（同 Tauri RetentionSlider 在 pointerup / 键盘提交时 ask）弹确认，
+// 取消则滑块弹回原值。拖动中停顿不弹：鼠标仍按着就继续等；键盘调节停 300ms 后视为提交。
 func (a *app) askRetention(old, next int) {
 	a.retainAskGen++
 	gen := a.retainAskGen
-	time.AfterFunc(retainDebounce, func() {
+	var wait func()
+	wait = func() {
 		a.onMain(func() {
 			if a.retainAskGen != gen {
-				return // 还在拖
+				return // 值又变了：由新的一轮负责
+			}
+			if mouseHeld() {
+				time.AfterFunc(100*time.Millisecond, wait)
+				return
 			}
 			label := tr("不按时间清理")
 			if next > 0 {
@@ -71,5 +81,6 @@ func (a *app) askRetention(old, next int) {
 				})
 			})
 		})
-	})
+	}
+	time.AfterFunc(retainDebounce, wait)
 }

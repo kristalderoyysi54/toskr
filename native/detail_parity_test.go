@@ -2,6 +2,7 @@ package main
 
 import (
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -186,8 +187,23 @@ func TestSettingsDestructiveConfirm(t *testing.T) {
 	if a.store.Settings().ClipRetainDays != 30 {
 		t.Fatal("取消后保留时长不变")
 	}
-	retentionAsk = func(string, string) bool { return true }
+	// 拖动中鼠标仍按着：停顿多久都不弹确认；松手后才问（同 Tauri 在 pointerup 时 ask）
+	var held atomic.Bool
+	held.Store(true)
+	oHeld := mouseHeld
+	t.Cleanup(func() { mouseHeld = oHeld })
+	mouseHeld = held.Load
+	var asked atomic.Int32
+	retentionAsk = func(string, string) bool { asked.Add(1); return true }
 	a.setRetain = 7
 	a.saveSettings()
+	time.Sleep(400 * time.Millisecond)
+	if asked.Load() != 0 {
+		t.Fatal("鼠标按着时不应弹确认")
+	}
+	held.Store(false)
 	waitFor(t, func() bool { return a.store.Settings().ClipRetainDays == 7 })
+	if asked.Load() != 1 {
+		t.Fatalf("松手后应只问一次，问了 %d 次", asked.Load())
+	}
 }
