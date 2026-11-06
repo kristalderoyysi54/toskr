@@ -87,17 +87,21 @@ type Settings struct {
 	ExcludedApps    []string `json:"excludedApps"`
 	Glass           string   `json:"glass"` // glass | clear | none
 	PanelHotkey     string   `json:"panelHotkey"`
-	Language        string   `json:"language"`       // system | zh | en
-	Stealth         bool     `json:"stealth"`        // 隐身：只保留 warn 气泡
-	ClipRetainDays  int      `json:"clipRetainDays"` // 剪贴板保留天数（0 = 不按时间清理）
-	PasteThenEnter  bool     `json:"pasteThenEnter"` // 粘贴后回车（终端类目标默认关闭）
-	ScreenshotKey   string   `json:"screenshotKey"`
-	AIEndpoint      string   `json:"aiEndpoint"`
-	AIModel         string   `json:"aiModel"`
-	Companion       []string `json:"companion"` // 伴随停靠的应用 bundle id
-	EdgeHide        bool     `json:"edgeHide"`
-	Currency        string   `json:"currency"`
-	DueReminders    bool     `json:"dueReminders"`
+	Language        string   `json:"language"`                // system | zh | en
+	Stealth         bool     `json:"stealth"`                 // 隐身：只保留 warn 气泡
+	ClipRetainDays  int      `json:"clipRetainDays"`          // 剪贴板保留天数（0 = 不按时间清理）
+	PasteThenEnter  bool     `json:"pasteThenEnter"`          // 粘贴后回车（终端类目标默认关闭）
+	NewNoteKey      string   `json:"newNoteHotkey,omitempty"` // 全局新建笔记（空 = 不注册）
+	// 双击行为（同 Tauri doubleTapCaptureOnly：true = 只划词捕获，无选中时不开关面板）与捕获存入的分组（空 = 收件箱）
+	DoubleTapCaptureOnly bool     `json:"doubleTapCaptureOnly,omitempty"`
+	CaptureSection       string   `json:"captureSectionId,omitempty"`
+	ScreenshotKey        string   `json:"screenshotKey"`
+	AIEndpoint           string   `json:"aiEndpoint"`
+	AIModel              string   `json:"aiModel"`
+	Companion            []string `json:"companion"` // 伴随停靠的应用 bundle id
+	EdgeHide             bool     `json:"edgeHide"`
+	Currency             string   `json:"currency"`
+	DueReminders         bool     `json:"dueReminders"`
 	// 与 Tauri 一致的可选功能域（默认关闭）：订阅进「提醒」页第三个子视图，秘文进「内容」页
 	SubscriptionsEnabled bool `json:"subscriptionsEnabled"`
 	SecretEnabled        bool `json:"secretEnabled"`

@@ -94,16 +94,7 @@ func start() (*app, error) {
 		}
 	})
 
-	a.shortcut = st.Settings().PanelHotkey
-	if err := mygo.GlobalShortcut.Register(a.shortcut, a.togglePanel); err != nil {
-		diag.Push("面板快捷键 %s 注册失败: %v", a.shortcut, err)
-		a.shortcut = ""
-	}
-	if key := st.Settings().ScreenshotKey; key != "" {
-		if err := mygo.GlobalShortcut.Register(key, a.screenshot); err != nil {
-			diag.Push("截图快捷键 %s 注册失败: %v", key, err)
-		}
-	}
+	a.registerHotkeys()
 	a.setUpTray()
 	a.startBackground()
 	diag.Push("辅助功能授权=%v", macos.AXTrusted(false))

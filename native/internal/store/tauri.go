@@ -166,6 +166,9 @@ type tauriSettings struct {
 	TargetProfiles     []TargetProfile `json:"targetProfiles"`
 	DefaultProfileID   string          `json:"defaultTargetProfileId"`
 	PromptSnippets     []PromptSnippet `json:"promptSnippets"`
+	NewNoteHotkey      *string         `json:"newNoteHotkey"`
+	DoubleTapCapture   *bool           `json:"doubleTapCaptureOnly"`
+	CaptureSectionID   *string         `json:"captureSectionId"`
 }
 
 // TauriReport 是导入结果。
@@ -467,6 +470,15 @@ func applyTauriSettings(st Settings, t tauriSettings) Settings {
 	if t.HotkeyGapMs > 0 {
 		st.TriggerGapMs = t.HotkeyGapMs
 	}
+	if t.DoubleTapCapture != nil {
+		st.DoubleTapCaptureOnly = *t.DoubleTapCapture
+	}
+	if t.CaptureSectionID != nil {
+		st.CaptureSection = *t.CaptureSectionID
+	}
+	if t.NewNoteHotkey != nil {
+		st.NewNoteKey = TauriAccel(*t.NewNoteHotkey)
+	}
 	if len(t.TargetProfiles) > 0 { // 发送方案整组以 Tauri 为准
 		st.PromptGroups, st.TargetProfiles, st.DefaultProfileID = t.PromptGroups, t.TargetProfiles, t.DefaultProfileID
 	}
@@ -508,3 +520,19 @@ func applyTauriSettings(st Settings, t tauriSettings) Settings {
 
 // ErrTauriMissing：本机没有 Tauri 版数据。
 var ErrTauriMissing = errors.New("没有找到 Tauri 版数据（toskr-data.json）")
+
+// TauriAccel 把 Tauri 的 KeyboardEvent.code 写法（Cmd+Shift+KeyN、Alt+Digit1）转成原生加速键（Cmd+Shift+N）。
+func TauriAccel(s string) string {
+	parts := strings.Split(s, "+")
+	for i, p := range parts {
+		switch {
+		case strings.HasPrefix(p, "Key") && len(p) == 4:
+			parts[i] = p[3:]
+		case strings.HasPrefix(p, "Digit") && len(p) == 6:
+			parts[i] = p[5:]
+		case strings.HasPrefix(p, "Arrow"):
+			parts[i] = p[5:]
+		}
+	}
+	return strings.Join(parts, "+")
+}

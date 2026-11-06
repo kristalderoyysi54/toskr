@@ -112,13 +112,6 @@ func (a *app) settingsView(c *ui.Context) {
 			}
 		}
 	}
-	hotkey := func(v string) func() {
-		return func() {
-			ui.Row(c).Height(28).Padding(0, 10).Radius(10).Background(k.track).AlignItems(ui.Center).Children(func() {
-				text(c, keyLabel(v), 12, 17, 500, k.fg).Font(fontMono)
-			})
-		}
-	}
 	retain := tr("不按时间清理")
 	if a.setRetain > 0 {
 		retain = itoa(int(a.setRetain)) + tr(" 天")
@@ -267,10 +260,43 @@ func (a *app) settingsView(c *ui.Context) {
 				{title: tr("两击最大间隔"), hint: tr("两次按键间隔超过此值不算双击"), control: func() {
 					changed = sliderValue(c, k, &a.setGap, 150, 1000, 50, itoa(int(a.setGap))+"ms") || changed
 				}},
+				{title: tr("双击行为"), hint: tr("「只划词」时没有选中文字的双击不做任何事"), control: func() {
+					i := 0
+					if st.DoubleTapCaptureOnly {
+						i = 1
+					}
+					if segmented(c, k, &i, "划词或开关面板", "只划词") {
+						cur := a.store.Settings()
+						cur.DoubleTapCaptureOnly = i == 1
+						_ = a.store.SetSettings(cur)
+					}
+				}},
+				{title: tr("捕获存入"), hint: tr("划词捕获的内容进入这个分组"), control: func() {
+					name := tr("收件箱")
+					for _, sec := range a.noteSections() {
+						if sec.ID == st.CaptureSection {
+							name = sectionName(sec)
+						}
+					}
+					ui.PopoverMenuButton(c, name, func(m *ui.Menu) {
+						for _, sec := range a.noteSections() {
+							id := sec.ID
+							if id == store.SectionInbox {
+								id = ""
+							}
+							if m.Item(sectionName(sec)).Checked(id == st.CaptureSection).Chosen() {
+								cur := a.store.Settings()
+								cur.CaptureSection = id
+								_ = a.store.SetSettings(cur)
+							}
+						}
+					})
+				}},
 			}},
 			{tr("全局快捷键"), []setRow{
-				{title: tr("开关面板"), control: hotkey(a.shortcut)},
-				{title: tr("截图"), control: hotkey(st.ScreenshotKey)},
+				{title: tr("开关面板"), hint: tr("点击后按下新组合即可录制；Esc 取消，⌫ 清除"), control: func() { a.hotkeyField(c, k, hotkeySlots[0]) }},
+				{title: tr("截图"), control: func() { a.hotkeyField(c, k, hotkeySlots[1]) }},
+				{title: tr("新建笔记"), hint: tr("在任意应用里唤出面板并聚焦输入区"), control: func() { a.hotkeyField(c, k, hotkeySlots[2]) }},
 				{title: tr("本机翻译"), hint: a.localTranslateHint(), control: func() { a.localTranslateButton(c, s) }},
 			}},
 		}}},

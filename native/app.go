@@ -132,7 +132,8 @@ type app struct {
 	taskDue, taskEnd                       string // 展开态的到期 / 重复结束输入
 	taskCk                                 map[string]*string
 	taskSecRename, taskSecName             string
-	tauriImporting                         bool // 正在从 Tauri 版导入
+	recordingKey                           string // 设置里正在录制的全局快捷键（panel / shot / newnote）
+	tauriImporting                         bool   // 正在从 Tauri 版导入
 	// 设置页「本机翻译」状态
 	ltStatus                        string
 	ltPreparing, ltFailed, ltOpened bool
@@ -353,6 +354,10 @@ func (a *app) onTrigger() {
 		started := time.Now()
 		got, ok := core.Capture(a.sys, front)
 		if !ok {
+			if a.store.Settings().DoubleTapCaptureOnly { // 双击行为「只划词」：无选中不开关面板
+				diag.Push("捕获: 无选中内容，只划词模式不动作 (%dms)", time.Since(started).Milliseconds())
+				return
+			}
 			diag.Push("捕获: 无选中内容 → 开关面板 (%dms)", time.Since(started).Milliseconds())
 			a.panel.Update(a.togglePanel)
 			return
@@ -360,7 +365,7 @@ func (a *app) onTrigger() {
 		if a.captureSecret(got.Text, front.Name) {
 			return // 秘文信封：解密进秘文页，绝不进普通笔记
 		}
-		note, dup, err := a.store.Add(store.Note{Section: store.SectionInbox, Text: got.Text, HTML: got.HTML,
+		note, dup, err := a.store.Add(store.Note{Section: a.captureSection(), Text: got.Text, HTML: got.HTML,
 			SourceApp: front.Name, BundleID: front.BundleID})
 		diag.Push("捕获: %d 字符 来自 %s dup=%v %dms", len([]rune(got.Text)), front.BundleID, dup, time.Since(started).Milliseconds())
 		a.panel.Update(func() {
@@ -385,6 +390,15 @@ func (a *app) onTrigger() {
 			})
 		})
 	}()
+}
+
+// captureSection：划词捕获存入的分组（设置「捕获存入」，分组已删时回收件箱）。
+func (a *app) captureSection() string {
+	id := a.store.Settings().CaptureSection
+	if id != "" && slices.ContainsFunc(a.store.Sections(), func(s store.Section) bool { return s.ID == id }) {
+		return id
+	}
+	return store.SectionInbox
 }
 
 // ---- 笔记操作（主线程） ----
