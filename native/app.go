@@ -185,7 +185,9 @@ type app struct {
 	aiUI         aiUI           // 设置 → AI 的会话态（模型列表、请求中）
 	dueEdit      dueEditor      // 设置 → 到期快捷档的编辑态
 	swapIdx      map[string]int // swapView 各组上一次的序号（定进场方向）
-	locateWin    *mygo.Window   // 定位原会话的高亮框
+	multiStash   []string       // 双击发送前第一击塌掉的多选（同 Tauri lastMultiSelection）
+	multiStashAt time.Time
+	locateWin    *mygo.Window // 定位原会话的高亮框
 	locateGen    int
 
 	// 秘文

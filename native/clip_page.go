@@ -412,22 +412,10 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 		a.quickBadge(c, k, idx, 4)
 	})
 	if box.Clicked() && !(box.ClickModifiers()&ui.Shift != 0 && a.rangeSelect(n.ID)) {
-		a.anchorID = n.ID
-		if box.ClickModifiers()&ui.Cmd != 0 {
-			if a.chosen.Has(n.ID) {
-				a.chosen.Remove(n.ID)
-			} else {
-				a.chosen.Add(n.ID)
-			}
-		} else {
-			a.chosen.Clear()
-		}
-		if idx >= 0 {
-			a.selected, a.focusList = idx, true
-		}
+		a.cardClick(n.ID, idx, box.ClickModifiers())
 	}
 	if box.DoubleClicked() && idx >= 0 {
-		a.openDetail(n)
+		a.cardDoubleClick(n, idx, true)
 	}
 }
 

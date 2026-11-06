@@ -107,6 +107,6 @@ var en = map[string]string{
 	"已删除快捷档「%s」": "Deleted preset “%s”", "没有快捷档，菜单里只剩自定义日期时间。": "No presets; menus only offer a custom date and time.",
 	"添加档位": "Add preset", "恢复默认": "Restore defaults", "共 %d 档": "%d presets", "已恢复默认快捷档": "Default presets restored", "输入无效": "Invalid input",
 	"多久后": "In…", "今天": "Today", "明天": "Tomorrow", "下个周几": "Next weekday", "分钟": "min", "小时": "h",
-	"时间格式应为 时:分，如 9:30": "Use hour:minute, e.g. 9:30", "复制正文": "Copy text", "清除到期": "Clear due date",
+	"时间格式应为 时:分，如 9:30": "Use hour:minute, e.g. 9:30", "复制正文": "Copy text", "已添加到正在编辑的卡片": "Added to the card being edited", "清除到期": "Clear due date",
 	"本次将访问 %s 获取标题和图标，允许此地址访问内网。不会发送应用中的其他内容；授权不覆盖其他内网地址的重定向。": "Toskr will visit %s once to fetch its title and icon, allowing this local-network address. Nothing else from the app is sent, and redirects to other local-network addresses are not covered.",
 }

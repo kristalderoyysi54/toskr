@@ -576,10 +576,16 @@ func TestSelectionBarHintsAndKeys(t *testing.T) {
 	a, tt := testApp(t, "甲", "乙", "丙")
 	sys := &recSys{}
 	a.sys = sys
+	_ = tt.Click("甲") // 同 Tauri：单击即单选（选中柔光 + 多选提示），再点同一张取消
+	tt.Frame()
+	if a.chosen.Len() != 1 || !tt.HasText("取消勾选") {
+		t.Fatalf("单击单选 %v", tt.Texts())
+	}
+	tt.Advance(time.Second) // 隔开，免得两击连成双击（双击 = 发送）
 	_ = tt.Click("甲")
 	tt.Frame()
-	if !tt.HasText("勾选") || !tt.HasText("预览") {
-		t.Fatalf("焦点态提示 %v", tt.Texts())
+	if a.chosen.Len() != 0 || !tt.HasText("勾选") || !tt.HasText("预览") {
+		t.Fatalf("再点取消、回焦点态提示 %v", tt.Texts())
 	}
 	tt.Key(0, ui.KeyX)
 	tt.Frame()
@@ -602,5 +608,37 @@ func TestSelectionBarHintsAndKeys(t *testing.T) {
 	}
 	if got := sendText([]string{"a", "b"}); got != "1. a\n2. b" {
 		t.Fatalf("多条发送应为编号列表：%q", got)
+	}
+}
+
+// 双击卡片直发该卡（同 Tauri）；双击落在多选集合里整组发送（第一击塌掉的多选从留档找回）。
+func TestDoubleClickSends(t *testing.T) {
+	a, tt := testApp(t, "甲", "乙", "丙")
+	sys := &recSys{}
+	a.sys = sys
+	a.target = macos.FrontApp{PID: 42, Name: "Notes", BundleID: "com.apple.Notes"}
+	tt.Frame()
+	_ = tt.Click("乙")
+	_ = tt.Click("乙") // 连两击 = 双击
+	tt.Frame()
+	waitFor(t, func() bool { return len(sys.sent()) == 1 })
+	if sys.sent()[0] != "乙" {
+		t.Fatalf("%q", sys.sent())
+	}
+	tt.Advance(time.Second)
+	tt.Frame()
+	a.chosen.Clear()
+	for _, n := range a.notes {
+		if n.Text == "甲" || n.Text == "丙" {
+			a.chosen.Add(n.ID)
+		}
+	}
+	tt.Frame()
+	_ = tt.Click("丙")
+	_ = tt.Click("丙")
+	tt.Frame()
+	waitFor(t, func() bool { return len(sys.sent()) == 2 })
+	if got := sys.sent()[1]; !strings.Contains(got, "甲") || !strings.Contains(got, "丙") || strings.Contains(got, "乙") {
+		t.Fatalf("多选整组发送 %q", got)
 	}
 }

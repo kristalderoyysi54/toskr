@@ -573,30 +573,63 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 		}
 	})
 	if box.Clicked() && !(box.ClickModifiers()&ui.Shift != 0 && a.rangeSelect(n.ID)) {
-		a.anchorID = n.ID
-		mods := box.ClickModifiers()
-		if mods&ui.Cmd != 0 {
-			if a.chosen.Len() == 0 { // 第一次 ⌘点击：把当前选中项也纳入多选
-				if cur, ok := a.current(); ok && cur.ID != n.ID && a.focusList {
-					a.chosen.Add(cur.ID)
-				}
-			}
-			if a.chosen.Has(n.ID) {
-				a.chosen.Remove(n.ID)
-			} else {
-				a.chosen.Add(n.ID)
-			}
-		} else {
-			a.chosen.Clear()
-		}
-		if idx >= 0 {
-			a.selected, a.focusList = idx, true
-		}
+		a.cardClick(n.ID, idx, box.ClickModifiers())
 	}
 	if box.DoubleClicked() && idx >= 0 {
-		a.selected = idx
-		a.openDetail(n)
+		a.cardDoubleClick(n, idx, false)
 	}
+}
+
+// cardClick 同 Tauri NoteCard onClick：⌘ 累加 / 移出多选；单击唯一已选的那张取消；其余单选（卡面出选中柔光）。
+// 双击发送的第一击会把多选塌成单选，先留档给 cardDoubleClick 找回整组。
+func (a *app) cardClick(id string, idx int, mods ui.Modifiers) {
+	a.anchorID = id
+	if a.chosen.Len() >= 2 && a.chosen.Has(id) {
+		a.multiStash, a.multiStashAt = slices.Collect(a.chosen.All()), time.Now()
+	}
+	switch {
+	case mods&ui.Cmd != 0:
+		if a.chosen.Has(id) {
+			a.chosen.Remove(id)
+		} else {
+			a.chosen.Add(id)
+		}
+	case a.chosen.Len() == 1 && a.chosen.Has(id):
+		a.chosen.Clear()
+	default:
+		a.chosen.Clear()
+		a.chosen.Add(id)
+	}
+	if idx >= 0 {
+		a.selected, a.focusList = idx, true
+	}
+}
+
+// cardDoubleClick 同 Tauri：双击直发该卡；双击落在刚才的多选集合里则整组发送。
+// 剪贴卡优先添加进打开的编辑器（详情窗编辑中时追加到正文末尾）。
+func (a *app) cardDoubleClick(n store.Note, idx int, clip bool) {
+	a.selected = idx
+	if clip && a.detailWin != nil && a.detail.edit && n.Kind != "image" {
+		a.detailText = strings.TrimRight(a.detailText, "\n") + "\n" + n.Text
+		a.detailWin.Invalidate()
+		a.showHUD("ok", tr("已添加到正在编辑的卡片"))
+		return
+	}
+	stash := a.multiStash
+	a.multiStash = nil
+	if len(stash) >= 2 && time.Since(a.multiStashAt) < 600*time.Millisecond && slices.Contains(stash, n.ID) {
+		var group []store.Note
+		for _, x := range a.notes {
+			if slices.Contains(stash, x.ID) {
+				group = append(group, x)
+			}
+		}
+		a.chosen.Clear()
+		a.send(group)
+		return
+	}
+	a.chosen.Clear()
+	a.send([]store.Note{n})
 }
 
 // elevated 按 on 在 150ms 内淡入 / 淡出 elevation-2（贴身影 + 环境影 + 顶缘高光）。
