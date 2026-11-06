@@ -144,7 +144,10 @@ type app struct {
 	quitting                               bool        // 正在退出：窗口关闭不再改成隐藏
 	permAX                                 bool        // 辅助功能已授权（每 3 秒复查）
 	tapReceiving                           atomic.Bool // 键盘监听收到过真实按键
-	tapStarted                             time.Time   // 键盘监听建立时刻（判断「建了却收不到」）
+	tapStarted                             time.Time   // 键盘监听建立时刻
+	permNoAuth, permStuck                  int         // 权限守护：输入监控查询连续为否 / 监听连续无事件的 tick 数
+	permKeySeen                            bool        // 面板自己看到过键盘活动（判「被拦截」的铁证之一）
+	permDraft                              string      // 上一帧的输入区文字（变了即有人在打字）
 	tauriImporting                         bool        // 正在从 Tauri 版导入
 	// 设置页「本机翻译」状态
 	ltStatus                        string

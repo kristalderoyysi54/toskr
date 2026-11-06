@@ -63,7 +63,7 @@ func (a *app) platinumPanel(c *ui.Context, k tokens) {
 			ui.Column(c).Grow(1).Margin(-1, 6, 0, 6).Padding(7, 7, 7, 7).Background(ptG300).Border(1, ptBlack).
 				InsetShadow(1, 0, 0, 0, ptWhite).InsetShadow(-1, -1, 0, 0, ptG600).Children(func() {
 				a.ptTargetBar(c, k)
-				if st := a.permState(a.now()); st == "ax" || st == "stuck" {
+				if st := a.permState(); st == "ax" || st == "stuck" {
 					ui.Column(c).Margin(6, -12, -8, -12).Children(func() { a.permissionBanner(c, k) })
 				}
 				if a.searchOpen {

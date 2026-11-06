@@ -35,6 +35,7 @@ func (a *app) panelView(c *ui.Context) {
 	a.drainUpdates()
 	k := tok(c)
 	a.panelKeys(c)
+	a.notePanelKeys(c)
 	shell := ui.Column(c).Fill()
 	p := a.panelPresence(c, shell)
 	// 底色是内容自绘的半透明膜（Tauri 同样画在 webview 里），随内容一起淡入淡出；系统材质本身不动
