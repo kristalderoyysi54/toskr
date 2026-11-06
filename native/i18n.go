@@ -122,3 +122,26 @@ func init() { // 横栏布局（hbar.go）
 		}
 	}
 }
+
+func init() { // 模板来源 / 试用预览 / AI 模板助手（templates_ai.go）
+	for k, v := range map[string]string{
+		"内置": "Built-in", "内置·已修改": "Built-in · edited", "自建": "Custom", "AI 创建": "Create with AI", "AI 调整": "Adjust with AI",
+		"插入 {内容}": "Insert {内容}", "未插入 {内容} 时，选中内容会追加在模板末尾。": "Without {内容}, the selection is appended to the end.",
+		"选中内容会替换 {内容}。": "The selection replaces {内容}.", "试用预览": "Try preview",
+		"仅在本地组合文本，不调用 AI 或发送。留空时使用下面的示例。": "Combines text locally only — no AI, nothing is sent. Leave empty to use the sample below.",
+		"示例材料": "Sample material", "组合全文": "Combined text", "描述你的想法": "Describe your idea", "继续调整这份建议": "Keep refining this suggestion",
+		"请先在“更多功能 → AI 智能”中配置并启用，或直接手动编辑。": "Set up and enable AI in More → AI first, or edit manually.",
+		"使用当前 AI · ": "Using current AI · ", "试试：": "Try:", "排查问题": "Debug report", "整理周报": "Weekly report", "润色消息": "Polish message",
+		"生成模板建议": "Generate template", "正在生成…": "Generating…", "生成调整建议": "Generate revision", "取消生成": "Cancel",
+		"仅提交想法与当前模板；示例材料留在本地。": "Only your idea and the current template are sent; sample material stays local.",
+		"建议已生成，采用到编辑区后可继续修改和预览。": "Suggestion ready — apply it to keep editing and previewing.",
+		"采用到编辑区": "Apply to editor", "放弃建议": "Discard",
+		"请填写想法，最多 2000 个字符": "Enter an idea, up to 2000 characters", "AI 返回的模板不是合法 JSON，请重试": "AI did not return valid JSON — try again",
+		"AI 返回的模板为空或超长，请重试": "AI template is empty or too long — try again", "AI 模板包含重复的 {内容}，请重新生成": "AI template has {内容} more than once — regenerate",
+		"AI 返回的模板内容超过 12000 个字符，请重试": "AI template exceeds 12000 characters — try again",
+	} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
+}

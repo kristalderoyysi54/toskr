@@ -165,6 +165,7 @@ type app struct {
 	pendingTmpl, enterTmpl                     string       // 挂起中的发送所带的提示词模板
 	snipAdd                                    bool         // 设置里正在新增模板
 	snipEditID, snipLabel, snipText, snipGroup string
+	snip                                       snipUI // 模板编辑区的试用预览 / AI 助手（templates_ai.go）
 	// 任务行内编辑与任务分组改名
 	taskOpen, taskTitle, taskNote, ckDraft string
 	taskTitleFocus                         bool // 展开任务后首帧聚焦标题

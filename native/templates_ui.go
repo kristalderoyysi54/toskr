@@ -76,6 +76,8 @@ func (a *app) templateMenu(m *ui.Menu, label string, notes func() []store.Note) 
 }
 
 func (a *app) startSnippetAdd() {
+	a.snipCancelAI()
+	a.snip = snipUI{}
 	a.snipAdd, a.snipEditID = true, ""
 	a.snipLabel, a.snipText, a.snipGroup = "", "", store.GeneralPromptGroup
 }
@@ -99,6 +101,16 @@ func (a *app) templateSections(c *ui.Context, k tokens, s settingsTokens) []setS
 	form := func(key string, commit func()) func() {
 		return func() {
 			ui.Column(c).Gap(8).Padding(8, 0, 4, 0).Key(key).Children(func() {
+				aiLabel := "AI 创建"
+				if a.snipEditID != "" {
+					aiLabel = "AI 调整"
+				}
+				if button(c, s, aiLabel) {
+					a.snip.aiOpen = !a.snip.aiOpen
+				}
+				if a.snip.aiOpen {
+					a.snipAssistant(c, k, s)
+				}
 				ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
 					text(c, tr("名称"), 12, 17, 400, k.muted).Width(56)
 					textField(c, k, s, &a.snipLabel, 240, tr("如：翻译成英文"), false)
@@ -107,7 +119,17 @@ func (a *app) templateSections(c *ui.Context, k tokens, s settingsTokens) []setS
 					text(c, tr("内容"), 12, 17, 400, k.muted).Width(56)
 					ui.Column(c).Grow(1).Basis(0).Children(func() { textBox(c, k, s, &a.snipText, 3, 10) })
 				})
-				text(c, tr("用 {内容} 标出卡片内容插入的位置；不写则把模板放在内容前面"), 11, 16, 400, k.muted).Wrap()
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+					hint := tr("未插入 {内容} 时，选中内容会追加在模板末尾。")
+					if strings.Contains(a.snipText, "{内容}") {
+						hint = tr("选中内容会替换 {内容}。")
+					}
+					text(c, hint, 11, 16, 400, k.muted).Wrap().Grow(1).Basis(0)
+					if !strings.Contains(a.snipText, "{内容}") && button(c, s, "插入 {内容}") { // 同 Tauri insertContent（原生插在末尾）
+						a.snipText = strings.TrimRight(a.snipText, "\n") + "\n\n{内容}"
+					}
+				})
+				a.snipPreview(c, k, s)
 				ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
 					text(c, tr("提示词组"), 12, 17, 400, k.muted).Width(56)
 					ui.PopoverMenuButton(c, groupName(a.snipGroup), func(m *ui.Menu) {
@@ -120,17 +142,21 @@ func (a *app) templateSections(c *ui.Context, k tokens, s settingsTokens) []setS
 					ui.Spacer(c)
 					if button(c, s, "取消") {
 						a.snipAdd, a.snipEditID = false, ""
+						a.snipCancelAI()
+						a.snip = snipUI{}
 					}
 					if button(c, s, "保存") && strings.TrimSpace(a.snipLabel) != "" && strings.TrimSpace(a.snipText) != "" {
 						commit()
 						a.snipAdd, a.snipEditID = false, ""
+						a.snipCancelAI()
+						a.snip = snipUI{}
 					}
 				})
 			})
 		}
 	}
 	row := func(sn store.PromptSnippet) setRow {
-		r := setRow{title: sn.Label, hint: preview(sn.Text, 60) + " · " + groupName(sn.GroupID), control: func() {
+		r := setRow{title: sn.Label, hint: tr(store.SnippetSource(sn)) + " · " + preview(sn.Text, 60) + " · " + groupName(sn.GroupID), control: func() {
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 				star := tr("设为常用")
 				if sn.IsCommon {
@@ -147,6 +173,8 @@ func (a *app) templateSections(c *ui.Context, k tokens, s settingsTokens) []setS
 					})
 				}
 				if button(c, s, "编辑") {
+					a.snipCancelAI()
+					a.snip = snipUI{}
 					a.snipEditID, a.snipAdd = sn.ID, false
 					a.snipLabel, a.snipText, a.snipGroup = sn.Label, sn.Text, sn.GroupID
 				}

@@ -29,7 +29,7 @@ func TestPromptTemplatesAddSendAndDelete(t *testing.T) {
 	}
 	st := ui.NewTester(a.settingsView, 1040, 720)
 	st.Frame()
-	if !st.HasText("暂无常用模板，可在“其他模板”中选择“设为常用”。") || !st.HasText("用 {内容} 标出卡片内容插入的位置；不写则把模板放在内容前面") {
+	if !st.HasText("暂无常用模板，可在“其他模板”中选择“设为常用”。") || !st.HasText("未插入 {内容} 时，选中内容会追加在模板末尾。") {
 		t.Fatalf("模板页 %v", st.Texts())
 	}
 	a.snipLabel, a.snipText = "翻译", "翻译成英文：{内容}"
