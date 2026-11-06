@@ -139,6 +139,7 @@ type app struct {
 	lastClipAt                             time.Time
 	trayBuilt                              string // 托盘菜单上次重建时的状态键
 	forceCheck                             bool   // 本次发送强制先过检查条（检查后发送…）
+	quitting                               bool   // 正在退出：窗口关闭不再改成隐藏
 	tauriImporting                         bool   // 正在从 Tauri 版导入
 	// 设置页「本机翻译」状态
 	ltStatus                        string

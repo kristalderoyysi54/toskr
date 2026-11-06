@@ -72,7 +72,14 @@ func start() (*app, error) {
 	})
 	a.panel.SetActiveAppearance(true)
 	a.panel.SetAlwaysOnTop(!st.Settings().PanelNotOnTop)
-	a.panel.OnClose(func(e *mygo.CloseEvent) { e.PreventDefault(); a.hidePanel() })
+	// 退出时 mygo 先逐个关窗，任何一个 PreventDefault 都会取消退出；只在非退出时把「关闭」改成隐藏
+	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { a.quitting = true })
+	a.panel.OnClose(func(e *mygo.CloseEvent) {
+		if !a.quitting {
+			e.PreventDefault()
+			a.hidePanel()
+		}
+	})
 	a.panel.OnResize(a.rememberPanelFrame)
 	a.panel.OnMove(a.rememberPanelFrame)
 	a.panel.OnBlur(func() {

@@ -39,8 +39,10 @@ func (a *app) openSettings() {
 		})
 		a.settingsWin.OnFocus(func() { a.refreshLocalTranslate(false) }) // 回到窗口时重查（可能刚在系统设置里下完语言包）
 		a.settingsWin.OnClose(func(e *mygo.CloseEvent) {
-			e.PreventDefault()
-			a.settingsWin.Hide()
+			if !a.quitting { // 退出时放行，否则会取消整个退出
+				e.PreventDefault()
+				a.settingsWin.Hide()
+			}
 		})
 	}
 	a.refreshLocalTranslate(false)
