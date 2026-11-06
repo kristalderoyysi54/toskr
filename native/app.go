@@ -785,7 +785,13 @@ func (a *app) finishDeliver(target macos.FrontApp, ids, texts []string, png []by
 	a.showHUD("sent", fmt.Sprintf(tr("已发送 %d 条到 %s"), len(ids), target.Name))
 }
 
-func (a *app) sendSelected() { a.send(a.chosenNotes()) }
+func (a *app) sendSelected() {
+	if a.editorInsertLikely() { // 剪贴页 + 详情窗开着：内容进卡片而非外发（同 Tauri）
+		a.addToOpenCard(a.chosenNotes())
+		return
+	}
+	a.send(a.chosenNotes())
+}
 
 // outputMode：本次覆盖优先，否则用发送方案的输出格式。
 func (a *app) outputMode(p store.TargetProfile) string {

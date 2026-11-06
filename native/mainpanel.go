@@ -993,9 +993,14 @@ func (a *app) selectionBar(c *ui.Context, k tokens) {
 			ctl := tw(100, easeStandard)
 			fadeColor(send, "bg", bg, ctl).Shadow(0, 1, 2, 0, send.AnimateColor("sh", sh, ctl))
 			send.AnimatePose(ui.Pose{Y: pressY(send.Pressed())}, ctl)
+			label := tr("发送")
+			if a.editorInsertLikely() { // 目的地如实：编辑器开着时内容进卡片而非外发
+				label = tr("添加到卡片")
+				send.Tooltip(tr("添加到打开的卡片编辑器"))
+			}
 			send.Children(func() {
 				licon(c, "send", 12, s.btnFg)
-				text(c, tr("发送"), 11, 16, 500, s.btnFg)
+				text(c, label, 11, 16, 500, s.btnFg)
 				text(c, "⌘⏎", 9, 12, 400, s.btnFg).Opacity(0.7)
 			})
 			if send.Clicked() {
