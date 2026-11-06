@@ -708,6 +708,15 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 		right.Children(func() { licon(c, "chevron-down", 12, fg) })
 		right.Menu(func(m *ui.Menu) {
 			r, _ := a.resolution()
+			// 发送方式（同 Tauri TextPreviewView）：仅本次换格式；代码卡与秘文保持原样，不提供去 Markdown
+			m.Item(tr("发送方式")).Disabled(true)
+			if m.Item(tr("原文发送")).Disabled(a.target.PID == 0).Chosen() {
+				a.sendDetailMode(n, "plain")
+			}
+			if m.Item(tr("去 Markdown 后发送")).Disabled(a.target.PID == 0 || n.CodeLang != "" || n.Kind == "secret").Chosen() {
+				a.sendDetailMode(n, "strip-markdown")
+			}
+			m.Separator()
 			on := r.Profile.EnterPolicy != "never"
 			if m.Item(tr("粘贴后回车")).Checked(on).Disabled(a.target.PID == 0).Chosen() { // 本次覆盖当前目标的方案规则
 				a.setRule(func(o *store.RuleOverrides) { o.EnterPolicy = map[bool]string{true: "never", false: "allow"}[on] })
@@ -718,6 +727,15 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 			}
 		})
 	})
+}
+
+// sendDetailMode：详情窗「发送方式」——本次覆盖输出格式后照常发送（挂起时保留到确认 / 取消）。
+func (a *app) sendDetailMode(n store.Note, mode string) {
+	a.sendMode = mode
+	a.sendDetail(n)
+	if len(a.pending) == 0 && len(a.enterAsk) == 0 {
+		a.sendMode = ""
+	}
 }
 
 func (a *app) sendDetail(n store.Note) {

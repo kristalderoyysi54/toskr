@@ -1009,6 +1009,8 @@ func (a *app) selectionBar(c *ui.Context, k tokens) {
 					a.exportNotes(a.chosenNotes())
 				}
 				m.Separator()
+				a.outputModeItems(m, a.chosenNotes)
+				m.Separator()
 				a.templateMenu(m, tr("用模板发送 · 常用"), a.chosenNotes)
 			})
 		})

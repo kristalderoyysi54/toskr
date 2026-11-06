@@ -80,6 +80,7 @@ type app struct {
 	pending                             []store.Note   // 预检命中、等待确认的发送
 	pf                                  preflightState // 发送预检：逐项处理状态
 	sendPNG                             []byte         // 本次发送用的图片副本（图片隐私检查遮挡后）
+	sendMode                            string         // 本次发送的输出格式覆盖（选择条 / 详情窗「输出格式」，发完或取消即清）
 	lp                                  longPress      // 浮钮长按（收进笔记选分类）
 	clipPick                            string         // 长按弹出分组选择的剪贴卡
 	clipPickAt                          ui.Rect        // 弹出浮层挂靠的浮钮位置
@@ -687,6 +688,8 @@ func (a *app) deliver(notes []store.Note, enter bool, tmpl string) {
 	r, _ := a.resolution()
 	redactions := a.lastRedactions
 	a.lastRedactions = 0
+	mode := a.outputMode(r.Profile)
+	a.sendMode = ""
 	override := a.sendPNG
 	a.sendPNG = nil
 	var texts []string
@@ -705,7 +708,7 @@ func (a *app) deliver(notes []store.Note, enter bool, tmpl string) {
 	}
 	payload := ""
 	if len(texts) > 0 {
-		payload = composePayload(texts, tmpl, r.Profile.OutputMode())
+		payload = composePayload(texts, tmpl, mode)
 	}
 	if !a.pinned && !r.Profile.KeepPanel {
 		a.hidePanelNow()
@@ -713,7 +716,7 @@ func (a *app) deliver(notes []store.Note, enter bool, tmpl string) {
 	profile := profileName(r.Profile)
 	go func() {
 		check, err := core.DeliverWith(a.sys, target, core.Payload{Text: payload, PNG: png}, core.Options{Enter: enter, StartedMs: a.targetStarted})
-		diag.Push("发送: %d 条 → %s 方案=%s 格式=%s enter=%v check=%s err=%v", len(notes), target.BundleID, r.Profile.ID, r.Profile.OutputMode(), enter, check, err)
+		diag.Push("发送: %d 条 → %s 方案=%s 格式=%s enter=%v check=%s err=%v", len(notes), target.BundleID, r.Profile.ID, mode, enter, check, err)
 		a.panel.Update(func() { a.finishDeliver(target, ids, texts, png, redactions, profile, check, err) })
 	}()
 }
@@ -748,6 +751,43 @@ func (a *app) finishDeliver(target macos.FrontApp, ids, texts []string, png []by
 }
 
 func (a *app) sendSelected() { a.send(a.chosenNotes()) }
+
+// outputMode：本次覆盖优先，否则用发送方案的输出格式。
+func (a *app) outputMode(p store.TargetProfile) string {
+	if a.sendMode != "" {
+		return a.sendMode
+	}
+	return p.OutputMode()
+}
+
+// sendWithMode：仅本次换输出格式发送（同 Tauri sendCheckedToChat(undefined, {format, markdownMode})），不改卡片与方案。
+func (a *app) sendWithMode(notes []store.Note, mode string) {
+	a.sendMode = mode
+	a.send(notes)
+	if len(a.pending) == 0 && len(a.enterAsk) == 0 {
+		a.sendMode = "" // 已直接投递（deliver 同步读走了格式）或没发出去；挂起中的发送保留到确认 / 取消
+	}
+}
+
+// outputModeItems：「输出格式」三项（✓ 标当前生效的格式）。
+func (a *app) outputModeItems(m *ui.Menu, notes func() []store.Note) {
+	r, _ := a.resolution()
+	cur := a.outputMode(r.Profile)
+	m.Item(tr("输出格式")).Disabled(true)
+	for _, o := range []struct{ mode, label, tip string }{
+		{"plain", "原文（保留 Markdown）", ""},
+		{"strip-markdown", "去 Markdown 后发送", "去除标题、粗体、链接括号等；仅影响本次发送，不修改卡片"},
+		{"code", "代码块 ```", "包裹为 Markdown 代码块，单条会带上检测到的语言"},
+	} {
+		label := tr(o.label)
+		if o.mode == cur {
+			label += " ✓"
+		}
+		if m.Item(label).Disabled(a.target.PID == 0).Chosen() {
+			a.sendWithMode(notes(), o.mode)
+		}
+	}
+}
 
 // sendQueue 发送当前分组全部未完成项（按队列从下到上，即最早的在前）。
 func (a *app) sendQueue() {

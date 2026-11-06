@@ -148,6 +148,12 @@ func (a *app) clearPending() {
 	a.pending, a.pendingTmpl, a.pf = nil, "", preflightState{}
 }
 
+// cancelPending：用户取消预检，本次的输出格式覆盖一并作废。
+func (a *app) cancelPending() {
+	a.clearPending()
+	a.sendMode = ""
+}
+
 // pfCombined：文字与图片两路检查都放行才能发；任一路要求不回车即不回车。
 func (a *app) pfCombined(policy string) (pfEval, pfEval) {
 	return a.pfEvaluate(policy), a.pfImageEval(policy)
@@ -237,7 +243,7 @@ func (a *app) preflightBar(c *ui.Context) {
 			}
 		})
 		if len(texts) > 0 { // 将要发送的内容（已套模板与输出格式，已替换的显示占位符）
-			ui.Text(c, clipRunes(composePayload(texts, a.pendingTmpl, r.Profile.OutputMode()), 400)).FontSize(11).Font(fontMono).Wrap().MaxLines(8).
+			ui.Text(c, clipRunes(composePayload(texts, a.pendingTmpl, a.outputMode(r.Profile)), 400)).FontSize(11).Font(fontMono).Wrap().MaxLines(8).
 				Padding(6, 8).Radius(8).Background(t.Background.Alpha(0.6))
 		}
 		if len(p.items) > 0 {
@@ -281,7 +287,7 @@ func (a *app) preflightBar(c *ui.Context) {
 				ui.Text(c, fmt.Sprintf(tr("%d 项处理完才能发送"), both.unresolved)).FontSize(11).TextColor(t.TextMuted)
 			}
 			if ui.Button(c, tr("取消")).Clicked() {
-				a.clearPending()
+				a.cancelPending()
 			}
 		})
 	})
