@@ -4,7 +4,11 @@ import (
 	"testing"
 	"time"
 
+	"bytes"
 	"github.com/toskr/native/internal/macos"
+	"golang.org/x/image/tiff"
+	"image"
+	"image/png"
 )
 
 // fake 模拟剪贴板、前台应用与按键效果。
@@ -172,5 +176,36 @@ func TestClipWatcherSkipsOwnTransientExcluded(t *testing.T) {
 	f.Write([]macos.Item{{macos.TypeString: []byte("机密")}}, false)
 	if _, ok := w.Tick(); ok {
 		t.Fatal("排除名单应用跳过")
+	}
+}
+
+func TestClipWatcherLinksAndImages(t *testing.T) {
+	f := &fake{items: original(), count: 5, front: macos.FrontApp{PID: 9, BundleID: "com.app"}}
+	w := &ClipWatcher{Sys: f}
+	w.Tick()
+	f.Write([]macos.Item{{macos.TypeString: []byte("  https://github.com/egoist/mygo  ")}}, false)
+	if ev, ok := w.Tick(); !ok || !ev.Link {
+		t.Fatalf("单个链接应识别为 link %+v", ev)
+	}
+	f.Write([]macos.Item{{macos.TypeString: []byte("见 https://a.b 文档")}}, false)
+	if ev, _ := w.Tick(); ev.Link {
+		t.Fatal("夹在句子里的链接不算链接卡")
+	}
+	img := image.NewRGBA(image.Rect(0, 0, 3, 2))
+	var tb, pb bytes.Buffer
+	_ = tiff.Encode(&tb, img, nil)
+	_ = png.Encode(&pb, img)
+	f.Write([]macos.Item{{TypeTIFF: tb.Bytes()}}, false)
+	ev, ok := w.Tick()
+	if !ok || ev.W != 3 || ev.H != 2 || !bytes.HasPrefix(ev.PNG, []byte("\x89PNG")) {
+		t.Fatalf("TIFF 应转 PNG %v %d×%d", ok, ev.W, ev.H)
+	}
+	f.Write([]macos.Item{{macos.TypePNG: pb.Bytes(), TypeTIFF: tb.Bytes()}}, false)
+	if ev, ok := w.Tick(); !ok || !bytes.Equal(ev.PNG, pb.Bytes()) {
+		t.Fatal("有 PNG 时原样使用")
+	}
+	f.Write([]macos.Item{{TypeTIFF: []byte("坏数据")}}, false)
+	if _, ok := w.Tick(); ok {
+		t.Fatal("解不开的图片跳过")
 	}
 }

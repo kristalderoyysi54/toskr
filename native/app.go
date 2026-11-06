@@ -702,11 +702,34 @@ func (a *app) watchClipboard() {
 			if !ok || ev.Source.PID == a.sys.SelfPID() {
 				continue
 			}
-			_, _, _ = a.store.Add(store.Note{Section: store.SectionClipboard, Text: ev.Text,
-				SourceApp: ev.Source.Name, BundleID: ev.Source.BundleID})
-			diag.Push("剪贴板: 收文本 %d 字符 来自 %s", len([]rune(ev.Text)), ev.Source.Name)
+			if _, err := a.addClip(ev); err != nil {
+				diag.Push("剪贴板: 入库失败 %v", err)
+			}
 		}
 	}()
+}
+
+// addClip：外部复制入剪贴页——文字、整段链接（link 卡）或图片（存媒体库）。
+func (a *app) addClip(ev core.ClipEvent) (store.Note, error) {
+	n := store.Note{Section: store.SectionClipboard, Text: ev.Text, SourceApp: ev.Source.Name, BundleID: ev.Source.BundleID}
+	switch {
+	case ev.PNG != nil:
+		name, err := a.store.SaveImage(ev.PNG)
+		if err != nil {
+			return n, err
+		}
+		n.Kind, n.ImageFile, n.ImageW, n.ImageH = "image", name, ev.W, ev.H
+		n.Text = fmt.Sprintf(tr("图片 %d×%d"), ev.W, ev.H)
+		diag.Push("剪贴板: 收图片 %d×%d 来自 %s", ev.W, ev.H, ev.Source.Name)
+	case ev.Link:
+		n.Kind, n.URL = "link", strings.TrimSpace(ev.Text)
+		n.Text = n.URL
+		diag.Push("剪贴板: 收链接 来自 %s", ev.Source.Name)
+	default:
+		diag.Push("剪贴板: 收文本 %d 字符 来自 %s", len([]rune(ev.Text)), ev.Source.Name)
+	}
+	added, _, err := a.store.Add(n)
+	return added, err
 }
 
 // ---- 键盘监听 ----
