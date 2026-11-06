@@ -47,6 +47,13 @@ func (a *app) panelView(c *ui.Context) {
 		tint = float32(a.store.Settings().PanelAlpha() / 0.62)
 	}
 	c.Root().Background(k.window.Alpha(min(p, 1) * tint)) // Alpha 是相乘
+	if a.hbar() {
+		a.barView(c, k, shell)
+		if a.menuOpen {
+			a.panelMenu(c, k)
+		}
+		return
+	}
 	if k.pt {
 		shell.Children(func() {
 			a.platinumPanel(c, k)
@@ -106,7 +113,14 @@ func (a *app) panelPresence(c *ui.Context, shell ui.Element) float32 {
 	if c.Preferences().ReduceMotion {
 		dx = 0
 	}
-	shell.Opacity(min(max(p, 0), 1)).Translate(dx, 0)
+	switch barEdge(a.store.Settings()) { // 横栏从所在屏缘（底 / 顶）滑入
+	case "bottom":
+		shell.Opacity(min(max(p, 0), 1)).Translate(0, dx)
+	case "top":
+		shell.Opacity(min(max(p, 0), 1)).Translate(0, -dx)
+	default:
+		shell.Opacity(min(max(p, 0), 1)).Translate(dx, 0)
+	}
 	return max(p, 0)
 }
 
@@ -287,11 +301,15 @@ func (a *app) panelMenu(c *ui.Context, k tokens) {
 		if a.placementOpen {
 			item("arrow-left", tr("返回面板选项"), false, false, "", func() { a.placementOpen = false })
 			sep()
-			place := tr("屏幕右侧")
 			side := tr("右侧")
 			if st.SidebarEdge == "left" {
 				side = tr("左侧")
 			}
+			edgeLabel := map[string]string{"top": "屏幕顶部", "bottom": "屏幕底部"}[st.SidebarEdge]
+			if edgeLabel == "" {
+				edgeLabel = "屏幕右侧"
+			}
+			place := tr(edgeLabel)
 			if !st.CompanionOff && len(st.Companion) > 0 {
 				place = tr("跟随应用 · ") + side
 			} else if st.FreeMove {
@@ -302,7 +320,7 @@ func (a *app) panelMenu(c *ui.Context, k tokens) {
 				st.CompanionOff = !st.CompanionOff
 				_ = a.store.SetSettings(st)
 			})
-			if !st.CompanionOff {
+			if !st.CompanionOff { // 同 Tauri PanelOptionsMenu：跟随应用时给「跟随位置」，关掉才给「屏幕位置」
 				label(tr("跟随位置"))
 				for _, e := range [][2]string{{"left", "应用左侧"}, {"right", "应用右侧"}} {
 					on := (st.SidebarEdge == "left") == (e[0] == "left")
@@ -313,19 +331,30 @@ func (a *app) panelMenu(c *ui.Context, k tokens) {
 						a.repositionPanel()
 					})
 				}
+				return
 			}
 			label(tr("屏幕位置"))
 			item("move", tr("自由移动"), st.FreeMove, true, "", func() {
+				wasBar := barEdge(st) != ""
 				st.FreeMove = true
 				_ = a.store.SetSettings(st)
 				closeMenu()
+				if wasBar { // 横栏 → 自由移动：回到竖栏尺寸
+					a.repositionPanel()
+				}
 			})
-			item("", tr("屏幕右侧"), !st.FreeMove, true, "", func() {
-				st.FreeMove = false
-				_ = a.store.SetSettings(st)
-				closeMenu()
-				a.repositionPanel()
-			})
+			cur := barEdge(st)
+			if cur == "" {
+				cur = "right"
+			}
+			for _, e := range [][2]string{{"right", "屏幕右侧"}, {"bottom", "屏幕底部"}} {
+				item("", tr(e[1]), !st.FreeMove && cur == e[0], true, "", func() {
+					st.FreeMove, st.SidebarEdge = false, e[0]
+					_ = a.store.SetSettings(st)
+					closeMenu()
+					a.repositionPanel()
+				})
+			}
 			return
 		}
 		done := 0

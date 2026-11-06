@@ -19,6 +19,24 @@ import (
 
 func (a *app) secretsPage(c *ui.Context, k tokens) {
 	st := a.store.Settings()
+	if a.hbar() { // 横栏（同 Tauri SecretPage horizontal）：输入区收作左列，卡片改横排瓷砖串
+		ui.Row(c).Grow(1).Basis(0).AlignItems(ui.Stretch).Children(func() {
+			ui.Scroll(c).Width(320).Scrollbars(false).Children(func() { a.secretComposer(c, k, st) })
+			empty := tr("还没有秘文——选中对方发来的密文内容，连按两次 ⇧ Shift 即可解密到这里")
+			if a.query != "" {
+				empty = tr("没有匹配的秘文")
+			}
+			a.strip(c, k, "strip-secret", &a.bar.secret, len(a.secrets), -1, nil, "", empty, func(i int, h float32) {
+				ui.Scroll(c).Size(h*16/17, h).Scrollbars(false).Key("sectile-" + a.secrets[i].ID).Children(func() {
+					a.secretCard(c, k, st, a.secrets[i])
+				})
+			})
+		})
+		if len(a.revealed) > 0 {
+			c.AnimationFrame()
+		}
+		return
+	}
 	a.secretComposer(c, k, st)
 	ui.Scroll(c).Grow(1).Scrollbars(false).Children(func() {
 		ui.Column(c).Padding(10, 12).Gap(8).Children(func() {

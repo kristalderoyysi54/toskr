@@ -40,6 +40,9 @@ func (a *app) panelBounds() mygo.Rectangle {
 	}
 	h = max(h, min(panelMinH, fullH))
 	def := mygo.Rectangle{X: wa.X + wa.Width - w - panelMargin, Y: wa.Y + panelMargin + top, Width: w, Height: h}
+	if e := barEdge(st); e != "" { // 屏幕顶部 / 底部横栏（同 Tauri sidebar_rect 2|3）
+		def = barRect(wa, e)
+	}
 	a.docked = false
 	if st.FreeMove && (st.PanelX != 0 || st.PanelY != 0) {
 		r := mygo.Rectangle{X: st.PanelX, Y: st.PanelY, Width: w, Height: h}
@@ -95,6 +98,9 @@ func (a *app) rememberPanelFrame() {
 		return
 	}
 	st := a.store.Settings()
+	if barEdge(st) != "" && !a.docked { // 横栏尺寸由屏幕推出，不写进竖栏的宽高记忆
+		return
+	}
 	d := mygo.Screen.DisplayNearestPoint(mygo.Point{X: b.X + b.Width/2, Y: b.Y + b.Height/2})
 	next := panelFrameSettings(st, b, d.WorkArea, a.docked)
 	if next.PanelWidth != st.PanelWidth || next.PanelHeight != st.PanelHeight || next.PanelX != st.PanelX || next.PanelY != st.PanelY || next.PanelTop != st.PanelTop {
@@ -104,6 +110,7 @@ func (a *app) rememberPanelFrame() {
 
 func (a *app) placePanel() {
 	a.placed = a.panelBounds()
+	a.applySizeLimits()
 	a.panel.SetBounds(a.placed)
 }
 

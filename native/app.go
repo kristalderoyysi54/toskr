@@ -75,7 +75,8 @@ type app struct {
 	secMenuOpen                string      // 「…」分组菜单展开中的分组
 	edge                       *edgeAnchor // 拖拽入坞后的贴边锚点（edge_hide.go）
 	edgeHidden, edgeArmed      bool
-	holdOpen, holdNext         bool // 快捷键 / 双击唤出：拖动或 Esc 前不随失焦收起、不贴边滑出（同 Tauri shortcutHoldOpen + panel_auto_hide_armed）
+	bar                        barState // 屏幕顶部 / 底部横栏的视图态（hbar.go）
+	holdOpen, holdNext         bool     // 快捷键 / 双击唤出：拖动或 Esc 前不随失焦收起、不贴边滑出（同 Tauri shortcutHoldOpen + panel_auto_hide_armed）
 	edgeAway                   time.Duration
 	edgeMachineUntil           time.Time
 	dockSeq, edgeAnimSeq       int // 剪贴页按来源分组时各组的折叠态（仅本次运行，同 Tauri useState）
@@ -357,12 +358,19 @@ func (a *app) reload() {
 		a.clipList = slices.Clone(a.notes)
 	} else {
 		// 笔记页：所有非剪贴板分组按顺序展开，键盘选择在扁平列表上移动
+		if a.noteFilter == doneFilter && !a.hbar() { // 「已完成」胶囊只在横栏有（同 Tauri：竖栏落回全部）
+			a.noteFilter = ""
+		}
 		a.noteGroups = a.groups()
+		bar := a.hbar()
 		for _, g := range a.noteGroups {
-			if !g.sec.Collapsed {
+			if !g.sec.Collapsed || bar { // 横栏卡串不分组：折叠的组照样排进串里（同 Tauri stripNotes）
 				a.notes = append(a.notes, g.open...)
 			}
 			a.done = append(a.done, g.done...)
+		}
+		if bar && a.noteFilter == doneFilter {
+			a.notes = append(a.notes[:0], a.done...)
 		}
 	}
 	a.noteIdx = make(map[string]int, len(a.notes))

@@ -165,7 +165,12 @@ func (a *app) scrollPageTop(p int) {
 }
 
 func (a *app) tabs(c *ui.Context, k tokens) {
-	ui.Row(c).Height(30).Margin(6, 12, 6, 12).AlignItems(ui.Start).Children(func() {
+	ui.Row(c).Height(30).Margin(6, 12, 6, 12).AlignItems(ui.Start).Children(func() { a.tabStrip(c, k) })
+}
+
+// tabStrip 是页签轨道本体（竖栏单独一行；横栏并入标题行）。
+func (a *app) tabStrip(c *ui.Context, k tokens) {
+	{
 		ui.Row(c).Padding(2).Radius(10).Background(k.track).Children(func() {
 			st := a.store.Settings()
 			for _, i := range a.visiblePages() {
@@ -235,7 +240,7 @@ func (a *app) tabs(c *ui.Context, k tokens) {
 				}
 			}
 		})
-	})
+	}
 }
 
 // groups 重建笔记页的分组块（剪贴板分组只在「剪贴」页出现）。
@@ -243,7 +248,7 @@ func (a *app) groups() []noteGroup {
 	all := store.Search(a.store.Notes(), a.query)
 	var out []noteGroup
 	for _, s := range a.store.Sections() {
-		if s.ID == store.SectionClipboard || (a.noteFilter != "" && s.ID != a.noteFilter) {
+		if s.ID == store.SectionClipboard || (a.noteFilter != "" && a.noteFilter != doneFilter && s.ID != a.noteFilter) {
 			continue
 		}
 		g := noteGroup{sec: s}

@@ -19,7 +19,7 @@ func (a *app) pickNoteGroup(id string) {
 		return
 	}
 	a.noteFilter = id
-	if id != "" {
+	if id != "" && id != doneFilter {
 		a.section = id // 输入区记到所选分组
 	}
 	a.chosen.Clear()

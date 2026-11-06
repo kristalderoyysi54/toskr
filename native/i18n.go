@@ -110,3 +110,15 @@ var en = map[string]string{
 	"时间格式应为 时:分，如 9:30": "Use hour:minute, e.g. 9:30", "复制正文": "Copy text", "已添加到正在编辑的卡片": "Added to the card being edited", "清除到期": "Clear due date",
 	"本次将访问 %s 获取标题和图标，允许此地址访问内网。不会发送应用中的其他内容；授权不覆盖其他内网地址的重定向。": "Toskr will visit %s once to fetch its title and icon, allowing this local-network address. Nothing else from the app is sent, and redirects to other local-network addresses are not covered.",
 }
+
+func init() { // 横栏布局（hbar.go）
+	for k, v := range map[string]string{
+		"屏幕右侧": "Right of screen", "屏幕底部": "Bottom of screen", "屏幕顶部": "Top of screen", "屏幕位置": "Screen position",
+		"添加笔记": "Add note", "收起输入": "Hide input", "没有未完成的笔记卡片": "No open note cards", "没有已完成的卡片": "No completed cards",
+		"没有进行中的任务": "No tasks in progress", "剪贴板历史未开启": "Clipboard history is off",
+	} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
+}

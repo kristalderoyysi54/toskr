@@ -162,6 +162,22 @@ func (a *app) messagesPage(c *ui.Context, k tokens) {
 	})
 	fi := slices.IndexFunc(msgFilters, func(f struct{ value, label string }) bool { return f.value == a.msgFilter })
 	swapKey, swap := "msg-list-"+itoa(fi), a.swapTransition("msg-list", fi)
+	rules := map[string]string{}
+	for _, r := range a.store.Settings().MessageRules {
+		rules[r.ID] = r.Name
+	}
+	if a.hbar() { // 横栏（同 Tauri MessagePage horizontal）：消息卡改横排瓷砖串
+		empty := map[string]string{"new": tr("没有待处理消息"), "waiting": tr("没有等待回复的消息"), "done": tr("还没有已处理消息")}[a.msgFilter]
+		if q := strings.TrimSpace(a.query); q != "" {
+			empty = fmt.Sprintf(tr("没有匹配「%s」的消息"), q)
+		}
+		a.strip(c, k, swapKey, &a.bar.msgs, len(view), -1, nil, "", empty, func(i int, h float32) {
+			ui.Scroll(c).Size(h*16/17*1.25, h).Scrollbars(false).Key("msgtile-" + view[i].ID).Children(func() {
+				a.messageCard(c, k, view[i], view, reasonLabels(view[i], rules))
+			})
+		})
+		return
+	}
 	ui.Column(c).Grow(1).Key(swapKey).Transition(swap).Children(func() {
 		ui.Scroll(c).Grow(1).Scrollbars(false).Children(func() {
 			ui.Column(c).Padding(4, 12, 12, 12).Gap(8).Children(func() {
@@ -176,10 +192,6 @@ func (a *app) messagesPage(c *ui.Context, k tokens) {
 					}
 					a.emptyState(c, k, "messages-square", title, hint)
 					return
-				}
-				rules := map[string]string{}
-				for _, r := range a.store.Settings().MessageRules {
-					rules[r.ID] = r.Name
 				}
 				for _, m := range view {
 					a.messageCard(c, k, m, view, reasonLabels(m, rules))

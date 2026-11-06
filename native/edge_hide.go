@@ -25,11 +25,18 @@ const (
 )
 
 type edgeAnchor struct {
-	x, y, w, h int // 展开位（已吸平右缘）
-	line       int // 该屏物理右边界
-	monY, monH int
-	sidebar    bool // 「屏幕右侧」边栏模式的锚点（同 Tauri 四缘边栏都是贴边隐藏候选）：切到自由移动 / 伴随停靠即作废
+	x, y, w, h int  // 展开位（已吸平右缘）
+	line       int  // 该屏物理右边界
+	monY, monH int  // 横轴沿屏缘的范围（右缘 = 纵向 y / 高；上下缘 = 横向 x / 宽）
+	sidebar    bool // 屏幕边栏模式的锚点（同 Tauri 四缘边栏都是贴边隐藏候选）：切到自由移动 / 伴随停靠即作废
+	axis       int  // 贴哪条边：edgeRight / edgeBottom / edgeTop
 }
+
+const (
+	edgeRight = iota
+	edgeBottom
+	edgeTop
+)
 
 // dockLine：面板 r 的右缘在所在屏物理右边界 edgeSnap 内（含拖出屏外），且越过这条线没有别的屏 → 返回该线。
 func dockLine(displays []mygo.Display, r mygo.Rectangle) (line, monY, monH int, ok bool) {
@@ -60,11 +67,46 @@ func dockLine(displays []mygo.Display, r mygo.Rectangle) (line, monY, monH int, 
 }
 
 func (e edgeAnchor) inside(cx, cy int) bool { // 主轴外侧延伸到屏缘（含面板与屏缘之间的空隙）
+	switch e.axis {
+	case edgeBottom:
+		return cy >= e.y && cy <= e.line && cx >= e.x && cx <= e.x+e.w
+	case edgeTop:
+		return cy >= e.line && cy <= e.y+e.h && cx >= e.x && cx <= e.x+e.w
+	}
 	return cx >= e.x && cx <= e.line && cy >= e.y && cy <= e.y+e.h
 }
 
-func (e edgeAnchor) touching(cx, cy int) bool { // 顶到该屏右缘任意高度都唤回（同 Tauri Dock 对齐）
-	return cx >= e.line-edgeTouchSlop && cx <= e.line+edgeTouchSlop && cy >= e.monY && cy < e.monY+e.monH
+func (e edgeAnchor) touching(cx, cy int) bool { // 顶到该屏缘任意位置都唤回（同 Tauri Dock 对齐）
+	along, cross := cx, cy
+	if e.axis != edgeRight {
+		along, cross = cy, cx
+	}
+	return along >= e.line-edgeTouchSlop && along <= e.line+edgeTouchSlop && cross >= e.monY && cross < e.monY+e.monH
+}
+
+// hiddenAt：滑出后面板在主轴上的坐标（只留 edgePeek 细条）；shownAt 为展开位。
+func (e edgeAnchor) hiddenAt() int {
+	switch e.axis {
+	case edgeBottom:
+		return e.line - edgePeek
+	case edgeTop:
+		return e.line - e.h + edgePeek
+	}
+	return e.line - edgePeek
+}
+
+func (e edgeAnchor) shownAt() int {
+	if e.axis == edgeRight {
+		return e.x
+	}
+	return e.y
+}
+
+func (e edgeAnchor) pos(v int) (int, int) { // 主轴坐标 → 面板左上角
+	if e.axis == edgeRight {
+		return v, e.y
+	}
+	return e.x, v
 }
 
 // panelMovedByUser：OnMove 回调里调用。机器移动（吸平 / 滑动）不算；用户拖动清掉锚点并在停稳 400ms 后评估入坞。
@@ -158,9 +200,13 @@ func (a *app) edgeSlideTo(hidden bool) {
 		return
 	}
 	a.edgeHidden = hidden
-	from, to := a.panel.Bounds().X, e.x
+	b := a.panel.Bounds()
+	from, to := b.X, e.shownAt()
+	if e.axis != edgeRight {
+		from = b.Y
+	}
 	if hidden {
-		to = e.line - edgePeek
+		to = e.hiddenAt()
 		a.saveDraftState()
 		a.remaskAll()
 	}
@@ -175,7 +221,7 @@ func (a *app) edgeSlideTo(hidden bool) {
 		}
 		t := min(float64(time.Since(start))/float64(edgeSlide), 1)
 		ease := 1 - (1-t)*(1-t)*(1-t)
-		a.panel.SetPosition(from+int(float64(to-from)*ease), e.y)
+		a.panel.SetPosition(e.pos(from + int(float64(to-from)*ease)))
 		if t < 1 {
 			time.AfterFunc(8*time.Millisecond, func() { mygo.RunOnMain(step) })
 		}
@@ -207,14 +253,23 @@ func (a *app) edgeOnShow() {
 	if a.edgeHidden && a.edge != nil {
 		a.edgeAnimSeq++
 		a.edgeHidden = false
-		a.machineMove(a.edge.x, a.edge.y, 0)
+		x, y := a.edge.pos(a.edge.shownAt())
+		a.machineMove(x, y, 0)
 		return
 	}
 	st := a.store.Settings()
-	if !st.FreeMove && !a.docked { // 屏幕右侧边栏：每次唤出按当前所在屏重新锚定（同 Tauri show_panel right_sidebar 分支）
+	if !st.FreeMove && !a.docked { // 屏幕边栏：每次唤出按当前所在屏重新锚定（同 Tauri show_panel right_sidebar 分支）
 		b := a.panel.Bounds()
 		if d, ok := displayAt(mygo.Screen.Displays(), b.X+b.Width/2, b.Y+b.Height/2); ok {
-			a.edge = &edgeAnchor{x: b.X, y: b.Y, w: b.Width, h: b.Height, line: d.Bounds.X + d.Bounds.Width, monY: d.Bounds.Y, monH: d.Bounds.Height, sidebar: true}
+			db := d.Bounds
+			e := edgeAnchor{x: b.X, y: b.Y, w: b.Width, h: b.Height, line: db.X + db.Width, monY: db.Y, monH: db.Height, sidebar: true}
+			switch barEdge(st) {
+			case "bottom":
+				e.axis, e.line, e.monY, e.monH = edgeBottom, db.Y+db.Height, db.X, db.Width
+			case "top":
+				e.axis, e.line, e.monY, e.monH = edgeTop, db.Y, db.X, db.Width
+			}
+			a.edge = &e
 		}
 		return
 	}

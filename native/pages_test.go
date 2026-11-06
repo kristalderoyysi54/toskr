@@ -597,12 +597,6 @@ func TestPageSlideAndHUDGhostKeyframes(t *testing.T) {
 	}
 }
 
-func abs32(v float32) float32 {
-	if v < 0 {
-		return -v
-	}
-	return v
-}
 
 // 多选：提示行换成 Tauri 的多选提示、底部出批量条；x 勾选、⌘C 复制为编号列表、Esc 取消勾选；多条发送为编号列表。
 func TestSelectionBarHintsAndKeys(t *testing.T) {
