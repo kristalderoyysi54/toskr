@@ -162,6 +162,11 @@ type Settings struct {
 	MessagesEnabled bool          `json:"messagesEnabled,omitempty"`
 	MessageRules    []MessageRule `json:"messageWatchRules,omitempty"`
 	IMProfile       *IMProfile    `json:"imProfile,omitempty"`
+	// 定期自动备份（同 Tauri autoBackupEnabled / autoBackupDir / autoBackupKeep / autoBackupLastAtMs；默认开）
+	AutoBackupOff  bool      `json:"autoBackupOff,omitempty"`
+	AutoBackupDir  string    `json:"autoBackupDir,omitempty"`  // 空 = 文稿/Toskr Native 自动备份
+	AutoBackupKeep int       `json:"autoBackupKeep,omitempty"` // 3 | 7 | 14 | 30，0 = 7
+	AutoBackupAt   time.Time `json:"autoBackupLastAt,omitempty"`
 }
 
 // ShotPrefs 是截图编辑器记住的使用习惯；零值都表示默认（粗细存档位 +1，0 = 默认中档）。

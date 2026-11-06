@@ -497,8 +497,7 @@ func (a *app) settingsView(c *ui.Context) {
 }
 
 func (a *app) dataSections(c *ui.Context, k tokens, s settingsTokens) []setSection {
-	backup := []setRow{
-		{title: tr("数据目录"), hint: dataDir()},
+	backup := append(a.dataDirRows(c, k, s), []setRow{
 		{title: tr("加密"), hint: tr("AES-256-GCM（TSK1 信封），密钥存于钥匙串；图片按内容哈希加密存放")},
 		{title: tr("导出备份"), hint: tr(".toskr-backup，加密"), control: func() {
 			if button(c, s, "导出…") {
@@ -514,12 +513,12 @@ func (a *app) dataSections(c *ui.Context, k tokens, s settingsTokens) []setSecti
 				a.importTauri(nil)
 			}
 		}},
-		{title: tr("从备份合并导入"), hint: tr("本机同 ID 记录优先，导入前自动写恢复点"), control: func() {
+		{title: tr("从备份导入"), hint: tr("预检后选「合并」（本机同 ID 记录优先）或「整份恢复」（用备份替换全部数据，设置保留）；都会先写恢复点"), control: func() {
 			if button(c, s, "选择文件…") {
 				a.inspectBackup(c)
 			}
 		}},
-	}
+	}...)
 	if p := importPreview; p != nil {
 		hint := fmt.Sprintf(tr("备份时间 %s · 笔记 %d（新增 %d / 已有 %d）· 任务 %d · 账单 %d · 秘文 %d"),
 			p.Manifest.CreatedAt.Format("2006-01-02 15:04"), p.Manifest.Counts["notes"], p.New, p.Overlap,
@@ -529,6 +528,17 @@ func (a *app) dataSections(c *ui.Context, k tokens, s settingsTokens) []setSecti
 		}
 		backup = append(backup, setRow{title: tr("待导入的备份"), hint: hint, control: func() {
 			ui.Row(c).Gap(6).Children(func() {
+				if button(c, s, "整份恢复") {
+					err := a.store.ReplaceFromBackup(p)
+					importPreview = nil
+					if err != nil {
+						a.showHUD("warn", tr("恢复失败：")+err.Error())
+					} else {
+						a.showHUD("ok", tr("已用备份替换全部数据（恢复前的数据存了一个恢复点）"))
+						a.recovery = a.store.RecoveryPoints()
+						a.reload()
+					}
+				}
 				if button(c, s, "合并导入") {
 					n, err := a.store.ImportBackup(p)
 					importPreview = nil
@@ -565,6 +575,7 @@ func (a *app) dataSections(c *ui.Context, k tokens, s settingsTokens) []setSecti
 	health := cmpOr(a.health, tr("只报告，不改数据"))
 	return []setSection{
 		{tr("备份与导入"), backup},
+		{tr("定期自动备份"), a.autoBackupRows(c, k, s)},
 		{fmt.Sprintf(tr("恢复点（启动 / 导入 / 恢复前自动生成，保留 %d 份）"), store.RecoveryKeep), points},
 		{tr("维护"), []setRow{{title: tr("数据健康检查"), hint: health, control: func() {
 			if button(c, s, "检查") {

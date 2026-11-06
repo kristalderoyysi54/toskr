@@ -377,6 +377,9 @@ func NormalizeMessageRules(in []MessageRule) []MessageRule {
 // Dir 是数据目录（IM 账本与数据文件同目录）。
 func (s *Store) Dir() string { return s.dir }
 
+// Key 是本机数据密钥（预检其他数据目录时用同一把解）。
+func (s *Store) Key() []byte { return s.key }
+
 // IMLedgerCodec：账本逐行加解密（用途 imwatch，同 Tauri Purpose::ImWatch）。
 func (s *Store) IMLedgerCodec() (seal, open func([]byte) ([]byte, error)) {
 	return func(b []byte) ([]byte, error) { return Seal(s.key, PurposeIMWatch, b) },

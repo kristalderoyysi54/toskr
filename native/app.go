@@ -167,6 +167,8 @@ type app struct {
 	permKeySeen                            bool        // 面板自己看到过键盘活动（判「被拦截」的铁证之一）
 	permDraft                              string      // 上一帧的输入区文字（变了即有人在打字）
 	tauriImporting                         bool        // 正在从 Tauri 版导入
+	dataDirMissing                         string      // 指针指向的自定义数据目录启动时不可用（本次用默认目录）
+	dirPlan                                *dirPlan    // 待确认的数据目录切换
 	// 设置页「本机翻译」状态
 	ltStatus                        string
 	ltPreparing, ltFailed, ltOpened bool

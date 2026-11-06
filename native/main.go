@@ -42,12 +42,17 @@ func main() {
 }
 
 func start() (*app, error) {
-	dir := dataDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(dataDir(), 0o700); err != nil {
 		return nil, err
 	}
-	diag.Init(dir)
+	diag.Init(dataDir()) // 诊断日志与目录指针始终在默认目录
 	diag.Push("启动 v%s pid=%d", mygo.App.Version(), os.Getpid())
+	dir, missing := activeDataDir()
+	if missing != "" {
+		diag.Push("自定义数据目录不可用: %s，本次使用默认目录", missing)
+	} else if dir != dataDir() {
+		diag.Push("数据目录: %s", dir)
+	}
 	_, statErr := os.Stat(filepath.Join(dir, store.DataFile))
 	key, err := dataKey(errors.Is(statErr, os.ErrNotExist))
 	if err != nil {
@@ -62,6 +67,7 @@ func start() (*app, error) {
 	appLive = true
 	applyAppearance(st.Settings())
 	a := newApp(core.Mac{}, st)
+	a.dataDirMissing = missing
 	total := len(st.Notes())
 	diag.Push("数据水合完成 笔记=%d 剪贴板=%d（全部 %d 条 · 分组 %d · 任务 %d · 收件箱未完成 %d）",
 		total-a.counts[store.SectionClipboard], a.counts[store.SectionClipboard], total, len(st.Sections()), len(st.Tasks()), a.counts[store.SectionInbox])

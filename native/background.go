@@ -24,7 +24,17 @@ func (a *app) startBackground() {
 		a.housekeeping()
 		a.refreshCalendar()
 		lastHouse := time.Now()
+		nextBackup := time.Now().Add(2 * time.Minute) // 同 Tauri：启动 2 分钟后首检，之后每 30 分钟看是否到期
+		if a.dataDirMissing != "" && a.panel != nil {
+			a.panel.Update(func() {
+				a.showHUDForce("warn", tr("自定义数据目录不可用，本次使用默认目录（设置 → 数据与备份）"))
+			})
+		}
 		for now := range time.Tick(reminderTick) {
+			if !now.Before(nextBackup) {
+				nextBackup = now.Add(30 * time.Minute)
+				a.runAutoBackup(false, now)
+			}
 			a.remind(now)
 			a.refreshCalendar() // 日程每 30 秒重拉一次（含跨零点换天）
 			if a.panel != nil {
