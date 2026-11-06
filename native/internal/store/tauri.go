@@ -167,8 +167,8 @@ type tauriSettings struct {
 
 // TauriReport 是导入结果。
 type TauriReport struct {
-	Notes, Sections, Tasks, Bills, Secrets, Media, MediaMissing, SeedRemoved int
-	Recovery                                                                 string
+	Notes, Sections, Tasks, Bills, Secrets, Media, MediaMissing, SeedRemoved, Deliveries int
+	Recovery                                                                             string
 }
 
 func ms(v int64) time.Time {
@@ -376,7 +376,9 @@ func (s *Store) ImportTauri(dir string, key []byte) (TauriReport, error) {
 		bills = append(bills, x)
 	}
 
+	acts := readTauriActivity(dir, st.Settings.TargetProfiles)
 	err = s.mutate(func() bool {
+		rep.Deliveries = mergeDeliveries(&s.deliveries, acts)
 		before := len(s.notes)
 		s.notes = slices.DeleteFunc(s.notes, func(n Note) bool { return n.SourceApp == "Seed" })
 		rep.SeedRemoved = before - len(s.notes)

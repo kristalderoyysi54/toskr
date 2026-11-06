@@ -64,7 +64,7 @@ func (a *app) importTauri(done func(string, error)) {
 			if err == nil {
 				diag.Push("Tauri 导入 %s：笔记 %d 分组 %d 任务 %d 账单 %d 秘文 %d 图片 %d（缺 %d）清除合成 %d 恢复点 %s",
 					dir, rep.Notes, rep.Sections, rep.Tasks, rep.Bills, rep.Secrets, rep.Media, rep.MediaMissing, rep.SeedRemoved, rep.Recovery)
-				msg = fmt.Sprintf(tr("已从 Tauri 版导入：笔记 %d、分组 %d、任务 %d、账单 %d、秘文 %d"), rep.Notes, rep.Sections, rep.Tasks, rep.Bills, rep.Secrets)
+				msg = fmt.Sprintf(tr("已从 Tauri 版导入：笔记 %d、分组 %d、任务 %d、账单 %d、秘文 %d、发送记录 %d"), rep.Notes, rep.Sections, rep.Tasks, rep.Bills, rep.Secrets, rep.Deliveries)
 				if rep.MediaMissing > 0 {
 					msg += fmt.Sprintf(tr("；%d 张图片缺失"), rep.MediaMissing)
 				}

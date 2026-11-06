@@ -9,6 +9,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -72,6 +73,16 @@ func TestImportTauri(t *testing.T) {
 	}
 	raw, _ := json.Marshal(map[string]any{"state": state, "version": 27})
 	_ = os.WriteFile(filepath.Join(tdir, "toskr-data.json"), seal(PurposeData, raw), 0o600)
+	// 最近发送：明文 JSONL 事件流；d1 发出并有回复，d2 失败，d3 只开过预检（不导入），坏行跳过
+	activity := strings.Join([]string{
+		`{"deliveryId":"d1","eventType":"draftCreated","timestampMs":1789000000000,"sourceItemIds":["n1"],"targetBundleId":"com.openai.chat","targetAppName":"ChatGPT","profileId":"p-ai"}`,
+		`{"deliveryId":"d1","eventType":"sendSent","timestampMs":1789000001000,"sourceItemIds":["n1"],"targetBundleId":"com.openai.chat","targetAppName":"ChatGPT","profileId":"p-ai","textCharCount":12,"imageCount":0,"redactionCount":2}`,
+		`{"deliveryId":"d1","eventType":"resultCaptured","timestampMs":1789000060000,"resultNoteId":"n2","profileId":"p-ai"}`,
+		`{"deliveryId":"d2","eventType":"sendFailed","timestampMs":1789000100000,"targetAppName":"Cursor","profileId":"default-safe","reasonCode":"target_exited"}`,
+		`{"deliveryId":"d3","eventType":"preflightOpened","timestampMs":1789000200000}`,
+		`坏行`,
+	}, "\n")
+	_ = os.WriteFile(filepath.Join(tdir, "toskr-delivery-activity.jsonl"), []byte(activity), 0o600)
 
 	s, err := OpenDir(t.TempDir(), bytes.Repeat([]byte{1}, 32))
 	if err != nil {
@@ -87,6 +98,10 @@ func TestImportTauri(t *testing.T) {
 	rep, err := s.ImportTauri(tdir, tkey)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if ds := s.Deliveries(); rep.Deliveries != 2 || len(ds) != 2 || ds[0].ID != "d2" || ds[0].Status != "failed" || ds[0].Err != "target_exited" ||
+		ds[1].Status != "sent" || ds[1].ResultNoteID != "n2" || ds[1].Redactions != 2 || ds[1].TextChars != 12 || ds[1].Profile != "AI 对话" || ds[1].TargetName != "ChatGPT" {
+		t.Fatalf("发送记录 %d %+v", rep.Deliveries, s.Deliveries())
 	}
 	if rep.Notes != 3 || rep.Secrets != 1 || rep.Tasks != 2 || rep.Bills != 1 || rep.SeedRemoved != 1 || rep.Media != 2 || rep.MediaMissing != 1 || rep.Recovery == "" {
 		t.Fatalf("报告 %+v", rep)
