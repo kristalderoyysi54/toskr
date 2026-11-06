@@ -160,27 +160,31 @@ func (a *app) messagesPage(c *ui.Context, k tokens) {
 			a.clearDoneMessages()
 		}
 	})
-	ui.Scroll(c).Grow(1).Scrollbars(false).Key("msg-scroll").Children(func() {
-		ui.Column(c).Padding(4, 12, 12, 12).Gap(8).Children(func() {
-			if len(view) == 0 {
-				title := map[string]string{"new": tr("没有待处理消息"), "waiting": tr("没有等待回复的消息"), "done": tr("还没有已处理消息")}[a.msgFilter]
-				if strings.TrimSpace(a.query) != "" {
-					title = fmt.Sprintf(tr("没有匹配「%s」的消息"), strings.TrimSpace(a.query))
+	fi := slices.IndexFunc(msgFilters, func(f struct{ value, label string }) bool { return f.value == a.msgFilter })
+	swapKey, swap := "msg-list-"+itoa(fi), a.swapTransition("msg-list", fi)
+	ui.Column(c).Grow(1).Key(swapKey).Transition(swap).Children(func() {
+		ui.Scroll(c).Grow(1).Scrollbars(false).Children(func() {
+			ui.Column(c).Padding(4, 12, 12, 12).Gap(8).Children(func() {
+				if len(view) == 0 {
+					title := map[string]string{"new": tr("没有待处理消息"), "waiting": tr("没有等待回复的消息"), "done": tr("还没有已处理消息")}[a.msgFilter]
+					if strings.TrimSpace(a.query) != "" {
+						title = fmt.Sprintf(tr("没有匹配「%s」的消息"), strings.TrimSpace(a.query))
+					}
+					hint := ""
+					if len(a.messages) == 0 {
+						hint = tr("开启只读监听后，@你、关注的人或组合规则命中的群消息会出现在这里。")
+					}
+					a.emptyState(c, k, "messages-square", title, hint)
+					return
 				}
-				hint := ""
-				if len(a.messages) == 0 {
-					hint = tr("开启只读监听后，@你、关注的人或组合规则命中的群消息会出现在这里。")
+				rules := map[string]string{}
+				for _, r := range a.store.Settings().MessageRules {
+					rules[r.ID] = r.Name
 				}
-				a.emptyState(c, k, "messages-square", title, hint)
-				return
-			}
-			rules := map[string]string{}
-			for _, r := range a.store.Settings().MessageRules {
-				rules[r.ID] = r.Name
-			}
-			for _, m := range view {
-				a.messageCard(c, k, m, view, reasonLabels(m, rules))
-			}
+				for _, m := range view {
+					a.messageCard(c, k, m, view, reasonLabels(m, rules))
+				}
+			})
 		})
 	})
 }

@@ -107,14 +107,17 @@ func (a *app) pageBody(c *ui.Context, k tokens, p int) {
 	case pageTasks:
 		ui.Column(c).Grow(1).Children(func() { a.tasksPage(c) })
 	default:
-		switch a.contentTabs(c, k) {
-		case subSecret:
-			ui.Column(c).Grow(1).Children(func() { a.secretsPage(c, k) })
-		case subMessages:
-			ui.Column(c).Grow(1).Children(func() { a.messagesPage(c, k) })
-		default:
-			a.notesPage(c, k)
-		}
+		sub := a.contentTabs(c, k)
+		a.swapView(ui.Column(c).Grow(1), "csub", sub).Children(func() {
+			switch sub {
+			case subSecret:
+				a.secretsPage(c, k)
+			case subMessages:
+				a.messagesPage(c, k)
+			default:
+				a.notesPage(c, k)
+			}
+		})
 	}
 }
 

@@ -228,11 +228,17 @@ func (a *app) billsPage(c *ui.Context, k tokens) {
 			if a.billAnalytics {
 				ui.Column(c).Key("bill-analytics").Transition(sheet).Children(func() { a.billAnalyticsCard(c, k, cur, now) })
 			}
+			bv := 0
 			if a.billView == "month" {
-				a.billMonthGrid(c, k, now)
-			} else {
-				a.billWeekStrip(c, k, now)
+				bv = 1
 			}
+			a.swapView(ui.Column(c), "bill-view", bv).Children(func() {
+				if bv == 1 {
+					a.billMonthGrid(c, k, now)
+				} else {
+					a.billWeekStrip(c, k, now)
+				}
+			})
 			ui.Column(c).Children(func() {
 				label := monthDay(a.billDay)
 				switch int(math.Round(a.billDay.Sub(dayStart(now)).Hours() / 24)) {

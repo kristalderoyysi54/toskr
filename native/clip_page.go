@@ -83,59 +83,63 @@ func (a *app) clipPage(c *ui.Context, k tokens) {
 	list := a.clipList
 	_, vh := c.Size()
 	vis := visWindow{top: a.clipScroll.Y - 600, bottom: a.clipScroll.Y + vh + 600}
-	ui.Scroll(c).Grow(1).Scrollbars(false).TrackScroll(&a.clipScroll).Children(func() {
-		ui.Column(c).Padding(4, 14, 8, 14).Children(func() {
-			if len(list) == 0 {
-				if !a.store.Settings().ClipboardWatch && a.query == "" {
-					a.clipOffState(c, k)
+	view := slices.IndexFunc(clipViews, func(v struct{ id, label string }) bool { return v.id == a.clipView })
+	swapKey, swap := "clip-view-"+itoa(view), a.swapTransition("clip-view", view)
+	ui.Column(c).Grow(1).Key(swapKey).Transition(swap).Children(func() {
+		ui.Scroll(c).Grow(1).Scrollbars(false).TrackScroll(&a.clipScroll).Children(func() {
+			ui.Column(c).Padding(4, 14, 8, 14).Children(func() {
+				if len(list) == 0 {
+					if !a.store.Settings().ClipboardWatch && a.query == "" {
+						a.clipOffState(c, k)
+						return
+					}
+					a.clipHeader(c, k, "", true)
+					a.emptyState(c, k, "clipboard-list", tr("还没有剪贴板记录"), tr("复制任意文字、链接或图片试试，会自动出现在这里。"))
 					return
 				}
-				a.clipHeader(c, k, "", true)
-				a.emptyState(c, k, "clipboard-list", tr("还没有剪贴板记录"), tr("复制任意文字、链接或图片试试，会自动出现在这里。"))
-				return
-			}
-			// 卡片定高（标准 116 / 浓缩 52 / 紧凑行 32，紧凑行间不留缝）：只构建视口附近的卡，其余等高占位（同笔记页）
-			layout := a.clipLayout()
-			gap := float32(4)
-			if layout == clipCompact {
-				gap = 0
-			}
-			y := float32(4)
-			for i := 0; i < len(list); {
-				band := a.clipBand(list[i])
-				j := i
-				for j < len(list) && a.clipBand(list[j]) == band {
-					j++
+				// 卡片定高（标准 116 / 浓缩 52 / 紧凑行 32，紧凑行间不留缝）：只构建视口附近的卡，其余等高占位（同笔记页）
+				layout := a.clipLayout()
+				gap := float32(4)
+				if layout == clipCompact {
+					gap = 0
 				}
-				a.clipHeader(c, k, band, i == 0)
-				y += 28
-				ui.Column(c).Gap(gap).Key("band-" + band).Children(func() {
-					skip := float32(0)
-					flush := func() {
-						if skip > 0 {
-							ui.Box(c).Height(skip - gap).Key("gap-" + itoa(int(y)))
-							skip = 0
-						}
+				y := float32(4)
+				for i := 0; i < len(list); {
+					band := a.clipBand(list[i])
+					j := i
+					for j < len(list) && a.clipBand(list[j]) == band {
+						j++
 					}
-					for _, n := range list[i:j] {
-						lay := layout
-						if a.editing == n.ID { // 编辑时临时回到标准高度放下输入框
-							lay = clipStandard
+					a.clipHeader(c, k, band, i == 0)
+					y += 28
+					ui.Column(c).Gap(gap).Key("band-" + band).Children(func() {
+						skip := float32(0)
+						flush := func() {
+							if skip > 0 {
+								ui.Box(c).Height(skip - gap).Key("gap-" + itoa(int(y)))
+								skip = 0
+							}
 						}
-						h := clipCardH(lay)
-						if (y+h < vis.top || y > vis.bottom) && !a.chosen.Has(n.ID) {
-							skip += h + gap
-						} else {
-							flush()
-							a.clipCard(c, k, n, lay)
+						for _, n := range list[i:j] {
+							lay := layout
+							if a.editing == n.ID { // 编辑时临时回到标准高度放下输入框
+								lay = clipStandard
+							}
+							h := clipCardH(lay)
+							if (y+h < vis.top || y > vis.bottom) && !a.chosen.Has(n.ID) {
+								skip += h + gap
+							} else {
+								flush()
+								a.clipCard(c, k, n, lay)
+							}
+							y += h + gap
 						}
-						y += h + gap
-					}
-					flush()
-				})
-				y -= gap
-				i = j
-			}
+						flush()
+					})
+					y -= gap
+					i = j
+				}
+			})
 		})
 	})
 }

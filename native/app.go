@@ -182,9 +182,10 @@ type app struct {
 	msgOpen      map[string]bool // x:<id> 展开全文、c:<id> 展开前文
 	msgDraftBusy string          // 正在生成 AI 回复草稿的消息
 	im           imCtl
-	aiUI         aiUI         // 设置 → AI 的会话态（模型列表、请求中）
-	dueEdit      dueEditor    // 设置 → 到期快捷档的编辑态
-	locateWin    *mygo.Window // 定位原会话的高亮框
+	aiUI         aiUI           // 设置 → AI 的会话态（模型列表、请求中）
+	dueEdit      dueEditor      // 设置 → 到期快捷档的编辑态
+	swapIdx      map[string]int // swapView 各组上一次的序号（定进场方向）
+	locateWin    *mygo.Window   // 定位原会话的高亮框
 	locateGen    int
 
 	// 秘文

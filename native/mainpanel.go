@@ -260,7 +260,12 @@ func (a *app) notesPage(c *ui.Context, k tokens) {
 }
 
 func (a *app) notesList(c *ui.Context, k tokens) {
-	ui.Box(c).Grow(1).Basis(0).Children(func() {
+	// 侧栏点选分组 = 换一批内容：按侧栏顺序定方向淡入（swapView）
+	at := 0
+	if a.noteFilter != "" {
+		at = 1 + slices.IndexFunc(a.noteSections(), func(s store.Section) bool { return s.ID == a.noteFilter })
+	}
+	a.swapView(ui.Box(c).Grow(1).Basis(0), "note-filter", at).Children(func() {
 		pad := float32(10)
 		if k.pt && ptClassicScroll {
 			pad = 4 // 右侧让给经典滚动条（井内左 10 / 右 4）
@@ -349,12 +354,8 @@ func (a *app) sectionBlock(c *ui.Context, k tokens, g noteGroup, top float32) fl
 			a.sectionMenu(m, g.sec, i, len(secs))
 		})
 		head.Children(func() {
-			chev := "chevron-down"
-			if collapsed {
-				chev = "chevron-right"
-			}
 			b := ui.Box(c).Size(16, 16).Radius(6).Center()
-			b.Children(func() { licon(c, chev, 12, k.muted) })
+			b.Children(func() { foldChevron(c, k, collapsed) })
 			if b.Clicked() {
 				g.sec.Collapsed = !collapsed
 				_ = a.store.UpdateSection(g.sec)
@@ -369,10 +370,10 @@ func (a *app) sectionBlock(c *ui.Context, k tokens, g noteGroup, top float32) fl
 			return
 		}
 		if len(g.open) == 0 && len(g.done) == 0 {
-			text(c, tr("此分组为空"), 11, 16, 400, k.muted).Padding(8, 0).TextAlign(ui.Center).FillWidth()
+			text(c, tr("此分组为空"), 11, 16, 400, k.muted).Padding(8, 0).TextAlign(ui.Center).FillWidth().Key("secempty-" + g.sec.ID).Transition(foldTransition)
 			return
 		}
-		ui.Column(c).Gap(4).Children(func() {
+		ui.Column(c).Gap(4).Key("secbody-" + g.sec.ID).Transition(foldTransition).Children(func() {
 			y := top + 26
 			skip := float32(0)
 			flush := func() {
@@ -407,20 +408,18 @@ func (a *app) doneRow(c *ui.Context, k tokens, g noteGroup) {
 	open := a.doneOpen[g.sec.ID]
 	r := ui.Row(c).Height(18).Padding(2, 4).Gap(4).AlignItems(ui.Center).Key("done-" + g.sec.ID)
 	r.Children(func() {
-		chev := "chevron-right"
-		if open {
-			chev = "chevron-down"
-		}
-		licon(c, chev, 10, k.muted)
+		foldChevronSized(c, !open, 10, k.muted)
 		text(c, tr("已完成 ")+itoa(len(g.done)), 10, 14, 400, k.muted)
 	})
 	if r.Clicked() {
 		a.doneOpen[g.sec.ID] = !open
 	}
 	if open {
-		for _, n := range g.done {
-			a.noteCard(c, k, n)
-		}
+		ui.Column(c).Gap(4).Key("done-body-" + g.sec.ID).Transition(foldTransition).Children(func() {
+			for _, n := range g.done {
+				a.noteCard(c, k, n)
+			}
+		})
 	}
 }
 

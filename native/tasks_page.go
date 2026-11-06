@@ -191,6 +191,10 @@ func (a *app) tasksPage(c *ui.Context) {
 	k := tok(c)
 	now := a.now()
 	a.taskSubtabs(c, k)
+	a.swapView(ui.Column(c).Grow(1), "tsub", a.taskSub).Children(func() { a.taskSubBody(c, k, now) })
+}
+
+func (a *app) taskSubBody(c *ui.Context, k tokens, now time.Time) {
 	if a.taskSub == 2 {
 		a.billsPage(c, k)
 		return
@@ -506,18 +510,14 @@ func (a *app) taskListView(c *ui.Context, k tokens, now time.Time) {
 		open := a.bandOpen["done"]
 		r := ui.Row(c).Height(18).Margin(4, 0, 0, 0).Padding(2, 4).Gap(4).AlignItems(ui.Center).AlignSelf(ui.Start)
 		r.Children(func() {
-			chev := "chevron-right"
-			if open {
-				chev = "chevron-down"
-			}
-			licon(c, chev, 10, k.muted)
+			foldChevronSized(c, !open, 10, k.muted)
 			text(c, tr("已完成 ")+itoa(len(b.done)), 10, 14, 400, k.muted)
 		})
 		if r.Clicked() {
 			a.bandOpen["done"] = !open
 		}
 		if open {
-			ui.Column(c).Gap(4).Children(func() {
+			ui.Column(c).Gap(4).Key("tdone-body").Transition(foldTransition).Children(func() {
 				for _, t := range b.done {
 					a.taskRow(c, k, t, now)
 				}
@@ -533,11 +533,7 @@ func (a *app) smartBand(c *ui.Context, k tokens, key, title, icon string, fg, ba
 		ui.Row(c).Height(16).Padding(0, 4, 0, 0).Gap(4).AlignItems(ui.Center).Children(func() {
 			h := ui.Row(c).Grow(1).Padding(0, 0, 0, 2).Gap(4).Radius(6).AlignItems(ui.Center)
 			h.Children(func() {
-				chev := "chevron-down"
-				if !open {
-					chev = "chevron-right"
-				}
-				licon(c, chev, 12, fg)
+				foldChevronSized(c, !open, 12, fg)
 				if icon != "" {
 					licon(c, icon, 12, k.violetIcon)
 				}
@@ -552,7 +548,7 @@ func (a *app) smartBand(c *ui.Context, k tokens, key, title, icon string, fg, ba
 			}
 		})
 		if open {
-			ui.Column(c).Gap(4).Children(func() {
+			ui.Column(c).Gap(4).Key("band-body-" + key).Transition(foldTransition).Children(func() {
 				for _, t := range tasks {
 					a.taskRow(c, k, t, now)
 				}
@@ -573,12 +569,8 @@ func (a *app) taskSection(c *ui.Context, k tokens, g taskGroup, now time.Time) {
 			_ = a.store.MoveTask(d.id, g.sec.ID, "")
 		}
 		head.Children(func() {
-			chev := "chevron-down"
-			if collapsed {
-				chev = "chevron-right"
-			}
 			b := ui.Box(c).Size(16, 16).Radius(6).Center()
-			b.Children(func() { licon(c, chev, 12, k.muted) })
+			b.Children(func() { foldChevron(c, k, collapsed) })
 			if b.Clicked() {
 				g.sec.Collapsed = !collapsed
 				_ = a.store.UpdateTaskSection(g.sec)
@@ -653,7 +645,7 @@ func (a *app) taskSection(c *ui.Context, k tokens, g taskGroup, now time.Time) {
 		if collapsed {
 			return
 		}
-		ui.Column(c).Gap(4).Children(func() {
+		ui.Column(c).Gap(4).Key("tsecbody-" + g.sec.ID).Transition(foldTransition).Children(func() {
 			if len(g.tasks) == 0 {
 				text(c, tr("此分组为空"), 11, 16, 400, k.muted).Padding(8, 0).TextAlign(ui.Center).FillWidth()
 			}

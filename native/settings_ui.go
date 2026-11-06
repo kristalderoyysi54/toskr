@@ -125,7 +125,11 @@ func (a *app) settingsShell(c *ui.Context, pages []setPage) {
 			ui.Scroll(c).Fill().Children(func() {
 				// 右侧留 5px 与 Tauri 的经典滚动条占位一致，720 内容列在剩余宽度内居中
 				ui.Column(c).Padding(20, 25, 20, 20).AlignItems(ui.Center).Children(func() {
-					ui.Column(c).FillWidth().MaxWidth(720).Children(func() {
+					view := a.setPage*16 + a.setSub
+					if a.setQuery != "" {
+						view = -1
+					}
+					a.swapView(ui.Column(c).FillWidth().MaxWidth(720), "set-page", view).Children(func() {
 						if a.setQuery != "" {
 							a.searchResults(c, k, s, pages)
 							return

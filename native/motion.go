@@ -72,3 +72,40 @@ func overThumb(c *ui.Context, content func()) {
 	ui.Box(c).Invisible().Children(content)
 	ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Center().Children(content)
 }
+
+// swapView 给「同一位置换内容」的容器（子页签、筛选、视图切换、设置页）加进出场：新内容从切换方向 8pt 外淡入、
+// 旧内容原地淡出（160ms ease-standard，同 --duration-overlay）；减弱动效时 mygo 只保留淡入淡出。
+// Tauri 只有顶层页签有 PageSlide、其余瞬切；用户 2026-11-06 要求所有切换统一成渐隐渐显。
+func (a *app) swapView(e ui.Element, group string, idx int) ui.Element {
+	return e.Key(group + "-" + itoa(idx)).Transition(a.swapTransition(group, idx))
+}
+
+func (a *app) swapTransition(group string, idx int) ui.ElementTransition {
+	if a.swapIdx == nil {
+		a.swapIdx = map[string]int{}
+	}
+	dx := float32(0)
+	if prev, ok := a.swapIdx[group]; ok && prev != idx {
+		dx = 8 * sign(idx-prev)
+	}
+	a.swapIdx[group] = idx
+	return ui.ElementTransition{Duration: 160 * time.Millisecond, Ease: easeStandard, Colors: true, Enter: &ui.Motion{X: dx}, Exit: &ui.Motion{}}
+}
+
+// foldTransition：分组折叠 / 展开时内容沿纵向收拢并淡出、展开时反向（200ms ease-standard）；减弱动效时只淡入淡出。
+var foldTransition = ui.ElementTransition{Duration: 200 * time.Millisecond, Ease: easeStandard, Colors: true,
+	Enter: &ui.Motion{Collapse: true}, Exit: &ui.Motion{Collapse: true}}
+
+// foldChevron：折叠箭头随状态转 -90°（springControl），代替换图标的瞬切。
+func foldChevron(c *ui.Context, k tokens, collapsed bool) {
+	foldChevronSized(c, collapsed, 12, k.muted)
+}
+
+func foldChevronSized(c *ui.Context, collapsed bool, size float32, col ui.Color) {
+	rot := float32(0)
+	if collapsed {
+		rot = -90
+	}
+	ic := ui.Box(c).Size(size, size).Center()
+	ic.AnimatePose(ui.Pose{Rotate: rot}, springControl).Children(func() { licon(c, "chevron-down", size, col) })
+}
