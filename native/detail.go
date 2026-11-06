@@ -15,6 +15,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
+	"github.com/toskr/native/internal/macos"
 	"github.com/toskr/native/internal/store"
 )
 
@@ -704,7 +705,7 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 		if left.Clicked() {
 			a.sendDetail(n)
 		}
-		right := ui.Box(c).Size(28, 32).Radius(0, 16, 16, 0).Background(fill).Border(1, border).Center()
+		right := ui.Box(c).Size(28, 32).Radius(0, 16, 16, 0).Background(fill).Border(1, border).Center().Label(tr("更多发送选项"))
 		right.Children(func() { licon(c, "chevron-down", 12, fg) })
 		right.Menu(func(m *ui.Menu) {
 			r, _ := a.resolution()
@@ -717,6 +718,21 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 				a.sendDetailMode(n, "strip-markdown")
 			}
 			m.Separator()
+			m.Item(tr("发送到…")).Disabled(true) // 同 Tauri：列出运行中的常规应用，选中即改为本次目标并发送
+			apps := runningTargets()
+			for _, app := range apps {
+				if m.Item(app.Name).Chosen() {
+					if a.adoptTarget(app) {
+						a.sendDetail(n)
+					} else {
+						a.showHUD("warn", tr("该应用暂不可作为发送目标"))
+					}
+				}
+			}
+			if len(apps) == 0 {
+				m.Item(tr("暂无其他可用应用")).Disabled(true)
+			}
+			m.Separator()
 			on := r.Profile.EnterPolicy != "never"
 			if m.Item(tr("粘贴后回车")).Checked(on).Disabled(a.target.PID == 0).Chosen() { // 本次覆盖当前目标的方案规则
 				a.setRule(func(o *store.RuleOverrides) { o.EnterPolicy = map[bool]string{true: "never", false: "allow"}[on] })
@@ -727,6 +743,21 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 			}
 		})
 	})
+}
+
+var runningTargets = macos.RegularApps // 测试替换
+
+// adoptTarget 同 Tauri adopt_send_target：手动采信该应用为当前发送目标（身份锁定用内核启动时刻）。
+func (a *app) adoptTarget(app macos.AppInfo) bool {
+	if app.PID <= 0 || app.PID == a.sys.SelfPID() {
+		return false
+	}
+	a.target = macos.FrontApp{PID: app.PID, BundleID: app.BundleID, Name: app.Name}
+	a.targetStarted = app.StartedMs
+	if a.targetStarted == 0 {
+		a.targetStarted = macos.ProcessStartMs(app.PID)
+	}
+	return true
 }
 
 // sendDetailMode：详情窗「发送方式」——本次覆盖输出格式后照常发送（挂起时保留到确认 / 取消）。
