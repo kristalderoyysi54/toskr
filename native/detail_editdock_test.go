@@ -54,3 +54,29 @@ func TestDetailEditDock(t *testing.T) {
 		t.Fatalf("图文卡逐文字块处理 %+v", a.detail.blocks)
 	}
 }
+
+// 图片备注：清空 = 清除备注（卡面回到默认标题），可撤销；本来就没备注时清空不出「已保存」。
+func TestImageNoteClear(t *testing.T) {
+	a, _ := testApp(t)
+	n, _, err := a.store.Add(store.Note{Text: "图片 10×20", Kind: "image", ImageFile: "x.png", ImageW: 10, ImageH: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.detail = detailState{id: n.ID, imgNote: true}
+	a.detailText = "  "
+	a.saveImageNote()
+	if a.hudText == "已保存" {
+		t.Fatal("没备注时清空不该提示已保存")
+	}
+	_ = a.store.Update(n.ID, "备注")
+	a.detail.imgNote, a.detailText = true, ""
+	a.saveImageNote()
+	got, _ := a.store.Note(n.ID)
+	if imageNoteText(got) != "" || a.hudText != "已保存" || a.hudUndo == nil {
+		t.Fatalf("清空备注 %q hud=%q", got.Text, a.hudText)
+	}
+	a.hudUndo()
+	if got, _ := a.store.Note(n.ID); got.Text != "备注" {
+		t.Fatalf("撤销 %q", got.Text)
+	}
+}

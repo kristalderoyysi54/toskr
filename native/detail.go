@@ -193,7 +193,7 @@ func (a *app) saveImageNote() {
 	if t == "" { // 清空 = 清除备注；卡面回到默认标题（imageNoteText 视为无备注）
 		t = fmt.Sprintf(tr("图片 %d×%d"), n.ImageW, n.ImageH)
 	}
-	if t == n.Text {
+	if t == n.Text || shotCaption.MatchString(t) && imageNoteText(n) == "" { // 本来就没备注、清空仍是没备注：不算修改
 		return
 	}
 	_ = a.store.Update(n.ID, t)
