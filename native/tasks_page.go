@@ -197,10 +197,6 @@ func (a *app) tasksPage(c *ui.Context) {
 	now := a.now()
 	a.taskSubtabs(c, k)
 	page := ui.Column(c).Grow(1)
-	if page.Clicked() && a.taskOpen != "" { // 同 Tauri TaskRow 行外 mousedown：点行外空白收起展开态（先保存）
-		a.commitTaskEdit()
-		a.taskOpen = ""
-	}
 	a.swapView(page, "tsub", a.taskSub).Children(func() { a.taskSubBody(c, k, now) })
 }
 
@@ -757,6 +753,15 @@ func (a *app) taskRow(c *ui.Context, k tokens, t store.Task, now time.Time) {
 	card := ui.Column(c).Padding(6, 8).Radius(10).Border(1, ui.Transparent).Key("task-" + t.ID)
 	if !open {
 		card.Height(38)
+	}
+	if open && card.PressedOutside() { // 同 Tauri TaskRow 行外 mousedown：点到别处就保存并收起（弹层算在卡内）
+		id := t.ID
+		a.onMain(func() {
+			if a.taskOpen == id {
+				a.commitTaskEdit()
+				a.taskOpen = ""
+			}
+		})
 	}
 	if t.Spark && !done {
 		card.Background(k.sparkRow)
