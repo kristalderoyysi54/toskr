@@ -388,6 +388,9 @@ func (a *app) panelKeys(c *ui.Context) {
 	if a.cmdOpen { // 命令面板打开时独占键盘（输入框处理 ↑↓↵ Esc）
 		return
 	}
+	if !typing && a.kbDragKeys(c) { // 键盘拖拽排序：拾起后独占方向键 / Space / Esc
+		return
+	}
 	if c.Shortcut(0, ui.KeyEscape) {
 		switch {
 		case a.clipPick != "": // 长按弹出的分组选择先关
