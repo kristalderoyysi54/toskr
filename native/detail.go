@@ -44,6 +44,7 @@ type detailState struct {
 	pickPara            bool                 // 选词粒度：段（同 Tauri pickGranularity）
 	blocks              []store.ContentBlock // 图文混排卡编辑态的内容块草稿（nil = 按纯文本编辑）
 	blank               bool                 // 本次是新建的「新笔记」占位卡：关窗时一字未改就删掉（同 Tauri note-discard-blank）
+	editPreview         bool                 // 编辑态「渲染」预览草稿（同 Tauri editPreviewOn）
 }
 
 // 多详情窗（同 Tauri detailWindows.ts，📌 固定并存）：每扇窗一份 detailPane。渲染 / 获得焦点时把该窗的状态换进
@@ -432,6 +433,13 @@ func (a *app) detailBody(c *ui.Context, k tokens, s settingsTokens, n store.Note
 					a.detailBlocksEdit(c, k, n)
 					break
 				}
+				if a.detail.editPreview { // 「渲染」：预览当前草稿，再点「原文」回到编辑器（同 Tauri editPreviewOn）
+					ui.Column(c).Margin(5.85, 0, 0, 0).Gap(5.85).Key("detail-edit-preview").Children(func() {
+						renderMarkdown(c, k, a.detailText, float32(a.store.Settings().DetailFontSize)+1)
+					})
+					a.detailMediaStrip(c, k, n)
+					break
+				}
 				ta := ui.TextAreaBase(c, &a.detailText).FillWidth().Margin(5.85, 0, 0, 0).Lines(12, 1000).Font(fontSans).FontSize(13).
 					FixedLineHeight(21.125).TextColor(k.fg).Focus().OnPaste(func(t string) bool { return a.pasteIntoDetail(n, t) })
 				if sel := a.detail.editSel; sel[0] >= 0 { // 双击 / 划词进编辑：落在同一处（同 Tauri pendingSelectionRef）
@@ -665,7 +673,24 @@ func dockButton(c *ui.Context, k tokens, icon, label string, active bool) ui.Ele
 
 func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note) {
 	d := &a.detail
-	if d.edit { // 同 Tauri 编辑态坞：自动保存语义，没有「取消」；正文为空时保存置灰
+	if d.edit { // 同 Tauri 编辑态坞：原文/渲染 · 处理 · 粘贴图片 · 保存 ⌘⏎；自动保存语义，没有「取消」；正文为空时保存置灰
+		if d.blocks == nil && !isCode(n) && noteURL(n) == "" {
+			label := tr("渲染")
+			if d.editPreview {
+				label = tr("原文")
+			}
+			if dockButton(c, k, "", label, d.editPreview).Clicked() {
+				d.editPreview = !d.editPreview
+			}
+		}
+		if d.blocks != nil || strings.TrimSpace(a.detailText) != "" {
+			a.editTextOpMenu(c, k, n)
+		}
+		img := dockButton(c, k, "image-plus", "", false).Role(ui.RoleButton).Label(tr("粘贴图片（⌘V）")).Tooltip(tr("粘贴图片（⌘V）"))
+		if img.Clicked() {
+			imgs, _ := a.pasteImages()
+			a.addImagesToDetail(n, imgs, tr("剪贴板里没有可用图片"))
+		}
 		b := dockButton(c, k, "", tr("保存 ⌘⏎"), true)
 		if d.blocks == nil && strings.TrimSpace(a.detailText) == "" {
 			b.Opacity(0.5).Tooltip(tr("笔记内容不能为空"))
@@ -870,7 +895,7 @@ func (a *app) commitDetailEdit(n store.Note) bool {
 	}
 	before, _ := a.store.Note(n.ID)
 	a.saveDetail()
-	a.detail.edit = false
+	a.detail.edit, a.detail.editPreview = false, false
 	after, ok := a.store.Note(n.ID)
 	if !ok || (after.Text == before.Text && after.Title == before.Title && slices.Equal(after.Blocks, before.Blocks)) {
 		return true
@@ -903,7 +928,7 @@ func (a *app) discardBlankDraft() {
 func (a *app) enterDetailEdit(n store.Note) {
 	a.saveDetail()
 	a.detail.edit, a.detail.pick, a.detailText = true, false, n.Text
-	a.detail.blocks = nil
+	a.detail.blocks, a.detail.editPreview = nil, false
 	if store.HasMixedContent(n.Blocks) {
 		a.detail.blocks = slices.Clone(n.Blocks)
 	}
@@ -1049,4 +1074,69 @@ func (a *app) editInDetail(n store.Note) {
 		return
 	}
 	a.enterDetailEdit(n)
+}
+
+// editTextOpMenu：编辑态坞的「处理」（同 Tauri renderTextOpMenu 编辑分支）：有选区只处理选中内容并选中结果，
+// 否则处理整篇草稿（图文卡逐文字块，图片位置不变）；结果无变化出 info「内容无变化」。改的是草稿，保存时落库。
+func (a *app) editTextOpMenu(c *ui.Context, k tokens, n store.Note) {
+	scope := tr("处理当前草稿")
+	if _, _, sel := a.detailSelection(n.Text); a.detail.blocks == nil && sel != "" {
+		scope = tr("处理选中内容")
+	}
+	dockButton(c, k, "wand-sparkles", tr("处理"), false).Tooltip(scope).PopoverMenuButton(func(m *ui.Menu) {
+		for _, op := range textOps {
+			if m.Item(tr(op.label)).Chosen() {
+				a.applyEditTextOp(n, op.apply)
+			}
+		}
+	})
+}
+
+func (a *app) applyEditTextOp(n store.Note, apply func(string) (string, error)) {
+	fail := func(err error) { a.showHUD("warn", tr("处理失败：")+err.Error()) }
+	if bs := a.detail.blocks; bs != nil {
+		next, changed := slices.Clone(bs), false
+		for i, b := range next {
+			if b.Type != "text" {
+				continue
+			}
+			out, err := apply(b.Text)
+			if err != nil {
+				fail(err)
+				return
+			}
+			changed = changed || out != b.Text
+			next[i].Text = out
+		}
+		if !changed {
+			a.showHUD("info", tr("内容无变化"))
+			return
+		}
+		a.detail.blocks = next
+		return
+	}
+	if lo, hi, sel := a.detailSelection(n.Text); sel != "" {
+		out, err := apply(sel)
+		if err != nil {
+			fail(err)
+			return
+		}
+		if out == sel {
+			a.showHUD("info", tr("内容无变化"))
+			return
+		}
+		a.replaceDetailRange(n, lo, hi, out)
+		return
+	}
+	out, err := apply(a.detailText)
+	if err != nil {
+		fail(err)
+		return
+	}
+	if out == a.detailText {
+		a.showHUD("info", tr("内容无变化"))
+		return
+	}
+	a.detailText = out
+	a.detail.editSel = [2]int{len([]rune(out)), len([]rune(out))}
 }
