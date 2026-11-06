@@ -174,6 +174,7 @@ type app struct {
 	fxLoaded, fxFetching                   bool
 	taskFocus                              string // 任务页键盘焦点（↑↓）
 	taskQuickFocused                       bool   // 速记框有焦点（上一帧）
+	diagFilter                             string // 设置 → 诊断的筛选：all | capture | delivery
 	billRange                              string // 消费分析趋势：month | year
 	remStatusAsked                         bool   // 设置页已查过提醒事项授权状态
 	// 设置页「本机翻译」状态

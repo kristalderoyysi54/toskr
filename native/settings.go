@@ -38,6 +38,7 @@ func (a *app) openSettings() {
 			Vibrancy: mygo.VibrancySidebar, Transparent: true,
 			Content: ui.View(a.settingsView),
 		})
+		diagWin.Store(a.settingsWin)                                     // 诊断页实时刷新用（diag.Push 可能在任意 goroutine）
 		a.settingsWin.OnFocus(func() { a.refreshLocalTranslate(false) }) // 回到窗口时重查（可能刚在系统设置里下完语言包）
 		a.settingsWin.OnClose(func(e *mygo.CloseEvent) {
 			if !a.quitting { // 退出时放行，否则会取消整个退出
@@ -141,6 +142,10 @@ func (a *app) settingsView(c *ui.Context) {
 	}
 	if a.tapErr != "" {
 		tapStatus = a.tapErr
+	}
+	screenStatus := tr("未授权")
+	if screenAllowed() {
+		screenStatus = tr("已授权")
 	}
 
 	pages := []setPage{
@@ -473,8 +478,24 @@ func (a *app) settingsView(c *ui.Context) {
 					}
 				}},
 				{title: tr("键盘监听"), hint: tapStatus},
+				{title: tr("输入监控"), hint: tr("双击触发键需要；授权对当前版本没生效时可重置后重新勾选"), control: func() {
+					ui.Row(c).Gap(6).Children(func() {
+						if button(c, s, "重置授权") {
+							a.resetInputMonitoring()
+						}
+						if button(c, s, "打开设置") {
+							openPrivacy("Privacy_ListenEvent")
+						}
+					})
+				}},
+				{title: tr("屏幕录制"), hint: tr("区域截图、长截屏、图内识别需要 · ") + screenStatus, control: func() {
+					if button(c, s, "打开设置") {
+						openPrivacy("Privacy_ScreenCapture")
+					}
+				}},
 			}},
 		}}},
+		{label: "诊断", icon: "scroll-text", sections: [][]setSection{a.diagSections(c, k, s)}},
 		{label: "帮助与更新", icon: "info", sections: [][]setSection{{
 			{tr("关于"), []setRow{
 				{title: "Toskr Native " + mygo.App.Version(), hint: cmpOr(a.updateMsg, "mygo · "+tr("原生界面")), control: func() {

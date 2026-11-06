@@ -125,6 +125,11 @@ func start() (*app, error) {
 		})
 	})
 	a.panel.SetOpacity(st.Settings().WindowAlpha())
+	diag.OnPush(func() { // 设置 → 诊断页开着时随新事件重绘
+		if w := diagWin.Load(); w != nil {
+			w.Invalidate()
+		}
+	})
 	st.OnChange(a.remindersChanged) // 任务变了 1.5s 后推提醒事项（关着时直接返回）
 	if st.Settings().RemindersOn {
 		a.scheduleReminderSync(3 * time.Second) // 启动先对账一轮（含导入列表里新建的提醒）
