@@ -82,4 +82,7 @@ var en = map[string]string{
 	"截图已加入队列": "Screenshot queued", "没有识别到文字": "No text found",
 	"任务到期": "Task due", "账单提醒": "Bill reminder", "完成": " done",
 	"润色": "Polish", "精简": "Shorten", "翻译为英文": "Translate to English", "翻译为中文": "Translate to Chinese", "写成提示词": "Rewrite as prompt",
+	"确认获取链接预览…": "Fetch Link Preview…", "确认获取链接预览": "Fetch Link Preview?", "仅本次允许": "Allow Once", "已更新链接预览": "Link preview updated",
+	"未获取预览（取消、网络失败或地址受限）": "No preview (canceled, network error, or restricted address)",
+	"本次将访问 %s 获取标题和图标，允许此地址访问内网。不会发送应用中的其他内容；授权不覆盖其他内网地址的重定向。": "Toskr will visit %s once to fetch its title and icon, allowing this local-network address. Nothing else from the app is sent, and redirects to other local-network addresses are not covered.",
 }

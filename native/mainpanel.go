@@ -471,6 +471,10 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 				}
 				return
 			}
+			if n.Kind == "link" {
+				a.linkBlock(c, k, n)
+				return
+			}
 			if cardTitle(n) == "sql" {
 				a.codeText(c, k, n.Text)
 				return
@@ -596,6 +600,12 @@ func (a *app) compactCard(c *ui.Context, k tokens, n store.Note, hovered bool) {
 		}
 		if n.Kind == "image" {
 			line = tr("图片")
+		}
+		if n.Kind == "link" && !n.Blur {
+			a.linkFavicon(c, n, 16)
+			if n.LinkTitle != "" {
+				line = n.LinkTitle
+			}
 		}
 		if cardTitle(n) == "sql" {
 			text(c, line, 11, 16, 400, k.fg).Font(fontMono).SingleLine().Grow(1).Basis(0)

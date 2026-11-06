@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/toskr/native/internal/linkmeta"
 )
 
 const (
@@ -274,6 +276,11 @@ func (s *Store) Add(n Note) (Note, bool, error) {
 	if strings.TrimSpace(n.Text) == "" {
 		return Note{}, false, errors.New("空内容")
 	}
+	if n.Kind == "" && n.ImageFile == "" && len(n.Attachments) == 0 { // 整段就是链接 → link 卡（同 Tauri detectLink，裸域名补 https://）
+		if u := linkmeta.Detect(n.Text); u != "" {
+			n.Kind, n.URL = "link", u
+		}
+	}
 	s.mu.Lock()
 	dup := false
 	if i := slices.IndexFunc(s.notes, func(o Note) bool { return o.Section == n.Section && o.Text == n.Text }); i >= 0 {
@@ -387,9 +394,49 @@ func (s *Store) Update(id, text string) error {
 		if i < 0 || s.notes[i].Text == text {
 			return false
 		}
-		s.notes[i].Text, s.notes[i].HTML = text, ""
+		n := &s.notes[i]
+		n.Text, n.HTML = text, ""
+		relink(n)
 		return true
 	})
+}
+
+// relink：编辑后重判链接（同 Tauri normalizeNoteContent）——仍是链接且 URL 变了清掉旧标题图标等重抓；不再是链接则退回文字卡。
+func relink(n *Note) {
+	if n.Kind != "" && n.Kind != "link" || n.ImageFile != "" || len(n.Attachments) > 0 {
+		return
+	}
+	u := linkmeta.Detect(n.Text)
+	switch {
+	case u != "":
+		if u != n.URL {
+			n.LinkTitle, n.LinkIcon = "", ""
+		}
+		n.Kind, n.URL = "link", u
+	case n.Kind == "link":
+		n.Kind, n.URL, n.LinkTitle, n.LinkIcon = "", "", "", ""
+	}
+}
+
+// SetLinkMeta 写入抓到的网页标题 / 图标；抓取期间 URL 被改或卡片已删则丢弃（同 Tauri enrichLinkMeta）。
+func (s *Store) SetLinkMeta(id, url, title, icon string) bool {
+	ok := false
+	_ = s.mutate(func() bool {
+		i := s.index(id)
+		if i < 0 || s.notes[i].Kind != "link" || s.notes[i].URL != url || title == "" && icon == "" {
+			return false
+		}
+		n := &s.notes[i]
+		if title != "" {
+			n.LinkTitle = title
+		}
+		if icon != "" {
+			n.LinkIcon = icon
+		}
+		ok = true
+		return true
+	})
+	return ok
 }
 
 // ReplaceImage 换掉图片卡里的图（打码 / 标注写回），返回原图信息供撤销。

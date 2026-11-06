@@ -305,8 +305,11 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 						ui.Image(c, img).Size(min(24*w/max(h, 1), 48), 24).Radius(4)
 					}
 					line = itoa(n.ImageW) + " × " + itoa(n.ImageH)
-				case isLink && n.LinkTitle != "":
-					line = n.LinkTitle
+				case isLink:
+					a.linkFavicon(c, n, 16)
+					if n.LinkTitle != "" {
+						line = n.LinkTitle
+					}
 				}
 				t := text(c, line, 13, 18, 400, k.fg).SingleLine().Grow(1)
 				if n.Kind == "code" {
@@ -350,7 +353,10 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 					title = n.Text
 				}
 				ui.Column(c).Gap(2).Children(func() {
-					text(c, title, 13, 16.25, 600, k.fg).SingleLine()
+					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+						a.linkFavicon(c, n, 16)
+						text(c, title, 13, 16.25, 600, k.fg).SingleLine().Grow(1).Basis(0)
+					})
 					text(c, linkHost(n.Text), 11, 13.75, 400, k.muted).SingleLine()
 				})
 			case n.Kind == "code":
@@ -484,8 +490,11 @@ func (a *app) clipRow(c *ui.Context, k tokens, n store.Note, hovered, isLink boo
 		line = ""
 	case n.Kind == "image":
 		line = tr("图片") + " " + itoa(n.ImageW) + " × " + itoa(n.ImageH)
-	case isLink && n.LinkTitle != "":
-		line = n.LinkTitle
+	case isLink:
+		a.linkFavicon(c, n, 16)
+		if n.LinkTitle != "" {
+			line = n.LinkTitle
+		}
 	}
 	if title := strings.TrimSpace(n.Title); title != "" && !n.Blur {
 		spans := []ui.Span{{Text: title, Weight: 500, Color: k.fg}}

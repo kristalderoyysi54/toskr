@@ -134,11 +134,13 @@ type app struct {
 	taskDue, taskEnd                       string // 展开态的到期 / 重复结束输入
 	taskCk                                 map[string]*string
 	taskSecRename, taskSecName             string
-	recordingKey                           string    // 设置里正在录制的全局快捷键（panel / shot / newnote）
-	altSince                               time.Time // 只按住 ⌥ 的起点（长按 650ms 弹快捷键速查）
-	setShortcutsOpen                       bool      // 设置「面板内快捷键」表展开
-	setJump                                string    // 设置窗下一帧要跳到的页名
-	lastClipID                             string    // 上一次外部复制入库的卡（连续复制两次置顶用）
+	recordingKey                           string            // 设置里正在录制的全局快捷键（panel / shot / newnote）
+	altSince                               time.Time         // 只按住 ⌥ 的起点（长按 650ms 弹快捷键速查）
+	linkSeen                               map[string]string // 链接卡 ID → 已处理的 URL（新卡 / 新 URL 才抓预览）
+	linkSem                                chan struct{}     // 链接预览并发上限
+	setShortcutsOpen                       bool              // 设置「面板内快捷键」表展开
+	setJump                                string            // 设置窗下一帧要跳到的页名
+	lastClipID                             string            // 上一次外部复制入库的卡（连续复制两次置顶用）
 	lastClipAt                             time.Time
 	trayBuilt                              string      // 托盘菜单上次重建时的状态键
 	forceCheck                             bool        // 本次发送强制先过检查条（检查后发送…）
@@ -231,7 +233,7 @@ type app struct {
 }
 
 func newApp(sys core.System, st *store.Store) *app {
-	a := &app{sys: sys, store: st, page: pageNotes, prevPage: -1, section: store.SectionInbox, doneOpen: map[string]bool{}, bandOpen: map[string]bool{"overdue": true, "spark": true}, clipView: "time", billView: "week", billFilter: "upcoming", clock: time.Now, thumbs: map[string]ui.ImageSource{}, revealed: map[string]time.Time{}, secretOpening: map[string]bool{}, secretPlain: map[string]string{}, secretFx: map[string]time.Time{}, drawerMore: map[string]bool{}}
+	a := &app{sys: sys, store: st, page: pageNotes, prevPage: -1, section: store.SectionInbox, doneOpen: map[string]bool{}, bandOpen: map[string]bool{"overdue": true, "spark": true}, clipView: "time", billView: "week", billFilter: "upcoming", clock: time.Now, thumbs: map[string]ui.ImageSource{}, revealed: map[string]time.Time{}, secretOpening: map[string]bool{}, secretPlain: map[string]string{}, secretFx: map[string]time.Time{}, drawerMore: map[string]bool{}, linkSem: make(chan struct{}, 2)}
 	a.reload()
 	return a
 }
@@ -239,6 +241,7 @@ func newApp(sys core.System, st *store.Store) *app {
 // reload 从 store 重建当前视图（主线程）。
 func (a *app) reload() {
 	all := a.store.Notes()
+	a.sweepLinks(all)
 	a.counts = map[string]int{}
 	for _, n := range all {
 		if !n.Done {

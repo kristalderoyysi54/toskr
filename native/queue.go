@@ -505,6 +505,9 @@ func (a *app) cardMenu(c *ui.Context, m *ui.Menu, i int, n store.Note) {
 		if link := noteLink(n); link != "" && m.Item(tr("打开链接")).Chosen() {
 			_ = exec.Command("/usr/bin/open", link).Start()
 		}
+		if n.Kind == "link" && n.URL != "" && m.Item(tr("确认获取链接预览…")).Chosen() {
+			a.confirmFetchLink(n)
+		}
 		if m.Item(tr("预览")).Chosen() {
 			a.openDetail(n)
 		}
