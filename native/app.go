@@ -51,25 +51,26 @@ type app struct {
 	longCap                            atomic.Pointer[longCapture] // 进行中的长截屏（键盘 tap 读：Esc 取消）
 
 	// 面板状态
-	page       int
-	section    string // 当前笔记分组
-	query      string
-	notes      []store.Note // 当前分组 + 搜索后的未完成项
-	done       []store.Note // 当前分组已完成项
-	counts     map[string]int
-	noteIdx    map[string]int // 笔记 ID → a.notes 下标（卡片构建时 O(1) 取键盘选中位置）
-	vis        visWindow
-	clipList   []store.Note // 剪贴页列表快照：换页动画里旧页不会读到另一页的 a.notes
-	clipScroll ui.ScrollState
-	selected   int
-	chosen     ui.Selection[string]
-	list       ui.ListState
-	search     ui.Handle
-	draft      string
-	draftIn    ui.Handle
-	pinned     bool
-	showDone   bool
-	newSecOn   bool
+	page             int
+	section          string // 当前笔记分组
+	query            string
+	notes            []store.Note // 当前分组 + 搜索后的未完成项
+	done             []store.Note // 当前分组已完成项
+	counts           map[string]int
+	noteIdx          map[string]int // 笔记 ID → a.notes 下标（卡片构建时 O(1) 取键盘选中位置）
+	vis              visWindow
+	clipList         []store.Note // 剪贴页列表快照：换页动画里旧页不会读到另一页的 a.notes
+	clipScroll       ui.ScrollState
+	selected         int
+	chosen           ui.Selection[string]
+	list             ui.ListState
+	search           ui.Handle
+	draft            string
+	draftIn          ui.Handle
+	clipSrcCollapsed map[string]bool // 剪贴页按来源分组时各组的折叠态（仅本次运行，同 Tauri useState）
+	pinned           bool
+	showDone         bool
+	newSecOn         bool
 	// 笔记分组侧栏：过滤（"" = 全部）、展开、就地改名
 	noteFilter, renamingSec, renameText string
 	noteRailOpen                        bool

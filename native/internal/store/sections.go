@@ -360,3 +360,48 @@ func (s *Store) MoveNoteBefore(id, beforeID string) error {
 	s.mu.Unlock()
 	return s.MoveToAt(id, sec, pos)
 }
+
+// MoveClipsToNotes 把剪贴卡移进笔记分组（同 Tauri moveClipsToNotes：剪贴「固定不清理」与笔记「常用」语义不同，
+// 一并清掉 keep / done）。移到目标组顶部，按传入顺序。返回撤销函数：把这些卡按原样放回原位置。
+func (s *Store) MoveClipsToNotes(ids []string, section string) (undo func(), moved int) {
+	type orig struct {
+		n   Note
+		pos int
+	}
+	var before []orig
+	_ = s.mutate(func() bool {
+		var picked []Note
+		for _, id := range ids {
+			if i := s.index(id); i >= 0 && s.notes[i].Section == SectionClipboard {
+				before = append(before, orig{s.notes[i], i})
+				n := s.notes[i]
+				n.Section, n.Kept, n.Done = section, false, false
+				picked = append(picked, n)
+			}
+		}
+		if len(picked) == 0 {
+			return false
+		}
+		s.notes = slices.DeleteFunc(s.notes, func(n Note) bool {
+			return slices.ContainsFunc(picked, func(p Note) bool { return p.ID == n.ID })
+		})
+		at := slices.IndexFunc(s.notes, func(n Note) bool { return n.Section == section })
+		if at < 0 {
+			at = len(s.notes)
+		}
+		s.notes = slices.Insert(s.notes, at, picked...)
+		return true
+	})
+	slices.SortFunc(before, func(a, b orig) int { return a.pos - b.pos })
+	return func() {
+		_ = s.mutate(func() bool {
+			s.notes = slices.DeleteFunc(s.notes, func(n Note) bool {
+				return slices.ContainsFunc(before, func(o orig) bool { return o.n.ID == n.ID })
+			})
+			for _, o := range before {
+				s.notes = slices.Insert(s.notes, min(o.pos, len(s.notes)), o.n)
+			}
+			return true
+		})
+	}, len(before)
+}

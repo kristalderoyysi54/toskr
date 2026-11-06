@@ -113,6 +113,10 @@ func (a *app) clipPage(c *ui.Context, k tokens) {
 					}
 					a.clipHeader(c, k, band, i == 0, list[i:j]...)
 					y += 28
+					if a.clipView == "source" && a.clipSrcCollapsed[band] { // 同 Tauri clipSourceCollapsed：折叠的来源组只留组头
+						i = j
+						continue
+					}
 					if a.clipView == "image" {
 						y += a.clipGrid(c, k, list[i:j], band, y, vis)
 						i = j
@@ -158,10 +162,38 @@ func (a *app) clipHeader(c *ui.Context, k tokens, label string, first bool, band
 	if source {
 		a.clipSourceMenu(row, label, band)
 	}
+	byApp := a.clipView == "source" && len(band) > 0
 	row.Children(func() {
-		if label != "" {
-			text(c, label, 10, 14, 500, k.muted)
+		hd := ui.Row(c).Gap(8).AlignItems(ui.Center).Key("srchd").Shrink(1)
+		if byApp {
+			hd.Role(ui.RoleButton).Label(label)
+			if hd.Clicked() {
+				if a.clipSrcCollapsed == nil {
+					a.clipSrcCollapsed = map[string]bool{}
+				}
+				a.clipSrcCollapsed[label] = !a.clipSrcCollapsed[label]
+			}
 		}
+		hd.Children(func() {
+			if byApp { // 同 Tauri 来源组头：箭头 · 应用图标（固定组为星标）· 名称 · 条数
+				chev := "chevron-right"
+				if !a.clipSrcCollapsed[label] {
+					chev = "chevron-down"
+				}
+				licon(c, chev, 12, k.muted).Margin(0, -4, 0, 0)
+				if band[0].Kept {
+					licon(c, "star", 12, k.muted).Margin(0, -4, 0, 0)
+				} else if img := a.appIcon(band[0].BundleID); img != nil {
+					ui.Image(c, img).Size(14, 14).Margin(0, -4, 0, 0)
+				}
+			}
+			if label != "" {
+				text(c, label, 10, 14, 500, k.muted)
+			}
+			if byApp {
+				text(c, itoa(len(band)), 10, 14, 400, k.muted).Margin(0, 0, 0, -4)
+			}
+		})
 		if source {
 			if d, ok := a.store.Settings().ClipAppRetention[store.ClipSourceKey(band[0])]; ok {
 				text(c, fmt.Sprintf(tr("· 保留 %s"), formatRetention(d)), 10, 14, 400, k.muted).SingleLine()
@@ -439,6 +471,12 @@ func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool, to
 			if len(grid) > 0 && grid[0] && !slices.Contains([]string{"send", "copy", open, "trash-2"}, act.icon) {
 				continue // 图片网格瓷砖只留 4 个（同 Tauri NoteCard grid：发送 / 复制 / 预览 / 删除）
 			}
+			if act.icon == "pencil" && n.Kind == "image" { // 同 Tauri：图片卡是文字备注
+				act.tip = "添加文字备注"
+				if imageNoteText(n) != "" {
+					act.tip = "编辑文字备注"
+				}
+			}
 			if act.icon == "eye-off" && n.Blur {
 				act.icon, act.tip = "eye", "取消模糊"
 			}
@@ -452,7 +490,7 @@ func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool, to
 			}
 			switch act.icon {
 			case "send":
-				a.send([]store.Note{n})
+				a.send(a.clipMoveTargets(n)) // 同 Tauri sendSelfOrChecked：当前卡在多选里就发整组
 			case "pin":
 				_ = a.store.SetKept(n.ID, !n.Kept)
 			case "copy":
@@ -472,9 +510,7 @@ func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool, to
 			case "eye-off", "eye":
 				_ = a.store.SetBlur(n.ID, !n.Blur)
 			case "trash-2":
-				if r, pos, ok := a.store.Delete(n.ID); ok {
-					a.showHUDUndo("ok", tr("已删除 · ")+preview(r.Text, 14), func() { _ = a.store.Restore(r, pos) })
-				}
+				a.deleteSelfOrChosen(n)
 			}
 			a.reload()
 		}

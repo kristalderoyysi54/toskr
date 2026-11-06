@@ -82,6 +82,8 @@ func (a *app) queueKeys(c *ui.Context) {
 	if c.Shortcut(0, ui.KeySpace) {
 		if link := noteLink(cur); cur.Kind == "link" && link != "" {
 			_ = exec.Command("/usr/bin/open", link).Start()
+		} else if a.detailWin != nil && a.detailWin.IsVisible() && a.detail.id == cur.ID {
+			a.detailWin.Hide() // 同 Tauri toggleNoteDetail：同一张卡再按 Space 收起详情窗
 		} else {
 			a.openDetail(cur)
 		}
@@ -522,7 +524,7 @@ func (a *app) menuEntry(c *ui.Context, m *ui.Menu, id string, n store.Note, mult
 			a.exportNotes(a.chosenNotes())
 		}
 	case "edit":
-		if single && m.Item(tr("编辑")).Chosen() {
+		if single && !isImage && m.Item(tr("编辑")).Chosen() { // 同 Tauri：图片卡右键不给「编辑」（2026-08-27）
 			a.startEdit()
 		}
 	case "ocr":
@@ -608,7 +610,11 @@ func (a *app) menuEntry(c *ui.Context, m *ui.Menu, id string, n store.Note, mult
 		}
 		m.Submenu(label, func(sm *ui.Menu) {
 			for _, s := range a.store.Sections() {
-				if s.ID != n.Section && s.ID != store.SectionClipboard && sm.Item(sectionName(s)).Chosen() {
+				if isClip && s.ID != store.SectionClipboard && sm.Item(sectionName(s)).Chosen() {
+					a.moveClipsTo(a.clipMoveTargets(n), s.ID)
+					continue
+				}
+				if !isClip && s.ID != n.Section && s.ID != store.SectionClipboard && sm.Item(sectionName(s)).Chosen() {
 					for _, x := range a.chosenNotes() {
 						_ = a.store.MoveToAt(x.ID, s.ID, 0)
 					}

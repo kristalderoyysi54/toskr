@@ -300,8 +300,21 @@ func TestMessageContextMenu(t *testing.T) {
 		t.Fatalf("%+v", ts)
 	}
 	tt.RightClick("小王")
+	if err := tt.ChooseMenuItem("删除消息"); err == nil {
+		t.Fatal("同 Tauri：未处理的消息不能删")
+	}
+	tt.Key(0, ui.KeyEscape)
+	var ids []string
+	for _, m := range a.store.Messages() {
+		ids = append(ids, m.ID)
+	}
+	a.store.SetMessagesStatus(ids, "done")
+	a.reload()
+	a.msgFilter = "done"
+	tt.Frame()
+	tt.RightClick("小王")
 	if err := tt.ChooseMenuItem("删除消息"); err != nil {
-		t.Fatal(err)
+		t.Fatal(err, tt.Texts())
 	}
 	if len(a.store.Messages()) != 1 {
 		t.Fatal("删除")

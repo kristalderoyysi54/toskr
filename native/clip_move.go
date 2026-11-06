@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -23,29 +24,36 @@ type longPress struct {
 
 // clipMoveTargets：要移动的卡——当前卡在多选里就是整组，否则只有它。
 func (a *app) clipMoveTargets(n store.Note) []store.Note {
-	if a.chosen.Has(n.ID) {
+	if a.chosen.Has(n.ID) && a.chosen.Len() > 1 {
 		return a.chosenNotes()
 	}
 	return []store.Note{n}
 }
 
+// moveClipsTo 同 Tauri moveClipsToNotesWithUndo：清掉固定 / 完成，可撤销；收件箱文案「已移入笔记」。
 func (a *app) moveClipsTo(notes []store.Note, section string) {
-	for _, x := range notes {
-		_ = a.store.MoveToAt(x.ID, section, 0)
+	ids := make([]string, len(notes))
+	for i, x := range notes {
+		ids[i] = x.ID
 	}
+	undo, n := a.store.MoveClipsToNotes(ids, section)
 	a.chosen.Clear()
 	a.reload()
-	name := tr("收件箱")
-	for _, s := range a.store.Sections() {
-		if s.ID == section && section != store.SectionInbox {
-			name = sectionName(s)
+	if n == 0 {
+		return
+	}
+	msg := tr("已移入笔记")
+	if section != store.SectionInbox {
+		for _, s := range a.store.Sections() {
+			if s.ID == section {
+				msg = tr("已移入「") + sectionName(s) + "」"
+			}
 		}
 	}
-	if len(notes) == 1 {
-		a.showHUD("ok", tr("已移入「")+name+"」")
-	} else {
-		a.showHUD("ok", tr("已移入「")+name+"」 "+itoa(len(notes))+tr(" 条"))
+	if n > 1 {
+		msg += " " + itoa(n) + tr(" 条")
 	}
+	a.showHUDUndo("ok", msg, undo)
 }
 
 func (a *app) noteSectionItems(m *ui.Menu, n store.Note) {
@@ -138,4 +146,15 @@ func (a *app) clipPickPopover(c *ui.Context, k tokens) {
 			}
 		})
 	})
+}
+
+// deleteSelfOrChosen 同 Tauri deleteSelfOrChecked：当前卡在多选里就删整组，提示「已删除 n 条」，可撤销。
+func (a *app) deleteSelfOrChosen(n store.Note) {
+	targets := a.clipMoveTargets(n)
+	ids := make([]string, len(targets))
+	for i, x := range targets {
+		ids[i] = x.ID
+		a.chosen.Remove(x.ID)
+	}
+	a.deleteNotesUndo(ids, fmt.Sprintf(tr("已删除 %d 条"), len(ids)))
 }

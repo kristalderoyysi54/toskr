@@ -598,8 +598,10 @@ func (a *app) messageMenu(menu *ui.Menu, m store.Message) {
 	if menu.Item(label).Disabled(a.msgDraftBusy != "").Chosen() {
 		a.draftReply(m)
 	}
-	menu.Separator()
-	if menu.Item(tr("删除消息")).Chosen() {
+	if m.Status == "done" { // 同 Tauri：只有已处理的消息能删
+		menu.Separator()
+	}
+	if m.Status == "done" && menu.Item(tr("删除消息")).Chosen() {
 		removed := a.store.RemoveMessages([]string{m.ID})
 		a.showHUDUndo("ok", tr("已删除这条消息"), func() { a.store.RestoreMessages(removed) })
 	}
