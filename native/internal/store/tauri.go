@@ -183,6 +183,7 @@ type tauriSettings struct {
 	ContextMenu        []MenuItem      `json:"contextMenu"`
 	CalendarEnabled    *bool           `json:"appleCalendarEnabled"`
 	CalendarHiddenIDs  []string        `json:"appleCalendarHiddenIds"`
+	PageOrder          []string        `json:"pageOrder"`
 }
 
 // TauriReport 是导入结果。
@@ -695,6 +696,9 @@ func applyTauriSettings(st Settings, t tauriSettings) Settings {
 	}
 	if t.CalendarHiddenIDs != nil {
 		st.CalendarHidden = t.CalendarHiddenIDs
+	}
+	if len(t.PageOrder) > 0 {
+		st.PageOrder = NormalizePageOrder(t.PageOrder)
 	}
 	return st
 }

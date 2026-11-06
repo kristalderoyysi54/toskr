@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -132,6 +133,8 @@ func (a *app) pageSlide(c *ui.Context, build func(p int)) {
 	if a.prevPage >= 0 && c.Now().Sub(a.pageAt) > 400*time.Millisecond {
 		a.prevPage = -1
 	}
+	order := a.visiblePages() // 方向按页签的显示顺序（可拖动重排）
+	pos := func(p int) int { return slices.Index(order, p) }
 	ui.Box(c).Grow(1).Clip().Children(func() {
 		for _, p := range []int{a.prevPage, a.page} {
 			if p < 0 || (p == a.page && p == a.prevPage) {
@@ -140,10 +143,10 @@ func (a *app) pageSlide(c *ui.Context, build func(p int)) {
 			pg := ui.Column(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Key(pageKey(p))
 			pose := ui.Pose{}
 			if p != a.page {
-				pose = ui.Pose{X: 24 * sign(p-a.page), Fade: 1}
+				pose = ui.Pose{X: 24 * sign(pos(p)-pos(a.page)), Fade: 1}
 				pg.PassThrough()
 			} else {
-				pg.Transition(ui.ElementTransition{Animation: &springSnappy, Position: true, Enter: &ui.Motion{X: 24 * sign(a.page-max(a.prevPage, 0))}})
+				pg.Transition(ui.ElementTransition{Animation: &springSnappy, Position: true, Enter: &ui.Motion{X: 24 * sign(pos(a.page)-pos(max(a.prevPage, 0)))}})
 			}
 			pg.AnimatePose(pose, springSnappy).Children(func() { build(p) })
 		}
@@ -347,14 +350,14 @@ func (a *app) panelMenu(c *ui.Context, k tokens) {
 // panelKeys：面板级快捷键（同 Tauri App.tsx 键盘处理）：⌃Tab / ⌘←→ 切页、Esc 逐层退出、⌘F 搜索、⌘Z 撤销、⇧⌘⌫ 清理已完成。
 func (a *app) panelKeys(c *ui.Context) {
 	typing := a.editing != "" || a.titleEditID != "" || a.tagEditID != "" || a.renamingSec != "" || a.taskOpen != "" || a.taskSecRename != ""
-	if c.Shortcut(ui.Ctrl, ui.KeyTab) {
-		a.switchPage((a.page + 1) % 3)
+	if c.Shortcut(ui.Ctrl, ui.KeyTab) { // 按页签顺序循环（页签可拖动重排，剪贴历史关闭时跳过剪贴页）
+		a.pageStep(1, true)
 	}
-	if !typing && c.Shortcut(ui.Cmd, ui.KeyLeft) && a.page > 0 {
-		a.switchPage(a.page - 1)
+	if !typing && c.Shortcut(ui.Cmd, ui.KeyLeft) {
+		a.pageStep(-1, false)
 	}
-	if !typing && c.Shortcut(ui.Cmd, ui.KeyRight) && a.page < 2 {
-		a.switchPage(a.page + 1)
+	if !typing && c.Shortcut(ui.Cmd, ui.KeyRight) {
+		a.pageStep(1, false)
 	}
 	if !typing && c.Shortcut(ui.Cmd, ui.KeyK) {
 		a.cmdOpen, a.cmdQuery, a.cmdCursor = !a.cmdOpen, "", 0

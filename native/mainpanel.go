@@ -101,11 +101,63 @@ func (a *app) targetBar(c *ui.Context, k tokens) {
 
 var tabLabels = []string{"剪贴", "笔记", "任务"}
 
+var pageIDs = map[string]int{"clipboard": pageClip, "notes": pageNotes, "tasks": pageTasks}
+
+// visiblePages：按设置的页签顺序（同 Tauri pageOrder），秘文是「内容」下的子页不占一级；关闭剪贴历史时不出剪贴页。
+func (a *app) visiblePages() []int {
+	st := a.store.Settings()
+	var out []int
+	for _, id := range store.NormalizePageOrder(st.PageOrder) {
+		p, ok := pageIDs[id]
+		if ok && (p != pageClip || st.ClipboardWatch || a.page == pageClip) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func pageID(p int) string {
+	for k, v := range pageIDs {
+		if v == p {
+			return k
+		}
+	}
+	return ""
+}
+
+type tabDrag struct{ page int }
+
+// pageStep：⌘←→ / ⌃Tab 按可见页签顺序移动（wrap 时循环）。
+func (a *app) pageStep(d int, wrap bool) {
+	pages := a.visiblePages()
+	i := max(0, slices.Index(pages, a.page)) + d
+	if wrap {
+		i = (i + len(pages)) % len(pages)
+	}
+	if i >= 0 && i < len(pages) {
+		a.switchPage(pages[i])
+	}
+}
+
+// scrollPageTop：双击页签回到列表起点（滚到顶、焦点回第一张）。
+func (a *app) scrollPageTop(p int) {
+	switch p {
+	case pageClip:
+		a.clipScroll.ScrollTo(0, 0, springSnappy)
+	case pageNotes:
+		a.noteScroll.ScrollTo(0, 0, springSnappy)
+	case pageTasks:
+		a.taskScroll.ScrollTo(0, 0, springSnappy)
+	}
+	a.selected = 0
+}
+
 func (a *app) tabs(c *ui.Context, k tokens) {
 	ui.Row(c).Height(30).Margin(6, 12, 6, 12).AlignItems(ui.Start).Children(func() {
 		ui.Row(c).Padding(2).Radius(10).Background(k.track).Children(func() {
 			st := a.store.Settings()
-			for i, label := range tabLabels {
+			for _, i := range a.visiblePages() {
+				label := tabLabels[i]
 				if i == pageNotes && st.SecretEnabled {
 					label = "内容" // 秘文开启后笔记页升格为「内容」域（笔记 · 秘文），与 Tauri 一致
 				}
@@ -121,7 +173,13 @@ func (a *app) tabs(c *ui.Context, k tokens) {
 				if badge > 0 {
 					w = 66 // 文字 22 + 间距 6 + 徽标 16 + 内边距 20 + 边框 2
 				}
-				b := ui.Box(c).Size(w, 26).Padding(1).Radius(8).Key("tab-" + label)
+				b := ui.Box(c).Size(w, 26).Padding(1).Radius(8).Key("tab-" + label).Tooltip(fmt.Sprintf(tr("切换到%s；双击返回列表起点；拖动可调整顺序"), tr(label)))
+				b.Drag(tabDrag{i})
+				if d, ok := ui.Drop[tabDrag](b); ok && d.page != i { // 拖到另一个页签上 = 移到它的位置（同 Tauri arrayMove）
+					cur := a.store.Settings()
+					cur.PageOrder = store.MovePage(cur.PageOrder, pageID(d.page), pageID(i))
+					_ = a.store.SetSettings(cur)
+				}
 				hover := !sel && b.Hovered()
 				if hover { // 悬停底色不在 Tauri 的过渡列表里：即时
 					b.Background(k.hoverBg)
@@ -156,6 +214,9 @@ func (a *app) tabs(c *ui.Context, k tokens) {
 				})
 				if b.Clicked() {
 					a.switchPage(i)
+				}
+				if b.DoubleClicked() {
+					a.scrollPageTop(i)
 				}
 			}
 		})

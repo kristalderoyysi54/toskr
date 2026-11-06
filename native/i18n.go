@@ -86,6 +86,7 @@ var en = map[string]string{
 	"动作": "Actions", "卡片": "Cards", "发送勾选的 %d 张卡到对话": "Send %d checked cards to chat", "检查后发送勾选的卡…": "Check, then send checked cards…",
 	"发送焦点卡片到对话": "Send focused card to chat", "检查后发送焦点卡片…": "Check, then send focused card…", "搜索当前页": "Search this page",
 	"切到内容页": "Go to Content", "切到剪贴页": "Go to Clipboard", "切到提醒页": "Go to Reminders", "最近发送记录": "Recent sends", "（无文字）": "(No text)",
+	"切换到%s；双击返回列表起点；拖动可调整顺序": "Switch to %s; double-click to return to the top; drag to reorder",
 	"苹果日历": "Apple Calendar", "显示苹果日历日程": "Show Apple Calendar events", "日程": "Events", "扣款": "Charges", "全天": "All day", "（无标题）": "(No title)",
 	"在「今天」时间轴里显示；只读，不会改动日历里的日程。点日程可在「日历」App 中打开。": "Shown on the Today timeline. Read-only: events are never changed. Click an event to open it in Calendar.",
 	"未获得日历访问权限": "No calendar access", "在「系统设置 → 隐私与安全性 → 日历」里允许 Toskr Native 完整访问": "Allow full access for Toskr Native in System Settings → Privacy & Security → Calendars",

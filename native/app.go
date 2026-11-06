@@ -146,9 +146,10 @@ type app struct {
 	cmdOpen                                bool // ⌘K 命令面板
 	cmdQuery                               string
 	cmdCursor                              int
-	setShortcutsOpen                       bool   // 设置「面板内快捷键」表展开
-	setJump                                string // 设置窗下一帧要跳到的页名
-	lastClipID                             string // 上一次外部复制入库的卡（连续复制两次置顶用）
+	taskScroll                             ui.ScrollState // 任务页滚动（双击页签回到开头）
+	setShortcutsOpen                       bool           // 设置「面板内快捷键」表展开
+	setJump                                string         // 设置窗下一帧要跳到的页名
+	lastClipID                             string         // 上一次外部复制入库的卡（连续复制两次置顶用）
 	lastClipAt                             time.Time
 	trayBuilt                              string      // 托盘菜单上次重建时的状态键
 	forceCheck                             bool        // 本次发送强制先过检查条（检查后发送…）

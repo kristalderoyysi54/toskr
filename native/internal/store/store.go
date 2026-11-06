@@ -111,6 +111,7 @@ type Settings struct {
 	ContextMenu    []MenuItem `json:"contextMenu,omitempty"`            // 卡片右键菜单的显隐与区内顺序（空 = 默认）
 	CalendarOn     bool       `json:"appleCalendarEnabled,omitempty"`   // 在「今天」显示苹果日历日程（只读）
 	CalendarHidden []string   `json:"appleCalendarHiddenIds,omitempty"` // 不显示的日历
+	PageOrder      []string   `json:"pageOrder,omitempty"`              // 一级页签顺序（可拖动重排）
 	ScreenshotKey  string     `json:"screenshotKey"`
 	ScreenshotOff  bool       `json:"screenshotOff,omitempty"`      // 区域截图总开关（Tauri screenshotEnabled，默认开）
 	ShotHideSelf   bool       `json:"screenshotHideSelf,omitempty"` // 截图时隐藏 Toskr 自己的窗口（默认不隐藏）

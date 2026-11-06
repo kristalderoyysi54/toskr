@@ -205,7 +205,7 @@ func (a *app) tasksPage(c *ui.Context) {
 		a.taskFilterBar(c, k, len(filtered))
 	}
 	ui.Box(c).Grow(1).Margin(6, 0, 0, 0).Children(func() {
-		ui.Scroll(c).Fill().Scrollbars(false).Children(func() {
+		ui.Scroll(c).Fill().Scrollbars(false).TrackScroll(&a.taskScroll).Children(func() {
 			ui.Column(c).Padding(4, 14, 8, 14).Gap(12).Children(func() {
 				switch {
 				case a.taskSub == 0:
