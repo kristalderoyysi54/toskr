@@ -293,8 +293,8 @@ func (a *app) settingsView(c *ui.Context) {
 							_ = a.store.SetSettings(cur)
 						}
 					}},
-					{title: tr("伴随应用"), hint: tr("以下应用在前台时，面板贴在其窗口右侧并跟随移动缩放（每行一个 bundle id）"), below: func() {
-						changed = textBox(c, k, s, &a.setCompan, 3, 8) || changed
+					{title: tr("伴随的应用"), hint: tr("这些应用在前台时面板自动停靠；加入当前应用前，需先在该应用中呼出过面板。"), below: func() {
+						changed = a.appListEditor(c, k, s, "companion-apps", &a.setCompan, tr("加入当前应用")) || changed
 					}},
 				}},
 			},
@@ -413,8 +413,8 @@ func (a *app) settingsView(c *ui.Context) {
 				}},
 			}},
 			{tr("排除应用"), []setRow{
-				{title: tr("不记录这些应用"), hint: tr("每行一个 bundle id，来自这些应用的复制与划词都不会被记录"), below: func() {
-					changed = textBox(c, k, s, &a.setExcluded, 3, 8) || changed
+				{title: tr("不记录这些应用"), hint: tr("来自这些应用的复制与划词都不会被记录"), below: func() {
+					changed = a.appListEditor(c, k, s, "excluded-apps", &a.setExcluded, tr("加入当前应用")) || changed
 				}},
 			}},
 		}}},
