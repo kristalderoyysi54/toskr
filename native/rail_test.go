@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"github.com/toskr/native/internal/macos"
@@ -191,5 +192,24 @@ func TestCardMenuAndKeys(t *testing.T) {
 	tt.Key(ui.Cmd, ui.Key1)
 	if len(sys.writes) == 0 {
 		t.Fatal("⌘1 快发第一张")
+	}
+}
+
+// 面板尺寸：记住的宽夹在 320–720，高度 0 = 铺满；跟随应用可停在左侧。
+func TestPanelSizeAndDockSide(t *testing.T) {
+	if w, h := panelSize(store.Settings{PanelWidth: 1000}); w != panelMaxW || h != 0 {
+		t.Fatal(w, h)
+	}
+	if w, _ := panelSize(store.Settings{PanelWidth: 200}); w != panelMinW {
+		t.Fatal(w)
+	}
+	wa := mygo.Rectangle{X: 0, Y: 25, Width: 1440, Height: 875}
+	r := dockBeside(macos.Rect{X: 500, Y: 60, W: 800, H: 700}, wa, 400, true)
+	if r.X != 500-400-6 || r.Width != 400 {
+		t.Fatalf("左侧停靠 %+v", r)
+	}
+	r = dockBeside(macos.Rect{X: 20, Y: 60, W: 800, H: 700}, wa, 400, true)
+	if r.X != 26 {
+		t.Fatalf("左边放不下贴内侧 %+v", r)
 	}
 }

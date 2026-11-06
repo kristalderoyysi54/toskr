@@ -117,6 +117,12 @@ type Settings struct {
 	DetailFontSize int    `json:"detailFontSize,omitempty"`    // 详情窗字号 10–24，0 = 12
 	CompanionOff   bool   `json:"companionOff,omitempty"`
 	FreeMove       bool   `json:"freeMove,omitempty"`
+	// 面板尺寸与位置（同 Tauri set_panel_width / 高度拖拽 / 自由移动位置；0 = 默认：宽 380、高度自动铺满）
+	PanelWidth  int    `json:"panelWidth,omitempty"`
+	PanelHeight int    `json:"panelHeight,omitempty"`
+	PanelX      int    `json:"panelX,omitempty"`
+	PanelY      int    `json:"panelY,omitempty"`
+	SidebarEdge string `json:"sidebarEdge,omitempty"` // 跟随应用时停在 left | right（默认右侧）
 	// 截图编辑器（Tauri 存 localStorage：toskr.screenshotStyle / CalloutStyle / Frame / Crosshair）
 	Shot ShotPrefs `json:"shot,omitempty"`
 }

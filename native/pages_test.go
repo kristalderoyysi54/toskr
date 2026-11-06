@@ -292,11 +292,11 @@ func TestStealthSilencesNonWarn(t *testing.T) {
 
 func TestDockBesideCompanionWindow(t *testing.T) {
 	wa := mygo.Rectangle{X: 0, Y: 25, Width: 1440, Height: 875}
-	got := dockBeside(macos.Rect{X: 100, Y: 60, W: 800, H: 700}, wa)
+	got := dockBeside(macos.Rect{X: 100, Y: 60, W: 800, H: 700}, wa, panelW, false)
 	if got.X != 906 || got.Y != 60 || got.Height != 700 {
 		t.Fatalf("应贴在窗口右侧 %+v", got)
 	}
-	full := dockBeside(macos.Rect{X: 0, Y: 25, W: 1440, H: 875}, wa)
+	full := dockBeside(macos.Rect{X: 0, Y: 25, W: 1440, H: 875}, wa, panelW, false)
 	if full.X != 1440-panelW-6 || full.Y+full.Height > 900-10 {
 		t.Fatalf("满屏窗口应放到内侧且不越出工作区 %+v", full)
 	}

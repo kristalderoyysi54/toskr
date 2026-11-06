@@ -109,7 +109,8 @@ type app struct {
 	sparkMode bool
 	// 卡片右键「重命名…」「新标签…」的就地输入
 	titleEditID, titleText, tagEditID, tagText string
-	tauriImporting                             bool // 正在从 Tauri 版导入
+	placed                                     mygo.Rectangle // 程序上次摆放面板的位置（与之相同的移动 / 缩放不当作用户操作记忆）
+	tauriImporting                             bool           // 正在从 Tauri 版导入
 	// 设置页「本机翻译」状态
 	ltStatus                        string
 	ltPreparing, ltFailed, ltOpened bool
@@ -272,7 +273,7 @@ func (a *app) showPanel() {
 		a.targetStarted = macos.ProcessStartMs(f.PID)
 	}
 	if !a.store.Settings().FreeMove { // 自由移动：保留用户拖到的位置
-		a.panel.SetBounds(a.panelBounds())
+		a.placePanel()
 	}
 	a.reload()
 	a.presenceArm = !a.panelHiding // 离场中途被叫回则从当前位置折返，否则从 0 起播
@@ -429,7 +430,7 @@ func (a *app) mergeChosen(c *ui.Context) {
 
 func (a *app) repositionPanel() {
 	if a.panel != nil {
-		a.panel.SetBounds(a.panelBounds())
+		a.placePanel()
 	}
 }
 

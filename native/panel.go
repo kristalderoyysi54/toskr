@@ -248,8 +248,12 @@ func (a *app) panelMenu(c *ui.Context, k tokens) {
 			item("arrow-left", tr("返回面板选项"), false, false, "", func() { a.placementOpen = false })
 			sep()
 			place := tr("屏幕右侧")
+			side := tr("右侧")
+			if st.SidebarEdge == "left" {
+				side = tr("左侧")
+			}
 			if !st.CompanionOff && len(st.Companion) > 0 {
-				place = tr("跟随应用 · 右侧")
+				place = tr("跟随应用 · ") + side
 			} else if st.FreeMove {
 				place = tr("自由移动")
 			}
@@ -258,6 +262,18 @@ func (a *app) panelMenu(c *ui.Context, k tokens) {
 				st.CompanionOff = !st.CompanionOff
 				_ = a.store.SetSettings(st)
 			})
+			if !st.CompanionOff {
+				label(tr("跟随位置"))
+				for _, e := range [][2]string{{"left", "应用左侧"}, {"right", "应用右侧"}} {
+					on := (st.SidebarEdge == "left") == (e[0] == "left")
+					item("", tr(e[1]), on, true, "", func() {
+						st.SidebarEdge = e[0]
+						_ = a.store.SetSettings(st)
+						closeMenu()
+						a.repositionPanel()
+					})
+				}
+			}
 			label(tr("屏幕位置"))
 			item("move", tr("自由移动"), st.FreeMove, true, "", func() {
 				st.FreeMove = true
