@@ -5,9 +5,11 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
 
+	"github.com/toskr/native/internal/codehl"
 	"github.com/toskr/native/internal/store"
 )
 
@@ -427,24 +429,26 @@ func (a *app) doneRow(c *ui.Context, k tokens, g noteGroup) {
 	}
 }
 
+// cardTitle 同 Tauri NoteCard typeLabel：图片 ×n / 图文 ×n / 链接 / 代码语言 / 文本。
 func cardTitle(n store.Note) string {
+	imgs := len(n.MediaFiles())
 	switch {
+	case n.Kind == "image" && imgs > 1:
+		return fmt.Sprintf(tr("图片 ×%d"), imgs)
 	case n.Kind == "image":
 		return tr("图片")
-	case n.Kind == "code" || looksLikeSQL(n.Text):
-		return "sql"
+	case imgs > 0:
+		return fmt.Sprintf(tr("图文 ×%d"), imgs+1)
+	case n.Kind == "link":
+		return tr("链接")
+	case isCode(n):
+		return tr(codehl.Label(n.CodeLang))
 	}
 	return tr("文本")
 }
 
-func looksLikeSQL(s string) bool {
-	s = strings.TrimLeft(s, " \t\r\n")
-	if len(s) > 7 {
-		s = s[:7] // 只看开头：整段转大写在长列表上每帧都很贵
-	}
-	u := strings.ToUpper(s)
-	return strings.HasPrefix(u, "SELECT ") || strings.HasPrefix(u, "INSERT ") || strings.HasPrefix(u, "UPDATE ")
-}
+// isCode：代码卡（同 Tauri 以 codeLang 判定；旧数据 kind=code 也算）。
+func isCode(n store.Note) bool { return n.CodeLang != "" || n.Kind == "code" }
 
 func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 	idx, ok := a.noteIdx[n.ID]
@@ -550,8 +554,8 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 				a.linkBlock(c, k, n)
 				return
 			}
-			if cardTitle(n) == "sql" {
-				a.codeText(c, k, n.Text)
+			if isCode(n) {
+				a.codeText(c, k, n)
 				return
 			}
 			if files := n.MediaFiles(); len(files) > 0 { // 图文组合卡：文字 + 右侧首图缩略（同 Tauri 组合卡）
@@ -727,7 +731,7 @@ func (a *app) compactCard(c *ui.Context, k tokens, n store.Note, hovered bool) {
 				line = n.LinkTitle
 			}
 		}
-		if cardTitle(n) == "sql" {
+		if isCode(n) {
 			text(c, line, 11, 16, 400, k.fg).Font(fontMono).SingleLine().Grow(1).Basis(0)
 		} else {
 			text(c, line, 12, 17, 400, k.fg).SingleLine().Grow(1).Basis(0)
@@ -778,48 +782,36 @@ func (a *app) cardActionsAt(c *ui.Context, k tokens, n store.Note, bottom float3
 	})
 }
 
-// codeText 做最小的 SQL 关键字着色（与 Tauri 版的配色一致：关键字 / 字符串 / 数字）。
-func (a *app) codeText(c *ui.Context, k tokens, src string) {
-	kw := map[string]bool{"SELECT": true, "FROM": true, "WHERE": true, "ORDER": true, "BY": true, "DESC": true, "ASC": true, "LIMIT": true,
-		"INSERT": true, "INTO": true, "VALUES": true, "UPDATE": true, "SET": true, "AND": true, "OR": true, "JOIN": true, "ON": true}
-	var spans []ui.Span
-	for _, tokn := range sqlTokens(src) {
-		col := k.fg
-		switch {
-		case kw[strings.ToUpper(tokn)]:
-			col = k.codeKeyword
-		case strings.HasPrefix(tokn, "'"):
-			col = k.codeString
-		case tokn != "" && tokn[0] >= '0' && tokn[0] <= '9':
-			col = k.codeNumber
-		}
-		spans = append(spans, ui.Span{Text: tokn, Color: col})
-	}
-	ui.RichText(c, spans...).Font(fontMono).FontSize(11).FixedLineHeight(16.5).Wrap().MaxLines(3)
+// codeText：卡面代码着色（同 Tauri 卡面 highlightCode，只算可见头部 600 字节）。
+func (a *app) codeText(c *ui.Context, k tokens, n store.Note) {
+	ui.RichText(c, codeSpans(k, n.Text, n.CodeLang, 600)...).Font(fontMono).FontSize(11).FixedLineHeight(16.5).Wrap().MaxLines(3)
 }
 
-func sqlTokens(s string) []string {
-	var out []string
-	for i := 0; i < len(s); {
-		j := i
-		switch ch := s[i]; {
-		case ch == '\'':
-			j++
-			for j < len(s) && s[j] != '\'' {
-				j++
-			}
-			j = min(j+1, len(s))
-		case isWord(ch):
-			for j < len(s) && isWord(s[j]) {
-				j++
-			}
-		default:
-			j++
+func codeSpans(k tokens, src, lang string, limit int) []ui.Span {
+	if limit > 0 && len(src) > limit {
+		cut := limit
+		for cut > 0 && !utf8.RuneStart(src[cut]) {
+			cut--
 		}
-		out = append(out, s[i:j])
-		i = j
+		src = src[:cut]
 	}
-	return out
+	toks := codehl.Highlight(src, lang)
+	spans := make([]ui.Span, len(toks))
+	for i, t := range toks {
+		col := k.fg
+		switch t.Kind {
+		case codehl.Keyword:
+			col = k.codeKeyword
+		case codehl.String:
+			col = k.codeString
+		case codehl.Number:
+			col = k.codeNumber
+		case codehl.Comment:
+			col = k.muted
+		}
+		spans[i] = ui.Span{Text: t.Text, Color: col}
+	}
+	return spans
 }
 
 func isWord(b byte) bool {

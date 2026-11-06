@@ -348,7 +348,7 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 					}
 				}
 				t := text(c, line, 13, 18, 400, k.fg).SingleLine().Grow(1)
-				if n.Kind == "code" {
+				if isCode(n) {
 					t.Font(fontMono).FontSize(12)
 				}
 			})
@@ -395,8 +395,8 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 					})
 					text(c, linkHost(n.Text), 11, 13.75, 400, k.muted).SingleLine()
 				})
-			case n.Kind == "code":
-				a.codeText(c, k, n.Text)
+			case isCode(n):
+				a.codeText(c, k, n)
 			default:
 				highlightText(c, k, n.Text, a.query, 12, 18, k.fg).Wrap().MaxLines(3)
 			}
@@ -529,7 +529,7 @@ func (a *app) clipRow(c *ui.Context, k tokens, n store.Note, hovered, isLink boo
 		ui.RichText(c, spans...).FontSize(13).FixedLineHeight(18).SingleLine().Grow(1).Basis(0)
 	} else {
 		t := text(c, line, 13, 18, 400, k.fg).SingleLine().Grow(1).Basis(0)
-		if n.Kind == "code" {
+		if isCode(n) {
 			t.Font(fontMono).FontSize(12)
 		}
 	}

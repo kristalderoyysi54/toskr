@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/toskr/native/internal/codehl"
 	"github.com/toskr/native/internal/linkmeta"
 )
 
@@ -314,6 +315,8 @@ func (s *Store) Add(n Note) (Note, bool, error) {
 	if n.Kind == "" && n.ImageFile == "" && len(n.Attachments) == 0 { // 整段就是链接 → link 卡（同 Tauri detectLink，裸域名补 https://）
 		if u := linkmeta.Detect(n.Text); u != "" {
 			n.Kind, n.URL = "link", u
+		} else if n.CodeLang == "" && len(n.Blocks) == 0 {
+			n.CodeLang = codehl.Detect(n.Text) // 同 Tauri addNote：非链接文字卡识别代码语言
 		}
 	}
 	s.mu.Lock()
@@ -447,9 +450,12 @@ func relink(n *Note) {
 		if u != n.URL {
 			n.LinkTitle, n.LinkIcon = "", ""
 		}
-		n.Kind, n.URL = "link", u
+		n.Kind, n.URL, n.CodeLang = "link", u, ""
 	case n.Kind == "link":
 		n.Kind, n.URL, n.LinkTitle, n.LinkIcon = "", "", "", ""
+	}
+	if n.Kind == "" || n.Kind == "code" { // 同 Tauri normalizeNoteContent：编辑后重判代码语言
+		n.CodeLang = codehl.Detect(n.Text)
 	}
 }
 

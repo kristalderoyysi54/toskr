@@ -418,7 +418,10 @@ func (a *app) detailBody(c *ui.Context, k tokens, s settingsTokens, n store.Note
 				// 阅读态整块共用一个选区：划词后点「编辑」或双击正文，进编辑时选区落在原文同一处
 				read := ui.Column(c).Padding(5.85, 0, 0, 0).Gap(5.85).Selectable().Key("detail-read")
 				read.Children(func() {
-					if a.detail.raw || n.Kind == "code" {
+					if isCode(n) && !a.detail.raw { // 代码卡着色（同 Tauri 详情 highlightCode）
+						ui.RichText(c, codeSpans(k, n.Text, n.CodeLang, 0)...).Font(fontMono).FontSize(13).FixedLineHeight(21.125).Wrap()
+						a.detailMediaStrip(c, k, n)
+					} else if a.detail.raw {
 						text(c, n.Text, 13, 21.125, 400, k.fg).Font(fontMono).Wrap()
 						a.detailMediaStrip(c, k, n)
 					} else if len(n.MediaFiles()) > 0 {
