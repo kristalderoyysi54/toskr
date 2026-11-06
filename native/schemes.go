@@ -35,6 +35,7 @@ func applyAppearance(st store.Settings) {
 		curScheme = "default"
 	}
 	setPlatinumDetail(st.PtHighlight, st.PtScrollbar)
+	cardAlpha = float32(st.CardAlpha())
 	if !appLive {
 		return
 	}
@@ -109,11 +110,18 @@ func schemed(t tokens) tokens {
 
 // cardFill 给卡片铺底：方案带底部渐变时为 155° 的 card → card(52%) → cardBottom。
 func cardFill(e ui.Element, k tokens) ui.Element {
-	if k.cardBottom == (ui.Color{}) {
-		return e.Background(k.card)
+	card, bottom := k.card, k.cardBottom
+	if cardAlpha < 1 && !k.pt { // 卡片底色不透明度（Tauri cardOpacity）
+		card, bottom = card.Alpha(cardAlpha), bottom.Alpha(cardAlpha)
 	}
-	return e.LinearGradient(ui.LinearGradient{From: k.card, To: k.cardBottom, Angle: 155, Start: 0.52, End: 1})
+	if k.cardBottom == (ui.Color{}) {
+		return e.Background(card)
+	}
+	return e.LinearGradient(ui.LinearGradient{From: card, To: bottom, Angle: 155, Start: 0.52, End: 1})
 }
+
+// cardAlpha：卡片底色不透明度，applyAppearance 写入（同 curScheme 的做法）。
+var cardAlpha float32 = 1
 
 // 设置窗的方案色：Tauri 设置页直接用 --background / --card / --muted / --border / --primary / 开关与按钮 token。
 type setPalette struct {

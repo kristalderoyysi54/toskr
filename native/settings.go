@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -244,10 +245,32 @@ func (a *app) settingsView(c *ui.Context) {
 					{title: tr("毛玻璃背景"), hint: tr("macOS 26 起为系统液态玻璃，更早系统回退为模糊材质"), hidden: st.ColorScheme == "platinum", control: func() {
 						changed = segmented(c, k, &a.setGlass, glassLabels...) || changed
 					}},
+					{title: tr("窗口整体不透明度"), hint: tr("连毛玻璃层一起变透，能看穿下层窗口"), control: a.pctSlider(c, k, st.WindowAlpha(), 30, 100, 5, func(s *store.Settings, v float64) { s.WindowOpacity = v })},
+					{title: tr("内容底色浓度"), hint: tr("面板底色的浓淡，毛玻璃关闭时最直观"), hidden: st.ColorScheme == "platinum",
+						control: a.pctSlider(c, k, st.PanelAlpha(), 25, 100, 1, func(s *store.Settings, v float64) { s.PanelOpacity = v })},
+					{title: tr("卡片底色不透明度"), hint: tr("调低可透出毛玻璃背景"), hidden: st.ColorScheme == "platinum",
+						control: a.pctSlider(c, k, st.CardAlpha(), 30, 100, 5, func(s *store.Settings, v float64) { s.CardOpacity = v })},
+					{title: tr("提示显示时长"), hint: tr("右上角气泡停留多久；失败提醒至少 4 秒"), control: func() {
+						v := st.HUDDuration().Seconds()
+						if sliderValue(c, k, &v, 2, 10, 1, fmt.Sprintf(tr("%d 秒"), int(v))) {
+							cur := a.store.Settings()
+							cur.HUDDurationMs = int(v) * 1000
+							_ = a.store.SetSettings(cur)
+						}
+					}},
 				}},
 			},
 			{
 				{tr("伴随停靠"), []setRow{
+					{title: tr("与窗口的间隙"), hint: tr("面板贴在应用窗口旁时留出的距离"), control: func() {
+						v := float64(st.Gap())
+						if sliderValue(c, k, &v, 0, 40, 1, fmt.Sprintf("%dpx", int(v))) {
+							cur := a.store.Settings()
+							g := int(v)
+							cur.CompanionGap = &g
+							_ = a.store.SetSettings(cur)
+						}
+					}},
 					{title: tr("伴随应用"), hint: tr("以下应用在前台时，面板贴在其窗口右侧并跟随移动缩放（每行一个 bundle id）"), below: func() {
 						changed = textBox(c, k, s, &a.setCompan, 3, 8) || changed
 					}},
@@ -701,4 +724,18 @@ func (a *app) clipPauseHint(st store.Settings) string {
 		return fmt.Sprintf(tr("已暂停，%s 恢复"), st.ClipPauseUntil.Format("15:04"))
 	}
 	return tr("临时停止，到点自动恢复")
+}
+
+// pctSlider：0–1 的比例设置用百分比滑块编辑；改卡片不透明度后重新应用外观。
+func (a *app) pctSlider(c *ui.Context, k tokens, cur float64, lo, hi, step float64, set func(*store.Settings, float64)) func() {
+	return func() {
+		v := math.Round(cur * 100)
+		if sliderValue(c, k, &v, lo, hi, step, fmt.Sprintf("%d%%", int(v))) {
+			st := a.store.Settings()
+			set(&st, v/100)
+			_ = a.store.SetSettings(st)
+			applyAppearance(st)
+			a.invalidateAll()
+		}
+	}
 }

@@ -90,7 +90,14 @@ func start() (*app, error) {
 		}
 	})
 	a.createHUD()
-	st.OnChange(func() { a.panel.Update(func() { a.reload(); a.refreshTray() }) })
+	st.OnChange(func() {
+		a.panel.Update(func() {
+			a.reload()
+			a.refreshTray()
+			a.panel.SetOpacity(a.store.Settings().WindowAlpha()) // 窗口整体不透明度
+		})
+	})
+	a.panel.SetOpacity(st.Settings().WindowAlpha())
 	st.OnError = func(err error) {
 		diag.Push("落盘失败: %v", err)
 		a.panel.Update(func() { a.showHUD("warn", "保存失败："+err.Error()) })

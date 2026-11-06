@@ -204,12 +204,37 @@ func TestPanelSizeAndDockSide(t *testing.T) {
 		t.Fatal(w)
 	}
 	wa := mygo.Rectangle{X: 0, Y: 25, Width: 1440, Height: 875}
-	r := dockBeside(macos.Rect{X: 500, Y: 60, W: 800, H: 700}, wa, 400, true)
+	r := dockBeside(macos.Rect{X: 500, Y: 60, W: 800, H: 700}, wa, 400, true, 6)
 	if r.X != 500-400-6 || r.Width != 400 {
 		t.Fatalf("左侧停靠 %+v", r)
 	}
-	r = dockBeside(macos.Rect{X: 20, Y: 60, W: 800, H: 700}, wa, 400, true)
+	r = dockBeside(macos.Rect{X: 20, Y: 60, W: 800, H: 700}, wa, 400, true, 6)
 	if r.X != 26 {
 		t.Fatalf("左边放不下贴内侧 %+v", r)
+	}
+}
+
+// 外观细项：设置页有对应行；卡片不透明度写回后应用到卡片底色；间隙进入停靠计算。
+func TestAppearanceDetailRows(t *testing.T) {
+	a, _ := testApp(t)
+	defer applyAppearance(store.Settings{})
+	a.openSettingsState()
+	st := ui.NewTester(a.settingsView, 1040, 720)
+	st.Frame()
+	for _, s := range []string{"窗口整体不透明度", "内容底色浓度", "卡片底色不透明度", "提示显示时长", "100%", "62%", "3 秒"} {
+		if !st.HasText(s) {
+			t.Fatalf("缺 %q：%v", s, st.Texts())
+		}
+	}
+	cur := a.store.Settings()
+	cur.CardOpacity = 0.5
+	_ = a.store.SetSettings(cur)
+	applyAppearance(cur)
+	if cardAlpha != 0.5 {
+		t.Fatalf("卡片不透明度 %v", cardAlpha)
+	}
+	wa := mygo.Rectangle{X: 0, Y: 25, Width: 1440, Height: 875}
+	if r := dockBeside(macos.Rect{X: 100, Y: 60, W: 800, H: 700}, wa, 380, false, 20); r.X != 920 {
+		t.Fatalf("间隙 20 应在窗口右缘外 20px：%v", r.X)
 	}
 }

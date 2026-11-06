@@ -38,7 +38,11 @@ func (a *app) panelView(c *ui.Context) {
 	shell := ui.Column(c).Fill()
 	p := a.panelPresence(c, shell)
 	// 底色是内容自绘的半透明膜（Tauri 同样画在 webview 里），随内容一起淡入淡出；系统材质本身不动
-	c.Root().Background(k.window.Alpha(min(p, 1))) // Alpha 是相乘
+	tint := float32(1)
+	if !k.pt { // 内容底色浓度（Tauri panelOpacity，默认 0.62 = 方案自带浓度）；Platinum 整窗不透明
+		tint = float32(a.store.Settings().PanelAlpha() / 0.62)
+	}
+	c.Root().Background(k.window.Alpha(min(p, 1) * tint)) // Alpha 是相乘
 	if k.pt {
 		shell.Children(func() { a.platinumPanel(c, k); a.recentDrawer(c, k) })
 		return

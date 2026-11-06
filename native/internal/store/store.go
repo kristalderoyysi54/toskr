@@ -100,13 +100,19 @@ type Settings struct {
 	ClipDoubleCopyOff bool      `json:"clipDoubleCopyKeepOff,omitempty"`
 	ClipKeepConcealed bool      `json:"clipKeepConcealed,omitempty"` // true = 不忽略密码管理器 / 隐藏内容
 	ClipKeepTransient bool      `json:"clipKeepTransient,omitempty"` // true = 不忽略瞬时内容
-	ScreenshotKey     string    `json:"screenshotKey"`
-	AIEndpoint        string    `json:"aiEndpoint"`
-	AIModel           string    `json:"aiModel"`
-	Companion         []string  `json:"companion"` // 伴随停靠的应用 bundle id
-	EdgeHide          bool      `json:"edgeHide"`
-	Currency          string    `json:"currency"`
-	DueReminders      bool      `json:"dueReminders"`
+	// 外观细项（同 Tauri windowOpacity / panelOpacity / cardOpacity / hudDurationMs / companionGap；0 / nil = 默认）
+	WindowOpacity float64  `json:"windowOpacity,omitempty"` // 0.3–1，默认 1
+	PanelOpacity  float64  `json:"panelOpacity,omitempty"`  // 内容底色浓度 0.25–1，默认 0.62
+	CardOpacity   float64  `json:"cardOpacity,omitempty"`   // 0.3–1，默认 1
+	HUDDurationMs int      `json:"hudDurationMs,omitempty"` // 2000–10000，默认 3000
+	CompanionGap  *int     `json:"companionGap,omitempty"`  // 0–40，默认 8
+	ScreenshotKey string   `json:"screenshotKey"`
+	AIEndpoint    string   `json:"aiEndpoint"`
+	AIModel       string   `json:"aiModel"`
+	Companion     []string `json:"companion"` // 伴随停靠的应用 bundle id
+	EdgeHide      bool     `json:"edgeHide"`
+	Currency      string   `json:"currency"`
+	DueReminders  bool     `json:"dueReminders"`
 	// 与 Tauri 一致的可选功能域（默认关闭）：订阅进「提醒」页第三个子视图，秘文进「内容」页
 	SubscriptionsEnabled bool `json:"subscriptionsEnabled"`
 	SecretEnabled        bool `json:"secretEnabled"`
@@ -612,4 +618,25 @@ func mergeSettings(st Settings) Settings {
 		st.Companion = d.Companion
 	}
 	return st
+}
+
+// 外观细项的生效值（未设 = Tauri 默认）。
+func (st Settings) WindowAlpha() float64 { return orDefault(st.WindowOpacity, 1, 0.3, 1) }
+func (st Settings) PanelAlpha() float64  { return orDefault(st.PanelOpacity, 0.62, 0.25, 1) }
+func (st Settings) CardAlpha() float64   { return orDefault(st.CardOpacity, 1, 0.3, 1) }
+func (st Settings) HUDDuration() time.Duration {
+	return time.Duration(orDefault(float64(st.HUDDurationMs), 3000, 2000, 10000)) * time.Millisecond
+}
+func (st Settings) Gap() int {
+	if st.CompanionGap == nil {
+		return 8
+	}
+	return min(max(*st.CompanionGap, 0), 40)
+}
+
+func orDefault(v, def, lo, hi float64) float64 {
+	if v == 0 {
+		return def
+	}
+	return min(max(v, lo), hi)
 }

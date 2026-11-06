@@ -89,3 +89,19 @@ func TestPromptSnippets(t *testing.T) {
 		t.Fatalf("最近使用 %v", st.RecentSnippets)
 	}
 }
+
+func TestAppearanceDefaultsAndClamp(t *testing.T) {
+	var st Settings
+	if st.WindowAlpha() != 1 || st.PanelAlpha() != 0.62 || st.CardAlpha() != 1 || st.HUDDuration().Seconds() != 3 || st.Gap() != 8 {
+		t.Fatal("未设置时用 Tauri 默认值")
+	}
+	zero, big := 0, 99
+	st = Settings{WindowOpacity: 0.1, PanelOpacity: 2, HUDDurationMs: 60000, CompanionGap: &zero}
+	if st.WindowAlpha() != 0.3 || st.PanelAlpha() != 1 || st.HUDDuration().Seconds() != 10 || st.Gap() != 0 {
+		t.Fatal("越界值夹到范围内；间隙 0 是有效值")
+	}
+	st.CompanionGap = &big
+	if st.Gap() != 40 {
+		t.Fatal("间隙上限 40")
+	}
+}

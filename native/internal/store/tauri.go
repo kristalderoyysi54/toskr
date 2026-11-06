@@ -169,6 +169,11 @@ type tauriSettings struct {
 	NewNoteHotkey      *string         `json:"newNoteHotkey"`
 	DoubleTapCapture   *bool           `json:"doubleTapCaptureOnly"`
 	CaptureSectionID   *string         `json:"captureSectionId"`
+	WindowOpacity      float64         `json:"windowOpacity"`
+	PanelOpacity       float64         `json:"panelOpacity"`
+	CardOpacity        float64         `json:"cardOpacity"`
+	HUDDurationMs      int             `json:"hudDurationMs"`
+	CompanionGap       *int            `json:"companionGap"`
 }
 
 // TauriReport 是导入结果。
@@ -469,6 +474,21 @@ func applyTauriSettings(st Settings, t tauriSettings) Settings {
 	set(&st.SecretCipherStyle, t.SecretCipherStyle)
 	if t.HotkeyGapMs > 0 {
 		st.TriggerGapMs = t.HotkeyGapMs
+	}
+	if t.WindowOpacity > 0 {
+		st.WindowOpacity = t.WindowOpacity
+	}
+	if t.PanelOpacity > 0 {
+		st.PanelOpacity = t.PanelOpacity
+	}
+	if t.CardOpacity > 0 {
+		st.CardOpacity = t.CardOpacity
+	}
+	if t.HUDDurationMs > 0 {
+		st.HUDDurationMs = t.HUDDurationMs
+	}
+	if t.CompanionGap != nil {
+		st.CompanionGap = t.CompanionGap
 	}
 	if t.DoubleTapCapture != nil {
 		st.DoubleTapCaptureOnly = *t.DoubleTapCapture

@@ -51,7 +51,7 @@ func (a *app) panelBounds() mygo.Rectangle {
 	if !ok {
 		return def
 	}
-	return dockBeside(f, wa, w, st.SidebarEdge == "left")
+	return dockBeside(f, wa, w, st.SidebarEdge == "left", st.Gap())
 }
 
 // onSomeScreen：矩形左上角落在某块屏的可用区内（换屏 / 拔显示器后不把面板放到屏外）。
@@ -65,15 +65,16 @@ func onSomeScreen(r mygo.Rectangle) bool {
 	return false
 }
 
-func dockBeside(f macos.Rect, wa mygo.Rectangle, w int, left bool) mygo.Rectangle {
-	x := int(f.X+f.W) + 6
+// gap：与窗口的间隙（Tauri companionGap）。
+func dockBeside(f macos.Rect, wa mygo.Rectangle, w int, left bool, gap int) mygo.Rectangle {
+	x := int(f.X+f.W) + gap
 	if left {
-		x = int(f.X) - w - 6
+		x = int(f.X) - w - gap
 		if x < wa.X+panelMargin {
-			x = int(f.X) + 6 // 左边放不下：放进窗口内侧
+			x = int(f.X) + gap // 左边放不下：放进窗口内侧
 		}
 	} else if x+w > wa.X+wa.Width-panelMargin {
-		x = int(f.X+f.W) - w - 6 // 窗口贴满屏宽：放进窗口内侧
+		x = int(f.X+f.W) - w - gap // 窗口贴满屏宽：放进窗口内侧
 	}
 	y, h := max(int(f.Y), wa.Y+panelMargin), int(f.H)
 	h = min(max(h, panelMinH), wa.Y+wa.Height-panelMargin-y)

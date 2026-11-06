@@ -114,9 +114,9 @@ func (a *app) showHUDForce(kind, text string) {
 	a.hud.SetIgnoreMouseEvents(true)
 	a.hud.Invalidate()
 	a.hud.ShowInactive()
-	hold := 1800 * time.Millisecond
+	hold := a.store.Settings().HUDDuration() // 提示显示时长（Tauri hudDurationMs，默认 3 秒）
 	if kind == "warn" {
-		hold = 4 * time.Second
+		hold = max(hold, 4*time.Second)
 	}
 	go a.watchHUDHover(gen, time.Now().Add(hold))
 }
