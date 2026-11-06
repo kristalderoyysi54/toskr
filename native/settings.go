@@ -432,6 +432,12 @@ func (a *app) settingsView(c *ui.Context) {
 						}
 					}
 				}},
+				{title: tr("消息监听（实验）"), hint: tr("只读监听 IM 群消息，在「内容 → 消息」里处理、转任务"), control: func() {
+					on := st.MessagesEnabled
+					if toggle(c, s, &on) {
+						a.setMessagesEnabled(on)
+					}
+				}},
 				{title: tr("秘文"), hint: tr("在本机把文字加密成中文、代码、日志等格式，对方自动识别解密"), control: setToggle(st.SecretEnabled, func(s *store.Settings, v bool) { s.SecretEnabled = v })},
 				{title: tr("订阅"), hint: tr("管理账单与信用卡到期，在「提醒」页按时提醒"), control: setToggle(st.SubscriptionsEnabled, func(s *store.Settings, v bool) { s.SubscriptionsEnabled = v })},
 			}},
@@ -489,6 +495,9 @@ func (a *app) settingsView(c *ui.Context) {
 	}
 	if st.SecretEnabled { // 与 Tauri 一致：秘文功能开启后侧栏才出现「秘文」分类
 		pages = slices.Insert(pages, 5, setPage{label: "秘文", icon: "key-round", sections: [][]setSection{a.secretSections(c, k, s, st)}})
+	}
+	if st.MessagesEnabled { // 消息监听同理
+		pages = slices.Insert(pages, 5, setPage{label: "消息监听", icon: "messages-square", sections: [][]setSection{a.messageWatchSections(c, k, s, st)}})
 	}
 	a.settingsShell(c, pages)
 	if changed {

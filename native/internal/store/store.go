@@ -155,6 +155,10 @@ type Settings struct {
 	RecentSnippets   []string        `json:"recentSnippetIds,omitempty"` // Tauri 存 localStorage
 	// 截图编辑器（Tauri 存 localStorage：toskr.screenshotStyle / CalloutStyle / Frame / Crosshair）
 	Shot ShotPrefs `json:"shot,omitempty"`
+	// IM 消息监听（同 Tauri messagesEnabled / messageWatchRules；监听目标 Tauri 存 localStorage）
+	MessagesEnabled bool          `json:"messagesEnabled,omitempty"`
+	MessageRules    []MessageRule `json:"messageWatchRules,omitempty"`
+	IMProfile       *IMProfile    `json:"imProfile,omitempty"`
 }
 
 // ShotPrefs 是截图编辑器记住的使用习惯；零值都表示默认（粗细存档位 +1，0 = 默认中档）。
@@ -194,6 +198,8 @@ type snapshot struct {
 	Bills        []Bill     `json:"bills,omitempty"`
 	Secrets      []Secret   `json:"secrets,omitempty"`
 	Deliveries   []Delivery `json:"deliveries,omitempty"`
+	Messages     []Message  `json:"messages,omitempty"`
+	MessagesGone []string   `json:"messagesGone,omitempty"` // 删过的消息标识：重放账本时不再收回
 }
 
 // PersistDelay 合并连续修改的落盘延迟：内存与界面即时生效，磁盘写入在后台线程合并执行
@@ -214,6 +220,8 @@ type Store struct {
 	bills        []Bill
 	secrets      []Secret
 	deliveries   []Delivery
+	messages     []Message
+	messagesGone []string
 	onChange     []func()
 	dirty        bool
 	timer        *time.Timer
@@ -247,6 +255,7 @@ func OpenDir(dir string, key []byte) (*Store, error) {
 	s.notes, s.settings = snap.Notes, mergeSettings(snap.Settings)
 	s.sections, s.tasks, s.taskSections, s.bills, s.secrets = snap.Sections, snap.Tasks, snap.TaskSections, snap.Bills, snap.Secrets
 	s.deliveries = snap.Deliveries
+	s.messages, s.messagesGone = snap.Messages, snap.MessagesGone
 	return s, nil
 }
 
@@ -629,7 +638,8 @@ func Fingerprint(notes []Note) string {
 
 func (s *Store) snapshotLocked() snapshot {
 	return snapshot{Version: 2, Notes: s.notes, Settings: s.settings, Sections: s.sections,
-		Tasks: s.tasks, TaskSections: s.taskSections, Bills: s.bills, Secrets: s.secrets, Deliveries: s.deliveries}
+		Tasks: s.tasks, TaskSections: s.taskSections, Bills: s.bills, Secrets: s.secrets, Deliveries: s.deliveries,
+		Messages: s.messages, MessagesGone: s.messagesGone}
 }
 
 // mergeSettings 用默认值补齐旧版本数据里缺的字段（只补零值）。

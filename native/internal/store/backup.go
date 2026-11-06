@@ -183,6 +183,8 @@ func (s *Store) ImportBackup(p *Preview) (added int, err error) {
 		mergeByID(&s.bills, p.snap.Bills, func(x Bill) string { return x.ID }, &dummy)
 		mergeByID(&s.secrets, p.snap.Secrets, func(x Secret) string { return x.ID }, &dummy)
 		mergeByID(&s.deliveries, p.snap.Deliveries, func(x Delivery) string { return x.ID }, &dummy)
+		mergeByID(&s.messages, p.snap.Messages, func(x Message) string { return x.ID }, &dummy)
+		sortMessages(s.messages)
 		return true
 	})
 	if err == nil {
@@ -276,6 +278,7 @@ func (s *Store) RestoreRecoveryPoint(path string) error {
 	err = s.mutate(func() bool {
 		s.notes, s.settings = sn.Notes, mergeSettings(sn.Settings)
 		s.sections, s.tasks, s.taskSections, s.bills, s.secrets = sn.Sections, sn.Tasks, sn.TaskSections, sn.Bills, sn.Secrets
+		s.messages, s.messagesGone = sn.Messages, sn.MessagesGone
 		return true
 	})
 	s.ensureDefaults()

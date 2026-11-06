@@ -127,7 +127,19 @@ type Status struct {
 	Transport        string
 	CDPConnected     bool
 	LastError        string
+	LastSeenAtMs     int64 // 手动桥最近一次心跳 / 投递（桥脚本每 2 秒 GET 一次）
 }
+
+// Connected：自动接入看 CDP 连接；手动桥看 6 秒内是否有心跳。
+func (s Status) Connected(nowMs int64) bool {
+	if s.CDPConnected {
+		return true
+	}
+	return s.Enabled && s.LastSeenAtMs > 0 && nowMs-s.LastSeenAtMs < 6000
+}
+
+// LedgerPath 是原始消息账本路径。
+func (b *Bridge) LedgerPath() string { return b.ledgerPath() }
 
 // Bridge 是运行中的回环接收端。零值不可用，用 New。
 type Bridge struct {
@@ -207,6 +219,11 @@ func cors(w http.ResponseWriter) {
 
 func (b *Bridge) handle(w http.ResponseWriter, r *http.Request) {
 	cors(w)
+	if r.Method == http.MethodGet || r.Method == http.MethodPost {
+		b.mu.Lock()
+		b.st.LastSeenAtMs = time.Now().UnixMilli()
+		b.mu.Unlock()
+	}
 	switch r.Method {
 	case http.MethodOptions:
 		w.WriteHeader(http.StatusNoContent)

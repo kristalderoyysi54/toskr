@@ -2,7 +2,12 @@
 
 package macos
 
-import "github.com/ebitengine/purego/objc"
+import (
+	"slices"
+	"strings"
+
+	"github.com/ebitengine/purego/objc"
+)
 
 // FrontApp 是前台应用身份。
 type FrontApp struct {
@@ -101,4 +106,35 @@ func Terminate(pid int32) bool {
 		}
 	})
 	return ok
+}
+
+// RegularApps 列出运行中的常规（有 Dock 图标）应用，按名称排序、同 bundle 去重（同 Tauri running_regular_apps）。
+func RegularApps() []AppInfo {
+	load()
+	var out []AppInfo
+	seen := map[string]bool{}
+	withPool(func() {
+		arr := class("NSWorkspace").Send(sel("sharedWorkspace")).Send(sel("runningApplications"))
+		for i := range objc.Send[uint](arr, sel("count")) {
+			app := arr.Send(sel("objectAtIndex:"), i)
+			if objc.Send[int](app, sel("activationPolicy")) != 0 { // NSApplicationActivationPolicyRegular
+				continue
+			}
+			info := AppInfo{PID: objc.Send[int32](app, sel("processIdentifier")), BundleID: goString(uintptr(app.Send(sel("bundleIdentifier")))),
+				Name: goString(uintptr(app.Send(sel("localizedName"))))}
+			if u := app.Send(sel("executableURL")); u != 0 {
+				info.BinPath = goString(uintptr(u.Send(sel("path"))))
+			}
+			if info.BundleID == "" || info.BinPath == "" || seen[info.BundleID] || strings.HasPrefix(info.BundleID, "com.toskr.") {
+				continue
+			}
+			seen[info.BundleID] = true
+			if info.Name == "" {
+				info.Name = info.BundleID
+			}
+			out = append(out, info)
+		}
+	})
+	slices.SortFunc(out, func(a, b AppInfo) int { return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)) })
+	return out
 }

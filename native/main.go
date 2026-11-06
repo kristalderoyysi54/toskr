@@ -123,11 +123,13 @@ func start() (*app, error) {
 		a.panel.Update(func() { a.showHUD("warn", "保存失败："+err.Error()) })
 	}
 	mygo.App.OnQuit(func() {
+		a.shutdownIM()()
 		if err := st.Flush(); err != nil {
 			diag.Push("退出前落盘失败: %v", err)
 		}
 	})
 
+	a.replayIMLedger()
 	a.registerHotkeys()
 	a.setUpTray()
 	a.startBackground()

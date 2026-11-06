@@ -173,7 +173,15 @@ type app struct {
 	taskCalDraft                       string
 	taskCalHideTasks, taskCalHideBills bool
 	clipView                           string // 剪贴页视图：time | source | image
-	noteSub                            int    // 内容页子视图：0 笔记 1 秘文（秘文功能开启时）
+	noteSub                            int    // 内容页子视图：subNotes / subSecret / subMessages
+	// 内容 → 消息
+	messages     []store.Message
+	msgFilter    string          // new | waiting | done
+	msgChosen    map[string]bool // 勾选
+	msgAnchor    string          // ⇧ 范围选锚点
+	msgOpen      map[string]bool // x:<id> 展开全文、c:<id> 展开前文
+	msgDraftBusy string          // 正在生成 AI 回复草稿的消息
+	im           imCtl
 
 	// 秘文
 	secretKeyID   string
@@ -243,7 +251,7 @@ type app struct {
 }
 
 func newApp(sys core.System, st *store.Store) *app {
-	a := &app{sys: sys, store: st, page: pageNotes, prevPage: -1, section: store.SectionInbox, doneOpen: map[string]bool{}, bandOpen: map[string]bool{"overdue": true, "spark": true}, clipView: "time", billView: "week", billFilter: "upcoming", clock: time.Now, thumbs: map[string]ui.ImageSource{}, revealed: map[string]time.Time{}, secretOpening: map[string]bool{}, secretPlain: map[string]string{}, secretFx: map[string]time.Time{}, drawerMore: map[string]bool{}, linkSem: make(chan struct{}, 2), appIcons: map[string]ui.ImageSource{}}
+	a := &app{sys: sys, store: st, page: pageNotes, prevPage: -1, section: store.SectionInbox, doneOpen: map[string]bool{}, bandOpen: map[string]bool{"overdue": true, "spark": true}, clipView: "time", billView: "week", billFilter: "upcoming", clock: time.Now, thumbs: map[string]ui.ImageSource{}, revealed: map[string]time.Time{}, secretOpening: map[string]bool{}, secretPlain: map[string]string{}, secretFx: map[string]time.Time{}, msgOpen: map[string]bool{}, msgChosen: map[string]bool{}, drawerMore: map[string]bool{}, linkSem: make(chan struct{}, 2), appIcons: map[string]ui.ImageSource{}}
 	a.reload()
 	return a
 }
@@ -283,6 +291,7 @@ func (a *app) reload() {
 	a.tasks = a.store.Tasks()
 	a.bills = a.store.Bills()
 	a.secrets = searchSecrets(a.store.Secrets(), a.query)
+	a.messages = a.store.Messages()
 }
 
 func (a *app) current() (store.Note, bool) {

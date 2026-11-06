@@ -158,8 +158,8 @@ func (a *app) tabs(c *ui.Context, k tokens) {
 			st := a.store.Settings()
 			for _, i := range a.visiblePages() {
 				label := tabLabels[i]
-				if i == pageNotes && st.SecretEnabled {
-					label = "内容" // 秘文开启后笔记页升格为「内容」域（笔记 · 秘文），与 Tauri 一致
+				if i == pageNotes && (st.SecretEnabled || st.MessagesEnabled) {
+					label = "内容" // 秘文 / 消息开启后笔记页升格为「内容」域（笔记 · 消息 · 秘文），与 Tauri 一致
 				}
 				if i == pageTasks && st.SubscriptionsEnabled {
 					label = "提醒"
@@ -168,6 +168,9 @@ func (a *app) tabs(c *ui.Context, k tokens) {
 				badge := 0
 				if i == pageTasks {
 					badge = a.overdueCount()
+				}
+				if i == pageNotes {
+					badge = a.newMessageCount()
 				}
 				w := float32(44)
 				if badge > 0 {
@@ -871,7 +874,7 @@ func (a *app) keyHints() [][2]string {
 		return [][2]string{{"Esc", tr("关闭搜索")}, {"↑↓", tr("移动焦点")}}
 	case a.page == pageTasks:
 		return [][2]string{{"⏎", tr("记下待办")}, {"⌘K", tr("命令")}, {tr("长按 ⌥ Option"), tr("全部快捷键")}}
-	case a.page == pageNotes && a.noteSub == 1:
+	case a.page == pageNotes && a.noteSub != subNotes:
 		return [][2]string{{"⌘K", tr("命令")}, {tr("长按 ⌥ Option"), tr("全部快捷键")}}
 	case a.chosen.Len() > 0:
 		return [][2]string{{"⌘⏎", fmt.Sprintf(tr("发送 %d 张"), a.chosen.Len())}, {"⌘C", tr("复制为列表")}, {"Esc", tr("取消勾选")}, {"⌘K", tr("命令")}}
@@ -885,7 +888,7 @@ func (a *app) keyHints() [][2]string {
 // 已选 N · 合并 · 删除 · 清除选择 · 发送 ⌘⏎ 分体钮。
 func (a *app) selectionBar(c *ui.Context, k tokens) {
 	n := a.chosen.Len()
-	if n == 0 || a.page == pageTasks || (a.page == pageNotes && a.noteSub == 1) {
+	if n == 0 || a.page == pageTasks || (a.page == pageNotes && a.noteSub != subNotes) {
 		return
 	}
 	s := stok(c)

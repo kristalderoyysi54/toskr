@@ -25,6 +25,7 @@ const (
 	PurposeRecovery Purpose = "recovery"
 	PurposeMedia    Purpose = "media"
 	PurposeBackup   Purpose = "backup"
+	PurposeIMWatch  Purpose = "imwatch"
 )
 
 func Sealed(b []byte) bool { return len(b) >= 4 && string(b[:4]) == string(magic) }

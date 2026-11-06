@@ -99,26 +99,20 @@ func (a *app) panelPresence(c *ui.Context, shell ui.Element) float32 {
 	return max(p, 0)
 }
 
-// pageBody 是一页的内容（剪贴 / 笔记·秘文 / 任务）。
+// pageBody 是一页的内容（剪贴 / 笔记·消息·秘文 / 任务）。
 func (a *app) pageBody(c *ui.Context, k tokens, p int) {
-	st := a.store.Settings()
 	switch p {
 	case pageClip:
 		a.clipPage(c, k)
 	case pageTasks:
 		ui.Column(c).Grow(1).Children(func() { a.tasksPage(c) })
 	default:
-		if st.SecretEnabled {
-			if i, ok := a.textTabs(c, k, []string{"笔记", "秘文"}, a.noteSub, nil); ok {
-				a.noteSub = i
-				a.chosen.Clear()
-			}
-		} else {
-			a.noteSub = 0
-		}
-		if a.noteSub == 1 {
+		switch a.contentTabs(c, k) {
+		case subSecret:
 			ui.Column(c).Grow(1).Children(func() { a.secretsPage(c, k) })
-		} else {
+		case subMessages:
+			ui.Column(c).Grow(1).Children(func() { a.messagesPage(c, k) })
+		default:
 			a.notesPage(c, k)
 		}
 	}
@@ -167,6 +161,11 @@ func sign(n int) float32 {
 
 // textTabs 是 Tauri 的二级文字页签（今天 · 任务 · 订阅 / 笔记 · 秘文）：选中加粗 + 22×2 短下划线。
 func (a *app) textTabs(c *ui.Context, k tokens, labels []string, sel int, right func()) (int, bool) {
+	return a.textTabsBadged(c, k, labels, nil, sel, right)
+}
+
+// textTabsBadged：badges[i] > 0 时在该页签文字后挂计数（同 Tauri ContentTabs 的消息未处理数）。
+func (a *app) textTabsBadged(c *ui.Context, k tokens, labels []string, badges []int, sel int, right func()) (int, bool) {
 	picked, changed := sel, false
 	ui.Row(c).Height(34).Padding(4, 14, 8, 16).AlignItems(ui.Start).Children(func() {
 		ui.Row(c).Gap(2).Grow(1).AlignItems(ui.Center).Children(func() {
@@ -186,7 +185,12 @@ func (a *app) textTabs(c *ui.Context, k tokens, labels []string, sel int, right 
 					if on {
 						w, col = 600, k.fg
 					}
-					text(c, tr(label), 11, 16, w, b.AnimateColor("fg", col, tweenControl))
+					ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
+						text(c, tr(label), 11, 16, w, b.AnimateColor("fg", col, tweenControl))
+						if i < len(badges) && badges[i] > 0 {
+							text(c, itoa(badges[i]), 10, 14, 600, k.danger).FontFeatures("tnum")
+						}
+					})
 					if on { // 共享布局下划线（layoutId content-subtab-line / reminders-subtab-line）
 						ui.Box(c).Absolute().Bottom(0).Left(8).Right(8).Height(2).Radius(1).Background(k.fg.Alpha(0.85)).PassThrough().
 							Transition(ui.ElementTransition{Match: layoutID{"subtab-line-" + labels[0]}, Animation: &springControl, Position: true, Size: true})
@@ -392,6 +396,8 @@ func (a *app) panelKeys(c *ui.Context) {
 			a.reload()
 		case a.chosen.Len() > 0:
 			a.chosen.Clear()
+		case a.page == pageNotes && a.noteSub == subMessages && len(a.msgChosen) > 0:
+			a.clearMsgChosen()
 		default:
 			a.hidePanel()
 		}
@@ -419,6 +425,12 @@ func (a *app) panelKeys(c *ui.Context) {
 	if a.page == pageClip || (a.page == pageNotes && a.noteSub == 0) {
 		a.queueKeys(c)
 	}
+	if !typing && a.page == pageNotes && a.noteSub == subMessages && c.Shortcut(ui.Cmd, ui.KeyA) { // ⌘A 全选当前栏（同 Tauri messageSelectAllIds）
+		a.clearMsgChosen()
+		for _, m := range a.visibleMessages() {
+			a.msgChosen[m.ID] = true
+		}
+	}
 }
 
 func (a *app) switchPage(p int) {
@@ -426,6 +438,7 @@ func (a *app) switchPage(p int) {
 		a.prevPage, a.pageAt = a.page, time.Time{}
 		a.page, a.editing, a.selected = p, "", 0
 		a.chosen.Clear()
+		a.clearMsgChosen()
 		a.reload()
 	}
 }

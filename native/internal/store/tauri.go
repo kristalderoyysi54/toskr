@@ -47,6 +47,7 @@ type tauriState struct {
 	Tasks        []tauriTask    `json:"tasks"`
 	TaskSections []tauriSection `json:"taskSections"`
 	Bills        []tauriBill    `json:"bills"`
+	Messages     []Message      `json:"messages"`
 	Settings     tauriSettings  `json:"settings"`
 }
 
@@ -184,13 +185,15 @@ type tauriSettings struct {
 	CalendarEnabled    *bool           `json:"appleCalendarEnabled"`
 	CalendarHiddenIDs  []string        `json:"appleCalendarHiddenIds"`
 	PageOrder          []string        `json:"pageOrder"`
+	MessagesEnabled    *bool           `json:"messagesEnabled"`
+	MessageRules       []MessageRule   `json:"messageWatchRules"`
 }
 
 // TauriReport 是导入结果。
 type TauriReport struct {
-	Notes, Sections, Tasks, Bills, Secrets, Media, MediaMissing, SeedRemoved, Deliveries int
-	Recovery                                                                             string
-	Check                                                                                TauriCheck
+	Notes, Sections, Tasks, Bills, Secrets, Media, MediaMissing, SeedRemoved, Deliveries, Messages int
+	Recovery                                                                                       string
+	Check                                                                                          TauriCheck
 }
 
 // TauriCheck 是导入后核对：Tauri 每条记录回读本机逐项比对（分组 / 正文 / 置顶 / 完成 / 模糊 / 标题 / 标签 / 图片）。
@@ -467,6 +470,7 @@ func (s *Store) ImportTauri(dir string, key []byte) (TauriReport, error) {
 			secIDs[x.ID] = true
 		}
 		s.notes = slices.DeleteFunc(s.notes, func(n Note) bool { return secIDs[n.ID] }) // 旧版导入留下的同 ID 普通笔记
+		rep.Messages = importTauriMessages(&s.messages, st.Messages)
 		s.settings = applyTauriSettings(s.settings, st.Settings)
 		return true
 	})
@@ -700,7 +704,36 @@ func applyTauriSettings(st Settings, t tauriSettings) Settings {
 	if len(t.PageOrder) > 0 {
 		st.PageOrder = NormalizePageOrder(t.PageOrder)
 	}
+	if t.MessagesEnabled != nil {
+		st.MessagesEnabled = *t.MessagesEnabled
+	}
+	if t.MessageRules != nil {
+		st.MessageRules = NormalizeMessageRules(t.MessageRules)
+	}
 	return st
+}
+
+// importTauriMessages：Tauri 的消息投影以 Tauri 为准整条覆盖（含状态 / 关联任务 / 草稿），返回导入条数。
+func importTauriMessages(cur *[]Message, in []Message) int {
+	n := 0
+	for _, m := range in {
+		if m.ConversationID == "" || m.MessageID == "" {
+			continue
+		}
+		x := mergeMessage(nil, m)
+		x.Status, x.LinkedTaskID, x.AIDraft, x.AIDraftAtMs = m.Status, m.LinkedTaskID, m.AIDraft, m.AIDraftAtMs
+		if x.Status == "" {
+			x.Status = "new"
+		}
+		if i := slices.IndexFunc(*cur, func(y Message) bool { return y.ID == x.ID }); i >= 0 {
+			(*cur)[i] = x
+		} else {
+			*cur = append(*cur, x)
+		}
+		n++
+	}
+	sortMessages(*cur)
+	return n
 }
 
 // ErrTauriMissing：本机没有 Tauri 版数据。

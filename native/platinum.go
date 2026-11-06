@@ -125,7 +125,7 @@ func (a *app) ptTabRow(c *ui.Context, k tokens) {
 	ui.Row(c).Height(24).Margin(2, 6, 0, 6).Padding(0, 0, 0, 8).AlignItems(ui.Stretch).Children(func() {
 		ui.Row(c).Grow(1).Padding(2, 0, 0, 0).AlignItems(ui.End).Children(func() {
 			for i, label := range tabLabels {
-				if i == pageNotes && st.SecretEnabled {
+				if i == pageNotes && (st.SecretEnabled || st.MessagesEnabled) {
 					label = "内容"
 				}
 				if i == pageTasks && st.SubscriptionsEnabled {
@@ -215,16 +215,12 @@ func (a *app) ptPageBody(c *ui.Context, k tokens, p int) {
 	case pageTasks:
 		ui.Column(c).Grow(1).Children(func() { a.tasksPage(c) })
 	default:
-		if a.store.Settings().SecretEnabled {
-			if i, ok := a.textTabs(c, k, []string{"笔记", "秘文"}, a.noteSub, nil); ok {
-				a.noteSub = i
-				a.chosen.Clear()
-			}
-		} else {
-			a.noteSub = 0
-		}
-		if a.noteSub == 1 {
+		switch a.contentTabs(c, k) {
+		case subSecret:
 			ui.Column(c).Grow(1).Children(func() { a.secretsPage(c, k) })
+			return
+		case subMessages:
+			ui.Column(c).Grow(1).Children(func() { a.messagesPage(c, k) })
 			return
 		}
 		ui.Row(c).Grow(1).AlignItems(ui.Stretch).Children(func() {
