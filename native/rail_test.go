@@ -282,8 +282,12 @@ func TestClipCondensedTemplate(t *testing.T) {
 	}
 	st.CardDensity = "compact"
 	_ = a.store.SetSettings(st)
-	if a.clipCondensed() {
+	if a.clipLayout() != clipCompact {
 		t.Fatal("紧凑密度下模板不生效")
+	}
+	tt.Frame()
+	if !tt.HasText("第一行") || tt.HasText("7 字符") || !tt.HasText("刚刚") {
+		t.Fatalf("紧凑流水行 %v", tt.Texts())
 	}
 	a.openSettingsState()
 	a.setPage = 0
