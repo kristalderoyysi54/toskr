@@ -78,6 +78,7 @@ type app struct {
 	newSec                              string
 	target                              macos.FrontApp    // 发送目标：面板唤出前的前台应用
 	targetStarted                       int64             // 目标进程启动时刻（身份锁定）
+	draftTarget                         draftTarget       // 预检 / 回车确认时冻结的目标（draft_target.go）
 	pending                             []store.Note      // 预检命中、等待确认的发送
 	pf                                  preflightState    // 发送预检：逐项处理状态
 	sendPNG                             []byte            // 本次发送用的图片副本（图片隐私检查遮挡后）
@@ -697,6 +698,7 @@ func (a *app) sendT(notes []store.Note, tmpl string) {
 		auto := len(fs) == 0 && !a.forceCheck // 只为图片 OCR 打开：检查干净就自动继续
 		a.forceCheck = false
 		a.pending, a.pendingTmpl, a.pf = notes, tmpl, preflightState{auto: auto}
+		a.freezeDraftTarget()
 		if a.panel != nil {
 			a.panel.Show() // 确认条在面板里
 		}
@@ -719,6 +721,9 @@ func (a *app) askEnter(notes []store.Note, rawKept bool, tmpl string) {
 		a.deliver(notes, false, tmpl)
 	case r.Profile.EnterPolicy == "confirm":
 		a.enterAsk, a.enterTmpl = notes, tmpl
+		if a.draftTarget.pid == 0 {
+			a.freezeDraftTarget()
+		}
 		if a.panel != nil {
 			a.panel.Show()
 		}
@@ -728,6 +733,9 @@ func (a *app) askEnter(notes []store.Note, rawKept bool, tmpl string) {
 }
 
 func (a *app) deliver(notes []store.Note, enter bool, tmpl string) {
+	if a.draftTargetChanged() {
+		return
+	}
 	target := a.target
 	r, _ := a.resolution()
 	redactions := a.lastRedactions

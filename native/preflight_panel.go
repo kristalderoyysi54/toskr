@@ -152,12 +152,12 @@ func (a *app) clearPending() {
 // cancelPending：用户取消预检，本次的输出格式覆盖一并作废。
 func (a *app) cancelPending() {
 	a.clearPending()
-	a.sendMode = ""
+	a.sendMode, a.draftTarget = "", draftTarget{}
 }
 
 // cancelEnterAsk：取消「粘贴后按回车？」——预检留下的遮挡图副本与占位符映射一并作废，不能带进下一次发送。
 func (a *app) cancelEnterAsk() {
-	a.enterAsk, a.sendMode, a.sendPNG, a.sendPH = nil, "", nil, sendRedaction{}
+	a.enterAsk, a.sendMode, a.sendPNG, a.sendPH, a.draftTarget = nil, "", nil, sendRedaction{}, draftTarget{}
 }
 
 // pfCombined：文字与图片两路检查都放行才能发；任一路要求不回车即不回车。
