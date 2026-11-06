@@ -18,31 +18,45 @@ const maxRedactionSessions = 50
 var irreversiblePH = regexp.MustCompile(`^\[(?:PRIVATE_KEY|AUTHORIZATION|API_KEY|DATABASE_URL|COOKIE|SESSION)_[0-9]{2,}\]$`)
 
 type redactionSession struct {
-	id  string
-	raw map[string]string // 原文 → 占位符（仅可逆项）
+	id     string
+	raw    map[string]string // 原文 → 占位符（仅可逆项）
+	counts map[string]int    // 发出的每个占位符次数（含凭据类，供回复核验）
 }
 
-func (a *app) rememberRedactionMap(deliveryID string, ph map[string]string) {
+// sendRedaction：预检替换后随本次发送带走的映射与次数。
+type sendRedaction struct {
+	raw    map[string]string
+	counts map[string]int
+}
+
+func (a *app) rememberRedactionMap(deliveryID string, ph sendRedaction) {
 	m := map[string]string{}
-	for raw, p := range ph {
+	for raw, p := range ph.raw {
 		if raw != "" && p != "" && !irreversiblePH.MatchString(p) {
 			m[raw] = p
 		}
 	}
-	if deliveryID == "" || len(m) == 0 {
+	if deliveryID == "" || len(m) == 0 && len(ph.counts) == 0 {
 		return
 	}
-	a.redactions = append(a.redactions, redactionSession{deliveryID, m})
+	a.redactions = append(a.redactions, redactionSession{deliveryID, m, ph.counts})
 	if len(a.redactions) > maxRedactionSessions {
 		a.redactions = a.redactions[len(a.redactions)-maxRedactionSessions:]
 	}
 }
 
-func (a *app) redactionMap(deliveryID string) map[string]string {
+func (a *app) redactionSessionOf(deliveryID string) *redactionSession {
 	for i := len(a.redactions) - 1; i >= 0; i-- {
 		if a.redactions[i].id == deliveryID {
-			return a.redactions[i].raw
+			return &a.redactions[i]
 		}
+	}
+	return nil
+}
+
+func (a *app) redactionMap(deliveryID string) map[string]string {
+	if s := a.redactionSessionOf(deliveryID); s != nil && len(s.raw) > 0 {
+		return s.raw
 	}
 	return nil
 }

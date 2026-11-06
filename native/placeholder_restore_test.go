@@ -26,7 +26,7 @@ func TestRestoreReplyPlaceholders(t *testing.T) {
 	}
 	a.cancelPending()
 	// 投递本体走 Window.Update（测试里没有主循环），这里直接跑收尾
-	a.finishDeliver(a.target, []string{src.ID}, []string{"x"}, nil, 2, ph, "稳妥发送", core.CheckVerified, nil)
+	a.finishDeliver(a.target, []string{src.ID}, []string{"x"}, nil, 2, sendRedaction{raw: ph}, "稳妥发送", core.CheckVerified, nil)
 	d := a.store.Deliveries()[0]
 	if m := a.redactionMap(d.ID); m == nil || m[mail] != "[EMAIL_01]" || len(m) != 1 {
 		t.Fatalf("只记可逆映射 %v", m)
@@ -48,9 +48,9 @@ func TestRestoreReplyPlaceholders(t *testing.T) {
 func TestCancelEnterAskClearsSendOverrides(t *testing.T) {
 	a, _ := testApp(t, "x")
 	a.enterAsk = []store.Note{{Text: "x"}}
-	a.sendPNG, a.sendPH = []byte{1}, map[string]string{"a": "[EMAIL_01]"}
+	a.sendPNG, a.sendPH = []byte{1}, sendRedaction{raw: map[string]string{"a": "[EMAIL_01]"}}
 	a.cancelEnterAsk()
-	if a.sendPNG != nil || a.sendPH != nil || a.enterAsk != nil {
+	if a.sendPNG != nil || a.sendPH.raw != nil || a.enterAsk != nil {
 		t.Fatal("取消后应清空")
 	}
 }

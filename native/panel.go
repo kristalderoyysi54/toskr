@@ -79,6 +79,7 @@ func (a *app) panelView(c *ui.Context) {
 		}
 		a.selectionBar(c, k) // 勾选时的批量条留在面板最下方
 		a.panelVHandles(c, k)
+		a.verifySheet(c, k)
 		a.recentDrawer(c, k)
 		a.shortcutHelp(c, k) // 长按 ⌥ 的快捷键速查层压在最上
 		a.commandPalette(c, k)
@@ -393,6 +394,8 @@ func (a *app) panelKeys(c *ui.Context) {
 	}
 	if c.Shortcut(0, ui.KeyEscape) {
 		switch {
+		case a.verify.noteID != "": // 回复检查浮层先关
+			a.closeVerify()
 		case a.clipPick != "": // 长按弹出的分组选择先关
 			a.clipPick = ""
 		case a.billForm.open: // 盖住面板的对话框先退（同 Tauri Dialog Esc）

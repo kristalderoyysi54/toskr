@@ -98,7 +98,8 @@ type app struct {
 	kbd                                 kbDrag                    // 键盘拖拽排序中拾起的卡
 	gripFocus                           string                    // 键盘焦点所在的拖拽把手（卡片 id）
 	redactions                          []redactionSession        // 各次发送的占位符映射（只在内存，同 Tauri redactionSessions）
-	sendPH                              map[string]string         // 本次发送的「原文 → 占位符」（预检替换时设置）
+	verify                              verifyState               // 回复检查浮层
+	sendPH                              sendRedaction             // 本次发送的「原文 → 占位符」与次数（预检替换时设置）
 
 	// 1:1 主面板
 	noteGroups                               []noteGroup
@@ -733,7 +734,7 @@ func (a *app) deliver(notes []store.Note, enter bool, tmpl string) {
 	override := a.sendPNG
 	a.sendPNG = nil
 	ph := a.sendPH
-	a.sendPH = nil
+	a.sendPH = sendRedaction{}
 	var texts []string
 	var png []byte
 	ids := make([]string, len(notes))
@@ -764,7 +765,7 @@ func (a *app) deliver(notes []store.Note, enter bool, tmpl string) {
 }
 
 // finishDeliver：投递结束后（主线程）记历史与「最近发送」、标记已发送、出 HUD。
-func (a *app) finishDeliver(target macos.FrontApp, ids, texts []string, png []byte, redactions int, ph map[string]string, profile string, check core.Check, err error) {
+func (a *app) finishDeliver(target macos.FrontApp, ids, texts []string, png []byte, redactions int, ph sendRedaction, profile string, check core.Check, err error) {
 	rec := delivery{At: time.Now(), Target: target.Name, Count: len(ids)}
 	if err != nil {
 		rec.Err = err.Error()

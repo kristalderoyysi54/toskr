@@ -344,6 +344,9 @@ func (a *app) replyMenu(m *ui.Menu, n store.Note) {
 		if sm.Item(tr("查看发送内容")).Chosen() {
 			a.drawerOpen = true
 		}
+		if sm.Item(tr("检查回复…")).Chosen() {
+			a.openVerify(n)
+		}
 		restore := sm.Item(tr("恢复占位符"))
 		if a.redactionMap(n.Provenance.DeliveryID) == nil {
 			restore.Disabled(true)

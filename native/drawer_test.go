@@ -33,8 +33,8 @@ func TestRecentDeliveryDrawer(t *testing.T) {
 	}
 	// 投递本体走 Window.Update（测试里没有主循环），这里直接跑收尾
 	src := a.store.Notes()[0]
-	a.finishDeliver(a.target, []string{src.ID}, []string{src.Text}, nil, 0, nil, "稳妥发送", core.CheckVerified, nil)
-	a.finishDeliver(a.target, []string{src.ID}, []string{src.Text}, nil, 0, nil, "稳妥发送", "", errors.New("目标窗口已关闭"))
+	a.finishDeliver(a.target, []string{src.ID}, []string{src.Text}, nil, 0, sendRedaction{}, "稳妥发送", core.CheckVerified, nil)
+	a.finishDeliver(a.target, []string{src.ID}, []string{src.Text}, nil, 0, sendRedaction{}, "稳妥发送", "", errors.New("目标窗口已关闭"))
 	tt.Frame()
 	if len(a.store.Deliveries()) != 2 || a.hudKind != "warn" {
 		t.Fatalf("成功与失败各记一轮 %+v hud=%s", a.store.Deliveries(), a.hudKind)
