@@ -156,9 +156,12 @@ type tauriSettings struct {
 		Note        string `json:"note"`
 		CreatedAtMs int64  `json:"createdAtMs"`
 	} `json:"secretKeys"`
-	SecretDefaultKeyID *string `json:"secretDefaultKeyId"`
-	SecretCipherStyle  string  `json:"secretCipherStyle"`
-	SecretRevealMs     *int    `json:"secretRevealTimeoutMs"`
+	SecretDefaultKeyID *string         `json:"secretDefaultKeyId"`
+	SecretCipherStyle  string          `json:"secretCipherStyle"`
+	SecretRevealMs     *int            `json:"secretRevealTimeoutMs"`
+	PromptGroups       []PromptGroup   `json:"promptGroups"`
+	TargetProfiles     []TargetProfile `json:"targetProfiles"`
+	DefaultProfileID   string          `json:"defaultTargetProfileId"`
 }
 
 // TauriReport 是导入结果。
@@ -454,6 +457,9 @@ func applyTauriSettings(st Settings, t tauriSettings) Settings {
 	set(&st.SecretCipherStyle, t.SecretCipherStyle)
 	if t.HotkeyGapMs > 0 {
 		st.TriggerGapMs = t.HotkeyGapMs
+	}
+	if len(t.TargetProfiles) > 0 { // 发送方案整组以 Tauri 为准
+		st.PromptGroups, st.TargetProfiles, st.DefaultProfileID = t.PromptGroups, t.TargetProfiles, t.DefaultProfileID
 	}
 	if t.Stealth != nil {
 		st.Stealth = *t.Stealth

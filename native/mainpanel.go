@@ -71,7 +71,7 @@ func (a *app) toggleIconButton(c *ui.Context, k tokens, icon, tip string, on boo
 }
 
 func (a *app) targetBar(c *ui.Context, k tokens) {
-	ui.Row(c).Height(36).Margin(0, 12).Padding(4).Children(func() {
+	ui.Column(c).Margin(0, 12).Padding(4).Children(func() {
 		ui.Row(c).Height(28).Gap(6).Grow(1).AlignItems(ui.Center).Children(func() {
 			ui.Row(c).Gap(6).Grow(1).AlignItems(ui.Center).Children(func() {
 				ui.Box(c).Size(16, 16).Radius(6).Background(k.chip).Center().Children(func() { licon(c, "app-window", 8, k.muted) })
@@ -90,9 +90,12 @@ func (a *app) targetBar(c *ui.Context, k tokens) {
 				if a.iconButton(c, k, "rotate-ccw-clock", 20, 12, tr("最近发送")) {
 					a.drawerOpen = !a.drawerOpen
 				}
-				a.iconButton(c, k, "chevron-down", 20, 12, tr("发送方案"))
+				a.lensChevron(c, k)
 			})
 		})
+		if a.lensOpen {
+			a.lensDetail(c, k)
+		}
 	})
 }
 

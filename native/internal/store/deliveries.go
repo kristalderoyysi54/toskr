@@ -19,6 +19,7 @@ type Delivery struct {
 	Redactions   int       `json:"redactions,omitempty"`
 	Unconfirmed  bool      `json:"unconfirmed,omitempty"` // 已粘贴但输入框未变化
 	ResultNoteID string    `json:"resultNoteId,omitempty"`
+	Profile      string    `json:"profile,omitempty"` // 发送方案名
 }
 
 // Provenance：回复笔记来自哪次发送（同 Tauri NoteProvenance，kind = deliveryResult）。

@@ -54,6 +54,9 @@ func (a *app) panelView(c *ui.Context) {
 		if len(a.pending) > 0 {
 			ui.Column(c).Margin(0, 12, 6, 12).Children(func() { a.preflightBar(c) })
 		}
+		if len(a.enterAsk) > 0 {
+			ui.Column(c).Margin(0, 12, 6, 12).Children(func() { a.enterAskBar(c) })
+		}
 		a.pageSlide(c, func(p int) { a.pageBody(c, k, p) })
 		a.hintsRow(c, k)
 		if a.page == pageNotes && a.noteSub == 0 { // 发送输入区只在笔记视图，与 Tauri 一致
@@ -353,6 +356,10 @@ func (a *app) panelKeys(c *ui.Context) {
 			a.editing = ""
 		case a.menuOpen:
 			a.menuOpen = false
+		case a.quickOpen:
+			a.quickOpen = false
+		case len(a.enterAsk) > 0:
+			a.enterAsk = nil
 		case a.drawerOpen:
 			a.drawerOpen = false
 		case a.noteRailOpen:

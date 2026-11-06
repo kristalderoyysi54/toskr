@@ -192,9 +192,12 @@ func (a *app) ptTargetBar(c *ui.Context, k tokens) {
 			if a.iconButton(c, k, "rotate-ccw-clock", 20, 12, tr("最近发送")) {
 				a.drawerOpen = !a.drawerOpen
 			}
-			a.iconButton(c, k, "chevron-down", 20, 12, tr("发送方案"))
+			a.lensChevron(c, k)
 		})
 	})
+	if a.lensOpen {
+		a.lensDetail(c, k)
+	}
 }
 
 // ptPage 是白井里的当前页；笔记页带经典滚动条。

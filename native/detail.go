@@ -474,10 +474,10 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 		right := ui.Box(c).Size(28, 32).Radius(0, 16, 16, 0).Background(fill).Border(1, border).Center()
 		right.Children(func() { licon(c, "chevron-down", 12, fg) })
 		right.Menu(func(m *ui.Menu) {
-			st := a.store.Settings()
-			if m.Item(tr("粘贴后回车")).Checked(st.PasteThenEnter).Chosen() {
-				st.PasteThenEnter = !st.PasteThenEnter
-				_ = a.store.SetSettings(st)
+			r, _ := a.resolution()
+			on := r.Profile.EnterPolicy != "never"
+			if m.Item(tr("粘贴后回车")).Checked(on).Disabled(a.target.PID == 0).Chosen() { // 本次覆盖当前目标的方案规则
+				a.setRule(func(o *store.RuleOverrides) { o.EnterPolicy = map[bool]string{true: "never", false: "allow"}[on] })
 			}
 			if m.Item(tr("仅复制，不发送")).Chosen() {
 				a.copyPrivate(n.Text)

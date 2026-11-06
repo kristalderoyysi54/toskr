@@ -3,6 +3,7 @@ package main
 import (
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -91,12 +92,12 @@ func TestPreflightBlocksUntilConfirmedAndRedacts(t *testing.T) {
 	a.target = macos.FrontApp{PID: 42, Name: "Cursor"}
 	tt.Key(ui.Cmd, ui.KeyEnter)
 	tt.Frame()
-	if !tt.HasText("发送内容含敏感信息：API 密钥 ×1") || len(sys.writes) != 0 {
+	if !tt.HasText("发送内容含敏感信息：API 密钥 ×1") || len(sys.sent()) != 0 {
 		t.Fatalf("预检命中应拦截 %v", tt.Texts())
 	}
 	_ = tt.Click("遮罩后发送")
-	waitFor(t, func() bool { return len(sys.writes) > 0 })
-	if got := sys.writes[0]; strings.Contains(got, key) || !strings.HasPrefix(got, "部署用 sk") {
+	waitFor(t, func() bool { return len(sys.sent()) > 0 })
+	if got := sys.sent()[0]; strings.Contains(got, key) || !strings.HasPrefix(got, "部署用 sk") {
 		t.Fatalf("应遮罩后发送，实为 %q", got)
 	}
 }
@@ -336,18 +337,28 @@ func TestTaskBucketsAndDueBadge(t *testing.T) {
 // recSys 记录写入剪贴板的文本；激活即到前台。
 type recSys struct {
 	nopSys
+	mu     sync.Mutex // 投递在后台 goroutine 写，测试在主 goroutine 读
 	front  int32
 	writes []string
 }
 
-func (r *recSys) Frontmost() (macos.FrontApp, bool) { return macos.FrontApp{PID: r.front}, true }
-func (r *recSys) Activate(pid int32) bool           { r.front = pid; return true }
+func (r *recSys) Frontmost() (macos.FrontApp, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return macos.FrontApp{PID: r.front}, true
+}
+func (r *recSys) Activate(pid int32) bool { r.mu.Lock(); r.front = pid; r.mu.Unlock(); return true }
 func (r *recSys) Write(items []macos.Item, _ bool) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if len(items) > 0 {
 		r.writes = append(r.writes, string(items[0][macos.TypeString]))
 	}
 	return len(r.writes)
 }
+
+// sent 返回写入记录的快照。
+func (r *recSys) sent() []string { r.mu.Lock(); defer r.mu.Unlock(); return slices.Clone(r.writes) }
 
 func waitFor(t *testing.T, ok func() bool) {
 	t.Helper()
@@ -375,13 +386,17 @@ func TestSettingsNavSearchAndToggle(t *testing.T) {
 	}
 	_ = tt.Click("粘贴与隐私")
 	tt.Frame()
-	before := a.store.Settings().PasteThenEnter
-	if r, ok := tt.Find("粘贴后回车"); ok {
-		tt.ClickAt(935, r.Y+18) // 行右侧开关中心（标题 18 + 说明 16 + 间距 2，开关垂直居中）
+	if !tt.HasText("稳妥发送 · 默认") || !tt.HasText("终端（安全）") {
+		t.Fatalf("发送方案应列出内置方案 %v", tt.Texts())
+	}
+	_ = tt.Click("编辑") // 第一个是稳妥发送
+	tt.Frame()
+	if err := tt.Click("代码块"); err != nil {
+		t.Fatalf("%v %v", err, tt.Texts())
 	}
 	tt.Frame()
-	if a.store.Settings().PasteThenEnter == before {
-		t.Fatal("开关应写回设置")
+	if ps := a.store.Settings().TargetProfiles; len(ps) != 2 || ps[0].OutputMode() != "code" {
+		t.Fatalf("方案编辑应写回设置 %+v", ps)
 	}
 	a.setQuery = "钥匙串"
 	tt.Frame()
@@ -577,8 +592,8 @@ func TestSelectionBarHintsAndKeys(t *testing.T) {
 	}
 	tt.Key(ui.Cmd, ui.KeyC)
 	tt.Frame()
-	if len(sys.writes) == 0 || sys.writes[len(sys.writes)-1] != "1. 甲\n2. 乙" {
-		t.Fatalf("复制为列表 %q", sys.writes)
+	if len(sys.sent()) == 0 || sys.sent()[len(sys.sent())-1] != "1. 甲\n2. 乙" {
+		t.Fatalf("复制为列表 %q", sys.sent())
 	}
 	tt.Key(0, ui.KeyEscape)
 	tt.Frame()

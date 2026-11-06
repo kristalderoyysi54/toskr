@@ -262,6 +262,9 @@ func (a *app) deliveryRow(c *ui.Context, k tokens, d store.Delivery, notes []sto
 					privacy = fmt.Sprintf(tr("发送前隐藏了 %d 项敏感内容"), d.Redactions)
 				}
 				kv(tr("隐私保护"), privacy)
+				if d.Profile != "" {
+					kv(tr("发送方案"), d.Profile)
+				}
 				if d.Err != "" {
 					kv(tr("原因"), d.Err)
 				}
@@ -271,7 +274,7 @@ func (a *app) deliveryRow(c *ui.Context, k tokens, d store.Delivery, notes []sto
 }
 
 func footLink(c *ui.Context, k tokens, label, key string) bool {
-	b := ui.Box(c).Key("fl-" + key).Role(ui.RoleButton).Label(label)
+	b := ui.Row(c).Key("fl-" + key).Role(ui.RoleButton).Label(label)
 	fg := k.muted
 	if b.Hovered() {
 		fg = k.fg

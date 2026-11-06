@@ -16,8 +16,8 @@ import (
 // queueKeys：笔记 / 剪贴页的卡片快捷键（同 Tauri）：⌘⏎ 发送勾选、⌘1-9 快发第 N 张、⌘C 复制为列表、⌘A 全选、
 // ↑↓ 移动焦点、←→ 移动并单选、Space 预览（链接卡开网页）、x 勾选、d 完成、p 置顶 / 常用、Enter 编辑、⌘⌫ 删除焦点卡。
 func (a *app) queueKeys(c *ui.Context) {
-	if a.editing != "" || a.titleEditID != "" || a.tagEditID != "" {
-		return // 输入框自己处理按键
+	if a.editing != "" || a.titleEditID != "" || a.tagEditID != "" || a.quickOpen {
+		return // 输入框 / 方案快速切换浮层自己处理按键
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyEnter) {
 		a.sendSelected()
@@ -270,15 +270,50 @@ func (a *app) preflightBar(c *ui.Context) {
 			ui.Icon(c, iconWarn).FontSize(14).TextColor(t.Warning)
 			ui.Text(c, tr("发送内容含敏感信息：")+strings.Join(parts, "、")).FontSize(12).Wrap().Grow(1)
 		})
+		r, _ := a.resolution()
 		ui.Row(c).Gap(6).Children(func() {
 			if ui.Button(c, tr("遮罩后发送")).Clicked() {
 				a.confirmPending(true)
 			}
-			if ui.Button(c, tr("仍然发送")).Clicked() {
-				a.confirmPending(false)
+			// 方案「要求逐项处理」：保留原文要再点一次确认；其余策略一次即可。保留原文时不回车
+			raw := tr("仍然发送")
+			if r.Profile.PrivacyPolicy == "requireRedaction" {
+				raw = tr("保留原文…")
+				if a.rawArm {
+					raw = fmt.Sprintf(tr("确认保留 %d 项原文"), len(a.findings))
+				}
+			}
+			if ui.Button(c, raw).Clicked() {
+				if r.Profile.PrivacyPolicy == "requireRedaction" && !a.rawArm {
+					a.rawArm = true
+				} else {
+					a.confirmPending(false)
+				}
 			}
 			if ui.Button(c, tr("取消")).Clicked() {
-				a.pending, a.findings = nil, nil
+				a.pending, a.findings, a.rawArm = nil, nil, false
+			}
+		})
+	})
+}
+
+// enterAskBar：方案为「每次发送前确认」时，粘贴前问一次是否按回车。
+func (a *app) enterAskBar(c *ui.Context) {
+	t := c.Theme()
+	ui.Column(c).Padding(10, 12).Gap(8).Radius(12).Background(t.Accent.Alpha(0.08)).Border(1, t.Accent.Alpha(0.3)).Key("enter-ask").Children(func() {
+		ui.Text(c, fmt.Sprintf(tr("粘贴到 %s 后按回车发送？"), a.target.Name)).FontSize(12).Wrap()
+		ui.Row(c).Gap(6).Children(func() {
+			notes := a.enterAsk
+			if ui.Button(c, tr("粘贴并回车")).Clicked() {
+				a.enterAsk = nil
+				a.deliver(notes, true)
+			}
+			if ui.Button(c, tr("仅粘贴")).Clicked() {
+				a.enterAsk = nil
+				a.deliver(notes, false)
+			}
+			if ui.Button(c, tr("取消")).Clicked() {
+				a.enterAsk = nil
 			}
 		})
 	})

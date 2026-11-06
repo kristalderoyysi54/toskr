@@ -63,7 +63,11 @@ func TestImportTauri(t *testing.T) {
 			"reminderOffsets": []int{1}, "remindedFor": map[string]any{"dueAt": 1790200000000, "offsets": []int{1}}, "fallbackColor": "#ef4444", "createdAt": 1789000000000,
 			"history": []any{map[string]any{"id": "h", "periodDueAt": 1787600000000, "amount": 25, "paidAt": 1787600000000, "method": "auto"}}}},
 		"settings": map[string]any{"colorScheme": "paper", "hotkeyModifier": "control", "hotkeyGapMs": 400, "currencySymbol": "¥", "secretEnabled": true, "subscriptionsEnabled": true,
-			"secretKeys": []any{map[string]any{"id": "k1", "label": "小明", "passphrase": "暗号", "createdAtMs": 1789000000000, "updatedAtMs": 1789000000000}}},
+			"secretKeys":   []any{map[string]any{"id": "k1", "label": "小明", "passphrase": "暗号", "createdAtMs": 1789000000000, "updatedAtMs": 1789000000000}},
+			"promptGroups": []any{map[string]any{"id": "general", "name": "通用", "order": 0}, map[string]any{"id": "g2", "name": "写作", "order": 1}},
+			"targetProfiles": []any{map[string]any{"id": "default-safe", "name": "稳妥发送", "bundleIds": []string{}, "promptGroupId": "general", "defaultFormat": "plain", "defaultMarkdownMode": "preserve", "enterPolicy": "never", "privacyPolicy": "requireRedaction", "keepPanel": false},
+				map[string]any{"id": "p-ai", "name": "AI 对话", "bundleIds": []string{"com.openai.chat"}, "promptGroupId": "g2", "defaultFormat": "plain", "defaultMarkdownMode": "strip", "enterPolicy": "confirm", "privacyPolicy": "confirmRaw", "keepPanel": true}},
+			"defaultTargetProfileId": "p-ai"},
 	}
 	raw, _ := json.Marshal(map[string]any{"state": state, "version": 27})
 	_ = os.WriteFile(filepath.Join(tdir, "toskr-data.json"), seal(PurposeData, raw), 0o600)
@@ -125,6 +129,9 @@ func TestImportTauri(t *testing.T) {
 	st := s.Settings()
 	if st.ColorScheme != "paper" || st.TriggerModifier != "control" || st.TriggerGapMs != 400 || !st.SecretEnabled || len(st.SecretKeys) != 1 {
 		t.Fatalf("设置 %+v", st)
+	}
+	if g, ps, def := st.ProfileConfig(); len(g) != 2 || len(ps) != 2 || def != "p-ai" || ps[1].OutputMode() != "strip-markdown" || !ps[1].KeepPanel {
+		t.Fatalf("发送方案应整组导入 %+v %+v %q", g, ps, def)
 	}
 	if _, ok := s.Note(func() string {
 		for _, n := range s.Notes() {

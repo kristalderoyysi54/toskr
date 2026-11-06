@@ -114,7 +114,17 @@ type app struct {
 	lastRedactions                             int             // 下一次投递前遮罩的敏感项数（记进发送记录）
 	drawerOpen                                 bool            // 「最近发送」抽屉
 	drawerMore                                 map[string]bool // 抽屉行「更多」展开态
-	tauriImporting                             bool            // 正在从 Tauri 版导入
+	// 发送方案：临时指定 / 规则覆盖只对 tempFor / ruleFor 记下的目标身份有效
+	tempProfile, tempFor string
+	ruleOv               store.RuleOverrides
+	ruleFor              string
+	lensOpen, quickOpen  bool
+	quickIdx             int
+	editProfileID        string // 设置里正在编辑的方案
+	profName             string
+	enterAsk             []store.Note // 方案为「每次发送前确认」时挂起，等用户选回车与否
+	rawArm               bool         // 「要求逐项处理」下保留原文需再点一次确认
+	tauriImporting       bool         // 正在从 Tauri 版导入
 	// 设置页「本机翻译」状态
 	ltStatus                        string
 	ltPreparing, ltFailed, ltOpened bool
@@ -496,7 +506,7 @@ func (a *app) commitEdit() {
 	a.editing = ""
 }
 
-// send 先做敏感内容预检，命中则挂起等确认；否则直接投递。
+// send 先做敏感内容预检（按方案隐私策略），命中则挂起等确认；再按方案的粘贴后动作投递。
 func (a *app) send(notes []store.Note) {
 	if len(notes) == 0 {
 		return
@@ -510,19 +520,19 @@ func (a *app) send(notes []store.Note) {
 		fs = append(fs, core.Preflight(n.Text)...)
 	}
 	if len(fs) > 0 {
-		a.pending, a.findings = notes, fs
+		a.pending, a.findings, a.rawArm = notes, fs, false
 		if a.panel != nil {
 			a.panel.Show() // 确认条在面板里
 		}
 		return
 	}
-	a.deliver(notes, false)
+	a.askEnter(notes, false)
 }
 
-// confirmPending 处理预检确认条：redact 为 true 时遮罩命中处再发。
+// confirmPending 处理预检确认条：redact 为 true 时遮罩命中处再发；保留原文时强制不回车（同 Tauri forcePressEnterOff）。
 func (a *app) confirmPending(redact bool) {
 	notes := a.pending
-	a.pending, a.findings = nil, nil
+	a.pending, a.findings, a.rawArm = nil, nil, false
 	if redact {
 		notes = slices.Clone(notes)
 		for i := range notes {
@@ -531,11 +541,28 @@ func (a *app) confirmPending(redact bool) {
 			notes[i].Text = core.Redact(notes[i].Text, fs)
 		}
 	}
-	a.deliver(notes, true)
+	a.askEnter(notes, !redact)
 }
 
-func (a *app) deliver(notes []store.Note, confirmed bool) {
+// askEnter：方案为「每次发送前确认」时先在面板里问是否回车；保留了原文则一律不回车。
+func (a *app) askEnter(notes []store.Note, rawKept bool) {
+	r, _ := a.resolution()
+	switch {
+	case rawKept || r.Profile.EnterPolicy == "never":
+		a.deliver(notes, false)
+	case r.Profile.EnterPolicy == "confirm":
+		a.enterAsk = notes
+		if a.panel != nil {
+			a.panel.Show()
+		}
+	default:
+		a.deliver(notes, true)
+	}
+}
+
+func (a *app) deliver(notes []store.Note, enter bool) {
 	target := a.target
+	r, _ := a.resolution()
 	redactions := a.lastRedactions
 	a.lastRedactions = 0
 	var texts []string
@@ -549,26 +576,30 @@ func (a *app) deliver(notes []store.Note, confirmed bool) {
 		}
 		texts = append(texts, n.Text)
 	}
-	enter := a.store.Settings().PasteThenEnter && !isTerminal(target.BundleID)
-	if !a.pinned {
+	payload := ""
+	if len(texts) > 0 {
+		payload = store.FormatForDelivery(sendText(texts), r.Profile.OutputMode())
+	}
+	if !a.pinned && !r.Profile.KeepPanel {
 		a.hidePanelNow()
 	}
+	profile := profileName(r.Profile)
 	go func() {
-		check, err := core.DeliverWith(a.sys, target, core.Payload{Text: sendText(texts), PNG: png}, core.Options{Enter: enter, StartedMs: a.targetStarted})
-		diag.Push("发送: %d 条 → %s enter=%v confirmed=%v check=%s err=%v", len(notes), target.BundleID, enter, confirmed, check, err)
-		a.panel.Update(func() { a.finishDeliver(target, ids, texts, png, redactions, check, err) })
+		check, err := core.DeliverWith(a.sys, target, core.Payload{Text: payload, PNG: png}, core.Options{Enter: enter, StartedMs: a.targetStarted})
+		diag.Push("发送: %d 条 → %s 方案=%s 格式=%s enter=%v check=%s err=%v", len(notes), target.BundleID, r.Profile.ID, r.Profile.OutputMode(), enter, check, err)
+		a.panel.Update(func() { a.finishDeliver(target, ids, texts, png, redactions, profile, check, err) })
 	}()
 }
 
 // finishDeliver：投递结束后（主线程）记历史与「最近发送」、标记已发送、出 HUD。
-func (a *app) finishDeliver(target macos.FrontApp, ids, texts []string, png []byte, redactions int, check core.Check, err error) {
+func (a *app) finishDeliver(target macos.FrontApp, ids, texts []string, png []byte, redactions int, profile string, check core.Check, err error) {
 	rec := delivery{At: time.Now(), Target: target.Name, Count: len(ids)}
 	if err != nil {
 		rec.Err = err.Error()
 	}
 	a.history = append([]delivery{rec}, a.history[:min(len(a.history), 49)]...)
 	d := store.Delivery{TargetName: target.Name, TargetBundle: target.BundleID, Status: "sent", SourceIDs: ids,
-		TextChars: utf8.RuneCountInString(sendText(texts)), Unconfirmed: check == core.CheckUnchanged}
+		TextChars: utf8.RuneCountInString(sendText(texts)), Unconfirmed: check == core.CheckUnchanged, Profile: profile}
 	if png != nil {
 		d.ImageCount = 1
 	}
@@ -587,11 +618,6 @@ func (a *app) finishDeliver(target macos.FrontApp, ids, texts []string, png []by
 		return
 	}
 	a.showHUD("sent", fmt.Sprintf(tr("已发送 %d 条到 %s"), len(ids), target.Name))
-}
-
-// isTerminal：终端里「粘贴后回车」等于直接执行命令，默认不补回车。
-func isTerminal(bundle string) bool {
-	return slices.Contains([]string{"com.apple.Terminal", "com.googlecode.iterm2", "dev.warp.Warp-Stable", "com.mitchellh.ghostty", "net.kovidgoyal.kitty"}, bundle)
 }
 
 func (a *app) sendSelected() { a.send(a.chosenNotes()) }

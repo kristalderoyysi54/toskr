@@ -297,9 +297,9 @@ func (a *app) settingsView(c *ui.Context) {
 		}}},
 		{label: "粘贴与隐私", icon: "crosshair", sections: [][]setSection{{
 			{tr("发送"), []setRow{
-				{title: tr("粘贴后回车"), hint: tr("终端类目标始终不回车"), control: setToggle(st.PasteThenEnter, func(s *store.Settings, v bool) { s.PasteThenEnter = v })},
 				{title: tr("发送前预检"), hint: tr("自动检查密钥、令牌、银行卡号、身份证号，命中时在面板里确认或遮罩后发送")},
 			}},
+			{tr("发送方案"), a.profileSection(c, k, s)},
 			{tr("最近发送"), recent},
 		}}},
 		{label: "更多功能", icon: "blocks", sections: [][]setSection{{

@@ -190,7 +190,7 @@ func TestCardMenuAndKeys(t *testing.T) {
 	a.sys = sys
 	a.target = macos.FrontApp{PID: 42, Name: "Cursor"}
 	tt.Key(ui.Cmd, ui.Key1)
-	if len(sys.writes) == 0 {
+	if len(sys.sent()) == 0 {
 		t.Fatal("⌘1 快发第一张")
 	}
 }

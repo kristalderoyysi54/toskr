@@ -124,6 +124,10 @@ type Settings struct {
 	PanelX      int    `json:"panelX,omitempty"`
 	PanelY      int    `json:"panelY,omitempty"`
 	SidebarEdge string `json:"sidebarEdge,omitempty"` // 跟随应用时停在 left | right（默认右侧）
+	// 发送方案（同 Tauri promptGroups / targetProfiles / defaultTargetProfileId；空 = 内置默认，见 ProfileConfig）
+	PromptGroups     []PromptGroup   `json:"promptGroups,omitempty"`
+	TargetProfiles   []TargetProfile `json:"targetProfiles,omitempty"`
+	DefaultProfileID string          `json:"defaultTargetProfileId,omitempty"`
 	// 截图编辑器（Tauri 存 localStorage：toskr.screenshotStyle / CalloutStyle / Frame / Crosshair）
 	Shot ShotPrefs `json:"shot,omitempty"`
 }
