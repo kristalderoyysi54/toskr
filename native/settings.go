@@ -273,6 +273,10 @@ func (a *app) settingsView(c *ui.Context) {
 						}
 					}},
 				}},
+				{tr("卡片右键菜单"), []setRow{
+					{title: tr("各区显隐与顺序"), hint: tr("「一级菜单」两区直接显示在右键菜单里，「整理」「转换与导出」各是一个二级菜单；各项只能在本区内开关和排序。剪贴卡的「移入笔记分组」显示在一级。合并、回复关联与删除始终显示。"),
+						below: func() { a.menuSettings(c, k, s) }},
+				}},
 			},
 			{
 				{tr("伴随停靠"), []setRow{

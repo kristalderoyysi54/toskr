@@ -138,7 +138,7 @@ func TestTaskFilterAndCalendar(t *testing.T) {
 func TestCardMenuAndKeys(t *testing.T) {
 	a, tt := testApp(t, "第一条", "第二条")
 	_ = tt.RightClick("第一条")
-	if err := tt.ChooseMenuItem("重命名…"); err != nil {
+	if err := tt.ChooseMenuItem("整理", "重命名…"); err != nil {
 		t.Fatalf("%v %v", err, tt.Menu())
 	}
 	tt.Frame()
@@ -149,13 +149,13 @@ func TestCardMenuAndKeys(t *testing.T) {
 		t.Fatalf("标题 %v", tt.Texts())
 	}
 	_ = tt.RightClick("第二条")
-	_ = tt.ChooseMenuItem("模糊内容")
+	_ = tt.ChooseMenuItem("整理", "模糊内容")
 	tt.Frame()
 	if tt.HasText("第二条") {
 		t.Fatal("模糊后卡面不应露出原文")
 	}
 	_ = tt.RightClick("周报")
-	_ = tt.ChooseMenuItem("标签", "新标签…")
+	_ = tt.ChooseMenuItem("整理", "标签", "新标签…")
 	tt.Frame()
 	tt.Type("工作")
 	tt.Key(0, ui.KeyEnter)
@@ -164,7 +164,7 @@ func TestCardMenuAndKeys(t *testing.T) {
 		t.Fatalf("%+v", n0)
 	}
 	_ = tt.RightClick("周报")
-	if err := tt.ChooseMenuItem("转为任务"); err != nil {
+	if err := tt.ChooseMenuItem("转换与导出", "转为任务"); err != nil {
 		t.Fatalf("%v %v", err, tt.Menu())
 	}
 	if len(a.store.Notes()) != 1 || len(a.store.Tasks()) != 1 || a.store.Tasks()[0].Text != "第一条" {

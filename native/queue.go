@@ -491,51 +491,30 @@ func (a *app) cardMenu(c *ui.Context, m *ui.Menu, i int, n store.Note) {
 	multi := a.chosen.Len() > 1
 	isClip := n.Section == store.SectionClipboard
 	isImage := n.Kind == "image" || len(n.MediaFiles()) > 0
+	// 骨架同 Tauri（方案 A）：多选先给合并与移动 → 发送区 → 常用区 → 整理 / 转换与导出二级菜单 → 回复关联 → 删除；
+	// 发送、常用、整理、转换各区的显隐与顺序来自设置「卡片右键菜单」。
+	parts := store.PartitionMenu(a.store.Settings().ContextMenu, isClip)
 	if multi {
-		if m.Item(fmt.Sprintf(tr("发送所选 %d 条"), a.chosen.Len())).Chosen() {
-			a.sendSelected()
-		}
 		if m.Item(fmt.Sprintf(tr("合并所选 %d 条（⌘M）"), a.chosen.Len())).Chosen() {
 			a.mergeChosen(c)
 		}
-		if m.Item(fmt.Sprintf(tr("复制原文为列表（不脱敏） %d 项"), a.chosen.Len())).Chosen() {
-			a.copyChosenAsList()
+		if slices.Contains(parts["main"], "move") || slices.Contains(parts["organize"], "move") {
+			a.menuEntry(c, m, "move", n, multi, isClip, isImage)
 		}
-	} else {
-		if link := noteLink(n); link != "" && m.Item(tr("打开链接")).Chosen() {
-			_ = exec.Command("/usr/bin/open", link).Start()
-		}
-		if n.Kind == "link" && n.URL != "" && m.Item(tr("确认获取链接预览…")).Chosen() {
-			a.confirmFetchLink(n)
-		}
-		if m.Item(tr("预览")).Chosen() {
-			a.openDetail(n)
-		}
-		send := tr("发送到对话")
-		if isClip {
-			send = tr("发送 / 添加")
-		}
-		if m.Item(send).Chosen() {
-			a.sendSelected()
-		}
-		if m.Item(tr("检查后发送…")).Chosen() {
-			a.checkSend(a.chosenNotes())
-		}
-		if !isImage {
-			a.templateMenu(m, tr("用模板发送"), a.chosenNotes)
-		}
-		if !isImage && m.Item(tr("编辑")).Chosen() {
-			a.startEdit()
-		}
-		if m.Item(tr("复制原文（不脱敏）")).Chosen() {
-			a.copySelected(c)
+		m.Separator()
+	}
+	section := func(m *ui.Menu, ids []string) {
+		for _, id := range ids {
+			if !(multi && id == "move") { // 多选时已提到合并之后
+				a.menuEntry(c, m, id, n, multi, isClip, isImage)
+			}
 		}
 	}
-	if n.Kind == "image" && !multi {
+	section(m, parts["send"])
+	m.Separator()
+	section(m, parts["main"])
+	if n.Kind == "image" && !multi { // 原生版图片工具（Tauri 在预览窗里），固定显示
 		m.Separator()
-		if m.Item(tr("识别文字 (OCR)")).Chosen() {
-			a.ocrNote(n)
-		}
 		if m.Item(tr("钉到屏幕")).Chosen() {
 			a.pinImage(n)
 		}
@@ -547,35 +526,136 @@ func (a *app) cardMenu(c *ui.Context, m *ui.Menu, i int, n store.Note) {
 		}
 	}
 	m.Separator()
-	done := tr("标记完成")
-	if n.Done {
-		done = tr("取消完成")
+	if len(parts["organize"]) > 0 {
+		m.Submenu(tr("整理"), func(sm *ui.Menu) { section(sm, parts["organize"]) })
 	}
-	if m.Item(done).Chosen() {
-		a.toggleDone()
+	aiPolish := n.Kind != "image" && !multi
+	if len(parts["convert"]) > 0 || aiPolish {
+		m.Submenu(tr("转换与导出"), func(sm *ui.Menu) {
+			section(sm, parts["convert"])
+			if aiPolish {
+				sm.Submenu("AI", func(am *ui.Menu) {
+					for _, act := range aiActions {
+						if am.Item(tr(act.label)).Chosen() {
+							a.runAI(n, act)
+						}
+					}
+				})
+			}
+		})
 	}
 	if !multi {
-		keep := tr("设为常用 · 发送后保留")
+		a.replyMenu(m, n)
+	}
+	m.Separator()
+	if m.Item(tr("删除")).Chosen() {
+		a.deleteSelected(c)
+	}
+}
+
+// menuEntry 渲染一项可配置的右键菜单（同 Tauri NoteCard renderMenuItem）；卡片类型不适用时不出。
+func (a *app) menuEntry(c *ui.Context, m *ui.Menu, id string, n store.Note, multi, isClip, isImage bool) {
+	count := ""
+	if multi {
+		count = fmt.Sprintf(" ×%d", a.chosen.Len())
+	}
+	single := !multi
+	switch id {
+	case "preview":
+		if !single {
+			return
+		}
+		if link := noteLink(n); link != "" {
+			if m.Item(tr("打开链接")).Chosen() {
+				_ = exec.Command("/usr/bin/open", link).Start()
+			}
+			if n.Kind == "link" && n.URL != "" && m.Item(tr("确认获取链接预览…")).Chosen() {
+				a.confirmFetchLink(n)
+			}
+			return
+		}
+		if n.Kind == "image" && n.ImageFile != "" {
+			return // 图片卡不出预览（Space / 双击是主入口，同 Tauri）
+		}
+		if m.Item(tr("预览")).Chosen() {
+			a.openDetail(n)
+		}
+	case "send":
+		label := tr("发送到对话")
+		if isClip {
+			label = tr("发送 / 添加")
+		}
+		if m.Item(label + count).Chosen() {
+			a.sendSelected()
+		}
+	case "send-preflight":
+		if m.Item(tr("检查后发送…") + count).Chosen() {
+			a.checkSend(a.chosenNotes())
+		}
+	case "send-template":
+		a.templateMenu(m, tr("用模板发送"), a.chosenNotes)
+	case "copy":
+		if single && m.Item(tr("复制原文（不脱敏）")).Chosen() {
+			a.copySelected(c)
+		}
+	case "copy-list":
+		if m.Item(tr("复制原文为列表（不脱敏）") + count).Chosen() {
+			a.copyChosenAsList()
+		}
+	case "export":
+		if !isClip && n.Kind != "secret" && m.Item(tr("导出笔记包…")+count).Chosen() {
+			a.exportNotes(a.chosenNotes())
+		}
+	case "edit":
+		if single && !isImage && m.Item(tr("编辑")).Chosen() {
+			a.startEdit()
+		}
+	case "ocr":
+		if single && n.Kind == "image" && n.ImageFile != "" && m.Item(tr("识别文字 (OCR)")).Chosen() {
+			a.ocrNote(n)
+		}
+	case "done":
+		label := tr("标记完成")
+		if n.Done {
+			label = tr("取消完成")
+		}
+		if m.Item(label + count).Chosen() {
+			a.toggleDone()
+		}
+	case "keep":
+		if !single {
+			return
+		}
+		label := tr("设为常用 · 发送后保留")
 		switch {
 		case isClip && n.Kept:
-			keep = tr("取消固定")
+			label = tr("取消固定")
 		case isClip:
-			keep = tr("固定 · 不被清理")
+			label = tr("固定 · 不被清理")
 		case n.Kept:
-			keep = tr("取消常用")
+			label = tr("取消常用")
 		}
-		if m.Item(keep).Chosen() {
+		if m.Item(label).Chosen() {
 			_ = a.store.SetKept(n.ID, !n.Kept)
 		}
-		blur := tr("模糊内容")
-		if n.Blur {
-			blur = tr("取消模糊")
+	case "blur":
+		if !single {
+			return
 		}
-		if m.Item(blur).Chosen() {
+		label := tr("模糊内容")
+		if n.Blur {
+			label = tr("取消模糊")
+		}
+		if m.Item(label).Chosen() {
 			_ = a.store.SetBlur(n.ID, !n.Blur)
 		}
-		if m.Item(tr("重命名…")).Chosen() {
+	case "rename":
+		if single && m.Item(tr("重命名…")).Chosen() {
 			a.titleEditID, a.titleText = n.ID, n.Title
+		}
+	case "tags":
+		if !single {
+			return
 		}
 		m.Submenu(tr("标签"), func(sm *ui.Menu) {
 			for _, t := range a.store.AllTags() {
@@ -594,44 +674,33 @@ func (a *app) cardMenu(c *ui.Context, m *ui.Menu, i int, n store.Note) {
 				a.tagEditID, a.tagText = n.ID, ""
 			}
 		})
-		if !isImage {
-			if m.Item(tr("AI 转任务")).Chosen() {
-				a.noteToTaskAI(n)
-			}
-		}
-		if n.Kind != "image" && m.Item(tr("AI 起标题")).Chosen() {
-			a.suggestTitle(n)
-		}
-		if !isImage && m.Item(tr("转为任务")).Chosen() {
+	case "to-task":
+		if single && !isImage && m.Item(tr("转为任务")).Chosen() {
 			a.convertToTask(n, "", nil, tr("已转为任务"))
 		}
-		a.replyMenu(m, n)
-	}
-	if !isClip && n.Kind != "secret" && m.Item(tr("导出笔记包…")).Chosen() {
-		a.exportNotes(a.chosenNotes())
-	}
-	m.Submenu(tr("移动到"), func(sm *ui.Menu) {
-		for _, s := range a.store.Sections() {
-			if s.ID != n.Section && sm.Item(sectionName(s)).Chosen() {
-				for _, x := range a.chosenNotes() {
-					_ = a.store.MoveToAt(x.ID, s.ID, 0)
-				}
-				a.chosen.Clear()
-			}
+	case "ai-to-task":
+		if single && !isImage && m.Item(tr("AI 转任务")).Chosen() {
+			a.noteToTaskAI(n)
 		}
-	})
-	if n.Kind != "image" && !multi {
-		m.Submenu("AI", func(sm *ui.Menu) {
-			for _, act := range aiActions {
-				if sm.Item(tr(act.label)).Chosen() {
-					a.runAI(n, act)
+	case "ai-title":
+		if single && n.Kind != "image" && m.Item(tr("AI 起标题")).Chosen() {
+			a.suggestTitle(n)
+		}
+	case "move":
+		label := tr("移动到")
+		if isClip {
+			label = tr("移入笔记分组")
+		}
+		m.Submenu(label, func(sm *ui.Menu) {
+			for _, s := range a.store.Sections() {
+				if s.ID != n.Section && s.ID != store.SectionClipboard && sm.Item(sectionName(s)).Chosen() {
+					for _, x := range a.chosenNotes() {
+						_ = a.store.MoveToAt(x.ID, s.ID, 0)
+					}
+					a.chosen.Clear()
 				}
 			}
 		})
-	}
-	m.Separator()
-	if m.Item(tr("删除")).Chosen() {
-		a.deleteSelected(c)
 	}
 }
 

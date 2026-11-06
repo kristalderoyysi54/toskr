@@ -180,6 +180,7 @@ type tauriSettings struct {
 	ClipCardTemplate   string          `json:"clipCardTemplate"`
 	ScreenshotEnabled  *bool           `json:"screenshotEnabled"`
 	ScreenshotHideSelf *bool           `json:"screenshotHideSelf"`
+	ContextMenu        []MenuItem      `json:"contextMenu"`
 }
 
 // TauriReport 是导入结果。
@@ -683,6 +684,9 @@ func applyTauriSettings(st Settings, t tauriSettings) Settings {
 			continue
 		}
 		st.SecretKeys = append(st.SecretKeys, SecretKey{ID: k.ID, Label: k.Label, Passphrase: k.Passphrase, Note: k.Note, CreatedAt: ms(k.CreatedAtMs)})
+	}
+	if len(t.ContextMenu) > 0 {
+		st.ContextMenu = NormalizeMenu(t.ContextMenu)
 	}
 	return st
 }

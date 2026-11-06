@@ -83,15 +83,15 @@ func TestPromptTemplatesAddSendAndDelete(t *testing.T) {
 	}
 }
 
-// 检查后发送：无敏感项也先在面板里展示将发送的原样内容（已套模板），确认后才发；剪贴卡没有「导出笔记包…」。
+// 检查后发送：无敏感项也先在面板里展示将发送的原样内容（已套模板），确认后才发；剪贴卡一级菜单没有「导出笔记包…」。
 func TestCheckSendShowsPayloadFirst(t *testing.T) {
 	a, tt := testApp(t, "第一行\n第二行")
 	sys := &recSys{}
 	a.sys = sys
 	a.target = macos.FrontApp{PID: 42, Name: "ChatGPT"}
 	_ = tt.RightClick("第一行\n第二行")
-	if m := strings.Join(tt.Menu(), "|"); !strings.Contains(m, "导出笔记包…") {
-		t.Fatalf("笔记卡应有导出 %s", m)
+	if m := strings.Join(tt.Menu(), "|"); !strings.Contains(m, "转换与导出") || strings.Contains(m, "导出笔记包…") {
+		t.Fatalf("笔记卡的导出在「转换与导出」二级菜单里（默认关闭，同 Tauri 低频项）%s", m)
 	}
 	if err := tt.ChooseMenuItem("检查后发送…"); err != nil {
 		t.Fatalf("%v %v", err, tt.Menu())

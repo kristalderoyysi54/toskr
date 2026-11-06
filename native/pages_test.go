@@ -75,7 +75,7 @@ func TestNewSectionChipAndMoveVia(t *testing.T) {
 		t.Fatalf("新分组应出现并成为输入区默认分组 %v", tt.Texts())
 	}
 	_ = tt.RightClick("一条")
-	if err := tt.ChooseMenuItem("移动到", "提示词"); err != nil {
+	if err := tt.ChooseMenuItem("整理", "移动到", "提示词"); err != nil {
 		t.Fatalf("%v %v", err, tt.Menu())
 	}
 	tt.Frame()

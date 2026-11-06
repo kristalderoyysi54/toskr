@@ -156,7 +156,7 @@ func TestClipboardTabAndMoveToNotes(t *testing.T) {
 	if err := tt.RightClick("复制来的"); err != nil {
 		t.Fatal(err)
 	}
-	if err := tt.ChooseMenuItem("移动到", "收件箱"); err != nil {
+	if err := tt.ChooseMenuItem("移入笔记分组", "收件箱"); err != nil {
 		t.Fatalf("%v menu=%v", err, tt.Menu())
 	}
 	tt.Frame()
