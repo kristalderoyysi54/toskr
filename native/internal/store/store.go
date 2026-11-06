@@ -106,6 +106,7 @@ type Settings struct {
 	CardOpacity   float64  `json:"cardOpacity,omitempty"`   // 0.3–1，默认 1
 	HUDDurationMs int      `json:"hudDurationMs,omitempty"` // 2000–10000，默认 3000
 	CompanionGap  *int     `json:"companionGap,omitempty"`  // 0–40，默认 8
+	CardTintOff   bool     `json:"cardTintOff,omitempty"`   // 卡片彩色通栏（Tauri cardTint，默认开）
 	ScreenshotKey string   `json:"screenshotKey"`
 	AIEndpoint    string   `json:"aiEndpoint"`
 	AIModel       string   `json:"aiModel"`

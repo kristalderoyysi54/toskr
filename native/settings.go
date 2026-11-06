@@ -248,6 +248,8 @@ func (a *app) settingsView(c *ui.Context) {
 					{title: tr("窗口整体不透明度"), hint: tr("连毛玻璃层一起变透，能看穿下层窗口"), control: a.pctSlider(c, k, st.WindowAlpha(), 30, 100, 5, func(s *store.Settings, v float64) { s.WindowOpacity = v })},
 					{title: tr("内容底色浓度"), hint: tr("面板底色的浓淡，毛玻璃关闭时最直观"), hidden: st.ColorScheme == "platinum",
 						control: a.pctSlider(c, k, st.PanelAlpha(), 25, 100, 1, func(s *store.Settings, v float64) { s.PanelOpacity = v })},
+					{title: tr("卡片彩色通栏"), hint: tr("卡片顶部按分组颜色着色；关闭则统一中性灰"), hidden: st.ColorScheme == "platinum",
+						control: setToggle(!st.CardTintOff, func(s *store.Settings, v bool) { s.CardTintOff = !v })},
 					{title: tr("卡片底色不透明度"), hint: tr("调低可透出毛玻璃背景"), hidden: st.ColorScheme == "platinum",
 						control: a.pctSlider(c, k, st.CardAlpha(), 30, 100, 5, func(s *store.Settings, v float64) { s.CardOpacity = v })},
 					{title: tr("提示显示时长"), hint: tr("右上角气泡停留多久；失败提醒至少 4 秒"), control: func() {

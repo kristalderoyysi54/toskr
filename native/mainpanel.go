@@ -430,7 +430,8 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 			return
 		}
 		head := ui.Row(c).Height(28).Padding(0, 8).Gap(6).AlignItems(ui.Center).Radius(10, 10, 0, 0)
-		head.LinearGradient(ui.LinearGradient{From: k.cardHeadFrom, To: k.cardHeadTo, Angle: 135})
+		from, to := a.bandColors(k, n)
+		head.LinearGradient(ui.LinearGradient{From: from, To: to, Angle: 135})
 		if k.pt {
 			head.Radius(0).InsetShadow(0, -1, 0, 0, ptBlack).InsetShadow(1, 1, 0, 0, ui.RGBA(255, 255, 255, 0.6))
 		}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -236,5 +237,29 @@ func TestAppearanceDetailRows(t *testing.T) {
 	wa := mygo.Rectangle{X: 0, Y: 25, Width: 1440, Height: 875}
 	if r := dockBeside(macos.Rect{X: 100, Y: 60, W: 800, H: 700}, wa, 380, false, 20); r.X != 920 {
 		t.Fatalf("间隙 20 应在窗口右缘外 20px：%v", r.X)
+	}
+}
+
+// 卡片彩色通栏：有分组色时通栏按分组色着色（浅色 86% 混白 → 92% 混黑），关闭后回中性灰。
+func TestCardBandTint(t *testing.T) {
+	a, _ := testApp(t)
+	id := a.store.AddSection("资料")
+	sec := a.store.Sections()[slices.IndexFunc(a.store.Sections(), func(s store.Section) bool { return s.ID == id })]
+	sec.Color = "#3b82f6"
+	_ = a.store.UpdateSection(sec)
+	n := store.Note{Section: id}
+	k := lightTokens
+	from, to := a.bandColors(k, n)
+	if from != mix(hexColor("#3b82f6"), ui.RGB(255, 255, 255), 0.86) || to == k.cardHeadTo {
+		t.Fatalf("分组色通栏 %v %v", from, to)
+	}
+	if f, _ := a.bandColors(k, store.Note{Section: store.SectionInbox}); f != k.cardHeadFrom {
+		t.Fatal("无分组色用中性灰")
+	}
+	st := a.store.Settings()
+	st.CardTintOff = true
+	_ = a.store.SetSettings(st)
+	if f, _ := a.bandColors(k, n); f != k.cardHeadFrom {
+		t.Fatal("关闭后中性灰")
 	}
 }

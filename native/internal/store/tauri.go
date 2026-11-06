@@ -174,6 +174,7 @@ type tauriSettings struct {
 	CardOpacity        float64         `json:"cardOpacity"`
 	HUDDurationMs      int             `json:"hudDurationMs"`
 	CompanionGap       *int            `json:"companionGap"`
+	CardTint           *bool           `json:"cardTint"`
 }
 
 // TauriReport 是导入结果。
@@ -489,6 +490,9 @@ func applyTauriSettings(st Settings, t tauriSettings) Settings {
 	}
 	if t.CompanionGap != nil {
 		st.CompanionGap = t.CompanionGap
+	}
+	if t.CardTint != nil {
+		st.CardTintOff = !*t.CardTint
 	}
 	if t.DoubleTapCapture != nil {
 		st.DoubleTapCaptureOnly = *t.DoubleTapCapture

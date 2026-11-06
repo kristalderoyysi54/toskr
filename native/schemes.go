@@ -165,3 +165,33 @@ func setSchemed(s settingsTokens, dark bool) settingsTokens {
 	s.knob, s.knobOn, s.btnHover = p.knobOff, p.knobOn, p.btnHover
 	return s
 }
+
+// mix 按 sRGB 线性混合（CSS color-mix(in srgb, a p%, b)）。
+func mix(a, b ui.Color, p float32) ui.Color {
+	f := func(x, y uint8) uint8 { return uint8(float32(x)*p + float32(y)*(1-p) + 0.5) }
+	return ui.RGBA(f(a.R, b.R), f(a.G, b.G), f(a.B, b.B), float32(f(a.A, b.A))/255)
+}
+
+// bandColors：卡片通栏（同 Tauri .asset-band，开「卡片彩色通栏」时分组色优先，否则中性灰 #7c8494）。
+// 浅色：band 86% 混白 → 92% 混黑的 135° 渐变；深色：band 28% 叠卡面。Platinum 走自己的结构。
+func (a *app) bandColors(k tokens, n store.Note) (ui.Color, ui.Color) {
+	st := a.store.Settings()
+	if k.pt || st.CardTintOff {
+		return k.cardHeadFrom, k.cardHeadTo
+	}
+	color := ""
+	for _, s := range a.store.Sections() {
+		if s.ID == n.Section {
+			color = s.Color
+		}
+	}
+	if color == "" || curScheme != "default" {
+		return k.cardHeadFrom, k.cardHeadTo
+	}
+	band := hexColor(color)
+	if k.dark {
+		c := mix(band, k.card, 0.28)
+		return c, c
+	}
+	return mix(band, ui.RGB(255, 255, 255), 0.86), mix(band, ui.RGB(0, 0, 0), 0.92)
+}
