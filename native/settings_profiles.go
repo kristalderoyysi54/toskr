@@ -71,7 +71,7 @@ func (a *app) profileSection(c *ui.Context, k tokens, s settingsTokens) []setRow
 					a.updateProfiles(func(ps []store.TargetProfile, _ string) ([]store.TargetProfile, string) { return ps, p.ID })
 				}
 			}
-		}).Key("default-profile")
+		})
 	}}}
 	for _, p := range ps {
 		p := p
@@ -107,7 +107,7 @@ func (a *app) profileSection(c *ui.Context, k tokens, s settingsTokens) []setRow
 					a.editProfileID, a.profName = np.ID, np.Name
 				}
 			}
-		}).Key("new-profile")
+		})
 	}})
 	return rows
 }

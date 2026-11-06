@@ -137,3 +137,34 @@ func TestSendProfilesQuickSwitchAndPolicies(t *testing.T) {
 	}
 	tt.Key(0, ui.KeyEscape)
 }
+
+// 设置里的弹出菜单按钮（默认方案、按预设新建）能打开并写回（PopoverMenuButton 上不能再挂 .Key，否则菜单打不开）。
+func TestSettingsProfilePopoverMenus(t *testing.T) {
+	a, _ := testApp(t)
+	a.openSettingsAt(setPagePaste, 0)
+	st := ui.NewTester(a.settingsView, 1040, 720)
+	st.Frame()
+	if err := st.Click("新建"); err != nil {
+		t.Fatal(err)
+	}
+	st.Frame()
+	if err := st.Click("AI 对话"); err != nil {
+		t.Fatalf("新建菜单应列出预设 %v %v", err, st.Texts())
+	}
+	st.Frame()
+	_, ps, _ := a.store.Settings().ProfileConfig()
+	if len(ps) != 3 || ps[2].Name != "AI 对话" || ps[2].EnterPolicy != "confirm" || a.editProfileID != ps[2].ID {
+		t.Fatalf("按预设新建 %+v", ps)
+	}
+	if err := st.Click("稳妥发送"); err != nil { // 默认方案按钮
+		t.Fatal(err)
+	}
+	st.Frame()
+	for _, key := range []ui.Key{ui.KeyDown, ui.KeyDown, ui.KeyEnter} { // 菜单项与方案列表同名，用键盘选第二项
+		st.Key(0, key)
+		st.Frame()
+	}
+	if _, _, def := a.store.Settings().ProfileConfig(); def != store.TerminalProfileID {
+		t.Fatalf("默认方案应改为终端 %q", def)
+	}
+}

@@ -109,7 +109,7 @@ func (a *app) templateSections(c *ui.Context, k tokens, s settingsTokens) []setS
 								a.snipGroup = g.ID
 							}
 						}
-					}).Key(key + "-group")
+					})
 					ui.Spacer(c)
 					if button(c, s, "取消") {
 						a.snipAdd, a.snipEditID = false, ""
