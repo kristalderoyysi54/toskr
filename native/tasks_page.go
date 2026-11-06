@@ -194,13 +194,35 @@ func (a *app) tasksPage(c *ui.Context) {
 		return
 	}
 	a.taskQuickAdd(c, k)
+	filtering := a.taskSub == 1 && a.taskFilterOn && a.taskFilter.active()
+	var filtered []store.Task
+	if filtering {
+		filtered = filterTasks(a.tasks, a.taskFilter, now)
+	}
+	if a.taskSub == 1 && a.taskFilterOn {
+		a.taskFilterBar(c, k, len(filtered))
+	}
 	ui.Box(c).Grow(1).Margin(6, 0, 0, 0).Children(func() {
 		ui.Scroll(c).Fill().Scrollbars(false).Children(func() {
 			ui.Column(c).Padding(4, 14, 8, 14).Gap(12).Children(func() {
-				if a.taskSub == 0 {
+				switch {
+				case a.taskSub == 0:
 					a.todayView(c, k, now)
-				} else {
-					a.taskListView(c, k, now)
+				default:
+					if a.taskCalOn {
+						a.taskCalendar(c, k, now)
+					}
+					if !filtering {
+						a.taskListView(c, k, now)
+					} else if len(filtered) == 0 {
+						text(c, tr("没有符合条件的任务"), 11, 16, 400, k.muted).Padding(8, 0).TextAlign(ui.Center).FillWidth()
+					} else {
+						ui.Column(c).Gap(4).Children(func() {
+							for _, t := range filtered {
+								a.taskRow(c, k, t, now)
+							}
+						})
+					}
 				}
 			})
 		})
@@ -217,8 +239,20 @@ func (a *app) taskSubtabs(c *ui.Context, k tokens) {
 	var right func()
 	if a.taskSub == 1 {
 		right = func() {
-			a.iconButton(c, k, "list-filter", 22, 14, tr("搜索与筛选任务"))
-			a.iconButton(c, k, "calendar-days", 22, 14, tr("显示任务日历"))
+			fl, cl := tr("搜索与筛选任务"), tr("显示任务日历")
+			if a.taskFilterOn {
+				fl = tr("关闭搜索与筛选")
+			}
+			if a.taskCalOn {
+				cl = tr("隐藏任务日历")
+			}
+			if a.toggleIconButton(c, k, "list-filter", fl, a.taskFilterOn) {
+				a.taskFilterOn = !a.taskFilterOn
+				a.taskFilter = taskFilter{} // 关闭即清空条件（会话态，不记忆）
+			}
+			if a.toggleIconButton(c, k, "calendar-days", cl, a.taskCalOn) {
+				a.taskCalOn = !a.taskCalOn
+			}
 		}
 	}
 	if i, ok := a.textTabs(c, k, labels, a.taskSub, right); ok {

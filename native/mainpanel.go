@@ -23,7 +23,9 @@ type noteGroup struct {
 
 func (a *app) mainHeader(c *ui.Context, k tokens) {
 	ui.Row(c).Height(44).Padding(14, 16, 8, 16).Gap(8).AlignItems(ui.Start).Children(func() {
-		text(c, "Toskr", 13, 18, 600, k.fg).LetterSpacing(-0.325).Grow(1).Margin(2, 0, 0, 0)
+		// 标题与留白是拖动区（Tauri data-tauri-drag-region）：拖动移动面板
+		text(c, "Toskr", 13, 18, 600, k.fg).LetterSpacing(-0.325).Grow(1).Margin(2, 0, 0, 0).Cursor(ui.CursorGrab).
+			Tooltip(tr("拖动此处可移动面板（未吸附时）")).DragWindow()
 		ui.Row(c).Gap(2).Children(func() {
 			if a.page != pageTasks && a.iconButton(c, k, "search", 22, 14, "搜索（⌘F）") {
 				a.searchOpen = !a.searchOpen
@@ -40,7 +42,7 @@ func (a *app) mainHeader(c *ui.Context, k tokens) {
 
 // iconButton 是 Tauri 的 IconButton：透明底、圆角 8、悬停浅底。
 func (a *app) iconButton(c *ui.Context, k tokens, icon string, box, size float32, tip string) bool {
-	b := ui.Box(c).Size(box, box).Radius(8).Center().Tooltip(tip)
+	b := ui.Box(c).Size(box, box).Radius(8).Center().Tooltip(tip).Role(ui.RoleButton).Label(tip)
 	bg := ui.Transparent
 	if b.Hovered() {
 		bg = k.track
@@ -48,6 +50,23 @@ func (a *app) iconButton(c *ui.Context, k tokens, icon string, box, size float32
 	fadeColor(b, "bg", bg, tweenControl) // IconButton：color / bg / transform 100ms，按下 scale 0.94
 	b.AnimatePose(ui.Pose{Scale: pressScale(b.Pressed(), 0.94)}, tweenControl)
 	b.Children(func() { licon(c, icon, size, k.muted) })
+	return b.Clicked()
+}
+
+// toggleIconButton：带按下态的 IconButton（aria-pressed 时图标染主色）。
+func (a *app) toggleIconButton(c *ui.Context, k tokens, icon, tip string, on bool) bool {
+	b := ui.Box(c).Size(22, 22).Radius(8).Center().Tooltip(tip).Role(ui.RoleButton).Label(tip)
+	bg := ui.Transparent
+	if b.Hovered() {
+		bg = k.track
+	}
+	fadeColor(b, "bg", bg, tweenControl)
+	b.AnimatePose(ui.Pose{Scale: pressScale(b.Pressed(), 0.94)}, tweenControl)
+	fg := k.muted
+	if on {
+		fg = stok(c).primary
+	}
+	b.Children(func() { licon(c, icon, 14, fg) })
 	return b.Clicked()
 }
 
@@ -143,7 +162,7 @@ func (a *app) groups() []noteGroup {
 	all := store.Search(a.store.Notes(), a.query)
 	var out []noteGroup
 	for _, s := range a.store.Sections() {
-		if s.ID == store.SectionClipboard {
+		if s.ID == store.SectionClipboard || (a.noteFilter != "" && s.ID != a.noteFilter) {
 			continue
 		}
 		g := noteGroup{sec: s}
@@ -163,7 +182,16 @@ func (a *app) groups() []noteGroup {
 }
 
 func (a *app) notesPage(c *ui.Context, k tokens) {
-	ui.Box(c).Grow(1).Children(func() {
+	ui.Row(c).Grow(1).Children(func() {
+		if a.noteRailOpen {
+			a.noteRail(c, k)
+		}
+		a.notesList(c, k)
+	})
+}
+
+func (a *app) notesList(c *ui.Context, k tokens) {
+	ui.Box(c).Grow(1).Basis(0).Children(func() {
 		pad := float32(10)
 		if k.pt && ptClassicScroll {
 			pad = 4 // 右侧让给经典滚动条（井内左 10 / 右 4）
@@ -187,19 +215,52 @@ func (a *app) notesPage(c *ui.Context, k tokens) {
 						return false
 					})
 				}
+				// 卡片高度固定（舒适 116 / 紧凑 40），按滚动位置只构建视口附近的卡，其余用等高占位（长列表换页不卡）
+				_, vh := c.Size()
+				a.vis = visWindow{top: a.noteScroll.Y - 600, bottom: a.noteScroll.Y + vh + 600}
+				y := float32(4)
 				for _, g := range a.noteGroups {
-					a.sectionBlock(c, k, g)
+					y += a.sectionBlock(c, k, g, y) + 8
 				}
 			})
 		})
 		// 左缘分组侧栏开关（Tauri：12×20，右侧圆角 8，图标 35% 透明度）
-		side := ui.Box(c).Absolute().Left(0).Top(4).Size(12, 20).Radius(0, 8, 8, 0).Center().Tooltip(tr("分组侧栏"))
-		side.Children(func() { licon(c, "panel-left", 12, k.muted.Alpha(0.35)) })
+		a.noteRailToggle(c, k)
 	})
 }
 
-func (a *app) sectionBlock(c *ui.Context, k tokens, g noteGroup) {
+// visWindow：笔记列表内容坐标下需要真实构建的纵向范围。
+type visWindow struct{ top, bottom float32 }
+
+func (a *app) cardHeight() float32 {
+	if a.store.Settings().CardDensity == "compact" {
+		return 40
+	}
+	return 116
+}
+
+// sectionBlock 构建一个分组块，top 为它在列表内容里的纵坐标，返回块高（与布局一致：区头 20 + 间距 6 + 卡片列 + 底 4）。
+func (a *app) sectionBlock(c *ui.Context, k tokens, g noteGroup, top float32) float32 {
 	collapsed := g.sec.Collapsed
+	cardH := a.cardHeight()
+	height := float32(20 + 4)
+	switch {
+	case collapsed:
+	case len(g.open) == 0 && len(g.done) == 0:
+		height += 6 + 32
+	default:
+		n := len(g.open)
+		height += 6 + float32(n)*cardH + float32(max(n-1, 0))*4
+		if len(g.done) > 0 {
+			if n > 0 {
+				height += 4
+			}
+			height += 18
+			if a.doneOpen[g.sec.ID] {
+				height = -1 // 已完成展开：高度不固定，不做窗口化
+			}
+		}
+	}
 	ui.Column(c).Gap(6).Padding(0, 0, 4, 0).Key("sec-" + g.sec.ID).Children(func() {
 		head := ui.Row(c).Height(20).Padding(0, 4, 0, 2).Gap(4).AlignItems(ui.Center)
 		head.ContextMenu(func(m *ui.Menu) {
@@ -207,16 +268,10 @@ func (a *app) sectionBlock(c *ui.Context, k tokens, g noteGroup) {
 				a.section = g.sec.ID
 				a.clearDone(c)
 			}
-			if m.Item(tr("发送后保留（不标记完成）")).Checked(g.sec.KeepAfterSend).Chosen() {
-				g.sec.KeepAfterSend = !g.sec.KeepAfterSend
-				_ = a.store.UpdateSection(g.sec)
-			}
-			if !store.IsSystemSection(g.sec.ID) {
-				m.Separator()
-				if m.Item(tr("删除分组（笔记移回收件箱）")).Chosen() {
-					a.store.DeleteSection(g.sec.ID)
-				}
-			}
+			m.Separator()
+			secs := a.noteSections()
+			i := slices.IndexFunc(secs, func(x store.Section) bool { return x.ID == g.sec.ID })
+			a.sectionMenu(m, g.sec, i, len(secs))
 		})
 		head.Children(func() {
 			chev := "chevron-down"
@@ -240,14 +295,34 @@ func (a *app) sectionBlock(c *ui.Context, k tokens, g noteGroup) {
 			return
 		}
 		ui.Column(c).Gap(4).Children(func() {
-			for _, n := range g.open {
-				a.noteCard(c, k, n)
+			y := top + 26
+			skip := float32(0)
+			flush := func() {
+				if skip > 0 {
+					ui.Box(c).Height(skip - 4).Key("gap-" + itoa(int(y))) // 占位：跳过的卡片 + 卡间距（减去它自己的一个间距）
+					skip = 0
+				}
 			}
+			for _, n := range g.open {
+				if height >= 0 && (y+cardH < a.vis.top || y > a.vis.bottom) && !a.chosen.Has(n.ID) && a.editing != n.ID {
+					skip += cardH + 4
+				} else {
+					flush()
+					a.noteCard(c, k, n)
+				}
+				y += cardH + 4
+			}
+			flush()
 			if len(g.done) > 0 {
 				a.doneRow(c, k, g)
 			}
 		})
 	})
+	if height < 0 { // 高度不可预知：之后的分组全部真实构建，避免占位算错漏卡
+		a.vis = visWindow{top: -1e9, bottom: 1e9}
+		return 0
+	}
+	return height
 }
 
 func (a *app) doneRow(c *ui.Context, k tokens, g noteGroup) {
@@ -282,12 +357,19 @@ func cardTitle(n store.Note) string {
 }
 
 func looksLikeSQL(s string) bool {
-	u := strings.ToUpper(strings.TrimSpace(s))
+	s = strings.TrimLeft(s, " \t\r\n")
+	if len(s) > 7 {
+		s = s[:7] // 只看开头：整段转大写在长列表上每帧都很贵
+	}
+	u := strings.ToUpper(s)
 	return strings.HasPrefix(u, "SELECT ") || strings.HasPrefix(u, "INSERT ") || strings.HasPrefix(u, "UPDATE ")
 }
 
 func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
-	idx := slices.IndexFunc(a.notes, func(x store.Note) bool { return x.ID == n.ID })
+	idx, ok := a.noteIdx[n.ID]
+	if !ok {
+		idx = -1
+	}
 	focused := idx >= 0 && idx == a.selected && a.focusList
 	checked := a.chosen.Has(n.ID)
 	compact := a.store.Settings().CardDensity == "compact"

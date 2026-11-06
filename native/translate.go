@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/egoist/mygo/ui"
+
 	"github.com/toskr/native/internal/ai"
 	"github.com/toskr/native/internal/diag"
 )
@@ -117,4 +119,135 @@ func translateTexts(cfg ai.Config, texts []string) (out []string, errMsg, hint s
 	}
 	diag.Push("图内翻译失败：%v", err)
 	return nil, tr("翻译失败"), ""
+}
+
+// ---- 设置页「本机翻译」状态（同 Tauri local_translate_status + SettingsView LocalTranslateRow）----
+
+// 本机翻译状态：ready / download（系统支持但语言包没下载）/ unsupported / unknown。
+const (
+	ltChecking    = ""
+	ltReady       = "ready"
+	ltDownload    = "download"
+	ltUnsupported = "unsupported"
+	ltUnknown     = "unknown"
+)
+
+// localTranslateStatus 只查语言包（不翻译）；prepare 时缺包就让辅助程序弹系统下载确认框，等用户处理完（最长 10 分钟）。
+var localTranslateStatus = func(prepare bool) string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ltUnknown
+	}
+	helper := filepath.Join(filepath.Dir(exe), "..", "Resources", translateHelperName)
+	if _, err := os.Stat(helper); err != nil {
+		return ltUnknown
+	}
+	return helperStatus(helper, prepare)
+}
+
+func helperStatus(helper string, prepare bool) string {
+	target := "zh-Hans"
+	if langEN.Load() {
+		target = "en"
+	}
+	timeout := 8 * time.Second
+	if prepare {
+		timeout = 610 * time.Second
+	}
+	in, _ := json.Marshal(map[string]any{"target": target, "prepare": prepare})
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, helper)
+	cmd.Stdin = bytes.NewReader(in)
+	out, err := cmd.Output()
+	var reply struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+	}
+	if json.Unmarshal(out, &reply) != nil {
+		if err != nil {
+			return ltUnsupported // 低于 macOS 15 时辅助程序加载不了
+		}
+		return ltUnknown
+	}
+	switch reply.Status {
+	case "installed":
+		return ltReady
+	case "supported":
+		return ltDownload
+	case "unsupported":
+		return ltUnsupported
+	}
+	if translateReason(errors.New(reply.Error)) == localUnsupported {
+		return ltUnsupported
+	}
+	diag.Push("本机翻译状态未知：%s", out)
+	return ltUnknown
+}
+
+// refreshLocalTranslate：后台查一次状态，查完刷新设置窗（打开设置窗 / 设置窗回到前台时调用）。
+func (a *app) refreshLocalTranslate(prepare bool) {
+	if prepare {
+		a.ltPreparing = true
+	}
+	work := func() {
+		st := localTranslateStatus(prepare)
+		upd := func() {
+			a.ltStatus = st
+			if prepare {
+				a.ltPreparing, a.ltFailed = false, st == ltDownload
+			}
+		}
+		if a.settingsWin != nil {
+			a.settingsWin.Update(upd)
+		} else {
+			upd()
+		}
+	}
+	if a.settingsWin == nil {
+		work() // 无设置窗（测试）同步查
+		return
+	}
+	go work()
+}
+
+func (a *app) localTranslateHint() string {
+	switch a.ltStatus {
+	case ltChecking:
+		return tr("检查中…")
+	case ltReady:
+		return "● " + tr("图内翻译用系统离线语言包中英互译，不联网")
+	case ltDownload:
+		switch {
+		case a.ltOpened:
+			return "● " + tr("在打开的「语言与地区」底部点「翻译语言…」，下载「中文（简体）」和「英语」")
+		case a.ltFailed:
+			return "● " + tr("没有完成下载，可到系统设置里手动下载")
+		}
+		return "● " + tr("未下载离线语言包，图内翻译会改用 AI（需已配置）")
+	case ltUnsupported:
+		return "● " + tr("需要 macOS 15 或更高；图内翻译会改用 AI（需已配置）")
+	}
+	return tr("无法检测本机翻译；不可用时图内翻译改用 AI")
+}
+
+// localTranslateButton：缺语言包时「去下载」（弹系统下载确认框）；没下完再给「打开系统设置」。
+func (a *app) localTranslateButton(c *ui.Context, s settingsTokens) {
+	if a.ltStatus != ltDownload {
+		return
+	}
+	if a.ltFailed {
+		if button(c, s, "打开系统设置") {
+			a.ltOpened = true
+			_ = exec.Command("open", "x-apple.systempreferences:com.apple.Localization-Settings.extension?translation").Start()
+		}
+		return
+	}
+	label := "去下载"
+	if a.ltPreparing {
+		label = "等待系统确认…"
+	}
+	if button(c, s, label) && !a.ltPreparing {
+		a.refreshLocalTranslate(true)
+	}
 }

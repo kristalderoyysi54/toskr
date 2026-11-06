@@ -37,11 +37,13 @@ func (a *app) openSettings() {
 			Vibrancy: mygo.VibrancySidebar, Transparent: true,
 			Content: ui.View(a.settingsView),
 		})
+		a.settingsWin.OnFocus(func() { a.refreshLocalTranslate(false) }) // 回到窗口时重查（可能刚在系统设置里下完语言包）
 		a.settingsWin.OnClose(func(e *mygo.CloseEvent) {
 			e.PreventDefault()
 			a.settingsWin.Hide()
 		})
 	}
+	a.refreshLocalTranslate(false)
 	a.settingsWin.Invalidate()
 	a.settingsWin.Show()
 	a.settingsWin.Focus()
@@ -269,6 +271,7 @@ func (a *app) settingsView(c *ui.Context) {
 			{tr("全局快捷键"), []setRow{
 				{title: tr("开关面板"), control: hotkey(a.shortcut)},
 				{title: tr("截图"), control: hotkey(st.ScreenshotKey)},
+				{title: tr("本机翻译"), hint: a.localTranslateHint(), control: func() { a.localTranslateButton(c, s) }},
 			}},
 		}}},
 		{label: "剪贴板", icon: "clipboard-list", sections: [][]setSection{{

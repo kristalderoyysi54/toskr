@@ -76,25 +76,46 @@ func (a *app) clipBand(n store.Note) string {
 }
 
 func (a *app) clipPage(c *ui.Context, k tokens) {
-	ui.Scroll(c).Grow(1).Scrollbars(false).Children(func() {
+	list := a.clipList
+	_, vh := c.Size()
+	vis := visWindow{top: a.clipScroll.Y - 600, bottom: a.clipScroll.Y + vh + 600}
+	ui.Scroll(c).Grow(1).Scrollbars(false).TrackScroll(&a.clipScroll).Children(func() {
 		ui.Column(c).Padding(4, 14, 8, 14).Children(func() {
-			if len(a.notes) == 0 {
+			if len(list) == 0 {
 				a.clipHeader(c, k, "", true)
 				a.emptyState(c, k, "clipboard-list", tr("还没有剪贴板记录"), tr("复制任意文字、链接或图片试试，会自动出现在这里。"))
 				return
 			}
-			for i := 0; i < len(a.notes); {
-				band := a.clipBand(a.notes[i])
+			// 卡片固定 116 高：只构建视口附近的卡，其余等高占位（同笔记页）
+			y := float32(4)
+			for i := 0; i < len(list); {
+				band := a.clipBand(list[i])
 				j := i
-				for j < len(a.notes) && a.clipBand(a.notes[j]) == band {
+				for j < len(list) && a.clipBand(list[j]) == band {
 					j++
 				}
 				a.clipHeader(c, k, band, i == 0)
+				y += 28
 				ui.Column(c).Gap(4).Key("band-" + band).Children(func() {
-					for _, n := range a.notes[i:j] {
-						a.clipCard(c, k, n)
+					skip := float32(0)
+					flush := func() {
+						if skip > 0 {
+							ui.Box(c).Height(skip - 4).Key("gap-" + itoa(int(y)))
+							skip = 0
+						}
 					}
+					for _, n := range list[i:j] {
+						if (y+116 < vis.top || y > vis.bottom) && !a.chosen.Has(n.ID) {
+							skip += 120
+						} else {
+							flush()
+							a.clipCard(c, k, n)
+						}
+						y += 120
+					}
+					flush()
 				})
+				y -= 4
 				i = j
 			}
 		})
@@ -156,7 +177,10 @@ func linkHost(raw string) string {
 
 // clipCard 是剪贴板「票据」卡：时间头 + 正文（3 行截断 / 链接标题）+ 虚线底栏（来源 · 字数）。
 func (a *app) clipCard(c *ui.Context, k tokens, n store.Note) {
-	idx := slices.IndexFunc(a.notes, func(x store.Note) bool { return x.ID == n.ID })
+	idx, ok := a.noteIdx[n.ID]
+	if !ok || a.page != pageClip {
+		idx = -1
+	}
 	focused := idx >= 0 && idx == a.selected && a.focusList
 	checked := a.chosen.Has(n.ID)
 	box := ui.Column(c).Height(116).Padding(6, 8, 4, 8).Radius(10).Background(k.card).Key(n.ID)

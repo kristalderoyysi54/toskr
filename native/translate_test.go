@@ -2,7 +2,9 @@ package main
 
 import (
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/toskr/native/internal/ai"
 )
@@ -57,5 +59,28 @@ func TestShotHintAfterEnd(t *testing.T) {
 	a.endShot(false)
 	if a.hudText != "引导" {
 		t.Fatalf("HUD %q", a.hudText)
+	}
+}
+
+// 本机翻译状态：真辅助程序查语言包（已装 → ready；系统支持未装 → download）；设置页对应文案与按钮。
+func TestLocalTranslateStatusRow(t *testing.T) {
+	st := helperStatus("resources/darwin/"+translateHelperName, false)
+	if st != ltReady && st != ltDownload && st != ltUnsupported {
+		t.Fatalf("状态 %q", st)
+	}
+	a, _ := testApp(t)
+	old := localTranslateStatus
+	t.Cleanup(func() { localTranslateStatus = old })
+	localTranslateStatus = func(bool) string { return ltDownload }
+	a.refreshLocalTranslate(false)
+	for i := 0; i < 100 && a.ltStatus == ltChecking; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !strings.Contains(a.localTranslateHint(), "未下载离线语言包") {
+		t.Fatalf("hint %q", a.localTranslateHint())
+	}
+	a.ltFailed = true
+	if !strings.Contains(a.localTranslateHint(), "手动下载") {
+		t.Fatal(a.localTranslateHint())
 	}
 }

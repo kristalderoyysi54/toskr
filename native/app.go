@@ -47,31 +47,38 @@ type app struct {
 	longCap                            atomic.Pointer[longCapture] // 进行中的长截屏（键盘 tap 读：Esc 取消）
 
 	// 面板状态
-	page          int
-	section       string // 当前笔记分组
-	query         string
-	notes         []store.Note // 当前分组 + 搜索后的未完成项
-	done          []store.Note // 当前分组已完成项
-	counts        map[string]int
-	selected      int
-	chosen        ui.Selection[string]
-	list          ui.ListState
-	search        ui.Handle
-	draft         string
-	draftIn       ui.Handle
-	editing       string // 正在编辑的笔记 ID
-	editText      string
-	pinned        bool
-	showDone      bool
-	newSecOn      bool
-	newSec        string
-	target        macos.FrontApp // 发送目标：面板唤出前的前台应用
-	targetStarted int64          // 目标进程启动时刻（身份锁定）
-	pending       []store.Note   // 预检命中、等待确认的发送
-	findings      []core.Finding
-	history       []delivery
-	thumbs        map[string]ui.ImageSource
-	aiBusy        string // 正在 AI 处理的笔记 ID
+	page       int
+	section    string // 当前笔记分组
+	query      string
+	notes      []store.Note // 当前分组 + 搜索后的未完成项
+	done       []store.Note // 当前分组已完成项
+	counts     map[string]int
+	noteIdx    map[string]int // 笔记 ID → a.notes 下标（卡片构建时 O(1) 取键盘选中位置）
+	vis        visWindow
+	clipList   []store.Note // 剪贴页列表快照：换页动画里旧页不会读到另一页的 a.notes
+	clipScroll ui.ScrollState
+	selected   int
+	chosen     ui.Selection[string]
+	list       ui.ListState
+	search     ui.Handle
+	draft      string
+	draftIn    ui.Handle
+	editing    string // 正在编辑的笔记 ID
+	editText   string
+	pinned     bool
+	showDone   bool
+	newSecOn   bool
+	// 笔记分组侧栏：过滤（"" = 全部）、展开、就地改名
+	noteFilter, renamingSec, renameText string
+	noteRailOpen                        bool
+	newSec                              string
+	target                              macos.FrontApp // 发送目标：面板唤出前的前台应用
+	targetStarted                       int64          // 目标进程启动时刻（身份锁定）
+	pending                             []store.Note   // 预检命中、等待确认的发送
+	findings                            []core.Finding
+	history                             []delivery
+	thumbs                              map[string]ui.ImageSource
+	aiBusy                              string // 正在 AI 处理的笔记 ID
 
 	// 1:1 主面板
 	noteGroups                               []noteGroup
@@ -100,8 +107,18 @@ type app struct {
 	taskDraft string
 	taskSub   int // 0 今天 1 任务
 	sparkMode bool
-	clipView  string // 剪贴页视图：time | source | image
-	noteSub   int    // 内容页子视图：0 笔记 1 秘文（秘文功能开启时）
+	// 设置页「本机翻译」状态
+	ltStatus                        string
+	ltPreparing, ltFailed, ltOpened bool
+	// 任务页头部开关：搜索与筛选、任务月历（会话态，同 Tauri）
+	taskFilterOn, taskCalOn            bool
+	taskFilter                         taskFilter
+	taskCalMonth                       int
+	taskCalDay                         time.Time
+	taskCalDraft                       string
+	taskCalHideTasks, taskCalHideBills bool
+	clipView                           string // 剪贴页视图：time | source | image
+	noteSub                            int    // 内容页子视图：0 笔记 1 秘文（秘文功能开启时）
 
 	// 秘文
 	secretKeyID   string
@@ -191,6 +208,7 @@ func (a *app) reload() {
 	a.notes, a.done = a.notes[:0], a.done[:0]
 	if a.page == pageClip {
 		a.notes = arrangeClips(append(a.notes, store.Search(a.store.Section(store.SectionClipboard), a.query)...), a.clipView)
+		a.clipList = slices.Clone(a.notes)
 	} else {
 		// 笔记页：所有非剪贴板分组按顺序展开，键盘选择在扁平列表上移动
 		a.noteGroups = a.groups()
@@ -200,6 +218,10 @@ func (a *app) reload() {
 			}
 			a.done = append(a.done, g.done...)
 		}
+	}
+	a.noteIdx = make(map[string]int, len(a.notes))
+	for i, n := range a.notes {
+		a.noteIdx[n.ID] = i
 	}
 	a.selected = max(0, min(a.selected, len(a.notes)-1))
 	a.tasks = a.store.Tasks()
