@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -137,5 +139,26 @@ func TestTemplateOptionClickChecksFirst(t *testing.T) {
 	}
 	if a.forceCheck {
 		t.Fatal("forceCheck 应只作用于这一次")
+	}
+}
+
+func TestExportTemplatesFromSettings(t *testing.T) {
+	a, _ := testApp(t)
+	st := a.store.Settings()
+	st.PromptSnippets = []store.PromptSnippet{{ID: "t1", Label: "翻译", Text: "翻译：{内容}", GroupID: store.GeneralPromptGroup}}
+	_ = a.store.SetSettings(st)
+	out := filepath.Join(t.TempDir(), "x.json")
+	orig := saveTemplatesPath
+	t.Cleanup(func() { saveTemplatesPath = orig })
+	saveTemplatesPath = func(*app) (string, error) { return out, nil }
+	a.openSettingsAt(setPagePaste, 1)
+	set := ui.NewTester(a.settingsView, 1040, 2000)
+	set.Frame()
+	if err := set.Click("导出"); err != nil {
+		t.Fatalf("%v %v", err, set.Texts())
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil || !strings.Contains(string(raw), `"format": "toskr-prompt-templates"`) || !strings.Contains(string(raw), `"label": "翻译"`) {
+		t.Fatalf("%s %v", raw, err)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"github.com/toskr/native/internal/macos"
@@ -202,9 +203,39 @@ func (a *app) templateSections(c *ui.Context, k tokens, s settingsTokens) []setS
 			a.showHUD("ok", fmt.Sprintf(tr("已添加模板「%s」"), sn.Label))
 		})
 	}
+	export := setRow{title: tr("导出所有模板"), hint: tr("只导出模板与它们引用的提示词组（JSON），不含其他设置或密钥"), control: func() {
+		if len(st.PromptSnippets) > 0 && button(c, s, "导出") {
+			a.exportTemplates()
+		}
+	}}
 	return []setSection{
 		{tr("常用模板"), common},
 		{tr("其他模板"), other},
-		{tr("添加"), []setRow{add}},
+		{tr("添加"), []setRow{add, export}},
 	}
+}
+
+var saveTemplatesPath = func(a *app) (string, error) { // 测试替换
+	return mygo.Dialog.Save(mygo.SaveDialogOptions{Parent: a.settingsWin, Title: tr("导出提示词模板"), DefaultPath: "toskr-prompt-templates.json",
+		Filters: []mygo.FileFilter{{Name: tr("Toskr 提示词模板"), Extensions: []string{"json"}}}})
+}
+
+// exportTemplates 同 Tauri exportPromptTemplates：选位置后写出；取消不写。
+func (a *app) exportTemplates() {
+	st := a.store.Settings()
+	groups, _, _ := st.ProfileConfig()
+	p, err := store.BuildPromptTemplatesExport(st.PromptSnippets, groups)
+	if err != nil {
+		a.showHUD("warn", fmt.Sprintf(tr("模板导出失败：%v"), tr(err.Error())))
+		return
+	}
+	path, err := saveTemplatesPath(a)
+	if err != nil || path == "" {
+		return
+	}
+	if err := store.WritePromptTemplatesExport(path, p); err != nil {
+		a.showHUD("warn", fmt.Sprintf(tr("模板导出失败：%v"), tr(err.Error())))
+		return
+	}
+	a.showHUD("ok", fmt.Sprintf(tr("已导出 %d 个提示词模板"), len(p.Snippets)))
 }
