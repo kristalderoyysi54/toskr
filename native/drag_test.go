@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -66,4 +67,51 @@ func TestDragReorderNotesAndTasks(t *testing.T) {
 			t.Fatalf("拖到任务分组头应移入 %+v", x)
 		}
 	}
+}
+
+// 拖到折叠分组头上悬停 500ms 自动展开（QA#12）。
+func TestDragHoverExpandsCollapsedGroup(t *testing.T) {
+	orig := dragNow
+	t.Cleanup(func() { dragNow = orig })
+	now := time.Now()
+	dragNow = func() time.Time { return now }
+	a, tt := testApp(t, "甲卡")
+	sec := a.store.AddSection("资料")
+	_, _, _ = a.store.Add(store.Note{Section: sec, Text: "里面的卡"})
+	for _, s := range a.store.Sections() {
+		if s.ID == sec {
+			s.Collapsed = true
+			_ = a.store.UpdateSection(s)
+		}
+	}
+	a.reload()
+	tt.Frame()
+	f, _ := tt.Find("甲卡")
+	g, _ := tt.Find("资料")
+	fx, fy := f.X+f.W/2, f.Y+f.H/2
+	gx, gy := g.X+g.W/2, g.Y+g.H/2
+	tt.Move(fx, fy)
+	tt.Press(fx, fy)
+	for i := 1; i <= 6; i++ {
+		tt.Move(fx+(gx-fx)*float32(i)/6, fy+(gy-fy)*float32(i)/6)
+		tt.Frame()
+	}
+	collapsed := func() bool {
+		for _, s := range a.store.Sections() {
+			if s.ID == sec {
+				return s.Collapsed
+			}
+		}
+		return false
+	}
+	if !collapsed() {
+		t.Fatal("刚悬停不应展开")
+	}
+	now = now.Add(600 * time.Millisecond)
+	tt.Frame()
+	if collapsed() {
+		t.Fatal("悬停 500ms 后应自动展开")
+	}
+	tt.Release(gx, gy)
+	tt.Frame()
 }

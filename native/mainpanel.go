@@ -343,8 +343,13 @@ func (a *app) sectionBlock(c *ui.Context, k tokens, g noteGroup, top float32) fl
 	}
 	ui.Column(c).Gap(6).Padding(0, 0, 4, 0).Key("sec-" + g.sec.ID).Children(func() {
 		head := ui.Row(c).Height(20).Padding(0, 4, 0, 2).Gap(4).Radius(6).AlignItems(ui.Center)
-		if _, ok := ui.DragOver[noteDrag](head); ok {
+		_, over := ui.DragOver[noteDrag](head)
+		if over {
 			head.Background(stok(c).primary.Alpha(0.12))
+		}
+		if a.dragHover(c, g.sec.ID, over, collapsed) {
+			g.sec.Collapsed = false
+			_ = a.store.UpdateSection(g.sec)
 		}
 		if d, ok := ui.Drop[noteDrag](head); ok {
 			_ = a.store.MoveToAt(d.id, g.sec.ID, 0)

@@ -615,8 +615,13 @@ func (a *app) taskSection(c *ui.Context, k tokens, g taskGroup, now time.Time) {
 	ui.Column(c).Gap(6).Key("tsec-" + g.sec.ID).Children(func() {
 		head := ui.Row(c).Height(20).Padding(0, 4, 0, 2).Gap(4).Radius(6).AlignItems(ui.Center)
 		hovered := head.Hovered()
-		if _, ok := ui.DragOver[taskDrag](head); ok {
+		_, over := ui.DragOver[taskDrag](head)
+		if over {
 			head.Background(stok(c).primary.Alpha(0.12))
+		}
+		if a.dragHover(c, "t:"+g.sec.ID, over, collapsed) {
+			g.sec.Collapsed = false
+			_ = a.store.UpdateTaskSection(g.sec)
 		}
 		if d, ok := ui.Drop[taskDrag](head); ok {
 			_ = a.store.MoveTask(d.id, g.sec.ID, "")

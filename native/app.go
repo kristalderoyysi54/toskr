@@ -94,6 +94,7 @@ type app struct {
 	bigImgs                             map[string]ui.ImageSource // 详情窗内嵌大图缓存
 	docked                              bool                      // 面板当前停靠在伴随应用窗口旁（位置不由自己记）
 	vdrag                               vDrag                     // 上 / 下缘把手拖动中
+	dragExp                             dragExpand                // 拖拽悬停在折叠分组头上（500ms 后自动展开）
 
 	// 1:1 主面板
 	noteGroups                               []noteGroup
