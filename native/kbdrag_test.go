@@ -78,3 +78,67 @@ func TestKeyboardDragReorder(t *testing.T) {
 		t.Fatalf("Space 放下 %v", got)
 	}
 }
+
+// 任务行键盘排序：分组视图里 Space 拾起、↑↓ 移动并跨组、Esc 回原位。
+func TestKeyboardDragReorderTasks(t *testing.T) {
+	a, tt := testApp(t)
+	work := a.store.AddTaskSection("工作")
+	for _, s := range []string{"任务一", "任务二", "任务三"} {
+		a.store.AddTask(store.Task{Text: s})
+	}
+	a.switchPage(pageTasks)
+	a.taskSub = 1
+	a.reload()
+	tt.Frame()
+	tt.Frame()
+	order := func(sec string) (out []string) {
+		for _, x := range a.store.Tasks() {
+			if x.Section == sec {
+				out = append(out, x.Text)
+			}
+		}
+		return
+	}
+	inbox := a.store.Tasks()[0].Section
+	start := order(inbox)
+	id := func(text string) string {
+		for _, x := range a.store.Tasks() {
+			if x.Text == text {
+				return x.ID
+			}
+		}
+		return ""
+	}
+	var target string
+	for range 80 {
+		if a.gripFocus != "" && a.gripFocus == id(start[len(start)-1]) {
+			target = a.gripFocus
+			break
+		}
+		tt.Key(0, ui.KeyTab)
+		tt.Frame()
+	}
+	if target == "" {
+		t.Fatalf("Tab 聚焦不到任务把手（%q）", a.gripFocus)
+	}
+	tt.Key(0, ui.KeySpace)
+	tt.Frame()
+	tt.Key(0, ui.KeyUp)
+	tt.Frame()
+	want := []string{start[0], start[2], start[1]}
+	if got := order(inbox); !slices.Equal(got, want) {
+		t.Fatalf("↑ %v，应为 %v", got, want)
+	}
+	for range 2 {
+		tt.Key(0, ui.KeyDown)
+		tt.Frame()
+	}
+	if got := order(work); !slices.Equal(got, []string{start[2]}) {
+		t.Fatalf("跨进工作组 %v", got)
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if got := order(inbox); !slices.Equal(got, start) {
+		t.Fatalf("Esc 回原位 %v，应为 %v", got, start)
+	}
+}

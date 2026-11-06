@@ -743,6 +743,7 @@ func (a *app) taskRow(c *ui.Context, k tokens, t store.Task, now time.Time) {
 		if dropOver {
 			ui.Box(c).Absolute().Top(-4).Left(6).Right(6).Height(2).Radius(1).Background(stok(c).primary).PassThrough()
 		}
+		a.taskGrip(c, k, t)
 		ui.Row(c).Grow(1).Height(24).Gap(8).AlignItems(ui.Center).Children(func() {
 			bar := ui.Box(c).Size(8, 24).Center()
 			bar.Children(func() {
