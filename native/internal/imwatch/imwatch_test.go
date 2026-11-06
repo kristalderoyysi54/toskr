@@ -178,3 +178,21 @@ func TestRunCDPInjectsAndReceivesBinding(t *testing.T) {
 		t.Fatalf("命令序列 %v", methods)
 	}
 }
+
+// 实机：推推开着图片查看器时 pic-preview.html 排在主界面前面，自动接入不能注入到它。
+func TestFindPageTargetPrefersMain(t *testing.T) {
+	res := json.RawMessage(`{"targetInfos":[
+		{"type":"page","url":"file:///Applications/T.app/Contents/Resources/app/dist/pic-preview.html?id=1","targetId":"pic"},
+		{"type":"service_worker","url":"file:///sw.js","targetId":"sw"},
+		{"type":"page","url":"file:///Applications/T.app/Contents/Resources/app/dist/index.html#/chat","targetId":"main"}]}`)
+	if got := FindPageTarget(res); got != "main" {
+		t.Fatal(got)
+	}
+	only := json.RawMessage(`{"targetInfos":[{"type":"page","url":"file:///a/pic-preview.html","targetId":"pic"},{"type":"page","url":"https://x","targetId":"web"}]}`)
+	if got := FindPageTarget(only); got != "pic" {
+		t.Fatal("只有辅助页时退回首个 file:// 页", got)
+	}
+	if FindPageTarget(json.RawMessage(`{}`)) != "" {
+		t.Fatal("空")
+	}
+}

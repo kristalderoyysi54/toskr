@@ -34,6 +34,14 @@ type imCtl struct {
 	formOpen   bool
 	form       [4]string // 规则名、群、发送者、关键词
 	ticking    bool
+	stopping   bool // 正在关闭自动接入（结束调试进程、重开 IM）
+}
+
+// redrawSettings：后台结果经 panelUpdate 回到主线程只重绘面板，设置窗要单独刷新。
+func (a *app) redrawSettings() {
+	if a.settingsWin != nil {
+		a.settingsWin.Invalidate()
+	}
 }
 
 var ( // 测试替换
@@ -158,11 +166,11 @@ func (a *app) setIMAuto(on bool) {
 	a.im.busy = true
 	if !on {
 		cancel, cmd, prof := a.im.cancel, a.im.cmd, *p
-		a.im.mode, a.im.cancel, a.im.cmd = "", nil, nil
+		a.im.mode, a.im.cancel, a.im.cmd, a.im.stopping = "", nil, nil, true
 		a.showHUD("info", tr("已关闭自动接入，正在恢复 IM 软件正常启动"))
 		go func() {
 			imStopAuto(cancel, cmd, prof.BundleID)
-			a.panelUpdate(func() { a.im.busy = false })
+			a.panelUpdate(func() { a.im.busy, a.im.stopping = false, false; a.redrawSettings() })
 		}()
 		return
 	}
@@ -170,10 +178,11 @@ func (a *app) setIMAuto(on bool) {
 	a.showHUD("ok", tr("正在以调试模式重启 IM 软件并自动注入…约 10 秒内完成"))
 	go func() {
 		cancel, cmd, err := imStartAuto(b, prof, rules, func(err error) {
-			a.panelUpdate(func() { a.im.lastErr = err.Error() })
+			a.panelUpdate(func() { a.im.lastErr = err.Error(); a.redrawSettings() })
 		})
 		a.panelUpdate(func() {
 			a.im.busy = false
+			defer a.redrawSettings()
 			if err != nil {
 				a.im.lastErr = err.Error()
 				a.showHUD("warn", fmt.Sprintf(tr("切换失败：%s"), truncateRunes(err.Error(), 100)))
@@ -432,6 +441,8 @@ func (a *app) imTransportRows(c *ui.Context, k tokens, s settingsTokens) []setRo
 	switch {
 	case mode == "cdp" && connected:
 		state = tr("已自动接入")
+	case a.im.stopping:
+		state = tr("正在断开…")
 	case mode == "cdp" || a.im.busy:
 		state = tr("正在接入…")
 	case mode == "http" && connected:

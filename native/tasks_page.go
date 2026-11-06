@@ -806,15 +806,16 @@ func (a *app) taskRow(c *ui.Context, k tokens, t store.Task, now time.Time) {
 	})
 }
 
+// dueMenu：设置里的到期快捷档 + 清除（同 Tauri TaskRow 到期弹层；自定义日期时间在任务编辑器里）。
 func (a *app) dueMenu(m *ui.Menu, t store.Task) {
-	now := a.now()
-	base := time.Date(now.Year(), now.Month(), now.Day(), 9, 0, 0, 0, now.Location())
-	for _, o := range []struct {
-		label string
-		at    time.Time
-	}{{"一小时后", now.Add(time.Hour).Truncate(time.Minute)}, {"今晚 20:00", base.Add(11 * time.Hour)}, {"明天 9:00", base.AddDate(0, 0, 1)}, {"下周一 9:00", nextMonday(base)}, {"清除", time.Time{}}} {
-		if m.Item(tr(o.label)).Chosen() {
-			t.DueAt = o.at
+	a.presetMenu(m, func(at time.Time) {
+		t.DueAt, t.RemindedAt = at, time.Time{}
+		_ = a.store.UpdateTask(t)
+	})
+	if !t.DueAt.IsZero() {
+		m.Separator()
+		if m.Item(tr("清除到期")).Chosen() {
+			t.DueAt, t.RemindedAt = time.Time{}, time.Time{}
 			_ = a.store.UpdateTask(t)
 		}
 	}

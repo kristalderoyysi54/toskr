@@ -142,21 +142,22 @@ type tauriBill struct {
 }
 
 type tauriSettings struct {
-	Language             string   `json:"language"`
-	Theme                string   `json:"theme"`
-	ColorScheme          string   `json:"colorScheme"`
-	CardDensity          string   `json:"cardDensity"`
-	HotkeyModifier       string   `json:"hotkeyModifier"`
-	HotkeyGapMs          int      `json:"hotkeyGapMs"`
-	Stealth              *bool    `json:"stealth"`
-	AIBaseURL            string   `json:"aiBaseUrl"`
-	AIModel              string   `json:"aiModel"`
-	AIEnabled            *bool    `json:"aiEnabled"`
-	TaskReminderChannel  string   `json:"taskReminderChannel"`
-	ExcludedApps         []string `json:"excludedApps"`
-	CurrencySymbol       string   `json:"currencySymbol"`
-	SubscriptionsEnabled *bool    `json:"subscriptionsEnabled"`
-	SecretEnabled        *bool    `json:"secretEnabled"`
+	Language             string       `json:"language"`
+	Theme                string       `json:"theme"`
+	ColorScheme          string       `json:"colorScheme"`
+	CardDensity          string       `json:"cardDensity"`
+	HotkeyModifier       string       `json:"hotkeyModifier"`
+	HotkeyGapMs          int          `json:"hotkeyGapMs"`
+	Stealth              *bool        `json:"stealth"`
+	AIBaseURL            string       `json:"aiBaseUrl"`
+	AIModel              string       `json:"aiModel"`
+	AIEnabled            *bool        `json:"aiEnabled"`
+	TaskReminderChannel  string       `json:"taskReminderChannel"`
+	DuePresets           *[]DuePreset `json:"duePresets"`
+	ExcludedApps         []string     `json:"excludedApps"`
+	CurrencySymbol       string       `json:"currencySymbol"`
+	SubscriptionsEnabled *bool        `json:"subscriptionsEnabled"`
+	SecretEnabled        *bool        `json:"secretEnabled"`
 	SecretKeys           []struct {
 		ID          string `json:"id"`
 		Label       string `json:"label"`
@@ -615,6 +616,10 @@ func applyTauriSettings(st Settings, t tauriSettings) Settings {
 	set(&st.AIEndpoint, t.AIBaseURL)
 	set(&st.AIModel, t.AIModel)
 	set(&st.ReminderVia, t.TaskReminderChannel)
+	if t.DuePresets != nil && !slices.ContainsFunc(*t.DuePresets, func(p DuePreset) bool { return !p.Valid() || p.ID == "" }) {
+		ps := slices.Clone(*t.DuePresets)
+		st.DuePresets = &ps
+	}
 	if t.AIEnabled != nil {
 		on := *t.AIEnabled
 		st.AIEnabled = &on

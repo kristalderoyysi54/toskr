@@ -101,5 +101,12 @@ var en = map[string]string{
 	"设为常用 / 固定": "Favorite / pin", "移动到分组": "Move to group", "移入笔记分组": "Move to notes group", "检查后发送": "Check before sending",
 	"确认获取链接预览…": "Fetch Link Preview…", "确认获取链接预览": "Fetch Link Preview?", "仅本次允许": "Allow Once", "已更新链接预览": "Link preview updated",
 	"未获取预览（取消、网络失败或地址受限）": "No preview (canceled, network error, or restricted address)",
+	"%d 小时后": "In %d h", "%d 分钟后": "In %d min", "今天 %s": "Today %s", "明天 %s": "Tomorrow %s", "下个%s %s": "Next %s %s",
+	"没有快捷档，去设置添加…": "No presets; add some in Settings…", "到期快捷档": "Due presets", "到期提醒快捷档": "Due date presets",
+	"任务「到期」菜单和消息「提醒我」里的快捷选项，按此顺序显示。": "Quick options in the task Due menu and message Remind me menu, in this order.",
+	"已删除快捷档「%s」": "Deleted preset “%s”", "没有快捷档，菜单里只剩自定义日期时间。": "No presets; menus only offer a custom date and time.",
+	"添加档位": "Add preset", "恢复默认": "Restore defaults", "共 %d 档": "%d presets", "已恢复默认快捷档": "Default presets restored", "输入无效": "Invalid input",
+	"多久后": "In…", "今天": "Today", "明天": "Tomorrow", "下个周几": "Next weekday", "分钟": "min", "小时": "h",
+	"时间格式应为 时:分，如 9:30": "Use hour:minute, e.g. 9:30", "清除到期": "Clear due date",
 	"本次将访问 %s 获取标题和图标，允许此地址访问内网。不会发送应用中的其他内容；授权不覆盖其他内网地址的重定向。": "Toskr will visit %s once to fetch its title and icon, allowing this local-network address. Nothing else from the app is sent, and redirects to other local-network addresses are not covered.",
 }

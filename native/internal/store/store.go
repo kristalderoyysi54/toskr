@@ -101,28 +101,29 @@ type Settings struct {
 	ClipKeepConcealed bool      `json:"clipKeepConcealed,omitempty"` // true = 不忽略密码管理器 / 隐藏内容
 	ClipKeepTransient bool      `json:"clipKeepTransient,omitempty"` // true = 不忽略瞬时内容
 	// 外观细项（同 Tauri windowOpacity / panelOpacity / cardOpacity / hudDurationMs / companionGap；0 / nil = 默认）
-	WindowOpacity  float64    `json:"windowOpacity,omitempty"`          // 0.3–1，默认 1
-	PanelOpacity   float64    `json:"panelOpacity,omitempty"`           // 内容底色浓度 0.25–1，默认 0.62
-	CardOpacity    float64    `json:"cardOpacity,omitempty"`            // 0.3–1，默认 1
-	HUDDurationMs  int        `json:"hudDurationMs,omitempty"`          // 2000–10000，默认 3000
-	CompanionGap   *int       `json:"companionGap,omitempty"`           // 0–40，默认 8
-	CardTintOff    bool       `json:"cardTintOff,omitempty"`            // 卡片彩色通栏（Tauri cardTint，默认开）
-	ClipTemplate   string     `json:"clipCardTemplate,omitempty"`       // 剪贴卡模板：standard | condensed（仅舒适密度）
-	ContextMenu    []MenuItem `json:"contextMenu,omitempty"`            // 卡片右键菜单的显隐与区内顺序（空 = 默认）
-	CalendarOn     bool       `json:"appleCalendarEnabled,omitempty"`   // 在「今天」显示苹果日历日程（只读）
-	CalendarHidden []string   `json:"appleCalendarHiddenIds,omitempty"` // 不显示的日历
-	PageOrder      []string   `json:"pageOrder,omitempty"`              // 一级页签顺序（可拖动重排）
-	ScreenshotKey  string     `json:"screenshotKey"`
-	ScreenshotOff  bool       `json:"screenshotOff,omitempty"`      // 区域截图总开关（Tauri screenshotEnabled，默认开）
-	ShotHideSelf   bool       `json:"screenshotHideSelf,omitempty"` // 截图时隐藏 Toskr 自己的窗口（默认不隐藏）
-	AIEndpoint     string     `json:"aiEndpoint"`
-	AIModel        string     `json:"aiModel"`
-	AIEnabled      *bool      `json:"aiEnabled,omitempty"` // 「AI 智能」总开关（同 Tauri aiEnabled）；nil = 旧数据，按开启
-	Companion      []string   `json:"companion"`           // 伴随停靠的应用 bundle id
-	EdgeHide       bool       `json:"edgeHide"`
-	Currency       string     `json:"currency"`
-	DueReminders   bool       `json:"dueReminders"`
-	ReminderVia    string     `json:"taskReminderChannel,omitempty"` // 任务提醒方式 hud | system | both（同 Tauri taskReminderChannel，空 = hud）
+	WindowOpacity  float64      `json:"windowOpacity,omitempty"`          // 0.3–1，默认 1
+	PanelOpacity   float64      `json:"panelOpacity,omitempty"`           // 内容底色浓度 0.25–1，默认 0.62
+	CardOpacity    float64      `json:"cardOpacity,omitempty"`            // 0.3–1，默认 1
+	HUDDurationMs  int          `json:"hudDurationMs,omitempty"`          // 2000–10000，默认 3000
+	CompanionGap   *int         `json:"companionGap,omitempty"`           // 0–40，默认 8
+	CardTintOff    bool         `json:"cardTintOff,omitempty"`            // 卡片彩色通栏（Tauri cardTint，默认开）
+	ClipTemplate   string       `json:"clipCardTemplate,omitempty"`       // 剪贴卡模板：standard | condensed（仅舒适密度）
+	ContextMenu    []MenuItem   `json:"contextMenu,omitempty"`            // 卡片右键菜单的显隐与区内顺序（空 = 默认）
+	CalendarOn     bool         `json:"appleCalendarEnabled,omitempty"`   // 在「今天」显示苹果日历日程（只读）
+	CalendarHidden []string     `json:"appleCalendarHiddenIds,omitempty"` // 不显示的日历
+	PageOrder      []string     `json:"pageOrder,omitempty"`              // 一级页签顺序（可拖动重排）
+	ScreenshotKey  string       `json:"screenshotKey"`
+	ScreenshotOff  bool         `json:"screenshotOff,omitempty"`      // 区域截图总开关（Tauri screenshotEnabled，默认开）
+	ShotHideSelf   bool         `json:"screenshotHideSelf,omitempty"` // 截图时隐藏 Toskr 自己的窗口（默认不隐藏）
+	AIEndpoint     string       `json:"aiEndpoint"`
+	AIModel        string       `json:"aiModel"`
+	AIEnabled      *bool        `json:"aiEnabled,omitempty"` // 「AI 智能」总开关（同 Tauri aiEnabled）；nil = 旧数据，按开启
+	Companion      []string     `json:"companion"`           // 伴随停靠的应用 bundle id
+	EdgeHide       bool         `json:"edgeHide"`
+	Currency       string       `json:"currency"`
+	DueReminders   bool         `json:"dueReminders"`
+	ReminderVia    string       `json:"taskReminderChannel,omitempty"` // 任务提醒方式 hud | system | both（同 Tauri taskReminderChannel，空 = hud）
+	DuePresets     *[]DuePreset `json:"duePresets,omitempty"`          // 到期快捷档（同 Tauri duePresets）；nil = 默认七档，空 = 全删了
 	// 与 Tauri 一致的可选功能域（默认关闭）：订阅进「提醒」页第三个子视图，秘文进「内容」页
 	SubscriptionsEnabled bool `json:"subscriptionsEnabled"`
 	SecretEnabled        bool `json:"secretEnabled"`
@@ -690,4 +691,65 @@ func orDefault(v, def, lo, hi float64) float64 {
 		return def
 	}
 	return min(max(v, lo), hi)
+}
+
+// DuePreset 到期快捷档（同 Tauri DuePresetCfg）：relative 相对分钟；today / tomorrow 定点；weekday 下个周几定点（0 = 周日）。
+type DuePreset struct {
+	ID      string `json:"id"`
+	Kind    string `json:"kind"`
+	Minutes int    `json:"minutes,omitempty"`
+	Hour    int    `json:"hour"`
+	Minute  int    `json:"minute"`
+	Weekday int    `json:"weekday"`
+}
+
+// DefaultDuePresets 同 Tauri DEFAULT_DUE_PRESETS。
+func DefaultDuePresets() []DuePreset {
+	return []DuePreset{
+		{ID: "rel-30m", Kind: "relative", Minutes: 30}, {ID: "rel-1h", Kind: "relative", Minutes: 60},
+		{ID: "rel-3h", Kind: "relative", Minutes: 180}, {ID: "rel-6h", Kind: "relative", Minutes: 360},
+		{ID: "today-20", Kind: "today", Hour: 20}, {ID: "tomorrow-9", Kind: "tomorrow", Hour: 9},
+		{ID: "next-mon-9", Kind: "weekday", Weekday: 1, Hour: 9},
+	}
+}
+
+// Presets：未设置时用默认档。
+func (s Settings) Presets() []DuePreset {
+	if s.DuePresets == nil {
+		return DefaultDuePresets()
+	}
+	return slices.Clone(*s.DuePresets)
+}
+
+// Valid 同 Tauri 导入校验：kind 合法、数值在范围内。
+func (p DuePreset) Valid() bool {
+	switch p.Kind {
+	case "relative":
+		return p.Minutes > 0
+	case "today", "tomorrow", "weekday":
+		return p.Hour >= 0 && p.Hour < 24 && p.Minute >= 0 && p.Minute < 60 && (p.Kind != "weekday" || p.Weekday >= 0 && p.Weekday <= 6)
+	}
+	return false
+}
+
+// Due 同 Tauri presetCfgDue：语义固定（「今天 20:00」已过也不跳明天；「下个周几」排除当天）。
+func (p DuePreset) Due(now time.Time) time.Time {
+	at := func(add int) time.Time {
+		return time.Date(now.Year(), now.Month(), now.Day()+add, p.Hour, p.Minute, 0, 0, now.Location())
+	}
+	switch p.Kind {
+	case "relative":
+		return now.Add(time.Duration(p.Minutes) * time.Minute).Truncate(time.Minute)
+	case "today":
+		return at(0)
+	case "tomorrow":
+		return at(1)
+	case "weekday":
+		add := (p.Weekday - int(now.Weekday()) + 7) % 7
+		if add == 0 {
+			add = 7
+		}
+		return at(add)
+	}
+	return time.Time{}
 }

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"slices"
 	"strings"
 	"time"
@@ -428,11 +427,7 @@ func (a *app) messageActions(c *ui.Context, k tokens, m store.Message) {
 			a.showHUDUndo("ok", tr("已标记处理"), func() { a.store.SetMessagesStatus([]string{m.ID}, prev) })
 		}
 		btn("alarm-clock", tr("提醒我")).Menu(func(menu *ui.Menu) {
-			for _, o := range msgRemindPresets(a.now()) {
-				if menu.Item(tr(o.label)).Chosen() {
-					a.messageToTask(m, "reminder", o.at)
-				}
-			}
+			a.presetMenu(menu, func(at time.Time) { a.messageToTask(m, "reminder", at) })
 		})
 		if btn("crosshair", tr("定位原会话")).Clicked() {
 			a.locateMessage(m)
@@ -462,17 +457,6 @@ func (a *app) messageActions(c *ui.Context, k tokens, m store.Message) {
 	})
 }
 
-type remindPreset struct {
-	label string
-	at    time.Time
-}
-
-func msgRemindPresets(now time.Time) []remindPreset {
-	base := time.Date(now.Year(), now.Month(), now.Day(), 9, 0, 0, 0, now.Location())
-	return []remindPreset{{"一小时后", now.Add(time.Hour).Truncate(time.Minute)}, {"今晚 20:00", base.Add(11 * time.Hour)},
-		{"明天 9:00", base.AddDate(0, 0, 1)}, {"下周一 9:00", nextMonday(base)}}
-}
-
 func (a *app) messageToTask(m store.Message, mode string, due time.Time) {
 	switch res, _ := a.store.MessageToTask(m.ID, mode, due); res {
 	case "existing":
@@ -481,25 +465,6 @@ func (a *app) messageToTask(m store.Message, mode string, due time.Time) {
 		msg := map[string]string{"waiting": tr("已加入等待回复"), "reminder": tr("已创建提醒"), "task": tr("已转为任务")}[mode]
 		a.showHUD("ok", msg)
 	}
-}
-
-// locateMessage：把来源 IM 切到前台（Tauri 还会经辅助功能滚动并高亮会话列表里那一行，原生版未做）。
-func (a *app) locateMessage(m store.Message) {
-	bundle := m.SourceBundle
-	if bundle == "" {
-		if p := a.store.Settings().IMProfile; p != nil {
-			bundle = p.BundleID
-		}
-	}
-	if bundle == "" {
-		a.showHUD("warn", tr("不知道这条消息来自哪个应用，先在设置里选择监听目标"))
-		return
-	}
-	if err := exec.Command("/usr/bin/open", "-b", bundle).Run(); err != nil {
-		a.showHUD("warn", tr("定位失败"))
-		return
-	}
-	a.showHUD("info", fmt.Sprintf(tr("已切到 %s，请在会话列表里找「%s」"), cmpOr(m.SourceApp, bundle), cmpOr(m.ConversationName, m.ConversationID)))
 }
 
 const msgDraftSystem = "你是工作沟通回复助手。基于用户给出的有限上下文，写一条简洁、可编辑的中文回复草稿。不得编造事实；信息不足时用澄清问题。只输出草稿，不要解释。"

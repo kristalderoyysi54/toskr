@@ -197,7 +197,9 @@ func (c *cdpConn) handle(m rpc) {
 	}
 }
 
-// FindPageTarget 取首个 type=page 且 url 为 file:// 的目标（Electron IM 的主界面）。
+// FindPageTarget 在 type=page 且 url 为 file:// 的目标里挑主界面（同 Tauri：Electron IM 的本地页）。
+// 实机推推开着图片查看器时会多出 pic-preview.html 这类辅助页且可能排在前面：优先 index.html，
+// 避开 preview / viewer / 弹窗类页面，都不满足时退回首个 file:// 页。
 func FindPageTarget(result json.RawMessage) string {
 	var r struct {
 		TargetInfos []struct {
@@ -205,12 +207,26 @@ func FindPageTarget(result json.RawMessage) string {
 		} `json:"targetInfos"`
 	}
 	_ = json.Unmarshal(result, &r)
+	best, bestScore := "", -1
 	for _, t := range r.TargetInfos {
-		if t.Type == "page" && strings.HasPrefix(t.URL, "file://") {
-			return t.TargetID
+		if t.Type != "page" || !strings.HasPrefix(t.URL, "file://") {
+			continue
+		}
+		u, score := strings.ToLower(t.URL), 1
+		if i := strings.IndexAny(u, "?#"); i >= 0 {
+			u = u[:i]
+		}
+		switch {
+		case strings.Contains(u, "preview") || strings.Contains(u, "viewer") || strings.Contains(u, "popup") || strings.Contains(u, "tray"):
+			score = 0
+		case strings.HasSuffix(u, "/index.html"):
+			score = 2
+		}
+		if score > bestScore {
+			best, bestScore = t.TargetID, score
 		}
 	}
-	return ""
+	return best
 }
 
 // RunCDP 连接、注入并收消息，直到 ctx 取消或连接断开。

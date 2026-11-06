@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/toskr/native/internal/secretcodec"
 )
@@ -309,5 +310,42 @@ func TestImportTauriLegacySecretSection(t *testing.T) {
 	}
 	if _, ok := s.Note("old-secret"); ok {
 		t.Fatal("信封不应留作普通笔记")
+	}
+}
+
+// 到期快捷档：Tauri 导入带上（含全删的空数组）；非法档位整组拒收保留默认。Due 语义同 presetCfgDue。
+func TestDuePresets(t *testing.T) {
+	var st Settings
+	if len(st.Presets()) != 7 || st.Presets()[0].Minutes != 30 {
+		t.Fatal("默认七档")
+	}
+	var ts tauriSettings
+	_ = json.Unmarshal([]byte(`{"duePresets":[{"id":"a","kind":"relative","minutes":45},{"id":"b","kind":"weekday","weekday":5,"hour":18,"minute":30}]}`), &ts)
+	got := applyTauriSettings(st, ts).Presets()
+	if len(got) != 2 || got[0].Minutes != 45 || got[1].Weekday != 5 || got[1].Minute != 30 {
+		t.Fatalf("%+v", got)
+	}
+	_ = json.Unmarshal([]byte(`{"duePresets":[]}`), &ts)
+	if ps := applyTauriSettings(st, ts); ps.DuePresets == nil || len(ps.Presets()) != 0 {
+		t.Fatal("全删了的空数组要保留")
+	}
+	_ = json.Unmarshal([]byte(`{"duePresets":[{"id":"x","kind":"today","hour":25,"minute":0}]}`), &ts)
+	if ps := applyTauriSettings(st, ts); ps.DuePresets != nil {
+		t.Fatal("非法档位不导入")
+	}
+	now := time.Date(2026, 11, 6, 21, 10, 30, 0, time.Local) // 周五
+	for _, c := range []struct {
+		p    DuePreset
+		want time.Time
+	}{
+		{DuePreset{Kind: "relative", Minutes: 90}, time.Date(2026, 11, 6, 22, 40, 0, 0, time.Local)},
+		{DuePreset{Kind: "today", Hour: 20}, time.Date(2026, 11, 6, 20, 0, 0, 0, time.Local)}, // 已过也不跳明天
+		{DuePreset{Kind: "tomorrow", Hour: 9}, time.Date(2026, 11, 7, 9, 0, 0, 0, time.Local)},
+		{DuePreset{Kind: "weekday", Weekday: 5, Hour: 9}, time.Date(2026, 11, 13, 9, 0, 0, 0, time.Local)}, // 「下个」排除当天
+		{DuePreset{Kind: "weekday", Weekday: 1, Hour: 9}, time.Date(2026, 11, 9, 9, 0, 0, 0, time.Local)},
+	} {
+		if got := c.p.Due(now); !got.Equal(c.want) {
+			t.Fatalf("%+v → %v，应为 %v", c.p, got, c.want)
+		}
 	}
 }
