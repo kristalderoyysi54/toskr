@@ -282,7 +282,7 @@ func (a *app) reload() {
 	a.selected = max(0, min(a.selected, len(a.notes)-1))
 	a.tasks = a.store.Tasks()
 	a.bills = a.store.Bills()
-	a.secrets = a.store.Secrets()
+	a.secrets = searchSecrets(a.store.Secrets(), a.query)
 }
 
 func (a *app) current() (store.Note, bool) {
@@ -941,4 +941,15 @@ func (a *app) rangeSelect(id string) bool {
 	}
 	a.selected, a.focusList = to, true
 	return true
+}
+
+// searchSecrets：秘文按密钥名 / 来源应用过滤（同 Tauri matchSecretNote；密文本身不参与匹配）。
+func searchSecrets(list []store.Secret, q string) []store.Secret {
+	q = strings.ToLower(strings.TrimSpace(q))
+	if q == "" {
+		return list
+	}
+	return slices.DeleteFunc(list, func(x store.Secret) bool {
+		return !strings.Contains(strings.ToLower(x.KeyLabel), q) && !strings.Contains(strings.ToLower(x.SourceApp), q)
+	})
 }

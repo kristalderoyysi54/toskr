@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/url"
 	"os/exec"
 	"slices"
@@ -82,6 +83,10 @@ func (a *app) clipPage(c *ui.Context, k tokens) {
 	ui.Scroll(c).Grow(1).Scrollbars(false).TrackScroll(&a.clipScroll).Children(func() {
 		ui.Column(c).Padding(4, 14, 8, 14).Children(func() {
 			if len(list) == 0 {
+				if !a.store.Settings().ClipboardWatch && a.query == "" {
+					a.clipOffState(c, k)
+					return
+				}
 				a.clipHeader(c, k, "", true)
 				a.emptyState(c, k, "clipboard-list", tr("还没有剪贴板记录"), tr("复制任意文字、链接或图片试试，会自动出现在这里。"))
 				return
@@ -528,4 +533,42 @@ func (a *app) clipRow(c *ui.Context, k tokens, n store.Note, hovered, isLink boo
 		return
 	}
 	text(c, ago(n.CreatedAt, a.now()), 10, 14, 400, k.muted)
+}
+
+// clipOffState：剪贴板历史未开启时的空状态（同 Tauri ClipHistoryOff）——说明 + 一键开启 / 调整规则。
+func (a *app) clipOffState(c *ui.Context, k tokens) {
+	st := a.store.Settings()
+	lines := []string{tr("只存在本机，加密保存，不上传")}
+	switch {
+	case !st.ClipKeepConcealed:
+		lines = append(lines, tr("自动忽略密码管理器和标记为隐藏的内容"))
+	}
+	if st.ClipRetainDays > 0 {
+		lines = append(lines, fmt.Sprintf(tr("超过 %d 天自动清理，固定 ★ 的保留"), st.ClipRetainDays))
+	}
+	ui.Column(c).Padding(48, 24, 40, 24).Gap(8).AlignItems(ui.Center).Children(func() {
+		licon(c, "clipboard-list", 24, k.muted.Alpha(0.5))
+		text(c, tr("剪贴板历史未开启"), 13, 18, 500, k.muted)
+		text(c, tr("开启后，复制过的文字、链接和图片会自动收集到这里"), 11, 16.5, 400, k.muted).TextAlign(ui.Center).Wrap()
+		ui.Column(c).Margin(8, 0, 8, 0).Gap(6).Children(func() {
+			for _, l := range lines {
+				ui.Row(c).Gap(6).AlignItems(ui.Start).Children(func() {
+					ui.Box(c).Size(4, 4).Radius(2).Margin(6, 0, 0, 0).Background(k.muted)
+					text(c, l, 11, 16, 400, k.muted).Wrap()
+				})
+			}
+		})
+		ui.Row(c).Gap(8).Children(func() {
+			s := stok(c)
+			if button(c, s, "开启剪贴板历史") {
+				cur := a.store.Settings()
+				cur.ClipboardWatch = true
+				_ = a.store.SetSettings(cur)
+				a.setClip = true
+			}
+			if button(c, s, "调整规则") {
+				a.openSettingsAt(2, 0) // 设置 → 剪贴板
+			}
+		})
+	})
 }

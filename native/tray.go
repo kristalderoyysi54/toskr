@@ -51,7 +51,7 @@ func (a *app) trayKey() string {
 	if a.now().Before(st.ClipPauseUntil) {
 		paused = st.ClipPauseUntil.Format("15:04")
 	}
-	return fmt.Sprint(a.shortcut, st.ClipboardWatch, paused, st.Stealth, st.ScreenshotOff)
+	return fmt.Sprint(a.shortcut, st.ClipboardWatch, paused, st.Stealth, st.ScreenshotOff, a.permState())
 }
 
 // refreshTray 按当前状态重建托盘菜单（同 Tauri tray.rs：显示面板、截图、暂停 / 恢复剪贴板收集、隐身模式、设置、开机启动、退出）。
@@ -65,9 +65,14 @@ func (a *app) refreshTray() {
 	}
 	a.trayBuilt = key
 	st := a.store.Settings()
-	items := []*mygo.MenuItem{
-		{Label: tr("显示 / 隐藏面板"), Accelerator: a.shortcut, Click: func(*mygo.MenuItem, *mygo.Window) { a.togglePanel() }},
+	var items []*mygo.MenuItem
+	switch a.permState() { // 权限没到位时托盘顶部给警告项（同 Tauri tray.rs fix-permission）
+	case "ax":
+		items = append(items, &mygo.MenuItem{Label: tr("⚠️ 需要辅助功能权限（点击设置）"), Click: func(*mygo.MenuItem, *mygo.Window) { openPrivacy("Privacy_Accessibility") }}, mygo.Separator())
+	case "stuck":
+		items = append(items, &mygo.MenuItem{Label: tr("⚠️ 需要输入监控权限（点击设置）"), Click: func(*mygo.MenuItem, *mygo.Window) { openPrivacy("Privacy_ListenEvent") }}, mygo.Separator())
 	}
+	items = append(items, &mygo.MenuItem{Label: tr("显示 / 隐藏面板"), Accelerator: a.shortcut, Click: func(*mygo.MenuItem, *mygo.Window) { a.togglePanel() }})
 	if !st.ScreenshotOff { // 区域截图关闭时托盘不显示入口（同 Tauri tray.rs）
 		items = append(items, &mygo.MenuItem{Label: tr("截图"), Click: func(*mygo.MenuItem, *mygo.Window) { a.screenshot() }})
 	}

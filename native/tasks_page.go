@@ -463,6 +463,19 @@ func (a *app) postponeAll(c *ui.Context, k tokens, tasks []store.Task) {
 				})
 			}
 		}
+		m.Separator()
+		if m.Item(tr("清除到期时间")).Chosen() { // 同 Tauri OverdueRescheduleMenu run(null)
+			before := slices.Clone(tasks)
+			for _, t := range tasks {
+				t.DueAt, t.RemindedAt = time.Time{}, time.Time{}
+				_ = a.store.UpdateTask(t)
+			}
+			a.showHUDUndo("ok", fmt.Sprintf(tr("已清除 %d 个任务的到期时间"), len(before)), func() {
+				for _, t := range before {
+					_ = a.store.UpdateTask(t)
+				}
+			})
+		}
 	})
 }
 
