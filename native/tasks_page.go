@@ -200,6 +200,9 @@ func (a *app) taskSubBody(c *ui.Context, k tokens, now time.Time) {
 		return
 	}
 	a.taskQuickAdd(c, k)
+	if a.taskSub == 1 {
+		a.taskDraftPreview(c, k)
+	}
 	filtering := a.taskSub == 1 && a.taskFilterOn && a.taskFilter.active()
 	var filtered []store.Task
 	if filtering {
@@ -273,24 +276,68 @@ func (a *app) taskQuickAdd(c *ui.Context, k tokens) {
 		ph := tr("添加今天的任务，回车保存（") + todayDefaultDue(a.now()).Format("15:04") + tr(" 到期）…")
 		if a.taskSub == 1 {
 			ph = tr("记下待办，回车保存…")
+			// 💡 闪念 / ✨ AI 两个开关互斥；亮起时实心填色（同 Tauri fill-violet-400 / fill-amber-400）
 			for _, ic := range []string{"lightbulb", "sparkles"} {
-				b := ui.Box(c).Size(18, 18).Radius(6).Center()
-				col := k.muted
-				if ic == "lightbulb" && a.sparkMode {
-					col = k.violetIcon
+				on := ic == "lightbulb" && a.sparkMode || ic == "sparkles" && a.taskAI
+				tip := map[string][2]string{
+					"lightbulb": {tr("点击进入闪念模式：随手记灵感"), tr("闪念模式：回车存为灵感（点击退出）")},
+					"sparkles":  {tr("点击进入 AI 模式：自然语言建任务"), tr("AI 模式：回车让 AI 解析时间、重复与分组（点击退出）")},
+				}[ic][map[bool]int{false: 0, true: 1}[on]]
+				b := ui.Box(c).Size(18, 18).Radius(6).Center().Key("qa-" + ic).Role(ui.RoleButton).Label(tip).Tooltip(tip)
+				if b.Hovered() {
+					b.Background(k.track)
 				}
-				b.Children(func() { licon(c, ic, 14, col) })
-				if ic == "lightbulb" && b.Clicked() {
-					a.sparkMode = !a.sparkMode
+				b.Children(func() {
+					switch {
+					case ic == "sparkles" && a.taskAIBusy:
+						licon(c, "loader-circle", 14, amber400).Rotate(float32(c.Now().UnixMilli()%1000) * 0.36)
+						c.AnimationFrame()
+					case on:
+						fill, stroke := k.violetIcon.Alpha(0.75), k.violetIcon
+						if ic == "sparkles" {
+							fill, stroke = amber400, oklch(0.769, 0.188, 70.08, 1) // amber-500
+						}
+						ui.Box(c).Size(14, 14).Children(func() {
+							liconFilled(c, ic, 14, fill).Absolute().Top(0).Left(0)
+							licon(c, ic, 14, stroke).Absolute().Top(0).Left(0)
+						})
+					default:
+						licon(c, ic, 14, k.muted)
+					}
+				})
+				if b.Clicked() && !a.taskAIBusy {
+					if ic == "lightbulb" {
+						a.sparkMode = !a.sparkMode
+						if a.sparkMode {
+							a.taskAI = false
+						}
+					} else {
+						a.setTaskAIMode(!a.taskAI)
+					}
 				}
 			}
-			if a.sparkMode {
-				ph = tr("记下灵感，回车保存…")
+			switch {
+			case a.taskAIBusy:
+				ph = tr("AI 解析中…")
+			case a.taskAIDraft != nil:
+				ph = tr("确认下方解析结果，或按 Esc 回到编辑")
+			case a.taskAI:
+				ph = tr("试试「每周一10点交周报，放工作组」，回车交给 AI…")
+			case a.sparkMode:
+				ph = tr("记录闪念灵感，回车保存…")
 			}
 		}
 		ui.TextInputBase(c, &a.taskDraft).Bind(&a.taskIn).Grow(1).Font(fontSans).FontSize(13).FixedLineHeight(18).
 			TextColor(k.fg).PlaceholderColor(k.muted).Placeholder(ph).OnTextKey(func(key ui.TextKey) bool {
 			if key.Key == ui.KeyEnter && key.Mods == 0 {
+				if a.taskSub == 1 && a.taskAI {
+					if a.taskAIDraft == nil && !a.taskAIBusy {
+						a.parseTaskDraftAI(key.Text())
+						a.taskDraft = ""
+						key.SetText("")
+					}
+					return true
+				}
 				a.taskDraft = key.Text()
 				a.addTaskDraft()
 				key.SetText(a.taskDraft)
@@ -770,16 +817,8 @@ func (a *app) taskRow(c *ui.Context, k tokens, t store.Task, now time.Time) {
 					text(c, fmt.Sprintf("%d/%d", d, n), 10, 14, 400, k.muted)
 				})
 			}
-			if !t.DueAt.IsZero() && !done {
-				fg, bg := k.muted, k.laterChip
-				switch dueTone(t.DueAt, now) {
-				case "overdue":
-					fg, bg = k.danger, k.danger.Alpha(0.15)
-				case "today":
-					fg, bg = k.amberText, k.amberBar.Alpha(0.15)
-				}
-				chip := text(c, dueBadge(t.DueAt, now), 10, 14, 400, fg).Height(18).Padding(2, 6).Radius(8).Background(bg)
-				chip.Menu(func(m *ui.Menu) { a.dueMenu(m, t) })
+			if !done && !open { // 同 Tauri：有到期是紧迫色 chip，没有时悬停露出「⏰ 到期」；展开态挪到编辑区常显
+				a.dueTrigger(c, k, t, now, hovered)
 			}
 			trash := ui.Box(c).Size(16, 16).Radius(6).Center().Tooltip(tr("删除"))
 			if !hovered {

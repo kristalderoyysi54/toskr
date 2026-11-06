@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -122,25 +123,11 @@ func TestTaskRowEditStatusAndGroups(t *testing.T) {
 	}
 }
 
-// 到期自定义：自然语言或日期格式，回车设定；重复：从完成时算起、结束于共几次。
-func TestTaskDueAndRecurrenceEditor(t *testing.T) {
+// 到期弹层（同 Tauri DueControl）：快捷档、自定义日期时间、重复（频率 / 星期几 / 起算 / 结束）、提醒档。
+func TestTaskDuePopover(t *testing.T) {
 	now := time.Date(2026, 11, 6, 10, 0, 0, 0, time.Local) // 周五
-	for in, want := range map[string]string{
-		"明天下午3点":           "2026-11-07 15:00",
-		"2026-11-20 15:30": "2026-11-20 15:30",
-		"2026-12-01":       "2026-12-01 09:00",
-		"11-08 08:15":      "2026-11-08 08:15",
-	} {
-		d, ok := parseDue(in, now)
-		if !ok || d.Format("2006-01-02 15:04") != want {
-			t.Errorf("parseDue(%q) = %v %v，应为 %s", in, d, ok, want)
-		}
-	}
-	if _, ok := parseDue("随便写写", now); ok {
-		t.Error("看不懂的不应设定")
-	}
-
 	a, tt := testApp(t)
+	tt.SetSize(380, 1600) // 弹层高度随窗口钳制，开大窗口让所有选项都可点
 	a.clock = func() time.Time { return now }
 	task := a.store.AddTask(store.Task{Text: "浇花", Recurrence: "daily", DueAt: now.Add(time.Hour)})
 	a.switchPage(pageTasks)
@@ -148,33 +135,58 @@ func TestTaskDueAndRecurrenceEditor(t *testing.T) {
 	tt.Frame()
 	_ = tt.Click("浇花")
 	tt.Frame()
-	for _, s := range []string{"到期", "重复", "每天", "按计划日期", "结束", "永不"} {
+	if err := tt.Click("修改到期时间"); err != nil {
+		t.Fatal(err, tt.Texts())
+	}
+	tt.Frame()
+	for _, s := range []string{"30 分钟后", "下个周一 9:00", "设定该时间", "清除到期", "重复", "每天", "按计划日期", "结束", "永不", "提醒我", "到期时", "提前 1 天"} {
 		if !tt.HasText(s) {
-			t.Fatalf("展开态缺 %q：%v", s, tt.Texts())
+			t.Fatalf("弹层缺 %q：%v", s, tt.Texts())
 		}
 	}
-	_ = tt.Click("修改到期时间")
-	tt.Type("明天下午3点")
-	tt.Key(0, ui.KeyEnter)
-	tt.Frame()
-	if got, _ := a.taskByID(task.ID); got.DueAt.Format("01-02 15:04") != "11-07 15:00" {
-		t.Fatalf("到期应改为明天 15:00 %v", got.DueAt)
+	if err := tt.Click("从完成时算起"); err != nil {
+		t.Fatal("从完成时算起", err)
 	}
-	if err := tt.Click("按计划日期"); err != nil {
-		t.Fatal(err)
-	}
-	tt.Frame()
-	if err := tt.Click("从完成时算起"); err != nil { // PopoverMenuButton 的菜单画在窗口里
-		t.Fatalf("%v %v", err, tt.Texts())
-	}
-	tt.Frame()
-	_ = tt.Click("永不")
 	tt.Frame()
 	if err := tt.Click("共几次"); err != nil {
-		t.Fatalf("%v %v", err, tt.Texts())
+		t.Fatal("共几次", err)
 	}
 	tt.Frame()
-	if got, _ := a.taskByID(task.ID); got.RecurBasis != "completion" || got.RecurCount != 5 || !tt.HasText("次（含本期）") {
-		t.Fatalf("重复设置 %+v %v", got, tt.Texts())
+	if err := tt.Click("提前 15 分钟"); err != nil {
+		t.Fatal("提前 15 分钟", err)
+	}
+	tt.Frame()
+	if err := tt.Click("每周"); err != nil {
+		t.Fatal("每周", err)
+	}
+	tt.Frame()
+	if !tt.HasText("次（含本期）") || !tt.HasText("三") {
+		t.Fatalf("共几次输入与星期选择 %v", tt.Texts())
+	}
+	tt.Click("三")
+	tt.Frame()
+	got, _ := a.taskByID(task.ID)
+	if got.RecurBasis != "completion" || got.RecurCount != 10 || got.Recurrence != "weekly" || !slices.Equal(got.RecurWeekdays, []int{3, 5}) ||
+		!slices.Equal(got.Offsets(), []int{0, 15}) {
+		t.Fatalf("%+v %v", got, got.Offsets())
+	}
+	tt.Click("下个周一 9:00")
+	tt.Frame()
+	if got, _ := a.taskByID(task.ID); got.DueAt.Format("01-02 15:04") != "11-09 09:00" || a.dueOpenID != "" {
+		t.Fatalf("快捷档设定并关闭 %v %q", got.DueAt, a.dueOpenID)
+	}
+	// 提前档：到期前 15 分钟提醒一次，到期再提醒一次；已逾期不补提前档
+	got, _ = a.taskByID(task.ID)
+	if hits := a.store.DueForReminder(got.DueAt.Add(-14 * time.Minute)); len(hits) != 1 {
+		t.Fatal("提前 15 分钟档")
+	}
+	if hits := a.store.DueForReminder(got.DueAt.Add(-10 * time.Minute)); len(hits) != 0 {
+		t.Fatal("同一档不重复")
+	}
+	if hits := a.store.DueForReminder(got.DueAt.Add(time.Minute)); len(hits) != 1 {
+		t.Fatal("到期档")
+	}
+	if l := reminderHitLabel(got, got.DueAt.Add(-14*time.Minute), "浇花"); l != "浇花 · 14 分钟后到期" {
+		t.Fatal(l)
 	}
 }

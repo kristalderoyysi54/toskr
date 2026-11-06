@@ -25,6 +25,22 @@ type Task struct {
 	RecurBasis string    `json:"recurBasis,omitempty"` // "" = 按计划日期；completion = 从完成时算起
 	RecurUntil time.Time `json:"recurUntil,omitzero"`  // 结束日（含当天）：下一期落在此日之后不再生成
 	RecurCount int       `json:"recurCount,omitempty"` // 剩余期数（含本期）；0 = 不限
+	// 每周重复的星期几（0 = 周日；空 = 按到期日那天，同 Tauri recurrence.weekdays）
+	RecurWeekdays []int `json:"recurWeekdays,omitempty"`
+	// 提醒档（分钟，0 = 到期时；nil = 只在到期时，空切片 = 不提醒，同 Tauri reminderOffsets）与已发过的提前档
+	ReminderOffsets *[]int `json:"reminderOffsets,omitempty"`
+	EarlyReminded   []int  `json:"earlyReminded,omitempty"`
+}
+
+// TaskReminderOffsetOptions 同 Tauri TASK_REMINDER_OFFSET_OPTIONS（分钟）。
+var TaskReminderOffsetOptions = []int{0, 15, 60, 1440, 4320}
+
+// Offsets：提醒档，缺省只在到期时。
+func (t Task) Offsets() []int {
+	if t.ReminderOffsets == nil {
+		return []int{0}
+	}
+	return *t.ReminderOffsets
 }
 
 type ChecklistItem struct {
@@ -69,7 +85,7 @@ func (s *Store) UpdateTask(t Task) error {
 			return false
 		}
 		if !s.tasks[i].DueAt.Equal(t.DueAt) {
-			t.RemindedAt = time.Time{} // 改了到期时间，允许对新时间重新提醒
+			t.RemindedAt, t.EarlyReminded = time.Time{}, nil // 改了到期时间，允许对新时间重新提醒
 		}
 		s.tasks[i] = t
 		return true
@@ -89,6 +105,7 @@ func (s *Store) CompleteTask(id string, done bool, now time.Time) (next Task, sp
 			if due, ok := nextDue(*t, now); ok {
 				next = *t
 				next.ID, next.Status, next.CompletedAt, next.RemindedAt, next.CreatedAt = newID(), "todo", time.Time{}, time.Time{}, now
+				next.EarlyReminded = nil
 				next.DueAt = due
 				if t.RecurCount > 0 {
 					next.RecurCount = t.RecurCount - 1
@@ -148,8 +165,22 @@ func (s *Store) DueForReminder(now time.Time) []Task {
 	_ = s.mutate(func() bool {
 		for i := range s.tasks {
 			t := &s.tasks[i]
-			if t.Status != "done" && !t.DueAt.IsZero() && !t.DueAt.After(now) && t.RemindedAt.IsZero() {
-				t.RemindedAt = now
+			if t.Status == "done" || t.DueAt.IsZero() {
+				continue
+			}
+			// 同 Tauri taskRemindersDue：到期档用 RemindedAt；提前档只在到期前有效（已逾期不补发「还有 15 分钟」）
+			hit := false
+			for _, off := range t.Offsets() {
+				switch {
+				case off == 0:
+					if !t.DueAt.After(now) && t.RemindedAt.IsZero() {
+						t.RemindedAt, hit = now, true
+					}
+				case t.DueAt.After(now) && !t.DueAt.Add(-time.Duration(off)*time.Minute).After(now) && !slices.Contains(t.EarlyReminded, off):
+					t.EarlyReminded, hit = append(t.EarlyReminded, off), true
+				}
+			}
+			if hit {
 				due = append(due, *t)
 			}
 		}
@@ -177,6 +208,20 @@ func NextOccurrence(t time.Time, rule string) time.Time {
 		return AddMonthsClamped(t, 12)
 	}
 	return t
+}
+
+// NextOccurrenceDays：每周重复且选了星期几时，推进到下一个选中的星期几（同 Tauri weekly weekdays）。
+func NextOccurrenceDays(t time.Time, rule string, weekdays []int) time.Time {
+	if rule != "weekly" || len(weekdays) == 0 {
+		return NextOccurrence(t, rule)
+	}
+	for i := 1; i <= 7; i++ {
+		n := t.AddDate(0, 0, i)
+		if slices.Contains(weekdays, int(n.Weekday())) {
+			return n
+		}
+	}
+	return t.AddDate(0, 0, 7)
 }
 
 // AddMonthsClamped 加月并把日钳制到目标月最后一天。
@@ -358,7 +403,7 @@ func nextDue(t Task, completed time.Time) (time.Time, bool) {
 	if t.RecurBasis == "completion" {
 		base = time.Date(completed.Year(), completed.Month(), completed.Day(), t.DueAt.Hour(), t.DueAt.Minute(), 0, 0, t.DueAt.Location())
 	}
-	due := NextOccurrence(base, t.Recurrence)
+	due := NextOccurrenceDays(base, t.Recurrence, t.RecurWeekdays)
 	if !t.RecurUntil.IsZero() {
 		y, m, d := t.RecurUntil.Date()
 		if due.After(time.Date(y, m, d, 23, 59, 59, 0, due.Location())) {

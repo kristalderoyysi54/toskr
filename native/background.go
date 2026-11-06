@@ -92,7 +92,7 @@ func (a *app) remindTasks(due []store.Task, now time.Time) {
 			names = append(names, preview(t.Text, 24))
 		}
 	}
-	text := preview(due[0].Text, 40)
+	text := reminderHitLabel(due[0], now, preview(due[0].Text, 40))
 	body := text
 	if len(due) > 1 {
 		text = fmt.Sprintf(tr("%d 个任务提醒"), len(due))
@@ -114,4 +114,19 @@ func (a *app) remindTasks(due []store.Task, now time.Time) {
 			}
 		}
 	}
+}
+
+// reminderHitLabel 同 Tauri：到期档用标题本身，提前档（任务还没到期）补「还有多久」。
+func reminderHitLabel(t store.Task, now time.Time, p string) string {
+	if !t.DueAt.After(now) {
+		return p
+	}
+	mins := max(1, int(t.DueAt.Sub(now).Minutes()+0.5))
+	switch {
+	case mins < 60:
+		return fmt.Sprintf(tr("%s · %d 分钟后到期"), p, mins)
+	case mins < 1440:
+		return fmt.Sprintf(tr("%s · %d 小时后到期"), p, (mins+30)/60)
+	}
+	return fmt.Sprintf(tr("%s · %d 天后到期"), p, (mins+720)/1440)
 }

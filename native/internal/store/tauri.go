@@ -104,11 +104,14 @@ type tauriTask struct {
 	SectionID   string          `json:"sectionId"`
 	CompletedAt int64           `json:"completedAt"`
 	Recurrence  *struct {
-		Freq  string `json:"freq"`
-		Basis string `json:"basis"`
-		Until int64  `json:"until"`
-		Count int    `json:"count"`
+		Freq     string `json:"freq"`
+		Basis    string `json:"basis"`
+		Until    int64  `json:"until"`
+		Count    int    `json:"count"`
+		Weekdays []int  `json:"weekdays"`
 	} `json:"recurrence"`
+	ReminderOffsets      *[]int `json:"reminderOffsets"`
+	EarlyRemindedOffsets []int  `json:"earlyRemindedOffsets"`
 }
 
 type tauriBill struct {
@@ -423,9 +426,24 @@ func (s *Store) ImportTauri(dir string, key []byte) (TauriReport, error) {
 		}
 		if t.Recurrence != nil {
 			x.Recurrence, x.RecurBasis, x.RecurCount = t.Recurrence.Freq, t.Recurrence.Basis, t.Recurrence.Count
+			if t.Recurrence.Freq == "weekly" {
+				x.RecurWeekdays = t.Recurrence.Weekdays
+			}
 			if t.Recurrence.Until > 0 {
 				x.RecurUntil = time.UnixMilli(t.Recurrence.Until)
 			}
+		}
+		if t.ReminderOffsets != nil {
+			var offs []int
+			for _, o := range *t.ReminderOffsets {
+				if slices.Contains(TaskReminderOffsetOptions, o) && !slices.Contains(offs, o) {
+					offs = append(offs, o)
+				}
+			}
+			if offs == nil {
+				offs = []int{}
+			}
+			x.ReminderOffsets, x.EarlyReminded = &offs, t.EarlyRemindedOffsets
 		}
 		if x.Status == "" {
 			x.Status = "todo"

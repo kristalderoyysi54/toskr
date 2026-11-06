@@ -106,10 +106,16 @@ type app struct {
 	clock func() time.Time // 可注入时钟（视觉对照测试固定在参照截图时刻）
 
 	// 任务页
-	tasks     []store.Task
-	taskDraft string
-	taskSub   int // 0 今天 1 任务
-	sparkMode bool
+	tasks       []store.Task
+	taskDraft   string
+	taskSub     int // 0 今天 1 任务
+	sparkMode   bool
+	taskAI      bool       // 速记 ✨ AI 模式（与 💡 互斥）
+	dueOpenID   string     // 到期弹层开在哪个任务上
+	dueDraft    time.Time  // 到期弹层里的自定义日期时间草稿
+	dueCount    string     // 「共几次」输入草稿
+	taskAIBusy  bool       // AI 解析中
+	taskAIDraft *taskDraft // 待确认的 AI 解析结果
 	// 卡片右键「重命名…」「新标签…」的就地输入
 	titleEditID, titleText, tagEditID, tagText string
 	placed                                     mygo.Rectangle  // 程序上次摆放面板的位置（与之相同的移动 / 缩放不当作用户操作记忆）
@@ -131,7 +137,6 @@ type app struct {
 	snipEditID, snipLabel, snipText, snipGroup string
 	// 任务行内编辑与任务分组改名
 	taskOpen, taskTitle, taskNote, ckDraft string
-	taskDue, taskEnd                       string // 展开态的到期 / 重复结束输入
 	taskCk                                 map[string]*string
 	taskSecRename, taskSecName             string
 	recordingKey                           string                    // 设置里正在录制的全局快捷键（panel / shot / newnote）
