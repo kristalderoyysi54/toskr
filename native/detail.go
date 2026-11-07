@@ -238,7 +238,10 @@ func (a *app) detailView(c *ui.Context) {
 				a.detailTags(c, k, s, n)
 			}
 		})
-		ui.Row(c).Absolute().Left(0).Right(0).Bottom(0).Padding(40, 16, 12, 16).Gap(4).Justify(ui.Center).AlignItems(ui.Center).
+		// 坞底同 Tauri .detail-bottom-dock::before：自上而下由透明渐到窗口底色（65% 处实），正文滚到坞下不再和按钮叠字；
+		// 容器本身同 pointer-events-none 透传点击，只有按钮接收
+		ui.Row(c).Absolute().Left(0).Right(0).Bottom(0).Padding(40, 16, 12, 16).Gap(4).Justify(ui.Center).AlignItems(ui.Center).PassThrough().
+			LinearGradient(ui.LinearGradient{From: bg.Alpha(0), To: bg, Angle: 180, Start: 0, End: 0.65}).
 			Children(func() { a.detailDock(c, k, s, n) })
 		a.detailSelectionBar(c, k, n)
 	})
@@ -614,8 +617,18 @@ func pickSegments(s string) []pickSeg {
 			if i > 0 {
 				out = append(out, pickSeg{"\n", false})
 			}
-			if part != "" {
-				out = append(out, pickSeg{part, false})
+			// 开括号 / 开引号单独成段：「：（」这类混合分隔里，冒号随前一词、括号随后一词（pickGroups 避头尾）
+			start, prevOpen := 0, false
+			for j, r := range part {
+				open := strings.ContainsRune(openingPunct, r)
+				if j > start && open && !prevOpen {
+					out = append(out, pickSeg{part[start:j], false})
+					start = j
+				}
+				prevOpen = open
+			}
+			if start < len(part) {
+				out = append(out, pickSeg{part[start:], false})
 			}
 		}
 	}
@@ -656,51 +669,91 @@ func (a *app) pickView(c *ui.Context, k tokens, s settingsTokens, src string) {
 		if d.pickAnchor < 0 { // 同 Tauri：只在还没选之前出现——选词模式最难懂的是「选完去哪操作」
 			text(c, hint, 10, 14, 400, k.muted).Margin(0, 0, 8, 0).Wrap()
 		}
-		ui.Row(c).Wrap().AlignItems(ui.Center).Children(func() {
-			for i, seg := range a.segments(src) {
-				on := d.pickAnchor >= 0 && i >= lo && i <= hi
-				if !seg.word {
-					switch {
-					case seg.text == "\n":
-						ui.Box(c).FillWidth().Height(0)
-					case !d.pickPara: // 词粒度保留原文标点 / 空白（同 Tauri text-muted-foreground，区间内转主色）
-						col := k.muted
-						if on {
-							col = s.primary
-						}
-						text(c, seg.text, 13, 29, 400, col).Font(fontMono)
+		segs := a.segments(src)
+		cell := func(i int) { // 一个分隔（标点 / 空白）或键帽
+			seg := segs[i]
+			on := d.pickAnchor >= 0 && i >= lo && i <= hi
+			if !seg.word {
+				switch {
+				case seg.text == "\n":
+					ui.Box(c).FillWidth().Height(0)
+				case !d.pickPara: // 词粒度保留原文标点 / 空白（同 Tauri text-muted-foreground，区间内转主色）
+					col := k.muted
+					if on {
+						col = s.primary
 					}
+					text(c, seg.text, 13, 29, 400, col).Font(fontMono)
+				}
+				return
+			}
+			// 键帽（同 Tauri 模板 B：浅底 + 细边 + 底边厚度，选中下沉转主色）
+			b := ui.Box(c).Radius(7).Border(1, s.inputBorder.Alpha(0.5)).Background(k.track).Key("pk" + itoa(i))
+			if d.pickPara {
+				b.FillWidth().Padding(6, 10).Margin(4, 0, 4, 0)
+			} else {
+				b.Padding(1, 7).Margin(2, 3, 2, 3)
+			}
+			col := k.fg
+			if on {
+				b.Background(s.primary).Border(1, s.primary.Alpha(0.6)).Shadow(0, 1, 0, 0, gray(0, 0.45)).Translate(0, 1.5)
+				col = gray(0.985, 1)
+			} else {
+				b.Shadow(0, 2.5, 0, 0, gray(0, 0.35))
+				if b.Hovered() {
+					b.Opacity(0.9)
+				}
+			}
+			b.Children(func() {
+				t := text(c, seg.text, 13, 21, 400, col).Font(fontMono)
+				if d.pickPara {
+					t.Wrap()
+				}
+			})
+			if b.Clicked() {
+				d.pickAnchor, d.pickEnd = pickClick(d.pickAnchor, d.pickEnd, i)
+			}
+		}
+		ui.Row(c).Wrap().AlignItems(ui.Center).Children(func() {
+			for _, g := range pickGroups(segs, d.pickPara) {
+				if len(g) == 1 {
+					cell(g[0])
 					continue
 				}
-				// 键帽（同 Tauri 模板 B：浅底 + 细边 + 底边厚度，选中下沉转主色）
-				b := ui.Box(c).Radius(7).Border(1, s.inputBorder.Alpha(0.5)).Background(k.track).Key("pk" + itoa(i))
-				if d.pickPara {
-					b.FillWidth().Padding(6, 10).Margin(4, 0, 4, 0)
-				} else {
-					b.Padding(1, 7).Margin(2, 3, 2, 3)
-				}
-				col := k.fg
-				if on {
-					b.Background(s.primary).Border(1, s.primary.Alpha(0.6)).Shadow(0, 1, 0, 0, gray(0, 0.45)).Translate(0, 1.5)
-					col = gray(0.985, 1)
-				} else {
-					b.Shadow(0, 2.5, 0, 0, gray(0, 0.35))
-					if b.Hovered() {
-						b.Opacity(0.9)
-					}
-				}
-				b.Children(func() {
-					t := text(c, seg.text, 13, 21, 400, col).Font(fontMono)
-					if d.pickPara {
-						t.Wrap()
+				// 同浏览器避头尾：不在逗号句号前、开括号后折行——标点和相邻键帽同进退
+				ui.Row(c).AlignItems(ui.Center).Shrink(0).Children(func() {
+					for _, i := range g {
+						cell(i)
 					}
 				})
-				if b.Clicked() {
-					d.pickAnchor, d.pickEnd = pickClick(d.pickAnchor, d.pickEnd, i)
-				}
 			}
 		})
 	})
+}
+
+const openingPunct = "（(「『“‘《【[{<"
+
+// pickGroups 把键帽与紧贴的标点编成不可拆的一组（下标保持 segments 的全局下标）：
+// 不含空白的分隔并入前一个键帽（，。：@ · 等不落到行首）；纯开括号 / 开引号并入后一个键帽。段粒度不分组。
+func pickGroups(segs []pickSeg, para bool) [][]int {
+	var out [][]int
+	opening := func(t string) bool { return strings.Trim(t, openingPunct) == "" }
+	glue := func(t string) bool { return t != "\n" && strings.TrimSpace(t) == t && t != "" }
+	for i := 0; i < len(segs); i++ {
+		seg := segs[i]
+		n := len(out)
+		switch {
+		case para:
+			out = append(out, []int{i})
+		case !seg.word && glue(seg.text) && opening(seg.text) && i+1 < len(segs) && segs[i+1].word:
+			out = append(out, []int{i, i + 1}) // 开括号 + 后一词
+			i++
+		case !seg.word && glue(seg.text) && n > 0 && segs[out[n-1][len(out[n-1])-1]].word:
+			out[n-1] = append(out[n-1], i) // 收尾标点并入前一词
+		default:
+			out = append(out, []int{i})
+		}
+	}
+	return out
 }
 
 // pickClick 同 Tauri onPickToken：未选 → 选这一块；再点唯一选中的那块 → 取消；否则锚点不动、终点移到这一块。

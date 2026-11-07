@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -122,5 +123,22 @@ func TestDetailImageOnlyDraftNotEmpty(t *testing.T) {
 	}
 	if a.detailDraftEmpty(store.Note{Attachments: []string{"x.png"}}) {
 		t.Fatal("只留附件图不算空（同 Tauri）")
+	}
+}
+
+// 实机发现：长文选词时「，」「。」单独落到行首。收尾标点并入前一键帽、开括号并入后一键帽（同浏览器避头尾）。
+func TestPickGroupsKinsoku(t *testing.T) {
+	segs := pickSegments("测试，项目：（甲）乙 丙")
+	var got []string
+	for _, g := range pickGroups(segs, false) {
+		var b strings.Builder
+		for _, i := range g {
+			b.WriteString(segs[i].text)
+		}
+		got = append(got, b.String())
+	}
+	want := []string{"测试，", "项目：", "（甲）", "乙", " ", "丙"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("%q", got)
 	}
 }
