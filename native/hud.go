@@ -138,7 +138,7 @@ func (a *app) showHUDForce(kind, text string) {
 
 // hudActionable：说话气泡形态（可撤销 / 到期 / 可定位到卡，同 Tauri hudActionable 看 targetId）。
 func (a *app) hudActionable() bool {
-	return a.hudUndo != nil || len(a.hudDue) > 0 || a.hudTarget != ""
+	return a.hudUndo != nil || len(a.hudDue) > 0 || a.hudTarget != "" || a.upd.pendingOpen && a.hudKind == "info"
 }
 
 func (a *app) hudStreakOf(kind string) int {
@@ -497,7 +497,12 @@ func (a *app) hudDueAction(ids []string, action string, minutes int) {
 // hudOpen：点气泡本体查看——到期提醒去提醒页（单条打开该任务），捕获类定位到那张卡，其余唤出面板。
 func (a *app) hudOpen() {
 	due, target := a.hudDue, a.hudTarget
+	update := a.upd.pendingOpen && a.hudKind == "info"
 	a.dismissHUD()
+	if update {
+		a.openUpdate()
+		return
+	}
 	if a.panel != nil {
 		a.showPanel()
 	}

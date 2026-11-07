@@ -14,5 +14,11 @@
       "NSRemindersFullAccessUsageDescription": "Toskr 把任务同步到提醒事项的「Toskr Native」列表，并读回你在提醒事项里的完成与修改",
       "NSRemindersUsageDescription": "Toskr 把任务同步到提醒事项的「Toskr Native」列表，并读回你在提醒事项里的完成与修改"
     }
+  },
+  "updates": {
+    "publicKey": "khP23LeODxe5mpC6j10k5234cDpbghd3G+6hfHNhuBU=",
+    "github": "kristalderoyysi54/toskr",
+    "tagPrefix": "native-v",
+    "privateKey": "~/.toskr-native-keys/mygo-update.key"
   }
 }

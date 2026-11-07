@@ -85,6 +85,7 @@ func (a *app) barHeader(c *ui.Context, k tokens) {
 					}
 				}
 			}
+			a.updatePill(c, k)
 			if a.page != pageTasks && a.iconButton(c, k, "search", 22, 14, "搜索（⌘F）") {
 				a.searchOpen = !a.searchOpen
 			}

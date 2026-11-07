@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -155,10 +156,13 @@ func (a *app) machineMove(x, y int, extra time.Duration) {
 	a.panel.SetPosition(x, y)
 }
 
+// noEdgeHide：实机自动化测试用（TOSKR_NO_EDGEHIDE=1）——测试代理的指针常在面板外，不让它滑走。
+var noEdgeHide = os.Getenv("TOSKR_NO_EDGEHIDE") == "1"
+
 // edgeTickOnce：监督循环一拍（主线程）。
 func (a *app) edgeTickOnce() {
 	e := a.edge
-	if e == nil || a.panel == nil || !a.panel.IsVisible() || a.panelHiding {
+	if e == nil || a.panel == nil || !a.panel.IsVisible() || a.panelHiding || noEdgeHide {
 		a.edgeAway = 0
 		return
 	}

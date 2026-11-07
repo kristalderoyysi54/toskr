@@ -1,8 +1,6 @@
 package main
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -503,15 +501,7 @@ func (a *app) settingsView(c *ui.Context) {
 			}},
 		}}},
 		{label: "诊断", icon: "scroll-text", sections: [][]setSection{a.diagSections(c, k, s)}},
-		{label: "帮助与更新", icon: "info", sections: [][]setSection{append(a.outcomeSections(c, k, s, st), a.learningSection(c, s, st), setSection{
-			tr("关于"), []setRow{
-				{title: "Toskr Native " + mygo.App.Version(), hint: cmpOr(a.updateMsg, "mygo · "+tr("原生界面")), control: func() {
-					if button(c, s, "检查更新") {
-						a.checkUpdate()
-					}
-				}},
-			}},
-		)}},
+		{label: "帮助与更新", icon: "info", sections: [][]setSection{append(append(a.outcomeSections(c, k, s, st), a.learningSection(c, s, st)), a.aboutRows(c, s)...)}},
 	}
 	if st.SecretEnabled { // 与 Tauri 一致：秘文功能开启后侧栏才出现「秘文」分类
 		pages = slices.Insert(pages, 5, setPage{label: "秘文", icon: "key-round", sections: [][]setSection{a.secretSections(c, k, s, st)}})
@@ -712,32 +702,6 @@ func readHead(path string, n int) ([]byte, error) {
 	b := make([]byte, n)
 	k, _ := io.ReadFull(f, b)
 	return b[:k], nil
-}
-
-func (a *app) checkUpdate() {
-	a.updateMsg = "检查中…"
-	go func() {
-		up, err := mygo.Updater.Check(context.Background())
-		msg := ""
-		switch {
-		case errors.Is(err, mygo.ErrUpdatesDisabled):
-			msg = "此构建未启用自动更新（mygo.json 尚未配置 updates.publicKey 与发布仓库）"
-		case err != nil:
-			msg = "检查失败：" + err.Error()
-		case up == nil:
-			msg = "已是最新版本"
-		default:
-			msg = "发现新版本 " + up.Version + "，正在下载安装…"
-			go func() {
-				if err := up.Install(context.Background(), nil); err != nil {
-					a.settingsWin.Update(func() { a.updateMsg = "安装失败：" + err.Error() })
-					return
-				}
-				mygo.App.Relaunch()
-			}()
-		}
-		a.settingsWin.Update(func() { a.updateMsg = msg })
-	}()
 }
 
 func keyLabel(s string) string {

@@ -312,9 +312,10 @@ type app struct {
 	recovery                            []string
 	health                              string
 	updateMsg                           string
-	setPage                             int    // 设置窗左侧分类
-	setSub                              int    // 分类内子页签
-	setQuery                            string // 设置搜索
+	upd                                 updateState // 应用更新（updater.go）
+	setPage                             int         // 设置窗左侧分类
+	setSub                              int         // 分类内子页签
+	setQuery                            string      // 设置搜索
 	setSearch                           ui.Handle
 	newKeyLabel, newKeyPass, newKeyNote string // 设置「秘文」添加密钥的草稿
 }

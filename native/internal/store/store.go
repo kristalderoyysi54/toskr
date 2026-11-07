@@ -107,29 +107,31 @@ type Settings struct {
 	ClipKeepConcealed bool      `json:"clipKeepConcealed,omitempty"` // true = 不忽略密码管理器 / 隐藏内容
 	ClipKeepTransient bool      `json:"clipKeepTransient,omitempty"` // true = 不忽略瞬时内容
 	// 外观细项（同 Tauri windowOpacity / panelOpacity / cardOpacity / hudDurationMs / companionGap；0 / nil = 默认）
-	WindowOpacity  float64      `json:"windowOpacity,omitempty"`          // 0.3–1，默认 1
-	PanelOpacity   float64      `json:"panelOpacity,omitempty"`           // 内容底色浓度 0.25–1，默认 0.62
-	CardOpacity    float64      `json:"cardOpacity,omitempty"`            // 0.3–1，默认 1
-	HUDDurationMs  int          `json:"hudDurationMs,omitempty"`          // 2000–10000，默认 3000
-	CompanionGap   *int         `json:"companionGap,omitempty"`           // 0–40，默认 8
-	CardTintOff    bool         `json:"cardTintOff,omitempty"`            // 卡片彩色通栏（Tauri cardTint，默认开）
-	ClipTemplate   string       `json:"clipCardTemplate,omitempty"`       // 剪贴卡模板：standard | condensed（仅舒适密度）
-	ContextMenu    []MenuItem   `json:"contextMenu,omitempty"`            // 卡片右键菜单的显隐与区内顺序（空 = 默认）
-	CalendarOn     bool         `json:"appleCalendarEnabled,omitempty"`   // 在「今天」显示苹果日历日程（只读）
-	CalendarHidden []string     `json:"appleCalendarHiddenIds,omitempty"` // 不显示的日历
-	PageOrder      []string     `json:"pageOrder,omitempty"`              // 一级页签顺序（可拖动重排）
-	ScreenshotKey  string       `json:"screenshotKey"`
-	ScreenshotOff  bool         `json:"screenshotOff,omitempty"`      // 区域截图总开关（Tauri screenshotEnabled，默认开）
-	ShotHideSelf   bool         `json:"screenshotHideSelf,omitempty"` // 截图时隐藏 Toskr 自己的窗口（默认不隐藏）
-	AIEndpoint     string       `json:"aiEndpoint"`
-	AIModel        string       `json:"aiModel"`
-	AIEnabled      *bool        `json:"aiEnabled,omitempty"` // 「AI 智能」总开关（同 Tauri aiEnabled）；nil = 旧数据，按开启
-	Companion      []string     `json:"companion"`           // 伴随停靠的应用 bundle id
-	EdgeHide       bool         `json:"edgeHide"`
-	Currency       string       `json:"currency"`
-	DueReminders   bool         `json:"dueReminders"`
-	ReminderVia    string       `json:"taskReminderChannel,omitempty"` // 任务提醒方式 hud | system | both（同 Tauri taskReminderChannel，空 = hud）
-	DuePresets     *[]DuePreset `json:"duePresets,omitempty"`          // 到期快捷档（同 Tauri duePresets）；nil = 默认七档，空 = 全删了
+	WindowOpacity     float64      `json:"windowOpacity,omitempty"`          // 0.3–1，默认 1
+	PanelOpacity      float64      `json:"panelOpacity,omitempty"`           // 内容底色浓度 0.25–1，默认 0.62
+	CardOpacity       float64      `json:"cardOpacity,omitempty"`            // 0.3–1，默认 1
+	HUDDurationMs     int          `json:"hudDurationMs,omitempty"`          // 2000–10000，默认 3000
+	CompanionGap      *int         `json:"companionGap,omitempty"`           // 0–40，默认 8
+	CardTintOff       bool         `json:"cardTintOff,omitempty"`            // 卡片彩色通栏（Tauri cardTint，默认开）
+	ClipTemplate      string       `json:"clipCardTemplate,omitempty"`       // 剪贴卡模板：standard | condensed（仅舒适密度）
+	ContextMenu       []MenuItem   `json:"contextMenu,omitempty"`            // 卡片右键菜单的显隐与区内顺序（空 = 默认）
+	CalendarOn        bool         `json:"appleCalendarEnabled,omitempty"`   // 在「今天」显示苹果日历日程（只读）
+	CalendarHidden    []string     `json:"appleCalendarHiddenIds,omitempty"` // 不显示的日历
+	PageOrder         []string     `json:"pageOrder,omitempty"`              // 一级页签顺序（可拖动重排）
+	ScreenshotKey     string       `json:"screenshotKey"`
+	ScreenshotOff     bool         `json:"screenshotOff,omitempty"`      // 区域截图总开关（Tauri screenshotEnabled，默认开）
+	ShotHideSelf      bool         `json:"screenshotHideSelf,omitempty"` // 截图时隐藏 Toskr 自己的窗口（默认不隐藏）
+	AIEndpoint        string       `json:"aiEndpoint"`
+	AIModel           string       `json:"aiModel"`
+	AutoCheckUpdate   *bool        `json:"autoCheckUpdate,omitempty"`   // 自动检查更新（同 Tauri autoCheckUpdate，nil = 默认开）
+	AutoInstallUpdate bool         `json:"autoInstallUpdate,omitempty"` // 发现新版直接后台下载安装（同 Tauri，默认关）
+	AIEnabled         *bool        `json:"aiEnabled,omitempty"`         // 「AI 智能」总开关（同 Tauri aiEnabled）；nil = 旧数据，按开启
+	Companion         []string     `json:"companion"`                   // 伴随停靠的应用 bundle id
+	EdgeHide          bool         `json:"edgeHide"`
+	Currency          string       `json:"currency"`
+	DueReminders      bool         `json:"dueReminders"`
+	ReminderVia       string       `json:"taskReminderChannel,omitempty"` // 任务提醒方式 hud | system | both（同 Tauri taskReminderChannel，空 = hud）
+	DuePresets        *[]DuePreset `json:"duePresets,omitempty"`          // 到期快捷档（同 Tauri duePresets）；nil = 默认七档，空 = 全删了
 	// 与 Tauri 一致的可选功能域（默认关闭）：订阅进「提醒」页第三个子视图，秘文进「内容」页
 	SubscriptionsEnabled bool   `json:"subscriptionsEnabled"`
 	BillView             string `json:"billView,omitempty"` // 订阅页「周 / 月」视图记忆（同 Tauri localStorage）
@@ -916,3 +918,6 @@ func (p DuePreset) Due(now time.Time) time.Time {
 	}
 	return time.Time{}
 }
+
+// AutoCheckOn：自动检查更新（未设置时默认开，同 Tauri）。
+func (st Settings) AutoCheckOn() bool { return st.AutoCheckUpdate == nil || *st.AutoCheckUpdate }

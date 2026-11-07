@@ -209,6 +209,8 @@ type tauriSettings struct {
 	MessagesEnabled    *bool            `json:"messagesEnabled"`
 	MessageRules       []MessageRule    `json:"messageWatchRules"`
 	WelcomeTourSeen    bool             `json:"welcomeTourSeen"`
+	AutoCheckUpdate    *bool            `json:"autoCheckUpdate"`
+	AutoInstallUpdate  *bool            `json:"autoInstallUpdate"`
 	Onboarding         *OnboardingState `json:"onboarding"`
 }
 
@@ -683,6 +685,13 @@ func applyTauriSettings(st Settings, t tauriSettings) Settings {
 	if t.AIEnabled != nil {
 		on := *t.AIEnabled
 		st.AIEnabled = &on
+	}
+	if t.AutoCheckUpdate != nil {
+		on := *t.AutoCheckUpdate
+		st.AutoCheckUpdate = &on
+	}
+	if t.AutoInstallUpdate != nil {
+		st.AutoInstallUpdate = *t.AutoInstallUpdate
 	}
 	set(&st.Currency, t.CurrencySymbol)
 	set(&st.SecretCipherStyle, t.SecretCipherStyle)

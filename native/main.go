@@ -118,7 +118,7 @@ func start() (*app, error) {
 	a.startEdgeSupervisor()
 	a.panel.OnBlur(func() {
 		diag.Push("面板失焦 pinned=%v", a.pinned)
-		a.remaskAll() // 秘文失焦即回遮罩（钉住时也一样，与 Tauri 一致）
+		a.remaskAll()             // 秘文失焦即回遮罩（钉住时也一样，与 Tauri 一致）
 		if a.edgeHideNow(false) { // 已入坞：失焦改为贴边滑出（同 Tauri edge_hide_now）
 			return
 		}
@@ -157,6 +157,7 @@ func start() (*app, error) {
 	a.registerHotkeys()
 	a.setUpTray()
 	a.startBackground()
+	a.startUpdateChecks()
 	diag.Push("辅助功能授权=%v", macos.AXTrusted(false))
 	a.watchPermission()
 	a.startTap()

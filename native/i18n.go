@@ -145,3 +145,19 @@ func init() { // 模板来源 / 试用预览 / AI 模板助手（templates_ai.go
 		}
 	}
 }
+
+func init() { // 应用更新（updater.go）
+	for k, v := range map[string]string{
+		"更新": "Update", "还没有发布原生版更新，当前即最新": "No native release published yet — you're up to date", "发现新版本 v%s · 点击查看": "New version v%s · click to view", "已更新到 v%s · 重启应用后生效": "Updated to v%s · restart to apply",
+		"自动更新失败：": "Auto-update failed: ", "此构建未启用自动更新（开发构建或安装位置不可写）": "Updates are off for this build (dev build or install location not writable)",
+		"检查失败：": "Check failed: ", "已是最新版本": "You're up to date", "发现新版本 v%s": "New version v%s", "安装失败：": "Install failed: ",
+		"%d%% · 完成后自动重启": "%d%% · restarts when done", "下载并安装": "Download and install", "检查中…": "Checking…", "本次更新内容": "What's new",
+		"自动检查更新": "Check for updates automatically", "启动后在后台检查；关闭后只在手动检查时查找": "Checks in the background after launch; when off, only manual checks",
+		"自动安装更新": "Install updates automatically", "在后台下载新版，下次启动时生效": "Downloads in the background; applies on next launch",
+		"更新日志": "Release notes", "所有版本": "All versions", "链接": "Links", "项目主页": "Homepage", "报告 Bug": "Report a bug", "提 Issue": "Open an issue",
+	} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
+}

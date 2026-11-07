@@ -31,6 +31,7 @@ func (a *app) mainHeader(c *ui.Context, k tokens) {
 		text(c, "Toskr", 13, 18, 600, k.fg).LetterSpacing(-0.325).Grow(1).Margin(2, 0, 0, 0).Cursor(ui.CursorGrab).
 			Tooltip(tr("拖动此处可移动面板（未吸附时）")).DragWindow()
 		ui.Row(c).Gap(2).Children(func() {
+			a.updatePill(c, k)
 			if a.page != pageTasks && a.iconButton(c, k, "search", 22, 14, "搜索（⌘F）") {
 				a.searchOpen = !a.searchOpen
 			}
