@@ -106,12 +106,16 @@ func (a *app) detailSelectionBar(c *ui.Context, k tokens, n store.Note) {
 				})
 				return b.Clicked()
 			}
-			if btn("send", tr("只把选中片段发到当前目标")) {
-				a.send([]store.Note{{Text: sel}})
+			ro := a.detail.virt != nil // 只读合并预览：只能复制（同 Tauri writable=false 不给发送 / 处理）
+			if !ro && btn("send", tr("只把选中片段发到当前目标")) {
+				a.sendDetailFragment(n, sel)
 			}
 			if btn("copy", tr("复制选中片段")) {
 				a.copyPrivate(sel)
 				a.showHUD("ok", tr("已复制"))
+			}
+			if ro {
+				return
 			}
 			if a.detail.edit {
 				sep := func() { ui.Box(c).Size(1, 16).Margin(0, 2).Background(k.fg.Alpha(0.1)) }

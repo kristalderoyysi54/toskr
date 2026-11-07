@@ -6,6 +6,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/toskr/native/internal/macos"
+	"github.com/toskr/native/internal/store"
 )
 
 // 用户实机反馈「详情选词默认页缺失、点了不生效」：单行卡片的键帽在顶部渐变条下面，渐变条吃掉了点击；
@@ -75,5 +76,51 @@ func TestDetailDockNoWrapInPick(t *testing.T) {
 		if !ok || r.H > 20 {
 			t.Fatalf("%q 应单行（高 %.1f）：%+v", s, r.H, r)
 		}
+	}
+}
+
+// 差距清单 #1/#2：只读合并预览的选中工具条只能复制，不给发送 / 处理（处理会改写一个不在库里的 id）。
+func TestDetailReadOnlySelectionBar(t *testing.T) {
+	a, _ := testApp(t)
+	v := store.Note{ID: "virt", Text: "甲乙 丙丁"}
+	a.detail = detailState{id: "virt", virt: &v, pickAnchor: 0, pickEnd: 0, pick: true, editSel: [2]int{-1, -1}}
+	tt := ui.NewTester(a.detailView, 560, 540)
+	tt.Frame()
+	tt.Frame()
+	if !tt.HasText("已选 2 字") || tt.HasText("发送选中") || tt.HasText("发送整卡") {
+		t.Fatalf("只读预览工具条只能复制：%v", tt.Texts())
+	}
+}
+
+func TestSendDetailFragmentKeepsSource(t *testing.T) {
+	a, _ := testApp(t, "甲乙 丙丁")
+	n := a.store.Notes()[0]
+	sys := &recSys{}
+	a.sys = sys
+	a.detail = detailState{id: n.ID, pickAnchor: -1, pickEnd: -1, editSel: [2]int{-1, -1}}
+	a.sendDetailFragment(n, "") // 空片段不发
+	a.target = macos.FrontApp{}
+	a.sendDetailFragment(n, "丙丁") // 没有目标：不发
+	if len(a.pending) != 0 || len(sys.sent()) != 0 {
+		t.Fatal("无目标不应发送")
+	}
+}
+
+func TestWordCountCJK(t *testing.T) {
+	for s, want := range map[string]int{"复现测试 一段": 6, "hello world": 2, "demo_user 我": 2, "": 0, "a-b's c": 2} {
+		if got := wordCount(s); got != want {
+			t.Fatalf("%q：%d，应 %d", s, got, want)
+		}
+	}
+}
+
+func TestDetailImageOnlyDraftNotEmpty(t *testing.T) {
+	a, _ := testApp(t)
+	a.detailText = "  "
+	if !a.detailDraftEmpty(store.Note{}) {
+		t.Fatal("无字无图应为空")
+	}
+	if a.detailDraftEmpty(store.Note{Attachments: []string{"x.png"}}) {
+		t.Fatal("只留附件图不算空（同 Tauri）")
 	}
 }

@@ -518,8 +518,8 @@ func TestDetailEditTagsPickAndRaw(t *testing.T) {
 	if got := a.pickedText(n.Text); got != "乙项 mygo" {
 		t.Fatalf("选词区间 %q", got)
 	}
-	if !tt.HasText("发送所选") {
-		t.Fatalf("选中后发送钮应只发所选 %v", tt.Texts())
+	if !tt.HasText("发送整卡") || !tt.HasText("发送选中") { // 同 Tauri：页脚发整卡，选中工具条发片段
+		t.Fatalf("选中后页脚应改口「发送整卡」%v", tt.Texts())
 	}
 	tt.Key(0, ui.KeyEscape)
 	tt.Frame()

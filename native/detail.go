@@ -31,17 +31,17 @@ type detailState struct {
 	tagDraft            string
 	tagOn               bool
 	full                ui.ImageSource
-	enter               bool                 // 正文待播进场（每次打开一条内容）
-	readSel             []ui.SelectedText    // 阅读态的划词选区（上一帧）
-	editSel             [2]int               // 进编辑时要落的选区（rune 偏移，-1 = 无）
-	dblFrames           int                  // 双击正文后再等几帧进编辑（等选词结果落进 readSel）
-	editRange           [2]int               // 编辑器当前选区（上一帧，rune 偏移）
-	title               string               // 编辑态标题草稿（同 Tauri draftTitle）
-	img                 int                  // 多图时当前第几张（主图 + 附件 + 内容块里的图）
-	imgW, imgH          int                  // 当前图原始尺寸
-	imgNote             bool                 // 图片文字备注编辑中
-	pickPara            bool                 // 选词粒度：段（同 Tauri pickGranularity）
-	segSrc              string               // 选词分块缓存（系统分词每帧跑太贵）：原文 + 粒度
+	enter               bool              // 正文待播进场（每次打开一条内容）
+	readSel             []ui.SelectedText // 阅读态的划词选区（上一帧）
+	editSel             [2]int            // 进编辑时要落的选区（rune 偏移，-1 = 无）
+	dblFrames           int               // 双击正文后再等几帧进编辑（等选词结果落进 readSel）
+	editRange           [2]int            // 编辑器当前选区（上一帧，rune 偏移）
+	title               string            // 编辑态标题草稿（同 Tauri draftTitle）
+	img                 int               // 多图时当前第几张（主图 + 附件 + 内容块里的图）
+	imgW, imgH          int               // 当前图原始尺寸
+	imgNote             bool              // 图片文字备注编辑中
+	pickPara            bool              // 选词粒度：段（同 Tauri pickGranularity）
+	segSrc              string            // 选词分块缓存（系统分词每帧跑太贵）：原文 + 粒度
 	segPara             bool
 	segs                []pickSeg
 	blocks              []store.ContentBlock // 图文混排卡编辑态的内容块草稿（nil = 按纯文本编辑）
@@ -230,7 +230,7 @@ func (a *app) detailView(c *ui.Context) {
 	a.detailKeys(c, n)
 	ui.Box(c).Fill().Children(func() {
 		ui.Box(c).Absolute().Top(0).Left(0).Right(0).Height(102.4).PassThrough(). // 纯装饰：不挡正文首行的点击 / 划选（选词首行键帽曾点不动）
-			LinearGradient(ui.LinearGradient{From: srgbf(0.486274, 0.517647, 0.580392).Alpha(0.26), To: ui.Transparent, Angle: 180})
+												LinearGradient(ui.LinearGradient{From: srgbf(0.486274, 0.517647, 0.580392).Alpha(0.26), To: ui.Transparent, Angle: 180})
 		a.detailBody(c, k, s, n)
 		ui.Column(c).Absolute().Top(0).Left(0).Right(0).Children(func() {
 			a.detailHeader(c, k, n)
@@ -308,7 +308,7 @@ func (a *app) detailKeys(c *ui.Context, n store.Note) {
 		case a.detail.imgNote: // Esc 保存并退出（同 Tauri）
 			a.saveImageNote()
 		case a.detail.edit: // 同 Tauri exitEditing：保存并退出；草稿清空了才算放弃
-			if a.detail.blocks == nil && strings.TrimSpace(a.detailText) == "" {
+			if a.detailDraftEmpty(n) {
 				a.detail.edit, a.detailText, a.detail.title = false, n.Text, n.Title
 			} else {
 				a.commitDetailEdit(n)
@@ -349,7 +349,7 @@ func (a *app) detailHeader(c *ui.Context, k tokens, n store.Note) {
 			spans = append([]ui.Span{{Text: t + " · ", Color: k.fg, Weight: 500}}, spans...)
 		}
 		ui.RichText(c, spans...).Font(fontSans).FontSize(10).FixedLineHeight(14).SingleLine().Grow(1).Basis(0).
-			Tooltip(fmt.Sprintf(tr("%d 字符 · %d 词 · %d 行"), chars, len(strings.Fields(n.Text)), strings.Count(n.Text, "\n")+1))
+			Tooltip(fmt.Sprintf(tr("%d 字符 · %d 词 · %d 行"), chars, wordCount(n.Text), strings.Count(n.Text, "\n")+1))
 		pinTip := tr("固定窗口：发送后保持打开，新开的卡另开一扇窗")
 		if a.detail.pinned {
 			pinTip = tr("取消固定（发送后恢复自动关窗）")
@@ -406,6 +406,9 @@ func (a *app) detailTags(c *ui.Context, k tokens, s settingsTokens, n store.Note
 			})
 			return
 		}
+		if len(n.Tags) >= store.TagMaxCount { // 同 Tauri：到上限隐藏「＋ 标签」
+			return
+		}
 		add := ui.Row(c).Height(20).Padding(2, 6).Radius(10).AlignItems(ui.Center)
 		if add.Hovered() {
 			add.Background(k.track)
@@ -422,10 +425,10 @@ func (a *app) detailBody(c *ui.Context, k tokens, s settingsTokens, n store.Note
 	if a.detail.edit { // 编辑态一圈内嵌描边 + 浅蓝底（同 Tauri editing && bg-primary/[0.04] ring-inset ring-primary/25）
 		sc.Background(s.primary.Alpha(0.04)).InsetShadow(0, 0, 0, 1, s.primary.Alpha(0.25))
 	}
-	if files := sc.DroppedFiles(); len(files) > 0 { // 拖入图片文件：追加进当前卡（同 Tauri 详情窗拖入）
+	if files := sc.DroppedFiles(); len(files) > 0 && a.detail.virt == nil { // 拖入图片文件：追加进当前卡（同 Tauri 详情窗拖入；只读合并预览不收）
 		a.dropIntoDetail(n, files)
 	}
-	if sc.FileDragOver() {
+	if sc.FileDragOver() && a.detail.virt == nil {
 		sc.InsetShadow(0, 0, 0, 2, s.primary.Alpha(0.5))
 	}
 	sc.Children(func() {
@@ -755,7 +758,7 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 			a.addImagesToDetail(n, imgs, tr("剪贴板里没有可用图片"))
 		}
 		b := dockButton(c, k, "", tr("保存 ⌘⏎"), true)
-		if d.blocks == nil && strings.TrimSpace(a.detailText) == "" {
+		if a.detailDraftEmpty(n) {
 			b.Opacity(0.5).Tooltip(tr("笔记内容不能为空"))
 		}
 		if b.Clicked() {
@@ -858,8 +861,8 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 		if a.target.PID != 0 {
 			label = tr("发送到 ") + a.target.Name
 		}
-		if d.pick && a.pickedText(n.Text) != "" {
-			label = tr("发送所选")
+		if _, _, sel := a.detailSelection(n.Text); strings.TrimSpace(sel) != "" && n.Kind != "image" {
+			label = tr("发送整卡") // 同 Tauri：选中工具条的「发送选中」露面时，页脚改口「发送整卡」以示区别
 		}
 		left := ui.Row(c).Height(32).Padding(0, 12, 0, 20).Gap(6).Radius(16, 0, 0, 16).Background(fill).Border(1, border).AlignItems(ui.Center)
 		if dark {
@@ -947,18 +950,31 @@ func (a *app) sendDetail(n store.Note) {
 		a.showHUD("warn", tr("没有发送目标：从发送钮右侧下拉「发送到…」选一个应用"))
 		return
 	}
-	if p := a.pickedText(n.Text); a.detail.pick && p != "" {
-		a.send([]store.Note{{Text: p}}) // 只发所选片段，不改卡片状态
-	} else {
-		if a.detail.edit {
-			if !a.commitDetailEdit(n) {
-				return
-			}
-			n.Text = a.detailText
+	// 主发送钮 / ⌘⏎ 恒发整卡（同 Tauri send）；只发选中走选中工具条「发送选中」
+	if a.detail.edit {
+		if !a.commitDetailEdit(n) {
+			return
 		}
-		a.send([]store.Note{n})
+		n.Text = a.detailText
 	}
+	a.send([]store.Note{n})
 	if !a.detail.pinned { // 未固定的窗发送后关闭（同 Tauri：📌 固定才保持打开；片段发送同样）
+		a.closeDetailWin()
+	}
+}
+
+// sendDetailFragment 同 Tauri sendSelection：只发选中文字（图片附件不随行），仍以本卡为来源；
+// 没有目标时不发不关窗；未固定的窗发完关闭，与整卡发送一致。
+func (a *app) sendDetailFragment(n store.Note, frag string) {
+	if strings.TrimSpace(frag) == "" || a.detail.virt != nil {
+		return
+	}
+	if a.target.PID == 0 {
+		a.showHUD("warn", tr("没有发送目标：从发送钮右侧下拉「发送到…」选一个应用"))
+		return
+	}
+	a.send([]store.Note{{ID: n.ID, Section: n.Section, SourceApp: n.SourceApp, BundleID: n.BundleID, Text: frag}})
+	if !a.detail.pinned {
 		a.closeDetailWin()
 	}
 }
@@ -970,10 +986,34 @@ func (a *app) closeDetailWin() {
 	}
 }
 
+// wordCount 同 Tauri textStats：汉字 / 假名每字一词，ASCII 字母数字（含 _ ' -）连写为一词。
+func wordCount(s string) int {
+	n, in := 0, false
+	for _, r := range s {
+		switch {
+		case r >= 0x4e00 && r <= 0x9fff || r >= 0x3040 && r <= 0x30ff:
+			n, in = n+1, false
+		case r < 128 && (r >= '0' && r <= '9' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r == '_' || r == '\'' || r == '-'):
+			if !in {
+				n++
+			}
+			in = true
+		default:
+			in = false
+		}
+	}
+	return n
+}
+
+// detailDraftEmpty 同 Tauri draftEmpty && draftImages.length === 0：文字和图片都没了才算空；只留附件图的卡可以保存。
+func (a *app) detailDraftEmpty(n store.Note) bool {
+	return a.detail.blocks == nil && strings.TrimSpace(a.detailText) == "" && len(n.MediaFiles()) == 0
+}
+
 // commitDetailEdit 保存编辑并退出编辑态（⌘⏎ / ⌘S / Esc / 保存钮）。正文为空时 warn 且留在编辑态（同 Tauri save）；
 // 有改动时出可撤销的「已保存」（同 Tauri armNoteEditUndo）。
 func (a *app) commitDetailEdit(n store.Note) bool {
-	if a.detail.blocks == nil && strings.TrimSpace(a.detailText) == "" {
+	if a.detailDraftEmpty(n) {
 		a.showHUD("warn", tr("笔记内容不能为空"))
 		return false
 	}

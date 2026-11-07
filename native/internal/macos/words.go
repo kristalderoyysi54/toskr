@@ -12,7 +12,7 @@ import (
 type cfRange struct{ Loc, Len int }
 
 var (
-	wordsOnce              sync.Once
+	wordsOnce               sync.Once
 	cfStringTokenizerCreate func(alloc, s uintptr, r cfRange, options uint, locale uintptr) uintptr
 	cfStringTokenizerNext   func(tok uintptr) uint
 	cfStringTokenizerRange  func(tok uintptr) cfRange

@@ -58,7 +58,7 @@ var en = map[string]string{
 	"标记完成（⌘D）": "Mark done (⌘D)", "保留": "Keep", "已发送": "Sent", "复制": "Copy",
 	"发送（⌘↵）": "Send (⌘↵)", "发送到 ": "Send to ", "编辑": "Edit", "在详情窗打开": "Open in window",
 	"移动到": "Move to", "识别文字": "Recognize text", "钉到屏幕": "Pin to screen", "删除": "Delete",
-	"发送所选 %d 条": "Send %d selected", "合并所选 %d 条（⌘M）": "Merge %d selected (⌘M)",
+	"发送所选 %d 条": "Send %d selected", "发送整卡": "Send Card", "发送选中": "Send Selected", "合并所选 %d 条（⌘M）": "Merge %d selected (⌘M)",
 	"⌘↵ 保存   esc 取消": "⌘↵ save   esc cancel", "（图片缺失）": "(image missing)",
 	"写一条笔记，↵ 加入队列（⇧↵ 换行）":  "Write a note, ↵ to queue (⇧↵ newline)",
 	"⌘↵ 发送  ⌥⌘↵ 全部  ⌘M 合并": "⌘↵ send  ⌥⌘↵ all  ⌘M merge", "（未知应用）": "(unknown app)",

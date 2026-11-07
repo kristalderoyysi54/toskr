@@ -638,11 +638,24 @@ func (s *Store) ReplaceImage(id, file string, w, h int) (prevFile string, prevW,
 	return
 }
 
-// SetTags 覆盖笔记标签（去空白、去重、保序）。
+// 同 Tauri NOTE_TAG_MAX_COUNT / NOTE_TAG_MAX_LENGTH。
+const (
+	TagMaxCount  = 8
+	TagMaxLength = 24
+)
+
+// SetTags 覆盖笔记标签（同 Tauri sanitizeNoteTags：去前导空白与 #、去空、大小写不敏感去重保首个写法、
+// 单条按字截到 24、最多 8 个）。
 func (s *Store) SetTags(id string, tags []string) error {
 	var clean []string
+	seen := map[string]bool{}
 	for _, t := range tags {
-		if t = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(t), "#")); t != "" && !slices.Contains(clean, t) {
+		t = strings.TrimSpace(strings.TrimLeft(t, " \t\n#"))
+		if r := []rune(t); len(r) > TagMaxLength {
+			t = string(r[:TagMaxLength])
+		}
+		if k := strings.ToLower(t); t != "" && !seen[k] && len(clean) < TagMaxCount {
+			seen[k] = true
 			clean = append(clean, t)
 		}
 	}
