@@ -379,6 +379,11 @@ func (a *app) reload() {
 			a.notes = append(a.notes[:0], a.done...)
 		}
 	}
+	for _, id := range slices.Collect(a.chosen.All()) { // 卡片已被删掉（清理示例 / 外部删除）：勾选里不留残影
+		if _, ok := a.store.Note(id); !ok {
+			a.chosen.Remove(id)
+		}
+	}
 	a.noteIdx = make(map[string]int, len(a.notes))
 	for i, n := range a.notes {
 		a.noteIdx[n.ID] = i

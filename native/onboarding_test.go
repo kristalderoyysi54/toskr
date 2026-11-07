@@ -427,3 +427,16 @@ func TestRefreshTargetUsesLastExternalFront(t *testing.T) {
 		t.Fatalf("应识别为刚才的外部应用，得到 %d", a.target.PID)
 	}
 }
+
+// Codex 实机发现：合并课清理示例后底部仍显示「已选 2」——删掉的卡要从勾选里移除。
+func TestDeletedNotesLeaveSelection(t *testing.T) {
+	a, _ := testApp(t, "甲", "乙")
+	for _, n := range a.store.Notes() {
+		a.chosen.Add(n.ID)
+	}
+	a.store.Delete(a.store.Notes()[0].ID)
+	a.reload()
+	if a.chosen.Len() != 1 {
+		t.Fatalf("勾选应只剩 1 张，得到 %d", a.chosen.Len())
+	}
+}
