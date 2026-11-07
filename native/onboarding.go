@@ -10,6 +10,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/toskr/native/internal/core"
+	"github.com/toskr/native/internal/diag"
 	"github.com/toskr/native/internal/macos"
 	"github.com/toskr/native/internal/store"
 )
@@ -498,6 +499,7 @@ func (a *app) sendLessonSamples() {
 		}
 	}
 	a.refreshTargetFromFront() // 课程让用户先点文档再回来发送：目标取最近外部前台应用，而不是唤出面板时的旧目标
+	diag.Push("课程发送 target=%s", a.target.BundleID)
 	a.send(notes)
 }
 

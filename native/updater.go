@@ -159,11 +159,13 @@ func (a *app) installUpdate() {
 		a.onMain(func() {
 			a.upd.installing = false
 			if err != nil {
+				diag.Push("更新: 安装失败 %v", err)
 				a.updateMsg = tr("安装失败：") + err.Error()
 				a.showHUD("warn", a.updateMsg)
 				a.redrawSettings()
 				return
 			}
+			diag.Push("更新: v%s 已就绪，重启", up.Version)
 			relaunch()
 		})
 	}()

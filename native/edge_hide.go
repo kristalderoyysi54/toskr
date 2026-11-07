@@ -305,6 +305,7 @@ func (a *app) startEdgeSupervisor() {
 func (a *app) observeFront() {
 	if f, ok := a.sys.Frontmost(); ok && f.PID != 0 && f.PID != a.sys.SelfPID() && f.PID != a.lastFront.PID {
 		a.lastFront = f
+		diag.Push("外部前台 → %s pid=%d", f.BundleID, f.PID)
 	}
 }
 
