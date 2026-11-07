@@ -440,3 +440,20 @@ func TestDeletedNotesLeaveSelection(t *testing.T) {
 		t.Fatalf("勾选应只剩 1 张，得到 %d", a.chosen.Len())
 	}
 }
+
+// Codex 实机发现：脱敏课「先点文档再发送」却发往唤出面板时的旧目标——发送前按最近外部前台应用重新识别。
+func TestLessonSendUsesLastExternalFront(t *testing.T) {
+	a, _ := testApp(t)
+	sys := &recSys{}
+	a.sys = sys
+	a.target = macos.FrontApp{PID: 7, Name: "ChatGPT"}
+	a.lesson = &lessonSession{progress: startLesson(lessonPrivacy)}
+	sys.front = 42
+	a.observeFront()
+	sys.front = sys.SelfPID()
+	a.observeFront()
+	a.sendLessonSamples()
+	if a.target.PID != 42 {
+		t.Fatalf("应发往刚才点过的应用，得到 %d", a.target.PID)
+	}
+}

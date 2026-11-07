@@ -497,6 +497,7 @@ func (a *app) sendLessonSamples() {
 			notes = append(notes, n)
 		}
 	}
+	a.refreshTargetFromFront() // 课程让用户先点文档再回来发送：目标取最近外部前台应用，而不是唤出面板时的旧目标
 	a.send(notes)
 }
 
