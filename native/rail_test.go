@@ -23,6 +23,7 @@ func TestNoteGroupRail(t *testing.T) {
 	if err := tt.Click("选择笔记分组，当前：全部"); err != nil {
 		t.Fatalf("侧栏开关不可点：%v", err)
 	}
+	tt.Advance(time.Second) // 侧栏宽度 0 → 64 过渡（同 Tauri duration-slow）走完再点
 	tt.Frame()
 	if !a.noteRailOpen || !tt.HasText("全部") || !tt.HasText("新建") {
 		t.Fatalf("侧栏 %v", tt.Texts())
@@ -36,6 +37,8 @@ func TestNoteGroupRail(t *testing.T) {
 		t.Fatalf("过滤后 filter=%q open=%v %v", a.noteFilter, a.noteRailOpen, tt.Texts())
 	}
 	a.noteRailOpen = true
+	tt.Frame()
+	tt.Advance(time.Second)
 	tt.Frame()
 	_ = tt.RightClick("提示词")
 	if err := tt.ChooseMenuItem("重命名"); err != nil {

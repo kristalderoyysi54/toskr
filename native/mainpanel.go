@@ -273,9 +273,18 @@ func (a *app) groups() []noteGroup {
 
 func (a *app) notesPage(c *ui.Context, k tokens) {
 	ui.Row(c).Grow(1).AlignItems(ui.Stretch).Children(func() { // Row 默认垂直居中：不拉伸的话列表短于视口时会整块浮到中间
+		// 同 Tauri NoteGroupRail：宽度 0 ↔ 64 过渡（transition-[width] duration-slow ease-standard），列表随之让位；收起到 0 后不再画
+		w := float32(0)
 		if a.noteRailOpen {
-			a.noteRail(c, k)
+			w = railW
 		}
+		box := ui.Box(c).Shrink(0).FillHeight().Clip().Key("note-rail-slot")
+		cur := box.AnimateTo("w", w, tweenSlow)
+		box.Width(cur).Children(func() {
+			if a.noteRailOpen || cur > 0.5 { // 打开当帧就画（裁在过渡宽度里），收起到 0 后不再画
+				ui.Box(c).Width(railW).FillHeight().Children(func() { a.noteRail(c, k) })
+			}
+		})
 		a.notesList(c, k)
 	})
 }

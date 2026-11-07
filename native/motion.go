@@ -30,6 +30,7 @@ var (
 	tweenControl = tw(100, easeTw)       // duration-(--duration-control) 的颜色 / 透明度
 	tweenTw      = tw(150, easeTw)       // Tailwind 默认 transition
 	tweenKnob    = tw(180, easePop)      // 开关滑块
+	tweenSlow    = tw(280, easeStandard) // --duration-slow 280ms（笔记分组侧栏展开收起）
 )
 
 func tw(ms int, e ui.Easing) ui.Animation {

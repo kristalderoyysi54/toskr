@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo"
@@ -99,6 +100,25 @@ func (a *app) pickPane(id string) (p *detailPane, same bool) {
 	return p, false
 }
 
+// detailFrame 同 Tauri window.rs 详情窗定位：首次按面板所在屏工作区定尺寸（半屏宽 480–640、七成高 400–680），
+// 之后沿用用户拖过的尺寸；居中在面板所在屏。
+func (a *app) detailFrame() (w, h, x, y int) {
+	wa := mygo.Rectangle{Width: 1440, Height: 900}
+	if a.panel != nil {
+		b := a.panel.Bounds()
+		if d, ok := displayAt(mygo.Screen.Displays(), b.X+b.Width/2, b.Y+b.Height/2); ok {
+			wa = d.WorkArea
+		}
+	}
+	if a.detailSize[0] > 0 {
+		w, h = a.detailSize[0], a.detailSize[1]
+	} else {
+		w = min(max(wa.Width/2, 480), 640, wa.Width-24)
+		h = min(max(wa.Height*7/10, 400), 680, wa.Height-24)
+	}
+	return w, h, wa.X + (wa.Width-w)/2, wa.Y + (wa.Height-h)/2
+}
+
 func (a *app) openDetail(n store.Note) {
 	p, same := a.pickPane(n.ID)
 	a.usePane(p)
@@ -114,10 +134,13 @@ func (a *app) openDetail(n store.Note) {
 		a.detailImageAt(n, 0)
 	}
 	if a.detailWin != nil {
+		a.detailSize[0], a.detailSize[1] = a.detailWin.Size()
 		a.detailWin.Destroy() // 每次重建：位图随窗口释放
 	}
+	w, h, x, y := a.detailFrame()
 	opts := mygo.WindowOptions{
-		Title: preview(n.Text, 24), Width: 560, Height: 540, MinWidth: 380, Hidden: true,
+		Title: preview(n.Text, 24), Width: w, Height: h, X: x, Y: y, MinWidth: 380, MinHeight: 300, Hidden: true,
+		AlwaysOnTop:   true, // 同 Tauri window.rs always_on_top：面板置顶时详情窗不能被它压住（曾 Space 打开了却在面板后面看不见）
 		TitleBarStyle: mygo.TitleBarHidden, TrafficLightPosition: &mygo.Point{X: 12, Y: 13},
 		Vibrancy: vibrancyFor(a.store.Settings().Glass), Transparent: true,
 		Content: ui.View(func(c *ui.Context) { a.usePane(p); a.detailView(c) }),
@@ -131,6 +154,7 @@ func (a *app) openDetail(n store.Note) {
 		}
 	}
 	win := mygo.NewWindow(opts)
+	win.SetVisibleOnAllWorkspaces(true) // 同 Tauri visible_on_all_workspaces：全屏 Space 上也能看
 	a.detailWin = win
 	win.OnFocus(func() { a.usePane(p) }) // 双击剪贴卡追加等外部操作落到最近获得焦点的窗
 	win.OnClose(func(*mygo.CloseEvent) {
@@ -138,6 +162,7 @@ func (a *app) openDetail(n store.Note) {
 			return // 已被换成新窗（Destroy 旧窗）
 		}
 		a.usePane(p)
+		a.detailSize[0], a.detailSize[1] = win.Size() // 记住用户拖过的尺寸，下次打开沿用（同 Tauri TEXT_PREVIEW_SIZED）
 		a.saveDetail()
 		a.discardBlankDraft()
 		a.detailWin, a.detail.id = nil, ""
@@ -331,6 +356,14 @@ func (a *app) detailKeys(c *ui.Context, n store.Note) {
 func (a *app) detailHeader(c *ui.Context, k tokens, n store.Note) {
 	ui.Row(c).Height(38).Padding(8, 12).Gap(8).AlignItems(ui.Center).DragWindow().Children(func() {
 		ui.Box(c).Width(52) // 系统红绿灯占位
+		if a.detail.edit {  // 同 Tauri 编辑态指示：一枚呼吸主色点 + 小字「编辑中」
+			p := stok(c).primary
+			ui.Row(c).Gap(6).AlignItems(ui.Center).Shrink(0).Children(func() {
+				dot := ui.Box(c).Size(6, 6).Radius(3).Background(p).Shadow(0, 0, 8, 1, p)
+				dot.Opacity(1 - 0.5*dot.Loop("edit-pulse", 2*time.Second, ui.Bounce(easePulse))) // animate-pulse
+				text(c, tr("编辑中"), 10, 14, 500, p)
+			})
+		}
 		parts := []string{}
 		if a.detail.virt != nil {
 			parts = append(parts, a.detail.subtitle)

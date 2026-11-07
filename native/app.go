@@ -86,6 +86,7 @@ type app struct {
 	// 笔记分组侧栏：过滤（"" = 全部）、展开、就地改名
 	noteFilter, renamingSec, renameText string
 	noteRailOpen                        bool
+	detailSize                          [2]int // 详情窗上次的尺寸（用户拖过即沿用；0 = 首次按屏幕定）
 	newSec                              string
 	target                              macos.FrontApp    // 发送目标：面板唤出前的前台应用
 	targetStarted                       int64             // 目标进程启动时刻（身份锁定）
