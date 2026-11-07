@@ -365,3 +365,34 @@ func TestTauriOnboardingImport(t *testing.T) {
 		t.Fatalf("%+v", got.Onboarding)
 	}
 }
+
+// 两版同时开着时同一次复制各收一条：导入后去掉本机那条（以 Tauri 为准），其余本机剪贴与分组笔记不动。
+func TestImportTauriDropsClipDuplicates(t *testing.T) {
+	notes := []any{map[string]any{"id": "t1", "text": "同一次复制", "sectionId": "clipboard", "createdAt": 1790000000000}}
+	inner, _ := json.Marshal(map[string]any{"state": map[string]any{"notes": notes}, "version": 27})
+	raw, _ := json.Marshal(map[string]string{"toskr": string(inner)})
+	tdir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(tdir, "toskr-data.json"), raw, 0o600)
+	s, err := OpenDir(t.TempDir(), bytes.Repeat([]byte{1}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dup, _, _ := s.Add(Note{Section: SectionClipboard, Text: "同一次复制"})
+	own, _, _ := s.Add(Note{Section: SectionClipboard, Text: "本机独有"})
+	inbox, _, _ := s.Add(Note{Section: SectionInbox, Text: "同一次复制"})
+	rep, err := s.ImportTauri(tdir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.ClipDupRemoved != 1 {
+		t.Fatalf("应去掉 1 条重复，得 %d", rep.ClipDupRemoved)
+	}
+	if _, ok := s.Note(dup.ID); ok {
+		t.Fatal("本机重复的剪贴应去掉")
+	}
+	for _, id := range []string{"t1", own.ID, inbox.ID} {
+		if _, ok := s.Note(id); !ok {
+			t.Fatalf("%s 不应被删", id)
+		}
+	}
+}

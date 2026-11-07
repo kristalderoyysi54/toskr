@@ -26,7 +26,28 @@ func (a *app) detailSelection(src string) (int, int, string) {
 		}
 		return lo, hi, string(r[lo:hi])
 	}
-	if d.pick || len(d.readSel) == 0 {
+	if d.pick { // 同 Tauri：选词区间驱动 textSelection，选中工具条照常出现
+		if d.pickAnchor < 0 {
+			return 0, 0, ""
+		}
+		segs := a.segments(src)
+		lo, hi, at := -1, -1, 0
+		for i, seg := range segs {
+			n := utf8.RuneCountInString(seg.text)
+			if i == min(d.pickAnchor, d.pickEnd) {
+				lo = at
+			}
+			if i == max(d.pickAnchor, d.pickEnd) {
+				hi = at + n
+			}
+			at += n
+		}
+		if lo < 0 || hi <= lo {
+			return 0, 0, ""
+		}
+		return lo, hi, string([]rune(src)[lo:hi])
+	}
+	if len(d.readSel) == 0 {
 		return 0, 0, ""
 	}
 	m := mapReadSelection(src, d.readSel)
@@ -44,6 +65,9 @@ func (a *app) replaceDetailRange(n store.Note, lo, hi int, out string) {
 		a.detailText = string(r[:lo]) + out + string(r[hi:])
 		a.detail.editSel = [2]int{lo, lo + utf8.RuneCountInString(out)}
 		return
+	}
+	if a.detail.pick { // 同 Tauri applySelectionTextOp：选词处理后退出选词模式
+		a.detail.pick, a.detail.pickAnchor, a.detail.pickEnd = false, -1, -1
 	}
 	r := []rune(n.Text)
 	next := string(r[:lo]) + out + string(r[hi:])

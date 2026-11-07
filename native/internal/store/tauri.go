@@ -217,6 +217,7 @@ type tauriSettings struct {
 // TauriReport 是导入结果。
 type TauriReport struct {
 	Notes, Sections, Tasks, Bills, Secrets, Media, MediaMissing, SeedRemoved, Deliveries, Messages int
+	ClipDupRemoved                                                                                 int // 本机独有、与导入剪贴板同内容的重复条（两版同时开着各收一条）
 	Recovery                                                                                       string
 	Check                                                                                          TauriCheck
 }
@@ -520,6 +521,7 @@ func (s *Store) ImportTauri(dir string, key []byte) (TauriReport, error) {
 		s.notes = slices.DeleteFunc(s.notes, func(n Note) bool { return n.SourceApp == "Seed" })
 		rep.SeedRemoved = before - len(s.notes)
 		rep.Notes = upsert(&s.notes, notes, func(n Note) string { return n.ID })
+		rep.ClipDupRemoved = dropClipDuplicates(&s.notes, notes)
 		rep.Sections = upsertSections(&s.sections, sections)
 		upsertSections(&s.taskSections, taskSecs)
 		rep.Tasks = upsert(&s.tasks, tasks, func(t Task) string { return t.ID })
@@ -547,6 +549,27 @@ func (s *Store) ImportTauri(dir string, key []byte) (TauriReport, error) {
 	rep.MediaMissing = m.missing
 	s.checkTauri(&rep.Check, notes)
 	return rep, s.Flush()
+}
+
+// dropClipDuplicates：两版同时开着时同一次复制会被各收一条（ID 不同），导入后剪贴板成对重复。
+// 按 Add 的去重口径（同分组 + 同正文 + 同图片 / 附件）去掉本机独有的那条，以 Tauri 的为准；只动剪贴板。
+func dropClipDuplicates(all *[]Note, imported []Note) int {
+	key := func(n Note) string {
+		return n.Text + "\x00" + n.ImageFile + "\x00" + strings.Join(n.Attachments, "\x00")
+	}
+	ids := make(map[string]bool, len(imported))
+	have := map[string]bool{}
+	for _, n := range imported {
+		ids[n.ID] = true
+		if n.Section == SectionClipboard {
+			have[key(n)] = true
+		}
+	}
+	before := len(*all)
+	*all = slices.DeleteFunc(*all, func(n Note) bool {
+		return n.Section == SectionClipboard && !ids[n.ID] && have[key(n)]
+	})
+	return before - len(*all)
 }
 
 // checkTauri 回读本机数据，与本次导入的 Tauri 记录逐条比对。

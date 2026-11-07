@@ -62,9 +62,13 @@ func (a *app) importTauri(done func(string, error)) {
 			rep, err = a.store.ImportTauri(dir, key)
 			clear(key)
 			if err == nil {
+				recovery := rep.Recovery
+				if recovery == "" { // WriteRecoveryPoint：数据与最近一份恢复点相同则不重复写
+					recovery = "未变化（沿用最近一份）"
+				}
 				diag.Push("Tauri 导入 %s：笔记 %d 分组 %d 任务 %d 账单 %d 秘文 %d 消息 %d 图片 %d（缺 %d）清除合成 %d 恢复点 %s",
-					dir, rep.Notes, rep.Sections, rep.Tasks, rep.Bills, rep.Secrets, rep.Messages, rep.Media, rep.MediaMissing, rep.SeedRemoved, rep.Recovery)
-				diag.Push("Tauri 导入%s", rep.Check.Summary())
+					dir, rep.Notes, rep.Sections, rep.Tasks, rep.Bills, rep.Secrets, rep.Messages, rep.Media, rep.MediaMissing, rep.SeedRemoved, recovery)
+				diag.Push("Tauri 导入%s · 剪贴板去重 %d", rep.Check.Summary(), rep.ClipDupRemoved)
 				for _, m := range rep.Check.Mismatch[:min(len(rep.Check.Mismatch), 20)] {
 					diag.Push("  不一致 %s", m)
 				}

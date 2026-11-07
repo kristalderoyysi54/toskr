@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo"
@@ -42,6 +41,9 @@ type detailState struct {
 	imgW, imgH          int                  // 当前图原始尺寸
 	imgNote             bool                 // 图片文字备注编辑中
 	pickPara            bool                 // 选词粒度：段（同 Tauri pickGranularity）
+	segSrc              string               // 选词分块缓存（系统分词每帧跑太贵）：原文 + 粒度
+	segPara             bool
+	segs                []pickSeg
 	blocks              []store.ContentBlock // 图文混排卡编辑态的内容块草稿（nil = 按纯文本编辑）
 	blank               bool                 // 本次是新建的「新笔记」占位卡：关窗时一字未改就删掉（同 Tauri note-discard-blank）
 	editPreview         bool                 // 编辑态「渲染」预览草稿（同 Tauri editPreviewOn）
@@ -227,7 +229,7 @@ func (a *app) detailView(c *ui.Context) {
 	c.Root().Background(bg)
 	a.detailKeys(c, n)
 	ui.Box(c).Fill().Children(func() {
-		ui.Box(c).Absolute().Top(0).Left(0).Right(0).Height(102.4).
+		ui.Box(c).Absolute().Top(0).Left(0).Right(0).Height(102.4).PassThrough(). // 纯装饰：不挡正文首行的点击 / 划选（选词首行键帽曾点不动）
 			LinearGradient(ui.LinearGradient{From: srgbf(0.486274, 0.517647, 0.580392).Alpha(0.26), To: ui.Transparent, Angle: 180})
 		a.detailBody(c, k, s, n)
 		ui.Column(c).Absolute().Top(0).Left(0).Right(0).Children(func() {
@@ -573,8 +575,8 @@ type pickSeg struct {
 	word bool
 }
 
-// pickSegments：ASCII 字母数字连写为一词，汉字逐字，空白与标点为分隔（Tauri 用 Intl.Segmenter，Go 无同等分词器）。
-// paraSegments：按段选取——非空行各成一段，换行为分隔。
+// pickSegments：系统分词（macos.WordRanges，同 Tauri Intl.Segmenter("zh-Hans") 词粒度）；词之间的空白、标点为不可点的分隔，
+// 换行单独成段。paraSegments：按段选取——非空行各成一段，换行为分隔。
 func paraSegments(s string) []pickSeg {
 	var out []pickSeg
 	for i, line := range strings.Split(s, "\n") {
@@ -589,34 +591,38 @@ func paraSegments(s string) []pickSeg {
 }
 
 func (a *app) segments(s string) []pickSeg {
-	if a.detail.pickPara {
-		return paraSegments(s)
+	d := &a.detail
+	if d.segs != nil && d.segSrc == s && d.segPara == d.pickPara {
+		return d.segs
 	}
-	return pickSegments(s)
+	if d.pickPara {
+		d.segs = paraSegments(s)
+	} else {
+		d.segs = pickSegments(s)
+	}
+	d.segSrc, d.segPara = s, d.pickPara
+	return d.segs
 }
 
 func pickSegments(s string) []pickSeg {
 	var out []pickSeg
-	var cur []rune
-	flush := func() {
-		if len(cur) > 0 {
-			out = append(out, pickSeg{string(cur), true})
-			cur = cur[:0]
+	gap := func(t string) { // 分隔：换行单独成段（排版换行用），其余原样保留（同 Tauri 词粒度保留原文标点）
+		for i, part := range strings.Split(t, "\n") {
+			if i > 0 {
+				out = append(out, pickSeg{"\n", false})
+			}
+			if part != "" {
+				out = append(out, pickSeg{part, false})
+			}
 		}
 	}
-	for _, r := range s {
-		switch {
-		case r < 128 && (unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-' || r == '.'):
-			cur = append(cur, r)
-		case unicode.Is(unicode.Han, r):
-			flush()
-			out = append(out, pickSeg{string(r), true})
-		default:
-			flush()
-			out = append(out, pickSeg{string(r), false})
-		}
+	at := 0
+	for _, r := range macos.WordRanges(s) {
+		gap(s[at:r[0]])
+		out = append(out, pickSeg{s[r[0]:r[1]], true})
+		at = r[1]
 	}
-	flush()
+	gap(s[at:])
 	return out
 }
 
@@ -637,40 +643,80 @@ func (a *app) pickedText(src string) string {
 func (a *app) pickView(c *ui.Context, k tokens, s settingsTokens, src string) {
 	d := &a.detail
 	lo, hi := min(d.pickAnchor, d.pickEnd), max(d.pickAnchor, d.pickEnd)
-	ui.Row(c).Margin(5.85, 0, 0, 0).Gap(3).Wrap().Children(func() {
-		for i, seg := range a.segments(src) {
-			if !seg.word {
-				if seg.text == "\n" {
-					ui.Box(c).FillWidth().Height(0)
-				}
-				continue
-			}
-			on := d.pickAnchor >= 0 && i >= lo && i <= hi
-			b := ui.Box(c).Height(24).Padding(2, 6).Radius(6).Border(1, s.inputBorder).Key("pk" + itoa(i))
-			col := k.fg
-			if on {
-				b.Background(s.primary).Border(1, s.primary)
-				col = gray(0.985, 1)
-			} else if b.Hovered() {
-				b.Background(k.track)
-			}
-			b.Children(func() { text(c, seg.text, 13, 18, 400, col) })
-			if b.Clicked() {
-				switch {
-				case d.pickAnchor < 0 || d.pickAnchor != d.pickEnd:
-					d.pickAnchor, d.pickEnd = i, i
-				default:
-					d.pickEnd = i
-				}
-			}
+	hint := tr("点词块选中 · 再点另一块扩展范围 · 选好后底部工具条可发送或复制")
+	label := tr("选词模式：点选词语，可再点另一词扩展范围")
+	if d.pickPara {
+		hint = tr("点段落选中 · 再点另一段扩展范围 · 选好后底部工具条可发送或复制")
+		label = tr("选段模式：点选段落，可再点另一段扩展范围")
+	}
+	ui.Column(c).Margin(5.85, 0, 0, 0).Label(label).Children(func() {
+		if d.pickAnchor < 0 { // 同 Tauri：只在还没选之前出现——选词模式最难懂的是「选完去哪操作」
+			text(c, hint, 10, 14, 400, k.muted).Margin(0, 0, 8, 0).Wrap()
 		}
+		ui.Row(c).Wrap().AlignItems(ui.Center).Children(func() {
+			for i, seg := range a.segments(src) {
+				on := d.pickAnchor >= 0 && i >= lo && i <= hi
+				if !seg.word {
+					switch {
+					case seg.text == "\n":
+						ui.Box(c).FillWidth().Height(0)
+					case !d.pickPara: // 词粒度保留原文标点 / 空白（同 Tauri text-muted-foreground，区间内转主色）
+						col := k.muted
+						if on {
+							col = s.primary
+						}
+						text(c, seg.text, 13, 29, 400, col).Font(fontMono)
+					}
+					continue
+				}
+				// 键帽（同 Tauri 模板 B：浅底 + 细边 + 底边厚度，选中下沉转主色）
+				b := ui.Box(c).Radius(7).Border(1, s.inputBorder.Alpha(0.5)).Background(k.track).Key("pk" + itoa(i))
+				if d.pickPara {
+					b.FillWidth().Padding(6, 10).Margin(4, 0, 4, 0)
+				} else {
+					b.Padding(1, 7).Margin(2, 3, 2, 3)
+				}
+				col := k.fg
+				if on {
+					b.Background(s.primary).Border(1, s.primary.Alpha(0.6)).Shadow(0, 1, 0, 0, gray(0, 0.45)).Translate(0, 1.5)
+					col = gray(0.985, 1)
+				} else {
+					b.Shadow(0, 2.5, 0, 0, gray(0, 0.35))
+					if b.Hovered() {
+						b.Opacity(0.9)
+					}
+				}
+				b.Children(func() {
+					t := text(c, seg.text, 13, 21, 400, col).Font(fontMono)
+					if d.pickPara {
+						t.Wrap()
+					}
+				})
+				if b.Clicked() {
+					d.pickAnchor, d.pickEnd = pickClick(d.pickAnchor, d.pickEnd, i)
+				}
+			}
+		})
 	})
+}
+
+// pickClick 同 Tauri onPickToken：未选 → 选这一块；再点唯一选中的那块 → 取消；否则锚点不动、终点移到这一块。
+func pickClick(anchor, end, i int) (int, int) {
+	switch {
+	case anchor < 0:
+		return i, i
+	case anchor == i && end == i:
+		return -1, -1
+	default:
+		return anchor, i
+	}
 }
 
 // ---- 操作坞 ----
 
 func dockButton(c *ui.Context, k tokens, icon, label string, active bool) ui.Element {
-	b := ui.Row(c).Height(29).Padding(6, 12).Gap(4).Radius(10).AlignItems(ui.Center).Key("dock-" + label)
+	// 不收缩、不折行（同 Tauri whitespace-nowrap）：坞放不下时只截断发送钮里的目标名（选词模式多了词/段切换，曾把「选词」挤成竖排）
+	b := ui.Row(c).Height(29).Padding(6, 12).Gap(4).Radius(10).AlignItems(ui.Center).Shrink(0).Key("dock-" + label)
 	col := k.muted
 	if active {
 		b.Background(k.track)
@@ -683,7 +729,7 @@ func dockButton(c *ui.Context, k tokens, icon, label string, active bool) ui.Ele
 		if icon != "" {
 			licon(c, icon, 12, col)
 		}
-		text(c, label, 12, 17, 400, col)
+		text(c, label, 12, 17, 400, col).SingleLine()
 	})
 	return b
 }
@@ -742,9 +788,11 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 			if d.pickPara {
 				g = "para"
 			}
-			if v, ok := miniSegmented(c, k, g, [][2]string{{"word", "词"}, {"para", "段"}}); ok {
-				d.pickPara, d.pickAnchor, d.pickEnd = v == "para", -1, -1
-			}
+			ui.Row(c).Shrink(0).AlignItems(ui.Center).Children(func() {
+				if v, ok := miniSegmented(c, k, g, [][2]string{{"word", "词"}, {"para", "段"}}); ok {
+					d.pickPara, d.pickAnchor, d.pickEnd = v == "para", -1, -1
+				}
+			})
 		}
 		rawLabel := tr("原文")
 		if d.raw {
