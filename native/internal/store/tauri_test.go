@@ -396,3 +396,32 @@ func TestImportTauriDropsClipDuplicates(t *testing.T) {
 		}
 	}
 }
+
+// 实机发现：本机那条剪贴置顶了、Tauri 那条没有，去重把置顶的删了。带用户操作的本机条目优先保留，核对不报缺失。
+func TestImportTauriClipDupKeepsTouchedLocal(t *testing.T) {
+	notes := []any{map[string]any{"id": "t1", "text": "置顶过的复制", "sectionId": "clipboard", "createdAt": 1790000000000}}
+	inner, _ := json.Marshal(map[string]any{"state": map[string]any{"notes": notes}, "version": 27})
+	raw, _ := json.Marshal(map[string]string{"toskr": string(inner)})
+	tdir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(tdir, "toskr-data.json"), raw, 0o600)
+	s, err := OpenDir(t.TempDir(), bytes.Repeat([]byte{1}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, _, _ := s.Add(Note{Section: SectionClipboard, Text: "置顶过的复制", Kept: true})
+	for range 2 { // 重复导入结果不变
+		rep, err := s.ImportTauri(tdir, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, ok := s.Note(local.ID); !ok || !got.Kept {
+			t.Fatal("置顶的本机剪贴应保留")
+		}
+		if _, ok := s.Note("t1"); ok {
+			t.Fatal("同内容的导入条应让位")
+		}
+		if len(rep.Check.Mismatch) != 0 {
+			t.Fatalf("让位的导入条不应报不一致：%v", rep.Check.Mismatch)
+		}
+	}
+}

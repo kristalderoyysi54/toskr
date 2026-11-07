@@ -513,6 +513,7 @@ func (s *Store) ImportTauri(dir string, key []byte) (TauriReport, error) {
 	notes, secrets, sections, taskSecs, tasks, bills := cv.notes, cv.secrets, cv.sections, cv.taskSecs, cv.tasks, cv.bills
 	rep.Check.Skipped = cv.skipped
 
+	var dropped map[string]bool // 去重时让位给本机带操作那条的导入记录：不参与回读核对
 	acts := readTauriActivity(dir, st.Settings.TargetProfiles)
 	outs := readTauriOutcomes(dir)
 	err = s.mutate(func() bool {
@@ -521,7 +522,7 @@ func (s *Store) ImportTauri(dir string, key []byte) (TauriReport, error) {
 		s.notes = slices.DeleteFunc(s.notes, func(n Note) bool { return n.SourceApp == "Seed" })
 		rep.SeedRemoved = before - len(s.notes)
 		rep.Notes = upsert(&s.notes, notes, func(n Note) string { return n.ID })
-		rep.ClipDupRemoved = dropClipDuplicates(&s.notes, notes)
+		rep.ClipDupRemoved, dropped = dropClipDuplicates(&s.notes, notes)
 		rep.Sections = upsertSections(&s.sections, sections)
 		upsertSections(&s.taskSections, taskSecs)
 		rep.Tasks = upsert(&s.tasks, tasks, func(t Task) string { return t.ID })
@@ -547,29 +548,42 @@ func (s *Store) ImportTauri(dir string, key []byte) (TauriReport, error) {
 	s.ensureDefaults()
 	rep.Media = len(m.mapped) - m.missing
 	rep.MediaMissing = m.missing
-	s.checkTauri(&rep.Check, notes)
+	s.checkTauri(&rep.Check, slices.DeleteFunc(slices.Clone(notes), func(n Note) bool { return dropped[n.ID] }))
 	return rep, s.Flush()
 }
 
 // dropClipDuplicates：两版同时开着时同一次复制会被各收一条（ID 不同），导入后剪贴板成对重复。
-// 按 Add 的去重口径（同分组 + 同正文 + 同图片 / 附件）去掉本机独有的那条，以 Tauri 的为准；只动剪贴板。
-func dropClipDuplicates(all *[]Note, imported []Note) int {
+// 按 Add 的去重口径（同分组 + 同正文 + 同图片 / 附件）每组只留一条，只动剪贴板：
+// 默认留 Tauri 的；本机那条带了用户操作（置顶 / 完成 / 模糊 / 标题 / 标签）而 Tauri 那条没有时留本机的，
+// 否则置顶等会随去重丢失（实机发现：置顶的剪贴被去掉）。重复导入结果不变。
+func dropClipDuplicates(all *[]Note, imported []Note) (int, map[string]bool) {
 	key := func(n Note) string {
 		return n.Text + "\x00" + n.ImageFile + "\x00" + strings.Join(n.Attachments, "\x00")
 	}
+	touched := func(n Note) bool { return n.Kept || n.Done || n.Blur || n.Title != "" || len(n.Tags) > 0 }
 	ids := make(map[string]bool, len(imported))
-	have := map[string]bool{}
+	tauri := map[string]Note{} // 内容 → 导入的那条
 	for _, n := range imported {
 		ids[n.ID] = true
 		if n.Section == SectionClipboard {
-			have[key(n)] = true
+			tauri[key(n)] = n
+		}
+	}
+	drop := map[string]bool{}
+	for _, n := range *all {
+		t, ok := tauri[key(n)]
+		if n.Section != SectionClipboard || ids[n.ID] || !ok {
+			continue
+		}
+		if touched(n) && !touched(t) {
+			drop[t.ID] = true // 留本机带操作的那条
+		} else {
+			drop[n.ID] = true
 		}
 	}
 	before := len(*all)
-	*all = slices.DeleteFunc(*all, func(n Note) bool {
-		return n.Section == SectionClipboard && !ids[n.ID] && have[key(n)]
-	})
-	return before - len(*all)
+	*all = slices.DeleteFunc(*all, func(n Note) bool { return drop[n.ID] })
+	return before - len(*all), drop
 }
 
 // checkTauri 回读本机数据，与本次导入的 Tauri 记录逐条比对。
