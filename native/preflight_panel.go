@@ -45,6 +45,9 @@ func pfID(note int, f core.Finding) string {
 func (a *app) pfScan() {
 	p := &a.pf
 	rules := a.scanRules()
+	if a.pfRehearsal { // 演练：隐私检查强制开启、全部类别（同 Tauri secureRehearsalDraft）
+		rules = core.Rules{CustomFields: rules.CustomFields}
+	}
 	var items []pfItem
 	for i, n := range a.pending {
 		if n.Kind == "image" {
@@ -145,6 +148,15 @@ func (a *app) pfEvaluate(policy string) pfEval {
 	return e
 }
 
+// pfPolicy：本次预检的隐私策略（演练固定 requireRedaction）。
+func (a *app) pfPolicy() string {
+	if a.pfRehearsal {
+		return "requireRedaction"
+	}
+	r, _ := a.resolution()
+	return r.Profile.PrivacyPolicy
+}
+
 func (a *app) clearPending() {
 	a.pending, a.pendingTmpl, a.pf = nil, "", preflightState{}
 }
@@ -152,6 +164,7 @@ func (a *app) clearPending() {
 // cancelPending：用户取消预检，本次的输出格式覆盖一并作废。
 func (a *app) cancelPending() {
 	a.clearPending()
+	a.pfRehearsal = false
 	a.sendMode, a.draftTarget = "", draftTarget{}
 }
 
@@ -189,6 +202,10 @@ func (a *app) pfSend(e pfEval) {
 		}
 	}
 	a.clearPending()
+	if a.pfRehearsal {
+		a.deliver(notes, false, tmpl) // 演练：不回车、不问回车
+		return
+	}
 	if r, _ := a.resolution(); r.Profile.EnterPolicy == "confirm" && !e.noEnter {
 		a.deliver(notes, true, tmpl) // 同 Tauri：confirm 方案并入预检，点「发送」即确认回车，不再二次询问
 		return
@@ -202,8 +219,7 @@ func (a *app) pfSubmit() {
 		a.pfScan()
 		a.pfScanImages()
 	}
-	r, _ := a.resolution()
-	e, ie := a.pfCombined(r.Profile.PrivacyPolicy)
+	e, ie := a.pfCombined(a.pfPolicy())
 	if e.canSend && ie.canSend {
 		a.pfSend(pfEval{canSend: true, noEnter: e.noEnter || ie.noEnter})
 		return
@@ -231,7 +247,7 @@ func (a *app) preflightBar(c *ui.Context) {
 		a.pfScanImages()
 	}
 	r, _ := a.resolution()
-	policy := r.Profile.PrivacyPolicy
+	policy := a.pfPolicy()
 	e, ie := a.pfCombined(policy)
 	if p.auto && len(p.items) == 0 && ie.canSend && !slices.ContainsFunc(p.images, func(im *pfImage) bool { return len(im.regions) > 0 }) {
 		a.pfSend(pfEval{canSend: true, noEnter: ie.noEnter}) // 图片检查干净：直接继续发送，不打扰
@@ -254,6 +270,15 @@ func (a *app) preflightBar(c *ui.Context) {
 	}
 	ui.Column(c).Padding(10, 12).Gap(8).Radius(12).Background(tone.Alpha(0.12)).Border(1, tone.Alpha(0.45)).Key("preflight").Children(func() {
 		head := func() {
+			if a.pfRehearsal { // 同 Tauri PreflightComposer safeRehearsal 标题与安全锁
+				text(c, tr("检查并粘贴"), 13, 18, 600, k.fg)
+				hint := tr("确认正文后，点下方「安全粘贴」。教程不会自动按回车。")
+				if len(p.items) > 0 {
+					hint = tr("点「一键全部替换」处理示例邮箱，检查正文后点「安全粘贴」。")
+				}
+				text(c, hint, 11, 16, 400, k.muted).Wrap()
+				text(c, tr("演练安全锁：只粘贴，不按回车"), 11, 16, 500, t.Success)
+			}
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				switch {
 				case len(p.items) == 0 && p.replaced > 0:
@@ -318,7 +343,11 @@ func (a *app) preflightBar(c *ui.Context) {
 						}
 					}
 				case both.canSend:
-					if ui.Button(c, tr("发送")).Clicked() {
+					label := tr("发送")
+					if a.pfRehearsal {
+						label = tr("安全粘贴")
+					}
+					if ui.Button(c, label).Clicked() {
 						a.pfSend(both)
 					}
 				case slices.ContainsFunc(p.images, func(im *pfImage) bool { return im.status == "scanning" }):

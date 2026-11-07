@@ -196,6 +196,9 @@ type Settings struct {
 	OutcomeOff       bool `json:"outcomeMetricsOff,omitempty"`
 	OutcomeRetention int  `json:"outcomeRetentionDays,omitempty"` // 7 / 30 / 90，0 = 30
 	OutcomeEpoch     int  `json:"outcomeMetricsEpoch,omitempty"`
+	// 首启导览与上手演练（同 Tauri welcomeTourSeen / onboarding）
+	WelcomeTourSeen bool            `json:"welcomeTourSeen,omitempty"`
+	Onboarding      OnboardingState `json:"onboarding,omitzero"`
 }
 
 // ShotPrefs 是截图编辑器记住的使用习惯；零值都表示默认（粗细存档位 +1，0 = 默认中档）。

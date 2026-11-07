@@ -270,6 +270,7 @@ func (a *app) barView(c *ui.Context, k tokens, shell ui.Element) {
 		a.recentDrawer(c, k)
 		a.shortcutHelp(c, k)
 		a.commandPalette(c, k)
+		a.welcomeTour(c, k)
 	})
 }
 
@@ -310,8 +311,20 @@ func (a *app) barPageBody(c *ui.Context, k tokens, p int) {
 				if a.noteFilter == doneFilter {
 					empty = tr("没有已完成的卡片")
 				}
-				a.strip(c, k, "strip-notes", &a.bar.notes, len(notes), a.focusIdx(pageNotes), &a.bar.followNote, a.focusID(), empty, func(i int, h float32) {
-					a.stripNoteTile(c, k, notes[i], h, false)
+				strip := func() {
+					a.strip(c, k, "strip-notes", &a.bar.notes, len(notes), a.focusIdx(pageNotes), &a.bar.followNote, a.focusID(), empty, func(i int, h float32) {
+						a.stripNoteTile(c, k, notes[i], h, false)
+					})
+				}
+				if !a.coachVisible() {
+					strip()
+					return
+				}
+				ui.Row(c).Grow(1).AlignItems(ui.Stretch).Children(func() { // 同 Tauri：演练 / 课程卡在左侧 w-80 一栏
+					ui.Scroll(c).Width(320).Scrollbars(false).Children(func() {
+						ui.Column(c).Padding(4, 4, 8, 12).Gap(8).Children(func() { a.coachCards(c, k) })
+					})
+					strip()
 				})
 			}
 		})

@@ -349,3 +349,19 @@ func TestDuePresets(t *testing.T) {
 		}
 	}
 }
+
+func TestTauriOnboardingImport(t *testing.T) {
+	var ts tauriSettings
+	if err := json.Unmarshal([]byte(`{"welcomeTourSeen":true,"onboarding":{"captured":true,"sent":true,"done":true}}`), &ts); err != nil {
+		t.Fatal(err)
+	}
+	got := applyTauriSettings(Settings{}, ts)
+	if !got.WelcomeTourSeen || got.Onboarding.RehearsalStatus != RehearsalCompleted || !got.Onboarding.Sent {
+		t.Fatalf("%+v", got.Onboarding)
+	}
+	// 本机已看过导览 / 已有演练进度：Tauri 的 false 与旧进度不覆盖
+	mine := Settings{WelcomeTourSeen: true, Onboarding: OnboardingAfter(DefaultOnboarding(), OnboardingEvent{Type: "start"}, 1)}
+	if got := applyTauriSettings(mine, tauriSettings{Onboarding: ts.Onboarding}); !got.WelcomeTourSeen || got.Onboarding.RehearsalStatus != RehearsalActive {
+		t.Fatalf("%+v", got.Onboarding)
+	}
+}

@@ -317,7 +317,13 @@ func (a *app) notesList(c *ui.Context, k tokens) {
 				for _, g := range a.noteGroups {
 					total += len(g.open) + len(g.done)
 				}
+				coach := a.coachVisible()
+				if coach { // 演练 / 进阶课卡在列表顶部（同 Tauri）
+					a.coachCards(c, k)
+				}
 				switch { // 同 Tauri 笔记页空态 / 搜索无结果
+				case total == 0 && coach:
+					return
 				case total == 0 && a.query != "":
 					text(c, fmt.Sprintf(tr("没有匹配「%s」的卡片"), a.query), 12, 18, 400, k.muted).Padding(32, 0).TextAlign(ui.Center).FillWidth()
 					return

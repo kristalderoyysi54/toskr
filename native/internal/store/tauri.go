@@ -11,6 +11,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -180,33 +181,35 @@ type tauriSettings struct {
 		Note        string `json:"note"`
 		CreatedAtMs int64  `json:"createdAtMs"`
 	} `json:"secretKeys"`
-	SecretDefaultKeyID *string         `json:"secretDefaultKeyId"`
-	SecretCipherStyle  string          `json:"secretCipherStyle"`
-	SecretRevealMs     *int            `json:"secretRevealTimeoutMs"`
-	PromptGroups       []PromptGroup   `json:"promptGroups"`
-	TargetProfiles     []TargetProfile `json:"targetProfiles"`
-	DefaultProfileID   string          `json:"defaultTargetProfileId"`
-	PromptSnippets     []PromptSnippet `json:"promptSnippets"`
-	NewNoteHotkey      *string         `json:"newNoteHotkey"`
-	DoubleTapCapture   *bool           `json:"doubleTapCaptureOnly"`
-	CaptureSectionID   *string         `json:"captureSectionId"`
-	LastDraftSection   string          `json:"lastDraftSectionId"`
-	WindowOpacity      float64         `json:"windowOpacity"`
-	PanelOpacity       float64         `json:"panelOpacity"`
-	CardOpacity        float64         `json:"cardOpacity"`
-	HUDDurationMs      int             `json:"hudDurationMs"`
-	CompanionGap       *int            `json:"companionGap"`
-	CardTint           *bool           `json:"cardTint"`
-	ClipCardTemplate   string          `json:"clipCardTemplate"`
-	ClipAppRetention   map[string]int  `json:"clipAppRetentionDays"`
-	ScreenshotEnabled  *bool           `json:"screenshotEnabled"`
-	ScreenshotHideSelf *bool           `json:"screenshotHideSelf"`
-	ContextMenu        []MenuItem      `json:"contextMenu"`
-	CalendarEnabled    *bool           `json:"appleCalendarEnabled"`
-	CalendarHiddenIDs  []string        `json:"appleCalendarHiddenIds"`
-	PageOrder          []string        `json:"pageOrder"`
-	MessagesEnabled    *bool           `json:"messagesEnabled"`
-	MessageRules       []MessageRule   `json:"messageWatchRules"`
+	SecretDefaultKeyID *string          `json:"secretDefaultKeyId"`
+	SecretCipherStyle  string           `json:"secretCipherStyle"`
+	SecretRevealMs     *int             `json:"secretRevealTimeoutMs"`
+	PromptGroups       []PromptGroup    `json:"promptGroups"`
+	TargetProfiles     []TargetProfile  `json:"targetProfiles"`
+	DefaultProfileID   string           `json:"defaultTargetProfileId"`
+	PromptSnippets     []PromptSnippet  `json:"promptSnippets"`
+	NewNoteHotkey      *string          `json:"newNoteHotkey"`
+	DoubleTapCapture   *bool            `json:"doubleTapCaptureOnly"`
+	CaptureSectionID   *string          `json:"captureSectionId"`
+	LastDraftSection   string           `json:"lastDraftSectionId"`
+	WindowOpacity      float64          `json:"windowOpacity"`
+	PanelOpacity       float64          `json:"panelOpacity"`
+	CardOpacity        float64          `json:"cardOpacity"`
+	HUDDurationMs      int              `json:"hudDurationMs"`
+	CompanionGap       *int             `json:"companionGap"`
+	CardTint           *bool            `json:"cardTint"`
+	ClipCardTemplate   string           `json:"clipCardTemplate"`
+	ClipAppRetention   map[string]int   `json:"clipAppRetentionDays"`
+	ScreenshotEnabled  *bool            `json:"screenshotEnabled"`
+	ScreenshotHideSelf *bool            `json:"screenshotHideSelf"`
+	ContextMenu        []MenuItem       `json:"contextMenu"`
+	CalendarEnabled    *bool            `json:"appleCalendarEnabled"`
+	CalendarHiddenIDs  []string         `json:"appleCalendarHiddenIds"`
+	PageOrder          []string         `json:"pageOrder"`
+	MessagesEnabled    *bool            `json:"messagesEnabled"`
+	MessageRules       []MessageRule    `json:"messageWatchRules"`
+	WelcomeTourSeen    bool             `json:"welcomeTourSeen"`
+	Onboarding         *OnboardingState `json:"onboarding"`
 }
 
 // TauriReport 是导入结果。
@@ -821,6 +824,10 @@ func applyTauriSettings(st Settings, t tauriSettings) Settings {
 		st.OutcomeRetention = t.OutcomeRetention
 	}
 	st.OutcomeEpoch = max(st.OutcomeEpoch, t.OutcomeEpoch)
+	st.WelcomeTourSeen = st.WelcomeTourSeen || t.WelcomeTourSeen // 任一侧看过导览就不再弹
+	if t.Onboarding != nil && reflect.DeepEqual(st.Onboarding.Normalized(), DefaultOnboarding()) {
+		st.Onboarding = *t.Onboarding // 本机还没碰过演练才采用 Tauri 进度（解码时已按 Tauri 规则迁移）
+	}
 	return st
 }
 

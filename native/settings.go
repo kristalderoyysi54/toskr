@@ -503,7 +503,7 @@ func (a *app) settingsView(c *ui.Context) {
 			}},
 		}}},
 		{label: "诊断", icon: "scroll-text", sections: [][]setSection{a.diagSections(c, k, s)}},
-		{label: "帮助与更新", icon: "info", sections: [][]setSection{append(a.outcomeSections(c, k, s, st), setSection{
+		{label: "帮助与更新", icon: "info", sections: [][]setSection{append(a.outcomeSections(c, k, s, st), a.learningSection(c, s, st), setSection{
 			tr("关于"), []setRow{
 				{title: "Toskr Native " + mygo.App.Version(), hint: cmpOr(a.updateMsg, "mygo · "+tr("原生界面")), control: func() {
 					if button(c, s, "检查更新") {

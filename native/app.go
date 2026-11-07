@@ -112,6 +112,9 @@ type app struct {
 	redactions                          []redactionSession        // 各次发送的占位符映射（只在内存，同 Tauri redactionSessions）
 	verify                              verifyState               // 回复检查浮层
 	sendPH                              sendRedaction             // 本次发送的「原文 → 占位符」与次数（预检替换时设置）
+	tourOpen                            bool                      // 首启导览盖在面板上（onboarding.go）
+	lesson                              *lessonSession            // 进行中的进阶课（只在内存，同 Tauri lessonStore）
+	pfRehearsal                         bool                      // 当前预检是安全发送演练：强制脱敏、不回车、保留面板
 
 	// 1:1 主面板
 	noteGroups                               []noteGroup
@@ -433,6 +436,7 @@ func (a *app) showPanel() {
 		a.placePanel()
 	}
 	a.reload()
+	a.maybeOpenTour()
 	a.presenceArm = !a.panelHiding // 离场中途被叫回则从当前位置折返，否则从 0 起播
 	a.panelHiding = false
 	a.edgeOnShow()
@@ -515,6 +519,11 @@ func (a *app) onTrigger() {
 				}
 			}
 		}
+		rehearsalText := isSafeRehearsalText(got.Text) // 演练与还原课按捕获原文判断（还原前）
+		restored := 0
+		if st := a.store.Settings(); !st.AliasNoAutoRestore {
+			restored = core.AliasOccurrences(got.Text, st.AliasEntities)
+		}
 		if blocks != nil {
 			for i := range blocks { // 逐个还原文字块里的化名，图片块与顺序不动
 				if blocks[i].Type == "text" {
@@ -540,6 +549,7 @@ func (a *app) onTrigger() {
 				a.showHUD("warn", "保存失败："+err.Error())
 				return
 			}
+			a.afterCaptured(note.ID, dup, rehearsalText, restored)
 			if dup {
 				a.showHUD("duplicate", preview(note.Text, 40))
 				a.hudTarget = note.ID
@@ -758,6 +768,7 @@ func (a *app) sendWithTemplate(notes []store.Note, sn store.PromptSnippet) {
 
 // sendT：tmpl 为本次提示词模板（空 = 不套模板），随挂起状态一起保存，取消即丢弃。
 func (a *app) sendT(notes []store.Note, tmpl string) {
+	a.pfRehearsal = false // 演练预检由 openSafeRehearsalPreflight 在这之后单独标记
 	if len(notes) == 0 {
 		return
 	}
@@ -818,9 +829,12 @@ func (a *app) askEnter(notes []store.Note, rawKept bool, tmpl string) {
 }
 
 func (a *app) deliver(notes []store.Note, enter bool, tmpl string) {
+	rehearsal := a.pfRehearsal
+	a.pfRehearsal = false
 	if a.draftTargetChanged() {
 		return
 	}
+	enter = enter && !rehearsal // 演练安全锁：只粘贴，不按回车
 	target := a.target
 	r, _ := a.resolution()
 	redactions := a.lastRedactions
@@ -849,7 +863,7 @@ func (a *app) deliver(notes []store.Note, enter bool, tmpl string) {
 	if len(texts) > 0 {
 		payload = composePayload(texts, tmpl, mode)
 	}
-	if !a.pinned && !r.Profile.KeepPanel {
+	if !a.pinned && !r.Profile.KeepPanel && !rehearsal {
 		a.hidePanelNow()
 	}
 	profile := profileName(r.Profile)
@@ -862,6 +876,9 @@ func (a *app) deliver(notes []store.Note, enter bool, tmpl string) {
 			prev := a.out // 期间可能已开始准备下一次发送
 			a.out = out
 			a.finishDeliver(target, ids, texts, png, redactions, ph, profile, check, err)
+			if err == nil {
+				a.afterDelivered(ids, rehearsal)
+			}
 			a.out = prev
 		})
 	}()
