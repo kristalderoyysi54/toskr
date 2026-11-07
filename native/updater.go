@@ -4,7 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
+	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -21,7 +25,6 @@ import (
 
 const (
 	repoURL         = "https://github.com/kristalderoyysi54/toskr"
-	setPageHelp     = 99 // 设置窗按页数夹紧：最后一页总是「帮助与更新」
 	updateFirstWait = 8 * time.Second
 	updateEvery     = 30 * time.Minute
 )
@@ -33,7 +36,8 @@ type updateState struct {
 	installing  bool
 	progress    int // 0–100
 	installed   bool
-	pendingOpen bool // 点了新版本气泡：唤出设置帮助页
+	pendingOpen bool // 新版本气泡可点：点了打开更新对话框
+	dialogOpen  bool // 面板内更新对话框（同 Tauri UpdateDialog）
 }
 
 // 测试替换
@@ -99,10 +103,16 @@ func (a *app) silentUpdate() {
 	})
 }
 
-// openUpdate：标题栏「更新」/ 新版本气泡 → 设置「帮助与更新」。
+// openUpdate：标题栏「更新」/ 新版本气泡 → 面板内更新对话框（同 Tauri setUpdateDialogOpen）。
 func (a *app) openUpdate() {
 	a.upd.pendingOpen = false
-	a.openSettingsAt(setPageHelp, 0)
+	if a.upd.avail == nil {
+		return
+	}
+	a.upd.dialogOpen = true
+	if a.panel != nil && !a.panel.IsVisible() {
+		a.showPanel()
+	}
 }
 
 // checkUpdate：设置里手动检查（不经静默去重）。
@@ -150,6 +160,7 @@ func (a *app) installUpdate() {
 			a.upd.installing = false
 			if err != nil {
 				a.updateMsg = tr("安装失败：") + err.Error()
+				a.showHUD("warn", a.updateMsg)
 				a.redrawSettings()
 				return
 			}
@@ -234,4 +245,96 @@ func (a *app) linkRow(c *ui.Context, s settingsTokens, title, value, url string)
 			openLink(url)
 		}
 	}}
+}
+
+// updateDialog 同 Tauri UpdateDialog：面板内浮层——版本对比、更新内容、「立即下载」进度（完成后自动重启）；
+// 下载中不可取消，点遮罩 / 取消关闭。
+func (a *app) updateDialog(c *ui.Context, k tokens) {
+	up := a.upd.avail
+	if !a.upd.dialogOpen || up == nil {
+		return
+	}
+	w, h := c.Size()
+	var act func()
+	defer func() {
+		if act != nil {
+			act()
+		}
+	}()
+	closeIt := func() {
+		if !a.upd.installing {
+			a.upd.dialogOpen = false
+		}
+	}
+	ui.Overlay(c, func() {
+		dim := ui.Box(c).Absolute().Left(0).Top(0).Size(w, h).Background(ui.RGBA(0, 0, 0, 0.3)).Key("update-dim") // token-exception: 浮层遮罩
+		if dim.Clicked() {
+			act = closeIt
+		}
+		dw := min(w-32, 320)
+		box := floatSurface(ui.Column(c).Absolute().Left((w-dw)/2).Top(max((h-260)/2, 20)).Width(dw).Padding(16).Gap(4).Radius(12).
+			Role(ui.RoleDialog).Label(tr("软件更新")).Key("update-dialog"), k)
+		box.Transition(ui.ElementTransition{Animation: &springSnappy, Enter: &ui.Motion{Scale: 0.94, Y: 8}})
+		p := stok(c).primary
+		box.Children(func() {
+			text(c, tr("软件更新"), 13, 18, 600, k.fg)
+			text(c, tr("发现新版本可用"), 11, 16, 400, p)
+			ui.Row(c).Margin(8, 0, 0, 0).Gap(8).AlignItems(ui.Center).Children(func() {
+				text(c, "v"+mygo.App.Version(), 12, 18, 400, k.muted).Font(fontMono)
+				licon(c, "arrow-right", 14, k.muted)
+				text(c, "v"+up.Version, 12, 18, 600, p).Font(fontMono)
+			})
+			text(c, tr("更新内容"), 11, 16, 500, k.muted).Margin(8, 0, 0, 0)
+			notes := strings.TrimSpace(up.Notes)
+			if notes == "" {
+				notes = tr("常规改进与问题修复。")
+			}
+			ui.Scroll(c).MaxHeight(144).Scrollbars(false).Children(func() {
+				text(c, notes, 12, 18, 400, k.fg.Alpha(0.8)).Wrap()
+			})
+			if a.upd.installing {
+				ui.Row(c).Margin(8, 0, 0, 0).Children(func() {
+					text(c, tr("下载中…"), 10, 14, 400, k.muted).Grow(1)
+					text(c, fmt.Sprintf(tr("%d%% · 完成后自动重启"), a.upd.progress), 10, 14, 400, k.muted).FontFeatures("tnum")
+				})
+				ui.Box(c).Height(4).Radius(2).Background(k.track).Children(func() {
+					ui.Box(c).Absolute().Left(0).Top(0).Height(4).Width((dw - 32) * float32(a.upd.progress) / 100).Radius(2).Background(p)
+				})
+			}
+			ui.Row(c).Margin(12, 0, 0, 0).Gap(8).Justify(ui.End).Children(func() {
+				if !a.upd.installing && ui.Button(c, tr("取消")).Clicked() {
+					act = closeIt
+				}
+				label := tr("立即下载")
+				if a.upd.installing {
+					label = tr("下载中…")
+				}
+				if ui.Button(c, label).Clicked() && !a.upd.installing {
+					act = a.installUpdate
+				}
+			})
+		})
+	})
+	if a.upd.installing {
+		c.AnimationFrame()
+	}
+}
+
+// dirSource：实机自动化测试用（TOSKR_UPDATE_DIR=目录）——从本地目录读更新清单与安装包，
+// 不发布也能走完「发现 → 下载 → 校验签名 → 安装 → 重启」。签名照常用内置公钥校验。
+type dirSource string
+
+func (d dirSource) Manifest(context.Context, bool) (io.ReadCloser, error) {
+	return os.Open(filepath.Join(string(d), "update-darwin-arm64.json"))
+}
+
+func (d dirSource) Open(_ context.Context, u string) (io.ReadCloser, error) {
+	return os.Open(filepath.Join(string(d), path.Base(u)))
+}
+
+func useTestUpdateDir() {
+	if dir := os.Getenv("TOSKR_UPDATE_DIR"); dir != "" {
+		mygo.Updater.SetSource(dirSource(dir))
+		diag.Push("更新: 测试源 %s", dir)
+	}
 }

@@ -157,6 +157,7 @@ func start() (*app, error) {
 	a.registerHotkeys()
 	a.setUpTray()
 	a.startBackground()
+	useTestUpdateDir()
 	a.startUpdateChecks()
 	diag.Push("辅助功能授权=%v", macos.AXTrusted(false))
 	a.watchPermission()

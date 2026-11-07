@@ -271,6 +271,7 @@ func (a *app) barView(c *ui.Context, k tokens, shell ui.Element) {
 		a.recentDrawer(c, k)
 		a.shortcutHelp(c, k)
 		a.commandPalette(c, k)
+		a.updateDialog(c, k)
 		a.welcomeTour(c, k)
 	})
 }

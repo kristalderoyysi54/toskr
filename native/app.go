@@ -114,6 +114,7 @@ type app struct {
 	sendPH                              sendRedaction             // 本次发送的「原文 → 占位符」与次数（预检替换时设置）
 	tourOpen                            bool                      // 首启导览盖在面板上（onboarding.go）
 	lesson                              *lessonSession            // 进行中的进阶课（只在内存，同 Tauri lessonStore）
+	lastFront                           macos.FrontApp            // 最近一次处于前台的外部应用（edge_hide.go observeFront）
 	pfRehearsal                         bool                      // 当前预检是安全发送演练：强制脱敏、不回车、保留面板
 
 	// 1:1 主面板

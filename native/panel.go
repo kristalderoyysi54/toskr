@@ -61,6 +61,7 @@ func (a *app) panelView(c *ui.Context) {
 			a.recentDrawer(c, k)
 			a.shortcutHelp(c, k)
 			a.commandPalette(c, k)
+			a.updateDialog(c, k)
 			a.welcomeTour(c, k)
 		})
 		return
@@ -92,6 +93,7 @@ func (a *app) panelView(c *ui.Context) {
 		a.recentDrawer(c, k)
 		a.shortcutHelp(c, k) // 长按 ⌥ 的快捷键速查层压在最上
 		a.commandPalette(c, k)
+		a.updateDialog(c, k)
 		a.welcomeTour(c, k) // 首启导览盖住全部内容
 	})
 	if a.menuOpen {

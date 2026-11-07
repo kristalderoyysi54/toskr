@@ -292,9 +292,20 @@ func (a *app) edgeOnShow() {
 func (a *app) startEdgeSupervisor() {
 	go func() {
 		for range time.Tick(edgeTick) {
-			mygo.RunOnMain(a.edgeTickOnce)
+			mygo.RunOnMain(func() {
+				a.observeFront()
+				a.edgeTickOnce()
+			})
 		}
 	}()
+}
+
+// observeFront 同 Tauri focus.rs 激活观察：记下最近一次处于前台的外部应用（不是 Toskr 自己），
+// 「识别粘贴位置」在点面板使 Toskr 成为前台时仍能拿到用户刚才所在的应用。
+func (a *app) observeFront() {
+	if f, ok := a.sys.Frontmost(); ok && f.PID != 0 && f.PID != a.sys.SelfPID() && f.PID != a.lastFront.PID {
+		a.lastFront = f
+	}
 }
 
 func displayAt(displays []mygo.Display, x, y int) (mygo.Display, bool) {

@@ -38,6 +38,16 @@ func TestSilentUpdateNotifiesOnce(t *testing.T) {
 	if !tt.HasText("更新") {
 		t.Fatal("标题栏应亮「更新」")
 	}
+	a.hudOpen() // 点气泡 → 面板内更新对话框
+	tt.Frame()
+	if !a.upd.dialogOpen || !tt.HasText("软件更新") || !tt.HasText("v9.9.9") {
+		t.Fatalf("应打开更新对话框 %v", tt.Texts())
+	}
+	if err := tt.Click("立即下载"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { tt.Frame(); return *installs == 1 })
+	a.upd.dialogOpen = false
 	a.hudText = ""
 	a.silentUpdate()
 	if a.hudText != "" {
@@ -74,7 +84,7 @@ func TestAboutRowsManualInstallAndLinks(t *testing.T) {
 	openLink = func(u string) { opened = u }
 	restarted := false
 	relaunch = func() { restarted = true }
-	a.openSettingsAt(setPageHelp, 0)
+	a.openSettingsAt(99, 0) // 夹紧到最后一页「帮助与更新」
 	v := ui.NewTester(a.settingsView, 1040, 2400)
 	v.Frame()
 	for _, s := range []string{"检查更新", "自动检查更新", "自动安装更新", "更新日志", "项目主页", "报告 Bug"} {

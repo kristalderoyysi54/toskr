@@ -347,6 +347,8 @@ func TestOnboardingHorizontalBar(t *testing.T) {
 	tt.SetSize(1400, 320)
 	a.maybeOpenTour()
 	tt.Frame()
+	tt.Scroll(700, 160, 0, 600) // 横栏矮：导览内容可滚动（同 Tauri overflow-y-auto）
+	tt.Frame()
 	mustClick(t, tt, "花 1 分钟试一下")
 	if !tt.HasText("上手教程") || !tt.HasText("横栏里的卡") {
 		t.Fatal(tt.Texts())
@@ -393,5 +395,35 @@ func TestLessonStateMachine(t *testing.T) {
 	}
 	if _, ok := lessonAfterCapture(m, "r", 1); ok {
 		t.Fatal("合并课不看捕获")
+	}
+}
+
+// 导览示意按拍循环：减少动态效果时停在最后一拍（发送完成、邮箱已替换）。
+func TestTourSceneFinalBeat(t *testing.T) {
+	a, _ := testApp(t)
+	v := ui.NewTester(func(c *ui.Context) { a.tourIllustration(c, tok(c)) }, 380, 300)
+	v.SetPreferences(ui.Preferences{ReduceMotion: true})
+	v.Frame()
+	v.Frame()
+	for _, s := range []string{"浏览器", "文档", "Toskr", "AI 对话", "[EMAIL_01]", "已一起发送 2 张 ✓", "邮箱发送前已自动替换"} {
+		if !v.HasText(s) {
+			t.Fatalf("缺 %q %v", s, v.Texts())
+		}
+	}
+}
+
+// 同 Tauri focus.rs 激活观察：点面板时 Toskr 在前台，「识别粘贴位置」用最近一次的外部前台应用。
+func TestRefreshTargetUsesLastExternalFront(t *testing.T) {
+	a, _ := testApp(t)
+	sys := &recSys{}
+	a.sys = sys
+	a.target = macos.FrontApp{PID: 7, Name: "Arc"}
+	sys.front = 42
+	a.observeFront() // 用户在文本编辑里放好光标
+	sys.front = sys.SelfPID()
+	a.observeFront() // 回到 Toskr 点按钮
+	a.refreshTargetFromFront()
+	if a.target.PID != 42 {
+		t.Fatalf("应识别为刚才的外部应用，得到 %d", a.target.PID)
 	}
 }

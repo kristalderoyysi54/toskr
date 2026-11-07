@@ -157,7 +157,11 @@ func (a *app) targetReady() bool {
 
 // refreshTargetFromFront：「识别粘贴位置」——采信当前前台应用（不是 Toskr 自己时）。
 func (a *app) refreshTargetFromFront() {
-	if f, ok := a.sys.Frontmost(); ok && f.PID != 0 && f.PID != a.sys.SelfPID() {
+	f, ok := a.sys.Frontmost()
+	if !ok || f.PID == 0 || f.PID == a.sys.SelfPID() { // 点面板时 Toskr 在前台：用最近一次的外部前台应用
+		f, ok = a.lastFront, a.lastFront.PID != 0
+	}
+	if ok {
 		a.target, a.targetStarted = f, macos.ProcessStartMs(f.PID)
 	}
 }
@@ -664,37 +668,95 @@ func (a *app) lessonCoach(c *ui.Context, k tokens) {
 
 // ---- 首启导览 ----
 
-// tourIllustration：静态示意（Tauri 为 SVG 动画 TourScene）——两处来源 → 勾选两张卡 → 发给 AI，邮箱已替换。
-func tourIllustration(c *ui.Context, k tokens) {
-	chip := func(icon, label string) {
-		ui.Row(c).Gap(4).Padding(4, 6).Radius(6).Background(k.card).Border(1, k.inputBorder).AlignItems(ui.Center).Children(func() {
-			licon(c, icon, 11, k.muted)
-			text(c, label, 10, 14, 400, k.fg).SingleLine()
-		})
+// tourIllustration 同 Tauri TourScene kind="welcome"：按拍循环（每拍 1.7s，共 4 拍）——
+// 0 两处来源高亮 + 双击键帽 → 1 两张卡收进 Toskr → 2 勾选 + ⌘⏎ → 3 一起发给 AI，邮箱已替换为 [EMAIL_01]。
+// 减少动态效果时停在最后一拍（完整结果）。
+const tourBeatMs, tourBeats = 1700, 4
+
+var tourEpoch = time.Now()
+
+func (a *app) tourIllustration(c *ui.Context, k tokens) {
+	beat := tourBeats - 1
+	if !c.Preferences().ReduceMotion {
+		beat = int(time.Since(tourEpoch).Milliseconds()/tourBeatMs) % tourBeats
+		c.AnimationFrame()
 	}
-	card := func(label string) {
-		ui.Row(c).Gap(4).Padding(4, 6).Radius(6).Background(k.card).Border(1, c.Theme().Accent.Alpha(0.6)).AlignItems(ui.Center).Children(func() {
-			licon(c, "circle-check", 11, c.Theme().Accent)
-			text(c, label, 10, 14, 400, k.fg).SingleLine()
-		})
+	key := map[string]string{"shift": "⇧", "control": "⌃", "option": "⌥"}[a.store.Settings().TriggerModifier]
+	if key == "" {
+		key = "⇧"
 	}
-	ui.Row(c).Padding(10).Gap(6).Radius(12).Background(k.track).AlignItems(ui.Center).Key("tour-scene").Label(tr("演示：从浏览器和文档各收一段文字，勾选后一起发送给 AI，邮箱自动替换")).Children(func() {
-		ui.Column(c).Gap(4).Children(func() {
-			chip("app-window", tr("浏览器"))
-			chip("file-text", tr("文档"))
-		})
-		licon(c, "arrow-right", 12, k.muted)
-		ui.Column(c).Gap(4).Children(func() {
-			card(tr("卡片 1"))
-			card(tr("卡片 2"))
-		})
-		licon(c, "arrow-right", 12, k.muted)
-		ui.Column(c).Grow(1).Basis(0).Gap(2).Padding(6).Radius(8).Background(k.card).Border(1, k.inputBorder).Children(func() {
-			ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
-				licon(c, "bot", 11, k.muted)
-				text(c, "AI", 10, 14, 600, k.fg)
+	p := stok(c).primary
+	fade := func(e ui.Element, id string, on bool) ui.Element {
+		to := float32(0)
+		if on {
+			to = 1
+		}
+		return e.Opacity(e.AnimateTo(id, to, tweenTw))
+	}
+	win := func(title string, w float32, body func()) ui.Element {
+		return ui.Column(c).Width(w).Padding(6, 8).Gap(5).Radius(8).Background(k.card).Border(1, k.inputBorder).Children(func() {
+			ui.Row(c).Gap(3).AlignItems(ui.Center).Children(func() {
+				ui.Box(c).Size(5, 5).Radius(2.5).Background(k.inputBorder)
+				ui.Box(c).Size(5, 5).Radius(2.5).Background(k.inputBorder)
+				text(c, title, 9, 12, 400, k.muted).Margin(0, 0, 0, 3)
 			})
-			text(c, "[EMAIL_01]", 10, 14, 500, k.ok).Font(fontMono).SingleLine()
+			body()
+		})
+	}
+	bar := func(w float32) { ui.Box(c).Size(w, 5).Radius(2).Background(k.track) }
+	keycap := func(id, label string, show bool) {
+		fade(ui.Row(c).Height(18).Padding(0, 6).Radius(4).Background(k.window).Border(1, k.inputBorder).AlignItems(ui.Center).AlignSelf(ui.Center).Key(id), id, show).
+			Children(func() { text(c, label, 10, 14, 500, k.fg) })
+	}
+	srcLine := func(id, label string) {
+		hl := ui.Row(c).Height(12).Padding(0, 3).Radius(3).AlignItems(ui.Center).Key(id)
+		hl.Background(p.Alpha(0.18 * hl.AnimateTo("hl", map[bool]float32{true: 1, false: 0.35}[beat == 0], tweenTw)))
+		hl.Children(func() { text(c, label, 9, 12, 400, k.fg).SingleLine() })
+	}
+	card := func(id, label string) {
+		b := ui.Row(c).Height(22).Padding(0, 6).Gap(5).Radius(6).Background(k.window).AlignItems(ui.Center).Key(id)
+		b.Border(1, b.AnimateColor("bd", map[bool]ui.Color{true: p, false: k.inputBorder}[beat == 2], tweenTw))
+		fade(b, "in", beat >= 1)
+		b.AnimatePose(ui.Pose{Y: map[bool]float32{true: 0, false: -14}[beat >= 1]}, springSnappy)
+		b.Children(func() {
+			dot := ui.Box(c).Size(9, 9).Radius(4.5).Border(1, map[bool]ui.Color{true: p, false: k.muted}[beat >= 2])
+			dot.Background(dot.AnimateColor("chk", map[bool]ui.Color{true: p, false: ui.Transparent}[beat >= 2], tweenTw))
+			text(c, label, 9, 12, 400, k.fg).SingleLine()
+		})
+	}
+	sent := beat >= 3
+	ui.Column(c).Padding(8).Gap(6).Radius(12).Background(k.track).Key("tour-scene").
+		Label(tr("演示：从浏览器和文档各收一段文字，勾选后一起发送给 AI，邮箱自动替换")).Children(func() {
+		ui.Row(c).Gap(8).Children(func() {
+			win(tr("浏览器"), 150, func() { bar(110); srcLine("src-a", "TypeError: cannot read…"); bar(80) })
+			win(tr("文档"), 150, func() { bar(100); srcLine("src-b", tr("联系人 demo.user@…")); bar(70) })
+		})
+		keycap("kc-cap", key+" "+key, beat == 0)
+		ui.Row(c).Gap(8).AlignItems(ui.Start).Children(func() {
+			win("Toskr", 150, func() {
+				cards := ui.Column(c).Gap(5).Key("tour-cards")
+				cards.Opacity(cards.AnimateTo("dim", map[bool]float32{true: 0.4, false: 1}[sent], tweenTw)).Children(func() {
+					card("tc1", "TypeError: cannot read…")
+					card("tc2", tr("联系人 demo.user@…"))
+				})
+				fade(ui.Box(c).Key("tour-sent"), "op", sent).Children(func() { text(c, tr("已一起发送 2 张 ✓"), 9, 12, 400, k.muted) })
+				keycap("kc-send", "⌘ ⏎", beat == 2)
+			})
+			win(tr("AI 对话"), 150, func() {
+				ui.Box(c).Size(100, 14).Radius(7).Background(k.track)
+				msg := fade(ui.Column(c).Padding(6, 8).Gap(4).Radius(8).Background(k.window).Border(1, p).Key("tour-msg"), "op", sent)
+				msg.AnimatePose(ui.Pose{Y: map[bool]float32{true: 0, false: 10}[sent]}, springSnappy)
+				msg.Children(func() {
+					text(c, "TypeError: cannot read…", 9, 12, 400, k.fg).SingleLine()
+					ui.Row(c).Gap(3).AlignItems(ui.Center).Children(func() {
+						text(c, tr("联系人"), 9, 12, 400, k.fg)
+						ui.Box(c).Padding(1, 3).Radius(3).Background(k.ok.Alpha(0.18)).Children(func() {
+							text(c, "[EMAIL_01]", 9, 12, 500, k.ok).Font(fontMono)
+						})
+					})
+				})
+				fade(ui.Box(c).Key("tour-note"), "op", sent).Children(func() { text(c, tr("邮箱发送前已自动替换"), 9, 12, 400, k.muted) })
+			})
 		})
 	})
 }
@@ -720,7 +782,7 @@ func (a *app) welcomeTour(c *ui.Context, k tokens) {
 						text(c, tr("欢迎使用 Toskr"), 11, 16, 400, k.muted)
 						text(c, tr(welcomeTourTitle), 17, 24, 600, k.fg).Wrap()
 					})
-					tourIllustration(c, k)
+					a.tourIllustration(c, k)
 					ui.Column(c).Gap(6).Children(func() {
 						for i, p := range welcomeTourPoints {
 							ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
