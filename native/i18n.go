@@ -161,3 +161,19 @@ func init() { // 应用更新（updater.go）
 		}
 	}
 }
+
+func init() { // 上手教程图形化（onboarding_visual.go）
+	for k, v := range map[string]string{
+		"不会自动按回车": "Never presses Enter", "不回车": "No Enter", "允许辅助功能": "Allow Accessibility", "系统设置": "Settings", "辅助功能": "Accessibility", "打开 Toskr": "Turn on Toskr",
+		"快捷键准备中": "Preparing shortcut", "按一下空格": "Press Space once", "空格": "Space", "就绪": "Ready", "允许输入监控": "Allow Input Monitoring", "输入监控": "Input Monitoring",
+		"收进示例": "Capture the sample", "空白文档": "Blank doc", "粘贴": "Paste", "全选": "Select all", "连按两次": "Double-tap", "复制示例": "Copy sample",
+		"选粘贴位置": "Choose where to paste", "点文档": "Click doc", "识别": "Detect", "确认": "Confirm", "未识别": "Not detected", "检查并粘贴": "Check & paste",
+		"替换邮箱": "Mask email", "看正文": "Review", "安全粘贴": "Safe paste", "教程标记": "Tutorial tag", "自动清理": "Auto cleanup", "点圆圈": "Click circle",
+		"或按 X": "or press X", "一起发送": "Send together", "发送": "Send", "合成一次": "One paste", "勾选多张": "Check several", "一起发": "Send all",
+		"复制回复": "Copy reply", "完成：收回时自动还原": "Done: restored on capture", "收集": "Collect", "合并发送": "Merge & send", "自动脱敏": "Auto-mask",
+	} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
+}

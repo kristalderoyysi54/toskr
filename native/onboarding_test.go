@@ -48,7 +48,7 @@ func TestWelcomeTourRehearse(t *testing.T) {
 	a, tt := testApp(t)
 	a.maybeOpenTour() // 全新数据目录：首次唤出面板时盖上导览
 	tt.Frame()
-	for _, s := range append([]string{"欢迎使用 Toskr", welcomeTourTitle, "花 1 分钟试一下", "直接开始使用", "随时可在「设置 → 帮助与更新」继续学习"}, welcomeTourPoints...) {
+	for _, s := range append([]string{"欢迎使用 Toskr", welcomeTourTitle, "花 1 分钟试一下", "直接开始使用", "合并发送"}, welcomeTourPoints...) {
 		if !tt.HasText(s) {
 			t.Fatalf("导览缺 %q：%v", s, tt.Texts())
 		}
@@ -58,7 +58,7 @@ func TestWelcomeTourRehearse(t *testing.T) {
 	if !st.WelcomeTourSeen || a.tourOpen || st.Onboarding.RehearsalStatus != store.RehearsalActive || a.page != pageNotes {
 		t.Fatalf("%+v tour=%v page=%d", st.Onboarding, a.tourOpen, a.page)
 	}
-	if !tt.HasText("上手教程") || !tt.HasText("一步一步试用 · 不会自动按回车") || tt.HasText("还没有内容") {
+	if !tt.HasText("上手教程") || !tt.HasText("不会自动按回车") || tt.HasText("还没有内容") {
 		t.Fatal(tt.Texts())
 	}
 	a.maybeOpenTour()
@@ -102,7 +102,7 @@ func TestSafeRehearsalFlow(t *testing.T) {
 	a.sys = sys
 	a.startRehearsal("start")
 	tt.Frame()
-	if !tt.HasText("快捷键还没准备好") { // 监听还没建起来
+	if !tt.HasText("快捷键准备中") { // 监听还没建起来
 		t.Fatal(tt.Texts())
 	}
 	a.tapStarted = time.Now()
@@ -114,7 +114,7 @@ func TestSafeRehearsalFlow(t *testing.T) {
 	if *copied != store.SafeRehearsalText || o.RehearsalStep != store.StepCapture || o.ActivationStartedAtMs == nil {
 		t.Fatalf("%q %+v", *copied, o)
 	}
-	if !tt.HasText("把示例文字收进 Toskr") || !tt.HasText("3. 连按两次 ⌥ Option 键：按下、松开，再按一下。") {
+	if !tt.HasText("收进示例") || !tt.HasText("⌥ ⌥") {
 		t.Fatal(tt.Texts())
 	}
 
@@ -130,7 +130,7 @@ func TestSafeRehearsalFlow(t *testing.T) {
 	if o := a.onboarding(); o.RehearsalStep != store.StepTarget || *o.RehearsalNoteID != sample.ID || !o.Captured {
 		t.Fatalf("%+v", o)
 	}
-	if !tt.HasText("示例内容已收好") || !tt.HasText("还没有可用的粘贴位置") || tt.HasText("就粘贴到这里") {
+	if !tt.HasText("示例内容已收好") || !tt.HasText("未识别") || tt.HasText("就粘贴到这里") {
 		t.Fatal(tt.Texts())
 	}
 	sys.front = 42
@@ -208,7 +208,7 @@ func TestMergeLesson(t *testing.T) {
 	a.transitionOnboarding(store.OnboardingEvent{Type: "skip"})
 	a.startAdvancedLesson(lessonMerge)
 	tt.Frame()
-	if !tt.HasText("进阶 · 合并发送") || !tt.HasText("第 1 步，共 3 步 · 不会自动按回车") {
+	if !tt.HasText("进阶 · 合并发送") || !tt.HasText("放入两张示例卡片") {
 		t.Fatal(tt.Texts())
 	}
 	a.prepareLessonSamples() // 按钮与进度第 1 步同名，Click 会点到进度文字
@@ -222,12 +222,12 @@ func TestMergeLesson(t *testing.T) {
 			t.Fatalf("%+v", n)
 		}
 	}
-	if !tt.HasText("已勾选 0 / 2") {
+	if !tt.HasText("勾选这两张卡片") {
 		t.Fatal(tt.Texts())
 	}
 	mustClick(t, tt, "帮我勾选")
 	tt.Frame()
-	if a.lesson.progress.step != 2 || !tt.HasText("按 ⌘ ⏎ 一起发送") {
+	if a.lesson.progress.step != 2 || !tt.HasText("一起发送") {
 		t.Fatal(tt.Texts())
 	}
 	a.afterDelivered(ids[:1], false) // 只发了一张：不算
@@ -285,7 +285,7 @@ func TestPrivacyLesson(t *testing.T) {
 		t.Fatalf("%+v", a.lesson.progress)
 	}
 	tt.Frame()
-	if !tt.HasText("完成：[USER_01] 已还原成「张三」") {
+	if !tt.HasText("完成：收回时自动还原") {
 		t.Fatal(tt.Texts())
 	}
 	mustClick(t, tt, "删除化名")

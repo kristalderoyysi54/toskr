@@ -178,8 +178,10 @@ func (a *app) rehearsalCard(c *ui.Context, k tokens) {
 	switch o.RehearsalStatus {
 	case store.RehearsalPaused:
 		coachBox(c, k, "rehearsal").Children(func() {
-			text(c, tr("教程已暂停"), 13, 18, 600, k.fg)
-			stepHint(c, k, tr("进度已保存在本机，可在「设置 → 帮助与更新」继续。"))
+			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+				licon(c, "hourglass", 14, k.muted)
+				text(c, tr("教程已暂停"), 13, 18, 600, k.fg)
+			})
 			ui.Row(c).Children(func() {
 				if ui.Button(c, tr("继续教程")).Clicked() {
 					act = func() { a.transitionOnboarding(store.OnboardingEvent{Type: "resume"}) }
@@ -200,9 +202,9 @@ func (a *app) rehearsalCard(c *ui.Context, k tokens) {
 	}
 	coachBox(c, k, "rehearsal").Children(func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Column(c).Grow(1).Basis(0).Children(func() {
+			ui.Row(c).Grow(1).Basis(0).Gap(6).AlignItems(ui.Center).Children(func() {
 				text(c, tr("上手教程"), 13, 18, 600, k.fg)
-				text(c, tr("一步一步试用 · 不会自动按回车"), 10, 14, 400, k.muted)
+				noEnterBadge(c, k)
 			})
 			if linkButton(c, k, "rh-pause", tr("稍后继续")) {
 				act = func() {
@@ -236,19 +238,21 @@ func (a *app) rehearsalStep(c *ui.Context, k tokens, o store.OnboardingState, ac
 	case store.StepPermissions:
 		switch a.permissionStatus() {
 		case "accessibilityDenied":
-			stepTitle(c, k, tr("先允许 Toskr 读取选中的文字"))
-			stepHint(c, k, tr("在系统设置中找到 Toskr，打开开关，然后回到这里。"))
+			stepTitle(c, k, tr("允许辅助功能"))
+			flow(c, k, "ax", vi("settings-2", "系统设置"), vi("shield-check", "辅助功能"), vi("check", "打开 Toskr"))
 			btn(tr("打开辅助功能设置"), func() { openPrivacy("Privacy_Accessibility") })
 		case "tapUnavailable":
-			stepTitle(c, k, tr("快捷键还没准备好"))
-			stepHint(c, k, tr("Toskr 正在重试。如果一直停在这里，请检查辅助功能中的 Toskr 开关。"))
+			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+				ui.Spinner(c).Size(12, 12)
+				stepTitle(c, k, tr("快捷键准备中"))
+			})
 			btn(tr("检查辅助功能设置"), func() { openPrivacy("Privacy_Accessibility") })
 		case "waitingForEvents":
-			stepTitle(c, k, tr("按一下键盘，确认快捷键可用"))
-			stepHint(c, k, tr("请按一下空格键。显示准备好后，点击按钮继续。"))
+			stepTitle(c, k, tr("按一下空格"))
+			flow(c, k, "space", vk("␣", "空格"), vi("shield-check", "就绪"))
 		case "inputMonitoringBlocked":
-			text(c, tr("还需要允许 Toskr 接收按键"), 12, 17, 500, k.danger).Wrap()
-			stepHint(c, k, tr("打开「输入监控」，开启 Toskr。如果已经开启但仍无反应，可重置授权后重新开启。"))
+			text(c, tr("允许输入监控"), 12, 17, 500, k.danger)
+			flow(c, k, "im", vi("settings-2", "系统设置"), vi("keyboard", "输入监控"), vi("check", "打开 Toskr"))
 			ui.Row(c).Gap(6).Children(func() {
 				if ui.Button(c, tr("重置输入监控授权")).Clicked() {
 					*act = a.resetInputMonitoring
@@ -272,15 +276,12 @@ func (a *app) rehearsalStep(c *ui.Context, k tokens, o store.OnboardingState, ac
 		prepared := o.ActivationStartedAtMs != nil
 		label := tr("复制示例文字")
 		if prepared {
-			stepTitle(c, k, tr("把示例文字收进 Toskr"))
-			stepHint(c, k, "1. "+tr("打开「文本编辑」等空白文档，按 ⌘ V 粘贴。"))
-			stepHint(c, k, "2. "+tr("选中刚粘贴的整段文字。"))
-			stepHint(c, k, "3. "+fmt.Sprintf(tr("连按两次 %s 键：按下、松开，再按一下。"), a.captureKeyLabel()))
-			stepHint(c, k, tr("收好后，Toskr 会自动进入下一步。"))
+			stepTitle(c, k, tr("收进示例"))
+			ck := a.capKey()
+			flow(c, k, "cap", vi("file-text", "空白文档"), vk("⌘V", "粘贴"), vk("⌘A", "全选"), vk(ck+" "+ck, "连按两次"))
 			label = tr("重新复制示例")
 		} else {
-			stepTitle(c, k, tr("先复制这段示例"))
-			stepHint(c, k, tr("用这段示例试着收进第一张卡片。"))
+			stepTitle(c, k, tr("复制示例"))
 			sampleBox(c, k, tr(store.SafeRehearsalText), false)
 		}
 		btn(label, func() {
@@ -293,16 +294,20 @@ func (a *app) rehearsalStep(c *ui.Context, k tokens, o store.OnboardingState, ac
 			licon(c, "circle-check", 14, k.ok)
 			text(c, tr("示例内容已收好"), 11, 16, 400, k.ok)
 		})
-		sampleBox(c, k, tr(store.SafeRehearsalText), false)
-		stepTitle(c, k, tr("这段内容要粘贴到哪里？"))
-		stepHint(c, k, "1. "+tr("回到刚才的空白文档，点击一处空白，让光标停在那里。"))
-		stepHint(c, k, "2. "+tr("回到 Toskr，点「识别粘贴位置」，再确认应用名称。"))
+		stepTitle(c, k, tr("选粘贴位置"))
+		flow(c, k, "tgt", vi("crosshair", "点文档"), vi("locate-fixed", "识别"), vi("circle-check", "确认"))
 		ready := a.targetReady()
-		status := tr("还没有可用的粘贴位置")
-		if ready {
-			status = fmt.Sprintf(tr("将粘贴到：%s"), targetName(a.target.Name))
-		}
-		text(c, status, 11, 16, 500, k.fg).Wrap()
+		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+			if ready {
+				if img := a.appIcon(a.target.BundleID); img != nil {
+					ui.Image(c, img).Size(16, 16)
+				}
+				text(c, fmt.Sprintf(tr("将粘贴到：%s"), targetName(a.target.Name)), 12, 17, 500, k.fg)
+			} else {
+				licon(c, "circle", 14, k.muted)
+				text(c, tr("未识别"), 12, 17, 400, k.muted)
+			}
+		})
 		ui.Row(c).Gap(6).Children(func() {
 			if ui.Button(c, tr("识别粘贴位置")).Clicked() {
 				*act = a.refreshTargetFromFront
@@ -316,9 +321,17 @@ func (a *app) rehearsalStep(c *ui.Context, k tokens, o store.OnboardingState, ac
 			}
 		})
 	case store.StepFirewall, store.StepDelivery:
-		stepTitle(c, k, tr("最后，检查一下要粘贴的内容"))
-		stepHint(c, k, tr("下一页会标出示例里的邮箱。选择替换后，检查正文，再点「安全粘贴」。"))
-		stepHint(c, k, tr("完成后，文字会出现在刚才的文档中。教程不会自动按回车。"))
+		stepTitle(c, k, tr("检查并粘贴"))
+		flow(c, k, "fw", vi("shield", "替换邮箱"), vi("eye", "看正文"), vi("clipboard-check", "安全粘贴"))
+		chipSwap(c, k, "demo.user@…", "[EMAIL_01]", true)
+		if !a.targetReady() { // 重启后目标丢失：先重新识别
+			ui.Row(c).Gap(6).Children(func() {
+				if ui.Button(c, tr("识别粘贴位置")).Clicked() {
+					*act = a.refreshTargetFromFront
+				}
+			})
+			return
+		}
 		label := tr("查看要粘贴的内容")
 		if o.RehearsalStep == store.StepDelivery {
 			label = tr("继续检查并粘贴")
@@ -606,11 +619,9 @@ func (a *app) lessonCoach(c *ui.Context, k tokens) {
 			ui.Box(c).Size(28, 28).Radius(8).Background(k.track).Center().Children(func() { licon(c, icon, 14, k.fg) })
 			ui.Column(c).Grow(1).Basis(0).Children(func() {
 				text(c, fmt.Sprintf(tr("进阶 · %s"), name), 13, 18, 600, k.fg).SingleLine()
-				sub := tr("已完成")
-				if !done {
-					sub = fmt.Sprintf(tr("第 %d 步，共 3 步 · 不会自动按回车"), p.step+1)
+				if done {
+					text(c, tr("已完成"), 10, 14, 400, k.ok)
 				}
-				text(c, sub, 10, 14, 400, k.muted)
 			})
 			if !done && linkButton(c, k, "lesson-quit", tr("退出")) {
 				act = func() { a.abandonAdvancedLesson(true) }
@@ -621,7 +632,7 @@ func (a *app) lessonCoach(c *ui.Context, k tokens) {
 			switch {
 			case merge && p.step == 0:
 				stepTitle(c, k, tr("放入两张示例卡片"))
-				stepHint(c, k, tr("会放进收件箱，带「Toskr 教程」标记，完成后自动清理。"))
+				flow(c, k, "m0", vi("inbox", "收件箱"), vi("tag", "教程标记"), vi("trash-2", "自动清理"))
 				ui.Row(c).Children(func() { btn(tr("放入示例卡片"), a.prepareLessonSamples) })
 			case merge && p.step == 1:
 				n := 0
@@ -630,33 +641,44 @@ func (a *app) lessonCoach(c *ui.Context, k tokens) {
 						n++
 					}
 				}
-				stepTitle(c, k, tr("勾选这两张卡片"))
-				stepHint(c, k, fmt.Sprintf(tr("点卡片左侧的圆圈，或选中后按 X。已勾选 %d / 2。"), n))
+				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+					stepTitle(c, k, tr("勾选这两张卡片"))
+					for i := range 2 {
+						if i < n {
+							licon(c, "circle-check", 14, k.ok)
+						} else {
+							licon(c, "circle", 14, k.muted)
+						}
+					}
+				})
+				flow(c, k, "m1", vi("crosshair", "点圆圈"), vk("X", "或按 X"))
 				ui.Row(c).Children(func() { btn(tr("帮我勾选"), a.checkLessonSamples) })
 			case merge && p.step == 2:
-				stepTitle(c, k, tr("按 ⌘ ⏎ 一起发送"))
-				stepHint(c, k, tr("先点一下文档或 AI 输入框的空白处，再回来发送；两张卡会合成一次粘贴。"))
+				stepTitle(c, k, tr("一起发送"))
+				flow(c, k, "m2", vi("crosshair", "点文档"), vk("⌘⏎", "发送"), vi("layers", "合成一次"))
 				ui.Row(c).Children(func() { btn(tr("发送这两张"), a.sendLessonSamples) })
 			case merge:
 				stepTitle(c, k, tr("完成：两张卡合成了一次发送"))
-				stepHint(c, k, tr("以后勾选多张卡片，按 ⌘⏎ 就能一起发。"))
+				flow(c, k, "m3", vi("copy-check", "勾选多张"), vk("⌘⏎", "一起发"))
 				ui.Row(c).Children(func() { btn(tr("完成并清理示例"), func() { a.finishAdvancedLesson(true) }) })
 			case p.step == 0:
 				stepTitle(c, k, tr("准备示例"))
-				stepHint(c, k, fmt.Sprintf(tr("会添加化名「%s」和一张示例卡片，并打开「捕获时自动还原」。"), alias))
+				chipSwap(c, k, alias, ph, false)
 				ui.Row(c).Children(func() { btn(tr("准备示例"), a.prepareLessonSamples) })
 			case p.step == 1:
 				stepTitle(c, k, tr("发送这张示例卡"))
-				stepHint(c, k, fmt.Sprintf(tr("发送时「%s」会换成 %s，邮箱会被隐私检查发现并替换。先点一下文档空白处，再发送。"), alias, ph))
+				chipSwap(c, k, alias, ph, true)
+				chipSwap(c, k, "demo.user@…", "[EMAIL_01]", true)
 				ui.Row(c).Children(func() { btn(tr("发送示例"), a.sendLessonSamples) })
 			case p.step == 2:
 				stepTitle(c, k, tr("把 AI 的回复收回来"))
-				stepHint(c, k, fmt.Sprintf(tr("复制下面这段模拟回复，粘贴到文档后选中，再连按两次 %s 收进来"), a.captureKeyLabel()))
+				ck := a.capKey()
+				flow(c, k, "p2", vi("copy", "复制回复"), vk("⌘V", "粘贴"), vk("⌘A", "全选"), vk(ck+" "+ck, "连按两次"))
 				sampleBox(c, k, privacyLessonReply(ph), true)
 				ui.Row(c).Children(func() { btn(tr("复制模拟回复"), a.copyLessonReply) })
 			default:
-				stepTitle(c, k, fmt.Sprintf(tr("完成：%s 已还原成「%s」"), ph, alias))
-				stepHint(c, k, tr("AI 只看到占位符，你收回的内容自动变回原文。示例化名要保留吗？"))
+				stepTitle(c, k, tr("完成：收回时自动还原"))
+				chipSwap(c, k, ph, alias, true)
 				ui.Row(c).Gap(6).Children(func() {
 					btn(tr("保留化名"), func() { a.finishAdvancedLesson(true) })
 					btn(tr("删除化名"), func() { a.finishAdvancedLesson(false) })
@@ -694,7 +716,7 @@ func (a *app) tourIllustration(c *ui.Context, k tokens) {
 		return e.Opacity(e.AnimateTo(id, to, tweenTw))
 	}
 	win := func(title string, w float32, body func()) ui.Element {
-		return ui.Column(c).Width(w).Padding(6, 8).Gap(5).Radius(8).Background(k.card).Border(1, k.inputBorder).Children(func() {
+		return ui.Column(c).Grow(1).Basis(0).Clip().Padding(6, 8).Gap(5).Radius(8).Background(k.card).Border(1, k.inputBorder).Children(func() {
 			ui.Row(c).Gap(3).AlignItems(ui.Center).Children(func() {
 				ui.Box(c).Size(5, 5).Radius(2.5).Background(k.inputBorder)
 				ui.Box(c).Size(5, 5).Radius(2.5).Background(k.inputBorder)
@@ -775,7 +797,7 @@ func (a *app) welcomeTour(c *ui.Context, k tokens) {
 		}
 	}()
 	ui.Overlay(c, func() {
-		ui.Column(c).Absolute().Left(0).Top(0).Size(w, h).Radius(14).Background(c.Theme().Background.Alpha(0.97)).Key("welcome-tour").Role(ui.RoleDialog).Label(tr("新手导览")).Children(func() {
+		ui.Column(c).Absolute().Left(0).Top(0).Size(w, h).Radius(14).Background(c.Theme().Background).Key("welcome-tour").Role(ui.RoleDialog).Label(tr("新手导览")).Children(func() {
 			ui.Scroll(c).Fill().Scrollbars(false).Children(func() {
 				ui.Column(c).Padding(24, 20).Gap(20).MaxWidth(420).MinHeight(h).Justify(ui.Center).Children(func() {
 					ui.Column(c).Gap(4).Children(func() {
@@ -783,13 +805,19 @@ func (a *app) welcomeTour(c *ui.Context, k tokens) {
 						text(c, tr(welcomeTourTitle), 17, 24, 600, k.fg).Wrap()
 					})
 					a.tourIllustration(c, k)
-					ui.Column(c).Gap(6).Children(func() {
-						for i, p := range welcomeTourPoints {
-							ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-								ui.Box(c).Size(20, 20).Radius(10).Background(k.track).Center().Children(func() {
-									text(c, itoa(i+1), 10, 14, 500, k.muted)
-								})
-								text(c, tr(p), 12, 17, 400, k.fg).Wrap().Grow(1).Basis(0)
+					ck := a.capKey()
+					ui.Row(c).Gap(8).Children(func() { // 要点改为图标格（用户要求少文字），原句作悬停提示与无障碍标签
+						for i, pt := range []vstep{vk(ck+" "+ck, "收集"), vk("⌘⏎", "合并发送"), vi("shield-check", "自动脱敏")} {
+							t := ui.Column(c).Grow(1).Basis(0).Padding(10, 4).Gap(6).Radius(10).Background(k.track).AlignItems(ui.Center).
+								Key("tour-pt-" + itoa(i)).Label(tr(welcomeTourPoints[i])).Tooltip(tr(welcomeTourPoints[i]))
+							t.Children(func() {
+								if pt.icon != "" {
+									ui.Box(c).Height(24).Center().Children(func() { licon(c, pt.icon, 20, k.ok) })
+								} else {
+									ui.Row(c).Height(24).Padding(0, 8).Radius(6).Background(k.window).Border(1, k.inputBorder).AlignItems(ui.Center).
+										Children(func() { text(c, pt.key, 12, 16, 600, k.fg) })
+								}
+								text(c, tr(pt.label), 11, 16, 500, k.fg).SingleLine()
 							})
 						}
 					})
@@ -798,11 +826,11 @@ func (a *app) welcomeTour(c *ui.Context, k tokens) {
 							act = func() { a.leaveTour(true) }
 						}
 						ui.Row(c).Justify(ui.Center).Children(func() {
-							if linkButton(c, k, "tour-skip", tr("直接开始使用")) {
+							if linkButton(c, k, "tour-skip", tr("直接开始使用")) { // 悬停见 tour-skip 提示
 								act = func() { a.leaveTour(false) }
 							}
 						})
-						text(c, tr("随时可在「设置 → 帮助与更新」继续学习"), 10, 14, 400, k.muted).TextAlign(ui.Center).FillWidth()
+						// 「随时可在设置继续学习」改为跳过按钮的悬停提示，不占正文
 					})
 				})
 			})
