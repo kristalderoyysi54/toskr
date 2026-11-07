@@ -253,6 +253,10 @@ func (a *app) detailView(c *ui.Context) {
 	}
 	c.Root().Background(bg)
 	a.detailKeys(c, n)
+	if n.Kind == "image" && a.detail.virt == nil {
+		a.detailImageView(c, k, s, n)
+		return
+	}
 	ui.Box(c).Fill().Children(func() {
 		ui.Box(c).Absolute().Top(0).Left(0).Right(0).Height(102.4).PassThrough(). // 纯装饰：不挡正文首行的点击 / 划选（选词首行键帽曾点不动）
 												LinearGradient(ui.LinearGradient{From: srgbf(0.486274, 0.517647, 0.580392).Alpha(0.26), To: ui.Transparent, Angle: 180})
@@ -476,9 +480,6 @@ func (a *app) detailBody(c *ui.Context, k tokens, s settingsTokens, n store.Note
 		in := body.AnimateTo("in", 1, springSnappy)
 		body.Opacity(min(in, 1)).Translate(0, 6*(1-in))
 		body.Children(func() {
-			if n.Kind == "image" {
-				a.detailImage(c, k, s, n)
-			}
 			switch {
 			case n.Kind == "image":
 				// 图片卡的文字在备注条里编辑
@@ -1173,58 +1174,107 @@ func mapReadSelection(src string, parts []ui.SelectedText) [2]int {
 }
 
 // detailImage：图片 + 多图上一张 / 下一张（圆形半透明钮）+ 底部「i / N · W × H」+ 文字备注条（同 Tauri ImagePreviewView）。
-func (a *app) detailImage(c *ui.Context, k tokens, s settingsTokens, n store.Note) {
+// detailImageView 同 Tauri ImagePreviewView：标题栏「图片 / 图片 i/N」+ 钉住 / 打码 / 标注 / 发送；
+// 图片铺满中间区域（object-contain，适配态拖动整窗）；下方备注条与「i / N · W×H」页脚；没有标签行与底部坞。
+func (a *app) detailImageView(c *ui.Context, k tokens, s settingsTokens, n store.Note) {
 	files := n.MediaFiles()
 	many := len(files) > 1
-	if a.detail.full != nil {
-		w, h := ui.ImageSize(a.detail.full)
-		dw := min(w, 520)
-		ui.Row(c).FillWidth().Margin(5.85, 0, 0, 0).Justify(ui.Center).Children(func() { // 翻页钮贴容器两侧（同 Tauri），小图也不重叠
-			ui.Image(c, a.detail.full).Size(dw, h*dw/max(w, 1)).Radius(8)
+	ui.Column(c).Fill().Children(func() {
+		ui.Row(c).Height(38).Padding(8, 12).Gap(6).AlignItems(ui.Center).DragWindow().Children(func() {
+			ui.Box(c).Width(52) // 系统红绿灯占位
+			title := tr("图片")
+			if many {
+				title = fmt.Sprintf(tr("图片 %d/%d"), a.detail.img+1, len(files))
+			}
+			text(c, title, 12, 17, 500, k.fg.Alpha(0.8)).Grow(1).Basis(0)
+			if a.detail.imgNote { // 同 Tauri：编辑备注时收起标题栏按钮
+				return
+			}
+			pinTip := tr("固定窗口：发送后保持打开")
+			if a.detail.pinned {
+				pinTip = tr("取消固定（发送后恢复自动关窗）")
+			}
+			pin := ghostIconButton(c, k, "img-pin", "pin", pinTip, 22, 14, false, true)
+			if a.detail.pinned {
+				pin.Background(k.track)
+			}
+			if pin.Clicked() {
+				a.detail.pinned = !a.detail.pinned
+			}
+			if ghostIconButton(c, k, "img-redact", "shield", tr("图片打码"), 22, 14, false, true).Clicked() {
+				a.onMain(func() { a.openRedactor(n) })
+			}
+			if ghostIconButton(c, k, "img-annotate", "pen-line", tr("标注 / 裁剪：加标注或裁剪，完成后替换卡片里的原图（可撤销）"), 22, 14, false, true).Clicked() {
+				a.onMain(func() { a.annotateNote(n) })
+			}
+			sendTip := tr("发送")
+			if a.target.PID != 0 {
+				sendTip = tr("发送到 ") + a.target.Name
+			}
+			if ghostIconButton(c, k, "img-send", "send", sendTip, 22, 14, false, true).Clicked() {
+				a.sendDetail(n)
+			}
+		})
+		area := ui.Box(c).Grow(1).Basis(0).FillWidth().Padding(8).Center().Clip().DragWindow()
+		if files := area.DroppedFiles(); len(files) > 0 {
+			a.dropIntoDetail(n, files)
+		}
+		area.Children(func() {
+			if a.detail.full != nil {
+				// 按「张序」重挂载：翻页也有浮现过渡（同 Tauri motion.img initial scale 0.96 → 1）
+				ui.Image(c, a.detail.full).Fill().Fit(ui.Contain).Key("img-" + itoa(a.detail.img)).
+					Transition(ui.ElementTransition{Duration: 200 * time.Millisecond, Ease: easeStandard, Enter: &ui.Motion{Scale: 0.96}})
+			}
 			if !many {
 				return
 			}
-			nav := func(icon, label string, left bool, disabled bool) {
-				b := ui.Box(c).Absolute().Top(h*dw/max(w, 1)/2-14).Size(28, 28).Radius(14).Center().Key("img-" + icon).
-					Role(ui.RoleButton).Label(label).Tooltip(label)
+			nav := func(icon, label string, left, disabled bool) {
+				col := ui.Box(c).Absolute().Top(0).Bottom(0).Width(28).Center()
 				if left {
-					b.Left(8)
+					col.Left(8)
 				} else {
-					b.Right(8)
+					col.Right(8)
 				}
-				bg, fg := ui.RGBA(0, 0, 0, 0.4), ui.RGBA(255, 255, 255, 0.8)
-				if b.Hovered() && !disabled {
-					bg, fg = ui.RGBA(0, 0, 0, 0.6), ui.RGB(255, 255, 255)
-				}
-				if disabled {
-					b.Opacity(0.3)
-				}
-				fadeColor(b, "bg", bg, tweenControl) // token-exception: 叠在图片上的固定暗钮（同 Tauri bg-black/40）
-				b.Children(func() { licon(c, icon, 16, fg) })
-				if b.Clicked() && !disabled {
-					if left {
-						a.detailImageAt(n, a.detail.img-1)
-					} else {
-						a.detailImageAt(n, a.detail.img+1)
+				col.Children(func() {
+					b := ui.Box(c).Size(28, 28).Radius(14).Center().Key("img-" + icon).Role(ui.RoleButton).Label(label).Tooltip(label)
+					bg, fg := ui.RGBA(0, 0, 0, 0.4), ui.RGBA(255, 255, 255, 0.8)
+					if b.Hovered() && !disabled {
+						bg, fg = ui.RGBA(0, 0, 0, 0.6), ui.RGB(255, 255, 255)
 					}
-				}
+					if disabled {
+						b.Opacity(0.3)
+					}
+					fadeColor(b, "bg", bg, tweenControl) // token-exception: 叠在图片上的固定暗钮（同 Tauri bg-black/40）
+					b.Children(func() { licon(c, icon, 16, fg) })
+					if b.Clicked() && !disabled {
+						if left {
+							a.detailImageAt(n, a.detail.img-1)
+						} else {
+							a.detailImageAt(n, a.detail.img+1)
+						}
+					}
+				})
 			}
 			nav("chevron-left", tr("上一张"), true, a.detail.img == 0)
 			nav("chevron-right", tr("下一张"), false, a.detail.img == len(files)-1)
 		})
-	}
-	var meta []string
-	if many {
-		meta = append(meta, fmt.Sprintf("%d / %d", a.detail.img+1, len(files)))
-	}
-	if a.detail.imgW > 0 {
-		meta = append(meta, fmt.Sprintf("%d × %d", a.detail.imgW, a.detail.imgH))
-	}
-	if len(meta) > 0 {
-		text(c, strings.Join(meta, " · "), 10, 14, 400, k.muted).TextAlign(ui.Center).FillWidth().Margin(6, 0, 0, 0)
-	}
-	// 文字备注条
-	ui.Column(c).Margin(10, 0, 0, 0).Padding(6, 0, 0, 0).BorderWidth(1, 0, 0, 0).BorderColor(k.inputBorder).Children(func() {
+		a.detailImageCaption(c, k, n)
+		var meta []string
+		if many {
+			meta = append(meta, fmt.Sprintf("%d / %d", a.detail.img+1, len(files)))
+		}
+		if a.detail.imgW > 0 {
+			meta = append(meta, fmt.Sprintf("%d × %d", a.detail.imgW, a.detail.imgH))
+		}
+		ui.Row(c).Height(24).FillWidth().Justify(ui.Center).AlignItems(ui.Center).Shrink(0).Children(func() {
+			text(c, strings.Join(meta, " · "), 11, 16, 400, k.muted).FontFeatures("tnum")
+		})
+	})
+}
+
+// detailImageCaption 同 Tauri 备注条：border-t px-3 py-1.5；查看态一行截断 + 铅笔，编辑态多行输入 + 保存。
+func (a *app) detailImageCaption(c *ui.Context, k tokens, n store.Note) {
+	ui.Column(c).FillWidth().Shrink(0).Padding(6, 12).BorderWidth(1, 0, 0, 0).BorderColor(k.inputBorder).Children(func() {
 		if a.detail.imgNote {
 			ui.Row(c).Gap(6).AlignItems(ui.End).Children(func() {
 				ui.Box(c).Grow(1).Basis(0).Padding(4, 8).Radius(6).Background(k.fg.Alpha(0.05)).Children(func() {
