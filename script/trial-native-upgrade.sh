@@ -30,7 +30,7 @@ prepare)
   fi
   id -un > "$KIT/.owner"; chmod 1777 "$KIT"   # 记下主账户名（其余子命令拒绝在主账户里运行）；测试账户要能往这里写校验值
   chmod -R a+rX "$KIT"
-  echo "→ 演练包已放到 $KIT；切到测试账户后运行 $KIT/trial.sh install"
+  echo "→ 演练包已放到 ${KIT}；切到测试账户后运行 $KIT/trial.sh install"
   ;;
 install)
   [[ "$(id -un)" != "$(cat "$KIT/.owner" 2>/dev/null)" ]] || { echo "请在测试账户里运行，不要在主账户"; exit 1; }
@@ -56,7 +56,7 @@ upgrade)
   mv "$APP" "$BAK" && mv "$NEW" "$APP"
   codesign --verify --deep --strict "$APP"
   open "$APP"
-  echo "→ 已原位换成原生包并打开（旧包备份在 $BAK）。留意：有没有钥匙串 / 权限弹框、面板里数据在不在。然后运行 check"
+  echo "→ 已原位换成原生包并打开（旧包备份在 ${BAK}）。留意：有没有钥匙串 / 权限弹框、面板里数据在不在。然后运行 check"
   ;;
 check)
   ok() { echo "  ✓ $1"; }; bad() { echo "  ✗ $1"; FAIL=1; }
