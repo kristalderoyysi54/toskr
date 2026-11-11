@@ -463,7 +463,7 @@ func init() { // 截图识别文字：选行 / 二维码 / 表格（shot_pick.go
 
 func init() { // 同时发到多个应用与回复对比（fanout.go）
 	for k, v := range map[string]string{
-		"没有发到任何应用": "Nothing was sent to any app", "已发到 %s": "Sent to %s", "只发到了 %s（共选了 %d 个）": "Only sent to %s (%d selected)", "已停止；之前已发到 %s": "Stopped; already sent to %s",
+		"没有发到任何应用": "Nothing was sent to any app", "已发到 %s": "Sent to %s", "只发到了 %s（共选了 %d 个）": "Only sent to %s (%d selected)", "已停止；之前已发到 %s": "Stopped; already sent to %s", "上一组还在发送，稍后再试": "The previous group is still sending — try again shortly",
 		"同时发到": "Send to several", "同时发到…": "Send to several…", "已选 %d / %d": "%d / %d selected", "至少选 2 个应用": "Pick at least 2 apps", "发到 %d 个应用": "Send to %d apps",
 		"已收为 %s 的回复 · 已有 %d 家，右键可对比": "Saved as %s's reply · %d so far, right-click to compare", "已收为 %s 的回复": "Saved as %s's reply",
 		"至少收到两家的回复才能对比": "Need replies from at least two apps to compare", "对比回复": "Compare replies", "对比回复 · %d 个应用": "Compare replies · %d apps",

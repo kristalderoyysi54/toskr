@@ -30,8 +30,18 @@ type fanout struct {
 
 // startFanout：依次发到 targets。
 func (a *app) startFanout(notes []store.Note, targets []macos.AppInfo) {
-	if len(notes) == 0 || len(targets) < 2 || a.fanout != nil {
+	if len(notes) == 0 || len(targets) < 2 {
 		return
+	}
+	if f := a.fanout; f != nil {
+		if f.delivering { // 上一组正在粘贴：不能打断
+			a.showHUD("info", tr("上一组还在发送，稍后再试"))
+			return
+		}
+		// 上一组停在预检 / 回车确认里没处理（确认条没被看到）：作废它，否则之后每次点「发到 N 个应用」都被静默忽略
+		a.fanout = nil
+		a.cancelPending()
+		a.cancelEnterAsk()
 	}
 	a.fanout = &fanout{id: fmt.Sprintf("fan-%d", a.now().UnixNano()), targets: targets, notes: notes}
 	a.fanoutStep()

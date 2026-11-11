@@ -545,6 +545,29 @@ func (a *app) hidePanel() {
 	}()
 }
 
+// revealPanelForConfirm：发送停在预检 / 「粘贴后按回车？」时把面板真正唤到用户眼前。确认条只画在面板里，而发送可能从详情窗
+// 发起——此时面板可能已收起、正在离场或贴边滑出成细条；只 Show() 不重绘、不滑回、不取焦点，看起来就是「点了发送没反应」。
+// 不走 showPanel：它会按前台应用重取目标，覆盖「发送到…」/ 多目标发送刚指定的目标，投递时被判「目标已变化」。
+func (a *app) revealPanelForConfirm(why string) {
+	diag.Push("发送: 等待%s target=%s", why, a.target.BundleID)
+	if a.panel == nil {
+		return
+	}
+	a.trimGen++ // 取消排着的内存整理
+	if !a.panel.IsVisible() {
+		a.presenceArm = true // 藏窗后再显示：从 0 起播进场
+		a.reload()
+	}
+	a.panelHiding = false
+	a.holdOpen, a.edgeArmed, a.edgeAway = true, false, 0 // 等用户确认：不随失焦收起、不贴边滑走（Esc / 拖动照常解除）
+	if a.edgeHidden {
+		a.edgeSlideTo(false)
+	}
+	a.panel.Show()
+	a.panel.Focus()
+	a.panel.Invalidate()
+}
+
 // yieldPanelFocus：发送后面板保留（钉住 / 方案「发送后保留面板」/ 演练）时，先让出键盘焦点再粘贴。
 // 面板是不激活应用的浮窗：目标应用本就在前台时，激活它不会把键盘焦点从仍是 key 的面板拿走，⌘V 会落到面板上。
 // 隐藏后不抢焦点地重新显示（同 HUD 的 ShowInactive）；期间的失焦不触发自动收起。
@@ -899,9 +922,7 @@ func (a *app) sendT(notes []store.Note, tmpl string) {
 		a.forceCheck = false
 		a.pending, a.pendingTmpl, a.pf = notes, tmpl, preflightState{auto: auto, preAlias: raw}
 		a.freezeDraftTarget()
-		if a.panel != nil {
-			a.panel.Show() // 确认条在面板里
-		}
+		a.revealPanelForConfirm("预检") // 确认条在面板里
 		return
 	}
 	a.askEnter(notes, false, tmpl)
@@ -924,9 +945,7 @@ func (a *app) askEnter(notes []store.Note, rawKept bool, tmpl string) {
 		if a.draftTarget.pid == 0 {
 			a.freezeDraftTarget()
 		}
-		if a.panel != nil {
-			a.panel.Show()
-		}
+		a.revealPanelForConfirm("回车确认")
 	default:
 		a.deliver(notes, true, tmpl)
 	}

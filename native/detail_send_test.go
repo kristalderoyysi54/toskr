@@ -45,3 +45,36 @@ func TestDetailSendToAppAndMode(t *testing.T) {
 		t.Fatalf("去 Markdown %q", got)
 	}
 }
+
+// 发送下拉向窗外展开：选「同时发到…」时光标已离窗，选择仍要送达（离窗那一帧不能先把操作坞收掉）。
+func TestDetailFanoutMenuChosenAfterPointerLeft(t *testing.T) {
+	a, _ := testApp(t, "一段问题")
+	a.sys = &recSys{}
+	a.target = macos.FrontApp{PID: 42, Name: "Cursor"}
+	orig := runningTargets
+	t.Cleanup(func() { runningTargets = orig })
+	runningTargets = fanApps
+	n := a.store.Notes()[0]
+	a.detail = detailState{id: n.ID, pickAnchor: -1, pickEnd: -1, pinned: true}
+	tt := ui.NewTester(a.detailView, 560, 540)
+	tt.Move(300, 300)
+	tt.Frame()
+	if err := tt.Click("更多发送选项"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Move(300, 900) // 菜单在窗外：光标离窗
+	if err := tt.ChooseMenuItem("同时发到…"); err != nil {
+		t.Fatalf("%v %v", err, tt.Menu())
+	}
+	tt.Frame()
+	if !a.detail.fanOpen || !tt.HasText("至少选 2 个应用") {
+		t.Fatalf("应打开选目标浮层 fanOpen=%v %v", a.detail.fanOpen, tt.Texts())
+	}
+	tt.Move(300, 300) // 光标重新进窗：解除保持
+	tt.Frame()
+	tt.Move(300, 900)
+	tt.Frame()
+	if a.detail.chromeHold || tt.HasText("复制") {
+		t.Fatalf("解除后离窗应照常收起 hold=%v", a.detail.chromeHold)
+	}
+}

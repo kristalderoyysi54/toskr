@@ -49,6 +49,7 @@ type detailState struct {
 	imgSized            bool            // 窗口按图片尺寸开（图片卡）：关窗不记尺寸
 	galleryBack         *mygo.Rectangle // 图文卡看图时放大前的窗口位置与尺寸
 	chromeHidden        bool            // 无界剧场（同 Tauri chromeOn）：标题栏 / 标签行 / 操作坞收起中
+	chromeHold          bool            // 操作坞下拉菜单打开后保持 chrome，直到光标重新进窗（菜单选择下一帧才送达）
 	chromeOver          bool            // 上一帧光标在窗内
 	altEdit             bool            // 看图层：正在给当前这张图写说明
 	altDraft            string
@@ -352,6 +353,9 @@ func (a *app) detailChromeTrack(over bool) {
 	d := &a.detail
 	switch {
 	case over:
+		if !d.chromeOver { // 光标重新进窗：菜单已了结，解除保持
+			d.chromeHold = false
+		}
 		d.chromeHidden = false
 	case d.chromeOver: // 刚离窗
 		d.chromeHidden = true
@@ -362,8 +366,14 @@ func (a *app) detailChromeTrack(over bool) {
 // detailChromeVisible：编辑 / 选词 / 标签输入 / 图片说明期间常显（有操作要落地）。
 func (a *app) detailChromeVisible() bool {
 	d := a.detail
-	return !d.chromeHidden || d.edit || d.pick || d.tagOn || d.altEdit
+	return !d.chromeHidden || d.chromeHold || d.edit || d.pick || d.tagOn || d.altEdit
 }
+
+// holdDetailChrome：chrome 里的原生下拉菜单（发送 / 存入分组）构建时调用。菜单常向窗外展开，选完时光标在窗外；
+// 选择要在下一帧送到挂菜单的那枚按钮上，chrome 若因「离窗」先收起，选择就丢了（「同时发到…」点了没反应）。
+// 菜单打开起保持 chrome，光标重新进窗后解除。「处理」是窗内弹层（PopoverMenuButton），光标不会离窗，不需要也不能调：
+// 它的构建函数弹层用过后逐帧执行，会让 chrome 再也收不起来。
+func (a *app) holdDetailChrome() { a.detail.chromeHold = true }
 
 // armDetailChrome：打开详情时显示 chrome，2.5s 后光标仍不在窗内就收起（键盘唤出的情形）。
 func (a *app) armDetailChrome(p *detailPane, win *mygo.Window) {
@@ -531,6 +541,7 @@ func (a *app) detailSourceAndSave(c *ui.Context, k tokens, n store.Note) {
 	}
 	b := ghostIconButton(c, k, "detail-save-notes", "folder-input", tr("存入笔记分组"), 22, 14, false, true)
 	b.Menu(func(m *ui.Menu) {
+		a.holdDetailChrome()
 		m.Item(tr("存入笔记分组")).Disabled(true)
 		for _, s := range a.store.Sections() {
 			if s.ID == store.SectionClipboard {
@@ -1228,6 +1239,7 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 			text(c, "⌘⏎", 9, 18, 500, fg).Opacity(0.7)
 		})
 		sendMenu := func(m *ui.Menu) {
+			a.holdDetailChrome()
 			r, _ := a.resolution()
 			// 发送方式（同 Tauri TextPreviewView）：仅本次换格式；代码卡与秘文保持原样，不提供去 Markdown
 			m.Item(tr("发送方式")).Disabled(true)

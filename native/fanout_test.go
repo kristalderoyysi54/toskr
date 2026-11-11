@@ -150,3 +150,22 @@ func TestFanoutPickerAndCancel(t *testing.T) {
 		t.Fatal("取消预检应停止整组发送")
 	}
 }
+
+// 上一组停在预检里没处理（确认条没被看到）时再次发起：作废旧的一组并重新开始，不能静默忽略。
+func TestFanoutRestartsWhenPreviousStuck(t *testing.T) {
+	a, _ := testApp(t, "一段问题 demo.user@example.com")
+	a.sys = &recSys{}
+	notes := a.store.Notes()[:1]
+	a.startFanout(notes, fanApps()[:2])
+	first := a.fanout
+	if first == nil || len(a.pending) == 0 {
+		t.Fatalf("应停在预检 fanout=%v pending=%d", first != nil, len(a.pending))
+	}
+	a.startFanout(notes, fanApps()[1:3])
+	if a.fanout == nil || a.fanout == first || len(a.pending) == 0 {
+		t.Fatalf("应作废旧的一组并重新停在预检 same=%v pending=%d", a.fanout == first, len(a.pending))
+	}
+	if got, want := a.target.Name, fanApps()[1].Name; got != want {
+		t.Fatalf("目标应是新一组的第一个 %q != %q", got, want)
+	}
+}
