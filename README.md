@@ -11,9 +11,7 @@
 [官网](https://toskr.kaibin.me/) · [下载最新版](https://github.com/kristalderoyysi54/toskr/releases/latest) · 简体中文 · [English](README.en.md)
 
 <img src="https://img.shields.io/badge/macOS-13%2B-000000?logo=apple&logoColor=white" alt="macOS 13+" />
-<img src="https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white" alt="Tauri 2" />
-<img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black" alt="React 18" />
-<img src="https://img.shields.io/badge/Rust-stable-DEA584?logo=rust&logoColor=white" alt="Rust" />
+<img src="https://img.shields.io/badge/%E5%8E%9F%E7%94%9F%E5%BA%94%E7%94%A8-Apple%20Silicon-555555" alt="原生应用 · Apple Silicon" />
 
 </div>
 
@@ -26,6 +24,17 @@
 <p align="center">
   <img src="docs/assets/readme/toskr-flow.png" alt="来源应用、Toskr 和当前 AI 输入框组成的三步流程" width="100%" />
 </p>
+
+## 1.0：原生重写
+
+界面与后台整体改为 macOS 原生实现，不再内嵌浏览器内核。功能与数据沿用旧版，从旧版点「更新」即可，不需要迁移或重新设置。
+
+| | 1.0 | 0.22 |
+| --- | --- | --- |
+| 打开到可用 | 约 0.2 秒 | 3–4 秒 |
+| 启动 20 秒后的内存 | 60–90 MB | 约 270 MB |
+
+<sub>2026-11-11 在同一台 Apple Silicon Mac 上各重启两次测得，数据量约 750 条；长时间使用后内存会高于此值。</sub>
 
 ## 三步上手
 

@@ -11,9 +11,7 @@ Collect text and images from different apps, organize and review privacy, then p
 [Website](https://toskr.kaibin.me/) · [Download the latest release](https://github.com/kristalderoyysi54/toskr/releases/latest) · [简体中文](README.md) · English
 
 <img src="https://img.shields.io/badge/macOS-13%2B-000000?logo=apple&logoColor=white" alt="macOS 13+" />
-<img src="https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white" alt="Tauri 2" />
-<img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black" alt="React 18" />
-<img src="https://img.shields.io/badge/Rust-stable-DEA584?logo=rust&logoColor=white" alt="Rust" />
+<img src="https://img.shields.io/badge/Native%20app-Apple%20Silicon-555555" alt="Native app · Apple Silicon" />
 
 </div>
 
@@ -26,6 +24,17 @@ Customize auto-submit per target app — `⌘ Enter` pastes and delivers in one 
 <p align="center">
   <img src="docs/assets/readme/toskr-flow.png" alt="A three-step flow from source apps through Toskr to the current AI input" width="100%" />
 </p>
+
+## 1.0: rewritten as a native app
+
+The interface and background services are now native macOS code, with no embedded browser engine. Features and data carry over: update from the previous version and keep working, with nothing to migrate or set up again.
+
+| | 1.0 | 0.22 |
+| --- | --- | --- |
+| Launch to ready | about 0.2 s | 3–4 s |
+| Memory 20 s after launch | 60–90 MB | about 270 MB |
+
+<sub>Measured on 2026-11-11 on one Apple Silicon Mac, two restarts each, with about 750 items. Memory rises above this after long use.</sub>
 
 ## Three steps
 
