@@ -4,6 +4,7 @@
 # 旧版用户点「更新」后装上的就是这个包：数据静默接续、钥匙串不弹框（包内是旧版原样的密钥辅助程序）。
 #
 # 用法: ./script/release-native.sh 1.0.0 ["更新说明"]
+#   Release 页面的说明取 docs/releases/v<版本>.md（没有这份文件才用第二个参数）；第二个参数同时写进旧版更新器的 latest.json
 #   DRY_RUN=1     只打包 + 门禁 + 生成物料到 native/build-release，不要求工作区干净、不建 Release（样机 / 自检用）
 #   SKIP_TESTS=1  跳过 go test（仅 DRY_RUN 下允许）
 # 正式运行建的是 **草稿** Release：实机走完「旧版点更新 → 原生版」后再手动发布（末尾会打印命令）。
@@ -12,6 +13,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VERSION="${1:?用法: ./script/release-native.sh <version> [notes]}"
+NOTES_FILE="docs/releases/v$VERSION.md"   # 有这份文件就用它作 Release 说明；旧版更新气泡里只放一句（$2）
 NOTES="${2:-Toskr v$VERSION}"
 DRY="${DRY_RUN:-0}"
 REPO="kristalderoyysi54/toskr"
@@ -126,7 +128,8 @@ if [[ "$DRY" == 1 ]]; then
   exit 0
 fi
 [[ "$(git rev-parse HEAD)" == "$TESTED_COMMIT" ]] || { echo "打包期间提交发生变化，拒绝发布"; exit 1; }
-gh release create "v$VERSION" --repo "$REPO" --draft --target "$TESTED_COMMIT" --title "Toskr v$VERSION" --notes "$NOTES" "${FILES[@]}"
+NOTE_ARGS=(--notes "$NOTES"); [[ -f "$NOTES_FILE" ]] && NOTE_ARGS=(--notes-file "$NOTES_FILE")
+gh release create "v$VERSION" --repo "$REPO" --draft --target "$TESTED_COMMIT" --title "Toskr v$VERSION" "${NOTE_ARGS[@]}" "${FILES[@]}"
 echo "✅ 草稿 Release v${VERSION} 已建。实机验证「旧版点更新 → 打开即原生版、数据都在、无授权框」后发布："
 echo "   gh release edit v$VERSION --repo $REPO --draft=false --latest"
 echo "   此后每个正式版都必须带 latest.json（照顾还没升级的旧版用户）。"

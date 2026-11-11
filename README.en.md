@@ -11,7 +11,7 @@ Collect text and images from different apps, organize and review privacy, then p
 [Website](https://toskr.kaibin.me/) · [Download the latest release](https://github.com/kristalderoyysi54/toskr/releases/latest) · [简体中文](README.md) · English
 
 <img src="https://img.shields.io/badge/macOS-13%2B-000000?logo=apple&logoColor=white" alt="macOS 13+" />
-<img src="https://img.shields.io/badge/Native%20app-Apple%20Silicon-555555" alt="Native app · Apple Silicon" />
+<img src="https://img.shields.io/badge/Apple%20Silicon-Intel-555555" alt="Apple Silicon · Intel" />
 
 </div>
 
@@ -24,27 +24,6 @@ Customize auto-submit per target app — `⌘ Enter` pastes and delivers in one 
 <p align="center">
   <img src="docs/assets/readme/toskr-flow.png" alt="A three-step flow from source apps through Toskr to the current AI input" width="100%" />
 </p>
-
-## 1.0: rewritten as a native app
-
-The interface and background services are now native macOS code, with no embedded browser engine. Features and data carry over: update from the previous version and keep working, with nothing to migrate or set up again.
-
-| | 1.0 | 0.22 |
-| --- | --- | --- |
-| Launch to ready | about 0.2 s | 3–4 s |
-| Memory 20 s after launch | 60–90 MB | about 270 MB |
-
-<sub>Measured on 2026-11-11 on one Apple Silicon Mac, two restarts each, with about 750 items. Memory rises above this after long use.</sub>
-
-### New in 1.0
-
-- **Ask several AIs at once** Send to 2–3 apps in one go and compare the replies side by side: what every app said is dimmed, what only one said is tinted
-- **Review AI rewrites block by block** The result streams in, each changed block marks additions and deletions character by character, and you accept or revert per block; `⌘ Enter` accepts all
-- **Pick screenshot text by line** After recognition, click, shift-click, or drag a box around the lines you want; QR codes in the selection are read out
-- **Time blocks on Today** Drag a task onto the timeline to schedule it, drag its bottom edge to change the duration, alongside your calendar events
-- **Quick-add parsing without AI** Dates, times, repeats, priority, and groups are recognised locally as you type (Chinese phrasing)
-- **Subscription insights** Six months of spend by category, a 30-day charge timeline, and price-increase notices
-- **Reading aids in the detail window** `⌘ F` find in text, heading outline, reading progress
 
 ## Three steps
 
@@ -87,7 +66,7 @@ The interface and background services are now native macOS code, with no embedde
 
 ## Install
 
-Requires **macOS 13 or later**. 1.0 supports Apple Silicon only.
+Requires **macOS 13 or later**, on Apple Silicon or Intel.
 
 1. Download the `.dmg` from the [latest release](https://github.com/kristalderoyysi54/toskr/releases/latest) and drag it into `Applications`.
 2. On first launch, use **right-click → Open** to open the self-signed app.

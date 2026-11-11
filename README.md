@@ -11,7 +11,7 @@
 [官网](https://toskr.kaibin.me/) · [下载最新版](https://github.com/kristalderoyysi54/toskr/releases/latest) · 简体中文 · [English](README.en.md)
 
 <img src="https://img.shields.io/badge/macOS-13%2B-000000?logo=apple&logoColor=white" alt="macOS 13+" />
-<img src="https://img.shields.io/badge/%E5%8E%9F%E7%94%9F%E5%BA%94%E7%94%A8-Apple%20Silicon-555555" alt="原生应用 · Apple Silicon" />
+<img src="https://img.shields.io/badge/Apple%20Silicon-Intel-555555" alt="Apple Silicon · Intel" />
 
 </div>
 
@@ -24,28 +24,6 @@
 <p align="center">
   <img src="docs/assets/readme/toskr-flow.png" alt="来源应用、Toskr 和当前 AI 输入框组成的三步流程" width="100%" />
 </p>
-
-## 1.0：原生重写
-
-界面与后台整体改为 macOS 原生实现，不再内嵌浏览器内核。功能与数据沿用旧版，从旧版点「更新」即可，不需要迁移或重新设置。
-
-| | 1.0 | 0.22 |
-| --- | --- | --- |
-| 打开到可用 | 约 0.2 秒 | 3–4 秒 |
-| 启动 20 秒后的内存 | 60–90 MB | 约 270 MB |
-
-<sub>2026-11-11 在同一台 Apple Silicon Mac 上各重启两次测得，数据量约 750 条；长时间使用后内存会高于此值。</sub>
-
-### 1.0 新增
-
-- **同时问多个 AI** 一次发到 2–3 个应用，收回的回复并排对比：各家都说到的内容压淡，只有一家说到的加浅底
-- **AI 改写逐块核对** 结果边生成边显示，按改动块逐字标出增删，可逐块采纳或还原，`⌘ Enter` 全部采纳
-- **截图文字按行挑选** 识别后点选、连选或框选要的几行再复制；选区里的二维码直接读出内容
-- **今天页时间块** 把任务拖进时间轴排期，拖下沿改时长，与日历日程同轴显示
-- **任务速记本地解析** 输入「明天下午 3 点开会 !!」，不配置 AI 也能认出时间、重复、优先级和分组
-- **订阅洞察** 近 6 个月分类柱图、未来 30 天扣款时间线、涨价提示
-- **详情窗阅读辅助** `⌘ F` 文内查找、标题大纲、阅读进度
-
 ## 三步上手
 
 1. **收进来** 选中文字后双击 `⇧ Shift`。复制过的文字和图片也会进入剪贴板历史。
@@ -87,7 +65,7 @@
 
 ## 安装
 
-需要 **macOS 13 或更高版本**；1.0 仅支持 Apple Silicon。
+需要 **macOS 13 或更高版本**，支持 Apple Silicon 与 Intel。
 
 1. 从 [最新 Releases](https://github.com/kristalderoyysi54/toskr/releases/latest) 下载 `.dmg`，拖入 `Applications`。
 2. 首次启动时使用**右键 →「打开」**，以打开自签名应用。
