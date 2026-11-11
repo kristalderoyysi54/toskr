@@ -48,12 +48,18 @@ export function handlePoint(r: Rect, h: Handle): { x: number; y: number } {
   return { x, y };
 }
 
-/** 命中的手柄（容差 tol pt）。 */
+/** 命中整条边框（容差 tol pt），四角优先；窄选区取较近的边。 */
 export function hitHandle(r: Rect, x: number, y: number, tol = 6): Handle | null {
-  return HANDLES.find((h) => {
-    const p = handlePoint(r, h);
-    return Math.abs(p.x - x) <= tol && Math.abs(p.y - y) <= tol;
-  }) ?? null;
+  const left = Math.abs(x - r.x);
+  const right = Math.abs(x - r.x - r.w);
+  const top = Math.abs(y - r.y);
+  const bottom = Math.abs(y - r.y - r.h);
+  const horizontal = Math.min(left, right) <= tol ? (left <= right ? "w" : "e") : null;
+  const vertical = Math.min(top, bottom) <= tol ? (top <= bottom ? "n" : "s") : null;
+  if (horizontal && vertical) return `${vertical}${horizontal}` as Handle;
+  if (vertical && x >= r.x && x <= r.x + r.w) return vertical;
+  if (horizontal && y >= r.y && y <= r.y + r.h) return horizontal;
+  return null;
 }
 
 export function inside(r: Rect, x: number, y: number): boolean {

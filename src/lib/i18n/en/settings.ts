@@ -88,10 +88,11 @@ export const settings = {
   // —— 窗口与外观 ——
   "常用外观": "Appearance",
   "配色方案": "Color scheme",
-  "固定浅色、整窗不透明；切回 Toskr 恢复原主题与毛玻璃":
-    "Always light and opaque. Switch back to Toskr to restore your theme and translucency",
+  "固定浅色、整窗不透明；切回琉璃恢复原主题与毛玻璃":
+    "Always light and opaque. Switch back to Glass to restore your theme and translucency",
   "Platinum 为 Mac OS 9 经典外观": "Platinum is the classic Mac OS 9 look",
-  "固定浅色；切回 Toskr 恢复深浅色设置": "Always light. Switch back to Toskr to restore your light/dark setting",
+  "固定浅色；切回琉璃恢复深浅色设置": "Always light. Switch back to Glass to restore your light/dark setting",
+  "琉璃": "Glass",
   "纸墨": "Paper",
   "抹茶": "Matcha",
   "樱粉": "Sakura",

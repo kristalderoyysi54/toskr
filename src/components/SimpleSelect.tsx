@@ -6,6 +6,19 @@ import { cn } from "@/lib/utils";
 export interface SimpleSelectOption<T extends string = string> {
   value: T;
   label: string;
+  /** 标签前的色点（如配色方案的代表色）；任意 CSS 颜色。 */
+  swatch?: string;
+}
+
+function Swatch({ color }: { color?: string }) {
+  if (!color) return null;
+  return (
+    <span
+      aria-hidden
+      className="inline-block size-2.5 shrink-0 rounded-full ring-1 ring-black/10 dark:ring-white/15"
+      style={{ backgroundColor: color }}
+    />
+  );
 }
 
 /**
@@ -79,6 +92,7 @@ export function SimpleSelect<T extends string>({
               {icon}
             </span>
           )}
+          <Swatch color={current?.swatch} />
           <span className="min-w-0 flex-1 truncate">{current?.label ?? ""}</span>
           <ChevronDown
             aria-hidden
@@ -103,7 +117,14 @@ export function SimpleSelect<T extends string>({
               }}
             >
               {option.value === value ? "✓ " : ""}
-              {option.label}
+              {option.swatch ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <Swatch color={option.swatch} />
+                  {option.label}
+                </span>
+              ) : (
+                option.label
+              )}
             </SimpleMenuItem>
           ))}
         </>

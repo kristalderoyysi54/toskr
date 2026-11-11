@@ -159,6 +159,15 @@
   --selection-rim: color-mix(in oklab, var(--primary) 78%, transparent);
   --selection-halo: color-mix(in oklab, var(--primary) 38%, transparent);
 }
+/* 琉璃（默认方案，无 data-theme）：选中柔光用中性灰（用户 2026-11-10 指定）；其他方案仍由 --primary 派生 */
+:root:not([data-theme]) {
+  --selection-rim: color-mix(in oklab, var(--foreground) 30%, transparent);
+  --selection-halo: color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+:root.dark:not([data-theme]) {
+  --selection-rim: color-mix(in oklab, var(--foreground) 45%, transparent);
+  --selection-halo: color-mix(in oklab, var(--foreground) 20%, transparent);
+}
 .list-selection-glow {
   position: absolute;
   inset: 0;
