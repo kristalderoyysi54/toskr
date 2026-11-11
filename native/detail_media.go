@@ -19,10 +19,7 @@ const detailImgW = 520
 
 // detailBig：详情里的内嵌大图（按文件缓存）。
 func (a *app) detailBig(file string) ui.ImageSource {
-	if a.bigImgs == nil {
-		a.bigImgs = map[string]ui.ImageSource{}
-	}
-	if img, ok := a.bigImgs[file]; ok {
+	if img, ok := a.bigImgs.get(file); ok {
 		return img
 	}
 	var out ui.ImageSource
@@ -31,7 +28,7 @@ func (a *app) detailBig(file string) ui.ImageSource {
 			out = scaledBitmap(src, detailImgW*2)
 		}
 	}
-	a.bigImgs[file] = out
+	a.bigImgs.put(file, out)
 	return out
 }
 

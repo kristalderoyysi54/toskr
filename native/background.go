@@ -57,6 +57,9 @@ func (a *app) housekeeping() {
 	if pruned+rolled+gc > 0 {
 		diag.Push("整理: 剪贴板清理 %d 订阅续期 %d 媒体回收 %d", pruned, rolled, gc)
 	}
+	if a.panel != nil {
+		a.panel.Update(func() { diag.Push("内存: %s", a.memLine()) }) // 每小时记一行，排查常驻内存用
+	}
 	if refs, notes, missing := a.store.MediaStats(); missing > 0 || gc > 0 {
 		diag.Push("媒体: 引用 %d（带图笔记 %d）缺文件 %d", refs, notes, missing)
 	}

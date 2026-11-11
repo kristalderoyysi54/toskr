@@ -96,7 +96,7 @@ func (a *app) favicon(src string) ui.ImageSource {
 	if !strings.HasPrefix(src, prefix) || len(src) > 65536 {
 		return nil
 	}
-	if img, ok := a.thumbs[src]; ok {
+	if img, ok := a.thumbs.get(src); ok {
 		return img
 	}
 	var out ui.ImageSource
@@ -105,7 +105,7 @@ func (a *app) favicon(src string) ui.ImageSource {
 			out = scaledBitmap(img, 64)
 		}
 	}
-	a.thumbs[src] = out
+	a.thumbs.put(src, out)
 	return out
 }
 

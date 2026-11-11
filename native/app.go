@@ -128,7 +128,9 @@ type app struct {
 	lp                                  longPress         // 浮钮长按（收进笔记选分类）
 	clipPick                            string            // 长按弹出分组选择的剪贴卡
 	clipPickAt                          ui.Rect           // 弹出浮层挂靠的浮钮位置
-	thumbs                              map[string]ui.ImageSource
+	thumbs                              *imgCache // 卡片缩略图与 favicon（按字节限额，imgcache.go）
+	trimGen                             int       // 内存整理的代次（再次唤出面板即作废）
+	adoptErr                            string    // 正式版：旧版数据没接上的原因（非空时面板顶部常驻横幅）
 	aiBusy                              string                    // 正在 AI 处理的笔记 ID
 	aiReviewing                         *aiReview                 // 进行中的 AI 核对（取消时一并作废）
 	focus                               *focusState               // 进行中的专注（today_blocks.go；只在内存里，重启即结束）
@@ -136,7 +138,7 @@ type app struct {
 	fanPick                             []string                  // 「同时发到」上次勾选的应用（bundle id，本次运行内记住）
 	aiCancel                            context.CancelFunc        // 进行中的 AI 改写（可取消）
 	draftImgs                           []pastedImage             // 输入区暂存的粘贴 / 拖入图片（提交时与草稿合成一张卡）
-	bigImgs                             map[string]ui.ImageSource // 详情窗内嵌大图缓存
+	bigImgs                             *imgCache // 详情窗内嵌大图缓存
 	docked                              bool                      // 面板当前停靠在伴随应用窗口旁（位置不由自己记）
 	comp                                companionTracker          // 伴随跟随（companion_track.go）
 	vdrag                               vDrag                     // 上 / 下缘把手拖动中
@@ -369,7 +371,7 @@ type app struct {
 }
 
 func newApp(sys core.System, st *store.Store) *app {
-	a := &app{sys: sys, store: st, page: pageNotes, prevPage: -1, section: store.SectionInbox, doneOpen: map[string]bool{}, bandOpen: map[string]bool{"overdue": true, "spark": true}, clipView: "time", billView: "week", billFilter: "upcoming", clock: time.Now, thumbs: map[string]ui.ImageSource{}, revealed: map[string]time.Time{}, secretOpening: map[string]bool{}, secretPlain: map[string]string{}, secretFx: map[string]time.Time{}, msgOpen: map[string]bool{}, msgChosen: map[string]bool{}, drawerMore: map[string]bool{}, linkSem: make(chan struct{}, 2), appIcons: map[string]ui.ImageSource{}}
+	a := &app{sys: sys, store: st, page: pageNotes, prevPage: -1, section: store.SectionInbox, doneOpen: map[string]bool{}, bandOpen: map[string]bool{"overdue": true, "spark": true}, clipView: "time", billView: "week", billFilter: "upcoming", clock: time.Now, thumbs: newImgCache(thumbBudget), bigImgs: newImgCache(bigBudget), revealed: map[string]time.Time{}, secretOpening: map[string]bool{}, secretPlain: map[string]string{}, secretFx: map[string]time.Time{}, msgOpen: map[string]bool{}, msgChosen: map[string]bool{}, drawerMore: map[string]bool{}, linkSem: make(chan struct{}, 2), appIcons: map[string]ui.ImageSource{}}
 	liveApp = a
 	st0 := st.Settings() // 同 Tauri：输入框草稿与所选分组跨重启保留
 	a.draft = st0.DraftText
@@ -499,6 +501,7 @@ func (a *app) toggleWith(hold bool) {
 }
 
 func (a *app) showPanel() {
+	a.trimGen++ // 取消排着的内存整理
 	a.holdOpen, a.holdNext = a.holdNext, false
 	if f, ok := a.sys.Frontmost(); ok && f.PID != a.sys.SelfPID() {
 		a.target = f
@@ -564,6 +567,7 @@ func (a *app) hidePanelNow() {
 		a.panel.Hide()
 	}
 	a.stopCompanionTracking()
+	a.trimMemorySoon()
 }
 
 // ---- 触发与捕获 ----

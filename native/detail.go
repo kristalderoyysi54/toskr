@@ -202,6 +202,7 @@ func (a *app) openDetail(n store.Note) {
 		a.discardBlankDraft()
 		a.detailWin, a.detail.id = nil, ""
 		a.panes = slices.DeleteFunc(a.panes, func(x *detailPane) bool { return x == p })
+		a.trimMemorySoon() // 详情窗全关后清掉内嵌大图
 		a.curPane = nil
 		if len(a.panes) > 0 {
 			a.usePane(a.panes[len(a.panes)-1])

@@ -17,20 +17,33 @@ import (
 )
 
 // thumbPx 是卡片缩略图的像素宽（300 DIP × 2 倍屏）。只缓存缩略图，原图用完即弃。
-const thumbPx = 600
+// thumbMaxH：缩略图的像素高上限——窄而长的图（长截屏 600×20000）此前不缩，一张就占几十 MB。
+const (
+	thumbPx   = 600
+	thumbMaxH = 1200
+)
 
 func (a *app) thumb(name string) ui.ImageSource {
-	if img, ok := a.thumbs[name]; ok {
+	if img, ok := a.thumbs.get(name); ok {
 		return img
 	}
 	var out ui.ImageSource
 	if raw, err := a.store.LoadImage(name); err == nil {
 		if src, err := png.Decode(bytes.NewReader(raw)); err == nil {
-			out = scaledBitmap(src, thumbPx)
+			out = scaledThumb(src)
 		}
 	}
-	a.thumbs[name] = out // 失败也缓存 nil，避免每帧重解
+	a.thumbs.put(name, out) // 失败也缓存 nil，避免每帧重解
 	return out
+}
+
+// scaledThumb：宽不超过 thumbPx、高不超过 thumbMaxH（等比）。
+func scaledThumb(src image.Image) *ui.Bitmap {
+	b := src.Bounds()
+	if b.Dy() <= thumbMaxH || b.Dx() == 0 {
+		return scaledBitmap(src, thumbPx)
+	}
+	return scaledBitmap(src, max(1, min(thumbPx, b.Dx()*thumbMaxH/b.Dy())))
 }
 
 func scaledBitmap(src image.Image, maxW int) *ui.Bitmap {
