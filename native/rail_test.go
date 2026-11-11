@@ -259,6 +259,10 @@ func TestCardBandTint(t *testing.T) {
 	if f, _ := a.bandColors(k, store.Note{Section: store.SectionInbox}); f != k.cardHeadFrom {
 		t.Fatal("无分组色用中性灰")
 	}
+	a.appIcons["com.x"], a.appIconColors = nil, map[string]ui.Color{"com.x": ui.RGB(200, 40, 40)} // 图标已加载
+	if f, _ := a.bandColors(k, store.Note{Section: store.SectionInbox, BundleID: "com.x"}); f != mix(ui.RGB(200, 40, 40), ui.RGB(255, 255, 255), 0.86) {
+		t.Fatal("无分组色取来源应用图标主色（同 Tauri sectionColor ?? icon.color）")
+	}
 	st := a.store.Settings()
 	st.CardTintOff = true
 	_ = a.store.SetSettings(st)
@@ -273,14 +277,14 @@ func TestClipCondensedTemplate(t *testing.T) {
 	a.store.Add(store.Note{Section: store.SectionClipboard, Text: "第一行\n第二行"})
 	a.switchPage(pageClip)
 	tt.Frame()
-	if !tt.HasText("第一行\n第二行") || !tt.HasText("7 字符") {
+	if !tt.HasText("第一行\n第二行") || !tt.HasText("2 行") {
 		t.Fatalf("标准卡 %v", tt.Texts())
 	}
 	st := a.store.Settings()
 	st.ClipTemplate = "condensed"
 	_ = a.store.SetSettings(st)
 	tt.Frame()
-	if !tt.HasText("第一行") || tt.HasText("第一行\n第二行") || tt.HasText("7 字符") {
+	if !tt.HasText("第一行") || tt.HasText("第一行\n第二行") || tt.HasText("2 行") {
 		t.Fatalf("浓缩卡 %v", tt.Texts())
 	}
 	st.CardDensity = "compact"
@@ -289,7 +293,7 @@ func TestClipCondensedTemplate(t *testing.T) {
 		t.Fatal("紧凑密度下模板不生效")
 	}
 	tt.Frame()
-	if !tt.HasText("第一行") || tt.HasText("7 字符") || !tt.HasText("刚刚") {
+	if !tt.HasText("第一行") || tt.HasText("2 行") || !tt.HasText("刚刚") {
 		t.Fatalf("紧凑流水行 %v", tt.Texts())
 	}
 	a.openSettingsState()
@@ -304,5 +308,24 @@ func TestClipCondensedTemplate(t *testing.T) {
 	sv.Frame()
 	if !sv.HasText("剪贴卡模板") {
 		t.Fatalf("舒适密度应显示 %v", sv.Texts())
+	}
+}
+
+// 同 Tauri NoteGroupRail：开关挂在侧栏容器左缘，展开后位置不动（之前挂在列表上，随列表右移 64）。
+func TestRailToggleStaysPut(t *testing.T) {
+	_, tt := testApp(t, "一条笔记")
+	before, ok := tt.Find("选择笔记分组，当前：全部")
+	if !ok {
+		t.Fatal(tt.Texts())
+	}
+	_ = tt.Click("选择笔记分组，当前：全部")
+	for range 3 {
+		tt.Frame()
+	}
+	tt.Advance(600e6)
+	tt.Frame()
+	after, ok := tt.Find("收起笔记分组，当前：全部")
+	if !ok || after.X != before.X || after.Y != before.Y {
+		t.Fatalf("开关应原位：%v → %v", before, after)
 	}
 }

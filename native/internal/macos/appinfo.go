@@ -35,3 +35,17 @@ func BundleIDOfApp(path string) string {
 	})
 	return out
 }
+
+// MainBundleID：本进程所在应用包的标识；不在 .app 里运行（go test / 裸二进制）时为空串。
+func MainBundleID() string {
+	load()
+	out := ""
+	withPool(func() {
+		if b := class("NSBundle").Send(sel("mainBundle")); b != 0 {
+			if id := b.Send(sel("bundleIdentifier")); id != 0 {
+				out = goString(uintptr(id))
+			}
+		}
+	})
+	return out
+}

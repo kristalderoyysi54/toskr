@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,12 +40,13 @@ const (
 var bridgeTemplate string
 
 type ContextItem struct {
-	MessageID    string `json:"messageId"`
-	SenderUID    string `json:"senderUid"`
-	SenderName   string `json:"senderName,omitempty"`
-	OccurredAtMs int64  `json:"occurredAtMs,omitempty"`
-	MessageType  string `json:"messageType,omitempty"`
-	Text         string `json:"text"`
+	MessageID    string  `json:"messageId"`
+	SenderUID    string  `json:"senderUid"`
+	SenderName   string  `json:"senderName,omitempty"`
+	OccurredAtMs int64   `json:"occurredAtMs,omitempty"`
+	MessageType  string  `json:"messageType,omitempty"`
+	Text         string  `json:"text"`
+	Images       []Image `json:"images,omitempty"`
 }
 
 // Message 与 Tauri 版 IncomingMessage 字段一致（camelCase JSON）。
@@ -65,7 +67,19 @@ type Message struct {
 	Text             string          `json:"text"`
 	Context          []ContextItem   `json:"context"`
 	Raw              json.RawMessage `json:"raw,omitempty"`
+	// Images：桥在 IM 页面里用其登录态取回的图片（data URL）；Accept 存进媒体库后只留 File，账本不存图片本体。
+	Images []Image `json:"images,omitempty"`
+	// ImageProbe：正文像「[图片]」却没认出图片时，桥回传的字段形状（键路径 + 值类型 / 域名），只写诊断不入账本。
+	ImageProbe []string `json:"imageProbe,omitempty"`
 }
+
+// Image 是消息里的一张图。
+type Image struct {
+	Data string `json:"data,omitempty"` // data:image/...;base64,...
+	File string `json:"file,omitempty"` // 媒体库文件名
+}
+
+const maxImages = 9
 
 // Rule 是组合关注规则：群 × 发送者 × 关键词，三组都命中（空组视为通过）。匹配在桥脚本里做。
 type Rule struct {
@@ -97,13 +111,14 @@ func Validate(m *Message) error {
 		return errors.New("实验监听只接收群组消息")
 	}
 	tooBig := utf8.RuneCountInString(m.ConversationName) > 1024 || utf8.RuneCountInString(m.SenderName) > 1024 ||
-		utf8.RuneCountInString(m.SenderUID) > 512 || len(m.Text) > maxBody || len(m.MatchedRuleIDs) > 50 || len(m.Context) > 8
+		utf8.RuneCountInString(m.SenderUID) > 512 || len(m.Text) > maxBody || len(m.MatchedRuleIDs) > 50 || len(m.Context) > 8 ||
+		len(m.Images) > maxImages || len(m.ImageProbe) > 80
 	for _, id := range m.MatchedRuleIDs {
 		tooBig = tooBig || !validShort(id, 128)
 	}
 	for _, c := range m.Context {
 		tooBig = tooBig || !validShort(c.MessageID, 512) || utf8.RuneCountInString(c.SenderUID) > 512 ||
-			utf8.RuneCountInString(c.SenderName) > 1024 || len(c.Text) > maxBody
+			utf8.RuneCountInString(c.SenderName) > 1024 || len(c.Text) > maxBody || len(c.Images) > maxImages
 	}
 	if tooBig {
 		return errors.New("消息字段过大")
@@ -147,6 +162,9 @@ type Bridge struct {
 	seal  func([]byte) ([]byte, error)
 	open  func([]byte) ([]byte, error)
 	OnMsg func(Message)
+	// SaveImage 把一张图存进媒体库并返回文件名（nil = 不收图片）；OnProbe 收到「没认出图片」的字段形状（写诊断）。
+	SaveImage func(raw []byte) (string, error)
+	OnProbe   func(m Message)
 
 	mu       sync.Mutex
 	st       Status
@@ -230,8 +248,8 @@ func (b *Bridge) handle(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		_, _ = w.Write([]byte(`{"ok":true,"version":1}`))
 	case http.MethodPost:
-		raw, err := io.ReadAll(io.LimitReader(r.Body, maxBody*2+1))
-		if err != nil || len(raw) > maxBody*2 {
+		raw, err := io.ReadAll(io.LimitReader(r.Body, maxBody*16+1)) // 带图片（data URL）时体积大
+		if err != nil || len(raw) > maxBody*16 {
 			http.Error(w, `{"ok":false,"error":"请求过大"}`, http.StatusRequestEntityTooLarge)
 			return
 		}
@@ -271,6 +289,11 @@ func (b *Bridge) Accept(m Message) (duplicate bool, err error) {
 		b.seenList = b.seenList[1:]
 	}
 	b.mu.Unlock()
+	b.localizeImages(&m)
+	if len(m.ImageProbe) > 0 && b.OnProbe != nil {
+		b.OnProbe(m)
+	}
+	m.ImageProbe = nil
 	now := time.Now().UnixMilli()
 	if err := b.appendLedger(Record{ReceivedAtMs: now, Message: m}); err != nil {
 		b.setErr(err)
@@ -284,6 +307,35 @@ func (b *Bridge) Accept(m Message) (duplicate bool, err error) {
 		b.OnMsg(m)
 	}
 	return false, nil
+}
+
+// localizeImages：data URL 解码后交给 SaveImage，只保留文件名；解不开 / 存不下的图丢掉。
+func (b *Bridge) localizeImages(m *Message) {
+	m.Images = b.saveImages(m.Images)
+	for i := range m.Context {
+		m.Context[i].Images = b.saveImages(m.Context[i].Images)
+	}
+}
+
+func (b *Bridge) saveImages(in []Image) []Image {
+	var out []Image
+	for _, im := range in {
+		if im.Data == "" || b.SaveImage == nil {
+			continue
+		}
+		_, enc, ok := strings.Cut(im.Data, ";base64,")
+		if !ok || !strings.HasPrefix(im.Data, "data:image/") {
+			continue
+		}
+		raw, err := base64.StdEncoding.DecodeString(enc)
+		if err != nil || len(raw) == 0 {
+			continue
+		}
+		if name, err := b.SaveImage(raw); err == nil && name != "" && !slices.ContainsFunc(out, func(x Image) bool { return x.File == name }) {
+			out = append(out, Image{File: name})
+		}
+	}
+	return out
 }
 
 func (b *Bridge) ledgerPath() string { return filepath.Join(b.dir, LedgerFile) }
@@ -322,7 +374,7 @@ func (b *Bridge) Recent(limit int) ([]Record, error) {
 	defer f.Close()
 	var out []Record
 	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64<<10), maxBody*3)
+	sc.Buffer(make([]byte, 64<<10), maxBody*4)
 	for sc.Scan() {
 		line := sc.Bytes()
 		plain := line

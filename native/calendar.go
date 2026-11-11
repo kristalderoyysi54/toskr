@@ -8,6 +8,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"github.com/toskr/native/internal/diag"
 	"github.com/toskr/native/internal/macos"
 	"github.com/toskr/native/internal/store"
 )
@@ -53,6 +54,7 @@ func (a *app) setCalendarEnabled(on bool) {
 		st := calStatus()
 		if st == "notDetermined" {
 			st = calRequest()
+			diag.Push("日历授权请求结果: %s", st) // 仍为 notDetermined = 系统没弹框（如缺 entitlement）
 		}
 		if st == "denied" || st == "restricted" {
 			openPrivacy("Privacy_Calendars")

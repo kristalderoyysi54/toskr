@@ -108,12 +108,13 @@ func (a *app) showHUDForce(kind, text string) {
 		a.hudStreak = 1
 	}
 	if onScreen && a.hudKind != "" {
-		a.hudGhost, a.hudGhostAt = &hudBubble{kind: a.hudKind, text: a.hudText, actionable: a.hudActionable(), undo: a.hudUndo != nil, due: a.hudDue, count: a.hudStreakOf(a.hudKind)}, time.Time{}
+		a.hudGhost, a.hudGhostAt = &hudBubble{kind: a.hudKind, text: a.hudText, actionable: a.hudActionable(), undo: a.hudUndo != nil, due: a.hudDue, count: a.hudStreakOf(a.hudKind), src: a.hudSrc, tag: a.hudTag}, time.Time{}
 	} else {
 		a.hudGhost, a.hudLogoAt = nil, time.Time{}
 	}
 	a.hudAt, a.hudLeaving = time.Time{}, false
 	a.hudKind, a.hudText, a.hudUndo, a.hudHover, a.hudTarget, a.hudDue = kind, text, nil, false, "", nil
+	a.hudSrc, a.hudTag = "", ""
 	a.hudGen++
 	gen := a.hudGen
 	if a.hud == nil {
@@ -207,6 +208,15 @@ type hudBubble struct {
 	undo       bool     // 有可撤销操作（悬停出「撤销」）
 	count      int      // 连续捕获计数
 	due        []string // 任务到期气泡的任务（>1 为批量）：气泡里直接完成或稍后
+	src, tag   string   // 捕获气泡：来源应用 bundle、内容类型小标
+}
+
+// captureTag：捕获气泡预览前的类型小标——纯文本不标，其余同卡片通栏（图文 ×N / 图片 / 链接 / 语言名）。
+func captureTag(n store.Note) string {
+	if t := cardTitle(n); t != tr("文本") {
+		return t
+	}
+	return ""
 }
 
 // hudProgress 返回从 *at 起经过 d 的进度（0…1），*at 为零时记为本帧；动画中持续要帧。无窗口（视图测试）时恒为 1。
@@ -242,7 +252,7 @@ func (a *app) hudView(c *ui.Context) {
 	registerFonts()
 	c.Root().Background(ui.Transparent)
 	reduce := c.Preferences().ReduceMotion
-	cur := hudBubble{kind: a.hudKind, text: a.hudText, actionable: a.hudActionable(), undo: a.hudUndo != nil, due: a.hudDue, count: a.hudStreakOf(a.hudKind)}
+	cur := hudBubble{kind: a.hudKind, text: a.hudText, actionable: a.hudActionable(), undo: a.hudUndo != nil, due: a.hudDue, count: a.hudStreakOf(a.hudKind), src: a.hudSrc, tag: a.hudTag}
 	// 进场：opacity 0 → 1、y 10 → 0、scale 0.982 → 1（160ms ease-standard）；离场叠乘 opacity → 0、scale → 0.96
 	e := easeStandard(a.hudProgress(c, &a.hudAt, 160*time.Millisecond))
 	op, dy, sc := e, 10*(1-e), 0.982+0.018*e
@@ -310,7 +320,12 @@ func (a *app) hudBubbleView(c *ui.Context, b hudBubble, ghostMs float32) {
 		ic = hudIcons["info"]
 	}
 	icon := func() {
-		ui.Box(c).Size(20, 20).Radius(10).Background(ic.color).Center().Children(func() { licon(c, ic.icon, 12, ui.RGB(255, 255, 255)) })
+		ui.Box(c).Size(20, 20).Shrink(0).Children(func() {
+			ui.Box(c).Size(20, 20).Radius(10).Background(ic.color).Center().Children(func() { licon(c, ic.icon, 12, ui.RGB(255, 255, 255)) })
+			if img := a.appIcon(b.src); img != nil { // 来源应用小图标叠在状态圆右下角
+				ui.Image(c, img).Absolute().Left(11).Top(11).Size(12, 12).Label(tr("来源应用"))
+			}
+		})
 	}
 	title := hudTitle(b.kind, b.text, b.count)
 	if !b.actionable {
@@ -346,7 +361,15 @@ func (a *app) hudBubbleView(c *ui.Context, b hudBubble, ghostMs float32) {
 		body.Children(func() {
 			tightText(c, title, 12, 15, 500, ink).FillWidth()
 			if (b.kind == "added" || b.kind == "duplicate") && b.text != "" {
-				tightText(c, b.text, 10, 12.5, 400, ink.Alpha(0.55)).FillWidth()
+				if b.tag == "" {
+					tightText(c, b.text, 10, 12.5, 400, ink.Alpha(0.55)).FillWidth()
+				} else { // 类型小标 + 预览
+					ui.Row(c).Gap(4).AlignItems(ui.Center).FillWidth().Children(func() {
+						ui.Row(c).Height(12.5).Padding(0, 4).Radius(3).Background(ink.Alpha(0.1)).AlignItems(ui.Center).Shrink(0).
+							Children(func() { text(c, b.tag, 9, 12.5, 500, ink.Alpha(0.7)).SingleLine() })
+						tightText(c, b.text, 10, 12.5, 400, ink.Alpha(0.55)).Grow(1).Basis(0)
+					})
+				}
 			}
 			if len(b.due) > 0 {
 				a.hudDueActions(c, ink, b.due, ghost)

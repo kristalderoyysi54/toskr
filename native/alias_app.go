@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/toskr/native/internal/core"
@@ -62,4 +63,39 @@ func (a *app) addAliasEntity(category, original string) string {
 	st.AliasNext = next
 	_ = a.store.SetSettings(st)
 	return ""
+}
+
+// quickAddAlias 同 Tauri addAliasEntityFromText：详情窗划词「加入化名词典」——校验 → 取号 → 写入，HUD 回执。
+func (a *app) quickAddAlias(original, category string) bool {
+	original = strings.TrimSpace(original)
+	if original == "" {
+		return false
+	}
+	known := false
+	for _, c := range core.AliasPresetCategories {
+		known = known || c.Code == category
+	}
+	for _, c := range a.store.Settings().AliasCategories {
+		known = known || c.Code == category
+	}
+	if !known {
+		a.showHUD("warn", tr("无法加入词典：类别无效"))
+		return false
+	}
+	if issue := a.addAliasEntity(category, original); issue != "" {
+		a.showHUD("warn", fmt.Sprintf(tr("无法加入词典：%s"), tr(issue)))
+		return false
+	}
+	st := a.store.Settings()
+	ph := st.AliasEntities[len(st.AliasEntities)-1].Placeholder
+	preview := original
+	if r := []rune(original); len(r) > 12 {
+		preview = string(r[:12]) + "…"
+	}
+	if st.AliasOff {
+		a.showHUD("added", fmt.Sprintf(tr("已加入词典（%s）；可逆化名总开关当前关闭"), ph))
+	} else {
+		a.showHUD("added", fmt.Sprintf(tr("已加入化名词典：%s → %s"), preview, ph))
+	}
+	return true
 }

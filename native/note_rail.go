@@ -58,13 +58,24 @@ func (a *app) noteRail(c *ui.Context, k tokens) {
 	rail := ui.Box(c).Width(railW).FillHeight().BorderWidth(0, 1, 0, 0).BorderColor(k.inputBorder.Alpha(0.4)).Key("note-rail").Label(tr("笔记分组"))
 	rail.Children(func() {
 		ui.Scroll(c).Fill().Scrollbars(false).Children(func() {
-			ui.Column(c).Padding(32, 0, 4, 8).Gap(4).Children(func() {
+			col := ui.Column(c).Padding(32, 0, 4, 8).Gap(4)
+			sortListBegin[secDrag](&a.railSort, col, &a.railJump, &a.railSeen, func(from, to string) {
+				_ = a.store.ReorderSection(from, to)
+				a.reload()
+				secs = a.noteSections()
+			})
+			ids := make([]string, 0, len(secs))
+			for _, x := range secs {
+				ids = append(ids, x.ID)
+			}
+			defer func() { sortListEnd(&a.railSort, a.railSeen) }()
+			col.Children(func() {
 				if a.railPill(c, k, "", tr("全部"), "", a.noteFilter == "") {
 					a.pickNoteGroup("")
 					a.noteRailOpen = false
 				}
 				for i, s := range secs {
-					a.railSection(c, k, s, i, len(secs))
+					a.railSection(c, k, s, i, len(secs), ids)
 				}
 				nb := ui.Row(c).Height(22).Margin(4, 0, 0, 0).Padding(0, 4).Gap(4).Radius(6).AlignItems(ui.Center).Role(ui.RoleButton).Label(tr("新建分组")).Key("rail-new")
 				fg := k.muted.Alpha(0.6)
@@ -135,7 +146,7 @@ func (a *app) railPill(c *ui.Context, k tokens, id, label, color string, on bool
 	return b.Clicked()
 }
 
-func (a *app) railSection(c *ui.Context, k tokens, s store.Section, i, n int) {
+func (a *app) railSection(c *ui.Context, k tokens, s store.Section, i, n int, ids []string) {
 	if a.renamingSec == s.ID {
 		ui.TextInputBase(c, &a.renameText).Height(24).Padding(0, 4).Radius(6).Border(1, k.inputBorder).Font(fontSans).FontSize(11).
 			TextColor(k.fg).Label(tr("分组名称")).Focus().OnTextKey(func(key ui.TextKey) bool {
@@ -152,17 +163,29 @@ func (a *app) railSection(c *ui.Context, k tokens, s store.Section, i, n int) {
 		})
 		return
 	}
-	pill := ui.Box(c).Key("railsec-" + s.ID)
-	pill.ContextMenu(func(m *ui.Menu) { a.sectionMenu(m, s, i, n) })
-	pill.Children(func() {
-		if a.railPill(c, k, s.ID, sectionName(s), s.Color, a.noteFilter == s.ID) {
-			a.pickNoteGroup(s.ID)
-			a.noteRailOpen = false
+	// 侧栏胶囊也可拖动排序（同 Tauri GroupPill reorder）：槽位判断落点，胶囊平移让位
+	slot := ui.Column(c).Key("railslot-" + s.ID)
+	sortTrack(&a.railSort, slot, s.ID)
+	slot.Children(func() {
+		pill := ui.Box(c).Key("railsec-" + s.ID).Drag(secDrag{s.ID})
+		sortShift(&a.railSort, pill, ids, s.ID, 4, a.railJump)
+		if pill.Dragging() {
+			a.railSort.begin(s.ID)
+			a.railSeen = true
+			liftHead(c, pill.Radius(6))
+		}
+		pill.ContextMenu(func(m *ui.Menu) { a.secMenuSrc = "rail"; a.sectionMenu(m, s, i, n) })
+		a.sectionColorPopover(c, k, s, pill, "rail")
+		pill.Children(func() {
+			if a.railPill(c, k, s.ID, sectionName(s), s.Color, a.noteFilter == s.ID) {
+				a.pickNoteGroup(s.ID)
+				a.noteRailOpen = false
+			}
+		})
+		if pill.DoubleClicked() {
+			a.renamingSec, a.renameText = s.ID, s.Name
 		}
 	})
-	if pill.DoubleClicked() {
-		a.renamingSec, a.renameText = s.ID, s.Name
-	}
 }
 
 func (a *app) commitRename() {
@@ -191,19 +214,9 @@ func (a *app) sectionMenu(m *ui.Menu, s store.Section, i, n int) {
 			a.headRename, a.headRenameText, a.headRenameFocused = s.ID, sectionName(s), false
 		}
 	}
-	m.Submenu(tr("分组颜色"), func(sm *ui.Menu) {
-		for _, col := range sectionColors {
-			if sm.Item(col).Checked(s.Color == col).Chosen() {
-				s.Color = col
-				_ = a.store.UpdateSection(s)
-			}
-		}
-		sm.Separator()
-		if sm.Item(tr("清除颜色")).Disabled(s.Color == "").Chosen() {
-			s.Color = ""
-			_ = a.store.UpdateSection(s)
-		}
-	})
+	if m.Item(tr("分组颜色…")).Chosen() { // 原生菜单放不了色点：弹出色板（section_color.go）
+		a.openSectionColor(s.ID)
+	}
 	keep := tr("发送后保留")
 	if s.KeepAfterSend {
 		keep = tr("取消发送后保留")

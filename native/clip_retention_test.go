@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -68,8 +69,11 @@ func TestClipSourceRetentionMenu(t *testing.T) {
 	}
 	_ = tt.RightClick("Safari")
 	_ = tt.ChooseMenuItem("不再收集来自「Safari」")
-	if st := a.store.Settings(); len(st.ExcludedApps) == 0 || st.ExcludedApps[len(st.ExcludedApps)-1] != "com.apple.Safari" {
-		t.Fatalf("应加入排除 %v", st.ExcludedApps)
+	if st := a.store.Settings(); len(st.ClipExcludedApps) == 0 || st.ClipExcludedApps[len(st.ClipExcludedApps)-1] != "com.apple.Safari" {
+		t.Fatalf("应加入剪贴忽略名单 %v", st.ClipExcludedApps)
+	}
+	if slices.Contains(a.store.Settings().ExcludedApps, "com.apple.Safari") {
+		t.Fatal("不再收集剪贴不应同时关掉划词捕获（同 Tauri 两份名单分开）")
 	}
 	_ = tt.RightClick("Safari")
 	_ = tt.ChooseMenuItem("删除这 1 条")

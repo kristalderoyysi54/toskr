@@ -84,7 +84,7 @@ func TestAboutRowsManualInstallAndLinks(t *testing.T) {
 	openLink = func(u string) { opened = u }
 	restarted := false
 	relaunch = func() { restarted = true }
-	a.openSettingsAt(99, 0) // 夹紧到最后一页「帮助与更新」
+	a.openSettingsAt(99, 1) // 夹紧到最后一页「帮助与更新」→ 子页「关于」
 	v := ui.NewTester(a.settingsView, 1040, 2400)
 	v.Frame()
 	for _, s := range []string{"检查更新", "自动检查更新", "自动安装更新", "更新日志", "项目主页", "报告 Bug"} {

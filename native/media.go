@@ -89,8 +89,11 @@ func (a *app) ocrNote(n store.Note) {
 }
 
 // pinImage 把图片钉成置顶小窗（双击或 Esc 关闭，关闭即销毁窗口释放位图）。
-func (a *app) pinImage(n store.Note) {
-	raw, err := a.store.LoadImage(n.ImageFile)
+func (a *app) pinImage(n store.Note) { a.pinImageFile(n.ImageFile) }
+
+// pinImageFile：卡片里指定的那张图钉到屏幕（多图 / 图文卡逐张）。
+func (a *app) pinImageFile(file string) {
+	raw, err := a.store.LoadImage(file)
 	if err != nil {
 		a.showHUD("warn", err.Error())
 		return

@@ -4,9 +4,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
+	"github.com/toskr/native/internal/diag"
 	"github.com/toskr/native/internal/macos"
 )
 
@@ -15,29 +15,48 @@ import (
 
 var (
 	pickAppBundle = func(a *app) string { // 测试替换
-		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.settingsWin, Title: tr("选择应用"), DefaultPath: "/Applications",
-			Filters: []mygo.FileFilter{{Name: tr("应用程序"), Extensions: []string{"app"}}}})
-		if err != nil || len(paths) == 0 {
+		p := macos.PickApplication(tr("选择应用"), tr("选择")) // 专用面板：只能选 .app（mygo 扩展名过滤会把应用全部置灰）
+		if p == "" {
 			return ""
 		}
-		return macos.BundleIDOfApp(paths[0])
+		b := macos.BundleIDOfApp(p)
+		if b == "" {
+			a.showHUD("warn", tr("读不到这个应用的标识，换一个试试"))
+		}
+		diag.Push("选择应用: %s → %s", p, b)
+		return b
 	}
 	appDisplayName = macos.AppDisplayName
 )
 
+// presetAppNames：预置终端的显示名——本机没装时系统查不到名称，不能把包名露给用户。
+var presetAppNames = map[string]string{
+	"com.apple.Terminal": "Terminal", "com.googlecode.iterm2": "iTerm", "dev.warp.Warp-Stable": "Warp",
+	"com.github.wez.wezterm": "WezTerm", "net.kovidgoyal.kitty": "kitty", "io.alacritty": "Alacritty", "com.mitchellh.ghostty": "Ghostty",
+}
+
 func (a *app) appName(bundle string) string {
 	if a.appNames == nil {
-		a.appNames = map[string]string{}
+		a.appNames, a.appMissing = map[string]string{}, map[string]bool{}
 	}
 	if n, ok := a.appNames[bundle]; ok {
 		return n
 	}
 	n := appDisplayName(bundle)
 	if n == "" {
-		n = bundle
+		a.appMissing[bundle] = true
+		if n = presetAppNames[bundle]; n == "" {
+			n = bundle
+		}
 	}
 	a.appNames[bundle] = n
 	return n
+}
+
+// appInstalled：系统能否找到这个应用（查不到 = 没装）。
+func (a *app) appInstalled(bundle string) bool {
+	a.appName(bundle)
+	return !a.appMissing[bundle]
 }
 
 // appListEditor 编辑 list（换行分隔的 bundle id）；有改动返回 true（调用方据此保存）。

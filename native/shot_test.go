@@ -247,3 +247,30 @@ func TestShotLoupeAndCopyColor(t *testing.T) {
 }
 
 func hexDigit(v uint8) byte { return "0123456789abcdef"[v] }
+
+// 先打码再用聚光灯：框外的打码与其余画面一样压暗（不再像被高亮）；框内的打码保持原亮度且仍是打码，不被原图盖回。
+func TestShotSpotlightDimsMosaicOutside(t *testing.T) {
+	_, d, _ := shotTest(t)
+	sel := shot.Rect{X: 0, Y: 0, W: 100, H: 100}
+	outMosaic := &shot.Shape{Kind: shot.Mosaic, X1: 60, Y1: 60, X2: 90, Y2: 90, Size: 1}
+	inMosaic := &shot.Shape{Kind: shot.Mosaic, X1: 5, Y1: 5, X2: 35, Y2: 35, Size: 1}
+	spot := &shot.Shape{Kind: shot.Spotlight, X1: 0, Y1: 0, X2: 40, Y2: 40}
+	plain := renderShot(d, sel, []*shot.Shape{outMosaic, inMosaic}, shotFrame{})
+	lit := renderShot(d, sel, []*shot.Shape{outMosaic, inMosaic, spot}, shotFrame{})
+	px := func(img *image.RGBA, x, y int) []uint8 { o := y*img.Stride + x*4; return img.Pix[o : o+3] }
+	sum := func(p []uint8) int { return int(p[0]) + int(p[1]) + int(p[2]) }
+	// 框外打码（pt 75,75 → px 150,150）：应压暗
+	if a, b := sum(px(plain, 150, 150)), sum(px(lit, 150, 150)); b >= a*7/10 || a == 0 {
+		t.Fatalf("框外打码应压暗：原 %d 现 %d", a, b)
+	}
+	// 框内打码（pt 20,20 → px 40,40）：与无聚光灯时完全一致（仍是打码，不压暗）
+	if a, b := px(plain, 40, 40), px(lit, 40, 40); a[0] != b[0] || a[1] != b[1] || a[2] != b[2] {
+		t.Fatalf("框内打码应保持原样 %v vs %v", a, b)
+	}
+	// 框内未打码处（pt 38,2 → px 76,4）：原图原亮度
+	r, g, b := shotPixel(76, 4)
+	near := func(x, y uint8) bool { return int(x)-int(y) <= 2 && int(y)-int(x) <= 2 } // 重采样允许相邻像素差
+	if p := px(lit, 76, 4); !near(p[0], r) || !near(p[1], g) || !near(p[2], b) {
+		t.Fatalf("框内原图应原样 %v want %v", p, []uint8{r, g, b})
+	}
+}

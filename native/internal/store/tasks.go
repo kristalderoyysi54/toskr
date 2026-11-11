@@ -20,7 +20,8 @@ type Task struct {
 	Checklist   []ChecklistItem `json:"checklist,omitempty"`
 	Spark       bool            `json:"spark,omitempty"`
 	Section     string          `json:"section,omitempty"`
-	Recurrence  string          `json:"recurrence,omitempty"` // daily | weekdays | weekly | monthly | yearly
+	DurationMin int             `json:"durationMin,omitempty"` // 预计时长（分钟，0 = 未设）：今天页时间块的长度；不同步到提醒事项
+	Recurrence  string          `json:"recurrence,omitempty"`  // daily | weekdays | weekly | monthly | yearly
 	// 重复的起算与结束（同 Tauri TaskRecurrence.basis / until / count）
 	RecurBasis string    `json:"recurBasis,omitempty"` // "" = 按计划日期；completion = 从完成时算起
 	RecurUntil time.Time `json:"recurUntil,omitzero"`  // 结束日（含当天）：下一期落在此日之后不再生成
@@ -263,6 +264,20 @@ func (s *Store) MoveTaskSection(id string, delta int) error {
 			return false
 		}
 		s.taskSections[i], s.taskSections[j] = s.taskSections[j], s.taskSections[i]
+		return true
+	})
+}
+
+// ReorderTaskSection 把 activeID 移到 overID 的位置（拖动排序，同 ReorderSection）。
+func (s *Store) ReorderTaskSection(activeID, overID string) error {
+	return s.mutate(func() bool {
+		i := slices.IndexFunc(s.taskSections, func(x Section) bool { return x.ID == activeID })
+		j := slices.IndexFunc(s.taskSections, func(x Section) bool { return x.ID == overID })
+		if i < 0 || j < 0 || i == j {
+			return false
+		}
+		sec := s.taskSections[i]
+		s.taskSections = slices.Insert(slices.Delete(s.taskSections, i, i+1), j, sec)
 		return true
 	})
 }

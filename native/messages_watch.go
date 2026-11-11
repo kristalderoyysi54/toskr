@@ -54,6 +54,7 @@ func (a *app) imBridge() *imwatch.Bridge {
 	if a.im.bridge == nil {
 		seal, open := a.store.IMLedgerCodec()
 		b := imwatch.New(a.store.Dir(), seal, open)
+		b.SaveImage, b.OnProbe = a.imSaveImage, imProbe
 		b.OnMsg = func(m imwatch.Message) {
 			r := imwatch.Record{ReceivedAtMs: time.Now().UnixMilli(), Message: m}
 			a.panelUpdate(func() {
@@ -74,9 +75,10 @@ func imToStore(r imwatch.Record, p *store.IMProfile) store.Message {
 		SenderUID: m.SenderUID, SenderName: m.SenderName, OccurredAtMs: m.OccurredAtMs, ReceivedAtMs: cmpOrInt(r.ReceivedAtMs, m.CapturedAtMs),
 		MentionedSelf: m.MentionedSelf, FollowedSender: m.FollowedSender, MatchedRuleIDs: m.MatchedRuleIDs,
 		MessageType: m.MessageType, Text: m.Text}
+	out.Images = imageFiles(m.Images)
 	for _, c := range m.Context {
 		out.Context = append(out.Context, store.MessageContext{MessageID: c.MessageID, SenderUID: c.SenderUID, SenderName: c.SenderName,
-			OccurredAtMs: c.OccurredAtMs, MessageType: c.MessageType, Text: c.Text})
+			OccurredAtMs: c.OccurredAtMs, MessageType: c.MessageType, Text: c.Text, Images: imageFiles(c.Images)})
 	}
 	if p != nil {
 		out.SourceApp, out.SourceBundle = p.AppName, p.BundleID
@@ -387,11 +389,11 @@ func (a *app) messageWatchSections(c *ui.Context, k tokens, s settingsTokens, st
 			})
 		}}}
 	}
-	out := []setSection{{tr("监听目标"), append([]setRow{intro}, target...)}}
+	out := []setSection{{title: tr("监听目标"), rows: append([]setRow{intro}, target...)}}
 	if st.IMProfile != nil {
-		out = append(out, setSection{tr("接入方式（二选一）"), a.imTransportRows(c, k, s)})
+		out = append(out, setSection{title: tr("接入方式（二选一）"), rows: a.imTransportRows(c, k, s)})
 	}
-	out = append(out, setSection{tr("收哪些消息"), a.imRuleRows(c, k, s, st)})
+	out = append(out, setSection{title: tr("收哪些消息"), rows: a.imRuleRows(c, k, s, st)})
 	ledger := []setRow{
 		{title: tr("原始消息账本"), hint: tr("原始消息完整保存在本机账本（仅当前用户可读），「内容 → 消息」显示整理后的结果。账本不包含在完整备份中，需要长期保留请单独备份。"), control: func() {
 			if button(c, s, "复制账本路径") {
@@ -400,7 +402,7 @@ func (a *app) messageWatchSections(c *ui.Context, k tokens, s settingsTokens, st
 			}
 		}},
 	}
-	return append(out, setSection{tr("数据存储"), ledger})
+	return append(out, setSection{title: tr("数据存储"), rows: ledger})
 }
 
 func (a *app) imTransportRows(c *ui.Context, k tokens, s settingsTokens) []setRow {
@@ -548,4 +550,14 @@ func (a *app) setMessagesEnabled(on bool) {
 	if a.noteSub == subMessages {
 		a.noteSub = subNotes
 	}
+}
+
+func imageFiles(ims []imwatch.Image) []string {
+	var out []string
+	for _, im := range ims {
+		if im.File != "" {
+			out = append(out, im.File)
+		}
+	}
+	return out
 }

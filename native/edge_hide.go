@@ -2,11 +2,13 @@ package main
 
 import (
 	"os"
+	"slices"
 	"time"
 
 	"github.com/egoist/mygo"
 
 	"github.com/toskr/native/internal/diag"
+	"github.com/toskr/native/internal/macos"
 )
 
 // 拖拽入坞 + 贴边自动收起（同 Tauri window.rs evaluate_drag_dock / spawn_edge_hide_supervisor / edge_hide_now）：
@@ -132,7 +134,7 @@ func (a *app) panelMovedByUser() {
 }
 
 func (a *app) evaluateDragDock() {
-	if a.panel == nil || !a.panel.IsVisible() || a.docked || a.edgeHidden {
+	if a.panel == nil || !a.panel.IsVisible() || a.docked || a.edgeHidden || a.pinnedFree() {
 		return
 	}
 	b := a.panel.Bounds()
@@ -172,6 +174,13 @@ func (a *app) edgeTickOnce() {
 		}
 		if !a.docked {
 			a.edge = nil
+		}
+		a.edgeAway = 0
+		return
+	}
+	if a.pinnedFree() { // 保持展开 + 自由移动：不贴边隐藏（隐藏中立即滑回）
+		if a.edgeHidden {
+			a.edgeSlideTo(false)
 		}
 		a.edgeAway = 0
 		return
@@ -241,7 +250,7 @@ func (a *app) edgeHideNow(explicit bool) bool {
 	if a.edge == nil || a.docked || a.edgeHidden || !a.edgeArmed {
 		return false
 	}
-	if !explicit && a.pinned {
+	if !explicit && a.pinned || a.pinnedFree() {
 		return false
 	}
 	a.edgeSlideTo(true)
@@ -300,12 +309,28 @@ func (a *app) startEdgeSupervisor() {
 	}()
 }
 
-// observeFront 同 Tauri focus.rs 激活观察：记下最近一次处于前台的外部应用（不是 Toskr 自己），
-// 「识别粘贴位置」在点面板使 Toskr 成为前台时仍能拿到用户刚才所在的应用。
+// observeFront 同 Tauri focus.rs 激活观察 + target.rs observe_front：记下最近一次处于前台的外部应用（不是 Toskr 自己），
+// 并让发送目标跟着它走（面板钉住 / 常开时切到别的应用，目标条与发送都换过去）。
+// 磁吸目标锁：伴随停靠中前台短暂切到伴随列表外的应用（截图工具等）不换目标。
 func (a *app) observeFront() {
-	if f, ok := a.sys.Frontmost(); ok && f.PID != 0 && f.PID != a.sys.SelfPID() && f.PID != a.lastFront.PID {
-		a.lastFront = f
-		diag.Push("外部前台 → %s pid=%d", f.BundleID, f.PID)
+	f, ok := a.sys.Frontmost()
+	if !ok || f.PID == 0 || f.PID == a.sys.SelfPID() || f.PID == a.lastFront.PID {
+		return
+	}
+	a.lastFront = f
+	diag.Push("外部前台 → %s pid=%d", f.BundleID, f.PID)
+	if f.BundleID == "" || f.PID == a.target.PID {
+		return // 无身份的浮层不当目标（同 Tauri observe_unavailable 保留旧目标）
+	}
+	st := a.store.Settings()
+	if a.docked && slices.Contains(st.Companion, a.target.BundleID) && !slices.Contains(st.Companion, f.BundleID) {
+		diag.Push("磁吸目标锁: 忽略瞬时前台切换，发送目标保持 %s", a.target.BundleID)
+		return
+	}
+	a.target, a.targetStarted = f, macos.ProcessStartMs(f.PID)
+	diag.Push("发送目标跟随前台 → %s", f.BundleID)
+	if a.panel != nil && a.panel.IsVisible() {
+		a.panel.Invalidate() // 目标条换应用
 	}
 }
 
@@ -318,3 +343,7 @@ func displayAt(displays []mygo.Display, x, y int) (mygo.Display, bool) {
 	}
 	return mygo.Display{}, false
 }
+
+// pinnedFree：「保持面板展开」且屏幕位置为自由移动——用户 2026-11-10 指定此时不入坞、不贴边隐藏（含 Esc）。
+// 有意偏离 Tauri（原版钉住只豁免失焦收起，入坞后光标离开仍滑出）。屏幕右侧 / 底部边栏照常贴边隐藏。
+func (a *app) pinnedFree() bool { return a.pinned && a.store.Settings().FreeMove }

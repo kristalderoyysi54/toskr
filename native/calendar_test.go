@@ -49,15 +49,15 @@ func TestTodayCalendarEvents(t *testing.T) {
 	a.switchPage(pageTasks)
 	a.reload()
 	tt.Frame()
-	for _, s := range []string{"全天", "全天会议", "下午评审", "15:00–16:00 · 工作日历 · 3 楼", "写周报", "接孩子", "日程"} {
+	for _, s := range []string{"全天", "全天会议", "下午评审", "15:00–16:00", "写周报", "接孩子", "3 个日程"} { // 定时日程是时间轴上的色块（地点等在悬停提示里）
 		if !tt.HasText(s) {
 			t.Fatalf("缺 %q：%v", s, tt.Texts())
 		}
 	}
 	ev, _ := tt.Find("下午评审")
 	task, _ := tt.Find("写周报")
-	if !(ev.Y < task.Y) {
-		t.Fatal("同刻日程排在任务前")
+	if !(ev.X < task.X) || ev.Y > task.Y+2 {
+		t.Fatal("同刻的日程与任务并排，日程在左")
 	}
 	cur := a.store.Settings()
 	cur.CalendarHidden = []string{"home"}
@@ -69,7 +69,7 @@ func TestTodayCalendarEvents(t *testing.T) {
 
 	a.openSettingsState()
 	set := ui.NewTester(a.settingsView, 1040, 4000)
-	_ = set.Click("更多功能")
+	a.setJump = "日历与提醒事项"
 	set.Frame()
 	set.Frame()
 	if !set.HasText("显示苹果日历日程") || !set.HasText("工作日历") || !set.HasText("家庭") {

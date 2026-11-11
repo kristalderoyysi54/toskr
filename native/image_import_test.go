@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/toskr/native/internal/macos"
@@ -45,7 +46,7 @@ func TestPasteAndDropImagesIntoDraft(t *testing.T) {
 		t.Fatalf("去重 %+v", a.draftImgs)
 	}
 	tt.Frame()
-	if _, ok := tt.Find("移除图片"); !ok {
+	if _, ok := tt.Find("移除这张图片"); !ok {
 		t.Fatalf("输入区应显示暂存图 %v", tt.Texts())
 	}
 
@@ -95,5 +96,51 @@ func TestDropImageOnComposer(t *testing.T) {
 	tt.Frame()
 	if len(a.draftImgs) != 1 {
 		t.Fatalf("%+v", a.draftImgs)
+	}
+}
+
+// 同 Tauri DraftImageChip：暂存图点击是查看 / 编辑（不再是移除），✕ 才移除；标注 ✓ 替换这张暂存图。
+func TestDraftImageChipOpenAndRemove(t *testing.T) {
+	a, tt := testApp(t)
+	sys := &clipSys{}
+	a.sys = sys
+	sys.items = []macos.Item{{macos.TypePNG: whitePNG(t, 30, 20)}}
+	if !a.pasteIntoDraft("") {
+		t.Fatal("应收为草稿图")
+	}
+	tt.Frame()
+	if r, ok := tt.Find("查看或编辑这张草稿图片"); !ok || r.W == 0 {
+		t.Fatalf("缺查看入口 %v", tt.Texts())
+	}
+	old := a.draftImgs[0].file
+	a.replaceDraftImage(old, whitePNG(t, 50, 40), 50, 40)
+	if len(a.draftImgs) != 1 || a.draftImgs[0].w != 50 || a.draftImgs[0].file == old {
+		t.Fatalf("标注后应替换暂存图 %+v", a.draftImgs)
+	}
+	tt.Frame()
+	mustClick(t, tt, "移除这张图片")
+	if len(a.draftImgs) != 0 {
+		t.Fatal("✕ 应移除")
+	}
+}
+
+// 剪贴卡页脚右端按类型：链接 → 域名，代码 → 语言 · 行数，多行 → 行数，长单行 → 字符数，短单行不显示。
+func TestClipFootMeta(t *testing.T) {
+	long := strings.Repeat("长", clipLongRunes)
+	for _, c := range []struct {
+		n    store.Note
+		want string
+	}{
+		{store.Note{Kind: "link", URL: "https://www.github.com/egoist/mygo", Text: "https://www.github.com/egoist/mygo"}, "github.com"},
+		{store.Note{Kind: "link", Text: "不是网址"}, "链接"},
+		{store.Note{Kind: "code", CodeLang: "sql", Text: "SELECT 1;\nSELECT 2;\n"}, "sql · 2 行"},
+		{store.Note{Text: "a\nb\nc"}, "3 行"},
+		{store.Note{Text: "brew install --cask toskr"}, ""},
+		{store.Note{Text: long}, "200 字符"},
+		{store.Note{Kind: "image", ImageFile: "a.png", ImageW: 640, ImageH: 280}, "640 × 280"},
+	} {
+		if got := clipFootMeta(c.n); got != c.want {
+			t.Errorf("%+v → %q，应为 %q", c.n.Text, got, c.want)
+		}
 	}
 }

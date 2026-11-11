@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -171,7 +172,9 @@ type tauriSettings struct {
 	TaskReminderChannel  string          `json:"taskReminderChannel"`
 	DuePresets           *[]DuePreset    `json:"duePresets"`
 	ExcludedApps         []string        `json:"excludedApps"`
+	ClipExcludedApps     []string        `json:"clipExcludedApps"`
 	CurrencySymbol       string          `json:"currencySymbol"`
+	BillRemind           []int           `json:"billDefaultReminderOffsets"`
 	SubscriptionsEnabled *bool           `json:"subscriptionsEnabled"`
 	SecretEnabled        *bool           `json:"secretEnabled"`
 	SecretKeys           []struct {
@@ -200,6 +203,7 @@ type tauriSettings struct {
 	CardTint           *bool            `json:"cardTint"`
 	ClipCardTemplate   string           `json:"clipCardTemplate"`
 	ClipAppRetention   map[string]int   `json:"clipAppRetentionDays"`
+	ClipRetention      json.RawMessage  `json:"clipRetentionDays"` // 数字 = 天数；null = 永久保留；缺省 = 旧版默认 30 天
 	ScreenshotEnabled  *bool            `json:"screenshotEnabled"`
 	ScreenshotHideSelf *bool            `json:"screenshotHideSelf"`
 	ContextMenu        []MenuItem       `json:"contextMenu"`
@@ -731,6 +735,22 @@ func applyTauriSettings(st Settings, t tauriSettings) Settings {
 		st.AutoInstallUpdate = *t.AutoInstallUpdate
 	}
 	set(&st.Currency, t.CurrencySymbol)
+	// 剪贴板保留时长必须带过来：本机默认更短的话，导入后第一次整理就会删掉旧版里还在保留期内的剪贴历史
+	switch raw := strings.TrimSpace(string(t.ClipRetention)); {
+	case raw == "null":
+		st.ClipRetainDays = 0
+	case raw != "":
+		if d, err := strconv.Atoi(raw); err == nil && d >= 0 {
+			st.ClipRetainDays = d
+		}
+	default:
+		if st.ClipRetainDays > 0 && st.ClipRetainDays < 30 { // 0 = 永久，不动
+			st.ClipRetainDays = 30
+		}
+	}
+	if t.BillRemind != nil {
+		st.BillRemind = slices.Clone(t.BillRemind)
+	}
 	set(&st.SecretCipherStyle, t.SecretCipherStyle)
 	if t.HotkeyGapMs > 0 {
 		st.TriggerGapMs = t.HotkeyGapMs
@@ -805,6 +825,11 @@ func applyTauriSettings(st Settings, t tauriSettings) Settings {
 	for _, x := range t.ExcludedApps {
 		if !slices.Contains(st.ExcludedApps, x) {
 			st.ExcludedApps = append(st.ExcludedApps, x)
+		}
+	}
+	for _, x := range t.ClipExcludedApps {
+		if !slices.Contains(st.ClipExcludedApps, x) {
+			st.ClipExcludedApps = append(st.ClipExcludedApps, x)
 		}
 	}
 	for _, k := range t.SecretKeys {

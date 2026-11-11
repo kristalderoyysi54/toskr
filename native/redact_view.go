@@ -50,6 +50,7 @@ type redactPreview struct {
 
 type redactEditor struct {
 	note       store.Note
+	file       string // 卡片里正在打码的那张图
 	img        *image.RGBA
 	bm         *ui.Bitmap
 	W, H       int
@@ -72,8 +73,14 @@ type redactEditor struct {
 	closed     bool
 }
 
-func (a *app) openRedactor(n store.Note) {
-	re, err := a.newRedactor(n)
+// redactFileFn 可替换（测试里不开窗）。
+var redactFileFn = (*app).openRedactorFile
+
+func (a *app) openRedactor(n store.Note) { a.openRedactorFile(n, n.ImageFile) }
+
+// openRedactorFile：卡片里指定的那张图打码（多图 / 图文卡逐张），应用后原位替换。
+func (a *app) openRedactorFile(n store.Note, file string) {
+	re, err := a.newRedactorFile(n, file)
 	if err != nil {
 		a.showHUD("warn", err.Error())
 		return
@@ -96,7 +103,11 @@ func (a *app) openRedactor(n store.Note) {
 }
 
 func (a *app) newRedactor(n store.Note) (*redactEditor, error) {
-	raw, err := a.store.LoadImage(n.ImageFile)
+	return a.newRedactorFile(n, n.ImageFile)
+}
+
+func (a *app) newRedactorFile(n store.Note, file string) (*redactEditor, error) {
+	raw, err := a.store.LoadImage(file)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +117,7 @@ func (a *app) newRedactor(n store.Note) (*redactEditor, error) {
 	}
 	img := image.NewRGBA(image.Rect(0, 0, src.Bounds().Dx(), src.Bounds().Dy()))
 	draw.Draw(img, img.Rect, src, src.Bounds().Min, draw.Src)
-	re := &redactEditor{note: n, img: img, bm: ui.NewBitmap(img).Pixelated(), W: img.Rect.Dx(), H: img.Rect.Dy(),
+	re := &redactEditor{note: n, file: file, img: img, bm: ui.NewBitmap(img).Pixelated(), W: img.Rect.Dx(), H: img.Rect.Dy(),
 		selected: -1, hovered: -1, view: shot.FitView, lastFill: 1, previews: map[int]redactPreview{}}
 	if st := a.store.Settings().Shot.RedactStyle; st >= 1 && st <= 3 {
 		re.lastFill = st
@@ -429,7 +440,7 @@ func (a *app) applyRedaction(re *redactEditor) {
 			default:
 				diag.Push("图片打码: %d 处", len(regions))
 				re.close()
-				a.replaceNoteImage(re.note, buf.Bytes(), W, H, fmt.Sprintf(tr("已打码 %d 处"), len(regions)))
+				a.replaceNoteImage(re.note, re.file, buf.Bytes(), W, H, fmt.Sprintf(tr("已打码 %d 处"), len(regions)))
 			}
 		})
 	}

@@ -58,7 +58,7 @@ func (a *app) presetMenu(m *ui.Menu, pick func(time.Time)) {
 		if a.panel != nil {
 			a.openSettings()
 		}
-		a.setJump = "更多功能"
+		a.setJump = "到期提醒"
 	}
 }
 

@@ -110,6 +110,37 @@ func ApplyAliases(text string, dict []store.AliasEntity) (string, int) {
 	return b.String(), len(hits)
 }
 
+// AliasHit 是一处词典替换（字节区间 + 词条），供预检逐项列出与还原。
+type AliasHit struct {
+	Start, End int
+	Entity     store.AliasEntity
+}
+
+// AliasHits 列出 ApplyAliases 会替换的每一处（同一套匹配规则）。
+func AliasHits(text string, dict []store.AliasEntity) []AliasHit {
+	var out []AliasHit
+	for _, h := range scanAliases(text, dict) {
+		out = append(out, AliasHit{h.start, h.end, h.e})
+	}
+	return out
+}
+
+// ApplyAliasesSkip 同 ApplyAliases，但 skip(start) 为真的那处保留原文（预检「还原为原文」，仅本次发送）。
+func ApplyAliasesSkip(text string, dict []store.AliasEntity, skip func(start int) bool) string {
+	var b strings.Builder
+	last := 0
+	for _, h := range scanAliases(text, dict) {
+		if skip(h.start) {
+			continue
+		}
+		b.WriteString(text[last:h.start])
+		b.WriteString(h.e.Placeholder)
+		last = h.end
+	}
+	b.WriteString(text[last:])
+	return b.String()
+}
+
 // RestoreAliases：文本里词典已知的占位符 → 原文；未知占位符原样保留。
 func RestoreAliases(text string, dict []store.AliasEntity) (string, int) {
 	es := slices.Clone(dict)

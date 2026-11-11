@@ -1,6 +1,8 @@
 package main
 
 import (
+	"slices"
+
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
@@ -11,7 +13,7 @@ import (
 // Platinum 固定浅色且整窗不透明。色值取自浏览器实测导出（同一组数据下与默认方案逐元素比对得出的映射）。
 
 var schemeNames = []string{"default", "platinum", "paper", "matcha", "sakura", "fog"}
-var schemeLabels = []string{"Toskr", "Platinum", "纸墨", "抹茶", "樱粉", "雾蓝"}
+var schemeLabels = []string{"琉璃", "Platinum", "纸墨", "抹茶", "樱粉", "雾蓝"}
 
 // curScheme 是当前配色方案（主线程读写；applyAppearance 设置）。
 var curScheme = "default"
@@ -105,7 +107,24 @@ func schemed(t tokens) tokens {
 	if t.dark {
 		t.floatBorder = p.fg.Alpha(0.1)
 	}
+	if sp, ok := setSchemes[name]; ok { // 选中柔光跟随方案主色（Tauri --selection-rim/halo = color-mix(--primary)）
+		t.selRim, t.selHalo = sp.primary.Alpha(0.58), sp.primary.Alpha(0.22)
+		if t.dark {
+			t.selRim, t.selHalo = sp.primary.Alpha(0.78), sp.primary.Alpha(0.38)
+		}
+	}
 	return t
+}
+
+// selectionGlow 画选中卡片的柔光（.list-selection-glow）：内缘描边 + 向内晕开，颜色取方案主色；
+// Platinum 按原版改为高亮色淡底（正片叠底保留文字对比）+ 2px 高亮色内框、直角。
+func selectionGlow(c *ui.Context, k tokens, radius, glow float32) {
+	if k.pt {
+		ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).PassThrough().Background(ptLav.Alpha(0.45)).InsetShadow(0, 0, 0, 2, ptHL)
+		return
+	}
+	ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Radius(radius).PassThrough().
+		InsetShadow(0, 0, 8, 1, k.selRim).InsetShadow(0, 0, glow, 2, k.selHalo)
 }
 
 // cardFill 给卡片铺底：方案带底部渐变时为 155° 的 card → card(52%) → cardBottom。
@@ -172,11 +191,10 @@ func mix(a, b ui.Color, p float32) ui.Color {
 	return ui.RGBA(f(a.R, b.R), f(a.G, b.G), f(a.B, b.B), float32(f(a.A, b.A))/255)
 }
 
-// bandColors：卡片通栏（同 Tauri .asset-band，开「卡片彩色通栏」时分组色优先，否则中性灰 #7c8494）。
-// 浅色：band 86% 混白 → 92% 混黑的 135° 渐变；深色：band 28% 叠卡面。Platinum 走自己的结构。
+// bandColors：卡片通栏（同 Tauri .asset-band，开「卡片彩色通栏」时分组色优先，其次来源应用图标主色，否则中性灰 #7c8494）。
+// 各配色方案的混色规则见 tintBand；关「卡片彩色通栏」时为方案默认通栏色。
 func (a *app) bandColors(k tokens, n store.Note) (ui.Color, ui.Color) {
-	st := a.store.Settings()
-	if k.pt || st.CardTintOff {
+	if a.store.Settings().CardTintOff {
 		return k.cardHeadFrom, k.cardHeadTo
 	}
 	color := ""
@@ -185,13 +203,121 @@ func (a *app) bandColors(k tokens, n store.Note) (ui.Color, ui.Color) {
 			color = s.Color
 		}
 	}
-	if color == "" || curScheme != "default" {
+	if color == "" { // 同 Tauri 竖栏 headerTint = sectionColor ?? icon?.color：无分组色取来源应用图标主色
+		if c, ok := a.appIconColor(n.BundleID); ok && n.BundleID != "" {
+			return tintBand(k, c)
+		}
 		return k.cardHeadFrom, k.cardHeadTo
 	}
-	band := hexColor(color)
+	return tintBand(k, hexColor(color))
+}
+
+// stripBandColors 同 Tauri 横栏串 headerTint：应用图标主色优先（图标色未就绪时不闪分组色），
+// 没有来源应用才取分组色，都没有为中性灰。
+func (a *app) stripBandColors(k tokens, n store.Note) (ui.Color, ui.Color) {
+	if a.store.Settings().CardTintOff {
+		return k.cardHeadFrom, k.cardHeadTo
+	}
+	if n.BundleID != "" {
+		if c, ok := a.appIconColor(n.BundleID); ok {
+			return tintBand(k, c)
+		}
+		return k.cardHeadFrom, k.cardHeadTo
+	}
+	if n.Section != store.SectionClipboard {
+		return a.bandColors(k, n)
+	}
+	return k.cardHeadFrom, k.cardHeadTo
+}
+
+// tintBand：通栏底色（同 Tauri .asset-band 各方案规则）：默认浅色 band 86% 混白 → 92% 混黑的 135° 渐变；
+// 深色（含雾蓝）band 28% 叠卡面；纸 / 抹茶 / 樱花为方案底色上叠 18% / 30% / 30% 的 band 实色；Platinum 叠 22% 在 G300 上。
+// 之前非默认方案与 Platinum 一律回落中性通栏，换了分组色卡片也不变。
+func tintBand(k tokens, band ui.Color) (ui.Color, ui.Color) {
+	solid := func(p float32, base ui.Color) (ui.Color, ui.Color) { c := mix(band, base, p); return c, c }
+	switch {
+	case k.pt:
+		return solid(0.22, ptG300)
+	case curScheme == "paper":
+		return solid(0.18, ui.RGB(233, 220, 195)) // token-exception: 同 Tauri paper .asset-band #e9dcc3
+	case curScheme == "matcha":
+		return solid(0.30, ui.RGB(138, 165, 122)) // token-exception: 同 Tauri matcha #8aa57a
+	case curScheme == "sakura":
+		return solid(0.30, ui.RGB(216, 152, 173)) // token-exception: 同 Tauri sakura #d898ad
+	}
 	if k.dark {
 		c := mix(band, k.card, 0.28)
 		return c, c
 	}
 	return mix(band, ui.RGB(255, 255, 255), 0.86), mix(band, ui.RGB(0, 0, 0), 0.92)
+}
+
+// schemeSwatch：配色方案的代表色（浅色主色；Platinum 取当前高亮色），设置里的方案下拉用它画色点。
+func schemeSwatch(name string) ui.Color {
+	switch name {
+	case "default":
+		return lightSet.primary
+	case "platinum":
+		return ptHL
+	}
+	return setSchemes[name].primary
+}
+
+// schemeMenuOpen：配色方案下拉弹层是否展开（设置窗主线程读写）。
+var schemeMenuOpen bool
+
+// schemeSelect：配色方案下拉。原生菜单放不了彩色图标，改用自绘弹层：每项「色点 + 方案名」，当前项右侧对勾；
+// 触发钮外观同 settingsSelect（144×32），名称前也带当前方案的色点。
+func schemeSelect(c *ui.Context, k tokens, s settingsTokens, cur string, pick func(name string)) {
+	idx := max(0, slices.Index(schemeNames, cur))
+	b := ui.Row(c).Width(144).Height(32).Padding(0, 8).Gap(6).Radius(10).Border(1, s.inputBorder).AlignItems(ui.Center).
+		Key("scheme-select").Role(ui.RoleButton).Label(tr("配色方案"))
+	if s.pt {
+		b.Radius(3).Border(1, ptG600)
+	} else if b.Hovered() || schemeMenuOpen {
+		b.Background(k.track)
+	}
+	dot := func(name string) {
+		ui.Box(c).Size(10, 10).Radius(5).Background(schemeSwatch(name)).Border(1, k.fg.Alpha(0.12)).Shrink(0)
+	}
+	b.Children(func() {
+		dot(schemeNames[idx])
+		text(c, tr(schemeLabels[idx]), 12, 17, 400, k.fg).SingleLine().Grow(1).Basis(0)
+		licon(c, "chevron-down", 14, k.muted)
+	})
+	if b.Clicked() {
+		schemeMenuOpen = !schemeMenuOpen
+	}
+	if !schemeMenuOpen {
+		return
+	}
+	ui.Popover(c, b, &schemeMenuOpen, func() {
+		ui.Column(c).Width(160).Gap(2).Key("scheme-menu").Children(func() {
+			for i, name := range schemeNames {
+				on := i == idx
+				row := ui.Row(c).Height(28).Padding(0, 8).Gap(8).Radius(6).AlignItems(ui.Center).Key("scheme-opt-" + name).
+					Role(ui.RoleButton).Label(tr(schemeLabels[i]))
+				if row.Hovered() {
+					row.Background(k.hoverBg)
+				}
+				row.Children(func() {
+					dot(name)
+					w := 400
+					if on {
+						w = 500
+					}
+					text(c, tr(schemeLabels[i]), 12, 17, w, k.fg).SingleLine().Grow(1)
+					if on {
+						licon(c, "check", 12, k.muted)
+					}
+				})
+				if row.Clicked() {
+					schemeMenuOpen = false
+					if !on {
+						pick(name)
+					}
+				}
+			}
+		})
+	})
 }

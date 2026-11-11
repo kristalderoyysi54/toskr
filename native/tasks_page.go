@@ -171,22 +171,28 @@ func (a *app) addTaskDraft() {
 	if a.taskDraft == "" {
 		return
 	}
-	// 同 Tauri addTask(text)：原文入库，不解析「明天 / 下午3点 / !!」（自然语言解析只在 AI 速记里）
 	text := strings.TrimSpace(a.taskDraft)
 	if text == "" {
 		return
 	}
 	t := store.Task{Text: text}
-	if a.taskSub == 0 { // 今天速记：一律今天默认时间（同 TodayQuickAdd）
+	if a.taskSub == 1 && a.sparkMode { // 闪念：原文入库，不解析
+		t.Spark = true
+	} else { // 本地解析时间 / 重复 / 优先级 / 分组（有意偏离 Tauri 的原文入库；被点掉的片保留原词）
+		t = a.quickTask(a.taskDraft)
+	}
+	if a.taskSub == 0 && t.DueAt.IsZero() { // 今天速记：没认出时间就用今天默认时间（同 TodayQuickAdd）
 		t.DueAt = todayDefaultDue(a.now())
 	}
-	if a.taskSub == 1 && a.sparkMode {
-		t.Spark = true
-	}
 	a.store.AddTask(t)
-	a.taskDraft = ""
+	a.taskDraft, a.taskQuickOff = "", nil
 	if a.taskSub == 0 {
-		a.showHUD("added", fmt.Sprintf(tr("已加到今天 %s"), t.DueAt.Format("15:04")))
+		now := a.now()
+		if y, m, d := t.DueAt.Date(); y == now.Year() && m == now.Month() && d == now.Day() {
+			a.showHUD("added", fmt.Sprintf(tr("已加到今天 %s"), t.DueAt.Format("15:04")))
+		} else { // 速记里写了别的日子：任务不在「今天」里，提示它去了哪天
+			a.showHUD("added", fmt.Sprintf(tr("已加到 %s"), dueBadge(t.DueAt, now)))
+		}
 	}
 }
 
@@ -206,6 +212,7 @@ func (a *app) taskSubBody(c *ui.Context, k tokens, now time.Time) {
 		return
 	}
 	a.taskQuickAdd(c, k)
+	a.taskQuickChips(c, k)
 	if a.taskSub == 1 {
 		a.taskDraftPreview(c, k)
 	}
@@ -218,7 +225,11 @@ func (a *app) taskSubBody(c *ui.Context, k tokens, now time.Time) {
 		a.taskFilterBar(c, k, len(filtered))
 	}
 	ui.Box(c).Grow(1).Margin(6, 0, 0, 0).Children(func() {
-		ui.Scroll(c).Fill().Scrollbars(false).TrackScroll(&a.taskScroll).Children(func() {
+		tsc := ui.Scroll(c).Fill().Scrollbars(false).TrackScroll(&a.taskScroll)
+		if a.tsecSort.active != "" { // 拖动任务分组靠近上下缘：自动滚动
+			sortAutoScroll(c, tsc, &a.taskScroll)
+		}
+		tsc.Children(func() {
 			ui.Column(c).Padding(4, 14, 8, 14).Gap(12).Children(func() {
 				switch {
 				case a.taskSub == 0:
@@ -359,34 +370,11 @@ func (a *app) todayView(c *ui.Context, k tokens, now time.Time) {
 	ag := agendaFor(a.tasks, now)
 	events := a.todayEvents(now)
 	st := a.store.Settings()
-	stats := []struct {
-		n     int
-		label string
-	}{{ag.pending, "待办"}, {ag.doneToday, "已完成"}, {ag.overdue, "已逾期"}}
+	nBills := 0
 	if st.SubscriptionsEnabled {
-		stats = append(stats, struct {
-			n     int
-			label string
-		}{billsDueToday(a.store.Bills(), now), "扣款"})
+		nBills = billsDueToday(a.store.Bills(), now)
 	}
-	if st.CalendarOn {
-		stats = append(stats, struct {
-			n     int
-			label string
-		}{len(events), "日程"})
-	}
-	ui.Row(c).Gap(6).Children(func() {
-		for i, s := range stats {
-			ui.Column(c).Grow(1).Basis(0).Height(40).Padding(4, 8).Radius(10).Background(k.track).Children(func() {
-				col := k.fg
-				if i == 2 && s.n > 0 {
-					col = k.danger
-				}
-				text(c, itoa(s.n), 13, 18, 600, col)
-				text(c, tr(s.label), 10, 14, 400, k.muted)
-			})
-		}
-	})
+	a.todayStatsLine(c, k, ag, nBills, len(events), st)
 	var dueBills []store.Bill
 	if st.SubscriptionsEnabled {
 		dueBills = todayBills(a.store.Bills(), now)
@@ -402,7 +390,8 @@ func (a *app) todayView(c *ui.Context, k tokens, now time.Time) {
 			}
 		})
 	}()
-	if len(ag.earlier) == 0 && len(ag.timeline) == 0 && len(events) == 0 && len(dueBills) == 0 {
+	defer a.unscheduledSection(c, k, now) // 时间轴之后：没排时间的待办，可拖进时间轴
+	if len(ag.earlier) == 0 && len(ag.timeline) == 0 && len(events) == 0 && len(dueBills) == 0 && len(a.unscheduledTasks()) == 0 {
 		a.emptyState(c, k, "calendar-check", tr("今天没有安排"), tr("在上方记下今天要做的事，或在任务的到期弹层里把它排到今天。"))
 		return
 	}
@@ -419,82 +408,29 @@ func (a *app) todayView(c *ui.Context, k tokens, now time.Time) {
 			}
 		})
 	}
-	// 任务按到期、日程按开始时刻（昨天开始的按今天 0 点）排进同一条轴；同刻日程在前；全天日程在轴顶
-	type entry struct {
-		at   time.Time
-		task *store.Task
-		ev   *macos.CalendarEvent
-	}
+	// 全天日程在轴顶；其余日程与任务排进按小时画格的时间轴（today_blocks.go）
 	var allDay []macos.CalendarEvent
-	var line []entry
-	day := dayStart(now)
-	for i := range events {
-		if events[i].AllDay {
-			allDay = append(allDay, events[i])
-		} else {
-			line = append(line, entry{at: time.UnixMilli(max(events[i].StartMs, day.UnixMilli())), ev: &events[i]})
+	for _, e := range events {
+		if e.AllDay {
+			allDay = append(allDay, e)
 		}
 	}
-	for i := range ag.timeline {
-		line = append(line, entry{at: ag.timeline[i].DueAt, task: &ag.timeline[i]})
-	}
-	slices.SortStableFunc(line, func(x, y entry) int {
-		if c := x.at.Compare(y.at); c != 0 {
-			return c
-		}
-		if (x.ev != nil) != (y.ev != nil) {
-			if x.ev != nil {
-				return -1
-			}
-			return 1
-		}
-		return 0
-	})
-	if len(line) == 0 && len(allDay) == 0 {
-		return
-	}
-	nowIdx := slices.IndexFunc(line, func(e entry) bool { return e.at.After(now) })
-	if nowIdx < 0 {
-		nowIdx = len(line)
-	}
-	ui.Column(c).Gap(4).Children(func() {
-		for _, e := range allDay {
-			ui.Row(c).Gap(6).AlignItems(ui.Start).Key("ad-" + e.ID).Children(func() {
-				text(c, tr("全天"), 10, 14, 400, k.muted).Width(44).Padding(8, 0, 0, 0).TextAlign(ui.End)
-				a.eventRow(c, k, e)
-			})
-		}
-		for i := 0; i <= len(line); i++ {
-			if i == nowIdx {
-				ui.Row(c).Height(14).Gap(6).Key("now-line").Children(func() {
-					text(c, now.Format("15:04"), 10, 14, 600, k.danger).Width(44).TextAlign(ui.End)
-					ui.Box(c).Grow(1).Height(14).Children(func() {
-						ui.Box(c).Absolute().Left(0).Right(0).Top(6.5).Height(1).Background(k.danger)
-						ui.Box(c).Absolute().Left(-2).Top(3.5).Size(7, 7).Radius(3.5).Background(k.danger)
-					})
+	if len(allDay) > 0 {
+		ui.Column(c).Gap(4).Children(func() {
+			for _, e := range allDay {
+				ui.Row(c).Gap(6).AlignItems(ui.Start).Key("ad-" + e.ID).Children(func() {
+					text(c, tr("全天"), 10, 14, 400, k.muted).Width(44).Padding(8, 0, 0, 0).TextAlign(ui.End)
+					a.eventRow(c, k, e)
 				})
 			}
-			if i == len(line) {
-				break
-			}
-			if ev := line[i].ev; ev != nil {
-				ui.Row(c).Gap(6).AlignItems(ui.Start).Key("tle-" + ev.ID).Children(func() {
-					text(c, line[i].at.Format("15:04"), 10, 14, 400, k.muted).Width(44).Padding(8, 0, 0, 0).TextAlign(ui.End)
-					a.eventRow(c, k, *ev)
-				})
-				continue
-			}
-			t := *line[i].task
-			ui.Row(c).Gap(6).AlignItems(ui.Start).Key("tl-" + t.ID).Children(func() {
-				col := k.muted
-				if t.Status != "done" && !t.DueAt.After(now) {
-					col = k.danger
-				}
-				text(c, t.DueAt.Format("15:04"), 10, 14, 400, col).Width(44).Padding(8, 0, 0, 0).TextAlign(ui.End)
-				ui.Column(c).Grow(1).Children(func() { a.taskRow(c, k, t, now) })
-			})
+		})
+	}
+	for _, t := range ag.timeline { // 正在编辑的任务：展开行放在时间轴上方（时间块里放不下编辑表单）
+		if a.taskOpen == t.ID {
+			a.taskRow(c, k, t, now)
 		}
-	})
+	}
+	a.dayGrid(c, k, a.todayBlocks(ag.timeline, events, now), now)
 }
 
 func (a *app) emptyState(c *ui.Context, k tokens, icon, title, body string) {
@@ -569,9 +505,23 @@ func (a *app) taskListView(c *ui.Context, k tokens, now time.Time) {
 	if len(b.sparks) > 0 {
 		a.smartBand(c, k, "spark", tr("灵感"), "lightbulb", k.violetText, k.violetIcon.Alpha(0.1), b.sparks, now, false)
 	}
+	// 任务分组拖动排序（同笔记分组）：按住区头拿起，其余分组平移让位，松手落进空位
+	list := ui.Column(c).Gap(12).Key("tsec-list")
+	sortListBegin[tsecDrag](&a.tsecSort, list, &a.tsecJump, &a.tsecSeen, func(from, to string) {
+		_ = a.store.ReorderTaskSection(from, to)
+		a.reload()
+		b = bucketTasks(a.tasks, a.store.TaskSections(), now)
+	})
+	a.tsecOrder = a.tsecOrder[:0]
 	for _, g := range b.groups {
-		a.taskSection(c, k, g, now)
+		a.tsecOrder = append(a.tsecOrder, g.sec.ID)
 	}
+	list.Children(func() {
+		for _, g := range b.groups {
+			a.taskSection(c, k, g, now)
+		}
+	})
+	sortListEnd(&a.tsecSort, a.tsecSeen)
 	nb := ui.Row(c).Height(24).Margin(0, 0, 0, 8).Padding(4, 6).Gap(4).Radius(8).AlignItems(ui.Center).AlignSelf(ui.Start)
 	nc := hoverLink(nb, k)
 	nb.Children(func() {
@@ -637,114 +587,134 @@ func (a *app) smartBand(c *ui.Context, k tokens, key, title, icon string, fg, ba
 
 func (a *app) taskSection(c *ui.Context, k tokens, g taskGroup, now time.Time) {
 	collapsed := g.sec.Collapsed
-	ui.Column(c).Gap(6).Key("tsec-" + g.sec.ID).Children(func() {
-		head := ui.Row(c).Height(20).Padding(0, 4, 0, 2).Gap(4).Radius(6).AlignItems(ui.Center)
-		hovered := head.Hovered()
-		_, over := ui.DragOver[taskDrag](head)
-		if over {
-			head.Background(stok(c).primary.Alpha(0.12))
-		}
-		if a.dragHover(c, "t:"+g.sec.ID, over, collapsed) {
-			g.sec.Collapsed = false
-			_ = a.store.UpdateTaskSection(g.sec)
-		}
-		if d, ok := ui.Drop[taskDrag](head); ok {
-			_ = a.store.MoveTask(d.id, g.sec.ID, "")
-		}
-		head.Children(func() {
-			b := ui.Box(c).Size(16, 16).Radius(6).Center()
-			b.Children(func() { foldChevron(c, k, collapsed) })
-			if b.Clicked() {
-				g.sec.Collapsed = !collapsed
+	slot := ui.Column(c).Key("tslot-" + g.sec.ID) // 槽位不动、按它判断落点；内层平移让位
+	sortTrack(&a.tsecSort, slot, g.sec.ID)
+	slot.Children(func() {
+		col := ui.Column(c).Gap(6).Key("tsec-" + g.sec.ID)
+		sortShift(&a.tsecSort, col, a.tsecOrder, g.sec.ID, 12, a.tsecJump)
+		col.Children(func() {
+			if a.tsecSort.active == g.sec.ID {
+				slotMark(c)
+			}
+			head := ui.Row(c).Height(20).Padding(0, 4, 0, 2).Gap(4).Radius(6).AlignItems(ui.Center).Key("tsechead-" + g.sec.ID)
+			if a.taskSecRename != g.sec.ID {
+				head.Drag(tsecDrag{g.sec.ID})
+			}
+			if head.Dragging() {
+				a.tsecSort.begin(g.sec.ID)
+				a.tsecSeen = true
+				liftHead(c, head)
+			}
+			hovered := head.Hovered()
+			_, over := ui.DragOver[taskDrag](head)
+			if over {
+				head.Background(stok(c).primary.Alpha(0.12))
+			}
+			if a.dragHover(c, "t:"+g.sec.ID, over, collapsed) {
+				g.sec.Collapsed = false
 				_ = a.store.UpdateTaskSection(g.sec)
 			}
-			name := sectionTitle(g.sec)
-			commit := func(v string) {
-				if v = strings.TrimSpace(v); v != "" {
-					sec := g.sec
-					sec.Name = v
-					_ = a.store.UpdateTaskSection(sec)
-				}
-				a.taskSecRename = ""
+			if d, ok := ui.Drop[taskDrag](head); ok && !d.resize {
+				_ = a.store.MoveTask(d.id, g.sec.ID, "")
 			}
-			if a.taskSecRename == g.sec.ID {
-				in := ui.TextInputBase(c, &a.taskSecName).Width(140).Font(fontSans).FontSize(11).TextColor(k.fg).Label(tr("分组名称"))
-				if a.taskSecFocus { // 只在进入改名的首帧抢焦点，之后才能检测失焦
-					in.Focus()
-					a.taskSecFocus = false
-				} else if !in.Focused() { // 同 Tauri onBlur={commitRename}
-					commit(a.taskSecName)
+			head.Children(func() {
+				b := ui.Box(c).Size(16, 16).Radius(6).Center()
+				b.Children(func() { foldChevron(c, k, collapsed) })
+				if b.Clicked() {
+					g.sec.Collapsed = !collapsed
+					_ = a.store.UpdateTaskSection(g.sec)
 				}
-				in.OnTextKey(func(key ui.TextKey) bool {
-					switch key.Key {
-					case ui.KeyEnter:
-						commit(key.Text())
-						return true
-					case ui.KeyEscape:
-						a.taskSecRename = ""
-						return true
+				name := sectionTitle(g.sec)
+				commit := func(v string) {
+					if v = strings.TrimSpace(v); v != "" {
+						sec := g.sec
+						sec.Name = v
+						_ = a.store.UpdateTaskSection(sec)
 					}
-					return false
-				})
-			} else {
-				label := text(c, name, 11, 16, 600, k.muted).LetterSpacing(0.88).Role(ui.RoleButton).Label(name).
-					Tooltip(tr("点击折叠/展开 · 双击重命名"))
-				if label.Clicked() { // 同 Tauri：单击 220ms 后折叠 / 展开，期间双击则改为重命名
-					a.taskSecClickSeq++
-					seq, sec := a.taskSecClickSeq, g.sec
-					time.AfterFunc(220*time.Millisecond, func() {
-						a.onMain(func() {
-							if a.taskSecClickSeq == seq {
-								sec.Collapsed = !sec.Collapsed
-								_ = a.store.UpdateTaskSection(sec)
-							}
-						})
+					a.taskSecRename = ""
+				}
+				if a.taskSecRename == g.sec.ID {
+					in := ui.TextInputBase(c, &a.taskSecName).Width(140).Font(fontSans).FontSize(11).TextColor(k.fg).Label(tr("分组名称"))
+					if a.taskSecFocus { // 只在进入改名的首帧抢焦点，之后才能检测失焦
+						in.Focus()
+						a.taskSecFocus = false
+					} else if !in.Focused() { // 同 Tauri onBlur={commitRename}
+						commit(a.taskSecName)
+					}
+					in.OnTextKey(func(key ui.TextKey) bool {
+						switch key.Key {
+						case ui.KeyEnter:
+							commit(key.Text())
+							return true
+						case ui.KeyEscape:
+							a.taskSecRename = ""
+							return true
+						}
+						return false
 					})
-				}
-				if label.DoubleClicked() {
-					a.taskSecClickSeq++
-					a.startTaskSecRename(g.sec)
-				}
-			}
-			countBadge(c, len(g.tasks), k.muted, k.track)
-			ui.Spacer(c)
-			more := ghostIconButton(c, k, "tsec-more-"+g.sec.ID, "ellipsis", sectionTitle(g.sec)+" "+tr("分组操作"), 16, 12, false, hovered) // 悬停区头才显出「···」（同 Tauri）
-			more.Menu(func(m *ui.Menu) { // 同 Tauri 分组操作：重命名 / 上移 / 下移（收集箱也可）/ 删除（收集箱除外）
-				secs := a.store.TaskSections()
-				i := slices.IndexFunc(secs, func(x store.Section) bool { return x.ID == g.sec.ID })
-				if m.Item(tr("重命名")).Chosen() {
-					a.startTaskSecRename(g.sec)
-				}
-				if m.Item(tr("上移")).Disabled(i <= 0).Chosen() {
-					_ = a.store.MoveTaskSection(g.sec.ID, -1)
-				}
-				if m.Item(tr("下移")).Disabled(i < 0 || i >= len(secs)-1).Chosen() {
-					_ = a.store.MoveTaskSection(g.sec.ID, 1)
-				}
-				if g.sec.ID == store.TaskInbox {
-					return
-				}
-				m.Separator()
-				if m.Item(tr("删除分组")).Chosen() {
-					if undo, ok := a.store.DeleteTaskSection(g.sec.ID); ok {
-						a.showHUDUndo("ok", fmt.Sprintf(tr("已删除分组「%s」，任务移回收集箱"), g.sec.Name), undo)
+				} else {
+					label := text(c, name, 11, 16, 600, k.muted).LetterSpacing(0.88).Role(ui.RoleButton).Label(name).
+						Tooltip(tr("拖动调整分组顺序 · 点击折叠/展开 · 双击重命名"))
+					if label.Clicked() { // 同 Tauri：单击 220ms 后折叠 / 展开，期间双击则改为重命名
+						a.taskSecClickSeq++
+						seq, sec := a.taskSecClickSeq, g.sec
+						time.AfterFunc(220*time.Millisecond, func() {
+							a.onMain(func() {
+								if a.taskSecClickSeq == seq {
+									sec.Collapsed = !sec.Collapsed
+									_ = a.store.UpdateTaskSection(sec)
+								}
+							})
+						})
 					}
+					if label.DoubleClicked() {
+						a.taskSecClickSeq++
+						a.startTaskSecRename(g.sec)
+					}
+				}
+				countBadge(c, len(g.tasks), k.muted, k.track)
+				ui.Spacer(c)
+				more := ghostIconButton(c, k, "tsec-more-"+g.sec.ID, "ellipsis", sectionTitle(g.sec)+" "+tr("分组操作"), 16, 12, false, hovered) // 悬停区头才显出「···」（同 Tauri）
+				more.Menu(func(m *ui.Menu) {                                                                                                 // 同 Tauri 分组操作：重命名 / 上移 / 下移（收集箱也可）/ 删除（收集箱除外）
+					secs := a.store.TaskSections()
+					i := slices.IndexFunc(secs, func(x store.Section) bool { return x.ID == g.sec.ID })
+					if m.Item(tr("重命名")).Chosen() {
+						a.startTaskSecRename(g.sec)
+					}
+					if m.Item(tr("上移")).Disabled(i <= 0).Chosen() {
+						_ = a.store.MoveTaskSection(g.sec.ID, -1)
+					}
+					if m.Item(tr("下移")).Disabled(i < 0 || i >= len(secs)-1).Chosen() {
+						_ = a.store.MoveTaskSection(g.sec.ID, 1)
+					}
+					if g.sec.ID == store.TaskInbox {
+						return
+					}
+					m.Separator()
+					if m.Item(tr("删除分组")).Chosen() {
+						if undo, ok := a.store.DeleteTaskSection(g.sec.ID); ok {
+							a.showHUDUndo("ok", fmt.Sprintf(tr("已删除分组「%s」，任务移回收集箱"), g.sec.Name), undo)
+						}
+					}
+				})
+			})
+			if collapsed {
+				return
+			}
+			ui.Column(c).Gap(4).Key("tsecbody-" + g.sec.ID).Transition(foldTransition).Children(func() {
+				if len(g.tasks) == 0 {
+					text(c, tr("此分组为空"), 11, 16, 400, k.muted).Padding(8, 0).TextAlign(ui.Center).FillWidth()
+				}
+				for _, t := range g.tasks {
+					a.taskRow(c, k, t, now)
 				}
 			})
 		})
-		if collapsed {
-			return
-		}
-		ui.Column(c).Gap(4).Key("tsecbody-" + g.sec.ID).Transition(foldTransition).Children(func() {
-			if len(g.tasks) == 0 {
-				text(c, tr("此分组为空"), 11, 16, 400, k.muted).Padding(8, 0).TextAlign(ui.Center).FillWidth()
-			}
-			for _, t := range g.tasks {
-				a.taskRow(c, k, t, now)
-			}
-		})
 	})
 }
+
+// tsecDrag 是被拖动排序的任务分组。
+type tsecDrag struct{ id string }
 
 // taskRow：卡片 38 高（边框 1 + 内边距 6/8），行内依次是优先级色条、状态圈、标题、重复 / 清单 / 到期、删除。
 func (a *app) taskRow(c *ui.Context, k tokens, t store.Task, now time.Time) {
@@ -775,16 +745,16 @@ func (a *app) taskRow(c *ui.Context, k tokens, t store.Task, now time.Time) {
 	elevated(card, k, hovered) // TaskRow：悬停 elevation-2，box-shadow 150ms
 	card.ContextMenu(func(m *ui.Menu) { a.taskMenu(c, m, t) })
 	if !open && !done { // 拖拽排序：放到另一行 = 插到它前面（可跨分组）；放到分组头 = 移到该组末尾。已完成不能拖（同 Tauri useSortable disabled）
-		card.Drag(taskDrag{t.ID})
+		card.Drag(taskDrag{id: t.ID})
 	}
 	if card.Clicked() && !open { // 同 Tauri TaskRow：整行点击展开编辑（子按钮自己先吃掉点击）；展开态也登记可点，行内空白不算「行外」
 		a.openTaskEdit(t)
 	}
 	dropOver := false
-	if d, ok := ui.DragOver[taskDrag](card); ok && d.id != t.ID {
+	if d, ok := ui.DragOver[taskDrag](card); ok && d.id != t.ID && !d.resize {
 		dropOver = true
 	}
-	if d, ok := ui.Drop[taskDrag](card); ok && d.id != t.ID {
+	if d, ok := ui.Drop[taskDrag](card); ok && d.id != t.ID && !d.resize {
 		_ = a.store.MoveTask(d.id, "", t.ID)
 	}
 	card.Children(func() {
@@ -933,6 +903,7 @@ func (a *app) taskMenu(c *ui.Context, m *ui.Menu, t store.Task) {
 	if m.Item(tr("AI 拆解子任务")).Chosen() {
 		a.splitSubtasks(t)
 	}
+	a.taskDurationMenu(m, t)
 	if t.Spark && m.Item(tr("转为待办")).Chosen() {
 		t.Spark = false
 		_ = a.store.UpdateTask(t)

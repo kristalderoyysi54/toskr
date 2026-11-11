@@ -126,6 +126,9 @@ func MakeOverlay(nsWindow uintptr) {
 	}
 	load()
 	w := objc.ID(nsWindow)
+	// 去掉 titled 样式改为无边框：带 titled 的窗口（mygo 的 Frameless 仍是 titled + fullSizeContentView）在上屏时会被系统
+	// 约束到菜单栏下方——实测主屏下移 38pt、外接屏 25pt，截图冻结画面整体下沉、Dock 被切掉。保留 nonactivatingPanel。
+	makeBorderless(w, true)
 	w.Send(sel("setLevel:"), OverlayLevel)
 	const joinAll, stationary, ignoresCycle, fullScreenAux = 1 << 0, 1 << 4, 1 << 6, 1 << 8
 	w.Send(sel("setCollectionBehavior:"), uint(joinAll|stationary|ignoresCycle|fullScreenAux))
@@ -228,4 +231,65 @@ func RaiseIMEWindows(ours map[uintptr]bool) []string {
 		}
 	})
 	return raised
+}
+
+// PinOverlayFrame 把遮罩窗精确放到全局 pt 矩形（左上原点，同 mygo 坐标）：直接 setFrame:display:，不经
+// constrainFrameRect。带标题栏样式的无边框窗在显示时会被系统推到菜单栏下方，截图冻结画面整体下移一个菜单栏高。
+// 返回设置后的实际 frame（Cocoa 左下原点，诊断用）。
+func PinOverlayFrame(nsWindow uintptr, x, y, w, h float64) (before, after [4]float64) {
+	if nsWindow == 0 {
+		return
+	}
+	load()
+	withPool(func() {
+		win := objc.ID(nsWindow)
+		screens := class("NSScreen").Send(sel("screens"))
+		if objc.Send[int](screens, sel("count")) == 0 {
+			return
+		}
+		primary := objc.Send[cgRect](screens.Send(sel("objectAtIndex:"), 0), sel("frame"))
+		f := objc.Send[cgRect](win, sel("frame"))
+		before = [4]float64{f.X, f.Y, f.W, f.H}
+		want := cgRect{X: x, Y: primary.H - (y + h), W: w, H: h}
+		if f != want {
+			win.Send(sel("setFrame:display:"), want, true)
+		}
+		g := objc.Send[cgRect](win, sel("frame"))
+		after = [4]float64{g.X, g.Y, g.W, g.H}
+	})
+	return
+}
+
+// MakeBorderless：把 mygo 的 Frameless 窗（titled + fullSizeContentView）改为真正无边框，系统不再把它约束到菜单栏下方。
+// 截图遮罩、长截屏边框 / 预览、钉图这类必须落在精确屏幕坐标上的窗用。panel = 保留 nonactivatingPanel。
+func MakeBorderless(nsWindow uintptr, panel bool) {
+	if nsWindow == 0 {
+		return
+	}
+	load()
+	withPool(func() { makeBorderless(objc.ID(nsWindow), panel) })
+}
+
+func makeBorderless(w objc.ID, panel bool) {
+	frame := objc.Send[cgRect](w, sel("frame"))
+	mask := uint(0)
+	if panel {
+		mask = 1 << 7 // NSWindowStyleMaskNonactivatingPanel
+	}
+	w.Send(sel("setStyleMask:"), mask)
+	w.Send(sel("setFrame:display:"), frame, false)
+}
+
+// CursorLocation：光标的全局 pt 坐标（原点为主屏左上角，同 WinRect）。主线程调用。
+func CursorLocation() (x, y float64) {
+	load()
+	withPool(func() {
+		p := objc.Send[cgPoint](class("NSEvent"), sel("mouseLocation"))
+		x, y = p.X, p.Y
+		screens := class("NSScreen").Send(sel("screens"))
+		if objc.Send[int](screens, sel("count")) > 0 {
+			y = objc.Send[cgRect](screens.Send(sel("objectAtIndex:"), 0), sel("frame")).H - p.Y
+		}
+	})
+	return
 }

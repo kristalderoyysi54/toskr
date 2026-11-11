@@ -196,3 +196,33 @@ func TestFindPageTargetPrefersMain(t *testing.T) {
 		t.Fatal("空")
 	}
 }
+
+// 带图片的消息：data URL 交给 SaveImage 存成文件，账本只留文件名；坏数据丢掉；形状探针走 OnProbe 不入账本。
+func TestAcceptLocalizesImages(t *testing.T) {
+	dir := t.TempDir()
+	plain := func(b []byte) ([]byte, error) { return b, nil }
+	b := New(dir, plain, plain)
+	var saved [][]byte
+	b.SaveImage = func(raw []byte) (string, error) { saved = append(saved, raw); return "img-" + string(rune('a'+len(saved))) + ".png", nil }
+	var probed []string
+	b.OnProbe = func(m Message) { probed = m.ImageProbe }
+	var got Message
+	b.OnMsg = func(m Message) { got = m }
+	yes := true
+	m := Message{BridgeVersion: BridgeVersion, ConversationID: "g1", MessageID: "m1", MentionedSelf: true, IsGroup: &yes, Text: "看图",
+		Images:     []Image{{Data: "data:image/png;base64,iVBORw0KGgo="}, {Data: "not-a-data-url"}},
+		ImageProbe: []string{"msg.type=number"}}
+	if _, err := b.Accept(m); err != nil {
+		t.Fatal(err)
+	}
+	if len(saved) != 1 || len(got.Images) != 1 || got.Images[0].File == "" || got.Images[0].Data != "" {
+		t.Fatalf("应只存下合法的一张 %+v", got.Images)
+	}
+	if len(probed) != 1 || got.ImageProbe != nil {
+		t.Fatalf("探针只走诊断 %v %v", probed, got.ImageProbe)
+	}
+	rs, _ := b.Recent(10)
+	if len(rs) != 1 || len(rs[0].Message.Images) != 1 || rs[0].Message.Images[0].Data != "" {
+		t.Fatalf("账本只留文件名 %+v", rs)
+	}
+}

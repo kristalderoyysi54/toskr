@@ -43,15 +43,16 @@ type Note struct {
 	ImageW    int       `json:"imageW,omitempty"`
 	ImageH    int       `json:"imageH,omitempty"`
 	// 与 Tauri Note 同名同义的字段（Tauri 数据导入与后续功能对齐用）
-	Title       string         `json:"title,omitempty"`       // 自定义标题（右键「重命名」）
-	Blur        bool           `json:"blur,omitempty"`        // 模糊内容（卡面打码防肩窥）
-	Attachments []string       `json:"attachments,omitempty"` // 附加图片（合并后的组合卡）
-	Blocks      []ContentBlock `json:"contentBlocks,omitempty"`
-	URL         string         `json:"url,omitempty"` // 链接卡
-	LinkIcon    string         `json:"linkIcon,omitempty"`
-	CodeLang    string         `json:"codeLang,omitempty"`
-	UpdatedAt   time.Time      `json:"updatedAt,omitzero"`
-	Provenance  *Provenance    `json:"provenance,omitempty"` // 回复笔记：来自哪次发送
+	Title       string            `json:"title,omitempty"`       // 自定义标题（右键「重命名」）
+	Blur        bool              `json:"blur,omitempty"`        // 模糊内容（卡面打码防肩窥）
+	Attachments []string          `json:"attachments,omitempty"` // 附加图片（合并后的组合卡）
+	Blocks      []ContentBlock    `json:"contentBlocks,omitempty"`
+	ImageAlts   map[string]string `json:"imageAlts,omitempty"` // 主图 / 附件的图片说明（文件 → 说明）；图文块的说明存在块的 Alt（同 Tauri block.alt）
+	URL         string            `json:"url,omitempty"`       // 链接卡
+	LinkIcon    string            `json:"linkIcon,omitempty"`
+	CodeLang    string            `json:"codeLang,omitempty"`
+	UpdatedAt   time.Time         `json:"updatedAt,omitzero"`
+	Provenance  *Provenance       `json:"provenance,omitempty"` // 回复笔记：来自哪次发送
 }
 
 // ContentBlock 是富卡的权威内容块（同 Tauri NoteContentBlock）：文字或图片。
@@ -83,15 +84,16 @@ func (n Note) MediaFiles() []string {
 }
 
 type Settings struct {
-	TriggerModifier string   `json:"triggerModifier"` // shift | control | option
-	TriggerGapMs    int      `json:"triggerGapMs"`
-	ClipboardWatch  bool     `json:"clipboardWatch"`
-	ExcludedApps    []string `json:"excludedApps"`
-	Glass           string   `json:"glass"` // glass | clear | none
-	PanelHotkey     string   `json:"panelHotkey"`
-	Language        string   `json:"language"`       // system | zh | en
-	Stealth         bool     `json:"stealth"`        // 隐身：只保留 warn 气泡
-	ClipRetainDays  int      `json:"clipRetainDays"` // 剪贴板保留天数（0 = 不按时间清理）
+	TriggerModifier  string   `json:"triggerModifier"` // shift | control | option
+	TriggerGapMs     int      `json:"triggerGapMs"`
+	ClipboardWatch   bool     `json:"clipboardWatch"`
+	ExcludedApps     []string `json:"excludedApps"`     // 捕获排除：这些应用里双击只开关面板，不读选区
+	ClipExcludedApps []string `json:"clipExcludedApps"` // 剪贴忽略：不保存从这些应用复制的内容（同 Tauri，与捕获排除分开）
+	Glass            string   `json:"glass"`            // glass | clear | none
+	PanelHotkey      string   `json:"panelHotkey"`
+	Language         string   `json:"language"`       // system | zh | en
+	Stealth          bool     `json:"stealth"`        // 隐身：只保留 warn 气泡
+	ClipRetainDays   int      `json:"clipRetainDays"` // 剪贴板保留天数（0 = 不按时间清理）
 	// 按来源单独设定的保留天数（同 Tauri clipAppRetentionDays，键 = bundle id，没有则应用名），优先于全局
 	ClipAppRetention map[string]int `json:"clipAppRetentionDays,omitempty"`
 	PasteThenEnter   bool           `json:"pasteThenEnter"`          // 粘贴后回车（终端类目标默认关闭）
@@ -121,6 +123,7 @@ type Settings struct {
 	ScreenshotKey     string       `json:"screenshotKey"`
 	ScreenshotOff     bool         `json:"screenshotOff,omitempty"`      // 区域截图总开关（Tauri screenshotEnabled，默认开）
 	ShotHideSelf      bool         `json:"screenshotHideSelf,omitempty"` // 截图时隐藏 Toskr 自己的窗口（默认不隐藏）
+	AIActions         []AIAction   `json:"aiActions,omitempty"`          // 自定义 AI 动作（名称 + 一句指令），出现在卡片右键 / 详情窗「处理」里
 	AIEndpoint        string       `json:"aiEndpoint"`
 	AIModel           string       `json:"aiModel"`
 	AutoCheckUpdate   *bool        `json:"autoCheckUpdate,omitempty"`   // 自动检查更新（同 Tauri autoCheckUpdate，nil = 默认开）
@@ -129,6 +132,8 @@ type Settings struct {
 	Companion         []string     `json:"companion"`                   // 伴随停靠的应用 bundle id
 	EdgeHide          bool         `json:"edgeHide"`
 	Currency          string       `json:"currency"`
+	BillRemind        []int        `json:"billDefaultReminderOffsets"`
+	PasteStepMs       int          `json:"pasteStepGapMs,omitempty"` // 多段粘贴（文字 / 图片逐段）之间的等待毫秒，0 = 350 // 新建账单默认提前天数（同 Tauri；nil = 默认 3 / 1，空 = 不提醒）
 	DueReminders      bool         `json:"dueReminders"`
 	ReminderVia       string       `json:"taskReminderChannel,omitempty"` // 任务提醒方式 hud | system | both（同 Tauri taskReminderChannel，空 = hud）
 	DuePresets        *[]DuePreset `json:"duePresets,omitempty"`          // 到期快捷档（同 Tauri duePresets）；nil = 默认七档，空 = 全删了
@@ -142,17 +147,20 @@ type Settings struct {
 	SecretCipherStyle  string      `json:"secretCipherStyle,omitempty"` // classic | code | log | quote
 	SecretRevealMs     int         `json:"secretRevealTimeoutMs"`       // 显现后自动回遮罩（0 = 不自动）
 	// 窗口与外观（与 Tauri 同名设置；布尔用「关闭」语义，旧数据缺字段即默认开启）
-	Theme          string `json:"theme,omitempty"`             // system | light | dark
-	ColorScheme    string `json:"colorScheme,omitempty"`       // default | platinum | paper | matcha | sakura | fog
-	CardDensity    string `json:"cardDensity,omitempty"`       // comfortable | compact
-	PtHighlight    string `json:"platinumHighlight,omitempty"` // lavender | blue | teal | graphite
-	PtScrollbar    string `json:"platinumScrollbar,omitempty"` // classic | thin
-	PanelNotOnTop  bool   `json:"panelNotOnTop,omitempty"`     // 面板置顶（默认开）
-	KeepOnBlur     bool   `json:"keepOnBlur,omitempty"`        // 失焦自动隐藏（默认开）
-	SoundOff       bool   `json:"soundOff,omitempty"`          // 捕获音效（默认开）
-	DetailFontSize int    `json:"detailFontSize,omitempty"`    // 详情窗字号 10–24，0 = 12
-	CompanionOff   bool   `json:"companionOff,omitempty"`
-	FreeMove       bool   `json:"freeMove,omitempty"`
+	Theme           string `json:"theme,omitempty"`             // system | light | dark
+	ColorScheme     string `json:"colorScheme,omitempty"`       // default | platinum | paper | matcha | sakura | fog
+	CardDensity     string `json:"cardDensity,omitempty"`       // comfortable | compact
+	PtHighlight     string `json:"platinumHighlight,omitempty"` // lavender | blue | teal | graphite
+	PtScrollbar     string `json:"platinumScrollbar,omitempty"` // classic | thin
+	PanelNotOnTop   bool   `json:"panelNotOnTop,omitempty"`     // 面板置顶（默认开）
+	KeepOnBlur      bool   `json:"keepOnBlur,omitempty"`        // 失焦自动隐藏（默认开）
+	SoundOff        bool   `json:"soundOff,omitempty"`          // 捕获音效（默认开）
+	DetailFontSize  int    `json:"detailFontSize,omitempty"`    // 详情窗字号 10–24，0 = 12
+	MessageFontSize int    `json:"messageFontSize,omitempty"`   // IM 消息放大阅读的字号 10–24，0 = 14（与普通详情窗分开记）
+	CompanionOff    bool   `json:"companionOff,omitempty"`
+	FreeMove        bool   `json:"freeMove,omitempty"`
+	KeyHintsOff     bool   `json:"keyHintsOff,omitempty"` // 面板底部键位提示行（默认开；☰ 菜单可关）
+	TrayNextDue     bool   `json:"trayNextDue,omitempty"` // 菜单栏图标旁显示今天下一个到期时间（默认关）
 	// 面板尺寸与位置（同 Tauri set_panel_width / 高度拖拽 / 自由移动位置；0 = 默认：宽 380、高度自动铺满）
 	PanelWidth  int    `json:"panelWidth,omitempty"`
 	PanelHeight int    `json:"panelHeight,omitempty"`
@@ -200,6 +208,8 @@ type Settings struct {
 	OutcomeEpoch     int  `json:"outcomeMetricsEpoch,omitempty"`
 	// 首启导览与上手演练（同 Tauri welcomeTourSeen / onboarding）
 	WelcomeTourSeen bool            `json:"welcomeTourSeen,omitempty"`
+	TauriMigration  string          `json:"tauriMigration,omitempty"`  // 旧版迁移向导：done / dismissed，空 = 未处理
+	TauriMigratedAt int64           `json:"tauriMigratedAt,omitempty"` // 最近一次迁移导入成功的时刻（毫秒）
 	Onboarding      OnboardingState `json:"onboarding,omitzero"`
 }
 
@@ -217,7 +227,19 @@ type ShotPrefs struct {
 	RedactStyle    int     `json:"redactStyle,omitempty"` // 打码新框样式：0 马赛克 / 1 黑 / 2 白 / 3 取色
 }
 
+// ReleaseDefaults：正式版（接替旧版）的默认值与旧版一致——双击 ⇧ 触发、剪贴板保留 30 天。
+// 迭代期默认值与旧版错开（见下）。由主程序在打开数据前按身份设置。
+var ReleaseDefaults bool
+
 func DefaultSettings() Settings {
+	d := evaluationDefaults()
+	if ReleaseDefaults {
+		d.TriggerModifier, d.ClipRetainDays = "shift", 30
+	}
+	return d
+}
+
+func evaluationDefaults() Settings {
 	// 评估期默认值与已安装的 Tauri 版错开（⌥ 双击、⌃⌥Space），两版并存时一次按键
 	// 不会同时触发两边；替换 Tauri 版后可在设置里改回 ⇧ 与 ⌘⇧C。
 	return Settings{
@@ -225,8 +247,9 @@ func DefaultSettings() Settings {
 		PanelHotkey: "Ctrl+Alt+Space", Language: "system", ClipRetainDays: 7,
 		ScreenshotKey: "Ctrl+Alt+A", AIEndpoint: "https://api.openai.com/v1", AIModel: "gpt-4o-mini", AIEnabled: new(bool),
 		Companion: []string{"com.googlecode.iterm2", "com.apple.Terminal", "com.todesktop.230313mzl4w4u92", "com.microsoft.VSCode"},
-		EdgeHide:  true, Currency: "¥", DueReminders: true, SecretRevealMs: 8000, DetailFontSize: 12,
-		ExcludedApps: []string{"com.1password.1password", "com.apple.keychainaccess", "com.bitwarden.desktop"},
+		EdgeHide:  true, Currency: "¥", DueReminders: true, SecretRevealMs: 8000, DetailFontSize: 12, MessageFontSize: 14,
+		ExcludedApps:     []string{"com.1password.1password", "com.apple.keychainaccess", "com.bitwarden.desktop"},
+		ClipExcludedApps: []string{"com.1password.1password", "com.agilebits.onepassword7", "com.bitwarden.desktop", "com.apple.Passwords", "com.apple.keychainaccess"},
 	}
 }
 
@@ -405,6 +428,13 @@ func (s *Store) Section(section string) []Note {
 	return out
 }
 
+// AIAction：用户自定义的 AI 改写动作。
+type AIAction struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Instruction string `json:"instruction"`
+}
+
 func newID() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
@@ -573,6 +603,11 @@ func (s *Store) Update(id, text string) error {
 			return false
 		}
 		n := &s.notes[i]
+		if HasMixedContent(n.Blocks) { // 图文卡：改动映射回内容块（块是权威内容，只改 Text 卡面不会变）
+			n.Blocks = SpliceBlocksText(n.Blocks, text)
+			n.Text, n.HTML, n.UpdatedAt = TextFromBlocks(n.Blocks), "", time.Now()
+			return true
+		}
 		n.Text, n.HTML = text, ""
 		relink(n)
 		return true
@@ -679,15 +714,17 @@ func (s *Store) Note(id string) (Note, bool) {
 	return Note{}, false
 }
 
-// MarkSent 发送成功：记录发送时间；所在分组未设 KeepAfterSend 时同时标记完成。
+// MarkSent 发送成功：记录发送时间；非常用、非剪贴、所在分组未设 KeepAfterSend 的卡同时标记完成。
 func (s *Store) MarkSent(ids []string, at time.Time) error {
 	return s.mutate(func() bool {
 		changed := false
 		for _, id := range ids {
 			if i := s.index(id); i >= 0 {
 				s.notes[i].SentAt, changed = at, true
-				if sec, ok := s.section(s.notes[i].Section); !ok || !sec.KeepAfterSend {
-					s.notes[i].Done = true
+				n := &s.notes[i]
+				// 同 Tauri doneIdsAfterSend：「常用」卡、「发送后保留」分组、剪贴板历史发送后都不标完成，留在原位
+				if sec, ok := s.section(n.Section); !n.Kept && n.Section != SectionClipboard && (!ok || !sec.KeepAfterSend) {
+					n.Done = true
 				}
 			}
 		}
@@ -832,6 +869,9 @@ func mergeSettings(st Settings) Settings {
 	if st.DetailFontSize == 0 {
 		st.DetailFontSize = 12
 	}
+	if st.MessageFontSize == 0 {
+		st.MessageFontSize = 14
+	}
 	if st.Language == "" {
 		st.Language = d.Language
 	}
@@ -846,6 +886,9 @@ func mergeSettings(st Settings) Settings {
 	}
 	if st.Companion == nil {
 		st.Companion = d.Companion
+	}
+	if st.ClipExcludedApps == nil { // 拆分前两份名单是同一份：老数据沿用原名单，剪贴行为不变
+		st.ClipExcludedApps = slices.Clone(st.ExcludedApps)
 	}
 	return st
 }
@@ -934,3 +977,24 @@ func (p DuePreset) Due(now time.Time) time.Time {
 
 // AutoCheckOn：自动检查更新（未设置时默认开，同 Tauri）。
 func (st Settings) AutoCheckOn() bool { return st.AutoCheckUpdate == nil || *st.AutoCheckUpdate }
+
+// BillDefaultRemind：新建账单默认勾选的提前天数（nil 走 Tauri 默认 [3, 1]）。
+func (s Settings) BillDefaultRemind() []int {
+	if s.BillRemind == nil {
+		return []int{3, 1}
+	}
+	return slices.Clone(s.BillRemind)
+}
+
+// PasteStepOptions：设置「多段粘贴间隔」的档位（毫秒）与默认档。
+var PasteStepOptions = []int{200, 350, 600, 1000}
+
+const DefaultPasteStepMs = 350
+
+// PasteStep：多段粘贴之间的等待（未设或非法 = 350ms）。
+func (s Settings) PasteStep() time.Duration {
+	if !slices.Contains(PasteStepOptions, s.PasteStepMs) {
+		return DefaultPasteStepMs * time.Millisecond
+	}
+	return time.Duration(s.PasteStepMs) * time.Millisecond
+}

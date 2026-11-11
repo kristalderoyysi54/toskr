@@ -54,14 +54,23 @@ func stok(c *ui.Context) settingsTokens {
 // setRow 是卡片里的一行：左侧标题（可带说明），右侧控件；below 画在标题下方的整宽内容（文本框、列表等）。
 type setRow struct {
 	title, hint string
+	tip         string // 说明的悬停全文（说明只留一行，细节放这里）
 	control     func()
 	below       func()
-	hidden      bool // 条件行（如固定浅色方案下的「主题」）
+	hidden      bool   // 条件行（如固定浅色方案下的「主题」）
+	icon        string // 有值时按 Tauri FeatureRow 画：左侧 32 图标格 + 加粗标题（功能开关、系统权限）
+	badge       string // 标题后的小标签（如「实验」）
+	warn        bool   // 标题后的琥珀小点（如同步失败）
 }
 
 type setSection struct {
-	title string
-	rows  []setRow
+	title      string
+	rows       []setRow
+	intro      string // 分组上方的页说明（同 Tauri SettingsIntro）
+	footer     string // 卡片下方的汇总说明（同 Tauri Group footer）
+	footerWarn bool   // 汇总为待处理状态：琥珀色
+	body       func() // 有值时不画行卡片，改画自定义内容（如粘贴规则的主从布局）
+	key        string // 同页多张无标题卡片时区分身份
 }
 
 type setPage struct {
@@ -72,7 +81,7 @@ type setPage struct {
 
 func (r setRow) matches(q string) bool {
 	q = strings.ToLower(q)
-	return strings.Contains(strings.ToLower(r.title), q) || strings.Contains(strings.ToLower(r.hint), q)
+	return strings.Contains(strings.ToLower(r.title), q) || (strings.Contains(strings.ToLower(r.hint), q) || strings.Contains(strings.ToLower(r.tip), q))
 }
 
 func (a *app) settingsShell(c *ui.Context, pages []setPage) {
@@ -83,10 +92,20 @@ func (a *app) settingsShell(c *ui.Context, pages []setPage) {
 		c.Root().Background(s.bg)
 	}
 	if a.setJump != "" { // 按页名跳转（页序号随「秘文」开关变化）
-		if i := slices.IndexFunc(pages, func(p setPage) bool { return p.label == a.setJump }); i >= 0 {
-			a.setPage, a.setSub, a.setQuery = i, 0, ""
+		for i, p := range pages { // 一级分类名，或子页签名（如「诊断」「秘文」）
+			if p.label == a.setJump {
+				a.setPage, a.setSub, a.setQuery = i, 0, ""
+				break
+			}
+			if j := slices.Index(p.subs, a.setJump); j >= 0 {
+				a.setPage, a.setSub, a.setQuery = i, j, ""
+				break
+			}
 		}
 		a.setJump = ""
+	}
+	if a.setQuery == "" && a.setPage < len(pages) && pages[a.setPage].label == "权限" {
+		a.pollPermissions()
 	}
 	if s.pt {
 		a.ptSettingsShell(c, k, s, pages)
@@ -161,7 +180,7 @@ func (a *app) settingsShell(c *ui.Context, pages []setPage) {
 						secs := p.sections[min(a.setSub, len(p.sections)-1)]
 						ui.Column(c).Margin(16, 0, 0, 0).Gap(24).Children(func() {
 							for _, sec := range secs {
-								settingsSection(c, k, s, sec.title, sec.rows)
+								settingsSection(c, k, s, sec)
 							}
 						})
 					})
@@ -186,7 +205,11 @@ func (a *app) searchResults(c *ui.Context, k tokens, s settingsTokens, pages []s
 					}
 					if len(rows) > 0 {
 						found = true
-						settingsSection(c, k, s, tr(p.label)+" · "+sec.title, rows)
+						title := tr(p.label)
+						if sec.title != "" {
+							title += " · " + sec.title
+						}
+						settingsSection(c, k, s, setSection{title: title, rows: rows})
 					}
 				}
 			}
@@ -197,29 +220,70 @@ func (a *app) searchResults(c *ui.Context, k tokens, s settingsTokens, pages []s
 	})
 }
 
-func settingsSection(c *ui.Context, k tokens, s settingsTokens, title string, rows []setRow) {
+func settingsSection(c *ui.Context, k tokens, s settingsTokens, sec setSection) {
 	if s.pt {
-		ptSection(c, k, s, title, rows)
+		ptSection(c, k, s, sec)
 		return
 	}
-	rows = slices.DeleteFunc(slices.Clone(rows), func(r setRow) bool { return r.hidden })
-	if len(rows) == 0 {
+	rows := slices.DeleteFunc(slices.Clone(sec.rows), func(r setRow) bool { return r.hidden })
+	if len(rows) == 0 && sec.body == nil {
 		return
 	}
-	ui.Column(c).Gap(8).Key("sec-" + title).Children(func() {
-		text(c, title, 13, 18, 600, k.fg).Padding(0, 2)
+	title := sec.title
+	ui.Column(c).Gap(8).Key("sec-" + title + sec.intro + sec.key).Children(func() {
+		if sec.intro != "" {
+			text(c, sec.intro, 12, 17, 400, k.muted).Wrap().Padding(0, 2, 4, 2)
+		}
+		if title != "" {
+			text(c, title, 13, 18, 600, k.fg).Padding(0, 2)
+		}
+		if sec.body != nil {
+			sec.body()
+			return
+		}
 		ui.Column(c).Radius(14).Background(s.card).Border(1, s.cardBorder).Children(func() {
 			for i, r := range rows {
 				row := ui.Column(c).Padding(10, 14).Radius(10)
+				if r.icon != "" {
+					row.Padding(12, 14)
+				}
 				if i < len(rows)-1 {
 					row.BorderWidth(0, 0, 1, 0).BorderColor(s.rowBorder)
 				}
 				row.Children(func() {
-					ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
+					gap := float32(16)
+					if r.icon != "" {
+						gap = 12
+					}
+					ui.Row(c).Gap(gap).AlignItems(ui.Center).Children(func() {
+						if r.icon != "" { // 同 Tauri FeatureRow：size-8 rounded-lg bg-muted，图标 16、前景 75%
+							ui.Box(c).Size(32, 32).Radius(8).Background(k.track).Center().Children(func() {
+								licon(c, r.icon, 16, k.fg.Alpha(0.75))
+							})
+						}
 						ui.Column(c).Grow(1).Basis(0).Gap(2).Children(func() {
-							tightText(c, r.title, 13, 18, 400, k.fg)
+							if r.icon != "" {
+								ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+									tightText(c, r.title, 13, 18, 600, k.fg)
+									if r.badge != "" {
+										ui.Box(c).Height(16).Padding(0, 4).Radius(3).Background(k.track).Center().Children(func() {
+											text(c, r.badge, 10, 14, 500, k.muted).SingleLine()
+										})
+									}
+								})
+							} else if r.warn {
+								ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+									tightText(c, r.title, 13, 18, 400, k.fg)
+									ui.Box(c).Size(6, 6).Radius(3).Background(k.amberText)
+								})
+							} else {
+								tightText(c, r.title, 13, 18, 400, k.fg)
+							}
 							if r.hint != "" {
-								text(c, r.hint, 11, 16, 400, k.muted).Wrap()
+								h := text(c, r.hint, 11, 16, 400, k.muted).Wrap()
+								if r.tip != "" {
+									h.Tooltip(r.tip)
+								}
 							}
 						})
 						if r.control != nil {
@@ -227,11 +291,30 @@ func settingsSection(c *ui.Context, k tokens, s settingsTokens, title string, ro
 						}
 					})
 					if r.below != nil {
-						ui.Column(c).Margin(8, 0, 0, 0).Gap(6).Children(r.below)
+						below := ui.Column(c).Margin(8, 0, 0, 0).Gap(6)
+						if r.icon != "" { // 与标题左缘对齐（图标格 32 + 间距 12）
+							below.Margin(6, 0, 0, 44)
+						}
+						below.Children(r.below)
 					}
 				})
 			}
 		})
+		if sec.footer != "" {
+			col := k.muted
+			if sec.footerWarn {
+				col = k.amberText
+			}
+			text(c, sec.footer, 11, 16, 400, col).Wrap().Padding(0, 2)
+		}
+	})
+}
+
+// grantedPill：已就绪状态（小面积绿色：对勾 + 文字，同 Tauri text-success「已授权」）。
+func grantedPill(c *ui.Context, k tokens, label string) {
+	ui.Row(c).Height(24).Padding(0, 8).Gap(4).Radius(12).Background(k.ok.Alpha(0.12)).AlignItems(ui.Center).Children(func() {
+		licon(c, "check", 12, k.ok)
+		text(c, label, 11, 16, 500, k.ok).SingleLine()
 	})
 }
 
@@ -359,7 +442,7 @@ func sliderValue(c *ui.Context, k tokens, v *float64, lo, hi, step float64, labe
 			*v = float64(int(*v/step+0.5)) * step
 			changed = true
 		}
-		text(c, label, 11, 16, 400, k.muted).Width(36).TextAlign(ui.End)
+		text(c, label, 11, 16, 400, k.muted).FontFeatures("tnum").Width(36).TextAlign(ui.End)
 	})
 	return changed
 }

@@ -26,7 +26,7 @@ func dataKey(fresh bool) ([]byte, error) {
 	if !mygo.IsDev() && !devBinary() { // mygo dev 的包不带 hardened runtime，辅助程序会拒绝；开发态用独立数据目录直读
 		path, err := helperPath()
 		if err != nil {
-			return nil, fmt.Errorf("内置密钥辅助程序缺失：请重新安装完整的 Toskr Native（%v）", err)
+			return nil, fmt.Errorf(brand("内置密钥辅助程序缺失：请重新安装完整的 Toskr Native（%v）"), err)
 		}
 		return helperDataKey(path, fresh, gen)
 	}
@@ -52,13 +52,18 @@ func devBinary() bool {
 	return err == nil && filepath.Base(filepath.Dir(exe)) != "MacOS"
 }
 
-// dataDir 是原生版独立的数据目录（不碰 Tauri 版 com.toskr.app）。
+// dataDir 是默认数据目录。迭代期用独立的 com.toskr.native（不碰旧版的 com.toskr.app）；
+// 正式版用 com.toskr.app/v1：与旧版同一个应用目录，但自成一个子目录——两版都有 media/、recovery/ 和诊断日志，
+// 混放会互相回收对方的图片；旧版的文件原样留在上一层，装回旧版仍能打开。
 func dataDir() string {
 	base, err := os.UserConfigDir()
 	if err != nil {
 		base = os.TempDir()
 	}
-	id := "com.toskr.native"
+	if released() {
+		return releaseDataDir()
+	}
+	id := nativeBundle
 	if mygo.IsDev() {
 		id += ".dev"
 	}

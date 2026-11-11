@@ -39,6 +39,7 @@ func (a *app) startBackground() {
 			a.refreshCalendar() // 日程每 30 秒重拉一次（含跨零点换天）
 			if a.panel != nil {
 				a.panel.Update(a.refreshTray) // 暂停到点后托盘回到「暂停」子菜单、剩余分钟更新
+				a.panel.Update(a.focusTick)   // 专注到点提醒、菜单栏剩余分钟
 			}
 			if now.Sub(lastHouse) > time.Hour {
 				a.housekeeping()

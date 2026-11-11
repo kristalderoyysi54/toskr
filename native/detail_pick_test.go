@@ -72,7 +72,7 @@ func TestDetailDockNoWrapInPick(t *testing.T) {
 	tt := ui.NewTester(a.detailView, 560, 540)
 	tt.Frame()
 	tt.Frame()
-	for _, s := range []string{"选词", "原文", "复制", "编辑"} {
+	for _, s := range []string{"选词", "复制", "编辑"} { // 「原文」只给 Markdown 正文且不在选词时（同 Tauri isMd && !pickMode）
 		r, ok := tt.Find(s)
 		if !ok || r.H > 20 {
 			t.Fatalf("%q 应单行（高 %.1f）：%+v", s, r.H, r)
@@ -140,5 +140,23 @@ func TestPickGroupsKinsoku(t *testing.T) {
 	want := []string{"测试，", "项目：", "（甲）", "乙", " ", "丙"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("%q", got)
+	}
+}
+
+// 同 Tauri：「原文 / 渲染」只在像 Markdown 的正文出现；没有文字时不给「选词」「处理」。
+func TestDetailDockGating(t *testing.T) {
+	a, _ := testApp(t, "普通一句话")
+	n := a.store.Notes()[0]
+	dt := detailTester(t, a, n)
+	if dt.HasText("原文") || !dt.HasText("选词") || !dt.HasText("处理") {
+		t.Fatalf("纯文本不给原文切换 %v", dt.Texts())
+	}
+	md, _, _ := a.store.Add(store.Note{Section: store.SectionInbox, Text: "# 标题\n- 列表"})
+	dt2 := detailTester(t, a, md)
+	if !dt2.HasText("原文") {
+		t.Fatalf("Markdown 正文应可切原文 %v", dt2.Texts())
+	}
+	if !looksLikeMarkdown("**粗体**") || !looksLikeMarkdown("看 [链接](https://a.b)") || looksLikeMarkdown("a*b 普通") {
+		t.Fatal("Markdown 识别")
 	}
 }

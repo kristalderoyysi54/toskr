@@ -15,7 +15,8 @@ import (
 // 编辑原文、删除需确认且编号不复用）、自定义类别、试一试替换效果。
 
 type aliasUI struct {
-	open                     bool
+	open                     bool // 添加表单展开
+	demoOpen                 bool // 「试一试替换效果」展开
 	category, input, issue   string
 	editID, editText         string
 	confirmDel               string
@@ -26,33 +27,42 @@ type aliasUI struct {
 
 func (a *app) aliasRows(c *ui.Context, k tokens, s settingsTokens, st store.Settings) []setRow {
 	u := &a.aliasUI
-	val := tr("暂无条目")
-	if n := len(st.AliasEntities); n > 0 {
-		val = fmt.Sprintf(tr("%d 条"), n)
-	}
-	return []setRow{
-		{title: tr("启用可逆化名"), hint: tr("发送时把词典里的名称换成占位符（张三 → [USER_01]），收到回复后在本机还原"), control: func() {
+	rows := []setRow{
+		{title: tr("可逆化名"), icon: "venetian-mask", hint: tr("发送时把词典里的名称换成占位符（张三 → [USER_01]），收到回复后在本机还原"), control: func() {
 			v := !st.AliasOff
 			if toggle(c, s, &v) {
 				a.patchSettings(func(x *store.Settings) { x.AliasOff = !v })
 			}
 		}},
-		{title: tr("捕获时自动恢复化名"), hint: tr("关闭后可在卡片上手动还原"), control: func() {
+	}
+	if st.AliasOff { // 同 Tauri：关闭时只留总开关
+		return rows
+	}
+	return append(rows,
+		setRow{title: tr("词典"), control: func() {
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				text(c, fmt.Sprintf(tr("%d 条"), len(st.AliasEntities)), 12, 17, 400, k.muted).FontFeatures("tnum")
+				if !u.open && linkButton(c, k, "alias-add", tr("+ 添加")) {
+					u.open = true
+				}
+			})
+		}, below: func() { a.aliasDictionary(c, k, s, st) }},
+		setRow{title: tr("捕获回复时自动还原"), hint: tr("关闭后可在卡片上手动还原"), control: func() {
 			v := !st.AliasNoAutoRestore
 			if toggle(c, s, &v) {
 				a.patchSettings(func(x *store.Settings) { x.AliasNoAutoRestore = !v })
 			}
 		}},
-		{title: tr("词典"), hint: tr("词典加密保存在本机；导出的完整备份中为明文。删除条目后，它的占位符编号不再复用。"), control: func() {
-			if disclosure(c, k, "alias-dict", val, u.open) {
-				u.open = !u.open
+		setRow{title: tr("试一试替换效果"), control: func() {
+			if disclosure(c, k, "alias-demo", "", u.demoOpen) {
+				u.demoOpen = !u.demoOpen
 			}
 		}, below: func() {
-			if u.open {
-				a.aliasDictionary(c, k, s, st)
+			if u.demoOpen {
+				a.aliasDemo(c, k, st)
 			}
 		}},
-	}
+	)
 }
 
 func aliasCategories(st store.Settings) []store.AliasCategory {
@@ -71,44 +81,49 @@ func (a *app) aliasDictionary(c *ui.Context, k tokens, s settingsTokens, st stor
 			act()
 		}
 	}()
-	ui.Column(c).Gap(6).Margin(6, 0, 0, 0).Children(func() {
+	ui.Column(c).Gap(6).Children(func() {
 		submit := false
-		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-			pick := ui.Row(c).Height(32).Padding(0, 8).Gap(4).Radius(10).Background(s.input).Border(1, s.inputBorder).AlignItems(ui.Center).Key("alias-cat").Role(ui.RoleButton).Label(tr("化名类别"))
-			pick.Children(func() {
-				text(c, tr(core.AliasCategoryLabel(u.category, st.AliasCategories)), 12, 17, 400, k.fg).SingleLine()
-				licon(c, "chevron-down", 12, k.muted)
-			})
-			pick.Menu(func(m *ui.Menu) {
-				for _, cat := range cats {
-					if m.Item(tr(cat.Label) + " · " + cat.Code).Radio(cat.Code == u.category).Chosen() {
-						u.category = cat.Code
+		if u.open { // 添加表单：点「+ 添加」才出现，加成功或取消后收起
+			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+				pick := ui.Row(c).Height(32).Padding(0, 8).Gap(4).Radius(10).Background(s.input).Border(1, s.inputBorder).AlignItems(ui.Center).Key("alias-cat").Role(ui.RoleButton).Label(tr("化名类别"))
+				pick.Children(func() {
+					text(c, tr(core.AliasCategoryLabel(u.category, st.AliasCategories)), 12, 17, 400, k.fg).SingleLine()
+					licon(c, "chevron-down", 12, k.muted)
+				})
+				pick.Menu(func(m *ui.Menu) {
+					for _, cat := range cats {
+						if m.Item(tr(cat.Label) + " · " + cat.Code).Radio(cat.Code == u.category).Chosen() {
+							u.category = cat.Code
+						}
 					}
+					m.Separator()
+					if m.Item(tr("+ 自定义类别")).Chosen() {
+						u.catOpen = true
+					}
+				})
+				box := ui.Row(c).Grow(1).Height(32).Padding(0, 8).Radius(10).Background(s.input).Border(1, s.inputBorder).AlignItems(ui.Center)
+				if u.issue != "" {
+					box.Border(1, k.danger)
 				}
-				m.Separator()
-				if m.Item(tr("+ 自定义类别")).Chosen() {
-					u.catOpen = true
+				box.Children(func() {
+					in := ui.TextInputBase(c, &u.input).Grow(1).Font(fontSans).FontSize(12).FixedLineHeight(17).TextColor(k.fg).
+						PlaceholderColor(k.muted).Placeholder(tr("如：张三 / 商户 12345")).Label(tr("原文（精确匹配，区分大小写）"))
+					if in.Changed() {
+						u.issue = ""
+					}
+					submit = in.Submitted()
+				})
+				submit = button(c, s, "添加") || submit
+				if linkButton(c, k, "alias-cancel", tr("取消")) {
+					u.open, u.input, u.issue, u.catOpen = false, "", "", false
 				}
 			})
-			box := ui.Row(c).Grow(1).Height(32).Padding(0, 8).Radius(10).Background(s.input).Border(1, s.inputBorder).AlignItems(ui.Center)
-			if u.issue != "" {
-				box.Border(1, k.danger)
-			}
-			box.Children(func() {
-				in := ui.TextInputBase(c, &u.input).Grow(1).Font(fontSans).FontSize(12).FixedLineHeight(17).TextColor(k.fg).
-					PlaceholderColor(k.muted).Placeholder(tr("如：张三 / 商户 12345")).Label(tr("原文（精确匹配，区分大小写）"))
-				if in.Changed() {
-					u.issue = ""
-				}
-				submit = in.Submitted()
-			})
-			submit = button(c, s, "添加") || submit
-		})
+		}
 		if submit {
 			v := u.input
 			act = func() {
 				if u.issue = tr(a.addAliasEntity(u.category, v)); u.issue == "" {
-					u.input = ""
+					u.input, u.open = "", false
 				}
 			}
 		}
@@ -156,19 +171,23 @@ func (a *app) aliasDictionary(c *ui.Context, k tokens, s settingsTokens, st stor
 				text(c, fmt.Sprintf(tr("删除后 %s 将无法再恢复为「%s」，编号也不会复用。确定删除？"), e.Placeholder, e.OriginalText), 11, 16, 400, k.amberText).Wrap()
 			}
 		}
-		if len(st.AliasEntities) > 0 {
-			text(c, tr("试一试替换效果"), 11, 16, 600, k.muted).Margin(4, 0, 0, 0)
-			ui.TextArea(c, &u.demo).Lines(1, 4).FontSize(12).Label(tr("化名预演输入")).Placeholder(tr("输入一句包含词典原文的示例，只在本机演示"))
-			if strings.TrimSpace(u.demo) != "" {
-				out, n := core.ApplyAliases(u.demo, st.AliasEntities)
-				back, _ := core.RestoreAliases(out, st.AliasEntities)
-				text(c, fmt.Sprintf(tr("① 替换后 · 匹配到的原文变为占位符（%d 处）"), n), 11, 16, 400, k.muted)
-				text(c, out, 12, 17, 400, k.fg).Font(fontMono).Wrap()
-				text(c, tr("② 恢复原文后"), 11, 16, 400, k.muted)
-				text(c, back, 12, 17, 400, k.fg).Wrap()
-				if back == u.demo {
-					text(c, tr("还原结果与原文一致"), 11, 16, 400, c.Theme().Success)
-				}
+	})
+}
+
+// aliasDemo：「试一试替换效果」展开内容——输入示例句，看替换与还原结果（只在本机演示）。
+func (a *app) aliasDemo(c *ui.Context, k tokens, st store.Settings) {
+	u := &a.aliasUI
+	ui.Column(c).Gap(6).Children(func() {
+		ui.TextArea(c, &u.demo).Lines(1, 4).FontSize(12).Label(tr("化名预演输入")).Placeholder(tr("输入一句包含词典原文的示例，只在本机演示"))
+		if strings.TrimSpace(u.demo) != "" {
+			out, n := core.ApplyAliases(u.demo, st.AliasEntities)
+			back, _ := core.RestoreAliases(out, st.AliasEntities)
+			text(c, fmt.Sprintf(tr("① 替换后 · 匹配到的原文变为占位符（%d 处）"), n), 11, 16, 400, k.muted)
+			text(c, out, 12, 17, 400, k.fg).Font(fontMono).Wrap()
+			text(c, tr("② 恢复原文后"), 11, 16, 400, k.muted)
+			text(c, back, 12, 17, 400, k.fg).Wrap()
+			if back == u.demo {
+				text(c, tr("还原结果与原文一致"), 11, 16, 400, c.Theme().Success)
 			}
 		}
 	})

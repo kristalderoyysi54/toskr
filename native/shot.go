@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -190,6 +191,24 @@ func (a *app) openShot(s *shotSession, displays []mygo.Display, frames []*image.
 	}
 	first.win.Show()
 	first.win.Focus()
+	for _, sd := range s.displays { // 显示之后再钉一次 frame：系统在显示时会把窗口推到菜单栏下方（冻结画面整体下移）
+		before, after := macos.PinOverlayFrame(sd.win.NativeHandle(), sd.X, sd.Y, sd.W, sd.H)
+		if before != after {
+			diag.Push("截图: 遮罩 frame 被系统挪动 %.0f,%.0f %.0f×%.0f → 复位 %.0f,%.0f", before[0], before[1], before[2], before[3], after[0], after[1])
+		}
+	}
+	time.AfterFunc(300*time.Millisecond, func() { // 系统的上屏约束发生在显示之后的下一轮：再核一次（实测旧版此时下移 38 / 25pt）
+		a.panel.Update(func() {
+			if a.shot != s {
+				return
+			}
+			for _, sd := range s.displays {
+				if before, after := macos.PinOverlayFrame(sd.win.NativeHandle(), sd.X, sd.Y, sd.W, sd.H); before != after {
+					diag.Push("截图: 遮罩显示后被挪动 %.0f,%.0f → 复位 %.0f,%.0f", before[0], before[1], after[0], after[1])
+				}
+			}
+		})
+	})
 	diag.Push("截图: 遮罩 %d 屏", len(s.displays))
 	go a.pollShotCursor(s)
 }
@@ -410,6 +429,13 @@ func (a *app) copyShotColor(v string) {
 	s := a.shot
 	_, _, _ = a.store.Add(store.Note{Section: store.SectionClipboard, Text: v, SourceApp: s.front, BundleID: s.frontID})
 	diag.Push("截图取色存入剪贴 %s", v)
+}
+
+// copyShotText：识别结果只复制（不入库），结束截图并用气泡回报字数。
+func (a *app) copyShotText(text string) {
+	a.endShot(true)
+	a.sys.Write([]macos.Item{{macos.TypeString: []byte(text)}}, false)
+	a.showHUD("ok", fmt.Sprintf(tr("已复制 %d 字"), utf8.RuneCountInString(text)))
 }
 
 // saveShotText：识别结果复制并存入「剪贴」，结束截图。

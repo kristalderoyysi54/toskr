@@ -121,8 +121,34 @@ func lineWidth(s *shot.Shape) float32 { return f32(shot.LineWidth[clampLv(s.Size
 
 func clampLv(lv int) int { return min(max(lv, 0), 2) }
 
-// drawShapes：画顺序同 drawShapes：聚光灯 → 马赛克 → 图内翻译 → 其余标注。clip 外的部分由调用方裁掉。
+// drawShapes：马赛克 → 图内翻译 → 聚光灯压暗 → 其余标注。clip 外的部分由调用方裁掉。
+// 压暗盖在打码与译文之上：只有聚光灯框内保持原亮度，框外的打码区域同样压暗（用户 2026-11-09 指定；
+// 原先先压暗后画马赛克，打码处会像被高亮）。框内按「原图 + 打码 + 译文」裁切重画，打码不会被原图盖回明文。
 func drawShapes(p *ui.Painter, d *shotDisplay, shapes []*shot.Shape, clip shot.Rect) {
+	content := func() {
+		for _, s := range shapes {
+			if s.Kind == shot.Mosaic {
+				if b := shot.Box(s); b.W >= 1 && b.H >= 1 {
+					p.ImageRegion(mosaicTile(d, s), ui.Rect{}, uiRect(b), ui.ImageOptions{})
+				}
+			}
+		}
+		for _, s := range shapes {
+			if s.Kind != shot.Translate {
+				continue
+			}
+			for _, it := range s.Items {
+				pad := shot.TranslatePad
+				if it.Patch != nil {
+					p.ImageRegion(d.ed.patchBitmap(it.Patch), ui.Rect{}, ui.Rect{X: f32(it.X - pad), Y: f32(it.Y - pad), W: f32(it.W + pad*2), H: f32(it.H + pad*2)}, ui.ImageOptions{})
+				}
+				sp := ui.Span{Text: it.Text, Font: shotFont, Size: f32(it.FontSize), Weight: 500, Color: shotColor(it.FG)}
+				_, h := p.MeasureText(0, sp)
+				p.RichText(f32(it.X), f32(it.Y+it.H/2)-h/2, 0, sp)
+			}
+		}
+	}
+	content()
 	var spots []*shot.Shape
 	for _, s := range shapes {
 		if s.Kind == shot.Spotlight {
@@ -133,28 +159,13 @@ func drawShapes(p *ui.Painter, d *shotDisplay, shapes []*shot.Shape, clip shot.R
 		p.Fill(uiRect(clip), ui.RGBA(0, 0, 0, shot.SpotlightDim), 0)
 		for _, s := range spots {
 			b := shot.Box(s)
-			p.ImageRegion(d.bm, ui.Rect{X: f32(b.X * d.sx), Y: f32(b.Y * d.sy), W: f32(b.W * d.sx), H: f32(b.H * d.sy)}, uiRect(b), ui.ImageOptions{})
-		}
-	}
-	for _, s := range shapes {
-		if s.Kind == shot.Mosaic {
-			if b := shot.Box(s); b.W >= 1 && b.H >= 1 {
-				p.ImageRegion(mosaicTile(d, s), ui.Rect{}, uiRect(b), ui.ImageOptions{})
+			if b.W < 1 || b.H < 1 {
+				continue
 			}
-		}
-	}
-	for _, s := range shapes {
-		if s.Kind != shot.Translate {
-			continue
-		}
-		for _, it := range s.Items {
-			pad := shot.TranslatePad
-			if it.Patch != nil {
-				p.ImageRegion(d.ed.patchBitmap(it.Patch), ui.Rect{}, ui.Rect{X: f32(it.X - pad), Y: f32(it.Y - pad), W: f32(it.W + pad*2), H: f32(it.H + pad*2)}, ui.ImageOptions{})
-			}
-			sp := ui.Span{Text: it.Text, Font: shotFont, Size: f32(it.FontSize), Weight: 500, Color: shotColor(it.FG)}
-			_, h := p.MeasureText(0, sp)
-			p.RichText(f32(it.X), f32(it.Y+it.H/2)-h/2, 0, sp)
+			p.Clip(uiRect(b), 0, func() {
+				p.ImageRegion(d.bm, ui.Rect{X: f32(b.X * d.sx), Y: f32(b.Y * d.sy), W: f32(b.W * d.sx), H: f32(b.H * d.sy)}, uiRect(b), ui.ImageOptions{})
+				content()
+			})
 		}
 	}
 	numbers := shot.CalloutNumbers(shapes)

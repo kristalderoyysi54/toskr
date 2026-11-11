@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -31,6 +33,9 @@ func (nopSys) SelfPID() int32                          { return 1 }
 
 func testApp(t *testing.T, texts ...string) (*app, *ui.Tester) {
 	t.Helper()
+	oldDrag := selDragging
+	selDragging = func() bool { return false } // 不读真实鼠标：跑测试时手动点击不应影响结果
+	t.Cleanup(func() { selDragging = oldDrag })
 	st, err := store.OpenDir(t.TempDir(), bytes.Repeat([]byte{1}, 32))
 	if err != nil {
 		t.Fatal(err)
@@ -48,17 +53,80 @@ func testApp(t *testing.T, texts ...string) (*app, *ui.Tester) {
 
 func TestPanelShowsQueueAndCounts(t *testing.T) {
 	_, tt := testApp(t, "第一条笔记", "第二条笔记")
-	for _, s := range []string{"第一条笔记", "第二条笔记", "收件箱", "2", "剪贴", "笔记", "任务", "提示词库"[:0] + "来自 Safari"} {
+	for _, s := range []string{"第一条笔记", "第二条笔记", "收件箱", "2", "剪贴", "笔记", "任务", "Safari"} { // 来源应用在通栏上
 		if !tt.HasText(s) {
 			t.Fatalf("缺少 %q，现有 %v", s, tt.Texts())
 		}
 	}
 }
 
+type clipTextSys struct {
+	nopSys
+	text string
+}
+
+func (s clipTextSys) ReadString() (string, string) { return s.text, "" }
+
+// 空队列：键帽画出实际触发键（跟随设置），主按钮把剪贴板文字收成第一张卡（可撤销）；剪贴板没文字只提示。
 func TestEmptyStateHint(t *testing.T) {
-	_, tt := testApp(t)
-	if !tt.HasText("还没有内容") || !tt.HasText("连按两次 ⇧ 捕获选中文本，也可以在下方直接记下") {
+	a, tt := testApp(t)
+	if !tt.HasText("选中文字，连按两次 Option") || !tt.HasText("在任何应用里都可以") || !tt.HasText("把剪贴板内容收成第一张卡") {
 		t.Fatalf("%v", tt.Texts())
+	}
+	a.patchSettings(func(x *store.Settings) { x.TriggerModifier = "shift" })
+	tt.Frame()
+	if !tt.HasText("选中文字，连按两次 Shift") || !tt.HasText("连按两次 ⇧ Shift") {
+		t.Fatalf("键帽应跟随触发键 %v", tt.Texts())
+	}
+	if err := tt.Click("把剪贴板内容收成第一张卡"); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.store.Notes()) != 0 || a.hudText != "剪贴板里没有文字" {
+		t.Fatalf("空剪贴板不应建卡 %q", a.hudText)
+	}
+	a.sys = clipTextSys{text: "剪贴板里的一段话"}
+	if err := tt.Click("把剪贴板内容收成第一张卡"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if ns := a.store.Notes(); len(ns) != 1 || ns[0].Text != "剪贴板里的一段话" || a.hudUndo == nil || tt.HasText("在任何应用里都可以") {
+		t.Fatalf("应建一张卡并可撤销 %+v", ns)
+	}
+	a.hudUndo()
+	tt.Frame()
+	if len(a.store.Notes()) != 0 || !tt.HasText("在任何应用里都可以") {
+		t.Fatal("撤销后回到空态")
+	}
+}
+
+// 空分组：虚线框提示拖入，「设为捕获目标」一点即生效；已是捕获目标的组只给说明。
+func TestEmptySectionCaptureLink(t *testing.T) {
+	a, tt := testApp(t, "收件箱的卡")
+	id := a.store.AddSection("资料")
+	a.reload()
+	tt.Frame()
+	if !tt.HasText("把卡片拖到这里") || !tt.HasText("设为捕获目标") {
+		t.Fatalf("%v", tt.Texts())
+	}
+	if err := tt.Click("设为捕获目标"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.store.Settings().CaptureSection != id || !tt.HasText("捕获的内容会存到这里") || tt.HasText("设为捕获目标") {
+		t.Fatalf("应设为捕获目标 %q %v", a.store.Settings().CaptureSection, tt.Texts())
+	}
+	if dir := os.Getenv("TOSKR_SHOT_DIR"); dir != "" {
+		b, _ := testApp(t)
+		for _, dark := range []bool{false, true} {
+			mode := map[bool]string{false: "light", true: "dark"}[dark]
+			for name, app := range map[string]*app{"empty-section": a, "empty-queue": b} {
+				v := ui.NewTester(app.panelView, 320, 560)
+				v.SetDark(dark)
+				v.Frame()
+				v.Frame()
+				save(t, filepath.Join(dir, name+"-"+mode+".png"), v.Image())
+			}
+		}
 	}
 }
 
@@ -202,5 +270,51 @@ func TestHelpers(t *testing.T) {
 	}
 	if preview("第一行很长很长\n第二行", 4) != "第一行很…" || itoa(1234) != "999+" || itoa(0) != "0" || itoa(42) != "42" {
 		t.Fatal("preview/itoa")
+	}
+}
+
+// 底部键位提示随状态变化：多选给 ⌘M 合并、聚焦给 d 完成、行内改名给保存 / 取消；☰ 菜单可整行关掉。
+func TestKeyHintsFollowState(t *testing.T) {
+	a, tt := testApp(t, "卡一", "卡二")
+	keys := func() []string {
+		var out []string
+		for _, h := range a.keyHints() {
+			out = append(out, h[0])
+		}
+		return out
+	}
+	tt.Frame()
+	if got := keys(); !slices.Contains(got, "↑↓") || slices.Contains(got, "⌘M") {
+		t.Fatalf("默认 %v", got)
+	}
+	tt.Key(0, ui.KeyDown)
+	tt.Frame()
+	if got := keys(); !slices.Contains(got, "d") || !slices.Contains(got, "Space") {
+		t.Fatalf("聚焦 %v", got)
+	}
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Frame()
+	if got := keys(); a.chosen.Len() != 2 || !slices.Contains(got, "⌘M") || !tt.HasText("合并") {
+		t.Fatalf("多选 %d %v", a.chosen.Len(), got)
+	}
+	a.chosen.Clear()
+	a.titleEditID = a.store.Notes()[0].ID
+	if got := keys(); !slices.Equal(got, []string{"⏎", "Esc"}) {
+		t.Fatalf("行内改名 %v", got)
+	}
+	a.titleEditID = ""
+	tt.Frame()
+	if !tt.HasText("勾选") {
+		t.Fatalf("默认应显示提示行 %v", tt.Texts())
+	}
+	a.menuOpen = true
+	tt.Frame()
+	if err := tt.Click("底部键位提示"); err != nil {
+		t.Fatalf("%v %v", err, tt.Texts())
+	}
+	tt.Frame()
+	tt.Frame()
+	if !a.store.Settings().KeyHintsOff || tt.HasText("勾选") {
+		t.Fatalf("关闭后不应再有提示行 off=%v %v", a.store.Settings().KeyHintsOff, tt.Texts())
 	}
 }

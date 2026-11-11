@@ -8,6 +8,7 @@ import (
 	"github.com/egoist/mygo"
 
 	"github.com/toskr/native/internal/diag"
+	"github.com/toskr/native/internal/store"
 )
 
 //go:embed resources/trayTemplate.png
@@ -22,6 +23,11 @@ func (a *app) setUpTray() {
 		diag.Push("托盘创建失败: %v", err)
 		return
 	}
+	a.tray.OnAppearanceChange(func() { // 菜单栏深浅变了：带色点的图标要换底色
+		if a.panel != nil {
+			a.panel.Update(a.refreshTrayIcon)
+		}
+	})
 	a.refreshTray()
 }
 
@@ -59,6 +65,7 @@ func (a *app) refreshTray() {
 	if a.tray == nil {
 		return
 	}
+	a.refreshTrayIcon()
 	key := a.trayKey()
 	if key == a.trayBuilt {
 		return
@@ -93,9 +100,7 @@ func (a *app) refreshTray() {
 	}
 	items = append(items,
 		&mygo.MenuItem{Label: tr("隐身模式（不弹捕获提示）"), Type: mygo.MenuItemCheckbox, Checked: st.Stealth, Click: func(it *mygo.MenuItem, _ *mygo.Window) {
-			cur := a.store.Settings()
-			cur.Stealth = it.Checked
-			_ = a.store.SetSettings(cur)
+			a.patchSettings(func(x *store.Settings) { x.Stealth = it.Checked })
 		}},
 		&mygo.MenuItem{Label: tr("设置…"), Click: func(*mygo.MenuItem, *mygo.Window) { a.openSettings() }},
 		mygo.Separator(),

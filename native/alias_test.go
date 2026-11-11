@@ -15,13 +15,13 @@ func TestAliasDictionaryFlow(t *testing.T) {
 	a, tt := testApp(t, "请联系张三处理商户 12345 的退款")
 	a.openSettingsState()
 	set := ui.NewTester(a.settingsView, 1040, 2400)
-	a.setJump = "粘贴与隐私"
+	a.setJump = "隐私保护"
 	set.Frame()
 	set.Frame()
-	if !set.HasText("启用可逆化名") || !set.HasText("捕获时自动恢复化名") {
+	if !set.HasText("可逆化名") || !set.HasText("捕获回复时自动还原") {
 		t.Fatal(set.Texts())
 	}
-	_ = set.Click("暂无条目")
+	_ = set.Click("+ 添加") // 添加表单点开才出现
 	set.Frame()
 	if !set.HasText("暂无词典条目。添加后，发送内容里出现的原文会自动换成占位符。") {
 		t.Fatal(set.Texts())

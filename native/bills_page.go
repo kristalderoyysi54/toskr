@@ -218,7 +218,7 @@ func (a *app) billsPage(c *ui.Context, k tokens) {
 						a.billFilter = v
 					}
 				})
-				a.billList(c, k, cur, now)
+				a.swapView(ui.Column(c), "bill-filter", map[string]int{"upcoming": 0, "all": 1}[a.billFilter]).Children(func() { a.billList(c, k, cur, now) })
 			})
 			a.billTrend(c, k, cur, now)
 		})
@@ -602,68 +602,6 @@ func (a *app) billMonthGrid(c *ui.Context, k tokens, now time.Time) {
 					text(c, itoa(st.n), 10, 14, 600, st.col)
 					text(c, tr(st.label), 10, 14, 400, k.muted)
 				})
-			}
-		})
-	})
-}
-
-// billTrend：近 6 个月消费迷你柱（柱容器高 40，当月深色；悬停显金额）。
-func (a *app) billTrend(c *ui.Context, k tokens, cur string, now time.Time) {
-	cv, converted := a.billConv(cur)
-	sym := cur
-	if !converted {
-		cv = nil
-		if d := distinctCurrencies(a.bills, cur); len(d) > 0 {
-			sym = d[0] // 单一币种用原币符号；汇率未就绪的多币种按主符号混计（同 Tauri BillTrendChart）
-		}
-	}
-	trend := spendTrend(a.bills, now, 6, cv)
-	peak := 0.0
-	for _, m := range trend {
-		peak = max(peak, m.total)
-	}
-	if peak <= 0 {
-		return
-	}
-	box := ui.Column(c).Padding(8).Radius(14).Background(k.track)
-	box.Children(func() {
-		text(c, tr("近 6 个月消费"), 10, 14, 400, k.muted).Padding(0, 0, 0, 4)
-		ui.Row(c).Margin(4, 0, 0, 0).Padding(0, 4).Gap(6).AlignItems(ui.End).Children(func() {
-			for i, m := range trend {
-				current := i == len(trend)-1
-				col := ui.Column(c).Grow(1).Basis(0).Gap(2).AlignItems(ui.Center).Key(fmt.Sprint(m.year, m.month))
-				hov := col.Hovered()
-				col.Children(func() {
-					amtText := money(sym, math.Round(m.total*100)/100)
-					if converted {
-						amtText = "≈" + amtText
-					}
-					amt := text(c, amtText, 10, 12, 400, k.muted).SingleLine()
-					show := float32(0)
-					if hov && m.total > 0 {
-						show = 1
-					}
-					amt.Opacity(amt.AnimateTo("show", show, tweenTw)) // 柱顶数值 opacity 150ms
-					ui.Column(c).FillWidth().Height(40).Justify(ui.End).Children(func() {
-						h := max(m.total/peak*100, 2)
-						if m.total > 0 {
-							h = max(h, 6)
-						}
-						bar := k.muted.Alpha(0.3)
-						if current {
-							bar = k.muted.Alpha(0.7)
-						}
-						ui.Box(c).FillWidth().Height(float32(h * 0.4)).Radius(6).Background(bar)
-					})
-					lcol := k.muted
-					if current {
-						lcol = k.fg
-					}
-					text(c, m.label, 10, 14, 400, lcol)
-				})
-				if col.Clicked() {
-					a.billAnalytics = true
-				}
 			}
 		})
 	})

@@ -116,3 +116,47 @@ func OCRLines(path string, w, h int) ([]OCRLine, error) {
 	})
 	return out, err
 }
+
+// DetectBarcodes 识别图片里的二维码 / 条码，返回各自的文本内容（去重，保持识别顺序）。
+func DetectBarcodes(path string) ([]string, error) {
+	load()
+	var loadErr error
+	visionOnce.Do(func() {
+		_, loadErr = purego.Dlopen("/System/Library/Frameworks/Vision.framework/Vision", purego.RTLD_NOW|purego.RTLD_GLOBAL)
+	})
+	if loadErr != nil {
+		return nil, loadErr
+	}
+	var out []string
+	var err error
+	withPool(func() {
+		url := class("NSURL").Send(sel("fileURLWithPath:"), nsString(path))
+		opts := class("NSDictionary").Send(sel("dictionary"))
+		handler := class("VNImageRequestHandler").Send(sel("alloc")).Send(sel("initWithURL:options:"), url, opts)
+		defer handler.Send(sel("release"))
+		req := class("VNDetectBarcodesRequest").Send(sel("alloc")).Send(sel("init"))
+		defer req.Send(sel("release"))
+		reqs := class("NSArray").Send(sel("arrayWithObject:"), req)
+		var nserr objc.ID
+		if !objc.Send[bool](handler, sel("performRequests:error:"), reqs, unsafe.Pointer(&nserr)) {
+			err = errors.New("二维码识别失败：" + goString(uintptr(nserr.Send(sel("localizedDescription")))))
+			return
+		}
+		results := req.Send(sel("results"))
+		for i := range objc.Send[uint](results, sel("count")) {
+			p := results.Send(sel("objectAtIndex:"), i).Send(sel("payloadStringValue"))
+			if p == 0 {
+				continue
+			}
+			s := strings.TrimSpace(goString(uintptr(p)))
+			dup := false
+			for _, x := range out {
+				dup = dup || x == s
+			}
+			if s != "" && !dup {
+				out = append(out, s)
+			}
+		}
+	})
+	return out, err
+}

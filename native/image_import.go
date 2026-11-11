@@ -12,9 +12,11 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"github.com/toskr/native/internal/codehl"
 	"github.com/toskr/native/internal/core"
 	"github.com/toskr/native/internal/diag"
 	"github.com/toskr/native/internal/macos"
+	"github.com/toskr/native/internal/store"
 )
 
 // 粘贴 / 拖入图片入库（同 Tauri paste_images_from_clipboard / import_image_files）：
@@ -125,7 +127,7 @@ func (a *app) addDraftImages(imgs []pastedImage, empty string) {
 	}
 }
 
-// draftImageChips：输入框左侧的暂存图缩略（点击移除）。
+// draftImageChips：输入框左侧的暂存图缩略（同 Tauri DraftImageChip：点击查看或编辑，悬停右上角 ✕ 移除）。
 func (a *app) draftImageChips(c *ui.Context, k tokens) {
 	if len(a.draftImgs) == 0 {
 		return
@@ -137,21 +139,31 @@ func (a *app) draftImageChips(c *ui.Context, k tokens) {
 				text(c, fmt.Sprintf("+%d", len(a.draftImgs)-3), 10, 14, 500, k.muted)
 				break
 			}
-			b := ui.Box(c).Size(26, 26).Radius(6).Clip().Key("draft-img-"+im.file).Role(ui.RoleButton).
-				Label(tr("移除图片")).Tooltip(tr("移除图片")).Border(1, k.inputBorder)
-			b.Children(func() {
-				if img := a.thumb(im.file); img != nil {
-					ui.Image(c, img).Size(26, 26).Fit(ui.Cover)
+			chip := ui.Box(c).Size(26, 26).Radius(6).Clip().Key("draft-img-"+im.file).Border(1, k.inputBorder)
+			hover := chip.Hovered()
+			chip.Children(func() {
+				b := ui.Box(c).Size(26, 26).Key("draft-open-" + im.file).Role(ui.RoleButton).Label(tr("查看或编辑这张草稿图片")).Tooltip(tr("查看或编辑这张草稿图片"))
+				b.Children(func() {
+					if img := a.thumb(im.file); img != nil {
+						ui.Image(c, img).Size(26, 26).Fit(ui.Cover)
+					}
+				})
+				if b.Clicked() {
+					f := im.file
+					a.onMain(func() { a.openDraftImage(f) })
 				}
-				if b.Hovered() {
-					ui.Box(c).Absolute().Left(0).Top(0).Size(26, 26).Background(ui.RGBA(0, 0, 0, 0.45)).Center().Children(func() { // token-exception: 缩略图上的暗罩
-						licon(c, "x", 12, ui.RGB(255, 255, 255))
-					})
+				x := ui.Box(c).Absolute().Top(0).Right(0).Size(12, 12).Radius(0, 0, 0, 5).Center().Key("draft-rm-" + im.file).
+					Role(ui.RoleButton).Label(tr("移除这张图片")).Tooltip(tr("移除这张图片"))
+				if hover || x.Hovered() {
+					x.Background(ui.RGBA(0, 0, 0, 0.55)) // token-exception: 缩略图上的移除角标底
+					x.Children(func() { licon(c, "x", 8, ui.RGB(255, 255, 255)) })
+				} else {
+					x.Opacity(0) // 同 Tauri opacity-0 仍可点：角标只占缩略图右上 12pt，不盖其他控件
+				}
+				if x.Clicked() {
+					drop = i
 				}
 			})
-			if b.Clicked() {
-				drop = i
-			}
 		}
 	})
 	if drop >= 0 {
@@ -159,18 +171,112 @@ func (a *app) draftImageChips(c *ui.Context, k tokens) {
 	}
 }
 
-// cardThumb：组合卡右侧首图缩略，多图角标张数。
-func (a *app) cardThumb(c *ui.Context, k tokens, files []string) {
-	img := a.thumb(files[0])
-	if img == nil {
+// cardImages 同 Tauri NoteCard 图片卡卡面：一张时等比居中；多张时并排最多 3 张（cover），第 3 张盖「+N」（N = 余下张数）。
+// h 为图片区高度；w 为可用宽度（0 = 按单图自身比例）。
+func (a *app) cardImages(c *ui.Context, k tokens, files []string, w, h float32) {
+	if len(files) == 0 || h <= 0 {
 		return
 	}
-	ui.Box(c).Size(54, 54).Radius(6).Clip().Border(1, k.inputBorder).Tooltip(fmt.Sprintf(tr("%d 张图片"), len(files))).Children(func() {
-		ui.Image(c, img).Size(54, 54).Fit(ui.Cover)
-		if len(files) > 1 {
-			ui.Box(c).Absolute().Right(2).Bottom(2).Padding(0, 4).Radius(4).Background(ui.RGBA(0, 0, 0, 0.55)).Children(func() { // token-exception: 缩略图角标暗底
-				text(c, itoa(len(files)), 9, 12, 600, ui.RGB(255, 255, 255))
+	if len(files) == 1 {
+		ui.Row(c).Height(h).FillWidth().Radius(3).Background(k.fg.Alpha(0.04)).Justify(ui.Center).AlignItems(ui.Center).Clip().Children(func() {
+			img := a.thumb(files[0])
+			if img == nil {
+				text(c, tr("加载中…"), 10, 14, 400, k.muted)
+				return
+			}
+			iw, ih := ui.ImageSize(img)
+			sc := h / max(ih, 1)
+			if w > 0 {
+				sc = min(sc, w/max(iw, 1))
+			}
+			ui.Image(c, img).Size(iw*sc, ih*sc)
+		})
+		return
+	}
+	ui.Row(c).Height(h).FillWidth().Gap(4).Key("card-imgs").Children(func() {
+		for i, f := range files[:min(3, len(files))] {
+			cell := ui.Box(c).Grow(1).Basis(0).FillHeight().Radius(3).Clip().Background(k.fg.Alpha(0.04)).Center().Key("ci-" + f)
+			cell.Children(func() {
+				if img := a.thumb(f); img != nil {
+					ui.Image(c, img).Fill().Fit(ui.Cover)
+				} else {
+					text(c, "…", 10, 14, 400, k.muted)
+				}
+				if i == 2 && len(files) > 3 {
+					ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0).Background(ui.RGBA(0, 0, 0, 0.45)).Center().Children(func() { // token-exception: 缩略图上的「+N」暗罩（同 Tauri bg-black/45）
+						text(c, fmt.Sprintf("+%d", len(files)-3), 13, 18, 500, ui.RGB(255, 255, 255))
+					})
+				}
 			})
 		}
 	})
 }
+
+// cardImageCaption 同 Tauri：图片卡真实文字备注（占位标题不显示）卡面一行截断。
+func cardImageCaption(c *ui.Context, k tokens, n store.Note) bool {
+	cap := strings.TrimSpace(imageNoteText(n))
+	if cap == "" || store.IsImagePlaceholder(cap) {
+		return false
+	}
+	t := text(c, cap, 11, 16, 400, k.muted).SingleLine().Shrink(0)
+	if n.Done {
+		t.Opacity(0.6)
+	}
+	return true
+}
+
+// cardThumbStrip 同 Tauri 组合卡（图文）：正文下方一排最多 4 张 32pt 小缩略（等比），更多以「+N」标示。
+func (a *app) cardThumbStrip(c *ui.Context, k tokens, files []string) {
+	ui.Row(c).Height(32).Gap(4).Shrink(0).AlignItems(ui.Center).Key("card-strip").Tooltip(fmt.Sprintf(tr("%d 张图片"), len(files))).Children(func() {
+		for _, f := range files[:min(4, len(files))] {
+			ui.Box(c).Size(32, 32).Radius(3).Clip().Background(k.fg.Alpha(0.05)).Center().Key("cs-" + f).Children(func() {
+				if img := a.thumb(f); img != nil {
+					iw, ih := ui.ImageSize(img)
+					sc := min(32/max(iw, 1), 32/max(ih, 1))
+					ui.Image(c, img).Size(iw*sc, ih*sc)
+				}
+			})
+		}
+		if len(files) > 4 {
+			text(c, fmt.Sprintf("+%d", len(files)-4), 10, 14, 400, k.muted)
+		}
+	})
+}
+
+// cardImageMeta 同 Tauri 卡片页脚右端：图片卡「W × H」、图文卡「N 字符 · N 图」、其余「N 字符」。
+func cardImageMeta(n store.Note) string {
+	files := n.MediaFiles()
+	switch {
+	case n.Kind == "image" && n.ImageW > 0:
+		return itoa(n.ImageW) + " × " + itoa(n.ImageH)
+	case n.Kind == "image":
+		return fmt.Sprintf(tr("%d 张"), len(files))
+	case n.Kind != "image" && len(files) > 0:
+		return fmt.Sprintf(tr("%d 字符 · %d 图"), len([]rune(n.Text)), len(files))
+	}
+	return fmt.Sprintf(tr("%d 字符"), len([]rune(n.Text)))
+}
+
+// clipFootMeta：剪贴卡 / 横栏卡页脚右端按内容类型给最有用的一项（有意偏离 Tauri 的一律「N 字符」）：
+// 链接 → 域名，代码 → 语言 · 行数，图片 / 图文 → 同 cardImageMeta，多行文字 → 行数，很长的单行 → 字符数，短单行不显示。
+func clipFootMeta(n store.Note) string {
+	lines := strings.Count(strings.TrimRight(n.Text, "\n"), "\n") + 1
+	switch {
+	case n.Kind == "link":
+		if u, err := url.Parse(strings.TrimSpace(cmpOr(n.URL, n.Text))); err == nil && u.Host != "" {
+			return strings.TrimPrefix(u.Host, "www.")
+		}
+		return tr("链接")
+	case n.Kind == "image" || len(n.MediaFiles()) > 0:
+		return cardImageMeta(n)
+	case isCode(n):
+		return tr(codehl.Label(n.CodeLang)) + " · " + fmt.Sprintf(tr("%d 行"), lines)
+	case lines > 1:
+		return fmt.Sprintf(tr("%d 行"), lines)
+	case len([]rune(n.Text)) >= clipLongRunes:
+		return fmt.Sprintf(tr("%d 字符"), len([]rune(n.Text)))
+	}
+	return ""
+}
+
+const clipLongRunes = 200

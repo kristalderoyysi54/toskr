@@ -24,10 +24,8 @@ import (
 // helperCDHash 是打包后（mygo 以 com.toskr.native 标识重签）包内 arm64 切片的 CDHash；
 // 重新运行 keychain-helper/build.sh 后必须同步更新，否则拒绝访问（不回退到主进程直读，避免反复授权）。
 const (
-	helperName   = "com.toskr.native.keychain-helper"
-	helperCDHash = "fc4feefa9eb2f2264085822ed17e4a383fb61d04"
-	helperHello  = "TSKKEY01"
-	certLeaf     = "6e960d8b61e1fc9c534e41cb812803d07e85e87b"
+	helperHello = "TSKKEY01"
+	certLeaf    = "6e960d8b61e1fc9c534e41cb812803d07e85e87b"
 
 	errSecItemNotFound = -25300
 	errSecUserCanceled = -128
@@ -41,7 +39,7 @@ func helperPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	p := filepath.Join(filepath.Dir(exe), "..", "Resources", helperName)
+	p := filepath.Join(filepath.Dir(exe), "..", "Resources", activeHelper().file)
 	if _, err := os.Stat(p); err != nil {
 		return "", errHelperMissing
 	}
@@ -53,8 +51,18 @@ type helperResponse struct {
 	Value  *string `json:"value"`
 }
 
-// helperRequest 起一次辅助程序，执行 load / store，返回钥匙串状态码与读到的值。
+// helperRequest 起一次辅助程序，对数据密钥执行 load / store，返回钥匙串状态码与读到的 32 字节密钥。
 func helperRequest(path, op string, value []byte) (int32, []byte, error) {
+	st, got, err := helperCall(path, "data", op, value)
+	if err == nil && st == 0 && op == "load" && len(got) != 32 {
+		return 0, nil, errors.New("辅助程序返回无效密钥")
+	}
+	return st, got, err
+}
+
+// helperCall 起一次辅助程序，对槽位 slot（data = 数据密钥；ai = 旧版的 AI 密钥记录，只有正式版的辅助程序认）
+// 执行 load / store，返回钥匙串状态码与读到的原始值。
+func helperCall(path, slot, op string, value []byte) (int32, []byte, error) {
 	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 	if err != nil {
 		return 0, nil, err
@@ -105,12 +113,13 @@ func helperRequest(path, op string, value []byte) (int32, []byte, error) {
 	if pid := int(binary.LittleEndian.Uint32(token[20:24])); pid != cmd.Process.Pid { // audit_token_t.val[5] = pid
 		return 0, nil, fmt.Errorf("辅助程序身份不符：pid %d ≠ %d", pid, cmd.Process.Pid)
 	}
-	req := fmt.Sprintf(`identifier "com.toskr.native" and certificate leaf = H"%s" and cdhash H"%s"`, certLeaf, helperCDHash)
+	spec := activeHelper()
+	req := fmt.Sprintf(`identifier "%s" and certificate leaf = H"%s" and cdhash H"%s"`, spec.identifier, certLeaf, spec.cdhash)
 	if err := macos.CheckAuditToken(token, req); err != nil {
 		return 0, nil, fmt.Errorf("辅助程序身份校验失败，已停止访问钥匙串：%w", err)
 	}
 
-	body := map[string]any{"version": 1, "slot": "data", "operation": op, "interactive": true}
+	body := map[string]any{"version": 1, "slot": slot, "operation": op, "interactive": true}
 	if value != nil {
 		body["value"] = base64.StdEncoding.EncodeToString(value)
 	}
@@ -140,8 +149,8 @@ func helperRequest(path, op string, value []byte) (int32, []byte, error) {
 		return resp.Status, nil, nil
 	}
 	got, err := base64.StdEncoding.DecodeString(*resp.Value)
-	if err != nil || len(got) != 32 {
-		return 0, nil, errors.New("辅助程序返回无效密钥")
+	if err != nil {
+		return 0, nil, errors.New("辅助程序返回无效数据")
 	}
 	return 0, got, nil
 }
@@ -155,9 +164,9 @@ func helperDataKey(path string, fresh bool, gen func() ([]byte, error)) ([]byte,
 	case st == 0:
 		return key, nil
 	case st == errSecUserCanceled:
-		return nil, errors.New("已取消钥匙串授权：Toskr Native 需要读取数据密钥才能打开加密数据，请重新打开并点「始终允许」")
+		return nil, errors.New(brand("已取消钥匙串授权：Toskr Native 需要读取数据密钥才能打开加密数据，请重新打开并点「始终允许」"))
 	case st != errSecItemNotFound:
-		return nil, fmt.Errorf("无法访问钥匙串（%d）：请解锁或允许 Toskr Native 密钥服务后重试", st)
+		return nil, fmt.Errorf(brand("无法访问钥匙串（%d）：请解锁或允许 Toskr Native 密钥服务后重试"), st)
 	case !fresh:
 		return nil, errors.New("钥匙串里没有数据密钥，但数据文件已存在：拒绝新建密钥覆盖")
 	}

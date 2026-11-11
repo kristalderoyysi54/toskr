@@ -37,7 +37,7 @@ func TestAISettings(t *testing.T) {
 
 	a.openSettingsState()
 	set := ui.NewTester(a.settingsView, 1040, 4000)
-	a.setJump = "更多功能"
+	a.setJump = "AI 智能"
 	set.Frame()
 	set.Frame()
 	for _, s := range []string{"AI 智能", "关闭后所有 AI 入口都不会发起请求", "DeepSeek", "通义", "Base URL", "API Key", "已配置", "模型名", "连接测试"} {

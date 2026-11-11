@@ -10,6 +10,8 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
+
+	"github.com/toskr/native/internal/diag"
 )
 
 // glassOn 报告设置里是否启用窗内玻璃（任务/账单/秘文页卡片的 glass 插件材质）。
@@ -63,6 +65,7 @@ func (a *app) panelView(c *ui.Context) {
 			a.commandPalette(c, k)
 			a.updateDialog(c, k)
 			a.welcomeTour(c, k)
+			a.migrateWizard(c, k)
 		})
 		return
 	}
@@ -77,11 +80,13 @@ func (a *app) panelView(c *ui.Context) {
 		a.conflictBanner(c, k)
 		a.tabs(c, k)
 		if len(a.pending) > 0 {
-			ui.Column(c).Margin(0, 12, 6, 12).Children(func() { a.preflightBar(c) })
+			_, vh := c.Size() // 逐项列表很长时预检条内部滚动，不把面板撑出屏幕（之前展开后看不到下面的项）
+			ui.Scroll(c).MaxHeight(max(240, vh*0.6)).Margin(0, 12, 6, 12).Children(func() { a.preflightBar(c) })
 		}
 		if len(a.enterAsk) > 0 {
 			ui.Column(c).Margin(0, 12, 6, 12).Children(func() { a.enterAskBar(c) })
 		}
+		a.focusCapsule(c, k)
 		a.pageSlide(c, func(p int) { a.pageBody(c, k, p) })
 		a.hintsRow(c, k)
 		if a.page == pageNotes && a.noteSub == 0 { // 发送输入区只在笔记视图，与 Tauri 一致
@@ -95,6 +100,7 @@ func (a *app) panelView(c *ui.Context) {
 		a.commandPalette(c, k)
 		a.updateDialog(c, k)
 		a.welcomeTour(c, k) // 首启导览盖住全部内容
+		a.migrateWizard(c, k) // 旧版迁移向导先于导览（导入可能带来「已看过导览」）
 	})
 	if a.menuOpen {
 		a.panelMenu(c, k)
@@ -323,6 +329,12 @@ func (a *app) panelMenu(c *ui.Context, k tokens) {
 			item("magnet", tr("跟随应用"), !st.CompanionOff, false, "", func() {
 				st.CompanionOff = !st.CompanionOff
 				_ = a.store.SetSettings(st)
+				diag.Push("伴随: 跟随应用=%v", !st.CompanionOff)
+				if st.CompanionOff {
+					a.stopCompanionTracking()
+				}
+				a.repositionPanel()
+				a.syncCompanionTracking()
 			})
 			if !st.CompanionOff { // 同 Tauri PanelOptionsMenu：跟随应用时给「跟随位置」，关掉才给「屏幕位置」
 				label(tr("跟随位置"))
@@ -339,13 +351,8 @@ func (a *app) panelMenu(c *ui.Context, k tokens) {
 			}
 			label(tr("屏幕位置"))
 			item("move", tr("自由移动"), st.FreeMove, true, "", func() {
-				wasBar := barEdge(st) != ""
-				st.FreeMove = true
-				_ = a.store.SetSettings(st)
 				closeMenu()
-				if wasBar { // 横栏 → 自由移动：回到竖栏尺寸
-					a.repositionPanel()
-				}
+				a.applyScreenPlacement(true, st.SidebarEdge)
 			})
 			cur := barEdge(st)
 			if cur == "" {
@@ -353,10 +360,8 @@ func (a *app) panelMenu(c *ui.Context, k tokens) {
 			}
 			for _, e := range [][2]string{{"right", "屏幕右侧"}, {"bottom", "屏幕底部"}} {
 				item("", tr(e[1]), !st.FreeMove && cur == e[0], true, "", func() {
-					st.FreeMove, st.SidebarEdge = false, e[0]
-					_ = a.store.SetSettings(st)
 					closeMenu()
-					a.repositionPanel()
+					a.applyScreenPlacement(false, e[0])
 				})
 			}
 			return
@@ -398,6 +403,11 @@ func (a *app) panelMenu(c *ui.Context, k tokens) {
 		}
 		label(tr("面板"))
 		item("pin", tr("保持面板展开"), a.pinned, false, "", func() { a.pinned = !a.pinned; closeMenu() })
+		item("keyboard", tr("底部键位提示"), !st.KeyHintsOff, false, "", func() {
+			st.KeyHintsOff = !st.KeyHintsOff
+			_ = a.store.SetSettings(st)
+			closeMenu()
+		})
 		item("move", tr("位置与停靠"), false, false, ">", func() { a.placementOpen = true })
 	})
 	if c.Shortcut(0, ui.KeyEscape) {
@@ -493,6 +503,9 @@ func (a *app) panelKeys(c *ui.Context) {
 	if !typing && a.page == pageTasks {
 		a.taskKeys(c)
 	}
+	if !typing && a.page == pageNotes && a.noteSub == subMessages {
+		a.msgKeys(c)
+	}
 	if !typing && a.page == pageNotes && a.noteSub == subMessages && c.Shortcut(ui.Cmd, ui.KeyA) { // ⌘A 全选当前栏（同 Tauri messageSelectAllIds）
 		a.clearMsgChosen()
 		for _, m := range a.visibleMessages() {
@@ -531,4 +544,26 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(b)
+}
+
+// applyScreenPlacement：切换「自由移动 / 屏幕右侧 / 屏幕底部」（同 Tauri applySidebar + set_sidebar_mode）：
+// 模式没变不动；变了就清掉记住的自由位置与贴边锚点（隐藏中先滑回），按新模式重新摆放并重建锚点——
+// 屏幕边栏是贴边隐藏候选；自由移动回到默认位置、不建锚点，只有真的拖到屏缘才自动收起。
+func (a *app) applyScreenPlacement(free bool, edge string) {
+	st := a.store.Settings()
+	if st.FreeMove == free && (free || st.SidebarEdge == edge) {
+		return
+	}
+	st.FreeMove, st.SidebarEdge, st.PanelX, st.PanelY = free, edge, 0, 0
+	_ = a.store.SetSettings(st)
+	diag.Push("屏幕位置: 自由移动=%v %s", free, edge)
+	if a.panel == nil {
+		return
+	}
+	if a.edgeHidden {
+		a.edgeSlideTo(false)
+	}
+	a.edge, a.edgeAway = nil, 0
+	a.placePanel()
+	a.edgeOnShow()
 }

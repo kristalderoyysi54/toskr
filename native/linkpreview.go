@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"image/png"
+	"net/url"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -116,20 +118,41 @@ func (a *app) linkFavicon(c *ui.Context, n store.Note, size float32) {
 
 // linkBlock 是笔记卡里的链接正文（同 Tauri NoteCard 链接票据）：图标 + 标题（无标题时用域名），下一行域名 + 路径。
 func (a *app) linkBlock(c *ui.Context, k tokens, n store.Note) {
-	host := linkHost(n.URL)
-	title := n.LinkTitle
+	host, path := linkHost(n.URL), ""
+	if u, err := url.Parse(strings.TrimSpace(n.URL)); err == nil && u.Host != "" {
+		host, path = strings.TrimPrefix(u.Host, "www."), strings.TrimSuffix(u.EscapedPath(), "/")
+	}
+	title, sub := n.LinkTitle, host+path // 同 Tauri：有标题时副行「域名 + 路径」，无标题时标题即域名、副行只放路径
 	if title == "" {
-		title = host
+		title, sub = host, path
 	}
 	ui.Column(c).Gap(2).Children(func() {
 		ui.Row(c).Gap(6).AlignItems(ui.Start).Children(func() {
 			if img := a.favicon(n.LinkIcon); img != nil {
 				ui.Image(c, img).Size(16, 16).Radius(3).Margin(1, 0, 0, 0)
 			}
-			text(c, title, 13, 16.25, 600, k.fg).Wrap().MaxLines(2).Grow(1).Basis(0)
+			doneText(text(c, title, 13, 16.25, 600, k.fg).Wrap().MaxLines(1).Grow(1).Basis(0), k, n)
 		})
-		if n.LinkTitle != "" {
-			text(c, host, 11, 13.75, 400, k.muted).SingleLine()
+		if sub != "" {
+			text(c, sub, 11, 13.75, 400, k.muted).SingleLine()
 		}
+		// 同 Tauri 非票据链接卡的常驻「打开链接」小钮
+		ui.Row(c).Children(func() { // 外包一层 Row：按钮按内容定宽（同 Tauri w-fit），不被 Column 拉满
+			b := ui.Row(c).Height(18).Margin(2, 0, 0, 0).Padding(0, 6).Gap(4).Radius(6).Background(k.fg.Alpha(0.06)).AlignItems(ui.Center).
+				Key("open-link-" + n.ID).Role(ui.RoleButton).Label(tr("打开链接"))
+			col := k.muted
+			if b.Hovered() {
+				col = k.fg
+			}
+			b.Children(func() {
+				licon(c, "external-link", 10, col)
+				text(c, tr("打开链接"), 10, 14, 400, col)
+			})
+			if b.Clicked() {
+				if u := noteURL(n); u != "" {
+					_ = exec.Command("/usr/bin/open", u).Start()
+				}
+			}
+		})
 	})
 }

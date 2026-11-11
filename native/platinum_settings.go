@@ -109,7 +109,7 @@ func (a *app) ptSettingsShell(c *ui.Context, k tokens, s settingsTokens, pages [
 						box := ui.Column(c).Margin(-1, 0, 0, 0).Padding(28, 14, 2, 14).Gap(24).Background(ptG300).Border(1, ptBlack)
 						ptBevel(box, ptG600).Children(func() {
 							for _, sec := range secs {
-								ptSection(c, k, s, sec.title, sec.rows)
+								ptSection(c, k, s, sec)
 							}
 							ui.Box(c).Height(12)
 						})
@@ -140,9 +140,20 @@ func ptFolderTab(c *ui.Context, label string, on, overlap bool) bool {
 }
 
 // ptSection：组框（#999 细框 + 白色内外高光），标题像 fieldset legend 压在上边框上。
-func ptSection(c *ui.Context, k tokens, s settingsTokens, title string, rows []setRow) {
-	visible := rows[:0:0]
-	for _, r := range rows {
+func ptSection(c *ui.Context, k tokens, s settingsTokens, sec setSection) {
+	title := sec.title
+	if sec.intro != "" {
+		text(c, sec.intro, 12, 17, 400, ptMuted).Wrap()
+	}
+	if sec.body != nil { // 自定义内容（主从布局）：标题照常，内容不套组框
+		if title != "" {
+			tightText(c, title, 13, 18, 700, ptBlack)
+		}
+		sec.body()
+		return
+	}
+	visible := sec.rows[:0:0]
+	for _, r := range sec.rows {
 		if !r.hidden {
 			visible = append(visible, r)
 		}
@@ -150,7 +161,7 @@ func ptSection(c *ui.Context, k tokens, s settingsTokens, title string, rows []s
 	if len(visible) == 0 {
 		return
 	}
-	ui.Box(c).Key("ptsec-" + title).Children(func() {
+	ui.Box(c).Key("ptsec-" + title + sec.key).Children(func() {
 		ui.Column(c).Padding(6, 0, 0, 0).Border(1, ptG600).InsetShadow(1, 1, 0, 0, ptWhite).Shadow(1, 1, 0, 0, ptWhite).Children(func() {
 			for i, r := range visible {
 				row := ui.Column(c).Padding(10, 14)
@@ -159,8 +170,18 @@ func ptSection(c *ui.Context, k tokens, s settingsTokens, title string, rows []s
 				}
 				row.Children(func() {
 					ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
+						if r.icon != "" {
+							licon(c, r.icon, 16, ptBlack).Margin(0, -4, 0, 0)
+						}
 						ui.Column(c).Grow(1).Basis(0).Gap(2).Children(func() {
-							tightText(c, r.title, 13, 18, 400, ptBlack)
+							w, label := 400, r.title
+							if r.icon != "" {
+								w = 700
+							}
+							if r.badge != "" {
+								label += "（" + r.badge + "）"
+							}
+							tightText(c, label, 13, 18, w, ptBlack)
 							if r.hint != "" {
 								text(c, r.hint, 11, 16, 400, ptMuted).Wrap()
 							}
@@ -175,10 +196,15 @@ func ptSection(c *ui.Context, k tokens, s settingsTokens, title string, rows []s
 				})
 			}
 		})
-		ui.Box(c).Absolute().Left(8).Top(-8).Height(16).Padding(0, 4).Background(ptG300).Children(func() {
-			text(c, title, 13, 18.2, 700, ptBlack).SingleLine().Margin(-1.1, 0, 0, 0) // CSS 行高 16 小于自然行高，上移半行距
-		})
+		if title != "" {
+			ui.Box(c).Absolute().Left(8).Top(-8).Height(16).Padding(0, 4).Background(ptG300).Children(func() {
+				text(c, title, 13, 18.2, 700, ptBlack).SingleLine().Margin(-1.1, 0, 0, 0) // CSS 行高 16 小于自然行高，上移半行距
+			})
+		}
 	})
+	if sec.footer != "" {
+		text(c, sec.footer, 11, 16, 400, ptMuted).Wrap()
+	}
 }
 
 // ptRadios：两项分段控件在 Platinum 下的单选钮组（12×12 圆钮 + 文字，组间距 16）。

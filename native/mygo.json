@@ -5,6 +5,7 @@
   "out": "build",
   "macos": {
     "signingIdentity": "Toskr Dev Signing",
+    "entitlements": "entitlements.plist",
     "minimumSystemVersion": "13.0",
     "infoPlist": {
       "LSUIElement": true,

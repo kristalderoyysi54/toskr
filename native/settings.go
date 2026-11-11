@@ -38,8 +38,8 @@ func (a *app) openSettings() {
 			Vibrancy: mygo.VibrancySidebar, Transparent: true,
 			Content: ui.View(a.settingsView),
 		})
-		diagWin.Store(a.settingsWin)                                     // 诊断页实时刷新用（diag.Push 可能在任意 goroutine）
-		a.settingsWin.OnFocus(func() { a.refreshLocalTranslate(false) }) // 回到窗口时重查（可能刚在系统设置里下完语言包）
+		diagWin.Store(a.settingsWin)                                                                 // 诊断页实时刷新用（diag.Push 可能在任意 goroutine）
+		a.settingsWin.OnFocus(func() { a.refreshLocalTranslate(false); a.permPolled = time.Time{} }) // 从系统设置授权回来：权限页立即重查 // 回到窗口时重查（可能刚在系统设置里下完语言包）
 		a.settingsWin.OnClose(func(e *mygo.CloseEvent) {
 			if !a.quitting { // 退出时放行，否则会取消整个退出
 				e.PreventDefault()
@@ -61,6 +61,7 @@ func (a *app) openSettingsState() {
 	a.setClip = st.ClipboardWatch
 	a.setGlass = max(0, slices.Index(glassNames, st.Glass))
 	a.setExcluded = strings.Join(st.ExcludedApps, "\n")
+	a.setClipExcluded = strings.Join(st.ClipExcludedApps, "\n")
 	a.setRetain = float64(st.ClipRetainDays)
 	a.setLang = max(0, slices.Index(langNames, st.Language))
 	a.setAIEnd, a.setAIModel, a.setAIKey = st.AIEndpoint, st.AIModel, ""
@@ -88,6 +89,7 @@ func (a *app) saveSettings() {
 	oldGlass := st.Glass
 	st.Glass = glassNames[a.setGlass]
 	st.ExcludedApps = lines(a.setExcluded)
+	st.ClipExcludedApps = lines(a.setClipExcluded)
 	if next := int(a.setRetain); next != st.ClipRetainDays {
 		if next > 0 && (st.ClipRetainDays == 0 || next < st.ClipRetainDays) {
 			a.askRetention(st.ClipRetainDays, next) // 调短会清理更旧记录：先确认（同 Tauri RetentionSlider commit）
@@ -126,54 +128,23 @@ func (a *app) settingsView(c *ui.Context) {
 			}
 		}
 	}
-	retain := tr("不按时间清理")
-	if a.setRetain > 0 {
-		retain = itoa(int(a.setRetain)) + tr(" 天")
-	}
-
-	var recent []setRow
-	for _, d := range a.history[:min(len(a.history), 8)] {
-		r := setRow{title: fmt.Sprintf("%s · %d 条 → %s", d.At.Format("15:04:05"), d.Count, d.Target)}
-		if d.Err != "" {
-			r.hint = "✗ " + d.Err
-		}
-		recent = append(recent, r)
-	}
-	if len(recent) == 0 {
-		recent = []setRow{{title: tr("暂无发送记录")}}
-	}
-
-	axStatus, tapStatus := tr("未授权"), tr("正常")
-	if a.axTrusted {
-		axStatus = tr("已授权")
-	}
-	if a.tapErr != "" {
-		tapStatus = a.tapErr
-	}
-	screenStatus := tr("未授权")
-	if screenAllowed() {
-		screenStatus = tr("已授权")
-	}
+	retainIdx := float64(retentionIndex(int(a.setRetain)))
+	retain := retentionLabel(int(a.setRetain))
 
 	pages := []setPage{
 		{label: "窗口与外观", icon: "settings-2", subs: []string{"通用", "伴随停靠"}, sections: [][]setSection{
 			{
-				{tr("常用外观"), []setRow{
+				{title: tr("常用外观"), rows: []setRow{
 					{title: tr("语言"), hint: tr("跟随系统时，中文系统显示中文，其余显示英文"), control: func() {
 						changed = segmented(c, k, &a.setLang, "跟随系统", "简体中文", "English") || changed
 					}},
 					{title: tr("配色方案"), hint: schemeHint(st.ColorScheme), control: func() {
-						cur := max(0, slices.Index(schemeNames, st.ColorScheme))
-						settingsSelect(c, k, s, schemeLabels[cur], func(m *ui.Menu) {
-							for i, name := range schemeNames {
-								if m.Item(tr(schemeLabels[i])).Radio(i == cur).Chosen() {
-									v := a.store.Settings()
-									v.ColorScheme = name
-									_ = a.store.SetSettings(v)
-									applyAppearance(v)
-									a.invalidateAll()
-								}
-							}
+						schemeSelect(c, k, s, st.ColorScheme, func(name string) {
+							v := a.store.Settings()
+							v.ColorScheme = name
+							_ = a.store.SetSettings(v)
+							applyAppearance(v)
+							a.invalidateAll()
 						})
 					}},
 					{title: tr("高亮颜色"), hint: tr("选中卡片与菜单高亮的颜色"), hidden: st.ColorScheme != "platinum", control: func() {
@@ -202,10 +173,7 @@ func (a *app) settingsView(c *ui.Context) {
 					{title: tr("主题"), hidden: fixedLight(st.ColorScheme), control: func() {
 						i := max(0, slices.Index(themeNames, st.Theme))
 						if segmented(c, k, &i, "跟随系统", "浅色", "深色") {
-							cur := a.store.Settings()
-							cur.Theme = themeNames[i]
-							_ = a.store.SetSettings(cur)
-							applyAppearance(cur)
+							a.setTheme(themeNames[i])
 						}
 					}},
 					{title: tr("卡片密度"), hint: tr("紧凑模式单行显示，一屏看到更多"), control: func() {
@@ -232,7 +200,7 @@ func (a *app) settingsView(c *ui.Context) {
 						}
 					}},
 				}},
-				{tr("窗口与提示"), []setRow{
+				{title: tr("窗口与提示"), rows: []setRow{
 					{title: tr("开机启动"), hint: tr("登录后在后台待命"), control: func() {
 						if toggle(c, s, &a.openAtLogin) && a.panel != nil {
 							if err := mygo.App.SetOpenAtLogin(a.openAtLogin); err != nil {
@@ -252,7 +220,7 @@ func (a *app) settingsView(c *ui.Context) {
 					{title: tr("音效"), hint: tr("捕获成功时轻响一声，隐身模式下静音"), control: setToggle(!st.SoundOff, func(s *store.Settings, v bool) { s.SoundOff = !v })},
 				}},
 				// Tauri 放在折叠的「更多外观与行为」里；Platinum 整窗不透明、原生模糊停用，不展示
-				{tr("外观细节"), []setRow{
+				{title: tr("外观细节"), rows: []setRow{
 					{title: tr("毛玻璃背景"), hint: tr("macOS 26 起为系统液态玻璃，更早系统回退为模糊材质"), hidden: st.ColorScheme == "platinum", control: func() {
 						changed = segmented(c, k, &a.setGlass, glassLabels...) || changed
 					}},
@@ -275,6 +243,8 @@ func (a *app) settingsView(c *ui.Context) {
 					}},
 					{title: tr("卡片底色不透明度"), hint: tr("调低可透出毛玻璃背景"), hidden: st.ColorScheme == "platinum",
 						control: a.pctSlider(c, k, st.CardAlpha(), 30, 100, 5, func(s *store.Settings, v float64) { s.CardOpacity = v })},
+					{title: tr("菜单栏显示下一个到期"), hint: tr("图标旁显示今天下一个任务的到期时间；图标本身会标出暂停、隐身、逾期与权限状态"),
+						control: setToggle(st.TrayNextDue, func(s *store.Settings, v bool) { s.TrayNextDue = v })},
 					{title: tr("提示显示时长"), hint: tr("右上角气泡停留多久；失败提醒至少 4 秒"), control: func() {
 						v := st.HUDDuration().Seconds()
 						if sliderValue(c, k, &v, 2, 10, 1, fmt.Sprintf(tr("%d 秒"), int(v))) {
@@ -284,13 +254,13 @@ func (a *app) settingsView(c *ui.Context) {
 						}
 					}},
 				}},
-				{tr("卡片右键菜单"), []setRow{
+				{title: tr("卡片右键菜单"), rows: []setRow{
 					{title: tr("各区显隐与顺序"), hint: tr("「一级菜单」两区直接显示在右键菜单里，「整理」「转换与导出」各是一个二级菜单；各项只能在本区内开关和排序。剪贴卡的「移入笔记分组」显示在一级。合并、回复关联与删除始终显示。"),
 						below: func() { a.menuSettings(c, k, s) }},
 				}},
 			},
 			{
-				{tr("伴随停靠"), []setRow{
+				{title: tr("伴随停靠"), rows: []setRow{
 					{title: tr("与窗口的间隙"), hint: tr("面板贴在应用窗口旁时留出的距离"), control: func() {
 						v := float64(st.Gap())
 						if sliderValue(c, k, &v, 0, 40, 1, fmt.Sprintf("%dpx", int(v))) {
@@ -307,7 +277,7 @@ func (a *app) settingsView(c *ui.Context) {
 			},
 		}},
 		{label: "快捷键", icon: "keyboard", sections: [][]setSection{{
-			{tr("划词捕获"), []setRow{
+			{title: tr("划词捕获"), rows: []setRow{
 				{title: tr("双击修饰键"), hint: tr("选中文字后连按两次即捕获；无选中时开关面板"), control: func() {
 					changed = segmented(c, k, &a.setModifier, modifierLabels...) || changed
 				}},
@@ -347,15 +317,21 @@ func (a *app) settingsView(c *ui.Context) {
 					})
 				}},
 			}},
-			{tr("全局快捷键"), []setRow{
+			{title: tr("全局快捷键"), rows: []setRow{
 				{title: tr("开关面板"), hint: tr("点击后按下新组合即可录制；Esc 取消，⌫ 清除"), control: func() { a.hotkeyField(c, k, hotkeySlots[0]) }},
 				{title: tr("截图"), hidden: st.ScreenshotOff, control: func() { a.hotkeyField(c, k, hotkeySlots[1]) }},
 				{title: tr("截图时隐藏 Toskr"), hint: tr("开启后截图画面里不出现 Toskr 的面板、钉图等窗口；默认关闭，截到的就是屏幕上看到的样子"), hidden: st.ScreenshotOff,
 					control: setToggle(st.ShotHideSelf, func(s *store.Settings, v bool) { s.ShotHideSelf = v })},
+				{title: tr("截图线条颜色"), hint: tr("十字线、选框和手柄的颜色"), hidden: st.ScreenshotOff, control: func() { a.crosshairControl(c, k) }},
 				{title: tr("新建笔记"), hint: tr("在任意应用里唤出面板并聚焦输入区"), control: func() { a.hotkeyField(c, k, hotkeySlots[2]) }},
 				{title: tr("本机翻译"), hint: a.localTranslateHint(), control: func() { a.localTranslateButton(c, s) }},
 			}},
-			{tr("面板内快捷键"), []setRow{
+			{title: tr("捕获排除"), rows: []setRow{
+				{title: tr("在这些应用中不读取选区"), hint: tr("双击只开关面板，不读取任何内容，适合密码管理器等敏感应用"), below: func() {
+					changed = a.appListEditor(c, k, s, "excluded-apps", &a.setExcluded, tr("加入当前应用")) || changed
+				}},
+			}},
+			{title: tr("面板内快捷键"), rows: []setRow{
 				{title: tr("面板内快捷键"), hint: fmt.Sprintf(tr("%d 项 · 面板里长按 ⌥ 也能速查"), len(panelShortcuts)), control: func() {
 					label := "展开"
 					if a.setShortcutsOpen {
@@ -380,7 +356,7 @@ func (a *app) settingsView(c *ui.Context) {
 			}},
 		}}},
 		{label: "剪贴板", icon: "clipboard-list", sections: [][]setSection{{
-			{tr("剪贴板历史"), []setRow{
+			{title: tr("剪贴板历史"), rows: []setRow{
 				{title: tr("记录剪贴板历史"), hint: tr("复制的文字、链接与图片自动进入「剪贴」页"), control: func() {
 					changed = toggle(c, s, &a.setClip) || changed
 				}},
@@ -410,7 +386,9 @@ func (a *app) settingsView(c *ui.Context) {
 				{title: tr("忽略瞬时内容"), hint: tr("应用标记为临时、自动生成的复制不进入历史"), hidden: !st.ClipboardWatch,
 					control: setToggle(!st.ClipKeepTransient, func(s *store.Settings, v bool) { s.ClipKeepTransient = !v })},
 				{title: tr("保留时长"), hint: tr("超期记录自动清理，置顶项除外"), control: func() {
-					changed = sliderValue(c, k, &a.setRetain, 0, 90, 1, retain) || changed
+					if sliderValue(c, k, &retainIdx, 0, float64(len(retentionSteps)-1), 1, retain) {
+						a.setRetain, changed = float64(retentionSteps[int(retainIdx)]), true
+					}
 				}},
 				{title: tr("删除历史"), hint: tr("清空未固定的记录，可在主面板撤销"), control: func() {
 					if button(c, s, "清除…") {
@@ -418,96 +396,91 @@ func (a *app) settingsView(c *ui.Context) {
 					}
 				}},
 			}},
-			{tr("排除应用"), []setRow{
-				{title: tr("不记录这些应用"), hint: tr("来自这些应用的复制与划词都不会被记录"), below: func() {
-					changed = a.appListEditor(c, k, s, "excluded-apps", &a.setExcluded, tr("加入当前应用")) || changed
+			{title: tr("忽略的应用"), rows: []setRow{
+				{title: tr("不保存这些应用的复制"), hint: tr("与「快捷键」页的「捕获排除」分开设置"), below: func() {
+					changed = a.appListEditor(c, k, s, "clip-excluded-apps", &a.setClipExcluded, tr("加入当前应用")) || changed
 				}},
 			}},
 		}}},
-		{label: "粘贴与隐私", icon: "crosshair", sections: [][]setSection{{
-			{tr("隐私检查"), a.firewallRows(c, k, s, st)},
-			{tr("可逆化名"), a.aliasRows(c, k, s, st)},
-			{tr("发送方案"), a.profileSection(c, k, s)},
-			{tr("最近发送"), recent},
-		}, a.templateSections(c, k, s)}, subs: []string{"发送", "提示词模板"}},
-		{label: "更多功能", icon: "blocks", sections: [][]setSection{{
-			{tr("功能"), []setRow{
-				{title: tr("区域截图"), hint: shotHint(st), control: func() {
-					on := !st.ScreenshotOff
-					if toggle(c, s, &on) {
-						a.setScreenshotEnabled(on)
-						if on && !macos.ScreenCaptureAllowed() {
-							a.setJump = "权限" // 未授权屏幕录制：直接带到权限页（同 Tauri）
+		// 同 Tauri TargetSection：粘贴规则 · 隐私保护 · 提示词模板（最近发送在主面板抽屉里，不在设置）
+		{label: "粘贴与隐私", icon: "crosshair", subs: pasteSubs, sections: [][]setSection{
+			a.pasteRuleSections(c, k, s, st),
+			a.privacySections(c, k, s, st),
+			a.templateSections(c, k, s),
+		}},
+		{label: "更多功能", icon: "blocks", subs: featureSubs(st), sections: append([][]setSection{
+			{a.featureSwitches(c, k, s, st)},
+			{{title: tr("AI 智能"), rows: a.aiSettingsRows(c, k, s, st, &changed)}},
+			{
+				{title: tr("提醒"), rows: []setRow{
+					{title: tr("任务到期与账单提醒"), hint: tr("到点提醒；账单走系统通知"), control: setToggle(st.DueReminders, func(s *store.Settings, v bool) { s.DueReminders = v })},
+					{title: tr("任务提醒方式"), hint: tr("系统通知在锁屏、面板关闭时也能看到，首次使用时 macOS 会请求通知权限。气泡里可直接完成或稍后提醒。"), control: func() {
+						sel := max(0, slices.Index([]string{"hud", "system", "both"}, cmpOr(st.ReminderVia, "hud")))
+						if segmented(c, k, &sel, tr("气泡"), tr("系统通知"), tr("两者")) {
+							cur := a.store.Settings()
+							cur.ReminderVia = []string{"hud", "system", "both"}[sel]
+							_ = a.store.SetSettings(cur)
 						}
-					}
+					}},
+					{title: tr("账单默认提醒"), hint: tr("新建账单时默认勾选这些提醒；不影响已有账单"), hidden: !st.SubscriptionsEnabled, control: func() {
+						cur := st.BillDefaultRemind()
+						ui.Row(c).Gap(6).Children(func() {
+							for _, o := range []struct {
+								d     int
+								label string
+							}{{7, "提前 7 天"}, {3, "提前 3 天"}, {1, "提前 1 天"}, {0, "当天"}} {
+								on := slices.Contains(cur, o.d)
+								ch := ui.Row(c).Height(24).Padding(0, 10).Radius(12).AlignItems(ui.Center).Key("bill-remind-" + itoa(o.d)).
+									Role(ui.RoleCheckBox).Label(tr(o.label)).Selected(on)
+								fg := k.muted
+								switch {
+								case on:
+									ch.Background(s.primary)
+									fg = gray(0.985, 1)
+								case ch.Hovered():
+									ch.Background(k.track)
+									fg = k.fg
+								default:
+									ch.Background(k.track)
+								}
+								ch.Children(func() { text(c, tr(o.label), 11, 16, 500, fg).SingleLine() })
+								if ch.Clicked() {
+									next := slices.DeleteFunc(slices.Clone(cur), func(x int) bool { return x == o.d })
+									if !on {
+										next = append(next, o.d)
+									}
+									if next == nil {
+										next = []int{}
+									}
+									a.patchSettings(func(x *store.Settings) { x.BillRemind = next })
+								}
+							}
+						})
+					}},
+					{title: tr("货币符号"), hint: tr("账单金额前缀"), control: func() {
+						cur := st.Currency
+						if textField(c, k, s, &cur, 64, "¥", false) {
+							ns := a.store.Settings()
+							ns.Currency = cur
+							_ = a.store.SetSettings(ns)
+						}
+					}},
 				}},
-				{title: tr("消息监听（实验）"), hint: tr("只读监听 IM 群消息，在「内容 → 消息」里处理、转任务"), control: func() {
-					on := st.MessagesEnabled
-					if toggle(c, s, &on) {
-						a.setMessagesEnabled(on)
-					}
-				}},
-				{title: tr("秘文"), hint: tr("在本机把文字加密成中文、代码、日志等格式，对方自动识别解密"), control: setToggle(st.SecretEnabled, func(s *store.Settings, v bool) { s.SecretEnabled = v })},
-				{title: tr("订阅"), hint: tr("管理账单与信用卡到期，在「提醒」页按时提醒"), control: setToggle(st.SubscriptionsEnabled, func(s *store.Settings, v bool) { s.SubscriptionsEnabled = v })},
-			}},
-			{tr("提醒"), []setRow{
-				{title: tr("任务到期与账单提醒"), hint: tr("到点提醒；账单走系统通知"), control: setToggle(st.DueReminders, func(s *store.Settings, v bool) { s.DueReminders = v })},
-				{title: tr("任务提醒方式"), hint: tr("系统通知在锁屏、面板关闭时也能看到，首次使用时 macOS 会请求通知权限。气泡里可直接完成或稍后提醒。"), control: func() {
-					sel := max(0, slices.Index([]string{"hud", "system", "both"}, cmpOr(st.ReminderVia, "hud")))
-					if segmented(c, k, &sel, tr("气泡"), tr("系统通知"), tr("两者")) {
-						cur := a.store.Settings()
-						cur.ReminderVia = []string{"hud", "system", "both"}[sel]
-						_ = a.store.SetSettings(cur)
-					}
-				}},
-				{title: tr("货币符号"), hint: tr("账单金额前缀"), control: func() {
-					cur := st.Currency
-					if textField(c, k, s, &cur, 64, "¥", false) {
-						ns := a.store.Settings()
-						ns.Currency = cur
-						_ = a.store.SetSettings(ns)
-					}
-				}},
-			}},
-			{tr("到期快捷档"), a.duePresetRows(c, k, s, st)},
-			{tr("苹果日历"), a.calendarSettings(c, k, s, st)},
-			{tr("苹果提醒事项"), a.remindersSettings(c, k, s, st)},
-			{tr("AI"), a.aiSettingsRows(c, k, s, st, &changed)},
-		}}},
+				{title: tr("到期快捷档"), rows: a.duePresetRows(c, k, s, st)},
+			},
+			{
+				{title: tr("苹果日历"), rows: a.calendarSettings(c, k, s, st)},
+				{title: tr("苹果提醒事项"), rows: a.remindersSettings(c, k, s, st)},
+			},
+		}, featureDomainSections(st, func() []setSection { return a.messageWatchSections(c, k, s, st) }, func() []setSection { return a.secretSections(c, k, s, st) })...)},
 		{label: "数据与备份", icon: "database", sections: [][]setSection{a.dataSections(c, k, s)}},
-		{label: "权限", icon: "shield-check", sections: [][]setSection{{
-			{tr("系统权限"), []setRow{
-				{title: tr("辅助功能"), hint: tr("读取选区、合成粘贴、伴随停靠 · ") + axStatus, control: func() {
-					if button(c, s, "打开授权") {
-						a.axTrusted = macos.AXTrusted(true)
-					}
-				}},
-				{title: tr("键盘监听"), hint: tapStatus},
-				{title: tr("输入监控"), hint: tr("双击触发键需要；授权对当前版本没生效时可重置后重新勾选"), control: func() {
-					ui.Row(c).Gap(6).Children(func() {
-						if button(c, s, "重置授权") {
-							a.resetInputMonitoring()
-						}
-						if button(c, s, "打开设置") {
-							openPrivacy("Privacy_ListenEvent")
-						}
-					})
-				}},
-				{title: tr("屏幕录制"), hint: tr("区域截图、长截屏、图内识别需要 · ") + screenStatus, control: func() {
-					if button(c, s, "打开设置") {
-						openPrivacy("Privacy_ScreenCapture")
-					}
-				}},
-			}},
-		}}},
-		{label: "诊断", icon: "scroll-text", sections: [][]setSection{a.diagSections(c, k, s)}},
-		{label: "帮助与更新", icon: "info", sections: [][]setSection{append(append(a.outcomeSections(c, k, s, st), a.learningSection(c, s, st)), a.aboutRows(c, s)...)}},
-	}
-	if st.SecretEnabled { // 与 Tauri 一致：秘文功能开启后侧栏才出现「秘文」分类
-		pages = slices.Insert(pages, 5, setPage{label: "秘文", icon: "key-round", sections: [][]setSection{a.secretSections(c, k, s, st)}})
-	}
-	if st.MessagesEnabled { // 消息监听同理
-		pages = slices.Insert(pages, 5, setPage{label: "消息监听", icon: "messages-square", sections: [][]setSection{a.messageWatchSections(c, k, s, st)}})
+		{label: "权限", icon: "shield-check", sections: [][]setSection{a.permissionSections(c, k, s, st)}},
+		// 同 Tauri settingsChildSections("outcome")：使用概览 · 关于 · 诊断
+		{label: "帮助与更新", icon: "info", subs: []string{"使用概览", "关于", "诊断"}, sections: [][]setSection{
+			append(a.outcomeSections(c, k, s, st), a.learningSection(c, s, st)),
+			a.aboutRows(c, s),
+			a.diagSections(c, k, s),
+		}},
 	}
 	a.settingsShell(c, pages)
 	if changed {
@@ -517,22 +490,14 @@ func (a *app) settingsView(c *ui.Context) {
 
 func (a *app) dataSections(c *ui.Context, k tokens, s settingsTokens) []setSection {
 	backup := append(a.dataDirRows(c, k, s), []setRow{
-		{title: tr("加密"), hint: tr("AES-256-GCM（TSK1 信封），密钥存于钥匙串；图片按内容哈希加密存放")},
+		{title: tr("加密"), hint: tr("AES-256 加密，密钥存于钥匙串"), tip: tr("AES-256-GCM（TSK1 信封），密钥存于钥匙串；图片按内容哈希加密存放")},
 		{title: tr("导出备份"), hint: tr(".toskr-backup，加密"), control: func() {
 			if button(c, s, "导出…") {
 				a.exportBackup(c)
 			}
 		}},
-		{title: tr("从 Tauri 版导入"), hint: fmt.Sprintf(tr("读取 %s 的笔记、分组、任务、账单与秘文（同 ID 以 Tauri 为准）；会请求一次钥匙串授权，导入前自动写恢复点"), store.TauriDataDir()), control: func() {
-			label := "导入"
-			if a.tauriImporting {
-				label = "导入中…"
-			}
-			if button(c, s, label) && !a.tauriImporting {
-				a.importTauri(nil)
-			}
-		}},
-		{title: tr("从备份导入"), hint: tr("预检后选「合并」（本机同 ID 记录优先）或「整份恢复」（用备份替换全部数据，设置保留）；都会先写恢复点。也可选 Tauri 旧 JSON 备份或迁移保险档（pre-encrypt-*.bak），只能合并"), control: func() {
+		a.legacyMigrationRow(c, k, s),
+		{title: tr("从备份导入"), hint: tr("合并或整份恢复，导入前自动写恢复点"), tip: tr("预检后选「合并」（本机同 ID 记录优先）或「整份恢复」（用备份替换全部数据，设置保留）；都会先写恢复点。也可选 Tauri 旧 JSON 备份或迁移保险档（pre-encrypt-*.bak），只能合并"), control: func() {
 			if button(c, s, "选择文件…") {
 				a.inspectBackup(c)
 			}
@@ -605,10 +570,10 @@ func (a *app) dataSections(c *ui.Context, k tokens, s settingsTokens) []setSecti
 	}
 	health := cmpOr(a.health, tr("只报告，不改数据"))
 	return []setSection{
-		{tr("备份与导入"), backup},
-		{tr("定期自动备份"), a.autoBackupRows(c, k, s)},
-		{fmt.Sprintf(tr("恢复点（启动 / 导入 / 恢复前自动生成，保留 %d 份）"), store.RecoveryKeep), points},
-		{tr("维护"), []setRow{{title: tr("数据健康检查"), hint: health, control: func() {
+		{title: tr("备份与导入"), rows: backup},
+		{title: tr("定期自动备份"), rows: a.autoBackupRows(c, k, s)},
+		{title: fmt.Sprintf(tr("恢复点（启动 / 导入 / 恢复前自动生成，保留 %d 份）"), store.RecoveryKeep), rows: points},
+		{title: tr("维护"), rows: []setRow{{title: tr("数据健康检查"), hint: health, control: func() {
 			if button(c, s, "检查") {
 				h := a.store.CheckHealth()
 				a.health = fmt.Sprintf(tr("笔记 %d · 缺失图片 %d · 孤立图片 %d · 分组失联 %d"), h.Notes, h.MissingMedia, h.OrphanMedia, h.OrphanSectionRefs)
@@ -730,12 +695,7 @@ func (a *app) secretSections(c *ui.Context, k tokens, s settingsTokens, st store
 					save(func(x *store.Settings) { x.SecretDefaultKeyID = key.ID })
 				}
 				if button(c, s, "删除") {
-					save(func(x *store.Settings) {
-						x.SecretKeys = slices.DeleteFunc(x.SecretKeys, func(y store.SecretKey) bool { return y.ID == key.ID })
-						if x.SecretDefaultKeyID == key.ID {
-							x.SecretDefaultKeyID = ""
-						}
-					})
+					a.confirmRemoveSecretKey(key)
 				}
 			})
 		}})
@@ -778,8 +738,8 @@ func (a *app) secretSections(c *ui.Context, k tokens, s settingsTokens, st store
 		revealLabel = fmt.Sprintf("%ds", int(reveal))
 	}
 	return []setSection{
-		{tr("共享密钥"), keys},
-		{tr("收发"), []setRow{
+		{title: tr("共享密钥"), rows: keys},
+		{title: tr("收发"), rows: []setRow{
 			{title: tr("默认密文格式"), hint: tr("中文文本 / 代码（随机语言）/ 日志记录 / 英文引用；接收端自动识别"), control: func() {
 				if segmented(c, k, &style, styleLabels...) {
 					save(func(x *store.Settings) { x.SecretCipherStyle = string(secretcodec.StyleOptions[style].Value) })
@@ -808,9 +768,9 @@ func (a *app) playCaptureSound() {
 func schemeHint(scheme string) string {
 	switch scheme {
 	case "platinum":
-		return tr("固定浅色、整窗不透明；切回 Toskr 恢复原主题与毛玻璃")
+		return tr("固定浅色、整窗不透明；切回琉璃恢复原主题与毛玻璃")
 	case "paper", "matcha", "sakura":
-		return tr("固定浅色；切回 Toskr 恢复深浅色设置")
+		return tr("固定浅色；切回琉璃恢复深浅色设置")
 	case "fog":
 		return tr("跟随下方主题设置切换浅色 / 深色")
 	}
@@ -852,4 +812,60 @@ func shotHint(st store.Settings) string {
 		return tr("截取屏幕任意区域，可标注、钉在屏幕上、长截屏、识别文字")
 	}
 	return tr("菜单栏图标或快捷键截图；需要「屏幕录制」权限")
+}
+
+var secretKeyAsk = func(title, msg string) bool { // 测试替换；Dialog.Message 阻塞，调用方在后台 goroutine
+	r, err := mygo.Dialog.Message(mygo.MessageOptions{Title: title, Message: msg, Buttons: []string{tr("删除"), tr("取消")}, DefaultButton: 1})
+	return err == nil && r.Button == 0
+}
+
+// confirmRemoveSecretKey 同 Tauri removeKey：先说明会锁住几条秘文，确认后删；默认密钥被删则改用剩下的第一把。
+func (a *app) confirmRemoveSecretKey(key store.SecretKey) {
+	n := 0
+	for _, x := range a.store.Secrets() {
+		if x.KeyID == key.ID {
+			n++
+		}
+	}
+	name := cmpOr(key.Label, tr("未命名"))
+	msg := fmt.Sprintf(tr("确定删除密钥「%s」？"), name)
+	if n > 0 {
+		msg = fmt.Sprintf(tr("有 %d 条秘文用「%s」加解密，删除后这些卡片将变为锁定态（用相同密钥文本重新添加可救回）。确定删除？"), n, name)
+	}
+	go func() {
+		if !secretKeyAsk(tr("删除秘文密钥"), msg) {
+			return
+		}
+		do := func() {
+			cur := a.store.Settings()
+			cur.SecretKeys = slices.DeleteFunc(cur.SecretKeys, func(y store.SecretKey) bool { return y.ID == key.ID })
+			if cur.SecretDefaultKeyID == key.ID {
+				cur.SecretDefaultKeyID = ""
+				if len(cur.SecretKeys) > 0 {
+					cur.SecretDefaultKeyID = cur.SecretKeys[0].ID
+				}
+			}
+			_ = a.store.SetSettings(cur)
+		}
+		if a.settingsWin != nil {
+			a.settingsWin.Update(do)
+		} else {
+			a.onMain(do)
+		}
+	}()
+}
+
+// pasteStepRow：图文 / 多图卡逐段粘贴时，段与段之间等多久。网页版对话框（ChatGPT、Claude 网页）上传图片较慢，
+// 间隔太短会把下一段粘进上一张图之前，调到「慢」或「很慢」即可。
+func (a *app) pasteStepRow(c *ui.Context, k tokens, st store.Settings) setRow {
+	return setRow{title: tr("多段粘贴间隔"), hint: tr("图文卡逐段粘贴；网页贴图慢就调大"),
+		tip: tr("文字与每张图分别粘贴，段与段之间等待这段时间让目标应用接收上一段。图片在目标里顺序错乱或缺图时，换成更慢的一档。"),
+		control: func() {
+			sel := max(0, slices.Index(store.PasteStepOptions, int(st.PasteStep()/time.Millisecond)))
+			labels := []string{tr("快 0.2 秒"), tr("标准 0.35 秒"), tr("慢 0.6 秒"), tr("很慢 1 秒")}
+			if segmented(c, k, &sel, labels...) {
+				ms := store.PasteStepOptions[sel]
+				a.patchSettings(func(x *store.Settings) { x.PasteStepMs = ms })
+			}
+		}}
 }

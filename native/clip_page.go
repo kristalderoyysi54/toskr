@@ -11,6 +11,8 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
+	"github.com/toskr/native/internal/core"
+
 	"github.com/toskr/native/internal/store"
 )
 
@@ -84,9 +86,9 @@ func (a *app) clipPage(c *ui.Context, k tokens) {
 	list := a.clipList
 	_, vh := c.Size()
 	vis := visWindow{top: a.clipScroll.Y - 600, bottom: a.clipScroll.Y + vh + 600}
-	view := slices.IndexFunc(clipViews, func(v struct{ id, label string }) bool { return v.id == a.clipView })
-	swapKey, swap := "clip-view-"+itoa(view), a.swapTransition("clip-view", view)
-	ui.Column(c).Grow(1).Key(swapKey).Transition(swap).Children(func() {
+	// 视图切换：外层不再整块重挂（之前连带切换器一起重建，滑块的共享布局动画断掉、新旧两层叠影）；
+	// 切换器原地保留滑块动画，分段标签与卡片列按切换方向淡入 + 横移（clipSwapIn）
+	ui.Column(c).Grow(1).Children(func() {
 		ui.Scroll(c).Grow(1).Scrollbars(false).TrackScroll(&a.clipScroll).Children(func() {
 			ui.Column(c).Padding(4, 14, 8, 14).Children(func() {
 				if len(list) == 0 {
@@ -122,7 +124,7 @@ func (a *app) clipPage(c *ui.Context, k tokens) {
 						i = j
 						continue
 					}
-					ui.Column(c).Gap(gap).Key("band-" + band).Children(func() {
+					ui.Column(c).Gap(gap).Key("band-" + a.clipView + "-" + band).Transition(a.clipSwapIn(c)).Children(func() {
 						skip := float32(0)
 						flush := func() {
 							if skip > 0 {
@@ -158,13 +160,18 @@ func (a *app) clipHeader(c *ui.Context, k tokens, label string, first bool, band
 		top = 2
 	}
 	row := ui.Row(c).Height(28).Padding(top, 0, 4, 0).Gap(8).AlignItems(ui.Center)
+	if first { // 首段头挂着视图切换器：固定 key 原地保留，滑块共享布局动画才连得上
+		row.Key("clip-hd-first")
+	} else {
+		row.Key("clip-hd-" + a.clipView + "-" + label).Transition(a.clipSwapIn(c))
+	}
 	source := a.clipView == "source" && len(band) > 0 && !band[0].Kept
 	if source {
 		a.clipSourceMenu(row, label, band)
 	}
 	byApp := a.clipView == "source" && len(band) > 0
 	row.Children(func() {
-		hd := ui.Row(c).Gap(8).AlignItems(ui.Center).Key("srchd").Shrink(1)
+		hd := ui.Row(c).Gap(8).AlignItems(ui.Center).Key("srchd-" + a.clipView + "-" + label).Shrink(1).Transition(a.clipSwapIn(c))
 		if byApp {
 			hd.Role(ui.RoleButton).Label(label)
 			if hd.Clicked() {
@@ -225,6 +232,9 @@ func (a *app) clipHeader(c *ui.Context, k tokens, label string, first bool, band
 					overThumb(c, func() { text(c, tr(v.label), 10, 14, w, fg) })
 				})
 				if b.Clicked() && !sel {
+					from := slices.IndexFunc(clipViews, func(x struct{ id, label string }) bool { return x.id == a.clipView })
+					to := slices.IndexFunc(clipViews, func(x struct{ id, label string }) bool { return x.id == v.id })
+					a.clipSwapAt, a.clipSwapDX = c.Now(), 10*sign(to-from)
 					a.clipView = v.id
 					a.selected = 0
 					a.reload()
@@ -298,6 +308,7 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 		box = ui.Column(c).Height(clipCardH(layout)).Padding(6, 8, 4, 8).Radius(10).Background(k.card).Key(n.ID)
 	}
 	hovered := box.Hovered()
+	a.bandHover(n.ID, hovered)
 	lift := float32(0)
 	if layout == clipCompact { // 行底：悬停 / 键盘焦点浮现（hover:bg-black/5，暗色 white/6）
 		bg := k.fg.Alpha(0)
@@ -321,7 +332,7 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 	isLink := n.Kind == "link"
 	box.Children(func() {
 		if layout == clipCompact {
-			a.clipRow(c, k, n, hovered, isLink)
+			a.clipRow(c, k, n, hovered, isLink, a.compactHover(c, box, n))
 			if n.Blur {
 				blurOverlay(c, k, 12)
 			}
@@ -333,16 +344,29 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 			return
 		}
 		ui.Row(c).Height(20).Gap(6).AlignItems(ui.Center).Children(func() {
-			text(c, ago(n.CreatedAt, a.now()), 11, 16, 600, k.muted)
-			if isLink {
-				ui.Box(c).Height(14).Padding(0, 6).Radius(6).Background(k.track).Center().Children(func() {
-					text(c, tr("链接"), 10, 10, 500, k.muted)
-				})
-			}
-			ui.Spacer(c)
-			if n.Kept { // 票据模板：悬停时淡出给操作钮让位（opacity 150ms）
+			text(c, ago(n.CreatedAt, a.now()), 11, 16, 600, k.muted).Shrink(0)
+			// 同 Tauri 票据头：有标题显示标题，否则非纯文本显示类型徽标（图片 / 图文 ×N / 代码语言 / 链接）；点击就地重命名
+			ui.Row(c).Grow(1).Basis(0).AlignItems(ui.Center).Clip().Children(func() {
+				if a.cardInlineInputOn(c, k, n, k.fg) {
+					return
+				}
+				title, typ := strings.TrimSpace(n.Title), cardTitle(n)
+				if title == "" && typ == tr("文本") {
+					return
+				}
+				b := ui.Row(c).Height(14).Radius(3).AlignItems(ui.Center).Key("clip-title-" + n.ID).Role(ui.RoleButton).Label(cmpOr(title, typ)).Tooltip(tr("点击重命名"))
+				if title != "" {
+					b.Children(func() { text(c, title, 11, 16, 500, k.fg).SingleLine() })
+				} else {
+					b.Padding(0, 6).Background(k.track).InsetShadow(0, 1, 2, 0, k.insetShadow).Children(func() { text(c, typ, 10, 10, 500, k.muted).SingleLine() })
+				}
+				if b.Clicked() {
+					a.titleEditID, a.titleText = n.ID, n.Title
+				}
+			})
+			if n.Kept { // 同 Tauri：标准票据悬停时图钉常显，只有浓缩模板淡出让位（opacity 150ms）
 				pinOp := float32(1)
-				if hovered {
+				if hovered && condensed {
 					pinOp = 0
 				}
 				pin := ui.Box(c).Size(12, 12)
@@ -364,19 +388,27 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 				}
 				line := firstLine(n.Text)
 				switch {
-				case n.Kind == "image":
+				case n.Kind == "image": // 同 Tauri 浓缩模板：缩略 + 张数 / 尺寸
 					if img := a.thumb(n.ImageFile); img != nil {
 						w, h := ui.ImageSize(img)
 						ui.Image(c, img).Size(min(24*w/max(h, 1), 48), 24).Radius(4)
 					}
-					line = itoa(n.ImageW) + " × " + itoa(n.ImageH)
+					line = cardImageMeta(n)
+					if files := n.MediaFiles(); len(files) > 1 {
+						line = cardTitle(n)
+					}
+				case len(n.MediaFiles()) > 0: // 图文：首图缩略 + 首行
+					if img := a.thumb(n.MediaFiles()[0]); img != nil {
+						w, h := ui.ImageSize(img)
+						ui.Image(c, img).Size(min(24*w/max(h, 1), 48), 24).Radius(4)
+					}
 				case isLink:
 					a.linkFavicon(c, n, 16)
 					if n.LinkTitle != "" {
 						line = n.LinkTitle
 					}
 				}
-				t := text(c, line, 13, 18, 400, k.fg).SingleLine().Grow(1)
+				t := doneText(highlightText(c, k, line, a.query, 13, 18, k.fg).SingleLine().Grow(1), k, n) // 同 Tauri：浓缩摘要也高亮命中
 				if isCode(n) {
 					t.Font(fontMono).FontSize(12)
 				}
@@ -394,11 +426,16 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 		ui.Column(c).Grow(1).Margin(4, 0, 0, 0).Clip().Children(func() {
 			switch {
 			case n.Blur: // 模糊卡不构建正文
-			case n.Kind == "image":
-				if img := a.thumb(n.ImageFile); img != nil {
-					w, h := ui.ImageSize(img)
-					ui.Image(c, img).Size(62*w/max(h, 1), 62).Radius(6)
+			case n.Kind == "image": // 同 Tauri：多张并排 3 张 +N，真实备注一行
+				files, h := n.MediaFiles(), float32(62)
+				if s := strings.TrimSpace(imageNoteText(n)); s != "" && !store.IsImagePlaceholder(s) {
+					h -= 20
 				}
+				a.cardImages(c, k, files, 0, h)
+				cardImageCaption(c, k, n)
+			case len(n.MediaFiles()) > 0: // 图文组合卡：正文 + 下方缩略条
+				doneText(highlightText(c, k, n.Text, a.query, 12, 18, k.fg).Wrap().MaxLines(1), k, n) // 留出缩略条后只放整行
+				a.cardThumbStrip(c, k, n.MediaFiles())
 			case isLink:
 				title := n.LinkTitle
 				if title == "" {
@@ -412,27 +449,18 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 					text(c, linkHost(n.Text), 11, 13.75, 400, k.muted).SingleLine()
 				})
 			case isCode(n):
-				a.codeText(c, k, n)
+				a.codeText(c, k, n, 3)
 			default:
-				highlightText(c, k, n.Text, a.query, 12, 18, k.fg).Wrap().MaxLines(3)
+				doneText(highlightText(c, k, n.Text, a.query, 12, 18, k.fg).Wrap().MaxLines(3), k, n)
 			}
 		})
 		foot := ui.Row(c).Height(20).Padding(4, 0, 0, 0).Gap(4).AlignItems(ui.Center).
 			BorderWidth(1, 0, 0, 0).BorderColor(k.fg.Alpha(0.1)).BorderStyle(ui.BorderDashed)
 		foot.Children(func() {
-			src := ""
-			if n.SourceApp != "" {
-				src = tr("来自 ") + n.SourceApp
+			a.cardFooterLead(c, k, n)
+			if right := clipFootMeta(n); right != "" {
+				text(c, right, 10, 14, 400, k.muted).SingleLine().Shrink(0).MaxWidth(150)
 			}
-			text(c, src, 10, 14, 400, k.muted).SingleLine().Grow(1)
-			right := itoa(len([]rune(n.Text))) + tr(" 字符")
-			switch {
-			case n.Kind == "image" && n.ImageW > 0:
-				right = itoa(n.ImageW) + " × " + itoa(n.ImageH)
-			case isLink:
-				right = tr("链接")
-			}
-			text(c, right, 10, 14, 400, k.muted)
 		})
 		if n.Blur {
 			blurOverlay(c, k, 20)
@@ -443,10 +471,11 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 		a.cardOverlays(c, k, n, checked, false)
 		a.quickBadge(c, k, idx, 4)
 	})
-	if box.Clicked() && !(box.ClickModifiers()&ui.Shift != 0 && a.rangeSelect(n.ID)) {
-		a.cardClick(n.ID, idx, box.ClickModifiers())
+	clk, dbl, mods := cardPressed(box, n.ID) // 正文是拖出源，点在正文上也算点卡片
+	if clk && !(mods&ui.Shift != 0 && a.rangeSelect(n.ID)) {
+		a.cardClick(n.ID, idx, mods)
 	}
-	if box.DoubleClicked() && idx >= 0 {
+	if dbl && idx >= 0 {
 		a.cardDoubleClick(n, idx, true)
 	}
 }
@@ -459,15 +488,27 @@ func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool, to
 		open = "external-link"
 	}
 	fade := ui.ElementTransition{Duration: 100 * time.Millisecond, Ease: easeTw, Enter: &ui.Motion{}, Exit: &ui.Motion{}} // 悬停浮钮 opacity 100ms
-	row := ui.Row(c).Absolute().Right(6).Bottom(4)
+	row := ui.Row(c).Absolute().Right(6).Bottom(4 + a.bandLift(n.ID, false))
 	if top >= 0 {
 		row = ui.Row(c).Absolute().Right(4).Top(top)
 	}
 	row.Gap(2).Key("acts").Transition(fade).Children(func() {
+		alias := core.AliasOccurrences(n.Text, a.store.Settings().AliasEntities) > 0
+		openTip := "预览（Space）"
+		if isLink {
+			openTip = "打开页面（Space）"
+		}
+		// 同 Tauri 顺序与提示：发送 · 置顶 · 复制 · 移入笔记 · [恢复化名] · 预览 · 编辑 · 模糊 · 删除
 		for _, act := range []struct{ icon, tip string }{
-			{"send", "发送（⌘↵）"}, {"pin", "置顶"}, {"copy", "复制"}, {"inbox", "移入笔记（长按选择分类）"},
-			{open, "打开"}, {"pencil", "编辑"}, {"eye-off", "模糊内容"}, {"trash-2", "删除"},
+			{"send", "发送 / 添加（双击卡片同效）"}, {"pin", "置顶（固定不清理）"}, {"copy", "复制原文（不脱敏）"}, {"inbox", "移入笔记（长按选择分类）"},
+			{"venetian-mask", "恢复化名"}, {open, openTip}, {"pencil", "编辑"}, {"eye-off", "模糊内容"}, {"trash-2", "删除"},
 		} {
+			if act.icon == "venetian-mask" && !alias {
+				continue
+			}
+			if act.icon == "pin" && n.Kept {
+				act.tip = "取消置顶"
+			}
 			if len(grid) > 0 && grid[0] && !slices.Contains([]string{"send", "copy", open, "trash-2"}, act.icon) {
 				continue // 图片网格瓷砖只留 4 个（同 Tauri NoteCard grid：发送 / 复制 / 预览 / 删除）
 			}
@@ -480,7 +521,11 @@ func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool, to
 			if act.icon == "eye-off" && n.Blur {
 				act.icon, act.tip = "eye", "取消模糊"
 			}
-			b := floatIconButton(c, k, "ca-"+act.icon, act.icon, tr(act.tip), act.icon == "trash-2", act.icon == "pin" && n.Kept)
+			glyph := act.icon
+			if act.icon == "send" && a.insertsIntoOpenCard(a.clipMoveTargets(n)) { // 目的地如实：详情窗开着时进那张卡，不外发
+				glyph, act.tip = "text-cursor-input", "添加到打开的卡片光标处（双击卡片同效）"
+			}
+			b := floatIconButton(c, k, "ca-"+act.icon, glyph, tr(act.tip), act.icon == "trash-2", act.icon == "pin" && n.Kept)
 			if act.icon == "inbox" {
 				a.clipInboxButton(b, n)
 				continue
@@ -489,8 +534,10 @@ func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool, to
 				continue
 			}
 			switch act.icon {
+			case "venetian-mask":
+				a.restoreCardAliases(n)
 			case "send":
-				a.send(a.clipMoveTargets(n)) // 同 Tauri sendSelfOrChecked：当前卡在多选里就发整组
+				a.sendFromList(a.clipMoveTargets(n)) // 同 Tauri sendSelfOrChecked：当前卡在多选里就发整组
 			case "pin":
 				_ = a.store.SetKept(n.ID, !n.Kept)
 			case "copy":
@@ -519,12 +566,12 @@ func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool, to
 
 // clipRow 是紧凑密度的剪贴流水行（同 Tauri CompactRow 剪贴形态）：缩略图 + 首行（命名过的先标题、摘要淡色跟随，
 // 代码等宽）+ 尾部置顶图钉或相对时间；尾部元数据悬停时让位给操作钮。
-func (a *app) clipRow(c *ui.Context, k tokens, n store.Note, hovered, isLink bool) {
+func (a *app) clipRow(c *ui.Context, k tokens, n store.Note, hovered, isLink, active bool) {
 	if !(isLink && a.favicon(n.LinkIcon) != nil) {
 		a.sourceIcon(c, n, 20)
 	}
-	if n.Kind == "image" {
-		if img := a.thumb(n.ImageFile); img != nil {
+	if files := n.MediaFiles(); len(files) > 0 && !n.Blur { // 带图行（图片 / 图文）首图缩略
+		if img := a.thumb(files[0]); img != nil {
 			w, h := ui.ImageSize(img)
 			ui.Image(c, img).Size(min(24*w/max(h, 1), 40), 24).Radius(4)
 		}
@@ -533,28 +580,39 @@ func (a *app) clipRow(c *ui.Context, k tokens, n store.Note, hovered, isLink boo
 	switch {
 	case n.Blur:
 		line = ""
-	case n.Kind == "image":
-		line = tr("图片") + " " + itoa(n.ImageW) + " × " + itoa(n.ImageH)
+	case n.Kind == "image": // 同 Tauri imageListLabel：真实备注优先，否则「图片 ×N」/「图片」
+		line = cardTitle(n)
+		if s := strings.TrimSpace(imageNoteText(n)); s != "" && !store.IsImagePlaceholder(s) {
+			line = s
+		}
 	case isLink:
 		a.linkFavicon(c, n, 16)
 		if n.LinkTitle != "" {
 			line = n.LinkTitle
 		}
 	}
-	if title := strings.TrimSpace(n.Title); title != "" && !n.Blur {
-		spans := []ui.Span{{Text: title, Weight: 500, Color: k.fg}}
-		if line != "" {
-			spans = append(spans, ui.Span{Text: " — " + line, Color: k.muted})
+	a.marqueeLine(c, n.ID, active, func() ui.Element { // 悬停行文字溢出时跑马灯；正文可拖出（同 Tauri CompactRow）
+		if title := strings.TrimSpace(n.Title); title != "" && !n.Blur {
+			spans := []ui.Span{{Text: title, Weight: 500, Color: k.fg}}
+			if line != "" {
+				spans = append(spans, ui.Span{Text: " — " + line, Color: k.muted})
+			}
+			return doneText(ui.RichText(c, spans...).Font(fontSans).FontSize(11).FixedLineHeight(16), k, n)
 		}
-		ui.RichText(c, spans...).FontSize(13).FixedLineHeight(18).SingleLine().Grow(1).Basis(0)
-	} else {
-		t := text(c, line, 13, 18, 400, k.fg).SingleLine().Grow(1).Basis(0)
+		// 紧凑行主文字比 Tauri（12/17）小一号：正文 11/16、代码 10.5/15（用户 2026-11-10 指定，仅主文字行，元数据不变）
 		if isCode(n) {
-			t.Font(fontMono).FontSize(12)
+			return doneText(highlightText(c, k, line, a.query, 10.5, 15, k.fg).Font(fontMono), k, n)
 		}
-	}
+		return doneText(highlightText(c, k, line, a.query, 11, 16, k.fg), k, n)
+	})
 	if hovered {
 		return
+	}
+	if n.Provenance != nil { // 同 Tauri CompactRow：回复卡标链接图标
+		licon(c, "link-2", 12, stok(c).primary).Shrink(0)
+	}
+	if files := n.MediaFiles(); n.Kind != "image" && len(files) > 0 {
+		text(c, fmt.Sprintf(tr("%d图"), len(files)), 10, 14, 400, k.muted).Shrink(0)
 	}
 	if n.Kept {
 		liconFilled(c, "pin", 12, amber400)
@@ -610,7 +668,7 @@ func (a *app) clipGrid(c *ui.Context, k tokens, notes []store.Note, band string,
 	allCols := max(1, int((inner+gap)/(minW+gap))) // auto-fill：列宽按容器算，张数少也不拉宽
 	tile := (inner - gap*float32(allCols-1)) / float32(allCols)
 	rows := (len(notes) + allCols - 1) / allCols
-	ui.Column(c).Gap(gap).Key("grid-" + band).Children(func() {
+	ui.Column(c).Gap(gap).Key("grid-" + band).Transition(a.clipSwapIn(c)).Children(func() {
 		for r := 0; r < rows; r++ {
 			y := top + float32(r)*(tile+gap)
 			row := notes[r*allCols : min(len(notes), (r+1)*allCols)]
@@ -640,6 +698,7 @@ func (a *app) clipTile(c *ui.Context, k tokens, n store.Note, size float32) {
 	focused := idx >= 0 && idx == a.selected && a.focusList
 	box := ui.Column(c).Size(size, size).Padding(6).Gap(4).Radius(10).Background(k.card).Key(n.ID)
 	hovered := box.Hovered()
+	a.bandHover(n.ID, hovered)
 	elevated(box, k, hovered || checked || (focused && !checked))
 	lift := float32(0)
 	if hovered {
@@ -653,16 +712,20 @@ func (a *app) clipTile(c *ui.Context, k tokens, n store.Note, size float32) {
 		a.cardMenu(c, m, max(idx, 0), n)
 	})
 	box.Children(func() {
-		ui.Box(c).Grow(1).Basis(0).FillWidth().Radius(4).Background(k.fg.Alpha(0.04)).Center().Clip().Children(func() {
-			if img := a.thumb(n.ImageFile); img != nil {
-				iw, ih := ui.ImageSize(img)
-				aw, ah := size-12, size-12-20
-				sc := min(aw/max(iw, 1), ah/max(ih, 1))
-				ui.Image(c, img).Size(iw*sc, ih*sc)
-			} else {
-				text(c, tr("加载中…"), 10, 14, 400, k.muted)
-			}
-		})
+		if files := n.MediaFiles(); len(files) > 1 { // 同 Tauri 网格瓷砖：多图并排 3 张 +N
+			a.cardImages(c, k, files, size-12, size-12-20)
+		} else {
+			ui.Box(c).Grow(1).Basis(0).FillWidth().Radius(4).Background(k.fg.Alpha(0.04)).Center().Clip().Children(func() {
+				if img := a.thumb(n.ImageFile); img != nil {
+					iw, ih := ui.ImageSize(img)
+					aw, ah := size-12, size-12-20
+					sc := min(aw/max(iw, 1), ah/max(ih, 1))
+					ui.Image(c, img).Size(iw*sc, ih*sc)
+				} else {
+					text(c, tr("加载中…"), 10, 14, 400, k.muted)
+				}
+			})
+		}
 		meta := ui.Row(c).Height(16).Gap(4).AlignItems(ui.Center)
 		meta.Opacity(meta.AnimateTo("meta", map[bool]float32{true: 0, false: 1}[hovered], tweenTw)).Children(func() {
 			a.sourceIcon(c, n, 14)
@@ -680,10 +743,24 @@ func (a *app) clipTile(c *ui.Context, k tokens, n store.Note, size float32) {
 		a.cardOverlays(c, k, n, checked, false)
 		a.quickBadge(c, k, idx, 4)
 	})
-	if box.Clicked() && !(box.ClickModifiers()&ui.Shift != 0 && a.rangeSelect(n.ID)) {
-		a.cardClick(n.ID, idx, box.ClickModifiers())
+	clk, dbl, mods := cardPressed(box, n.ID) // 正文是拖出源，点在正文上也算点卡片
+	if clk && !(mods&ui.Shift != 0 && a.rangeSelect(n.ID)) {
+		a.cardClick(n.ID, idx, mods)
 	}
-	if box.DoubleClicked() && idx >= 0 {
+	if dbl && idx >= 0 {
 		a.cardDoubleClick(n, idx, true)
 	}
+}
+
+// clipSwapIn：剪贴视图切换后 400ms 内新挂载的分段头 / 卡片列按切换方向（往右切从右侧进）横移 10pt 淡入，
+// 180ms ease-standard；不做退场（旧内容直接让位，避免两层叠影）；平时新出现的分段（如新的一天）不带动效。
+func (a *app) clipSwapIn(c *ui.Context) ui.ElementTransition {
+	if a.clipSwapAt.IsZero() || c.Now().Sub(a.clipSwapAt) > 400*time.Millisecond {
+		return ui.ElementTransition{}
+	}
+	dx := a.clipSwapDX
+	if c.Preferences().ReduceMotion {
+		dx = 0
+	}
+	return ui.ElementTransition{Duration: 180 * time.Millisecond, Ease: easeStandard, Colors: true, Enter: &ui.Motion{X: dx}}
 }

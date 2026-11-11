@@ -23,7 +23,9 @@ import (
 type longOrigin struct {
 	front, frontID string
 	pin            *pinWin     // 非空：✓ 写回这张钉图
-	note           *store.Note // 非空：✓ 替换图片卡里的原图（可撤销）
+	note           *store.Note // 非空：✓ 替换卡片里的 file 这张图（可撤销）
+	file           string
+	draft          string // 非空：✓ 替换输入区里这张暂存图（同 Tauri 草稿图 quickLook kind=draft）
 }
 
 type longCropDrag struct {
@@ -53,7 +55,7 @@ func (a *app) openLongEditor(img *image.RGBA, scale float64, display shot.Rect, 
 	title := fmt.Sprintf(tr("长截屏 %d×%d"), pxW, pxH)
 	if origin.pin != nil {
 		title = fmt.Sprintf(tr("编辑钉图 %d×%d"), pxW, pxH)
-	} else if origin.note != nil {
+	} else if origin.note != nil || origin.draft != "" {
 		title = fmt.Sprintf(tr("标注图片 %d×%d"), pxW, pxH)
 	}
 	le.win = mygo.NewWindow(mygo.WindowOptions{
@@ -99,8 +101,12 @@ func (a *app) longFinish(le *longEditor, act shotAction, section string) {
 	}
 	var buf bytes.Buffer
 	_ = (&png.Encoder{CompressionLevel: png.BestSpeed}).Encode(&buf, out)
+	if f := le.origin.draft; act == shotSave && f != "" {
+		a.replaceDraftImage(f, buf.Bytes(), out.Rect.Dx(), out.Rect.Dy())
+		return
+	}
 	if n := le.origin.note; act == shotSave && n != nil {
-		a.replaceNoteImage(*n, buf.Bytes(), out.Rect.Dx(), out.Rect.Dy(), tr("已替换卡片里的图片"))
+		a.replaceNoteImage(*n, le.origin.file, buf.Bytes(), out.Rect.Dx(), out.Rect.Dy(), tr("已替换卡片里的图片"))
 		return
 	}
 	if act == shotSaveAs {
@@ -302,7 +308,7 @@ func (a *app) longEditorView(c *ui.Context, le *longEditor) {
 					e.hist = shot.Redo(e.hist)
 				}
 				shotSep(c, pal)
-				a.shotFrameSliders(c, d, pal, fr)
+				a.shotFrameToggle(c, d, pal, fr)
 				ui.Spacer(c)
 				text(c, fmt.Sprintf("%d × %d", int(out.W), int(out.H)), 11, 16, 400, pal.muted).Font(fontMono).FontFeatures("tnum").Margin(0, 4, 0, 0)
 				if a.shotButton(c, d, pal, "saveas", "download", tr("另存为图片…：保存为 PNG 文件"), false, false, nil).Clicked() {
@@ -315,6 +321,8 @@ func (a *app) longEditorView(c *ui.Context, le *longEditor) {
 					cancelTip, doneTip = tr("放弃标注"), tr("完成：更新钉图（Enter）；长按选择存入的分组")
 				} else if le.origin.note != nil {
 					cancelTip, doneTip = tr("放弃标注"), tr("完成：替换卡片里的原图（Enter，可撤销）；长按选择存入的分组")
+				} else if le.origin.draft != "" {
+					cancelTip, doneTip = tr("放弃标注"), tr("完成：替换输入区里的这张图（Enter）")
 				}
 				if a.shotButton(c, d, pal, "cancel", "x", cancelTip, false, false, nil).Clicked() {
 					le.close()
@@ -322,6 +330,9 @@ func (a *app) longEditorView(c *ui.Context, le *longEditor) {
 				}
 				a.shotCheckButton(c, d, pal, doneTip, false, func() { a.longFinish(le, shotSave, "") })
 			})
+			if a.shotFrameOpen { // 滑块另起一行：窄窗里不再把右侧的尺寸与完成挤出去
+				ui.Row(c).Gap(8).Height(30).Padding(0, 6).AlignItems(ui.Center).Children(func() { a.shotFrameSliders(c, d, pal, fr) })
+			}
 			if showStyle {
 				a.shotStyleRow(c, d, pal, styleKind, styleInk, styleLv)
 			}
@@ -457,14 +468,14 @@ func (a *app) pinSetImage(p *pinWin, img *image.RGBA) {
 	}
 }
 
-// annotateNote：图片卡交给长图标注窗，✓ 替换卡片里的原图。
-func (a *app) annotateNote(n store.Note) {
-	raw, err := a.store.LoadImage(n.ImageFile)
+// openDraftImage：输入区暂存图「查看或编辑」——交给标注窗，✓ 替换这张暂存图。
+func (a *app) openDraftImage(file string) {
+	raw, err := a.store.LoadImage(file)
 	if err != nil {
 		a.showHUD("warn", err.Error())
 		return
 	}
-	src, err := png.Decode(bytes.NewReader(raw))
+	src, _, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
 		a.showHUD("warn", tr("图片读取失败"))
 		return
@@ -473,20 +484,68 @@ func (a *app) annotateNote(n store.Note) {
 	draw.Draw(img, img.Rect, src, src.Bounds().Min, draw.Src)
 	d := mygo.Screen.DisplayNearestPoint(mygo.Screen.CursorScreenPoint())
 	disp := shot.Rect{X: float64(d.Bounds.X), Y: float64(d.Bounds.Y), W: float64(d.Bounds.Width), H: float64(d.Bounds.Height)}
-	a.openLongEditor(img, math.Max(d.ScaleFactor, 1), disp, longOrigin{note: &n, front: n.SourceApp, frontID: n.BundleID})
+	a.openLongEditor(img, math.Max(d.ScaleFactor, 1), disp, longOrigin{draft: file})
 }
 
-// replaceNoteImage：新图入媒体库、换进图片卡，气泡可撤销（换回原图）。
-func (a *app) replaceNoteImage(n store.Note, raw []byte, w, h int, done string) {
+// replaceDraftImage：标注后的新图入媒体库，换掉输入区里原来那张（还在暂存时）。
+func (a *app) replaceDraftImage(old string, raw []byte, w, h int) {
 	file, err := a.store.SaveImage(raw)
 	if err != nil {
 		a.showHUD("warn", err.Error())
 		return
 	}
-	prev, pw, ph, err := a.store.ReplaceImage(n.ID, file, w, h)
+	for i, im := range a.draftImgs {
+		if im.file == old {
+			imgs := slices.Clone(a.draftImgs)
+			imgs[i] = pastedImage{file, w, h}
+			a.draftImgs = imgs
+			return
+		}
+	}
+}
+
+// annotateNote：图片卡交给长图标注窗，✓ 替换卡片里的原图。
+func (a *app) annotateNote(n store.Note) { a.annotateFile(n, n.ImageFile) }
+
+// annotateFile：卡片里指定的那张图交给标注窗（多图 / 图文卡逐张编辑），✓ 原位替换。
+func (a *app) annotateFile(n store.Note, file string) {
+	raw, err := a.store.LoadImage(file)
 	if err != nil {
 		a.showHUD("warn", err.Error())
 		return
 	}
-	a.showHUDUndo("ok", done, func() { _, _, _, _ = a.store.ReplaceImage(n.ID, prev, pw, ph) })
+	src, _, err := image.Decode(bytes.NewReader(raw))
+	if err != nil {
+		a.showHUD("warn", tr("图片读取失败"))
+		return
+	}
+	img := image.NewRGBA(image.Rect(0, 0, src.Bounds().Dx(), src.Bounds().Dy()))
+	draw.Draw(img, img.Rect, src, src.Bounds().Min, draw.Src)
+	d := mygo.Screen.DisplayNearestPoint(mygo.Screen.CursorScreenPoint())
+	disp := shot.Rect{X: float64(d.Bounds.X), Y: float64(d.Bounds.Y), W: float64(d.Bounds.Width), H: float64(d.Bounds.Height)}
+	a.openLongEditor(img, math.Max(d.ScaleFactor, 1), disp, longOrigin{note: &n, file: file, front: n.SourceApp, frontID: n.BundleID})
+}
+
+// replaceNoteImage：新图入媒体库、原位换掉卡片里的 old（任意卡型），气泡可撤销（换回原图）。
+func (a *app) replaceNoteImage(n store.Note, old string, raw []byte, w, h int, done string) {
+	file, err := a.store.SaveImage(raw)
+	if err != nil {
+		a.showHUD("warn", err.Error())
+		return
+	}
+	if old == "" {
+		old = n.ImageFile
+	}
+	prev, err := a.store.ReplaceMediaFile(n.ID, old, file, w, h)
+	if err != nil {
+		if a.detail.id == n.ID && slices.ContainsFunc(a.detail.blocks, func(x store.ContentBlock) bool { return x.File == old }) {
+			a.replaceDetailDraftImage(n.ID, old, file, w, h) // 编辑中刚粘贴、尚未保存的图：只换草稿
+			a.showHUD("ok", done)
+			return
+		}
+		a.showHUD("warn", tr(err.Error()))
+		return
+	}
+	a.replaceDetailDraftImage(n.ID, old, file, w, h)
+	a.showHUDUndo("ok", done, func() { a.store.RestoreContent(prev) })
 }

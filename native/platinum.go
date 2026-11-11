@@ -73,13 +73,18 @@ func (a *app) platinumPanel(c *ui.Context, k tokens) {
 					ui.Box(c).Height(6)
 					a.searchRow(c, k)
 				}
+				if a.focus != nil { // 专注胶囊（同默认布局，放在内容井上方）
+					ui.Column(c).Margin(6, -12, -6, -12).Children(func() { a.focusCapsule(c, k) })
+				}
 				well := ui.Column(c).Grow(1).Margin(6, 0, 0, 0)
 				ptWell(well).Children(func() { a.ptPage(c, k) })
 			})
 			if a.page == pageNotes && a.noteSub == 0 {
 				a.ptComposer(c, k)
 			}
-			a.ptStatusBar(c, k)
+			if !a.store.Settings().KeyHintsOff {
+				a.ptStatusBar(c, k)
+			}
 		})
 	})
 	if a.menuOpen {

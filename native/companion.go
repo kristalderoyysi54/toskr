@@ -2,6 +2,7 @@ package main
 
 import (
 	"slices"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -44,21 +45,21 @@ func (a *app) panelBounds() mygo.Rectangle {
 		def = barRect(wa, e)
 	}
 	a.docked = false
+	// 跟随应用优先（同 Tauri show_panel：伴随候选先于自由位置）——此前自由位置先返回，选过「自由移动」后跟随应用永不生效
+	if a.target.PID != 0 && !st.CompanionOff && slices.Contains(st.Companion, a.target.BundleID) {
+		if f, ok := macos.FocusedWindowFrame(int32(a.target.PID)); ok && f.W >= minTargetW && f.H >= minTargetH {
+			a.docked = true
+			fd := mygo.Screen.DisplayNearestPoint(mygo.Point{X: int(f.X + f.W/2), Y: int(f.Y + f.H/2)})
+			return dockBeside(f, fd.WorkArea, w, st.SidebarEdge == "left", st.Gap())
+		}
+	}
 	if st.FreeMove && (st.PanelX != 0 || st.PanelY != 0) {
 		r := mygo.Rectangle{X: st.PanelX, Y: st.PanelY, Width: w, Height: h}
 		if onSomeScreen(r) {
 			return r
 		}
 	}
-	if a.target.PID == 0 || st.CompanionOff || !slices.Contains(st.Companion, a.target.BundleID) {
-		return def
-	}
-	f, ok := macos.FocusedWindowFrame(a.target.PID)
-	if !ok {
-		return def
-	}
-	a.docked = true
-	return dockBeside(f, wa, w, st.SidebarEdge == "left", st.Gap())
+	return def
 }
 
 // onSomeScreen：矩形左上角落在某块屏的可用区内（换屏 / 拔显示器后不把面板放到屏外）。
@@ -111,6 +112,9 @@ func (a *app) rememberPanelFrame() {
 func (a *app) placePanel() {
 	a.placed = a.panelBounds()
 	a.applySizeLimits()
+	// 程序摆放是机器移动（同 Tauri mark_machine_move）：否则 OnMove 把它当用户拖动——清掉锚点、
+	// 400ms 后按「拖拽入坞」评估，默认位置离屏缘仅 10pt 就被判入坞，自由移动也会自动贴边隐藏
+	a.edgeMachineUntil = time.Now().Add(250 * time.Millisecond)
 	a.panel.SetBounds(a.placed)
 }
 

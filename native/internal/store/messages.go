@@ -14,12 +14,13 @@ import (
 
 // MessageContext 是捕获时客户端内存里已有的前文。
 type MessageContext struct {
-	MessageID    string `json:"messageId"`
-	SenderUID    string `json:"senderUid"`
-	SenderName   string `json:"senderName,omitempty"`
-	OccurredAtMs int64  `json:"occurredAtMs,omitempty"`
-	MessageType  string `json:"messageType,omitempty"`
-	Text         string `json:"text"`
+	MessageID    string   `json:"messageId"`
+	SenderUID    string   `json:"senderUid"`
+	SenderName   string   `json:"senderName,omitempty"`
+	OccurredAtMs int64    `json:"occurredAtMs,omitempty"`
+	MessageType  string   `json:"messageType,omitempty"`
+	Text         string   `json:"text"`
+	Images       []string `json:"images,omitempty"` // 前文里的图片（媒体库文件名）
 }
 
 // Message 与 Tauri MessageItem 同字段（camelCase JSON，可直接读 Tauri 的 messages 数组）。
@@ -40,6 +41,7 @@ type Message struct {
 	MatchedRuleIDs   []string         `json:"matchedRuleIds"`
 	MessageType      string           `json:"messageType,omitempty"`
 	Text             string           `json:"text"`
+	Images           []string         `json:"images,omitempty"` // 消息里的图片（已存进媒体库的文件名，按出现顺序）
 	Context          []MessageContext `json:"context"`
 	Status           string           `json:"status"` // new | waiting | done | archived
 	LinkedTaskID     string           `json:"linkedTaskId,omitempty"`
@@ -129,6 +131,9 @@ func mergeMessage(cur *Message, in Message) Message {
 		in.OccurredAtMs = cur.OccurredAtMs
 	}
 	in.Text = cmp(in.Text, cur.Text)
+	if len(in.Images) == 0 {
+		in.Images = cur.Images
+	}
 	if len(in.Context) < len(cur.Context) {
 		in.Context = cur.Context
 	}

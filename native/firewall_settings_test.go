@@ -14,7 +14,7 @@ func TestFirewallSettings(t *testing.T) {
 	a, _ := testApp(t)
 	a.openSettingsState()
 	set := ui.NewTester(a.settingsView, 1040, 2000)
-	a.setJump = "粘贴与隐私"
+	a.setJump = "隐私保护"
 	set.Frame()
 	set.Frame()
 	for _, s := range []string{"发送前隐私检查", "检测类别", "全部开启", "自定义敏感字段", "未添加"} {

@@ -33,7 +33,7 @@ func (a *app) draftTargetChanged() bool {
 	if d.pid == 0 || (d.pid == a.target.PID && d.started == a.targetStarted) {
 		return false
 	}
-	a.sendMode, a.sendPNG, a.sendPH, a.lastRedactions = "", nil, sendRedaction{}, 0
+	a.sendMode, a.sendPNG, a.sendPH, a.lastRedactions, a.sendFinal, a.sendKeep = "", nil, sendRedaction{}, 0, "", nil
 	if a.out.id != "" { // 使用概览：记为这次准备的受阻（同 Tauri draft-target-changed）
 		a.store.RecordOutcome(store.OutcomeEvent{DeliveryID: a.out.id, Type: store.OutBlocked, Reason: "draft-target-changed"})
 		a.out = outcomeDraft{}

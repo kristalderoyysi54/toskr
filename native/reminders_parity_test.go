@@ -7,16 +7,21 @@ import (
 	"github.com/toskr/native/internal/store"
 )
 
-// 今天速记原文入库、到期今天默认时间并提示（同 Tauri TodayQuickAdd）。
+// 今天速记：没写时间的到期今天默认时间并提示（同 Tauri TodayQuickAdd）；写了别的日子按识别结果入库，提示去了哪天。
 func TestTodayQuickAddKeepsRawText(t *testing.T) {
 	a, _ := testApp(t)
 	now := time.Date(2026, 11, 5, 10, 0, 0, 0, time.Local)
 	a.clock = func() time.Time { return now }
-	a.taskSub, a.taskDraft = 0, "明天 买菜"
+	a.taskSub, a.taskDraft = 0, "买菜"
 	a.addTaskDraft()
 	ts := a.store.Tasks()
-	if len(ts) != 1 || ts[0].Text != "明天 买菜" || ts[0].DueAt.Hour() != 20 || a.hudText != "已加到今天 20:00" {
+	if len(ts) != 1 || ts[0].Text != "买菜" || ts[0].DueAt.Hour() != 20 || a.hudText != "已加到今天 20:00" {
 		t.Fatalf("%+v hud=%q", ts, a.hudText)
+	}
+	a.taskDraft = "明天 买花"
+	a.addTaskDraft()
+	if got := a.store.Tasks()[0]; got.Text != "买花" || got.DueAt.Day() != 6 || a.hudText != "已加到 明天 09:00" {
+		t.Fatalf("%+v hud=%q", got, a.hudText)
 	}
 }
 

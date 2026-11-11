@@ -172,7 +172,7 @@ func (a *app) messagesPage(c *ui.Context, k tokens) {
 			empty = fmt.Sprintf(tr("没有匹配「%s」的消息"), q)
 		}
 		a.strip(c, k, swapKey, &a.bar.msgs, len(view), -1, nil, "", empty, func(i int, h float32) {
-			ui.Scroll(c).Width(h*16/17*1.25).FillHeight().Scrollbars(false).Key("msgtile-" + view[i].ID).Children(func() {
+			ui.Scroll(c).Width(h * 16 / 17 * 1.25).FillHeight().Scrollbars(false).Key("msgtile-" + view[i].ID).Children(func() {
 				a.messageCard(c, k, view[i], view, reasonLabels(view[i], rules))
 			})
 		})
@@ -289,17 +289,24 @@ func (a *app) msgClick(id string, mods ui.Modifiers, view []store.Message) {
 
 func (a *app) messageCard(c *ui.Context, k tokens, m store.Message, view []store.Message, reasons []string) {
 	body := m.Text
-	if body == "" {
+	if body == "" && len(m.Images) == 0 {
 		body = "[" + cmpOr(m.MessageType, tr("非文本消息")) + "]"
 	}
 	sender := cmpOr(cmpOr(m.SenderName, m.SenderUID), tr("未知发送者"))
 	conv := cmpOr(m.ConversationName, m.ConversationID)
 	checked := a.msgChosen[m.ID]
 	box := ui.Column(c).Padding(10, 12).Radius(12).Background(k.card).Key("msg-" + m.ID).Label(sender)
+	if a.msgScrollTo == m.ID { // ↑↓ 选中的消息滚进视口（只在换选那一帧）
+		box.ScrollIntoView()
+		a.msgScrollTo = ""
+	}
 	hovered := box.Hovered()
 	elevated(box, k, hovered || checked)
 	if box.Clicked() {
 		a.msgClick(m.ID, box.ClickModifiers(), view)
+	}
+	if box.DoubleClicked() { // 同剪贴卡：双击放大阅读
+		a.openMessageDetail(m)
 	}
 	box.ContextMenu(func(menu *ui.Menu) { a.messageMenu(menu, m) })
 	box.Children(func() {
@@ -329,10 +336,13 @@ func (a *app) messageCard(c *ui.Context, k tokens, m store.Message, view []store
 		}
 		open := a.msgOpen["x:"+m.ID]
 		// 正文不设可选中：mygo 的可选文字会吃掉点击，整卡点选（Tauri 的主交互）就失效了；前文与草稿仍可选中复制
-		t := text(c, body, 12, 19.5, 400, k.fg).Wrap().Margin(6, 0, 0, 0)
-		if !open {
-			t.MaxLines(4)
+		if body != "" {
+			t := text(c, body, 12, 19.5, 400, k.fg).Wrap().Margin(6, 0, 0, 0)
+			if !open {
+				t.MaxLines(4)
+			}
 		}
+		a.messageThumbs(c, k, m)
 		if utf8.RuneCountInString(body) > 120 {
 			l := fmt.Sprintf(tr("展开全文 · %d 字"), utf8.RuneCountInString(body))
 			if open {
@@ -364,11 +374,17 @@ func (a *app) messageCard(c *ui.Context, k tokens, m store.Message, view []store
 				ui.Column(c).Margin(6, 0, 0, 0).Padding(8).Gap(6).Radius(8).Background(k.track).Children(func() {
 					for _, x := range m.Context {
 						who := cmpOr(cmpOr(x.SenderName, x.SenderUID), tr("未知发送者"))
-						what := cmpOr(x.Text, "["+cmpOr(x.MessageType, tr("非文本消息"))+"]")
+						what := x.Text
+						if what == "" && len(x.Images) == 0 {
+							what = "[" + cmpOr(x.MessageType, tr("非文本消息")) + "]"
+						}
 						ui.Row(c).Gap(0).AlignItems(ui.Start).Children(func() {
 							text(c, who, 11, 17, 500, k.fg)
 							text(c, "："+what, 11, 17, 400, k.muted).Wrap().Selectable().Grow(1).Basis(0)
 						})
+						if len(x.Images) > 0 { // 前文里的图：缩略，点「放大阅读」一起看
+							ui.Row(c).Label(fmt.Sprintf(tr("%d 张图片"), len(x.Images))).Children(func() { a.cardThumbStrip(c, k, x.Images) })
+						}
 					}
 					text(c, tr("仅来自捕获时客户端内存，不会补拉历史或改变已读。"), 10, 14, 400, k.muted).Wrap()
 				})
@@ -394,8 +410,7 @@ func (a *app) messageCard(c *ui.Context, k tokens, m store.Message, view []store
 			})
 		}
 		if checked {
-			ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Radius(12).PassThrough().
-				InsetShadow(0, 0, 8, 1, k.selRim).InsetShadow(0, 0, 24, 2, k.selHalo)
+			selectionGlow(c, k, 12, 24)
 		}
 		if hovered || a.msgDraftBusy == m.ID {
 			a.messageActions(c, k, m)
@@ -430,8 +445,15 @@ func (a *app) messageActions(c *ui.Context, k tokens, m store.Message) {
 		btn := func(icon, tip string) ui.Element {
 			return floatIconButton(c, k, "ma-"+icon, icon, tip, icon == "trash-2", false)
 		}
-		if strings.TrimSpace(m.Text) != "" && btn("send", tr("发送到对话")).Clicked() {
-			a.send([]store.Note{{ID: m.ID, Text: m.Text}})
+		if (strings.TrimSpace(m.Text) != "" || len(m.Images) > 0) && btn("send", tr("发送到对话")).Clicked() {
+			n := store.Note{ID: m.ID, Text: m.Text, Attachments: m.Images} // 图文消息连图一起发
+			if strings.TrimSpace(m.Text) == "" {
+				n = store.Note{ID: m.ID, Kind: "image", ImageFile: m.Images[0], Attachments: m.Images[1:]}
+			}
+			a.send([]store.Note{n})
+		}
+		if btn("maximize-2", tr("放大阅读（空格 / 双击卡片）")).Clicked() {
+			a.openMessageDetail(m)
 		}
 		if done {
 			if btn("rotate-ccw", tr("恢复为待处理")).Clicked() {

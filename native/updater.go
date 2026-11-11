@@ -199,7 +199,7 @@ func (a *app) aboutRows(c *ui.Context, s settingsTokens) []setSection {
 		fn(&cur)
 		_ = a.store.SetSettings(cur)
 	}
-	ver := setRow{title: "Toskr Native " + mygo.App.Version(), hint: cmpOr(a.updateMsg, "mygo · "+tr("原生界面")), control: func() {
+	ver := setRow{title: appName() + " " + mygo.App.Version(), hint: cmpOr(a.updateMsg, tr("原生界面")), control: func() {
 		switch {
 		case a.upd.installing:
 			text(c, fmt.Sprintf(tr("%d%% · 完成后自动重启"), a.upd.progress), 11, 16, 400, tok(c).muted).FontFeatures("tnum")
@@ -236,8 +236,8 @@ func (a *app) aboutRows(c *ui.Context, s settingsTokens) []setSection {
 		a.linkRow(c, s, "更新日志", "所有版本", repoURL+"/releases"),
 	)
 	return []setSection{
-		{tr("关于"), rows},
-		{tr("链接"), []setRow{a.linkRow(c, s, "项目主页", "GitHub", repoURL), a.linkRow(c, s, "报告 Bug", "提 Issue", repoURL+"/issues/new")}},
+		{title: tr("关于"), rows: rows},
+		{title: tr("链接"), rows: []setRow{a.linkRow(c, s, "项目主页", "GitHub", repoURL), a.linkRow(c, s, "报告 Bug", "提 Issue", repoURL+"/issues/new")}},
 	}
 }
 

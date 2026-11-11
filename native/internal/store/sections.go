@@ -1,9 +1,12 @@
 package store
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/toskr/native/internal/codehl"
 )
 
 // Section 是笔记分组。inbox / clipboard 为系统分组（ID 稳定，不可删）。
@@ -98,10 +101,28 @@ func (s *Store) MoveSection(id string, delta int) error {
 	return s.mutate(func() bool {
 		i := slices.IndexFunc(s.sections, func(x Section) bool { return x.ID == id })
 		j := i + delta
+		// 剪贴板分组在笔记页不可见：相邻交换跳过它，否则「上移/下移」看不出变化（同 Tauri moveSection）
+		for j >= 0 && j < len(s.sections) && s.sections[j].ID == SectionClipboard {
+			j += delta
+		}
 		if i < 0 || j < 0 || j >= len(s.sections) {
 			return false
 		}
 		s.sections[i], s.sections[j] = s.sections[j], s.sections[i]
+		return true
+	})
+}
+
+// ReorderSection 把 activeID 移到 overID 的位置（同 Tauri reorderSections / dnd-kit arrayMove）。
+func (s *Store) ReorderSection(activeID, overID string) error {
+	return s.mutate(func() bool {
+		i := slices.IndexFunc(s.sections, func(x Section) bool { return x.ID == activeID })
+		j := slices.IndexFunc(s.sections, func(x Section) bool { return x.ID == overID })
+		if i < 0 || j < 0 || i == j {
+			return false
+		}
+		sec := s.sections[i]
+		s.sections = slices.Insert(slices.Delete(s.sections, i, i+1), j, sec)
 		return true
 	})
 }
@@ -156,7 +177,87 @@ func (s *Store) RestoreMany(notes []Note) error {
 	})
 }
 
-// Merge 把 ids（按给定顺序）合并为一条，放在第一条的位置；返回被合并的原项（供撤销）。
+// mergedContent 同 Tauri mergeNotes 的内容合成：sources 按捕获先后（列表底→顶）；各卡内容块保持原序拼接，
+// 图片卡的自动占位文字剔除，有文字的来源之间空一行；标签合并去重。纯图片合并为图片卡，正文为「图片 N 张」。
+func mergedContent(sources []Note, sep string) Note {
+	var parts [][]ContentBlock
+	textSources, lastText := 0, -1
+	var tags []string
+	var alts map[string]string
+	for i, n := range sources {
+		caption := strings.TrimSpace(n.Text)
+		keepText := n.Kind != "image" || (caption != "" && !imagePlaceholder.MatchString(caption))
+		var bs []ContentBlock
+		if n.Blocks != nil {
+			for _, b := range n.Blocks {
+				if keepText || b.Type == "image" {
+					bs = append(bs, b)
+				}
+			}
+		} else {
+			if keepText && n.Text != "" {
+				bs = append(bs, ContentBlock{Type: "text", Text: n.Text})
+			}
+			for _, b := range n.ContentBlocks() {
+				if b.Type == "image" {
+					bs = append(bs, b)
+				}
+			}
+		}
+		if slices.ContainsFunc(bs, func(b ContentBlock) bool { return b.Type != "image" }) {
+			textSources++
+			lastText = i
+		}
+		parts = append(parts, bs)
+		for _, t := range n.Tags {
+			if !slices.Contains(tags, t) {
+				tags = append(tags, t)
+			}
+		}
+		for f, alt := range n.ImageAlts { // 图片说明随图带进合并卡
+			if alts == nil {
+				alts = map[string]string{}
+			}
+			if _, ok := alts[f]; !ok {
+				alts[f] = alt
+			}
+		}
+	}
+	var blocks []ContentBlock
+	for i, bs := range parts {
+		blocks = append(blocks, bs...)
+		if i != lastText && lastText >= 0 && slices.ContainsFunc(bs, func(b ContentBlock) bool { return b.Type != "image" }) {
+			blocks = append(blocks, ContentBlock{Type: "text", Text: sep})
+		}
+	}
+	var out Note
+	out.Tags, out.ImageAlts = tags, alts
+	var imgs []ContentBlock
+	for _, b := range blocks {
+		if b.Type == "image" && b.File != "" && !slices.ContainsFunc(imgs, func(x ContentBlock) bool { return x.File == b.File }) {
+			imgs = append(imgs, b)
+		}
+	}
+	if len(imgs) > 0 {
+		out.ImageFile, out.ImageW, out.ImageH = imgs[0].File, imgs[0].Width, imgs[0].Height
+		for _, b := range imgs[1:] {
+			out.Attachments = append(out.Attachments, b.File)
+		}
+	}
+	if textSources == 0 { // 纯图片：图片卡 + 占位正文（图片由主图 / 附件投影，不另写块）
+		out.Kind, out.Text = "image", fmt.Sprintf("图片 %d 张", len(imgs))
+		return out
+	}
+	out.Text = TextFromBlocks(blocks)
+	if len(imgs) > 0 {
+		out.Blocks = blocks // 图文混排：块是权威顺序
+	}
+	out.CodeLang = codehl.Detect(out.Text)
+	return out
+}
+
+// Merge 同 Tauri mergeNotes 笔记分支：合并卡留在最上面那张的位置与身份（新 ID），其余卡消费掉；
+// 内容按列表底→顶（捕获先后）合成，图片一并带上。originals 按存储顺序，供 Unmerge 原样放回。
 func (s *Store) Merge(ids []string, sep string) (Note, []Note, bool) {
 	var merged Note
 	var originals []Note
@@ -165,19 +266,31 @@ func (s *Store) Merge(ids []string, sep string) (Note, []Note, bool) {
 		if len(ids) < 2 {
 			return false
 		}
-		first := s.index(ids[0])
-		if first < 0 {
-			return false
-		}
-		var texts []string
+		pick := map[string]bool{}
 		for _, id := range ids {
-			if i := s.index(id); i >= 0 {
-				originals = append(originals, s.notes[i])
-				texts = append(texts, s.notes[i].Text)
+			pick[id] = true
+		}
+		first := -1
+		for i, n := range s.notes {
+			if pick[n.ID] {
+				if first < 0 {
+					first = i
+				}
+				originals = append(originals, n)
 			}
 		}
+		if len(originals) < 2 {
+			originals = nil
+			return false
+		}
+		src := slices.Clone(originals)
+		slices.Reverse(src)
+		c := mergedContent(src, sep)
 		merged = originals[0]
-		merged.ID, merged.Text, merged.HTML, merged.Done = newID(), strings.Join(texts, sep), "", false
+		merged.ID, merged.Done, merged.HTML, merged.UpdatedAt = newID(), false, "", time.Now()
+		merged.Text, merged.Kind, merged.Blocks, merged.CodeLang, merged.Tags = c.Text, c.Kind, c.Blocks, c.CodeLang, c.Tags
+		merged.ImageFile, merged.ImageW, merged.ImageH, merged.Attachments, merged.ImageAlts = c.ImageFile, c.ImageW, c.ImageH, c.Attachments, c.ImageAlts
+		merged.URL, merged.LinkTitle, merged.LinkIcon = "", "", ""
 		s.notes[first] = merged
 		drop := map[string]bool{}
 		for _, o := range originals[1:] {
@@ -223,16 +336,9 @@ func (s *Store) MergeClipsAsNew(ids []string, sep string) (Note, bool) {
 			return false
 		}
 		slices.Reverse(src)
-		var texts []string
-		for _, n := range src {
-			if n.Kind != "image" {
-				texts = append(texts, n.Text)
-			}
-		}
-		combo = Note{ID: newID(), Section: SectionClipboard, Text: strings.Join(texts, sep), CreatedAt: time.Now()}
-		if len(texts) == 0 {
-			return false // 纯图片合并原生版暂不支持组合图卡
-		}
+		c := mergedContent(src, sep) // 图片一并带上；纯图片合成组合图卡（同 Tauri）
+		combo = Note{ID: newID(), Section: SectionClipboard, Text: c.Text, Kind: c.Kind, Blocks: c.Blocks, CodeLang: c.CodeLang, Tags: c.Tags,
+			ImageFile: c.ImageFile, ImageW: c.ImageW, ImageH: c.ImageH, Attachments: c.Attachments, ImageAlts: c.ImageAlts, CreatedAt: time.Now()}
 		s.notes = slices.Concat([]Note{combo}, s.notes)
 		ok = true
 		return true

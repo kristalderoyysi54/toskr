@@ -32,7 +32,7 @@ func (a *app) queueKeys(c *ui.Context) {
 	}
 	for i, key := range []ui.Key{ui.Key1, ui.Key2, ui.Key3, ui.Key4, ui.Key5, ui.Key6, ui.Key7, ui.Key8, ui.Key9} {
 		if c.Shortcut(ui.Cmd, key) && i < len(a.notes) { // Paste 式快发
-			a.send([]store.Note{a.notes[i]})
+			a.sendFromList([]store.Note{a.notes[i]})
 		}
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyM) {
@@ -66,10 +66,15 @@ func (a *app) queueKeys(c *ui.Context) {
 			a.focusAt(0)
 		}
 	}
+	peeking := a.peekOn && len(a.peekFiles) > 1 // 悬停窥视多图时 ← / → 换张，不动列表选择
 	for _, step := range []struct {
 		key ui.Key
 		d   int
 	}{{ui.KeyLeft, -1}, {ui.KeyRight, 1}} {
+		if peeking && c.Shortcut(0, step.key) {
+			a.peekStep(step.d)
+			continue
+		}
 		if c.Shortcut(0, step.key) && len(a.notes) > 0 {
 			next := a.selected + step.d
 			if !a.focusList {
@@ -191,7 +196,8 @@ func (a *app) queuePage(c *ui.Context) {
 	})
 	a.sectionChips(c)
 	if len(a.pending) > 0 {
-		a.preflightBar(c)
+		_, vh := c.Size()
+		ui.Scroll(c).MaxHeight(max(240, vh*0.6)).Children(func() { a.preflightBar(c) })
 	}
 	a.noteList(c)
 	if len(a.done) > 0 {
@@ -448,17 +454,30 @@ func (a *app) cardMenu(c *ui.Context, m *ui.Menu, i int, n store.Note) {
 	section(m, parts["send"])
 	m.Separator()
 	section(m, parts["main"])
-	if n.Kind == "image" && !multi { // 原生版图片工具（Tauri 在预览窗里），固定显示
+	if files := n.MediaFiles(); len(files) > 0 && !multi { // 原生版图片工具（Tauri 在预览窗里）：一张直接作用，多张（多图 / 图文卡）选哪一张
 		m.Separator()
-		if m.Item(tr("钉到屏幕")).Chosen() {
-			a.pinImage(n)
+		tool := func(label string, do func(string)) {
+			if len(files) == 1 {
+				if m.Item(label).Chosen() {
+					do(files[0])
+				}
+				return
+			}
+			m.Submenu(label, func(sm *ui.Menu) {
+				for i, f := range files {
+					label := fmt.Sprintf(tr("图片 %d"), i+1)
+					if alt := n.AltOf(f); alt != "" {
+						label += " · " + clipRunes(alt, 16)
+					}
+					if sm.Item(label).Chosen() {
+						do(f)
+					}
+				}
+			})
 		}
-		if m.Item(tr("标注…")).Chosen() {
-			a.annotateNote(n)
-		}
-		if m.Item(tr("图片打码…")).Chosen() {
-			a.openRedactor(n)
-		}
+		tool(tr("钉到屏幕"), a.pinImageFile)
+		tool(tr("标注…"), func(f string) { a.annotateFile(n, f) })
+		tool(tr("图片打码…"), func(f string) { redactFileFn(a, n, f) })
 	}
 	m.Separator()
 	if len(parts["organize"]) > 0 {
@@ -470,7 +489,7 @@ func (a *app) cardMenu(c *ui.Context, m *ui.Menu, i int, n store.Note) {
 			section(sm, parts["convert"])
 			if aiPolish {
 				sm.Submenu("AI", func(am *ui.Menu) {
-					for _, act := range aiActions {
+					for _, act := range a.allAIActions() {
 						if am.Item(tr(act.label)).Chosen() {
 							a.runAI(n, act)
 						}

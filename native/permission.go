@@ -88,7 +88,7 @@ func openPrivacy(pane string) {
 
 // resetInputMonitoring：删掉本应用的输入监控旧条目（签名变了旧条目不生效），再打开设置让用户重新勾选。
 func (a *app) resetInputMonitoring() {
-	out, err := exec.Command("/usr/bin/tccutil", "reset", "ListenEvent", "com.toskr.native").CombinedOutput()
+	out, err := exec.Command("/usr/bin/tccutil", "reset", "ListenEvent", bundleID()).CombinedOutput()
 	if err != nil {
 		a.showHUD("warn", tr("重置失败：")+strings.TrimSpace(string(out)))
 		return

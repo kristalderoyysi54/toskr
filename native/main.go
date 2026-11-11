@@ -3,6 +3,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 )
 
 func main() {
+	macos.WebFontSmoothing() // 同 Tauri -webkit-font-smoothing: antialiased：关掉字体平滑，字不发粗
 	if !mygo.App.RequestSingleInstanceLock() {
 		return
 	}
@@ -30,10 +32,20 @@ func main() {
 		}
 	})
 	mygo.App.WhenReady(func() {
+		if os.Getenv(handoffEnv) == "1" { // 把迭代期的数据交接给正式版后退出（handoff.go）
+			msg, err := runHandoff()
+			if err != nil {
+				msg = "交接没有完成：" + err.Error()
+			}
+			log.Print(msg)
+			_, _ = mygo.Dialog.Message(mygo.MessageOptions{Title: appName(), Message: msg})
+			mygo.App.Quit()
+			return
+		}
 		var err error
 		if a, err = start(); err != nil {
 			log.Print(err)
-			_, _ = mygo.Dialog.Message(mygo.MessageOptions{Title: "Toskr Native 无法启动", Message: err.Error()})
+			_, _ = mygo.Dialog.Message(mygo.MessageOptions{Title: appName() + " 无法启动", Message: err.Error()})
 			mygo.App.Quit()
 		}
 	})
@@ -55,7 +67,9 @@ func start() (*app, error) {
 		diag.Push("数据目录: %s", dir)
 	}
 	_, statErr := os.Stat(filepath.Join(dir, store.DataFile))
-	key, err := dataKey(errors.Is(statErr, os.ErrNotExist))
+	fresh := errors.Is(statErr, os.ErrNotExist)
+	store.ReleaseDefaults = released()
+	key, err := dataKey(fresh)
 	if err != nil {
 		return nil, err
 	}
@@ -64,6 +78,10 @@ func start() (*app, error) {
 		return nil, err
 	}
 	seedIfRequested(st)
+	var adopted *store.TauriReport
+	if released() { // 旧版点「更新」后的第一次启动：把旧版数据静默接过来（没成功的话下次启动再试，成功后不再做）
+		adopted = adoptLegacyData(st)
+	}
 	setLanguage(st.Settings().Language, mygo.App.PreferredLanguages())
 	appLive = true
 	applyAppearance(st.Settings())
@@ -116,9 +134,13 @@ func start() (*app, error) {
 		a.panelMovedByUser()
 	})
 	a.startEdgeSupervisor()
+	a.startCompanionTracker()
 	a.panel.OnBlur(func() {
 		diag.Push("面板失焦 pinned=%v", a.pinned)
-		a.remaskAll()             // 秘文失焦即回遮罩（钉住时也一样，与 Tauri 一致）
+		a.remaskAll()                        // 秘文失焦即回遮罩（钉住时也一样，与 Tauri 一致）
+		if time.Now().Before(a.yieldUntil) || a.cmpWin != nil { // 发送时主动让出焦点 / 正在对比窗里核对预检：都不是用户点走
+			return
+		}
 		if a.edgeHideNow(false) { // 已入坞：失焦改为贴边滑出（同 Tauri edge_hide_now）
 			return
 		}
@@ -164,6 +186,10 @@ func start() (*app, error) {
 	a.startTap()
 	a.watchClipboard()
 	a.pinned = os.Getenv("TOSKR_PIN") == "1" // 测量用：面板常驻不随失焦收起
+	a.adoptLegacyAutostart()
+	if adopted != nil {
+		a.showHUDForce("ok", fmt.Sprintf(tr("已升级到新版，数据都在（%d 条内容）"), adopted.Notes))
+	}
 	if !mygo.App.WasOpenedAtLogin() {
 		a.showPanel()
 	}

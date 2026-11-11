@@ -305,7 +305,7 @@ func TestLearningSettings(t *testing.T) {
 	a.setJump = "帮助与更新"
 	set.Frame()
 	set.Frame()
-	for _, s := range []string{"上手课程", "基础：收集并粘贴", "3 步 · 已完成 0 / 3", "进阶：合并发送", "进阶：智能脱敏与还原", "先完成基础课", "新手导览", "重看导览"} {
+	for _, s := range []string{"上手课程", "基础：收集并粘贴", "已完成 0 / 3", "0/3", "进阶：合并发送", "进阶：智能脱敏与还原", "先完成基础课", "新手导览", "重看导览"} {
 		if !set.HasText(s) {
 			t.Fatalf("缺 %q：%v", s, set.Texts())
 		}

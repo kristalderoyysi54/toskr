@@ -58,3 +58,24 @@ func TestCrossCursorSwap(t *testing.T) {
 		t.Fatalf("关：%x 应回到系统 %x", cur, sys)
 	}
 }
+
+// 二维码识别：TOSKR_QR_PNG 指向一张二维码图时核对内容（没有现成的二维码生成器，默认跳过）；空白图返回空、不报错。
+func TestDetectBarcodes(t *testing.T) {
+	blank := image.NewRGBA(image.Rect(0, 0, 200, 200))
+	draw.Draw(blank, blank.Bounds(), image.White, image.Point{}, draw.Src)
+	path := filepath.Join(t.TempDir(), "blank.png")
+	f, _ := os.Create(path)
+	_ = png.Encode(f, blank)
+	f.Close()
+	if got, err := DetectBarcodes(path); err != nil || len(got) != 0 {
+		t.Fatalf("空白图 %v %v", got, err)
+	}
+	qr := os.Getenv("TOSKR_QR_PNG")
+	if qr == "" {
+		return
+	}
+	got, err := DetectBarcodes(qr)
+	if err != nil || len(got) != 1 || got[0] != os.Getenv("TOSKR_QR_TEXT") {
+		t.Fatalf("%v %v", got, err)
+	}
+}

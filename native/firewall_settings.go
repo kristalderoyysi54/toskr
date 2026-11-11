@@ -65,7 +65,7 @@ func (a *app) firewallRows(c *ui.Context, k tokens, s settingsTokens, st store.S
 		fieldVal = fmt.Sprintf(tr("%d 个"), n)
 	}
 	return []setRow{
-		{title: tr("发送前隐私检查"), hint: hint, control: func() {
+		{title: tr("发送前隐私检查"), icon: "shield-check", hint: hint, control: func() {
 			v := on
 			if toggle(c, s, &v) {
 				a.patchSettings(func(x *store.Settings) { x.FirewallOff = !v })
@@ -89,7 +89,11 @@ func (a *app) firewallRows(c *ui.Context, k tokens, s settingsTokens, st store.S
 				a.firewallFields(c, k, s, st, on)
 			}
 		}},
-		{title: tr("发现后如何处理"), hint: tr("按粘贴规则：在面板里确认、遮罩后发送或保留原文（见下方「发送方案」）。本机规则可能漏检，发送前仍可在预检中核对最终内容。")},
+		{title: tr("发现后如何处理"), control: func() { // 同 Tauri NavigateRow：去「粘贴规则」改各应用的敏感处理
+			if disclosure(c, k, "fw-handle", tr("按粘贴规则"), false) {
+				a.setSub = 0
+			}
+		}},
 	}
 }
 

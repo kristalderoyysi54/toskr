@@ -18,6 +18,41 @@ import (
 
 var clipAppRetentionSteps = []int{1, 7, 30, 365}
 
+// retentionSteps 同 Tauri RETENTION_STEPS：1–6 天、1–3 周、1–11 个月、1 年、2 年、无限（0）。
+var retentionSteps = func() []int {
+	var s []int
+	for d := 1; d <= 6; d++ {
+		s = append(s, d)
+	}
+	for w := 1; w <= 3; w++ {
+		s = append(s, w*7)
+	}
+	for m := 1; m <= 11; m++ {
+		s = append(s, m*30)
+	}
+	return append(s, 365, 730, 0)
+}()
+
+// retentionIndex：天数对应的档位；不在档位上的（旧数据如 10 天）取不短于它的最近一档。
+func retentionIndex(days int) int {
+	if days <= 0 {
+		return len(retentionSteps) - 1
+	}
+	for i, d := range retentionSteps {
+		if d >= days {
+			return i
+		}
+	}
+	return len(retentionSteps) - 2
+}
+
+func retentionLabel(days int) string {
+	if days <= 0 {
+		return tr("无限")
+	}
+	return formatRetention(days)
+}
+
 // formatRetention 同 Tauri formatRetention。
 func formatRetention(days int) string {
 	switch {
@@ -76,14 +111,14 @@ func (a *app) clipSourceMenu(row ui.Element, label string, band []store.Note) {
 			}
 		})
 		if bundle != "" {
-			excluded := slices.Contains(st.ExcludedApps, bundle)
+			excluded := slices.Contains(st.ClipExcludedApps, bundle)
 			title := fmt.Sprintf(tr("不再收集来自「%s」"), label)
 			if excluded {
 				title = fmt.Sprintf(tr("已不收集「%s」"), label)
 			}
 			if m.Item(title).Disabled(excluded).Chosen() {
-				a.patchSettings(func(x *store.Settings) { x.ExcludedApps = append(slices.Clone(x.ExcludedApps), bundle) })
-				a.setExcluded = strings.Join(a.store.Settings().ExcludedApps, "\n") // 设置窗编辑态同步，免得保存时覆盖回去
+				a.patchSettings(func(x *store.Settings) { x.ClipExcludedApps = append(slices.Clone(x.ClipExcludedApps), bundle) }) // 只停剪贴收集，不影响双击划词（同 Tauri）
+				a.setClipExcluded = strings.Join(a.store.Settings().ClipExcludedApps, "\n")                                        // 设置窗编辑态同步，免得保存时覆盖回去
 				a.showHUD("ok", fmt.Sprintf(tr("已不再收集来自「%s」的复制，现有记录保留"), label))
 			}
 		}

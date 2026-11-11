@@ -56,6 +56,9 @@ func NoteBlocks(n Note) []ContentBlock {
 	return []ContentBlock{{Type: "text", Text: n.Text}}
 }
 
+// IsImagePlaceholder：图片卡的自动占位标题（「图片 30×20」「图片 3 张」「截图 W×H」），不算真实备注。
+func IsImagePlaceholder(s string) bool { return imagePlaceholder.MatchString(strings.TrimSpace(s)) }
+
 var imagePlaceholder = regexp.MustCompile(`^(?:图片 (?:\d+×\d+|\d+ 张)|截图 \d+×\d+|Screenshot \d+×\d+)$`)
 
 // BuildNotesExport 生成 notes.md 与要打包的媒体文件名（按出现顺序去重）。

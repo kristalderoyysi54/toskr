@@ -74,9 +74,10 @@ func overThumb(c *ui.Context, content func()) {
 	ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Center().Children(content)
 }
 
-// swapView 给「同一位置换内容」的容器（子页签、筛选、视图切换、设置页）加进出场：新内容从切换方向 8pt 外淡入、
-// 旧内容原地淡出（160ms ease-standard，同 --duration-overlay）；减弱动效时 mygo 只保留淡入淡出。
-// Tauri 只有顶层页签有 PageSlide、其余瞬切；用户 2026-11-06 要求所有切换统一成渐隐渐显。
+// swapView 给「同一位置换内容」的容器（子页签、筛选、视图切换、设置页）加进场：新内容从切换方向 10pt 外横移淡入
+// （180ms ease-standard），旧内容直接让位——旧版旧内容原地淡出，与新内容叠在一起成重影（用户 2026-11-09 定为
+// 剪贴视图切换同款）；减弱动效时 mygo 只保留淡入。容器内不要放切换器本身，否则滑块的共享布局动画会被一起重挂打断。
+// Tauri 只有顶层页签有 PageSlide、其余瞬切；用户 2026-11-06 要求所有切换统一带过渡。
 func (a *app) swapView(e ui.Element, group string, idx int) ui.Element {
 	return e.Key(group + "-" + itoa(idx)).Transition(a.swapTransition(group, idx))
 }
@@ -87,10 +88,10 @@ func (a *app) swapTransition(group string, idx int) ui.ElementTransition {
 	}
 	dx := float32(0)
 	if prev, ok := a.swapIdx[group]; ok && prev != idx {
-		dx = 8 * sign(idx-prev)
+		dx = 10 * sign(idx-prev)
 	}
 	a.swapIdx[group] = idx
-	return ui.ElementTransition{Duration: 160 * time.Millisecond, Ease: easeStandard, Colors: true, Enter: &ui.Motion{X: dx}, Exit: &ui.Motion{}}
+	return ui.ElementTransition{Duration: 180 * time.Millisecond, Ease: easeStandard, Colors: true, Enter: &ui.Motion{X: dx}}
 }
 
 // foldTransition：分组折叠 / 展开时内容沿纵向收拢并淡出、展开时反向（200ms ease-standard）；减弱动效时只淡入淡出。

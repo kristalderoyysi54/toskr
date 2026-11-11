@@ -70,7 +70,7 @@ func TestImagePrivacyMaskAndSend(t *testing.T) {
 	if !tt.HasText("图片隐私检查 · 1 张") || !tt.HasText("1 项 · 发送原图") || len(sys.sent()) != 0 {
 		t.Fatalf("应拦下等处理 %v", tt.Texts())
 	}
-	_ = tt.Click("遮挡全部图片敏感区域")
+	_ = tt.Click("遮挡全部敏感区域")
 	tt.Frame()
 	if !tt.HasText("1 项 · 已遮挡 1 处 · 发送副本") {
 		t.Fatalf("%v", tt.Texts())

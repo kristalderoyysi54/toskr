@@ -42,6 +42,7 @@ func (a *app) pinShot(img *image.RGBA, x, y, w, h float64) {
 		Content: ui.View(func(c *ui.Context) { a.pinView(c, p) }),
 	})
 	p.win.SetBounds(bounds)
+	macos.MakeBorderless(p.win.NativeHandle(), false) // 钉图落在截图原位：贴屏顶时不被推到菜单栏下
 	p.win.SetVisibleOnAllWorkspaces(true)
 	p.win.OnClosed(func() { a.pins = slices.DeleteFunc(a.pins, func(q *pinWin) bool { return q == p }) })
 	a.pins = append(a.pins, p)
@@ -104,7 +105,7 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 		c.After(left)
 		ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Center().PassThrough().Children(func() {
 			ui.Box(c).Padding(4, 8).Radius(8).Background(gray(0, 0.7)).Children(func() {
-				text(c, fmt.Sprintf("%d%%", int(math.Round(p.factor*100))), 12, 17, 400, colWhite).Font(fontMono).FontFeatures("tnum")
+				text(c, fmt.Sprintf("%d%%", int(math.Round(p.factor*100))), 12, 17, 400, colWhite).Font(fontMono).FontFeatures("tnum").MinWidth(36).TextAlign(ui.Center) // 等宽字体 4 字符宽，99%→100% 胶囊不变宽
 			})
 		})
 	}

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -14,19 +15,37 @@ import (
 
 const aiKeyName = "ai-api-key"
 
-type aiAction struct{ label, instruction string }
+type aiAction struct {
+	label, instruction string
+	replace            bool // 全文替换类（翻译、改写成另一种文体）：结果并排显示，不做逐段差异
+	custom             bool // 用户在设置里自己加的
+}
 
 var aiActions = []aiAction{
-	{"润色", "把下面的文字润色得更清晰通顺，保持原意和语言。"},
-	{"精简", "把下面的文字压缩到一半长度以内，保留关键信息。"},
-	{"翻译为英文", "把下面的文字翻译成自然的英文。"},
-	{"翻译为中文", "把下面的文字翻译成自然的简体中文。"},
-	{"写成提示词", "把下面的需求改写成给 AI 编码助手的清晰指令：目标、约束、验收标准。"},
+	{label: "润色", instruction: "把下面的文字润色得更清晰通顺，保持原意和语言。"},
+	{label: "精简", instruction: "把下面的文字压缩到一半长度以内，保留关键信息。"},
+	{label: "翻译为英文", instruction: "把下面的文字翻译成自然的英文。", replace: true},
+	{label: "翻译为中文", instruction: "把下面的文字翻译成自然的简体中文。", replace: true},
+	{label: "写成提示词", instruction: "把下面的需求改写成给 AI 编码助手的清晰指令：目标、约束、验收标准。", replace: true},
+}
+
+// allAIActions：内置动作 + 设置里的自定义动作（名称 + 一句指令）。
+func (a *app) allAIActions() []aiAction {
+	out := append([]aiAction(nil), aiActions...)
+	for _, c := range a.store.Settings().AIActions {
+		if strings.TrimSpace(c.Label) != "" && strings.TrimSpace(c.Instruction) != "" {
+			out = append(out, aiAction{label: c.Label, instruction: c.Instruction, custom: true})
+		}
+	}
+	return out
 }
 
 var aiRewrite = ai.Rewrite // 测试替换
 
 var aiKey = func() string { // 测试替换
+	if usesLegacyKeychain() { // 正式版：沿用旧版的钥匙串记录
+		return legacyAIKey()
+	}
 	k, err := mygo.Secrets.Get(aiKeyName)
 	if err != nil {
 		return ""
@@ -41,6 +60,9 @@ func (a *app) cancelAI() {
 	}
 	a.aiCancel()
 	a.aiBusy, a.aiCancel = "", nil
+	if rv := a.aiReviewing; rv != nil { // 核对流程：一并作废
+		rv.dead, a.aiReviewing = true, nil
+	}
 	a.showHUD("info", tr("已取消 AI 请求"))
 }
 
@@ -58,6 +80,10 @@ func (a *app) aiBusyMark(c *ui.Context, k tokens, id string) {
 // runAI 改写笔记：结果作为新笔记插在原笔记上方（原文保留，便于对照与撤销）。
 func (a *app) runAI(n store.Note, act aiAction) {
 	if a.aiBusy != "" {
+		return
+	}
+	if aiReviewable(n) { // 纯文字卡：在详情窗里流式显示并逐段核对
+		a.startAIReview(n, act)
 		return
 	}
 	st := a.store.Settings()

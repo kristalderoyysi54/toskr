@@ -56,10 +56,7 @@ func (a *app) askRetention(old, next int) {
 				time.AfterFunc(100*time.Millisecond, wait)
 				return
 			}
-			label := tr("不按时间清理")
-			if next > 0 {
-				label = fmt.Sprintf(tr("%d 天"), next)
-			}
+			label := retentionLabel(next)
 			title := fmt.Sprintf(tr("确定把保留时长调整为「%s」吗？"), label)
 			msg := tr("比新的时长限制更旧的记录将被立即清理。\n已固定（★）的记录不会被删除。")
 			pfGo(func() {

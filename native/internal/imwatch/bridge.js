@@ -120,6 +120,94 @@
     } catch (_) {}
     return toPlain(value);
   };
+  // ---- 消息里的图片：只在 IM 页面里用它自己的登录态读取（fetch credentials:include），转成 data URL 交给 Toskr ----
+  const IMG_EXT = /\.(png|jpe?g|gif|webp|heic|heif|bmp)(?:[?#]|$)/i;
+  const IMG_KEY = /(img|image|pic|photo|thumb|origin|cover|src|url|path|uri)/i;
+  const TEXTY_KEY = /^(text|content|title|desc|description|name|n|file_name|fileName)$/;
+  const KEY_RANK = [/origin|raw|big|large|full|hd/i, /^(url|src|uri|path)$/i, /middle|medium/i, /thumb|small|mini|preview/i];
+  const rankKey = (key) => { const i = KEY_RANK.findIndex((re) => re.test(key)); return i < 0 ? KEY_RANK.length : i; };
+  const imageish = (key, value) => {
+    if (typeof value !== "string" || value.length < 6 || value.length > 4_000_000) return false;
+    if (value.startsWith("data:image/")) return true;
+    if (!/^(https?:|file:|blob:|\/)/i.test(value)) return false;
+    if (TEXTY_KEY.test(key)) return false;
+    return IMG_EXT.test(value) || IMG_KEY.test(key);
+  };
+  const findImages = (value, out = [], depth = 0, seen = new WeakSet()) => {
+    if (out.length >= 9 || depth > 8 || value === null || value === undefined) return out;
+    if (typeof value === "string") {
+      const parsed = parseJson(value);
+      return parsed !== value ? findImages(parsed, out, depth + 1, seen) : out;
+    }
+    if (typeof value !== "object" || seen.has(value)) return out;
+    seen.add(value);
+    if (Array.isArray(value)) { for (const item of value) findImages(item, out, depth + 1, seen); return out; }
+    let best = null;
+    for (const key of Object.keys(value)) {
+      if (imageish(key, value[key]) && (!best || rankKey(key) < rankKey(best[0]))) best = [key, value[key]];
+    }
+    if (best && !out.includes(best[1])) out.push(best[1]);
+    for (const key of Object.keys(value)) {
+      if (typeof value[key] === "object" || (typeof value[key] === "string" && /^[\[{]/.test(value[key]))) findImages(value[key], out, depth + 1, seen);
+    }
+    return out;
+  };
+  // 没认出图片、正文又像「[图片]」时，回传字段形状（键路径 + 值类型 / 域名，不含正文）供诊断
+  const probeShape = (value, prefix = "", out = [], depth = 0) => {
+    if (out.length >= 60 || depth > 6 || value === null || value === undefined) return out;
+    if (typeof value === "string") {
+      const parsed = parseJson(value);
+      if (parsed !== value) return probeShape(parsed, prefix, out, depth + 1);
+      let shape = "str(" + value.length + ")";
+      const m = /^(https?):\/\/([^/?#]+)/i.exec(value);
+      if (m) shape = m[1] + "(" + m[2] + ")";
+      else if (/^(file:|blob:|data:)/i.test(value)) shape = value.slice(0, 5);
+      out.push(prefix + "=" + shape);
+      return out;
+    }
+    if (typeof value !== "object") { out.push(prefix + "=" + typeof value); return out; }
+    for (const key of Object.keys(value).slice(0, 40)) probeShape(value[key], prefix ? prefix + "." + key : key, out, depth + 1);
+    return out;
+  };
+  const imagesOf = (record, parsed, text) => {
+    const urls = findImages(parsed && typeof parsed === "object" ? parsed : null);
+    findImages(record && { content: record.content, msg_body: record.msg_body, msgBody: record.msgBody, extra: record.extra, attachment: record.attachment }, urls);
+    const probe = !urls.length && (!text || /\[(图片|image|photo|表情)\]/i.test(text))
+      ? probeShape({ msg: parsed, content: record && record.content, type: record && (record.msg_type ?? record.msgType) })
+      : null;
+    return { urls, probe };
+  };
+  const blobToDataUrl = (blob) => new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : null);
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(blob);
+  });
+  const loadImage = async (url) => {
+    if (url.startsWith("data:image/")) return url.length < 7_000_000 ? url : null;
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 8000);
+    try {
+      const response = await fetch(url, { credentials: "include", cache: "force-cache", signal: ctl.signal });
+      if (!response.ok) return null;
+      const blob = await response.blob();
+      if (blob.size === 0 || blob.size > 5_000_000) return null;
+      if (blob.type && !blob.type.startsWith("image/") && !IMG_EXT.test(url)) return null;
+      return await blobToDataUrl(blob);
+    } catch (_) {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const loadImages = async (urls) => {
+    const output = [];
+    for (const url of urls.slice(0, 9)) {
+      const data = await loadImage(url);
+      if (data) output.push({ data });
+    }
+    return output;
+  };
   const findText = (value, depth = 0) => {
     if (value === null || value === undefined || depth > 10) return [];
     if (typeof value === "string") return value.trim() ? [value] : [];
@@ -226,6 +314,7 @@
         occurredAtMs,
         messageType: asId(first(record.msg_type, record.msgType, parsed && parsed.type)) || null,
         text: findText(first(parsed && parsed.dt, parsed, record.content, record.text)).join("\n").trim(),
+        __images: imagesOf(record, parsed, "x"), // 前文不回传探针（第三个参数非空即不探）
       });
     }
     output.sort((a, b) => (a.occurredAtMs || 0) - (b.occurredAtMs || 0));
@@ -297,6 +386,7 @@
       text,
       context: contextFor(conversationId, id, occurredAtMs, messageState, conversationByMessage),
       raw: { message: snapshot(record), session: snapshot(session) },
+      __images: imagesOf(record, parsed, text),
     };
   };
   const signalEnvelope = (record, mentionedSelf, followedSender) => {
@@ -350,6 +440,7 @@
         findText(first(parsed && parsed.dt, parsed)).join("\n").trim(),
       context: [],
       raw: { signal: snapshot(record) },
+      __images: imagesOf(record, parsed, String(first(record.content, record.text, ""))),
     };
   };
   const signalLists = (main) => {
@@ -417,6 +508,22 @@
     draining = true;
     while (pending.length && !stopped) {
       const current = pending[0];
+      const found = current.message.__images;
+      if (found) { // 图片在发出前异步取回（只取一次）；取不到的跳过，正文照常送达
+        delete current.message.__images;
+        if (found.urls.length) current.message.images = await loadImages(found.urls);
+        if (found.urls.length && !current.message.images.length) current.message.imageProbe = ["fetch-failed:" + found.urls.length];
+        else if (found.probe) current.message.imageProbe = found.probe;
+      }
+      let budget = 9; // 前文的图片：每条最多 3 张、合计 9 张
+      for (const item of current.message.context || []) {
+        const urls = item.__images ? item.__images.urls.slice(0, 3) : [];
+        delete item.__images;
+        if (urls.length && budget > 0) {
+          item.images = await loadImages(urls.slice(0, budget));
+          budget -= item.images.length;
+        }
+      }
       if (!(await post(current.message))) break;
       pending.shift();
       queued.delete(current.key);
@@ -437,6 +544,8 @@
         ]));
         current.message.raw = { ...current.message.raw, ...message.raw };
         if (!current.message.text && message.text) current.message.text = message.text;
+        const mine = current.message.__images, theirs = message.__images;
+        if (theirs && theirs.urls.length && (!mine || !mine.urls.length)) current.message.__images = theirs;
         if ((message.context || []).length >= (current.message.context || []).length) {
           current.message.context = message.context;
         }

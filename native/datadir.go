@@ -26,11 +26,37 @@ const dataDirPointer = "toskr-datadir.txt"
 var defaultDir = dataDir // 测试替换成临时目录，免得写到真实的默认目录
 
 // activeDataDir 读指针：没有指针用默认目录；指针指向的目录不可用时用默认目录并返回 missing。
-func activeDataDir() (dir, missing string) {
-	def := defaultDir()
+func activeDataDir() (dir, missing string) { return resolveDataDir(defaultDir(), released()) }
+
+// legacyPointerPath：旧版的数据目录指针（com.toskr.app/toskr-datadir.txt）。测试替换。
+var legacyPointerPath = func() string { return filepath.Join(filepath.Dir(releaseDataDir()), dataDirPointer) }
+
+// inheritedDataDir：正式版还没有自己的指针、默认目录里也还没有数据时，沿用旧版用户自定义的数据目录——
+// 数据放在它下面的 v1 子目录（与旧版文件分开，理由同 dataDir）。之后在设置里换目录会写自己的指针；
+// 换回默认目录后默认目录里有了数据，这里就不再生效。
+func inheritedDataDir(def string) string {
+	if _, err := os.Stat(filepath.Join(def, store.DataFile)); err == nil {
+		return ""
+	}
+	raw, err := os.ReadFile(legacyPointerPath())
+	p := strings.TrimSpace(string(raw))
+	if err != nil || p == "" || !filepath.IsAbs(p) {
+		return ""
+	}
+	sub := filepath.Join(p, "v1")
+	if fi, err := os.Stat(p); err == nil && fi.IsDir() {
+		_ = os.MkdirAll(sub, 0o700) // 旧目录在：建好子目录；不在（外置盘没挂载）则按「不可用」处理
+	}
+	return sub
+}
+
+func resolveDataDir(def string, inherit bool) (dir, missing string) {
 	raw, err := os.ReadFile(filepath.Join(def, dataDirPointer))
 	p := strings.TrimSpace(string(raw))
-	if err != nil || p == "" {
+	if (err != nil || p == "") && inherit {
+		p = inheritedDataDir(def)
+	}
+	if p == "" {
 		return def, ""
 	}
 	if fi, err := os.Stat(p); err != nil || !fi.IsDir() || !filepath.IsAbs(p) {
@@ -130,11 +156,11 @@ func (a *app) previewDataDir(target string) {
 func (a *app) dataDirRows(c *ui.Context, k tokens, s settingsTokens) []setRow {
 	cur := a.store.Dir()
 	custom := filepath.Clean(cur) != filepath.Clean(defaultDir())
-	hint := cur
+	hint := shortHome(cur)
 	if custom {
 		hint += tr("（自定义）")
 	}
-	rows := []setRow{{title: tr("数据目录"), hint: hint, control: func() {
+	rows := []setRow{{title: tr("数据目录"), hint: hint, tip: cur, control: func() {
 		ui.Row(c).Gap(6).Children(func() {
 			if custom && button(c, s, "恢复默认") {
 				a.previewDataDir(defaultDir())
@@ -190,7 +216,7 @@ func (a *app) dataDirRows(c *ui.Context, k tokens, s settingsTokens) []setRow {
 
 func defaultAutoBackupDir() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "Documents", "Toskr Native 自动备份")
+	return filepath.Join(home, "Documents", appName()+" 自动备份")
 }
 
 func (a *app) autoBackupDir() string {
@@ -284,7 +310,7 @@ func (a *app) autoBackupRows(c *ui.Context, k tokens, s settingsTokens) []setRow
 				go a.runAutoBackup(true, time.Now())
 			}
 		}},
-		setRow{title: tr("备份位置"), hint: a.autoBackupDir(), control: func() {
+		setRow{title: tr("备份位置"), hint: shortHome(a.autoBackupDir()), tip: a.autoBackupDir(), control: func() {
 			ui.Row(c).Gap(6).Children(func() {
 				if st.AutoBackupDir != "" && button(c, s, "恢复默认") {
 					cur := a.store.Settings()

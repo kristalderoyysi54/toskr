@@ -24,7 +24,7 @@ func TestPromptTemplatesAddSendAndDelete(t *testing.T) {
 	if err := tt.ChooseMenuItem("用模板发送", "添加模板…"); err != nil {
 		t.Fatalf("无模板时应给添加入口 %v %v", err, tt.Menu())
 	}
-	if !a.snipAdd || a.setPage != setPagePaste || a.setSub != 1 {
+	if !a.snipAdd || a.setPage != setPagePaste || a.setSub != 2 {
 		t.Fatalf("应打开设置的提示词模板页 add=%v page=%d sub=%d", a.snipAdd, a.setPage, a.setSub)
 	}
 	st := ui.NewTester(a.settingsView, 1040, 720)
@@ -100,7 +100,7 @@ func TestCheckSendShowsPayloadFirst(t *testing.T) {
 		t.Fatalf("%v %v", err, tt.Menu())
 	}
 	tt.Frame()
-	if !tt.HasText("发送前检查：发往 ChatGPT · 稳妥发送") || !tt.HasText("第一行\n第二行") || len(sys.sent()) != 0 {
+	if !tt.HasText("ChatGPT · 稳妥发送") || !tt.HasText("第一行\n第二行") || len(sys.sent()) != 0 {
 		t.Fatalf("应先展示内容不发送 %v", tt.Texts())
 	}
 	_ = tt.Click("发送")
@@ -135,7 +135,7 @@ func TestTemplateOptionClickChecksFirst(t *testing.T) {
 		t.Fatalf("%v %v", err, tt.Menu())
 	}
 	tt.Frame()
-	if len(sys.sent()) != 0 || len(a.pending) != 1 || !tt.HasText("翻译成英文：早上好") {
+	if len(sys.sent()) != 0 || len(a.pending) != 1 || a.pf.final != "翻译成英文：早上好" {
 		t.Fatalf("应先显示检查条 sent=%v %v", sys.sent(), tt.Texts())
 	}
 	if a.forceCheck {
@@ -152,7 +152,7 @@ func TestExportTemplatesFromSettings(t *testing.T) {
 	orig := saveTemplatesPath
 	t.Cleanup(func() { saveTemplatesPath = orig })
 	saveTemplatesPath = func(*app) (string, error) { return out, nil }
-	a.openSettingsAt(setPagePaste, 1)
+	a.openSettingsAt(setPagePaste, 2)
 	set := ui.NewTester(a.settingsView, 1040, 2000)
 	set.Frame()
 	if err := set.Click("导出"); err != nil {

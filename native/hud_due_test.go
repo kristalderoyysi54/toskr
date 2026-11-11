@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -84,5 +86,36 @@ func TestDueHUDCompleteAndOpen(t *testing.T) {
 	a.hudOpen()
 	if cur, ok := a.current(); a.page != pageNotes || !ok || cur.ID != n.ID {
 		t.Fatalf("应定位到捕获的卡 page=%d", a.page)
+	}
+}
+
+// 捕获气泡：预览前带内容类型小标（纯文本不标），状态圆叠来源应用图标；换成别的气泡后清掉。
+func TestCaptureHUDSourceAndTag(t *testing.T) {
+	a, _ := testApp(t)
+	if got := captureTag(store.Note{Text: "纯文本"}); got != "" {
+		t.Fatalf("纯文本不标 %q", got)
+	}
+	if got := captureTag(store.Note{Kind: "link", Text: "https://a.com"}); got != "链接" {
+		t.Fatalf("链接 %q", got)
+	}
+	if got := captureTag(store.Note{Text: "图文", Attachments: []string{"a.png", "b.png"}}); got != "图文 ×3" {
+		t.Fatalf("图文 %q", got)
+	}
+	a.showHUDUndo("added", "SELECT 1;", func() {})
+	a.hudTarget, a.hudSrc, a.hudTag = "n1", "com.apple.Safari", "sql"
+	hud := ui.NewTester(a.hudView, hudW, hudH)
+	for _, dark := range []bool{false, true} {
+		hud.SetDark(dark)
+		hud.Frame()
+		if !hud.HasText("sql") || !hud.HasText("SELECT 1;") || !hud.HasText("已捕获") {
+			t.Fatalf("应有类型小标与预览 %v", hud.Texts())
+		}
+		if dir := os.Getenv("TOSKR_SHOT_DIR"); dir != "" {
+			save(t, filepath.Join(dir, "hud-tag-"+map[bool]string{false: "light", true: "dark"}[dark]+".png"), hud.Image())
+		}
+	}
+	a.showHUD("ok", "完成")
+	if a.hudSrc != "" || a.hudTag != "" {
+		t.Fatal("换气泡后应清来源与小标")
 	}
 }

@@ -10,6 +10,7 @@ var (
 	AXUIElementCopyAttributeValue func(el, attr uintptr, out *uintptr) int32
 	kAXTrustedCheckOptionPrompt   uintptr
 	CGPreflightListenEventAccess  func() bool
+	CGRequestListenEventAccess    func() bool
 )
 
 func loadAX() {
@@ -18,12 +19,19 @@ func loadAX() {
 	purego.RegisterLibFunc(&AXUIElementCopyAttributeValue, ax, "AXUIElementCopyAttributeValue")
 	kAXTrustedCheckOptionPrompt = deref(ax, "kAXTrustedCheckOptionPrompt")
 	purego.RegisterLibFunc(&CGPreflightListenEventAccess, cg, "CGPreflightListenEventAccess")
+	purego.RegisterLibFunc(&CGRequestListenEventAccess, cg, "CGRequestListenEventAccess")
 }
 
 // ListenAuthorized：系统「输入监控」授权查询（不弹框）。
 func ListenAuthorized() bool {
 	load()
 	return CGPreflightListenEventAccess()
+}
+
+// RequestListen：弹「输入监控」系统授权框（已决定过则立即返回当前结果）。
+func RequestListen() bool {
+	load()
+	return CGRequestListenEventAccess()
 }
 
 // AXTrusted 报告是否已获辅助功能授权；prompt 为 true 时系统弹出授权引导。

@@ -98,8 +98,8 @@ func init() {
 	l.bandLine, d.bandLine = gray(0.922, 0.6), gray(1, 0.06)
 	l.pressed, d.pressed = gray(0, 0.05), gray(1, 0.1)
 	l.hoverBg, d.hoverBg = gray(0, 0.05), gray(1, 0.05)
-	lp, dp := lightSet.primary, darkSet.primary
-	l.selRim, l.selHalo, d.selRim, d.selHalo = lp.Alpha(0.58), lp.Alpha(0.22), dp.Alpha(0.78), dp.Alpha(0.38)
+	// 琉璃（默认方案）选中柔光用中性灰（用户 2026-11-10 指定，有意偏离原版的主色蓝）；其他方案在 schemed() 里按主色重算
+	l.selRim, l.selHalo, d.selRim, d.selHalo = l.fg.Alpha(0.30), l.fg.Alpha(0.12), d.fg.Alpha(0.45), d.fg.Alpha(0.20)
 }
 
 var (

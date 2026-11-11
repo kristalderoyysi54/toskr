@@ -35,6 +35,7 @@ func (r pfRegion) block() bool { return !slices.Contains(core.WarnCategories, r.
 
 type pfImage struct {
 	note     int
+	file     string // 卡片里的哪张图（图文 / 多图卡每张各查一次）
 	status   string // scanning | ready | failed | disabled
 	err      string
 	img      *image.RGBA
@@ -44,6 +45,7 @@ type pfImage struct {
 	rawOK    bool // 未经 OCR 的原图已确认发送
 	gen      int
 	thumb    *ui.Bitmap // 实际发送图（遮挡后）缩略
+	orig     *ui.Bitmap // 原图（对比窗左栏）
 	thumbKey string
 }
 
@@ -83,43 +85,47 @@ func (a *app) pfScanImages() {
 	rules := a.scanRules()
 	old := p.images
 	p.images = nil
+	seen := map[string]bool{}
 	for i, n := range a.pending {
-		if n.Kind != "image" || n.ImageFile == "" {
-			continue
-		}
-		im := &pfImage{note: i, status: "scanning", masked: map[string]bool{}, kept: map[string]bool{}}
-		for _, o := range old {
-			if o.note == i {
-				im.gen = o.gen + 1
+		for _, file := range n.MediaFiles() { // 每张卡的全部图片（主图 / 附件 / 图文块）都要过检查：现在它们都会被发出去
+			if seen[file] {
+				continue
 			}
-		}
-		p.images = append(p.images, im)
-		if rules.Off {
-			im.status = "disabled"
-			continue
-		}
-		raw, err := a.store.LoadImage(n.ImageFile)
-		if err == nil {
-			im.img, err = decodeRGBA(raw)
-		}
-		if err != nil {
-			im.status, im.err = "failed", err.Error()
-			continue
-		}
-		img, gen := im.img, im.gen
-		pfGo(func() {
-			lines, err := pfOCR(img)
-			a.onMain(func() {
-				if !slices.Contains(a.pf.images, im) || im.gen != gen {
-					return // 已取消或已重新检测
+			seen[file] = true
+			im := &pfImage{note: i, file: file, status: "scanning", masked: map[string]bool{}, kept: map[string]bool{}}
+			for _, o := range old {
+				if o.file == file {
+					im.gen = o.gen + 1
 				}
-				if err != nil {
-					im.status, im.err = "failed", err.Error()
-					return
-				}
-				im.regions, im.status = imageRegions(lines, img.Rect.Dx(), img.Rect.Dy(), rules), "ready"
+			}
+			p.images = append(p.images, im)
+			if rules.Off {
+				im.status = "disabled"
+				continue
+			}
+			raw, err := a.store.LoadImage(file)
+			if err == nil {
+				im.img, err = decodeRGBA(raw)
+			}
+			if err != nil {
+				im.status, im.err = "failed", err.Error()
+				continue
+			}
+			img, gen := im.img, im.gen
+			pfGo(func() {
+				lines, err := pfOCR(img)
+				a.onMain(func() {
+					if !slices.Contains(a.pf.images, im) || im.gen != gen {
+						return // 已取消或已重新检测
+					}
+					if err != nil {
+						im.status, im.err = "failed", err.Error()
+						return
+					}
+					im.regions, im.status = imageRegions(lines, img.Rect.Dx(), img.Rect.Dy(), rules), "ready"
+				})
 			})
-		})
+		}
 	}
 }
 
@@ -271,13 +277,25 @@ func (a *app) pfImagesSection(c *ui.Context, k tokens, policy string) {
 		text(c, fmt.Sprintf(tr("图片隐私检查 · %d 张"), len(p.images)), 12, 17, 600, k.fg)
 		for i, im := range p.images {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Key(fmt.Sprintf("pf-img-%d", i)).Children(func() {
-				if bm := a.pfThumb(im); bm != nil {
+				if bm := a.pfThumb(im); bm != nil { // 点开对比窗：左原图（红框标命中）右实际发送
 					w, h := float32(im.img.Rect.Dx()), float32(im.img.Rect.Dy())
-					ui.Image(c, bm).Size(min(48*w/max(h, 1), 96), 48).Radius(4).Tooltip(tr("实际发送"))
+					tb := ui.Box(c).Size(min(48*w/max(h, 1), 96), 48).Radius(4).Clip().Border(1, k.fg.Alpha(0.1)).Key(fmt.Sprintf("pf-thumb-%d", i)).
+						Role(ui.RoleButton).Label(tr("点击放大对比原图与发送图")).Tooltip(tr("点击放大对比原图与发送图"))
+					tb.Children(func() {
+						ui.Image(c, bm).Fill()
+						if tb.Hovered() {
+							ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Background(ui.RGBA(0, 0, 0, 0.35)).Center().Children(func() { // token-exception: 缩略图悬停暗罩
+								licon(c, "maximize-2", 14, colWhite)
+							})
+						}
+					})
+					if tb.Clicked() {
+						a.openPFCompare()
+					}
 				}
 				text(c, imageStatusLine(im), 11, 16, 400, k.muted).Wrap().Grow(1).Basis(0)
 				if im.status == "failed" {
-					if button(c, stok(c), "重试 OCR") {
+					if pfButton(c, k, "pf-retry", tr("重试 OCR"), "", false, false) {
 						act = a.pfScanImages
 					}
 				}
@@ -322,17 +340,18 @@ func (a *app) pfImagesSection(c *ui.Context, k tokens, policy string) {
 		}
 		hasRegions := slices.ContainsFunc(p.images, func(im *pfImage) bool { return len(im.regions) > 0 })
 		if hasRegions {
-			ui.Row(c).Gap(6).Children(func() {
-				if ui.Button(c, tr("遮挡全部图片敏感区域")).Clicked() {
+			// 主操作占满一行、次操作降为文字链接（设计清单 ②：不出现一排同款按钮，窄面板也不溢出）
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				if pfButton(c, k, "pf-maskall", tr("遮挡全部敏感区域"), tr("遮挡全部图片里的敏感文字（不可逆纯色，只作用于发送副本）"), true, true) {
 					act = func() { a.pfMaskImages(func(*pfImage, pfRegion) bool { return true }, true) }
 				}
-				if ui.Button(c, tr("图片全部不遮挡")).Tooltip(tr("本次图片全部不遮挡，按原图发出；文字脱敏不受影响")).Clicked() {
+				if linkButton(c, k, "pf-unmaskall", tr("全部不遮挡")) {
 					act = func() { a.pfMaskImages(func(*pfImage, pfRegion) bool { return true }, false) }
 				}
 			})
 		}
 		if policy != "requireRedaction" && policy != "" && slices.ContainsFunc(p.images, func(im *pfImage) bool { return im.status == "failed" && !im.rawOK }) {
-			if ui.Button(c, tr("确认发送未经 OCR 的原图")).Clicked() {
+			if pfButton(c, k, "pf-rawimg", tr("确认发送未经 OCR 的原图"), "", false, false) {
 				act = func() {
 					for _, im := range a.pf.images {
 						if im.status == "failed" {

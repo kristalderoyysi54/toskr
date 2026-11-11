@@ -1,2 +1,4 @@
 build/
 .mygo/
+build-release/
+/native

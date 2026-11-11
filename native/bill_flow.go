@@ -125,7 +125,7 @@ func (a *app) startConfirm(s *catalogService, credit bool) {
 	now := dayStart(a.now())
 	f.step, f.kind, f.name, f.amount, f.note, f.catalog = "confirm", 0, "", "", "", ""
 	f.category, f.cycle, f.due, f.start, f.repayDay = "other", 1, now, now, "10"
-	f.remind = []int{3, 1} // 同 Tauri billDefaultReminderOffsets 默认：提前 3 天 + 提前 1 天
+	f.remind = a.store.Settings().BillDefaultRemind() // 同 Tauri billDefaultReminderOffsets（设置 → 提醒「账单默认提醒」）
 	f.focusName = true
 	if pms := a.usedPayMethods(); len(pms) > 0 {
 		f.method = pms[0]

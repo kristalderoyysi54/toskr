@@ -19,6 +19,7 @@ func TestRecentDeliveryDrawer(t *testing.T) {
 	a, tt := testApp(t, "怎么写周报")
 	a.sys = &recSys{}
 	a.target = macos.FrontApp{PID: 42, Name: "ChatGPT", BundleID: "com.openai.chat"}
+	tt.Frame() // 目标就绪后头部不再有「重新识别」钮，按新布局点
 	if err := tt.Click("最近发送"); err != nil {
 		t.Fatal(err)
 	}

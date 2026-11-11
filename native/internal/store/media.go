@@ -61,6 +61,16 @@ func (s *Store) MediaStats() (refs, notes, missing int) {
 			used[b.IconFile] = true
 		}
 	}
+	for _, m := range s.messages { // IM 消息里的图片
+		for _, f := range m.Images {
+			used[f] = true
+		}
+		for _, x := range m.Context {
+			for _, f := range x.Images {
+				used[f] = true
+			}
+		}
+	}
 	s.mu.Unlock()
 	for f := range used {
 		if _, err := os.Stat(filepath.Join(s.mediaDir(), f)); err != nil {
@@ -81,6 +91,16 @@ func (s *Store) GCMedia() int {
 	for _, b := range s.bills {
 		if b.IconFile != "" {
 			used[b.IconFile] = true
+		}
+	}
+	for _, m := range s.messages { // IM 消息里的图片
+		for _, f := range m.Images {
+			used[f] = true
+		}
+		for _, x := range m.Context {
+			for _, f := range x.Images {
+				used[f] = true
+			}
 		}
 	}
 	s.mu.Unlock()

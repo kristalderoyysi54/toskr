@@ -170,7 +170,8 @@ func (a *app) openLongWindows(lc *longCapture) {
 		Content: ui.View(func(c *ui.Context) { a.longFrameView(c, lc) }),
 	})
 	lc.frameWin.SetBounds(fb)
-	lc.frameWin.SetIgnoreMouseEvents(true) // 滚轮要落到选区下面的页面
+	macos.MakeBorderless(lc.frameWin.NativeHandle(), true) // 选区贴屏顶时边框不被系统推到菜单栏下（与遮罩同因）
+	lc.frameWin.SetIgnoreMouseEvents(true)                 // 滚轮要落到选区下面的页面
 	lc.frameWin.SetVisibleOnAllWorkspaces(true)
 	lc.frameWin.ShowInactive()
 	lc.frameID.Store(macos.WindowNumber(lc.frameWin.NativeHandle()))
@@ -183,6 +184,7 @@ func (a *app) openLongWindows(lc *longCapture) {
 		Content: ui.View(func(c *ui.Context) { a.longPreviewView(c, lc) }),
 	})
 	lc.panelWin.SetBounds(pb)
+	macos.MakeBorderless(lc.panelWin.NativeHandle(), true)
 	lc.panelWin.SetVisibleOnAllWorkspaces(true)
 	lc.panelWin.ShowInactive()
 }

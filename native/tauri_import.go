@@ -19,6 +19,9 @@ import (
 
 // tauriKey 可替换（测试）。
 var tauriKey = func() ([]byte, error) {
+	if usesLegacyKeychain() { // 正式版与旧版共用一把数据密钥：经辅助程序读，不弹授权框
+		return dataKey(false)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute) // 等用户在授权框里处理
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "/usr/bin/security", "find-generic-password",
@@ -62,6 +65,8 @@ func (a *app) importTauri(done func(string, error)) {
 			rep, err = a.store.ImportTauri(dir, key)
 			clear(key)
 			if err == nil {
+				repCopy := rep
+				a.onMain(func() { a.lastTauriReport = &repCopy })
 				recovery := rep.Recovery
 				if recovery == "" { // WriteRecoveryPoint：数据与最近一份恢复点相同则不重复写
 					recovery = "未变化（沿用最近一份）"

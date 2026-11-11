@@ -2,8 +2,11 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
+
+	"github.com/egoist/mygo/ui"
 )
 
 // preview 取首行前 n 个字符。
@@ -33,4 +36,20 @@ func ago(t, now time.Time) string {
 		return fmt.Sprintf("%d 天前", int(d.Hours()/24))
 	}
 	return t.Format("1月2日")
+}
+
+var pctRe = regexp.MustCompile(`\d+%`)
+
+// numSlot：会随数值变化的文字（计数、百分比、张序）预留的最小宽度——数字一律按「8」量（配合 tnum 等宽数字），
+// 百分比按 3 位预留。避免数值位数一变，同行后面的控件跟着左右跳。
+func numSlot(c *ui.Context, s string, size float32, weight int) float32 {
+	s = pctRe.ReplaceAllString(s, "888%")
+	s = strings.Map(func(r rune) rune {
+		if r >= '0' && r <= '9' {
+			return '8'
+		}
+		return r
+	}, s)
+	w, _ := c.MeasureText(0, ui.Span{Text: s, Font: fontSans, Size: size, Weight: weight})
+	return w + 1
 }

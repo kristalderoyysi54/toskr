@@ -64,7 +64,7 @@ func (a *app) diagSections(c *ui.Context, k tokens, s settingsTokens) []setSecti
 			}
 		})
 	}}}
-	return []setSection{{tr("诊断"), rows}}
+	return []setSection{{title: tr("诊断"), rows: rows}}
 }
 
 var screenAllowed = macos.ScreenCaptureAllowed // 测试替换

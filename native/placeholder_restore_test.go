@@ -48,7 +48,7 @@ func TestRestoreReplyPlaceholders(t *testing.T) {
 func TestCancelEnterAskClearsSendOverrides(t *testing.T) {
 	a, _ := testApp(t, "x")
 	a.enterAsk = []store.Note{{Text: "x"}}
-	a.sendPNG, a.sendPH = []byte{1}, sendRedaction{raw: map[string]string{"a": "[EMAIL_01]"}}
+	a.sendPNG, a.sendPH = map[string][]byte{"a.png": {1}}, sendRedaction{raw: map[string]string{"a": "[EMAIL_01]"}}
 	a.cancelEnterAsk()
 	if a.sendPNG != nil || a.sendPH.raw != nil || a.enterAsk != nil {
 		t.Fatal("取消后应清空")

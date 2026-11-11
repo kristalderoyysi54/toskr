@@ -26,7 +26,7 @@ func TestCmdClickMultiSelectThenMergeWithUndo(t *testing.T) {
 	tt.Key(ui.Cmd, ui.KeyM)
 	tt.Frame()
 	notes := a.store.Section(store.SectionInbox)
-	if len(notes) != 2 || notes[0].Text != "甲\n\n丙" {
+	if len(notes) != 2 || notes[0].Text != "丙\n\n甲" { // 同 Tauri：按列表底→顶（捕获先后）拼接
 		t.Fatalf("合并结果 %+v", notes)
 	}
 	tt.Key(ui.Cmd, ui.KeyZ) // HUD「撤销」的键盘入口
@@ -129,24 +129,29 @@ func TestTasksQuickAddCompleteAndRecurring(t *testing.T) {
 	tt.Type("写周报")
 	tt.Key(0, ui.KeyEnter)
 	tt.Frame()
-	if !tt.HasText("写周报") || !tt.HasText("今天 20:00") || !tt.HasText("20:00") {
+	if got := a.store.Tasks()[0]; !tt.HasText("写周报") || got.DueAt.Hour() != 20 || !tt.HasText("20:00") { // 今天页是时间块：任务落在 20:00 那一格
 		t.Fatalf("%v", tt.Texts())
 	}
-	// 任务视图：同 Tauri addTask(text) 原文入库，不解析时间与优先级（自然语言只在 AI 速记里）
+	// 任务视图：本地解析时间与优先级（输入时出片），标题去掉已识别的词
 	a.taskSub = 1
 	tt.Frame()
 	a.taskIn.Focus()
 	tt.Frame()
 	tt.Type("明天下午3点 交周报 !!")
+	tt.Frame()
+	if !tt.HasText("优先级 中") {
+		t.Fatalf("输入时应出识别片 %v", tt.Texts())
+	}
 	tt.Key(0, ui.KeyEnter)
 	tt.Frame()
-	if !tt.HasText("明天下午3点 交周报 !!") || !tt.HasText("收集箱") {
+	if !tt.HasText("交周报") || tt.HasText("明天下午3点 交周报 !!") || !tt.HasText("收集箱") {
 		t.Fatalf("%v", tt.Texts())
 	}
-	i := slices.IndexFunc(a.store.Tasks(), func(x store.Task) bool { return x.Text == "明天下午3点 交周报 !!" })
+	i := slices.IndexFunc(a.store.Tasks(), func(x store.Task) bool { return x.Text == "交周报" })
 	task := a.store.Tasks()[i]
-	if task.Priority != "none" || !task.DueAt.IsZero() {
-		t.Fatalf("原文入库，不应改优先级 / 到期 %+v", task)
+	tomorrow := a.now().AddDate(0, 0, 1)
+	if task.Priority != "mid" || task.DueAt.Hour() != 15 || task.DueAt.Day() != tomorrow.Day() {
+		t.Fatalf("应解析出明天 15:00 与中优先级 %+v", task)
 	}
 	task.DueAt = now.Add(time.Hour)
 	task.Recurrence = "weekly"
@@ -298,7 +303,7 @@ func TestEnglishUI(t *testing.T) {
 	setLanguage("en", nil)
 	defer setLanguage("zh", nil)
 	_, tt := testApp(t)
-	for _, s := range []string{"Clip", "Notes", "Tasks", "Nothing here yet", "Hold ⌥ Option"} {
+	for _, s := range []string{"Clip", "Notes", "Tasks", "Works in any app", "Hold ⌥ Option"} {
 		if !tt.HasText(s) {
 			t.Fatalf("缺 %q：%v", s, tt.Texts())
 		}
@@ -407,7 +412,7 @@ func waitFor(t *testing.T, ok func() bool) {
 func TestSettingsNavSearchAndToggle(t *testing.T) {
 	a, _ := testApp(t)
 	a.openSettingsState()
-	tt := ui.NewTester(a.settingsView, 1040, 1200) // 粘贴与隐私页加了可逆化名，发送方案下移
+	tt := ui.NewTester(a.settingsView, 1040, 2000) // 粘贴规则页主从布局较高，发送方案在下方
 	tt.Frame()
 	if !tt.HasText("常用外观") || !tt.HasText("伴随停靠") {
 		t.Fatalf("首屏应为窗口与外观 %v", tt.Texts())
@@ -418,6 +423,10 @@ func TestSettingsNavSearchAndToggle(t *testing.T) {
 		t.Fatalf("应切到快捷键 %v", tt.Texts())
 	}
 	_ = tt.Click("粘贴与隐私")
+	tt.Frame()
+	if err := tt.Click("2 个方案"); err != nil { // 发送方案收在「共享方案与高级管理」里
+		t.Fatalf("%v %v", err, tt.Texts())
+	}
 	tt.Frame()
 	if !tt.HasText("稳妥发送 · 默认") || !tt.HasText("终端（安全）") {
 		t.Fatalf("发送方案应列出内置方案 %v", tt.Texts())

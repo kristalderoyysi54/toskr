@@ -104,26 +104,64 @@ func coachBox(c *ui.Context, k tokens, key string) ui.Element {
 	return ui.Column(c).Padding(12).Gap(8).Radius(12).Background(k.card).Border(1, k.inputBorder).Key(key)
 }
 
-// stepDots：三步进度（已完成打勾、当前步强调色）。
+// stepDots：三步进度，同迁移向导 migrateSteps 的语言——编号圆点（当前步实心、已完成换对勾）+ 连线，标签在下。
 func stepDots(c *ui.Context, k tokens, labels [3]string, cur int) {
-	ui.Row(c).Gap(8).Children(func() {
+	ui.Row(c).Children(func() {
 		for i, l := range labels {
-			ui.Column(c).Grow(1).Basis(0).Gap(2).AlignItems(ui.Center).Children(func() {
-				col := k.muted
-				switch {
-				case i < cur:
-					licon(c, "circle-check", 12, k.ok)
-				case i == cur:
-					col = k.fg
-					licon(c, "circle", 12, c.Theme().Accent)
-				default:
-					licon(c, "circle", 12, k.muted)
+			ui.Column(c).Grow(1).Basis(0).Gap(4).AlignItems(ui.Center).Children(func() {
+				seg := func(on, show bool) {
+					col := k.fg.Alpha(0.12)
+					if on {
+						col = k.ok.Alpha(0.6)
+					}
+					if !show {
+						col = ui.Transparent
+					}
+					ui.Box(c).Grow(1).Basis(0).Height(1).Background(col)
 				}
-				text(c, tr(l), 10, 14, 400, col).SingleLine()
+				ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+					seg(i <= cur, i > 0)
+					dot := ui.Box(c).Size(16, 16).Radius(8).Center().Shrink(0)
+					switch {
+					case i < cur:
+						dot.Background(k.ok.Alpha(0.15))
+						dot.Children(func() { licon(c, "check", 10, k.ok) })
+					case i == cur:
+						dot.Background(k.fg)
+						dot.Children(func() { text(c, itoa(i+1), 10, 14, 600, c.Theme().Background) })
+					default:
+						dot.Border(1, k.fg.Alpha(0.18))
+						dot.Children(func() { text(c, itoa(i+1), 10, 14, 500, k.muted) })
+					}
+					seg(i < cur, i < len(labels)-1)
+				})
+				col, w := k.muted, 500
+				if i == cur {
+					col, w = k.fg, 600
+				}
+				text(c, tr(l), 10, 14, w, col).SingleLine()
 			})
 		}
 	})
 }
+
+// coachHead：课程卡统一头部——图标格 + 标题（可带徽标 / 副行）+ 右上文字链接。
+func coachHead(c *ui.Context, k tokens, icon, title string, extra, right func()) {
+	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Box(c).Size(28, 28).Radius(8).Background(k.track).Center().Shrink(0).Children(func() { licon(c, icon, 14, k.fg) })
+		ui.Row(c).Grow(1).Basis(0).Gap(6).AlignItems(ui.Center).Children(func() {
+			text(c, title, 13, 18, 600, k.fg).SingleLine()
+			if extra != nil {
+				extra()
+			}
+		})
+		if right != nil {
+			ui.Row(c).Gap(2).AlignItems(ui.Center).Children(right)
+		}
+	})
+}
+
+func linkSep(c *ui.Context, k tokens) { text(c, "·", 11, 16, 400, k.muted.Alpha(0.6)) }
 
 // linkButton：文字链样式的次要操作（同 Tauri ghost / underline 按钮）。
 func linkButton(c *ui.Context, k tokens, key, label string) bool {
@@ -156,6 +194,16 @@ func (a *app) targetReady() bool {
 	return a.target.PID != 0 && targetAlive(a.target.PID, a.targetStarted)
 }
 
+// refreshTarget：目标条「重新识别发送目标」（同 Tauri refreshTarget）——采信最近的外部前台应用，识别不到给原因。
+func (a *app) refreshTarget() {
+	a.refreshTargetFromFront()
+	if a.target.PID == 0 {
+		a.showHUD("warn", tr("没有可识别的目标：先切到要粘贴的应用再唤出面板"))
+		return
+	}
+	diag.Push("重新识别目标 → %s pid=%d", a.target.BundleID, a.target.PID)
+}
+
 // refreshTargetFromFront：「识别粘贴位置」——采信当前前台应用（不是 Toskr 自己时）。
 func (a *app) refreshTargetFromFront() {
 	f, ok := a.sys.Frontmost()
@@ -179,12 +227,9 @@ func (a *app) rehearsalCard(c *ui.Context, k tokens) {
 	switch o.RehearsalStatus {
 	case store.RehearsalPaused:
 		coachBox(c, k, "rehearsal").Children(func() {
-			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-				licon(c, "hourglass", 14, k.muted)
-				text(c, tr("教程已暂停"), 13, 18, 600, k.fg)
-			})
+			coachHead(c, k, "hourglass", tr("教程已暂停"), nil, nil)
 			ui.Row(c).Children(func() {
-				if ui.Button(c, tr("继续教程")).Clicked() {
+				if ui.Button(c, tr("继续教程")).Grow(1).Basis(0).Clicked() {
 					act = func() { a.transitionOnboarding(store.OnboardingEvent{Type: "resume"}) }
 				}
 			})
@@ -202,21 +247,14 @@ func (a *app) rehearsalCard(c *ui.Context, k tokens) {
 		cur = 2
 	}
 	coachBox(c, k, "rehearsal").Children(func() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Row(c).Grow(1).Basis(0).Gap(6).AlignItems(ui.Center).Children(func() {
-				text(c, tr("上手教程"), 13, 18, 600, k.fg)
-				noEnterBadge(c, k)
-			})
+		coachHead(c, k, "keyboard", tr("上手教程"), func() { noEnterBadge(c, k) }, func() { // 出口集中在右上：暂停 · 退出
 			if linkButton(c, k, "rh-pause", tr("稍后继续")) {
 				act = func() {
 					a.transitionOnboarding(store.OnboardingEvent{Type: "pause"})
 					a.showHUD("info", tr("教程已暂停，可在「设置 → 帮助与更新」继续"))
 				}
 			}
-		})
-		stepDots(c, k, [3]string{"收进内容", "选择位置", "检查并粘贴"}, cur)
-		stepBody(c, k, func() { a.rehearsalStep(c, k, o, &act) })
-		ui.Row(c).Children(func() {
+			linkSep(c, k)
 			if linkButton(c, k, "rh-skip", tr("退出教程")) {
 				act = func() {
 					a.transitionOnboarding(store.OnboardingEvent{Type: "skip"})
@@ -224,13 +262,15 @@ func (a *app) rehearsalCard(c *ui.Context, k tokens) {
 				}
 			}
 		})
+		stepDots(c, k, [3]string{"收进内容", "选择位置", "检查并粘贴"}, cur)
+		stepBody(c, k, func() { a.rehearsalStep(c, k, o, &act) })
 	})
 }
 
 func (a *app) rehearsalStep(c *ui.Context, k tokens, o store.OnboardingState, act *func()) {
 	btn := func(label string, fn func()) {
 		ui.Row(c).Gap(6).Children(func() {
-			if ui.Button(c, label).Clicked() {
+			if ui.Button(c, label).Grow(1).Basis(0).Clicked() {
 				*act = fn
 			}
 		})
@@ -255,10 +295,10 @@ func (a *app) rehearsalStep(c *ui.Context, k tokens, o store.OnboardingState, ac
 			text(c, tr("允许输入监控"), 12, 17, 500, k.danger)
 			flow(c, k, "im", vi("settings-2", "系统设置"), vi("keyboard", "输入监控"), vi("check", "打开 Toskr"))
 			ui.Row(c).Gap(6).Children(func() {
-				if ui.Button(c, tr("重置输入监控授权")).Clicked() {
+				if ui.Button(c, tr("重置输入监控授权")).Grow(1).Basis(0).Clicked() {
 					*act = a.resetInputMonitoring
 				}
-				if ui.Button(c, tr("打开输入监控设置")).Clicked() {
+				if ui.Button(c, tr("打开输入监控设置")).Grow(1).Basis(0).Clicked() {
 					*act = func() { openPrivacy("Privacy_ListenEvent") }
 				}
 			})
@@ -310,10 +350,10 @@ func (a *app) rehearsalStep(c *ui.Context, k tokens, o store.OnboardingState, ac
 			}
 		})
 		ui.Row(c).Gap(6).Children(func() {
-			if ui.Button(c, tr("识别粘贴位置")).Clicked() {
+			if ui.Button(c, tr("识别粘贴位置")).Grow(1).Basis(0).Clicked() {
 				*act = a.refreshTargetFromFront
 			}
-			if ready && ui.Button(c, tr("就粘贴到这里")).Clicked() {
+			if ready && ui.Button(c, tr("就粘贴到这里")).Grow(1).Basis(0).Clicked() {
 				*act = func() {
 					if a.targetReady() {
 						a.transitionOnboarding(store.OnboardingEvent{Type: "targetConfirmed"})
@@ -327,7 +367,7 @@ func (a *app) rehearsalStep(c *ui.Context, k tokens, o store.OnboardingState, ac
 		chipSwap(c, k, "demo.user@…", "[EMAIL_01]", true)
 		if !a.targetReady() { // 重启后目标丢失：先重新识别
 			ui.Row(c).Gap(6).Children(func() {
-				if ui.Button(c, tr("识别粘贴位置")).Clicked() {
+				if ui.Button(c, tr("识别粘贴位置")).Grow(1).Basis(0).Clicked() {
 					*act = a.refreshTargetFromFront
 				}
 			})
@@ -609,7 +649,7 @@ func (a *app) lessonCoach(c *ui.Context, k tokens) {
 		}
 	}()
 	btn := func(label string, fn func()) {
-		if ui.Button(c, label).Clicked() {
+		if ui.Button(c, label).Grow(1).Basis(0).Clicked() {
 			act = fn
 		}
 	}
@@ -618,14 +658,12 @@ func (a *app) lessonCoach(c *ui.Context, k tokens) {
 		name, icon = tr("合并发送"), "layers"
 	}
 	coachBox(c, k, "lesson").Children(func() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Box(c).Size(28, 28).Radius(8).Background(k.track).Center().Children(func() { licon(c, icon, 14, k.fg) })
-			ui.Column(c).Grow(1).Basis(0).Children(func() {
-				text(c, fmt.Sprintf(tr("进阶 · %s"), name), 13, 18, 600, k.fg).SingleLine()
-				if done {
-					text(c, tr("已完成"), 10, 14, 400, k.ok)
-				}
-			})
+		coachHead(c, k, icon, fmt.Sprintf(tr("进阶 · %s"), name), func() {
+			if done {
+				ui.Row(c).Height(18).Padding(0, 6).Radius(9).Background(k.ok.Alpha(0.12)).AlignItems(ui.Center).
+					Children(func() { text(c, tr("已完成"), 10, 14, 500, k.ok) })
+			}
+		}, func() {
 			if !done && linkButton(c, k, "lesson-quit", tr("退出")) {
 				act = func() { a.abandonAdvancedLesson(true) }
 			}
@@ -792,6 +830,9 @@ func (a *app) welcomeTour(c *ui.Context, k tokens) {
 		a.tourOpen = false
 		return
 	}
+	if a.migrate != nil { // 迁移向导在前：导入后若带来「已看过」，上面的判断会在下一帧收起导览
+		return
+	}
 	w, h := c.Size()
 	var act func()
 	defer func() {
@@ -863,10 +904,7 @@ func (a *app) learningSection(c *ui.Context, s settingsTokens, st store.Settings
 		label, mode = "继续", "resume"
 	}
 	lessonRow := func(id, title, desc, meta string, doneAt *int64) setRow {
-		if doneAt != nil {
-			title += " ✓"
-		}
-		return setRow{title: tr(title), hint: tr(desc) + " · " + tr(meta), control: func() {
+		return setRow{title: tr(title), hint: tr(desc), tip: tr(meta), control: func() {
 			if !unlocked {
 				ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
 					licon(c, "lock-keyhole", 13, tok(c).muted)
@@ -877,21 +915,25 @@ func (a *app) learningSection(c *ui.Context, s settingsTokens, st store.Settings
 			l := "开始"
 			if doneAt != nil {
 				l = "再练一次"
+				doneChip(c, tok(c))
 			}
 			if button(c, s, l) {
 				a.startAdvancedLesson(id)
 			}
 		}}
 	}
-	basicTitle := tr("基础：收集并粘贴")
-	if complete {
-		basicTitle += " ✓"
-	}
-	return setSection{tr("上手课程"), []setRow{
-		{title: basicTitle, hint: tr("收进一条内容，选好粘贴位置，检查后粘贴") + " · " + meta, control: func() {
-			if button(c, s, label) {
-				a.startRehearsal(mode)
-			}
+	return setSection{title: tr("上手课程"), rows: []setRow{
+		{title: tr("基础：收集并粘贴"), hint: tr("收进一条内容，选好粘贴位置，检查后粘贴"), tip: meta, control: func() {
+			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+				if complete {
+					doneChip(c, tok(c))
+				} else {
+					progressSegs(c, tok(c), basicDone, 3)
+				}
+				if button(c, s, label) {
+					a.startRehearsal(mode)
+				}
+			})
 		}},
 		lessonRow(lessonMerge, "进阶：合并发送", "勾选多张卡片，按 ⌘⏎ 合成一次粘贴", "3 步 · 使用示例卡片，结束时自动清理", o.MergeTutorialCompletedAtMs),
 		lessonRow(lessonPrivacy, "进阶：智能脱敏与还原", "发送时把名字换成占位符，收回 AI 回复时自动还原", "3 步 · 使用示例化名，结束时可保留或删除", o.RecoveryTutorialCompletedAtMs),
@@ -907,6 +949,29 @@ func (a *app) learningSection(c *ui.Context, s settingsTokens, st store.Settings
 			}
 		}},
 	}}
+}
+
+// progressSegs：n 段细进度条 + 「done/n」，用于设置里的课程进度（同步骤条的完成色）。
+func progressSegs(c *ui.Context, k tokens, done, n int) {
+	ui.Row(c).Gap(6).AlignItems(ui.Center).Key("progress-segs").Label(fmt.Sprintf(tr("已完成 %d / %d"), done, n)).Children(func() {
+		ui.Row(c).Gap(3).Children(func() {
+			for i := range n {
+				col := k.fg.Alpha(0.12)
+				if i < done {
+					col = k.ok
+				}
+				ui.Box(c).Size(14, 4).Radius(2).Background(col)
+			}
+		})
+		text(c, fmt.Sprintf("%d/%d", done, n), 10, 14, 500, k.muted)
+	})
+}
+
+func doneChip(c *ui.Context, k tokens) {
+	ui.Row(c).Height(20).Padding(0, 8).Gap(3).Radius(10).Background(k.ok.Alpha(0.12)).AlignItems(ui.Center).Children(func() {
+		licon(c, "check", 11, k.ok)
+		text(c, tr("已完成"), 10, 14, 500, k.ok)
+	})
 }
 
 func init() { // 首启导览 / 安全发送演练 / 进阶课（onboarding.go、lessons.go）

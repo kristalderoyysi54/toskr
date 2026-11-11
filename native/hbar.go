@@ -63,7 +63,7 @@ type barState struct {
 
 // barHeader：横栏单行头部——左「Toskr + 页签」，中分组胶囊，右工具钮（同 Tauri horizontalBar 头部）。
 func (a *app) barHeader(c *ui.Context, k tokens) {
-	ui.Row(c).Height(40).Padding(8, 12, 4, 16).Gap(8).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).Height(40).Padding(8, 12, 4, 16).Gap(8).AlignItems(ui.Center).DragWindow().Key("bar-header").Children(func() { // 整个头部可拖（同 Tauri header drag-region）
 		ui.Row(c).Grow(1).Basis(0).Gap(10).AlignItems(ui.Center).Children(func() {
 			text(c, "Toskr", 13, 18, 600, k.fg).LetterSpacing(-0.325).Cursor(ui.CursorGrab).
 				Tooltip(tr("拖动此处可移动面板（未吸附时）")).DragWindow()
@@ -110,7 +110,8 @@ func (a *app) barPills(c *ui.Context, k tokens) {
 		secs := a.noteSections()
 		for i, s := range secs {
 			p := a.barPillEl(c, k, s.ID, sectionName(s), s.Color, a.noteFilter == s.ID)
-			p.ContextMenu(func(m *ui.Menu) { a.sectionMenu(m, s, i, len(secs)) })
+			p.ContextMenu(func(m *ui.Menu) { a.secMenuSrc = "bar"; a.sectionMenu(m, s, i, len(secs)) })
+			a.sectionColorPopover(c, k, s, p, "bar")
 			if d, ok := ui.Drop[noteDrag](p); ok {
 				_ = a.store.MoveToAt(d.id, s.ID, 0)
 			}
@@ -273,6 +274,7 @@ func (a *app) barView(c *ui.Context, k tokens, shell ui.Element) {
 		a.commandPalette(c, k)
 		a.updateDialog(c, k)
 		a.welcomeTour(c, k)
+		a.migrateWizard(c, k)
 	})
 }
 
@@ -292,8 +294,10 @@ func (a *app) barPageBody(c *ui.Context, k tokens, p int) {
 		})
 	case pageTasks:
 		tasks := a.stripTasks()
-		a.strip(c, k, "strip-tasks", &a.bar.tasks, len(tasks), -1, nil, "", tr("没有进行中的任务"), func(i int, h float32) {
-			a.taskTile(c, k, tasks[i], h)
+		a.swapView(ui.Column(c).Grow(1), "bar-task-filter", a.barFilterIdx(a.bar.taskFilter, a.store.TaskSections())).Children(func() { // 分组胶囊切换带过渡
+			a.strip(c, k, "strip-tasks", &a.bar.tasks, len(tasks), -1, nil, "", tr("没有进行中的任务"), func(i int, h float32) {
+				a.taskTile(c, k, tasks[i], h)
+			})
 		})
 		ui.Column(c).Padding(0, 0, 8, 0).Children(func() { a.taskQuickAdd(c, k) })
 	default:
@@ -319,7 +323,7 @@ func (a *app) barPageBody(c *ui.Context, k tokens, p int) {
 					})
 				}
 				if !a.coachVisible() {
-					strip()
+					a.swapView(ui.Column(c).Grow(1), "bar-note-filter", a.barFilterIdx(a.noteFilter, a.noteSections())).Children(strip) // 分组胶囊切换带过渡
 					return
 				}
 				ui.Row(c).Grow(1).AlignItems(ui.Stretch).Children(func() { // 同 Tauri：演练 / 课程卡在左侧 w-80 一栏
@@ -386,6 +390,7 @@ func (a *app) stripNoteTile(c *ui.Context, k tokens, n store.Note, h float32, cl
 	box := ui.Column(c).Width(h * 16 / 17).FillHeight().Radius(10).Clip().Key(n.ID)
 	cardFill(box, k)
 	hovered := box.Hovered()
+	a.bandHover(n.ID, hovered)
 	elevated(box, k, hovered || checked || focused)
 	box.ContextMenu(func(m *ui.Menu) {
 		if idx >= 0 {
@@ -401,26 +406,28 @@ func (a *app) stripNoteTile(c *ui.Context, k tokens, n store.Note, h float32, cl
 	}
 	isLink := n.Kind == "link"
 	box.Children(func() {
+		// 同 Tauri 横栏串通栏（笔记与剪贴同款）：应用主色渐变底，标题（点击重命名）+ 相对时间副行，右端应用图标
 		head := ui.Row(c).Height(36).Padding(0, 8).Gap(6).AlignItems(ui.Center)
-		if !clip {
-			from, to := a.bandColors(k, n)
-			head.LinearGradient(ui.LinearGradient{From: from, To: to, Angle: 135})
-		}
+		from, to := a.stripBandColors(k, n)
+		head.LinearGradient(ui.LinearGradient{From: from, To: to, Angle: 135})
 		head.Children(func() {
 			fg := k.cardHeadText
-			title := cardTitle(n)
-			if n.Title != "" {
-				title = n.Title
+			if !a.cardInlineInput(c, k, n) {
+				title := cmpOr(n.Title, cardTitle(n))
+				tb := ui.Column(c).Grow(1).Basis(0).Key("strip-title").Role(ui.RoleButton).Label(title).Tooltip(tr("点击重命名"))
+				tb.Children(func() {
+					text(c, title, 11, 15, 600, fg).SingleLine()
+					text(c, ago(n.CreatedAt, a.now()), 10, 13, 400, fg).SingleLine().Opacity(0.7)
+				})
+				if tb.Clicked() {
+					a.titleEditID, a.titleText = n.ID, n.Title
+				}
 			}
-			if clip {
-				fg, title = k.muted, ago(n.CreatedAt, a.now())
-			}
-			text(c, title, 11, 16, 600, fg).SingleLine().Grow(1).Basis(0)
 			if n.Kept {
 				liconFilled(c, map[bool]string{true: "pin", false: "star"}[clip], 12, fg)
 			}
 			if img := a.appIcon(n.BundleID); img != nil { // 应用图标嵌在头部右端（strip：44×36 露出 52 大图标的左半）
-				ui.Box(c).Width(44).Height(36).Margin(0, -8, 0, 0).Clip().AlignItems(ui.Center).Children(func() {
+				ui.Row(c).Width(44).Height(36).Margin(0, -8, 0, 0).Clip().AlignItems(ui.Center).Shrink(0).Children(func() {
 					ui.Image(c, img).Size(52, 52)
 				})
 			}
@@ -430,6 +437,8 @@ func (a *app) stripNoteTile(c *ui.Context, k tokens, n store.Note, h float32, cl
 				return
 			}
 			switch {
+			case n.Kind == "image" && len(n.MediaFiles()) > 1: // 同 Tauri：多张并排 3 张 +N
+				a.cardImages(c, k, n.MediaFiles(), h*16/17-16, h-36-30)
 			case n.Kind == "image":
 				if img := a.thumb(n.ImageFile); img != nil {
 					iw, ih := ui.ImageSize(img)
@@ -437,23 +446,22 @@ func (a *app) stripNoteTile(c *ui.Context, k tokens, n store.Note, h float32, cl
 					s := min(mw/max(float32(iw), 1), mh/max(float32(ih), 1))
 					ui.Image(c, img).Size(float32(iw)*s, float32(ih)*s).Radius(6)
 				}
+			case len(n.MediaFiles()) > 0 && !isLink: // 图文：正文 + 下方缩略条
+				doneText(highlightText(c, k, n.Text, a.query, 12, 18, k.fg).Wrap().MaxLines(max(1, int((h-36-30-36)/18))), k, n) // 按可用高度取整行
+				a.cardThumbStrip(c, k, n.MediaFiles())
 			case isLink:
 				a.linkBlock(c, k, n)
 			case isCode(n):
-				a.codeText(c, k, n)
+				a.codeText(c, k, n, 6)
 			default:
-				highlightText(c, k, n.Text, a.query, 12, 18, k.fg).Wrap().MaxLines(6)
+				doneText(highlightText(c, k, n.Text, a.query, 12, 18, k.fg).Wrap().MaxLines(6), k, n)
 			}
 		})
 		ui.Row(c).Height(16).Margin(0, 8, 6, 8).AlignItems(ui.Center).Children(func() {
-			src := ""
-			if n.SourceApp != "" {
-				src = tr("来自 ") + n.SourceApp
-			}
-			text(c, src, 10, 14, 400, k.muted).SingleLine().Grow(1)
+			a.cardFooterLead(c, k, n)
 			a.aiBusyMark(c, k, n.ID)
-			if !clip {
-				text(c, ago(n.CreatedAt, a.now()), 10, 14, 400, k.muted)
+			if right := clipFootMeta(n); right != "" {
+				text(c, right, 10, 14, 400, k.muted).SingleLine().Shrink(0).MaxWidth(150)
 			}
 		})
 		if n.Blur {
@@ -461,7 +469,7 @@ func (a *app) stripNoteTile(c *ui.Context, k tokens, n store.Note, h float32, cl
 		}
 		if hovered || focused {
 			if clip {
-				a.clipActions(c, k, n, isLink, -1, true)
+				a.clipActions(c, k, n, isLink, -1) // 同 Tauri：横栏剪贴卡不是网格瓷砖，给完整操作钮
 			} else {
 				a.cardActions(c, k, n)
 			}
@@ -469,10 +477,11 @@ func (a *app) stripNoteTile(c *ui.Context, k tokens, n store.Note, h float32, cl
 		a.cardOverlays(c, k, n, checked, false)
 		a.quickBadge(c, k, idx, 4)
 	})
-	if box.Clicked() && !(box.ClickModifiers()&ui.Shift != 0 && a.rangeSelect(n.ID)) {
-		a.cardClick(n.ID, idx, box.ClickModifiers())
+	clk, dbl, mods := cardPressed(box, n.ID) // 正文是拖出源，点在正文上也算点卡片
+	if clk && !(mods&ui.Shift != 0 && a.rangeSelect(n.ID)) {
+		a.cardClick(n.ID, idx, mods)
 	}
-	if box.DoubleClicked() && idx >= 0 {
+	if dbl && idx >= 0 {
 		a.cardDoubleClick(n, idx, clip)
 	}
 }
@@ -594,4 +603,15 @@ func (a *app) taskTile(c *ui.Context, k tokens, t store.Task, h float32) {
 			a.dueTrigger(c, k, t, a.now(), hovered)
 		})
 	})
+}
+
+// barFilterIdx：横栏分组胶囊的序号（全部 0，各组按顺序，「已完成」最后），决定切换过渡方向。
+func (a *app) barFilterIdx(filter string, secs []store.Section) int {
+	switch filter {
+	case "":
+		return 0
+	case doneFilter:
+		return len(secs) + 1
+	}
+	return 1 + slices.IndexFunc(secs, func(s store.Section) bool { return s.ID == filter })
 }

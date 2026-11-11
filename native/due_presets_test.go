@@ -14,7 +14,7 @@ func TestDuePresetSettings(t *testing.T) {
 	a, tt := msgApp(t)
 	a.openSettingsState()
 	set := ui.NewTester(a.settingsView, 1040, 6000)
-	a.setJump = "更多功能"
+	a.setJump = "到期提醒"
 	set.Frame()
 	set.Frame()
 	for _, s := range []string{"到期提醒快捷档", "30 分钟后", "1 小时后", "6 小时后", "今天 20:00", "明天 9:00", "下个周一 9:00"} {

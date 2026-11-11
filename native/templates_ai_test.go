@@ -61,7 +61,7 @@ func TestTemplateEditorPreviewAndAssistant(t *testing.T) {
 	on := true
 	st.AIEnabled, st.AIModel = &on, "m"
 	_ = a.store.SetSettings(st)
-	a.setPage, a.setSub = setPagePaste, 1
+	a.setPage, a.setSub = setPagePaste, 2
 	a.startSnippetAdd()
 	v := ui.NewTester(a.settingsView, 1040, 900)
 	v.Frame()

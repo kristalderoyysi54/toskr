@@ -206,6 +206,12 @@ func (a *app) lensDetail(c *ui.Context, k tokens) {
 				src = tr("临时指定")
 			}
 			text(c, src, 10, 14, 400, k.muted)
+			if a.target.PID != 0 && targetAlive(a.target.PID, a.targetStarted) {
+				ui.Box(c).Grow(1)
+				if a.iconButton(c, k, "refresh-cw", 18, 11, tr("重新识别发送目标")) {
+					a.refreshTarget()
+				}
+			}
 		})
 		if r.Source == "conflict" || stale || a.target.PID == 0 {
 			ui.Column(c).Gap(2).Children(func() {
@@ -434,6 +440,35 @@ func (a *app) ruleLedger(c *ui.Context, k tokens, r store.ProfileResolution, gro
 		})
 		if b.Clicked() {
 			a.ruleOv, a.ruleFor = store.RuleOverrides{}, ""
+		}
+	}
+}
+
+// profileMenuItems 同 Tauri SelectionBar「本次发送方案」：暂停待确认的原方案 · 自动匹配 · 各方案（✓ 当前）。
+func (a *app) profileMenuItems(m *ui.Menu) {
+	m.Item(tr("本次发送方案")).Disabled(true)
+	_, profiles, _ := a.store.Settings().ProfileConfig()
+	if _, stale := a.resolution(); stale && a.target.PID != 0 {
+		old := tr("原方案")
+		if i := slices.IndexFunc(profiles, func(p store.TargetProfile) bool { return p.ID == a.tempProfile }); i >= 0 {
+			old = profileName(profiles[i])
+		}
+		if m.Item(fmt.Sprintf(tr("将 %s 用于当前目标"), old)).Chosen() {
+			a.tempFor = a.targetKey()
+		}
+	}
+	mark := func(on bool) string {
+		if on {
+			return "✓ "
+		}
+		return ""
+	}
+	if m.Item(mark(a.tempProfile == "") + fmt.Sprintf(tr("自动匹配：%s"), profileName(a.automaticResolution().Profile))).Chosen() {
+		a.restoreAutomatic()
+	}
+	for _, p := range profiles {
+		if m.Item(mark(a.tempProfile == p.ID) + profileName(p)).Chosen() {
+			a.selectTempProfile(p.ID)
 		}
 	}
 }

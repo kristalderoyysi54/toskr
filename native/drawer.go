@@ -189,6 +189,20 @@ func (a *app) deliveryRow(c *ui.Context, k tokens, d store.Delivery, notes []sto
 		}
 		ui.Row(c).Margin(8, 0, 0, 0).Padding(6, 4, 0, 4).Gap(12).BorderWidth(1, 0, 0, 0).BorderColor(k.inputBorder.Alpha(0.5)).AlignItems(ui.Center).Children(func() {
 			cands := store.ResultCandidates(d, notes)
+			if a.cmpSnaps[d.ID] != nil {
+				cl := ui.Row(c).Gap(3).AlignItems(ui.Center).Key("cmp-" + d.ID).Role(ui.RoleButton).Label(tr("对比")).Tooltip(tr("查看这次发送的原文与实际发送内容对比"))
+				fg := k.muted
+				if cl.Hovered() {
+					fg = k.fg
+				}
+				cl.Children(func() {
+					licon(c, "columns-2", 11, fg)
+					text(c, tr("对比"), 10, 14, 400, fg)
+				})
+				if cl.Clicked() {
+					a.openDeliveryCompare(d.ID)
+				}
+			}
 			if d.Status == "sent" {
 				label := tr("手动选择回复")
 				if hasReply {
@@ -346,6 +360,12 @@ func (a *app) replyMenu(m *ui.Menu, n store.Note) {
 		return
 	}
 	m.Submenu(tr("回复关联"), func(sm *ui.Menu) {
+		if id := a.fanoutOf(n); id != "" { // 多目标发送的回复：凑够两家可并排对比
+			got := len(a.fanoutReplies(id))
+			if sm.Item(fmt.Sprintf(tr("对比各应用的回复（%d 家）"), got)).Disabled(got < 2).Chosen() {
+				a.openReplyCompare(id)
+			}
+		}
 		if sm.Item(tr("查看发送内容")).Chosen() {
 			a.drawerOpen = true
 		}
@@ -370,5 +390,8 @@ func (a *app) replyMenu(m *ui.Menu, n store.Note) {
 // 面板内拖拽的值类型（ui.Drag / ui.Drop）。
 type (
 	noteDrag struct{ id string }
-	taskDrag struct{ id string }
+	taskDrag struct {
+		id     string
+		resize bool // 今天页时间块的下沿把手：拖动改时长（同一元素只能登记一种拖放类型，所以并进 taskDrag）
+	}
 )

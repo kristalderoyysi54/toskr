@@ -26,8 +26,9 @@ type noteGroup struct {
 }
 
 func (a *app) mainHeader(c *ui.Context, k tokens) {
-	ui.Row(c).Height(44).Padding(14, 16, 8, 16).Gap(8).AlignItems(ui.Start).Children(func() {
-		// 标题与留白是拖动区（Tauri data-tauri-drag-region）：拖动移动面板
+	// 整个头部（含标题上方 14pt 留白与两侧空白）是拖动区，同 Tauri <header data-tauri-drag-region>；按钮照常点击。
+	// 之前只有「Toskr」文字可拖，用户从面板顶部空白处拖不动
+	ui.Row(c).Height(44).Padding(14, 16, 8, 16).Gap(8).AlignItems(ui.Start).DragWindow().Key("panel-header").Children(func() {
 		text(c, "Toskr", 13, 18, 600, k.fg).LetterSpacing(-0.325).Grow(1).Margin(2, 0, 0, 0).Cursor(ui.CursorGrab).
 			Tooltip(tr("拖动此处可移动面板（未吸附时）")).DragWindow()
 		ui.Row(c).Gap(2).Children(func() {
@@ -79,16 +80,22 @@ func (a *app) targetBar(c *ui.Context, k tokens) {
 	ui.Column(c).Margin(0, 12).Padding(4).Children(func() {
 		ui.Row(c).Height(28).Gap(6).Grow(1).AlignItems(ui.Center).Children(func() {
 			ui.Row(c).Gap(6).Grow(1).AlignItems(ui.Center).Children(func() {
-				if img := a.appIcon(a.target.BundleID); img != nil { // 目标应用真实图标（同 Tauri TargetLensBar appIcon），没取到用通用图标
-					ui.Image(c, img).Size(16, 16).Radius(4)
-				} else {
-					ui.Box(c).Size(16, 16).Radius(6).Background(k.chip).Center().Children(func() { licon(c, "app-window", 8, k.muted) })
+				el, switching := a.targetSwitchElapsed(c) // 换目标时「灵动胶囊」动效（target_switch.go）
+				switch {
+				case switching:
+					a.targetSwitchWho(c, k, el)
+				default:
+					a.targetIcon(c, k, a.target) // 目标应用真实图标（同 Tauri TargetLensBar appIcon），没取到用通用图标
 				}
 				if a.target.PID == 0 {
-					text(c, tr("未识别目标"), 11, 16, 600, k.fg)
+					if !switching {
+						text(c, tr("未识别目标"), 11, 16, 600, k.fg)
+					}
 					return
 				}
-				text(c, a.target.Name, 11, 16, 600, k.fg).SingleLine()
+				if !switching {
+					text(c, a.target.Name, 11, 16, 600, k.fg).SingleLine()
+				}
 				text(c, "·", 10, 14, 400, k.muted)
 				dot, state := k.ok, tr("可发送")
 				if !targetAlive(a.target.PID, a.targetStarted) { // 同 Tauri TargetLensBar：进程已退出 / 重启 → 失效
@@ -100,6 +107,10 @@ func (a *app) targetBar(c *ui.Context, k tokens) {
 				})
 			})
 			ui.Row(c).Gap(2).Children(func() {
+				// 同 Tauri showRecoveryAction：目标未识别 / 已失效时刷新钮放在头部；正常时收在展开区方案行末
+				if (a.target.PID == 0 || !targetAlive(a.target.PID, a.targetStarted)) && a.iconButton(c, k, "refresh-cw", 20, 12, tr("重新识别发送目标")) {
+					a.refreshTarget()
+				}
 				if a.iconButton(c, k, "rotate-ccw-clock", 20, 12, tr("最近发送")) {
 					a.drawerOpen = !a.drawerOpen
 				}
@@ -139,6 +150,9 @@ func pageID(p int) string {
 }
 
 type tabDrag struct{ page int }
+
+// secDrag 是被拖动排序的笔记分组（区头组名 / 侧栏分组胶囊）。
+type secDrag struct{ id string }
 
 // pageStep：⌘←→ / ⌃Tab 按可见页签顺序移动（wrap 时循环）。
 func (a *app) pageStep(d int, wrap bool) {
@@ -286,6 +300,8 @@ func (a *app) notesPage(c *ui.Context, k tokens) {
 			}
 		})
 		a.notesList(c, k)
+		// 左缘分组侧栏开关（同 Tauri：挂在侧栏容器左缘 absolute left-0，侧栏展开 / 收起位置不动；12×20，右侧圆角 8）
+		a.noteRailToggle(c, k)
 	})
 }
 
@@ -300,8 +316,24 @@ func (a *app) notesList(c *ui.Context, k tokens) {
 		if k.pt && ptClassicScroll {
 			pad = 4 // 右侧让给经典滚动条（井内左 10 / 右 4）
 		}
-		ui.Scroll(c).Fill().Scrollbars(false).TrackScroll(&a.noteScroll).Children(func() {
-			ui.Column(c).Padding(4, pad, 8, 10).Gap(8).Children(func() {
+		sc := ui.Scroll(c).Fill().Scrollbars(false).TrackScroll(&a.noteScroll)
+		// 分组吸顶用：上一帧的视口位置与当时的滚动量（Bounds 是上一帧布局），换算分组在内容里的纵坐标
+		a.stick = stickCtx{view: sc.Bounds(), builtY: a.stick.nextY, nextY: a.noteScroll.Y, top: map[string]float32{}}
+		sc.Children(func() {
+			list := ui.Column(c).Padding(4, pad, 8, 10).Gap(8)
+			sortListBegin[secDrag](&a.secSort, list, &a.secJump, &a.secSeen, func(from, to string) { // 松手：落进让出的空位（同 dnd-kit arrayMove）
+				_ = a.store.ReorderSection(from, to)
+				a.reload()
+			})
+			if a.secSort.active != "" {
+				sortAutoScroll(c, sc, &a.noteScroll)
+			}
+			a.secOrder = a.secOrder[:0]
+			for _, g := range a.noteGroups {
+				a.secOrder = append(a.secOrder, g.sec.ID)
+			}
+			defer func() { sortListEnd(&a.secSort, a.secSeen) }()
+			list.Children(func() {
 				if a.newSecOn {
 					ui.TextInputBase(c, &a.newSec).Height(28).Padding(0, 10).Radius(10).Background(k.track).Font(fontSans).FontSize(12).
 						Focus().Placeholder(tr("分组名，↵ 创建")).OnTextKey(func(key ui.TextKey) bool {
@@ -338,10 +370,7 @@ func (a *app) notesList(c *ui.Context, k tokens) {
 					text(c, fmt.Sprintf(tr("没有匹配「%s」的卡片"), a.query), 12, 18, 400, k.muted).Padding(32, 0).TextAlign(ui.Center).FillWidth()
 					return
 				case total == 0 && a.noteFilter == "":
-					ui.Column(c).Padding(40, 0).Gap(6).AlignItems(ui.Center).FillWidth().Children(func() {
-						text(c, tr("还没有内容"), 13, 18, 500, k.fg)
-						text(c, tr("连按两次 ⇧ 捕获选中文本，也可以在下方直接记下"), 11, 16, 400, k.muted).TextAlign(ui.Center)
-					})
+					a.emptyQueue(c, k)
 					return
 				}
 				for _, g := range a.noteGroups {
@@ -349,13 +378,82 @@ func (a *app) notesList(c *ui.Context, k tokens) {
 				}
 			})
 		})
-		// 左缘分组侧栏开关（Tauri：12×20，右侧圆角 8，图标 35% 透明度）
-		a.noteRailToggle(c, k)
 	})
 }
 
 // visWindow：笔记列表内容坐标下需要真实构建的纵向范围。
 type visWindow struct{ top, bottom float32 }
+
+// has：纵坐标 y、高 h 的条目是否与范围相交。
+func (v visWindow) has(y, h float32) bool { return y+h >= v.top && y <= v.bottom }
+
+const emptySecH = 56 // 空分组提示框高（sectionBlock 的占位高度与之一致）
+
+// emptyQueue：笔记页空态——用键帽把动作画出来，再给一个当下就能点的操作（把剪贴板现有文字收成第一张卡）。
+// 键帽读设置里的实际触发键，不写死 ⇧。
+func (a *app) emptyQueue(c *ui.Context, k tokens) {
+	label := a.captureKeyLabel() // 如「⇧ Shift」
+	glyph, name, _ := strings.Cut(label, " ")
+	ui.Column(c).Padding(36, 20, 20, 20).AlignItems(ui.Center).FillWidth().Key("empty-queue").Children(func() {
+		ui.Row(c).Gap(8).Label(fmt.Sprintf(tr("连按两次 %s"), label)).Children(func() {
+			for i := range 2 {
+				ui.Box(c).Size(40, 40).Radius(10).Background(k.card).Border(1, k.fg.Alpha(0.12)).Shadow(0, 1, 0, 0, k.fg.Alpha(0.12)).Center().Key("empty-key-" + itoa(i)).
+					Children(func() { text(c, glyph, 17, 24, 500, k.fg) })
+			}
+		})
+		text(c, fmt.Sprintf(tr("选中文字，连按两次 %s"), name), 13, 18, 600, k.fg).Margin(14, 0, 0, 0)
+		text(c, tr("在任何应用里都可以"), 11, 16, 400, k.muted).Margin(2, 0, 0, 0)
+		ui.Row(c).FillWidth().Margin(16, 0, 0, 0).Children(func() {
+			if ui.Button(c, tr("把剪贴板内容收成第一张卡")).Grow(1).Basis(0).Clicked() {
+				a.clipboardToFirstCard()
+			}
+		})
+	})
+}
+
+// clipboardToFirstCard：把系统剪贴板里现有的文字存成收件箱的一张卡（可撤销）；没有文字时只提示。
+func (a *app) clipboardToFirstCard() {
+	txt, _ := a.sys.ReadString()
+	if strings.TrimSpace(txt) == "" {
+		a.showHUD("info", tr("剪贴板里没有文字"))
+		return
+	}
+	n, dup, err := a.store.Add(store.Note{Section: a.captureSection(), Text: txt})
+	if err != nil {
+		a.showHUD("warn", tr("保存失败：")+err.Error())
+		return
+	}
+	a.reload()
+	if dup {
+		a.showHUD("duplicate", preview(n.Text, 40))
+		return
+	}
+	a.showHUDUndo("added", preview(n.Text, 40), func() {
+		a.store.Delete(n.ID)
+		a.reload()
+	})
+}
+
+// emptySection：空分组——虚线框提示可拖入，下方文字链接把它设为捕获目标（已是捕获目标则只说明）。
+func (a *app) emptySection(c *ui.Context, k tokens, sec store.Section) {
+	capID := a.store.Settings().CaptureSection
+	isCap := capID == sec.ID || (capID == "" && sec.ID == store.SectionInbox)
+	ui.Column(c).Height(emptySecH).Radius(10).Border(1, k.fg.Alpha(0.16)).BorderStyle(ui.BorderDashed).Center().Gap(2).
+		Key("secempty-" + sec.ID).Transition(foldTransition).Label(tr("此分组为空")).Children(func() {
+		text(c, tr("把卡片拖到这里"), 11, 16, 400, k.muted)
+		if isCap {
+			text(c, tr("捕获的内容会存到这里"), 10, 14, 400, k.muted.Alpha(0.75))
+			return
+		}
+		link := ui.Row(c).Padding(0, 4).Radius(4).Key("seccap-" + sec.ID).Role(ui.RoleButton).Label(tr("设为捕获目标"))
+		col := hoverLink(link, k)
+		link.Children(func() { text(c, tr("设为捕获目标"), 10, 14, 400, col).Underline() })
+		if link.Clicked() {
+			a.patchSettings(func(x *store.Settings) { x.CaptureSection = sec.ID })
+			a.showHUD("ok", fmt.Sprintf(tr("捕获的内容将存入「%s」"), sec.Name))
+		}
+	})
+}
 
 func (a *app) cardHeight() float32 {
 	if a.store.Settings().CardDensity == "compact" {
@@ -372,7 +470,7 @@ func (a *app) sectionBlock(c *ui.Context, k tokens, g noteGroup, top float32) fl
 	switch {
 	case collapsed:
 	case len(g.open) == 0 && len(g.done) == 0:
-		height += 6 + 32
+		height += 6 + emptySecH
 	default:
 		n := len(g.open)
 		height += 6 + float32(n)*cardH + float32(max(n-1, 0))*4
@@ -386,93 +484,131 @@ func (a *app) sectionBlock(c *ui.Context, k tokens, g noteGroup, top float32) fl
 			}
 		}
 	}
-	ui.Column(c).Gap(6).Padding(0, 0, 4, 0).Key("sec-" + g.sec.ID).Children(func() {
-		head := ui.Row(c).Height(20).Padding(0, 4, 0, 2).Gap(4).Radius(6).AlignItems(ui.Center)
-		_, over := ui.DragOver[noteDrag](head)
-		if over {
-			head.Background(stok(c).primary.Alpha(0.12))
-		}
-		if a.dragHover(c, g.sec.ID, over, collapsed) {
-			g.sec.Collapsed = false
-			_ = a.store.UpdateSection(g.sec)
-		}
-		if d, ok := ui.Drop[noteDrag](head); ok {
-			_ = a.store.MoveToAt(d.id, g.sec.ID, 0)
-		}
-		head.ContextMenu(func(m *ui.Menu) {
-			if len(g.done) > 0 && m.Item(tr("清理已完成")).Chosen() {
-				a.section = g.sec.ID
-				a.clearDone(c)
+	// 分组拖动排序（同 Tauri SectionGroup useSortable）：槽位不动、按它判断落点，内层平移让位
+	slot := ui.Column(c).Key("secslot-" + g.sec.ID)
+	sortTrack(&a.secSort, slot, g.sec.ID)
+	shift := a.secSort.offset(a.secOrder, g.sec.ID, 8) // 让位目标：窗口化时连平移后的位置一起算可见
+	slot.Children(func() {
+		col := ui.Column(c).Gap(6).Padding(0, 0, 4, 0).Radius(8).Key("sec-" + g.sec.ID)
+		sortShift(&a.secSort, col, a.secOrder, g.sec.ID, 8, a.secJump)
+		off := a.stickOffset(g.sec.ID, col.Bounds())
+		col.Children(func() {
+			if a.secSort.active == g.sec.ID { // 落点：虚线框标出松手后分组落在哪（内容已淡化）
+				slotMark(c)
 			}
-			m.Separator()
-			secs := a.noteSections()
-			i := slices.IndexFunc(secs, func(x store.Section) bool { return x.ID == g.sec.ID })
-			a.sectionMenu(m, g.sec, i, len(secs))
-		})
-		head.Children(func() {
-			b := ui.Box(c).Size(16, 16).Radius(6).Center()
-			b.Children(func() { foldChevron(c, k, collapsed) })
-			if b.Clicked() {
-				g.sec.Collapsed = !collapsed
+			head := ui.Row(c).Height(20).Padding(0, 4, 0, 2).Gap(4).Radius(6).AlignItems(ui.Center).Key("sechead-" + g.sec.ID) // 稳定身份：落点虚线框插在前面时拖动源不能换人
+			if a.headRename != g.sec.ID {
+				head.Drag(secDrag{g.sec.ID}) // 同 Tauri：按住区头拖动 = 拿起整个分组
+			}
+			if head.Dragging() {
+				a.secSort.begin(g.sec.ID)
+				a.secSeen = true
+				liftHead(c, head)
+			}
+			if off > 0 { // 同 Tauri SectionGroup sticky top-0：滚过组首后区头钉在视口顶，直到本组底部把它推走
+				head.Translate(0, off)
+			}
+			_, over := ui.DragOver[noteDrag](head)
+			if over {
+				head.Background(stok(c).primary.Alpha(0.12))
+			}
+			if a.dragHover(c, g.sec.ID, over, collapsed) {
+				g.sec.Collapsed = false
 				_ = a.store.UpdateSection(g.sec)
 			}
-			if g.sec.Color != "" { // 同 Tauri SectionGroup：分组色点
-				ui.Box(c).Size(8, 8).Radius(4).Background(hexColor(g.sec.Color))
+			if d, ok := ui.Drop[noteDrag](head); ok {
+				_ = a.store.MoveToAt(d.id, g.sec.ID, 0)
 			}
-			a.sectionHeadName(c, k, g.sec)
-			if g.sec.KeepAfterSend {
-				liconFilled(c, "star", 10, k.muted).Tooltip(tr("发送后保留"))
-			}
-			if g.sec.ID != store.SectionInbox && a.store.Settings().CaptureSection == g.sec.ID {
-				licon(c, "arrow-down-to-line", 10, k.muted).Tooltip(tr("捕获目标"))
-			}
-			total := len(g.open) + len(g.done)
-			text(c, itoa(total), 10, 14, 400, k.muted).Grow(1)
-			if head.Hovered() && a.iconButton(c, k, "plus", 18, 12, fmt.Sprintf(tr("在「%s」中添加内容"), sectionName(g.sec))) {
-				a.newNoteIn(g.sec)
-			}
-			if head.Hovered() || a.secMenuOpen == g.sec.ID { // 同 Tauri：悬停出「…」分组操作
-				mb := ghostIconButton(c, k, "secmore-"+g.sec.ID, "ellipsis", tr("分组操作"), 18, 12, false, true)
-				mb.Menu(func(m *ui.Menu) {
-					a.secMenuOpen = g.sec.ID
-					secs := a.noteSections()
-					i := slices.IndexFunc(secs, func(x store.Section) bool { return x.ID == g.sec.ID })
-					a.sectionMenu(m, g.sec, i, len(secs))
-				})
-				if !mb.Hovered() && a.secMenuOpen == g.sec.ID {
-					a.secMenuOpen = ""
+			head.ContextMenu(func(m *ui.Menu) {
+				if len(g.done) > 0 && m.Item(tr("清理已完成")).Chosen() {
+					a.section = g.sec.ID
+					a.clearDone(c)
 				}
-			}
-		})
-		if collapsed {
-			return
-		}
-		if len(g.open) == 0 && len(g.done) == 0 {
-			text(c, tr("此分组为空"), 11, 16, 400, k.muted).Padding(8, 0).TextAlign(ui.Center).FillWidth().Key("secempty-" + g.sec.ID).Transition(foldTransition)
-			return
-		}
-		ui.Column(c).Gap(4).Key("secbody-" + g.sec.ID).Transition(foldTransition).Children(func() {
-			y := top + 26
-			skip := float32(0)
-			flush := func() {
-				if skip > 0 {
-					ui.Box(c).Height(skip - 4).Key("gap-" + itoa(int(y))) // 占位：跳过的卡片 + 卡间距（减去它自己的一个间距）
-					skip = 0
+				m.Separator()
+				secs := a.noteSections()
+				i := slices.IndexFunc(secs, func(x store.Section) bool { return x.ID == g.sec.ID })
+				a.secMenuSrc = "head"
+				a.sectionMenu(m, g.sec, i, len(secs))
+			})
+			a.sectionColorPopover(c, k, g.sec, head, "head")
+			head.Children(func() {
+				b := ui.Box(c).Size(16, 16).Radius(6).Center()
+				b.Children(func() { foldChevron(c, k, collapsed) })
+				if b.Clicked() {
+					g.sec.Collapsed = !collapsed
+					_ = a.store.UpdateSection(g.sec)
 				}
+				if g.sec.Color != "" { // 同 Tauri SectionGroup：分组色点
+					ui.Box(c).Size(8, 8).Radius(4).Background(hexColor(g.sec.Color))
+				}
+				a.sectionHeadName(c, k, g.sec)
+				if g.sec.KeepAfterSend {
+					liconFilled(c, "star", 10, k.muted).Tooltip(tr("发送后保留"))
+				}
+				if g.sec.ID != store.SectionInbox && a.store.Settings().CaptureSection == g.sec.ID {
+					licon(c, "arrow-down-to-line", 10, k.muted).Tooltip(tr("捕获目标"))
+				}
+				total := len(g.open) + len(g.done)
+				text(c, itoa(total), 10, 14, 400, k.muted).Grow(1)
+				if head.Hovered() && a.iconButton(c, k, "plus", 18, 12, fmt.Sprintf(tr("在「%s」中添加内容"), sectionName(g.sec))) {
+					a.newNoteIn(g.sec)
+				}
+				if head.Hovered() || a.secMenuOpen == g.sec.ID { // 同 Tauri：悬停出「…」分组操作
+					mb := ghostIconButton(c, k, "secmore-"+g.sec.ID, "ellipsis", tr("分组操作"), 18, 12, false, true)
+					mb.Menu(func(m *ui.Menu) {
+						a.secMenuOpen = g.sec.ID
+						secs := a.noteSections()
+						i := slices.IndexFunc(secs, func(x store.Section) bool { return x.ID == g.sec.ID })
+						a.secMenuSrc = "head"
+						a.sectionMenu(m, g.sec, i, len(secs))
+					})
+					if !mb.Hovered() && a.secMenuOpen == g.sec.ID {
+						a.secMenuOpen = ""
+					}
+				}
+			})
+			if collapsed {
+				return
 			}
-			for _, n := range g.open {
-				if height >= 0 && (y+cardH < a.vis.top || y > a.vis.bottom) && !a.chosen.Has(n.ID) {
-					skip += cardH + 4
-				} else {
+			if len(g.open) == 0 && len(g.done) == 0 {
+				a.emptySection(c, k, g.sec)
+				return
+			}
+			// 吸顶时卡片滚到区头下沿即被裁掉（同 Tauri 卡片在吸顶栏下沿渐隐，不与标题叠印）：
+			// 外层裁切窗随区头下移，内层反向平移保持卡片原位
+			clip := ui.Box(c).Key("secclip-" + g.sec.ID)
+			if shift := off - 4; shift > 0 {
+				clip.Translate(0, shift).ClipY()
+			}
+			clip.Children(func() {
+				body := ui.Column(c).Gap(4).Key("secbody-" + g.sec.ID).Transition(foldTransition)
+				if shift := off - 4; shift > 0 {
+					body.Translate(0, -shift)
+				}
+				body.Children(func() {
+					y := top + 26
+					skip := float32(0)
+					flush := func() {
+						if skip > 0 {
+							ui.Box(c).Height(skip - 4).Key("gap-" + itoa(int(y))) // 占位：跳过的卡片 + 卡间距（减去它自己的一个间距）
+							skip = 0
+						}
+					}
+					for _, n := range g.open {
+						if height >= 0 && !a.vis.has(y, cardH) && !a.vis.has(y+shift, cardH) && !a.chosen.Has(n.ID) {
+							skip += cardH + 4
+						} else {
+							flush()
+							a.noteCard(c, k, n)
+						}
+						y += cardH + 4
+					}
 					flush()
-					a.noteCard(c, k, n)
-				}
-				y += cardH + 4
-			}
-			flush()
-			if len(g.done) > 0 {
-				a.doneRow(c, k, g)
-			}
+					if len(g.done) > 0 {
+						a.doneRow(c, k, g)
+					}
+				})
+			})
 		})
 	})
 	if height < 0 { // 高度不可预知：之后的分组全部真实构建，避免占位算错漏卡
@@ -541,6 +677,7 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 		box.Radius(0)
 	}
 	hovered := box.Hovered()
+	a.bandHover(n.ID, hovered)
 	// Tauri：舒适卡悬停上移 1px + elevation-2（transform / box-shadow 150ms）；紧凑卡悬停只给影子；
 	// 多选（checked）为内发光，舒适卡同时保持抬升；键盘焦点只抬升不描边。
 	elevated(box, k, hovered || (checked && !compact) || (focused && !checked))
@@ -571,7 +708,7 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 			ui.Box(c).Absolute().Top(-4).Left(6).Right(6).Height(2).Radius(1).Background(stok(c).primary).PassThrough()
 		}
 		if compact {
-			a.compactCard(c, k, n, hovered || focused)
+			a.compactCard(c, k, n, hovered || focused, a.compactHover(c, box, n))
 			a.cardOverlays(c, k, n, checked, true)
 			a.quickBadge(c, k, idx, 12)
 			a.cardGrip(c, k, n, 9)
@@ -585,34 +722,62 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 		}
 		head.Children(func() {
 			if !a.cardInlineInput(c, k, n) {
-				title := cardTitle(n)
-				if n.Title != "" {
+				// 通栏说最有用的话（有意偏离 Tauri 的只写类型）：自定义标题 → 来源应用 → 类型；右端是时间与非纯文本的类型小标
+				kind := cardTitle(n)
+				title := kind
+				switch {
+				case n.Title != "":
 					title = n.Title
+				case noteHeadSource(n):
+					title = n.SourceApp
+				default:
+					kind = ""
+				}
+				if kind == tr("文本") {
+					kind = ""
 				}
 				tb := ui.Row(c).Grow(1).Basis(0).Key("title-hit").Role(ui.RoleButton).Label(title).Tooltip(tr("点击重命名"))
 				tb.Children(func() { text(c, title, 11, 16, 600, k.cardHeadText).SingleLine() })
 				if tb.Clicked() { // 同 Tauri：点通栏标题就地改名
 					a.titleEditID, a.titleText = n.ID, n.Title
 				}
+				meta := ago(n.CreatedAt, time.Now())
+				if kind != "" {
+					meta += " · " + kind
+				}
+				text(c, meta, 10, 14, 400, k.cardHeadText.Alpha(0.86)).SingleLine().Shrink(0)
 			}
 			if n.Kept { // 同 Tauri：常用卡通栏右端星标
 				liconFilled(c, "star", 12, k.cardHeadText)
 			}
 			if img := a.appIcon(n.BundleID); img != nil { // 应用图标嵌入通栏右端（同 Tauri Paste 风格）：左缘完整，上/右/下被通栏裁去少许
-				ui.Box(c).Width(36).Height(28).Margin(0, -8, 0, 0).Clip().AlignItems(ui.Center).Children(func() {
+				ic := ui.Row(c).Width(36).Height(28).Margin(0, -8, 0, 0).Clip().AlignItems(ui.Center).Shrink(0)
+				if !k.pt { // 卡片右上圆角同样裁掉图标（Tauri 卡片 overflow-hidden）
+					ic.Radius(0, 10, 0, 0)
+				}
+				ic.Children(func() {
 					ui.Image(c, img).Size(40, 40)
 				})
 			}
 		})
-		ui.Column(c).Height(62).Margin(4, 8, 0, 8).Clip().Children(func() {
+		foot := a.noteFooterShown(n)
+		bodyH, lines := float32(62), 3
+		if !foot { // 没有页脚：正文多得一行（62 + 页脚 16 + 底边距 6 → 4 行 72 + 余量）
+			bodyH, lines = 80, 4
+		}
+		ui.Column(c).Height(bodyH).Margin(4, 8, 0, 8).Clip().Children(func() {
 			if n.Blur {
 				return // 模糊卡不构建正文（旁白与截图都读不到）
 			}
-			if n.Kind == "image" {
-				if img := a.thumb(n.ImageFile); img != nil {
-					w, h := ui.ImageSize(img)
-					ui.Image(c, img).Size(62*w/max(h, 1), 62).Radius(6)
+			if n.Kind == "image" { // 同 Tauri：多张并排 3 张 +N，真实备注一行
+				files, h := n.MediaFiles(), bodyH
+				if s := strings.TrimSpace(imageNoteText(n)); s != "" && !store.IsImagePlaceholder(s) {
+					h -= 20
 				}
+				ui.Column(c).Gap(4).FillWidth().Children(func() {
+					a.cardImages(c, k, files, 0, h)
+					cardImageCaption(c, k, n)
+				})
 				return
 			}
 			if n.Kind == "link" {
@@ -620,27 +785,25 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 				return
 			}
 			if isCode(n) {
-				a.codeText(c, k, n)
+				a.codeText(c, k, n, lines)
 				return
 			}
-			if files := n.MediaFiles(); len(files) > 0 { // 图文组合卡：文字 + 右侧首图缩略（同 Tauri 组合卡）
-				ui.Row(c).Gap(8).Children(func() {
-					highlightText(c, k, n.Text, a.query, 12, 18, k.fg).Wrap().MaxLines(3).Grow(1).Basis(0)
-					a.cardThumb(c, k, files)
+			if files := n.MediaFiles(); len(files) > 0 { // 图文组合卡（同 Tauri isComposite）：正文 + 下方一排最多 4 张缩略 +N
+				ui.Column(c).Gap(4).Fill().Children(func() {
+					doneText(highlightText(c, k, n.Text, a.query, 12, 18, k.fg).Wrap().MaxLines(lines-2), k, n) // 去掉 32 缩略条后只放整行，不切半行
+					a.cardThumbStrip(c, k, files)
 				})
 				return
 			}
-			highlightText(c, k, n.Text, a.query, 12, 18, k.fg).Wrap().MaxLines(3)
+			doneText(highlightText(c, k, n.Text, a.query, 12, 18, k.fg).Wrap().MaxLines(lines), k, n)
 		})
-		ui.Row(c).Height(16).Margin(0, 8, 6, 8).AlignItems(ui.Center).Children(func() {
-			src := ""
-			if n.SourceApp != "" {
-				src = tr("来自 ") + n.SourceApp
-			}
-			text(c, src, 10, 14, 400, k.muted).SingleLine().Grow(1)
-			a.aiBusyMark(c, k, n.ID)
-			text(c, ago(n.CreatedAt, time.Now()), 10, 14, 400, k.muted)
-		})
+		if foot {
+			ui.Row(c).Height(16).Margin(0, 8, 6, 8).AlignItems(ui.Center).Children(func() {
+				a.cardFooterLeadOpt(c, k, n, !noteHeadSource(n))
+				a.aiBusyMark(c, k, n.ID)
+				a.sentChip(c, k, n)
+			})
+		}
 		if n.Blur {
 			blurOverlay(c, k, 20)
 		}
@@ -654,10 +817,11 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 			ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Border(1, ptG600).PassThrough()
 		}
 	})
-	if box.Clicked() && !(box.ClickModifiers()&ui.Shift != 0 && a.rangeSelect(n.ID)) {
-		a.cardClick(n.ID, idx, box.ClickModifiers())
+	clk, dbl, mods := cardPressed(box, n.ID) // 正文是拖出源，点在正文上也算点卡片
+	if clk && !(mods&ui.Shift != 0 && a.rangeSelect(n.ID)) {
+		a.cardClick(n.ID, idx, mods)
 	}
-	if box.DoubleClicked() && idx >= 0 {
+	if dbl && idx >= 0 {
 		a.cardDoubleClick(n, idx, false)
 	}
 }
@@ -688,15 +852,9 @@ func (a *app) cardClick(id string, idx int, mods ui.Modifiers) {
 }
 
 // cardDoubleClick 同 Tauri：双击直发该卡；双击落在刚才的多选集合里则整组发送。
-// 剪贴卡优先添加进打开的编辑器（详情窗编辑中时追加到正文末尾）。
+// 剪贴卡在详情窗开着时追加进那张卡（编辑中进草稿，光标落末尾；含图片），见 sendFromList。
 func (a *app) cardDoubleClick(n store.Note, idx int, clip bool) {
 	a.selected = idx
-	if clip && a.detailWin != nil && a.detail.edit && n.Kind != "image" {
-		a.detailText = strings.TrimRight(a.detailText, "\n") + "\n" + n.Text
-		a.detailWin.Invalidate()
-		a.showHUD("ok", tr("已添加到正在编辑的卡片"))
-		return
-	}
 	stash := a.multiStash
 	a.multiStash = nil
 	if len(stash) >= 2 && time.Since(a.multiStashAt) < 600*time.Millisecond && slices.Contains(stash, n.ID) {
@@ -707,11 +865,11 @@ func (a *app) cardDoubleClick(n store.Note, idx int, clip bool) {
 			}
 		}
 		a.chosen.Clear()
-		a.send(group)
+		a.sendFromList(group)
 		return
 	}
 	a.chosen.Clear()
-	a.send([]store.Note{n})
+	a.sendFromList([]store.Note{n})
 }
 
 // elevated 按 on 在 150ms 内淡入 / 淡出 elevation-2（贴身影 + 环境影 + 顶缘高光）。
@@ -727,6 +885,7 @@ func elevated(e ui.Element, k tokens, on bool) {
 
 // cardOverlays 画卡面之上的选中柔光（.list-selection-glow）与捕获闪烁（flash-highlight：琥珀 30% → 透明，1800ms ease-out）。
 func (a *app) cardOverlays(c *ui.Context, k tokens, n store.Note, checked, compact bool) {
+	a.deliveryBandOverlay(c, k, n.ID, compact)
 	r := float32(10)
 	if k.pt {
 		r = 0
@@ -736,8 +895,7 @@ func (a *app) cardOverlays(c *ui.Context, k tokens, n store.Note, checked, compa
 		if compact {
 			glow = 8
 		}
-		ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Radius(r).PassThrough().
-			InsetShadow(0, 0, 8, 1, k.selRim).InsetShadow(0, 0, glow, 2, k.selHalo)
+		selectionGlow(c, k, r, glow)
 	}
 	if n.ID != a.flashID {
 		return
@@ -762,7 +920,7 @@ func (a *app) cardOverlays(c *ui.Context, k tokens, n store.Note, checked, compa
 const flashDur = 1800 * time.Millisecond
 
 // compactCard 是紧凑密度的单行卡（Tauri cardDensity=compact：40 高，左侧拖拽把手，单行省略，悬停操作钮垂直居中）。
-func (a *app) compactCard(c *ui.Context, k tokens, n store.Note, hovered bool) {
+func (a *app) compactCard(c *ui.Context, k tokens, n store.Note, hovered, active bool) {
 	ui.Box(c).Size(18, 18).Margin(0, 0, 0, 4).Padding(2).Opacity(0.6).Children(func() { licon(c, "grip-vertical", 14, k.muted.Alpha(0.5)) })
 	ui.Row(c).Grow(1).Basis(0).Padding(0, 8).Gap(6).AlignItems(ui.Center).Children(func() {
 		if !(n.Kind == "link" && a.favicon(n.LinkIcon) != nil) {
@@ -772,8 +930,18 @@ func (a *app) compactCard(c *ui.Context, k tokens, n store.Note, hovered bool) {
 		if n.Blur {
 			line = ""
 		}
-		if n.Kind == "image" {
-			line = tr("图片")
+		files := n.MediaFiles()
+		if n.Kind == "image" { // 同 Tauri imageListLabel：真实备注优先，否则「图片 ×N」
+			line = cardTitle(n)
+			if s := strings.TrimSpace(imageNoteText(n)); s != "" && !store.IsImagePlaceholder(s) {
+				line = s
+			}
+		}
+		if len(files) > 0 && !n.Blur { // 带图行：首图 24pt 缩略
+			if img := a.thumb(files[0]); img != nil {
+				iw, ih := ui.ImageSize(img)
+				ui.Image(c, img).Size(min(24*iw/max(ih, 1), 40), 24).Radius(4)
+			}
 		}
 		if n.Kind == "link" && !n.Blur {
 			a.linkFavicon(c, n, 16)
@@ -781,10 +949,29 @@ func (a *app) compactCard(c *ui.Context, k tokens, n store.Note, hovered bool) {
 				line = n.LinkTitle
 			}
 		}
-		if isCode(n) {
-			text(c, line, 11, 16, 400, k.fg).Font(fontMono).SingleLine().Grow(1).Basis(0)
-		} else {
-			text(c, line, 12, 17, 400, k.fg).SingleLine().Grow(1).Basis(0)
+		a.marqueeLine(c, n.ID, active, func() ui.Element { // 悬停行文字溢出时跑马灯（同 Tauri MarqueeLine）
+			switch title := strings.TrimSpace(n.Title); {
+			case title != "" && !n.Blur: // 同 Tauri CompactRow：命名过的卡「标题 — 摘要」，摘要淡色
+				spans := []ui.Span{{Text: title, Weight: 500, Color: k.fg}}
+				if line != "" {
+					spans = append(spans, ui.Span{Text: " — " + line, Color: k.muted})
+				}
+				return doneText(ui.RichText(c, spans...).Font(fontSans).FontSize(11).FixedLineHeight(16), k, n)
+			case isCode(n):
+				return doneText(highlightText(c, k, line, a.query, 10.5, 15, k.fg).Font(fontMono), k, n)
+			}
+			return doneText(highlightText(c, k, line, a.query, 11, 16, k.fg), k, n)
+		})
+		if !hovered { // 尾部元数据，悬停让位给操作钮
+			if n.Kept {
+				liconFilled(c, "star", 12, amber400).Shrink(0)
+			}
+			if n.Provenance != nil {
+				licon(c, "link-2", 12, stok(c).primary).Shrink(0).Tooltip(tr("来自发送结果"))
+			}
+			if n.Kind != "image" && len(files) > 0 { // 同 Tauri CompactRow「N图」
+				text(c, fmt.Sprintf(tr("%d图"), len(files)), 10, 14, 400, k.muted).Shrink(0)
+			}
 		}
 	})
 	if n.Blur {
@@ -796,24 +983,26 @@ func (a *app) compactCard(c *ui.Context, k tokens, n store.Note, hovered bool) {
 }
 
 // cardActions 是悬停时出现在卡片右下角的浮动操作钮组（22×22，间距 2）。
-func (a *app) cardActions(c *ui.Context, k tokens, n store.Note) { a.cardActionsAt(c, k, n, 4) }
+func (a *app) cardActions(c *ui.Context, k tokens, n store.Note) {
+	a.cardActionsAt(c, k, n, 4+a.bandLift(n.ID, false))
+}
 
 func (a *app) cardActionsAt(c *ui.Context, k tokens, n store.Note, bottom float32) {
 	right := float32(8)
-	if bottom != 4 {
+	if bottom == 9 { // 紧凑行：垂直居中
 		right = 4
 	}
 	fade := ui.ElementTransition{Duration: 100 * time.Millisecond, Ease: easeTw, Enter: &ui.Motion{}, Exit: &ui.Motion{}} // reveal="hover-focus"：opacity 100ms
 	ui.Row(c).Absolute().Right(right).Bottom(bottom).Gap(2).Key("acts").Transition(fade).Children(func() {
-		if core.AliasOccurrences(n.Text, a.store.Settings().AliasEntities) > 0 { // 卡上还有可还原的词典占位符（同 Tauri 恢复化名）
-			if floatIconButton(c, k, "na-alias", "venetian-mask", tr("恢复化名"), false, false).Clicked() {
-				a.restoreCardAliases(n)
-			}
-		}
 		link := noteLink(n)
+		alias := core.AliasOccurrences(n.Text, a.store.Settings().AliasEntities) > 0
+		// 同 Tauri 顺序：发送 · [恢复化名] · 预览 / 打开页面 · 编辑 · 模糊 · 删除
 		for _, act := range []struct{ icon, tip string }{
-			{"send", "发送到对话（双击卡片同效）"}, {"expand", "在详情窗打开"}, {"pencil", "编辑"}, {"eye-off", "模糊内容"}, {"trash-2", "删除"},
+			{"send", "发送到对话（双击卡片同效）"}, {"venetian-mask", "恢复化名"}, {"expand", "预览（Space）"}, {"pencil", "编辑"}, {"eye-off", "模糊内容"}, {"trash-2", "删除"},
 		} {
+			if act.icon == "venetian-mask" && !alias {
+				continue
+			}
 			if act.icon == "expand" && link != "" { // 同 Tauri openPreview：链接卡打开网页
 				act.icon, act.tip = "external-link", "打开页面（Space）"
 			}
@@ -830,7 +1019,9 @@ func (a *app) cardActionsAt(c *ui.Context, k tokens, n store.Note, bottom float3
 			if b.Clicked() {
 				switch act.icon {
 				case "send": // 同 Tauri sendSelfOrChecked：在多选里就发整组
-					a.send(a.clipMoveTargets(n))
+					a.sendFromList(a.clipMoveTargets(n))
+				case "venetian-mask":
+					a.restoreCardAliases(n)
 				case "expand":
 					a.openDetail(n)
 				case "external-link":
@@ -848,8 +1039,13 @@ func (a *app) cardActionsAt(c *ui.Context, k tokens, n store.Note, bottom float3
 }
 
 // codeText：卡面代码着色（同 Tauri 卡面 highlightCode，只算可见头部 600 字节）。
-func (a *app) codeText(c *ui.Context, k tokens, n store.Note) {
-	ui.RichText(c, codeSpans(k, n.Text, n.CodeLang, 600)...).Font(fontMono).FontSize(11).FixedLineHeight(16.5).Wrap().MaxLines(3)
+// codeText：代码卡卡面着色；搜索时让位给命中高亮（同 Tauri note.codeLang && !query），完成态弱化。
+func (a *app) codeText(c *ui.Context, k tokens, n store.Note, lines int) {
+	if a.query != "" {
+		doneText(highlightText(c, k, n.Text, a.query, 11, 16.5, k.fg).Font(fontMono).Wrap().MaxLines(lines), k, n)
+		return
+	}
+	doneText(ui.RichText(c, codeSpans(k, n.Text, n.CodeLang, 600)...).Font(fontMono).FontSize(11).FixedLineHeight(16.5).Wrap().MaxLines(lines), k, n)
 }
 
 func codeSpans(k tokens, src, lang string, limit int) []ui.Span {
@@ -884,6 +1080,9 @@ func isWord(b byte) bool {
 }
 
 func (a *app) hintsRow(c *ui.Context, k tokens) {
+	if a.store.Settings().KeyHintsOff {
+		return
+	}
 	ui.Row(c).Height(20).Margin(0, 12).Gap(10).AlignItems(ui.Center).Children(func() { a.hintItems(c, k) })
 }
 
@@ -899,9 +1098,11 @@ func (a *app) hintItems(c *ui.Context, k tokens) {
 }
 
 func (a *app) composerBar(c *ui.Context, k tokens) {
-	ui.Column(c).Height(60).Padding(6, 12, 12, 12).Children(func() {
-		box := ui.Row(c).Height(42).Padding(8, 10).Gap(6).Radius(14).Background(k.track).Border(1, k.inputBorder).
-			InsetShadow(0, 1, 2, 0, k.insetShadow).AlignItems(ui.Center)
+	// 同 Tauri PillInput multiline：输入框随行数长高（最少 42，正文最多 6 行再内部滚动），两侧控件贴底对齐。
+	// 之前外层定死 60、框定死 42，第 3 行起文字溢出到面板外。
+	ui.Column(c).Shrink(0).Padding(6, 12, 12, 12).Children(func() {
+		box := ui.Row(c).MinHeight(42).Padding(8, 10).Gap(6).Radius(14).Background(k.track).Border(1, k.inputBorder).
+			InsetShadow(0, 1, 2, 0, k.insetShadow).AlignItems(ui.End)
 		box.Children(func() { a.composerRow(c, k) })
 		if files := box.DroppedFiles(); len(files) > 0 { // 拖入图片文件：暂存为草稿图（同 Tauri 输入框拖入）
 			a.addDraftImages(a.importImagePaths(files), tr("没有可导入的图片"))
@@ -914,7 +1115,7 @@ func (a *app) composerBar(c *ui.Context, k tokens) {
 
 // composerRow 是输入区内容：分组选择 · 多行输入 · 处理草稿 · 转大窗编辑。
 func (a *app) composerRow(c *ui.Context, k tokens) {
-	ui.Row(c).Grow(1).Gap(6).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).Grow(1).Gap(6).AlignItems(ui.End).Children(func() {
 		pick := ui.Row(c).Height(24).Padding(0, 6).Gap(4).Radius(8).AlignItems(ui.Center)
 		pc := hoverLink(pick, k)
 		pick.Children(func() {
@@ -931,7 +1132,7 @@ func (a *app) composerRow(c *ui.Context, k tokens) {
 			}
 		})
 		a.draftImageChips(c, k)
-		ui.TextAreaBase(c, &a.draft).Bind(&a.draftIn).Grow(1).Lines(1, 6).Font(fontSans).FontSize(13).FixedLineHeight(19.5).
+		ui.TextAreaBase(c, &a.draft).Bind(&a.draftIn).Grow(1).Basis(0).Margin(2, 0).Lines(1, 6).Font(fontSans).FontSize(13).FixedLineHeight(19.5).
 			TextColor(k.fg).PlaceholderColor(k.muted).Placeholder(tr("添加笔记或提示词…")).
 			OnPaste(a.pasteIntoDraft).
 			OnTextKey(func(key ui.TextKey) bool {
@@ -977,16 +1178,22 @@ func (a *app) composerSection() store.Section {
 func (a *app) keyHints() [][2]string {
 	_, focused := a.current()
 	switch {
+	case a.titleEditID != "" || a.tagEditID != "" || a.renamingSec != "" || a.taskSecRename != "": // 行内改名 / 标签输入
+		return [][2]string{{"⏎", tr("保存")}, {"Esc", tr("取消")}}
+	case a.page == pageTasks && a.taskOpen != "":
+		return [][2]string{{"Esc", tr("收起")}, {"⌘⌫", tr("删除")}, {"⌘K", tr("命令")}}
 	case a.searchOpen:
 		return [][2]string{{"Esc", tr("关闭搜索")}, {"↑↓", tr("移动焦点")}}
 	case a.page == pageTasks:
 		return [][2]string{{"⏎", tr("记下待办")}, {"⌘K", tr("命令")}, {tr("长按 ⌥ Option"), tr("全部快捷键")}}
 	case a.page == pageNotes && a.noteSub != subNotes:
 		return [][2]string{{"⌘K", tr("命令")}, {tr("长按 ⌥ Option"), tr("全部快捷键")}}
+	case a.chosen.Len() > 1: // 多选：合并只对 ≥ 2 张有意义
+		return [][2]string{{"⌘⏎", fmt.Sprintf(tr("发送 %d 张"), a.chosen.Len())}, {"⌘M", tr("合并")}, {"⌘C", tr("复制为列表")}, {"Esc", tr("取消勾选")}}
 	case a.chosen.Len() > 0:
 		return [][2]string{{"⌘⏎", fmt.Sprintf(tr("发送 %d 张"), a.chosen.Len())}, {"⌘C", tr("复制为列表")}, {"Esc", tr("取消勾选")}, {"⌘K", tr("命令")}}
 	case focused && a.focusList:
-		return [][2]string{{"⌘⏎", tr("发送")}, {"Space", tr("预览")}, {"⏎", tr("编辑")}, {"x", tr("勾选")}, {"⌘K", tr("命令")}}
+		return [][2]string{{"⌘⏎", tr("发送")}, {"Space", tr("预览")}, {"⏎", tr("编辑")}, {"x", tr("勾选")}, {"d", tr("完成")}}
 	}
 	return [][2]string{{"↑↓", tr("选卡片")}, {"⌘F", tr("搜索")}, {"⌘K", tr("命令")}, {tr("长按 ⌥ Option"), tr("全部快捷键")}}
 }
@@ -1003,7 +1210,7 @@ func (a *app) selectionBar(c *ui.Context, k tokens) {
 		Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB).InsetShadow(0, 1, 0, 0, k.floatInset).AlignItems(ui.Center).
 		Key("selection-bar").Transition(ui.ElementTransition{Duration: 160 * time.Millisecond, Ease: easeStandard, Enter: &ui.Motion{Y: 8}})
 	bar.Children(func() {
-		text(c, fmt.Sprintf(tr("已选 %d"), n), 11, 16, 400, k.muted).Padding(0, 4).SingleLine()
+		text(c, fmt.Sprintf(tr("已选 %d"), n), 11, 16, 400, k.muted).FontFeatures("tnum").Padding(0, 4).SingleLine()
 		ui.Spacer(c)
 		act := func(icon, tip string, enabled bool) bool {
 			b := ui.Box(c).Size(22, 22).Radius(8).Center().Tooltip(tip).Key("sel-" + icon)
@@ -1050,16 +1257,27 @@ func (a *app) selectionBar(c *ui.Context, k tokens) {
 			fadeColor(send, "bg", bg, ctl).Shadow(0, 1, 2, 0, send.AnimateColor("sh", sh, ctl))
 			send.AnimatePose(ui.Pose{Y: pressY(send.Pressed())}, ctl)
 			label := tr("发送")
-			if a.editorInsertLikely() { // 目的地如实：编辑器开着时内容进卡片而非外发
+			insert := a.insertsIntoOpenCard(a.chosenNotes())
+			blocked := ""
+			if !insert {
+				blocked = a.targetBlockedReason()
+			}
+			switch {
+			case insert: // 目的地如实：编辑器开着时内容进卡片而非外发
 				label = tr("添加到卡片")
-				send.Tooltip(tr("添加到打开的卡片编辑器"))
+				send.Tooltip(tr("添加到打开的卡片光标处（有选中文字则替换）"))
+			case blocked != "": // 同 Tauri disabled={!targetReady}：置灰并说明原因
+				send.Opacity(0.45).Tooltip(fmt.Sprintf(tr("发送不可用：%s"), blocked)).Label(fmt.Sprintf(tr("发送不可用：%s"), blocked))
+			default:
+				r, _ := a.resolution()
+				send.Label(fmt.Sprintf(tr("发送到当前目标，发送方案 %s，粘贴后动作 %s"), profileName(r.Profile), enterPolicyLabel(r.Profile.EnterPolicy)))
 			}
 			send.Children(func() {
 				licon(c, "send", 12, s.btnFg)
 				text(c, label, 11, 16, 500, s.btnFg)
 				text(c, "⌘⏎", 9, 12, 400, s.btnFg).Opacity(0.7)
 			})
-			if send.Clicked() {
+			if send.Clicked() && blocked == "" {
 				a.sendSelected()
 			}
 			more := ui.Box(c).Height(24).Padding(0, 4).Radius(0, 10, 10, 0).BorderWidth(1, 1, 1, 0).BorderColor(s.btnBorder).Center()
@@ -1088,6 +1306,8 @@ func (a *app) selectionBar(c *ui.Context, k tokens) {
 				m.Separator()
 				a.outputModeItems(m, a.chosenNotes)
 				m.Separator()
+				a.profileMenuItems(m)
+				m.Separator()
 				a.templateMenu(m, tr("用模板发送 · 常用"), a.chosenNotes)
 			})
 		})
@@ -1098,6 +1318,9 @@ func (a *app) selectionBar(c *ui.Context, k tokens) {
 func (a *app) copyChosenAsList() {
 	notes := a.chosenNotes()
 	if len(notes) == 0 {
+		return
+	}
+	if a.copyNotesRich(notes) { // 含图片：文字与图片一起复制
 		return
 	}
 	texts := make([]string, len(notes))
@@ -1136,10 +1359,15 @@ func blurOverlay(c *ui.Context, k tokens, icon float32) {
 }
 
 // cardInlineInput：卡片标题栏里的就地输入（右键「重命名…」/「新标签…」），返回是否占用了标题栏。
+// cardInlineInput 用通栏白字；剪贴票据头底色浅，用 cardInlineInputOn 传正文色。
 func (a *app) cardInlineInput(c *ui.Context, k tokens, n store.Note) bool {
+	return a.cardInlineInputOn(c, k, n, k.cardHeadText)
+}
+
+func (a *app) cardInlineInputOn(c *ui.Context, k tokens, n store.Note, fg ui.Color) bool {
 	switch {
 	case a.titleEditID == n.ID:
-		ui.TextInputBase(c, &a.titleText).Grow(1).Font(fontSans).FontSize(11).TextColor(k.cardHeadText).Placeholder(tr("卡片标题，↵ 保存，留空清除")).
+		ui.TextInputBase(c, &a.titleText).Grow(1).Font(fontSans).FontSize(11).TextColor(fg).Placeholder(tr("卡片标题，↵ 保存，留空清除")).
 			Label(tr("卡片标题")).Focus().OnTextKey(func(key ui.TextKey) bool {
 			switch key.Key {
 			case ui.KeyEnter:
@@ -1154,7 +1382,7 @@ func (a *app) cardInlineInput(c *ui.Context, k tokens, n store.Note) bool {
 		})
 		return true
 	case a.tagEditID == n.ID:
-		ui.TextInputBase(c, &a.tagText).Grow(1).Font(fontSans).FontSize(11).TextColor(k.cardHeadText).Placeholder(tr("新标签，↵ 添加")).
+		ui.TextInputBase(c, &a.tagText).Grow(1).Font(fontSans).FontSize(11).TextColor(fg).Placeholder(tr("新标签，↵ 添加")).
 			Label(tr("新标签")).Focus().OnTextKey(func(key ui.TextKey) bool {
 			switch key.Key {
 			case ui.KeyEnter:
@@ -1192,7 +1420,9 @@ func (a *app) newNoteIn(sec store.Section) {
 	a.detail.blank = !dup                             // 关窗时一字未改就回收（已有的同名卡不动）
 }
 
-var openDetailFn = (*app).openDetail // 测试替换（真窗口需要运行中的应用）
+var openDetailFn func(*app, store.Note) // 测试替换（真窗口需要运行中的应用）；在 init 里赋值，避免与 runAI → startAIReview 形成初始化环
+
+func init() { openDetailFn = (*app).openDetail }
 
 // sectionHeadName：分组头组名（同 Tauri SectionGroup h3）——单击 220ms 后折叠 / 展开（与双击区分），双击就地改名；
 // 改名框 ↵ 提交、Esc 放弃、失焦提交。
@@ -1220,7 +1450,7 @@ func (a *app) sectionHeadName(c *ui.Context, k tokens, s store.Section) {
 		return
 	}
 	name := ui.Row(c).Key("secname-" + s.ID).Role(ui.RoleButton).Label(sectionName(s)).
-		Tooltip(fmt.Sprintf(tr("%s · 点击折叠/展开 · 双击重命名"), sectionName(s)))
+		Tooltip(fmt.Sprintf(tr("%s · 拖动调整分组顺序 · 点击折叠/展开（吸顶时回到组首） · 双击重命名"), sectionName(s)))
 	name.Children(func() { text(c, sectionName(s), 11, 16, 600, k.muted).LetterSpacing(0.88).SingleLine() })
 	switch {
 	case name.DoubleClicked():
@@ -1232,6 +1462,10 @@ func (a *app) sectionHeadName(c *ui.Context, k tokens, s store.Section) {
 		lpAfter(220*time.Millisecond, func() {
 			a.onMain(func() {
 				if a.secClickSeq != seq {
+					return
+				}
+				if top, ok := a.stick.top[id]; ok { // 同 Tauri scrollToStartIfStuck：吸顶中点标题先回到组首
+					a.noteScroll.Y = top
 					return
 				}
 				for _, x := range a.store.Sections() {

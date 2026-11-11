@@ -107,7 +107,7 @@ func TestSendProfilesQuickSwitchAndPolicies(t *testing.T) {
 	a.quickOpen = false
 	a.send([]store.Note{note})
 	tt.Frame()
-	if len(a.pending) == 0 || !tt.HasText("发送前检查：发往 Terminal · 稳妥发送") {
+	if len(a.pending) == 0 || !tt.HasText("Terminal · 稳妥发送") {
 		t.Fatalf("确认回车的方案应先进预检 %v", tt.Texts())
 	}
 	before := len(sys.sent())
@@ -145,7 +145,9 @@ func TestSendProfilesQuickSwitchAndPolicies(t *testing.T) {
 func TestSettingsProfilePopoverMenus(t *testing.T) {
 	a, _ := testApp(t)
 	a.openSettingsAt(setPagePaste, 0)
-	st := ui.NewTester(a.settingsView, 1040, 1200) // 粘贴与隐私页加了可逆化名，发送方案下移
+	a.paste.advOpen = true                         // 发送方案收在「共享方案与高级管理」里
+	a.paste.sel = "com.apple.Terminal"             // 右侧卡片显示终端方案，「稳妥发送」只剩默认方案按钮
+	st := ui.NewTester(a.settingsView, 1040, 2000) // 主从布局较高，发送方案在下方
 	st.Frame()
 	if err := st.Click("新建"); err != nil {
 		t.Fatal(err)

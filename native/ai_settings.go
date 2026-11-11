@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/egoist/mygo"
@@ -38,12 +39,13 @@ type aiUI struct {
 	models             []string
 	fetching, testing  bool
 	deleting, keyKnown bool
+	newLabel, newInstr string // 自定义动作的新增草稿
 }
 
 var ( // 测试替换
 	aiListModels = ai.ListModels
 	aiTest       = ai.Test
-	aiDeleteKey  = func() error { return mygo.Secrets.Delete(aiKeyName) }
+	aiDeleteKey  = removeAIKey
 )
 
 func (a *app) aiDraftConfig() ai.Config {
@@ -110,7 +112,7 @@ func (a *app) aiSettingsRows(c *ui.Context, k tokens, s settingsTokens, st store
 					label = "覆盖"
 				}
 				if button(c, s, label) && strings.TrimSpace(a.setAIKey) != "" {
-					if err := mygo.Secrets.Set(aiKeyName, []byte(strings.TrimSpace(a.setAIKey))); err != nil {
+					if err := saveAIKey(strings.TrimSpace(a.setAIKey)); err != nil {
 						a.showHUD("warn", tr("保存失败：")+err.Error())
 					} else {
 						a.setAIKey = ""
@@ -168,8 +170,75 @@ func (a *app) aiSettingsRows(c *ui.Context, k tokens, s settingsTokens, st store
 				a.testAIConnection()
 			}
 		}},
-		{title: tr("右键笔记 → AI"), hint: tr("润色 / 精简 / 翻译 / 写成提示词，结果作为新笔记插在原文上方")},
+		{title: tr("右键笔记 → AI"), hint: tr("润色 / 精简 / 翻译 / 写成提示词；结果在详情窗里边生成边显示，逐段采纳后写回原卡")},
+		{title: tr("自定义动作"), hint: tr("名称加一句指令，出现在卡片右键 AI 菜单和详情窗「处理」里"), below: func() { a.aiActionEditor(c, k, s) }},
 	}
+}
+
+const aiActionMax = 12
+
+// addAIAction：新增自定义动作；返回问题说明（空 = 成功）。
+func (a *app) addAIAction(label, instr string) string {
+	label, instr = strings.TrimSpace(label), strings.TrimSpace(instr)
+	st := a.store.Settings()
+	switch {
+	case label == "" || instr == "":
+		return "名称和指令都要填"
+	case len([]rune(label)) > 12:
+		return "名称最多 12 个字"
+	case len([]rune(instr)) > 400:
+		return "指令最多 400 个字"
+	case len(st.AIActions) >= aiActionMax:
+		return "最多 12 个自定义动作"
+	}
+	for _, x := range a.allAIActions() {
+		if x.label == label {
+			return "已有同名动作"
+		}
+	}
+	st.AIActions = append(st.AIActions, store.AIAction{ID: fmt.Sprintf("act-%d", a.now().UnixNano()), Label: label, Instruction: instr})
+	_ = a.store.SetSettings(st)
+	return ""
+}
+
+func (a *app) removeAIAction(id string) {
+	st := a.store.Settings()
+	prev := slices.Clone(st.AIActions)
+	st.AIActions = slices.DeleteFunc(slices.Clone(st.AIActions), func(x store.AIAction) bool { return x.ID == id })
+	_ = a.store.SetSettings(st)
+	a.showHUDUndo("ok", tr("已删除自定义动作"), func() { a.patchSettings(func(x *store.Settings) { x.AIActions = prev }) })
+}
+
+// aiActionEditor：已有动作列表（悬停出删除）+ 一行新增表单。
+func (a *app) aiActionEditor(c *ui.Context, k tokens, s settingsTokens) {
+	u := &a.aiUI
+	ui.Column(c).Gap(6).Margin(6, 0, 0, 0).Key("ai-actions").Children(func() {
+		for _, x := range a.store.Settings().AIActions {
+			row := ui.Row(c).Gap(8).Padding(4, 4, 4, 8).Radius(6).Background(k.track).AlignItems(ui.Center).Key("aia-" + x.ID)
+			hov := row.Hovered()
+			row.Children(func() {
+				text(c, x.Label, 12, 17, 500, k.fg).SingleLine().Shrink(0).MaxWidth(140)
+				text(c, x.Instruction, 11, 16, 400, k.muted).SingleLine().Grow(1).Basis(0).Tooltip(x.Instruction)
+				if ghostIconButton(c, k, "aia-rm-"+x.ID, "trash-2", tr("删除")+" "+x.Label, 22, 13, true, hov).Clicked() {
+					a.removeAIAction(x.ID)
+				}
+			})
+		}
+		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+			textField(c, k, s, &u.newLabel, 120, tr("名称，如「改成邮件」"), false)
+			ui.Row(c).Grow(1).Basis(0).Height(32).Padding(0, 8).Radius(10).Background(s.input).Border(1, s.inputBorder).AlignItems(ui.Center).Children(func() {
+				ui.TextInputBase(c, &u.newInstr).Grow(1).Font(fontSans).FontSize(12).FixedLineHeight(17).TextColor(k.fg).PlaceholderColor(k.muted).
+					Placeholder(tr("指令，如「把下面的文字改写成礼貌的工作邮件」")).Label(tr("自定义动作的指令"))
+			})
+			if button(c, s, "添加") {
+				if issue := a.addAIAction(u.newLabel, u.newInstr); issue != "" {
+					a.showHUD("warn", tr(issue))
+				} else {
+					u.newLabel, u.newInstr = "", ""
+				}
+			}
+		})
+	})
 }
 
 func (a *app) requireAIKey() bool {

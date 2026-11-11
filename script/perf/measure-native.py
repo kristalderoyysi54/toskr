@@ -81,6 +81,8 @@ def main():
     for i in range(a.runs):
         r = one(a.app, a.settle); runs.append(r)
         print(f"#{i+1} open→exec {r['open_to_exec_ms']}ms | exec→水合 {r['exec_to_hydrated_ms']}ms | exec→面板 {r['exec_to_shown_ms']}ms | open→面板 {r['open_to_shown_ms']}ms | 笔记 {r['notes']} | 内存 {r['mb']}MB")
+    if all(r["open_to_shown_ms"] is None for r in runs):
+        raise SystemExit("没有一轮走到面板显示：多半卡在钥匙串授权弹窗（新构建签名变化），点「始终允许」后重跑")
     med = lambda k: statistics.median([r[k] for r in runs if r[k] is not None])
     print(f"\n中位数 open→面板 {med('open_to_shown_ms')}ms  exec→面板 {med('exec_to_shown_ms')}ms  内存 {med('mb')}MB")
     if a.idle:

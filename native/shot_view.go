@@ -23,8 +23,11 @@ const (
 	shotLoupePanelH = shotLoupeSize + 44
 	shotToolbarWEst = 760.0 // 工具条宽度估值：选区右缘离左边不足此宽时改为贴左
 	shotFrameBarW   = 480.0
-	shotEditTol     = 6.0 // 已画图形的命中容差
-	shotMinBox      = 6.0 // 框类调整后的最小边长
+	shotFrameBarH   = 38.0 // 30 的按钮上下各留 4
+	shotBarGap      = 8.0  // 浮条与选框、浮条之间的间隔（尺寸条、工具条、识别面板、操作提示共用）
+	shotNoticeH     = 24.0 // 操作提示条高度
+	shotEditTol     = 6.0  // 已画图形的命中容差
+	shotMinBox      = 6.0  // 框类调整后的最小边长
 	shotTipDelay    = 400 * time.Millisecond
 	shotLongPress   = 500 * time.Millisecond
 )
@@ -159,6 +162,9 @@ func (d *shotDisplay) hover() *shot.Rect {
 func (e *shotEditor) locked() bool { return e.tool != "" || len(e.hist.Shapes) > 0 }
 
 func (e *shotEditor) showLoupe() bool { return e.cursor != nil && (e.sel == nil || e.dragging) }
+
+// showCross：全屏十字线只在还没有选区时画；拖出 / 移动 / 缩放选区时不画（放大镜仍在）。
+func (e *shotEditor) showCross() bool { return e.cursor != nil && e.sel == nil }
 
 // allShapes：出图与历史用：正在输入的文字 / 批注说明也算进去。
 func (e *shotEditor) allShapes() []*shot.Shape {
@@ -697,16 +703,18 @@ func (a *app) shotView(c *ui.Context, d *shotDisplay) {
 	var toolbarTop float64
 	if e.sel != nil {
 		s := e.sel
-		if s.Y+s.H+8+toolbarH <= d.H {
-			toolbarTop = s.Y + s.H + 8
+		if s.Y+s.H+shotBarGap+toolbarH <= d.H {
+			toolbarTop = s.Y + s.H + shotBarGap
 		} else {
-			toolbarTop = math.Max(s.Y-8-toolbarH, 0)
+			toolbarTop = math.Max(s.Y-shotBarGap-toolbarH, 0)
 		}
 	}
 	if e.sel != nil && !e.dragging {
-		a.shotFrameBar(c, d, pal, pr, fr)
+		if e.ocr == nil { // 识别面板开着时收起尺寸条：两者都贴选区上沿，窄处会叠在一起，且此时用不到圆角阴影
+			a.shotFrameBar(c, d, pal, pr, fr, shotFrameBarTop(*e.sel, toolbarTop, toolbarH))
+		}
 		if e.notice != "" && c.Now().Sub(e.noticeAt) < 2500*time.Millisecond {
-			ui.Box(c).Absolute().Left(f32(e.sel.X)).Top(f32(math.Max(4, toolbarTop-30))).Padding(4, 8).Radius(8).Background(gray(0, 0.75)).PassThrough().
+			ui.Row(c).Absolute().Left(f32(e.sel.X)).Top(f32(math.Max(shotBarGap, toolbarTop-shotBarGap-shotNoticeH))).Height(shotNoticeH).Padding(0, 8).AlignItems(ui.Center).Radius(8).Background(gray(0, 0.75)).PassThrough().
 				Children(func() { text(c, e.notice, 11, 16, 400, colWhite) })
 		}
 		a.shotToolbar(c, d, pal, toolbarTop, toolbarH, showStyle, styleKind, styleInk, styleLv)
@@ -715,7 +723,8 @@ func (a *app) shotView(c *ui.Context, d *shotDisplay) {
 		}
 	}
 	if e.sel != nil && e.ocr != nil {
-		a.shotOCRPanel(c, d, pal)
+		a.shotOCRLines(c, d) // 行框在面板之下：面板盖在选区内侧时仍可操作面板
+		a.shotOCRPanel(c, d, pal, toolbarTop, toolbarH)
 	}
 	if e.editing != nil {
 		a.shotTextEditor(c, d, 1, gray(1, 0.7))
@@ -833,7 +842,7 @@ func (a *app) paintShotBase(p *ui.Painter, d *shotDisplay, active *shot.Rect, sh
 			p.StrokePath(&ring, 2, cross)
 		}
 	}
-	if e.showLoupe() {
+	if e.showCross() {
 		cy, cx := f32(math.Round(e.cursor.Y)-1), f32(math.Round(e.cursor.X)-1)
 		p.Fill(ui.Rect{Y: cy, W: f32(d.W), H: 2}, cross, 0)
 		p.Fill(ui.Rect{X: cx, W: 2, H: f32(d.H)}, cross, 0)
@@ -901,20 +910,43 @@ func (a *app) shotLoupe(c *ui.Context, d *shotDisplay) {
 	})
 }
 
-// shotFrameBar：选区上方：尺寸 + 出图圆角 / 阴影（参照 iShot）。
-func (a *app) shotFrameBar(c *ui.Context, d *shotDisplay, pal shotPalette, pr shot.Rect, fr shotFrame) {
-	s := d.ed.sel
-	top := s.Y + 6
-	if s.Y >= 40 {
-		top = s.Y - 36
+// shotFrameBarTop：尺寸条的纵向位置。与选框的间隔同下方工具条（shotBarGap），且不与工具条重叠：
+// 工具条在选区下方 → 尺寸条贴选区上沿外侧，上方放不下就进选区内侧；
+// 工具条被挤到选区上方 → 尺寸条进选区内侧，工具条盖进选区时再让到工具条下面。
+func shotFrameBarTop(s shot.Rect, toolbarTop, toolbarH float64) float64 {
+	if toolbarTop >= s.Y+s.H { // 工具条在下方
+		if s.Y >= shotFrameBarH+shotBarGap {
+			return s.Y - shotBarGap - shotFrameBarH
+		}
+		return s.Y + shotBarGap
 	}
+	return math.Max(s.Y+shotBarGap, toolbarTop+toolbarH+shotBarGap)
+}
+
+// shotFrameBar：选区上方：尺寸 + 圆角 / 阴影开合按钮，展开后跟滑块（参照 iShot）。
+func (a *app) shotFrameBar(c *ui.Context, d *shotDisplay, pal shotPalette, pr shot.Rect, fr shotFrame, top float64) {
+	s := d.ed.sel
 	left := math.Min(s.X, math.Max(0, d.W-shotFrameBarW))
-	bar := ui.Row(c).Absolute().Left(f32(left)).Top(f32(top)).Padding(4, 8).Gap(8).Radius(8).AlignItems(ui.Center).Cursor(ui.CursorDefault)
+	bar := ui.Row(c).Absolute().Left(f32(left)).Top(f32(top)).Height(shotFrameBarH).Padding(0, 8).Gap(8).Radius(10).AlignItems(ui.Center).Cursor(ui.CursorDefault).Key("shot-frame-bar")
 	pal.float(bar).Children(func() {
 		text(c, fmt.Sprintf("%d × %d", int(pr.W), int(pr.H)), 11, 16, 400, pal.muted).Font(fontMono).FontFeatures("tnum")
 		ui.Box(c).Size(1, 16).Background(pal.border)
-		a.shotFrameSliders(c, d, pal, fr)
+		a.shotFrameToggle(c, d, pal, fr)
+		if a.shotFrameOpen {
+			a.shotFrameSliders(c, d, pal, fr)
+		}
 	})
+}
+
+// shotFrameToggle：圆角 / 阴影滑块的开合按钮（不常用，默认收起；本次运行内记住）。已设了圆角或阴影时图标用前景色提示。
+func (a *app) shotFrameToggle(c *ui.Context, d *shotDisplay, pal shotPalette, fr shotFrame) {
+	var col *ui.Color
+	if fr.Radius > 0 || fr.Shadow > 0 {
+		col = &pal.fg
+	}
+	if a.shotButton(c, d, pal, "frame", "square-round-corner", tr("圆角与阴影：调整出图的圆角和投影"), a.shotFrameOpen, false, col).Clicked() {
+		a.shotFrameOpen = !a.shotFrameOpen
+	}
 }
 
 // shotFrameSliders：出图圆角与阴影滑块（遮罩与长图标注窗共用）。
@@ -1306,4 +1338,30 @@ func (a *app) shotHoverTip(c *ui.Context, d *shotDisplay, W, H float64) {
 		tip.Top(r.Y - 6 - h)
 	}
 	tip.Children(func() { text(c, e.tip, 11, 16, 400, colWhite).Wrap() })
+}
+
+var crosshairLabels = map[string]string{"sky": "浅天蓝", "white": "白", "lime": "黄绿", "magenta": "品红"}
+
+// crosshairControl 同 Tauri CrosshairColorRow：色条预览 · 四色分段 · 不透明度滑杆（30–100%，步进 5）。
+func (a *app) crosshairControl(c *ui.Context, k tokens) {
+	p := a.store.Settings().Shot
+	cur := cmpOr(p.Crosshair, shot.DefaultCrosshair.Preset)
+	sel := max(0, slices.Index(shot.CrosshairPresetNames, cur))
+	alpha := p.CrosshairAlpha
+	if alpha <= 0 {
+		alpha = shot.DefaultCrosshair.Alpha
+	}
+	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Box(c).Size(2, 16).Radius(1).Background(a.shotCross())
+		labels := make([]string, len(shot.CrosshairPresetNames))
+		for i, n := range shot.CrosshairPresetNames {
+			labels[i] = tr(crosshairLabels[n])
+		}
+		if segmented(c, k, &sel, labels...) {
+			a.patchSettings(func(x *store.Settings) { x.Shot.Crosshair = shot.CrosshairPresetNames[sel] })
+		}
+		if sliderValue(c, k, &alpha, shot.CrosshairAlphaMin, shot.CrosshairAlphaMax, 5, fmt.Sprintf("%d%%", int(alpha))) {
+			a.patchSettings(func(x *store.Settings) { x.Shot.CrosshairAlpha = alpha })
+		}
+	})
 }

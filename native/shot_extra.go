@@ -11,7 +11,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -24,10 +23,18 @@ import (
 // 遮罩上的识别文字面板与图内翻译（ScreenshotView runOcr / translateInImage / erasePatch）。
 
 type shotOCR struct {
-	text     string
-	busy     bool
-	err      string
-	copiedAt time.Time
+	text string
+	busy bool
+	err  string
+	// 选行 / 二维码 / 表格（shot_pick.go）
+	lines   []macos.OCRLine // 各行文字与框（选区内的图片像素坐标）
+	picked  map[int]bool    // 选中的行；空 = 全部
+	anchor  int             // ⇧ 连选的起点
+	band    [4]float64      // 拖选框（图片像素）：起点 x y、当前 x y
+	banding bool
+	moved   bool
+	qr      []string // 选区里二维码 / 条码的内容
+	panelH  float64  // 面板上一帧的高度（避让工具条用）
 }
 
 // shotTranslateJob：识别出的行（选区像素坐标）与 AI 逐行译文，等下一帧（有排版上下文）再生成覆盖。
@@ -43,7 +50,8 @@ type shotTranslateJob struct {
 const (
 	shotOCRPanelW    = 320.0
 	shotOCRPanelMaxH = 420.0
-	strokeDiff       = 40 // 与背景色的最大通道差超过此值视为文字笔画
+	shotOCRPanelEstH = 240.0 // 首帧还不知道面板高度时的估值
+	strokeDiff       = 40    // 与背景色的最大通道差超过此值视为文字笔画
 )
 
 // update：后台结果回到主线程（无窗口的测试里直接执行）。
@@ -71,17 +79,28 @@ func (d *shotDisplay) crop(sel shot.Rect) (*image.RGBA, shot.Rect) {
 
 // ocrImage：Vision 逐行识别（简中 + 英文），框为图片像素坐标。
 func ocrImage(img *image.RGBA) ([]macos.OCRLine, error) {
+	lines, _, err := ocrImageCodes(img, false)
+	return lines, err
+}
+
+// ocrImageCodes：同 ocrImage，codes 为 true 时顺带找图里的二维码 / 条码（同一张临时图，不重复编码）。
+var ocrImageCodes = func(img *image.RGBA, codes bool) ([]macos.OCRLine, []string, error) { // 测试替换
 	f, err := os.CreateTemp("", "toskr-ocr-*.png")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer os.Remove(f.Name())
 	err = (&png.Encoder{CompressionLevel: png.BestSpeed}).Encode(f, img)
 	f.Close()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return macos.OCRLines(f.Name(), img.Rect.Dx(), img.Rect.Dy())
+	lines, err := macos.OCRLines(f.Name(), img.Rect.Dx(), img.Rect.Dy())
+	var qr []string
+	if codes {
+		qr, _ = detectBarcodes(f.Name()) // 找不到 / 失败都不影响文字识别
+	}
+	return lines, qr, err
 }
 
 func (a *app) shotRunOCR(c *ui.Context, d *shotDisplay) {
@@ -95,10 +114,10 @@ func (a *app) shotRunOCR(c *ui.Context, d *shotDisplay) {
 	}
 	e.commitEditing()
 	e.tool = ""
-	o := &shotOCR{busy: true}
+	o := &shotOCR{busy: true, anchor: -1}
 	e.ocr = o
 	go func() {
-		lines, err := ocrImage(img)
+		lines, qr, err := ocrImageCodes(img, true)
 		d.update(func() {
 			if e.ocr != o {
 				return
@@ -114,28 +133,59 @@ func (a *app) shotRunOCR(c *ui.Context, d *shotDisplay) {
 				texts[i] = l.Text
 			}
 			o.text = strings.Join(texts, "\n")
-			if strings.TrimSpace(o.text) == "" {
+			o.lines, o.qr = lines, qr
+			if strings.TrimSpace(o.text) == "" && len(qr) == 0 {
 				o.err = tr("未识别到文字")
 			}
 		})
 	}()
 }
 
-// shotOCRPanel：识别结果（可改）+ 复制 / 存入「剪贴」；贴选区右侧，放不下换左侧或内侧。
-func (a *app) shotOCRPanel(c *ui.Context, d *shotDisplay, pal shotPalette) {
-	e := &d.ed
-	o, s := e.ocr, e.sel
-	top := math.Min(math.Max(s.Y, 8), math.Max(8, d.H-shotOCRPanelMaxH-8))
-	left := s.X + s.W + 12
-	if left+shotOCRPanelW > d.W {
-		left = s.X - 12 - shotOCRPanelW
+// shotOCRPanelPlace：识别面板的位置（h 为面板高度）。与选框的间隔同工具条（shotBarGap）：
+// 贴选区右侧，放不下换左侧，再放不下进选区内侧右上；与工具条相交时整体让到工具条的另一边。
+func shotOCRPanelPlace(s shot.Rect, dW, dH, toolbarTop, toolbarH, h float64) (left, top float64) {
+	const g = shotBarGap
+	left, top = s.X+s.W+g, s.Y
+	if left+shotOCRPanelW > dW {
+		left = s.X - g - shotOCRPanelW
 		if left < 0 {
-			left = math.Max(8, s.X+s.W-shotOCRPanelW-8)
+			left, top = math.Max(g, s.X+s.W-shotOCRPanelW-g), s.Y+g
 		}
 	}
+	top = math.Min(math.Max(top, g), math.Max(g, dH-h-g))
+	tl := s.X + s.W - shotToolbarWEst // 工具条横向范围：贴选区右缘，够不着时贴左（同 shotToolbar）
+	if s.X+s.W < shotToolbarWEst {
+		tl = 4
+	}
+	if left < tl+shotToolbarWEst+g && left+shotOCRPanelW > tl-g && top < toolbarTop+toolbarH+g && top+h > toolbarTop-g {
+		above, below := toolbarTop-g-h, toolbarTop+toolbarH+g
+		okAbove, okBelow := above >= g, below+h <= dH-g
+		switch {
+		case toolbarTop >= s.Y+s.H && okAbove, !okBelow && okAbove: // 工具条在选区下方：面板留在选区旁、收到工具条上面
+			top = above
+		case okBelow:
+			top = below
+		}
+	}
+	return left, top
+}
+
+// shotOCRPanel：识别结果（可改）+ 复制（不入库）/ 存入「剪贴」，两者都结束截图；贴选区右侧，放不下换左侧或内侧。
+func (a *app) shotOCRPanel(c *ui.Context, d *shotDisplay, pal shotPalette, toolbarTop, toolbarH float64) {
+	e := &d.ed
+	o, s := e.ocr, e.sel
+	h := o.panelH
+	if h == 0 {
+		h = shotOCRPanelEstH
+	}
+	left, top := shotOCRPanelPlace(*s, d.W, d.H, toolbarTop, toolbarH, h)
 	st := stok(c)
 	panel := ui.Column(c).Absolute().Left(f32(left)).Top(f32(top)).Width(shotOCRPanelW).MaxHeight(shotOCRPanelMaxH).Padding(8).Gap(8).Radius(8).
 		Cursor(ui.CursorDefault).Key("shot-ocr")
+	if b := panel.Bounds(); b.H > 0 && float64(b.H) != o.panelH { // 高度变了：记下并再画一帧，按真实高度重新避让
+		o.panelH = float64(b.H)
+		c.Invalidate()
+	}
 	pal.float(panel).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
 			title := tr("识别结果")
@@ -160,16 +210,14 @@ func (a *app) shotOCRPanel(c *ui.Context, d *shotDisplay, pal shotPalette) {
 		if o.err != "" {
 			text(c, o.err, 11, 16, 400, pal.k.amberText)
 		}
+		a.shotOCRExtras(c, d, pal)
 		ui.Row(c).Gap(6).Justify(ui.End).Children(func() {
 			empty := strings.TrimSpace(o.text) == ""
-			label := tr("复制")
-			if !o.copiedAt.IsZero() && c.Now().Sub(o.copiedAt) < 900*time.Millisecond {
-				label = tr("已复制")
+			if md, ok := tableFromLines(o.pickedLines()); ok && shotTextButton(c, st, tr("复制为表格"), false) { // 选中的行排得像表格：复制为 Markdown 表
+				a.copyShotText(md)
 			}
-			if shotTextButton(c, st, label, empty) {
-				a.sys.Write([]macos.Item{{macos.TypeString: []byte(o.text)}}, false)
-				o.copiedAt = c.Now()
-				c.After(900 * time.Millisecond)
+			if shotTextButton(c, st, tr("复制"), empty) { // 只复制、不入库；与「存入」一样结束截图，气泡回报
+				a.copyShotText(o.text)
 			}
 			if shotTextButton(c, st, tr("存入「剪贴」"), empty) {
 				a.saveShotText(o.text)

@@ -19,7 +19,8 @@ import (
 // 此后任务变化（1.5s 防抖）与系统提醒库变化（0.8s 防抖）各触发一轮；同一时刻只跑一轮，期间的触发合并为跑完再补一轮。
 // 原生版推到单独的「Toskr Native」列表：评估期 Tauri 版仍在同步「Toskr」列表，共用一个列表会互删对方的提醒。
 
-const remindersListTitle = "Toskr Native"
+// 正式版接替旧版后直接用旧版的「Toskr」列表（关联键同为 toskr://task/<任务 id>，任务 id 随导入保留）。
+func remindersListTitle() string { return appName() }
 
 var ( // 测试替换
 	remStatus  = macos.RemindersStatus
@@ -182,7 +183,7 @@ func (a *app) runReminderSync() {
 		})
 	}
 	desired := store.DesiredReminders(a.store.Tasks(), recreate, st.RemindersAlarm)
-	listID, items, err := remFetch(st.RemindersListID, remindersListTitle)
+	listID, items, err := remFetch(st.RemindersListID, remindersListTitle())
 	if err != nil {
 		fail(err)
 		return
@@ -317,6 +318,7 @@ func (a *app) setRemindersEnabled(on bool) {
 		st := remStatus()
 		if st == "notDetermined" {
 			st = remRequest()
+			diag.Push("提醒事项授权请求结果: %s", st) // 仍为 notDetermined = 系统没弹框（如缺 entitlement）
 		}
 		if st == "denied" || st == "restricted" {
 			openPrivacy("Privacy_Reminders")
@@ -330,7 +332,7 @@ func (a *app) setRemindersEnabled(on bool) {
 
 // remindersSettings：更多功能 → 苹果提醒事项。
 func (a *app) remindersSettings(c *ui.Context, k tokens, s settingsTokens, st store.Settings) []setRow {
-	rows := []setRow{{title: tr("同步任务到提醒事项"), hint: tr("推到提醒事项的「Toskr Native」列表，iPhone 上可查看和勾选"), control: func() {
+	rows := []setRow{{title: tr("同步任务到提醒事项"), hint: tr("在 iPhone 的「Toskr Native」列表里查看和勾选"), control: func() {
 		on := st.RemindersOn
 		if toggle(c, s, &on) {
 			a.setRemindersEnabled(on)
@@ -357,29 +359,42 @@ func (a *app) remindersSettings(c *ui.Context, k tokens, s settingsTokens, st st
 			}
 		}})
 	}
-	hint := tr("任务变化后几秒内推送")
-	if st.RemindersError != "" {
-		hint = st.RemindersError
+	hint, failed := tr("任务变化后几秒内推送"), st.RemindersError != ""
+	if failed {
+		hint = tr("同步失败：") + st.RemindersError
 	} else if !st.RemindersSyncAt.IsZero() {
 		hint = fmt.Sprintf(tr("上次同步 %s"), st.RemindersSyncAt.Format("01-02 15:04"))
 	}
-	rows = append(rows, setRow{title: tr("同步"), hint: hint, control: func() {
-		if button(c, s, "立即同步") {
-			a.syncRemindersNow()
-		}
-	}})
 	a.rem.mu.Lock()
 	x := a.rem.stats
 	a.rem.mu.Unlock()
-	if x.rounds+x.failures > 0 {
-		h := fmt.Sprintf(tr("轮数 %d · 推送：新建 %d 更新 %d 删除 %d · 回来：完成 %d 导入 %d 标题 %d 备注 %d 到期 %d · 冲突 %d 失败 %d"),
+	tip := ""
+	if x.rounds+x.failures > 0 { // 本次启动以来的明细放悬停全文；说明里只在有动静时带一句小结
+		tip = fmt.Sprintf(tr("本次启动以来 %d 轮 · 推送：新建 %d 更新 %d 删除 %d · 回来：完成 %d 导入 %d 标题 %d 备注 %d 到期 %d · 冲突 %d 失败 %d"),
 			x.rounds, x.created, x.updated, x.deleted, x.completed, x.imported, x.titleBack, x.notesBack, x.dueBack, x.conflicts, x.failures)
 		if x.lastErr != "" {
-			h += fmt.Sprintf(tr(" · 最近失败 %s %s"), x.lastErrAt.Format("15:04"), x.lastErr)
+			tip += fmt.Sprintf(tr(" · 最近失败 %s %s"), x.lastErrAt.Format("15:04"), x.lastErr)
 		}
-		rows = append(rows, setRow{title: fmt.Sprintf(tr("本次启动以来：推送 %d · 回来 %d · 冲突 %d"), x.created+x.updated+x.deleted,
-			x.completed+x.imported+x.titleBack+x.notesBack+x.dueBack, x.conflicts), hint: h + tr("。重启后清零。")})
+		out, back := x.created+x.updated+x.deleted, x.completed+x.imported+x.titleBack+x.notesBack+x.dueBack
+		if out+back > 0 {
+			hint += fmt.Sprintf(tr(" · 推送 %d · 回来 %d"), out, back)
+		}
+		if x.conflicts > 0 {
+			hint += fmt.Sprintf(tr(" · 冲突 %d"), x.conflicts)
+		}
+		if x.failures > 0 {
+			hint += fmt.Sprintf(tr(" · 失败 %d"), x.failures)
+		}
 	}
+	rows = append(rows, setRow{title: tr("同步"), hint: hint, tip: tip, warn: failed, control: func() {
+		label := "立即同步"
+		if failed {
+			label = "重试"
+		}
+		if button(c, s, label) {
+			a.syncRemindersNow()
+		}
+	}})
 	secName := tr("收集箱")
 	for _, sec := range a.store.TaskSections() {
 		if sec.ID == st.RemindersSection && sec.ID != store.TaskInbox {
@@ -387,7 +402,7 @@ func (a *app) remindersSettings(c *ui.Context, k tokens, s settingsTokens, st st
 		}
 	}
 	rows = append(rows,
-		setRow{title: tr("导入到分组"), hint: tr("在「Toskr Native」列表里新建的提醒导入到这里"), control: func() {
+		setRow{title: tr("导入到分组"), hint: tr("iPhone 上新建的提醒放进这个分组"), control: func() {
 			settingsSelect(c, k, s, secName, func(m *ui.Menu) {
 				for _, sec := range a.store.TaskSections() {
 					name := sec.Name
@@ -406,7 +421,7 @@ func (a *app) remindersSettings(c *ui.Context, k tokens, s settingsTokens, st st
 				}
 			})
 		}},
-		setRow{title: tr("在提醒事项里响铃"), hint: tr("按任务的提醒档响铃，iPhone 锁屏也能收到；Mac 上会和 Toskr 各响一次"), control: func() {
+		setRow{title: tr("在提醒事项里响铃"), hint: tr("到点 iPhone 也响；Mac 上会响两次"), control: func() {
 			on := st.RemindersAlarm
 			if toggle(c, s, &on) {
 				cur := a.store.Settings()
@@ -414,7 +429,71 @@ func (a *app) remindersSettings(c *ui.Context, k tokens, s settingsTokens, st st
 				_ = a.store.SetSettings(cur)
 			}
 		}},
-		setRow{title: tr("同步规则"), hint: tr("在 iPhone 勾完成，Toskr 跟着完成；在列表里新建的提醒导入为任务。只在提醒事项里改的标题、备注、到期会同步回来；两边都改以 Toskr 为准，提示里点「撤销」可改用提醒事项版本。优先级以 Toskr 为准；闪念、开启前已完成的任务不推送。在提醒事项里删掉的任务不再同步，Toskr 里的任务保留。重复规则不推送，完成后由 Toskr 生成下一期。")},
+		setRow{title: tr("同步规则"), hint: tr("两边都改以 Toskr 为准，可在提示里撤销"), control: func() {
+			label, icon := tr("查看"), "chevron-right"
+			if a.remRulesOpen {
+				label, icon = tr("收起"), "chevron-down"
+			}
+			b := ui.Row(c).Height(24).Padding(0, 4, 0, 8).Gap(2).Radius(6).AlignItems(ui.Center).Key("rem-rules").Role(ui.RoleButton).Label(tr("同步规则") + " " + label)
+			col := hoverLink(b, k)
+			b.Children(func() {
+				text(c, label, 11, 16, 500, col).SingleLine()
+				licon(c, icon, 12, col)
+			})
+			if b.Clicked() {
+				a.remRulesOpen = !a.remRulesOpen
+			}
+		}, below: a.remRulesBelow(c, k)},
 	)
 	return rows
+}
+
+// remRulesBelow：「同步规则」展开后的分类条目（左侧类别小标 + 一句话）；收起时返回 nil。
+func (a *app) remRulesBelow(c *ui.Context, k tokens) func() {
+	if !a.remRulesOpen {
+		return nil
+	}
+	return func() {
+		for _, r := range [][2]string{
+			{"完成", "在 iPhone 勾完成，Toskr 跟着完成"},
+			{"新建", "在「Toskr Native」列表里新建的提醒导入为任务"},
+			{"修改", "只在提醒事项里改的标题、备注、到期会同步回来；优先级以 Toskr 为准"},
+			{"冲突", "两边都改以 Toskr 为准；提示里点「撤销」改用提醒事项版本"},
+			{"删除", "在提醒事项里删掉的任务不再同步，Toskr 里的任务保留"},
+			{"不推送", "闪念、开启前已完成的任务；重复规则（完成后由 Toskr 生成下一期）"},
+		} {
+			ui.Row(c).Gap(8).Key("rem-rule-" + r[0]).Children(func() {
+				ui.Box(c).Width(44).Height(18).Radius(4).Background(k.track).Center().Children(func() {
+					text(c, tr(r[0]), 10, 14, 500, k.muted).SingleLine()
+				})
+				text(c, tr(r[1]), 11, 18, 400, k.fg.Alpha(0.8)).Wrap().Grow(1).Basis(0)
+			})
+		}
+	}
+}
+
+func init() { // 设置 → 苹果提醒事项
+	for k, v := range map[string]string{
+		"同步任务到提醒事项": "Sync tasks to Reminders", "在 iPhone 的「Toskr Native」列表里查看和勾选": "View and check them off in the “Toskr Native” list on iPhone",
+		"未获得提醒事项访问权限": "No access to Reminders", "在「系统设置 → 隐私与安全性 → 提醒事项」里允许 Toskr Native 完整访问": "Allow Toskr Native full access in System Settings → Privacy & Security → Reminders",
+		"打开设置": "Open Settings", "同步": "Sync", "立即同步": "Sync now", "重试": "Retry", "同步失败：": "Sync failed: ", "提醒事项同步失败：": "Reminders sync failed: ",
+		"任务变化后几秒内推送": "Changes are pushed within seconds", "上次同步 %s": "Last synced %s",
+		" · 推送 %d · 回来 %d": " · %d pushed · %d pulled", " · 冲突 %d": " · %d conflicts", " · 失败 %d": " · %d failed", " · 最近失败 %s %s": " · last failure %s %s",
+		"本次启动以来 %d 轮 · 推送：新建 %d 更新 %d 删除 %d · 回来：完成 %d 导入 %d 标题 %d 备注 %d 到期 %d · 冲突 %d 失败 %d": "Since launch: %d rounds · pushed: %d new, %d updated, %d deleted · pulled: %d completed, %d imported, %d titles, %d notes, %d due dates · %d conflicts, %d failed",
+		"导入到分组": "Import into", "iPhone 上新建的提醒放进这个分组": "Reminders created on iPhone go into this group", "收集箱": "Inbox",
+		"在提醒事项里响铃": "Alert in Reminders", "到点 iPhone 也响；Mac 上会响两次": "iPhone alerts too; the Mac alerts twice",
+		"同步规则": "Sync rules", "两边都改以 Toskr 为准，可在提示里撤销": "If both sides change, Toskr wins; undo from the notice", "查看": "View", "收起": "Hide",
+		"完成": "Done", "新建": "New", "修改": "Edits", "冲突": "Conflict", "删除": "Deleted", "不推送": "Not pushed",
+		"在 iPhone 勾完成，Toskr 跟着完成":              "Checking it off on iPhone completes it in Toskr",
+		"在「Toskr Native」列表里新建的提醒导入为任务":         "Reminders created in the “Toskr Native” list become tasks",
+		"只在提醒事项里改的标题、备注、到期会同步回来；优先级以 Toskr 为准": "Title, notes and due date changed only in Reminders sync back; priority follows Toskr",
+		"两边都改以 Toskr 为准；提示里点「撤销」改用提醒事项版本":      "If both sides change, Toskr wins; click Undo in the notice to keep the Reminders version",
+		"在提醒事项里删掉的任务不再同步，Toskr 里的任务保留":         "Tasks deleted in Reminders stop syncing; the Toskr task is kept",
+		"闪念、开启前已完成的任务；重复规则（完成后由 Toskr 生成下一期）":  "Sparks and tasks completed before sync was on; repeat rules (Toskr creates the next one on completion)",
+		"已复制 %d 字": "Copied %d characters",
+	} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
 }

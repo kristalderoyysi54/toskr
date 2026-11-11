@@ -107,8 +107,8 @@ func (a *app) outcomeSections(c *ui.Context, k tokens, s settingsTokens, st stor
 		state = tr("已暂停")
 	}
 	return []setSection{
-		{tr("发送统计"), rows},
-		{tr("数据与隐私"), []setRow{
+		{title: tr("发送统计"), rows: rows},
+		{title: tr("数据与隐私"), rows: []setRow{
 			{title: tr("本机使用统计"), hint: state + " · " + tr("只记录次数、时间和状态，不保存卡片正文、Prompt 或密钥"), control: func() {
 				on := !st.OutcomeOff
 				if toggle(c, s, &on) {

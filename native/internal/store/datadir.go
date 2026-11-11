@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -245,4 +246,76 @@ func (s *Store) ReplaceFromBackup(p *Preview) error {
 	}
 	s.ensureDefaults()
 	return s.Flush()
+}
+
+// RekeyTo 把整库（笔记、任务、账单、秘文、发送记录、消息、设置与图片）用另一把密钥 key 写到 dst
+// （dst 里不能已有数据文件），再从 dst 用新密钥读回核对。原目录与原密钥下的文件保持不动。
+// 用途：迭代期的原生版数据交接给正式版（两者的数据密钥不同，直接复制目录解不开）。恢复点不带过去。
+func (s *Store) RekeyTo(dst string, key []byte) (DirInfo, error) {
+	if err := s.Flush(); err != nil {
+		return DirInfo{}, err
+	}
+	if len(key) != 32 {
+		return DirInfo{}, errors.New("新密钥长度不对")
+	}
+	if SameOrNested(s.dir, dst) {
+		return DirInfo{}, errors.New("目标目录不能与当前数据目录重叠")
+	}
+	if _, err := os.Stat(filepath.Join(dst, DataFile)); err == nil {
+		return DirInfo{}, errors.New("目标目录已有数据文件")
+	}
+	s.mu.Lock()
+	plain, err := json.Marshal(s.snapshotLocked())
+	s.mu.Unlock()
+	if err != nil {
+		return DirInfo{}, err
+	}
+	var sn snapshot // 经 JSON 深拷贝一份，与本库不共享切片
+	if err := json.Unmarshal(plain, &sn); err != nil {
+		return DirInfo{}, err
+	}
+	t, err := OpenDir(dst, key)
+	if err != nil {
+		return DirInfo{}, err
+	}
+	entries, _ := os.ReadDir(s.mediaDir())
+	for _, e := range entries {
+		if e.IsDir() || !mediaName.MatchString(e.Name()) {
+			continue
+		}
+		raw, err := s.LoadImage(e.Name())
+		if err != nil {
+			continue // 本来就读不出的图：不带过去（引用它的笔记照旧显示缺图）
+		}
+		name, err := t.SaveImage(raw)
+		if err != nil {
+			return DirInfo{}, err
+		}
+		if name != e.Name() {
+			return DirInfo{}, fmt.Errorf("图片 %s 重存后文件名变成 %s", e.Name(), name)
+		}
+	}
+	if err := t.mutate(func() bool {
+		t.notes, t.sections, t.tasks, t.taskSections = sn.Notes, sn.Sections, sn.Tasks, sn.TaskSections
+		t.bills, t.secrets, t.deliveries, t.outcomes = sn.Bills, sn.Secrets, sn.Deliveries, sn.Outcomes
+		t.messages, t.messagesGone, t.settings = sn.Messages, sn.MessagesGone, sn.Settings
+		return true
+	}); err != nil {
+		return DirInfo{}, err
+	}
+	if err := t.Flush(); err != nil {
+		return DirInfo{}, err
+	}
+	const ledger = "toskr-im-message-watch.jsonl" // 消息账本（不加密）
+	if err := copyFile(filepath.Join(s.dir, ledger), filepath.Join(dst, ledger)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return DirInfo{}, err
+	}
+	info, err := InspectDir(dst, key)
+	if err != nil {
+		return info, err
+	}
+	if !info.HasData || info.Notes != len(sn.Notes) || info.Tasks != len(sn.Tasks) {
+		return info, fmt.Errorf("交接后核对不一致：笔记 %d/%d、任务 %d/%d", info.Notes, len(sn.Notes), info.Tasks, len(sn.Tasks))
+	}
+	return info, nil
 }

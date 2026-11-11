@@ -2,9 +2,17 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/url"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/toskr/native/internal/store"
 )
@@ -35,6 +43,114 @@ var textOps = []struct {
 	}},
 	{"url-decode", "URL 解码", url.PathUnescape},
 	{"strip-md", "去 Markdown 标记", func(t string) (string, error) { return store.MarkdownToPlain(t), nil }},
+	// 以下为原生版扩充（Tauri 无）：输入区与详情窗共用这张表
+	{"base64-encode", "Base64 编码", func(t string) (string, error) { return base64.StdEncoding.EncodeToString([]byte(t)), nil }},
+	{"base64-decode", "Base64 解码", base64Decode},
+	{"timestamp", "时间戳 ↔ 日期", convertTimestamp},
+	{"dedupe-lines", "行去重", func(t string) (string, error) {
+		seen, out := map[string]bool{}, []string(nil)
+		for _, l := range strings.Split(t, "\n") {
+			if !seen[l] {
+				seen[l] = true
+				out = append(out, l)
+			}
+		}
+		return strings.Join(out, "\n"), nil
+	}},
+	{"sort-lines", "行排序", func(t string) (string, error) {
+		ls := strings.Split(t, "\n")
+		slices.Sort(ls)
+		return strings.Join(ls, "\n"), nil
+	}},
+	{"to-halfwidth", "全角转半角", func(t string) (string, error) {
+		return strings.Map(func(r rune) rune {
+			switch {
+			case r == 0x3000:
+				return ' '
+			case r >= 0xFF01 && r <= 0xFF5E:
+				return r - 0xFEE0
+			}
+			return r
+		}, t), nil
+	}},
+	{"to-fullwidth", "半角转全角", func(t string) (string, error) {
+		return strings.Map(func(r rune) rune {
+			if r >= 0x21 && r <= 0x7E {
+				return r + 0xFEE0
+			}
+			return r
+		}, t), nil
+	}},
+	{"cjk-space", "中英文之间加空格", func(t string) (string, error) { return spaceCJK(t), nil }},
+	{"extract-links", "提取全部链接", extractLinks},
+}
+
+func base64Decode(t string) (string, error) {
+	raw := strings.Join(strings.Fields(t), "")
+	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+		if b, err := enc.DecodeString(raw); err == nil {
+			if !utf8.Valid(b) {
+				return "", errors.New(tr("解码结果不是文本"))
+			}
+			return string(b), nil
+		}
+	}
+	return "", errors.New(tr("不是有效的 Base64"))
+}
+
+var dateLayouts = []string{"2006-01-02 15:04:05", "2006-01-02 15:04", "2006-01-02T15:04:05", "2006/01/02 15:04:05", "2006/01/02 15:04", "2006-01-02", "2006/01/02"}
+
+// convertTimestamp：纯数字按 Unix 时间戳（10 位秒 / 13 位毫秒）转本地日期时间；日期时间转回秒级时间戳。
+func convertTimestamp(t string) (string, error) {
+	v := strings.TrimSpace(t)
+	if n, err := strconv.ParseInt(v, 10, 64); err == nil && (len(v) == 10 || len(v) == 13) {
+		if len(v) == 13 {
+			return time.UnixMilli(n).Format("2006-01-02 15:04:05.000"), nil
+		}
+		return time.Unix(n, 0).Format("2006-01-02 15:04:05"), nil
+	}
+	if d, err := time.Parse(time.RFC3339, v); err == nil {
+		return strconv.FormatInt(d.Unix(), 10), nil
+	}
+	for _, l := range dateLayouts {
+		if d, err := time.ParseInLocation(l, v, time.Local); err == nil {
+			return strconv.FormatInt(d.Unix(), 10), nil
+		}
+	}
+	return "", errors.New(tr("不是时间戳或日期"))
+}
+
+// spaceCJK：汉字与相邻的拉丁字母 / 数字之间补一个空格（已有空白不重复加）。
+func spaceCJK(t string) string {
+	var b strings.Builder
+	var prev rune
+	for _, r := range t {
+		if prev != 0 && (unicode.Is(unicode.Han, prev) && isLatinDigit(r) || isLatinDigit(prev) && unicode.Is(unicode.Han, r)) {
+			b.WriteByte(' ')
+		}
+		b.WriteRune(r)
+		prev = r
+	}
+	return b.String()
+}
+
+func isLatinDigit(r rune) bool {
+	return r < 0x80 && (unicode.IsLetter(r) || unicode.IsDigit(r))
+}
+
+var linkRe = regexp.MustCompile(`https?://[^\s<>"'）)】」，。；、]+`)
+
+func extractLinks(t string) (string, error) {
+	var out []string
+	for _, l := range linkRe.FindAllString(t, -1) {
+		if l = strings.TrimRight(l, ".,;:!?"); !slices.Contains(out, l) {
+			out = append(out, l)
+		}
+	}
+	if len(out) == 0 {
+		return "", errors.New(tr("没有找到链接"))
+	}
+	return strings.Join(out, "\n"), nil
 }
 
 // applyDraftOp 处理输入区草稿；失败给警告气泡。

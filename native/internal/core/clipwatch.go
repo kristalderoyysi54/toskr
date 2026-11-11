@@ -19,6 +19,8 @@ const ClipPoll = 500 * time.Millisecond
 // ClipEvent 是一次外部复制。
 type ClipEvent struct {
 	Text   string
+	HTML   string // 富文本（同 Tauri ClipPayload.html）：带 <img> 时入库前把图片本地化成图文块
+	URL    string // 复制来源网页（富文本图片的 Referer）
 	Link   bool   // 整段是一个 http(s) 链接
 	PNG    []byte // 复制的是图片（无文字时）
 	W, H   int
@@ -72,10 +74,17 @@ func (w *ClipWatcher) Tick() (ClipEvent, bool) {
 	if w.Excluded != nil && slices.Contains(w.Excluded(), front.BundleID) {
 		return ClipEvent{}, false
 	}
-	text, _ := w.Sys.ReadString()
+	text, html := w.Sys.ReadString()
 	if text = normalize(text); text != "" {
 		t := strings.TrimSpace(text)
-		return ClipEvent{Text: text, Link: singleURL.MatchString(t), Source: front}, true
+		ev := ClipEvent{Text: text, Link: singleURL.MatchString(t), Source: front}
+		if !ev.Link && strings.Contains(strings.ToLower(html), "<img") { // 只有带图的 HTML 才走图文（纯文字照旧存纯文本）
+			ev.HTML = html
+			if r, ok := w.Sys.(interface{ ReadSourceURL() string }); ok {
+				ev.URL = r.ReadSourceURL()
+			}
+		}
+		return ev, true
 	}
 	if ev, ok := ClipImage(w.Sys.Snapshot()); ok {
 		ev.Source = front

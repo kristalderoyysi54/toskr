@@ -23,10 +23,10 @@ func setLanguage(setting string, preferred []string) {
 func tr(s string) string {
 	if langEN.Load() {
 		if t, ok := en[s]; ok {
-			return t
+			return brand(t)
 		}
 	}
-	return s
+	return brand(s) // 正式版里「Toskr Native」写成「Toskr」
 }
 
 var en = map[string]string{
@@ -133,7 +133,7 @@ func init() { // 模板来源 / 试用预览 / AI 模板助手（templates_ai.go
 		"请先在“更多功能 → AI 智能”中配置并启用，或直接手动编辑。": "Set up and enable AI in More → AI first, or edit manually.",
 		"使用当前 AI · ": "Using current AI · ", "试试：": "Try:", "排查问题": "Debug report", "整理周报": "Weekly report", "润色消息": "Polish message",
 		"生成模板建议": "Generate template", "正在生成…": "Generating…", "生成调整建议": "Generate revision", "取消生成": "Cancel",
-		"仅提交想法与当前模板；示例材料留在本地。": "Only your idea and the current template are sent; sample material stays local.",
+		"仅提交想法与当前模板；示例材料留在本地。":   "Only your idea and the current template are sent; sample material stays local.",
 		"建议已生成，采用到编辑区后可继续修改和预览。": "Suggestion ready — apply it to keep editing and previewing.",
 		"采用到编辑区": "Apply to editor", "放弃建议": "Discard",
 		"请填写想法，最多 2000 个字符": "Enter an idea, up to 2000 characters", "AI 返回的模板不是合法 JSON，请重试": "AI did not return valid JSON — try again",
@@ -176,4 +176,306 @@ func init() { // 上手教程图形化（onboarding_visual.go）
 			en[k] = v
 		}
 	}
+}
+
+func init() { // 设置 → 更多功能子页签 / 权限页（settings_features.go）、分组拖动排序
+	for k, v := range map[string]string{
+		"拖动调整分组顺序 · 点击折叠/展开 · 双击重命名": "Drag to reorder · Click to collapse/expand · Double-click to rename",
+		"使用概览": "Overview", "关于": "About", "诊断": "Diagnostics",
+		"功能开关": "Features", "AI 智能": "AI", "到期提醒": "Due reminders", "日历与提醒事项": "Calendar & Reminders", "消息监听": "Message watch", "实验": "Beta",
+		"开启后，主面板会出现对应入口。":   "Turned-on features show up in the main panel.",
+		"可设置监听应用、接入方式和收集规则": "Set the app to watch, how to connect and what to collect",
+		"可管理共享密钥和默认格式":      "Manage shared keys and the default format", "可设置新账单的默认提醒": "Set default reminders for new bills",
+		"苹果日历与提醒事项": "Apple Calendar & Reminders", "在「提醒」页显示日历日程，把任务同步到 iPhone 的提醒事项": "Show calendar events in Reminders and sync tasks to Reminders on iPhone",
+		"已开启：%s": "On: %s", "日历": "Calendar", "提醒事项": "Reminders", "未开启": "Off",
+		"全部授权": "Allow all", "全部授权（%d 项）": "Allow all (%d)", "按顺序逐项请求；需要在系统设置里手动打开的项会停下，打开后回到这里再点一次继续": "Asks one by one; stops at items you must turn on in System Settings — come back and click again to continue",
+		"已在系统设置里允许？重启 Toskr 后生效": "Allowed in System Settings? Restart Toskr to apply", "键盘监听：": "Keyboard tap: ", "重启 Toskr": "Restart Toskr",
+		"已授权": "Allowed", "✓ 都已就绪": "✓ All set", "授权后需重启 Toskr 才生效": "Restart Toskr to apply the new permissions", "还有 %d 项需要授权": "%d more to allow",
+		"系统权限": "System permissions", "屏幕录制": "Screen Recording", "重置授权": "Reset",
+		"读取你选中的文字（双击触发键捕获），并把内容粘贴回目标应用。":  "Reads the text you select (double-tap capture) and pastes content back into the target app.",
+		"识别双击触发键等全局快捷操作；只判断按键时机，不记录输入内容。": "Detects global gestures like the double-tap; only key timing is checked, nothing you type is recorded.",
+		"区域截图、长截屏和图内识别需要读取屏幕画面；画面只在本机处理。": "Screenshots, scrolling capture and image text recognition read the screen; images stay on this Mac.",
+		"在「提醒」页显示日历日程，只读。":                "Shows calendar events in Reminders, read-only.", "把任务同步到「提醒事项」，在 iPhone 上也能看到。": "Syncs tasks to Reminders so you can see them on iPhone.",
+		"Toskr 在这台 Mac 上需要的系统权限。点「授权」会弹出系统授权框或打开对应的系统设置页，在那里允许 Toskr 即可；每一项都可以随时在系统设置里更改，内容只留在你的电脑上。": "System permissions Toskr needs on this Mac. “Allow” shows the system prompt or opens the matching System Settings page — allow Toskr there. You can change each one any time; your content stays on your Mac.",
+		"%s · 拖动调整分组顺序 · 点击折叠/展开（吸顶时回到组首） · 双击重命名":                                                    "%s · Drag to reorder · Click to collapse/expand (scrolls to start when pinned) · Double-click to rename",
+	} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
+}
+
+func init() { // 设置 → 粘贴与隐私：粘贴规则主从布局 / 隐私保护（settings_paste.go）
+	for k, v := range map[string]string{
+		"粘贴规则": "Paste rules", "隐私保护": "Privacy", "提示词模板": "Prompt templates", "管理应用粘贴规则": "Per-app paste rules",
+		"设置内容怎样粘贴、粘贴后是否回车；每个应用可以单独设置。": "How content is pasted and whether Return is pressed; each app can have its own rule.",
+		"共享方案与高级管理": "Shared profiles & advanced", "名称、应用绑定、排序与默认方案": "Names, app bindings, order and default profile", "%d 个方案": "%d profiles",
+		"多段粘贴": "Multi-part paste", "搜索应用": "Search apps", "搜索应用或方案": "Search apps or profiles",
+		"默认规则": "Default rule", "未单独设置的应用": "Apps without their own rule", "使用默认规则": "Uses default rule", "重复绑定": "Duplicate binding",
+		"选择一个应用，为它设置粘贴规则。": "Pick an app to set its paste rule.", "没有匹配的应用": "No matching apps", "选择应用…": "Choose App…",
+		"未绑定应用使用这套默认规则": "Apps without a rule use this default", "设置此应用以后的粘贴行为": "How pasting into this app works from now on",
+		"尚未单独设置，当前使用默认规则": "No rule of its own yet; uses the default rule", "共 %d 个应用使用此方案": "%d apps use this profile",
+		"仅此应用": "This app only", "共享方案": "Shared profile",
+		"默认规则固定为不自动回车、敏感内容逐项处理；绑定此方案的应用会一起更新格式和面板。": "The default rule never presses Return and reviews sensitive items one by one; apps bound to this profile update format and panel too.",
+		"修改会同时影响上方全部应用，以及未单独设置应用的默认格式和面板。":          "Changes apply to all apps above and to the default format and panel of apps without their own rule.",
+		"修改会同时影响上方全部应用。": "Changes apply to all apps above.", "这套规则仅用于当前应用。": "This rule is used only by this app.",
+		"修改时为当前应用建立独立规则，其他应用保持原设置。":         "Changing it creates a rule just for this app; other apps keep theirs.",
+		"此应用有重复绑定，请在下方「共享方案与高级管理」里只保留一个方案。": "This app is bound to several profiles; keep only one under “Shared profiles & advanced” below.",
+		"逐项明确选择替换或保留原文，不会自动全部替换。":           "Choose replace or keep for each item; nothing is replaced automatically.",
+		"全局隐私检查已关闭，这项规则暂不生效；开启后使用所选策略。":     "Privacy check is off, so this has no effect until it is turned on.",
+		"普通提示项保留原文时，发送前需要确认。":               "Keeping the original of a flagged item asks for confirmation before sending.",
+		"普通提示项允许保留原文；高风险原文仍需二次确认。":          "Flagged items may keep their original; high-risk originals still need a second confirmation.",
+		"默认规则始终只粘贴，不自动回车。":                  "The default rule only pastes and never presses Return.",
+		"输出格式": "Output format", "回车策略": "Return key", "敏感处理": "Sensitive content", "完成后面板": "Panel after sending",
+		"粘贴成功后收起或保持打开；钉住时始终打开。": "Hide or keep the panel after pasting; it stays open while pinned.", "收起面板": "Hide panel", "保持打开": "Keep open",
+		"自动按回车：内容会直接提交或执行，只适合明确可信的目标。": "Auto Return submits or runs the content right away; use it only for trusted targets.",
+		"改动即时生效": "Changes apply immediately", "恢复默认": "Restore default", "%s 已恢复默认规则": "%s now uses the default rule",
+		"保持内容自然排版并保留 Markdown 标记。": "Keeps the layout and Markdown marks as they are.", "发送时去除 Markdown 标记；智能预检会先展示结果。": "Removes Markdown marks when sending; the preflight shows the result first.",
+		"用代码围栏包裹文本，适合开发工具与终端记录。": "Wraps text in a code fence, for developer tools and terminals.",
+		"只完成粘贴，由你在目标应用中检查后提交。":   "Only pastes; you review and submit in the target app.", "发送前询问；确认后才会在粘贴后模拟回车。": "Asks first; presses Return after pasting only once you confirm.",
+		"内容会直接提交或执行，只适合明确可信的目标。":    "Content is submitted or run right away; only for trusted targets.",
+		"发送前在本机检查敏感内容，原始卡片不会被改写。":   "Checks for sensitive content on this Mac before sending; the original cards are not changed.",
+		"本机规则可能漏检，发送前仍可在预检中核对最终内容。": "Local rules can miss things; you can still review the final content in the preflight.",
+		"按粘贴规则": "Per paste rules", "可逆化名": "Reversible aliases", "%d 条": "%d", "+ 添加": "+ Add", "捕获回复时自动还原": "Restore when capturing replies",
+		"试一试替换效果": "Try it out", "取消": "Cancel",
+		"词典加密保存在本机；导出的完整备份中为明文。删除条目后，它的占位符编号不再复用。": "The dictionary is encrypted on this Mac and exported in plain text in full backups. Deleted entries' placeholder numbers are never reused.",
+	} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
+}
+
+func init() { // 配色方案名与说明（schemes.go / settings.go schemeHint；同 Tauri en/settings.ts）
+	for k, v := range map[string]string{
+		"琉璃": "Glass", "纸墨": "Paper", "抹茶": "Matcha", "樱粉": "Sakura", "雾蓝": "Fog",
+		"固定浅色、整窗不透明；切回琉璃恢复原主题与毛玻璃": "Always light and opaque. Switch back to Glass to restore your theme and translucency",
+		"固定浅色；切回琉璃恢复深浅色设置":         "Always light. Switch back to Glass to restore your light/dark setting",
+	} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
+}
+
+func init() { // 粘贴规则：模板排序 / 输出预览 / 当前目标与规则检查（settings_paste_extra.go；同 Tauri en 词条）
+	for k, v := range map[string]string{
+		"# 项目更新": "# Project update", "- **完成**：修复发送": "- **Done**: fixed sending", "- [查看文档](https://example.com)": "- [Read the docs](https://example.com)",
+		"暂无提示词": "No prompts", "、": ", ", "模板排序": "Template order", "「其他模板」里优先显示": "Shown first in “Other templates”",
+		"已删除的提示词组 · 请选择替代项": "Deleted prompt group · pick another", "提示词组": "Prompt group",
+		"%s · %d 条 · %s": "%s · %d · %s", "%d 条提示词 · %s": "%d prompts · %s",
+		"只影响「其他模板」的顺序，不会自动套用模板。": "Only changes the order of “Other templates”; never applies a template automatically.",
+		"输出预览": "Output preview", "用示例内容预览输出格式，不做隐私处理，也不会真实粘贴或回车。": "Previews the output format with sample text — no privacy processing, nothing is pasted, Enter is never pressed.",
+		"测试内容（可编辑，最多 4000 字符）": "Sample text (editable, up to 4,000 characters)", "输出方式预览测试内容": "Output preview sample text",
+		"格式预览 · %s": "Preview · %s", "（空内容不会发送）": "(Empty content isn’t sent)", "%s格式预览结果": "%s preview result",
+		"当前目标与规则检查": "Current target & rule check", "看看现在会粘贴到哪里、用哪套规则": "See where content would paste and which rule applies",
+		"尚未识别": "Not detected", "可粘贴": "Ready to paste", "应用已退出": "App has quit", "当前粘贴目标": "Current paste target",
+		"调整粘贴规则": "Adjust paste rule", "请先点目标应用的输入框，再唤出 Toskr。位置未确认前不会粘贴。": "Click the input field in the target app first, then open Toskr. Nothing is pasted until the position is confirmed.",
+		"使用方案：%s": "Profile: %s", "规则来源：%s": "Rule source: %s", "其他模板优先显示「%s」组；不会自动套用模板。": "“Other templates” lists the “%s” group first; templates are never applied automatically.",
+		"检查规则": "Check rule", "重新识别目标": "Re-detect target", "尚未识别粘贴目标": "Paste target not detected",
+		"已识别目标应用，输入位置未确认": "Target app detected; input position not confirmed", "请重新选择目标输入框": "Select the target input field again",
+		"规则已重新计算：%s · %s。未执行粘贴或回车。": "Rule recalculated: %s · %s. Nothing was pasted and Enter wasn’t pressed.",
+	} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
+}
+
+func init() { // 详情窗光标处插入 / 拖进详情编辑器（insert_card.go / detail_drop.go）
+	for k, v := range map[string]string{
+		"已替换选中内容": "Replaced the selection",
+		"添加到打开的卡片光标处（双击卡片同效）":     "Add at the open card's cursor (or double-click the card)",
+		"添加到打开的卡片光标处（有选中文字则替换）":   "Add at the open card's cursor (replaces selected text)",
+		"直发该卡（详情窗开着时剪贴卡添加到它的光标处）": "Send the card (clips go to the open card's cursor while a detail window is open)",
+	} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
+}
+
+func init() { // 拖出预览 / 拖进详情（drag_preview.go）
+	for k, v := range map[string]string{
+		"%d 张": "%d cards",
+		"拖出原文（不脱敏，目标由拖放位置决定）；拖进详情窗插在落点": "Drag out the original text (not redacted); drop into a detail window to insert at that spot",
+	} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
+}
+
+func init() { // 选择应用面板（internal/macos/apppicker.go）
+	for k, v := range map[string]string{"选择": "Choose", "读不到这个应用的标识，换一个试试": "Couldn't read this app's identifier; try another one"} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
+}
+
+func init() { // 文本处理扩充（textops.go）
+	for k, v := range map[string]string{
+		"Base64 编码": "Base64-encode", "Base64 解码": "Base64-decode", "时间戳 ↔ 日期": "Timestamp ↔ date", "行去重": "Remove duplicate lines",
+		"行排序": "Sort lines", "全角转半角": "Full-width → half-width", "半角转全角": "Half-width → full-width", "中英文之间加空格": "Space between CJK and Latin",
+		"提取全部链接": "Extract all links", "解码结果不是文本": "Decoded data is not text", "不是有效的 Base64": "Not valid Base64",
+		"不是时间戳或日期": "Not a timestamp or date", "没有找到链接": "No links found",
+	} {
+		en[k] = v
+	}
+}
+
+func init() { // 命令面板扩充（commands.go sharedActions / settingsJumps）
+	for k, v := range map[string]string{
+		"在设置里搜索「%s」": "Search settings for “%s”", "恢复剪贴板收集": "Resume clipboard collection", "已恢复剪贴板收集": "Clipboard collection resumed",
+		"已暂停剪贴板收集": "Clipboard collection paused", "关闭隐身模式": "Turn off stealth mode", "开启隐身模式（不弹捕获提示）": "Turn on stealth mode (no capture bubbles)",
+		"已关闭隐身模式": "Stealth mode off", "切换为舒适列表": "Switch to comfortable list", "切换为紧凑列表": "Switch to compact list",
+		"主题：跟随系统": "Theme: system", "主题：浅色": "Theme: light", "主题：深色": "Theme: dark", "取消保持面板展开": "Stop keeping panel open",
+		"快捷键速查表": "Shortcut cheat sheet",
+	} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
+}
+
+func init() { // 粘贴规则应用列表：未安装的预置终端（settings_paste.go）
+	en["另有 %d 个未安装的终端"] = "%d more terminals not installed"
+}
+
+func init() { // 剪贴卡页脚按类型显示（image_import.go clipFootMeta）
+	if _, ok := en["%d 行"]; !ok {
+		en["%d 行"] = "%d lines"
+	}
+}
+
+func init() { // 键位提示随状态变化 + 整行开关（mainpanel.go keyHints / panel.go 面板菜单）
+	for k, v := range map[string]string{"底部键位提示": "Key hints at the bottom", "合并": "Merge", "保存": "Save", "取消": "Cancel", "收起": "Collapse", "完成": "Done", "删除": "Delete"} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
+}
+
+func init() { // 捕获气泡来源图标（hud.go）
+	en["来源应用"] = "Source app"
+}
+
+func init() { // 空状态（mainpanel.go emptyQueue / emptySection）
+	for k, v := range map[string]string{
+		"连按两次 %s": "Double-tap %s", "选中文字，连按两次 %s": "Select text, then double-tap %s", "在任何应用里都可以": "Works in any app",
+		"把剪贴板内容收成第一张卡": "Turn clipboard into the first card", "剪贴板里没有文字": "No text on the clipboard", "把卡片拖到这里": "Drag cards here",
+		"捕获的内容会存到这里": "Captures are saved here", "捕获的内容将存入「%s」": "Captures will be saved to “%s”", "保存失败：": "Save failed: ",
+	} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
+}
+
+func init() { // 菜单栏图标状态（tray_icon.go）
+	for k, v := range map[string]string{
+		"权限需要处理": "Permission needs attention", "有逾期任务": "Overdue tasks", "已暂停剪贴板收集": "Clipboard collection paused", "隐身模式": "Stealth mode",
+		"菜单栏显示下一个到期": "Show next due time in menu bar",
+		"图标旁显示今天下一个任务的到期时间；图标本身会标出暂停、隐身、逾期与权限状态": "Shows today's next task due time beside the icon; the icon itself marks paused, stealth, overdue and permission states",
+	} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
+}
+
+func init() { // 速记本地解析（tasks_quick.go）
+	for k, v := range map[string]string{"点一下不采用，保留原文": "Click to ignore and keep the words", "点一下重新采用": "Click to use again", "已加到 %s": "Added for %s"} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
+}
+
+func init() { // 订阅页洞察（bill_insights.go）
+	for k, v := range map[string]string{
+		"折合每年 %s": "%s per year", "未来 30 天": "Next 30 days", "%d 笔，合计 %s": "%d charges, %s total", "还剩 %d 天": " in %d days", "就在今天": " today",
+		"%s 首次扣款%s": "%s: first charge%s", "到期自动扣 %s": "Charges %s automatically", "下一期起": "From next period", "%d月起": "Since month %d",
+		"%s 涨价了": "%s went up", "%s %s 变 %s": "%s %s to %s", "查看": "View", "较上月 +%s": "+%s vs last month", "较上月 −%s": "−%s vs last month",
+	} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
+}
+
+func init() { // 详情窗查找 / 大纲 / 进度（detail_find.go）
+	for k, v := range map[string]string{
+		"文内查找": "Find in card", "在这张卡里查找": "Find in this card", "查找内容": "Find text", "无结果": "No results", "上一个（⇧⏎）": "Previous (⇧⏎)",
+		"下一个（⏎）": "Next (⏎)", "关闭查找（Esc）": "Close find (Esc)", "大纲": "Outline", "跳到：": "Jump to: ", "阅读进度": "Reading progress",
+	} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
+}
+
+func init() { // AI 流式核对与自定义动作（ai_review.go / ai_settings.go）
+	for k, v := range map[string]string{
+		"AI 没有改动内容": "AI made no changes", "已采纳 · ": "Applied · ", "生成中，已 %d 秒": "Generating, %d s", "全文结果，不逐段比对": "Full result, no per-block diff",
+		"%d 处改动，已处理 %d 处": "%d changes, %d handled", "%d 处改动": "%d changes", "等待 AI 返回…": "Waiting for AI…", "原文": "Original", "结果": "Result",
+		"采纳": "Accept", "还原": "Revert", "已采纳": "Accepted", "已还原": "Reverted", "（这一段已删除）": "(this block was removed)", "撤回": "Undo", "停止": "Stop",
+		"另存为新卡": "Save as new card", "全部还原": "Discard all", "全部采纳 ⌘⏎": "Accept all ⌘⏎", "替换原文 ⌘⏎": "Replace original ⌘⏎", "应用 ⌘⏎": "Apply ⌘⏎",
+		"润色 / 精简 / 翻译 / 写成提示词；结果在详情窗里边生成边显示，逐段采纳后写回原卡": "Polish / shorten / translate / turn into a prompt; results stream into the detail window and are applied block by block",
+		"自定义动作": "Custom actions", "AI 处理选中内容…": "AI is processing the selection…", "选中的内容已变化，没有替换": "The selection changed; nothing was replaced",
+		"已处理选中内容 · ": "Selection processed · ", "自定义动作的指令": "Instruction for the custom action", "名称加一句指令，出现在卡片右键 AI 菜单和详情窗「处理」里": "A name plus one instruction; shown in the card AI menu and the detail window's Process menu",
+		"名称和指令都要填": "Name and instruction are both required", "名称最多 12 个字": "Name: 12 characters max", "指令最多 400 个字": "Instruction: 400 characters max",
+		"最多 12 个自定义动作": "Up to 12 custom actions", "已有同名动作": "An action with this name already exists", "已删除自定义动作": "Custom action deleted",
+		"名称，如「改成邮件」": "Name, e.g. “As email”", "指令，如「把下面的文字改写成礼貌的工作邮件」": "Instruction, e.g. “Rewrite the text below as a polite work email”", "添加": "Add",
+	} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
+}
+
+func init() { // 今天页时间块与专注（today_blocks.go）
+	for k, v := range map[string]string{
+		"今天 %d / %d 完成": "Today %d / %d done", "%d 项逾期": "%d overdue", "%d 笔扣款": "%d charges", "%d 个日程": "%d events", "今天的时间轴": "Today's timeline",
+		"空档 %d 分钟": "%d min free", "点击在「日历」中打开": "Click to open in Calendar", "专注中": "Focusing", "开始专注": "Start focus", "结束专注": "End focus",
+		"拖动改时长": "Drag to change duration", "已排到 %s": "Scheduled at %s", "已清除时长": "Duration cleared", "时长 %s": "Duration %s", "%d 小时 %d 分钟": "%d h %d min",
+		"时长": "Duration", "清除时长": "Clear duration", "未排期": "Unscheduled", "拖到时间轴上排时间": "Drag onto the timeline to schedule",
+		"还有 %d 项，在「任务」里查看": "%d more in Tasks", "专注时间到 · %s": "Focus time is up · %s", "专注": "Focus", "专注中，剩 %d 分钟": "Focusing, %d min left",
+		"已完成 · %s": "Done · %s", "延后": "Later", "结束": "End", "专注 %d 分": "Focus %d m",
+	} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
+}
+
+func init() { // 截图识别文字：选行 / 二维码 / 表格（shot_pick.go）
+	for k, v := range map[string]string{
+		"识别出的文字行": "Recognized text lines", "在选区里点选或拖框，只取其中几行": "Click or drag in the selection to take only some lines", "已选 %d / %d 行": "%d of %d lines selected",
+		"二维码内容": "QR code content", "打开链接": "Open link", "复制内容": "Copy content", "复制为表格": "Copy as table",
+	} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
+}
+
+func init() { // 同时发到多个应用与回复对比（fanout.go）
+	for k, v := range map[string]string{
+		"没有发到任何应用": "Nothing was sent to any app", "已发到 %s": "Sent to %s", "只发到了 %s（共选了 %d 个）": "Only sent to %s (%d selected)", "已停止；之前已发到 %s": "Stopped; already sent to %s",
+		"同时发到": "Send to several", "同时发到…": "Send to several…", "已选 %d / %d": "%d / %d selected", "至少选 2 个应用": "Pick at least 2 apps", "发到 %d 个应用": "Send to %d apps",
+		"已收为 %s 的回复 · 已有 %d 家，右键可对比": "Saved as %s's reply · %d so far, right-click to compare", "已收为 %s 的回复": "Saved as %s's reply",
+		"至少收到两家的回复才能对比": "Need replies from at least two apps to compare", "对比回复": "Compare replies", "对比回复 · %d 个应用": "Compare replies · %d apps",
+		"返回这张卡": "Back to this card", "%d 字": "%d chars", "浅底：不是每家都说到的内容；灰字：各家一致": "Tinted: not said by every app; grey: all agree",
+		"对比各应用的回复（%d 家）": "Compare replies across apps (%d)",
+	} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
+}
+
+func init() { // 正式版接续旧版数据（legacy_adopt.go）
+	en["已升级到新版，数据都在（%d 条内容）"] = "Upgraded. Your data is all here (%d items)"
 }

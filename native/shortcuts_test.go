@@ -50,7 +50,7 @@ func TestShortcutHelpAndQuickBadges(t *testing.T) {
 	// 设置「快捷键」页的静态表：默认收起，展开后列全
 	a.openSettingsState()
 	a.setPage = 1
-	st := ui.NewTester(a.settingsView, 1040, 900)
+	st := ui.NewTester(a.settingsView, 1040, 1400)
 	st.Frame()
 	if !st.HasText("20 项 · 面板里长按 ⌥ 也能速查") || st.HasText("撤销上一步操作") {
 		t.Fatalf("设置表默认收起 %v", st.Texts())

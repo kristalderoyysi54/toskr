@@ -45,7 +45,7 @@ func (a *app) templateMenu(m *ui.Menu, label string, notes func() []store.Note) 
 	m.Submenu(label, func(sm *ui.Menu) {
 		if len(sections) == 0 {
 			if sm.Item(tr("添加模板…")).Chosen() {
-				a.openSettingsAt(setPagePaste, 1)
+				a.openSettingsAt(setPagePaste, 2)
 				a.startSnippetAdd()
 			}
 			return
@@ -69,7 +69,7 @@ func (a *app) templateMenu(m *ui.Menu, label string, notes func() []store.Note) 
 		}
 		sm.Separator()
 		if sm.Item(tr("管理模板…")).Chosen() {
-			a.openSettingsAt(setPagePaste, 1)
+			a.openSettingsAt(setPagePaste, 2)
 		}
 		sm.Item(tr("按住 ⌥ 点击：先检查再发送")).Disabled(true)
 	})
@@ -237,9 +237,9 @@ func (a *app) templateSections(c *ui.Context, k tokens, s settingsTokens) []setS
 		}
 	}}
 	return []setSection{
-		{tr("常用模板"), common},
-		{tr("其他模板"), other},
-		{tr("添加"), []setRow{add, export}},
+		{title: tr("常用模板"), rows: common},
+		{title: tr("其他模板"), rows: other},
+		{title: tr("添加"), rows: []setRow{add, export}},
 	}
 }
 

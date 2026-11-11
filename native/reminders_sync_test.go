@@ -141,7 +141,7 @@ func TestRemindersSettingsRows(t *testing.T) {
 	a, _ := testApp(t)
 	a.openSettingsState()
 	set := ui.NewTester(a.settingsView, 1040, 4000)
-	a.setJump = "更多功能"
+	a.setJump = "日历与提醒事项"
 	set.Frame()
 	set.Frame()
 	if !set.HasText("同步任务到提醒事项") {
@@ -155,6 +155,24 @@ func TestRemindersSettingsRows(t *testing.T) {
 		if !set.HasText(s) {
 			t.Fatalf("缺 %q：%v", s, set.Texts())
 		}
+	}
+	if set.HasText("不推送") {
+		t.Fatal("同步规则默认收起")
+	}
+	if err := set.Click("同步规则 查看"); err != nil {
+		t.Fatal(err)
+	}
+	set.Frame()
+	if !set.HasText("不推送") || !set.HasText("在提醒事项里删掉的任务不再同步，Toskr 里的任务保留") || !set.HasText("收起") {
+		t.Fatalf("展开后分条列出：%v", set.Texts())
+	}
+	// 同步失败：行上换成「重试」，说明写失败原因
+	cur := a.store.Settings()
+	cur.RemindersError = "列表不可写"
+	_ = a.store.SetSettings(cur)
+	set.Frame()
+	if !set.HasText("重试") || set.HasText("立即同步") || !set.HasText("同步失败：列表不可写") {
+		t.Fatalf("失败态：%v", set.Texts())
 	}
 }
 
