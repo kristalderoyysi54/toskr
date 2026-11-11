@@ -36,6 +36,16 @@ The interface and background services are now native macOS code, with no embedde
 
 <sub>Measured on 2026-11-11 on one Apple Silicon Mac, two restarts each, with about 750 items. Memory rises above this after long use.</sub>
 
+### New in 1.0
+
+- **Ask several AIs at once** Send to 2–3 apps in one go and compare the replies side by side: what every app said is dimmed, what only one said is tinted
+- **Review AI rewrites block by block** The result streams in, each changed block marks additions and deletions character by character, and you accept or revert per block; `⌘ Enter` accepts all
+- **Pick screenshot text by line** After recognition, click, shift-click, or drag a box around the lines you want; QR codes in the selection are read out
+- **Time blocks on Today** Drag a task onto the timeline to schedule it, drag its bottom edge to change the duration, alongside your calendar events
+- **Quick-add parsing without AI** Dates, times, repeats, priority, and groups are recognised locally as you type (Chinese phrasing)
+- **Subscription insights** Six months of spend by category, a 30-day charge timeline, and price-increase notices
+- **Reading aids in the detail window** `⌘ F` find in text, heading outline, reading progress
+
 ## Three steps
 
 1. **Collect** Select text and double-tap `⇧ Shift`. Copied text and images also appear in Clipboard History.
@@ -54,12 +64,16 @@ The interface and background services are now native macOS code, with no embedde
 - **Prepare several items together** Select text and image cards and group them, in their current order, into one delivery
 - **Review sensitive text before pasting** Locally detect supported emails, IP addresses, phone numbers, secrets, and other sensitive text, then replace it when needed
 - **Mask sensitive text in images** Use local OCR to find supported regions and mask them on a generated sending copy while keeping the original unchanged
+- **Compare before sending** Original on the left, what will be sent on the right, aligned line by line with replacements marked; restore or keep each one in the same window
 - **Encrypted local storage** Notes, images, and message records are written with AES-256-GCM. The key stays in the macOS login keychain, so other apps cannot read or tamper with those files
 
 ## Useful extras
 
 - **Clipboard History** Keeps copied items for 30 days by default and can be paused at any time
-- **Notes and tasks** Parks prompts, references, and follow-ups, with due reminders while Toskr is running
+- **Region screenshots** `⌃ ⌥ A` to capture and annotate, with scrolling capture, pin-to-screen, and text recognition; on-device Chinese–English translation on macOS 15 and later
+- **Notes and tasks** Parks prompts, references, and follow-ups, with due reminders while Toskr is running; optional two-way sync with Reminders and calendar events on Today
+- **Prompt templates** Send selected cards with a template, with suggestions for the current target app
+- **Command palette** `⌘ K` to run actions or search cards and tasks
 - **Panel docking** Pins to the right or bottom edge, with optional left or right companion mode
 - **Opt-in extensions** The message workspace, secret text, subscription reminders, and AI assistant are off by default
 
@@ -73,7 +87,7 @@ The interface and background services are now native macOS code, with no embedde
 
 ## Install
 
-Requires **macOS 13 or later**.
+Requires **macOS 13 or later**. 1.0 supports Apple Silicon only.
 
 1. Download the `.dmg` from the [latest release](https://github.com/kristalderoyysi54/toskr/releases/latest) and drag it into `Applications`.
 2. On first launch, use **right-click → Open** to open the self-signed app.
@@ -90,6 +104,8 @@ Auto-update is built in. You can also check manually in Settings → About.
 | Double-tap `⇧ Shift` | With selected text, collect it in Toskr; without a selection, toggle the panel |
 | `⌘ Enter` / `⌘ 1-9` | Paste selected cards / quickly paste the Nth card |
 | `⌘ F` · `Esc` | Search · dismiss layer by layer |
+| `⌘ K` | Command palette |
+| `⌃ ⌥ A` | Region screenshot |
 | Hold `⌥ Option` | Open the full shortcut reference |
 
 ## Credits & License
