@@ -6,6 +6,7 @@
 #   主账户：  DRY_RUN=1 ./script/release-native.sh 1.0.0 && ./script/trial-native-upgrade.sh prepare
 #   测试账户：/Users/Shared/toskr-trial/trial.sh install     # 把旧版 0.22.4 装到 ~/Applications 并打开
 #             → 在旧版里授权辅助功能与输入监控、捕获几条内容、建个任务、（可选）开机启动，然后退出旧版
+#             /Users/Shared/toskr-trial/trial.sh precheck    # 升级前只读预检：新包能否读出并接续这份旧数据（不写任何数据）
 #             /Users/Shared/toskr-trial/trial.sh upgrade     # 按旧版更新器的装法原位换成原生包并打开
 #             /Users/Shared/toskr-trial/trial.sh check       # 读诊断日志，逐项给出结论
 #             /Users/Shared/toskr-trial/trial.sh clean       # 删掉演练装的应用与数据（钥匙串条目需在「钥匙串访问」里手动删）
@@ -58,6 +59,21 @@ upgrade)
   open "$APP"
   echo "→ 已原位换成原生包并打开（旧包备份在 ${BAK}）。留意：有没有钥匙串 / 权限弹框、面板里数据在不在。然后运行 check"
   ;;
+precheck)
+  # 只读：把新包解到临时目录直接运行其可执行文件，旧数据导入到临时空库后出报告；不动已装的应用、旧数据和 v1。
+  TMP=$(mktemp -d); OUT="$TMP/report.txt"
+  tar -xzf "$KIT/Toskr.app.tar.gz" -C "$TMP"
+  NEWAPP=$(ls -d "$TMP"/*.app | head -1)
+  EXE="$NEWAPP/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$NEWAPP/Contents/Info.plist")"
+  TOSKR_ADOPT_CHECK="$OUT" "$EXE" >/dev/null 2>&1 &
+  PID=$!
+  for _ in $(seq 60); do [[ -s "$OUT" ]] && break; sleep 0.5; done
+  kill "$PID" 2>/dev/null || true
+  [[ -s "$OUT" ]] || { echo "  ✗ 预检 30 秒内没有出报告（可能卡在钥匙串授权框）"; exit 1; }
+  sed 's/^/  /' "$OUT"
+  HEAD=$(head -1 "$OUT")
+  [[ "$HEAD" == 通过* || "$HEAD" == 没有需要* ]] || exit 1
+  ;;
 check)
   ok() { echo "  ✓ $1"; }; bad() { echo "  ✗ $1"; FAIL=1; }
   FAIL=0
@@ -66,6 +82,9 @@ check)
   pgrep -f "$APP/Contents/MacOS/" >/dev/null && ok "应用在运行" || bad "应用没在运行"
   [[ -f "$NEW_LOG" ]] || { bad "没有新版诊断日志 $NEW_LOG"; exit 1; }
   grep -a '已接续旧版数据' "$NEW_LOG" | tail -1 | cut -d' ' -f2- | sed 's/^/  · /' || true
+  if grep -aq '接续旧版数据失败' "$NEW_LOG" && ! grep -aq '已接续旧版数据' "$NEW_LOG"; then
+    bad "接续失败（面板顶部应有「旧版的数据还没显示出来」横幅和重试按钮）：$(grep -a '接续旧版数据失败' "$NEW_LOG" | tail -1 | cut -d' ' -f2-)"
+  fi
   grep -aq '已接续旧版数据' "$NEW_LOG" && ok "旧版数据已静默接续" || bad "没有接续记录（看日志里的「接续旧版数据失败」）"
   grep -a '已接续旧版数据' "$NEW_LOG" | tail -1 | grep -q '核对.*不一致 0\|全部一致' && ok "回读核对无不一致" || echo "  ? 回读核对结果见上一行，请人工确认"
   grep -a '辅助功能授权=' "$NEW_LOG" | tail -1 | grep -q 'true' && ok "辅助功能授权保留" || bad "辅助功能授权没有保留（需要重新授权）"

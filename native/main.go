@@ -3,7 +3,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -32,6 +31,11 @@ func main() {
 		}
 	})
 	mygo.App.WhenReady(func() {
+		if out := os.Getenv("TOSKR_ADOPT_CHECK"); out != "" { // 接续预检：只读，报告写到文件后退出（legacy_adopt.go）
+			runAdoptCheck(out)
+			mygo.App.Quit()
+			return
+		}
 		if os.Getenv(handoffEnv) == "1" { // 把迭代期的数据交接给正式版后退出（handoff.go）
 			msg, err := runHandoff()
 			if err != nil {
@@ -79,8 +83,9 @@ func start() (*app, error) {
 	}
 	seedIfRequested(st)
 	var adopted *store.TauriReport
+	var adoptErr error
 	if released() { // 旧版点「更新」后的第一次启动：把旧版数据静默接过来（没成功的话下次启动再试，成功后不再做）
-		adopted = adoptLegacyData(st)
+		adopted, adoptErr = adoptLegacyData(st)
 	}
 	setLanguage(st.Settings().Language, mygo.App.PreferredLanguages())
 	appLive = true
@@ -188,7 +193,12 @@ func start() (*app, error) {
 	a.pinned = os.Getenv("TOSKR_PIN") == "1" // 测量用：面板常驻不随失焦收起
 	a.adoptLegacyAutostart()
 	if adopted != nil {
-		a.showHUDForce("ok", fmt.Sprintf(tr("已升级到新版，数据都在（%d 条内容）"), adopted.Notes))
+		kind, msg := adoptSummary(adopted)
+		a.showHUDForce(kind, msg)
+	}
+	if adoptErr != nil { // 旧数据没接上：面板顶部常驻横幅（带重试），并立刻唤出面板让用户看到
+		a.adoptErr = adoptReason(adoptErr)
+		a.showPanel()
 	}
 	if !mygo.App.WasOpenedAtLogin() {
 		a.showPanel()

@@ -66,7 +66,7 @@ func (a *app) platinumPanel(c *ui.Context, k tokens) {
 				if st := a.permState(); st == "ax" || st == "stuck" {
 					ui.Column(c).Margin(6, -12, -8, -12).Children(func() { a.permissionBanner(c, k) })
 				}
-				if a.store.Conflict() {
+				if a.store.Conflict() || a.adoptErr != "" {
 					ui.Column(c).Margin(6, -12, -8, -12).Children(func() { a.conflictBanner(c, k) })
 				}
 				if a.searchOpen {

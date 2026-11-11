@@ -479,3 +479,16 @@ func init() { // 同时发到多个应用与回复对比（fanout.go）
 func init() { // 正式版接续旧版数据（legacy_adopt.go）
 	en["已升级到新版，数据都在（%d 条内容）"] = "Upgraded. Your data is all here (%d items)"
 }
+
+func init() { // 旧版数据没接上时的横幅与提示（legacy_adopt.go）
+	for k, v := range map[string]string{
+		"已升级到新版；有 %d 项内容没能原样带过来，旧版数据仍完整保留（详见 设置 → 诊断）": "Upgraded; %d items could not be carried over as-is. Your old data is kept intact (see Settings → Diagnostics)",
+		"还是没接上：": "Still not connected: ", "旧版的数据还没显示出来": "Your data from the previous version isn't showing yet",
+		"数据没有丢，仍完整保存在原处。原因：": "Nothing is lost; it is still stored where it was. Reason: ", "重试": "Retry",
+		"旧版的数据文件读不出来（详情见 设置 → 诊断）": "The previous version's data file can't be read (details in Settings → Diagnostics)",
+	} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
+}

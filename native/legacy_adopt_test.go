@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"github.com/egoist/mygo/ui"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,8 +75,8 @@ func TestAdoptLegacyData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rep := adoptLegacyData(st)
-	if rep == nil || rep.Notes != 2 || rep.Tasks != 1 {
+	rep, err := adoptLegacyData(st)
+	if err != nil || rep == nil || rep.Notes != 2 || rep.Tasks != 1 {
 		t.Fatalf("应接续旧数据 %+v", rep)
 	}
 	if n, ok := st.Note("n1"); !ok || n.Text != "旧版的一条笔记" {
@@ -94,7 +95,7 @@ func TestAdoptLegacyData(t *testing.T) {
 	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
 		t.Fatalf("旧版目录里不应多出文件 %v", entries)
 	}
-	if adoptLegacyData(st) != nil {
+	if again, err := adoptLegacyData(st); again != nil || err != nil {
 		t.Fatal("只接续一次")
 	}
 	a := newApp(nopSys{}, st)
@@ -107,12 +108,12 @@ func TestAdoptLegacyData(t *testing.T) {
 func TestAdoptLegacyDataFailsSoft(t *testing.T) {
 	t.Cleanup(setReleased(true))
 	st, _ := store.OpenDir(t.TempDir(), bytes.Repeat([]byte{7}, 32))
-	if adoptLegacyData(st) != nil {
+	if rep, err := adoptLegacyData(st); rep != nil || err != nil {
 		t.Fatal("没有旧数据")
 	}
-	legacyFixture(t, `{"unknown":"{}"}`)
-	if adoptLegacyData(st) != nil || st.Settings().TauriMigration != "" {
-		t.Fatal("导入失败不应标记完成")
+	legacyFixture(t, `不是 JSON`)
+	if rep, err := adoptLegacyData(st); rep != nil || err == nil || st.Settings().TauriMigration != "" {
+		t.Fatal("读不出来：报错且不标记完成")
 	}
 	if _, _, err := st.Add(store.Note{Section: store.SectionInbox, Text: "还能用"}); err != nil {
 		t.Fatal(err)
@@ -233,7 +234,7 @@ func TestRunHandoff(t *testing.T) {
 	legacyFixture(t, legacyDoc(t)) // 这台机器上还有旧版数据：正式版启动时不应把它并进交接过来的库
 	func() {
 		defer setReleased(true)()
-		if adoptLegacyData(got) != nil || len(got.Notes()) != 1 {
+		if rep, err := adoptLegacyData(got); rep != nil || err != nil || len(got.Notes()) != 1 {
 			t.Fatal("交接过来的库以原生版数据为准，不再接旧版数据")
 		}
 	}()
@@ -283,5 +284,51 @@ func TestInheritLegacyDataDir(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(def, store.DataFile), []byte("x"), 0o600)
 	if d, _ := resolveDataDir(def, true); d != def {
 		t.Fatal("默认目录里已有数据（如在设置里换回默认）就不再沿用")
+	}
+}
+
+// 旧数据没接上时不能静默空白：面板顶部常驻横幅说明原因，「重试」接上后横幅消失、内容出现；
+// 旧版里本来就没有内容则直接标记完成、不打扰；旧版的自定义数据目录不可用要报出来。
+func TestAdoptFailureIsVisible(t *testing.T) {
+	t.Cleanup(setReleased(true))
+	dir := legacyFixture(t, `不是 JSON`)
+	a, tt := testApp(t)
+	_, err := adoptLegacyData(a.store)
+	if err == nil {
+		t.Fatal("应报错")
+	}
+	a.adoptErr = adoptReason(err)
+	tt.Frame()
+	if !tt.HasText("旧版的数据还没显示出来") || !tt.HasText("数据没有丢") {
+		t.Fatalf("应有横幅 %v", tt.Texts())
+	}
+	if dir := os.Getenv("TOSKR_SHOT_DIR"); dir != "" {
+		for _, dark := range []bool{false, true} {
+			v := ui.NewTester(a.panelView, 320, 700)
+			v.SetDark(dark)
+			v.Frame()
+			v.Frame()
+			save(t, filepath.Join(dir, "adopt-banner-"+map[bool]string{false: "light", true: "dark"}[dark]+".png"), v.Image())
+		}
+	}
+	_ = os.WriteFile(filepath.Join(dir, "toskr-data.json"), []byte(legacyDoc(t)), 0o600)
+	mustClick(t, tt, "重试")
+	tt.Frame()
+	if a.adoptErr != "" || tt.HasText("旧版的数据还没显示出来") || !tt.HasText("旧版的一条笔记") {
+		t.Fatalf("重试后应接上并显示内容 %q %v", a.adoptErr, tt.Texts())
+	}
+
+	empty, _ := store.OpenDir(t.TempDir(), bytes.Repeat([]byte{7}, 32))
+	legacyFixture(t, `{"toskr":"{\"state\":{},\"version\":27}"}`)
+	if rep, err := adoptLegacyData(empty); rep != nil || err != nil || empty.Settings().TauriMigration != "done" {
+		t.Fatalf("旧版里没有内容：不算失败，标记完成 %v", err)
+	}
+
+	gone, _ := store.OpenDir(t.TempDir(), bytes.Repeat([]byte{7}, 32))
+	old := legacyDataDir
+	legacyDataDir = func() string { return "/Volumes/没挂载的盘/Toskr" }
+	defer func() { legacyDataDir = old }()
+	if _, err := adoptLegacyData(gone); err == nil || !strings.Contains(err.Error(), "打不开") || gone.Settings().TauriMigration != "" {
+		t.Fatalf("自定义目录不可用应报出来 %v", err)
 	}
 }
