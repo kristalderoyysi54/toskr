@@ -36,7 +36,7 @@ cmp -s "$HELPER_SRC" "$HELPER_RES" || { echo "$HELPER_RES 与旧版辅助程序�
 python3 script/keychain-helper.py check >/dev/null || { echo "旧版辅助程序产物校验失败"; exit 1; }
 WANT_ARM=$(python3 -I -c 'import json;print(json.load(open("src-tauri/keychain-helper/manifest.json"))["cdhash"]["arm64"])')
 WANT_X86=$(python3 -I -c 'import json;print(json.load(open("src-tauri/keychain-helper/manifest.json"))["cdhash"]["x86_64"])')
-grep -q "cdhash: \"$WANT_ARM\"" native/identity.go || { echo "native/identity.go 锁定的辅助程序指纹与清单不一致"; exit 1; }
+grep -q "cdhash: \"$WANT_ARM\", cdhashX86: \"$WANT_X86\"" native/identity.go || { echo "native/identity.go 锁定的辅助程序指纹与清单不一致"; exit 1; }
 
 # 门禁 2：测试
 if [[ "${SKIP_TESTS:-0}" != 1 ]]; then
@@ -56,12 +56,15 @@ d["macos"]["infoPlist"] = {k: (v.replace("Toskr Native", "Toskr") if isinstance(
 open(p, "w").write(json.dumps(d, ensure_ascii=False, indent=2) + "\n")
 PY
 
-# 2. 打包（.app + dmg + 原生更新包与清单）
-rm -rf "$OUT/darwin-arm64"
-(cd native && go tool mygo build -o build-release)
-[[ -d "$APP" ]] || { echo "缺少 $APP"; exit 1; }
+# 2. 打包（.app + dmg + 原生更新包与清单）：Apple Silicon 与 Intel 各一份。
+#    旧版只发过 Apple Silicon，所以旧版更新物料（latest.json）只需要 arm64；Intel 包给新装用户，之后走原生更新。
+rm -rf "$OUT/darwin-arm64" "$OUT/darwin-amd64"
+(cd native && go tool mygo build -platform darwin/arm64,darwin/amd64 -o build-release)
+[[ -d "$APP" && -d "$OUT/darwin-amd64/Toskr.app" ]] || { echo "缺少 $APP 或 Intel 包"; exit 1; }
 
-# 门禁 3：包身份、签名、辅助程序指纹
+# 门禁 3：包身份、签名、辅助程序指纹（两种架构逐个过）
+for APP in "$OUT/darwin-amd64/Toskr.app" "$OUT/darwin-arm64/Toskr.app"; do
+ARCH=$([[ "$APP" == *amd64* ]] && echo x86_64 || echo arm64)
 plist() { /usr/libexec/PlistBuddy -c "Print :$1" "$APP/Contents/Info.plist"; }
 [[ "$(plist CFBundleIdentifier)" == com.toskr.app && "$(plist CFBundleShortVersionString)" == "$VERSION" ]] || { echo "包标识或版本不对"; exit 1; }
 EXE="$APP/Contents/MacOS/$(plist CFBundleExecutable)"
@@ -75,7 +78,9 @@ cdhash() { codesign -d --verbose=4 -a "$1" "$APP/Contents/Resources/com.toskr.ke
   || { echo "包内旧版辅助程序的指纹变了（$(cdhash arm64)）：存量用户会被要求重新授权钥匙串，拒绝发布"; exit 1; }
 HELPINFO=$(codesign -d --verbose=4 "$APP/Contents/Resources/com.toskr.keychain-helper.bin" 2>&1)
 grep -q '^Identifier=com.toskr.keychain-helper$' <<<"$HELPINFO" || { echo "辅助程序标识不对"; exit 1; }
-echo "→ 包校验通过：com.toskr.app v${VERSION}，辅助程序指纹 $WANT_ARM"
+[[ "$(lipo -archs "$EXE")" == "$ARCH" ]] || { echo "$EXE 的架构不是 $ARCH"; exit 1; }
+echo "→ 包校验通过（${ARCH}）：com.toskr.app v${VERSION}，辅助程序指纹 $WANT_ARM / $WANT_X86"
+done
 
 # 3. 旧版更新器的物料：顶层目录名随意（更新器解包时跳过第一级），装到原 Toskr.app 的位置
 LEGACY="$OUT/legacy"; rm -rf "$LEGACY"; mkdir -p "$LEGACY"
@@ -110,7 +115,11 @@ sha = lambda p: hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
 pathlib.Path(out).write_text(json.dumps({"testedCommit": commit, "version": version, "flavor": "native",
     "sha256": {pathlib.Path(p).name: sha(p) for p in paths}}, indent=2) + "\n")
 PY
-FILES=("$NATIVE_DMG" "$NATIVE_TGZ" "$MANIFEST" "$LEGACY/Toskr.app.tar.gz" "$LEGACY/Toskr.app.tar.gz.sig" "$LEGACY/latest.json" "$LEGACY/release-evidence.json")
+X86_TGZ="$OUT/darwin-amd64/toskr-$VERSION-darwin-amd64.tar.gz"; X86_DMG="$OUT/darwin-amd64/toskr-$VERSION-amd64.dmg"; X86_MANIFEST="$OUT/darwin-amd64/update-darwin-amd64.json"
+[[ -f "$X86_TGZ" && -f "$X86_DMG" && -f "$X86_MANIFEST" ]] || { echo "缺少 Intel 的更新包 / DMG / 清单"; exit 1; }
+grep -q "releases/download/v$VERSION/" "$X86_MANIFEST" || { echo "Intel 更新清单的下载地址不是 v${VERSION}"; exit 1; }
+hdiutil verify "$X86_DMG" >/dev/null
+FILES=("$X86_DMG" "$X86_TGZ" "$X86_MANIFEST" "$NATIVE_DMG" "$NATIVE_TGZ" "$MANIFEST" "$LEGACY/Toskr.app.tar.gz" "$LEGACY/Toskr.app.tar.gz.sig" "$LEGACY/latest.json" "$LEGACY/release-evidence.json")
 
 if [[ "$DRY" == 1 ]]; then
   echo "✅ 试运行完成（未建 Release）。物料："; printf '   %s\n' "${FILES[@]}"

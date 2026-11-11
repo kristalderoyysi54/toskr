@@ -114,7 +114,7 @@ func helperCall(path, slot, op string, value []byte) (int32, []byte, error) {
 		return 0, nil, fmt.Errorf("辅助程序身份不符：pid %d ≠ %d", pid, cmd.Process.Pid)
 	}
 	spec := activeHelper()
-	req := fmt.Sprintf(`identifier "%s" and certificate leaf = H"%s" and cdhash H"%s"`, spec.identifier, certLeaf, spec.cdhash)
+	req := fmt.Sprintf(`identifier "%s" and certificate leaf = H"%s" and (cdhash H"%s" or cdhash H"%s")`, spec.identifier, certLeaf, spec.cdhash, spec.cdhashX86)
 	if err := macos.CheckAuditToken(token, req); err != nil {
 		return 0, nil, fmt.Errorf("辅助程序身份校验失败，已停止访问钥匙串：%w", err)
 	}

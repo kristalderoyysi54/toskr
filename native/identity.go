@@ -61,15 +61,16 @@ type helperSpec struct {
 	file       string // 资源文件名；mygo 重签时按「文件名去掉最后一段扩展名」定标识
 	identifier string
 	cdhash     string // arm64 切片
+	cdhashX86  string // x86_64 切片（Intel 机器上系统跑的是这一片，指纹不同）
 }
 
 var (
 	// 迭代期：原生版自己的辅助程序与钥匙串条目。
-	nativeHelper = helperSpec{file: "com.toskr.native.keychain-helper", identifier: "com.toskr.native", cdhash: "fc4feefa9eb2f2264085822ed17e4a383fb61d04"}
+	nativeHelper = helperSpec{file: "com.toskr.native.keychain-helper", identifier: "com.toskr.native", cdhash: "fc4feefa9eb2f2264085822ed17e4a383fb61d04", cdhashX86: "0f75b278ee67af4d3c89c5ec7617f78586ef800a"}
 	// 正式版：旧版的辅助程序原样产物（src-tauri/keychain-helper/artifacts，文件名加 .bin 让重签后的标识仍是
 	// com.toskr.keychain-helper）。钥匙串授权绑在它的 CDHash 上：指纹一变，存量用户就会被要求重新授权，
 	// 所以发布脚本逐包核对这个值（script/release-native.sh）。
-	releaseHelper = helperSpec{file: "com.toskr.keychain-helper.bin", identifier: "com.toskr.keychain-helper", cdhash: "5008368f7af34fde0f4ca7d5277eecb4a5218ef0"}
+	releaseHelper = helperSpec{file: "com.toskr.keychain-helper.bin", identifier: "com.toskr.keychain-helper", cdhash: "5008368f7af34fde0f4ca7d5277eecb4a5218ef0", cdhashX86: "3ef817d1670e8e9d27175545ccfc48e0794e1f88"}
 )
 
 func activeHelper() helperSpec {
