@@ -1,3 +1,4 @@
+import { startRenderActivityProbe } from "@/lib/renderActivity";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -243,7 +244,6 @@ import {
   SETTINGS_AI_KEY_CHANGED,
   SETTINGS_DATA_HEALTH_RESULT,
   SETTINGS_DATA_INSPECT_PATH,
-  SETTINGS_SECTION,
   SETTINGS_START_SAFE_REHEARSAL,
   SETTINGS_START_LESSON,
   applySettingsPatch,
@@ -1698,8 +1698,7 @@ export default function App() {
       }
       // 直达设置窗指定分区，不动面板
       if (p.settings) {
-        void api.openSettingsWindow();
-        void emitTo("settings", SETTINGS_SECTION, p.settings);
+        void api.openSettingsWindow(p.settings);
         return;
       }
       const flash = (id: string) => {
@@ -2291,6 +2290,8 @@ export default function App() {
   const platinumScrollbar = useNotesStore((s) => s.settings.platinumScrollbar);
   // 水合前的默认值不广播：否则启动瞬间会把各窗口缓存改回 default 再切回来
   useEffect(() => installAutoBackupScheduler(), []);
+  // 面板不可见却仍在渲染时落诊断（rAF 次数 / 运行中动画来源）
+  useEffect(() => startRenderActivityProbe(), []);
 
   // 水合成功写条数指纹：install-app.sh 部署后比对前后笔记数，骤降即报警
   useEffect(
@@ -4374,8 +4375,7 @@ export default function App() {
                   size="sm"
                   className="mt-2.5"
                   onClick={() => {
-                    void api.openSettingsWindow();
-                    void emitTo("settings", SETTINGS_SECTION, "data");
+                    void api.openSettingsWindow("data");
                   }}
                 >
                   {t("前往设置处理")}
@@ -5420,8 +5420,7 @@ function ClipHistoryOff({
           size="sm"
           variant="ghost"
           onClick={() => {
-            void api.openSettingsWindow();
-            void emitTo("settings", SETTINGS_SECTION, "clip");
+            void api.openSettingsWindow("clip");
           }}
         >
           {t("调整规则")}

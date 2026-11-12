@@ -232,7 +232,7 @@ fn handle_menu(app: &AppHandle, id: &str) {
             refresh(app);
         }
         "screenshot" => crate::screenshot::on_hotkey(app),
-        "settings" => crate::commands::open_settings_window(app.clone()),
+        "settings" => crate::commands::open_settings_window(app.clone(), None),
         "quit" => app.exit(0),
         _ => {}
     }

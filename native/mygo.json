@@ -1,0 +1,25 @@
+{
+  "name": "Toskr Native",
+  "identifier": "com.toskr.native",
+  "version": "0.1.0",
+  "out": "build",
+  "macos": {
+    "signingIdentity": "Toskr Dev Signing",
+    "entitlements": "entitlements.plist",
+    "minimumSystemVersion": "13.0",
+    "infoPlist": {
+      "LSUIElement": true,
+      "NSAppleEventsUsageDescription": "Toskr 需要向目标应用粘贴内容",
+      "NSCalendarsFullAccessUsageDescription": "Toskr 在「今天」时间轴里只读显示你的日历日程",
+      "NSCalendarsUsageDescription": "Toskr 在「今天」时间轴里只读显示你的日历日程",
+      "NSRemindersFullAccessUsageDescription": "Toskr 把任务同步到提醒事项的「Toskr Native」列表，并读回你在提醒事项里的完成与修改",
+      "NSRemindersUsageDescription": "Toskr 把任务同步到提醒事项的「Toskr Native」列表，并读回你在提醒事项里的完成与修改"
+    }
+  },
+  "updates": {
+    "publicKey": "khP23LeODxe5mpC6j10k5234cDpbghd3G+6hfHNhuBU=",
+    "github": "kristalderoyysi54/toskr",
+    "tagPrefix": "native-v",
+    "privateKey": "~/.toskr-native-keys/mygo-update.key"
+  }
+}

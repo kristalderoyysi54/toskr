@@ -11,9 +11,7 @@ Collect text and images from different apps, organize and review privacy, then p
 [Website](https://toskr.kaibin.me/) · [Download the latest release](https://github.com/kristalderoyysi54/toskr/releases/latest) · [简体中文](README.md) · English
 
 <img src="https://img.shields.io/badge/macOS-13%2B-000000?logo=apple&logoColor=white" alt="macOS 13+" />
-<img src="https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white" alt="Tauri 2" />
-<img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black" alt="React 18" />
-<img src="https://img.shields.io/badge/Rust-stable-DEA584?logo=rust&logoColor=white" alt="Rust" />
+<img src="https://img.shields.io/badge/Apple%20Silicon-Intel-555555" alt="Apple Silicon · Intel" />
 
 </div>
 
@@ -24,7 +22,10 @@ Collect text and images from different apps, organize and review privacy, then p
 Customize auto-submit per target app — `⌘ Enter` pastes and delivers in one step.
 
 <p align="center">
-  <img src="docs/assets/readme/toskr-flow.png" alt="A three-step flow from source apps through Toskr to the current AI input" width="100%" />
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/toskr-flow-en-light.webp" />
+    <img src="docs/assets/readme/toskr-flow-en.webp" alt="Content from source apps is ordered and privacy-checked in Toskr, then delivered at once to AI apps such as ChatGPT, Claude and DeepSeek" width="100%" />
+  </picture>
 </p>
 
 ## Three steps
@@ -34,7 +35,10 @@ Customize auto-submit per target app — `⌘ Enter` pastes and delivers in one 
 3. **Paste** Focus the destination input, open Toskr, and press `⌘ Enter`. Toskr returns to that app and pastes the content; for apps with auto-submit enabled, it presses Enter for you as well.
 
 <p align="center">
-  <img src="docs/assets/readme/toskr-showcase.webp" alt="Toskr clipboard history, card organization, and task reminders" width="100%" />
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/toskr-showcase-en-light.webp" />
+    <img src="docs/assets/readme/toskr-showcase-en.webp" alt="Toskr clipboard history, multi-card sending from notes, and the Today timeline" width="100%" />
+  </picture>
 </p>
 
 <p align="center"><sub>Clipboard history · card-based preparation · task reminders</sub></p>
@@ -45,12 +49,16 @@ Customize auto-submit per target app — `⌘ Enter` pastes and delivers in one 
 - **Prepare several items together** Select text and image cards and group them, in their current order, into one delivery
 - **Review sensitive text before pasting** Locally detect supported emails, IP addresses, phone numbers, secrets, and other sensitive text, then replace it when needed
 - **Mask sensitive text in images** Use local OCR to find supported regions and mask them on a generated sending copy while keeping the original unchanged
+- **Compare before sending** Original on the left, what will be sent on the right, aligned line by line with replacements marked; restore or keep each one in the same window
 - **Encrypted local storage** Notes, images, and message records are written with AES-256-GCM. The key stays in the macOS login keychain, so other apps cannot read or tamper with those files
 
 ## Useful extras
 
 - **Clipboard History** Keeps copied items for 30 days by default and can be paused at any time
-- **Notes and tasks** Parks prompts, references, and follow-ups, with due reminders while Toskr is running
+- **Region screenshots** `⌃ ⌥ A` to capture and annotate, with scrolling capture, pin-to-screen, and text recognition; on-device Chinese–English translation on macOS 15 and later
+- **Notes and tasks** Parks prompts, references, and follow-ups, with due reminders while Toskr is running; optional two-way sync with Reminders and calendar events on Today
+- **Prompt templates** Send selected cards with a template, with suggestions for the current target app
+- **Command palette** `⌘ K` to run actions or search cards and tasks
 - **Panel docking** Pins to the right or bottom edge, with optional left or right companion mode
 - **Opt-in extensions** The message workspace, secret text, subscription reminders, and AI assistant are off by default
 
@@ -64,7 +72,7 @@ Customize auto-submit per target app — `⌘ Enter` pastes and delivers in one 
 
 ## Install
 
-Requires **macOS 13 or later**.
+Requires **macOS 13 or later**, on Apple Silicon or Intel.
 
 1. Download the `.dmg` from the [latest release](https://github.com/kristalderoyysi54/toskr/releases/latest) and drag it into `Applications`.
 2. On first launch, use **right-click → Open** to open the self-signed app.
@@ -81,6 +89,8 @@ Auto-update is built in. You can also check manually in Settings → About.
 | Double-tap `⇧ Shift` | With selected text, collect it in Toskr; without a selection, toggle the panel |
 | `⌘ Enter` / `⌘ 1-9` | Paste selected cards / quickly paste the Nth card |
 | `⌘ F` · `Esc` | Search · dismiss layer by layer |
+| `⌘ K` | Command palette |
+| `⌃ ⌥ A` | Region screenshot |
 | Hold `⌥ Option` | Open the full shortcut reference |
 
 ## Credits & License

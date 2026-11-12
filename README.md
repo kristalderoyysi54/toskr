@@ -11,9 +11,7 @@
 [官网](https://toskr.kaibin.me/) · [下载最新版](https://github.com/kristalderoyysi54/toskr/releases/latest) · 简体中文 · [English](README.en.md)
 
 <img src="https://img.shields.io/badge/macOS-13%2B-000000?logo=apple&logoColor=white" alt="macOS 13+" />
-<img src="https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white" alt="Tauri 2" />
-<img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black" alt="React 18" />
-<img src="https://img.shields.io/badge/Rust-stable-DEA584?logo=rust&logoColor=white" alt="Rust" />
+<img src="https://img.shields.io/badge/Apple%20Silicon-Intel-555555" alt="Apple Silicon · Intel" />
 
 </div>
 
@@ -24,7 +22,10 @@
 可为每个目标应用自定义自动提交——`⌘ Enter` 粘贴即送达。
 
 <p align="center">
-  <img src="docs/assets/readme/toskr-flow.png" alt="来源应用、Toskr 和当前 AI 输入框组成的三步流程" width="100%" />
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/toskr-flow-light.webp" />
+    <img src="docs/assets/readme/toskr-flow.webp" alt="来源应用里的内容经 Toskr 排序并检查隐私后，一次送达 ChatGPT、Claude、DeepSeek 等 AI 应用" width="100%" />
+  </picture>
 </p>
 
 ## 三步上手
@@ -34,7 +35,10 @@
 3. **粘贴过去** 先点进目标应用的输入框，再打开 Toskr 按 `⌘ Enter`。Toskr 会切回该应用并粘贴；开启自动提交的应用，回车也一并完成。
 
 <p align="center">
-  <img src="docs/assets/readme/toskr-showcase.webp" alt="Toskr 的剪贴板、笔记整理与任务提醒界面" width="100%" />
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/toskr-showcase-light.webp" />
+    <img src="docs/assets/readme/toskr-showcase.webp" alt="Toskr 的剪贴板历史、笔记多选发送与今天页时间轴" width="100%" />
+  </picture>
 </p>
 
 <p align="center"><sub>剪贴板历史 · 卡片整理 · 任务提醒</sub></p>
@@ -45,12 +49,16 @@
 - **多项内容一起准备** 选择多张文字或图片卡片，按当前顺序组成一次投递
 - **粘贴前检查文字隐私** 在本机识别邮箱、IP、手机号、密钥等支持的敏感文字，需要时替换后再粘贴
 - **处理图片中的敏感文字** 使用本地 OCR 找出支持识别的区域，并在发送副本上遮挡，原图保持不变
+- **发送前对比** 左「原文」右「将发送」逐行对照，替换掉的内容逐字标出，可在窗口里直接还原或保留
 - **本机加密存储** 笔记、图片与消息记录以 AES-256-GCM 加密落盘，密钥存放在 macOS 登录钥匙串，其他应用无法读取或篡改
 
 ## 顺手能力
 
 - **剪贴板历史** 默认保留 30 天，可随时暂停
-- **笔记和任务** 暂存 Prompt、资料和待办，Toskr 运行时会提醒到期任务
+- **区域截图** `⌃ ⌥ A` 截图并标注，支持长截屏、钉在屏幕上、识别文字；macOS 15 起可本机中英互译
+- **笔记和任务** 暂存 Prompt、资料和待办，Toskr 运行时会提醒到期任务；可与「提醒事项」双向同步，并在今天页显示日历日程
+- **提示词模板** 选好卡片后「用模板发送」，按当前目标应用推荐常用模板
+- **命令面板** `⌘ K` 执行动作，或搜索卡片与任务
 - **面板停靠** 可固定在屏幕右侧或下方，也可开启左右伴随模式
 - **按需扩展** 消息工作台、秘文、订阅提醒和 AI 助手默认关闭，需要时再开启
 
@@ -64,7 +72,7 @@
 
 ## 安装
 
-需要 **macOS 13 或更高版本**。
+需要 **macOS 13 或更高版本**，支持 Apple Silicon 与 Intel。
 
 1. 从 [最新 Releases](https://github.com/kristalderoyysi54/toskr/releases/latest) 下载 `.dmg`，拖入 `Applications`。
 2. 首次启动时使用**右键 →「打开」**，以打开自签名应用。
@@ -81,6 +89,8 @@
 | 双击 `⇧ Shift` | 有选中文字时收进 Toskr，无选中时呼出或收起面板 |
 | `⌘ Enter` / `⌘ 1-9` | 粘贴已选卡片 / 快速粘贴第 N 张卡片 |
 | `⌘ F` · `Esc` | 搜索 · 逐层退出 |
+| `⌘ K` | 命令面板 |
+| `⌃ ⌥ A` | 区域截图 |
 | 长按 `⌥ Option` | 打开完整快捷键速查层 |
 
 ## 致谢与许可

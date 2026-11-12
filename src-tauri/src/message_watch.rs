@@ -335,6 +335,19 @@ pub(crate) fn cdp_set_error(app: &AppHandle, error: String) {
     state.runtime.lock().unwrap().last_error = Some(error);
 }
 
+#[cfg(unix)]
+fn wait_readable(listener: &TcpListener, timeout_ms: i32) {
+    use std::os::fd::AsRawFd;
+    let mut fd = libc::pollfd { fd: listener.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+    // 被信号打断（EINTR）或超时都直接返回，由外层循环重新 accept / 检查 generation
+    unsafe { libc::poll(&mut fd, 1, timeout_ms) };
+}
+
+#[cfg(not(unix))]
+fn wait_readable(_listener: &TcpListener, timeout_ms: i32) {
+    thread::sleep(Duration::from_millis(timeout_ms as u64));
+}
+
 fn run_listener(app: AppHandle, listener: TcpListener, token: String, generation: u64) {
     loop {
         let state = app.state::<MessageWatchState>();
@@ -344,7 +357,9 @@ fn run_listener(app: AppHandle, listener: TcpListener, token: String, generation
         match listener.accept() {
             Ok((stream, _)) => handle_connection(&app, stream, &token, generation),
             Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(25));
+                // 阻塞等新连接（最长 500ms 回头检查 generation），替代 25ms 轮询：
+                // 后者空闲时每秒唤醒 40 次（2026-11-05 实测主进程 38.8/s）。
+                wait_readable(&listener, 500);
             }
             Err(error) => {
                 let mut runtime = state.runtime.lock().unwrap();
@@ -949,6 +964,22 @@ mod tests {
         assert_eq!(request.method, "POST");
         assert_eq!(request.path, "/v1/im/token");
         assert_eq!(request.body, expected);
+    }
+
+    #[test]
+    fn listener_wait_blocks_until_connection_or_timeout() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let started = std::time::Instant::now();
+        wait_readable(&listener, 150);
+        assert!(started.elapsed() >= Duration::from_millis(120), "空闲时应阻塞到超时而非忙轮询");
+
+        let address = listener.local_addr().unwrap();
+        let _client = TcpStream::connect(address).unwrap();
+        let started = std::time::Instant::now();
+        wait_readable(&listener, 5_000);
+        assert!(started.elapsed() < Duration::from_millis(1_000), "有连接时应立即返回");
+        assert!(listener.accept().is_ok());
     }
 
     #[test]

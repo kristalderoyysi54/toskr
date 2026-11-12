@@ -44,6 +44,29 @@ pub(crate) fn frontend_event(message: &str) -> &'static str {
         .map(|(_, event)| *event).unwrap_or("frontend.unclassified")
 }
 
+/// WKWebView 当前 WebContent 进程 pid（私有 `_webProcessIdentifier`，有
+/// respondsToSelector 守卫；取不到返回 -1）。只用于诊断日志。
+#[cfg(target_os = "macos")]
+pub(crate) fn webcontent_pid(wk_webview: *mut std::ffi::c_void) -> i32 {
+    use objc2::runtime::AnyObject;
+    use objc2::{msg_send, sel};
+    let Some(view) = (unsafe { (wk_webview as *const AnyObject).as_ref() }) else {
+        return -1;
+    };
+    unsafe {
+        let ok: bool = msg_send![view, respondsToSelector: sel!(_webProcessIdentifier)];
+        if !ok {
+            return -1;
+        }
+        msg_send![view, _webProcessIdentifier]
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn webcontent_pid(_wk_webview: *mut std::ffi::c_void) -> i32 {
+    -1
+}
+
 #[cfg(test)]
 mod frontend_tests {
     use super::frontend_event;
@@ -62,6 +85,56 @@ mod frontend_tests {
         assert_eq!(frontend_event("webview 挂载 label=main"), "frontend.mounted");
         assert_eq!(frontend_event("前端收到 Toggle: source=keyboard"), "frontend.toggle_received");
     }
+
+    #[test]
+    fn ipc_summary_only_when_frequent_and_ranked() {
+        let mut counts = std::collections::HashMap::new();
+        counts.insert("a".to_string(), 30);
+        assert_eq!(super::ipc_summary(&counts), None);
+        counts.insert("b".to_string(), 40);
+        assert_eq!(super::ipc_summary(&counts).unwrap(), "IPC 频次(60s): 合计=70 b=40 a=30");
+    }
+}
+
+/// IPC 调用频次（按命令名计数）。每 60s 结算一次，总数 ≥ 60（≥1 次/秒）才落一行
+/// 「IPC 频次(60s): 命令=次数 …」取前 6 名——空闲时前端不该持续调用后端，
+/// 这行出现即说明有轮询在跑。只记命令名，不记参数与返回值。
+static IPC_COUNTS: Mutex<Option<(u64, std::collections::HashMap<String, u32>)>> = Mutex::new(None);
+const IPC_WINDOW_MS: u64 = 60_000;
+const IPC_REPORT_MIN: u32 = 60;
+
+pub(crate) fn count_ipc(app: &AppHandle, command: &str) {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    let report = {
+        let mut guard = IPC_COUNTS.lock().unwrap();
+        let (since, counts) = guard.get_or_insert_with(|| (now, Default::default()));
+        let report = if now.saturating_sub(*since) >= IPC_WINDOW_MS {
+            let line = ipc_summary(counts);
+            counts.clear();
+            *since = now;
+            line
+        } else {
+            None
+        };
+        if command.len() <= 64 {
+            *counts.entry(command.to_string()).or_insert(0) += 1;
+        }
+        report
+    };
+    if let Some(line) = report {
+        push(app, line);
+    }
+}
+
+fn ipc_summary(counts: &std::collections::HashMap<String, u32>) -> Option<String> {
+    let total: u32 = counts.values().sum();
+    if total < IPC_REPORT_MIN {
+        return None;
+    }
+    let mut top: Vec<_> = counts.iter().collect();
+    top.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+    let parts: Vec<String> = top.iter().take(6).map(|(k, v)| format!("{k}={v}")).collect();
+    Some(format!("IPC 频次(60s): 合计={total} {}", parts.join(" ")))
 }
 
 /// 记录一条诊断（同时输出到 stderr 供命令行调试）。任意线程可调。

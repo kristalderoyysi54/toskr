@@ -1,0 +1,667 @@
+(() => {
+  "use strict";
+  const TRANSPORT = "__TOSKR_TRANSPORT__";
+  const ENDPOINT = "__TOSKR_ENDPOINT__";
+  const STARTED_AT = __TOSKR_STARTED_AT__;
+  const RULES = __TOSKR_RULES__;
+  const VERSION = 1;
+  const prior = window.__toskrMessageWatchV1;
+  if (prior && typeof prior.stop === "function") prior.stop();
+
+  const ignored = new Set();
+  const queued = new Set();
+  const delivered = new Set();
+  // 已终态化的 messageInfo 条目键（历史忽略 / 非群 / 不命中 / 已入队）：
+  // 稳态 scan 直接跳过，不再对其做 parseJson / findText / snapshot 等重活。
+  const processed = new Set();
+  const pending = [];
+  const restorers = [];
+  let stopped = false;
+  let draining = false;
+  let drainScheduled = false;
+  let initialScan = true;
+  let scanTimer = 0;
+  let healthTimer = 0;
+  let healthFailures = 0;
+
+  const first = (...values) => values.find((value) => value !== undefined && value !== null);
+  const stateOf = (store) => {
+    if (!store) return {};
+    try {
+      if (typeof store.getState === "function") return store.getState() || {};
+    } catch (_) {}
+    return store.state || store;
+  };
+  const entriesOf = (value) => {
+    if (!value) return [];
+    try {
+      if (value instanceof Map || typeof value.entries === "function") return Array.from(value.entries());
+    } catch (_) {}
+    if (Array.isArray(value)) return value.map((item, index) => [String(index), item]);
+    if (typeof value === "object") return Object.entries(value);
+    return [];
+  };
+  // 遍历 messageInfo 但不物化成数组（Object 走 for-in、Map 走迭代器）：
+  // 推推 messageInfo 可达数万条，每轮 scan 物化整表是持续的 GC 压力。
+  const forEachEntry = (value, cb) => {
+    if (!value) return;
+    if (value instanceof Map) { for (const [k, v] of value) cb(k, v); return; }
+    if (Array.isArray(value)) { for (let i = 0; i < value.length; i += 1) cb(String(i), value[i]); return; }
+    if (typeof value === "object") {
+      for (const k in value) if (Object.prototype.hasOwnProperty.call(value, k)) cb(k, value[k]);
+    }
+  };
+  const listOf = (value) => {
+    if (!value) return [];
+    if (Array.isArray(value)) return value;
+    try {
+      if (typeof value.values === "function") return Array.from(value.values());
+    } catch (_) {}
+    return Array.isArray(value.list) ? value.list : Array.isArray(value.items) ? value.items : [];
+  };
+  const valueAt = (collection, key) => {
+    if (!collection || !key) return undefined;
+    try {
+      if (typeof collection.get === "function") return collection.get(key) ?? collection.get(String(key));
+    } catch (_) {}
+    return collection[key] ?? collection[String(key)];
+  };
+  const parseJson = (value) => {
+    if (typeof value !== "string") return value;
+    const text = value.trim();
+    if (!text || (text[0] !== "{" && text[0] !== "[")) return value;
+    try { return JSON.parse(text); } catch (_) { return value; }
+  };
+  const flag = (value) => value === true || value === 1 || value === "1" || value === "true";
+  const asId = (value) => value === undefined || value === null ? "" : String(value);
+  const timeMs = (value) => {
+    const number = Number(value);
+    if (!Number.isFinite(number) || number <= 0) return null;
+    return number < 100000000000 ? Math.trunc(number * 1000) : Math.trunc(number);
+  };
+  const toPlain = (value, seen = new WeakSet(), depth = 0) => {
+    if (value === null || value === undefined || typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
+    if (typeof value === "bigint") return String(value);
+    if (typeof value === "function" || typeof value === "symbol") return undefined;
+    if (depth > 64) return "[MaxDepth]";
+    if (typeof value !== "object") return String(value);
+    if (seen.has(value)) return "[Circular]";
+    seen.add(value);
+    try {
+      if (value instanceof Date) return value.toISOString();
+      if (value instanceof Map) {
+        const output = {};
+        for (const [key, item] of value.entries()) output[String(key)] = toPlain(item, seen, depth + 1);
+        return output;
+      }
+      if (value instanceof Set) return Array.from(value, (item) => toPlain(item, seen, depth + 1));
+      if (Array.isArray(value)) return value.map((item) => toPlain(item, seen, depth + 1));
+      const output = {};
+      for (const key of Object.keys(value)) {
+        try {
+          const item = toPlain(value[key], seen, depth + 1);
+          if (item !== undefined) output[key] = item;
+        } catch (_) {}
+      }
+      return output;
+    } finally {
+      seen.delete(value);
+    }
+  };
+  const snapshot = (value) => {
+    try {
+      const serialized = JSON.stringify(value, (_key, item) => {
+        if (typeof item === "bigint") return String(item);
+        if (item instanceof Map) return Object.fromEntries(item.entries());
+        if (item instanceof Set) return Array.from(item.values());
+        return item;
+      });
+      if (serialized !== undefined) return JSON.parse(serialized);
+    } catch (_) {}
+    return toPlain(value);
+  };
+  // ---- 消息里的图片：只在 IM 页面里用它自己的登录态读取（fetch credentials:include），转成 data URL 交给 Toskr ----
+  const IMG_EXT = /\.(png|jpe?g|gif|webp|heic|heif|bmp)(?:[?#]|$)/i;
+  const IMG_KEY = /(img|image|pic|photo|thumb|origin|cover|src|url|path|uri)/i;
+  const TEXTY_KEY = /^(text|content|title|desc|description|name|n|file_name|fileName)$/;
+  const KEY_RANK = [/origin|raw|big|large|full|hd/i, /^(url|src|uri|path)$/i, /middle|medium/i, /thumb|small|mini|preview/i];
+  const rankKey = (key) => { const i = KEY_RANK.findIndex((re) => re.test(key)); return i < 0 ? KEY_RANK.length : i; };
+  const imageish = (key, value) => {
+    if (typeof value !== "string" || value.length < 6 || value.length > 4_000_000) return false;
+    if (value.startsWith("data:image/")) return true;
+    if (!/^(https?:|file:|blob:|\/)/i.test(value)) return false;
+    if (TEXTY_KEY.test(key)) return false;
+    return IMG_EXT.test(value) || IMG_KEY.test(key);
+  };
+  const findImages = (value, out = [], depth = 0, seen = new WeakSet()) => {
+    if (out.length >= 9 || depth > 8 || value === null || value === undefined) return out;
+    if (typeof value === "string") {
+      const parsed = parseJson(value);
+      return parsed !== value ? findImages(parsed, out, depth + 1, seen) : out;
+    }
+    if (typeof value !== "object" || seen.has(value)) return out;
+    seen.add(value);
+    if (Array.isArray(value)) { for (const item of value) findImages(item, out, depth + 1, seen); return out; }
+    let best = null;
+    for (const key of Object.keys(value)) {
+      if (imageish(key, value[key]) && (!best || rankKey(key) < rankKey(best[0]))) best = [key, value[key]];
+    }
+    if (best && !out.includes(best[1])) out.push(best[1]);
+    for (const key of Object.keys(value)) {
+      if (typeof value[key] === "object" || (typeof value[key] === "string" && /^[\[{]/.test(value[key]))) findImages(value[key], out, depth + 1, seen);
+    }
+    return out;
+  };
+  // 没认出图片、正文又像「[图片]」时，回传字段形状（键路径 + 值类型 / 域名，不含正文）供诊断
+  const probeShape = (value, prefix = "", out = [], depth = 0) => {
+    if (out.length >= 60 || depth > 6 || value === null || value === undefined) return out;
+    if (typeof value === "string") {
+      const parsed = parseJson(value);
+      if (parsed !== value) return probeShape(parsed, prefix, out, depth + 1);
+      let shape = "str(" + value.length + ")";
+      const m = /^(https?):\/\/([^/?#]+)/i.exec(value);
+      if (m) shape = m[1] + "(" + m[2] + ")";
+      else if (/^(file:|blob:|data:)/i.test(value)) shape = value.slice(0, 5);
+      out.push(prefix + "=" + shape);
+      return out;
+    }
+    if (typeof value !== "object") { out.push(prefix + "=" + typeof value); return out; }
+    for (const key of Object.keys(value).slice(0, 40)) probeShape(value[key], prefix ? prefix + "." + key : key, out, depth + 1);
+    return out;
+  };
+  const imagesOf = (record, parsed, text) => {
+    const urls = findImages(parsed && typeof parsed === "object" ? parsed : null);
+    findImages(record && { content: record.content, msg_body: record.msg_body, msgBody: record.msgBody, extra: record.extra, attachment: record.attachment }, urls);
+    const probe = !urls.length && (!text || /\[(图片|image|photo|表情)\]/i.test(text))
+      ? probeShape({ msg: parsed, content: record && record.content, type: record && (record.msg_type ?? record.msgType) })
+      : null;
+    return { urls, probe };
+  };
+  const blobToDataUrl = (blob) => new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : null);
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(blob);
+  });
+  const loadImage = async (url) => {
+    if (url.startsWith("data:image/")) return url.length < 7_000_000 ? url : null;
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 8000);
+    try {
+      const response = await fetch(url, { credentials: "include", cache: "force-cache", signal: ctl.signal });
+      if (!response.ok) return null;
+      const blob = await response.blob();
+      if (blob.size === 0 || blob.size > 5_000_000) return null;
+      if (blob.type && !blob.type.startsWith("image/") && !IMG_EXT.test(url)) return null;
+      return await blobToDataUrl(blob);
+    } catch (_) {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const loadImages = async (urls) => {
+    const output = [];
+    for (const url of urls.slice(0, 9)) {
+      const data = await loadImage(url);
+      if (data) output.push({ data });
+    }
+    return output;
+  };
+  const findText = (value, depth = 0) => {
+    if (value === null || value === undefined || depth > 10) return [];
+    if (typeof value === "string") return value.trim() ? [value] : [];
+    if (typeof value !== "object") return [];
+    if (Array.isArray(value)) return value.flatMap((item) => findText(item, depth + 1));
+    const preferred = ["text", "content", "title", "desc", "description", "val", "v", "file_name", "fileName", "name", "n"];
+    const selected = preferred.flatMap((key) => key in value ? findText(value[key], depth + 1) : []);
+    if (selected.length) return selected;
+    const blocks = first(value.dt, value.blocks, value.items);
+    return blocks ? findText(blocks, depth + 1) : [];
+  };
+  const messageKey = (value, fallback) => asId(first(
+    value && value.msg_id, value && value.msgId, value && value.message_id,
+    value && value.messageId, value && value.svr_msg_id, value && value.serverId,
+    value && value.cli_msg_id, value && value.clientId, value && value.client_msg_id,
+    value && value.id, fallback
+  ));
+  const conversationIndex = (messageState) => {
+    const index = new Map();
+    for (const [conversationId, rawList] of entriesOf(messageState && messageState.messageList)) {
+      for (const ref of listOf(rawList)) {
+        const key = messageKey(ref, typeof ref === "string" || typeof ref === "number" ? ref : "");
+        if (key) index.set(key, String(conversationId));
+      }
+    }
+    return index;
+  };
+  const followUids = (main) => {
+    const users = first(main && main.msgTrain && main.msgTrain.followUsers, main && main.followUsers, []);
+    return new Set(listOf(users).map((user) => asId(first(
+      user && user.uid, user && user.user_id, user && user.userId, user
+    ))).filter(Boolean));
+  };
+  const selfUid = (main) => asId(first(
+    valueAt(main && main.loginInfo && main.loginInfo.loginInfo, "uid"),
+    main && main.login && main.login.uid,
+    main && main.login && main.login.userInfo && main.login.userInfo.uid,
+    main && main.mainInfo && main.mainInfo.uid,
+    main && main.userInfo && main.userInfo.uid,
+    main && main.account && main.account.uid
+  ));
+  const containsUid = (value, uid) => {
+    if (!uid || value === null || value === undefined) return false;
+    if (Array.isArray(value)) return value.some((item) => containsUid(item, uid));
+    if (typeof value === "object") return containsUid(first(value.uid, value.user_id, value.userId, value.at_uid), uid);
+    const id = String(value);
+    return id === uid || id === "0";
+  };
+  const includesAny = (values, needles) => {
+    if (!needles.length) return true;
+    const haystack = values.filter(Boolean).join("\n").toLocaleLowerCase();
+    return needles.some((needle) => haystack.includes(String(needle).toLocaleLowerCase()));
+  };
+  const matchingRuleIds = (conversationId, conversationName, senderUid, senderName, text) =>
+    RULES.filter((rule) => rule.enabled &&
+      (rule.groupTerms.length || rule.senderTerms.length || rule.keywords.length) &&
+      includesAny([conversationId, conversationName], rule.groupTerms) &&
+      includesAny([senderUid, senderName], rule.senderTerms) &&
+      includesAny([text], rule.keywords)
+    ).map((rule) => rule.id);
+  const inferGroup = (record, session) => {
+    if (first(record && record.gid, record && record.group_id, record && record.groupId, session && session.gid, session && session.group_id)) return true;
+    const value = String(first(
+      record && record.session_type, record && record.chat_type,
+      session && session.session_type, session && session.chat_type, session && session.type, ""
+    )).toLowerCase();
+    if (value.includes("group")) return true;
+    if (value.includes("single") || value.includes("direct") || value.includes("person")) return false;
+    return null;
+  };
+  const contextFor = (conversationId, targetId, targetAt, messageState, conversationByMessage) => {
+    // 时间不可比较时宁可不展示上下文，也不把目标后的消息误称作“前文”。
+    if (!targetAt) return [];
+    const output = [];
+    for (const [entryKey, record] of entriesOf(messageState && messageState.messageInfo)) {
+      if (!record || typeof record !== "object") continue;
+      const parsed = parseJson(record.msg);
+      const id = messageKey(record, entryKey);
+      if (!id || id === targetId) continue;
+      const groupId = asId(first(record.groupId, record.group_id));
+      const recordConversationId = asId(first(
+        record.conversation_id, record.conversationId, record.session_id, record.sessionId,
+        groupId && groupId !== "0" ? groupId : undefined,
+        record.gid, conversationByMessage.get(id), record.fromId, record.from_uid, "unknown"
+      ));
+      if (recordConversationId !== conversationId) continue;
+      const occurredAtMs = timeMs(first(
+        record.msg_time, record.msgTime, record.timestamp, record.time, record.create_time,
+        record.created_at, parsed && parsed.msg_time, parsed && parsed.timestamp, parsed && parsed.time
+      ));
+      if (!occurredAtMs || occurredAtMs > targetAt) continue;
+      output.push({
+        messageId: id,
+        senderUid: asId(first(
+          record.from_uid, record.fromUid, record.fromId, record.sender_uid, record.senderUid,
+          parsed && parsed.from_uid, parsed && parsed.fromUid, parsed && parsed.sender_uid,
+          parsed && parsed.u && parsed.u.uid
+        )),
+        senderName: String(first(
+          record.from_name, record.fromName, record.sender_name, record.senderName,
+          parsed && parsed.from_name, parsed && parsed.sender_name,
+          parsed && parsed.u && parsed.u.n, ""
+        )) || null,
+        occurredAtMs,
+        messageType: asId(first(record.msg_type, record.msgType, parsed && parsed.type)) || null,
+        text: findText(first(parsed && parsed.dt, parsed, record.content, record.text)).join("\n").trim(),
+        __images: imagesOf(record, parsed, "x"), // 前文不回传探针（第三个参数非空即不探）
+      });
+    }
+    output.sort((a, b) => (a.occurredAtMs || 0) - (b.occurredAtMs || 0));
+    return output.slice(-4);
+  };
+  const envelopeFor = (entryKey, record, conversationByMessage, sessions, main, messageState) => {
+    if (!record || typeof record !== "object") return null;
+    const parsed = parseJson(record.msg);
+    const id = messageKey(record, entryKey);
+    if (!id) return null;
+    const formattedGroupId = asId(first(record.groupId, record.group_id));
+    const conversationId = asId(first(
+      record.conversation_id, record.conversationId, record.session_id, record.sessionId,
+      formattedGroupId && formattedGroupId !== "0" ? formattedGroupId : undefined,
+      record.gid, conversationByMessage.get(id), record.fromId, record.from_uid, "unknown"
+    ));
+    const session = valueAt(sessions, conversationId) || {};
+    const mainUid = selfUid(main);
+    const senderUid = asId(first(
+      record.from_uid, record.fromUid, record.fromId, record.sender_uid, record.senderUid,
+      parsed && parsed.from_uid, parsed && parsed.fromUid, parsed && parsed.sender_uid,
+      parsed && parsed.u && parsed.u.uid
+    ));
+    const atValues = first(
+      record.at, record.client_at, parsed && parsed.at, parsed && parsed.client_at,
+      parsed && parsed.at_list, parsed && parsed.atList
+    );
+    const mentionedSelf = flag(first(
+      record.at_me_msg, record.atMeMsg, record.isCall && record.isCall.at_me_msg,
+      parsed && parsed.at_me_msg, parsed && parsed.atMeMsg, false
+    )) || containsUid(atValues, mainUid);
+    const followedSender = flag(first(
+      record.follow_msg, record.followMsg, parsed && parsed.follow_msg, parsed && parsed.followMsg, false
+    )) || followUids(main).has(senderUid);
+    const occurredAtMs = timeMs(first(
+      record.msg_time, record.msgTime, record.timestamp, record.time, record.create_time,
+      record.created_at, parsed && parsed.msg_time, parsed && parsed.timestamp, parsed && parsed.time
+    ));
+    const text = findText(first(parsed && parsed.dt, parsed, record.content, record.text)).join("\n").trim();
+    const isGroup = inferGroup(record, session);
+    if (isGroup !== true) return null;
+    const conversationName = String(first(
+      session.name, session.group_name, session.groupName, session.title,
+      record.group_name, record.groupName, ""
+    )) || null;
+    const senderName = String(first(
+      record.from_name, record.fromName, record.sender_name, record.senderName,
+      parsed && parsed.from_name, parsed && parsed.sender_name,
+      parsed && parsed.u && parsed.u.n, ""
+    )) || null;
+    const matchedRuleIds = matchingRuleIds(
+      conversationId, conversationName, senderUid, senderName, text
+    );
+    if (!mentionedSelf && !followedSender && !matchedRuleIds.length) return null;
+    return {
+      bridgeVersion: VERSION,
+      conversationId,
+      messageId: id,
+      conversationName,
+      senderUid,
+      senderName,
+      occurredAtMs,
+      capturedAtMs: Date.now(),
+      mentionedSelf,
+      followedSender,
+      matchedRuleIds,
+      isGroup,
+      messageType: asId(first(record.msg_type, record.msgType, parsed && parsed.type)) || null,
+      text,
+      context: contextFor(conversationId, id, occurredAtMs, messageState, conversationByMessage),
+      raw: { message: snapshot(record), session: snapshot(session) },
+      __images: imagesOf(record, parsed, text),
+    };
+  };
+  const signalEnvelope = (record, mentionedSelf, followedSender) => {
+    if (!record || typeof record !== "object") return null;
+    const parsed = parseJson(first(record.msg_body, record.msgBody, record.msg));
+    const id = messageKey(record, "");
+    if (!id) return null;
+    // 原生 @/关注 action 执行后，优先从已经写入 messageInfo 的同一消息构造
+    // 富投影（群名、完整正文、内存前文、组合规则）；不发网络请求、不切会话。
+    const im = stateOf(window.__ccImStore__);
+    const main = stateOf(window.__ccMainStore__);
+    const messageState = im.message || {};
+    const detailed = valueAt(messageState.messageInfo, id);
+    if (detailed && typeof detailed === "object") {
+      const rich = envelopeFor(
+        id,
+        detailed,
+        conversationIndex(messageState),
+        (im.session && im.session.sessionInfo) || {},
+        main,
+        messageState
+      );
+      if (rich) {
+        rich.mentionedSelf ||= mentionedSelf;
+        rich.followedSender ||= followedSender;
+        rich.raw = { ...rich.raw, signal: snapshot(record) };
+        return rich;
+      }
+    }
+    const toGroup = asId(first(record.to_gid, record.toGid));
+    if (!toGroup || toGroup === "0") return null;
+    const senderUid = asId(first(record.from_uid, record.fromUid, parsed && parsed.u && parsed.u.uid));
+    const conversationId = toGroup && toGroup !== "0" ? toGroup : senderUid || "unknown";
+    return {
+      bridgeVersion: VERSION,
+      conversationId,
+      messageId: id,
+      conversationName: String(first(record.name, record.group_name, record.groupName, "")) || null,
+      senderUid,
+      senderName: String(first(
+        record.from_name, record.fromName, parsed && parsed.u && parsed.u.n, ""
+      )) || null,
+      occurredAtMs: timeMs(first(record.send_time, record.sendTime, record.msg_time, record.time)),
+      capturedAtMs: Date.now(),
+      mentionedSelf,
+      followedSender,
+      matchedRuleIds: [],
+      isGroup: true,
+      messageType: asId(first(record.msg_type, record.msgType, parsed && parsed.r && parsed.r.type)) || null,
+      text: String(first(record.content, record.text, "")) ||
+        findText(first(parsed && parsed.dt, parsed)).join("\n").trim(),
+      context: [],
+      raw: { signal: snapshot(record) },
+      __images: imagesOf(record, parsed, String(first(record.content, record.text, ""))),
+    };
+  };
+  const signalLists = (main) => {
+    const items = listOf(main && main.msgTrain && main.msgTrain.items);
+    const output = [];
+    for (const item of items) {
+      if (!item || item.key !== "at" && item.key !== "follow") continue;
+      const records = item.key === "follow"
+        ? listOf(item.list && item.list.datas)
+        : listOf(item.list);
+      for (const record of records) {
+        output.push({
+          record,
+          mentionedSelf: item.key === "at",
+          followedSender: item.key === "follow",
+        });
+      }
+    }
+    return output;
+  };
+  const stopBridge = () => {
+    if (stopped) return;
+    stopped = true;
+    clearInterval(scanTimer);
+    clearInterval(healthTimer);
+    pending.length = 0;
+    queued.clear();
+    processed.clear();
+    for (const restore of restorers.splice(0)) {
+      try { restore(); } catch (_) {}
+    }
+  };
+  const post = async (message) => {
+    if (TRANSPORT === "cdp") {
+      const bridgeEmit = globalThis.__toskrEmit;
+      if (typeof bridgeEmit === "function") {
+        try { bridgeEmit(JSON.stringify(message)); return true; }
+        catch (_) { return false; }
+      }
+      return false;
+    }
+    try {
+      const response = await fetch(ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=UTF-8" },
+        body: JSON.stringify(message),
+        mode: "cors",
+        cache: "no-store",
+        credentials: "omit",
+      });
+      if (response.status === 410) {
+        stopBridge();
+        return false;
+      }
+      if (!response.ok) {
+        console.warn("[Toskr] 本地消息桥暂未接收该消息（HTTP " + response.status + "），已保留队列等待重试。");
+      }
+      return response.ok;
+    } catch (_) {
+      return false;
+    }
+  };
+  const drain = async () => {
+    if (draining || stopped) return;
+    draining = true;
+    while (pending.length && !stopped) {
+      const current = pending[0];
+      const found = current.message.__images;
+      if (found) { // 图片在发出前异步取回（只取一次）；取不到的跳过，正文照常送达
+        delete current.message.__images;
+        if (found.urls.length) current.message.images = await loadImages(found.urls);
+        if (found.urls.length && !current.message.images.length) current.message.imageProbe = ["fetch-failed:" + found.urls.length];
+        else if (found.probe) current.message.imageProbe = found.probe;
+      }
+      let budget = 9; // 前文的图片：每条最多 3 张、合计 9 张
+      for (const item of current.message.context || []) {
+        const urls = item.__images ? item.__images.urls.slice(0, 3) : [];
+        delete item.__images;
+        if (urls.length && budget > 0) {
+          item.images = await loadImages(urls.slice(0, budget));
+          budget -= item.images.length;
+        }
+      }
+      if (!(await post(current.message))) break;
+      pending.shift();
+      queued.delete(current.key);
+      delivered.add(current.key);
+    }
+    draining = false;
+    if (pending.length && !stopped) setTimeout(drain, 1500);
+  };
+  const enqueue = (key, message) => {
+    if (ignored.has(key) || delivered.has(key)) return;
+    if (queued.has(key)) {
+      const current = pending.find((item) => item.key === key);
+      if (current) {
+        current.message.mentionedSelf ||= message.mentionedSelf;
+        current.message.followedSender ||= message.followedSender;
+        current.message.matchedRuleIds = Array.from(new Set([
+          ...(current.message.matchedRuleIds || []), ...(message.matchedRuleIds || [])
+        ]));
+        current.message.raw = { ...current.message.raw, ...message.raw };
+        if (!current.message.text && message.text) current.message.text = message.text;
+        const mine = current.message.__images, theirs = message.__images;
+        if (theirs && theirs.urls.length && (!mine || !mine.urls.length)) current.message.__images = theirs;
+        if ((message.context || []).length >= (current.message.context || []).length) {
+          current.message.context = message.context;
+        }
+      }
+      return;
+    }
+    queued.add(key);
+    pending.push({ key, message });
+    if (!drainScheduled) {
+      drainScheduled = true;
+      Promise.resolve().then(() => {
+        drainScheduled = false;
+        void drain();
+      });
+    }
+  };
+  const acceptSignal = (record, mentionedSelf, followedSender, historical) => {
+    const message = signalEnvelope(record, mentionedSelf, followedSender);
+    if (!message) return;
+    const key = message.conversationId + "\u0000" + message.messageId;
+    if (historical && (!message.occurredAtMs || message.occurredAtMs < STARTED_AT - 2000)) {
+      ignored.add(key);
+      return;
+    }
+    enqueue(key, message);
+  };
+  const installHooks = () => {
+    const action = window.__ccMainStore__ && window.__ccMainStore__.action &&
+      window.__ccMainStore__.action.msgTrain;
+    if (!action) return;
+    for (const [name, mentionedSelf, followedSender] of [
+      ["addAtMeMsg", true, false],
+      ["addFollowMsg", false, true],
+    ]) {
+      const original = action[name];
+      if (typeof original !== "function" || original.__toskrMessageWatchHookV1) continue;
+      const wrapped = function (...args) {
+        let result;
+        try {
+          result = original.apply(this, args);
+        } finally {
+          try { acceptSignal(args[0], mentionedSelf, followedSender, false); } catch (_) {}
+        }
+        return result;
+      };
+      Object.defineProperty(wrapped, "__toskrMessageWatchHookV1", { value: true });
+      try {
+        action[name] = wrapped;
+        if (action[name] === wrapped) {
+          restorers.push(() => { if (action[name] === wrapped) action[name] = original; });
+        }
+      } catch (_) {}
+    }
+  };
+  const heartbeat = async () => {
+    if (stopped) return;
+    try {
+      const response = await fetch(ENDPOINT, {
+        method: "GET",
+        mode: "cors",
+        cache: "no-store",
+        credentials: "omit",
+      });
+      if (response.status === 410) {
+        stopBridge();
+        return;
+      }
+      healthFailures = response.ok ? 0 : healthFailures + 1;
+    } catch (_) {
+      healthFailures += 1;
+    }
+    if (healthFailures >= 3) stopBridge();
+  };
+  const scan = () => {
+    const im = stateOf(window.__ccImStore__);
+    const main = stateOf(window.__ccMainStore__);
+    const messageState = im.message || {};
+    const infos = messageState.messageInfo;
+    const sessions = (im.session && im.session.sessionInfo) || {};
+    // 会话索引惰性构建：只有真要处理新条目（envelopeFor 内兜底解析会话号）时
+    // 才全量遍历 messageList；稳态无新消息时根本不构建，且一轮 scan 内只建一次。
+    let indexCache = null;
+    const index = { get: (key) => (indexCache || (indexCache = conversationIndex(messageState))).get(key) };
+    installHooks();
+    for (const signal of signalLists(main)) {
+      acceptSignal(signal.record, signal.mentionedSelf, signal.followedSender, initialScan);
+    }
+    forEachEntry(infos, (entryKey, record) => {
+      // 只在条目首次出现时做昂贵解析；已终态化的条目稳态下 O(1) 跳过，
+      // 这样卡顿从「每轮全量 parse」降为「仅处理新增消息」。
+      if (processed.has(entryKey)) return;
+      const message = envelopeFor(entryKey, record, index, sessions, main, messageState);
+      if (!message) { processed.add(entryKey); return; }
+      const key = message.conversationId + "\u0000" + message.messageId;
+      if (initialScan && (!message.occurredAtMs || message.occurredAtMs < STARTED_AT - 2000)) {
+        ignored.add(key);
+      } else {
+        enqueue(key, message);
+      }
+      processed.add(entryKey);
+    });
+    initialScan = false;
+  };
+
+  scan();
+  scanTimer = setInterval(scan, 500);
+  if (TRANSPORT === "http") {
+    healthTimer = setInterval(() => { void heartbeat(); }, 2_000);
+  }
+  window.__toskrMessageWatchV1 = {
+    stop: stopBridge,
+    scan,
+    status() {
+      return { active: !stopped, pending: pending.length, delivered: delivered.size, ignored: ignored.size };
+    },
+  };
+  console.info("[Toskr] IM 只读消息桥已启动；未切换会话、未修改已读状态、未调用发送接口。");
+  return window.__toskrMessageWatchV1.status();
+})()

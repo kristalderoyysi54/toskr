@@ -75,7 +75,7 @@ describe("数据事务架构门禁", () => {
     // 主面板只读遮罩在可恢复态必须提供跳转设置数据分区的引导入口
     const app = source("src/App.tsx");
     expect(app).toContain("前往设置处理");
-    expect(app).toContain('emitTo("settings", SETTINGS_SECTION, "data")');
+    expect(app).toContain('api.openSettingsWindow("data")');
   });
 
   it("冲突标记与解锁后的运行态 ready 信号不会依赖瞬时 HUD", () => {

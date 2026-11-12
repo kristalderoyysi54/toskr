@@ -28,17 +28,6 @@
         "visibleOnAllWorkspaces": true
       },
       {
-        "label": "settings",
-        "title": "Toskr 设置",
-        "width": 1040,
-        "height": 720,
-        "minWidth": 560,
-        "minHeight": 420,
-        "visible": false,
-        "resizable": true,
-        "center": true
-      },
-      {
         "label": "hud",
         "title": "Toskr HUD",
         "width": 264,
@@ -52,38 +41,6 @@
         "shadow": false,
         "focus": false,
         "acceptFirstMouse": true,
-        "visibleOnAllWorkspaces": true
-      },
-      {
-        "label": "sourceoverlay",
-        "title": "Toskr 来源",
-        "width": 316,
-        "height": 144,
-        "visible": false,
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "resizable": false,
-        "shadow": false,
-        "focus": false,
-        "acceptFirstMouse": false,
-        "visibleOnAllWorkspaces": true
-      },
-      {
-        "label": "locatehl",
-        "title": "Toskr 定位",
-        "width": 260,
-        "height": 76,
-        "visible": false,
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "resizable": false,
-        "shadow": false,
-        "focus": false,
-        "acceptFirstMouse": false,
         "visibleOnAllWorkspaces": true
       },
       {

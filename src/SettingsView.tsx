@@ -500,9 +500,19 @@ export default function SettingsView() {
   }, [section, searchTarget]);
 
   useEffect(() => {
+    // 按需创建的设置窗：拿到首份设置快照后（分区门禁依赖设置）再领取挂起的分区深链；
+    // 主窗迟迟不回快照时 1.5s 兜底领取。
+    let readyReported = false;
+    const reportReady = () => {
+      if (readyReported) return;
+      readyReported = true;
+      void api.settingsWindowReady().catch(() => {});
+    };
+    const readyFallback = window.setTimeout(reportReady, 1500);
     const un = listen<Settings>(SETTINGS_STATE, (e) => {
       currentSettingsRef.current = e.payload;
       setSettings(e.payload);
+      reportReady();
     });
     // 外部指路（更新提醒气泡点击等）→ 切到指定分区
     const unSection = listen<SettingsSectionPayload>(SETTINGS_SECTION, (e) => {
@@ -541,6 +551,7 @@ export default function SettingsView() {
       .then(() => emitTo("main", SETTINGS_REQUEST, {}))
       .catch(() => {});
     return () => {
+      window.clearTimeout(readyFallback);
       un.then((fn) => fn());
       unSection.then((fn) => fn());
       unDataActivity.then((fn) => fn());
@@ -1152,9 +1163,9 @@ export function GeneralSection({ settings, patch, searchId = null, searchSequenc
           label={t("配色方案")}
           hint={
             platinum
-              ? t("固定浅色、整窗不透明；切回 Toskr 恢复原主题与毛玻璃")
+              ? t("固定浅色、整窗不透明；切回琉璃恢复原主题与毛玻璃")
               : fixedTone
-                  ? t("固定浅色；切回 Toskr 恢复深浅色设置")
+                  ? t("固定浅色；切回琉璃恢复深浅色设置")
                 : settings.colorScheme === "fog"
                   ? t("跟随下方主题设置切换浅色 / 深色")
                   : t("Platinum 为 Mac OS 9 经典外观")
@@ -1166,12 +1177,14 @@ export function GeneralSection({ settings, patch, searchId = null, searchSequenc
               align="end"
               value={settings.colorScheme}
               options={[
-                { value: "default", label: "Toskr" },
-                { value: "platinum", label: "Platinum" },
-                { value: "paper", label: t("纸墨") },
-                { value: "matcha", label: t("抹茶") },
-                { value: "sakura", label: t("樱粉") },
-                { value: "fog", label: t("雾蓝") },
+                // 色点 = 各方案代表色（浅色主色，同 index.css 各方案 --primary；Platinum 取默认高亮色）
+                // token-exception: 方案色点需展示其他方案的主色，当前主题的 token 取不到
+                { value: "default", label: t("琉璃"), swatch: "oklch(0.56 0.19 259.8)" },
+                { value: "platinum", label: "Platinum", swatch: "#333399" }, // token-exception: 同上
+                { value: "paper", label: t("纸墨"), swatch: "#8a5a2b" }, // token-exception: 同上
+                { value: "matcha", label: t("抹茶"), swatch: "#4f7a3a" }, // token-exception: 同上
+                { value: "sakura", label: t("樱粉"), swatch: "#c2547a" }, // token-exception: 同上
+                { value: "fog", label: t("雾蓝"), swatch: "#5e81ac" }, // token-exception: 同上
               ]}
               onChange={(v) => patch({ colorScheme: v })}
             />

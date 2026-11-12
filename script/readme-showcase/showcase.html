@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Toskr 介绍图</title>
+<!-- 由 build.sh 用无界面浏览器按 2x 截图。地址参数：
+       view  = showcase（三屏介绍图，1600×1000）| flow（三步流程图，1600×1000）| og（分享封面，1200×630）
+       theme = dark | light        lang = zh | en
+     面板素材是原生界面的真实渲染（native/readme_shots_test.go，带透明度），这里只负责舞台：
+     松林底色、世界树的年轮、信使走的线、排布与文字。配色与 site/index.html 同源。 -->
+<script>
+(function(){var q=new URLSearchParams(location.search),h=document.documentElement;
+  h.dataset.view=q.get('view')||'showcase';h.dataset.theme=q.get('theme')||'dark';h.dataset.lang=q.get('lang')||'zh'})();
+</script>
+<style>
+@font-face{font-family:"Geist";src:url("../../native/resources/fonts/Geist-Variable.ttf");font-weight:100 900}
+:root{
+  --W:1600px;--H:1000px;
+  --ink:#efe6d2;--ink-2:rgba(239,230,210,.64);--ink-3:rgba(239,230,210,.38);
+  --amber:#ffb24a;--line:rgba(255,255,255,.12);
+  --glass:linear-gradient(160deg,rgba(255,255,255,.10),rgba(255,255,255,.03));
+  --glass-edge:inset 0 .5px 0 rgba(255,255,255,.3),0 0 0 .5px rgba(255,255,255,.12),0 14px 30px -10px rgba(0,0,0,.7);
+  --win-shadow:0 0 0 .5px rgba(0,0,0,.8),0 40px 80px -20px rgba(0,0,0,.75),0 18px 36px -18px rgba(0,0,0,.7);
+  --win-shadow-mid:0 0 0 .5px rgba(0,0,0,.5),0 0 120px 10px rgba(255,170,70,.16),0 60px 110px -24px rgba(0,0,0,.85),0 24px 48px -20px rgba(0,0,0,.7);
+  --side-fade:rgba(2,8,7,.38);
+  --em:linear-gradient(180deg,#ffd9a0 8%,#ffab3d 52%,#f0741a 96%);
+  --serif:"Songti SC","Noto Serif SC",serif;
+  --sans:"Geist","PingFang SC",sans-serif;
+  --mono:"SF Mono",Menlo,monospace;
+}
+[data-lang=en]{--serif:"Iowan Old Style","Palatino","Georgia",serif}
+[data-view=og]{--W:1200px;--H:630px}
+[data-theme=light]{
+  --ink:#10231f;--ink-2:rgba(16,35,31,.70);--ink-3:rgba(16,35,31,.44);
+  --amber:#c2620c;--line:rgba(16,35,31,.12);
+  --glass:linear-gradient(160deg,rgba(255,255,255,.95),rgba(255,255,255,.72));
+  --glass-edge:inset 0 .5px 0 #fff,0 0 0 .5px rgba(16,35,31,.14),0 14px 28px -12px rgba(70,50,15,.35);
+  --win-shadow:0 0 0 .5px rgba(16,35,31,.22),0 40px 70px -24px rgba(70,50,15,.42),0 16px 30px -18px rgba(70,50,15,.3);
+  --win-shadow-mid:0 0 0 .5px rgba(0,0,0,.6),0 0 110px 6px rgba(255,150,40,.22),0 56px 100px -26px rgba(40,30,10,.6),0 22px 44px -20px rgba(40,30,10,.45);
+  --side-fade:rgba(120,100,60,.16);
+  --em:linear-gradient(180deg,#f0a030 4%,#d9760f 50%,#b04a08 98%);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:var(--W);height:var(--H);overflow:hidden;background:#030d0c}
+body{font-family:var(--sans);color:var(--ink);-webkit-font-smoothing:antialiased}
+[data-lang=zh] .en,[data-lang=en] .zh{display:none!important}
+.view{display:none}
+[data-view=showcase] .view.showcase,[data-view=flow] .view.flow,[data-view=og] .view.og{display:block}
+
+.stage{position:relative;width:var(--W);height:var(--H);overflow:hidden;
+  background:
+    radial-gradient(56% 52% at 50% 108%,rgba(255,138,40,.20),transparent 62%),
+    radial-gradient(75% 76% at 50% 62%,rgba(22,64,58,.85),transparent 70%),
+    radial-gradient(44% 50% at 8% 12%,rgba(20,70,62,.5),transparent 70%),
+    linear-gradient(180deg,#041211 0%,#030d0c 55%,#020807 100%)}
+[data-theme=light] .stage{background:
+    radial-gradient(56% 48% at 50% 110%,rgba(255,150,50,.30),transparent 64%),
+    radial-gradient(70% 70% at 50% 58%,rgba(255,255,255,.92),transparent 72%),
+    radial-gradient(44% 50% at 6% 8%,rgba(60,130,112,.16),transparent 70%),
+    linear-gradient(180deg,#f7f2e8 0%,#f1eadc 60%,#ebe2d0 100%)}
+.stage>svg.art{position:absolute;inset:0;width:100%;height:100%}
+.grain{position:absolute;inset:0;opacity:.11;mix-blend-mode:overlay;pointer-events:none;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 .9 0'/></filter><rect width='240' height='240' filter='url(%23n)'/></svg>")}
+[data-theme=light] .grain{mix-blend-mode:multiply;opacity:.05;filter:invert(1)}
+.vignette{position:absolute;inset:0;pointer-events:none;background:radial-gradient(82% 82% at 50% 52%,transparent 55%,rgba(0,0,0,.55) 100%)}
+[data-theme=light] .vignette{background:radial-gradient(82% 82% at 50% 52%,transparent 60%,rgba(130,100,50,.16) 100%)}
+
+/* ── 标题 ── */
+.head{position:absolute;left:0;right:0;top:46px;text-align:center}
+.mark{display:inline-flex;align-items:center;gap:10px;font:600 15px/1 var(--sans);letter-spacing:.14em;color:var(--ink-2);text-transform:uppercase}
+.mark img{width:26px;height:26px;border-radius:7px;box-shadow:0 0 0 .5px rgba(255,255,255,.25),0 6px 16px rgba(0,0,0,.4)}
+.mark i{width:28px;height:1px;background:linear-gradient(90deg,transparent,var(--ink-3))}
+.mark span+i{background:linear-gradient(270deg,transparent,var(--ink-3))}
+h1{margin-top:18px;font:900 68px/1.12 var(--serif);letter-spacing:.02em;color:var(--ink);
+  text-shadow:0 2px 0 rgba(0,0,0,.35),0 18px 50px rgba(0,0,0,.6)}
+[data-lang=en] h1{font-weight:700;font-size:60px;letter-spacing:-.01em}
+[data-theme=light] h1{text-shadow:0 1px 0 rgba(255,255,255,.8)}
+h1 em{font-style:normal;background:var(--em);-webkit-background-clip:text;color:transparent;filter:drop-shadow(0 0 22px rgba(255,150,50,.35))}
+[data-theme=light] h1 em{filter:none;text-shadow:none}
+.sub{margin-top:14px;font:400 17px/1.5 var(--sans);letter-spacing:.06em;color:var(--ink-2)}
+[data-lang=en] .sub{letter-spacing:.01em}
+.sub b{font-weight:600;color:var(--ink)}
+kbd{display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:24px;padding:0 6px;margin:0 1.5px;vertical-align:1px;
+  border-radius:6px;font:500 13px/1 var(--sans);letter-spacing:0;color:var(--ink);
+  background:linear-gradient(180deg,rgba(255,255,255,.14),rgba(255,255,255,.05));
+  box-shadow:inset 0 .5px 0 rgba(255,255,255,.35),0 0 0 .5px rgba(255,255,255,.18),0 2px 0 rgba(0,0,0,.5)}
+[data-theme=light] kbd{background:linear-gradient(180deg,#fff,#f3efe6);box-shadow:inset 0 .5px 0 #fff,0 0 0 .5px rgba(16,35,31,.22),0 2px 0 rgba(16,35,31,.16)}
+
+/* ── 面板窗 ── */
+.deck{position:absolute;inset:0;perspective:2600px;perspective-origin:50% 46%}
+.win{position:absolute;border-radius:18px;box-shadow:var(--win-shadow)}
+.win.mid{box-shadow:var(--win-shadow-mid)}
+.win .body{position:relative;width:100%;height:100%;border-radius:inherit;overflow:hidden}
+.win .body::before{content:"";position:absolute;inset:0}   /* 面板素材自带透明度（毛玻璃底），垫在它下面的那层 */
+.win img.ui{position:absolute;inset:0;width:100%;height:100%;display:block}
+.win .body::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none}
+.win.dark .body::before{background:linear-gradient(160deg,rgba(40,62,58,.94),rgba(13,24,23,.96) 55%,rgba(9,16,16,.98))}
+.win.dark .body::after{box-shadow:inset 0 0 0 1px rgba(255,255,255,.11),inset 0 1px 0 0 rgba(255,255,255,.22)}
+.win.light .body::before{background:linear-gradient(170deg,#f6f3ec,#eceef1 40%,#e9ebee)}
+.win.light .body::after{box-shadow:inset 0 0 0 1px rgba(255,255,255,.7)}
+.showcase .win.mid{width:344px;height:688px;left:628px;top:236px;transform:translateZ(60px)}
+.showcase .win.side{width:306px;height:612px;top:284px}
+.win.l{left:262px;transform:rotateY(26deg) translateZ(-40px);transform-origin:100% 50%}
+.win.r{left:1032px;transform:rotateY(-26deg) translateZ(-40px);transform-origin:0 50%}
+.win.l .body::after{background:linear-gradient(90deg,var(--side-fade),transparent 55%)}
+.win.r .body::after{background:linear-gradient(270deg,var(--side-fade),transparent 55%)}
+.floor{position:absolute;border-radius:50%;filter:blur(18px);background:rgba(0,0,0,.6)}
+.floor.warm{background:rgba(255,150,50,.34)}
+[data-theme=light] .floor{background:rgba(90,65,20,.28)}
+[data-theme=light] .floor.warm{background:rgba(255,140,40,.36)}
+
+/* ── 应用图标格 ── */
+.tile{position:absolute;width:54px;height:54px;border-radius:15px;display:grid;place-items:center;background:var(--glass);box-shadow:var(--glass-edge)}
+.tile img{width:38px;height:38px;border-radius:9px}
+.tile.to{width:60px;height:60px;border-radius:17px;box-shadow:var(--glass-edge),0 0 0 .5px rgba(255,180,90,.55),0 0 36px 0 rgba(255,150,50,.30)}
+.tile.to img{width:44px;height:44px;border-radius:11px}
+.tname{position:absolute;transform:translateX(-50%);font:500 11px/1 var(--sans);letter-spacing:.04em;color:var(--ink-2);white-space:nowrap}
+.tag{position:absolute;font:500 12px/1 var(--sans);letter-spacing:.2em;color:var(--ink-3);white-space:nowrap}
+.tag.v{writing-mode:vertical-rl;letter-spacing:.5em}
+[data-lang=en] .tag{letter-spacing:.24em;text-transform:uppercase;font-size:11px}
+
+/* ── 底部三段 ── */
+.cap{position:absolute;top:948px;transform:translateX(-50%);display:flex;align-items:baseline;gap:12px;white-space:nowrap}
+.cap b{font:900 26px/1 var(--serif);color:var(--amber);text-shadow:0 0 18px rgba(255,160,60,.45)}
+[data-lang=en] .cap b{font-weight:700;font-size:22px}
+[data-theme=light] .cap b{text-shadow:none}
+.cap span{font:400 14px/1 var(--sans);letter-spacing:.08em;color:var(--ink-2)}
+[data-lang=en] .cap span{letter-spacing:.01em}
+
+/* ── 流程图 ── */
+.flow .head{top:36px}
+.flow h1{font-size:56px;margin-top:14px}
+[data-lang=en] .flow h1{font-size:50px}
+.flow .sub{margin-top:10px;font-size:16px}
+.col{position:absolute;top:200px;transform:translateX(-50%);display:flex;align-items:baseline;gap:12px;white-space:nowrap}
+.col b{font:900 28px/1 var(--serif);color:var(--amber);text-shadow:0 0 18px rgba(255,160,60,.4)}
+[data-lang=en] .col b{font-weight:700;font-size:23px}
+[data-theme=light] .col b{text-shadow:none}
+.col span{font:400 14px/1 var(--sans);letter-spacing:.1em;color:var(--ink-2)}
+[data-lang=en] .col span{letter-spacing:.01em}
+.frag{position:absolute;width:336px;padding:13px 15px 14px;border-radius:14px;background:var(--glass);box-shadow:var(--glass-edge);backdrop-filter:blur(6px)}
+.frag header{display:flex;align-items:center;gap:8px;font:600 12.5px/1 var(--sans);color:var(--ink)}
+.frag header img{width:22px;height:22px;border-radius:6px}
+.frag header i{margin-left:auto;font:400 11px/1 var(--sans);font-style:normal;color:var(--ink-3)}
+.frag p{margin-top:9px;font:400 13px/1.62 var(--sans);color:var(--ink-2)}
+.frag pre,.msg pre{font:400 11.5px/1.6 var(--mono);color:var(--ink-2);white-space:pre}
+.frag pre{margin-top:9px}
+.frag.off{opacity:.55}
+.flow .win{width:330px;height:660px;left:635px;top:244px;box-shadow:var(--win-shadow-mid)}
+.keychip{position:absolute;left:1051px;top:574px;transform:translate(-50%,-50%);padding:7px 9px;border-radius:12px;background:var(--glass);box-shadow:var(--glass-edge);backdrop-filter:blur(8px)}
+.keychip kbd{min-width:28px;height:28px;font-size:15px}
+.msg{position:absolute;left:1130px;top:250px;width:390px;padding:16px 18px 14px;border-radius:18px;background:var(--glass);
+  box-shadow:var(--glass-edge),0 0 0 .5px rgba(255,180,90,.4),0 0 60px -6px rgba(255,150,50,.22);backdrop-filter:blur(8px)}
+.msg header{display:flex;align-items:center;gap:8px;font:500 12px/1 var(--sans);letter-spacing:.08em;color:var(--ink-3)}
+.msg header u{margin-left:auto;text-decoration:none;padding:4px 8px;border-radius:999px;font-size:11px;letter-spacing:.02em;color:var(--ink-2);box-shadow:0 0 0 .5px var(--line)}
+.msg p{margin-top:12px;font:400 13.5px/1.7 var(--sans);color:var(--ink)}
+.msg mark{padding:1px 6px;border-radius:5px;font:600 12px/1.5 var(--sans);color:var(--amber);background:rgba(255,160,50,.16);box-shadow:0 0 0 .5px rgba(255,170,70,.5)}
+.msg pre{margin-top:12px;padding:10px 12px;border-radius:10px;background:rgba(0,0,0,.26);box-shadow:inset 0 0 0 .5px var(--line);color:var(--ink)}
+[data-theme=light] .msg pre{background:rgba(16,35,31,.05)}
+.msg footer{display:flex;align-items:center;gap:7px;margin-top:14px;padding-top:12px;border-top:.5px solid var(--line);font:500 12px/1 var(--sans);color:var(--amber)}
+.msg footer svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.msg footer em{font-style:normal;color:var(--ink-3);font-weight:400}
+.msg footer b{margin-left:auto;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;background:var(--em);color:#2a1503;box-shadow:0 0 18px rgba(255,150,50,.5)}
+.msg footer b svg{width:15px;height:15px;stroke-width:2.6}
+
+/* ── 分享封面 ── */
+.og .head{left:70px;right:auto;top:150px;width:470px;text-align:left}
+.og h1{font-size:62px;line-height:1.2;margin-top:26px}
+.og .sub{margin-top:22px;font-size:19px;line-height:1.7;letter-spacing:.04em}
+.og .row{display:flex;align-items:center;gap:10px;margin-top:34px}
+.og .row img{width:34px;height:34px;border-radius:9px;box-shadow:0 6px 14px rgba(0,0,0,.5)}
+.og .row s{text-decoration:none;width:44px;height:1.5px;margin:0 4px;background:linear-gradient(90deg,rgba(255,178,74,.2),#ffb24a)}
+.og .deck{perspective:2200px;perspective-origin:74% 46%}
+.og .win.mid{width:300px;height:600px;left:756px;top:74px;transform:translateZ(60px)}
+.og .win.side{width:262px;height:524px;top:118px}
+.og .win.l{left:470px}
+.og .win.r{left:1076px}
+</style>
+</head>
+<body>
+<div class="stage">
+  <svg class="art" aria-hidden="true">
+    <defs>
+      <filter id="wob" x="-10%" y="-10%" width="120%" height="120%"><feTurbulence type="fractalNoise" baseFrequency=".006" numOctaves="2" seed="7"/><feDisplacementMap in="SourceGraphic" scale="34"/></filter>
+      <radialGradient id="ringFade"><stop offset="0" stop-color="#fff"/><stop offset=".55" stop-color="#fff" stop-opacity=".7"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+      <mask id="ringMask"><rect width="100%" height="100%" fill="url(#ringFade)"/></mask>
+      <filter id="glow" x="0" y="0" width="1600" height="1000" filterUnits="userSpaceOnUse"><feGaussianBlur stdDeviation="5"/></filter>
+      <filter id="soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2.2"/></filter>
+    </defs>
+    <g mask="url(#ringMask)"><g filter="url(#wob)" fill="none" id="rings"></g></g>
+    <g fill="none" stroke-linecap="round" id="threads"></g>
+    <g id="embers"></g>
+  </svg>
+
+  <!-- ═════════ 三屏介绍图 ═════════ -->
+  <div class="view showcase">
+    <div class="head">
+      <div class="mark"><i></i><img src="../../src-tauri/icons/128x128@2x.png" alt=""><span>Toskr</span><i></i></div>
+      <h1 class="zh">散在各处的，<em>一次送达。</em></h1>
+      <h1 class="en">Scattered everywhere, <em>delivered at once.</em></h1>
+      <p class="sub zh">把文字、截图和剪贴板<b>收</b>进一个小面板，<b>排</b>好顺序、<b>查</b>过隐私，按一次 <kbd>⌘</kbd><kbd>⏎</kbd> <b>送</b>到你的 AI 应用</p>
+      <p class="sub en"><b>Collect</b> text, screenshots and clipboard in one small panel, <b>order</b> them, <b>check</b> privacy, then press <kbd>⌘</kbd><kbd>⏎</kbd> to <b>send</b> to your AI apps</p>
+    </div>
+
+    <div class="tag v" style="left:52px;top:476px"><span class="zh">来源应用</span><span class="en">Sources</span></div>
+    <div class="tile" style="left:104px;top:352px"><img src="panels/icons/com.googlecode.iterm2.png" alt=""></div>
+    <div class="tile" style="left:140px;top:444px"><img src="panels/icons/com.apple.Safari.png" alt=""></div>
+    <div class="tile" style="left:140px;top:560px"><img src="panels/icons/com.tinyspeck.slackmacgap.png" alt=""></div>
+    <div class="tile" style="left:104px;top:652px"><img src="panels/icons/com.electron.lark.png" alt=""></div>
+
+    <div class="tag v" style="left:1532px;top:488px"><span class="zh">送达应用</span><span class="en">Deliver to</span></div>
+    <div class="tile to" style="left:1416px;top:392px"><img src="panels/icons/com.openai.codex.png" alt=""></div><div class="tname" style="left:1446px;top:462px">ChatGPT</div>
+    <div class="tile to" style="left:1416px;top:514px"><img src="panels/icons/com.anthropic.claudefordesktop.png" alt=""></div><div class="tname" style="left:1446px;top:584px">Claude</div>
+    <div class="tile to" style="left:1416px;top:636px"><img src="panels/icons/com.deepseek.dsh.png" alt=""></div><div class="tname" style="left:1446px;top:706px">DeepSeek</div>
+
+    <div class="floor" style="left:250px;top:900px;width:340px;height:34px"></div>
+    <div class="floor" style="left:1010px;top:900px;width:340px;height:34px"></div>
+    <div class="floor warm" style="left:590px;top:914px;width:420px;height:30px"></div>
+    <div class="deck">
+      <div class="win side l" data-tone="same"><div class="body"><img class="ui" data-panel="clip" alt=""></div></div>
+      <div class="win side r" data-tone="same"><div class="body"><img class="ui" data-panel="today" alt=""></div></div>
+      <div class="win mid" data-tone="other"><div class="body"><img class="ui" data-panel="notes" alt=""></div></div>
+    </div>
+
+    <div class="cap" style="left:404px"><b class="zh">收</b><span class="zh">连按 <kbd>⇧</kbd><kbd>⇧</kbd> 收进来 · 剪贴板历史</span><b class="en">Collect</b><span class="en">double-tap <kbd>⇧</kbd> · clipboard history</span></div>
+    <div class="cap" style="left:800px"><b class="zh">排 · 送</b><span class="zh">选卡、排序，一次送达</span><b class="en">Order · Send</b><span class="en">pick cards, deliver at once</span></div>
+    <div class="cap" style="left:1196px"><b class="zh">记</b><span class="zh">任务提醒 · 与日程同轴</span><b class="en">Plan</b><span class="en">tasks next to your calendar</span></div>
+  </div>
+
+  <!-- ═════════ 三步流程图 ═════════ -->
+  <div class="view flow">
+    <div class="head">
+      <div class="mark"><i></i><img src="../../src-tauri/icons/128x128@2x.png" alt=""><span>Toskr</span><i></i></div>
+      <h1 class="zh">AI <em>消息中转站</em></h1>
+      <h1 class="en">A relay station <em>for your AI messages</em></h1>
+      <p class="sub zh">从各个应用收集文字与图片，整理、组合并检查隐私，再粘贴到 AI 输入框</p>
+      <p class="sub en">Collect text and images from any app, arrange them, check privacy, then paste into the AI input</p>
+    </div>
+    <div class="col" style="left:264px"><b class="zh">收</b><span class="zh">来源应用</span><b class="en">Collect</b><span class="en">from any app</span></div>
+    <div class="col" style="left:800px"><b class="zh">排 · 查</b><span class="zh">排好顺序，查过隐私</span><b class="en">Order · Check</b><span class="en">arrange, review privacy</span></div>
+    <div class="col" style="left:1325px"><b class="zh">送</b><span class="zh">一次送达 AI 应用</span><b class="en">Send</b><span class="en">to your AI apps at once</span></div>
+
+    <div class="frag" style="left:84px;top:252px;transform:rotate(-1.6deg)">
+      <header><img src="panels/icons/com.tinyspeck.slackmacgap.png" alt="">Slack<i class="zh">选中文字</i><i class="en">selected text</i></header>
+      <p class="zh">线上报错：日志发到 ops@example.com，机器 10.2.3.18，先回滚再排查。</p>
+      <p class="en">Production error: logs go to ops@example.com, host 10.2.3.18. Roll back first.</p>
+    </div>
+    <div class="frag" style="left:120px;top:400px;transform:rotate(1.2deg)">
+      <header><img src="panels/icons/com.apple.Safari.png" alt="">Safari<i class="zh">选中文字</i><i class="en">selected text</i></header>
+      <p class="zh">请先指出这段代码里会越界的地方，再给出最小改动的修复。</p>
+      <p class="en">Point out where this code can go out of range, then give the smallest fix.</p>
+    </div>
+    <div class="frag" style="left:88px;top:536px;transform:rotate(-.8deg)">
+      <header><img src="panels/icons/com.todesktop.230313mzl4w4u92.png" alt="">Cursor<i class="zh">选中文字</i><i class="en">selected text</i></header>
+<pre>func (q *Queue) pick(i int) Card {
+    if i >= len(q.cards) {
+        return Card{}
+    }</pre>
+    </div>
+    <div class="frag off" style="left:124px;top:716px;transform:rotate(1.6deg)">
+      <header><img src="panels/icons/com.googlecode.iterm2.png" alt="">iTerm2<i class="zh">剪贴板</i><i class="en">clipboard</i></header>
+<pre>panic: runtime error: index out of
+range [3] with length 3</pre>
+    </div>
+
+    <div class="floor warm" style="left:600px;top:894px;width:400px;height:30px"></div>
+    <div class="win mid" data-tone="other"><div class="body"><img class="ui" data-panel="notes" alt=""></div></div>
+    <div class="keychip"><kbd>⌘</kbd><kbd>⏎</kbd></div>
+
+    <div class="msg">
+      <header><span class="zh">将发送的内容</span><span class="en">WHAT GETS SENT</span><u class="zh">3 张卡 · 合并为一条</u><u class="en">3 cards · one message</u></header>
+      <p class="zh">线上报错：日志发到 <mark>[邮箱]</mark>，机器 <mark>[IP]</mark>，先回滚再排查。</p>
+      <p class="en">Production error: logs go to <mark>[email]</mark>, host <mark>[IP]</mark>. Roll back first, then investigate.</p>
+      <p class="zh">请先指出这段代码里会越界的地方，再给出最小改动的修复，不要重写整个函数。</p>
+      <p class="en">Point out where this code can go out of range, then give the smallest fix. Do not rewrite the whole function.</p>
+<pre>func (q *Queue) pick(i int) Card {
+    if i >= len(q.cards) {
+        return Card{}
+    }
+    return q.cards[i]
+}</pre>
+      <footer><svg viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>
+        <span class="zh">已替换 2 处敏感文字 <em>· 原卡不变</em></span><span class="en">2 sensitive items replaced <em>· originals untouched</em></span>
+        <b><svg viewBox="0 0 24 24"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg></b></footer>
+    </div>
+    <div class="tile to" style="left:1165px;top:776px"><img src="panels/icons/com.openai.codex.png" alt=""></div><div class="tname" style="left:1195px;top:848px">ChatGPT</div>
+    <div class="tile to" style="left:1295px;top:776px"><img src="panels/icons/com.anthropic.claudefordesktop.png" alt=""></div><div class="tname" style="left:1325px;top:848px">Claude</div>
+    <div class="tile to" style="left:1425px;top:776px"><img src="panels/icons/com.deepseek.dsh.png" alt=""></div><div class="tname" style="left:1455px;top:848px">DeepSeek</div>
+  </div>
+
+  <!-- ═════════ 分享封面 ═════════ -->
+  <div class="view og">
+    <div class="head">
+      <div class="mark"><img src="../../src-tauri/icons/128x128@2x.png" alt=""><span>Toskr</span><i></i></div>
+      <h1 class="zh">散在各处的，<br><em>一次送达。</em></h1>
+      <h1 class="en">Scattered everywhere,<br><em>delivered at once.</em></h1>
+      <p class="sub zh">AI 消息中转站：收进一个小面板，<br>排好顺序、查过隐私，一次送到 AI 输入框</p>
+      <p class="sub en">A relay station for your AI messages:<br>collect, order, check privacy, send at once</p>
+      <div class="row"><img src="panels/icons/com.apple.Safari.png" alt=""><img src="panels/icons/com.tinyspeck.slackmacgap.png" alt=""><img src="panels/icons/com.googlecode.iterm2.png" alt=""><s></s><img src="panels/icons/com.openai.codex.png" alt=""><img src="panels/icons/com.anthropic.claudefordesktop.png" alt=""><img src="panels/icons/com.deepseek.dsh.png" alt=""></div>
+    </div>
+    <div class="deck">
+      <div class="win side l" data-tone="same"><div class="body"><img class="ui" data-panel="clip" alt=""></div></div>
+      <div class="win side r" data-tone="same"><div class="body"><img class="ui" data-panel="today" alt=""></div></div>
+      <div class="win mid" data-tone="other"><div class="body"><img class="ui" data-panel="notes" alt=""></div></div>
+    </div>
+  </div>
+
+  <div class="grain"></div>
+  <div class="vignette"></div>
+</div>
+<script>
+(function(){
+  var h=document.documentElement,view=h.dataset.view,theme=h.dataset.theme,lang=h.dataset.lang,light=theme==='light';
+  var W=view==='og'?1200:1600,H=view==='og'?630:1000;
+  var NS='http://www.w3.org/2000/svg',art=document.querySelector('svg.art');
+  art.setAttribute('viewBox','0 0 '+W+' '+H);
+  function el(tag,attrs,parent){var e=document.createElementNS(NS,tag);for(var k in attrs)e.setAttribute(k,attrs[k]);parent.appendChild(e);return e}
+  var seed=20261112;function rnd(){seed=(seed*1664525+1013904223)>>>0;return seed/4294967296}   // 固定种子：每次出图一致
+
+  // 面板素材：same = 与舞台同色调，other = 反色调（中屏靠反差跳出来）
+  [].forEach.call(document.querySelectorAll('.view.'+view+' .win'),function(w){
+    var tone=(w.dataset.tone==='same')===!light?'dark':'light',img=w.querySelector('img.ui');
+    w.classList.add(tone);
+    img.src='panels/'+img.dataset.panel+'-'+tone+(lang==='en'?'-en':'')+'.png';
+  });
+
+  // 年轮：间距不均（丰年宽、歉年窄），越外越淡
+  var rings=document.getElementById('rings'),cx=view==='og'?900:800,cy=view==='og'?380:600,r=70;
+  rings.setAttribute('stroke',light?'#1f5c52':'#ffb86a');
+  for(var i=0;i<34;i++){
+    r+=14+rnd()*30;
+    el('ellipse',{cx:cx,cy:cy,rx:r*1.18,ry:r*.92,'stroke-width':(rnd()<.18?1.6:.8),'stroke-opacity':((light?.07:.05)+rnd()*(light?.09:.07)).toFixed(3)},rings);
+  }
+
+  // 线：下面一道发光的粗线，上面一道细实线；渐变按画布坐标走（竖直线段也能着色）
+  var th=document.getElementById('threads'),defs=art.querySelector('defs'),gid=0;
+  function grad(x1,x2,stops){
+    var g=el('linearGradient',{id:'g'+(++gid),gradientUnits:'userSpaceOnUse',x1:x1,y1:0,x2:x2,y2:0},defs);
+    stops.forEach(function(s){el('stop',{offset:s[0],'stop-color':s[1],'stop-opacity':s[2]},g)});
+    return 'url(#g'+gid+')';
+  }
+  var hot=light?'#e8730f':'#ff7a1f',warm=light?'#f09a2a':'#ffb24a',tip=light?'#d9650c':'#fff0d0';
+  function thread(d,paint,w){
+    el('path',{d:d,stroke:paint,'stroke-width':w*3.2,opacity:light?.32:.5,filter:'url(#glow)'},th);
+    el('path',{d:d,stroke:paint,'stroke-width':w},th);
+  }
+  if(view==='showcase'){
+    var gin=grad(150,330,[[0,warm,0],[.25,warm,.85],[1,hot,.95]]);
+    [[158,379],[194,471],[194,587],[158,679]].forEach(function(p,i){
+      thread('M'+p[0]+' '+p[1]+' C '+(p[0]+70)+' '+p[1]+', 250 '+(560+(i-1.5)*14)+', 330 '+(566+(i-1.5)*10),gin,1.3);
+    });
+    // 中屏的「发送」出一根主干，贴着右屏外缘往上，分三枝到三个应用
+    var gout=grad(940,1420,[[0,hot,.95],[.8,warm,.95],[1,tip,1]]),X=1384,ys=[422,544,666];
+    thread('M 940 866 C 1080 960, '+X+' 930, '+X+' 800 L '+X+' '+(ys[0]+34),gout,1.8);
+    ys.forEach(function(y){thread('M '+X+' '+(y+34)+' C '+X+' '+(y+8)+', '+(X+10)+' '+y+', 1416 '+y,gout,1.5)});
+    ys.forEach(function(y){el('circle',{cx:X,cy:y+34,r:2.6,fill:tip},th)});
+  }
+  if(view==='flow'){
+    var g1=grad(420,640,[[0,warm,.15],[.4,warm,.85],[1,hot,.95]]);
+    [[420,305],[456,452],[424,600],[460,762]].forEach(function(p,i){
+      var y=500+i*42,d='M'+p[0]+' '+p[1]+' C '+(p[0]+90)+' '+p[1]+', 540 '+y+', 635 '+y;
+      if(i<3)thread(d,g1,1.5);else el('path',{d:d,stroke:g1,'stroke-width':1,opacity:.45,'stroke-dasharray':'3 7'},th);
+    });
+    thread('M 965 574 L 1130 574',grad(965,1130,[[0,hot,.95],[1,warm,.95]]),2);
+    var g3=grad(1190,1460,[[0,warm,.9],[.5,tip,1],[1,warm,.9]]),by=250+document.querySelector('.msg').offsetHeight;
+    [1195,1325,1455].forEach(function(x){thread('M 1325 '+by+' C 1325 '+(by+44)+', '+x+' '+(776-48)+', '+x+' 776',g3,1.5)});
+    el('circle',{cx:1325,cy:by,r:3,fill:tip},th);
+  }
+
+  // 余烬
+  var em=document.getElementById('embers');
+  for(var j=0;j<(view==='og'?40:70);j++){
+    var x=rnd()*W,y=H*.26+Math.pow(rnd(),.7)*H*.74,s=.5+rnd()*1.6,amber=light||rnd()<.7;
+    el('circle',{cx:x.toFixed(1),cy:y.toFixed(1),r:(s*2.4).toFixed(2),fill:amber?'#ff9a3a':'#7fd6ff',opacity:((light?.10:.05)+rnd()*.12).toFixed(3),filter:'url(#soft)'},em);
+    el('circle',{cx:x.toFixed(1),cy:y.toFixed(1),r:(s*.55).toFixed(2),fill:light?'#e07a10':(amber?'#ffd9a0':'#d8f3ff'),opacity:(.25+rnd()*.55).toFixed(3)},em);
+  }
+})();
+</script>
+</body>
+</html>

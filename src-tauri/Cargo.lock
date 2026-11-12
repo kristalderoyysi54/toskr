@@ -2702,6 +2702,7 @@ dependencies = [
  "bitflags 2.13.1",
  "objc2",
  "objc2-core-foundation",
+ "objc2-core-graphics",
  "objc2-foundation",
 ]
 
@@ -4749,6 +4750,7 @@ dependencies = [
  "objc2-core-video",
  "objc2-event-kit",
  "objc2-foundation",
+ "objc2-quartz-core",
  "objc2-screen-capture-kit",
  "objc2-user-notifications",
  "objc2-vision",

@@ -1644,8 +1644,58 @@ pub fn hud_feedback(
 
 /// 前端链路诊断回执（Toggle 处理结果等落盘，报障时诊断页可见）。
 #[tauri::command]
-pub fn diag_note(app: AppHandle, msg: String) {
-    crate::diag::push(&app, crate::diag::frontend_event(&msg));
+pub fn diag_note(app: AppHandle, webview: tauri::Webview, msg: String) {
+    let event = crate::diag::frontend_event(&msg);
+    if event != "frontend.mounted" {
+        crate::diag::push(&app, event);
+        return;
+    }
+    // 挂载指纹附带窗口 label（Rust 侧身份，非 WebView 文本）与 WebContent pid，
+    // 内存基线据此把 WebKit 子进程按窗口归属。主窗挂载时顺带列出所有已建窗口
+    // （辅助窗不发挂载回执）。
+    let mut targets = vec![(webview.label().to_string(), webview)];
+    if targets[0].0 == "main" {
+        for (label, window) in app.webview_windows() {
+            if label != "main" {
+                targets.push((label, window.as_ref().clone()));
+            }
+        }
+    }
+    for (index, (label, view)) in targets.into_iter().enumerate() {
+        let app_for_log = app.clone();
+        let tag = if index == 0 { event } else { "webview.pid" };
+        if view
+            .with_webview(move |platform| {
+                let pid = crate::diag::webcontent_pid(platform.inner());
+                crate::diag::push(&app_for_log, format!("{tag} label={label} webcontent_pid={pid}"));
+            })
+            .is_err()
+            && tag == event
+        {
+            crate::diag::push(&app, event);
+        }
+    }
+}
+
+/// 主窗渲染活动诊断（前端每 60s 一次，仅在面板不可见/已滑出却仍在渲染时上报）：
+/// rAF 回调次数、运行中动画数与动画来源标签（CSS 动画名 / 目标元素首个 class，
+/// 均为代码标识符，这里再按字符集与长度清洗一次，正文不可能混入）。
+#[tauri::command]
+pub fn report_render_activity(app: AppHandle, raf: u32, animations: u32, panel_open: bool, edge_hidden: bool, kinds: Vec<String>) {
+    let kinds: Vec<String> = kinds
+        .into_iter()
+        .take(4)
+        .map(|k| k.chars().filter(|c| c.is_ascii_alphanumeric() || "-_:.=".contains(*c)).take(60).collect::<String>())
+        .filter(|k| !k.is_empty())
+        .collect();
+    crate::diag::push(
+        &app,
+        format!(
+            "渲染活动(60s): rAF={raf} 动画={animations} 面板={} 贴边隐藏={edge_hidden} 来源=[{}]",
+            if panel_open { "开" } else { "关" },
+            kinds.join(",")
+        ),
+    );
 }
 
 /// 主窗口水合结果指纹：只收条数（不含任何内容），install-app.sh 部署后据此比对
@@ -1721,7 +1771,9 @@ pub fn bundle_id_of_app(path: String) -> Option<String> {
 
 /// 设置窗口主题（system/light/dark）：同时切换原生外观与
 /// webview 的 prefers-color-scheme，前端 CSS 深浅色自动跟随。
-const THEMED_WINDOW_LABELS: [&str; 4] = ["main", "settings", "imgpreview", "sourceoverlay"];
+const THEMED_WINDOW_LABELS: [&str; 3] = ["main", "settings", "imgpreview"];
+/// 最近一次手动主题（None = 跟随系统），供按需创建的窗口补设。
+static WINDOW_THEME: std::sync::Mutex<Option<tauri::Theme>> = std::sync::Mutex::new(None);
 
 #[tauri::command]
 pub fn set_window_theme(app: AppHandle, theme: String) {
@@ -1730,6 +1782,7 @@ pub fn set_window_theme(app: AppHandle, theme: String) {
         "dark" => Some(tauri::Theme::Dark),
         _ => None, // 跟随系统
     };
+    *WINDOW_THEME.lock().unwrap() = theme;
     for label in THEMED_WINDOW_LABELS {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.set_theme(theme);
@@ -1842,26 +1895,110 @@ pub fn set_panel_free_pos(app: AppHandle, x: Option<f64>, y: Option<f64>) {
     crate::window::set_free_pos(&app, x.zip(y));
 }
 
-/// 打开独立设置窗口。
+const SETTINGS_SECTION_EVENT: &str = "toskr://settings-section";
+/// 设置窗按需创建：首次打开才建，关闭后隐藏 `SETTINGS_IDLE_DESTROY` 仍未重开即销毁
+/// （常驻隐藏时实测占 ≈60MB WebContent）。新建窗口的分区请求先挂起，等前端注册
+/// 监听后调用 `settings_window_ready` 再投递，否则事件会在 JS 加载前丢失。
+static PENDING_SETTINGS_SECTION: std::sync::Mutex<Option<serde_json::Value>> = std::sync::Mutex::new(None);
+static SETTINGS_IDLE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+const SETTINGS_IDLE_DESTROY: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn settings_section_payload_valid(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(s) => s.len() <= 64,
+        serde_json::Value::Object(map) => {
+            map.len() <= 2
+                && map.get("section").and_then(|v| v.as_str()).is_some_and(|s| s.len() <= 64)
+                && map.get("targetProfileId").is_none_or(|v| v.is_null() || v.as_str().is_some_and(|s| s.len() <= 128))
+        }
+        _ => false,
+    }
+}
+
+fn build_settings_window(app: &AppHandle) -> tauri::Result<tauri::WebviewWindow> {
+    let window = tauri::WebviewWindowBuilder::new(app, "settings", tauri::WebviewUrl::App("index.html".into()))
+        .title(crate::i18n::tr("Toskr 设置"))
+        .inner_size(1040.0, 720.0)
+        .min_inner_size(560.0, 420.0)
+        .resizable(true)
+        .visible(false)
+        .build()?;
+    if let Some(theme) = *WINDOW_THEME.lock().unwrap() {
+        let _ = window.set_theme(Some(theme));
+    }
+    Ok(window)
+}
+
+/// 打开独立设置窗口；`section` 为分区深链（字符串或 {section, targetProfileId}）。
 #[tauri::command]
-pub fn open_settings_window(app: AppHandle) {
+pub fn open_settings_window(app: AppHandle, section: Option<serde_json::Value>) {
+    let section = section.filter(settings_section_payload_valid);
+    SETTINGS_IDLE_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
-        if let Some(window) = handle.get_webview_window("settings") {
-            // 从隐藏态打开时定位到「当前使用屏幕」居中；已可见则不动（尊重手动摆放）
-            if !window.is_visible().unwrap_or(false) {
-                crate::window::center_on_cursor_screen(&handle, &window);
-            }
-            let _ = window.show();
-            let _ = window.set_focus();
+        let (window, fresh) = match handle.get_webview_window("settings") {
+            Some(window) => (window, false),
+            None => match build_settings_window(&handle) {
+                Ok(window) => (window, true),
+                Err(error) => {
+                    crate::diag::push(&handle, format!("设置窗创建失败: {error}"));
+                    return;
+                }
+            },
+        };
+        // 从隐藏态打开时定位到「当前使用屏幕」居中；已可见则不动（尊重手动摆放）
+        if !window.is_visible().unwrap_or(false) {
+            crate::window::center_on_cursor_screen(&handle, &window);
         }
+        let _ = window.show();
+        let _ = window.set_focus();
+        if let Some(section) = section {
+            if fresh {
+                *PENDING_SETTINGS_SECTION.lock().unwrap() = Some(section);
+            } else {
+                // 先 show 再 emit：隐藏期 WebView 可能被挂起
+                let _ = handle.emit_to("settings", SETTINGS_SECTION_EVENT, section);
+            }
+        } else if fresh {
+            *PENDING_SETTINGS_SECTION.lock().unwrap() = None;
+        }
+    });
+}
+
+/// 设置窗前端已注册分区监听：投递创建前挂起的分区请求。
+#[tauri::command]
+pub fn settings_window_ready(app: AppHandle, window: tauri::WebviewWindow) {
+    if window.label() != "settings" {
+        return;
+    }
+    if let Some(section) = PENDING_SETTINGS_SECTION.lock().unwrap().take() {
+        let _ = app.emit_to("settings", SETTINGS_SECTION_EVENT, section);
+    }
+}
+
+/// 设置窗被关闭（已隐藏）：空闲后销毁；期间重新打开则作废。
+pub fn schedule_settings_destroy(app: &AppHandle) {
+    let generation = SETTINGS_IDLE_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(SETTINGS_IDLE_DESTROY);
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if SETTINGS_IDLE_GEN.load(std::sync::atomic::Ordering::SeqCst) != generation {
+                return;
+            }
+            if let Some(window) = handle.get_webview_window("settings") {
+                if !window.is_visible().unwrap_or(true) && window.destroy().is_ok() {
+                    crate::diag::push(&handle, "设置窗空闲回收");
+                }
+            }
+        });
     });
 }
 
 /// 打开设置窗并切到指定分区（前端 SETTINGS_SECTION 事件同名）。
 pub fn open_settings_section(app: &AppHandle, section: &'static str) {
-    open_settings_window(app.clone());
-    let _ = app.emit_to("settings", "toskr://settings-section", section);
+    open_settings_window(app.clone(), Some(serde_json::Value::from(section)));
 }
 
 /// 重启应用（输入监控授权变更后需要重启进程才能生效）。
@@ -2556,7 +2693,7 @@ mod tests {
     fn manual_theme_reaches_the_image_preview_window() {
         assert_eq!(
             THEMED_WINDOW_LABELS,
-            ["main", "settings", "imgpreview", "sourceoverlay"]
+            ["main", "settings", "imgpreview"]
         );
     }
 
