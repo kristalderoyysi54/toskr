@@ -22,8 +22,12 @@
 可为每个目标应用自定义自动提交——`⌘ Enter` 粘贴即送达。
 
 <p align="center">
-  <img src="docs/assets/readme/toskr-flow.png" alt="来源应用、Toskr 和当前 AI 输入框组成的三步流程" width="100%" />
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/toskr-flow-light.webp" />
+    <img src="docs/assets/readme/toskr-flow.webp" alt="来源应用里的内容经 Toskr 排序并检查隐私后，一次送达 ChatGPT、Claude、DeepSeek 等 AI 应用" width="100%" />
+  </picture>
 </p>
+
 ## 三步上手
 
 1. **收进来** 选中文字后双击 `⇧ Shift`。复制过的文字和图片也会进入剪贴板历史。
@@ -31,7 +35,10 @@
 3. **粘贴过去** 先点进目标应用的输入框，再打开 Toskr 按 `⌘ Enter`。Toskr 会切回该应用并粘贴；开启自动提交的应用，回车也一并完成。
 
 <p align="center">
-  <img src="docs/assets/readme/toskr-showcase.webp" alt="Toskr 的剪贴板、笔记整理与任务提醒界面" width="100%" />
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/toskr-showcase-light.webp" />
+    <img src="docs/assets/readme/toskr-showcase.webp" alt="Toskr 的剪贴板历史、笔记多选发送与今天页时间轴" width="100%" />
+  </picture>
 </p>
 
 <p align="center"><sub>剪贴板历史 · 卡片整理 · 任务提醒</sub></p>

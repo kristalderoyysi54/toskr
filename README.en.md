@@ -22,7 +22,10 @@ Collect text and images from different apps, organize and review privacy, then p
 Customize auto-submit per target app — `⌘ Enter` pastes and delivers in one step.
 
 <p align="center">
-  <img src="docs/assets/readme/toskr-flow.png" alt="A three-step flow from source apps through Toskr to the current AI input" width="100%" />
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/toskr-flow-en-light.webp" />
+    <img src="docs/assets/readme/toskr-flow-en.webp" alt="Content from source apps is ordered and privacy-checked in Toskr, then delivered at once to AI apps such as ChatGPT, Claude and DeepSeek" width="100%" />
+  </picture>
 </p>
 
 ## Three steps
@@ -32,7 +35,10 @@ Customize auto-submit per target app — `⌘ Enter` pastes and delivers in one 
 3. **Paste** Focus the destination input, open Toskr, and press `⌘ Enter`. Toskr returns to that app and pastes the content; for apps with auto-submit enabled, it presses Enter for you as well.
 
 <p align="center">
-  <img src="docs/assets/readme/toskr-showcase.webp" alt="Toskr clipboard history, card organization, and task reminders" width="100%" />
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/toskr-showcase-en-light.webp" />
+    <img src="docs/assets/readme/toskr-showcase-en.webp" alt="Toskr clipboard history, multi-card sending from notes, and the Today timeline" width="100%" />
+  </picture>
 </p>
 
 <p align="center"><sub>Clipboard history · card-based preparation · task reminders</sub></p>
