@@ -20,6 +20,14 @@ VERSION=$(python3 -c 'import json; print(json.load(open("src-tauri/tauri.conf.js
 codesign --verify --deep --strict "$SRC" \
   || { echo "✗ 构建产物签名校验失败，未覆盖 /Applications"; exit 1; }
 
+# 1.0 起 /Applications/Toskr.app 是原生正式版（可执行文件名 Toskr，旧 Tauri 版是 toskr）。
+# 旧版打包不得把它降级覆盖回 Tauri 版：可执行文件名对不上就拒绝
+plist_exec() { /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$1/Contents/Info.plist" 2>/dev/null || true; }
+if [[ -d "$DEST" && "$(plist_exec "$DEST")" != "$(plist_exec "$SRC")" ]]; then
+  echo "✗ ${DEST} 是原生版（可执行文件 $(plist_exec "$DEST")），旧 Tauri 包不覆盖它；原生版走 script/release-native.sh 发版更新"
+  exit 1
+fi
+
 # 先完整拷到暂存目录并校验，再替换：拷贝中途失败时 /Applications 仍是可用的上一版
 rm -rf "$STAGE"
 ditto "$SRC" "$STAGE"
