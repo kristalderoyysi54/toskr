@@ -10,21 +10,21 @@ import (
 )
 
 // 配色方案按 Tauri index.css 的 data-theme 段复刻：纸墨 / 抹茶 / 樱粉固定浅色，雾蓝跟随主题，
-// Platinum 固定浅色且整窗不透明。色值取自浏览器实测导出（同一组数据下与默认方案逐元素比对得出的映射）。
+// 色值取自浏览器实测导出（同一组数据下与默认方案逐元素比对得出的映射）。
 
-var schemeNames = []string{"default", "platinum", "paper", "matcha", "sakura", "fog"}
-var schemeLabels = []string{"琉璃", "Platinum", "纸墨", "抹茶", "樱粉", "雾蓝"}
+// 颜色（现代主题下的配色）。界面风格主题（Platinum 等）不在这里，见 theme.go。
+var schemeNames = []string{"default", "paper", "matcha", "sakura", "fog"}
+var schemeLabels = []string{"琉璃", "纸墨", "抹茶", "樱粉", "雾蓝"}
 
 // curScheme 是当前配色方案（主线程读写；applyAppearance 设置）。
 var curScheme = "default"
 
-// fixedLight：不跟随「主题」设置、恒为浅色的方案。
+// fixedLight：不跟随「模式」设置、恒为浅色——只有主题会这样（styleTheme.FixedLight）。
 func fixedLight(scheme string) bool {
-	switch scheme {
-	case "paper", "matcha", "sakura", "platinum":
-		return true
+	if isTheme(scheme) {
+		return themeFor(scheme).FixedLight()
 	}
-	return false
+	return false // 颜色都有浅 / 深两套色板
 }
 
 // appLive：应用已在运行（main 设置）。无头视图测试里 mygo.Theme.SetSource 会永久阻塞，只在运行时调用。
@@ -36,7 +36,9 @@ func applyAppearance(st store.Settings) {
 	if curScheme == "" {
 		curScheme = "default"
 	}
-	setPlatinumDetail(st.PtHighlight, st.PtScrollbar)
+	for _, id := range styleThemeOrder {
+		styleThemes[id].Apply(st)
+	}
 	cardAlpha = float32(st.CardAlpha())
 	if !appLive {
 		return
@@ -74,19 +76,37 @@ var schemes = map[string]schemePalette{
 		head: srgbf(0.738824, 0.572549, 0.64902), headText: ui.RGB(255, 255, 255)},
 	"fog": {window: ui.RGBA(229, 233, 240, 0.62), fg: ui.RGB(46, 52, 64), muted: ui.RGB(76, 86, 106), chip: ui.RGB(226, 230, 238),
 		card: ui.RGB(248, 249, 251), cardBottom: ui.RGB(240, 243, 247), ok: ui.RGB(106, 138, 82)},
+	// 纸墨 / 抹茶 / 樱粉的深色：原版没有（固定浅色），原生自定——同色相压暗，结构同雾蓝深色
+	"paper-dark": {window: ui.RGBA(42, 38, 32, 0.557), fg: ui.RGB(236, 228, 212), muted: ui.RGB(179, 166, 144), chip: ui.RGB(61, 55, 46),
+		card: ui.RGB(53, 48, 40), cardBottom: ui.RGB(48, 43, 36), ok: ui.RGB(155, 191, 122), pill: ui.RGB(90, 80, 64),
+		head: ui.RGB(74, 66, 54), headText: gray(0.985, 1)},
+	"matcha-dark": {window: ui.RGBA(35, 42, 32, 0.557), fg: ui.RGB(228, 233, 220), muted: ui.RGB(163, 176, 152), chip: ui.RGB(53, 64, 48),
+		card: ui.RGB(45, 54, 41), cardBottom: ui.RGB(40, 48, 37), ok: ui.RGB(159, 197, 135), pill: ui.RGB(75, 90, 68),
+		head: ui.RGB(62, 79, 56), headText: gray(0.985, 1)},
+	"sakura-dark": {window: ui.RGBA(46, 35, 39, 0.557), fg: ui.RGB(246, 230, 234), muted: ui.RGB(194, 165, 173), chip: ui.RGB(68, 52, 58),
+		card: ui.RGB(58, 44, 49), cardBottom: ui.RGB(52, 40, 44), keepOK: true, pill: ui.RGB(99, 72, 79),
+		head: ui.RGB(85, 61, 69), headText: gray(0.985, 1)},
 	"fog-dark": {window: ui.RGBA(43, 48, 59, 0.557), fg: ui.RGB(229, 233, 240), muted: ui.RGB(163, 171, 186), chip: ui.RGB(59, 66, 82),
 		card: ui.RGB(53, 59, 72), cardBottom: ui.RGB(48, 54, 66), ok: ui.RGB(163, 190, 140), pill: ui.RGB(76, 86, 106),
 		head: srgbf(0.285804, 0.311529, 0.365804), headText: gray(0.985, 1)},
 }
 
+// schemeVariant：颜色在该深浅模式下用的色板名（深色且有 "<名>-dark" 时用它）。
+func schemeVariant(name string, dark bool) string {
+	if _, ok := schemes[name+"-dark"]; dark && ok {
+		return name + "-dark"
+	}
+	return name
+}
+
 // schemed 把当前配色方案叠到基础设计变量上。
 func schemed(t tokens) tokens {
-	name := curScheme
-	if name == "fog" && t.dark {
-		name = "fog-dark"
-	}
-	if name == "platinum" {
-		return platinumTokens(t)
+	name := schemeVariant(curScheme, t.dark)
+	t.th = theme()
+	if isTheme(curScheme) { // 主题自己出整套变量
+		t = t.th.Tokens(t)
+		t.th = theme()
+		return t
 	}
 	p, ok := schemes[name]
 	if !ok {
@@ -117,10 +137,9 @@ func schemed(t tokens) tokens {
 }
 
 // selectionGlow 画选中卡片的柔光（.list-selection-glow）：内缘描边 + 向内晕开，颜色取方案主色；
-// Platinum 按原版改为高亮色淡底（正片叠底保留文字对比）+ 2px 高亮色内框、直角。
+// 主题可以整个换掉（styleTheme.SelectionGlow）。
 func selectionGlow(c *ui.Context, k tokens, radius, glow float32) {
-	if k.pt {
-		ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).PassThrough().Background(ptLav.Alpha(0.45)).InsetShadow(0, 0, 0, 2, ptHL)
+	if k.th.SelectionGlow(c) {
 		return
 	}
 	ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Radius(radius).PassThrough().
@@ -130,7 +149,7 @@ func selectionGlow(c *ui.Context, k tokens, radius, glow float32) {
 // cardFill 给卡片铺底：方案带底部渐变时为 155° 的 card → card(52%) → cardBottom。
 func cardFill(e ui.Element, k tokens) ui.Element {
 	card, bottom := k.card, k.cardBottom
-	if cardAlpha < 1 && !k.pt { // 卡片底色不透明度（Tauri cardOpacity）
+	if cardAlpha < 1 && !k.th.Opaque() { // 卡片底色不透明度（Tauri cardOpacity）
 		card, bottom = card.Alpha(cardAlpha), bottom.Alpha(cardAlpha)
 	}
 	if k.cardBottom == (ui.Color{}) {
@@ -156,17 +175,23 @@ var setSchemes = map[string]setPalette{
 	"matcha": {bg: hex(0xf2f4ee), card: hex(0xfbfcf8), muted: hex(0xe4e9dc), border: hex(0xdde3d4), primary: hex(0x4f7a3a), toggleOff: hex(0xd7dfcc), toggleOffBorder: hex(0xcfd8c3), btn: hex(0xfbfcf8), btnBorder: hex(0xcfd8c3), knobOff: hex(0xf2f4ee), knobOn: hex(0xf2f4ee), btnHover: hex(0xeef1e8)},
 	"sakura": {bg: hex(0xfdf6f7), card: hex(0xffffff), muted: hex(0xf6e6ea), border: hex(0xf0dfe3), primary: hex(0xc2547a), toggleOff: hex(0xefdbe0), toggleOffBorder: hex(0xead0d7), btn: hex(0xffffff), btnBorder: hex(0xead0d7), knobOff: hex(0xfdf6f7), knobOn: hex(0xfdf6f7), btnHover: hex(0xfbf0f2)},
 	"fog":    {bg: hex(0xeceff4), card: hex(0xf8f9fb), muted: hex(0xe2e6ee), border: hex(0xd8dee9), primary: hex(0x5e81ac), toggleOff: hex(0xd8dee9), toggleOffBorder: hex(0xcdd4e0), btn: hex(0xf8f9fb), btnBorder: hex(0xcdd4e0), knobOff: hex(0xeceff4), knobOn: hex(0xeceff4), btnHover: hex(0xe5e9f0)},
+	"paper-dark": {bg: hex(0x2a2620), card: hex(0x353028), muted: hex(0x3d372e), border: ui.RGBA(236, 228, 212, 0.1), primary: hex(0xd9a066), toggleOff: hex(0x5a5040), toggleOffBorder: ui.RGBA(236, 228, 212, 0.12),
+		btn: hex(0xe3d9c7), btnFg: hex(0x2a2620), btnBorder: ui.RGBA(236, 228, 212, 0.08), knobOff: hex(0xece4d4), knobOn: hex(0x1f1c17), btnHover: hex(0xd2c6b0)},
+	"matcha-dark": {bg: hex(0x232a20), card: hex(0x2d3629), muted: hex(0x354030), border: ui.RGBA(228, 233, 220, 0.1), primary: hex(0x9fc587), toggleOff: hex(0x4b5a44), toggleOffBorder: ui.RGBA(228, 233, 220, 0.12),
+		btn: hex(0xdde3d4), btnFg: hex(0x232a20), btnBorder: ui.RGBA(228, 233, 220, 0.08), knobOff: hex(0xe4e9dc), knobOn: hex(0x1a2018), btnHover: hex(0xcdd5c2)},
+	"sakura-dark": {bg: hex(0x2e2327), card: hex(0x3a2c31), muted: hex(0x44343a), border: ui.RGBA(246, 230, 234, 0.1), primary: hex(0xe88aa8), toggleOff: hex(0x63484f), toggleOffBorder: ui.RGBA(246, 230, 234, 0.12),
+		btn: hex(0xf0dfe3), btnFg: hex(0x2e2327), btnBorder: ui.RGBA(246, 230, 234, 0.08), knobOff: hex(0xf6e6ea), knobOn: hex(0x221a1d), btnHover: hex(0xe2ccd2)},
 	"fog-dark": {bg: hex(0x2b303b), card: hex(0x353b48), muted: hex(0x3b4252), border: ui.RGBA(229, 233, 240, 0.1), primary: hex(0x88c0d0), toggleOff: hex(0x4c566a), toggleOffBorder: ui.RGBA(229, 233, 240, 0.12),
 		btn: hex(0xd8dee9), btnFg: hex(0x2b303b), btnBorder: ui.RGBA(229, 233, 240, 0.08), knobOff: hex(0xe5e9f0), knobOn: hex(0x1f242d), btnHover: hex(0xc8d0dc)},
 }
 
 func setSchemed(s settingsTokens, dark bool) settingsTokens {
-	name := curScheme
-	if name == "fog" && dark {
-		name = "fog-dark"
-	}
-	if name == "platinum" {
-		return platinumSet()
+	name := schemeVariant(curScheme, dark)
+	s.th = theme()
+	if isTheme(curScheme) {
+		s = s.th.SettingsTokens(s)
+		s.th = theme()
+		return s
 	}
 	p, ok := setSchemes[name]
 	if !ok {
@@ -231,13 +256,15 @@ func (a *app) stripBandColors(k tokens, n store.Note) (ui.Color, ui.Color) {
 }
 
 // tintBand：通栏底色（同 Tauri .asset-band 各方案规则）：默认浅色 band 86% 混白 → 92% 混黑的 135° 渐变；
-// 深色（含雾蓝）band 28% 叠卡面；纸 / 抹茶 / 樱花为方案底色上叠 18% / 30% / 30% 的 band 实色；Platinum 叠 22% 在 G300 上。
+// 深色（含雾蓝）band 28% 叠卡面；纸 / 抹茶 / 樱花为方案底色上叠 18% / 30% / 30% 的 band 实色；主题可自定混色（styleTheme.TintBand）。
 // 之前非默认方案与 Platinum 一律回落中性通栏，换了分组色卡片也不变。
 func tintBand(k tokens, band ui.Color) (ui.Color, ui.Color) {
 	solid := func(p float32, base ui.Color) (ui.Color, ui.Color) { c := mix(band, base, p); return c, c }
+	if col, ok := k.th.TintBand(band); ok {
+		return col, col
+	}
 	switch {
-	case k.pt:
-		return solid(0.22, ptG300)
+	case k.dark: // 深色一律 band 28% 叠卡面（下方）
 	case curScheme == "paper":
 		return solid(0.18, ui.RGB(233, 220, 195)) // token-exception: 同 Tauri paper .asset-band #e9dcc3
 	case curScheme == "matcha":
@@ -252,13 +279,11 @@ func tintBand(k tokens, band ui.Color) (ui.Color, ui.Color) {
 	return mix(band, ui.RGB(255, 255, 255), 0.86), mix(band, ui.RGB(0, 0, 0), 0.92)
 }
 
-// schemeSwatch：配色方案的代表色（浅色主色；Platinum 取当前高亮色），设置里的方案下拉用它画色点。
+// schemeSwatch：颜色的代表色（浅色主色），设置里的颜色下拉用它画色点。
 func schemeSwatch(name string) ui.Color {
 	switch name {
 	case "default":
 		return lightSet.primary
-	case "platinum":
-		return ptHL
 	}
 	return setSchemes[name].primary
 }
@@ -270,11 +295,9 @@ var schemeMenuOpen bool
 // 触发钮外观同 settingsSelect（144×32），名称前也带当前方案的色点。
 func schemeSelect(c *ui.Context, k tokens, s settingsTokens, cur string, pick func(name string)) {
 	idx := max(0, slices.Index(schemeNames, cur))
-	b := ui.Row(c).Width(144).Height(32).Padding(0, 8).Gap(6).Radius(10).Border(1, s.inputBorder).AlignItems(ui.Center).
-		Key("scheme-select").Role(ui.RoleButton).Label(tr("配色方案"))
-	if s.pt {
-		b.Radius(3).Border(1, ptG600)
-	} else if b.Hovered() || schemeMenuOpen {
+	b := ui.Row(c).Width(144).Height(32).Padding(0, 8).Gap(6).Radius(rr(10)).Border(1, s.inputBorder).AlignItems(ui.Center).
+		Key("scheme-select").Role(ui.RoleButton).Label(tr("颜色"))
+	if !s.th.SelectTrigger(b) && (b.Hovered() || schemeMenuOpen) {
 		b.Background(k.track)
 	}
 	dot := func(name string) {
@@ -291,11 +314,11 @@ func schemeSelect(c *ui.Context, k tokens, s settingsTokens, cur string, pick fu
 	if !schemeMenuOpen {
 		return
 	}
-	ui.Popover(c, b, &schemeMenuOpen, func() {
+	popoverOf(c, b, &schemeMenuOpen, func() {
 		ui.Column(c).Width(160).Gap(2).Key("scheme-menu").Children(func() {
 			for i, name := range schemeNames {
 				on := i == idx
-				row := ui.Row(c).Height(28).Padding(0, 8).Gap(8).Radius(6).AlignItems(ui.Center).Key("scheme-opt-" + name).
+				row := ui.Row(c).Height(28).Padding(0, 8).Gap(8).Radius(rr(6)).AlignItems(ui.Center).Key("scheme-opt-" + name).
 					Role(ui.RoleButton).Label(tr(schemeLabels[i]))
 				if row.Hovered() {
 					row.Background(k.hoverBg)

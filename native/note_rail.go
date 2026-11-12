@@ -37,7 +37,7 @@ func (a *app) noteRailToggle(c *ui.Context, k tokens) {
 	if a.noteRailOpen {
 		tip = tr("收起笔记分组")
 	}
-	b := ui.Box(c).Absolute().Left(0).Top(4).Size(12, 20).Radius(0, 8, 8, 0).Center().Tooltip(tip).
+	b := tipOf(c, ui.Box(c).Absolute().Left(0).Top(4).Size(12, 20).Radius(0, rr(8), rr(8), 0).Center(), tip).
 		Role(ui.RoleButton).Label(tip + tr("，当前：") + name).Key("rail-toggle")
 	col := k.muted.Alpha(0.35)
 	if b.Hovered() || a.noteRailOpen {
@@ -77,7 +77,7 @@ func (a *app) noteRail(c *ui.Context, k tokens) {
 				for i, s := range secs {
 					a.railSection(c, k, s, i, len(secs), ids)
 				}
-				nb := ui.Row(c).Height(22).Margin(4, 0, 0, 0).Padding(0, 4).Gap(4).Radius(6).AlignItems(ui.Center).Role(ui.RoleButton).Label(tr("新建分组")).Key("rail-new")
+				nb := ui.Row(c).Height(22).Margin(4, 0, 0, 0).Padding(0, 4).Gap(4).Radius(rr(6)).AlignItems(ui.Center).Role(ui.RoleButton).Label(tr("新建分组")).Key("rail-new")
 				fg := k.muted.Alpha(0.6)
 				if nb.Hovered() {
 					fg = k.fg
@@ -111,8 +111,8 @@ func (a *app) noteSections() []store.Section {
 // railPill：竖排胶囊（pillCls vertical）：选中浅主色底 + 描边、字重 500。
 func (a *app) railPill(c *ui.Context, k tokens, id, label, color string, on bool) bool {
 	s := stok(c)
-	b := ui.Row(c).Height(26).Padding(0, 2).Gap(4).Radius(6).AlignItems(ui.Center).Border(1, ui.Transparent).
-		Role(ui.RoleButton).Label(label).Tooltip(label).Key("rail-" + id)
+	b := tipOf(c, ui.Row(c).Height(26).Padding(0, 2).Gap(4).Radius(rr(6)).AlignItems(ui.Center).Border(1, ui.Transparent).
+		Role(ui.RoleButton).Label(label), label).Key("rail-" + id)
 	fg, w := k.muted, 400
 	switch {
 	case on:
@@ -148,7 +148,7 @@ func (a *app) railPill(c *ui.Context, k tokens, id, label, color string, on bool
 
 func (a *app) railSection(c *ui.Context, k tokens, s store.Section, i, n int, ids []string) {
 	if a.renamingSec == s.ID {
-		ui.TextInputBase(c, &a.renameText).Height(24).Padding(0, 4).Radius(6).Border(1, k.inputBorder).Font(fontSans).FontSize(11).
+		ui.TextInputBase(c, &a.renameText).Height(24).Padding(0, 4).Radius(rr(6)).Border(1, k.inputBorder).Font(fontSans).FontSize(11).
 			TextColor(k.fg).Label(tr("分组名称")).Focus().OnTextKey(func(key ui.TextKey) bool {
 			switch key.Key {
 			case ui.KeyEnter:
@@ -172,7 +172,7 @@ func (a *app) railSection(c *ui.Context, k tokens, s store.Section, i, n int, id
 		if pill.Dragging() {
 			a.railSort.begin(s.ID)
 			a.railSeen = true
-			liftHead(c, pill.Radius(6))
+			liftHead(c, pill.Radius(rr(6)))
 		}
 		pill.ContextMenu(func(m *ui.Menu) { a.secMenuSrc = "rail"; a.sectionMenu(m, s, i, n) })
 		a.sectionColorPopover(c, k, s, pill, "rail")

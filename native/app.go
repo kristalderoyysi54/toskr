@@ -113,45 +113,45 @@ type app struct {
 	noteRailOpen                        bool
 	detailSize                          [2]int // 详情窗上次的尺寸（用户拖过即沿用；0 = 首次按屏幕定）
 	newSec                              string
-	target                              macos.FrontApp    // 发送目标：面板唤出前的前台应用
-	targetStarted                       int64             // 目标进程启动时刻（身份锁定）
-	draftTarget                         draftTarget       // 预检 / 回车确认时冻结的目标（draft_target.go）
-	pending                             []store.Note      // 预检命中、等待确认的发送
-	pf                                  preflightState    // 发送预检：逐项处理状态
-	sendPNG                             map[string][]byte // 本次发送用的图片遮挡副本（文件 → 遮挡后 PNG，图片隐私检查）
-	sendFinal                           string            // 预检里手动改过的最终文本（非空即原样发送，不再套模板 / 格式）
-	sendKeep                            *bool             // 预检「发送后保留面板」本次覆盖（nil = 按方案）
-	sendMode                            string            // 本次发送的输出格式覆盖（选择条 / 详情窗「输出格式」，发完或取消即清）
-	appNames                            map[string]string // bundle → 应用显示名（设置里的应用名单）
-	appMissing                          map[string]bool   // 系统查不到的应用（没装）
-	sentCounts                          map[string]int    // 卡片 id → 成功发送次数（reload 时重算）
-	lp                                  longPress         // 浮钮长按（收进笔记选分类）
-	clipPick                            string            // 长按弹出分组选择的剪贴卡
-	clipPickAt                          ui.Rect           // 弹出浮层挂靠的浮钮位置
-	thumbs                              *imgCache // 卡片缩略图与 favicon（按字节限额，imgcache.go）
-	trimGen                             int       // 内存整理的代次（再次唤出面板即作废）
-	adoptErr                            string    // 正式版：旧版数据没接上的原因（非空时面板顶部常驻横幅）
-	aiBusy                              string                    // 正在 AI 处理的笔记 ID
-	aiReviewing                         *aiReview                 // 进行中的 AI 核对（取消时一并作废）
-	focus                               *focusState               // 进行中的专注（today_blocks.go；只在内存里，重启即结束）
-	fanout                              *fanout                   // 进行中的多目标发送（fanout.go）
-	fanPick                             []string                  // 「同时发到」上次勾选的应用（bundle id，本次运行内记住）
-	aiCancel                            context.CancelFunc        // 进行中的 AI 改写（可取消）
-	draftImgs                           []pastedImage             // 输入区暂存的粘贴 / 拖入图片（提交时与草稿合成一张卡）
-	bigImgs                             *imgCache // 详情窗内嵌大图缓存
-	docked                              bool                      // 面板当前停靠在伴随应用窗口旁（位置不由自己记）
-	comp                                companionTracker          // 伴随跟随（companion_track.go）
-	vdrag                               vDrag                     // 上 / 下缘把手拖动中
-	dragExp                             dragExpand                // 拖拽悬停在折叠分组头上（500ms 后自动展开）
-	kbd                                 kbDrag                    // 键盘拖拽排序中拾起的卡
-	gripFocus                           string                    // 键盘焦点所在的拖拽把手（卡片 id）
-	redactions                          []redactionSession        // 各次发送的占位符映射（只在内存，同 Tauri redactionSessions）
-	verify                              verifyState               // 回复检查浮层
-	sendPH                              sendRedaction             // 本次发送的「原文 → 占位符」与次数（预检替换时设置）
-	tourOpen                            bool                      // 首启导览盖在面板上（onboarding.go）
-	lesson                              *lessonSession            // 进行中的进阶课（只在内存，同 Tauri lessonStore）
-	lastFront                           macos.FrontApp            // 最近一次处于前台的外部应用（edge_hide.go observeFront）
-	pfRehearsal                         bool                      // 当前预检是安全发送演练：强制脱敏、不回车、保留面板
+	target                              macos.FrontApp     // 发送目标：面板唤出前的前台应用
+	targetStarted                       int64              // 目标进程启动时刻（身份锁定）
+	draftTarget                         draftTarget        // 预检 / 回车确认时冻结的目标（draft_target.go）
+	pending                             []store.Note       // 预检命中、等待确认的发送
+	pf                                  preflightState     // 发送预检：逐项处理状态
+	sendPNG                             map[string][]byte  // 本次发送用的图片遮挡副本（文件 → 遮挡后 PNG，图片隐私检查）
+	sendFinal                           string             // 预检里手动改过的最终文本（非空即原样发送，不再套模板 / 格式）
+	sendKeep                            *bool              // 预检「发送后保留面板」本次覆盖（nil = 按方案）
+	sendMode                            string             // 本次发送的输出格式覆盖（选择条 / 详情窗「输出格式」，发完或取消即清）
+	appNames                            map[string]string  // bundle → 应用显示名（设置里的应用名单）
+	appMissing                          map[string]bool    // 系统查不到的应用（没装）
+	sentCounts                          map[string]int     // 卡片 id → 成功发送次数（reload 时重算）
+	lp                                  longPress          // 浮钮长按（收进笔记选分类）
+	clipPick                            string             // 长按弹出分组选择的剪贴卡
+	clipPickAt                          ui.Rect            // 弹出浮层挂靠的浮钮位置
+	thumbs                              *imgCache          // 卡片缩略图与 favicon（按字节限额，imgcache.go）
+	trimGen                             int                // 内存整理的代次（再次唤出面板即作废）
+	adoptErr                            string             // 正式版：旧版数据没接上的原因（非空时面板顶部常驻横幅）
+	aiBusy                              string             // 正在 AI 处理的笔记 ID
+	aiReviewing                         *aiReview          // 进行中的 AI 核对（取消时一并作废）
+	focus                               *focusState        // 进行中的专注（today_blocks.go；只在内存里，重启即结束）
+	fanout                              *fanout            // 进行中的多目标发送（fanout.go）
+	fanPick                             []string           // 「同时发到」上次勾选的应用（bundle id，本次运行内记住）
+	aiCancel                            context.CancelFunc // 进行中的 AI 改写（可取消）
+	draftImgs                           []pastedImage      // 输入区暂存的粘贴 / 拖入图片（提交时与草稿合成一张卡）
+	bigImgs                             *imgCache          // 详情窗内嵌大图缓存
+	docked                              bool               // 面板当前停靠在伴随应用窗口旁（位置不由自己记）
+	comp                                companionTracker   // 伴随跟随（companion_track.go）
+	vdrag                               vDrag              // 上 / 下缘把手拖动中
+	dragExp                             dragExpand         // 拖拽悬停在折叠分组头上（500ms 后自动展开）
+	kbd                                 kbDrag             // 键盘拖拽排序中拾起的卡
+	gripFocus                           string             // 键盘焦点所在的拖拽把手（卡片 id）
+	redactions                          []redactionSession // 各次发送的占位符映射（只在内存，同 Tauri redactionSessions）
+	verify                              verifyState        // 回复检查浮层
+	sendPH                              sendRedaction      // 本次发送的「原文 → 占位符」与次数（预检替换时设置）
+	tourOpen                            bool               // 首启导览盖在面板上（onboarding.go）
+	lesson                              *lessonSession     // 进行中的进阶课（只在内存，同 Tauri lessonStore）
+	lastFront                           macos.FrontApp     // 最近一次处于前台的外部应用（edge_hide.go observeFront）
+	pfRehearsal                         bool               // 当前预检是安全发送演练：强制脱敏、不回车、保留面板
 
 	// 1:1 主面板
 	noteGroups                               []noteGroup
@@ -224,7 +224,9 @@ type app struct {
 	calStatus                              string                    // 日历授权状态（空 = 未查）
 	calendars                              []macos.CalendarInfo      // 设置页「显示的日历」
 	calListing                             bool
-	cmdOpen                                bool // ⌘K 命令面板
+	cmdOpen                                bool    // ⌘K 命令面板
+	panelCorner                            float64 // 面板窗口当前圆角（建窗 18；主题要直角窗时为 0）
+	clipInnerW                             float32 // 剪贴页内容区上一帧的可用宽（方格墙排列用）
 	cmdQuery                               string
 	cmdCursor                              int
 	taskScroll                             ui.ScrollState // 任务页滚动（双击页签回到开头）
@@ -501,6 +503,9 @@ func (a *app) toggleWith(hold bool) {
 }
 
 func (a *app) showPanel() {
+	if a.panelCorner == 0 { // 直角窗：唤出后按画出来的形状重算阴影
+		a.refreshPanelShadow()
+	}
 	a.trimGen++ // 取消排着的内存整理
 	a.holdOpen, a.holdNext = a.holdNext, false
 	if f, ok := a.sys.Frontmost(); ok && f.PID != a.sys.SelfPID() {

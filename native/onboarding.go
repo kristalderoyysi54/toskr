@@ -148,7 +148,7 @@ func stepDots(c *ui.Context, k tokens, labels [3]string, cur int) {
 // coachHead：课程卡统一头部——图标格 + 标题（可带徽标 / 副行）+ 右上文字链接。
 func coachHead(c *ui.Context, k tokens, icon, title string, extra, right func()) {
 	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Box(c).Size(28, 28).Radius(8).Background(k.track).Center().Shrink(0).Children(func() { licon(c, icon, 14, k.fg) })
+		ui.Box(c).Size(28, 28).Radius(rr(8)).Background(k.track).Center().Shrink(0).Children(func() { licon(c, icon, 14, k.fg) })
 		ui.Row(c).Grow(1).Basis(0).Gap(6).AlignItems(ui.Center).Children(func() {
 			text(c, title, 13, 18, 600, k.fg).SingleLine()
 			if extra != nil {
@@ -165,21 +165,21 @@ func linkSep(c *ui.Context, k tokens) { text(c, "·", 11, 16, 400, k.muted.Alpha
 
 // linkButton：文字链样式的次要操作（同 Tauri ghost / underline 按钮）。
 func linkButton(c *ui.Context, k tokens, key, label string) bool {
-	b := ui.Row(c).Padding(2, 6).Radius(6).Key(key).Role(ui.RoleButton).Label(label)
+	b := ui.Row(c).Padding(2, 6).Radius(rr(6)).Key(key).Role(ui.RoleButton).Label(label)
 	col := hoverLink(b, k)
 	b.Children(func() { text(c, label, 11, 16, 500, col).SingleLine() })
 	return b.Clicked()
 }
 
 func stepBody(c *ui.Context, k tokens, fn func()) {
-	ui.Column(c).Padding(10).Gap(6).Radius(8).Background(k.track).Children(fn)
+	ui.Column(c).Padding(10).Gap(6).Radius(rr(8)).Background(k.track).Children(fn)
 }
 
 func stepTitle(c *ui.Context, k tokens, s string) { text(c, s, 12, 17, 500, k.fg).Wrap() }
 func stepHint(c *ui.Context, k tokens, s string)  { text(c, s, 11, 16, 400, k.muted).Wrap() }
 
 func sampleBox(c *ui.Context, k tokens, s string, mono bool) {
-	e := text(c, s, 11, 16, 400, k.fg).Wrap().Padding(6, 8).Radius(8).Background(k.card)
+	e := text(c, s, 11, 16, 400, k.fg).Wrap().Padding(6, 8).Radius(rr(8)).Background(k.card)
 	if mono {
 		e.Font(fontMono)
 	}
@@ -229,13 +229,16 @@ func (a *app) rehearsalCard(c *ui.Context, k tokens) {
 		coachBox(c, k, "rehearsal").Children(func() {
 			coachHead(c, k, "hourglass", tr("教程已暂停"), nil, nil)
 			ui.Row(c).Children(func() {
-				if ui.Button(c, tr("继续教程")).Grow(1).Basis(0).Clicked() {
+				if btnOf(c, tr("继续教程")).Grow(1).Basis(0).Clicked() {
 					act = func() { a.transitionOnboarding(store.OnboardingEvent{Type: "resume"}) }
 				}
 			})
 		})
 		return
 	case store.RehearsalActive:
+		if len(a.pending) > 0 && !a.hbar() { // 预检对话框盖住整个面板，演练提示由对话框自己的标题区说（同 Tauri safeRehearsal）
+			return
+		}
 	default:
 		return
 	}
@@ -270,7 +273,7 @@ func (a *app) rehearsalCard(c *ui.Context, k tokens) {
 func (a *app) rehearsalStep(c *ui.Context, k tokens, o store.OnboardingState, act *func()) {
 	btn := func(label string, fn func()) {
 		ui.Row(c).Gap(6).Children(func() {
-			if ui.Button(c, label).Grow(1).Basis(0).Clicked() {
+			if btnOf(c, label).Grow(1).Basis(0).Clicked() {
 				*act = fn
 			}
 		})
@@ -295,10 +298,10 @@ func (a *app) rehearsalStep(c *ui.Context, k tokens, o store.OnboardingState, ac
 			text(c, tr("允许输入监控"), 12, 17, 500, k.danger)
 			flow(c, k, "im", vi("settings-2", "系统设置"), vi("keyboard", "输入监控"), vi("check", "打开 Toskr"))
 			ui.Row(c).Gap(6).Children(func() {
-				if ui.Button(c, tr("重置输入监控授权")).Grow(1).Basis(0).Clicked() {
+				if btnOf(c, tr("重置输入监控授权")).Grow(1).Basis(0).Clicked() {
 					*act = a.resetInputMonitoring
 				}
-				if ui.Button(c, tr("打开输入监控设置")).Grow(1).Basis(0).Clicked() {
+				if btnOf(c, tr("打开输入监控设置")).Grow(1).Basis(0).Clicked() {
 					*act = func() { openPrivacy("Privacy_ListenEvent") }
 				}
 			})
@@ -350,10 +353,10 @@ func (a *app) rehearsalStep(c *ui.Context, k tokens, o store.OnboardingState, ac
 			}
 		})
 		ui.Row(c).Gap(6).Children(func() {
-			if ui.Button(c, tr("识别粘贴位置")).Grow(1).Basis(0).Clicked() {
+			if btnOf(c, tr("识别粘贴位置")).Grow(1).Basis(0).Clicked() {
 				*act = a.refreshTargetFromFront
 			}
-			if ready && ui.Button(c, tr("就粘贴到这里")).Grow(1).Basis(0).Clicked() {
+			if ready && btnOf(c, tr("就粘贴到这里")).Grow(1).Basis(0).Clicked() {
 				*act = func() {
 					if a.targetReady() {
 						a.transitionOnboarding(store.OnboardingEvent{Type: "targetConfirmed"})
@@ -367,7 +370,7 @@ func (a *app) rehearsalStep(c *ui.Context, k tokens, o store.OnboardingState, ac
 		chipSwap(c, k, "demo.user@…", "[EMAIL_01]", true)
 		if !a.targetReady() { // 重启后目标丢失：先重新识别
 			ui.Row(c).Gap(6).Children(func() {
-				if ui.Button(c, tr("识别粘贴位置")).Grow(1).Basis(0).Clicked() {
+				if btnOf(c, tr("识别粘贴位置")).Grow(1).Basis(0).Clicked() {
 					*act = a.refreshTargetFromFront
 				}
 			})
@@ -649,7 +652,7 @@ func (a *app) lessonCoach(c *ui.Context, k tokens) {
 		}
 	}()
 	btn := func(label string, fn func()) {
-		if ui.Button(c, label).Grow(1).Basis(0).Clicked() {
+		if btnOf(c, label).Grow(1).Basis(0).Clicked() {
 			act = fn
 		}
 	}
@@ -757,7 +760,7 @@ func (a *app) tourIllustration(c *ui.Context, k tokens) {
 		return e.Opacity(e.AnimateTo(id, to, tweenTw))
 	}
 	win := func(title string, w float32, body func()) ui.Element {
-		return ui.Column(c).Grow(1).Basis(0).Clip().Padding(6, 8).Gap(5).Radius(8).Background(k.card).Border(1, k.inputBorder).Children(func() {
+		return ui.Column(c).Grow(1).Basis(0).Clip().Padding(6, 8).Gap(5).Radius(rr(8)).Background(k.card).Border(1, k.inputBorder).Children(func() {
 			ui.Row(c).Gap(3).AlignItems(ui.Center).Children(func() {
 				ui.Box(c).Size(5, 5).Radius(2.5).Background(k.inputBorder)
 				ui.Box(c).Size(5, 5).Radius(2.5).Background(k.inputBorder)
@@ -777,7 +780,7 @@ func (a *app) tourIllustration(c *ui.Context, k tokens) {
 		hl.Children(func() { text(c, label, 9, 12, 400, k.fg).SingleLine() })
 	}
 	card := func(id, label string) {
-		b := ui.Row(c).Height(22).Padding(0, 6).Gap(5).Radius(6).Background(k.window).AlignItems(ui.Center).Key(id)
+		b := ui.Row(c).Height(22).Padding(0, 6).Gap(5).Radius(rr(6)).Background(k.window).AlignItems(ui.Center).Key(id)
 		b.Border(1, b.AnimateColor("bd", map[bool]ui.Color{true: p, false: k.inputBorder}[beat == 2], tweenTw))
 		fade(b, "in", beat >= 1)
 		b.AnimatePose(ui.Pose{Y: map[bool]float32{true: 0, false: -14}[beat >= 1]}, springSnappy)
@@ -807,7 +810,7 @@ func (a *app) tourIllustration(c *ui.Context, k tokens) {
 			})
 			win(tr("AI 对话"), 150, func() {
 				ui.Box(c).Size(100, 14).Radius(7).Background(k.track)
-				msg := fade(ui.Column(c).Padding(6, 8).Gap(4).Radius(8).Background(k.window).Border(1, p).Key("tour-msg"), "op", sent)
+				msg := fade(ui.Column(c).Padding(6, 8).Gap(4).Radius(rr(8)).Background(k.window).Border(1, p).Key("tour-msg"), "op", sent)
 				msg.AnimatePose(ui.Pose{Y: map[bool]float32{true: 0, false: 10}[sent]}, springSnappy)
 				msg.Children(func() {
 					text(c, "TypeError: cannot read…", 9, 12, 400, k.fg).SingleLine()
@@ -841,7 +844,7 @@ func (a *app) welcomeTour(c *ui.Context, k tokens) {
 		}
 	}()
 	ui.Overlay(c, func() {
-		ui.Column(c).Absolute().Left(0).Top(0).Size(w, h).Radius(14).Background(c.Theme().Background).Key("welcome-tour").Role(ui.RoleDialog).Label(tr("新手导览")).Children(func() {
+		ui.Column(c).Absolute().Left(0).Top(0).Size(w, h).Radius(rr(14)).Background(sheetBg(c)).Key("welcome-tour").Role(ui.RoleDialog).Label(tr("新手导览")).Children(func() {
 			ui.Scroll(c).Fill().Scrollbars(false).Children(func() {
 				ui.Column(c).Padding(24, 20).Gap(20).MaxWidth(420).MinHeight(h).Justify(ui.Center).Children(func() {
 					ui.Column(c).Gap(4).Children(func() {
@@ -852,13 +855,13 @@ func (a *app) welcomeTour(c *ui.Context, k tokens) {
 					ck := a.capKey()
 					ui.Row(c).Gap(8).Children(func() { // 要点改为图标格（用户要求少文字），原句作悬停提示与无障碍标签
 						for i, pt := range []vstep{vk(ck+" "+ck, "收集"), vk("⌘⏎", "合并发送"), vi("shield-check", "自动脱敏")} {
-							t := ui.Column(c).Grow(1).Basis(0).Padding(10, 4).Gap(6).Radius(10).Background(k.track).AlignItems(ui.Center).
-								Key("tour-pt-" + itoa(i)).Label(tr(welcomeTourPoints[i])).Tooltip(tr(welcomeTourPoints[i]))
+							t := tipOf(c, ui.Column(c).Grow(1).Basis(0).Padding(10, 4).Gap(6).Radius(rr(10)).Background(k.track).AlignItems(ui.Center).
+								Key("tour-pt-"+itoa(i)).Label(tr(welcomeTourPoints[i])), tr(welcomeTourPoints[i]))
 							t.Children(func() {
 								if pt.icon != "" {
 									ui.Box(c).Height(24).Center().Children(func() { licon(c, pt.icon, 20, k.ok) })
 								} else {
-									ui.Row(c).Height(24).Padding(0, 8).Radius(6).Background(k.window).Border(1, k.inputBorder).AlignItems(ui.Center).
+									ui.Row(c).Height(24).Padding(0, 8).Radius(rr(6)).Background(k.window).Border(1, k.inputBorder).AlignItems(ui.Center).
 										Children(func() { text(c, pt.key, 12, 16, 600, k.fg) })
 								}
 								text(c, tr(pt.label), 11, 16, 500, k.fg).SingleLine()
@@ -866,7 +869,7 @@ func (a *app) welcomeTour(c *ui.Context, k tokens) {
 						}
 					})
 					ui.Column(c).Gap(8).Children(func() {
-						if ui.Button(c, tr("花 1 分钟试一下")).FillWidth().Clicked() {
+						if btnOf(c, tr("花 1 分钟试一下")).FillWidth().Clicked() {
 							act = func() { a.leaveTour(true) }
 						}
 						ui.Row(c).Justify(ui.Center).Children(func() {

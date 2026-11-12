@@ -76,11 +76,11 @@ type tokens struct {
 	danger, amberBar, amberText, tealBar ui.Color
 	repeatIcon, violetText, violetIcon   ui.Color
 	sparkRow, laterChip                  ui.Color
-	bandLine                             ui.Color // 剪贴页分段头细线
-	pressed                              ui.Color // 浮钮按下态（如已置顶）
-	hoverBg                              ui.Color // hover:bg-black/5（深色 white/5）
-	selRim, selHalo                      ui.Color // 选中柔光（--selection-rim / --selection-halo）
-	pt                                   bool     // Platinum 配色方案（直角斜面，结构另绘）
+	bandLine                             ui.Color   // 剪贴页分段头细线
+	pressed                              ui.Color   // 浮钮按下态（如已置顶）
+	hoverBg                              ui.Color   // hover:bg-black/5（深色 white/5）
+	selRim, selHalo                      ui.Color   // 选中柔光（--selection-rim / --selection-halo）
+	th                                   styleTheme // 当前主题（没有主题生效时是 modernTheme）；共用代码经它问主题要不要接管 / 修饰
 }
 
 func init() {
@@ -127,6 +127,10 @@ var (
 )
 
 func tok(c *ui.Context) tokens {
+	buildCtx = c
+	if lib := *c.Theme(); theme().LibTheme(&lib) { // 主题要改库主题（提示气泡底色等）：每帧首次取变量时换上
+		c.SetTheme(&lib)
+	}
 	if c.Theme().Dark {
 		return schemed(darkTokens)
 	}

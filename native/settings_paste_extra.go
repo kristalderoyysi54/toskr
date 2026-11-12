@@ -43,7 +43,7 @@ func groupSummary(g store.PromptGroup, snippets []store.PromptSnippet) (int, str
 
 // ruleFold：卡片内细边折叠块（同 Tauri <details className="rounded-lg border px-3 py-2">）。
 func ruleFold(c *ui.Context, k tokens, s settingsTokens, key, title string, open *bool, body func()) {
-	ui.Column(c).Padding(8, 12).Radius(8).Border(1, s.rowBorder).Key(key).Children(func() {
+	ui.Column(c).Padding(8, 12).Radius(rr(8)).Border(1, s.rowBorder).Key(key).Children(func() {
 		h := ui.Row(c).Gap(4).AlignItems(ui.Center).Role(ui.RoleButton).Label(title).Key(key + "-head")
 		col := k.muted
 		if h.Hovered() {
@@ -80,7 +80,7 @@ func (a *app) ruleTemplateOrder(c *ui.Context, k tokens, s settingsTokens, st st
 			label = tr(groups[cur].Name)
 			n, sum = groupSummary(groups[cur], st.PromptSnippets)
 		}
-		b := ui.Row(c).Width(260).Height(32).Padding(0, 8).Gap(4).Radius(10).Border(1, s.inputBorder).AlignItems(ui.Center).Key("rule-group").
+		b := ui.Row(c).Width(260).Height(32).Padding(0, 8).Gap(4).Radius(rr(10)).Border(1, s.inputBorder).AlignItems(ui.Center).Key("rule-group").
 			Role(ui.RoleButton).Label(tr("提示词组"))
 		if disabled {
 			b.Opacity(0.55)
@@ -123,10 +123,10 @@ func (a *app) ruleOutputPreview(c *ui.Context, k tokens, s settingsTokens, mode 
 	ui.Column(c).Padding(12, 0, 0, 0).Gap(2).BorderWidth(1, 0, 0, 0).BorderColor(s.rowBorder).Key("rule-preview").Children(func() {
 		tightText(c, tr("输出预览"), 13, 18, 400, k.fg)
 		text(c, tr("用示例内容预览输出格式，不做隐私处理，也不会真实粘贴或回车。"), 11, 16, 400, k.muted).Wrap()
-		ui.Row(c).Margin(8, 0, 0, 0).Padding(8).Gap(8).Radius(8).Border(1, s.rowBorder).AlignItems(ui.Stretch).Children(func() {
+		ui.Row(c).Margin(8, 0, 0, 0).Padding(8).Gap(8).Radius(rr(8)).Border(1, s.rowBorder).AlignItems(ui.Stretch).Children(func() {
 			ui.Column(c).Grow(1).Basis(0).Gap(4).Children(func() {
 				text(c, tr("测试内容（可编辑，最多 4000 字符）"), 10, 14, 500, k.muted).SingleLine()
-				box := ui.Column(c).Grow(1).Padding(6, 8).Radius(8).Background(s.input).Border(1, s.inputBorder)
+				box := ui.Column(c).Grow(1).Padding(6, 8).Radius(rr(8)).Background(s.input).Border(1, s.inputBorder)
 				box.Children(func() {
 					ui.TextAreaBase(c, &u.preview).FillWidth().Lines(5, 10).Font(fontMono).FontSize(10).FixedLineHeight(16).
 						TextColor(k.fg).Label(tr("输出方式预览测试内容"))
@@ -138,7 +138,7 @@ func (a *app) ruleOutputPreview(c *ui.Context, k tokens, s settingsTokens, mode 
 				if strings.TrimSpace(out) == "" {
 					shown, col = tr("（空内容不会发送）"), k.muted
 				}
-				ui.Column(c).Grow(1).Padding(6, 8).Radius(8).Background(k.track.Alpha(0.6)).Key("rule-preview-out").
+				ui.Column(c).Grow(1).Padding(6, 8).Radius(rr(8)).Background(k.track.Alpha(0.6)).Key("rule-preview-out").
 					Label(fmt.Sprintf(tr("%s格式预览结果"), modeLabel)).Children(func() {
 					text(c, shown, 10, 16, 400, col).Font(fontMono).Wrap()
 				})
@@ -179,7 +179,7 @@ func (a *app) currentTargetSection(c *ui.Context, k tokens, s settingsTokens) se
 	rows[0].below = func() {
 		ui.Column(c).Margin(4, 0, 0, 0).Gap(8).Key("paste-target-body").Children(func() {
 			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-				ui.Box(c).Size(32, 32).Radius(8).Background(k.track).Center().Children(func() {
+				ui.Box(c).Size(32, 32).Radius(rr(8)).Background(k.track).Center().Children(func() {
 					var img ui.ImageSource
 					if known {
 						img = a.appIcon(bundle)
@@ -193,7 +193,7 @@ func (a *app) currentTargetSection(c *ui.Context, k tokens, s settingsTokens) se
 				ui.Column(c).Grow(1).Basis(0).Gap(1).Children(func() {
 					text(c, tr("当前粘贴目标"), 10, 14, 500, k.muted)
 					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-						text(c, name, 13, 18, 600, k.fg).SingleLine().Tooltip(bundle)
+						tipOf(c, text(c, name, 13, 18, 600, k.fg).SingleLine(), bundle)
 						ui.Row(c).Height(18).Padding(0, 6).Radius(9).Background(tone.Alpha(0.12)).AlignItems(ui.Center).Children(func() {
 							text(c, status, 10, 14, 500, tone).SingleLine()
 						})
@@ -206,7 +206,7 @@ func (a *app) currentTargetSection(c *ui.Context, k tokens, s settingsTokens) se
 			if !known {
 				text(c, tr("请先点目标应用的输入框，再唤出 Toskr。位置未确认前不会粘贴。"), 11, 16, 400, k.muted).Wrap()
 			}
-			ui.Column(c).Padding(8, 10).Gap(3).Radius(8).Background(k.track.Alpha(0.6)).Children(func() {
+			ui.Column(c).Padding(8, 10).Gap(3).Radius(rr(8)).Background(k.track.Alpha(0.6)).Children(func() {
 				text(c, fmt.Sprintf(tr("使用方案：%s"), profileName(r.Profile)), 11, 16, 500, k.fg).SingleLine()
 				text(c, fmt.Sprintf(tr("规则来源：%s"), a.matchReason(r, stale)), 11, 16, 400, k.muted).Wrap()
 				text(c, fmt.Sprintf(tr("其他模板优先显示「%s」组；不会自动套用模板。"), tr(r.Group.Name)), 11, 16, 400, k.muted).Wrap()

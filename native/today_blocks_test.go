@@ -55,7 +55,7 @@ func TestTodayTimeBlocks(t *testing.T) {
 	a.taskSub = 0
 	tt.Frame()
 	tt.Frame()
-	for _, s := range []string{"今天 0 / 2 完成", "1 项逾期", "1 个日程", "周会", "16:00–17:30", "空档 45 分钟", "未排期", "整理截图标注需求", "往日未完成"} {
+	for _, s := range []string{"待办", "已完成", "已逾期", "日程", "周会", "16:00–17:30", "空档 45 分钟", "未排期", "整理截图标注需求", "往日未完成"} {
 		if !tt.HasText(s) {
 			t.Fatalf("缺 %q %v", s, tt.Texts())
 		}

@@ -85,7 +85,7 @@ func (a *app) aliasDictionary(c *ui.Context, k tokens, s settingsTokens, st stor
 		submit := false
 		if u.open { // 添加表单：点「+ 添加」才出现，加成功或取消后收起
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-				pick := ui.Row(c).Height(32).Padding(0, 8).Gap(4).Radius(10).Background(s.input).Border(1, s.inputBorder).AlignItems(ui.Center).Key("alias-cat").Role(ui.RoleButton).Label(tr("化名类别"))
+				pick := ui.Row(c).Height(32).Padding(0, 8).Gap(4).Radius(rr(10)).Background(s.input).Border(1, s.inputBorder).AlignItems(ui.Center).Key("alias-cat").Role(ui.RoleButton).Label(tr("化名类别"))
 				pick.Children(func() {
 					text(c, tr(core.AliasCategoryLabel(u.category, st.AliasCategories)), 12, 17, 400, k.fg).SingleLine()
 					licon(c, "chevron-down", 12, k.muted)
@@ -101,7 +101,7 @@ func (a *app) aliasDictionary(c *ui.Context, k tokens, s settingsTokens, st stor
 						u.catOpen = true
 					}
 				})
-				box := ui.Row(c).Grow(1).Height(32).Padding(0, 8).Radius(10).Background(s.input).Border(1, s.inputBorder).AlignItems(ui.Center)
+				box := ui.Row(c).Grow(1).Height(32).Padding(0, 8).Radius(rr(10)).Background(s.input).Border(1, s.inputBorder).AlignItems(ui.Center)
 				if u.issue != "" {
 					box.Border(1, k.danger)
 				}
@@ -140,7 +140,7 @@ func (a *app) aliasDictionary(c *ui.Context, k tokens, s settingsTokens, st stor
 			text(c, tr("暂无词典条目。添加后，发送内容里出现的原文会自动换成占位符。"), 11, 16, 400, k.muted).Wrap()
 		}
 		for _, e := range st.AliasEntities {
-			ui.Row(c).Gap(8).Padding(2, 4, 2, 8).Radius(6).Background(k.track).AlignItems(ui.Center).Key("alias-" + e.ID).Label(tr("化名词典条目")).Children(func() {
+			ui.Row(c).Gap(8).Padding(2, 4, 2, 8).Radius(rr(6)).Background(k.track).AlignItems(ui.Center).Key("alias-" + e.ID).Label(tr("化名词典条目")).Children(func() {
 				text(c, e.Placeholder, 11, 16, 500, k.muted).Font(fontMono).SingleLine()
 				if u.editID == e.ID {
 					in := ui.TextInputBase(c, &u.editText).Grow(1).Basis(0).Font(fontSans).FontSize(12).TextColor(k.fg).Focus().Label(fmt.Sprintf(tr("编辑 %s 的原文"), e.Placeholder))
@@ -196,9 +196,9 @@ func (a *app) aliasDemo(c *ui.Context, k tokens, st store.Settings) {
 func (a *app) aliasCategoryForm(c *ui.Context, k tokens, s settingsTokens, st store.Settings, act *func()) {
 	u := &a.aliasUI
 	ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-		ui.TextInputBase(c, &u.catCode).Width(110).Height(30).Padding(0, 8).Radius(8).Background(s.input).Font(fontSans).FontSize(12).
+		ui.TextInputBase(c, &u.catCode).Width(110).Height(30).Padding(0, 8).Radius(rr(8)).Background(s.input).Font(fontSans).FontSize(12).
 			Placeholder(tr("如 VENDOR")).Label(tr("自定义类别码"))
-		ui.TextInputBase(c, &u.catLabel).Grow(1).Height(30).Padding(0, 8).Radius(8).Background(s.input).Font(fontSans).FontSize(12).
+		ui.TextInputBase(c, &u.catLabel).Grow(1).Height(30).Padding(0, 8).Radius(rr(8)).Background(s.input).Font(fontSans).FontSize(12).
 			Placeholder(tr("如 供应商")).Label(tr("自定义类别显示名"))
 		if button(c, s, "添加") {
 			code, label := strings.TrimSpace(u.catCode), strings.TrimSpace(u.catLabel)

@@ -69,7 +69,7 @@ func (a *app) targetIcon(c *ui.Context, k tokens, f macos.FrontApp) ui.Element {
 	if img := a.appIcon(f.BundleID); img != nil {
 		return ui.Image(c, img).Size(16, 16).Radius(4)
 	}
-	return ui.Box(c).Size(16, 16).Radius(6).Background(k.chip).Center().Children(func() { licon(c, "app-window", 8, k.muted) })
+	return ui.Box(c).Size(16, 16).Radius(rr(6)).Background(k.chip).Center().Children(func() { licon(c, "app-window", 8, k.muted) })
 }
 
 var (

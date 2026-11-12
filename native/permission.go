@@ -158,10 +158,10 @@ func (a *app) permissionBanner(c *ui.Context, k tokens) {
 
 // bannerButton：横幅里的小按钮（24 高、文字单行不折、不被挤压）。
 func bannerButton(c *ui.Context, s settingsTokens, label string) bool {
-	if s.pt {
-		return ptButton(c, label)
+	if clicked, ok := s.th.TextButton(c, label); ok {
+		return clicked
 	}
-	b := ui.Row(c).Height(24).Padding(0, 8).Radius(8).Border(1, s.btnBorder).AlignItems(ui.Center).Shrink(0)
+	b := ui.Row(c).Height(24).Padding(0, 8).Radius(rr(8)).Border(1, s.btnBorder).AlignItems(ui.Center).Shrink(0)
 	bg := s.btn
 	if b.Hovered() {
 		bg = s.btnHover

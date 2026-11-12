@@ -176,7 +176,16 @@ func (a *app) lensChevron(c *ui.Context, k tokens) {
 // lensDetail：展开区「方案 [名称 ▾] 自动匹配 / 临时指定」+ 失效原因 / 暂停的临时方案确认。
 func (a *app) lensDetail(c *ui.Context, k tokens) {
 	r, stale := a.resolution()
-	ui.Column(c).Margin(4, 0, 0, 0).Padding(6, 8).Radius(10).Background(k.track.Alpha(0.6)).Gap(4).Key("lens-detail").Children(func() {
+	box := ui.Column(c).Margin(4, 0, 0, 0).Padding(6, 8).Radius(rr(10)).Background(k.track.Alpha(0.6)).Gap(4).Key("lens-detail")
+	k.th.LensDetail(box)
+	box.Children(func() {
+		if a.target.PID != 0 { // 同 Tauri：识别到目标时提醒确认的只是应用
+			text(c, tr("仅确认目标应用，未确认输入位置"), 10, 12.5, 400, k.muted)
+		}
+		defer func() { // 同 Tauri 展开区：方案行之下是本次生效规则台账（前四行可本次切换）
+			groups, _, _ := a.store.Settings().ProfileConfig()
+			ui.Column(c).Margin(4, 0, 0, 0).Children(func() { a.ruleLedger(c, k, r, groups, a.target.PID != 0) })
+		}()
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 			text(c, tr("方案"), 10, 14, 400, k.muted)
 			name := profileName(r.Profile)
@@ -185,8 +194,9 @@ func (a *app) lensDetail(c *ui.Context, k tokens) {
 			if r.Source == "temporary" {
 				border, fg = stok(c).primary.Alpha(0.5), stok(c).primary
 			}
-			btn := ui.Row(c).Gap(4).Padding(1, 6).Radius(6).Border(1, border).AlignItems(ui.Center).MaxWidth(160).
-				Key("profile-btn").Role(ui.RoleButton).Label(fmt.Sprintf(tr("本次发送方案：%s，点击查看与切换"), name)).Tooltip(name)
+			btn := tipOf(c, ui.Row(c).Gap(4).Padding(1, 6).Radius(rr(6)).Border(1, border).AlignItems(ui.Center).MaxWidth(160).
+				Key("profile-btn").Role(ui.RoleButton).Label(fmt.Sprintf(tr("本次发送方案：%s，点击查看与切换"), name)), name)
+			k.th.LensButton(btn)
 			if btn.Hovered() {
 				btn.Background(k.hoverBg)
 			}
@@ -255,7 +265,7 @@ func (a *app) quickSwitch(c *ui.Context, k tokens) {
 	}
 	sep := func() { ui.Box(c).Height(1).Margin(10, -8).Background(k.inputBorder.Alpha(0.6)) }
 	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Box(c).Size(24, 24).Radius(6).Background(k.chip).Center().Children(func() { licon(c, "app-window", 12, k.muted) })
+		ui.Box(c).Size(24, 24).Radius(rr(6)).Background(k.chip).Center().Children(func() { licon(c, "app-window", 12, k.muted) })
 		ui.Column(c).Grow(1).Basis(0).Children(func() {
 			text(c, fmt.Sprintf(tr("发送到 %s"), a.target.Name), 12, 17, 600, k.fg).SingleLine()
 			text(c, a.matchReason(r, stale), 10, 14, 400, k.muted).Wrap()
@@ -277,7 +287,7 @@ func (a *app) quickSwitch(c *ui.Context, k tokens) {
 	ui.Column(c).Gap(2).Label(tr("选择本次临时发送方案")).Children(func() {
 		for i, p := range cands {
 			sel := p.ID == r.Profile.ID
-			row := ui.Row(c).Gap(8).Padding(6, 8).Radius(6).AlignItems(ui.Center).Key("qp-" + p.ID).Role(ui.RoleButton).Label(profileName(p))
+			row := ui.Row(c).Gap(8).Padding(6, 8).Radius(rr(6)).AlignItems(ui.Center).Key("qp-" + p.ID).Role(ui.RoleButton).Label(profileName(p))
 			switch {
 			case sel:
 				row.Background(stok(c).primary.Alpha(0.1)).Border(1, stok(c).primary.Alpha(0.25))
@@ -309,7 +319,7 @@ func (a *app) quickSwitch(c *ui.Context, k tokens) {
 				if p.EnterPolicy == "allow" && r.Profile.EnterPolicy != "allow" {
 					fg = k.amberText
 				}
-				text(c, s, 10, 14, 400, fg).SingleLine().Grow(1).Basis(0).TextAlign(ui.End).Tooltip(s)
+				tipOf(c, text(c, s, 10, 14, 400, fg).SingleLine().Grow(1).Basis(0).TextAlign(ui.End), s)
 			})
 			if row.Clicked() && ready && !sel {
 				a.selectTempProfile(p.ID)
@@ -323,7 +333,7 @@ func (a *app) quickSwitch(c *ui.Context, k tokens) {
 	text(c, tr("本次生效规则"), 10, 14, 600, k.muted).Margin(0, 0, 6, 0)
 	a.ruleLedger(c, k, r, groups, ready)
 	if a.tempProfile != "" && !stale && a.target.BundleID != "" && r.Source == "temporary" {
-		b := ui.Row(c).Margin(10, 0, 0, 0).Padding(6, 8).Gap(6).Radius(6).Border(1, k.inputBorder).AlignItems(ui.Center).Key("make-permanent").Role(ui.RoleButton).
+		b := ui.Row(c).Margin(10, 0, 0, 0).Padding(6, 8).Gap(6).Radius(rr(6)).Border(1, k.inputBorder).AlignItems(ui.Center).Key("make-permanent").Role(ui.RoleButton).
 			Label(fmt.Sprintf(tr("以后发给 %s 都使用此方案"), a.target.Name))
 		if b.Hovered() {
 			b.Background(k.hoverBg)
@@ -338,8 +348,7 @@ func (a *app) quickSwitch(c *ui.Context, k tokens) {
 		}
 	}
 	ui.Row(c).Margin(10, 0, 0, 0).Padding(8, 0, 0, 0).BorderWidth(1, 0, 0, 0).BorderColor(k.inputBorder.Alpha(0.6)).AlignItems(ui.Center).Children(func() {
-		restore := ui.Row(c).Gap(4).AlignItems(ui.Center).Key("restore-auto").Role(ui.RoleButton).Label(tr("恢复自动匹配")).
-			Tooltip(fmt.Sprintf(tr("恢复自动匹配：%s"), profileName(auto.Profile)))
+		restore := tipOf(c, ui.Row(c).Gap(4).AlignItems(ui.Center).Key("restore-auto").Role(ui.RoleButton).Label(tr("恢复自动匹配")), fmt.Sprintf(tr("恢复自动匹配：%s"), profileName(auto.Profile)))
 		if a.tempProfile == "" {
 			restore.Opacity(0.4)
 		}
@@ -352,8 +361,7 @@ func (a *app) quickSwitch(c *ui.Context, k tokens) {
 			a.quickOpen = false
 		}
 		ui.Spacer(c)
-		edit := ui.Row(c).Gap(4).AlignItems(ui.Center).Key("edit-profile").Role(ui.RoleButton).Label(tr("编辑方案")).
-			Tooltip(fmt.Sprintf(tr("编辑 %s 的发送方案"), a.target.Name))
+		edit := tipOf(c, ui.Row(c).Gap(4).AlignItems(ui.Center).Key("edit-profile").Role(ui.RoleButton).Label(tr("编辑方案")), fmt.Sprintf(tr("编辑 %s 的发送方案"), a.target.Name))
 		edit.Children(func() {
 			licon(c, "settings-2", 12, k.muted)
 			text(c, tr("编辑方案"), 10, 14, 400, k.muted)
@@ -369,7 +377,9 @@ func (a *app) quickSwitch(c *ui.Context, k tokens) {
 // ruleLedger：本次生效规则台账（键弱值强）；interactive 时前四行可点开菜单做本次覆盖，隐私检查恒只读。
 func (a *app) ruleLedger(c *ui.Context, k tokens, r store.ProfileResolution, groups []store.PromptGroup, interactive bool) {
 	over := func(key string) bool { return slices.Contains(r.Overridden, key) }
+	icon, iconCol := "", k.muted // 下一行值前的小图标（隐私检查用），用完即清
 	row := func(key, val string, warn, overridden bool, menu func(m *ui.Menu)) {
+		defer func() { icon = "" }()
 		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
 			text(c, key, 10, 16, 400, k.muted).Width(52).TextAlign(ui.End)
 			fg := k.fg
@@ -377,9 +387,23 @@ func (a *app) ruleLedger(c *ui.Context, k tokens, r store.ProfileResolution, gro
 				fg = k.amberText
 			}
 			v := ui.Row(c).Gap(4).AlignItems(ui.Center).Key("rule-" + key).Role(ui.RoleButton).Label(val)
+			pick := interactive && menu != nil
+			if pick { // 同 Tauri SimpleSelect size="micro"：24 高带框小下拉
+				v.Height(24).Padding(0, 4).Radius(rr(6)).Border(1, k.inputBorder)
+				if v.Hovered() {
+					v.Background(k.hoverBg)
+				}
+			}
 			v.Children(func() {
-				text(c, val, 11, 16, 500, fg)
-				if interactive && menu != nil {
+				if icon != "" {
+					licon(c, icon, 12, iconCol)
+				}
+				if pick {
+					text(c, val, 10, 14, 500, fg)
+				} else {
+					text(c, val, 11, 16, 500, fg)
+				}
+				if pick {
 					licon(c, "chevron-down", 10, k.muted)
 				}
 				if overridden {
@@ -430,7 +454,8 @@ func (a *app) ruleLedger(c *ui.Context, k tokens, r store.ProfileResolution, gro
 				}
 			}
 		})
-		row(tr("隐私检查"), tr("发送时执行")+" · "+optLabel(privacyOpts, r.Profile.PrivacyPolicy), false, false, nil)
+		icon, iconCol = "shield-check", k.ok // 同 Tauri：隐私检查恒只读，绿盾 +「发送时执行」；策略明细在方案编辑里
+		row(tr("隐私检查"), tr("发送时执行"), false, false, nil)
 	})
 	if len(r.Overridden) > 0 && interactive {
 		b := ui.Row(c).Margin(6, 0, 0, 0).Gap(4).AlignItems(ui.Center).Key("reset-rules").Role(ui.RoleButton).Label(tr("恢复方案默认规则"))

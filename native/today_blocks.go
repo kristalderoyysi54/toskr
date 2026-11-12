@@ -124,23 +124,30 @@ func (a *app) todayBlocks(tl []store.Task, events []macos.CalendarEvent, now tim
 
 // todayStatsLine：三块统计压成一行文字（逾期用危险色，只落在那几个字上）。
 func (a *app) todayStatsLine(c *ui.Context, k tokens, ag todayAgenda, bills, events int, st store.Settings) {
-	ui.Row(c).Gap(4).Padding(0, 2).AlignItems(ui.Center).Key("today-stats").Children(func() {
-		text(c, fmt.Sprintf(tr("今天 %d / %d 完成"), ag.doneToday, ag.doneToday+ag.pending), 11, 16, 500, k.fg).SingleLine()
-		if ag.overdue > 0 {
-			text(c, fmt.Sprintf(tr("%d 项逾期"), ag.overdue), 11, 16, 500, k.danger).SingleLine()
-		}
-		extra := ""
-		if st.SubscriptionsEnabled && bills > 0 {
-			extra += fmt.Sprintf(tr("%d 笔扣款"), bills)
-		}
-		if st.CalendarOn && events > 0 {
-			if extra != "" {
-				extra += " · "
-			}
-			extra += fmt.Sprintf(tr("%d 个日程"), events)
-		}
-		if extra != "" {
-			text(c, extra, 11, 16, 400, k.muted).SingleLine().Grow(1).Basis(0).TextAlign(ui.End)
+	// 同 Tauri TodayPage 的 Stat 格：待办 / 已完成 / 已逾期（有逾期时数字转红），开了订阅 / 日历再加扣款 / 日程
+	type stat struct {
+		n     int
+		label string
+		red   bool
+	}
+	stats := []stat{{ag.pending, "待办", false}, {ag.doneToday, "已完成", false}, {ag.overdue, "已逾期", ag.overdue > 0}}
+	if st.SubscriptionsEnabled {
+		stats = append(stats, stat{bills, "扣款", false})
+	}
+	if st.CalendarOn {
+		stats = append(stats, stat{events, "日程", false})
+	}
+	ui.Row(c).Gap(6).AlignItems(ui.Stretch).Key("today-stats").Children(func() {
+		for _, x := range stats {
+			tile := ui.Column(c).Grow(1).Basis(0).Padding(4, 8).Radius(rr(10)).Background(k.track).InsetShadow(0, 1, 2, 0, k.insetShadow).Key("stat-" + x.label)
+			tile.Children(func() {
+				col := k.fg
+				if x.red {
+					col = k.danger
+				}
+				text(c, itoa(x.n), 13, 18, 600, col).FontFeatures("tnum").SingleLine()
+				text(c, tr(x.label), 10, 14, 400, k.muted).SingleLine()
+			})
 		}
 	})
 }
@@ -189,7 +196,7 @@ func (a *app) dayGrid(c *ui.Context, k tokens, bs []dayBlock, now time.Time) {
 			if gh < 20 {
 				continue
 			}
-			ui.Box(c).Absolute().Left(blockGutter).Right(0).Top(gy).Height(gh).Radius(8).Border(1, k.fg.Alpha(0.14)).BorderStyle(ui.BorderDashed).Center().
+			ui.Box(c).Absolute().Left(blockGutter).Right(0).Top(gy).Height(gh).Radius(rr(8)).Border(1, k.fg.Alpha(0.14)).BorderStyle(ui.BorderDashed).Center().
 				PassThrough().Key("gap-" + itoa(g[0])).Children(func() { text(c, fmt.Sprintf(tr("空档 %d 分钟"), g[1]-g[0]), 10, 14, 400, k.muted) })
 		}
 		avail := grid.Bounds().W - blockGutter
@@ -206,7 +213,7 @@ func (a *app) dayGrid(c *ui.Context, k tokens, bs []dayBlock, now time.Time) {
 		}
 		if preview >= 0 { // 拖放预览：落点时刻线（改时长时是整块轮廓）
 			if previewTo > preview {
-				ui.Box(c).Absolute().Left(blockGutter).Right(0).Top(y(preview)).Height(y(previewTo)-y(preview)).Radius(8).Border(1.5, s.primary.Alpha(0.7)).
+				ui.Box(c).Absolute().Left(blockGutter).Right(0).Top(y(preview)).Height(y(previewTo)-y(preview)).Radius(rr(8)).Border(1.5, s.primary.Alpha(0.7)).
 					Background(s.primary.Alpha(0.08)).PassThrough().Key("drop-preview")
 				text(c, hm(preview)+"–"+hm(previewTo), 10, 14, 600, s.primary).Absolute().Right(6).Top(y(previewTo) - 16).PassThrough().Key("drop-label")
 			} else {
@@ -227,8 +234,8 @@ func (a *app) eventBlock(c *ui.Context, k tokens, e macos.CalendarEvent, x, top,
 	if title == "" {
 		title = tr("（无标题）")
 	}
-	b := ui.Row(c).Absolute().Left(x).Top(top).Width(w).Height(h).Padding(3, 6, 3, 8).Gap(5).Radius(6).Background(col.Alpha(0.14)).Clip().
-		Key("evb-" + e.ID).Role(ui.RoleButton).Label(title).Tooltip(title + "\n" + eventTimeLabel(e) + "\n" + tr("点击在「日历」中打开"))
+	b := tipOf(c, ui.Row(c).Absolute().Left(x).Top(top).Width(w).Height(h).Padding(3, 6, 3, 8).Gap(5).Radius(rr(6)).Background(col.Alpha(0.14)).Clip().
+		Key("evb-"+e.ID).Role(ui.RoleButton).Label(title), title+"\n"+eventTimeLabel(e)+"\n"+tr("点击在「日历」中打开"))
 	b.Children(func() {
 		ui.Box(c).Absolute().Left(0).Top(0).Bottom(0).Width(2.5).Background(col)
 		ui.Column(c).Grow(1).Basis(0).Children(func() {
@@ -254,7 +261,7 @@ func s2color(hex string, k tokens) ui.Color {
 func (a *app) taskBlock(c *ui.Context, k tokens, s settingsTokens, t store.Task, b dayBlock, x, top, w, h float32, now time.Time) {
 	done := t.Status == "done"
 	focusing := a.focus != nil && a.focus.taskID == t.ID
-	blk := ui.Row(c).Absolute().Left(x).Top(top).Width(w).Height(h).Padding(3, 6, 3, 6).Gap(6).Radius(8).Background(k.card).Border(1, k.fg.Alpha(0.08)).AlignItems(ui.Start).Clip().
+	blk := ui.Row(c).Absolute().Left(x).Top(top).Width(w).Height(h).Padding(3, 6, 3, 6).Gap(6).Radius(rr(8)).Background(k.card).Border(1, k.fg.Alpha(0.08)).AlignItems(ui.Start).Clip().
 		Key("tb-" + t.ID).Role(ui.RoleButton).Label(t.Text)
 	hov := blk.Hovered()
 	elevated(blk, k, hov)
@@ -300,7 +307,7 @@ func (a *app) taskBlock(c *ui.Context, k tokens, s settingsTokens, t store.Task,
 			}
 		}
 		if !done { // 下沿把手：拖动改时长
-			grip := ui.Box(c).Absolute().Left(0).Right(0).Bottom(0).Height(6).Key("tbr-" + t.ID).Label(tr("拖动改时长")).Tooltip(tr("拖动改时长"))
+			grip := tipOf(c, ui.Box(c).Absolute().Left(0).Right(0).Bottom(0).Height(6).Key("tbr-"+t.ID).Label(tr("拖动改时长")), tr("拖动改时长"))
 			grip.Drag(taskDrag{id: t.ID, resize: true})
 			if hov {
 				ui.Box(c).Absolute().Left(w/2 - 9).Bottom(2).Width(18).Height(2).Radius(1).Background(k.muted.Alpha(0.5)).PassThrough()
@@ -507,4 +514,15 @@ func (a *app) focusCapsule(c *ui.Context, k tokens) {
 			a.endFocus()
 		}
 	})
+}
+
+func init() { // 与原版对齐后新增文案的英文（已有的键不覆盖）
+	for k, v := range map[string]string{
+		"待办": "To do", "已完成": "Done", "已逾期": "Overdue", "搜索卡片…": "Search cards…",
+		"仅确认目标应用，未确认输入位置": "Only the target app is confirmed, not the input field",
+	} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
 }

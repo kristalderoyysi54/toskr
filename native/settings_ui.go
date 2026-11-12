@@ -17,8 +17,8 @@ type settingsTokens struct {
 	toggleOff, toggleOffBorder, toggleInset    ui.Color
 	knob, knobOn                               ui.Color // 开关滑块（关 / 开；shadcn：浅色均为 background，深色关为 foreground、开为 primary-foreground）
 	btn, btnFg, btnBorder, btnShadow           ui.Color
-	btnHover                                   ui.Color // --button-primary-hover
-	pt                                         bool     // Platinum：控件换成 Mac OS 9 形态
+	btnHover                                   ui.Color   // --button-primary-hover
+	th                                         styleTheme // 当前主题（同 tokens.th）
 }
 
 var (
@@ -107,14 +107,13 @@ func (a *app) settingsShell(c *ui.Context, pages []setPage) {
 	if a.setQuery == "" && a.setPage < len(pages) && pages[a.setPage].label == "权限" {
 		a.pollPermissions()
 	}
-	if s.pt {
-		a.ptSettingsShell(c, k, s, pages)
+	if s.th.SettingsShell(a, c, k, s, pages) {
 		return
 	}
 	a.setPage = min(a.setPage, len(pages)-1)
 	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
 		ui.Column(c).Width(176).Padding(8).Background(s.aside).BorderWidth(0, 1, 0, 0).BorderColor(s.asideBorder).Children(func() {
-			ui.Row(c).Height(32).Padding(0, 8).Gap(6).Radius(10).Background(s.input).Border(1, s.inputBorder).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Height(32).Padding(0, 8).Gap(6).Radius(rr(10)).Background(s.input).Border(1, s.inputBorder).AlignItems(ui.Center).Children(func() {
 				licon(c, "search", 14, k.muted)
 				ui.TextInputBase(c, &a.setQuery).Bind(&a.setSearch).Grow(1).Font(fontSans).FontSize(12).FixedLineHeight(17).
 					TextColor(k.fg).PlaceholderColor(k.muted).Placeholder(tr("搜索设置"))
@@ -122,7 +121,7 @@ func (a *app) settingsShell(c *ui.Context, pages []setPage) {
 			ui.Column(c).Margin(6, 2, 0, 0).Gap(4).Children(func() {
 				for i, p := range pages {
 					sel := a.setPage == i && a.setQuery == ""
-					b := ui.Row(c).Height(33).Padding(8, 10).Gap(8).Radius(10).AlignItems(ui.Center).Key("nav-" + p.label)
+					b := ui.Row(c).Height(33).Padding(8, 10).Gap(8).Radius(rr(10)).AlignItems(ui.Center).Key("nav-" + p.label)
 					w, col := 400, k.muted
 					if sel {
 						w, col = 500, k.fg
@@ -160,7 +159,7 @@ func (a *app) settingsShell(c *ui.Context, pages []setPage) {
 							ui.Row(c).Height(28).Margin(12, 0, 0, 0).Gap(6).Children(func() {
 								for i, sub := range p.subs {
 									sel := a.setSub == i
-									b := ui.Row(c).Height(28).Padding(0, 10).Radius(10).AlignItems(ui.Center).Key("sub-" + sub)
+									b := ui.Row(c).Height(28).Padding(0, 10).Radius(rr(10)).AlignItems(ui.Center).Key("sub-" + sub)
 									bg, bd := ui.Transparent, ui.Transparent
 									if sel {
 										bg, bd = s.navSel, s.navSelBorder
@@ -221,8 +220,7 @@ func (a *app) searchResults(c *ui.Context, k tokens, s settingsTokens, pages []s
 }
 
 func settingsSection(c *ui.Context, k tokens, s settingsTokens, sec setSection) {
-	if s.pt {
-		ptSection(c, k, s, sec)
+	if s.th.SettingsSection(c, k, s, sec) {
 		return
 	}
 	rows := slices.DeleteFunc(slices.Clone(sec.rows), func(r setRow) bool { return r.hidden })
@@ -241,9 +239,9 @@ func settingsSection(c *ui.Context, k tokens, s settingsTokens, sec setSection) 
 			sec.body()
 			return
 		}
-		ui.Column(c).Radius(14).Background(s.card).Border(1, s.cardBorder).Children(func() {
+		ui.Column(c).Radius(rr(14)).Background(s.card).Border(1, s.cardBorder).Children(func() {
 			for i, r := range rows {
-				row := ui.Column(c).Padding(10, 14).Radius(10)
+				row := ui.Column(c).Padding(10, 14).Radius(rr(10))
 				if r.icon != "" {
 					row.Padding(12, 14)
 				}
@@ -257,7 +255,7 @@ func settingsSection(c *ui.Context, k tokens, s settingsTokens, sec setSection) 
 					}
 					ui.Row(c).Gap(gap).AlignItems(ui.Center).Children(func() {
 						if r.icon != "" { // 同 Tauri FeatureRow：size-8 rounded-lg bg-muted，图标 16、前景 75%
-							ui.Box(c).Size(32, 32).Radius(8).Background(k.track).Center().Children(func() {
+							ui.Box(c).Size(32, 32).Radius(rr(8)).Background(k.track).Center().Children(func() {
 								licon(c, r.icon, 16, k.fg.Alpha(0.75))
 							})
 						}
@@ -282,7 +280,7 @@ func settingsSection(c *ui.Context, k tokens, s settingsTokens, sec setSection) 
 							if r.hint != "" {
 								h := text(c, r.hint, 11, 16, 400, k.muted).Wrap()
 								if r.tip != "" {
-									h.Tooltip(r.tip)
+									tipOf(c, h, r.tip)
 								}
 							}
 						})
@@ -321,17 +319,14 @@ func grantedPill(c *ui.Context, k tokens, label string) {
 // ---- 控件（与 Tauri 的 SegmentedControl / Switch / Button / Input 同规格） ----
 
 func segmented(c *ui.Context, k tokens, sel *int, labels ...string) bool {
-	if k.pt { // Platinum：两项为单选钮，三项以上为弹出菜单（Tauri Segmented 的 platinum 分支）
-		if len(labels) == 2 {
-			return ptRadios(c, sel, labels...)
-		}
-		return ptPopup(c, sel, labels...)
+	if changed, ok := k.th.Segmented(c, sel, labels...); ok {
+		return changed
 	}
 	changed := false
-	ui.Row(c).Height(28).Padding(2).Radius(10).Background(k.track).InsetShadow(0, 1, 2, 0, k.insetShadow).Children(func() {
+	ui.Row(c).Height(28).Padding(2).Radius(rr(10)).Background(k.track).InsetShadow(0, 1, 2, 0, k.insetShadow).Children(func() {
 		for i, l := range labels {
 			on := *sel == i
-			b := ui.Box(c).Height(24).Padding(4, 8).Radius(8).Center().Key("seg-" + l)
+			b := ui.Box(c).Height(24).Padding(4, 8).Radius(rr(8)).Center().Key("seg-" + l)
 			w, col := 400, k.muted
 			if on {
 				w, col = 500, k.fg
@@ -340,7 +335,7 @@ func segmented(c *ui.Context, k tokens, sel *int, labels ...string) bool {
 			}
 			b.Children(func() {
 				if on { // 共享布局滑块（layoutId ${groupName}-thumb，springControl）
-					thumb := ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Radius(8).Background(k.pill).Shadow(0, 1, 2, 0, k.pillShadow).PassThrough().
+					thumb := ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Radius(rr(8)).Background(k.pill).Shadow(0, 1, 2, 0, k.pillShadow).PassThrough().
 						Transition(ui.ElementTransition{Match: layoutID{"seg-" + strings.Join(labels, "|")}, Animation: &springControl, Position: true, Size: true})
 					if !k.dark {
 						thumb.InsetShadow(0, 1, 0, 0, k.pillHighlight)
@@ -358,8 +353,8 @@ func segmented(c *ui.Context, k tokens, sel *int, labels ...string) bool {
 }
 
 func toggle(c *ui.Context, s settingsTokens, on *bool) bool {
-	if s.pt {
-		return ptCheckbox(c, on)
+	if changed, ok := s.th.Checkbox(c, on); ok {
+		return changed
 	}
 	changed := false
 	ui.Box(c).Size(32, 24).Children(func() {
@@ -386,10 +381,10 @@ func toggle(c *ui.Context, s settingsTokens, on *bool) bool {
 }
 
 func button(c *ui.Context, s settingsTokens, label string) bool {
-	if s.pt {
-		return ptButton(c, label)
+	if clicked, ok := s.th.TextButton(c, label); ok {
+		return clicked
 	}
-	b := ui.Row(c).Height(28).Padding(0, 10).Radius(10).Border(1, s.btnBorder).AlignItems(ui.Center)
+	b := ui.Row(c).Height(28).Padding(0, 10).Radius(rr(10)).Border(1, s.btnBorder).AlignItems(ui.Center)
 	bg, sh := s.btn, s.btnShadow
 	if b.Hovered() {
 		bg = s.btnHover
@@ -406,10 +401,8 @@ func button(c *ui.Context, s settingsTokens, label string) bool {
 
 func textField(c *ui.Context, k tokens, s settingsTokens, v *string, w float32, placeholder string, password bool) bool {
 	changed := false
-	box := ui.Row(c).Width(w).Height(32).Padding(0, 8).Radius(10).Background(s.input).Border(1, s.inputBorder).AlignItems(ui.Center)
-	if s.pt {
-		ptWell(box.Radius(0))
-	}
+	box := ui.Row(c).Width(w).Height(32).Padding(0, 8).Radius(rr(10)).Background(s.input).Border(1, s.inputBorder).AlignItems(ui.Center)
+	s.th.Well(box)
 	box.Children(func() {
 		in := ui.TextInputBase(c, v).Grow(1).Font(fontSans).FontSize(12).FixedLineHeight(17).TextColor(k.fg).PlaceholderColor(k.muted).Placeholder(placeholder)
 		if password {
@@ -422,10 +415,8 @@ func textField(c *ui.Context, k tokens, s settingsTokens, v *string, w float32, 
 
 func textBox(c *ui.Context, k tokens, s settingsTokens, v *string, minLines, maxLines int) bool {
 	changed := false
-	box := ui.Column(c).Padding(6, 8).Radius(10).Background(s.input).Border(1, s.inputBorder)
-	if s.pt {
-		ptWell(box.Radius(0))
-	}
+	box := ui.Column(c).Padding(6, 8).Radius(rr(10)).Background(s.input).Border(1, s.inputBorder)
+	s.th.Well(box)
 	box.Children(func() {
 		changed = ui.TextAreaBase(c, v).FillWidth().Lines(minLines, maxLines).Font(fontMono).FontSize(12).FixedLineHeight(17).TextColor(k.fg).Changed()
 	})
@@ -436,8 +427,8 @@ func textBox(c *ui.Context, k tokens, s settingsTokens, v *string, minLines, max
 func sliderValue(c *ui.Context, k tokens, v *float64, lo, hi, step float64, label string) bool {
 	changed := false
 	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-		if k.pt {
-			changed = ptSlider(c, v, lo, hi, step)
+		if ch, ok := k.th.Slider(c, v, lo, hi, step); ok {
+			changed = ch
 		} else if ui.Slider(c, v, lo, hi).Width(128).Changed() {
 			*v = float64(int(*v/step+0.5)) * step
 			changed = true
@@ -449,10 +440,8 @@ func sliderValue(c *ui.Context, k tokens, v *float64, lo, hi, step float64, labe
 
 // settingsSelect 是设置行右侧的下拉（Tauri SimpleSelect w-36：144×32、圆角 10、描边），点开原生菜单。
 func settingsSelect(c *ui.Context, k tokens, s settingsTokens, label string, menu func(*ui.Menu)) {
-	b := ui.Row(c).Width(144).Height(32).Padding(0, 8).Gap(4).Radius(10).Border(1, s.inputBorder).AlignItems(ui.Center)
-	if s.pt {
-		b.Radius(3).Border(1, ptG600)
-	} else if b.Hovered() {
+	b := ui.Row(c).Width(144).Height(32).Padding(0, 8).Gap(4).Radius(rr(10)).Border(1, s.inputBorder).AlignItems(ui.Center)
+	if !s.th.SelectTrigger(b) && b.Hovered() {
 		b.Background(k.track)
 	}
 	b.Children(func() {

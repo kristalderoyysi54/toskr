@@ -202,7 +202,7 @@ func (a *app) detailOutline(c *ui.Context, k tokens) {
 	box := ui.Column(c).Absolute().Right(6).Top(84).MaxHeight(vh - 190).Key("detail-outline").Label(tr("大纲"))
 	open := box.Hovered()
 	if open {
-		floatSurface(box.Width(208).Padding(6).Radius(10), k)
+		floatSurface(box.Width(208).Padding(6).Radius(rr(10)), k)
 	} else {
 		box.Padding(6, 4).Gap(7).AlignItems(ui.End)
 	}
@@ -223,8 +223,8 @@ func (a *app) detailOutline(c *ui.Context, k tokens) {
 		ui.Scroll(c).Shrink(1).Scrollbars(false).Children(func() {
 			ui.Column(c).Children(func() {
 				for i, h := range heads {
-					row := ui.Row(c).Height(24).Padding(0, 8, 0, float32(8+10*(min(h.level, 4)-1))).Radius(6).AlignItems(ui.Center).
-						Key("ol-" + itoa(i)).Role(ui.RoleButton).Label(tr("跳到：") + h.title).Tooltip(h.title)
+					row := tipOf(c, ui.Row(c).Height(24).Padding(0, 8, 0, float32(8+10*(min(h.level, 4)-1))).Radius(rr(6)).AlignItems(ui.Center).
+						Key("ol-"+itoa(i)).Role(ui.RoleButton).Label(tr("跳到：")+h.title), h.title)
 					col, weight := k.muted, 400
 					if i == cur {
 						col, weight = k.fg, 600

@@ -173,7 +173,7 @@ func (a *app) fanoutPicker(c *ui.Context, k tokens, n store.Note) {
 		if len(picked) >= 2 {
 			label = fmt.Sprintf(tr("发到 %d 个应用"), len(picked))
 		}
-		btn := ui.Row(c).Height(32).Radius(10).Justify(ui.Center).AlignItems(ui.Center).Key("fan-go").Role(ui.RoleButton).Label(label)
+		btn := ui.Row(c).Height(32).Radius(rr(10)).Justify(ui.Center).AlignItems(ui.Center).Key("fan-go").Role(ui.RoleButton).Label(label)
 		st := stok(c)
 		btn.Background(st.btn).Border(1, st.btnBorder).Shadow(0, 1, 2, 0, st.btnShadow)
 		if len(picked) < 2 {

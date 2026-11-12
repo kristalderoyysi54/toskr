@@ -141,7 +141,7 @@ func (a *app) hotkeyField(c *ui.Context, k tokens, slot hotkeySlot) {
 	case cur == "":
 		label = tr("未设置")
 	}
-	box := ui.Row(c).Height(28).Padding(0, 10).Radius(10).Background(k.track).AlignItems(ui.Center).Gap(6).
+	box := ui.Row(c).Height(28).Padding(0, 10).Radius(rr(10)).Background(k.track).AlignItems(ui.Center).Gap(6).
 		Role(ui.RoleButton).Label(fmt.Sprintf(tr("%s快捷键：%s，点击录制"), tr(slot.label), label)).Focusable()
 	if recording {
 		box.Border(1, stok(c).primary).Focus()

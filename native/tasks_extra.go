@@ -182,7 +182,7 @@ func (a *app) taskCalendar(c *ui.Context, k tokens, now time.Time) {
 					}
 				}
 				if a.taskCalMonth != 0 {
-					b := ui.Box(c).Padding(2, 6).Radius(6).Role(ui.RoleButton).Label(tr("今天"))
+					b := ui.Box(c).Padding(2, 6).Radius(rr(6)).Role(ui.RoleButton).Label(tr("今天"))
 					if b.Hovered() {
 						b.Background(k.hoverBg)
 					}
@@ -219,7 +219,7 @@ func (a *app) taskCalendar(c *ui.Context, k tokens, now time.Time) {
 								}
 							}
 							bills := len(billsOn1(day))
-							cell := ui.Column(c).Grow(1).Basis(0).Height(36).Radius(8).Justify(ui.Center).AlignItems(ui.Center).
+							cell := ui.Column(c).Grow(1).Basis(0).Height(36).Radius(rr(8)).Justify(ui.Center).AlignItems(ui.Center).
 								Key(day.Format("0102")).Role(ui.RoleButton).Label(monthDay(day))
 							fg := k.fg
 							switch {
@@ -277,7 +277,7 @@ func (a *app) taskCalendar(c *ui.Context, k tokens, now time.Time) {
 		}
 		text(c, label, 10, 14, 400, k.muted).Padding(0, 4)
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-			ui.TextInputBase(c, &a.taskCalDraft).Grow(1).Height(26).Padding(0, 6).Radius(6).Border(1, k.inputBorder).Font(fontSans).FontSize(13).
+			ui.TextInputBase(c, &a.taskCalDraft).Grow(1).Height(26).Padding(0, 6).Radius(rr(6)).Border(1, k.inputBorder).Font(fontSans).FontSize(13).
 				TextColor(k.fg).PlaceholderColor(k.muted).Placeholder(fmt.Sprintf(tr("为%s添加任务…"), label)).Label(tr("为选中日期添加任务")).
 				OnTextKey(func(key ui.TextKey) bool {
 					if key.Key == ui.KeyEnter && key.Mods == 0 {

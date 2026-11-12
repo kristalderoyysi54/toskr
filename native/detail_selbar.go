@@ -302,14 +302,14 @@ func (a *app) detailSelectionBar(c *ui.Context, k tokens, n store.Note) {
 	showAlias := !d.edit // 同 Tauri onAddAlias={editing ? undefined : …}：阅读 / 选词态（含只读预览）可加入词典
 	blocked := a.targetBlockedReason()
 	bar.Children(func() {
-		ui.Row(c).Height(32).Padding(0, 6).Gap(2).Radius(10).Background(k.floatBtn).Border(1, k.floatBorder).
+		ui.Row(c).Height(32).Padding(0, 6).Gap(2).Radius(rr(10)).Background(k.floatBtn).Border(1, k.floatBorder).
 			Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB).AlignItems(ui.Center).Children(func() {
 			// 字数用等宽数字并按 4 位预留宽度：拖选时数字变化不再让整条工具条伸缩抖动（Tauri 只有 tabular-nums，位数变化仍会跳）
 			cnt := utf8.RuneCountInString(sel)
 			slot, _ := c.MeasureText(0, ui.Span{Text: fmt.Sprintf(tr("已选 %d 字"), max(cnt, 1000)), Font: fontSans, Size: 10})
 			text(c, fmt.Sprintf(tr("已选 %d 字"), cnt), 10, 14, 400, k.muted).FontFeatures("tnum").Padding(0, 6).MinWidth(slot + 14).Key("sb-count")
 			btn := func(icon, label string, disabled bool) bool {
-				b := ui.Row(c).Height(24).Padding(0, 6).Gap(4).Radius(6).AlignItems(ui.Center).Key("sb-" + icon).Role(ui.RoleButton).Label(label).Tooltip(label)
+				b := tipOf(c, ui.Row(c).Height(24).Padding(0, 6).Gap(4).Radius(rr(6)).AlignItems(ui.Center).Key("sb-" + icon).Role(ui.RoleButton).Label(label), label)
 				col := k.muted
 				switch {
 				case disabled:
@@ -341,7 +341,7 @@ func (a *app) detailSelectionBar(c *ui.Context, k tokens, n store.Note) {
 			}
 			sep := func() { ui.Box(c).Size(1, 16).Margin(0, 2).Background(k.fg.Alpha(0.1)) }
 			toggle := func(icon, label string, on, disabled bool) bool {
-				b := ui.Box(c).Size(24, 24).Radius(6).Center().Key("sb-" + icon).Role(ui.RoleButton).Label(label).Tooltip(label)
+				b := tipOf(c, ui.Box(c).Size(24, 24).Radius(rr(6)).Center().Key("sb-" + icon).Role(ui.RoleButton).Label(label), label)
 				col := k.muted
 				switch {
 				case disabled:
@@ -387,7 +387,7 @@ func (a *app) detailSelectionBar(c *ui.Context, k tokens, n store.Note) {
 			}
 			sep()
 			cur := blockFormatAt(src, lo, hi)
-			fm := ui.Row(c).Height(24).Padding(0, 6).Gap(2).Radius(6).AlignItems(ui.Center).Key("sb-format").Role(ui.RoleButton).Label(tr("段落格式"))
+			fm := ui.Row(c).Height(24).Padding(0, 6).Gap(2).Radius(rr(6)).AlignItems(ui.Center).Key("sb-format").Role(ui.RoleButton).Label(tr("段落格式"))
 			if fm.Hovered() {
 				fm.Background(k.track)
 			}
@@ -414,7 +414,7 @@ func (a *app) detailSelectionBar(c *ui.Context, k tokens, n store.Note) {
 				}
 			}
 			sep()
-			ops := ui.Row(c).Height(24).Padding(0, 6).Radius(6).AlignItems(ui.Center).Key("sb-ops").Role(ui.RoleButton).Label(tr("处理选中内容")).Tooltip(tr("处理选中内容"))
+			ops := tipOf(c, ui.Row(c).Height(24).Padding(0, 6).Radius(rr(6)).AlignItems(ui.Center).Key("sb-ops").Role(ui.RoleButton).Label(tr("处理选中内容")), tr("处理选中内容"))
 			if ops.Hovered() {
 				ops.Background(k.track)
 			}
@@ -449,12 +449,12 @@ func (a *app) detailSelectionBar(c *ui.Context, k tokens, n store.Note) {
 				p.Top(38)
 			}
 			p.Children(func() {
-				ui.Column(c).Padding(6).Gap(6).Radius(10).Background(k.floatBtn).Border(1, k.floatBorder).
+				ui.Column(c).Padding(6).Gap(6).Radius(rr(10)).Background(k.floatBtn).Border(1, k.floatBorder).
 					Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB).Children(fn)
 			})
 		}
 		field := func(v *string, w float32, label, ph string, onEnter func()) {
-			ui.Row(c).Height(28).Padding(0, 8).Radius(6).Background(k.window).Border(1, k.fg.Alpha(0.1)).AlignItems(ui.Center).Width(w).Children(func() {
+			ui.Row(c).Height(28).Padding(0, 8).Radius(rr(6)).Background(k.window).Border(1, k.fg.Alpha(0.1)).AlignItems(ui.Center).Width(w).Children(func() {
 				ui.TextInputBase(c, v).Grow(1).Font(fontSans).FontSize(12).FixedLineHeight(18).TextColor(k.fg).
 					PlaceholderColor(k.muted).Placeholder(ph).Label(label).Focus().OnTextKey(func(key ui.TextKey) bool {
 					switch key.Key {
@@ -484,7 +484,7 @@ func (a *app) detailSelectionBar(c *ui.Context, k tokens, n store.Note) {
 			pop("sb-link-pop", func() {
 				ui.Row(c).Gap(6).AlignItems(ui.Center).Label(tr("添加链接")).Children(func() {
 					field(&d.linkDraft, 196, tr("链接地址"), tr("粘贴链接地址"), applyLink)
-					if ui.Button(c, tr("应用")).Disabled(strings.TrimSpace(d.linkDraft) == "").Clicked() {
+					if btnOf(c, tr("应用")).Disabled(strings.TrimSpace(d.linkDraft) == "").Clicked() {
 						applyLink()
 					}
 				})
@@ -508,7 +508,7 @@ func (a *app) detailSelectionBar(c *ui.Context, k tokens, n store.Note) {
 						ui.Row(c).Grow(1).Basis(0).Wrap().Gap(4).Label(tr("化名类别")).Children(func() {
 							for _, cat := range core.AliasPresetCategories {
 								on := d.aliasCat == cat.Code
-								ch := ui.Row(c).Height(20).Padding(0, 6).Radius(6).AlignItems(ui.Center).Key("sb-cat-" + cat.Code).Role(ui.RoleButton).Label(tr(cat.Label)).Selected(on)
+								ch := ui.Row(c).Height(20).Padding(0, 6).Radius(rr(6)).AlignItems(ui.Center).Key("sb-cat-" + cat.Code).Role(ui.RoleButton).Label(tr(cat.Label)).Selected(on)
 								col, w := k.muted, 400
 								switch {
 								case on:
@@ -526,7 +526,7 @@ func (a *app) detailSelectionBar(c *ui.Context, k tokens, n store.Note) {
 								}
 							}
 						})
-						if ui.Button(c, tr("加入")).Disabled(strings.TrimSpace(d.aliasText) == "").Clicked() {
+						if btnOf(c, tr("加入")).Disabled(strings.TrimSpace(d.aliasText) == "").Clicked() {
 							addAlias()
 						}
 					})

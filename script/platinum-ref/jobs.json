@@ -1,0 +1,19 @@
+[
+ {"name": "main-platinum"},
+ {"name": "pt-hover", "steps": [{"hover": [190, 180]}]},
+ {"name": "pt-checked", "steps": [{"eval": "window.notesStore.getState().setChecked(['n1','n2'])"}]},
+ {"name": "pt-search", "steps": [{"eval": "window.uiStore.getState().setSearchOpen(true)"}]},
+ {"name": "pt-clip", "steps": [{"eval": "window.uiStore.getState().setPage('clipboard')"}]},
+ {"name": "pt-clip2", "steps": [{"eval": "(()=>{const s=window.notesStore.getState();s.addClipNote('brew install --cask toskr',{sourceApp:'Terminal'});s.addClipNote('周五前把 mygo 原生版对比报告发给团队，附内存与启动耗时。',{sourceApp:'Safari'});s.addClipNote('https://github.com/egoist/mygo',{sourceApp:'Arc'});window.uiStore.getState().setPage('clipboard')})()"}]},
+ {"name": "pt-tasks", "steps": [{"eval": "window.uiStore.getState().setPage('tasks')"}]},
+ {"name": "pt-tasks2", "steps": [{"eval": "(()=>{const s=window.notesStore.getState();s.addTask('更新 lessons');s.addTask('整理截图标注需求');s.addTask('交 mygo 对比报告');window.uiStore.getState().setPage('tasks');window.uiStore.getState().setRemindersSubview('tasks')})()"}]},
+ {"name": "pt-menu", "steps": [{"click": [338, 33]}]},
+ {"name": "pt-lens", "steps": [{"click": [349, 69]}]},
+ {"name": "pt-palette", "steps": [{"eval": "window.uiStore.getState().setCommandPaletteOpen(true)"}]},
+ {"name": "pt-ctx", "steps": [{"rclick": [150, 180]}]},
+ {"name": "pt-secmenu", "steps": [{"click": [70, 706]}]},
+ {"name": "settings-platinum", "w": 1040, "h": 720, "query": "?view=settings"},
+ {"name": "pt-due", "steps": [{"eval": "(()=>{const s=window.notesStore.getState();s.addTask('更新 lessons');s.addTask('整理截图标注需求');s.addTask('交 mygo 对比报告');window.uiStore.getState().setPage('tasks');window.uiStore.getState().setRemindersSubview('tasks')})()"}, {"hover": [200, 216]}, {"clickSel": "text=到期"}]},
+ {"name": "pt-secops", "steps": [{"hover": [200, 104]}, {"click": [333, 104]}]},
+ {"name": "pt-preflight", "steps": [{"rclick": [150, 180]}, {"clickSel": "text=检查后发送…"}, {"wait": 800}]}
+]

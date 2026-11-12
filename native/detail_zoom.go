@@ -95,7 +95,7 @@ func (a *app) detailZoomControls(c *ui.Context, hovered bool) {
 	ui.Row(c).Absolute().Right(12).Bottom(12).Height(28).Padding(0, 2).Radius(14).AlignItems(ui.Center).Key("zoom-ctl").Transition(fade).
 		Background(ui.RGBA(0, 0, 0, 0.45)).Children(func() { // token-exception: 叠在图片上的暗底控件（同翻页钮 bg-black/40）
 		btn := func(key, icon, label string, disabled bool) bool {
-			b := ui.Box(c).Size(24, 24).Radius(12).Center().Key(key).Role(ui.RoleButton).Label(label).Tooltip(label)
+			b := tipOf(c, ui.Box(c).Size(24, 24).Radius(12).Center().Key(key).Role(ui.RoleButton).Label(label), label)
 			fg := ui.RGBA(255, 255, 255, 0.85)
 			switch {
 			case disabled:
@@ -111,8 +111,8 @@ func (a *app) detailZoomControls(c *ui.Context, hovered bool) {
 			a.zoomStep(1 / zoomKeyStep)
 		}
 		pct := fmt.Sprintf("%d%%", int(math.Round(float64(v.zoom)*100)))
-		fit := ui.Row(c).Height(24).MinWidth(max(44, numSlot(c, "800%", 11, 500)+8)).Padding(0, 4).Radius(12).Justify(ui.Center).AlignItems(ui.Center).Key("zoom-fit").
-			Role(ui.RoleButton).Label(tr("适配窗口（⌘0）")).Tooltip(tr("适配窗口（⌘0）"))
+		fit := tipOf(c, ui.Row(c).Height(24).MinWidth(max(44, numSlot(c, "800%", 11, 500)+8)).Padding(0, 4).Radius(12).Justify(ui.Center).AlignItems(ui.Center).Key("zoom-fit").
+			Role(ui.RoleButton).Label(tr("适配窗口（⌘0）")), tr("适配窗口（⌘0）"))
 		if fit.Hovered() && v != fitView {
 			fit.Background(ui.RGBA(255, 255, 255, 0.16))
 		}

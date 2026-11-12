@@ -224,32 +224,38 @@ func (a *app) taskSubBody(c *ui.Context, k tokens, now time.Time) {
 	if a.taskSub == 1 && a.taskFilterOn {
 		a.taskFilterBar(c, k, len(filtered))
 	}
+	padR := float32(14)
+	if k.th.ClassicScroll() {
+		padR = 4 // 右侧让给经典滚动条
+	}
 	ui.Box(c).Grow(1).Margin(6, 0, 0, 0).Children(func() {
-		tsc := ui.Scroll(c).Fill().Scrollbars(false).TrackScroll(&a.taskScroll)
-		if a.tsecSort.active != "" { // 拖动任务分组靠近上下缘：自动滚动
-			sortAutoScroll(c, tsc, &a.taskScroll)
-		}
-		tsc.Children(func() {
-			ui.Column(c).Padding(4, 14, 8, 14).Gap(12).Children(func() {
-				switch {
-				case a.taskSub == 0:
-					a.todayView(c, k, now)
-				default:
-					if a.taskCalOn {
-						a.taskCalendar(c, k, now)
+		scrolledOf(c, k, &a.taskScroll, func() {
+			tsc := ui.Scroll(c).Fill().Scrollbars(false).TrackScroll(&a.taskScroll)
+			if a.tsecSort.active != "" { // 拖动任务分组靠近上下缘：自动滚动
+				sortAutoScroll(c, tsc, &a.taskScroll)
+			}
+			tsc.Children(func() {
+				ui.Column(c).Padding(4, padR, 8, 14).Gap(12).Children(func() {
+					switch {
+					case a.taskSub == 0:
+						a.todayView(c, k, now)
+					default:
+						if a.taskCalOn {
+							a.taskCalendar(c, k, now)
+						}
+						if !filtering {
+							a.taskListView(c, k, now)
+						} else if len(filtered) == 0 {
+							text(c, tr("没有符合条件的任务"), 11, 16, 400, k.muted).Padding(8, 0).TextAlign(ui.Center).FillWidth()
+						} else {
+							ui.Column(c).Gap(4).Children(func() {
+								for _, t := range filtered {
+									a.taskRow(c, k, t, now)
+								}
+							})
+						}
 					}
-					if !filtering {
-						a.taskListView(c, k, now)
-					} else if len(filtered) == 0 {
-						text(c, tr("没有符合条件的任务"), 11, 16, 400, k.muted).Padding(8, 0).TextAlign(ui.Center).FillWidth()
-					} else {
-						ui.Column(c).Gap(4).Children(func() {
-							for _, t := range filtered {
-								a.taskRow(c, k, t, now)
-							}
-						})
-					}
-				}
+				})
 			})
 		})
 	})
@@ -287,8 +293,9 @@ func (a *app) taskSubtabs(c *ui.Context, k tokens) {
 }
 
 func (a *app) taskQuickAdd(c *ui.Context, k tokens) {
-	box := ui.Row(c).Height(36).Margin(0, 12).Padding(8, 10).Gap(6).Radius(14).Background(k.track).Border(1, k.inputBorder).
+	box := ui.Row(c).Height(36).Margin(0, 12).Padding(8, 10).Gap(6).Radius(rr(14)).Background(k.track).Border(1, k.inputBorder).
 		InsetShadow(0, 1, 2, 0, k.insetShadow).AlignItems(ui.Center)
+	k.th.Well(box)
 	box.Children(func() {
 		ph := tr("添加今天的任务，回车保存（") + todayDefaultDue(a.now()).Format("15:04") + tr(" 到期）…")
 		if a.taskSub == 1 {
@@ -300,7 +307,7 @@ func (a *app) taskQuickAdd(c *ui.Context, k tokens) {
 					"lightbulb": {tr("点击进入闪念模式：随手记灵感"), tr("闪念模式：回车存为灵感（点击退出）")},
 					"sparkles":  {tr("点击进入 AI 模式：自然语言建任务"), tr("AI 模式：回车让 AI 解析时间、重复与分组（点击退出）")},
 				}[ic][map[bool]int{false: 0, true: 1}[on]]
-				b := ui.Box(c).Size(18, 18).Radius(6).Center().Key("qa-" + ic).Role(ui.RoleButton).Label(tip).Tooltip(tip)
+				b := tipOf(c, ui.Box(c).Size(18, 18).Radius(rr(6)).Center().Key("qa-"+ic).Role(ui.RoleButton).Label(tip), tip)
 				if b.Hovered() {
 					b.Background(k.track)
 				}
@@ -442,12 +449,12 @@ func (a *app) emptyState(c *ui.Context, k tokens, icon, title, body string) {
 }
 
 func countBadge(c *ui.Context, n int, fg, bg ui.Color) {
-	text(c, itoa(n), 10, 14, 600, fg).Padding(1, 4).Radius(6).Background(bg)
+	text(c, itoa(n), 10, 14, 600, fg).Padding(1, 4).Radius(rr(6)).Background(bg)
 }
 
 // postponeAll 是「全部顺延」：把积压的逾期任务挪到同一时间点（可撤销）。
 func (a *app) postponeAll(c *ui.Context, k tokens, tasks []store.Task) {
-	b := ui.Row(c).Height(14).Padding(0, 4).Gap(2).Radius(6).AlignItems(ui.Center)
+	b := ui.Row(c).Height(14).Padding(0, 4).Gap(2).Radius(rr(6)).AlignItems(ui.Center)
 	bc := hoverLink(b, k)
 	b.Children(func() {
 		text(c, tr("全部顺延"), 10, 14, 400, bc)
@@ -522,7 +529,7 @@ func (a *app) taskListView(c *ui.Context, k tokens, now time.Time) {
 		}
 	})
 	sortListEnd(&a.tsecSort, a.tsecSeen)
-	nb := ui.Row(c).Height(24).Margin(0, 0, 0, 8).Padding(4, 6).Gap(4).Radius(8).AlignItems(ui.Center).AlignSelf(ui.Start)
+	nb := ui.Row(c).Height(24).Margin(0, 0, 0, 8).Padding(4, 6).Gap(4).Radius(rr(8)).AlignItems(ui.Center).AlignSelf(ui.Start)
 	nc := hoverLink(nb, k)
 	nb.Children(func() {
 		licon(c, "plus", 12, nc)
@@ -556,7 +563,7 @@ func (a *app) smartBand(c *ui.Context, k tokens, key, title, icon string, fg, ba
 	open := a.bandOpen[key]
 	ui.Column(c).Gap(6).Key("band-" + key).Children(func() {
 		ui.Row(c).Height(16).Padding(0, 4, 0, 0).Gap(4).AlignItems(ui.Center).Children(func() {
-			h := ui.Row(c).Grow(1).Padding(0, 0, 0, 2).Gap(4).Radius(6).AlignItems(ui.Center)
+			h := ui.Row(c).Grow(1).Padding(0, 0, 0, 2).Gap(4).Radius(rr(6)).AlignItems(ui.Center)
 			if h.Hovered() {
 				h.Background(k.track)
 			}
@@ -596,7 +603,7 @@ func (a *app) taskSection(c *ui.Context, k tokens, g taskGroup, now time.Time) {
 			if a.tsecSort.active == g.sec.ID {
 				slotMark(c)
 			}
-			head := ui.Row(c).Height(20).Padding(0, 4, 0, 2).Gap(4).Radius(6).AlignItems(ui.Center).Key("tsechead-" + g.sec.ID)
+			head := ui.Row(c).Height(20).Padding(0, 4, 0, 2).Gap(4).Radius(rr(6)).AlignItems(ui.Center).Key("tsechead-" + g.sec.ID)
 			if a.taskSecRename != g.sec.ID {
 				head.Drag(tsecDrag{g.sec.ID})
 			}
@@ -618,7 +625,7 @@ func (a *app) taskSection(c *ui.Context, k tokens, g taskGroup, now time.Time) {
 				_ = a.store.MoveTask(d.id, g.sec.ID, "")
 			}
 			head.Children(func() {
-				b := ui.Box(c).Size(16, 16).Radius(6).Center()
+				b := ui.Box(c).Size(16, 16).Radius(rr(6)).Center()
 				b.Children(func() { foldChevron(c, k, collapsed) })
 				if b.Clicked() {
 					g.sec.Collapsed = !collapsed
@@ -653,8 +660,7 @@ func (a *app) taskSection(c *ui.Context, k tokens, g taskGroup, now time.Time) {
 						return false
 					})
 				} else {
-					label := text(c, name, 11, 16, 600, k.muted).LetterSpacing(0.88).Role(ui.RoleButton).Label(name).
-						Tooltip(tr("拖动调整分组顺序 · 点击折叠/展开 · 双击重命名"))
+					label := tipOf(c, text(c, name, 11, 16, 600, k.muted).LetterSpacing(0.88).Role(ui.RoleButton).Label(name), tr("拖动调整分组顺序 · 点击折叠/展开 · 双击重命名"))
 					if label.Clicked() { // 同 Tauri：单击 220ms 后折叠 / 展开，期间双击则改为重命名
 						a.taskSecClickSeq++
 						seq, sec := a.taskSecClickSeq, g.sec
@@ -720,7 +726,8 @@ type tsecDrag struct{ id string }
 func (a *app) taskRow(c *ui.Context, k tokens, t store.Task, now time.Time) {
 	done := t.Status == "done"
 	open := a.taskOpen == t.ID
-	card := ui.Column(c).Padding(6, 8).Radius(10).Border(1, ui.Transparent).Key("task-" + t.ID)
+	card := ui.Column(c).Padding(6, 8).Radius(rr(10)).Border(1, ui.Transparent).Key("task-" + t.ID)
+	k.th.ListRow(card)
 	if !open {
 		card.Height(38)
 	}
@@ -798,7 +805,7 @@ func (a *app) taskRow(c *ui.Context, k tokens, t store.Task, now time.Time) {
 			if t.Spark && !done {
 				stLabel = tr("灵感转为待办")
 			}
-			st := ui.Box(c).Size(16, 16).Role(ui.RoleButton).Label(stLabel).Tooltip(stLabel)
+			st := tipOf(c, ui.Box(c).Size(16, 16).Role(ui.RoleButton).Label(stLabel), stLabel)
 			if st.Hovered() && t.Status == "todo" && !t.Spark {
 				col = k.muted // 悬停时空心圈加深，提示可点
 			}

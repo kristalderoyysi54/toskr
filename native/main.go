@@ -113,6 +113,7 @@ func start() (*app, error) {
 		Width: 380, Height: 720, MinWidth: panelMinW, MaxWidth: panelMaxW, MinHeight: panelMinH, // 拖边调宽高（同 Tauri），尺寸记进设置
 		Content: ui.View(a.panelView),
 	})
+	a.panelCorner = 18 // 与上面的 CornerRadius 一致；之后随主题改（panelView）
 	a.panel.SetActiveAppearance(true)
 	a.panel.SetAlwaysOnTop(!st.Settings().PanelNotOnTop)
 	// 退出时 mygo 先逐个关窗，任何一个 PreventDefault 都会取消退出；只在非退出时把「关闭」改成隐藏

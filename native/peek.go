@@ -197,7 +197,7 @@ func (a *app) hidePeek() {
 func (a *app) peekView(c *ui.Context) {
 	k := tok(c)
 	ui.Box(c).Fill().Padding(peekPad).Children(func() {
-		card := ui.Box(c).Fill().Radius(10).Clip().Background(k.card).Border(1, k.fg.Alpha(0.1)).Shadow(0, 8, 24, -6, ui.RGBA(0, 0, 0, 0.35)) // token-exception: 浮窗投影
+		card := ui.Box(c).Fill().Radius(rr(10)).Clip().Background(k.card).Border(1, k.fg.Alpha(0.1)).Shadow(0, 8, 24, -6, ui.RGBA(0, 0, 0, 0.35)) // token-exception: 浮窗投影
 		card.Children(func() {
 			if a.peekImg != nil {
 				ui.Image(c, a.peekImg).Fill().Fit(ui.Contain)

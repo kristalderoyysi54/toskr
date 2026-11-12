@@ -12,6 +12,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/toskr/native/internal/diag"
+	"github.com/toskr/native/internal/macos"
 )
 
 // glassOn 报告设置里是否启用窗内玻璃（任务/账单/秘文页卡片的 glass 插件材质）。
@@ -35,17 +36,45 @@ func (a *app) surface(c *ui.Context, e ui.Element, clarity float32) ui.Element {
 
 // panelView 与 Tauri 主面板同构：标题栏 → 目标条 → 页签 → 内容 → 快捷键提示 → 输入区。
 // 面板底色是 Tauri 叠在模糊材质上的半透明色；材质本身换成原生模糊 / 液态玻璃。
+// refreshPanelShadow：等面板把当前形状画出来之后，让系统重算阴影与外圈描边（改窗角、直角窗重新唤出时用）。
+func (a *app) refreshPanelShadow() {
+	if a.panel == nil {
+		return
+	}
+	for _, d := range []time.Duration{120 * time.Millisecond, 600 * time.Millisecond} {
+		time.AfterFunc(d, func() {
+			a.panel.Update(func() { macos.InvalidateShadow(a.panel.NativeHandle()) })
+		})
+	}
+}
+
 func (a *app) panelView(c *ui.Context) {
 	registerFonts()
 	a.drainUpdates()
 	k := tok(c)
+	if a.panel != nil { // 窗角随主题：自绘窗框的主题（Platinum）是直角窗
+		want := float64(18)
+		if theme().SquareWindows() {
+			want = 0
+		}
+		if want != a.panelCorner {
+			a.panelCorner = want
+			time.AfterFunc(0, func() { // 换窗口样式会换掉窗框视图：等这一帧构建完再做
+				a.panel.Update(func() {
+					macos.SetSquarePanel(a.panel.NativeHandle(), want == 0, 18)
+					diag.Push("窗角: 直角=%v", want == 0)
+				})
+			})
+			a.refreshPanelShadow()
+		}
+	}
 	a.panelKeys(c)
 	a.notePanelKeys(c)
 	shell := ui.Column(c).Fill()
 	p := a.panelPresence(c, shell)
 	// 底色是内容自绘的半透明膜（Tauri 同样画在 webview 里），随内容一起淡入淡出；系统材质本身不动
 	tint := float32(1)
-	if !k.pt { // 内容底色浓度（Tauri panelOpacity，默认 0.62 = 方案自带浓度）；Platinum 整窗不透明
+	if !k.th.Opaque() { // 内容底色浓度（Tauri panelOpacity，默认 0.62 = 方案自带浓度）；整窗不透明的主题不用
 		tint = float32(a.store.Settings().PanelAlpha() / 0.62)
 	}
 	c.Root().Background(k.window.Alpha(min(p, 1) * tint)) // Alpha 是相乘
@@ -56,21 +85,25 @@ func (a *app) panelView(c *ui.Context) {
 		}
 		return
 	}
-	if k.pt {
-		shell.Children(func() {
-			a.platinumPanel(c, k)
-			a.panelVHandles(c, k)
-			a.recentDrawer(c, k)
-			a.shortcutHelp(c, k)
-			a.commandPalette(c, k)
-			a.updateDialog(c, k)
-			a.welcomeTour(c, k)
-			a.migrateWizard(c, k)
-		})
+	themed := false
+	shell.Children(func() { // 主题接管竖栏布局时，压在最上的浮层仍在这里统一挂
+		if themed = k.th.Panel(a, c, k); !themed {
+			return
+		}
+		a.panelVHandles(c, k)
+		a.recentDrawer(c, k)
+		a.shortcutHelp(c, k)
+		a.preflightDialog(c)
+		a.commandPalette(c, k)
+		a.updateDialog(c, k)
+		a.welcomeTour(c, k)
+		a.migrateWizard(c, k)
+	})
+	if themed {
 		return
 	}
 
-	shell.Radius(14).Children(func() {
+	shell.Radius(rr(14)).Children(func() {
 		a.mainHeader(c, k)
 		if a.searchOpen {
 			a.searchRow(c, k)
@@ -79,10 +112,6 @@ func (a *app) panelView(c *ui.Context) {
 		a.permissionBanner(c, k)
 		a.conflictBanner(c, k)
 		a.tabs(c, k)
-		if len(a.pending) > 0 {
-			_, vh := c.Size() // 逐项列表很长时预检条内部滚动，不把面板撑出屏幕（之前展开后看不到下面的项）
-			ui.Scroll(c).MaxHeight(max(240, vh*0.6)).Margin(0, 12, 6, 12).Children(func() { a.preflightBar(c) })
-		}
 		if len(a.enterAsk) > 0 {
 			ui.Column(c).Margin(0, 12, 6, 12).Children(func() { a.enterAskBar(c) })
 		}
@@ -97,9 +126,10 @@ func (a *app) panelView(c *ui.Context) {
 		a.verifySheet(c, k)
 		a.recentDrawer(c, k)
 		a.shortcutHelp(c, k) // 长按 ⌥ 的快捷键速查层压在最上
+		a.preflightDialog(c) // 发送预检：整面板对话框（同 Tauri PreflightComposer）
 		a.commandPalette(c, k)
 		a.updateDialog(c, k)
-		a.welcomeTour(c, k) // 首启导览盖住全部内容
+		a.welcomeTour(c, k)   // 首启导览盖住全部内容
 		a.migrateWizard(c, k) // 旧版迁移向导先于导览（导入可能带来「已看过导览」）
 	})
 	if a.menuOpen {
@@ -212,7 +242,7 @@ func (a *app) textTabsBadged(c *ui.Context, k tokens, labels []string, badges []
 					text(c, "·", 10, 14, 400, k.muted.Alpha(0.45)).Padding(0, 2)
 				}
 				on := sel == i
-				b := ui.Column(c).Height(22).Padding(2, 8, 4, 8).Radius(8).AlignItems(ui.Center).Key("sub-" + label)
+				b := ui.Column(c).Height(22).Padding(2, 8, 4, 8).Radius(rr(8)).AlignItems(ui.Center).Key("sub-" + label)
 				bg := ui.Transparent
 				if !on && b.Hovered() {
 					bg = k.track
@@ -247,9 +277,11 @@ func (a *app) textTabsBadged(c *ui.Context, k tokens, labels []string, badges []
 }
 
 func (a *app) searchRow(c *ui.Context, k tokens) {
-	ui.Row(c).Height(30).Margin(0, 12, 6, 12).Padding(0, 10).Gap(6).Radius(10).Background(k.track).AlignItems(ui.Center).Children(func() {
+	row := ui.Row(c).Height(30).Margin(0, 12, 6, 12).Padding(0, 10).Gap(6).Radius(rr(10)).Background(k.track).AlignItems(ui.Center)
+	k.th.SearchRow(row)
+	row.Children(func() {
 		licon(c, "search", 12, k.muted)
-		if ui.TextInputBase(c, &a.query).Bind(&a.search).Grow(1).Font(fontSans).FontSize(12).Placeholder(tr("搜索（⌘F）")).Focus().Changed() {
+		if ui.TextInputBase(c, &a.query).Bind(&a.search).Grow(1).Font(fontSans).FontSize(12).Placeholder(tr("搜索卡片…")).Focus().Changed() {
 			a.selected = 0
 			a.reload()
 		}
@@ -270,34 +302,44 @@ func (a *app) panelMenu(c *ui.Context, k tokens) {
 		a.menuOpen, a.placementOpen = false, false
 		return
 	}
-	menu := ui.Column(c).Absolute().Top(40).Right(40).Width(224).Padding(4).Radius(10).Background(k.floatBtn.Alpha(0.95)).Border(1, k.floatBorder).
+	menu := ui.Column(c).Absolute().Top(40).Right(40).Width(224).Padding(4).Radius(rr(10)).Background(k.floatBtn.Alpha(0.95)).Border(1, k.floatBorder).
 		Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB).InsetShadow(0, 1, 0, 0, k.floatInset).
 		// SimpleMenu：fade + zoom 0.95 → 1（自上缘展开），160ms ease-standard；关闭反向。菜单项悬停底色即时
 		Key("panel-menu").TransformOrigin(0.5, 0).Transition(ui.ElementTransition{Duration: 160 * time.Millisecond, Ease: easeStandard,
 		Enter: &ui.Motion{Scale: 0.95}, Exit: &ui.Motion{Scale: 0.95}})
+	k.th.PanelMenu(menu)
 	label := func(s string) { text(c, s, 10, 14, 500, k.muted).Padding(4, 8) }
-	sep := func() { ui.Box(c).Height(1).Margin(4, 0).Background(stok(c).inputBorder) }
+	sep := func() {
+		if k.th.MenuSeparator(c) {
+			return
+		}
+		ui.Box(c).Height(1).Margin(4, 0).Background(stok(c).inputBorder)
+	}
 	item := func(icon, s string, checked, radio bool, trail string, fn func()) {
-		row := ui.Row(c).Height(29).Padding(6, 8).Gap(8).Radius(6).AlignItems(ui.Center).Key("pm-" + s)
+		row := ui.Row(c).Height(29).Padding(6, 8).Gap(8).Radius(rr(6)).AlignItems(ui.Center).Key("pm-" + s)
+		fg, dim := k.fg, k.muted
 		if row.Hovered() {
 			row.Background(k.track)
+			if hl, ok := k.th.MenuItem(row, "menu", true); ok {
+				fg, dim = hl, hl
+			}
 		}
 		row.Children(func() {
 			if icon != "" {
-				licon(c, icon, 14, k.fg)
+				licon(c, icon, 14, fg)
 			}
-			text(c, s, 12, 17, 400, k.fg).Grow(1).SingleLine()
+			text(c, s, 12, 17, 400, fg).Grow(1).SingleLine()
 			switch {
 			case trail != "":
 				if trail == ">" {
-					licon(c, "chevron-right", 14, k.fg)
+					licon(c, "chevron-right", 14, fg)
 				} else {
-					text(c, trail, 10, 14, 400, k.muted)
+					text(c, trail, 10, 14, 400, dim)
 				}
 			case checked && radio:
-				ui.Box(c).Size(14, 14).Center().Children(func() { ui.Box(c).Size(6, 6).Radius(3).Background(k.fg) })
+				ui.Box(c).Size(14, 14).Center().Children(func() { ui.Box(c).Size(6, 6).Radius(3).Background(fg) })
 			case checked:
-				licon(c, "check", 14, k.fg)
+				licon(c, "check", 14, fg)
 			default:
 				ui.Box(c).Size(14, 14)
 			}

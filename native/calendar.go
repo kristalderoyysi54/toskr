@@ -120,8 +120,7 @@ func (a *app) eventRow(c *ui.Context, k tokens, e macos.CalendarEvent) {
 	if title == "" {
 		title = tr("（无标题）")
 	}
-	row := ui.Row(c).Grow(1).Padding(4, 8).Gap(6).Radius(8).AlignItems(ui.Start).Key("ev-" + e.ID).
-		Tooltip(tr("在「日历」中打开")).Role(ui.RoleButton).Label(title)
+	row := tipOf(c, ui.Row(c).Grow(1).Padding(4, 8).Gap(6).Radius(rr(8)).AlignItems(ui.Start).Key("ev-"+e.ID), tr("在「日历」中打开")).Role(ui.RoleButton).Label(title)
 	bg := k.fg.Alpha(0.04)
 	if row.Hovered() {
 		bg = k.fg.Alpha(0.07)
@@ -193,7 +192,7 @@ func (a *app) calendarSettings(c *ui.Context, k tokens, s settingsTokens, st sto
 		ui.Row(c).Wrap().Gap(6).Children(func() {
 			for _, cal := range a.calendars {
 				shown := !slices.Contains(st.CalendarHidden, cal.ID)
-				chip := ui.Row(c).Height(22).Padding(0, 8).Gap(6).Radius(11).AlignItems(ui.Center).Key("cal-" + cal.ID).Tooltip(cal.Source).Role(ui.RoleButton).Label(cal.Title)
+				chip := tipOf(c, ui.Row(c).Height(22).Padding(0, 8).Gap(6).Radius(11).AlignItems(ui.Center).Key("cal-"+cal.ID), cal.Source).Role(ui.RoleButton).Label(cal.Title)
 				if shown {
 					chip.Background(s.card).Border(1, s.cardBorder)
 				} else {

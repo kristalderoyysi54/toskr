@@ -164,7 +164,7 @@ func (a *app) billTrend(c *ui.Context, k tokens, cur string, now time.Time) {
 	if peak <= 0 && len(charges) == 0 && len(insights) == 0 {
 		return
 	}
-	box := ui.Column(c).Padding(10, 10, 8, 10).Gap(8).Radius(14).Background(k.track).Key("bill-trend")
+	box := ui.Column(c).Padding(10, 10, 8, 10).Gap(8).Radius(rr(14)).Background(k.track).Key("bill-trend")
 	box.Children(func() {
 		if peak > 0 {
 			a.billTrendBars(c, k, trend, peak, present, amount)
@@ -218,7 +218,7 @@ func (a *app) billTrendBars(c *ui.Context, k tokens, trend []catBucket, peak flo
 				col := ui.Column(c).Grow(1).Basis(0).Gap(2).AlignItems(ui.Center).Key(fmt.Sprint(m.year, m.month)).
 					Role(ui.RoleButton).Label(m.label + " " + amount(m.total))
 				if len(tip) > 0 {
-					col.Tooltip(m.label + " " + amount(m.total) + "\n" + strings.Join(tip, "\n"))
+					tipOf(c, col, m.label+" "+amount(m.total)+"\n"+strings.Join(tip, "\n"))
 				}
 				hov := col.Hovered()
 				col.Children(func() {
@@ -298,8 +298,8 @@ func (a *app) billRunway(c *ui.Context, k tokens, charges []billCharge, now time
 				d := float32(6 + 8*math.Sqrt(v/top)) // 面积随金额：直径 6–14
 				cat := cmpOr(ch.bill.Category, "other")
 				tip := fmt.Sprintf("%s · %s · %s", monthDay(ch.at), ch.bill.Name, money(billCur(ch.bill, a.store.Settings().Currency), ch.bill.Amount))
-				ui.Box(c).Absolute().LeftPercent(float32(day/30*100)).Top(9-d/2).Size(d, d).Margin(0, 0, 0, -d/2).Radius(d/2).
-					Background(categoryColor(cat)).Border(1.5, k.card).Key(fmt.Sprint("run-", i)).Label(tip).Tooltip(tip)
+				tipOf(c, ui.Box(c).Absolute().LeftPercent(float32(day/30*100)).Top(9-d/2).Size(d, d).Margin(0, 0, 0, -d/2).Radius(d/2).
+					Background(categoryColor(cat)).Border(1.5, k.card).Key(fmt.Sprint("run-", i)).Label(tip), tip)
 			}
 		})
 		ui.Row(c).Children(func() {

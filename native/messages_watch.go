@@ -336,7 +336,7 @@ func (a *app) addIMRule() bool {
 
 // growField：占满一行的输入框（textField 是定宽的）。
 func growField(c *ui.Context, k tokens, s settingsTokens, v *string, placeholder string) {
-	ui.Row(c).Grow(1).Height(32).Padding(0, 8).Radius(10).Background(s.input).Border(1, s.inputBorder).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).Grow(1).Height(32).Padding(0, 8).Radius(rr(10)).Background(s.input).Border(1, s.inputBorder).AlignItems(ui.Center).Children(func() {
 		ui.TextInputBase(c, v).Grow(1).Font(fontSans).FontSize(12).FixedLineHeight(17).TextColor(k.fg).PlaceholderColor(k.muted).Placeholder(placeholder)
 	})
 }
@@ -374,7 +374,7 @@ func (a *app) messageWatchSections(c *ui.Context, k tokens, s settingsTokens, st
 			}
 			ui.Column(c).Gap(4).Children(func() {
 				for _, cand := range a.im.candidates {
-					row := ui.Column(c).Padding(6, 10).Radius(6).Border(1, s.cardBorder).Key("imc-" + cand.BundleID).Role(ui.RoleButton).Label(cand.Name)
+					row := ui.Column(c).Padding(6, 10).Radius(rr(6)).Border(1, s.cardBorder).Key("imc-" + cand.BundleID).Role(ui.RoleButton).Label(cand.Name)
 					if row.Hovered() {
 						row.Background(k.track)
 					}

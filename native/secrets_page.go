@@ -81,20 +81,20 @@ func (a *app) secretComposer(c *ui.Context, k tokens, st store.Settings) {
 					label = cmpOr(key.Label, tr("未命名密钥"))
 				}
 			}
-			selectBox(c, k, s, "key-round", label, 0, func(m *ui.Menu) {
+			tipOf(c, selectBox(c, k, s, "key-round", label, 0, func(m *ui.Menu) {
 				for _, key := range st.SecretKeys {
 					if m.Item(cmpOr(key.Label, tr("未命名密钥"))).Radio(key.ID == a.secretKeyID).Chosen() {
 						a.secretKeyID = key.ID
 					}
 				}
-			}).Tooltip(tr("用哪把密钥"))
+			}), tr("用哪把密钥"))
 			short := ""
 			for _, o := range secretcodec.StyleOptions {
 				if o.Value == style {
 					short = tr(o.ShortLabel)
 				}
 			}
-			selectBox(c, k, s, "braces", short, 96, func(m *ui.Menu) {
+			tipOf(c, selectBox(c, k, s, "braces", short, 96, func(m *ui.Menu) {
 				for _, o := range secretcodec.StyleOptions {
 					if m.Item(tr(o.Label)).Radio(o.Value == style).Chosen() {
 						cur := a.store.Settings()
@@ -102,9 +102,9 @@ func (a *app) secretComposer(c *ui.Context, k tokens, st store.Settings) {
 						_ = a.store.SetSettings(cur)
 					}
 				}
-			}).Tooltip(tr("密文格式 · 支持该格式的接收端自动识别"))
+			}), tr("密文格式 · 支持该格式的接收端自动识别"))
 		})
-		ui.Column(c).Padding(8, 10).Gap(6).Radius(10).Border(1, s.inputBorder).Children(func() {
+		ui.Column(c).Padding(8, 10).Gap(6).Radius(rr(10)).Border(1, s.inputBorder).Children(func() {
 			ui.TextAreaBase(c, &a.secretDraft).FillWidth().Lines(2, 6).Font(fontSans).FontSize(12).FixedLineHeight(17).
 				TextColor(k.fg).PlaceholderColor(k.muted).Placeholder(tr("写下要加密的话，⌘⏎ 加密并发送")).
 				OnTextKey(func(key ui.TextKey) bool {
@@ -214,7 +214,7 @@ func (a *app) secretCard(c *ui.Context, k tokens, st store.Settings, sec store.S
 	if k.dark {
 		bg, border = gray(0.205, 1), gray(1, 0.07)
 	}
-	ui.Column(c).Radius(10).Background(bg).Border(1, border).Key("sec-" + sec.ID).Children(func() {
+	ui.Column(c).Radius(rr(10)).Background(bg).Border(1, border).Key("sec-" + sec.ID).Children(func() {
 		ui.Row(c).Padding(8, 12, 0, 12).Gap(6).AlignItems(ui.Center).Children(func() {
 			icon, dir := "shield-check", tr("收到")
 			if sec.Direction == "out" {
@@ -234,7 +234,7 @@ func (a *app) secretCard(c *ui.Context, k tokens, st store.Settings, sec store.S
 			ui.Spacer(c)
 			text(c, ago(sec.CreatedAt, a.now()), 10, 14, 400, k.muted)
 		})
-		body := ui.Column(c).Padding(8, 12).Tooltip(tr("点击解密查看"))
+		body := tipOf(c, ui.Column(c).Padding(8, 12), tr("点击解密查看"))
 		// AnimatePresence mode="wait"：解密时遮罩先淡出（120ms ease-standard），明文再淡入并去模糊（opacity 0 → 1、blur 6 → 0，300ms ease-standard）；
 		// 回遮罩时遮罩淡入（120ms easeInOut）。明文在回遮罩那一刻即从内存丢弃，不再播它的淡出。
 		maskOp, plainOp, plainBlur := float32(1), float32(1), float32(0)
@@ -410,7 +410,7 @@ func (a *app) captureSecret(text, sourceApp string) bool {
 
 // selectBox 是 Tauri SimpleSelect 触发钮：32 高、圆角 10、描边，图标 + 文字 + 下拉箭头，点开原生菜单。
 func selectBox(c *ui.Context, k tokens, s settingsTokens, icon, label string, width float32, menu func(*ui.Menu)) ui.Element {
-	b := ui.Row(c).Height(32).Padding(0, 8).Gap(4).Radius(10).Border(1, s.inputBorder).AlignItems(ui.Center)
+	b := ui.Row(c).Height(32).Padding(0, 8).Gap(4).Radius(rr(10)).Border(1, s.inputBorder).AlignItems(ui.Center)
 	if width > 0 {
 		b.Width(width)
 	} else {
@@ -430,7 +430,7 @@ func selectBox(c *ui.Context, k tokens, s settingsTokens, icon, label string, wi
 
 // actionButton 是 Tauri Button size="sm"：primary 为白底描边主键，否则 ghost；禁用时 45% 透明且不响应。
 func actionButton(c *ui.Context, k tokens, s settingsTokens, icon, label string, primary, disabled bool) bool {
-	b := ui.Row(c).Height(28).Padding(0, 10).Gap(6).Radius(10).AlignItems(ui.Center).Key("ab-" + label)
+	b := ui.Row(c).Height(28).Padding(0, 10).Gap(6).Radius(rr(10)).AlignItems(ui.Center).Key("ab-" + label)
 	fg := k.fg
 	if primary {
 		b.Background(s.btn).Border(1, s.btnBorder).Shadow(0, 1, 2, 0, s.btnShadow)

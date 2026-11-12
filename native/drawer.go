@@ -154,7 +154,7 @@ func (a *app) deliveryRow(c *ui.Context, k tokens, d store.Delivery, notes []sto
 				name = tr("未识别目标")
 			}
 			text(c, name, 12, 17, 500, k.fg).SingleLine().Grow(1).Basis(0)
-			text(c, timeAgoShort(d.At, now), 10, 14, 400, k.muted).FontFeatures("tnum").Tooltip(d.At.Format("2006-01-02 15:04:05"))
+			tipOf(c, text(c, timeAgoShort(d.At, now), 10, 14, 400, k.muted).FontFeatures("tnum"), d.At.Format("2006-01-02 15:04:05"))
 			label, tone := deliveryStatus(d, hasReply)
 			fg, bg, icon := k.muted, k.track, "clock-3"
 			switch tone {
@@ -168,7 +168,7 @@ func (a *app) deliveryRow(c *ui.Context, k tokens, d store.Delivery, notes []sto
 				text(c, label, 10, 14, 500, fg).SingleLine()
 			})
 		})
-		sb := ui.Box(c).Margin(4, 0, 0, 0).Padding(2, 4).Radius(6).Tooltip(tr("查看发送内容")).Role(ui.RoleButton).Label(tr("查看发送内容"))
+		sb := tipOf(c, ui.Box(c).Margin(4, 0, 0, 0).Padding(2, 4).Radius(rr(6)), tr("查看发送内容")).Role(ui.RoleButton).Label(tr("查看发送内容"))
 		if len(src) > 0 && sb.Hovered() {
 			sb.Background(k.hoverBg)
 		}
@@ -190,7 +190,7 @@ func (a *app) deliveryRow(c *ui.Context, k tokens, d store.Delivery, notes []sto
 		ui.Row(c).Margin(8, 0, 0, 0).Padding(6, 4, 0, 4).Gap(12).BorderWidth(1, 0, 0, 0).BorderColor(k.inputBorder.Alpha(0.5)).AlignItems(ui.Center).Children(func() {
 			cands := store.ResultCandidates(d, notes)
 			if a.cmpSnaps[d.ID] != nil {
-				cl := ui.Row(c).Gap(3).AlignItems(ui.Center).Key("cmp-" + d.ID).Role(ui.RoleButton).Label(tr("对比")).Tooltip(tr("查看这次发送的原文与实际发送内容对比"))
+				cl := tipOf(c, ui.Row(c).Gap(3).AlignItems(ui.Center).Key("cmp-"+d.ID).Role(ui.RoleButton).Label(tr("对比")), tr("查看这次发送的原文与实际发送内容对比"))
 				fg := k.muted
 				if cl.Hovered() {
 					fg = k.fg
@@ -238,7 +238,7 @@ func (a *app) deliveryRow(c *ui.Context, k tokens, d store.Delivery, notes []sto
 				}
 			}
 			ui.Spacer(c)
-			more := ui.Row(c).Gap(2).AlignItems(ui.Center).Key("more-" + d.ID).Tooltip(tr("更多信息")).Role(ui.RoleButton).Label(tr("更多信息"))
+			more := tipOf(c, ui.Row(c).Gap(2).AlignItems(ui.Center).Key("more-"+d.ID), tr("更多信息")).Role(ui.RoleButton).Label(tr("更多信息"))
 			open := a.drawerMore[d.ID]
 			mc := k.muted
 			if more.Hovered() {
@@ -323,6 +323,9 @@ func (a *app) linkReply(d store.Delivery, n store.Note) {
 
 // floatSurface：浮层底（同卡片悬浮钮的描边与双层投影）。
 func floatSurface(b ui.Element, k tokens) ui.Element {
+	if e, ok := k.th.FloatSurface(b); ok {
+		return e
+	}
 	return b.Background(k.floatBtn).Border(1, k.floatBorder).
 		Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB).InsetShadow(0, 1, 0, 0, k.floatInset)
 }

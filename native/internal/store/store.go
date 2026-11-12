@@ -149,6 +149,7 @@ type Settings struct {
 	// 窗口与外观（与 Tauri 同名设置；布尔用「关闭」语义，旧数据缺字段即默认开启）
 	Theme           string `json:"theme,omitempty"`             // system | light | dark
 	ColorScheme     string `json:"colorScheme,omitempty"`       // default | platinum | paper | matcha | sakura | fog
+	LastColorScheme string `json:"lastColorScheme,omitempty"`   // 切到 Platinum 等风格主题前用的颜色，切回「现代」时恢复
 	CardDensity     string `json:"cardDensity,omitempty"`       // comfortable | compact
 	PtHighlight     string `json:"platinumHighlight,omitempty"` // lavender | blue | teal | graphite
 	PtScrollbar     string `json:"platinumScrollbar,omitempty"` // classic | thin

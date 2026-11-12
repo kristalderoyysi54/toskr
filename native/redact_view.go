@@ -629,11 +629,11 @@ func (a *app) redactRegionBar(c *ui.Context, re *redactEditor, pal shotPalette) 
 	if y < 8 {
 		y = v.Y + v.H + 6 + 8
 	}
-	bar := ui.Row(c).Absolute().Left(f32(x)).Top(f32(y)).Padding(2).Gap(2).Radius(10).AlignItems(ui.Center).Key("redact-bar")
+	bar := ui.Row(c).Absolute().Left(f32(x)).Top(f32(y)).Padding(2).Gap(2).Radius(rr(10)).AlignItems(ui.Center).Key("redact-bar")
 	pal.float(bar).Children(func() {
 		cur := re.present[re.selected].Style
 		for i, opt := range shot.RedactStyles {
-			b := ui.Box(c).Size(26, 26).Radius(8).Center().Key(fmt.Sprintf("rs-%d", i)).Role(ui.RoleButton).Label(fmt.Sprintf(tr("改为%s"), tr(opt.Label))).Tooltip(tr(opt.Label))
+			b := tipOf(c, ui.Box(c).Size(26, 26).Radius(rr(8)).Center().Key(fmt.Sprintf("rs-%d", i)).Role(ui.RoleButton).Label(fmt.Sprintf(tr("改为%s"), tr(opt.Label))), tr(opt.Label))
 			if opt.Style == cur || b.Hovered() {
 				b.Background(pal.hover)
 			}
@@ -645,7 +645,7 @@ func (a *app) redactRegionBar(c *ui.Context, re *redactEditor, pal shotPalette) 
 			}
 		}
 		ui.Box(c).Size(1, 16).Margin(0, 2).Background(pal.border)
-		del := ui.Box(c).Size(26, 26).Radius(8).Center().Role(ui.RoleButton).Label(tr("删除这个框（⌫）")).Tooltip(tr("删除这个框（⌫）"))
+		del := tipOf(c, ui.Box(c).Size(26, 26).Radius(rr(8)).Center().Role(ui.RoleButton).Label(tr("删除这个框（⌫）")), tr("删除这个框（⌫）"))
 		fg := pal.muted
 		if del.Hovered() {
 			del.Background(pal.k.danger.Alpha(0.1))
@@ -662,7 +662,7 @@ func (a *app) redactRegionBar(c *ui.Context, re *redactEditor, pal shotPalette) 
 func (a *app) redactBanner(c *ui.Context, re *redactEditor, pal shotPalette, warn ui.Color) {
 	st := stok(c)
 	ui.Row(c).Absolute().Top(16).Left(0).Right(0).Justify(ui.Center).PassThrough().Children(func() {
-		bar := ui.Row(c).Padding(4, 4, 4, 12).Gap(8).Radius(10).AlignItems(ui.Center)
+		bar := ui.Row(c).Padding(4, 4, 4, 12).Gap(8).Radius(rr(10)).AlignItems(ui.Center)
 		pal.float(bar).Children(func() {
 			ui.Box(c).Size(8, 8).Radius(4).Background(warn)
 			text(c, fmt.Sprintf(tr("识别到 %d 处敏感文字，点虚线框逐个打码"), len(re.candidates)), 11, 16, 400, pal.fg)
@@ -681,7 +681,7 @@ func (a *app) redactBanner(c *ui.Context, re *redactEditor, pal shotPalette, war
 }
 
 func ghostButton(c *ui.Context, pal shotPalette, label string, disabled bool) bool {
-	b := ui.Row(c).Height(24).Padding(0, 8).Radius(10).AlignItems(ui.Center).Key("gb-" + label).Role(ui.RoleButton).Label(label)
+	b := ui.Row(c).Height(24).Padding(0, 8).Radius(rr(10)).AlignItems(ui.Center).Key("gb-" + label).Role(ui.RoleButton).Label(label)
 	if disabled {
 		b.Opacity(0.5)
 	} else if b.Hovered() {
@@ -700,11 +700,11 @@ func (a *app) redactToolbar(c *ui.Context, re *redactEditor, pal shotPalette, wa
 	}
 	st := stok(c)
 	ui.Row(c).Absolute().Bottom(20).Left(0).Right(0).Justify(ui.Center).PassThrough().Children(func() {
-		bar := ui.Row(c).Padding(4).Gap(4).Radius(14).AlignItems(ui.Center).Key("redact-toolbar").Label(tr("打码工具"))
+		bar := ui.Row(c).Padding(4).Gap(4).Radius(rr(14)).AlignItems(ui.Center).Key("redact-toolbar").Label(tr("打码工具"))
 		pal.float(bar).Children(func() {
-			ui.Row(c).Padding(2).Gap(1).Radius(10).Background(pal.k.track).Children(func() {
+			ui.Row(c).Padding(2).Gap(1).Radius(rr(10)).Background(pal.k.track).Children(func() {
 				seg := func(label string, active bool, glyph int, pick int) {
-					b := ui.Row(c).Height(24).Padding(0, 8).Gap(6).Radius(8).AlignItems(ui.Center).Key("seg-" + label).Role(ui.RoleButton).Label(label)
+					b := ui.Row(c).Height(24).Padding(0, 8).Gap(6).Radius(rr(8)).AlignItems(ui.Center).Key("seg-" + label).Role(ui.RoleButton).Label(label)
 					fg := pal.muted
 					if active {
 						b.Background(pal.k.pill).Shadow(0, 1, 2, 0, gray(0, 0.05))
@@ -725,7 +725,7 @@ func (a *app) redactToolbar(c *ui.Context, re *redactEditor, pal shotPalette, wa
 			})
 			if fill {
 				for i := 1; i <= 3; i++ {
-					b := ui.Box(c).Size(26, 26).Radius(8).Center().Key(fmt.Sprintf("fill-%d", i)).Role(ui.RoleButton).Label(tr(shot.RedactStyles[i].Label)).Tooltip(tr(shot.RedactStyles[i].Label))
+					b := tipOf(c, ui.Box(c).Size(26, 26).Radius(rr(8)).Center().Key(fmt.Sprintf("fill-%d", i)).Role(ui.RoleButton).Label(tr(shot.RedactStyles[i].Label)), tr(shot.RedactStyles[i].Label))
 					if cur == i || b.Hovered() {
 						b.Background(pal.hover)
 					}
@@ -736,7 +736,7 @@ func (a *app) redactToolbar(c *ui.Context, re *redactEditor, pal shotPalette, wa
 				}
 			}
 			shotSep(c, pal)
-			det := ui.Row(c).Height(24).Padding(0, 8).Gap(4).Radius(10).Border(1, warn.Alpha(0.5)).AlignItems(ui.Center).Key("detect").Role(ui.RoleButton)
+			det := ui.Row(c).Height(24).Padding(0, 8).Gap(4).Radius(rr(10)).Border(1, warn.Alpha(0.5)).AlignItems(ui.Center).Key("detect").Role(ui.RoleButton)
 			label := tr("识别敏感文字")
 			if re.detecting {
 				label = tr("识别中…")
@@ -757,7 +757,7 @@ func (a *app) redactToolbar(c *ui.Context, re *redactEditor, pal shotPalette, wa
 			}
 			shotSep(c, pal)
 			small := func(icon, label string, disabled bool) bool {
-				b := ui.Box(c).Size(22, 22).Radius(8).Center().Key("sm-" + icon).Role(ui.RoleButton).Label(label).Tooltip(label)
+				b := tipOf(c, ui.Box(c).Size(22, 22).Radius(rr(8)).Center().Key("sm-"+icon).Role(ui.RoleButton).Label(label), label)
 				fg := pal.muted
 				if disabled {
 					b.Opacity(0.45)
@@ -793,7 +793,7 @@ func (a *app) redactToolbar(c *ui.Context, re *redactEditor, pal shotPalette, wa
 
 // primaryButton：Button default 变体里的主操作（xs）。
 func primaryButton(c *ui.Context, s settingsTokens, label string, disabled bool) bool {
-	b := ui.Row(c).Height(24).Padding(0, 8).Radius(10).AlignItems(ui.Center).Key("pb-" + label).Role(ui.RoleButton).Label(label)
+	b := ui.Row(c).Height(24).Padding(0, 8).Radius(rr(10)).AlignItems(ui.Center).Key("pb-" + label).Role(ui.RoleButton).Label(label)
 	bg := s.primary
 	if disabled {
 		b.Opacity(0.5)

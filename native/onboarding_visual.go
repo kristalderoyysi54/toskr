@@ -33,7 +33,7 @@ func flow(c *ui.Context, k tokens, id string, steps ...vstep) {
 			if i > 0 {
 				licon(c, "chevron-right", 12, k.muted.Alpha(0.6))
 			}
-			t := ui.Column(c).Grow(1).Basis(0).Padding(6, 2).Gap(4).Radius(8).AlignItems(ui.Center).Key(id + "-" + itoa(i)).Label(tr(s.label))
+			t := ui.Column(c).Grow(1).Basis(0).Padding(6, 2).Gap(4).Radius(rr(8)).AlignItems(ui.Center).Key(id + "-" + itoa(i)).Label(tr(s.label))
 			on := i == hot
 			t.Background(t.AnimateColor("bg", map[bool]ui.Color{true: p.Alpha(0.12), false: k.card}[on], tweenTw))
 			t.Border(1, t.AnimateColor("bd", map[bool]ui.Color{true: p.Alpha(0.6), false: k.inputBorder}[on], tweenTw))
@@ -67,7 +67,7 @@ func chipSwap(c *ui.Context, k tokens, from, to string, okTo bool) {
 
 // noEnterBadge：「不会按回车」图示（⏎ 加禁止号）。
 func noEnterBadge(c *ui.Context, k tokens) {
-	ui.Row(c).Gap(3).Padding(1, 6).Radius(8).Background(k.track).AlignItems(ui.Center).Tooltip(tr("不会自动按回车")).Label(tr("不会自动按回车")).Children(func() {
+	tipOf(c, ui.Row(c).Gap(3).Padding(1, 6).Radius(rr(8)).Background(k.track).AlignItems(ui.Center), tr("不会自动按回车")).Label(tr("不会自动按回车")).Children(func() {
 		licon(c, "keyboard-off", 10, k.muted)
 		text(c, tr("不回车"), 10, 14, 500, k.muted)
 	})

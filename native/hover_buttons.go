@@ -8,7 +8,10 @@ import "github.com/egoist/mygo/ui"
 // floatIconButton：卡面悬浮钮（IconButton surface）：实底不透明，悬停描边 10% → 25%、图标 muted → 前景。
 // on = 开关型按下态（置顶等）。返回元素，调用方取 Clicked() 或挂 Menu()。
 func floatIconButton(c *ui.Context, k tokens, key, icon, tip string, danger, on bool) ui.Element {
-	b := ui.Box(c).Size(22, 22).Radius(8).Center().Key(key).Tooltip(tip).Role(ui.RoleButton).Label(tip).
+	if b, ok := k.th.FloatIconButton(c, k, key, icon, tip, danger, on); ok {
+		return b
+	}
+	b := tipOf(c, ui.Box(c).Size(22, 22).Radius(rr(8)).Center().Key(key), tip).Role(ui.RoleButton).Label(tip).
 		Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB).InsetShadow(0, 1, 0, 0, k.floatInset)
 	hov := b.Hovered()
 	bg, border, col := k.floatBtn, k.floatBorder, k.muted
@@ -31,7 +34,18 @@ func floatIconButton(c *ui.Context, k tokens, key, icon, tip string, danger, on 
 // ghostIconButton：行内透明图标钮（IconButton 默认 / danger tone）：悬停浅底（删除类红色 10%）+ 图标转前景 / 红。
 // show = false 时隐形但仍占位（同 reveal="hover-focus"：行悬停才显出），悬停到按钮本身时照样显出。
 func ghostIconButton(c *ui.Context, k tokens, key, icon, tip string, box, size float32, danger, show bool) ui.Element {
-	b := ui.Box(c).Size(box, box).Radius(6).Center().Key(key).Tooltip(tip).Role(ui.RoleButton).Label(tip)
+	b := tipOf(c, ui.Box(c).Size(box, box).Radius(rr(6)).Center().Key(key), tip).Role(ui.RoleButton).Label(tip)
+	hot := k.fg
+	if danger {
+		hot = k.danger
+	}
+	if col, ok := k.th.IconFace(b, k.muted, hot, false); ok { // 主题自己的图标钮三态
+		if !show && !b.Hovered() {
+			b.Opacity(0)
+		}
+		b.Children(func() { licon(c, icon, size, col) })
+		return b
+	}
 	hov := b.Hovered()
 	bg, col := ui.Transparent, k.muted
 	if hov {

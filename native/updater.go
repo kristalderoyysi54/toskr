@@ -304,14 +304,14 @@ func (a *app) updateDialog(c *ui.Context, k tokens) {
 				})
 			}
 			ui.Row(c).Margin(12, 0, 0, 0).Gap(8).Justify(ui.End).Children(func() {
-				if !a.upd.installing && ui.Button(c, tr("取消")).Clicked() {
+				if !a.upd.installing && btnOf(c, tr("取消")).Clicked() {
 					act = closeIt
 				}
 				label := tr("立即下载")
 				if a.upd.installing {
 					label = tr("下载中…")
 				}
-				if ui.Button(c, label).Clicked() && !a.upd.installing {
+				if btnOf(c, label).Clicked() && !a.upd.installing {
 					act = a.installUpdate
 				}
 			})

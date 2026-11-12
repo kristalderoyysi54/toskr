@@ -92,8 +92,8 @@ func (a *app) detailInlineImage(c *ui.Context, k tokens, n store.Note, file stri
 		if alt != "" {
 			tip = alt + " · " + tip
 		}
-		box := ui.Box(c).Size(dw, h*dw/max(w, 1)).Radius(8).Clip().Border(1, k.fg.Alpha(0.1)).Key("dimg-" + file).
-			Role(ui.RoleButton).Label(tr("查看原图")).Tooltip(tip)
+		box := tipOf(c, ui.Box(c).Size(dw, h*dw/max(w, 1)).Radius(rr(8)).Clip().Border(1, k.fg.Alpha(0.1)).Key("dimg-"+file).
+			Role(ui.RoleButton).Label(tr("查看原图")), tip)
 		box.Children(func() { ui.Image(c, img).Size(dw, h*dw/max(w, 1)) })
 		if box.Clicked() {
 			a.openDetailGallery(n, file)
@@ -144,8 +144,8 @@ func (a *app) detailThumbStrip(c *ui.Context, k tokens, n store.Note) {
 					cell := ui.Box(c).Size(48, 48).Key("dthumb-" + f)
 					hover := cell.Hovered()
 					cell.Children(func() {
-						b := ui.Box(c).Size(48, 48).Radius(6).Clip().Border(1, k.fg.Alpha(0.1)).Background(k.fg.Alpha(0.04)).
-							Key("dthumb-open-" + f).Role(ui.RoleButton).Label(tr("查看图片")).Tooltip(cmpOr(n.AltOf(f), tr("查看图片")))
+						b := tipOf(c, ui.Box(c).Size(48, 48).Radius(rr(6)).Clip().Border(1, k.fg.Alpha(0.1)).Background(k.fg.Alpha(0.04)).
+							Key("dthumb-open-"+f).Role(ui.RoleButton).Label(tr("查看图片")), cmpOr(n.AltOf(f), tr("查看图片")))
 						b.Children(func() {
 							if img := a.thumb(f); img != nil {
 								ui.Image(c, img).Size(48, 48).Fit(ui.Cover)
@@ -157,8 +157,8 @@ func (a *app) detailThumbStrip(c *ui.Context, k tokens, n store.Note) {
 						if !writable {
 							return
 						}
-						x := ui.Box(c).Absolute().Top(-4).Right(-4).Size(16, 16).Radius(8).Center().Key("dthumb-rm-" + f).
-							Role(ui.RoleButton).Label(tr("从卡片移除这张图片")).Tooltip(tr("从卡片移除这张图片"))
+						x := tipOf(c, ui.Box(c).Absolute().Top(-4).Right(-4).Size(16, 16).Radius(8).Center().Key("dthumb-rm-"+f).
+							Role(ui.RoleButton).Label(tr("从卡片移除这张图片")), tr("从卡片移除这张图片"))
 						if hover || x.Hovered() {
 							x.Background(k.fg.Alpha(0.8)).Children(func() { licon(c, "x", 10, c.Theme().Background) })
 						} else {
@@ -206,7 +206,7 @@ func (a *app) detailBlocksEdit(c *ui.Context, k tokens, n store.Note) {
 					ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
 						text(c, head, 11, 16, 400, k.muted).Shrink(0)
 						if label != head {
-							text(c, label, 11, 16, 400, k.fg.Alpha(0.75)).SingleLine().Tooltip(label)
+							tipOf(c, text(c, label, 11, 16, 400, k.fg.Alpha(0.75)).SingleLine(), label)
 						}
 						ui.Spacer(c)
 						if ghostIconButton(c, k, fmt.Sprintf("dblk-view-%d", i), "maximize-2", fmt.Sprintf(tr("查看%s"), label), 22, 12, false, true).Clicked() {
@@ -224,8 +224,8 @@ func (a *app) detailBlocksEdit(c *ui.Context, k tokens, n store.Note) {
 					w, h := ui.ImageSize(img)
 					dw := min(w, detailImgW-24)
 					ui.Row(c).FillWidth().Justify(ui.Center).Children(func() {
-						pic := ui.Box(c).Size(dw, h*dw/max(w, 1)).Radius(8).Clip().Key(fmt.Sprintf("dblk-pic-%d", i)).
-							Role(ui.RoleButton).Label(fmt.Sprintf(tr("选择%s"), label)).Tooltip(tr("单击选中，双击查看")).Selected(sel)
+						pic := tipOf(c, ui.Box(c).Size(dw, h*dw/max(w, 1)).Radius(rr(8)).Clip().Key(fmt.Sprintf("dblk-pic-%d", i)).
+							Role(ui.RoleButton).Label(fmt.Sprintf(tr("选择%s"), label)), tr("单击选中，双击查看")).Selected(sel)
 						pic.Children(func() { ui.Image(c, img).Size(dw, h*dw/max(w, 1)) })
 						if pic.DoubleClicked() {
 							a.openDetailGallery(n, file)
@@ -241,8 +241,8 @@ func (a *app) detailBlocksEdit(c *ui.Context, k tokens, n store.Note) {
 						if blocked != "" {
 							tip = fmt.Sprintf(tr("发送选中不可用：%s"), blocked)
 						}
-						sb := ui.Row(c).Height(24).Padding(0, 8).Gap(4).Radius(6).AlignItems(ui.Center).Key(fmt.Sprintf("dblk-send-%d", i)).
-							Role(ui.RoleButton).Label(tip).Tooltip(tip)
+						sb := tipOf(c, ui.Row(c).Height(24).Padding(0, 8).Gap(4).Radius(rr(6)).AlignItems(ui.Center).Key(fmt.Sprintf("dblk-send-%d", i)).
+							Role(ui.RoleButton).Label(tip), tip)
 						fg := k.fg
 						switch {
 						case blocked != "":
@@ -361,7 +361,7 @@ func (a *app) imageAltBar(c *ui.Context, k tokens, n store.Note, file, meta stri
 	if d.altEdit && editable {
 		ui.Row(c).FillWidth().Shrink(0).Padding(6, 12).Gap(6).AlignItems(ui.Center).BorderWidth(1, 0, 0, 0).BorderColor(k.inputBorder).Key("img-alt-edit").Children(func() {
 			licon(c, "message-square-text", 12, k.muted)
-			ui.Row(c).Grow(1).Basis(0).Height(26).Padding(0, 8).Radius(6).Background(k.fg.Alpha(0.05)).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Grow(1).Basis(0).Height(26).Padding(0, 8).Radius(rr(6)).Background(k.fg.Alpha(0.05)).AlignItems(ui.Center).Children(func() {
 				ui.TextInputBase(c, &d.altDraft).Grow(1).Font(fontSans).FontSize(12).FixedLineHeight(18).TextColor(k.fg).PlaceholderColor(k.muted).
 					Placeholder(tr("描述这张图，例如「登录页报错截图」")).Label(tr("图片说明")).Focus().OnTextKey(func(key ui.TextKey) bool {
 					if key.Key == ui.KeyEnter {
@@ -393,9 +393,9 @@ func (a *app) imageAltBar(c *ui.Context, k tokens, n store.Note, file, meta stri
 		if label == "" {
 			label = tr("添加图片说明")
 		}
-		b := ui.Row(c).Height(22).Padding(0, 6).Gap(4).Radius(6).AlignItems(ui.Center).Shrink(1).Key("img-alt").Role(ui.RoleButton)
+		b := ui.Row(c).Height(22).Padding(0, 6).Gap(4).Radius(rr(6)).AlignItems(ui.Center).Shrink(1).Key("img-alt").Role(ui.RoleButton)
 		if alt != "" {
-			b.Label(tr("图片说明：") + alt).Tooltip(alt)
+			tipOf(c, b.Label(tr("图片说明：")+alt), alt)
 		} else {
 			b.Label(label)
 		}

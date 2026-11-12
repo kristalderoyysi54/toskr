@@ -49,7 +49,7 @@ func TestTodayCalendarEvents(t *testing.T) {
 	a.switchPage(pageTasks)
 	a.reload()
 	tt.Frame()
-	for _, s := range []string{"全天", "全天会议", "下午评审", "15:00–16:00", "写周报", "接孩子", "3 个日程"} { // 定时日程是时间轴上的色块（地点等在悬停提示里）
+	for _, s := range []string{"全天", "全天会议", "下午评审", "15:00–16:00", "写周报", "接孩子", "日程"} { // 定时日程是时间轴上的色块（地点等在悬停提示里）
 		if !tt.HasText(s) {
 			t.Fatalf("缺 %q：%v", s, tt.Texts())
 		}

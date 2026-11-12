@@ -134,7 +134,7 @@ func (a *app) snipAssistant(c *ui.Context, k tokens, s settingsTokens) {
 	u := &a.snip
 	st := a.store.Settings()
 	ready := st.AIOn() && strings.TrimSpace(st.AIModel) != ""
-	ui.Column(c).Gap(8).Padding(10).Radius(10).Border(1, k.inputBorder).Key("snip-ai").Children(func() {
+	ui.Column(c).Gap(8).Padding(10).Radius(rr(10)).Border(1, k.inputBorder).Key("snip-ai").Children(func() {
 		title := tr("描述你的想法")
 		if u.cand != nil {
 			title = tr("继续调整这份建议")
@@ -177,7 +177,7 @@ func (a *app) snipAssistant(c *ui.Context, k tokens, s settingsTokens) {
 		}
 		text(c, tr("建议已生成，采用到编辑区后可继续修改和预览。"), 11, 16, 400, k.muted)
 		text(c, u.cand[0], 13, 18, 500, k.fg)
-		text(c, u.cand[1], 12, 18, 400, k.fg).Wrap().Padding(8).Radius(8).Background(k.track)
+		text(c, u.cand[1], 12, 18, 400, k.fg).Wrap().Padding(8).Radius(rr(8)).Background(k.track)
 		ui.Row(c).Gap(8).Children(func() {
 			if button(c, s, "采用到编辑区") && !u.busy {
 				a.snipLabel, a.snipText = u.cand[0], u.cand[1]
@@ -217,6 +217,6 @@ func (a *app) snipPreview(c *ui.Context, k tokens, s settingsTokens) {
 		if m == "" {
 			m = example
 		}
-		text(c, store.ApplyPromptTemplate(a.snipText, m), 12, 18, 400, k.fg).Wrap().Padding(8).Radius(8).Background(k.track)
+		text(c, store.ApplyPromptTemplate(a.snipText, m), 12, 18, 400, k.fg).Wrap().Padding(8).Radius(rr(8)).Background(k.track)
 	})
 }

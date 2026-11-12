@@ -276,7 +276,11 @@ func (a *app) commandPalette(c *ui.Context, k tokens) {
 	fade := ui.ElementTransition{Duration: 120 * time.Millisecond, Ease: easeTw, Enter: &ui.Motion{Y: -4}}
 	floatSurface(ui.Column(c).Absolute().Left(12).Right(12).Top(56).MaxHeight(vh*0.7).Padding(6).Radius(12), k).
 		Key("cmd-palette").Transition(fade).Label(tr("命令面板")).Children(func() {
-		ui.Row(c).Height(30).Padding(0, 8).Gap(8).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(k.bandLine).Children(func() {
+		line := k.bandLine
+		if l, ok := k.th.Line(); ok {
+			line = l
+		}
+		ui.Row(c).Height(30).Padding(0, 8).Gap(8).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(line).Children(func() {
 			licon(c, "command", 14, k.muted)
 			prev := a.cmdQuery
 			ui.TextInputBase(c, &a.cmdQuery).Grow(1).Font(fontSans).FontSize(13).FixedLineHeight(18).TextColor(k.fg).
@@ -308,7 +312,9 @@ func (a *app) commandPalette(c *ui.Context, k tokens) {
 			if a.cmdQuery != prev {
 				a.cmdCursor = 0
 			}
-			keycap(c, k, "Esc", 0)
+			if !k.th.KeyHint(c, "Esc", k.fg) {
+				keycap(c, k, "Esc", 0)
+			}
 		})
 		ui.Scroll(c).Grow(1).Shrink(1).Scrollbars(false).Children(func() {
 			ui.Column(c).Padding(4, 0).Children(func() {
@@ -321,21 +327,26 @@ func (a *app) commandPalette(c *ui.Context, k tokens) {
 						last = it.group
 						text(c, tr(it.group), 10, 14, 500, k.muted).Padding(6, 8, 2, 8)
 					}
-					row := ui.Row(c).Height(26).Padding(0, 8).Gap(8).Radius(6).AlignItems(ui.Center).Key("cmd-" + it.id).Role(ui.RoleButton).Label(it.label)
+					row := ui.Row(c).Height(26).Padding(0, 8).Gap(8).Radius(rr(6)).AlignItems(ui.Center).Key("cmd-" + it.id).Role(ui.RoleButton).Label(it.label)
 					if row.Hovered() {
 						a.cmdCursor = i
 					}
-					fg := k.fg
+					fg, dim := k.fg, k.muted
 					if i == a.cmdCursor {
 						row.Background(k.pressed)
+					}
+					if hl, ok := k.th.MenuItem(row, "command", i == a.cmdCursor); ok {
+						fg, dim = hl, hl
 					}
 					row.Children(func() {
 						text(c, it.label, 12, 18, 400, fg).SingleLine().Grow(1).Basis(0)
 						if it.hint != "" {
-							text(c, it.hint, 10, 14, 400, k.muted)
+							text(c, it.hint, 10, 14, 400, dim)
 						}
 						if it.shortcut != "" {
-							keycap(c, k, it.shortcut, 0)
+							if !k.th.KeyHint(c, it.shortcut, fg) {
+								keycap(c, k, it.shortcut, 0)
+							}
 						}
 					})
 					if row.Clicked() {

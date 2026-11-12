@@ -99,21 +99,15 @@ func TestEmptyStateHint(t *testing.T) {
 	}
 }
 
-// 空分组：虚线框提示拖入，「设为捕获目标」一点即生效；已是捕获目标的组只给说明。
+// 空分组：一行「此分组为空」（同 Tauri）；「设为捕获目标」在分组右键菜单里（见 tasks_keys_test）。
 func TestEmptySectionCaptureLink(t *testing.T) {
 	a, tt := testApp(t, "收件箱的卡")
 	id := a.store.AddSection("资料")
 	a.reload()
 	tt.Frame()
-	if !tt.HasText("把卡片拖到这里") || !tt.HasText("设为捕获目标") {
+	_ = id
+	if !tt.HasText("此分组为空") || tt.HasText("把卡片拖到这里") || tt.HasText("设为捕获目标") {
 		t.Fatalf("%v", tt.Texts())
-	}
-	if err := tt.Click("设为捕获目标"); err != nil {
-		t.Fatal(err)
-	}
-	tt.Frame()
-	if a.store.Settings().CaptureSection != id || !tt.HasText("捕获的内容会存到这里") || tt.HasText("设为捕获目标") {
-		t.Fatalf("应设为捕获目标 %q %v", a.store.Settings().CaptureSection, tt.Texts())
 	}
 	if dir := os.Getenv("TOSKR_SHOT_DIR"); dir != "" {
 		b, _ := testApp(t)

@@ -37,15 +37,15 @@ func (a *app) dueTrigger(c *ui.Context, k tokens, t store.Task, now time.Time, s
 		case "today":
 			fg, bg = k.amberText, k.amberBar.Alpha(0.15)
 		}
-		anchor = ui.Box(c).Height(18).Padding(2, 6).Radius(8).Background(bg).Key("due-" + t.ID).Role(ui.RoleButton).
-			Label(tr("修改到期时间")).Tooltip(tr("修改到期时间"))
+		anchor = tipOf(c, ui.Box(c).Height(18).Padding(2, 6).Radius(rr(8)).Background(bg).Key("due-"+t.ID).Role(ui.RoleButton).
+			Label(tr("修改到期时间")), tr("修改到期时间"))
 		anchor.Children(func() { text(c, dueBadge(t.DueAt, now), 10, 14, 400, fg) })
 	} else {
 		if !show && !open {
 			return
 		}
-		anchor = ui.Row(c).Height(18).Padding(2, 4).Gap(2).Radius(8).AlignItems(ui.Center).Key("due-" + t.ID).Role(ui.RoleButton).
-			Label(tr("设置到期提醒")).Tooltip(tr("设置到期提醒"))
+		anchor = tipOf(c, ui.Row(c).Height(18).Padding(2, 4).Gap(2).Radius(rr(8)).AlignItems(ui.Center).Key("due-"+t.ID).Role(ui.RoleButton).
+			Label(tr("设置到期提醒")), tr("设置到期提醒"))
 		col := k.muted
 		if anchor.Hovered() {
 			col = k.fg
@@ -67,7 +67,7 @@ func (a *app) dueTrigger(c *ui.Context, k tokens, t store.Task, now time.Time, s
 		return
 	}
 	_, vh := c.Size()
-	ui.Popover(c, anchor, &open, func() { // 高度钳到窗口的一半多一点，超出内滚（同 Tauri max-h available-height）
+	popoverOf(c, anchor, &open, func() { // 高度钳到窗口的一半多一点，超出内滚（同 Tauri max-h available-height）
 		ui.Scroll(c).Width(224).MaxHeight(max(260, vh*0.62)).Scrollbars(false).Children(func() {
 			ui.Column(c).Gap(4).Children(func() { a.duePopoverBody(c, k, t, now) })
 		})
@@ -105,7 +105,8 @@ func (a *app) mutateTask(id string, fn func(t *store.Task)) {
 
 func optionChip(c *ui.Context, k tokens, key, label string, on bool) bool {
 	s := stok(c)
-	b := ui.Box(c).Height(20).Padding(0, 6).Radius(6).Center().Key(key).Role(ui.RoleButton).Label(label)
+	b := ui.Box(c).Height(20).Padding(0, 6).Radius(rr(6)).Center().Key(key).Role(ui.RoleButton).Label(label)
+	k.th.OptionChip(b)
 	fg := k.muted
 	switch {
 	case on:
@@ -125,7 +126,7 @@ func (a *app) duePopoverBody(c *ui.Context, k tokens, t store.Task, now time.Tim
 	label := func(l string) { text(c, l, 10, 14, 500, k.muted).Padding(2, 4, 0, 4) }
 	sep := func() { ui.Box(c).Height(1).Margin(2, 0).Background(k.inputBorder) }
 	item := func(key, l string, fg ui.Color) bool {
-		b := ui.Row(c).Height(24).Padding(0, 8).Radius(6).AlignItems(ui.Center).Key(key).Role(ui.RoleButton).Label(l)
+		b := ui.Row(c).Height(24).Padding(0, 8).Radius(rr(6)).AlignItems(ui.Center).Key(key).Role(ui.RoleButton).Label(l)
 		if b.Hovered() {
 			b.Background(k.track)
 		}
@@ -140,10 +141,12 @@ func (a *app) duePopoverBody(c *ui.Context, k tokens, t store.Task, now time.Tim
 	}
 	sep()
 	ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
-		ui.DateInput(c, &a.dueDraft).Grow(1).FontSize(12).Label(tr("到期日期"))
-		ui.TimeInput(c, &a.dueDraft).FontSize(12).Label(tr("到期时间"))
+		di := ui.DateInput(c, &a.dueDraft).Grow(1).FontSize(12).Label(tr("到期日期"))
+		ti := ui.TimeInput(c, &a.dueDraft).FontSize(12).Label(tr("到期时间"))
+		k.th.Well(di)
+		k.th.Well(ti)
 	})
-	set := ui.Row(c).Height(26).Radius(6).Justify(ui.Center).AlignItems(ui.Center).Background(s.primary).Key("due-set").Role(ui.RoleButton).Label(tr("设定该时间"))
+	set := ui.Row(c).Height(26).Radius(rr(6)).Justify(ui.Center).AlignItems(ui.Center).Background(s.primary).Key("due-set").Role(ui.RoleButton).Label(tr("设定该时间"))
 	set.Children(func() { text(c, tr("设定该时间"), 12, 17, 500, gray(1, 1)) })
 	if set.Clicked() {
 		a.setTaskDue(t, a.dueDraft.Truncate(time.Minute))
@@ -277,7 +280,7 @@ func (a *app) recurrenceEditor(c *ui.Context, k tokens, t store.Task, now time.T
 		}
 		ui.Row(c).Gap(6).Padding(0, 2).AlignItems(ui.Center).Children(func() {
 			text(c, tr("还剩"), 11, 16, 400, k.muted)
-			in := ui.TextInputBase(c, &a.dueCount).Width(48).Height(22).Padding(0, 6).Radius(6).Border(1, k.inputBorder).
+			in := ui.TextInputBase(c, &a.dueCount).Width(48).Height(22).Padding(0, 6).Radius(rr(6)).Border(1, k.inputBorder).
 				Font(fontSans).FontSize(11).TextColor(k.fg).Label(tr("剩余重复次数（含本期）"))
 			if in.Changed() {
 				if n, err := strconv.Atoi(strings.TrimSpace(a.dueCount)); err == nil && n >= 1 && n <= 999 {

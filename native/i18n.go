@@ -250,7 +250,8 @@ func init() { // 配色方案名与说明（schemes.go / settings.go schemeHint�
 	for k, v := range map[string]string{
 		"琉璃": "Glass", "纸墨": "Paper", "抹茶": "Matcha", "樱粉": "Sakura", "雾蓝": "Fog",
 		"固定浅色、整窗不透明；切回琉璃恢复原主题与毛玻璃": "Always light and opaque. Switch back to Glass to restore your theme and translucency",
-		"固定浅色；切回琉璃恢复深浅色设置":         "Always light. Switch back to Glass to restore your light/dark setting",
+		"现代": "Modern", "颜色": "Color", "模式": "Mode", "外观": "Appearance", "语言与显示": "Language & display",
+		"Mac OS 9 经典外观：固定浅色、整窗不透明；切回现代恢复颜色、模式与毛玻璃": "Mac OS 9 classic look: always light and opaque. Switch back to Modern to restore color, mode and translucency",
 	} {
 		if _, ok := en[k]; !ok {
 			en[k] = v

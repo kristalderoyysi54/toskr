@@ -65,8 +65,7 @@ type barState struct {
 func (a *app) barHeader(c *ui.Context, k tokens) {
 	ui.Row(c).Height(40).Padding(8, 12, 4, 16).Gap(8).AlignItems(ui.Center).DragWindow().Key("bar-header").Children(func() { // 整个头部可拖（同 Tauri header drag-region）
 		ui.Row(c).Grow(1).Basis(0).Gap(10).AlignItems(ui.Center).Children(func() {
-			text(c, "Toskr", 13, 18, 600, k.fg).LetterSpacing(-0.325).Cursor(ui.CursorGrab).
-				Tooltip(tr("拖动此处可移动面板（未吸附时）")).DragWindow()
+			tipOf(c, text(c, "Toskr", 13, 18, 600, k.fg).LetterSpacing(-0.325).Cursor(ui.CursorGrab), tr("拖动此处可移动面板（未吸附时）")).DragWindow()
 			a.tabStrip(c, k)
 		})
 		ui.ScrollHorizontal(c).Scrollbars(false).Shrink(1).MaxWidth(560).Children(func() {
@@ -249,7 +248,7 @@ func abs32(v float32) float32 {
 
 // barView：横栏形态的整块面板（Platinum 在横栏下不生效，同 Tauri platinumLayout && !horizontalBar）。
 func (a *app) barView(c *ui.Context, k tokens, shell ui.Element) {
-	shell.Radius(14).Children(func() {
+	shell.Radius(rr(14)).Children(func() {
 		a.barHeader(c, k)
 		if a.searchOpen {
 			a.searchRow(c, k)
@@ -387,8 +386,9 @@ func (a *app) stripNoteTile(c *ui.Context, k tokens, n store.Note, h float32, cl
 	}
 	focused := idx >= 0 && idx == a.selected && a.focusList
 	checked := a.chosen.Has(n.ID)
-	box := ui.Column(c).Width(h * 16 / 17).FillHeight().Radius(10).Clip().Key(n.ID)
+	box := ui.Column(c).Width(h * 16 / 17).FillHeight().Radius(rr(10)).Clip().Key(n.ID)
 	cardFill(box, k)
+	k.th.Card(box, checked)
 	hovered := box.Hovered()
 	a.bandHover(n.ID, hovered)
 	elevated(box, k, hovered || checked || focused)
@@ -414,7 +414,7 @@ func (a *app) stripNoteTile(c *ui.Context, k tokens, n store.Note, h float32, cl
 			fg := k.cardHeadText
 			if !a.cardInlineInput(c, k, n) {
 				title := cmpOr(n.Title, cardTitle(n))
-				tb := ui.Column(c).Grow(1).Basis(0).Key("strip-title").Role(ui.RoleButton).Label(title).Tooltip(tr("点击重命名"))
+				tb := tipOf(c, ui.Column(c).Grow(1).Basis(0).Key("strip-title").Role(ui.RoleButton).Label(title), tr("点击重命名"))
 				tb.Children(func() {
 					text(c, title, 11, 15, 600, fg).SingleLine()
 					text(c, ago(n.CreatedAt, a.now()), 10, 13, 400, fg).SingleLine().Opacity(0.7)
@@ -444,7 +444,7 @@ func (a *app) stripNoteTile(c *ui.Context, k tokens, n store.Note, h float32, cl
 					iw, ih := ui.ImageSize(img)
 					mw, mh := h*16/17-16, h-36-30
 					s := min(mw/max(float32(iw), 1), mh/max(float32(ih), 1))
-					ui.Image(c, img).Size(float32(iw)*s, float32(ih)*s).Radius(6)
+					ui.Image(c, img).Size(float32(iw)*s, float32(ih)*s).Radius(rr(6))
 				}
 			case len(n.MediaFiles()) > 0 && !isLink: // 图文：正文 + 下方缩略条
 				doneText(highlightText(c, k, n.Text, a.query, 12, 18, k.fg).Wrap().MaxLines(max(1, int((h-36-30-36)/18))), k, n) // 按可用高度取整行
@@ -475,6 +475,7 @@ func (a *app) stripNoteTile(c *ui.Context, k tokens, n store.Note, h float32, cl
 			}
 		}
 		a.cardOverlays(c, k, n, checked, false)
+		k.th.CardOutline(c)
 		a.quickBadge(c, k, idx, 4)
 	})
 	clk, dbl, mods := cardPressed(box, n.ID) // 正文是拖出源，点在正文上也算点卡片
@@ -494,12 +495,13 @@ func (a *app) taskTile(c *ui.Context, k tokens, t store.Task, h float32) {
 	if open {
 		w = 384
 	}
-	card := ui.Column(c).Width(w).FillHeight().Padding(6, 8).Gap(6).Radius(10).Clip().Key("ttile-" + t.ID)
+	card := ui.Column(c).Width(w).FillHeight().Padding(6, 8).Gap(6).Radius(rr(10)).Clip().Key("ttile-" + t.ID)
 	if t.Spark && !done {
 		card.Background(k.sparkRow)
 	} else {
 		cardFill(card, k)
 	}
+	k.th.ListRow(card)
 	if a.taskFocus == t.ID {
 		card.Border(2, stok(c).primary.Alpha(0.6))
 	}
@@ -533,7 +535,7 @@ func (a *app) taskTile(c *ui.Context, k tokens, t store.Task, h float32) {
 				icon, col = "circle-dot", stok(c).primary
 			}
 			stLabel := fmt.Sprintf(tr("状态：%s（点击切换）"), taskStatusLabel(t.Status))
-			st := ui.Box(c).Size(16, 16).Role(ui.RoleButton).Label(stLabel).Tooltip(stLabel)
+			st := tipOf(c, ui.Box(c).Size(16, 16).Role(ui.RoleButton).Label(stLabel), stLabel)
 			st.Children(func() { licon(c, icon, 16, col) })
 			if st.Clicked() {
 				if t.Spark && !done {

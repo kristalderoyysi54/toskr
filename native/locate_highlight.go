@@ -96,7 +96,7 @@ func (a *app) locateView(c *ui.Context) {
 	if c.Theme().Dark {
 		col = oklch(0.828, 0.189, 84.429, 1) // amber-400
 	}
-	box := ui.Box(c).Fill().Radius(10).Border(2, col).Background(col.Alpha(0.16))
+	box := ui.Box(c).Fill().Radius(rr(10)).Border(2, col).Background(col.Alpha(0.16))
 	if !c.Preferences().ReduceMotion { // 1.1s 透明度呼吸；减少动态效果时常亮
 		box.Opacity(0.55 + 0.45*box.Loop("breathe", 1100*time.Millisecond, ui.Bounce(easeMInOut)))
 	}

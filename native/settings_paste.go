@@ -158,19 +158,22 @@ func (a *app) pasteRuleInspector(c *ui.Context, k tokens, s settingsTokens, st s
 // pasteRuleList：左列——搜索、默认规则、各应用（名称 + 所用方案）、选择应用…
 func (a *app) pasteRuleList(c *ui.Context, k tokens, s settingsTokens, ps []store.TargetProfile, apps []string) {
 	u := &a.paste
-	ui.Row(c).Height(32).Padding(0, 8).Gap(6).Radius(10).Background(s.input).Border(1, s.inputBorder).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).Height(32).Padding(0, 8).Gap(6).Radius(rr(10)).Background(s.input).Border(1, s.inputBorder).AlignItems(ui.Center).Children(func() {
 		licon(c, "search", 14, k.muted)
 		ui.TextInputBase(c, &u.query).Grow(1).Font(fontSans).FontSize(12).FixedLineHeight(17).
 			TextColor(k.fg).PlaceholderColor(k.muted).Placeholder(tr("搜索应用")).Label(tr("搜索应用或方案"))
 	})
 	entry := func(key, title, sub string, on bool, icon func()) bool {
-		b := ui.Row(c).Padding(8, 8).Gap(8).Radius(10).Border(1, s.cardBorder).AlignItems(ui.Center).Key("rule-" + key).
-			Role(ui.RoleButton).Label(title).Selected(on).Tooltip(title)
-		fg := k.fg
+		b := tipOf(c, ui.Row(c).Padding(8, 8).Gap(8).Radius(rr(10)).Border(1, s.cardBorder).AlignItems(ui.Center).Key("rule-"+key).
+			Role(ui.RoleButton).Label(title).Selected(on), title)
+		fg, dim := k.fg, k.muted
 		switch {
 		case on:
 			b.Background(s.navSel).Border(1, s.navSelBorder)
 			fg = s.primary
+			if _, on, ok := s.th.Highlight(); ok { // 主题的选中项是高亮色底：文字用其上的前景色（主色字压在主色底上看不见）
+				fg, dim = on, on
+			}
 		case b.Hovered():
 			b.Background(k.track)
 		default:
@@ -180,7 +183,7 @@ func (a *app) pasteRuleList(c *ui.Context, k tokens, s settingsTokens, ps []stor
 			icon()
 			ui.Column(c).Grow(1).Basis(0).Gap(1).Children(func() {
 				text(c, title, 12, 17, 500, fg).SingleLine()
-				text(c, sub, 10, 14, 400, k.muted).SingleLine()
+				text(c, sub, 10, 14, 400, dim).SingleLine()
 			})
 		})
 		return b.Clicked()
@@ -216,7 +219,7 @@ func (a *app) pasteRuleList(c *ui.Context, k tokens, s settingsTokens, ps []stor
 		}
 		shown++
 		if entry(b, name, sub, u.sel == b, func() {
-			ui.Box(c).Size(24, 24).Radius(6).Background(k.track).Center().Children(func() {
+			ui.Box(c).Size(24, 24).Radius(rr(6)).Background(k.track).Center().Children(func() {
 				if img := a.appIcon(b); img != nil {
 					ui.Image(c, img).Size(20, 20)
 				} else {
@@ -230,7 +233,7 @@ func (a *app) pasteRuleList(c *ui.Context, k tokens, s settingsTokens, ps []stor
 	if len(missing) > 0 {
 		shown++
 		label := fmt.Sprintf(tr("另有 %d 个未安装的终端"), len(missing))
-		row := ui.Row(c).Height(24).Padding(0, 8).Gap(4).Radius(8).AlignItems(ui.Center).Key("rule-missing").Role(ui.RoleButton).Label(label)
+		row := ui.Row(c).Height(24).Padding(0, 8).Gap(4).Radius(rr(8)).AlignItems(ui.Center).Key("rule-missing").Role(ui.RoleButton).Label(label)
 		if row.Hovered() {
 			row.Background(k.track)
 		}
@@ -261,7 +264,7 @@ func (a *app) pasteRuleList(c *ui.Context, k tokens, s settingsTokens, ps []stor
 
 // pickAppButton：占满一行、带图标的次要按钮（白底细描边，同 button）。
 func pickAppButton(c *ui.Context, k tokens, s settingsTokens, key, icon, label string) bool {
-	b := ui.Row(c).Height(28).Padding(0, 10).Gap(6).Radius(10).Border(1, s.btnBorder).AlignItems(ui.Center).Justify(ui.Center).Key(key).Role(ui.RoleButton).Label(label)
+	b := ui.Row(c).Height(28).Padding(0, 10).Gap(6).Radius(rr(10)).Border(1, s.btnBorder).AlignItems(ui.Center).Justify(ui.Center).Key(key).Role(ui.RoleButton).Label(label)
 	bg := s.btn
 	if b.Hovered() {
 		bg = s.btnHover
@@ -276,7 +279,7 @@ func pickAppButton(c *ui.Context, k tokens, s settingsTokens, key, icon, label s
 
 // ruleSelect：右侧字段的下拉（Tauri SimpleSelect w-56）；disabled 时只显示当前值、不可点。
 func ruleSelect(c *ui.Context, k tokens, s settingsTokens, key string, opts []opt, cur string, disabled bool, pick func(string)) {
-	b := ui.Row(c).Width(196).Height(32).Padding(0, 8).Gap(4).Radius(10).Border(1, s.inputBorder).AlignItems(ui.Center).Key(key)
+	b := ui.Row(c).Width(196).Height(32).Padding(0, 8).Gap(4).Radius(rr(10)).Border(1, s.inputBorder).AlignItems(ui.Center).Key(key)
 	if disabled {
 		b.Opacity(0.55)
 	} else if b.Hovered() {
@@ -316,7 +319,7 @@ func (a *app) pasteRuleCard(c *ui.Context, k tokens, s settingsTokens, st store.
 	if sel != "" {
 		name, subtitle = a.appName(sel), tr("设置此应用以后的粘贴行为")
 	}
-	card := ui.Column(c).Grow(1).Basis(0).Padding(14).Gap(12).Radius(14).Background(s.card).Border(1, s.cardBorder).Key("rule-card-" + sel)
+	card := ui.Column(c).Grow(1).Basis(0).Padding(14).Gap(12).Radius(rr(14)).Background(s.card).Border(1, s.cardBorder).Key("rule-card-" + sel)
 	card.Children(func() {
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 			if sel == "" {
@@ -327,12 +330,12 @@ func (a *app) pasteRuleCard(c *ui.Context, k tokens, s settingsTokens, st store.
 				licon(c, "app-window", 24, k.muted)
 			}
 			ui.Column(c).Grow(1).Basis(0).Gap(1).Children(func() {
-				text(c, name, 15, 20, 600, k.fg).SingleLine().Tooltip(sel)
+				tipOf(c, text(c, name, 15, 20, 600, k.fg).SingleLine(), sel)
 				text(c, subtitle, 11, 16, 400, k.muted).SingleLine()
 			})
 		})
 		// 影响范围：所用方案、共享它的应用、改动会影响谁
-		ui.Column(c).Padding(10).Gap(6).Radius(8).Background(k.track.Alpha(0.6)).Children(func() {
+		ui.Column(c).Padding(10).Gap(6).Radius(rr(8)).Background(k.track.Alpha(0.6)).Children(func() {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Column(c).Grow(1).Basis(0).Gap(1).Children(func() {
 					text(c, profileName(p), 12, 17, 600, k.fg).SingleLine()
@@ -357,7 +360,7 @@ func (a *app) pasteRuleCard(c *ui.Context, k tokens, s settingsTokens, st store.
 			if len(owners) == 1 && len(owners[0].BundleIDs) > 1 {
 				ui.Row(c).Wrap().Gap(4).Children(func() {
 					for _, b := range owners[0].BundleIDs {
-						ui.Row(c).Height(20).Padding(0, 6).Gap(4).Radius(10).Background(s.card).AlignItems(ui.Center).Key("share-" + b).Tooltip(b).Children(func() {
+						tipOf(c, ui.Row(c).Height(20).Padding(0, 6).Gap(4).Radius(10).Background(s.card).AlignItems(ui.Center).Key("share-"+b), b).Children(func() {
 							if img := a.appIcon(b); img != nil {
 								ui.Image(c, img).Size(12, 12)
 							}

@@ -154,7 +154,7 @@ func (a *app) billsPage(c *ui.Context, k tokens) {
 			if cv, ok := a.billConv(cur); ok {
 				label = approx(cur, monthSpend(a.bills, now, cv))
 			}
-			text(c, fmt.Sprintf(tr("本月 %s"), label), 13, 18, 600, k.fg).SingleLine().Tooltip(parts)
+			tipOf(c, text(c, fmt.Sprintf(tr("本月 %s"), label), 13, 18, 600, k.fg).SingleLine(), parts)
 			sub := tr("未来 7 天没有到期账单")
 			if len(upcoming) > 0 {
 				sub = fmt.Sprintf(tr("未来 7 天有 %d 笔到期"), len(upcoming))
@@ -280,7 +280,7 @@ func (a *app) billRow(c *ui.Context, k tokens, b store.Bill, cur string, now tim
 	}
 	inactive := b.Status != "active"
 	paid := store.CardPaidForCurrentCycle(b, now)
-	row := ui.Column(c).Padding(6).Radius(10).Key(scope + "-" + b.ID)
+	row := ui.Column(c).Padding(6).Radius(rr(10)).Key(scope + "-" + b.ID)
 	hovered := row.Hovered()
 	rowBg := ui.Transparent
 	if hovered {
@@ -327,11 +327,11 @@ func (a *app) billRow(c *ui.Context, k tokens, b store.Bill, cur string, now tim
 				return
 			}
 			if paid {
-				text(c, fmt.Sprintf(tr("已还 · 下期 %d/%d"), b.NextDueAt.Month(), b.NextDueAt.Day()), 10, 14, 400, k.ok).Padding(1, 4).Radius(6).Background(k.ok.Alpha(0.1))
+				text(c, fmt.Sprintf(tr("已还 · 下期 %d/%d"), b.NextDueAt.Month(), b.NextDueAt.Day()), 10, 14, 400, k.ok).Padding(1, 4).Radius(rr(6)).Background(k.ok.Alpha(0.1))
 				return
 			}
 			label, tone := billDueBadge(b, now)
-			badge := text(c, label, 10, 14, 400, k.muted).Padding(1, 4).Radius(6)
+			badge := text(c, label, 10, 14, 400, k.muted).Padding(1, 4).Radius(rr(6))
 			switch tone {
 			case "overdue":
 				badge.TextColor(k.danger).Background(k.danger.Alpha(0.1))
@@ -342,7 +342,7 @@ func (a *app) billRow(c *ui.Context, k tokens, b store.Bill, cur string, now tim
 		if a.paying == b.ID {
 			ui.Row(c).Margin(6, 0, 0, 32).Gap(6).AlignItems(ui.Center).Children(func() {
 				text(c, tr("本期实付"), 10, 14, 400, k.muted)
-				ui.Row(c).Width(80).Height(22).Padding(0, 6).Radius(8).Border(1, k.inputBorder).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).Width(80).Height(22).Padding(0, 6).Radius(rr(8)).Border(1, k.inputBorder).AlignItems(ui.Center).Children(func() {
 					ui.TextInputBase(c, &a.payAmount).Grow(1).Font(fontSans).FontSize(12).FixedLineHeight(17).TextColor(k.fg).Focus().
 						OnTextKey(func(key ui.TextKey) bool {
 							switch key.Key {
@@ -421,7 +421,7 @@ func (a *app) billMenu(c *ui.Context, m *ui.Menu, b store.Bill, scope string) {
 func (a *app) billWeekStrip(c *ui.Context, k tokens, now time.Time) {
 	s := stok(c)
 	from := dayStart(now)
-	ui.Row(c).Padding(4).Gap(4).Radius(14).Background(k.track).Children(func() {
+	ui.Row(c).Padding(4).Gap(4).Radius(rr(14)).Background(k.track).Children(func() {
 		for i := range 7 {
 			day := from.AddDate(0, 0, i)
 			var due []store.Bill
@@ -431,7 +431,7 @@ func (a *app) billWeekStrip(c *ui.Context, k tokens, now time.Time) {
 				}
 			}
 			sel := day.Equal(a.billDay)
-			cell := ui.Box(c).Grow(1).Basis(0).Height(65).Radius(10).Key(day.Format("0102"))
+			cell := ui.Box(c).Grow(1).Basis(0).Height(65).Radius(rr(10)).Key(day.Format("0102"))
 			wcol, dcol := k.muted, k.fg
 			hoverBg := ui.Transparent
 			if sel {
@@ -443,7 +443,7 @@ func (a *app) billWeekStrip(c *ui.Context, k tokens, now time.Time) {
 			wcol, dcol = cell.AnimateColor("w", wcol, tweenTw), cell.AnimateColor("d", dcol, tweenTw)
 			cell.Children(func() {
 				if sel { // 选中块是共享布局指示器（layoutId bill-week-thumb，springControl）
-					ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Radius(10).Background(s.primary).PassThrough().
+					ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Radius(rr(10)).Background(s.primary).PassThrough().
 						Transition(ui.ElementTransition{Match: layoutID{"bill-week-thumb"}, Animation: &springControl, Position: true, Size: true})
 				}
 				// 日格内容绝对定位、排在滑块之后（mygo 绝对定位元素压在流内兄弟之上）
@@ -483,11 +483,11 @@ func (a *app) billMonthGrid(c *ui.Context, k tokens, now time.Time) {
 	rows := (lead + days + 6) / 7
 	gridStart := first.AddDate(0, 0, -lead)
 	today := dayStart(now)
-	ui.Column(c).Padding(8).Radius(14).Background(k.track).Children(func() {
+	ui.Column(c).Padding(8).Radius(rr(14)).Background(k.track).Children(func() {
 		ui.Row(c).Margin(0, 0, 4, 0).Gap(4).AlignItems(ui.Center).Children(func() {
 			text(c, fmt.Sprintf(tr("%d 年 %d 月"), first.Year(), first.Month()), 11, 16, 600, k.fg).Padding(0, 0, 0, 4).Grow(1)
 			if a.billMonth != 0 {
-				b := ui.Box(c).Padding(2, 6).Radius(8)
+				b := ui.Box(c).Padding(2, 6).Radius(rr(8))
 				b.Children(func() { text(c, tr("今天"), 10, 14, 400, k.muted) })
 				if b.Clicked() {
 					a.billMonth = 0
@@ -522,7 +522,7 @@ func (a *app) billMonthGrid(c *ui.Context, k tokens, now time.Time) {
 							}
 						}
 						sel := day.Equal(a.billDay)
-						cell := ui.Column(c).Grow(1).Basis(0).Height(44).Padding(4, 0, 0, 0).Radius(10).AlignItems(ui.Center).Key(day.Format("0102"))
+						cell := ui.Column(c).Grow(1).Basis(0).Height(44).Padding(4, 0, 0, 0).Radius(rr(10)).AlignItems(ui.Center).Key(day.Format("0102"))
 						col := k.fg
 						switch {
 						case sel:
@@ -624,10 +624,12 @@ func nextMonthlyDue(day int, now time.Time) time.Time {
 // miniSegmented 是 Tauri Segmented size="xs"：槽高 22，项 18 高、10/14 字。
 func miniSegmented(c *ui.Context, k tokens, value string, opts [][2]string) (string, bool) {
 	picked, changed := value, false
-	ui.Row(c).Height(22).Padding(2).Radius(10).Background(k.track).InsetShadow(0, 1, 2, 0, k.insetShadow).Children(func() {
+	seg := ui.Row(c).Height(22).Padding(2).Radius(rr(10)).Background(k.track).InsetShadow(0, 1, 2, 0, k.insetShadow)
+	k.th.SegTrack(seg)
+	seg.Children(func() {
 		for _, o := range opts {
 			sel := value == o[0]
-			b := ui.Box(c).Height(18).Padding(2, 6).Radius(8).Center().Key("ms-" + o[0])
+			b := ui.Box(c).Height(18).Padding(2, 6).Radius(rr(8)).Center().Key("ms-" + o[0])
 			w, col := 400, k.muted
 			if sel {
 				w, col = 500, k.fg
@@ -635,6 +637,7 @@ func miniSegmented(c *ui.Context, k tokens, value string, opts [][2]string) (str
 				if !k.dark {
 					b.InsetShadow(0, 1, 0, 0, k.pillHighlight)
 				}
+				k.th.SegThumb(b)
 			}
 			b.Children(func() { text(c, tr(o[1]), 10, 14, w, col) })
 			if b.Clicked() && !sel {
@@ -648,7 +651,7 @@ func miniSegmented(c *ui.Context, k tokens, value string, opts [][2]string) (str
 // smallButton 是 Tauri Button size="sm"（白底描边主键，图标 14 + 文字）。
 func smallButton(c *ui.Context, k tokens, icon, label string) bool {
 	s := stok(c)
-	b := ui.Row(c).Height(28).Padding(0, 10).Gap(4).Radius(10).Background(s.btn).Border(1, s.btnBorder).Shadow(0, 1, 2, 0, s.btnShadow).AlignItems(ui.Center)
+	b := ui.Row(c).Height(28).Padding(0, 10).Gap(4).Radius(rr(10)).Background(s.btn).Border(1, s.btnBorder).Shadow(0, 1, 2, 0, s.btnShadow).AlignItems(ui.Center)
 	b.Children(func() {
 		licon(c, icon, 14, s.btnFg)
 		text(c, label, 12, 17, 500, s.btnFg)

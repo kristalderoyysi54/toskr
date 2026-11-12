@@ -192,7 +192,7 @@ func (a *app) verifySheet(c *ui.Context, k tokens) {
 	}()
 	ui.Overlay(c, func() {
 		ui.Box(c).Absolute().Left(0).Top(0).Size(w, h).Background(ui.RGBA(0, 0, 0, 0.18)).Key("verify-dim") // token-exception: 浮层遮罩
-		sheet := floatSurface(ui.Column(c).Absolute().Left(10).Top(40).Width(w-20).Height(h-60).Radius(14).Key("verify-sheet"), k)
+		sheet := floatSurface(ui.Column(c).Absolute().Left(10).Top(40).Width(w-20).Height(h-60).Radius(rr(14)).Key("verify-sheet"), k)
 		sheet.Children(func() {
 			ui.Row(c).Padding(10, 12).Gap(8).AlignItems(ui.Center).Children(func() {
 				licon(c, "file-check-corner", 15, k.fg)
@@ -226,15 +226,15 @@ func (a *app) verifySheet(c *ui.Context, k tokens) {
 						ui.TextArea(c, &a.verify.fields).Lines(2, 5).FontSize(12).Label(tr("JSON 必填字段（每行一个，可用 a.b）"))
 					}
 					ui.Row(c).Gap(6).Children(func() {
-						if ui.Button(c, tr("检查回复")).Clicked() {
+						if btnOf(c, tr("检查回复")).Clicked() {
 							act = a.runVerify
 						}
 						if a.verify.report != nil {
 							if a.verify.aiBusy {
-								if ui.Button(c, tr("取消检查")).Clicked() {
+								if btnOf(c, tr("取消检查")).Clicked() {
 									act = func() { a.cancelVerifyAI(); a.showHUD("info", tr("AI 检查已取消；回复卡没有被修改")) }
 								}
-							} else if ui.Button(c, tr("AI 深度检查")).Tooltip(tr("需要时再用 AI 检查")).Clicked() {
+							} else if tipOf(c, btnOf(c, tr("AI 深度检查")), tr("需要时再用 AI 检查")).Clicked() {
 								act = a.runVerifyAI
 							}
 						}
@@ -286,7 +286,7 @@ func (a *app) verifyReportView(c *ui.Context, k tokens, t ui.Theme, r core.Verif
 	}
 	text(c, tr("核验只呈现规则内证据、遗漏和问题，不代表结果完全正确，也不替代人工审批。"), 10, 14, 400, k.muted).Wrap()
 	ui.Row(c).Gap(6).Children(func() {
-		if ui.Button(c, tr("保存为笔记")).Clicked() {
+		if btnOf(c, tr("保存为笔记")).Clicked() {
 			*act = func() {
 				body := core.FormatVerifyReport(r)
 				if a.verify.aiText != "" {
@@ -299,9 +299,9 @@ func (a *app) verifyReportView(c *ui.Context, k tokens, t ui.Theme, r core.Verif
 			}
 		}
 		q := core.VerifyQuestionsText(r)
-		b := ui.Button(c, tr("问题进入预检"))
+		b := btnOf(c, tr("问题进入预检"))
 		if q == "" {
-			b.Disabled(true).Tooltip(tr("当前报告没有可继续发送的问题"))
+			tipOf(c, b.Disabled(true), tr("当前报告没有可继续发送的问题"))
 		}
 		if q != "" && b.Clicked() {
 			*act = func() {

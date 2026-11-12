@@ -24,6 +24,7 @@ func TestSendProfilesQuickSwitchAndPolicies(t *testing.T) {
 		tt.Frame()
 		submitPending(a) // 代码格式 / 确认回车等同 Tauri smart：先进预检
 		waitFor(t, func() bool { return len(sys.sent()) > before })
+		tt.Frame() // 预检对话框盖住整个面板：关掉后重排一帧，后面的点击才落得到面板上
 		w := sys.sent()
 		return w[len(w)-1]
 	}
@@ -84,8 +85,8 @@ func TestSendProfilesQuickSwitchAndPolicies(t *testing.T) {
 		t.Fatalf("改绑后精确命中 %+v", r)
 	}
 
-	// 规则本次覆盖：输出改为无 Markdown
-	a.quickOpen = true
+	// 规则本次覆盖：输出改为无 Markdown（展开区自己的规则台账；快速切换浮层开着会盖住它，先收起）
+	a.quickOpen = false
 	tt.Frame()
 	if err := tt.Click("原文"); err != nil {
 		t.Fatalf("%v %v", err, tt.Texts())

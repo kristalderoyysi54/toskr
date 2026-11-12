@@ -90,7 +90,15 @@ func (a *app) clipPage(c *ui.Context, k tokens) {
 	// 切换器原地保留滑块动画，分段标签与卡片列按切换方向淡入 + 横移（clipSwapIn）
 	ui.Column(c).Grow(1).Children(func() {
 		ui.Scroll(c).Grow(1).Scrollbars(false).TrackScroll(&a.clipScroll).Children(func() {
-			ui.Column(c).Padding(4, 14, 8, 14).Children(func() {
+			padR := float32(14)
+			if k.th.ClassicScroll() {
+				padR = 4 // 右侧让给经典滚动条
+			}
+			col := ui.Column(c).Padding(4, padR, 8, 14)
+			if bw := col.Bounds().W; bw > 0 { // 上一帧量到的内容宽：方格墙按它排列（主题的窗框、滚动条会占掉一部分面板宽）
+				a.clipInnerW = bw - padR - 14
+			}
+			col.Children(func() {
 				if len(list) == 0 {
 					if !a.store.Settings().ClipboardWatch && a.query == "" {
 						a.clipOffState(c, k)
@@ -210,10 +218,12 @@ func (a *app) clipHeader(c *ui.Context, k tokens, label string, first bool, band
 		if !first {
 			return
 		}
-		ui.Row(c).Height(22).Padding(2).Radius(10).Background(k.track).InsetShadow(0, 1, 2, 0, k.insetShadow).Children(func() {
+		seg := ui.Row(c).Height(22).Padding(2).Radius(rr(10)).Background(k.track).InsetShadow(0, 1, 2, 0, k.insetShadow)
+		k.th.SegTrack(seg)
+		seg.Children(func() {
 			for _, v := range clipViews {
 				sel := a.clipView == v.id
-				b := ui.Box(c).Height(18).Padding(2, 6).Radius(8).Center().Key("cv-" + v.id)
+				b := ui.Box(c).Height(18).Padding(2, 6).Radius(rr(8)).Center().Key("cv-" + v.id)
 				w, col := 400, k.muted
 				if sel {
 					w, col = 500, k.fg
@@ -222,11 +232,12 @@ func (a *app) clipHeader(c *ui.Context, k tokens, label string, first bool, band
 				}
 				b.Children(func() {
 					if sel { // Segmented xs：共享布局滑块，springControl
-						thumb := ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Radius(8).Background(k.pill).Shadow(0, 1, 2, 0, k.pillShadow).PassThrough().
+						thumb := ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Radius(rr(8)).Background(k.pill).Shadow(0, 1, 2, 0, k.pillShadow).PassThrough().
 							Transition(ui.ElementTransition{Match: layoutID{"clip-view-thumb"}, Animation: &springControl, Position: true, Size: true})
 						if !k.dark {
 							thumb.InsetShadow(0, 1, 0, 0, k.pillHighlight)
 						}
+						k.th.SegThumb(thumb)
 					}
 					fg := b.AnimateColor("fg", col, tweenControl)
 					overThumb(c, func() { text(c, tr(v.label), 10, 14, w, fg) })
@@ -303,9 +314,10 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 	checked := a.chosen.Has(n.ID)
 	var box ui.Element
 	if layout == clipCompact {
-		box = ui.Row(c).Height(32).Padding(0, 8).Gap(8).Radius(6).AlignItems(ui.Center).Key(n.ID)
+		box = ui.Row(c).Height(32).Padding(0, 8).Gap(8).Radius(rr(6)).AlignItems(ui.Center).Key(n.ID)
 	} else {
-		box = ui.Column(c).Height(clipCardH(layout)).Padding(6, 8, 4, 8).Radius(10).Background(k.card).Key(n.ID)
+		box = ui.Column(c).Height(clipCardH(layout)).Padding(6, 8, 4, 8).Radius(rr(10)).Background(k.card).Key(n.ID)
+		k.th.Card(box, checked)
 	}
 	hovered := box.Hovered()
 	a.bandHover(n.ID, hovered)
@@ -314,6 +326,11 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 		bg := k.fg.Alpha(0)
 		if hovered || focused {
 			bg = k.fg.Alpha(0.05)
+		}
+		if checked { // 紧凑行选中：主题给高亮淡底
+			if sel, ok := k.th.SelectedRow(box); ok {
+				bg = sel
+			}
 		}
 		box.Background(box.AnimateColor("row-bg", bg, tweenTw))
 	} else {
@@ -354,7 +371,7 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 				if title == "" && typ == tr("文本") {
 					return
 				}
-				b := ui.Row(c).Height(14).Radius(3).AlignItems(ui.Center).Key("clip-title-" + n.ID).Role(ui.RoleButton).Label(cmpOr(title, typ)).Tooltip(tr("点击重命名"))
+				b := tipOf(c, ui.Row(c).Height(14).Radius(3).AlignItems(ui.Center).Key("clip-title-"+n.ID).Role(ui.RoleButton).Label(cmpOr(title, typ)), tr("点击重命名"))
 				if title != "" {
 					b.Children(func() { text(c, title, 11, 16, 500, k.fg).SingleLine() })
 				} else {
@@ -420,6 +437,7 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 				a.clipActions(c, k, n, isLink, 4)
 			}
 			a.cardOverlays(c, k, n, checked, false)
+			k.th.CardOutline(c)
 			a.quickBadge(c, k, idx, 4)
 			return
 		}
@@ -469,6 +487,7 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 			a.clipActions(c, k, n, isLink, -1)
 		}
 		a.cardOverlays(c, k, n, checked, false)
+		k.th.CardOutline(c)
 		a.quickBadge(c, k, idx, 4)
 	})
 	clk, dbl, mods := cardPressed(box, n.ID) // 正文是拖出源，点在正文上也算点卡片
@@ -665,6 +684,9 @@ func (a *app) clipGrid(c *ui.Context, k tokens, notes []store.Note, band string,
 	const gap, minW = float32(6), float32(104)
 	w, _ := c.Size()
 	inner := w - 28
+	if a.clipInnerW > 0 {
+		inner = a.clipInnerW
+	}
 	allCols := max(1, int((inner+gap)/(minW+gap))) // auto-fill：列宽按容器算，张数少也不拉宽
 	tile := (inner - gap*float32(allCols-1)) / float32(allCols)
 	rows := (len(notes) + allCols - 1) / allCols
@@ -696,7 +718,8 @@ func (a *app) clipTile(c *ui.Context, k tokens, n store.Note, size float32) {
 	}
 	checked := a.chosen.Has(n.ID)
 	focused := idx >= 0 && idx == a.selected && a.focusList
-	box := ui.Column(c).Size(size, size).Padding(6).Gap(4).Radius(10).Background(k.card).Key(n.ID)
+	box := ui.Column(c).Size(size, size).Padding(6).Gap(4).Radius(rr(10)).Background(k.card).Key(n.ID)
+	k.th.Card(box, checked)
 	hovered := box.Hovered()
 	a.bandHover(n.ID, hovered)
 	elevated(box, k, hovered || checked || (focused && !checked))
@@ -741,6 +764,7 @@ func (a *app) clipTile(c *ui.Context, k tokens, n store.Note, size float32) {
 			a.clipActions(c, k, n, false, -1, true)
 		}
 		a.cardOverlays(c, k, n, checked, false)
+		k.th.CardOutline(c)
 		a.quickBadge(c, k, idx, 4)
 	})
 	clk, dbl, mods := cardPressed(box, n.ID) // 正文是拖出源，点在正文上也算点卡片

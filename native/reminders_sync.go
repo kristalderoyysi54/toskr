@@ -434,7 +434,7 @@ func (a *app) remindersSettings(c *ui.Context, k tokens, s settingsTokens, st st
 			if a.remRulesOpen {
 				label, icon = tr("收起"), "chevron-down"
 			}
-			b := ui.Row(c).Height(24).Padding(0, 4, 0, 8).Gap(2).Radius(6).AlignItems(ui.Center).Key("rem-rules").Role(ui.RoleButton).Label(tr("同步规则") + " " + label)
+			b := ui.Row(c).Height(24).Padding(0, 4, 0, 8).Gap(2).Radius(rr(6)).AlignItems(ui.Center).Key("rem-rules").Role(ui.RoleButton).Label(tr("同步规则") + " " + label)
 			col := hoverLink(b, k)
 			b.Children(func() {
 				text(c, label, 11, 16, 500, col).SingleLine()

@@ -185,7 +185,7 @@ func (a *app) outcomeSummaryRow(c *ui.Context, k tokens, s settingsTokens, m sto
 }
 
 func outcomeMetric(c *ui.Context, k tokens, s settingsTokens, label, value, hint string) {
-	ui.Column(c).Grow(1).Basis(0).Padding(8, 10).Gap(2).Radius(10).Background(s.card).Border(1, s.cardBorder).Children(func() {
+	ui.Column(c).Grow(1).Basis(0).Padding(8, 10).Gap(2).Radius(rr(10)).Background(s.card).Border(1, s.cardBorder).Children(func() {
 		text(c, label, 11, 16, 400, k.muted).SingleLine()
 		text(c, value, 17, 22, 600, k.fg).SingleLine()
 		if hint != "" {
@@ -282,7 +282,7 @@ func outcomeDistribution(c *ui.Context, k tokens, s settingsTokens, title string
 		keys = append(keys, key)
 	}
 	slices.Sort(keys)
-	ui.Column(c).Grow(1).Basis(0).MinWidth(150).Padding(8, 10).Gap(4).Radius(10).Background(s.card).Border(1, s.cardBorder).Children(func() {
+	ui.Column(c).Grow(1).Basis(0).MinWidth(150).Padding(8, 10).Gap(4).Radius(rr(10)).Background(s.card).Border(1, s.cardBorder).Children(func() {
 		text(c, title, 12, 17, 500, k.fg)
 		for _, key := range keys {
 			ui.Row(c).Gap(8).Children(func() {
@@ -299,7 +299,7 @@ func outcomeDistribution(c *ui.Context, k tokens, s settingsTokens, title string
 
 // outcomeDaily：每日发送柱状图（浅色柱高 = 尝试数，深色填充 = 成功占比）+ 趋势结论。
 func (a *app) outcomeDaily(c *ui.Context, k tokens, s settingsTokens, m store.OutcomeMetrics) {
-	ui.Column(c).Padding(8, 10).Gap(6).Radius(10).Background(s.card).Border(1, s.cardBorder).Children(func() {
+	ui.Column(c).Padding(8, 10).Gap(6).Radius(rr(10)).Background(s.card).Border(1, s.cardBorder).Children(func() {
 		ui.Row(c).Children(func() {
 			text(c, tr("每日发送"), 12, 17, 500, k.fg).Grow(1)
 			text(c, fmt.Sprintf(tr("样本 %d"), m.Sample), 10, 14, 400, k.muted)
@@ -318,8 +318,7 @@ func (a *app) outcomeDaily(c *ui.Context, k tokens, s settingsTokens, m store.Ou
 					if d.Attempts > 0 {
 						fill = h * float32(d.Sent) / float32(d.Attempts)
 					}
-					ui.Column(c).Grow(1).Basis(0).MaxWidth(20).Height(h).Radius(3).Background(s.primary.Alpha(0.25)).Justify(ui.End).
-						Tooltip(fmt.Sprintf(tr("%s：尝试 %d，成功 %d"), d.Day, d.Attempts, d.Sent)).Children(func() {
+					tipOf(c, ui.Column(c).Grow(1).Basis(0).MaxWidth(20).Height(h).Radius(3).Background(s.primary.Alpha(0.25)).Justify(ui.End), fmt.Sprintf(tr("%s：尝试 %d，成功 %d"), d.Day, d.Attempts, d.Sent)).Children(func() {
 						ui.Box(c).FillWidth().Height(fill).Radius(3).Background(s.primary)
 					})
 				}

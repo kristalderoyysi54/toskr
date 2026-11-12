@@ -200,12 +200,12 @@ func (a *app) longFrameView(c *ui.Context, lc *longCapture) {
 	if stalled {
 		col = k.amberText.Alpha(0.5 + 0.5*float32(math.Abs(math.Cos(float64(c.Root().Loop("pulse", 2*time.Second, ui.Linear))*math.Pi))))
 	}
-	ui.Box(c).Absolute().Top(2).Left(2).Right(2).Bottom(2).Radius(6).Border(2, col).AlignItems(ui.Center).Children(func() {
+	ui.Box(c).Absolute().Top(2).Left(2).Right(2).Bottom(2).Radius(rr(6)).Border(2, col).AlignItems(ui.Center).Children(func() {
 		if !stalled {
 			return
 		}
 		pal := shotColors(c)
-		bar := ui.Box(c).Margin(8, 0, 0, 0).Padding(4, 8).Radius(8)
+		bar := ui.Box(c).Margin(8, 0, 0, 0).Padding(4, 8).Radius(rr(8))
 		pal.float(bar).Children(func() { text(c, tr("滚太快接不上，往回滚一点"), 11, 16, 400, k.amberText) })
 	})
 }
@@ -236,9 +236,9 @@ func (a *app) longPreviewView(c *ui.Context, lc *longCapture) {
 			bw, bh := ui.ImageSize(lc.bm)
 			maxH := H - 8 - 52 // 下方工具条约 52pt
 			s := min(W/bw, maxH/bh)
-			ui.Image(c, lc.bm).Size(bw*s, bh*s).Radius(6).Border(1, gray(1, 0.7)).Shadow(0, 10, 15, -3, gray(0, 0.1)).Shadow(0, 4, 6, -4, gray(0, 0.1))
+			ui.Image(c, lc.bm).Size(bw*s, bh*s).Radius(rr(6)).Border(1, gray(1, 0.7)).Shadow(0, 10, 15, -3, gray(0, 0.1)).Shadow(0, 4, 6, -4, gray(0, 0.1))
 		})
-		bar := ui.Column(c).Padding(6, 8).Gap(4).Radius(8)
+		bar := ui.Column(c).Padding(6, 8).Gap(4).Radius(rr(8))
 		pal.float(bar).Children(func() {
 			ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
 				label := ""
@@ -265,7 +265,7 @@ func (a *app) longPreviewView(c *ui.Context, lc *longCapture) {
 
 // longIconButton：IconButton sm（24pt，图标 14）。
 func longIconButton(c *ui.Context, pal shotPalette, icon, label string, disabled bool, iconColor *ui.Color) bool {
-	b := ui.Box(c).Size(22, 22).Radius(8).Center().Label(label).Role(ui.RoleButton).Key("lb-" + icon)
+	b := ui.Box(c).Size(22, 22).Radius(rr(8)).Center().Label(label).Role(ui.RoleButton).Key("lb-" + icon)
 	fg := pal.muted
 	if disabled {
 		b.Opacity(0.45)

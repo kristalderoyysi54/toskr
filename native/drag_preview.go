@@ -83,7 +83,7 @@ func renderDragPreview(first string, count int, dark bool) image.Image {
 		k := tok(c)
 		c.Root().Background(ui.Transparent)
 		ui.Row(c).Fill().Padding(4).Children(func() {
-			ui.Row(c).Fill().Padding(0, 10).Gap(8).Radius(10).Background(k.card).Border(1, k.floatBorder).
+			ui.Row(c).Fill().Padding(0, 10).Gap(8).Radius(rr(10)).Background(k.card).Border(1, k.floatBorder).
 				Shadow(0, 2, 6, -2, gray(0, 0.25)).AlignItems(ui.Center).Children(func() {
 				licon(c, "file-text", 12, k.muted)
 				line := first

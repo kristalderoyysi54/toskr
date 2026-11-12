@@ -27,7 +27,7 @@ func (a *app) patchSettings(f func(*store.Settings)) {
 
 // disclosure 是右侧「值 + 箭头」的展开入口（Tauri DisclosureRow）。
 func disclosure(c *ui.Context, k tokens, key, value string, open bool) bool {
-	b := ui.Row(c).Gap(4).Padding(2, 6).Radius(6).AlignItems(ui.Center).Key(key).Role(ui.RoleButton).Label(value)
+	b := ui.Row(c).Gap(4).Padding(2, 6).Radius(rr(6)).AlignItems(ui.Center).Key(key).Role(ui.RoleButton).Label(value)
 	col := hoverLink(b, k)
 	icon := "chevron-right"
 	if open {
@@ -104,7 +104,7 @@ func (a *app) firewallCategories(c *ui.Context, k tokens, s settingsTokens, st s
 			ui.Row(c).Gap(8).Children(func() {
 				for _, cat := range cats[i:min(i+2, len(cats))] {
 					label := tr(core.CategoryLabel[cat])
-					cell := ui.Row(c).Grow(1).Basis(0).Gap(8).Padding(4, 10).Radius(8).Background(k.track).AlignItems(ui.Center).Key("fw-cat-" + cat).Label(label + tr("提示"))
+					cell := ui.Row(c).Grow(1).Basis(0).Gap(8).Padding(4, 10).Radius(rr(8)).Background(k.track).AlignItems(ui.Center).Key("fw-cat-" + cat).Label(label + tr("提示"))
 					if !on {
 						cell.Opacity(0.5)
 					}
@@ -141,7 +141,7 @@ func (a *app) firewallFields(c *ui.Context, k tokens, s settingsTokens, st store
 		}
 		submit := false
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-			box := ui.Row(c).Grow(1).Height(32).Padding(0, 8).Radius(10).Background(s.input).Border(1, s.inputBorder).AlignItems(ui.Center)
+			box := ui.Row(c).Grow(1).Height(32).Padding(0, 8).Radius(rr(10)).Background(s.input).Border(1, s.inputBorder).AlignItems(ui.Center)
 			if f.issue != "" {
 				box.Border(1, k.danger)
 			}
@@ -168,7 +168,7 @@ func (a *app) firewallFields(c *ui.Context, k tokens, s settingsTokens, st store
 			text(c, tr("字段后面的值会按高风险内容检查，不需要填写真实密钥。"), 11, 16, 400, k.muted).Wrap()
 		}
 		for _, name := range fields {
-			ui.Row(c).Gap(8).Padding(2, 4, 2, 8).Radius(6).Background(k.track).AlignItems(ui.Center).Key("fw-field-" + name).Children(func() {
+			ui.Row(c).Gap(8).Padding(2, 4, 2, 8).Radius(rr(6)).Background(k.track).AlignItems(ui.Center).Key("fw-field-" + name).Children(func() {
 				text(c, name, 12, 17, 400, k.fg).Wrap().Grow(1).Basis(0)
 				if ghostIconButton(c, k, "fw-del-"+name, "trash-2", fmt.Sprintf(tr("删除敏感字段 %s"), name), 22, 13, true, true).Clicked() {
 					a.patchSettings(func(x *store.Settings) {

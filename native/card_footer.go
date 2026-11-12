@@ -46,16 +46,6 @@ func (a *app) openProvenanceSource(n store.Note) {
 	}
 }
 
-// noteHeadSource：笔记卡通栏左端写来源应用（没有自定义标题、也有来源时）；否则通栏写标题 / 类型，来源留在页脚。
-func noteHeadSource(n store.Note) bool { return n.Title == "" && n.SourceApp != "" }
-
-// noteFooterShown：笔记卡页脚只在有状态可说时出现（回复关联 / 化名 / 标签 / 已发送 / AI 处理中 / 来源没上通栏）；
-// 不出现时正文多得一行。
-func (a *app) noteFooterShown(n store.Note) bool {
-	return n.Provenance != nil || len(n.Tags) > 0 || a.sentCounts[n.ID] > 0 || a.aiBusy == n.ID ||
-		(n.SourceApp != "" && !noteHeadSource(n)) || core.AliasOccurrences(n.Text, a.store.Settings().AliasEntities) > 0
-}
-
 // sentChip：发过的卡——绿色小勾 + 次数（状态色只落在这枚小标上）。
 func (a *app) sentChip(c *ui.Context, k tokens, n store.Note) {
 	cnt := a.sentCounts[n.ID]
@@ -73,7 +63,7 @@ func (a *app) sentChip(c *ui.Context, k tokens, n store.Note) {
 }
 
 func footLinkButton(c *ui.Context, k tokens, key, icon, label, tip string, col ui.Color) bool {
-	b := ui.Row(c).Gap(3).Radius(4).AlignItems(ui.Center).Shrink(1).Key(key).Role(ui.RoleButton).Label(label).Tooltip(cmpOr(tip, label))
+	b := tipOf(c, ui.Row(c).Gap(3).Radius(4).AlignItems(ui.Center).Shrink(1).Key(key).Role(ui.RoleButton).Label(label), cmpOr(tip, label))
 	if b.Hovered() {
 		col = k.fg
 	}
@@ -135,8 +125,8 @@ func doneText(e ui.Element, k tokens, n store.Note) ui.Element {
 		if e.Hovered() { // 拖出预览只在悬停时生成（按下前一定悬停过）
 			opts = append(opts, cardDragOptions(group, k.dark))
 		}
-		e.DragDataFrom(func() transfer.Data { return transfer.TextData(cardDragText(group)) }, opts...).
-			Drag(cardTextDrag{noteIDs(group)}).Tooltip(tr("拖出原文（不脱敏，目标由拖放位置决定）；拖进详情窗插在落点"))
+		tipOf(buildCtx, e.DragDataFrom(func() transfer.Data { return transfer.TextData(cardDragText(group)) }, opts...).
+			Drag(cardTextDrag{noteIDs(group)}), tr("拖出原文（不脱敏，目标由拖放位置决定）；拖进详情窗插在落点"))
 		// 拖出源会接走按下：单击 / 双击转交给所在卡片（cardPressed）
 		if e.Clicked() || e.DoubleClicked() {
 			textHit = cardTextHit{id: n.ID, click: e.Clicked(), dbl: e.DoubleClicked(), mods: e.ClickModifiers()}

@@ -30,22 +30,73 @@ var (
 // importPreview 是待确认的备份导入（设置窗主线程读写）。
 var importPreview *store.Preview
 
+// settingsWinSquare：设置窗建窗时是否按主题去掉了系统标题栏（标题栏样式只能在建窗时定）。
+// settingsRebuilding：已排了一次重建，等它跑完（设置窗主线程读写）。
+var settingsWinSquare, settingsRebuilding bool
+
+// syncSettingsFrame：主题切换后若「要不要系统标题栏」变了（styleTheme.SquareWindows），原位重建设置窗——
+// 自绘标题栏的主题不能再带系统标题栏（同 Tauri 的 setDecorations(false)）；切回去则恢复。
+func (a *app) syncSettingsFrame() {
+	if a.settingsWin == nil || settingsRebuilding || settingsWinSquare == theme().SquareWindows() {
+		return
+	}
+	settingsRebuilding = true
+	a.onMain(func() {
+		defer func() { settingsRebuilding = false }()
+		old := a.settingsWin
+		if old == nil || settingsWinSquare == theme().SquareWindows() {
+			return
+		}
+		x, y := old.Position()
+		w, h := old.Size()
+		shown := old.IsVisible()
+		a.settingsWin = nil
+		old.Destroy()
+		a.createSettingsWin(func(o *mygo.WindowOptions) { o.X, o.Y, o.Width, o.Height = x, y, w, h })
+		if shown {
+			a.settingsWin.Show()
+			a.settingsWin.Focus()
+		}
+	})
+}
+
+// createSettingsWin 建设置窗（隐藏）；place 可改位置与尺寸（重建时沿用原窗的）。
+func (a *app) createSettingsWin(place func(o *mygo.WindowOptions)) {
+	opts := mygo.WindowOptions{
+		Title: "Toskr 设置", Width: 1040, Height: 720, MinWidth: 560, MinHeight: 420, Hidden: true,
+		Vibrancy: mygo.VibrancySidebar, Transparent: true,
+		Content: ui.View(a.settingsView),
+	}
+	settingsWinSquare = theme().SquareWindows()
+	if settingsWinSquare { // 标题栏由主题自绘，不要系统标题栏与红绿灯
+		opts.TitleBarStyle, opts.HideWindowButtons = mygo.TitleBarHidden, true
+	}
+	if place != nil {
+		place(&opts)
+	}
+	a.settingsWin = mygo.NewWindow(opts)
+	if settingsWinSquare { // 直角窗（带标题栏的窗口一定是圆角）
+		macos.MakeSquare(a.settingsWin.NativeHandle())
+	}
+	diagWin.Store(a.settingsWin)                                                                 // 诊断页实时刷新用（diag.Push 可能在任意 goroutine）
+	a.settingsWin.OnFocus(func() { a.refreshLocalTranslate(false); a.permPolled = time.Time{} }) // 从系统设置授权回来：权限页立即重查 // 回到窗口时重查（可能刚在系统设置里下完语言包）
+	a.settingsWin.OnClose(func(e *mygo.CloseEvent) {
+		if !a.quitting { // 退出时放行，否则会取消整个退出
+			e.PreventDefault()
+			a.settingsWin.Hide()
+		}
+	})
+}
+
 func (a *app) openSettings() {
 	a.openSettingsState()
+	if a.settingsWin != nil && settingsWinSquare != theme().SquareWindows() { // 隐藏期间换过方案：按新方案重建
+		old := a.settingsWin
+		a.settingsWin = nil
+		old.Destroy()
+	}
 	if a.settingsWin == nil {
-		a.settingsWin = mygo.NewWindow(mygo.WindowOptions{
-			Title: "Toskr 设置", Width: 1040, Height: 720, MinWidth: 560, MinHeight: 420, Hidden: true,
-			Vibrancy: mygo.VibrancySidebar, Transparent: true,
-			Content: ui.View(a.settingsView),
-		})
-		diagWin.Store(a.settingsWin)                                                                 // 诊断页实时刷新用（diag.Push 可能在任意 goroutine）
-		a.settingsWin.OnFocus(func() { a.refreshLocalTranslate(false); a.permPolled = time.Time{} }) // 从系统设置授权回来：权限页立即重查 // 回到窗口时重查（可能刚在系统设置里下完语言包）
-		a.settingsWin.OnClose(func(e *mygo.CloseEvent) {
-			if !a.quitting { // 退出时放行，否则会取消整个退出
-				e.PreventDefault()
-				a.settingsWin.Hide()
-			}
-		})
+		a.createSettingsWin(nil)
 	}
 	a.refreshLocalTranslate(false)
 	a.settingsWin.Invalidate()
@@ -114,6 +165,7 @@ func (a *app) saveSettings() {
 }
 
 func (a *app) settingsView(c *ui.Context) {
+	a.syncSettingsFrame()
 	registerFonts()
 	k, s := tok(c), stok(c)
 	st := a.store.Settings()
@@ -134,11 +186,21 @@ func (a *app) settingsView(c *ui.Context) {
 	pages := []setPage{
 		{label: "窗口与外观", icon: "settings-2", subs: []string{"通用", "伴随停靠"}, sections: [][]setSection{
 			{
-				{title: tr("常用外观"), rows: []setRow{
-					{title: tr("语言"), hint: tr("跟随系统时，中文系统显示中文，其余显示英文"), control: func() {
-						changed = segmented(c, k, &a.setLang, "跟随系统", "简体中文", "English") || changed
+				// 外观：主题（界面风格）· 颜色（现代主题下的配色）· 模式（跟随系统 / 浅色 / 深色）三个独立维度，各占一行
+				{title: tr("外观"), rows: []setRow{
+					// 主题 = 界面风格（现代 + 已注册的 styleTheme）；颜色 = 现代主题下的配色。两者分开选。
+					{title: tr("主题"), hint: themeHint(st.ColorScheme), control: func() {
+						ids := append([]string{""}, styleThemeOrder...)
+						labels := []string{modernTheme.Label()}
+						for _, id := range styleThemeOrder {
+							labels = append(labels, styleThemes[id].Label())
+						}
+						i := max(0, slices.Index(ids, st.ColorScheme))
+						if segmented(c, k, &i, labels...) {
+							a.setStyleTheme(ids[i])
+						}
 					}},
-					{title: tr("配色方案"), hint: schemeHint(st.ColorScheme), control: func() {
+					{title: tr("颜色"), hint: schemeHint(st.ColorScheme), hidden: isTheme(st.ColorScheme), control: func() {
 						schemeSelect(c, k, s, st.ColorScheme, func(name string) {
 							v := a.store.Settings()
 							v.ColorScheme = name
@@ -147,34 +209,17 @@ func (a *app) settingsView(c *ui.Context) {
 							a.invalidateAll()
 						})
 					}},
-					{title: tr("高亮颜色"), hint: tr("选中卡片与菜单高亮的颜色"), hidden: st.ColorScheme != "platinum", control: func() {
-						i := max(0, slices.Index(ptHighlightNames, st.PtHighlight))
-						if segmented(c, k, &i, ptHighlightLabels...) {
-							cur := a.store.Settings()
-							cur.PtHighlight = ptHighlightNames[i]
-							_ = a.store.SetSettings(cur)
-							applyAppearance(cur)
-							a.invalidateAll()
-						}
-					}},
-					{title: tr("滚动条"), hint: tr("经典款带箭头和条纹滑块"), hidden: st.ColorScheme != "platinum", control: func() {
-						i := 0
-						if st.PtScrollbar == "thin" {
-							i = 1
-						}
-						if segmented(c, k, &i, "经典 Platinum", "细条") {
-							cur := a.store.Settings()
-							cur.PtScrollbar = []string{"classic", "thin"}[i]
-							_ = a.store.SetSettings(cur)
-							applyAppearance(cur)
-							a.invalidateAll()
-						}
-					}},
-					{title: tr("主题"), hidden: fixedLight(st.ColorScheme), control: func() {
+					// 只在当前主题 / 颜色支持深色时显示（Platinum、纸墨、抹茶、樱粉固定浅色）
+					{title: tr("模式"), hidden: fixedLight(st.ColorScheme), control: func() {
 						i := max(0, slices.Index(themeNames, st.Theme))
 						if segmented(c, k, &i, "跟随系统", "浅色", "深色") {
 							a.setTheme(themeNames[i])
 						}
+					}},
+				}},
+				{title: tr("语言与显示"), rows: []setRow{
+					{title: tr("语言"), hint: tr("跟随系统时，中文系统显示中文，其余显示英文"), control: func() {
+						changed = segmented(c, k, &a.setLang, "跟随系统", "简体中文", "English") || changed
 					}},
 					{title: tr("卡片密度"), hint: tr("紧凑模式单行显示，一屏看到更多"), control: func() {
 						i := 0
@@ -219,15 +264,15 @@ func (a *app) settingsView(c *ui.Context) {
 					{title: tr("隐身模式"), hint: tr("不弹「已捕获」气泡，适合投屏；失败提醒仍会显示"), control: setToggle(st.Stealth, func(s *store.Settings, v bool) { s.Stealth = v })},
 					{title: tr("音效"), hint: tr("捕获成功时轻响一声，隐身模式下静音"), control: setToggle(!st.SoundOff, func(s *store.Settings, v bool) { s.SoundOff = !v })},
 				}},
-				// Tauri 放在折叠的「更多外观与行为」里；Platinum 整窗不透明、原生模糊停用，不展示
+				// Tauri 放在折叠的「更多外观与行为」里；整窗不透明的主题（styleTheme.Opaque）原生模糊停用，不展示
 				{title: tr("外观细节"), rows: []setRow{
-					{title: tr("毛玻璃背景"), hint: tr("macOS 26 起为系统液态玻璃，更早系统回退为模糊材质"), hidden: st.ColorScheme == "platinum", control: func() {
+					{title: tr("毛玻璃背景"), hint: tr("macOS 26 起为系统液态玻璃，更早系统回退为模糊材质"), hidden: themeFor(st.ColorScheme).Opaque(), control: func() {
 						changed = segmented(c, k, &a.setGlass, glassLabels...) || changed
 					}},
 					{title: tr("窗口整体不透明度"), hint: tr("连毛玻璃层一起变透，能看穿下层窗口"), control: a.pctSlider(c, k, st.WindowAlpha(), 30, 100, 5, func(s *store.Settings, v float64) { s.WindowOpacity = v })},
-					{title: tr("内容底色浓度"), hint: tr("面板底色的浓淡，毛玻璃关闭时最直观"), hidden: st.ColorScheme == "platinum",
+					{title: tr("内容底色浓度"), hint: tr("面板底色的浓淡，毛玻璃关闭时最直观"), hidden: themeFor(st.ColorScheme).Opaque(),
 						control: a.pctSlider(c, k, st.PanelAlpha(), 25, 100, 1, func(s *store.Settings, v float64) { s.PanelOpacity = v })},
-					{title: tr("卡片彩色通栏"), hint: tr("卡片顶部按分组颜色着色；关闭则统一中性灰"), hidden: st.ColorScheme == "platinum",
+					{title: tr("卡片彩色通栏"), hint: tr("卡片顶部按分组颜色着色；关闭则统一中性灰"), hidden: themeFor(st.ColorScheme).Opaque(),
 						control: setToggle(!st.CardTintOff, func(s *store.Settings, v bool) { s.CardTintOff = !v })},
 					{title: tr("剪贴卡模板"), hint: tr("只影响剪贴页：标准显示完整内容，浓缩只留摘要"), hidden: st.CardDensity == "compact", control: func() {
 						i := 0
@@ -241,7 +286,7 @@ func (a *app) settingsView(c *ui.Context) {
 							a.invalidateAll()
 						}
 					}},
-					{title: tr("卡片底色不透明度"), hint: tr("调低可透出毛玻璃背景"), hidden: st.ColorScheme == "platinum",
+					{title: tr("卡片底色不透明度"), hint: tr("调低可透出毛玻璃背景"), hidden: themeFor(st.ColorScheme).Opaque(),
 						control: a.pctSlider(c, k, st.CardAlpha(), 30, 100, 5, func(s *store.Settings, v float64) { s.CardOpacity = v })},
 					{title: tr("菜单栏显示下一个到期"), hint: tr("图标旁显示今天下一个任务的到期时间；图标本身会标出暂停、隐身、逾期与权限状态"),
 						control: setToggle(st.TrayNextDue, func(s *store.Settings, v bool) { s.TrayNextDue = v })},
@@ -481,6 +526,12 @@ func (a *app) settingsView(c *ui.Context) {
 			a.aboutRows(c, s),
 			a.diagSections(c, k, s),
 		}},
+	}
+	// 主题自己的设置行（styleTheme.SettingsRows）排在「颜色」行之后
+	if extra := themeFor(st.ColorScheme).SettingsRows(a, c, k, st); len(extra) > 0 {
+		rows := &pages[0].sections[0][0].rows
+		at := 1 + slices.IndexFunc(*rows, func(r setRow) bool { return r.title == tr("颜色") })
+		*rows = slices.Insert(*rows, at, extra...)
 	}
 	a.settingsShell(c, pages)
 	if changed {
@@ -765,16 +816,38 @@ func (a *app) playCaptureSound() {
 	_ = exec.Command("/usr/bin/afplay", "-v", "0.4", "/System/Library/Sounds/Tink.aiff").Start()
 }
 
-func schemeHint(scheme string) string {
-	switch scheme {
-	case "platinum":
-		return tr("固定浅色、整窗不透明；切回琉璃恢复原主题与毛玻璃")
-	case "paper", "matcha", "sakura":
-		return tr("固定浅色；切回琉璃恢复深浅色设置")
-	case "fog":
-		return tr("跟随下方主题设置切换浅色 / 深色")
+// themeHint：「主题」行的说明。
+func themeHint(scheme string) string {
+	if isTheme(scheme) {
+		return tr(themeFor(scheme).Hint())
 	}
 	return tr("Platinum 为 Mac OS 9 经典外观")
+}
+
+// schemeHint：「颜色」行的说明（各颜色都跟随「模式」，目前无需说明）。
+func schemeHint(string) string { return "" }
+
+// setStyleTheme 切换界面风格：id 是主题 ID，"" = 现代。离开现代前记下当前颜色，切回现代时恢复。
+func (a *app) setStyleTheme(id string) {
+	v := a.store.Settings()
+	cur := ""
+	if isTheme(v.ColorScheme) {
+		cur = v.ColorScheme
+	}
+	if id == cur || (id != "" && !isTheme(id)) {
+		return
+	}
+	if cur == "" {
+		v.LastColorScheme = v.ColorScheme
+	}
+	if id == "" {
+		v.ColorScheme, v.LastColorScheme = v.LastColorScheme, ""
+	} else {
+		v.ColorScheme = id
+	}
+	_ = a.store.SetSettings(v)
+	applyAppearance(v)
+	a.invalidateAll()
 }
 
 // invalidateAll 让所有已开窗口按新外观重绘（配色方案 / 卡片密度）。

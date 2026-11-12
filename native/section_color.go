@@ -26,7 +26,7 @@ func (a *app) sectionColorPopover(c *ui.Context, k tokens, s store.Section, anch
 		return
 	}
 	open := true
-	ui.Popover(c, anchor, &open, func() {
+	popoverOf(c, anchor, &open, func() {
 		ui.Column(c).Gap(10).Padding(2).Key("seccolor-" + s.ID).Children(func() {
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 				text(c, tr("分组颜色"), 12, 17, 600, k.fg)
@@ -64,7 +64,7 @@ func (a *app) colorDot(c *ui.Context, k tokens, id, col string, on bool) bool {
 	if on {
 		tip += tr("（当前）")
 	}
-	b := ui.Box(c).Size(24, 24).Center().Key("secdot-" + id + col).Role(ui.RoleButton).Label(label).Tooltip(tip) // 不用 Selected：主题会给选中元素铺方形强调底
+	b := tipOf(c, ui.Box(c).Size(24, 24).Center().Key("secdot-"+id+col).Role(ui.RoleButton).Label(label), tip) // 不用 Selected：主题会给选中元素铺方形强调底
 	s := float32(1)
 	if b.Hovered() {
 		s = 1.15

@@ -143,7 +143,7 @@ func sortAutoScroll(c *ui.Context, sc ui.Element, state *ui.ScrollState) {
 // slotMark：落点虚线框（拿起项的淡化占位上，标出松手后落在哪）。
 func slotMark(c *ui.Context) {
 	p := stok(c).primary
-	ui.Box(c).Absolute().Top(-2).Left(-2).Right(-2).Bottom(0).Radius(10).Border(1, p).BorderStyle(ui.BorderDashed).
+	ui.Box(c).Absolute().Top(-2).Left(-2).Right(-2).Bottom(0).Radius(rr(10)).Border(1, p).BorderStyle(ui.BorderDashed).
 		Background(p.Alpha(0.08)).PassThrough().Key("slotmark")
 }
 

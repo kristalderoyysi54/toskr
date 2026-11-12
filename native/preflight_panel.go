@@ -44,6 +44,20 @@ type preflightState struct {
 	preAlias  []store.Note    // 词典化名前的副本（与 a.pending 一一对应）
 	aliasSkip map[string]bool // 本次还原为原文的词典替换（"卡下标:字节起点"）
 	aliasOpen bool
+	tab       int // 整面板预检的页签：0 概览 / 1 内容
+}
+
+// pfSheet：本帧 preflightBar 画成盖住整个面板的对话框（竖栏；同 Tauri PreflightComposer）。横栏仍是内嵌区。
+var pfSheet bool
+
+// preflightDialog：竖栏面板的发送预检——整面板对话框：标题栏（概览 / 内容页签、关闭）+ 可滚正文 + 底部操作栏。
+func (a *app) preflightDialog(c *ui.Context) {
+	if len(a.pending) == 0 {
+		return
+	}
+	pfSheet = true
+	defer func() { pfSheet = false }()
+	a.preflightBar(c)
 }
 
 type pfAliasHit struct {
@@ -153,9 +167,9 @@ func (a *app) pfAliasSection(c *ui.Context, k tokens) {
 		if !p.aliasOpen {
 			return
 		}
-		ui.Column(c).Gap(4).Padding(6).Radius(8).Border(1, k.inputBorder).Children(func() {
+		ui.Column(c).Gap(4).Padding(6).Radius(rr(8)).Border(1, k.inputBorder).Children(func() {
 			for _, h := range hits {
-				ui.Row(c).Gap(6).Padding(4, 6).Radius(6).Background(c.Theme().Background.Alpha(0.6)).AlignItems(ui.Center).Key("pf-al-" + aliasKey(h.note, h.hit.Start)).Children(func() {
+				ui.Row(c).Gap(6).Padding(4, 6).Radius(rr(6)).Background(c.Theme().Background.Alpha(0.6)).AlignItems(ui.Center).Key("pf-al-" + aliasKey(h.note, h.hit.Start)).Children(func() {
 					ui.Row(c).Height(16).Padding(0, 4).Radius(4).Background(k.track).AlignItems(ui.Center).
 						Children(func() {
 							text(c, tr(core.AliasCategoryLabel(h.hit.Entity.Category, custom)), 10, 14, 500, k.muted).SingleLine()
@@ -165,7 +179,7 @@ func (a *app) pfAliasSection(c *ui.Context, k tokens) {
 					if p.edited {
 						tip = tr("正文已手工编辑，先「恢复自动组装」再还原")
 					}
-					b := ui.Row(c).Height(20).Padding(0, 6).Radius(6).AlignItems(ui.Center).Key("pf-al-rv-" + aliasKey(h.note, h.hit.Start)).Role(ui.RoleButton).Label(tr("还原为原文")).Tooltip(tip)
+					b := tipOf(c, ui.Row(c).Height(20).Padding(0, 6).Radius(rr(6)).AlignItems(ui.Center).Key("pf-al-rv-"+aliasKey(h.note, h.hit.Start)).Role(ui.RoleButton).Label(tr("还原为原文")), tip)
 					fg := k.fg
 					switch {
 					case p.edited:
@@ -479,7 +493,17 @@ func (a *app) preflightBar(c *ui.Context) {
 	if len(p.items) == 0 {
 		tone = t.Accent
 	}
-	ui.Column(c).Padding(10, 12).Gap(8).Radius(12).Background(tone.Alpha(0.12)).Border(1, tone.Alpha(0.45)).Key("preflight").Children(func() {
+	sheet := pfSheet
+	pfBox := ui.Column(c).Padding(10, 12).Gap(8).Radius(12).Background(tone.Alpha(0.12)).Border(1, tone.Alpha(0.45)).Key("preflight")
+	switch {
+	case k.th.PreflightFrame(pfBox, sheet): // 主题自己的容器样式
+	case sheet:
+		pfBox.Absolute().Top(0).Left(0).Right(0).Bottom(0).Padding(0).Gap(0).Radius(rr(14)).Background(sheetBg(c)).Border(1, k.floatBorder)
+	}
+	if sheet {
+		_ = pfBox.Clicked() // 吃掉落在空白处的点击，不漏给底下的列表
+	}
+	pfBox.Children(func() {
 		head := func() {
 			if a.pfRehearsal { // 同 Tauri PreflightComposer safeRehearsal 标题与安全锁
 				text(c, tr("检查并粘贴"), 13, 18, 600, k.fg)
@@ -498,7 +522,7 @@ func (a *app) preflightBar(c *ui.Context) {
 				case len(p.items) == 0: // 标题 + 单行副标题（长方案名不再把「方案」挤成单字换行）
 					ui.Column(c).Grow(1).Basis(0).Children(func() {
 						text(c, tr("发送前检查"), 12, 17, 600, k.fg).SingleLine()
-						text(c, a.target.Name+" · "+profileName(r.Profile), 11, 16, 400, k.muted).SingleLine().Tooltip(a.target.Name + " · " + profileName(r.Profile))
+						tipOf(c, text(c, a.target.Name+" · "+profileName(r.Profile), 11, 16, 400, k.muted).SingleLine(), a.target.Name+" · "+profileName(r.Profile))
 					})
 				default:
 					ui.Icon(c, iconWarn).FontSize(14).TextColor(t.Warning)
@@ -537,6 +561,14 @@ func (a *app) preflightBar(c *ui.Context) {
 		}
 		actions := func() {
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+				cancel := func() {
+					if linkButton(c, k, "pf-cancel", tr("取消")) {
+						a.cancelPending()
+					}
+				}
+				if sheet { // 对话框底栏：取消在左，主操作在最右
+					cancel()
+				}
 				switch {
 				case both.needRaw != "":
 					label := tr("确认本次保留提示级原文")
@@ -573,10 +605,84 @@ func (a *app) preflightBar(c *ui.Context) {
 				default:
 					ui.Text(c, fmt.Sprintf(tr("%d 项处理完才能发送"), both.unresolved)).FontSize(11).TextColor(t.TextMuted)
 				}
-				if linkButton(c, k, "pf-cancel", tr("取消")) {
+				if !sheet {
+					cancel()
+				}
+			})
+		}
+		if sheet {
+			line := k.inputBorder
+			if l, ok := k.th.Line(); ok {
+				line = l
+			}
+			card := func(key string, fn func()) { // 分块卡：细边圆角；主题可改成蚀刻框
+				b := ui.Column(c).Padding(10).Gap(8).Radius(rr(10)).Border(1, line).Key("pfc-" + key)
+				if !k.th.Etched(b) {
+					b.Background(k.card.Alpha(0.6))
+				}
+				b.Children(fn)
+			}
+			if len(texts) == 0 {
+				p.tab = 0
+			}
+			ui.Row(c).Padding(10, 12).Gap(8).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(line).Children(func() {
+				ui.Column(c).Grow(1).Basis(0).Children(func() {
+					text(c, tr("发送预检"), 13, 18, 600, k.fg).SingleLine()
+					text(c, tr("确认目标、内容与粘贴后动作"), 11, 16, 400, k.muted).SingleLine()
+				})
+				if len(texts) > 0 {
+					if v, ok := miniSegmented(c, k, itoa(p.tab), [][2]string{{"0", "概览"}, {"1", "内容"}}); ok {
+						p.tab = map[string]int{"0": 0, "1": 1}[v]
+					}
+				}
+				if ghostIconButton(c, k, "pf-close", "x", tr("关闭预检（Esc）"), 22, 14, false, true).Clicked() {
 					a.cancelPending()
 				}
 			})
+			ui.Scroll(c).Grow(1).Basis(0).Scrollbars(false).Children(func() {
+				ui.Column(c).Padding(12).Gap(10).Children(func() {
+					if p.tab == 1 { // 内容：可编辑的最终文本
+						a.pfFinalText(c, k)
+						return
+					}
+					card("check", func() {
+						head()
+						body()
+					})
+					if len(texts) == 0 {
+						return
+					}
+					card("target", func() {
+						ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+							ui.Box(c).Size(28, 28).Radius(rr(8)).Background(k.track).Center().Children(func() { licon(c, "app-window", 14, k.muted) })
+							ui.Column(c).Grow(1).Basis(0).Children(func() {
+								text(c, cmpOr(a.target.Name, tr("未识别目标")), 12, 17, 600, k.fg).SingleLine()
+								text(c, tr("可发送"), 10, 14, 400, k.muted)
+							})
+							ui.Box(c).Padding(2, 6).Radius(rr(6)).Background(k.track).Children(func() { text(c, profileName(r.Profile), 10, 14, 500, k.fg).SingleLine() })
+						})
+						a.pfSendOptions(c, k, r.Profile, both.noEnter)
+					})
+					card("preview", func() { // 将要粘贴的内容：只读预览，「编辑」切到内容页
+						if !p.edited {
+							p.final = a.pfAssembled()
+						}
+						ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+							text(c, tr("将要粘贴的内容"), 11, 16, 600, k.fg).Grow(1)
+							text(c, fmt.Sprintf(tr("%d 字符"), utf8.RuneCountInString(p.final)), 10, 14, 400, k.muted).FontFeatures("tnum")
+							if linkButton(c, k, "pf-edit", tr("编辑")) {
+								p.tab = 1
+							}
+						})
+						text(c, p.final, 11, 16, 400, k.fg).Font(fontMono).Wrap().MaxLines(8).Padding(6, 8).Radius(rr(6)).Background(k.track)
+					})
+				})
+			})
+			ui.Row(c).Padding(8, 12).Gap(8).AlignItems(ui.Center).BorderWidth(1, 0, 0, 0).BorderColor(line).Children(func() {
+				text(c, both.reason, 11, 16, 400, k.amberText).SingleLine().Grow(1).Basis(0)
+				actions()
+			})
+			return
 		}
 		if a.hbar() { // 横栏（同 Tauri PreflightComposer horizontal）：左 0.9 概览 / 右 1.1 正文并排
 			ui.Row(c).Gap(8).AlignItems(ui.Stretch).Children(func() {
@@ -634,7 +740,7 @@ func (a *app) pfDetails(c *ui.Context, k tokens, e pfEval) {
 		if p.open {
 			label = tr("收起列表")
 		}
-		b := ui.Row(c).Padding(1, 6).Radius(6).Key("pf-toggle").Role(ui.RoleButton).Label(label)
+		b := ui.Row(c).Padding(1, 6).Radius(rr(6)).Key("pf-toggle").Role(ui.RoleButton).Label(label)
 		col := hoverLink(b, k)
 		b.Children(func() { text(c, label, 11, 16, 500, col).SingleLine() })
 		if b.Clicked() {
@@ -654,13 +760,13 @@ func (a *app) pfDetails(c *ui.Context, k tokens, e pfEval) {
 		for _, it := range p.items {
 			kept := p.kept[it.id]
 			src := a.pfText(it.note)[it.f.Start:it.f.End]
-			ui.Row(c).Gap(6).Padding(4, 6).Radius(8).Background(t.Background.Alpha(0.6)).AlignItems(ui.Center).Key("pf-" + it.id).Children(func() {
+			ui.Row(c).Gap(6).Padding(4, 6).Radius(rr(8)).Background(t.Background.Alpha(0.6)).AlignItems(ui.Center).Key("pf-" + it.id).Children(func() {
 				col := k.amberText
 				if it.block() {
 					col = k.danger
 				}
 				ui.Text(c, it.f.Kind).FontSize(11).TextColor(col).SingleLine()
-				pv := ui.Row(c).Grow(1).Basis(0).Key("pf-pv-" + it.id).Role(ui.RoleButton).Label(tr("点击对比原文与替换后的内容")).Tooltip(tr("点击对比原文与替换后的内容"))
+				pv := tipOf(c, ui.Row(c).Grow(1).Basis(0).Key("pf-pv-"+it.id).Role(ui.RoleButton).Label(tr("点击对比原文与替换后的内容")), tr("点击对比原文与替换后的内容"))
 				pv.Children(func() {
 					ui.Text(c, core.MaskedPreview(src)).FontSize(11).Font(fontMono).TextColor(k.fg).SingleLine()
 					if pv.Hovered() {
@@ -731,7 +837,7 @@ func (a *app) pfImageToggle(c *ui.Context, k tokens) {
 	if p.open {
 		label = tr("收起列表")
 	}
-	b := ui.Row(c).Padding(1, 6).Radius(6).Key("pf-itoggle").Role(ui.RoleButton).Label(label)
+	b := ui.Row(c).Padding(1, 6).Radius(rr(6)).Key("pf-itoggle").Role(ui.RoleButton).Label(label)
 	col := hoverLink(b, k)
 	b.Children(func() { text(c, label, 11, 16, 500, col).SingleLine() })
 	if b.Clicked() {
@@ -743,7 +849,7 @@ func (a *app) pfImageToggle(c *ui.Context, k tokens) {
 func pfSelect(c *ui.Context, k tokens, key, caption, value string, menu func(*ui.Menu)) {
 	ui.Column(c).Grow(1).Basis(0).Gap(3).Children(func() {
 		text(c, caption, 10, 14, 400, k.muted).SingleLine()
-		b := ui.Row(c).Height(26).Padding(0, 8).Gap(4).Radius(8).Background(k.window).Border(1, k.inputBorder).AlignItems(ui.Center).
+		b := ui.Row(c).Height(26).Padding(0, 8).Gap(4).Radius(rr(8)).Background(k.window).Border(1, k.inputBorder).AlignItems(ui.Center).
 			Key(key).Role(ui.RoleButton).Label(caption)
 		if b.Hovered() {
 			b.Background(k.track)
@@ -824,7 +930,7 @@ func (a *app) pfSendOptions(c *ui.Context, k tokens, prof store.TargetProfile, n
 			})
 		})
 		if a.pendingTmpl != "" {
-			text(c, a.pendingTmpl, 10, 14, 400, k.muted).Font(fontMono).Wrap().MaxLines(3).Padding(4, 6).Radius(6).Background(k.track)
+			text(c, a.pendingTmpl, 10, 14, 400, k.muted).Font(fontMono).Wrap().MaxLines(3).Padding(4, 6).Radius(rr(6)).Background(k.track)
 		}
 		decision := tr("本次不按回车")
 		switch {
@@ -845,10 +951,12 @@ func (a *app) pfSendOptions(c *ui.Context, k tokens, prof store.TargetProfile, n
 			cb := ui.Row(c).Gap(6).AlignItems(ui.Center).Key("pf-keep").Role(ui.RoleCheckBox).Label(tr("发送后保留面板")).Selected(p.keep)
 			cb.Children(func() { // 同 Tauri 原生勾选框：14 圆角 4，勾上填主色 + 白勾
 				box := ui.Box(c).Size(14, 14).Radius(4).Center()
-				if p.keep {
+				switch {
+				case k.th.CheckGlyph(c, box, p.keep): // 主题自己的勾选框
+				case p.keep:
 					box.Background(stok(c).primary)
 					box.Children(func() { licon(c, "check", 10, gray(0.985, 1)) })
-				} else {
+				default:
 					box.Background(k.window).Border(1, k.inputBorder)
 				}
 				text(c, tr("发送后保留面板"), 11, 16, 400, k.fg)
@@ -877,7 +985,7 @@ func (a *app) pfFinalText(c *ui.Context, k tokens) {
 			ui.Box(c).Grow(1)
 			fc := fmt.Sprintf(tr("%d 字符"), utf8.RuneCountInString(p.final))
 			text(c, fc, 10, 14, 400, k.muted).FontFeatures("tnum").MinWidth(numSlot(c, fmt.Sprintf(tr("%d 字符"), 10000), 10, 400)).TextAlign(ui.End) // 编辑最终文本时字数变化不挪动「恢复自动组装」
-			b := ui.Row(c).Height(20).Padding(0, 6).Gap(3).Radius(6).AlignItems(ui.Center).Key("pf-reset").Role(ui.RoleButton).Label(tr("恢复自动组装"))
+			b := ui.Row(c).Height(20).Padding(0, 6).Gap(3).Radius(rr(6)).AlignItems(ui.Center).Key("pf-reset").Role(ui.RoleButton).Label(tr("恢复自动组装"))
 			col := k.muted
 			switch {
 			case !p.edited:
@@ -896,6 +1004,7 @@ func (a *app) pfFinalText(c *ui.Context, k tokens) {
 		})
 		ta := ui.TextAreaBase(c, &p.final).FillWidth().Lines(3, 8).Font(fontMono).FontSize(11).FixedLineHeight(16).TextColor(k.fg).
 			Padding(6, 8).Radius(8).Background(c.Theme().Background.Alpha(0.6)).Border(1, k.inputBorder).Label(tr("最终文本"))
+		k.th.Well(ta)
 		if ta.Changed() && p.final != assembled {
 			p.edited = true
 			a.pfScan()
@@ -907,14 +1016,18 @@ func (a *app) pfFinalText(c *ui.Context, k tokens) {
 // 不铺按钮底）；primary 只加粗字重，主次靠「主操作占满一行、次操作降为文字链接」区分；wide = 占满剩余宽度。
 func pfButton(c *ui.Context, k tokens, key, label, tip string, primary, wide bool) bool {
 	s := stok(c)
-	b := ui.Row(c).Height(26).Padding(0, 10).Radius(8).Justify(ui.Center).AlignItems(ui.Center).Key(key).Role(ui.RoleButton).Label(label)
+	b := ui.Row(c).Height(26).Padding(0, 10).Radius(rr(8)).Justify(ui.Center).AlignItems(ui.Center).Key(key).Role(ui.RoleButton).Label(label)
 	if wide {
 		b.Grow(1).Basis(0)
 	} else {
 		b.Shrink(0)
 	}
 	if tip != "" {
-		b.Tooltip(tip)
+		tipOf(c, b, tip)
+	}
+	if fg, w, ok := k.th.PushButton(b); ok { // 主题的推钮
+		b.Children(func() { text(c, label, 12, 17, w, fg).SingleLine() })
+		return b.Clicked()
 	}
 	bg, w := s.btn, 500
 	if b.Hovered() {
@@ -928,4 +1041,15 @@ func pfButton(c *ui.Context, k tokens, key, label, tip string, primary, wide boo
 	b.AnimatePose(ui.Pose{Y: pressY(b.Pressed())}, tweenControl)
 	b.Children(func() { text(c, label, 12, 17, w, s.btnFg).SingleLine() })
 	return b.Clicked()
+}
+
+func init() { // 整面板预检新增文案的英文（已有的键不覆盖）
+	for k, v := range map[string]string{
+		"发送预检": "Send preflight", "确认目标、内容与粘贴后动作": "Confirm the target, content and after-paste action",
+		"概览": "Overview", "内容": "Content", "将要粘贴的内容": "Content to paste", "关闭预检（Esc）": "Close preflight (Esc)",
+	} {
+		if _, ok := en[k]; !ok {
+			en[k] = v
+		}
+	}
 }

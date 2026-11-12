@@ -280,6 +280,104 @@ func makeBorderless(w objc.ID, panel bool) {
 	w.Send(sel("setFrame:display:"), frame, false)
 }
 
+// MakeSquare 把窗口改成无标题栏的直角窗，保留边缘缩放与最小化（Platinum 的设置窗 / 详情窗：
+// 标题栏、关闭 / 缩放 / 收起框都由视图自绘）。带标题栏的窗口在 macOS 上一定是圆角，会切掉自绘黑框的四角。
+// 关窗走 close（不经 performClose:），所以不需要 closable 位。主线程调用。
+func MakeSquare(nsWindow uintptr) {
+	if nsWindow == 0 {
+		return
+	}
+	load()
+	withPool(func() {
+		w := objc.ID(nsWindow)
+		frame := objc.Send[cgRect](w, sel("frame"))
+		w.Send(sel("setStyleMask:"), uint(1<<2|1<<3)) // NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable
+		w.Send(sel("setFrame:display:"), frame, false)
+		w.Send(sel("setHasShadow:"), true)
+	})
+}
+
+// SetCornerRadius 改无边框窗口的圆角（mygo 的 CornerRadius 只在建窗时定）：内容视图与它里面的材质视图一起改，
+// 0 = 直角。主题切换时面板用。主线程调用。
+func SetCornerRadius(nsWindow uintptr, radius float64) {
+	if nsWindow == 0 {
+		return
+	}
+	load()
+	withPool(func() {
+		w := objc.ID(nsWindow)
+		apply := func(v objc.ID) {
+			if v == 0 {
+				return
+			}
+			if objc.Send[bool](v, sel("respondsToSelector:"), sel("setCornerRadius:")) { // 液态玻璃视图自己圆角
+				v.Send(sel("setCornerRadius:"), radius)
+			}
+			if layer := objc.Send[objc.ID](v, sel("layer")); layer != 0 { // 视图自己会圆角时图层也一并改，哪条生效都对
+				layer.Send(sel("setCornerRadius:"), radius)
+			}
+		}
+		content := objc.Send[objc.ID](w, sel("contentView"))
+		apply(content)
+		subs := objc.Send[objc.ID](content, sel("subviews"))
+		for i, n := uint(0), objc.Send[uint](subs, sel("count")); i < n; i++ {
+			apply(objc.Send[objc.ID](subs, sel("objectAtIndex:"), i))
+		}
+		w.Send(sel("invalidateShadow"))
+	})
+}
+
+// squareMasks：SetSquarePanel 改成直角前各窗口原来的 styleMask（切回时还原）。主线程读写。
+var squareMasks = map[uintptr]uint{}
+
+// SetSquarePanel 把面板在「带标题样式（系统裁圆角）」与「无标题直角」之间切换，保留不抢焦点与边缘缩放。
+// 光把内容图层圆角改成 0 不够：带标题样式的窗口（mygo 的 Frameless 也是，只是藏了标题栏）系统自己会裁圆角。
+// radius 是切回圆角时内容图层的圆角。主线程调用，不要在视图构建过程中调（会换掉窗框视图）。
+func SetSquarePanel(nsWindow uintptr, square bool, radius float64) {
+	if nsWindow == 0 {
+		return
+	}
+	load()
+	withPool(func() {
+		w := objc.ID(nsWindow)
+		frame := objc.Send[cgRect](w, sel("frame"))
+		orig, saved := squareMasks[nsWindow]
+		switch {
+		case square && !saved:
+			cur := objc.Send[uint](w, sel("styleMask"))
+			squareMasks[nsWindow] = cur
+			w.Send(sel("setStyleMask:"), cur&(1<<3|1<<7)) // 只留 resizable 与 nonactivatingPanel
+		case !square && saved:
+			delete(squareMasks, nsWindow)
+			w.Send(sel("setStyleMask:"), orig)
+			if orig&1 != 0 { // 还原后标题栏会重新出现：照建窗时那样藏起来
+				w.Send(sel("setTitlebarAppearsTransparent:"), true)
+				w.Send(sel("setTitleVisibility:"), 1)
+				for i := 0; i < 3; i++ {
+					if b := objc.Send[objc.ID](w, sel("standardWindowButton:"), i); b != 0 {
+						b.Send(sel("setHidden:"), true)
+					}
+				}
+			}
+		}
+		w.Send(sel("setFrame:display:"), frame, true)
+	})
+	if square {
+		radius = 0
+	}
+	SetCornerRadius(nsWindow, radius)
+}
+
+// InvalidateShadow 让系统按窗口当前画出来的形状重算阴影与外圈描边。改圆角的那一帧内容还没重画，
+// 当场重算拿到的仍是旧形状（实测：内容已直角，外圈还留一圈圆角），要等画完再调一次。主线程调用。
+func InvalidateShadow(nsWindow uintptr) {
+	if nsWindow == 0 {
+		return
+	}
+	load()
+	withPool(func() { objc.ID(nsWindow).Send(sel("invalidateShadow")) })
+}
+
 // CursorLocation：光标的全局 pt 坐标（原点为主屏左上角，同 WinRect）。主线程调用。
 func CursorLocation() (x, y float64) {
 	load()

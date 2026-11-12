@@ -414,12 +414,12 @@ func TestSettingsNavSearchAndToggle(t *testing.T) {
 	a.openSettingsState()
 	tt := ui.NewTester(a.settingsView, 1040, 2000) // 粘贴规则页主从布局较高，发送方案在下方
 	tt.Frame()
-	if !tt.HasText("常用外观") || !tt.HasText("伴随停靠") {
+	if !tt.HasText("语言与显示") || !tt.HasText("伴随停靠") {
 		t.Fatalf("首屏应为窗口与外观 %v", tt.Texts())
 	}
 	_ = tt.Click("快捷键")
 	tt.Frame()
-	if !tt.HasText("双击修饰键") || tt.HasText("常用外观") {
+	if !tt.HasText("双击修饰键") || tt.HasText("语言与显示") {
 		t.Fatalf("应切到快捷键 %v", tt.Texts())
 	}
 	_ = tt.Click("粘贴与隐私")
@@ -450,9 +450,9 @@ func TestSettingsNavSearchAndToggle(t *testing.T) {
 func TestSettingsGeneralRowsWriteBack(t *testing.T) {
 	a, _ := testApp(t)
 	a.openSettingsState()
-	tt := ui.NewTester(a.settingsView, 1040, 720)
+	tt := ui.NewTester(a.settingsView, 1040, 820) // 首屏多了「颜色」一行，窗口加高到能点到「音效」
 	tt.Frame()
-	for _, label := range []string{"主题", "详情窗字号", "开机启动", "面板置顶", "失焦自动隐藏", "音效"} {
+	for _, label := range []string{"外观", "主题", "颜色", "模式", "详情窗字号", "开机启动", "面板置顶", "失焦自动隐藏", "音效"} {
 		if !tt.HasText(label) {
 			t.Fatalf("通用页缺少「%s」 %v", label, tt.Texts())
 		}
@@ -565,9 +565,21 @@ func TestSchemeAndDensity(t *testing.T) {
 	_ = a.store.SetSettings(st)
 	curScheme = "platinum"
 	tt.Frame()
-	if !tt.HasText("高亮颜色") || !tt.HasText("滚动条") || slices.Contains(tt.Texts(), "主题") || slices.Contains(tt.Texts(), "毛玻璃背景") {
-		t.Fatalf("Platinum 下应显示高亮颜色 / 滚动条，隐藏主题与毛玻璃 %v", tt.Texts())
+	if !tt.HasText("高亮颜色") || !tt.HasText("滚动条") || slices.Contains(tt.Texts(), "模式") || slices.Contains(tt.Texts(), "颜色") || slices.Contains(tt.Texts(), "毛玻璃背景") {
+		t.Fatalf("Platinum 下应显示高亮颜色 / 滚动条，隐藏颜色、模式与毛玻璃 %v", tt.Texts())
 	}
+	// 主题与颜色分开：切回「现代」恢复进 Platinum 前的颜色
+	a.patchSettings(func(x *store.Settings) { x.ColorScheme = "matcha" })
+	a.setStyleTheme("platinum")
+	if v := a.store.Settings(); v.ColorScheme != "platinum" || v.LastColorScheme != "matcha" {
+		t.Fatalf("进 Platinum 应记下颜色 %+v", v.ColorScheme)
+	}
+	a.setStyleTheme("")
+	if v := a.store.Settings(); v.ColorScheme != "matcha" || v.LastColorScheme != "" {
+		t.Fatalf("切回现代应恢复颜色 %q", v.ColorScheme)
+	}
+	a.setStyleTheme("platinum")
+	tt.Frame()
 	if err := tt.Click("细条"); err != nil {
 		t.Fatal(err)
 	}

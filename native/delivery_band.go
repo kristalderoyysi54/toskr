@@ -129,10 +129,7 @@ func (a *app) deliveryBandOverlay(c *ui.Context, k tokens, id string, compact bo
 		h = 12
 	}
 	in := ui.ElementTransition{Duration: 180 * time.Millisecond, Ease: easeStandard, Enter: &ui.Motion{Y: h}, Exit: &ui.Motion{Y: h}}
-	r := float32(10)
-	if k.pt {
-		r = 0
-	}
+	r := k.th.CardRadius(10)
 	// 色晕与底线整体穿透点击（同 pointer-events-none）；文字胶囊另起一层，只有「撤销」接收点击
 	ui.Box(c).Absolute().Left(0).Right(0).Bottom(0).Height(h+14).Radius(0, 0, r, r).Clip().PassThrough().Key("delivery-band").Transition(in).
 		LinearGradient(ui.LinearGradient{From: tone.Alpha(0.22), To: tone.Alpha(0), Angle: 0, Start: 0, End: 1}).
@@ -156,7 +153,7 @@ func (a *app) deliveryBandOverlay(c *ui.Context, k tokens, id string, compact bo
 			if b.phase != "sent" || len(b.undoIDs) == 0 {
 				return
 			}
-			u := ui.Row(c).Key("band-undo").Role(ui.RoleButton).Label(tr("撤销")).Tooltip(fmt.Sprintf(tr("把这 %d 张卡恢复为未完成"), len(b.undoIDs)))
+			u := tipOf(c, ui.Row(c).Key("band-undo").Role(ui.RoleButton).Label(tr("撤销")), fmt.Sprintf(tr("把这 %d 张卡恢复为未完成"), len(b.undoIDs)))
 			u.Children(func() {
 				text(c, tr("撤销"), 10, 14, 600, tone).Underline()
 			})

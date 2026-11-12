@@ -514,7 +514,7 @@ func (a *app) pfCompareView(c *ui.Context) {
 						if changes == 0 {
 							text(c, tr("文字没有改动"), 11, 16, 400, k.muted)
 						}
-						ui.Column(c).Radius(10).Clip().Border(1, line).Background(k.fg.Alpha(0.02)).Children(func() {
+						ui.Column(c).Radius(rr(10)).Clip().Border(1, line).Background(k.fg.Alpha(0.02)).Children(func() {
 							for i, r := range rows {
 								if r.fold > 0 {
 									a.cmpFoldRow(c, k, r, line)
@@ -657,7 +657,7 @@ func (a *app) cmpImageBlock(c *ui.Context, k tokens, i int, im cmpImage, colW fl
 		dw, dh := iw*sc, ih*sc
 		ui.Row(c).Gap(16).AlignItems(ui.Start).Children(func() {
 			ui.Row(c).Width(colW).Children(func() {
-				ui.Box(c).Size(dw, dh).Radius(6).Clip().Border(1, k.fg.Alpha(0.1)).Children(func() {
+				ui.Box(c).Size(dw, dh).Radius(rr(6)).Clip().Border(1, k.fg.Alpha(0.1)).Children(func() {
 					ui.Image(c, im.orig).Size(dw, dh)
 					for _, r := range im.regions {
 						col := red
@@ -680,10 +680,10 @@ func (a *app) cmpImageBlock(c *ui.Context, k tokens, i int, im cmpImage, colW fl
 							b.Border(1.5, col).Background(col.Alpha(0.14))
 						}
 						if !live {
-							b.PassThrough().Tooltip(r.kind)
+							tipOf(c, b.PassThrough(), r.kind)
 							continue
 						}
-						b.Role(ui.RoleButton).Label(tip).Tooltip(tip).Cursor(ui.CursorPointer)
+						tipOf(c, b.Role(ui.RoleButton).Label(tip), tip).Cursor(ui.CursorPointer)
 						if b.Hovered() {
 							b.Border(2, col)
 						}
@@ -695,7 +695,7 @@ func (a *app) cmpImageBlock(c *ui.Context, k tokens, i int, im cmpImage, colW fl
 				})
 			})
 			if im.sent != nil {
-				ui.Box(c).Size(dw, dh).Radius(6).Clip().Border(1, k.fg.Alpha(0.1)).Children(func() { ui.Image(c, im.sent).Size(dw, dh) })
+				ui.Box(c).Size(dw, dh).Radius(rr(6)).Clip().Border(1, k.fg.Alpha(0.1)).Children(func() { ui.Image(c, im.sent).Size(dw, dh) })
 			}
 		})
 	})
@@ -724,8 +724,8 @@ func cmpHunks(rows []cmpRow) []int {
 func (a *app) cmpNav(c *ui.Context, k tokens, n int, jump func(int)) {
 	ui.Row(c).Gap(6).AlignItems(ui.Center).Shrink(0).Children(func() {
 		lbl := tr("只看改动")
-		t := ui.Row(c).Height(22).Padding(0, 8).Gap(4).Radius(6).AlignItems(ui.Center).Key("cmp-only").Role(ui.RoleButton).
-			Label(lbl).Tooltip(tr("隐藏全部未改动的行（折叠处仍可点开）"))
+		t := tipOf(c, ui.Row(c).Height(22).Padding(0, 8).Gap(4).Radius(rr(6)).AlignItems(ui.Center).Key("cmp-only").Role(ui.RoleButton).
+			Label(lbl), tr("隐藏全部未改动的行（折叠处仍可点开）"))
 		fg := k.muted
 		switch {
 		case a.cmpOnly:
@@ -742,7 +742,7 @@ func (a *app) cmpNav(c *ui.Context, k tokens, n int, jump func(int)) {
 		if t.Clicked() {
 			a.cmpOnly, a.cmpExpand = !a.cmpOnly, nil
 		}
-		ui.Row(c).Height(22).Padding(0, 2).Radius(6).Border(1, k.fg.Alpha(0.1)).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Height(22).Padding(0, 2).Radius(rr(6)).Border(1, k.fg.Alpha(0.1)).AlignItems(ui.Center).Children(func() {
 			if ghostIconButton(c, k, "cmp-prev", "chevron-up", tr("上一处（P）"), 18, 12, false, true).Clicked() {
 				jump(-1)
 			}

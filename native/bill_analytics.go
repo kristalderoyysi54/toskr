@@ -80,9 +80,9 @@ func (a *app) billAnalyticsSheet(c *ui.Context, k tokens, cur string, now time.T
 func statCard(c *ui.Context, k tokens, label, value, sub string, subCol ui.Color) {
 	ui.Column(c).Grow(1).Basis(0).Padding(8, 10).Radius(12).Background(k.track).InsetShadow(0, 1, 2, 0, k.insetShadow).Key("sc-" + label).Children(func() {
 		text(c, label, 10, 14, 400, k.muted).SingleLine()
-		text(c, value, 13, 18, 600, k.fg).SingleLine().Margin(2, 0, 0, 0).Tooltip(value)
+		tipOf(c, text(c, value, 13, 18, 600, k.fg).SingleLine().Margin(2, 0, 0, 0), value)
 		if sub != "" {
-			text(c, sub, 10, 14, 400, subCol).SingleLine().Margin(2, 0, 0, 0).Tooltip(sub)
+			tipOf(c, text(c, sub, 10, 14, 400, subCol).SingleLine().Margin(2, 0, 0, 0), sub)
 		}
 	})
 }
@@ -168,7 +168,7 @@ func (a *app) billTrendSection(c *ui.Context, k tokens, cur, sym string, now tim
 				current := i == len(trend)-1
 				showLabel := rng == "year" || (len(trend)-1-i)%2 == 0 // 12 根柱挤：从当月往回隔月显示标签
 				amt := money(sym, math.Round(m.total*100)/100)
-				col := ui.Column(c).Grow(1).Basis(0).Gap(2).AlignItems(ui.Center).Key("tb-" + m.label + itoa(m.year)).Tooltip(m.label + " " + amt)
+				col := tipOf(c, ui.Column(c).Grow(1).Basis(0).Gap(2).AlignItems(ui.Center).Key("tb-"+m.label+itoa(m.year)), m.label+" "+amt)
 				hov := col.Hovered()
 				col.Children(func() {
 					v := ""

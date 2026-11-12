@@ -214,11 +214,11 @@ func (a *app) aiActionEditor(c *ui.Context, k tokens, s settingsTokens) {
 	u := &a.aiUI
 	ui.Column(c).Gap(6).Margin(6, 0, 0, 0).Key("ai-actions").Children(func() {
 		for _, x := range a.store.Settings().AIActions {
-			row := ui.Row(c).Gap(8).Padding(4, 4, 4, 8).Radius(6).Background(k.track).AlignItems(ui.Center).Key("aia-" + x.ID)
+			row := ui.Row(c).Gap(8).Padding(4, 4, 4, 8).Radius(rr(6)).Background(k.track).AlignItems(ui.Center).Key("aia-" + x.ID)
 			hov := row.Hovered()
 			row.Children(func() {
 				text(c, x.Label, 12, 17, 500, k.fg).SingleLine().Shrink(0).MaxWidth(140)
-				text(c, x.Instruction, 11, 16, 400, k.muted).SingleLine().Grow(1).Basis(0).Tooltip(x.Instruction)
+				tipOf(c, text(c, x.Instruction, 11, 16, 400, k.muted).SingleLine().Grow(1).Basis(0), x.Instruction)
 				if ghostIconButton(c, k, "aia-rm-"+x.ID, "trash-2", tr("删除")+" "+x.Label, 22, 13, true, hov).Clicked() {
 					a.removeAIAction(x.ID)
 				}
@@ -226,7 +226,7 @@ func (a *app) aiActionEditor(c *ui.Context, k tokens, s settingsTokens) {
 		}
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 			textField(c, k, s, &u.newLabel, 120, tr("名称，如「改成邮件」"), false)
-			ui.Row(c).Grow(1).Basis(0).Height(32).Padding(0, 8).Radius(10).Background(s.input).Border(1, s.inputBorder).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Grow(1).Basis(0).Height(32).Padding(0, 8).Radius(rr(10)).Background(s.input).Border(1, s.inputBorder).AlignItems(ui.Center).Children(func() {
 				ui.TextInputBase(c, &u.newInstr).Grow(1).Font(fontSans).FontSize(12).FixedLineHeight(17).TextColor(k.fg).PlaceholderColor(k.muted).
 					Placeholder(tr("指令，如「把下面的文字改写成礼貌的工作邮件」")).Label(tr("自定义动作的指令"))
 			})

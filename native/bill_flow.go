@@ -223,7 +223,7 @@ func (a *app) billPick(c *ui.Context, k tokens, s settingsTokens) {
 			}
 		})
 	})
-	ui.Row(c).Height(30).Margin(6, 0, 0, 0).Padding(0, 8).Gap(6).Radius(8).Border(1, k.inputBorder).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).Height(30).Margin(6, 0, 0, 0).Padding(0, 8).Gap(6).Radius(rr(8)).Border(1, k.inputBorder).AlignItems(ui.Center).Children(func() {
 		licon(c, "search", 14, k.muted)
 		ui.TextInputBase(c, &f.query).Grow(1).Font(fontSans).FontSize(12).FixedLineHeight(17).TextColor(k.fg).
 			PlaceholderColor(k.muted).Placeholder(tr("搜索服务…")).Label(tr("搜索预置服务"))
@@ -280,7 +280,7 @@ func (a *app) billPick(c *ui.Context, k tokens, s settingsTokens) {
 
 // wideButton：撑满宽度的 Button（default 变体：白底灰描边，同发送按钮）。
 func wideButton(c *ui.Context, s settingsTokens, icon, label string) bool {
-	b := ui.Row(c).Height(28).Padding(0, 10).Gap(4).Radius(10).Border(1, s.btnBorder).Justify(ui.Center).AlignItems(ui.Center).Key("wb-" + label).
+	b := ui.Row(c).Height(28).Padding(0, 10).Gap(4).Radius(rr(10)).Border(1, s.btnBorder).Justify(ui.Center).AlignItems(ui.Center).Key("wb-" + label).
 		Role(ui.RoleButton).Label(label)
 	bg := s.btn
 	if b.Hovered() {
@@ -306,7 +306,7 @@ func formField(c *ui.Context, k tokens, label string, body func()) {
 
 func formInput(c *ui.Context, k tokens, v *string, ph string) ui.Element {
 	var in ui.Element
-	ui.Row(c).Height(28).Padding(0, 8).Radius(6).Border(1, k.inputBorder).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).Height(28).Padding(0, 8).Radius(rr(6)).Border(1, k.inputBorder).AlignItems(ui.Center).Children(func() {
 		in = ui.TextInputBase(c, v).Grow(1).Font(fontSans).FontSize(12).FixedLineHeight(17).TextColor(k.fg).PlaceholderColor(k.muted).Placeholder(ph)
 	})
 	return in
@@ -314,7 +314,7 @@ func formInput(c *ui.Context, k tokens, v *string, ph string) ui.Element {
 
 // formSelect：表单下拉（同 Tauri FormSelect：描边 + 下拉箭头，菜单是应用内浮层）。
 func formSelect(c *ui.Context, k tokens, key, label string, w float32, menu func(m *ui.Menu)) {
-	b := ui.Row(c).Height(28).Padding(0, 8).Gap(4).Radius(6).Border(1, k.inputBorder).AlignItems(ui.Center).Key(key).Role(ui.RoleButton).Label(label)
+	b := ui.Row(c).Height(28).Padding(0, 8).Gap(4).Radius(rr(6)).Border(1, k.inputBorder).AlignItems(ui.Center).Key(key).Role(ui.RoleButton).Label(label)
 	if w > 0 {
 		b.Width(w)
 	} else {

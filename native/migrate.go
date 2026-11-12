@@ -118,7 +118,7 @@ func (a *app) migrateWizard(c *ui.Context, k tokens) {
 		}
 	}()
 	ui.Overlay(c, func() {
-		ui.Column(c).Absolute().Left(0).Top(0).Size(w, h).Radius(14).Background(c.Theme().Background).Key("migrate-wizard").Role(ui.RoleDialog).Label(tr("旧版迁移")).Children(func() {
+		ui.Column(c).Absolute().Left(0).Top(0).Size(w, h).Radius(rr(14)).Background(sheetBg(c)).Key("migrate-wizard").Role(ui.RoleDialog).Label(tr("旧版迁移")).Children(func() {
 			ui.Scroll(c).Fill().Scrollbars(false).Children(func() {
 				ui.Column(c).Padding(20, 20, 24, 20).Gap(20).MaxWidth(420).MinHeight(h).Children(func() {
 					a.migrateSteps(c, k, map[bool]int{false: 0, true: 1}[m.step == 2])
@@ -202,7 +202,7 @@ func kindGrid(c *ui.Context, k tokens, rep *store.TauriReport) {
 		for row := range 2 {
 			ui.Row(c).Gap(6).Children(func() {
 				for _, kd := range migrateKinds[row*3 : row*3+3] {
-					ui.Column(c).Grow(1).Basis(0).Padding(10, 8).Gap(4).Radius(10).Background(k.track).AlignItems(ui.Center).Key("mk-" + kd.label).Children(func() {
+					ui.Column(c).Grow(1).Basis(0).Padding(10, 8).Gap(4).Radius(rr(10)).Background(k.track).AlignItems(ui.Center).Key("mk-" + kd.label).Children(func() {
 						if rep == nil {
 							licon(c, kd.icon, 16, k.muted)
 						} else {
@@ -244,13 +244,13 @@ func (a *app) migrateImportStep(c *ui.Context, k tokens, m *migrateState, act fu
 			text(c, tr("导入前自动写恢复点；旧版数据只读，不会被修改"), 11, 16, 400, k.muted).Wrap().Grow(1).Basis(0)
 		})
 		d := legacyDataDir()
-		ui.Row(c).Gap(6).AlignItems(ui.Center).Tooltip(d).Children(func() {
+		tipOf(c, ui.Row(c).Gap(6).AlignItems(ui.Center), d).Children(func() {
 			licon(c, "folder", 13, k.muted)
 			text(c, shortHome(d), 10, 14, 400, k.muted).Font(fontMono).SingleLine().Grow(1).Basis(0)
 		})
 	})
 	if m.err != "" {
-		ui.Row(c).Gap(8).Padding(8, 10).Radius(10).Background(k.danger.Alpha(0.08)).Border(1, k.danger.Alpha(0.25)).AlignItems(ui.Start).Key("migrate-err").Children(func() {
+		ui.Row(c).Gap(8).Padding(8, 10).Radius(rr(10)).Background(k.danger.Alpha(0.08)).Border(1, k.danger.Alpha(0.25)).AlignItems(ui.Start).Key("migrate-err").Children(func() {
 			licon(c, "x", 14, k.danger).Margin(1, 0, 0, 0)
 			text(c, fmt.Sprintf(tr("导入失败：%s"), m.err), 11, 16, 500, k.danger).Wrap().Grow(1).Basis(0)
 		})
@@ -263,7 +263,7 @@ func (a *app) migrateImportStep(c *ui.Context, k tokens, m *migrateState, act fu
 		case m.err != "":
 			label = tr("重试导入")
 		}
-		if ui.Button(c, label).FillWidth().Disabled(m.step == 1).Clicked() && m.step == 0 {
+		if btnOf(c, label).FillWidth().Disabled(m.step == 1).Clicked() && m.step == 0 {
 			act = a.runMigrationImport
 		}
 		if m.step == 1 {
@@ -316,7 +316,7 @@ func (a *app) migrateHandoffStep(c *ui.Context, k tokens, m *migrateState, act f
 					return
 				}
 				ui.Row(c).Gap(10).Padding(10, 12).AlignItems(ui.Center).Key(key).Children(func() {
-					ui.Box(c).Size(28, 28).Radius(8).Background(k.window).Border(1, k.inputBorder).Center().Children(func() {
+					ui.Box(c).Size(28, 28).Radius(rr(8)).Background(k.window).Border(1, k.inputBorder).Center().Children(func() {
 						if img := a.appIcon(icon); img != nil { // 旧版应用图标本身最好认
 							ui.Image(c, img).Size(22, 22)
 						} else {
@@ -332,7 +332,7 @@ func (a *app) migrateHandoffStep(c *ui.Context, k tokens, m *migrateState, act f
 							licon(c, "check", 11, k.ok)
 							text(c, doneLabel, 11, 16, 500, k.ok)
 						})
-					} else if ui.Button(c, btn).Clicked() {
+					} else if btnOf(c, btn).Clicked() {
 						act = do
 					}
 				})
@@ -363,7 +363,7 @@ func (a *app) migrateHandoffStep(c *ui.Context, k tokens, m *migrateState, act f
 			}
 		})
 	})
-	if ui.Button(c, tr("开始使用新版")).FillWidth().Clicked() {
+	if btnOf(c, tr("开始使用新版")).FillWidth().Clicked() {
 		act = func() { a.migrate = nil }
 	}
 	return act

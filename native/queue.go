@@ -257,7 +257,7 @@ func (a *app) sectionChips(c *ui.Context) {
 					}
 					return false
 				})
-			} else if ui.Icon(c, iconPlus).FontSize(13).TextColor(t.TextMuted).Padding(4).Tooltip(tr("新建分组")).Clicked() {
+			} else if tipOf(c, ui.Icon(c, iconPlus).FontSize(13).TextColor(t.TextMuted).Padding(4), tr("新建分组")).Clicked() {
 				a.newSecOn = true
 			}
 		})
@@ -271,15 +271,15 @@ func (a *app) enterAskBar(c *ui.Context) {
 		ui.Text(c, fmt.Sprintf(tr("粘贴到 %s 后按回车发送？"), a.target.Name)).FontSize(12).Wrap()
 		ui.Row(c).Gap(6).Children(func() {
 			notes, tmpl := a.enterAsk, a.enterTmpl
-			if ui.Button(c, tr("粘贴并回车")).Clicked() {
+			if btnOf(c, tr("粘贴并回车")).Clicked() {
 				a.enterAsk = nil
 				a.deliver(notes, true, tmpl)
 			}
-			if ui.Button(c, tr("仅粘贴")).Clicked() {
+			if btnOf(c, tr("仅粘贴")).Clicked() {
 				a.enterAsk = nil
 				a.deliver(notes, false, tmpl)
 			}
-			if ui.Button(c, tr("取消")).Clicked() {
+			if btnOf(c, tr("取消")).Clicked() {
 				a.cancelEnterAsk()
 			}
 		})
@@ -336,7 +336,7 @@ func (a *app) doneFold(c *ui.Context) {
 			ui.Column(c).Gap(4).Children(func() {
 				for _, n := range a.done {
 					ui.Row(c).Padding(4, 8).Gap(8).AlignItems(ui.Center).Key("done-" + n.ID).Children(func() {
-						if ui.Icon(c, iconDone).FontSize(13).TextColor(t.Success).Tooltip(tr("恢复为未完成")).Clicked() {
+						if tipOf(c, ui.Icon(c, iconDone).FontSize(13).TextColor(t.Success), tr("恢复为未完成")).Clicked() {
 							_ = a.store.SetDone(n.ID, false)
 						}
 						ui.Text(c, preview(n.Text, 40)).FontSize(12).TextColor(t.TextMuted).Strikethrough().SingleLine().Grow(1)
@@ -363,7 +363,7 @@ func (a *app) card(c *ui.Context, i int) {
 			if img := a.thumb(n.ImageFile); img != nil {
 				w, h := ui.ImageSize(img)
 				dw := min(w, 300)
-				ui.Image(c, img).Size(dw, h*dw/max(w, 1)).Radius(8)
+				ui.Image(c, img).Size(dw, h*dw/max(w, 1)).Radius(rr(8))
 			} else {
 				ui.Text(c, tr("（图片缺失）")).TextColor(t.Danger)
 			}
@@ -377,7 +377,7 @@ func (a *app) card(c *ui.Context, i int) {
 			}
 		}
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-			if ui.Icon(c, iconCircle).FontSize(12).TextColor(t.TextMuted).Tooltip(tr("标记完成（⌘D）")).Clicked() {
+			if tipOf(c, ui.Icon(c, iconCircle).FontSize(12).TextColor(t.TextMuted), tr("标记完成（⌘D）")).Clicked() {
 				_ = a.store.SetDone(n.ID, true)
 			}
 			meta := ago(n.CreatedAt, time.Now())
@@ -397,13 +397,13 @@ func (a *app) card(c *ui.Context, i int) {
 				ui.Badge(c, tr("保留"))
 			}
 			if !n.SentAt.IsZero() {
-				ui.Icon(c, iconCheck).FontSize(11).TextColor(t.Success).Tooltip(tr("已发送"))
+				tipOf(c, ui.Icon(c, iconCheck).FontSize(11).TextColor(t.Success), tr("已发送"))
 			}
 			if i == a.selected {
-				if ui.Icon(c, iconCopy).FontSize(12).TextColor(t.TextMuted).Tooltip(tr("复制")).Clicked() {
+				if tipOf(c, ui.Icon(c, iconCopy).FontSize(12).TextColor(t.TextMuted), tr("复制")).Clicked() {
 					a.copySelected(c)
 				}
-				if ui.Icon(c, iconSend).FontSize(12).TextColor(t.Accent).Tooltip(tr("发送（⌘↵）")).Clicked() {
+				if tipOf(c, ui.Icon(c, iconSend).FontSize(12).TextColor(t.Accent), tr("发送（⌘↵）")).Clicked() {
 					a.sendSelected()
 				}
 			}

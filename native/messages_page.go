@@ -134,7 +134,7 @@ func (a *app) messagesPage(c *ui.Context, k tokens) {
 		}
 		for _, f := range msgFilters {
 			on := a.msgFilter == f.value
-			b := ui.Row(c).Height(24).Padding(0, 8).Gap(4).Radius(6).AlignItems(ui.Center).Key("mf-" + f.value).Role(ui.RoleTab).Label(tr(f.label))
+			b := ui.Row(c).Height(24).Padding(0, 8).Gap(4).Radius(rr(6)).AlignItems(ui.Center).Key("mf-" + f.value).Role(ui.RoleTab).Label(tr(f.label))
 			if on {
 				b.Background(k.track)
 			} else if b.Hovered() {
@@ -371,7 +371,7 @@ func (a *app) messageCard(c *ui.Context, k tokens, m store.Message, view []store
 				a.msgOpen["c:"+m.ID] = !ctxOpen
 			}
 			if ctxOpen {
-				ui.Column(c).Margin(6, 0, 0, 0).Padding(8).Gap(6).Radius(8).Background(k.track).Children(func() {
+				ui.Column(c).Margin(6, 0, 0, 0).Padding(8).Gap(6).Radius(rr(8)).Background(k.track).Children(func() {
 					for _, x := range m.Context {
 						who := cmpOr(cmpOr(x.SenderName, x.SenderUID), tr("未知发送者"))
 						what := x.Text
@@ -391,7 +391,7 @@ func (a *app) messageCard(c *ui.Context, k tokens, m store.Message, view []store
 			}
 		}
 		if m.AIDraft != "" {
-			ui.Column(c).Margin(8, 0, 0, 0).Padding(8).Gap(4).Radius(8).Background(k.track).Children(func() {
+			ui.Column(c).Margin(8, 0, 0, 0).Padding(8).Gap(4).Radius(rr(8)).Background(k.track).Children(func() {
 				ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
 					licon(c, "sparkles", 12, k.muted)
 					text(c, tr("AI 草稿"), 10, 14, 500, k.muted)

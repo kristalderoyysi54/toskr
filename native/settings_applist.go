@@ -83,7 +83,7 @@ func (a *app) appListEditor(c *ui.Context, k tokens, s settingsTokens, key strin
 			return
 		}
 		for _, b := range apps {
-			row := ui.Row(c).Gap(8).Padding(4, 6).Radius(6).AlignItems(ui.Center).Key(key + "-" + b)
+			row := ui.Row(c).Gap(8).Padding(4, 6).Radius(rr(6)).AlignItems(ui.Center).Key(key + "-" + b)
 			hov := row.Hovered()
 			if hov {
 				row.Background(k.track)
@@ -94,7 +94,7 @@ func (a *app) appListEditor(c *ui.Context, k tokens, s settingsTokens, key strin
 				} else {
 					ui.Box(c).Size(20, 20).Radius(4).Background(k.track)
 				}
-				text(c, a.appName(b), 13, 18, 400, k.fg).SingleLine().Grow(1).Basis(0).Tooltip(b)
+				tipOf(c, text(c, a.appName(b), 13, 18, 400, k.fg).SingleLine().Grow(1).Basis(0), b)
 				if ghostIconButton(c, k, key+"-rm-"+b, "x", tr("移除")+" "+a.appName(b), 22, 13, true, hov).Clicked() {
 					apps = slices.DeleteFunc(apps, func(x string) bool { return x == b })
 					*list, changed = strings.Join(apps, "\n"), true

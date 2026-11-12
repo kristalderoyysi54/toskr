@@ -690,7 +690,7 @@ func (a *app) shotView(c *ui.Context, d *shotDisplay) {
 		if active.Y >= 26 {
 			top = active.Y - 24
 		}
-		ui.Box(c).Absolute().Left(f32(active.X)).Top(f32(top)).Padding(2, 6).Radius(6).Background(gray(0, 0.7)).PassThrough().Children(func() {
+		ui.Box(c).Absolute().Left(f32(active.X)).Top(f32(top)).Padding(2, 6).Radius(rr(6)).Background(gray(0, 0.7)).PassThrough().Children(func() {
 			text(c, fmt.Sprintf("%d × %d", int(pr.W), int(pr.H)), 10, 14, 400, colWhite).Font(fontMono).FontFeatures("tnum")
 		})
 	}
@@ -714,7 +714,7 @@ func (a *app) shotView(c *ui.Context, d *shotDisplay) {
 			a.shotFrameBar(c, d, pal, pr, fr, shotFrameBarTop(*e.sel, toolbarTop, toolbarH))
 		}
 		if e.notice != "" && c.Now().Sub(e.noticeAt) < 2500*time.Millisecond {
-			ui.Row(c).Absolute().Left(f32(e.sel.X)).Top(f32(math.Max(shotBarGap, toolbarTop-shotBarGap-shotNoticeH))).Height(shotNoticeH).Padding(0, 8).AlignItems(ui.Center).Radius(8).Background(gray(0, 0.75)).PassThrough().
+			ui.Row(c).Absolute().Left(f32(e.sel.X)).Top(f32(math.Max(shotBarGap, toolbarTop-shotBarGap-shotNoticeH))).Height(shotNoticeH).Padding(0, 8).AlignItems(ui.Center).Radius(rr(8)).Background(gray(0, 0.75)).PassThrough().
 				Children(func() { text(c, e.notice, 11, 16, 400, colWhite) })
 		}
 		a.shotToolbar(c, d, pal, toolbarTop, toolbarH, showStyle, styleKind, styleInk, styleLv)
@@ -876,7 +876,7 @@ func (a *app) shotLoupe(c *ui.Context, d *shotDisplay) {
 		e.sampled = fmt.Sprintf("#%02X%02X%02X", d.img.Pix[o], d.img.Pix[o+1], d.img.Pix[o+2])
 	}
 	half := shotLoupeSample / 2
-	ui.Column(c).Absolute().Left(f32(pos.X)).Top(f32(pos.Y)).Width(shotLoupeSize).Radius(8).Clip().
+	ui.Column(c).Absolute().Left(f32(pos.X)).Top(f32(pos.Y)).Width(shotLoupeSize).Radius(rr(8)).Clip().
 		Background(gray(0, 0.8)).Border(1, gray(1, 0.6)).Shadow(0, 10, 15, -3, gray(0, 0.1)).Shadow(0, 4, 6, -4, gray(0, 0.1)).
 		PassThrough().Children(func() {
 		ui.Box(c).Size(shotLoupeSize, shotLoupeSize).Draw(func(p *ui.Painter, r ui.Rect) {
@@ -927,7 +927,7 @@ func shotFrameBarTop(s shot.Rect, toolbarTop, toolbarH float64) float64 {
 func (a *app) shotFrameBar(c *ui.Context, d *shotDisplay, pal shotPalette, pr shot.Rect, fr shotFrame, top float64) {
 	s := d.ed.sel
 	left := math.Min(s.X, math.Max(0, d.W-shotFrameBarW))
-	bar := ui.Row(c).Absolute().Left(f32(left)).Top(f32(top)).Height(shotFrameBarH).Padding(0, 8).Gap(8).Radius(10).AlignItems(ui.Center).Cursor(ui.CursorDefault).Key("shot-frame-bar")
+	bar := ui.Row(c).Absolute().Left(f32(left)).Top(f32(top)).Height(shotFrameBarH).Padding(0, 8).Gap(8).Radius(rr(10)).AlignItems(ui.Center).Cursor(ui.CursorDefault).Key("shot-frame-bar")
 	pal.float(bar).Children(func() {
 		text(c, fmt.Sprintf("%d × %d", int(pr.W), int(pr.H)), 11, 16, 400, pal.muted).Font(fontMono).FontFeatures("tnum")
 		ui.Box(c).Size(1, 16).Background(pal.border)
@@ -1011,7 +1011,7 @@ func (a *app) shotTipTarget(c *ui.Context, d *shotDisplay, el ui.Element, tip st
 // shotButton：工具条按钮 30pt、图标 18pt（IconButton sm + p-1.5）。
 func (a *app) shotButton(c *ui.Context, d *shotDisplay, pal shotPalette, key, icon, tip string, pressed, disabled bool, iconColor *ui.Color) ui.Element {
 	label, _, _ := strings.Cut(tip, "：")
-	b := ui.Box(c).Size(30, 30).Radius(8).Center().Key("sb-" + key).Label(label).Role(ui.RoleButton)
+	b := ui.Box(c).Size(30, 30).Radius(rr(8)).Center().Key("sb-" + key).Label(label).Role(ui.RoleButton)
 	bg, fg := ui.Transparent, pal.muted
 	if disabled {
 		b.Opacity(0.45)
@@ -1042,7 +1042,7 @@ func shotSep(c *ui.Context, pal shotPalette) {
 func (a *app) shotToolbar(c *ui.Context, d *shotDisplay, pal shotPalette, top, h float64, showStyle bool, styleKind shot.Kind, styleInk string, styleLv int) {
 	e := &d.ed
 	s := e.sel
-	bar := ui.Column(c).Absolute().Top(f32(top)).Height(f32(h)).Padding(0, 8).Gap(6).Radius(10).Justify(ui.Center).Cursor(ui.CursorDefault)
+	bar := ui.Column(c).Absolute().Top(f32(top)).Height(f32(h)).Padding(0, 8).Gap(6).Radius(rr(10)).Justify(ui.Center).Cursor(ui.CursorDefault)
 	if s.X+s.W < shotToolbarWEst {
 		bar.Left(4)
 	} else {
@@ -1169,7 +1169,7 @@ func (a *app) shotSectionMenu(c *ui.Context, d *shotDisplay, pal shotPalette, W,
 		e.sectionMenu = false
 		return
 	}
-	m := ui.Column(c).Absolute().Width(192).MaxHeight(288).Padding(4).Radius(8).Key("shot-sections")
+	m := ui.Column(c).Absolute().Width(192).MaxHeight(288).Padding(4).Radius(rr(8)).Key("shot-sections")
 	place(m)
 	var secs []store.Section
 	for _, sec := range a.store.Sections() {
@@ -1184,7 +1184,7 @@ func (a *app) shotSectionMenu(c *ui.Context, d *shotDisplay, pal shotPalette, W,
 		}
 		ui.Scroll(c).Children(func() {
 			for _, sec := range secs {
-				row := ui.Box(c).Padding(4, 8).Radius(6).Key("sec-" + sec.ID)
+				row := ui.Box(c).Padding(4, 8).Radius(rr(6)).Key("sec-" + sec.ID)
 				if row.Hovered() {
 					row.Background(pal.accent)
 				}
@@ -1214,7 +1214,7 @@ func (a *app) shotStyleRow(c *ui.Context, d *shotDisplay, pal shotPalette, kind 
 	}
 	ui.Row(c).Gap(8).Padding(0, 4).AlignItems(ui.Center).Children(func() {
 		for i := range 3 {
-			b := ui.Box(c).Size(20, 20).Radius(6).Center().Key(fmt.Sprintf("lv-%d", i))
+			b := ui.Box(c).Size(20, 20).Radius(rr(6)).Center().Key(fmt.Sprintf("lv-%d", i))
 			if lv == i {
 				b.Background(pal.accent)
 			}
@@ -1230,7 +1230,7 @@ func (a *app) shotStyleRow(c *ui.Context, d *shotDisplay, pal shotPalette, kind 
 		ui.Box(c).Size(1, 16).Background(pal.border)
 		for _, col := range shot.Colors {
 			on := col == ink
-			b := ui.Box(c).Size(16, 16).Radius(6).Background(shotColor(col)).Border(1, pal.border).Key("ink-" + col)
+			b := ui.Box(c).Size(16, 16).Radius(rr(6)).Background(shotColor(col)).Border(1, pal.border).Key("ink-" + col)
 			if on {
 				b.DrawOver(func(p *ui.Painter, r ui.Rect) {
 					p.Stroke(ui.Rect{X: r.X - 3, Y: r.Y - 3, W: r.W + 6, H: r.H + 6}, pal.primary, 9, 2)
@@ -1286,7 +1286,7 @@ func (a *app) shotCallouts(c *ui.Context, d *shotDisplay, shapes []*shot.Shape, 
 		}
 		t := shot.CalloutTag(s, n)
 		ui.Row(c).Absolute().Left(f32((t.X+t.W)*z)).Top(f32(t.Y*z)).Height(f32(t.H*z)).MaxWidth(240).Padding(0, 6).AlignItems(ui.Center).
-			Radius(0, 8, 8, 0).Background(cardBg).Border(1, cardBorder).Shadow(0, 6, 16, -4, gray(0, 0.12)).PassThrough().Key(fmt.Sprintf("cl-%d", n)).
+			Radius(0, rr(8), rr(8), 0).Background(cardBg).Border(1, cardBorder).Shadow(0, 6, 16, -4, gray(0, 0.12)).PassThrough().Key(fmt.Sprintf("cl-%d", n)).
 			Children(func() { text(c, s.Note, 11, 16, 400, cardText).SingleLine() })
 	}
 	if e.note == nil {
@@ -1298,10 +1298,10 @@ func (a *app) shotCallouts(c *ui.Context, d *shotDisplay, shapes []*shot.Shape, 
 		n = len(numbers)
 	}
 	color := e.note.Shape.Color
-	ui.Row(c).Absolute().Left(f32(b.X*z)).Top(f32((b.Y+b.H)*z+6)).Width(256).Padding(4, 8, 4, 4).Gap(8).Radius(8).AlignItems(ui.Center).
+	ui.Row(c).Absolute().Left(f32(b.X*z)).Top(f32((b.Y+b.H)*z+6)).Width(256).Padding(4, 8, 4, 4).Gap(8).Radius(rr(8)).AlignItems(ui.Center).
 		Background(cardBg).Border(1, cardBorder).Shadow(0, 1, 2, 0, gray(0, 0.08)).Shadow(0, 6, 16, -4, gray(0, 0.12)).Cursor(ui.CursorDefault).
 		Children(func() {
-			ui.Box(c).Height(24).MinWidth(24).Padding(0, 4).Radius(8).Center().Background(shotColor(color)).
+			ui.Box(c).Height(24).MinWidth(24).Padding(0, 4).Radius(rr(8)).Center().Background(shotColor(color)).
 				Children(func() { text(c, fmt.Sprint(n), 11, 16, 700, shotColor(shot.NumberTextColor(color))) })
 			ui.TextInputBase(c, &e.note.Text).Grow(1).Font(fontSans).FontSize(12).TextColor(cardText).
 				Placeholder(tr("这里要怎么改？")).PlaceholderColor(gray(0, 0.4)).Label(tr("批注说明")).Focus().
@@ -1330,7 +1330,7 @@ func (a *app) shotHoverTip(c *ui.Context, d *shotDisplay, W, H float64) {
 	w, h := c.MeasureText(224, sp)
 	w, h = w+16, h+8
 	cx := math.Min(math.Max(float64(r.X+r.W/2), 124), W-124)
-	tip := ui.Box(c).Absolute().Left(f32(cx)-w/2).Width(w).Padding(4, 8).Radius(8).Background(gray(0, 0.75)).
+	tip := ui.Box(c).Absolute().Left(f32(cx)-w/2).Width(w).Padding(4, 8).Radius(rr(8)).Background(gray(0, 0.75)).
 		Shadow(0, 4, 6, -1, gray(0, 0.1)).PassThrough()
 	if float64(r.Y+r.H)+48 < H {
 		tip.Top(r.Y + r.H + 6)

@@ -292,7 +292,7 @@ func (a *app) reviewView(c *ui.Context, k tokens, n store.Note, rv *aiReview) {
 	lh := fs * 1.625
 	ui.Column(c).Padding(5.85, 0, 0, 0).Gap(8).Key("ai-review").Children(func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Row(c).Height(18).Padding(0, 7, 0, 5).Gap(4).Radius(6).Background(s.primary.Alpha(0.1)).AlignItems(ui.Center).Shrink(0).Children(func() {
+			ui.Row(c).Height(18).Padding(0, 7, 0, 5).Gap(4).Radius(rr(6)).Background(s.primary.Alpha(0.1)).AlignItems(ui.Center).Shrink(0).Children(func() {
 				licon(c, "sparkles", 11, s.primary)
 				text(c, tr(rv.act.label), 10, 14, 500, s.primary).SingleLine()
 			})
@@ -318,7 +318,7 @@ func (a *app) reviewView(c *ui.Context, k tokens, n store.Note, rv *aiReview) {
 			}
 			text(c, body+" ▍", fs, lh, 400, k.fg).Wrap().Key("ai-stream")
 		case rv.replace:
-			ui.Column(c).Padding(8, 10).Radius(8).Background(k.track).Gap(2).Children(func() {
+			ui.Column(c).Padding(8, 10).Radius(rr(8)).Background(k.track).Gap(2).Children(func() {
 				text(c, tr("原文"), 10, 14, 500, k.muted)
 				text(c, rv.orig, fs-1, (fs-1)*1.6, 400, k.muted).Wrap().MaxLines(8)
 			})
@@ -335,7 +335,7 @@ func (a *app) reviewView(c *ui.Context, k tokens, n store.Note, rv *aiReview) {
 					}
 					continue
 				}
-				row := ui.Row(c).Gap(8).AlignItems(ui.Start).Padding(4, 6, 4, 8).Margin(0, -8).Radius(8).Key("rs-" + itoa(i))
+				row := ui.Row(c).Gap(8).AlignItems(ui.Start).Padding(4, 6, 4, 8).Margin(0, -8).Radius(rr(8)).Key("rs-" + itoa(i))
 				switch sg.state {
 				case 0:
 					row.Background(k.fg.Alpha(0.035))

@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/egoist/mygo/ui"
+	"strconv"
 )
 
 // Platinum 下的设置窗与控件，按 Tauri 的 platinum 段与 Segmented / Switch / range 的 Platinum 分支复刻：
@@ -47,13 +48,15 @@ func (a *app) ptSettingsShell(c *ui.Context, k tokens, s settingsTokens, pages [
 	}()
 	ui.Column(c).Fill().Children(func() {
 		ui.Row(c).Height(21).Padding(5, 6, 3, 6).Gap(4).DragWindow().Children(func() {
-			if ptWidget(c, "close") && a.settingsWin != nil {
+			if ptWidgetTip(c, "close", tr("关闭窗口")) && a.settingsWin != nil {
 				a.settingsWin.Close()
 			}
 			ptStripes(c)
 			text(c, tr("Toskr 设置"), 12, 13, 700, ptBlack).Padding(0, 3)
 			ptStripes(c)
-			ptWidget(c, "zoom")
+			if ptWidgetTip(c, "zoom", tr("最大化 / 还原")) && a.settingsWin != nil {
+				a.settingsWin.ToggleMaximize()
+			}
 		})
 		ui.Row(c).Grow(1).AlignItems(ui.Stretch).Children(func() {
 			ui.Column(c).Width(176).Padding(10, 0, 12, 12).Gap(6).Children(func() {
@@ -108,7 +111,10 @@ func (a *app) ptSettingsShell(c *ui.Context, k tokens, s settingsTokens, pages [
 						secs := p.sections[min(a.setSub, len(p.sections)-1)]
 						box := ui.Column(c).Margin(-1, 0, 0, 0).Padding(28, 14, 2, 14).Gap(24).Background(ptG300).Border(1, ptBlack)
 						ptBevel(box, ptG600).Children(func() {
-							for _, sec := range secs {
+							for i, sec := range secs {
+								if sec.key == "" { // 同页多张无标题分组：没给 key 的按序号区分身份（重复 key 会 panic）
+									sec.key = "#" + strconv.Itoa(i)
+								}
 								ptSection(c, k, s, sec)
 							}
 							ui.Box(c).Height(12)

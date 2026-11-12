@@ -180,7 +180,7 @@ func (a *app) shotOCRPanel(c *ui.Context, d *shotDisplay, pal shotPalette, toolb
 	}
 	left, top := shotOCRPanelPlace(*s, d.W, d.H, toolbarTop, toolbarH, h)
 	st := stok(c)
-	panel := ui.Column(c).Absolute().Left(f32(left)).Top(f32(top)).Width(shotOCRPanelW).MaxHeight(shotOCRPanelMaxH).Padding(8).Gap(8).Radius(8).
+	panel := ui.Column(c).Absolute().Left(f32(left)).Top(f32(top)).Width(shotOCRPanelW).MaxHeight(shotOCRPanelMaxH).Padding(8).Gap(8).Radius(rr(8)).
 		Cursor(ui.CursorDefault).Key("shot-ocr")
 	if b := panel.Bounds(); b.H > 0 && float64(b.H) != o.panelH { // 高度变了：记下并再画一帧，按真实高度重新避让
 		o.panelH = float64(b.H)
@@ -193,7 +193,7 @@ func (a *app) shotOCRPanel(c *ui.Context, d *shotDisplay, pal shotPalette, toolb
 				title = tr("识别中…")
 			}
 			text(c, title, 11, 16, 400, pal.muted)
-			x := ui.Box(c).Size(20, 20).Radius(8).Center().Label(tr("关闭（Esc）")).Role(ui.RoleButton)
+			x := ui.Box(c).Size(20, 20).Radius(rr(8)).Center().Label(tr("关闭（Esc）")).Role(ui.RoleButton)
 			if x.Hovered() {
 				x.Background(pal.hover)
 			}
@@ -205,7 +205,7 @@ func (a *app) shotOCRPanel(c *ui.Context, d *shotDisplay, pal shotPalette, toolb
 		if e.ocr == nil {
 			return
 		}
-		ui.TextAreaBase(c, &o.text).Grow(1).Lines(5, 18).Padding(6).Radius(6).Border(1, pal.border).Background(st.input).
+		ui.TextAreaBase(c, &o.text).Grow(1).Lines(5, 18).Padding(6).Radius(rr(6)).Border(1, pal.border).Background(st.input).
 			Font(fontSans).FontSize(12).FixedLineHeight(17).TextColor(pal.fg).ReadOnly(o.busy).Focus()
 		if o.err != "" {
 			text(c, o.err, 11, 16, 400, pal.k.amberText)
@@ -228,7 +228,7 @@ func (a *app) shotOCRPanel(c *ui.Context, d *shotDisplay, pal shotPalette, toolb
 
 // shotTextButton：Button default 变体 xs（h-6 px-2 rounded-lg text-label）。
 func shotTextButton(c *ui.Context, s settingsTokens, label string, disabled bool) bool {
-	b := ui.Row(c).Height(24).Padding(0, 8).Radius(10).Border(1, s.btnBorder).AlignItems(ui.Center).Key("tb-" + label).Role(ui.RoleButton).Label(label)
+	b := ui.Row(c).Height(24).Padding(0, 8).Radius(rr(10)).Border(1, s.btnBorder).AlignItems(ui.Center).Key("tb-" + label).Role(ui.RoleButton).Label(label)
 	bg := s.btn
 	if disabled {
 		b.Opacity(0.5)

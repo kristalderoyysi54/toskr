@@ -77,8 +77,8 @@ func TestCompactRowTitle(t *testing.T) {
 	}
 }
 
-// 笔记卡信息层级：通栏写来源应用 + 时间（非纯文本带类型小标），有自定义标题时通栏写标题、来源回到页脚；
-// 页脚只在有状态时出现，发过的卡带「已发送 ×N」。
+// 笔记卡信息层级（同 Tauri NoteCard）：通栏写自定义标题或类型；页脚常驻——左来源 / 标签 / 状态，右时间；
+// 发过的卡带「已发送 ×N」，失败的发送不计数。
 func TestNoteCardHeaderHierarchy(t *testing.T) {
 	a, tt := testApp(t)
 	plain, _, _ := a.store.Add(store.Note{Section: store.SectionInbox, Text: "一段纯文本", SourceApp: "Microsoft Remote Desktop Beta"})
@@ -93,18 +93,16 @@ func TestNoteCardHeaderHierarchy(t *testing.T) {
 	_ = a.store.SetTags(plain.ID, []string{"报告", "周会", "复盘", "归档"})
 	a.reload()
 	tt.Frame()
-	for _, s := range []string{"Microsoft Remote Desktop Beta", "周五对比报告", "来自 Cursor", "已发送 ×12", "刚刚 · sql", "#报告", "+1"} {
+	for _, s := range []string{"文本", "周五对比报告", "来自 Cursor", "来自 Arc", "已发送 ×12", "刚刚", "#报告", "+1"} {
 		if !tt.HasText(s) {
 			t.Fatalf("缺 %q %v", s, tt.Texts())
 		}
 	}
-	if tt.HasText("来自 Microsoft") || tt.HasText("来自 Arc") {
-		t.Fatalf("来源已上通栏，页脚不再重复 %v", tt.Texts())
+	if _, ok := tt.Find("Microsoft Remote Desktop Beta"); ok {
+		t.Fatalf("来源不上通栏 %v", tt.Texts())
 	}
-	p, _ := a.store.Note(plain.ID)
-	b, _ := a.store.Note(bare.ID)
-	if !a.noteFooterShown(p) || a.noteFooterShown(b) || a.sentCounts[bare.ID] != 0 {
-		t.Fatal("有标签 / 已发送才出页脚；失败的发送不计数")
+	if a.sentCounts[plain.ID] != 12 || a.sentCounts[bare.ID] != 0 {
+		t.Fatal("失败的发送不计数")
 	}
 	if dir := os.Getenv("TOSKR_SHOT_DIR"); dir != "" {
 		for _, dark := range []bool{false, true} {

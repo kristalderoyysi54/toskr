@@ -333,8 +333,8 @@ func (a *app) taskQuickChips(c *ui.Context, k tokens) {
 	now := a.now()
 	chip := func(kind, icon, label string) {
 		off := a.taskQuickOff[kind]
-		b := ui.Row(c).Height(20).Padding(0, 8, 0, 6).Gap(4).Radius(10).AlignItems(ui.Center).Key("tqc-" + kind).Role(ui.RoleButton).Selected(!off).
-			Label(label).Tooltip(map[bool]string{false: tr("点一下不采用，保留原文"), true: tr("点一下重新采用")}[off])
+		b := tipOf(c, ui.Row(c).Height(20).Padding(0, 8, 0, 6).Gap(4).Radius(10).AlignItems(ui.Center).Key("tqc-"+kind).Role(ui.RoleButton).Selected(!off).
+			Label(label), map[bool]string{false: tr("点一下不采用，保留原文"), true: tr("点一下重新采用")}[off])
 		fg := s.primary
 		if off {
 			fg = k.muted

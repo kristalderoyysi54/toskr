@@ -129,14 +129,14 @@ func (a *app) clipPickPopover(c *ui.Context, k tokens) {
 		if y < 8 {
 			y = at.Y + at.H + 6
 		}
-		floatSurface(ui.Column(c).Absolute().Left(x).Top(y).Width(pw).Padding(4).Radius(10).Key("clip-pick"), k).Children(func() {
+		floatSurface(ui.Column(c).Absolute().Left(x).Top(y).Width(pw).Padding(4).Radius(rr(10)).Key("clip-pick"), k).Children(func() {
 			text(c, tr("移入笔记分类"), 11, 16, 500, k.muted).Padding(4, 8)
 			for _, s := range secs {
 				name := sectionName(s)
 				if s.ID == store.SectionInbox {
 					name = tr("收件箱")
 				}
-				row := ui.Row(c).Height(28).Padding(0, 8).Radius(6).AlignItems(ui.Center).Key("cp-" + s.ID).Role(ui.RoleButton).Label(tr("移入 ") + name)
+				row := ui.Row(c).Height(28).Padding(0, 8).Radius(rr(6)).AlignItems(ui.Center).Key("cp-" + s.ID).Role(ui.RoleButton).Label(tr("移入 ") + name)
 				col := hoverLink(row, k)
 				row.Children(func() { text(c, name, 12, 17, 400, col).SingleLine() })
 				if row.Clicked() {

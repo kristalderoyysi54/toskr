@@ -273,14 +273,14 @@ func (a *app) pfImagesSection(c *ui.Context, k tokens, policy string) {
 			act()
 		}
 	}()
-	ui.Column(c).Gap(6).Padding(6, 8).Radius(8).Background(t.Background.Alpha(0.6)).Key("pf-images").Children(func() {
+	ui.Column(c).Gap(6).Padding(6, 8).Radius(rr(8)).Background(t.Background.Alpha(0.6)).Key("pf-images").Children(func() {
 		text(c, fmt.Sprintf(tr("图片隐私检查 · %d 张"), len(p.images)), 12, 17, 600, k.fg)
 		for i, im := range p.images {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Key(fmt.Sprintf("pf-img-%d", i)).Children(func() {
 				if bm := a.pfThumb(im); bm != nil { // 点开对比窗：左原图（红框标命中）右实际发送
 					w, h := float32(im.img.Rect.Dx()), float32(im.img.Rect.Dy())
-					tb := ui.Box(c).Size(min(48*w/max(h, 1), 96), 48).Radius(4).Clip().Border(1, k.fg.Alpha(0.1)).Key(fmt.Sprintf("pf-thumb-%d", i)).
-						Role(ui.RoleButton).Label(tr("点击放大对比原图与发送图")).Tooltip(tr("点击放大对比原图与发送图"))
+					tb := tipOf(c, ui.Box(c).Size(min(48*w/max(h, 1), 96), 48).Radius(4).Clip().Border(1, k.fg.Alpha(0.1)).Key(fmt.Sprintf("pf-thumb-%d", i)).
+						Role(ui.RoleButton).Label(tr("点击放大对比原图与发送图")), tr("点击放大对比原图与发送图"))
 					tb.Children(func() {
 						ui.Image(c, bm).Fill()
 						if tb.Hovered() {

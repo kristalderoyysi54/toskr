@@ -138,7 +138,7 @@ func (a *app) linkBlock(c *ui.Context, k tokens, n store.Note) {
 		}
 		// 同 Tauri 非票据链接卡的常驻「打开链接」小钮
 		ui.Row(c).Children(func() { // 外包一层 Row：按钮按内容定宽（同 Tauri w-fit），不被 Column 拉满
-			b := ui.Row(c).Height(18).Margin(2, 0, 0, 0).Padding(0, 6).Gap(4).Radius(6).Background(k.fg.Alpha(0.06)).AlignItems(ui.Center).
+			b := ui.Row(c).Height(18).Margin(2, 0, 0, 0).Padding(0, 6).Gap(4).Radius(rr(6)).Background(k.fg.Alpha(0.06)).AlignItems(ui.Center).
 				Key("open-link-" + n.ID).Role(ui.RoleButton).Label(tr("打开链接"))
 			col := k.muted
 			if b.Hovered() {

@@ -197,7 +197,7 @@ func (a *app) shotOCRExtras(c *ui.Context, d *shotDisplay, pal shotPalette) {
 	for i, q := range o.qr {
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Key("ocr-qr-" + itoa(i)).Children(func() {
 			licon(c, "scan-text", 12, pal.muted)
-			text(c, q, 11, 16, 400, pal.fg).SingleLine().Grow(1).Basis(0).Tooltip(q)
+			tipOf(c, text(c, q, 11, 16, 400, pal.fg).SingleLine().Grow(1).Basis(0), q)
 			if isWebURL(q) {
 				if shotTextButton(c, st, tr("打开链接"), false) {
 					openURL(q)

@@ -181,6 +181,8 @@ func (a *app) openDetail(n store.Note) {
 		Vibrancy: vibrancyFor(a.store.Settings().Glass), Transparent: true,
 		Content: ui.View(func(c *ui.Context) { a.usePane(p); a.detailView(c) }),
 	}
+	// 标题栏由主题自绘（关闭 / 缩放 / 收起框）时不要系统红绿灯
+	opts.HideWindowButtons = theme().SquareWindows()
 	if len(a.panes) > 1 { // 并存的新窗错开 28pt，不整块压住已固定的窗
 		for _, x := range a.panes {
 			if x != p && x.win != nil {
@@ -190,6 +192,9 @@ func (a *app) openDetail(n store.Note) {
 		}
 	}
 	win := mygo.NewWindow(opts)
+	if opts.HideWindowButtons { // 直角窗，标题栏与三个框由主题自绘
+		macos.MakeSquare(win.NativeHandle())
+	}
 	win.SetVisibleOnAllWorkspaces(true) // 同 Tauri visible_on_all_workspaces：全屏 Space 上也能看
 	a.detailWin = win
 	win.OnFocus(func() { a.usePane(p) }) // 双击剪贴卡追加等外部操作落到最近获得焦点的窗
@@ -291,8 +296,8 @@ func (a *app) detailView(c *ui.Context) {
 		return
 	}
 	bg := s.bg
-	if c.Vibrancy() {
-		bg = bg.Alpha(0.72) // 原生模糊材质透出（Tauri 关闭玻璃时为不透明底）
+	if c.Vibrancy() && !k.th.Opaque() {
+		bg = bg.Alpha(0.72) // 原生模糊材质透出（Tauri 关闭玻璃时为不透明底）；整窗不透明的主题强制实底
 	}
 	c.Root().Background(bg)
 	if a.detail.compare != "" { // 回复对比占整窗
@@ -307,8 +312,12 @@ func (a *app) detailView(c *ui.Context) {
 	root := ui.Box(c).Fill()
 	a.detail.sel.win, a.detail.sel.ok, a.detail.sel.floor, a.detail.sel.pickBot = root.Bounds(), false, 0, 0
 	root.Children(func() {
-		ui.Box(c).Absolute().Top(0).Left(0).Right(0).Height(102.4).PassThrough(). // 纯装饰：不挡正文首行的点击 / 划选（选词首行键帽曾点不动）
-												LinearGradient(ui.LinearGradient{From: a.detailAccent(n).Alpha(0.26), To: ui.Transparent, Angle: 180})
+		if over, ok := k.th.DetailFrame(c); ok { // 主题自绘窗框：不画顶部晕光，窗框压在内容之上
+			defer over()
+		} else {
+			ui.Box(c).Absolute().Top(0).Left(0).Right(0).Height(102.4).PassThrough(). // 纯装饰：不挡正文首行的点击 / 划选（选词首行键帽曾点不动）
+													LinearGradient(ui.LinearGradient{From: a.detailAccent(n).Alpha(0.26), To: ui.Transparent, Angle: 180})
+		}
 		a.detailBody(c, k, s, n)
 		// 同 Tauri：顶部 40pt 常驻拖动区（标题栏收起时也能拖窗）；正文从 64 开始，不挡首行
 		ui.Box(c).Absolute().Top(0).Left(0).Right(0).Height(40).DragWindow().Key("detail-drag")
@@ -366,6 +375,9 @@ func (a *app) detailChromeTrack(over bool) {
 // detailChromeVisible：编辑 / 选词 / 标签输入 / 图片说明期间常显（有操作要落地）。
 func (a *app) detailChromeVisible() bool {
 	d := a.detail
+	if theme().DetailChromePinned() {
+		return true
+	}
 	return !d.chromeHidden || d.chromeHold || d.edit || d.pick || d.tagOn || d.altEdit
 }
 
@@ -533,7 +545,7 @@ func (a *app) detailAccent(n store.Note) ui.Color {
 func (a *app) detailSourceAndSave(c *ui.Context, k tokens, n store.Note) {
 	if img := a.appIcon(n.BundleID); img != nil {
 		tip := n.SourceApp
-		ui.Box(c).Size(20, 20).Radius(5).Clip().Shrink(0).Key("detail-src-icon").Tooltip(cmpOr(tip, n.BundleID)).Label(tr("来自 ") + cmpOr(tip, n.BundleID)).
+		tipOf(c, ui.Box(c).Size(20, 20).Radius(5).Clip().Shrink(0).Key("detail-src-icon"), cmpOr(tip, n.BundleID)).Label(tr("来自 ") + cmpOr(tip, n.BundleID)).
 			Children(func() { ui.Image(c, img).Size(20, 20) })
 	}
 	if n.Section != store.SectionClipboard || a.detail.virt != nil {
@@ -555,6 +567,9 @@ func (a *app) detailSourceAndSave(c *ui.Context, k tokens, n store.Note) {
 }
 
 func (a *app) detailHeader(c *ui.Context, k tokens, n store.Note) {
+	if k.th.DetailHeader(a, c, k, n) {
+		return
+	}
 	ui.Row(c).Height(38).Padding(8, 12).Gap(8).AlignItems(ui.Center).DragWindow().Children(func() {
 		ui.Box(c).Width(52) // 系统红绿灯占位
 		if a.detail.edit {  // 同 Tauri 编辑态指示：一枚呼吸主色点 + 小字「编辑中」
@@ -585,14 +600,13 @@ func (a *app) detailHeader(c *ui.Context, k tokens, n store.Note) {
 		if t := strings.TrimSpace(n.Title); t != "" {
 			spans = append([]ui.Span{{Text: t + " · ", Color: k.fg, Weight: 500}}, spans...)
 		}
-		ui.RichText(c, spans...).Font(fontSans).FontSize(10).FixedLineHeight(14).SingleLine().Grow(1).Basis(0).
-			Tooltip(fmt.Sprintf(tr("%d 字符 · %d 词 · %d 行"), chars, wordCount(n.Text), strings.Count(n.Text, "\n")+1))
+		tipOf(c, ui.RichText(c, spans...).Font(fontSans).FontSize(10).FixedLineHeight(14).SingleLine().Grow(1).Basis(0), fmt.Sprintf(tr("%d 字符 · %d 词 · %d 行"), chars, wordCount(n.Text), strings.Count(n.Text, "\n")+1))
 		a.detailSourceAndSave(c, k, n)
 		pinTip := tr("固定窗口：发送后保持打开，新开的卡另开一扇窗")
 		if a.detail.pinned {
 			pinTip = tr("取消固定（发送后恢复自动关窗）")
 		}
-		pin := ui.Box(c).Size(22, 22).Radius(8).Center().Tooltip(pinTip).Role(ui.RoleButton).Label(pinTip)
+		pin := tipOf(c, ui.Box(c).Size(22, 22).Radius(rr(8)).Center(), pinTip).Role(ui.RoleButton).Label(pinTip)
 		col := k.muted
 		if a.detail.pinned {
 			pin.Background(k.track)
@@ -743,7 +757,7 @@ func (a *app) detailBody(c *ui.Context, k tokens, s settingsTokens, n store.Note
 					a.addToOpenCard(ns)
 				}
 				if _, over := ui.DragOver[cardTextDrag](read); over && a.detail.virt == nil {
-					read.Radius(8).Background(stok(c).primary.Alpha(0.05)).InsetShadow(0, 0, 0, 1, stok(c).primary.Alpha(0.35))
+					read.Radius(rr(8)).Background(stok(c).primary.Alpha(0.05)).InsetShadow(0, 0, 0, 1, stok(c).primary.Alpha(0.35))
 				}
 				md := a.beginDetailMD(sc.Bounds())
 				finding := md.query != ""
@@ -813,7 +827,7 @@ func renderMarkdown(c *ui.Context, k tokens, src string, fs float32) {
 				j++
 			}
 			code := strings.Join(lines[i+1:min(j, len(lines))], "\n")
-			ui.Column(c).Padding(8, 10).Radius(8).Background(k.track).Key("code" + itoa(i)).Children(func() {
+			ui.Column(c).Padding(8, 10).Radius(rr(8)).Background(k.track).Key("code" + itoa(i)).Children(func() {
 				mdText(c, k, code, 12, 18, 400, true).Wrap()
 			})
 			i = j + 1
@@ -1058,7 +1072,7 @@ func pickClick(anchor, end, i int) (int, int) {
 
 func dockButton(c *ui.Context, k tokens, icon, label string, active bool) ui.Element {
 	// 不收缩、不折行（同 Tauri whitespace-nowrap）：坞放不下时只截断发送钮里的目标名（选词模式多了词/段切换，曾把「选词」挤成竖排）
-	b := ui.Row(c).Height(29).Padding(6, 12).Gap(4).Radius(10).AlignItems(ui.Center).Shrink(0).Key("dock-" + label)
+	b := ui.Row(c).Height(29).Padding(6, 12).Gap(4).Radius(rr(10)).AlignItems(ui.Center).Shrink(0).Key("dock-" + label)
 	col := k.muted
 	if active {
 		b.Background(k.track)
@@ -1095,14 +1109,14 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 		if d.blocks != nil || strings.TrimSpace(a.detailText) != "" {
 			a.editTextOpMenu(c, k, n)
 		}
-		img := dockButton(c, k, "image-plus", "", false).Role(ui.RoleButton).Label(tr("粘贴图片（⌘V）")).Tooltip(tr("粘贴图片（⌘V）"))
+		img := tipOf(c, dockButton(c, k, "image-plus", "", false).Role(ui.RoleButton).Label(tr("粘贴图片（⌘V）")), tr("粘贴图片（⌘V）"))
 		if img.Clicked() {
 			imgs, _ := a.pasteImages()
 			a.addImagesToDetail(n, imgs, tr("剪贴板里没有可用图片"))
 		}
 		b := dockButton(c, k, "", tr("保存 ⌘⏎"), true)
 		if a.detailDraftEmpty(n) {
-			b.Opacity(0.5).Tooltip(tr("笔记内容不能为空"))
+			tipOf(c, b.Opacity(0.5), tr("笔记内容不能为空"))
 		}
 		if b.Clicked() {
 			a.commitDetailEdit(n)
@@ -1127,7 +1141,7 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 	}
 	hasText := strings.TrimSpace(n.Text) != ""
 	if n.Kind != "image" {
-		if hasText && dockButton(c, k, "", tr("选词"), d.pick).Tooltip(tr("选词模式：点选词/段，可发送或复制选中片段（W）")).Clicked() {
+		if hasText && tipOf(c, dockButton(c, k, "", tr("选词"), d.pick), tr("选词模式：点选词/段，可发送或复制选中片段（W）")).Clicked() {
 			d.pick, d.pickAnchor, d.pickEnd = !d.pick, -1, -1
 		}
 		if d.pick {
@@ -1210,7 +1224,7 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 	if store.HasMixedContent(n.Blocks) {
 		editTip = tr("编辑图文")
 	}
-	if n.Kind != "image" && dockButton(c, k, "", tr("编辑"), false).Tooltip(editTip).Clicked() {
+	if n.Kind != "image" && tipOf(c, dockButton(c, k, "", tr("编辑"), false), editTip).Clicked() {
 		a.enterDetailEdit(n)
 	}
 	// 分体发送钮：左「发送到 目标 ⌘⏎」，右下拉
@@ -1228,14 +1242,21 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 			label = tr("发送整卡") // 同 Tauri：选中工具条的「发送选中」露面时，页脚改口「发送整卡」以示区别
 		}
 		left := ui.Row(c).Height(32).Padding(0, 12, 0, 20).Gap(6).Radius(16, 0, 0, 16).Background(fill).Border(1, border).AlignItems(ui.Center)
-		if dark {
+		weight := 500
+		pfg, pw, pushed := k.th.PushButton(left)
+		switch {
+		case pushed: // 主题的默认动作推钮：左右内边距对称，下拉另成一钮
+			left.Padding(0, 12)
+			fg, weight = pfg, pw
+		case dark:
 			left.Shadow(0, 1, 2, 0, gray(0, 0.5)).InsetShadow(0, 1, 0, 0, gray(1, 0.7))
-		} else {
+		default:
 			left.Shadow(0, 1, 2, 0, gray(0, 0.12))
 		}
 		left.Children(func() {
+			k.th.DefaultRing(c)
 			licon(c, "send", 12, fg)
-			text(c, label, 13, 18, 500, fg).SingleLine()
+			text(c, label, 13, 18, weight, fg).SingleLine()
 			text(c, "⌘⏎", 9, 18, 500, fg).Opacity(0.7)
 		})
 		sendMenu := func(m *ui.Menu) {
@@ -1286,7 +1307,9 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 			a.sendDetail(n)
 		}
 		right := ui.Box(c).Size(28, 32).Radius(0, 16, 16, 0).Background(fill).Border(1, border).Center().Label(tr("更多发送选项"))
-		right.Children(func() { licon(c, "chevron-down", 12, fg) })
+		if !k.th.PopupButton(c, right) {
+			right.Children(func() { licon(c, "chevron-down", 12, fg) })
+		}
 		right.Menu(sendMenu)
 	})
 }
@@ -1554,7 +1577,7 @@ func (a *app) detailImageView(c *ui.Context, k tokens, s settingsTokens, n store
 					col.Right(8)
 				}
 				col.Children(func() {
-					b := ui.Box(c).Size(28, 28).Radius(14).Center().Key("img-" + icon).Role(ui.RoleButton).Label(label).Tooltip(label)
+					b := tipOf(c, ui.Box(c).Size(28, 28).Radius(14).Center().Key("img-"+icon).Role(ui.RoleButton).Label(label), label)
 					bg, fg := ui.RGBA(0, 0, 0, 0.4), ui.RGBA(255, 255, 255, 0.8)
 					if b.Hovered() && !disabled {
 						bg, fg = ui.RGBA(0, 0, 0, 0.6), ui.RGB(255, 255, 255)
@@ -1598,7 +1621,7 @@ func (a *app) detailImageCaption(c *ui.Context, k tokens, n store.Note) {
 	ui.Column(c).FillWidth().Shrink(0).Padding(6, 12).BorderWidth(1, 0, 0, 0).BorderColor(k.inputBorder).Children(func() {
 		if a.detail.imgNote {
 			ui.Row(c).Gap(6).AlignItems(ui.End).Children(func() {
-				ui.Box(c).Grow(1).Basis(0).Padding(4, 8).Radius(6).Background(k.fg.Alpha(0.05)).Children(func() {
+				ui.Box(c).Grow(1).Basis(0).Padding(4, 8).Radius(rr(6)).Background(k.fg.Alpha(0.05)).Children(func() {
 					ui.TextAreaBase(c, &a.detailText).FillWidth().Lines(2, 8).Font(fontSans).FontSize(12).FixedLineHeight(18).TextColor(k.fg).
 						PlaceholderColor(k.muted).Placeholder(tr("给这张图片写点文字…")).Label(tr("图片文字备注")).Focus()
 				})
@@ -1613,7 +1636,7 @@ func (a *app) detailImageCaption(c *ui.Context, k tokens, n store.Note) {
 		if note != "" {
 			label = tr("编辑文字备注")
 		}
-		b := ui.Row(c).Padding(4, 6).Gap(6).Radius(6).AlignItems(ui.Center).Key("imgnote").Role(ui.RoleButton).Label(label).Tooltip(label)
+		b := tipOf(c, ui.Row(c).Padding(4, 6).Gap(6).Radius(rr(6)).AlignItems(ui.Center).Key("imgnote").Role(ui.RoleButton).Label(label), label)
 		pc := k.fg.Alpha(0.4)
 		if b.Hovered() {
 			b.Background(k.fg.Alpha(0.1))
@@ -1680,7 +1703,7 @@ func (a *app) editTextOpMenu(c *ui.Context, k tokens, n store.Note) {
 	if _, _, sel := a.detailSelection(n.Text); sel != "" {
 		scope = tr("处理选中内容")
 	}
-	dockButton(c, k, "wand-sparkles", tr("处理"), false).Tooltip(scope).PopoverMenuButton(func(m *ui.Menu) {
+	tipOf(c, dockButton(c, k, "wand-sparkles", tr("处理"), false), scope).PopoverMenuButton(func(m *ui.Menu) {
 		for _, op := range textOps {
 			if m.Item(tr(op.label)).Chosen() {
 				a.applyEditTextOp(n, op.apply)

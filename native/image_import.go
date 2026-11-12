@@ -139,10 +139,10 @@ func (a *app) draftImageChips(c *ui.Context, k tokens) {
 				text(c, fmt.Sprintf("+%d", len(a.draftImgs)-3), 10, 14, 500, k.muted)
 				break
 			}
-			chip := ui.Box(c).Size(26, 26).Radius(6).Clip().Key("draft-img-"+im.file).Border(1, k.inputBorder)
+			chip := ui.Box(c).Size(26, 26).Radius(rr(6)).Clip().Key("draft-img-"+im.file).Border(1, k.inputBorder)
 			hover := chip.Hovered()
 			chip.Children(func() {
-				b := ui.Box(c).Size(26, 26).Key("draft-open-" + im.file).Role(ui.RoleButton).Label(tr("查看或编辑这张草稿图片")).Tooltip(tr("查看或编辑这张草稿图片"))
+				b := tipOf(c, ui.Box(c).Size(26, 26).Key("draft-open-"+im.file).Role(ui.RoleButton).Label(tr("查看或编辑这张草稿图片")), tr("查看或编辑这张草稿图片"))
 				b.Children(func() {
 					if img := a.thumb(im.file); img != nil {
 						ui.Image(c, img).Size(26, 26).Fit(ui.Cover)
@@ -152,8 +152,8 @@ func (a *app) draftImageChips(c *ui.Context, k tokens) {
 					f := im.file
 					a.onMain(func() { a.openDraftImage(f) })
 				}
-				x := ui.Box(c).Absolute().Top(0).Right(0).Size(12, 12).Radius(0, 0, 0, 5).Center().Key("draft-rm-" + im.file).
-					Role(ui.RoleButton).Label(tr("移除这张图片")).Tooltip(tr("移除这张图片"))
+				x := tipOf(c, ui.Box(c).Absolute().Top(0).Right(0).Size(12, 12).Radius(0, 0, 0, 5).Center().Key("draft-rm-"+im.file).
+					Role(ui.RoleButton).Label(tr("移除这张图片")), tr("移除这张图片"))
 				if hover || x.Hovered() {
 					x.Background(ui.RGBA(0, 0, 0, 0.55)) // token-exception: 缩略图上的移除角标底
 					x.Children(func() { licon(c, "x", 8, ui.RGB(255, 255, 255)) })
@@ -227,7 +227,7 @@ func cardImageCaption(c *ui.Context, k tokens, n store.Note) bool {
 
 // cardThumbStrip 同 Tauri 组合卡（图文）：正文下方一排最多 4 张 32pt 小缩略（等比），更多以「+N」标示。
 func (a *app) cardThumbStrip(c *ui.Context, k tokens, files []string) {
-	ui.Row(c).Height(32).Gap(4).Shrink(0).AlignItems(ui.Center).Key("card-strip").Tooltip(fmt.Sprintf(tr("%d 张图片"), len(files))).Children(func() {
+	tipOf(c, ui.Row(c).Height(32).Gap(4).Shrink(0).AlignItems(ui.Center).Key("card-strip"), fmt.Sprintf(tr("%d 张图片"), len(files))).Children(func() {
 		for _, f := range files[:min(4, len(files))] {
 			ui.Box(c).Size(32, 32).Radius(3).Clip().Background(k.fg.Alpha(0.05)).Center().Key("cs-" + f).Children(func() {
 				if img := a.thumb(f); img != nil {

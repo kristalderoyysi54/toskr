@@ -24,11 +24,11 @@ func (a *app) cardGrip(c *ui.Context, k tokens, n store.Note, top float32) {
 		return
 	}
 	label := tr("拖拽调整位置和分组（Space 拾起，方向键移动）")
-	g := ui.Box(c).Absolute().Left(4).Top(top).Size(20, 22).Radius(6).Center().Focusable().Role(ui.RoleButton).Label(label).Key("grip-" + n.ID)
+	g := ui.Box(c).Absolute().Left(4).Top(top).Size(20, 22).Radius(rr(6)).Center().Focusable().Role(ui.RoleButton).Label(label).Key("grip-" + n.ID)
 	lifted := a.kbd.id == n.ID
 	if g.Focused() || lifted {
 		a.gripFocus = n.ID
-		g.Background(k.floatBtn).Border(1, k.fg.Alpha(0.1)).Tooltip(label)
+		tipOf(c, g.Background(k.floatBtn).Border(1, k.fg.Alpha(0.1)), label)
 		g.Children(func() { licon(c, "grip-vertical", 14, k.muted) })
 		if lifted {
 			g.Border(2, stok(c).primary)
@@ -166,11 +166,11 @@ func (a *app) taskGrip(c *ui.Context, k tokens, t store.Task) {
 		return
 	}
 	label := tr("拖拽调整位置和分组（Space 拾起，方向键移动）")
-	g := ui.Box(c).Absolute().Left(2).Top(8).Size(18, 22).Radius(6).Center().Focusable().Role(ui.RoleButton).Label(label).Key("tgrip-" + t.ID)
+	g := ui.Box(c).Absolute().Left(2).Top(8).Size(18, 22).Radius(rr(6)).Center().Focusable().Role(ui.RoleButton).Label(label).Key("tgrip-" + t.ID)
 	lifted := a.kbd.id == t.ID
 	if g.Focused() || lifted {
 		a.gripFocus = t.ID
-		g.Background(k.floatBtn).Border(1, k.fg.Alpha(0.1)).Tooltip(label)
+		tipOf(c, g.Background(k.floatBtn).Border(1, k.fg.Alpha(0.1)), label)
 		g.Children(func() { licon(c, "grip-vertical", 13, k.muted) })
 		if lifted {
 			g.Border(2, stok(c).primary)

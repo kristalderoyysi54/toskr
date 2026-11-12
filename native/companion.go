@@ -177,7 +177,7 @@ func (a *app) panelVHandles(c *ui.Context, k tokens) {
 		if edge == "bottom" {
 			label = tr("拖拽调整高度 · 双击复位自动高度")
 		}
-		h := ui.Box(c).Absolute().Left(16).Right(16).Height(6).Key("vh-" + edge).Cursor(ui.CursorResizeRow).Tooltip(label).Label(label)
+		h := tipOf(c, ui.Box(c).Absolute().Left(16).Right(16).Height(6).Key("vh-"+edge).Cursor(ui.CursorResizeRow), label).Label(label)
 		if edge == "top" {
 			h.Top(0)
 		} else {

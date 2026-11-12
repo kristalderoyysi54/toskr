@@ -82,8 +82,7 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 		a.pinCopy(p)
 	}
 	border := stok(c).primary.Alpha(0.4)
-	el := ui.Box(c).Fill().Cursor(ui.CursorGrab).DragWindow().
-		Tooltip(tr("钉图：拖动移动 · 滚轮缩放 · ⌘C 复制 · 双击或 Esc 关闭 · 右键更多")).
+	el := tipOf(c, ui.Box(c).Fill().Cursor(ui.CursorGrab).DragWindow(), tr("钉图：拖动移动 · 滚轮缩放 · ⌘C 复制 · 双击或 Esc 关闭 · 右键更多")).
 		HandleInput(func(ev ui.InputEvent) bool {
 			if ev.Kind != ui.InputScroll {
 				return false
@@ -104,7 +103,7 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 	if left := 900*time.Millisecond - c.Now().Sub(p.zoomAt); !p.zoomAt.IsZero() && left > 0 {
 		c.After(left)
 		ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Center().PassThrough().Children(func() {
-			ui.Box(c).Padding(4, 8).Radius(8).Background(gray(0, 0.7)).Children(func() {
+			ui.Box(c).Padding(4, 8).Radius(rr(8)).Background(gray(0, 0.7)).Children(func() {
 				text(c, fmt.Sprintf("%d%%", int(math.Round(p.factor*100))), 12, 17, 400, colWhite).Font(fontMono).FontFeatures("tnum").MinWidth(36).TextAlign(ui.Center) // 等宽字体 4 字符宽，99%→100% 胶囊不变宽
 			})
 		})

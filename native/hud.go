@@ -309,6 +309,10 @@ func (a *app) hudBubbleView(c *ui.Context, b hudBubble, ghostMs float32) {
 	if c.Theme().Dark {
 		paper, ink, ghostPaper = oklch(0.9, 0.014, 90, 1), gray(0.205, 1), oklch(0.8, 0.014, 90, 1)
 	}
+	th := theme()
+	if p, i, g, ok := th.HudColors(); ok {
+		paper, ink, ghostPaper = p, i, g
+	}
 	ghost := ghostMs >= 0
 	tailOp := float32(1)
 	if ghost {
@@ -330,8 +334,10 @@ func (a *app) hudBubbleView(c *ui.Context, b hudBubble, ghostMs float32) {
 	title := hudTitle(b.kind, b.text, b.count)
 	if !b.actionable {
 		ui.Row(c).FillWidth().Justify(ui.End).Children(func() {
-			pill := ui.Row(c).Padding(4, 12, 4, 6).Gap(6).Radius(16).Background(paper).AlignItems(ui.Center).
-				Shadow(0, 6, 16, -4, gray(0, 0.12)).Shadow(0, 1, 2, 0, gray(0, 0.08))
+			pill := ui.Row(c).Padding(4, 12, 4, 6).Gap(6).Radius(16).Background(paper).AlignItems(ui.Center)
+			if !th.HudPill(pill) {
+				pill.Shadow(0, 6, 16, -4, gray(0, 0.12)).Shadow(0, 1, 2, 0, gray(0, 0.08))
+			}
 			pill.Children(func() {
 				icon()
 				text(c, title, 12, 15, 500, ink).Wrap().MaxLines(3)
@@ -347,17 +353,18 @@ func (a *app) hudBubbleView(c *ui.Context, b hudBubble, ghostMs float32) {
 	if c.Theme().Dark {
 		s1, s2, s3 = gray(0, 0.35), gray(0, 0.45), gray(0, 0.60)
 	}
-	balloon := ui.Row(c).FillWidth().Padding(6, 6, 6, 10).Gap(8).Radius(18).Background(paper).AlignItems(ui.Center).
-		Shadow(0, 0, 1, 0, s3).Shadow(0, 1, 2, 0, s1) // CSS drop-shadow 的模糊值是标准差，换成 box-shadow 语义要 ×2
-	if c.Theme().Dark {
-		balloon.Shadow(0, 5, 28, 0, s2)
-	} else {
-		balloon.Shadow(0, 4, 20, 0, s2)
+	balloon := ui.Row(c).FillWidth().Padding(6, 6, 6, 10).Gap(8).Radius(rr(18)).Background(paper).AlignItems(ui.Center)
+	switch {
+	case th.HudBalloon(balloon):
+	case c.Theme().Dark:
+		balloon.Shadow(0, 0, 1, 0, s3).Shadow(0, 1, 2, 0, s1).Shadow(0, 5, 28, 0, s2) // CSS drop-shadow 的模糊值是标准差，换成 box-shadow 语义要 ×2
+	default:
+		balloon.Shadow(0, 0, 1, 0, s3).Shadow(0, 1, 2, 0, s1).Shadow(0, 4, 20, 0, s2)
 	}
 	hover := a.hudHover && !ghost
 	balloon.Children(func() {
 		icon()
-		body := ui.Column(c).Grow(1).Basis(0).Tooltip(tr("点击查看")).Role(ui.RoleButton).Label(title)
+		body := tipOf(c, ui.Column(c).Grow(1).Basis(0), tr("点击查看")).Role(ui.RoleButton).Label(title)
 		body.Children(func() {
 			tightText(c, title, 12, 15, 500, ink).FillWidth()
 			if (b.kind == "added" || b.kind == "duplicate") && b.text != "" {
@@ -392,7 +399,7 @@ func (a *app) hudBubbleView(c *ui.Context, b hudBubble, ghostMs float32) {
 			}
 			return
 		}
-		undo := ui.Row(c).Height(20).Padding(2, 6).Gap(4).Radius(6).AlignItems(ui.Center)
+		undo := ui.Row(c).Height(20).Padding(2, 6).Gap(4).Radius(rr(6)).AlignItems(ui.Center)
 		if undo.Hovered() {
 			undo.Border(1, ink.Alpha(0.45)).Background(ink.Alpha(0.08))
 		} else {
@@ -420,7 +427,9 @@ func (a *app) hudBubbleView(c *ui.Context, b hudBubble, ghostMs float32) {
 	// 尾巴：22×13 固定几何，从气泡右下弯向 logo
 	ui.Row(c).FillWidth().Height(12).Margin(-1, 0, 0, 0).Justify(ui.End).Padding(0, 14, 0, 0).Opacity(tailOp).Children(func() {
 		ui.Box(c).Size(22, 13).Children(func() {
-			ui.Icon(c, hudTail).Absolute().Top(4).Left(0).Size(22, 13).TextColor(s2).Blur(5) // 尾巴随气泡同一组投影
+			if !th.HudTail(c) {
+				ui.Icon(c, hudTail).Absolute().Top(4).Left(0).Size(22, 13).TextColor(s2).Blur(5) // 尾巴随气泡同一组投影
+			}
 			ui.Icon(c, hudTail).Absolute().Top(0).Left(0).Size(22, 13).TextColor(paper)
 		})
 	})
@@ -460,7 +469,7 @@ func (a *app) hudBubbleH() int {
 func (a *app) hudDueActions(c *ui.Context, ink ui.Color, ids []string, ghost bool) {
 	ui.Row(c).Margin(5, 0, 0, 0).Gap(4).Children(func() {
 		btn := func(key, label string) bool {
-			b := ui.Row(c).Height(20).Padding(0, 7).Radius(6).Border(1, ink.Alpha(0.25)).AlignItems(ui.Center).Key("hd-" + key).Role(ui.RoleButton).Label(label)
+			b := ui.Row(c).Height(20).Padding(0, 7).Radius(rr(6)).Border(1, ink.Alpha(0.25)).AlignItems(ui.Center).Key("hd-" + key).Role(ui.RoleButton).Label(label)
 			if b.Hovered() {
 				b.Background(ink.Alpha(0.06))
 			}
@@ -557,7 +566,7 @@ func (a *app) showDueHUD(text string, ids []string) {
 
 // hudClose：气泡关闭钮，悬停底色加深、图标转实（同 Tauri HUD close hover）。
 func hudClose(c *ui.Context, ink ui.Color) ui.Element {
-	x := ui.Box(c).Size(22, 22).Radius(11).Center().Tooltip(tr("关闭"))
+	x := tipOf(c, ui.Box(c).Size(22, 22).Radius(11).Center(), tr("关闭"))
 	bg, fg := ink.Alpha(0.1), ink.Alpha(0.6)
 	if x.Hovered() {
 		bg, fg = ink.Alpha(0.18), ink.Alpha(0.9)

@@ -37,7 +37,7 @@ func featureDomainSections(st store.Settings, messages, secret func() []setSecti
 
 // featureLink：功能行里的「设置 ›」次要入口（文字链，主操作是右侧开关）。
 func featureLink(c *ui.Context, k tokens, key string) bool {
-	b := ui.Row(c).Height(24).Padding(0, 4, 0, 8).Gap(2).Radius(6).AlignItems(ui.Center).Key("feat-set-" + key).Role(ui.RoleButton).Label(tr("设置") + " " + tr(key))
+	b := ui.Row(c).Height(24).Padding(0, 4, 0, 8).Gap(2).Radius(rr(6)).AlignItems(ui.Center).Key("feat-set-" + key).Role(ui.RoleButton).Label(tr("设置") + " " + tr(key))
 	col := hoverLink(b, k)
 	b.Children(func() {
 		text(c, tr("设置"), 11, 16, 500, col).SingleLine()
