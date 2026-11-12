@@ -100,6 +100,7 @@ type app struct {
 	permTicking                bool        // 权限页 2 秒重画已排上
 	edge                       *edgeAnchor // 拖拽入坞后的贴边锚点（edge_hide.go）
 	edgeHidden, edgeArmed      bool
+	dockPending, dragBlur      bool     // 拖动后等入坞评估中 / 期间失过焦（edge_hide.go）
 	bar                        barState // 屏幕顶部 / 底部横栏的视图态（hbar.go）
 	holdOpen, holdNext         bool     // 快捷键 / 双击唤出：拖动或 Esc 前不随失焦收起、不贴边滑出（同 Tauri shortcutHoldOpen + panel_auto_hide_armed）
 	edgeAway                   time.Duration
@@ -124,7 +125,6 @@ type app struct {
 	sendMode                            string             // 本次发送的输出格式覆盖（选择条 / 详情窗「输出格式」，发完或取消即清）
 	appNames                            map[string]string  // bundle → 应用显示名（设置里的应用名单）
 	appMissing                          map[string]bool    // 系统查不到的应用（没装）
-	sentCounts                          map[string]int     // 卡片 id → 成功发送次数（reload 时重算）
 	lp                                  longPress          // 浮钮长按（收进笔记选分类）
 	clipPick                            string             // 长按弹出分组选择的剪贴卡
 	clipPickAt                          ui.Rect            // 弹出浮层挂靠的浮钮位置
@@ -401,14 +401,6 @@ func (a *app) saveDraftState() {
 func (a *app) reload() {
 	all := a.store.Notes()
 	a.sweepLinks(all)
-	a.sentCounts = map[string]int{}
-	for _, d := range a.store.Deliveries() {
-		if d.Status == "sent" {
-			for _, id := range d.SourceIDs {
-				a.sentCounts[id]++
-			}
-		}
-	}
 	a.counts = map[string]int{}
 	for _, n := range all {
 		if !n.Done {

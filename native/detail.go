@@ -639,18 +639,24 @@ func (a *app) detailTags(c *ui.Context, k tokens, s settingsTokens, n store.Note
 			})
 		}
 		if a.detail.tagOn {
-			ui.Row(c).Width(110).Height(20).Padding(0, 6).Radius(10).Border(1, s.inputBorder).AlignItems(ui.Center).Children(func() {
+			box := ui.Row(c).Width(110).Height(20).Padding(0, 6).Radius(10).Border(1, s.inputBorder).AlignItems(ui.Center)
+			if box.PressedOutside() { // 点详情窗别处：没回车的文字也存成标签并收起（不再每帧抢回焦点）
+				a.addDetailTag(n.ID, a.detail.tagDraft)
+				a.detail.tagDraft, a.detail.tagOn = "", false
+				box.Hidden(true)
+				c.Invalidate()
+				return
+			}
+			box.Children(func() {
 				ui.TextInputBase(c, &a.detail.tagDraft).Grow(1).Font(fontSans).FontSize(11).FixedLineHeight(16).TextColor(k.fg).
 					PlaceholderColor(k.muted).Placeholder(tr("标签，回车添加")).Focus().OnTextKey(func(key ui.TextKey) bool {
 					switch key.Key {
 					case ui.KeyEnter:
-						t := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(key.Text()), "#"))
-						if t == "" { // 同 Tauri commitTagDraft：空回车收起输入
+						if !a.addDetailTag(n.ID, key.Text()) { // 同 Tauri commitTagDraft：空回车收起输入
 							a.detail.tagDraft, a.detail.tagOn = "", false
 							return true
 						}
-						_ = a.store.SetTags(n.ID, append(slices.Clone(n.Tags), t)) // SetTags 去重、限 8 个、截长
-						a.detail.tagDraft = ""                                     // 同 Tauri：回车后保持输入框，方便连续添加
+						a.detail.tagDraft = "" // 同 Tauri：回车后保持输入框，方便连续添加
 						return true
 					case ui.KeyEscape:
 						a.detail.tagDraft, a.detail.tagOn = "", false
@@ -673,6 +679,19 @@ func (a *app) detailTags(c *ui.Context, k tokens, s settingsTokens, n store.Note
 			a.detail.tagOn = true
 		}
 	})
+}
+
+// addDetailTag 把输入框里的文字加成标签（去掉前导 #），空串返回 false。按存储里的最新标签追加，
+// 同一帧先点了别的标签「×」也不会被旧快照写回。
+func (a *app) addDetailTag(id, raw string) bool {
+	t := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(raw), "#"))
+	if t == "" {
+		return false
+	}
+	if cur, ok := a.store.Note(id); ok {
+		_ = a.store.SetTags(id, append(slices.Clone(cur.Tags), t)) // SetTags 去重、限 8 个、截长
+	}
+	return true
 }
 
 func (a *app) detailBody(c *ui.Context, k tokens, s settingsTokens, n store.Note) {
@@ -1620,7 +1639,14 @@ func (a *app) detailImageView(c *ui.Context, k tokens, s settingsTokens, n store
 func (a *app) detailImageCaption(c *ui.Context, k tokens, n store.Note) {
 	ui.Column(c).FillWidth().Shrink(0).Padding(6, 12).BorderWidth(1, 0, 0, 0).BorderColor(k.inputBorder).Children(func() {
 		if a.detail.imgNote {
-			ui.Row(c).Gap(6).AlignItems(ui.End).Children(func() {
+			row := ui.Row(c).Gap(6).AlignItems(ui.End)
+			if row.PressedOutside() { // 点详情窗别处：保存备注并退出编辑（同 Esc）
+				a.saveImageNote()
+				row.Hidden(true)
+				c.Invalidate()
+				return
+			}
+			row.Children(func() {
 				ui.Box(c).Grow(1).Basis(0).Padding(4, 8).Radius(rr(6)).Background(k.fg.Alpha(0.05)).Children(func() {
 					ui.TextAreaBase(c, &a.detailText).FillWidth().Lines(2, 8).Font(fontSans).FontSize(12).FixedLineHeight(18).TextColor(k.fg).
 						PlaceholderColor(k.muted).Placeholder(tr("给这张图片写点文字…")).Label(tr("图片文字备注")).Focus()

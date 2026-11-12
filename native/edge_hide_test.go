@@ -51,3 +51,17 @@ func TestShortcutHoldBlocksEdgeHide(t *testing.T) {
 		t.Fatalf("真实拖动应解除保护并清锚点 hold=%v armed=%v", a.holdOpen, a.edgeArmed)
 	}
 }
+
+// 拖动途中失焦：拖动已清掉锚点，此时不能按普通失焦把面板整个收起（症状：拖向右缘时面板消失、入坞不生效），
+// 只记下待裁决，等落定后的入坞评估。
+func TestBlurDuringDragDefersHide(t *testing.T) {
+	a, _ := testApp(t)
+	a.panelMovedByUser()
+	if !a.dockPending {
+		t.Fatal("拖动后应等待入坞评估")
+	}
+	a.blurHide()
+	if !a.dragBlur || a.panelHiding {
+		t.Fatalf("拖动中失焦应延后裁决 dragBlur=%v hiding=%v", a.dragBlur, a.panelHiding)
+	}
+}

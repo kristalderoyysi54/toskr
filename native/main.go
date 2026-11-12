@@ -147,12 +147,7 @@ func start() (*app, error) {
 		if time.Now().Before(a.yieldUntil) || a.cmpWin != nil { // 发送时主动让出焦点 / 正在对比窗里核对预检：都不是用户点走
 			return
 		}
-		if a.edgeHideNow(false) { // 已入坞：失焦改为贴边滑出（同 Tauri edge_hide_now）
-			return
-		}
-		if !a.pinned && !a.store.Settings().KeepOnBlur && !a.holdOpen { // 快捷键唤出保持展开（同 Tauri shouldHidePanelOnBlur）
-			a.hidePanel()
-		}
+		a.blurHide()
 	})
 	a.createHUD()
 	st.OnChange(func() {

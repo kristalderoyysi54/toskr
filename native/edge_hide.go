@@ -123,14 +123,37 @@ func (a *app) panelMovedByUser() {
 		diag.Push("贴边隐藏: 拖动清除锚点")
 	}
 	a.dockSeq++
+	a.dockPending = true
 	seq := a.dockSeq
 	time.AfterFunc(dockDebounce, func() {
 		a.onMain(func() {
-			if a.dockSeq == seq {
-				a.evaluateDragDock()
+			if a.dockSeq != seq {
+				return
+			}
+			a.dockPending = false
+			a.evaluateDragDock()
+			if a.dragBlur { // 拖动期间失的焦：落定后再裁决——入坞了交给监督循环（光标离开再滑出），否则按失焦收起
+				a.dragBlur = false
+				if a.edge == nil && a.panel != nil && !a.panel.IsFocused() {
+					a.blurHide()
+				}
 			}
 		})
 	})
+}
+
+// blurHide：面板失焦的收起裁决（已入坞改为贴边滑出；钉住 / 失焦不收起 / 快捷键保持展开时不动）。
+func (a *app) blurHide() {
+	if a.dockPending { // 正在拖动 / 刚落定：拖动已清掉锚点，此刻收起会把拖向屏缘的面板整个藏掉——等入坞评估后再裁决
+		a.dragBlur = true
+		return
+	}
+	if a.edgeHideNow(false) { // 已入坞：失焦改为贴边滑出（同 Tauri edge_hide_now）
+		return
+	}
+	if !a.pinned && !a.store.Settings().KeepOnBlur && !a.holdOpen { // 快捷键唤出保持展开（同 Tauri shouldHidePanelOnBlur）
+		a.hidePanel()
+	}
 }
 
 func (a *app) evaluateDragDock() {
@@ -234,6 +257,9 @@ func (a *app) edgeSlideTo(hidden bool) {
 		}
 		t := min(float64(time.Since(start))/float64(edgeSlide), 1)
 		ease := 1 - (1-t)*(1-t)*(1-t)
+		// 每帧续期「机器移动」窗口：主线程忙时动画会拖过开头给的 390ms，尾帧的 OnMove 会被当成用户拖动而清掉锚点，
+		// 之后一次失焦就把面板整个收起（症状：触边唤回几次后面板消失）
+		a.edgeMachineUntil = time.Now().Add(150 * time.Millisecond)
 		a.panel.SetPosition(e.pos(from + int(float64(to-from)*ease)))
 		if t < 1 {
 			time.AfterFunc(8*time.Millisecond, func() { mygo.RunOnMain(step) })

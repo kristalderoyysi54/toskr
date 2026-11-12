@@ -225,6 +225,14 @@ func (a *app) sectionMenu(m *ui.Menu, s store.Section, i, n int) {
 		s.KeepAfterSend = !s.KeepAfterSend
 		_ = a.store.UpdateSection(s)
 	}
+	m.Submenu(tr("排序"), func(sm *ui.Menu) { // 只影响本组的未完成卡；普通卡发送后会标完成移出，配合「发送后保留」最有用
+		for _, o := range sectionSorts {
+			if sm.Item(tr(o.label)).Checked(s.Sort == o.id).Chosen() {
+				s.Sort = o.id
+				_ = a.store.UpdateSection(s)
+			}
+		}
+	})
 	// 设为捕获目标（同 Tauri SectionGroup）：双击触发键捕获的内容存入此组；再点改回收件箱
 	capID := a.store.Settings().CaptureSection
 	isCap := capID == s.ID || (capID == "" && s.ID == store.SectionInbox)

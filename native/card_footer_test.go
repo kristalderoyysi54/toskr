@@ -86,9 +86,7 @@ func TestNoteCardHeaderHierarchy(t *testing.T) {
 	_ = a.store.SetTitle(titled.ID, "周五对比报告")
 	_, _, _ = a.store.Add(store.Note{Section: store.SectionInbox, Text: "SELECT id FROM notes WHERE section = 'inbox' ORDER BY created_at DESC;", SourceApp: "Arc", Kind: "code", CodeLang: "sql"})
 	bare, _, _ := a.store.Add(store.Note{Section: store.SectionInbox, Text: "没有来源的卡"})
-	for range 12 {
-		a.store.AddDelivery(store.Delivery{TargetName: "Cursor", Status: "sent", SourceIDs: []string{plain.ID}})
-	}
+	_, _ = a.store.SetSendCount(plain.ID, 12) // 页脚次数读永久计数（发送成功 MarkSent +1）
 	a.store.AddDelivery(store.Delivery{TargetName: "Cursor", Status: "failed", SourceIDs: []string{bare.ID}})
 	_ = a.store.SetTags(plain.ID, []string{"报告", "周会", "复盘", "归档"})
 	a.reload()
@@ -101,7 +99,7 @@ func TestNoteCardHeaderHierarchy(t *testing.T) {
 	if _, ok := tt.Find("Microsoft Remote Desktop Beta"); ok {
 		t.Fatalf("来源不上通栏 %v", tt.Texts())
 	}
-	if a.sentCounts[plain.ID] != 12 || a.sentCounts[bare.ID] != 0 {
+	if n, _ := a.store.Note(bare.ID); n.SendCount != 0 {
 		t.Fatal("失败的发送不计数")
 	}
 	if dir := os.Getenv("TOSKR_SHOT_DIR"); dir != "" {

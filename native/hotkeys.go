@@ -29,6 +29,13 @@ var hotkeySlots = []hotkeySlot{
 	{"newnote", func(s store.Settings) string { return s.NewNoteKey }, func(s *store.Settings, v string) { s.NewNoteKey = v }, (*app).newNoteHotkey, "新建笔记"},
 }
 
+// punctKeys：可做全局快捷键的符号键（mygo darwin 后端 keyCodes 认的 ANSI 键位）。
+var punctKeys = map[ui.Key]string{
+	ui.KeySemicolon: ";", ui.KeyQuote: "'", ui.KeyComma: ",", ui.KeyPeriod: ".", ui.KeySlash: "/",
+	ui.KeyBackslash: "\\", ui.KeyBracketLeft: "[", ui.KeyBracketRight: "]", ui.KeyMinus: "-", ui.KeyEqual: "=",
+	ui.KeyBackquote: "`",
+}
+
 // accelFrom 把按键组合写成 GlobalShortcut 认的加速键（Cmd+Shift+N）；必须带 ⌘ / ⌃ / ⌥ 之一，单 ⇧ 不算。
 func accelFrom(mods ui.Modifiers, key ui.Key) (string, bool) {
 	var name string
@@ -50,7 +57,9 @@ func accelFrom(mods ui.Modifiers, key ui.Key) (string, bool) {
 	case key == ui.KeyRight:
 		name = "Right"
 	default:
-		return "", false
+		if name = punctKeys[key]; name == "" {
+			return "", false
+		}
 	}
 	isF := strings.HasPrefix(name, "F") && len(name) > 1
 	if mods&(ui.Cmd|ui.Ctrl|ui.Alt) == 0 && !isF {
@@ -76,12 +85,22 @@ func (a *app) registerHotkeys() {
 		if acc == "" || (s.id == "shot" && st.ScreenshotOff) {
 			continue
 		}
-		run := s.run
-		if err := mygo.GlobalShortcut.Register(acc, func() { run(a) }); err != nil {
+		if err := a.bindHotkey(s, acc); err != nil {
 			diag.Push("%s快捷键 %s 注册失败: %v", s.label, acc, err)
+		} else {
+			diag.Push("%s快捷键 %s 已注册", s.label, acc)
 		}
 	}
 	a.shortcut = st.PanelHotkey
+}
+
+// bindHotkey 注册一个全局快捷键；按下时写诊断日志再执行（排查「录下了但按了不生效」：日志里有没有「触发」即可分清是系统没送达还是动作没生效）。
+func (a *app) bindHotkey(slot hotkeySlot, acc string) error {
+	run := slot.run
+	return mygo.GlobalShortcut.Register(acc, func() {
+		diag.Push("%s快捷键 %s 触发", slot.label, acc)
+		run(a)
+	})
 }
 
 // setHotkey 换绑：先注销旧键，注册新键失败则恢复旧键。
@@ -97,18 +116,19 @@ func (a *app) setHotkey(slot hotkeySlot, acc string) error {
 		}
 	}
 	if a.panel != nil { // 无 App 运行（视图测试）时只写设置
-		run := slot.run
 		if old != "" {
 			mygo.GlobalShortcut.Unregister(old)
 		}
 		if acc != "" {
-			if err := mygo.GlobalShortcut.Register(acc, func() { run(a) }); err != nil {
+			if err := a.bindHotkey(slot, acc); err != nil {
+				diag.Push("%s快捷键改绑 %s → %s 失败: %v", slot.label, old, acc, err)
 				if old != "" {
-					_ = mygo.GlobalShortcut.Register(old, func() { run(a) })
+					_ = a.bindHotkey(slot, old)
 				}
 				return errors.New(tr("可能已被其他应用占用"))
 			}
 		}
+		diag.Push("%s快捷键改绑 %s → %s", slot.label, old, acc)
 	}
 	slot.set(&st, acc)
 	if err := a.store.SetSettings(st); err != nil {
@@ -162,7 +182,14 @@ func (a *app) hotkeyField(c *ui.Context, k tokens, slot hotkeySlot) {
 			}
 			acc, ok := accelFrom(ev.Mods, ev.Key)
 			if !ok {
+				if ev.Mods&(ui.Cmd|ui.Ctrl|ui.Alt) != 0 { // 带了 ⌘⌃⌥ 仍不认：是这个键不支持，明说而不是静默干等
+					a.showHUD("info", tr("这个键不能用作全局快捷键，请换一个"))
+				}
 				return true // 只按了修饰键或缺 ⌘⌃⌥：继续等
+			}
+			if msg := hotkeyConflict(ev.Mods, ev.Key, readSymbolicHotkeys()); msg != "" && acc != slot.get(a.store.Settings()) {
+				a.showHUD("warn", msg) // 撞上系统快捷键 / 应用通用命令：不保存，留在录制态等下一个组合
+				return true
 			}
 			a.recordingKey = ""
 			if err := a.setHotkey(slot, acc); err != nil {

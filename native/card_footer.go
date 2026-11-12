@@ -48,7 +48,7 @@ func (a *app) openProvenanceSource(n store.Note) {
 
 // sentChip：发过的卡——绿色小勾 + 次数（状态色只落在这枚小标上）。
 func (a *app) sentChip(c *ui.Context, k tokens, n store.Note) {
-	cnt := a.sentCounts[n.ID]
+	cnt := n.SendCount
 	if cnt == 0 {
 		return
 	}

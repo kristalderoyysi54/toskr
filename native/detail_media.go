@@ -359,7 +359,14 @@ func (a *app) imageAltBar(c *ui.Context, k tokens, n store.Note, file, meta stri
 	d := &a.detail
 	alt := a.detailAltOf(n, file)
 	if d.altEdit && editable {
-		ui.Row(c).FillWidth().Shrink(0).Padding(6, 12).Gap(6).AlignItems(ui.Center).BorderWidth(1, 0, 0, 0).BorderColor(k.inputBorder).Key("img-alt-edit").Children(func() {
+		bar := ui.Row(c).FillWidth().Shrink(0).Padding(6, 12).Gap(6).AlignItems(ui.Center).BorderWidth(1, 0, 0, 0).BorderColor(k.inputBorder).Key("img-alt-edit")
+		if bar.PressedOutside() { // 点详情窗别处：保存说明并退出编辑（同 ↵ / Esc）
+			a.commitImageAlt(n)
+			bar.Hidden(true)
+			c.Invalidate()
+			return
+		}
+		bar.Children(func() {
 			licon(c, "message-square-text", 12, k.muted)
 			ui.Row(c).Grow(1).Basis(0).Height(26).Padding(0, 8).Radius(rr(6)).Background(k.fg.Alpha(0.05)).AlignItems(ui.Center).Children(func() {
 				ui.TextInputBase(c, &d.altDraft).Grow(1).Font(fontSans).FontSize(12).FixedLineHeight(18).TextColor(k.fg).PlaceholderColor(k.muted).

@@ -239,7 +239,7 @@ func (s *Store) ReplaceFromBackup(p *Preview) error {
 	if err := s.mutate(func() bool {
 		s.notes, s.sections, s.tasks, s.taskSections = sn.Notes, sn.Sections, sn.Tasks, sn.TaskSections
 		s.bills, s.secrets, s.deliveries, s.outcomes = sn.Bills, sn.Secrets, sn.Deliveries, sn.Outcomes
-		s.messages, s.messagesGone = sn.Messages, sn.MessagesGone
+		s.messages, s.messagesGone, s.sendCounted = sn.Messages, sn.MessagesGone, sn.SendCounted
 		return true
 	}); err != nil {
 		return err

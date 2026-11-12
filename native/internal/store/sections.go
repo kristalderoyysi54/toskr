@@ -16,9 +16,17 @@ type Section struct {
 	Color         string `json:"color,omitempty"`
 	Collapsed     bool   `json:"collapsed,omitempty"`
 	KeepAfterSend bool   `json:"keepAfterSend,omitempty"` // 发送后不标记完成（提示词库等）
+	Sort          string `json:"sort,omitempty"`          // 组内未完成卡的顺序："" 手动 | SortSent 发送最多 | SortRecent 最近发送
+	SortBySent    bool   `json:"sortBySent,omitempty"`    // 旧字段（11-12 迭代版短暂使用）：加载时并入 Sort
 }
 
 const TaskInbox = "task-inbox"
+
+// 分组排序方式（Section.Sort）。同值时保持手动顺序。
+const (
+	SortSent   = "sent"   // 发送次数从多到少
+	SortRecent = "recent" // 上次发送时间从近到远，没发过的排后
+)
 
 func (s *Store) ensureDefaults() {
 	s.mu.Lock()
@@ -34,6 +42,33 @@ func (s *Store) ensureDefaults() {
 	}
 	if !has(s.taskSections, TaskInbox) {
 		s.taskSections = slices.Insert(s.taskSections, 0, Section{ID: TaskInbox, Name: "收集箱"})
+	}
+	for i := range s.sections {
+		if s.sections[i].SortBySent {
+			s.sections[i].Sort, s.sections[i].SortBySent = SortSent, false
+		}
+	}
+	if !s.sendCounted {
+		s.backfillSendCounts()
+		s.sendCounted = true // 随下一次落盘写进数据文件；落盘前重开会再回填一次，结果相同
+	}
+}
+
+// backfillSendCounts：加发送次数字段之前的数据只回填一次——按发送历史（最近 200 轮）补上次数为 0 的卡。
+// 只做一次是为了让「清零发送次数」持久：否则下次启动又会按历史补回来。
+func (s *Store) backfillSendCounts() {
+	counts := map[string]int{}
+	for _, d := range s.deliveries {
+		if d.Status == "sent" {
+			for _, id := range d.SourceIDs {
+				counts[id]++
+			}
+		}
+	}
+	for i := range s.notes {
+		if s.notes[i].SendCount == 0 {
+			s.notes[i].SendCount = counts[s.notes[i].ID]
+		}
 	}
 }
 

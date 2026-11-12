@@ -288,9 +288,30 @@ func (a *app) groups() []noteGroup {
 		if a.query != "" && len(g.open)+len(g.done) == 0 {
 			continue // 同 Tauri：搜索时隐藏没有命中的分组
 		}
+		switch s.Sort { // 同值保持手动顺序
+		case store.SortSent:
+			slices.SortStableFunc(g.open, func(x, y store.Note) int { return y.SendCount - x.SendCount })
+		case store.SortRecent: // 没发过的（零值）自然排在最后
+			slices.SortStableFunc(g.open, func(x, y store.Note) int { return y.SentAt.Compare(x.SentAt) })
+		}
 		out = append(out, g)
 	}
 	return out
+}
+
+// autoSorted：分组是否自动排序（分组菜单「排序」不是手动）。这样的组里卡片间拖放不改顺序，拖到分组头 / 侧栏换组照常。
+func (a *app) autoSorted(secID string) bool {
+	for _, s := range a.store.Sections() {
+		if s.ID == secID {
+			return s.Sort != ""
+		}
+	}
+	return false
+}
+
+// sectionSorts：分组「排序」的三个选项（值 → 菜单文字 → 分组头图标）。
+var sectionSorts = []struct{ id, label, icon string }{
+	{"", "手动", ""}, {store.SortSent, "发送最多", "list-ordered"}, {store.SortRecent, "最近发送", "clock"},
 }
 
 func (a *app) notesPage(c *ui.Context, k tokens) {
@@ -540,6 +561,11 @@ func (a *app) sectionBlock(c *ui.Context, k tokens, g noteGroup, top float32) fl
 				if g.sec.KeepAfterSend {
 					tipOf(c, liconFilled(c, "star", 10, k.muted), tr("发送后保留"))
 				}
+				for _, o := range sectionSorts {
+					if o.icon != "" && g.sec.Sort == o.id {
+						tipOf(c, licon(c, o.icon, 10, k.muted), tr("排序：")+tr(o.label))
+					}
+				}
 				if g.sec.ID != store.SectionInbox && a.store.Settings().CaptureSection == g.sec.ID {
 					tipOf(c, licon(c, "arrow-down-to-line", 10, k.muted), tr("捕获目标"))
 				}
@@ -690,11 +716,13 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 		box.Drag(noteDrag{n.ID})
 	}
 	dropOver := false
-	if d, ok := ui.DragOver[noteDrag](box); ok && d.id != n.ID {
-		dropOver = true
-	}
-	if d, ok := ui.Drop[noteDrag](box); ok && d.id != n.ID {
-		_ = a.store.MoveNoteBefore(d.id, n.ID)
+	if !a.autoSorted(n.Section) {
+		if d, ok := ui.DragOver[noteDrag](box); ok && d.id != n.ID {
+			dropOver = true
+		}
+		if d, ok := ui.Drop[noteDrag](box); ok && d.id != n.ID {
+			_ = a.store.MoveNoteBefore(d.id, n.ID)
+		}
 	}
 	box.Children(func() {
 		if dropOver {

@@ -34,6 +34,7 @@ type Note struct {
 	BundleID  string    `json:"bundleId,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 	SentAt    time.Time `json:"sentAt,omitzero"`
+	SendCount int       `json:"sendCount,omitempty"` // 成功发送次数（永久累计；旧数据加载时按发送历史回填，见 ensureDefaults）
 	Kept      bool      `json:"kept,omitempty"`
 	Done      bool      `json:"done,omitempty"`
 	Kind      string    `json:"kind,omitempty"` // text | link | code | image
@@ -241,11 +242,11 @@ func DefaultSettings() Settings {
 }
 
 func evaluationDefaults() Settings {
-	// 评估期默认值与已安装的 Tauri 版错开（⌥ 双击、⌃⌥Space），两版并存时一次按键
-	// 不会同时触发两边；替换 Tauri 版后可在设置里改回 ⇧ 与 ⌘⇧C。
+	// 迭代期双击键与旧版错开（⌥），两版并存时双击不会同时触发两边。开关面板快捷键两种身份都是 ⇧⌘C
+	// （同旧版默认，用户 2026-11-12 指定；迭代版与正式版同时运行时一次按键两边都会响）。
 	return Settings{
 		TriggerModifier: "option", TriggerGapMs: 400, ClipboardWatch: true, Glass: "glass",
-		PanelHotkey: "Ctrl+Alt+Space", Language: "system", ClipRetainDays: 7,
+		PanelHotkey: "Shift+Cmd+C", Language: "system", ClipRetainDays: 7,
 		ScreenshotKey: "Ctrl+Alt+A", AIEndpoint: "https://api.openai.com/v1", AIModel: "gpt-4o-mini", AIEnabled: new(bool),
 		Companion: []string{"com.googlecode.iterm2", "com.apple.Terminal", "com.todesktop.230313mzl4w4u92", "com.microsoft.VSCode"},
 		EdgeHide:  true, Currency: "¥", DueReminders: true, SecretRevealMs: 8000, DetailFontSize: 12, MessageFontSize: 14,
@@ -267,6 +268,7 @@ type snapshot struct {
 	Outcomes     []OutcomeEvent `json:"outcomes,omitempty"`
 	Messages     []Message      `json:"messages,omitempty"`
 	MessagesGone []string       `json:"messagesGone,omitempty"` // 删过的消息标识：重放账本时不再收回
+	SendCounted  bool           `json:"sendCounted,omitempty"`  // 笔记发送次数已按发送历史回填过（只做一次）
 }
 
 // PersistDelay 合并连续修改的落盘延迟：内存与界面即时生效，磁盘写入在后台线程合并执行
@@ -290,6 +292,7 @@ type Store struct {
 	outcomes     []OutcomeEvent
 	messages     []Message
 	messagesGone []string
+	sendCounted  bool // 见 snapshot.SendCounted
 	onChange     []func()
 	dirty        bool
 	timer        *time.Timer
@@ -348,7 +351,7 @@ func OpenDir(dir string, key []byte) (*Store, error) {
 	s.notes, s.settings = snap.Notes, mergeSettings(snap.Settings)
 	s.sections, s.tasks, s.taskSections, s.bills, s.secrets = snap.Sections, snap.Tasks, snap.TaskSections, snap.Bills, snap.Secrets
 	s.deliveries, s.outcomes = snap.Deliveries, snap.Outcomes
-	s.messages, s.messagesGone = snap.Messages, snap.MessagesGone
+	s.messages, s.messagesGone, s.sendCounted = snap.Messages, snap.MessagesGone, snap.SendCounted
 	s.disk = stampOf(filepath.Join(dir, DataFile))
 	return s, nil
 }
@@ -383,7 +386,7 @@ func (s *Store) ReloadFromDisk() error {
 	s.notes, s.settings = snap.Notes, mergeSettings(snap.Settings)
 	s.sections, s.tasks, s.taskSections, s.bills, s.secrets = snap.Sections, snap.Tasks, snap.TaskSections, snap.Bills, snap.Secrets
 	s.deliveries, s.outcomes = snap.Deliveries, snap.Outcomes
-	s.messages, s.messagesGone = snap.Messages, snap.MessagesGone
+	s.messages, s.messagesGone, s.sendCounted = snap.Messages, snap.MessagesGone, snap.SendCounted
 	s.disk, s.conflict, s.dirty = stampOf(path), false, false
 	s.mu.Unlock()
 	s.ensureDefaults()
@@ -715,6 +718,20 @@ func (s *Store) Note(id string) (Note, bool) {
 	return Note{}, false
 }
 
+// SetSendCount 改一张卡的发送次数（右键「清零发送次数」与它的撤销），返回原值。
+func (s *Store) SetSendCount(id string, n int) (prev int, err error) {
+	err = s.mutate(func() bool {
+		i := s.index(id)
+		if i < 0 {
+			return false
+		}
+		prev = s.notes[i].SendCount
+		s.notes[i].SendCount = max(n, 0)
+		return prev != s.notes[i].SendCount
+	})
+	return prev, err
+}
+
 // MarkSent 发送成功：记录发送时间；非常用、非剪贴、所在分组未设 KeepAfterSend 的卡同时标记完成。
 func (s *Store) MarkSent(ids []string, at time.Time) error {
 	return s.mutate(func() bool {
@@ -722,6 +739,7 @@ func (s *Store) MarkSent(ids []string, at time.Time) error {
 		for _, id := range ids {
 			if i := s.index(id); i >= 0 {
 				s.notes[i].SentAt, changed = at, true
+				s.notes[i].SendCount++
 				n := &s.notes[i]
 				// 同 Tauri doneIdsAfterSend：「常用」卡、「发送后保留」分组、剪贴板历史发送后都不标完成，留在原位
 				if sec, ok := s.section(n.Section); !n.Kept && n.Section != SectionClipboard && (!ok || !sec.KeepAfterSend) {
@@ -858,7 +876,7 @@ func Fingerprint(notes []Note) string {
 func (s *Store) snapshotLocked() snapshot {
 	return snapshot{Version: 2, Notes: s.notes, Settings: s.settings, Sections: s.sections,
 		Tasks: s.tasks, TaskSections: s.taskSections, Bills: s.bills, Secrets: s.secrets, Deliveries: s.deliveries, Outcomes: s.outcomes,
-		Messages: s.messages, MessagesGone: s.messagesGone}
+		Messages: s.messages, MessagesGone: s.messagesGone, SendCounted: s.sendCounted}
 }
 
 // mergeSettings 用默认值补齐旧版本数据里缺的字段（只补零值）。

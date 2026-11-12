@@ -400,7 +400,7 @@ func (a *app) stripNoteTile(c *ui.Context, k tokens, n store.Note, h float32, cl
 	})
 	if !clip && !n.Done {
 		box.Drag(noteDrag{n.ID})
-		if d, ok := ui.Drop[noteDrag](box); ok && d.id != n.ID {
+		if d, ok := ui.Drop[noteDrag](box); ok && d.id != n.ID && !a.autoSorted(n.Section) {
 			_ = a.store.MoveNoteBefore(d.id, n.ID)
 		}
 	}

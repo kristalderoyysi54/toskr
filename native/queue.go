@@ -501,6 +501,14 @@ func (a *app) cardMenu(c *ui.Context, m *ui.Menu, i int, n store.Note) {
 	if !multi {
 		a.replyMenu(m, n)
 	}
+	if !multi && n.SendCount > 0 { // 一阵子集中用过的卡在「发送最多」里一直靠前：手动降下去
+		if m.Item(fmt.Sprintf(tr("清零发送次数（%d）"), n.SendCount)).Chosen() {
+			id := n.ID
+			if prev, err := a.store.SetSendCount(id, 0); err == nil {
+				a.showHUDUndo("ok", tr("已清零发送次数"), func() { _, _ = a.store.SetSendCount(id, prev) })
+			}
+		}
+	}
 	m.Separator()
 	del := tr("删除")
 	if multi {
