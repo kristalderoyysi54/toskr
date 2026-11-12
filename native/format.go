@@ -22,18 +22,21 @@ func preview(s string, n int) string {
 	return s
 }
 
-// ago 是相对时间（中文短格式）。
+// ago 是相对时间（短格式，随界面语言）。
 func ago(t, now time.Time) string {
 	d := now.Sub(t)
 	switch {
 	case d < time.Minute:
-		return "刚刚"
+		return tr("刚刚")
 	case d < time.Hour:
-		return fmt.Sprintf("%d 分钟前", int(d.Minutes()))
+		return fmt.Sprintf(tr("%d 分钟前"), int(d.Minutes()))
 	case d < 24*time.Hour:
-		return fmt.Sprintf("%d 小时前", int(d.Hours()))
+		return fmt.Sprintf(tr("%d 小时前"), int(d.Hours()))
 	case d < 7*24*time.Hour:
-		return fmt.Sprintf("%d 天前", int(d.Hours()/24))
+		return fmt.Sprintf(tr("%d 天前"), int(d.Hours()/24))
+	}
+	if langEN.Load() {
+		return t.Format("Jan 2")
 	}
 	return t.Format("1月2日")
 }
