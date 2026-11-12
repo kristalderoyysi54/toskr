@@ -26,6 +26,8 @@ APP="$OUT/darwin-arm64/Toskr.app"
 
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "版本号须为 x.y.z"; exit 1; }
 [[ -f "$LEGACY_KEY" && -f "$NATIVE_KEY" ]] || { echo "缺少更新私钥（$LEGACY_KEY / $NATIVE_KEY）"; exit 1; }
+# 旧版更新包的签名走 tauri CLI（node_modules 里）：缺了会在打包几分钟后才失败，开头就拦下
+[[ -x node_modules/.bin/tauri ]] || { echo "缺少 tauri CLI（node_modules/.bin/tauri），先运行 pnpm install --frozen-lockfile"; exit 1; }
 [[ "$REPO" == "$(python3 -I -c 'import json;print(json.load(open("native/mygo.json"))["updates"]["github"])')" ]] || { echo "REPO 与 native/mygo.json updates.github 不一致"; exit 1; }
 if [[ "$DRY" != 1 ]]; then
   [[ -z "$(git status --porcelain --untracked-files=all)" ]] || { echo "存在未提交改动，请先提交再发版"; exit 1; }
@@ -87,8 +89,11 @@ done
 # 3. 旧版更新器的物料：顶层目录名随意（更新器解包时跳过第一级），装到原 Toskr.app 的位置
 LEGACY="$OUT/legacy"; rm -rf "$LEGACY"; mkdir -p "$LEGACY"
 COPYFILE_DISABLE=1 tar -czf "$LEGACY/Toskr.app.tar.gz" -C "$OUT/darwin-arm64" Toskr.app
-TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" pnpm -s tauri signer sign -f "$LEGACY_KEY" -p "" "$LEGACY/Toskr.app.tar.gz" >/dev/null
-[[ -s "$LEGACY/Toskr.app.tar.gz.sig" ]] || { echo "旧版更新签名失败"; exit 1; }
+# 失败时把签名工具的输出打出来（曾因 -s 与丢弃输出静默退出，看不出原因）
+if ! SIGN_OUT=$(TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" pnpm -s tauri signer sign -f "$LEGACY_KEY" -p "" "$LEGACY/Toskr.app.tar.gz" 2>&1); then
+  echo "✗ 旧版更新签名失败："; echo "$SIGN_OUT"; exit 1
+fi
+[[ -s "$LEGACY/Toskr.app.tar.gz.sig" ]] || { echo "✗ 旧版更新签名失败：没有生成 .sig"; echo "$SIGN_OUT"; exit 1; }
 python3 -I - "$VERSION" "$NOTES" "$(cat "$LEGACY/Toskr.app.tar.gz.sig")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$REPO" <<'PY' > "$LEGACY/latest.json"
 import json, sys
 v, notes, sig, date, repo = sys.argv[1:6]
