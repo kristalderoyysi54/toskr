@@ -811,6 +811,7 @@ func (a *app) detailBody(c *ui.Context, k tokens, s settingsTokens, n store.Note
 					return false
 				})
 				a.detail.readSel = read.SelectedTexts()
+				a.followReadPointer(read)
 				a.markReadSelection(read.Bounds(), a.detailFS())
 				if a.detail.dblFrames > 0 {
 					if a.detail.dblFrames--; a.detail.dblFrames == 0 {

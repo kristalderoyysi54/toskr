@@ -82,17 +82,27 @@ func utf16Len(r []rune) int {
 	return n
 }
 
-// trackReadPointer 记下阅读态划选的起止指针（按下即起点，拖动 / 抬起更新终点）。
+// trackReadPointer 记下阅读态划选的起点（按下）。终点不能等 Move / Up：输入钩子不拦按下时，mygo 把指针
+// 交给被划选的段落，拖动与抬起都送不到这里，松手后才收到不按键的悬停 Move（Button = -1）——
+// 之前把这些悬停当拖动终点，工具条跟着松手后的鼠标跑到窗底。终点改由 followReadPointer 逐帧读指针。
 func (a *app) trackReadPointer(ev ui.InputEvent) {
 	g := &a.detail.sel
-	p := ui.Point{X: ev.X, Y: ev.Y}
-	switch {
-	case ev.Kind == ui.InputPointerDown && ev.Button == 0:
+	if ev.Kind == ui.InputPointerDown && ev.Button == 0 {
+		p := ui.Point{X: ev.X, Y: ev.Y}
 		g.ptr, g.ptrOK, g.ptrDrag = [2]ui.Point{p, p}, true, true
-	case ev.Kind == ui.InputPointerMove && g.ptrDrag:
-		g.ptr[1] = p
-	case ev.Kind == ui.InputPointerUp && g.ptrDrag:
-		g.ptr[1], g.ptrDrag = p, false
+	}
+}
+
+// followReadPointer：划选中逐帧取指针作终点（相对阅读容器），鼠标键松开即定格。
+func (a *app) followReadPointer(read ui.Element) {
+	g := &a.detail.sel
+	if !g.ptrDrag {
+		return
+	}
+	x, y, _ := read.PointerPosition()
+	g.ptr[1] = ui.Point{X: x, Y: y}
+	if !selDragging() {
+		g.ptrDrag = false
 	}
 }
 
@@ -100,7 +110,9 @@ func (a *app) trackReadPointer(ev ui.InputEvent) {
 func (a *app) markReadSelection(box ui.Rect, fs float32) {
 	g := &a.detail.sel
 	if len(a.detail.readSel) == 0 {
-		g.ptrOK = false // 选区已清：旧指针不再代表下一次（键盘）选区
+		if !g.ptrDrag { // 按下那一帧选区先清空，拖选中不能把刚记下的起点一起清掉
+			g.ptrOK = false // 选区已清：旧指针不再代表下一次（键盘）选区
+		}
 		return
 	}
 	if !g.ptrOK {

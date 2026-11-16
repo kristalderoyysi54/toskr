@@ -62,6 +62,44 @@ func TestSelBarFollowsEditSelection(t *testing.T) {
 	}
 }
 
+// 阅读态拖选：工具条贴着选中行；松手后鼠标移到窗底，工具条不跟着跑到底部（用户 2026-11-16 截图）。
+func TestSelBarFollowsReadSelection(t *testing.T) {
+	var paras []string
+	for i := range 12 {
+		paras = append(paras, fmt.Sprintf("第%02d段内容文字", i))
+	}
+	a, _ := testApp(t, strings.Join(paras, "\n\n"))
+	held := false
+	selDragging = func() bool { return held } // testApp 已登记还原
+	n := a.store.Notes()[0]
+	dt := detailTester(t, a, n)
+	dt.Frame()
+	line, ok := dt.Find("第05段内容文字")
+	if !ok {
+		t.Fatalf("找不到正文 %v", dt.Texts())
+	}
+	y := line.Y + line.H/2
+	held = true
+	dt.Press(line.X+2, y)
+	dt.Frame()
+	dt.Move(line.X+line.W-2, y)
+	dt.Frame()
+	held = false
+	dt.Release(line.X+line.W-2, y)
+	dt.Frame()
+	dt.Move(line.X, 520) // 松手后鼠标移向窗底
+	for range 6 {
+		dt.Frame()
+	}
+	bar, ok := dt.Find("已选 8 字")
+	if !ok {
+		t.Fatalf("划选后无工具条 %v", dt.Texts())
+	}
+	if d := bar.Y - line.Y; d < -60 || d > 60 {
+		t.Fatalf("工具条应贴着选中行：bar=%v line=%v", bar, line)
+	}
+}
+
 func TestSelBarLeft(t *testing.T) {
 	// 窗宽 [0, 560)，工具条宽 300
 	for _, c := range []struct {
