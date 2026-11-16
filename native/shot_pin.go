@@ -15,10 +15,12 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/toskr/native/internal/macos"
+	"github.com/toskr/native/internal/shot"
 	"github.com/toskr/native/internal/store"
 )
 
 // 钉图（PinView + screenshot.rs pin_*）：置顶小窗显示一张截图；拖动移动、滚轮缩放（20%–400%）、
+// 拖四边 / 四角等比缩放（对边 / 对角不动，拖上下边时水平居中、拖左右边时竖直居中；样式不变，只换光标）、
 // ⌘C 复制、双击或 Esc 关闭、右键菜单（复制 / 存入 / 另存为 / 识别文字 / 透明度 / 原大小 / 关闭）。
 
 type pinWin struct {
@@ -31,6 +33,55 @@ type pinWin struct {
 	original *image.RGBA // 编辑标注前的原图（「还原原图」）
 	win      *mygo.Window
 	closing  bool
+	rs       pinResize // 拖动中：平移或缩放把手与起点
+	closeReq bool      // 双击关闭，留到下一帧执行
+}
+
+type pinResize struct {
+	edge   string // move = 平移；n / s / e / w / nw / ne / sw / se = 缩放；空 = 未在拖动
+	from   mygo.Point
+	bounds mygo.Rectangle
+}
+
+// pinResizeRect：按把手 edge 与屏幕位移 (dx, dy) 等比缩放 r（宽高比 ar = 宽/高），宽钳在 [minW, maxW]。
+// 角把手把位移投影到对角线；含 w / n 的一侧移动、对侧固定，单拖上下边时水平居中、单拖左右边时竖直居中。
+func pinResizeRect(edge string, r mygo.Rectangle, dx, dy int, ar, minW, maxW float64) mygo.Rectangle {
+	W, H := float64(r.Width), float64(r.Height)
+	hasN, hasS := strings.Contains(edge, "n"), strings.Contains(edge, "s")
+	hasW, hasE := strings.Contains(edge, "w"), strings.Contains(edge, "e")
+	ex, ey := W+float64(dx), H+float64(dy) // 拖动后的角相对固定侧的宽高
+	if hasW {
+		ex = W - float64(dx)
+	}
+	if hasN {
+		ey = H - float64(dy)
+	}
+	var w float64
+	switch {
+	case (hasN || hasS) && (hasE || hasW):
+		// 角：投影到对角线上，连续变化。取两轴中较大变化会在两轴反号处换驱动轴，100% 附近跳变
+		w = W * (ex*W + ey*H) / (W*W + H*H)
+	case hasE || hasW:
+		w = ex
+	default:
+		w = ey * ar
+	}
+	w = math.Min(maxW, math.Max(minW, w))
+	h := w / ar
+	x, y := float64(r.X), float64(r.Y)
+	switch {
+	case hasW:
+		x += W - w
+	case !hasE:
+		x += (W - w) / 2
+	}
+	switch {
+	case hasN:
+		y += H - h
+	case !hasS:
+		y += (H - h) / 2
+	}
+	return mygo.Rectangle{X: int(math.Round(x)), Y: int(math.Round(y)), Width: max(1, int(math.Round(w))), Height: max(1, int(math.Round(h)))}
 }
 
 func (a *app) pinShot(img *image.RGBA, x, y, w, h float64) {
@@ -81,24 +132,34 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 	if c.Shortcut(ui.Cmd, ui.KeyC) {
 		a.pinCopy(p)
 	}
+	if p.closeReq {
+		a.closePin(p)
+		return
+	}
 	border := stok(c).primary.Alpha(0.4)
-	el := tipOf(c, ui.Box(c).Fill().Cursor(ui.CursorGrab).DragWindow(), tr("钉图：拖动移动 · 滚轮缩放 · ⌘C 复制 · 双击或 Esc 关闭 · 右键更多")).
+	cur := ui.CursorGrab
+	if p.rs.edge == "move" {
+		cur = ui.CursorGrabbing
+	}
+	drag := p.dragInput("move")
+	el := tipOf(c, ui.Box(c).Fill().Cursor(cur), tr("钉图：拖动移动 · 拖边缘缩放 · 滚轮缩放 · ⌘C 复制 · 双击或 Esc 关闭 · 右键更多")).
 		HandleInput(func(ev ui.InputEvent) bool {
-			if ev.Kind != ui.InputScroll {
-				return false
+			if ev.Kind == ui.InputScroll {
+				p.zoom(ev.Time, p.factor*(1-float64(ev.DY)*0.002))
+				return true
 			}
-			p.zoom(ev.Time, p.factor*(1-float64(ev.DY)*0.002))
-			return true
+			return drag(ev)
 		}).
 		Draw(func(pt *ui.Painter, r ui.Rect) {
 			pt.ImageRegion(p.bm, ui.Rect{}, r, ui.ImageOptions{})
 			pt.Stroke(r, border, 0, 1)
 		}).
 		ContextMenu(func(m *ui.Menu) { a.pinMenu(c, m, p) })
-	if el.DoubleClicked() {
+	if el.DoubleClicked() { // 无窗口（测试）时按下不被拖动接管，双击走这里
 		a.closePin(p)
 		return
 	}
+	pinHandles(c, p)
 	// 缩放时在图上短暂显示当前比例
 	if left := 900*time.Millisecond - c.Now().Sub(p.zoomAt); !p.zoomAt.IsZero() && left > 0 {
 		c.After(left)
@@ -107,6 +168,83 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 				text(c, fmt.Sprintf("%d%%", int(math.Round(p.factor*100))), 12, 17, 400, colWhite).Font(fontMono).FontFeatures("tnum").MinWidth(36).TextAlign(ui.Center) // 等宽字体 4 字符宽，99%→100% 胶囊不变宽
 			})
 		})
+	}
+}
+
+// dragInput：同截图选区的拖动——按下即接管指针，之后的 Move / Up 都送到这里（指针出窗也是）。
+// edge = "move" 平移，其余为缩放把手。位移取屏幕坐标：窗口在指针下移动，窗内坐标会漂。
+func (p *pinWin) dragInput(edge string) func(ui.InputEvent) bool {
+	return func(ev ui.InputEvent) bool {
+		switch ev.Kind {
+		case ui.InputPointerDown:
+			if ev.Button != 0 || p.win == nil {
+				return false
+			}
+			if edge == "move" && ev.Clicks >= 2 {
+				p.closeReq = true // 关窗留到下一帧，不在事件分发里销毁窗口
+				return true
+			}
+			p.rs = pinResize{edge: edge, from: mygo.Screen.CursorScreenPoint(), bounds: p.win.Bounds()}
+			return true
+		case ui.InputPointerMove, ui.InputPointerUp:
+			if p.rs.edge != edge {
+				return false
+			}
+			p.dragTo(mygo.Screen.CursorScreenPoint(), ev.Time)
+			if ev.Kind == ui.InputPointerUp {
+				p.rs = pinResize{}
+			}
+			return true
+		}
+		return false
+	}
+}
+
+func (p *pinWin) dragTo(pt mygo.Point, at time.Time) {
+	g := p.rs
+	dx, dy := pt.X-g.from.X, pt.Y-g.from.Y
+	r := g.bounds
+	if g.edge == "move" {
+		r.X, r.Y = r.X+dx, r.Y+dy
+	} else {
+		r = pinResizeRect(g.edge, g.bounds, dx, dy, p.w/p.h, p.w*0.2, p.w*4)
+		p.factor = float64(r.Width) / p.w
+		p.zoomAt = at // 同滚轮缩放：短暂显示当前比例
+	}
+	if r != p.win.Bounds() {
+		p.win.SetBounds(r)
+	}
+}
+
+// pinHandles：四边与四角的透明缩放把手（只换光标，不改钉图样式），盖在拖动区之上。
+func pinHandles(c *ui.Context, p *pinWin) {
+	W, H := float32(p.w*p.factor), float32(p.h*p.factor)
+	t := min(6, min(W, H)/5)   // 边把手厚度：小图收窄，留出中间的拖动区
+	cs := min(14, min(W, H)/3) // 角把手边长
+	for _, e := range []string{"n", "s", "w", "e", "nw", "ne", "sw", "se"} {
+		hb := ui.Box(c).Absolute().Key("pin-h-" + e).Cursor(handleCursor(shot.Handle(e)))
+		if len(e) == 1 {
+			if e == "n" || e == "s" {
+				hb.Left(cs).Right(cs).Height(t)
+			} else {
+				hb.Top(cs).Bottom(cs).Width(t)
+			}
+		} else {
+			hb.Width(cs).Height(cs)
+		}
+		if strings.Contains(e, "n") {
+			hb.Top(0)
+		}
+		if strings.Contains(e, "s") {
+			hb.Bottom(0)
+		}
+		if strings.Contains(e, "w") {
+			hb.Left(0)
+		}
+		if strings.Contains(e, "e") {
+			hb.Right(0)
+		}
+		hb.HandleInput(p.dragInput(e))
 	}
 }
 

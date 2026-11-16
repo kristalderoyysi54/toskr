@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"github.com/toskr/native/internal/macos"
@@ -112,6 +113,38 @@ func TestPinWheelZoom(t *testing.T) {
 	tt.Frame()
 	if p.factor <= 1 || !tt.HasText("140%") {
 		t.Fatalf("滚轮放大 %v %v", p.factor, tt.Texts())
+	}
+}
+
+// 拖边框缩放：等比、对边 / 对角固定，单边拖动时另一轴居中，越界钳在 [minW, maxW]。
+func TestPinResizeRect(t *testing.T) {
+	r := mygo.Rectangle{X: 100, Y: 100, Width: 200, Height: 100}
+	for _, tc := range []struct {
+		edge   string
+		dx, dy int
+		want   mygo.Rectangle
+	}{
+		{"se", 100, 50, mygo.Rectangle{X: 100, Y: 100, Width: 300, Height: 150}}, // 沿对角线
+		{"se", 100, 0, mygo.Rectangle{X: 100, Y: 100, Width: 280, Height: 140}},  // 投影到对角线
+		{"nw", -100, -50, mygo.Rectangle{X: 0, Y: 50, Width: 300, Height: 150}},  // 右下角不动
+		{"e", 100, 0, mygo.Rectangle{X: 100, Y: 75, Width: 300, Height: 150}},   // 竖直居中
+		{"n", 0, -50, mygo.Rectangle{X: 50, Y: 50, Width: 300, Height: 150}},    // 下边不动、水平居中
+		{"w", 190, 0, mygo.Rectangle{X: 260, Y: 140, Width: 40, Height: 20}},    // 钳到最小宽 40
+		{"se", 2000, 0, mygo.Rectangle{X: 100, Y: 100, Width: 800, Height: 400}}, // 钳到最大宽 800
+	} {
+		if got := pinResizeRect(tc.edge, r, tc.dx, tc.dy, 2, 40, 800); got != tc.want {
+			t.Errorf("%s %d,%d → %+v，应 %+v", tc.edge, tc.dx, tc.dy, got, tc.want)
+		}
+	}
+	// 斜拖经过原大小附近（两轴可能反号）：宽度变化不超过指针位移，不跳变
+	for _, e := range []string{"se", "nw", "ne", "sw"} {
+		for dx := -3; dx <= 3; dx++ {
+			for dy := -3; dy <= 3; dy++ {
+				if got := pinResizeRect(e, r, dx, dy, 2, 40, 800); got.Width < 196 || got.Width > 204 { // 旧算法在 (-1, 3) 处给 206
+					t.Errorf("%s %d,%d 宽 %d 跳变", e, dx, dy, got.Width)
+				}
+			}
+		}
 	}
 }
 
