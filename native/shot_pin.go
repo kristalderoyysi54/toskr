@@ -32,9 +32,26 @@ type pinWin struct {
 	zoomAt   time.Time
 	original *image.RGBA // 编辑标注前的原图（「还原原图」）
 	win      *mygo.Window
+	frame    pinFrame // 拖动 / 缩放读写的窗口框（即 win；测试换成假窗口）
 	closing  bool
 	rs       pinResize // 拖动中：平移或缩放把手与起点
 	closeReq bool      // 双击关闭，留到下一帧执行
+}
+
+type pinFrame interface {
+	Bounds() mygo.Rectangle
+	SetBounds(mygo.Rectangle)
+}
+
+var pinCursor = mygo.Screen.CursorScreenPoint // 屏幕指针（测试替换）
+
+// pinZoomRect：把 r 缩放到 w×h，锚点 (ax, ay)（窗内比例 0–1）在屏幕上不动。
+func pinZoomRect(r mygo.Rectangle, w, h int, ax, ay float64) mygo.Rectangle {
+	ax, ay = math.Min(1, math.Max(0, ax)), math.Min(1, math.Max(0, ay))
+	return mygo.Rectangle{
+		X: r.X + int(math.Round(ax*float64(r.Width-w))), Y: r.Y + int(math.Round(ay*float64(r.Height-h))),
+		Width: w, Height: h,
+	}
 }
 
 type pinResize struct {
@@ -93,6 +110,7 @@ func (a *app) pinShot(img *image.RGBA, x, y, w, h float64) {
 		Content: ui.View(func(c *ui.Context) { a.pinView(c, p) }),
 	})
 	p.win.SetBounds(bounds)
+	p.frame = p.win
 	macos.MakeBorderless(p.win.NativeHandle(), false) // 钉图落在截图原位：贴屏顶时不被推到菜单栏下
 	p.win.SetVisibleOnAllWorkspaces(true)
 	p.win.OnClosed(func() { a.pins = slices.DeleteFunc(a.pins, func(q *pinWin) bool { return q == p }) })
@@ -106,7 +124,9 @@ func (a *app) closePin(p *pinWin) {
 	}
 	p.closing = true
 	a.pins = slices.DeleteFunc(a.pins, func(q *pinWin) bool { return q == p })
-	p.win.Destroy()
+	if p.win != nil { // 无头测试没有真窗口
+		p.win.Destroy()
+	}
 }
 
 func (p *pinWin) png() []byte {
@@ -115,10 +135,12 @@ func (p *pinWin) png() []byte {
 	return buf.Bytes()
 }
 
-func (p *pinWin) zoom(at time.Time, f float64) {
+// zoom 以窗内比例 (ax, ay) 处为锚点缩放：滚轮传指针位置（指针下的像素不动），「恢复原大小」传左上角。
+func (p *pinWin) zoom(at time.Time, f, ax, ay float64) {
 	p.factor = math.Min(4, math.Max(0.2, f))
-	if p.win != nil {
-		p.win.SetSize(max(1, int(math.Round(p.w*p.factor))), max(1, int(math.Round(p.h*p.factor))))
+	if p.frame != nil {
+		w, h := max(1, int(math.Round(p.w*p.factor))), max(1, int(math.Round(p.h*p.factor)))
+		p.frame.SetBounds(pinZoomRect(p.frame.Bounds(), w, h, ax, ay))
 	}
 	p.zoomAt = at
 }
@@ -141,15 +163,8 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 	if p.rs.edge == "move" {
 		cur = ui.CursorGrabbing
 	}
-	drag := p.dragInput("move")
 	el := tipOf(c, ui.Box(c).Fill().Cursor(cur), tr("钉图：拖动移动 · 拖边缘缩放 · 滚轮缩放 · ⌘C 复制 · 双击或 Esc 关闭 · 右键更多")).
-		HandleInput(func(ev ui.InputEvent) bool {
-			if ev.Kind == ui.InputScroll {
-				p.zoom(ev.Time, p.factor*(1-float64(ev.DY)*0.002))
-				return true
-			}
-			return drag(ev)
-		}).
+		HandleInput(p.dragInput("move")).
 		Draw(func(pt *ui.Painter, r ui.Rect) {
 			pt.ImageRegion(p.bm, ui.Rect{}, r, ui.ImageOptions{})
 			pt.Stroke(r, border, 0, 1)
@@ -173,24 +188,33 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 
 // dragInput：同截图选区的拖动——按下即接管指针，之后的 Move / Up 都送到这里（指针出窗也是）。
 // edge = "move" 平移，其余为缩放把手。位移取屏幕坐标：窗口在指针下移动，窗内坐标会漂。
+// 滚轮也在这里：把手盖住边缘，滚轮落在把手上同样要缩放。
 func (p *pinWin) dragInput(edge string) func(ui.InputEvent) bool {
 	return func(ev ui.InputEvent) bool {
 		switch ev.Kind {
+		case ui.InputScroll:
+			ax, ay := 0.0, 0.0 // 锚点 = 指针在窗内的比例（屏幕坐标算，与落在哪个把手无关）
+			if p.frame != nil {
+				b, pt := p.frame.Bounds(), pinCursor()
+				ax, ay = float64(pt.X-b.X)/float64(max(1, b.Width)), float64(pt.Y-b.Y)/float64(max(1, b.Height))
+			}
+			p.zoom(ev.Time, p.factor*(1-float64(ev.DY)*0.002), ax, ay)
+			return true
 		case ui.InputPointerDown:
-			if ev.Button != 0 || p.win == nil {
+			if ev.Button != 0 || p.frame == nil {
 				return false
 			}
 			if edge == "move" && ev.Clicks >= 2 {
 				p.closeReq = true // 关窗留到下一帧，不在事件分发里销毁窗口
 				return true
 			}
-			p.rs = pinResize{edge: edge, from: mygo.Screen.CursorScreenPoint(), bounds: p.win.Bounds()}
+			p.rs = pinResize{edge: edge, from: pinCursor(), bounds: p.frame.Bounds()}
 			return true
 		case ui.InputPointerMove, ui.InputPointerUp:
 			if p.rs.edge != edge {
 				return false
 			}
-			p.dragTo(mygo.Screen.CursorScreenPoint(), ev.Time)
+			p.dragTo(pinCursor(), ev.Time)
 			if ev.Kind == ui.InputPointerUp {
 				p.rs = pinResize{}
 			}
@@ -211,8 +235,8 @@ func (p *pinWin) dragTo(pt mygo.Point, at time.Time) {
 		p.factor = float64(r.Width) / p.w
 		p.zoomAt = at // 同滚轮缩放：短暂显示当前比例
 	}
-	if r != p.win.Bounds() {
-		p.win.SetBounds(r)
+	if r != p.frame.Bounds() {
+		p.frame.SetBounds(r)
 	}
 }
 
@@ -299,7 +323,7 @@ func (a *app) pinMenu(c *ui.Context, m *ui.Menu, p *pinWin) {
 		}
 	})
 	if m.Item(tr("恢复原大小")).Chosen() {
-		p.zoom(time.Now(), 1)
+		p.zoom(time.Now(), 1, 0, 0)
 	}
 	m.Separator()
 	if m.Item(tr("关闭")).Chosen() {

@@ -116,6 +116,75 @@ func TestPinWheelZoom(t *testing.T) {
 	}
 }
 
+type fakePinFrame struct{ r mygo.Rectangle }
+
+func (f *fakePinFrame) Bounds() mygo.Rectangle     { return f.r }
+func (f *fakePinFrame) SetBounds(r mygo.Rectangle) { f.r = r }
+
+// pinTest：100×50 的钉图挂在屏幕 (300, 200) 的假窗口上，屏幕指针由 *cur 决定。
+func pinTest(t *testing.T) (*pinWin, *fakePinFrame, *mygo.Point, *ui.Tester) {
+	a, _ := testApp(t)
+	img := image.NewRGBA(image.Rect(0, 0, 200, 100))
+	fr := &fakePinFrame{r: mygo.Rectangle{X: 300, Y: 200, Width: 100, Height: 50}}
+	p := &pinWin{img: img, bm: ui.NewBitmap(img), w: 100, h: 50, factor: 1, alpha: 100, frame: fr}
+	cur := &mygo.Point{}
+	old := pinCursor
+	pinCursor = func() mygo.Point { return *cur }
+	t.Cleanup(func() { pinCursor = old })
+	tt := ui.NewTester(func(c *ui.Context) { a.pinView(c, p) }, 100, 50)
+	tt.Frame()
+	return p, fr, cur, tt
+}
+
+// 滚轮缩放以指针为锚：指针在右下角（落在角把手上）放大，右下角在屏幕上不动。
+func TestPinWheelZoomAroundPointer(t *testing.T) {
+	p, fr, cur, tt := pinTest(t)
+	*cur = mygo.Point{X: 400, Y: 250}
+	tt.Wheel(99, 49, 0, -200)
+	tt.Frame()
+	if want := (mygo.Rectangle{X: 260, Y: 180, Width: 140, Height: 70}); fr.r != want || p.factor != 1.4 {
+		t.Fatalf("右下角为锚放大 → %+v（%.2f），应 %+v", fr.r, p.factor, want)
+	}
+}
+
+// 拖动：按下接管指针，按屏幕位移平移；松手后再移指针不动；拖右下角等比放大、左上角不动。
+func TestPinDragMoveAndResize(t *testing.T) {
+	p, fr, cur, tt := pinTest(t)
+	*cur = mygo.Point{X: 350, Y: 225}
+	tt.Press(50, 25)
+	tt.Frame()
+	*cur = mygo.Point{X: 380, Y: 245}
+	tt.Move(52, 27)
+	tt.Frame()
+	*cur = mygo.Point{X: 390, Y: 255}
+	tt.Release(52, 27)
+	tt.Frame()
+	if want := (mygo.Rectangle{X: 340, Y: 230, Width: 100, Height: 50}); fr.r != want {
+		t.Fatalf("平移 → %+v，应 %+v", fr.r, want)
+	}
+	*cur = mygo.Point{X: 600, Y: 600}
+	tt.Move(60, 30)
+	tt.Frame()
+	if fr.r.X != 340 || fr.r.Y != 230 {
+		t.Fatalf("松手后不应再跟随指针：%+v", fr.r)
+	}
+
+	*cur = mygo.Point{X: 438, Y: 278}
+	tt.Press(98, 48) // 右下角把手
+	tt.Frame()
+	*cur = mygo.Point{X: 538, Y: 328}
+	tt.Move(98, 48)
+	tt.Frame()
+	tt.Release(98, 48)
+	tt.Frame()
+	if want := (mygo.Rectangle{X: 340, Y: 230, Width: 200, Height: 100}); fr.r != want || p.factor != 2 {
+		t.Fatalf("拖右下角 → %+v（%.2f），应 %+v", fr.r, p.factor, want)
+	}
+	if p.rs.edge != "" {
+		t.Fatalf("松手后应结束拖动：%q", p.rs.edge)
+	}
+}
+
 // 拖边框缩放：等比、对边 / 对角固定，单边拖动时另一轴居中，越界钳在 [minW, maxW]。
 func TestPinResizeRect(t *testing.T) {
 	r := mygo.Rectangle{X: 100, Y: 100, Width: 200, Height: 100}
