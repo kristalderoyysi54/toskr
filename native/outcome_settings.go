@@ -6,7 +6,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"github.com/toskr/native/internal/store"
@@ -32,6 +31,7 @@ var outcomeReasonLabel = map[string]string{
 	"target-not-ready":     "目标不可用",
 	"draft-target-changed": "目标已变化",
 	"target_exited":        "目标已退出",
+	"privacy_incomplete":   "超出隐私扫描上限",
 	"paste_failed":         "粘贴失败",
 	"enter_failed":         "回车失败",
 	"restored":             "完整恢复",
@@ -342,12 +342,8 @@ func (a *app) outcomeDaily(c *ui.Context, k tokens, s settingsTokens, m store.Ou
 // confirmClearOutcomes：清除前确认（同 Tauri ask 对话框）；Dialog.Message 阻塞，放后台。
 func (a *app) confirmClearOutcomes() {
 	go func() {
-		r, err := mygo.Dialog.Message(mygo.MessageOptions{
-			Title:   tr("清除使用统计"),
-			Message: tr("清除使用统计？最近发送记录、卡片、任务和附件不会改变。"),
-			Buttons: []string{tr("清除"), tr("取消")}, DefaultButton: 1,
-		})
-		if err != nil || r.Button != 0 {
+		if !confirmAsk(confirmSpec{icon: "chart-column", danger: true, title: tr("清除使用统计？"),
+			body: tr("最近发送记录、卡片、任务和附件不会改变。"), ok: tr("清除")}) {
 			return
 		}
 		a.panelUpdate(func() { a.clearOutcomes() })

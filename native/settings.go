@@ -888,8 +888,7 @@ func shotHint(st store.Settings) string {
 }
 
 var secretKeyAsk = func(title, msg string) bool { // 测试替换；Dialog.Message 阻塞，调用方在后台 goroutine
-	r, err := mygo.Dialog.Message(mygo.MessageOptions{Title: title, Message: msg, Buttons: []string{tr("删除"), tr("取消")}, DefaultButton: 1})
-	return err == nil && r.Button == 0
+	return confirmAsk(confirmSpec{icon: "key-round", danger: true, title: title, body: msg, ok: tr("删除")})
 }
 
 // confirmRemoveSecretKey 同 Tauri removeKey：先说明会锁住几条秘文，确认后删；默认密钥被删则改用剩下的第一把。

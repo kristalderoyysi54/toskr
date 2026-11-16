@@ -36,7 +36,7 @@ const splitSystem = `你是任务拆解助手。把给出的任务（可能带�
 
 // splitSubtasks：右键「AI 拆解子任务」（同 Tauri splitSubtasks）——拆成检查项追加到任务，可整体撤销。
 func (a *app) splitSubtasks(t store.Task) {
-	cfg := a.aiConfig()
+	cfg := a.aiConfig(tr("AI 拆解子任务"))
 	if cfg.Off {
 		a.aiFailed(ai.ErrDisabled)
 		return
@@ -112,14 +112,19 @@ var aiJSON = func(cfg ai.Config, system, user string, v any) error {
 	return nil
 }
 
-func (a *app) aiConfig() ai.Config {
+// aiConfig：purpose 是这次请求的用途，显示在敏感内容确认框里。
+func (a *app) aiConfig(purpose string) ai.Config {
 	st := a.store.Settings()
-	return ai.Config{Endpoint: st.AIEndpoint, Key: aiKey(), Model: st.AIModel, Off: !st.AIOn()}
+	return ai.Config{Endpoint: st.AIEndpoint, Key: aiKey(), Model: st.AIModel, Off: !st.AIOn(), Purpose: purpose}
 }
 
 func (a *app) aiFailed(err error) {
 	if errors.Is(err, ai.ErrNoKey) {
 		a.showHUD("info", tr("请先在 设置 → AI 中配置密钥"))
+		return
+	}
+	if errors.Is(err, errAIDeclined) {
+		a.showHUD("info", tr(err.Error()))
 		return
 	}
 	if errors.Is(err, ai.ErrDisabled) {
@@ -141,7 +146,7 @@ func (a *app) convertToTask(n store.Note, title string, checklist []string, msg 
 }
 
 func (a *app) noteToTaskAI(n store.Note) {
-	cfg := a.aiConfig()
+	cfg := a.aiConfig(tr("笔记转任务"))
 	a.showHUD("info", tr("AI 正在提炼任务…"))
 	go func() {
 		var r struct {
@@ -164,7 +169,7 @@ func (a *app) noteToTaskAI(n store.Note) {
 }
 
 func (a *app) suggestTitle(n store.Note) {
-	cfg := a.aiConfig()
+	cfg := a.aiConfig(tr("生成标题"))
 	a.showHUD("info", tr("AI 正在起标题…"))
 	go func() {
 		var r struct {

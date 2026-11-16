@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -79,5 +80,46 @@ func TestListModels(t *testing.T) {
 	}
 	if _, err := ListModels(context.Background(), Config{Endpoint: srv.URL}); err != ErrNoKey {
 		t.Fatal(err)
+	}
+}
+
+// 授权钩子：拒绝时一个请求都不发；看到的是截断后的真实内容；流式被拒退回非流式时不重复询问。
+func TestAuthorizeGatesEveryRequest(t *testing.T) {
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["stream"] == true {
+			w.WriteHeader(400)
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer srv.Close()
+	t.Cleanup(func() { Authorize = nil })
+	cfg := Config{Endpoint: strings.Replace(srv.URL, "127.0.0.1", "localhost", 1), Key: "k", Model: "m", Purpose: "润色"}
+	var seen []Request
+	deny := errors.New("denied")
+	Authorize = func(r Request) error { seen = append(seen, r); return deny }
+	if _, err := Rewrite(context.Background(), cfg, "润色", strings.Repeat("字", MaxInput+5)); !errors.Is(err, deny) {
+		t.Fatalf("拒绝应原样返回 %v", err)
+	}
+	if _, err := RewriteStream(context.Background(), cfg, "润色", "x", nil); !errors.Is(err, deny) {
+		t.Fatalf("流式同样受控 %v", err)
+	}
+	if hits != 0 {
+		t.Fatalf("拒绝后不应发请求 hits=%d", hits)
+	}
+	if r := seen[0]; r.Purpose != "润色" || !strings.HasSuffix(r.Endpoint, "/v1/chat/completions") || len([]rune(r.User)) != MaxInput || !strings.HasPrefix(r.System, "润色") {
+		t.Fatalf("钩子应看到截断后的实发内容 %+v", r)
+	}
+	seen = nil
+	Authorize = func(r Request) error { seen = append(seen, r); return nil }
+	if out, err := RewriteStream(context.Background(), cfg, "润色", "x", nil); err != nil || out != "ok" {
+		t.Fatalf("%q %v", out, err)
+	}
+	if len(seen) != 1 || hits != 2 {
+		t.Fatalf("退回非流式不应再次授权 seen=%d hits=%d", len(seen), hits)
 	}
 }

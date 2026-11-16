@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"github.com/toskr/native/internal/ai"
@@ -291,12 +290,9 @@ func (a *app) testAIConnection() {
 // confirmDeleteAIKey：删前确认（同 Tauri removeKey 的 ask 对话框）；Dialog.Message 阻塞，放后台。
 func (a *app) confirmDeleteAIKey() {
 	go func() {
-		r, err := mygo.Dialog.Message(mygo.MessageOptions{
-			Title:   tr("删除 AI 密钥"),
-			Message: tr("删除后 AI 功能会停止，且 Toskr 无法恢复原密钥。确认从 macOS 钥匙串删除吗？"),
-			Buttons: []string{tr("删除"), tr("取消")}, DefaultButton: 1,
-		})
-		if err != nil || r.Button != 0 {
+		if !confirmAsk(confirmSpec{icon: "key-round", danger: true, title: tr("删除 AI 密钥？"),
+			body:  tr("删除后 AI 功能会停止，且 Toskr 无法恢复原密钥。"),
+			facts: []confirmFact{{label: tr("位置"), value: tr("macOS 钥匙串")}}, ok: tr("从钥匙串删除")}) {
 			return
 		}
 		a.panelUpdate(func() { a.deleteAIKey() })

@@ -126,7 +126,7 @@ func (a *app) startAIReview(n store.Note, act aiAction) {
 		return
 	}
 	st := a.store.Settings()
-	cfg := ai.Config{Endpoint: st.AIEndpoint, Key: aiKey(), Model: st.AIModel, Off: !st.AIOn()}
+	cfg := ai.Config{Endpoint: st.AIEndpoint, Key: aiKey(), Model: st.AIModel, Off: !st.AIOn(), Purpose: tr(act.label)}
 	switch {
 	case a.detail.id == n.ID && a.detail.edit: // 正在编辑这张卡：先保存草稿，按保存后的内容改写
 		if !a.commitDetailEdit(n) {
@@ -411,7 +411,7 @@ func (a *app) runAIOnSelection(n store.Note, lo, hi int, sel string, act aiActio
 		return
 	}
 	st := a.store.Settings()
-	cfg := ai.Config{Endpoint: st.AIEndpoint, Key: aiKey(), Model: st.AIModel, Off: !st.AIOn()}
+	cfg := ai.Config{Endpoint: st.AIEndpoint, Key: aiKey(), Model: st.AIModel, Off: !st.AIOn(), Purpose: tr(act.label)}
 	ctx, cancel := context.WithCancel(context.Background())
 	a.aiBusy, a.aiCancel = n.ID, cancel
 	a.showHUD("info", tr("AI 处理选中内容…"))

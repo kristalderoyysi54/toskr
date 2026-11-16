@@ -135,7 +135,7 @@ func (a *app) parseTaskDraftAI(text string) {
 	if text == "" || a.taskAIBusy {
 		return
 	}
-	cfg := a.aiConfig()
+	cfg := a.aiConfig(tr("解析任务"))
 	fallback := func(err error) {
 		a.store.AddTask(store.Task{Text: text})
 		a.aiFailed(err)

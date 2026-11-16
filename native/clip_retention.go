@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"github.com/toskr/native/internal/store"
@@ -67,8 +66,7 @@ func formatRetention(days int) string {
 }
 
 var retentionAsk = func(title, msg string) bool { // 测试替换；Dialog.Message 阻塞，调用方在后台 goroutine
-	r, err := mygo.Dialog.Message(mygo.MessageOptions{Title: title, Message: msg, Buttons: []string{tr("调整并清理"), tr("取消")}, DefaultButton: 1})
-	return err == nil && r.Button == 0
+	return confirmAsk(confirmSpec{icon: "clock", danger: true, title: title, body: msg, ok: tr("调整并清理")})
 }
 
 func (a *app) clipSourceMenu(row ui.Element, label string, band []store.Note) {

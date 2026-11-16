@@ -4,14 +4,12 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"image/png"
 	"net/url"
 	"os/exec"
 	"strings"
 	"time"
 
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"github.com/toskr/native/internal/diag"
@@ -79,12 +77,9 @@ func (a *app) fetchLink(n store.Note, manual bool) {
 func (a *app) confirmFetchLink(n store.Note) {
 	origin := linkmeta.Origin(n.URL)
 	go func() { // Dialog.Message 阻塞到用户选择，不能卡在渲染帧里
-		r, err := mygo.Dialog.Message(mygo.MessageOptions{
-			Title:   tr("确认获取链接预览"),
-			Message: fmt.Sprintf(tr("本次将访问 %s 获取标题和图标，允许此地址访问内网。不会发送应用中的其他内容；授权不覆盖其他内网地址的重定向。"), origin),
-			Buttons: []string{tr("仅本次允许"), tr("取消")}, DefaultButton: 0,
-		})
-		if err == nil && r.Button == 0 {
+		if confirmAsk(confirmSpec{icon: "link-2", title: tr("获取链接预览？"),
+			body:  tr("访问该地址获取标题和图标，本次允许它访问内网。"),
+			facts: []confirmFact{{label: tr("地址"), value: origin}}, note: tr("不会发送应用中的其他内容；授权不覆盖其他内网地址的重定向。"), ok: tr("仅本次允许")}) {
 			a.fetchLink(n, true)
 		}
 	}()

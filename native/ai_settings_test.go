@@ -83,10 +83,10 @@ func TestAIEnabledGate(t *testing.T) {
 	st := a.store.Settings()
 	st.AIEnabled = &off
 	_ = a.store.SetSettings(st)
-	if !a.aiConfig().Off {
+	if !a.aiConfig("").Off {
 		t.Fatal("关掉后 aiConfig 应带 Off")
 	}
-	if _, err := ai.Rewrite(context.Background(), a.aiConfig(), "", "x"); !errors.Is(err, ai.ErrDisabled) {
+	if _, err := ai.Rewrite(context.Background(), a.aiConfig(""), "", "x"); !errors.Is(err, ai.ErrDisabled) {
 		t.Fatal(err)
 	}
 }

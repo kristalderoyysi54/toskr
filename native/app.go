@@ -904,6 +904,11 @@ func (a *app) sendT(notes []store.Note, tmpl string) {
 	notes = a.aliasNotes(notes) // 词典化名先于隐私检查：被化名的实体不会再触发正则命中
 	var fs []core.Finding
 	rules := a.scanRules()
+	if !rules.Off && slices.ContainsFunc(notes, func(n store.Note) bool { return !core.ScanComplete(n.Text) }) { // 扫不全 ≠ 干净（同 Tauri PrivacyIncomplete）
+		a.outcomeBlocked("privacy_incomplete")
+		a.showHUD("warn", tr(core.ErrPrivacyIncomplete.Error()))
+		return
+	}
 	for _, n := range notes {
 		fs = append(fs, core.Scan(n.Text, rules)...)
 	}
@@ -1022,7 +1027,7 @@ func (a *app) deliver(notes []store.Note, enter bool, tmpl string) {
 	onClip := func(result string) { a.onMain(func() { a.outcomeClipboard(out, result) }) }
 	a.beginBand(ids)
 	go func() {
-		check, err := core.DeliverWith(a.sys, target, core.Payload{Steps: steps}, core.Options{Enter: enter, StartedMs: a.targetStarted, OnClipboard: onClip, StepGap: a.store.Settings().PasteStep(), Trace: diag.Push})
+		check, err := core.DeliverWith(a.sys, target, core.Payload{Steps: steps}, core.Options{Enter: enter, Firewall: !a.scanRules().Off, StartedMs: a.targetStarted, OnClipboard: onClip, StepGap: a.store.Settings().PasteStep(), Trace: diag.Push})
 		diag.Push("发送: %d 条 → %s 方案=%s 格式=%s enter=%v check=%s err=%v", len(notes), target.BundleID, r.Profile.ID, mode, enter, check, err)
 		a.panelUpdate(func() { // 无窗口的测试里排队，由 drainUpdates 执行（多目标发送要靠这段收尾接着发下一个）
 			prev := a.out // 期间可能已开始准备下一次发送

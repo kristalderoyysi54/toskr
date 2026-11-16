@@ -20,18 +20,15 @@ const streamIdle = 60 * time.Second
 // 服务端不支持流式时自动退回：返回普通 JSON 就按整段处理；带 stream 参数被 400 / 404 / 422 拒绝就改发非流式请求。
 // 返回完整结果（已去首尾空白）。
 func RewriteStream(ctx context.Context, cfg Config, instruction, text string, onDelta func(string)) (string, error) {
-	endpoint, err := cfg.validate()
+	endpoint, system, user, err := prepare(cfg, instruction, text)
 	if err != nil {
 		return "", err
-	}
-	if r := []rune(text); len(r) > MaxInput {
-		text = string(r[:MaxInput])
 	}
 	body, _ := json.Marshal(map[string]any{
 		"model": cfg.Model,
 		"messages": []message{
-			{"system", instruction + "\n只输出结果本身，不要解释、不要加引号。"},
-			{"user", text},
+			{"system", system},
+			{"user", user},
 		},
 		"temperature": 0.3,
 		"stream":      true,
@@ -53,7 +50,7 @@ func RewriteStream(ctx context.Context, cfg Config, instruction, text string, on
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		switch resp.StatusCode {
 		case http.StatusBadRequest, http.StatusNotFound, http.StatusUnprocessableEntity:
-			if out, err2 := Rewrite(ctx, cfg, instruction, text); err2 == nil { // 可能只是不认 stream 参数
+			if out, err2 := post(ctx, cfg, endpoint, system, user); err2 == nil { // 可能只是不认 stream 参数（已授权的同一份内容，不再弹确认）
 				if onDelta != nil {
 					onDelta(out)
 				}

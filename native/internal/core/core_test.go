@@ -1,6 +1,7 @@
 package core
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -229,4 +230,24 @@ func TestClipWatcherIgnoreSwitches(t *testing.T) {
 	if _, ok := w.Tick(); ok {
 		t.Fatal("瞬时内容仍忽略")
 	}
+}
+
+// 隐私检查开着时超出扫描上限的文字不能粘贴（同 Tauri PrivacyIncomplete）；两段各自不超、合计超也拦；关掉隐私检查照常发。
+func TestDeliverBlocksUnscannableText(t *testing.T) {
+	half := strings.Repeat("x", maxScanBytes/2+1)
+	if ScanComplete(half+half) || !ScanComplete(half) {
+		t.Fatal("ScanComplete 边界不对")
+	}
+	f := &fake{items: original(), activateOK: true, front: macos.FrontApp{PID: 1}}
+	p := Payload{Steps: []Step{{Text: half}, {Text: half}}}
+	if _, err := DeliverWith(f, macos.FrontApp{PID: 42}, p, Options{Firewall: true}); err != ErrPrivacyIncomplete {
+		t.Fatalf("应中止 %v", err)
+	}
+	if len(f.pasted) != 0 || len(f.activated) != 0 {
+		t.Fatalf("中止前不应激活目标或粘贴 %v %v", f.activated, len(f.pasted))
+	}
+	if _, err := DeliverWith(f, macos.FrontApp{PID: 42}, Payload{Text: half}, Options{Firewall: true}); err != nil {
+		t.Fatalf("未超限照常发 %v", err)
+	}
+	WaitIdle()
 }

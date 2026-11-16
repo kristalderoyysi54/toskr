@@ -19,8 +19,18 @@ type Config struct {
 	Endpoint string // Base URL，如 https://api.deepseek.com（带不带 /v1 都行）
 	Key      string
 	Model    string
-	Off      bool // 设置里关了「AI 智能」：所有 AI 入口都不发请求（连接测试除外）
+	Off      bool   // 设置里关了「AI 智能」：所有 AI 入口都不发请求（连接测试除外）
+	Purpose  string // 用途（授权确认框里显示，如「润色」「图内翻译」）
 }
+
+// Request 是即将发出的一次对话请求：截断后、真正上线的内容。
+type Request struct {
+	Purpose, Endpoint, System, User string
+}
+
+// Authorize 在每次对话请求发出前调用（同 Tauri authorize_payload）：返回错误即不发送。
+// 应用启动时注入隐私检查与一次性确认；nil 只出现在本包测试里。
+var Authorize func(Request) error
 
 var (
 	ErrNoKey       = errors.New("未配置 AI 密钥（设置 → AI）")
@@ -114,20 +124,39 @@ func Test(ctx context.Context, cfg Config) error {
 	return err
 }
 
-// Rewrite 按 instruction 改写 text，返回模型输出。
-func Rewrite(ctx context.Context, cfg Config, instruction, text string) (string, error) {
-	endpoint, err := cfg.validate()
-	if err != nil {
-		return "", err
+// prepare：校验配置、截断正文、拼系统提示词，并过授权钩子。返回接口地址与实际要发的两段内容。
+func prepare(cfg Config, instruction, text string) (endpoint, system, user string, err error) {
+	if endpoint, err = cfg.validate(); err != nil {
+		return "", "", "", err
 	}
 	if r := []rune(text); len(r) > MaxInput {
 		text = string(r[:MaxInput])
 	}
+	system = instruction + "\n只输出结果本身，不要解释、不要加引号。"
+	if Authorize != nil {
+		if err = Authorize(Request{Purpose: cfg.Purpose, Endpoint: endpoint, System: system, User: text}); err != nil {
+			return "", "", "", err
+		}
+	}
+	return endpoint, system, text, nil
+}
+
+// Rewrite 按 instruction 改写 text，返回模型输出。
+func Rewrite(ctx context.Context, cfg Config, instruction, text string) (string, error) {
+	endpoint, system, user, err := prepare(cfg, instruction, text)
+	if err != nil {
+		return "", err
+	}
+	return post(ctx, cfg, endpoint, system, user)
+}
+
+// post 发一次非流式请求（内容已过授权）。
+func post(ctx context.Context, cfg Config, endpoint, system, user string) (string, error) {
 	body, _ := json.Marshal(map[string]any{
 		"model": cfg.Model,
 		"messages": []message{
-			{"system", instruction + "\n只输出结果本身，不要解释、不要加引号。"},
-			{"user", text},
+			{"system", system},
+			{"user", user},
 		},
 		"temperature": 0.3,
 	})

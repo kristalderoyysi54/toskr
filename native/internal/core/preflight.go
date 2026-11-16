@@ -42,7 +42,7 @@ type Rules struct {
 func Preflight(text string) []Finding { return Scan(text, Rules{}) }
 
 // Scan 在发送前扫描文本（同 Tauri scan_sensitive_text_with_rules + 前端按类别过滤）：高风险与自定义字段始终检测，
-// 提示级类别按设置开关；关掉隐私检查（Off）或文本超过 2MB 时不报。
+// 提示级类别按设置开关；关掉隐私检查（Off）或文本超过 2MB 时不报——超限不等于干净，调用方必须先用 ScanComplete 拦下。
 func Scan(text string, r Rules) []Finding {
 	if r.Off || len(text) > maxScanBytes {
 		return nil
@@ -73,6 +73,10 @@ func Scan(text string, r Rules) []Finding {
 	}
 	return out
 }
+
+// ScanComplete：text 能被完整扫描（同 Tauri scan.complete）。为 false 时 Scan 的空结果不代表没有敏感内容，
+// 隐私检查开着就必须中止外发（同 Tauri DeliveryReasonCode::PrivacyIncomplete）。
+func ScanComplete(text string) bool { return len(text) <= maxScanBytes }
 
 var (
 	fieldNameRe = regexp.MustCompile(`^[A-Za-z0-9\p{Han}_.-]+$`)

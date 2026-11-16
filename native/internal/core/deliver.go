@@ -15,6 +15,8 @@ var (
 	ErrTargetChanged = errors.New("目标应用已重启（进程身份变化），已中止发送：请切回目标后重新唤出面板")
 	ErrEmpty         = errors.New("没有可发送的内容")
 	ErrFocusDrift    = errors.New("发送中途目标应用失去前台，已停止后续粘贴（未标记完成）")
+	// ErrPrivacyIncomplete 同 Tauri PrivacyIncomplete：隐私检查开着，但文本超出本地扫描上限，无法在发送前复核。
+	ErrPrivacyIncomplete = errors.New("发送中止：文本超出本地隐私扫描上限，无法在发送前复核")
 )
 
 const (
@@ -66,6 +68,7 @@ func (s Step) item() macos.Item {
 // Options 是发送方案。
 type Options struct {
 	Enter     bool  // 粘贴后补回车
+	Firewall  bool  // 隐私检查开着：实发文字超出扫描上限即中止（同 Tauri firewall_text_enabled，最后一道闸）
 	StartedMs int64 // 目标进程启动时刻（面板唤出时锁定）；非 0 时发送前核对，防 pid 复用 / 目标重启
 	// OnClipboard 报告剪贴板还原结果（同 Tauri ClipboardOutcome）：restored | skippedUserChanged | nothingToRestore。
 	// 粘贴成功时在后台还原后才回调（另一个 goroutine）。
@@ -121,6 +124,16 @@ func DeliverWith(sys System, target macos.FrontApp, p Payload, opt Options) (Che
 	if len(steps) == 0 {
 		opt.clip("nothingToRestore")
 		return CheckUnknown, ErrEmpty
+	}
+	if opt.Firewall { // 按实发总量算：套模板 / 多卡拼接后可能超限，而每张卡单独扫描时都没超
+		total := 0
+		for _, s := range steps {
+			total += len(s.Text)
+		}
+		if total > maxScanBytes {
+			opt.clip("nothingToRestore")
+			return CheckUnknown, ErrPrivacyIncomplete
+		}
 	}
 	if id, ok := sys.(identity); ok && opt.StartedMs != 0 {
 		if started := id.ProcessStartMs(target.PID); started == 0 { // 进程已不在（同 Tauri TargetReason::TargetExited）

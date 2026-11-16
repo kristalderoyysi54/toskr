@@ -56,6 +56,8 @@ func outcomeReason(err error) (typ, reason string) {
 		return store.OutBlocked, "target_exited"
 	case errors.Is(err, core.ErrTargetChanged):
 		return store.OutBlocked, "draft-target-changed"
+	case errors.Is(err, core.ErrPrivacyIncomplete):
+		return store.OutBlocked, "privacy_incomplete"
 	}
 	return store.OutFailed, "paste_failed"
 }

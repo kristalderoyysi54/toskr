@@ -106,7 +106,7 @@ func (a *app) runVerifyAI() {
 	if !ok || a.verify.report == nil || a.verify.aiBusy {
 		return
 	}
-	cfg := a.aiConfig()
+	cfg := a.aiConfig(tr("检查回复"))
 	ctx, _ := a.verifyContext(n)
 	ph := map[string]string{}
 	src, k1 := a.redactForAI(ctx.SourceText, ph)

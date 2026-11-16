@@ -102,7 +102,7 @@ func (a *app) snipGenerate() {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	u.busy, u.cancel = true, cancel
-	cfg, instr := a.aiConfig(), u.instr
+	cfg, instr := a.aiConfig(tr("模板助手")), u.instr
 	go func() {
 		label, text, err := generateTemplate(ctx, cfg, instr, cur)
 		diag.Push("AI 模板助手: err=%v", err != nil)
