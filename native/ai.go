@@ -87,7 +87,7 @@ func (a *app) runAI(n store.Note, act aiAction) {
 		return
 	}
 	st := a.store.Settings()
-	cfg := ai.Config{Endpoint: st.AIEndpoint, Key: aiKey(), Model: st.AIModel, Off: !st.AIOn(), Purpose: tr(act.label)}
+	cfg := ai.Config{Endpoint: st.AIEndpoint, Key: aiKey(), Model: st.AIModel, Off: !st.AIOn(), Purpose: tr(act.label), Subject: aiSubject(n.Title, n.Text)}
 	a.aiBusy = n.ID
 	ctx, cancel := context.WithCancel(context.Background())
 	a.aiCancel = cancel

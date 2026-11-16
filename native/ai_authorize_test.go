@@ -73,3 +73,29 @@ func TestSendBlocksUnscannableNote(t *testing.T) {
 	a.send([]store.Note{big})
 	waitFor(t, func() bool { tt.Frame(); return len(sys.sent()) > 0 })
 }
+
+// 确认窗「内容」行：有自定义标题用标题，否则首个非空行；敏感片段打码、长文截断；没有内容就不显示这一行。
+func TestAISubjectInConfirm(t *testing.T) {
+	orig := aiAsk
+	t.Cleanup(func() { aiAsk = orig })
+	token := strings.Join([]string{"gh", "p_", strings.Repeat("a1B2", 9)}, "")
+	if got := aiSubject("周报草稿", "第一行\n"+token); got != "周报草稿" {
+		t.Fatalf("有标题用标题 %q", got)
+	}
+	if got := aiSubject("", "\n  令牌 "+token+" 结尾\n第二行"); strings.Contains(got, token) || got != "令牌 •••• 结尾" {
+		t.Fatalf("首行打码 %q", got)
+	}
+	if got := aiSubject("", strings.Repeat("字", 50)); got != strings.Repeat("字", 40)+"…" {
+		t.Fatalf("截到 40 字 %q", got)
+	}
+	var spec confirmSpec
+	aiAsk = func(s confirmSpec) bool { spec = s; return false }
+	_ = authorizeAI(ai.Request{Purpose: "润色", Subject: "周报草稿", Endpoint: "https://api.example.com/v1/chat/completions", User: "令牌 " + token})
+	if spec.facts[0].label != "内容" || spec.facts[0].value != "周报草稿" {
+		t.Fatalf("首行应是内容 %+v", spec.facts)
+	}
+	_ = authorizeAI(ai.Request{Purpose: "润色", Endpoint: "https://api.example.com/v1/chat/completions", User: "令牌 " + token})
+	if spec.facts[0].label == "内容" {
+		t.Fatalf("没有内容不显示这一行 %+v", spec.facts)
+	}
+}

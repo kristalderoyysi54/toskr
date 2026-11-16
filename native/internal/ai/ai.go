@@ -21,11 +21,12 @@ type Config struct {
 	Model    string
 	Off      bool   // 设置里关了「AI 智能」：所有 AI 入口都不发请求（连接测试除外）
 	Purpose  string // 用途（授权确认框里显示，如「润色」「图内翻译」）
+	Subject  string // 处理的是哪条内容（卡片标题 / 首行，已打码）：并发多个请求时分清确认的是哪张
 }
 
 // Request 是即将发出的一次对话请求：截断后、真正上线的内容。
 type Request struct {
-	Purpose, Endpoint, System, User string
+	Purpose, Subject, Endpoint, System, User string
 }
 
 // Authorize 在每次对话请求发出前调用（同 Tauri authorize_payload）：返回错误即不发送。
@@ -134,7 +135,7 @@ func prepare(cfg Config, instruction, text string) (endpoint, system, user strin
 	}
 	system = instruction + "\n只输出结果本身，不要解释、不要加引号。"
 	if Authorize != nil {
-		if err = Authorize(Request{Purpose: cfg.Purpose, Endpoint: endpoint, System: system, User: text}); err != nil {
+		if err = Authorize(Request{Purpose: cfg.Purpose, Subject: cfg.Subject, Endpoint: endpoint, System: system, User: text}); err != nil {
 			return "", "", "", err
 		}
 	}

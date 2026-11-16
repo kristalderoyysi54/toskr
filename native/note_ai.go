@@ -37,6 +37,7 @@ const splitSystem = `你是任务拆解助手。把给出的任务（可能带�
 // splitSubtasks：右键「AI 拆解子任务」（同 Tauri splitSubtasks）——拆成检查项追加到任务，可整体撤销。
 func (a *app) splitSubtasks(t store.Task) {
 	cfg := a.aiConfig(tr("AI 拆解子任务"))
+	cfg.Subject = aiSubject("", t.Text)
 	if cfg.Off {
 		a.aiFailed(ai.ErrDisabled)
 		return
@@ -147,6 +148,7 @@ func (a *app) convertToTask(n store.Note, title string, checklist []string, msg 
 
 func (a *app) noteToTaskAI(n store.Note) {
 	cfg := a.aiConfig(tr("笔记转任务"))
+	cfg.Subject = aiSubject(n.Title, n.Text)
 	a.showHUD("info", tr("AI 正在提炼任务…"))
 	go func() {
 		var r struct {
@@ -170,6 +172,7 @@ func (a *app) noteToTaskAI(n store.Note) {
 
 func (a *app) suggestTitle(n store.Note) {
 	cfg := a.aiConfig(tr("生成标题"))
+	cfg.Subject = aiSubject(n.Title, n.Text)
 	a.showHUD("info", tr("AI 正在起标题…"))
 	go func() {
 		var r struct {

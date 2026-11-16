@@ -237,7 +237,7 @@ func init() {
 		"不会发送应用中的其他内容；授权不覆盖其他内网地址的重定向。": "Nothing else from the app is sent. Redirects to other local addresses aren't covered.",
 		"删除剪贴板历史记录？": "Delete clipboard history?", "已固定（★）的记录不会被删除。": "Pinned (★) items are kept.",
 		"删除后可在主面板的提示气泡中撤销一次。": "You can undo once from the bubble on the main panel.",
-		"用途": "Purpose", "AI 服务": "AI service", "原文包含": "Contains",
+		"用途": "Purpose", "AI 服务": "AI service", "原文包含": "Contains", "内容": "Content", "截图选区": "Screenshot selection",
 	} {
 		if _, ok := en[k]; !ok {
 			en[k] = v

@@ -107,6 +107,7 @@ func (a *app) runVerifyAI() {
 		return
 	}
 	cfg := a.aiConfig(tr("检查回复"))
+	cfg.Subject = aiSubject(n.Title, n.Text)
 	ctx, _ := a.verifyContext(n)
 	ph := map[string]string{}
 	src, k1 := a.redactForAI(ctx.SourceText, ph)

@@ -136,6 +136,7 @@ func (a *app) parseTaskDraftAI(text string) {
 		return
 	}
 	cfg := a.aiConfig(tr("解析任务"))
+	cfg.Subject = aiSubject("", text)
 	fallback := func(err error) {
 		a.store.AddTask(store.Task{Text: text})
 		a.aiFailed(err)

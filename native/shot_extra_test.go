@@ -196,9 +196,9 @@ func TestPinResizeRect(t *testing.T) {
 		{"se", 100, 50, mygo.Rectangle{X: 100, Y: 100, Width: 300, Height: 150}}, // 沿对角线
 		{"se", 100, 0, mygo.Rectangle{X: 100, Y: 100, Width: 280, Height: 140}},  // 投影到对角线
 		{"nw", -100, -50, mygo.Rectangle{X: 0, Y: 50, Width: 300, Height: 150}},  // 右下角不动
-		{"e", 100, 0, mygo.Rectangle{X: 100, Y: 75, Width: 300, Height: 150}},   // 竖直居中
-		{"n", 0, -50, mygo.Rectangle{X: 50, Y: 50, Width: 300, Height: 150}},    // 下边不动、水平居中
-		{"w", 190, 0, mygo.Rectangle{X: 260, Y: 140, Width: 40, Height: 20}},    // 钳到最小宽 40
+		{"e", 100, 0, mygo.Rectangle{X: 100, Y: 75, Width: 300, Height: 150}},    // 竖直居中
+		{"n", 0, -50, mygo.Rectangle{X: 50, Y: 50, Width: 300, Height: 150}},     // 下边不动、水平居中
+		{"w", 190, 0, mygo.Rectangle{X: 260, Y: 140, Width: 40, Height: 20}},     // 钳到最小宽 40
 		{"se", 2000, 0, mygo.Rectangle{X: 100, Y: 100, Width: 800, Height: 400}}, // 钳到最大宽 800
 	} {
 		if got := pinResizeRect(tc.edge, r, tc.dx, tc.dy, 2, 40, 800); got != tc.want {

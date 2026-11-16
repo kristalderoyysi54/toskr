@@ -116,7 +116,7 @@ func TestConfirmShots(t *testing.T) {
 		t.Skip("set TOSKR_SHOT_DIR")
 	}
 	ai := confirmSpec{icon: "shield-alert", danger: true, title: "发给 AI 的原文含敏感内容",
-		facts: []confirmFact{{label: "用途", value: "润色"}, {label: "AI 服务", value: "api.deepseek.com"}, {label: "原文包含", tags: []string{"密钥/凭据 1 处", "邮箱 2 处", "手机号 1 处"}}},
+		facts: []confirmFact{{label: "内容", value: "周报：本周完成支付对账脚本改造，令牌 •••• 已换新"}, {label: "用途", value: "润色"}, {label: "AI 服务", value: "api.deepseek.com"}, {label: "原文包含", tags: []string{"密钥/凭据 1 处", "邮箱 2 处", "手机号 1 处"}}},
 		note:  "此前对其他应用「保留原文」的决定不适用于 AI 请求。", ok: "仅本次发送原文"}
 	link := confirmSpec{icon: "link-2", title: "获取链接预览？", body: "访问该地址获取标题和图标，本次允许它访问内网。",
 		facts: []confirmFact{{label: "地址", value: "http://intranet.example.internal:8080/very/long/path/to/a/page"}}, note: "不会发送应用中的其他内容；授权不覆盖其他内网地址的重定向。", ok: "仅本次允许"}

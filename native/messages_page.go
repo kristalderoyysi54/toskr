@@ -543,6 +543,7 @@ func (a *app) draftReply(m store.Message) {
 	}
 	a.msgDraftBusy = m.ID
 	cfg, en := a.aiConfig(tr("草拟回复")), langEN.Load()
+	cfg.Subject = aiSubject(m.ConversationName, m.Text)
 	sys := msgDraftSystem
 	if en {
 		sys = msgDraftSystemEn

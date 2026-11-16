@@ -260,7 +260,7 @@ func (a *app) shotTranslate(c *ui.Context, d *shotDisplay) {
 	e.translateGen++
 	gen, sel := e.translateGen, *e.sel
 	st := a.store.Settings()
-	cfg := ai.Config{Endpoint: st.AIEndpoint, Model: st.AIModel, Off: !st.AIOn(), Purpose: tr("图内翻译")}
+	cfg := ai.Config{Endpoint: st.AIEndpoint, Model: st.AIModel, Off: !st.AIOn(), Purpose: tr("图内翻译"), Subject: tr("截图选区")}
 	go func() {
 		job := &shotTranslateJob{pr: pr, sel: sel}
 		cfg.Key = aiKey()

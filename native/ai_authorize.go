@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sort"
+	"strings"
 
 	"github.com/toskr/native/internal/ai"
 	"github.com/toskr/native/internal/core"
@@ -56,13 +58,41 @@ func authorizeAI(r ai.Request) error {
 	}
 	spec := confirmSpec{
 		icon: "shield-alert", danger: true, title: tr("发给 AI 的原文含敏感内容"),
-		facts: []confirmFact{{label: tr("用途"), value: purpose}, {label: tr("AI 服务"), value: endpointHost(r.Endpoint)}, {label: tr("原文包含"), tags: summary}},
+		facts: []confirmFact{{label: tr("内容"), value: r.Subject}, {label: tr("用途"), value: purpose}, {label: tr("AI 服务"), value: endpointHost(r.Endpoint)}, {label: tr("原文包含"), tags: summary}},
 		note:  tr("此前对其他应用「保留原文」的决定不适用于 AI 请求。"), ok: tr("仅本次发送原文"),
+	}
+	if r.Subject == "" {
+		spec.facts = spec.facts[1:]
 	}
 	if !aiAsk(spec) {
 		return errAIDeclined
 	}
 	return nil
+}
+
+// aiSubject：确认窗里「内容」一行——自定义标题，否则首个非空行；敏感片段打码、截到 40 字。只在本机显示，不外发。
+func aiSubject(title, text string) string {
+	s := strings.TrimSpace(title)
+	if s == "" {
+		s = firstLine(text)
+	}
+	var custom []string
+	if liveApp != nil {
+		custom = liveApp.store.Settings().FirewallCustomFields
+	}
+	fs := core.Scan(s, core.Rules{CustomFields: custom})
+	sort.Slice(fs, func(i, j int) bool { return fs[i].Start > fs[j].Start })
+	end := len(s)
+	for _, f := range fs { // 从后往前替换，重叠的跳过
+		if f.End > end || f.Start < 0 || f.Start >= f.End {
+			continue
+		}
+		s, end = s[:f.Start]+"••••"+s[f.End:], f.Start
+	}
+	if r := []rune(s); len(r) > 40 {
+		s = string(r[:40]) + "…"
+	}
+	return s
 }
 
 // endpointHost：确认框里只写 AI 服务的主机名（完整接口路径长、换行难读）；解析失败原样返回。
