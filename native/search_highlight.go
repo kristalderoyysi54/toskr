@@ -39,7 +39,27 @@ func splitHighlight(s, q string) []hlSeg {
 }
 
 // highlightText：卡面正文；有搜索词时命中处加琥珀底。
+// cardPreviewRunes：列表卡片预览最多交给排版的字数。mygo 排版会测量整段文字（MaxLines 只截显示），
+// 2MB 的文字卡单帧要几分钟、面板卡死；预览最多四十来行，4000 字足够填满。
+const cardPreviewRunes = 4000
+
+// previewCap：截到前 cardPreviewRunes 个字（按字符边界）。
+func previewCap(s string) string {
+	if len(s) <= cardPreviewRunes {
+		return s
+	}
+	n := 0
+	for i := range s {
+		if n == cardPreviewRunes {
+			return s[:i]
+		}
+		n++
+	}
+	return s
+}
+
 func highlightText(c *ui.Context, k tokens, s, q string, size, lh float32, col ui.Color) ui.Element {
+	s = previewCap(s)
 	segs := splitHighlight(s, q)
 	if len(segs) == 1 && !segs[0].hit {
 		return text(c, s, size, lh, 400, col)

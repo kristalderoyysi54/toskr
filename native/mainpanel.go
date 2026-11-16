@@ -926,7 +926,7 @@ func (a *app) compactCard(c *ui.Context, k tokens, n store.Note, hovered, active
 		if !(n.Kind == "link" && a.favicon(n.LinkIcon) != nil) {
 			a.sourceIcon(c, n, 20)
 		}
-		line := strings.Join(strings.Fields(n.Text), " ")
+		line := strings.Join(strings.Fields(previewCap(n.Text)), " ")
 		if n.Blur {
 			line = ""
 		}

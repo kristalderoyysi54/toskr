@@ -292,10 +292,13 @@ func clipCardH(layout string) float32 {
 }
 
 // firstLine：首个非空行（浓缩卡摘要）。
+// 逐行找、不整段 Split（大卡每帧都会调）；结果截到预览上限。
 func firstLine(s string) string {
-	for _, l := range strings.Split(s, "\n") {
+	for s != "" {
+		var l string
+		l, s, _ = strings.Cut(s, "\n")
 		if l = strings.TrimSpace(l); l != "" {
-			return l
+			return previewCap(l)
 		}
 	}
 	return ""

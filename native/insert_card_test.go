@@ -203,3 +203,35 @@ func TestCardDragPreview(t *testing.T) {
 		t.Fatalf("多张拖出为编号列表 %q", cardDragText([]store.Note{{Text: "一"}, {Text: "二"}}))
 	}
 }
+
+// 详情窗固定（📌）且在阅读态：是常驻参考窗，面板里发剪贴卡照常外发到目标光标处，不进这张卡；进编辑后才添加进卡。
+func TestPinnedReadingDetailSendsExternally(t *testing.T) {
+	orig := detailVisible
+	t.Cleanup(func() { detailVisible = orig })
+	detailVisible = func(*app) bool { return true }
+	a, _ := testApp(t)
+	a.sys = &recSys{}
+	target, _, _ := a.store.Add(store.Note{Section: store.SectionInbox, Text: "目标正文"})
+	clip, _, _ := a.store.Add(store.Note{Section: store.SectionClipboard, Text: "剪贴内容"})
+	img := imageNote(t, a)
+	_ = a.store.MoveToAt(img.ID, store.SectionClipboard, 0)
+	img, _ = a.store.Note(img.ID)
+	a.detail = detailState{id: target.ID, pickAnchor: -1, pickEnd: -1, editSel: [2]int{-1, -1}, pinned: true}
+	a.detailText = target.Text
+	notes := []store.Note{clip, img}
+	if a.insertsIntoOpenCard(notes) {
+		t.Fatal("固定 + 阅读态不应进卡")
+	}
+	a.sendFromList(notes)
+	if got, _ := a.store.Note(target.ID); got.Text != "目标正文" || got.ImageFile != "" || len(got.Attachments) != 0 {
+		t.Fatalf("卡片不应被改动 %+v", got)
+	}
+	a.enterDetailEdit(target)
+	if !a.insertsIntoOpenCard(notes) {
+		t.Fatal("固定但在编辑中：仍添加到光标处")
+	}
+	a.detail.edit, a.detail.pinned = false, false
+	if !a.insertsIntoOpenCard(notes) {
+		t.Fatal("未固定的阅读态保持原行为：添加进卡")
+	}
+}

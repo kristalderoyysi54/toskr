@@ -142,3 +142,37 @@ func TestKeyboardDragReorderTasks(t *testing.T) {
 		t.Fatalf("Esc 回原位 %v，应为 %v", got, start)
 	}
 }
+
+// 把手聚焦后切到剪贴页 / 开搜索：把手不再渲染，空格不能再被「拾起」一张看不见的卡吞掉（应回到卡片预览）。
+func TestStaleGripDoesNotSwallowSpace(t *testing.T) {
+	for _, sc := range []string{"clip", "search"} {
+		t.Run(sc, func(t *testing.T) {
+			a, tt := testApp(t, "甲卡", "乙卡")
+			_, _, _ = a.store.Add(store.Note{Section: store.SectionClipboard, Text: "剪贴一"})
+			a.reload()
+			tt.Frame()
+			for range 30 {
+				if a.gripFocus != "" {
+					break
+				}
+				tt.Key(0, ui.KeyTab)
+				tt.Frame()
+			}
+			if a.gripFocus == "" {
+				t.Fatal("Tab 应能聚焦把手")
+			}
+			if sc == "clip" {
+				a.switchPage(pageClip)
+			} else {
+				a.query = "卡"
+			}
+			a.reload()
+			tt.Frame()
+			tt.Key(0, ui.KeySpace)
+			tt.Frame()
+			if a.kbd.id != "" || a.gripFocus != "" {
+				t.Fatalf("残留把手焦点吞掉了空格 kbd=%q grip=%q", a.kbd.id, a.gripFocus)
+			}
+		})
+	}
+}

@@ -70,6 +70,7 @@ func (a *app) panelView(c *ui.Context) {
 	}
 	a.panelKeys(c)
 	a.notePanelKeys(c)
+	a.gripFocus = "" // 按键已按上一帧的把手焦点处理完；本帧渲染出且聚焦的把手再写回（切页 / 搜索 / 滚出后不残留，否则空格被「拾起」吞掉）
 	shell := ui.Column(c).Fill()
 	p := a.panelPresence(c, shell)
 	// 底色是内容自绘的半透明膜（Tauri 同样画在 webview 里），随内容一起淡入淡出；系统材质本身不动

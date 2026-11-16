@@ -32,8 +32,9 @@ func (a *app) sendFromList(notes []store.Note) {
 }
 
 // insertsIntoOpenCard：同 Tauri insertClipboardNotesIntoOpenEditor 的入口条件——有可见详情窗、所选全是剪贴卡。
+// 例外：详情窗已固定且在阅读态 = 常驻参考窗，照常外发到目标光标处；进编辑后才添加进卡。
 func (a *app) insertsIntoOpenCard(notes []store.Note) bool {
-	if len(notes) == 0 || a.openCardID() == "" {
+	if len(notes) == 0 || a.openCardID() == "" || a.detail.pinned && !a.detail.edit {
 		return false
 	}
 	for _, n := range notes {

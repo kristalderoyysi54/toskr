@@ -35,9 +35,6 @@ func (a *app) cardGrip(c *ui.Context, k tokens, n store.Note, top float32) {
 		}
 	} else {
 		g.Opacity(0).PassThrough()
-		if a.gripFocus == n.ID {
-			a.gripFocus = ""
-		}
 	}
 }
 
@@ -177,9 +174,6 @@ func (a *app) taskGrip(c *ui.Context, k tokens, t store.Task) {
 		}
 	} else {
 		g.Opacity(0).PassThrough()
-		if a.gripFocus == t.ID {
-			a.gripFocus = ""
-		}
 	}
 }
 
