@@ -267,7 +267,7 @@ func TestHelpers(t *testing.T) {
 	}
 }
 
-// 底部键位提示随状态变化：多选给 ⌘M 合并、聚焦给 d 完成、行内改名给保存 / 取消；☰ 菜单可整行关掉。
+// 底部键位提示随状态变化：多选给 ⌘M 合并、聚焦给 d 完成、行内改名给保存 / 取消；提示行常驻、面板菜单不再提供开关。
 func TestKeyHintsFollowState(t *testing.T) {
 	a, tt := testApp(t, "卡一", "卡二")
 	keys := func() []string {
@@ -303,12 +303,7 @@ func TestKeyHintsFollowState(t *testing.T) {
 	}
 	a.menuOpen = true
 	tt.Frame()
-	if err := tt.Click("底部键位提示"); err != nil {
-		t.Fatalf("%v %v", err, tt.Texts())
-	}
-	tt.Frame()
-	tt.Frame()
-	if !a.store.Settings().KeyHintsOff || tt.HasText("勾选") {
-		t.Fatalf("关闭后不应再有提示行 off=%v %v", a.store.Settings().KeyHintsOff, tt.Texts())
+	if tt.HasText("底部键位提示") {
+		t.Fatalf("面板菜单不应再有键位提示开关 %v", tt.Texts())
 	}
 }

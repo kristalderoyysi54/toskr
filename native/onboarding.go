@@ -321,8 +321,7 @@ func (a *app) rehearsalStep(c *ui.Context, k tokens, o store.OnboardingState, ac
 		label := tr("复制示例文字")
 		if prepared {
 			stepTitle(c, k, tr("收进示例"))
-			ck := a.capKey()
-			flow(c, k, "cap", vi("file-text", "空白文档"), vk("⌘V", "粘贴"), vk("⌘A", "全选"), vk(ck+" "+ck, "连按两次"))
+			flow(c, k, "cap", vi("file-text", "空白文档"), vk("⌘V", "粘贴"), vk("⌘A", "全选"), vk(a.capName(), "连按两次"))
 			label = tr("重新复制示例")
 		} else {
 			stepTitle(c, k, tr("复制示例"))
@@ -716,8 +715,7 @@ func (a *app) lessonCoach(c *ui.Context, k tokens) {
 				ui.Row(c).Children(func() { btn(tr("发送示例"), a.sendLessonSamples) })
 			case p.step == 2:
 				stepTitle(c, k, tr("把 AI 的回复收回来"))
-				ck := a.capKey()
-				flow(c, k, "p2", vi("copy", "复制回复"), vk("⌘V", "粘贴"), vk("⌘A", "全选"), vk(ck+" "+ck, "连按两次"))
+				flow(c, k, "p2", vi("copy", "复制回复"), vk("⌘V", "粘贴"), vk("⌘A", "全选"), vk(a.capName(), "连按两次"))
 				sampleBox(c, k, privacyLessonReply(ph), true)
 				ui.Row(c).Children(func() { btn(tr("复制模拟回复"), a.copyLessonReply) })
 			default:
@@ -746,10 +744,6 @@ func (a *app) tourIllustration(c *ui.Context, k tokens) {
 	if !c.Preferences().ReduceMotion {
 		beat = int(time.Since(tourEpoch).Milliseconds()/tourBeatMs) % tourBeats
 		c.AnimationFrame()
-	}
-	key := map[string]string{"shift": "⇧", "control": "⌃", "option": "⌥"}[a.store.Settings().TriggerModifier]
-	if key == "" {
-		key = "⇧"
 	}
 	p := stok(c).primary
 	fade := func(e ui.Element, id string, on bool) ui.Element {
@@ -797,7 +791,7 @@ func (a *app) tourIllustration(c *ui.Context, k tokens) {
 			win(tr("浏览器"), 150, func() { bar(110); srcLine("src-a", "TypeError: cannot read…"); bar(80) })
 			win(tr("文档"), 150, func() { bar(100); srcLine("src-b", tr("联系人 demo.user@…")); bar(70) })
 		})
-		keycap("kc-cap", key+" "+key, beat == 0)
+		keycap("kc-cap", a.captureKeyLabel()+" ×2", beat == 0)
 		ui.Row(c).Gap(8).AlignItems(ui.Start).Children(func() {
 			win("Toskr", 150, func() {
 				cards := ui.Column(c).Gap(5).Key("tour-cards")
@@ -852,9 +846,8 @@ func (a *app) welcomeTour(c *ui.Context, k tokens) {
 						text(c, tr(welcomeTourTitle), 17, 24, 600, k.fg).Wrap()
 					})
 					a.tourIllustration(c, k)
-					ck := a.capKey()
 					ui.Row(c).Gap(8).Children(func() { // 要点改为图标格（用户要求少文字），原句作悬停提示与无障碍标签
-						for i, pt := range []vstep{vk(ck+" "+ck, "收集"), vk("⌘⏎", "合并发送"), vi("shield-check", "自动脱敏")} {
+						for i, pt := range []vstep{vk(a.capName()+" ×2", "收集"), vk("⌘⏎", "合并发送"), vi("shield-check", "自动脱敏")} {
 							t := tipOf(c, ui.Column(c).Grow(1).Basis(0).Padding(10, 4).Gap(6).Radius(rr(10)).Background(k.track).AlignItems(ui.Center).
 								Key("tour-pt-"+itoa(i)).Label(tr(welcomeTourPoints[i])), tr(welcomeTourPoints[i]))
 							t.Children(func() {

@@ -52,7 +52,7 @@ var en = map[string]string{
 	"搜索（⌘F）": "Search (⌘F)", "新建分组": "New section", "分组名": "Section name",
 	"发送后保留（不标记完成）": "Keep after sending", "左移": "Move left", "右移": "Move right",
 	"删除分组（笔记移回收件箱）":            "Delete section (notes go to Inbox)",
-	"队列为空\n在任意应用选中文字，双击 ⇧ 收进来": "Queue is empty\nSelect text in any app and double-tap ⇧",
+	"队列为空\n在任意应用选中文字，双击 ⇧ Shift 收进来": "Queue is empty\nSelect text in any app and double-tap ⇧ Shift",
 	"还没有剪贴板记录":                 "No clipboard history yet", "没有匹配的内容": "No matches",
 	"已完成 ": "Done ", "清理": "Clear", "恢复为未完成": "Mark as not done",
 	"标记完成（⌘D）": "Mark done (⌘D)", "保留": "Keep", "已发送": "Sent", "复制": "Copy",
@@ -350,8 +350,8 @@ func init() { // 剪贴卡页脚按类型显示（image_import.go clipFootMeta�
 	}
 }
 
-func init() { // 键位提示随状态变化 + 整行开关（mainpanel.go keyHints / panel.go 面板菜单）
-	for k, v := range map[string]string{"底部键位提示": "Key hints at the bottom", "合并": "Merge", "保存": "Save", "取消": "Cancel", "收起": "Collapse", "完成": "Done", "删除": "Delete"} {
+func init() { // 键位提示随状态变化（mainpanel.go keyHints）
+	for k, v := range map[string]string{"合并": "Merge", "保存": "Save", "取消": "Cancel", "收起": "Collapse", "完成": "Done", "删除": "Delete"} {
 		if _, ok := en[k]; !ok {
 			en[k] = v
 		}

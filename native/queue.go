@@ -299,7 +299,7 @@ func (a *app) noteList(c *ui.Context) {
 	}
 	list := ui.List(c, &a.list, len(a.notes), func(i int) { a.card(c, i) }).Grow(1).Children(func() {
 		if len(a.notes) == 0 {
-			msg := tr("队列为空\n在任意应用选中文字，双击 ⇧ 收进来")
+			msg := tr("队列为空\n在任意应用选中文字，双击 ⇧ Shift 收进来")
 			if a.section == store.SectionClipboard {
 				msg = tr("还没有剪贴板记录")
 			}

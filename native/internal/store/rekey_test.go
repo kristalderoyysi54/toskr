@@ -23,7 +23,7 @@ func TestRekeyTo(t *testing.T) {
 	s.AddBill(Bill{Kind: "subscription", Name: "云盘", Amount: 21, Cycle: "monthly"})
 	d := s.AddDelivery(Delivery{TargetName: "Cursor", Status: "sent", SourceIDs: []string{n.ID}})
 	st := s.Settings()
-	st.PanelHotkey, st.KeyHintsOff, st.RemindersListID = "Ctrl+Alt+T", true, "list-1"
+	st.PanelHotkey, st.RemindersListID = "Ctrl+Alt+T", "list-1"
 	_ = s.SetSettings(st)
 	_ = os.WriteFile(filepath.Join(src, "toskr-im-message-watch.jsonl"), []byte("{}\n"), 0o600)
 	_ = s.Flush()
@@ -47,7 +47,7 @@ func TestRekeyTo(t *testing.T) {
 	if ts := got.Tasks(); len(ts) != 1 || ts[0].ID != task.ID || ts[0].DurationMin != 45 || len(got.Bills()) != 1 || got.Deliveries()[0].ID != d.ID {
 		t.Fatal("任务 / 账单 / 发送记录")
 	}
-	if g := got.Settings(); g.PanelHotkey != "Ctrl+Alt+T" || !g.KeyHintsOff || g.RemindersListID != "list-1" {
+	if g := got.Settings(); g.PanelHotkey != "Ctrl+Alt+T" || g.RemindersListID != "list-1" {
 		t.Fatalf("设置应带过来 %+v", g.PanelHotkey)
 	}
 	if _, err := os.Stat(filepath.Join(dst, "toskr-im-message-watch.jsonl")); err != nil {

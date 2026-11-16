@@ -1080,9 +1080,6 @@ func isWord(b byte) bool {
 }
 
 func (a *app) hintsRow(c *ui.Context, k tokens) {
-	if a.store.Settings().KeyHintsOff {
-		return
-	}
 	ui.Row(c).Height(20).Margin(0, 12).Gap(10).AlignItems(ui.Center).Children(func() { a.hintItems(c, k) })
 }
 

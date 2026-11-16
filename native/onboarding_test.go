@@ -114,7 +114,7 @@ func TestSafeRehearsalFlow(t *testing.T) {
 	if *copied != store.SafeRehearsalText || o.RehearsalStep != store.StepCapture || o.ActivationStartedAtMs == nil {
 		t.Fatalf("%q %+v", *copied, o)
 	}
-	if !tt.HasText("收进示例") || !tt.HasText("⌥ ⌥") {
+	if !tt.HasText("收进示例") || !slices.Contains(tt.Texts(), "Option") {
 		t.Fatal(tt.Texts())
 	}
 

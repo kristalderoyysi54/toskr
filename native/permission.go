@@ -123,7 +123,7 @@ func (a *app) permissionBanner(c *ui.Context, k tokens) {
 	}
 	s := stok(c)
 	tone, icon, title := k.amberText, "shield-alert", tr("需要「辅助功能」权限")
-	body := tr("双击 ⇧ 捕获选中文本需要此权限。在系统设置里勾选 Toskr，授权后自动生效。")
+	body := tr("双击 ⇧ Shift 捕获选中文本需要此权限。在系统设置里勾选 Toskr，授权后自动生效。")
 	if state == "stuck" {
 		tone, icon, title = k.danger, "keyboard-off", tr("键盘事件被系统拦截")
 		body = tr("「输入监控」授权对当前版本未生效。点「重置授权」后在设置里重新勾选 Toskr，再重启。")

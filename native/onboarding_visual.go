@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -11,7 +12,7 @@ import (
 
 type vstep struct {
 	icon  string // lucide 图标名；为空时画键帽
-	key   string // 键帽文字（如 ⌘V、⇧ ⇧）
+	key   string // 键帽文字（如 ⌘V、Shift）
 	label string
 }
 
@@ -33,7 +34,11 @@ func flow(c *ui.Context, k tokens, id string, steps ...vstep) {
 			if i > 0 {
 				licon(c, "chevron-right", 12, k.muted.Alpha(0.6))
 			}
-			t := ui.Column(c).Grow(1).Basis(0).Padding(6, 2).Gap(4).Radius(rr(8)).AlignItems(ui.Center).Key(id + "-" + itoa(i)).Label(tr(s.label))
+			grow, keyPad := float32(1), float32(6)
+			if len([]rune(s.key)) > 5 { // Control / Option 这类长键名：多分一点宽、键帽收窄内边距，最窄面板（320）下键名与旁边的标签都不截断
+				grow, keyPad = 1.2, 3
+			}
+			t := ui.Column(c).Grow(grow).Basis(0).Padding(6, 2).Gap(4).Radius(rr(8)).AlignItems(ui.Center).Key(id + "-" + itoa(i)).Label(tr(s.label))
 			on := i == hot
 			t.Background(t.AnimateColor("bg", map[bool]ui.Color{true: p.Alpha(0.12), false: k.card}[on], tweenTw))
 			t.Border(1, t.AnimateColor("bd", map[bool]ui.Color{true: p.Alpha(0.6), false: k.inputBorder}[on], tweenTw))
@@ -42,7 +47,7 @@ func flow(c *ui.Context, k tokens, id string, steps ...vstep) {
 				if s.icon != "" {
 					ui.Box(c).Height(22).Center().Children(func() { licon(c, s.icon, 18, fg) })
 				} else {
-					ui.Row(c).Height(22).Padding(0, 6).Radius(5).Background(k.window).Border(1, k.inputBorder).AlignItems(ui.Center).Children(func() {
+					ui.Row(c).Height(22).Padding(0, keyPad).Radius(5).Background(k.window).Border(1, k.inputBorder).AlignItems(ui.Center).Children(func() {
 						text(c, s.key, 11, 14, 600, fg).SingleLine()
 					})
 				}
@@ -73,9 +78,8 @@ func noEnterBadge(c *ui.Context, k tokens) {
 	})
 }
 
-func (a *app) capKey() string {
-	if s := map[string]string{"shift": "⇧", "control": "⌃", "option": "⌥"}[a.store.Settings().TriggerModifier]; s != "" {
-		return s
-	}
-	return "⇧"
+// capName：触发键的英文键名（Shift / Control / Option）。键帽写键名不写 ⇧ 这类符号——⇧ 常被看成向上箭头（用户 2026-11-14 指出）。
+func (a *app) capName() string {
+	_, name, _ := strings.Cut(a.captureKeyLabel(), " ")
+	return name
 }

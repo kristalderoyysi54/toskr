@@ -446,11 +446,6 @@ func (a *app) panelMenu(c *ui.Context, k tokens) {
 		}
 		label(tr("面板"))
 		item("pin", tr("保持面板展开"), a.pinned, false, "", func() { a.pinned = !a.pinned; closeMenu() })
-		item("keyboard", tr("底部键位提示"), !st.KeyHintsOff, false, "", func() {
-			st.KeyHintsOff = !st.KeyHintsOff
-			_ = a.store.SetSettings(st)
-			closeMenu()
-		})
 		item("move", tr("位置与停靠"), false, false, ">", func() { a.placementOpen = true })
 	})
 	if c.Shortcut(0, ui.KeyEscape) {

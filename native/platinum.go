@@ -149,9 +149,7 @@ func (a *app) platinumPanel(c *ui.Context, k tokens) {
 				a.ptComposer(c, k)
 			}
 			a.selectionBar(c, k) // 勾选时的批量条停靠在输入框与状态栏之间
-			if !a.store.Settings().KeyHintsOff {
-				a.ptStatusBar(c, k)
-			}
+			a.ptStatusBar(c, k)
 		})
 	})
 	if a.menuOpen {

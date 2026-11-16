@@ -186,7 +186,7 @@ func start() (*app, error) {
 	a.watchPermission()
 	a.startTap()
 	a.watchClipboard()
-	a.pinned = os.Getenv("TOSKR_PIN") == "1" // 测量用：面板常驻不随失焦收起
+	a.pinned = os.Getenv("TOSKR_PIN") != "0" // 默认保持面板展开（用户 2026-11-12 指定）；TOSKR_PIN=0 关闭
 	a.adoptLegacyAutostart()
 	if adopted != nil {
 		kind, msg := adoptSummary(adopted)

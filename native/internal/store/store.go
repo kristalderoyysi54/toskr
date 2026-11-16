@@ -161,7 +161,6 @@ type Settings struct {
 	MessageFontSize int    `json:"messageFontSize,omitempty"`   // IM 消息放大阅读的字号 10–24，0 = 14（与普通详情窗分开记）
 	CompanionOff    bool   `json:"companionOff,omitempty"`
 	FreeMove        bool   `json:"freeMove,omitempty"`
-	KeyHintsOff     bool   `json:"keyHintsOff,omitempty"` // 面板底部键位提示行（默认开；☰ 菜单可关）
 	TrayNextDue     bool   `json:"trayNextDue,omitempty"` // 菜单栏图标旁显示今天下一个到期时间（默认关）
 	// 面板尺寸与位置（同 Tauri set_panel_width / 高度拖拽 / 自由移动位置；0 = 默认：宽 380、高度自动铺满）
 	PanelWidth  int    `json:"panelWidth,omitempty"`

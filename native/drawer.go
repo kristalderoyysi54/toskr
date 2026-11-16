@@ -132,7 +132,7 @@ func (a *app) recentDrawer(c *ui.Context, k tokens) {
 						text(c, sec.label, 10, 14, 500, k.muted)
 						ui.Box(c).Height(1).Grow(1).Background(k.inputBorder.Alpha(0.6))
 						if sec.hint {
-							text(c, tr("在 AI 应用双击 ⇧ 划选回复"), 10, 14, 400, k.muted)
+							text(c, tr("在 AI 应用双击 ⇧ Shift 划选回复"), 10, 14, 400, k.muted)
 						}
 					})
 					for _, d := range sec.list {
