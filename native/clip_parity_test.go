@@ -11,7 +11,8 @@ import (
 	"github.com/toskr/native/internal/store"
 )
 
-// 剪贴卡移入笔记（同 Tauri moveClipsToNotesWithUndo）：清固定 / 完成，提示「已移入笔记」，可撤销回原位。
+// 剪贴卡收进内容页（用户 2026-11-17 改为「收下」语义）：副本进收件箱且不带固定，原卡留在剪贴页（固定照旧），
+// 提示「已收进收件箱」，撤销删掉副本、原卡恢复未收下。
 func TestMoveClipsToNotesClearsKeepAndUndoes(t *testing.T) {
 	a, _ := testApp(t)
 	x, _, _ := a.store.Add(store.Note{Section: store.SectionClipboard, Text: "剪贴一"})
@@ -20,13 +21,14 @@ func TestMoveClipsToNotesClearsKeepAndUndoes(t *testing.T) {
 	x, _ = a.store.Note(x.ID)
 	a.moveClipsTo([]store.Note{x}, store.SectionInbox)
 	got, _ := a.store.Note(x.ID)
-	if got.Section != store.SectionInbox || got.Kept || a.hudText != "已移入笔记" || a.hudUndo == nil {
-		t.Fatalf("%+v hud=%q", got, a.hudText)
+	cp, _ := a.store.Note(got.SavedTo)
+	if got.Section != store.SectionClipboard || !got.Kept || cp.Section != store.SectionInbox || cp.Kept || a.hudText != "已收进收件箱" || a.hudUndo == nil {
+		t.Fatalf("%+v copy=%+v hud=%q", got, cp, a.hudText)
 	}
 	a.hudUndo()
 	got, _ = a.store.Note(x.ID)
-	if got.Section != store.SectionClipboard || !got.Kept {
-		t.Fatalf("撤销应放回剪贴并保留固定 %+v", got)
+	if got.Section != store.SectionClipboard || !got.Kept || got.SavedTo != "" || len(a.store.Notes()) != 2 {
+		t.Fatalf("撤销应删副本、原卡恢复未收下 %+v", got)
 	}
 	ns := a.store.Notes()
 	if ns[0].ID != y.ID || ns[1].ID != x.ID {

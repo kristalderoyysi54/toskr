@@ -11,7 +11,6 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/toskr/native/internal/codehl"
-	"github.com/toskr/native/internal/core"
 	"github.com/toskr/native/internal/store"
 )
 
@@ -35,8 +34,8 @@ func (a *app) mainHeader(c *ui.Context, k tokens) {
 			if a.page != pageTasks && a.iconButton(c, k, "search", 22, 14, "搜索（⌘F）") {
 				a.searchOpen = !a.searchOpen
 			}
-			if a.iconButton(c, k, "menu", 22, 14, "更多") {
-				a.menuOpen = !a.menuOpen
+			if a.iconButton(c, k, "menu", 22, 14, "列表与面板选项") {
+				a.menuOpen, a.placementOpen = !a.menuOpen, false
 			}
 			if a.iconButton(c, k, "settings-2", 22, 14, "设置（⌘,）") {
 				a.openSettings()
@@ -315,22 +314,9 @@ var sectionSorts = []struct{ id, label, icon string }{
 }
 
 func (a *app) notesPage(c *ui.Context, k tokens) {
+	defer a.triagePanel(c, k)
 	ui.Row(c).Grow(1).AlignItems(ui.Stretch).Children(func() { // Row 默认垂直居中：不拉伸的话列表短于视口时会整块浮到中间
-		// 同 Tauri NoteGroupRail：宽度 0 ↔ 64 过渡（transition-[width] duration-slow ease-standard），列表随之让位；收起到 0 后不再画
-		w := float32(0)
-		if a.noteRailOpen {
-			w = railW
-		}
-		box := ui.Box(c).Shrink(0).FillHeight().Clip().Key("note-rail-slot")
-		cur := box.AnimateTo("w", w, tweenSlow)
-		box.Width(cur).Children(func() {
-			if a.noteRailOpen || cur > 0.5 { // 打开当帧就画（裁在过渡宽度里），收起到 0 后不再画
-				ui.Box(c).Width(railW).FillHeight().Children(func() { a.noteRail(c, k) })
-			}
-		})
-		a.notesList(c, k)
-		// 左缘分组侧栏开关（同 Tauri：挂在侧栏容器左缘 absolute left-0，侧栏展开 / 收起位置不动；12×20，右侧圆角 8）
-		a.noteRailToggle(c, k)
+		a.notesList(c, k) // 左侧分组侧栏已移除（用户 2026-11-17）：筛选在分组头菜单、新建分组在标题栏 ☰ 菜单，换组靠拖动分组坞
 	})
 }
 
@@ -340,12 +326,34 @@ func (a *app) notesList(c *ui.Context, k tokens) {
 	if a.noteFilter != "" {
 		at = 1 + slices.IndexFunc(a.noteSections(), func(s store.Section) bool { return s.ID == a.noteFilter })
 	}
-	a.swapView(ui.Box(c).Grow(1).Basis(0), "note-filter", at).Children(func() {
+	a.swapView(ui.Column(c).Grow(1).Basis(0), "note-filter", at).Children(func() {
 		pad := float32(10)
 		if k.th.ClassicScroll() {
 			pad = 4 // 右侧让给经典滚动条（井内左 10 / 右 4）
 		}
-		sc := ui.Scroll(c).Fill().Scrollbars(false).TrackScroll(&a.noteScroll)
+		if a.rowDragID == "" && a.rowDragLast != "" { // 刚松手：放下的行高弹回去的这段仍走动画
+			a.rowSettle, a.rowSettleUntil = a.rowDragLast, dragNow().Add(700*time.Millisecond)
+		}
+		a.rowDragLast, a.rowDragID = a.rowDragID, ""
+		if a.rowDragLast == "" && len(a.dockNaming) == 0 { // 坞收起：翻页 / 翻页计时 / 指针在坞上 复位
+			a.dockFor, a.dockPage, a.dockEdge, a.dockUnder = "", 0, dockEdge{}, false
+		}
+		// 分组坞钉在列表最上方：视口让出一条，滚动量同步补上，列表内容原地不动
+		if on := a.dockOn(); on != a.dockWas {
+			if on {
+				a.noteScroll.Y += dockSlotH
+			} else {
+				a.noteScroll.Y = max(a.noteScroll.Y-dockSlotH, 0)
+			}
+			a.dockWas = on
+		}
+		if a.dockWas { // 坞在列表之后建、绝对定位到让出的那一条里（构建顺序在后：同名文字先命中列表里的分组）
+			defer a.noteDock(c, k, 10, pad)
+		}
+		sc := ui.Scroll(c).Grow(1).Basis(0).FillWidth().Scrollbars(false).TrackScroll(&a.noteScroll)
+		if a.dockWas {
+			sc.Margin(dockSlotH, 0, 0, 0)
+		}
 		// 分组吸顶用：上一帧的视口位置与当时的滚动量（Bounds 是上一帧布局），换算分组在内容里的纵坐标
 		a.stick = stickCtx{view: sc.Bounds(), builtY: a.stick.nextY, nextY: a.noteScroll.Y, top: map[string]float32{}}
 		sc.Children(func() {
@@ -354,7 +362,7 @@ func (a *app) notesList(c *ui.Context, k tokens) {
 				_ = a.store.ReorderSection(from, to)
 				a.reload()
 			})
-			if a.secSort.active != "" {
+			if a.secSort.active != "" || (a.rowDragLast != "" && !a.dockUnder) { // 拖分组 / 拖行到列表上下缘自动滚（指针在分组坞上时不滚）
 				sortAutoScroll(c, sc, &a.noteScroll)
 			}
 			a.secOrder = a.secOrder[:0]
@@ -363,6 +371,7 @@ func (a *app) notesList(c *ui.Context, k tokens) {
 			}
 			defer func() { sortListEnd(&a.secSort, a.secSeen) }()
 			list.Children(func() {
+				a.noteFilterBar(c, k)
 				if a.newSecOn {
 					ui.TextInputBase(c, &a.newSec).Height(28).Padding(0, 10).Radius(rr(10)).Background(k.track).Font(fontSans).FontSize(12).
 						Focus().Placeholder(tr("分组名，↵ 创建")).OnTextKey(func(key ui.TextKey) bool {
@@ -380,10 +389,13 @@ func (a *app) notesList(c *ui.Context, k tokens) {
 						return false
 					})
 				}
-				// 卡片高度固定（舒适 116 / 紧凑 40），按滚动位置只构建视口附近的卡，其余用等高占位（长列表换页不卡）
+				// 行高固定（舒适 52 / 紧凑 40），按滚动位置只构建视口附近的卡，其余用等高占位（长列表换页不卡）
 				_, vh := c.Size()
 				a.vis = visWindow{top: a.noteScroll.Y - 600, bottom: a.noteScroll.Y + vh + 600}
 				y := float32(4)
+				if a.noteFilter != "" && a.noteFilter != doneFilter {
+					y += 26 + 8 // 筛选条
+				}
 				total := 0
 				for _, g := range a.noteGroups {
 					total += len(g.open) + len(g.done)
@@ -402,6 +414,11 @@ func (a *app) notesList(c *ui.Context, k tokens) {
 					a.emptyQueue(c, k)
 					return
 				}
+				if a.quickStripShown() { // 常用栏：定高，计进后面分组的纵坐标（窗口化按它算可见）
+					a.quickStrip(c, k)
+					y += a.quickStripHeight() + 8
+				}
+				a.glideHov, a.glideNext = a.glideNext, rowGlideAt{} // 上一帧量到的悬停行，本帧画滑动浅底
 				for _, g := range a.noteGroups {
 					y += a.sectionBlock(c, k, g, y) + 8
 				}
@@ -410,11 +427,50 @@ func (a *app) notesList(c *ui.Context, k tokens) {
 	})
 }
 
+// noteFilterBar：「只看此组」时列表顶上的筛选条：分组色点 + 名 + 「显示全部」。
+func (a *app) noteFilterBar(c *ui.Context, k tokens) {
+	if a.noteFilter == "" || a.noteFilter == doneFilter {
+		return
+	}
+	var sec store.Section
+	for _, s := range a.store.Sections() {
+		if s.ID == a.noteFilter {
+			sec = s
+		}
+	}
+	bar := ui.Row(c).Height(26).Padding(0, 4, 0, 10).Gap(6).Radius(rr(8)).Background(k.track).AlignItems(ui.Center).Key("note-filter-bar").
+		Transition(foldTransition)
+	for _, g := range a.noteGroups { // 右键筛选条 = 该分组头的菜单
+		if g.sec.ID == sec.ID {
+			bar.ContextMenu(func(m *ui.Menu) { a.sectionHeadMenu(c, m, g) })
+		}
+	}
+	bar.Children(func() {
+		licon(c, "list-filter", 11, k.muted)
+		text(c, tr("只看"), 11, 16, 400, k.muted)
+		if tint, ok := sectionTint(sec); ok {
+			ui.Box(c).Size(7, 7).Radius(4).Background(tint)
+		}
+		text(c, sectionName(sec), 11, 16, 600, k.fg).SingleLine().Shrink(1)
+		ui.Box(c).Grow(1)
+		b := ui.Row(c).Height(20).Padding(0, 8).Radius(rr(6)).AlignItems(ui.Center).Role(ui.RoleButton).Label(tr("显示全部分组")).Key("filter-all")
+		if b.Hovered() {
+			b.Background(k.hoverBg)
+		}
+		b.Children(func() { text(c, tr("显示全部"), 11, 16, 500, stok(c).primary) })
+		if b.Clicked() {
+			a.pickNoteGroup("")
+		}
+	})
+}
+
 // visWindow：笔记列表内容坐标下需要真实构建的纵向范围。
 type visWindow struct{ top, bottom float32 }
 
 // has：纵坐标 y、高 h 的条目是否与范围相交。
 func (v visWindow) has(y, h float32) bool { return y+h >= v.top && y <= v.bottom }
+
+const secPad = 4 // 分组大边框的内边距
 
 const emptySecH = 32 // 空分组提示高（上下各 8 + 一行 16；sectionBlock 的占位高度与之一致）
 
@@ -475,25 +531,75 @@ func (a *app) cardHeight() float32 {
 	if a.store.Settings().CardDensity == "compact" {
 		return 40
 	}
-	return 116
+	return listRowH
+}
+
+// sectionHeadMenu：分组头右键 / 「…」共用菜单（用户 2026-11-17：区头「+」并入这里）——
+// 新建内容 · 只看此组 · 清理已完成，之后是分组管理（sectionMenu），只放针对本组的操作；新建分组 · 全部展开 / 全部折叠在标题栏 ☰ 菜单（用户 2026-11-18）。
+func (a *app) sectionHeadMenu(c *ui.Context, m *ui.Menu, g noteGroup) {
+	if g.sec.ID != store.SectionClipboard && m.Item(tr("新建内容")).Chosen() {
+		a.newNoteIn(g.sec)
+	}
+	m.Separator()
+	if a.noteFilter == g.sec.ID {
+		if m.Item(tr("显示全部分组")).Chosen() {
+			a.pickNoteGroup("")
+		}
+	} else if m.Item(tr("只看此组")).Chosen() {
+		a.pickNoteGroup(g.sec.ID)
+	}
+	if len(g.done) > 0 && m.Item(tr("清理已完成")).Chosen() {
+		a.section = g.sec.ID
+		a.clearDone(c)
+	}
+	m.Separator()
+	secs := a.noteSections()
+	i := slices.IndexFunc(secs, func(x store.Section) bool { return x.ID == g.sec.ID })
+	a.secMenuSrc = "head"
+	a.sectionMenu(m, g.sec, i, len(secs))
+}
+
+// sectionFoldCounts：笔记页当前列出的分组里展开 / 折叠的各有几个。
+func (a *app) sectionFoldCounts() (open, shut int) {
+	for _, g := range a.noteGroups {
+		if g.sec.Collapsed {
+			shut++
+		} else {
+			open++
+		}
+	}
+	return
+}
+
+// foldAllSections：笔记页列出的分组一起折叠 / 展开（状态逐组存，与单独点区头同一字段）。
+func (a *app) foldAllSections(fold bool) {
+	ids := map[string]bool{}
+	for _, g := range a.noteGroups {
+		ids[g.sec.ID] = true
+	}
+	for _, s := range a.store.Sections() {
+		if ids[s.ID] && s.Collapsed != fold {
+			s.Collapsed = fold
+			_ = a.store.UpdateSection(s)
+		}
+	}
+	a.reload()
 }
 
 // sectionBlock 构建一个分组块，top 为它在列表内容里的纵坐标，返回块高（与布局一致：区头 20 + 间距 6 + 卡片列 + 底 4）。
 func (a *app) sectionBlock(c *ui.Context, k tokens, g noteGroup, top float32) float32 {
 	collapsed := g.sec.Collapsed
-	cardH := a.cardHeight()
 	height := float32(20 + 4)
 	switch {
 	case collapsed:
 	case len(g.open) == 0 && len(g.done) == 0:
 		height += 6 + emptySecH
 	default:
-		n := len(g.open)
-		height += 6 + float32(n)*cardH + float32(max(n-1, 0))*4
+		height += 6 + 2*secPad // 分组大边框：内边距 secPad，行间不留缝
+		for _, n := range g.open {
+			height += a.noteRowH(c, n) // 卡片样式行高随内容变
+		}
 		if len(g.done) > 0 {
-			if n > 0 {
-				height += 4
-			}
 			height += 18
 			if a.doneOpen[g.sec.ID] {
 				height = -1 // 已完成展开：高度不固定，不做窗口化
@@ -533,19 +639,9 @@ func (a *app) sectionBlock(c *ui.Context, k tokens, g noteGroup, top float32) fl
 				_ = a.store.UpdateSection(g.sec)
 			}
 			if d, ok := ui.Drop[noteDrag](head); ok {
-				_ = a.store.MoveToAt(d.id, g.sec.ID, 0)
+				a.moveNotesTo(a.dragNotes(d.id), g.sec.ID)
 			}
-			head.ContextMenu(func(m *ui.Menu) {
-				if len(g.done) > 0 && m.Item(tr("清理已完成")).Chosen() {
-					a.section = g.sec.ID
-					a.clearDone(c)
-				}
-				m.Separator()
-				secs := a.noteSections()
-				i := slices.IndexFunc(secs, func(x store.Section) bool { return x.ID == g.sec.ID })
-				a.secMenuSrc = "head"
-				a.sectionMenu(m, g.sec, i, len(secs))
-			})
+			head.ContextMenu(func(m *ui.Menu) { a.sectionHeadMenu(c, m, g) })
 			a.sectionColorPopover(c, k, g.sec, head, "head")
 			head.Children(func() {
 				b := ui.Box(c).Size(16, 16).Radius(rr(6)).Center()
@@ -554,8 +650,9 @@ func (a *app) sectionBlock(c *ui.Context, k tokens, g noteGroup, top float32) fl
 					g.sec.Collapsed = !collapsed
 					_ = a.store.UpdateSection(g.sec)
 				}
-				if g.sec.Color != "" { // 同 Tauri SectionGroup：分组色点
-					ui.Box(c).Size(8, 8).Radius(4).Background(hexColor(g.sec.Color))
+				if g.sec.Color != "" { // 同 Tauri SectionGroup：分组色点（带一圈同色光晕，与框描边呼应）
+					col := hexColor(g.sec.Color)
+					ui.Box(c).Size(8, 8).Radius(4).Background(col).Border(2, col.Alpha(0.22))
 				}
 				a.sectionHeadName(c, k, g.sec)
 				if g.sec.KeepAfterSend {
@@ -570,23 +667,22 @@ func (a *app) sectionBlock(c *ui.Context, k tokens, g noteGroup, top float32) fl
 					tipOf(c, licon(c, "arrow-down-to-line", 10, k.muted), tr("捕获目标"))
 				}
 				total := len(g.open) + len(g.done)
-				text(c, itoa(total), 10, 14, 400, k.muted).Grow(1)
-				if head.Hovered() && a.iconButton(c, k, "plus", 18, 12, fmt.Sprintf(tr("在「%s」中添加内容"), sectionName(g.sec))) {
-					a.newNoteIn(g.sec)
-				}
+				ui.Box(c).Grow(1)
 				if head.Hovered() || a.secMenuOpen == g.sec.ID { // 同 Tauri：悬停出「…」分组操作
 					mb := ghostIconButton(c, k, "secmore-"+g.sec.ID, "ellipsis", tr("分组操作"), 18, 12, false, true)
 					mb.Menu(func(m *ui.Menu) {
 						a.secMenuOpen = g.sec.ID
-						secs := a.noteSections()
-						i := slices.IndexFunc(secs, func(x store.Section) bool { return x.ID == g.sec.ID })
-						a.secMenuSrc = "head"
-						a.sectionMenu(m, g.sec, i, len(secs))
+						a.sectionHeadMenu(c, m, g)
 					})
 					if !mb.Hovered() && a.secMenuOpen == g.sec.ID {
 						a.secMenuOpen = ""
 					}
 				}
+				if g.sec.ID == store.SectionInbox && !collapsed { // 收件箱操作排在悬停按钮之后
+					a.inboxHeadActions(c, k, g)
+				}
+				// 条数贴最右对齐（用户 2026-11-17）：各组数字一列对齐；等宽数字、最小宽度保证个位 / 两位数右缘齐
+				text(c, itoa(total), 10.5, 14, 500, k.muted).Font(fontMono).TextAlign(ui.End).MinWidth(18).Shrink(0).Key("sec-count")
 			})
 			if collapsed {
 				return
@@ -602,27 +698,46 @@ func (a *app) sectionBlock(c *ui.Context, k tokens, g noteGroup, top float32) fl
 				clip.Translate(0, shift).ClipY()
 			}
 			clip.Children(func() {
-				body := ui.Column(c).Gap(4).Key("secbody-" + g.sec.ID).Transition(foldTransition)
+				// 分组大边框（用户 2026-11-17 定）：一个分组一个框，行在框里；收件箱是唯一抬起（带阴影）的框
+				// 分组颜色（用户 2026-11-17：融进框里）：框描边带一层分组色、悬停滑块用分组色（框顶渐变已去：操作条遮罩对不上色）；
+				// 选中仍是主色（选中的含义全局统一）。无颜色的分组保持中性
+				tint, tinted := sectionTint(g.sec)
+				border := k.inputBorder
+				if tinted {
+					border = tint.Alpha(map[bool]float32{true: 0.42, false: 0.34}[k.dark])
+				}
+				body := ui.Column(c).Padding(secPad).Radius(rr(14)).Background(k.card).Border(1, border).Key("secbody-" + g.sec.ID).Transition(foldTransition)
+				if g.sec.ID == store.SectionInbox {
+					elevated(body, k, true)
+				}
 				if shift := off - 4; shift > 0 {
 					body.Translate(0, -shift)
 				}
 				body.Children(func() {
-					y := top + 26
+					if bw := body.Bounds().W; bw > 0 {
+						a.listBodyW = bw // 卡片样式按它量正文折行
+					}
+					a.rowGlide(c, k, g.sec.ID, tint, tinted)
+					y := top + 26 + secPad
 					skip := float32(0)
 					flush := func() {
 						if skip > 0 {
-							ui.Box(c).Height(skip - 4).Key("gap-" + itoa(int(y))) // 占位：跳过的卡片 + 卡间距（减去它自己的一个间距）
+							ui.Box(c).Height(skip).Key("gap-" + itoa(int(y))) // 占位：跳过的行（行间无缝）
 							skip = 0
 						}
 					}
-					for _, n := range g.open {
-						if height >= 0 && !a.vis.has(y, cardH) && !a.vis.has(y+shift, cardH) && !a.chosen.Has(n.ID) {
-							skip += cardH + 4
+					rowY := float32(secPad)
+					for i, n := range g.open {
+						rh := a.noteRowH(c, n)
+						a.rowFirst, a.rowSec, a.rowY = i == 0, g.sec.ID, rowY
+						if height >= 0 && !a.vis.has(y, rh) && !a.vis.has(y+shift, rh) && !a.chosen.Has(n.ID) && n.ID != a.rowDragLast {
+							skip += rh
 						} else {
 							flush()
 							a.noteCard(c, k, n)
 						}
-						y += cardH + 4
+						y += rh
+						rowY += rh
 					}
 					flush()
 					if len(g.done) > 0 {
@@ -684,34 +799,63 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 	if !ok {
 		idx = -1
 	}
-	focused := idx >= 0 && idx == a.selected && a.focusList
+	focused := idx >= 0 && idx == a.selected && a.focusList && a.kbFocus // 只有键盘移来的焦点才常显操作钮；鼠标点选后移走即隐藏
 	checked := a.chosen.Has(n.ID)
 	compact := a.store.Settings().CardDensity == "compact"
-	var box ui.Element
-	if compact {
-		box = ui.Row(c).Height(40).Radius(rr(10)).AlignItems(ui.Center).Key(n.ID)
-	} else {
-		box = ui.Column(c).Height(116).Radius(rr(10)).Key(n.ID)
+	// 竖版笔记页（用户 2026-11-17 定）：分组是一个大边框，里面一行一条，不再是带彩色通栏的独立卡片；
+	// 通栏样式只留在横版（hbar.go）。点一行 = 在框里选中（主色浅底），悬停浅底 + 操作钮，键盘焦点同悬停。
+	first := a.rowFirst
+	a.rowFirst = false
+	sec, rowY := a.rowSec, a.rowY
+	a.rowSec = ""
+	style := a.listStyle()
+	cardStyle := !compact && isCardStyle(style)
+	var lay cardLayout
+	rowH := a.cardHeight()
+	if cardStyle {
+		style = cardStyleFor(n, style)
+		lay = a.cardLayoutOf(c, n, style)
+		rowH = lay.h
 	}
-	cardFill(box, k)
-	k.th.Card(box, checked)
+	if a.rowDragLast == n.ID {
+		rowH = dragRowH
+	}
+	box := ui.Row(c).Radius(rr(9)).AlignItems(ui.Center).Key(n.ID)
+	if box.Dragging() || a.rowDragLast == n.ID || (a.rowSettle == n.ID && dragNow().Before(a.rowSettleUntil)) {
+		box.Height(box.AnimateTo("h", rowH, springControl)) // 拖起 / 放下时行高弹簧收放，下面的行跟着平滑让位
+	} else {
+		box.Height(rowH) // 平时不挂动画（常驻的高度动画会让行一直处在动画态）
+	}
 	hovered := box.Hovered()
 	a.bandHover(n.ID, hovered)
-	// Tauri：舒适卡悬停上移 1px + elevation-2（transform / box-shadow 150ms）；紧凑卡悬停只给影子；
-	// 多选（checked）为内发光，舒适卡同时保持抬升；键盘焦点只抬升不描边。
-	elevated(box, k, hovered || (checked && !compact) || (focused && !checked))
-	lift := float32(0)
-	if hovered && !compact {
-		lift = -1
+	p := stok(c).primary
+	// 行底：平常透明（分组的滑动浅底从下面透上来），选中为主色浅底。遮罩色按「卡片底 + 浅底」合成，与看到的颜色一致
+	base := k.card
+	if checked {
+		base = p.Mix(k.card, 0.88)
 	}
-	box.AnimatePose(ui.Pose{Y: lift}, tweenTw)
+	base = box.AnimateColor("row-bg", base, tweenTw)
+	if checked {
+		box.Background(base)
+	}
+	box.AnimatePose(ui.Pose{Scale: pressScale(box.Pressed(), 0.985)}, tweenControl)
+	dragging := box.Dragging()
+	if dragging { // 拖起：原位淡出；跟手副本（框架按本元素画）带卡片底 + 细边 + 浮起阴影（同原型 .ghost / .lifting）
+		if a.dockFor != n.ID {
+			a.dockFor, a.dockPage = n.ID, 0
+		}
+		a.rowDragID = n.ID
+		box.Background(ui.RGBA(0, 0, 0, 0)).Opacity(0.4).Cursor(ui.CursorGrabbing) // 行本身透明（选中底也去掉）：跟手副本只剩一行小卡（dragMini）
+	} else if hovered && !n.Done && a.page == pageNotes {
+		box.Cursor(ui.CursorGrab)
+	}
 	box.ContextMenu(func(m *ui.Menu) {
 		if idx >= 0 {
 			a.selected = idx
 		}
 		a.cardMenu(c, m, max(idx, 0), n)
 	})
-	// 拖拽排序（同 Tauri dnd-kit）：拖起卡片，放到另一张卡上 = 插到它前面（可跨分组）；放到分组头 / 侧栏分组 = 移入该组
+	// 拖拽排序（同 Tauri dnd-kit）：拖起一行，放到另一行上 = 插到它前面（可跨分组）；放到分组头 / 侧栏分组 = 移入该组
 	if a.titleEditID != n.ID && a.tagEditID != n.ID && !n.Done { // 同 Tauri useSortable({disabled: note.done})
 		box.Drag(noteDrag{n.ID})
 	}
@@ -721,101 +865,59 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 			dropOver = true
 		}
 		if d, ok := ui.Drop[noteDrag](box); ok && d.id != n.ID {
-			_ = a.store.MoveNoteBefore(d.id, n.ID)
+			for _, x := range a.dragNotes(d.id) { // 多选整组按顺序插到它前面
+				if x.ID != n.ID {
+					_ = a.store.MoveNoteBefore(x.ID, n.ID)
+				}
+			}
 		}
 	}
 	box.Children(func() {
+		if dragging { // 拖动中：整行内容换成一行小卡（用户 2026-11-17：整张卡跟手会挡住分组坞）
+			a.dragMini(c, k, n, box.Bounds().W)
+			return
+		}
 		if dropOver {
-			ui.Box(c).Absolute().Top(-4).Left(6).Right(6).Height(2).Radius(1).Background(stok(c).primary).PassThrough()
+			ui.Box(c).Absolute().Top(-1).Left(6).Right(6).Height(2).Radius(1).Background(p).PassThrough()
 		}
 		if compact {
 			a.compactCard(c, k, n, hovered || focused, a.compactHover(c, box, n))
-			a.cardOverlays(c, k, n, checked, true)
+			a.cardOverlays(c, k, n, false, true)
 			a.quickBadge(c, k, idx, 12)
 			a.cardGrip(c, k, n, 9)
-			k.th.CardOutline(c)
 			return
 		}
-		head := ui.Row(c).Height(28).Padding(0, 8).Gap(6).AlignItems(ui.Center).Radius(rr(10), rr(10), 0, 0)
-		from, to := a.bandColors(k, n)
-		from, to = k.th.BandColors(from, to, checked)
-		head.LinearGradient(ui.LinearGradient{From: from, To: to, Angle: 135})
-		k.th.CardHead(head)
-		head.Children(func() {
-			if !a.cardInlineInput(c, k, n) {
-				// 同 Tauri NoteCard：通栏只写自定义标题或类型（文本 / 代码 / 链接 / 图片）；来源与时间在页脚
-				title := cardTitle(n)
-				if n.Title != "" {
-					title = n.Title
-				}
-				tb := tipOf(c, ui.Row(c).Grow(1).Basis(0).Key("title-hit").Role(ui.RoleButton).Label(title), tr("点击重命名"))
-				tb.Children(func() { text(c, title, 11, 16, 600, k.cardHeadText).SingleLine() })
-				if tb.Clicked() { // 同 Tauri：点通栏标题就地改名
-					a.titleEditID, a.titleText = n.ID, n.Title
-				}
+		active := hovered || focused
+		if active && sec != "" && !checked {
+			a.glideNext = rowGlideAt{sec: sec, y: rowY, h: rowH}
+		}
+		if !first { // 行间细分隔线：从文字起点开始（图标列不画），悬停 / 选中的行盖住它
+			ui.Box(c).Absolute().Top(0).Left(a.listTextX()).Right(12).Height(1).Background(k.fg.Alpha(0.06)).PassThrough()
+		}
+		headMid := float32(listRowH) / 2 // 头行中线：操作条、快捷键角标、拖动把手都对齐它
+		if cardStyle {
+			a.cardRow(c, k, n, lay, style, active)
+			headMid = cardPadY + cardHeadH/2
+			if style == listHero && lay.media {
+				headMid += lay.mediaH + 8
 			}
-			if n.Kept { // 同 Tauri：常用卡通栏右端星标
-				liconFilled(c, "star", 12, k.cardHeadText)
-			}
-			if img := a.appIcon(n.BundleID); img != nil { // 应用图标嵌入通栏右端（同 Tauri Paste 风格）：左缘完整，上/右/下被通栏裁去少许
-				ic := ui.Row(c).Width(36).Height(28).Margin(0, -8, 0, 0).Clip().AlignItems(ui.Center).Shrink(0)
-				if k.th.CardRadius(10) > 0 { // 卡片右上圆角同样裁掉图标（Tauri 卡片 overflow-hidden）
-					ic.Radius(0, rr(10), 0, 0)
-				}
-				ic.Children(func() {
-					ui.Image(c, img).Size(40, 40)
-				})
-			}
-		})
-		bodyH, lines := float32(62), 3 // 同 Tauri：页脚常驻（左来源 / 状态，右时间），正文 3 行
-		ui.Column(c).Height(bodyH).Margin(4, 8, 0, 8).Clip().Children(func() {
-			if n.Blur {
-				return // 模糊卡不构建正文（旁白与截图都读不到）
-			}
-			if n.Kind == "image" { // 同 Tauri：多张并排 3 张 +N，真实备注一行
-				files, h := n.MediaFiles(), bodyH
-				if s := strings.TrimSpace(imageNoteText(n)); s != "" && !store.IsImagePlaceholder(s) {
-					h -= 20
-				}
-				ui.Column(c).Gap(4).FillWidth().Children(func() {
-					a.cardImages(c, k, files, 0, h)
-					cardImageCaption(c, k, n)
-				})
-				return
-			}
-			if n.Kind == "link" {
-				a.linkBlock(c, k, n)
-				return
-			}
-			if isCode(n) {
-				a.codeText(c, k, n, lines)
-				return
-			}
-			if files := n.MediaFiles(); len(files) > 0 { // 图文组合卡（同 Tauri isComposite）：正文 + 下方一排最多 4 张缩略 +N
-				ui.Column(c).Gap(4).Fill().Children(func() {
-					doneText(highlightText(c, k, n.Text, a.query, 12, 18, k.fg).Wrap().MaxLines(lines-2), k, n) // 去掉 32 缩略条后只放整行，不切半行
-					a.cardThumbStrip(c, k, files)
-				})
-				return
-			}
-			doneText(highlightText(c, k, n.Text, a.query, 12, 18, k.fg).Wrap().MaxLines(lines), k, n)
-		})
-		ui.Row(c).Height(16).Margin(0, 8, 6, 8).Gap(6).AlignItems(ui.Center).Children(func() {
-			a.cardFooterLeadOpt(c, k, n, true)
-			a.aiBusyMark(c, k, n.ID)
-			a.sentChip(c, k, n)
-			text(c, ago(n.CreatedAt, time.Now()), 10, 14, 400, k.muted).SingleLine().Shrink(0)
-		})
+		} else if two := a.listRow(c, k, n, active); two {
+			headMid = 8 + 9
+		}
 		if n.Blur {
-			blurOverlay(c, k, 20)
+			blurOverlay(c, k, 16)
 		}
-		if hovered || focused { // 同 Tauri reveal="hover-focus"
-			a.cardActions(c, k, n)
+		if active && !dragging {
+			a.rowToolbar(c, k, n, base, !checked, headMid-12) // 选中行没有悬停浅底（滑动浅底不进选中行）
 		}
-		a.cardOverlays(c, k, n, checked, false)
-		a.quickBadge(c, k, idx, 4)
-		a.cardGrip(c, k, n, 40)
-		k.th.CardOutline(c) // 主题的卡片描边（压在通栏之上）
+		if hovered && !dragging && !n.Done && a.page == pageNotes && a.query == "" { // 悬停露出拖动把手：这一行可以拖
+			ui.Box(c).Absolute().Left(0).Top(headMid-8).Size(11, 16).Center().PassThrough().Key("row-grip").
+				Transition(ui.ElementTransition{Animation: &tweenTw, Enter: &ui.Motion{X: 3}, Exit: &ui.Motion{X: 3}}).
+				Children(func() { licon(c, "grip-vertical", 12, k.muted.Alpha(0.7)) })
+		}
+		a.cardOverlays(c, k, n, false, false) // 舒适行：投递状态带带文字胶囊（发送中… / 回执 + 撤销）
+		a.quickBadge(c, k, idx, headMid-8)
+		a.cardGrip(c, k, n, headMid-11)
 	})
 	clk, dbl, mods := cardPressed(box, n.ID) // 正文是拖出源，点在正文上也算点卡片
 	if clk && !(mods&ui.Shift != 0 && a.rangeSelect(n.ID)) {
@@ -823,6 +925,222 @@ func (a *app) noteCard(c *ui.Context, k tokens, n store.Note) {
 	}
 	if dbl && idx >= 0 {
 		a.cardDoubleClick(n, idx, false)
+	}
+}
+
+type rowGlideAt struct {
+	sec  string
+	y, h float32
+}
+
+// rowGlide：分组里唯一的一块悬停浅底，跟着指针在行间弹簧滑动（不是每行各自闪现）；移出分组时原地淡出。
+// sectionTint：分组颜色（未设色返回 false）。
+func sectionTint(s store.Section) (ui.Color, bool) {
+	if s.Color == "" {
+		return ui.Color{}, false
+	}
+	return hexColor(s.Color), true
+}
+
+func (a *app) rowGlide(c *ui.Context, k tokens, sec string, tint ui.Color, tinted bool) {
+	on := a.glideHov.sec == sec
+	bg := k.fg.Alpha(0.05)
+	if tinted {
+		bg = tint.Alpha(map[bool]float32{true: 0.16, false: 0.09}[k.dark])
+	}
+	a.glideBg = bg
+	b := ui.Box(c).Absolute().Left(secPad).Right(secPad).Radius(rr(9)).Background(bg).PassThrough().Key("glide-" + sec)
+	if on {
+		a.rowGlideLast[sec] = a.glideHov
+	}
+	last := a.rowGlideLast[sec]
+	b.Top(b.AnimateTo("y", last.y, springControl)).Height(b.AnimateTo("h", max(last.h, 1), springControl)) // 卡片行高不一：高度也跟着弹
+	b.Opacity(b.AnimateTo("op", map[bool]float32{true: 1}[on], tweenTw))
+}
+
+const (
+	listRowH  = 52 // 竖版舒适密度行高：8 + 标题行 18 + 次行 18 + 8
+	listPadX  = 12
+	listIcon  = 18
+	listTile  = 36 // 行首方块 / 右端缩略图：统一这一个尺寸
+	listLeadW = 40 // 方块列宽：方块 + 多图叠放外扩 4
+	listGap   = 10
+)
+
+// listRow：竖版行（用户 2026-11-17 重设计）。两条对齐线：
+//   - 左：图标与标题同一行居中，次行（摘要 / 来源 / 标签）与标题左缘对齐
+//   - 右：标题行右端是时间（悬停时换成操作条），次行右端是建议分组 / 常用 / 发送次数
+//
+// 没有次行内容时整行只留一行、垂直居中，不留半空的第二行。返回是否两行。
+func (a *app) listRow(c *ui.Context, k tokens, n store.Note, active bool) bool {
+	preview := a.listPreview(n)
+	alias := a.aliasCount(n)
+	meta := n.Provenance != nil || alias > 0 || len(n.Tags) > 0
+	_, sug := a.inboxSug[n.ID]
+	sug = sug && n.Section == store.SectionInbox
+	busy := a.aiBusy == n.ID
+	code := isCode(n) && !n.Blur
+	two := preview != "" || meta || sug || n.Kept || n.SendCount > 0 || busy || code
+	timeCell := func() {
+		t := text(c, ago(n.CreatedAt, a.now()), 10.5, 18, 400, k.muted).SingleLine().Shrink(0).Key("row-time")
+		op := float32(1)
+		if active || a.bandFor(n.ID) != nil {
+			op = 0 // 让位给操作条 / 投递胶囊（只淡出不移除，标题不重排）
+		}
+		t.Opacity(t.AnimateTo("op", op, tweenTw))
+	}
+	ui.Row(c).Fill().Padding(0, listPadX).Gap(listGap).AlignItems(ui.Center).Children(func() {
+		style := a.listStyle()
+		thumb := a.listThumbOf(n)
+		trailing := style == listTrail || style == listMail // 缩略图放右端
+		switch style {
+		case listTiles, listFilm, listAvatar:
+			round := style == listAvatar
+			ui.Box(c).Size(listLeadW, listLeadW).Shrink(0).Key("row-lead").Children(func() {
+				if thumb != nil {
+					a.listThumbStack(c, k, n, thumb, active, round)
+					return
+				}
+				a.listTileIcon(c, k, n, active, round)
+			})
+		case listTrail: // 左列恒为小应用图标，与标题行对齐
+			lead := ui.Box(c).Size(listIcon, listIcon).Shrink(0).Key("row-lead")
+			if two {
+				lead.Margin(0, 0, 18, 0)
+			}
+			lead.AnimatePose(ui.Pose{Scale: map[bool]float32{true: 1.1, false: 1}[active]}, springControl)
+			lead.Children(func() { a.listLead(c, k, n) })
+		}
+		inlineIcon := (style == listMail && !n.Blur) || (thumb != nil && style != listTrail) // 次行行首的 13 小应用图标
+		ui.Column(c).Grow(1).Basis(0).Clip().Children(func() {
+			ui.Row(c).Height(18).Gap(8).AlignItems(ui.Center).Children(func() {
+				if a.cardInlineInputOn(c, k, n, k.fg) {
+					return
+				}
+				a.listTitle(c, k, n)
+				timeCell()
+			})
+			if !two {
+				return
+			}
+			ui.Row(c).Height(18).Gap(6).AlignItems(ui.Center).Children(func() {
+				a.aiBusyMark(c, k, n.ID) // 含「取消」钮：放行首，位置不随悬停变
+				if ic := a.appIcon(n.BundleID); inlineIcon && ic != nil {
+					ui.Image(c, ic).Size(13, 13).Shrink(0)
+				}
+				if code {
+					text(c, cardTitle(n), 9.5, 14, 500, k.muted).Font(fontMono).Padding(0, 4).Radius(4).Background(k.track).Shrink(0)
+				}
+				// 状态小标排在次行起点（与标题左缘对齐），摘要跟在后面占满剩余宽度
+				if a.bandFor(n.ID) == nil {
+					if n.Kept {
+						tipOf(c, liconFilled(c, "star", 11, amber400).Shrink(0), tr("常用"))
+					}
+					a.inboxSugChip(c, k, n)
+					a.sentChip(c, k, n)
+				}
+				if style == listFilm && thumb != nil && len(n.MediaFiles()) > 1 { // 胶片：多图行次行是一排小缩略
+					a.filmStrip(c, k, n)
+					return
+				}
+				if meta {
+					a.cardFooterLeadOpt(c, k, n, a.appIcon(n.BundleID) == nil)
+				} else {
+					text(c, preview, 11.5, 18, 400, k.muted).SingleLine().Grow(1).Basis(0)
+				}
+			})
+		})
+		if trailing && thumb != nil {
+			ui.Box(c).Size(listLeadW, listLeadW).Shrink(0).Key("row-trail").Children(func() {
+				a.listThumbStack(c, k, n, thumb, active, false)
+			})
+		}
+	})
+	return two
+}
+
+// listPreview：次行摘要——标题之外还能看到的那部分：正文第二行起 / 链接域名 / 图片备注；
+// 都没有时，取不到应用图标的写「来自 X」。
+func (a *app) listPreview(n store.Note) string {
+	if n.Blur || n.Kind == "secret" {
+		return ""
+	}
+	out := ""
+	switch {
+	case n.Kind == "link":
+		if strings.TrimSpace(n.Title) != "" || n.LinkTitle != "" {
+			out = linkHost(n.Text)
+		}
+	case n.Kind == "image":
+		out = cardImageMeta(n) // 尺寸「W × H」或「N 张」
+		if s := strings.TrimSpace(imageNoteText(n)); s != "" && !store.IsImagePlaceholder(s) && strings.TrimSpace(n.Title) != "" {
+			out = firstLine(s) + " · " + out
+		}
+	case strings.TrimSpace(n.Title) != "":
+		out = firstLine(n.Text)
+	default:
+		t := strings.TrimSpace(n.Text)
+		if i := strings.IndexByte(t, '\n'); i >= 0 {
+			out = strings.Join(strings.Fields(t[i+1:]), " ")
+		}
+	}
+	if n.SourceApp != "" && a.appIcon(n.BundleID) == nil { // 取不到应用图标：来源写成文字放在摘要前
+		out = strings.TrimSuffix(tr("来自 ")+n.SourceApp+" · "+out, " · ")
+	}
+	return preview(out, 160)
+}
+
+// rowToolbar：悬停 / 键盘焦点时挂在标题行右端的操作条（换掉时间的位置）。左侧一段与行底同色的渐隐遮住标题尾部，
+// 条本身是浮起的胶囊，从右侧 6pt 处滑入淡显。
+func (a *app) rowToolbar(c *ui.Context, k tokens, n store.Note, under ui.Color, lit bool, top float32) {
+	// 遮罩与操作条是两个独立的绝对定位兄弟：遮罩穿透点击，只有按钮本身接收点击（包一层容器会把行的点击吞掉）
+	cnt := 5
+	if a.aliasCount(n) > 0 {
+		cnt = 6
+	}
+	barW := float32(cnt*22 + 4 + 2)
+	right := float32(8)
+	if (a.listStyle() == listTrail || a.listStyle() == listMail) && a.listThumbOf(n) != nil {
+		right = listPadX + listLeadW + 6 // 右端是缩略图：操作条停在它左边，不盖图
+	}
+	in := ui.ElementTransition{Animation: &springControl, Enter: &ui.Motion{X: 6}, Exit: &ui.Motion{X: 4}}
+	// 遮罩按行的实际叠法分两层：先渐变到卡片底（或选中底），再叠一层同样渐变的 5% 前景色（= 悬停浅底），颜色与旁边严丝合缝
+	ui.Box(c).Absolute().Right(right+barW).Top(top).Size(28, 24).Gradient(under.Alpha(0), under, 90).PassThrough().Key("row-tools-fade").
+		Transition(ui.ElementTransition{Animation: &springControl, Enter: &ui.Motion{}, Exit: &ui.Motion{}}).Children(func() {
+		if !lit {
+			return
+		}
+		ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0).Gradient(a.glideBg.Alpha(0), a.glideBg, 90).PassThrough() // 与悬停浅底同色（分组色也对得上）
+	})
+	bar := ui.Row(c).Absolute().Right(right).Top(top).Height(24).Padding(0, 2).Radius(rr(8)).AlignItems(ui.Center).Background(k.card).
+		Border(1, k.inputBorder).Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 14, -6, k.floatShadowB).Key("row-tools").Transition(in)
+	bar.Children(func() {
+		a.noteActions(c, k, n, func(key, icon, tip string, danger bool) ui.Element {
+			return ghostIconButton(c, k, key, icon, tip, 22, 12, danger, true)
+		})
+	})
+}
+
+// listTitle：自定义标题 > 链接标题 > 图片备注 > 正文首行；代码用等宽；搜索命中高亮；已完成划线。
+func (a *app) listTitle(c *ui.Context, k tokens, n store.Note) {
+	title := strings.TrimSpace(n.Title)
+	switch {
+	case n.Blur:
+		title = cmpOr(title, tr("已模糊"))
+	case title != "":
+	case n.Kind == "link":
+		title = cmpOr(n.LinkTitle, linkHost(n.Text))
+	case n.Kind == "image":
+		title = cardTitle(n)
+		if s := strings.TrimSpace(imageNoteText(n)); s != "" && !store.IsImagePlaceholder(s) {
+			title = firstLine(s)
+		}
+	default:
+		title = cmpOr(firstLine(n.Text), cardTitle(n))
+	}
+	t := doneText(highlightText(c, k, title, a.query, 12.5, 18, k.fg).FontWeight(500).SingleLine().Grow(1).Basis(0), k, n)
+	if isCode(n) && n.Title == "" && !n.Blur {
+		t.Font(fontMono).FontSize(11.5)
 	}
 }
 
@@ -847,7 +1165,7 @@ func (a *app) cardClick(id string, idx int, mods ui.Modifiers) {
 		a.chosen.Add(id)
 	}
 	if idx >= 0 {
-		a.selected, a.focusList = idx, true
+		a.selected, a.focusList, a.kbFocus = idx, true, false
 	}
 }
 
@@ -963,6 +1281,7 @@ func (a *app) compactCard(c *ui.Context, k tokens, n store.Note, hovered, active
 			return doneText(highlightText(c, k, line, a.query, 11, 16, k.fg), k, n)
 		})
 		if !hovered { // 尾部元数据，悬停让位给操作钮
+			a.inboxSugChip(c, k, n) // 收件箱：建议分组
 			if n.Kept {
 				liconFilled(c, "star", 12, amber400).Shrink(0)
 			}
@@ -994,8 +1313,17 @@ func (a *app) cardActionsAt(c *ui.Context, k tokens, n store.Note, bottom float3
 	}
 	fade := ui.ElementTransition{Duration: 100 * time.Millisecond, Ease: easeTw, Enter: &ui.Motion{}, Exit: &ui.Motion{}} // reveal="hover-focus"：opacity 100ms
 	ui.Row(c).Absolute().Right(right).Bottom(bottom).Gap(2).Key("acts").Transition(fade).Children(func() {
+		a.noteActions(c, k, n, func(key, icon, tip string, danger bool) ui.Element {
+			return floatIconButton(c, k, key, icon, tip, danger, false)
+		})
+	})
+}
+
+// noteActions：卡片 / 行的操作钮（同 Tauri 顺序：发送 · [恢复化名] · 预览 / 打开页面 · 编辑 · 模糊 · 删除），mk 决定按钮外观。
+func (a *app) noteActions(c *ui.Context, k tokens, n store.Note, mk func(key, icon, tip string, danger bool) ui.Element) {
+	{
 		link := noteLink(n)
-		alias := core.AliasOccurrences(n.Text, a.store.Settings().AliasEntities) > 0
+		alias := a.aliasCount(n) > 0
 		// 同 Tauri 顺序：发送 · [恢复化名] · 预览 / 打开页面 · 编辑 · 模糊 · 删除
 		for _, act := range []struct{ icon, tip string }{
 			{"send", "发送到对话（双击卡片同效）"}, {"venetian-mask", "恢复化名"}, {"expand", "预览（Space）"}, {"pencil", "编辑"}, {"eye-off", "模糊内容"}, {"trash-2", "删除"},
@@ -1015,7 +1343,7 @@ func (a *app) cardActionsAt(c *ui.Context, k tokens, n store.Note, bottom float3
 			if act.icon == "eye-off" && n.Blur {
 				act.icon, act.tip = "eye", "取消模糊"
 			}
-			b := floatIconButton(c, k, "na-"+act.icon, act.icon, tr(act.tip), act.icon == "trash-2", false)
+			b := mk("na-"+act.icon, act.icon, tr(act.tip), act.icon == "trash-2")
 			if b.Clicked() {
 				switch act.icon {
 				case "send": // 同 Tauri sendSelfOrChecked：在多选里就发整组
@@ -1035,7 +1363,7 @@ func (a *app) cardActionsAt(c *ui.Context, k tokens, n store.Note, bottom float3
 				}
 			}
 		}
-	})
+	}
 }
 
 // codeText：卡面代码着色（同 Tauri 卡面 highlightCode，只算可见头部 600 字节）。
@@ -1175,7 +1503,7 @@ func (a *app) composerSection() store.Section {
 func (a *app) keyHints() [][2]string {
 	_, focused := a.current()
 	switch {
-	case a.titleEditID != "" || a.tagEditID != "" || a.renamingSec != "" || a.taskSecRename != "": // 行内改名 / 标签输入
+	case a.titleEditID != "" || a.tagEditID != "" || a.taskSecRename != "": // 行内改名 / 标签输入
 		return [][2]string{{"⏎", tr("保存")}, {"Esc", tr("取消")}}
 	case a.page == pageTasks && a.taskOpen != "":
 		return [][2]string{{"Esc", tr("收起")}, {"⌘⌫", tr("删除")}, {"⌘K", tr("命令")}}

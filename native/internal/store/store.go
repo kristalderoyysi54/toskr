@@ -54,6 +54,7 @@ type Note struct {
 	CodeLang    string            `json:"codeLang,omitempty"`
 	UpdatedAt   time.Time         `json:"updatedAt,omitzero"`
 	Provenance  *Provenance       `json:"provenance,omitempty"` // 回复笔记：来自哪次发送
+	SavedTo     string            `json:"savedTo,omitempty"`    // 剪贴卡「收下」后指向内容页里的那份副本（原卡留在剪贴页、不再按保留时长清理）
 }
 
 // ContentBlock 是富卡的权威内容块（同 Tauri NoteContentBlock）：文字或图片。
@@ -152,6 +153,11 @@ type Settings struct {
 	ColorScheme     string `json:"colorScheme,omitempty"`       // default | platinum | paper | matcha | sakura | fog
 	LastColorScheme string `json:"lastColorScheme,omitempty"`   // 切到 Platinum 等风格主题前用的颜色，切回「现代」时恢复
 	CardDensity     string `json:"cardDensity,omitempty"`       // comfortable | compact
+	NoteListStyle   string `json:"noteListStyle,omitempty"`     // 竖版列表行样式：tiles | trail | mail | avatar | film | card | side（默认）| hero
+	QuickCollapsed  bool   `json:"quickCollapsed,omitempty"`    // 内容页「常用」栏折叠
+	// 拖动分组坞的排序依据：各分组被放入的次数与最近一次（Unix 秒）
+	DockUse  map[string]int   `json:"dockUse,omitempty"`
+	DockLast map[string]int64 `json:"dockLast,omitempty"`
 	PtHighlight     string `json:"platinumHighlight,omitempty"` // lavender | blue | teal | graphite
 	PtScrollbar     string `json:"platinumScrollbar,omitempty"` // classic | thin
 	PanelNotOnTop   bool   `json:"panelNotOnTop,omitempty"`     // 面板置顶（默认开）
@@ -212,6 +218,16 @@ type Settings struct {
 	TauriMigration  string          `json:"tauriMigration,omitempty"`  // 旧版迁移向导：done / dismissed，空 = 未处理
 	TauriMigratedAt int64           `json:"tauriMigratedAt,omitempty"` // 最近一次迁移导入成功的时刻（毫秒）
 	Onboarding      OnboardingState `json:"onboarding,omitzero"`
+	// 收件箱归类规则：同一来源应用 + 类型的内容归到哪个分组（同类归同组 3 次后自动记下，设置里可看可删）
+	FileRules []FileRule `json:"fileRules,omitempty"`
+}
+
+// FileRule：来自 Bundle 应用、类型为 Kind（text / link / code / image，空 = 不限）的内容建议归到 Section。
+type FileRule struct {
+	Bundle  string `json:"bundle"`
+	App     string `json:"app,omitempty"` // 应用显示名（设置里展示用）
+	Kind    string `json:"kind,omitempty"`
+	Section string `json:"section"`
 }
 
 // ShotPrefs 是截图编辑器记住的使用习惯；零值都表示默认（粗细存档位 +1，0 = 默认中档）。

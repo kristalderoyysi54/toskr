@@ -6,7 +6,6 @@ import (
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 
-	"github.com/toskr/native/internal/core"
 	"github.com/toskr/native/internal/store"
 )
 
@@ -94,8 +93,8 @@ func (a *app) cardFooterLeadOpt(c *ui.Context, k tokens, n store.Note, withSourc
 			if footLinkButton(c, k, "prov-"+n.ID, "link-2", label, tr("打开这次发送的来源"), col) {
 				a.openProvenanceSource(n)
 			}
-		case core.AliasOccurrences(n.Text, a.store.Settings().AliasEntities) > 0:
-			cnt := core.AliasOccurrences(n.Text, a.store.Settings().AliasEntities)
+		case a.aliasCount(n) > 0:
+			cnt := a.aliasCount(n)
 			if footLinkButton(c, k, "alias-"+n.ID, "venetian-mask", fmt.Sprintf(tr("含 %d 处化名 · 点击恢复"), cnt), tr("把词典占位符还原为原文（本机操作，可撤销）"), k.muted) {
 				a.restoreCardAliases(n)
 			}

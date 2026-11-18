@@ -103,3 +103,38 @@ func TestTaskSectionDragShot(t *testing.T) {
 		tt.Frame()
 	}
 }
+
+// TestListMenuShots：标题栏 ☰ 菜单（列表操作 + 面板设置）浅深两色截图（TOSKR_SHOT_DIR 未设时跳过）。
+func TestListMenuShots(t *testing.T) {
+	dir := os.Getenv("TOSKR_SHOT_DIR")
+	if dir == "" {
+		t.Skip("set TOSKR_SHOT_DIR")
+	}
+	for _, dark := range []bool{false, true} {
+		a, tt := testApp(t, "收件箱里的卡", "另一张卡", "做完的卡")
+		tt.SetDark(dark)
+		id := a.store.AddSection("工作")
+		a.store.Add(store.Note{Section: id, Text: "工作里的卡"})
+		for _, n := range a.store.Section(store.SectionInbox) {
+			if n.Text == "做完的卡" {
+				_ = a.store.SetDone(n.ID, true)
+			}
+		}
+		for _, s := range a.store.Sections() {
+			if s.ID == id {
+				s.Collapsed = true
+				_ = a.store.UpdateSection(s)
+			}
+		}
+		a.reload()
+		a.menuOpen = true
+		tt.Frame()
+		tt.Advance(time.Second)
+		tt.Frame()
+		mode := "light"
+		if dark {
+			mode = "dark"
+		}
+		save(t, filepath.Join(dir, "menu-"+mode+".png"), tt.Image())
+	}
+}

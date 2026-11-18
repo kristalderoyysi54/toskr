@@ -88,8 +88,8 @@ func (a *app) barHeader(c *ui.Context, k tokens) {
 			if a.page != pageTasks && a.iconButton(c, k, "search", 22, 14, "搜索（⌘F）") {
 				a.searchOpen = !a.searchOpen
 			}
-			if a.iconButton(c, k, "menu", 22, 14, "更多") {
-				a.menuOpen = !a.menuOpen
+			if a.iconButton(c, k, "menu", 22, 14, "列表与面板选项") {
+				a.menuOpen, a.placementOpen = !a.menuOpen, false
 			}
 			if a.iconButton(c, k, "settings-2", 22, 14, "设置（⌘,）") {
 				a.openSettings()

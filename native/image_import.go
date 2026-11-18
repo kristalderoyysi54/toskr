@@ -248,7 +248,7 @@ func cardImageMeta(n store.Note) string {
 	files := n.MediaFiles()
 	switch {
 	case n.Kind == "image" && n.ImageW > 0:
-		return itoa(n.ImageW) + " × " + itoa(n.ImageH)
+		return fmt.Sprintf("%d × %d", n.ImageW, n.ImageH) // 不用 itoa：它把 >999 显示成「999+」
 	case n.Kind == "image":
 		return fmt.Sprintf(tr("%d 张"), len(files))
 	case n.Kind != "image" && len(files) > 0:

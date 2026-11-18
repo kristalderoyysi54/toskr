@@ -89,7 +89,7 @@ func idOf(a *app, text string) string {
 	return ""
 }
 
-// 组内「新笔记」：悬停分组头出 +，点了在该组落一张新笔记并打开详情窗编辑。
+// 组内「新笔记」：分组头右键（与「…」同一份菜单）「新建内容」，在该组落一张新笔记并打开详情窗编辑；区头不再有「+」。
 func TestNewNoteInSection(t *testing.T) {
 	a, tt := testApp(t, "已有")
 	old := openDetailFn
@@ -101,8 +101,14 @@ func TestNewNoteInSection(t *testing.T) {
 	}
 	tt.Move(r.X+r.W/2, r.Y+r.H/2)
 	tt.Frame()
-	if err := tt.Click("在「收件箱」中添加内容"); err != nil {
+	if _, ok := tt.Find("在「收件箱」中添加内容"); ok {
+		t.Fatal("区头不应再有「+」")
+	}
+	if err := tt.RightClick("收件箱"); err != nil {
 		t.Fatal(err)
+	}
+	if err := tt.ChooseMenuItem("新建内容"); err != nil {
+		t.Fatalf("%v %v", err, tt.Menu())
 	}
 	tt.Frame()
 	if got := a.store.Section("inbox"); len(got) != 2 || got[0].Text != "新笔记" || a.detail.id != got[0].ID || !a.detail.edit {

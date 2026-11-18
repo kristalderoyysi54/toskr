@@ -12,34 +12,26 @@ import (
 	"github.com/toskr/native/internal/store"
 )
 
-// 分组侧栏：开关可点 → 列出全部 / 各分组 / 新建；点分组只显示该组并收起；右键可重命名、上移下移。
-func TestNoteGroupRail(t *testing.T) {
+// 竖版左侧分组侧栏已移除（用户 2026-11-17）：分组头菜单「只看此组」筛选，顶上出筛选条「显示全部」回到全部；
+// 「新建分组」在列表顶出输入框；重命名 / 上移照常。
+func TestHeadFilterAndNewSection(t *testing.T) {
 	a, tt := testApp(t, "收件箱里的")
 	id := a.store.AddSection("提示词")
-	n, _, _ := a.store.Add(store.Note{Section: id, Text: "提示词里的"})
-	_ = n
+	_, _, _ = a.store.Add(store.Note{Section: id, Text: "提示词里的"})
 	a.reload()
 	tt.Frame()
-	if err := tt.Click("选择笔记分组，当前：全部"); err != nil {
-		t.Fatalf("侧栏开关不可点：%v", err)
+	if _, ok := tt.Find("选择笔记分组，当前：全部"); ok {
+		t.Fatal("侧栏开关应已移除")
 	}
-	tt.Advance(time.Second) // 侧栏宽度 0 → 64 过渡（同 Tauri duration-slow）走完再点
-	tt.Frame()
-	if !a.noteRailOpen || !tt.HasText("全部") || !tt.HasText("新建") {
-		t.Fatalf("侧栏 %v", tt.Texts())
-	}
-	if err := tt.Click("提示词"); err != nil {
-		t.Fatal(err)
+	_ = tt.RightClick("提示词")
+	if err := tt.ChooseMenuItem("只看此组"); err != nil {
+		t.Fatalf("%v %v", err, tt.Menu())
 	}
 	tt.Advance(time.Second)
 	tt.Frame()
-	if a.noteFilter != id || a.noteRailOpen || tt.HasText("收件箱里的") || !tt.HasText("提示词里的") || a.section != id {
-		t.Fatalf("过滤后 filter=%q open=%v %v", a.noteFilter, a.noteRailOpen, tt.Texts())
+	if a.noteFilter != id || tt.HasText("收件箱里的") || !tt.HasText("提示词里的") || !tt.HasText("显示全部") || a.section != id {
+		t.Fatalf("过滤后 filter=%q %v", a.noteFilter, tt.Texts())
 	}
-	a.noteRailOpen = true
-	tt.Frame()
-	tt.Advance(time.Second)
-	tt.Frame()
 	_ = tt.RightClick("提示词")
 	if err := tt.ChooseMenuItem("重命名"); err != nil {
 		t.Fatalf("%v %v", err, tt.Menu())
@@ -52,17 +44,25 @@ func TestNoteGroupRail(t *testing.T) {
 	if secs := a.store.Sections(); secs[1].Name != "Prompt 库" {
 		t.Fatalf("改名 %+v", secs)
 	}
-	_ = tt.RightClick("Prompt 库")
-	if err := tt.ChooseMenuItem("上移"); err != nil {
-		t.Fatalf("%v %v", err, tt.Menu())
+	if err := tt.Click("显示全部分组"); err != nil {
+		t.Fatal(err)
 	}
-	if secs := a.store.Sections(); secs[0].ID != id {
-		t.Fatalf("上移 %+v", secs)
-	}
-	_ = tt.Click("全部")
+	tt.Advance(time.Second)
 	tt.Frame()
 	if a.noteFilter != "" || !tt.HasText("收件箱里的") {
 		t.Fatal("回到全部")
+	}
+	a.menuOpen = true // 新建分组在标题栏 ☰ 菜单
+	tt.Frame()
+	if err := tt.Click("新建分组"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	tt.Type("资料")
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	if !slices.ContainsFunc(a.store.Sections(), func(s store.Section) bool { return s.Name == "资料" }) {
+		t.Fatalf("新建分组 %+v", a.store.Sections())
 	}
 }
 
@@ -308,24 +308,5 @@ func TestClipCondensedTemplate(t *testing.T) {
 	sv.Frame()
 	if !sv.HasText("剪贴卡模板") {
 		t.Fatalf("舒适密度应显示 %v", sv.Texts())
-	}
-}
-
-// 同 Tauri NoteGroupRail：开关挂在侧栏容器左缘，展开后位置不动（之前挂在列表上，随列表右移 64）。
-func TestRailToggleStaysPut(t *testing.T) {
-	_, tt := testApp(t, "一条笔记")
-	before, ok := tt.Find("选择笔记分组，当前：全部")
-	if !ok {
-		t.Fatal(tt.Texts())
-	}
-	_ = tt.Click("选择笔记分组，当前：全部")
-	for range 3 {
-		tt.Frame()
-	}
-	tt.Advance(600e6)
-	tt.Frame()
-	after, ok := tt.Find("收起笔记分组，当前：全部")
-	if !ok || after.X != before.X || after.Y != before.Y {
-		t.Fatalf("开关应原位：%v → %v", before, after)
 	}
 }

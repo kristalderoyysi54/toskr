@@ -143,7 +143,7 @@ func (a *app) focusAt(i int) {
 	if len(a.notes) == 0 {
 		return
 	}
-	a.focusList = true
+	a.focusList, a.kbFocus = true, true
 	a.choose(i)
 }
 

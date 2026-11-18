@@ -428,12 +428,18 @@ func (s *Store) PruneClipboard(days int, perApp map[string]int, now func() int64
 	}
 	removed := 0
 	_ = s.mutate(func() bool {
+		saved := map[string]bool{} // 已收下且内容页那份还在的剪贴卡：不清理（那份被删了就照常清理）
+		for _, n := range s.notes {
+			if n.SavedTo != "" && s.index(n.SavedTo) >= 0 {
+				saved[n.ID] = true
+			}
+		}
 		s.notes = slices.DeleteFunc(s.notes, func(n Note) bool {
 			limit, ok := perApp[ClipSourceKey(n)] // 来源单独设定优先，其余跟随全局（全局永久时只清有单独设定的来源）
 			if !ok {
 				limit = days
 			}
-			if limit > 0 && n.Section == SectionClipboard && !n.Kept && n.CreatedAt.Unix() < now()-int64(limit)*86400 {
+			if limit > 0 && n.Section == SectionClipboard && !n.Kept && !saved[n.ID] && n.CreatedAt.Unix() < now()-int64(limit)*86400 {
 				removed++
 				return true
 			}
@@ -561,4 +567,60 @@ func (s *Store) ClearSectionNotes(section string) []Note {
 		return len(removed) > 0
 	})
 	return removed
+}
+
+// KeepClips 是剪贴卡「收下」：把剪贴卡复制一份到 section（收件箱或分组，排在该组最前），原卡留在剪贴页并记下 SavedTo
+// （剪贴页显示绿色分组小标、不再按保留时长清理）。已收下过的卡跳过。返回撤销函数与新建的副本。
+func (s *Store) KeepClips(ids []string, section string) (undo func(), copies []Note) {
+	now := time.Now()
+	_ = s.mutate(func() bool {
+		for _, id := range ids {
+			i := s.index(id)
+			if i < 0 || s.notes[i].Section != SectionClipboard || (s.notes[i].SavedTo != "" && s.index(s.notes[i].SavedTo) >= 0) {
+				continue // 已收下（那份还在）的跳过；那份被删了可以重新收下
+			}
+			n := s.notes[i]
+			n.ID, n.Section, n.Kept, n.Done, n.SavedTo = newID(), section, false, false, ""
+			n.SentAt, n.SendCount, n.UpdatedAt = time.Time{}, 0, now
+			s.notes[i].SavedTo = n.ID
+			copies = append(copies, n)
+		}
+		if len(copies) == 0 {
+			return false
+		}
+		at := slices.IndexFunc(s.notes, func(n Note) bool { return n.Section == section })
+		if at < 0 {
+			at = len(s.notes)
+		}
+		s.notes = slices.Insert(s.notes, at, copies...)
+		return true
+	})
+	return func() {
+		_ = s.mutate(func() bool {
+			for _, c := range copies {
+				if i := s.index(c.ID); i >= 0 {
+					s.notes = slices.Delete(s.notes, i, i+1)
+				}
+				for i := range s.notes {
+					if s.notes[i].SavedTo == c.ID {
+						s.notes[i].SavedTo = ""
+					}
+				}
+			}
+			return len(copies) > 0
+		})
+	}, copies
+}
+
+// SavedSection：已收下的剪贴卡，其副本现在所在的分组；副本被删了返回 ""（剪贴页按未收下显示）。
+func (s *Store) SavedSection(n Note) string {
+	if n.SavedTo == "" {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if i := s.index(n.SavedTo); i >= 0 {
+		return s.notes[i].Section
+	}
+	return ""
 }

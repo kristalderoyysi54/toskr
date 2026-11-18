@@ -1,6 +1,7 @@
 package main
 
 import (
+	"image/color"
 	"testing"
 	"time"
 
@@ -31,7 +32,19 @@ func TestSectionColorPopover(t *testing.T) {
 		t.Fatalf("应弹出色板 %v", tt.Texts())
 	}
 	r, _ := tt.Find("收件箱卡片")
-	before := tt.Image().RGBAAt(int(r.X)+4, int(r.Y)-14)
+	// 分组颜色显示为区头色点（竖版列表 2026-11-17：不再给边框 / 通栏上色）。扫卡片行上方区头一带找最红的像素。
+	edge := func() (best color.RGBA) {
+		img := tt.Image()
+		for y := int(r.Y) - 70; y <= int(r.Y)-10; y++ {
+			for x := 0; x <= int(r.X); x++ {
+				if p := img.RGBAAt(x, y); int(p.R)-int(p.G) > int(best.R)-int(best.G) {
+					best = p
+				}
+			}
+		}
+		return
+	}
+	before := edge()
 	if err := tt.Click("红"); err != nil {
 		t.Fatal(err)
 	}
@@ -40,8 +53,8 @@ func TestSectionColorPopover(t *testing.T) {
 	if inboxColor(a) != "#ef4444" || a.secColorPick != "" {
 		t.Fatalf("应设为红色并收起 color=%q pick=%q", inboxColor(a), a.secColorPick)
 	}
-	if after := tt.Image().RGBAAt(int(r.X)+4, int(r.Y)-14); after == before || after.R < after.G+60 {
-		t.Fatalf("卡片通栏应变红 %v → %v", before, after)
+	if after := edge(); after == before || after.R < after.G+60 {
+		t.Fatalf("区头色点应变红 %v → %v", before, after)
 	}
 	_ = tt.RightClick("收件箱")
 	_ = tt.ChooseMenuItem("分组颜色…")

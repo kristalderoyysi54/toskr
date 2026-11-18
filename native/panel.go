@@ -296,7 +296,24 @@ func (a *app) searchRow(c *ui.Context, k tokens) {
 	})
 }
 
-// panelMenu 是标题栏 ☰「面板选项」（Tauri PanelOptionsMenu）：当前列表 / 面板 两组，位置与停靠为二级页。
+// listMenuInfo：当前页的列表操作——能否切紧凑、有几条已完成可清、是不是笔记分组列表。
+func (a *app) listMenuInfo() (density bool, done int, groups bool) {
+	groups = a.page == pageNotes && a.noteSub == 0
+	switch {
+	case groups:
+		done = len(a.done)
+	case a.page == pageTasks:
+		for _, t := range a.tasks {
+			if t.Status == "done" {
+				done++
+			}
+		}
+	}
+	return a.page == pageClip || groups, done, groups
+}
+
+// panelMenu 是标题栏 ☰ 菜单（用户 2026-11-18：一个图标，按作用范围分节）：先是当前页的列表操作（视图 / 分组 / 整理），
+// 末尾「面板」放面板自身的设置（Tauri PanelOptionsMenu），位置与停靠为二级页。
 func (a *app) panelMenu(c *ui.Context, k tokens) {
 	st := a.store.Settings()
 	if ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Clicked() { // 点菜单外关闭
@@ -409,39 +426,44 @@ func (a *app) panelMenu(c *ui.Context, k tokens) {
 			}
 			return
 		}
-		done := 0
-		switch {
-		case a.page == pageNotes && a.noteSub == 0:
-			done = len(a.done)
-		case a.page == pageTasks:
-			for _, t := range a.tasks {
-				if t.Status == "done" {
-					done++
+		if density, done, groups := a.listMenuInfo(); density || done > 0 {
+			if density { // 卡片密度开关（Tauri：Rows3「紧凑列表」，勾选 = 紧凑）
+				label(tr("视图"))
+				compact := st.CardDensity == "compact"
+				item("rows-3", tr("紧凑列表"), compact, false, "", func() {
+					st.CardDensity = "comfortable"
+					if !compact {
+						st.CardDensity = "compact"
+					}
+					_ = a.store.SetSettings(st)
+					closeMenu()
+				})
+			}
+			if groups {
+				sep()
+				label(tr("分组"))
+				item("folder-plus", tr("新建分组"), false, false, "", func() {
+					closeMenu()
+					a.newSecOn, a.newSec, a.noteScroll.Y = true, "", 0
+				})
+				open, shut := a.sectionFoldCounts()
+				if shut > 0 {
+					item("folder-open", tr("全部展开"), false, false, "", func() { closeMenu(); a.foldAllSections(false) })
+				}
+				if open > 0 {
+					item("folder", tr("全部折叠"), false, false, "", func() { closeMenu(); a.foldAllSections(true) })
 				}
 			}
-		}
-		density := a.page == pageClip || (a.page == pageNotes && a.noteSub == 0)
-		if density || done > 0 {
-			label(tr("当前列表"))
-		}
-		if density { // 卡片密度开关（Tauri：Rows3「紧凑列表」，勾选 = 紧凑）
-			compact := st.CardDensity == "compact"
-			item("rows-3", tr("紧凑列表"), compact, false, "", func() {
-				st.CardDensity = "comfortable"
-				if !compact {
-					st.CardDensity = "compact"
+			if done > 0 {
+				if density {
+					sep()
 				}
-				_ = a.store.SetSettings(st)
-				closeMenu()
-			})
-		}
-		if done > 0 {
-			item("eraser", fmt.Sprintf(tr("清理已完成（%d）"), done), false, false, "⇧⌘⌫", func() {
-				closeMenu()
-				a.clearAllDone(c)
-			})
-		}
-		if density || done > 0 {
+				label(tr("整理"))
+				item("eraser", fmt.Sprintf(tr("清理已完成（%d）"), done), false, false, "⇧⌘⌫", func() {
+					closeMenu()
+					a.clearAllDone(c)
+				})
+			}
 			sep()
 		}
 		label(tr("面板"))
@@ -455,7 +477,7 @@ func (a *app) panelMenu(c *ui.Context, k tokens) {
 
 // panelKeys：面板级快捷键（同 Tauri App.tsx 键盘处理）：⌃Tab / ⌘←→ 切页、Esc 逐层退出、⌘F 搜索、⌘Z 撤销、⇧⌘⌫ 清理已完成。
 func (a *app) panelKeys(c *ui.Context) {
-	typing := a.titleEditID != "" || a.tagEditID != "" || a.renamingSec != "" || a.taskOpen != "" || a.taskSecRename != ""
+	typing := a.titleEditID != "" || a.tagEditID != "" || a.taskOpen != "" || a.taskSecRename != ""
 	if c.Shortcut(ui.Ctrl, ui.KeyTab) { // 按页签顺序循环（页签可拖动重排，剪贴历史关闭时跳过剪贴页）
 		a.pageStep(1, true)
 	}
@@ -480,12 +502,16 @@ func (a *app) panelKeys(c *ui.Context) {
 			a.closeVerify()
 		case a.clipPick != "": // 长按弹出的分组选择先关
 			a.clipPick = ""
+		case a.remindPick != "": // 剪贴卡「提醒我」浮层
+			a.remindPick = ""
+		case a.triageOn: // 逐条整理浮层
+			a.triageOn = false
 		case a.billForm.open: // 盖住面板的对话框先退（同 Tauri Dialog Esc）
 			a.billForm = billForm{}
 		case a.billAnalytics:
 			a.billAnalytics = false
-		case a.titleEditID != "" || a.tagEditID != "" || a.renamingSec != "":
-			a.titleEditID, a.tagEditID, a.renamingSec = "", "", ""
+		case a.titleEditID != "" || a.tagEditID != "":
+			a.titleEditID, a.tagEditID = "", ""
 		case a.taskSecRename != "":
 			a.taskSecRename = ""
 		case a.taskOpen != "":

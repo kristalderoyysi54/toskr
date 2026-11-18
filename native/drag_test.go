@@ -14,8 +14,8 @@ func drag(t *testing.T, tt *ui.Tester, from, to string, toDY float32) {
 	dragAt(t, tt, from, 0, to, toDY)
 }
 
-// cardGrab：卡面正文是拖出源（抓文字 = 拖原文到别的应用），排序要抓卡片其余部分——这里抓正文上方的通栏。
-const cardGrab = -20
+// cardGrab：排序抓行里标题以外的部分——竖版列表行（2026-11-17）抓标题下方的元数据行（标题中心 + 18）。
+const cardGrab = 18
 
 func dragAt(t *testing.T, tt *ui.Tester, from string, fromDY float32, to string, toDY float32) {
 	t.Helper()
@@ -28,6 +28,13 @@ func dragAt(t *testing.T, tt *ui.Tester, from string, fromDY float32, to string,
 	gx, gy := g.X+g.W/2, g.Y+g.H/2+toDY
 	tt.Move(fx, fy)
 	tt.Press(fx, fy)
+	tt.Move(fx, fy+8) // 先拖起：笔记行拖起后列表顶上出分组坞（视口让位），目标要重新取坐标
+	tt.Frame()
+	tt.Frame()
+	if g2, ok := tt.Find(to); ok {
+		gx, gy = g2.X+g2.W/2, g2.Y+g2.H/2+toDY
+	}
+	fy += 8
 	for i := 1; i <= 6; i++ {
 		tt.Move(fx+(gx-fx)*float32(i)/6, fy+(gy-fy)*float32(i)/6)
 		tt.Frame()
@@ -99,6 +106,13 @@ func TestDragHoverExpandsCollapsedGroup(t *testing.T) {
 	gx, gy := g.X+g.W/2, g.Y+g.H/2
 	tt.Move(fx, fy)
 	tt.Press(fx, fy)
+	tt.Move(fx, fy+8)
+	tt.Frame()
+	tt.Frame()
+	if g2, ok := tt.Find("资料"); ok {
+		gx, gy = g2.X+g2.W/2, g2.Y+g2.H/2
+	}
+	fy += 8
 	for i := 1; i <= 6; i++ {
 		tt.Move(fx+(gx-fx)*float32(i)/6, fy+(gy-fy)*float32(i)/6)
 		tt.Frame()

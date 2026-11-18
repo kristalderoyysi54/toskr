@@ -252,8 +252,8 @@ func (a *app) ptTabRow(c *ui.Context, k tokens) {
 			if a.page != pageTasks && ptToolButton(c, "search", tr("搜索（⌘F）"), a.searchOpen) { // 同 Tauri：任务页没有搜索钮
 				a.searchOpen = !a.searchOpen
 			}
-			if ptToolButton(c, "menu", tr("更多"), a.menuOpen) {
-				a.menuOpen = !a.menuOpen
+			if ptToolButton(c, "menu", tr("列表与面板选项"), a.menuOpen) {
+				a.menuOpen, a.placementOpen = !a.menuOpen, false
 			}
 			if ptToolButton(c, "settings-2", tr("设置（⌘,）"), false) {
 				a.openSettings()

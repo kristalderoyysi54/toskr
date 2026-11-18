@@ -37,7 +37,7 @@ func addColorImages(t *testing.T, a *app, n int) []string {
 	return fs
 }
 
-// 同 Tauri NoteCard：多图卡并排 3 张、第 3 张盖「+N」；图文卡正文下一排最多 4 张 +N，紧凑行显示「N图」。
+// 多图卡：竖版列表行标题写张数；紧凑行显示「N图」。
 func TestCardShowsMultipleImages(t *testing.T) {
 	a, tt := testApp(t)
 	fs := addColorImages(t, a, 5)
@@ -45,7 +45,8 @@ func TestCardShowsMultipleImages(t *testing.T) {
 	_, _, _ = a.store.Add(store.Note{Section: store.SectionInbox, Text: "带五张图的说明", ImageFile: fs[0], Attachments: fs[1:]})
 	tt.Frame()
 	tt.Frame()
-	for _, s := range []string{"图片 ×5", "+2", "图文 ×6", "带五张图的说明", "+1"} {
+	// 竖版列表行（2026-11-17）：行首小图标是首图缩略，图片行标题写「图片 ×N」
+	for _, s := range []string{"图片 ×5", "带五张图的说明"} {
 		if !tt.HasText(s) {
 			t.Fatalf("缺 %q %v", s, tt.Texts())
 		}
@@ -263,8 +264,8 @@ func TestDetailAccentAndSaveToNotes(t *testing.T) {
 			t.Fatalf("%v %v", err, dt.Menu())
 		}
 	}
-	if moved, _ := a.store.Note(clip.ID); moved.Section != sec {
-		t.Fatalf("应移入分组 %q", moved.Section)
+	if cp := savedCopy(a, "剪贴内容"); cp.Section != sec {
+		t.Fatalf("应收到分组 %q", cp.Section)
 	}
 	dt.Frame()
 	if _, ok := dt.Find("存入笔记分组"); ok {

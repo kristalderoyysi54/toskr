@@ -233,6 +233,18 @@ func (a *app) settingsView(c *ui.Context) {
 							a.invalidateAll()
 						}
 					}},
+					{title: tr("列表样式"), hint: tr("单行列表 5 种，或卡片 3 种（正文与图片直接可见，高度随内容）"), hidden: st.CardDensity == "compact", control: func() {
+						var opts []opt
+						for _, x := range listStyles {
+							opts = append(opts, opt{v: x, label: listStyleNames[x]})
+						}
+						ruleSelect(c, k, s, "list-style", opts, a.listStyle(), false, func(v string) {
+							cur := a.store.Settings()
+							cur.NoteListStyle = v
+							_ = a.store.SetSettings(cur)
+							a.invalidateAll()
+						})
+					}},
 					{title: tr("详情窗字号"), hint: tr("详情窗内也可用 ⌘+ / ⌘− 调整，⌘0 复位"), control: func() {
 						v := float64(st.DetailFontSize)
 						if sliderValue(c, k, &v, 10, 24, 1, itoa(st.DetailFontSize)+"px") {
@@ -430,7 +442,7 @@ func (a *app) settingsView(c *ui.Context) {
 					control: setToggle(!st.ClipKeepConcealed, func(s *store.Settings, v bool) { s.ClipKeepConcealed = !v })},
 				{title: tr("忽略瞬时内容"), hint: tr("应用标记为临时、自动生成的复制不进入历史"), hidden: !st.ClipboardWatch,
 					control: setToggle(!st.ClipKeepTransient, func(s *store.Settings, v bool) { s.ClipKeepTransient = !v })},
-				{title: tr("保留时长"), hint: tr("超期记录自动清理，置顶项除外"), control: func() {
+				{title: tr("保留时长"), hint: tr("超期记录自动清理，置顶和已收下的除外"), control: func() {
 					if sliderValue(c, k, &retainIdx, 0, float64(len(retentionSteps)-1), 1, retain) {
 						a.setRetain, changed = float64(retentionSteps[int(retainIdx)]), true
 					}
@@ -446,6 +458,8 @@ func (a *app) settingsView(c *ui.Context) {
 					changed = a.appListEditor(c, k, s, "clip-excluded-apps", &a.setClipExcluded, tr("加入当前应用")) || changed
 				}},
 			}},
+			{title: tr("收件箱归类规则"), rows: a.fileRuleRows(c, s, st),
+				footer: tr("同一应用的同类内容归到同一分组满 3 次，会自动记成规则；收件箱里按规则给出的建议显示为实线。")},
 		}}},
 		// 同 Tauri TargetSection：粘贴规则 · 隐私保护 · 提示词模板（最近发送在主面板抽屉里，不在设置）
 		{label: "粘贴与隐私", icon: "crosshair", subs: pasteSubs, sections: [][]setSection{

@@ -548,7 +548,7 @@ func (a *app) detailSourceAndSave(c *ui.Context, k tokens, n store.Note) {
 		tipOf(c, ui.Box(c).Size(20, 20).Radius(5).Clip().Shrink(0).Key("detail-src-icon"), cmpOr(tip, n.BundleID)).Label(tr("来自 ") + cmpOr(tip, n.BundleID)).
 			Children(func() { ui.Image(c, img).Size(20, 20) })
 	}
-	if n.Section != store.SectionClipboard || a.detail.virt != nil {
+	if n.Section != store.SectionClipboard || n.SavedTo != "" || a.detail.virt != nil { // 已收下的剪贴卡不再给入口
 		return
 	}
 	b := ghostIconButton(c, k, "detail-save-notes", "folder-input", tr("存入笔记分组"), 22, 14, false, true)
@@ -560,7 +560,7 @@ func (a *app) detailSourceAndSave(c *ui.Context, k tokens, n store.Note) {
 				continue
 			}
 			if m.Item(sectionName(s)).Chosen() {
-				a.moveClipsTo([]store.Note{n}, s.ID) // 移走后卡片换到该分组，晕光随即换成分组色（同 Tauri headerColor）
+				a.moveClipsTo([]store.Note{n}, s.ID) // 收下：副本进该分组，原卡留在剪贴页（用户 2026-11-17 定）
 			}
 		}
 	})

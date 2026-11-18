@@ -11,7 +11,6 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
-	"github.com/toskr/native/internal/core"
 
 	"github.com/toskr/native/internal/store"
 )
@@ -83,6 +82,7 @@ func (a *app) clipBand(n store.Note) string {
 
 func (a *app) clipPage(c *ui.Context, k tokens) {
 	defer a.clipPickPopover(c, k)
+	defer a.clipRemindPopover(c, k)
 	list := a.clipList
 	_, vh := c.Size()
 	vis := visWindow{top: a.clipScroll.Y - 600, bottom: a.clipScroll.Y + vh + 600}
@@ -313,7 +313,7 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 	if !ok || a.page != pageClip {
 		idx = -1
 	}
-	focused := idx >= 0 && idx == a.selected && a.focusList
+	focused := idx >= 0 && idx == a.selected && a.focusList && a.kbFocus // 同笔记行：鼠标点选后移走即隐藏操作钮
 	checked := a.chosen.Has(n.ID)
 	var box ui.Element
 	if layout == clipCompact {
@@ -384,17 +384,17 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 					a.titleEditID, a.titleText = n.ID, n.Title
 				}
 			})
-			if n.Kept { // 同 Tauri：标准票据悬停时图钉常显，只有浓缩模板淡出让位（opacity 150ms）
+			if n.Kept { // 悬停时淡出，让位给挂在头行的操作钮（opacity 150ms）
 				pinOp := float32(1)
-				if hovered && condensed {
+				if hovered {
 					pinOp = 0
 				}
 				pin := ui.Box(c).Size(12, 12)
 				pin.Opacity(pin.AnimateTo("op", pinOp, tweenTw)).Children(func() { liconFilled(c, "pin", 12, amber400) })
 			}
-			if img := a.appIcon(n.BundleID); img != nil { // 来源应用图标（同 Tauri 票据头右端）；浓缩模板悬停让位给操作钮
+			if img := a.appIcon(n.BundleID); img != nil { // 来源应用图标（同 Tauri 票据头右端）；悬停让位给操作钮
 				op := float32(1)
-				if hovered && condensed {
+				if hovered {
 					op = 0
 				}
 				ic := ui.Box(c).Size(16, 16)
@@ -432,6 +432,7 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 				if isCode(n) {
 					t.Font(fontMono).FontSize(12)
 				}
+				a.clipKeepLinks(c, k, n) // 浓缩卡没有底栏：「收下 ˅ / 提醒」挂摘要行右端
 			})
 			if n.Blur {
 				blurOverlay(c, k, 20)
@@ -478,16 +479,17 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 		foot := ui.Row(c).Height(20).Padding(4, 0, 0, 0).Gap(4).AlignItems(ui.Center).
 			BorderWidth(1, 0, 0, 0).BorderColor(k.fg.Alpha(0.1)).BorderStyle(ui.BorderDashed)
 		foot.Children(func() {
-			a.cardFooterLead(c, k, n)
+			a.cardFooterLeadOpt(c, k, n, a.appIcon(n.BundleID) == nil) // 头行已有应用图标就不再写「来自 X」
 			if right := clipFootMeta(n); right != "" {
-				text(c, right, 10, 14, 400, k.muted).SingleLine().Shrink(0).MaxWidth(150)
+				text(c, right, 10, 14, 400, k.muted).SingleLine().Shrink(1).MaxWidth(110)
 			}
+			a.clipKeepLinks(c, k, n)
 		})
 		if n.Blur {
 			blurOverlay(c, k, 20)
 		}
-		if hovered {
-			a.clipActions(c, k, n, isLink, -1)
+		if hovered { // 底栏右端常驻「收下 / 提醒」，悬停浮钮挂头行右端（同浓缩模板）
+			a.clipActions(c, k, n, isLink, 4)
 		}
 		a.cardOverlays(c, k, n, checked, false)
 		k.th.CardOutline(c)
@@ -515,14 +517,14 @@ func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool, to
 		row = ui.Row(c).Absolute().Right(4).Top(top)
 	}
 	row.Gap(2).Key("acts").Transition(fade).Children(func() {
-		alias := core.AliasOccurrences(n.Text, a.store.Settings().AliasEntities) > 0
+		alias := a.aliasCount(n) > 0
 		openTip := "预览（Space）"
 		if isLink {
 			openTip = "打开页面（Space）"
 		}
 		// 同 Tauri 顺序与提示：发送 · 置顶 · 复制 · 移入笔记 · [恢复化名] · 预览 · 编辑 · 模糊 · 删除
 		for _, act := range []struct{ icon, tip string }{
-			{"send", "发送 / 添加（双击卡片同效）"}, {"pin", "置顶（固定不清理）"}, {"copy", "复制原文（不脱敏）"}, {"inbox", "移入笔记（长按选择分类）"},
+			{"send", "发送 / 添加（双击卡片同效）"}, {"pin", "置顶（固定不清理）"}, {"copy", "复制原文（不脱敏）"}, {"inbox", "收下（长按选择分类）"},
 			{"venetian-mask", "恢复化名"}, {open, openTip}, {"pencil", "编辑"}, {"eye-off", "模糊内容"}, {"trash-2", "删除"},
 		} {
 			if act.icon == "venetian-mask" && !alias {
@@ -635,6 +637,9 @@ func (a *app) clipRow(c *ui.Context, k tokens, n store.Note, hovered, isLink, ac
 	}
 	if files := n.MediaFiles(); n.Kind != "image" && len(files) > 0 {
 		text(c, fmt.Sprintf(tr("%d图"), len(files)), 10, 14, 400, k.muted).Shrink(0)
+	}
+	if sec := a.store.SavedSection(n); sec != "" { // 已收下：绿色对勾（悬停写分组），收下入口在悬停浮钮里
+		tipOf(c, licon(c, "circle-check", 12, k.ok).Shrink(0), tr("已收下：")+a.sectionLabel(sec))
 	}
 	if n.Kept {
 		liconFilled(c, "pin", 12, amber400)

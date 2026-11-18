@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"image"
 	"os"
 	"path/filepath"
 	"slices"
@@ -88,10 +89,9 @@ type app struct {
 	headRenameFocused          bool
 	secClickSeq                int      // 分组名单击 / 双击消歧
 	secMenuOpen                string   // 「…」分组菜单展开中的分组
-	secSort, railSort          sortDrag // 笔记分组拖动排序（列表区头 / 侧栏胶囊）
+	secSort                    sortDrag // 笔记分组拖动排序（列表区头）
 	secOrder                   []string // 本帧笔记列表的分组顺序（让位计算用）
 	secJump, secSeen           bool     // 落下那一帧归零平移 / 本帧拖动源仍在拖
-	railJump, railSeen         bool
 	tsecSort                   sortDrag // 任务分组拖动排序
 	tsecOrder                  []string
 	tsecJump, tsecSeen         bool
@@ -109,49 +109,47 @@ type app struct {
 	pinned                     bool
 	showDone                   bool
 	newSecOn                   bool
-	// 笔记分组侧栏：过滤（"" = 全部）、展开、就地改名
-	noteFilter, renamingSec, renameText string
-	noteRailOpen                        bool
-	detailSize                          [2]int // 详情窗上次的尺寸（用户拖过即沿用；0 = 首次按屏幕定）
-	newSec                              string
-	target                              macos.FrontApp     // 发送目标：面板唤出前的前台应用
-	targetStarted                       int64              // 目标进程启动时刻（身份锁定）
-	draftTarget                         draftTarget        // 预检 / 回车确认时冻结的目标（draft_target.go）
-	pending                             []store.Note       // 预检命中、等待确认的发送
-	pf                                  preflightState     // 发送预检：逐项处理状态
-	sendPNG                             map[string][]byte  // 本次发送用的图片遮挡副本（文件 → 遮挡后 PNG，图片隐私检查）
-	sendFinal                           string             // 预检里手动改过的最终文本（非空即原样发送，不再套模板 / 格式）
-	sendKeep                            *bool              // 预检「发送后保留面板」本次覆盖（nil = 按方案）
-	sendMode                            string             // 本次发送的输出格式覆盖（选择条 / 详情窗「输出格式」，发完或取消即清）
-	appNames                            map[string]string  // bundle → 应用显示名（设置里的应用名单）
-	appMissing                          map[string]bool    // 系统查不到的应用（没装）
-	lp                                  longPress          // 浮钮长按（收进笔记选分类）
-	clipPick                            string             // 长按弹出分组选择的剪贴卡
-	clipPickAt                          ui.Rect            // 弹出浮层挂靠的浮钮位置
-	thumbs                              *imgCache          // 卡片缩略图与 favicon（按字节限额，imgcache.go）
-	trimGen                             int                // 内存整理的代次（再次唤出面板即作废）
-	adoptErr                            string             // 正式版：旧版数据没接上的原因（非空时面板顶部常驻横幅）
-	aiBusy                              string             // 正在 AI 处理的笔记 ID
-	aiReviewing                         *aiReview          // 进行中的 AI 核对（取消时一并作废）
-	focus                               *focusState        // 进行中的专注（today_blocks.go；只在内存里，重启即结束）
-	fanout                              *fanout            // 进行中的多目标发送（fanout.go）
-	fanPick                             []string           // 「同时发到」上次勾选的应用（bundle id，本次运行内记住）
-	aiCancel                            context.CancelFunc // 进行中的 AI 改写（可取消）
-	draftImgs                           []pastedImage      // 输入区暂存的粘贴 / 拖入图片（提交时与草稿合成一张卡）
-	bigImgs                             *imgCache          // 详情窗内嵌大图缓存
-	docked                              bool               // 面板当前停靠在伴随应用窗口旁（位置不由自己记）
-	comp                                companionTracker   // 伴随跟随（companion_track.go）
-	vdrag                               vDrag              // 上 / 下缘把手拖动中
-	dragExp                             dragExpand         // 拖拽悬停在折叠分组头上（500ms 后自动展开）
-	kbd                                 kbDrag             // 键盘拖拽排序中拾起的卡
-	gripFocus                           string             // 键盘焦点所在的拖拽把手（卡片 id）
-	redactions                          []redactionSession // 各次发送的占位符映射（只在内存，同 Tauri redactionSessions）
-	verify                              verifyState        // 回复检查浮层
-	sendPH                              sendRedaction      // 本次发送的「原文 → 占位符」与次数（预检替换时设置）
-	tourOpen                            bool               // 首启导览盖在面板上（onboarding.go）
-	lesson                              *lessonSession     // 进行中的进阶课（只在内存，同 Tauri lessonStore）
-	lastFront                           macos.FrontApp     // 最近一次处于前台的外部应用（edge_hide.go observeFront）
-	pfRehearsal                         bool               // 当前预检是安全发送演练：强制脱敏、不回车、保留面板
+	noteFilter                 string // 笔记分组过滤（"" = 全部；分组头菜单「只看此组」）
+	detailSize                 [2]int // 详情窗上次的尺寸（用户拖过即沿用；0 = 首次按屏幕定）
+	newSec                     string
+	target                     macos.FrontApp     // 发送目标：面板唤出前的前台应用
+	targetStarted              int64              // 目标进程启动时刻（身份锁定）
+	draftTarget                draftTarget        // 预检 / 回车确认时冻结的目标（draft_target.go）
+	pending                    []store.Note       // 预检命中、等待确认的发送
+	pf                         preflightState     // 发送预检：逐项处理状态
+	sendPNG                    map[string][]byte  // 本次发送用的图片遮挡副本（文件 → 遮挡后 PNG，图片隐私检查）
+	sendFinal                  string             // 预检里手动改过的最终文本（非空即原样发送，不再套模板 / 格式）
+	sendKeep                   *bool              // 预检「发送后保留面板」本次覆盖（nil = 按方案）
+	sendMode                   string             // 本次发送的输出格式覆盖（选择条 / 详情窗「输出格式」，发完或取消即清）
+	appNames                   map[string]string  // bundle → 应用显示名（设置里的应用名单）
+	appMissing                 map[string]bool    // 系统查不到的应用（没装）
+	lp                         longPress          // 浮钮长按（收进笔记选分类）
+	clipPick                   string             // 长按弹出分组选择的剪贴卡
+	clipPickAt                 ui.Rect            // 弹出浮层挂靠的浮钮位置
+	thumbs                     *imgCache          // 卡片缩略图与 favicon（按字节限额，imgcache.go）
+	trimGen                    int                // 内存整理的代次（再次唤出面板即作废）
+	adoptErr                   string             // 正式版：旧版数据没接上的原因（非空时面板顶部常驻横幅）
+	aiBusy                     string             // 正在 AI 处理的笔记 ID
+	aiReviewing                *aiReview          // 进行中的 AI 核对（取消时一并作废）
+	focus                      *focusState        // 进行中的专注（today_blocks.go；只在内存里，重启即结束）
+	fanout                     *fanout            // 进行中的多目标发送（fanout.go）
+	fanPick                    []string           // 「同时发到」上次勾选的应用（bundle id，本次运行内记住）
+	aiCancel                   context.CancelFunc // 进行中的 AI 改写（可取消）
+	draftImgs                  []pastedImage      // 输入区暂存的粘贴 / 拖入图片（提交时与草稿合成一张卡）
+	bigImgs                    *imgCache          // 详情窗内嵌大图缓存
+	docked                     bool               // 面板当前停靠在伴随应用窗口旁（位置不由自己记）
+	comp                       companionTracker   // 伴随跟随（companion_track.go）
+	vdrag                      vDrag              // 上 / 下缘把手拖动中
+	dragExp                    dragExpand         // 拖拽悬停在折叠分组头上（500ms 后自动展开）
+	kbd                        kbDrag             // 键盘拖拽排序中拾起的卡
+	gripFocus                  string             // 键盘焦点所在的拖拽把手（卡片 id）
+	redactions                 []redactionSession // 各次发送的占位符映射（只在内存，同 Tauri redactionSessions）
+	verify                     verifyState        // 回复检查浮层
+	sendPH                     sendRedaction      // 本次发送的「原文 → 占位符」与次数（预检替换时设置）
+	tourOpen                   bool               // 首启导览盖在面板上（onboarding.go）
+	lesson                     *lessonSession     // 进行中的进阶课（只在内存，同 Tauri lessonStore）
+	lastFront                  macos.FrontApp     // 最近一次处于前台的外部应用（edge_hide.go observeFront）
+	pfRehearsal                bool               // 当前预检是安全发送演练：强制脱敏、不回车、保留面板
 
 	// 1:1 主面板
 	noteGroups                               []noteGroup
@@ -370,10 +368,45 @@ type app struct {
 	setQuery                            string      // 设置搜索
 	setSearch                           ui.Handle
 	newKeyLabel, newKeyPass, newKeyNote string // 设置「秘文」添加密钥的草稿
+
+	// 收下 / 收件箱归类 / 常用栏（keep_inbox.go）
+	inboxSug       map[string]fileSuggestion // 收件箱每条的建议分组（reload 时算好）
+	quick          []store.Note              // 内容页顶部「常用」栏
+	quickScroll    ui.ScrollState            // 常用栏横向滚动
+	triageOn       bool                      // 收件箱「逐条整理」进行中
+	triageSkip     map[string]bool           // 逐条整理里按空格跳过的条目
+	remindPick     string                    // 弹出「提醒我」浮层的剪贴卡
+	remindAt       ui.Rect                   // 浮层挂靠的「提醒」链接位置
+	remindText     string                    // 浮层里输入的时间
+	rowSec         string                    // 构建中的行所在分组与其在分组框内的纵坐标（悬停浅底按它滑动）
+	rowY           float32
+	glideHov       rowGlideAt // 上一帧的悬停行
+	glideNext      rowGlideAt
+	rowGlideLast   map[string]rowGlideAt // 各分组悬停浅底最后停的位置（淡出时留在原地）
+	cardLayouts    map[cardKey]cardCached // 卡片样式排版缓存（内容 + 宽度为键）
+	listBodyW      float32               // 上一帧量到的分组框宽
+	rowDragID      string                // 本帧正被鼠标拖起的行（底部分组坞据此滑出）
+	rowDragLast    string                // 上一帧拖起的行（窗口化不跳过它，拖动源不能消失）
+	dockFor        string                // 分组坞正在为哪一行列分组（收起动画期间保留）
+	dockPage       int
+	dockEdge       dockEdge
+	dockUnder      bool     // 指针在坞上（不触发列表边缘自动滚动）
+	dockNaming     []string // 拖到「新建分组」后待放入的卡（坞留下来起名）
+	dockNewName    string
+	aliasHits map[string]aliasHit // 各卡别名命中数缓存（aliasCount）
+	dockFlash      dockFlash // 放入后坞停留，格里数字冒「+N」
+	dockWas        bool      // 上一帧坞是否在（出现 / 收起时补滚动量，列表内容原地不动）
+	rowSettle      string    // 刚放下的行（行高弹回动画期间）
+	rowSettleUntil time.Time
+	glideBg        ui.Color // 当前分组悬停浅底色（分组有颜色时用分组色；操作条遮罩按它合成）
+	dragPrevFile   string   // 拖出缩略图的跟手预览缓存
+	dragPrev       *image.RGBA
+	rowFirst       bool // 构建中的行是不是分组里的第一行（不画上分隔线）
+	kbFocus        bool // 当前焦点由键盘（方向键）移来：只有这时焦点行常显操作钮，鼠标点选的移走即隐藏
 }
 
 func newApp(sys core.System, st *store.Store) *app {
-	a := &app{sys: sys, store: st, page: pageNotes, prevPage: -1, section: store.SectionInbox, doneOpen: map[string]bool{}, bandOpen: map[string]bool{"overdue": true, "spark": true}, clipView: "time", billView: "week", billFilter: "upcoming", clock: time.Now, thumbs: newImgCache(thumbBudget), bigImgs: newImgCache(bigBudget), revealed: map[string]time.Time{}, secretOpening: map[string]bool{}, secretPlain: map[string]string{}, secretFx: map[string]time.Time{}, msgOpen: map[string]bool{}, msgChosen: map[string]bool{}, drawerMore: map[string]bool{}, linkSem: make(chan struct{}, 2), appIcons: map[string]ui.ImageSource{}}
+	a := &app{sys: sys, store: st, page: pageNotes, prevPage: -1, section: store.SectionInbox, doneOpen: map[string]bool{}, bandOpen: map[string]bool{"overdue": true, "spark": true}, clipView: "time", billView: "week", billFilter: "upcoming", clock: time.Now, thumbs: newImgCache(thumbBudget), bigImgs: newImgCache(bigBudget), revealed: map[string]time.Time{}, secretOpening: map[string]bool{}, secretPlain: map[string]string{}, secretFx: map[string]time.Time{}, msgOpen: map[string]bool{}, msgChosen: map[string]bool{}, drawerMore: map[string]bool{}, linkSem: make(chan struct{}, 2), appIcons: map[string]ui.ImageSource{}, rowGlideLast: map[string]rowGlideAt{}, cardLayouts: map[cardKey]cardCached{}}
 	liveApp = a
 	st0 := st.Settings() // 同 Tauri：输入框草稿与所选分组跨重启保留
 	a.draft = st0.DraftText
@@ -436,6 +469,8 @@ func (a *app) reload() {
 			a.chosen.Remove(id)
 		}
 	}
+	a.refreshInboxSuggestions(all)
+	a.quick = quickNotes(all)
 	a.noteIdx = make(map[string]int, len(a.notes))
 	for i, n := range a.notes {
 		a.noteIdx[n.ID] = i
@@ -1452,7 +1487,7 @@ func (a *app) rangeSelect(id string) bool {
 	for i := min(from, to); i <= max(from, to); i++ {
 		a.chosen.Add(a.notes[i].ID)
 	}
-	a.selected, a.focusList = to, true
+	a.selected, a.focusList, a.kbFocus = to, true, false
 	return true
 }
 
