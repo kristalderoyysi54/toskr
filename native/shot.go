@@ -65,6 +65,9 @@ func (a *app) screenshot() {
 	// 默认截到的就是屏幕上看到的样子（同 Tauri screenshotHideSelf=false）；开了「截图时隐藏 Toskr」才先藏面板与钉图
 	hideSelf := a.store.Settings().ShotHideSelf
 	s.wasVisible = a.panel != nil && a.panel.IsVisible()
+	if hideSelf && macos.CancelMenuTracking() { // 开着的菜单也是 Toskr 的：一并藏掉
+		diag.Push("截图: 关闭打开中的菜单（隐藏 Toskr）")
+	}
 	if s.wasVisible && hideSelf {
 		a.hidePanelNow()
 	}
@@ -106,6 +109,22 @@ func (a *app) screenshot() {
 	}()
 }
 
+// shotKeyOverMenu：原生菜单打开期间 Carbon 热键不送达（菜单关掉后才补发，那时菜单已不在画面里），
+// 由键盘监听线程认出截图快捷键并直接开始截图。菜单关掉后补发的那一次落在 a.shot != nil 上被忽略。
+func (a *app) shotKeyOverMenu(ev macos.KeyEvent) {
+	if !macos.MenuTracking() {
+		return
+	}
+	st := a.store.Settings()
+	code, flags, ok := accelKeycode(st.ScreenshotKey)
+	const mods = macos.FlagShift | macos.FlagControl | macos.FlagOption | macos.FlagCommand
+	if !ok || st.ScreenshotOff || int(ev.Keycode) != code || ev.Flags&mods != flags {
+		return
+	}
+	diag.Push("截图快捷键 %s 触发（菜单打开中）", st.ScreenshotKey)
+	a.panel.Update(a.screenshot)
+}
+
 // captureRect：screencapture -R 按全局 pt 截一块屏（免去显示器序号映射），得到原生像素。
 func captureRect(r mygo.Rectangle) (*image.RGBA, error) {
 	f, err := os.CreateTemp("", "toskr-shot-*.png")
@@ -140,6 +159,10 @@ func captureRect(r mygo.Rectangle) (*image.RGBA, error) {
 func (a *app) openShot(s *shotSession, displays []mygo.Display, frames []*image.RGBA, wins []macos.WinRect) {
 	if a.shot != s {
 		return
+	}
+	// 菜单还开着（快捷键是在菜单打开时按的）：冻结帧已经拍到它，这里关掉——菜单追踪会独占鼠标，遮罩收不到拖选
+	if macos.CancelMenuTracking() {
+		diag.Push("截图: 关闭打开中的菜单")
 	}
 	cur := mygo.Screen.CursorScreenPoint()
 	var first *shotDisplay

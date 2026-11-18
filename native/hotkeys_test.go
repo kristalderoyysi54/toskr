@@ -154,3 +154,19 @@ func TestHotkeyRecorderRejectsConflict(t *testing.T) {
 		t.Fatalf("换成可用组合应生效 %q", got)
 	}
 }
+
+func TestAccelKeycode(t *testing.T) {
+	for acc, want := range map[string][2]uint64{
+		"Ctrl+Shift+Q": {12, symCtrl | symShift},
+		"Alt+Cmd+F5":   {96, symAlt | symCmd},
+		"Cmd+;":        {41, symCmd},
+	} {
+		code, flags, ok := accelKeycode(acc)
+		if !ok || uint64(code) != want[0] || flags != want[1] {
+			t.Errorf("%s → %d %#x %v，应为 %d %#x", acc, code, flags, ok, want[0], want[1])
+		}
+	}
+	if _, _, ok := accelKeycode(""); ok {
+		t.Error("空加速键不应解析成功")
+	}
+}

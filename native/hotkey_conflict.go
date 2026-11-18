@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -79,6 +80,30 @@ var keyCodes = func() map[ui.Key]int {
 	}
 	return m
 }()
+
+// accelKeycode：加速键（Ctrl+Shift+Q）→ 虚拟键码与修饰键位（sym* 与 CGEvent 的修饰键位同值），accelFrom 的逆运算。
+func accelKeycode(acc string) (code int, flags uint64, ok bool) {
+	parts := strings.Split(acc, "+")
+	var mods ui.Modifiers
+	for _, p := range parts[:len(parts)-1] {
+		switch p {
+		case "Ctrl":
+			mods |= ui.Ctrl
+		case "Alt":
+			mods |= ui.Alt
+		case "Shift":
+			mods |= ui.Shift
+		case "Cmd":
+			mods |= ui.Cmd
+		}
+	}
+	for key, c := range keyCodes {
+		if a, valid := accelFrom(mods, key); valid && a == acc {
+			return c, symFlags(mods), true
+		}
+	}
+	return 0, 0, false
+}
 
 func symFlags(m ui.Modifiers) uint64 {
 	var f uint64

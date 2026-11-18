@@ -1275,6 +1275,7 @@ func (a *app) startTap() {
 	d := detector.New()
 	var prev uint64
 	seen := false
+	macos.WatchMenuTracking()
 	err := macos.StartKeyTap(func(ev macos.KeyEvent) {
 		if ev.Synthetic {
 			return
@@ -1290,6 +1291,7 @@ func (a *app) startTap() {
 		var in detector.Event
 		switch ev.Type {
 		case macos.EventKeyDown:
+			a.shotKeyOverMenu(ev)
 			if ev.Keycode == 53 && a.longEsc() { // 长截屏中按 Esc：焦点在被截的应用上，由这里转为取消
 				diag.Push("长截屏: Esc 取消")
 			}
