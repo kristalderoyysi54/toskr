@@ -16,6 +16,18 @@ import (
 
 type cardTextDrag struct{ ids []string }
 
+// cardDrag：详情窗收的本进程拖动——卡面正文（cardTextDrag）与笔记页整行（noteDrag）。
+type cardDrag interface{ cardIDs() []string }
+
+func (d cardTextDrag) cardIDs() []string { return d.ids }
+
+func (d noteDrag) cardIDs() []string {
+	if liveApp == nil {
+		return []string{d.id}
+	}
+	return noteIDs(liveApp.dragNotes(d.id))
+}
+
 var detailDropOpts = transfer.DropOptions{Formats: []transfer.Format{transfer.Text}}
 
 // dropHover：一次拖入编辑器的悬停状态。orig 是拖进来时编辑器原有选区（落在它里面 = 替换它）；idx 为当前落点。
@@ -46,7 +58,7 @@ func inRange(r [2]int, i int) bool {
 // 另画一条 2pt 主色插入线——拖动时详情窗不是前台窗，系统光标不画，插入线保证看得见。松手插在光标显示处。
 func (a *app) detailDropZone(ta ui.Element, n store.Note, src string, block int) (ui.Rect, bool) {
 	key := itoa(block)
-	local, gotLocal := ui.Drop[cardTextDrag](ta)
+	local, gotLocal := ui.Drop[cardDrag](ta)
 	data, gotData := ui.DropData(ta, detailDropOpts)
 	_, over := ui.DataDragOver(ta, detailDropOpts)
 	h := &a.dropHov
@@ -64,7 +76,7 @@ func (a *app) detailDropZone(ta ui.Element, n store.Note, src string, block int)
 		*h = dropHover{}
 		var notes []store.Note
 		if gotLocal {
-			for _, id := range local.ids {
+			for _, id := range local.cardIDs() {
 				if x, ok := a.store.Note(id); ok {
 					notes = append(notes, x)
 				}

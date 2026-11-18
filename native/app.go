@@ -52,6 +52,7 @@ type app struct {
 	yieldUntil                            time.Time // 发送时面板让出焦点：此前的失焦不自动收起
 	// 紧凑行悬停与原图窥视（peek.go）
 	rowHov    rowHover
+	gp        groupPeek // 合上的分组悬停速览（group_peek.go）
 	peekWin   *mygo.Window
 	peekImg   ui.ImageSource
 	peekFiles []string
@@ -337,11 +338,12 @@ type app struct {
 	retainAskGen     int // 全局保留时长缩短的待确认代次（settings_confirm.go）
 	hudStreak        int // 连续捕获计数：气泡仍在场时再捕获累加（同 Tauri hud.streak）
 	hudGen           int
-	hudUndo          func()   // 可撤销气泡的撤销动作
-	hudHover         bool     // 光标在气泡上（关闭穿透、显出撤销）
-	hudTarget        string   // 点气泡查看时定位的卡片（捕获类）
-	hudSrc, hudTag   string   // 捕获气泡：来源应用 bundle（状态圆右下角叠小图标）与内容类型小标（图文 ×3 / 链接 / sql…）
-	hudDue           []string // 任务到期气泡的任务
+	hudUndo          func()           // 可撤销气泡的撤销动作
+	hudHover         bool             // 光标在气泡上（关闭穿透、显出撤销）
+	hudTarget        string           // 点气泡查看时定位的卡片（捕获类）
+	hudSrc, hudTag   string           // 捕获气泡：来源应用 bundle（状态圆右下角叠小图标）与内容类型小标（图文 ×3 / 链接 / sql…）
+	hudDue           []string         // 任务到期气泡的任务
+	hudFile          []fileSuggestion // 捕获气泡上的去向（点一下把刚捕获的那条归过去）
 
 	// 设置窗编辑态
 	setModifier                         int
@@ -371,8 +373,15 @@ type app struct {
 
 	// 收下 / 收件箱归类 / 常用栏（keep_inbox.go）
 	inboxSug       map[string]fileSuggestion // 收件箱每条的建议分组（reload 时算好）
-	quick          []store.Note              // 内容页顶部「常用」栏
-	quickScroll    ui.ScrollState            // 常用栏横向滚动
+	quick          []store.Note              // 内容页顶部「常用」区
+	quickScroll    ui.ScrollState            // 常用区超过 3 行时的纵向滚动
+	quickSort      quickSort                 // 常用区拖动排序 / 拖入的落点
+	quickJump      bool                      // 本帧落下：让位平移直接归零
+	quickDragID    string                    // 本帧正被拖起的常用方块
+	inboxScroll    ui.ScrollState            // 收件箱抽屉里的滚动位置
+	quickSentID    string                    // 上一次点击发送的常用方块（双击只发一次）
+	quickSentAt    time.Time                 // 上一次点击发送的时刻
+	quickDragLast  string                    // 上一帧拖起的常用方块（拖到列表上下缘自动滚）
 	triageOn       bool                      // 收件箱「逐条整理」进行中
 	triageSkip     map[string]bool           // 逐条整理里按空格跳过的条目
 	remindPick     string                    // 弹出「提醒我」浮层的剪贴卡
@@ -382,21 +391,25 @@ type app struct {
 	rowY           float32
 	glideHov       rowGlideAt // 上一帧的悬停行
 	glideNext      rowGlideAt
-	rowGlideLast   map[string]rowGlideAt // 各分组悬停浅底最后停的位置（淡出时留在原地）
+	rowGlideLast   map[string]rowGlideAt  // 各分组悬停浅底最后停的位置（淡出时留在原地）
 	cardLayouts    map[cardKey]cardCached // 卡片样式排版缓存（内容 + 宽度为键）
-	listBodyW      float32               // 上一帧量到的分组框宽
-	rowDragID      string                // 本帧正被鼠标拖起的行（底部分组坞据此滑出）
-	rowDragLast    string                // 上一帧拖起的行（窗口化不跳过它，拖动源不能消失）
-	dockFor        string                // 分组坞正在为哪一行列分组（收起动画期间保留）
+	listBodyW      float32                // 上一帧量到的分组框宽
+	rowDragID      string                 // 本帧正被鼠标拖起的行（底部分组坞据此滑出）
+	rowDragLast    string                 // 上一帧拖起的行（窗口化不跳过它，拖动源不能消失）
+	dockFor        string                 // 分组坞正在为哪一行列分组（收起动画期间保留）
 	dockPage       int
 	dockEdge       dockEdge
-	dockUnder      bool     // 指针在坞上（不触发列表边缘自动滚动）
-	dockNaming     []string // 拖到「新建分组」后待放入的卡（坞留下来起名）
+	dockUnder      bool            // 指针在坞上（不触发列表边缘自动滚动）
+	foldSeen       map[string]bool // 各分组上一帧是否折叠（发现变化 = 刚折叠 / 展开）
+	foldSpan       float32         // 刚折叠 / 展开的分组内容高度
+	foldUntil      time.Time       // 折叠动画结束时刻
+	dockComp       float32         // 坞滑出时给列表补上的滚动量（收起时原样减回）
+	dockNaming     []string        // 拖到「新建分组」后待放入的卡（坞留下来起名）
 	dockNewName    string
-	aliasHits map[string]aliasHit // 各卡别名命中数缓存（aliasCount）
-	dockFlash      dockFlash // 放入后坞停留，格里数字冒「+N」
-	dockWas        bool      // 上一帧坞是否在（出现 / 收起时补滚动量，列表内容原地不动）
-	rowSettle      string    // 刚放下的行（行高弹回动画期间）
+	aliasHits      map[string]aliasHit // 各卡别名命中数缓存（aliasCount）
+	dockFlash      dockFlash           // 放入后坞停留，格里数字冒「+N」
+	dockWas        bool                // 上一帧坞是否在（出现 / 收起时补滚动量，列表内容原地不动）
+	rowSettle      string              // 刚放下的行（行高弹回动画期间）
 	rowSettleUntil time.Time
 	glideBg        ui.Color // 当前分组悬停浅底色（分组有颜色时用分组色；操作条遮罩按它合成）
 	dragPrevFile   string   // 拖出缩略图的跟手预览缓存
@@ -454,8 +467,18 @@ func (a *app) reload() {
 		}
 		a.noteGroups = a.groups()
 		bar := a.hbar()
+		drawer := a.drawerMode()
 		for _, g := range a.noteGroups {
+			if drawer && g.sec.ID == store.SectionInbox {
+				continue // 收件箱在底部抽屉里：排到最后（见下）
+			}
 			if !g.sec.Collapsed || bar { // 横栏卡串不分组：折叠的组照样排进串里（同 Tauri stripNotes）
+				a.notes = append(a.notes, g.open...)
+			}
+			a.done = append(a.done, g.done...)
+		}
+		if g, ok := a.inboxGroup(); ok && drawer {
+			if a.inboxDrawerOpen() {
 				a.notes = append(a.notes, g.open...)
 			}
 			a.done = append(a.done, g.done...)
@@ -470,7 +493,9 @@ func (a *app) reload() {
 		}
 	}
 	a.refreshInboxSuggestions(all)
-	a.quick = quickNotes(all)
+	st := a.store.Settings()
+	a.quick = quickNotes(all, st.QuickOrder)
+	reduceMotionPref = st.ReduceMotion
 	a.noteIdx = make(map[string]int, len(a.notes))
 	for i, n := range a.notes {
 		a.noteIdx[n.ID] = i
@@ -558,6 +583,7 @@ func (a *app) showPanel() {
 // hidePanel 收起面板：先播离场（向停靠边退 16px 并淡出，140ms easeIn），播完再藏窗，同 Tauri onAnimationComplete → hidePanel。
 func (a *app) hidePanel() {
 	a.holdOpen = false
+	a.closeGroupPeek("面板收起", false)
 	a.saveDraftState()
 	a.remaskAll() // 秘文：面板收起即回遮罩，明文丢弃
 	if a.panel == nil || !a.panel.IsVisible() || a.panelHiding {
@@ -616,6 +642,7 @@ func (a *app) yieldPanelFocus() {
 // hidePanelNow 立即藏窗（发送、截图：焦点必须马上还给目标应用，不能等离场动画）。
 func (a *app) hidePanelNow() {
 	a.holdOpen = false
+	a.closeGroupPeek("面板收起", false)
 	a.remaskAll()
 	a.panelHiding = false
 	if a.panel != nil {
@@ -722,6 +749,7 @@ func (a *app) onTrigger() {
 			})
 			a.hudTarget = note.ID
 			a.hudSrc, a.hudTag = front.BundleID, captureTag(note)
+			a.hudOfferFile(note)
 		})
 	}()
 }

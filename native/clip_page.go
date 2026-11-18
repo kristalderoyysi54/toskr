@@ -504,7 +504,7 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 	}
 }
 
-// clipActions 是悬停浮钮组：发送 / 置顶 / 复制 / 收进笔记 / 详情（链接为打开页面）/ 编辑 / 模糊 / 删除。
+// clipActions 是悬停操作条（用户 2026-11-18：与内容页行操作条同款——一个浮起的胶囊里排无底图标钮，不再是一个个独立浮钮）：发送 / 置顶 / 复制 / 收进笔记 / 详情（链接为打开页面）/ 编辑 / 模糊 / 删除。
 // top ≥ 0：距顶偏移（浓缩卡挂头行右端、紧凑行垂直居中，元数据悬停让位）；< 0：标准卡挂底栏右端。
 func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool, top float32, grid ...bool) {
 	open := "expand"
@@ -516,7 +516,9 @@ func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool, to
 	if top >= 0 {
 		row = ui.Row(c).Absolute().Right(4).Top(top)
 	}
-	row.Gap(2).Key("acts").Transition(fade).Children(func() {
+	row.Height(24).Padding(0, 2).Radius(rr(8)).AlignItems(ui.Center).Background(k.card).Border(1, k.inputBorder).
+		Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 14, -6, k.floatShadowB)
+	row.Key("acts").Transition(fade).Children(func() {
 		alias := a.aliasCount(n) > 0
 		openTip := "预览（Space）"
 		if isLink {
@@ -549,7 +551,10 @@ func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool, to
 			if act.icon == "send" && a.insertsIntoOpenCard(a.clipMoveTargets(n)) { // 目的地如实：详情窗开着时进那张卡，不外发
 				glyph, act.tip = "text-cursor-input", "添加到打开的卡片光标处（双击卡片同效）"
 			}
-			b := floatIconButton(c, k, "ca-"+act.icon, glyph, tr(act.tip), act.icon == "trash-2", act.icon == "pin" && n.Kept)
+			b := ghostIconButton(c, k, "ca-"+act.icon, glyph, tr(act.tip), 22, 12, act.icon == "trash-2", true)
+			if act.icon == "pin" && n.Kept && !b.Hovered() { // 已置顶：钮常亮一层底
+				b.Background(k.pressed)
+			}
 			if act.icon == "inbox" {
 				a.clipInboxButton(b, n)
 				continue
@@ -791,7 +796,7 @@ func (a *app) clipSwapIn(c *ui.Context) ui.ElementTransition {
 		return ui.ElementTransition{}
 	}
 	dx := a.clipSwapDX
-	if c.Preferences().ReduceMotion {
+	if reduceMotion(c) {
 		dx = 0
 	}
 	return ui.ElementTransition{Duration: 180 * time.Millisecond, Ease: easeStandard, Colors: true, Enter: &ui.Motion{X: dx}}

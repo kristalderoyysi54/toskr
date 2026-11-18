@@ -143,7 +143,11 @@ func start() (*app, error) {
 	a.startCompanionTracker()
 	a.panel.OnBlur(func() {
 		diag.Push("面板失焦 pinned=%v", a.pinned)
-		a.remaskAll()                        // 秘文失焦即回遮罩（钉住时也一样，与 Tauri 一致）
+		a.remaskAll()       // 秘文失焦即回遮罩（钉住时也一样，与 Tauri 一致）
+		if a.gp.sec != "" { // 分组速览开着（焦点可能是进了弹框）：收起裁决推迟到弹框关掉
+			a.gp.blurred = true
+			return
+		}
 		if time.Now().Before(a.yieldUntil) || a.cmpWin != nil { // 发送时主动让出焦点 / 正在对比窗里核对预检：都不是用户点走
 			return
 		}

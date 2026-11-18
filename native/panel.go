@@ -151,7 +151,7 @@ func (a *app) panelPresence(c *ui.Context, shell ui.Element) float32 {
 	}
 	p := shell.AnimateTo("presence", target, anim)
 	dx := 16 * (1 - p)
-	if c.Preferences().ReduceMotion {
+	if reduceMotion(c) {
 		dx = 0
 	}
 	switch barEdge(a.store.Settings()) { // 横栏从所在屏缘（底 / 顶）滑入
@@ -580,6 +580,7 @@ func (a *app) panelKeys(c *ui.Context) {
 
 func (a *app) switchPage(p int) {
 	if a.page != p {
+		a.closeGroupPeek("换页", true)
 		a.prevPage, a.pageAt = a.page, time.Time{}
 		a.page, a.selected = p, 0
 		a.chosen.Clear()

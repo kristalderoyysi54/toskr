@@ -118,7 +118,7 @@ func doneText(e ui.Element, k tokens, n store.Note) ui.Element {
 	if n.Done {
 		e.TextColor(k.muted).Strikethrough().Opacity(0.6)
 	}
-	if n.Kind != "image" && n.Kind != "link" && n.Kind != "secret" && !n.Blur && n.Text != "" { // 模糊卡、秘文不可拖出明文
+	if !rowUnified && n.Kind != "image" && n.Kind != "link" && n.Kind != "secret" && !n.Blur && n.Text != "" { // 模糊卡、秘文不可拖出明文；笔记页的行整行拖（rowDragOut）
 		group := cardDragNotes(n) // 在多选里拖整组（同发送钮）
 		var opts []transfer.DragOptions
 		if e.Hovered() { // 拖出预览只在悬停时生成（按下前一定悬停过）

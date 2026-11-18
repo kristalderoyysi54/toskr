@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
@@ -103,4 +104,41 @@ func renderDragPreview(first string, count int, dark bool) image.Image {
 	tt.SetDark(dark)
 	tt.Frame()
 	return tt.Image()
+}
+
+// rowUnified：正在构建的笔记行整行是一个拖动源——里面的正文 / 缩略图不再各自当拖出源（doneText、imageDragOut 据此跳过）。
+var rowUnified bool
+
+// rowUnifiedHover：该行此刻被指针悬停（缩略图的停留预览据此判断，见 compactHover）。
+var rowUnifiedHover bool
+
+// rowDragNative：笔记行的拖动同时是系统原生拖拽（能拖到别的应用）。无头测试没有系统拖拽会话，关掉走窗内拖动；放下的处理是同一份。
+var rowDragNative = true
+
+// rowDragOut：笔记行拖出窗口时交给别的应用的内容——有正文给原文（在多选里是整组，同发送），纯图片卡给原图。
+// 模糊卡、秘文、链接卡不给（只能在面板里拖）。图文都有的卡只给文字。跟手的是一张小卡 / 缩略图。
+func (a *app) rowDragOut(box ui.Element, k tokens, n store.Note) {
+	if !rowDragNative || n.Blur || n.Kind == "secret" || n.Kind == "link" {
+		return
+	}
+	hovered := box.Hovered() // 预览只在悬停时生成（按下前一定悬停过）
+	var opts []transfer.DragOptions
+	if n.Kind != "image" && n.Text != "" {
+		if hovered {
+			opts = append(opts, cardDragOptions(cardDragNotes(n), k.dark))
+		}
+		box.DragDataFrom(func() transfer.Data { return transfer.TextData(cardDragText(cardDragNotes(n))) }, opts...)
+		return
+	}
+	files := n.MediaFiles()
+	if len(files) == 0 {
+		return
+	}
+	o := transfer.DragOptions{Done: func(transfer.Result) { time.AfterFunc(time.Minute, cleanImageDragDir) }}
+	if hovered {
+		if prev := a.dragThumbPreview(files[0]); prev != nil {
+			o.Preview, o.Hotspot = prev, image.Pt(prev.Bounds().Dx()/2, prev.Bounds().Dy()/2)
+		}
+	}
+	box.DragDataFrom(func() transfer.Data { return a.imageDragData(files) }, o)
 }

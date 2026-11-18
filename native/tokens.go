@@ -128,6 +128,7 @@ var (
 
 func tok(c *ui.Context) tokens {
 	buildCtx = c
+	motionGate(c)
 	if lib := *c.Theme(); theme().LibTheme(&lib) { // 主题要改库主题（提示气泡底色等）：每帧首次取变量时换上
 		c.SetTheme(&lib)
 	}

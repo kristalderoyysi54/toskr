@@ -233,17 +233,12 @@ func (a *app) settingsView(c *ui.Context) {
 							a.invalidateAll()
 						}
 					}},
-					{title: tr("列表样式"), hint: tr("单行列表 5 种，或卡片 3 种（正文与图片直接可见，高度随内容）"), hidden: st.CardDensity == "compact", control: func() {
-						var opts []opt
-						for _, x := range listStyles {
-							opts = append(opts, opt{v: x, label: listStyleNames[x]})
-						}
-						ruleSelect(c, k, s, "list-style", opts, a.listStyle(), false, func(v string) {
-							cur := a.store.Settings()
-							cur.NoteListStyle = v
-							_ = a.store.SetSettings(cur)
+					{title: tr("减弱动态效果"), hint: tr("关闭滑动、缩放、弹簧等过渡，界面变化直接到位"), control: func() {
+						on := st.ReduceMotion
+						if toggle(c, s, &on) {
+							a.patchSettings(func(x *store.Settings) { x.ReduceMotion = on })
 							a.invalidateAll()
-						})
+						}
 					}},
 					{title: tr("详情窗字号"), hint: tr("详情窗内也可用 ⌘+ / ⌘− 调整，⌘0 复位"), control: func() {
 						v := float64(st.DetailFontSize)

@@ -3,151 +3,238 @@ package main
 import (
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
 	"github.com/toskr/native/internal/store"
 )
 
-// 内容页的「常用」栏、收件箱头部操作（按建议归好 / 逐条整理）、收件箱卡片上的建议分组、逐条整理浮层。
+// 内容页的「常用」区、收件箱头部操作（按建议归好 / 逐条整理）、收件箱卡片上的建议分组、逐条整理浮层。
 
 const (
-	quickMax    = 12
-	quickCardW  = 64 // 常用：方块（用户 2026-11-17：84 → 64，再小些）
-	quickCardH  = 64
-	quickHeadH  = 18
-	quickStripH = quickHeadH + 6 + quickCardH + 6 + 4 // 标题行 + 间距 + 卡片 + 间距 + 位置点
+	quickCols    = 3
+	quickRowsMax = 3 // 最多露出 3 行，更多的在区内纵向滚动
+	quickCardH   = 56
+	quickGap     = 6
 )
 
-// quickStripHeight：常用栏实占高度（折叠时只剩标题行）。
-func (a *app) quickStripHeight() float32 {
-	if a.store.Settings().QuickCollapsed {
-		return quickHeadH
-	}
-	return quickStripH
-}
+// quickSort：常用区的拖动状态。active 是区内拿起的方块（排序），over 是指针所在的槽位（排序落点 / 外面的卡拖进来时插到它前面）。
+type quickSort struct{ active, over string }
 
-// quickNotes：常用栏内容（用户 2026-11-17 定）——设为常用（★）的在前按发送次数排，其余按发送次数补满；收件箱、剪贴板、已完成不进。
-func quickNotes(all []store.Note) []store.Note {
+// quickNotes：常用区内容（用户 2026-11-18 定，同 Arc 的常用书签）——只放设为常用（★）的卡，顺序是拖动排出来的 order，
+// 不在 order 里的（菜单里设的 / 旧数据）排在后面；剪贴板、已完成不进。没有就不显示这个区。
+func quickNotes(all []store.Note, order []string) []store.Note {
+	rank := make(map[string]int, len(order))
+	for i, id := range order {
+		rank[id] = i
+	}
 	var out []store.Note
 	for _, n := range all {
-		if store.IsSystemSection(n.Section) || n.Done || (!n.Kept && n.SendCount == 0) {
-			continue
+		if n.Kept && !n.Done && n.Section != store.SectionClipboard {
+			out = append(out, n)
 		}
-		out = append(out, n)
 	}
 	slices.SortStableFunc(out, func(x, y store.Note) int {
-		if x.Kept != y.Kept {
-			if x.Kept {
-				return -1
-			}
+		rx, okx := rank[x.ID]
+		ry, oky := rank[y.ID]
+		switch {
+		case okx && oky:
+			return rx - ry
+		case okx:
+			return -1
+		case oky:
 			return 1
 		}
-		return y.SendCount - x.SendCount
+		return 0
 	})
-	return out[:min(len(out), quickMax)]
+	return out
 }
 
 func (a *app) quickStripShown() bool {
 	return len(a.quick) > 0 && a.noteFilter == "" && a.query == ""
 }
 
-// quickStrip：一排常用卡，点一下发送。纵向滚轮在这里转成横向翻页；滚到头也不交给外层列表（用户 2026-11-17：
-// 接着滚整页容易误操作），要滚列表把指针移出这一排即可。不显示滚动条。
-func (a *app) quickStrip(c *ui.Context, k tokens) {
-	collapsed := a.store.Settings().QuickCollapsed
-	ui.Column(c).Height(a.quickStripHeight()).Gap(6).FillWidth().Key("quick-strip").Children(func() {
-		// 标题行 = 折叠开关（与分组头同一枚折叠箭头），状态存设置
-		head := ui.Row(c).Height(quickHeadH).Gap(4).Padding(0, 4, 0, 2).Radius(rr(6)).AlignItems(ui.Center).Key("quick-head").
-			Role(ui.RoleButton).Label(map[bool]string{true: tr("展开常用"), false: tr("折叠常用")}[collapsed])
-		if head.Hovered() {
-			head.Background(k.fg.Alpha(0.04))
-		}
-		head.Children(func() {
-			ui.Box(c).Size(16, 16).Center().Children(func() { foldChevron(c, k, collapsed) })
-			liconFilled(c, "star", 10, k.amberText)
-			text(c, tr("常用"), 11, 16, 600, k.muted).LetterSpacing(0.88)
-			ui.Box(c).Grow(1)
-			text(c, itoa(len(a.quick)), 10.5, 14, 500, k.muted).Font(fontMono).TextAlign(ui.End).MinWidth(18).Shrink(0) // 与分组头条数同一列
-		})
-		if head.Clicked() {
-			cur := a.store.Settings()
-			cur.QuickCollapsed = !collapsed
-			_ = a.store.SetSettings(cur)
-		}
-		if collapsed {
-			return
-		}
-		wrap := ui.Box(c).Height(quickCardH).FillWidth().Key("quick-wrap").Transition(foldTransition)
-		viewW := wrap.Bounds().W // 上一帧量到的可视宽（位置点按它分页）
-		wrap.Children(func() { a.quickScroller(c, k) })
-		a.quickDots(c, k, viewW)
-	})
+// quickStripHeight：常用区实占高度（每行 3 个，最多露出 3 行）。
+func (a *app) quickStripHeight() float32 {
+	rows := min((len(a.quick)+quickCols-1)/quickCols, quickRowsMax)
+	return float32(rows)*quickCardH + float32(rows-1)*quickGap
 }
 
-// quickScroller：横向滚动的卡片排 + 两端渐隐（只在那一侧还有内容时画）。
-func (a *app) quickScroller(c *ui.Context, k tokens) {
-	sc := ui.ScrollHorizontal(c).Fill().Scrollbars(false).TrackScroll(&a.quickScroll).Key("quick-scroll")
-	sc.HandleInput(func(ev ui.InputEvent) bool {
-		if ev.Kind != ui.InputScroll || abs32(ev.DY) <= abs32(ev.DX) || a.quickScroll.MaxX <= 0 {
-			return false // 触控板横向手势按原生行为走；放得下没得翻时照常滚列表
-		}
-		a.quickScroll.X = min(max(a.quickScroll.X+ev.DY, 0), a.quickScroll.MaxX) // 到头停住，不交给外层
-		return true
-	})
-	sc.Children(func() {
-		ui.Row(c).Gap(6).Padding(0, 1).Children(func() {
-			for _, n := range a.quick {
-				a.quickCard(c, k, n)
-			}
-		})
-	})
-	fade := func(left bool, show bool) {
-		b := ui.Box(c).Absolute().Top(0).Size(28, quickCardH).PassThrough().Key(map[bool]string{true: "quick-fade-l", false: "quick-fade-r"}[left])
-		if left {
-			b.Left(0).Gradient(k.window, k.window.Alpha(0), 90)
-		} else {
-			b.Right(0).Gradient(k.window.Alpha(0), k.window, 90)
-		}
-		b.Opacity(b.AnimateTo("op", map[bool]float32{true: 1}[show], tweenTw))
+// quickMoved：ids 里把 active 挪到 over 的位置（拖动排序的结果 / 预览）。
+func quickMoved(ids []string, active, over string) []string {
+	i, j := slices.Index(ids, active), slices.Index(ids, over)
+	if i < 0 || j < 0 || i == j {
+		return ids
 	}
-	fade(true, a.quickScroll.X > 1)
-	fade(false, a.quickScroll.X < a.quickScroll.MaxX-1)
+	out := slices.Delete(slices.Clone(ids), i, i+1)
+	return slices.Insert(out, j, active)
 }
 
-// quickDots：位置点（一页一个，当前页拉长）；只有一页时留空不画。
-func (a *app) quickDots(c *ui.Context, k tokens, viewW float32) {
-	ui.Row(c).Height(4).Gap(4).Justify(ui.Center).FillWidth().Key("quick-dots").Children(func() {
-		if viewW <= 0 || a.quickScroll.MaxX <= 0 {
-			return
+func (a *app) setQuickOrder(ids []string) {
+	cur := a.store.Settings()
+	cur.QuickOrder = ids
+	_ = a.store.SetSettings(cur)
+	a.reload()
+}
+
+// keepNotes：把 ns 设为常用，插到常用区 before 之前（"" = 排到最后）；卡仍留在原分组。气泡可撤销。
+func (a *app) keepNotes(ns []store.Note, before string) {
+	var add []string
+	for _, n := range ns {
+		if !n.Kept && !n.Done && n.Section != store.SectionClipboard {
+			_ = a.store.SetKept(n.ID, true)
+			add = append(add, n.ID)
 		}
-		pages := int((a.quickScroll.MaxX+viewW)/viewW + 0.99)
-		cur := int(a.quickScroll.X/viewW + 0.5)
-		if a.quickScroll.X >= a.quickScroll.MaxX-1 {
-			cur = pages - 1
+	}
+	if len(add) == 0 {
+		return
+	}
+	ids := noteIDs(a.quick)
+	at := slices.Index(ids, before)
+	if at < 0 {
+		at = len(ids)
+	}
+	a.setQuickOrder(slices.Insert(ids, at, add...))
+	msg := tr("已设为常用")
+	if len(add) > 1 {
+		msg = fmt.Sprintf(tr("%d 条已设为常用"), len(add))
+	}
+	a.showHUDUndo("ok", msg, func() {
+		for _, id := range add {
+			_ = a.store.SetKept(id, false)
 		}
-		for i := range pages {
-			d := ui.Box(c).Height(4).Radius(2).Key("qd-" + itoa(i))
-			w, col := float32(4), k.fg.Alpha(0.15)
-			if i == cur {
-				w, col = 14, k.fg.Alpha(0.4)
+		a.reload()
+	})
+}
+
+// quickMoveOut：常用方块拖到分组 sec 里松手 = 取消常用并移入该组（before 非空则落到那一行前面；已在该组就只取消常用）。气泡可撤销。
+func (a *app) quickMoveOut(id, sec, before string) {
+	n, ok := a.store.Note(id)
+	if !ok {
+		return
+	}
+	pos := slices.IndexFunc(a.store.Section(n.Section), func(x store.Note) bool { return x.ID == id })
+	order := noteIDs(a.quick)
+	switch {
+	case before != "":
+		_ = a.store.MoveNoteBefore(id, before)
+	case n.Section != sec:
+		_ = a.store.MoveToAt(id, sec, 0)
+	}
+	_ = a.store.SetKept(id, false)
+	a.reload()
+	a.showHUDUndo("ok", tr("已取消常用"), func() {
+		_ = a.store.MoveToAt(id, n.Section, pos)
+		_ = a.store.SetKept(id, true)
+		a.setQuickOrder(order)
+	})
+}
+
+// quickStrip：常用区（同 Arc 的常用书签格）。每行 3 个等分宽度，最多露出 3 行，更多的在区内纵向滚动（不显示滚动条，上下缘的行渐隐）。
+// 点一下发送；拖动换位置；列表里的卡拖进来 = 设为常用；方块拖到分组头 / 分组里的行上 = 取消常用并移入该组。
+func (a *app) quickStrip(c *ui.Context, k tokens) {
+	ids := noteIDs(a.quick)
+	qs := &a.quickSort
+	wrap := ui.Box(c).Height(a.quickStripHeight()).FillWidth().Key("quick-strip")
+	// 方块自己不接收放下：区内排序与外面拖进来的卡，松手都落到这个容器上，落点按 qs.over
+	drag, over := ui.DragOver[noteDrag](wrap)
+	a.quickJump = false
+	if d, ok := ui.Drop[noteDrag](wrap); ok {
+		if d.quick {
+			if next := quickMoved(ids, d.id, qs.over); !slices.Equal(next, ids) {
+				a.setQuickOrder(next)
+				ids = noteIDs(a.quick)
 			}
-			d.Width(d.AnimateTo("w", w, tweenControl)).Background(d.AnimateColor("c", col, tweenControl))
+		} else {
+			a.keepNotes(a.dragNotes(d.id), qs.over)
+			ids = noteIDs(a.quick)
+		}
+		*qs, over = quickSort{}, false
+		a.quickJump = true
+	}
+	incoming := over && !drag.quick // 列表里的卡正拖在常用区上：整区描边，指着的方块前出插入线
+	switch {
+	case !over && a.quickDragLast == "": // 没在拖 / 在别处松手了
+		*qs = quickSort{}
+	case !over: // 方块拖出了常用区：其余的回原位
+		qs.over = qs.active
+	}
+	shown := quickMoved(ids, qs.active, qs.over)
+	rows := (len(ids) + quickCols - 1) / quickCols
+	viewH := a.quickStripHeight()
+	grid := func() {
+		ui.Column(c).Gap(quickGap).FillWidth().Children(func() {
+			for r := range rows {
+				row := ui.Row(c).Height(quickCardH).Gap(quickGap).Key("quick-row-" + itoa(r))
+				if rows > quickRowsMax { // 上下缘渐隐：滚出视口的那部分越多越淡。不用底色渐变盖：面板底是半透明材质，盖上去颜色对不上
+					y0 := float32(r)*(quickCardH+quickGap) - a.quickScroll.Y
+					cut := max(-y0, y0+quickCardH-viewH, 0)
+					row.Opacity(1 - 0.8*min(cut/quickCardH, 1))
+				}
+				row.Children(func() {
+					for col := range quickCols {
+						i := r*quickCols + col
+						slot := ui.Box(c).Grow(1).Basis(0).FillHeight().Key("quick-slot-" + itoa(i))
+						if i >= len(ids) {
+							continue // 末行补空槽：方块宽度恒为三分之一
+						}
+						n := a.quick[i]
+						w := slot.Bounds().W
+						if over || qs.active != "" { // 只在拖动中读指针，免得平时每次移动鼠标都重建
+							if px, py, ok := slot.PointerPosition(); ok && px >= 0 && px < w+quickGap && py >= 0 && py < quickCardH+quickGap {
+								qs.over = n.ID
+							}
+						}
+						j := slices.Index(shown, n.ID) // 让位后的格子
+						dx := float32(j%quickCols-col) * (w + quickGap)
+						dy := float32(j/quickCols-r) * (quickCardH + quickGap)
+						slot.Children(func() {
+							mv := ui.Box(c).Fill().Key("quick-mv-" + n.ID)
+							if a.quickJump { // 落下那一帧直接归位（顺序已换，不从旧位置滑回）
+								mv.Translate(mv.Jump("sx", 0), mv.Jump("sy", 0))
+							} else {
+								mv.Translate(mv.AnimateTo("sx", dx, tw(250, easeCSS)), mv.AnimateTo("sy", dy, tw(250, easeCSS)))
+							}
+							mv.Children(func() { a.quickCard(c, k, n, w) })
+							if incoming && qs.over == n.ID {
+								ui.Box(c).Absolute().Left(-quickGap/2 - 1).Top(4).Bottom(4).Width(2).Radius(1).Background(stok(c).primary).PassThrough().Key("quick-insert")
+							}
+						})
+					}
+				})
+			}
+		})
+	}
+	wrap.Children(func() {
+		if rows <= quickRowsMax {
+			a.quickScroll = ui.ScrollState{}
+			grid()
+		} else {
+			ui.Scroll(c).Fill().Scrollbars(false).TrackScroll(&a.quickScroll).Key("quick-scroll").Children(grid)
+		}
+		if incoming {
+			p := stok(c).primary
+			ui.Box(c).Absolute().Top(-3).Left(-3).Right(-3).Bottom(-3).Radius(rr(12)).Border(1, p).BorderStyle(ui.BorderDashed).
+				Background(p.Alpha(0.06)).PassThrough().Key("quick-incoming")
 		}
 	})
 }
 
-// quickCard：常用方块。有图：图片铺满，底部渐暗压标题，停留 360ms 弹原图窥视窗（← → 换张）；
-// 无图：标题最多 3 行 + 发送次数。点一下发送；右键更多。
-func (a *app) quickCard(c *ui.Context, k tokens, n store.Note) {
+// quickCard：常用方块（宽 w，上一帧槽位量到的）。有图：图片铺满，底部渐暗压标题，停留 360ms 弹原图窥视窗（← → 换张）；
+// 无图：标题最多 2 行 + 发送次数。点一下发送；拖动换位置；右键更多。
+func (a *app) quickCard(c *ui.Context, k tokens, n store.Note, w float32) {
 	title := cmpOr(n.Title, cmpOr(firstLine(n.Text), cardTitle(n)))
 	files := n.MediaFiles()
 	var img ui.ImageSource
 	if len(files) > 0 && !n.Blur {
 		img = a.thumb(files[0])
 	}
-	b := tipOf(c, ui.Box(c).Size(quickCardW, quickCardH).Radius(rr(10)).Clip().Key("quick-"+n.ID).Role(ui.RoleButton).Label(tr("发送：")+title),
-		fmt.Sprintf(tr("%s · 已发送 %d 次 · 点一下发送；右键更多"), preview(title, 24), n.SendCount))
+	if w <= 0 {
+		w = 96
+	}
+	b := tipOf(c, ui.Box(c).Fill().Radius(rr(10)).Clip().Key("quick-"+n.ID).Role(ui.RoleButton).Label(tr("发送：")+title),
+		fmt.Sprintf(tr("%s · 已发送 %d 次 · 点一下发送，拖动换位置"), preview(title, 24), n.SendCount))
 	hovered := b.Hovered()
 	if hovered {
 		b.Background(k.card)
@@ -155,17 +242,23 @@ func (a *app) quickCard(c *ui.Context, k tokens, n store.Note) {
 		b.Background(k.track)
 	}
 	elevated(b, k, hovered)
-	b.AnimatePose(ui.Pose{Y: map[bool]float32{true: -2}[hovered], Scale: pressScale(b.Pressed(), 0.96)}, springControl)
+	b.Drag(noteDrag{id: n.ID, quick: true})
+	dragging := b.Dragging()
+	if dragging {
+		if a.quickSort.active != n.ID {
+			a.quickSort = quickSort{active: n.ID, over: n.ID}
+		}
+		a.quickDragID = n.ID
+		b.Opacity(0.4).Cursor(ui.CursorGrabbing) // 原位淡成占位，跟手的是框架画的副本
+	}
+	lift := hovered && !dragging && a.quickSort.active == ""
+	b.AnimatePose(ui.Pose{Y: map[bool]float32{true: -2}[lift], Scale: pressScale(b.Pressed(), 0.96)}, springControl)
 	b.ContextMenu(func(m *ui.Menu) {
 		if m.Item(tr("在列表中查看")).Chosen() {
 			a.focusNote(n)
 		}
-		label := tr("设为常用")
-		if n.Kept {
-			label = tr("取消常用")
-		}
-		if m.Item(label).Chosen() {
-			_ = a.store.SetKept(n.ID, !n.Kept)
+		if m.Item(tr("取消常用")).Chosen() {
+			_ = a.store.SetKept(n.ID, false)
 			a.reload()
 		}
 	})
@@ -173,14 +266,14 @@ func (a *app) quickCard(c *ui.Context, k tokens, n store.Note) {
 	b.Children(func() {
 		if img != nil {
 			iw, ih := ui.ImageSize(img)
-			sc := quickCardW / max(min(float32(iw), float32(ih)), 1)
+			sc := max(w/max(float32(iw), 1), quickCardH/max(float32(ih), 1)) // 铺满方块（cover）
 			ui.Box(c).Fill().Center().Children(func() {
 				im := ui.Image(c, img).Size(float32(iw)*sc, float32(ih)*sc)
 				im.AnimatePose(ui.Pose{Scale: map[bool]float32{true: 1.08, false: 1}[hovered]}, springControl) // 悬停：图慢慢推近
 			})
 			ui.Box(c).Absolute().Left(0).Right(0).Bottom(0).Height(36).Gradient(ui.RGBA(0, 0, 0, 0), ui.RGBA(0, 0, 0, 0.62), 180).PassThrough()
-			ui.Column(c).Absolute().Left(6).Right(6).Bottom(5).Gap(0).PassThrough().Children(func() {
-				text(c, title, 10, 13, 600, white).SingleLine()
+			ui.Column(c).Absolute().Left(7).Right(7).Bottom(5).Gap(0).PassThrough().Children(func() {
+				text(c, title, 10.5, 14, 600, white).SingleLine()
 				text(c, fmt.Sprintf(tr("%d 次"), n.SendCount), 9, 12, 500, white.Alpha(0.8)).Font(fontMono)
 			})
 			if len(files) > 1 {
@@ -188,55 +281,43 @@ func (a *app) quickCard(c *ui.Context, k tokens, n store.Note) {
 					Children(func() { text(c, itoa(len(files)), 9, 12, 600, white) })
 			}
 		} else {
-			ui.Column(c).Fill().Padding(6, 7).Gap(0).Children(func() {
-				text(c, title, 10.5, 14, 500, k.fg).Wrap().MaxLines(2)
+			ui.Column(c).Fill().Padding(6, 8).Gap(0).Children(func() {
+				text(c, title, 11, 15, 500, k.fg).Wrap().MaxLines(2)
 				ui.Box(c).Grow(1)
 				text(c, fmt.Sprintf(tr("%d 次"), n.SendCount), 9, 12, 400, k.muted).Font(fontMono)
 			})
 		}
-		// 右上：常用星标；悬停换成发送图标
-		ic := ui.Box(c).Absolute().Right(5).Bottom(5).Size(12, 12).Center().PassThrough()
-		if img != nil {
-			ic.Top(5).Left(5)
-		}
-		ic.Children(func() {
-			col := k.amberText
-			if img != nil {
-				col = white
-			}
-			switch {
-			case hovered:
+		if hovered && !dragging { // 悬停：右下出发送图标（区里全是常用卡，不再画星标）
+			ui.Box(c).Absolute().Right(6).Bottom(6).Size(12, 12).Center().PassThrough().Children(func() {
 				licon(c, "send", 11, map[bool]ui.Color{true: white, false: stok(c).primary}[img != nil])
-			case n.Kept:
-				liconFilled(c, "star", 10, col)
-			}
-		})
+			})
+		}
 	})
-	if img != nil {
+	if img != nil && a.quickSort.active == "" {
 		a.compactHover(c, b, n) // 停留弹原图（文字截图看得清）
 	}
-	if b.Clicked() {
+	if b.Clicked() && a.quickClickOnce(n.ID, c.Now()) {
 		a.sendFromList([]store.Note{n})
 	}
 }
 
+// quickRepeatGap：同一个常用方块两次点击间隔短于它算一次（双击 / 手抖连点只发一遍）。
+const quickRepeatGap = 600 * time.Millisecond
+
+// quickClickOnce：这次点击该不该发送——同一方块紧跟着的第二下不发。
+func (a *app) quickClickOnce(id string, now time.Time) bool {
+	if a.quickSentID == id && now.Sub(a.quickSentAt) < quickRepeatGap {
+		a.quickSentAt = now // 连点三四下也只算最初那一次
+		return false
+	}
+	a.quickSentID, a.quickSentAt = id, now
+	return true
+}
+
 // inboxHeadActions：收件箱分组头右侧的「按建议归好 N 条」（主题色浅底）与「逐条整理」（灰底）。
 func (a *app) inboxHeadActions(c *ui.Context, k tokens, g noteGroup) {
-	p := stok(c).primary
 	chip := func(key, icon, label, tip string, primary bool) bool {
-		b := tipOf(c, ui.Row(c).Height(18).Gap(3).Padding(0, 7).Radius(999).AlignItems(ui.Center).Shrink(0).Key(key).Role(ui.RoleButton).Label(label), tip)
-		bg, fg := k.track, k.fg
-		if primary {
-			bg, fg = p.Alpha(0.12), p
-		}
-		if b.Hovered() {
-			bg, fg = p.Alpha(0.18), p
-		}
-		b.Background(bg).Children(func() {
-			licon(c, icon, 10, fg)
-			text(c, label, 10, 14, 500, fg).SingleLine()
-		})
-		return b.Clicked()
+		return pillChip(c, k, key, icon, label, tip, primary)
 	}
 	if n := len(a.inboxSug); n >= 2 && chip("inbox-fileall", "check", fmt.Sprintf(tr("按建议归好 %d 条"), n), tr("把有建议分组的都归过去（可撤销）"), true) {
 		a.fileAllSuggested()

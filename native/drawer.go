@@ -392,7 +392,10 @@ func (a *app) replyMenu(m *ui.Menu, n store.Note) {
 
 // 面板内拖拽的值类型（ui.Drag / ui.Drop）。
 type (
-	noteDrag struct{ id string }
+	noteDrag struct {
+		id    string
+		quick bool // 从内容页「常用」区拖起的方块：区内松手 = 排序，拖到分组 = 取消常用并移入
+	}
 	taskDrag struct {
 		id     string
 		resize bool // 今天页时间块的下沿把手：拖动改时长（同一元素只能登记一种拖放类型，所以并进 taskDrag）

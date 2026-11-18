@@ -98,6 +98,47 @@ func (a *app) swapTransition(group string, idx int) ui.ElementTransition {
 var foldTransition = ui.ElementTransition{Duration: 200 * time.Millisecond, Ease: easeStandard, Colors: true,
 	Enter: &ui.Motion{Collapse: true}, Exit: &ui.Motion{Collapse: true}}
 
+// reduceMotionPref：设置 → 「减弱动态效果」总开关（reload 时从设置同步）。
+var reduceMotionPref bool
+
+// reduceMotion：本帧按「减弱动态效果」画——应用里的总开关或系统的同名设置。各处自绘动效（跑马灯、呼吸、轮播）读它。
+func reduceMotion(c *ui.Context) bool { return reduceMotionPref || c.Preferences().ReduceMotion }
+
+// motionGate：总开关开着时，本帧所有补间 / 弹簧 / 进出场过渡直接到位（加载转圈这类循环动画照常）。每个窗口每帧取配色时调用。
+func motionGate(c *ui.Context) {
+	if reduceMotionPref {
+		c.DisableAnimations()
+	}
+}
+
+// foldSlide：分组展开时框里的内容从区头下面向下滑出并淡入、折叠时反向（外层裁切窗用 foldTransition 同步放开高度）。
+var foldSlide = ui.ElementTransition{Duration: 200 * time.Millisecond, Ease: easeStandard, Colors: true,
+	Enter: &ui.Motion{Y: -14}, Exit: &ui.Motion{Y: -14}}
+
+// foldFolder：分组头的小文件夹（用户 2026-11-18：代替折叠箭头）。合上 = 带浅底的文件夹，展开 = 打开的文件夹；
+// 两个图标叠放，切换时一个弹出一个缩回（springControl），不是瞬切。
+// peek：卡片正拖在合上的分组头上——文件夹先打开并放大一点，表示松手会放进去。
+func foldFolder(c *ui.Context, collapsed, peek bool, size float32, col ui.Color) {
+	collapsed = collapsed && !peek
+	ui.Box(c).Size(size, size).Key("fold-folder").Children(func() {
+		layer := func(key string, show bool, tilt float32, draw func()) {
+			b := ui.Box(c).Absolute().Left(0).Top(0).Size(size, size).Center().PassThrough().Key(key).TransformOrigin(0.5, 1)
+			pose := ui.Pose{Scale: 0.7, Rotate: tilt}
+			if show {
+				pose = ui.Pose{Scale: map[bool]float32{true: 1.2, false: 1}[peek]}
+			}
+			b.AnimatePose(pose, springControl)
+			b.Opacity(b.AnimateTo("op", map[bool]float32{true: 1}[show], tweenControl))
+			b.Children(draw)
+		}
+		layer("shut", collapsed, 8, func() {
+			liconFilled(c, "folder", size, col.Alpha(0.22)).Absolute().Left(0).Top(0)
+			licon(c, "folder", size, col)
+		})
+		layer("open", !collapsed, -8, func() { licon(c, "folder-open", size, col) })
+	})
+}
+
 // foldChevron：折叠箭头随状态转 -90°（springControl），代替换图标的瞬切。
 func foldChevron(c *ui.Context, k tokens, collapsed bool) {
 	foldChevronSized(c, collapsed, 12, k.muted)

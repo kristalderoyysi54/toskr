@@ -137,12 +137,34 @@ func TestDragHoverExpandsCollapsedGroup(t *testing.T) {
 	tt.Frame()
 }
 
-// 同 Tauri dragOutProps：抓正文拖动是把原文拖出到其他应用（原生拖拽），不触发卡片排序。
-func TestDragCardTextIsDragOutNotReorder(t *testing.T) {
+// 笔记行整行是一个拖动源（用户 2026-11-18）：抓正文拖动也是排序，不再是另一种「拖到其他应用」的拖动。
+func TestDragCardTextReorders(t *testing.T) {
 	a, tt := testApp(t, "甲卡", "乙卡", "丙卡")
 	drag(t, tt, "丙卡", "甲卡", 0)
-	if got := a.store.Section(store.SectionInbox); got[0].Text != "甲卡" || got[2].Text != "丙卡" {
-		t.Fatalf("抓正文不应排序 %v", []string{got[0].Text, got[1].Text, got[2].Text})
+	if got := a.store.Section(store.SectionInbox); got[0].Text != "丙卡" || got[1].Text != "甲卡" {
+		t.Fatalf("抓正文拖到第一行应排到它前面 %v", []string{got[0].Text, got[1].Text, got[2].Text})
+	}
+}
+
+// 原生拖拽开着（实机）：抓正文拖起的仍是这一行——分组坞出现，可以移到分组 / 设为常用。
+func TestRowNativeDragLiftsRow(t *testing.T) {
+	a, tt := testApp(t, "甲卡", "乙卡")
+	rowDragNative = true
+	tt.Frame()
+	f, ok := tt.Find("乙卡")
+	if !ok {
+		t.Fatal(tt.Texts())
+	}
+	fx, fy := f.X+f.W/2, f.Y+f.H/2
+	tt.Move(fx, fy)
+	tt.Frame()
+	tt.Press(fx, fy)
+	for i := 1; i <= 4; i++ {
+		tt.Move(fx, fy+float32(i)*6)
+		tt.Frame()
+	}
+	if a.rowDragID == "" || !tt.HasText("放到哪个分组") {
+		t.Fatalf("抓正文应拖起这一行并出坞 drag=%q", a.rowDragID)
 	}
 }
 

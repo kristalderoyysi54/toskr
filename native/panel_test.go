@@ -36,6 +36,10 @@ func testApp(t *testing.T, texts ...string) (*app, *ui.Tester) {
 	oldDrag := selDragging
 	selDragging = func() bool { return false } // 不读真实鼠标：跑测试时手动点击不应影响结果
 	t.Cleanup(func() { selDragging = oldDrag })
+	rowDragNative = false // 无头没有系统拖拽会话：笔记行走窗内拖动（放下的处理同一份）
+	t.Cleanup(func() { rowDragNative = true })
+	inboxDrawer = false // 既有用例按「收件箱排在列表里」写；抽屉用例自己打开
+	t.Cleanup(func() { inboxDrawer = true })
 	st, err := store.OpenDir(t.TempDir(), bytes.Repeat([]byte{1}, 32))
 	if err != nil {
 		t.Fatal(err)

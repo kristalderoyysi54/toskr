@@ -625,8 +625,8 @@ func (a *app) taskSection(c *ui.Context, k tokens, g taskGroup, now time.Time) {
 				_ = a.store.MoveTask(d.id, g.sec.ID, "")
 			}
 			head.Children(func() {
-				b := ui.Box(c).Size(16, 16).Radius(rr(6)).Center()
-				b.Children(func() { foldChevron(c, k, collapsed) })
+				b := ui.Box(c).Size(16, 16).Radius(rr(6)).Center().Role(ui.RoleButton).Label(map[bool]string{true: tr("展开分组"), false: tr("折叠分组")}[collapsed])
+				b.Children(func() { foldFolder(c, collapsed, over, 14, k.muted) }) // 同笔记页分组头的小文件夹
 				if b.Clicked() {
 					g.sec.Collapsed = !collapsed
 					_ = a.store.UpdateTaskSection(g.sec)

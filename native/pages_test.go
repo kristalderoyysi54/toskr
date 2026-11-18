@@ -450,7 +450,7 @@ func TestSettingsNavSearchAndToggle(t *testing.T) {
 func TestSettingsGeneralRowsWriteBack(t *testing.T) {
 	a, _ := testApp(t)
 	a.openSettingsState()
-	tt := ui.NewTester(a.settingsView, 1040, 900) // 首屏多了「颜色」「列表样式」两行，窗口加高到能点到「音效」
+	tt := ui.NewTester(a.settingsView, 1040, 960) // 首屏多了「颜色」「列表样式」「减弱动态效果」三行，窗口加高到能点到「音效」
 	tt.Frame()
 	for _, label := range []string{"外观", "主题", "颜色", "模式", "详情窗字号", "开机启动", "面板置顶", "失焦自动隐藏", "音效"} {
 		if !tt.HasText(label) {

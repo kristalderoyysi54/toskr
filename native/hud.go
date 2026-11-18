@@ -108,13 +108,13 @@ func (a *app) showHUDForce(kind, text string) {
 		a.hudStreak = 1
 	}
 	if onScreen && a.hudKind != "" {
-		a.hudGhost, a.hudGhostAt = &hudBubble{kind: a.hudKind, text: a.hudText, actionable: a.hudActionable(), undo: a.hudUndo != nil, due: a.hudDue, count: a.hudStreakOf(a.hudKind), src: a.hudSrc, tag: a.hudTag}, time.Time{}
+		a.hudGhost, a.hudGhostAt = &hudBubble{kind: a.hudKind, text: a.hudText, actionable: a.hudActionable(), undo: a.hudUndo != nil, due: a.hudDue, file: a.hudFile, count: a.hudStreakOf(a.hudKind), src: a.hudSrc, tag: a.hudTag}, time.Time{}
 	} else {
 		a.hudGhost, a.hudLogoAt = nil, time.Time{}
 	}
 	a.hudAt, a.hudLeaving = time.Time{}, false
 	a.hudKind, a.hudText, a.hudUndo, a.hudHover, a.hudTarget, a.hudDue = kind, text, nil, false, "", nil
-	a.hudSrc, a.hudTag = "", ""
+	a.hudSrc, a.hudTag, a.hudFile = "", "", nil
 	a.hudGen++
 	gen := a.hudGen
 	if a.hud == nil {
@@ -205,10 +205,11 @@ func (a *app) dismissHUD() {
 type hudBubble struct {
 	kind, text string
 	actionable bool
-	undo       bool     // 有可撤销操作（悬停出「撤销」）
-	count      int      // 连续捕获计数
-	due        []string // 任务到期气泡的任务（>1 为批量）：气泡里直接完成或稍后
-	src, tag   string   // 捕获气泡：来源应用 bundle、内容类型小标
+	undo       bool             // 有可撤销操作（悬停出「撤销」）
+	count      int              // 连续捕获计数
+	due        []string         // 任务到期气泡的任务（>1 为批量）：气泡里直接完成或稍后
+	src, tag   string           // 捕获气泡：来源应用 bundle、内容类型小标
+	file       []fileSuggestion // 捕获气泡：可直接归到的分组
 }
 
 // captureTag：捕获气泡预览前的类型小标——纯文本不标，其余同卡片通栏（图文 ×N / 图片 / 链接 / 语言名）。
@@ -251,8 +252,8 @@ func hudGhostPose(t float32) (y, scale, op float32) {
 func (a *app) hudView(c *ui.Context) {
 	registerFonts()
 	c.Root().Background(ui.Transparent)
-	reduce := c.Preferences().ReduceMotion
-	cur := hudBubble{kind: a.hudKind, text: a.hudText, actionable: a.hudActionable(), undo: a.hudUndo != nil, due: a.hudDue, count: a.hudStreakOf(a.hudKind), src: a.hudSrc, tag: a.hudTag}
+	reduce := reduceMotion(c)
+	cur := hudBubble{kind: a.hudKind, text: a.hudText, actionable: a.hudActionable(), undo: a.hudUndo != nil, due: a.hudDue, file: a.hudFile, count: a.hudStreakOf(a.hudKind), src: a.hudSrc, tag: a.hudTag}
 	// 进场：opacity 0 → 1、y 10 → 0、scale 0.982 → 1（160ms ease-standard）；离场叠乘 opacity → 0、scale → 0.96
 	e := easeStandard(a.hudProgress(c, &a.hudAt, 160*time.Millisecond))
 	op, dy, sc := e, 10*(1-e), 0.982+0.018*e
@@ -353,7 +354,7 @@ func (a *app) hudBubbleView(c *ui.Context, b hudBubble, ghostMs float32) {
 	if c.Theme().Dark {
 		s1, s2, s3 = gray(0, 0.35), gray(0, 0.45), gray(0, 0.60)
 	}
-	balloon := ui.Row(c).FillWidth().Padding(6, 6, 6, 10).Gap(8).Radius(rr(18)).Background(paper).AlignItems(ui.Center)
+	balloon := ui.Column(c).FillWidth().Padding(6, 6, 6, 10).Radius(rr(18)).Background(paper)
 	switch {
 	case th.HudBalloon(balloon):
 	case c.Theme().Dark:
@@ -362,7 +363,7 @@ func (a *app) hudBubbleView(c *ui.Context, b hudBubble, ghostMs float32) {
 		balloon.Shadow(0, 0, 1, 0, s3).Shadow(0, 1, 2, 0, s1).Shadow(0, 4, 20, 0, s2)
 	}
 	hover := a.hudHover && !ghost
-	balloon.Children(func() {
+	main := func() {
 		icon()
 		body := tipOf(c, ui.Column(c).Grow(1).Basis(0), tr("点击查看")).Role(ui.RoleButton).Label(title)
 		body.Children(func() {
@@ -423,6 +424,12 @@ func (a *app) hudBubbleView(c *ui.Context, b hudBubble, ghostMs float32) {
 		if !ghost && x.Clicked() {
 			a.dismissHUD()
 		}
+	}
+	balloon.Children(func() {
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(main)
+		if len(b.file) > 0 { // 去向钮单独一行，与标题左缘对齐（标题行右侧有撤销 / 关闭，放不下三个）
+			a.hudFileActions(c, ink, b.file, ghost)
+		}
 	})
 	// 尾巴：22×13 固定几何，从气泡右下弯向 logo
 	ui.Row(c).FillWidth().Height(12).Margin(-1, 0, 0, 0).Justify(ui.End).Padding(0, 14, 0, 0).Opacity(tailOp).Children(func() {
@@ -459,10 +466,61 @@ func vibrancyFor(glassSetting string) mygo.Vibrancy {
 
 // hudBubbleH：气泡区高度（光标在其中时关闭鼠标穿透）；到期气泡多一行操作钮。
 func (a *app) hudBubbleH() int {
-	if len(a.hudDue) > 0 {
+	if len(a.hudDue) > 0 || len(a.hudFile) > 0 {
 		return 88
 	}
 	return 60
+}
+
+// hudOfferFile：刚捕获进收件箱的那条，气泡上直接给 2–3 个去向（建议分组排第一）；没有用户分组就不给。
+func (a *app) hudOfferFile(n store.Note) {
+	if n.Section != store.SectionInbox || a.hudKind != "added" || a.hudTarget != n.ID {
+		return // 捕获直接进了分组 / 隐身模式没弹气泡
+	}
+	a.hudFile = a.newFileIndex(a.store.Notes()).choices(n, 3)
+	if a.hud != nil && len(a.hudFile) > 0 {
+		a.hud.SetSize(hudW, hudH+28)
+	}
+}
+
+// hudFileActions：捕获气泡里的去向钮。建议分组（有依据）是浅底实心，其余只有描边；点一下归过去，气泡换成可撤销的「已归到」。
+func (a *app) hudFileActions(c *ui.Context, ink ui.Color, file []fileSuggestion, ghost bool) {
+	ui.Row(c).Margin(4, 4, 2, 28).Gap(4).Children(func() {
+		for _, f := range file {
+			name := a.sectionLabel(f.section)
+			if name == "" {
+				continue
+			}
+			tip := fmt.Sprintf(tr("归到「%s」"), name)
+			if f.why != "" {
+				tip += " · " + f.why
+			}
+			b := tipOf(c, ui.Row(c).Height(20).Padding(0, 7).Radius(rr(6)).AlignItems(ui.Center).Shrink(0).Key("hf-"+f.section).Role(ui.RoleButton).Label(tip), tip)
+			bg, bd := ui.Transparent, ink.Alpha(0.25)
+			if f.why != "" {
+				bg, bd = ink.Alpha(0.1), ink.Alpha(0.1)
+			}
+			if b.Hovered() {
+				bg, bd = ink.Alpha(0.16), ink.Alpha(0.3)
+			}
+			b.Background(bg).Border(1, bd)
+			b.Children(func() { text(c, preview(name, 6), 10, 14, 500, ink.Alpha(0.85)).SingleLine() })
+			if !ghost && b.Clicked() {
+				a.hudFileTo(f.section)
+			}
+		}
+	})
+}
+
+// hudFileTo：把气泡对应的那条归到 section（已不在收件箱则只收起气泡）。
+func (a *app) hudFileTo(section string) {
+	id := a.hudTarget
+	if a.fileInbox([]string{id}, func(store.Note) string { return section }, false) == 0 {
+		a.dismissHUD()
+		return
+	}
+	// 同一个气泡里点的：原地换成「已归到」——不留旧气泡的下沉残影（两条叠着淡出看着卡），也不重播进场
+	a.hudGhost, a.hudAt = nil, time.Now().Add(-time.Second)
 }
 
 // hudDueActions：任务到期气泡里的「完成 · 10 分钟后 · 1 小时后」（批量时为「全部…」，没有完成）。

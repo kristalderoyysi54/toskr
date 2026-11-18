@@ -153,8 +153,9 @@ type Settings struct {
 	ColorScheme     string `json:"colorScheme,omitempty"`       // default | platinum | paper | matcha | sakura | fog
 	LastColorScheme string `json:"lastColorScheme,omitempty"`   // 切到 Platinum 等风格主题前用的颜色，切回「现代」时恢复
 	CardDensity     string `json:"cardDensity,omitempty"`       // comfortable | compact
-	NoteListStyle   string `json:"noteListStyle,omitempty"`     // 竖版列表行样式：tiles | trail | mail | avatar | film | card | side（默认）| hero
-	QuickCollapsed  bool   `json:"quickCollapsed,omitempty"`    // 内容页「常用」栏折叠
+	InboxOpen       bool     `json:"inboxOpen,omitempty"`       // 笔记页底部收件箱抽屉展开着
+	ReduceMotion    bool     `json:"reduceMotion,omitempty"`    // 减弱动态效果总开关（系统「减弱动态效果」开着时同样生效）
+	QuickOrder      []string `json:"quickOrder,omitempty"`      // 内容页「常用」区的顺序（卡 ID，拖动排出来的；不在其中的常用卡排在后面）
 	// 拖动分组坞的排序依据：各分组被放入的次数与最近一次（Unix 秒）
 	DockUse  map[string]int   `json:"dockUse,omitempty"`
 	DockLast map[string]int64 `json:"dockLast,omitempty"`

@@ -741,7 +741,7 @@ var tourEpoch = time.Now()
 
 func (a *app) tourIllustration(c *ui.Context, k tokens) {
 	beat := tourBeats - 1
-	if !c.Preferences().ReduceMotion {
+	if !reduceMotion(c) {
 		beat = int(time.Since(tourEpoch).Milliseconds()/tourBeatMs) % tourBeats
 		c.AnimationFrame()
 	}

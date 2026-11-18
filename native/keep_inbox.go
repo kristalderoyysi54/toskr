@@ -105,6 +105,28 @@ func (ix fileIndex) suggest(n store.Note) (fileSuggestion, bool) {
 	return fileSuggestion{section: best, why: fmt.Sprintf(tr("%s 的%s大多归在这里"), cmpOr(n.SourceApp, tr("这个应用")), kindName(kind))}, true
 }
 
+// choices：捕获气泡上给的去向，最多 limit 个——建议分组排第一（why 非空），其后按同来源同类型归得多的，再按分组顺序补齐。
+func (ix fileIndex) choices(n store.Note, limit int) []fileSuggestion {
+	var out []fileSuggestion
+	seen := map[string]bool{}
+	add := func(s fileSuggestion) {
+		if !seen[s.section] && len(out) < limit {
+			seen[s.section] = true
+			out = append(out, s)
+		}
+	}
+	if s, ok := ix.suggest(n); ok {
+		add(s)
+	}
+	count := ix.counts[n.BundleID+"|"+noteKind(n)]
+	byCount := slices.Clone(ix.order)
+	slices.SortStableFunc(byCount, func(x, y store.Section) int { return count[y.ID] - count[x.ID] })
+	for _, s := range byCount {
+		add(fileSuggestion{section: s.ID})
+	}
+	return out
+}
+
 // suggestFile：单条内容的建议分组（「收到哪里」浮层用；收件箱列表用 reload 里算好的 a.inboxSug）。
 func (a *app) suggestFile(n store.Note) (fileSuggestion, bool) {
 	return a.newFileIndex(a.store.Notes()).suggest(n)

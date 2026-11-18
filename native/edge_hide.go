@@ -218,7 +218,7 @@ func (a *app) edgeTickOnce() {
 		a.edgeAway = 0
 		return
 	}
-	if !a.edgeArmed || e.inside(cur.X, cur.Y) || a.menuOpen { // 原生右键菜单是模态跟踪，期间主线程不跑这一拍
+	if !a.edgeArmed || e.inside(cur.X, cur.Y) || a.menuOpen || a.gp.sec != "" { // 分组速览开着：光标在面板外的弹框里，不滑走 // 原生右键菜单是模态跟踪，期间主线程不跑这一拍
 		a.edgeAway = 0
 		return
 	}

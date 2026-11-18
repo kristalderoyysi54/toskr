@@ -53,7 +53,7 @@ func (a *app) targetSwitchElapsed(c *ui.Context) (time.Duration, bool) {
 	}
 	el := now.Sub(t.at)
 	total := tswTotal
-	if c.Preferences().ReduceMotion {
+	if reduceMotion(c) {
 		total = tswReduced
 	}
 	if el >= total {
@@ -161,7 +161,7 @@ func (a *app) targetSwitchWho(c *ui.Context, k tokens, el time.Duration) {
 		}
 		return f.Name
 	}
-	if c.Preferences().ReduceMotion {
+	if reduceMotion(c) {
 		op := float32(el) / float32(tswReduced)
 		a.targetIcon(c, k, a.target).Opacity(op)
 		text(c, name(a.target), 11, 16, 600, k.fg).SingleLine().Opacity(op)

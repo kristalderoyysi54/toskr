@@ -268,7 +268,7 @@ func (a *app) secretCard(c *ui.Context, k tokens, st store.Settings, sec store.S
 						switch {
 						case a.secretOpening[sec.ID]: // animate-pulse：opacity 1 → 0.5 → 1，2s cubic-bezier(0.4,0,0.6,1)
 							busy := text(c, tr("解密中…"), 11, 16, 400, k.muted)
-							if !c.Preferences().ReduceMotion {
+							if !reduceMotion(c) {
 								busy.Opacity(1 - 0.5*busy.Loop("pulse", 2*time.Second, ui.Bounce(easePulse)))
 							}
 						case sec.KeyID == "":

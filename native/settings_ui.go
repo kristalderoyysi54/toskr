@@ -45,6 +45,7 @@ var (
 )
 
 func stok(c *ui.Context) settingsTokens {
+	motionGate(c)
 	if c.Theme().Dark {
 		return setSchemed(darkSet, true)
 	}

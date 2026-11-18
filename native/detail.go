@@ -766,16 +766,16 @@ func (a *app) detailBody(c *ui.Context, k tokens, s settingsTokens, n store.Note
 			default:
 				// 阅读态整块共用一个选区：划词后点「编辑」或双击正文，进编辑时选区落在原文同一处
 				read := ui.Column(c).Padding(5.85, 0, 0, 0).Gap(5.85).Selectable().Key("detail-read" + itoa(a.detail.readGen))
-				if v, ok := ui.Drop[cardTextDrag](read); ok && a.detail.virt == nil { // 阅读态拖卡片进来：同「添加到打开的卡片」（有划词选区则替换）
+				if v, ok := ui.Drop[cardDrag](read); ok && a.detail.virt == nil { // 阅读态拖卡片进来：同「添加到打开的卡片」（有划词选区则替换）
 					var ns []store.Note
-					for _, id := range v.ids {
+					for _, id := range v.cardIDs() {
 						if x, ok := a.store.Note(id); ok {
 							ns = append(ns, x)
 						}
 					}
 					a.addToOpenCard(ns)
 				}
-				if _, over := ui.DragOver[cardTextDrag](read); over && a.detail.virt == nil {
+				if _, over := ui.DragOver[cardDrag](read); over && a.detail.virt == nil {
 					read.Radius(rr(8)).Background(stok(c).primary.Alpha(0.05)).InsetShadow(0, 0, 0, 1, stok(c).primary.Alpha(0.35))
 				}
 				md := a.beginDetailMD(sc.Bounds())

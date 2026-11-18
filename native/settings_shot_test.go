@@ -138,3 +138,91 @@ func TestListMenuShots(t *testing.T) {
 		save(t, filepath.Join(dir, "menu-"+mode+".png"), tt.Image())
 	}
 }
+
+// TestQuickGridShots：内容页「常用」区（4 个 / 11 个带滚动）浅深两色截图（TOSKR_SHOT_DIR 未设时跳过）。
+func TestQuickGridShots(t *testing.T) {
+	dir := os.Getenv("TOSKR_SHOT_DIR")
+	if dir == "" {
+		t.Skip("set TOSKR_SHOT_DIR")
+	}
+	titles := []string{"不限制你的创意和想象力，自由发挥", "请使用 Three.js 写一个可交互的示例", "claude --dangerously-skip-permissions", "代码审查", "翻译成英文",
+		"周报模板：本周完成 / 下周计划 / 风险", "解释报错", "总结要点", "改写得更口语", "生成测试用例", "提交说明"}
+	for _, dark := range []bool{false, true} {
+		for _, n := range []int{4, 11} {
+			a, tt := testApp(t, "收件箱里的卡")
+			tt.SetDark(dark)
+			sec := a.store.AddSection("提示词")
+			for i := range n {
+				x, _, _ := a.store.Add(store.Note{Section: sec, Text: titles[i]})
+				_ = a.store.SetKept(x.ID, true)
+				_, _ = a.store.SetSendCount(x.ID, (i*7)%13+1)
+			}
+			a.reload()
+			tt.Frame()
+			tt.Frame()
+			if n > 9 {
+				a.quickScroll.Y = 30
+			}
+			tt.Advance(time.Second)
+			tt.Frame()
+			save(t, filepath.Join(dir, "quick-"+itoa(n)+"-"+map[bool]string{false: "light", true: "dark"}[dark]+".png"), tt.Image())
+		}
+	}
+}
+
+// TestFoldFolderShots：分组头小文件夹（合上 / 打开 / 带分组色）与展开中途一帧，浅深两色截图（TOSKR_SHOT_DIR 未设时跳过）。
+func TestFoldFolderShots(t *testing.T) {
+	dir := os.Getenv("TOSKR_SHOT_DIR")
+	if dir == "" {
+		t.Skip("set TOSKR_SHOT_DIR")
+	}
+	for _, dark := range []bool{false, true} {
+		a, tt := testApp(t, "收件箱里的卡")
+		tt.SetDark(dark)
+		var last store.Section
+		for i, name := range []string{"Ai Basics", "News", "可借鉴"} {
+			id := a.store.AddSection(name)
+			a.store.Add(store.Note{Section: id, Text: name + " 里的卡"})
+			a.store.Add(store.Note{Section: id, Text: name + " 里的第二张卡"})
+			for _, s := range a.store.Sections() {
+				if s.ID == id {
+					s.Collapsed = i != 1
+					if i < 2 {
+						s.Color = sectionColors[(i*3+5)%len(sectionColors)]
+					}
+					_ = a.store.UpdateSection(s)
+					last = s
+				}
+			}
+		}
+		a.reload()
+		tt.Frame()
+		tt.Advance(time.Second)
+		tt.Frame()
+		mode := map[bool]string{false: "light", true: "dark"}[dark]
+		save(t, filepath.Join(dir, "fold-"+mode+".png"), tt.Image())
+		last.Collapsed = false
+		_ = a.store.UpdateSection(last)
+		tt.Frame()
+		tt.Advance(90 * time.Millisecond)
+		tt.Frame()
+		save(t, filepath.Join(dir, "fold-mid-"+mode+".png"), tt.Image())
+		work := a.store.AddTaskSection("工作")
+		a.store.AddTaskSection("生活")
+		a.store.AddTask(store.Task{Text: "任务一", Section: work})
+		a.store.AddTask(store.Task{Text: "任务二"})
+		a.switchPage(pageTasks) // 任务页分组头同款文件夹
+		a.taskSub = 1
+		tt.Frame()
+		tt.Advance(time.Second)
+		tt.Frame()
+		save(t, filepath.Join(dir, "fold-tasks-"+mode+".png"), tt.Image())
+		a.openSettingsState() // 设置 → 通用：「减弱动态效果」行
+		st := ui.NewTester(a.settingsView, 1040, 960)
+		st.SetDark(dark)
+		st.Frame()
+		st.Advance(time.Second)
+		st.Frame()
+		save(t, filepath.Join(dir, "reduce-motion-"+mode+".png"), st.Image())
+	}
+}

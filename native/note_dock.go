@@ -29,6 +29,7 @@ const (
 	dockSlotH    = 4 + dockH + 4                  // 坞在列表顶上实占的高（上下留缝）
 	dockPageWait = 400 * time.Millisecond
 	dockNewID    = "__new__"
+	dockQuickID  = "__quick__" // 「常用」格：松手 = 设为常用（卡仍留在原分组）
 )
 
 type dockEdge struct {
@@ -163,10 +164,15 @@ func (a *app) noteDock(c *ui.Context, k tokens, padL, padR float32) {
 		return
 	}
 	secs := a.dockSections(a.dockFor)
-	cells := len(secs) + 1 // + 新建分组
+	dragged := a.dragNotes(a.dockFor)
+	toQuick := slices.ContainsFunc(dragged, func(n store.Note) bool { return !n.Kept }) // 拖起的都已是常用就不列「常用」格
+	cells := len(secs) + 1                                                              // + 新建分组
+	if toQuick {
+		cells++
+	}
 	pages := max((cells+dockPerPage-1)/dockPerPage, 1)
 	a.dockPage = min(a.dockPage, pages-1)
-	cnt := len(a.dragNotes(a.dockFor))
+	cnt := len(dragged)
 	dock.Children(func() {
 		ui.Row(c).Height(14).Gap(6).AlignItems(ui.Center).Children(func() {
 			title := tr("放到哪个分组")
@@ -197,6 +203,9 @@ func (a *app) noteDock(c *ui.Context, k tokens, padL, padR float32) {
 				strip := ui.Row(c).Gap(dockGap).Height(dockTileH).Key("dock-strip")
 				strip.Translate(strip.AnimateTo("x", -float32(a.dockPage)*(vw+dockGap), springControl), 0)
 				strip.Children(func() {
+					if toQuick {
+						a.dockTile(c, k, store.Section{ID: dockQuickID, Name: tr("常用")}, tw)
+					}
 					for _, s := range secs {
 						a.dockTile(c, k, s, tw)
 					}
@@ -213,15 +222,21 @@ func (a *app) noteDock(c *ui.Context, k tokens, padL, padR float32) {
 // dockTile：一个分组格（图标 / 分组色 + 名字）。拖到上面主色描边 + 浮起，松手移入；「新建分组」格是虚线框。
 func (a *app) dockTile(c *ui.Context, k tokens, s store.Section, w float32) {
 	p := stok(c).primary
-	isNew := s.ID == dockNewID
+	isNew, isQuick := s.ID == dockNewID, s.ID == dockQuickID
 	label := fmt.Sprintf(tr("放到「%s」"), sectionName(s))
-	if isNew {
+	switch {
+	case isNew:
 		label = tr("新建分组并放入")
+	case isQuick:
+		label = tr("设为常用")
 	}
 	t := ui.Column(c).Size(w, dockTileH).Shrink(0).Radius(rr(9)).Gap(3).AlignItems(ui.Center).Justify(ui.Center).Padding(0, 4).
 		Key("dock-" + s.ID).Label(label)
 	_, over := ui.DragOver[noteDrag](t)
 	tint := a.sectionColorOf(s)
+	if isQuick {
+		tint = k.amberText
+	}
 	bgA := map[bool]float32{true: 0.2, false: 0.12}[k.dark]
 	bg, edge := tint.Alpha(bgA), tint.Alpha(bgA+0.08)
 	if isNew {
@@ -241,6 +256,8 @@ func (a *app) dockTile(c *ui.Context, k tokens, s store.Section, w float32) {
 			switch {
 			case isNew:
 				licon(c, "folder-plus", 16, map[bool]ui.Color{true: p, false: k.muted}[over])
+			case isQuick:
+				liconFilled(c, "star", 16, tint)
 			case s.ID == store.SectionInbox:
 				licon(c, "inbox", 16, tint)
 			default:
@@ -253,7 +270,7 @@ func (a *app) dockTile(c *ui.Context, k tokens, s store.Section, w float32) {
 		}
 		ui.Row(c).Height(14).Gap(4).AlignItems(ui.Center).MaxWidth(w - 8).Children(func() {
 			text(c, sectionName(s), 11, 14, 600, fg).SingleLine().Shrink(1)
-			if isNew {
+			if isNew || isQuick {
 				return
 			}
 			// 组内条数；刚放入时变成分组色胶囊弹一下，上方冒「+N」
@@ -279,6 +296,10 @@ func (a *app) dockTile(c *ui.Context, k tokens, s store.Section, w float32) {
 		ns := a.dragNotes(d.id)
 		if isNew {
 			a.dockNaming, a.dockNewName = noteIDs(ns), ""
+			return
+		}
+		if isQuick {
+			a.keepNotes(ns, "")
 			return
 		}
 		before := a.sectionCount(s.ID)

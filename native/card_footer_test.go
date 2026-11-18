@@ -81,7 +81,6 @@ func TestCompactRowTitle(t *testing.T) {
 // 发过的卡带「已发送 ×N」，失败的发送不计数。
 func TestNoteCardHeaderHierarchy(t *testing.T) {
 	a, tt := testApp(t)
-	a.patchSettings(func(s *store.Settings) { s.NoteListStyle = listTiles }) // 单行样式的「来自 X」文案（默认已改卡片）
 	plain, _, _ := a.store.Add(store.Note{Section: store.SectionInbox, Text: "一段纯文本", SourceApp: "Microsoft Remote Desktop Beta"})
 	titled, _, _ := a.store.Add(store.Note{Section: store.SectionInbox, Text: "带标题的卡", SourceApp: "Cursor"})
 	_ = a.store.SetTitle(titled.ID, "周五对比报告")
@@ -92,7 +91,7 @@ func TestNoteCardHeaderHierarchy(t *testing.T) {
 	_ = a.store.SetTags(plain.ID, []string{"报告", "周会", "复盘", "归档"})
 	a.reload()
 	tt.Frame()
-	for _, s := range []string{"文本", "周五对比报告", "来自 Cursor", "来自 Arc", "已发送 ×12", "刚刚", "#报告", "+1"} {
+	for _, s := range []string{"文本", "周五对比报告", "· Cursor", "· Arc", "已发送 ×12", "刚刚", "#报告", "+1"} {
 		if !tt.HasText(s) {
 			t.Fatalf("缺 %q %v", s, tt.Texts())
 		}

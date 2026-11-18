@@ -119,3 +119,62 @@ func TestCaptureHUDSourceAndTag(t *testing.T) {
 		t.Fatal("换气泡后应清来源与小标")
 	}
 }
+
+// 捕获气泡上的去向：建议分组排第一、最多 3 个；点一下把刚捕获的那条归过去，气泡换成可撤销的「已归到」。
+func TestCaptureHUDFileChoices(t *testing.T) {
+	a, _ := testApp(t)
+	var secs []string
+	for _, name := range []string{"提示词", "Bug", "可借鉴", "杂项"} {
+		secs = append(secs, a.store.AddSection(name))
+	}
+	for range 2 { // Arc 的文字大多归在「可借鉴」
+		a.store.Add(store.Note{Section: secs[2], Text: "旧 " + itoa(len(a.store.Notes())), BundleID: "arc"})
+	}
+	n, _, _ := a.store.Add(store.Note{Section: store.SectionInbox, Text: "刚捕获的", BundleID: "arc", SourceApp: "Arc"})
+	a.reload()
+	ch := a.newFileIndex(a.store.Notes()).choices(n, 3)
+	if len(ch) != 3 || ch[0].section != secs[2] || ch[0].why == "" || ch[1].section != secs[0] || ch[1].why != "" {
+		t.Fatalf("建议分组排第一，其余按分组顺序补齐 %+v", ch)
+	}
+	a.showHUDUndo("added", "刚捕获的", func() {})
+	a.hudTarget = n.ID
+	a.hudOfferFile(n)
+	if len(a.hudFile) != 3 || a.hudBubbleH() != 88 {
+		t.Fatalf("气泡应带 3 个去向 %+v", a.hudFile)
+	}
+	hud := ui.NewTester(a.hudView, hudW, hudH+28)
+	for _, dark := range []bool{false, true} {
+		hud.SetDark(dark)
+		hud.Frame()
+		if !hud.HasText("可借鉴") || !hud.HasText("提示词") || !hud.HasText("Bug") || hud.HasText("杂项") {
+			t.Fatalf("去向钮 %v", hud.Texts())
+		}
+		if dir := os.Getenv("TOSKR_SHOT_DIR"); dir != "" {
+			save(t, filepath.Join(dir, "hud-file-"+map[bool]string{false: "light", true: "dark"}[dark]+".png"), hud.Image())
+		}
+	}
+	if err := hud.Click("Bug"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := a.store.Note(n.ID); got.Section != secs[1] {
+		t.Fatalf("点去向应归过去 %q", got.Section)
+	}
+	if a.hudGhost != nil || a.hudAt.IsZero() {
+		t.Fatal("点去向是原地换内容：不留残影、不重播进场")
+	}
+	if a.hudKind != "ok" || a.hudUndo == nil || len(a.hudFile) != 0 {
+		t.Fatalf("气泡应换成可撤销的「已归到」 kind=%s", a.hudKind)
+	}
+	a.hudUndo()
+	if got, _ := a.store.Note(n.ID); got.Section != store.SectionInbox {
+		t.Fatal("撤销应回收件箱")
+	}
+	// 捕获直接进了分组：不给去向
+	m, _, _ := a.store.Add(store.Note{Section: secs[0], Text: "直接进组", BundleID: "arc"})
+	a.showHUDUndo("added", "直接进组", func() {})
+	a.hudTarget = m.ID
+	a.hudOfferFile(m)
+	if len(a.hudFile) != 0 {
+		t.Fatal("不在收件箱的不给去向")
+	}
+}

@@ -24,7 +24,7 @@ var flowEpoch = time.Now()
 // flow 画流程条。ReduceMotion 时不轮播高亮。
 func flow(c *ui.Context, k tokens, id string, steps ...vstep) {
 	hot := -1
-	if !c.Preferences().ReduceMotion && len(steps) > 1 {
+	if !reduceMotion(c) && len(steps) > 1 {
 		hot = int(time.Since(flowEpoch).Milliseconds()/1100) % len(steps)
 		c.AnimationFrame()
 	}

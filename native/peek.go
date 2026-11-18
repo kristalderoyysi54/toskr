@@ -25,16 +25,24 @@ const (
 
 type rowHover struct {
 	id     string
-	at     time.Time // 认领时刻（跑马灯计时起点）
-	px, py float32   // 上次看到的指针窗口坐标
-	gen    int       // 窥视计时代次：离行 / 换行即作废
-	rect   ui.Rect   // 认领行在面板里的位置（窥视窗看门狗用）
+	at     time.Time    // 认领时刻（跑马灯计时起点）
+	px, py float32      // 上次看到的指针窗口坐标
+	gen    int          // 窥视计时代次：离行 / 换行即作废
+	rect   ui.Rect      // 认领行在面板里的位置（窥视窗看门狗用）
+	win    *mygo.Window // 认领行所在的窗；nil = 主面板（分组速览弹框里的行在弹框窗里）
 }
 
 // compactHover：在紧凑行渲染时调用，返回该行是否为当前悬停行。
 func (a *app) compactHover(c *ui.Context, box ui.Element, n store.Note) bool {
 	h := &a.rowHov
-	_, _, over := box.PointerPosition()
+	var over bool
+	if rowUnified { // 整行拖动的行：不在缩略图上读指针（读了它就接走按下后的移动，行拖不起来），按行悬停 + 指针落在它的框里判断
+		rx, ry, _ := c.Root().PointerPosition()
+		r := box.Bounds()
+		over = rowUnifiedHover && rx >= r.X && rx < r.X+r.W && ry >= r.Y && ry < r.Y+r.H
+	} else {
+		_, _, over = box.PointerPosition()
+	}
 	if !over || box.Pressed() {
 		if h.id == n.ID {
 			a.releaseRow()
@@ -47,7 +55,7 @@ func (a *app) compactHover(c *ui.Context, box ui.Element, n store.Note) bool {
 			return false // 指针没动，是行被滚到了指针下
 		}
 		a.releaseRow()
-		h.id, h.at = n.ID, c.Now()
+		h.id, h.at, h.win = n.ID, c.Now(), nil
 		if files := n.MediaFiles(); len(files) > 0 && !n.Blur {
 			a.armPeek(files)
 		}
@@ -168,6 +176,9 @@ func (a *app) peekWatch(gen int) {
 			}
 			cx, cy := macos.CursorLocation()
 			pb := a.panel.Bounds()
+			if w := a.rowHov.win; w != nil {
+				pb = w.Bounds()
+			}
 			r := a.rowHov.rect
 			const m = 12
 			x0, y0 := float64(pb.X)+float64(r.X), float64(pb.Y)+float64(r.Y)
@@ -216,7 +227,7 @@ func (a *app) peekView(c *ui.Context) {
 // marqueeLine 同 Tauri MarqueeLine：悬停行文字溢出时匀速（50pt/s，至少 0.9s）向左滚完被截断的部分，
 // 起步停 0.45s、读完停 0.7s 后跳回开头循环（只向左，不回摆）；非悬停 / 减弱动效时单行省略。
 func (a *app) marqueeLine(c *ui.Context, key string, active bool, build func() ui.Element) {
-	if !active || c.Preferences().ReduceMotion {
+	if !active || reduceMotion(c) {
 		build().SingleLine().Grow(1).Basis(0)
 		return
 	}

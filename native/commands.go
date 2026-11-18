@@ -237,6 +237,9 @@ func (a *app) focusNote(n store.Note) {
 	}
 	a.switchPage(page)
 	a.noteSub, a.searchOpen, a.query = 0, false, ""
+	if n.Section == store.SectionInbox && !a.store.Settings().InboxOpen {
+		a.patchSettings(func(s *store.Settings) { s.InboxOpen = true }) // 收件箱在底部抽屉里：定位到里面的卡先展开
+	}
 	a.reload()
 	if _, ok := a.noteIdx[n.ID]; !ok {
 		for _, s := range a.store.Sections() {
