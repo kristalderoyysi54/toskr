@@ -56,7 +56,7 @@ func TestComparePlatinum(t *testing.T) {
 		a.reload()
 		return a
 	}
-	// 参照图在 testdata/platinum（script/platinum-ref/capture.sh 抓取）；并排图与差异汇总 summary.txt 写到 dir。
+	// 参照图在 testdata/platinum（由已移除的 script/platinum-ref 从旧版前端抓取，见标签 v0.22.4）；并排图与差异汇总 summary.txt 写到 dir。
 	var summary strings.Builder
 	defer func() { _ = os.WriteFile(filepath.Join(dir, "summary.txt"), []byte(summary.String()), 0o644) }()
 	against := func(name string, got *image.RGBA) {

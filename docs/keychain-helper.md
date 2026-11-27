@@ -11,20 +11,17 @@
 - 只有认证完成才传输请求或访问钥匙串。每次进程只接受一项请求，槽位仅限 `data` 和 `ai`，不接受任意钥匙串服务名。
 - 所有查询先禁止系统 UI；遇到需要授权的错误且本次允许交互时，只重试一次。取消不会进入自动循环。
 - 数据密钥与成功读取的 AI 记录只在 Rust 进程内缓存。AI 显式保存、删除成功后更新缓存；失败不会被缓存成“不存在”。AI 旧配置迁移只在实际使用 AI 或进入 AI 设置时进行。
-- 发布版辅助程序缺失或身份不符会拒绝访问，不回退到主进程再次索取授权。`tauri dev` 的调试构建没有正式签名，沿用原开发钥匙串路径，不能用于升级免重复授权验收。
+- 发布版辅助程序缺失或身份不符会拒绝访问，不回退到主进程再次索取授权。
 
 ## 固定产物与构建
 
-`src-tauri/keychain-helper/artifacts/toskr-keychain-helper` 是已签名的 arm64/x86_64 通用产物，与源码和 `manifest.json` 一同版本化。清单记录源码 SHA-256、产物 SHA-256 与各架构 CDHash；不包含私钥。
+`helpers/keychain-helper/artifacts/toskr-keychain-helper` 是已签名的 arm64/x86_64 通用产物，与源码和 `manifest.json` 一同版本化。清单记录源码 SHA-256、产物 SHA-256 与各架构 CDHash；不包含私钥。
 
-普通构建只校验并复制产物，不编译或重签辅助程序：
+原生版正式包使用它的逐字节副本 `native/resources/darwin/com.toskr.keychain-helper.bin`（打包后位于 `Contents/Resources`；文件名决定 mygo 重签时的标识，不能改）。普通发版不编译、不重签辅助程序；`script/release-native.sh` 在打包前后核对：副本与本产物逐字节一致、`keychain-helper.py check` 通过、`native/identity.go` 锁定的 CDHash 与清单一致、包内副本的 CDHash 未变，任何偏差阻止发布。
 
 ```sh
 python3 script/keychain-helper.py check
-pnpm build:app
 ```
-
-Tauri 的 `bundle.macOS.files` 把它放入 `Contents/Helpers`，避免 externalBin 的自动重签路径。`build:app` 与 `release.sh` 在打包后检查包内副本逐字节一致；任何偏差阻止交付。
 
 只有审查过辅助程序本身的升级才运行：
 
@@ -32,7 +29,7 @@ Tauri 的 `bundle.macOS.files` 把它放入 `Contents/Helpers`，避免 external
 python3 script/keychain-helper.py build
 ```
 
-这会重新编译、签名并更新清单，可能使存量用户再次授权；不得作为普通打包前置命令。变更签名证书时需同步双方身份要求并独立规划迁移。由于 Rust 编译时嵌入清单，必须重新构建主程序。
+这会重新编译、签名并更新清单，可能使存量用户再次授权；不得作为普通打包前置命令。变更签名证书时需同步双方身份要求并独立规划迁移。升级后须同步更新 `native/resources/darwin/` 下的副本与 `native/identity.go` 锁定的 CDHash。
 
 ## 验收
 

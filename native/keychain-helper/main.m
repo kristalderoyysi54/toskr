@@ -1,4 +1,4 @@
-// Toskr Native 内置密钥辅助程序：派生自 src-tauri/keychain-helper/main.m（同一协议），只开放 data 槽。
+// Toskr Native 内置密钥辅助程序：派生自 helpers/keychain-helper/main.m（同一协议），只开放 data 槽。
 // 钥匙串授权绑定在这个固定产物的 CDHash 上，主程序每次重编译都不再触发授权弹窗。
 #import <Foundation/Foundation.h>
 #import <Security/Security.h>

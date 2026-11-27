@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="src-tauri/icons/icon.png" alt="Toskr" width="128" height="128" />
+<img src="native/resources/icon.png" alt="Toskr" width="128" height="128" />
 
 # Toskr
 

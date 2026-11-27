@@ -79,7 +79,7 @@
 
 ## 签名与 TCC 备注
 
-构建使用本机自签名证书 **"Toskr Dev Signing"**（`bundle.macOS.signingIdentity`），签名跨编译稳定，重新编译后无需重新授权辅助功能。换机器时：先在钥匙串创建同名代码签名证书并信任，或移除该配置退回 ad-hoc（每次重编译需在系统设置里删掉 Toskr 条目重新添加）。`pnpm tauri dev` 的调试进程权限附着于启动它的终端。
+构建使用本机自签名证书 **"Toskr Dev Signing"**（`native/mygo.json` 的 `macos.signingIdentity`），签名跨编译稳定，重新编译后无需重新授权辅助功能。换机器时：先在钥匙串创建同名代码签名证书并信任，或移除该配置退回 ad-hoc（每次重编译需在系统设置里删掉 Toskr 条目重新添加）。
 
 ## AI 智能（v0.9.x 新增）
 63. 设置 → AI 智能：预设点选填 Base URL（模型名为空才带入推荐值）；API Key 只显示“已配置/未配置”，新值只可保存或覆盖且不能回显；「测试连接」从 macOS 钥匙串读取 key，未启用 AI 总开关也能执行

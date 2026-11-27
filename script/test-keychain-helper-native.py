@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DIRECTORY = ROOT / "src-tauri/keychain-helper"
+DIRECTORY = ROOT / "helpers/keychain-helper"
 IDENTITY = "6E960D8B61E1FC9C534E41CB812803D07E85E87B"
 CLIENT_ID = "com.toskr.keychain-test-client"
 

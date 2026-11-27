@@ -17,7 +17,7 @@ def main():
             "/usr/bin/xcrun", "clang", "-fobjc-arc", "-Wall", "-Wextra", "-Werror",
             "-Wno-deprecated-declarations", "-mmacosx-version-min=13.0",
             "-framework", "Foundation", "-framework", "Security", "-lbsm",
-            str(ROOT / "src-tauri/keychain-helper/tests/unit.m"), "-o", str(binary),
+            str(ROOT / "helpers/keychain-helper/tests/unit.m"), "-o", str(binary),
         ], check=True)
         subprocess.run([str(binary)], check=True)
 

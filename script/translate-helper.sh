@@ -3,7 +3,7 @@
 # 双架构、hardened runtime，用应用同一证书签名后由 tauri.conf.json bundle.macOS.files 放进 Contents/Helpers。
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-DIR="$ROOT/src-tauri/translate-helper"
+DIR="$ROOT/helpers/translate-helper"
 OUT="$DIR/artifacts/toskr-translate-helper"
 if [ -f "$OUT" ] && [ "$OUT" -nt "$DIR/main.swift" ] && [ "$OUT" -nt "$0" ]; then
   echo "✓ 本机翻译辅助程序已是最新"

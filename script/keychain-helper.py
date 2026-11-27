@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DIRECTORY = ROOT / "src-tauri/keychain-helper"
+DIRECTORY = ROOT / "helpers/keychain-helper"
 BINARY = DIRECTORY / "artifacts/toskr-keychain-helper"
 MANIFEST = DIRECTORY / "manifest.json"
 SOURCES = [DIRECTORY / "main.m", DIRECTORY / "config.h"]

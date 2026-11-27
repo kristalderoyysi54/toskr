@@ -21,7 +21,7 @@ var langPackHinted atomic.Bool
 
 // 本机中英互译（同 Tauri screenshot.rs translate_local）：经包内 Swift 辅助程序调系统翻译框架（macOS 15+，离线语言包），
 // 比 AI 快一个量级且不联网。辅助程序缺失、系统低于 15、语言包未装或超时都返回错误，由调用方退回 AI。
-// 辅助程序源码在 src-tauri/translate-helper/main.swift，由 script/translate-helper.sh 构建后拷进 resources/darwin。
+// 辅助程序源码在 helpers/translate-helper/main.swift，由 script/translate-helper.sh 构建后拷进 resources/darwin。
 
 const translateHelperName = "toskr-translate-helper"
 

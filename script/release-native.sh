@@ -19,15 +19,13 @@ DRY="${DRY_RUN:-0}"
 REPO="kristalderoyysi54/toskr"
 LEGACY_KEY="$HOME/.tauri/toskr-updater.key"          # 旧版更新私钥：公钥已烧进存量旧版
 NATIVE_KEY="$HOME/.toskr-native-keys/mygo-update.key" # 原生版更新私钥
-HELPER_SRC=src-tauri/keychain-helper/artifacts/toskr-keychain-helper
+HELPER_SRC=helpers/keychain-helper/artifacts/toskr-keychain-helper
 HELPER_RES=native/resources/darwin/com.toskr.keychain-helper.bin
 OUT=native/build-release
 APP="$OUT/darwin-arm64/Toskr.app"
 
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "版本号须为 x.y.z"; exit 1; }
 [[ -f "$LEGACY_KEY" && -f "$NATIVE_KEY" ]] || { echo "缺少更新私钥（$LEGACY_KEY / $NATIVE_KEY）"; exit 1; }
-# 旧版更新包的签名走 tauri CLI（node_modules 里）：缺了会在打包几分钟后才失败，开头就拦下
-[[ -x node_modules/.bin/tauri ]] || { echo "缺少 tauri CLI（node_modules/.bin/tauri），先运行 pnpm install --frozen-lockfile"; exit 1; }
 [[ "$REPO" == "$(python3 -I -c 'import json;print(json.load(open("native/mygo.json"))["updates"]["github"])')" ]] || { echo "REPO 与 native/mygo.json updates.github 不一致"; exit 1; }
 if [[ "$DRY" != 1 ]]; then
   [[ -z "$(git status --porcelain --untracked-files=all)" ]] || { echo "存在未提交改动，请先提交再发版"; exit 1; }
@@ -38,8 +36,8 @@ TESTED_COMMIT=$(git rev-parse HEAD)
 # 门禁 1：包里的旧版密钥辅助程序必须就是旧版的原样产物（钥匙串授权绑在它的指纹上）
 cmp -s "$HELPER_SRC" "$HELPER_RES" || { echo "$HELPER_RES 与旧版辅助程序产物不一致"; exit 1; }
 python3 script/keychain-helper.py check >/dev/null || { echo "旧版辅助程序产物校验失败"; exit 1; }
-WANT_ARM=$(python3 -I -c 'import json;print(json.load(open("src-tauri/keychain-helper/manifest.json"))["cdhash"]["arm64"])')
-WANT_X86=$(python3 -I -c 'import json;print(json.load(open("src-tauri/keychain-helper/manifest.json"))["cdhash"]["x86_64"])')
+WANT_ARM=$(python3 -I -c 'import json;print(json.load(open("helpers/keychain-helper/manifest.json"))["cdhash"]["arm64"])')
+WANT_X86=$(python3 -I -c 'import json;print(json.load(open("helpers/keychain-helper/manifest.json"))["cdhash"]["x86_64"])')
 grep -q "cdhash: \"$WANT_ARM\", cdhashX86: \"$WANT_X86\"" native/identity.go || { echo "native/identity.go 锁定的辅助程序指纹与清单不一致"; exit 1; }
 
 # 门禁 2：测试
@@ -89,8 +87,8 @@ done
 # 3. 旧版更新器的物料：顶层目录名随意（更新器解包时跳过第一级），装到原 Toskr.app 的位置
 LEGACY="$OUT/legacy"; rm -rf "$LEGACY"; mkdir -p "$LEGACY"
 COPYFILE_DISABLE=1 tar -czf "$LEGACY/Toskr.app.tar.gz" -C "$OUT/darwin-arm64" Toskr.app
-# 失败时把签名工具的输出打出来（曾因 -s 与丢弃输出静默退出，看不出原因）
-if ! SIGN_OUT=$(TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" pnpm -s tauri signer sign -f "$LEGACY_KEY" -p "" "$LEGACY/Toskr.app.tar.gz" 2>&1); then
+# 旧版更新签名（script/legacy-sign，替代 tauri signer）：签前核对私钥与旧版锁定的公钥配对，签后自验
+if ! SIGN_OUT=$(go -C script/legacy-sign run . -key "$LEGACY_KEY" "$PWD/$LEGACY/Toskr.app.tar.gz" 2>&1); then
   echo "✗ 旧版更新签名失败："; echo "$SIGN_OUT"; exit 1
 fi
 [[ -s "$LEGACY/Toskr.app.tar.gz.sig" ]] || { echo "✗ 旧版更新签名失败：没有生成 .sig"; echo "$SIGN_OUT"; exit 1; }

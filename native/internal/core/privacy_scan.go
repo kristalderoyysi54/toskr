@@ -1,6 +1,5 @@
 package core
 
-//go:generate python3 -I gen_privacy_patterns.py
 
 import (
 	"encoding/base64"
@@ -16,7 +15,7 @@ import (
 )
 
 // 本文件逐条移植 Tauri src-tauri/src/privacy.rs 的 collect_candidates / resolve_overlaps（含 context.rs、providers.rs）：
-// 正则原文由 gen_privacy_patterns.py 从 Rust 源码抽出（privacy_patterns_gen.go），校验函数照 Rust 版改写。
+// 正则原文当初由脚本从 Rust 源码抽出（privacy_patterns_gen.go，旧版源码移除后改为手工维护），校验函数照 Rust 版改写。
 // 差异：Go RE2 的 \b、\s 只认 ASCII（Rust 默认 Unicode），对中英混排的命中边界影响很小。
 
 const maxScanBytes = 2 * 1024 * 1024 // 同 Tauri MAX_SCAN_INPUT_BYTES：超限不做不完整扫描
