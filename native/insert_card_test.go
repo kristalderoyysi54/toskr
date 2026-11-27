@@ -235,3 +235,34 @@ func TestPinnedReadingDetailSendsExternally(t *testing.T) {
 		t.Fatal("未固定的阅读态保持原行为：添加进卡")
 	}
 }
+
+// 详情编辑态光标在标题框：面板里「添加到打开的卡片光标处」应插进标题的光标处（多行压成一行），正文不动；可撤销。
+func TestAddToOpenCardTitleCaret(t *testing.T) {
+	orig := detailVisible
+	t.Cleanup(func() { detailVisible = orig })
+	detailVisible = func(*app) bool { return true }
+	a, _ := testApp(t)
+	target, _, _ := a.store.Add(store.Note{Section: store.SectionInbox, Text: "正文内容"})
+	clip, _, _ := a.store.Add(store.Note{Section: store.SectionClipboard, Text: "剪贴\n内容"})
+	dt := detailTester(t, a, target)
+	a.enterDetailEdit(target)
+	dt.Frame()
+	dt.Frame()
+	mustClick(t, dt, "笔记标题")
+	dt.Type("周报")
+	dt.Frame()
+	a.addToOpenCard([]store.Note{clip})
+	dt.Frame()
+	if a.detail.title != "周报剪贴 内容" || a.detailText != "正文内容" {
+		t.Fatalf("应插进标题 title=%q body=%q", a.detail.title, a.detailText)
+	}
+	dt.Type("!")
+	dt.Frame()
+	if a.detail.title != "周报剪贴 内容!" {
+		t.Fatalf("插入后焦点与光标应留在标题末尾 %q", a.detail.title)
+	}
+	a.hudUndo()
+	if a.detail.title != "周报" || a.detailText != "正文内容" {
+		t.Fatalf("撤销应还原标题 title=%q body=%q", a.detail.title, a.detailText)
+	}
+}

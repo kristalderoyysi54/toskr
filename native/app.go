@@ -50,6 +50,7 @@ type app struct {
 	cmpOrder                              []string
 	secColorPick, secColorSrc, secMenuSrc string    // 分组颜色弹层：哪个分组、在哪弹（head / rail / bar）、菜单从哪打开（section_color.go）
 	yieldUntil                            time.Time // 发送时面板让出焦点：此前的失焦不自动收起
+	caretApps                             map[string]bool // 发送时读到过焦点输入框的应用（bundle）：下次读不到就提示没有光标（本次运行内）
 	// 紧凑行悬停与原图窥视（peek.go）
 	rowHov    rowHover
 	gp        groupPeek // 合上的分组悬停速览（group_peek.go）
@@ -250,6 +251,7 @@ type app struct {
 	permKeySeen                            bool               // 面板自己看到过键盘活动（判「被拦截」的铁证之一）
 	permDraft                              string             // 上一帧的输入区文字（变了即有人在打字）
 	tauriImporting                         bool               // 正在从 Tauri 版导入
+	merging                                bool               // 正在并入正式版（merge_release.go）
 	migrate                                *migrateState      // 旧版迁移向导（nil = 未打开）
 	migrateLater                           bool               // 本次进程选过「稍后」
 	lastTauriReport                        *store.TauriReport // 最近一次 Tauri 导入的结果（迁移向导完成页的数字）
@@ -1090,9 +1092,15 @@ func (a *app) deliver(notes []store.Note, enter bool, tmpl string) {
 	onClip := func(result string) { a.onMain(func() { a.outcomeClipboard(out, result) }) }
 	a.beginBand(ids)
 	go func() {
-		check, err := core.DeliverWith(a.sys, target, core.Payload{Steps: steps}, core.Options{Enter: enter, Firewall: !a.scanRules().Off, StartedMs: a.targetStarted, OnClipboard: onClip, StepGap: a.store.Settings().PasteStep(), Trace: diag.Push})
+		check, err := core.DeliverWith(a.sys, target, core.Payload{Steps: steps}, core.Options{Enter: enter, Firewall: !a.scanRules().Off, StartedMs: a.targetStarted, OnClipboard: onClip, StepGap: a.store.Settings().PasteStep(), Trace: diag.Push, ExpectCaret: a.caretApps[target.BundleID]})
 		diag.Push("发送: %d 条 → %s 方案=%s 格式=%s enter=%v check=%s err=%v", len(notes), target.BundleID, r.Profile.ID, mode, enter, check, err)
 		a.panelUpdate(func() { // 无窗口的测试里排队，由 drainUpdates 执行（多目标发送要靠这段收尾接着发下一个）
+			if check == core.CheckVerified || check == core.CheckUnchanged { // 读得到焦点输入框：记下这个应用
+				if a.caretApps == nil {
+					a.caretApps = map[string]bool{}
+				}
+				a.caretApps[target.BundleID] = true
+			}
 			prev := a.out // 期间可能已开始准备下一次发送
 			a.out = out
 			var open []string // 发送前未完成的卡：发送后被标记完成的可从状态带撤销
@@ -1108,7 +1116,7 @@ func (a *app) deliver(notes []store.Note, enter bool, tmpl string) {
 					undo = append(undo, id)
 				}
 			}
-			a.settleBand(err != nil, err == nil && check != core.CheckUnchanged, enter && err == nil, undo)
+			a.settleBand(err != nil, err == nil && check != core.CheckUnchanged && check != core.CheckNoCaret, enter && err == nil, undo)
 			if err == nil {
 				a.afterDelivered(ids, rehearsal)
 			}
@@ -1121,7 +1129,7 @@ func (a *app) deliver(notes []store.Note, enter bool, tmpl string) {
 // finishDeliver：投递结束后（主线程）记历史与「最近发送」、标记已发送、出 HUD。
 func (a *app) finishDeliver(target macos.FrontApp, ids, texts []string, png []byte, redactions int, ph sendRedaction, profile string, check core.Check, err error) {
 	d := store.Delivery{TargetName: target.Name, TargetBundle: target.BundleID, Status: "sent", SourceIDs: ids,
-		TextChars: utf8.RuneCountInString(sendText(texts)), Unconfirmed: check == core.CheckUnchanged, Profile: profile}
+		TextChars: utf8.RuneCountInString(sendText(texts)), Unconfirmed: check == core.CheckUnchanged || check == core.CheckNoCaret, Profile: profile}
 	if png != nil {
 		d.ImageCount = 1
 	}
@@ -1145,6 +1153,10 @@ func (a *app) finishDeliver(target macos.FrontApp, ids, texts []string, png []by
 	_ = a.store.MarkSent(ids, time.Now())
 	if check == core.CheckUnchanged {
 		a.showHUD("warn", tr("已粘贴，但目标输入框内容没有变化，请确认是否发送成功"))
+		return
+	}
+	if check == core.CheckNoCaret {
+		a.showHUD("warn", fmt.Sprintf(tr("%s 里没有光标，内容可能没粘贴进去"), target.Name))
 		return
 	}
 	a.showHUD("sent", fmt.Sprintf(tr("已发送 %d 条到 %s"), len(ids), target.Name))

@@ -168,7 +168,7 @@ func drawShapes(p *ui.Painter, d *shotDisplay, shapes []*shot.Shape, clip shot.R
 			})
 		}
 	}
-	numbers := shot.CalloutNumbers(shapes)
+	numbers := shot.CalloutNumbersIn(shapes, clip)
 	for _, s := range shapes {
 		drawShape(p, s, numbers[s])
 	}

@@ -337,7 +337,7 @@ func (a *app) clipCard(c *ui.Context, k tokens, n store.Note, layout string) {
 		}
 		box.Background(box.AnimateColor("row-bg", bg, tweenTw))
 	} else {
-		elevated(box, k, hovered || checked || (focused && !checked)) // 同笔记卡：悬停上移 1px + elevation-2，多选内发光
+		lifted(box, k, hovered || checked || (focused && !checked)) // 同笔记卡：悬停上移 1px + 抬起（外暗线 + 浮层同款投影），多选内发光
 		if hovered {
 			lift = -1
 		}
@@ -516,8 +516,10 @@ func (a *app) clipActions(c *ui.Context, k tokens, n store.Note, isLink bool, to
 	if top >= 0 {
 		row = ui.Row(c).Absolute().Right(4).Top(top)
 	}
-	row.Height(24).Padding(0, 2).Radius(rr(8)).AlignItems(ui.Center).Background(k.card).Border(1, k.inputBorder).
-		Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 14, -6, k.floatShadowB)
+	row.Height(24).Padding(0, 2).Radius(rr(8)).AlignItems(ui.Center)
+	if !floatEdge(row, k) {
+		row.Background(k.card).Border(1, k.inputBorder).Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 14, -6, k.floatShadowB)
+	}
 	row.Key("acts").Transition(fade).Children(func() {
 		alias := a.aliasCount(n) > 0
 		openTip := "预览（Space）"
@@ -735,7 +737,7 @@ func (a *app) clipTile(c *ui.Context, k tokens, n store.Note, size float32) {
 	k.th.Card(box, checked)
 	hovered := box.Hovered()
 	a.bandHover(n.ID, hovered)
-	elevated(box, k, hovered || checked || (focused && !checked))
+	lifted(box, k, hovered || checked || (focused && !checked))
 	lift := float32(0)
 	if hovered {
 		lift = -1

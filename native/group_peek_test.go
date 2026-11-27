@@ -220,3 +220,33 @@ func TestGroupPeekRowMenuAndImageHover(t *testing.T) {
 		t.Fatal("弹框收起应放开窥视")
 	}
 }
+
+// 弹框已经开着：移到另一个合上的分组头立即换过去，不等 0.4 秒（用户 2026-11-25）。
+func TestGroupPeekSwitchIsInstant(t *testing.T) {
+	a, tt, sec := peekApp(t)
+	other := a.store.AddSection("另一个组")
+	a.store.Add(store.Note{Section: other, Text: "另一组里的卡"})
+	a.foldAllSections(true)
+	a.reload()
+	tt.Frame()
+	tt.Frame()
+	hover := func(name string) {
+		r, ok := tt.Find(name)
+		if !ok {
+			t.Fatalf("没有 %s %v", name, tt.Texts())
+		}
+		tt.Move(r.X+r.W/2, r.Y+r.H/2)
+		tt.Frame()
+	}
+	hover("提示词")
+	tt.Advance(gpDelay + 10*time.Millisecond)
+	tt.Frame()
+	if a.gp.sec != sec {
+		t.Fatal("前置：应先弹出第一个分组")
+	}
+	hover("另一个组")
+	tt.Frame()
+	if a.gp.sec != other {
+		t.Fatalf("应立即换到另一个组，实为 %q（arm=%q）", a.gp.sec, a.gp.arm)
+	}
+}

@@ -286,6 +286,8 @@ func init() { // 粘贴规则：模板排序 / 输出预览 / 当前目标与规
 func init() { // 详情窗光标处插入 / 拖进详情编辑器（insert_card.go / detail_drop.go）
 	for k, v := range map[string]string{
 		"已替换选中内容": "Replaced the selection",
+		"%s 里没有光标，内容可能没粘贴进去":      "No cursor in %s; the content may not have been pasted",
+		"已添加到标题":  "Added to the title",
 		"添加到打开的卡片光标处（双击卡片同效）":     "Add at the open card's cursor (or double-click the card)",
 		"添加到打开的卡片光标处（有选中文字则替换）":   "Add at the open card's cursor (replaces selected text)",
 		"直发该卡（详情窗开着时剪贴卡添加到它的光标处）": "Send the card (clips go to the open card's cursor while a detail window is open)",

@@ -193,11 +193,12 @@ func (a *app) shotOCRPanel(c *ui.Context, d *shotDisplay, pal shotPalette, toolb
 				title = tr("识别中…")
 			}
 			text(c, title, 11, 16, 400, pal.muted)
-			x := ui.Box(c).Size(20, 20).Radius(rr(8)).Center().Label(tr("关闭（Esc）")).Role(ui.RoleButton)
+			x := ui.Box(c).Size(20, 20).Radius(rr(8)).Center().Label(tr("关闭")).Role(ui.RoleButton)
 			if x.Hovered() {
 				x.Background(pal.hover)
 			}
 			x.Children(func() { licon(c, "x", 12, pal.muted) })
+			a.shotTipTarget(c, d, x, tr("关闭 Esc"))
 			if x.Clicked() {
 				e.ocr = nil
 			}
@@ -244,7 +245,7 @@ func shotTextButton(c *ui.Context, s settingsTokens, label string, disabled bool
 func (a *app) shotTranslate(c *ui.Context, d *shotDisplay) {
 	e := &d.ed
 	if slices.ContainsFunc(e.hist.Shapes, func(s *shot.Shape) bool { return s.Kind == shot.Translate }) {
-		e.hist = shot.CommitShapes(e.hist, slices.DeleteFunc(slices.Clone(e.hist.Shapes), func(s *shot.Shape) bool { return s.Kind == shot.Translate }))
+		e.setHist(shot.CommitShapes(e.hist, slices.DeleteFunc(slices.Clone(e.hist.Shapes), func(s *shot.Shape) bool { return s.Kind == shot.Translate })))
 		return
 	}
 	if e.sel == nil || e.translating {
@@ -350,7 +351,7 @@ func (a *app) applyTranslation(c *ui.Context, d *shotDisplay) {
 			}),
 		})
 	}
-	e.hist = shot.PushShape(e.hist, &shot.Shape{Kind: shot.Translate, Items: items})
+	e.setHist(shot.PushShape(e.hist, &shot.Shape{Kind: shot.Translate, Items: items}))
 }
 
 // erasePatch：只抹掉文字笔画：识别框外扩 pad 像素，取外圈亮度中位数的像素色当背景，

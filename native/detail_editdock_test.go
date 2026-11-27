@@ -102,7 +102,8 @@ func TestBatchDetailReadOnly(t *testing.T) {
 	}
 	dt := ui.NewTester(a.detailView, 560, 540)
 	dt.Frame()
-	if dt.HasText("编辑") || dt.HasText("处理") || dt.HasText("⌘⏎") || !dt.HasText("复制") || !dt.HasText("合并发送内容 · ") {
+	_, titled := dt.Find("合并发送内容") // 标题栏：标题与副标题各是一段文字
+	if dt.HasText("编辑") || dt.HasText("处理") || dt.HasText("⌘⏎") || !dt.HasText("复制") || !titled || !dt.HasText(" · 2/3 张当前可用来源卡片") {
 		t.Fatalf("只读坞 %v", dt.Texts())
 	}
 	dt.Key(ui.Cmd, ui.KeyEnter)

@@ -93,7 +93,7 @@ func (a *app) longFinish(le *longEditor, act shotAction, section string) {
 	if out == nil {
 		return
 	}
-	caption := shot.CalloutPrompt(shapes, tr("图上的标注（序号对应图中区域）："))
+	caption := shot.CalloutPromptIn(shapes, sel, tr("图上的标注（序号对应图中区域）："))
 	le.close()
 	if act == shotSave && le.origin.pin != nil {
 		a.pinReplace(le.origin.pin, out)
@@ -295,34 +295,34 @@ func (a *app) longEditorView(c *ui.Context, le *longEditor) {
 						}
 					}
 				}
-				if a.shotButton(c, d, pal, "crop", "crop", tr("裁剪：拖动边角调整，Esc 结束"), le.cropping, false, nil).Clicked() {
+				if a.shotButton(c, d, pal, "crop", "crop", tr("裁剪"), le.cropping, false, nil).Clicked() {
 					e.commitEditing()
 					e.tool = ""
 					le.cropping = !le.cropping
 				}
 				shotSep(c, pal)
-				if a.shotButton(c, d, pal, "undo", "undo-2", tr("撤销（⌘Z）"), false, len(e.hist.Undo) == 0, nil).Clicked() && len(e.hist.Undo) > 0 {
+				if a.shotButton(c, d, pal, "undo", "undo-2", tr("撤销 ⌘Z"), false, len(e.hist.Undo) == 0, nil).Clicked() && len(e.hist.Undo) > 0 {
 					e.hist = shot.Undo(e.hist)
 				}
-				if a.shotButton(c, d, pal, "redo", "redo-2", tr("重做（⇧⌘Z）"), false, len(e.hist.Redo) == 0, nil).Clicked() && len(e.hist.Redo) > 0 {
+				if a.shotButton(c, d, pal, "redo", "redo-2", tr("重做 ⇧⌘Z"), false, len(e.hist.Redo) == 0, nil).Clicked() && len(e.hist.Redo) > 0 {
 					e.hist = shot.Redo(e.hist)
 				}
 				shotSep(c, pal)
 				a.shotFrameToggle(c, d, pal, fr)
 				ui.Spacer(c)
 				text(c, fmt.Sprintf("%d × %d", int(out.W), int(out.H)), 11, 16, 400, pal.muted).Font(fontMono).FontFeatures("tnum").Margin(0, 4, 0, 0)
-				if a.shotButton(c, d, pal, "saveas", "download", tr("另存为图片…：保存为 PNG 文件"), false, false, nil).Clicked() {
+				if a.shotButton(c, d, pal, "saveas", "download", tr("另存为…"), false, false, nil).Clicked() {
 					a.longFinish(le, shotSaveAs, "")
 					return
 				}
-				cancelTip := tr("放弃长截屏")
-				doneTip := tr("完成：复制并存入「剪贴」（Enter）；长按选择存入的分组")
+				cancelTip := tr("取消 Esc")
+				doneTip := tr("完成 ⏎ · 长按选分组")
 				if le.origin.pin != nil {
-					cancelTip, doneTip = tr("放弃标注"), tr("完成：更新钉图（Enter）；长按选择存入的分组")
+					doneTip = tr("更新钉图 ⏎ · 长按选分组")
 				} else if le.origin.note != nil {
-					cancelTip, doneTip = tr("放弃标注"), tr("完成：替换卡片里的原图（Enter，可撤销）；长按选择存入的分组")
+					doneTip = tr("替换原图 ⏎ · 长按选分组")
 				} else if le.origin.draft != "" {
-					cancelTip, doneTip = tr("放弃标注"), tr("完成：替换输入区里的这张图（Enter）")
+					doneTip = tr("替换草稿图 ⏎")
 				}
 				if a.shotButton(c, d, pal, "cancel", "x", cancelTip, false, false, nil).Clicked() {
 					le.close()
@@ -353,6 +353,8 @@ func (a *app) longEditorView(c *ui.Context, le *longEditor) {
 	}
 	if !e.sectionMenu {
 		a.shotHoverTip(c, d, float64(W), float64(H))
+	} else {
+		e.tip, e.tipHidden, e.tipSeen = "", "", false
 	}
 }
 
@@ -421,7 +423,7 @@ func (a *app) longPage(c *ui.Context, le *longEditor, pal shotPalette, fr shotFr
 		})
 	})
 	page.Children(func() {
-		a.shotCallouts(c, d, shapes, z)
+		a.shotCallouts(c, d, shapes, z, le.cropRect())
 		if e.editing != nil {
 			a.shotTextEditor(c, d, z, pal.fg.Alpha(0.5))
 		}

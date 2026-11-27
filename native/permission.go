@@ -173,7 +173,19 @@ func bannerButton(c *ui.Context, s settingsTokens, label string) bool {
 // conflictBanner：数据文件被外部修改后的只读横幅（同 Tauri persistence conflict 提示）——
 // 内存里的修改不再落盘，用户选「重新加载磁盘版本」或「另存恢复副本后重新加载」解除只读。
 func (a *app) conflictBanner(c *ui.Context, k tokens) {
-	a.adoptBanner(c, k) // 旧版数据没接上的横幅与只读横幅同一位置（三种面板布局共用这个入口）
+	a.adoptBanner(c, k)  // 旧版数据没接上的横幅与只读横幅同一位置（三种面板布局共用这个入口）
+	if a.store.Newer() { // 数据由更新版本写入：没有可点的出路，只有更新应用
+		tone, title := k.danger, tr("数据只读：由更新版本的 Toskr 写入")
+		ui.Column(c).Margin(0, 12, 8, 12).Padding(12).Gap(6).Radius(12).Background(tone.Alpha(0.1)).Border(1, tone.Alpha(0.3)).
+			Label(title).Key("newer-banner").Children(func() {
+			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+				licon(c, "triangle-alert", 14, tone)
+				text(c, title, 12, 17, 500, tone)
+			})
+			text(c, tr("这个版本不认识其中的新内容，为免抹掉它们已停止保存。更新应用后恢复。"), 11, 16, 400, k.muted).Wrap().MaxLines(2)
+		})
+		return
+	}
 	if !a.store.Conflict() {
 		return
 	}

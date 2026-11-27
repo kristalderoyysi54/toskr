@@ -34,7 +34,8 @@ func (a *app) detailWorkArea() mygo.Rectangle {
 	wa := mygo.Rectangle{Width: 1440, Height: 900}
 	if a.panel != nil {
 		b := a.panel.Bounds()
-		if d, ok := displayAt(mygo.Screen.Displays(), b.X+b.Width/2, b.Y+b.Height/2); ok {
+		// 贴边滑走 / 停靠在屏缘时面板中心可能落在所有屏幕之外：取离它最近的屏，不能退回固定 1440×900（那会把详情窗开到主屏）
+		if d, ok := displayNear(mygo.Screen.Displays(), b.X+b.Width/2, b.Y+b.Height/2); ok {
 			wa = d.WorkArea
 		}
 	}
@@ -60,7 +61,7 @@ func (a *app) enterGalleryFrame(n store.Note) {
 	b := win.Bounds()
 	a.detail.galleryBack = &b
 	wa := a.detailWorkArea()
-	if d, ok := displayAt(mygo.Screen.Displays(), b.X+b.Width/2, b.Y+b.Height/2); ok {
+	if d, ok := displayNear(mygo.Screen.Displays(), b.X+b.Width/2, b.Y+b.Height/2); ok {
 		wa = d.WorkArea
 	}
 	win.SetBounds(imageWindowFrame(wa, a.detail.imgW, a.detail.imgH, imageChrome(n)))

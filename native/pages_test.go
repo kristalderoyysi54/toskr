@@ -511,7 +511,7 @@ func TestDetailEditTagsPickAndRaw(t *testing.T) {
 	if !tt.HasText(n.Text) || !tt.HasText("渲染") {
 		t.Fatalf("原文模式应显示原始文本 %v", tt.Texts())
 	}
-	_ = tt.Click("＋ 标签")
+	_ = tt.Click("添加标签") // 标签行默认收起：标题栏「#」钮展开并直接进输入
 	tt.Frame()
 	tt.Type("周会")
 	tt.Key(0, ui.KeyEnter)

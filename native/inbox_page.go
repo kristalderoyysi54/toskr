@@ -7,6 +7,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"github.com/toskr/native/internal/diag"
 	"github.com/toskr/native/internal/store"
 )
 
@@ -20,7 +21,11 @@ const (
 )
 
 // quickSort：常用区的拖动状态。active 是区内拿起的方块（排序），over 是指针所在的槽位（排序落点 / 外面的卡拖进来时插到它前面）。
-type quickSort struct{ active, over string }
+// left：拿起的方块离开过自己的格子（到过别的格子 / 拖出过常用区）。没离开过就松手 = 点击时手滑了几个点，按点击发送。
+type quickSort struct {
+	active, over string
+	left         bool
+}
 
 // quickNotes：常用区内容（用户 2026-11-18 定，同 Arc 的常用书签）——只放设为常用（★）的卡，顺序是拖动排出来的 order，
 // 不在 order 里的（菜单里设的 / 旧数据）排在后面；剪贴板、已完成不进。没有就不显示这个区。
@@ -140,11 +145,14 @@ func (a *app) quickStrip(c *ui.Context, k tokens) {
 	// 方块自己不接收放下：区内排序与外面拖进来的卡，松手都落到这个容器上，落点按 qs.over
 	drag, over := ui.DragOver[noteDrag](wrap)
 	a.quickJump = false
+	tapped := "" // 按下后移了几个点被框架当成拖动、又在原格松手的方块：按点击发送
 	if d, ok := ui.Drop[noteDrag](wrap); ok {
 		if d.quick {
 			if next := quickMoved(ids, d.id, qs.over); !slices.Equal(next, ids) {
 				a.setQuickOrder(next)
 				ids = noteIDs(a.quick)
+			} else if !qs.left {
+				tapped = d.id
 			}
 		} else {
 			a.keepNotes(a.dragNotes(d.id), qs.over)
@@ -153,12 +161,17 @@ func (a *app) quickStrip(c *ui.Context, k tokens) {
 		*qs, over = quickSort{}, false
 		a.quickJump = true
 	}
+	if i := slices.Index(ids, tapped); i >= 0 && a.quickClickOnce(tapped, c.Now()) {
+		diag.Push("常用: 原格松手按点击发送 %s", tapped)
+		a.sendFromList([]store.Note{a.quick[i]})
+	}
+	quick := a.quick                // 本帧快照：方块右键「取消常用」会在下面的循环里 reload 换掉 a.quick，按旧长度取就越界
 	incoming := over && !drag.quick // 列表里的卡正拖在常用区上：整区描边，指着的方块前出插入线
 	switch {
 	case !over && a.quickDragLast == "": // 没在拖 / 在别处松手了
 		*qs = quickSort{}
 	case !over: // 方块拖出了常用区：其余的回原位
-		qs.over = qs.active
+		qs.over, qs.left = qs.active, true
 	}
 	shown := quickMoved(ids, qs.active, qs.over)
 	rows := (len(ids) + quickCols - 1) / quickCols
@@ -179,11 +192,12 @@ func (a *app) quickStrip(c *ui.Context, k tokens) {
 						if i >= len(ids) {
 							continue // 末行补空槽：方块宽度恒为三分之一
 						}
-						n := a.quick[i]
+						n := quick[i]
 						w := slot.Bounds().W
 						if over || qs.active != "" { // 只在拖动中读指针，免得平时每次移动鼠标都重建
 							if px, py, ok := slot.PointerPosition(); ok && px >= 0 && px < w+quickGap && py >= 0 && py < quickCardH+quickGap {
 								qs.over = n.ID
+								qs.left = qs.left || (qs.active != "" && n.ID != qs.active)
 							}
 						}
 						j := slices.Index(shown, n.ID) // 让位后的格子
@@ -241,7 +255,7 @@ func (a *app) quickCard(c *ui.Context, k tokens, n store.Note, w float32) {
 	} else {
 		b.Background(k.track)
 	}
-	elevated(b, k, hovered)
+	lifted(b, k, hovered)
 	b.Drag(noteDrag{id: n.ID, quick: true})
 	dragging := b.Dragging()
 	if dragging {
@@ -258,8 +272,13 @@ func (a *app) quickCard(c *ui.Context, k tokens, n store.Note, w float32) {
 			a.focusNote(n)
 		}
 		if m.Item(tr("取消常用")).Chosen() {
+			order := noteIDs(a.quick)
 			_ = a.store.SetKept(n.ID, false)
 			a.reload()
+			a.showHUDUndo("ok", tr("已取消常用"), func() {
+				_ = a.store.SetKept(n.ID, true)
+				a.setQuickOrder(order)
+			})
 		}
 	})
 	white := ui.RGB(255, 255, 255)
@@ -297,6 +316,7 @@ func (a *app) quickCard(c *ui.Context, k tokens, n store.Note, w float32) {
 		a.compactHover(c, b, n) // 停留弹原图（文字截图看得清）
 	}
 	if b.Clicked() && a.quickClickOnce(n.ID, c.Now()) {
+		diag.Push("常用: 点击发送 %s", n.ID)
 		a.sendFromList([]store.Note{n})
 	}
 }

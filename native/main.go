@@ -64,11 +64,21 @@ func start() (*app, error) {
 	}
 	diag.Init(dataDir()) // 诊断日志与目录指针始终在默认目录
 	diag.Push("启动 v%s pid=%d", mygo.App.Version(), os.Getpid())
+	diag.CaptureCrash()
 	dir, missing := activeDataDir()
 	if missing != "" {
 		diag.Push("自定义数据目录不可用: %s，本次使用默认目录", missing)
 	} else if dir != dataDir() {
 		diag.Push("数据目录: %s", dir)
+	}
+	_, err := lockDataDir(dir) // 两种身份可能指到同一份数据：同一时刻只让一个进程打开
+	for i := 0; err != nil && i < 15; i++ { // 自己重启时上一个进程可能还没退干净：等最多 3 秒
+		time.Sleep(200 * time.Millisecond)
+		_, err = lockDataDir(dir)
+	}
+	if err != nil {
+		diag.Push("数据目录被占用: %v", err)
+		return nil, err
 	}
 	_, statErr := os.Stat(filepath.Join(dir, store.DataFile))
 	fresh := errors.Is(statErr, os.ErrNotExist)
@@ -141,6 +151,10 @@ func start() (*app, error) {
 	})
 	a.startEdgeSupervisor()
 	a.startCompanionTracker()
+	a.panel.OnFocus(func() { diag.Push("面板获焦") }) // 与「面板失焦」成对：点了面板有没有拿到键盘，看这两行
+	// 面板不激活应用：发送后以不取焦点的方式重新显示，之后点窗内输入框偶发没拿到键盘，键入进了目标应用（用户 2026-11-27）。
+	// 点击派发前补成键盘窗口，覆盖面板里所有输入框
+	macos.KeyOnClick(a.panel.NativeHandle(), func() { diag.Push("面板: 点击时不是键盘窗口，补取焦点") })
 	a.panel.OnBlur(func() {
 		diag.Push("面板失焦 pinned=%v", a.pinned)
 		a.remaskAll()       // 秘文失焦即回遮罩（钉住时也一样，与 Tauri 一致）

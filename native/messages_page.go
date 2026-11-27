@@ -301,7 +301,7 @@ func (a *app) messageCard(c *ui.Context, k tokens, m store.Message, view []store
 		a.msgScrollTo = ""
 	}
 	hovered := box.Hovered()
-	elevated(box, k, hovered || checked)
+	lifted(box, k, hovered || checked)
 	if box.Clicked() {
 		a.msgClick(m.ID, box.ClickModifiers(), view)
 	}

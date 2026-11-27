@@ -251,6 +251,8 @@ func (a *app) settingsView(c *ui.Context) {
 							}
 						}
 					}},
+					{title: tr("详情窗能力提示"), hint: tr("内容较短时，在正文下方列出划词、选词、多投、化名的入口"),
+						control: setToggle(!st.DetailTipsOff, func(s *store.Settings, v bool) { s.DetailTipsOff = !v })},
 				}},
 				{title: tr("窗口与提示"), rows: []setRow{
 					{title: tr("开机启动"), hint: tr("登录后在后台待命"), control: func() {
@@ -563,6 +565,10 @@ func (a *app) dataSections(c *ui.Context, k tokens, s settingsTokens) []setSecti
 			}
 		}},
 	}...)
+	if !released() { // 迭代期才有：排在「从旧版迁移」后面
+		at := 1 + slices.IndexFunc(backup, func(r setRow) bool { return r.title == tr("从旧版迁移") })
+		backup = slices.Insert(backup, at, a.mergeReleaseRow(c, s))
+	}
 	if p := importPreview; p != nil {
 		legacy := p.Manifest.Format == store.LegacyJSONFormat
 		when := p.Manifest.CreatedAt.Format("2006-01-02 15:04")
@@ -949,4 +955,13 @@ func (a *app) pasteStepRow(c *ui.Context, k tokens, st store.Settings) setRow {
 				a.patchSettings(func(x *store.Settings) { x.PasteStepMs = ms })
 			}
 		}}
+}
+
+// mergeReleaseRow：迭代期才有的「并入正式版」（merge_release.go）。
+func (a *app) mergeReleaseRow(c *ui.Context, s settingsTokens) setRow {
+	return setRow{title: tr("并入正式版"), hint: tr("把这里新增的内容补进正式版 Toskr，可反复执行"), control: func() {
+		if button(c, s, "并入…") {
+			a.mergeToRelease()
+		}
+	}}
 }

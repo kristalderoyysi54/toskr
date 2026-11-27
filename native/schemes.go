@@ -114,6 +114,7 @@ func schemed(t tokens) tokens {
 	}
 	t.window, t.fg, t.muted, t.chip = p.window, p.fg, p.muted, p.chip
 	t.card, t.cardBottom, t.floatBtn = p.card, p.cardBottom, p.card
+	t.floatFill = mix(p.card, p.fg, map[bool]float32{true: 0.97, false: 0.96}[t.dark]) // 浮层填充：卡片色向前景靠 3–4%（默认方案的 245 / 45 同此比例）
 	t.pill = p.card
 	if p.pill != (ui.Color{}) {
 		t.pill = p.pill

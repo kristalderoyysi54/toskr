@@ -72,6 +72,10 @@ func (a *app) addToOpenCard(notes []store.Note) {
 		return
 	}
 	a.chosen.Clear()
+	if a.detail.edit && a.detail.titleFocus && incoming != "" { // 光标在标题框：文字进标题光标处
+		a.insertIntoTitle(id, incoming, imgs)
+		return
+	}
 	if a.detail.edit { // 编辑中：放到光标处（有选区就替换选区），保存时一起落库；气泡可撤销
 		replace := false
 		if d := a.detail; d.blocks != nil {
@@ -191,6 +195,32 @@ func (a *app) insertIntoDraft(id, incoming string, imgs []store.ContentBlock) {
 	a.invalidateDetail()
 }
 
+// insertIntoTitle：编辑中光标在标题框——文字压成一行放到标题光标处（有选区替换），光标落在其后、焦点留在标题；
+// 图片标题放不下，照旧追加到正文（图文卡进块草稿末尾，纯文字卡进附件）。气泡可撤销。
+func (a *app) insertIntoTitle(id, incoming string, imgs []store.ContentBlock) {
+	snap := a.draftSnapshot(id)
+	d := &a.detail
+	r, in := []rune(d.title), strings.Join(strings.Fields(incoming), " ")
+	lo, hi := min(d.titleRange[0], d.titleRange[1]), max(d.titleRange[0], d.titleRange[1])
+	lo, hi = min(max(lo, 0), len(r)), min(max(hi, 0), len(r))
+	d.title = string(r[:lo]) + in + string(r[hi:])
+	at := lo + utf8.RuneCountInString(in)
+	d.titleRange, d.titleSet = [2]int{at, at}, true
+	if len(imgs) > 0 {
+		if d.blocks != nil {
+			d.blocks = append(slices.Clone(d.blocks), imgs...)
+		} else {
+			_, _, _ = a.store.AddImages(id, imgs)
+		}
+	}
+	a.invalidateDetail()
+	msg := tr("已添加到标题")
+	if lo != hi {
+		msg = tr("已替换选中内容")
+	}
+	a.showHUDUndo("ok", msg, func() { a.undoDraft(snap) })
+}
+
 // invalidateDetail：详情窗是另一扇窗，草稿 / 选区变了要它重画。
 func (a *app) invalidateDetail() {
 	if a.detailWin != nil {
@@ -202,6 +232,7 @@ func (a *app) invalidateDetail() {
 type draftSnap struct {
 	id      string
 	text    string
+	title   string
 	blocks  []store.ContentBlock
 	sel     [2]int
 	note    store.Note
@@ -210,7 +241,7 @@ type draftSnap struct {
 
 func (a *app) draftSnapshot(id string) draftSnap {
 	d := a.detail
-	s := draftSnap{id: id, text: a.detailText, blocks: slices.Clone(d.blocks), sel: d.editRange}
+	s := draftSnap{id: id, text: a.detailText, title: a.detail.title, blocks: slices.Clone(d.blocks), sel: d.editRange}
 	if d.blocks != nil {
 		s.sel = d.blkRange
 	}
@@ -242,7 +273,7 @@ func (a *app) undoDraft(s draftSnap) {
 			a.detail.edit, a.detail.blocks = false, nil
 			a.detailText = s.note.Text
 		} else {
-			a.detailText, a.detail.blocks = s.text, slices.Clone(s.blocks)
+			a.detailText, a.detail.title, a.detail.blocks = s.text, s.title, slices.Clone(s.blocks)
 			if s.blocks != nil {
 				a.detail.blkSet = [3]int{a.detail.blkActive, s.sel[0], s.sel[1]}
 			} else if s.sel[0] >= 0 {

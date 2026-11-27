@@ -60,7 +60,11 @@ var dragPreviewCache struct {
 	hot image.Point
 }
 
-const dragPreviewW, dragPreviewH = 240, 40
+// 小卡本体 232×32；四周留白给投影（上 6 / 左右 10 / 下 14：环境影 0 4 12 -2 向下最远约 14pt，留少了会在图边切出一条直线）。
+const (
+	dragPreviewW, dragPreviewH             = 252, 52
+	dragPadTop, dragPadSide, dragPadBottom = 6, 10, 14
+)
 
 // cardDragOptions：拖出预览（悬停时才生成，按「卡片组 + 首条正文 + 深浅色」缓存，不每帧重画）。
 func cardDragOptions(ns []store.Note, dark bool) transfer.DragOptions {
@@ -72,20 +76,23 @@ func cardDragOptions(ns []store.Note, dark bool) transfer.DragOptions {
 	if dragPreviewCache.key != key || dragPreviewCache.img == nil {
 		dragPreviewCache.key = key
 		dragPreviewCache.img = renderDragPreview(first, len(ns), dark)
-		dragPreviewCache.hot = image.Pt(18, dragPreviewH/2)
+		dragPreviewCache.hot = image.Pt(dragPadSide+14, dragPadTop+(dragPreviewH-dragPadTop-dragPadBottom)/2)
 	}
 	return transfer.DragOptions{Preview: dragPreviewCache.img, Hotspot: dragPreviewCache.hot}
 }
 
-// renderDragPreview：离屏画一张 240×40 小卡（卡片底 + 细边 + 浮起阴影；摘要单行截断，多张时右侧「N 张」主色胶囊）。
+// renderDragPreview：离屏画一张小卡（浮层双线边 floatEdge；主题生效时仍是卡片底 + 细边 + 浮起阴影；摘要单行截断，多张时右侧「N 张」主色胶囊）。
 func renderDragPreview(first string, count int, dark bool) image.Image {
 	tt := ui.NewTester(func(c *ui.Context) {
 		registerFonts()
 		k := tok(c)
 		c.Root().Background(ui.Transparent)
-		ui.Row(c).Fill().Padding(4).Children(func() {
-			ui.Row(c).Fill().Padding(0, 10).Gap(8).Radius(rr(10)).Background(k.card).Border(1, k.floatBorder).
-				Shadow(0, 2, 6, -2, gray(0, 0.25)).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Fill().Padding(dragPadTop, dragPadSide, dragPadBottom, dragPadSide).Children(func() {
+			card := ui.Row(c).Fill().Padding(0, 10).Gap(8).Radius(rr(10)).AlignItems(ui.Center)
+			if !floatEdge(card, k) {
+				card.Background(k.card).Border(1, k.floatBorder).Shadow(0, 2, 6, -2, gray(0, 0.25))
+			}
+			card.Children(func() {
 				licon(c, "file-text", 12, k.muted)
 				line := first
 				if strings.TrimSpace(line) == "" {

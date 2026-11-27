@@ -137,7 +137,7 @@ func (a *app) detailFindBar(c *ui.Context, k tokens) {
 		return
 	}
 	d := &a.detail
-	bar := floatSurface(ui.Row(c).Absolute().Top(44).Right(14).Width(248).Height(30).Padding(0, 4, 0, 8).Gap(4).Radius(9).AlignItems(ui.Center), k).
+	bar := floatSurface(ui.Row(c).Absolute().Top(44+a.detailTagsExtra(k)).Right(14).Width(248).Height(30).Padding(0, 4, 0, 8).Gap(4).Radius(9).AlignItems(ui.Center), k).
 		Key("detail-find").Label(tr("文内查找"))
 	bar.Children(func() {
 		licon(c, "search", 13, k.muted)
@@ -192,14 +192,15 @@ func (a *app) detailOutline(c *ui.Context, k tokens) {
 	if len(heads) < 2 {
 		return
 	}
-	cur := 0 // 当前所在小节：最后一个已滚过视口上沿附近的标题
+	extra := a.detailTagsExtra(k) // 标签行折了行：大纲与落点一起下移
+	cur := 0                      // 当前所在小节：最后一个已滚过视口上沿附近的标题
 	for i, h := range heads {
-		if h.y <= a.detail.scroll.Y+72 {
+		if h.y <= a.detail.scroll.Y+72+extra {
 			cur = i
 		}
 	}
 	_, vh := c.Size()
-	box := ui.Column(c).Absolute().Right(6).Top(84).MaxHeight(vh - 190).Key("detail-outline").Label(tr("大纲"))
+	box := ui.Column(c).Absolute().Right(6).Top(84 + extra).MaxHeight(vh - 190 - extra).Key("detail-outline").Label(tr("大纲"))
 	open := box.Hovered()
 	if open {
 		floatSurface(box.Width(208).Padding(6).Radius(rr(10)), k)
@@ -235,7 +236,7 @@ func (a *app) detailOutline(c *ui.Context, k tokens) {
 					}
 					row.Children(func() { text(c, h.title, 11, 16, weight, col).SingleLine().Grow(1).Basis(0) })
 					if row.Clicked() {
-						a.detail.scroll.ScrollTo(0, max(0, h.y-64), springSnappy)
+						a.detail.scroll.ScrollTo(0, max(0, h.y-64-extra), springSnappy)
 					}
 				}
 			})

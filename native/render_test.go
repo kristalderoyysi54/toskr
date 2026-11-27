@@ -210,7 +210,7 @@ func TestDetailTitleEdit(t *testing.T) {
 	tt.Frame()
 	found := false
 	for _, s := range tt.Texts() {
-		if strings.HasPrefix(s, "周报草稿 · ") {
+		if s == "周报草稿" { // 标题栏：标题、来源、时间各是一段文字
 			found = true
 		}
 	}

@@ -314,8 +314,11 @@ func (a *app) detailSelectionBar(c *ui.Context, k tokens, n store.Note) {
 	showAlias := !d.edit // 同 Tauri onAddAlias={editing ? undefined : …}：阅读 / 选词态（含只读预览）可加入词典
 	blocked := a.targetBlockedReason()
 	bar.Children(func() {
-		ui.Row(c).Height(32).Padding(0, 6).Gap(2).Radius(rr(10)).Background(k.floatBtn).Border(1, k.floatBorder).
-			Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB).AlignItems(ui.Center).Children(func() {
+		tools := ui.Row(c).Height(32).Padding(0, 6).Gap(2).Radius(rr(10)).AlignItems(ui.Center)
+		if !floatEdge(tools, k) {
+			tools.Background(k.floatBtn).Border(1, k.floatBorder).Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB)
+		}
+		tools.Children(func() {
 			// 字数用等宽数字并按 4 位预留宽度：拖选时数字变化不再让整条工具条伸缩抖动（Tauri 只有 tabular-nums，位数变化仍会跳）
 			cnt := utf8.RuneCountInString(sel)
 			slot, _ := c.MeasureText(0, ui.Span{Text: fmt.Sprintf(tr("已选 %d 字"), max(cnt, 1000)), Font: fontSans, Size: 10})
@@ -461,8 +464,11 @@ func (a *app) detailSelectionBar(c *ui.Context, k tokens, n store.Note) {
 				p.Top(38)
 			}
 			p.Children(func() {
-				ui.Column(c).Padding(6).Gap(6).Radius(rr(10)).Background(k.floatBtn).Border(1, k.floatBorder).
-					Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB).Children(fn)
+				pop := ui.Column(c).Padding(6).Gap(6).Radius(rr(10))
+				if !floatEdge(pop, k) {
+					pop.Background(k.floatBtn).Border(1, k.floatBorder).Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB)
+				}
+				pop.Children(fn)
 			})
 		}
 		field := func(v *string, w float32, label, ph string, onEnter func()) {

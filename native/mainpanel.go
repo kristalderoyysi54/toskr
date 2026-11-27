@@ -568,6 +568,10 @@ func (a *app) sectionHeadMenu(c *ui.Context, m *ui.Menu, g noteGroup) {
 		a.section = g.sec.ID
 		a.clearDone(c)
 	}
+	if g.sec.ID == store.SectionInbox && len(g.open) > 0 {
+		m.Separator()
+		a.inboxBulkMenu(m)
+	}
 	m.Separator()
 	secs := a.noteSections()
 	i := slices.IndexFunc(secs, func(x store.Section) bool { return x.ID == g.sec.ID })
@@ -707,7 +711,7 @@ func (a *app) sectionBlock(c *ui.Context, k tokens, g noteGroup, top float32) fl
 				if g.sec.Color != "" {
 					folderCol = hexColor(g.sec.Color)
 				}
-				b.Children(func() { foldFolder(c, collapsed, over || a.gp.sec == g.sec.ID, 14, folderCol) }) // 速览开着：文件夹同样预开
+				b.Children(func() { foldFolder(c, collapsed && a.gp.sec != g.sec.ID, over, 14, folderCol) }) // 速览开着：文件夹打开、不放大，同点击展开（用户 2026-11-19）；拖卡片悬停仍放大提示可放入
 				if b.Clicked() {
 					g.sec.Collapsed = !collapsed
 					_ = a.store.UpdateSection(g.sec)
@@ -1045,8 +1049,10 @@ func (a *app) rowToolbar(c *ui.Context, k tokens, n store.Note, under ui.Color, 
 		}
 		ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0).Gradient(a.glideBg.Alpha(0), a.glideBg, 90).PassThrough() // 与悬停浅底同色（分组色也对得上）
 	})
-	bar := ui.Row(c).Absolute().Right(right).Top(top).Height(24).Padding(0, 2).Radius(rr(8)).AlignItems(ui.Center).Background(k.card).
-		Border(1, k.inputBorder).Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 14, -6, k.floatShadowB).Key("row-tools").Transition(in)
+	bar := ui.Row(c).Absolute().Right(right).Top(top).Height(24).Padding(0, 2).Radius(rr(8)).AlignItems(ui.Center).Key("row-tools").Transition(in)
+	if !floatEdge(bar, k) {
+		bar.Background(k.card).Border(1, k.inputBorder).Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 14, -6, k.floatShadowB)
+	}
 	bar.Children(func() {
 		a.noteActions(c, k, n, func(key, icon, tip string, danger bool) ui.Element {
 			return ghostIconButton(c, k, key, icon, tip, 22, 12, danger, true)
@@ -1446,9 +1452,12 @@ func (a *app) selectionBar(c *ui.Context, k tokens) {
 	s := stok(c)
 	bar, themed := k.th.SelectionBar(c)
 	if !themed {
-		bar = ui.Row(c).Margin(0, 8, 8, 8).Padding(6, 8).Gap(2).Radius(12).Background(k.floatBtn.Alpha(0.95)).Border(1, k.fg.Alpha(0.1)).
-			Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB).InsetShadow(0, 1, 0, 0, k.floatInset).AlignItems(ui.Center).
-			Key("selection-bar").Transition(ui.ElementTransition{Duration: 160 * time.Millisecond, Ease: easeStandard, Enter: &ui.Motion{Y: 8}})
+		bar = ui.Row(c).Margin(0, 8, 8, 8).Padding(6, 8).Gap(2).Radius(12).AlignItems(ui.Center)
+		if !floatEdge(bar, k) {
+			bar.Background(k.floatBtn.Alpha(0.95)).Border(1, k.fg.Alpha(0.1)).
+				Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB).InsetShadow(0, 1, 0, 0, k.floatInset)
+		}
+		bar.Key("selection-bar").Transition(ui.ElementTransition{Duration: 160 * time.Millisecond, Ease: easeStandard, Enter: &ui.Motion{Y: 8}})
 	}
 	bar.Children(func() {
 		text(c, fmt.Sprintf(tr("已选 %d"), n), 11, 16, 400, k.muted).FontFeatures("tnum").Padding(0, 4).SingleLine()

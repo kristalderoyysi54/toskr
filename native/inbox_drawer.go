@@ -143,6 +143,9 @@ func (a *app) inboxDrawerView(c *ui.Context, k tokens) {
 			if open && len(g.open) >= 2 && pillChip(c, k, "inbox-triage", "layers", tr("逐条整理"), tr("一条一条看，按数字键归类"), false) {
 				a.triageOn, a.triageSkip = true, map[string]bool{}
 			}
+			if len(g.open) > 0 { // 整批操作：不随悬停 / 开合显隐（菜单选择下一帧才送达）
+				ghostIconButton(c, k, "inbox-more", "ellipsis", tr("整批操作"), 20, 13, false, true).Shrink(0).Menu(a.inboxBulkMenu)
+			}
 			ch := licon(c, "chevron-up", 12, k.muted).Shrink(0)
 			ch.AnimatePose(ui.Pose{Rotate: map[bool]float32{true: 180}[open]}, tweenTw)
 		})

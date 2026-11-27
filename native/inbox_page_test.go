@@ -425,3 +425,33 @@ func TestQuickDoubleClickSendsOnce(t *testing.T) {
 		t.Fatal("紧跟的第二下不应再发")
 	}
 }
+
+// 按下后手滑几个点（框架判成拖动）又在原格松手：按点击发送；拖到别的格子再拖回来松手不发。
+func TestQuickSloppyClickSends(t *testing.T) {
+	a, tt, _ := quickTestApp(t, 4)
+	id := a.quick[0].ID
+	f, _ := tt.Find("发送：" + a.quick[0].Text)
+	g, _ := tt.Find("发送：" + a.quick[1].Text)
+	cx, cy := f.X+f.W/2, f.Y+f.H/2
+	before := quickTexts(a)
+	dragTo(tt, cx, cy, cx+7, cy+5)
+	if a.quickSentID != id {
+		t.Fatal("原格内手滑松手应按点击发送")
+	}
+	if got := quickTexts(a); !slices.Equal(got, before) {
+		t.Fatalf("顺序不应变 %v", got)
+	}
+	a.quickSentID = ""
+	tt.Move(cx, cy)
+	tt.Press(cx, cy)
+	for _, x := range []float32{cx + 10, g.X + g.W/2, g.X + g.W/2, cx + 10, cx} {
+		tt.Move(x, cy)
+		tt.Frame()
+	}
+	tt.Release(cx, cy)
+	tt.Frame()
+	tt.Frame()
+	if a.quickSentID != "" {
+		t.Fatal("拖到别的格子又拖回原格松手不应发送")
+	}
+}

@@ -72,7 +72,7 @@ var confirmAsk = func(s confirmSpec) bool {
 func openConfirm(s confirmSpec, answer func(bool)) {
 	cw := &confirmWin{spec: s, answer: answer, wa: mygo.Rectangle{Width: 1440, Height: 900}}
 	p := mygo.Screen.CursorScreenPoint() // 落在用户正在看的那块屏
-	if d, ok := displayAt(mygo.Screen.Displays(), p.X, p.Y); ok {
+	if d, ok := displayNear(mygo.Screen.Displays(), p.X, p.Y); ok {
 		cw.wa = d.WorkArea
 	}
 	glass := ""

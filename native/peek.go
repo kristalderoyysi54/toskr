@@ -20,7 +20,7 @@ import (
 
 const (
 	peekDelay = 360 * time.Millisecond
-	peekPad   = 6
+	peekPad   = 14 // 图外留给投影：环境影 0 4 12 -2 向下约 14pt 才衰减完（深色更重），留 6 时下缘被窗口切出一条线
 )
 
 type rowHover struct {
@@ -144,7 +144,7 @@ func (a *app) showPeek(files []string, gen int) {
 	}
 	a.peekImg, a.peekFiles, a.peekIdx = img, files, 0
 	cx, cy := macos.CursorLocation()
-	d, ok := displayAt(mygo.Screen.Displays(), int(cx), int(cy))
+	d, ok := displayNear(mygo.Screen.Displays(), int(cx), int(cy))
 	if !ok {
 		return
 	}
@@ -207,8 +207,15 @@ func (a *app) hidePeek() {
 // peekView：窥视窗内容——图片铺满（contain），圆角 + 细边 + 投影；多张时右下角「共 N 张」。
 func (a *app) peekView(c *ui.Context) {
 	k := tok(c)
+	themed := isTheme(curScheme)
+	if !themed { // 窗口根默认铺一层不透明的主题底色：不清掉的话图外那圈留白是个直角色框，投影也画在框上（主题外观不动）
+		c.Root().Background(ui.Transparent)
+	}
 	ui.Box(c).Fill().Padding(peekPad).Children(func() {
-		card := ui.Box(c).Fill().Radius(rr(10)).Clip().Background(k.card).Border(1, k.fg.Alpha(0.1)).Shadow(0, 8, 24, -6, ui.RGBA(0, 0, 0, 0.35)) // token-exception: 浮窗投影
+		card := ui.Box(c).Fill().Radius(rr(10)).Clip()
+		if !floatEdge(card, k) {
+			card.Background(k.card).Border(1, k.fg.Alpha(0.1)).Shadow(0, 8, 24, -6, ui.RGBA(0, 0, 0, 0.35)) // token-exception: 浮窗投影
+		}
 		card.Children(func() {
 			if a.peekImg != nil {
 				ui.Image(c, a.peekImg).Fill().Fit(ui.Contain)

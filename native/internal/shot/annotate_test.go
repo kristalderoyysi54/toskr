@@ -193,3 +193,23 @@ func TestCrosshair(t *testing.T) {
 		t.Fatal("magenta")
 	}
 }
+
+func TestCalloutNumbersAndPromptInClip(t *testing.T) {
+	c1 := &Shape{Kind: Callout, X1: 10, Y1: 10, X2: 50, Y2: 40, Note: "第一处"}
+	c2 := &Shape{Kind: Callout, X1: 120, Y1: 80, X2: 180, Y2: 120, Note: "第二处"}
+	shapes := []*Shape{c1, c2}
+	// 选区裁掉 c1，只留 c2：c2 顺位编为 1，文案仅列 ① 第二处
+	clip := Rect{100, 60, 120, 100}
+	nums := CalloutNumbersIn(shapes, clip)
+	if len(nums) != 1 || nums[c1] != 0 || nums[c2] != 1 {
+		t.Fatalf("可见批注编号 %+v", nums)
+	}
+	if got := CalloutPromptIn(shapes, clip, "标注："); got != "标注：\n① 第二处" {
+		t.Fatalf("裁剪后文案 %q", got)
+	}
+	// 选区扩大包回两处：恢复 ① ②
+	wide := Rect{0, 0, 220, 160}
+	if got := CalloutPromptIn(shapes, wide, "标注："); got != "标注：\n① 第一处\n② 第二处" {
+		t.Fatalf("扩回选区文案 %q", got)
+	}
+}

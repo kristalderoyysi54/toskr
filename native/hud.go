@@ -337,7 +337,7 @@ func (a *app) hudBubbleView(c *ui.Context, b hudBubble, ghostMs float32) {
 		ui.Row(c).FillWidth().Justify(ui.End).Children(func() {
 			pill := ui.Row(c).Padding(4, 12, 4, 6).Gap(6).Radius(16).Background(paper).AlignItems(ui.Center)
 			if !th.HudPill(pill) {
-				pill.Shadow(0, 6, 16, -4, gray(0, 0.12)).Shadow(0, 1, 2, 0, gray(0, 0.08))
+				hudEdge(pill, c.Theme().Dark).Shadow(0, 6, 16, -4, gray(0, 0.12)).Shadow(0, 1, 2, 0, gray(0, 0.08))
 			}
 			pill.Children(func() {
 				icon()
@@ -349,18 +349,18 @@ func (a *app) hudBubbleView(c *ui.Context, b hudBubble, ghostMs float32) {
 		})
 		return
 	}
-	// 多层投影 + 0.5px 描边影（Tauri 的 drop-shadow 组，深色加重）
-	s1, s2, s3 := ui.RGBA(20, 20, 24, 0.10), ui.RGBA(20, 20, 24, 0.16), ui.RGBA(20, 20, 24, 0.30)
+	// 双线边（hudEdge）+ 两层投影（Tauri 的 drop-shadow 组，深色加重）
+	s1, s2 := ui.RGBA(20, 20, 24, 0.10), ui.RGBA(20, 20, 24, 0.16)
 	if c.Theme().Dark {
-		s1, s2, s3 = gray(0, 0.35), gray(0, 0.45), gray(0, 0.60)
+		s1, s2 = gray(0, 0.35), gray(0, 0.45)
 	}
 	balloon := ui.Column(c).FillWidth().Padding(6, 6, 6, 10).Radius(rr(18)).Background(paper)
 	switch {
 	case th.HudBalloon(balloon):
 	case c.Theme().Dark:
-		balloon.Shadow(0, 0, 1, 0, s3).Shadow(0, 1, 2, 0, s1).Shadow(0, 5, 28, 0, s2) // CSS drop-shadow 的模糊值是标准差，换成 box-shadow 语义要 ×2
+		hudEdge(balloon, true).Shadow(0, 1, 2, 0, s1).Shadow(0, 5, 28, 0, s2) // CSS drop-shadow 的模糊值是标准差，换成 box-shadow 语义要 ×2
 	default:
-		balloon.Shadow(0, 0, 1, 0, s3).Shadow(0, 1, 2, 0, s1).Shadow(0, 4, 20, 0, s2)
+		hudEdge(balloon, false).Shadow(0, 1, 2, 0, s1).Shadow(0, 4, 20, 0, s2)
 	}
 	hover := a.hudHover && !ghost
 	main := func() {
@@ -440,6 +440,16 @@ func (a *app) hudBubbleView(c *ui.Context, b hudBubble, ghostMs float32) {
 			ui.Icon(c, hudTail).Absolute().Top(0).Left(0).Size(22, 13).TextColor(paper)
 		})
 	})
+}
+
+// hudEdge：气泡 / 胶囊的双线边（同 floatEdge 的两条线，纸色不变）：1px 外暗线 + 整圈 1px 内亮线。
+// 外暗线画成外扩 1 的投影：气泡原来没有描边，用 Border 会把内容挤 1pt。
+func hudEdge(e ui.Element, dark bool) ui.Element {
+	line, rim := ui.RGBA(20, 20, 24, 0.13), gray(1, 0.6)
+	if dark {
+		line, rim = gray(0, 0.35), gray(1, 0.5)
+	}
+	return e.Shadow(0, 0, 0, 1, line).InsetShadow(0, 0, 0, 1, rim)
 }
 
 var hudTail = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 13"><path fill="currentColor" d="M2 0 H20 C19.6 3.8 20.2 7.6 21.6 10.8 Q22.4 12.6 20.6 12.3 C13.8 11.2 6 7.4 2 0 Z"/></svg>`))

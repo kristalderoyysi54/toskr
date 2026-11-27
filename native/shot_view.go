@@ -29,6 +29,7 @@ const (
 	shotEditTol     = 6.0  // 已画图形的命中容差
 	shotMinBox      = 6.0  // 框类调整后的最小边长
 	shotTipDelay    = 400 * time.Millisecond
+	shotTipWarm     = 400 * time.Millisecond // 热切窗口：刚看过提示后滑到相邻图标立即显示
 	shotLongPress   = 500 * time.Millisecond
 )
 
@@ -46,6 +47,11 @@ type shotEditDrag struct {
 	handle shot.EditHandle
 }
 
+type shotUndoOp struct {
+	isSel bool      // true = 选区调整；false = 图形历史步进
+	rect  shot.Rect // isSel 为 true 时记录恢复目标选区
+}
+
 type shotEditor struct {
 	sel          *shot.Rect
 	cursor       *shot.Point
@@ -53,6 +59,10 @@ type shotEditor struct {
 	drag         *shotDrag
 	tool         shot.Kind
 	hist         shot.History
+	undoOps      []shotUndoOp
+	redoOps      []shotUndoOp
+	nudgeAt      time.Time
+	snapGuides   shot.SnapGuides
 	draft        *shot.Shape
 	editing      *shot.TextDraft
 	note         *shot.NoteDraft
@@ -68,8 +78,9 @@ type shotEditor struct {
 	tip          string // 悬停中的工具条按钮说明
 	tipRect      ui.Rect
 	tipAt        time.Time
-	tipHidden    string // 点过的按钮：收起说明直到移到别的按钮
-	tipSeen      bool   // 本帧有按钮在悬停
+	tipShownAt   time.Time // 上次提示可见的时间：短时间内移到相邻按钮直接显示
+	tipHidden    string    // 点过的按钮：收起说明直到移开
+	tipSeen      bool      // 本帧有按钮在悬停
 	checkDownAt  time.Time
 	checkLong    bool
 	mosaics      map[*shot.Shape]mosaicEntry
@@ -159,8 +170,6 @@ func (d *shotDisplay) hover() *shot.Rect {
 	return &c
 }
 
-func (e *shotEditor) locked() bool { return e.tool != "" || len(e.hist.Shapes) > 0 }
-
 func (e *shotEditor) showLoupe() bool { return e.cursor != nil && (e.sel == nil || e.dragging) }
 
 // showCross：全屏十字线只在还没有选区时画；拖出 / 移动 / 缩放选区时不画（放大镜仍在）。
@@ -171,13 +180,73 @@ func (e *shotEditor) allShapes() []*shot.Shape {
 	return shot.WithNoteDraft(shot.WithTextDraft(e.hist.Shapes, e.editing), e.note)
 }
 
+func (e *shotEditor) setHist(next shot.History) {
+	if len(next.Undo) > len(e.hist.Undo) {
+		e.undoOps = append(e.undoOps, shotUndoOp{})
+		e.redoOps = nil
+		e.nudgeAt = time.Time{}
+	}
+	e.hist = next
+}
+
+func (e *shotEditor) pushSelUndo(prev shot.Rect) {
+	e.undoOps = append(e.undoOps, shotUndoOp{isSel: true, rect: prev})
+	e.redoOps = nil
+	e.hist.Redo = nil
+}
+
+func (e *shotEditor) canUndo() bool { return len(e.undoOps) > 0 || len(e.hist.Undo) > 0 }
+func (e *shotEditor) canRedo() bool { return len(e.redoOps) > 0 || len(e.hist.Redo) > 0 }
+
+func (e *shotEditor) undo() {
+	e.nudgeAt = time.Time{}
+	if len(e.undoOps) == 0 {
+		e.hist = shot.Undo(e.hist)
+		return
+	}
+	op := e.undoOps[len(e.undoOps)-1]
+	e.undoOps = e.undoOps[:len(e.undoOps)-1]
+	if op.isSel {
+		if e.sel != nil {
+			e.redoOps = append(e.redoOps, shotUndoOp{isSel: true, rect: *e.sel})
+		}
+		r := op.rect
+		e.sel = &r
+		e.ocr = nil
+		return
+	}
+	e.hist = shot.Undo(e.hist)
+	e.redoOps = append(e.redoOps, shotUndoOp{})
+}
+
+func (e *shotEditor) redo() {
+	e.nudgeAt = time.Time{}
+	if len(e.redoOps) == 0 {
+		e.hist = shot.Redo(e.hist)
+		return
+	}
+	op := e.redoOps[len(e.redoOps)-1]
+	e.redoOps = e.redoOps[:len(e.redoOps)-1]
+	if op.isSel {
+		if e.sel != nil {
+			e.undoOps = append(e.undoOps, shotUndoOp{isSel: true, rect: *e.sel})
+		}
+		r := op.rect
+		e.sel = &r
+		e.ocr = nil
+		return
+	}
+	e.hist = shot.Redo(e.hist)
+	e.undoOps = append(e.undoOps, shotUndoOp{})
+}
+
 func (e *shotEditor) commitEditing() {
 	if e.editing != nil {
-		e.hist = shot.CommitText(e.hist, *e.editing)
+		e.setHist(shot.CommitText(e.hist, *e.editing))
 		e.editing = nil
 	}
 	if e.note != nil {
-		e.hist = shot.CommitNote(e.hist, *e.note)
+		e.setHist(shot.CommitNote(e.hist, *e.note))
 		e.note = nil
 	}
 }
@@ -185,6 +254,9 @@ func (e *shotEditor) commitEditing() {
 func (e *shotEditor) clearSel() {
 	e.sel, e.ocr = nil, nil
 	e.hist = shot.History{}
+	e.undoOps, e.redoOps = nil, nil
+	e.nudgeAt = time.Time{}
+	e.snapGuides = shot.SnapGuides{}
 	e.picked, e.preview, e.edrag = nil, nil, nil
 }
 
@@ -224,7 +296,7 @@ func replaceShape(shapes []*shot.Shape, old, next *shot.Shape) []*shot.Shape {
 }
 
 func (e *shotEditor) replacePicked(target, next *shot.Shape) {
-	e.hist = shot.CommitShapes(e.hist, replaceShape(e.hist.Shapes, target, next))
+	e.setHist(shot.CommitShapes(e.hist, replaceShape(e.hist.Shapes, target, next)))
 	e.picked = next
 }
 
@@ -324,7 +396,7 @@ func (a *app) shotInput(d *shotDisplay, ev ui.InputEvent) bool {
 	case ui.InputPointerMove:
 		e.gotPointer = true
 		e.cursor = &shot.Point{X: x, Y: y}
-		a.shotMove(d, x, y, ev.Mods&ui.Shift != 0)
+		a.shotMove(d, x, y, ev.Mods&ui.Shift != 0, ev.Mods&(ui.Alt|ui.Cmd) == 0)
 		return true
 	case ui.InputPointerUp:
 		if ev.Button != 0 {
@@ -348,6 +420,15 @@ func (a *app) shotDown(d *shotDisplay, x, y float64) {
 	if e.sel != nil && e.editDown(x, y) {
 		return
 	}
+	// 选框四边与八角手柄始终可调（即使已选标注工具或已有标注）；标注按屏幕坐标锚定底图、出图自动裁切，不会错位。
+	if e.sel != nil {
+		if h := shot.HitHandle(*e.sel, x, y, 6); h != "" {
+			e.picked = nil
+			e.ocr = nil
+			e.drag = &shotDrag{kind: "resize", x: x, y: y, orig: *e.sel, handle: h}
+			return
+		}
+	}
 	if e.sel != nil && e.tool != "" {
 		if !shot.Inside(*e.sel, x, y) {
 			return
@@ -361,7 +442,7 @@ func (a *app) shotDown(d *shotDisplay, x, y float64) {
 			}
 			return
 		case shot.Number:
-			e.hist = shot.PushShape(e.hist, &shot.Shape{Kind: shot.Number, X: x, Y: y, N: shot.NextNumber(e.hist.Shapes), Color: ink, Size: lv})
+			e.setHist(shot.PushShape(e.hist, &shot.Shape{Kind: shot.Number, X: x, Y: y, N: shot.NextNumber(e.hist.Shapes), Color: ink, Size: lv}))
 			return
 		case shot.Pen:
 			e.draft = &shot.Shape{Kind: shot.Pen, Points: []shot.Point{{X: x, Y: y}}, Color: ink, Size: lv}
@@ -370,21 +451,19 @@ func (a *app) shotDown(d *shotDisplay, x, y float64) {
 		}
 		return
 	}
-	// 已有标注时选区锁定，避免标注与底图错位
-	if e.sel != nil && e.locked() {
-		return
-	}
 	switch {
-	case e.sel != nil && shot.HitHandle(*e.sel, x, y, 6) != "":
-		e.drag = &shotDrag{kind: "resize", x: x, y: y, orig: *e.sel, handle: shot.HitHandle(*e.sel, x, y, 6)}
 	case e.sel != nil && shot.Inside(*e.sel, x, y):
+		e.ocr = nil
 		e.drag = &shotDrag{kind: "move", x: x, y: y, orig: *e.sel}
+	case e.sel != nil && len(e.hist.Shapes) > 0:
+		// 已有标注时点击选区外部不重拉新选区，避免误触丢弃标注
+		return
 	default:
 		e.drag = &shotDrag{kind: "create", x: x, y: y}
 	}
 }
 
-func (a *app) shotMove(d *shotDisplay, x, y float64, shift bool) {
+func (a *app) shotMove(d *shotDisplay, x, y float64, shift, snap bool) {
 	e := &d.ed
 	if e.editMove(d, x, y) {
 		return
@@ -411,15 +490,26 @@ func (a *app) shotMove(d *shotDisplay, x, y float64, shift bool) {
 		}
 		g.moved = true
 		e.dragging = true
+		e.snapGuides = shot.SnapGuides{}
 		r := shot.RectFromPoints(g.x, g.y, x, y, d.W, d.H)
 		e.sel = &r
 	case "move":
 		e.dragging = true
 		r := shot.MoveRect(g.orig, dx, dy, d.W, d.H)
+		if snap {
+			r, e.snapGuides = shot.SnapMove(r, d.windows, d.W, d.H, shot.SnapTol)
+		} else {
+			e.snapGuides = shot.SnapGuides{}
+		}
 		e.sel = &r
 	default:
 		e.dragging = true
 		r := shot.ResizeRect(g.orig, g.handle, dx, dy, d.W, d.H)
+		if snap {
+			r, e.snapGuides = shot.SnapResize(r, g.handle, d.windows, d.W, d.H, shot.SnapTol)
+		} else {
+			e.snapGuides = shot.SnapGuides{}
+		}
 		e.sel = &r
 	}
 }
@@ -441,7 +531,7 @@ func (a *app) shotUp(d *shotDisplay, x, y float64, shift bool) {
 		if done.Kind == shot.Callout && shot.IsMeaningful(&done) {
 			e.note = &shot.NoteDraft{Shape: &done}
 		} else {
-			e.hist = shot.PushShape(e.hist, &done)
+			e.setHist(shot.PushShape(e.hist, &done))
 		}
 		e.draft = nil
 		return
@@ -449,6 +539,7 @@ func (a *app) shotUp(d *shotDisplay, x, y float64, shift bool) {
 	g := e.drag
 	e.drag = nil
 	e.dragging = false
+	e.snapGuides = shot.SnapGuides{}
 	if g != nil && g.kind == "create" && !g.moved && e.sel == nil {
 		if h := d.hover(); h != nil {
 			e.sel = h
@@ -457,6 +548,11 @@ func (a *app) shotUp(d *shotDisplay, x, y float64, shift bool) {
 	// 拖出零宽高的选区视为无效
 	if e.sel != nil && (e.sel.W < 2 || e.sel.H < 2) {
 		e.sel = nil
+		return
+	}
+	if g != nil && (g.kind == "move" || g.kind == "resize") && e.sel != nil && *e.sel != g.orig {
+		e.nudgeAt = time.Time{}
+		e.pushSelUndo(g.orig)
 	}
 }
 
@@ -525,7 +621,7 @@ func (a *app) shotConfirm(d *shotDisplay, act shotAction, section string) {
 		return
 	}
 	place := shot.Point{X: e.sel.X - fr.Shadow, Y: e.sel.Y - fr.Shadow}
-	caption := shot.CalloutPrompt(shapes, tr("图上的标注（序号对应图中区域）："))
+	caption := shot.CalloutPromptIn(shapes, *e.sel, tr("图上的标注（序号对应图中区域）："))
 	a.commitShot(d, act, out, place, section, caption)
 }
 
@@ -583,9 +679,9 @@ func (a *app) shotKeys(c *ui.Context, d *shotDisplay) {
 	}
 	switch {
 	case c.Shortcut(ui.Cmd, ui.KeyZ):
-		e.hist = shot.Undo(e.hist)
+		e.undo()
 	case c.Shortcut(ui.Cmd|ui.Shift, ui.KeyZ):
-		e.hist = shot.Redo(e.hist)
+		e.redo()
 	case e.pickedShape() != nil && (c.Shortcut(0, ui.KeyBackspace) || c.Shortcut(0, ui.KeyDelete)):
 		e.replacePicked(e.pickedShape(), nil)
 	case c.Shortcut(0, ui.KeyEnter) || c.Shortcut(ui.Cmd, ui.KeyC):
@@ -595,7 +691,7 @@ func (a *app) shotKeys(c *ui.Context, d *shotDisplay) {
 	case c.Shortcut(ui.Shift, ui.KeyC):
 		a.shotCopyColor(c, d, true)
 	}
-	if e.sel == nil || e.tool != "" || len(e.hist.Shapes) > 0 {
+	if e.sel == nil || e.tool != "" {
 		return
 	}
 	for _, mods := range []ui.Modifiers{0, ui.Shift} {
@@ -608,8 +704,18 @@ func (a *app) shotKeys(c *ui.Context, d *shotDisplay) {
 			dx, dy float64
 		}{{ui.KeyLeft, -1, 0}, {ui.KeyRight, 1, 0}, {ui.KeyUp, 0, -1}, {ui.KeyDown, 0, 1}} {
 			if c.Shortcut(mods, k.key) {
-				r := shot.MoveRect(*e.sel, k.dx*step, k.dy*step, d.W, d.H)
-				e.sel = &r
+				prev := *e.sel
+				r := shot.MoveRect(prev, k.dx*step, k.dy*step, d.W, d.H)
+				if r != prev {
+					now := c.Now()
+					merged := !e.nudgeAt.IsZero() && now.Sub(e.nudgeAt) < 500*time.Millisecond && len(e.undoOps) > 0 && e.undoOps[len(e.undoOps)-1].isSel
+					if !merged {
+						e.pushSelUndo(prev)
+					}
+					e.nudgeAt = now
+					e.sel = &r
+					e.ocr = nil
+				}
 			}
 		}
 	}
@@ -683,7 +789,7 @@ func (a *app) shotView(c *ui.Context, d *shotDisplay) {
 		pr = shot.ToPixelRect(*active, d.sx, d.sy, float64(d.pxW), float64(d.pxH))
 	}
 	if e.sel != nil {
-		a.shotCallouts(c, d, shapes, 1)
+		a.shotCallouts(c, d, shapes, 1, *e.sel)
 	}
 	if active != nil && (e.sel == nil || e.dragging) {
 		top := active.Y + 4
@@ -713,7 +819,8 @@ func (a *app) shotView(c *ui.Context, d *shotDisplay) {
 		if e.ocr == nil { // 识别面板开着时收起尺寸条：两者都贴选区上沿，窄处会叠在一起，且此时用不到圆角阴影
 			a.shotFrameBar(c, d, pal, pr, fr, shotFrameBarTop(*e.sel, toolbarTop, toolbarH))
 		}
-		if e.notice != "" && c.Now().Sub(e.noticeAt) < 2500*time.Millisecond {
+		if left := 2500*time.Millisecond - c.Now().Sub(e.noticeAt); e.notice != "" && left > 0 {
+			c.After(left)
 			ui.Row(c).Absolute().Left(f32(e.sel.X)).Top(f32(math.Max(shotBarGap, toolbarTop-shotBarGap-shotNoticeH))).Height(shotNoticeH).Padding(0, 8).AlignItems(ui.Center).Radius(rr(8)).Background(gray(0, 0.75)).PassThrough().
 				Children(func() { text(c, e.notice, 11, 16, 400, colWhite) })
 		}
@@ -731,6 +838,8 @@ func (a *app) shotView(c *ui.Context, d *shotDisplay) {
 	}
 	if e.sel != nil && !e.dragging && !e.sectionMenu {
 		a.shotHoverTip(c, d, d.W, d.H)
+	} else {
+		e.tip, e.tipHidden, e.tipSeen = "", "", false
 	}
 	if e.showLoupe() {
 		a.shotLoupe(c, d)
@@ -766,6 +875,11 @@ func (a *app) shotCursorStyle(d *shotDisplay) ui.Cursor {
 			return cur
 		}
 	}
+	if e.sel != nil && !e.dragging {
+		if h := shot.HitHandle(*e.sel, x, y, 6); h != "" {
+			return handleCursor(h)
+		}
+	}
 	inSel := e.sel != nil && shot.Inside(*e.sel, x, y)
 	if e.tool != "" {
 		switch {
@@ -776,15 +890,10 @@ func (a *app) shotCursorStyle(d *shotDisplay) ui.Cursor {
 		}
 		return ui.CursorDefault
 	}
-	if e.sel != nil && !e.dragging && !e.locked() {
-		if h := shot.HitHandle(*e.sel, x, y, 6); h != "" {
-			return handleCursor(h)
-		}
-	}
 	switch {
-	case inSel && !e.locked():
+	case inSel:
 		return ui.CursorMove
-	case e.sel != nil && e.locked():
+	case e.sel != nil && len(e.hist.Shapes) > 0:
 		return ui.CursorDefault
 	}
 	return ui.CursorCrosshair
@@ -831,7 +940,7 @@ func (a *app) paintShotBase(p *ui.Painter, d *shotDisplay, active *shot.Rect, sh
 			paintEditFrame(p, pk, primary, 1)
 		}
 	}
-	if e.sel != nil && !e.dragging && !e.locked() {
+	if e.sel != nil && !e.dragging {
 		for _, h := range shot.Handles {
 			pt := shot.HandlePoint(*e.sel, h)
 			var dot ui.Path
@@ -840,6 +949,15 @@ func (a *app) paintShotBase(p *ui.Painter, d *shotDisplay, active *shot.Rect, sh
 			var ring ui.Path
 			ring.Circle(f32(pt.X), f32(pt.Y), 3)
 			p.StrokePath(&ring, 2, cross)
+		}
+	}
+	if e.dragging && (len(e.snapGuides.X) > 0 || len(e.snapGuides.Y) > 0) {
+		guide := primary.Alpha(0.85)
+		for _, gx := range e.snapGuides.X {
+			p.Fill(ui.Rect{X: f32(math.Round(gx)), Y: 0, W: 1, H: f32(d.H)}, guide, 0)
+		}
+		for _, gy := range e.snapGuides.Y {
+			p.Fill(ui.Rect{X: 0, Y: f32(math.Round(gy)), W: f32(d.W), H: 1}, guide, 0)
 		}
 	}
 	if e.showCross() {
@@ -900,7 +1018,8 @@ func (a *app) shotLoupe(c *ui.Context, d *shotDisplay) {
 				if e.sampled != "" {
 					sw.Background(shotColor(e.sampled))
 				}
-				if !e.copiedAt.IsZero() && c.Now().Sub(e.copiedAt) < 900*time.Millisecond {
+				if left := 900*time.Millisecond - c.Now().Sub(e.copiedAt); !e.copiedAt.IsZero() && left > 0 {
+					c.After(left)
 					mono(tr("已复制"))
 				} else {
 					mono(e.sampled + "  C · ⇧C RGB")
@@ -944,7 +1063,7 @@ func (a *app) shotFrameToggle(c *ui.Context, d *shotDisplay, pal shotPalette, fr
 	if fr.Radius > 0 || fr.Shadow > 0 {
 		col = &pal.fg
 	}
-	if a.shotButton(c, d, pal, "frame", "square-round-corner", tr("圆角与阴影：调整出图的圆角和投影"), a.shotFrameOpen, false, col).Clicked() {
+	if a.shotButton(c, d, pal, "frame", "square-round-corner", tr("圆角与阴影"), a.shotFrameOpen, false, col).Clicked() {
 		a.shotFrameOpen = !a.shotFrameOpen
 	}
 }
@@ -962,10 +1081,10 @@ func (a *app) shotFrameSliders(c *ui.Context, d *shotDisplay, pal shotPalette, f
 		})
 		a.shotTipTarget(c, d, row, tip)
 	}
-	slider(&fr.Radius, "square-round-corner", tr("圆角：出图四角裁成圆角（外侧透明）"), 0, shot.MaxRadius, 2)
-	slider(&fr.Shadow, "layers-2", tr("阴影：出图四周加投影，数值为阴影大小（0 = 无）"), 0, shot.MaxShadow, 2)
+	slider(&fr.Radius, "square-round-corner", tr("圆角"), 0, shot.MaxRadius, 2)
+	slider(&fr.Shadow, "layers-2", tr("阴影"), 0, shot.MaxShadow, 2)
 	if fr.Shadow > 0 {
-		slider(&fr.ShadowAlpha, "blend", tr("阴影浓淡：投影的深浅（%）"), shot.ShadowAlphaMin, shot.ShadowAlphaMax, 5)
+		slider(&fr.ShadowAlpha, "blend", tr("阴影浓淡"), shot.ShadowAlphaMin, shot.ShadowAlphaMax, 5)
 	}
 
 }
@@ -976,16 +1095,16 @@ type shotToolDef struct {
 }
 
 var shotTools = []shotToolDef{
-	{shot.Line, "slash", "直线", "直线：拖动画直线，按住 ⇧ 吸附水平 / 垂直 / 45°"},
-	{shot.RectK, "square", "矩形", "矩形：拖动框出重点区域"},
-	{shot.Ellipse, "circle", "椭圆", "椭圆：拖动圈出重点"},
-	{shot.Arrow, "move-up-right", "箭头", "箭头：从起点拖到要指向的位置"},
-	{shot.Pen, "pencil", "画笔", "画笔：按住随手画"},
-	{shot.Text, "type", "文字", "文字：点击位置输入，Enter 完成、Shift+Enter 换行"},
-	{shot.Mosaic, "grid-3x3", "马赛克", "马赛克：拖动框住要遮挡的隐私内容"},
-	{shot.Spotlight, "focus", "聚光灯", "聚光灯：框出的区域保持原样，其余压暗"},
-	{shot.Number, "hash", "序号", "序号：点击依次放置 1、2、3… 编号"},
-	{shot.Callout, "message-square-text", "批注", "批注：框出要改的地方并写下说明，自动编号；存入或发送时编号说明随图附上，方便交给 AI"},
+	{shot.Line, "slash", "直线", "直线"},
+	{shot.RectK, "square", "矩形", "矩形"},
+	{shot.Ellipse, "circle", "椭圆", "椭圆"},
+	{shot.Arrow, "move-up-right", "箭头", "箭头"},
+	{shot.Pen, "pencil", "画笔", "画笔"},
+	{shot.Text, "type", "文字", "文字"},
+	{shot.Mosaic, "grid-3x3", "马赛克", "马赛克"},
+	{shot.Spotlight, "focus", "聚光灯", "聚光灯"},
+	{shot.Number, "hash", "序号", "序号"},
+	{shot.Callout, "message-square-text", "批注", "批注"},
 }
 
 // shotTipTarget：记下悬停中的元素与说明（HoverTip：遮罩不激活应用，原生 tooltip 不出现，自己画）。
@@ -1002,16 +1121,24 @@ func (a *app) shotTipTarget(c *ui.Context, d *shotDisplay, el ui.Element, tip st
 		if e.tipHidden != tip {
 			e.tipHidden = ""
 		}
-		c.After(shotTipDelay)
 	}
 	e.tipRect = el.Bounds()
 	e.tipSeen = true
 }
 
+// shotTipLabel：从提示语里截出简短无障碍名称（去掉快捷键或补充说明）。
+func shotTipLabel(tip string) string {
+	for _, sep := range []string{"：", " · ", "（", " ⌘", " ⇧", " ⏎", " Esc"} {
+		if l, _, ok := strings.Cut(tip, sep); ok {
+			tip = l
+		}
+	}
+	return tip
+}
+
 // shotButton：工具条按钮 30pt、图标 18pt（IconButton sm + p-1.5）。
 func (a *app) shotButton(c *ui.Context, d *shotDisplay, pal shotPalette, key, icon, tip string, pressed, disabled bool, iconColor *ui.Color) ui.Element {
-	label, _, _ := strings.Cut(tip, "：")
-	b := ui.Box(c).Size(30, 30).Radius(rr(8)).Center().Key("sb-" + key).Label(label).Role(ui.RoleButton)
+	b := ui.Box(c).Size(30, 30).Radius(rr(8)).Center().Key("sb-" + key).Label(shotTipLabel(tip)).Role(ui.RoleButton)
 	bg, fg := ui.Transparent, pal.muted
 	if disabled {
 		b.Opacity(0.45)
@@ -1062,22 +1189,22 @@ func (a *app) shotToolbar(c *ui.Context, d *shotDisplay, pal shotPalette, top, h
 				}
 			}
 			shotSep(c, pal)
-			if a.shotButton(c, d, pal, "undo", "undo-2", tr("撤销（⌘Z）"), false, len(e.hist.Undo) == 0, nil).Clicked() && len(e.hist.Undo) > 0 {
-				e.hist = shot.Undo(e.hist)
+			if a.shotButton(c, d, pal, "undo", "undo-2", tr("撤销 ⌘Z"), false, !e.canUndo(), nil).Clicked() && e.canUndo() {
+				e.undo()
 			}
-			if a.shotButton(c, d, pal, "redo", "redo-2", tr("重做（⇧⌘Z）"), false, len(e.hist.Redo) == 0, nil).Clicked() && len(e.hist.Redo) > 0 {
-				e.hist = shot.Redo(e.hist)
+			if a.shotButton(c, d, pal, "redo", "redo-2", tr("重做 ⇧⌘Z"), false, !e.canRedo(), nil).Clicked() && e.canRedo() {
+				e.redo()
 			}
 			shotSep(c, pal)
-			if a.shotButton(c, d, pal, "long", "scroll-text", tr("长截屏：点击后滚动页面，自动拼接成长图"), false, false, nil).Clicked() {
+			if a.shotButton(c, d, pal, "long", "scroll-text", tr("长截屏"), false, false, nil).Clicked() {
 				a.shotStartLong(c, d)
 			}
-			if a.shotButton(c, d, pal, "ocr", "scan-text", tr("识别文字：提取选区里的文字，可复制或存入「剪贴」"), e.ocr != nil, false, nil).Clicked() {
+			if a.shotButton(c, d, pal, "ocr", "scan-text", tr("识别文字"), e.ocr != nil, false, nil).Clicked() {
 				a.shotRunOCR(c, d)
 			}
-			trTip := tr("图内翻译：把图里的外文原位替换成中文")
+			trTip := tr("图内翻译")
 			if hasTranslation {
-				trTip = tr("去掉图内翻译")
+				trTip = tr("取消翻译")
 			}
 			trIcon := "languages"
 			if e.translating {
@@ -1090,10 +1217,10 @@ func (a *app) shotToolbar(c *ui.Context, d *shotDisplay, pal shotPalette, top, h
 				act       shotAction
 				icon, tip string
 			}{
-				{shotPin, "pin", "钉在屏幕上：截图置顶悬浮，可拖动、滚轮缩放，右键更多"},
-				{shotEdit, "shield", "在编辑器中打开（打码）：存入「剪贴」后打开图片编辑器打码"},
-				{shotSend, "send", "发送到当前目标：存入「剪贴」并粘贴到目标应用"},
-				{shotSaveAs, "download", "另存为图片…：选位置保存为 PNG 文件"},
+				{shotPin, "pin", "钉在屏幕上"},
+				{shotEdit, "shield", "打码编辑"},
+				{shotSend, "send", "发送到当前目标"},
+				{shotSaveAs, "download", "另存为…"},
 			} {
 				if a.shotButton(c, d, pal, string(act.act), act.icon, tr(act.tip), false, false, nil).Clicked() {
 					a.shotConfirm(d, act.act, "")
@@ -1101,11 +1228,11 @@ func (a *app) shotToolbar(c *ui.Context, d *shotDisplay, pal shotPalette, top, h
 				}
 			}
 			shotSep(c, pal)
-			if a.shotButton(c, d, pal, "cancel", "x", tr("取消（Esc）"), false, false, nil).Clicked() {
+			if a.shotButton(c, d, pal, "cancel", "x", tr("取消 Esc"), false, false, nil).Clicked() {
 				a.endShot(true)
 				return
 			}
-			a.shotCheckButton(c, d, pal, tr("完成：复制并存入「剪贴」（Enter）；长按选择存入的分组"), false, func() { a.shotConfirm(d, shotSave, "") })
+			a.shotCheckButton(c, d, pal, tr("完成 ⏎ · 长按选分组"), false, func() { a.shotConfirm(d, shotSave, "") })
 		})
 		if showStyle {
 			a.shotStyleRow(c, d, pal, styleKind, styleInk, styleLv)
@@ -1141,9 +1268,13 @@ func (a *app) shotCheckButton(c *ui.Context, d *shotDisplay, pal shotPalette, ti
 	case b.Pressed():
 		if e.checkDownAt.IsZero() {
 			e.checkDownAt, e.checkLong = now, false
-			c.After(shotLongPress)
-		} else if !e.checkLong && now.Sub(e.checkDownAt) >= shotLongPress {
-			e.checkLong, e.sectionMenu = true, true
+		}
+		if !e.checkLong {
+			if wait := shotLongPress - now.Sub(e.checkDownAt); wait > 0 {
+				c.After(wait)
+			} else {
+				e.checkLong, e.sectionMenu = true, true
+			}
 		}
 	default:
 		e.checkDownAt = time.Time{}
@@ -1199,6 +1330,9 @@ func (a *app) shotSectionMenu(c *ui.Context, d *shotDisplay, pal shotPalette, W,
 	})
 }
 
+// shotColorNames：标注色的悬停说明。
+var shotColorNames = map[string]string{"#FF3B30": "红", "#FFCC00": "黄", "#34C759": "绿", "#007AFF": "蓝", "#FFFFFF": "白", "#000000": "黑"}
+
 // shotStyleRow：粗细三档 + 6 色（马赛克只显示粗细，即颗粒大小）。
 func (a *app) shotStyleRow(c *ui.Context, d *shotDisplay, pal shotPalette, kind shot.Kind, ink string, lv int) {
 	e := &d.ed
@@ -1212,14 +1346,19 @@ func (a *app) shotStyleRow(c *ui.Context, d *shotDisplay, pal shotPalette, kind 
 			e.replacePicked(p, &n)
 		}
 	}
+	lvTips := [3]string{tr("细"), tr("中"), tr("粗")}
+	if kind == shot.Mosaic {
+		lvTips = [3]string{tr("颗粒：小"), tr("颗粒：中"), tr("颗粒：大")}
+	}
 	ui.Row(c).Gap(8).Padding(0, 4).AlignItems(ui.Center).Children(func() {
 		for i := range 3 {
-			b := ui.Box(c).Size(20, 20).Radius(rr(6)).Center().Key(fmt.Sprintf("lv-%d", i))
+			b := ui.Box(c).Size(20, 20).Radius(rr(6)).Center().Key(fmt.Sprintf("lv-%d", i)).Label(lvTips[i]).Role(ui.RoleButton)
 			if lv == i {
 				b.Background(pal.accent)
 			}
 			sz := float32(4 + i*3)
 			b.Children(func() { ui.Box(c).Size(sz, sz).Radius(sz / 2).Background(pal.fg) })
+			a.shotTipTarget(c, d, b, lvTips[i])
 			if b.Clicked() {
 				apply(ink, i)
 			}
@@ -1230,12 +1369,13 @@ func (a *app) shotStyleRow(c *ui.Context, d *shotDisplay, pal shotPalette, kind 
 		ui.Box(c).Size(1, 16).Background(pal.border)
 		for _, col := range shot.Colors {
 			on := col == ink
-			b := ui.Box(c).Size(16, 16).Radius(rr(6)).Background(shotColor(col)).Border(1, pal.border).Key("ink-" + col)
+			b := ui.Box(c).Size(16, 16).Radius(rr(6)).Background(shotColor(col)).Border(1, pal.border).Key("ink-" + col).Label(tr(shotColorNames[col])).Role(ui.RoleButton)
 			if on {
 				b.DrawOver(func(p *ui.Painter, r ui.Rect) {
 					p.Stroke(ui.Rect{X: r.X - 3, Y: r.Y - 3, W: r.W + 6, H: r.H + 6}, pal.primary, 9, 2)
 				})
 			}
+			a.shotTipTarget(c, d, b, tr(shotColorNames[col]))
 			if b.Clicked() {
 				apply(col, lv)
 			}
@@ -1266,9 +1406,9 @@ func (a *app) shotTextEditor(c *ui.Context, d *shotDisplay, z float64, border ui
 }
 
 // shotCallouts：已填说明以浅色标签贴在编号贴片右侧（只在编辑时显示，不进出图）；正在填写时在框下方出输入卡。
-func (a *app) shotCallouts(c *ui.Context, d *shotDisplay, shapes []*shot.Shape, z float64) {
+func (a *app) shotCallouts(c *ui.Context, d *shotDisplay, shapes []*shot.Shape, z float64, clip shot.Rect) {
 	e := &d.ed
-	numbers := shot.CalloutNumbers(shapes)
+	numbers := shot.CalloutNumbersIn(shapes, clip)
 	var drafted *shot.Shape
 	if e.note != nil {
 		// 填写中的那条：替换原图形的位置，或追加在最后
@@ -1315,29 +1455,50 @@ func (a *app) shotCallouts(c *ui.Context, d *shotDisplay, shapes []*shot.Shape, 
 		})
 }
 
-// shotHoverTip：停留 400ms 后在按钮下方（贴底时上方）显示说明。
+// shotHoverTip：停留 400ms 后在按钮下方（贴底时上方）显示说明；连续滑过工具条时热切立即显示。
 func (a *app) shotHoverTip(c *ui.Context, d *shotDisplay, W, H float64) {
 	e := &d.ed
 	if !e.tipSeen {
-		e.tip = ""
+		e.tip, e.tipHidden = "", ""
+		return
 	}
 	e.tipSeen = false
-	if e.tip == "" || e.tipHidden == e.tip || c.Now().Sub(e.tipAt) < shotTipDelay {
+	if e.tip == "" || e.tipHidden == e.tip {
+		return
+	}
+	now := c.Now()
+	warm := !e.tipShownAt.IsZero() && e.tipAt.Sub(e.tipShownAt) <= shotTipWarm
+	if wait := shotTipDelay - now.Sub(e.tipAt); wait > 0 && !warm {
+		// 每帧都要重设 After：按钮悬停过渡等后续帧会清空上一帧的定时器。
+		c.After(wait)
 		return
 	}
 	r := e.tipRect
-	sp := ui.Span{Text: e.tip, Font: fontSans, Size: 11}
-	w, h := c.MeasureText(224, sp)
-	w, h = w+16, h+8
-	cx := math.Min(math.Max(float64(r.X+r.W/2), 124), W-124)
-	tip := ui.Box(c).Absolute().Left(f32(cx)-w/2).Width(w).Padding(4, 8).Radius(rr(8)).Background(gray(0, 0.75)).
-		Shadow(0, 4, 6, -1, gray(0, 0.1)).PassThrough()
-	if float64(r.Y+r.H)+48 < H {
-		tip.Top(r.Y + r.H + 6)
-	} else {
-		tip.Top(r.Y - 6 - h)
+	if r.W <= 0 && r.H <= 0 {
+		return
 	}
-	tip.Children(func() { text(c, e.tip, 11, 16, 400, colWhite).Wrap() })
+	e.tipShownAt = now
+	sp := ui.Span{Text: e.tip, Font: fontSans, Size: 11}
+	tw, th := c.MeasureText(224, sp)
+	w := float32(math.Ceil(float64(tw))) + 18
+	h := max(float32(math.Ceil(float64(th))), 16) + 8
+	half := float64(w)/2 + 8
+	cx := float64(r.X + r.W/2)
+	if W > 2*half {
+		cx = math.Min(math.Max(cx, half), W-half)
+	} else {
+		cx = W / 2
+	}
+	tip := ui.Box(c).Absolute().Left(f32(cx)-w/2).Width(w).Padding(4, 8).Center().Radius(rr(8)).
+		Background(gray(0, 0.82)).Border(1, gray(1, 0.14)).
+		Shadow(0, 4, 10, -2, gray(0, 0.22)).PassThrough().Key("shot-hover-tip").Role(ui.RoleTooltip)
+	const gap = 12.0
+	if float64(r.Y+r.H)+gap+float64(h)+4 < H {
+		tip.Top(r.Y + r.H + gap)
+	} else {
+		tip.Top(f32(math.Max(4, float64(r.Y)-gap-float64(h))))
+	}
+	tip.Children(func() { text(c, e.tip, 11, 16, 400, colWhite).TextAlign(ui.Center).Wrap() })
 }
 
 var crosshairLabels = map[string]string{"sky": "浅天蓝", "white": "白", "lime": "黄绿", "magenta": "品红"}

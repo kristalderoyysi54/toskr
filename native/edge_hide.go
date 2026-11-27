@@ -299,7 +299,7 @@ func (a *app) edgeOnShow() {
 	st := a.store.Settings()
 	if !st.FreeMove && !a.docked { // 屏幕边栏：每次唤出按当前所在屏重新锚定（同 Tauri show_panel right_sidebar 分支）
 		b := a.panel.Bounds()
-		if d, ok := displayAt(mygo.Screen.Displays(), b.X+b.Width/2, b.Y+b.Height/2); ok {
+		if d, ok := displayNear(mygo.Screen.Displays(), b.X+b.Width/2, b.Y+b.Height/2); ok {
 			db := d.Bounds
 			e := edgeAnchor{x: b.X, y: b.Y, w: b.Width, h: b.Height, line: db.X + db.Width, monY: db.Y, monH: db.Height, sidebar: true}
 			switch barEdge(st) {
@@ -368,6 +368,26 @@ func displayAt(displays []mygo.Display, x, y int) (mygo.Display, bool) {
 		}
 	}
 	return mygo.Display{}, false
+}
+
+// displayNear：点所在的屏；点不在任何屏上时取离它最近的屏。
+func displayNear(displays []mygo.Display, x, y int) (mygo.Display, bool) {
+	if d, ok := displayAt(displays, x, y); ok {
+		return d, true
+	}
+	best, bestD := -1, 0
+	for i, d := range displays {
+		b := d.Bounds
+		dx := max(b.X-x, 0, x-(b.X+b.Width-1))
+		dy := max(b.Y-y, 0, y-(b.Y+b.Height-1))
+		if dd := dx*dx + dy*dy; best < 0 || dd < bestD {
+			best, bestD = i, dd
+		}
+	}
+	if best < 0 {
+		return mygo.Display{}, false
+	}
+	return displays[best], true
 }
 
 // pinnedFree：「保持面板展开」且屏幕位置为自由移动——用户 2026-11-10 指定此时不入坞、不贴边隐藏（含 Esc）。

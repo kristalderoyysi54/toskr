@@ -226,3 +226,211 @@ func TestPreviewDownsamplesAppendedRowsOnly(t *testing.T) {
 		t.Fatal("只追加新行、第 k 行取源 2k 行", p.Rows)
 	}
 }
+
+// syntheticDoc 生成类似真实网页/列表的宽幅 RGBA 画布（白底 + 错落文字块 + 彩色标签），用于模拟真实滚动。
+func syntheticDoc(w, h int) []byte {
+	pix := make([]byte, w*h*4)
+	for i := 0; i < len(pix); i += 4 {
+		pix[i], pix[i+1], pix[i+2], pix[i+3] = 248, 248, 250, 255
+	}
+	seed := uint32(0x1234567)
+	next := func() uint32 {
+		seed = seed*1664525 + 1013904223
+		return seed
+	}
+	for y := 12; y < h-12; y += 22 {
+		// 模拟不同长度与缩进的文字行、偶尔插入卡片色块
+		indent := 20 + int(next()%80)
+		span := 120 + int(next()%uint32(max(40, w-indent-60)))
+		cr := uint8(30 + next()%90)
+		cg := uint8(30 + next()%90)
+		cb := uint8(30 + next()%110)
+		for dy := range 10 {
+			yy := y + dy
+			if yy >= h {
+				break
+			}
+			for x := indent; x < min(w-30, indent+span); x++ {
+				// 模拟字形笔画间隙
+				if ((x+dy*3+y)^int(cr))%5 < 2 {
+					continue
+				}
+				o := (yy*w + x) * 4
+				pix[o], pix[o+1], pix[o+2] = cr, cg, cb
+			}
+		}
+	}
+	return pix
+}
+
+// sampleSubpixel 从 doc 在小数位置 yPos 采样一帧（线性插值模拟 1×/缩放屏亚像素滚动），
+// 叠加右侧移动/淡变的 overlay 滚动条与 ±2 抖动噪声。
+func sampleSubpixel(doc []byte, w, docH, h int, yPos float64, frameIdx int) []byte {
+	out := make([]byte, w*h*4)
+	y0 := int(yPos)
+	frac := yPos - float64(y0)
+	for r := range h {
+		s0 := min(max(y0+r, 0), docH-1)
+		s1 := min(s0+1, docH-1)
+		for x := range w {
+			o := (r*w + x) * 4
+			i0 := (s0*w + x) * 4
+			i1 := (s1*w + x) * 4
+			noise := (x + r + frameIdx) % 3 // 0..2 轻微色彩抖动
+			for c := range 3 {
+				v := float64(doc[i0+c])*(1-frac) + float64(doc[i1+c])*frac
+				iv := int(v) + noise - 1
+				out[o+c] = uint8(min(255, max(0, iv)))
+			}
+			out[o+3] = 255
+		}
+		// 模拟 macOS 右侧 14px 宽的 overlay 滚动条（滑块随滚动移动且透明度每帧淡变）
+		thumbTop := int(yPos * float64(h-60) / float64(max(1, docH-h)))
+		inThumb := r >= thumbTop && r < thumbTop+60
+		alpha := 0.25 + 0.05*float64(frameIdx%8)
+		for x := max(0, w-16); x < w-2; x++ {
+			o := (r*w + x) * 4
+			if inThumb {
+				for c := range 3 {
+					out[o+c] = uint8(float64(out[o+c])*(1-alpha) + 60*alpha)
+				}
+			} else {
+				// 轨道淡入淡出
+				for c := range 3 {
+					out[o+c] = uint8(max(0, int(out[o+c])-frameIdx%4))
+				}
+			}
+		}
+	}
+	return out
+}
+
+// 回归真实诊断日志（480×481 / 776×561 接不上 0/121）：
+// 亚像素平滑滚动 + 右侧滚动条 + 色彩抖动下必须稳定连续拼接，不能全帧 NoOverlap。
+func TestSubpixelSmoothScrollWithScrollbarStitches(t *testing.T) {
+	const W, H, DocH = 480, 481, 2000
+	doc := syntheticDoc(W, DocH)
+	first := sampleSubpixel(doc, W, DocH, H, 0, 0)
+	st := NewStitcher(first, W, H)
+
+	misses := 0
+	y := 0.0
+	for i := 1; i <= 80; i++ {
+		y += 14.3 // 小数步长模拟触控板平滑滚动
+		if y+H >= DocH {
+			break
+		}
+		res := st.Push(sampleSubpixel(doc, W, DocH, H, y, i))
+		if res == NoOverlap {
+			misses++
+		}
+	}
+	st.Flush()
+	wantH := H + int(y)
+	if misses > 0 {
+		t.Fatalf("亚像素滚动 + 滚动条不应出现接不上，实有 %d 次（总高 %d，期望约 %d）", misses, st.TotalH, wantH)
+	}
+	if absInt(st.TotalH-wantH) > 8 {
+		t.Fatalf("拼接总高误差过大：实得 %d，期望约 %d（误差限 8px）", st.TotalH, wantH)
+	}
+}
+
+// 吸顶栏首行有动态微变（使 fixedRows 在第 0 行截断）时，静态栏不能靠 dy=0 抢票导致整帧 NoOverlap。
+func TestNoisyStickyHeaderDoesNotStealZeroOffsetVote(t *testing.T) {
+	const W, H, DocH = 640, 420, 1400
+	const headerH = 72
+	doc := syntheticDoc(W, DocH)
+	render := func(top, tick int) []byte {
+		f := make([]byte, W*H*4)
+		// 吸顶栏：深灰底 + 居中标题横条；首行每帧微变 20 模拟顶部进度条 / 时钟
+		for y := range headerH {
+			for x := range W {
+				o := (y*W + x) * 4
+				r, g, b := uint8(36), uint8(38), uint8(44)
+				if y == 0 && x < 120 {
+					r = uint8(80 + (tick*17)%120)
+				} else if y >= 24 && y < 44 && x >= 40 && x < 360 && (x+y)%3 != 0 {
+					r, g, b = 220, 224, 232
+				}
+				f[o], f[o+1], f[o+2], f[o+3] = r, g, b, 255
+			}
+		}
+		// 中间滚动内容
+		bodyH := H - headerH
+		copy(f[headerH*W*4:], doc[top*W*4:(top+bodyH)*W*4])
+		return f
+	}
+	st := NewStitcher(render(0, 0), W, H)
+	for i := 1; i <= 10; i++ {
+		if r := st.Push(render(i*60, i)); r != Appended {
+			t.Fatalf("第 %d 步应正常拼接，实为 %v", i, r)
+		}
+	}
+	if st.TotalH != H+600 {
+		t.Fatalf("总高 %d，期望 %d", st.TotalH, H+600)
+	}
+}
+
+// 白底上两段完全不重叠的稀疏短文字行不能误对齐（防假阳性）。
+func TestDisjointSparseTextDoesNotFalseMatch(t *testing.T) {
+	const W, H = 600, 400
+	makeFrame := func(seed uint32) []byte {
+		pix := make([]byte, W*H*4)
+		for i := 0; i < len(pix); i += 4 {
+			pix[i], pix[i+1], pix[i+2], pix[i+3] = 255, 255, 255, 255
+		}
+		for y := 20; y < H-20; y += 28 {
+			seed = seed*1664525 + 1013904223
+			x0 := 24 + int(seed%260)
+			for dy := range 8 {
+				for x := x0; x < x0+70; x++ {
+					if (x+dy)%2 == 0 {
+						o := ((y+dy)*W + x) * 4
+						pix[o], pix[o+1], pix[o+2] = 20, 20, 20
+					}
+				}
+			}
+		}
+		return pix
+	}
+	a := RowSignatures(makeFrame(11), W, H)
+	b := RowSignatures(makeFrame(99991), W, H)
+	if dy, ok := ScrollOffset(a, b); ok {
+		t.Fatalf("完全不重叠的稀疏页面不应误对齐：dy=%d", dy)
+	}
+}
+
+// 画面未滚动但有局部光标闪烁 / 小卡片悬停变化：应视为 dy=0（Moved），不报错也不重复追加。
+func TestInPlaceHoverOrCaretBlinkDoesNotStall(t *testing.T) {
+	const W, H = 600, 400
+	base := syntheticDoc(W, H)
+	st := NewStitcher(base, W, H)
+	changed := slices.Clone(base)
+	// 中间 2px×16px 闪烁光标
+	for y := 180; y < 196; y++ {
+		for x := 200; x < 202; x++ {
+			o := (y*W + x) * 4
+			changed[o], changed[o+1], changed[o+2] = 0, 122, 255
+		}
+	}
+	if r := st.Push(changed); r != Moved || st.TotalH != H {
+		t.Fatalf("原地闪烁光标应为 Moved 且不增高，实为 %v totalH=%d", r, st.TotalH)
+	}
+}
+
+// 60fps 微小步长（每帧 5px）平滑滚动后停住或点击完成：小步长暂存不丢且暂停后立即落盘。
+func TestMicroStepsAccumulateAndFlushOnPause(t *testing.T) {
+	const W, H, DocH = 400, 300, 900
+	doc := syntheticDoc(W, DocH)
+	sliceFrame := func(top int) []byte { return doc[top*W*4 : (top+H)*W*4] }
+	st := NewStitcher(sliceFrame(0), W, H)
+	for top := 5; top <= 20; top += 5 {
+		if r := st.Push(sliceFrame(top)); r != Moved {
+			t.Fatalf("小步长 %d 应先暂存（Moved），实为 %v", top, r)
+		}
+	}
+	// 画面停顿（收到同帧）：应立刻落盘暂存的 20px
+	if r := st.Push(sliceFrame(20)); r != Appended || st.TotalH != H+20 {
+		t.Fatalf("停滚时暂存应落盘：res=%v totalH=%d 期望 %d", r, st.TotalH, H+20)
+	}
+}

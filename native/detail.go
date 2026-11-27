@@ -16,6 +16,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
+	"github.com/toskr/native/internal/diag"
 	"github.com/toskr/native/internal/macos"
 	"github.com/toskr/native/internal/store"
 )
@@ -39,6 +40,9 @@ type detailState struct {
 	dblFrames           int               // 双击正文后再等几帧进编辑（等选词结果落进 readSel）
 	editRange           [2]int            // 编辑器当前选区（上一帧，rune 偏移）
 	title               string            // 编辑态标题草稿（同 Tauri draftTitle）
+	titleFocus          bool              // 上一帧标题框持有窗内焦点（窗口失焦也算）：面板里「添加到光标处」进标题而不是正文
+	titleRange          [2]int            // 标题框选区（rune 偏移）；titleSet 时为待落下的光标
+	titleSet            bool              // titleRange 待落到标题框（插入后一帧）
 	img                 int               // 多图时当前第几张（主图 + 附件 + 内容块里的图）
 	imgW, imgH          int               // 当前图原始尺寸
 	view                zoomView          // 看图层缩放 / 平移（0 值 = 适配）
@@ -88,6 +92,9 @@ type detailState struct {
 	editPreview        bool                 // 编辑态「渲染」预览草稿（同 Tauri editPreviewOn）
 	virt               *store.Note          // 只读合并预览（同 Tauri openNoteBatchDetail readOnly）：不在库里，只读、不可编辑 / 发送
 	subtitle           string               // 只读预览的副标题（来源张数 · 发送记录不保存正文）
+	tagsOpen           bool                 // 标签行展开中：标题栏只有一行，标签行默认收起，由「#N」钮开关（主题自绘标题栏时常驻，不看它）
+	readH              float32              // 阅读态正文上一帧的高度：能力卡据此判断「正文 + 卡」一屏放不放得下（detail_caps.go）
+	tagsH              float32              // 标签行上一帧的高度：标签多了会折行，正文 / 查找栏 / 大纲按多出的高度下移（detailTagsExtra）
 }
 
 // detailNote：当前详情窗显示的内容；只读合并预览取 virt，其余按 id 从库里取。
@@ -152,6 +159,7 @@ func (a *app) detailFrame() (w, h, x, y int) {
 }
 
 func (a *app) openDetail(n store.Note) {
+	diag.Push("详情: 打开 %s 屏幕=%v", n.ID, a.detailWorkArea())
 	p, same := a.pickPane(n.ID)
 	a.usePane(p)
 	if same && a.detailWin != nil {
@@ -309,20 +317,26 @@ func (a *app) detailView(c *ui.Context) {
 		a.detailImageView(c, k, s, n)
 		return
 	}
+	if d := &a.detail; d.tagsOpen && len(n.Tags) == 0 && !d.tagOn {
+		d.tagsOpen = false // 没有标签也不在输入：空的标签行自己收起（标题栏「#」钮就是添加入口）
+	}
 	root := ui.Box(c).Fill()
 	a.detail.sel.win, a.detail.sel.ok, a.detail.sel.floor, a.detail.sel.pickBot = root.Bounds(), false, 0, 0
 	root.Children(func() {
+		glow := false
 		if over, ok := k.th.DetailFrame(c); ok { // 主题自绘窗框：不画顶部晕光，窗框压在内容之上
 			defer over()
 		} else {
-			ui.Box(c).Absolute().Top(0).Left(0).Right(0).Height(102.4).PassThrough(). // 纯装饰：不挡正文首行的点击 / 划选（选词首行键帽曾点不动）
-													LinearGradient(ui.LinearGradient{From: a.detailAccent(n).Alpha(0.26), To: ui.Transparent, Angle: 180})
+			glow = true
+			ui.Box(c).Absolute().Top(0).Left(0).Right(0).Height(detailGlowH).PassThrough(). // 纯装饰：不挡正文首行的点击 / 划选（选词首行键帽曾点不动）
+													LinearGradient(ui.LinearGradient{From: a.detailAccent(n).Alpha(detailGlowA), To: ui.Transparent, Angle: 180})
 		}
 		a.detailBody(c, k, s, n)
 		// 同 Tauri：顶部 40pt 常驻拖动区（标题栏收起时也能拖窗）；正文从 64 开始，不挡首行
 		ui.Box(c).Absolute().Top(0).Left(0).Right(0).Height(40).DragWindow().Key("detail-drag")
 		_, _, over := root.PointerPosition()
 		a.detailChromeTrack(over)
+		hdrH := a.detail.sel.hdr.H // 上一帧标题栏连同标签行的高度（渐隐底先于标题栏创建，量不到本帧的）
 		a.detail.sel.hdr = ui.Rect{}
 		if a.detailChromeVisible() {
 			// 同 Tauri chromeVisible：贴缘唤出——淡入 + 微移（duration-overlay），收起时淡出
@@ -330,11 +344,12 @@ func (a *app) detailView(c *ui.Context) {
 				return ui.ElementTransition{Duration: 180 * time.Millisecond, Ease: easeStandard, Colors: true,
 					Enter: &ui.Motion{Y: dy}, Exit: &ui.Motion{Y: dy}}
 			}
+			a.detailTopEdge(c, s, n, hdrH, glow, fade(-4))
 			hdr := ui.Column(c).Absolute().Top(0).Left(0).Right(0).Key("detail-chrome-top").Transition(fade(-4))
 			a.detail.sel.hdr = hdr.Bounds()
 			hdr.Children(func() {
 				a.detailHeader(c, k, n)
-				if a.detail.virt == nil {
+				if a.detailTagsShown(k) {
 					a.detailTags(c, k, s, n)
 				}
 			})
@@ -355,6 +370,54 @@ func (a *app) detailView(c *ui.Context) {
 		a.detailThumbStrip(c, k, n) // 同 Tauri：非混排图文卡的缩略条常显在正文与操作坞之间（z 高于坞）
 		a.detailSelectionBar(c, k, n)
 	})
+}
+
+const (
+	detailGlowH, detailGlowA = 102.4, 0.26 // 顶部晕光：高度与最浓处的不透明度
+
+	topEdgeFade = 20 // 渐隐底：从标题栏 / 标签行下缘再往下渐隐这么长
+	topEdgeRamp = 8  // 正文滚过这么多才到全浓度（刚滚一点时不突然冒出来）
+)
+
+// detailTopEdge：正文滚到标题栏 / 标签行下面时垫在它们底下的一层（用户 2026-11-26 选定）——窗口底色，下缘渐隐，
+// 标题、标签不再和滚上来的正文叠字。没滚动时不画；过渡 tr 同标题栏，随它一起淡入淡出。
+// h = 标题栏连同标签行的高度；glow = 窗口顶部画了晕光（底色要带上同一处的晕光，不然一滚动顶部就变色）。
+// 不用 glass 插件的背景模糊：毛玻璃窗的底色是半透明的，模糊层叠上去会把这一带变成不透明的灰块。
+func (a *app) detailTopEdge(c *ui.Context, s settingsTokens, n store.Note, h float32, glow bool, tr ui.ElementTransition) {
+	if h <= 0 {
+		return
+	}
+	cover := s.bg
+	if a.detail.edit { // 编辑态正文区多一层浅主色底（detailBody）
+		cover = s.primary.Alpha(0.04).Over(cover)
+	}
+	total, acc := h+topEdgeFade, a.detailAccent(n)
+	at := func(y, t float32) ui.GradientStop { // y 处的底色（带上该处的晕光），浓度 t
+		col := cover
+		if glow && y < detailGlowH {
+			col = acc.Alpha(detailGlowA * (1 - y/detailGlowH)).Over(cover)
+		}
+		return ui.GradientStop{Color: col.Alpha(t), At: y / total}
+	}
+	stops := []ui.GradientStop{at(0, 1)}
+	if glow && h > detailGlowH { // 标签折了好几行：晕光在垫层中途就到头了
+		stops = append(stops, at(detailGlowH, 1))
+	}
+	stops = append(stops, at(h, 1))
+	for _, u := range []float32{0.25, 0.5, 0.75, 1} { // 下缘按 smoothstep 渐隐：直线渐变的两头各会出一道棱
+		stops = append(stops, at(h+topEdgeFade*u, 1-u*u*(3-2*u)))
+	}
+	// 不透明度跟着滚动量走，为 0 时不绘制。元素常在：免得每次从顶上开始滚都重播一遍进场过渡
+	edge := ui.Box(c).Absolute().Top(0).Left(0).Right(0).Height(total).PassThrough().
+		LinearGradient(ui.LinearGradient{Angle: 180, Stops: stops}).
+		Opacity(min(max(a.detail.scroll.Y, 0)/topEdgeRamp, 1)).Key("detail-top-edge").Transition(tr)
+	if a.detail.edit { // 编辑态那一圈描边：左右让出来，上缘那一行会有正文从底下滚过，盖住后补画
+		line := s.primary.Alpha(0.25).Over(cover)
+		if glow { // 没滚动时晕光压在描边上：按同样的先后配色，滚动前后这条线不变色
+			line = acc.Alpha(detailGlowA * (1 - 0.5/detailGlowH)).Over(line)
+		}
+		edge.Left(1).Right(1).BorderWidth(1, 0, 0, 0).BorderColor(line)
+	}
 }
 
 // detailChromeTrack 同 Tauri 无界剧场：光标进窗即唤出，离窗立即收起；打开窗口时先显示，光标不在窗内 2.5s 后收起。
@@ -548,7 +611,17 @@ func (a *app) detailSourceAndSave(c *ui.Context, k tokens, n store.Note) {
 		tipOf(c, ui.Box(c).Size(20, 20).Radius(5).Clip().Shrink(0).Key("detail-src-icon"), cmpOr(tip, n.BundleID)).Label(tr("来自 ") + cmpOr(tip, n.BundleID)).
 			Children(func() { ui.Image(c, img).Size(20, 20) })
 	}
-	if n.Section != store.SectionClipboard || n.SavedTo != "" || a.detail.virt != nil { // 已收下的剪贴卡不再给入口
+	a.detailSaveToNotes(c, k, n)
+}
+
+// detailCanSave：还没收下的剪贴卡才给「存入笔记分组」入口（只读合并预览不给）。
+func (a *app) detailCanSave(n store.Note) bool {
+	return n.Section == store.SectionClipboard && n.SavedTo == "" && a.detail.virt == nil
+}
+
+// detailSaveToNotes：剪贴卡「存入笔记分组」（点开即选分组）。
+func (a *app) detailSaveToNotes(c *ui.Context, k tokens, n store.Note) {
+	if !a.detailCanSave(n) {
 		return
 	}
 	b := ghostIconButton(c, k, "detail-save-notes", "folder-input", tr("存入笔记分组"), 22, 14, false, true)
@@ -570,76 +643,164 @@ func (a *app) detailHeader(c *ui.Context, k tokens, n store.Note) {
 	if k.th.DetailHeader(a, c, k, n) {
 		return
 	}
+	// 极简居中（用户 2026-11-25 选定）：只有一行。居中「标题 · 来源 · 创建时间」，右端「存入分组 · 标签钮 · 固定」；
+	// 具体时间与字数在悬停提示里，标签行默认收起（detailTagChip）。左右两格等宽，中间那段才落在窗口正中。
+	side := float32(22) // 固定钮
+	if a.detail.virt == nil {
+		side += 28 + 4 // 标签钮（「#N」胶囊 28；没有标签时是 22 的图标钮，按宽的留）
+	}
+	if a.detailCanSave(n) {
+		side += 22 + 4
+	}
+	side = max(side, 52) // 左格同时是系统红绿灯的占位
+	title := strings.TrimSpace(n.Title)
+	if a.detail.edit {
+		title = "" // 编辑态标题在正文上方的输入框里改，标题栏不再放一份旧的
+	}
+	src, when := a.detail.subtitle, "" // 只读预览：副标题整段当来源，没有时间
+	var tip []string
+	if a.detail.virt == nil {
+		src, when = cmpOr(n.SourceApp, tr("笔记")), " · "+ago(n.CreatedAt, a.now())
+		tip = append(tip, src, tr("创建 ")+n.CreatedAt.Format("2006-01-02 15:04"))
+	}
+	if n.UpdatedAt.After(n.CreatedAt) {
+		tip = append(tip, tr("改于 ")+n.UpdatedAt.Format("2006-01-02 15:04"))
+	}
+	tip = append(tip, fmt.Sprintf(tr("%d 字符 · %d 词 · %d 行"), utf8.RuneCountInString(n.Text), wordCount(n.Text), strings.Count(n.Text, "\n")+1))
+	hint := strings.Join(tip, " · ")
+	if title != "" { // 标题、来源在标题栏里可能被截，提示里给全文
+		hint = title + "\n" + hint
+	}
 	ui.Row(c).Height(38).Padding(8, 12).Gap(8).AlignItems(ui.Center).DragWindow().Children(func() {
-		ui.Box(c).Width(52) // 系统红绿灯占位
-		if a.detail.edit {  // 同 Tauri 编辑态指示：一枚呼吸主色点 + 小字「编辑中」
-			p := stok(c).primary
-			ui.Row(c).Gap(6).AlignItems(ui.Center).Shrink(0).Children(func() {
-				dot := ui.Box(c).Size(6, 6).Radius(3).Background(p).Shadow(0, 0, 8, 1, p)
-				dot.Opacity(1 - 0.5*dot.Loop("edit-pulse", 2*time.Second, ui.Bounce(easePulse))) // animate-pulse
-				text(c, tr("编辑中"), 10, 14, 500, p)
-			})
-		}
-		parts := []string{}
-		if a.detail.virt != nil {
-			parts = append(parts, a.detail.subtitle)
-		} else if n.SourceApp != "" {
-			parts = append(parts, tr("来自 ")+n.SourceApp)
-		} else {
-			parts = append(parts, tr("笔记"))
-		}
-		if a.detail.virt == nil {
-			parts = append(parts, tr("创建 ")+ago(n.CreatedAt, a.now()))
-		}
-		if n.UpdatedAt.After(n.CreatedAt) {
-			parts = append(parts, tr("改于 ")+ago(n.UpdatedAt, a.now()))
-		}
-		chars := utf8.RuneCountInString(n.Text)
-		parts = append(parts, strconv.Itoa(chars)+tr(" 字"))
-		spans := []ui.Span{{Text: strings.Join(parts, " · "), Color: k.muted}}
-		if t := strings.TrimSpace(n.Title); t != "" {
-			spans = append([]ui.Span{{Text: t + " · ", Color: k.fg, Weight: 500}}, spans...)
-		}
-		tipOf(c, ui.RichText(c, spans...).Font(fontSans).FontSize(10).FixedLineHeight(14).SingleLine().Grow(1).Basis(0), fmt.Sprintf(tr("%d 字符 · %d 词 · %d 行"), chars, wordCount(n.Text), strings.Count(n.Text, "\n")+1))
-		a.detailSourceAndSave(c, k, n)
-		pinTip := tr("固定窗口：发送后保持打开，新开的卡另开一扇窗")
-		if a.detail.pinned {
-			pinTip = tr("取消固定（发送后恢复自动关窗）")
-		}
-		pin := tipOf(c, ui.Box(c).Size(22, 22).Radius(rr(8)).Center(), pinTip).Role(ui.RoleButton).Label(pinTip)
-		col := k.muted
-		if a.detail.pinned {
-			pin.Background(k.track)
-			col = k.fg
-		} else if pin.Hovered() {
-			pin.Background(k.track)
-		}
-		pin.Children(func() {
-			if a.detail.pinned {
-				liconFilled(c, "pin", 14, col)
+		ui.Box(c).Width(side).Shrink(0)
+		tipOf(c, ui.Row(c).Grow(1).Basis(0).Justify(ui.Center).AlignItems(ui.Center).Key("detail-meta"), hint).Children(func() {
+			if a.detail.edit { // 同 Tauri 编辑态指示：一枚呼吸主色点 + 小字「编辑中」
+				p := stok(c).primary
+				ui.Row(c).Gap(6).Margin(0, 8, 0, 0).AlignItems(ui.Center).Shrink(0).Children(func() {
+					dot := ui.Box(c).Size(6, 6).Radius(3).Background(p).Shadow(0, 0, 8, 1, p)
+					dot.Opacity(1 - 0.5*dot.Loop("edit-pulse", 2*time.Second, ui.Bounce(easePulse))) // animate-pulse
+					text(c, tr("编辑中"), 10, 14, 500, p)
+				})
+			}
+			// 放不下时的让位顺序：先截标题，再截来源，时间不截。
+			if title == "" {
+				text(c, src, 11, 16, 400, k.muted).SingleLine().Shrink(1)
 			} else {
-				licon(c, "pin", 14, col)
+				// 来源不参与收缩、直接定上限：和标题一起按比例收缩的话，系数再悬殊它也会被压掉零点几个点，照样出省略号。
+				// 上限 = 标题用剩的宽度，标题很长时两者各占一半。
+				ww, _ := c.Size()
+				room := ww - 2*12 - 2*8 - 2*side - textW(c, when, 11, 400) // 中间那格里标题 + 来源能用的宽度
+				text(c, title, 11, 16, 500, k.fg).SingleLine().Shrink(1)
+				text(c, " · "+src, 11, 16, 400, k.muted).SingleLine().Shrink(0).MaxWidth(max(room-textW(c, title, 11, 500), room/2, 0))
+			}
+			if when != "" {
+				text(c, when, 11, 16, 400, k.muted).NoWrap().Shrink(0)
 			}
 		})
-		if pin.Clicked() {
-			a.detail.pinned = !a.detail.pinned // 同 Tauri：固定只表示发送后不关窗、新卡另开一扇窗，不置顶
-		}
+		ui.Row(c).Width(side).Shrink(0).Gap(4).Justify(ui.End).AlignItems(ui.Center).Children(func() {
+			a.detailSaveToNotes(c, k, n)
+			a.detailTagChip(c, k, n)
+			pinTip := tr("固定窗口：发送后保持打开，新开的卡另开一扇窗")
+			if a.detail.pinned {
+				pinTip = tr("取消固定（发送后恢复自动关窗）")
+			}
+			pin := tipOf(c, ui.Box(c).Size(22, 22).Radius(rr(8)).Center().Shrink(0), pinTip).Role(ui.RoleButton).Label(pinTip)
+			col := k.muted
+			if a.detail.pinned {
+				pin.Background(k.track)
+				col = k.fg
+			} else if pin.Hovered() {
+				pin.Background(k.track)
+			}
+			pin.Children(func() {
+				if a.detail.pinned {
+					liconFilled(c, "pin", 14, col)
+				} else {
+					licon(c, "pin", 14, col)
+				}
+			})
+			if pin.Clicked() {
+				a.detail.pinned = !a.detail.pinned // 同 Tauri：固定只表示发送后不关窗、新卡另开一扇窗，不置顶
+			}
+		})
 	})
 }
 
+// detailTagChip：标题栏右端的标签钮——有标签时是「#N」小胶囊（悬停列出全部），没有时是一枚「#」图标钮；点它展开 / 收起标签行。
+func (a *app) detailTagChip(c *ui.Context, k tokens, n store.Note) {
+	d := &a.detail
+	if d.virt != nil {
+		return
+	}
+	var chip ui.Element
+	if len(n.Tags) == 0 {
+		chip = ghostIconButton(c, k, "detail-tags", "hash", tr("添加标签"), 22, 13, false, true)
+	} else {
+		chip = tipOf(c, ui.Row(c).MinWidth(28).Height(20).Padding(0, 6).Radius(10).Justify(ui.Center).AlignItems(ui.Center).Shrink(0).Key("detail-tags"),
+			"#"+strings.Join(n.Tags, "  #")).Role(ui.RoleButton).Label(tr("标签"))
+		bg, col := k.track, k.muted
+		if d.tagsOpen || chip.Hovered() {
+			bg, col = k.fg.Alpha(0.1), k.fg
+		}
+		fadeColor(chip, "bg", bg, tweenControl)
+		chip.Children(func() { text(c, "#"+itoa(len(n.Tags)), 11, 16, 400, col).FontFeatures("tnum").SingleLine() })
+	}
+	if !chip.Clicked() {
+		return
+	}
+	if d.tagsOpen { // 收起：没回车的草稿照常存成标签（同点别处）
+		a.addDetailTag(n.ID, d.tagDraft)
+		d.tagDraft, d.tagOn = "", false
+	} else if len(n.Tags) == 0 {
+		d.tagOn = true // 还没有标签：展开即进输入
+	}
+	d.tagsOpen = !d.tagsOpen
+}
+
+// detailTagsShown：标签行在不在。标题栏只有一行时默认收起，由「#N」钮展开；主题自绘标题栏（没有那枚钮）时常驻。
+func (a *app) detailTagsShown(k tokens) bool {
+	return a.detail.virt == nil && (a.detail.tagsOpen || k.th.SquareWindows())
+}
+
+// detailTagsExtra：标签行折行后比一行多出的高度（没折行 / 没显示时是 0）。正文、查找栏、大纲都下移这么多。
+func (a *app) detailTagsExtra(k tokens) float32 {
+	if !a.detailTagsShown(k) {
+		return 0
+	}
+	return max(a.detail.tagsH-28, 0)
+}
+
+// detailBodyTop：正文上边距。标题栏 38，正文从 44 起；标签行（每行 24）/ 查找栏（30）出现时再让出位置，不压首行。
+func (a *app) detailBodyTop(k tokens) float32 {
+	top, extra := float32(44), a.detailTagsExtra(k)
+	if a.detailTagsShown(k) || k.th.SquareWindows() { // 主题自绘的标题栏沿用原来的高度
+		top = 64 + extra
+	}
+	if a.detail.findOn {
+		top = max(top, 78+extra)
+	}
+	return top
+}
+
 func (a *app) detailTags(c *ui.Context, k tokens, s settingsTokens, n store.Note) {
-	ui.Row(c).Height(28).Padding(4, 12).Gap(4).AlignItems(ui.Center).Children(func() {
+	// 一行放不下就折行：胶囊不压窄、字不折（原来单行硬挤，8 个标签时字被折成两行）。行高变了正文跟着让位，要再画一帧。
+	row := ui.Row(c).MinHeight(28).Padding(4, 12).Gap(4).Wrap().AlignItems(ui.Center).Key("detail-tagrow")
+	if h := row.Bounds().H; h > 0 && h != a.detail.tagsH {
+		a.detail.tagsH = h
+		c.Invalidate()
+	}
+	row.Children(func() {
 		for _, tag := range n.Tags {
 			chip := ui.Row(c).Height(20).Padding(2, 6).Gap(2).Radius(10).Background(k.track).AlignItems(ui.Center).Key("tag-" + tag)
 			chip.Children(func() {
-				text(c, "#"+tag, 11, 16, 400, k.muted)
+				text(c, "#"+tag, 11, 16, 400, k.muted).SingleLine()
 				if ghostIconButton(c, k, "tagx-"+tag, "x", tr("移除标签"), 14, 10, true, chip.Hovered()).Clicked() {
 					_ = a.store.SetTags(n.ID, slices.DeleteFunc(slices.Clone(n.Tags), func(t string) bool { return t == tag }))
 				}
 			})
 		}
 		if a.detail.tagOn {
-			box := ui.Row(c).Width(110).Height(20).Padding(0, 6).Radius(10).Border(1, s.inputBorder).AlignItems(ui.Center)
+			box := ui.Row(c).Width(110).Height(20).Padding(0, 6).Radius(10).Border(1, s.inputBorder).AlignItems(ui.Center).Shrink(0)
 			if box.PressedOutside() { // 点详情窗别处：没回车的文字也存成标签并收起（不再每帧抢回焦点）
 				a.addDetailTag(n.ID, a.detail.tagDraft)
 				a.detail.tagDraft, a.detail.tagOn = "", false
@@ -670,7 +831,7 @@ func (a *app) detailTags(c *ui.Context, k tokens, s settingsTokens, n store.Note
 		if len(n.Tags) >= store.TagMaxCount { // 同 Tauri：到上限隐藏「＋ 标签」
 			return
 		}
-		add := ui.Row(c).Height(20).Padding(2, 6).Radius(10).AlignItems(ui.Center)
+		add := ui.Row(c).Height(20).Padding(2, 6).Radius(10).AlignItems(ui.Center).Shrink(0)
 		if add.Hovered() {
 			add.Background(k.track)
 		}
@@ -710,7 +871,10 @@ func (a *app) detailBody(c *ui.Context, k tokens, s settingsTokens, n store.Note
 		if a.detailStripShown(n) {
 			bottom += 68 // 给常显缩略条让位
 		}
-		body := ui.Column(c).Padding(64, 20, bottom, 20)
+		body := ui.Column(c)
+		top := a.detailBodyTop(k)
+		// 标签行 / 查找栏出现时正文顺滑让位
+		body.Padding(body.AnimateTo("top", top, tweenOverlay), 20, bottom, 20)
 		if a.detail.enter { // 正文进场：opacity 0 → 1、y 6 → 0，springSnappy（Tauri motion.div key=gen）
 			body.Jump("in", 0)
 			a.detail.enter = false
@@ -727,8 +891,16 @@ func (a *app) detailBody(c *ui.Context, k tokens, s settingsTokens, n store.Note
 					a.detail.sel.floor = r.Y + r.H
 				}
 				titleRow.Children(func() {
-					ui.TextInputBase(c, &a.detail.title).Grow(1).Font(fontSans).FontSize(16).FixedLineHeight(22).FontWeight(600).TextColor(k.fg).
+					ti := ui.TextInputBase(c, &a.detail.title).Grow(1).Font(fontSans).FontSize(16).FixedLineHeight(22).FontWeight(600).TextColor(k.fg).
 						PlaceholderColor(k.muted.Alpha(0.5)).Placeholder(tr("添加标题（可选）")).Label(tr("笔记标题"))
+					if a.detail.titleSet { // 外部插入后：光标落在插入内容之后
+						ti.Focus().SetTextSelection(a.detail.titleRange[0], a.detail.titleRange[1])
+						a.detail.titleSet = false
+					}
+					// FocusWithin 不看窗口焦点：点面板按钮时详情窗已失焦，仍要知道光标原本在标题里
+					if a.detail.titleFocus = ti.FocusWithin(); a.detail.titleFocus {
+						a.detail.titleRange[0], a.detail.titleRange[1] = ti.TextSelection()
+					}
 				})
 				if a.detail.blocks != nil && a.detail.editPreview { // 「渲染」：按块预览草稿（文字 Markdown + 内嵌图）
 					ui.Column(c).Margin(5.85, 0, 0, 0).Gap(5.85).Key("detail-edit-preview").Children(func() {
@@ -819,6 +991,12 @@ func (a *app) detailBody(c *ui.Context, k tokens, s settingsTokens, n store.Note
 					} else {
 						c.Invalidate()
 					}
+				}
+				if r := read.Bounds(); r.H > 0 { // 可选文字容器重建（清划选）的那一帧量不到，沿用上次的高度
+					a.detail.readH = r.H
+				}
+				if view := sc.Bounds(); a.detail.readH > 0 {
+					a.detailCapsView(c, k, n, view.W-40, view.H-top-bottom-a.detail.readH)
 				}
 			}
 		})
@@ -1090,8 +1268,113 @@ func pickClick(anchor, end, i int) (int, int) {
 
 // ---- 操作坞 ----
 
+// dockItem：阅读态操作坞里的一个次操作（发送钮之外的那些）。
+type dockItem struct {
+	icon, label, tip string
+	active           bool
+	keep             int                   // 一排放不下时先收 keep 小的（dockFit）
+	click            func()                // 点按钮 / 选菜单项
+	menu             func(m *ui.Menu)      // 下拉（「处理」）：坞上是窗内弹层，收进「⋯」后是子菜单
+	mark             func(mi *ui.MenuItem) // 收进「⋯」后给菜单项补勾选、键位
+	extra            func()                // 紧跟在按钮后面的附属控件（选词模式的「词 / 段」），随按钮显隐
+	w                float32               // 按钮连同附属控件的宽度
+}
+
+// 次操作的保留级别：一排放不下时从小的收起。后两项是「正在进行」的状态，轮到它们之前发送钮先缩到只剩「发送」。
+const (
+	keepRaw = iota + 1 // 原文 / 渲染
+	keepPick
+	keepEdit
+	keepProc
+	keepLink // 打开链接：链接卡上它比「处理」「编辑」常用，和「复制」一起留到最后
+	keepCopy
+	keepBusy   // 取消 AI 请求
+	keepPickOn // 开着的选词（连同「词 / 段」）
+)
+
+// 发送钮的四种写法，越往后越窄。
+const (
+	sendHint  = iota // 发送到 目标 ⌘⏎
+	sendFull         // 发送到 目标
+	sendFloor        // 发送到 目标…（目标名截短，不低于 ddockNameFloor）
+	sendShort        // 发送
+)
+
+const (
+	ddockPadX      = 16 // 坞左右内边距
+	ddockGap       = 4  // 按钮间距；发送钮另有同样大的左外边距
+	ddockMoreW     = 28 // 「⋯」钮
+	ddockSendFixed = 80 // 发送钮除文字外的宽度：描边 2 + 内边距 32 + 图标 12 + 间距 6 + 下拉 28（Platinum 是 73，按宽的算）
+	ddockNameFloor = 64 // 目标名最少留这么宽（约 5 个汉字 / 9 个字母），再窄就认不出是哪个应用
+)
+
+// textW：一段单行文字（界面字体）的宽度。
+func textW(c *ui.Context, s string, size float32, weight int) float32 {
+	w, _ := c.MeasureText(0, ui.Span{Text: s, Font: fontSans, Size: size, Weight: weight})
+	return w
+}
+
+// dockButtonW：dockButton 画出来的宽度（内边距 24 + 图标 12 与间距 4 + 文字）。
+func dockButtonW(c *ui.Context, icon, label string) float32 {
+	w := 24 + textW(c, label, 12, 400)
+	if icon != "" {
+		w += 12 + 4
+	}
+	return w
+}
+
+// dockFit 决定操作坞一排放不下时谁让位。窗口最窄 380，而目标名、界面语言、选词模式都会把这一排撑宽——
+// 原来全靠发送钮里的字收缩，380 宽时只剩「…⌘⏎」，下拉箭头被挤出窗外点不到。
+// room = 坞内可用宽度；ws / keep = 各次操作的宽度与保留级别；send = 发送钮四种写法的宽度（下标 sendHint…sendShort）。
+// 返回要收进「⋯」的项和发送钮的写法。顺序：去键位 → 目标名截到下限 → 次操作按 keep 从小到大收进「⋯」→
+// 轮到进行中的项（keepBusy 起）之前，发送钮先缩成「发送」；进行中的项也收起后腾出了位置，目标名再放回来。
+// 发送钮与下拉始终完整留在窗内。
+func dockFit(room float32, ws []float32, keep []int, send [4]float32) (hide []bool, mode int) {
+	hide = make([]bool, len(ws))
+	fits := func(mode int) bool {
+		total, n, more := send[mode]+ddockGap, 1, false
+		for i, w := range ws {
+			if hide[i] {
+				more = true
+				continue
+			}
+			total, n = total+w, n+1
+		}
+		if more {
+			total, n = total+ddockMoreW, n+1
+		}
+		return total+float32(n-1)*ddockGap <= room
+	}
+	for mode = sendHint; mode <= sendFloor; mode++ {
+		if fits(mode) {
+			return hide, mode
+		}
+	}
+	mode = sendFloor
+	order := make([]int, len(ws))
+	for i := range order {
+		order[i] = i
+	}
+	slices.SortStableFunc(order, func(x, y int) int { return keep[x] - keep[y] })
+	for _, i := range order {
+		if keep[i] >= keepBusy && mode != sendShort {
+			if mode = sendShort; fits(mode) {
+				return hide, mode
+			}
+		}
+		hide[i] = true
+		if fits(sendFloor) {
+			return hide, sendFloor
+		}
+		if fits(mode) {
+			return hide, mode
+		}
+	}
+	return hide, sendShort
+}
+
 func dockButton(c *ui.Context, k tokens, icon, label string, active bool) ui.Element {
-	// 不收缩、不折行（同 Tauri whitespace-nowrap）：坞放不下时只截断发送钮里的目标名（选词模式多了词/段切换，曾把「选词」挤成竖排）
+	// 不收缩、不折行（同 Tauri whitespace-nowrap）：一排放不下时由 dockFit 决定谁让位（选词模式多了词/段切换，曾把「选词」挤成竖排）
 	b := ui.Row(c).Height(29).Padding(6, 12).Gap(4).Radius(rr(10)).AlignItems(ui.Center).Shrink(0).Key("dock-" + label)
 	col := k.muted
 	if active {
@@ -1160,20 +1443,36 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 		return
 	}
 	hasText := strings.TrimSpace(n.Text) != ""
+	var items []dockItem // 次操作，按坞上从左到右的顺序
+	add := func(it dockItem) {
+		it.w += dockButtonW(c, it.icon, it.label)
+		items = append(items, it)
+	}
 	if n.Kind != "image" {
-		if hasText && tipOf(c, dockButton(c, k, "", tr("选词"), d.pick), tr("选词模式：点选词/段，可发送或复制选中片段（W）")).Clicked() {
-			d.pick, d.pickAnchor, d.pickEnd = !d.pick, -1, -1
-		}
-		if d.pick {
-			g := "word"
-			if d.pickPara {
-				g = "para"
-			}
-			ui.Row(c).Shrink(0).AlignItems(ui.Center).Children(func() {
-				if v, ok := miniSegmented(c, k, g, [][2]string{{"word", "词"}, {"para", "段"}}); ok {
-					d.pickPara, d.pickAnchor, d.pickEnd = v == "para", -1, -1
+		if hasText {
+			pick := dockItem{label: tr("选词"), tip: tr("选词模式：点选词/段，可发送或复制选中片段（W）"), active: d.pick, keep: keepPick,
+				click: func() { d.pick, d.pickAnchor, d.pickEnd = !d.pick, -1, -1 },
+				mark:  func(mi *ui.MenuItem) { mi.Checked(d.pick).Shortcut(0, ui.KeyW) }}
+			if d.pick { // 选词开着：按钮连同「词 / 段」留在坞上，最后才收
+				opts := [][2]string{{"word", "词"}, {"para", "段"}}
+				segW := float32(4)
+				for _, o := range opts {
+					segW += 12 + textW(c, tr(o[1]), 10, 500)
 				}
-			})
+				pick.keep, pick.w = keepPickOn, ddockGap+segW
+				pick.extra = func() {
+					g := "word"
+					if d.pickPara {
+						g = "para"
+					}
+					ui.Row(c).Width(segW).Shrink(0).AlignItems(ui.Center).Children(func() {
+						if v, ok := miniSegmented(c, k, g, opts); ok {
+							d.pickPara, d.pickAnchor, d.pickEnd = v == "para", -1, -1
+						}
+					})
+				}
+			}
+			add(pick)
 		}
 		// 同 Tauri：「原文 / 渲染」只给像 Markdown 的正文（非图文混排、非代码 / 链接、不在选词）；代码卡的着色 / 原文照旧可切
 		if (looksLikeMarkdown(n.Text) && !store.HasMixedContent(n.Blocks) && !isCode(n) && n.Kind != "link" && !d.pick) || isCode(n) || d.raw {
@@ -1181,53 +1480,19 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 			if d.raw {
 				rawLabel = tr("渲染")
 			}
-			if dockButton(c, k, "", rawLabel, false).Clicked() {
-				d.raw = !d.raw
-			}
+			add(dockItem{label: rawLabel, keep: keepRaw, click: func() { d.raw = !d.raw }})
 		}
-		if u := noteURL(n); u != "" && dockButton(c, k, "", tr("打开链接"), false).Clicked() {
-			_ = exec.Command("/usr/bin/open", u).Start()
+		if u := noteURL(n); u != "" {
+			add(dockItem{label: tr("打开链接"), keep: keepLink, click: func() { _ = exec.Command("/usr/bin/open", u).Start() }})
 		}
 		if a.aiBusy == n.ID && a.aiCancel != nil { // AI 改写进行中：可取消（同 Tauri 结果核对的「取消」）
-			if dockButton(c, k, "x", tr("取消 AI 请求"), false).Clicked() {
-				a.cancelAI()
-			}
+			add(dockItem{icon: "x", label: tr("取消 AI 请求"), keep: keepBusy, click: a.cancelAI})
 		}
 		if hasText { // 没有文字时不给「处理」（同 Tauri textOpsAvailable）
-			proc := dockButton(c, k, "wand-sparkles", tr("处理"), false)
-			proc.PopoverMenuButton(func(m *ui.Menu) {
-				for _, op := range textOps { // 本地文本处理（同 Tauri TEXT_OPS）：作用于全文，可撤销
-					if m.Item(tr(op.label)).Chosen() {
-						prev := n                            // 撤销整卡还原
-						if store.HasMixedContent(n.Blocks) { // 图文卡逐文字块处理，图片位置不变（同编辑态）
-							bs, err := mapTextBlocks(n.Blocks, op.apply)
-							if err != nil {
-								a.showHUD("warn", tr("处理失败：")+err.Error())
-								continue
-							}
-							_, _ = a.store.SetBlocks(n.ID, bs)
-							a.showHUDUndo("ok", tr("已处理 · ")+tr(op.label), func() { a.store.RestoreContent(prev) })
-							continue
-						}
-						out, err := op.apply(n.Text)
-						if err != nil {
-							a.showHUD("warn", tr("处理失败：")+err.Error())
-							continue
-						}
-						_ = a.store.Update(n.ID, out)
-						a.showHUDUndo("ok", tr("已处理 · ")+tr(op.label), func() { a.store.RestoreContent(prev) })
-					}
-				}
-				m.Separator()
-				for _, act := range a.allAIActions() {
-					if m.Item(tr(act.label)).Chosen() {
-						a.runAI(n, act)
-					}
-				}
-			})
+			add(dockItem{icon: "wand-sparkles", label: tr("处理"), keep: keepProc, menu: func(m *ui.Menu) { a.detailTextOps(m, n) }})
 		}
 	}
-	if dockButton(c, k, "", tr("复制"), false).Clicked() {
+	add(dockItem{label: tr("复制"), keep: keepCopy, click: func() {
 		txt := n.Text
 		p := a.pickedText(n.Text)
 		if d.pick && p != "" {
@@ -1239,28 +1504,83 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 			a.copyPrivate(txt)
 			a.showHUD("ok", tr("已复制"))
 		}
+	}})
+	if n.Kind != "image" {
+		editTip := tr("编辑")
+		if store.HasMixedContent(n.Blocks) {
+			editTip = tr("编辑图文")
+		}
+		add(dockItem{label: tr("编辑"), tip: editTip, keep: keepEdit, click: func() { a.enterDetailEdit(n) }})
 	}
-	editTip := tr("编辑")
-	if store.HasMixedContent(n.Blocks) {
-		editTip = tr("编辑图文")
+
+	// 发送钮上的字：有目标时是「发送到 目标」，实在放不下才只留「发送」（目标名在悬停提示里）
+	label, short := tr("发送"), ""
+	if a.target.PID != 0 {
+		label, short = tr("发送到 ")+a.target.Name, tr("发送")
 	}
-	if n.Kind != "image" && tipOf(c, dockButton(c, k, "", tr("编辑"), false), editTip).Clicked() {
-		a.enterDetailEdit(n)
+	if _, _, sel := a.detailSelection(n.Text); strings.TrimSpace(sel) != "" && n.Kind != "image" {
+		label, short = tr("发送整卡"), "" // 同 Tauri：选中工具条的「发送选中」露面时，页脚改口「发送整卡」以示区别
 	}
+	// 一排放不下时谁让位（dockFit）。字宽按较粗的字重量：主题的推钮用 600，量宽了只是早一点让位，不会溢出
+	sendW := func(s string) float32 { return max(textW(c, s, 13, 500), textW(c, s, 13, 600)) }
+	full := sendW(label)
+	floor, least := full, full
+	if short != "" {
+		floor, least = min(full, sendW(tr("发送到 "))+ddockNameFloor), sendW(short)
+	}
+	ws, keep := make([]float32, len(items)), make([]int, len(items))
+	for i, it := range items {
+		ws[i], keep[i] = it.w, it.keep
+	}
+	ww, _ := c.Size()
+	hide, mode := dockFit(ww-2*ddockPadX, ws, keep,
+		[4]float32{ddockSendFixed + full + 6 + textW(c, "⌘⏎", 9, 500), ddockSendFixed + full, ddockSendFixed + floor, ddockSendFixed + least})
+
+	var more []dockItem
+	for i, it := range items {
+		if hide[i] {
+			more = append(more, it)
+			continue
+		}
+		b := dockButton(c, k, it.icon, it.label, it.active)
+		if it.tip != "" {
+			tipOf(c, b, it.tip)
+		}
+		if it.menu != nil {
+			b.PopoverMenuButton(it.menu)
+		} else if b.Clicked() {
+			it.click()
+		}
+		if it.extra != nil {
+			it.extra()
+		}
+	}
+	if len(more) > 0 { // 放不下的次操作：按坞上的顺序列在「⋯」里
+		ghostIconButton(c, k, "dock-more", "ellipsis", tr("更多操作"), ddockMoreW, 14, false, true).Shrink(0).Menu(func(m *ui.Menu) {
+			a.holdDetailChrome() // 菜单常向窗外展开：选完之前别让坞收起（同发送钮的下拉）
+			for _, it := range more {
+				if it.menu != nil {
+					m.Submenu(it.label, it.menu)
+					continue
+				}
+				mi := m.Item(it.label)
+				if it.mark != nil {
+					it.mark(mi)
+				}
+				if mi.Chosen() {
+					it.click()
+				}
+			}
+		})
+	}
+
 	// 分体发送钮：左「发送到 目标 ⌘⏎」，右下拉
 	dark := k.dark
 	fill, fg, border := gray(1, 1), gray(0.145, 1), gray(0, 0.1)
 	if dark {
 		fill, fg, border = gray(0.92, 1), gray(0.205, 1), gray(1, 0.08)
 	}
-	ui.Row(c).Margin(0, 0, 0, 4).Children(func() {
-		label := tr("发送")
-		if a.target.PID != 0 {
-			label = tr("发送到 ") + a.target.Name
-		}
-		if _, _, sel := a.detailSelection(n.Text); strings.TrimSpace(sel) != "" && n.Kind != "image" {
-			label = tr("发送整卡") // 同 Tauri：选中工具条的「发送选中」露面时，页脚改口「发送整卡」以示区别
-		}
+	ui.Row(c).Margin(0, 0, 0, ddockGap).Children(func() {
 		left := ui.Row(c).Height(32).Padding(0, 12, 0, 20).Gap(6).Radius(16, 0, 0, 16).Background(fill).Border(1, border).AlignItems(ui.Center)
 		weight := 500
 		pfg, pw, pushed := k.th.PushButton(left)
@@ -1273,11 +1593,23 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 		default:
 			left.Shadow(0, 1, 2, 0, gray(0, 0.12))
 		}
+		if mode >= sendFloor { // 目标名可能被截 / 没显示：悬停给全称与键位
+			tipOf(c, left, label+" ⌘⏎")
+		}
 		left.Children(func() {
 			k.th.DefaultRing(c)
 			licon(c, "send", 12, fg)
-			text(c, label, 13, 18, weight, fg).SingleLine()
-			text(c, "⌘⏎", 9, 18, 500, fg).Opacity(0.7)
+			switch mode {
+			case sendFloor: // 目标名让位，但不低于下限
+				text(c, label, 13, 18, weight, fg).SingleLine().MinWidth(min(textW(c, label, 13, weight), textW(c, tr("发送到 "), 13, weight)+ddockNameFloor))
+			case sendShort:
+				text(c, cmpOr(short, label), 13, 18, weight, fg).SingleLine().Shrink(0)
+			default: // 放得下：不参与收缩（差零点几个点就会出省略号）
+				text(c, label, 13, 18, weight, fg).SingleLine().Shrink(0)
+			}
+			if mode == sendHint {
+				text(c, "⌘⏎", 9, 18, 500, fg).Opacity(0.7)
+			}
 		})
 		sendMenu := func(m *ui.Menu) {
 			a.holdDetailChrome()
@@ -1332,6 +1664,39 @@ func (a *app) detailDock(c *ui.Context, k tokens, s settingsTokens, n store.Note
 		}
 		right.Menu(sendMenu)
 	})
+}
+
+// detailTextOps：「处理」的菜单项——本地文本处理（同 Tauri TEXT_OPS，作用于全文，可撤销）+ AI 动作。
+// 坞上是窗内弹层；按钮收进「⋯」后是它的子菜单。
+func (a *app) detailTextOps(m *ui.Menu, n store.Note) {
+	for _, op := range textOps {
+		if m.Item(tr(op.label)).Chosen() {
+			prev := n                            // 撤销整卡还原
+			if store.HasMixedContent(n.Blocks) { // 图文卡逐文字块处理，图片位置不变（同编辑态）
+				bs, err := mapTextBlocks(n.Blocks, op.apply)
+				if err != nil {
+					a.showHUD("warn", tr("处理失败：")+err.Error())
+					continue
+				}
+				_, _ = a.store.SetBlocks(n.ID, bs)
+				a.showHUDUndo("ok", tr("已处理 · ")+tr(op.label), func() { a.store.RestoreContent(prev) })
+				continue
+			}
+			out, err := op.apply(n.Text)
+			if err != nil {
+				a.showHUD("warn", tr("处理失败：")+err.Error())
+				continue
+			}
+			_ = a.store.Update(n.ID, out)
+			a.showHUDUndo("ok", tr("已处理 · ")+tr(op.label), func() { a.store.RestoreContent(prev) })
+		}
+	}
+	m.Separator()
+	for _, act := range a.allAIActions() {
+		if m.Item(tr(act.label)).Chosen() {
+			a.runAI(n, act)
+		}
+	}
 }
 
 var runningTargets = macos.RegularApps // 测试替换

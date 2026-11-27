@@ -104,3 +104,22 @@ func TestDeliverVerifiesPasteAndLocksIdentity(t *testing.T) {
 	}
 	v.started = old
 }
+
+// noCaretSys：应用暴露 AX，但此刻焦点不在输入框（读不到 AXValue）。
+type noCaretSys struct{ *fake }
+
+func (noCaretSys) FocusedValue() (string, bool) { return "", false }
+
+// 以前读得到输入框的应用这次读不到 = 没有光标：照常粘贴，报 nocaret；没读到过的应用（微信、终端）仍是 unknown。
+func TestDeliverReportsNoCaret(t *testing.T) {
+	v := noCaretSys{&fake{items: original(), activateOK: true, front: macos.FrontApp{PID: 42}}}
+	c, err := DeliverWith(v, macos.FrontApp{PID: 42}, Payload{Text: "x"}, Options{ExpectCaret: true})
+	WaitIdle()
+	if err != nil || c != CheckNoCaret || len(v.fake.pasted) == 0 {
+		t.Fatalf("应粘贴并报 nocaret：%v %v 粘贴 %d 次", c, err, len(v.fake.pasted))
+	}
+	if c, _ := DeliverWith(v, macos.FrontApp{PID: 42}, Payload{Text: "x"}, Options{}); c != CheckUnknown {
+		t.Fatalf("没读到过输入框的应用应为 unknown，实为 %v", c)
+	}
+	WaitIdle()
+}

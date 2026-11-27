@@ -111,20 +111,160 @@ func TestShotDrawUndoAndEditShape(t *testing.T) {
 	if b := shot.Box(d.ed.hist.Shapes[0]); b.X != 40 {
 		t.Fatalf("撤销移动 %+v", b)
 	}
-	// 选区锁定：有标注时拖不动选区
+	// 选着标注工具且已有标注时，仍可直接拖选框边角调整截图区域，且标注锚定底图不错位
+	dragOn(tt, 220, 95, 250, 95)
+	if d.ed.sel.W != 230 || d.ed.tool != shot.RectK {
+		t.Fatalf("选着工具拖右边应调宽且保持工具：sel=%+v tool=%q", d.ed.sel, d.ed.tool)
+	}
+	if b := shot.Box(d.ed.hist.Shapes[0]); b.X != 40 || b.Y != 80 {
+		t.Fatalf("调整选区后标注应锚定底图原坐标 %+v", b)
+	}
 	tt.Key(0, ui.KeyEscape) // 撤销后选中项已失效：Esc 直接退出工具
 	tt.Frame()
 	if d.ed.tool != "" || d.ed.sel == nil {
 		t.Fatalf("Esc 逐级：tool=%q sel=%v", d.ed.tool, d.ed.sel)
 	}
+	// 退出工具后即使已有标注，仍可平移选区与方向键微调；点击选区外部不误清标注
 	dragOn(tt, 150, 150, 160, 160)
+	if d.ed.sel.X != 30 || d.ed.sel.Y != 30 {
+		t.Fatalf("退出工具后应可平移选区 %+v", d.ed.sel)
+	}
+	tt.Key(ui.Shift, ui.KeyLeft)
+	tt.Frame()
 	if d.ed.sel.X != 20 {
-		t.Fatal("有标注时选区应锁定")
+		t.Fatalf("有标注时方向键微调应生效 %+v", d.ed.sel)
+	}
+	dragOn(tt, 350, 260, 390, 290) // 选区外拖动：保护已有标注，不重拉新选区
+	if d.ed.sel.X != 20 || d.ed.sel.W != 230 || len(d.ed.hist.Shapes) != 1 {
+		t.Fatalf("选区外误拖不应覆盖已有选区与标注 sel=%+v shapes=%d", d.ed.sel, len(d.ed.hist.Shapes))
 	}
 	tt.Key(0, ui.KeyEscape)
 	tt.Frame()
 	if d.ed.sel != nil || len(d.ed.hist.Shapes) != 0 {
 		t.Fatal("Esc 清掉选区与标注")
+	}
+}
+
+// 使用箭头等标注工具后，不退出工具也能直接拖边角扩/缩选区，已画箭头随底图对齐且出图正确裁切。
+func TestShotResizeAfterArrowKeepsAnchor(t *testing.T) {
+	_, d, tt := shotTest(t)
+	shotSelect(t, tt, d) // (20, 20, 200, 150)
+	if err := tt.Click("箭头"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	dragOn(tt, 60, 80, 140, 140)
+	if len(d.ed.hist.Shapes) != 1 || d.ed.hist.Shapes[0].Kind != shot.Arrow {
+		t.Fatalf("画箭头 %+v", d.ed.hist.Shapes)
+	}
+	// 光标悬停右缘应给左右缩放光标，直接拖动调整选区宽与底边
+	tt.Move(220, 95)
+	tt.Frame()
+	if cur := d.ed.tool; cur != shot.Arrow {
+		t.Fatalf("仍保持箭头工具 %q", cur)
+	}
+	dragOn(tt, 220, 170, 260, 200) // 拖右下角扩选区
+	if d.ed.sel.W != 240 || d.ed.sel.H != 180 {
+		t.Fatalf("箭头工具下应能拖角缩放选区 %+v", d.ed.sel)
+	}
+	s := d.ed.hist.Shapes[0]
+	if s.X1 != 60 || s.Y1 != 80 || s.X2 != 140 || s.Y2 != 140 {
+		t.Fatalf("箭头坐标应保持锚定底图 %+v", s)
+	}
+	// 出图按新选区尺寸裁切
+	out := renderShot(d, *d.ed.sel, d.ed.allShapes(), shotFrame{})
+	if out.Rect.Dx() != 480 || out.Rect.Dy() != 360 {
+		t.Fatalf("出图尺寸应为新选区 480×360，实为 %v", out.Rect)
+	}
+}
+
+// 缩小选区裁掉第一条批注后：编辑态标签隐藏被裁项，导出文案只保留仍在选区内的批注并重新从 ① 编号。
+func TestShotCalloutPromptExcludesCroppedOut(t *testing.T) {
+	a, d, tt := shotTest(t)
+	shotSelect(t, tt, d) // (20, 20, 200, 150)
+	_ = tt.Click("批注")
+	tt.Frame()
+	dragOn(tt, 30, 80, 70, 110)
+	tt.Type("左边被裁掉")
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	dragOn(tt, 140, 80, 190, 120)
+	tt.Type("右边保留")
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	if !tt.HasText("左边被裁掉") || !tt.HasText("右边保留") {
+		t.Fatalf("两处批注说明都应可见 %v", tt.Texts())
+	}
+	// 把选区左边向右拖到 110，完全裁掉第一条批注 (30..70)
+	dragOn(tt, 20, 95, 110, 95)
+	if tt.HasText("左边被裁掉") || !tt.HasText("右边保留") {
+		t.Fatalf("裁出选区的批注浮标应隐藏 %v", tt.Texts())
+	}
+	tt.Key(0, ui.KeyEscape) // 退出工具
+	tt.Frame()
+	tt.Key(0, ui.KeyEnter) // 确认出图
+	tt.Frame()
+	clips := a.store.Section(store.SectionClipboard)
+	want := "图上的标注（序号对应图中区域）：\n① 右边保留"
+	if len(clips) != 1 || clips[0].Text != want {
+		t.Fatalf("导出批注说明应只含选区内项且从 ① 编号，实为 %+v", clips)
+	}
+}
+
+// 选区调整支持 ⌘Z / ⇧⌘Z 与图形标注交替撤销重做，且拖动边角靠近窗口边界时自动吸附。
+func TestShotSelectionUndoRedoAndSnap(t *testing.T) {
+	_, d, tt := shotTest(t)
+	// 窗口在 (50, 40, 200, 120) → 右边 x=250，底边 y=160
+	shotSelect(t, tt, d) // (20, 20, 200, 150) → 右边 220，底边 170
+	_ = tt.Click("箭头")
+	tt.Frame()
+	dragOn(tt, 60, 80, 140, 130) // 步骤 1：画箭头
+	// 步骤 2：拖右边到 246（距窗口右缘 250 仅 4pt <= 6pt），应自动吸附到 250（宽 230）
+	dragOn(tt, 220, 95, 246, 95)
+	if d.ed.sel.W != 230 {
+		t.Fatalf("拖右边靠近窗口缘 250 应吸附，实为 %+v", d.ed.sel)
+	}
+	// 步骤 3：退出工具并按 ⇧→ 微调
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	tt.Key(ui.Shift, ui.KeyRight)
+	tt.Frame()
+	if d.ed.sel.X != 30 {
+		t.Fatalf("微调后 X 应为 30，实为 %+v", d.ed.sel)
+	}
+	// ⌘Z #1：撤回微调 → X=20, W=230
+	tt.Key(ui.Cmd, ui.KeyZ)
+	tt.Frame()
+	if *d.ed.sel != (shot.Rect{X: 20, Y: 20, W: 230, H: 150}) || len(d.ed.hist.Shapes) != 1 {
+		t.Fatalf("撤销 #1 应回退微调：sel=%+v shapes=%d", d.ed.sel, len(d.ed.hist.Shapes))
+	}
+	// ⌘Z #2：撤回缩放 → W=200，箭头仍在
+	tt.Key(ui.Cmd, ui.KeyZ)
+	tt.Frame()
+	if *d.ed.sel != (shot.Rect{X: 20, Y: 20, W: 200, H: 150}) || len(d.ed.hist.Shapes) != 1 {
+		t.Fatalf("撤销 #2 应回退缩放：sel=%+v shapes=%d", d.ed.sel, len(d.ed.hist.Shapes))
+	}
+	// ⌘Z #3：撤回箭头 → 图形清空
+	tt.Key(ui.Cmd, ui.KeyZ)
+	tt.Frame()
+	if len(d.ed.hist.Shapes) != 0 {
+		t.Fatalf("撤销 #3 应撤回箭头 %+v", d.ed.hist.Shapes)
+	}
+	// ⇧⌘Z 三次依次恢复：箭头 → 缩放 → 微调
+	tt.Key(ui.Cmd|ui.Shift, ui.KeyZ)
+	tt.Frame()
+	if len(d.ed.hist.Shapes) != 1 {
+		t.Fatal("重做 #1 应恢复箭头")
+	}
+	tt.Key(ui.Cmd|ui.Shift, ui.KeyZ)
+	tt.Frame()
+	if d.ed.sel.W != 230 {
+		t.Fatalf("重做 #2 应恢复缩放 %+v", d.ed.sel)
+	}
+	tt.Key(ui.Cmd|ui.Shift, ui.KeyZ)
+	tt.Frame()
+	if d.ed.sel.X != 30 {
+		t.Fatalf("重做 #3 应恢复微调 %+v", d.ed.sel)
 	}
 }
 

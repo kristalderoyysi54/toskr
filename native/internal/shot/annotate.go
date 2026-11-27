@@ -162,6 +162,17 @@ func CalloutNumbers(shapes []*Shape) map[*Shape]int {
 	return out
 }
 
+// CalloutNumbersIn：只为与 clip 有重叠的批注从 1 起顺序编号，确保缩小选区裁掉的批注不占号。
+func CalloutNumbersIn(shapes []*Shape, clip Rect) map[*Shape]int {
+	out := map[*Shape]int{}
+	for _, s := range shapes {
+		if s.Kind == Callout && Intersects(Box(s), clip) {
+			out[s] = len(out) + 1
+		}
+	}
+	return out
+}
+
 // CalloutPrompt：「① …」逐行；没填说明的批注不列出，都没填返回空串。
 func CalloutPrompt(shapes []*Shape, header string) string {
 	var lines []string
@@ -179,6 +190,17 @@ func CalloutPrompt(shapes []*Shape, header string) string {
 		return ""
 	}
 	return header + "\n" + strings.Join(lines, "\n")
+}
+
+// CalloutPromptIn：只为与 clip 有重叠的批注顺序编号并输出说明，与出图里的编号一一对应。
+func CalloutPromptIn(shapes []*Shape, clip Rect, header string) string {
+	var visible []*Shape
+	for _, s := range shapes {
+		if s.Kind == Callout && Intersects(Box(s), clip) {
+			visible = append(visible, s)
+		}
+	}
+	return CalloutPrompt(visible, header)
 }
 
 // CircledNumber：①–⑳ 用带圈数字，更多用 (21)。

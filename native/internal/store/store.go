@@ -166,6 +166,7 @@ type Settings struct {
 	SoundOff        bool   `json:"soundOff,omitempty"`          // 捕获音效（默认开）
 	DetailFontSize  int    `json:"detailFontSize,omitempty"`    // 详情窗字号 10–24，0 = 12
 	MessageFontSize int    `json:"messageFontSize,omitempty"`   // IM 消息放大阅读的字号 10–24，0 = 14（与普通详情窗分开记）
+	DetailTipsOff   bool   `json:"detailTipsOff,omitempty"`     // 详情窗能力卡（内容较短时正文下方的几张用法提示，默认开）
 	CompanionOff    bool   `json:"companionOff,omitempty"`
 	FreeMove        bool   `json:"freeMove,omitempty"`
 	TrayNextDue     bool   `json:"trayNextDue,omitempty"` // 菜单栏图标旁显示今天下一个到期时间（默认关）
@@ -271,6 +272,11 @@ func evaluationDefaults() Settings {
 	}
 }
 
+// SchemaVersion：数据文件的格式版本。两种身份（迭代期 / 正式版）可能读写同一份数据，而反序列化会丢掉不认识的字段——
+// 旧版本一保存，新版本写的字段就没了。所以读到比自己新的版本一律只读（ErrNewer）。
+// 给持久化的结构体增删字段时把它 +1（schema_test.go 的字段指纹会在忘了改时失败）。
+const SchemaVersion = 3
+
 type snapshot struct {
 	Version      int            `json:"version"`
 	Notes        []Note         `json:"notes"`
@@ -315,6 +321,7 @@ type Store struct {
 	OnError      func(error) // 后台落盘失败回调
 	disk         fileStamp   // 上次读到 / 写出的数据文件状态（外部修改检测）
 	conflict     bool        // 数据文件被外部修改：停止自动覆盖，进入只读
+	newer        bool        // 数据文件的格式版本比本程序新：只读（ErrNewer）
 	OnConflict   func()      // 检测到外部修改时回调（后台线程）
 }
 
@@ -338,6 +345,8 @@ var (
 	ErrConflict = errors.New("数据文件被外部修改，已停止自动覆盖")
 	// ErrReadOnly：冲突待处理期间拒绝修改。
 	ErrReadOnly = errors.New("数据只读：请先处理外部修改冲突")
+	// ErrNewer：数据文件由更新版本的应用写入，本版本不认识其中的新字段，写回去会把它们抹掉，所以只读。
+	ErrNewer = errors.New("数据只读：这份数据由更新版本的 Toskr 写入，请先更新应用")
 )
 
 // Open 读取 dir 下的数据文件；文件不存在视为全新安装。密钥错误显式报错，不返回空集合。
@@ -369,8 +378,12 @@ func OpenDir(dir string, key []byte) (*Store, error) {
 	s.deliveries, s.outcomes = snap.Deliveries, snap.Outcomes
 	s.messages, s.messagesGone, s.sendCounted = snap.Messages, snap.MessagesGone, snap.SendCounted
 	s.disk = stampOf(filepath.Join(dir, DataFile))
+	s.newer = snap.Version > SchemaVersion
 	return s, nil
 }
+
+// Newer 报告数据文件是否由更新版本写入（只读，更新应用后解除）。
+func (s *Store) Newer() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.newer }
 
 // Conflict 报告是否处于「外部修改冲突」只读状态。
 func (s *Store) Conflict() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.conflict }
@@ -404,6 +417,7 @@ func (s *Store) ReloadFromDisk() error {
 	s.deliveries, s.outcomes = snap.Deliveries, snap.Outcomes
 	s.messages, s.messagesGone, s.sendCounted = snap.Messages, snap.MessagesGone, snap.SendCounted
 	s.disk, s.conflict, s.dirty = stampOf(path), false, false
+	s.newer = snap.Version > SchemaVersion
 	s.mu.Unlock()
 	s.ensureDefaults()
 	s.notify()
@@ -475,10 +489,10 @@ func (s *Store) Add(n Note) (Note, bool, error) {
 		}
 	}
 	s.mu.Lock()
-	if s.conflict {
+	if err := s.blockedLocked(); err != nil {
 		s.mu.Unlock()
-		s.readOnlyHit()
-		return Note{}, false, ErrReadOnly
+		s.readOnlyHit(err)
+		return Note{}, false, err
 	}
 	dup := false
 	if i := slices.IndexFunc(s.notes, func(o Note) bool {
@@ -503,18 +517,29 @@ func (s *Store) Add(n Note) (Note, bool, error) {
 }
 
 // readOnlyHit：只读期间有修改被拒，交给 OnError 提示（调用方多数忽略返回值，否则用户只会看到「点了没反应」）。
-func (s *Store) readOnlyHit() {
+func (s *Store) readOnlyHit(err error) {
 	if s.OnError != nil {
-		s.OnError(ErrReadOnly)
+		s.OnError(err)
 	}
+}
+
+// blockedLocked：此刻不能修改的原因（没有则 nil）。
+func (s *Store) blockedLocked() error {
+	switch {
+	case s.newer:
+		return ErrNewer
+	case s.conflict:
+		return ErrReadOnly
+	}
+	return nil
 }
 
 func (s *Store) mutate(fn func() bool) error {
 	s.mu.Lock()
-	if s.conflict {
+	if err := s.blockedLocked(); err != nil {
 		s.mu.Unlock()
-		s.readOnlyHit()
-		return ErrReadOnly
+		s.readOnlyHit(err)
+		return err
 	}
 	if !fn() {
 		s.mu.Unlock()
@@ -549,6 +574,10 @@ func (s *Store) Flush() error {
 	if !s.dirty {
 		s.mu.Unlock()
 		return nil
+	}
+	if s.newer { // 不认识的新字段写回去就丢了
+		s.mu.Unlock()
+		return ErrNewer
 	}
 	path := filepath.Join(s.dir, DataFile)
 	if s.conflict || stampOf(path) != s.disk { // 别人改过磁盘文件：不覆盖（同 Tauri CAS 拒绝）
@@ -890,7 +919,7 @@ func Fingerprint(notes []Note) string {
 }
 
 func (s *Store) snapshotLocked() snapshot {
-	return snapshot{Version: 2, Notes: s.notes, Settings: s.settings, Sections: s.sections,
+	return snapshot{Version: SchemaVersion, Notes: s.notes, Settings: s.settings, Sections: s.sections,
 		Tasks: s.tasks, TaskSections: s.taskSections, Bills: s.bills, Secrets: s.secrets, Deliveries: s.deliveries, Outcomes: s.outcomes,
 		Messages: s.messages, MessagesGone: s.messagesGone, SendCounted: s.sendCounted}
 }

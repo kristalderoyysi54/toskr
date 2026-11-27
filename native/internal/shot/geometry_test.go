@@ -103,3 +103,31 @@ func TestPlaceNear(t *testing.T) {
 		t.Fatal(p)
 	}
 }
+
+func TestSnapResizeAndMove(t *testing.T) {
+	wins := []Rect{{100, 80, 300, 200}} // 边：x=100,400；y=80,280
+	// 拖右边靠近 x=400（差 4pt <= 6pt）：只吸附右边，左边不动
+	r, g := SnapResize(Rect{120, 100, 276, 150}, "e", wins, W, H, SnapTol)
+	eqRect(t, r, Rect{120, 100, 280, 150})
+	if len(g.X) != 1 || g.X[0] != 400 || len(g.Y) != 0 {
+		t.Fatalf("参考线 %+v", g)
+	}
+	// 拖右下角同时贴近 x=400 与 y=280
+	r, g = SnapResize(Rect{120, 100, 283, 175}, "se", wins, W, H, SnapTol)
+	eqRect(t, r, Rect{120, 100, 280, 180})
+	if len(g.X) != 1 || g.X[0] != 400 || len(g.Y) != 1 || g.Y[0] != 280 {
+		t.Fatalf("双轴参考线 %+v", g)
+	}
+	// 超出容差（7pt）不吸附
+	r, g = SnapResize(Rect{120, 100, 273, 150}, "e", wins, W, H, SnapTol)
+	eqRect(t, r, Rect{120, 100, 273, 150})
+	if len(g.X) != 0 || len(g.Y) != 0 {
+		t.Fatalf("超容差不应吸附 %+v", g)
+	}
+	// 平移吸附左边 x=100 与顶边 y=80，保持尺寸不变
+	r, g = SnapMove(Rect{104, 76, 150, 90}, wins, W, H, SnapTol)
+	eqRect(t, r, Rect{100, 80, 150, 90})
+	if len(g.X) != 1 || g.X[0] != 100 || len(g.Y) != 1 || g.Y[0] != 80 {
+		t.Fatalf("平移参考线 %+v", g)
+	}
+}

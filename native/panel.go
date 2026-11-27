@@ -320,11 +320,14 @@ func (a *app) panelMenu(c *ui.Context, k tokens) {
 		a.menuOpen, a.placementOpen = false, false
 		return
 	}
-	menu := ui.Column(c).Absolute().Top(40).Right(40).Width(224).Padding(4).Radius(rr(10)).Background(k.floatBtn.Alpha(0.95)).Border(1, k.floatBorder).
-		Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB).InsetShadow(0, 1, 0, 0, k.floatInset).
+	menu := ui.Column(c).Absolute().Top(40).Right(40).Width(224).Padding(4).Radius(rr(10)).
 		// SimpleMenu：fade + zoom 0.95 → 1（自上缘展开），160ms ease-standard；关闭反向。菜单项悬停底色即时
 		Key("panel-menu").TransformOrigin(0.5, 0).Transition(ui.ElementTransition{Duration: 160 * time.Millisecond, Ease: easeStandard,
 		Enter: &ui.Motion{Scale: 0.95}, Exit: &ui.Motion{Scale: 0.95}})
+	if !floatEdge(menu, k) {
+		menu.Background(k.floatBtn.Alpha(0.95)).Border(1, k.floatBorder).
+			Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB).InsetShadow(0, 1, 0, 0, k.floatInset)
+	}
 	k.th.PanelMenu(menu)
 	label := func(s string) { text(c, s, 10, 14, 500, k.muted).Padding(4, 8) }
 	sep := func() {

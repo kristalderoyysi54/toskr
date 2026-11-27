@@ -332,3 +332,87 @@ func (a *app) fileRuleRows(c *ui.Context, s settingsTokens, st store.Settings) [
 	}
 	return rows
 }
+
+// inboxOpenNotes：收件箱里还没完成的条目（回调里现取，不用帧首的列表）。
+func (a *app) inboxOpenNotes() []store.Note {
+	var out []store.Note
+	for _, n := range a.store.Section(store.SectionInbox) {
+		if !n.Done {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// inboxBulkMenu：收件箱的整批操作——全部归到某个分组 / 全部标为完成 / 全部删除，都可撤销。
+// 整批归类不记归类规则（一次全归不代表「这个来源以后都归这里」）。
+func (a *app) inboxBulkMenu(m *ui.Menu) {
+	n := len(a.inboxOpenNotes())
+	if targets := a.fileTargets(); len(targets) > 0 {
+		m.Submenu(fmt.Sprintf(tr("全部归到（%d 条）"), n), func(sm *ui.Menu) {
+			for _, sec := range targets {
+				if sm.Item(sectionName(sec)).Chosen() {
+					a.moveNotesTo(a.inboxOpenNotes(), sec.ID)
+				}
+			}
+		})
+	}
+	if m.Item(tr("全部标为完成")).Chosen() {
+		a.inboxDoneAll()
+	}
+	m.Separator()
+	if m.Item(fmt.Sprintf(tr("全部删除（%d 条）…"), n)).Chosen() {
+		a.inboxDeleteAll()
+	}
+}
+
+var inboxDeleteAsk = func(n int) bool { // 测试替换
+	return confirmAsk(confirmSpec{icon: "trash-2", danger: true, title: fmt.Sprintf(tr("删除收件箱里的 %d 条？"), n),
+		body: tr("已完成的条目不受影响。"), note: tr("删除后可在主面板的提示气泡中撤销一次。"), ok: tr("全部删除")})
+}
+
+// inboxDeleteAll：确认后删除收件箱里未完成的全部条目；气泡可整批撤销。
+func (a *app) inboxDeleteAll() {
+	n := len(a.inboxOpenNotes())
+	if n == 0 {
+		return
+	}
+	pfGo(func() {
+		if !inboxDeleteAsk(n) {
+			return
+		}
+		a.onMain(func() {
+			var removed []store.Note
+			for _, x := range a.inboxOpenNotes() {
+				if r, _, ok := a.store.Delete(x.ID); ok {
+					removed = append(removed, r)
+				}
+			}
+			a.reload()
+			a.showHUDUndo("ok", fmt.Sprintf(tr("已清空收件箱 · 删除 %d 条"), len(removed)), func() {
+				_ = a.store.RestoreMany(removed)
+				a.reload()
+			})
+		})
+	})
+}
+
+// inboxDoneAll：收件箱未完成的全部标为完成；撤销 = 这一批改回未完成。
+func (a *app) inboxDoneAll() {
+	var ids []string
+	for _, n := range a.inboxOpenNotes() {
+		if a.store.SetDone(n.ID, true) == nil {
+			ids = append(ids, n.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	a.reload()
+	a.showHUDUndo("ok", fmt.Sprintf(tr("收件箱 %d 条已标为完成"), len(ids)), func() {
+		for _, id := range ids {
+			_ = a.store.SetDone(id, false)
+		}
+		a.reload()
+	})
+}

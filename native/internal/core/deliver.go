@@ -77,6 +77,8 @@ type Options struct {
 	StepGap time.Duration
 	// Trace 写诊断日志（逐段粘贴、焦点就绪），nil 不记。
 	Trace func(format string, args ...any)
+	// ExpectCaret 目标应用以前发送时读到过焦点输入框：这次读不到就报 CheckNoCaret（照常粘贴，不中止）。
+	ExpectCaret bool
 }
 
 func (o Options) trace(format string, args ...any) {
@@ -98,6 +100,7 @@ const (
 	CheckVerified  Check = "verified"  // 焦点输入框内容已变化
 	CheckUnchanged Check = "unchanged" // 读得到输入框但内容没变：可能没粘进去
 	CheckUnknown   Check = "unknown"   // 目标不暴露 AXValue（终端、画布类），无法核验
+	CheckNoCaret   Check = "nocaret"   // 该应用以前读得到焦点输入框，这次读不到：多半没有光标，内容可能没粘进去
 )
 
 // identity 与 valueReader 是可选能力（真实系统实现，测试替身可不实现）。
@@ -206,6 +209,9 @@ func DeliverWith(sys System, target macos.FrontApp, p Payload, opt Options) (Che
 		opt.trace("发送: 第 %d/%d 段（%s）已粘贴", i+1, len(steps), kind)
 	}
 	check := CheckUnknown
+	if canVerify && !hasBefore && opt.ExpectCaret {
+		check = CheckNoCaret
+	}
 	if hasBefore {
 		sys.Sleep(verifyWait)
 		if after, ok := vr.FocusedValue(); ok {

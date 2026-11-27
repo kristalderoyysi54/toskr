@@ -262,9 +262,12 @@ func (a *app) secretCard(c *ui.Context, k tokens, st store.Settings, sec store.S
 				preview := strings.Join(strings.Fields(string(r[:min(72, len(r))])), " ") // 同 CSS 空白折叠：换行显示为空格
 				text(c, preview, 12, 19.5, 400, k.muted.Alpha(0.8)).Wrap().MaxLines(2).Blur(4)
 				ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Center().Children(func() {
-					ui.Row(c).Height(26).Padding(4, 10).Gap(6).Radius(13).Background(k.floatBtn.Alpha(0.95)).Border(1, k.floatBorder).
-						Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB).InsetShadow(0, 1, 0, 0, k.floatInset).
-						AlignItems(ui.Center).Children(func() {
+					pill := ui.Row(c).Height(26).Padding(4, 10).Gap(6).Radius(13).AlignItems(ui.Center)
+					if !floatEdge(pill, k) {
+						pill.Background(k.floatBtn.Alpha(0.95)).Border(1, k.floatBorder).
+							Shadow(0, 1, 2, 0, k.floatShadowA).Shadow(0, 6, 16, -4, k.floatShadowB).InsetShadow(0, 1, 0, 0, k.floatInset)
+					}
+					pill.Children(func() {
 						switch {
 						case a.secretOpening[sec.ID]: // animate-pulse：opacity 1 → 0.5 → 1，2s cubic-bezier(0.4,0,0.6,1)
 							busy := text(c, tr("解密中…"), 11, 16, 400, k.muted)

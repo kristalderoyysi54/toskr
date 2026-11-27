@@ -749,7 +749,7 @@ func (a *app) taskRow(c *ui.Context, k tokens, t store.Task, now time.Time) {
 		card.Border(2, stok(c).primary.Alpha(0.6))
 	}
 	hovered := card.Hovered()
-	elevated(card, k, hovered) // TaskRow：悬停 elevation-2，box-shadow 150ms
+	lifted(card, k, hovered) // TaskRow：悬停抬起，150ms
 	card.ContextMenu(func(m *ui.Menu) { a.taskMenu(c, m, t) })
 	if !open && !done { // 拖拽排序：放到另一行 = 插到它前面（可跨分组）；放到分组头 = 移到该组末尾。已完成不能拖（同 Tauri useSortable disabled）
 		card.Drag(taskDrag{id: t.ID})

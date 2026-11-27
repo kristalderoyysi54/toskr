@@ -49,7 +49,10 @@ func (a *app) shotStartLong(c *ui.Context, d *shotDisplay) {
 		return
 	}
 	sel, s := *e.sel, a.shot
-	lc := &longCapture{region: shot.Rect{X: d.X + sel.X, Y: d.Y + sel.Y, W: sel.W, H: sel.H},
+	// 选区对齐整数 pt，避免 SCStream sourceRect 出现小数缩放重采样导致每帧像素漂移
+	rx, ry := math.Round(d.X+sel.X), math.Round(d.Y+sel.Y)
+	rw, rh := math.Max(1, math.Round(sel.W)), math.Max(1, math.Round(sel.H))
+	lc := &longCapture{region: shot.Rect{X: rx, Y: ry, W: rw, H: rh},
 		display: shot.Rect{X: d.X, Y: d.Y, W: d.W, H: d.H}, front: s.front, frontID: s.frontID}
 	a.endShot(false)
 	a.longCap.Store(lc)
@@ -239,6 +242,7 @@ func (a *app) longPreviewView(c *ui.Context, lc *longCapture) {
 			ui.Image(c, lc.bm).Size(bw*s, bh*s).Radius(rr(6)).Border(1, gray(1, 0.7)).Shadow(0, 10, 15, -3, gray(0, 0.1)).Shadow(0, 4, 6, -4, gray(0, 0.1))
 		})
 		bar := ui.Column(c).Padding(6, 8).Gap(4).Radius(rr(8))
+		tip := ""
 		pal.float(bar).Children(func() {
 			ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
 				label := ""
@@ -246,11 +250,11 @@ func (a *app) longPreviewView(c *ui.Context, lc *longCapture) {
 					label = fmt.Sprintf("%d × %d", pw, ph)
 				}
 				text(c, label, 11, 16, 400, pal.muted).Font(fontMono).FontFeatures("tnum").Grow(1)
-				if longIconButton(c, pal, "x", tr("取消"), lc.done, nil) {
+				if longIconButton(c, pal, "x", tr("取消"), tr("放弃长截屏"), &tip, lc.done, nil) {
 					stopWith(shot.StopCancelled)
 				}
 				primary := pal.primary
-				if longIconButton(c, pal, "check", tr("完成"), lc.done, &primary) {
+				if longIconButton(c, pal, "check", tr("完成"), tr("完成长截屏"), &tip, lc.done, &primary) {
 					stopWith(shot.StopFinished)
 				}
 			})
@@ -258,13 +262,16 @@ func (a *app) longPreviewView(c *ui.Context, lc *longCapture) {
 			if stalled {
 				hint, col = tr("滚太快接不上，往回滚一点"), pal.k.amberText
 			}
+			if tip != "" { // 光标停在 ✕ / ✓ 上：这一行换成按钮说明（浮窗不激活应用，原生 tooltip 不出现）
+				hint, col = tip, pal.fg
+			}
 			text(c, hint, 10, 14, 400, col).Wrap()
 		})
 	})
 }
 
-// longIconButton：IconButton sm（24pt，图标 14）。
-func longIconButton(c *ui.Context, pal shotPalette, icon, label string, disabled bool, iconColor *ui.Color) bool {
+// longIconButton：IconButton sm（24pt，图标 14）。悬停时把说明写进 *hover，由调用方显示。
+func longIconButton(c *ui.Context, pal shotPalette, icon, label, tip string, hover *string, disabled bool, iconColor *ui.Color) bool {
 	b := ui.Box(c).Size(22, 22).Radius(rr(8)).Center().Label(label).Role(ui.RoleButton).Key("lb-" + icon)
 	fg := pal.muted
 	if disabled {
@@ -272,6 +279,7 @@ func longIconButton(c *ui.Context, pal shotPalette, icon, label string, disabled
 	} else if b.Hovered() {
 		b.Background(pal.hover)
 		fg = pal.fg
+		*hover = tip
 	}
 	if iconColor != nil {
 		fg = *iconColor

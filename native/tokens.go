@@ -69,6 +69,8 @@ type tokens struct {
 	floatBtn                               ui.Color // 卡片悬浮操作钮
 	floatBorder                            ui.Color
 	floatShadowA, floatShadowB, floatInset ui.Color
+	floatFill, floatLine, floatRim         ui.Color // 双线边（floatEdge）：灰填充、外暗线、整圈内亮线
+	floatCastA, floatCastB                 ui.Color // 双线边的贴身影 / 环境影
 	inputBorder                            ui.Color
 	insetShadow                            ui.Color
 	codeKeyword, codeString, codeNumber    ui.Color
@@ -110,6 +112,7 @@ var (
 		card:         ui.RGB(255, 255, 255),
 		cardHeadFrom: srgbf(0.558196, 0.585176, 0.639137), cardHeadTo: srgbf(0.447373, 0.476235, 0.533961), cardHeadText: ui.RGB(255, 255, 255),
 		floatBtn: gray(1, 1), floatBorder: gray(0.145, 0.1), floatShadowA: gray(0, 0.08), floatShadowB: gray(0, 0.12), floatInset: gray(1, 0.4),
+		floatFill: ui.RGB(245, 245, 246), floatLine: gray(0, 0.09), floatRim: gray(1, 0.85), floatCastA: gray(0, 0.05), floatCastB: gray(0, 0.11),
 		inputBorder: gray(0, 0.1), insetShadow: gray(0, 0.05),
 		codeKeyword: ui.RGB(166, 38, 164), codeString: ui.RGB(20, 133, 106), codeNumber: ui.RGB(183, 107, 1),
 	}
@@ -121,6 +124,7 @@ var (
 		card:         ui.RGB(39, 39, 42),
 		cardHeadFrom: srgbf(0.201324, 0.210126, 0.227696), cardHeadTo: srgbf(0.201324, 0.210126, 0.227696), cardHeadText: gray(0.985, 1),
 		floatBtn: gray(0.205, 1), floatBorder: gray(0.985, 0.1), floatShadowA: gray(0, 0.35), floatShadowB: gray(0, 0.45), floatInset: gray(1, 0.08),
+		floatFill: ui.RGB(45, 45, 48), floatLine: gray(0, 0.6), floatRim: gray(1, 0.1), floatCastA: gray(0, 0.3), floatCastB: gray(0, 0.42),
 		inputBorder: gray(1, 0.1), insetShadow: gray(0, 0.35),
 		codeKeyword: ui.RGB(210, 168, 255), codeString: ui.RGB(126, 231, 135), codeNumber: ui.RGB(255, 166, 87),
 	}

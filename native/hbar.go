@@ -391,7 +391,7 @@ func (a *app) stripNoteTile(c *ui.Context, k tokens, n store.Note, h float32, cl
 	k.th.Card(box, checked)
 	hovered := box.Hovered()
 	a.bandHover(n.ID, hovered)
-	elevated(box, k, hovered || checked || focused)
+	lifted(box, k, hovered || checked || focused)
 	box.ContextMenu(func(m *ui.Menu) {
 		if idx >= 0 {
 			a.selected = idx
@@ -506,7 +506,7 @@ func (a *app) taskTile(c *ui.Context, k tokens, t store.Task, h float32) {
 		card.Border(2, stok(c).primary.Alpha(0.6))
 	}
 	hovered := card.Hovered()
-	elevated(card, k, hovered)
+	lifted(card, k, hovered)
 	card.ContextMenu(func(m *ui.Menu) { a.taskMenu(c, m, t) })
 	if open && card.PressedOutside() {
 		id := t.ID

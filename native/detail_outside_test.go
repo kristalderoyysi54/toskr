@@ -18,7 +18,7 @@ func TestDetailTagSavedOnClickOutside(t *testing.T) {
 	a.detail = detailState{id: n.ID, pickAnchor: -1, pickEnd: -1}
 	tt := ui.NewTester(a.detailView, 560, 540)
 	tt.Frame()
-	if err := tt.Click("＋ 标签"); err != nil {
+	if err := tt.Click("添加标签"); err != nil { // 标签行默认收起：标题栏「#」钮展开并直接进输入
 		t.Fatalf("%v %v", err, tt.Texts())
 	}
 	tt.Frame()
